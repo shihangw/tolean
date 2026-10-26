@@ -1,7 +1,9 @@
 # Builds the native `tolean` binary for each platform that the npm package
 # ships one for, with Lean's own toolchain (elan, from lean-toolchain), not the
 # Nix shell: a Nix build links to libraries in /nix/store, so it runs only
-# where those exist. Each job checks that the binary loads no library from the
+# where those exist. The Linux binaries build in manylinux_2_28 (glibc 2.28),
+# because a binary runs on the glibc it was built with and on newer ones only:
+# Debian 10, Ubuntu 20.04, RHEL 8 and later. Each job checks that the binary loads no library from the
 # toolchain, runs the npm package's tests with it, and uploads it. Publishing
 # the platform packages is a separate step, not done here.
 name: binaries
@@ -25,12 +27,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-24.04, platform: linux-x64 }
-          - { os: ubuntu-24.04-arm, platform: linux-arm64 }
+          - { os: ubuntu-24.04, platform: linux-x64, container: 'quay.io/pypa/manylinux_2_28_x86_64' }
+          - { os: ubuntu-24.04-arm, platform: linux-arm64, container: 'quay.io/pypa/manylinux_2_28_aarch64' }
           - { os: macos-15, platform: darwin-arm64 }
           - { os: macos-15-intel, platform: darwin-x64 }
           - { os: windows-2025, platform: win32-x64 }
     runs-on: ${{ matrix.os }}
+    # Empty for macOS and Windows, which build on the runner itself.
+    container: ${{ matrix.container }}
     timeout-minutes: 90
     defaults:
       run:
@@ -50,6 +54,18 @@ jobs:
           echo "$libs"
           if echo "$libs" | grep -E '\.elan|/nix/|not found'; then
             echo "the binary depends on a library that a user's machine does not have" >&2
+            exit 1
+          fi
+
+      - name: The Linux binary needs glibc 2.28 at most
+        if: runner.os == 'Linux'
+        run: |
+          newest() { objdump -T "$1" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1; }
+          echo "the Lean toolchain needs $(newest "$(elan which lean)")"
+          need=$(newest .lake/build/bin/tolean)
+          echo "tolean needs $need"
+          if [ "$(printf '%s\nGLIBC_2.28\n' "$need" | sort -V | tail -1)" != GLIBC_2.28 ]; then
+            echo "tolean needs a glibc newer than 2.28" >&2
             exit 1
           fi
 
