@@ -76,15 +76,17 @@ def bigintLiteral (text : String) : Option Int :=
     | _ => digitsIn 10 chars
   value.map (Int.ofNat ·)
 
-/-- `IsStrictlyEqual` (ECMA-262 §7.2.15) on primitive values. Objects
-compare by identity, which the subset does not model, so they leave it. -/
+/-- `IsStrictlyEqual` (ECMA-262 §7.2.15) on primitive values, and between
+`null` and any value. Values of different types are not equal, so `null` is
+never equal to an object. Two objects compare by identity, which the subset
+does not model, so they leave it. -/
 def strictEq : Val → Val → Option Bool
   | .int a, .int b => some (decide (a = b))
   | .bool a, .bool b => some (decide (a = b))
   | .str a, .str b => some (decide (a = b))
   | .null, .null => some true
-  | .null, .int _ | .null, .bool _ | .null, .str _ => some false
-  | .int _, .null | .bool _, .null | .str _, .null => some false
+  | .null, .int _ | .null, .bool _ | .null, .str _ | .null, .list _ | .null, .obj _ => some false
+  | .int _, .null | .bool _, .null | .str _, .null | .list _, .null | .obj _, .null => some false
   | _, _ => none
 
 /-- A binary operator on two values, when neither operand short-circuits.
@@ -164,12 +166,12 @@ def eval (m : Module) (fuel : Nat) (env : Env) : Expr → Option Val
       | .ret v => some v
       | .normal _ => none
   | _ => none
-termination_by e => (fuel, sizeOf e)
+termination_by e => (fuel, sizeOf e, 0)
 
 def evalList (m : Module) (fuel : Nat) (env : Env) : List Expr → Option (List Val)
   | [] => some []
   | e :: es => do return (← eval m fuel env e) :: (← evalList m fuel env es)
-termination_by es => (fuel, sizeOf es)
+termination_by es => (fuel, sizeOf es, 0)
 
 def evalProps (m : Module) (fuel : Nat) (env : Env) : List Property → Option (List (String × Val))
   | [] => some []
@@ -177,7 +179,7 @@ def evalProps (m : Module) (fuel : Nat) (env : Env) : List Property → Option (
   | .keyValue _ (.ident key) v :: ps => do
     return (key, ← eval m fuel env v) :: (← evalProps m fuel env ps)
   | _ :: _ => none
-termination_by ps => (fuel, sizeOf ps)
+termination_by ps => (fuel, sizeOf ps, 0)
 
 /-- Run one statement. A block, and the branch of an `if`, keep the changes
 they make to outer variables and drop the variables they declare. -/
@@ -185,6 +187,12 @@ def execStmt (m : Module) (fuel : Nat) (env : Env) : Stmt → Option Outcome
   | .varDecl _ { name, init := some init, .. } => do
     return .normal ((name, ← eval m fuel env init) :: env)
   | .returnStmt _ (some e) => do return .ret (← eval m fuel env e)
+  -- `xs.push(v)` adds `v` at the end (`Array.prototype.push`, ECMA-262
+  -- §23.1.3.23). The subset pushes only onto an array that the function owns,
+  -- which nothing else can see, so the push changes only the variable.
+  | .exprStmt _ (.call _ (.member _ (.ident _ name) "push") [arg]) => do
+    let .list items ← env.lookup name | none
+    return .normal (env.set name (.list (items ++ [← eval m fuel env arg])))
   | .exprStmt _ (.assign _ .assign (.ident _ name) value) => do
     return .normal (env.set name (← eval m fuel env value))
   | .exprStmt _ (.assign _ op (.ident _ name) value) => do
@@ -204,8 +212,26 @@ def execStmt (m : Module) (fuel : Nat) (env : Env) : Stmt → Option Outcome
     | .ret v => some (.ret v)
     | .normal env' => some (.normal (env'.drop (env'.length - env.length)))
   | .empty _ => some (.normal env)
+  -- `for (const x of xs)` on an array: the body runs once for each element,
+  -- in order, with `x` bound to it in a new scope (`ForIn/OfBodyEvaluation`,
+  -- ECMA-262 §14.7.5.7, with the array iterator of §23.1.5.1).
+  | .forOfStmt _ .const name iterable body => do
+    let .list items ← eval m fuel env iterable | none
+    execLoop m fuel env name body items
   | _ => none
-termination_by s => (fuel, sizeOf s)
+termination_by s => (fuel, sizeOf s, 0)
+
+/-- Run the body of `for (const name of …)` once for each of `items`. Each
+run keeps the changes to outer variables, and drops `name` and the variables
+the body declares. -/
+def execLoop (m : Module) (fuel : Nat) (env : Env) (name : String) (body : Stmt) :
+    List Val → Option Outcome
+  | [] => some (.normal env)
+  | x :: xs => do
+    match ← execStmt m fuel ((name, x) :: env) body with
+    | .ret v => some (.ret v)
+    | .normal env' => execLoop m fuel (env'.drop (env'.length - env.length)) name body xs
+termination_by xs => (fuel, sizeOf body, xs.length + 1)
 
 /-- Run a statement list, up to its end or its first `return`. -/
 def exec (m : Module) (fuel : Nat) (env : Env) : List Stmt → Option Outcome
@@ -214,7 +240,7 @@ def exec (m : Module) (fuel : Nat) (env : Env) : List Stmt → Option Outcome
     match ← execStmt m fuel env s with
     | .ret v => some (.ret v)
     | .normal env' => exec m fuel env' rest
-termination_by ss => (fuel, sizeOf ss)
+termination_by ss => (fuel, sizeOf ss, 0)
 
 end
 
@@ -239,9 +265,9 @@ syntax "certify_tac" "[" Lean.Parser.Tactic.simpLemma,* "]" : tactic
 macro_rules
   | `(tactic| certify_tac [$defs,*]) =>
     `(tactic| (
-      simp [run, eval, evalList, evalProps, execStmt, exec, functions, binary, strictEq,
+      simp [run, eval, evalList, evalProps, execStmt, exec, execLoop, functions, binary, strictEq,
         bigintLiteral, digitsIn, digitIn, Env.set, Val.truthy, List.lookup, $defs,*]
-      all_goals repeat' (split <;> (try simp_all [List.lookup, binary, strictEq, Val.truthy, Env.set]))
-      all_goals (try simp_all [List.lookup, binary, strictEq, Val.truthy, Env.set])))
+      all_goals repeat' (split <;> (try simp_all [List.lookup, binary, strictEq, Val.truthy, Env.set, $defs,*]))
+      all_goals (try simp_all [List.lookup, binary, strictEq, Val.truthy, Env.set, $defs,*])))
 
 end tolean.TypeScript.Eval

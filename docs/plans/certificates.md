@@ -1,6 +1,6 @@
 # Plan: certificates and round-trip proofs
 
-**Status:** phase 1 built, phase 6 steps 1 and 2 built · **Date:** 2026-10-26
+**Status:** phases 1 and 2 built, phase 6 steps 1 and 2 built · **Date:** 2026-10-26
 
 A certificate proves the translation of one file. It states, for each
 function, that an interpreter of the source language and the translated Lean
@@ -26,10 +26,13 @@ A certified file trusts three links instead of the translator:
    `bigint`, `boolean`, `string` and `T | null`. `tolean certify` writes the
    theorems, and the tactic `certify_tac` proves them. Six corpus files and the
    gauge example have certificates, and CI checks them.
-2. **Loops.** The interpreter gains `for … of`. Tolean proves one general
-   lemma: when the loop body and the fold step agree on every element, the
-   loop and `List.foldl` agree. Each certificate then applies the lemma with
-   an induction over the list. The RBAC example becomes certifiable.
+2. **Loops (built).** The interpreter gains `for … of` and `push` onto an
+   owned array. Tolean proves one general lemma, `execLoop_foldl`: when one
+   run of the loop body and one step of the fold agree, the loop and
+   `List.foldl` agree. Each certificate states a lemma for each loop, for
+   every environment whose variables have values of the right types, and
+   proves it from the general one. The theorem of the function then uses
+   that lemma as a rewrite rule. The RBAC example now has a certificate.
 3. **Numbers.** The interpreter gains `number` values through the same
    abstract number model that the translation uses, so a certificate holds for
    every model that keeps the number laws.

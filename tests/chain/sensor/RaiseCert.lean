@@ -1,10 +1,14 @@
 -- Certificate written by tolean for sensor/raise.ts. Do not edit.
-import tolean.TypeScript.Spec.Eval
+import tolean.TypeScript.Spec.Lemmas.Eval
 import sensor.Raise
 
 namespace sensor.RaiseCert
 
 open tolean.TypeScript.Eval
+
+-- The proofs pass the same lemmas everywhere, so some go unused.
+set_option linter.unusedSimpArgs false
+set_option linter.unusedVariables false
 
 /-- The program, as the parser read it. -/
 def program : tolean.TypeScript.Syntax.Module :=
@@ -15,8 +19,15 @@ def program : tolean.TypeScript.Syntax.Module :=
 
 def encGauge (x : sensor.Raise.Gauge) : Val := Val.obj [("level", Val.int x.level), ("max", Val.int x.max)]
 
+def decGauge : Option Val → sensor.Raise.Gauge
+  | some (.obj fs) => { level := decInt (fs.lookup "level"), max := decInt (fs.lookup "max") }
+  | _ => { level := decInt none, max := decInt none }
+
+@[simp] theorem decGauge_encGauge (x : sensor.Raise.Gauge) : decGauge (some (encGauge x)) = x := by
+  cases x; simp [decGauge, encGauge, List.lookup, encList, encNull]
+
 theorem raise_cert (g : _) (step : _) :
     run program "raise" [(encGauge g), (Val.int step)] = some (encGauge (sensor.Raise.raise g step)) := by
-  certify_tac [program, encGauge, sensor.Raise.raise]
+  certify_tac [program, Env.set_cons, Env.lookup_cons, Env.lookup_set_same, Env.lookup_set_ne, Env.set_set, Env.length_set, encList, encNull, decInt, decBool, decStr, encGauge, decGauge, sensor.Raise.raise]
 
 end sensor.RaiseCert
