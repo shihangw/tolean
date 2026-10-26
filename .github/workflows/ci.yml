@@ -1,8 +1,9 @@
 # CI, in stages. `check` builds Tolean with `lake build --wfail` in the Nix
-# shell and runs every check that needs only the native build. When it
-# passes, `wasm` builds the playground's WebAssembly translator, and on main
-# `pages` then publishes the playground. The native binaries for the npm
-# package build only in release.yml, which runs by hand.
+# shell and runs every check that needs only the native build. It runs on
+# each pull request. On main, `wasm` then builds the playground's WebAssembly
+# translator and `pages` publishes the playground. Only the published page
+# needs WebAssembly, so pull requests skip it. The native binaries for the
+# npm package build only in release.yml, which runs by hand.
 name: ci
 
 on:
@@ -95,9 +96,11 @@ jobs:
 
   # The playground's WebAssembly translator: build it, require that it gives
   # the native result on the corpus and on random programs, and check the
-  # examples' proofs on the Lean that runs in the browser.
+  # examples' proofs on the Lean that runs in the browser. It runs on main
+  # and by hand, not on pull requests, because only the published page uses it.
   wasm:
     needs: check
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     defaults:

@@ -43,10 +43,12 @@ one spare worker that has already started Lean, and it starts the next
 spare after each check. The bug is reported as
 [cauli/lean4-wasm-in-browser#4](https://github.com/cauli/lean4-wasm-in-browser/issues/4).
 
-CI checks each example twice. It runs `tolean translate --check` and
-`lake build --wfail` with the pinned Lean, and `site/scripts/check-wasm.ts`
-runs the bundle on the Lean that the page runs. The two Leans differ, so a
-proof must pass on both.
+CI checks each example twice. On each pull request, it runs
+`tolean translate --check` and `lake build --wfail` with the pinned Lean.
+On `main`, before it publishes the page, `site/scripts/check-wasm.ts` runs
+the bundle on the Lean that the page runs. The two Leans differ, so a proof
+must pass on both, and a proof that fails only in the browser stops the
+publish.
 
 The threaded Lean needs the page to be cross-origin isolated. GitHub Pages
 cannot send the headers for that, so `coi-serviceworker` adds them in the
