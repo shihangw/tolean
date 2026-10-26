@@ -57,10 +57,14 @@ jobs:
         with:
           node-version: 24
 
+      # The version that the Nix shell has and that wrote the lockfiles.
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+
       - name: The npm package works with this binary
         working-directory: npm
         run: |
-          corepack enable
           pnpm install --frozen-lockfile
           pnpm build
           export TOLEAN_BINARY="$GITHUB_WORKSPACE/.lake/build/bin/tolean${{ runner.os == 'Windows' && '.exe' || '' }}"
