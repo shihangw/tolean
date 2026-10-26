@@ -41,5 +41,5 @@ if (process.argv[1] === import.meta.filename) {
   const { src, theorems } = exampleFiles(exampleDir);
   const files = [...src, ...theorems];
   const names = claims(files).map((c) => c.name);
-  process.stdout.write(bundle(readFileSync(goSpecPath, 'utf8'), leanInOrder(files), names));
+  process.stdout.write(bundle(readFileSync(goSpecPath, 'utf8'), leanInOrder(files), names).text);
 }

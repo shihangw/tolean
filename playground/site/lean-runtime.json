@@ -1,0 +1,12 @@
+{
+  "source": "https://github.com/cauli/lean4-wasm-in-browser (Apache-2.0), Lean fork https://github.com/cauli/lean4/tree/reinstate-wasm",
+  "leanCommit": "62b6a2291302d4bbeace37642a066b7510d0145c",
+  "fixture": {
+    "url": "https://github.com/cauli/lean4-wasm-in-browser/releases/download/runtime-62b6a22-compact1/lean-runtime-fixture.tar.gz",
+    "sha256": "8dce3ed8a078046b5251ddf55917080fdf69227b3e4597c94e91ebb7f0b06521"
+  },
+  "objects": {
+    "bin/lean.js": "63aa7b004435f3d90cf19d7c3b3e3284726701ea06da8bc70b015125e1a38b24",
+    "bin/lean.wasm": "08d3ae8ee5dec8bae165ad5102e604eca016d74d2303e0b5748690df679a764e"
+  }
+}

@@ -84,22 +84,49 @@ export function claims(files: readonly WorkspaceFile[]): Claim[] {
 export const proofDeclarations = (files: readonly WorkspaceFile[]): Declaration[] =>
   files.filter(isProof).flatMap((f) => declarations(f.text));
 
+/** Where one file starts in a bundle, so a diagnostic can name its file and line. */
+export interface BundlePart {
+  readonly path: string;
+  /** The bundle line, counted from 1, that holds the file's first line. */
+  readonly firstLine: number;
+}
+
+export interface Bundle {
+  readonly text: string;
+  readonly parts: readonly BundlePart[];
+}
+
 /**
  * One Lean file that imports only `Init`: the Go Spec, then the generated
  * code, the claims and the proofs, then a check of each claim. The check
  * stands in for `#audit_claims`, which needs `import Lean`:
  * `example : Spec.c := Proof.c` fails unless the theorem has exactly the
  * claim's type, and `#print axioms` lists what the theorem relies on.
+ * Import lines are blanked, not removed, so that line numbers stay the same.
  */
-export function bundle(goSpec: string, files: readonly WorkspaceFile[], claimNames: readonly string[]): string {
+export function bundle(goSpec: string, files: readonly WorkspaceFile[], claimNames: readonly string[]): Bundle {
   const body = (text: string) =>
     text
       .split('\n')
-      .filter((line) => !line.startsWith('import ') && !line.startsWith('#audit_claims'))
+      .map((line) => (line.startsWith('import ') || line.startsWith('#audit_claims') ? '' : line))
       .join('\n');
-  const parts = [`-- tolean/Go/Spec/Basic.lean\n${body(goSpec)}`].concat(
-    files.map((f) => `-- ${f.path}\n${body(f.text)}`),
-  );
-  const checks = claimNames.map((c) => `example : Spec.${c} := Proof.${c}\n#print axioms Proof.${c}`);
-  return [...parts, '-- claim checks', ...checks].join('\n\n') + '\n';
+  const inputs = [{ path: 'tolean/Go/Spec/Basic.lean', text: goSpec }, ...files];
+  const parts: BundlePart[] = [];
+  const chunks: string[] = [];
+  let line = 1;
+  for (const f of inputs) {
+    const text = body(f.text).replace(/\n*$/, '\n');
+    chunks.push(text);
+    parts.push({ path: f.path, firstLine: line });
+    line += text.split('\n').length - 1;
+  }
+  const checks = claimNames.map((c) => `example : Spec.${c} := Proof.${c}\n#print axioms Proof.${c}\n`);
+  return { text: chunks.join('') + checks.join(''), parts };
+}
+
+/** The file and line in the workspace for a line of the bundle. */
+export function locate(parts: readonly BundlePart[], bundleLine: number): { path: string; line: number } | null {
+  let found: BundlePart | null = null;
+  for (const p of parts) if (p.firstLine <= bundleLine) found = p;
+  return found == null ? null : { path: found.path, line: bundleLine - found.firstLine + 1 };
 }

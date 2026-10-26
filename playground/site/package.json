@@ -4,8 +4,9 @@
   "type": "module",
   "scripts": {
     "examples": "node scripts/examples.ts",
-    "dev": "pnpm examples && vite",
-    "build": "pnpm examples && tsc --noEmit && vite build",
+    "lean-runtime": "node scripts/lean-runtime.ts",
+    "dev": "pnpm examples && pnpm lean-runtime && vite",
+    "build": "pnpm examples && pnpm lean-runtime && tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

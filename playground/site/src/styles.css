@@ -30,7 +30,7 @@ code, pre { font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
 .loading { padding: 24px; }
 .app {
   display: grid;
-  grid-template: "top top top" auto "tree main side" 1fr / 200px minmax(0, 1fr) minmax(320px, 420px);
+  grid-template: "top top top" auto "tree main side" minmax(0, 1fr) / 200px minmax(0, 1fr) minmax(320px, 420px);
   height: 100vh;
 }
 .top { grid-area: top; display: flex; gap: 12px; align-items: center; padding: 8px 16px; border-bottom: 1px solid var(--border); }
@@ -41,9 +41,9 @@ code, pre { font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
 .file { display: block; width: 100%; text-align: left; font: inherit; padding: 2px 8px 2px 16px; border: 0; border-radius: 4px; background: none; color: var(--text); cursor: pointer; }
 .file.active { background: var(--code); color: var(--accent); }
 .tag { margin-left: 6px; font-size: 11px; color: var(--muted); }
-.main { grid-area: main; display: flex; flex-direction: column; min-width: 0; }
+.main { grid-area: main; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .file-bar { padding: 6px 12px; border-bottom: 1px solid var(--border); color: var(--muted); }
-.editor { flex: 1; overflow: auto; }
+.editor { flex: 1; min-height: 0; overflow: auto; }
 .editor .cm-editor { height: 100%; background: var(--bg); color: var(--text); }
 .editor .cm-gutters { background: var(--panel); color: var(--muted); border-right: 1px solid var(--border); }
 .editor .cm-activeLine, .editor .cm-activeLineGutter { background: var(--code); }
@@ -51,6 +51,7 @@ code, pre { font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
 .file.top-level { margin-top: 12px; padding-left: 4px; }
 .side { grid-area: side; padding: 12px 16px; border-left: 1px solid var(--border); overflow: auto; }
 .notice { padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--muted); }
+.notice.failed { color: var(--bad); }
 .claims h2 { font-size: 15px; }
 .claim { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; }
 .claim header { display: flex; justify-content: space-between; align-items: center; gap: 8px; }

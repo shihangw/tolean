@@ -21,10 +21,10 @@ theorem loop_unplaced (x : Int) : ∀ (ys out : List Int) (i : Int),
     (match (Insert.loop1 x i ys false out).run with
       | .inl (p, o) => if p then o else o ++ [x]
       | .inr r => r) = out ++ ins x ys
-  | [], out, i => by simp [Insert.loop1, ins, Id.run]
+  | [], out, i => by simp [Insert.loop1, ins, Id.run] <;> rfl
   | y :: ys, out, i => by
     by_cases h : x ≤ y
-    · simp [Insert.loop1, ins, h, loop_placed, Id.run]
+    · simp [Insert.loop1, ins, h, loop_placed, Id.run] <;> rfl
     · have := loop_unplaced x ys (out ++ [y]) (i + 1)
       simp [Insert.loop1, ins, h, Id.run] at this ⊢
       simpa using this

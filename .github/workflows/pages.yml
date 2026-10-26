@@ -35,6 +35,12 @@ jobs:
           extra_nix_config: |
             accept-flake-config = true
 
+      - name: Cache the Lean that runs in the browser
+        uses: actions/cache@v4
+        with:
+          path: playground/site/.cache/*.tar.gz
+          key: lean-wasm-${{ hashFiles('playground/site/lean-runtime.json') }}
+
       - name: Build the playground
         working-directory: playground/site
         run: |
