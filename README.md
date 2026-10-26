@@ -22,11 +22,61 @@ A proof can join the last two: the Go code's theorem holds for any store that
 keeps a stated contract, and a second theorem shows that the store built on
 the translated queries keeps it.
 
-The main use case is a double-entry ledger, and the test corpora use one. The
-Go code checks that a journal entry's debits equal its credits, and then
-posts each line through a store. The SQL statements debit and credit one
-account each, inside one transaction, so the sum of all balances does not
-change.
+## Getting started
+
+A sort is a good first example, because everyone knows what it must do. This
+Go function sorts a slice by insertion:
+
+```go
+package sorting
+
+// Insert puts x into the sorted slice xs, before the first larger element.
+func Insert(xs []int64, x int64) []int64 {
+	out := []int64{}
+	placed := false
+	for _, y := range xs {
+		if !placed && x <= y {
+			out = append(out, x)
+			placed = true
+		}
+		out = append(out, y)
+	}
+	if !placed {
+		out = append(out, x)
+	}
+	return out
+}
+
+// Sort returns the elements of xs in ascending order.
+func Sort(xs []int64) []int64 {
+	out := []int64{}
+	for _, x := range xs {
+		out = Insert(out, x)
+	}
+	return out
+}
+```
+
+To translate it, list the source in a `tolean.json` file at the project root:
+
+```json
+{ "go": { "sources": ["sorting/*.go"] } }
+```
+
+Then run `tolean translate`. It writes `sorting/Sorting.lean`, where each
+`range` loop becomes a recursive function over a list. In CI, run
+`tolean translate --check`, which fails when the Lean is out of date.
+
+We strongly recommend that you run Tolean through `tolean.json`. The
+project file is the stable interface. The single-file commands, such as
+`tolean translate-go`, are for Tolean's own tests, and their arguments can
+change between versions.
+
+Then you write the claim. Here it has two parts, and both are needed. The
+output of `Sort` is sorted, and it is a permutation of the input. Without the
+second part, a sort that returns an empty list would satisfy the claim. You
+state each part as a `def … : Prop` in `Spec`, prove it in `Proof`, and
+`lake build` checks the proofs.
 
 ## Why Tolean
 
@@ -182,7 +232,13 @@ migrations, in sorted order. The defaults keep most entries short:
 - A SQL file translates each query that it names, unless `queries` lists
   some of them.
 
-The single-file commands still work, for scripts and quick use.
+A script that does not want a file can pass the same JSON inline, as in
+`tolean translate --config '{"go":{"sources":["sorting/*.go"]}}'`. Paths in
+the config are relative to the directory that Tolean runs in.
+
+The single-file commands still work, but they are not a stable interface,
+and their arguments can change between versions. Use `tolean.json` in your
+project and in CI.
 
 ## Why a proof kernel, not an SMT solver
 
