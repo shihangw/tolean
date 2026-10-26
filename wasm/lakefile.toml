@@ -1,11 +1,12 @@
 name = "web"
 defaultTargets = ["Web"]
 
-# The translator's entry point for the playground. build.sh compiles it, with
+# The translator's entry point for the playground and the npm package.
+# build.sh compiles it, with
 # the modules it imports, to WebAssembly.
 [[require]]
 name = "tolean"
-path = "../.."
+path = ".."
 
 [[lean_lib]]
 name = "Web"

@@ -55,6 +55,7 @@ browser.
 ## Build
 
 ```sh
+nix develop .#wasm -c wasm/build.sh   # the translator, from the repository root
 cd playground/site
 pnpm install
 pnpm dev                       # serve on localhost:5173

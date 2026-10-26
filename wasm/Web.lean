@@ -1,8 +1,8 @@
 import tolean.Project
 
 /-!
-The playground's entry point into the translator. `build.sh` compiles it to
-WebAssembly, and the page calls it through `glue.c`.
+The entry point into the translator for the playground and the npm package.
+`build.sh` compiles it to WebAssembly, and both call it through `glue.c`.
 
 The input is a whole workspace as JSON: `{"files": [{"path", "text"}, …]}`,
 with `tolean.json` among the files. The output lists each unit's result:

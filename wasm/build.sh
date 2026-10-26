@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Build the translator as WebAssembly for the playground:
-# playground/site/public/translator/tolean.{js,wasm}. Run it in the wasm dev
-# shell: `nix develop .#wasm -c playground/wasm/build.sh`.
+# Build the translator as WebAssembly: wasm/out/tolean.js and
+# wasm/out/tolean.wasm.bin (gzipped). The playground and the npm package both
+# use it. Run it in the wasm dev shell: `nix develop .#wasm -c wasm/build.sh`.
+# TOLEAN_WASM_OUT sets another output directory.
 #
 # Lean ships no WebAssembly build, so this compiles everything the translator
 # runs from C, as github.com/nathsou/ariadne does for its playground:
@@ -15,7 +16,7 @@
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 work=${TOLEAN_WASM_WORK:-$here/.build}
-out=$here/../site/public/translator
+out=${TOLEAN_WASM_OUT:-$here/out}
 mkdir -p "$work" "$out"
 
 prefix=$(lean --print-prefix)
@@ -50,7 +51,7 @@ fi
 
 # 3, first, because it decides which standard library modules are needed.
 (cd "$here" && lake build Web >/dev/null)
-closure=$(LEAN_SRC_PATH="$here:$here/../..:$prefix/src/lean" node "$here/closure.ts" Web)
+closure=$(LEAN_SRC_PATH="$here:$here/..:$prefix/src/lean" node "$here/closure.ts" Web)
 
 # 2. The standard library modules in the closure.
 stdlib=$work/stdlib
@@ -86,7 +87,7 @@ export -f compile
 export cflags
 for m in $closure; do
   path=$(echo "$m" | tr . /).c
-  for dir in "$stdlib/.lake/build/ir" "$here/../../.lake/build/ir" "$here/.lake/build/ir"; do
+  for dir in "$stdlib/.lake/build/ir" "$here/../.lake/build/ir" "$here/.lake/build/ir"; do
     if [ -f "$dir/$path" ]; then echo "$dir/$path $objects/${path%.c}.o"; break; fi
   done
 done | xargs -P "$jobs" -n 2 bash -c 'compile "$0" "$1"'
@@ -101,7 +102,7 @@ em++ -O3 -fwasm-exceptions $(find "$objects" -name '*.o' | sort) \
   "$runtime/lib/lean/libleanrt.a" "$runtime/libuv/src/libuv/libuv.a" \
   -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=worker,node -sALLOW_MEMORY_GROWTH=1 -sSTACK_SIZE=16MB \
   -sEXPORTED_FUNCTIONS=_tolean_init,_tolean_translate,_free \
-  -sEXPORTED_RUNTIME_METHODS=UTF8ToString,stringToNewUTF8 \
+  -sEXPORTED_RUNTIME_METHODS=UTF8ToString,stringToNewUTF8,getExceptionMessage -sEXPORT_EXCEPTION_HANDLING_HELPERS \
   -o "$out/tolean.js" 2>&1 | grep -v 'signature mismatch\|>>> defined as' || true
 test -f "$out/tolean.wasm"
 # The page fetches the gzipped copy and unpacks it, whatever the server does.
