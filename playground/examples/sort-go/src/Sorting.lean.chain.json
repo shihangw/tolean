@@ -1,0 +1,36 @@
+{"tolean": "0.1.0",
+ "sources":
+ [{"sha256": "7519f25e378b348d1cecc0c8724caefa588d0c53cacb3ce770c11c0d6249f9d3",
+   "path": "src/sort.go"}],
+ "output":
+ {"sha256": "db4c737473effe9ca8922d1db39ea2d5bd60f9747434d9cfa1b61b96ba444b5a",
+  "path": "src/Sorting.lean"},
+ "nodes":
+ [{"status": "tested",
+   "label": "Go parser",
+   "kind": "parser",
+   "id": "parser",
+   "evidence": {"reference": "go/parser", "check": "go-check", "by": "tolean"}},
+  {"status": "tested",
+   "label": "Go translator",
+   "kind": "translator",
+   "id": "translator",
+   "evidence":
+   {"reference": "fixed corpus output", "check": "go-check", "by": "tolean"}},
+  {"status": "trusted",
+   "module": "tolean.Go.Spec.Basic",
+   "label": "Go Spec",
+   "kind": "spec",
+   "id": "spec"},
+  {"status": "trusted",
+   "label": "Go compiler",
+   "kind": "runtime",
+   "id": "runtime"}],
+ "module": "Sorting",
+ "language": "go",
+ "edges":
+ [["source", "parser"],
+  ["parser", "translator"],
+  ["translator", "output"],
+  ["spec", "output"],
+  ["runtime", "output"]]}
