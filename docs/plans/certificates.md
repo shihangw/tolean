@@ -1,6 +1,6 @@
 # Plan: certificates and round-trip proofs
 
-**Status:** phase 1 built · **Date:** 2026-10-26
+**Status:** phase 1 built, phase 6 started · **Date:** 2026-10-26
 
 A certificate proves the translation of one file. It states, for each
 function, that an interpreter of the source language and the translated Lean
@@ -42,10 +42,26 @@ A certified file trusts three links instead of the translator:
 5. **The interpreter against Node.** A differential test runs random programs
    in the interpreter and in Node, and requires the same results. This is
    evidence that the interpreter means what JavaScript means.
-6. **The translator for all programs.** With the interpreter and a total
-   parser in place, Tolean proves `run program f args = translate program f args`
-   for every program the translator accepts. Every certificate then follows
-   from one theorem.
+6. **The translator for all programs.** Tolean proves one theorem about the
+   translator, instead of one certificate per file. The theorem covers every
+   program that the translator accepts. The phase has four steps.
+   1. **The output as a syntax tree (built).** The translator builds the
+      Lean code as a tree (`tolean/TypeScript/Output.lean`), and a printer
+      writes the tree as text. The text is the same as before, byte for
+      byte. So a theorem can now state what the translator writes.
+   2. **A total translator.** The translator and the analyses it uses become
+      total functions, as the interpreter is. Lean cannot reason about a
+      `partial` function, so this step comes before any proof.
+   3. **The meaning of the output.** An evaluator gives each tree a meaning,
+      over the same values as the interpreter. Tolean proves that the two
+      agree: when `translate program = .ok out`, the interpreter and the
+      evaluator give the same result for every function and every input.
+   4. **The printer link.** For each file, a theorem states that the printed
+      definitions compute what the evaluator gives for the tree. Each output
+      form has one lemma, so the proof follows the tree and does not search.
+      The kernel checks `translate program = .ok out` for the file, so with
+      step 3 the whole file is proved. Every certificate then follows from
+      one theorem.
 
 ## Why a certificate first
 

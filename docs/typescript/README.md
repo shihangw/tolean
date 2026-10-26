@@ -62,6 +62,9 @@ read. The check covers three kinds of input:
 use `tsc`, so it types the subset itself. It gives every expression the type
 that `tsc` would give it, with the same narrowing on `null`, and it refuses
 anything it cannot type exactly. That type checker is part of what we trust.
+The translator does not write text. It builds the Lean code as a syntax tree,
+and `tolean/TypeScript/Output.lean` prints the tree. So a theorem can state
+what the translator writes, which a proof of the translator needs.
 
 `tests/typescript/checkTranslate.ts` checks the translator. No second
 translator checks its meaning, so these checks show that the output does not
@@ -356,6 +359,7 @@ to trust the translator:
 |---|---|---|
 | Differential test | Run the TypeScript in Node and the generated Lean on the same random inputs, and compare. Evidence for step 2, with a failure report that an agent can reproduce. | Not started |
 | AST as Lean data | The syntax tree of each file as Lean data (`Program`) | Built: `tolean certify` writes it |
+| Output as Lean data | The translator builds its output as a syntax tree, so that one theorem can cover every program it accepts (phase 6 of the certificates plan) | Built: `tolean/TypeScript/Output.lean`. The translator is not total yet, and the theorem is not started. |
 | `eval`, a JS interpreter in Lean | The meaning of a `Program`. It is trusted, so it is tested against Node. | Started: `tolean/TypeScript/Spec/Eval.lean` covers loop-free code without `number`; the test against Node is not started |
 | Construct lemmas | Proved once, for example: an interpreted `for…of` equals `List.foldl` | Not started (phase 2 of the certificates plan) |
 | Per-file certificate (`f.source`) | Proves `eval(Program)` equals the generated definition, for all inputs. Step 2 is then proved. | Started: loop-free functions without `number` |
