@@ -288,10 +288,14 @@ code.
 - [Ariadne](https://github.com/nathsou/ariadne) translates a TypeScript subset
   into readable Lean definitions, and it rejects what it cannot model. Ariadne
   also proves, once for all programs, that its definitions match a JavaScript
-  interpreter, and it emits a `source` theorem for each function. tolean has
-  begun the same step with per-file certificates (see the
-  [TypeScript page](docs/typescript/README.md#certificates)), but it has not
-  proved the match for all programs.
+  interpreter, and it emits a `source` theorem for each function. tolean
+  proves the same match one file at a time, with a
+  [certificate](docs/typescript/README.md#certificates). For each certified
+  function, the kernel checks that the translated Lean equals what a
+  JavaScript interpreter in Lean returns, for every input. Certificates cover
+  loop-free functions without `number` values for now. For other files, we
+  still trust the match between JS and Lean, and no proof covers all programs
+  yet.
 
 ## License
 
