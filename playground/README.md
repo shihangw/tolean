@@ -40,7 +40,8 @@ Each check runs in a fresh worker. After a check that unfolds a recursive
 definition, this Lean build fails every later check in the same worker, and
 the generated code is full of recursive loop functions. So the page keeps
 one spare worker that has already started Lean, and it starts the next
-spare after each check.
+spare after each check. The bug is reported as
+[cauli/lean4-wasm-in-browser#4](https://github.com/cauli/lean4-wasm-in-browser/issues/4).
 
 CI checks each example twice. It runs `tolean translate --check` and
 `lake build --wfail` with the pinned Lean, and `site/scripts/check-wasm.ts`

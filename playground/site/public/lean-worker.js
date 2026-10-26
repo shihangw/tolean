@@ -8,7 +8,8 @@
 // `module` is lean.wasm, compiled once by the page, so a new worker does not
 // compile 100 MB again. The page runs one check per worker: after a check that
 // unfolds a recursive definition, this Lean build fails every later check, so
-// the page starts a fresh worker instead.
+// the page starts a fresh worker instead. See
+// https://github.com/cauli/lean4-wasm-in-browser/issues/4.
 // Messages out: { type: 'ready' } | { type: 'error', message }
 //               { type: 'result', id, diagnostics, elapsed }
 //

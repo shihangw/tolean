@@ -87,7 +87,8 @@ interface Warm {
 /**
  * Lean, compiled to WebAssembly, in workers. Each check runs on a fresh
  * worker, because this Lean build fails every check after one that unfolds a
- * recursive definition, and generated code is full of them. One spare worker
+ * recursive definition, and generated code is full of them.
+ * See https://github.com/cauli/lean4-wasm-in-browser/issues/4. One spare worker
  * starts ahead of time, so a check does not wait for Lean to start.
  *
  * One check runs at a time. A check asked for while another runs replaces any
