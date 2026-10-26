@@ -1,6 +1,6 @@
 # Plan: certificates and round-trip proofs
 
-**Status:** phase 1 built, phase 6 started · **Date:** 2026-10-26
+**Status:** phase 1 built, phase 6 steps 1 and 2 built · **Date:** 2026-10-26
 
 A certificate proves the translation of one file. It states, for each
 function, that an interpreter of the source language and the translated Lean
@@ -49,9 +49,14 @@ A certified file trusts three links instead of the translator:
       Lean code as a tree (`tolean/TypeScript/Output.lean`), and a printer
       writes the tree as text. The text is the same as before, byte for
       byte. So a theorem can now state what the translator writes.
-   2. **A total translator.** The translator and the analyses it uses become
-      total functions, as the interpreter is. Lean cannot reason about a
-      `partial` function, so this step comes before any proof.
+   2. **A total translator (built).** The translator and the analyses it
+      uses are total functions, so Lean can reason about them and the kernel
+      can run them. The analyses recurse on the syntax tree. The translator
+      takes fuel: each call uses one unit, and the translation starts with
+      four units per character of the source. A program nests at most a few
+      calls deep per character, so the fuel never runs out on a real file.
+      If it did run out, the translator would refuse the file, and the
+      theorem is only about files that the translator accepts.
    3. **The meaning of the output.** An evaluator gives each tree a meaning,
       over the same values as the interpreter. Tolean proves that the two
       agree: when `translate program = .ok out`, the interpreter and the
