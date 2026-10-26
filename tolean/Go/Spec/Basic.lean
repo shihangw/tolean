@@ -4,7 +4,7 @@ only what this file states, so review it with care.
 
 - `int` and `int64` are `Int`, and every arithmetic result passes through
   `wrap64`, which wraps it into the 64-bit range as Go does.
-- `error` is `Option GoError`: `none` is `nil`. tolean models only how an error
+- `error` is `Option GoError`: `none` is `nil`. Tolean models only how an error
   was made (a sentinel from `errors.New`, or `fmt.Errorf` with a leading `%w`)
   and drops the message text of `fmt.Errorf`.
 - `context.Context` carries nothing: translated code only passes it along, so

@@ -58,7 +58,7 @@ instance : FromJson Status where
 structure Evidence where
   /-- The check that compares it with a reference, such as `go-check`. -/
   check : Option String := none
-  /-- Who runs the check: `tolean` (tolean's own CI, for this tolean version)
+  /-- Who runs the check: `tolean` (Tolean's own CI, for this Tolean version)
   or `project` (the project's CI, which reports it to `chain check`). -/
   «by» : Option String := none
   /-- What the check compares against, such as `go/parser`. -/

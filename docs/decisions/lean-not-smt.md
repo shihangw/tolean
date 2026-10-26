@@ -1,8 +1,8 @@
-# Why tolean writes Lean instead of SMT queries
+# Why Tolean writes Lean instead of SMT queries
 
 **Status:** accepted · **Date:** 2026-10-25
 
-tolean turns TypeScript into Lean 4 definitions, and we write and check
+Tolean turns TypeScript into Lean 4 definitions, and we write and check
 proofs about a program in Lean. Before we built the translator, we
 considered a different design. In that design, the translator would turn the
 same TypeScript subset straight into queries for an SMT solver such as Z3,
@@ -68,7 +68,7 @@ translator is written in Lean 4, and it is small because it accepts only a
 limited subset of TypeScript. So the statement that it keeps the meaning of
 every program it accepts is a Lean theorem about Lean code, and the proof is
 within reach. Once we have that proof, we no longer need to trust the
-translator, and the trusted part of tolean shrinks to the language Spec and
+translator, and the trusted part of Tolean shrinks to the language Spec and
 Lean's kernel. A solver could not do this work, because the proof goes by
 induction over the syntax of programs.
 
@@ -95,8 +95,8 @@ does not prove our theorems. We can ask Z3 whether any input makes a
 TypeScript function and its Lean translation return different results. This
 check only means something if we encode the two sides separately. We would
 encode one side from the TypeScript, following the ECMA-262 sections that the
-Spec cites. We would encode the other side from the Lean that tolean wrote. If
-both sides went through tolean's own pipeline, a bug in that pipeline would
+Spec cites. We would encode the other side from the Lean that Tolean wrote. If
+both sides went through Tolean's own pipeline, a bug in that pipeline would
 show up on both sides, and they would agree. When Z3 does find such an input,
 we can add it to the test corpus. Z3 can also produce inputs that reach every
 branch of a function, and we can run those inputs through Node and through the

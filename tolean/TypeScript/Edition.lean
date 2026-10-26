@@ -1,14 +1,14 @@
 /-!
-Editions of ECMA-262, the JavaScript standard, and the JS features that tolean
+Editions of ECMA-262, the JavaScript standard, and the JS features that Tolean
 relies on.
 
 A translation is for one target edition. The parser and the translator refuse a
-feature that the target does not have, because tolean translates the source as
+feature that the target does not have, because Tolean translates the source as
 it runs: type stripping leaves the syntax as it is, so the engine must support
 it, and the meaning that a translation assumes must be the one the target
 specifies.
 
-Each feature names the first edition that specifies it as tolean reads it, and
+Each feature names the first edition that specifies it as Tolean reads it, and
 the ECMA-262 production or operation that does. Section numbers move between
 editions; these names do not.
 

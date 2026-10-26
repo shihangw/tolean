@@ -5,7 +5,7 @@ import tolean.TypeScript.Syntax.Token
 The TypeScript lexer. It reads the source as Unicode code points and gives the
 tokens with their spans.
 
-It refuses what tolean does not read the same way as `tsc` and the JavaScript
+It refuses what Tolean does not read the same way as `tsc` and the JavaScript
 engine: template literals, non-ASCII identifiers, escapes in identifiers,
 legacy octal numbers and escapes, lone surrogates, and the `<!--` and `-->`
 comments that CommonJS scripts allow.

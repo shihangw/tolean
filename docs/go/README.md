@@ -1,6 +1,6 @@
 # Go
 
-tolean translates Go code that has effects. A function that calls methods on
+Tolean translates Go code that has effects. A function that calls methods on
 an interface, such as a database store, becomes a function in a state monad,
 so a proof can plug in a model of what the interface does. The
 [README](../../README.md) describes the parts that all languages share.
@@ -54,7 +54,7 @@ the Lean parser does not read:
 
 `tolean/Go/Translate.lean` translates one Go package at a time. It starts
 from the functions named with `--root` and keeps only the declarations they
-reach, so a file can hold code that tolean does not support:
+reach, so a file can hold code that Tolean does not support:
 
 ```sh
 tolean translate-go --root Post --erase-type Log --erase-package time \
@@ -73,12 +73,12 @@ Go values. Review it with care.
   `return` leaves the function with its result.
 - `int` and `int64` arithmetic wraps as Go's does, through `Go.wrap64`. A
   proof shows that the values stay in range and then reasons over `Int`.
-- An `error` is `Option GoError`. tolean models how an error was made
+- An `error` is `Option GoError`. Tolean models how an error was made
   (`errors.New`, or `fmt.Errorf` with a leading `%w`) and drops the rest of
   the message.
 - Code that only feeds observability is erased. A statement is erased when it
   reads a value of a type named by `--erase-type` or calls a package named by
-  `--erase-package`. tolean refuses to erase a statement unless it only
+  `--erase-package`. Tolean refuses to erase a statement unless it only
   assigns through the erased value, so that erasing it cannot change any
   other value.
 

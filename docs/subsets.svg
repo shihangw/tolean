@@ -16,7 +16,7 @@
   </defs>
 
   <rect width="1200" height="860" fill="#ffffff"/>
-  <text x="20" y="34" class="title">Subsets of each language: what tolean reads, translates and proves</text>
+  <text x="20" y="34" class="title">Subsets of each language: what Tolean reads, translates and proves</text>
 
   <!-- ================= TypeScript ================= -->
   <text x="210" y="66" text-anchor="middle" class="lang">TypeScript</text>

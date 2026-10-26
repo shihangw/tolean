@@ -8,7 +8,7 @@ imports. Proofs assume only what this file states, so review it with care.
   can share IDs.
 - `timestamptz` is a count of microseconds. `now()` is the same within one
   transaction, so generated code takes it as an argument.
-- `jsonb` is opaque: tolean does not translate code that looks inside it.
+- `jsonb` is opaque: Tolean does not translate code that looks inside it.
 - A table is a map from its primary key to its row.
 - Booleans in conditions are three-valued: `none` is SQL's NULL, and `WHERE`
   keeps a row only when its condition is `some true`.

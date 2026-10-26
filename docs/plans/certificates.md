@@ -26,7 +26,7 @@ A certified file trusts three links instead of the translator:
    `bigint`, `boolean`, `string` and `T | null`. `tolean certify` writes the
    theorems, and the tactic `certify_tac` proves them. Six corpus files and the
    gauge example have certificates, and CI checks them.
-2. **Loops.** The interpreter gains `for … of`. tolean proves one general
+2. **Loops.** The interpreter gains `for … of`. Tolean proves one general
    lemma: when the loop body and the fold step agree on every element, the
    loop and `List.foldl` agree. Each certificate then applies the lemma with
    an induction over the list. The RBAC example becomes certifiable.
@@ -37,13 +37,13 @@ A certified file trusts three links instead of the translator:
    fuel or with recursion that Lean accepts. Then the kernel can run them, and
    each certificate checks `parse source = .ok program` by `rfl`. This removes
    the term printer from the trusted links. With a total printer from syntax
-   trees back to source text, tolean proves the round trip
+   trees back to source text, Tolean proves the round trip
    `parse (print t) = .ok t` for every tree in the subset.
 5. **The interpreter against Node.** A differential test runs random programs
    in the interpreter and in Node, and requires the same results. This is
    evidence that the interpreter means what JavaScript means.
 6. **The translator for all programs.** With the interpreter and a total
-   parser in place, tolean proves `run program f args = translate program f args`
+   parser in place, Tolean proves `run program f args = translate program f args`
    for every program the translator accepts. Every certificate then follows
    from one theorem.
 

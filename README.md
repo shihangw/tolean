@@ -1,13 +1,13 @@
-# tolean
+# Tolean
 
-tolean translates source code into Lean 4, so that proofs about a program are
+Tolean translates source code into Lean 4, so that proofs about a program are
 about its real source. It reads a subset of each language and writes Lean
 definitions that a person can read. It refuses everything else, and it
-reports the file, the line and the reason. In CI, tolean generates the Lean
+reports the file, the line and the reason. In CI, Tolean generates the Lean
 again and fails if the result differs from the committed copy. Then
 `lake build` checks the proofs.
 
-tolean reads three languages:
+Tolean reads three languages:
 
 - **TypeScript**: pure functions become plain Lean functions.
 - **Go**: code with effects is supported too. A function that calls methods on
@@ -28,7 +28,7 @@ posts each line through a store. The SQL statements debit and credit one
 account each, inside one transaction, so the sum of all balances does not
 change.
 
-## Why tolean
+## Why Tolean
 
 Coding agents now write more code than people can review. A reviewer skims
 the diff and approves it, and tests check only the inputs that someone
@@ -36,10 +36,10 @@ thought of. Neither shows that the code is correct for every input.
 
 A proof does. A test shows that the right password logs a user in. A proof
 shows that no wrong password ever logs a user in, for every possible input.
-With tolean, you review what the code must do, and the Lean kernel checks
+With Tolean, you review what the code must do, and the Lean kernel checks
 that the code does it.
 
-tolean moves review from the code to the claim, and it keeps three things
+Tolean moves review from the code to the claim, and it keeps three things
 out of the trusted path:
 
 - **No model of the code written by hand or by an LLM.** The translator
@@ -71,7 +71,7 @@ claim, nothing was verified.
 
 ## The verification chain
 
-What tolean produces is a verification chain: a path from the source code
+What Tolean produces is a verification chain: a path from the source code
 that runs to theorems about it, where every link is proved, tested against a
 reference, or trusted. The graphs show the chain for each language, and which
 links are which:
@@ -87,7 +87,7 @@ lists them.
 ### Chain manifests
 
 The chain is also data. Each translation writes `<output>.chain.json` next to
-the Lean file. It records the tolean version, the SHA-256 of each source file
+the Lean file. It records the Tolean version, the SHA-256 of each source file
 and of the output, and the links the output relies on (parser, translator,
 Spec, runtime), each with a status and the check that supports it.
 
@@ -113,7 +113,7 @@ axioms the proof may use:
 
 The statuses are `proved`, `tested`, `trusted`, `read-by-people`, `generated`
 and `planned`. A `tested` link names its check and who runs it: `tolean` for
-tolean's own checks, which hold for the tolean version that wrote the
+Tolean's own checks, which hold for the Tolean version that wrote the
 manifest, or `project` for the project's checks, which CI reports with
 `--passed`.
 
@@ -131,17 +131,17 @@ relies on that no proof covers. `chain graph` draws the chain, colored by
 status; [this is the graph](docs/chain-gauge.svg) of the sample project in
 `tests/chain`, which `tests/chain/check.sh` checks.
 
-To set up tolean in your own project, read
-[Using tolean in a project](docs/project-layout.md). It shows the folder
+To set up Tolean in your own project, read
+[Using Tolean in a project](docs/project-layout.md). It shows the folder
 layout and a full example for each language.
 
 ## Why a proof kernel, not an SMT solver
 
 Tools such as Verus and Dafny send each verification goal to an SMT solver,
-such as Z3. tolean writes Lean, and Lean's kernel checks every proof. This
+such as Z3. Tolean writes Lean, and Lean's kernel checks every proof. This
 gives a stronger guarantee in four ways:
 
-- **A smaller trusted base.** A proof in tolean relies on the Lean kernel,
+- **A smaller trusted base.** A proof in Tolean relies on the Lean kernel,
   which is a few thousand lines, and on the axioms that the proof lists.
   `#audit_claims` and `tolean chain check` report those axioms for each claim.
   An SMT result relies on the solver, which is hundreds of thousands of lines,
@@ -155,7 +155,7 @@ gives a stronger guarantee in four ways:
 - **Proofs about the translator.** Lean can state and prove facts about
   languages, such as "for every program the translator accepts, the Lean has
   the meaning of the source". An SMT solver works on one formula at a time, so
-  it cannot prove that the translator is correct. tolean's aim is a
+  it cannot prove that the translator is correct. Tolean's aim is a
   translator that is proved correct. Its parsers and translators are tested
   against reference implementations now, and the chain manifests mark them
   as tested, not as proved.
@@ -167,14 +167,14 @@ the full comparison.
 
 Neither design can show that a claim says what its author meant. A checker
 accepts a true theorem that says nothing useful, such as "the output of sort
-is sorted" without "the output has the same elements as the input". tolean
+is sorted" without "the output has the same elements as the input". Tolean
 makes the claim the only text that a person must read. The translator writes
 the model of the code, and the kernel checks the proof. The claim is a short
 `def … : Prop`, which the chain marks as `read-by-people`.
 
 ## Layout
 
-tolean is shaped like Babel. Each language has its own front end, and the
+Tolean is shaped like Babel. Each language has its own front end, and the
 stages after it are shared.
 
 ```
@@ -275,20 +275,20 @@ trusted model of JavaScript.
 
 ## Prior work
 
-tolean takes its design from two projects. It uses their ideas, but not their
+Tolean takes its design from two projects. It uses their ideas, but not their
 code.
 
 - [Aeneas](https://github.com/AeneasVerif/aeneas), together with
   [Charon](https://github.com/AeneasVerif/charon), translates safe Rust into
   pure Lean. Rust's borrow checker rules out aliasing, so Aeneas can turn a
   mutation in place into a pure update of a value. TypeScript has no borrow
-  checker, so tolean gets the same property from its subset instead. Only
+  checker, so Tolean gets the same property from its subset instead. Only
   locals that the function owns can change, and the function can read an
   owned array only in its return value.
 - [Ariadne](https://github.com/nathsou/ariadne) translates a TypeScript subset
   into readable Lean definitions, and it rejects what it cannot model. Ariadne
   also proves, once for all programs, that its definitions match a JavaScript
-  interpreter, and it emits a `source` theorem for each function. tolean
+  interpreter, and it emits a `source` theorem for each function. Tolean
   proves the same match one file at a time, with a
   [certificate](docs/typescript/README.md#certificates). For each certified
   function, the kernel checks that the translated Lean equals what a

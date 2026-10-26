@@ -150,7 +150,7 @@ partial def skipWhile (p : Char → Bool) : LexM Unit := do
   | none => return
 
 /-- Digits and `_` separators. Go checks separators in the parser of
-`strconv`; tolean checks only that a digit follows. -/
+`strconv`; Tolean checks only that a digit follows. -/
 def skipDigits (isDigit : Char → Bool) : LexM Unit :=
   skipWhile fun c => isDigit c || c == '_'
 

@@ -4,7 +4,7 @@ import tolean.Version
 
 /-!
 The chain each translator writes next to its output. The nodes say what the
-translation relies on; tolean's own CI runs the checks named `by: tolean`.
+translation relies on; Tolean's own CI runs the checks named `by: tolean`.
 -/
 namespace tolean.Chain
 

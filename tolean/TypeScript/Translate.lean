@@ -4,7 +4,7 @@ import tolean.TypeScript.Edition
 import tolean.TypeScript.Syntax.Parser
 
 /-!
-Translate one TypeScript module, in tolean's subset, to Lean 4 definitions that
+Translate one TypeScript module, in Tolean's subset, to Lean 4 definitions that
 compute the same values.
 
 The translation is a shallow embedding: each function becomes a `def`, each
