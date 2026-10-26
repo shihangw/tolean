@@ -5,7 +5,9 @@ an interface, such as a database store, becomes a function in a state monad,
 so a proof can plug in a model of what the interface does. The
 [README](../../README.md) describes the parts that all languages share.
 
-## The parser
+## The translator
+
+### Parsing
 
 `tolean/Go/Syntax/` puts on every node the span that `go/ast` gives it, and it
 inserts semicolons at line breaks as the Go specification requires. It reads:
@@ -45,7 +47,7 @@ the Lean parser does not read:
   first line gives the line, the column and part of the message to expect.
 - Any Go file named on the command line is checked like an accepted file.
 
-## The translator
+### Translation
 
 `tolean/Go/Translate.lean` translates one Go package at a time. It starts
 from the functions named with `--root` and keeps only the declarations they

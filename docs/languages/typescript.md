@@ -5,7 +5,9 @@ page describes the parser, the translator, the subset it accepts, how it
 models JS numbers, and what is proved and what is trusted. The
 [README](../../README.md) describes the parts that all languages share.
 
-## The parser
+## The translator
+
+### Parsing
 
 `tolean/TypeScript/Syntax/` puts a span on every node. It reads:
 
@@ -51,7 +53,7 @@ read. The check covers three kinds of input:
   refuse it, or the Lean parser must refuse one of the lookalikes above. The
   run prints its seed, so you can replay a failure.
 
-## The translator
+### Translation
 
 `tolean/TypeScript/Translate.lean` translates the syntax tree. It does not
 use `tsc`, so it types the subset itself. It gives every expression the type
@@ -71,7 +73,7 @@ TypeScript translator in `npm/`, which uses `tsc`:
   meaning. Those lints are TS2367 and TS2845, which flag comparisons whose
   answer is fixed, and TS2322 when the target type is `true` or `false`.
 
-### Effects (planned)
+#### Effects (planned)
 
 tolean refuses most calls to libraries with side effects today.
 [The effects plan](../plans/effects.md) describes how the translators will
@@ -79,7 +81,7 @@ share one mechanism for them. Each library declares its effects in a small
 file, and the declarations fix a trust boundary that a later proof of the
 library removes.
 
-### Names
+#### Names
 
 A source name never hides a Lean name that the output uses. Before it
 translates a file, the translator collects every identifier in it. When the
