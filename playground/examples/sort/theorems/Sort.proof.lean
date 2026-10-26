@@ -61,7 +61,7 @@ theorem insert_eq (xs : List Int) (x : Int) : Sorting.insert xs x = ins x xs := 
   simpa using fold_unplaced x xs []
 
 theorem sort_eq (xs : List Int) : sort xs = xs.foldl (fun acc x => ins x acc) [] := by
-  simp [sort, empty, insert_eq]
+  simp [sort, insert_eq]
 
 theorem ins_perm (x : Int) : ∀ ys : List Int, (ins x ys).Perm (x :: ys)
   | [] => by simp [ins]

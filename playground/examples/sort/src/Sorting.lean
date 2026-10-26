@@ -25,12 +25,8 @@ def insert (xs : List Int) (x : Int) : List Int :=
       out
   out
 
-def empty  : List Int :=
-  let out : List Int := []
-  out
-
 def sort (xs : List Int) : List Int :=
-  let out := (empty)
+  let out := ([] : List Int)
   let out :=
     List.foldl
       (fun out x =>
