@@ -2,7 +2,7 @@
 
 tolean translates PostgreSQL queries written for sqlc, with the schema that
 their migrations build. Each query becomes a function from a database to a
-result and a new database. The [README](../../../README.md) describes the parts
+result and a new database. The [README](../../README.md) describes the parts
 that all languages share.
 
 [This graph](verification.svg) shows the verification chain for PostgreSQL. It

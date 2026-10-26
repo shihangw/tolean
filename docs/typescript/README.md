@@ -3,7 +3,7 @@
 tolean translates pure TypeScript functions into plain Lean functions. This
 page describes the parser, the translator, the subset it accepts, how it
 models JS numbers, and what is proved and what is trusted. The
-[README](../../../README.md) describes the parts that all languages share.
+[README](../../README.md) describes the parts that all languages share.
 
 [This graph](verification.svg) shows the verification chain for TypeScript. It
 marks which links are proved, tested against a reference, or trusted.
@@ -79,7 +79,7 @@ TypeScript translator in `npm/`, which uses `tsc`:
 #### Effects (planned)
 
 tolean refuses most calls to libraries with side effects today.
-[The effects plan](../../plans/effects.md) describes how the translators will
+[The effects plan](../plans/effects.md) describes how the translators will
 share one mechanism for them. Each library declares its effects in a small
 file, and the declarations fix a trust boundary that a later proof of the
 library removes.
@@ -282,7 +282,7 @@ path = "node_modules/tolean/lean"
 ## What is proved and what is trusted
 
 
-![The tolean pipeline: proof path, planned certificate, and what runs](../../pipeline.svg)
+![The tolean pipeline: proof path, planned certificate, and what runs](../pipeline.svg)
 
 | Step | What happens | Status | How it is checked |
 |---|---|---|---|

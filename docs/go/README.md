@@ -3,7 +3,7 @@
 tolean translates Go code that has effects. A function that calls methods on
 an interface, such as a database store, becomes a function in a state monad,
 so a proof can plug in a model of what the interface does. The
-[README](../../../README.md) describes the parts that all languages share.
+[README](../../README.md) describes the parts that all languages share.
 
 [This graph](verification.svg) shows the verification chain for Go. It
 marks which links are proved, tested against a reference, or trusted.
