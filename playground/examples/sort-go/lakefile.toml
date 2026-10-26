@@ -1,4 +1,4 @@
-name = "sort-go"
+name = "sort_go"
 defaultTargets = ["src", "theorems"]
 
 [[require]]

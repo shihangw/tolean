@@ -8,6 +8,6 @@
    "inherited": false,
    "dir": "../../..",
    "configFile": "lakefile.toml"}],
- "name": "sort-go",
+ "name": "sort_go",
  "lakeDir": ".lake",
  "fixedToolchain": false}
