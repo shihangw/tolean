@@ -373,6 +373,15 @@ links for each claim.
 | What runs | Trusted: the JavaScript engine | Trusted: the Go compiler | Trusted: the PostgreSQL server and its constraints |
 | Callers | Not checked: inputs must meet each theorem's preconditions | Not checked; the glue between an interface and a real store is trusted | Not checked; the code that calls the queries is trusted |
 
+The npm package and the playground run the translator compiled to
+WebAssembly, so they also trust that build: Lean's runtime built for a
+32-bit target that Lean does not support officially, the patches in
+`wasm/build.sh`, and Emscripten. CI tests it against the native command:
+every corpus file and 200 random programs must give the same Lean or the
+same refusal. A project that runs `tolean translate --check` in CI checks
+its Lean with the native command, and a certificate holds whichever build
+wrote the Lean, because the kernel checks it.
+
 A certificate changes what one TypeScript file trusts. The file no longer
 trusts the translator. It trusts the parser, the interpreter that defines
 what the subset means (`tolean/TypeScript/Spec/Eval.lean`), and the printer
