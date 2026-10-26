@@ -63,18 +63,22 @@ use `tsc`, so it types the subset itself. It gives every expression the type
 that `tsc` would give it, with the same narrowing on `null`, and it refuses
 anything it cannot type exactly. That type checker is part of what we trust.
 
-`tests/typescript/checkTranslate.ts` checks the Lean translator against the
-TypeScript translator in `npm/`, which uses `tsc`:
+`tests/typescript/checkTranslate.ts` checks the translator. No second
+translator checks its meaning, so these checks show that the output does not
+change and still compiles; certificates prove more for the files they cover.
 
-- The check runs on `corpus/translate/*.ts` and on 200 random typed programs
-  per run, and it prints its seed. When both translators accept a file, they
-  must write the same Lean, byte for byte, and Lean must compile it. When the
-  TypeScript translator refuses a file, the Lean translator must refuse it
-  too.
-- The Lean translator may refuse more files than the TypeScript one. It may
-  also accept a file that `tsc` refuses for a lint that does not change the
-  meaning. Those lints are TS2367 and TS2845, which flag comparisons whose
-  answer is fixed, and TS2322 when the target type is `true` or `false`.
+- `corpus/translate/accept/*.ts`: the translation must equal the committed
+  `.lean` file beside it, and Lean must compile it. Run the check with
+  `--update` to rewrite those files when a change to the output is meant, and
+  review the diff. When the TypeScript translator in `npm/` that used `tsc`
+  was removed, every one of these files equalled its output.
+- `corpus/translate/reject/*.ts`: the translator must refuse the file. A line
+  `// expect: <line>:<col> <part of the message>` says where and why. These
+  files state in executable form what the subset refuses.
+- In both, a line `// target: ES20xx` translates for that edition.
+- Fuzz: 200 random typed programs per run, from a printed seed. When the
+  translator accepts one, Lean must compile the output, and a second
+  translation must give the same text.
 
 #### Certificates
 
@@ -192,8 +196,8 @@ Tolean rejects these, among others:
 - Recursion, closures and arrow functions, classes, `async`, imports,
   exceptions, and optional or mutable interface fields.
 
-The rejection tests in `npm/src/translate.test.ts` state in executable form
-what the translator refuses. To see what that does and does not guarantee,
+The files in `tests/typescript/corpus/translate/reject/` state in executable
+form what the translator refuses. To see what that does and does not guarantee,
 read [What is proved and what is
 trusted](#what-is-proved-and-what-is-trusted).
 
@@ -301,9 +305,14 @@ tolean translate --target ES2022 input.ts Output.lean My.Namespace
 
 `npm/` is the `tolean` package. Its `package.json` sets `"private": true`, so
 nobody can publish it by accident. To publish it, remove that line. The
-package contains the `tolean` command, the `translateSource` function and the
-Lean runtime in `lean/`. Its translator still reads TypeScript with `tsc`, and
-it is the next part that we will move to Lean.
+package contains the `tolean` command, the `translateSource` and
+`translateWorkspace` functions, and the Lean runtime in `lean/`. All of them
+run the native `tolean` binary for the platform, which
+the `binaries` job in `.github/workflows/ci.yml` builds with Lean's own toolchain for each
+platform that Lean supports. Until those binaries are published as
+`@tolean/<platform>` packages, set `TOLEAN_BINARY` to a `tolean` that Lake
+built. `translateSource` returns a promise, because it runs the binary as a
+child process.
 
 ```sh
 tolean <input.ts> <output.lean> <Lean.Namespace>
@@ -325,8 +334,8 @@ path = "node_modules/tolean/lean"
 
 | Step | What happens | Status | How it is checked |
 |---|---|---|---|
-| 1. Parse and type-check | `tsc` reads the source and gives the AST and the types | Trusted | `tsc` is the reference TypeScript compiler. Tolean refuses a file with type errors. The Lean parser, checked against `tsc`, is to replace it. |
-| 2. Translate | Tolean writes readable Lean definitions (the generated `.lean` files) | **Trusted, not proved**, except in certified files | The rejection tests in `npm/src/translate.test.ts`, the CI drift check, and review. A [certificate](#certificates) proves the step for one file. |
+| 1. Parse and type-check | Tolean's parser reads the source, and the translator types the subset itself | Trusted, tested | `tests/typescript/check.ts` compares the parser's syntax trees with `tsc`'s, on the corpus and on random programs. The type checker is tested through the translation corpus. |
+| 2. Translate | Tolean writes readable Lean definitions (the generated `.lean` files) | **Trusted, not proved**, except in certified files | The golden and reject files of the translation corpus, compiling random programs, the CI drift check, and review. A [certificate](#certificates) proves the step for one file. |
 | 3. Prove the claims | Hand-written proofs show that each claim in `Spec/*.lean` holds for the generated definitions | **Proved** | The Lean kernel, `#audit_claims`, `lake build --wfail`, and no `sorry`, `admit`, `axiom` or `native_decide` |
 | 4. Assume JS number facts | `SafeIntLaws` and `SpecialValueLaws` in `tolean/TypeScript/Spec/Number.lean` | Trusted, tested | `tests/typescript/jsNumberLaws.test.ts` checks each law against real doubles. |
 | 5. Run | Type stripping or a bundler makes the JavaScript that Node runs | Trusted | The subset uses only constructs that type stripping leaves unchanged |

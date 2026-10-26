@@ -40,7 +40,7 @@
           ];
         };
         # `nix develop .#wasm`: the toolchain that builds the translator as
-        # WebAssembly for the playground (playground/wasm/build.sh).
+        # WebAssembly for the playground (wasm/build.sh).
         wasm = pkgs.mkShell {
           packages = [
             pkgs.lean4

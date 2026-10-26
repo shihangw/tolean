@@ -1,84 +1,54 @@
 /**
- * Check the Lean translator (`tolean translate`) against the TypeScript one
- * in `npm/`, which reads the source with `tsc`.
+ * Check the Lean TypeScript translator (`tolean translate`) on the corpus and
+ * on random programs.
  *
- *   cd tests/typescript && node checkTranslate.ts
+ *   cd tests/typescript && node checkTranslate.ts [--fuzz <count>] [--seed <n>] [--update] [--require-wasm]
  *
- * For each `corpus/translate/*.ts`, at each target in `TARGETS`:
+ * - `corpus/translate/accept/*.ts`: the translation equals the committed
+ *   `.lean` file beside it, and Lean compiles it. `--update` rewrites those
+ *   files instead, for a change to the output that is meant.
+ * - `corpus/translate/reject/*.ts`: the translator refuses the file. A line
+ *   `// expect: <line>:<col> <part of the message>` says where and why.
+ * - In both, a line `// target: ES20xx` translates for that edition instead of
+ *   the default.
+ * - Fuzz: random programs (default 200). When the translator accepts one, the
+ *   output compiles, and a second translation gives the same text.
+ * - Everywhere, when `wasm/out` exists (from `wasm/build.sh`): the
+ *   playground's WebAssembly build gives the same result as the native
+ *   command, the same Lean or the same refusal. The two are compiled from the
+ *   same Lean, but for different machines, so this catches a miscompilation
+ *   on either one. `--require-wasm` fails when `wasm/out` does not exist.
  *
- * - if both accept it, the Lean files are the same, byte for byte, and Lean
- *   compiles them against this repository's runtime;
- * - if the TypeScript translator refuses it, the Lean one refuses it too.
+ * Nothing here is a second translator, so a golden file shows only that the
+ * output did not change and still compiles; a person read it once. Per-file
+ * certificates (`checkCertify.sh`) prove the translation for the files they
+ * cover.
  *
- * The Lean translator types the subset itself and may refuse more. It lists
- * those files; they are not failures.
- *
- * Run it in `nix develop`: it needs `lake`. The Lean translator is
+ * Run it in `nix develop`: it needs `lake`. The translator is
  * `.lake/build/bin/tolean`, or `$TOLEAN`.
  */
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { type Edition, TranslateError, translateSource } from '../../npm/src/translate.ts';
-
-/** The corpus runs at each of these targets, so that both translators also
- * agree on which features each edition has. */
-const TARGETS: ReadonlyArray<Edition> = ['ES2015', 'ES2019', 'ES2020', 'ES2024'];
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const tolean = process.env.TOLEAN ?? join(root, '.lake/build/bin/tolean');
 const out = mkdtempSync(join(tmpdir(), 'tolean-translate-'));
+const update = process.argv.includes('--update');
+const wasmOut = fileURLToPath(new URL('../../wasm/out/tolean.js', import.meta.url));
+if (process.argv.includes('--require-wasm') && !existsSync(wasmOut)) {
+  console.error('wasm/out has no translator; run wasm/build.sh');
+  process.exit(1);
+}
+// Loaded only when it exists, because loading it starts the translator.
+const translateInWasm = existsSync(wasmOut) ? (await import('./wasm.ts')).translateInWasm : null;
 
 type Result = { kind: 'lean'; text: string } | { kind: 'refused'; message: string };
 
-/** tsc refused only with lints that the translators do not model; the code
- * still has an exact meaning, so the Lean translator may accept it:
- *
- * - TS2367, "this comparison appears to be unintentional because the types
- *   have no overlap", as in `true === false`;
- * - TS2845, "this condition will always return 'false'", as in `x === NaN`;
- * - TS2322 into the type `true` or `false`: tsc gives `let b = c || true` the
- *   type `true`, so a later `b = x < y` fails. */
-function onlyLints(message: string): boolean {
-  const errors = [...message.matchAll(/error TS(\d+): ([^\n]*)/g)];
-  return (
-    errors.length > 0 &&
-    errors.every(
-      ([, code, text]) =>
-        code === '2367' ||
-        code === '2845' ||
-        (code === '2322' && /to type '(true|false)'/.test(text ?? '')),
-    )
-  );
-}
-
-function short(message: string): string {
-  return message.split('\n').filter((l) => l.trim() !== '').slice(0, 3).join(' | ');
-}
-
-function typescript(path: string, target?: Edition): Result {
-  try {
-    return {
-      kind: 'lean',
-      text: translateSource({
-        fileName: path,
-        text: readFileSync(path, 'utf8'),
-        namespace: 'Test',
-        ...(target === undefined ? {} : { target }),
-      }),
-    };
-  } catch (error) {
-    if (error instanceof TranslateError) {
-      return { kind: 'refused', message: error.message };
-    }
-    throw error;
-  }
-}
-
-function lean(path: string, output: string, target?: Edition): Result {
+function lean(path: string, output: string, target?: string): Result {
   const args = target === undefined ? [] : ['--target', target];
   const run = spawnSync(tolean, ['translate', ...args, path, output, 'Test'], { encoding: 'utf8' });
   if (run.error !== undefined) {
@@ -109,53 +79,68 @@ function compiles(output: string): string | null {
     .trim();
 }
 
-function firstDifference(lean: string, ts: string): string {
-  const a = lean.split('\n');
-  const b = ts.split('\n');
-  for (let i = 0; i < Math.max(a.length, b.length); i++) {
-    if (a[i] !== b[i]) {
-      return `line ${i + 1}:\n  lean: ${a[i] ?? '(none)'}\n  ts:   ${b[i] ?? '(none)'}`;
-    }
-  }
-  return '(none)';
+let agreed = 0;
+
+/** Fail unless the WebAssembly build gives the native result. */
+async function sameInWasm(path: string, native: Result, target?: string): Promise<void> {
+  if (translateInWasm === null) return;
+  const other = translateInWasm(path, readFileSync(path, 'utf8'), target);
+  const same =
+    native.kind === other.kind &&
+    (native.kind === 'lean' ? native.text === (other as typeof native).text : native.message === (other as { message: string }).message);
+  if (same) agreed++;
+  else failures.push(`${path}: the WebAssembly build differs from the native command:\n  native: ${JSON.stringify(native).slice(0, 300)}\n  wasm:   ${JSON.stringify(other).slice(0, 300)}`);
+}
+
+/** The value of a `// <key>: <value>` line in a corpus file. */
+function directive(text: string, key: string): string | undefined {
+  return new RegExp(`^// ${key}: (.*)$`, 'm').exec(text)?.[1]?.trim();
 }
 
 const failures: Array<string> = [];
-const stricter: Array<string> = [];
-let equal = 0;
-let bothRefuse = 0;
-let lint = 0;
 
-const files = readdirSync('corpus/translate')
-  .filter((f) => f.endsWith('.ts'))
-  .sort();
-for (const target of TARGETS) for (const file of files) {
-  const path = `corpus/translate/${file}`;
-  const output = join(out, `${target}-${file.replace(/\.ts$/, '.lean')}`);
-  const expected = typescript(path, target);
-  const actual = lean(path, output, target);
-  if (expected.kind === 'lean' && actual.kind === 'lean') {
-    if (actual.text !== expected.text) {
-      failures.push(`${path} (${target}): the outputs differ\n--- typescript\n${expected.text}\n--- lean\n${actual.text}`);
-      continue;
-    }
-    const error = compiles(output);
-    if (error !== null) {
-      failures.push(`${path} (${target}): the Lean output does not compile:\n${error}`);
-      continue;
-    }
-    equal++;
-  } else if (expected.kind === 'refused' && actual.kind === 'refused') {
-    bothRefuse++;
-  } else if (actual.kind === 'refused') {
-    stricter.push(`${path} (${target}): ${actual.message}`);
-  } else if (expected.kind === 'refused' && onlyLints(expected.message)) {
-    lint++;
-  } else {
-    failures.push(`${path} (${target}): only the TypeScript translator refuses it: ${expected.kind === 'refused' ? short(expected.message) : ''}`);
+const accept = readdirSync('corpus/translate/accept').filter((f) => f.endsWith('.ts')).sort();
+for (const file of accept) {
+  const path = `corpus/translate/accept/${file}`;
+  const golden = path.replace(/\.ts$/, '.lean');
+  const output = join(out, file.replace(/\.ts$/, '.lean'));
+  const target = directive(readFileSync(path, 'utf8'), 'target');
+  const result = lean(path, output, target);
+  await sameInWasm(path, result, target);
+  if (result.kind === 'refused') {
+    failures.push(`${path}: refused: ${result.message}`);
+    continue;
+  }
+  if (update) {
+    writeFileSync(golden, result.text);
+  } else if (result.text !== readFileSync(golden, 'utf8')) {
+    failures.push(`${path}: the output differs from ${golden}; run with --update if the change is meant`);
+    continue;
+  }
+  const error = compiles(output);
+  if (error !== null) {
+    failures.push(`${path}: the Lean output does not compile:\n${error}`);
   }
 }
 
+const reject = readdirSync('corpus/translate/reject').filter((f) => f.endsWith('.ts')).sort();
+for (const file of reject) {
+  const path = `corpus/translate/reject/${file}`;
+  const text = readFileSync(path, 'utf8');
+  const expect = directive(text, 'expect');
+  const where = expect === undefined ? null : /^(\d+):(\d+) (.*)$/.exec(expect);
+  if (where == null) {
+    failures.push(`${path}: the first lines need '// expect: <line>:<col> <part of the message>'`);
+    continue;
+  }
+  const result = lean(path, join(out, file.replace(/\.ts$/, '.lean')), directive(text, 'target'));
+  await sameInWasm(path, result, directive(text, 'target'));
+  if (result.kind === 'lean') {
+    failures.push(`${path}: accepted, but it should be refused`);
+  } else if (!result.message.startsWith(`${path}:${where[1]}:${where[2]}: `) || !result.message.includes(where[3]!)) {
+    failures.push(`${path}: refused with '${result.message}', expected ${where[1]}:${where[2]} '${where[3]}'`);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Random programs in the subset, built by type, so that most are valid.
@@ -476,54 +461,46 @@ function flag(name: string): number | undefined {
 const fuzzCount = flag('--fuzz') ?? 200;
 const seed = flag('--seed') ?? Math.floor(Math.random() * 1e9);
 const fuzzDir = mkdtempSync(join(tmpdir(), 'tolean-translate-fuzz-'));
-const tally = { equal: 0, bothRefuse: 0, stricter: 0 };
-const stricterReasons = new Map<string, number>();
+const tally = { compiled: 0, refused: 0 };
+const reasons = new Map<string, number>();
 for (let i = 0; i < fuzzCount; i++) {
   const caseSeed = seed + i;
   const path = join(fuzzDir, `case${caseSeed}.ts`);
   writeFileSync(path, new Gen(caseSeed).program());
   const output = join(fuzzDir, `case${caseSeed}.lean`);
-  const expected = typescript(path);
-  const actual = lean(path, output);
-  if (expected.kind === 'lean' && actual.kind === 'lean') {
-    if (actual.text !== expected.text) {
-      failures.push(`fuzz seed ${caseSeed} (${path}): the outputs differ at ${firstDifference(actual.text, expected.text)}`);
-    } else {
-      const error = compiles(output);
-      if (error === null) {
-        tally.equal++;
-      } else {
-        failures.push(`fuzz seed ${caseSeed} (${path}): the Lean output does not compile:\n${error.slice(0, 600)}`);
-      }
-    }
-  } else if (expected.kind === 'refused' && actual.kind === 'refused') {
-    tally.bothRefuse++;
-  } else if (actual.kind === 'refused') {
-    tally.stricter++;
-    const reason = actual.message.replace(/^[^:]*:\d+:\d+: /, '').replace(/: .*$/, '');
-    stricterReasons.set(reason, (stricterReasons.get(reason) ?? 0) + 1);
-  } else if (expected.kind === 'refused' && onlyLints(expected.message)) {
-    lint++;
+  const first = lean(path, output);
+  await sameInWasm(path, first);
+  if (first.kind === 'refused') {
+    tally.refused++;
+    const reason = first.message.replace(/^[^:]*:\d+:\d+: /, '').replace(/: .*$/, '');
+    reasons.set(reason, (reasons.get(reason) ?? 0) + 1);
+    continue;
+  }
+  const second = lean(path, join(fuzzDir, `case${caseSeed}.again.lean`));
+  if (second.kind !== 'lean' || second.text !== first.text) {
+    failures.push(`fuzz seed ${caseSeed} (${path}): a second translation gives another result`);
+    continue;
+  }
+  const error = compiles(output);
+  if (error === null) {
+    tally.compiled++;
   } else {
-    failures.push(`fuzz seed ${caseSeed} (${path}): only the TypeScript translator refuses it: ${expected.kind === 'refused' ? short(expected.message) : ''}`);
+    failures.push(`fuzz seed ${caseSeed} (${path}): the Lean output does not compile:\n${error.slice(0, 600)}`);
   }
 }
-console.log(
-  `fuzz: ${fuzzCount} programs from seed ${seed}: ${tally.equal} equal and compiled, ` +
-    `${tally.bothRefuse} refused by both, ${tally.stricter} refused only by the Lean translator, ` +
-    `${lint} accepted by Lean where tsc reports only lints`,
-);
-for (const [reason, n] of [...stricterReasons].sort((x, y) => y[1] - x[1])) {
-  console.log(`  stricter: ${n}× ${reason}`);
+console.log(`fuzz: ${fuzzCount} programs from seed ${seed}: ${tally.compiled} translated and compiled, ${tally.refused} refused`);
+for (const [reason, n] of [...reasons].sort((x, y) => y[1] - x[1])) {
+  console.log(`  refused: ${n}× ${reason}`);
 }
 
 console.log(
-  `translate: ${files.length} files at ${TARGETS.join(', ')}: ${equal} equal and compiled, ${bothRefuse} refused by both, ` +
-    `${stricter.length} refused only by the Lean translator`,
+  `translate: ${accept.length} accepted files${update ? ' (golden files rewritten)' : ''}, ${reject.length} refused files`,
 );
-for (const s of stricter) {
-  console.log(`  stricter: ${s}`);
-}
+console.log(
+  translateInWasm === null
+    ? 'wasm: skipped, because wasm/out has no translator'
+    : `wasm: ${agreed} files and programs where the WebAssembly build gives the native result`,
+);
 for (const f of failures) {
   console.error(`FAIL ${f}`);
 }

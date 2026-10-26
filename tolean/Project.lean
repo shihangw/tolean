@@ -88,11 +88,6 @@ def settings (lang : Json) (unitFiles : List String) : Json := Id.run do
 
 /-! ### Units -/
 
-def capitalize (s : String) : String :=
-  match s.toList with
-  | c :: cs => String.ofList (c.toUpper :: cs)
-  | [] => s
-
 def dirOf (path : String) : String :=
   match (segments path).dropLast with
   | [] => ""
@@ -166,7 +161,7 @@ so the playground runs it in the browser. -/
 def translateUnit (u : Job) (read : String → Except String String) : Except String Translation := do
   match u with
   | .typescript s source =>
-    let output := (string? s "output").getD s!"{dirOf source}{capitalize (stem source)}.lean"
+    let output := (string? s "output").getD s!"{dirOf source}{(stem source).capitalize}.lean"
     let ns := (string? s "namespace").getD (namespaceOf output)
     let targetName := (string? s "target").getD TypeScript.Edition.default.name
     let some target := TypeScript.Edition.parse? targetName
@@ -176,7 +171,7 @@ def translateUnit (u : Job) (read : String → Except String String) : Except St
   | .go s files =>
     let dir := dirOf (files.head!)
     let pkgName := ((segments dir).getLast?).getD "Package"
-    let output := (string? s "output").getD s!"{dir}{capitalize pkgName}.lean"
+    let output := (string? s "output").getD s!"{dir}{pkgName.capitalize}.lean"
     let ns := (string? s "namespace").getD (namespaceOf output)
     let sources ← files.mapM fun f => return (f, ← read f)
     let roots ← match strings s "roots" with
@@ -186,7 +181,7 @@ def translateUnit (u : Job) (read : String → Except String String) : Except St
       { roots, eraseTypes := strings s "eraseTypes", erasePackages := strings s "erasePackages" }
     return { output, ns, lean := ← Go.Translate.translate sources cfg ns }
   | .sql s queryFile migrations =>
-    let output := (string? s "output").getD s!"{dirOf queryFile}{capitalize (stem queryFile)}.lean"
+    let output := (string? s "output").getD s!"{dirOf queryFile}{(stem queryFile).capitalize}.lean"
     let ns := (string? s "namespace").getD (namespaceOf output)
     let text ← read queryFile
     let queries := match strings s "queries" with
@@ -237,6 +232,41 @@ are relative to the project root, which must be the working directory. -/
 def plan (config : Json) : IO (List Write) := do
   let files ← projectFiles "."
   return (← (units config files).mapM unitWrites).flatten
+
+/-! ### Workspaces as JSON
+
+`tolean translate-workspace` and the playground's WebAssembly build take a
+whole workspace as JSON, `{"files": [{"path", "text"}, …]}` with
+`tolean.json` among the files, and return each unit's result:
+`{"units": [{"output", "lean"} or {"sources", "error"}, …]}`, or `{"error"}`
+when the workspace has no valid `tolean.json`. One unit's error does not hide
+the others, and nothing here reads or writes files. -/
+
+def unitJson (texts : List (String × String)) (job : Job) : Json :=
+  let read (f : String) : Except String String :=
+    match texts.lookup f with
+    | some t => .ok t
+    | none => .error s!"{f}: no such file"
+  match translateUnit job read with
+  | .ok t => Json.mkObj [("output", t.output), ("lean", t.lean)]
+  | .error e => Json.mkObj [("sources", Lean.toJson job.sources), ("error", e)]
+
+def translateWorkspace (input : String) : Except String Json := do
+  let ws ← Json.parse input
+  let files ← ws.getObjValAs? (List Json) "files"
+  let texts ← files.mapM fun f => do
+    return ((← f.getObjValAs? String "path"), (← f.getObjValAs? String "text"))
+  let some configText := texts.lookup "tolean.json"
+    | throw "the workspace has no tolean.json"
+  let config ← (Json.parse configText).mapError (s!"tolean.json: {·}")
+  let jobs := units config (texts.map (·.1))
+  return Json.mkObj [("units", Json.arr (jobs.map (unitJson texts)).toArray)]
+
+/-- `translateWorkspace` as JSON text, with an error as `{"error"}`. -/
+def workspaceJson (input : String) : String :=
+  match translateWorkspace input with
+  | .ok j => j.compress
+  | .error e => (Json.mkObj [("error", e)]).compress
 
 /-- Write the plan, or with `check`, report each file that differs and write
 nothing. Returns the number of stale files. -/
