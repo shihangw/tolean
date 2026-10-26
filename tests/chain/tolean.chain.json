@@ -1,0 +1,104 @@
+{
+  "files": [
+    "sensor/Raise.lean.chain.json",
+    "access/Rbac.lean.chain.json"
+  ],
+  "nodes": [
+    {
+      "id": "callers",
+      "kind": "glue",
+      "status": "trusted",
+      "label": "callers pass a gauge with level ≤ max",
+      "note": "the claim's precondition; nothing checks it at run time"
+    }
+  ],
+  "edges": [
+    [
+      "callers",
+      "raise_stays_under_max"
+    ]
+  ],
+  "claims": [
+    {
+      "id": "raise_stays_under_max",
+      "spec": "Spec.raise_stays_under_max",
+      "proof": "Proof.raise_stays_under_max",
+      "module": "sensor.RaiseProof",
+      "axioms": [
+        "propext",
+        "Quot.sound"
+      ],
+      "depends": [
+        "sensor.Raise"
+      ]
+    },
+    {
+      "id": "tenant_isolation",
+      "spec": "Spec.tenant_isolation",
+      "proof": "Proof.tenant_isolation",
+      "module": "access.RbacProof",
+      "axioms": [
+        "propext",
+        "Quot.sound"
+      ],
+      "depends": [
+        "access.Rbac"
+      ]
+    },
+    {
+      "id": "deny_wins",
+      "spec": "Spec.deny_wins",
+      "proof": "Proof.deny_wins",
+      "module": "access.RbacProof",
+      "axioms": [
+        "propext",
+        "Quot.sound"
+      ],
+      "depends": [
+        "access.Rbac"
+      ]
+    },
+    {
+      "id": "needs_binding",
+      "spec": "Spec.needs_binding",
+      "proof": "Proof.needs_binding",
+      "module": "access.RbacProof",
+      "axioms": [
+        "propext",
+        "Quot.sound"
+      ],
+      "depends": [
+        "access.Rbac"
+      ]
+    },
+    {
+      "id": "group_grants",
+      "spec": "Spec.group_grants",
+      "proof": "Proof.group_grants",
+      "module": "access.RbacProof",
+      "axioms": [
+        "propext",
+        "Quot.sound"
+      ],
+      "depends": [
+        "access.Rbac"
+      ]
+    },
+    {
+      "id": "deny_never_grants",
+      "spec": "Spec.deny_never_grants",
+      "proof": "Proof.deny_never_grants",
+      "module": "access.RbacProof",
+      "axioms": [
+        "propext",
+        "Quot.sound"
+      ],
+      "depends": [
+        "access.Rbac"
+      ]
+    }
+  ],
+  "assumptions": [
+    "the JavaScript engine implements bigint as the ECMAScript specification says"
+  ]
+}

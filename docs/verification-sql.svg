@@ -1,0 +1,153 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="820" viewBox="0 0 980 820" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-labelledby="title desc">
+  <title id="title">PostgreSQL: what is proved and what is trusted</title>
+  <desc id="desc">Migrations and sqlc queries go through tolean's SQL parser, the schema translator, tested against PostgreSQL's catalog, and the query translator, tested against a real server on generated scenarios, to generated Lean. The READ COMMITTED model's theorems are proved, and the model itself is tested against the real server. Proofs about the queries, such as that a store built on them keeps a contract, are checked by Lean. What runs is the real SQL on the PostgreSQL server.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#3c4043"/>
+    </marker>
+    <style>
+      .title { font-size: 18px; font-weight: 700; fill: #202124; }
+      .head { font-size: 12px; font-weight: 700; fill: #5f6368; letter-spacing: 0.05em; }
+      .name { font-size: 14px; font-weight: 700; fill: #202124; }
+      .sub { font-size: 11.5px; fill: #3c4043; }
+      .edge { font-size: 11px; fill: #5f6368; font-style: italic; }
+      .line { stroke: #3c4043; stroke-width: 1.5; fill: none; }
+      .dash { stroke: #5f6368; stroke-width: 1.5; fill: none; stroke-dasharray: 6 4; }
+      .check { stroke: #b06000; stroke-width: 1.5; fill: none; stroke-dasharray: 2 3; }
+      .proved { fill: #e6f4ea; stroke: #1e8e3e; stroke-width: 2; }
+      .tested { fill: #fef7e0; stroke: #b06000; stroke-width: 2; }
+      .untested { fill: #fce8e6; stroke: #c5221f; stroke-width: 2; }
+      .generated { fill: #f1f3f4; stroke: #5f6368; stroke-width: 2; }
+      .human { fill: #e8f0fe; stroke: #1a73e8; stroke-width: 2; }
+      .planned { fill: #ffffff; stroke: #5f6368; stroke-width: 2; stroke-dasharray: 6 4; }
+      .ref { fill: #ffffff; stroke: #9aa0a6; stroke-width: 1.5; }
+    </style>
+  </defs>
+
+  <rect width="980" height="820" fill="#ffffff"/>
+  <text x="30" y="34" class="title">PostgreSQL: what is proved and what is trusted</text>
+
+  <text x="170" y="74" text-anchor="middle" class="head">TRANSLATION</text>
+  <text x="490" y="74" text-anchor="middle" class="head">LEAN</text>
+  <text x="820" y="74" text-anchor="middle" class="head">WHAT RUNS</text>
+
+  <!-- Source -->
+  <rect x="40" y="85" width="260" height="52" rx="8" class="generated"/>
+  <text x="170" y="107" text-anchor="middle" class="name">migrations and queries</text>
+  <text x="170" y="125" text-anchor="middle" class="sub">*.up.sql in order; sqlc query files</text>
+
+  <!-- Parser -->
+  <path d="M170,137 V167" class="line" marker-end="url(#arrow)"/>
+  <rect x="40" y="169" width="260" height="62" rx="8" class="tested"/>
+  <text x="170" y="192" text-anchor="middle" class="name">Lean SQL parser</text>
+  <text x="170" y="210" text-anchor="middle" class="sub">tested through the two translators'</text>
+  <text x="170" y="224" text-anchor="middle" class="sub">checks; no direct reference parser yet</text>
+
+  <!-- Schema translator -->
+  <path d="M170,231 V261" class="line" marker-end="url(#arrow)"/>
+  <rect x="40" y="263" width="260" height="62" rx="8" class="tested"/>
+  <text x="170" y="286" text-anchor="middle" class="name">Schema translator</text>
+  <text x="170" y="304" text-anchor="middle" class="sub">replays migrations; the schema equals</text>
+  <text x="170" y="318" text-anchor="middle" class="sub">the catalog after the same migrations</text>
+
+  <!-- Query translator -->
+  <path d="M170,325 V355" class="line" marker-end="url(#arrow)"/>
+  <rect x="40" y="357" width="260" height="76" rx="8" class="tested"/>
+  <text x="170" y="380" text-anchor="middle" class="name">Query translator</text>
+  <text x="170" y="398" text-anchor="middle" class="sub">agrees with the server on generated</text>
+  <text x="170" y="412" text-anchor="middle" class="sub">scenarios; refuses full scans and</text>
+  <text x="170" y="426" text-anchor="middle" class="sub">updates from stale reads (tested)</text>
+
+  <!-- Reference -->
+  <rect x="40" y="473" width="260" height="46" rx="8" class="ref"/>
+  <text x="170" y="494" text-anchor="middle" class="name">PostgreSQL 18 server</text>
+  <text x="170" y="510" text-anchor="middle" class="sub">reference that the tests compare against</text>
+  <path d="M300,496 H318 V294 H302" class="check"/>
+  <path d="M318,395 H302" class="check"/>
+
+  <!-- Postgres spec -->
+  <rect x="360" y="85" width="260" height="62" rx="8" class="tested"/>
+  <text x="490" y="108" text-anchor="middle" class="name">Postgres Spec</text>
+  <text x="490" y="126" text-anchor="middle" class="sub">values, errors, three-valued logic;</text>
+  <text x="490" y="140" text-anchor="middle" class="sub">tested by the scenario checks</text>
+
+  <!-- Generated -->
+  <path d="M300,302 H358" class="line" marker-end="url(#arrow)"/>
+  <path d="M300,395 H340 V302" class="line"/>
+  <path d="M490,147 V269" class="line" marker-end="url(#arrow)"/>
+  <text x="496" y="214" class="edge">imported by</text>
+  <rect x="360" y="271" width="260" height="62" rx="8" class="generated"/>
+  <text x="490" y="294" text-anchor="middle" class="name">Generated Lean</text>
+  <text x="490" y="312" text-anchor="middle" class="sub">rows, keyed tables and Valid; one</text>
+  <text x="490" y="326" text-anchor="middle" class="sub">function per query: DB → result × DB</text>
+
+  <!-- READ COMMITTED model -->
+  <rect x="690" y="271" width="260" height="62" rx="8" class="tested"/>
+  <text x="820" y="294" text-anchor="middle" class="name">READ COMMITTED model</text>
+  <text x="820" y="312" text-anchor="middle" class="sub">locks and re-checked updates; tested</text>
+  <text x="820" y="326" text-anchor="middle" class="sub">on the server with two transactions</text>
+  <path d="M820,333 V371" class="line" marker-end="url(#arrow)"/>
+  <rect x="690" y="373" width="260" height="62" rx="8" class="proved"/>
+  <text x="820" y="396" text-anchor="middle" class="name">Model theorems</text>
+  <text x="820" y="414" text-anchor="middle" class="sub">in every interleaving, kept properties</text>
+  <text x="820" y="428" text-anchor="middle" class="sub">hold and no update is lost</text>
+
+  <!-- Claims -->
+  <rect x="420" y="373" width="200" height="62" rx="8" class="human"/>
+  <text x="520" y="396" text-anchor="middle" class="name">Claims</text>
+  <text x="520" y="414" text-anchor="middle" class="sub">e.g. the contract a store</text>
+  <text x="520" y="428" text-anchor="middle" class="sub">built on the queries keeps</text>
+
+  <!-- Proofs -->
+  <path d="M385,333 V483" class="line" marker-end="url(#arrow)"/>
+  <path d="M520,435 V483" class="line" marker-end="url(#arrow)"/>
+  <path d="M820,435 V455 H600 V483" class="line" marker-end="url(#arrow)"/>
+  <text x="680" y="450" class="edge">used by</text>
+  <rect x="360" y="485" width="260" height="76" rx="8" class="proved"/>
+  <text x="490" y="508" text-anchor="middle" class="name">Proofs about the queries</text>
+  <text x="490" y="526" text-anchor="middle" class="sub">for one statement, and for every</text>
+  <text x="490" y="540" text-anchor="middle" class="sub">interleaving of the statements;</text>
+  <text x="490" y="554" text-anchor="middle" class="sub">they assume Valid</text>
+
+  <!-- Planned -->
+  <rect x="40" y="593" width="260" height="62" rx="8" class="planned"/>
+  <text x="170" y="616" text-anchor="middle" class="name">Grammar and semantics (planned)</text>
+  <text x="170" y="634" text-anchor="middle" class="sub">from gram.y or a formal SQL semantics,</text>
+  <text x="170" y="648" text-anchor="middle" class="sub">to prove the parser and the translation</text>
+  <path d="M300,624 H330 V523 H358" class="dash" marker-end="url(#arrow)"/>
+
+  <!-- What runs -->
+  <rect x="690" y="85" width="260" height="62" rx="8" class="tested"/>
+  <text x="820" y="108" text-anchor="middle" class="name">PostgreSQL runs the SQL</text>
+  <text x="820" y="126" text-anchor="middle" class="sub">the real query text; checked on</text>
+  <text x="820" y="140" text-anchor="middle" class="sub">version 18 only</text>
+  <path d="M300,111 H335 V50 H930 V83" class="line" marker-end="url(#arrow)"/>
+  <path d="M820,147 V175" class="line" marker-end="url(#arrow)"/>
+  <rect x="690" y="177" width="260" height="62" rx="8" class="untested"/>
+  <text x="820" y="200" text-anchor="middle" class="name">Constraints on every write</text>
+  <text x="820" y="218" text-anchor="middle" class="sub">keys, ranges, foreign keys, unique:</text>
+  <text x="820" y="232" text-anchor="middle" class="sub">why proofs may assume Valid</text>
+  <path d="M688,208 H650 V302 H622" class="line" marker-end="url(#arrow)"/>
+  <text x="626" y="256" class="edge">justify Valid</text>
+
+  <rect x="690" y="593" width="260" height="76" rx="8" class="untested"/>
+  <text x="820" y="616" text-anchor="middle" class="name">Code that calls the queries</text>
+  <text x="820" y="634" text-anchor="middle" class="sub">e.g. Go glue: trusted to run each query</text>
+  <text x="820" y="648" text-anchor="middle" class="sub">with the arguments the model uses;</text>
+  <text x="820" y="662" text-anchor="middle" class="sub">reads without locks are outside the model</text>
+  <path d="M688,630 H600 V563" class="line" marker-end="url(#arrow)"/>
+
+  <!-- Legend -->
+  <g transform="translate(40,712)">
+    <rect x="0" y="0" width="18" height="14" rx="3" class="proved"/><text x="24" y="12" class="sub">proved</text>
+    <rect x="90" y="0" width="18" height="14" rx="3" class="tested"/><text x="114" y="12" class="sub">trusted, tested</text>
+    <rect x="230" y="0" width="18" height="14" rx="3" class="untested"/><text x="254" y="12" class="sub">trusted, not tested</text>
+    <rect x="390" y="0" width="18" height="14" rx="3" class="generated"/><text x="414" y="12" class="sub">generated or input</text>
+    <rect x="540" y="0" width="18" height="14" rx="3" class="human"/><text x="564" y="12" class="sub">read by people</text>
+    <rect x="670" y="0" width="18" height="14" rx="3" class="planned"/><text x="694" y="12" class="sub">planned</text>
+    <path d="M770,7 H800" class="check"/><text x="806" y="12" class="sub">compared in tests</text>
+  </g>
+  <text x="40" y="756" class="sub">A theorem about the queries holds for what runs if the translation and the Postgres Spec are as trusted, the server enforces its</text>
+  <text x="40" y="772" class="sub">constraints and behaves as the READ COMMITTED model says (tested on version 18), and the calling code runs the queries as the model</text>
+  <text x="40" y="788" class="sub">assumes.</text>
+</svg>

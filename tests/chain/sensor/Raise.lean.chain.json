@@ -1,0 +1,44 @@
+{"tolean": "0.1.0",
+ "target": "ES2024",
+ "sources":
+ [{"sha256": "28312a8a2b4846ec7e7fc3f5f409e2f6157009578576f6a1ba3243b50552e847",
+   "path": "sensor/raise.ts"}],
+ "output":
+ {"sha256": "2e2964783efb7dff0c41ba224ef96cfbd68196da6757bc5d48d3dc44a7533b0c",
+  "path": "sensor/Raise.lean"},
+ "nodes":
+ [{"status": "tested",
+   "label": "TypeScript parser",
+   "kind": "parser",
+   "id": "parser",
+   "evidence":
+   {"reference": "tsc", "check": "typescript-parse", "by": "tolean"}},
+  {"status": "tested",
+   "label": "TypeScript translator",
+   "kind": "translator",
+   "id": "translator",
+   "evidence":
+   {"reference": "tsc-based translator",
+    "check": "typescript-translate",
+    "by": "tolean"}},
+  {"status": "tested",
+   "module": "tolean.TypeScript.Spec.Number",
+   "label": "JavaScript number laws",
+   "kind": "spec",
+   "id": "spec",
+   "evidence":
+   {"reference": "Node 22 and 24",
+    "check": "typescript-engines",
+    "by": "tolean"}},
+  {"status": "trusted",
+   "label": "JavaScript engine",
+   "kind": "runtime",
+   "id": "runtime"}],
+ "module": "sensor.Raise",
+ "language": "typescript",
+ "edges":
+ [["source", "parser"],
+  ["parser", "translator"],
+  ["translator", "output"],
+  ["spec", "output"],
+  ["runtime", "output"]]}

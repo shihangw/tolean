@@ -1,0 +1,7 @@
+/.lake
+node_modules/
+/npm/dist
+/npm/lean
+/npm/LICENSE
+.DS_Store
+/tests/chain/.lake

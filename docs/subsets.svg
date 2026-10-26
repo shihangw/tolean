@@ -1,0 +1,155 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="860" viewBox="0 0 1200 860" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-labelledby="title desc">
+  <title id="title">Subsets of each language: read, translated, proved</title>
+  <desc id="desc">For TypeScript, Go and PostgreSQL, nested regions show the whole language, the subset the parser reads, the subset the translator accepts with a meaning that is trusted and tested, and what is proved.</desc>
+  <defs>
+    <style>
+      .title { font-size: 18px; font-weight: 700; fill: #202124; }
+      .lang { font-size: 16px; font-weight: 700; fill: #202124; }
+      .ring { font-size: 12px; font-weight: 700; fill: #202124; }
+      .item { font-size: 11px; fill: #3c4043; }
+      .all { fill: #ffffff; stroke: #9aa0a6; stroke-width: 1.5; }
+      .read { fill: #f1f3f4; stroke: #5f6368; stroke-width: 1.5; }
+      .translated { fill: #fef7e0; stroke: #b06000; stroke-width: 2; }
+      .proved { fill: #e6f4ea; stroke: #1e8e3e; stroke-width: 2; }
+      .legendtext { font-size: 11.5px; fill: #3c4043; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="860" fill="#ffffff"/>
+  <text x="20" y="34" class="title">Subsets of each language: what tolean reads, translates and proves</text>
+
+  <!-- ================= TypeScript ================= -->
+  <text x="210" y="66" text-anchor="middle" class="lang">TypeScript</text>
+  <rect x="20" y="80" width="380" height="680" rx="10" class="all"/>
+  <text x="34" y="100" class="ring">The language</text>
+  <text x="34" y="117" class="item">not read: classes, arrow functions and closures,</text>
+  <text x="34" y="131" class="item">async, generics on functions, exceptions,</text>
+  <text x="34" y="145" class="item">template literals, imports, regular expressions,</text>
+  <text x="34" y="159" class="item">lone surrogates, legacy octal, non-ASCII names</text>
+
+  <rect x="32" y="178" width="356" height="570" rx="9" class="read"/>
+  <text x="46" y="198" class="ring">Read by the parser (tested against tsc)</text>
+  <text x="46" y="215" class="item">read but not translated: while, break and continue</text>
+  <text x="46" y="229" class="item">in loops, return inside a loop, recursion, ==, bit</text>
+  <text x="46" y="243" class="item">operators, typeof, in, instanceof, === on objects,</text>
+  <text x="46" y="257" class="item">fractional numbers, / and % on number, Math.*,</text>
+  <text x="46" y="271" class="item">assigning parameters, fields or const</text>
+
+  <rect x="44" y="290" width="332" height="446" rx="8" class="translated"/>
+  <text x="58" y="310" class="ring">Translated: meaning trusted, tested</text>
+  <text x="58" y="327" class="item">bigint as Int, with / and % by a nonzero literal</text>
+  <text x="58" y="341" class="item">(tested against the engine)</text>
+  <text x="58" y="355" class="item">number on safe integers, NaN and ±Infinity</text>
+  <text x="58" y="369" class="item">(laws tested on Node 22 and 24)</text>
+  <text x="58" y="383" class="item">T | null with narrowing, as Option T</text>
+  <text x="58" y="397" class="item">interfaces as structures, arrays as List</text>
+  <text x="58" y="411" class="item">for … of as List.foldl; local mutation;</text>
+  <text x="58" y="425" class="item">push onto an array the function owns</text>
+  <text x="58" y="439" class="item">output equals the tsc-based translator's</text>
+  <text x="58" y="453" class="item">translation correctness: not proved</text>
+  <text x="58" y="467" class="item">(a certificate is planned)</text>
+
+  <rect x="56" y="560" width="308" height="164" rx="8" class="proved"/>
+  <text x="70" y="580" class="ring">Proved</text>
+  <text x="70" y="597" class="item">facts derived from the number laws,</text>
+  <text x="70" y="611" class="item">such as eq a a = !isNaN a</text>
+  <text x="70" y="625" class="item">each project's claims about its</text>
+  <text x="70" y="639" class="item">translated code, by the Lean kernel,</text>
+  <text x="70" y="653" class="item">with #audit_claims</text>
+  <text x="70" y="675" class="item">these assume the translation and</text>
+  <text x="70" y="689" class="item">the number laws are right</text>
+
+  <!-- ================= Go ================= -->
+  <text x="600" y="66" text-anchor="middle" class="lang">Go</text>
+  <rect x="410" y="80" width="380" height="680" rx="10" class="all"/>
+  <text x="424" y="100" class="ring">The language</text>
+  <text x="424" y="117" class="item">not read: generics, channels, go statements,</text>
+  <text x="424" y="131" class="item">select, goto, labels, fallthrough, imaginary</text>
+  <text x="424" y="145" class="item">numbers, three-index slices, [...]T arrays,</text>
+  <text x="424" y="159" class="item">non-ASCII names</text>
+
+  <rect x="422" y="178" width="356" height="570" rx="9" class="read"/>
+  <text x="436" y="198" class="ring">Read by the parser (tested against go/parser)</text>
+  <text x="436" y="215" class="item">read but not translated: defer, function literals,</text>
+  <text x="436" y="229" class="item">type switches and assertions, maps, pointers</text>
+  <text x="436" y="243" class="item">(except erased ones), for loops other than range</text>
+  <text x="436" y="257" class="item">over a slice, / and %, break inside switch,</text>
+  <text x="436" y="271" class="item">effectful calls inside expressions</text>
+
+  <rect x="434" y="290" width="332" height="446" rx="8" class="translated"/>
+  <text x="448" y="310" class="ring">Translated: meaning trusted, partly tested</text>
+  <text x="448" y="327" class="item">structs with zero values, named types, aliases</text>
+  <text x="448" y="341" class="item">int and int64 with wrapping (Go Spec: not yet</text>
+  <text x="448" y="355" class="item">tested against the Go runtime), bool, string</text>
+  <text x="448" y="369" class="item">slices as List, [N]T as Vector</text>
+  <text x="448" y="383" class="item">errors.New and fmt.Errorf with %w</text>
+  <text x="448" y="397" class="item">interface calls as steps in StateM State</text>
+  <text x="448" y="411" class="item">range over slices with break, continue and</text>
+  <text x="448" y="425" class="item">return; if, switch, multiple results, methods</text>
+  <text x="448" y="439" class="item">erased tracing and timing code</text>
+  <text x="448" y="453" class="item">corpus output fixed and compiled in CI</text>
+  <text x="448" y="467" class="item">translation correctness: not proved (needs</text>
+  <text x="448" y="481" class="item">a Go semantics; none is complete yet)</text>
+
+  <rect x="446" y="560" width="308" height="164" rx="8" class="proved"/>
+  <text x="460" y="580" class="ring">Proved</text>
+  <text x="460" y="597" class="item">wrap64 is the identity on in-range values</text>
+  <text x="460" y="611" class="item">each project's claims, for every store</text>
+  <text x="460" y="625" class="item">that keeps the interface's contract</text>
+  <text x="460" y="639" class="item">with a store on translated SQL: that the</text>
+  <text x="460" y="653" class="item">store keeps the contract, too</text>
+  <text x="460" y="675" class="item">these assume the translation, the Go Spec</text>
+  <text x="460" y="689" class="item">and the compiler are right</text>
+
+  <!-- ================= PostgreSQL ================= -->
+  <text x="990" y="66" text-anchor="middle" class="lang">PostgreSQL (sqlc queries)</text>
+  <rect x="800" y="80" width="380" height="680" rx="10" class="all"/>
+  <text x="814" y="100" class="ring">The language</text>
+  <text x="814" y="117" class="item">not read: INSERT and DELETE (not yet), ORDER BY,</text>
+  <text x="814" y="131" class="item">GROUP BY, LIMIT, DISTINCT, UNION, outer joins,</text>
+  <text x="814" y="145" class="item">CASE, IN, BETWEEN, LIKE, JSON operators,</text>
+  <text x="814" y="159" class="item">WITH RECURSIVE, $1 parameters</text>
+
+  <rect x="812" y="178" width="356" height="570" rx="9" class="read"/>
+  <text x="826" y="198" class="ring">Read by the parser (tested indirectly)</text>
+  <text x="826" y="215" class="item">read but not translated: full scans, functions</text>
+  <text x="826" y="229" class="item">other than now, LEAST and COALESCE, NULL literals,</text>
+  <text x="826" y="243" class="item">operators on nullable values, CHECK and partial</text>
+  <text x="826" y="257" class="item">unique on modeled tables, sqlc.narg, an UPDATE</text>
+  <text x="826" y="271" class="item">that uses a stale read of its own table</text>
+
+  <rect x="824" y="290" width="332" height="446" rx="8" class="translated"/>
+  <text x="838" y="310" class="ring">Translated: tested against PostgreSQL 18</text>
+  <text x="838" y="327" class="item">schema from migrations: tables, enums, domains,</text>
+  <text x="838" y="341" class="item">keys, foreign keys, unique, defaults; equal to</text>
+  <text x="838" y="355" class="item">the catalog</text>
+  <text x="838" y="369" class="item">SELECT and joins by primary key; UPDATE by key,</text>
+  <text x="838" y="383" class="item">with FROM and RETURNING; data-modifying WITH</text>
+  <text x="838" y="397" class="item">EXISTS, scalar subqueries, casts, LEAST,</text>
+  <text x="838" y="411" class="item">COALESCE, now(); three-valued logic;</text>
+  <text x="838" y="425" class="item">bigint overflow errors</text>
+  <text x="838" y="439" class="item">every result agrees with the server on</text>
+  <text x="838" y="453" class="item">generated scenarios</text>
+  <text x="838" y="467" class="item">translation correctness: not proved</text>
+  <text x="838" y="481" class="item">(gram.y or a formal SQL semantics planned)</text>
+
+  <rect x="836" y="560" width="308" height="164" rx="8" class="proved"/>
+  <text x="850" y="580" class="ring">Proved</text>
+  <text x="850" y="597" class="item">READ COMMITTED, for updates by key: in every</text>
+  <text x="850" y="611" class="item">interleaving, kept properties hold and no</text>
+  <text x="850" y="625" class="item">update is lost (model tested on the server)</text>
+  <text x="850" y="639" class="item">each project's claims about its queries,</text>
+  <text x="850" y="653" class="item">such as that a store keeps a contract</text>
+  <text x="850" y="675" class="item">these assume the translation, the Postgres</text>
+  <text x="850" y="689" class="item">Spec and Valid are right</text>
+
+  <!-- Legend -->
+  <g transform="translate(20,782)">
+    <rect x="0" y="0" width="18" height="14" rx="3" class="all"/><text x="24" y="12" class="legendtext">the language</text>
+    <rect x="130" y="0" width="18" height="14" rx="3" class="read"/><text x="154" y="12" class="legendtext">read by the parser</text>
+    <rect x="290" y="0" width="18" height="14" rx="3" class="translated"/><text x="314" y="12" class="legendtext">translated: meaning trusted, tested where noted</text>
+    <rect x="620" y="0" width="18" height="14" rx="3" class="proved"/><text x="644" y="12" class="legendtext">proved by the Lean kernel</text>
+  </g>
+  <text x="20" y="826" class="legendtext">Each ring lists what is in it but not in the ring inside it. The proved ring is about translated code: a proof holds for the program that</text>
+  <text x="20" y="842" class="legendtext">runs as far as the rings around it are right.</text>
+</svg>

@@ -1,0 +1,2 @@
+Ledger --query Debit --query Credit --query Freeze --query GetAccount
+--table accounts --table balances

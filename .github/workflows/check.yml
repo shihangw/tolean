@@ -1,0 +1,80 @@
+# Runs every check in the README's "Build and check" section, inside the
+# pinned Nix dev shell, on each push and pull request.
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    defaults:
+      run:
+        # Every step runs in the flake's dev shell: Lean, Node, pnpm, Go,
+        # PostgreSQL and Graphviz at the pinned versions.
+        shell: nix develop --command bash -euo pipefail {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            accept-flake-config = true
+
+      - name: Cache Lean build output
+        uses: actions/cache@v4
+        with:
+          path: |
+            .lake
+            tests/chain/.lake
+          key: lake-${{ runner.os }}-${{ hashFiles('lean-toolchain', 'lake-manifest.json', 'lakefile.toml', '**/*.lean') }}
+          restore-keys: lake-${{ runner.os }}-
+
+      - name: Build the library and the tolean command
+        run: lake build --wfail
+
+      - name: Install the TypeScript checks' dependencies
+        run: |
+          (cd tests/typescript && pnpm install --frozen-lockfile)
+          (cd npm && pnpm install --frozen-lockfile && pnpm build)
+
+      - name: npm package tests
+        working-directory: npm
+        run: pnpm test
+
+      - name: TypeScript parser against tsc
+        working-directory: tests/typescript
+        run: node check.ts
+
+      - name: TypeScript translator against the tsc-based translator
+        working-directory: tests/typescript
+        run: node checkTranslate.ts
+
+      - name: JS number laws on every maintained Node release line
+        run: nix run .#test-engines
+
+      - name: Go parser and translator against go/parser
+        working-directory: tests/go
+        run: go run ./check
+
+      - name: SQL translator against PostgreSQL
+        working-directory: tests/sql
+        run: go run ./pgcheck corpus
+
+      - name: Chain manifests on the sample project
+        working-directory: tests/chain
+        run: ./check.sh
+
+      - name: Generated files are committed and current
+        run: git diff --exit-code

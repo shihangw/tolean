@@ -1,0 +1,1 @@
+reject/stale-read/queries.sql:21:3: UPDATE balances uses target, which reads balances without FOR UPDATE

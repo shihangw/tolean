@@ -1,0 +1,150 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="800" viewBox="0 0 980 800" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-labelledby="title desc">
+  <title id="title">Go: what is proved and what is trusted</title>
+  <desc id="desc">Go source goes through tolean's Lean parser, tested against go/parser, and the Go translator, tested on a corpus, to generated Lean in a state monad. The theorem about the generated code holds for every store that keeps a contract. The store is either a hand-written model, which is trusted, or the store built on translated SQL, whose contract is proved. What runs is the Go binary with a hand-written implementation of the interface.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#3c4043"/>
+    </marker>
+    <style>
+      .title { font-size: 18px; font-weight: 700; fill: #202124; }
+      .head { font-size: 12px; font-weight: 700; fill: #5f6368; letter-spacing: 0.05em; }
+      .name { font-size: 14px; font-weight: 700; fill: #202124; }
+      .sub { font-size: 11.5px; fill: #3c4043; }
+      .edge { font-size: 11px; fill: #5f6368; font-style: italic; }
+      .line { stroke: #3c4043; stroke-width: 1.5; fill: none; }
+      .dash { stroke: #5f6368; stroke-width: 1.5; fill: none; stroke-dasharray: 6 4; }
+      .check { stroke: #b06000; stroke-width: 1.5; fill: none; stroke-dasharray: 2 3; }
+      .proved { fill: #e6f4ea; stroke: #1e8e3e; stroke-width: 2; }
+      .tested { fill: #fef7e0; stroke: #b06000; stroke-width: 2; }
+      .untested { fill: #fce8e6; stroke: #c5221f; stroke-width: 2; }
+      .generated { fill: #f1f3f4; stroke: #5f6368; stroke-width: 2; }
+      .human { fill: #e8f0fe; stroke: #1a73e8; stroke-width: 2; }
+      .planned { fill: #ffffff; stroke: #5f6368; stroke-width: 2; stroke-dasharray: 6 4; }
+      .ref { fill: #ffffff; stroke: #9aa0a6; stroke-width: 1.5; }
+    </style>
+  </defs>
+
+  <rect width="980" height="800" fill="#ffffff"/>
+  <text x="30" y="34" class="title">Go: what is proved and what is trusted</text>
+
+  <text x="170" y="74" text-anchor="middle" class="head">TRANSLATION</text>
+  <text x="490" y="74" text-anchor="middle" class="head">LEAN</text>
+  <text x="820" y="74" text-anchor="middle" class="head">WHAT RUNS</text>
+
+  <!-- Source -->
+  <rect x="40" y="85" width="260" height="52" rx="8" class="generated"/>
+  <text x="170" y="107" text-anchor="middle" class="name">package files (*.go)</text>
+  <text x="170" y="125" text-anchor="middle" class="sub">and the root functions to translate</text>
+
+  <!-- Parser -->
+  <path d="M170,137 V167" class="line" marker-end="url(#arrow)"/>
+  <rect x="40" y="169" width="260" height="62" rx="8" class="tested"/>
+  <text x="170" y="192" text-anchor="middle" class="name">Lean parser</text>
+  <text x="170" y="210" text-anchor="middle" class="sub">trees and spans equal go/parser's</text>
+  <text x="170" y="224" text-anchor="middle" class="sub">on the corpus and real packages</text>
+
+  <!-- Translator -->
+  <path d="M170,231 V261" class="line" marker-end="url(#arrow)"/>
+  <rect x="40" y="263" width="260" height="76" rx="8" class="tested"/>
+  <text x="170" y="286" text-anchor="middle" class="name">Go translator</text>
+  <text x="170" y="304" text-anchor="middle" class="sub">corpus output fixed and compiled in CI;</text>
+  <text x="170" y="318" text-anchor="middle" class="sub">erases observability code only when it</text>
+  <text x="170" y="332" text-anchor="middle" class="sub">writes nothing else (a syntactic rule)</text>
+
+  <!-- go/parser reference -->
+  <rect x="40" y="379" width="260" height="46" rx="8" class="ref"/>
+  <text x="170" y="400" text-anchor="middle" class="name">go/parser</text>
+  <text x="170" y="416" text-anchor="middle" class="sub">reference that the parser test compares against</text>
+  <path d="M300,402 H318 V200 H302" class="check"/>
+
+  <!-- Go spec -->
+  <rect x="360" y="85" width="260" height="62" rx="8" class="untested"/>
+  <text x="490" y="108" text-anchor="middle" class="name">Go Spec</text>
+  <text x="490" y="126" text-anchor="middle" class="sub">int64 wraps (wrap64), errors, Context;</text>
+  <text x="490" y="140" text-anchor="middle" class="sub">not yet tested against the Go runtime</text>
+
+  <!-- Generated -->
+  <path d="M300,301 H358" class="line" marker-end="url(#arrow)"/>
+  <path d="M490,147 V269" class="line" marker-end="url(#arrow)"/>
+  <text x="496" y="214" class="edge">imported by</text>
+  <rect x="360" y="271" width="260" height="62" rx="8" class="generated"/>
+  <text x="490" y="294" text-anchor="middle" class="name">Generated Lean</text>
+  <text x="490" y="312" text-anchor="middle" class="sub">interface calls are steps in StateM State;</text>
+  <text x="490" y="326" text-anchor="middle" class="sub">loops are recursive functions</text>
+
+  <!-- Contract and claims -->
+  <rect x="420" y="373" width="200" height="62" rx="8" class="human"/>
+  <text x="520" y="396" text-anchor="middle" class="name">Contract and claims</text>
+  <text x="520" y="414" text-anchor="middle" class="sub">what each interface method</text>
+  <text x="520" y="428" text-anchor="middle" class="sub">may do; what the code ensures</text>
+
+  <!-- Proof against the contract -->
+  <path d="M385,333 V483" class="line" marker-end="url(#arrow)"/>
+  <path d="M520,435 V483" class="line" marker-end="url(#arrow)"/>
+  <rect x="360" y="485" width="260" height="62" rx="8" class="proved"/>
+  <text x="490" y="508" text-anchor="middle" class="name">Theorem for every store</text>
+  <text x="490" y="526" text-anchor="middle" class="sub">holds for any implementation of the</text>
+  <text x="490" y="540" text-anchor="middle" class="sub">interface that keeps the contract</text>
+
+  <!-- Store options -->
+  <path d="M490,547 V575" class="line"/>
+  <path d="M410,575 H570" class="line"/>
+  <path d="M410,575 V603" class="line" marker-end="url(#arrow)"/>
+  <path d="M570,575 V603" class="line" marker-end="url(#arrow)"/>
+  <text x="496" y="568" class="edge">applied to a store</text>
+  <rect x="330" y="605" width="160" height="76" rx="8" class="untested"/>
+  <text x="410" y="628" text-anchor="middle" class="name">Hand-written</text>
+  <text x="410" y="644" text-anchor="middle" class="name">store model</text>
+  <text x="410" y="662" text-anchor="middle" class="sub">trusted to match</text>
+  <text x="410" y="676" text-anchor="middle" class="sub">the real store</text>
+  <rect x="500" y="605" width="160" height="76" rx="8" class="proved"/>
+  <text x="580" y="628" text-anchor="middle" class="name">Store on</text>
+  <text x="580" y="644" text-anchor="middle" class="name">translated SQL</text>
+  <text x="580" y="662" text-anchor="middle" class="sub">contract proved;</text>
+  <text x="580" y="676" text-anchor="middle" class="sub">see the SQL graph</text>
+
+  <!-- Certificate (planned) -->
+  <rect x="40" y="485" width="260" height="62" rx="8" class="planned"/>
+  <text x="170" y="508" text-anchor="middle" class="name">Go semantics (planned)</text>
+  <text x="170" y="526" text-anchor="middle" class="sub">an executable model of Go, tested on</text>
+  <text x="170" y="540" text-anchor="middle" class="sub">Go's test suite, to prove the translation</text>
+  <path d="M300,516 H358" class="dash" marker-end="url(#arrow)"/>
+
+  <!-- What runs -->
+  <rect x="690" y="85" width="260" height="62" rx="8" class="untested"/>
+  <text x="820" y="108" text-anchor="middle" class="name">Go compiler</text>
+  <text x="820" y="126" text-anchor="middle" class="sub">trusted to implement the Go</text>
+  <text x="820" y="140" text-anchor="middle" class="sub">semantics the Spec describes</text>
+  <path d="M300,111 H335 V50 H930 V83" class="line" marker-end="url(#arrow)"/>
+  <path d="M820,147 V175" class="line" marker-end="url(#arrow)"/>
+  <rect x="690" y="177" width="260" height="62" rx="8" class="generated"/>
+  <text x="820" y="200" text-anchor="middle" class="name">The binary runs</text>
+  <text x="820" y="218" text-anchor="middle" class="sub">including the erased tracing code,</text>
+  <text x="820" y="232" text-anchor="middle" class="sub">which writes only through itself</text>
+
+  <rect x="690" y="605" width="260" height="76" rx="8" class="untested"/>
+  <text x="820" y="628" text-anchor="middle" class="name">Interface implementation</text>
+  <text x="820" y="646" text-anchor="middle" class="sub">the real store in Go; trusted to call</text>
+  <text x="820" y="660" text-anchor="middle" class="sub">what the model says, e.g. each method</text>
+  <text x="820" y="674" text-anchor="middle" class="sub">runs the query it is named after</text>
+  <path d="M688,643 H662" class="line" marker-end="url(#arrow)"/>
+
+  <rect x="690" y="485" width="260" height="62" rx="8" class="untested"/>
+  <text x="820" y="508" text-anchor="middle" class="name">Callers' inputs</text>
+  <text x="820" y="526" text-anchor="middle" class="sub">must meet the theorems' preconditions;</text>
+  <text x="820" y="540" text-anchor="middle" class="sub">not checked yet</text>
+  <path d="M688,516 H622" class="line" marker-end="url(#arrow)"/>
+
+  <!-- Legend -->
+  <g transform="translate(40,722)">
+    <rect x="0" y="0" width="18" height="14" rx="3" class="proved"/><text x="24" y="12" class="sub">proved</text>
+    <rect x="90" y="0" width="18" height="14" rx="3" class="tested"/><text x="114" y="12" class="sub">trusted, tested</text>
+    <rect x="230" y="0" width="18" height="14" rx="3" class="untested"/><text x="254" y="12" class="sub">trusted, not tested</text>
+    <rect x="390" y="0" width="18" height="14" rx="3" class="generated"/><text x="414" y="12" class="sub">generated or input</text>
+    <rect x="540" y="0" width="18" height="14" rx="3" class="human"/><text x="564" y="12" class="sub">read by people</text>
+    <rect x="670" y="0" width="18" height="14" rx="3" class="planned"/><text x="694" y="12" class="sub">planned</text>
+    <path d="M770,7 H800" class="check"/><text x="806" y="12" class="sub">compared in tests</text>
+  </g>
+  <text x="40" y="766" class="sub">A theorem holds for the code that runs if the translation, the Go Spec and the compiler are as trusted, the store keeps the contract</text>
+  <text x="40" y="782" class="sub">(proved for a store on translated SQL), the real store does what the model says, and callers meet the preconditions.</text>
+</svg>

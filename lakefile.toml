@@ -1,0 +1,15 @@
+name = "tolean"
+license = "Apache-2.0"
+defaultTargets = ["tolean", "tolean-cli"]
+
+# Every module under tolean/: the shared source model, the language specs, the
+# language parsers, and the audit command.
+[[lean_lib]]
+name = "tolean"
+globs = ["tolean.+"]
+
+# The `tolean` command.
+[[lean_exe]]
+name = "tolean-cli"
+root = "Main"
+exeName = "tolean"

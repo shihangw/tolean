@@ -1,0 +1,42 @@
+{
+  "name": "tolean",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "description": "Translate a small pure subset of TypeScript to Lean 4, so proofs are about the real source",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shihangw/tolean.git",
+    "directory": "npm"
+  },
+  "bin": {
+    "tolean": "./dist/bin.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "lean"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && node scripts/copyFromRoot.ts",
+    "prepack": "pnpm run build",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "typescript": "^6.0.3"
+  },
+  "devDependencies": {
+    "@types/node": "22.18.6",
+    "vitest": "3.2.7"
+  }
+}

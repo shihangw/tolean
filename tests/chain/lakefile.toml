@@ -1,0 +1,14 @@
+name = "gauge"
+defaultTargets = ["sensor", "access"]
+
+[[require]]
+name = "tolean"
+path = "../.."
+
+[[lean_lib]]
+name = "sensor"
+globs = ["sensor.+"]
+
+[[lean_lib]]
+name = "access"
+globs = ["access.+"]
