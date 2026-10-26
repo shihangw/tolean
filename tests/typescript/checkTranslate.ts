@@ -2,7 +2,7 @@
  * Check the Lean TypeScript translator (`tolean translate`) on the corpus and
  * on random programs.
  *
- *   cd tests/typescript && node checkTranslate.ts [--fuzz <count>] [--seed <n>] [--update]
+ *   cd tests/typescript && node checkTranslate.ts [--fuzz <count>] [--seed <n>] [--update] [--require-wasm]
  *
  * - `corpus/translate/accept/*.ts`: the translation equals the committed
  *   `.lean` file beside it, and Lean compiles it. `--update` rewrites those
@@ -13,11 +13,11 @@
  *   the default.
  * - Fuzz: random programs (default 200). When the translator accepts one, the
  *   output compiles, and a second translation gives the same text.
- * - Everywhere: the playground's WebAssembly build (`wasm/out`, from
- *   `wasm/build.sh`) gives the same result as the native
+ * - Everywhere, when `wasm/out` exists (from `wasm/build.sh`): the
+ *   playground's WebAssembly build gives the same result as the native
  *   command, the same Lean or the same refusal. The two are compiled from the
  *   same Lean, but for different machines, so this catches a miscompilation
- *   on either one.
+ *   on either one. `--require-wasm` fails when `wasm/out` does not exist.
  *
  * Nothing here is a second translator, so a golden file shows only that the
  * output did not change and still compiles; a person read it once. Per-file
@@ -28,17 +28,23 @@
  * `.lake/build/bin/tolean`, or `$TOLEAN`.
  */
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { translateInWasm } from './wasm.ts';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const tolean = process.env.TOLEAN ?? join(root, '.lake/build/bin/tolean');
 const out = mkdtempSync(join(tmpdir(), 'tolean-translate-'));
 const update = process.argv.includes('--update');
+const wasmOut = fileURLToPath(new URL('../../wasm/out/tolean.js', import.meta.url));
+if (process.argv.includes('--require-wasm') && !existsSync(wasmOut)) {
+  console.error('wasm/out has no translator; run wasm/build.sh');
+  process.exit(1);
+}
+// Loaded only when it exists, because loading it starts the translator.
+const translateInWasm = existsSync(wasmOut) ? (await import('./wasm.ts')).translateInWasm : null;
 
 type Result = { kind: 'lean'; text: string } | { kind: 'refused'; message: string };
 
@@ -77,6 +83,7 @@ let agreed = 0;
 
 /** Fail unless the WebAssembly build gives the native result. */
 async function sameInWasm(path: string, native: Result, target?: string): Promise<void> {
+  if (translateInWasm === null) return;
   const other = translateInWasm(path, readFileSync(path, 'utf8'), target);
   const same =
     native.kind === other.kind &&
@@ -489,7 +496,11 @@ for (const [reason, n] of [...reasons].sort((x, y) => y[1] - x[1])) {
 console.log(
   `translate: ${accept.length} accepted files${update ? ' (golden files rewritten)' : ''}, ${reject.length} refused files`,
 );
-console.log(`wasm: ${agreed} files and programs where the WebAssembly build gives the native result`);
+console.log(
+  translateInWasm === null
+    ? 'wasm: skipped, because wasm/out has no translator'
+    : `wasm: ${agreed} files and programs where the WebAssembly build gives the native result`,
+);
 for (const f of failures) {
   console.error(`FAIL ${f}`);
 }

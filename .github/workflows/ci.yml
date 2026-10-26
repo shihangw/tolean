@@ -1,0 +1,316 @@
+# CI, in stages. `check` builds Tolean with `lake build --wfail` in the Nix
+# shell and runs every check that needs only the native build. When it
+# passes, `binaries` builds the native binary on each platform and `wasm`
+# builds the playground's WebAssembly translator. After `binaries`,
+# `npm-package` packs the npm release from those binaries and installs it as
+# a user would; it publishes nothing. On main, `pages` publishes the
+# playground after `wasm`.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    defaults:
+      run:
+        # Every step runs in the flake's dev shell: Lean, Node, pnpm, Go,
+        # PostgreSQL and Graphviz at the pinned versions.
+        shell: nix develop --command bash -euo pipefail {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            accept-flake-config = true
+
+      - name: Cache Lean build output
+        uses: actions/cache@v4
+        with:
+          path: |
+            .lake
+            tests/chain/.lake
+            playground/examples/*/.lake
+          key: lake-${{ runner.os }}-${{ hashFiles('lean-toolchain', 'lake-manifest.json', 'lakefile.toml', '**/*.lean') }}
+          restore-keys: lake-${{ runner.os }}-
+
+      - name: Build the library and the tolean command
+        run: lake build --wfail
+
+      - name: Install the TypeScript checks' dependencies
+        run: |
+          (cd tests/typescript && pnpm install --frozen-lockfile)
+          (cd npm && pnpm install --frozen-lockfile && pnpm build)
+
+      - name: npm package tests
+        working-directory: npm
+        run: TOLEAN_BINARY=$PWD/../.lake/build/bin/tolean pnpm test
+
+      - name: TypeScript parser against tsc
+        working-directory: tests/typescript
+        run: node check.ts
+
+      - name: TypeScript translator on the corpus and on random programs
+        working-directory: tests/typescript
+        run: node checkTranslate.ts
+
+      - name: Per-file certificates for the translation corpus
+        working-directory: tests/typescript
+        run: ./checkCertify.sh
+
+      - name: JS number laws on every maintained Node release line
+        run: nix run .#test-engines
+
+      - name: Go parser and translator against go/parser
+        working-directory: tests/go
+        run: go run ./check
+
+      - name: SQL translator against PostgreSQL
+        working-directory: tests/sql
+        run: go run ./pgcheck corpus
+
+      - name: Chain manifests on the sample project
+        working-directory: tests/chain
+        run: ./check.sh
+
+      - name: Playground examples translate and their proofs check
+        run: |
+          for example in playground/examples/*/; do
+            (cd "$example" && ../../../.lake/build/bin/tolean translate --check && lake build --wfail)
+          done
+
+      - name: Generated files are committed and current
+        run: git diff --exit-code
+
+  # Builds the native `tolean` binary for each platform that the npm package
+  # ships one for, with Lean's own toolchain (elan, from lean-toolchain), not the
+  # Nix shell: a Nix build links to libraries in /nix/store, so it runs only
+  # where those exist. The Linux binaries build in Ubuntu 20.04 (glibc 2.31),
+  # because a binary runs on the glibc it was built with and on newer ones only:
+  # Ubuntu 20.04, Debian 11, RHEL 9 and later. No older glibc works: the clang
+  # that Lean's toolchain ships needs glibc 2.29. Each job checks that the binary loads no library from the
+  # toolchain, runs the npm package's tests with it, and uploads it. Publishing
+  # the platform packages is a separate step, not done here.
+  binaries:
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, platform: linux-x64, container: 'ubuntu:20.04' }
+          - { os: ubuntu-24.04-arm, platform: linux-arm64, container: 'ubuntu:20.04' }
+          - { os: macos-15, platform: darwin-arm64 }
+          - { os: macos-15-intel, platform: darwin-x64 }
+          - { os: windows-2025, platform: win32-x64 }
+    runs-on: ${{ matrix.os }}
+    # Empty for macOS and Windows, which build on the runner itself.
+    container: ${{ matrix.container }}
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # The image has none of the tools that checkout, elan and the glibc check use.
+      - name: Install the tools that the Linux container lacks
+        if: matrix.container != ''
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            binutils ca-certificates curl git xz-utils
+
+      - uses: actions/checkout@v4
+
+      # Installs elan with the toolchain that lean-toolchain names, and runs
+      # `lake build`, which builds .lake/build/bin/tolean.
+      - uses: leanprover/lean-action@v1
+
+      - name: The binary loads no library from the toolchain
+        if: runner.os != 'Windows'
+        run: |
+          bin=.lake/build/bin/tolean
+          if [ "$RUNNER_OS" = macOS ]; then libs=$(otool -L "$bin" | tail -n +2); else libs=$(ldd "$bin"); fi
+          echo "$libs"
+          if echo "$libs" | grep -E '\.elan|/nix/|not found'; then
+            echo "the binary depends on a library that a user's machine does not have" >&2
+            exit 1
+          fi
+
+      - name: The Linux binary needs glibc 2.31 at most
+        if: runner.os == 'Linux'
+        run: |
+          newest() { objdump -T "$1" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1; }
+          echo "the Lean toolchain needs $(newest "$(elan which lean)")"
+          need=$(newest .lake/build/bin/tolean)
+          echo "tolean needs $need"
+          if [ "$(printf '%s\nGLIBC_2.31\n' "$need" | sort -V | tail -1)" != GLIBC_2.31 ]; then
+            echo "tolean needs a glibc newer than 2.31" >&2
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      # The version that the Nix shell has and that wrote the lockfiles.
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+
+      - name: The npm package works with this binary
+        working-directory: npm
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+          export TOLEAN_BINARY="$GITHUB_WORKSPACE/.lake/build/bin/tolean${{ runner.os == 'Windows' && '.exe' || '' }}"
+          pnpm test
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tolean-${{ matrix.platform }}
+          path: .lake/build/bin/tolean${{ runner.os == 'Windows' && '.exe' || '' }}
+          if-no-files-found: error
+
+  # The npm release: one @tolean/<platform> package per binary, and the
+  # tolean package that lists them. Packed and installed here, not published.
+  npm-package:
+    needs: binaries
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: tolean-*-*
+          path: binaries
+
+      - name: Pack the packages
+        working-directory: npm
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+          node scripts/pack.ts ../binaries ../packed
+
+      - name: Install the packed packages as a user would, and run them
+        run: |
+          mkdir try && cd try
+          printf '{"name":"try","private":true,"type":"module"}\n' > package.json
+          v=$(node -p "require('../npm/package.json').version")
+          npm install --no-audit --no-fund "../packed/tolean-$v.tgz" "../packed/tolean-linux-x64-$v.tgz"
+          echo 'export function f(a: bigint): bigint { return a + 1n; }' > a.ts
+          npx tolean translate a.ts A.lean A
+          grep -q '^def f' A.lean
+          node -e "import('tolean').then(async (t) => { const lean = await t.translateSource({ fileName: 'a.ts', text: 'export function g(): boolean { return true; }', namespace: 'G' }); if (!lean.includes('def g')) process.exit(1); })"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-packages
+          path: packed/*.tgz
+          if-no-files-found: error
+
+  # The playground's WebAssembly translator: build it, require that it gives
+  # the native result on the corpus and on random programs, and check the
+  # examples' proofs on the Lean that runs in the browser.
+  wasm:
+    needs: check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: nix develop --command bash -euo pipefail {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            accept-flake-config = true
+
+      - name: Cache Lean build output
+        uses: actions/cache@v4
+        with:
+          path: .lake
+          key: lake-${{ runner.os }}-${{ hashFiles('lean-toolchain', 'lake-manifest.json', 'lakefile.toml', '**/*.lean') }}
+          restore-keys: lake-${{ runner.os }}-
+
+      - name: Build the tolean command
+        run: lake build --wfail
+
+      - name: Cache the translator's WebAssembly build
+        uses: actions/cache@v4
+        with:
+          path: wasm/.build
+          key: translator-wasm-${{ hashFiles('lean-toolchain', 'flake.lock', 'wasm/build.sh') }}-${{ hashFiles('tolean/**/*.lean', 'wasm/*.lean', 'wasm/glue.c') }}
+          restore-keys: translator-wasm-${{ hashFiles('lean-toolchain', 'flake.lock', 'wasm/build.sh') }}-
+
+      - name: Build the translator as WebAssembly
+        shell: nix develop .#wasm --command bash -euo pipefail {0}
+        run: wasm/build.sh
+
+      - name: The WebAssembly translator gives the native result
+        working-directory: tests/typescript
+        run: |
+          pnpm install --frozen-lockfile
+          node checkTranslate.ts --require-wasm
+
+      - name: Cache the Lean that runs in the browser
+        uses: actions/cache@v4
+        with:
+          path: playground/site/.cache/*.tar.gz
+          key: lean-wasm-${{ hashFiles('playground/site/lean-runtime.json') }}
+
+      - name: Build the playground
+        working-directory: playground/site
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Playground examples prove on the Lean that runs in the browser
+        working-directory: playground/site
+        run: node scripts/check-wasm.ts
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tolean-wasm
+          path: wasm/out
+          if-no-files-found: error
+
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: playground/site/dist
+
+  pages:
+    needs: wasm
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

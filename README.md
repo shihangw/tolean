@@ -310,7 +310,7 @@ form of a syntax tree, the project file and the chain manifests.
 | `tolean/Sql/` | The PostgreSQL front end, the schema translator that replays migrations, the query translator, and the READ COMMITTED model in `Spec/ReadCommitted.lean` |
 | `Main.lean` | The `tolean` command |
 | `wasm/` | The translator compiled to WebAssembly for the playground. `build.sh` builds it. |
-| `npm/` | The npm package: the `tolean` command and `translateSource`, which run the native binary for the platform (built by `.github/workflows/binaries.yml`), and the Lean runtime that generated code imports |
+| `npm/` | The npm package: the `tolean` command and `translateSource`, which run the native binary for the platform (built by the `binaries` job of `.github/workflows/ci.yml`), and the Lean runtime that generated code imports |
 | `playground/` | A static page where you edit an example and Lean checks its proofs in the browser |
 | `tests/<language>/` | Checks for the front end against the language's own compiler, for the translator on a corpus, and for the Spec against the real runtime |
 
@@ -339,9 +339,17 @@ cd ../chain && ./check.sh                   # chain manifests on a sample projec
 ```
 
 CI runs all of these on each push and pull request, in the same Nix dev
-shell, from `.github/workflows/check.yml`. It also runs the number laws on
+shell, from `.github/workflows/ci.yml`. It also runs the number laws on
 every maintained Node release line (`nix run .#test-engines`), and it fails
 if a check leaves a committed file changed.
+
+CI runs in stages, so a failure stops the expensive work early. The `check`
+job runs `lake build --wfail` and the checks above. When it passes,
+`binaries` builds the native `tolean` on Linux, macOS and Windows, and
+`wasm` builds the playground's WebAssembly translator and requires that it
+gives the native result. After `binaries`, `npm-package` packs the npm
+release and installs it as a user would. On `main`, `pages` then publishes
+the playground.
 
 
 ## Languages
