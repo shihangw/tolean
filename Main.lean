@@ -14,8 +14,9 @@ The `tolean` command.
 ```
 tolean parse [--target ES20xx] <file>
     print the syntax tree of <file>
-tolean translate [--target ES20xx] <input> <output.lean> <Namespace>
-    write <input> as Lean definitions
+tolean translate [--target ES20xx] [--certify] <input> <output.lean> <Namespace>
+    write <input> as Lean definitions; with --certify, also write its
+    certificate next to it when some function can have one (see `certify`)
 tolean translate-go --root F [--root G…] [--erase-type T…] [--erase-package P…]
     <output.lean> <Namespace> <file.go>…
     write the Go functions F, G… of one package, and what they reach
@@ -46,7 +47,7 @@ open tolean tolean.TypeScript
 
 def usage : String :=
   "usage: tolean parse [--target ES20xx] <file.ts>\n" ++
-  "       tolean translate [--target ES20xx] <input.ts> <output.lean> <Lean.Namespace>\n" ++
+  "       tolean translate [--target ES20xx] [--certify] <input.ts> <output.lean> <Lean.Namespace>\n" ++
   "       tolean translate-sql <output.lean> <Lean.Namespace> --query Q --queries <file.sql>... --migrations <file.sql>...\n" ++
   "       tolean sql-schema --table T --migrations <file.sql>...\n" ++
   "       tolean translate-go --root F [--erase-type T] [--erase-package P] <output.lean> <Lean.Namespace> <file.go>...\n" ++
@@ -83,13 +84,33 @@ def parseFile (target : Edition) (path : String) : IO UInt32 := do
     IO.eprintln (e.render path)
     return 1
 
-def translateFile (target : Edition) (input output ns : String) : IO UInt32 := do
+/-- Where the certificate of `output` goes: `Raise.lean` gets `RaiseCert.lean`. -/
+def certPath (output : String) : String :=
+  if output.endsWith ".lean" then (output.dropEnd 5).toString ++ "Cert.lean" else output ++ "Cert.lean"
+
+/-- Write the certificate of a translation, when some function can have one,
+and record it in the manifest. Remove a certificate that a former run wrote
+when no function can have one now. -/
+def certifyAfterTranslate (target : Edition) (input source output ns : String) : IO Unit := do
+  let path := certPath output
+  match Certify.certify input source ns ns (ns ++ "Cert") target with
+  | .ok lean =>
+    IO.FS.writeFile path lean
+    let .ok (fns, all) := Certify.certifiedFunctions source target | return
+    Chain.recordCertificate (output ++ ".chain.json") path (ns ++ "Cert")
+      (fns.map fun f => (f, s!"{ns}Cert.{f}_cert")) all
+  | .error _ =>
+    if ← System.FilePath.pathExists path then IO.FS.removeFile path
+
+def translateFile (target : Edition) (input output ns : String) (certify : Bool := false) :
+    IO UInt32 := do
   unless ← checkLanguage input do return 2
   let source ← IO.FS.readFile input
   match Translate.translate input source ns target with
   | .ok lean =>
     IO.FS.writeFile output lean
     Chain.emit "typescript" (some target.name) [input] output ns
+    if certify then certifyAfterTranslate target input source output ns
     return 0
   | .error message =>
     IO.eprintln message
@@ -178,6 +199,7 @@ def sqlSchema (opts : List String) : IO UInt32 := do
 def run (target : Edition) : List String → IO UInt32
   | ["parse", path] => parseFile target path
   | ["translate", input, output, ns] => translateFile target input output ns
+  | ["translate", "--certify", input, output, ns] => translateFile target input output ns true
   | "translate-sql" :: rest => translateSql rest
   | "sql-schema" :: rest => sqlSchema rest
   | "translate-go" :: rest => translateGo { roots := [], eraseTypes := [], erasePackages := [] } rest
