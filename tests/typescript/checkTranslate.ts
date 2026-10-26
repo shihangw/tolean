@@ -13,6 +13,11 @@
  *   the default.
  * - Fuzz: random programs (default 200). When the translator accepts one, the
  *   output compiles, and a second translation gives the same text.
+ * - Everywhere: the WebAssembly build that the npm package runs
+ *   (`npm/dist`, from `pnpm build`) gives the same result as the native
+ *   command, the same Lean or the same refusal. The two are compiled from the
+ *   same Lean, but for different machines, so this catches a miscompilation
+ *   on either one.
  *
  * Nothing here is a second translator, so a golden file shows only that the
  * output did not change and still compiles; a person read it once. Per-file
@@ -27,6 +32,8 @@ import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { TranslateError, translateSource } from '../../npm/dist/index.js';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const tolean = process.env.TOLEAN ?? join(root, '.lake/build/bin/tolean');
@@ -66,6 +73,34 @@ function compiles(output: string): string | null {
     .trim();
 }
 
+/** What the WebAssembly build makes of a file, as `Result`. */
+async function wasm(path: string, target?: string): Promise<Result> {
+  try {
+    const text = await translateSource({
+      fileName: path,
+      text: readFileSync(path, 'utf8'),
+      namespace: 'Test',
+      ...(target === undefined ? {} : { target: target as 'ES2024' }),
+    });
+    return { kind: 'lean', text };
+  } catch (error) {
+    if (error instanceof TranslateError) return { kind: 'refused', message: error.message };
+    throw error;
+  }
+}
+
+let agreed = 0;
+
+/** Fail unless the WebAssembly build gives the native result. */
+async function sameInWasm(path: string, native: Result, target?: string): Promise<void> {
+  const other = await wasm(path, target);
+  const same =
+    native.kind === other.kind &&
+    (native.kind === 'lean' ? native.text === (other as typeof native).text : native.message === (other as { message: string }).message);
+  if (same) agreed++;
+  else failures.push(`${path}: the WebAssembly build differs from the native command:\n  native: ${JSON.stringify(native).slice(0, 300)}\n  wasm:   ${JSON.stringify(other).slice(0, 300)}`);
+}
+
 /** The value of a `// <key>: <value>` line in a corpus file. */
 function directive(text: string, key: string): string | undefined {
   return new RegExp(`^// ${key}: (.*)$`, 'm').exec(text)?.[1]?.trim();
@@ -78,7 +113,9 @@ for (const file of accept) {
   const path = `corpus/translate/accept/${file}`;
   const golden = path.replace(/\.ts$/, '.lean');
   const output = join(out, file.replace(/\.ts$/, '.lean'));
-  const result = lean(path, output, directive(readFileSync(path, 'utf8'), 'target'));
+  const target = directive(readFileSync(path, 'utf8'), 'target');
+  const result = lean(path, output, target);
+  await sameInWasm(path, result, target);
   if (result.kind === 'refused') {
     failures.push(`${path}: refused: ${result.message}`);
     continue;
@@ -106,6 +143,7 @@ for (const file of reject) {
     continue;
   }
   const result = lean(path, join(out, file.replace(/\.ts$/, '.lean')), directive(text, 'target'));
+  await sameInWasm(path, result, directive(text, 'target'));
   if (result.kind === 'lean') {
     failures.push(`${path}: accepted, but it should be refused`);
   } else if (!result.message.startsWith(`${path}:${where[1]}:${where[2]}: `) || !result.message.includes(where[3]!)) {
@@ -440,6 +478,7 @@ for (let i = 0; i < fuzzCount; i++) {
   writeFileSync(path, new Gen(caseSeed).program());
   const output = join(fuzzDir, `case${caseSeed}.lean`);
   const first = lean(path, output);
+  await sameInWasm(path, first);
   if (first.kind === 'refused') {
     tally.refused++;
     const reason = first.message.replace(/^[^:]*:\d+:\d+: /, '').replace(/: .*$/, '');
@@ -466,6 +505,7 @@ for (const [reason, n] of [...reasons].sort((x, y) => y[1] - x[1])) {
 console.log(
   `translate: ${accept.length} accepted files${update ? ' (golden files rewritten)' : ''}, ${reject.length} refused files`,
 );
+console.log(`wasm: ${agreed} files and programs where the WebAssembly build gives the native result`);
 for (const f of failures) {
   console.error(`FAIL ${f}`);
 }

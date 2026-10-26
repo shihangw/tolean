@@ -427,8 +427,7 @@ def intLiteral (span : Span) (raw : String) : TM String := do
 /-- The value of a Go string literal, raw or interpreted. -/
 def stringValue (span : Span) (raw : String) : TM String := do
   let cs := raw.toList
-  -- Not String.ofList, which raises bad_alloc in the WebAssembly build (wasm/).
-  if cs.head? == some '`' then return (cs.drop 1 |>.dropLast).foldl String.push ""
+  if cs.head? == some '`' then return String.ofList (cs.drop 1 |>.dropLast)
   let body := (cs.drop 1).dropLast
   let rec go : List Char → String → Except String String
     | [], acc => .ok acc

@@ -88,9 +88,6 @@ def settings (lang : Json) (unitFiles : List String) : Json := Id.run do
 
 /-! ### Units -/
 
--- Not String.ofList, which raises bad_alloc in the WebAssembly build (wasm/).
-def capitalize (s : String) : String := s.capitalize
-
 def dirOf (path : String) : String :=
   match (segments path).dropLast with
   | [] => ""
@@ -164,7 +161,7 @@ so the playground runs it in the browser. -/
 def translateUnit (u : Job) (read : String → Except String String) : Except String Translation := do
   match u with
   | .typescript s source =>
-    let output := (string? s "output").getD s!"{dirOf source}{capitalize (stem source)}.lean"
+    let output := (string? s "output").getD s!"{dirOf source}{(stem source).capitalize}.lean"
     let ns := (string? s "namespace").getD (namespaceOf output)
     let targetName := (string? s "target").getD TypeScript.Edition.default.name
     let some target := TypeScript.Edition.parse? targetName
@@ -174,7 +171,7 @@ def translateUnit (u : Job) (read : String → Except String String) : Except St
   | .go s files =>
     let dir := dirOf (files.head!)
     let pkgName := ((segments dir).getLast?).getD "Package"
-    let output := (string? s "output").getD s!"{dir}{capitalize pkgName}.lean"
+    let output := (string? s "output").getD s!"{dir}{pkgName.capitalize}.lean"
     let ns := (string? s "namespace").getD (namespaceOf output)
     let sources ← files.mapM fun f => return (f, ← read f)
     let roots ← match strings s "roots" with
@@ -184,7 +181,7 @@ def translateUnit (u : Job) (read : String → Except String String) : Except St
       { roots, eraseTypes := strings s "eraseTypes", erasePackages := strings s "erasePackages" }
     return { output, ns, lean := ← Go.Translate.translate sources cfg ns }
   | .sql s queryFile migrations =>
-    let output := (string? s "output").getD s!"{dirOf queryFile}{capitalize (stem queryFile)}.lean"
+    let output := (string? s "output").getD s!"{dirOf queryFile}{(stem queryFile).capitalize}.lean"
     let ns := (string? s "namespace").getD (namespaceOf output)
     let text ← read queryFile
     let queries := match strings s "queries" with

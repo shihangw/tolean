@@ -74,8 +74,7 @@ def sha256 (data : ByteArray) : ByteArray := Id.run do
 
 private def hexByte (b : UInt8) : String :=
   let d := "0123456789abcdef".toList
-  -- Not String.ofList, which raises bad_alloc in the WebAssembly build (wasm/).
-  ("".push d[(b / 16).toNat]!).push d[(b % 16).toNat]!
+  String.ofList [d[(b / 16).toNat]!, d[(b % 16).toNat]!]
 
 /-- The SHA-256 digest of `data`, in lower-case hex. -/
 def sha256Hex (data : ByteArray) : String :=
