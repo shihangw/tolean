@@ -30,10 +30,11 @@ jobs:
   # Builds the native `tolean` binary for each platform that the npm package
   # ships one for, with Lean's own toolchain (elan, from lean-toolchain), not the
   # Nix shell: a Nix build links to libraries in /nix/store, so it runs only
-  # where those exist. The Linux binaries build in Ubuntu 20.04 (glibc 2.31),
-  # because a binary runs on the glibc it was built with and on newer ones only:
-  # Ubuntu 20.04, Debian 11, RHEL 9 and later. No older glibc works: the clang
-  # that Lean's toolchain ships needs glibc 2.29. Each job checks that the binary loads no library from the
+  # where those exist. The Linux binaries build in Ubuntu 20.04, the oldest
+  # common image where the clang that Lean's toolchain ships runs (it needs
+  # glibc 2.29). A binary needs the glibc symbols it was linked against, and a
+  # newer glibc makes the linker pick newer ones, so building there keeps the
+  # binary at glibc 2.17 symbols: it runs on glibc 2.17 and later. Each job checks that the binary loads no library from the
   # toolchain, runs the npm package's tests with it, and uploads it. Publishing
   # the platform packages is a separate step, not done here.
   binaries:
@@ -79,15 +80,15 @@ jobs:
             exit 1
           fi
 
-      - name: The Linux binary needs glibc 2.31 at most
+      - name: The Linux binary needs glibc 2.17 at most
         if: runner.os == 'Linux'
         run: |
           newest() { objdump -T "$1" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1; }
           echo "the Lean toolchain needs $(newest "$(elan which lean)")"
           need=$(newest .lake/build/bin/tolean)
           echo "tolean needs $need"
-          if [ "$(printf '%s\nGLIBC_2.31\n' "$need" | sort -V | tail -1)" != GLIBC_2.31 ]; then
-            echo "tolean needs a glibc newer than 2.31" >&2
+          if [ "$(printf '%s\nGLIBC_2.17\n' "$need" | sort -V | tail -1)" != GLIBC_2.17 ]; then
+            echo "tolean needs a glibc newer than 2.17" >&2
             exit 1
           fi
 
