@@ -1,3 +1,4 @@
+import { fetchAll, gunzip } from './download.ts';
 import type { WorkspaceFile } from './lean.ts';
 
 /** One unit's result: its generated Lean, or why the translator refused it. */
@@ -31,7 +32,18 @@ export function loadTranslator(base: string): Promise<Translate> {
     const url = new URL(`${base}/tolean.js`, document.baseURI).href;
     const factory = ((await import(/* @vite-ignore */ url)) as { default: (m: object) => Promise<TranslatorModule> })
       .default;
-    const m = await factory({ locateFile: (p: string) => new URL(`${base}/${p}`, document.baseURI).href });
+    const [packed] = await fetchAll([new URL(`${base}/tolean.wasm.bin`, document.baseURI).href], () => {});
+    const bytes = await gunzip(packed!);
+    // This glue reads Module.instantiateWasm but not Module.wasmBinary.
+    const m = await factory({
+      instantiateWasm: (
+        imports: WebAssembly.Imports,
+        receive: (instance: WebAssembly.Instance, module: WebAssembly.Module) => void,
+      ) => {
+        void WebAssembly.instantiate(bytes, imports).then((r) => receive(r.instance, r.module));
+        return {};
+      },
+    });
     if (m._tolean_init() !== 1) throw new Error('The translator did not start.');
     return (files) => {
       const input = m.stringToNewUTF8(JSON.stringify({ files }));

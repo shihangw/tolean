@@ -104,4 +104,7 @@ em++ -O3 -fwasm-exceptions $(find "$objects" -name '*.o' | sort) \
   -sEXPORTED_RUNTIME_METHODS=UTF8ToString,stringToNewUTF8 \
   -o "$out/tolean.js" 2>&1 | grep -v 'signature mismatch\|>>> defined as' || true
 test -f "$out/tolean.wasm"
-echo "built $(du -h "$out/tolean.wasm" | cut -f1) $out/tolean.wasm"
+# The page fetches the gzipped copy and unpacks it, whatever the server does.
+gzip -9 -c "$out/tolean.wasm" > "$out/tolean.wasm.bin"
+rm "$out/tolean.wasm"
+echo "built $(du -h "$out/tolean.wasm.bin" | cut -f1) $out/tolean.wasm.bin (gzipped)"

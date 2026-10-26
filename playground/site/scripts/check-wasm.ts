@@ -50,6 +50,7 @@ async function checkOne(code: string): Promise<Diagnostic[]> {
   mkdirSync(bin, { recursive: true });
   writeFileSync(path.join(bin, 'package.json'), '{ "type": "commonjs" }\n');
   writeFileSync(path.join(bin, 'lean.js'), readFileSync(path.join(leanDir, 'lean.js')));
+  writeFileSync(path.join(bin, 'lean.wasm'), gunzipSync(readFileSync(path.join(leanDir, 'lean.wasm.bin'))));
   const leanJs = path.join(bin, 'lean.js');
   const diagnostics: Diagnostic[] = [];
   let capturing = false;
@@ -66,7 +67,7 @@ async function checkOne(code: string): Promise<Diagnostic[]> {
   const Module: Record<string, unknown> & { [k: string]: any } = {
     noInitialRun: true,
     INITIAL_MEMORY: 2048 * 1024 * 1024,
-    locateFile: (p: string) => path.join(leanDir, p),
+    locateFile: (p: string) => path.join(path.join(site, '.cache/node-lean/bin'), p),
     print: onLine,
     printErr: onLine,
   };

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { Claims } from './Claims.tsx';
 import { type ClaimStatus, type EngineState, LeanChecker, statuses as readStatuses } from './checker.ts';
+import type { Progress } from './download.ts';
 import { Editor } from './Editor.tsx';
 import { shareLink, sharedFromLocation } from './share.ts';
 import { type Translation, loadTranslator } from './translator.ts';
@@ -20,10 +21,22 @@ declare const __BUILD_ID__: string;
 /** How long the page waits after an edit before it checks again. */
 const checkDelayMs = 400;
 
+/** The viewer turned proof checking on once; the browser then keeps Lean cached. */
+const checkingKey = 'tolean-playground-check-proofs';
+function readChecking(): boolean {
+  try {
+    return localStorage.getItem(checkingKey) === 'on';
+  } catch {
+    return false;
+  }
+}
+
 function engineNotice(state: EngineState): string {
   switch (state.kind) {
+    case 'off':
+      return 'Lean checks the proofs in your browser. It is a download of about 44 MB, which the browser keeps after that.';
     case 'loading':
-      return 'Loading Lean (about 130 MB the first time; the browser keeps it after that)…';
+      return 'Downloading Lean, which checks the proofs in your browser. The browser keeps it after the first visit.';
     case 'ready':
       return 'Lean runs in your browser and checks the proofs as you edit. It is an unofficial WebAssembly build of a newer Lean than CI uses; CI checks the same proofs with the pinned Lean.';
     case 'failed':
@@ -33,6 +46,24 @@ function engineNotice(state: EngineState): string {
       return never;
     }
   }
+}
+
+const mb = (bytes: number) => (bytes / 1e6).toFixed(0);
+
+function DownloadBar({ progress }: { progress: Progress }) {
+  const { loaded, total } = progress;
+  return (
+    <div className="download">
+      <progress value={total == null ? undefined : loaded} max={total ?? undefined} />
+      <span>
+        {total == null
+          ? `${mb(loaded)} MB`
+          : loaded >= total
+            ? 'Starting Lean…'
+            : `${mb(loaded)} of ${mb(total)} MB`}
+      </span>
+    </div>
+  );
 }
 
 /** A short hash of a text, to tell versions of a generated file apart. */
@@ -113,7 +144,17 @@ export function App() {
   const claims = useMemo(() => readClaims(files), [files]);
   const proofs = useMemo(() => proofDeclarations(files), [files]);
 
-  const [engine, setEngine] = useState<EngineState>({ kind: 'loading' });
+  // Lean downloads only when the viewer asks to check proofs.
+  const [checking, setChecking] = useState(readChecking);
+  const [engine, setEngine] = useState<EngineState>({ kind: 'off' });
+  function turnOnChecking() {
+    try {
+      localStorage.setItem(checkingKey, 'on');
+    } catch {
+      // Without storage, the viewer turns checking on again on the next visit.
+    }
+    setChecking(true);
+  }
   const checker = useRef<LeanChecker | null>(null);
   checker.current ??= new LeanChecker('./lean', `./lean-worker.js?v=${__BUILD_ID__}`, setEngine);
 
@@ -128,6 +169,10 @@ export function App() {
     if (translationErrors.length > 0) {
       const reason = `Tolean could not translate the source: ${translationErrors[0]}`;
       setStatuses(new Map(names.map((n) => [n, { kind: 'broken', reason }])));
+      return;
+    }
+    if (!checking) {
+      setStatuses(new Map(names.map((n) => [n, { kind: 'unchecked' }])));
       return;
     }
     const b = bundle(data.goSpec, ordered, names);
@@ -149,7 +194,7 @@ export function App() {
     };
     // translationErrors is derived from translation, which is listed.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, current, files, claims, translation]);
+  }, [data, current, files, claims, translation, checking]);
 
   function updateFile(path: string, text: string) {
     if (current == null) return;
@@ -289,7 +334,15 @@ export function App() {
       </main>
 
       <aside className="side">
-        <p className={engine.kind === 'failed' ? 'notice failed' : 'notice'}>{engineNotice(engine)}</p>
+        <div className={engine.kind === 'failed' ? 'notice failed' : 'notice'}>
+          <p>{engineNotice(engine)}</p>
+          {engine.kind === 'loading' && <DownloadBar progress={engine.progress} />}
+          {engine.kind === 'off' && !checking && (
+            <button type="button" className="primary" onClick={turnOnChecking}>
+              Check proofs
+            </button>
+          )}
+        </div>
         {translatorError != null && (
           <p className="notice failed">
             The translator did not load ({translatorError}), so the generated Lean is the copy that came with the

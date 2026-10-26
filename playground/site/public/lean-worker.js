@@ -2,11 +2,13 @@
 // worker of github.com/cauli/lean4-wasm-in-browser (Apache-2.0), whose Lean
 // build this is.
 //
-// Messages in:  { type: 'start', base, module, files: [{ path, data }] }
+// Messages in:  { type: 'start', base, wasm, files: [{ path, data }] }
 //               { type: 'check', id, code }
 //
-// `module` is lean.wasm, compiled once by the page, so a new worker does not
-// compile 100 MB again. The page runs one check per worker: after a check that
+// `wasm` is the bytes of lean.wasm, which the page downloads gzipped and
+// unpacks once. This lean.js reads neither Module.wasmBinary nor
+// Module.instantiateWasm; it always fetches lean.wasm. So the worker answers
+// that one fetch with the bytes it was given. The page runs one check per worker: after a check that
 // unfolds a recursive definition, this Lean build fails every later check, so
 // the page starts a fresh worker instead. See
 // https://github.com/cauli/lean4-wasm-in-browser/issues/4.
@@ -71,14 +73,10 @@ function pickMemory() {
   return {};
 }
 
-function start(base, module, files) {
+function start(base, wasm, files) {
   self.Module = {
     ...pickMemory(),
     noInitialRun: true,
-    instantiateWasm: (imports, receive) => {
-      WebAssembly.instantiate(module, imports).then((instance) => receive(instance, module));
-      return {};
-    },
     locateFile: (p) => base + '/' + p,
     // The threads that this worker starts load lean.js, not this file.
     mainScriptUrlOrBlob: base + '/lean.js',
@@ -119,6 +117,13 @@ function start(base, module, files) {
     },
     onAbort: (what) => self.postMessage({ type: 'error', message: 'Lean stopped: ' + (what || 'unknown') }),
   };
+  const wasmUrl = new URL(base + '/lean.wasm', self.location.href).href;
+  const realFetch = self.fetch.bind(self);
+  self.fetch = (input, init) => {
+    const url = new URL(typeof input === 'string' ? input : input.url, self.location.href).href;
+    if (url === wasmUrl) return Promise.resolve(new Response(wasm, { headers: { 'Content-Type': 'application/wasm' } }));
+    return realFetch(input, init);
+  };
   try {
     importScripts(base + '/lean.js');
   } catch (e) {
@@ -146,6 +151,6 @@ function check(code) {
 
 self.onmessage = (event) => {
   const msg = event.data;
-  if (msg.type === 'start') start(msg.base, msg.module, msg.files);
+  if (msg.type === 'start') start(msg.base, msg.wasm, msg.files);
   else if (msg.type === 'check') self.postMessage({ type: 'result', id: msg.id, ...check(msg.code) });
 };

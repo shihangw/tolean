@@ -1,3 +1,4 @@
+import { type Progress, fetchAll, gunzip } from './download.ts';
 import { type Bundle, locate } from './lean.ts';
 
 /** The result of checking one claim. */
@@ -16,7 +17,8 @@ interface Diagnostic {
 
 /** The state of the Lean that runs in the page. */
 export type EngineState =
-  | { readonly kind: 'loading' }
+  | { readonly kind: 'off' }
+  | { readonly kind: 'loading'; readonly progress: Progress }
   | { readonly kind: 'ready' }
   | { readonly kind: 'failed'; readonly message: string };
 
@@ -71,9 +73,9 @@ type WorkerMessage =
       readonly elapsed: number;
     };
 
-/** What every worker starts from: the compiled WebAssembly and the Init library. */
+/** What every worker starts from: the bytes of lean.wasm and the Init library. */
 interface Runtime {
-  readonly module: WebAssembly.Module;
+  readonly wasm: ArrayBuffer;
   readonly index: readonly PackEntry[];
   readonly pack: ArrayBuffer;
 }
@@ -114,7 +116,7 @@ export class LeanChecker {
   /** Start Lean: download it and warm up the first worker. */
   start(): Promise<Warm> {
     if (this.spare == null) {
-      this.onState({ kind: 'loading' });
+      this.onState({ kind: 'loading', progress: { loaded: 0, total: null } });
       this.spare = this.warm().then(
         (w) => {
           this.onState({ kind: 'ready' });
@@ -162,26 +164,19 @@ export class LeanChecker {
   private loadRuntime(): Promise<Runtime> {
     this.runtime ??= (async () => {
       if (!crossOriginIsolated) throw new Error('The page is not cross-origin isolated, so Lean cannot start.');
-      const [module, index, pack] = await Promise.all([
-        WebAssembly.compileStreaming(fetch(`${this.base}/lean.wasm`)),
-        fetch(`${this.base}/init.index.json`).then((r) => r.json() as Promise<PackEntry[]>),
-        fetch(`${this.base}/init.pack.bin`).then(async (r) => {
-          if (!r.ok) throw new Error(`The Lean library did not download (${r.status}).`);
-          // The file is gzipped, but some servers unpack it on the way, so
-          // unpack only when the bytes still start with gzip's signature.
-          const bytes = await r.arrayBuffer();
-          const head = new Uint8Array(bytes, 0, 2);
-          if (head[0] !== 0x1f || head[1] !== 0x8b) return bytes;
-          return new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
-        }),
-      ]);
-      return { module, index, pack };
+      const [wasm, indexBytes, packed] = await fetchAll(
+        [`${this.base}/lean.wasm.bin`, `${this.base}/init.index.json`, `${this.base}/init.pack.bin`],
+        (progress) => this.onState({ kind: 'loading', progress }),
+      );
+      const [wasmBytes, pack] = await Promise.all([gunzip(wasm!), gunzip(packed!)]);
+      const index = JSON.parse(new TextDecoder().decode(indexBytes)) as PackEntry[];
+      return { wasm: wasmBytes, index, pack };
     })();
     return this.runtime;
   }
 
   private async warm(): Promise<Warm> {
-    const { module, index, pack } = await this.loadRuntime();
+    const { wasm, index, pack } = await this.loadRuntime();
     // Each worker gets its own copy of the library, which it takes over.
     const files = index.map((e) => ({ path: e.path, data: pack.slice(e.offset, e.offset + e.length) }));
     const worker = new Worker(this.workerUrl);
@@ -211,10 +206,12 @@ export class LeanChecker {
           }
         }
       };
-      worker.postMessage(
-        { type: 'start', base: this.base, module, files },
-        files.map((f) => f.data),
-      );
+      // The worker takes over its own copy of the bytes, so the page keeps one for the next worker.
+      const wasmCopy = wasm.slice(0);
+      worker.postMessage({ type: 'start', base: this.base, wasm: wasmCopy, files }, [
+        wasmCopy,
+        ...files.map((f) => f.data),
+      ]);
     });
     return {
       check: (code) =>

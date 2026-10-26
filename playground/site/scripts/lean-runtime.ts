@@ -2,7 +2,7 @@
  * Fetch the Lean that runs in the browser, check it, and write what the page
  * serves under public/lean/:
  *
- * - lean.js and lean.wasm, the Lean compiled to WebAssembly;
+ * - lean.js and lean.wasm.bin, the Lean compiled to WebAssembly, gzipped;
  * - init.pack.bin and init.index.json, the `.olean` files of `Init` joined into
  *   one gzipped file, so the page fetches one file and not 629.
  *
@@ -54,9 +54,10 @@ for (const [file, expected] of Object.entries(pin.objects)) check(path.join(extr
 
 rmSync(out, { recursive: true, force: true });
 mkdirSync(out, { recursive: true });
-for (const name of ['lean.js', 'lean.wasm']) {
-  writeFileSync(path.join(out, name), readFileSync(path.join(extracted, 'bin', name)));
-}
+writeFileSync(path.join(out, 'lean.js'), readFileSync(path.join(extracted, 'bin/lean.js')));
+// Gzip cuts lean.wasm from 101 MB to 17 MB. The page unpacks it itself, so it
+// does not depend on whether the server compresses .wasm files.
+writeFileSync(path.join(out, 'lean.wasm.bin'), gzipSync(readFileSync(path.join(extracted, 'bin/lean.wasm')), { level: 9 }));
 
 // Lean reads only the .olean files of Init; the .ir files serve #eval of
 // library code, which the playground does not need.
