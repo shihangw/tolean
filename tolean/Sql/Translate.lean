@@ -10,7 +10,7 @@ def Q (now : Pg.Timestamp) (args…) (db : DB) : Pg.Result (result × DB)
 
 - Every table in `FROM` and every `UPDATE` target must be reached through its
   primary key, by a condition `alias.key = e` where `e` does not read the
-  table. tolean refuses a full scan. With the invariant `Valid db`, which says
+  table. Tolean refuses a full scan. With the invariant `Valid db`, which says
   each row sits under its own key, the lookup gives the same rows as a scan.
 - Every part of a statement reads the snapshot `db` from before the
   statement, as data-modifying `WITH` queries do in PostgreSQL, and the

@@ -222,7 +222,7 @@ def peekAssignOp : ParseM (Option (AssignOp × Nat)) := do
 
 /-- `tsc` reads `f < A, B > (x)` as a call with type arguments, where
 JavaScript reads two comparisons, and type stripping keeps `tsc`'s reading.
-tolean does not parse type arguments in expressions, so it refuses every `<`
+Tolean does not parse type arguments in expressions, so it refuses every `<`
 operator that `tsc` could read as their start: any `<` followed by a `>`
 before the end of its group or statement. This refuses some plain
 comparisons, such as `a < b && c > d`; parentheses make them parse. -/

@@ -6,6 +6,8 @@ import tolean.Go.Syntax.Print
 import tolean.Go.Translate
 import tolean.Sql.Translate
 import tolean.Chain.Check
+import tolean.TypeScript.Certify
+import tolean.Project
 
 /-!
 The `tolean` command.
@@ -13,8 +15,12 @@ The `tolean` command.
 ```
 tolean parse [--target ES20xx] <file>
     print the syntax tree of <file>
-tolean translate [--target ES20xx] <input> <output.lean> <Namespace>
-    write <input> as Lean definitions
+tolean translate [--check]
+    build every unit that tolean.json lists; with --check, write nothing and
+    fail when a generated file is not current
+tolean translate [--target ES20xx] [--certify] <input> <output.lean> <Namespace>
+    write <input> as Lean definitions; with --certify, also write its
+    certificate next to it when some function can have one (see `certify`)
 tolean translate-go --root F [--root G…] [--erase-type T…] [--erase-package P…]
     <output.lean> <Namespace> <file.go>…
     write the Go functions F, G… of one package, and what they reach
@@ -23,6 +29,11 @@ tolean translate-sql <output.lean> <Namespace> --query Q [--query R…]
     write the schema the queries reach (from the migrations, in order) and the queries
 tolean sql-schema --table T [--table U…] --migrations <file.sql>…
     print the schema of the tables T, U… and the tables they reference
+tolean certify [--target ES20xx] <input.ts> <Translated.Module> <Translated.Namespace> <output.lean> <Cert.Namespace>
+    [--manifest <output>.chain.json]
+    write a certificate: one theorem per function, that the interpreter and the
+    translated Lean give the same result for every input; --manifest records it in
+    the translation's chain manifest
 tolean chain check <tolean.chain.json> [--passed check,check…]
     check that the files are unchanged, each status has evidence, and each claim
     is a theorem of exactly its spec with the recorded axioms
@@ -40,10 +51,12 @@ open tolean tolean.TypeScript
 
 def usage : String :=
   "usage: tolean parse [--target ES20xx] <file.ts>\n" ++
-  "       tolean translate [--target ES20xx] <input.ts> <output.lean> <Lean.Namespace>\n" ++
+  "       tolean translate [--check]\n" ++
+  "       tolean translate [--target ES20xx] [--certify] <input.ts> <output.lean> <Lean.Namespace>\n" ++
   "       tolean translate-sql <output.lean> <Lean.Namespace> --query Q --queries <file.sql>... --migrations <file.sql>...\n" ++
   "       tolean sql-schema --table T --migrations <file.sql>...\n" ++
   "       tolean translate-go --root F [--erase-type T] [--erase-package P] <output.lean> <Lean.Namespace> <file.go>...\n" ++
+  "       tolean certify [--target ES20xx] <input.ts> <Translated.Module> <Translated.Namespace> <output.lean> <Cert.Namespace> [--manifest <output>.chain.json]\n" ++
   "       tolean chain check <tolean.chain.json> [--passed check,check...]\n" ++
   "       tolean chain graph <tolean.chain.json>\n" ++
   "       tolean chain trust <tolean.chain.json> <claim>\n" ++
@@ -76,13 +89,33 @@ def parseFile (target : Edition) (path : String) : IO UInt32 := do
     IO.eprintln (e.render path)
     return 1
 
-def translateFile (target : Edition) (input output ns : String) : IO UInt32 := do
+/-- Where the certificate of `output` goes: `Raise.lean` gets `RaiseCert.lean`. -/
+def certPath (output : String) : String :=
+  if output.endsWith ".lean" then (output.dropEnd 5).toString ++ "Cert.lean" else output ++ "Cert.lean"
+
+/-- Write the certificate of a translation, when some function can have one,
+and record it in the manifest. Remove a certificate that a former run wrote
+when no function can have one now. -/
+def certifyAfterTranslate (target : Edition) (input source output ns : String) : IO Unit := do
+  let path := certPath output
+  match Certify.certify input source ns ns (ns ++ "Cert") target with
+  | .ok lean =>
+    IO.FS.writeFile path lean
+    let .ok (fns, all) := Certify.certifiedFunctions source target | return
+    Chain.recordCertificate (output ++ ".chain.json") path (ns ++ "Cert")
+      (fns.map fun f => (f, s!"{ns}Cert.{f}_cert")) all
+  | .error _ =>
+    if ← System.FilePath.pathExists path then IO.FS.removeFile path
+
+def translateFile (target : Edition) (input output ns : String) (certify : Bool := false) :
+    IO UInt32 := do
   unless ← checkLanguage input do return 2
   let source ← IO.FS.readFile input
   match Translate.translate input source ns target with
   | .ok lean =>
     IO.FS.writeFile output lean
     Chain.emit "typescript" (some target.name) [input] output ns
+    if certify then certifyAfterTranslate target input source output ns
     return 0
   | .error message =>
     IO.eprintln message
@@ -168,12 +201,45 @@ def sqlSchema (opts : List String) : IO UInt32 := do
       IO.eprintln m
       return 1
 
+/-- Build every unit that `tolean.json` lists, or with `check`, fail when a
+generated file is not current. -/
+def translateProject (check : Bool) : IO UInt32 := do
+  unless ← System.FilePath.pathExists "tolean.json" do
+    IO.eprintln "no tolean.json in this directory"
+    return 2
+  try
+    let config ← Chain.readJson (A := Lean.Json) "tolean.json"
+    let writes ← Project.plan config
+    let stale ← Project.apply writes check
+    if check && stale > 0 then return 1
+    if check then IO.println "every generated file is current"
+    return 0
+  catch e =>
+    IO.eprintln e
+    return 1
+
 def run (target : Edition) : List String → IO UInt32
   | ["parse", path] => parseFile target path
+  | ["translate"] => translateProject false
+  | ["translate", "--check"] => translateProject true
   | ["translate", input, output, ns] => translateFile target input output ns
+  | ["translate", "--certify", input, output, ns] => translateFile target input output ns true
   | "translate-sql" :: rest => translateSql rest
   | "sql-schema" :: rest => sqlSchema rest
   | "translate-go" :: rest => translateGo { roots := [], eraseTypes := [], erasePackages := [] } rest
+  | "certify" :: input :: transModule :: transNs :: output :: certNs :: rest => do
+    let source ← IO.FS.readFile input
+    match Certify.certify input source transModule transNs certNs target with
+    | .ok lean =>
+      IO.FS.writeFile output lean
+      if let ["--manifest", manifest] := rest then
+        let .ok (fns, all) := Certify.certifiedFunctions source target | return 1
+        Chain.recordCertificate manifest output certNs
+          (fns.map fun f => (f, s!"{certNs}.{f}_cert")) all
+      return 0
+    | .error e =>
+      IO.eprintln e
+      return 1
   | ["chain", "graph", path] => Chain.graph path
   | ["chain", "trust", path, claim] => Chain.trust path claim
   | "chain" :: "check" :: path :: rest =>

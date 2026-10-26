@@ -1,0 +1,8 @@
+{
+  "typescript": {
+    "sources": ["sensor/*.ts", "access/*.ts"],
+    "overrides": [
+      { "sources": ["sensor/raise.ts"], "certify": true }
+    ]
+  }
+}

@@ -45,7 +45,7 @@ def allEdges (l : Loaded) : List (String × String) :=
 private def freshness (l : Loaded) : IO (List String) := do
   let mut errs := []
   for (f, m) in l.files do
-    for r in m.sources ++ [m.output] do
+    for r in m.sources ++ [m.output] ++ m.certificate.toList do
       let p := l.dir / r.path
       if !(← p.pathExists) then
         errs := errs ++ [s!"{f}: {r.path} is missing"]
@@ -54,7 +54,14 @@ private def freshness (l : Loaded) : IO (List String) := do
   return errs
 
 private def evidence (l : Loaded) (passed : List String) : List String :=
-  l.files.flatMap (fun (f, m) => m.nodes.filterMap fun n => nodeErr s!"{f}: {n.id}" m.tolean n) ++
+  l.files.flatMap (fun (f, m) => m.nodes.filterMap fun n =>
+    -- A translator that certificates prove has no single theorem: each
+    -- certificate node that points to it carries one.
+    let certified := m.edges.any (fun (a, b) => b == n.id && a.startsWith "certificate:") &&
+      m.edges.all (fun (a, b) => b != n.id || !a.startsWith "certificate:" ||
+        m.nodes.any (fun c => c.id == a && c.status == .proved))
+    if n.status == .proved && n.«theorem».isNone && certified then none
+    else nodeErr s!"{f}: {n.id}" m.tolean n) ++
   l.project.nodes.filterMap fun n => nodeErr s!"project: {n.id}" version n
 where
   nodeErr (at_ tool : String) (n : Node) : Option String :=

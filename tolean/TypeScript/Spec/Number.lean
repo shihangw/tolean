@@ -19,7 +19,7 @@ These are hypotheses, not postulates: if one were false, the theorem would not
 apply to JS, but Lean stays consistent. `tests/typescript/jsNumberLaws.test.ts`
 checks each one against JS.
 
-Editions: every edition tolean supports (`tolean.TypeScript.Edition`). ECMA-262
+Editions: every edition Tolean supports (`tolean.TypeScript.Edition`). ECMA-262
 has defined a `number` as an IEEE-754 binary64 double since its first edition
 (the Number type, with `Number::add`, `Number::lessThan` and the like), and
 `Number.isSafeInteger`, `Number.isNaN` and `Number.isFinite` since ES2015.

@@ -4,7 +4,7 @@
 
 Real code calls libraries that change the world outside the program. A
 logger writes lines, a tracer sends spans, and a database client changes
-rows. tolean refuses such calls today, except for two narrow cases. The Go
+rows. Tolean refuses such calls today, except for two narrow cases. The Go
 translator erases observability statements, and a Go interface becomes a
 store whose model a proof plugs in. This plan replaces both cases with one
 mechanism that the TypeScript and Go translators share. The mechanism also
@@ -48,9 +48,9 @@ effectful one.
 ## 2. The tags
 
 The tag set is small and fixed, so the boundary stays stable while libraries
-grow. tolean proves the law of each tag once, in its own library.
+grow. Tolean proves the law of each tag once, in its own library.
 
-| Tag | Meaning | Law that tolean proves once |
+| Tag | Meaning | Law that Tolean proves once |
 |---|---|---|
 | `pure` | The function has no effect. | It is an ordinary function. |
 | `observe` | The call only writes telemetry. | No result depends on the telemetry, so a proof about values can drop it. |
@@ -115,7 +115,7 @@ A boundary moves through three stages:
 |---|---|---|
 | Declared | A person wrote the declaration. | `trusted` |
 | Tested | The library ran under instrumentation. For example, a check removed every `observe` call and saw no change in any result. | `tested` |
-| Proved | tolean translated the library and proved that it keeps its tags. | `proved` |
+| Proved | Tolean translated the library and proved that it keeps its tags. | `proved` |
 
 The proofs stop at a small set of primitive effects, such as system calls,
 the clock and the network. These primitives stay trusted, as the JavaScript
@@ -150,7 +150,7 @@ code that has no effects.
 
 ## Open questions
 
-- Should a declaration file live with tolean, in a shared registry like
+- Should a declaration file live with Tolean, in a shared registry like
   DefinitelyTyped, or with each project?
 - Should SQL statements become a declared resource, so that SQL uses the same
   classes as Go and TypeScript?

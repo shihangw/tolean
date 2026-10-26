@@ -5,7 +5,7 @@ The schema translator. It replays migrations in order and keeps the final
 shape of the tables that the translated queries reach, and of the tables their
 foreign keys point to.
 
-A statement that could change a reached table or type must parse; tolean
+A statement that could change a reached table or type must parse; Tolean
 refuses it otherwise. A statement that names none of them, such as an
 extension setup, is skipped, and so is one that cannot change a schema at all,
 such as a data backfill or a session setting.

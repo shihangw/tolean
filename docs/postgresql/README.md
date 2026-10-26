@@ -1,6 +1,6 @@
 # PostgreSQL
 
-tolean translates PostgreSQL queries written for sqlc, with the schema that
+Tolean translates PostgreSQL queries written for sqlc, with the schema that
 their migrations build. Each query becomes a function from a database to a
 result and a new database. The [README](../../README.md) describes the parts
 that all languages share.
@@ -11,7 +11,7 @@ marks which links are proved, tested against a reference, or trusted.
 ## The translator
 
 `tolean/Sql/` translates PostgreSQL queries written for sqlc, together with
-the schema they read. You name the root queries, and tolean replays the
+the schema they read. You name the root queries, and Tolean replays the
 migrations in order to find the final shape of the tables those queries
 reach:
 
@@ -52,13 +52,13 @@ and `COALESCE`.
   sits under its own key, `bigint` values stay in range, foreign keys point
   to rows, and unique columns are unique. Proofs may assume it.
 - A migration statement that could change a reached table must parse, or
-  tolean refuses it. Statements about other tables, data backfills and
+  Tolean refuses it. Statements about other tables, data backfills and
   session settings are skipped.
 - Each query becomes a function from the database to a result and a new
   database, or a PostgreSQL error such as `bigint out of range`. `now()` is an
   argument, because it stays the same within a transaction.
 - Every table must be reached through its primary key. With `Valid db`, the
-  lookup gives the same rows as a scan would. tolean refuses a full scan.
+  lookup gives the same rows as a scan would. Tolean refuses a full scan.
 - Conditions use SQL's three-valued logic. PostgreSQL does not fix the order
   in which it evaluates `AND` and `OR`, so the model raises an error only
   when every order must. Whenever PostgreSQL succeeds, the model succeeds with
@@ -80,7 +80,7 @@ theorems about every interleaving of transactions:
 
 The model covers the case READ COMMITTED does protect. It does not protect a
 write whose value came from an earlier read of the same table without a lock.
-So tolean refuses an `UPDATE` that uses a value read from its own table in the
+So Tolean refuses an `UPDATE` that uses a value read from its own table in the
 same statement, through a `WITH` query or a subquery, unless that read uses
 `FOR UPDATE`.
 
@@ -89,14 +89,14 @@ against a real PostgreSQL that it starts for the test:
 
 - The translation must equal the committed `.lean` file, and Lean must
   compile it.
-- The schema that tolean built must match PostgreSQL's catalog after the same
+- The schema that Tolean built must match PostgreSQL's catalog after the same
   migrations.
 - The directory's `Scenarios.lean` runs the generated code on many database
   states and writes what each query should return and leave behind. Each
   scenario then runs in PostgreSQL, in a transaction that is rolled back, and
   the two must agree.
 
-It also requires tolean to refuse each query in `tests/sql/reject/`, with the
+It also requires Tolean to refuse each query in `tests/sql/reject/`, with the
 message in that directory's `expect` file. And it checks, on the real server,
 the READ COMMITTED behavior the model relies on: of two transactions that take
 20 from a counter with 30 left, a guarded `UPDATE` lets only one take, while a

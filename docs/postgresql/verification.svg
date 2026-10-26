@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="980" height="820" viewBox="0 0 980 820" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-labelledby="title desc">
   <title id="title">PostgreSQL: what is proved and what is trusted</title>
-  <desc id="desc">Migrations and sqlc queries go through tolean's SQL parser, the schema translator, tested against PostgreSQL's catalog, and the query translator, tested against a real server on generated scenarios, to generated Lean. The READ COMMITTED model's theorems are proved, and the model itself is tested against the real server. Proofs about the queries, such as that a store built on them keeps a contract, are checked by Lean. What runs is the real SQL on the PostgreSQL server.</desc>
+  <desc id="desc">Migrations and sqlc queries go through Tolean's SQL parser, the schema translator, tested against PostgreSQL's catalog, and the query translator, tested against a real server on generated scenarios, to generated Lean. The READ COMMITTED model's theorems are proved, and the model itself is tested against the real server. Proofs about the queries, such as that a store built on them keeps a contract, are checked by Lean. What runs is the real SQL on the PostgreSQL server.</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M0,0 L10,5 L0,10 z" fill="#3c4043"/>

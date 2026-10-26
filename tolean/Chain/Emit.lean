@@ -4,7 +4,7 @@ import tolean.Version
 
 /-!
 The chain each translator writes next to its output. The nodes say what the
-translation relies on; tolean's own CI runs the checks named `by: tolean`.
+translation relies on; Tolean's own CI runs the checks named `by: tolean`.
 -/
 namespace tolean.Chain
 
@@ -52,13 +52,60 @@ def languageChain : String → List Node × List (String × String)
      [("source", "parser"), ("parser", "translator"), ("translator", "output"),
       ("spec", "output"), ("isolation", "output"), ("runtime", "output")])
 
+def textRef (path text : String) : FileRef :=
+  { path, sha256 := sha256Hex text.toUTF8 }
+
+/-- The manifest of a translation whose output is `outputText`. -/
+def fileManifest (language : String) (target : Option String) (sources : List String)
+    (output outputText module : String) : IO FileManifest := do
+  let (nodes, edges) := languageChain language
+  return { tolean := version, language, target, sources := ← sources.mapM fileRef
+           output := textRef output outputText, module, nodes, edges }
+
+/-- A manifest as the text of its file. -/
+def manifestText (m : FileManifest) : String := (compact (Lean.toJson m)).pretty ++ "\n"
+
 /-- Write `<output>.chain.json` for a translation that just wrote `output`. -/
 def emit (language : String) (target : Option String) (sources : List String)
     (output module : String) : IO Unit := do
-  let (nodes, edges) := languageChain language
-  writeJson (output ++ ".chain.json") ({
-    tolean := version, language, target
-    sources := ← sources.mapM fileRef, output := ← fileRef output
-    module, nodes, edges } : FileManifest)
+  let m ← fileManifest language target sources output (← IO.FS.readFile output) module
+  IO.FS.writeFile (output ++ ".chain.json") (manifestText m)
+
+/-- Record a certificate in the file manifest at `path`. Each function that
+has a theorem gets a proved node. When every function has one, the translator
+is proved for this file; the interpreter and the term printer are then the
+links the proof trusts. -/
+def withCertificate (m : FileManifest) (certFile certText certModule : String)
+    (theorems : List (String × String)) (allFunctions : Bool) : FileManifest :=
+  let axioms := ["propext", "Classical.choice", "Quot.sound"]
+  let certNodes := theorems.map fun (fn, thm) =>
+    ({ id := s!"certificate:{fn}", kind := "proof", status := .proved
+       label := s!"{fn}: interpreter equals translation", module := some certModule
+       «theorem» := some thm, axioms } : Node)
+  let extra : List Node := [
+    { id := "semantics", kind := "spec", status := .trusted
+      label := "TypeScript semantics (interpreter)", module := some "tolean.TypeScript.Spec.Eval" },
+    { id := "term-printer", kind := "translator", status := .trusted
+      label := "syntax tree printed as a Lean term" }]
+  let nodes := (m.nodes.filter fun n => !(n.id.startsWith "certificate:") && n.id != "semantics" &&
+      n.id != "term-printer").map fun n =>
+    if n.id == "translator" && allFunctions then
+      { n with status := .proved, label := n.label ++ " (certified for this file)"
+               evidence := none }
+    else n
+  let certEdges := theorems.flatMap fun (fn, _) =>
+    [("parser", s!"certificate:{fn}"), ("term-printer", s!"certificate:{fn}"),
+     ("semantics", s!"certificate:{fn}"), (s!"certificate:{fn}", "translator")]
+  { m with
+    nodes := nodes ++ extra ++ certNodes
+    edges := (m.edges.filter fun ((a, b) : String × String) =>
+      !(a.startsWith "certificate:" || b.startsWith "certificate:")) ++ certEdges
+    certificate := some (textRef certFile certText) }
+
+/-- Record a certificate in the file manifest at `path`. -/
+def recordCertificate (path : System.FilePath) (certFile certModule : String)
+    (theorems : List (String × String)) (allFunctions : Bool) : IO Unit := do
+  let m : FileManifest ← readJson path
+  writeJson path (withCertificate m certFile (← IO.FS.readFile certFile) certModule theorems allFunctions)
 
 end tolean.Chain

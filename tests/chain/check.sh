@@ -7,7 +7,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 T=../../.lake/build/bin/tolean
 tmp=$(mktemp -d)
-trap 'cp "$tmp/raise.ts" sensor/raise.ts; cp "$tmp/project.json" tolean.chain.json; rm -rf "$tmp"' EXIT
+trap 'cp "$tmp/raise.ts" sensor/raise.ts; cp "$tmp/project.json" tolean.chain.json; [ -f "$tmp/Raise.lean.good" ] && cp "$tmp/Raise.lean.good" sensor/Raise.lean; rm -rf "$tmp"' EXIT
 cp sensor/raise.ts "$tmp/raise.ts"
 cp tolean.chain.json "$tmp/project.json"
 
@@ -20,19 +20,38 @@ expect_fail() { # <name> <expected text> [args]
   echo "ok: $name"
 }
 
-# The generated file is current, and its hash is SHA-256 as shasum computes it.
-$T translate sensor/raise.ts "$tmp/Raise.lean" sensor.Raise
-cmp -s "$tmp/Raise.lean" sensor/Raise.lean || fail "sensor/Raise.lean is not current"
+# Every generated file is current: tolean.json rebuilds exactly what is
+# committed, the certificate included.
+$T translate --check >/dev/null || fail "a generated file is not current: $($T translate --check 2>&1)"
+echo "ok: generated files current"
+
+# The manifest's hash is SHA-256 as shasum computes it.
 want=$(shasum -a 256 sensor/raise.ts | cut -d' ' -f1)
 grep -qF "\"sha256\": \"$want\"" sensor/Raise.lean.chain.json || fail "SHA-256 differs from shasum"
 echo "ok: sha256"
 
 lake build --wfail >/dev/null
+
+# A wrong translation breaks the certificate: add 1 to one branch.
+cp sensor/Raise.lean "$tmp/Raise.lean.good"
+sed -i.bak 's/level := (g.level + step)/level := (g.level + step + 1)/' sensor/Raise.lean
+rm -f sensor/Raise.lean.bak
+grep -q 'step + 1' sensor/Raise.lean || fail "the mutation did not apply"
+lake build sensor.Raise >/dev/null
+if lake env lean sensor/RaiseCert.lean >/dev/null 2>&1; then
+  cp "$tmp/Raise.lean.good" sensor/Raise.lean
+  fail "the certificate accepted a wrong translation"
+fi
+cp "$tmp/Raise.lean.good" sensor/Raise.lean
+lake build --wfail >/dev/null
+echo "ok: a wrong translation breaks the certificate"
 check >/dev/null || fail "the committed chain does not hold: $(check)"
 echo "ok: the chain holds"
 
 echo "// edit" >> sensor/raise.ts
 expect_fail "changed source" "sensor/raise.ts changed since it was translated"
+$T translate --check >/dev/null 2>&1 && fail "translate --check accepted a changed source"
+echo "ok: translate --check sees the change"
 cp "$tmp/raise.ts" sensor/raise.ts
 
 sed -i.bak 's/"status": "trusted"/"status": "tested", "evidence": {"check": "caller-audit", "by": "project"}/' tolean.chain.json
@@ -47,9 +66,10 @@ cp "$tmp/project.json" tolean.chain.json
 rm -f tolean.chain.json.bak
 
 trust=$($T chain trust tolean.chain.json raise_stays_under_max)
-for want in "trusted: sensor.Raise:runtime" "trusted: callers" "tested: sensor.Raise:parser"; do
+for want in "trusted: sensor.Raise:runtime" "trusted: callers" "tested: sensor.Raise:parser" "trusted: sensor.Raise:semantics"; do
   grep -qF "$want" <<<"$trust" || fail "chain trust lacks '$want'"
 done
+if grep -q "sensor.Raise:translator" <<<"$trust"; then fail "chain trust still lists the certified translator"; fi
 echo "ok: trust"
 $T chain graph tolean.chain.json | grep -q '"callers" -> "raise_stays_under_max"' || fail "graph lacks an edge"
 echo "ok: graph"

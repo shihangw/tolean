@@ -5,7 +5,7 @@ import tolean.Go.Syntax.Lexer
 The Go parser: recursive descent, with precedence climbing for binary
 operators, as `go/parser` reads Go. Every node gets the span `go/ast` gives it.
 
-It reads the part of Go that tolean supports, and refuses everything else
+It reads the part of Go that Tolean supports, and refuses everything else
 with a position and a reason: generics, channels, `go`, `goto`, `select`,
 labels and `fallthrough`. It reads some syntax that the translator refuses,
 such as type switches, function literals and `defer`, so that a file can be

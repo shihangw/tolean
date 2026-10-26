@@ -1,7 +1,7 @@
 import tolean.Go.Syntax.Token
 
 /-!
-The Go syntax tree. It follows `go/ast` for the syntax that tolean reads, and
+The Go syntax tree. It follows `go/ast` for the syntax that Tolean reads, and
 every node's span is the one `go/ast` gives it, from `Pos()` to `End()`.
 
 The parser reads more than the translator supports, such as type switches and

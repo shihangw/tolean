@@ -1,6 +1,6 @@
 # TypeScript
 
-tolean translates pure TypeScript functions into plain Lean functions. This
+Tolean translates pure TypeScript functions into plain Lean functions. This
 page describes the parser, the translator, the subset it accepts, how it
 models JS numbers, and what is proved and what is trusted. The
 [README](../../README.md) describes the parts that all languages share.
@@ -38,7 +38,7 @@ reading. There are two such cases:
 - `(a)` followed by `{`. `tsc` reads an arrow function that is missing its
   `=>`, but JavaScript reads `(a); {`.
 
-The parser also refuses code that tolean cannot represent exactly. Examples
+The parser also refuses code that Tolean cannot represent exactly. Examples
 are lone surrogates, legacy octal literals, template literals and non-ASCII
 names.
 
@@ -76,9 +76,48 @@ TypeScript translator in `npm/`, which uses `tsc`:
   meaning. Those lints are TS2367 and TS2845, which flag comparisons whose
   answer is fixed, and TS2322 when the target type is `true` or `false`.
 
+#### Certificates
+
+A certificate proves one file's translation, so that file no longer trusts
+the translator. `tolean/TypeScript/Spec/Eval.lean` is an interpreter for the
+subset: it runs the syntax tree that the parser returns, following ECMA-262.
+For each function, `tolean certify` writes a theorem that the interpreter and
+the translated Lean give the same result for every input:
+
+```lean
+theorem raise_cert (g : _) (step : _) :
+    run program "raise" [(encGauge g), (Val.int step)] =
+      some (encGauge (sensor.Raise.raise g step)) := by
+  certify_tac [program, encGauge, sensor.Raise.raise]
+```
+
+```sh
+tolean certify sensor/raise.ts sensor.Raise sensor.Raise sensor/RaiseCert.lean sensor.RaiseCert \
+  --manifest sensor/Raise.lean.chain.json
+```
+
+Certificates are optional for now. `tolean translate --certify` writes the
+certificate next to the translation, as `RaiseCert.lean` beside `Raise.lean`,
+and records it in the manifest. Without `--certify`, `translate` writes only
+the translation. In a project file, `"certify": true` asks for the same.
+
+The command does not need to be trusted. If it writes a wrong encoding or a
+wrong theorem, Lean refuses the file. A certified file trusts the parser, the
+interpreter, and the printer that writes the syntax tree as a Lean term,
+instead of the translator. With `--manifest`, the chain records this: the
+translator link becomes `proved`, and `chain trust` lists the interpreter
+and the printer in its place.
+
+A function gets a certificate when it and the functions it calls have no
+loops and no `number` values. `tests/typescript/checkCertify.sh` certifies
+each corpus file it can, and `tests/chain/check.sh` checks that a wrong
+translation breaks a certificate. [The certificates plan](../plans/certificates.md)
+lists the next phases: loops, numbers, and a parser that Lean can reason
+about, for round-trip proofs.
+
 #### Effects (planned)
 
-tolean refuses most calls to libraries with side effects today.
+Tolean refuses most calls to libraries with side effects today.
 [The effects plan](../plans/effects.md) describes how the translators will
 share one mechanism for them. Each library declares its effects in a small
 file, and the declarations fix a trust boundary that a later proof of the
@@ -102,7 +141,7 @@ it by the name in the source. The number type parameter is `N`, or `N1`,
 The TypeScript translation is a shallow embedding, which means it maps
 TypeScript constructs straight to Lean constructs. That is sound only for code
 that cannot alias mutable state. For this reason, the subset lets a function
-change only the locals that it owns. tolean rejects anything else and reports
+change only the locals that it owns. Tolean rejects anything else and reports
 the file, the line and the reason. It never approximates.
 
 | TypeScript | Lean |
@@ -131,7 +170,7 @@ the file, the line and the reason. It never approximates.
 | `{ a, b: e }` building a declared interface | structure instance |
 | Call to a function declared earlier in the file | application |
 
-tolean rejects these, among others:
+Tolean rejects these, among others:
 
 - Fractional or unsafe `number` literals, such as `0.5` and `2 ** 53`. It also
   rejects `/`, `%` and `Math.*` on `number`, because no law covers them yet.
@@ -160,7 +199,7 @@ trusted](#what-is-proved-and-what-is-trusted).
 
 ## Numbers
 
-A JS `number` is an IEEE-754 double. tolean does not map it to Lean's
+A JS `number` is an IEEE-754 double. Tolean does not map it to Lean's
 `Float`, because then the code would run in Lean, but you could not prove
 anything about it. Lean's `Float` is an opaque wrapper around C doubles. Its
 operations are `extern` functions that come with no lemmas, so even
@@ -178,7 +217,7 @@ silently becomes a type variable. One proposed fix maps `f64` to Lean's
 `Float`. With that fix the code runs, but you still cannot reason about the
 arithmetic.
 
-tolean takes a different approach. Every definition that uses `number` is
+Tolean takes a different approach. Every definition that uses `number` is
 generic over an abstract number type `N`, which has the operations of the
 `JSNumber` class in `tolean/TypeScript/Spec/Number.lean`. Proofs can use this
 at three levels:
@@ -218,7 +257,7 @@ no audit.
 ## Versions
 
 Each translation is for one **target**, which is the ECMAScript edition that
-the code runs on. tolean translates the source as it runs, because type
+the code runs on. Tolean translates the source as it runs, because type
 stripping keeps the syntax unchanged. This means the engine must support every
 feature that the code uses. It also means that the translation must assume the
 meaning that the target edition specifies.
@@ -231,7 +270,7 @@ tolean translate --target ES2022 input.ts Output.lean My.Namespace
   because that is what Node 22 supports, and Node 22 is the oldest release
   line that is still maintained. We add a new edition only after we review
   what it changed.
-- `tolean/TypeScript/Edition.lean` lists each JS feature that tolean relies
+- `tolean/TypeScript/Edition.lean` lists each JS feature that Tolean relies
   on. For each feature, it gives the first edition that specifies it and the
   ECMA-262 production or operation that defines it. It uses names instead of
   section numbers, because section numbers move between editions. The parser
@@ -250,7 +289,7 @@ tolean translate --target ES2022 input.ts Output.lean My.Namespace
   The number laws hold in every edition. If a later edition changes how
   something behaves, we add a new feature for the new meaning. We never give
   one feature a second meaning.
-- Every generated file starts with the tolean release and the target, for
+- Every generated file starts with the Tolean release and the target, for
   example `-- Generated by tolean 0.1.0 for ES2024 from x.ts.` That way, the
   drift check notices when either one changes. A change to the meaning of a
   law is a major release. A new law, model or feature is a minor release.
@@ -282,12 +321,12 @@ path = "node_modules/tolean/lean"
 ## What is proved and what is trusted
 
 
-![The tolean pipeline: proof path, planned certificate, and what runs](../pipeline.svg)
+![The Tolean pipeline: proof path, planned certificate, and what runs](../pipeline.svg)
 
 | Step | What happens | Status | How it is checked |
 |---|---|---|---|
-| 1. Parse and type-check | `tsc` reads the source and gives the AST and the types | Trusted | `tsc` is the reference TypeScript compiler. tolean refuses a file with type errors. The Lean parser, checked against `tsc`, is to replace it. |
-| 2. Translate | tolean writes readable Lean definitions (the generated `.lean` files) | **Trusted, not proved** | The rejection tests in `npm/src/translate.test.ts`, the CI drift check, and review. Nothing proves yet that the Lean means the same as the TypeScript. |
+| 1. Parse and type-check | `tsc` reads the source and gives the AST and the types | Trusted | `tsc` is the reference TypeScript compiler. Tolean refuses a file with type errors. The Lean parser, checked against `tsc`, is to replace it. |
+| 2. Translate | Tolean writes readable Lean definitions (the generated `.lean` files) | **Trusted, not proved**, except in certified files | The rejection tests in `npm/src/translate.test.ts`, the CI drift check, and review. A [certificate](#certificates) proves the step for one file. |
 | 3. Prove the claims | Hand-written proofs show that each claim in `Spec/*.lean` holds for the generated definitions | **Proved** | The Lean kernel, `#audit_claims`, `lake build --wfail`, and no `sorry`, `admit`, `axiom` or `native_decide` |
 | 4. Assume JS number facts | `SafeIntLaws` and `SpecialValueLaws` in `tolean/TypeScript/Spec/Number.lean` | Trusted, tested | `tests/typescript/jsNumberLaws.test.ts` checks each law against real doubles. |
 | 5. Run | Type stripping or a bundler makes the JavaScript that Node runs | Trusted | The subset uses only constructs that type stripping leaves unchanged |
@@ -301,8 +340,8 @@ to trust the translator:
 | Planned piece | Purpose | Status |
 |---|---|---|
 | Differential test | Run the TypeScript in Node and the generated Lean on the same random inputs, and compare. Evidence for step 2, with a failure report that an agent can reproduce. | Not started |
-| AST as Lean data | The syntax tree of each file as Lean data (`Program`) | Started: the Lean parser gives it |
-| `eval`, a JS interpreter in Lean | The meaning of a `Program`. It is trusted, so it is tested against Node. | Not started |
-| Construct lemmas | Proved once, for example: an interpreted `for…of` equals `List.foldl` | Not started |
-| Per-file certificate (`f.source`) | Proves `eval(Program)` equals the generated definition, for all inputs. Step 2 is then proved. | Not started |
+| AST as Lean data | The syntax tree of each file as Lean data (`Program`) | Built: `tolean certify` writes it |
+| `eval`, a JS interpreter in Lean | The meaning of a `Program`. It is trusted, so it is tested against Node. | Started: `tolean/TypeScript/Spec/Eval.lean` covers loop-free code without `number`; the test against Node is not started |
+| Construct lemmas | Proved once, for example: an interpreted `for…of` equals `List.foldl` | Not started (phase 2 of the certificates plan) |
+| Per-file certificate (`f.source`) | Proves `eval(Program)` equals the generated definition, for all inputs. Step 2 is then proved. | Started: loop-free functions without `number` |
 | Boundary guards | Check the preconditions of step 6 where callers enter the verified code | Not started |
