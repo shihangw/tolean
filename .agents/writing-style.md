@@ -19,3 +19,11 @@ Rules:
 Example — bad: "Verus: low effort per proof, but less predictable." Good: "Verus asks you to write very little proof, because the solver finds most of it. The cost is that a proof can stop working after an unrelated change."
 
 Reference doc: `docs/decisions/lean-not-smt.md`.
+
+## PR descriptions
+
+- Sections, in order: `## TLDR` (1–3 sentences; define new terms plainly), `## What changed`, then optional `## Rollout and rollback`, `## Validations performed`, `## Open questions`. Omit a section with no real content.
+- What changed: paragraphs, each led by its claim, for reasoning (what the change does, why it can or must be trusted). List only parallel file-level changes; each item a full sentence.
+- Validations performed: what was done and what happened, beyond what CI runs (e.g. a deliberate mutation and its result, an axiom audit). Never list lint/build/test runs CI already does.
+- No session links (`claude.ai/code/session…`, `Claude-Session:`) in PR bodies or commit messages.
+- Commit messages: same rules, subject line imperative, body in paragraphs.
