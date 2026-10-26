@@ -45,6 +45,18 @@ jobs:
       - name: Build the library and the tolean command
         run: lake build --wfail
 
+      - name: Cache the translator's WebAssembly build
+        uses: actions/cache@v4
+        with:
+          path: wasm/.build
+          key: translator-wasm-${{ hashFiles('lean-toolchain', 'flake.lock', 'wasm/build.sh') }}-${{ hashFiles('tolean/**/*.lean', 'wasm/*.lean', 'wasm/glue.c') }}
+          restore-keys: translator-wasm-${{ hashFiles('lean-toolchain', 'flake.lock', 'wasm/build.sh') }}-
+
+      # The npm package and the playground run this build of the translator.
+      - name: Build the translator as WebAssembly
+        shell: nix develop .#wasm --command bash -euo pipefail {0}
+        run: wasm/build.sh
+
       - name: Install the TypeScript checks' dependencies
         run: |
           (cd tests/typescript && pnpm install --frozen-lockfile)
@@ -58,7 +70,7 @@ jobs:
         working-directory: tests/typescript
         run: node check.ts
 
-      - name: TypeScript translator against the tsc-based translator
+      - name: TypeScript translator on the corpus and on random programs
         working-directory: tests/typescript
         run: node checkTranslate.ts
 
