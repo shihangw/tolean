@@ -21,8 +21,7 @@
   },
   "files": [
     "dist",
-    "lean",
-    "translator"
+    "lean"
   ],
   "engines": {
     "node": ">=22"

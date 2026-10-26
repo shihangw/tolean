@@ -8,8 +8,8 @@
  *   path = "../node_modules/tolean/lean"
  *
  * The runtime is the language specs and `#audit_claims`: what generated code
- * and proofs import. Also copy the translator, compiled to WebAssembly by
- * wasm/build.sh, into `translator/`.
+ * and proofs import. The parsers and translators stay out; they run as the
+ * native `tolean` command.
  */
 import { cpSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -27,13 +27,6 @@ cpSync(`${root}tolean/TypeScript/Spec`, `${out}tolean/TypeScript/Spec`, { recurs
 mkdirSync(`${out}tolean/Go/Spec`, { recursive: true });
 cpSync(`${root}tolean/Go/Spec`, `${out}tolean/Go/Spec`, { recursive: true });
 
-// The translator, built by wasm/build.sh.
-const translator = fileURLToPath(new URL('../translator/', import.meta.url));
-rmSync(translator, { recursive: true, force: true });
-mkdirSync(translator, { recursive: true });
-for (const name of ['tolean.js', 'tolean.wasm.bin']) {
-  cpSync(`${root}wasm/out/${name}`, `${translator}${name}`);
-}
 writeFileSync(
   `${out}lakefile.toml`,
   [

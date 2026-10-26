@@ -2,10 +2,10 @@ import { describe, expect, test } from 'vitest';
 
 import { TranslateError, translateSource, translateWorkspace } from './translate.ts';
 
-// These tests check that the package loads the WebAssembly translator and
-// passes its options through. What the translator accepts and writes is
-// checked on the corpus in tests/typescript and tests/go, against the same
-// translator.
+// These tests check that the package runs the tolean binary and passes its
+// options through. What the translator accepts and writes is checked on the
+// corpus in tests/typescript and tests/go, with the same binary. Run them with
+// TOLEAN_BINARY set, as CI does, until the platform packages exist.
 describe('translateSource', () => {
   test('translates a TypeScript file', async () => {
     const lean = await translateSource({

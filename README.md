@@ -309,8 +309,8 @@ form of a syntax tree, the project file and the chain manifests.
 | `tolean/Go/Translate.lean` | The Go translator: one package at a time, from root functions, with interface calls as steps in a state monad |
 | `tolean/Sql/` | The PostgreSQL front end, the schema translator that replays migrations, the query translator, and the READ COMMITTED model in `Spec/ReadCommitted.lean` |
 | `Main.lean` | The `tolean` command |
-| `wasm/` | The translator compiled to WebAssembly, one file that runs in any browser or Node. `build.sh` builds it. |
-| `npm/` | The npm package: the `tolean` command and `translateSource`, which run the WebAssembly translator, and the Lean runtime that generated code imports |
+| `wasm/` | The translator compiled to WebAssembly for the playground. `build.sh` builds it. |
+| `npm/` | The npm package: the `tolean` command and `translateSource`, which run the native binary for the platform (built by `.github/workflows/binaries.yml`), and the Lean runtime that generated code imports |
 | `playground/` | A static page where you edit an example and Lean checks its proofs in the browser |
 | `tests/<language>/` | Checks for the front end against the language's own compiler, for the translator on a corpus, and for the Spec against the real runtime |
 
@@ -326,12 +326,12 @@ nix develop                                 # Lean 4.30.0, Node 24, pnpm 10
 lake build --wfail                          # the library and .lake/build/bin/tolean
 .lake/build/bin/tolean parse file.ts        # print the syntax tree, or file:line:col: reason
 .lake/build/bin/tolean translate file.ts File.lean My.Namespace
-nix develop .#wasm -c wasm/build.sh         # the translator as WebAssembly, for npm/ and playground/
+nix develop .#wasm -c wasm/build.sh         # the translator as WebAssembly, for playground/
 cd tests/typescript && pnpm install
 node check.ts                               # the Lean parser against tsc (see the language docs)
 node checkTranslate.ts                      # the translator on the corpus and on random programs
 pnpm test                                   # JS number laws and bigint division against the engine
-cd ../../npm && pnpm install && pnpm build && pnpm test
+cd ../../npm && pnpm install && pnpm build && TOLEAN_BINARY=$PWD/../.lake/build/bin/tolean pnpm test
 cd ../tests/go && go run ./check            # the Lean Go parser against go/parser (see the language docs)
 cd ../sql && go run ./pgcheck corpus        # the SQL translator against PostgreSQL (see the language docs)
 (cd ../typescript && ./checkCertify.sh)     # per-file certificates for the corpus (see the TypeScript page)
@@ -373,10 +373,11 @@ links for each claim.
 | What runs | Trusted: the JavaScript engine | Trusted: the Go compiler | Trusted: the PostgreSQL server and its constraints |
 | Callers | Not checked: inputs must meet each theorem's preconditions | Not checked; the glue between an interface and a real store is trusted | Not checked; the code that calls the queries is trusted |
 
-The npm package and the playground run the translator compiled to
-WebAssembly, so they also trust that build: Lean's runtime built for a
-32-bit target that Lean does not support officially, the patches in
-`wasm/build.sh`, and Emscripten. CI tests it against the native command:
+The playground runs the translator compiled to WebAssembly, so it also
+trusts that build: Lean's runtime built for a 32-bit target that Lean does
+not support officially, the patches in `wasm/build.sh`, and Emscripten. The
+npm package does not: it runs the native binary, built for each platform with
+Lean's own toolchain. CI tests the WebAssembly build against the native command:
 every corpus file and 200 random programs must give the same Lean or the
 same refusal. A project that runs `tolean translate --check` in CI checks
 its Lean with the native command, and a certificate holds whichever build

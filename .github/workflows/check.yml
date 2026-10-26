@@ -52,7 +52,7 @@ jobs:
           key: translator-wasm-${{ hashFiles('lean-toolchain', 'flake.lock', 'wasm/build.sh') }}-${{ hashFiles('tolean/**/*.lean', 'wasm/*.lean', 'wasm/glue.c') }}
           restore-keys: translator-wasm-${{ hashFiles('lean-toolchain', 'flake.lock', 'wasm/build.sh') }}-
 
-      # The npm package and the playground run this build of the translator.
+      # The playground runs this build; checkTranslate.ts compares it with the native one.
       - name: Build the translator as WebAssembly
         shell: nix develop .#wasm --command bash -euo pipefail {0}
         run: wasm/build.sh
@@ -64,7 +64,7 @@ jobs:
 
       - name: npm package tests
         working-directory: npm
-        run: pnpm test
+        run: TOLEAN_BINARY=$PWD/../.lake/build/bin/tolean pnpm test
 
       - name: TypeScript parser against tsc
         working-directory: tests/typescript

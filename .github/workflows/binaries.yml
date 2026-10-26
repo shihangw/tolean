@@ -1,0 +1,73 @@
+# Builds the native `tolean` binary for each platform that the npm package
+# ships one for, with Lean's own toolchain (elan, from lean-toolchain), not the
+# Nix shell: a Nix build links to libraries in /nix/store, so it runs only
+# where those exist. Each job checks that the binary loads no library from the
+# toolchain, runs the npm package's tests with it, and uploads it. Publishing
+# the platform packages is a separate step, not done here.
+name: binaries
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: binaries-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, platform: linux-x64 }
+          - { os: ubuntu-24.04-arm, platform: linux-arm64 }
+          - { os: macos-15, platform: darwin-arm64 }
+          - { os: macos-15-intel, platform: darwin-x64 }
+          - { os: windows-2025, platform: win32-x64 }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      # Installs elan with the toolchain that lean-toolchain names, and runs
+      # `lake build`, which builds .lake/build/bin/tolean.
+      - uses: leanprover/lean-action@v1
+
+      - name: The binary loads no library from the toolchain
+        if: runner.os != 'Windows'
+        run: |
+          bin=.lake/build/bin/tolean
+          if [ "$RUNNER_OS" = macOS ]; then libs=$(otool -L "$bin" | tail -n +2); else libs=$(ldd "$bin"); fi
+          echo "$libs"
+          if echo "$libs" | grep -E '\.elan|/nix/|not found'; then
+            echo "the binary depends on a library that a user's machine does not have" >&2
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: The npm package works with this binary
+        working-directory: npm
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm build
+          export TOLEAN_BINARY="$GITHUB_WORKSPACE/.lake/build/bin/tolean${{ runner.os == 'Windows' && '.exe' || '' }}"
+          pnpm test
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tolean-${{ matrix.platform }}
+          path: .lake/build/bin/tolean${{ runner.os == 'Windows' && '.exe' || '' }}
+          if-no-files-found: error

@@ -1,11 +1,12 @@
 /**
- * Tolean's translator, compiled to WebAssembly from the Lean sources by
- * `wasm/build.sh`. It is the same translator that the `tolean` command runs
- * and that per-file certificates are about; this package only loads it. The
- * build copies it into `translator/`.
+ * Tolean's translator, run as the native `tolean` command. The package finds
+ * the binary in `$TOLEAN_BINARY`, or else in the package for this platform,
+ * such as `@tolean/darwin-arm64`, and passes it the workspace as JSON on
+ * stdin (`tolean translate-workspace`).
  */
-import { readFileSync } from 'node:fs';
-import { gunzipSync } from 'node:zlib';
+import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { createRequire } from 'node:module';
 
 export class TranslateError extends Error {}
 
@@ -48,44 +49,42 @@ export type UnitResult =
   | { readonly kind: 'ok'; readonly output: string; readonly lean: string }
   | { readonly kind: 'error'; readonly sources: readonly string[]; readonly error: string };
 
-interface TranslatorModule {
-  _tolean_init(): number;
-  _tolean_translate(input: number): number;
-  _free(ptr: number): void;
-  stringToNewUTF8(s: string): number;
-  UTF8ToString(ptr: number): string;
+/** The platforms that Lean releases a toolchain for, and so that Tolean ships a binary for. */
+export const PLATFORMS = ['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64', 'win32-x64'] as const;
+
+/** The path of the `tolean` binary for this machine. */
+export function binaryPath(): string {
+  const fromEnv = process.env.TOLEAN_BINARY;
+  if (fromEnv !== undefined && fromEnv !== '') return fromEnv;
+  const platform = `${process.platform}-${process.arch}`;
+  const exe = process.platform === 'win32' ? 'tolean.exe' : 'tolean';
+  try {
+    const path = createRequire(import.meta.url).resolve(`@tolean/${platform}/bin/${exe}`);
+    if (existsSync(path)) return path;
+  } catch {
+    // Not installed; the error below says what to do.
+  }
+  throw new Error(
+    `no tolean binary for ${platform}: install @tolean/${platform}, or set TOLEAN_BINARY to a tolean command ` +
+      `(Tolean ships binaries for ${PLATFORMS.join(', ')})`,
+  );
 }
 
-let loading: Promise<(input: string) => string> | null = null;
-
-function loadTranslator(): Promise<(input: string) => string> {
-  loading ??= (async () => {
-    const dir = new URL('../translator/', import.meta.url);
-    const bytes = new Uint8Array(gunzipSync(readFileSync(new URL('tolean.wasm.bin', dir))));
-    const { default: factory } = (await import(new URL('tolean.js', dir).href)) as {
-      default: (m: object) => Promise<TranslatorModule>;
-    };
-    // The glue reads Module.instantiateWasm but not Module.wasmBinary.
-    const m = await factory({
-      instantiateWasm: (
-        imports: WebAssembly.Imports,
-        receive: (instance: WebAssembly.Instance, module: WebAssembly.Module) => void,
-      ) => {
-        void WebAssembly.instantiate(bytes, imports).then((r) => receive(r.instance, r.module));
-        return {};
-      },
+/** Run `tolean translate-workspace` on the JSON text, and return its output. */
+function run(input: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(binaryPath(), ['translate-workspace'], { stdio: ['pipe', 'pipe', 'pipe'] });
+    const out: Buffer[] = [];
+    const err: Buffer[] = [];
+    child.stdout.on('data', (b: Buffer) => out.push(b));
+    child.stderr.on('data', (b: Buffer) => err.push(b));
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code === 0) resolve(Buffer.concat(out).toString('utf8'));
+      else reject(new Error(`tolean exited with ${code}: ${Buffer.concat(err).toString('utf8')}`));
     });
-    if (m._tolean_init() !== 1) throw new Error('the translator did not start');
-    return (input) => {
-      const p = m.stringToNewUTF8(input);
-      const r = m._tolean_translate(p);
-      m._free(p);
-      const out = m.UTF8ToString(r);
-      m._free(r);
-      return out;
-    };
-  })();
-  return loading;
+    child.stdin.end(input);
+  });
 }
 
 /**
@@ -94,8 +93,7 @@ function loadTranslator(): Promise<(input: string) => string> {
  * Lean or as the translator's reason to refuse it.
  */
 export async function translateWorkspace(files: readonly WorkspaceFile[]): Promise<UnitResult[]> {
-  const translate = await loadTranslator();
-  const json = JSON.parse(translate(JSON.stringify({ files }))) as
+  const json = JSON.parse(await run(JSON.stringify({ files }))) as
     | { error: string }
     | { units: ({ output: string; lean: string } | { sources: string[]; error: string })[] };
   if ('error' in json) throw new TranslateError(json.error);

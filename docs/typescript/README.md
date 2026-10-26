@@ -306,11 +306,13 @@ tolean translate --target ES2022 input.ts Output.lean My.Namespace
 `npm/` is the `tolean` package. Its `package.json` sets `"private": true`, so
 nobody can publish it by accident. To publish it, remove that line. The
 package contains the `tolean` command, the `translateSource` and
-`translateWorkspace` functions, and the Lean runtime in `lean/`. Its
-translator is the one in this repository, compiled to WebAssembly by
-`wasm/build.sh`, so the package writes the same Lean as the `tolean` command
-on every platform. `translateSource` returns a promise, because WebAssembly
-loads asynchronously.
+`translateWorkspace` functions, and the Lean runtime in `lean/`. All of them
+run the native `tolean` binary for the platform, which
+`.github/workflows/binaries.yml` builds with Lean's own toolchain for each
+platform that Lean supports. Until those binaries are published as
+`@tolean/<platform>` packages, set `TOLEAN_BINARY` to a `tolean` that Lake
+built. `translateSource` returns a promise, because it runs the binary as a
+child process.
 
 ```sh
 tolean <input.ts> <output.lean> <Lean.Namespace>

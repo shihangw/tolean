@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Build the translator as WebAssembly: wasm/out/tolean.js and
-# wasm/out/tolean.wasm.bin (gzipped). The playground and the npm package both
-# use it. Run it in the wasm dev shell: `nix develop .#wasm -c wasm/build.sh`.
+# wasm/out/tolean.wasm.bin (gzipped), for the playground. Run it in the wasm dev shell: `nix develop .#wasm -c wasm/build.sh`.
 # TOLEAN_WASM_OUT sets another output directory.
 #
 # Lean ships no WebAssembly build, so this compiles everything the translator

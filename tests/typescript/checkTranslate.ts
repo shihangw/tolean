@@ -13,8 +13,8 @@
  *   the default.
  * - Fuzz: random programs (default 200). When the translator accepts one, the
  *   output compiles, and a second translation gives the same text.
- * - Everywhere: the WebAssembly build that the npm package runs
- *   (`npm/dist`, from `pnpm build`) gives the same result as the native
+ * - Everywhere: the playground's WebAssembly build (`wasm/out`, from
+ *   `wasm/build.sh`) gives the same result as the native
  *   command, the same Lean or the same refusal. The two are compiled from the
  *   same Lean, but for different machines, so this catches a miscompilation
  *   on either one.
@@ -33,7 +33,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { TranslateError, translateSource } from '../../npm/dist/index.js';
+import { translateInWasm } from './wasm.ts';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const tolean = process.env.TOLEAN ?? join(root, '.lake/build/bin/tolean');
@@ -73,27 +73,11 @@ function compiles(output: string): string | null {
     .trim();
 }
 
-/** What the WebAssembly build makes of a file, as `Result`. */
-async function wasm(path: string, target?: string): Promise<Result> {
-  try {
-    const text = await translateSource({
-      fileName: path,
-      text: readFileSync(path, 'utf8'),
-      namespace: 'Test',
-      ...(target === undefined ? {} : { target: target as 'ES2024' }),
-    });
-    return { kind: 'lean', text };
-  } catch (error) {
-    if (error instanceof TranslateError) return { kind: 'refused', message: error.message };
-    throw error;
-  }
-}
-
 let agreed = 0;
 
 /** Fail unless the WebAssembly build gives the native result. */
 async function sameInWasm(path: string, native: Result, target?: string): Promise<void> {
-  const other = await wasm(path, target);
+  const other = translateInWasm(path, readFileSync(path, 'utf8'), target);
   const same =
     native.kind === other.kind &&
     (native.kind === 'lean' ? native.text === (other as typeof native).text : native.message === (other as { message: string }).message);

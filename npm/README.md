@@ -2,16 +2,17 @@
 
 The npm build of [Tolean](../README.md). It has:
 
-- the `tolean` command: `tolean [--target ES20xx] <input.ts> <output.lean> <Lean.Namespace>`,
-  which translates one TypeScript file in the Tolean subset to Lean;
-- `translateSource`, for the same from code, and `translateWorkspace`, which
-  translates every unit that a `tolean.json` names, in TypeScript, Go or SQL;
+- the `tolean` command, with the same commands as the one that Lake builds,
+  such as `tolean translate` with a `tolean.json`;
+- `translateSource`, which translates one TypeScript file, and
+  `translateWorkspace`, which translates every unit that a `tolean.json`
+  names, in TypeScript, Go or SQL;
 - `lean/`: the Lake package that generated code imports (the language specs
   and `#audit_claims`).
 
-The translator is Tolean's own, written in Lean and compiled to WebAssembly
-by `wasm/build.sh`, so it writes the same Lean as the `tolean` command that
-Lake builds, on any platform that runs Node 22 or later. `pnpm build` copies
-it from `wasm/out/`, so build it first.
+Both run the native `tolean` binary. It comes from the package for the
+platform, such as `@tolean/darwin-arm64`, for each platform that Lean
+supports: macOS and Linux on arm64 and x64, and Windows on x64. Until those
+packages are published, set `TOLEAN_BINARY` to a `tolean` that Lake built.
 
 Licensed under the Apache License 2.0 (`LICENSE`).
