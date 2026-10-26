@@ -39,6 +39,22 @@
             pkgs.graphviz
           ];
         };
+        # `nix develop .#wasm`: the toolchain that builds the translator as
+        # WebAssembly for the playground (playground/wasm/build.sh).
+        wasm = pkgs.mkShell {
+          packages = [
+            pkgs.lean4
+            pkgs.nodejs_24
+            pkgs.pnpm_10
+            pkgs.emscripten
+            pkgs.cmake
+            pkgs.git
+          ];
+          # Emscripten writes its cache next to itself, which the Nix store forbids.
+          shellHook = ''
+            export EM_CACHE="$PWD/.emcache"
+          '';
+        };
       });
 
       # `nix run .#test-engines`, from the repository root after

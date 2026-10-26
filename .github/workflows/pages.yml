@@ -7,7 +7,9 @@ on:
     branches: [main]
     paths:
       - playground/**
-      - tolean/Go/Spec/**
+      - tolean/**
+      - flake.nix
+      - flake.lock
       - .github/workflows/pages.yml
   workflow_dispatch:
 
@@ -40,6 +42,17 @@ jobs:
         with:
           path: playground/site/.cache/*.tar.gz
           key: lean-wasm-${{ hashFiles('playground/site/lean-runtime.json') }}
+
+      - name: Cache the translator's WebAssembly build
+        uses: actions/cache@v4
+        with:
+          path: playground/wasm/.build
+          key: translator-wasm-${{ hashFiles('lean-toolchain', 'flake.lock', 'playground/wasm/build.sh') }}-${{ hashFiles('tolean/**/*.lean', 'playground/wasm/*.lean', 'playground/wasm/glue.c') }}
+          restore-keys: translator-wasm-${{ hashFiles('lean-toolchain', 'flake.lock', 'playground/wasm/build.sh') }}-
+
+      - name: Build the translator as WebAssembly
+        shell: nix develop .#wasm --command bash -euo pipefail {0}
+        run: playground/wasm/build.sh
 
       - name: Build the playground
         working-directory: playground/site

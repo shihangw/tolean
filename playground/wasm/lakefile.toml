@@ -1,0 +1,11 @@
+name = "web"
+defaultTargets = ["Web"]
+
+# The translator's entry point for the playground. build.sh compiles it, with
+# the modules it imports, to WebAssembly.
+[[require]]
+name = "tolean"
+path = "../.."
+
+[[lean_lib]]
+name = "Web"

@@ -4,3 +4,4 @@ public/examples.json
 public/coi-serviceworker.min.js
 public/lean/
 .cache/
+public/translator/

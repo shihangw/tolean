@@ -3,6 +3,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Claims } from './Claims.tsx';
 import { type ClaimStatus, type EngineState, LeanChecker, statuses as readStatuses } from './checker.ts';
 import { Editor } from './Editor.tsx';
+import { shareLink, sharedFromLocation } from './share.ts';
+import { type Translation, loadTranslator } from './translator.ts';
 import { type WorkspaceFile, bundle, claims as readClaims, isProof, isSpec, proofDeclarations } from './lean.ts';
 import {
   type ExampleData,
@@ -33,6 +35,13 @@ function engineNotice(state: EngineState): string {
   }
 }
 
+/** A short hash of a text, to tell versions of a generated file apart. */
+function hashText(text: string): string {
+  let h = 0;
+  for (let i = 0; i < text.length; i++) h = (Math.imul(h, 31) + text.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36);
+}
+
 const keyOf = (w: Workspace) => (w.kind === 'example' ? `example:${w.name}` : `user:${w.id}`);
 
 /** The folders of a workspace, in the order the file tree shows them. */
@@ -48,17 +57,54 @@ export function App() {
   useEffect(() => {
     void fetch('./examples.json')
       .then((r) => r.json() as Promise<ExampleData>)
-      .then((d) => {
+      .then(async (d) => {
         const examples: Workspace[] = d.examples.map((e) => ({ kind: 'example', ...e }));
-        const all = [...examples, ...loadUserWorkspaces()];
+        let all = [...examples, ...loadUserWorkspaces()];
+        let selected = all[0] ?? null;
+        // A share link opens its workspace as the viewer's own copy.
+        const shared = await sharedFromLocation();
+        if (shared != null) {
+          selected = { kind: 'user', id: crypto.randomUUID(), name: shared.name, files: shared.files };
+          all = [...all, selected];
+          saveUserWorkspaces(all);
+          history.replaceState(null, '', location.pathname + location.search);
+        }
         setData(d);
         setWorkspaces(all);
-        setCurrentKey(all[0] == null ? null : keyOf(all[0]));
+        setCurrentKey(selected == null ? null : keyOf(selected));
       });
   }, []);
 
   const current = workspaces.find((w) => keyOf(w) === currentKey) ?? null;
-  const files = current?.files ?? [];
+
+  // The translator, compiled to WebAssembly. Until it loads, or if it cannot,
+  // the page shows the generated Lean that came with the example.
+  const [translate, setTranslate] = useState<((f: readonly WorkspaceFile[]) => Translation) | null>(null);
+  const [translatorError, setTranslatorError] = useState<string | null>(null);
+  useEffect(() => {
+    loadTranslator(`./translator`).then(
+      (t) => setTranslate(() => t),
+      (e: unknown) => setTranslatorError(e instanceof Error ? e.message : String(e)),
+    );
+  }, []);
+
+  // What the person wrote. Generated files are derived from it.
+  const authored = useMemo(() => (current?.files ?? []).filter((f) => !isGenerated(f.path)), [current]);
+  const translation = useMemo(
+    () => (translate == null || current == null ? null : translate(authored)),
+    [translate, current, authored],
+  );
+  const files = useMemo((): readonly WorkspaceFile[] => {
+    if (translation == null || translation.kind === 'error') return current?.files ?? [];
+    const generated = translation.units.flatMap((u) => (u.kind === 'ok' ? [{ path: u.output, text: u.lean }] : []));
+    return [...authored, ...generated].sort((a, b) => a.path.localeCompare(b.path));
+  }, [translation, current, authored]);
+  const translationErrors =
+    translation == null
+      ? []
+      : translation.kind === 'error'
+        ? [translation.error]
+        : translation.units.flatMap((u) => (u.kind === 'error' ? [u.error] : []));
   const open =
     files.find((f) => f.path === openPath) ??
     files.find((f) => f.path.startsWith('src/') && !isGenerated(f.path)) ??
@@ -79,6 +125,11 @@ export function App() {
       ...files.filter(isProof),
     ];
     const names = claims.map((c) => c.name);
+    if (translationErrors.length > 0) {
+      const reason = `Tolean could not translate the source: ${translationErrors[0]}`;
+      setStatuses(new Map(names.map((n) => [n, { kind: 'broken', reason }])));
+      return;
+    }
     const b = bundle(data.goSpec, ordered, names);
     let cancelled = false;
     const timer = setTimeout(() => {
@@ -96,10 +147,13 @@ export function App() {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [data, current, files, claims]);
+    // translationErrors is derived from translation, which is listed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, current, files, claims, translation]);
 
   function updateFile(path: string, text: string) {
     if (current == null) return;
+    if (isGenerated(path)) return;
     const files = current.files.map((f): WorkspaceFile => (f.path === path ? { path, text } : f));
     let next: Workspace[];
     if (current.kind === 'example') {
@@ -112,6 +166,19 @@ export function App() {
     }
     setWorkspaces(next);
     saveUserWorkspaces(next);
+  }
+
+  const [shareNote, setShareNote] = useState<string | null>(null);
+  async function share() {
+    if (current == null) return;
+    const link = await shareLink({ name: current.name, files: authored });
+    try {
+      await navigator.clipboard.writeText(link);
+      setShareNote('Link copied');
+    } catch {
+      // The clipboard can be blocked; show the link to copy by hand.
+      window.prompt('Copy this link', link);
+    }
   }
 
   function newWorkspace() {
@@ -166,6 +233,10 @@ export function App() {
         <button type="button" onClick={newWorkspace}>
           New workspace
         </button>
+        <button type="button" onClick={() => void share()}>
+          Share
+        </button>
+        {shareNote != null && <span className="muted">{shareNote}</span>}
       </header>
 
       <nav className="tree" aria-label="Files">
@@ -206,7 +277,8 @@ export function App() {
               {isGenerated(open.path) && <span className="muted"> · written by Tolean, read-only</span>}
             </div>
             <Editor
-              key={`${currentKey}:${open.path}`}
+              // A generated file changes under the viewer, so its editor restarts with the new text.
+              key={`${currentKey}:${open.path}${isGenerated(open.path) ? `:${hashText(open.text)}` : ''}`}
               path={open.path}
               text={open.text}
               readOnly={isGenerated(open.path)}
@@ -218,6 +290,17 @@ export function App() {
 
       <aside className="side">
         <p className={engine.kind === 'failed' ? 'notice failed' : 'notice'}>{engineNotice(engine)}</p>
+        {translatorError != null && (
+          <p className="notice failed">
+            The translator did not load ({translatorError}), so the generated Lean is the copy that came with the
+            example and does not follow your edits.
+          </p>
+        )}
+        {translationErrors.map((e) => (
+          <p key={e} className="notice failed">
+            Tolean refused the source: {e}
+          </p>
+        ))}
         <Claims claims={claims} proofs={proofs} statuses={statuses} />
       </aside>
     </div>
