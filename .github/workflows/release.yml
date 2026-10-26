@@ -1,0 +1,195 @@
+# The npm release, run by hand from the Actions tab. `binaries` builds the
+# native tolean on each platform, and `npm-package` packs the packages and
+# installs them as a user would. With `publish` unset this is a dry run that
+# uploads the tarballs. With `publish` set, the `publish` job waits for
+# approval in the `npm` environment, publishes the platform packages and
+# then `tolean` with npm's trusted publishing, and tags the commit.
+#
+# Before the first publish: create the @tolean scope on npmjs.com, set up
+# trusted publishing for each package with this workflow, create the `npm`
+# environment with a required reviewer, and remove "private" from
+# npm/package.json.
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish to npm (otherwise build, pack and test only)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  # Builds the native `tolean` binary for each platform that the npm package
+  # ships one for, with Lean's own toolchain (elan, from lean-toolchain), not the
+  # Nix shell: a Nix build links to libraries in /nix/store, so it runs only
+  # where those exist. The Linux binaries build in Ubuntu 20.04 (glibc 2.31),
+  # because a binary runs on the glibc it was built with and on newer ones only:
+  # Ubuntu 20.04, Debian 11, RHEL 9 and later. No older glibc works: the clang
+  # that Lean's toolchain ships needs glibc 2.29. Each job checks that the binary loads no library from the
+  # toolchain, runs the npm package's tests with it, and uploads it. Publishing
+  # the platform packages is a separate step, not done here.
+  binaries:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, platform: linux-x64, container: 'ubuntu:20.04' }
+          - { os: ubuntu-24.04-arm, platform: linux-arm64, container: 'ubuntu:20.04' }
+          - { os: macos-15, platform: darwin-arm64 }
+          - { os: macos-15-intel, platform: darwin-x64 }
+          - { os: windows-2025, platform: win32-x64 }
+    runs-on: ${{ matrix.os }}
+    # Empty for macOS and Windows, which build on the runner itself.
+    container: ${{ matrix.container }}
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # The image has none of the tools that checkout, elan and the glibc check use.
+      - name: Install the tools that the Linux container lacks
+        if: matrix.container != ''
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            binutils ca-certificates curl git xz-utils
+
+      - uses: actions/checkout@v4
+
+      # Installs elan with the toolchain that lean-toolchain names, and runs
+      # `lake build`, which builds .lake/build/bin/tolean.
+      - uses: leanprover/lean-action@v1
+
+      - name: The binary loads no library from the toolchain
+        if: runner.os != 'Windows'
+        run: |
+          bin=.lake/build/bin/tolean
+          if [ "$RUNNER_OS" = macOS ]; then libs=$(otool -L "$bin" | tail -n +2); else libs=$(ldd "$bin"); fi
+          echo "$libs"
+          if echo "$libs" | grep -E '\.elan|/nix/|not found'; then
+            echo "the binary depends on a library that a user's machine does not have" >&2
+            exit 1
+          fi
+
+      - name: The Linux binary needs glibc 2.31 at most
+        if: runner.os == 'Linux'
+        run: |
+          newest() { objdump -T "$1" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1; }
+          echo "the Lean toolchain needs $(newest "$(elan which lean)")"
+          need=$(newest .lake/build/bin/tolean)
+          echo "tolean needs $need"
+          if [ "$(printf '%s\nGLIBC_2.31\n' "$need" | sort -V | tail -1)" != GLIBC_2.31 ]; then
+            echo "tolean needs a glibc newer than 2.31" >&2
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      # The version that the Nix shell has and that wrote the lockfiles.
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+
+      - name: The npm package works with this binary
+        working-directory: npm
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+          export TOLEAN_BINARY="$GITHUB_WORKSPACE/.lake/build/bin/tolean${{ runner.os == 'Windows' && '.exe' || '' }}"
+          pnpm test
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tolean-${{ matrix.platform }}
+          path: .lake/build/bin/tolean${{ runner.os == 'Windows' && '.exe' || '' }}
+          if-no-files-found: error
+
+  # The npm release: one @tolean/<platform> package per binary, and the
+  # tolean package that lists them. Packed and installed here, not published.
+  npm-package:
+    needs: binaries
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: tolean-*-*
+          path: binaries
+
+      - name: Pack the packages
+        working-directory: npm
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+          node scripts/pack.ts ../binaries ../packed
+
+      - name: Install the packed packages as a user would, and run them
+        run: |
+          mkdir try && cd try
+          printf '{"name":"try","private":true,"type":"module"}\n' > package.json
+          v=$(node -p "require('../npm/package.json').version")
+          npm install --no-audit --no-fund "../packed/tolean-$v.tgz" "../packed/tolean-linux-x64-$v.tgz"
+          echo 'export function f(a: bigint): bigint { return a + 1n; }' > a.ts
+          npx tolean translate a.ts A.lean A
+          grep -q '^def f' A.lean
+          node -e "import('tolean').then(async (t) => { const lean = await t.translateSource({ fileName: 'a.ts', text: 'export function g(): boolean { return true; }', namespace: 'G' }); if (!lean.includes('def g')) process.exit(1); })"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-packages
+          path: packed/*.tgz
+          if-no-files-found: error
+
+  publish:
+    needs: npm-package
+    if: inputs.publish
+    runs-on: ubuntu-24.04
+    environment: npm
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-packages
+          path: packed
+
+      # The platform packages first, so that tolean never names a missing one.
+      - name: Publish to npm
+        run: |
+          v=$(node -p "require('./npm/package.json').version")
+          for f in packed/tolean-*-*-"$v".tgz; do npm publish --provenance --access public "$f"; done
+          npm publish --provenance --access public "packed/tolean-$v.tgz"
+
+      - name: Tag the release
+        run: |
+          v=$(node -p "require('./npm/package.json').version")
+          git tag "v$v"
+          git push origin "v$v"
