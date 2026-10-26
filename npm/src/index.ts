@@ -5,4 +5,7 @@ export {
   parseEdition,
   TranslateError,
   translateSource,
+  translateWorkspace,
+  type UnitResult,
+  type WorkspaceFile,
 } from './translate.ts';

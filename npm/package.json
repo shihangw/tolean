@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "license": "Apache-2.0",
-  "description": "Translate a small pure subset of TypeScript to Lean 4, so proofs are about the real source",
+  "description": "Translate a subset of TypeScript, Go and PostgreSQL to Lean 4, so proofs are about the real source",
   "type": "module",
   "repository": {
     "type": "git",
@@ -21,7 +21,8 @@
   },
   "files": [
     "dist",
-    "lean"
+    "lean",
+    "translator"
   ],
   "engines": {
     "node": ">=22"
@@ -32,11 +33,9 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": {
-    "typescript": "^6.0.3"
-  },
   "devDependencies": {
     "@types/node": "22.18.6",
-    "vitest": "3.2.7"
+    "vitest": "3.2.7",
+    "typescript": "6.0.3"
   }
 }

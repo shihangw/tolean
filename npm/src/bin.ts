@@ -38,7 +38,7 @@ if (input == null || output == null || namespace == null) {
 }
 
 try {
-  const lean = translateSource({
+  const lean = await translateSource({
     fileName: input,
     text: readFileSync(input, 'utf8'),
     namespace,
