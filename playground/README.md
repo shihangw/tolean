@@ -7,8 +7,9 @@ to GitHub Pages.
 Each workspace has two folders. `src/` holds the source code and the Lean
 that Tolean generates from it. `theorems/` holds the claims in `*.spec.lean`
 files, and next to each one, the proofs in a `*.proof.lean` file. The page
-shows the claims first, because a person must read them. Each proof is
-folded under its claim, and the helper lemmas sit in their own group.
+shows the claims first, because a person must read them. Each claim card
+links to its proof in the editor, and the helper lemmas sit in their own
+group.
 
 ## The editor
 
