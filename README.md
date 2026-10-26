@@ -310,7 +310,7 @@ form of a syntax tree, the project file and the chain manifests.
 | `tolean/Sql/` | The PostgreSQL front end, the schema translator that replays migrations, the query translator, and the READ COMMITTED model in `Spec/ReadCommitted.lean` |
 | `Main.lean` | The `tolean` command |
 | `wasm/` | The translator compiled to WebAssembly for the playground. `build.sh` builds it. |
-| `npm/` | The npm package: the `tolean` command and `translateSource`, which run the native binary for the platform (built by the `binaries` job of `.github/workflows/ci.yml`), and the Lean runtime that generated code imports |
+| `npm/` | The npm package: the `tolean` command and `translateSource`, which run the native binary for the platform (built by `.github/workflows/release.yml`), and the Lean runtime that generated code imports |
 | `playground/` | A static page where you edit an example and Lean checks its proofs in the browser |
 | `tests/<language>/` | Checks for the front end against the language's own compiler, for the translator on a corpus, and for the Spec against the real runtime |
 
@@ -344,12 +344,15 @@ every maintained Node release line (`nix run .#test-engines`), and it fails
 if a check leaves a committed file changed.
 
 CI runs in stages, so a failure stops the expensive work early. The `check`
-job runs `lake build --wfail` and the checks above. When it passes,
-`binaries` builds the native `tolean` on Linux, macOS and Windows, and
-`wasm` builds the playground's WebAssembly translator and requires that it
-gives the native result. After `binaries`, `npm-package` packs the npm
-release and installs it as a user would. On `main`, `pages` then publishes
-the playground.
+job runs `lake build --wfail` and the checks above. When it passes, `wasm`
+builds the playground's WebAssembly translator and requires that it gives
+the native result, and on `main`, `pages` then publishes the playground.
+
+The npm release runs by hand, from `.github/workflows/release.yml`. It
+builds the native `tolean` on Linux, macOS and Windows, packs the npm
+packages, and installs them as a user would. By default that is a dry run
+that uploads the packages. With `publish` set, it waits for approval,
+publishes them to npm and tags the commit.
 
 
 ## Languages

@@ -308,7 +308,7 @@ nobody can publish it by accident. To publish it, remove that line. The
 package contains the `tolean` command, the `translateSource` and
 `translateWorkspace` functions, and the Lean runtime in `lean/`. All of them
 run the native `tolean` binary for the platform, which
-the `binaries` job in `.github/workflows/ci.yml` builds with Lean's own toolchain for each
+`.github/workflows/release.yml` builds with Lean's own toolchain for each
 platform that Lean supports. Until those binaries are published as
 `@tolean/<platform>` packages, set `TOLEAN_BINARY` to a `tolean` that Lake
 built. `translateSource` returns a promise, because it runs the binary as a
