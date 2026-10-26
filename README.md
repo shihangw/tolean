@@ -76,9 +76,9 @@ that runs to theorems about it, where every link is proved, tested against a
 reference, or trusted. The graphs show the chain for each language, and which
 links are which:
 
-- [TypeScript](docs/verification-typescript.svg)
-- [Go](docs/verification-go.svg)
-- [PostgreSQL](docs/verification-sql.svg)
+- [TypeScript](docs/languages/typescript/verification.svg)
+- [Go](docs/languages/go/verification.svg)
+- [PostgreSQL](docs/languages/postgresql/verification.svg)
 
 Each language also splits into nested subsets: what the parser reads, what
 the translator accepts, and what is proved. [This chart](docs/subsets.svg)
@@ -232,9 +232,9 @@ translator, the subset it accepts and how its checks work.
 
 | Language | Input | Output | Trusted model | Details |
 |---|---|---|---|---|
-| TypeScript | Pure functions | Plain Lean functions, generic over the number type | `tolean/TypeScript/Spec/` | [TypeScript](docs/languages/typescript.md) |
-| Go | One package, from named root functions | Functions in `StateM State`, with interface calls as steps | `tolean/Go/Spec/Basic.lean` | [Go](docs/languages/go.md) |
-| PostgreSQL | sqlc queries and their migrations | Functions from a database to a result and a new database | `tolean/Sql/Spec/`, with a READ COMMITTED model | [PostgreSQL](docs/languages/postgresql.md) |
+| TypeScript | Pure functions | Plain Lean functions, generic over the number type | `tolean/TypeScript/Spec/` | [TypeScript](docs/languages/typescript/README.md) |
+| Go | One package, from named root functions | Functions in `StateM State`, with interface calls as steps | `tolean/Go/Spec/Basic.lean` | [Go](docs/languages/go/README.md) |
+| PostgreSQL | sqlc queries and their migrations | Functions from a database to a result and a new database | `tolean/Sql/Spec/`, with a READ COMMITTED model | [PostgreSQL](docs/languages/postgresql/README.md) |
 
 ## What is proved and what is trusted
 
@@ -242,7 +242,7 @@ In every language, the trusted parts are the spec file that generated code
 imports and the translator. For a proof that joins Go and SQL, the glue code
 that a project writes between the Go interface and the generated queries is
 trusted too. Each language page lists its own steps. The
-[TypeScript page](docs/languages/typescript.md#what-is-proved-and-what-is-trusted)
+[TypeScript page](docs/languages/typescript/README.md#what-is-proved-and-what-is-trusted)
 also gives the plan that will turn its translator into a proved step.
 
 ## Claims and proofs
