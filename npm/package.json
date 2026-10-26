@@ -1,7 +1,6 @@
 {
   "name": "tolean",
   "version": "0.1.0",
-  "private": true,
   "license": "Apache-2.0",
   "description": "Translate a subset of TypeScript, Go and PostgreSQL to Lean 4, so proofs are about the real source",
   "type": "module",

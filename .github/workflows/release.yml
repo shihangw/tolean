@@ -5,10 +5,14 @@
 # approval in the `npm` environment, publishes the platform packages and
 # then `tolean` with npm's trusted publishing, and tags the commit.
 #
-# Before the first publish: create the @tolean scope on npmjs.com, set up
-# trusted publishing for each package with this workflow, create the `npm`
-# environment with a required reviewer, and remove "private" from
-# npm/package.json.
+# Trusted publishing means that no npm token is stored anywhere. npm gives
+# this workflow a short-lived token for each run, but only for a package that
+# trusts it. npm can attach that trust only to a package that already exists.
+# So each new package name needs one manual publish first. The owner logs in
+# with `npm login`, publishes a placeholder 0.0.0 of the package, and runs
+# `npm trust github <name> --repo shihangw/tolean --file release.yml --env npm
+# --allow-publish`. The `npm` environment requires the owner's approval and
+# accepts only protected branches.
 name: release
 
 on:
@@ -183,11 +187,19 @@ jobs:
           path: packed
 
       # The platform packages first, so that tolean never names a missing one.
+      # The loop skips a version that npm already has, so a rerun after a
+      # partial failure publishes only the rest.
       - name: Publish to npm
         run: |
           v=$(node -p "require('./npm/package.json').version")
-          for f in packed/tolean-*-*-"$v".tgz; do npm publish --provenance --access public "$f"; done
-          npm publish --provenance --access public "packed/tolean-$v.tgz"
+          for f in packed/tolean-*-*-"$v".tgz "packed/tolean-$v.tgz"; do
+            name=$(tar -xOzf "$f" package/package.json | jq -r .name)
+            if [ -n "$(npm view "$name@$v" version 2>/dev/null)" ]; then
+              echo "$name@$v is already on npm"
+              continue
+            fi
+            npm publish --provenance --access public "$f"
+          done
 
       - name: Tag the release
         run: |
