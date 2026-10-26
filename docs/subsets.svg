@@ -45,7 +45,7 @@
   <text x="58" y="397" class="item">interfaces as structures, arrays as List</text>
   <text x="58" y="411" class="item">for … of as List.foldl; local mutation;</text>
   <text x="58" y="425" class="item">push onto an array the function owns</text>
-  <text x="58" y="439" class="item">output equals the tsc-based translator's</text>
+  <text x="58" y="439" class="item">golden output on the corpus; fuzz compiles</text>
   <text x="58" y="453" class="item">translation correctness: not proved</text>
   <text x="58" y="467" class="item">(a certificate is planned)</text>
 

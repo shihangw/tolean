@@ -47,15 +47,14 @@
   <path d="M170,231 V261" class="line" marker-end="url(#arrow)"/>
   <rect x="40" y="263" width="260" height="62" rx="8" class="tested"/>
   <text x="170" y="286" text-anchor="middle" class="name">Lean translator and type checker</text>
-  <text x="170" y="304" text-anchor="middle" class="sub">output equals the tsc-based translator's,</text>
-  <text x="170" y="318" text-anchor="middle" class="sub">byte for byte, on corpus and random programs</text>
+  <text x="170" y="304" text-anchor="middle" class="sub">corpus output fixed by golden files;</text>
+  <text x="170" y="318" text-anchor="middle" class="sub">output for random programs compiles</text>
 
   <!-- tsc reference -->
   <rect x="40" y="365" width="260" height="46" rx="8" class="ref"/>
   <text x="170" y="386" text-anchor="middle" class="name">tsc</text>
-  <text x="170" y="402" text-anchor="middle" class="sub">reference that the tests compare against</text>
+  <text x="170" y="402" text-anchor="middle" class="sub">reference that the parser is compared against</text>
   <path d="M300,388 H318 V200 H302" class="check"/>
-  <path d="M318,294 H302" class="check"/>
 
   <!-- Generated Lean -->
   <path d="M300,294 H358" class="line" marker-end="url(#arrow)"/>

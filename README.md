@@ -279,28 +279,40 @@ the model of the code, and the kernel checks the proof. The claim is a short
 
 ## Layout
 
-Tolean is shaped like Babel. Each language has its own front end, and the
-stages after it are shared.
+Each language has its own front end and its own translator, and both are
+written in Lean. The front end reads the source into the language's syntax
+tree. The translator then writes Lean directly, and the generated code
+imports the language's Spec.
 
 ```
-source ──front end──▶ language AST ──lower──▶ shared IR ──generate──▶ Lean
-         (lexer and                 (planned)            (planned)     │
-          parser, in Lean)                                             │ imports
-                                                     language Spec ◀───┘
+source ──front end──▶ syntax tree ──translator──▶ Lean ──imports──▶ language Spec
+         (lexer and                  (one per
+          parser)                    language)
 ```
+
+The languages share no intermediate form, because each one models what code
+does in its own way. A TypeScript function becomes a plain Lean function. A
+Go function that calls an interface becomes a function in a state monad. A
+SQL query becomes a function from a database to a result and a new
+database. What the languages share is small: source positions, the printed
+form of a syntax tree, the project file and the chain manifests.
 
 | Path | What it holds |
 |---|---|
 | `tolean/Source.lean`, `tolean/Sexp.lean` | Shared by all languages: positions, spans, parse errors, and the printed form of a syntax tree |
+| `tolean/Project.lean` | The project file, `tolean.json`: which units to translate, with which settings. Translation itself does no IO, so the WebAssembly build runs it too. |
+| `tolean/Chain/` | The chain manifests: what each translation relies on, and the checks for them |
 | `tolean/Audit.lean` | `#audit_claims`, which keeps claims apart from proofs |
 | `tolean/<Language>/Spec/` | **The trusted model of the language's values** (for TypeScript: JS numbers). Generated code imports it, and proofs assume only what it states. Review it with care. |
-| `tolean/<Language>/Syntax/` | The language's front end, written in Lean: tokens, lexer, AST, parser, printer |
-| `tolean/TypeScript/Translate.lean` | The TypeScript translator, in Lean: it types the subset (with `null` narrowing) and writes the Lean definitions |
+| `tolean/<Language>/Syntax/` | The language's front end: tokens, lexer, syntax tree, parser, printer |
+| `tolean/TypeScript/Translate.lean` | The TypeScript translator: it types the subset (with `null` narrowing) and writes the Lean definitions |
 | `tolean/Go/Translate.lean` | The Go translator: one package at a time, from root functions, with interface calls as steps in a state monad |
 | `tolean/Sql/` | The PostgreSQL front end, the schema translator that replays migrations, the query translator, and the READ COMMITTED model in `Spec/ReadCommitted.lean` |
 | `Main.lean` | The `tolean` command |
-| `tests/<language>/` | Checks for the front end against the language's own compiler, and for the Spec against the real runtime |
-| `npm/` | The npm package, the first published form |
+| `wasm/` | The translator compiled to WebAssembly for the playground. `build.sh` builds it. |
+| `npm/` | The npm package: the `tolean` command and `translateSource`, which run the native binary for the platform (built by `.github/workflows/release.yml`), and the Lean runtime that generated code imports |
+| `playground/` | A static page where you edit an example and Lean checks its proofs in the browser |
+| `tests/<language>/` | Checks for the front end against the language's own compiler, for the translator on a corpus, and for the Spec against the real runtime |
 
 To add a language, create `tolean/<Language>/Spec/`,
 `tolean/<Language>/Syntax/` and `tests/<language>/`. Also write a reference
@@ -314,11 +326,12 @@ nix develop                                 # Lean 4.30.0, Node 24, pnpm 10
 lake build --wfail                          # the library and .lake/build/bin/tolean
 .lake/build/bin/tolean parse file.ts        # print the syntax tree, or file:line:col: reason
 .lake/build/bin/tolean translate file.ts File.lean My.Namespace
+nix develop .#wasm -c wasm/build.sh         # the translator as WebAssembly, for playground/
 cd tests/typescript && pnpm install
 node check.ts                               # the Lean parser against tsc (see the language docs)
-node checkTranslate.ts                      # the Lean translator against the TS one (see the language docs)
+node checkTranslate.ts                      # the translator on the corpus and on random programs
 pnpm test                                   # JS number laws and bigint division against the engine
-cd ../../npm && pnpm install && pnpm test && pnpm build
+cd ../../npm && pnpm install && pnpm build && TOLEAN_BINARY=$PWD/../.lake/build/bin/tolean pnpm test
 cd ../tests/go && go run ./check            # the Lean Go parser against go/parser (see the language docs)
 cd ../sql && go run ./pgcheck corpus        # the SQL translator against PostgreSQL (see the language docs)
 (cd ../typescript && ./checkCertify.sh)     # per-file certificates for the corpus (see the TypeScript page)
@@ -326,9 +339,20 @@ cd ../chain && ./check.sh                   # chain manifests on a sample projec
 ```
 
 CI runs all of these on each push and pull request, in the same Nix dev
-shell, from `.github/workflows/check.yml`. It also runs the number laws on
+shell, from `.github/workflows/ci.yml`. It also runs the number laws on
 every maintained Node release line (`nix run .#test-engines`), and it fails
 if a check leaves a committed file changed.
+
+CI runs in stages, so a failure stops the expensive work early. The `check`
+job runs `lake build --wfail` and the checks above. When it passes, `wasm`
+builds the playground's WebAssembly translator and requires that it gives
+the native result, and on `main`, `pages` then publishes the playground.
+
+The npm release runs by hand, from `.github/workflows/release.yml`. It
+builds the native `tolean` on Linux, macOS and Windows, packs the npm
+packages, and installs them as a user would. By default that is a dry run
+that uploads the packages. With `publish` set, it waits for approval,
+publishes them to npm and tags the commit.
 
 
 ## Languages
@@ -353,12 +377,22 @@ links for each claim.
 | Link | TypeScript | Go | PostgreSQL |
 |---|---|---|---|
 | Parser | Tested: the trees equal `tsc`'s, on the corpus and on random programs | Tested: the trees equal `go/parser`'s | Tested through the two translators' checks; no reference parser yet |
-| Translator | Tested: the output equals the `tsc`-based translator's, byte for byte. **Proved** for a file with a [certificate](docs/typescript/README.md#certificates) | Tested: the corpus output is fixed and compiled | Tested: the results agree with PostgreSQL 18 on generated scenarios |
+| Translator | Tested: the corpus output is fixed and compiled, and so is the output for random programs. **Proved** for a file with a [certificate](docs/typescript/README.md#certificates) | Tested: the corpus output is fixed and compiled | Tested: the results agree with PostgreSQL 18 on generated scenarios |
 | Value model (the spec that generated code imports) | Tested: the number laws hold on every maintained Node release line | Trusted, not tested yet: `int64` wrapping and errors | Tested: values, errors and three-valued logic agree with PostgreSQL 18 |
 | Concurrency model | None: the subset is single-threaded | None: no goroutines | The READ COMMITTED model is tested on the server, and its theorems are **proved** |
 | Claims about the generated code | **Proved** | **Proved** | **Proved** |
 | What runs | Trusted: the JavaScript engine | Trusted: the Go compiler | Trusted: the PostgreSQL server and its constraints |
 | Callers | Not checked: inputs must meet each theorem's preconditions | Not checked; the glue between an interface and a real store is trusted | Not checked; the code that calls the queries is trusted |
+
+The playground runs the translator compiled to WebAssembly, so it also
+trusts that build: Lean's runtime built for a 32-bit target that Lean does
+not support officially, the patches in `wasm/build.sh`, and Emscripten. The
+npm package does not: it runs the native binary, built for each platform with
+Lean's own toolchain. CI tests the WebAssembly build against the native command:
+every corpus file and 200 random programs must give the same Lean or the
+same refusal. A project that runs `tolean translate --check` in CI checks
+its Lean with the native command, and a certificate holds whichever build
+wrote the Lean, because the kernel checks it.
 
 A certificate changes what one TypeScript file trusts. The file no longer
 trusts the translator. It trusts the parser, the interpreter that defines

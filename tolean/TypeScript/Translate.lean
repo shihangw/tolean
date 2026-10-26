@@ -243,7 +243,11 @@ def declare (env : Env) (span : Span) (name : String) (binding : Binding) (type 
 
 /-! ### Types -/
 
-def argument (code : String) : String := if code.contains ' ' then s!"({code})" else code
+/-- Lean code as an argument: parenthesized unless it is one atom. A prefix
+`!` or `¬` takes the rest of the line in Lean, so code that starts with one is
+not an atom even without a space: `f !(a) b` reads as `f !((a) b)`. -/
+def argument (code : String) : String :=
+  if code.contains ' ' || code.startsWith "!" || code.startsWith "¬" then s!"({code})" else code
 
 def wrapped (constructor argument : String) : String :=
   constructor ++ " " ++

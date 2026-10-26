@@ -24,7 +24,7 @@ type Translate = (files: readonly WorkspaceFile[]) => Translation;
 let loading: Promise<Translate> | null = null;
 
 /**
- * Load Tolean's translator, compiled to WebAssembly by playground/wasm/build.sh.
+ * Load Tolean's translator, compiled to WebAssembly by wasm/build.sh.
  * It runs on the page's own thread, because a translation takes milliseconds.
  */
 export function loadTranslator(base: string): Promise<Translate> {

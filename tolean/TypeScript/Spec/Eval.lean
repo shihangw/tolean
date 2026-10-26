@@ -49,12 +49,32 @@ def Env.set (env : Env) (name : String) (v : Val) : Env :=
   | [] => []
   | (n, old) :: rest => if n == name then (n, v) :: rest else (n, old) :: Env.set rest name v
 
-/-- The value of a decimal bigint literal such as `12n` or `1_000n`
-(`BigInt` literal, ECMA-262 §12.9.3). Other bases leave the subset. -/
+/-- The value of one digit in base `radix`, or none. -/
+def digitIn (radix : Nat) (c : Char) : Option Nat :=
+  let v := if c.isDigit then c.toNat - '0'.toNat
+    else if 'a' ≤ c && c ≤ 'f' then c.toNat - 'a'.toNat + 10
+    else if 'A' ≤ c && c ≤ 'F' then c.toNat - 'A'.toNat + 10
+    else radix
+  if v < radix then some v else none
+
+/-- The value of digits in base `radix`, or none if one is not a digit. -/
+def digitsIn (radix : Nat) (digits : List Char) : Option Nat :=
+  if digits.isEmpty then none
+  else digits.foldlM (fun n c => return n * radix + (← digitIn radix c)) 0
+
+/-- The value of a bigint literal such as `12n`, `1_000n` or `0x1fn`: the
+MV of its `DecimalBigIntegerLiteral` or `NonDecimalIntegerLiteral`, with
+separators dropped (`BigInt` literal, ECMA-262 §12.9.3). -/
 def bigintLiteral (text : String) : Option Int :=
-  let digits := (text.toList.filter (· != '_')).dropLast
-  if digits.isEmpty || !digits.all Char.isDigit then none
-  else some (digits.foldl (fun n c => n * 10 + (c.toNat - '0'.toNat)) 0 : Nat)
+  let chars := (text.toList.filter (· != '_')).dropLast
+  let value := match chars with
+    | '0' :: p :: digits =>
+      if p == 'x' || p == 'X' then digitsIn 16 digits
+      else if p == 'o' || p == 'O' then digitsIn 8 digits
+      else if p == 'b' || p == 'B' then digitsIn 2 digits
+      else digitsIn 10 chars
+    | _ => digitsIn 10 chars
+  value.map (Int.ofNat ·)
 
 /-- `IsStrictlyEqual` (ECMA-262 §7.2.15) on primitive values. Objects
 compare by identity, which the subset does not model, so they leave it. -/
@@ -220,7 +240,7 @@ macro_rules
   | `(tactic| certify_tac [$defs,*]) =>
     `(tactic| (
       simp [run, eval, evalList, evalProps, execStmt, exec, functions, binary, strictEq,
-        bigintLiteral, Env.set, Val.truthy, List.lookup, $defs,*]
+        bigintLiteral, digitsIn, digitIn, Env.set, Val.truthy, List.lookup, $defs,*]
       all_goals repeat' (split <;> (try simp_all [List.lookup, binary, strictEq, Val.truthy, Env.set]))
       all_goals (try simp_all [List.lookup, binary, strictEq, Val.truthy, Env.set])))
 

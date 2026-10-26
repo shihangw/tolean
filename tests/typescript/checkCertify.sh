@@ -11,7 +11,7 @@ trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/Corpus"
 lean_path="$(cd "$root" && lake env printenv LEAN_PATH):$work"
 proved=0 skipped=0
-for f in corpus/translate/*.ts; do
+for f in corpus/translate/accept/*.ts; do
   b=$(basename "$f" .ts)
   n="$(tr '[:lower:]' '[:upper:]' <<<"${b:0:1}")${b:1}"
   $T translate "$f" "$work/Corpus/$n.lean" "Corpus.$n" 2>/dev/null || { skipped=$((skipped + 1)); continue; }

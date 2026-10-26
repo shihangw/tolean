@@ -19,6 +19,10 @@ tolean translate [--check] [--config <json>]
     build every unit that tolean.json lists, or that the inline JSON <json>
     lists; with --check, write nothing and fail when a generated file is not
     current
+tolean translate-workspace
+    read a workspace as JSON on stdin, {"files": [{"path", "text"}, …]} with
+    tolean.json among them, and print each unit's Lean or error as JSON; it
+    reads and writes no files
 tolean translate [--target ES20xx] [--certify] <input> <output.lean> <Namespace>
     write <input> as Lean definitions; with --certify, also write its
     certificate next to it when some function can have one (see `certify`)
@@ -53,6 +57,7 @@ open tolean tolean.TypeScript
 def usage : String :=
   "usage: tolean parse [--target ES20xx] <file.ts>\n" ++
   "       tolean translate [--check] [--config <json>]\n" ++
+  "       tolean translate-workspace < workspace.json\n" ++
   "       tolean translate [--target ES20xx] [--certify] <input.ts> <output.lean> <Lean.Namespace>\n" ++
   "       tolean translate-sql <output.lean> <Lean.Namespace> --query Q --queries <file.sql>... --migrations <file.sql>...\n" ++
   "       tolean sql-schema --table T --migrations <file.sql>...\n" ++
@@ -227,6 +232,9 @@ def run (target : Edition) : List String → IO UInt32
   | ["parse", path] => parseFile target path
   | ["translate"] => translateProject false
   | ["translate", "--check"] => translateProject true
+  | ["translate-workspace"] => do
+    IO.println (Project.workspaceJson (← (← IO.getStdin).readToEnd))
+    return 0
   | ["translate", "--config", json] => translateProject false json
   | ["translate", "--check", "--config", json] => translateProject true json
   | ["translate", "--config", json, "--check"] => translateProject true json

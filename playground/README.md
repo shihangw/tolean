@@ -1,7 +1,7 @@
 # Playground
 
 The playground is a static page where you read and edit Tolean examples. It
-is built with React and Vite, and `.github/workflows/pages.yml` publishes it
+is built with React and Vite, and the `pages` job in `.github/workflows/ci.yml` publishes it
 to GitHub Pages.
 
 Each workspace has two folders. `src/` holds the source code and the Lean
@@ -70,6 +70,7 @@ browser.
 ## Build
 
 ```sh
+nix develop .#wasm -c wasm/build.sh   # the translator, from the repository root
 cd playground/site
 pnpm install
 pnpm dev                       # serve on localhost:5173
