@@ -2,6 +2,7 @@ import tolean.Sexp
 import tolean.Version
 import tolean.TypeScript.Edition
 import tolean.TypeScript.Syntax.Parser
+import tolean.TypeScript.Output
 
 /-!
 Translate one TypeScript module, in Tolean's subset, to Lean 4 definitions that
@@ -23,9 +24,9 @@ expression gets the type that `tsc` gives it, with the same narrowing on
 `null`. Where it cannot tell, it refuses. It refuses everything outside the
 subset with a position and a reason; nothing is approximated.
 
-On every file that both accept, the output is the same, byte for byte, as the
-TypeScript translator in `npm/src/translate.ts`
-(`tests/typescript/checkTranslate.ts` checks this).
+The translator does not write text. It builds the output as a syntax tree
+(`Output.lean`), and the printer there writes it. So the translator is a
+function from one syntax tree to another, which a theorem can be about.
 -/
 namespace tolean.TypeScript.Translate
 
@@ -61,6 +62,17 @@ def Ty.join (a b : Ty) : Option Ty :=
 def Ty.isObject : Ty → Bool
   | .array _ | .struct _ => true
   | _ => false
+
+/-- The Lean type that the output gives a value of type `t`. -/
+def Ty.lean : Ty → Output.Ty
+  | .bigint => .int
+  | .number => .number
+  | .boolean => .bool
+  | .string => .string
+  | .null => .null
+  | .nullable t => .option t.lean
+  | .array t => .list t.lean
+  | .struct name => .struct name
 
 /-- How a name in scope may be used. Only `let` and `array` locals change. -/
 inductive Binding where
@@ -101,12 +113,6 @@ structure Ctx where
   target : Edition
   src : Array Char
   lineStarts : Array Nat
-  usesNumber : Bool
-  /-- Lean names the output uses that the source also declares. The output
-  writes them in full from the root, so a source name never hides them. -/
-  clashes : List String := []
-  /-- The number type parameter: `N`, or a fresh name when the source uses `N`. -/
-  numberVar : String := "N"
   structs : List StructInfo := []
   functions : List FnInfo := []
   currentFunction : String := ""
@@ -122,32 +128,13 @@ abbrev TM := EStateM String Ctx
 /-- A translated expression. `prop` is true when the code is a Lean `Prop`,
 not a `Bool`. -/
 structure Code where
-  code : String
+  code : Output.Expr
   prop : Bool
   type : Ty
 
-/-- The Lean names the output uses, with their full names from the root. -/
-def leanNames : List (String × String) :=
-  [("decide", "Decidable.decide"), ("List", "List"), ("Option", "Option"),
-   ("some", "Option.some"), ("none", "Option.none"), ("Int", "Int"), ("Bool", "Bool"),
-   ("String", "String"), ("JSNumber", "tolean.TypeScript.JSNumber")]
-
-/-- Write the Lean name `name` (or `name.rest`), from the root when the source
-declares the same name. -/
-def leanName (name : String) : TM String := do
-  let (head, rest) := match name.splitOn "." with
-    | h :: t => (h, String.join (t.map ("." ++ ·)))
-    | [] => (name, "")
-  if (← get).clashes.contains head then
-    return s!"_root_.{(leanNames.lookup head).getD head}{rest}"
-  return name
-
-/-- The number type parameter. -/
-def numberVar : TM String := do return (← get).numberVar
-
 /-- In value position, a `Prop` becomes a `Bool` with `decide`. -/
-def Code.value (c : Code) : TM String := do
-  if c.prop then return s!"{← leanName "decide"} ({c.code})" else return c.code
+def Code.value (c : Code) : Output.Expr :=
+  if c.prop then .decide c.code else c.code
 
 /-- What a statement list ends in: a `return`, or the tuple of changed locals. -/
 inductive Tail where
@@ -243,44 +230,20 @@ def declare (env : Env) (span : Span) (name : String) (binding : Binding) (type 
 
 /-! ### Types -/
 
-/-- Lean code as an argument: parenthesized unless it is one atom. A prefix
-`!` or `¬` takes the rest of the line in Lean, so code that starts with one is
-not an atom even without a space: `f !(a) b` reads as `f !((a) b)`. -/
-def argument (code : String) : String :=
-  if code.contains ' ' || code.startsWith "!" || code.startsWith "¬" then s!"({code})" else code
-
-def wrapped (constructor argument : String) : String :=
-  constructor ++ " " ++
-    (if argument.contains ' ' && !argument.startsWith "(" then s!"({argument})" else argument)
-
-def structType (ctx : Ctx) (name : String) : String :=
-  if ctx.usesNumber then s!"({name} {ctx.numberVar})" else name
-
 def unsupportedType {A : Type} (t : TypeExpr) : TM A :=
   reject t.span
     ("unsupported type (use bigint, number, boolean, string, T | null, arrays, " ++
       "or an interface declared above)")
 
-/-- How the output writes a value of type `t`, as `translateType` does. -/
-partial def tyLean : Ty → TM String
-  | .bigint => leanName "Int"
-  | .number => numberVar
-  | .boolean => leanName "Bool"
-  | .string => leanName "String"
-  | .null => return s!"({← leanName "Option"} Empty)"
-  | .nullable t => return wrapped (← leanName "Option") (← tyLean t)
-  | .array t => return wrapped (← leanName "List") (← tyLean t)
-  | .struct name => return structType (← get) name
-
-/-- The Lean type of `t`, and its type in the subset. -/
-partial def translateType (t : TypeExpr) : TM (String × Ty) := do
+/-- The type of `t` in the subset. The output writes it as `Ty.lean`. -/
+partial def translateType (t : TypeExpr) : TM Ty := do
   match t with
   | .keyword s "bigint" =>
     requireFeature s .bigint
-    return (← leanName "Int", .bigint)
-  | .keyword _ "boolean" => return (← leanName "Bool", .boolean)
-  | .keyword _ "string" => return (← leanName "String", .string)
-  | .keyword _ "number" => return (← numberVar, .number)
+    return .bigint
+  | .keyword _ "boolean" => return .boolean
+  | .keyword _ "string" => return .string
+  | .keyword _ "number" => return .number
   | .union _ [a, b] =>
     -- `T | null`: exactly two members, one of them `null`.
     let value? := match a, b with
@@ -288,19 +251,14 @@ partial def translateType (t : TypeExpr) : TM (String × Ty) := do
       | .null _, v | v, .null _ => some v
       | _, _ => none
     let some value := value? | unsupportedType t
-    let (lean, ty) ← translateType value
-    return (wrapped (← leanName "Option") lean, .nullable ty)
-  | .array _ elem =>
-    let (lean, ty) ← translateType elem
-    return (wrapped (← leanName "List") lean, .array ty)
+    return .nullable (← translateType value)
+  | .array _ elem => return .array (← translateType elem)
   | .ref _ name [elem] =>
     unless name == "Array" || name == "ReadonlyArray" do unsupportedType t
-    let (lean, ty) ← translateType elem
-    return (wrapped (← leanName "List") lean, .array ty)
+    return .array (← translateType elem)
   | .ref _ name [] =>
-    let ctx ← get
-    unless ctx.structs.any (·.name == name) do unsupportedType t
-    return (structType ctx name, .struct name)
+    unless (← get).structs.any (·.name == name) do unsupportedType t
+    return .struct name
   | _ => unsupportedType t
 
 /-! ### What statements do -/
@@ -363,15 +321,6 @@ def changedNames (statements : List Stmt) (env : Env) : List String :=
   let changed := statements.foldl (fun acc s => acc ++ stmtChanges s) []
   (env.locals.filter fun l => changed.contains l.name).map (·.name)
 
-def tuple (names : List String) : String :=
-  match names with
-  | [name] => name
-  | _ => "(" ++ ", ".intercalate names ++ ")"
-
-def indentBy (by_ : String) (lines : List String) : List String := lines.map (by_ ++ ·)
-
-def indent (lines : List String) : List String := indentBy "  " lines
-
 /-- `x === null` or `x !== null`, where `x` is a name in scope that may be
 `null` here: `(x, the test is ===, the type of x when not null)`. A name
 already narrowed is not an `Option` in Lean any more, so it gets no `match`. -/
@@ -396,16 +345,15 @@ partial def isNonzeroBigintLiteral (e : Expr) : Bool :=
   | .bigint _ text => bigintValue text != 0
   | _ => false
 
-/-- `js` is how the output writes `JSNumber`. -/
-def numberTest? (js : String) : String → Option (String → String)
-  | "isSafeInteger" => some fun x => s!"({js}.toSafeInt {x}).isSome"
-  | "isNaN" => some fun x => s!"({js}.isNaN {x})"
-  | "isFinite" => some fun x => s!"({js}.isFinite {x})"
+def numberTest? : String → Option Output.NumberTest
+  | "isSafeInteger" => some .isSafeInteger
+  | "isNaN" => some .isNaN
+  | "isFinite" => some .isFinite
   | _ => none
 
-def numberConstant? : String → Option String
-  | "NaN" => some "nan"
-  | "Infinity" => some "posInf"
+def numberConstant? : String → Option Output.NumberConstant
+  | "NaN" => some .nan
+  | "Infinity" => some .posInf
   | _ => none
 
 /-! ### Expressions -/
@@ -419,23 +367,23 @@ partial def translateExpr (env : Env) (expected : Option Ty) (e : Expr) : TM Cod
   | .paren _ inner => translateExpr env expected inner
   | .bigint _ text =>
     -- Typed, so Lean never defaults a numeral to `Nat`, where `0 - 1 = 0`.
-    return ⟨s!"({bigintValue text} : {← leanName "Int"})", false, .bigint⟩
+    return ⟨.int (bigintValue text), false, .bigint⟩
   | .number s text =>
     let some v := safeIntegerValue? text | reject s "a number literal must be a safe integer"
-    return ⟨s!"({← leanName "JSNumber"}.ofSafeInt (N := {← numberVar}) ({v} : {← leanName "Int"}))", false, .number⟩
-  | .null _ => return ⟨← leanName "none", false, .null⟩
-  | .bool _ value => return ⟨if value then "true" else "false", false, .boolean⟩
-  | .string _ value => return ⟨Sexp.quote value, false, .string⟩
+    return ⟨.number v, false, .number⟩
+  | .null _ => return ⟨.none, false, .null⟩
+  | .bool _ value => return ⟨.bool value, false, .boolean⟩
+  | .string _ value => return ⟨.string value, false, .string⟩
   | .ident s name =>
     match env.lookup name with
     | none =>
       let some constant := numberConstant? name
         | reject s "only parameters and locals may be referenced"
-      return ⟨s!"({← leanName "JSNumber"}.{constant} (N := {← numberVar}))", false, .number⟩
+      return ⟨.numberConstant constant, false, .number⟩
     | some l =>
       if l.binding == .array && !(← get).returning then
         reject s "an owned array may be read only in the return value"
-      return ⟨name, false, l.type⟩
+      return ⟨.var name, false, l.type⟩
   | .member s obj name =>
     let o ← translateExpr env none obj
     let ctx : Ctx ← get
@@ -445,21 +393,20 @@ partial def translateExpr (env : Env) (expected : Option Ty) (e : Expr) : TM Cod
           fun info => info.fields.lookup name
       | _ => none
     let some type := field? | reject s "only fields of interfaces declared in this file may be read"
-    let object := if obj matches .ident .. then o.code else s!"({o.code})"
-    return ⟨s!"{object}.{name}", false, type⟩
+    return ⟨.field o.code (!(obj matches .ident ..)) name, false, type⟩
   | .unary s op arg =>
     if op == .neg && (arg matches .ident _ "Infinity") && !env.has "Infinity" then
-      return ⟨s!"({← leanName "JSNumber"}.negInf (N := {← numberVar}))", false, .number⟩
+      return ⟨.numberConstant .negInf, false, .number⟩
     let a ← translateExpr env none arg
     match op with
     | .not =>
       unless a.type == .boolean do reject s "'!' needs a boolean"
-      return if a.prop then ⟨s!"¬({a.code})", true, .boolean⟩
-        else ⟨s!"!({a.code})", false, .boolean⟩
+      return if a.prop then ⟨.propNot a.code, true, .boolean⟩
+        else ⟨.not a.code, false, .boolean⟩
     | .neg =>
       match a.type with
-      | .bigint => return ⟨s!"(-{(← a.value)})", false, .bigint⟩
-      | .number => return ⟨s!"({← leanName "JSNumber"}.neg {argument (← a.value)})", false, .number⟩
+      | .bigint => return ⟨.neg a.value, false, .bigint⟩
+      | .number => return ⟨.numberNeg a.value, false, .number⟩
       | _ => reject s "unsupported unary operator"
     | _ => reject s "unsupported unary operator"
   | .binary s op l r => translateBinary env s op l r
@@ -469,7 +416,7 @@ partial def translateExpr (env : Env) (expected : Option Ty) (e : Expr) : TM Cod
     let a ← translateExpr env expected ifTrue
     let b ← translateExpr env expected ifFalse
     let some type := a.type.join b.type | reject s "the branches of '?:' have different types"
-    return ⟨s!"(if {c.code} then {(← a.value)} else {(← b.value)})", false, type⟩
+    return ⟨.ite c.code a.value b.value, false, type⟩
   | .call s callee args => translateCall env s callee args
   | .object s props => translateObject env expected s props
   | .array s elems => translateArray env expected s elems
@@ -482,11 +429,11 @@ context, or else from the elements. -/
 partial def translateArray (env : Env) (expected : Option Ty) (s : Span) (elems : List Expr) :
     TM Code := do
   let (values, elem) ← translateElements env expected s elems
-  return ⟨s!"([{", ".intercalate values}] : {← tyLean (.array elem)})", false, .array elem⟩
+  return ⟨.list values elem.lean, false, .array elem⟩
 
 /-- The elements of an array literal, and their type. -/
 partial def translateElements (env : Env) (expected : Option Ty) (s : Span) (elems : List Expr) :
-    TM (List String × Ty) := do
+    TM (List Output.Expr × Ty) := do
   let expectedElem := match expected with
     | some (.array t) => some t
     | _ => none
@@ -501,17 +448,17 @@ partial def translateElements (env : Env) (expected : Option Ty) (s : Span) (ele
       pure t
   for (c, e) in codes.zip elems do
     unless c.type.assignableTo elem do reject e.span "the element does not have the array's element type"
-  return (← codes.mapM (·.value), elem)
+  return (codes.map (·.value), elem)
 
 partial def translateCall (env : Env) (s : Span) (callee : Expr) (args : List Expr) : TM Code := do
   -- `Number.isNaN(x)` and the like. TypeScript lets them take any value; the
   -- model has them on numbers only.
   if let .member _ (.ident _ "Number") test := callee then
-    if let (false, some form, [arg]) := (env.has "Number", numberTest? (← leanName "JSNumber") test, args) then
+    if let (false, some form, [arg]) := (env.has "Number", numberTest? test, args) then
       let a ← translateExpr env none arg
       unless a.type == .number do
         reject arg.span s!"Number.{test} needs a number operand (narrow a nullable value first)"
-      return ⟨form (argument (← a.value)), false, .boolean⟩
+      return ⟨.numberTest form a.value, false, .boolean⟩
   let noCall {A : Type} : TM A :=
     reject s "calls may name only functions declared earlier in this file (no recursion)"
   let .ident _ name := callee | noCall
@@ -521,15 +468,13 @@ partial def translateCall (env : Env) (s : Span) (callee : Expr) (args : List Ex
   let some fn := ctx.functions.find? (·.name == name) | noCall
   if env.has name then noCall
   unless fn.params.length == args.length do reject s s!"'{name}' takes {fn.params.length} arguments"
-  -- Every def is generic over `N` when the file uses numbers. Name it, so
-  -- that a callee whose signature does not mention `N` still elaborates.
-  let mut parts := if ctx.usesNumber then #[name, s!"(N := {ctx.numberVar})"] else #[name]
+  let mut values := #[]
   for (arg, paramType) in args.zip fn.params do
     let a ← translateExpr env (some paramType) arg
     unless a.type.assignableTo paramType do
       reject arg.span "the argument does not have the parameter's type"
-    parts := parts.push (argument (← a.value))
-  return ⟨"(" ++ " ".intercalate parts.toList ++ ")", false, fn.ret⟩
+    values := values.push a.value
+  return ⟨.call name values.toList, false, fn.ret⟩
 
 partial def translateObject (env : Env) (expected : Option Ty) (s : Span) (props : List Property) :
     TM Code := do
@@ -551,11 +496,10 @@ partial def translateObject (env : Env) (expected : Option Ty) (s : Span) (props
     seen := seen ++ [key]
     let v ← translateExpr env (some fieldType) value
     unless v.type.assignableTo fieldType do reject span s!"'{key}' does not have the field's type"
-    parts := parts.push s!"{key} := {(← v.value)}"
+    parts := parts.push (key, v.value)
   for (field, _) in info.fields do
     unless seen.contains field do reject s s!"the object lacks the field '{field}'"
-  return ⟨"({ " ++ ", ".intercalate parts.toList ++ " } : " ++ structType ctx structName ++ ")",
-    false, .struct structName⟩
+  return ⟨.struct parts.toList structName, false, .struct structName⟩
 
 partial def translateBinary (env : Env) (s : Span) (op : BinOp) (l r : Expr) : TM Code := do
   -- `x === null` and `x !== null`: a test on a Lean `Option`.
@@ -569,87 +513,86 @@ partial def translateBinary (env : Env) (s : Span) (op : BinOp) (l r : Expr) : T
     let o ← translateExpr env none other
     match o.type with
     | .nullable _ =>
-      return ⟨s!"{argument o.code}.{if isEquality then "isNone" else "isSome"}", false, .boolean⟩
+      return ⟨if isEquality then .isNone o.code else .isSome o.code, false, .boolean⟩
     | type =>
       -- Already narrowed: the answer is fixed, as it is in JS.
-      return ⟨if isEquality == (type == .null) then "true" else "false", false, .boolean⟩
+      return ⟨.bool (isEquality == (type == .null)), false, .boolean⟩
   -- `x === null || e` and `x !== null && e`: TypeScript narrows `x` in `e`,
   -- so Lean matches on `x` and binds it to the value inside.
   if let some (name, isNullTest, value) := nullTestOf env l then
     if (op == .or && isNullTest) || (op == .and && !isNullTest) then
       let whenSome ← translateExpr (env.narrow name value) none r
       unless whenSome.type == .boolean do reject r.span s!"'{op.symbol}' needs two booleans"
-      let whenNone := if op == .or then "true" else "false"
-      return ⟨s!"(match {name} with | {← leanName "none"} => {whenNone} | {← leanName "some"} {name} => {(← whenSome.value)})",
-        false, .boolean⟩
+      return ⟨.matchNull name (.bool (op == .or)) whenSome.value, false, .boolean⟩
   let a ← translateExpr env none l
   let b ← translateExpr env none r
   let bothBigInt := a.type == .bigint && b.type == .bigint
   let bothNumber := a.type == .number && b.type == .number
-  let call (name : String) (x y : Code) (type : Ty) : TM Code := do
-    return ⟨s!"({← leanName "JSNumber"}.{name} {argument (← x.value)} {argument (← y.value)})", false, type⟩
-  let arithmetic (bigintOp numberOp : String) : TM Code := do
-    if bothNumber then return ← call numberOp a b .number
+  let call (op : Output.NumberOp) (x y : Code) (type : Ty) : Code :=
+    ⟨.numberOp op x.value y.value, false, type⟩
+  let arithmetic (bigintOp : Output.IntOp) (numberOp : Output.NumberOp) : TM Code := do
+    if bothNumber then return call numberOp a b .number
     unless bothBigInt do reject s "arithmetic needs two bigints or two numbers"
-    return ⟨s!"({(← a.value)} {bigintOp} {(← b.value)})", false, .bigint⟩
+    return ⟨.intOp bigintOp a.value b.value, false, .bigint⟩
   -- `a > b` is `b < a`, and `a >= b` is `b <= a`.
-  let compare (bigintOp numberOp : String) (swap : Bool) : TM Code := do
+  let compare (bigintOp : Output.Order) (numberOp : Output.NumberOp) (swap : Bool) : TM Code := do
     if bothNumber then
-      return ← if swap then call numberOp b a .boolean else call numberOp a b .boolean
+      return if swap then call numberOp b a .boolean else call numberOp a b .boolean
     unless bothBigInt do reject s "ordering needs two bigints or two numbers"
-    return ⟨s!"{(← a.value)} {bigintOp} {(← b.value)}", true, .boolean⟩
+    return ⟨.order bigintOp a.value b.value, true, .boolean⟩
   let equal (negated : Bool) : TM Code := do
     if bothNumber then
-      let eq ← call "eq" a b .boolean
-      return if negated then { eq with code := "!" ++ eq.code } else eq
+      return if negated then ⟨.numberNe a.value b.value, false, .boolean⟩
+        else call .eq a b .boolean
     if a.type.isObject || b.type.isObject || (a.type matches .nullable _) ||
         (b.type matches .nullable _) then
       reject s ("=== here would compare objects or nullable values; " ++
         "only primitives and null tests are supported")
     unless a.type == b.type && (a.type matches .boolean | .string | .bigint) do
       reject s "=== needs two values of the same primitive type"
-    return ⟨s!"{(← a.value)} {if negated then "≠" else "="} {(← b.value)}", true, .boolean⟩
+    return ⟨if negated then .ne a.value b.value else .eq a.value b.value, true, .boolean⟩
   -- bigint `/` truncates toward zero and `%` takes the sign of the dividend:
   -- Lean's `Int.tdiv` and `Int.tmod`. JS throws on a zero divisor, where Lean
   -- gives a value, so the divisor must be a nonzero literal.
-  let divide (operation : String) : TM Code := do
+  let divide (operation : Output.Division) : TM Code := do
     unless bothBigInt && isNonzeroBigintLiteral r do
       reject s "'/' and '%' need two bigints and a nonzero bigint literal divisor (JS throws on 0n)"
     requireFeature s .bigintDivision
-    return ⟨s!"({← leanName "Int"}.{operation} {argument (← a.value)} {argument (← b.value)})", false, .bigint⟩
-  let logical (propOp boolOp : String) : TM Code := do
+    return ⟨.division operation a.value b.value, false, .bigint⟩
+  let logical (isAnd : Bool) : TM Code := do
     unless a.type == .boolean && b.type == .boolean do
       reject s s!"'{op.symbol}' needs two booleans"
-    if a.prop && b.prop then return ⟨s!"({a.code}) {propOp} ({b.code})", true, .boolean⟩
-    return ⟨s!"({(← a.value)} {boolOp} {(← b.value)})", false, .boolean⟩
+    if a.prop && b.prop then
+      return ⟨if isAnd then .propAnd a.code b.code else .propOr a.code b.code, true, .boolean⟩
+    return ⟨if isAnd then .and a.value b.value else .or a.value b.value, false, .boolean⟩
   match op with
-  | .add => arithmetic "+" "add"
-  | .sub => arithmetic "-" "sub"
-  | .mul => arithmetic "*" "mul"
-  | .div => divide "tdiv"
-  | .mod => divide "tmod"
-  | .lt => compare "<" "lt" false
-  | .le => compare "≤" "le" false
-  | .gt => compare ">" "lt" true
-  | .ge => compare "≥" "le" true
+  | .add => arithmetic .add .add
+  | .sub => arithmetic .sub .sub
+  | .mul => arithmetic .mul .mul
+  | .div => divide .tdiv
+  | .mod => divide .tmod
+  | .lt => compare .lt .lt false
+  | .le => compare .le .le false
+  | .gt => compare .gt .lt true
+  | .ge => compare .ge .le true
   | .strictEq => equal false
   | .strictNe => equal true
-  | .and => logical "∧" "&&"
-  | .or => logical "∨" "||"
+  | .and => logical true
+  | .or => logical false
   | _ => reject s "unsupported binary operator"
 
 end
 
 /-! ### Statements -/
 
-def assignOps? : AssignOp → Option (String × String)
-  | .add => some ("+", "add")
-  | .sub => some ("-", "sub")
-  | .mul => some ("*", "mul")
+def assignOps? : AssignOp → Option (Output.IntOp × Output.NumberOp)
+  | .add => some (.add, .add)
+  | .sub => some (.sub, .sub)
+  | .mul => some (.mul, .mul)
   | _ => none
 
 /-- One mutation statement, as the local it changes and its new value. -/
-def translateUpdate (env : Env) (s : Span) (e : Expr) : TM (String × String) := do
+def translateUpdate (env : Env) (s : Span) (e : Expr) : TM (String × Output.Expr) := do
   let refuse {A : Type} : TM A :=
     reject s "an expression statement must assign a let local or push to an owned array"
   match e with
@@ -661,7 +604,7 @@ def translateUpdate (env : Env) (s : Span) (e : Expr) : TM (String × String) :=
     let v ← translateExpr env (some elemType) element
     unless v.type.assignableTo elemType do
       reject element.span "the element does not have the array's element type"
-    return (target, s!"{target} ++ [{(← v.value)}]")
+    return (target, .push target v.value)
   | .assign _ op (.ident _ name) right =>
     unless op matches .assign | .add | .sub | .mul do refuse
     let some { binding := .«let», type, .. } := env.lookup name
@@ -670,25 +613,25 @@ def translateUpdate (env : Env) (s : Span) (e : Expr) : TM (String × String) :=
     match assignOps? op with
     | none =>
       unless v.type.assignableTo type do reject s "the value does not have the local's type"
-      return (name, (← v.value))
+      return (name, v.value)
     | some (bigintOp, numberOp) =>
       -- On `number` the operation goes through the abstract number model.
       if type == .number && v.type == .number then
-        return (name, s!"({← leanName "JSNumber"}.{numberOp} {name} {argument (← v.value)})")
+        return (name, .numberOp numberOp (.var name) v.value)
       unless type == .bigint && v.type == .bigint do
         reject s "arithmetic needs two bigints or two numbers"
-      return (name, s!"{name} {bigintOp} {(← v.value)}")
+      return (name, .update bigintOp name v.value)
   | _ => refuse
 
 mutual
 
-partial def translateStatements (env : Env) (tail : Tail) : List Stmt → TM (List String)
+partial def translateStatements (env : Env) (tail : Tail) : List Stmt → TM Output.Body
   | [] => do
     match tail with
     | .ret =>
       let ctx ← get
       throw s!"{ctx.file}: '{ctx.currentFunction}' can end without a return"
-    | .state names => return [tuple names]
+    | .state names => return .state names
   | stmt :: rest => do
     match stmt with
     | .returnStmt s value =>
@@ -700,11 +643,11 @@ partial def translateStatements (env : Env) (tail : Tail) : List Stmt → TM (Li
       unless code.type.assignableTo returnType do
         reject v.span "the value does not have the function's return type"
       modify fun c => { c with returning := false }
-      return [(← code.value)]
+      return .value code.value
     | .varDecl s d => translateVariable env s d rest tail
     | .exprStmt s e =>
       let (name, update) ← translateUpdate env s e
-      return s!"let {name} := {update}" :: (← translateStatements env tail rest)
+      return .let name update (← translateStatements env tail rest)
     | .ifStmt s test thenBranch elseBranch =>
       translateIf env s test thenBranch elseBranch rest tail
     | .forOfStmt s kind name iterable body =>
@@ -712,7 +655,7 @@ partial def translateStatements (env : Env) (tail : Tail) : List Stmt → TM (Li
     | _ => reject stmt.span "unsupported statement"
 
 partial def translateVariable (env : Env) (s : Span) (d : VarDecl) (rest : List Stmt)
-    (tail : Tail) : TM (List String) := do
+    (tail : Tail) : TM Output.Body := do
   let some init := d.init | reject s "declare one const or let identifier with an initializer"
   -- `const xs: Array<T> = [...]` (or `T[]`) is an owned array, which the
   -- function may push to. Any other array literal is a value.
@@ -724,14 +667,14 @@ partial def translateVariable (env : Env) (s : Span) (d : VarDecl) (rest : List 
       unless d.kind == .const do
         reject s "an array that the function pushes to must be 'const xs: Array<T> = [...]'; use ReadonlyArray<T> for a value"
       let some annotation := d.type | unreachable!
-      let (lean, type) ← translateType annotation
+      let type ← translateType annotation
       let .array _ elems := init | unreachable!
       -- The `let` states the type, so the list needs no ascription.
       let (values, _) ← translateElements env (some type) s elems
       let env' ← declare env s d.name .array type
-      return s!"let {d.name} : {lean} := [{", ".intercalate values}]" :: (← translateStatements env' tail rest)
+      return .letArray d.name type.lean values (← translateStatements env' tail rest)
   let declared ← match d.type with
-    | some annotation => some <$> Prod.snd <$> translateType annotation
+    | some annotation => some <$> translateType annotation
     | none => pure none
   let code ← translateExpr env declared init
   let type ← match declared with
@@ -741,10 +684,10 @@ partial def translateVariable (env : Env) (s : Span) (d : VarDecl) (rest : List 
     | none => pure code.type
   let binding := if d.kind == .const then Binding.const else .«let»
   let env' ← declare env s d.name binding type
-  return s!"let {d.name} := {(← code.value)}" :: (← translateStatements env' tail rest)
+  return .let d.name code.value (← translateStatements env' tail rest)
 
 partial def translateIf (env : Env) (s : Span) (test : Expr) (thenBranch : Stmt)
-    (elseBranch : Option Stmt) (rest : List Stmt) (tail : Tail) : TM (List String) := do
+    (elseBranch : Option Stmt) (rest : List Stmt) (tail : Tail) : TM Output.Body := do
   let thenStatements := blockStatements thenBranch
   let elseStatements := (elseBranch.map blockStatements).getD []
   -- `if (x === null)` and `if (x !== null)`: TypeScript narrows `x` in each
@@ -754,16 +697,15 @@ partial def translateIf (env : Env) (s : Span) (test : Expr) (thenBranch : Stmt)
     | some (name, true, value) => (env.narrow name .null, env.narrow name value)
     | some (name, false, value) => (env.narrow name value, env.narrow name .null)
     | none => (env, env)
-  let branch (whenTrue whenFalse : List String) : TM (List String) := do
+  let branch (whenTrue whenFalse : Output.Body) : TM Output.Body := do
     match nullTest with
     | none =>
       let c ← translateExpr env none test
       unless c.type == .boolean do reject test.span "a condition must be a boolean"
-      return [s!"if {c.code} then"] ++ indent whenTrue ++ ["else"] ++ indent whenFalse
+      return .ite c.code whenTrue whenFalse
     | some (name, isNullTest, _) =>
-      return [s!"match {name} with", s!"| {← leanName "none"} =>"] ++
-        indent (if isNullTest then whenTrue else whenFalse) ++
-        [s!"| {← leanName "some"} {name} =>"] ++ indent (if isNullTest then whenFalse else whenTrue)
+      return if isNullTest then .matchNull name whenTrue whenFalse
+        else .matchNull name whenFalse whenTrue
   if (tail matches .ret) && alwaysReturns thenStatements then
     if elseBranch.isSome && !rest.isEmpty then
       reject s "code after an if whose branches both return is unreachable"
@@ -780,11 +722,10 @@ partial def translateIf (env : Env) (s : Span) (test : Expr) (thenBranch : Stmt)
   let state := Tail.state names
   let whenTrue ← translateStatements envTrue state thenStatements
   let whenFalse ← translateStatements envFalse state elseStatements
-  let lines ← branch whenTrue whenFalse
-  return [s!"let {tuple names} :="] ++ indent lines ++ (← translateStatements env tail rest)
+  return .letState names (← branch whenTrue whenFalse) (← translateStatements env tail rest)
 
 partial def translateForOf (env : Env) (s : Span) (kind : VarKind) (element : String)
-    (iterable : Expr) (body : Stmt) (rest : List Stmt) (tail : Tail) : TM (List String) := do
+    (iterable : Expr) (body : Stmt) (rest : List Stmt) (tail : Tail) : TM Output.Body := do
   unless kind == .const do reject s "a loop must be 'for (const x of xs)'"
   let bodyStatements := blockStatements body
   if bodyStatements.any containsJump then reject s "a loop body may not return, break or continue"
@@ -793,11 +734,8 @@ partial def translateForOf (env : Env) (s : Span) (kind : VarKind) (element : St
   let items ← translateExpr env none iterable
   let .array elemType := items.type | reject iterable.span "a loop must run over an array"
   let bodyEnv ← declare env s element .const elemType
-  let bodyLines ← translateStatements bodyEnv (.state names) bodyStatements
-  let lastLine := bodyLines.getLast?.getD ""
-  return [s!"let {tuple names} :=", s!"  {← leanName "List.foldl"}", s!"    (fun {tuple names} {element} =>"] ++
-    indentBy "      " (bodyLines.dropLast ++ [lastLine ++ ")"]) ++
-    [s!"    {tuple names} {items.code}"] ++ (← translateStatements env tail rest)
+  let bodyOut ← translateStatements bodyEnv (.state names) bodyStatements
+  return .fold names element bodyOut items.code (← translateStatements env tail rest)
 
 end
 
@@ -808,25 +746,21 @@ def declareTopLevel (s : Span) (name : String) : TM Unit := do
   if ctx.structs.any (·.name == name) || ctx.functions.any (·.name == name) then
     reject s s!"'{name}' is declared twice"
 
-def translateInterface (s : Span) (name : String) (fields : List Field) : TM String := do
+def translateInterface (s : Span) (name : String) (fields : List Field) : TM Output.Decl := do
   let name ← checkName s name
   declareTopLevel s name
-  let ctx ← get
   let mut infos := #[]
-  let mut lines := #[s!"structure {name}{if ctx.usesNumber then s!" ({ctx.numberVar} : Type)" else ""} where"]
   for f in fields do
     unless f.readonly && !f.optional do
       reject f.span "interface fields must be readonly, required and typed"
     let field ← checkName f.span f.name
     if infos.any (·.1 == field) then reject f.span s!"'{field}' is declared twice"
-    let (lean, type) ← translateType f.type
-    infos := infos.push (field, type)
-    lines := lines.push s!"  {field} : {lean}"
+    infos := infos.push (field, ← translateType f.type)
   modify fun c => { c with structs := c.structs ++ [{ name, fields := infos.toList }] }
-  return "\n".intercalate lines.toList
+  return .struct name (infos.toList.map fun (field, type) => (field, type.lean))
 
 def translateFunction (s : Span) (name : String) (params : List Param)
-    (returnType : Option TypeExpr) (body : Stmt) : TM String := do
+    (returnType : Option TypeExpr) (body : Stmt) : TM Output.Decl := do
   let some returnType := returnType
     | reject s "functions must be named, typed, non-generic and synchronous"
   let name ← checkName s name
@@ -838,19 +772,15 @@ def translateFunction (s : Span) (name : String) (params : List Param)
     let some type := p.type | reject p.span "parameters must be plain, typed identifiers"
     let paramName ← checkName p.span p.name
     if env.has paramName then reject p.span s!"'{paramName}' is declared twice"
-    let (lean, ty) ← translateType type
+    let ty ← translateType type
     env := env.add { name := paramName, binding := .param, type := ty }
-    leanParams := leanParams.push s!"({paramName} : {lean})"
+    leanParams := leanParams.push (paramName, ty.lean)
     types := types.push ty
-  let (leanReturn, ret) ← translateType returnType
+  let ret ← translateType returnType
   modify fun c => { c with currentFunction := name, returnType := ret }
-  let lines ← translateStatements env .ret (blockStatements body)
+  let out ← translateStatements env .ret (blockStatements body)
   modify fun c => { c with functions := c.functions ++ [{ name, params := types.toList, ret }] }
-  let n ← numberVar
-  let js ← leanName "JSNumber"
-  let generic := if (← get).usesNumber then s!" \{{n} : Type} [{js} {n}]" else ""
-  return "\n".intercalate
-    (s!"def {name}{generic} {" ".intercalate leanParams.toList} : {leanReturn} :=" :: indent lines)
+  return .function name leanParams.toList ret.lean out
 
 /-! ### The number model -/
 
@@ -945,23 +875,23 @@ def translate (file source ns : String) (target : Edition := .default) :
       | _ => none
     | .error _ => []
   let numberVar := ("N" :: (List.range 1000).map (s!"N{· + 1}")).find? (!idents.contains ·)
-  let ctx : Ctx :=
-    { file, target, src, lineStarts := lineStarts src, usesNumber := moduleUsesNumber m,
-      clashes := leanNames.map (·.1) |>.filter idents.contains,
-      numberVar := numberVar.getD "N" }
-  let sections : TM (List String) := m.decls.mapM fun
+  let names : Output.Names :=
+    { clashes := Output.leanNames.map (·.1) |>.filter idents.contains,
+      numberVar := numberVar.getD "N", usesNumber := moduleUsesNumber m }
+  let ctx : Ctx := { file, target, src, lineStarts := lineStarts src }
+  let decls : TM (List Output.Decl) := m.decls.mapM fun
     | .interface s _ name fields => translateInterface s name fields
     | .function s _ name params ret body => translateFunction s name params ret body
     | d => reject d.span "only interfaces and functions may appear at top level"
-  match sections.run ctx with
+  match decls.run ctx with
   | .error e _ => .error e
-  | .ok sections ctx =>
+  | .ok decls _ =>
     let header :=
-      if ctx.usesNumber then ["import tolean.TypeScript.Spec.Number", "", "open tolean.TypeScript"]
+      if names.usesNumber then ["import tolean.TypeScript.Spec.Number", "", "open tolean.TypeScript"]
       else []
     return "\n".intercalate
       ([s!"-- Generated by tolean {version} for {target.name} from {file}. Do not edit."] ++
         header ++
-        [s!"namespace {ns}", "", "\n\n".intercalate sections, "", s!"end {ns}", ""])
+        [s!"namespace {ns}", "", "\n\n".intercalate (decls.map (·.print names)), "", s!"end {ns}", ""])
 
 end tolean.TypeScript.Translate

@@ -305,7 +305,8 @@ form of a syntax tree, the project file and the chain manifests.
 | `tolean/Audit.lean` | `#audit_claims`, which keeps claims apart from proofs |
 | `tolean/<Language>/Spec/` | **The trusted model of the language's values** (for TypeScript: JS numbers). Generated code imports it, and proofs assume only what it states. Review it with care. |
 | `tolean/<Language>/Syntax/` | The language's front end: tokens, lexer, syntax tree, parser, printer |
-| `tolean/TypeScript/Translate.lean` | The TypeScript translator: it types the subset (with `null` narrowing) and writes the Lean definitions |
+| `tolean/TypeScript/Translate.lean` | The TypeScript translator: it types the subset (with `null` narrowing) and builds the Lean definitions as a syntax tree |
+| `tolean/TypeScript/Output.lean` | The syntax tree of the Lean code that the TypeScript translator writes, and its printer |
 | `tolean/Go/Translate.lean` | The Go translator: one package at a time, from root functions, with interface calls as steps in a state monad |
 | `tolean/Sql/` | The PostgreSQL front end, the schema translator that replays migrations, the query translator, and the READ COMMITTED model in `Spec/ReadCommitted.lean` |
 | `Main.lean` | The `tolean` command |
