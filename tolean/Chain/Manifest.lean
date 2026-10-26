@@ -113,6 +113,8 @@ structure FileManifest where
   nodes : List Node
   /-- Edges between node ids; `source` and `output` stand for the files. -/
   edges : List (String × String)
+  /-- The certificate file, when `tolean certify` proved the translation. -/
+  certificate : Option FileRef := none
 deriving ToJson, FromJson, Inhabited, Repr
 
 structure Claim where

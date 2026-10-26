@@ -61,6 +61,10 @@ jobs:
         working-directory: tests/typescript
         run: node checkTranslate.ts
 
+      - name: Per-file certificates for the translation corpus
+        working-directory: tests/typescript
+        run: ./checkCertify.sh
+
       - name: JS number laws on every maintained Node release line
         run: nix run .#test-engines
 

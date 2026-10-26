@@ -6,6 +6,7 @@ import tolean.Go.Syntax.Print
 import tolean.Go.Translate
 import tolean.Sql.Translate
 import tolean.Chain.Check
+import tolean.TypeScript.Certify
 
 /-!
 The `tolean` command.
@@ -23,6 +24,11 @@ tolean translate-sql <output.lean> <Namespace> --query Q [--query R…]
     write the schema the queries reach (from the migrations, in order) and the queries
 tolean sql-schema --table T [--table U…] --migrations <file.sql>…
     print the schema of the tables T, U… and the tables they reference
+tolean certify [--target ES20xx] <input.ts> <Translated.Module> <Translated.Namespace> <output.lean> <Cert.Namespace>
+    [--manifest <output>.chain.json]
+    write a certificate: one theorem per function, that the interpreter and the
+    translated Lean give the same result for every input; --manifest records it in
+    the translation's chain manifest
 tolean chain check <tolean.chain.json> [--passed check,check…]
     check that the files are unchanged, each status has evidence, and each claim
     is a theorem of exactly its spec with the recorded axioms
@@ -44,6 +50,7 @@ def usage : String :=
   "       tolean translate-sql <output.lean> <Lean.Namespace> --query Q --queries <file.sql>... --migrations <file.sql>...\n" ++
   "       tolean sql-schema --table T --migrations <file.sql>...\n" ++
   "       tolean translate-go --root F [--erase-type T] [--erase-package P] <output.lean> <Lean.Namespace> <file.go>...\n" ++
+  "       tolean certify [--target ES20xx] <input.ts> <Translated.Module> <Translated.Namespace> <output.lean> <Cert.Namespace> [--manifest <output>.chain.json]\n" ++
   "       tolean chain check <tolean.chain.json> [--passed check,check...]\n" ++
   "       tolean chain graph <tolean.chain.json>\n" ++
   "       tolean chain trust <tolean.chain.json> <claim>\n" ++
@@ -174,6 +181,19 @@ def run (target : Edition) : List String → IO UInt32
   | "translate-sql" :: rest => translateSql rest
   | "sql-schema" :: rest => sqlSchema rest
   | "translate-go" :: rest => translateGo { roots := [], eraseTypes := [], erasePackages := [] } rest
+  | "certify" :: input :: transModule :: transNs :: output :: certNs :: rest => do
+    let source ← IO.FS.readFile input
+    match Certify.certify input source transModule transNs certNs target with
+    | .ok lean =>
+      IO.FS.writeFile output lean
+      if let ["--manifest", manifest] := rest then
+        let .ok (fns, all) := Certify.certifiedFunctions source target | return 1
+        Chain.recordCertificate manifest output certNs
+          (fns.map fun f => (f, s!"{certNs}.{f}_cert")) all
+      return 0
+    | .error e =>
+      IO.eprintln e
+      return 1
   | ["chain", "graph", path] => Chain.graph path
   | ["chain", "trust", path, claim] => Chain.trust path claim
   | "chain" :: "check" :: path :: rest =>

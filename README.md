@@ -216,6 +216,7 @@ pnpm test                                   # JS number laws and bigint division
 cd ../../npm && pnpm install && pnpm test && pnpm build
 cd ../tests/go && go run ./check            # the Lean Go parser against go/parser (see below)
 cd ../sql && go run ./pgcheck corpus        # the SQL translator against PostgreSQL (see below)
+./checkCertify.sh                           # per-file certificates for the corpus (see below)
 cd ../chain && ./check.sh                   # chain manifests on a sample project (see below)
 ```
 
@@ -460,6 +461,40 @@ TypeScript translator in `npm/`, which uses `tsc`:
   also accept a file that `tsc` refuses for a lint that does not change the
   meaning. Those lints are TS2367 and TS2845, which flag comparisons whose
   answer is fixed, and TS2322 when the target type is `true` or `false`.
+
+### Certificates
+
+A certificate proves one file's translation, so that file no longer trusts
+the translator. `tolean/TypeScript/Spec/Eval.lean` is an interpreter for the
+subset: it runs the syntax tree that the parser returns, following ECMA-262.
+For each function, `tolean certify` writes a theorem that the interpreter and
+the translated Lean give the same result for every input:
+
+```lean
+theorem raise_cert (g : _) (step : _) :
+    run program "raise" [(encGauge g), (Val.int step)] =
+      some (encGauge (sensor.Raise.raise g step)) := by
+  certify_tac [program, encGauge, sensor.Raise.raise]
+```
+
+```sh
+tolean certify sensor/raise.ts sensor.Raise sensor.Raise sensor/RaiseCert.lean sensor.RaiseCert \
+  --manifest sensor/Raise.lean.chain.json
+```
+
+The command does not need to be trusted. If it writes a wrong encoding or a
+wrong theorem, Lean refuses the file. A certified file trusts the parser, the
+interpreter, and the printer that writes the syntax tree as a Lean term,
+instead of the translator. With `--manifest`, the chain records this: the
+translator link becomes `proved`, and `chain trust` lists the interpreter
+and the printer in its place.
+
+A function gets a certificate when it and the functions it calls have no
+loops and no `number` values. `tests/typescript/checkCertify.sh` certifies
+each corpus file it can, and `tests/chain/check.sh` checks that a wrong
+translation breaks a certificate. [The certificates plan](docs/plans/certificates.md)
+lists the next phases: loops, numbers, and a parser that Lean can reason
+about, for round-trip proofs.
 
 ### Effects (planned)
 

@@ -61,4 +61,35 @@ def emit (language : String) (target : Option String) (sources : List String)
     sources := ← sources.mapM fileRef, output := ← fileRef output
     module, nodes, edges } : FileManifest)
 
+/-- Record a certificate in the file manifest at `path`. Each function that
+has a theorem gets a proved node. When every function has one, the translator
+is proved for this file; the interpreter and the term printer are then the
+links the proof trusts. -/
+def recordCertificate (path : System.FilePath) (certFile certModule : String)
+    (theorems : List (String × String)) (allFunctions : Bool) : IO Unit := do
+  let m : FileManifest ← readJson path
+  let axioms := ["propext", "Classical.choice", "Quot.sound"]
+  let certNodes := theorems.map fun (fn, thm) =>
+    ({ id := s!"certificate:{fn}", kind := "proof", status := .proved
+       label := s!"{fn}: interpreter equals translation", module := some certModule
+       «theorem» := some thm, axioms } : Node)
+  let extra : List Node := [
+    { id := "semantics", kind := "spec", status := .trusted
+      label := "TypeScript semantics (interpreter)", module := some "tolean.TypeScript.Spec.Eval" },
+    { id := "term-printer", kind := "translator", status := .trusted
+      label := "syntax tree printed as a Lean term" }]
+  let nodes := (m.nodes.filter fun n => !(n.id.startsWith "certificate:") && n.id != "semantics" &&
+      n.id != "term-printer").map fun n =>
+    if n.id == "translator" && allFunctions then
+      { n with status := .proved, label := n.label ++ " (certified for this file)"
+               evidence := none }
+    else n
+  let certEdges := theorems.flatMap fun (fn, _) =>
+    [("parser", s!"certificate:{fn}"), ("term-printer", s!"certificate:{fn}"),
+     ("semantics", s!"certificate:{fn}"), (s!"certificate:{fn}", "translator")]
+  writeJson path { m with
+    nodes := nodes ++ extra ++ certNodes
+    edges := (m.edges.filter fun ((a, b) : String × String) => !(a.startsWith "certificate:" || b.startsWith "certificate:")) ++ certEdges
+    certificate := some (← fileRef certFile) }
+
 end tolean.Chain
