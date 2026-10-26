@@ -1,0 +1,6 @@
+{
+  "go": {
+    "sources": ["src/*.go"],
+    "overrides": [{ "sources": ["src/*.go"], "output": "src/Sorting.lean", "namespace": "Sorting" }]
+  }
+}
