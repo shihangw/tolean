@@ -57,12 +57,20 @@ func Sort(xs []int64) []int64 {
 }
 ```
 
-Tolean translates it into Lean. Each `range` loop becomes a recursive
-function over a list:
+To translate it, list the source in a `tolean.json` file at the project root:
 
-```sh
-tolean translate-go --root Sort Sorting.lean Sorting sort.go
+```json
+{ "go": { "sources": ["sorting/*.go"] } }
 ```
+
+Then run `tolean translate`. It writes `sorting/Sorting.lean`, where each
+`range` loop becomes a recursive function over a list. In CI, run
+`tolean translate --check`, which fails when the Lean is out of date.
+
+We strongly recommend that you run Tolean through `tolean.json`. The
+project file is the stable interface. The single-file commands, such as
+`tolean translate-go`, are for Tolean's own tests, and their arguments can
+change between versions.
 
 Then you write the claim. Here it has two parts, and both are needed. The
 output of `Sort` is sorted, and it is a permutation of the input. Without the
@@ -224,7 +232,9 @@ migrations, in sorted order. The defaults keep most entries short:
 - A SQL file translates each query that it names, unless `queries` lists
   some of them.
 
-The single-file commands still work, for scripts and quick use.
+The single-file commands still work, but they are not a stable interface,
+and their arguments can change between versions. Use `tolean.json` in your
+project and in CI.
 
 ## Why a proof kernel, not an SMT solver
 
