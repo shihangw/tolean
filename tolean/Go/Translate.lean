@@ -1169,4 +1169,14 @@ def translate (files : List (String × String)) (cfg : Config) (ns : String) : E
     | .error _ => []
   translatePkg pkg cfg ns (files.map (·.1)) idents
 
+/-- The exported top-level functions of a package: the default roots. -/
+def exportedFunctions (files : List (String × String)) : Except String (List String) := do
+  let parsed ← files.mapM fun (path, src) =>
+    match parse src with
+    | .ok f => .ok (path, f)
+    | .error e => .error (e.render path)
+  let pkg ← readPkg parsed
+  return pkg.funcs.filterMap fun f =>
+    if !f.name.contains '.' && (f.name.front.isUpper) then some f.name else none
+
 end tolean.Go.Translate

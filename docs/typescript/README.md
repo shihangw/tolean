@@ -99,7 +99,7 @@ tolean certify sensor/raise.ts sensor.Raise sensor.Raise sensor/RaiseCert.lean s
 Certificates are optional for now. `tolean translate --certify` writes the
 certificate next to the translation, as `RaiseCert.lean` beside `Raise.lean`,
 and records it in the manifest. Without `--certify`, `translate` writes only
-the translation.
+the translation. In a project file, `"certify": true` asks for the same.
 
 The command does not need to be trusted. If it writes a wrong encoding or a
 wrong theorem, Lean refuses the file. A certified file trusts the parser, the

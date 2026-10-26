@@ -20,17 +20,15 @@ expect_fail() { # <name> <expected text> [args]
   echo "ok: $name"
 }
 
-# The generated file is current, and its hash is SHA-256 as shasum computes it.
-$T translate sensor/raise.ts "$tmp/Raise.lean" sensor.Raise
-cmp -s "$tmp/Raise.lean" sensor/Raise.lean || fail "sensor/Raise.lean is not current"
+# Every generated file is current: tolean.json rebuilds exactly what is
+# committed, the certificate included.
+$T translate --check >/dev/null || fail "a generated file is not current: $($T translate --check 2>&1)"
+echo "ok: generated files current"
+
+# The manifest's hash is SHA-256 as shasum computes it.
 want=$(shasum -a 256 sensor/raise.ts | cut -d' ' -f1)
 grep -qF "\"sha256\": \"$want\"" sensor/Raise.lean.chain.json || fail "SHA-256 differs from shasum"
 echo "ok: sha256"
-
-# The certificate is current: tolean certify writes the committed file.
-$T certify sensor/raise.ts sensor.Raise sensor.Raise "$tmp/RaiseCert.lean" sensor.RaiseCert
-cmp -s "$tmp/RaiseCert.lean" sensor/RaiseCert.lean || fail "sensor/RaiseCert.lean is not current"
-echo "ok: certificate current"
 
 lake build --wfail >/dev/null
 
@@ -52,6 +50,8 @@ echo "ok: the chain holds"
 
 echo "// edit" >> sensor/raise.ts
 expect_fail "changed source" "sensor/raise.ts changed since it was translated"
+$T translate --check >/dev/null 2>&1 && fail "translate --check accepted a changed source"
+echo "ok: translate --check sees the change"
 cp "$tmp/raise.ts" sensor/raise.ts
 
 sed -i.bak 's/"status": "trusted"/"status": "tested", "evidence": {"check": "caller-audit", "by": "project"}/' tolean.chain.json
