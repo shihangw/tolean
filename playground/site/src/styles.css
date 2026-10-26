@@ -1,0 +1,71 @@
+:root {
+  --bg: #ffffff;
+  --panel: #f6f7f9;
+  --text: #1c1e21;
+  --muted: #5f6670;
+  --border: #dde1e6;
+  --accent: #2f5bd3;
+  --ok: #1d7a3a;
+  --bad: #b3261e;
+  --code: #eef0f3;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #15171a;
+    --panel: #1d2024;
+    --text: #e6e8eb;
+    --muted: #9aa1aa;
+    --border: #30343a;
+    --accent: #7ea2ff;
+    --ok: #5fcf83;
+    --bad: #ff8a80;
+    --code: #24282d;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 system-ui, sans-serif; }
+code, pre { font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
+.loading { padding: 24px; }
+.app {
+  display: grid;
+  grid-template: "top top top" auto "tree main side" 1fr / 200px minmax(0, 1fr) minmax(320px, 420px);
+  height: 100vh;
+}
+.top { grid-area: top; display: flex; gap: 12px; align-items: center; padding: 8px 16px; border-bottom: 1px solid var(--border); }
+.top h1 { font-size: 16px; margin: 0 12px 0 0; }
+.top select, .top button { font: inherit; padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--text); }
+.tree { grid-area: tree; padding: 12px 8px; border-right: 1px solid var(--border); background: var(--panel); overflow: auto; }
+.folder { color: var(--muted); margin: 8px 4px 2px; }
+.file { display: block; width: 100%; text-align: left; font: inherit; padding: 2px 8px 2px 16px; border: 0; border-radius: 4px; background: none; color: var(--text); cursor: pointer; }
+.file.active { background: var(--code); color: var(--accent); }
+.tag { margin-left: 6px; font-size: 11px; color: var(--muted); }
+.main { grid-area: main; display: flex; flex-direction: column; min-width: 0; }
+.file-bar { padding: 6px 12px; border-bottom: 1px solid var(--border); color: var(--muted); }
+.editor { flex: 1; overflow: auto; }
+.editor .cm-editor { height: 100%; background: var(--bg); color: var(--text); }
+.editor .cm-gutters { background: var(--panel); color: var(--muted); border-right: 1px solid var(--border); }
+.editor .cm-activeLine, .editor .cm-activeLineGutter { background: var(--code); }
+.editor .cm-content { caret-color: var(--text); }
+.file.top-level { margin-top: 12px; padding-left: 4px; }
+.side { grid-area: side; padding: 12px 16px; border-left: 1px solid var(--border); overflow: auto; }
+.notice { padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--muted); }
+.claims h2 { font-size: 15px; }
+.claim { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; }
+.claim header { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.claim-name { font-weight: 600; }
+.claim-doc { margin: 6px 0; }
+.claim-statement, .proof { background: var(--code); padding: 8px; border-radius: 6px; overflow: auto; white-space: pre; }
+.claim-reason { color: var(--bad); }
+.badge { font-size: 12px; padding: 1px 8px; border-radius: 10px; border: 1px solid currentColor; white-space: nowrap; }
+.badge.unchecked, .badge.checking { color: var(--muted); }
+.badge.proved { color: var(--ok); }
+.badge.broken { color: var(--bad); }
+.muted { color: var(--muted); }
+details summary { cursor: pointer; color: var(--accent); margin-top: 6px; }
+@media (max-width: 800px) {
+  .app { grid-template: "top" auto "tree" auto "main" 60vh "side" auto / 1fr; height: auto; }
+  .top { flex-wrap: wrap; }
+  .side { border-left: 0; border-top: 1px solid var(--border); }
+}

@@ -38,6 +38,7 @@ jobs:
           path: |
             .lake
             tests/chain/.lake
+            playground/examples/*/.lake
           key: lake-${{ runner.os }}-${{ hashFiles('lean-toolchain', 'lake-manifest.json', 'lakefile.toml', '**/*.lean') }}
           restore-keys: lake-${{ runner.os }}-
 
@@ -79,6 +80,12 @@ jobs:
       - name: Chain manifests on the sample project
         working-directory: tests/chain
         run: ./check.sh
+
+      - name: Playground examples translate and their proofs check
+        run: |
+          for example in playground/examples/*/; do
+            (cd "$example" && ../../../.lake/build/bin/tolean translate --check && lake build --wfail)
+          done
 
       - name: Generated files are committed and current
         run: git diff --exit-code

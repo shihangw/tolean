@@ -1,0 +1,4 @@
+node_modules/
+dist/
+public/examples.json
+public/coi-serviceworker.min.js
