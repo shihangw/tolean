@@ -202,6 +202,12 @@ Tolean rejects these, among others:
   function pushes to must be a `const`; for a value, use `ReadonlyArray<T>`.
   An empty `[]` needs a type from its context, and the elements of a literal
   need one type.
+- An object literal whose fields are not in the order that the interface
+  declares them. A JS object keeps its keys in the order the literal writes
+  them, and a caller can see that order through `Object.keys` or
+  `JSON.stringify`. A Lean structure has no order, so the literal must use
+  the declared one. Code in the subset can only read a field by name, so
+  inside the subset the order never changes a result.
 - Recursion, closures and arrow functions, classes, `async`, imports,
   exceptions, and optional or mutable interface fields.
 

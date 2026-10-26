@@ -558,6 +558,12 @@ def translateObject (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (
     parts := parts.push (key, v.value)
   for (field, _) in info.fields do
     unless seen.contains field do reject s s!"the object lacks the field '{field}'"
+  -- A JS object keeps its keys in the order the literal writes them, and the
+  -- caller can see that order, through `Object.keys` or `JSON.stringify`. A
+  -- Lean structure has no order, so the literal must use the declared one.
+  let declared := info.fields.map (·.1)
+  unless seen == declared do
+    reject s s!"write the fields in the order that {structName} declares them: {", ".intercalate declared}"
   return ⟨.struct parts.toList structName, false, .struct structName⟩
 
 def translateBinary (fuel : Nat) (env : Env) (s : Span) (op : BinOp) (l r : Expr) : TM Code := do
