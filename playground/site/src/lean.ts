@@ -84,6 +84,22 @@ export function claims(files: readonly WorkspaceFile[]): Claim[] {
 export const proofDeclarations = (files: readonly WorkspaceFile[]): Declaration[] =>
   files.filter(isProof).flatMap((f) => declarations(f.text));
 
+/** The file and line, counted from 1, where a top-level `def` or `theorem` of that name starts. */
+export function declarationAt(
+  files: readonly WorkspaceFile[],
+  name: string,
+  keep: (f: WorkspaceFile) => boolean,
+): { path: string; line: number } | null {
+  for (const f of files.filter(keep)) {
+    const index = f.text.split('\n').findIndex((line) => {
+      const m = declStart.exec(line);
+      return m != null && m[2] === name;
+    });
+    if (index >= 0) return { path: f.path, line: index + 1 };
+  }
+  return null;
+}
+
 /** Where one file starts in a bundle, so a diagnostic can name its file and line. */
 export interface BundlePart {
   readonly path: string;
@@ -94,6 +110,8 @@ export interface BundlePart {
 export interface Bundle {
   readonly text: string;
   readonly parts: readonly BundlePart[];
+  /** The bundle line where the claim checks start, after the last file. */
+  readonly checksLine: number;
 }
 
 /**
@@ -121,7 +139,7 @@ export function bundle(goSpec: string, files: readonly WorkspaceFile[], claimNam
     line += text.split('\n').length - 1;
   }
   const checks = claimNames.map((c) => `example : Spec.${c} := Proof.${c}\n#print axioms Proof.${c}\n`);
-  return { text: chunks.join('') + checks.join(''), parts };
+  return { text: chunks.join('') + checks.join(''), parts, checksLine: line };
 }
 
 /** The file and line in the workspace for a line of the bundle. */

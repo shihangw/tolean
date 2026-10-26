@@ -7,8 +7,24 @@ to GitHub Pages.
 Each workspace has two folders. `src/` holds the source code and the Lean
 that Tolean generates from it. `theorems/` holds the claims in `*.spec.lean`
 files, and next to each one, the proofs in a `*.proof.lean` file. The page
-shows the claims first, because a person must read them. Each proof is
-folded under its claim, and the helper lemmas sit in their own group.
+shows the claims first, because a person must read them. Each claim card
+links to its proof in the editor, and the helper lemmas sit in their own
+group.
+
+## The editor
+
+The editor is CodeMirror, set up in `site/src/editor/`. It highlights
+TypeScript, Go, JSON and Lean. Lean has no CodeMirror package, so
+`editor/lean.ts` reads its tokens line by line and folds a block by its
+indentation. It also expands the abbreviations that Lean's own editors use:
+`\to` followed by a space becomes `→`, and typing `\` lists the symbols.
+
+The page keeps one editor state for each file. So when you switch to another
+file and back, the undo history, the cursor and the scroll position are still
+there. Errors from the translator and from Lean are underlined in the file
+they belong to, and the Problems list under the editor collects all of them.
+Each claim card links to its proof, and a broken claim links to the line of
+its first error.
 
 ## What runs where
 

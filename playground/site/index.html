@@ -4,6 +4,19 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Tolean Playground</title>
+    <meta
+      name="description"
+      content="Translate TypeScript and Go into Lean 4 in your browser, and check the proofs about the result."
+    />
+    <meta name="color-scheme" content="light dark" />
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <!-- Apply the viewer's stored theme before the page draws, so it does not flash. -->
+    <script>
+      try {
+        const t = localStorage.getItem('tolean-playground-theme');
+        if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+      } catch {}
+    </script>
     <!-- GitHub Pages cannot send COOP/COEP headers; this worker adds them. -->
     <script src="./coi-serviceworker.min.js"></script>
   </head>

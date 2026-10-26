@@ -9,9 +9,10 @@ export type ClaimStatus =
   | { readonly kind: 'broken'; readonly reason: string };
 
 /** A diagnostic that Lean prints as one JSON line. */
-interface Diagnostic {
+export interface Diagnostic {
   readonly severity: 'error' | 'warning' | 'information';
   readonly pos?: { readonly line: number; readonly column: number };
+  readonly endPos?: { readonly line: number; readonly column: number } | null;
   readonly data: string;
 }
 
@@ -37,7 +38,7 @@ export function statuses(
   let reason = 'Lean did not check this claim.';
   if (firstError != null) {
     const where = firstError.pos == null ? null : locate(bundle.parts, firstError.pos.line);
-    const message = firstError.data.split('\n')[0] ?? '';
+    const message = firstError.data.replace(/\s+/g, ' ').trim();
     reason = where == null ? message : `${where.path}:${where.line}: ${message}`;
   }
   const result = new Map<string, ClaimStatus>();
@@ -99,6 +100,7 @@ interface Warm {
 export class LeanChecker {
   private runtime: Promise<Runtime> | null = null;
   private spare: Promise<Warm> | null = null;
+  private started = false;
   private busy = false;
   private waiting: { code: string; resolve: (d: Diagnostic[] | null) => void } | null = null;
 
@@ -116,10 +118,14 @@ export class LeanChecker {
   /** Start Lean: download it and warm up the first worker. */
   start(): Promise<Warm> {
     if (this.spare == null) {
-      this.onState({ kind: 'loading', progress: { loaded: 0, total: null } });
+      // Lean is ready once the first worker starts. A later spare starts
+      // behind the scenes, so the page does not go back to "downloading".
+      const first = !this.started;
+      this.started = true;
+      if (first) this.onState({ kind: 'loading', progress: { loaded: 0, total: null } });
       this.spare = this.warm().then(
         (w) => {
-          this.onState({ kind: 'ready' });
+          if (first) this.onState({ kind: 'ready' });
           return w;
         },
         (e: unknown) => {
