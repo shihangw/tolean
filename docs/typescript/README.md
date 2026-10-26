@@ -166,7 +166,8 @@ the file, the line and the reason. It never approximates.
 | `function` with typed parameters and return type | `def` |
 | `const x = e`, `let x = e` | `let x := e` |
 | `x = e`, `x += e`, `x -= e`, `x *= e` on a `let` local | `let x := …` (shadowing) |
-| `const xs: Array<T> = []`, then `xs.push(e)`; `xs` read only in the `return` | `let xs := xs ++ [e]` |
+| `[a, b]` with the element type from the context or the elements, such as `return [a, b]` or `const xs: ReadonlyArray<T> = []` | `([a, b] : List T)` |
+| `const xs: Array<T> = [...]`, then `xs.push(e)`; `xs` read only in the `return` | `let xs := xs ++ [e]` |
 | `for (const x of xs) { … }` | `List.foldl` over the tuple of locals the body changes |
 | `if` that returns, `if` that changes locals, `c ? a : b` | `if … then … else …` |
 | `+ - *`, `< <= > >=`, `=== !==`, `&& \|\| !` | the same operators on `Int`, `Bool`, `Prop` |
@@ -192,7 +193,12 @@ Tolean rejects these, among others:
 - A read of an owned array anywhere except in the `return` value. If code
   kept an alias, stored the array in a field or looped over it, it would miss
   a later push. In Lean a push makes a new list, but in JS it changes the
-  shared one.
+  shared one. An array literal is safe anywhere else: in JS it makes a new
+  array, and nothing may push to an array that the function does not own.
+- An array declared with `let` and the type `Array<T>`. An array that the
+  function pushes to must be a `const`; for a value, use `ReadonlyArray<T>`.
+  An empty `[]` needs a type from its context, and the elements of a literal
+  need one type.
 - Recursion, closures and arrow functions, classes, `async`, imports,
   exceptions, and optional or mutable interface fields.
 

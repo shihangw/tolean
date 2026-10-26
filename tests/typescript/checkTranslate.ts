@@ -255,7 +255,10 @@ class Gen {
           return this.object(t.name, vars, 0);
         case 'array': {
           const any = readable.filter((v) => v.ty.k === 'array' && same(v.ty, t));
-          return any.length > 0 ? this.pick(any).name : 'null as never';
+          if (any.length > 0 && this.chance(0.5)) return this.pick(any).name;
+          // An array literal, with up to three elements.
+          const n = this.pick([0, 1, 2, 3]);
+          return `[${Array.from({ length: n }, () => this.expr(t.of, vars, 0)).join(', ')}]`;
         }
       }
     };
