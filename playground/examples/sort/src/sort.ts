@@ -15,15 +15,9 @@ export function insert(xs: ReadonlyArray<bigint>, x: bigint): ReadonlyArray<bigi
   return out;
 }
 
-/** An empty array. Tolean's subset does not yet accept `let out: ReadonlyArray<bigint> = []`. */
-function empty(): ReadonlyArray<bigint> {
-  const out: Array<bigint> = [];
-  return out;
-}
-
 /** The elements of xs in ascending order. */
 export function sort(xs: ReadonlyArray<bigint>): ReadonlyArray<bigint> {
-  let out = empty();
+  let out: ReadonlyArray<bigint> = [];
   for (const x of xs) {
     out = insert(out, x);
   }

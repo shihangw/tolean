@@ -261,6 +261,17 @@ def unsupportedType {A : Type} (t : TypeExpr) : TM A :=
     ("unsupported type (use bigint, number, boolean, string, T | null, arrays, " ++
       "or an interface declared above)")
 
+/-- How the output writes a value of type `t`, as `translateType` does. -/
+partial def tyLean : Ty → TM String
+  | .bigint => leanName "Int"
+  | .number => numberVar
+  | .boolean => leanName "Bool"
+  | .string => leanName "String"
+  | .null => return s!"({← leanName "Option"} Empty)"
+  | .nullable t => return wrapped (← leanName "Option") (← tyLean t)
+  | .array t => return wrapped (← leanName "List") (← tyLean t)
+  | .struct name => return structType (← get) name
+
 /-- The Lean type of `t`, and its type in the subset. -/
 partial def translateType (t : TypeExpr) : TM (String × Ty) := do
   match t with
@@ -461,7 +472,36 @@ partial def translateExpr (env : Env) (expected : Option Ty) (e : Expr) : TM Cod
     return ⟨s!"(if {c.code} then {(← a.value)} else {(← b.value)})", false, type⟩
   | .call s callee args => translateCall env s callee args
   | .object s props => translateObject env expected s props
+  | .array s elems => translateArray env expected s elems
   | _ => reject e.span "unsupported expression"
+
+/-- An array literal, as a list. In JS a literal makes a new array, and only
+an owned array may be pushed to, so nothing changes the array after it is
+made, and a Lean list has its meaning. The element type comes from the
+context, or else from the elements. -/
+partial def translateArray (env : Env) (expected : Option Ty) (s : Span) (elems : List Expr) :
+    TM Code := do
+  let (values, elem) ← translateElements env expected s elems
+  return ⟨s!"([{", ".intercalate values}] : {← tyLean (.array elem)})", false, .array elem⟩
+
+/-- The elements of an array literal, and their type. -/
+partial def translateElements (env : Env) (expected : Option Ty) (s : Span) (elems : List Expr) :
+    TM (List String × Ty) := do
+  let expectedElem := match expected with
+    | some (.array t) => some t
+    | _ => none
+  let codes ← elems.mapM (translateExpr env expectedElem)
+  let elem ← match expectedElem with
+    | some t => pure t
+    | none =>
+      let some first := codes.head?
+        | reject s "an empty array needs a declared type, such as 'const xs: ReadonlyArray<bigint> = []'"
+      let some t := codes.foldl (fun acc c => acc.bind (·.join c.type)) (some first.type)
+        | reject s "the elements of an array must have one type"
+      pure t
+  for (c, e) in codes.zip elems do
+    unless c.type.assignableTo elem do reject e.span "the element does not have the array's element type"
+  return (← codes.mapM (·.value), elem)
 
 partial def translateCall (env : Env) (s : Span) (callee : Expr) (args : List Expr) : TM Code := do
   -- `Number.isNaN(x)` and the like. TypeScript lets them take any value; the
@@ -674,14 +714,22 @@ partial def translateStatements (env : Env) (tail : Tail) : List Stmt → TM (Li
 partial def translateVariable (env : Env) (s : Span) (d : VarDecl) (rest : List Stmt)
     (tail : Tail) : TM (List String) := do
   let some init := d.init | reject s "declare one const or let identifier with an initializer"
-  if let .array _ elems := init then
-    let refuse {A : Type} : TM A := reject s "an owned array must be 'const x: Array<T> = []'"
-    unless d.kind == .const && elems.isEmpty do refuse
-    let some annotation := d.type | refuse
-    let (lean, type) ← translateType annotation
-    unless type matches .array _ do refuse
-    let env' ← declare env s d.name .array type
-    return s!"let {d.name} : {lean} := []" :: (← translateStatements env' tail rest)
+  -- `const xs: Array<T> = [...]` (or `T[]`) is an owned array, which the
+  -- function may push to. Any other array literal is a value.
+  let mutableAnnotation := match d.type with
+    | some (.ref _ "Array" [_]) | some (.array _ _) => true
+    | _ => false
+  if init matches .array .. then
+    if mutableAnnotation then
+      unless d.kind == .const do
+        reject s "an array that the function pushes to must be 'const xs: Array<T> = [...]'; use ReadonlyArray<T> for a value"
+      let some annotation := d.type | unreachable!
+      let (lean, type) ← translateType annotation
+      let .array _ elems := init | unreachable!
+      -- The `let` states the type, so the list needs no ascription.
+      let (values, _) ← translateElements env (some type) s elems
+      let env' ← declare env s d.name .array type
+      return s!"let {d.name} : {lean} := [{", ".intercalate values}]" :: (← translateStatements env' tail rest)
   let declared ← match d.type with
     | some annotation => some <$> Prod.snd <$> translateType annotation
     | none => pure none
