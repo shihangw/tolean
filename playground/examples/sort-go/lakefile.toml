@@ -1,0 +1,14 @@
+name = "sort_go"
+defaultTargets = ["src", "theorems"]
+
+[[require]]
+name = "tolean"
+path = "../../.."
+
+[[lean_lib]]
+name = "src"
+globs = ["src.+"]
+
+[[lean_lib]]
+name = "theorems"
+globs = ["theorems.+"]

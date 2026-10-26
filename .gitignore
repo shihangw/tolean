@@ -5,3 +5,4 @@ node_modules/
 /npm/LICENSE
 .DS_Store
 /tests/chain/.lake
+.emcache/

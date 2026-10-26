@@ -1,0 +1,6 @@
+{
+  "typescript": {
+    "sources": ["src/*.ts"],
+    "overrides": [{ "sources": ["src/sort.ts"], "output": "src/Sorting.lean", "namespace": "Sorting" }]
+  }
+}

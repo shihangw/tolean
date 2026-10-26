@@ -118,41 +118,41 @@ def ok {A : Type} (e : Except String A) : IO A :=
   | .ok v => return v
   | .error m => throw (IO.userError m)
 
-def typescriptUnit (s : Json) (source : String) : IO (List Write) := do
-  let output := (string? s "output").getD s!"{dirOf source}{capitalize (stem source)}.lean"
-  let ns := (string? s "namespace").getD (namespaceOf output)
-  let targetName := (string? s "target").getD TypeScript.Edition.default.name
-  let some target := TypeScript.Edition.parse? targetName
-    | throw (IO.userError s!"{source}: unknown target '{targetName}'")
-  let text ← IO.FS.readFile source
-  let lean ← ok (TypeScript.Translate.translate source text ns target)
-  let m ← Chain.fileManifest "typescript" (some target.name) [source] output lean ns
-  if !bool s "certify" false then
-    return [.file output lean, .file (output ++ ".chain.json") (Chain.manifestText m)]
-  let cert := certPath output
-  match TypeScript.Certify.certify source text ns ns (ns ++ "Cert") target with
-  | .ok certText =>
-    let (fns, all) ← ok (TypeScript.Certify.certifiedFunctions text target)
-    let m := Chain.withCertificate m cert certText (ns ++ "Cert")
-      (fns.map fun f => (f, s!"{ns}Cert.{f}_cert")) all
-    return [.file output lean, .file cert certText, .file (output ++ ".chain.json") (Chain.manifestText m)]
-  | .error _ =>
-    return [.file output lean, .file (output ++ ".chain.json") (Chain.manifestText m), .remove cert]
+/-- One translation unit, with its resolved settings: a TypeScript file, a Go
+  package or a SQL query file. -/
+inductive Job where
+  | typescript (settings : Json) (source : String)
+  | go (settings : Json) (files : List String)
+  | sql (settings : Json) (queryFile : String) (migrations : List String)
 
-def goUnit (s : Json) (files : List String) : IO (List Write) := do
-  let dir := dirOf (files.head!)
-  let pkgName := ((segments dir).getLast?).getD "Package"
-  let output := (string? s "output").getD s!"{dir}{capitalize pkgName}.lean"
-  let ns := (string? s "namespace").getD (namespaceOf output)
-  let sources ← files.mapM fun (f : String) => do return (f, ← IO.FS.readFile f)
-  let roots ← match strings s "roots" with
-    | [] => ok (Go.Translate.exportedFunctions sources)
-    | rs => pure rs
-  let cfg : Go.Translate.Config :=
-    { roots, eraseTypes := strings s "eraseTypes", erasePackages := strings s "erasePackages" }
-  let lean ← ok (Go.Translate.translate sources cfg ns)
-  let m ← Chain.fileManifest "go" none files output lean ns
-  return [.file output lean, .file (output ++ ".chain.json") (Chain.manifestText m)]
+/-- The units that the project file asks for, given every file in the project. -/
+def units (config : Json) (files : List String) : List Job := Id.run do
+  let mut out : List Job := []
+  if let .ok ts := config.getObjVal? "typescript" then
+    for f in expand files (strings ts "sources") do
+      out := out ++ [.typescript (settings ts [f]) f]
+  if let .ok go := config.getObjVal? "go" then
+    let matched := expand files (strings go "sources")
+    for dir in (matched.map dirOf).eraseDups do
+      let pkg := matched.filter (dirOf · == dir)
+      out := out ++ [.go (settings go pkg) pkg]
+  if let .ok sql := config.getObjVal? "sql" then
+    for f in expand files (strings sql "sources") do
+      let s := settings sql [f]
+      out := out ++ [.sql s f (expand files (strings s "migrations"))]
+  return out
+
+/-- The files that a unit reads. -/
+def Job.sources : Job → List String
+  | .typescript _ f => [f]
+  | .go _ fs => fs
+  | .sql _ f ms => ms ++ [f]
+
+/-- A unit's translation: the output path, its namespace and the Lean text. -/
+structure Translation where
+  output : String
+  ns : String
+  lean : String
 
 /-- The names of the sqlc queries in a file: each `-- name: X` line. -/
 def queryNames (text : String) : List String :=
@@ -161,36 +161,82 @@ def queryNames (text : String) : List String :=
     | "--" :: "name:" :: n :: _ => some n
     | _ => none
 
-def sqlUnit (allFiles : List String) (s : Json) (queryFile : String) : IO (List Write) := do
-  let output := (string? s "output").getD s!"{dirOf queryFile}{capitalize (stem queryFile)}.lean"
-  let ns := (string? s "namespace").getD (namespaceOf output)
-  let migrations := expand allFiles (strings s "migrations")
-  let text ← IO.FS.readFile queryFile
-  let queries := match strings s "queries" with
-    | [] => queryNames text
-    | qs => qs
-  let migrationTexts ← migrations.mapM fun (f : String) => do return (f, ← IO.FS.readFile f)
-  let lean ← ok (Sql.Translate.translate migrationTexts [(queryFile, text)] queries ns)
-  let m ← Chain.fileManifest "sql" (some "PostgreSQL 18") (migrations ++ [queryFile]) output lean ns
-  return [.file output lean, .file (output ++ ".chain.json") (Chain.manifestText m)]
+/-- Translate one unit, given the text of each file it reads. This does no IO,
+so the playground runs it in the browser. -/
+def translateUnit (u : Job) (read : String → Except String String) : Except String Translation := do
+  match u with
+  | .typescript s source =>
+    let output := (string? s "output").getD s!"{dirOf source}{capitalize (stem source)}.lean"
+    let ns := (string? s "namespace").getD (namespaceOf output)
+    let targetName := (string? s "target").getD TypeScript.Edition.default.name
+    let some target := TypeScript.Edition.parse? targetName
+      | throw s!"{source}: unknown target '{targetName}'"
+    let lean ← TypeScript.Translate.translate source (← read source) ns target
+    return { output, ns, lean }
+  | .go s files =>
+    let dir := dirOf (files.head!)
+    let pkgName := ((segments dir).getLast?).getD "Package"
+    let output := (string? s "output").getD s!"{dir}{capitalize pkgName}.lean"
+    let ns := (string? s "namespace").getD (namespaceOf output)
+    let sources ← files.mapM fun f => return (f, ← read f)
+    let roots ← match strings s "roots" with
+      | [] => Go.Translate.exportedFunctions sources
+      | rs => pure rs
+    let cfg : Go.Translate.Config :=
+      { roots, eraseTypes := strings s "eraseTypes", erasePackages := strings s "erasePackages" }
+    return { output, ns, lean := ← Go.Translate.translate sources cfg ns }
+  | .sql s queryFile migrations =>
+    let output := (string? s "output").getD s!"{dirOf queryFile}{capitalize (stem queryFile)}.lean"
+    let ns := (string? s "namespace").getD (namespaceOf output)
+    let text ← read queryFile
+    let queries := match strings s "queries" with
+      | [] => queryNames text
+      | qs => qs
+    let migrationTexts ← migrations.mapM fun f => return (f, ← read f)
+    return { output, ns, lean := ← Sql.Translate.translate migrationTexts [(queryFile, text)] queries ns }
+
+/-- The language name and target that a unit's manifest records. -/
+def Job.chainLanguage : Job → String × Option String
+  | .typescript s _ =>
+    ("typescript", some ((string? s "target").getD TypeScript.Edition.default.name))
+  | .go .. => ("go", none)
+  | .sql .. => ("sql", some "PostgreSQL 18")
+
+/-- What one unit writes: its Lean file and manifest, and for a TypeScript
+file with `certify`, its certificate. -/
+def unitWrites (u : Job) : IO (List Write) := do
+  let texts ← u.sources.mapM fun (f : String) => do return (f, ← IO.FS.readFile f)
+  let read (f : String) : Except String String :=
+    match texts.lookup f with
+    | some t => .ok t
+    | none => .error s!"{f}: not read"
+  let t ← ok (translateUnit u read)
+  let (language, target) := u.chainLanguage
+  let m ← Chain.fileManifest language target u.sources t.output t.lean t.ns
+  let lean := [Write.file t.output t.lean]
+  match u with
+  | .typescript s source =>
+    if !bool s "certify" false then
+      return lean ++ [.file (t.output ++ ".chain.json") (Chain.manifestText m)]
+    let some target := TypeScript.Edition.parse? (target.getD "")
+      | return lean ++ [.file (t.output ++ ".chain.json") (Chain.manifestText m)]
+    let text ← ok (read source)
+    let cert := certPath t.output
+    match TypeScript.Certify.certify source text t.ns t.ns (t.ns ++ "Cert") target with
+    | .ok certText =>
+      let (fns, all) ← ok (TypeScript.Certify.certifiedFunctions text target)
+      let m := Chain.withCertificate m cert certText (t.ns ++ "Cert")
+        (fns.map fun f => (f, s!"{t.ns}Cert.{f}_cert")) all
+      return lean ++ [.file cert certText, .file (t.output ++ ".chain.json") (Chain.manifestText m)]
+    | .error _ =>
+      return lean ++ [.file (t.output ++ ".chain.json") (Chain.manifestText m), .remove cert]
+  | _ => return lean ++ [.file (t.output ++ ".chain.json") (Chain.manifestText m)]
 
 /-- What the project file asks for: every file to write or to remove. Paths
 are relative to the project root, which must be the working directory. -/
 def plan (config : Json) : IO (List Write) := do
   let files ← projectFiles "."
-  let mut out : List Write := []
-  if let .ok ts := config.getObjVal? "typescript" then
-    for f in expand files (strings ts "sources") do
-      out := out ++ (← typescriptUnit (settings ts [f]) f)
-  if let .ok go := config.getObjVal? "go" then
-    let matched := expand files (strings go "sources")
-    for dir in (matched.map dirOf).eraseDups do
-      let pkg := matched.filter (dirOf · == dir)
-      out := out ++ (← goUnit (settings go pkg) pkg)
-  if let .ok sql := config.getObjVal? "sql" then
-    for f in expand files (strings sql "sources") do
-      out := out ++ (← sqlUnit files (settings sql [f]) f)
-  return out
+  return (← (units config files).mapM unitWrites).flatten
 
 /-- Write the plan, or with `check`, report each file that differs and write
 nothing. Returns the number of stale files. -/
