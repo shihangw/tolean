@@ -88,10 +88,8 @@ def settings (lang : Json) (unitFiles : List String) : Json := Id.run do
 
 /-! ### Units -/
 
-def capitalize (s : String) : String :=
-  match s.toList with
-  | c :: cs => String.ofList (c.toUpper :: cs)
-  | [] => s
+-- Not String.ofList, which raises bad_alloc in the WebAssembly build (wasm/).
+def capitalize (s : String) : String := s.capitalize
 
 def dirOf (path : String) : String :=
   match (segments path).dropLast with
