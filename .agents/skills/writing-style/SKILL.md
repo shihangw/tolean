@@ -1,6 +1,9 @@
-# Writing style (human-facing text)
+---
+name: writing-style
+description: Write human-facing text (README, docs/, code comments, commit messages, PR text) at the density of ordinary technical prose. Use whenever you write or edit any of them. Not for agent files (AGENTS.md, .agents/), which stay dense.
+---
 
-Scope: README, `docs/`, code comments, commit messages, PR text. NOT agent files (`AGENTS.md`, `.agents/`) — write those dense.
+# Writing style
 
 Why: LLM prose is denser and more noun-heavy than human prose (excess participial clauses, nominalizations, coordination; Reinhart et al., PNAS 2025). Target ordinary technical-prose density with natural rhythm: not max, not flat.
 
