@@ -232,6 +232,10 @@ migrations, in sorted order. The defaults keep most entries short:
 - A SQL file translates each query that it names, unless `queries` lists
   some of them.
 
+A script that does not want a file can pass the same JSON inline, as in
+`tolean translate --config '{"go":{"sources":["sorting/*.go"]}}'`. Paths in
+the config are relative to the directory that Tolean runs in.
+
 The single-file commands still work, but they are not a stable interface,
 and their arguments can change between versions. Use `tolean.json` in your
 project and in CI.

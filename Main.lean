@@ -15,9 +15,10 @@ The `tolean` command.
 ```
 tolean parse [--target ES20xx] <file>
     print the syntax tree of <file>
-tolean translate [--check]
-    build every unit that tolean.json lists; with --check, write nothing and
-    fail when a generated file is not current
+tolean translate [--check] [--config <json>]
+    build every unit that tolean.json lists, or that the inline JSON <json>
+    lists; with --check, write nothing and fail when a generated file is not
+    current
 tolean translate [--target ES20xx] [--certify] <input> <output.lean> <Namespace>
     write <input> as Lean definitions; with --certify, also write its
     certificate next to it when some function can have one (see `certify`)
@@ -51,7 +52,7 @@ open tolean tolean.TypeScript
 
 def usage : String :=
   "usage: tolean parse [--target ES20xx] <file.ts>\n" ++
-  "       tolean translate [--check]\n" ++
+  "       tolean translate [--check] [--config <json>]\n" ++
   "       tolean translate [--target ES20xx] [--certify] <input.ts> <output.lean> <Lean.Namespace>\n" ++
   "       tolean translate-sql <output.lean> <Lean.Namespace> --query Q --queries <file.sql>... --migrations <file.sql>...\n" ++
   "       tolean sql-schema --table T --migrations <file.sql>...\n" ++
@@ -201,14 +202,18 @@ def sqlSchema (opts : List String) : IO UInt32 := do
       IO.eprintln m
       return 1
 
-/-- Build every unit that `tolean.json` lists, or with `check`, fail when a
-generated file is not current. -/
-def translateProject (check : Bool) : IO UInt32 := do
-  unless ← System.FilePath.pathExists "tolean.json" do
-    IO.eprintln "no tolean.json in this directory"
-    return 2
+/-- Build every unit that the project config lists, or with `check`, fail when
+a generated file is not current. The config is `inline` when given, else the
+file `tolean.json`. -/
+def translateProject (check : Bool) (inline : Option String := none) : IO UInt32 := do
+  if inline.isNone then
+    unless ← System.FilePath.pathExists "tolean.json" do
+      IO.eprintln "no tolean.json in this directory"
+      return 2
   try
-    let config ← Chain.readJson (A := Lean.Json) "tolean.json"
+    let config ← match inline with
+      | some text => IO.ofExcept (Lean.Json.parse text |>.mapError (s!"--config: {·}"))
+      | none => Chain.readJson (A := Lean.Json) "tolean.json"
     let writes ← Project.plan config
     let stale ← Project.apply writes check
     if check && stale > 0 then return 1
@@ -222,6 +227,9 @@ def run (target : Edition) : List String → IO UInt32
   | ["parse", path] => parseFile target path
   | ["translate"] => translateProject false
   | ["translate", "--check"] => translateProject true
+  | ["translate", "--config", json] => translateProject false json
+  | ["translate", "--check", "--config", json] => translateProject true json
+  | ["translate", "--config", json, "--check"] => translateProject true json
   | ["translate", input, output, ns] => translateFile target input output ns
   | ["translate", "--certify", input, output, ns] => translateFile target input output ns true
   | "translate-sql" :: rest => translateSql rest

@@ -23,8 +23,9 @@ same pull request as the source change.
 
 CI runs three steps, and any one of them can fail the build:
 
-1. It regenerates every Lean file and fails if `git diff --exit-code` shows a
-   change. This catches source edits that were made without regenerating.
+1. It runs `tolean translate --check`, which fails when a generated Lean file
+   is not current. This catches source edits that were made without
+   regenerating.
 2. It runs `lake build --wfail`. This checks every proof, and
    `#audit_claims` fails the build if a claim has no proof.
 3. It fails if any proof uses `sorry`, `admit`, `axiom` or `native_decide`.
@@ -140,30 +141,36 @@ globs = ["sensor.+"]
 Keep the library in `defaultTargets`. If you leave it out, `lake build`
 finishes successfully without building anything.
 
-To regenerate a file, run Tolean from the directory that `srcDir` names, so
-that the namespace matches the module path:
+To regenerate the Lean files, run Tolean from the directory that `srcDir`
+names, so that each namespace matches its module path. Pass the project
+config inline with `--config`, or put it in a `tolean.json` file in that
+directory:
 
 ```sh
-cd src && npx tolean sensor/raise.ts sensor/Raise.lean sensor.Raise
+cd src && lake -d .. exe tolean-cli translate --config '{"typescript":{"sources":["sensor/*.ts"]}}'
 ```
+
+Always run Tolean through a project config. The single-file commands are for
+Tolean's own tests, and their arguments can change between versions.
 
 ## Go
 
-The Go translator works one package at a time, from the functions you name
-with `--root`. We have checked that Lake and the Go toolchain accept this
+The Go translator works one package at a time. By default it starts from the
+package's exported functions, and the `roots` setting can name others. We have checked that Lake and the Go toolchain accept this
 layout: Lake builds the Lean files from inside the Go package directory, and
 `go build` and `go vet` ignore them.
 
 ```
 mymod/
   go.mod
+  tolean.json             # lists the Go sources to translate
   lakefile.toml           # requires tolean at a pinned tag
   lean-toolchain
   sensor/
-    raise.go              # //go:generate lake -d .. exe tolean-cli translate-go --root Raise Raise.lean sensor.Raise raise.go
-    Raise.lean            # generated
-    RaiseSpec.lean
-    RaiseProof.lean
+    raise.go
+    Sensor.lean           # generated, for the whole package
+    SensorSpec.lean
+    SensorProof.lean
 ```
 
 The `lakefile.toml` uses the project root as `srcDir`, because Go packages
@@ -184,10 +191,19 @@ srcDir = "."
 globs = ["sensor.+"]
 ```
 
-Each Go package that you verify carries a `//go:generate` line, so
-`go generate ./...` regenerates all the Lean files. Name every `.go` file of
-the package on that line, because a root function can reach declarations in
-any of them. This fits how Go developers already work. The `go` line in `go.mod` will play the same role as
+The `tolean.json` file at the project root lists the packages to translate:
+
+```json
+{ "go": { "sources": ["sensor/*.go"] } }
+```
+
+Run `lake exe tolean-cli translate` from the project root to regenerate all
+the Lean files. Run it from the root, because the namespace follows the path
+from there. Tolean translates a whole package into one file, named after
+its directory, so the package in `sensor/` gives `sensor/Sensor.lean` with
+the namespace `sensor.Sensor`. The glob must match every
+`.go` file of a package, because a root function can reach declarations in
+any of them. The `go` line in `go.mod` will play the same role as
 the ECMAScript target does for TypeScript: it sets the language version that
 the translation assumes.
 
@@ -198,8 +214,8 @@ project needs Lean anyway, because CI runs `lake build` to check the proofs.
 The `[[require]]` block that brings in the Lean runtime also brings in the
 translator, because both live in the same Tolean repository. Lake builds the
 translator from source the first time, and `lake exe tolean-cli` runs it after
-that. Lake runs it in the current directory, so the `//go:generate` line can
-use paths relative to the Go package.
+that. Lake runs it in the current directory, so the paths in the config are
+relative to where you run it.
 
 This gives us one pinned version, in one place. The translator and the
 runtime always come from the same tag, so they cannot drift apart. There are
