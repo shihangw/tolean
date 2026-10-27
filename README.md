@@ -454,10 +454,17 @@ Apache License 2.0. See [LICENSE](LICENSE).
 
 ## Meet Tulie
 
-Tulie is Tolean's mascot, a small dragon. In the banner, Tulie carries code
-through the proved translator and holds up the Lean 4 that comes out. The
-sheet below shows Tulie asleep, holding a crystal, reading a book of λ, and
-chasing a butterfly.
+Tulie is Tolean's idol, a small dragon that everyone on the project adores.
+In the banner, Tulie carries your code into Lean 4 and proudly holds up the
+theorem that comes out.
+
+Tulie cheers for every proof that checks. A failed proof doesn't upset
+Tulie, because the kernel caught the mistake, and that is the whole point.
+When the build is green, Tulie naps. When a new theorem lands, Tulie hugs the
+λ egg a little tighter.
+
+If Tolean helps you prove something you care about, give the repository a
+star. Tulie loves shiny things, and every star is one more fan.
 
 <p align="center">
   <img src="docs/images/tulie.webp" alt="Tulie the dragon in nine poses: sitting, asleep, holding a crystal, reading, flying, looking back, watching a butterfly, smiling, and hugging a λ egg" width="640">
