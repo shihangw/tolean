@@ -440,9 +440,9 @@ code.
   [certificate](docs/typescript/README.md#certificates). For each certified
   function, the kernel checks that the translated Lean equals what a
   JavaScript interpreter in Lean returns, for every input. Certificates cover
-  loop-free functions without `number` values for now. For other files, we
-  still trust the match between JS and Lean, and no proof covers all programs
-  yet.
+  the whole subset, loops and `number` values included. For a file without a
+  certificate, we still trust the match between JS and Lean, and no proof
+  covers all programs yet.
 
 ## License
 

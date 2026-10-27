@@ -1,4 +1,5 @@
 import tolean.Sexp
+import tolean.Source
 
 /-!
 The Lean code that the TypeScript translator writes, as a syntax tree.
@@ -126,6 +127,19 @@ inductive Expr where
   | update (op : IntOp) (name : String) (a : Expr)
 deriving Repr, Inhabited
 
+/-- What a certificate needs to know about a loop, besides its code. The
+printer does not read it. -/
+structure LoopInfo where
+  /-- The span of the `for…of` statement. -/
+  span : Span
+  /-- The types of the locals that the loop changes, in the order of the state. -/
+  stateTypes : List Ty
+  /-- The type of the elements. -/
+  elem : Ty
+  /-- The other locals in scope at the loop, in the order they were declared. -/
+  scope : List (String × Ty)
+deriving Repr, Inhabited
+
 /-- The body of a function: `let`s that end in a value. -/
 inductive Body where
   /-- The value of the function. -/
@@ -146,6 +160,7 @@ inductive Body where
   /-- `let (x, y) := List.foldl (fun (x, y) e => body) (x, y) items`, then
   `rest`. -/
   | fold (names : List String) (element : String) (body : Body) (items : Expr) (rest : Body)
+      (info : LoopInfo)
 deriving Repr, Inhabited
 
 /-- A declaration in the output. -/
@@ -167,6 +182,10 @@ structure Names where
   numberVar : String := "N"
   /-- The file uses the number model, so every declaration is generic over `N`. -/
   usesNumber : Bool := false
+  /-- The namespace of the translation, with a final dot, before the names of
+  its structures and functions. The translation itself writes them inside
+  that namespace, so it leaves this empty; a certificate, outside it, sets it. -/
+  namespacePrefix : String := ""
 
 /-- The Lean names the output uses, with their full names from the root. -/
 def leanNames : List (String × String) :=
@@ -210,7 +229,9 @@ def Ty.print (names : Names) : Ty → String
   | .null => s!"({leanName names "Option"} Empty)"
   | .option t => wrapped (leanName names "Option") (t.print names)
   | .list t => wrapped (leanName names "List") (t.print names)
-  | .struct name => if names.usesNumber then s!"({name} {names.numberVar})" else name
+  | .struct name =>
+    let name := names.namespacePrefix ++ name
+    if names.usesNumber then s!"({name} {names.numberVar})" else name
 
 def IntOp.symbol : IntOp → String
   | .add => "+" | .sub => "-" | .mul => "*"
@@ -247,7 +268,9 @@ def Expr.print (names : Names) : Expr → String
   | .numberNeg a => s!"({leanName names "JSNumber"}.neg {argument (a.print names)})"
   | .ite c a b => s!"(if {c.print names} then {a.print names} else {b.print names})"
   | .call name args =>
-    let head := if names.usesNumber then [name, s!"(N := {names.numberVar})"] else [name]
+    let name := names.namespacePrefix ++ name
+    -- The function binds the number type under its own name, `N` or a fresh one.
+    let head := if names.usesNumber then [name, s!"({names.numberVar} := {names.numberVar})"] else [name]
     "(" ++ " ".intercalate (head ++ (Expr.printList names args).map argument) ++ ")"
   | .list elems elem =>
     s!"([{", ".intercalate (Expr.printList names elems)}] : {(Ty.list elem).print names})"
@@ -310,7 +333,7 @@ def Body.lines (names : Names) : Body → List String
       [s!"| {leanName names "some"} {name} =>"] ++ indent (whenValue.lines names)
   | .letState ns branch rest =>
     [s!"let {tuple ns} :="] ++ indent (branch.lines names) ++ rest.lines names
-  | .fold ns element body items rest =>
+  | .fold ns element body items rest _ =>
     let bodyLines := body.lines names
     let lastLine := bodyLines.getLast?.getD ""
     [s!"let {tuple ns} :=", s!"  {leanName names "List.foldl"}", s!"    (fun {tuple ns} {element} =>"] ++

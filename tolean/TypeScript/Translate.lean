@@ -117,6 +117,11 @@ structure Ctx where
   functions : List FnInfo := []
   currentFunction : String := ""
   returnType : Ty := .boolean
+  /-- A bound on how deep the translator's calls nest. Each nesting of the
+  program takes at most a few calls, so four per character of the source is
+  more than enough, and running out is a refusal. With the bound, every
+  function of the translator is total. -/
+  fuel : Nat := 0
   /-- True while translating a `return` value. An owned array may be read
   only there: a later push would shadow the array in Lean but change it in
   JS, so an earlier read (an alias, a field, a loop over it) could see a
@@ -213,6 +218,13 @@ def reject {A : Type} (span : Span) (reason : String) : TM A := do
   let ctx ← get
   throw s!"{ctx.file}:{span.start.line}:{span.start.col}: {reason}: {spanText ctx span}"
 
+/-- The program nests deeper than `Ctx.fuel` allows. -/
+def tooDeep {A : Type} : TM A := do
+  throw s!"{(← get).file}: the program is nested too deeply for the translator"
+
+/-- `Ctx.fuel`, for a call into the translator from outside it. -/
+def fuelLimit : TM Nat := do return (← get).fuel
+
 /-- Refuse the node at `span` unless the target edition has `f`. -/
 def requireFeature (span : Span) (f : Feature) : TM Unit := do
   let target := (← get).target
@@ -236,7 +248,7 @@ def unsupportedType {A : Type} (t : TypeExpr) : TM A :=
       "or an interface declared above)")
 
 /-- The type of `t` in the subset. The output writes it as `Ty.lean`. -/
-partial def translateType (t : TypeExpr) : TM Ty := do
+def translateType (t : TypeExpr) : TM Ty := do
   match t with
   | .keyword s "bigint" =>
     requireFeature s .bigint
@@ -246,12 +258,10 @@ partial def translateType (t : TypeExpr) : TM Ty := do
   | .keyword _ "number" => return .number
   | .union _ [a, b] =>
     -- `T | null`: exactly two members, one of them `null`.
-    let value? := match a, b with
-      | .null _, .null _ => none
-      | .null _, v | v, .null _ => some v
-      | _, _ => none
-    let some value := value? | unsupportedType t
-    return .nullable (← translateType value)
+    match a, b with
+    | .null _, .null _ => unsupportedType t
+    | .null _, value | value, .null _ => return .nullable (← translateType value)
+    | _, _ => unsupportedType t
   | .array _ elem => return .array (← translateType elem)
   | .ref _ name [elem] =>
     unless name == "Array" || name == "ReadonlyArray" do unsupportedType t
@@ -267,24 +277,48 @@ def blockStatements : Stmt → List Stmt
   | .block _ body => body
   | s => [s]
 
+mutual
+
 /-- Every path through `statements` ends in a `return`. -/
-partial def alwaysReturns (statements : List Stmt) : Bool :=
-  match statements.getLast? with
-  | some (.returnStmt ..) => true
-  | some (.ifStmt _ _ thenBranch (some elseBranch)) =>
-    alwaysReturns (blockStatements thenBranch) && alwaysReturns (blockStatements elseBranch)
+def alwaysReturns : List Stmt → Bool
+  | [] => false
+  | [s] => endsInReturn s
+  | _ :: rest => alwaysReturns rest
+
+/-- `s`, the last statement of a list, ends every path in a `return`. -/
+def endsInReturn : Stmt → Bool
+  | .returnStmt .. => true
+  | .ifStmt _ _ thenBranch (some elseBranch) => branchReturns thenBranch && branchReturns elseBranch
   | _ => false
+
+/-- `alwaysReturns (blockStatements s)`. -/
+def branchReturns : Stmt → Bool
+  | .block _ body => alwaysReturns body
+  | s => endsInReturn s
+
+end
+
+mutual
 
 /-- `s` contains a `return`, `break` or `continue`. -/
-partial def containsJump : Stmt → Bool
+def containsJump : Stmt → Bool
   | .returnStmt .. | .breakStmt _ | .continueStmt _ => true
-  | .ifStmt _ _ t e => containsJump t || (e.map containsJump).getD false
+  | .ifStmt _ _ t (some e) => containsJump t || containsJump e
+  | .ifStmt _ _ t none => containsJump t
   | .forOfStmt _ _ _ _ body | .whileStmt _ _ body => containsJump body
-  | .block _ body => body.any containsJump
+  | .block _ body => anyContainsJump body
   | _ => false
 
+def anyContainsJump : List Stmt → Bool
+  | [] => false
+  | s :: rest => containsJump s || anyContainsJump rest
+
+end
+
+mutual
+
 /-- The names that `e` assigns, increments or pushes to. -/
-partial def exprChanges : Expr → List String
+def exprChanges : Expr → List String
   | .assign _ op target value =>
     let own := match target with
       | .ident _ name => if op matches .assign | .add | .sub | .mul then [name] else []
@@ -296,29 +330,50 @@ partial def exprChanges : Expr → List String
     let own := match callee with
       | .member _ (.ident _ name) "push" => [name]
       | _ => []
-    own ++ exprChanges callee ++ args.foldl (fun acc a => acc ++ exprChanges a) []
-  | .array _ elems => elems.foldl (fun acc a => acc ++ exprChanges a) []
-  | .object _ props => props.foldl (init := []) fun acc p =>
-      match p with
-      | .keyValue _ _ v => acc ++ exprChanges v
-      | .shorthand .. => acc
+    own ++ exprChanges callee ++ exprsChanges args
+  | .array _ elems => exprsChanges elems
+  | .object _ props => propsChanges props
   | .index _ a b | .binary _ _ a b => exprChanges a ++ exprChanges b
   | .cond _ a b c => exprChanges a ++ exprChanges b ++ exprChanges c
   | _ => []
 
-partial def stmtChanges : Stmt → List String
-  | .varDecl _ d => (d.init.map exprChanges).getD []
+def exprsChanges : List Expr → List String
+  | [] => []
+  | e :: es => exprChanges e ++ exprsChanges es
+
+def propsChanges : List Property → List String
+  | [] => []
+  | .keyValue _ _ v :: ps => exprChanges v ++ propsChanges ps
+  | .shorthand .. :: ps => propsChanges ps
+
+end
+
+def optionChanges : Option Expr → List String
+  | some e => exprChanges e
+  | none => []
+
+mutual
+
+def stmtChanges : Stmt → List String
+  | .varDecl _ d => optionChanges d.init
   | .exprStmt _ e => exprChanges e
-  | .returnStmt _ v => (v.map exprChanges).getD []
-  | .ifStmt _ test t e => exprChanges test ++ stmtChanges t ++ (e.map stmtChanges).getD []
+  | .returnStmt _ v => optionChanges v
+  | .ifStmt _ test t (some e) => exprChanges test ++ stmtChanges t ++ stmtChanges e
+  | .ifStmt _ test t none => exprChanges test ++ stmtChanges t
   | .forOfStmt _ _ _ iterable body => exprChanges iterable ++ stmtChanges body
   | .whileStmt _ test body => exprChanges test ++ stmtChanges body
-  | .block _ body => body.foldl (fun acc s => acc ++ stmtChanges s) []
+  | .block _ body => stmtsChanges body
   | _ => []
+
+def stmtsChanges : List Stmt → List String
+  | [] => []
+  | s :: rest => stmtChanges s ++ stmtsChanges rest
+
+end
 
 /-- The locals of `env` that `statements` change, in the order of `env`. -/
 def changedNames (statements : List Stmt) (env : Env) : List String :=
-  let changed := statements.foldl (fun acc s => acc ++ stmtChanges s) []
+  let changed := stmtsChanges statements
   (env.locals.filter fun l => changed.contains l.name).map (·.name)
 
 /-- `x === null` or `x !== null`, where `x` is a name in scope that may be
@@ -339,9 +394,8 @@ def nullTestOf (env : Env) (e : Expr) : Option (String × Bool × Ty) :=
   | _ => none
 
 /-- A bigint literal other than `0n`, such as `2n` or `-(3n)`. -/
-partial def isNonzeroBigintLiteral (e : Expr) : Bool :=
-  match e.stripParens with
-  | .unary _ .neg inner => isNonzeroBigintLiteral inner
+def isNonzeroBigintLiteral : Expr → Bool
+  | .paren _ inner | .unary _ .neg inner => isNonzeroBigintLiteral inner
   | .bigint _ text => bigintValue text != 0
   | _ => false
 
@@ -362,9 +416,10 @@ mutual
 
 /-- `expected` is the type the context gives, which an object literal needs:
 the return type, a declared type, a parameter type or a field type. -/
-partial def translateExpr (env : Env) (expected : Option Ty) (e : Expr) : TM Code := do
+def translateExpr (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr) : TM Code := do
+  let fuel + 1 := fuel | tooDeep
   match e with
-  | .paren _ inner => translateExpr env expected inner
+  | .paren _ inner => translateExpr fuel env expected inner
   | .bigint _ text =>
     -- Typed, so Lean never defaults a numeral to `Nat`, where `0 - 1 = 0`.
     return ⟨.int (bigintValue text), false, .bigint⟩
@@ -385,7 +440,7 @@ partial def translateExpr (env : Env) (expected : Option Ty) (e : Expr) : TM Cod
         reject s "an owned array may be read only in the return value"
       return ⟨.var name, false, l.type⟩
   | .member s obj name =>
-    let o ← translateExpr env none obj
+    let o ← translateExpr fuel env none obj
     let ctx : Ctx ← get
     let field? := match o.type with
       | .struct structName =>
@@ -397,7 +452,7 @@ partial def translateExpr (env : Env) (expected : Option Ty) (e : Expr) : TM Cod
   | .unary s op arg =>
     if op == .neg && (arg matches .ident _ "Infinity") && !env.has "Infinity" then
       return ⟨.numberConstant .negInf, false, .number⟩
-    let a ← translateExpr env none arg
+    let a ← translateExpr fuel env none arg
     match op with
     | .not =>
       unless a.type == .boolean do reject s "'!' needs a boolean"
@@ -409,35 +464,37 @@ partial def translateExpr (env : Env) (expected : Option Ty) (e : Expr) : TM Cod
       | .number => return ⟨.numberNeg a.value, false, .number⟩
       | _ => reject s "unsupported unary operator"
     | _ => reject s "unsupported unary operator"
-  | .binary s op l r => translateBinary env s op l r
+  | .binary s op l r => translateBinary fuel env s op l r
   | .cond s test ifTrue ifFalse =>
-    let c ← translateExpr env none test
+    let c ← translateExpr fuel env none test
     unless c.type == .boolean do reject test.span "a condition must be a boolean"
-    let a ← translateExpr env expected ifTrue
-    let b ← translateExpr env expected ifFalse
+    let a ← translateExpr fuel env expected ifTrue
+    let b ← translateExpr fuel env expected ifFalse
     let some type := a.type.join b.type | reject s "the branches of '?:' have different types"
     return ⟨.ite c.code a.value b.value, false, type⟩
-  | .call s callee args => translateCall env s callee args
-  | .object s props => translateObject env expected s props
-  | .array s elems => translateArray env expected s elems
+  | .call s callee args => translateCall fuel env s callee args
+  | .object s props => translateObject fuel env expected s props
+  | .array s elems => translateArray fuel env expected s elems
   | _ => reject e.span "unsupported expression"
 
 /-- An array literal, as a list. In JS a literal makes a new array, and only
 an owned array may be pushed to, so nothing changes the array after it is
 made, and a Lean list has its meaning. The element type comes from the
 context, or else from the elements. -/
-partial def translateArray (env : Env) (expected : Option Ty) (s : Span) (elems : List Expr) :
+def translateArray (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (elems : List Expr) :
     TM Code := do
-  let (values, elem) ← translateElements env expected s elems
+  let fuel + 1 := fuel | tooDeep
+  let (values, elem) ← translateElements fuel env expected s elems
   return ⟨.list values elem.lean, false, .array elem⟩
 
 /-- The elements of an array literal, and their type. -/
-partial def translateElements (env : Env) (expected : Option Ty) (s : Span) (elems : List Expr) :
+def translateElements (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (elems : List Expr) :
     TM (List Output.Expr × Ty) := do
+  let fuel + 1 := fuel | tooDeep
   let expectedElem := match expected with
     | some (.array t) => some t
     | _ => none
-  let codes ← elems.mapM (translateExpr env expectedElem)
+  let codes ← elems.mapM (translateExpr fuel env expectedElem)
   let elem ← match expectedElem with
     | some t => pure t
     | none =>
@@ -450,12 +507,13 @@ partial def translateElements (env : Env) (expected : Option Ty) (s : Span) (ele
     unless c.type.assignableTo elem do reject e.span "the element does not have the array's element type"
   return (codes.map (·.value), elem)
 
-partial def translateCall (env : Env) (s : Span) (callee : Expr) (args : List Expr) : TM Code := do
+def translateCall (fuel : Nat) (env : Env) (s : Span) (callee : Expr) (args : List Expr) : TM Code := do
+  let fuel + 1 := fuel | tooDeep
   -- `Number.isNaN(x)` and the like. TypeScript lets them take any value; the
   -- model has them on numbers only.
   if let .member _ (.ident _ "Number") test := callee then
     if let (false, some form, [arg]) := (env.has "Number", numberTest? test, args) then
-      let a ← translateExpr env none arg
+      let a ← translateExpr fuel env none arg
       unless a.type == .number do
         reject arg.span s!"Number.{test} needs a number operand (narrow a nullable value first)"
       return ⟨.numberTest form a.value, false, .boolean⟩
@@ -470,14 +528,15 @@ partial def translateCall (env : Env) (s : Span) (callee : Expr) (args : List Ex
   unless fn.params.length == args.length do reject s s!"'{name}' takes {fn.params.length} arguments"
   let mut values := #[]
   for (arg, paramType) in args.zip fn.params do
-    let a ← translateExpr env (some paramType) arg
+    let a ← translateExpr fuel env (some paramType) arg
     unless a.type.assignableTo paramType do
       reject arg.span "the argument does not have the parameter's type"
     values := values.push a.value
   return ⟨.call name values.toList, false, fn.ret⟩
 
-partial def translateObject (env : Env) (expected : Option Ty) (s : Span) (props : List Property) :
+def translateObject (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (props : List Property) :
     TM Code := do
+  let fuel + 1 := fuel | tooDeep
   let ctx ← get
   let notStruct {A : Type} : TM A :=
     reject s "an object literal must build an interface declared in this file"
@@ -494,14 +553,21 @@ partial def translateObject (env : Env) (expected : Option Ty) (s : Span) (props
       | reject span s!"'{key}' is not a field of {structName}"
     if seen.contains key then reject span s!"'{key}' is set twice"
     seen := seen ++ [key]
-    let v ← translateExpr env (some fieldType) value
+    let v ← translateExpr fuel env (some fieldType) value
     unless v.type.assignableTo fieldType do reject span s!"'{key}' does not have the field's type"
     parts := parts.push (key, v.value)
   for (field, _) in info.fields do
     unless seen.contains field do reject s s!"the object lacks the field '{field}'"
+  -- A JS object keeps its keys in the order the literal writes them, and the
+  -- caller can see that order, through `Object.keys` or `JSON.stringify`. A
+  -- Lean structure has no order, so the literal must use the declared one.
+  let declared := info.fields.map (·.1)
+  unless seen == declared do
+    reject s s!"write the fields in the order that {structName} declares them: {", ".intercalate declared}"
   return ⟨.struct parts.toList structName, false, .struct structName⟩
 
-partial def translateBinary (env : Env) (s : Span) (op : BinOp) (l r : Expr) : TM Code := do
+def translateBinary (fuel : Nat) (env : Env) (s : Span) (op : BinOp) (l r : Expr) : TM Code := do
+  let fuel + 1 := fuel | tooDeep
   -- `x === null` and `x !== null`: a test on a Lean `Option`.
   if (op == .strictEq || op == .strictNe) && ((l matches .null _) || (r matches .null _)) then
     let other := if l matches .null _ then r else l
@@ -510,7 +576,7 @@ partial def translateBinary (env : Env) (s : Span) (op : BinOp) (l r : Expr) : T
     -- Translate the operand even when the answer is fixed: translating is what
     -- refuses anything outside the subset, such as an assignment inside it.
     -- What the subset accepts has no side effects, so its value can be dropped.
-    let o ← translateExpr env none other
+    let o ← translateExpr fuel env none other
     match o.type with
     | .nullable _ =>
       return ⟨if isEquality then .isNone o.code else .isSome o.code, false, .boolean⟩
@@ -521,11 +587,11 @@ partial def translateBinary (env : Env) (s : Span) (op : BinOp) (l r : Expr) : T
   -- so Lean matches on `x` and binds it to the value inside.
   if let some (name, isNullTest, value) := nullTestOf env l then
     if (op == .or && isNullTest) || (op == .and && !isNullTest) then
-      let whenSome ← translateExpr (env.narrow name value) none r
+      let whenSome ← translateExpr fuel (env.narrow name value) none r
       unless whenSome.type == .boolean do reject r.span s!"'{op.symbol}' needs two booleans"
       return ⟨.matchNull name (.bool (op == .or)) whenSome.value, false, .boolean⟩
-  let a ← translateExpr env none l
-  let b ← translateExpr env none r
+  let a ← translateExpr fuel env none l
+  let b ← translateExpr fuel env none r
   let bothBigInt := a.type == .bigint && b.type == .bigint
   let bothNumber := a.type == .number && b.type == .number
   let call (op : Output.NumberOp) (x y : Code) (type : Ty) : Code :=
@@ -601,7 +667,7 @@ def translateUpdate (env : Env) (s : Span) (e : Expr) : TM (String × Output.Exp
       reject s "push is allowed only onto an owned array, one element at a time"
     let some { binding := .array, type := .array elemType, .. } := env.lookup target | refusePush
     let [element] := args | refusePush
-    let v ← translateExpr env (some elemType) element
+    let v ← translateExpr (← fuelLimit) env (some elemType) element
     unless v.type.assignableTo elemType do
       reject element.span "the element does not have the array's element type"
     return (target, .push target v.value)
@@ -609,7 +675,7 @@ def translateUpdate (env : Env) (s : Span) (e : Expr) : TM (String × Output.Exp
     unless op matches .assign | .add | .sub | .mul do refuse
     let some { binding := .«let», type, .. } := env.lookup name
       | reject s "only a local declared with let may be assigned"
-    let v ← translateExpr env (some type) right
+    let v ← translateExpr (← fuelLimit) env (some type) right
     match assignOps? op with
     | none =>
       unless v.type.assignableTo type do reject s "the value does not have the local's type"
@@ -625,37 +691,41 @@ def translateUpdate (env : Env) (s : Span) (e : Expr) : TM (String × Output.Exp
 
 mutual
 
-partial def translateStatements (env : Env) (tail : Tail) : List Stmt → TM Output.Body
-  | [] => do
+def translateStatements (fuel : Nat) (env : Env) (tail : Tail) (statements : List Stmt) :
+    TM Output.Body := do
+  let fuel + 1 := fuel | tooDeep
+  match statements with
+  | [] =>
     match tail with
     | .ret =>
       let ctx ← get
       throw s!"{ctx.file}: '{ctx.currentFunction}' can end without a return"
     | .state names => return .state names
-  | stmt :: rest => do
+  | stmt :: rest =>
     match stmt with
     | .returnStmt s value =>
       let (.ret, [], some v) := (tail, rest, value)
         | reject s "return must be the last statement of a function and carry a value"
       modify fun c => { c with returning := true }
       let returnType := (← get).returnType
-      let code ← translateExpr env (some returnType) v
+      let code ← translateExpr (← fuelLimit) env (some returnType) v
       unless code.type.assignableTo returnType do
         reject v.span "the value does not have the function's return type"
       modify fun c => { c with returning := false }
       return .value code.value
-    | .varDecl s d => translateVariable env s d rest tail
+    | .varDecl s d => translateVariable fuel env s d rest tail
     | .exprStmt s e =>
       let (name, update) ← translateUpdate env s e
-      return .let name update (← translateStatements env tail rest)
+      return .let name update (← translateStatements fuel env tail rest)
     | .ifStmt s test thenBranch elseBranch =>
-      translateIf env s test thenBranch elseBranch rest tail
+      translateIf fuel env s test thenBranch elseBranch rest tail
     | .forOfStmt s kind name iterable body =>
-      translateForOf env s kind name iterable body rest tail
+      translateForOf fuel env s kind name iterable body rest tail
     | _ => reject stmt.span "unsupported statement"
 
-partial def translateVariable (env : Env) (s : Span) (d : VarDecl) (rest : List Stmt)
+def translateVariable (fuel : Nat) (env : Env) (s : Span) (d : VarDecl) (rest : List Stmt)
     (tail : Tail) : TM Output.Body := do
+  let fuel + 1 := fuel | tooDeep
   let some init := d.init | reject s "declare one const or let identifier with an initializer"
   -- `const xs: Array<T> = [...]` (or `T[]`) is an owned array, which the
   -- function may push to. Any other array literal is a value.
@@ -670,13 +740,13 @@ partial def translateVariable (env : Env) (s : Span) (d : VarDecl) (rest : List 
       let type ← translateType annotation
       let .array _ elems := init | unreachable!
       -- The `let` states the type, so the list needs no ascription.
-      let (values, _) ← translateElements env (some type) s elems
+      let (values, _) ← translateElements (← fuelLimit) env (some type) s elems
       let env' ← declare env s d.name .array type
-      return .letArray d.name type.lean values (← translateStatements env' tail rest)
+      return .letArray d.name type.lean values (← translateStatements fuel env' tail rest)
   let declared ← match d.type with
     | some annotation => some <$> translateType annotation
     | none => pure none
-  let code ← translateExpr env declared init
+  let code ← translateExpr (← fuelLimit) env declared init
   let type ← match declared with
     | some t =>
       if code.type.assignableTo t then pure t
@@ -684,10 +754,11 @@ partial def translateVariable (env : Env) (s : Span) (d : VarDecl) (rest : List 
     | none => pure code.type
   let binding := if d.kind == .const then Binding.const else .«let»
   let env' ← declare env s d.name binding type
-  return .let d.name code.value (← translateStatements env' tail rest)
+  return .let d.name code.value (← translateStatements fuel env' tail rest)
 
-partial def translateIf (env : Env) (s : Span) (test : Expr) (thenBranch : Stmt)
+def translateIf (fuel : Nat) (env : Env) (s : Span) (test : Expr) (thenBranch : Stmt)
     (elseBranch : Option Stmt) (rest : List Stmt) (tail : Tail) : TM Output.Body := do
+  let fuel + 1 := fuel | tooDeep
   let thenStatements := blockStatements thenBranch
   let elseStatements := (elseBranch.map blockStatements).getD []
   -- `if (x === null)` and `if (x !== null)`: TypeScript narrows `x` in each
@@ -700,7 +771,7 @@ partial def translateIf (env : Env) (s : Span) (test : Expr) (thenBranch : Stmt)
   let branch (whenTrue whenFalse : Output.Body) : TM Output.Body := do
     match nullTest with
     | none =>
-      let c ← translateExpr env none test
+      let c ← translateExpr (← fuelLimit) env none test
       unless c.type == .boolean do reject test.span "a condition must be a boolean"
       return .ite c.code whenTrue whenFalse
     | some (name, isNullTest, _) =>
@@ -709,8 +780,8 @@ partial def translateIf (env : Env) (s : Span) (test : Expr) (thenBranch : Stmt)
   if (tail matches .ret) && alwaysReturns thenStatements then
     if elseBranch.isSome && !rest.isEmpty then
       reject s "code after an if whose branches both return is unreachable"
-    let whenTrue ← translateStatements envTrue tail thenStatements
-    let whenFalse ← translateStatements envFalse tail (elseStatements ++ rest)
+    let whenTrue ← translateStatements fuel envTrue tail thenStatements
+    let whenFalse ← translateStatements fuel envFalse tail (elseStatements ++ rest)
     return (← branch whenTrue whenFalse)
   if (thenStatements ++ elseStatements).any containsJump then
     reject s "a branch that does not always return may not return, break or continue"
@@ -720,22 +791,27 @@ partial def translateIf (env : Env) (s : Span) (test : Expr) (thenBranch : Stmt)
     if names.contains name then
       reject s "a local tested against null may not be assigned in that if"
   let state := Tail.state names
-  let whenTrue ← translateStatements envTrue state thenStatements
-  let whenFalse ← translateStatements envFalse state elseStatements
-  return .letState names (← branch whenTrue whenFalse) (← translateStatements env tail rest)
+  let whenTrue ← translateStatements fuel envTrue state thenStatements
+  let whenFalse ← translateStatements fuel envFalse state elseStatements
+  return .letState names (← branch whenTrue whenFalse) (← translateStatements fuel env tail rest)
 
-partial def translateForOf (env : Env) (s : Span) (kind : VarKind) (element : String)
+def translateForOf (fuel : Nat) (env : Env) (s : Span) (kind : VarKind) (element : String)
     (iterable : Expr) (body : Stmt) (rest : List Stmt) (tail : Tail) : TM Output.Body := do
+  let fuel + 1 := fuel | tooDeep
   unless kind == .const do reject s "a loop must be 'for (const x of xs)'"
   let bodyStatements := blockStatements body
   if bodyStatements.any containsJump then reject s "a loop body may not return, break or continue"
   let names := changedNames bodyStatements env
   if names.isEmpty then reject s "a loop must change a local"
-  let items ← translateExpr env none iterable
+  let items ← translateExpr (← fuelLimit) env none iterable
   let .array elemType := items.type | reject iterable.span "a loop must run over an array"
   let bodyEnv ← declare env s element .const elemType
-  let bodyOut ← translateStatements bodyEnv (.state names) bodyStatements
-  return .fold names element bodyOut items.code (← translateStatements env tail rest)
+  let bodyOut ← translateStatements fuel bodyEnv (.state names) bodyStatements
+  let info : Output.LoopInfo :=
+    { span := s, elem := elemType.lean,
+      stateTypes := names.filterMap fun n => (env.lookup n).map (·.type.lean),
+      scope := (env.locals.filter fun l => !names.contains l.name).map fun l => (l.name, l.type.lean) }
+  return .fold names element bodyOut items.code (← translateStatements fuel env tail rest) info
 
 end
 
@@ -778,7 +854,7 @@ def translateFunction (s : Span) (name : String) (params : List Param)
     types := types.push ty
   let ret ← translateType returnType
   modify fun c => { c with currentFunction := name, returnType := ret }
-  let out ← translateStatements env .ret (blockStatements body)
+  let out ← translateStatements (← fuelLimit) env .ret (blockStatements body)
   modify fun c => { c with functions := c.functions ++ [{ name, params := types.toList, ret }] }
   return .function name leanParams.toList ret.lean out
 
@@ -787,47 +863,75 @@ def translateFunction (s : Span) (name : String) (params : List Param)
 def isNumberName (name : String) : Bool :=
   name == "Number" || name == "NaN" || name == "Infinity"
 
-partial def typeUsesNumber : TypeExpr → Bool
+mutual
+
+def typeUsesNumber : TypeExpr → Bool
   | .keyword _ name => name == "number"
   | .literal _ (.number _) => true
-  | .ref _ name args => isNumberName name || args.any typeUsesNumber
+  | .ref _ name args => isNumberName name || typesUseNumber args
   | .array _ e | .paren _ e => typeUsesNumber e
-  | .union _ members => members.any typeUsesNumber
+  | .union _ members => typesUseNumber members
   | _ => false
 
-partial def exprUsesNumber : Expr → Bool
+def typesUseNumber : List TypeExpr → Bool
+  | [] => false
+  | t :: ts => typeUsesNumber t || typesUseNumber ts
+
+end
+
+def keyUsesNumber : PropKey → Bool
+  | .ident name => isNumberName name
+  | .number _ => true
+  | .string _ => false
+
+mutual
+
+def exprUsesNumber : Expr → Bool
   | .ident _ name => isNumberName name
   | .number .. => true
   | .member _ obj name => isNumberName name || exprUsesNumber obj
-  | .object _ props => props.any fun
-    | .shorthand _ name => isNumberName name
-    | .keyValue _ key value =>
-      (match key with
-        | .ident name => isNumberName name
-        | .number _ => true
-        | .string _ => false) || exprUsesNumber value
-  | .array _ es => es.any exprUsesNumber
-  | .call _ f args => exprUsesNumber f || args.any exprUsesNumber
+  | .object _ props => propsUseNumber props
+  | .array _ es => exprsUseNumber es
+  | .call _ f args => exprUsesNumber f || exprsUseNumber args
   | .paren _ e | .unary _ _ e | .prefix _ _ e | .postfix _ _ e => exprUsesNumber e
   | .index _ a b | .binary _ _ a b | .assign _ _ a b => exprUsesNumber a || exprUsesNumber b
   | .cond _ a b c => exprUsesNumber a || exprUsesNumber b || exprUsesNumber c
   | _ => false
 
+def exprsUseNumber : List Expr → Bool
+  | [] => false
+  | e :: es => exprUsesNumber e || exprsUseNumber es
+
+def propsUseNumber : List Property → Bool
+  | [] => false
+  | .shorthand _ name :: ps => isNumberName name || propsUseNumber ps
+  | .keyValue _ key value :: ps => (keyUsesNumber key || exprUsesNumber value) || propsUseNumber ps
+
+end
+
 def varUsesNumber (d : VarDecl) : Bool :=
   isNumberName d.name || (d.type.map typeUsesNumber).getD false ||
     (d.init.map exprUsesNumber).getD false
 
-partial def stmtUsesNumber : Stmt → Bool
+mutual
+
+def stmtUsesNumber : Stmt → Bool
   | .varDecl _ d => varUsesNumber d
   | .exprStmt _ e => exprUsesNumber e
   | .returnStmt _ v => (v.map exprUsesNumber).getD false
-  | .ifStmt _ test t e =>
-    exprUsesNumber test || stmtUsesNumber t || (e.map stmtUsesNumber).getD false
+  | .ifStmt _ test t (some e) => exprUsesNumber test || stmtUsesNumber t || stmtUsesNumber e
+  | .ifStmt _ test t none => exprUsesNumber test || stmtUsesNumber t
   | .forOfStmt _ _ name iterable body =>
     isNumberName name || exprUsesNumber iterable || stmtUsesNumber body
   | .whileStmt _ test body => exprUsesNumber test || stmtUsesNumber body
-  | .block _ body => body.any stmtUsesNumber
+  | .block _ body => stmtsUseNumber body
   | _ => false
+
+def stmtsUseNumber : List Stmt → Bool
+  | [] => false
+  | s :: rest => stmtUsesNumber s || stmtsUseNumber rest
+
+end
 
 /-- The file uses the number model: a `number` type, a number literal, or the
 name `Number`, `NaN` or `Infinity` anywhere. A file can use
@@ -846,6 +950,15 @@ def moduleUsesNumber (m : Module) : Bool :=
 
 /-! ### The module -/
 
+/-- The declarations of `m`, translated. This is the translator as a function
+from one syntax tree to another: `translate` parses the source before it and
+prints the result after it. -/
+def translateDecls (m : Module) : TM (List Output.Decl) :=
+  m.decls.mapM fun
+    | .interface s _ name fields => translateInterface s name fields
+    | .function s _ name params ret body => translateFunction s name params ret body
+    | d => reject d.span "only interfaces and functions may appear at top level"
+
 def lineStarts (src : Array Char) : Array Nat := Id.run do
   let mut starts := #[0]
   let mut i := 0
@@ -860,11 +973,10 @@ def lineStarts (src : Array Char) : Array Nat := Id.run do
       i := i + 1
   return starts
 
-/-- Translate `source`, the TypeScript file `file`, to a Lean file whose
-definitions are in namespace `ns`, for code that runs on the edition
-`target`. -/
-def translate (file source ns : String) (target : Edition := .default) :
-    Except String String := do
+/-- Parse and translate `source`, the TypeScript file `file`: the parsed
+module, the names that the printer needs, and the output tree. -/
+def translateTree (file source : String) (target : Edition := .default) :
+    Except String (Module × Output.Names × List Output.Decl) := do
   let m ← (parse source target).mapError (·.render file)
   let src := source.toList.toArray
   -- Every identifier in the source, at any level. A Lean name in this list is
@@ -878,20 +990,23 @@ def translate (file source ns : String) (target : Edition := .default) :
   let names : Output.Names :=
     { clashes := Output.leanNames.map (·.1) |>.filter idents.contains,
       numberVar := numberVar.getD "N", usesNumber := moduleUsesNumber m }
-  let ctx : Ctx := { file, target, src, lineStarts := lineStarts src }
-  let decls : TM (List Output.Decl) := m.decls.mapM fun
-    | .interface s _ name fields => translateInterface s name fields
-    | .function s _ name params ret body => translateFunction s name params ret body
-    | d => reject d.span "only interfaces and functions may appear at top level"
-  match decls.run ctx with
+  let ctx : Ctx := { file, target, src, lineStarts := lineStarts src, fuel := 4 * src.size + 4 }
+  match (translateDecls m).run ctx with
   | .error e _ => .error e
-  | .ok decls _ =>
-    let header :=
-      if names.usesNumber then ["import tolean.TypeScript.Spec.Number", "", "open tolean.TypeScript"]
-      else []
-    return "\n".intercalate
-      ([s!"-- Generated by tolean {version} for {target.name} from {file}. Do not edit."] ++
-        header ++
-        [s!"namespace {ns}", "", "\n\n".intercalate (decls.map (·.print names)), "", s!"end {ns}", ""])
+  | .ok decls _ => return (m, names, decls)
+
+/-- Translate `source`, the TypeScript file `file`, to a Lean file whose
+definitions are in namespace `ns`, for code that runs on the edition
+`target`. -/
+def translate (file source ns : String) (target : Edition := .default) :
+    Except String String := do
+  let (_, names, decls) ← translateTree file source target
+  let header :=
+    if names.usesNumber then ["import tolean.TypeScript.Spec.Number", "", "open tolean.TypeScript"]
+    else []
+  return "\n".intercalate
+    ([s!"-- Generated by tolean {version} for {target.name} from {file}. Do not edit."] ++
+      header ++
+      [s!"namespace {ns}", "", "\n\n".intercalate (decls.map (·.print names)), "", s!"end {ns}", ""])
 
 end tolean.TypeScript.Translate

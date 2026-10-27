@@ -1,6 +1,6 @@
 # Plan: certificates and round-trip proofs
 
-**Status:** phase 1 built, phase 6 started · **Date:** 2026-10-26
+**Status:** phases 1 to 3 built, phase 6 steps 1 and 2 built · **Date:** 2026-10-26
 
 A certificate proves the translation of one file. It states, for each
 function, that an interpreter of the source language and the translated Lean
@@ -26,13 +26,19 @@ A certified file trusts three links instead of the translator:
    `bigint`, `boolean`, `string` and `T | null`. `tolean certify` writes the
    theorems, and the tactic `certify_tac` proves them. Six corpus files and the
    gauge example have certificates, and CI checks them.
-2. **Loops.** The interpreter gains `for … of`. Tolean proves one general
-   lemma: when the loop body and the fold step agree on every element, the
-   loop and `List.foldl` agree. Each certificate then applies the lemma with
-   an induction over the list. The RBAC example becomes certifiable.
-3. **Numbers.** The interpreter gains `number` values through the same
-   abstract number model that the translation uses, so a certificate holds for
-   every model that keeps the number laws.
+2. **Loops (built).** The interpreter gains `for … of` and `push` onto an
+   owned array. Tolean proves one general lemma, `execLoop_foldl`: when one
+   run of the loop body and one step of the fold agree, the loop and
+   `List.foldl` agree. Each certificate states a lemma for each loop, for
+   every environment whose variables have values of the right types, and
+   proves it from the general one. The theorem of the function then uses
+   that lemma as a rewrite rule. The RBAC example now has a certificate.
+3. **Numbers (built).** The interpreter takes its `number` values from the
+   same abstract model, `JSNumber N`, that the translation uses. So each
+   certificate holds for every `N`, and it does not assume the number laws.
+   A certificate proves each number literal's value with `decide`, because
+   `simp` cannot run the literal parser. Every accepted corpus file now has
+   a certificate.
 4. **A total parser.** The lexer and the parser become total functions, with
    fuel or with recursion that Lean accepts. Then the kernel can run them, and
    each certificate checks `parse source = .ok program` by `rfl`. This removes
@@ -49,9 +55,14 @@ A certified file trusts three links instead of the translator:
       Lean code as a tree (`tolean/TypeScript/Output.lean`), and a printer
       writes the tree as text. The text is the same as before, byte for
       byte. So a theorem can now state what the translator writes.
-   2. **A total translator.** The translator and the analyses it uses become
-      total functions, as the interpreter is. Lean cannot reason about a
-      `partial` function, so this step comes before any proof.
+   2. **A total translator (built).** The translator and the analyses it
+      uses are total functions, so Lean can reason about them and the kernel
+      can run them. The analyses recurse on the syntax tree. The translator
+      takes fuel: each call uses one unit, and the translation starts with
+      four units per character of the source. A program nests at most a few
+      calls deep per character, so the fuel never runs out on a real file.
+      If it did run out, the translator would refuse the file, and the
+      theorem is only about files that the translator accepts.
    3. **The meaning of the output.** An evaluator gives each tree a meaning,
       over the same values as the interpreter. Tolean proves that the two
       agree: when `translate program = .ok out`, the interpreter and the

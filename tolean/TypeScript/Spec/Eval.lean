@@ -1,4 +1,5 @@
 import tolean.TypeScript.Syntax.Ast
+import tolean.TypeScript.Spec.Number
 
 /-!
 The meaning of the translated TypeScript subset, as an interpreter in Lean.
@@ -12,39 +13,48 @@ trusted: only this interpreter and the parser do.
 This file is trusted. Each rule follows ECMA-262 for the values the subset
 has, and names the operation it follows. A rule returns `none` when the
 program would throw, or when it leaves the subset; a certificate then fails.
-The subset has no `number` yet: `number` values come in a later phase.
+
+A `number` is a value of an abstract type `N` with the operations of
+`JSNumber` (`Spec/Number.lean`), the same model that the translation uses. So
+the interpreter assumes nothing about doubles, and a certificate holds for
+every model, real doubles among them.
 -/
 namespace tolean.TypeScript.Eval
 
 open tolean.TypeScript.Syntax
+
+variable {N : Type} [JSNumber N]
 
 /-- A span, written short in certificates. -/
 abbrev sp (a b c d : Nat) : tolean.Span := ⟨⟨a, b⟩, ⟨c, d⟩⟩
 
 /-- A JavaScript value of the subset. An object is a list of fields, in the
 order the program wrote them. -/
-inductive Val where
+inductive Val (N : Type) where
   | int (i : Int)
+  | num (n : N)
   | bool (b : Bool)
   | str (s : String)
   | null
-  | list (items : List Val)
-  | obj (fields : List (String × Val))
-deriving Repr, Inhabited, BEq
+  | list (items : List (Val N))
+  | obj (fields : List (String × Val N))
+deriving Inhabited
 
-/-- `ToBoolean` (ECMA-262 §7.1.2), on the values of the subset. -/
-def Val.truthy : Val → Bool
+/-- `ToBoolean` (ECMA-262 §7.1.2), on the values of the subset. A number is
+false when it is `+0`, `-0` or `NaN`, and `-0 === 0`. -/
+def Val.truthy : Val N → Bool
   | .int i => i != 0
+  | .num n => !(JSNumber.isNaN n || JSNumber.eq n (JSNumber.ofSafeInt 0))
   | .bool b => b
   | .str s => !s.isEmpty
   | .null => false
   | .list _ | .obj _ => true
 
 /-- The variables in scope, innermost first. -/
-abbrev Env := List (String × Val)
+abbrev Env (N : Type) := List (String × Val N)
 
 /-- Change the innermost variable named `name`. -/
-def Env.set (env : Env) (name : String) (v : Val) : Env :=
+def Env.set (env : Env N) (name : String) (v : Val N) : Env N :=
   match env with
   | [] => []
   | (n, old) :: rest => if n == name then (n, v) :: rest else (n, old) :: Env.set rest name v
@@ -76,21 +86,62 @@ def bigintLiteral (text : String) : Option Int :=
     | _ => digitsIn 10 chars
   value.map (Int.ofNat ·)
 
-/-- `IsStrictlyEqual` (ECMA-262 §7.2.15) on primitive values. Objects
-compare by identity, which the subset does not model, so they leave it. -/
-def strictEq : Val → Val → Option Bool
+/-- The value of a number literal such as `12`, `1_000`, `0x1f` or `1e3`, when
+it is a safe integer: the MV of its `NumericLiteral`, with separators dropped
+(ECMA-262 §12.9.3). A safe integer is exactly a double, so the literal is that
+number. A literal with a fraction, or above `2^53 - 1`, leaves the subset. -/
+def numberLiteral (text : String) : Option Int := do
+  let chars := text.toList.filter (· != '_')
+  let value : Int ← match chars with
+    | '0' :: p :: digits =>
+      if p == 'x' || p == 'X' then Int.ofNat <$> digitsIn 16 digits
+      else if p == 'o' || p == 'O' then Int.ofNat <$> digitsIn 8 digits
+      else if p == 'b' || p == 'B' then Int.ofNat <$> digitsIn 2 digits
+      else decimal chars
+    | _ => decimal chars
+  if -maxSafe ≤ value && value ≤ maxSafe then some value else none
+where
+  /-- A `DecimalLiteral`, `digits.digits e±digits`, when its value is an integer. -/
+  decimal (chars : List Char) : Option Int := do
+    let (mantissa, exponent) := chars.span fun c => c != 'e' && c != 'E'
+    let exp : Int ← match exponent with
+      | [] => some 0
+      | _ :: '-' :: ds => (fun n => -(n : Int)) <$> digitsIn 10 ds
+      | _ :: '+' :: ds | _ :: ds => (fun n => (n : Int)) <$> digitsIn 10 ds
+    let (whole, fraction) := mantissa.span (· != '.')
+    let fraction := fraction.drop 1
+    let m ← digitsIn 10 (whole ++ fraction)
+    let scale := exp - fraction.length
+    if scale ≥ 0 then
+      -- Above 2^53 the literal leaves the subset anyway, so a large exponent
+      -- need not be computed.
+      if scale > 20 then (if m == 0 then some 0 else none) else some (m * 10 ^ scale.toNat)
+    else
+      let k := (-scale).toNat
+      if k > 400 then none else if m % 10 ^ k == 0 then some (m / 10 ^ k : Nat) else none
+
+/-- `IsStrictlyEqual` (ECMA-262 §7.2.15) on primitive values, and between
+`null` and any value. Values of different types are not equal, so `null` is
+never equal to an object. Two objects compare by identity, which the subset
+does not model, so they leave it. -/
+def strictEq : Val N → Val N → Option Bool
   | .int a, .int b => some (decide (a = b))
+  | .num a, .num b => some (JSNumber.eq a b)
   | .bool a, .bool b => some (decide (a = b))
   | .str a, .str b => some (decide (a = b))
   | .null, .null => some true
-  | .null, .int _ | .null, .bool _ | .null, .str _ => some false
-  | .int _, .null | .bool _, .null | .str _, .null => some false
+  | .null, .int _ | .null, .num _ | .null, .bool _ | .null, .str _ | .null, .list _
+  | .null, .obj _ => some false
+  | .int _, .null | .num _, .null | .bool _, .null | .str _, .null | .list _, .null
+  | .obj _, .null => some false
   | _, _ => none
 
 /-- A binary operator on two values, when neither operand short-circuits.
 Bigint `/` and `%` truncate toward zero and throw on a zero divisor
-(`BigInt::divide`, `BigInt::remainder`). -/
-def binary : BinOp → Val → Val → Option Val
+(`BigInt::divide`, `BigInt::remainder`). On numbers, `a > b` is `b < a` and
+`a >= b` is `b <= a`, as `IsLessThan` evaluates them (ECMA-262 §13.10.1).
+The subset has no `/` or `%` on numbers. -/
+def binary : BinOp → Val N → Val N → Option (Val N)
   | .add, .int a, .int b => some (.int (a + b))
   | .sub, .int a, .int b => some (.int (a - b))
   | .mul, .int a, .int b => some (.int (a * b))
@@ -100,15 +151,22 @@ def binary : BinOp → Val → Val → Option Val
   | .gt, .int a, .int b => some (.bool (decide (a > b)))
   | .le, .int a, .int b => some (.bool (decide (a ≤ b)))
   | .ge, .int a, .int b => some (.bool (decide (a ≥ b)))
+  | .add, .num a, .num b => some (.num (JSNumber.add a b))
+  | .sub, .num a, .num b => some (.num (JSNumber.sub a b))
+  | .mul, .num a, .num b => some (.num (JSNumber.mul a b))
+  | .lt, .num a, .num b => some (.bool (JSNumber.lt a b))
+  | .gt, .num a, .num b => some (.bool (JSNumber.lt b a))
+  | .le, .num a, .num b => some (.bool (JSNumber.le a b))
+  | .ge, .num a, .num b => some (.bool (JSNumber.le b a))
   | .strictEq, a, b => (strictEq a b).map .bool
   | .strictNe, a, b => (strictEq a b).map (.bool ∘ not)
   | _, _, _ => none
 
 /-- What a statement list does: it runs to its end with the variables it
 leaves, or it returns a value. -/
-inductive Outcome where
-  | normal (env : Env)
-  | ret (v : Val)
+inductive Outcome (N : Type) where
+  | normal (env : Env N)
+  | ret (v : Val N)
 deriving Inhabited
 
 /-- The functions of the module, by name. -/
@@ -121,9 +179,18 @@ mutual
 
 /-- The value of `e`. `fuel` bounds the depth of nested calls, so that the
 interpreter is a total function. -/
-def eval (m : Module) (fuel : Nat) (env : Env) : Expr → Option Val
-  | .ident _ name => env.lookup name
+def eval (m : Module) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
+  -- `NaN` and `Infinity` are properties of the global object (ECMA-262
+  -- §19.1), unless a variable of the program hides them.
+  | .ident _ name =>
+    match env.lookup name with
+    | some v => some v
+    | none =>
+      if name == "NaN" then some (.num JSNumber.nan)
+      else if name == "Infinity" then some (.num JSNumber.posInf)
+      else none
   | .bigint _ text => (bigintLiteral text).map .int
+  | .number _ text => (numberLiteral text).map (.num ∘ JSNumber.ofSafeInt)
   | .bool _ b => some (.bool b)
   | .string _ s => some (.str s)
   | .null _ => some .null
@@ -135,9 +202,16 @@ def eval (m : Module) (fuel : Nat) (env : Env) : Expr → Option Val
     | .obj fields => fields.lookup name
     | _ => none
   | .unary _ .not arg => do return .bool !(← eval m fuel env arg).truthy
+  -- The source text `-Infinity` is `negInf`, the model's name for it.
+  | .unary _ .neg (.ident _ "Infinity") => do
+    match env.lookup "Infinity" with
+    | some (.num n) => some (.num (JSNumber.neg n))
+    | some _ => none
+    | none => some (.num JSNumber.negInf)
   | .unary _ .neg arg => do
     match ← eval m fuel env arg with
     | .int i => some (.int (-i))
+    | .num n => some (.num (JSNumber.neg n))
     | _ => none
   -- `&&`, `||` and `??` evaluate their right side only when they need it
   -- (ECMA-262 §13.13.1), and return an operand, not a boolean.
@@ -149,10 +223,21 @@ def eval (m : Module) (fuel : Nat) (env : Env) : Expr → Option Val
     if a.truthy then some a else eval m fuel env r
   | .binary _ .coalesce l r => do
     let a ← eval m fuel env l
-    if a == .null then eval m fuel env r else some a
+    match a with
+    | .null => eval m fuel env r
+    | _ => some a
   | .binary _ op l r => do binary op (← eval m fuel env l) (← eval m fuel env r)
   | .cond _ test t f => do
     if (← eval m fuel env test).truthy then eval m fuel env t else eval m fuel env f
+  -- `Number.isNaN(x)`, `Number.isFinite(x)` and `Number.isSafeInteger(x)` on a
+  -- number (ECMA-262 §21.1.2), unless a variable hides `Number`.
+  | .call _ (.member _ (.ident _ "Number") test) [arg] => do
+    if (env.lookup "Number").isSome then none
+    let .num n ← eval m fuel env arg | none
+    if test == "isNaN" then some (.bool (JSNumber.isNaN n))
+    else if test == "isFinite" then some (.bool (JSNumber.isFinite n))
+    else if test == "isSafeInteger" then some (.bool (JSNumber.toSafeInt n).isSome)
+    else none
   | .call _ (.ident _ name) args => do
     let vs ← evalList m fuel env args
     match fuel with
@@ -164,27 +249,34 @@ def eval (m : Module) (fuel : Nat) (env : Env) : Expr → Option Val
       | .ret v => some v
       | .normal _ => none
   | _ => none
-termination_by e => (fuel, sizeOf e)
+termination_by e => (fuel, sizeOf e, 0)
 
-def evalList (m : Module) (fuel : Nat) (env : Env) : List Expr → Option (List Val)
+def evalList (m : Module) (fuel : Nat) (env : Env N) : List Expr → Option (List (Val N))
   | [] => some []
   | e :: es => do return (← eval m fuel env e) :: (← evalList m fuel env es)
-termination_by es => (fuel, sizeOf es)
+termination_by es => (fuel, sizeOf es, 0)
 
-def evalProps (m : Module) (fuel : Nat) (env : Env) : List Property → Option (List (String × Val))
+def evalProps (m : Module) (fuel : Nat) (env : Env N) :
+    List Property → Option (List (String × Val N))
   | [] => some []
   | .shorthand _ name :: ps => do return (name, ← env.lookup name) :: (← evalProps m fuel env ps)
   | .keyValue _ (.ident key) v :: ps => do
     return (key, ← eval m fuel env v) :: (← evalProps m fuel env ps)
   | _ :: _ => none
-termination_by ps => (fuel, sizeOf ps)
+termination_by ps => (fuel, sizeOf ps, 0)
 
 /-- Run one statement. A block, and the branch of an `if`, keep the changes
 they make to outer variables and drop the variables they declare. -/
-def execStmt (m : Module) (fuel : Nat) (env : Env) : Stmt → Option Outcome
+def execStmt (m : Module) (fuel : Nat) (env : Env N) : Stmt → Option (Outcome N)
   | .varDecl _ { name, init := some init, .. } => do
     return .normal ((name, ← eval m fuel env init) :: env)
   | .returnStmt _ (some e) => do return .ret (← eval m fuel env e)
+  -- `xs.push(v)` adds `v` at the end (`Array.prototype.push`, ECMA-262
+  -- §23.1.3.23). The subset pushes only onto an array that the function owns,
+  -- which nothing else can see, so the push changes only the variable.
+  | .exprStmt _ (.call _ (.member _ (.ident _ name) "push") [arg]) => do
+    let .list items ← env.lookup name | none
+    return .normal (env.set name (.list (items ++ [← eval m fuel env arg])))
   | .exprStmt _ (.assign _ .assign (.ident _ name) value) => do
     return .normal (env.set name (← eval m fuel env value))
   | .exprStmt _ (.assign _ op (.ident _ name) value) => do
@@ -204,24 +296,42 @@ def execStmt (m : Module) (fuel : Nat) (env : Env) : Stmt → Option Outcome
     | .ret v => some (.ret v)
     | .normal env' => some (.normal (env'.drop (env'.length - env.length)))
   | .empty _ => some (.normal env)
+  -- `for (const x of xs)` on an array: the body runs once for each element,
+  -- in order, with `x` bound to it in a new scope (`ForIn/OfBodyEvaluation`,
+  -- ECMA-262 §14.7.5.7, with the array iterator of §23.1.5.1).
+  | .forOfStmt _ .const name iterable body => do
+    let .list items ← eval m fuel env iterable | none
+    execLoop m fuel env name body items
   | _ => none
-termination_by s => (fuel, sizeOf s)
+termination_by s => (fuel, sizeOf s, 0)
+
+/-- Run the body of `for (const name of …)` once for each of `items`. Each
+run keeps the changes to outer variables, and drops `name` and the variables
+the body declares. -/
+def execLoop (m : Module) (fuel : Nat) (env : Env N) (name : String) (body : Stmt) :
+    List (Val N) → Option (Outcome N)
+  | [] => some (.normal env)
+  | x :: xs => do
+    match ← execStmt m fuel ((name, x) :: env) body with
+    | .ret v => some (.ret v)
+    | .normal env' => execLoop m fuel (env'.drop (env'.length - env.length)) name body xs
+termination_by xs => (fuel, sizeOf body, xs.length + 1)
 
 /-- Run a statement list, up to its end or its first `return`. -/
-def exec (m : Module) (fuel : Nat) (env : Env) : List Stmt → Option Outcome
+def exec (m : Module) (fuel : Nat) (env : Env N) : List Stmt → Option (Outcome N)
   | [] => some (.normal env)
   | s :: rest => do
     match ← execStmt m fuel env s with
     | .ret v => some (.ret v)
     | .normal env' => exec m fuel env' rest
-termination_by ss => (fuel, sizeOf ss)
+termination_by ss => (fuel, sizeOf ss, 0)
 
 end
 
 /-- Call the function `name` of `m` with `args`, as a call expression would
 (ECMA-262 §10.2.1): bind each parameter to its argument, run the body, and
 take the value it returns. -/
-def run (m : Module) (name : String) (args : List Val) (fuel : Nat := 64) : Option Val := do
+def run (m : Module) (name : String) (args : List (Val N)) (fuel : Nat := 64) : Option (Val N) := do
   let (params, body) ← (functions m).lookup name
   if params.length != args.length then none
   match ← execStmt m fuel (params.zip args).reverse body with
@@ -239,9 +349,9 @@ syntax "certify_tac" "[" Lean.Parser.Tactic.simpLemma,* "]" : tactic
 macro_rules
   | `(tactic| certify_tac [$defs,*]) =>
     `(tactic| (
-      simp [run, eval, evalList, evalProps, execStmt, exec, functions, binary, strictEq,
+      simp [run, eval, evalList, evalProps, execStmt, exec, execLoop, functions, binary, strictEq,
         bigintLiteral, digitsIn, digitIn, Env.set, Val.truthy, List.lookup, $defs,*]
-      all_goals repeat' (split <;> (try simp_all [List.lookup, binary, strictEq, Val.truthy, Env.set]))
-      all_goals (try simp_all [List.lookup, binary, strictEq, Val.truthy, Env.set])))
+      all_goals repeat' (split <;> (try simp_all [List.lookup, binary, strictEq, Val.truthy, Env.set, $defs,*]))
+      all_goals (try simp_all [List.lookup, binary, strictEq, Val.truthy, Env.set, $defs,*])))
 
 end tolean.TypeScript.Eval
