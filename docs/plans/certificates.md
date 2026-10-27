@@ -50,7 +50,9 @@ printer gives a certificate that Lean refuses.
       the source one line at a time, as `chars!"…"`. The macro reads each
       string literal as its characters when Lean elaborates the file, so the
       certificate reads as the source, and the kernel never decodes a
-      `String`. The certificate proves
+      `String`. The kernel takes quadratic time to reduce `String.toList` on
+      a literal ([lean4#16012](https://github.com/leanprover/lean4/issues/16012)).
+      The certificate proves
       `parseChars sourceChars = .ok program` with `decide +kernel`. Lean
       cannot derive `DecidableEq` for a syntax tree, so
       `Syntax/Equality.lean` gives `Module.beq` and proves that it decides

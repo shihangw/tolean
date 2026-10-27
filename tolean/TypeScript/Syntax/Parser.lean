@@ -779,11 +779,16 @@ def parseChars (chars : List Char) (target : Edition := .default) : Except Parse
   parseTokens (← lexChars chars target).toList target
 
 open Lean in
-/-- `chars!"ab"` is `['a', 'b']`: Lean reads the string literal as its
-characters when it elaborates the file. A certificate writes its source this
-way, so that it reads as the source, and the kernel never reads a `String`:
-the kernel expands a string literal to its UTF-8 bytes and decodes them again,
-which is quadratic, and it stops on a literal of a few kilobytes. -/
+/-- `chars!"ab"` is `['a', 'b']`. Lean reads the string literal as its
+characters when it elaborates the file.
+
+A certificate writes its source this way, so that it reads as the source and
+the kernel never reads a `String`. When the kernel reduces `String.toList` on
+a string literal, it takes time quadratic in the length of the literal
+(https://github.com/leanprover/lean4/issues/16012). The kernel encodes the
+characters as UTF-8 bytes and decodes them again, and it reads an `Array` as
+a list, so each step of that loop takes linear time. A 2.7 KB source did not
+finish in five minutes. -/
 macro "chars!" s:str : term => do
   let cs : Array (TSyntax `term) := s.getString.toList.toArray.map fun c => ⟨Syntax.mkCharLit c⟩
   `(([$cs,*] : List Char))
