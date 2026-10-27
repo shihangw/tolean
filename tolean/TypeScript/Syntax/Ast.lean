@@ -151,6 +151,31 @@ def Expr.isCoalesce : Expr → Bool
   | .binary _ .coalesce _ _ => true
   | _ => false
 
+/-- `=`, `+=`, `-=` or `*=`: the assignments that the Tolean subset has. -/
+def AssignOp.isSimple : AssignOp → Bool
+  | .assign | .add | .sub | .mul => true
+  | _ => false
+
+/-- `null`, not in parentheses. -/
+def Expr.isNull : Expr → Bool
+  | .null _ => true
+  | _ => false
+
+/-- A name, not in parentheses. -/
+def Expr.isIdent : Expr → Bool
+  | .ident .. => true
+  | _ => false
+
+/-- The name `Infinity`, not in parentheses. -/
+def Expr.isInfinity : Expr → Bool
+  | .ident _ "Infinity" => true
+  | _ => false
+
+/-- An array literal. -/
+def Expr.isArrayLiteral : Expr → Bool
+  | .array .. => true
+  | _ => false
+
 /-- A target that `=`, `++` and `--` can change. -/
 def Expr.isSimpleTarget : Expr → Bool
   | .ident .. | .member .. | .index .. => true

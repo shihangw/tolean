@@ -61,10 +61,11 @@ deriving BEq, Repr, Inhabited
 /-- A Lean expression in the output. Some are a `Prop`, such as `a < b`; the
 translator knows which, and wraps one in `decide` where Lean needs a `Bool`. -/
 inductive Expr where
-  /-- `(n : Int)`. -/
-  | int (n : Nat)
+  /-- `(n : Int)`. The translator gives it only a literal's value, which is
+  not negative. -/
+  | int (n : Int)
   /-- `(JSNumber.ofSafeInt (N := N) (n : Int))`. -/
-  | number (n : Nat)
+  | number (n : Int)
   /-- `(JSNumber.nan (N := N))`. -/
   | numberConstant (c : NumberConstant)
   | none
