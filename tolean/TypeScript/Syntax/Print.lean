@@ -92,6 +92,9 @@ def Field.toSexp (f : Field) : Sexp :=
     [f.type.toSexp]
 
 def Decl.toSexp : Decl → Sexp
+  | .import s names source =>
+    node "import" s [Sexp.quote source]
+      (names.map fun n => node "name" n.span ([n.name] ++ flag n.typeOnly "type") [])
   | .function s exported name params returnType body =>
     node "function" s ([name] ++ flag exported "export")
       (params.map Param.toSexp ++ (returnType.map TypeExpr.toSexp).toList ++ [body.toSexp])

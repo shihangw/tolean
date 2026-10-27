@@ -207,6 +207,9 @@ class Printer {
   }
 
   private topLevel(s: ts.Statement): Sexp {
+    if (ts.isImportDeclaration(s)) {
+      return this.importDecl(s);
+    }
     if (ts.isFunctionDeclaration(s)) {
       return this.functionDecl(s);
     }
@@ -242,6 +245,31 @@ class Printer {
       return this.variable(s, exported);
     }
     return this.statement(s);
+  }
+
+  // `import { a, type B } from "./x.ts"` and `import type { B } from "./x.ts"`.
+  private importDecl(s: ts.ImportDeclaration): Sexp {
+    const clause = s.importClause;
+    if (clause === undefined || clause.name !== undefined || s.attributes !== undefined) {
+      refuse(s, 'import form');
+    }
+    const bindings = clause.namedBindings;
+    if (bindings === undefined || !ts.isNamedImports(bindings)) {
+      refuse(s, 'import form');
+    }
+    if (clause.phaseModifier === ts.SyntaxKind.DeferKeyword) {
+      refuse(s, 'import defer');
+    }
+    const clauseType = clause.phaseModifier === ts.SyntaxKind.TypeKeyword;
+    const names = bindings.elements.map((el) => {
+      if (el.propertyName !== undefined) {
+        refuse(el, 'import alias');
+      }
+      const typeOnly = clauseType || el.isTypeOnly;
+      return this.node('name', el.name, [this.name(el.name), ...(typeOnly ? ['type'] : [])], []);
+    });
+    const source = (s.moduleSpecifier as ts.StringLiteral).text;
+    return this.node('import', s, [JSON.stringify(source)], names);
   }
 
   private functionDecl(s: ts.FunctionDeclaration): Sexp {

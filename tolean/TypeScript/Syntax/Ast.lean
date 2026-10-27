@@ -223,7 +223,17 @@ structure Field where
   optional : Bool
   type : TypeExpr
 
+/-- One name of `import { a, type B } from "./x.ts"`. `typeOnly` is true for
+`type B`, and for every name of `import type { … }`. -/
+structure ImportName where
+  span : Span
+  typeOnly : Bool
+  name : String
+deriving DecidableEq
+
 inductive Decl where
+  /-- `import { a, b } from "source"`: named imports from another file. -/
+  | «import» (span : Span) (names : List ImportName) (source : String)
   /-- `body` is a `block`. -/
   | function (span : Span) (exported : Bool) (name : String) (params : List Param)
       (returnType : Option TypeExpr) (body : Stmt)
@@ -264,7 +274,7 @@ def Stmt.span : Stmt → Span
   | .whileStmt s _ _ | .block s _ | .breakStmt s | .continueStmt s | .empty s => s
 
 def Decl.span : Decl → Span
-  | .function s .. | .interface s .. | .typeAlias s .. | .exportedVar s _ => s
+  | .import s .. | .function s .. | .interface s .. | .typeAlias s .. | .exportedVar s _ => s
   | .stmt st => st.span
 
 /-- `e` without the parentheses around it. -/

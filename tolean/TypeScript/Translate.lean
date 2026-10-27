@@ -925,6 +925,7 @@ name `Number`, `NaN` or `Infinity` anywhere. A file can use
 `Number.isNaN(NaN)` with no `number` keyword, and it still needs `N`. -/
 def moduleUsesNumber (m : Module) : Bool :=
   m.decls.any fun
+    | .import _ names _ => names.any fun n => isNumberName n.name
     | .function _ _ name params ret body =>
       isNumberName name ||
         params.any (fun p => isNumberName p.name || (p.type.map typeUsesNumber).getD false) ||
