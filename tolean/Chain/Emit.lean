@@ -73,8 +73,9 @@ def emit (language : String) (target : Option String) (sources : List String)
 
 /-- Record a certificate in the file manifest at `path`. Each function that
 has a theorem gets a proved node. When every function has one, the translator
-is proved for this file; the interpreter and the term printer are then the
-links the proof trusts. -/
+is proved for this file; the interpreter is then the link the proof trusts.
+The certificate also proves that the parser gives the program its theorems
+are about, so the printer that wrote the program is not trusted. -/
 def withCertificate (m : FileManifest) (certFile certText certModule : String)
     (theorems : List (String × String)) (allFunctions : Bool) : FileManifest :=
   let axioms := ["propext", "Classical.choice", "Quot.sound"]
@@ -85,16 +86,17 @@ def withCertificate (m : FileManifest) (certFile certText certModule : String)
   let extra : List Node := [
     { id := "semantics", kind := "spec", status := .trusted
       label := "TypeScript semantics (interpreter)", module := some "tolean.TypeScript.Spec.Eval" },
-    { id := "term-printer", kind := "translator", status := .trusted
-      label := "syntax tree printed as a Lean term" }]
+    { id := "parsed", kind := "proof", status := .proved
+      label := "the parser gives the program of the certificate", module := some certModule
+      «theorem» := some s!"{certModule}.program_parsed", axioms }]
   let nodes := (m.nodes.filter fun n => !(n.id.startsWith "certificate:") && n.id != "semantics" &&
-      n.id != "term-printer").map fun n =>
+      n.id != "parsed").map fun n =>
     if n.id == "translator" && allFunctions then
       { n with status := .proved, label := n.label ++ " (certified for this file)"
                evidence := none }
     else n
-  let certEdges := theorems.flatMap fun (fn, _) =>
-    [("parser", s!"certificate:{fn}"), ("term-printer", s!"certificate:{fn}"),
+  let certEdges := ("parser", "parsed") :: theorems.flatMap fun (fn, _) =>
+    [("parsed", s!"certificate:{fn}"),
      ("semantics", s!"certificate:{fn}"), (s!"certificate:{fn}", "translator")]
   { m with
     nodes := nodes ++ extra ++ certNodes

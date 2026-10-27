@@ -1,10 +1,11 @@
 -- Certificate written by tolean for access/rbac.ts. Do not edit.
 import tolean.TypeScript.Spec.Lemmas.Eval
+import tolean.TypeScript.Syntax.Parser
 import access.Rbac
 
 namespace access.RbacCert
 
-open tolean.TypeScript tolean.TypeScript.Eval
+open tolean.TypeScript tolean.TypeScript.Eval tolean.TypeScript.Syntax
 
 -- The proofs pass the same lemmas everywhere, so some go unused.
 set_option linter.unusedSimpArgs false
@@ -35,6 +36,118 @@ def program : tolean.TypeScript.Syntax.Module :=
     (tolean.TypeScript.Syntax.Stmt.block (sp 87 58 95 2) [(tolean.TypeScript.Syntax.Stmt.varDecl (sp 88 3 88 21) { kind := tolean.TypeScript.Syntax.VarKind.«let», name := "found", type := none, init := (some (tolean.TypeScript.Syntax.Expr.bool (sp 88 15 88 20) false)) }), (tolean.TypeScript.Syntax.Stmt.forOfStmt (sp 89 3 93 4) tolean.TypeScript.Syntax.VarKind.const "d" (tolean.TypeScript.Syntax.Expr.member (sp 89 19 89 27) (tolean.TypeScript.Syntax.Expr.ident (sp 89 19 89 20) "p") "denies") (tolean.TypeScript.Syntax.Stmt.block (sp 89 29 93 4) [(tolean.TypeScript.Syntax.Stmt.ifStmt (sp 90 5 92 6) (tolean.TypeScript.Syntax.Expr.call (sp 90 9 90 31) (tolean.TypeScript.Syntax.Expr.ident (sp 90 9 90 20) "denyApplies") [(tolean.TypeScript.Syntax.Expr.ident (sp 90 21 90 22) "p"), (tolean.TypeScript.Syntax.Expr.ident (sp 90 24 90 25) "d"), (tolean.TypeScript.Syntax.Expr.ident (sp 90 27 90 30) "req")]) (tolean.TypeScript.Syntax.Stmt.block (sp 90 33 92 6) [(tolean.TypeScript.Syntax.Stmt.exprStmt (sp 91 7 91 20) (tolean.TypeScript.Syntax.Expr.assign (sp 91 7 91 19) tolean.TypeScript.Syntax.AssignOp.assign (tolean.TypeScript.Syntax.Expr.ident (sp 91 7 91 12) "found") (tolean.TypeScript.Syntax.Expr.bool (sp 91 15 91 19) true)))]) none)])), (tolean.TypeScript.Syntax.Stmt.returnStmt (sp 94 3 94 16) (some (tolean.TypeScript.Syntax.Expr.ident (sp 94 10 94 15) "found")))])),
   (tolean.TypeScript.Syntax.Decl.function (sp 98 1 100 2) true "permits" [{ span := (sp 98 25 98 34), name := "p", type := (some (tolean.TypeScript.Syntax.TypeExpr.ref (sp 98 28 98 34) "Policy" [])) }, { span := (sp 98 36 98 48), name := "req", type := (some (tolean.TypeScript.Syntax.TypeExpr.ref (sp 98 41 98 48) "Request" [])) }] (some (tolean.TypeScript.Syntax.TypeExpr.keyword (sp 98 51 98 58) "boolean"))
     (tolean.TypeScript.Syntax.Stmt.block (sp 98 59 100 2) [(tolean.TypeScript.Syntax.Stmt.returnStmt (sp 99 3 99 45) (some (tolean.TypeScript.Syntax.Expr.binary (sp 99 10 99 44) tolean.TypeScript.Syntax.BinOp.and (tolean.TypeScript.Syntax.Expr.call (sp 99 10 99 25) (tolean.TypeScript.Syntax.Expr.ident (sp 99 10 99 17) "allowed") [(tolean.TypeScript.Syntax.Expr.ident (sp 99 18 99 19) "p"), (tolean.TypeScript.Syntax.Expr.ident (sp 99 21 99 24) "req")]) (tolean.TypeScript.Syntax.Expr.unary (sp 99 29 99 44) tolean.TypeScript.Syntax.UnaryOp.not (tolean.TypeScript.Syntax.Expr.call (sp 99 30 99 44) (tolean.TypeScript.Syntax.Expr.ident (sp 99 30 99 36) "denied") [(tolean.TypeScript.Syntax.Expr.ident (sp 99 37 99 38) "p"), (tolean.TypeScript.Syntax.Expr.ident (sp 99 40 99 43) "req")])))))]))] }
+
+/-- The source file, one line at a time. -/
+def sourceLines : List (List Char) := [
+  chars!"/** A role binding: in one tenant, a member holds a role. The member is a",
+  chars!"principal or a group. */",
+  chars!"export interface Binding {",
+  chars!"  readonly tenant: string;",
+  chars!"  readonly role: string;",
+  chars!"  readonly member: string;",
+  chars!"}",
+  chars!"",
+  chars!"/** A role grants a permission. */",
+  chars!"export interface Grant {",
+  chars!"  readonly role: string;",
+  chars!"  readonly permission: string;",
+  chars!"}",
+  chars!"",
+  chars!"/** A principal belongs to a group. */",
+  chars!"export interface Membership {",
+  chars!"  readonly group: string;",
+  chars!"  readonly principal: string;",
+  chars!"}",
+  chars!"",
+  chars!"/** A deny rule: in one tenant, a member may not use a permission. */",
+  chars!"export interface Deny {",
+  chars!"  readonly tenant: string;",
+  chars!"  readonly permission: string;",
+  chars!"  readonly member: string;",
+  chars!"}",
+  chars!"",
+  chars!"export interface Policy {",
+  chars!"  readonly bindings: ReadonlyArray<Binding>;",
+  chars!"  readonly grants: ReadonlyArray<Grant>;",
+  chars!"  readonly groups: ReadonlyArray<Membership>;",
+  chars!"  readonly denies: ReadonlyArray<Deny>;",
+  chars!"}",
+  chars!"",
+  chars!"/** A principal asks to use a permission in a tenant. */",
+  chars!"export interface Request {",
+  chars!"  readonly tenant: string;",
+  chars!"  readonly principal: string;",
+  chars!"  readonly permission: string;",
+  chars!"}",
+  chars!"",
+  chars!"export function inGroup(groups: ReadonlyArray<Membership>, group: string, principal: string): boolean {",
+  chars!"  let found = false;",
+  chars!"  for (const m of groups) {",
+  chars!"    if (m.group === group && m.principal === principal) {",
+  chars!"      found = true;",
+  chars!"    }",
+  chars!"  }",
+  chars!"  return found;",
+  chars!"}",
+  chars!"",
+  chars!"/** The member is the principal itself, or a group that holds the principal. */",
+  chars!"export function isMember(groups: ReadonlyArray<Membership>, member: string, principal: string): boolean {",
+  chars!"  return member === principal || inGroup(groups, member, principal);",
+  chars!"}",
+  chars!"",
+  chars!"export function roleGrants(grants: ReadonlyArray<Grant>, role: string, permission: string): boolean {",
+  chars!"  let found = false;",
+  chars!"  for (const g of grants) {",
+  chars!"    if (g.role === role && g.permission === permission) {",
+  chars!"      found = true;",
+  chars!"    }",
+  chars!"  }",
+  chars!"  return found;",
+  chars!"}",
+  chars!"",
+  chars!"export function bindingAllows(p: Policy, b: Binding, req: Request): boolean {",
+  chars!"  return b.tenant === req.tenant && isMember(p.groups, b.member, req.principal) &&",
+  chars!"    roleGrants(p.grants, b.role, req.permission);",
+  chars!"}",
+  chars!"",
+  chars!"export function denyApplies(p: Policy, d: Deny, req: Request): boolean {",
+  chars!"  return d.tenant === req.tenant && d.permission === req.permission &&",
+  chars!"    isMember(p.groups, d.member, req.principal);",
+  chars!"}",
+  chars!"",
+  chars!"export function allowed(p: Policy, req: Request): boolean {",
+  chars!"  let found = false;",
+  chars!"  for (const b of p.bindings) {",
+  chars!"    if (bindingAllows(p, b, req)) {",
+  chars!"      found = true;",
+  chars!"    }",
+  chars!"  }",
+  chars!"  return found;",
+  chars!"}",
+  chars!"",
+  chars!"export function denied(p: Policy, req: Request): boolean {",
+  chars!"  let found = false;",
+  chars!"  for (const d of p.denies) {",
+  chars!"    if (denyApplies(p, d, req)) {",
+  chars!"      found = true;",
+  chars!"    }",
+  chars!"  }",
+  chars!"  return found;",
+  chars!"}",
+  chars!"",
+  chars!"/** Allow when a binding in the tenant allows, and no deny rule applies. */",
+  chars!"export function permits(p: Policy, req: Request): boolean {",
+  chars!"  return allowed(p, req) && !denied(p, req);",
+  chars!"}",
+  chars!""]
+
+def sourceChars : List Char := tolean.TypeScript.Syntax.joinLines sourceLines
+
+/-- The parser gives `program` for the source: the kernel runs the parser and
+compares the trees. So the theorems below are about the source file, and the
+printer that wrote `program` need not be trusted. -/
+theorem program_parsed : tolean.TypeScript.Syntax.parseChars sourceChars .es2024 = Except.ok program :=
+  tolean.TypeScript.Syntax.parseChars_eq_of_parsesTo (by decide +kernel)
 
 def encodeBinding {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Binding) : Val N := Val.obj [("tenant", Val.str x.tenant), ("role", Val.str x.role), ("member", Val.str x.member)]
 

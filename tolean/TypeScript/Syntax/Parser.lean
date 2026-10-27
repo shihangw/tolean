@@ -1,5 +1,6 @@
 import tolean.TypeScript.Syntax.Ast
 import tolean.TypeScript.Syntax.Lexer
+import tolean.TypeScript.Syntax.Equality
 
 /-!
 The TypeScript parser: recursive descent, with precedence climbing for binary
@@ -24,8 +25,14 @@ namespace tolean.TypeScript.Syntax
 open tolean
 
 structure ParseState where
-  tokens : Array Token
-  i : Nat := 0
+  /-- The tokens that are left to read. The parser reads them from the front,
+  so the kernel runs it in time linear in the tokens, as it does a list. The
+  last token, `eof`, stays. -/
+  rest : List Token
+  /-- The number of tokens in `rest`. -/
+  left : Nat
+  /-- The last token of the file. -/
+  eof : Token
   /-- The end of the last token read: the end of the node being read. -/
   lastStop : Pos := ⟨1, 1⟩
   inFunction : Bool := false
@@ -52,14 +59,17 @@ def typeOperatorWords : List String := ["keyof", "unique", "readonly", "infer", 
 
 def peekAt (k : Nat) : ParseM Token := do
   let s ← get
-  return s.tokens[min (s.i + k) (s.tokens.size - 1)]!
+  return s.rest[k]?.getD s.eof
 
 def peek : ParseM Token := peekAt 0
 
 def advance : ParseM Token := do
   let s ← get
-  let t := s.tokens[s.i]!
-  set { s with i := min (s.i + 1) (s.tokens.size - 1), lastStop := t.span.stop }
+  let t := s.rest.headD s.eof
+  let s := match s.rest with
+    | _ :: rest@(_ :: _) => { s with rest, left := s.left - 1 }
+    | _ => s
+  set { s with lastStop := t.span.stop }
   return t
 
 def skip (count : Nat) : ParseM Unit := do
@@ -70,6 +80,25 @@ def spanFrom (start : Pos) : ParseM Span := do
 
 def failAt {A : Type} (t : Token) (message : String) : ParseM A :=
   throw ({ span := t.span, message } : ParseError)
+
+/-- Fuel for the calls that start here, and for a loop: ten units for each
+token left, and ten more. A loop reads at least one token in each step, and a
+call nests at most a few calls deeper for each token it reads, so the parser
+never uses up its fuel. With fuel, every function of the parser is total, and
+the kernel can run it. -/
+def budget : ParseM Nat := do
+  return 10 * ((← get).left + 1)
+
+/-- The parser used up its fuel, which `budget` rules out. -/
+def outOfFuel {A : Type} : ParseM A := do
+  failAt (← peek) "the parser ran out of fuel"
+
+/-- Run `step` from `state` until it says to stop, and give the last state.
+It is the parser's `repeat`, which the kernel cannot run. -/
+def iterate {σ : Type} (fuel : Nat) (state : σ) (step : σ → ParseM (σ × Bool)) : ParseM σ := do
+  let fuel + 1 := fuel | outOfFuel
+  let (state, again) ← step state
+  if again then iterate fuel state step else return state
 
 /-- Refuse `t` unless the target edition has `f`. -/
 def requireFeature (t : Token) (f : Feature) : ParseM Unit := do
@@ -117,37 +146,37 @@ def withLoop {A : Type} (body : ParseM A) : ParseM A := do
 
 mutual
 
-partial def parseType : ParseM TypeExpr := do
+def parseType (fuel : Nat) : ParseM TypeExpr := do
+  let fuel + 1 := fuel | outOfFuel
   let t ← peek
   let start := t.span.start
   -- `type A = | B` is a union of one member in `tsc`.
   let leading := t.isPunct "|"
   if leading then discard advance
-  let first ← parseArrayType
-  let mut members := #[first]
-  repeat
+  let first ← parseArrayType fuel
+  let members ← iterate (← budget) #[first] fun members => do
     let t ← peek
-    if !t.isPunct "|" then break
+    if !t.isPunct "|" then return (members, false)
     discard advance
-    members := members.push (← parseArrayType)
+    return (members.push (← parseArrayType fuel), true)
   let t ← peek
   if t.isPunct "&" then failAt t "intersection types are not supported"
   if leading || members.size > 1 then return .union (← spanFrom start) members.toList
   return first
 
-partial def parseArrayType : ParseM TypeExpr := do
+def parseArrayType (fuel : Nat) : ParseM TypeExpr := do
+  let fuel + 1 := fuel | outOfFuel
   let start := (← peek).span.start
-  let mut type ← parsePrimaryType
-  repeat
+  iterate (← budget) (← parsePrimaryType fuel) fun type => do
     let t ← peek
     -- `tsc` does not read `T` `[]` across a line break as an array type.
-    if !t.isPunct "[" || t.newlineBefore then break
+    if !t.isPunct "[" || t.newlineBefore then return (type, false)
     unless (← peekAt 1).isPunct "]" do failAt t "indexed access types are not supported"
     skip 2
-    type := .array (← spanFrom start) type
-  return type
+    return (.array (← spanFrom start) type, true)
 
-partial def parsePrimaryType : ParseM TypeExpr := do
+def parsePrimaryType (fuel : Nat) : ParseM TypeExpr := do
+  let fuel + 1 := fuel | outOfFuel
   let t ← advance
   match t.kind with
   | .ident name =>
@@ -158,12 +187,12 @@ partial def parsePrimaryType : ParseM TypeExpr := do
     if refusedNames.contains name then failAt t s!"'{name}' is not supported as a name"
     if !next.isPunct "<" || next.newlineBefore then return .ref t.span name []
     discard advance
-    let mut args := #[]
-    repeat
-      args := args.push (← parseType)
+    let args ← iterate (← budget) #[] fun args => do
+      let args := args.push (← parseType fuel)
       let t ← peek
-      if !t.isPunct "," then break
+      if !t.isPunct "," then return (args, false)
       discard advance
+      return (args, true)
     let _ ← expectPunct ">"
     return .ref (← spanFrom t.span.start) name args.toList
   | .keyword "void" => return .keyword t.span "void"
@@ -174,7 +203,7 @@ partial def parsePrimaryType : ParseM TypeExpr := do
   | .number text => return .literal t.span (.number text)
   | .bigint text => return .literal t.span (.bigint text)
   | .punct "(" =>
-    let inner ← parseType
+    let inner ← parseType fuel
     let _ ← expectPunct ")"
     return .paren (← spanFrom t.span.start) inner
   | _ => unexpected t "a type"
@@ -229,8 +258,7 @@ comparisons, such as `a < b && c > d`; parentheses make them parse. -/
 def refuseTypeArgumentLookalike (lt : Token) : ParseM Unit := do
   let s ← get
   let mut depth := 0
-  for j in [s.i + 1 : s.tokens.size] do
-    let t := s.tokens[j]!
+  for t in s.rest.drop 1 do
     match t.kind with
     | .eof => return
     | .punct "(" | .punct "[" | .punct "{" => depth := depth + 1
@@ -278,15 +306,17 @@ def updateOp? (t : Token) : Option UpdateOp :=
 mutual
 
 /-- An expression where a `,` would be the comma operator. -/
-partial def parseExpression : ParseM Expr := do
-  let expr ← parseAssign
+def parseExpression (fuel : Nat) : ParseM Expr := do
+  let fuel + 1 := fuel | outOfFuel
+  let expr ← parseAssign fuel
   let t ← peek
   if t.isPunct "," then failAt t "the comma operator is not supported"
   return expr
 
-partial def parseAssign : ParseM Expr := do
+def parseAssign (fuel : Nat) : ParseM Expr := do
+  let fuel + 1 := fuel | outOfFuel
   let start := (← peek).span.start
-  let lhs ← parseConditional
+  let lhs ← parseConditional fuel
   let t ← peek
   if t.isPunct "=>" then failAt t "arrow functions are not supported"
   let some (op, width) ← peekAssignOp | return lhs
@@ -296,25 +326,26 @@ partial def parseAssign : ParseM Expr := do
   | .and | .or | .coalesce => requireFeature t .logicalAssignment
   | _ => pure ()
   skip width
-  let value ← parseAssign
+  let value ← parseAssign fuel
   return .assign (← spanFrom start) op lhs value
 
-partial def parseConditional : ParseM Expr := do
+def parseConditional (fuel : Nat) : ParseM Expr := do
+  let fuel + 1 := fuel | outOfFuel
   let start := (← peek).span.start
-  let test ← parseBinary 0
+  let test ← parseBinary fuel 0
   if !(← peek).isPunct "?" then return test
   discard advance
-  let ifTrue ← parseAssign
+  let ifTrue ← parseAssign fuel
   let _ ← expectPunct ":"
-  let ifFalse ← parseAssign
+  let ifFalse ← parseAssign fuel
   return .cond (← spanFrom start) test ifTrue ifFalse
 
-partial def parseBinary (minPrec : Nat) : ParseM Expr := do
+def parseBinary (fuel : Nat) (minPrec : Nat) : ParseM Expr := do
+  let fuel + 1 := fuel | outOfFuel
   let start := (← peek).span.start
-  let mut lhs ← parseUnary
-  repeat
-    let some (op, width) ← peekBinaryOp | break
-    if op.precedence < minPrec then break
+  iterate (← budget) (← parseUnary fuel) fun lhs => do
+    let some (op, width) ← peekBinaryOp | return (lhs, false)
+    if op.precedence < minPrec then return (lhs, false)
     let opToken ← peek
     if op == .exp && (lhs matches .unary ..) then
       failAt opToken "put parentheses around a unary operand of '**'"
@@ -323,29 +354,30 @@ partial def parseBinary (minPrec : Nat) : ParseM Expr := do
     if op == .coalesce then requireFeature opToken .nullishCoalescing
     skip width
     -- `**` is right-associative.
-    let rhs ← parseBinary (if op == .exp then op.precedence else op.precedence + 1)
+    let rhs ← parseBinary fuel (if op == .exp then op.precedence else op.precedence + 1)
     if (op == .coalesce && (lhs.isLogical || rhs.isLogical)) ||
         ((op == .and || op == .or) && (lhs.isCoalesce || rhs.isCoalesce)) then
       failAt opToken "'??' cannot be mixed with '&&' or '||' without parentheses"
-    lhs := .binary (← spanFrom start) op lhs rhs
-  return lhs
+    return (.binary (← spanFrom start) op lhs rhs, true)
 
-partial def parseUnary : ParseM Expr := do
+def parseUnary (fuel : Nat) : ParseM Expr := do
+  let fuel + 1 := fuel | outOfFuel
   let t ← peek
   if let some op := unaryOp? t then
     discard advance
-    let arg ← parseUnary
+    let arg ← parseUnary fuel
     return .unary (← spanFrom t.span.start) op arg
   if let some op := updateOp? t then
     discard advance
-    let arg ← parseLeftHandSide
+    let arg ← parseLeftHandSide fuel
     unless arg.isSimpleTarget do failAt t s!"'{op.symbol}' needs a name, a property or an element"
     return .prefix (← spanFrom t.span.start) op arg
-  parsePostfix
+  parsePostfix fuel
 
-partial def parsePostfix : ParseM Expr := do
+def parsePostfix (fuel : Nat) : ParseM Expr := do
+  let fuel + 1 := fuel | outOfFuel
   let start := (← peek).span.start
-  let arg ← parseLeftHandSide
+  let arg ← parseLeftHandSide fuel
   let t ← peek
   -- No line break may come before a postfix `++` or `--`.
   let some op := updateOp? t | return arg
@@ -354,61 +386,63 @@ partial def parsePostfix : ParseM Expr := do
   discard advance
   return .postfix (← spanFrom start) op arg
 
-partial def parseLeftHandSide : ParseM Expr := do
+def parseLeftHandSide (fuel : Nat) : ParseM Expr := do
+  let fuel + 1 := fuel | outOfFuel
   let start := (← peek).span.start
-  let mut expr ← parsePrimary
-  repeat
+  iterate (← budget) (← parsePrimary fuel) fun expr => do
     let t ← peek
     if t.isPunct "." then
       discard advance
       let name ← readPropertyName
-      expr := .member (← spanFrom start) expr name
+      return (.member (← spanFrom start) expr name, true)
     else if t.isPunct "[" then
       discard advance
-      let idx ← parseExpression
+      let idx ← parseExpression fuel
       let _ ← expectPunct "]"
-      expr := .index (← spanFrom start) expr idx
+      return (.index (← spanFrom start) expr idx, true)
     else if t.isPunct "(" then
       let isAsync := (expr matches .ident _ "async") && !t.newlineBefore
-      let args ← parseArguments
+      let args ← parseArguments fuel
       if isAsync then refuseAsyncArrowLookalike
-      expr := .call (← spanFrom start) expr args
+      return (.call (← spanFrom start) expr args, true)
     else if t.isPunct "?." then failAt t "optional chaining is not supported"
     else if t.isPunct "!" && !t.newlineBefore then
       failAt t "non-null assertions are not supported"
-    else break
-  return expr
+    else return (expr, false)
 
-partial def parseArguments : ParseM (List Expr) := do
+def parseArguments (fuel : Nat) : ParseM (List Expr) := do
+  let fuel + 1 := fuel | outOfFuel
   let _ ← expectPunct "("
-  let mut args := #[]
-  repeat
+  let args ← iterate (← budget) #[] fun args => do
     let t ← peek
-    if t.isPunct ")" then break
+    if t.isPunct ")" then return (args, false)
     if t.isPunct "..." then failAt t "spread arguments are not supported"
-    args := args.push (← parseAssign)
+    let args := args.push (← parseAssign fuel)
     let t ← peek
     if t.isPunct "," then discard advance
     else if !t.isPunct ")" then unexpected t "',' or ')'"
+    return (args, true)
   let _ ← expectPunct ")"
   return args.toList
 
-partial def parseArrayLiteral : ParseM Expr := do
+def parseArrayLiteral (fuel : Nat) : ParseM Expr := do
+  let fuel + 1 := fuel | outOfFuel
   let start := (← expectPunct "[").span.start
-  let mut elems := #[]
-  repeat
+  let elems ← iterate (← budget) #[] fun elems => do
     let t ← peek
-    if t.isPunct "]" then break
+    if t.isPunct "]" then return (elems, false)
     if t.isPunct "," then failAt t "array holes are not supported"
     if t.isPunct "..." then failAt t "spread elements are not supported"
-    elems := elems.push (← parseAssign)
+    let elems := elems.push (← parseAssign fuel)
     let t ← peek
     if t.isPunct "," then discard advance
     else if !t.isPunct "]" then unexpected t "',' or ']'"
+    return (elems, true)
   let _ ← expectPunct "]"
   return .array (← spanFrom start) elems.toList
 
-partial def parseProperty : ParseM Property := do
+def parseProperty (fuel : Nat) : ParseM Property := do
+  let fuel + 1 := fuel | outOfFuel
   let t ← advance
   let start := t.span.start
   let key : PropKey ← match t.kind with
@@ -421,7 +455,7 @@ partial def parseProperty : ParseM Property := do
   let next ← peek
   if next.isPunct ":" then
     discard advance
-    let value ← parseAssign
+    let value ← parseAssign fuel
     return .keyValue (← spanFrom start) key value
   if next.isPunct "," || next.isPunct "}" then
     let .ident name := t.kind | unexpected next "':'"
@@ -430,20 +464,22 @@ partial def parseProperty : ParseM Property := do
   if next.isPunct "(" || next.isPunct "<" then failAt next "methods are not supported"
   unexpected next "':'"
 
-partial def parseObjectLiteral : ParseM Expr := do
+def parseObjectLiteral (fuel : Nat) : ParseM Expr := do
+  let fuel + 1 := fuel | outOfFuel
   let start := (← expectPunct "{").span.start
-  let mut props := #[]
-  repeat
+  let props ← iterate (← budget) #[] fun props => do
     let t ← peek
-    if t.isPunct "}" then break
-    props := props.push (← parseProperty)
+    if t.isPunct "}" then return (props, false)
+    let props := props.push (← parseProperty fuel)
     let t ← peek
     if t.isPunct "," then discard advance
     else if !t.isPunct "}" then unexpected t "',' or '}'"
+    return (props, true)
   let _ ← expectPunct "}"
   return .object (← spanFrom start) props.toList
 
-partial def parsePrimary : ParseM Expr := do
+def parsePrimary (fuel : Nat) : ParseM Expr := do
+  let fuel + 1 := fuel | outOfFuel
   let t ← peek
   match t.kind with
   | .ident _ => return .ident t.span (← readName)
@@ -467,12 +503,12 @@ partial def parsePrimary : ParseM Expr := do
     return .null t.span
   | .punct "(" =>
     discard advance
-    let inner ← parseExpression
+    let inner ← parseExpression fuel
     let _ ← expectPunct ")"
     refuseArrowLookalike
     return .paren (← spanFrom t.span.start) inner
-  | .punct "[" => parseArrayLiteral
-  | .punct "{" => parseObjectLiteral
+  | .punct "[" => parseArrayLiteral fuel
+  | .punct "{" => parseObjectLiteral fuel
   | .keyword word => failAt t s!"'{word}' is not supported in an expression"
   | _ => unexpected t "an expression"
 
@@ -490,11 +526,11 @@ def parseVarDecl : ParseM VarDecl := do
   let mut type := none
   if (← peek).isPunct ":" then
     discard advance
-    type := some (← parseType)
+    type := some (← parseType (← budget))
   let mut init := none
   if (← peek).isPunct "=" then
     discard advance
-    init := some (← parseAssign)
+    init := some (← parseAssign (← budget))
   let t ← peek
   if t.isPunct "," then failAt t "declare one variable per statement"
   if kind == .const && init.isNone then failAt keyword "a 'const' needs a value"
@@ -509,11 +545,12 @@ def refuseDeclaration (t : Token) : ParseM Unit := do
 
 mutual
 
-partial def parseStatement : ParseM Stmt := do
+def parseStatement (fuel : Nat) : ParseM Stmt := do
+  let fuel + 1 := fuel | outOfFuel
   let t ← peek
   let start := t.span.start
   match t.kind with
-  | .punct "{" => parseBlock
+  | .punct "{" => parseBlock fuel
   | .punct ";" =>
     discard advance
     return .empty t.span
@@ -523,21 +560,21 @@ partial def parseStatement : ParseM Stmt := do
   | .keyword "if" =>
     discard advance
     let _ ← expectPunct "("
-    let test ← parseExpression
+    let test ← parseExpression (← budget)
     let _ ← expectPunct ")"
-    let thenBranch ← parseBranch
+    let thenBranch ← parseBranch fuel
     let mut elseBranch := none
     if (← peek).isKeyword "else" then
       discard advance
-      elseBranch := some (← parseBranch)
+      elseBranch := some (← parseBranch fuel)
     return .ifStmt (← spanFrom start) test thenBranch elseBranch
-  | .keyword "for" => parseForOf
+  | .keyword "for" => parseForOf fuel
   | .keyword "while" =>
     discard advance
     let _ ← expectPunct "("
-    let test ← parseExpression
+    let test ← parseExpression (← budget)
     let _ ← expectPunct ")"
-    let body ← withLoop parseBranch
+    let body ← withLoop (parseBranch fuel)
     return .whileStmt (← spanFrom start) test body
   | .keyword "return" =>
     discard advance
@@ -545,7 +582,7 @@ partial def parseStatement : ParseM Stmt := do
     let next ← peek
     let mut value := none
     if !(next.isPunct ";" || next.isPunct "}" || next.isEof || next.newlineBefore) then
-      value := some (← parseExpression)
+      value := some (← parseExpression (← budget))
     endStatement
     return .returnStmt (← spanFrom start) value
   | .keyword "break" | .keyword "continue" =>
@@ -557,22 +594,25 @@ partial def parseStatement : ParseM Stmt := do
     let span ← spanFrom start
     return if t.isKeyword "break" then .breakStmt span else .continueStmt span
   | .keyword "true" | .keyword "false" | .keyword "null" | .keyword "typeof"
-  | .keyword "void" => parseExpressionStatement
+  | .keyword "void" => parseExpressionStatement fuel
   | .keyword word => failAt t s!"'{word}' is not supported here"
-  | _ => parseExpressionStatement
+  | _ => parseExpressionStatement fuel
 
 /-- The body of `if`, `else`, `for` or `while`. -/
-partial def parseBranch : ParseM Stmt := do
+def parseBranch (fuel : Nat) : ParseM Stmt := do
+  let fuel + 1 := fuel | outOfFuel
   refuseDeclaration (← peek)
-  parseStatement
+  parseStatement fuel
 
-partial def parseExpressionStatement : ParseM Stmt := do
+def parseExpressionStatement (fuel : Nat) : ParseM Stmt := do
+  let _ + 1 := fuel | outOfFuel
   let start := (← peek).span.start
-  let expr ← parseExpression
+  let expr ← parseExpression (← budget)
   endStatement
   return .exprStmt (← spanFrom start) expr
 
-partial def parseForOf : ParseM Stmt := do
+def parseForOf (fuel : Nat) : ParseM Stmt := do
+  let fuel + 1 := fuel | outOfFuel
   let start := (← advance).span.start
   let t ← peek
   if t.isIdent "await" then failAt t "'for await' is not supported"
@@ -588,19 +628,19 @@ partial def parseForOf : ParseM Stmt := do
   let t ← peek
   unless t.isIdent "of" do failAt t "tolean supports only 'for … of' loops"
   discard advance
-  let iterable ← parseAssign
+  let iterable ← parseAssign (← budget)
   let _ ← expectPunct ")"
-  let body ← withLoop parseBranch
+  let body ← withLoop (parseBranch fuel)
   return .forOfStmt (← spanFrom start) kind name iterable body
 
-partial def parseBlock : ParseM Stmt := do
+def parseBlock (fuel : Nat) : ParseM Stmt := do
+  let fuel + 1 := fuel | outOfFuel
   let start := (← expectPunct "{").span.start
-  let mut body := #[]
-  repeat
+  let body ← iterate (← budget) #[] fun body => do
     let t ← peek
-    if t.isPunct "}" then break
+    if t.isPunct "}" then return (body, false)
     if t.isEof then unexpected t "'}'"
-    body := body.push (← parseStatement)
+    return (body.push (← parseStatement fuel), true)
   let _ ← expectPunct "}"
   return .block (← spanFrom start) body.toList
 
@@ -619,7 +659,7 @@ def parseParam : ParseM Param := do
   let mut type := none
   if next.isPunct ":" then
     discard advance
-    type := some (← parseType)
+    type := some (← parseType (← budget))
   let next ← peek
   if next.isPunct "=" then failAt next "default values are not supported"
   return { span := ← spanFrom t.span.start, name, type }
@@ -632,23 +672,23 @@ def parseFunction (start : Pos) (exported : Bool) : ParseM Decl := do
   let t ← peek
   if t.isPunct "<" then failAt t "generic functions are not supported"
   let _ ← expectPunct "("
-  let mut params := #[]
-  repeat
+  let params ← iterate (← budget) #[] fun params => do
     let t ← peek
-    if t.isPunct ")" then break
-    params := params.push (← parseParam)
+    if t.isPunct ")" then return (params, false)
+    let params := params.push (← parseParam)
     let t ← peek
     if t.isPunct "," then discard advance
     else if !t.isPunct ")" then unexpected t "',' or ')'"
+    return (params, true)
   let _ ← expectPunct ")"
   let mut returnType := none
   if (← peek).isPunct ":" then
     discard advance
-    returnType := some (← parseType)
+    returnType := some (← parseType (← budget))
   let t ← peek
   unless t.isPunct "{" do unexpected t "'{' (a function needs a body)"
   modify fun s => { s with inFunction := true }
-  let body ← parseBlock
+  let body ← parseBlock (← budget)
   modify fun s => { s with inFunction := false }
   return .function (← spanFrom start) exported name params.toList returnType body
 
@@ -666,7 +706,7 @@ def parseField : ParseM Field := do
   if next.isPunct "(" || next.isPunct "<" then failAt next "method signatures are not supported"
   unless next.isPunct ":" do unexpected next "':' (a field needs a type)"
   discard advance
-  let type ← parseType
+  let type ← parseType (← budget)
   let next ← peek
   if next.isPunct ";" || next.isPunct "," then discard advance
   else if !(next.isPunct "}" || next.newlineBefore) then unexpected next "';' or ','"
@@ -679,12 +719,11 @@ def parseInterface (start : Pos) (exported : Bool) : ParseM Decl := do
   if t.isPunct "<" then failAt t "generic interfaces are not supported"
   if t.isKeyword "extends" then failAt t "'extends' is not supported"
   let _ ← expectPunct "{"
-  let mut fields := #[]
-  repeat
+  let fields ← iterate (← budget) #[] fun fields => do
     let t ← peek
-    if t.isPunct "}" then break
+    if t.isPunct "}" then return (fields, false)
     if t.isEof then unexpected t "'}'"
-    fields := fields.push (← parseField)
+    return (fields.push (← parseField), true)
   let _ ← expectPunct "}"
   return .interface (← spanFrom start) exported name fields.toList
 
@@ -694,7 +733,7 @@ def parseTypeAlias (start : Pos) (exported : Bool) : ParseM Decl := do
   let t ← peek
   if t.isPunct "<" then failAt t "generic type aliases are not supported"
   let _ ← expectPunct "="
-  let type ← parseType
+  let type ← parseType (← budget)
   endStatement
   return .typeAlias (← spanFrom start) exported name type
 
@@ -716,22 +755,66 @@ def parseDecl : ParseM Decl := do
       failAt t "tolean supports 'export' only of a function, an interface, a type or a variable"
     let decl ← parseVarDecl
     return .exportedVar (← spanFrom start) decl
-  else return .stmt (← parseStatement)
+  else return .stmt (← parseStatement (← budget))
 
 def parseModule : ParseM Module := do
-  let mut decls := #[]
-  repeat
-    if (← peek).isEof then break
-    decls := decls.push (← parseDecl)
+  let decls ← iterate (← budget) #[] fun decls => do
+    if (← peek).isEof then return (decls, false)
+    return (decls.push (← parseDecl), true)
   return { decls := decls.toList }
 
 end Parse
 
-/-- Parse a TypeScript module, refusing syntax newer than `target`. -/
-def parse (source : String) (target : Edition := .default) : Except ParseError Module := do
-  let tokens ← lex source target
-  match Parse.parseModule.run { tokens, target } with
+/-- Parse the tokens of a TypeScript module, refusing syntax newer than
+`target`. The last token is `eof`. -/
+def parseTokens (tokens : List Token) (target : Edition := .default) : Except ParseError Module :=
+  let eof := tokens.getLastD { kind := .eof, span := ⟨⟨1, 1⟩, ⟨1, 1⟩⟩, newlineBefore := false }
+  match Parse.parseModule.run { rest := tokens, left := tokens.length, eof, target } with
   | .ok m _ => .ok m
   | .error e _ => .error e
+
+/-- Parse the characters of a TypeScript module, refusing syntax newer than
+`target`. The kernel runs this in time linear in the source. -/
+def parseChars (chars : List Char) (target : Edition := .default) : Except ParseError Module := do
+  parseTokens (← lexChars chars target).toList target
+
+open Lean in
+/-- `chars!"ab"` is `['a', 'b']`. Lean reads the string literal as its
+characters when it elaborates the file.
+
+A certificate writes its source this way, so that it reads as the source and
+the kernel never reads a `String`. When the kernel reduces `String.toList` on
+a string literal, it takes time quadratic in the length of the literal
+(https://github.com/leanprover/lean4/issues/16012). The kernel encodes the
+characters as UTF-8 bytes and decodes them again, and it reads an `Array` as
+a list, so each step of that loop takes linear time. A 2.7 KB source did not
+finish in five minutes. -/
+macro "chars!" s:str : term => do
+  let cs : Array (TSyntax `term) := s.getString.toList.toArray.map fun c => ⟨Syntax.mkCharLit c⟩
+  `(([$cs,*] : List Char))
+
+/-- The characters of `lines`, with a line break between two lines. -/
+def joinLines : List (List Char) → List Char
+  | [] => []
+  | [line] => line
+  | line :: rest => line ++ '\n' :: joinLines rest
+
+/-- The parser gives `m` for the characters `chars`. The kernel can decide this,
+and a certificate does, with `parseChars_eq_of_parsesTo`. -/
+def parsesTo (chars : List Char) (target : Edition) (m : Module) : Bool :=
+  match parseChars chars target with
+  | .ok m' => Module.beq m' m
+  | .error _ => false
+
+theorem parseChars_eq_of_parsesTo {chars : List Char} {target : Edition} {m : Module}
+    (h : parsesTo chars target m = true) : parseChars chars target = .ok m := by
+  unfold parsesTo at h
+  split at h
+  · next m' hm => rw [hm, (Module.beq_iff m' m).mp h]
+  · simp at h
+
+/-- Parse a TypeScript module, refusing syntax newer than `target`. -/
+def parse (source : String) (target : Edition := .default) : Except ParseError Module :=
+  parseChars source.toList target
 
 end tolean.TypeScript.Syntax

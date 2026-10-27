@@ -314,11 +314,12 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
   return "\n".intercalate ([
     s!"-- Certificate written by tolean for {file}. Do not edit.",
     "import tolean.TypeScript.Spec.Lemmas.Eval",
+    "import tolean.TypeScript.Syntax.Parser",
     s!"import {leanModule}",
     "",
     s!"namespace {certNs}",
     "",
-    "open tolean.TypeScript tolean.TypeScript.Eval",
+    "open tolean.TypeScript tolean.TypeScript.Eval tolean.TypeScript.Syntax",
     "",
     "-- The proofs pass the same lemmas everywhere, so some go unused.",
     "set_option linter.unusedSimpArgs false",
@@ -326,6 +327,18 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     "",
     "/-- The program, as the parser read it. -/",
     s!"def program : tolean.TypeScript.Syntax.Module :=\n  {module m}",
+    "",
+    "/-- The source file, one line at a time. -/",
+    s!"def sourceLines : List (List Char) := [\n  " ++
+      ",\n  ".intercalate ((source.splitOn "\n").map fun line => s!"chars!{str line}") ++ "]",
+    "",
+    "def sourceChars : List Char := tolean.TypeScript.Syntax.joinLines sourceLines",
+    "",
+    "/-- The parser gives `program` for the source: the kernel runs the parser and",
+    "compares the trees. So the theorems below are about the source file, and the",
+    "printer that wrote `program` need not be trusted. -/",
+    s!"theorem program_parsed : tolean.TypeScript.Syntax.parseChars sourceChars .{target.name.toLower} = Except.ok program :=",
+    "  tolean.TypeScript.Syntax.parseChars_eq_of_parsesTo (by decide +kernel)",
     ""] ++ encs.toList.map (· ++ "\n") ++ thms.toList.map (· ++ "\n") ++ [s!"end {certNs}", ""])
 
 /-- The functions of `source` that get a certificate, and whether that is all

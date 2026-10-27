@@ -109,11 +109,12 @@ and records it in the manifest. Without `--certify`, `translate` writes only
 the translation. In a project file, `"certify": true` asks for the same.
 
 The command does not need to be trusted. If it writes a wrong encoding or a
-wrong theorem, Lean refuses the file. A certified file trusts the parser, the
-interpreter, and the printer that writes the syntax tree as a Lean term,
-instead of the translator. With `--manifest`, the chain records this: the
-translator link becomes `proved`, and `chain trust` lists the interpreter
-and the printer in its place.
+wrong theorem, Lean refuses the file. The certificate also holds the
+characters of the source, and it proves that the parser gives its program for
+them: the kernel runs the parser on the characters and compares the trees. So
+a certified file trusts the parser and the interpreter, instead of the
+translator. With `--manifest`, the chain records this: the translator link
+becomes `proved`, and so does the parse.
 
 Every function of the subset can get a certificate. A `number` is a value of
 the abstract model `JSNumber N` in the interpreter, as it is in the

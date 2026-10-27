@@ -8,13 +8,13 @@ Unicode code points, not bytes or UTF-16 units. -/
 structure Pos where
   line : Nat
   col : Nat
-deriving Repr, BEq, Inhabited
+deriving Repr, BEq, DecidableEq, Inhabited
 
 /-- From the first character of a node to the position just after its last. -/
 structure Span where
   start : Pos
   stop : Pos
-deriving Repr, BEq, Inhabited
+deriving Repr, BEq, DecidableEq, Inhabited
 
 def Span.render (s : Span) : String :=
   s!"{s.start.line}:{s.start.col}-{s.stop.line}:{s.stop.col}"
@@ -22,7 +22,7 @@ def Span.render (s : Span) : String :=
 structure ParseError where
   span : Span
   message : String
-deriving Repr, Inhabited
+deriving Repr, DecidableEq, Inhabited
 
 /-- `file:line:col: message`, the form editors and CI logs link. -/
 def ParseError.render (e : ParseError) (file : String) : String :=
