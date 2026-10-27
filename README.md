@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/images/banner.webp" alt="Tolean banner: Tulie the dragon carries TypeScript, Go and SQL code through a proved translator into a Lean 4 theorem" width="100%">
+</p>
+
 # Tolean
 
 Tolean translates source code into Lean 4, so that proofs about a program are
@@ -447,3 +451,14 @@ code.
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE).
+
+## Meet Tulie
+
+Tulie is Tolean's mascot, a small dragon. In the banner, Tulie carries code
+through the proved translator and holds up the Lean 4 that comes out. The
+sheet below shows Tulie asleep, holding a crystal, reading a book of λ, and
+chasing a butterfly.
+
+<p align="center">
+  <img src="docs/images/tulie.webp" alt="Tulie the dragon in nine poses: sitting, asleep, holding a crystal, reading, flying, looking back, watching a butterfly, smiling, and hugging a λ egg" width="640">
+</p>
