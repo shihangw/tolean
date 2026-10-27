@@ -563,14 +563,13 @@ def translateCall (fuel : Nat) (env : Env) (s : Span) (callee : Expr) (args : Li
       unless a.type == .number do
         reject arg.span s!"Number.{test} needs a number operand (narrow a nullable value first)"
       return ⟨.numberTest form a.value, false, .boolean⟩
-  let noCall {A : Type} : TM A :=
-    reject s "calls may name only functions declared earlier in this file (no recursion)"
+  let noCallMessage := "calls may name only functions declared earlier in this file (no recursion)"
+  let noCall {A : Type} : TM A := reject s noCallMessage
   let .ident _ name := callee | noCall
   let ctx ← get
   if (name == "isNaN" || name == "isFinite") && !ctx.functions.any (·.name == name) then
     reject s s!"the global {name} converts its argument to a number; use Number.{name}"
-  let fn ← orReject (ctx.functions.find? (·.name == name)) s
-    "calls may name only functions declared earlier in this file (no recursion)"
+  let fn ← orReject (ctx.functions.find? (·.name == name)) s noCallMessage
   if env.has name then noCall
   unless fn.params.length == args.length do reject s s!"'{name}' takes {fn.params.length} arguments"
   let values ← (args.zip fn.params).mapM fun (arg, paramType) => do
@@ -584,11 +583,9 @@ def translateObject (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (
     TM Code := do
   let fuel + 1 := fuel | tooDeep
   let ctx ← get
-  let notStruct {A : Type} : TM A :=
-    reject s "an object literal must build an interface declared in this file"
-  let some (.struct structName) := expected | notStruct
-  let info ← orReject (ctx.structs.find? (·.name == structName)) s
-    "an object literal must build an interface declared in this file"
+  let notStructMessage := "an object literal must build an interface declared in this file"
+  let some (.struct structName) := expected | reject s notStructMessage
+  let info ← orReject (ctx.structs.find? (·.name == structName)) s notStructMessage
   -- The keys seen so far, and the fields translated so far.
   let (seen, parts) ← props.foldlM (init := (([] : List String), ([] : List (String × Output.Expr))))
     fun (seen, parts) p => do

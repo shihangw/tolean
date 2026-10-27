@@ -507,20 +507,6 @@ theorem eval_binary (sp : Span) (op : BinOp) (l r : Expr) (ρ : Eval.Env N) (hop
   cases op <;> simp [BinOp.strict] at hop <;> rw [Eval.eval] <;>
     first | rfl | (intro hc; cases hc)
 
-/-- A binary expression whose code takes the operands' values to what
-`Eval.binary` gives for them. -/
-theorem binary_general {env : Translate.Env} {sp : Span} {op : BinOp} {l r : Expr} {a b : Code}
-    {out : Output.Expr} (hop : op.strict = true)
-    (hl : Sim (N := N) m fs fuel env l a.code) (hr : Sim (N := N) m fs fuel env r b.code)
-    (hout : ∀ (ρo : Eval.Env N) v, Output.Expr.eval fs fuel ρo out = some v →
-      ∃ va vb, Output.Expr.eval fs fuel ρo a.code = some va ∧
-        Output.Expr.eval fs fuel ρo b.code = some vb ∧ Eval.binary op va vb = some v) :
-    Sim (N := N) m fs fuel env (.binary sp op l r) out := by
-  intro ρs ρo v ha hs hv
-  obtain ⟨va, vb, hva, hvb, hbin⟩ := hout ρo v hv
-  rw [eval_binary m fuel sp op l r ρs hop, hl ρs ρo va ha hs hva, hr ρs ρo vb ha hs hvb]
-  exact hbin
-
 theorem isNull_eq_true {e : Expr} (h : e.isNull = true) : ∃ s, e = .null s := by
   cases e <;> simp [Expr.isNull] at h ⊢
 

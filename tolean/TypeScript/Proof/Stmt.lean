@@ -1,4 +1,5 @@
 import tolean.TypeScript.Proof.Expr
+import tolean.TypeScript.Spec.Lemmas.Eval
 
 /-!
 The translation of a statement list means what the statements mean.
@@ -118,18 +119,6 @@ theorem Frame.split : ∀ {ρ' a b : Eval.Env N}, Frame c ρ' (a ++ b) →
 
 /-! ### Environments -/
 
-theorem lookup_set_self {n : String} {v : Val N} :
-    ∀ {ρ : Eval.Env N}, (ρ.lookup n).isSome → (ρ.set n v).lookup n = some v
-  | [], h => by simp at h
-  | (k, w) :: ρ, h => by
-    simp only [Eval.Env.set]
-    by_cases hk : k = n
-    · subst hk; simp
-    · have hkn : (k == n) = false := by simpa using hk
-      have hnk : (n == k) = false := by simpa using Ne.symm hk
-      simp only [List.lookup, hnk] at h
-      simp [hkn, List.lookup, hnk, lookup_set_self h]
-
 theorem has_add (env : Translate.Env) (l : Local) (x : String) :
     (env.add l).has x = (env.has x || l.name == x) := by
   simp only [Env.has, Env.lookup, Env.add, List.find?_append]
@@ -211,7 +200,7 @@ theorem agree_set {ρs ρo : Eval.Env N} {n : String} {w : Val N} (ha : Agree ρ
     (hn : (ρs.lookup n).isSome) : Agree (ρs.set n w) ((n, w) :: ρo) := by
   intro x
   by_cases hx : x = n
-  · subst hx; rw [lookup_set_self hn]; simp
+  · subst hx; rw [Eval.Env.lookup_set_same _ _ _ hn]; simp
   · rw [Frame.lookup (c := [n]) (by simpa using hx) (Frame.set (by simp) ρs)]
     have : (x == n) = false := by simpa using hx
     simp [List.lookup, this, ha x]

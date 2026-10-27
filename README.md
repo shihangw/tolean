@@ -389,7 +389,7 @@ links for each claim.
 | Link | TypeScript | Go | PostgreSQL |
 |---|---|---|---|
 | Parser | Tested: the trees equal `tsc`'s, on the corpus and on random programs | Tested: the trees equal `go/parser`'s | Tested through the two translators' checks; no reference parser yet |
-| Translator | **Proved** up to the printer: for every program it accepts, the output tree computes only what the interpreter computes. The printer from the tree to text is tested: the corpus output is fixed and compiled, and so is the output for random programs. **Proved** in full for a file with a [certificate](docs/typescript/README.md#certificates) | Tested: the corpus output is fixed and compiled | Tested: the results agree with PostgreSQL 18 on generated scenarios |
+| Translator | **Proved** up to the printer: for every program it accepts, when the output tree's evaluator gives a value, the interpreter gives the same value. The printer link, that the printed Lean computes what the evaluator gives, is trusted. Tests check it: the corpus output is fixed and compiled, and so is the output for random programs. **Proved** in full for a file with a [certificate](docs/typescript/README.md#certificates) | Tested: the corpus output is fixed and compiled | Tested: the results agree with PostgreSQL 18 on generated scenarios |
 | Value model (the spec that generated code imports) | Tested: the number laws hold on every maintained Node release line | Trusted, not tested yet: `int64` wrapping and errors | Tested: values, errors and three-valued logic agree with PostgreSQL 18 |
 | Concurrency model | None: the subset is single-threaded | None: no goroutines | The READ COMMITTED model is tested on the server, and its theorems are **proved** |
 | Claims about the generated code | **Proved** | **Proved** | **Proved** |
@@ -446,7 +446,8 @@ code.
   JavaScript interpreter in Lean returns, for every input. Certificates cover
   the whole subset, loops and `number` values included. Tolean now also proves
   the translator once, for all programs, up to the printer that writes its
-  output tree as text. A file without a certificate trusts only that printer.
+  output tree as text. A file without a certificate trusts that printer link:
+  the printed Lean computes what the evaluator of the output tree gives.
 
 ## License
 

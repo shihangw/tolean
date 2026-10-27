@@ -79,15 +79,6 @@ theorem params_fold {α : Type} {g : Env × List (String × α) × List Ty → P
     · have : (x == p.name) = false := by simpa using hx
       simp [this, hx]
 
-theorem declareTopLevel_ok {sp : Span} {name : String} {s s' : Ctx} {u : Unit}
-    (h : declareTopLevel sp name s = .ok u s') : s' = s := by
-  simp only [declareTopLevel, bind_ok, get_ok, ite_state] at h
-  obtain ⟨c, s₁, ⟨rfl, rfl⟩, h⟩ := h
-  split at h
-  · simp at h
-  · simp only [pure_ok] at h
-    exact h.2.symm
-
 theorem function_rel {sp : Span} {name : String} {params : List Param} {ret : Option TypeExpr}
     {body : Stmt} {ctx ctx' : Ctx} {o : Output.Decl}
     (h : translateFunction sp name params ret body ctx = .ok o ctx') :
@@ -176,15 +167,11 @@ theorem lookup_rel :
       exact lookup_rel hrest h
   | [], _ :: _, h, _, _, _, _ | _ :: _, [], h, _, _, _, _ => h.elim
 
-theorem lookup_isSome {β : Type} (x : String) :
-    ∀ l : List (String × β), (l.lookup x).isSome = decide (x ∈ l.map Prod.fst)
-  | [] => rfl
-  | (k, v) :: l => by
-    simp only [List.lookup]
-    by_cases hk : x = k
-    · subst hk; simp
-    · have : (x == k) = false := by simpa using hk
-      simp [this, hk, lookup_isSome x l]
+theorem lookup_isSome {β : Type} (x : String) (l : List (String × β)) :
+    (l.lookup x).isSome = decide (x ∈ l.map Prod.fst) := by
+  rw [Bool.eq_iff_iff, List.lookup_isSome_iff]
+  simp only [decide_eq_true_eq, List.mem_map, beq_iff_eq]
+  exact ⟨fun ⟨p, hp, h⟩ => ⟨p, hp, h.symm⟩, fun ⟨p, hp, h⟩ => ⟨p, hp, h.symm⟩⟩
 
 variable {N : Type} [JSNumber N]
 

@@ -118,7 +118,9 @@ where
       if scale > 20 then (if m == 0 then some 0 else none) else some (m * 10 ^ scale.toNat)
     else
       let k := (-scale).toNat
-      if k > 400 then none else if m % 10 ^ k == 0 then some (m / 10 ^ k : Nat) else none
+      -- A long fraction of zeros is still zero.
+      if m == 0 then some 0
+      else if k > 400 then none else if m % 10 ^ k == 0 then some (m / 10 ^ k : Nat) else none
 
 /-- `IsStrictlyEqual` (ECMA-262 §7.2.15) on primitive values, and between
 `null` and any value. Values of different types are not equal, so `null` is

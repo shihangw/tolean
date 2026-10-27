@@ -73,8 +73,10 @@ it evaluates the tree over the interpreter's values. The theorem
 accepts a file, a function of the output tree gives a value only when the
 interpreter gives the same value for the same call. It holds for every input,
 every model of numbers and every amount of fuel. The theorem does not assume
-that the types the translator gives are right. It is about the tree, so the
-printer that writes the tree as text is still trusted, and the corpus tests it.
+that the types the translator gives are right. It is about the tree, so we
+still trust the printer link: the printed Lean computes what the evaluator
+gives for the tree, and the evaluator gives a value where the printed Lean
+does. The corpus tests the printer.
 
 `tests/typescript/checkTranslate.ts` checks the translator. No second
 translator checks its meaning, so these checks show that the output does not
@@ -372,7 +374,7 @@ path = "node_modules/tolean/lean"
 | Step | What happens | Status | How it is checked |
 |---|---|---|---|
 | 1. Parse and type-check | Tolean's parser reads the source, and the translator types the subset itself | Trusted, tested | `tests/typescript/check.ts` compares the parser's syntax trees with `tsc`'s, on the corpus and on random programs. The type checker is tested through the translation corpus. |
-| 2. Translate | Tolean writes readable Lean definitions (the generated `.lean` files) | **Proved** up to the printer | `translate_sound` proves the translation to the output tree for every accepted program. The printer that writes the tree as text is trusted. The golden files of the corpus, compiling random programs and the CI drift check test it, and a [certificate](#certificates) proves the whole step for one file. |
+| 2. Translate | Tolean writes readable Lean definitions (the generated `.lean` files) | **Proved** up to the printer | `translate_sound` proves the translation to the output tree for every accepted program: when the tree's evaluator gives a value, the interpreter gives the same value. The printer link is trusted: that the printed Lean computes what the evaluator gives for the tree, and that the evaluator gives a value where the printed Lean does. The golden files of the corpus, compiling random programs and the CI drift check test it, and a [certificate](#certificates) proves the whole step for one file. |
 | 3. Prove the claims | Hand-written proofs show that each claim in `Spec/*.lean` holds for the generated definitions | **Proved** | The Lean kernel, `#audit_claims`, `lake build --wfail`, and no `sorry`, `admit`, `axiom` or `native_decide` |
 | 4. Assume JS number facts | `SafeIntLaws` and `SpecialValueLaws` in `tolean/TypeScript/Spec/Number.lean` | Trusted, tested | `tests/typescript/jsNumberLaws.test.ts` checks each law against real doubles. |
 | 5. Run | Type stripping or a bundler makes the JavaScript that Node runs | Trusted | The subset uses only constructs that type stripping leaves unchanged |
@@ -391,5 +393,5 @@ below removes the printer from what we trust, and it tests the interpreter:
 | Printer link | For each file, a proof that the printed definitions compute what the output tree means. With the translator's theorem, every file is then proved. | Not started |
 | `eval`, a JS interpreter in Lean | The meaning of a `Program`. It is trusted, so it is tested against Node. | Started: `tolean/TypeScript/Spec/Eval.lean` covers the subset, with `number` values from the abstract model; the test against Node is not started |
 | Construct lemmas | Proved once, for example: an interpreted `for…of` equals `List.foldl` | Built: `execLoop_foldl` in `tolean/TypeScript/Spec/Lemmas/Eval.lean` |
-| Per-file certificate (`f.source`) | Proves `eval(Program)` equals the generated definition, for all inputs. Step 2 is then proved. | Built for the whole subset. All 31 accepted corpus files have one. |
+| Per-file certificate (`f.source`) | Proves `eval(Program)` equals the generated definition, for all inputs. Step 2 is then proved. | Built for the whole subset. All 29 accepted corpus files have one. |
 | Boundary guards | Check the preconditions of step 6 where callers enter the verified code | Not started |
