@@ -26,5 +26,5 @@ for f in corpus/translate/accept/*.ts; do
   fi
   proved=$((proved + 1))
 done
-echo "certify: $proved files proved, $skipped files without a certificate yet (number, or not translated)"
+echo "certify: $proved files proved, $skipped files without a certificate (not translated)"
 [ "$proved" -gt 0 ] || { echo "FAIL: no file was certified"; exit 1; }

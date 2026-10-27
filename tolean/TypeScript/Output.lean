@@ -269,7 +269,8 @@ def Expr.print (names : Names) : Expr → String
   | .ite c a b => s!"(if {c.print names} then {a.print names} else {b.print names})"
   | .call name args =>
     let name := names.namespacePrefix ++ name
-    let head := if names.usesNumber then [name, s!"(N := {names.numberVar})"] else [name]
+    -- The function binds the number type under its own name, `N` or a fresh one.
+    let head := if names.usesNumber then [name, s!"({names.numberVar} := {names.numberVar})"] else [name]
     "(" ++ " ".intercalate (head ++ (Expr.printList names args).map argument) ++ ")"
   | .list elems elem =>
     s!"([{", ".intercalate (Expr.printList names elems)}] : {(Ty.list elem).print names})"

@@ -28,8 +28,8 @@ the function uses it as a rewrite rule. To be usable that way, the lemma reads
 the loop's starting state, and the other variables that the body reads, back
 out of the environment with decoders.
 
-A function gets a certificate when it and every function it calls have no
-`number` values.
+A `number` is a value of the abstract model `JSNumber N`, in the
+interpreter as in the translation, so every theorem holds for every `N`.
 -/
 namespace tolean.TypeScript.Certify
 
@@ -38,6 +38,7 @@ open tolean tolean.TypeScript.Syntax
 /-- How a value of a TypeScript type becomes a `Val`, as a Lean function. -/
 partial def encoder : TypeExpr → Option String
   | .keyword _ "bigint" => some "Val.int"
+  | .keyword _ "number" => some "Val.num"
   | .keyword _ "boolean" => some "Val.bool"
   | .keyword _ "string" => some "Val.str"
   | .paren _ t => encoder t
@@ -48,7 +49,7 @@ partial def encoder : TypeExpr → Option String
     return s!"(encNull {inner})"
   | .array _ t => do return s!"(encList {← encoder t})"
   | .ref _ "Array" [t] | .ref _ "ReadonlyArray" [t] => do return s!"(encList {← encoder t})"
-  | .ref _ name [] => some s!"enc{name}"
+  | .ref _ name [] => some s!"encode{name}"
   | _ => none
 
 /-- How a value of a Lean type of the output becomes a `Val`, as `encoder`
@@ -59,8 +60,9 @@ def encoderOf : Output.Ty → Option String
   | .string => some "Val.str"
   | .option t => do return s!"(encNull {← encoderOf t})"
   | .list t => do return s!"(encList {← encoderOf t})"
-  | .struct name => some s!"enc{name}"
-  | .null | .number => none
+  | .struct name => some s!"encode{name}"
+  | .number => some "Val.num"
+  | .null => none
 
 /-- How a variable's value becomes a Lean value of type `t` again. -/
 def decoderOf : Output.Ty → Option String
@@ -69,16 +71,9 @@ def decoderOf : Output.Ty → Option String
   | .string => some "decStr"
   | .option t => do return s!"(decNull {← decoderOf t})"
   | .list t => do return s!"(decList {← decoderOf t})"
-  | .struct name => some s!"dec{name}"
-  | .null | .number => none
-
-/-- The source uses the abstract number model: `NaN`, `Infinity` or `Number`. -/
-def usesNumberNames (source : String) (target : Edition) : Bool :=
-  match lex source target with
-  | .ok tokens => tokens.any fun (t : Token) => match t.kind with
-    | .ident n => n == "NaN" || n == "Infinity" || n == "Number"
-    | _ => false
-  | .error _ => true
+  | .struct name => some s!"decode{name}"
+  | .number => some "decNum"
+  | .null => none
 
 /-- The statements of a function body, with nested ones. -/
 partial def stmtsOf : Stmt → List Stmt
@@ -98,45 +93,36 @@ partial def exprCalls : Expr → List String
   | .object _ ps => ps.flatMap fun | .keyValue _ _ v => exprCalls v | _ => []
   | _ => []
 
+/-- The text of each number literal in `e`. -/
+partial def exprNumbers : Expr → List String
+  | .number _ t => [t]
+  | .call _ c args => exprNumbers c ++ args.flatMap exprNumbers
+  | .paren _ e | .member _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e => exprNumbers e
+  | .index _ a b | .binary _ _ a b | .assign _ _ a b => exprNumbers a ++ exprNumbers b
+  | .cond _ a b c => exprNumbers a ++ exprNumbers b ++ exprNumbers c
+  | .array _ es => es.flatMap exprNumbers
+  | .object _ ps => ps.flatMap fun | .keyValue _ _ v => exprNumbers v | _ => []
+  | _ => []
+
+def stmtNumbers : Stmt → List String
+  | .varDecl _ d => (d.init.map exprNumbers).getD []
+  | .exprStmt _ e | .ifStmt _ e _ _ | .whileStmt _ e _ | .forOfStmt _ _ _ e _ => exprNumbers e
+  | .returnStmt _ e => (e.map exprNumbers).getD []
+  | _ => []
+
 def stmtCalls : Stmt → List String
   | .varDecl _ d => (d.init.map exprCalls).getD []
   | .exprStmt _ e | .ifStmt _ e _ _ | .whileStmt _ e _ | .forOfStmt _ _ _ e _ => exprCalls e
   | .returnStmt _ e => (e.map exprCalls).getD []
   | _ => []
 
-partial def typeHasNumber : TypeExpr → Bool
-  | .keyword _ "number" => true
-  | .paren _ t | .array _ t => typeHasNumber t
-  | .union _ ts | .ref _ _ ts => ts.any typeHasNumber
-  | _ => false
-
 def functionsOf (m : Module) : List (String × List Param × Option TypeExpr × Stmt) :=
   m.decls.filterMap fun
     | .function _ _ n ps r b => some (n, ps, r, b)
     | _ => none
 
-/-- The functions that get a certificate: no `number`, in themselves and in
-every function they call. -/
-def certifiable (m : Module) : List String :=
-  let fns := functionsOf m
-  let structsUseNumber := m.decls.any fun
-    | .interface _ _ _ fs => fs.any (typeHasNumber ·.type)
-    | _ => false
-  let ok1 (n : String) : Bool := match fns.find? (·.1 == n) with
-    | some (_, ps, r, _) =>
-      !structsUseNumber && !ps.any (fun p => (p.type.map typeHasNumber).getD true) &&
-        !((r.map typeHasNumber).getD true)
-    | none => false
-  -- A function is certifiable when it and all it reaches are.
-  let rec reach (fuel : Nat) (seen : List String) (n : String) : Bool :=
-    match fuel with
-    | 0 => false
-    | fuel + 1 =>
-      if seen.contains n then true
-      else ok1 n && match fns.find? (·.1 == n) with
-        | some (_, _, _, b) => ((stmtsOf b).flatMap stmtCalls).all (reach fuel (n :: seen))
-        | none => false
-  fns.filterMap fun (n, _, _, _) => if reach (fns.length + 1) [] n then some n else none
+/-- The functions that get a certificate: all of them. -/
+def certifiable (m : Module) : List String := (functionsOf m).map (·.1)
 
 /-- How deep the calls in `s` nest: the fuel that the interpreter needs to run
 them. The subset has no recursion, so the depth is finite. -/
@@ -190,11 +176,18 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     Except String String := do
   let (m, names, decls) ← Translate.translateTree file source target
   let names := { names with namespacePrefix := transNs ++ "." }
-  let fns := if usesNumberNames source target then [] else certifiable m
-  if fns.isEmpty then throw s!"{file}: no function can get a certificate yet (number comes later)"
+  let fns := certifiable m
+  if fns.isEmpty then throw s!"{file}: there is no function to certify"
+  let nv := names.numberVar
+  -- Every theorem is about every number model.
+  let generic := s!"\{{nv} : Type} [tolean.TypeScript.JSNumber {nv}]"
+  -- A generic translated definition takes the model by name, as the
+  -- translation's own calls do.
+  let callN := if names.usesNumber then s!" ({nv} := {nv})" else ""
+  let structTy (name : String) : String := (Output.Ty.struct name).print names
   let mut encs : Array String := #[]
   let mut lemmaNames : Array String :=
-    #["encList", "encNull", "decInt", "decBool", "decStr"]
+    #["encList", "encNull", "decInt", "decBool", "decStr", "decNum"]
   for d in decls do
     if let .struct name fields := d then
       let parts ← fields.mapM fun (f, t) => do
@@ -204,17 +197,28 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         let some dec := decoderOf t | throw s!"{file}: cannot decode the field {name}.{f}"
         return (f, dec)
       let some_ := ", ".intercalate (decs.map fun (f, dec) => s!"{f} := {dec} (fs.lookup {str f})")
-      let none_ := ", ".intercalate (decs.map fun (f, dec) => s!"{f} := {dec} none")
-      encs := encs.push s!"def enc{name} (x : {transNs}.{name}) : Val := Val.obj {list parts}"
+      let none_ := ", ".intercalate (decs.map fun (f, dec) => s!"{f} := {dec} (none : Option (Val {nv}))")
+      encs := encs.push s!"def encode{name} {generic} (x : {structTy name}) : Val {nv} := Val.obj {list parts}"
       encs := encs.push <|
-        s!"def dec{name} : Option Val → {transNs}.{name}\n" ++
+        s!"def decode{name} {generic} : Option (Val {nv}) → {structTy name}\n" ++
         s!"  | some (.obj fs) => \{ {some_} }\n" ++
         s!"  | _ => \{ {none_} }"
       encs := encs.push <|
-        s!"@[simp] theorem dec{name}_enc{name} (x : {transNs}.{name}) : dec{name} (some (enc{name} x)) = x := by\n" ++
-        s!"  cases x; simp [dec{name}, enc{name}, List.lookup, encList, encNull]"
-      lemmaNames := lemmaNames ++ #[s!"enc{name}", s!"dec{name}"]
+        s!"@[simp] theorem decode{name}_encode{name} {generic} (x : {structTy name}) : decode{name} (some (encode{name} ({nv} := {nv}) x)) = x := by\n" ++
+        s!"  cases x; simp [decode{name}, encode{name}, List.lookup, encList, encNull]"
+      lemmaNames := lemmaNames ++ #[s!"encode{name}", s!"decode{name}"]
   let defs := (functionsOf m).map (s!"{transNs}." ++ ·.1)
+  -- `simp` cannot run `numberLiteral`, so each literal gets a lemma that
+  -- `decide` proves.
+  let texts := ((functionsOf m).flatMap fun (_, _, _, b) => (stmtsOf b).flatMap stmtNumbers).eraseDups
+  let mut literals : Array String := #[]
+  for (text, i) in texts.zipIdx do
+    let value := match Eval.numberLiteral text with
+      | some v => s!"some ({v})"
+      | none => "none"
+    encs := encs.push s!"theorem numberLiteral{i} : numberLiteral {str text} = {value} := by decide"
+    literals := literals.push s!"numberLiteral{i}"
+  lemmaNames := lemmaNames ++ literals
   let envLemmas := ["Env.set_cons", "Env.lookup_cons", "Env.lookup_set_same", "Env.lookup_set_ne",
     "Env.set_set", "Env.length_set"]
   let mut loopLemmas : Array String := #[]
@@ -252,9 +256,12 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       let decState (ρ : String) : String :=
         if count == 1 then decode ρ stateNames.head! else
           "(" ++ ", ".intercalate (stateNames.map (decode ρ)) ++ ")"
+      -- The globals that the interpreter reads when no variable hides them.
+      let globals := ["Number", "NaN", "Infinity"].filter fun g => !vars.any (·.1 == g)
       let inv (ρ : String) : String :=
-        " ∧ ".intercalate (coded.map fun (n, e, dec) =>
-          s!"{ρ}.lookup {str n} = some ({e} ({dec} ({ρ}.lookup {str n})))")
+        " ∧ ".intercalate ((coded.map fun (n, e, dec) =>
+          s!"{ρ}.lookup {str n} = some ({e} ({dec} ({ρ}.lookup {str n})))") ++
+          globals.map fun g => s!"{ρ}.lookup {str g} = none")
       let scopeNames := info.scope.map (·.1)
       let stepLines := Output.indentBy "        " (body.lines names)
       let captured := if scopeNames.isEmpty then "" else s!"fun {" ".intercalate scopeNames} => "
@@ -267,8 +274,8 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       let hmName := if depth == 0 then [] else ["program"]
       let substHm := if depth == 0 then "" else "    subst hm\n"
       let elemTy := info.elem.print names
-      let hyps := if coded.length == 1 then "h0" else
-        "⟨" ++ ", ".intercalate ((List.range coded.length).map (s!"h{·}")) ++ "⟩"
+      let hypNames := (List.range (coded.length + globals.length)).map (s!"h{·}")
+      let hyps := if hypNames.length == 1 then "h0" else "⟨" ++ ", ".intercalate hypNames ++ "⟩"
       let generalize (ρ : String) (which : List (String × String × String)) : String :=
         String.join (which.zipIdx.map fun ((n, _, dec), i) =>
           s!"    generalize {dec} ({ρ}.lookup {str n}) = v{i} at h{i} ⊢\n")
@@ -278,7 +285,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       let simpSet := ", ".intercalate (hmName ++ envLemmas ++ lemmaNames.toList ++ loopLemmas.toList ++ defs)
       loopLemmas := loopLemmas.push lemmaName
       thms := thms.push <|
-        s!"theorem {lemmaName} (m : tolean.TypeScript.Syntax.Module){hm} (fuel : Nat) (items : List {elemTy}) (ρ : Env)\n" ++
+        s!"theorem {lemmaName} {generic} (m : tolean.TypeScript.Syntax.Module){hm} (fuel : Nat) (items : List {elemTy}) (ρ : Env {nv})\n" ++
         s!"    (hI : {inv "ρ"}) :\n" ++
         s!"    execLoop m {fuel} ρ {str element} {stmt bodyStmt} (List.map {encX} items) =\n" ++
         s!"      some (.normal {upd s!"(List.foldl {stepFn "ρ"} {decState "ρ"} items)" "ρ"}) := by\n" ++
@@ -287,7 +294,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         s!"  · intro ρ s x hI\n" ++ substHm ++
         s!"    obtain {hyps} := hI\n    try simp only []\n" ++
         generalize "ρ" coded ++ destruct ++
-        s!"    certify_tac [{simpSet}, {", ".intercalate ((List.range coded.length).map (s!"h{·}"))}]\n" ++
+        s!"    certify_tac [{simpSet}, {", ".intercalate hypNames}]\n" ++
         s!"  · intro s ρ; simp [Env.length_set]\n" ++
         s!"  · intro ρ hI\n" ++
         s!"    obtain {hyps} := hI\n    try simp only []\n" ++
@@ -298,11 +305,11 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       let some e := p.type.bind encoder | throw s!"{file}: cannot encode the parameter {p.name}"
       return s!"({e} {p.name})"
     let binders := " ".intercalate (params.map fun p => s!"({p.name} : _)")
-    let call := " ".intercalate (s!"{transNs}.{name}" :: params.map (·.name))
+    let call := " ".intercalate (s!"{transNs}.{name}{callN}" :: params.map (·.name))
     let simpSet := ", ".intercalate (["program"] ++ envLemmas ++ lemmaNames.toList ++ loopLemmas.toList ++ defs)
     thms := thms.push <|
-      s!"theorem {name}_cert {binders} :\n" ++
-      s!"    run program {str name} {list args} = some ({retEnc} ({call})) := by\n" ++
+      s!"theorem {name}_cert {generic} {binders} :\n" ++
+      s!"    run (N := {nv}) program {str name} {list args} = some ({retEnc} ({call})) := by\n" ++
       s!"  {casesOn params}certify_tac [{simpSet}]"
   return "\n".intercalate ([
     s!"-- Certificate written by tolean for {file}. Do not edit.",
@@ -311,7 +318,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     "",
     s!"namespace {certNs}",
     "",
-    "open tolean.TypeScript.Eval",
+    "open tolean.TypeScript tolean.TypeScript.Eval",
     "",
     "-- The proofs pass the same lemmas everywhere, so some go unused.",
     "set_option linter.unusedSimpArgs false",
@@ -327,7 +334,7 @@ def certifiedFunctions (source : String) (target : Edition := .default) :
     Except String (List String × Bool) := do
   let m ← (parse source target).mapError (·.message)
   let all := m.decls.filterMap fun | .function _ _ n .. => some n | _ => none
-  let fns := if usesNumberNames source target then [] else certifiable m
+  let fns := certifiable m
   return (fns, fns.length == all.length)
 
 end tolean.TypeScript.Certify

@@ -4,7 +4,7 @@ import access.Rbac
 
 namespace access.RbacCert
 
-open tolean.TypeScript.Eval
+open tolean.TypeScript tolean.TypeScript.Eval
 
 -- The proofs pass the same lemmas everywhere, so some go unused.
 set_option linter.unusedSimpArgs false
@@ -36,63 +36,63 @@ def program : tolean.TypeScript.Syntax.Module :=
   (tolean.TypeScript.Syntax.Decl.function (sp 98 1 100 2) true "permits" [{ span := (sp 98 25 98 34), name := "p", type := (some (tolean.TypeScript.Syntax.TypeExpr.ref (sp 98 28 98 34) "Policy" [])) }, { span := (sp 98 36 98 48), name := "req", type := (some (tolean.TypeScript.Syntax.TypeExpr.ref (sp 98 41 98 48) "Request" [])) }] (some (tolean.TypeScript.Syntax.TypeExpr.keyword (sp 98 51 98 58) "boolean"))
     (tolean.TypeScript.Syntax.Stmt.block (sp 98 59 100 2) [(tolean.TypeScript.Syntax.Stmt.returnStmt (sp 99 3 99 45) (some (tolean.TypeScript.Syntax.Expr.binary (sp 99 10 99 44) tolean.TypeScript.Syntax.BinOp.and (tolean.TypeScript.Syntax.Expr.call (sp 99 10 99 25) (tolean.TypeScript.Syntax.Expr.ident (sp 99 10 99 17) "allowed") [(tolean.TypeScript.Syntax.Expr.ident (sp 99 18 99 19) "p"), (tolean.TypeScript.Syntax.Expr.ident (sp 99 21 99 24) "req")]) (tolean.TypeScript.Syntax.Expr.unary (sp 99 29 99 44) tolean.TypeScript.Syntax.UnaryOp.not (tolean.TypeScript.Syntax.Expr.call (sp 99 30 99 44) (tolean.TypeScript.Syntax.Expr.ident (sp 99 30 99 36) "denied") [(tolean.TypeScript.Syntax.Expr.ident (sp 99 37 99 38) "p"), (tolean.TypeScript.Syntax.Expr.ident (sp 99 40 99 43) "req")])))))]))] }
 
-def encBinding (x : access.Rbac.Binding) : Val := Val.obj [("tenant", Val.str x.tenant), ("role", Val.str x.role), ("member", Val.str x.member)]
+def encodeBinding {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Binding) : Val N := Val.obj [("tenant", Val.str x.tenant), ("role", Val.str x.role), ("member", Val.str x.member)]
 
-def decBinding : Option Val → access.Rbac.Binding
+def decodeBinding {N : Type} [tolean.TypeScript.JSNumber N] : Option (Val N) → access.Rbac.Binding
   | some (.obj fs) => { tenant := decStr (fs.lookup "tenant"), role := decStr (fs.lookup "role"), member := decStr (fs.lookup "member") }
-  | _ => { tenant := decStr none, role := decStr none, member := decStr none }
+  | _ => { tenant := decStr (none : Option (Val N)), role := decStr (none : Option (Val N)), member := decStr (none : Option (Val N)) }
 
-@[simp] theorem decBinding_encBinding (x : access.Rbac.Binding) : decBinding (some (encBinding x)) = x := by
-  cases x; simp [decBinding, encBinding, List.lookup, encList, encNull]
+@[simp] theorem decodeBinding_encodeBinding {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Binding) : decodeBinding (some (encodeBinding (N := N) x)) = x := by
+  cases x; simp [decodeBinding, encodeBinding, List.lookup, encList, encNull]
 
-def encGrant (x : access.Rbac.Grant) : Val := Val.obj [("role", Val.str x.role), ("permission", Val.str x.permission)]
+def encodeGrant {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Grant) : Val N := Val.obj [("role", Val.str x.role), ("permission", Val.str x.permission)]
 
-def decGrant : Option Val → access.Rbac.Grant
+def decodeGrant {N : Type} [tolean.TypeScript.JSNumber N] : Option (Val N) → access.Rbac.Grant
   | some (.obj fs) => { role := decStr (fs.lookup "role"), permission := decStr (fs.lookup "permission") }
-  | _ => { role := decStr none, permission := decStr none }
+  | _ => { role := decStr (none : Option (Val N)), permission := decStr (none : Option (Val N)) }
 
-@[simp] theorem decGrant_encGrant (x : access.Rbac.Grant) : decGrant (some (encGrant x)) = x := by
-  cases x; simp [decGrant, encGrant, List.lookup, encList, encNull]
+@[simp] theorem decodeGrant_encodeGrant {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Grant) : decodeGrant (some (encodeGrant (N := N) x)) = x := by
+  cases x; simp [decodeGrant, encodeGrant, List.lookup, encList, encNull]
 
-def encMembership (x : access.Rbac.Membership) : Val := Val.obj [("group", Val.str x.group), ("principal", Val.str x.principal)]
+def encodeMembership {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Membership) : Val N := Val.obj [("group", Val.str x.group), ("principal", Val.str x.principal)]
 
-def decMembership : Option Val → access.Rbac.Membership
+def decodeMembership {N : Type} [tolean.TypeScript.JSNumber N] : Option (Val N) → access.Rbac.Membership
   | some (.obj fs) => { group := decStr (fs.lookup "group"), principal := decStr (fs.lookup "principal") }
-  | _ => { group := decStr none, principal := decStr none }
+  | _ => { group := decStr (none : Option (Val N)), principal := decStr (none : Option (Val N)) }
 
-@[simp] theorem decMembership_encMembership (x : access.Rbac.Membership) : decMembership (some (encMembership x)) = x := by
-  cases x; simp [decMembership, encMembership, List.lookup, encList, encNull]
+@[simp] theorem decodeMembership_encodeMembership {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Membership) : decodeMembership (some (encodeMembership (N := N) x)) = x := by
+  cases x; simp [decodeMembership, encodeMembership, List.lookup, encList, encNull]
 
-def encDeny (x : access.Rbac.Deny) : Val := Val.obj [("tenant", Val.str x.tenant), ("permission", Val.str x.permission), ("member", Val.str x.member)]
+def encodeDeny {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Deny) : Val N := Val.obj [("tenant", Val.str x.tenant), ("permission", Val.str x.permission), ("member", Val.str x.member)]
 
-def decDeny : Option Val → access.Rbac.Deny
+def decodeDeny {N : Type} [tolean.TypeScript.JSNumber N] : Option (Val N) → access.Rbac.Deny
   | some (.obj fs) => { tenant := decStr (fs.lookup "tenant"), permission := decStr (fs.lookup "permission"), member := decStr (fs.lookup "member") }
-  | _ => { tenant := decStr none, permission := decStr none, member := decStr none }
+  | _ => { tenant := decStr (none : Option (Val N)), permission := decStr (none : Option (Val N)), member := decStr (none : Option (Val N)) }
 
-@[simp] theorem decDeny_encDeny (x : access.Rbac.Deny) : decDeny (some (encDeny x)) = x := by
-  cases x; simp [decDeny, encDeny, List.lookup, encList, encNull]
+@[simp] theorem decodeDeny_encodeDeny {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Deny) : decodeDeny (some (encodeDeny (N := N) x)) = x := by
+  cases x; simp [decodeDeny, encodeDeny, List.lookup, encList, encNull]
 
-def encPolicy (x : access.Rbac.Policy) : Val := Val.obj [("bindings", (encList encBinding) x.bindings), ("grants", (encList encGrant) x.grants), ("groups", (encList encMembership) x.groups), ("denies", (encList encDeny) x.denies)]
+def encodePolicy {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Policy) : Val N := Val.obj [("bindings", (encList encodeBinding) x.bindings), ("grants", (encList encodeGrant) x.grants), ("groups", (encList encodeMembership) x.groups), ("denies", (encList encodeDeny) x.denies)]
 
-def decPolicy : Option Val → access.Rbac.Policy
-  | some (.obj fs) => { bindings := (decList decBinding) (fs.lookup "bindings"), grants := (decList decGrant) (fs.lookup "grants"), groups := (decList decMembership) (fs.lookup "groups"), denies := (decList decDeny) (fs.lookup "denies") }
-  | _ => { bindings := (decList decBinding) none, grants := (decList decGrant) none, groups := (decList decMembership) none, denies := (decList decDeny) none }
+def decodePolicy {N : Type} [tolean.TypeScript.JSNumber N] : Option (Val N) → access.Rbac.Policy
+  | some (.obj fs) => { bindings := (decList decodeBinding) (fs.lookup "bindings"), grants := (decList decodeGrant) (fs.lookup "grants"), groups := (decList decodeMembership) (fs.lookup "groups"), denies := (decList decodeDeny) (fs.lookup "denies") }
+  | _ => { bindings := (decList decodeBinding) (none : Option (Val N)), grants := (decList decodeGrant) (none : Option (Val N)), groups := (decList decodeMembership) (none : Option (Val N)), denies := (decList decodeDeny) (none : Option (Val N)) }
 
-@[simp] theorem decPolicy_encPolicy (x : access.Rbac.Policy) : decPolicy (some (encPolicy x)) = x := by
-  cases x; simp [decPolicy, encPolicy, List.lookup, encList, encNull]
+@[simp] theorem decodePolicy_encodePolicy {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Policy) : decodePolicy (some (encodePolicy (N := N) x)) = x := by
+  cases x; simp [decodePolicy, encodePolicy, List.lookup, encList, encNull]
 
-def encRequest (x : access.Rbac.Request) : Val := Val.obj [("tenant", Val.str x.tenant), ("principal", Val.str x.principal), ("permission", Val.str x.permission)]
+def encodeRequest {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Request) : Val N := Val.obj [("tenant", Val.str x.tenant), ("principal", Val.str x.principal), ("permission", Val.str x.permission)]
 
-def decRequest : Option Val → access.Rbac.Request
+def decodeRequest {N : Type} [tolean.TypeScript.JSNumber N] : Option (Val N) → access.Rbac.Request
   | some (.obj fs) => { tenant := decStr (fs.lookup "tenant"), principal := decStr (fs.lookup "principal"), permission := decStr (fs.lookup "permission") }
-  | _ => { tenant := decStr none, principal := decStr none, permission := decStr none }
+  | _ => { tenant := decStr (none : Option (Val N)), principal := decStr (none : Option (Val N)), permission := decStr (none : Option (Val N)) }
 
-@[simp] theorem decRequest_encRequest (x : access.Rbac.Request) : decRequest (some (encRequest x)) = x := by
-  cases x; simp [decRequest, encRequest, List.lookup, encList, encNull]
+@[simp] theorem decodeRequest_encodeRequest {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Request) : decodeRequest (some (encodeRequest (N := N) x)) = x := by
+  cases x; simp [decodeRequest, encodeRequest, List.lookup, encList, encNull]
 
-theorem inGroup_loop1 (m : tolean.TypeScript.Syntax.Module) (fuel : Nat) (items : List access.Rbac.Membership) (ρ : Env)
-    (hI : ρ.lookup "found" = some (Val.bool (decBool (ρ.lookup "found"))) ∧ ρ.lookup "groups" = some ((encList encMembership) ((decList decMembership) (ρ.lookup "groups"))) ∧ ρ.lookup "group" = some (Val.str (decStr (ρ.lookup "group"))) ∧ ρ.lookup "principal" = some (Val.str (decStr (ρ.lookup "principal")))) :
-    execLoop m fuel ρ "m" (tolean.TypeScript.Syntax.Stmt.block (sp 44 27 48 4) [(tolean.TypeScript.Syntax.Stmt.ifStmt (sp 45 5 47 6) (tolean.TypeScript.Syntax.Expr.binary (sp 45 9 45 55) tolean.TypeScript.Syntax.BinOp.and (tolean.TypeScript.Syntax.Expr.binary (sp 45 9 45 26) tolean.TypeScript.Syntax.BinOp.strictEq (tolean.TypeScript.Syntax.Expr.member (sp 45 9 45 16) (tolean.TypeScript.Syntax.Expr.ident (sp 45 9 45 10) "m") "group") (tolean.TypeScript.Syntax.Expr.ident (sp 45 21 45 26) "group")) (tolean.TypeScript.Syntax.Expr.binary (sp 45 30 45 55) tolean.TypeScript.Syntax.BinOp.strictEq (tolean.TypeScript.Syntax.Expr.member (sp 45 30 45 41) (tolean.TypeScript.Syntax.Expr.ident (sp 45 30 45 31) "m") "principal") (tolean.TypeScript.Syntax.Expr.ident (sp 45 46 45 55) "principal"))) (tolean.TypeScript.Syntax.Stmt.block (sp 45 57 47 6) [(tolean.TypeScript.Syntax.Stmt.exprStmt (sp 46 7 46 20) (tolean.TypeScript.Syntax.Expr.assign (sp 46 7 46 19) tolean.TypeScript.Syntax.AssignOp.assign (tolean.TypeScript.Syntax.Expr.ident (sp 46 7 46 12) "found") (tolean.TypeScript.Syntax.Expr.bool (sp 46 15 46 19) true)))]) none)]) (List.map encMembership items) =
+theorem inGroup_loop1 {N : Type} [tolean.TypeScript.JSNumber N] (m : tolean.TypeScript.Syntax.Module) (fuel : Nat) (items : List access.Rbac.Membership) (ρ : Env N)
+    (hI : ρ.lookup "found" = some (Val.bool (decBool (ρ.lookup "found"))) ∧ ρ.lookup "groups" = some ((encList encodeMembership) ((decList decodeMembership) (ρ.lookup "groups"))) ∧ ρ.lookup "group" = some (Val.str (decStr (ρ.lookup "group"))) ∧ ρ.lookup "principal" = some (Val.str (decStr (ρ.lookup "principal"))) ∧ ρ.lookup "Number" = none ∧ ρ.lookup "NaN" = none ∧ ρ.lookup "Infinity" = none) :
+    execLoop m fuel ρ "m" (tolean.TypeScript.Syntax.Stmt.block (sp 44 27 48 4) [(tolean.TypeScript.Syntax.Stmt.ifStmt (sp 45 5 47 6) (tolean.TypeScript.Syntax.Expr.binary (sp 45 9 45 55) tolean.TypeScript.Syntax.BinOp.and (tolean.TypeScript.Syntax.Expr.binary (sp 45 9 45 26) tolean.TypeScript.Syntax.BinOp.strictEq (tolean.TypeScript.Syntax.Expr.member (sp 45 9 45 16) (tolean.TypeScript.Syntax.Expr.ident (sp 45 9 45 10) "m") "group") (tolean.TypeScript.Syntax.Expr.ident (sp 45 21 45 26) "group")) (tolean.TypeScript.Syntax.Expr.binary (sp 45 30 45 55) tolean.TypeScript.Syntax.BinOp.strictEq (tolean.TypeScript.Syntax.Expr.member (sp 45 30 45 41) (tolean.TypeScript.Syntax.Expr.ident (sp 45 30 45 31) "m") "principal") (tolean.TypeScript.Syntax.Expr.ident (sp 45 46 45 55) "principal"))) (tolean.TypeScript.Syntax.Stmt.block (sp 45 57 47 6) [(tolean.TypeScript.Syntax.Stmt.exprStmt (sp 46 7 46 20) (tolean.TypeScript.Syntax.Expr.assign (sp 46 7 46 19) tolean.TypeScript.Syntax.AssignOp.assign (tolean.TypeScript.Syntax.Expr.ident (sp 46 7 46 12) "found") (tolean.TypeScript.Syntax.Expr.bool (sp 46 15 46 19) true)))]) none)]) (List.map encodeMembership items) =
       some (.normal (ρ.set "found" (Val.bool (List.foldl (((fun groups group principal => fun found m =>
         let found :=
           if (m.group = group) ∧ (m.principal = principal) then
@@ -100,8 +100,8 @@ theorem inGroup_loop1 (m : tolean.TypeScript.Syntax.Module) (fuel : Nat) (items 
             found
           else
             found
-        found) ((decList decMembership) (ρ.lookup "groups")) (decStr (ρ.lookup "group")) (decStr (ρ.lookup "principal")))) (decBool (ρ.lookup "found")) items)))) := by
-  refine execLoop_foldl m fuel "m" _ encMembership (fun s ρ => (ρ.set "found" (Val.bool s)))
+        found) ((decList decodeMembership) (ρ.lookup "groups")) (decStr (ρ.lookup "group")) (decStr (ρ.lookup "principal")))) (decBool (ρ.lookup "found")) items)))) := by
+  refine execLoop_foldl m fuel "m" _ encodeMembership (fun s ρ => (ρ.set "found" (Val.bool s)))
     (fun ρ => (decBool (ρ.lookup "found"))) (fun ρ => (((fun groups group principal => fun found m =>
         let found :=
           if (m.group = group) ∧ (m.principal = principal) then
@@ -109,33 +109,33 @@ theorem inGroup_loop1 (m : tolean.TypeScript.Syntax.Module) (fuel : Nat) (items 
             found
           else
             found
-        found) ((decList decMembership) (ρ.lookup "groups")) (decStr (ρ.lookup "group")) (decStr (ρ.lookup "principal"))))) (fun ρ => ρ.lookup "found" = some (Val.bool (decBool (ρ.lookup "found"))) ∧ ρ.lookup "groups" = some ((encList encMembership) ((decList decMembership) (ρ.lookup "groups"))) ∧ ρ.lookup "group" = some (Val.str (decStr (ρ.lookup "group"))) ∧ ρ.lookup "principal" = some (Val.str (decStr (ρ.lookup "principal")))) ?_ ?_ ?_ items ρ hI
+        found) ((decList decodeMembership) (ρ.lookup "groups")) (decStr (ρ.lookup "group")) (decStr (ρ.lookup "principal"))))) (fun ρ => ρ.lookup "found" = some (Val.bool (decBool (ρ.lookup "found"))) ∧ ρ.lookup "groups" = some ((encList encodeMembership) ((decList decodeMembership) (ρ.lookup "groups"))) ∧ ρ.lookup "group" = some (Val.str (decStr (ρ.lookup "group"))) ∧ ρ.lookup "principal" = some (Val.str (decStr (ρ.lookup "principal"))) ∧ ρ.lookup "Number" = none ∧ ρ.lookup "NaN" = none ∧ ρ.lookup "Infinity" = none) ?_ ?_ ?_ items ρ hI
   · intro ρ s x hI
-    obtain ⟨h0, h1, h2, h3⟩ := hI
+    obtain ⟨h0, h1, h2, h3, h4, h5, h6⟩ := hI
     try simp only []
     generalize decBool (ρ.lookup "found") = v0 at h0 ⊢
-    generalize (decList decMembership) (ρ.lookup "groups") = v1 at h1 ⊢
+    generalize (decList decodeMembership) (ρ.lookup "groups") = v1 at h1 ⊢
     generalize decStr (ρ.lookup "group") = v2 at h2 ⊢
     generalize decStr (ρ.lookup "principal") = v3 at h3 ⊢
-    certify_tac [Env.set_cons, Env.lookup_cons, Env.lookup_set_same, Env.lookup_set_ne, Env.set_set, Env.length_set, encList, encNull, decInt, decBool, decStr, encBinding, decBinding, encGrant, decGrant, encMembership, decMembership, encDeny, decDeny, encPolicy, decPolicy, encRequest, decRequest, access.Rbac.inGroup, access.Rbac.isMember, access.Rbac.roleGrants, access.Rbac.bindingAllows, access.Rbac.denyApplies, access.Rbac.allowed, access.Rbac.denied, access.Rbac.permits, h0, h1, h2, h3]
+    certify_tac [Env.set_cons, Env.lookup_cons, Env.lookup_set_same, Env.lookup_set_ne, Env.set_set, Env.length_set, encList, encNull, decInt, decBool, decStr, decNum, encodeBinding, decodeBinding, encodeGrant, decodeGrant, encodeMembership, decodeMembership, encodeDeny, decodeDeny, encodePolicy, decodePolicy, encodeRequest, decodeRequest, access.Rbac.inGroup, access.Rbac.isMember, access.Rbac.roleGrants, access.Rbac.bindingAllows, access.Rbac.denyApplies, access.Rbac.allowed, access.Rbac.denied, access.Rbac.permits, h0, h1, h2, h3, h4, h5, h6]
   · intro s ρ; simp [Env.length_set]
   · intro ρ hI
-    obtain ⟨h0, h1, h2, h3⟩ := hI
+    obtain ⟨h0, h1, h2, h3, h4, h5, h6⟩ := hI
     try simp only []
     generalize decBool (ρ.lookup "found") = v0 at h0 ⊢
     simp [Env.set_of_lookup _ _ _ h0]
 
-theorem inGroup_cert (groups : _) (group : _) (principal : _) :
-    run program "inGroup" [((encList encMembership) groups), (Val.str group), (Val.str principal)] = some (Val.bool (access.Rbac.inGroup groups group principal)) := by
-  certify_tac [program, Env.set_cons, Env.lookup_cons, Env.lookup_set_same, Env.lookup_set_ne, Env.set_set, Env.length_set, encList, encNull, decInt, decBool, decStr, encBinding, decBinding, encGrant, decGrant, encMembership, decMembership, encDeny, decDeny, encPolicy, decPolicy, encRequest, decRequest, inGroup_loop1, access.Rbac.inGroup, access.Rbac.isMember, access.Rbac.roleGrants, access.Rbac.bindingAllows, access.Rbac.denyApplies, access.Rbac.allowed, access.Rbac.denied, access.Rbac.permits]
+theorem inGroup_cert {N : Type} [tolean.TypeScript.JSNumber N] (groups : _) (group : _) (principal : _) :
+    run (N := N) program "inGroup" [((encList encodeMembership) groups), (Val.str group), (Val.str principal)] = some (Val.bool (access.Rbac.inGroup groups group principal)) := by
+  certify_tac [program, Env.set_cons, Env.lookup_cons, Env.lookup_set_same, Env.lookup_set_ne, Env.set_set, Env.length_set, encList, encNull, decInt, decBool, decStr, decNum, encodeBinding, decodeBinding, encodeGrant, decodeGrant, encodeMembership, decodeMembership, encodeDeny, decodeDeny, encodePolicy, decodePolicy, encodeRequest, decodeRequest, inGroup_loop1, access.Rbac.inGroup, access.Rbac.isMember, access.Rbac.roleGrants, access.Rbac.bindingAllows, access.Rbac.denyApplies, access.Rbac.allowed, access.Rbac.denied, access.Rbac.permits]
 
-theorem isMember_cert (groups : _) (member : _) (principal : _) :
-    run program "isMember" [((encList encMembership) groups), (Val.str member), (Val.str principal)] = some (Val.bool (access.Rbac.isMember groups member principal)) := by
-  certify_tac [program, Env.set_cons, Env.lookup_cons, Env.lookup_set_same, Env.lookup_set_ne, Env.set_set, Env.length_set, encList, encNull, decInt, decBool, decStr, encBinding, decBinding, encGrant, decGrant, encMembership, decMembership, encDeny, decDeny, encPolicy, decPolicy, encRequest, decRequest, inGroup_loop1, access.Rbac.inGroup, access.Rbac.isMember, access.Rbac.roleGrants, access.Rbac.bindingAllows, access.Rbac.denyApplies, access.Rbac.allowed, access.Rbac.denied, access.Rbac.permits]
+theorem isMember_cert {N : Type} [tolean.TypeScript.JSNumber N] (groups : _) (member : _) (principal : _) :
+    run (N := N) program "isMember" [((encList encodeMembership) groups), (Val.str member), (Val.str principal)] = some (Val.bool (access.Rbac.isMember groups member principal)) := by
+  certify_tac [program, Env.set_cons, Env.lookup_cons, Env.lookup_set_same, Env.lookup_set_ne, Env.set_set, Env.length_set, encList, encNull, decInt, decBool, decStr, decNum, encodeBinding, decodeBinding, encodeGrant, decodeGrant, encodeMembership, decodeMembership, encodeDeny, decodeDeny, encodePolicy, decodePolicy, encodeRequest, decodeRequest, inGroup_loop1, access.Rbac.inGroup, access.Rbac.isMember, access.Rbac.roleGrants, access.Rbac.bindingAllows, access.Rbac.denyApplies, access.Rbac.allowed, access.Rbac.denied, access.Rbac.permits]
 
-theorem roleGrants_loop1 (m : tolean.TypeScript.Syntax.Module) (fuel : Nat) (items : List access.Rbac.Grant) (ρ : Env)
-    (hI : ρ.lookup "found" = some (Val.bool (decBool (ρ.lookup "found"))) ∧ ρ.lookup "grants" = some ((encList encGrant) ((decList decGrant) (ρ.lookup "grants"))) ∧ ρ.lookup "role" = some (Val.str (decStr (ρ.lookup "role"))) ∧ ρ.lookup "permission" = some (Val.str (decStr (ρ.lookup "permission")))) :
-    execLoop m fuel ρ "g" (tolean.TypeScript.Syntax.Stmt.block (sp 59 27 63 4) [(tolean.TypeScript.Syntax.Stmt.ifStmt (sp 60 5 62 6) (tolean.TypeScript.Syntax.Expr.binary (sp 60 9 60 55) tolean.TypeScript.Syntax.BinOp.and (tolean.TypeScript.Syntax.Expr.binary (sp 60 9 60 24) tolean.TypeScript.Syntax.BinOp.strictEq (tolean.TypeScript.Syntax.Expr.member (sp 60 9 60 15) (tolean.TypeScript.Syntax.Expr.ident (sp 60 9 60 10) "g") "role") (tolean.TypeScript.Syntax.Expr.ident (sp 60 20 60 24) "role")) (tolean.TypeScript.Syntax.Expr.binary (sp 60 28 60 55) tolean.TypeScript.Syntax.BinOp.strictEq (tolean.TypeScript.Syntax.Expr.member (sp 60 28 60 40) (tolean.TypeScript.Syntax.Expr.ident (sp 60 28 60 29) "g") "permission") (tolean.TypeScript.Syntax.Expr.ident (sp 60 45 60 55) "permission"))) (tolean.TypeScript.Syntax.Stmt.block (sp 60 57 62 6) [(tolean.TypeScript.Syntax.Stmt.exprStmt (sp 61 7 61 20) (tolean.TypeScript.Syntax.Expr.assign (sp 61 7 61 19) tolean.TypeScript.Syntax.AssignOp.assign (tolean.TypeScript.Syntax.Expr.ident (sp 61 7 61 12) "found") (tolean.TypeScript.Syntax.Expr.bool (sp 61 15 61 19) true)))]) none)]) (List.map encGrant items) =
+theorem roleGrants_loop1 {N : Type} [tolean.TypeScript.JSNumber N] (m : tolean.TypeScript.Syntax.Module) (fuel : Nat) (items : List access.Rbac.Grant) (ρ : Env N)
+    (hI : ρ.lookup "found" = some (Val.bool (decBool (ρ.lookup "found"))) ∧ ρ.lookup "grants" = some ((encList encodeGrant) ((decList decodeGrant) (ρ.lookup "grants"))) ∧ ρ.lookup "role" = some (Val.str (decStr (ρ.lookup "role"))) ∧ ρ.lookup "permission" = some (Val.str (decStr (ρ.lookup "permission"))) ∧ ρ.lookup "Number" = none ∧ ρ.lookup "NaN" = none ∧ ρ.lookup "Infinity" = none) :
+    execLoop m fuel ρ "g" (tolean.TypeScript.Syntax.Stmt.block (sp 59 27 63 4) [(tolean.TypeScript.Syntax.Stmt.ifStmt (sp 60 5 62 6) (tolean.TypeScript.Syntax.Expr.binary (sp 60 9 60 55) tolean.TypeScript.Syntax.BinOp.and (tolean.TypeScript.Syntax.Expr.binary (sp 60 9 60 24) tolean.TypeScript.Syntax.BinOp.strictEq (tolean.TypeScript.Syntax.Expr.member (sp 60 9 60 15) (tolean.TypeScript.Syntax.Expr.ident (sp 60 9 60 10) "g") "role") (tolean.TypeScript.Syntax.Expr.ident (sp 60 20 60 24) "role")) (tolean.TypeScript.Syntax.Expr.binary (sp 60 28 60 55) tolean.TypeScript.Syntax.BinOp.strictEq (tolean.TypeScript.Syntax.Expr.member (sp 60 28 60 40) (tolean.TypeScript.Syntax.Expr.ident (sp 60 28 60 29) "g") "permission") (tolean.TypeScript.Syntax.Expr.ident (sp 60 45 60 55) "permission"))) (tolean.TypeScript.Syntax.Stmt.block (sp 60 57 62 6) [(tolean.TypeScript.Syntax.Stmt.exprStmt (sp 61 7 61 20) (tolean.TypeScript.Syntax.Expr.assign (sp 61 7 61 19) tolean.TypeScript.Syntax.AssignOp.assign (tolean.TypeScript.Syntax.Expr.ident (sp 61 7 61 12) "found") (tolean.TypeScript.Syntax.Expr.bool (sp 61 15 61 19) true)))]) none)]) (List.map encodeGrant items) =
       some (.normal (ρ.set "found" (Val.bool (List.foldl (((fun grants role permission => fun found g =>
         let found :=
           if (g.role = role) ∧ (g.permission = permission) then
@@ -143,8 +143,8 @@ theorem roleGrants_loop1 (m : tolean.TypeScript.Syntax.Module) (fuel : Nat) (ite
             found
           else
             found
-        found) ((decList decGrant) (ρ.lookup "grants")) (decStr (ρ.lookup "role")) (decStr (ρ.lookup "permission")))) (decBool (ρ.lookup "found")) items)))) := by
-  refine execLoop_foldl m fuel "g" _ encGrant (fun s ρ => (ρ.set "found" (Val.bool s)))
+        found) ((decList decodeGrant) (ρ.lookup "grants")) (decStr (ρ.lookup "role")) (decStr (ρ.lookup "permission")))) (decBool (ρ.lookup "found")) items)))) := by
+  refine execLoop_foldl m fuel "g" _ encodeGrant (fun s ρ => (ρ.set "found" (Val.bool s)))
     (fun ρ => (decBool (ρ.lookup "found"))) (fun ρ => (((fun grants role permission => fun found g =>
         let found :=
           if (g.role = role) ∧ (g.permission = permission) then
@@ -152,37 +152,37 @@ theorem roleGrants_loop1 (m : tolean.TypeScript.Syntax.Module) (fuel : Nat) (ite
             found
           else
             found
-        found) ((decList decGrant) (ρ.lookup "grants")) (decStr (ρ.lookup "role")) (decStr (ρ.lookup "permission"))))) (fun ρ => ρ.lookup "found" = some (Val.bool (decBool (ρ.lookup "found"))) ∧ ρ.lookup "grants" = some ((encList encGrant) ((decList decGrant) (ρ.lookup "grants"))) ∧ ρ.lookup "role" = some (Val.str (decStr (ρ.lookup "role"))) ∧ ρ.lookup "permission" = some (Val.str (decStr (ρ.lookup "permission")))) ?_ ?_ ?_ items ρ hI
+        found) ((decList decodeGrant) (ρ.lookup "grants")) (decStr (ρ.lookup "role")) (decStr (ρ.lookup "permission"))))) (fun ρ => ρ.lookup "found" = some (Val.bool (decBool (ρ.lookup "found"))) ∧ ρ.lookup "grants" = some ((encList encodeGrant) ((decList decodeGrant) (ρ.lookup "grants"))) ∧ ρ.lookup "role" = some (Val.str (decStr (ρ.lookup "role"))) ∧ ρ.lookup "permission" = some (Val.str (decStr (ρ.lookup "permission"))) ∧ ρ.lookup "Number" = none ∧ ρ.lookup "NaN" = none ∧ ρ.lookup "Infinity" = none) ?_ ?_ ?_ items ρ hI
   · intro ρ s x hI
-    obtain ⟨h0, h1, h2, h3⟩ := hI
+    obtain ⟨h0, h1, h2, h3, h4, h5, h6⟩ := hI
     try simp only []
     generalize decBool (ρ.lookup "found") = v0 at h0 ⊢
-    generalize (decList decGrant) (ρ.lookup "grants") = v1 at h1 ⊢
+    generalize (decList decodeGrant) (ρ.lookup "grants") = v1 at h1 ⊢
     generalize decStr (ρ.lookup "role") = v2 at h2 ⊢
     generalize decStr (ρ.lookup "permission") = v3 at h3 ⊢
-    certify_tac [Env.set_cons, Env.lookup_cons, Env.lookup_set_same, Env.lookup_set_ne, Env.set_set, Env.length_set, encList, encNull, decInt, decBool, decStr, encBinding, decBinding, encGrant, decGrant, encMembership, decMembership, encDeny, decDeny, encPolicy, decPolicy, encRequest, decRequest, inGroup_loop1, access.Rbac.inGroup, access.Rbac.isMember, access.Rbac.roleGrants, access.Rbac.bindingAllows, access.Rbac.denyApplies, access.Rbac.allowed, access.Rbac.denied, access.Rbac.permits, h0, h1, h2, h3]
+    certify_tac [Env.set_cons, Env.lookup_cons, Env.lookup_set_same, Env.lookup_set_ne, Env.set_set, Env.length_set, encList, encNull, decInt, decBool, decStr, decNum, encodeBinding, decodeBinding, encodeGrant, decodeGrant, encodeMembership, decodeMembership, encodeDeny, decodeDeny, encodePolicy, decodePolicy, encodeRequest, decodeRequest, inGroup_loop1, access.Rbac.inGroup, access.Rbac.isMember, access.Rbac.roleGrants, access.Rbac.bindingAllows, access.Rbac.denyApplies, access.Rbac.allowed, access.Rbac.denied, access.Rbac.permits, h0, h1, h2, h3, h4, h5, h6]
   · intro s ρ; simp [Env.length_set]
   · intro ρ hI
-    obtain ⟨h0, h1, h2, h3⟩ := hI
+    obtain ⟨h0, h1, h2, h3, h4, h5, h6⟩ := hI
     try simp only []
     generalize decBool (ρ.lookup "found") = v0 at h0 ⊢
     simp [Env.set_of_lookup _ _ _ h0]
 
-theorem roleGrants_cert (grants : _) (role : _) (permission : _) :
-    run program "roleGrants" [((encList encGrant) grants), (Val.str role), (Val.str permission)] = some (Val.bool (access.Rbac.roleGrants grants role permission)) := by
-  certify_tac [program, Env.set_cons, Env.lookup_cons, Env.lookup_set_same, Env.lookup_set_ne, Env.set_set, Env.length_set, encList, encNull, decInt, decBool, decStr, encBinding, decBinding, encGrant, decGrant, encMembership, decMembership, encDeny, decDeny, encPolicy, decPolicy, encRequest, decRequest, inGroup_loop1, roleGrants_loop1, access.Rbac.inGroup, access.Rbac.isMember, access.Rbac.roleGrants, access.Rbac.bindingAllows, access.Rbac.denyApplies, access.Rbac.allowed, access.Rbac.denied, access.Rbac.permits]
+theorem roleGrants_cert {N : Type} [tolean.TypeScript.JSNumber N] (grants : _) (role : _) (permission : _) :
+    run (N := N) program "roleGrants" [((encList encodeGrant) grants), (Val.str role), (Val.str permission)] = some (Val.bool (access.Rbac.roleGrants grants role permission)) := by
+  certify_tac [program, Env.set_cons, Env.lookup_cons, Env.lookup_set_same, Env.lookup_set_ne, Env.set_set, Env.length_set, encList, encNull, decInt, decBool, decStr, decNum, encodeBinding, decodeBinding, encodeGrant, decodeGrant, encodeMembership, decodeMembership, encodeDeny, decodeDeny, encodePolicy, decodePolicy, encodeRequest, decodeRequest, inGroup_loop1, roleGrants_loop1, access.Rbac.inGroup, access.Rbac.isMember, access.Rbac.roleGrants, access.Rbac.bindingAllows, access.Rbac.denyApplies, access.Rbac.allowed, access.Rbac.denied, access.Rbac.permits]
 
-theorem bindingAllows_cert (p : _) (b : _) (req : _) :
-    run program "bindingAllows" [(encPolicy p), (encBinding b), (encRequest req)] = some (Val.bool (access.Rbac.bindingAllows p b req)) := by
-  certify_tac [program, Env.set_cons, Env.lookup_cons, Env.lookup_set_same, Env.lookup_set_ne, Env.set_set, Env.length_set, encList, encNull, decInt, decBool, decStr, encBinding, decBinding, encGrant, decGrant, encMembership, decMembership, encDeny, decDeny, encPolicy, decPolicy, encRequest, decRequest, inGroup_loop1, roleGrants_loop1, access.Rbac.inGroup, access.Rbac.isMember, access.Rbac.roleGrants, access.Rbac.bindingAllows, access.Rbac.denyApplies, access.Rbac.allowed, access.Rbac.denied, access.Rbac.permits]
+theorem bindingAllows_cert {N : Type} [tolean.TypeScript.JSNumber N] (p : _) (b : _) (req : _) :
+    run (N := N) program "bindingAllows" [(encodePolicy p), (encodeBinding b), (encodeRequest req)] = some (Val.bool (access.Rbac.bindingAllows p b req)) := by
+  certify_tac [program, Env.set_cons, Env.lookup_cons, Env.lookup_set_same, Env.lookup_set_ne, Env.set_set, Env.length_set, encList, encNull, decInt, decBool, decStr, decNum, encodeBinding, decodeBinding, encodeGrant, decodeGrant, encodeMembership, decodeMembership, encodeDeny, decodeDeny, encodePolicy, decodePolicy, encodeRequest, decodeRequest, inGroup_loop1, roleGrants_loop1, access.Rbac.inGroup, access.Rbac.isMember, access.Rbac.roleGrants, access.Rbac.bindingAllows, access.Rbac.denyApplies, access.Rbac.allowed, access.Rbac.denied, access.Rbac.permits]
 
-theorem denyApplies_cert (p : _) (d : _) (req : _) :
-    run program "denyApplies" [(encPolicy p), (encDeny d), (encRequest req)] = some (Val.bool (access.Rbac.denyApplies p d req)) := by
-  certify_tac [program, Env.set_cons, Env.lookup_cons, Env.lookup_set_same, Env.lookup_set_ne, Env.set_set, Env.length_set, encList, encNull, decInt, decBool, decStr, encBinding, decBinding, encGrant, decGrant, encMembership, decMembership, encDeny, decDeny, encPolicy, decPolicy, encRequest, decRequest, inGroup_loop1, roleGrants_loop1, access.Rbac.inGroup, access.Rbac.isMember, access.Rbac.roleGrants, access.Rbac.bindingAllows, access.Rbac.denyApplies, access.Rbac.allowed, access.Rbac.denied, access.Rbac.permits]
+theorem denyApplies_cert {N : Type} [tolean.TypeScript.JSNumber N] (p : _) (d : _) (req : _) :
+    run (N := N) program "denyApplies" [(encodePolicy p), (encodeDeny d), (encodeRequest req)] = some (Val.bool (access.Rbac.denyApplies p d req)) := by
+  certify_tac [program, Env.set_cons, Env.lookup_cons, Env.lookup_set_same, Env.lookup_set_ne, Env.set_set, Env.length_set, encList, encNull, decInt, decBool, decStr, decNum, encodeBinding, decodeBinding, encodeGrant, decodeGrant, encodeMembership, decodeMembership, encodeDeny, decodeDeny, encodePolicy, decodePolicy, encodeRequest, decodeRequest, inGroup_loop1, roleGrants_loop1, access.Rbac.inGroup, access.Rbac.isMember, access.Rbac.roleGrants, access.Rbac.bindingAllows, access.Rbac.denyApplies, access.Rbac.allowed, access.Rbac.denied, access.Rbac.permits]
 
-theorem allowed_loop1 (m : tolean.TypeScript.Syntax.Module) (hm : m = program) (fuel : Nat) (items : List access.Rbac.Binding) (ρ : Env)
-    (hI : ρ.lookup "found" = some (Val.bool (decBool (ρ.lookup "found"))) ∧ ρ.lookup "p" = some (encPolicy (decPolicy (ρ.lookup "p"))) ∧ ρ.lookup "req" = some (encRequest (decRequest (ρ.lookup "req")))) :
-    execLoop m (fuel + 3) ρ "b" (tolean.TypeScript.Syntax.Stmt.block (sp 79 31 83 4) [(tolean.TypeScript.Syntax.Stmt.ifStmt (sp 80 5 82 6) (tolean.TypeScript.Syntax.Expr.call (sp 80 9 80 33) (tolean.TypeScript.Syntax.Expr.ident (sp 80 9 80 22) "bindingAllows") [(tolean.TypeScript.Syntax.Expr.ident (sp 80 23 80 24) "p"), (tolean.TypeScript.Syntax.Expr.ident (sp 80 26 80 27) "b"), (tolean.TypeScript.Syntax.Expr.ident (sp 80 29 80 32) "req")]) (tolean.TypeScript.Syntax.Stmt.block (sp 80 35 82 6) [(tolean.TypeScript.Syntax.Stmt.exprStmt (sp 81 7 81 20) (tolean.TypeScript.Syntax.Expr.assign (sp 81 7 81 19) tolean.TypeScript.Syntax.AssignOp.assign (tolean.TypeScript.Syntax.Expr.ident (sp 81 7 81 12) "found") (tolean.TypeScript.Syntax.Expr.bool (sp 81 15 81 19) true)))]) none)]) (List.map encBinding items) =
+theorem allowed_loop1 {N : Type} [tolean.TypeScript.JSNumber N] (m : tolean.TypeScript.Syntax.Module) (hm : m = program) (fuel : Nat) (items : List access.Rbac.Binding) (ρ : Env N)
+    (hI : ρ.lookup "found" = some (Val.bool (decBool (ρ.lookup "found"))) ∧ ρ.lookup "p" = some (encodePolicy (decodePolicy (ρ.lookup "p"))) ∧ ρ.lookup "req" = some (encodeRequest (decodeRequest (ρ.lookup "req"))) ∧ ρ.lookup "Number" = none ∧ ρ.lookup "NaN" = none ∧ ρ.lookup "Infinity" = none) :
+    execLoop m (fuel + 3) ρ "b" (tolean.TypeScript.Syntax.Stmt.block (sp 79 31 83 4) [(tolean.TypeScript.Syntax.Stmt.ifStmt (sp 80 5 82 6) (tolean.TypeScript.Syntax.Expr.call (sp 80 9 80 33) (tolean.TypeScript.Syntax.Expr.ident (sp 80 9 80 22) "bindingAllows") [(tolean.TypeScript.Syntax.Expr.ident (sp 80 23 80 24) "p"), (tolean.TypeScript.Syntax.Expr.ident (sp 80 26 80 27) "b"), (tolean.TypeScript.Syntax.Expr.ident (sp 80 29 80 32) "req")]) (tolean.TypeScript.Syntax.Stmt.block (sp 80 35 82 6) [(tolean.TypeScript.Syntax.Stmt.exprStmt (sp 81 7 81 20) (tolean.TypeScript.Syntax.Expr.assign (sp 81 7 81 19) tolean.TypeScript.Syntax.AssignOp.assign (tolean.TypeScript.Syntax.Expr.ident (sp 81 7 81 12) "found") (tolean.TypeScript.Syntax.Expr.bool (sp 81 15 81 19) true)))]) none)]) (List.map encodeBinding items) =
       some (.normal (ρ.set "found" (Val.bool (List.foldl (((fun p req => fun found b =>
         let found :=
           if (access.Rbac.bindingAllows p b req) then
@@ -190,8 +190,8 @@ theorem allowed_loop1 (m : tolean.TypeScript.Syntax.Module) (hm : m = program) (
             found
           else
             found
-        found) (decPolicy (ρ.lookup "p")) (decRequest (ρ.lookup "req")))) (decBool (ρ.lookup "found")) items)))) := by
-  refine execLoop_foldl m (fuel + 3) "b" _ encBinding (fun s ρ => (ρ.set "found" (Val.bool s)))
+        found) (decodePolicy (ρ.lookup "p")) (decodeRequest (ρ.lookup "req")))) (decBool (ρ.lookup "found")) items)))) := by
+  refine execLoop_foldl m (fuel + 3) "b" _ encodeBinding (fun s ρ => (ρ.set "found" (Val.bool s)))
     (fun ρ => (decBool (ρ.lookup "found"))) (fun ρ => (((fun p req => fun found b =>
         let found :=
           if (access.Rbac.bindingAllows p b req) then
@@ -199,29 +199,29 @@ theorem allowed_loop1 (m : tolean.TypeScript.Syntax.Module) (hm : m = program) (
             found
           else
             found
-        found) (decPolicy (ρ.lookup "p")) (decRequest (ρ.lookup "req"))))) (fun ρ => ρ.lookup "found" = some (Val.bool (decBool (ρ.lookup "found"))) ∧ ρ.lookup "p" = some (encPolicy (decPolicy (ρ.lookup "p"))) ∧ ρ.lookup "req" = some (encRequest (decRequest (ρ.lookup "req")))) ?_ ?_ ?_ items ρ hI
+        found) (decodePolicy (ρ.lookup "p")) (decodeRequest (ρ.lookup "req"))))) (fun ρ => ρ.lookup "found" = some (Val.bool (decBool (ρ.lookup "found"))) ∧ ρ.lookup "p" = some (encodePolicy (decodePolicy (ρ.lookup "p"))) ∧ ρ.lookup "req" = some (encodeRequest (decodeRequest (ρ.lookup "req"))) ∧ ρ.lookup "Number" = none ∧ ρ.lookup "NaN" = none ∧ ρ.lookup "Infinity" = none) ?_ ?_ ?_ items ρ hI
   · intro ρ s x hI
     subst hm
-    obtain ⟨h0, h1, h2⟩ := hI
+    obtain ⟨h0, h1, h2, h3, h4, h5⟩ := hI
     try simp only []
     generalize decBool (ρ.lookup "found") = v0 at h0 ⊢
-    generalize decPolicy (ρ.lookup "p") = v1 at h1 ⊢
-    generalize decRequest (ρ.lookup "req") = v2 at h2 ⊢
-    certify_tac [program, Env.set_cons, Env.lookup_cons, Env.lookup_set_same, Env.lookup_set_ne, Env.set_set, Env.length_set, encList, encNull, decInt, decBool, decStr, encBinding, decBinding, encGrant, decGrant, encMembership, decMembership, encDeny, decDeny, encPolicy, decPolicy, encRequest, decRequest, inGroup_loop1, roleGrants_loop1, access.Rbac.inGroup, access.Rbac.isMember, access.Rbac.roleGrants, access.Rbac.bindingAllows, access.Rbac.denyApplies, access.Rbac.allowed, access.Rbac.denied, access.Rbac.permits, h0, h1, h2]
+    generalize decodePolicy (ρ.lookup "p") = v1 at h1 ⊢
+    generalize decodeRequest (ρ.lookup "req") = v2 at h2 ⊢
+    certify_tac [program, Env.set_cons, Env.lookup_cons, Env.lookup_set_same, Env.lookup_set_ne, Env.set_set, Env.length_set, encList, encNull, decInt, decBool, decStr, decNum, encodeBinding, decodeBinding, encodeGrant, decodeGrant, encodeMembership, decodeMembership, encodeDeny, decodeDeny, encodePolicy, decodePolicy, encodeRequest, decodeRequest, inGroup_loop1, roleGrants_loop1, access.Rbac.inGroup, access.Rbac.isMember, access.Rbac.roleGrants, access.Rbac.bindingAllows, access.Rbac.denyApplies, access.Rbac.allowed, access.Rbac.denied, access.Rbac.permits, h0, h1, h2, h3, h4, h5]
   · intro s ρ; simp [Env.length_set]
   · intro ρ hI
-    obtain ⟨h0, h1, h2⟩ := hI
+    obtain ⟨h0, h1, h2, h3, h4, h5⟩ := hI
     try simp only []
     generalize decBool (ρ.lookup "found") = v0 at h0 ⊢
     simp [Env.set_of_lookup _ _ _ h0]
 
-theorem allowed_cert (p : _) (req : _) :
-    run program "allowed" [(encPolicy p), (encRequest req)] = some (Val.bool (access.Rbac.allowed p req)) := by
-  certify_tac [program, Env.set_cons, Env.lookup_cons, Env.lookup_set_same, Env.lookup_set_ne, Env.set_set, Env.length_set, encList, encNull, decInt, decBool, decStr, encBinding, decBinding, encGrant, decGrant, encMembership, decMembership, encDeny, decDeny, encPolicy, decPolicy, encRequest, decRequest, inGroup_loop1, roleGrants_loop1, allowed_loop1, access.Rbac.inGroup, access.Rbac.isMember, access.Rbac.roleGrants, access.Rbac.bindingAllows, access.Rbac.denyApplies, access.Rbac.allowed, access.Rbac.denied, access.Rbac.permits]
+theorem allowed_cert {N : Type} [tolean.TypeScript.JSNumber N] (p : _) (req : _) :
+    run (N := N) program "allowed" [(encodePolicy p), (encodeRequest req)] = some (Val.bool (access.Rbac.allowed p req)) := by
+  certify_tac [program, Env.set_cons, Env.lookup_cons, Env.lookup_set_same, Env.lookup_set_ne, Env.set_set, Env.length_set, encList, encNull, decInt, decBool, decStr, decNum, encodeBinding, decodeBinding, encodeGrant, decodeGrant, encodeMembership, decodeMembership, encodeDeny, decodeDeny, encodePolicy, decodePolicy, encodeRequest, decodeRequest, inGroup_loop1, roleGrants_loop1, allowed_loop1, access.Rbac.inGroup, access.Rbac.isMember, access.Rbac.roleGrants, access.Rbac.bindingAllows, access.Rbac.denyApplies, access.Rbac.allowed, access.Rbac.denied, access.Rbac.permits]
 
-theorem denied_loop1 (m : tolean.TypeScript.Syntax.Module) (hm : m = program) (fuel : Nat) (items : List access.Rbac.Deny) (ρ : Env)
-    (hI : ρ.lookup "found" = some (Val.bool (decBool (ρ.lookup "found"))) ∧ ρ.lookup "p" = some (encPolicy (decPolicy (ρ.lookup "p"))) ∧ ρ.lookup "req" = some (encRequest (decRequest (ρ.lookup "req")))) :
-    execLoop m (fuel + 3) ρ "d" (tolean.TypeScript.Syntax.Stmt.block (sp 89 29 93 4) [(tolean.TypeScript.Syntax.Stmt.ifStmt (sp 90 5 92 6) (tolean.TypeScript.Syntax.Expr.call (sp 90 9 90 31) (tolean.TypeScript.Syntax.Expr.ident (sp 90 9 90 20) "denyApplies") [(tolean.TypeScript.Syntax.Expr.ident (sp 90 21 90 22) "p"), (tolean.TypeScript.Syntax.Expr.ident (sp 90 24 90 25) "d"), (tolean.TypeScript.Syntax.Expr.ident (sp 90 27 90 30) "req")]) (tolean.TypeScript.Syntax.Stmt.block (sp 90 33 92 6) [(tolean.TypeScript.Syntax.Stmt.exprStmt (sp 91 7 91 20) (tolean.TypeScript.Syntax.Expr.assign (sp 91 7 91 19) tolean.TypeScript.Syntax.AssignOp.assign (tolean.TypeScript.Syntax.Expr.ident (sp 91 7 91 12) "found") (tolean.TypeScript.Syntax.Expr.bool (sp 91 15 91 19) true)))]) none)]) (List.map encDeny items) =
+theorem denied_loop1 {N : Type} [tolean.TypeScript.JSNumber N] (m : tolean.TypeScript.Syntax.Module) (hm : m = program) (fuel : Nat) (items : List access.Rbac.Deny) (ρ : Env N)
+    (hI : ρ.lookup "found" = some (Val.bool (decBool (ρ.lookup "found"))) ∧ ρ.lookup "p" = some (encodePolicy (decodePolicy (ρ.lookup "p"))) ∧ ρ.lookup "req" = some (encodeRequest (decodeRequest (ρ.lookup "req"))) ∧ ρ.lookup "Number" = none ∧ ρ.lookup "NaN" = none ∧ ρ.lookup "Infinity" = none) :
+    execLoop m (fuel + 3) ρ "d" (tolean.TypeScript.Syntax.Stmt.block (sp 89 29 93 4) [(tolean.TypeScript.Syntax.Stmt.ifStmt (sp 90 5 92 6) (tolean.TypeScript.Syntax.Expr.call (sp 90 9 90 31) (tolean.TypeScript.Syntax.Expr.ident (sp 90 9 90 20) "denyApplies") [(tolean.TypeScript.Syntax.Expr.ident (sp 90 21 90 22) "p"), (tolean.TypeScript.Syntax.Expr.ident (sp 90 24 90 25) "d"), (tolean.TypeScript.Syntax.Expr.ident (sp 90 27 90 30) "req")]) (tolean.TypeScript.Syntax.Stmt.block (sp 90 33 92 6) [(tolean.TypeScript.Syntax.Stmt.exprStmt (sp 91 7 91 20) (tolean.TypeScript.Syntax.Expr.assign (sp 91 7 91 19) tolean.TypeScript.Syntax.AssignOp.assign (tolean.TypeScript.Syntax.Expr.ident (sp 91 7 91 12) "found") (tolean.TypeScript.Syntax.Expr.bool (sp 91 15 91 19) true)))]) none)]) (List.map encodeDeny items) =
       some (.normal (ρ.set "found" (Val.bool (List.foldl (((fun p req => fun found d =>
         let found :=
           if (access.Rbac.denyApplies p d req) then
@@ -229,8 +229,8 @@ theorem denied_loop1 (m : tolean.TypeScript.Syntax.Module) (hm : m = program) (f
             found
           else
             found
-        found) (decPolicy (ρ.lookup "p")) (decRequest (ρ.lookup "req")))) (decBool (ρ.lookup "found")) items)))) := by
-  refine execLoop_foldl m (fuel + 3) "d" _ encDeny (fun s ρ => (ρ.set "found" (Val.bool s)))
+        found) (decodePolicy (ρ.lookup "p")) (decodeRequest (ρ.lookup "req")))) (decBool (ρ.lookup "found")) items)))) := by
+  refine execLoop_foldl m (fuel + 3) "d" _ encodeDeny (fun s ρ => (ρ.set "found" (Val.bool s)))
     (fun ρ => (decBool (ρ.lookup "found"))) (fun ρ => (((fun p req => fun found d =>
         let found :=
           if (access.Rbac.denyApplies p d req) then
@@ -238,28 +238,28 @@ theorem denied_loop1 (m : tolean.TypeScript.Syntax.Module) (hm : m = program) (f
             found
           else
             found
-        found) (decPolicy (ρ.lookup "p")) (decRequest (ρ.lookup "req"))))) (fun ρ => ρ.lookup "found" = some (Val.bool (decBool (ρ.lookup "found"))) ∧ ρ.lookup "p" = some (encPolicy (decPolicy (ρ.lookup "p"))) ∧ ρ.lookup "req" = some (encRequest (decRequest (ρ.lookup "req")))) ?_ ?_ ?_ items ρ hI
+        found) (decodePolicy (ρ.lookup "p")) (decodeRequest (ρ.lookup "req"))))) (fun ρ => ρ.lookup "found" = some (Val.bool (decBool (ρ.lookup "found"))) ∧ ρ.lookup "p" = some (encodePolicy (decodePolicy (ρ.lookup "p"))) ∧ ρ.lookup "req" = some (encodeRequest (decodeRequest (ρ.lookup "req"))) ∧ ρ.lookup "Number" = none ∧ ρ.lookup "NaN" = none ∧ ρ.lookup "Infinity" = none) ?_ ?_ ?_ items ρ hI
   · intro ρ s x hI
     subst hm
-    obtain ⟨h0, h1, h2⟩ := hI
+    obtain ⟨h0, h1, h2, h3, h4, h5⟩ := hI
     try simp only []
     generalize decBool (ρ.lookup "found") = v0 at h0 ⊢
-    generalize decPolicy (ρ.lookup "p") = v1 at h1 ⊢
-    generalize decRequest (ρ.lookup "req") = v2 at h2 ⊢
-    certify_tac [program, Env.set_cons, Env.lookup_cons, Env.lookup_set_same, Env.lookup_set_ne, Env.set_set, Env.length_set, encList, encNull, decInt, decBool, decStr, encBinding, decBinding, encGrant, decGrant, encMembership, decMembership, encDeny, decDeny, encPolicy, decPolicy, encRequest, decRequest, inGroup_loop1, roleGrants_loop1, allowed_loop1, access.Rbac.inGroup, access.Rbac.isMember, access.Rbac.roleGrants, access.Rbac.bindingAllows, access.Rbac.denyApplies, access.Rbac.allowed, access.Rbac.denied, access.Rbac.permits, h0, h1, h2]
+    generalize decodePolicy (ρ.lookup "p") = v1 at h1 ⊢
+    generalize decodeRequest (ρ.lookup "req") = v2 at h2 ⊢
+    certify_tac [program, Env.set_cons, Env.lookup_cons, Env.lookup_set_same, Env.lookup_set_ne, Env.set_set, Env.length_set, encList, encNull, decInt, decBool, decStr, decNum, encodeBinding, decodeBinding, encodeGrant, decodeGrant, encodeMembership, decodeMembership, encodeDeny, decodeDeny, encodePolicy, decodePolicy, encodeRequest, decodeRequest, inGroup_loop1, roleGrants_loop1, allowed_loop1, access.Rbac.inGroup, access.Rbac.isMember, access.Rbac.roleGrants, access.Rbac.bindingAllows, access.Rbac.denyApplies, access.Rbac.allowed, access.Rbac.denied, access.Rbac.permits, h0, h1, h2, h3, h4, h5]
   · intro s ρ; simp [Env.length_set]
   · intro ρ hI
-    obtain ⟨h0, h1, h2⟩ := hI
+    obtain ⟨h0, h1, h2, h3, h4, h5⟩ := hI
     try simp only []
     generalize decBool (ρ.lookup "found") = v0 at h0 ⊢
     simp [Env.set_of_lookup _ _ _ h0]
 
-theorem denied_cert (p : _) (req : _) :
-    run program "denied" [(encPolicy p), (encRequest req)] = some (Val.bool (access.Rbac.denied p req)) := by
-  certify_tac [program, Env.set_cons, Env.lookup_cons, Env.lookup_set_same, Env.lookup_set_ne, Env.set_set, Env.length_set, encList, encNull, decInt, decBool, decStr, encBinding, decBinding, encGrant, decGrant, encMembership, decMembership, encDeny, decDeny, encPolicy, decPolicy, encRequest, decRequest, inGroup_loop1, roleGrants_loop1, allowed_loop1, denied_loop1, access.Rbac.inGroup, access.Rbac.isMember, access.Rbac.roleGrants, access.Rbac.bindingAllows, access.Rbac.denyApplies, access.Rbac.allowed, access.Rbac.denied, access.Rbac.permits]
+theorem denied_cert {N : Type} [tolean.TypeScript.JSNumber N] (p : _) (req : _) :
+    run (N := N) program "denied" [(encodePolicy p), (encodeRequest req)] = some (Val.bool (access.Rbac.denied p req)) := by
+  certify_tac [program, Env.set_cons, Env.lookup_cons, Env.lookup_set_same, Env.lookup_set_ne, Env.set_set, Env.length_set, encList, encNull, decInt, decBool, decStr, decNum, encodeBinding, decodeBinding, encodeGrant, decodeGrant, encodeMembership, decodeMembership, encodeDeny, decodeDeny, encodePolicy, decodePolicy, encodeRequest, decodeRequest, inGroup_loop1, roleGrants_loop1, allowed_loop1, denied_loop1, access.Rbac.inGroup, access.Rbac.isMember, access.Rbac.roleGrants, access.Rbac.bindingAllows, access.Rbac.denyApplies, access.Rbac.allowed, access.Rbac.denied, access.Rbac.permits]
 
-theorem permits_cert (p : _) (req : _) :
-    run program "permits" [(encPolicy p), (encRequest req)] = some (Val.bool (access.Rbac.permits p req)) := by
-  certify_tac [program, Env.set_cons, Env.lookup_cons, Env.lookup_set_same, Env.lookup_set_ne, Env.set_set, Env.length_set, encList, encNull, decInt, decBool, decStr, encBinding, decBinding, encGrant, decGrant, encMembership, decMembership, encDeny, decDeny, encPolicy, decPolicy, encRequest, decRequest, inGroup_loop1, roleGrants_loop1, allowed_loop1, denied_loop1, access.Rbac.inGroup, access.Rbac.isMember, access.Rbac.roleGrants, access.Rbac.bindingAllows, access.Rbac.denyApplies, access.Rbac.allowed, access.Rbac.denied, access.Rbac.permits]
+theorem permits_cert {N : Type} [tolean.TypeScript.JSNumber N] (p : _) (req : _) :
+    run (N := N) program "permits" [(encodePolicy p), (encodeRequest req)] = some (Val.bool (access.Rbac.permits p req)) := by
+  certify_tac [program, Env.set_cons, Env.lookup_cons, Env.lookup_set_same, Env.lookup_set_ne, Env.set_set, Env.length_set, encList, encNull, decInt, decBool, decStr, decNum, encodeBinding, decodeBinding, encodeGrant, decodeGrant, encodeMembership, decodeMembership, encodeDeny, decodeDeny, encodePolicy, decodePolicy, encodeRequest, decodeRequest, inGroup_loop1, roleGrants_loop1, allowed_loop1, denied_loop1, access.Rbac.inGroup, access.Rbac.isMember, access.Rbac.roleGrants, access.Rbac.bindingAllows, access.Rbac.denyApplies, access.Rbac.allowed, access.Rbac.denied, access.Rbac.permits]
 
 end access.RbacCert

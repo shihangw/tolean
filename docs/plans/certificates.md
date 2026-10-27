@@ -1,6 +1,6 @@
 # Plan: certificates and round-trip proofs
 
-**Status:** phases 1 and 2 built, phase 6 steps 1 and 2 built · **Date:** 2026-10-26
+**Status:** phases 1 to 3 built, phase 6 steps 1 and 2 built · **Date:** 2026-10-26
 
 A certificate proves the translation of one file. It states, for each
 function, that an interpreter of the source language and the translated Lean
@@ -33,9 +33,12 @@ A certified file trusts three links instead of the translator:
    every environment whose variables have values of the right types, and
    proves it from the general one. The theorem of the function then uses
    that lemma as a rewrite rule. The RBAC example now has a certificate.
-3. **Numbers.** The interpreter gains `number` values through the same
-   abstract number model that the translation uses, so a certificate holds for
-   every model that keeps the number laws.
+3. **Numbers (built).** The interpreter takes its `number` values from the
+   same abstract model, `JSNumber N`, that the translation uses. So each
+   certificate holds for every `N`, and it does not assume the number laws.
+   A certificate proves each number literal's value with `decide`, because
+   `simp` cannot run the literal parser. Every accepted corpus file now has
+   a certificate.
 4. **A total parser.** The lexer and the parser become total functions, with
    fuel or with recursion that Lean accepts. Then the kernel can run them, and
    each certificate checks `parse source = .ok program` by `rfl`. This removes

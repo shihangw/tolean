@@ -115,16 +115,19 @@ instead of the translator. With `--manifest`, the chain records this: the
 translator link becomes `proved`, and `chain trust` lists the interpreter
 and the printer in its place.
 
-A function gets a certificate when it and the functions it calls have no
-`number` values. A loop gets a lemma of its own: the interpreter runs the
+Every function of the subset can get a certificate. A `number` is a value of
+the abstract model `JSNumber N` in the interpreter, as it is in the
+translation, so each theorem holds for every `N`, real doubles among them,
+and assumes none of the number laws. A loop gets a lemma of its own: the interpreter runs the
 loop as the translation's `List.foldl`, for every environment whose variables
 have values of the right types. The lemma follows from `execLoop_foldl` in
 `tolean/TypeScript/Spec/Lemmas/Eval.lean`, which Tolean proves once: when one
 run of the body and one step of the fold agree, the loop and the fold agree.
 `tests/typescript/checkCertify.sh` certifies each corpus file it can, and
 `tests/chain/check.sh` checks that a wrong translation breaks a certificate.
-[The certificates plan](../plans/certificates.md) lists the next phases:
-numbers, and a parser that Lean can reason about, for round-trip proofs.
+[The certificates plan](../plans/certificates.md) lists the next phases: a
+parser that Lean can reason about, for round-trip proofs, and one theorem for
+the translator.
 
 #### Effects (planned)
 
@@ -370,7 +373,7 @@ to trust the translator:
 | Differential test | Run the TypeScript in Node and the generated Lean on the same random inputs, and compare. Evidence for step 2, with a failure report that an agent can reproduce. | Not started |
 | AST as Lean data | The syntax tree of each file as Lean data (`Program`) | Built: `tolean certify` writes it |
 | Output as Lean data | The translator builds its output as a syntax tree, so that one theorem can cover every program it accepts (phase 6 of the certificates plan) | Built: `tolean/TypeScript/Output.lean`, and the translator is total. The theorem is not started. |
-| `eval`, a JS interpreter in Lean | The meaning of a `Program`. It is trusted, so it is tested against Node. | Started: `tolean/TypeScript/Spec/Eval.lean` covers the subset without `number`, with `for…of` and `push`; the test against Node is not started |
+| `eval`, a JS interpreter in Lean | The meaning of a `Program`. It is trusted, so it is tested against Node. | Started: `tolean/TypeScript/Spec/Eval.lean` covers the subset, with `number` values from the abstract model; the test against Node is not started |
 | Construct lemmas | Proved once, for example: an interpreted `for…of` equals `List.foldl` | Built: `execLoop_foldl` in `tolean/TypeScript/Spec/Lemmas/Eval.lean` |
-| Per-file certificate (`f.source`) | Proves `eval(Program)` equals the generated definition, for all inputs. Step 2 is then proved. | Started: functions without `number`, loops included |
+| Per-file certificate (`f.source`) | Proves `eval(Program)` equals the generated definition, for all inputs. Step 2 is then proved. | Built for the whole subset. All 31 accepted corpus files have one. |
 | Boundary guards | Check the preconditions of step 6 where callers enter the verified code | Not started |
