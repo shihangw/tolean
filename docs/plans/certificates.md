@@ -47,7 +47,10 @@ printer gives a certificate that Lean refuses.
       total, with fuel. They read their input from the front of a list,
       because the kernel reads an `Array` and the bytes of a `String` from
       the start each time, which made lexing quadratic. A certificate holds
-      the characters of the source, and it proves
+      the source one line at a time, as `chars!"…"`. The macro reads each
+      string literal as its characters when Lean elaborates the file, so the
+      certificate reads as the source, and the kernel never decodes a
+      `String`. The certificate proves
       `parseChars sourceChars = .ok program` with `decide +kernel`. Lean
       cannot derive `DecidableEq` for a syntax tree, so
       `Syntax/Equality.lean` gives `Module.beq` and proves that it decides

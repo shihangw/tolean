@@ -778,6 +778,22 @@ def parseTokens (tokens : List Token) (target : Edition := .default) : Except Pa
 def parseChars (chars : List Char) (target : Edition := .default) : Except ParseError Module := do
   parseTokens (← lexChars chars target).toList target
 
+open Lean in
+/-- `chars!"ab"` is `['a', 'b']`: Lean reads the string literal as its
+characters when it elaborates the file. A certificate writes its source this
+way, so that it reads as the source, and the kernel never reads a `String`:
+the kernel expands a string literal to its UTF-8 bytes and decodes them again,
+which is quadratic, and it stops on a literal of a few kilobytes. -/
+macro "chars!" s:str : term => do
+  let cs : Array (TSyntax `term) := s.getString.toList.toArray.map fun c => ⟨Syntax.mkCharLit c⟩
+  `(([$cs,*] : List Char))
+
+/-- The characters of `lines`, with a line break between two lines. -/
+def joinLines : List (List Char) → List Char
+  | [] => []
+  | [line] => line
+  | line :: rest => line ++ '\n' :: joinLines rest
+
 /-- The parser gives `m` for the characters `chars`. The kernel can decide this,
 and a certificate does, with `parseChars_eq_of_parsesTo`. -/
 def parsesTo (chars : List Char) (target : Edition) (m : Module) : Bool :=
