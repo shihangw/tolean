@@ -832,22 +832,21 @@ def translateFunction (s : Span) (name : String) (params : List Param)
     | reject s "functions must be named, typed, non-generic and synchronous"
   let name ← checkName s name
   declareTopLevel s name
-  let mut env : Env := {}
-  let mut leanParams := #[]
-  let mut types := #[]
-  for p in params do
-    let type ← orReject p.type p.span "parameters must be plain, typed identifiers"
-    let paramName ← checkName p.span p.name
-    if env.has paramName then reject p.span s!"'{paramName}' is declared twice"
-    let ty ← translateType type
-    env := env.add { name := paramName, binding := .param, type := ty }
-    leanParams := leanParams.push (paramName, ty.lean)
-    types := types.push ty
+  -- The scope of the body, and the parameters in Lean and as types.
+  let (env, leanParams, types) ← params.foldlM
+    (init := (({} : Env), ([] : List (String × Output.Ty)), ([] : List Ty)))
+    fun (env, leanParams, types) p => do
+      let type ← orReject p.type p.span "parameters must be plain, typed identifiers"
+      let paramName ← checkName p.span p.name
+      if env.has paramName then reject p.span s!"'{paramName}' is declared twice"
+      let ty ← translateType type
+      pure (env.add { name := paramName, binding := .param, type := ty },
+        leanParams ++ [(paramName, ty.lean)], types ++ [ty])
   let ret ← translateType returnType
   modify fun c => { c with currentFunction := name, returnType := ret }
   let out ← translateStatements (← fuelLimit) env .ret (blockStatements body)
-  modify fun c => { c with functions := c.functions ++ [{ name, params := types.toList, ret }] }
-  return .function name leanParams.toList ret.lean out
+  modify fun c => { c with functions := c.functions ++ [{ name, params := types, ret }] }
+  return .function name leanParams ret.lean out
 
 /-! ### The number model -/
 
