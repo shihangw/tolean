@@ -3,6 +3,7 @@ import tolean.Version
 import tolean.TypeScript.Edition
 import tolean.TypeScript.Syntax.Parser
 import tolean.TypeScript.Output
+import tolean.TypeScript.Spec.Eval
 
 /-!
 Translate one TypeScript module, in Tolean's subset, to Lean 4 definitions that
@@ -153,57 +154,18 @@ def leanReserved : List String :=
    "private", "protected", "return", "section", "show", "structure", "then", "theorem",
    "universe", "unless", "variable", "where", "with", "Type", "Prop", "Sort"]
 
-/-! ### Literal values -/
+/-! ### Literal values
 
-def digitValue (c : Char) : Nat :=
-  if c.isDigit then c.toNat - '0'.toNat
-  else if 'a' ≤ c && c ≤ 'f' then c.toNat - 'a'.toNat + 10
-  else c.toNat - 'A'.toNat + 10
+The translator reads a literal with the interpreter's own functions,
+`Eval.bigintLiteral` and `Eval.numberLiteral`, so the two cannot disagree on
+its value. -/
 
-def digitsValue (radix : Nat) (digits : List Char) : Nat :=
-  digits.foldl (fun acc c => acc * radix + digitValue c) 0
-
-/-- The value of an integer literal with a `0x`, `0o` or `0b` prefix, or none. -/
-def prefixedValue? : List Char → Option Nat
-  | '0' :: p :: digits =>
-    if p == 'x' || p == 'X' then some (digitsValue 16 digits)
-    else if p == 'o' || p == 'O' then some (digitsValue 8 digits)
-    else if p == 'b' || p == 'B' then some (digitsValue 2 digits)
-    else none
-  | _ => none
-
-def maxSafeInteger : Nat := 2 ^ 53 - 1
+/-- The value of a bigint literal, such as `0xffn`. -/
+def bigintValue? (text : String) : Option Nat := (Eval.bigintLiteral text).map Int.toNat
 
 /-- The safe integer that a number literal denotes exactly, or none. A literal
 such as `0.5`, or one above `2^53 - 1`, has none. -/
-def safeIntegerValue? (text : String) : Option Nat := do
-  let chars := text.toList.filter (· != '_')
-  let value ← match prefixedValue? chars with
-    | some v => some v
-    | none =>
-      let (mantissa, exponent) := chars.span fun c => c != 'e' && c != 'E'
-      let exp : Int ← match exponent with
-        | [] => some 0
-        | _ :: '-' :: ds => some (-(digitsValue 10 ds : Int))
-        | _ :: '+' :: ds | _ :: ds => some (digitsValue 10 ds : Int)
-      let (whole, fraction) := mantissa.span (· != '.')
-      let fraction := fraction.drop 1
-      let m := digitsValue 10 (whole ++ fraction)
-      let scale := exp - fraction.length
-      if m == 0 then some 0
-      else if scale ≥ 0 then
-        -- `m ≥ 1`, so anything past 10^16 is above 2^53.
-        if scale > 16 then none else some (m * 10 ^ scale.toNat)
-      else
-        let k := (-scale).toNat
-        if k > 400 then none
-        else if m % 10 ^ k == 0 then some (m / 10 ^ k) else none
-  if value ≤ maxSafeInteger then some value else none
-
-/-- The value of a bigint literal, such as `0xffn`. -/
-def bigintValue (text : String) : Nat :=
-  let chars := (text.toList.filter (· != '_')).dropLast
-  (prefixedValue? chars).getD (digitsValue 10 chars)
+def safeIntegerValue? (text : String) : Option Nat := (Eval.numberLiteral text).map Int.toNat
 
 /-! ### Errors -/
 
@@ -396,7 +358,7 @@ def nullTestOf (env : Env) (e : Expr) : Option (String × Bool × Ty) :=
 /-- A bigint literal other than `0n`, such as `2n` or `-(3n)`. -/
 def isNonzeroBigintLiteral : Expr → Bool
   | .paren _ inner | .unary _ .neg inner => isNonzeroBigintLiteral inner
-  | .bigint _ text => bigintValue text != 0
+  | .bigint _ text => (bigintValue? text).any (· != 0)
   | _ => false
 
 def numberTest? : String → Option Output.NumberTest
@@ -422,7 +384,8 @@ def translateExpr (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr) : T
   | .paren _ inner => translateExpr fuel env expected inner
   | .bigint _ text =>
     -- Typed, so Lean never defaults a numeral to `Nat`, where `0 - 1 = 0`.
-    return ⟨.int (bigintValue text), false, .bigint⟩
+    let some v := bigintValue? text | reject e.span "a bigint literal must be an integer"
+    return ⟨.int v, false, .bigint⟩
   | .number s text =>
     let some v := safeIntegerValue? text | reject s "a number literal must be a safe integer"
     return ⟨.number v, false, .number⟩
