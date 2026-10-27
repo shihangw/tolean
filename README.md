@@ -455,8 +455,8 @@ Apache License 2.0. See [LICENSE](LICENSE).
 ## Meet Tulie
 
 Tulie is Tolean's idol, a small dragon that everyone on the project adores.
-In the banner, Tulie carries your code into Lean 4 and proudly holds up the
-theorem that comes out.
+Tulie carries your code into Lean 4 and proudly holds up the theorem that
+comes out.
 
 Tulie cheers for every proof that checks. A failed proof doesn't upset
 Tulie, because the kernel caught the mistake, and that is the whole point.
