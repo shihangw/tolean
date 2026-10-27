@@ -22,6 +22,10 @@ A proof can join the last two: the Go code's theorem holds for any store that
 keeps a stated contract, and a second theorem shows that the store built on
 the translated queries keeps it.
 
+To try Tolean without installing it, open the
+[playground](https://shihangw.github.io/tolean/). There you edit an example,
+and Lean checks its proofs in the browser.
+
 ## Getting started
 
 A sort is a good first example, because everyone knows what it must do. This
