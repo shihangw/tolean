@@ -210,6 +210,16 @@ inductive Decl where
 structure Module where
   decls : List Decl
 
+-- These types have decidable equality. The ones that hold lists of
+-- themselves get theirs in `Equality.lean`, because Lean cannot derive it.
+deriving instance DecidableEq for BinOp
+deriving instance DecidableEq for UnaryOp
+deriving instance DecidableEq for UpdateOp
+deriving instance DecidableEq for AssignOp
+deriving instance DecidableEq for LitType
+deriving instance DecidableEq for PropKey
+deriving instance DecidableEq for VarKind
+
 end tolean.TypeScript.Syntax
 
 namespace tolean.TypeScript.Syntax

@@ -236,10 +236,11 @@ def lexNumber (start : Pos) : LexM TokenKind := do
   if (← peekChar).any (fun c => isIdentStart c || c.isDigit) then
     failFrom start "an identifier or a digit cannot follow a number directly"
   let s ← get
-  let text := charsToString (rest0.take (s.i - i0))
+  let chars := rest0.take (s.i - i0)
+  let text := charsToString chars
   if isBigint && !s.target.supports .bigint then
     failFrom start (Feature.bigint.refusal s.target)
-  if text.contains '_' && !s.target.supports .numericSeparators then
+  if chars.contains '_' && !s.target.supports .numericSeparators then
     failFrom start (Feature.numericSeparators.refusal s.target)
   return if isBigint then .bigint text else .number text
 

@@ -314,6 +314,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
   return "\n".intercalate ([
     s!"-- Certificate written by tolean for {file}. Do not edit.",
     "import tolean.TypeScript.Spec.Lemmas.Eval",
+    "import tolean.TypeScript.Syntax.Parser",
     s!"import {leanModule}",
     "",
     s!"namespace {certNs}",
@@ -326,6 +327,15 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     "",
     "/-- The program, as the parser read it. -/",
     s!"def program : tolean.TypeScript.Syntax.Module :=\n  {module m}",
+    "",
+    "/-- The characters of the source file, as code points. -/",
+    s!"def sourceChars : List Char :=\n  ({list (source.toList.map fun c => toString c.toNat)} : List Nat).map Char.ofNat",
+    "",
+    "/-- The parser gives `program` for the source: the kernel runs the parser and",
+    "compares the trees. So the theorems below are about the source file, and the",
+    "printer that wrote `program` need not be trusted. -/",
+    s!"theorem program_parsed : tolean.TypeScript.Syntax.parseChars sourceChars .{target.name.toLower} = Except.ok program :=",
+    "  tolean.TypeScript.Syntax.parseChars_eq_of_parsesTo (by decide +kernel)",
     ""] ++ encs.toList.map (· ++ "\n") ++ thms.toList.map (· ++ "\n") ++ [s!"end {certNs}", ""])
 
 /-- The functions of `source` that get a certificate, and whether that is all

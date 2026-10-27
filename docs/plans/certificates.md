@@ -1,6 +1,6 @@
 # Plan: certificates and round-trip proofs
 
-**Status:** phases 1 to 3 built, phase 6 steps 1 and 2 built · **Date:** 2026-10-26
+**Status:** phases 1 to 3 built, phase 4 step 1 built, phase 6 steps 1 and 2 built · **Date:** 2026-10-26
 
 A certificate proves the translation of one file. It states, for each
 function, that an interpreter of the source language and the translated Lean
@@ -11,13 +11,16 @@ then to a parser whose own correctness Lean can check.
 
 ## What a certified file trusts
 
-A certified file trusts three links instead of the translator:
+A certified file trusts two links instead of the translator:
 
 | Link | Why it is trusted | How it stops being trusted |
 |---|---|---|
-| The parser | It turns the source text into the syntax tree that the certificate is about. | Phase 4 makes the parser total, so that the kernel checks `parse source = program` for each file. Round-trip proofs and a grammar then check the parser itself. |
-| The term printer | It writes the syntax tree as a Lean term. | Phase 4 removes it, because the kernel compares the parser's output with the term directly. |
+| The parser | It turns the source text into the syntax tree that the certificate is about. The kernel checks that it gives that tree for the file, but not that it reads TypeScript correctly. | Round-trip proofs and a grammar check the parser itself (phase 4). |
 | The interpreter | It defines what the subset means. | It stays a specification. Phase 5 tests it against Node on random programs, and later it can come from a formal semantics of ECMA-262. |
+
+The printer that writes the syntax tree as a Lean term was trusted too. Now
+each certificate proves `parseChars sourceChars = .ok program`, so a wrong
+printer gives a certificate that Lean refuses.
 
 ## Phases
 
@@ -39,12 +42,20 @@ A certified file trusts three links instead of the translator:
    A certificate proves each number literal's value with `decide`, because
    `simp` cannot run the literal parser. Every accepted corpus file now has
    a certificate.
-4. **A total parser.** The lexer and the parser become total functions, with
-   fuel or with recursion that Lean accepts. Then the kernel can run them, and
-   each certificate checks `parse source = .ok program` by `rfl`. This removes
-   the term printer from the trusted links. With a total printer from syntax
-   trees back to source text, Tolean proves the round trip
-   `parse (print t) = .ok t` for every tree in the subset.
+4. **A total parser.**
+   1. **The kernel runs the parser (built).** The lexer and the parser are
+      total, with fuel. They read their input from the front of a list,
+      because the kernel reads an `Array` and the bytes of a `String` from
+      the start each time, which made lexing quadratic. A certificate holds
+      the characters of the source, and it proves
+      `parseChars sourceChars = .ok program` with `decide +kernel`. Lean
+      cannot derive `DecidableEq` for a syntax tree, so
+      `Syntax/Equality.lean` gives `Module.beq` and proves that it decides
+      equality. This removes the term printer from the trusted links. The
+      kernel parses a 2.7 KB file in about ten seconds.
+   2. **Round trips.** With a total printer from syntax trees back to source
+      text, Tolean proves the round trip `parse (print t) = .ok t` for every
+      tree in the subset.
 5. **The interpreter against Node.** A differential test runs random programs
    in the interpreter and in Node, and requires the same results. This is
    evidence that the interpreter means what JavaScript means.
