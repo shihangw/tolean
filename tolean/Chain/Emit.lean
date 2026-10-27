@@ -20,7 +20,7 @@ def languageChain : String → List Node × List (String × String)
     ([{ id := "parser", kind := "parser", status := .tested, label := "TypeScript parser"
         evidence := toleanCheck "typescript-parse" "tsc" },
       { id := "translator", kind := "translator", status := .tested, label := "TypeScript translator"
-        evidence := toleanCheck "typescript-translate" "tsc-based translator" },
+        evidence := toleanCheck "typescript-translate" "fixed corpus output and random programs" },
       { id := "spec", kind := "spec", status := .tested, label := "JavaScript number laws"
         module := some "tolean.TypeScript.Spec.Number"
         evidence := toleanCheck "typescript-engines" "Node 22 and 24" },

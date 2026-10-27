@@ -18,7 +18,7 @@
    "kind": "translator",
    "id": "translator",
    "evidence":
-   {"reference": "tsc-based translator",
+   {"reference": "fixed corpus output and random programs",
     "check": "typescript-translate",
     "by": "tolean"}},
   {"status": "tested",
