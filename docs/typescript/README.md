@@ -196,6 +196,10 @@ Tolean rejects these, among others:
   `/` and `%` agree with `Int.tdiv` and `Int.tmod`.
 - `===` on objects, because in JS it compares references. It also rejects
   `===` between nullable values.
+- A test with `null` whose answer the type fixes, such as `x === null` after
+  `if (x === null) return …`. The test does nothing, so the code means the
+  same without it. Refusing it keeps every part of the program in the
+  translation, which the proof of the translator relies on.
 - The global `isNaN` and `isFinite`. These convert their argument to a number
   first. Use `Number.isNaN` and `Number.isFinite` instead.
 - Assignment to a parameter, a `const` or a field, and a push onto an array

@@ -536,16 +536,15 @@ def translateBinary (fuel : Nat) (env : Env) (s : Span) (op : BinOp) (l r : Expr
     let other := if l matches .null _ then r else l
     if other matches .null _ then reject s "compare null with a value, not with null"
     let isEquality := op == .strictEq
-    -- Translate the operand even when the answer is fixed: translating is what
-    -- refuses anything outside the subset, such as an assignment inside it.
-    -- What the subset accepts has no side effects, so its value can be dropped.
     let o ← translateExpr fuel env none other
     match o.type with
     | .nullable _ =>
       return ⟨if isEquality then .isNone o.code else .isSome o.code, false, .boolean⟩
-    | type =>
-      -- Already narrowed: the answer is fixed, as it is in JS.
-      return ⟨.bool (isEquality == (type == .null)), false, .boolean⟩
+    | _ =>
+      -- The type fixes the answer, as after `if (x === null) return …`. The
+      -- test then does nothing, and a constant answer would drop the operand,
+      -- which the interpreter still evaluates. So the subset refuses it.
+      reject s "the type fixes the answer of this test with null, so it does nothing; remove it"
   -- `x === null || e` and `x !== null && e`: TypeScript narrows `x` in `e`,
   -- so Lean matches on `x` and binds it to the value inside.
   if let some (name, isNullTest, value) := nullTestOf env l then
