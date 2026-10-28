@@ -1,9 +1,9 @@
 import tolean.TypeScript.Spec.Eval
 
-/-! ECMA-262 chapter 12, ECMAScript Language: Lexical Grammar. -/
+/-! # §12 ECMAScript Language: Lexical Grammar {#sec-ecmascript-language-lexical-grammar} -/
 namespace tolean.TypeScript.Coverage
 
-/-! ### §12.9.3 Numeric Literals -/
+/-! ### §12.9.3 Numeric Literals {#sec-literals-numeric-literals} -/
 
 -- A literal whose digits are all zero is 0, however long its fraction is.
 -- The interpreter once refused a zero with more than 400 fraction digits.

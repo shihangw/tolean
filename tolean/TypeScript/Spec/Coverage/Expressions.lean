@@ -1,12 +1,12 @@
 import tolean.TypeScript.Spec.Eval
 
-/-! ECMA-262 chapter 13, ECMAScript Language: Expressions. -/
+/-! # §13 ECMAScript Language: Expressions {#sec-ecmascript-language-expressions} -/
 namespace tolean.TypeScript.Coverage
 
 open tolean.TypeScript tolean.TypeScript.Syntax
 open tolean.TypeScript.Eval (Val)
 
-/-! ### §13.2.5.5 PropertyDefinitionEvaluation -/
+/-! ### §13.2.5.5 Runtime Semantics: PropertyDefinitionEvaluation {#sec-runtime-semantics-propertydefinitionevaluation} -/
 
 /-- `{ NaN }` reads the global `NaN` when no local hides it, as any
 `IdentifierReference` does. The interpreter once looked the name up only
@@ -16,7 +16,7 @@ theorem shorthand_reads_global {N : Type} [JSNumber N] (m : Eval.Scope) (fuel : 
       some (.obj [("NaN", .num JSNumber.nan)]) := by
   simp [Eval.eval, Eval.evalProps, List.lookup]
 
-/-! ### §13.5.5 Unary - Operator -/
+/-! ### §13.5.5 Unary - Operator {#sec-unary-minus-operator} -/
 
 /-- `-Infinity` negates a local named `Infinity` as it negates any value, a
 bigint too. The interpreter once gave no value when the local held a

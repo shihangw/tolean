@@ -30,9 +30,20 @@ theorem of the TypeScript modules is in no list, so a new theorem must find
 its place here.
 
 The files in `Spec/Coverage/` hold checks that the interpreter and the
-translator follow a rule that one of them once broke, with the same headings
-as this index. They hold `#guard` checks too, for rules about concrete
-strings.
+translator follow a rule that one of them once broke. They hold `#guard`
+checks too, for rules about concrete strings.
+
+Every heading about the spec, in this file and in `Spec/Coverage/`, has one
+form, so that a script can read them all and compare them with each other
+and with the spec:
+
+    §<number> <title> {#<anchor>}
+
+A chapter has this form as the title of its file in `Spec/Coverage/`, and as
+a `--` comment in `sections`. A section has it as a heading of level 3, with
+the number, the title and the anchor of its entry in `sections`. A heading of
+the extras is `### Extras: <heading>`, with the heading of its group in
+`extras`, and the file of the extras has the title `Extras`.
 
 Each section has its anchor in the spec, its number in ES2024, the default
 target, and its title. The anchor, such as `sec-unary-minus-operator`, stays
@@ -68,27 +79,27 @@ def everySection : Group :=
 /-- The sections of ECMA-262 that the interpreter follows, in the order of
 the spec, with the theorems about each. -/
 def sections : List Section := [
-  -- Chapter 6, ECMAScript Data Types and Values
+  -- §6 ECMAScript Data Types and Values {#sec-ecmascript-data-types-and-values}
   ⟨"sec-ecmascript-language-types-number-type", "6.1.6.1", "The Number Type",
     [``eq_refl_of_safe, ``le_refl_of_safe, ``lt_irrefl_of_safe, ``eq_self_eq_not_isNaN,
     ``eq_posInf_posInf, ``eq_negInf_negInf, ``isNaN_eq_false_of_safe]⟩,
   ⟨"sec-ecmascript-language-types-bigint-type", "6.1.6.2", "The BigInt Type", []⟩,
-  -- Chapter 7, Abstract Operations
+  -- §7 Abstract Operations {#sec-abstract-operations}
   ⟨"sec-toboolean", "7.1.2", "ToBoolean", []⟩,
   ⟨"sec-isstrictlyequal", "7.2.15", "IsStrictlyEqual", []⟩,
-  -- Chapter 9, Executable Code and Execution Contexts
+  -- §9 Executable Code and Execution Contexts {#sec-executable-code-and-execution-contexts}
   ⟨"sec-declarative-environment-records", "9.1.1.1", "Declarative Environment Records",
     [``Eval.Env.set_cons, ``Eval.Env.lookup_cons, ``Eval.Env.length_set, ``Eval.Env.set_set,
     ``Eval.Env.set_of_lookup, ``Eval.Env.lookup_set_same, ``Eval.Env.lookup_set_ne,
     ``Eval.Env.set_comm, ``Eval.Env.set_merge1, ``Eval.Env.set_merge2, ``Eval.Env.set_merge3,
     ``Eval.Env.set_merge4, ``Eval.Env.set_merge5, ``Eval.Env.set_merge6, ``Eval.Env.set_merge7,
     ``Eval.Env.set_merge8]⟩,
-  -- Chapter 10, Ordinary and Exotic Objects Behaviours
+  -- §10 Ordinary and Exotic Objects Behaviours {#sec-ordinary-and-exotic-objects-behaviours}
   ⟨"sec-ecmascript-function-objects-call-thisargument-argumentslist", "10.2.1", "[[Call]]",
     [``Proof.scoped_params]⟩,
-  -- Chapter 12, ECMAScript Language: Lexical Grammar
+  -- §12 ECMAScript Language: Lexical Grammar {#sec-ecmascript-language-lexical-grammar}
   ⟨"sec-literals-numeric-literals", "12.9.3", "Numeric Literals", []⟩,
-  -- Chapter 13, ECMAScript Language: Expressions
+  -- §13 ECMAScript Language: Expressions {#sec-ecmascript-language-expressions}
   ⟨"sec-identifiers", "13.1", "Identifiers",
     [``Proof.Scoped.none, ``Proof.Scoped.some]⟩,
   ⟨"sec-primary-expression-literals", "13.2.3", "Literals", []⟩,
@@ -124,7 +135,7 @@ def sections : List Section := [
     [``Proof.out_ite]⟩,
   ⟨"sec-assignment-operators", "13.15", "Assignment Operators",
     [``Proof.update_sound, ``Proof.out_update, ``Proof.agree_set]⟩,
-  -- Chapter 14, ECMAScript Language: Statements and Declarations
+  -- §14 ECMAScript Language: Statements and Declarations {#sec-ecmascript-language-statements-and-declarations}
   ⟨"sec-block", "14.2", "Block",
     [``Proof.exec_single, ``Proof.blockStatements_eq, ``Proof.execStmt_block, ``Proof.block_ret,
     ``Proof.block_normal, ``Proof.stmtsChanges_append, ``Proof.stmtsChanges_block,
@@ -141,10 +152,10 @@ def sections : List Section := [
     "The for-in, for-of, and for-await-of Statements",
     [``Proof.loop_sim, ``Eval.execLoop_foldl]⟩,
   ⟨"sec-return-statement", "14.10", "The return Statement", []⟩,
-  -- Chapter 15, ECMAScript Language: Functions and Classes
+  -- §15 ECMAScript Language: Functions and Classes {#sec-ecmascript-language-functions-and-classes}
   ⟨"sec-function-definitions", "15.2", "Function Definitions",
     [``Proof.translateFunction_ok, ``Proof.params_fold]⟩,
-  -- Chapter 16, ECMAScript Language: Scripts and Modules
+  -- §16 ECMAScript Language: Scripts and Modules {#sec-ecmascript-language-scripts-and-modules}
   ⟨"sec-source-text-module-record-initialize-environment", "16.2.1.6.4", "InitializeEnvironment",
     [``Proof.module_resolves, ``Proof.declareTopLevel_ok, ``Proof.translateDecl_ok,
     ``Proof.decls_ok, ``declareTopLevel_not_global]⟩,
@@ -153,13 +164,13 @@ def sections : List Section := [
   ⟨"sec-imports", "16.2.2", "Imports",
     [``Proof.translateImport_ok]⟩,
   ⟨"sec-exports", "16.2.3", "Exports", []⟩,
-  -- Chapter 19, The Global Object
+  -- §19 The Global Object {#sec-global-object}
   ⟨"sec-value-properties-of-the-global-object-infinity", "19.1.2", "Infinity", []⟩,
   ⟨"sec-value-properties-of-the-global-object-nan", "19.1.3", "NaN", []⟩,
-  -- Chapter 21, Numbers and Dates
+  -- §21 Numbers and Dates {#sec-numbers-and-dates}
   ⟨"sec-properties-of-the-number-constructor", "21.1.2", "Properties of the Number Constructor",
     [``Proof.out_numberTest]⟩,
-  -- Chapter 23, Indexed Collections
+  -- §23 Indexed Collections {#sec-indexed-collections}
   ⟨"sec-array.prototype.push", "23.1.3.23", "Array.prototype.push",
     [``Proof.out_push]⟩,
   ⟨"sec-createarrayiterator", "23.1.5.1", "CreateArrayIterator", []⟩]

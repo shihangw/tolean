@@ -1,11 +1,11 @@
 import tolean.TypeScript.Proof.Expr
 
-/-! ECMA-262 chapter 16, ECMAScript Language: Scripts and Modules. -/
+/-! # §16 ECMAScript Language: Scripts and Modules {#sec-ecmascript-language-scripts-and-modules} -/
 namespace tolean.TypeScript.Coverage
 
 open tolean.TypeScript tolean.TypeScript.Syntax tolean.TypeScript.Translate tolean.TypeScript.Proof
 
-/-! ### §16.2.1.6.4 InitializeEnvironment
+/-! ### §16.2.1.6.4 InitializeEnvironment {#sec-source-text-module-record-initialize-environment}
 
 A module binds each of its function declarations in the module's
 environment, and the outer environment of that one is the global one. So a
@@ -26,7 +26,7 @@ theorem declareTopLevel_not_global {sp : Span} {name : String} {s s' : Ctx} {u :
     · rename_i hg
       refine ⟨?_, ?_, ?_⟩ <;> rintro rfl <;> simp [isNumberName] at hg
 
-/-! ### §16.2.1.8 HostLoadImportedModule
+/-! ### §16.2.1.8 HostLoadImportedModule {#sec-HostLoadImportedModule}
 
 ECMA-262 leaves it to the host to find the module that a specifier names.
 The subset follows Node, where the specifier names the `.ts` file itself by a

@@ -1,7 +1,8 @@
 import tolean.TypeScript.Proof.Expr
 import tolean.Project
 
-/-!
+/-! # Extras
+
 Checks for rules that come from Lean and the project, not from ECMA-262: how
 Lean reads the names that the output writes, and which files the output of a
 file may name or import. They have no section of ECMA-262, so the index in
@@ -11,7 +12,7 @@ namespace tolean.TypeScript.Coverage
 
 open tolean.TypeScript tolean.TypeScript.Syntax tolean.TypeScript.Translate tolean.TypeScript.Proof
 
-/-! ### Names, as Lean reads them -/
+/-! ### Extras: How Lean reads the output -/
 
 /-- A parameter or a local never has the name of an interface of its file,
 which Lean, unlike TypeScript, would read as the local. -/
@@ -39,13 +40,13 @@ theorem checkLocalName_not_interface {sp : Span} {name r : String} {s s' : Ctx}
 #guard (Project.moduleOf "src" "src/my-lib/Util.lean" matches .ok "«my-lib».Util")
 #guard (Project.moduleOf "lib" "Base.lean" matches .error _)
 
-/-! ### The files that the output names and imports -/
-
 -- The check before printing sees every declaration that the output names: a
 -- call, and a structure in a type.
 #guard Output.Decl.refs
     (.function "f" [("g", .struct ⟨"a.ts", "G"⟩)] .int (.value (.call ⟨"b.ts", "h"⟩ []))) ==
   [⟨"a.ts", "G"⟩, ⟨"b.ts", "h"⟩]
+
+/-! ### Extras: Imports across editions -/
 
 /-- A file imports only from a file translated for an edition no newer than
 its own. -/

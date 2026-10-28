@@ -86,7 +86,9 @@ section, such as those about the translator's monad or the parser, are in its
 extras. The build fails when a theorem is in no list. `Spec/Coverage/` holds
 a check for each rule that the interpreter or the translator once broke,
 with one file for each chapter and one for the extras. A theorem states the
-rule for every input, and a `#guard` checks one input.
+rule for every input, and a `#guard` checks one input. Every heading about the
+spec has the form `§<number> <title> {#<anchor>}`, with the anchor of the
+section in the spec, so a script can read the headings and compare them.
 
 `tests/typescript/checkTranslate.ts` checks the translator. No second
 translator checks its meaning, so these checks show that the output does not

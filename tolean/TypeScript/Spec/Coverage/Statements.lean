@@ -1,11 +1,11 @@
 import tolean.TypeScript.Proof.Expr
 
-/-! ECMA-262 chapter 14, ECMAScript Language: Statements and Declarations. -/
+/-! # §14 ECMAScript Language: Statements and Declarations {#sec-ecmascript-language-statements-and-declarations} -/
 namespace tolean.TypeScript.Coverage
 
 open tolean.TypeScript tolean.TypeScript.Syntax tolean.TypeScript.Translate tolean.TypeScript.Proof
 
-/-! ### §14.3.1 Let and Const Declarations
+/-! ### §14.3.1 Let and Const Declarations {#sec-let-and-const-declarations}
 
 A `let` or `const` variable exists from the start of its block, but it "may
 not be accessed in any way until the variable's LexicalBinding is
