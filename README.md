@@ -6,7 +6,6 @@
   <a href="https://github.com/shihangw/tolean/actions/workflows/ci.yml"><img src="https://github.com/shihangw/tolean/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI status"></a>
   <a href="https://lean-lang.org"><img src="https://img.shields.io/badge/Lean-4-blue" alt="Lean 4"></a>
   <a href="https://shihangw.github.io/tolean/"><img src="https://img.shields.io/badge/playground-try_it-brightgreen" alt="Try it in the playground"></a>
-  <a href="https://github.com/shihangw/tolean"><img src="https://img.shields.io/github/stars/shihangw/tolean?style=social" alt="Star Tolean on GitHub"></a>
 </p>
 
 # Tolean
