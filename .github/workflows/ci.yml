@@ -32,7 +32,7 @@ jobs:
         # PostgreSQL and Graphviz at the pinned versions.
         shell: nix develop --command bash -euo pipefail {0}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: cachix/install-nix-action@v31
         with:
@@ -40,7 +40,7 @@ jobs:
             accept-flake-config = true
 
       - name: Cache Lean build output
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             .lake
@@ -110,7 +110,7 @@ jobs:
       run:
         shell: nix develop --command bash -euo pipefail {0}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: cachix/install-nix-action@v31
         with:
@@ -118,7 +118,7 @@ jobs:
             accept-flake-config = true
 
       - name: Cache Lean build output
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .lake
           key: lake-${{ runner.os }}-${{ hashFiles('lean-toolchain', 'lake-manifest.json', 'lakefile.toml', '**/*.lean') }}
@@ -128,7 +128,7 @@ jobs:
         run: lake build --wfail
 
       - name: Cache the translator's WebAssembly build
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: wasm/.build
           key: translator-wasm-${{ hashFiles('lean-toolchain', 'flake.lock', 'wasm/build.sh') }}-${{ hashFiles('tolean/**/*.lean', 'wasm/*.lean', 'wasm/glue.c') }}
@@ -145,7 +145,7 @@ jobs:
           node checkTranslate.ts --require-wasm
 
       - name: Cache the Lean that runs in the browser
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: playground/site/.cache/*.tar.gz
           key: lean-wasm-${{ hashFiles('playground/site/lean-runtime.json') }}
@@ -160,14 +160,14 @@ jobs:
         working-directory: playground/site
         run: node scripts/check-wasm.ts
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: tolean-wasm
           path: wasm/out
           if-no-files-found: error
 
       - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: playground/site/dist
 
@@ -187,4 +187,4 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
