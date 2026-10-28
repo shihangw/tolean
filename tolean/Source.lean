@@ -28,6 +28,20 @@ deriving Repr, DecidableEq, Inhabited
 def ParseError.render (e : ParseError) (file : String) : String :=
   s!"{file}:{e.span.start.line}:{e.span.start.col}: {e.message}"
 
+/-- A declaration of a program of several files, such as a function or an
+interface: the file that declares it, and its name in that file. -/
+structure DeclRef where
+  file : String
+  name : String
+deriving Repr, DecidableEq, Inhabited
+
+/-- Two keys are equal when their files and their names are. `simp` uses this
+to decide a lookup by key. -/
+@[simp] theorem DeclRef.beq_def (a b : DeclRef) : (a == b) = (a.file == b.file && a.name == b.name) := by
+  cases a; cases b
+  rw [Bool.eq_iff_iff]
+  simp
+
 /-- `n` in base 16, lower case, padded with zeros to `width` digits. -/
 def hexDigits (n : Nat) (width : Nat) : String :=
   let digits := (Nat.toDigits 16 n).foldl String.push ""

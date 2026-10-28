@@ -143,11 +143,13 @@ def Job.sources : Job → List String
   | .go _ fs => fs
   | .sql _ f ms => ms ++ [f]
 
-/-- A unit's translation: the output path, its namespace and the Lean text. -/
+/-- A unit's translation: the output path, its namespace and the Lean text,
+and for a TypeScript file, what it exports to the files that import from it. -/
 structure Translation where
   output : String
   ns : String
   lean : String
+  interface : Option TypeScript.Translate.Interface := none
 
 /-- The names of the sqlc queries in a file: each `-- name: X` line. -/
 def queryNames (text : String) : List String :=
@@ -158,7 +160,8 @@ def queryNames (text : String) : List String :=
 
 /-- Translate one unit, given the text of each file it reads. This does no IO,
 so the playground runs it in the browser. -/
-def translateUnit (u : Job) (read : String → Except String String) : Except String Translation := do
+def translateUnit (u : Job) (read : String → Except String String)
+    (deps : List (String × TypeScript.Translate.Dependency) := []) : Except String Translation := do
   match u with
   | .typescript s source =>
     let output := (string? s "output").getD s!"{dirOf source}{(stem source).capitalize}.lean"
@@ -166,8 +169,8 @@ def translateUnit (u : Job) (read : String → Except String String) : Except St
     let targetName := (string? s "target").getD TypeScript.Edition.default.name
     let some target := TypeScript.Edition.parse? targetName
       | throw s!"{source}: unknown target '{targetName}'"
-    let lean ← TypeScript.Translate.translate source (← read source) ns target
-    return { output, ns, lean }
+    let (lean, iface) ← TypeScript.Translate.translateWith source (← read source) ns target deps
+    return { output, ns, lean, interface := some iface }
   | .go s files =>
     let dir := dirOf (files.head!)
     let pkgName := ((segments dir).getLast?).getD "Package"
@@ -190,6 +193,60 @@ def translateUnit (u : Job) (read : String → Except String String) : Except St
     let migrationTexts ← migrations.mapM fun f => return (f, ← read f)
     return { output, ns, lean := ← Sql.Translate.translate migrationTexts [(queryFile, text)] queries ns }
 
+/-- The TypeScript files of the project that `source` imports from, as the
+parser reads it for the edition `target`. -/
+def typescriptImports (sources : List String) (read : String → Except String String)
+    (target : TypeScript.Edition) (source : String) : List String :=
+  match read source with
+  | .error _ => []
+  | .ok text =>
+    match TypeScript.Syntax.parse text target with
+    | .error _ => []
+    | .ok m => (TypeScript.Translate.importedFiles source m).filter sources.contains
+
+/-- The edition that a unit's settings name, or the default one. -/
+def Job.edition : Job → TypeScript.Edition
+  | .typescript s _ =>
+    ((string? s "target").bind TypeScript.Edition.parse?).getD TypeScript.Edition.default
+  | _ => TypeScript.Edition.default
+
+/-- The units, with each TypeScript file after the files it imports from, and
+an error for each TypeScript file that an import cycle leaves out. -/
+def typescriptOrder (jobs : List Job) (read : String → Except String String) :
+    List Job × List (Job × String) := Id.run do
+  let ts := jobs.filter (· matches .typescript ..)
+  let others := jobs.filter fun j => !(j matches .typescript ..)
+  let sources := ts.flatMap Job.sources
+  let imports := ts.map fun j => (j, j.sources.flatMap (typescriptImports sources read j.edition))
+  -- Kahn's algorithm: take a file when every file it imports is taken.
+  let mut done : List String := []
+  let mut ordered : List Job := []
+  let mut left := imports
+  for _ in ts do
+    let (ready, rest) := left.partition fun (_, is) => is.all done.contains
+    if ready.isEmpty then break
+    ordered := ordered ++ ready.map (·.1)
+    done := done ++ ready.flatMap (·.1.sources)
+    left := rest
+  let cycle := ", ".intercalate (left.flatMap (·.1.sources))
+  return (ordered ++ others,
+    left.map fun (j, _) => (j, s!"{", ".intercalate j.sources}: an import cycle, or an import of a file in one: {cycle}"))
+
+/-- Translate every unit. A TypeScript file comes after the files it imports
+from, and it sees what they export. -/
+def translateAll (jobs : List Job) (read : String → Except String String) :
+    List (Job × Except String Translation) := Id.run do
+  let (ordered, cyclic) := typescriptOrder jobs read
+  let mut deps : List (String × TypeScript.Translate.Dependency) := []
+  let mut out : List (Job × Except String Translation) := []
+  for j in ordered do
+    let t := translateUnit j read deps
+    if let (.typescript _ source, .ok t) := (j, t) then
+      if let some iface := t.interface then
+        deps := deps ++ [(source, { module := namespaceOf t.output, ns := t.ns, interface := iface })]
+    out := out ++ [(j, t)]
+  return out ++ cyclic.map fun (j, e) => (j, .error e)
+
 /-- The language name and target that a unit's manifest records. -/
 def Job.chainLanguage : Job → String × Option String
   | .typescript s _ =>
@@ -199,13 +256,9 @@ def Job.chainLanguage : Job → String × Option String
 
 /-- What one unit writes: its Lean file and manifest, and for a TypeScript
 file with `certify`, its certificate. -/
-def unitWrites (u : Job) : IO (List Write) := do
-  let texts ← u.sources.mapM fun (f : String) => do return (f, ← IO.FS.readFile f)
-  let read (f : String) : Except String String :=
-    match texts.lookup f with
-    | some t => .ok t
-    | none => .error s!"{f}: not read"
-  let t ← ok (translateUnit u read)
+def unitWrites (u : Job) (read : String → Except String String) (result : Except String Translation) :
+    IO (List Write) := do
+  let t ← ok result
   let (language, target) := u.chainLanguage
   let m ← Chain.fileManifest language target u.sources t.output t.lean t.ns
   let lean := [Write.file t.output t.lean]
@@ -231,7 +284,14 @@ def unitWrites (u : Job) : IO (List Write) := do
 are relative to the project root, which must be the working directory. -/
 def plan (config : Json) : IO (List Write) := do
   let files ← projectFiles "."
-  return (← (units config files).mapM unitWrites).flatten
+  let jobs := units config files
+  let texts ← (jobs.flatMap Job.sources).eraseDups.mapM fun (f : String) => do
+    return (f, ← IO.FS.readFile f)
+  let read (f : String) : Except String String :=
+    match texts.lookup f with
+    | some t => .ok t
+    | none => .error s!"{f}: not read"
+  return (← (translateAll jobs read).mapM fun (u, t) => unitWrites u read t).flatten
 
 /-! ### Workspaces as JSON
 
@@ -242,12 +302,8 @@ whole workspace as JSON, `{"files": [{"path", "text"}, …]}` with
 when the workspace has no valid `tolean.json`. One unit's error does not hide
 the others, and nothing here reads or writes files. -/
 
-def unitJson (texts : List (String × String)) (job : Job) : Json :=
-  let read (f : String) : Except String String :=
-    match texts.lookup f with
-    | some t => .ok t
-    | none => .error s!"{f}: no such file"
-  match translateUnit job read with
+def unitJson (job : Job) (result : Except String Translation) : Json :=
+  match result with
   | .ok t => Json.mkObj [("output", t.output), ("lean", t.lean)]
   | .error e => Json.mkObj [("sources", Lean.toJson job.sources), ("error", e)]
 
@@ -260,7 +316,15 @@ def translateWorkspace (input : String) : Except String Json := do
     | throw "the workspace has no tolean.json"
   let config ← (Json.parse configText).mapError (s!"tolean.json: {·}")
   let jobs := units config (texts.map (·.1))
-  return Json.mkObj [("units", Json.arr (jobs.map (unitJson texts)).toArray)]
+  let read (f : String) : Except String String :=
+    match texts.lookup f with
+    | some t => .ok t
+    | none => .error s!"{f}: no such file"
+  let results := translateAll jobs read
+  -- Report the units in the project's order, whatever order they ran in.
+  let ordered := jobs.filterMap fun j => (results.find? fun (k, _) => k.sources == j.sources).map
+    fun (_, r) => unitJson j r
+  return Json.mkObj [("units", Json.arr ordered.toArray)]
 
 /-- `translateWorkspace` as JSON text, with an error as `{"error"}`. -/
 def workspaceJson (input : String) : String :=

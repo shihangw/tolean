@@ -69,9 +69,10 @@ what the translator writes, which a proof of the translator needs.
 `tolean/TypeScript/Proof/` proves the translator for every program that it
 accepts. `tolean/TypeScript/Output/Eval.lean` gives the output tree a meaning:
 it evaluates the tree over the interpreter's values. The theorem
-`translate_sound` in `Proof/Module.lean` states that when the translator
-accepts a file, a function of the output tree gives a value only when the
-interpreter gives the same value for the same call. It holds for every input,
+`program_sound` in `Proof/Module.lean` states that when the translator
+accepts every file of a program, a function of the output tree gives a value
+only when the interpreter gives the same value for the same call.
+`translate_sound` is the case of one file. It holds for every input,
 every model of numbers and every amount of fuel. The theorem does not assume
 that the types the translator gives are right. It is about the tree, so we
 still trust the printer link: the printed Lean computes what the evaluator
@@ -163,6 +164,44 @@ it by the name in the source. The number type parameter is `N`, or `N1`,
 `corpus/translate/leanNames.ts` checks it. A Lean keyword, such as `def` or
 `where`, is still refused as a name.
 
+### Imports
+
+A file may import the exported functions and interfaces of other files of
+the project:
+
+```ts
+import { clamp, type Gauge } from "./lib/util.ts";
+```
+
+- An import names the file by a relative path with its `.ts` extension, such
+  as `"./util.ts"`. Node's type stripping needs that extension, and a bundler
+  accepts it, so the import names the same file wherever the code runs.
+  Tolean refuses `"./util.js"` and `"./util"`. The file must be among the
+  sources of `tolean.json`.
+- An interface needs `type`, either before its name or as `import type`.
+  Node's type stripping removes only imports that say `type`, so without it
+  the JavaScript would import a name that does not exist at run time.
+- Only named imports are supported. Tolean refuses `as`, a default or
+  namespace import, an import for its side effects, a re-export, and an
+  import cycle.
+
+`tolean translate` translates the files of a project so that each file comes
+after the files it imports from. Each file becomes its own Lean module, with
+an `import` line for each file that it imports from. The output writes a name
+from another file from the root, with that file's namespace, such as
+`_root_.lib.Util.clamp`, so that a local name cannot capture it. A file may
+read and build the fields of an interface that reaches it through another
+interface's fields, without importing it. A file
+that imports from a file that uses the number model uses it too, so that it
+has a number type to pass. The command for one file, `tolean translate
+<file>`, refuses an import, because it does not see the other files.
+
+The interpreter runs a program of several files, and a call runs the function
+that its file declares or imports under that name. `program_sound` covers
+such programs. A file with imports has no certificate yet.
+`corpus/translate/projects/` holds projects that the translator must accept
+and compile, and projects that it must refuse.
+
 ## The subset
 
 The TypeScript translation is a shallow embedding, which means it maps
@@ -232,8 +271,9 @@ Tolean rejects these, among others:
   `JSON.stringify`. A Lean structure has no order, so the literal must use
   the declared one. Code in the subset can only read a field by name, so
   inside the subset the order never changes a result.
-- Recursion, closures and arrow functions, classes, `async`, imports,
-  exceptions, and optional or mutable interface fields.
+- Recursion, closures and arrow functions, classes, `async`, exceptions, and
+  optional or mutable interface fields.
+- Imports other than the named imports of [Imports](#imports).
 
 The files in `tests/typescript/corpus/translate/reject/` state in executable
 form what the translator refuses. To see what that does and does not guarantee,
@@ -374,7 +414,7 @@ path = "node_modules/tolean/lean"
 | Step | What happens | Status | How it is checked |
 |---|---|---|---|
 | 1. Parse and type-check | Tolean's parser reads the source, and the translator types the subset itself | Trusted, tested | `tests/typescript/check.ts` compares the parser's syntax trees with `tsc`'s, on the corpus and on random programs. The type checker is tested through the translation corpus. |
-| 2. Translate | Tolean writes readable Lean definitions (the generated `.lean` files) | **Proved** up to the printer | `translate_sound` proves the translation to the output tree for every accepted program: when the tree's evaluator gives a value, the interpreter gives the same value. The printer link is trusted: that the printed Lean computes what the evaluator gives for the tree, and that the evaluator gives a value where the printed Lean does. The golden files of the corpus, compiling random programs and the CI drift check test it, and a [certificate](#certificates) proves the whole step for one file. |
+| 2. Translate | Tolean writes readable Lean definitions (the generated `.lean` files) | **Proved** up to the printer | `program_sound` proves the translation to the output tree for every accepted program: when the tree's evaluator gives a value, the interpreter gives the same value. The printer link is trusted: that the printed Lean computes what the evaluator gives for the tree, and that the evaluator gives a value where the printed Lean does. The golden files of the corpus, compiling random programs and the CI drift check test it, and a [certificate](#certificates) proves the whole step for one file. |
 | 3. Prove the claims | Hand-written proofs show that each claim in `Spec/*.lean` holds for the generated definitions | **Proved** | The Lean kernel, `#audit_claims`, `lake build --wfail`, and no `sorry`, `admit`, `axiom` or `native_decide` |
 | 4. Assume JS number facts | `SafeIntLaws` and `SpecialValueLaws` in `tolean/TypeScript/Spec/Number.lean` | Trusted, tested | `tests/typescript/jsNumberLaws.test.ts` checks each law against real doubles. |
 | 5. Run | Type stripping or a bundler makes the JavaScript that Node runs | Trusted | The subset uses only constructs that type stripping leaves unchanged |
@@ -389,7 +429,7 @@ below removes the printer from what we trust, and it tests the interpreter:
 | Differential test | Run the TypeScript in Node and the generated Lean on the same random inputs, and compare. Evidence for step 2, with a failure report that an agent can reproduce. | Not started |
 | AST as Lean data | The syntax tree of each file as Lean data (`Program`) | Built: `tolean certify` writes it |
 | Output as Lean data | The translator builds its output as a syntax tree, so that one theorem can cover every program it accepts (phase 6 of the certificates plan) | Built: `tolean/TypeScript/Output.lean`, and the translator is total |
-| The translator's theorem | `translate_sound`: for every accepted program, the output tree computes only what the interpreter computes | Built: `tolean/TypeScript/Proof/` |
+| The translator's theorem | `program_sound`: for every accepted program, of one file or several, the output tree computes only what the interpreter computes | Built: `tolean/TypeScript/Proof/` |
 | Printer link | For each file, a proof that the printed definitions compute what the output tree means. With the translator's theorem, every file is then proved. | Not started |
 | `eval`, a JS interpreter in Lean | The meaning of a `Program`. It is trusted, so it is tested against Node. | Started: `tolean/TypeScript/Spec/Eval.lean` covers the subset, with `number` values from the abstract model; the test against Node is not started |
 | Construct lemmas | Proved once, for example: an interpreted `for…of` equals `List.foldl` | Built: `execLoop_foldl` in `tolean/TypeScript/Spec/Lemmas/Eval.lean` |

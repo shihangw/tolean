@@ -1,0 +1,1 @@
+'./base.js' is not a relative path to a .ts file

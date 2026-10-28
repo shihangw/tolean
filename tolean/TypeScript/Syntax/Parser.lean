@@ -737,9 +737,47 @@ def parseTypeAlias (start : Pos) (exported : Bool) : ParseM Decl := do
   endStatement
   return .typeAlias (← spanFrom start) exported name type
 
+/-- `import { a, type B } from "./x.ts";` and `import type { B } from "./x.ts";`.
+Other forms of `import` leave the subset. -/
+def parseImport (start : Pos) : ParseM Decl := do
+  let refuse {A : Type} (t : Token) : ParseM A :=
+    failAt t "tolean supports only 'import { a, b } from \"./file.ts\"', with no default or namespace import and no 'as'"
+  discard advance
+  let mut clauseType := false
+  if (← peek).isIdent "type" && (← peekAt 1).isPunct "{" then
+    discard advance
+    clauseType := true
+  let t ← peek
+  unless t.isPunct "{" do refuse t
+  discard advance
+  let names ← iterate (← budget) #[] fun names => do
+    let t ← peek
+    if t.isPunct "}" then return (names, false)
+    let next ← peekAt 1
+    -- `type` marks the name after it, unless it is the name itself.
+    let typeOnly := t.isIdent "type" && next.isAnyIdent
+    if typeOnly then discard advance
+    let nameToken ← peek
+    let name ← readName
+    if (← peek).isIdent "as" then refuse (← peek)
+    let names := names.push { span := nameToken.span, typeOnly := clauseType || typeOnly, name }
+    let t ← peek
+    if t.isPunct "," then discard advance
+    else if !t.isPunct "}" then unexpected t "',' or '}'"
+    return (names, true)
+  let _ ← expectPunct "}"
+  let t ← peek
+  unless t.isIdent "from" do unexpected t "'from'"
+  discard advance
+  let t ← advance
+  let .string source := t.kind | unexpected t "a string"
+  endStatement
+  return .import (← spanFrom start) names.toList source
+
 def parseDecl : ParseM Decl := do
   let first ← peek
   let start := first.span.start
+  if first.isKeyword "import" then return ← parseImport start
   let exported := first.isKeyword "export"
   if exported then discard advance
   let t ← peek

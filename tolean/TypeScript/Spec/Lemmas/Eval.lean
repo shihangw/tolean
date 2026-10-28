@@ -120,7 +120,7 @@ of its names, so the result does not depend on the order of the writes. -/
   simp only [Env.set_comm _ a _ _ _ h8, Env.set_comm _ a _ _ _ h7, Env.set_comm _ a _ _ _ h6, Env.set_comm _ a _ _ _ h5, Env.set_comm _ a _ _ _ h4, Env.set_comm _ a _ _ _ h3, Env.set_comm _ a _ _ _ h2, Env.set_comm _ a _ _ _ h1, Env.set_set]
 
 /-- A loop and a fold agree when one run of the body and one fold step agree. -/
-theorem execLoop_foldl [JSNumber N] {α σ : Type} (m : Syntax.Module) (fuel : Nat) (name : String) (body : Syntax.Stmt)
+theorem execLoop_foldl [JSNumber N] {α σ : Type} (m : Scope) (fuel : Nat) (name : String) (body : Syntax.Stmt)
     (encX : α → Val N) (upd : σ → Env N → Env N) (dec : Env N → σ) (step : Env N → σ → α → σ) (I : Env N → Prop)
     (hbody : ∀ ρ s x, I ρ → execStmt m fuel ((name, encX x) :: upd s ρ) body =
       some (.normal ((name, encX x) :: upd (step ρ s x) ρ)))

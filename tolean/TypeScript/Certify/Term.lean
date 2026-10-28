@@ -148,7 +148,11 @@ def field (f : Field) : String :=
   s!"\{ span := {span f.span}, readonly := {f.readonly}, name := {str f.name}, " ++
     s!"optional := {f.optional}, type := {typeExpr f.type} }"
 
+def importName (n : ImportName) : String :=
+  s!"\{ span := {span n.span}, typeOnly := {n.typeOnly}, name := {str n.name} }"
+
 def decl : Decl → String
+  | .import s names source => s!"({ns}Decl.import {span s} {list (names.map importName)} {str source})"
   | .function s e n ps r b =>
     s!"({ns}Decl.function {span s} {e} {str n} {list (ps.map param)} " ++
       s!"{option (r.map typeExpr)}\n    {stmt b})"

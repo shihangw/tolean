@@ -283,6 +283,7 @@ theorem Field.beqList_iff : (xs ys : List Field) → Field.beqList xs ys = true 
     cases ys <;> simp [and_assoc, Field.beqList, Field.beq_iff x, Field.beqList_iff xs]
 
 def Decl.beq : Decl → Decl → Bool
+  | .import a0 a1 a2, .import b0 b1 b2 => decide (a0 = b0) && decide (a1 = b1) && decide (a2 = b2)
   | .function a0 a1 a2 a3 a4 a5, .function b0 b1 b2 b3 b4 b5 => decide (a0 = b0) && decide (a1 = b1) && decide (a2 = b2) && Param.beqList a3 b3 && TypeExpr.beqOpt a4 b4 && Stmt.beq a5 b5
   | .interface a0 a1 a2 a3, .interface b0 b1 b2 b3 => decide (a0 = b0) && decide (a1 = b1) && decide (a2 = b2) && Field.beqList a3 b3
   | .typeAlias a0 a1 a2 a3, .typeAlias b0 b1 b2 b3 => decide (a0 = b0) && decide (a1 = b1) && decide (a2 = b2) && TypeExpr.beq a3 b3
@@ -291,6 +292,8 @@ def Decl.beq : Decl → Decl → Bool
   | _, _ => false
 
 theorem Decl.beq_iff : (a b : Decl) → Decl.beq a b = true ↔ a = b
+  | .import a0 a1 a2, b => by
+    cases b <;> simp [and_assoc, Decl.beq]
   | .function a0 a1 a2 a3 a4 a5, b => by
     cases b <;> simp [and_assoc, Decl.beq, Param.beqList_iff a3, TypeExpr.beqOpt_iff a4, Stmt.beq_iff a5]
   | .interface a0 a1 a2 a3, b => by

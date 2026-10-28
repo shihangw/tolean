@@ -24,11 +24,18 @@ open tolean.TypeScript.Eval (Val Env Outcome)
 
 variable {N : Type} [JSNumber N]
 
-/-- The functions of the output, by name: their parameters and their body. -/
+/-- The functions of the output of `file`, by name: their parameters and their
+body. -/
 def functions (decls : List Decl) : List (String × List String × Body) :=
   decls.filterMap fun
     | .function name params _ body => some (name, params.map (·.1), body)
     | .struct .. => none
+
+/-- The functions of the output of a program, under the file of each: the
+output of each file, with that file's path. -/
+def functionsOf (program : List (String × List Decl)) : List (DeclRef × List String × Body) :=
+  program.flatMap fun (file, decls) =>
+    (functions decls).map fun (name, params, body) => (⟨file, name⟩, params, body)
 
 /-- `=` on the values that the output compares: integers, booleans and
 strings. -/
@@ -74,7 +81,7 @@ def bindState (names : List String) (inner outer : Env N) : Option (Env N) :=
 mutual
 
 /-- The value of `e`. `fuel` bounds the depth of nested calls. -/
-def Expr.eval (fs : List (String × List String × Body)) (fuel : Nat) (ρ : Env N) :
+def Expr.eval (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : Env N) :
     Expr → Option (Val N)
   | .int n => some (.int n)
   | .number n => some (.num (JSNumber.ofSafeInt n))
@@ -99,12 +106,12 @@ def Expr.eval (fs : List (String × List String × Body)) (fuel : Nat) (ρ : Env
   | .ite c a b => do
     let .bool t ← Expr.eval fs fuel ρ c | none
     if t then Expr.eval fs fuel ρ a else Expr.eval fs fuel ρ b
-  | .call name args => do
+  | .call ref args => do
     let vs ← Expr.evalList fs fuel ρ args
     match fuel with
     | 0 => none
     | fuel + 1 =>
-      let (params, body) ← fs.lookup name
+      let (params, body) ← fs.lookup ref
       if params.length != vs.length then none
       match ← Body.exec fs fuel (params.zip vs).reverse body with
       | .ret v => some v
@@ -168,13 +175,13 @@ def Expr.eval (fs : List (String × List String × Body)) (fuel : Nat) (ρ : Env
     return .int (op.apply x y)
 termination_by e => (fuel, sizeOf e, 0)
 
-def Expr.evalList (fs : List (String × List String × Body)) (fuel : Nat) (ρ : Env N) :
+def Expr.evalList (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : Env N) :
     List Expr → Option (List (Val N))
   | [] => some []
   | e :: es => do return (← Expr.eval fs fuel ρ e) :: (← Expr.evalList fs fuel ρ es)
 termination_by es => (fuel, sizeOf es, 0)
 
-def Expr.evalFields (fs : List (String × List String × Body)) (fuel : Nat) (ρ : Env N) :
+def Expr.evalFields (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : Env N) :
     List (String × Expr) → Option (List (String × Val N))
   | [] => some []
   | (key, e) :: rest => do
@@ -183,7 +190,7 @@ termination_by fields => (fuel, sizeOf fields, 0)
 
 /-- Run a body: it returns the function's value, or it ends in the state of a
 branch or a loop body, with the bindings it has made. -/
-def Body.exec (fs : List (String × List String × Body)) (fuel : Nat) (ρ : Env N) :
+def Body.exec (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : Env N) :
     Body → Option (Outcome N)
   | .value e => do return .ret (← Expr.eval fs fuel ρ e)
   | .state _ => some (.normal ρ)
@@ -208,7 +215,7 @@ termination_by b => (fuel, sizeOf b, 0)
 
 /-- `List.foldl` over `items` with the step `fun (names) element => body`: the
 bindings of `names` after each element, on top of `ρ`. -/
-def Body.runFold (fs : List (String × List String × Body)) (fuel : Nat) (names : List String)
+def Body.runFold (fs : List (DeclRef × List String × Body)) (fuel : Nat) (names : List String)
     (element : String) (body : Body) (ρ : Env N) : List (Val N) → Option (Env N)
   | [] => some ρ
   | x :: xs => do
@@ -219,12 +226,12 @@ termination_by xs => (fuel, sizeOf body, xs.length + 1)
 
 end
 
-/-- Call the function `name` of the output with `args`. -/
-def run (decls : List Decl) (name : String) (args : List (Val N)) (fuel : Nat := 64) :
-    Option (Val N) := do
-  let (params, body) ← (functions decls).lookup name
+/-- Call the function `key` of the output with `args`. -/
+def runIn (fs : List (DeclRef × List String × Body)) (key : DeclRef) (args : List (Val N))
+    (fuel : Nat := 64) : Option (Val N) := do
+  let (params, body) ← fs.lookup key
   if params.length != args.length then none
-  match ← Body.exec (functions decls) fuel (params.zip args).reverse body with
+  match ← Body.exec fs fuel (params.zip args).reverse body with
   | Outcome.ret v => some v
   | Outcome.normal _ => none
 

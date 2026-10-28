@@ -188,12 +188,12 @@ end Monad
 /-! ### The statement -/
 
 variable [JSNumber N]
-variable (m : Module) (fs : List (String × List String × Output.Body)) (fuel : Nat)
+variable (m : Eval.Scope) (fs : List (DeclRef × List String × Output.Body)) (fuel : Nat)
 
 omit [JSNumber N] in
-theorem scoped_frame {env : Translate.Env} {ρ ρ' : Eval.Env N} {c : List String} (hs : Scoped env ρ)
-    (hf : Frame c ρ' ρ) : Scoped env ρ' :=
-  fun n => (hf.isSome n).trans (hs n)
+theorem scoped_frame {m : Eval.Scope} {env : Translate.Env} {ρ ρ' : Eval.Env N} {c : List String}
+    (hs : Scoped m env ρ) (hf : Frame c ρ' ρ) : Scoped m env ρ' :=
+  ⟨fun n => (hf.isSome n).trans (hs.1 n), hs.2⟩
 
 omit [JSNumber N] in
 theorem agree_set {ρs ρo : Eval.Env N} {n : String} {w : Val N} (ha : Agree ρs ρo)
@@ -235,10 +235,10 @@ theorem out_update {ρ : Eval.Env N} {op : Output.IntOp} {name : String} {a : Ou
 
 /-- An update statement sets a name in scope to the value of the output's
 update. -/
-theorem update_sound (hc : CallsAgree (N := N) m fs fuel) {env : Translate.Env} {sp : Span} {e : Expr}
+theorem update_sound (hc : CallsAgree (N := N) m.program fs fuel) {env : Translate.Env} {sp : Span} {e : Expr}
     {ctx ctx' : Ctx} {name : String} {upd : Output.Expr}
     (h : translateUpdate env sp e ctx = .ok (name, upd) ctx')
-    {ρs ρo : Eval.Env N} (ha : Agree ρs ρo) (hs : Scoped env ρs) {w : Val N}
+    {ρs ρo : Eval.Env N} (ha : Agree ρs ρo) (hs : Scoped m env ρs) {w : Val N}
     (hw : Output.Expr.eval fs fuel ρo upd = some w) :
     env.has name = true ∧ name ∈ exprChanges e ∧
       Eval.execStmt m fuel ρs (.exprStmt sp e) = some (.normal (ρs.set name w)) := by
@@ -311,7 +311,7 @@ environments that agree: the interpreter's has new bindings, which `env`
 does not have, in front of the old names, and it changes only the names that
 `ss` change. -/
 def StmtSim (env : Translate.Env) (tail : Tail) (ss : List Stmt) (body : Output.Body) : Prop :=
-  ∀ (ρs ρo : Eval.Env N), Agree ρs ρo → Scoped env ρs →
+  ∀ (ρs ρo : Eval.Env N), Agree ρs ρo → Scoped m env ρs →
     (∀ v, Output.Body.exec fs fuel ρo body = some (.ret v) → Eval.exec m fuel ρs ss = some (.ret v)) ∧
     (∀ ρo', Output.Body.exec fs fuel ρo body = some (.normal ρo') →
       tail.isRet = false ∧ ∃ new mod, Eval.exec m fuel ρs ss = some (.normal (new ++ mod)) ∧
@@ -443,7 +443,7 @@ theorem decl_sim {env env' : Translate.Env} {s : Span} {d : VarDecl} {init : Exp
     (hinit : d.init = some init) (hfresh : env.has d.name = false)
     (henv : env' = env.add { name := d.name, binding := b, type := ty })
     (hbody : ∀ (ρo : Eval.Env N) (o : Outcome N), Output.Body.exec fs fuel ρo body = some o → ∃ w,
-      (∀ ρs, Agree ρs ρo → Scoped env ρs → Eval.eval m fuel ρs init = some w) ∧
+      (∀ ρs, Agree ρs ρo → Scoped m env ρs → Eval.eval m fuel ρs init = some w) ∧
         Output.Body.exec fs fuel ((d.name, w) :: ρo) rb = some o)
     (hrest : StmtSim (N := N) m fs fuel env' tail rest rb) :
     StmtSim (N := N) m fs fuel env tail (.varDecl s d :: rest) body := by
@@ -456,14 +456,15 @@ theorem decl_sim {env env' : Translate.Env} {s : Span} {d : VarDecl} {init : Exp
     simp only [List.lookup]; split
     · rfl
     · exact ha x
-  have hs' : ∀ w, Scoped (env.add { name, binding := b, type := ty }) ((name, w) :: ρs) := fun w x => by
-    rw [has_add, ← hs x]
+  have hs' : ∀ w, Scoped m (env.add { name, binding := b, type := ty }) ((name, w) :: ρs) :=
+    fun w => ⟨fun x => by
+    rw [has_add, ← hs.1 x]
     simp only [List.lookup]
     by_cases hx : x = name
     · subst hx; simp
     · have h1 : (x == name) = false := by simpa using hx
       have h2 : (name == x) = false := by simpa using Ne.symm hx
-      simp [h1, h2]
+      simp [h1, h2], hs.2⟩
   have hstep : ∀ w, Eval.eval m fuel ρs init = some w →
       Eval.exec m fuel ρs (.varDecl s { kind, name, type, init := some init } :: rest) =
         Eval.exec m fuel ((name, w) :: ρs) rest := by
@@ -505,7 +506,7 @@ theorem lookup_append_fresh {n : String} :
 /-- The output `br` runs `whenTrue` when the interpreter's test is truthy, and
 `whenFalse` when it is not. -/
 def BranchSim (env : Translate.Env) (test : Expr) (br whenTrue whenFalse : Output.Body) : Prop :=
-  ∀ (ρs ρo : Eval.Env N) (o : Outcome N), Agree ρs ρo → Scoped env ρs →
+  ∀ (ρs ρo : Eval.Env N) (o : Outcome N), Agree ρs ρo → Scoped m env ρs →
     Output.Body.exec fs fuel ρo br = some o →
     ∃ w, Eval.eval m fuel ρs test = some w ∧
       Output.Body.exec fs fuel ρo (if w.truthy then whenTrue else whenFalse) = some o
@@ -514,14 +515,15 @@ def BranchSim (env : Translate.Env) (test : Expr) (br whenTrue whenFalse : Outpu
 theorem if_ret_sim {env envT envF : Translate.Env} {sp : Span} {test : Expr} {t : Stmt}
     {e : Option Stmt} {rest : List Stmt} {tail : Tail} {br wt wf : Output.Body}
     (hT : ∀ x, envT.has x = env.has x) (hF : ∀ x, envF.has x = env.has x)
+    (hTf : envT.functions = env.functions) (hFf : envF.functions = env.functions)
     (htail : tail.isRet = true) (hrest : e.isSome = true → rest = [])
     (hbr : BranchSim (N := N) m fs fuel env test br wt wf)
     (hwt : StmtSim (N := N) m fs fuel envT tail (blockStatements t) wt)
     (hwf : StmtSim (N := N) m fs fuel envF tail ((e.map blockStatements).getD [] ++ rest) wf) :
     StmtSim (N := N) m fs fuel env tail (.ifStmt sp test t e :: rest) br := by
   intro ρs ρo ha hs
-  have hsT : Scoped envT ρs := fun x => (hs x).trans (hT x).symm
-  have hsF : Scoped envF ρs := fun x => (hs x).trans (hF x).symm
+  have hsT : Scoped m envT ρs := ⟨fun x => (hs.1 x).trans (hT x).symm, fun f hf => hs.2 f (hTf ▸ hf)⟩
+  have hsF : Scoped m envF ρs := ⟨fun x => (hs.1 x).trans (hF x).symm, fun f hf => hs.2 f (hFf ▸ hf)⟩
   constructor
   · intro v hv
     obtain ⟨w, hw, hb⟩ := hbr ρs ρo _ ha hs hv
@@ -553,6 +555,7 @@ theorem if_ret_sim {env envT envF : Translate.Env} {sp : Span} {test : Expr} {t 
 theorem if_state_sim {env envT envF : Translate.Env} {sp : Span} {test : Expr} {t : Stmt}
     {e : Option Stmt} {rest : List Stmt} {tail : Tail} {br wt wf rb : Output.Body} {names : List String}
     (hT : ∀ x, envT.has x = env.has x) (hF : ∀ x, envF.has x = env.has x)
+    (hTf : envT.functions = env.functions) (hFf : envF.functions = env.functions)
     (hnames : names = changedNames (blockStatements t ++ (e.map blockStatements).getD []) env)
     (hbr : BranchSim (N := N) m fs fuel env test br wt wf)
     (hwt : StmtSim (N := N) m fs fuel envT (.state names) (blockStatements t) wt)
@@ -560,8 +563,8 @@ theorem if_state_sim {env envT envF : Translate.Env} {sp : Span} {test : Expr} {
     (hrest : StmtSim (N := N) m fs fuel env tail rest rb) :
     StmtSim (N := N) m fs fuel env tail (.ifStmt sp test t e :: rest) (.letState names br rb) := by
   intro ρs ρo ha hs
-  have hsT : Scoped envT ρs := fun x => (hs x).trans (hT x).symm
-  have hsF : Scoped envF ρs := fun x => (hs x).trans (hF x).symm
+  have hsT : Scoped m envT ρs := ⟨fun x => (hs.1 x).trans (hT x).symm, fun f hf => hs.2 f (hTf ▸ hf)⟩
+  have hsF : Scoped m envF ρs := ⟨fun x => (hs.1 x).trans (hF x).symm, fun f hf => hs.2 f (hFf ▸ hf)⟩
   -- The `if` ends in `mod`, which agrees with the output's state after the
   -- `letState`.
   have key : ∀ o, Output.Body.exec fs fuel ρo (.letState names br rb) = some o →
@@ -669,7 +672,7 @@ theorem loop_sim {env bodyEnv : Translate.Env} {x : String} {elemType : Ty} {nam
     (henv : bodyEnv = env.add { name := x, binding := .const, type := elemType })
     (hfresh : env.has x = false)
     (hnames : names = changedNames (blockStatements bodyS) env) :
-    ∀ (vs : List (Val N)) (ρs ρo ρo' : Eval.Env N), Agree ρs ρo → Scoped env ρs →
+    ∀ (vs : List (Val N)) (ρs ρo ρo' : Eval.Env N), Agree ρs ρo → Scoped m env ρs →
       Output.Body.runFold fs fuel names x bodyOut ρo vs = some ρo' →
       ∃ mod, Eval.execLoop m fuel ρs x bodyS vs = some (.normal mod) ∧ Agree mod ρo' ∧
         Frame (stmtChanges bodyS) mod ρs := by
@@ -698,15 +701,15 @@ theorem loop_sim {env bodyEnv : Translate.Env} {x : String} {elemType : Ty} {nam
             simp only [List.lookup]; split
             · rfl
             · exact ha n
-          have hs' : Scoped (env.add { name := x, binding := .const, type := elemType }) ((x, v) :: ρs) :=
-            fun n => by
-              rw [has_add, ← hs n]
+          have hs' : Scoped m (env.add { name := x, binding := .const, type := elemType }) ((x, v) :: ρs) :=
+            ⟨fun n => by
+              rw [has_add, ← hs.1 n]
               simp only [List.lookup]
               by_cases hn : n = x
               · subst hn; simp
               · have h1 : (n == x) = false := by simpa using hn
                 have h2 : (x == n) = false := by simpa using Ne.symm hn
-                simp [h1, h2]
+                simp [h1, h2], hs.2⟩
           obtain ⟨-, new, mod, hex, hag, hnew, hfr⟩ := (hbody _ _ ha' hs').2 inner hb
           obtain ⟨e, he, hdrop, hlen⟩ := block_normal m fuel bodyS hex hfr
           -- `mod` is the loop variable in front of the outer names.
@@ -752,7 +755,7 @@ theorem loop_sim {env bodyEnv : Translate.Env} {x : String} {elemType : Ty} {nam
           · rw [stmtsChanges_block] at hfr'
             exact (hfr₂.trans hfr').mono fun n hn => by simp at hn; exact hn
 
-theorem stmts_sound (hc : CallsAgree (N := N) m fs fuel) (F : Nat) :
+theorem stmts_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
     (∀ env tail ss ctx body ctx', translateStatements F env tail ss ctx = .ok body ctx' →
       StmtSim (N := N) m fs fuel env tail ss body) ∧
     (∀ env s d rest tail ctx body ctx', translateVariable F env s d rest tail ctx = .ok body ctx' →
@@ -827,7 +830,7 @@ theorem stmts_sound (hc : CallsAgree (N := N) m fs fuel) (F : Nat) :
             cases hw : Output.Expr.eval fs fuel ρo upd with
             | none => simp [hw] at ho
             | some w => exact ⟨w, rfl, by simpa [hw] using ho⟩
-          have hs' : ∀ w, Scoped env (ρs.set name w) := fun w =>
+          have hs' : ∀ w, Scoped m env (ρs.set name w) := fun w =>
             scoped_frame hs (Frame.set (c := [name]) (by simp) ρs)
           constructor
           · intro v hv
@@ -947,7 +950,7 @@ theorem stmts_sound (hc : CallsAgree (N := N) m fs fuel) (F : Nat) :
             split at hbr
             · simp only [pure_ok] at hbr
               obtain ⟨rfl, -⟩ := hbr
-              exact if_ret_sim m fs fuel (fun _ => rfl) (fun _ => rfl) hret.1
+              exact if_ret_sim m fs fuel (fun _ => rfl) (fun _ => rfl) rfl rfl hret.1
                 (fun he => by simpa [he] using hrest)
                 (branch_ite m fs fuel ((expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hce))
                 (ihS _ _ _ _ _ _ hwt) (ihS _ _ _ _ _ _ hwf)
@@ -965,7 +968,7 @@ theorem stmts_sound (hc : CallsAgree (N := N) m fs fuel) (F : Nat) :
               split at hbr
               · simp only [pure_ok] at hbr
                 obtain ⟨rfl, -⟩ := hbr
-                exact if_state_sim m fs fuel (fun _ => rfl) (fun _ => rfl) rfl
+                exact if_state_sim m fs fuel (fun _ => rfl) (fun _ => rfl) rfl rfl rfl
                   (branch_ite m fs fuel ((expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hce))
                   (ihS _ _ _ _ _ _ hwt) (ihS _ _ _ _ _ _ hwf) (ihS _ _ _ _ _ _ hrb)
               · simp at hbr
@@ -982,7 +985,7 @@ theorem stmts_sound (hc : CallsAgree (N := N) m fs fuel) (F : Nat) :
             · rename_i hrest
               simp only [pure_bind, bind_ok, pure_ok] at h
               obtain ⟨wt, s₁, hwt, wf, s₂, hwf, rfl, -⟩ := h
-              exact if_ret_sim m fs fuel (narrow_has _ _ _) (narrow_has _ _ _) hret.1
+              exact if_ret_sim m fs fuel (narrow_has _ _ _) (narrow_has _ _ _) rfl rfl hret.1
                 (fun he => by simpa [he] using hrest) (hb wt wf) (ihS _ _ _ _ _ _ hwt) (ihS _ _ _ _ _ _ hwf)
           · simp only [pure_bind, ite_state] at h
             split at h
@@ -995,7 +998,7 @@ theorem stmts_sound (hc : CallsAgree (N := N) m fs fuel) (F : Nat) :
                 · simp at h
                 · simp only [bind_ok, pure_ok] at h
                   obtain ⟨wt, s₁, hwt, wf, s₂, hwf, rb, s₄, hrb, rfl, -⟩ := h
-                  exact if_state_sim m fs fuel (narrow_has _ _ _) (narrow_has _ _ _) rfl (hb wt wf)
+                  exact if_state_sim m fs fuel (narrow_has _ _ _) (narrow_has _ _ _) rfl rfl rfl (hb wt wf)
                     (ihS _ _ _ _ _ _ hwt) (ihS _ _ _ _ _ _ hwf) (ihS _ _ _ _ _ _ hrb)
     · intro env s kind x iterable b rest tail ctx body ctx' h
       unfold translateForOf at h
