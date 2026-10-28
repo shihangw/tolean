@@ -426,9 +426,9 @@ trusts the translator. It trusts the parser and the interpreter that defines
 what the subset means (`tolean/TypeScript/Spec/Eval.lean`) instead. The
 kernel checks that the parser gives the certificate's program for the file.
 `tests/typescript/interpreter.test.ts` tests the interpreter against Node on
-random programs. The [certificates plan](docs/plans/certificates.md) proves the
-parser's round trip and the printer link next. Each language page lists its
-steps in more detail.
+random programs, and a certificate also proves the printer link for its file.
+The [certificates plan](docs/plans/certificates.md) proves the parser's round
+trip next. Each language page lists its steps in more detail.
 
 ## Claims and proofs
 

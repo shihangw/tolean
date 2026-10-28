@@ -1,6 +1,10 @@
 import Lean
-import tolean.TypeScript.Proof.Module
+import tolean.TypeScript.Certify
+import tolean.TypeScript.Interpret
+import tolean.TypeScript.Proof.Guard
+import tolean.TypeScript.Proof.Link
 import tolean.TypeScript.Syntax.Equality
+import tolean.TypeScript.Syntax.Print
 import tolean.TypeScript.Spec.Lemmas.Number
 import tolean.TypeScript.Spec.Coverage.LexicalGrammar
 import tolean.TypeScript.Spec.Coverage.Expressions
@@ -25,9 +29,10 @@ Node, so they are trusted, not proved.
 machinery, the rules that come from Lean, and the parser.
 
 The build checks the index. Each name must be a theorem that exists, so a
-rename breaks the build. The check at the end of this file fails when a
+rename breaks the build. The checks at the end of this file fail when a
 theorem of the TypeScript modules is in no list, so a new theorem must find
-its place here.
+its place here, and when a file under `tolean/TypeScript` is not imported
+here, so a new file cannot hide its theorems from the first check.
 
 The files in `Spec/Coverage/` hold checks that the interpreter and the
 translator follow a rule that one of them once broke. They hold `#guard`
@@ -74,7 +79,7 @@ structure Group where
 /-- The theorems that cover every section of the subset at once. -/
 def everySection : Group :=
   ⟨"Every section of the subset", [``Proof.program_sound, ``Proof.translate_sound,
-    ``Proof.programTranslation_rel, ``Proof.expr_sound, ``Proof.stmts_sound]⟩
+    ``Proof.programTranslation_rel, ``Proof.expr_sound, ``Proof.stmts_sound, ``Proof.decls_sound]⟩
 
 /-- The sections of ECMA-262 that the interpreter follows, in the order of
 the spec, with the theorems about each. -/
@@ -150,7 +155,7 @@ def sections : List Section := [
     ``Proof.if_state_sim, ``Proof.branch_ite, ``Proof.branch_null]⟩,
   ⟨"sec-for-in-and-for-of-statements", "14.7.5",
     "The for-in, for-of, and for-await-of Statements",
-    [``Proof.loop_sim, ``Eval.execLoop_foldl]⟩,
+    [``Proof.loop_sim, ``Proof.runFold_foldl]⟩,
   ⟨"sec-return-statement", "14.10", "The return Statement", []⟩,
   -- §15 ECMAScript Language: Functions and Classes {#sec-ecmascript-language-functions-and-classes}
   ⟨"sec-function-definitions", "15.2", "Function Definitions",
@@ -210,6 +215,8 @@ def extras : List Group := [
     ``Syntax.Stmt.beqList_iff, ``Syntax.Stmt.beqOpt_iff, ``Syntax.Param.beq_iff,
     ``Syntax.Param.beqList_iff, ``Syntax.Field.beq_iff, ``Syntax.Field.beqList_iff,
     ``Syntax.Decl.beq_iff, ``Syntax.Decl.beqList_iff, ``Syntax.Module.beq_iff]⟩,
+  ⟨"Certificates: the check that the translator gives the tree", [``Proof.translatesTo_ok,
+    ``Output.Expr.beq_iff, ``Output.Expr.beqList_iff, ``Output.Expr.beqFields_iff]⟩,
   ⟨"Certificates: the encoders and decoders", [``Eval.encNull_some, ``Eval.encNull_none,
     ``Eval.decInt_int, ``Eval.decBool_bool, ``Eval.decNum_num, ``Eval.decStr_str, ``Eval.decList_list,
     ``Eval.decNull_some, ``Eval.decList_nil, ``Eval.decList_cons, ``Eval.decList_encList,
@@ -237,5 +244,20 @@ def unlisted : MetaM (List Name) := do
   let missing ← unlisted
   unless missing.isEmpty do
     throwError "the index does not list these theorems: {missing}"
+
+/-- The modules under `tolean/TypeScript` that this file does not import.
+Lake builds the library from the package root, so the path is relative. -/
+def unimported : MetaM (List Name) := do
+  let env ← getEnv
+  let files ← System.FilePath.walkDir "tolean/TypeScript"
+  let modules := files.toList.filterMap fun f =>
+    if f.extension != some "lean" then none
+    else some ((f.withExtension "").components.foldl Name.str .anonymous)
+  return modules.filter fun m => m != `tolean.TypeScript.Spec.Coverage && !env.header.moduleNames.contains m
+
+#eval show MetaM Unit from do
+  let missing ← unimported
+  unless missing.isEmpty do
+    throwError "the index does not import these modules, so it cannot check their theorems: {missing}"
 
 end tolean.TypeScript.Coverage

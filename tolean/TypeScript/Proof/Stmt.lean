@@ -136,12 +136,25 @@ theorem bindState_lookup {inner : Eval.Env N} :
     | none => simp [hk] at h
     | some w =>
       simp only [hk] at h
-      have := bindState_lookup (names := ks) (outer := (k, w) :: outer) (by simpa [Output.bindState] using h) n
-      rw [this]
+      -- After `k`, a lookup of `k` gives `w`, and a lookup of another name
+      -- gives what it gave in `outer`.
+      have hmid : ∀ m, (if (outer.lookup k).isSome then Eval.Env.set outer k w else (k, w) :: outer).lookup m =
+          if m = k then some w else outer.lookup m := by
+        intro m
+        split
+        · next hs =>
+          by_cases hm : m = k
+          · subst hm; simp [Eval.Env.lookup_set_same _ _ _ hs]
+          · simp [hm, Eval.Env.lookup_set_ne _ _ _ _ (Ne.symm hm)]
+        · by_cases hm : m = k
+          · subst hm; simp [List.lookup]
+          · have : (m == k) = false := by simpa using hm
+            simp [hm, this, List.lookup]
+      have := bindState_lookup (names := ks) (by simpa [Output.bindState] using h) n
+      rw [this, hmid]
       by_cases hn : n = k
-      · subst hn; by_cases hm : n ∈ ks <;> simp [hm, hk, List.lookup]
-      · have : (n == k) = false := by simpa using hn
-        by_cases hm : n ∈ ks <;> simp [hm, hn, this, List.lookup]
+      · subst hn; by_cases hm : n ∈ ks <;> simp [hm, hk]
+      · by_cases hm : n ∈ ks <;> simp [hm, hn]
 
 /-! ### The translator's state -/
 

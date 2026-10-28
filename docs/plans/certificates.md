@@ -1,6 +1,6 @@
 # Plan: certificates and round-trip proofs
 
-**Status:** phases 1 to 3 and 5 built, phase 4 step 1 built, phase 6 steps 1 to 3 built · **Date:** 2026-10-27
+**Status:** phases 1 to 3, 5 and 6 built, phase 4 step 1 built · **Date:** 2026-10-27
 
 A certificate proves the translation of one file. It states, for each
 function, that an interpreter of the source language and the translated Lean
@@ -106,12 +106,19 @@ printer gives a certificate that Lean refuses.
       `Infinity`, and we fixed them. We also found a test against `null`
       whose answer the type fixes. The output dropped its operand, so the
       subset now refuses that test.
-   4. **The printer link.** For each file, a theorem states that the printed
-      definitions compute what the evaluator gives for the tree. Each output
-      form has one lemma, so the proof follows the tree and does not search.
-      The kernel checks `translate program = .ok out` for the file, so with
-      step 3 the whole file is proved. Every certificate then follows from
-      one theorem.
+   4. **The printer link (built).** A certificate holds the output tree as a
+      Lean term, and the kernel checks with `translatesTo` that the
+      translator gives that tree for the parsed program. For each function,
+      a `link` theorem states that the printed definition computes what the
+      evaluator gives for the tree, and `link_tac` proves it by unfolding
+      the evaluator. A loop's lemma follows from `runFold_foldl`. With step
+      3, `decls_sound` turns the link into the certificate's theorem, so
+      every certificate now follows from one theorem and none unfolds the
+      interpreter. All 29 accepted corpus files have such a certificate.
+      Two changes made this possible. `alwaysReturns` became structural, so
+      the kernel can run the translator on an `if`. And `let (x, y) := …`
+      in the evaluator gives `x` and `y` their new values in place, as every
+      lookup sees it, so a loop leaves the environment the same length.
 
 ## Why a certificate first
 
