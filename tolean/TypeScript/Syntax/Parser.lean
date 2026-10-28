@@ -16,6 +16,9 @@ refuses the code instead of choosing one:
 - `(a)` or `async(a)`, then `{`: `tsc` reads an arrow function that lacks its
   `=>`, JavaScript reads `(a); {`. The parser refuses the `{` there, and a
   `:` after `async(a)`, which `tsc` reads as a return type.
+- `a.` with a name on the next line that another word follows on that line,
+  such as `default instanceof b`: `tsc` reads a member access that lacks its
+  name, JavaScript reads `a.default instanceof b`. The parser refuses it.
 - `a ?? b || c` without parentheses is a syntax error, and so is `-a ** b`.
 - Declarations stand only where JavaScript allows them, `return` only in a
   function, `break` and `continue` only in a loop.
@@ -269,6 +272,22 @@ def peekAssignOp : ParseM (Option (AssignOp × Nat)) := do
   | .punct symbol => return (AssignOp.ofSymbol? symbol).map (·, 1)
   | _ => return none
 
+/-- A `>` comes in `tokens` before the end of the group or the statement
+that they start in, `depth` brackets in: before a `)`, `]` or `}` that closes
+that group, a `;` outside every bracket, or the end of the file. The
+recursion is structural, so that a proof can state what the scan finds. -/
+def closesTypeArguments (depth : Nat) : List Token → Bool
+  | [] => false
+  | t :: rest =>
+    match t.kind with
+    | .eof => false
+    | .punct "(" | .punct "[" | .punct "{" => closesTypeArguments (depth + 1) rest
+    | .punct ")" | .punct "]" | .punct "}" =>
+      if depth == 0 then false else closesTypeArguments (depth - 1) rest
+    | .punct ";" => if depth == 0 then false else closesTypeArguments depth rest
+    | .punct ">" => true
+    | _ => closesTypeArguments depth rest
+
 /-- `tsc` reads `f < A, B > (x)` as a call with type arguments, where
 JavaScript reads two comparisons, and type stripping keeps `tsc`'s reading.
 Tolean does not parse type arguments in expressions, so it refuses every `<`
@@ -276,20 +295,9 @@ operator that `tsc` could read as their start: any `<` followed by a `>`
 before the end of its group or statement. This refuses some plain
 comparisons, such as `a < b && c > d`; parentheses make them parse. -/
 def refuseTypeArgumentLookalike (lt : Token) : ParseM Unit := do
-  let s ← get
-  let mut depth := 0
-  for t in s.rest.drop 1 do
-    match t.kind with
-    | .eof => return
-    | .punct "(" | .punct "[" | .punct "{" => depth := depth + 1
-    | .punct ")" | .punct "]" | .punct "}" =>
-      if depth == 0 then return
-      depth := depth - 1
-    | .punct ";" => if depth == 0 then return
-    | .punct ">" =>
-      failAt lt ("tsc may read this '<' as the start of type arguments; " ++
-        "add parentheses around the comparison")
-    | _ => pure ()
+  if closesTypeArguments 0 ((← get).rest.drop 1) then
+    failAt lt ("tsc may read this '<' as the start of type arguments; " ++
+      "add parentheses around the comparison")
 
 /-- `tsc` reads `(a)` or `async(a)` followed by `{` as an arrow function that
 lacks its `=>`, even across a line break, and reports an error. JavaScript
@@ -307,6 +315,18 @@ def refuseAsyncArrowLookalike : ParseM Unit := do
   let t ← peek
   if t.isPunct ":" then
     failAt t "tsc may read this 'async(…) :' as an arrow function; put the call in parentheses"
+
+/-- `tsc` reads `a.` and then, on the next line, a name that another word
+follows on that line, such as `default instanceof b`, as a member access that
+lacks its name, and reports an error (`parseRightSideOfDot`). JavaScript reads
+`a.default instanceof b`. Call after the `.`. -/
+def refuseSplitMember : ParseM Unit := do
+  let name ← peek
+  let next ← peekAt 1
+  let word (t : Token) : Bool := t.isAnyIdent || t.kind matches .keyword _
+  if name.newlineBefore && word name && word next && !next.newlineBefore then
+    failAt name ("tsc reads a name on the line after '.' that another word follows as an " ++
+      "unfinished member access; put the name on the line of the '.'")
 
 def unaryOp? (t : Token) : Option UnaryOp :=
   match t.kind with
@@ -413,6 +433,7 @@ def parseLeftHandSide (fuel : Nat) : ParseM Expr := do
     let t ← peek
     if t.isPunct "." then
       discard advance
+      refuseSplitMember
       let name ← readPropertyName
       return (.member (← spanFrom start) expr name, true)
     else if t.isPunct "[" then
