@@ -170,6 +170,15 @@ theorem checkName_ok {sp : Span} {name r : String} {s s' : Ctx} :
   · simp
   · simp only [pure_bind, pure_ok]; rintro ⟨rfl, rfl⟩; exact ⟨rfl, rfl⟩
 
+theorem checkLocalName_ok {sp : Span} {name r : String} {s s' : Ctx}
+    (h : checkLocalName sp name s = .ok r s') : r = name ∧ s' = s := by
+  simp only [checkLocalName, bind_ok, get_ok, ite_state] at h
+  obtain ⟨c, s₁, ⟨rfl, rfl⟩, h⟩ := h
+  split at h
+  · simp at h
+  · simp only [pure_bind] at h
+    exact checkName_ok h
+
 theorem declare_ok {env env' : Translate.Env} {sp : Span} {name : String} {b : Binding} {t : Ty}
     {s s' : Ctx} (h : declare env sp name b t s = .ok env' s') :
     env.has name = false ∧ env' = env.add { name, binding := b, type := t } ∧ s' = s := by
@@ -179,7 +188,7 @@ theorem declare_ok {env env' : Translate.Env} {sp : Span} {name : String} {b : B
   · rename_i hn
     simp only [pure_bind, bind_ok] at h
     obtain ⟨r, s₁, hr, h⟩ := h
-    obtain ⟨-, rfl⟩ := checkName_ok hr
+    obtain ⟨-, rfl⟩ := checkLocalName_ok hr
     simp only [pure_ok] at h
     exact ⟨by simpa using hn, h.1.symm, h.2.symm⟩
 

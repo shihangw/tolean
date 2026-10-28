@@ -138,7 +138,7 @@ theorem translateFunction_ok {sp : Span} {ex : Bool} {name : String} {params : L
     have hps := params_fold (hstep := fun env lp ts p ctx r ctx' hg => by
         simp only [bind_ok, orReject_ok, ite_state] at hg
         obtain ⟨type, s₁, ⟨-, rfl⟩, pn, s₂, hpn, hg⟩ := hg
-        obtain ⟨rfl, -⟩ := checkName_ok hpn
+        obtain ⟨rfl, -⟩ := checkLocalName_ok hpn
         split at hg
         · simp at hg
         · simp only [pure_bind, bind_ok, pure_ok] at hg

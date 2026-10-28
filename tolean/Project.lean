@@ -273,11 +273,21 @@ def translateAll (jobs : List Job) (read : String → Except String String) :
   let (ordered, cyclic) := typescriptOrder jobs read
   let mut deps : List (String × TypeScript.Translate.Dependency) := []
   let mut out : List (Job × Except String Translation) := []
+  -- The output each unit writes, and the unit that writes it.
+  let mut taken : List (String × String) := []
   for j in ordered do
-    let t := translateUnit j read deps
-    if let (.typescript _ source, .ok t) := (j, t) then
-      if let some iface := t.interface then
-        deps := deps ++ [(source, { module := t.module, ns := t.ns, interface := iface })]
+    let mut t := translateUnit j read deps
+    -- Two units that write one file would overwrite each other, as
+    -- `foo.ts` and `foo.test.ts` both write `Foo.lean` by default.
+    if let .ok tr := t then
+      let writer := ", ".intercalate j.sources
+      match taken.lookup tr.output with
+      | some other =>
+        t := .error s!"{writer} and {other} both translate to {tr.output}; set output for one of them"
+      | none => taken := taken ++ [(tr.output, writer)]
+    if let (.typescript _ source, .ok tr) := (j, t) then
+      if let some iface := tr.interface then
+        deps := deps ++ [(source, { module := tr.module, ns := tr.ns, interface := iface })]
     out := out ++ [(j, t)]
   return out ++ cyclic.map fun (j, e) => (j, .error e)
 

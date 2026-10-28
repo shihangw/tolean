@@ -251,10 +251,19 @@ def checkName (span : Span) (name : String) : TM String := do
   if leanReserved.contains name then reject span s!"name '{name}' is reserved in Lean"
   return name
 
+/-- The name of a parameter or a local. TypeScript keeps types and values
+apart, but Lean does not, and the output writes an interface of the file by
+its bare name. So a local with that name would hide the interface. -/
+def checkLocalName (span : Span) (name : String) : TM String := do
+  let ctx ← get
+  if ctx.structs.any fun i => i.name == name && i.file == ctx.file then
+    reject span s!"'{name}' would hide the interface {name} in Lean; choose another name"
+  checkName span name
+
 def declare (env : Env) (span : Span) (name : String) (binding : Binding) (type : Ty) :
     TM Env := do
   if env.has name then reject span s!"'{name}' shadows a name already in scope"
-  let _ ← checkName span name
+  let _ ← checkLocalName span name
   return env.add { name, binding, type }
 
 /-! ### Types -/
@@ -886,7 +895,7 @@ def translateFunction (s : Span) (exported : Bool) (name : String) (params : Lis
     (init := (({ functions := (← get).functions } : Env), ([] : List (String × Output.Ty)), ([] : List Ty)))
     fun (env, leanParams, types) p => do
       let type ← orReject p.type p.span "parameters must be plain, typed identifiers"
-      let paramName ← checkName p.span p.name
+      let paramName ← checkLocalName p.span p.name
       if env.has paramName then reject p.span s!"'{paramName}' is declared twice"
       let ty ← translateType type
       pure (env.add { name := paramName, binding := .param, type := ty },
