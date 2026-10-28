@@ -210,17 +210,27 @@ end
 
 /-- `p` reads the tokens of `x`, laid out as the printer writes them and
 followed by any rest that `ends` allows and that `afterOK` accepts, as `x`
-apart from spans, and leaves the rest. The target edition is `T`. -/
+apart from spans, and leaves the rest. The target edition is `T`. No line
+break comes before a token of `x` after its first, but one may come before
+the first, as at the start of a statement. -/
 def ReadsW {α : Type} (T : Edition) (erase : α → α) (words : α → List Word)
     (afterOK : List TokenKind → α → Bool) (p : ParseM α) (x : α) (ends : List Token → Prop) : Prop :=
   ∀ (s : ParseState) (ts rest : List Token), s.target = T → s.rest = ts ++ rest →
-    s.left = s.rest.length → Touching ts (words x) → (∀ y ∈ ts, y.newlineBefore = false) → rest ≠ [] →
+    s.left = s.rest.length → Touching ts (words x) → (∀ y ∈ ts.tail, y.newlineBefore = false) → rest ≠ [] →
     ends rest → afterOK (rest.map (·.kind)) x = true →
     ∃ x' s', p s = .ok x' s' ∧ erase x' = erase x ∧ Leaves s s' rest
 
 /-- `ReadsW` for an expression. -/
 abbrev ReadsE (T : Edition) (p : ParseM Expr) (e : Expr) (ends : List Token → Prop) : Prop :=
   ReadsW T Expr.erase Expr.words (fun after e => e.afterOK after) p e ends
+
+/-- A token after the first of `a ++ b`, when `a` has tokens. -/
+theorem tail_sub {ts a b : List Token} (h : ts = a ++ b) (ha : a ≠ []) {y : Token}
+    (hy : y ∈ a.tail ∨ y ∈ b) : y ∈ ts.tail := by
+  subst h
+  cases a with
+  | nil => exact absurd rfl ha
+  | cons x a => simpa using hy
 
 /-- `ReadsW` for a property of an object literal. -/
 abbrev ReadsP (T : Edition) (p : ParseM Property) (q : Property) (ends : List Token → Prop) : Prop :=
@@ -696,7 +706,7 @@ theorem iterate_list {α : Type} {T : Edition} {erase : α → α} {words : α �
         rw [List.map_append, this]
         simpa [punctWord, commas_flatten, List.map_map, Function.comp_def, hc] using hafter.1
     obtain ⟨x', s₁, hp, he, hL⟩ := hreads x (by simp) s (t :: xts') (more ++ c :: rest) hT (by simp [hs'])
-      hl hxt (fun y hy => hn y (by simp at hy ⊢; rcases hy with h | h <;> simp [h])) (by simp) hends hafter₁
+      hl hxt (fun y hy => hn y (by simp at hy ⊢; simp [hy])) (by simp) hends hafter₁
     have hT₁ : s₁.target = T := hL.target_eq.trans hT
     have hl₁ : s₁.left = s₁.rest.length := by rw [hL.left_eq, hL.rest_eq]
     cases items with
@@ -953,7 +963,7 @@ theorem parseProperty_reads {T : Edition} (g : Nat) (q : Property) (hq : q.wf T 
     let s₁ := advanced s x colon (vts ++ rest)
     let s₂ : ParseState := { s₁ with rest := vts ++ rest, left := s₁.left - 1, lastStop := colon.span.stop }
     have hl₂ : s₂.left = s₂.rest.length := by simp [s₂, s₁, hl, hs']
-    obtain ⟨v', s₃, hp, he, hL⟩ := hvr s₂ vts rest hT rfl hl₂ hv' (fun y hy => hn y (by simp [hy])) hr
+    obtain ⟨v', s₃, hp, he, hL⟩ := hvr s₂ vts rest hT rfl hl₂ hv' (fun y hy => hn y (by simp [List.mem_of_mem_tail hy])) hr
       (endsItem_assign (by simp) hE) (by simpa [Property.afterOK] using ha)
     refine ⟨.keyValue ⟨x.span.start, s₃.lastStop⟩ key v', s₃, ?_, by simp [Property.erase, he], ?_⟩
     · simp only [Parse.parseProperty]
@@ -1037,7 +1047,7 @@ theorem parsePrimary_paren {T : Edition} (f : Nat) (sp : Span) (inner : Expr)
     ⟨endsAssign_separator hrp (by simp [separators]), fun t ht => by
       simp at ht; subst ht; rw [hrp]; exact punct_ne (by decide)⟩
   obtain ⟨inner', s₂, hp, he, hL⟩ := h s₁ its (rp :: u :: r) (hT ▸ rfl) rfl hl₁ hits
-    (fun y hy => hn y (by simp [hy])) (by simp) hE (by simpa [hrp] using ha.2)
+    (fun y hy => hn y (by simp [List.mem_of_mem_tail hy])) (by simp) hE (by simpa [hrp] using ha.2)
   have hs₂ : s₂.rest = rp :: u :: r := hL.rest_eq
   let s₃ : ParseState := { s₂ with rest := u :: r, left := s₂.left - 1, lastStop := rp.span.stop }
   refine ⟨.paren ⟨lp.span.start, s₃.lastStop⟩ inner', s₃, ?_, by simp [Expr.erase, he],
@@ -1280,7 +1290,7 @@ theorem lhs_loop {T : Edition} {pi : ParseM Expr} {pa : ParseM (List Expr)} {sta
       ⟨endsAssign_separator hrb (by simp [separators]), fun t ht => by
         simp at ht; subst ht; rw [hrb]; exact punct_ne (by decide)⟩
     obtain ⟨i', s₂, hpi, hei, hLi⟩ := hE i hHi he.2 s₁' its (rb :: rest) (hL.target_eq.trans hT) rfl
-      (by simp [s₁', hl₁, hs₁]) hits (fun y hy => hn y (by simp [hy])) (by simp) hE' (by simpa [hrb] using ha.2)
+      (by simp [s₁', hl₁, hs₁]) hits (fun y hy => hn y (by simp [List.mem_of_mem_tail hy])) (by simp) hE' (by simpa [hrb] using ha.2)
     have hs₂ : s₂.rest = rb :: rest := hLi.rest_eq
     refine ⟨.index ⟨start, rb.span.stop⟩ o' i', { s₂ with rest := rest, left := s₂.left - 1, lastStop := rb.span.stop },
       ?_, by simp [Expr.erase, he', hei], ?_⟩
@@ -1467,11 +1477,12 @@ theorem parsePostfix_reads {T : Edition} (f : Nat) (e : Expr) (he : e.wfAt T .po
     obtain ⟨o, ots', rfl, hok, hot'⟩ := Touching.cons_one (by simpa [punctWord] using hot)
     simp [Touching] at hot'; subst hot'
     have hs₀ : s.rest = ats ++ o :: rest := by rw [hs, hsplit]; simp
-    have hno : o.newlineBefore = false := hn o (by rw [hsplit]; simp)
+    have hne : ats ≠ [] := by obtain ⟨_, _, rfl, _⟩ := Touching.head hat; simp
+    have hno : o.newlineBefore = false := hn o (tail_sub hsplit hne (.inr (by simp)))
     have hEnd : EndsLhs (o :: rest) := fun t ht => by
       simp at ht; subst ht; rw [hok]; cases op <;> simp [UpdateOp.symbol]
     obtain ⟨arg', s₁, hpa, hea, hL₁⟩ := hL arg (by simp [Expr.height]) he.1 s ats (o :: rest) hT hs₀ hl hat
-      (fun y hy => hn y (by rw [hsplit]; simp [hy])) (by simp) hEnd (by simpa [Expr.afterOK, hok] using ha)
+      (fun y hy => hn y (tail_sub hsplit hne (.inl hy))) (by simp) hEnd (by simpa [Expr.afterOK, hok] using ha)
     have hs₁ : s₁.rest = o :: rest := hL₁.rest_eq
     have hl₁ : s₁.left = s₁.rest.length := by rw [hL₁.left_eq, hL₁.rest_eq]
     have hsim : arg'.isSimpleTarget = true := by rw [isSimpleTarget_of_erase hea]; exact he.2
@@ -1519,7 +1530,8 @@ theorem parseUnary_reads {T : Edition} (f : Nat) (e : Expr) (he : e.wfAt T .unar
     have hs' : s.rest = o :: (ats ++ rest) := by simpa using hs
     let s₁ : ParseState := { s with rest := ats ++ rest, left := s.left - 1, lastStop := o.span.stop }
     obtain ⟨arg', s₂, hpa, hea, hL₂⟩ := hU arg (by simp [Expr.height]) he s₁ ats rest hT rfl
-      (by simp [s₁, hl, hs']) hat (fun y hy => hn y (by simp [hy])) hr hends (by simpa [Expr.afterOK] using ha)
+      (by simp [s₁, hl, hs']) hat (fun y hy => hn y (by simp [List.mem_of_mem_tail hy])) hr hends
+      (by simpa [Expr.afterOK] using ha)
     refine ⟨.unary ⟨o.span.start, s₂.lastStop⟩ op arg', s₂, ?_, by simp [Expr.erase, hea],
       leaves_trans (leaves_advance hs' hl) hL₂⟩
     simp only [Parse.parseUnary]
@@ -1535,7 +1547,8 @@ theorem parseUnary_reads {T : Edition} (f : Nat) (e : Expr) (he : e.wfAt T .unar
     have hs' : s.rest = o :: (ats ++ rest) := by simpa using hs
     let s₁ : ParseState := { s with rest := ats ++ rest, left := s.left - 1, lastStop := o.span.stop }
     obtain ⟨arg', s₂, hpa, hea, hL₂⟩ := hL arg (by simp [Expr.height]) he.1 s₁ ats rest hT rfl
-      (by simp [s₁, hl, hs']) hat (fun y hy => hn y (by simp [hy])) hr hends.1 (by simpa [Expr.afterOK] using ha)
+      (by simp [s₁, hl, hs']) hat (fun y hy => hn y (by simp [List.mem_of_mem_tail hy])) hr hends.1
+      (by simpa [Expr.afterOK] using ha)
     have hsim : arg'.isSimpleTarget = true := by rw [isSimpleTarget_of_erase hea]; exact he.2
     have hnone : Parse.unaryOp? o = none := by
       cases op <;> simp [Parse.unaryOp?, hok, UpdateOp.symbol]
@@ -1798,7 +1811,7 @@ theorem bin_loop {T : Edition} {pr : Nat → ParseM Expr} {start : Pos} {m H : N
     have hl₁' : s₁'.left = s₁'.rest.length := by rw [hLk.left_eq, hLk.rest_eq]
     obtain ⟨r', s₂, hpr, her, hLr⟩ := hR r (rhsPrec op) hHr hrw s₁' (u :: b') rest
       (hLk.target_eq.trans (hL.target_eq.trans hT)) (by simpa using hLk.rest_eq) hl₁' hb
-      (fun y hy => hn y (by simp at hy ⊢; rcases hy with h | h <;> simp [h])) hr hnext hra
+      (fun y hy => hn y (by simp at hy ⊢; simp [hy])) hr hnext hra
     have hexp : op = .exp → ∀ sp o x, l' ≠ .unary sp o x := fun h =>
       notUnary_of_erase hel (leftOK_exp (h ▸ hlo))
     have hlt' : op = .lt ∨ op = .shl → Parse.closesTypeArguments 0 (u :: (b' ++ rest)) = false := by
@@ -1902,15 +1915,17 @@ theorem parseConditional_reads {T : Edition} (f : Nat) (e : Expr) (he : e.wfAt T
     simp only [Expr.afterOK, Bool.and_eq_true] at ha
     obtain ⟨⟨hat', haa⟩, hab⟩ := ha
     have hs₀ : s.rest = tts ++ q :: (ats ++ c :: (bts ++ rest)) := by rw [hs, hsplit]; simp
+    have hne : tts ≠ [] := by obtain ⟨_, _, rfl, _⟩ := Touching.head htt; simp
     obtain ⟨t', s₁, hpt, het, hL₁⟩ := hB t (by simp [Expr.height]; omega) hwt s tts
-      (q :: (ats ++ c :: (bts ++ rest))) hT hs₀ hl htt (fun y hy => hn y (by rw [hsplit]; simp [hy])) (by simp)
+      (q :: (ats ++ c :: (bts ++ rest))) hT hs₀ hl htt (fun y hy => hn y (tail_sub hsplit hne (.inl hy))) (by simp)
       (endsBin_question hq)
       (by simpa [hq, hcolon, hat.kinds, hbt.kinds, Expr.tokens, List.append_assoc] using hat')
     have hs₁ : s₁.rest = q :: (ats ++ c :: (bts ++ rest)) := hL₁.rest_eq
     have hl₁ : s₁.left = s₁.rest.length := by rw [hL₁.left_eq, hL₁.rest_eq]
     let s₂ : ParseState := { s₁ with rest := ats ++ c :: (bts ++ rest), left := s₁.left - 1, lastStop := q.span.stop }
     obtain ⟨a', s₃, hpa, hea, hL₃⟩ := hA a (by simp [Expr.height]; omega) hwa s₂ ats (c :: (bts ++ rest))
-      (hL₁.target_eq.trans hT) rfl (by simp [s₂, hl₁, hs₁]) hat (fun y hy => hn y (by rw [hsplit]; simp [hy]))
+      (hL₁.target_eq.trans hT) rfl (by simp [s₂, hl₁, hs₁]) hat
+      (fun y hy => hn y (tail_sub hsplit hne (.inr (by simp [List.mem_of_mem_tail hy]))))
       (by simp) (endsAssign_separator hcolon (by simp [separators]))
       (by simpa [hcolon, hbt.kinds, Expr.tokens] using haa)
     have hs₃ : s₃.rest = c :: (bts ++ rest) := hL₃.rest_eq
@@ -1918,7 +1933,7 @@ theorem parseConditional_reads {T : Edition} (f : Nat) (e : Expr) (he : e.wfAt T
     have hl₃ : s₃.left = s₃.rest.length := by rw [hL₃.left_eq, hL₃.rest_eq]
     obtain ⟨b', s₅, hpb, heb, hL₅⟩ := hA b (by simp [Expr.height]; omega) hwb s₄ bts rest
       (hL₃.target_eq.trans (hL₁.target_eq.trans hT)) rfl (by simp [s₄, hl₃, hs₃]) hbt
-      (fun y hy => hn y (by rw [hsplit]; simp [hy])) hr hends hab
+      (fun y hy => hn y (tail_sub hsplit hne (.inr (by simp [List.mem_of_mem_tail hy])))) hr hends hab
     refine ⟨.cond ⟨x.span.start, s₅.lastStop⟩ t' a' b', s₅, ?_, by simp [Expr.erase, het, hea, heb],
       leaves_trans hL₁ (leaves_trans (leaves_advance hs₁ hl₁) (leaves_trans hL₃
         (leaves_trans (leaves_advance hs₃ hl₃) hL₅)))⟩
@@ -1965,10 +1980,11 @@ theorem parseAssign_reads {T : Edition} (f : Nat) (e : Expr) (he : e.wfAt T .ass
     simp only [Expr.afterOK, Bool.and_eq_true] at ha
     obtain ⟨hta, hva⟩ := ha
     have hs₀ : s.rest = tts ++ (a ++ u :: (vts' ++ rest)) := by rw [hs, hsplit]; simp
+    have hne : tts ≠ [] := by obtain ⟨_, _, rfl, _⟩ := Touching.head htt; simp
     have hnc : ∀ sp t' a' b', t ≠ .cond sp t' a' b' := by
       rintro sp t' a' b' rfl; simp [isSimpleTarget_cond] at hsim
     obtain ⟨t', s₁, hpt, het, hL₁⟩ := hC t (by simp [Expr.height]; omega) hwt s tts (a ++ u :: (vts' ++ rest)) hT
-      hs₀ hl htt (fun y hy => hn y (by rw [hsplit]; simp [hy])) (by simp)
+      hs₀ hl htt (fun y hy => hn y (tail_sub hsplit hne (.inl hy))) (by simp)
       (by rw [ends_cond_eq hnc]; exact endsCond_assignOp ha' hc hu)
       (by rw [List.map_append, ha', ← List.cons_append, List.map_append, hvt.kinds]
           simpa [Expr.tokens, List.append_assoc] using hta)
@@ -1981,7 +1997,7 @@ theorem parseAssign_reads {T : Edition} (f : Nat) (e : Expr) (he : e.wfAt T .ass
     have hl₂ : s₂.left = s₂.rest.length := by rw [hLk.left_eq, hLk.rest_eq]
     obtain ⟨v', s₃, hpv, hev, hL₃⟩ := hA v (by simp [Expr.height]; omega) hwv s₂ (u :: vts') rest
       (hLk.target_eq.trans (hL₁.target_eq.trans hT)) (by simpa using hLk.rest_eq) hl₂ hvt
-      (fun y hy => hn y (by rw [hsplit]; simp at hy ⊢; rcases hy with h | h <;> simp [h])) hr hends hva
+      (fun y hy => hn y (tail_sub hsplit hne (.inr (by simp at hy ⊢; simp [hy])))) hr hends hva
     have hsim' : t'.isSimpleTarget = true := by rw [isSimpleTarget_of_erase het]; exact hsim
     have hT₁ : s₁.target = T := hL₁.target_eq.trans hT
     refine ⟨.assign ⟨x.span.start, s₃.lastStop⟩ op t' v', s₃, ?_, by simp [Expr.erase, het, hev],
