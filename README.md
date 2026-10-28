@@ -234,7 +234,15 @@ migrations, in sorted order. The defaults keep most entries short:
   and `db/queries.sql` gives `db/Queries.lean`. The namespace follows the
   path, such as `src.sensor.Raise`. An override can set `output` and
   `namespace` for one unit.
-- The TypeScript target is ES2024, and `certify` is off.
+- The TypeScript target is ES2024, and `certify` is off. With `certify` on, a
+  file that cannot have a certificate makes `tolean translate` fail with the
+  reason.
+- Lean module names start at the directory of `tolean.json`, so
+  `src/sensor/Raise.lean` is the module `src.sensor.Raise`. When the Lean
+  package's module names start elsewhere, set `moduleRoot` to that directory,
+  relative to `tolean.json`. An import and a certificate name the module. A
+  path component that Lean does not read as a name, such as `my-lib`, is
+  written `«my-lib»`.
 - A Go package starts from its exported functions, unless `roots` names
   others.
 - A SQL file translates each query that it names, unless `queries` lists

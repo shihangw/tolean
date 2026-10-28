@@ -97,9 +97,27 @@ def stem (path : String) : String :=
   let name := ((segments path).getLast?).getD path
   ((name.splitOn ".").head?).getD name
 
+/-- A component of a Lean name, in `«»` when Lean would not read it as one,
+as for `my-lib` or `end`. -/
+def nameSegment (s : String) : String :=
+  let plain := match s.toList with
+    | c :: cs => (c.isAlpha || c == '_') && cs.all fun c => c.isAlphanum || c == '_' || c == '\''
+    | [] => false
+  if plain && !TypeScript.Translate.leanReserved.contains s then s else s!"«{s}»"
+
 /-- `src/sensor/Raise.lean` has the namespace `src.sensor.Raise`. -/
 def namespaceOf (output : String) : String :=
-  ".".intercalate (segments ((output.dropEnd 5).toString))
+  ".".intercalate ((segments ((output.dropEnd 5).toString)).map nameSegment)
+
+/-- The Lean module of the file `path`, as Lake names it: its path from
+`moduleRoot`, the directory that the Lean package's module names start from.
+Both paths are relative to the project root. -/
+def moduleOf (moduleRoot path : String) : Except String String := do
+  let root := segments moduleRoot
+  let parts := segments ((path.dropEnd 5).toString)
+  unless root.isPrefixOf parts && root.length < parts.length do
+    throw s!"{path} is not under the moduleRoot '{moduleRoot}'"
+  return ".".intercalate ((parts.drop root.length).map nameSegment)
 
 /-- One file to write, or one to remove because it is stale. -/
 inductive Write where
@@ -153,6 +171,9 @@ structure Translation where
   /-- The files that a TypeScript file imports from. Its meaning depends on
   them, so its manifest lists them among its sources. -/
   imports : List String := []
+  /-- The Lean module of the output, which an `import` and a certificate
+  name. -/
+  module : String := ""
 
 /-- The names of the sqlc queries in a file: each `-- name: X` line. -/
 def queryNames (text : String) : List String :=
@@ -161,9 +182,12 @@ def queryNames (text : String) : List String :=
     | "--" :: "name:" :: n :: _ => some n
     | _ => none
 
-/-- Translate one unit, given the text of each file it reads. This does no IO,
-so the playground runs it in the browser. -/
-def translateUnit (u : Job) (read : String → Except String String)
+/-- A unit's resolved settings. -/
+def Job.settings : Job → Json
+  | .typescript s _ | .go s _ | .sql s _ _ => s
+
+/-- Translate one unit without its module name. -/
+def translateUnitText (u : Job) (read : String → Except String String)
     (deps : List (String × TypeScript.Translate.Dependency) := []) : Except String Translation := do
   match u with
   | .typescript s source =>
@@ -195,6 +219,13 @@ def translateUnit (u : Job) (read : String → Except String String)
       | qs => qs
     let migrationTexts ← migrations.mapM fun f => return (f, ← read f)
     return { output, ns, lean := ← Sql.Translate.translate migrationTexts [(queryFile, text)] queries ns }
+
+/-- Translate one unit, given the text of each file it reads. This does no IO,
+so the playground runs it in the browser. -/
+def translateUnit (u : Job) (read : String → Except String String)
+    (deps : List (String × TypeScript.Translate.Dependency) := []) : Except String Translation := do
+  let t ← translateUnitText u read deps
+  return { t with module := ← moduleOf ((string? u.settings "moduleRoot").getD "") t.output }
 
 /-- The TypeScript files of the project that `source` imports from, as the
 parser reads it for the edition `target`. -/
@@ -246,7 +277,7 @@ def translateAll (jobs : List Job) (read : String → Except String String) :
     let t := translateUnit j read deps
     if let (.typescript _ source, .ok t) := (j, t) then
       if let some iface := t.interface then
-        deps := deps ++ [(source, { module := namespaceOf t.output, ns := t.ns, interface := iface })]
+        deps := deps ++ [(source, { module := t.module, ns := t.ns, interface := iface })]
     out := out ++ [(j, t)]
   return out ++ cyclic.map fun (j, e) => (j, .error e)
 
@@ -263,7 +294,7 @@ def unitWrites (u : Job) (read : String → Except String String) (result : Exce
     IO (List Write) := do
   let t ← ok result
   let (language, target) := u.chainLanguage
-  let m ← Chain.fileManifest language target (u.sources ++ t.imports) t.output t.lean t.ns
+  let m ← Chain.fileManifest language target (u.sources ++ t.imports) t.output t.lean t.module
   let lean := [Write.file t.output t.lean]
   match u with
   | .typescript s source =>
@@ -273,14 +304,14 @@ def unitWrites (u : Job) (read : String → Except String String) (result : Exce
       | return lean ++ [.file (t.output ++ ".chain.json") (Chain.manifestText m)]
     let text ← ok (read source)
     let cert := certPath t.output
-    match TypeScript.Certify.certify source text t.ns t.ns (t.ns ++ "Cert") target with
-    | .ok certText =>
-      let (fns, all) ← ok (TypeScript.Certify.certifiedFunctions text target)
-      let m := Chain.withCertificate m cert certText (t.ns ++ "Cert")
-        (fns.map fun f => (f, s!"{t.ns}Cert.{f}_cert")) all
-      return lean ++ [.file cert certText, .file (t.output ++ ".chain.json") (Chain.manifestText m)]
-    | .error _ =>
-      return lean ++ [.file (t.output ++ ".chain.json") (Chain.manifestText m), .remove cert]
+    -- `certify` asks for a certificate, so a file that cannot have one is an
+    -- error, not a certificate that silently goes away.
+    let certText ← ok (TypeScript.Certify.certify source text t.module t.ns (t.ns ++ "Cert") target)
+    let certModule ← ok (moduleOf ((string? s "moduleRoot").getD "") cert)
+    let (fns, all) ← ok (TypeScript.Certify.certifiedFunctions text target)
+    let m := Chain.withCertificate m cert certText certModule (t.ns ++ "Cert")
+      (fns.map fun f => (f, s!"{t.ns}Cert.{f}_cert")) all
+    return lean ++ [.file cert certText, .file (t.output ++ ".chain.json") (Chain.manifestText m)]
   | _ => return lean ++ [.file (t.output ++ ".chain.json") (Chain.manifestText m)]
 
 /-- What the project file asks for: every file to write or to remove. Paths

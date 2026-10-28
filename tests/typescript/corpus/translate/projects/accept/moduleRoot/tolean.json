@@ -1,0 +1,1 @@
+{ "typescript": { "sources": ["src/**/*.ts"], "moduleRoot": "src" } }

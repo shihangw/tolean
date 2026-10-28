@@ -34,7 +34,7 @@
    "label": "JavaScript engine",
    "kind": "runtime",
    "id": "runtime"}],
- "module": "Sorting",
+ "module": "src.Sorting",
  "language": "typescript",
  "edges":
  [["source", "parser"],

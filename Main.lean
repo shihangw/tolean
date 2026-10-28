@@ -108,7 +108,7 @@ def certifyAfterTranslate (target : Edition) (input source output ns : String) :
   | .ok lean =>
     IO.FS.writeFile path lean
     let .ok (fns, all) := Certify.certifiedFunctions source target | return
-    Chain.recordCertificate (output ++ ".chain.json") path (ns ++ "Cert")
+    Chain.recordCertificate (output ++ ".chain.json") path (ns ++ "Cert") (ns ++ "Cert")
       (fns.map fun f => (f, s!"{ns}Cert.{f}_cert")) all
   | .error _ =>
     if ← System.FilePath.pathExists path then IO.FS.removeFile path
@@ -250,7 +250,7 @@ def run (target : Edition) : List String → IO UInt32
       IO.FS.writeFile output lean
       if let ["--manifest", manifest] := rest then
         let .ok (fns, all) := Certify.certifiedFunctions source target | return 1
-        Chain.recordCertificate manifest output certNs
+        Chain.recordCertificate manifest output certNs certNs
           (fns.map fun f => (f, s!"{certNs}.{f}_cert")) all
       return 0
     | .error e =>

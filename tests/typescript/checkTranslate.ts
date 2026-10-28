@@ -171,8 +171,11 @@ function rootLeanPath(): string {
 /** Compile the Lean modules of `dir`, each after the modules of `dir` that it
 imports, and give the first error, or null. */
 function compilesProject(dir: string, leanPath: string): string | null {
-  const build = mkdtempSync(join(tmpdir(), 'tolean-project-'));
-  cpSync(dir, build, { recursive: true });
+  const copy = mkdtempSync(join(tmpdir(), 'tolean-project-'));
+  cpSync(dir, copy, { recursive: true });
+  // Module names start at `moduleRoot`, as they do in the project's Lean package.
+  const config = JSON.parse(readFileSync(join(dir, 'tolean.json'), 'utf8'));
+  const build = join(copy, config.typescript?.moduleRoot ?? '');
   const modules = new Map(leanFiles(build).map((f) => [f.replace(/\.lean$/, '').replaceAll('/', '.'), f]));
   const done = new Set<string>();
   const visit = (name: string): string | null => {
@@ -180,9 +183,10 @@ function compilesProject(dir: string, leanPath: string): string | null {
     done.add(name);
     const file = modules.get(name)!;
     const text = readFileSync(join(build, file), 'utf8');
-    for (const [, dep] of text.matchAll(/^import (\S+)$/gm)) {
-      if (modules.has(dep!)) {
-        const error = visit(dep!);
+    for (const [, written] of text.matchAll(/^import (\S+)$/gm)) {
+      const dep = written!.replaceAll(/[«»]/g, '');
+      if (modules.has(dep)) {
+        const error = visit(dep);
         if (error !== null) return error;
       }
     }

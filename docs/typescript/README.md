@@ -191,9 +191,9 @@ import { clamp, type Gauge } from "./lib/util.ts";
 `tolean translate` translates the files of a project so that each file comes
 after the files it imports from. Each file becomes its own Lean module, with
 an `import` line for each file that it imports from. The module's name comes
-from the output's path, so the directory of `tolean.json` must be the root
-of the Lean package. Each file's manifest lists the files it imports from
-among its sources. The output writes a name
+from the output's path, from the directory that `moduleRoot` names, or from
+the directory of `tolean.json` by default. Each file's manifest lists the
+files it imports from among its sources. The output writes a name
 from another file from the root, with that file's namespace, such as
 `_root_.lib.Util.clamp`, so that a local name cannot capture it. A file may
 read and build the fields of an interface that reaches it through another

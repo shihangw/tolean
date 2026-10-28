@@ -1110,6 +1110,12 @@ from. `deps` are the files it may import from. -/
 def translateWith (file source ns : String) (target : Edition := .default)
     (deps : List (String × Dependency) := []) : Except String (String × Interface × List String) := do
   let (m, names, decls, iface) ← translateFile file source target deps
+  -- The printer writes a declaration of another file with that file's
+  -- namespace, so it must know the file. The translator only names files it
+  -- sees, and this check keeps a later change from printing a bare name.
+  if let some r := (decls.flatMap Output.Decl.refs).find? fun r =>
+      r.file != file && (deps.lookup r.file).isNone then
+    throw s!"{file}: the output names '{r.name}' of '{r.file}', a file that it does not see"
   let imports := (importedFiles file m).filterMap fun f => (deps.lookup f).map (s!"import {·.module}")
   let header :=
     (if names.usesNumber then ["import tolean.TypeScript.Spec.Number"] else []) ++ imports ++

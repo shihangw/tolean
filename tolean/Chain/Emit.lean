@@ -76,7 +76,7 @@ has a theorem gets a proved node. When every function has one, the translator
 is proved for this file; the interpreter is then the link the proof trusts.
 The certificate also proves that the parser gives the program its theorems
 are about, so the printer that wrote the program is not trusted. -/
-def withCertificate (m : FileManifest) (certFile certText certModule : String)
+def withCertificate (m : FileManifest) (certFile certText certModule certNs : String)
     (theorems : List (String × String)) (allFunctions : Bool) : FileManifest :=
   let axioms := ["propext", "Classical.choice", "Quot.sound"]
   let certNodes := theorems.map fun (fn, thm) =>
@@ -88,7 +88,7 @@ def withCertificate (m : FileManifest) (certFile certText certModule : String)
       label := "TypeScript semantics (interpreter)", module := some "tolean.TypeScript.Spec.Eval" },
     { id := "parsed", kind := "proof", status := .proved
       label := "the parser gives the program of the certificate", module := some certModule
-      «theorem» := some s!"{certModule}.program_parsed", axioms }]
+      «theorem» := some s!"{certNs}.program_parsed", axioms }]
   let nodes := (m.nodes.filter fun n => !(n.id.startsWith "certificate:") && n.id != "semantics" &&
       n.id != "parsed").map fun n =>
     if n.id == "translator" && allFunctions then
@@ -105,9 +105,10 @@ def withCertificate (m : FileManifest) (certFile certText certModule : String)
     certificate := some (textRef certFile certText) }
 
 /-- Record a certificate in the file manifest at `path`. -/
-def recordCertificate (path : System.FilePath) (certFile certModule : String)
+def recordCertificate (path : System.FilePath) (certFile certModule certNs : String)
     (theorems : List (String × String)) (allFunctions : Bool) : IO Unit := do
   let m : FileManifest ← readJson path
-  writeJson path (withCertificate m certFile (← IO.FS.readFile certFile) certModule theorems allFunctions)
+  writeJson path
+    (withCertificate m certFile (← IO.FS.readFile certFile) certModule certNs theorems allFunctions)
 
 end tolean.Chain
