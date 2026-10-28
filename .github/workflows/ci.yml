@@ -15,9 +15,12 @@ on:
 permissions:
   contents: read
 
+# A new push to a pull request cancels its older run. On main, each commit
+# gets its own group, so every run finishes. The README's CI badge shows the
+# last finished run on main, and it shows a cancelled run as failing.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   check:
@@ -172,6 +175,10 @@ jobs:
     needs: wasm
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
+    # One deploy at a time. A deploy that is running always finishes.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
     permissions:
       pages: write
       id-token: write
