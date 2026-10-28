@@ -168,8 +168,9 @@ structure Translation where
   ns : String
   lean : String
   interface : Option TypeScript.Translate.Interface := none
-  /-- The files that a TypeScript file imports from. Its meaning depends on
-  them, so its manifest lists them among its sources. -/
+  /-- The files that a TypeScript file imports from, and the files that those
+  import from. Its meaning depends on them, so its manifest lists them among
+  its sources. -/
   imports : List String := []
   /-- The Lean module of the output, which an `import` and a certificate
   name. -/
@@ -186,12 +187,22 @@ def queryNames (text : String) : List String :=
 def Job.settings : Job → Json
   | .typescript s _ | .go s _ | .sql s _ _ => s
 
+/-- The file that a unit writes: its `output` setting, or the default next to
+its source. -/
+def Job.output : Job → String
+  | .typescript s source => (string? s "output").getD s!"{dirOf source}{(stem source).capitalize}.lean"
+  | .go s files =>
+    let dir := dirOf (files.head!)
+    let pkgName := ((segments dir).getLast?).getD "Package"
+    (string? s "output").getD s!"{dir}{pkgName.capitalize}.lean"
+  | .sql s queryFile _ => (string? s "output").getD s!"{dirOf queryFile}{(stem queryFile).capitalize}.lean"
+
 /-- Translate one unit without its module name. -/
 def translateUnitText (u : Job) (read : String → Except String String)
     (deps : List (String × TypeScript.Translate.Dependency) := []) : Except String Translation := do
   match u with
   | .typescript s source =>
-    let output := (string? s "output").getD s!"{dirOf source}{(stem source).capitalize}.lean"
+    let output := u.output
     let ns := (string? s "namespace").getD (namespaceOf output)
     let targetName := (string? s "target").getD TypeScript.Edition.default.name
     let some target := TypeScript.Edition.parse? targetName
@@ -199,9 +210,7 @@ def translateUnitText (u : Job) (read : String → Except String String)
     let (lean, iface, imports) ← TypeScript.Translate.translateWith source (← read source) ns target deps
     return { output, ns, lean, interface := some iface, imports }
   | .go s files =>
-    let dir := dirOf (files.head!)
-    let pkgName := ((segments dir).getLast?).getD "Package"
-    let output := (string? s "output").getD s!"{dir}{pkgName.capitalize}.lean"
+    let output := u.output
     let ns := (string? s "namespace").getD (namespaceOf output)
     let sources ← files.mapM fun f => return (f, ← read f)
     let roots ← match strings s "roots" with
@@ -211,7 +220,7 @@ def translateUnitText (u : Job) (read : String → Except String String)
       { roots, eraseTypes := strings s "eraseTypes", erasePackages := strings s "erasePackages" }
     return { output, ns, lean := ← Go.Translate.translate sources cfg ns }
   | .sql s queryFile migrations =>
-    let output := (string? s "output").getD s!"{dirOf queryFile}{(stem queryFile).capitalize}.lean"
+    let output := u.output
     let ns := (string? s "namespace").getD (namespaceOf output)
     let text ← read queryFile
     let queries := match strings s "queries" with
@@ -276,18 +285,23 @@ def translateAll (jobs : List Job) (read : String → Except String String) :
   -- The output each unit writes, and the unit that writes it.
   let mut taken : List (String × String) := []
   for j in ordered do
-    let mut t := translateUnit j read deps
     -- Two units that write one file would overwrite each other, as
-    -- `foo.ts` and `foo.test.ts` both write `Foo.lean` by default.
-    if let .ok tr := t then
-      let writer := ", ".intercalate j.sources
-      match taken.lookup tr.output with
-      | some other =>
-        t := .error s!"{writer} and {other} both translate to {tr.output}; set output for one of them"
-      | none => taken := taken ++ [(tr.output, writer)]
+    -- `foo.ts` and `foo.node.ts` both write `Foo.lean` by default.
+    let writer := ", ".intercalate j.sources
+    let mut t : Except String Translation := .error ""
+    match taken.lookup j.output with
+    | some other =>
+      t := .error s!"{writer} and {other} both translate to {j.output}; set output for one of them"
+    | none =>
+      taken := taken ++ [(j.output, writer)]
+      t := translateUnit j read deps
     if let (.typescript _ source, .ok tr) := (j, t) then
+      -- A file's meaning depends on the files it imports from and on theirs,
+      -- so its manifest lists them all.
+      let files := (tr.imports.flatMap fun f => f :: ((deps.lookup f).map (·.files)).getD []).eraseDups
+      t := .ok { tr with imports := files }
       if let some iface := tr.interface then
-        deps := deps ++ [(source, { module := tr.module, ns := tr.ns, interface := iface })]
+        deps := deps ++ [(source, { module := tr.module, ns := tr.ns, interface := iface, files })]
     out := out ++ [(j, t)]
   return out ++ cyclic.map fun (j, e) => (j, .error e)
 

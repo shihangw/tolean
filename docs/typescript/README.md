@@ -177,8 +177,10 @@ import { clamp, type Gauge } from "./lib/util.ts";
   as `"./util.ts"`. Node's type stripping needs that extension, and a bundler
   accepts it, so the import names the same file wherever the code runs.
   Tolean refuses `"./util.js"` and `"./util"`. Node reads a source as a URL,
-  so Tolean also refuses a source with `%`, `?` or `#`. The file must be
-  among the sources of `tolean.json`.
+  so Tolean also refuses a source with `%`, `?`, `#` or `\`, and one such as
+  `"./util.ts/."` that names a directory there. The file must be among the
+  sources of `tolean.json`, and its edition may not be newer than the
+  importing file's.
 - An interface needs `type`, either before its name or as `import type`.
   Node's type stripping removes only imports that say `type`, so without it
   the JavaScript would import a name that does not exist at run time.
@@ -187,6 +189,17 @@ import { clamp, type Gauge } from "./lib/util.ts";
   re-export, and an import cycle.
 - A function or an interface may not be named `NaN`, `Infinity` or `Number`,
   because it would hide the global that the subset reads under that name.
+- A local may not have the name of a function that the file declares or
+  imports, or of `NaN`, `Infinity` or `Number`. In JavaScript the local is
+  in its temporal dead zone from the start of its block, so a use of the
+  name before the local throws, where the subset would read the function or
+  the global. A parameter or a local may not have the name of an interface
+  of the file either, because Lean, unlike TypeScript, would read the type
+  as the local.
+- No two files of a project may have namespaces that are equal or nested,
+  such as `A` and `A.B`. Inside `namespace A.B`, Lean finds a plain name such
+  as `decide` in `A` before the root, so one file's declarations could change
+  what another file's output means.
 
 `tolean translate` translates the files of a project so that each file comes
 after the files it imports from. Each file becomes its own Lean module, with

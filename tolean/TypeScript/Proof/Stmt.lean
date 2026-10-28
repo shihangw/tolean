@@ -186,11 +186,14 @@ theorem declare_ok {env env' : Translate.Env} {sp : Span} {name : String} {b : B
   split at h
   · simp at h
   · rename_i hn
-    simp only [pure_bind, bind_ok] at h
-    obtain ⟨r, s₁, hr, h⟩ := h
-    obtain ⟨-, rfl⟩ := checkLocalName_ok hr
-    simp only [pure_ok] at h
-    exact ⟨by simpa using hn, h.1.symm, h.2.symm⟩
+    simp only [pure_bind, ite_state] at h
+    split at h
+    · simp at h
+    · simp only [bind_ok] at h
+      obtain ⟨r, s₁, hr, h⟩ := h
+      obtain ⟨-, rfl⟩ := checkLocalName_ok hr
+      simp only [pure_ok] at h
+      exact ⟨by simpa using hn, h.1.symm, h.2.symm⟩
 
 end Monad
 

@@ -141,6 +141,9 @@ structure Interface where
   usesNumber : Bool := false
   /-- The name under which its declarations bind the number type. -/
   numberVar : String := "N"
+  /-- The edition that it is translated for. A file may import from it only
+  when the file's own edition is at least as new. -/
+  target : Edition := .default
 
 structure Ctx where
   file : String
@@ -263,6 +266,11 @@ def checkLocalName (span : Span) (name : String) : TM String := do
 def declare (env : Env) (span : Span) (name : String) (binding : Binding) (type : Ty) :
     TM Env := do
   if env.has name then reject span s!"'{name}' shadows a name already in scope"
+  -- A local is in its temporal dead zone from the start of its block, so a
+  -- use of the name before the declaration throws in JS. The subset reads
+  -- such a use as the function or the global, so it refuses the local.
+  if env.functions.any (·.name == name) || name == "NaN" || name == "Infinity" || name == "Number" then
+    reject span s!"'{name}' would hide the function or global {name} in its whole block; choose another name"
   let _ ← checkLocalName span name
   return env.add { name, binding, type }
 
@@ -986,7 +994,8 @@ name `Number`, `NaN` or `Infinity` anywhere. A file can use
 `Number.isNaN(NaN)` with no `number` keyword, and it still needs `N`. -/
 def moduleUsesNumber (m : Module) : Bool :=
   m.decls.any fun
-    | .import _ names _ => names.any fun n => isNumberName n.name
+    -- An import of one of these names is refused, so an import adds nothing.
+    | .import .. => false
     | .function _ _ name params ret body =>
       isNumberName name ||
         params.any (fun p => isNumberName p.name || (p.type.map typeUsesNumber).getD false) ||
@@ -1009,6 +1018,9 @@ def translateImport (s : Span) (names : List ImportName) (source : String) : TM 
   let iface ← orReject (ctx.interfaces.lookup target) s
     (s!"'{source}' is not a translated file of the project: an import needs a tolean.json " ++
       "project, and the file it imports from must be among its sources and translate")
+  if ctx.target.year < iface.target.year then
+    reject s (s!"'{source}' is translated for {iface.target.name}, which is newer than this " ++
+      s!"file's {ctx.target.name}")
   names.forM fun n => do
     declareTopLevel n.span n.name
     if n.typeOnly then
@@ -1040,7 +1052,7 @@ def translateDecls (m : Module) : TM (List Output.Decl) := do
 def Ctx.interface (c : Ctx) (usesNumber : Bool) (numberVar : String) : Interface :=
   { functions := c.functions.filter fun f => f.exported && f.file == c.file,
     structs := c.structs.filter fun i => i.exported && i.file == c.file,
-    usesNumber, numberVar }
+    usesNumber, numberVar, target := c.target }
 
 def lineStarts (src : Array Char) : Array Nat := Id.run do
   let mut starts := #[0]
@@ -1063,6 +1075,8 @@ structure Dependency where
   module : String
   ns : String
   interface : Interface
+  /-- The files that it imports from, and the files that those import from. -/
+  files : List String := []
 
 /-- The files that `m`, the module of `file`, imports from, in the order of its
 imports, without repeats. -/
@@ -1119,6 +1133,13 @@ from. `deps` are the files it may import from. -/
 def translateWith (file source ns : String) (target : Edition := .default)
     (deps : List (String × Dependency) := []) : Except String (String × Interface × List String) := do
   let (m, names, decls, iface) ← translateFile file source target deps
+  -- Inside `namespace A.B`, Lean finds a plain name in `A.B` and `A` first.
+  -- So a file whose namespace is, or holds, another file's would let that
+  -- file's declarations capture the plain names that the output writes, such
+  -- as `decide`, and two files with one namespace collide outright.
+  let inside (a b : String) : Bool := a == b || a.startsWith (b ++ ".")
+  if let some (f, d) := deps.find? fun (_, d) => inside ns d.ns || inside d.ns ns then
+    throw s!"{file}: its namespace {ns} and the namespace {d.ns} of {f} nest; set namespace for one of them"
   -- The printer writes a declaration of another file with that file's
   -- namespace, so it must know the file. The translator only names files it
   -- sees, and this check keeps a later change from printing a bare name.
