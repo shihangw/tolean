@@ -12,6 +12,12 @@ it, and `Ends` states which tokens those are. In a few places the parser also
 looks at the tokens after a node, and `Expr.afterOK` states what it checks
 there. The tokens of a word such as `>=` touch, and `Touching` states that.
 `exprs_read` proves the round trip by induction on the parser's fuel.
+
+The statement parser calls `parseExpression` and `parseAssign` with the fuel
+that `budget` gives, and `parseExpression_budget` and `parseAssign_budget`
+state the round trip for that fuel. The brackets of an expression's tokens
+match, and the tokens have no `;`, so what `afterOK` checks before a `;` does
+not depend on the tokens after it (`afterOK_semicolon`).
 -/
 namespace tolean.TypeScript.Syntax
 
@@ -2217,5 +2223,472 @@ function for each level reads the printed tokens of every expression that is
 well formed there and needs at most `f`, as that expression apart from spans,
 whatever follows that ends the level. -/
 theorem exprs_read (T : Edition) (f : Nat) : AllRead T f := exprs_read_le T f f (Nat.le_refl _)
+
+/-! ### What follows an expression -/
+
+/-- A `>` comes in `ks`. -/
+def hasGreater (ks : List TokenKind) : Bool := ks.contains (.punct ">")
+
+/-- The scan of `closesKinds` passes over `ks` at every depth: `ks` closes no
+group that it does not open, and has no `;` and no end of file. -/
+def Neutral (ks : List TokenKind) : Prop :=
+  ∀ d a, closesKinds d (ks ++ a) = (hasGreater ks || closesKinds d a)
+
+theorem Neutral.nil : Neutral [] := fun _ _ => by simp [hasGreater]
+
+theorem Neutral.append {a b : List TokenKind} (ha : Neutral a) (hb : Neutral b) : Neutral (a ++ b) :=
+  fun d x => by rw [List.append_assoc, ha, hb]; simp [hasGreater, Bool.or_assoc]
+
+/-- A token other than a bracket, a `;` and the end of the file. -/
+theorem Neutral.one {k : TokenKind} (h1 : k ∉ [.punct "(", .punct "[", .punct "{", .punct ")", .punct "]",
+    .punct "}", .punct ";", .eof]) : Neutral [k] := by
+  intro d a
+  simp at h1
+  obtain ⟨h1, h2, h3, h4, h5, h6, h7, h8⟩ := h1
+  by_cases hg : k = .punct ">"
+  · subst hg; simp [closesKinds, hasGreater]
+  · cases k with
+    | punct p =>
+      simp only [ne_eq, TokenKind.punct.injEq] at h1 h2 h3 h4 h5 h6 h7 hg
+      have hg' : ">" ≠ p := fun e => hg e.symm
+      simp [closesKinds, hasGreater, h1, h2, h3, h4, h5, h6, h7, hg, hg']
+    | eof => exact absurd rfl h8
+    | _ => simp [closesKinds, hasGreater]
+
+/-- A group in brackets. -/
+theorem Neutral.enclosed {o c : String} (ho : o ∈ ["(", "[", "{"]) (hc : c ∈ [")", "]", "}"])
+    {ks : List TokenKind} (h : Neutral ks) : Neutral (.punct o :: ks ++ [.punct c]) := by
+  intro d a
+  simp at ho hc
+  have hopen : closesKinds d (.punct o :: (ks ++ .punct c :: a)) = closesKinds (d + 1) (ks ++ .punct c :: a) := by
+    rcases ho with rfl | rfl | rfl <;> simp [closesKinds]
+  have hclose : closesKinds (d + 1) (.punct c :: a) = closesKinds d a := by
+    rcases hc with rfl | rfl | rfl <;> simp [closesKinds]
+  simp only [List.cons_append, List.append_assoc, List.singleton_append, List.nil_append]
+  rw [hopen, h, hclose]
+  have h1 : ">" ≠ o := by rcases ho with rfl | rfl | rfl <;> decide
+  have h2 : ">" ≠ c := by rcases hc with rfl | rfl | rfl <;> decide
+  simp [hasGreater, h1, h2]
+
+
+theorem Neutral.cons {k : TokenKind} {ks : List TokenKind} (hk : k ∉ [.punct "(", .punct "[", .punct "{",
+    .punct ")", .punct "]", .punct "}", .punct ";", .eof]) (h : Neutral ks) : Neutral (k :: ks) :=
+  Neutral.append (a := [k]) (Neutral.one hk) h
+
+/-- Tokens none of which is a bracket, a `;` or the end of the file. -/
+theorem Neutral.all : ∀ {ks : List TokenKind}, (∀ k ∈ ks, k ∉ [.punct "(", .punct "[", .punct "{",
+    .punct ")", .punct "]", .punct "}", .punct ";", .eof]) → Neutral ks
+  | [], _ => Neutral.nil
+  | k :: ks, h => Neutral.cons (h k (by simp)) (Neutral.all fun x hx => h x (by simp [hx]))
+
+theorem Neutral.join : ∀ {xs : List (List TokenKind)}, (∀ x ∈ xs, Neutral x) → Neutral (joined "," xs)
+  | [], _ => Neutral.nil
+  | [x], h => by simpa [joined] using h x (by simp)
+  | x :: y :: xs, h => by
+    show Neutral (x ++ .punct "," :: joined "," (y :: xs))
+    exact Neutral.append (h x (by simp)) (Neutral.cons (by simp)
+      (Neutral.join fun z hz => h z (by simp at hz ⊢; rcases hz with h' | h' <;> simp [h'])))
+
+theorem neutral_binOp (op : BinOp) : Neutral (symbol op.symbol) := by
+  apply Neutral.all
+  cases op <;> simp [BinOp.symbol, symbol, Lex.reservedWords, punctWord, keywordWord]
+
+theorem neutral_assignOp (op : AssignOp) : Neutral (symbol op.symbol) := by
+  apply Neutral.all
+  cases op <;> simp [AssignOp.symbol, symbol, Lex.reservedWords, punctWord, keywordWord]
+
+theorem neutral_unaryOp (op : UnaryOp) : Neutral (symbol op.symbol) := by
+  apply Neutral.all
+  cases op <;> simp [UnaryOp.symbol, symbol, Lex.reservedWords, punctWord, keywordWord]
+
+theorem neutral_updateOp (op : UpdateOp) : Neutral [.punct op.symbol] := by
+  apply Neutral.all
+  cases op <;> simp [UpdateOp.symbol]
+
+theorem neutral_propertyName (n : String) : Neutral (propertyName n) := by
+  apply Neutral.all
+  unfold propertyName; split <;> simp [keywordWord, identWord]
+
+theorem neutral_key (k : PropKey) : Neutral (k.words.flatten) := by
+  cases k with
+  | ident n => simpa [PropKey.words] using neutral_propertyName n
+  | string v => exact Neutral.all (by simp [PropKey.words])
+  | number t => exact Neutral.all (by simp [PropKey.words])
+
+theorem Neutral.encl {o c : String} (ho : o ∈ ["(", "[", "{"]) (hc : c ∈ [")", "]", "}"])
+    {ks : List TokenKind} (h : Neutral ks) : Neutral (.punct o :: (ks ++ [.punct c])) := by
+  simpa using Neutral.enclosed ho hc h
+
+mutual
+
+/-- The tokens of an expression are neutral: its brackets match, and it has no
+`;`. -/
+theorem Expr.neutral : ∀ e : Expr, Neutral e.tokens
+  | .ident _ n => Neutral.all (by simp [Expr.tokens, Expr.words, identWord])
+  | .number .. | .bigint .. | .string .. | .null _ => Neutral.all (by simp [Expr.tokens, Expr.words, keywordWord])
+  | .bool _ b => Neutral.all (by cases b <;> simp [Expr.tokens, Expr.words, keywordWord])
+  | .array _ es => by
+    have h := Neutral.encl (o := "[") (c := "]") (by simp) (by simp) (Neutral.join (Expr.neutralAll es))
+    simpa [Expr.tokens, Expr.words, enclose, punctWord, commas_flatten, Expr.wordsOf_eq, List.map_map,
+      Function.comp_def] using h
+  | .object _ ps => by
+    have h := Neutral.encl (o := "{") (c := "}") (by simp) (by simp) (Neutral.join (Property.neutralAll ps))
+    simpa [Expr.tokens, Expr.words, enclose, punctWord, commas_flatten, Property.wordsOf_eq, List.map_map,
+      Function.comp_def] using h
+  | .paren _ i => by
+    have h := Neutral.encl (o := "(") (c := ")") (by simp) (by simp) (Expr.neutral i)
+    simpa [Expr.tokens, Expr.words, punctWord] using h
+  | .member _ o n => by
+    have h := Neutral.append (Expr.neutral o) (Neutral.cons (k := .punct ".") (by simp) (neutral_propertyName n))
+    simpa [Expr.tokens, Expr.words, punctWord] using h
+  | .index _ o i => by
+    have h := Neutral.append (Expr.neutral o)
+      (Neutral.encl (o := "[") (c := "]") (by simp) (by simp) (Expr.neutral i))
+    simpa [Expr.tokens, Expr.words, punctWord] using h
+  | .call _ c as => by
+    have h := Neutral.append (Expr.neutral c)
+      (Neutral.encl (o := "(") (c := ")") (by simp) (by simp) (Neutral.join (Expr.neutralAll as)))
+    simpa [Expr.tokens, Expr.words, enclose, punctWord, commas_flatten, Expr.wordsOf_eq, List.map_map,
+      Function.comp_def] using h
+  | .unary _ op a => by
+    have h := Neutral.append (neutral_unaryOp op) (Expr.neutral a)
+    simpa [Expr.tokens, Expr.words] using h
+  | .prefix _ op a => by
+    have h := Neutral.append (neutral_updateOp op) (Expr.neutral a)
+    simpa [Expr.tokens, Expr.words, punctWord] using h
+  | .postfix _ op a => by
+    have h := Neutral.append (Expr.neutral a) (neutral_updateOp op)
+    simpa [Expr.tokens, Expr.words, punctWord] using h
+  | .binary _ op l r => by
+    have h := Neutral.append (Expr.neutral l) (Neutral.append (neutral_binOp op) (Expr.neutral r))
+    simpa [Expr.tokens, Expr.words] using h
+  | .cond _ t a b => by
+    have h := Neutral.append (Expr.neutral t) (Neutral.cons (k := .punct "?") (by simp)
+      (Neutral.append (Expr.neutral a) (Neutral.cons (k := .punct ":") (by simp) (Expr.neutral b))))
+    simpa [Expr.tokens, Expr.words, punctWord] using h
+  | .assign _ op t v => by
+    have h := Neutral.append (Expr.neutral t) (Neutral.append (neutral_assignOp op) (Expr.neutral v))
+    simpa [Expr.tokens, Expr.words] using h
+
+theorem Expr.neutralAll : ∀ es : List Expr, ∀ x ∈ es.map Expr.tokens, Neutral x
+  | [], _, h => by simp at h
+  | e :: es, x, h => by
+    simp at h
+    rcases h with rfl | h
+    · exact Expr.neutral e
+    · exact Expr.neutralAll es x (by simpa using h)
+
+theorem Property.neutral : ∀ q : Property, Neutral q.tokens
+  | .shorthand _ n => Neutral.all (by simp [Property.tokens, Property.words, identWord])
+  | .keyValue _ k v => by
+    have h := Neutral.append (neutral_key k) (Neutral.cons (k := .punct ":") (by simp) (Expr.neutral v))
+    simpa [Property.tokens, Property.words, punctWord] using h
+
+theorem Property.neutralAll : ∀ ps : List Property, ∀ x ∈ ps.map Property.tokens, Neutral x
+  | [], _, h => by simp at h
+  | p :: ps, x, h => by
+    simp at h
+    rcases h with rfl | h
+    · exact Property.neutral p
+    · exact Property.neutralAll ps x (by simpa using h)
+
+end
+
+
+/-- Two lists of tokens after an expression that `afterOK` cannot tell apart:
+they start with the same token, and the scan for a `>` finds the same at
+depth 0. -/
+def AfterEquiv (a b : List TokenKind) : Prop := a.head? = b.head? ∧ closesKinds 0 a = closesKinds 0 b
+
+theorem AfterEquiv.prepend {x a b : List TokenKind} (hx : Neutral x) (hne : x ≠ []) (h : AfterEquiv a b) :
+    AfterEquiv (x ++ a) (x ++ b) := by
+  refine ⟨?_, by rw [hx, hx, h.2]⟩
+  cases x with
+  | nil => exact absurd rfl hne
+  | cons k x => simp
+
+theorem AfterEquiv.closer {c : String} (hc : c ∈ [")", "]", "}"]) (a b : List TokenKind) :
+    AfterEquiv (.punct c :: a) (.punct c :: b) :=
+  ⟨rfl, by simp at hc; rcases hc with rfl | rfl | rfl <;> simp [closesKinds]⟩
+
+theorem neutral_args (args : List Expr) : Neutral (enclose "(" ")" (Expr.wordsOf args)).flatten := by
+  have h := Neutral.encl (o := "(") (c := ")") (by simp) (by simp) (Neutral.join (Expr.neutralAll args))
+  simpa [enclose, punctWord, commas_flatten, Expr.wordsOf_eq, List.map_map, Function.comp_def] using h
+
+mutual
+
+/-- `afterOK` depends on what follows only through what `AfterEquiv` compares. -/
+theorem Expr.afterOK_congr : ∀ (e : Expr) {a b : List TokenKind}, AfterEquiv a b → e.afterOK a = e.afterOK b
+  | .binary _ op l r, a, b, h => by
+    obtain ⟨k, ks, hk, _⟩ := binOp_head op
+    simp only [Expr.afterOK]
+    rw [Expr.neutral r 0 a, Expr.neutral r 0 b, h.2, Expr.afterOK_congr r h,
+      Expr.afterOK_congr l (AfterEquiv.prepend (Neutral.append (neutral_binOp op) (Expr.neutral r))
+        (by simp [hk]) h)]
+  | .paren _ i, a, b, h => by
+    simp only [Expr.afterOK, notFirst, h.1, Expr.afterOK_congr i (AfterEquiv.closer (c := ")") (by simp) a b)]
+  | .member _ o n, a, b, h => by
+    simp only [Expr.afterOK]
+    exact Expr.afterOK_congr o (AfterEquiv.prepend (x := .punct "." :: propertyName n)
+      (Neutral.cons (by simp) (neutral_propertyName n)) (by simp) h)
+  | .index _ o i, a, b, h => by
+    simp only [Expr.afterOK]
+    have hx := Neutral.encl (o := "[") (c := "]") (by simp) (by simp) (Expr.neutral i)
+    have ho := Expr.afterOK_congr o (AfterEquiv.prepend hx (by simp) h)
+    simp only [List.cons_append, List.append_assoc, List.singleton_append, List.nil_append] at ho ⊢
+    rw [ho, Expr.afterOK_congr i (AfterEquiv.closer (c := "]") (by simp) a b)]
+  | .call _ c as, a, b, h => by
+    simp only [Expr.afterOK, notFirst, h.1]
+    rw [Expr.afterOK_congr c (AfterEquiv.prepend (neutral_args as) (by simp [enclose, punctWord]) h),
+      Expr.afterOKList_congr as (AfterEquiv.closer (c := ")") (by simp) a b)]
+  | .unary _ _ x, a, b, h | .prefix _ _ x, a, b, h => by
+    simp only [Expr.afterOK]; exact Expr.afterOK_congr x h
+  | .postfix _ op x, a, b, h => by
+    simp only [Expr.afterOK]
+    exact Expr.afterOK_congr x (AfterEquiv.prepend (x := [.punct op.symbol]) (neutral_updateOp op) (by simp) h)
+  | .cond _ t x y, a, b, h => by
+    simp only [Expr.afterOK]
+    have hy := AfterEquiv.prepend (x := .punct ":" :: y.tokens) (Neutral.cons (by simp) (Expr.neutral y))
+      (by simp) h
+    have hx := AfterEquiv.prepend (x := .punct "?" :: x.tokens ++ .punct ":" :: y.tokens)
+      (Neutral.cons (by simp) (Neutral.append (Expr.neutral x) (Neutral.cons (by simp) (Expr.neutral y))))
+      (by simp) h
+    rw [Expr.afterOK_congr t hx, Expr.afterOK_congr x hy, Expr.afterOK_congr y h]
+  | .assign _ op t v, a, b, h => by
+    obtain ⟨k, ks, hk, _⟩ := assignOp_head op
+    simp only [Expr.afterOK]
+    rw [Expr.afterOK_congr v h, Expr.afterOK_congr t (AfterEquiv.prepend
+      (Neutral.append (neutral_assignOp op) (Expr.neutral v)) (by simp [hk]) h)]
+  | .array _ es, a, b, h => by
+    simp only [Expr.afterOK]
+    exact Expr.afterOKList_congr es (AfterEquiv.closer (c := "]") (by simp) a b)
+  | .object _ ps, a, b, h => by
+    simp only [Expr.afterOK]
+    exact Property.afterOKList_congr ps (AfterEquiv.closer (c := "}") (by simp) a b)
+  | .ident .., _, _, _ | .number .., _, _, _ | .bigint .., _, _, _ | .string .., _, _, _
+  | .bool .., _, _, _ | .null _, _, _, _ => rfl
+
+theorem Expr.afterOKList_congr : ∀ (es : List Expr) {c c' : List TokenKind}, AfterEquiv c c' →
+    Expr.afterOKList c es = Expr.afterOKList c' es
+  | [], _, _, _ => rfl
+  | [e], _, _, h => by simp only [Expr.afterOKList]; exact Expr.afterOK_congr e h
+  | e :: f :: es, _, _, h => by
+    simp only [Expr.afterOKList]
+    rw [Expr.afterOK_congr e (AfterEquiv.prepend (x := .punct "," :: joined "," ((f :: es).map Expr.tokens))
+      (Neutral.cons (by simp) (Neutral.join (Expr.neutralAll (f :: es)))) (by simp) h),
+      Expr.afterOKList_congr (f :: es) h]
+
+theorem Property.afterOK_congr : ∀ (q : Property) {a b : List TokenKind}, AfterEquiv a b →
+    q.afterOK a = q.afterOK b
+  | .shorthand .., _, _, _ => rfl
+  | .keyValue _ _ v, _, _, h => by simp only [Property.afterOK]; exact Expr.afterOK_congr v h
+
+theorem Property.afterOKList_congr : ∀ (ps : List Property) {c c' : List TokenKind}, AfterEquiv c c' →
+    Property.afterOKList c ps = Property.afterOKList c' ps
+  | [], _, _, _ => rfl
+  | [q], _, _, h => by simp only [Property.afterOKList]; exact Property.afterOK_congr q h
+  | q :: r :: ps, _, _, h => by
+    simp only [Property.afterOKList]
+    rw [Property.afterOK_congr q (AfterEquiv.prepend
+      (x := .punct "," :: joined "," ((r :: ps).map Property.tokens))
+      (Neutral.cons (by simp) (Neutral.join (Property.neutralAll (r :: ps)))) (by simp) h),
+      Property.afterOKList_congr (r :: ps) h]
+
+end
+
+/-- What `afterOK` checks before a `;` does not depend on what follows the `;`. -/
+theorem afterOK_semicolon {e : Expr} (h : e.afterOK [.punct ";"] = true) (x : List TokenKind) :
+    e.afterOK (.punct ";" :: x) = true := by
+  rw [Expr.afterOK_congr e (a := .punct ";" :: x) (b := [.punct ";"]) ⟨rfl, by simp [closesKinds]⟩]; exact h
+
+
+/-! ### Fuel from the budget -/
+
+theorem length_symbol_binOp (op : BinOp) : 1 ≤ (symbol op.symbol).length := by
+  obtain ⟨k, ks, hk, _⟩ := binOp_head op; simp [hk]
+
+theorem length_symbol_assignOp (op : AssignOp) : 1 ≤ (symbol op.symbol).length := by
+  obtain ⟨k, ks, hk, _⟩ := assignOp_head op; simp [hk]
+
+theorem length_symbol_unaryOp (op : UnaryOp) : 1 ≤ (symbol op.symbol).length := by
+  obtain ⟨k, hk, _⟩ := unaryOp_symbol op; simp [hk]
+
+section
+variable {sp : Span}
+
+theorem Expr.tokens_array (es : List Expr) :
+    (Expr.array sp es).tokens = .punct "[" :: joined "," (es.map Expr.tokens) ++ [.punct "]"] := by
+  simp [Expr.tokens, Expr.words, enclose, punctWord, commas_flatten, Expr.wordsOf_eq, List.map_map,
+    Function.comp_def]; rfl
+
+theorem Expr.tokens_object (ps : List Property) :
+    (Expr.object sp ps).tokens = .punct "{" :: joined "," (ps.map Property.tokens) ++ [.punct "}"] := by
+  simp [Expr.tokens, Expr.words, Property.tokens, enclose, punctWord, commas_flatten, Property.wordsOf_eq,
+    List.map_map, Function.comp_def]; rfl
+
+theorem Expr.tokens_paren (i : Expr) : (Expr.paren sp i).tokens = .punct "(" :: i.tokens ++ [.punct ")"] := by
+  simp [Expr.tokens, Expr.words, punctWord]
+
+theorem Expr.tokens_member (o : Expr) (n : String) :
+    (Expr.member sp o n).tokens = o.tokens ++ .punct "." :: propertyName n := by
+  simp [Expr.tokens, Expr.words, punctWord]
+
+theorem Expr.tokens_index (o i : Expr) :
+    (Expr.index sp o i).tokens = o.tokens ++ .punct "[" :: i.tokens ++ [.punct "]"] := by
+  simp [Expr.tokens, Expr.words, punctWord]
+
+theorem Expr.tokens_call (c : Expr) (as : List Expr) :
+    (Expr.call sp c as).tokens = c.tokens ++ .punct "(" :: joined "," (as.map Expr.tokens) ++ [.punct ")"] := by
+  simp [Expr.tokens, Expr.words, enclose, punctWord, commas_flatten, Expr.wordsOf_eq, List.map_map,
+    Function.comp_def]; rfl
+
+theorem Expr.tokens_unary (op : UnaryOp) (a : Expr) :
+    (Expr.unary sp op a).tokens = symbol op.symbol ++ a.tokens := by
+  simp [Expr.tokens, Expr.words]
+
+theorem Expr.tokens_prefix (op : UpdateOp) (a : Expr) :
+    (Expr.prefix sp op a).tokens = .punct op.symbol :: a.tokens := by
+  simp [Expr.tokens, Expr.words, punctWord]
+
+theorem Expr.tokens_postfix (op : UpdateOp) (a : Expr) :
+    (Expr.postfix sp op a).tokens = a.tokens ++ [.punct op.symbol] := by
+  simp [Expr.tokens, Expr.words, punctWord]
+
+theorem Expr.tokens_binary (op : BinOp) (l r : Expr) :
+    (Expr.binary sp op l r).tokens = l.tokens ++ symbol op.symbol ++ r.tokens := by
+  simp [Expr.tokens, Expr.words]
+
+theorem Expr.tokens_cond (t a b : Expr) :
+    (Expr.cond sp t a b).tokens = t.tokens ++ .punct "?" :: a.tokens ++ .punct ":" :: b.tokens := by
+  simp [Expr.tokens, Expr.words, punctWord]
+
+theorem Expr.tokens_assign (op : AssignOp) (t v : Expr) :
+    (Expr.assign sp op t v).tokens = t.tokens ++ symbol op.symbol ++ v.tokens := by
+  simp [Expr.tokens, Expr.words]
+
+theorem Property.tokens_keyValue (k : PropKey) (v : Expr) :
+    (Property.keyValue sp k v).tokens = k.words.flatten ++ .punct ":" :: v.tokens := by
+  simp [Property.tokens, Property.words, Expr.tokens, punctWord]
+
+end
+
+mutual
+
+/-- An expression nests no deeper than it has tokens. -/
+theorem Expr.height_le : ∀ e : Expr, e.height ≤ e.tokens.length
+  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => by simp [Expr.height]
+  | .array _ es => by
+    have := Expr.heightOf_le es
+    rw [Expr.tokens_array]; simp only [Expr.height, List.length_cons, List.length_append, List.length_nil]
+    omega
+  | .object _ ps => by
+    have := Property.heightOf_le ps
+    rw [Expr.tokens_object]; simp only [Expr.height, List.length_cons, List.length_append, List.length_nil]
+    omega
+  | .paren _ i => by
+    have := Expr.height_le i
+    rw [Expr.tokens_paren]; simp only [Expr.height, List.length_cons, List.length_append, List.length_nil]
+    omega
+  | .member _ o n => by
+    have := Expr.height_le o
+    rw [Expr.tokens_member]; simp only [Expr.height, List.length_cons, List.length_append, length_propertyName]
+    omega
+  | .index _ o i => by
+    have := Expr.height_le o; have := Expr.height_le i
+    rw [Expr.tokens_index]; simp only [Expr.height, List.length_cons, List.length_append, List.length_nil]
+    omega
+  | .call _ c as => by
+    have := Expr.height_le c; have := Expr.heightOf_le as
+    rw [Expr.tokens_call]; simp only [Expr.height, List.length_cons, List.length_append, List.length_nil]
+    omega
+  | .unary _ op a => by
+    have := Expr.height_le a; have := length_symbol_unaryOp op
+    rw [Expr.tokens_unary]; simp only [Expr.height, List.length_append]
+    omega
+  | .prefix _ op a => by
+    have := Expr.height_le a
+    rw [Expr.tokens_prefix]; simp only [Expr.height, List.length_cons]
+    omega
+  | .postfix _ op a => by
+    have := Expr.height_le a
+    rw [Expr.tokens_postfix]; simp only [Expr.height, List.length_append, List.length_cons, List.length_nil]
+    omega
+  | .binary _ op l r => by
+    have := Expr.height_le l; have := Expr.height_le r; have := length_symbol_binOp op
+    rw [Expr.tokens_binary]; simp only [Expr.height, List.length_append]
+    omega
+  | .cond _ t a b => by
+    have := Expr.height_le t; have := Expr.height_le a; have := Expr.height_le b
+    rw [Expr.tokens_cond]; simp only [Expr.height, List.length_append, List.length_cons]
+    omega
+  | .assign _ op t v => by
+    have := Expr.height_le t; have := Expr.height_le v; have := length_symbol_assignOp op
+    rw [Expr.tokens_assign]; simp only [Expr.height, List.length_append]
+    omega
+
+theorem Expr.heightOf_le : ∀ es : List Expr, Expr.heightOf es ≤ (joined "," (es.map Expr.tokens)).length
+  | [] => by simp [Expr.heightOf, joined]
+  | [e] => by have := Expr.height_le e; simp [Expr.heightOf, joined]; omega
+  | e :: f :: es => by
+    have := Expr.height_le e; have := Expr.heightOf_le (f :: es)
+    show max e.height (Expr.heightOf (f :: es)) ≤
+      (e.tokens ++ .punct "," :: joined "," ((f :: es).map Expr.tokens)).length
+    simp only [List.length_append, List.length_cons]; omega
+
+theorem Property.height_le : ∀ q : Property, q.height ≤ q.tokens.length
+  | .shorthand .. => by simp [Property.height]
+  | .keyValue _ k v => by
+    have := Expr.height_le v
+    rw [Property.tokens_keyValue]; simp only [Property.height, List.length_append, List.length_cons]
+    omega
+
+theorem Property.heightOf_le : ∀ ps : List Property,
+    Property.heightOf ps ≤ (joined "," (ps.map Property.tokens)).length
+  | [] => by simp [Property.heightOf, joined]
+  | [q] => by have := Property.height_le q; simp [Property.heightOf, joined]; omega
+  | q :: r :: ps => by
+    have := Property.height_le q; have := Property.heightOf_le (r :: ps)
+    show max q.height (Property.heightOf (r :: ps)) ≤
+      (q.tokens ++ .punct "," :: joined "," ((r :: ps).map Property.tokens)).length
+    simp only [List.length_append, List.length_cons]; omega
+
+end
+
+
+/-- `need` fits in the fuel that `budget` gives for the tokens of `e` and what follows them. -/
+theorem need_le_budget {e : Expr} {level : Level} {s : ParseState} {ts rest : List Token}
+    (hs : s.rest = ts ++ rest) (hl : s.left = s.rest.length) (ht : Touching ts e.words) :
+    need level e + 1 ≤ 10 * (s.left + 1) := by
+  have h1 := Expr.height_le e
+  have h2 : ts.length = e.tokens.length := by
+    have := congrArg List.length ht.kinds; simpa [Expr.tokens] using this
+  have h3 : ts.length ≤ s.left := by rw [hl, hs, List.length_append]; omega
+  have h4 : level.cost ≤ 8 := by cases level <;> simp
+  simp only [need]; omega
+
+/-- `parseAssign`, with the fuel that `budget` gives, reads every assignment
+expression. -/
+theorem parseAssign_budget {T : Edition} (e : Expr) (he : e.wfAt T .assign = true) :
+    ∀ (s : ParseState) (ts rest : List Token), s.target = T → s.rest = ts ++ rest →
+      s.left = s.rest.length → Touching ts e.words → (∀ y ∈ ts.tail, y.newlineBefore = false) →
+      rest ≠ [] → EndsAssign rest → e.afterOK (rest.map (·.kind)) = true →
+      ∃ e' s', Parse.parseAssign (10 * (s.left + 1)) s = .ok e' s' ∧ e'.erase = e.erase ∧ Leaves s s' rest :=
+  fun s ts rest hT hs hl ht hn hr hE ha =>
+    exprs_read T (10 * (s.left + 1)) .assign e he (by have := need_le_budget (level := .assign) hs hl ht; omega)
+      s ts rest hT hs hl ht hn hr hE ha
+
+/-- `parseExpression`, with the fuel that `budget` gives, reads every
+assignment expression that no `,` follows. -/
+theorem parseExpression_budget {T : Edition} (e : Expr) (he : e.wfAt T .assign = true) :
+    ∀ (s : ParseState) (ts rest : List Token), s.target = T → s.rest = ts ++ rest →
+      s.left = s.rest.length → Touching ts e.words → (∀ y ∈ ts.tail, y.newlineBefore = false) →
+      rest ≠ [] → EndsExpr rest → e.afterOK (rest.map (·.kind)) = true →
+      ∃ e' s', Parse.parseExpression (10 * (s.left + 1)) s = .ok e' s' ∧ e'.erase = e.erase ∧
+        Leaves s s' rest := by
+  intro s ts rest hT hs hl ht hn hr hE ha
+  have hb := need_le_budget (level := .assign) hs hl ht
+  obtain ⟨g, hg⟩ : ∃ g, 10 * (s.left + 1) = g + 1 := ⟨10 * s.left + 9, by omega⟩
+  rw [hg]
+  exact expression_reads g e (exprs_read T g .assign e he (by omega)) s ts rest hT hs hl ht hn hr hE ha
 
 end tolean.TypeScript.Syntax
