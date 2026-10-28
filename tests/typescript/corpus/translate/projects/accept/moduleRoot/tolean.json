@@ -1,1 +1,7 @@
-{ "typescript": { "sources": ["src/**/*.ts"], "moduleRoot": "src" } }
+{
+  "typescript": {
+    "sources": ["src/**/*.ts"],
+    "moduleRoot": "src",
+    "overrides": [{ "sources": ["src/my-lib/util.ts"], "certify": true }]
+  }
+}
