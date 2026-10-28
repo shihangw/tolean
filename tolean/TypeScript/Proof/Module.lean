@@ -28,7 +28,8 @@ Three facts make it work.
   the calls with fuel `f`.
 
 The theorem is about the output tree. The printer link is trusted: that the
-printed Lean computes what the output's evaluator gives.
+printed Lean computes what the output's evaluator gives. A certificate proves
+the link for its file, with `Proof/Link.lean`.
 -/
 namespace tolean.TypeScript.Proof
 

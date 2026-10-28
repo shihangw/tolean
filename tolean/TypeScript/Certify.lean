@@ -6,9 +6,9 @@ import tolean.TypeScript.Translate
 /-!
 `tolean certify`: a per-file certificate for a translation.
 
-For one TypeScript file, the certificate holds the parsed program as a Lean
-term, an encoding of each translated Lean value as a JavaScript value, and one
-theorem per function:
+For one TypeScript file, the certificate holds the parsed program and the
+translator's output tree as Lean terms, an encoding of each translated Lean
+value as a JavaScript value, and one theorem per function:
 
 ```
 theorem raise_cert (g step) :
@@ -18,15 +18,23 @@ theorem raise_cert (g step) :
 `run` is the interpreter in `Spec/Eval.lean`. When the theorems compile, the
 translation of that file is proved: for every input, the translated function
 returns what the program returns. This module does not need to be trusted. If
-it writes a wrong encoding or a wrong theorem, Lean refuses the file.
+it writes a wrong encoding, a wrong tree or a wrong theorem, Lean refuses the
+file.
+
+The theorem follows from `decls_sound` in `Proof/Link.lean`, so it does not
+unfold the interpreter. The kernel checks that the parser gives the program
+for the source and that the translator gives the tree for the program. Then
+a `link` theorem for each function states that the printed definition
+computes what `Output/Eval.lean` gives for the tree, and `link_tac` proves it
+by unfolding the evaluator.
 
 A loop gets a lemma of its own before the theorem of its function. The lemma
-states that the interpreter runs the loop as the translation's `List.foldl`,
+states that the evaluator runs the loop's fold as the printed `List.foldl`,
 for every environment whose variables have values of the right types. It
-follows from `execLoop_foldl` in `Spec/Lemmas/Eval.lean`, and the theorem of
-the function uses it as a rewrite rule. To be usable that way, the lemma reads
-the loop's starting state, and the other variables that the body reads, back
-out of the environment with decoders.
+follows from `runFold_foldl`, and the theorem of the function uses it as a
+rewrite rule. To be usable that way, the lemma reads the loop's starting
+state, and the other variables that the body reads, back out of the
+environment with decoders.
 
 A `number` is a value of the abstract model `JSNumber N`, in the
 interpreter as in the translation, so every theorem holds for every `N`.
@@ -35,44 +43,76 @@ namespace tolean.TypeScript.Certify
 
 open tolean tolean.TypeScript.Syntax
 
+/-- How the certificate writes the names it uses. A theorem binds the
+parameters of its function, and a loop lemma binds locals, so a source name
+would hide a Lean name with the same first part. Such a name is written from
+the root, as the printer writes the Lean names that the source declares. -/
+structure Refs where
+  /-- Every identifier in the source. -/
+  idents : List String
+  /-- The namespace of the certificate. -/
+  certNs : String
+
+/-- `short`, or `full` from the root when a source name would hide `short`. -/
+def Refs.write (r : Refs) (short full : String) : String :=
+  if r.idents.contains ((short.splitOn ".").headD short) then s!"_root_.{full}" else short
+
+/-- A name of `Spec/Eval.lean` or of its lemmas, which the certificate opens. -/
+def Refs.eval (r : Refs) (name : String) : String := r.write name s!"tolean.TypeScript.Eval.{name}"
+
+/-- A name that the certificate declares. -/
+def Refs.cert (r : Refs) (name : String) : String := r.write name s!"{r.certNs}.{name}"
+
+/-- A name that is already written in full. -/
+def Refs.full (r : Refs) (name : String) : String := r.write name name
+
+/-- Every identifier in `source`, at any level, as `Translate.translateFile`
+finds them. -/
+def sourceIdents (source : String) (target : Edition) : List String :=
+  match Syntax.lex source target with
+  | .ok tokens => tokens.toList.filterMap fun (t : Syntax.Token) => match t.kind with
+    | .ident name => some name
+    | _ => none
+  | .error _ => []
+
 /-- How a value of a TypeScript type becomes a `Val`, as a Lean function. -/
-partial def encoder : TypeExpr → Option String
-  | .keyword _ "bigint" => some "Val.int"
-  | .keyword _ "number" => some "Val.num"
-  | .keyword _ "boolean" => some "Val.bool"
-  | .keyword _ "string" => some "Val.str"
-  | .paren _ t => encoder t
+partial def encoder (r : Refs) : TypeExpr → Option String
+  | .keyword _ "bigint" => some (r.eval "Val.int")
+  | .keyword _ "number" => some (r.eval "Val.num")
+  | .keyword _ "boolean" => some (r.eval "Val.bool")
+  | .keyword _ "string" => some (r.eval "Val.str")
+  | .paren _ t => encoder r t
   | .union _ [a, b] => do
     let inner ← match a, b with
-      | .null _, t | t, .null _ => encoder t
+      | .null _, t | t, .null _ => encoder r t
       | _, _ => none
-    return s!"(encNull {inner})"
-  | .array _ t => do return s!"(encList {← encoder t})"
-  | .ref _ "Array" [t] | .ref _ "ReadonlyArray" [t] => do return s!"(encList {← encoder t})"
-  | .ref _ name [] => some s!"encode{name}"
+    return s!"({r.eval "encNull"} {inner})"
+  | .array _ t => do return s!"({r.eval "encList"} {← encoder r t})"
+  | .ref _ "Array" [t] | .ref _ "ReadonlyArray" [t] => do return s!"({r.eval "encList"} {← encoder r t})"
+  | .ref _ name [] => some (r.cert s!"encode{name}")
   | _ => none
 
 /-- How a value of a Lean type of the output becomes a `Val`, as `encoder`
 writes it. -/
-def encoderOf : Output.Ty → Option String
-  | .int => some "Val.int"
-  | .bool => some "Val.bool"
-  | .string => some "Val.str"
-  | .option t => do return s!"(encNull {← encoderOf t})"
-  | .list t => do return s!"(encList {← encoderOf t})"
-  | .struct ref => some s!"encode{ref.name}"
-  | .number => some "Val.num"
+def encoderOf (r : Refs) : Output.Ty → Option String
+  | .int => some (r.eval "Val.int")
+  | .bool => some (r.eval "Val.bool")
+  | .string => some (r.eval "Val.str")
+  | .option t => do return s!"({r.eval "encNull"} {← encoderOf r t})"
+  | .list t => do return s!"({r.eval "encList"} {← encoderOf r t})"
+  | .struct ref => some (r.cert s!"encode{ref.name}")
+  | .number => some (r.eval "Val.num")
   | .null => none
 
 /-- How a variable's value becomes a Lean value of type `t` again. -/
-def decoderOf : Output.Ty → Option String
-  | .int => some "decInt"
-  | .bool => some "decBool"
-  | .string => some "decStr"
-  | .option t => do return s!"(decNull {← decoderOf t})"
-  | .list t => do return s!"(decList {← decoderOf t})"
-  | .struct ref => some s!"decode{ref.name}"
-  | .number => some "decNum"
+def decoderOf (r : Refs) : Output.Ty → Option String
+  | .int => some (r.eval "decInt")
+  | .bool => some (r.eval "decBool")
+  | .string => some (r.eval "decStr")
+  | .option t => do return s!"({r.eval "decNull"} {← decoderOf r t})"
+  | .list t => do return s!"({r.eval "decList"} {← decoderOf r t})"
+  | .struct ref => some (r.cert s!"decode{ref.name}")
+  | .number => some (r.eval "decNum")
   | .null => none
 
 /-- The statements of a function body, with nested ones. -/
@@ -170,6 +210,11 @@ def project (s : String) (count index : Nat) : String :=
     let seconds := String.join (List.replicate index ".2")
     if index + 1 == count then s!"{s}{seconds}" else s!"{s}{seconds}.1"
 
+/-- A value as a Lean term. The derived `Repr` writes each constructor by its
+full name, so Lean reads the text back as the same value. If it did not, the
+kernel's check in the certificate would fail, so this need not be trusted. -/
+def term {α : Type} [Repr α] (x : α) : String := (repr x).pretty 100
+
 /-- The certificate file for `source`, translated as the Lean module `leanModule`
 with namespace `transNs`. -/
 def certify (file source leanModule transNs certNs : String) (target : Edition := .default) :
@@ -177,8 +222,13 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
   if let .ok m := Syntax.parse source target then
     if m.decls.any (· matches .import ..) then
       throw s!"{file}: a file with imports has no certificate yet"
-  let (m, names, decls) ← Translate.translateTree file source target
-  let names := { names with namespacePrefix := transNs ++ "." }
+  -- The certificate's program is the file "", so the tree names the file's
+  -- own declarations under "".
+  let (m, names, decls) ← (Translate.translateTree "" source target).mapError (file ++ ·)
+  let r : Refs := { idents := sourceIdents source target, certNs }
+  -- A loop lemma's step function binds the loop's locals, so the printer
+  -- writes the translation's names as `Refs` does.
+  let names := { names with namespacePrefix := r.full transNs ++ "." }
   let fns := certifiable m
   if fns.isEmpty then throw s!"{file}: there is no function to certify"
   let nv := names.numberVar
@@ -187,17 +237,17 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
   -- A generic translated definition takes the model by name, as the
   -- translation's own calls do.
   let callN := if names.usesNumber then s!" ({nv} := {nv})" else ""
-  let structTy (name : String) : String := (Output.Ty.struct ⟨file, name⟩).print names
+  let structTy (name : String) : String := (Output.Ty.struct ⟨"", name⟩).print names
   let mut encs : Array String := #[]
   let mut lemmaNames : Array String :=
-    #["encList", "encNull", "decInt", "decBool", "decStr", "decNum"]
+    #["encList", "encNull", "decInt", "decBool", "decStr", "decNum"].map r.eval
   for d in decls do
     if let .struct name fields := d then
       let parts ← fields.mapM fun (f, t) => do
-        let some e := encoderOf t | throw s!"{file}: cannot encode the field {name}.{f}"
+        let some e := encoderOf r t | throw s!"{file}: cannot encode the field {name}.{f}"
         return s!"({str f}, {e} x.{f})"
       let decs ← fields.mapM fun (f, t) => do
-        let some dec := decoderOf t | throw s!"{file}: cannot decode the field {name}.{f}"
+        let some dec := decoderOf r t | throw s!"{file}: cannot decode the field {name}.{f}"
         return (f, dec)
       let some_ := ", ".intercalate (decs.map fun (f, dec) => s!"{f} := {dec} (fs.lookup {str f})")
       let none_ := ", ".intercalate (decs.map fun (f, dec) => s!"{f} := {dec} (none : Option (Val {nv}))")
@@ -209,21 +259,11 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       encs := encs.push <|
         s!"@[simp] theorem decode{name}_encode{name} {generic} (x : {structTy name}) : decode{name} (some (encode{name} ({nv} := {nv}) x)) = x := by\n" ++
         s!"  cases x; simp [decode{name}, encode{name}, List.lookup, encList, encNull]"
-      lemmaNames := lemmaNames ++ #[s!"encode{name}", s!"decode{name}"]
-  let defs := (functionsOf m).map (s!"{transNs}." ++ ·.1)
-  -- `simp` cannot run `numberLiteral`, so each literal gets a lemma that
-  -- `decide` proves.
-  let texts := ((functionsOf m).flatMap fun (_, _, _, b) => (stmtsOf b).flatMap stmtNumbers).eraseDups
-  let mut literals : Array String := #[]
-  for (text, i) in texts.zipIdx do
-    let value := match Eval.numberLiteral text with
-      | some v => s!"some ({v})"
-      | none => "none"
-    encs := encs.push s!"theorem numberLiteral{i} : numberLiteral {str text} = {value} := by decide"
-    literals := literals.push s!"numberLiteral{i}"
-  lemmaNames := lemmaNames ++ literals
+      lemmaNames := lemmaNames ++ #[r.cert s!"encode{name}", r.cert s!"decode{name}"]
+  let defs := (functionsOf m).map fun f => r.full s!"{transNs}.{f.1}"
+  let outputFs := s!"({r.full "tolean.TypeScript.Output.functionsOf"} [(\"\", {r.cert "decls"})])"
   let envLemmas := ["Env.set_cons", "Env.lookup_cons", "Env.lookup_set_same", "Env.lookup_set_ne",
-    "Env.set_set", "Env.length_set"]
+    "Env.set_set", "Env.length_set"].map r.eval
   let mut loopLemmas : Array String := #[]
   let mut thms : Array String := #[]
   for d in m.decls do
@@ -239,11 +279,11 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       let lemmaName := s!"{name}_loop{index}"
       let some bodyStmt := loopBody syntaxBody info.span
         | throw s!"{file}: no loop at {info.span.start.line}:{info.span.start.col} in {name}"
-      let some encX := encoderOf info.elem | throw s!"{file}: cannot encode the elements of a loop in {name}"
+      let some encX := encoderOf r info.elem | throw s!"{file}: cannot encode the elements of a loop in {name}"
       let state := stateNames.zip info.stateTypes
       let vars := state ++ info.scope
       let coded ← vars.mapM fun (n, t) => do
-        let (some e, some dec) := (encoderOf t, decoderOf t)
+        let (some e, some dec) := (encoderOf r t, decoderOf r t)
           | throw s!"{file}: cannot encode the variable {n} in {name}"
         return (n, e, dec)
       let decode (ρ n : String) : String :=
@@ -259,12 +299,9 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       let decState (ρ : String) : String :=
         if count == 1 then decode ρ stateNames.head! else
           "(" ++ ", ".intercalate (stateNames.map (decode ρ)) ++ ")"
-      -- The globals that the interpreter reads when no variable hides them.
-      let globals := ["Number", "NaN", "Infinity"].filter fun g => !vars.any (·.1 == g)
       let inv (ρ : String) : String :=
-        " ∧ ".intercalate ((coded.map fun (n, e, dec) =>
-          s!"{ρ}.lookup {str n} = some ({e} ({dec} ({ρ}.lookup {str n})))") ++
-          globals.map fun g => s!"{ρ}.lookup {str g} = none")
+        " ∧ ".intercalate (coded.map fun (n, e, dec) =>
+          s!"{ρ}.lookup {str n} = some ({e} ({dec} ({ρ}.lookup {str n})))")
       let scopeNames := info.scope.map (·.1)
       let stepLines := Output.indentBy "        " (body.lines names)
       let captured := if scopeNames.isEmpty then "" else s!"fun {" ".intercalate scopeNames} => "
@@ -273,11 +310,13 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           String.join (scopeNames.map fun n => s!" {decode ρ n}") ++ "))"
       let depth := callDepth m bodyStmt
       let fuel := if depth == 0 then "fuel" else s!"(fuel + {depth})"
-      let hm := if depth == 0 then "" else " (hm : m = { program := [(\"\", program)], file := \"\" })"
-      let hmName := if depth == 0 then [] else ["program"]
-      let substHm := if depth == 0 then "" else "    subst hm\n"
+      -- A body with calls looks the functions up in the output, so the lemma
+      -- is about the output's functions.
+      let hfs := if depth == 0 then "" else s!" (hfs : fs = {outputFs})"
+      let substHfs := if depth == 0 then "" else "    subst hfs\n"
+      let hfsName := if depth == 0 then [] else [r.cert "decls"]
       let elemTy := info.elem.print names
-      let hypNames := (List.range (coded.length + globals.length)).map (s!"h{·}")
+      let hypNames := (List.range coded.length).map (s!"h{·}")
       let hyps := if hypNames.length == 1 then "h0" else "⟨" ++ ", ".intercalate hypNames ++ "⟩"
       let generalize (ρ : String) (which : List (String × String × String)) : String :=
         String.join (which.zipIdx.map fun ((n, _, dec), i) =>
@@ -285,39 +324,48 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       let stateCoded := coded.take count
       let destruct := if count ≤ 1 then "" else
         s!"    obtain ⟨{", ".intercalate ((List.range count).map (s!"s{·}"))}⟩ := s\n"
-      let simpSet := ", ".intercalate (hmName ++ envLemmas ++ lemmaNames.toList ++ loopLemmas.toList ++ defs)
-      loopLemmas := loopLemmas.push lemmaName
+      let simpSet := ", ".intercalate (hfsName ++ envLemmas ++ lemmaNames.toList ++ loopLemmas.toList ++ defs)
+      loopLemmas := loopLemmas.push (r.cert lemmaName)
       thms := thms.push <|
-        s!"theorem {lemmaName} {generic} (m : tolean.TypeScript.Eval.Scope){hm} (fuel : Nat) (items : List {elemTy}) (ρ : Env {nv})\n" ++
-        s!"    (hI : {inv "ρ"}) :\n" ++
-        s!"    execLoop m {fuel} ρ {str element} {stmt bodyStmt} (List.map {encX} items) =\n" ++
-        s!"      some (.normal {upd s!"(List.foldl {stepFn "ρ"} {decState "ρ"} items)" "ρ"}) := by\n" ++
-        s!"  refine execLoop_foldl m {fuel} {str element} _ {encX} (fun s ρ => {upd "s" "ρ"})\n" ++
-        s!"    (fun ρ => {decState "ρ"}) (fun ρ => {stepFn "ρ"}) (fun ρ => {inv "ρ"}) ?_ ?_ ?_ items ρ hI\n" ++
-        s!"  · intro ρ s x hI\n" ++ substHm ++
+        s!"theorem {lemmaName} {generic} (fs : List (tolean.DeclRef × List String × tolean.TypeScript.Output.Body)){hfs}\n" ++
+        s!"    (fuel : Nat) (items : List {elemTy}) (ρ : Env {nv}) (hI : {inv "ρ"}) :\n" ++
+        s!"    tolean.TypeScript.Output.Body.runFold fs {fuel} {list (stateNames.map str)} {str element}\n" ++
+        s!"      ({term body}) ρ (List.map {encX} items) =\n" ++
+        s!"      some {upd s!"(List.foldl {stepFn "ρ"} {decState "ρ"} items)" "ρ"} := by\n" ++
+        s!"  refine tolean.TypeScript.Proof.runFold_foldl fs {fuel} _ {str element} _ {encX} (fun s ρ => {upd "s" "ρ"})\n" ++
+        s!"    (fun ρ => {decState "ρ"}) (fun ρ => {stepFn "ρ"}) (fun ρ => {inv "ρ"}) ?_ ?_ items ρ hI\n" ++
+        s!"  · intro ρ s x hI\n" ++ substHfs ++
         s!"    obtain {hyps} := hI\n    try simp only []\n" ++
         generalize "ρ" coded ++ destruct ++
-        s!"    certify_tac [{simpSet}, {", ".intercalate hypNames}]\n" ++
-        s!"  · intro s ρ; simp [Env.length_set]\n" ++
+        s!"    link_tac [{simpSet}, {", ".intercalate hypNames}]\n" ++
         s!"  · intro ρ hI\n" ++
         s!"    obtain {hyps} := hI\n    try simp only []\n" ++
         generalize "ρ" stateCoded ++
         s!"    simp [{", ".intercalate ((List.range count).map fun i => s!"Env.set_of_lookup _ _ _ h{i}")}]"
-    let some retEnc := ret.bind encoder | throw s!"{file}: cannot encode the result of {name}"
+    let some retEnc := ret.bind (encoder r) | throw s!"{file}: cannot encode the result of {name}"
     let args ← params.mapM fun p => do
-      let some e := p.type.bind encoder | throw s!"{file}: cannot encode the parameter {p.name}"
+      let some e := p.type.bind (encoder r) | throw s!"{file}: cannot encode the parameter {p.name}"
       return s!"({e} {p.name})"
     let binders := " ".intercalate (params.map fun p => s!"({p.name} : _)")
-    let call := " ".intercalate (s!"{transNs}.{name}{callN}" :: params.map (·.name))
-    let simpSet := ", ".intercalate (["program"] ++ envLemmas ++ lemmaNames.toList ++ loopLemmas.toList ++ defs)
+    let call := " ".intercalate ((r.full s!"{transNs}.{name}" ++ callN) :: params.map (·.name))
+    let simpSet := ", ".intercalate ([r.cert "decls"] ++ envLemmas ++ lemmaNames.toList ++ loopLemmas.toList ++ defs)
+    let some_ := r.write "some" "Option.some"
+    let rfl := r.full "rfl"
+    thms := thms.push <|
+      s!"theorem {name}_link {generic} {binders} :\n" ++
+      s!"    {r.full "tolean.TypeScript.Output.runIn"} (N := {nv}) {outputFs} ⟨\"\", {str name}⟩ {list args} =\n" ++
+      s!"      {some_} ({retEnc} ({call})) := by\n" ++
+      s!"  {casesOn params}link_tac [{simpSet}]"
     thms := thms.push <|
       s!"theorem {name}_cert {generic} {binders} :\n" ++
-      s!"    run (N := {nv}) program {str name} {list args} = some ({retEnc} ({call})) := by\n" ++
-      s!"  {casesOn params}certify_tac [{simpSet}]"
+      s!"    {r.eval "run"} (N := {nv}) {r.cert "program"} {str name} {list args} = {some_} ({retEnc} ({call})) :=\n" ++
+      s!"  {r.full "tolean.TypeScript.Proof.decls_sound"} {rfl} {rfl} {rfl} {r.cert "program_translated"} {str name} _ 64 _\n" ++
+      s!"    ({" ".intercalate (r.cert s!"{name}_link" :: params.map (·.name))})"
   return "\n".intercalate ([
     s!"-- Certificate written by tolean for {file}. Do not edit.",
     "import tolean.TypeScript.Spec.Lemmas.Eval",
     "import tolean.TypeScript.Syntax.Parser",
+    "import tolean.TypeScript.Proof.Link",
     s!"import {leanModule}",
     "",
     s!"namespace {certNs}",
@@ -342,6 +390,20 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     "printer that wrote `program` need not be trusted. -/",
     s!"theorem program_parsed : tolean.TypeScript.Syntax.parseChars sourceChars .{target.name.toLower} = Except.ok program :=",
     "  tolean.TypeScript.Syntax.parseChars_eq_of_parsesTo (by decide +kernel)",
+    "",
+    "/-- The output tree, as the translator gives it for the program. -/",
+    s!"def decls : List tolean.TypeScript.Output.Decl :=\n  {term decls}",
+    "",
+    "/-- The state that the translator starts from. The source text serves only in",
+    "the message of a refusal, so the start leaves it out. -/",
+    "def start : tolean.TypeScript.Translate.Ctx :=",
+    s!"  \{ file := \"\", target := .{target.name.toLower}, src := #[], lineStarts := #[], fuel := 4 * sourceChars.length + 4 }",
+    "",
+    "/-- The translator gives `decls` for the program: the kernel runs it and",
+    "compares the trees. With a `link` theorem for each function, the theorems",
+    "below then trust neither the translator nor the printer. -/",
+    "theorem program_translated : tolean.TypeScript.Proof.translatesTo program start decls = true := by",
+    "  decide +kernel",
     ""] ++ encs.toList.map (· ++ "\n") ++ thms.toList.map (· ++ "\n") ++ [s!"end {certNs}", ""])
 
 /-- The functions of `source` that get a certificate, and whether that is all

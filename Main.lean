@@ -8,6 +8,7 @@ import tolean.Go.Translate
 import tolean.Sql.Translate
 import tolean.Chain.Check
 import tolean.TypeScript.Certify
+import tolean.TypeScript.Interpret
 import tolean.Project
 
 /-!
@@ -15,8 +16,9 @@ The `tolean` command.
 
 ```
 tolean parse [--target ES20xx] [--round-trip] <file>
-    print the syntax tree of <file>; with --round-trip, also print the tree
-    as source, parse that, and exit with 3 unless it gives the same tree
+    print the syntax tree of <file>; with --round-trip (TypeScript only),
+    also print the tree as source, parse that, and exit with 3 unless it
+    gives the same tree
 tolean translate [--check] [--config <json>]
     build every unit that tolean.json lists, or that the inline JSON <json>
     lists; with --check, write nothing and fail when a generated file is not
@@ -25,6 +27,10 @@ tolean translate-workspace
     read a workspace as JSON on stdin, {"files": [{"path", "text"}, …]} with
     tolean.json among them, and print each unit's Lean or error as JSON; it
     reads and writes no files
+tolean interpret
+    read TypeScript programs and calls as JSON on stdin, run each call in the
+    interpreter of Spec/Eval.lean on real doubles, and print the results as
+    JSON (see tolean/TypeScript/Interpret.lean); the test against Node uses it
 tolean translate [--target ES20xx] [--certify] <input> <output.lean> <Namespace>
     write <input> as Lean definitions; with --certify, also write its
     certificate next to it when some function can have one (see `certify`)
@@ -57,7 +63,7 @@ file extension selects the language: `.ts`, or `.go` for `parse` only.
 open tolean tolean.TypeScript
 
 def usage : String :=
-  "usage: tolean parse [--target ES20xx] <file.ts>\n" ++
+  "usage: tolean parse [--target ES20xx] [--round-trip] <file.ts>\n" ++
   "       tolean translate [--check] [--config <json>]\n" ++
   "       tolean translate-workspace < workspace.json\n" ++
   "       tolean translate [--target ES20xx] [--certify] <input.ts> <output.lean> <Lean.Namespace>\n" ++
@@ -86,7 +92,11 @@ def parseGoFile (path : String) : IO UInt32 := do
     return 1
 
 def parseFile (target : Edition) (path : String) (roundTrip : Bool := false) : IO UInt32 := do
-  if path.endsWith ".go" then return ← parseGoFile path
+  if path.endsWith ".go" then
+    if roundTrip then
+      IO.eprintln s!"{path}: --round-trip reads only TypeScript (.ts) files"
+      return 2
+    return ← parseGoFile path
   unless ← checkLanguage path do return 2
   let source ← IO.FS.readFile path
   match Syntax.parse source target with
@@ -242,6 +252,10 @@ def run (target : Edition) : List String → IO UInt32
   | ["translate-workspace"] => do
     IO.println (Project.workspaceJson (← (← IO.getStdin).readToEnd))
     return 0
+  | ["interpret"] => do
+    match TypeScript.Interpret.interpret (← (← IO.getStdin).readToEnd) with
+    | .ok out => IO.println out; return 0
+    | .error e => IO.eprintln e; return 1
   | ["translate", "--config", json] => translateProject false json
   | ["translate", "--check", "--config", json] => translateProject true json
   | ["translate", "--config", json, "--check"] => translateProject true json
