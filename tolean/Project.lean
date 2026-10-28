@@ -193,15 +193,22 @@ def translateUnit (u : Job) (read : String → Except String String)
     let migrationTexts ← migrations.mapM fun f => return (f, ← read f)
     return { output, ns, lean := ← Sql.Translate.translate migrationTexts [(queryFile, text)] queries ns }
 
-/-- The TypeScript files of the project that `source` imports from. -/
+/-- The TypeScript files of the project that `source` imports from, as the
+parser reads it for the edition `target`. -/
 def typescriptImports (sources : List String) (read : String → Except String String)
-    (source : String) : List String :=
+    (target : TypeScript.Edition) (source : String) : List String :=
   match read source with
   | .error _ => []
   | .ok text =>
-    match TypeScript.Syntax.parse text with
+    match TypeScript.Syntax.parse text target with
     | .error _ => []
     | .ok m => (TypeScript.Translate.importedFiles source m).filter sources.contains
+
+/-- The edition that a unit's settings name, or the default one. -/
+def Job.edition : Job → TypeScript.Edition
+  | .typescript s _ =>
+    ((string? s "target").bind TypeScript.Edition.parse?).getD TypeScript.Edition.default
+  | _ => TypeScript.Edition.default
 
 /-- The units, with each TypeScript file after the files it imports from, and
 an error for each TypeScript file that an import cycle leaves out. -/
@@ -210,7 +217,7 @@ def typescriptOrder (jobs : List Job) (read : String → Except String String) :
   let ts := jobs.filter (· matches .typescript ..)
   let others := jobs.filter fun j => !(j matches .typescript ..)
   let sources := ts.flatMap Job.sources
-  let imports := ts.map fun j => (j, j.sources.flatMap (typescriptImports sources read))
+  let imports := ts.map fun j => (j, j.sources.flatMap (typescriptImports sources read j.edition))
   -- Kahn's algorithm: take a file when every file it imports is taken.
   let mut done : List String := []
   let mut ordered : List Job := []

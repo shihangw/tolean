@@ -174,10 +174,11 @@ def project (s : String) (count index : Nat) : String :=
 with namespace `transNs`. -/
 def certify (file source leanModule transNs certNs : String) (target : Edition := .default) :
     Except String String := do
+  if let .ok m := Syntax.parse source target then
+    if m.decls.any (· matches .import ..) then
+      throw s!"{file}: a file with imports has no certificate yet"
   let (m, names, decls) ← Translate.translateTree file source target
   let names := { names with namespacePrefix := transNs ++ "." }
-  if m.decls.any (· matches .import ..) then
-    throw s!"{file}: a file with imports has no certificate yet"
   let fns := certifiable m
   if fns.isEmpty then throw s!"{file}: there is no function to certify"
   let nv := names.numberVar

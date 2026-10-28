@@ -202,20 +202,18 @@ def normalizeSegments : List String → List String → Option (List String)
   | acc, ".." :: rest => if acc.isEmpty then none else normalizeSegments acc.dropLast rest
   | acc, s :: rest => if s.isEmpty then none else normalizeSegments (acc ++ [s]) rest
 
-/-- The file that `import … from source` in `file` names. `source` is relative
-to the directory of `file`. Tolean names a file by its `.ts` path, so
-`"./b.ts"`, `"./b.js"` and `"./b"` all name `b.ts`, as TypeScript resolves
-them. A source that is not relative names no file of the program. -/
+/-- The file that `import … from source` in `file` names: `source` relative to
+the directory of `file`. The source must name the `.ts` file itself, as
+Node's type stripping requires and a bundler accepts, so that the import
+names the same file wherever the code runs. Any other source names no file
+of the program. -/
 def resolvePath (file source : String) : Option String := do
   let segments := source.splitOn "/"
   unless segments.head? == some "." || segments.head? == some ".." do none
   let path ← normalizeSegments (file.splitOn "/").dropLast segments
   let last ← path.getLast?
-  let last :=
-    if last.endsWith ".ts" then last
-    else if last.endsWith ".js" then (last.dropEnd 3).toString ++ ".ts"
-    else last ++ ".ts"
-  return "/".intercalate (path.dropLast ++ [last])
+  unless last.endsWith ".ts" do none
+  return "/".intercalate path
 
 /-- `m` declares `name` as an exported function. -/
 def exportsFunction (m : Module) (name : String) : Bool :=

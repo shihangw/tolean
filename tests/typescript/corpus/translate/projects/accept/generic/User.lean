@@ -6,9 +6,9 @@ open tolean.TypeScript
 namespace User
 
 def two {N : Type} [JSNumber N]  : Int :=
-  ((Num.one (N := N)) + (Num.one (N := N)))
+  ((_root_.Num.one (N := N)) + (_root_.Num.one (N := N)))
 
 def four {N : Type} [JSNumber N] (x : N) : N :=
-  (Num.twice (N := N) ((Num.twice (N := N) x)))
+  (_root_.Num.twice (N := N) ((_root_.Num.twice (N := N) x)))
 
 end User

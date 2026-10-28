@@ -1,1 +1,1 @@
-'./missing.ts' is not a file of the project that this file may import from
+'./missing.ts' is not a translated file of the project

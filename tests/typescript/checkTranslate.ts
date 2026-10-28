@@ -160,12 +160,19 @@ function leanFiles(dir: string, prefix = ''): Array<string> {
   });
 }
 
+/** The Lean search path of the root package, for compiling a project's modules. */
+function rootLeanPath(): string {
+  const run = spawnSync('lake', ['env', 'printenv', 'LEAN_PATH'], { cwd: root, encoding: 'utf8' });
+  if (run.error !== undefined) throw run.error;
+  if (run.status !== 0) throw new Error(`lake env printenv LEAN_PATH exited with ${run.status}: ${run.stderr}`);
+  return run.stdout.trim();
+}
+
 /** Compile the Lean modules of `dir`, each after the modules of `dir` that it
 imports, and give the first error, or null. */
-function compilesProject(dir: string): string | null {
+function compilesProject(dir: string, leanPath: string): string | null {
   const build = mkdtempSync(join(tmpdir(), 'tolean-project-'));
   cpSync(dir, build, { recursive: true });
-  const leanPath = spawnSync('lake', ['env', 'printenv', 'LEAN_PATH'], { cwd: root, encoding: 'utf8' }).stdout.trim();
   const modules = new Map(leanFiles(build).map((f) => [f.replace(/\.lean$/, '').replaceAll('/', '.'), f]));
   const done = new Set<string>();
   const visit = (name: string): string | null => {
@@ -186,6 +193,7 @@ function compilesProject(dir: string): string | null {
       encoding: 'utf8',
       env: { ...process.env, LEAN_PATH: `${build}:${leanPath}` },
     });
+    if (run.error !== undefined) throw run.error;
     return run.status === 0 ? null : `${file}: ${(run.stdout + run.stderr).trim().slice(0, 600)}`;
   };
   for (const name of modules.keys()) {
@@ -197,6 +205,7 @@ function compilesProject(dir: string): string | null {
 
 const projectsDir = 'corpus/translate/projects';
 const acceptProjects = readdirSync(`${projectsDir}/accept`).sort();
+const leanPath = rootLeanPath();
 for (const name of acceptProjects) {
   const dir = `${projectsDir}/accept/${name}`;
   const run = spawnSync(tolean, update ? ['translate'] : ['translate', '--check'], { cwd: dir, encoding: 'utf8' });
@@ -204,7 +213,7 @@ for (const name of acceptProjects) {
     failures.push(`${dir}: tolean translate${update ? '' : ' --check'} failed: ${run.stderr.trim()}`);
     continue;
   }
-  const error = compilesProject(dir);
+  const error = compilesProject(dir, leanPath);
   if (error !== null) failures.push(`${dir}: the Lean output does not compile:\n${error}`);
 }
 const rejectProjects = readdirSync(`${projectsDir}/reject`).sort();

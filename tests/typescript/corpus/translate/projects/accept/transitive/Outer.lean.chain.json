@@ -1,0 +1,44 @@
+{"tolean": "0.1.0",
+ "target": "ES2024",
+ "sources":
+ [{"sha256": "dd01cd21927296b594ecad7d93fe0f1e77720ee998de157c3d0c5d6fb2fa4c1b",
+   "path": "outer.ts"}],
+ "output":
+ {"sha256": "9a2bed953cf18b09772907b9bfb4a6f2c107e8d201e7875d697c428b366f81ad",
+  "path": "Outer.lean"},
+ "nodes":
+ [{"status": "tested",
+   "label": "TypeScript parser",
+   "kind": "parser",
+   "id": "parser",
+   "evidence":
+   {"reference": "tsc", "check": "typescript-parse", "by": "tolean"}},
+  {"status": "tested",
+   "label": "TypeScript translator",
+   "kind": "translator",
+   "id": "translator",
+   "evidence":
+   {"reference": "fixed corpus output and random programs",
+    "check": "typescript-translate",
+    "by": "tolean"}},
+  {"status": "tested",
+   "module": "tolean.TypeScript.Spec.Number",
+   "label": "JavaScript number laws",
+   "kind": "spec",
+   "id": "spec",
+   "evidence":
+   {"reference": "Node 22 and 24",
+    "check": "typescript-engines",
+    "by": "tolean"}},
+  {"status": "trusted",
+   "label": "JavaScript engine",
+   "kind": "runtime",
+   "id": "runtime"}],
+ "module": "Outer",
+ "language": "typescript",
+ "edges":
+ [["source", "parser"],
+  ["parser", "translator"],
+  ["translator", "output"],
+  ["spec", "output"],
+  ["runtime", "output"]]}

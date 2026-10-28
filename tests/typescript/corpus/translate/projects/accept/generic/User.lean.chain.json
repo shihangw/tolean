@@ -4,7 +4,7 @@
  [{"sha256": "4b19296e2d8b03c8538145b6e1bd76f7d1684c49d19ee14146faa156ba0d6335",
    "path": "user.ts"}],
  "output":
- {"sha256": "148849d37c05809942b8dffc2b20841ee7e7a70a2cd59591ccf108b32d99a782",
+ {"sha256": "8c07ec6c3ef74a946e4c43218ab3b62ff96300abf2ca7748ac1514e1239b1ee2",
   "path": "User.lean"},
  "nodes":
  [{"status": "tested",

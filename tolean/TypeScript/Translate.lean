@@ -167,6 +167,13 @@ structure Ctx where
 
 abbrev TM := EStateM String Ctx
 
+/-- The interfaces whose fields the file may read or build: its own and the
+ones it imports, and the exported interfaces of the files before it. A value
+of an interface that the file does not import can reach it through a field
+of one that it does. -/
+def Ctx.knownStructs (c : Ctx) : List StructInfo :=
+  c.structs ++ c.interfaces.flatMap (·.2.structs)
+
 /-- A translated expression. `prop` is true when the code is a Lean `Prop`,
 not a `Bool`. -/
 structure Code where
@@ -524,7 +531,7 @@ def translateExpr (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr) : T
     let ctx : Ctx ← get
     let field? := match o.type with
       | .struct ref =>
-        (ctx.structs.find? fun (i : StructInfo) => i.ref == ref).bind
+        (ctx.knownStructs.find? fun (i : StructInfo) => i.ref == ref).bind
           fun info => info.fields.lookup name
       | _ => none
     let type ← orReject field? s "only fields of interfaces declared in this file may be read"
@@ -612,7 +619,7 @@ def translateObject (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (
   let ctx ← get
   let notStructMessage := "an object literal must build an interface declared in this file"
   let some (.struct ref) := expected | reject s notStructMessage
-  let info ← orReject (ctx.structs.find? (·.ref == ref)) s notStructMessage
+  let info ← orReject (ctx.knownStructs.find? (·.ref == ref)) s notStructMessage
   let structName := ref.name
   -- The keys seen so far, and the fields translated so far.
   let (seen, parts) ← props.foldlM (init := (([] : List String), ([] : List (String × Output.Expr))))
@@ -983,9 +990,10 @@ translated first. -/
 def translateImport (s : Span) (names : List ImportName) (source : String) : TM Unit := do
   let ctx ← get
   let target ← orReject (Eval.resolvePath ctx.file source) s
-    s!"'{source}' is not a relative path to a file of the project, such as './x.ts'"
+    s!"'{source}' is not a relative path to a .ts file, such as './x.ts'"
   let iface ← orReject (ctx.interfaces.lookup target) s
-    s!"'{source}' is not a file of the project that this file may import from"
+    (s!"'{source}' is not a translated file of the project: an import needs a tolean.json " ++
+      "project, and the file it imports from must be among its sources and translate")
   names.forM fun n => do
     declareTopLevel n.span n.name
     if n.typeOnly then
@@ -1071,7 +1079,9 @@ def translateFile (file source : String) (target : Edition := .default)
   let names : Output.Names :=
     { clashes := Output.leanNames.map (·.1) |>.filter idents.contains,
       numberVar := numberVar.getD "N", usesNumber, file,
-      imported := imported.map fun (f, d) =>
+      -- Every file before this one, not only the ones it imports: a type can
+      -- reach it through the field types of an imported interface.
+      imported := deps.map fun (f, d) =>
         (f, { ns := d.ns, generic := d.interface.usesNumber, numberVar := d.interface.numberVar }) }
   let ctx : Ctx :=
     { file, target, src, lineStarts := lineStarts src, fuel := 4 * src.size + 4,

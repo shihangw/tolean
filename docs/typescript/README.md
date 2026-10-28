@@ -173,9 +173,11 @@ the project:
 import { clamp, type Gauge } from "./lib/util.ts";
 ```
 
-- An import names the file by a relative path. `"./util.ts"`, `"./util.js"`
-  and `"./util"` all name `util.ts`. The file must be among the sources of
-  `tolean.json`.
+- An import names the file by a relative path with its `.ts` extension, such
+  as `"./util.ts"`. Node's type stripping needs that extension, and a bundler
+  accepts it, so the import names the same file wherever the code runs.
+  Tolean refuses `"./util.js"` and `"./util"`. The file must be among the
+  sources of `tolean.json`.
 - An interface needs `type`, either before its name or as `import type`.
   Node's type stripping removes only imports that say `type`, so without it
   the JavaScript would import a name that does not exist at run time.
@@ -185,8 +187,11 @@ import { clamp, type Gauge } from "./lib/util.ts";
 
 `tolean translate` translates the files of a project so that each file comes
 after the files it imports from. Each file becomes its own Lean module, with
-an `import` line for each file that it imports from. The output writes an
-imported name with that file's namespace, such as `lib.Util.clamp`. A file
+an `import` line for each file that it imports from. The output writes a name
+from another file from the root, with that file's namespace, such as
+`_root_.lib.Util.clamp`, so that a local name cannot capture it. A file may
+read and build the fields of an interface that reaches it through another
+interface's fields, without importing it. A file
 that imports from a file that uses the number model uses it too, so that it
 has a number type to pass. The command for one file, `tolean translate
 <file>`, refuses an import, because it does not see the other files.

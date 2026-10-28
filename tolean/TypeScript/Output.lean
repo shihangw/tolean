@@ -211,7 +211,9 @@ def Names.ref (names : Names) (r : DeclRef) : String × Option String :=
   if r.file == names.file then
     (names.namespacePrefix ++ r.name, if names.usesNumber then some names.numberVar else none)
   else match names.imported.lookup r.file with
-    | some i => (i.ns ++ "." ++ r.name, if i.generic then some i.numberVar else none)
+    -- From the root, so that a local name or the current namespace cannot
+    -- capture it.
+    | some i => ("_root_." ++ i.ns ++ "." ++ r.name, if i.generic then some i.numberVar else none)
     | none => (r.name, none)
 
 /-- The Lean names the output uses, with their full names from the root. -/

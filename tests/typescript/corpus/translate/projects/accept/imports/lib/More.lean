@@ -4,7 +4,7 @@ import lib.Util
 
 namespace lib.More
 
-def raiseTwice (g : lib.Util.Gauge) (step : Int) : lib.Util.Gauge :=
-  (Gauge.raise ((Gauge.raise g step)) step)
+def raiseTwice (g : _root_.lib.Util.Gauge) (step : Int) : _root_.lib.Util.Gauge :=
+  (_root_.Gauge.raise ((_root_.Gauge.raise g step)) step)
 
 end lib.More

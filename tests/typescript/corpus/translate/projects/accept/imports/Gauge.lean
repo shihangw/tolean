@@ -3,7 +3,10 @@ import lib.Util
 
 namespace Gauge
 
-def raise (g : lib.Util.Gauge) (step : Int) : lib.Util.Gauge :=
-  ({ level := (lib.Util.clamp ((g.level + step)) ((0 : Int)) g.max), max := g.max } : lib.Util.Gauge)
+def raise (g : _root_.lib.Util.Gauge) (step : Int) : _root_.lib.Util.Gauge :=
+  ({ level := (_root_.lib.Util.clamp ((g.level + step)) ((0 : Int)) g.max), max := g.max } : _root_.lib.Util.Gauge)
+
+def bump (lib : Int) (g : _root_.lib.Util.Gauge) : _root_.lib.Util.Gauge :=
+  (raise g lib)
 
 end Gauge
