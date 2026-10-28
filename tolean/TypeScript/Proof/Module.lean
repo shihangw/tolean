@@ -58,10 +58,13 @@ theorem declareTopLevel_ok {sp : Span} {name : String} {s s' : Ctx} {u : Unit}
   split at h
   · simp at h
   · rename_i hn
-    simp only [pure_ok] at h
-    refine ⟨h.2.symm, fun f hf heq => hn ?_⟩
-    simp only [Bool.or_eq_true, List.any_eq_true, beq_iff_eq]
-    exact Or.inr ⟨f, hf, heq⟩
+    simp only [pure_bind, ite_state] at h
+    split at h
+    · simp at h
+    · simp only [pure_ok] at h
+      refine ⟨h.2.symm, fun f hf heq => hn ?_⟩
+      simp only [Bool.or_eq_true, List.any_eq_true, beq_iff_eq]
+      exact Or.inr ⟨f, hf, heq⟩
 
 end State
 

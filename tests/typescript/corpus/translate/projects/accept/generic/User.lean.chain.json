@@ -2,7 +2,9 @@
  "target": "ES2024",
  "sources":
  [{"sha256": "4b19296e2d8b03c8538145b6e1bd76f7d1684c49d19ee14146faa156ba0d6335",
-   "path": "user.ts"}],
+   "path": "user.ts"},
+  {"sha256": "9dd68ecdc82832bfad872d2df4a94f2cbcd10c05c75fe270690c6c4675aa031f",
+   "path": "num.ts"}],
  "output":
  {"sha256": "8c07ec6c3ef74a946e4c43218ab3b62ff96300abf2ca7748ac1514e1239b1ee2",
   "path": "User.lean"},

@@ -2,7 +2,9 @@
  "target": "ES2024",
  "sources":
  [{"sha256": "0f748021302b578503b8667606ca3216cf654c9bf0e86fe7807cc269b9bd8466",
-   "path": "gauge.ts"}],
+   "path": "gauge.ts"},
+  {"sha256": "baadc096f1fb021757130f52019d3fdce376bb7747a47304b46066aeb35c0cf8",
+   "path": "lib/util.ts"}],
  "output":
  {"sha256": "b886275d9a1c9437bde737cf913c204f30067f8f2776c2679877db8fe804a9c9",
   "path": "Gauge.lean"},

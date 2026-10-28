@@ -150,6 +150,9 @@ structure Translation where
   ns : String
   lean : String
   interface : Option TypeScript.Translate.Interface := none
+  /-- The files that a TypeScript file imports from. Its meaning depends on
+  them, so its manifest lists them among its sources. -/
+  imports : List String := []
 
 /-- The names of the sqlc queries in a file: each `-- name: X` line. -/
 def queryNames (text : String) : List String :=
@@ -169,8 +172,8 @@ def translateUnit (u : Job) (read : String → Except String String)
     let targetName := (string? s "target").getD TypeScript.Edition.default.name
     let some target := TypeScript.Edition.parse? targetName
       | throw s!"{source}: unknown target '{targetName}'"
-    let (lean, iface) ← TypeScript.Translate.translateWith source (← read source) ns target deps
-    return { output, ns, lean, interface := some iface }
+    let (lean, iface, imports) ← TypeScript.Translate.translateWith source (← read source) ns target deps
+    return { output, ns, lean, interface := some iface, imports }
   | .go s files =>
     let dir := dirOf (files.head!)
     let pkgName := ((segments dir).getLast?).getD "Package"
@@ -260,7 +263,7 @@ def unitWrites (u : Job) (read : String → Except String String) (result : Exce
     IO (List Write) := do
   let t ← ok result
   let (language, target) := u.chainLanguage
-  let m ← Chain.fileManifest language target u.sources t.output t.lean t.ns
+  let m ← Chain.fileManifest language target (u.sources ++ t.imports) t.output t.lean t.ns
   let lean := [Write.file t.output t.lean]
   match u with
   | .typescript s source =>
