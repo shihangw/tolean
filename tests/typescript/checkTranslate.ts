@@ -11,6 +11,12 @@
  *   `// expect: <line>:<col> <part of the message>` says where and why.
  * - In both, a line `// target: ES20xx` translates for that edition instead of
  *   the default.
+ * - `corpus/translate/projects/accept/<name>/`: a project of several files,
+ *   with a `tolean.json`. `tolean translate --check` finds its committed Lean
+ *   current, and Lean compiles each module after the modules it imports.
+ *   `--update` runs `tolean translate` there instead.
+ * - `corpus/translate/projects/reject/<name>/`: `tolean translate` refuses the
+ *   project, with a message that contains the text of its `expect.txt`.
  * - Fuzz: random programs (default 200). When the translator accepts one, the
  *   output compiles, and a second translation gives the same text.
  * - Everywhere, when `wasm/out` exists (from `wasm/build.sh`): the
@@ -28,7 +34,7 @@
  * `.lake/build/bin/tolean`, or `$TOLEAN`.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -140,6 +146,76 @@ for (const file of reject) {
   } else if (!result.message.startsWith(`${path}:${where[1]}:${where[2]}: `) || !result.message.includes(where[3]!)) {
     failures.push(`${path}: refused with '${result.message}', expected ${where[1]}:${where[2]} '${where[3]}'`);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Projects of several files.
+
+/** The `.lean` files under `dir`, as paths relative to it. */
+function leanFiles(dir: string, prefix = ''): Array<string> {
+  return readdirSync(join(dir, prefix), { withFileTypes: true }).flatMap((e) => {
+    const rel = prefix === '' ? e.name : `${prefix}/${e.name}`;
+    if (e.isDirectory()) return leanFiles(dir, rel);
+    return e.name.endsWith('.lean') ? [rel] : [];
+  });
+}
+
+/** Compile the Lean modules of `dir`, each after the modules of `dir` that it
+imports, and give the first error, or null. */
+function compilesProject(dir: string): string | null {
+  const build = mkdtempSync(join(tmpdir(), 'tolean-project-'));
+  cpSync(dir, build, { recursive: true });
+  const leanPath = spawnSync('lake', ['env', 'printenv', 'LEAN_PATH'], { cwd: root, encoding: 'utf8' }).stdout.trim();
+  const modules = new Map(leanFiles(build).map((f) => [f.replace(/\.lean$/, '').replaceAll('/', '.'), f]));
+  const done = new Set<string>();
+  const visit = (name: string): string | null => {
+    if (done.has(name)) return null;
+    done.add(name);
+    const file = modules.get(name)!;
+    const text = readFileSync(join(build, file), 'utf8');
+    for (const [, dep] of text.matchAll(/^import (\S+)$/gm)) {
+      if (modules.has(dep!)) {
+        const error = visit(dep!);
+        if (error !== null) return error;
+      }
+    }
+    const olean = join(build, file.replace(/\.lean$/, '.olean'));
+    mkdirSync(join(olean, '..'), { recursive: true });
+    const run = spawnSync('lean', ['--root=.', '-o', olean, file], {
+      cwd: build,
+      encoding: 'utf8',
+      env: { ...process.env, LEAN_PATH: `${build}:${leanPath}` },
+    });
+    return run.status === 0 ? null : `${file}: ${(run.stdout + run.stderr).trim().slice(0, 600)}`;
+  };
+  for (const name of modules.keys()) {
+    const error = visit(name);
+    if (error !== null) return error;
+  }
+  return null;
+}
+
+const projectsDir = 'corpus/translate/projects';
+const acceptProjects = readdirSync(`${projectsDir}/accept`).sort();
+for (const name of acceptProjects) {
+  const dir = `${projectsDir}/accept/${name}`;
+  const run = spawnSync(tolean, update ? ['translate'] : ['translate', '--check'], { cwd: dir, encoding: 'utf8' });
+  if (run.status !== 0) {
+    failures.push(`${dir}: tolean translate${update ? '' : ' --check'} failed: ${run.stderr.trim()}`);
+    continue;
+  }
+  const error = compilesProject(dir);
+  if (error !== null) failures.push(`${dir}: the Lean output does not compile:\n${error}`);
+}
+const rejectProjects = readdirSync(`${projectsDir}/reject`).sort();
+for (const name of rejectProjects) {
+  const dir = `${projectsDir}/reject/${name}`;
+  const expect = readFileSync(join(dir, 'expect.txt'), 'utf8').trim();
+  const build = mkdtempSync(join(tmpdir(), 'tolean-project-'));
+  cpSync(dir, build, { recursive: true });
+  const run = spawnSync(tolean, ['translate'], { cwd: build, encoding: 'utf8' });
+  if (run.status === 0) failures.push(`${dir}: accepted, but it should be refused`);
+  else if (!run.stderr.includes(expect)) failures.push(`${dir}: refused with '${run.stderr.trim()}', expected '${expect}'`);
 }
 
 // ---------------------------------------------------------------------------
@@ -499,6 +575,7 @@ for (const [reason, n] of [...reasons].sort((x, y) => y[1] - x[1])) {
 console.log(
   `translate: ${accept.length} accepted files${update ? ' (golden files rewritten)' : ''}, ${reject.length} refused files`,
 );
+console.log(`projects: ${acceptProjects.length} accepted, ${rejectProjects.length} refused`);
 console.log(
   translateInWasm === null
     ? 'wasm: skipped, because wasm/out has no translator'

@@ -89,7 +89,9 @@ printer gives a certificate that Lean refuses.
       evaluation of the output back to the source. The proof is in three
       files. `Proof/Expr.lean` covers expressions, `Proof/Stmt.lean` covers
       statements, and `Proof/Module.lean` covers calls by induction on the
-      fuel. While writing it, we found two interpreter rules that did not
+      fuel. `program_sound` covers a program of several files, whose files
+      import functions and interfaces from each other. While writing it, we
+      found two interpreter rules that did not
       follow ECMA-262, shorthand properties and `-Infinity` under a local
       `Infinity`, and we fixed them. We also found a test against `null`
       whose answer the type fixes. The output dropped its operand, so the
