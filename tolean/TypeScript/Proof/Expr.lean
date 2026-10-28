@@ -80,60 +80,67 @@ end Monad
 value. -/
 def Agree (ρs ρo : Eval.Env N) : Prop := ∀ n, ρs.lookup n = ρo.lookup n
 
+/-- Each function that a call may name is the one the interpreter calls: in
+the file of `m`, a call of `f.name` runs `f`. -/
+def Resolves (m : Eval.Scope) (env : Translate.Env) : Prop :=
+  ∀ f ∈ env.functions, Eval.resolve m f.name = some f.ref
+
 /-- The interpreter's environment binds exactly the names that the translator
-has in scope. So a name out of scope, such as `NaN`, is the global. -/
-def Scoped (env : Translate.Env) (ρ : Eval.Env N) : Prop :=
-  ∀ n, (ρ.lookup n).isSome = env.has n
+has in scope, so a name out of scope, such as `NaN`, is the global. And the
+functions that the translator knows are the ones that the interpreter calls. -/
+def Scoped (m : Eval.Scope) (env : Translate.Env) (ρ : Eval.Env N) : Prop :=
+  (∀ n, (ρ.lookup n).isSome = env.has n) ∧ Resolves m env
 
 omit [JSNumber N] in
-theorem Scoped.none {env : Translate.Env} {ρ : Eval.Env N} (h : Scoped env ρ) {n : String}
-    (hn : env.has n = false) : ρ.lookup n = none := by
-  have := h n; rw [hn] at this; simpa using this
+theorem Scoped.none {m : Eval.Scope} {env : Translate.Env} {ρ : Eval.Env N} (h : Scoped m env ρ)
+    {n : String} (hn : env.has n = false) : ρ.lookup n = none := by
+  have := h.1 n; rw [hn] at this; simpa using this
 
 omit [JSNumber N] in
-theorem Scoped.some {env : Translate.Env} {ρ : Eval.Env N} (h : Scoped env ρ) {n : String}
-    (hn : env.has n = true) : (ρ.lookup n).isSome := by
-  rw [h n]; exact hn
+theorem Scoped.some {m : Eval.Scope} {env : Translate.Env} {ρ : Eval.Env N} (h : Scoped m env ρ)
+    {n : String} (hn : env.has n = true) : (ρ.lookup n).isSome := by
+  rw [h.1 n]; exact hn
 
-/-- A call of the function `name` of the program, as the interpreter runs it. -/
-def callS (m : Module) (fuel : Nat) (name : String) (vs : List (Val N)) : Option (Val N) :=
+/-- A call of the function `key` of the program, as the interpreter runs it. -/
+def callS (p : Eval.Program) (fuel : Nat) (key : DeclRef) (vs : List (Val N)) : Option (Val N) :=
   match fuel with
   | 0 => none
   | fuel + 1 => do
-    let (params, body) ← (Eval.functions m).lookup name
+    let (params, body) ← (Eval.functionsOf p).lookup key
     if params.length != vs.length then none
-    match ← Eval.execStmt m fuel (params.zip vs).reverse body with
+    match ← Eval.execStmt ⟨p, key.file⟩ fuel (params.zip vs).reverse body with
     | .ret v => some v
     | .normal _ => none
 
-/-- A call of the function `name` of the output, as its evaluator runs it. -/
-def callO (fs : List (String × List String × Output.Body)) (fuel : Nat) (name : String)
+/-- A call of the function `key` of the output, as its evaluator runs it. -/
+def callO (fs : List (DeclRef × List String × Output.Body)) (fuel : Nat) (key : DeclRef)
     (vs : List (Val N)) : Option (Val N) :=
   match fuel with
   | 0 => none
   | fuel + 1 => do
-    let (params, body) ← fs.lookup name
+    let (params, body) ← fs.lookup key
     if params.length != vs.length then none
     match ← Output.Body.exec fs fuel (params.zip vs).reverse body with
     | .ret v => some v
     | .normal _ => none
 
 /-- Every call that gives a value in the output gives it in the interpreter. -/
-def CallsAgree (m : Module) (fs : List (String × List String × Output.Body)) (fuel : Nat) : Prop :=
-  ∀ name vs v, callO (N := N) fs fuel name vs = some v → callS m fuel name vs = some v
+def CallsAgree (p : Eval.Program) (fs : List (DeclRef × List String × Output.Body)) (fuel : Nat) :
+    Prop :=
+  ∀ key vs v, callO (N := N) fs fuel key vs = some v → callS p fuel key vs = some v
 
 /-! ### The statement -/
 
-variable (m : Module) (fs : List (String × List String × Output.Body)) (fuel : Nat)
+variable (m : Eval.Scope) (fs : List (DeclRef × List String × Output.Body)) (fuel : Nat)
 
 /-- The output code `out` means what the expression `e` means. -/
 def Sim (env : Translate.Env) (e : Expr) (out : Output.Expr) : Prop :=
-  ∀ (ρs ρo : Eval.Env N) v, Agree ρs ρo → Scoped env ρs →
+  ∀ (ρs ρo : Eval.Env N) v, Agree ρs ρo → Scoped m env ρs →
     Output.Expr.eval fs fuel ρo out = some v → Eval.eval m fuel ρs e = some v
 
 /-- The output codes `outs` mean what the expressions `es` mean. -/
 def SimList (env : Translate.Env) (es : List Expr) (outs : List Output.Expr) : Prop :=
-  ∀ (ρs ρo : Eval.Env N) vs, Agree ρs ρo → Scoped env ρs →
+  ∀ (ρs ρo : Eval.Env N) vs, Agree ρs ρo → Scoped m env ρs →
     Output.Expr.evalList fs fuel ρo outs = some vs → Eval.evalList m fuel ρs es = some vs
 
 theorem isInfinity_eq_true {e : Expr} (h : e.isInfinity = true) : ∃ s, e = .ident s "Infinity" := by
@@ -359,13 +366,13 @@ end Inversion
 
 /-- The output fields `outs` mean what the properties `ps` mean. -/
 def SimFields (env : Translate.Env) (ps : List Property) (outs : List (String × Output.Expr)) : Prop :=
-  ∀ (ρs ρo : Eval.Env N) fvs, Agree ρs ρo → Scoped env ρs →
+  ∀ (ρs ρo : Eval.Env N) fvs, Agree ρs ρo → Scoped m env ρs →
     Output.Expr.evalFields fs fuel ρo outs = some fvs → Eval.evalProps m fuel ρs ps = some fvs
 
 /-- The output field `(key, o)` means what the property `p` means: the
 interpreter gives `(key, w)` for `p` when `o` has the value `w`. -/
 def PropSim (env : Translate.Env) (p : Property) (key : String) (o : Output.Expr) : Prop :=
-  ∀ (ρs ρo : Eval.Env N) w, Agree ρs ρo → Scoped env ρs → Output.Expr.eval fs fuel ρo o = some w →
+  ∀ (ρs ρo : Eval.Env N) w, Agree ρs ρo → Scoped m env ρs → Output.Expr.eval fs fuel ρo o = some w →
     ∀ rest, Eval.evalProps m fuel ρs (p :: rest) = (Eval.evalProps m fuel ρs rest).map ((key, w) :: ·)
 
 /-- A fold that appends one field for each property, where each field means
@@ -486,13 +493,14 @@ theorem zip_sim {env : Translate.Env} {g : Expr × Ty → TM Output.Expr}
 
 theorem eval_call (sp sp' : Span) (name : String) (args : List Expr) (ρ : Eval.Env N) :
     Eval.eval m fuel ρ (.call sp (.ident sp' name) args) =
-      (Eval.evalList m fuel ρ args).bind (callS m fuel name) := by
+      (Eval.evalList m fuel ρ args).bind fun vs => (Eval.resolve m name).bind fun key =>
+        callS m.program fuel key vs := by
   rw [Eval.eval]
-  cases Eval.evalList m fuel ρ args <;> cases fuel <;> rfl
+  cases Eval.evalList m fuel ρ args <;> cases fuel <;> cases Eval.resolve m name <;> rfl
 
-theorem out_call (name : String) (args : List Output.Expr) (ρ : Eval.Env N) :
-    Output.Expr.eval fs fuel ρ (.call name args) =
-      (Output.Expr.evalList fs fuel ρ args).bind (callO fs fuel name) := by
+theorem out_call (key : DeclRef) (args : List Output.Expr) (ρ : Eval.Env N) :
+    Output.Expr.eval fs fuel ρ (.call key args) =
+      (Output.Expr.evalList fs fuel ρ args).bind (callO fs fuel key) := by
   rw [Output.Expr.eval]
   cases Output.Expr.evalList fs fuel ρ args <;> cases fuel <;> rfl
 
@@ -528,7 +536,7 @@ theorem narrow_has (env : Translate.Env) (n : String) (t : Ty) (x : String) :
 /-- A test that `nullTestOf` finds gives whether the local is `null`. -/
 theorem nullTestOf_eval {env : Translate.Env} {l : Expr} {name : String} {isNullTest : Bool}
     {value : Ty} (h : nullTestOf env l = some (name, isNullTest, value)) {ρ : Eval.Env N}
-    (hs : Scoped env ρ) :
+    (hs : Scoped m env ρ) :
     ∃ w, ρ.lookup name = some w ∧
       Eval.eval m fuel ρ l = some (.bool (if isNullTest then isNullVal w else !isNullVal w)) := by
   unfold nullTestOf at h
@@ -676,7 +684,7 @@ theorem operator_sound {sp s : Span} {op : BinOp} {l r : Expr} {a b c : Code} {c
        rw [hl _ hx, hr _ hy]
        cases x <;> cases y <;> simp_all [Output.eqVal, Eval.binary, Eval.strictEq])
 
-theorem expr_sound (hc : CallsAgree (N := N) m fs fuel) (F : Nat) :
+theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
     (∀ env exp e ctx c ctx', translateExpr F env exp e ctx = .ok c ctx' →
       Sim (N := N) m fs fuel env e c.code) ∧
     (∀ env exp s es ctx r ctx', translateElements F env exp s es ctx = .ok r ctx' →
@@ -890,11 +898,10 @@ theorem expr_sound (hc : CallsAgree (N := N) m fs fuel) (F : Nat) :
       simp only [translateCall] at h
       cases callee <;> simp at h
       case ident sp' name =>
-        obtain ⟨_, _, ⟨rfl, rfl⟩, h⟩ := h
         split at h
         · simp at h
         · simp at h
-          obtain ⟨fn, s₁, ⟨-, rfl⟩, h⟩ := h
+          obtain ⟨fn, s₁, ⟨hfind, rfl⟩, h⟩ := h
           split at h
           · simp at h
           · split at h
@@ -911,7 +918,12 @@ theorem expr_sound (hc : CallsAgree (N := N) m fs fuel) (F : Nat) :
                 simp [hx] at hv
                 have hargs := zip_sim m fs fuel ?hg args fn.params _ vals _ hlen.symm hvals
                   ρs ρo vs ha hs hx
-                · rw [eval_call, hargs]; exact hc _ _ _ hv
+                · have hname : fn.name = name := by simpa using List.find?_some hfind
+                  have hres := hs.2 fn (List.mem_of_find?_eq_some hfind)
+                  rw [hname] at hres
+                  rw [eval_call, hargs]
+                  simp only [Option.bind_some, hres]
+                  exact hc _ _ _ hv
                 case hg =>
                   intro x t c₀ o c₁ hgo
                   simp at hgo
@@ -1089,7 +1101,8 @@ theorem expr_sound (hc : CallsAgree (N := N) m fs fuel) (F : Nat) :
               intro ρs ρo v hag hs hv
               obtain ⟨w, hw, hl⟩ := nullTestOf_eval m fuel hn hs
               have hso : ρo.lookup name = some w := by rw [← hag]; exact hw
-              have hs' : Scoped (env.narrow name value) ρs := fun x => by rw [narrow_has]; exact hs x
+              have hs' : Scoped m (env.narrow name value) ρs :=
+                ⟨fun x => by rw [narrow_has]; exact hs.1 x, hs.2⟩
               have hr := fun u hu => ihE _ _ _ _ _ _ hws ρs ρo u hag hs' hu
               have hcases : (op = .or ∧ isNullTest = true) ∨ (op = .and ∧ isNullTest = false) := by
                 revert hcond; cases op <;> cases isNullTest <;> simp +decide

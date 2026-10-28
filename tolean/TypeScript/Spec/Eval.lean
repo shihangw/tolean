@@ -177,11 +177,74 @@ def functions (m : Module) : List (String × List String × Stmt) :=
     | .function _ _ name params _ body => some (name, params.map (·.name), body)
     | _ => none
 
+/-! ### Programs of several files
+
+A program is a list of files, each with its path and its module. In the
+subset a file declares only functions and interfaces, and it runs no code of
+its own, so an import binds a name to a function of another file and does
+nothing else (ECMA-262 §16.2.1.6, `InitializeEnvironment`). A call looks up
+the name in the file that runs: first among its own functions, then among
+the names it imports. -/
+
+/-- A program: the path of each file, and its module. -/
+abbrev Program := List (String × Module)
+
+/-- Where code runs: a program, and the file whose code it is. -/
+structure Scope where
+  program : Program
+  file : String
+
+/-- `path` with `.` and `..` segments resolved, or none when `..` would leave
+the root. -/
+def normalizeSegments : List String → List String → Option (List String)
+  | acc, [] => some acc
+  | acc, "." :: rest => normalizeSegments acc rest
+  | acc, ".." :: rest => if acc.isEmpty then none else normalizeSegments acc.dropLast rest
+  | acc, s :: rest => if s.isEmpty then none else normalizeSegments (acc ++ [s]) rest
+
+/-- The file that `import … from source` in `file` names. `source` is relative
+to the directory of `file`. Tolean names a file by its `.ts` path, so
+`"./b.ts"`, `"./b.js"` and `"./b"` all name `b.ts`, as TypeScript resolves
+them. A source that is not relative names no file of the program. -/
+def resolvePath (file source : String) : Option String := do
+  let segments := source.splitOn "/"
+  unless segments.head? == some "." || segments.head? == some ".." do none
+  let path ← normalizeSegments (file.splitOn "/").dropLast segments
+  let last ← path.getLast?
+  let last :=
+    if last.endsWith ".ts" then last
+    else if last.endsWith ".js" then (last.dropEnd 3).toString ++ ".ts"
+    else last ++ ".ts"
+  return "/".intercalate (path.dropLast ++ [last])
+
+/-- `m` declares `name` as an exported function. -/
+def exportsFunction (m : Module) (name : String) : Bool :=
+  m.decls.any fun
+    | .function _ exported n _ _ _ => exported && n == name
+    | _ => false
+
+/-- The function that a call of `name` runs, in the file of `s`: the file's
+own function, or else the exported function of the file it imports `name`
+from. -/
+def resolve (s : Scope) (name : String) : Option DeclRef := do
+  let m ← s.program.lookup s.file
+  if (functions m).any (·.1 == name) then return ⟨s.file, name⟩
+  let target ← m.decls.findSome? fun
+    | .import _ names source =>
+      if names.any fun n => !n.typeOnly && n.name == name then resolvePath s.file source else none
+    | _ => none
+  let tm ← s.program.lookup target
+  if exportsFunction tm name then return ⟨target, name⟩ else none
+
+/-- Every function of the program, under the file that declares it. -/
+def functionsOf (p : Program) : List (DeclRef × List String × Stmt) :=
+  p.flatMap fun (file, m) => (functions m).map fun (name, params, body) => (⟨file, name⟩, params, body)
+
 mutual
 
 /-- The value of `e`. `fuel` bounds the depth of nested calls, so that the
 interpreter is a total function. -/
-def eval (m : Module) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
+def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
   -- `NaN` and `Infinity` are properties of the global object (ECMA-262
   -- §19.1), unless a variable of the program hides them.
   | .ident _ name =>
@@ -247,20 +310,21 @@ def eval (m : Module) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     match fuel with
     | 0 => none
     | fuel + 1 =>
-      let (params, body) ← (functions m).lookup name
+      let key ← resolve m name
+      let (params, body) ← (functionsOf m.program).lookup key
       if params.length != vs.length then none
-      match ← execStmt m fuel (params.zip vs).reverse body with
+      match ← execStmt { m with file := key.file } fuel (params.zip vs).reverse body with
       | .ret v => some v
       | .normal _ => none
   | _ => none
 termination_by e => (fuel, sizeOf e, 0)
 
-def evalList (m : Module) (fuel : Nat) (env : Env N) : List Expr → Option (List (Val N))
+def evalList (m : Scope) (fuel : Nat) (env : Env N) : List Expr → Option (List (Val N))
   | [] => some []
   | e :: es => do return (← eval m fuel env e) :: (← evalList m fuel env es)
 termination_by es => (fuel, sizeOf es, 0)
 
-def evalProps (m : Module) (fuel : Nat) (env : Env N) :
+def evalProps (m : Scope) (fuel : Nat) (env : Env N) :
     List Property → Option (List (String × Val N))
   | [] => some []
   -- `{ a }` evaluates the name `a`, so `{ NaN }` reads the global
@@ -274,7 +338,7 @@ termination_by ps => (fuel, sizeOf ps, 0)
 
 /-- Run one statement. A block, and the branch of an `if`, keep the changes
 they make to outer variables and drop the variables they declare. -/
-def execStmt (m : Module) (fuel : Nat) (env : Env N) : Stmt → Option (Outcome N)
+def execStmt (m : Scope) (fuel : Nat) (env : Env N) : Stmt → Option (Outcome N)
   | .varDecl _ { name, init := some init, .. } => do
     return .normal ((name, ← eval m fuel env init) :: env)
   | .returnStmt _ (some e) => do return .ret (← eval m fuel env e)
@@ -315,7 +379,7 @@ termination_by s => (fuel, sizeOf s, 0)
 /-- Run the body of `for (const name of …)` once for each of `items`. Each
 run keeps the changes to outer variables, and drops `name` and the variables
 the body declares. -/
-def execLoop (m : Module) (fuel : Nat) (env : Env N) (name : String) (body : Stmt) :
+def execLoop (m : Scope) (fuel : Nat) (env : Env N) (name : String) (body : Stmt) :
     List (Val N) → Option (Outcome N)
   | [] => some (.normal env)
   | x :: xs => do
@@ -325,7 +389,7 @@ def execLoop (m : Module) (fuel : Nat) (env : Env N) (name : String) (body : Stm
 termination_by xs => (fuel, sizeOf body, xs.length + 1)
 
 /-- Run a statement list, up to its end or its first `return`. -/
-def exec (m : Module) (fuel : Nat) (env : Env N) : List Stmt → Option (Outcome N)
+def exec (m : Scope) (fuel : Nat) (env : Env N) : List Stmt → Option (Outcome N)
   | [] => some (.normal env)
   | s :: rest => do
     match ← execStmt m fuel env s with
@@ -335,15 +399,19 @@ termination_by ss => (fuel, sizeOf ss, 0)
 
 end
 
-/-- Call the function `name` of `m` with `args`, as a call expression would
+/-- Call the function `key` of `p` with `args`, as a call expression would
 (ECMA-262 §10.2.1): bind each parameter to its argument, run the body, and
 take the value it returns. -/
-def run (m : Module) (name : String) (args : List (Val N)) (fuel : Nat := 64) : Option (Val N) := do
-  let (params, body) ← (functions m).lookup name
+def runIn (p : Program) (key : DeclRef) (args : List (Val N)) (fuel : Nat := 64) : Option (Val N) := do
+  let (params, body) ← (functionsOf p).lookup key
   if params.length != args.length then none
-  match ← execStmt m fuel (params.zip args).reverse body with
+  match ← execStmt ⟨p, key.file⟩ fuel (params.zip args).reverse body with
   | .ret v => some v
   | .normal _ => none
+
+/-- Call the function `name` of the one-file program `m`. -/
+def run (m : Module) (name : String) (args : List (Val N)) (fuel : Nat := 64) : Option (Val N) :=
+  runIn [("", m)] ⟨"", name⟩ args fuel
 
 end tolean.TypeScript.Eval
 
@@ -356,9 +424,12 @@ syntax "certify_tac" "[" Lean.Parser.Tactic.simpLemma,* "]" : tactic
 macro_rules
   | `(tactic| certify_tac [$defs,*]) =>
     `(tactic| (
-      simp [run, eval, evalList, evalProps, execStmt, exec, execLoop, functions, binary, strictEq,
+      simp [run, runIn, eval, evalList, evalProps, execStmt, exec, execLoop, functions, functionsOf,
+        resolve, DeclRef.beq_def, binary, strictEq,
         bigintLiteral, digitsIn, digitIn, Env.set, Val.truthy, List.lookup, $defs,*]
-      all_goals repeat' (split <;> (try simp_all [List.lookup, binary, strictEq, Val.truthy, Env.set, $defs,*]))
-      all_goals (try simp_all [List.lookup, binary, strictEq, Val.truthy, Env.set, $defs,*])))
+      all_goals repeat' (split <;> (try simp_all [List.lookup, DeclRef.beq_def, binary, strictEq, Val.truthy,
+        Env.set, $defs,*]))
+      all_goals (try simp_all [List.lookup, DeclRef.beq_def, binary, strictEq, Val.truthy, Env.set,
+        $defs,*])))
 
 end tolean.TypeScript.Eval

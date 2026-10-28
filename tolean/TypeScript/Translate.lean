@@ -39,7 +39,9 @@ inductive Ty where
   /-- `T | null`, where `T` is not `null` and not nullable. -/
   | nullable (value : Ty)
   | array (elem : Ty)
-  | struct (name : String)
+  /-- An interface of the program: one that the file declares, or one that it
+  imports. -/
+  | struct (ref : DeclRef)
 deriving BEq, Repr, Inhabited
 
 /-- A value of type `source` can stand where `target` is expected. Arrays and
@@ -83,7 +85,7 @@ def Ty.lean : Ty → Output.Ty
   | .null => .null
   | .nullable t => .option t.lean
   | .array t => .list t.lean
-  | .struct name => .struct name
+  | .struct ref => .struct ref
 
 /-- How a name in scope may be used. Only `let` and `array` locals change. -/
 inductive Binding where
@@ -95,28 +97,50 @@ structure Local where
   binding : Binding
   type : Ty
 
-/-- The names in scope, in the order they were declared. -/
+/-- An interface of the program, with the file that declares it. -/
+structure StructInfo where
+  file : String
+  name : String
+  exported : Bool := false
+  fields : List (String × Ty)
+
+def StructInfo.ref (i : StructInfo) : DeclRef := ⟨i.file, i.name⟩
+
+/-- A function of the program, with the file that declares it. -/
+structure FnInfo where
+  file : String
+  name : String
+  exported : Bool := false
+  params : List Ty
+  ret : Ty
+
+def FnInfo.ref (f : FnInfo) : DeclRef := ⟨f.file, f.name⟩
+
+/-- The names in scope, in the order they were declared, and the functions
+that a call may name. -/
 structure Env where
   locals : List Local := []
+  functions : List FnInfo := []
 
 def Env.lookup (env : Env) (name : String) : Option Local := env.locals.find? (·.name == name)
 
 def Env.has (env : Env) (name : String) : Bool := (env.lookup name).isSome
 
-def Env.add (env : Env) (l : Local) : Env := { locals := env.locals ++ [l] }
+def Env.add (env : Env) (l : Local) : Env := { env with locals := env.locals ++ [l] }
 
 /-- `name` has the type `type` from here on, as after `x !== null`. -/
 def Env.narrow (env : Env) (name : String) (type : Ty) : Env :=
-  { locals := env.locals.map fun l => if l.name == name then { l with type } else l }
+  { env with locals := env.locals.map fun l => if l.name == name then { l with type } else l }
 
-structure StructInfo where
-  name : String
-  fields : List (String × Ty)
-
-structure FnInfo where
-  name : String
-  params : List Ty
-  ret : Ty
+/-- What a file offers the files that import from it: its exported functions
+and interfaces, and whether its declarations are generic over the number
+type. -/
+structure Interface where
+  functions : List FnInfo := []
+  structs : List StructInfo := []
+  usesNumber : Bool := false
+  /-- The name under which its declarations bind the number type. -/
+  numberVar : String := "N"
 
 structure Ctx where
   file : String
@@ -126,6 +150,8 @@ structure Ctx where
   lineStarts : Array Nat
   structs : List StructInfo := []
   functions : List FnInfo := []
+  /-- The files that this file may import from, by path. -/
+  interfaces : List (String × Interface) := []
   currentFunction : String := ""
   returnType : Ty := .boolean
   /-- A bound on how deep the translator's calls nest. Each nesting of the
@@ -251,8 +277,9 @@ def translateType (t : TypeExpr) : TM Ty := do
     unless name == "Array" || name == "ReadonlyArray" do unsupportedType t
     return .array (← translateType elem)
   | .ref _ name [] =>
-    unless (← get).structs.any (·.name == name) do unsupportedType t
-    return .struct name
+    match (← get).structs.find? (·.name == name) with
+    | some info => return .struct info.ref
+    | none => unsupportedType t
   | _ => unsupportedType t
 
 /-! ### What statements do -/
@@ -496,8 +523,8 @@ def translateExpr (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr) : T
     let o ← translateExpr fuel env none obj
     let ctx : Ctx ← get
     let field? := match o.type with
-      | .struct structName =>
-        (ctx.structs.find? fun (i : StructInfo) => i.name == structName).bind
+      | .struct ref =>
+        (ctx.structs.find? fun (i : StructInfo) => i.ref == ref).bind
           fun info => info.fields.lookup name
       | _ => none
     let type ← orReject field? s "only fields of interfaces declared in this file may be read"
@@ -563,13 +590,13 @@ def translateCall (fuel : Nat) (env : Env) (s : Span) (callee : Expr) (args : Li
       unless a.type == .number do
         reject arg.span s!"Number.{test} needs a number operand (narrow a nullable value first)"
       return ⟨.numberTest form a.value, false, .boolean⟩
-  let noCallMessage := "calls may name only functions declared earlier in this file (no recursion)"
+  let noCallMessage :=
+    "calls may name only functions declared earlier in this file, or imported (no recursion)"
   let noCall {A : Type} : TM A := reject s noCallMessage
   let .ident _ name := callee | noCall
-  let ctx ← get
-  if (name == "isNaN" || name == "isFinite") && !ctx.functions.any (·.name == name) then
+  if (name == "isNaN" || name == "isFinite") && !env.functions.any (·.name == name) then
     reject s s!"the global {name} converts its argument to a number; use Number.{name}"
-  let fn ← orReject (ctx.functions.find? (·.name == name)) s noCallMessage
+  let fn ← orReject (env.functions.find? (·.name == name)) s noCallMessage
   if env.has name then noCall
   unless fn.params.length == args.length do reject s s!"'{name}' takes {fn.params.length} arguments"
   let values ← (args.zip fn.params).mapM fun (arg, paramType) => do
@@ -577,15 +604,16 @@ def translateCall (fuel : Nat) (env : Env) (s : Span) (callee : Expr) (args : Li
     unless a.type.assignableTo paramType do
       reject arg.span "the argument does not have the parameter's type"
     pure a.value
-  return ⟨.call name values, false, fn.ret⟩
+  return ⟨.call fn.ref values, false, fn.ret⟩
 
 def translateObject (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (props : List Property) :
     TM Code := do
   let fuel + 1 := fuel | tooDeep
   let ctx ← get
   let notStructMessage := "an object literal must build an interface declared in this file"
-  let some (.struct structName) := expected | reject s notStructMessage
-  let info ← orReject (ctx.structs.find? (·.name == structName)) s notStructMessage
+  let some (.struct ref) := expected | reject s notStructMessage
+  let info ← orReject (ctx.structs.find? (·.ref == ref)) s notStructMessage
+  let structName := ref.name
   -- The keys seen so far, and the fields translated so far.
   let (seen, parts) ← props.foldlM (init := (([] : List String), ([] : List (String × Output.Expr))))
     fun (seen, parts) p => do
@@ -606,7 +634,7 @@ def translateObject (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (
   let declared := info.fields.map (·.1)
   unless seen == declared do
     reject s s!"write the fields in the order that {structName} declares them: {", ".intercalate declared}"
-  return ⟨.struct parts structName, false, .struct structName⟩
+  return ⟨.struct parts ref, false, .struct ref⟩
 
 def translateBinary (fuel : Nat) (env : Env) (s : Span) (op : BinOp) (l r : Expr) : TM Code := do
   let fuel + 1 := fuel | tooDeep
@@ -805,33 +833,44 @@ end
 
 /-! ### Declarations -/
 
+/-- Run `x` for its result, and keep the state from before it. The parts of a
+declaration that only read the state, or change only flags of their own, run
+this way: its types, its fields and parameters, and a function body. So the
+declarations after it start from the state that the declaration itself sets,
+and a proof can read that state from here. -/
+def isolated {A : Type} (x : TM A) : TM A := do
+  let c ← get
+  let r ← x
+  set c
+  return r
+
 def declareTopLevel (s : Span) (name : String) : TM Unit := do
   let ctx ← get
   if ctx.structs.any (·.name == name) || ctx.functions.any (·.name == name) then
     reject s s!"'{name}' is declared twice"
 
-def translateInterface (s : Span) (name : String) (fields : List Field) : TM Output.Decl := do
+def translateInterface (s : Span) (exported : Bool) (name : String) (fields : List Field) :
+    TM Output.Decl := do
   let name ← checkName s name
   declareTopLevel s name
-  let mut infos := #[]
-  for f in fields do
+  let infos ← isolated <| fields.foldlM (init := ([] : List (String × Ty))) fun infos f => do
     unless f.readonly && !f.optional do
       reject f.span "interface fields must be readonly, required and typed"
     let field ← checkName f.span f.name
     if infos.any (·.1 == field) then reject f.span s!"'{field}' is declared twice"
-    infos := infos.push (field, ← translateType f.type)
-  modify fun c => { c with structs := c.structs ++ [{ name, fields := infos.toList }] }
-  return .struct name (infos.toList.map fun (field, type) => (field, type.lean))
+    pure (infos ++ [(field, ← translateType f.type)])
+  modify fun c => { c with structs := c.structs ++ [{ file := c.file, name, exported, fields := infos }] }
+  return .struct name (infos.map fun (field, type) => (field, type.lean))
 
-def translateFunction (s : Span) (name : String) (params : List Param)
+def translateFunction (s : Span) (exported : Bool) (name : String) (params : List Param)
     (returnType : Option TypeExpr) (body : Stmt) : TM Output.Decl := do
   let some returnType := returnType
     | reject s "functions must be named, typed, non-generic and synchronous"
   let name ← checkName s name
   declareTopLevel s name
   -- The scope of the body, and the parameters in Lean and as types.
-  let (env, leanParams, types) ← params.foldlM
-    (init := (({} : Env), ([] : List (String × Output.Ty)), ([] : List Ty)))
+  let (env, leanParams, types) ← isolated <| params.foldlM
+    (init := (({ functions := (← get).functions } : Env), ([] : List (String × Output.Ty)), ([] : List Ty)))
     fun (env, leanParams, types) p => do
       let type ← orReject p.type p.span "parameters must be plain, typed identifiers"
       let paramName ← checkName p.span p.name
@@ -839,10 +878,10 @@ def translateFunction (s : Span) (name : String) (params : List Param)
       let ty ← translateType type
       pure (env.add { name := paramName, binding := .param, type := ty },
         leanParams ++ [(paramName, ty.lean)], types ++ [ty])
-  let ret ← translateType returnType
+  let ret ← isolated (translateType returnType)
   modify fun c => { c with currentFunction := name, returnType := ret }
-  let out ← translateStatements (← fuelLimit) env .ret (blockStatements body)
-  modify fun c => { c with functions := c.functions ++ [{ name, params := types, ret }] }
+  let out ← isolated (translateStatements (← fuelLimit) env .ret (blockStatements body))
+  modify fun c => { c with functions := c.functions ++ [{ file := c.file, name, exported, params := types, ret }] }
   return .function name leanParams ret.lean out
 
 /-! ### The number model -/
@@ -938,14 +977,47 @@ def moduleUsesNumber (m : Module) : Bool :=
 
 /-! ### The module -/
 
+/-- `import { a, type B } from "./x.ts"`. Each name becomes a function or an
+interface of the file, as the file it names exports it. That file must be
+translated first. -/
+def translateImport (s : Span) (names : List ImportName) (source : String) : TM Unit := do
+  let ctx ← get
+  let target ← orReject (Eval.resolvePath ctx.file source) s
+    s!"'{source}' is not a relative path to a file of the project, such as './x.ts'"
+  let iface ← orReject (ctx.interfaces.lookup target) s
+    s!"'{source}' is not a file of the project that this file may import from"
+  names.forM fun n => do
+    declareTopLevel n.span n.name
+    if n.typeOnly then
+      let info ← orReject (iface.structs.find? (·.name == n.name)) n.span
+        s!"'{source}' exports no interface named '{n.name}'"
+      modify fun c => { c with structs := c.structs ++ [{ info with exported := false }] }
+    else
+      if iface.structs.any (·.name == n.name) then
+        reject n.span s!"'{n.name}' is an interface; import it with 'type {n.name}'"
+      let fn ← orReject (iface.functions.find? (·.name == n.name)) n.span
+        s!"'{source}' exports no function named '{n.name}'"
+      modify fun c => { c with functions := c.functions ++ [{ fn with exported := false }] }
+
+/-- One declaration: an output declaration, or none for an import. -/
+def translateDecl : Decl → TM (Option Output.Decl)
+  | .import s names source => do translateImport s names source; return none
+  | .interface s exported name fields => some <$> translateInterface s exported name fields
+  | .function s exported name params ret body =>
+    some <$> translateFunction s exported name params ret body
+  | d => reject d.span "only imports, interfaces and functions may appear at top level"
+
 /-- The declarations of `m`, translated. This is the translator as a function
 from one syntax tree to another: `translate` parses the source before it and
 prints the result after it. -/
-def translateDecls (m : Module) : TM (List Output.Decl) :=
-  m.decls.mapM fun
-    | .interface s _ name fields => translateInterface s name fields
-    | .function s _ name params ret body => translateFunction s name params ret body
-    | d => reject d.span "only interfaces and functions may appear at top level"
+def translateDecls (m : Module) : TM (List Output.Decl) := do
+  return (← m.decls.mapM translateDecl).filterMap id
+
+/-- What the file exports: its own exported functions and interfaces. -/
+def Ctx.interface (c : Ctx) (usesNumber : Bool) (numberVar : String) : Interface :=
+  { functions := c.functions.filter fun f => f.exported && f.file == c.file,
+    structs := c.structs.filter fun i => i.exported && i.file == c.file,
+    usesNumber, numberVar }
 
 def lineStarts (src : Array Char) : Array Nat := Id.run do
   let mut starts := #[0]
@@ -961,10 +1033,27 @@ def lineStarts (src : Array Char) : Array Nat := Id.run do
       i := i + 1
   return starts
 
-/-- Parse and translate `source`, the TypeScript file `file`: the parsed
-module, the names that the printer needs, and the output tree. -/
-def translateTree (file source : String) (target : Edition := .default) :
-    Except String (Module × Output.Names × List Output.Decl) := do
+/-- Another file of the project, as the translation of a file that imports
+from it needs it: the Lean module and the namespace of its translation, and
+what it exports. -/
+structure Dependency where
+  module : String
+  ns : String
+  interface : Interface
+
+/-- The files that `m`, the module of `file`, imports from, in the order of its
+imports, without repeats. -/
+def importedFiles (file : String) (m : Module) : List String :=
+  (m.decls.filterMap fun
+    | .import _ _ source => Eval.resolvePath file source
+    | _ => none).eraseDups
+
+/-- Parse and translate `source`, the TypeScript file `file`, which may import
+from the files `deps`: the parsed module, the names that the printer needs,
+the output tree, and what the file exports. -/
+def translateFile (file source : String) (target : Edition := .default)
+    (deps : List (String × Dependency) := []) :
+    Except String (Module × Output.Names × List Output.Decl × Interface) := do
   let m ← (parse source target).mapError (·.render file)
   let src := source.toList.toArray
   -- Every identifier in the source, at any level. A Lean name in this list is
@@ -975,26 +1064,51 @@ def translateTree (file source : String) (target : Edition := .default) :
       | _ => none
     | .error _ => []
   let numberVar := ("N" :: (List.range 1000).map (s!"N{· + 1}")).find? (!idents.contains ·)
+  let imported := (importedFiles file m).filterMap fun f => (deps.lookup f).map (f, ·)
+  -- A file that imports from a generic file is generic too, so that it has a
+  -- number type to pass.
+  let usesNumber := moduleUsesNumber m || imported.any (·.2.interface.usesNumber)
   let names : Output.Names :=
     { clashes := Output.leanNames.map (·.1) |>.filter idents.contains,
-      numberVar := numberVar.getD "N", usesNumber := moduleUsesNumber m }
-  let ctx : Ctx := { file, target, src, lineStarts := lineStarts src, fuel := 4 * src.size + 4 }
+      numberVar := numberVar.getD "N", usesNumber, file,
+      imported := imported.map fun (f, d) =>
+        (f, { ns := d.ns, generic := d.interface.usesNumber, numberVar := d.interface.numberVar }) }
+  let ctx : Ctx :=
+    { file, target, src, lineStarts := lineStarts src, fuel := 4 * src.size + 4,
+      interfaces := deps.map fun (f, d) => (f, d.interface) }
   match (translateDecls m).run ctx with
   | .error e _ => .error e
-  | .ok decls _ => return (m, names, decls)
+  | .ok decls ctx' => return (m, names, decls, ctx'.interface usesNumber names.numberVar)
+
+/-- Parse and translate `source`, the TypeScript file `file`: the parsed
+module, the names that the printer needs, and the output tree. -/
+def translateTree (file source : String) (target : Edition := .default) :
+    Except String (Module × Output.Names × List Output.Decl) := do
+  let (m, names, decls, _) ← translateFile file source target
+  return (m, names, decls)
+
+/-- Translate `source`, the TypeScript file `file`, to a Lean file whose
+definitions are in namespace `ns`, for code that runs on the edition
+`target`: the Lean text, and what the file exports. `deps` are the files it
+may import from. -/
+def translateWith (file source ns : String) (target : Edition := .default)
+    (deps : List (String × Dependency) := []) : Except String (String × Interface) := do
+  let (m, names, decls, iface) ← translateFile file source target deps
+  let imports := (importedFiles file m).filterMap fun f => (deps.lookup f).map (s!"import {·.module}")
+  let header :=
+    (if names.usesNumber then ["import tolean.TypeScript.Spec.Number"] else []) ++ imports ++
+    (if names.usesNumber then ["", "open tolean.TypeScript"] else if imports.isEmpty then [] else [""])
+  let text := "\n".intercalate
+    ([s!"-- Generated by tolean {version} for {target.name} from {file}. Do not edit."] ++
+      header ++
+      [s!"namespace {ns}", "", "\n\n".intercalate (decls.map (·.print names)), "", s!"end {ns}", ""])
+  return (text, iface)
 
 /-- Translate `source`, the TypeScript file `file`, to a Lean file whose
 definitions are in namespace `ns`, for code that runs on the edition
 `target`. -/
 def translate (file source ns : String) (target : Edition := .default) :
-    Except String String := do
-  let (_, names, decls) ← translateTree file source target
-  let header :=
-    if names.usesNumber then ["import tolean.TypeScript.Spec.Number", "", "open tolean.TypeScript"]
-    else []
-  return "\n".intercalate
-    ([s!"-- Generated by tolean {version} for {target.name} from {file}. Do not edit."] ++
-      header ++
-      [s!"namespace {ns}", "", "\n\n".intercalate (decls.map (·.print names)), "", s!"end {ns}", ""])
+    Except String String :=
+  (·.1) <$> translateWith file source ns target
 
 end tolean.TypeScript.Translate

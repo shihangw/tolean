@@ -60,7 +60,7 @@ def encoderOf : Output.Ty → Option String
   | .string => some "Val.str"
   | .option t => do return s!"(encNull {← encoderOf t})"
   | .list t => do return s!"(encList {← encoderOf t})"
-  | .struct name => some s!"encode{name}"
+  | .struct ref => some s!"encode{ref.name}"
   | .number => some "Val.num"
   | .null => none
 
@@ -71,7 +71,7 @@ def decoderOf : Output.Ty → Option String
   | .string => some "decStr"
   | .option t => do return s!"(decNull {← decoderOf t})"
   | .list t => do return s!"(decList {← decoderOf t})"
-  | .struct name => some s!"decode{name}"
+  | .struct ref => some s!"decode{ref.name}"
   | .number => some "decNum"
   | .null => none
 
@@ -176,6 +176,8 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     Except String String := do
   let (m, names, decls) ← Translate.translateTree file source target
   let names := { names with namespacePrefix := transNs ++ "." }
+  if m.decls.any (· matches .import ..) then
+    throw s!"{file}: a file with imports has no certificate yet"
   let fns := certifiable m
   if fns.isEmpty then throw s!"{file}: there is no function to certify"
   let nv := names.numberVar
@@ -184,7 +186,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
   -- A generic translated definition takes the model by name, as the
   -- translation's own calls do.
   let callN := if names.usesNumber then s!" ({nv} := {nv})" else ""
-  let structTy (name : String) : String := (Output.Ty.struct name).print names
+  let structTy (name : String) : String := (Output.Ty.struct ⟨file, name⟩).print names
   let mut encs : Array String := #[]
   let mut lemmaNames : Array String :=
     #["encList", "encNull", "decInt", "decBool", "decStr", "decNum"]
@@ -270,7 +272,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           String.join (scopeNames.map fun n => s!" {decode ρ n}") ++ "))"
       let depth := callDepth m bodyStmt
       let fuel := if depth == 0 then "fuel" else s!"(fuel + {depth})"
-      let hm := if depth == 0 then "" else " (hm : m = program)"
+      let hm := if depth == 0 then "" else " (hm : m = { program := [(\"\", program)], file := \"\" })"
       let hmName := if depth == 0 then [] else ["program"]
       let substHm := if depth == 0 then "" else "    subst hm\n"
       let elemTy := info.elem.print names
@@ -285,7 +287,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       let simpSet := ", ".intercalate (hmName ++ envLemmas ++ lemmaNames.toList ++ loopLemmas.toList ++ defs)
       loopLemmas := loopLemmas.push lemmaName
       thms := thms.push <|
-        s!"theorem {lemmaName} {generic} (m : tolean.TypeScript.Syntax.Module){hm} (fuel : Nat) (items : List {elemTy}) (ρ : Env {nv})\n" ++
+        s!"theorem {lemmaName} {generic} (m : tolean.TypeScript.Eval.Scope){hm} (fuel : Nat) (items : List {elemTy}) (ρ : Env {nv})\n" ++
         s!"    (hI : {inv "ρ"}) :\n" ++
         s!"    execLoop m {fuel} ρ {str element} {stmt bodyStmt} (List.map {encX} items) =\n" ++
         s!"      some (.normal {upd s!"(List.foldl {stepFn "ρ"} {decState "ρ"} items)" "ρ"}) := by\n" ++

@@ -24,8 +24,9 @@ inductive Ty where
   | null
   | option (value : Ty)
   | list (elem : Ty)
-  /-- A structure that the file declares. -/
-  | struct (name : String)
+  /-- A structure of the program: one that the file declares, or one that it
+  imports. -/
+  | struct (ref : DeclRef)
 deriving BEq, Repr, Inhabited
 
 /-- `+`, `-` and `*` on `Int`. -/
@@ -84,12 +85,13 @@ inductive Expr where
   | numberNeg (a : Expr)
   /-- `(if c then a else b)`. -/
   | ite (c a b : Expr)
-  /-- `(f (N := N) a b)`: a call of a function that the file declares. -/
-  | call (name : String) (args : List Expr)
+  /-- `(f (N := N) a b)`: a call of a function of the program, one that the
+  file declares or one that it imports. -/
+  | call (ref : DeclRef) (args : List Expr)
   /-- `([a, b] : List T)`, where `elem` is `T`. -/
   | list (elems : List Expr) (elem : Ty)
   /-- `({ f := a, g := b } : S)`. -/
-  | struct (fields : List (String × Expr)) (name : String)
+  | struct (fields : List (String × Expr)) (ref : DeclRef)
   /-- `a.isNone`. -/
   | isNone (a : Expr)
   /-- `a.isSome`. -/
@@ -174,6 +176,16 @@ deriving Repr, Inhabited
 
 /-! ### Printing -/
 
+/-- Another file of the program, as the output of a file that imports from it
+writes its declarations. -/
+structure ImportedFile where
+  /-- The namespace of its translation. -/
+  ns : String
+  /-- Its declarations are generic over the number type. -/
+  generic : Bool
+  /-- The name under which its declarations bind the number type. -/
+  numberVar : String
+
 /-- The names that the printer needs from the file. -/
 structure Names where
   /-- Lean names the output uses that the source also declares. The output
@@ -187,6 +199,20 @@ structure Names where
   its structures and functions. The translation itself writes them inside
   that namespace, so it leaves this empty; a certificate, outside it, sets it. -/
   namespacePrefix : String := ""
+  /-- The file of the translation. The output writes a declaration of another
+  file with the namespace of that file's translation. -/
+  file : String := ""
+  /-- The files that the file imports from, by path. -/
+  imported : List (String × ImportedFile) := []
+
+/-- How the output writes the declaration `r`, and the name under which it
+binds the number type when it is generic over it. -/
+def Names.ref (names : Names) (r : DeclRef) : String × Option String :=
+  if r.file == names.file then
+    (names.namespacePrefix ++ r.name, if names.usesNumber then some names.numberVar else none)
+  else match names.imported.lookup r.file with
+    | some i => (i.ns ++ "." ++ r.name, if i.generic then some i.numberVar else none)
+    | none => (r.name, none)
 
 /-- The Lean names the output uses, with their full names from the root. -/
 def leanNames : List (String × String) :=
@@ -230,9 +256,10 @@ def Ty.print (names : Names) : Ty → String
   | .null => s!"({leanName names "Option"} Empty)"
   | .option t => wrapped (leanName names "Option") (t.print names)
   | .list t => wrapped (leanName names "List") (t.print names)
-  | .struct name =>
-    let name := names.namespacePrefix ++ name
-    if names.usesNumber then s!"({name} {names.numberVar})" else name
+  | .struct ref =>
+    match names.ref ref with
+    | (name, some _) => s!"({name} {names.numberVar})"
+    | (name, Option.none) => name
 
 def IntOp.symbol : IntOp → String
   | .add => "+" | .sub => "-" | .mul => "*"
@@ -268,16 +295,17 @@ def Expr.print (names : Names) : Expr → String
   | .neg a => s!"(-{a.print names})"
   | .numberNeg a => s!"({leanName names "JSNumber"}.neg {argument (a.print names)})"
   | .ite c a b => s!"(if {c.print names} then {a.print names} else {b.print names})"
-  | .call name args =>
-    let name := names.namespacePrefix ++ name
+  | .call ref args =>
     -- The function binds the number type under its own name, `N` or a fresh one.
-    let head := if names.usesNumber then [name, s!"({names.numberVar} := {names.numberVar})"] else [name]
+    let head := match names.ref ref with
+      | (name, some binder) => [name, s!"({binder} := {names.numberVar})"]
+      | (name, Option.none) => [name]
     "(" ++ " ".intercalate (head ++ (Expr.printList names args).map argument) ++ ")"
   | .list elems elem =>
     s!"([{", ".intercalate (Expr.printList names elems)}] : {(Ty.list elem).print names})"
-  | .struct fields name =>
+  | .struct fields ref =>
     "({ " ++ ", ".intercalate (Expr.printFields names fields) ++ " } : " ++
-      (Ty.struct name).print names ++ ")"
+      (Ty.struct ref).print names ++ ")"
   | .isNone a => s!"{argument (a.print names)}.isNone"
   | .isSome a => s!"{argument (a.print names)}.isSome"
   | .matchNull name whenNull whenValue =>
