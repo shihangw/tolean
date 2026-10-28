@@ -1,7 +1,7 @@
 import tolean.TypeScript.Proof.Expr
 
 /-! ECMA-262 chapter 16, ECMAScript Language: Scripts and Modules. -/
-namespace tolean.TypeScript.Conformance
+namespace tolean.TypeScript.Coverage
 
 open tolean.TypeScript tolean.TypeScript.Syntax tolean.TypeScript.Translate tolean.TypeScript.Proof
 
@@ -74,4 +74,4 @@ theorem resolvePath_last {file source raw : String} (hraw : (source.splitOn "/")
 #guard Eval.resolvePath "x.ts" "./sub\\y.ts" == none
 #guard Eval.resolvePath "x.ts" "y.ts" == none
 
-end tolean.TypeScript.Conformance
+end tolean.TypeScript.Coverage

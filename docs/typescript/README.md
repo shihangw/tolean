@@ -79,12 +79,14 @@ still trust the printer link: the printed Lean computes what the evaluator
 gives for the tree, and the evaluator gives a value where the printed Lean
 does. The corpus tests the printer.
 
-`tolean/TypeScript/Spec/Conformance/` holds a check for each rule of
-ECMA-262 that the interpreter or the translator once broke. It has one file
-for each chapter of the spec. A theorem states the rule for every input, and
-a `#guard` checks one input. `Proof/Output.lean` does the same for the rules
-that come from Lean and the project. CI builds these files with the library,
-so a check that stops holding fails the build.
+`tolean/TypeScript/Spec/Coverage.lean` lists every theorem about the subset
+under the section of ECMA-262 that it is about, in the order of the spec, so
+it shows which sections have theorems of their own. The theorems about no
+section, such as those about the translator's monad or the parser, are in its
+extras. The build fails when a theorem is in no list. `Spec/Coverage/` holds
+a check for each rule that the interpreter or the translator once broke,
+with one file for each chapter and one for the extras. A theorem states the
+rule for every input, and a `#guard` checks one input.
 
 `tests/typescript/checkTranslate.ts` checks the translator. No second
 translator checks its meaning, so these checks show that the output does not

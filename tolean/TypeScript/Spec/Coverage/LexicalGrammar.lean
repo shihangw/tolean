@@ -1,7 +1,7 @@
 import tolean.TypeScript.Spec.Eval
 
 /-! ECMA-262 chapter 12, ECMAScript Language: Lexical Grammar. -/
-namespace tolean.TypeScript.Conformance
+namespace tolean.TypeScript.Coverage
 
 /-! ### §12.9.3 Numeric Literals -/
 
@@ -11,4 +11,4 @@ namespace tolean.TypeScript.Conformance
 -- A fraction with a digit that is not zero leaves the subset, at any length.
 #guard Eval.numberLiteral ("0." ++ "".pushn '0' 401 ++ "1") == none
 
-end tolean.TypeScript.Conformance
+end tolean.TypeScript.Coverage

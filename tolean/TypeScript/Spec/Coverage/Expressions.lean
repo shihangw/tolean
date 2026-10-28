@@ -1,7 +1,7 @@
 import tolean.TypeScript.Spec.Eval
 
 /-! ECMA-262 chapter 13, ECMAScript Language: Expressions. -/
-namespace tolean.TypeScript.Conformance
+namespace tolean.TypeScript.Coverage
 
 open tolean.TypeScript tolean.TypeScript.Syntax
 open tolean.TypeScript.Eval (Val)
@@ -26,4 +26,4 @@ theorem neg_local_infinity {N : Type} [JSNumber N] (m : Eval.Scope) (fuel : Nat)
       some (.int (-i)) := by
   simp [Eval.eval, List.lookup]
 
-end tolean.TypeScript.Conformance
+end tolean.TypeScript.Coverage

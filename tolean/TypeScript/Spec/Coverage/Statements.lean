@@ -1,7 +1,7 @@
 import tolean.TypeScript.Proof.Expr
 
 /-! ECMA-262 chapter 14, ECMAScript Language: Statements and Declarations. -/
-namespace tolean.TypeScript.Conformance
+namespace tolean.TypeScript.Coverage
 
 open tolean.TypeScript tolean.TypeScript.Syntax tolean.TypeScript.Translate tolean.TypeScript.Proof
 
@@ -30,4 +30,4 @@ theorem declare_not_callable {env env' : Translate.Env} {sp : Span} {name : Stri
         exact Or.inl ⟨f, hf, hn⟩
       all_goals rintro rfl; simp [isNumberName] at hg
 
-end tolean.TypeScript.Conformance
+end tolean.TypeScript.Coverage

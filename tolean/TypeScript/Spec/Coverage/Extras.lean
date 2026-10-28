@@ -4,13 +4,12 @@ import tolean.Project
 /-!
 Checks for rules that come from Lean and the project, not from ECMA-262: how
 Lean reads the names that the output writes, and which files the output of a
-file may name or import. Each check covers a rule that the translator once
-broke. The checks that follow ECMA-262 are in `Spec/Conformance`, one file
-for each chapter.
+file may name or import. They have no section of ECMA-262, so the index in
+`Spec/Coverage.lean` lists them among its extras.
 -/
-namespace tolean.TypeScript.Proof
+namespace tolean.TypeScript.Coverage
 
-open tolean.TypeScript tolean.TypeScript.Syntax tolean.TypeScript.Translate
+open tolean.TypeScript tolean.TypeScript.Syntax tolean.TypeScript.Translate tolean.TypeScript.Proof
 
 /-! ### Names, as Lean reads them -/
 
@@ -71,4 +70,4 @@ theorem translateImport_edition {sp : Span} {names : List ImportName} {source : 
 -- The project reads each file's imports for the file's own target.
 #guard Project.Job.edition (.typescript (Lean.Json.mkObj [("target", "ES2019")]) "x.ts") == .es2019
 
-end tolean.TypeScript.Proof
+end tolean.TypeScript.Coverage
