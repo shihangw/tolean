@@ -10,9 +10,10 @@ trip follows the tree:
 - Every statement and every declaration has a line of its own, and every
   statement ends in `;`. So no `;` is inserted, and no rule about a line break
   inside a statement applies.
-- Two tokens are always one space apart. So no two tokens run together, and a
-  `>=` or a `>>`, which the parser reads as `>` tokens that touch, is printed
-  as one word.
+- The printer builds lines of words, and `render` writes them with one space
+  between two words. A word is one token, or the `>` and `=` tokens of a
+  `>=` or a `>>`, which the parser reads as tokens that touch. So no two
+  words run together.
 - A parenthesis stands only where the tree has a `paren` node, as the parser
   keeps them.
 - A string is printed in double quotes, with an escape only for `"`, `\`, `\n`,
@@ -36,147 +37,198 @@ def quote (s : String) : String :=
     else if c == '\r' then "\\r" else if c.toNat == 0x2028 then "\\u2028"
     else if c.toNat == 0x2029 then "\\u2029" else c.toString) ++ "\""
 
-def LitType.source : LitType → String
-  | .string value => quote value
-  | .number text | .bigint text => text
-  | .bool b => if b then "true" else "false"
+/-- Tokens with no space between them. A word is one token, except that the
+parser reads `>=`, `>>`, `>>>`, `>>=` and `>>>=` as `>` and `=` tokens that
+touch. -/
+abbrev Word := List TokenKind
+
+/-- A line: how many steps it is indented, and its words. -/
+abbrev Line := Nat × List Word
+
+def keywordWord (w : String) : Word := [.keyword w]
+def identWord (n : String) : Word := [.ident n]
+def punctWord (p : String) : Word := [.punct p]
+
+/-- A property name after `.`, or a field name: a reserved word is a keyword
+token, and any other name an identifier. -/
+def propertyName (n : String) : Word :=
+  if Lex.reservedWords.contains n then keywordWord n else identWord n
+
+/-- An operator's symbol. A symbol that starts with `>` is its `>` and `=`
+tokens, touching, and a word such as `instanceof` is a keyword. -/
+def symbol (s : String) : Word :=
+  if s.startsWith ">" then s.toList.map fun c => .punct c.toString
+  else if Lex.reservedWords.contains s then keywordWord s
+  else punctWord s
+
+/-- `items`, with a `,` between two of them. -/
+def commas : List (List Word) → List Word
+  | [] => []
+  | [item] => item
+  | item :: rest => item ++ punctWord "," :: commas rest
+
+/-- `items` between `open` and `close`, with a `,` between two of them. -/
+def enclose (open_ close : String) (items : List (List Word)) : List Word :=
+  punctWord open_ :: commas items ++ [punctWord close]
+
+def LitType.words : LitType → List Word
+  | .string value => [[.string value]]
+  | .number text => [[.number text]]
+  | .bigint text => [[.bigint text]]
+  | .bool b => [keywordWord (if b then "true" else "false")]
 
 mutual
 
-def TypeExpr.source : TypeExpr → String
-  | .keyword _ name => name
-  | .null _ => "null"
-  | .literal _ lit => lit.source
-  | .ref _ name [] => name
-  | .ref _ name args => s!"{name} < {", ".intercalate (TypeExpr.sources args)} >"
-  | .array _ elem => s!"{elem.source} [ ]"
+def TypeExpr.words : TypeExpr → List Word
+  | .keyword _ name => [if name == "void" then keywordWord name else identWord name]
+  | .null _ => [keywordWord "null"]
+  | .literal _ lit => lit.words
+  | .ref _ name [] => [identWord name]
+  | .ref _ name args => identWord name :: punctWord "<" :: commas (TypeExpr.wordsOf args) ++ [punctWord ">"]
+  | .array _ elem => elem.words ++ [punctWord "[", punctWord "]"]
   -- A union of one member is `| T`, as `type A = | T` writes it.
-  | .union _ [member] => s!"| {member.source}"
-  | .union _ members => " | ".intercalate (TypeExpr.sources members)
-  | .paren _ inner => s!"( {inner.source} )"
+  | .union _ [member] => punctWord "|" :: member.words
+  | .union _ members => TypeExpr.bars (TypeExpr.wordsOf members)
+  | .paren _ inner => punctWord "(" :: inner.words ++ [punctWord ")"]
 
-def TypeExpr.sources : List TypeExpr → List String
+def TypeExpr.wordsOf : List TypeExpr → List (List Word)
   | [] => []
-  | t :: ts => t.source :: TypeExpr.sources ts
+  | t :: ts => t.words :: TypeExpr.wordsOf ts
+
+/-- `members`, with a `|` between two of them. -/
+def TypeExpr.bars : List (List Word) → List Word
+  | [] => []
+  | [member] => member
+  | member :: rest => member ++ punctWord "|" :: TypeExpr.bars rest
 
 end
 
-def PropKey.source : PropKey → String
-  | .ident name => name
-  | .string value => quote value
-  | .number text => text
-
-/-- `items` between `open` and `close`, with `, ` between two of them. -/
-def enclose (open_ close : String) : List String → String
-  | [] => s!"{open_} {close}"
-  | items => s!"{open_} {", ".intercalate items} {close}"
+def PropKey.words : PropKey → List Word
+  | .ident name => [propertyName name]
+  | .string value => [[.string value]]
+  | .number text => [[.number text]]
 
 mutual
 
-def Expr.source : Expr → String
-  | .ident _ name => name
-  | .number _ text | .bigint _ text => text
-  | .string _ value => quote value
-  | .bool _ b => if b then "true" else "false"
-  | .null _ => "null"
-  | .array _ elems => enclose "[" "]" (Expr.sources elems)
-  | .object _ props => enclose "{" "}" (Property.sources props)
-  | .paren _ inner => s!"( {inner.source} )"
-  | .member _ obj name => s!"{obj.source} . {name}"
-  | .index _ obj idx => s!"{obj.source} [ {idx.source} ]"
-  | .call _ callee args => s!"{callee.source} {enclose "(" ")" (Expr.sources args)}"
-  | .unary _ op arg => s!"{op.symbol} {arg.source}"
-  | .prefix _ op arg => s!"{op.symbol} {arg.source}"
-  | .postfix _ op arg => s!"{arg.source} {op.symbol}"
-  | .binary _ op lhs rhs => s!"{lhs.source} {op.symbol} {rhs.source}"
-  | .cond _ test a b => s!"{test.source} ? {a.source} : {b.source}"
-  | .assign _ op target value => s!"{target.source} {op.symbol} {value.source}"
+def Expr.words : Expr → List Word
+  | .ident _ name => [identWord name]
+  | .number _ text => [[.number text]]
+  | .bigint _ text => [[.bigint text]]
+  | .string _ value => [[.string value]]
+  | .bool _ b => [keywordWord (if b then "true" else "false")]
+  | .null _ => [keywordWord "null"]
+  | .array _ elems => enclose "[" "]" (Expr.wordsOf elems)
+  | .object _ props => enclose "{" "}" (Property.wordsOf props)
+  | .paren _ inner => punctWord "(" :: inner.words ++ [punctWord ")"]
+  | .member _ obj name => obj.words ++ [punctWord ".", propertyName name]
+  | .index _ obj idx => obj.words ++ punctWord "[" :: idx.words ++ [punctWord "]"]
+  | .call _ callee args => callee.words ++ enclose "(" ")" (Expr.wordsOf args)
+  | .unary _ op arg => symbol op.symbol :: arg.words
+  | .prefix _ op arg => punctWord op.symbol :: arg.words
+  | .postfix _ op arg => arg.words ++ [punctWord op.symbol]
+  | .binary _ op lhs rhs => lhs.words ++ symbol op.symbol :: rhs.words
+  | .cond _ test a b => test.words ++ punctWord "?" :: a.words ++ punctWord ":" :: b.words
+  | .assign _ op target value => target.words ++ symbol op.symbol :: value.words
 
-def Expr.sources : List Expr → List String
+def Expr.wordsOf : List Expr → List (List Word)
   | [] => []
-  | e :: es => e.source :: Expr.sources es
+  | e :: es => e.words :: Expr.wordsOf es
 
-def Property.source : Property → String
-  | .shorthand _ name => name
-  | .keyValue _ key value => s!"{key.source} : {value.source}"
+def Property.words : Property → List Word
+  | .shorthand _ name => [identWord name]
+  | .keyValue _ key value => key.words ++ punctWord ":" :: value.words
 
-def Property.sources : List Property → List String
+def Property.wordsOf : List Property → List (List Word)
   | [] => []
-  | p :: ps => p.source :: Property.sources ps
+  | p :: ps => p.words :: Property.wordsOf ps
 
 end
 
-def VarDecl.source (d : VarDecl) : String :=
-  let type := match d.type with
-    | some t => s!" : {t.source}"
-    | none => ""
-  let init := match d.init with
-    | some e => s!" = {e.source}"
-    | none => ""
-  s!"{d.kind.keyword} {d.name}{type}{init} ;"
+/-- `const` is a reserved word, and `let` an identifier. -/
+def VarKind.word : VarKind → Word
+  | .const => keywordWord "const"
+  | .«let» => identWord "let"
 
-/-- `lines`, each two spaces further in. -/
-def indent (lines : List String) : List String := lines.map ("  " ++ ·)
+def VarDecl.words (d : VarDecl) : List Word :=
+  [d.kind.word, identWord d.name] ++
+    (match d.type with | some t => punctWord ":" :: t.words | none => []) ++
+    (match d.init with | some e => punctWord "=" :: e.words | none => []) ++ [punctWord ";"]
 
 mutual
 
-/-- The lines of a statement. -/
-def Stmt.lines : Stmt → List String
-  | .varDecl _ d => [d.source]
-  | .exprStmt _ e => [s!"{e.source} ;"]
-  | .returnStmt _ none => ["return ;"]
-  | .returnStmt _ (some e) => [s!"return {e.source} ;"]
-  | .ifStmt _ test t none => s!"if ( {test.source} )" :: indent t.lines
+/-- The lines of a statement, `depth` steps in. -/
+def Stmt.lines (depth : Nat) : Stmt → List Line
+  | .varDecl _ d => [(depth, d.words)]
+  | .exprStmt _ e => [(depth, e.words ++ [punctWord ";"])]
+  | .returnStmt _ none => [(depth, [keywordWord "return", punctWord ";"])]
+  | .returnStmt _ (some e) => [(depth, keywordWord "return" :: e.words ++ [punctWord ";"])]
+  | .ifStmt _ test t none =>
+    (depth, keywordWord "if" :: punctWord "(" :: test.words ++ [punctWord ")"]) :: t.lines (depth + 1)
   | .ifStmt _ test t (some e) =>
-    s!"if ( {test.source} )" :: indent t.lines ++ "else" :: indent e.lines
+    (depth, keywordWord "if" :: punctWord "(" :: test.words ++ [punctWord ")"]) :: t.lines (depth + 1) ++
+      (depth, [keywordWord "else"]) :: e.lines (depth + 1)
   | .forOfStmt _ kind name iterable body =>
-    s!"for ( {kind.keyword} {name} of {iterable.source} )" :: indent body.lines
-  | .whileStmt _ test body => s!"while ( {test.source} )" :: indent body.lines
-  | .block _ body => "{" :: indent (Stmt.linesOf body) ++ ["}"]
-  | .breakStmt _ => ["break ;"]
-  | .continueStmt _ => ["continue ;"]
-  | .empty _ => [";"]
+    (depth, keywordWord "for" :: punctWord "(" :: kind.word :: identWord name :: identWord "of" :: iterable.words ++
+      [punctWord ")"]) :: body.lines (depth + 1)
+  | .whileStmt _ test body =>
+    (depth, keywordWord "while" :: punctWord "(" :: test.words ++ [punctWord ")"]) :: body.lines (depth + 1)
+  | .block _ body => (depth, [punctWord "{"]) :: Stmt.linesOf (depth + 1) body ++ [(depth, [punctWord "}"])]
+  | .breakStmt _ => [(depth, [keywordWord "break", punctWord ";"])]
+  | .continueStmt _ => [(depth, [keywordWord "continue", punctWord ";"])]
+  | .empty _ => [(depth, [punctWord ";"])]
 
-def Stmt.linesOf : List Stmt → List String
+def Stmt.linesOf (depth : Nat) : List Stmt → List Line
   | [] => []
-  | s :: ss => s.lines ++ Stmt.linesOf ss
+  | s :: ss => s.lines depth ++ Stmt.linesOf depth ss
 
 end
 
-def Param.source (p : Param) : String :=
-  match p.type with
-  | some t => s!"{p.name} : {t.source}"
-  | none => p.name
+def Param.words (p : Param) : List Word :=
+  identWord p.name :: match p.type with | some t => punctWord ":" :: t.words | none => []
 
-def Field.source (f : Field) : String :=
-  let readonly := if f.readonly then "readonly " else ""
-  let optional := if f.optional then " ?" else ""
-  s!"{readonly}{f.name}{optional} : {f.type.source} ;"
+def Field.words (f : Field) : List Word :=
+  (if f.readonly then [identWord "readonly"] else []) ++ [propertyName f.name] ++
+    (if f.optional then [punctWord "?"] else []) ++ punctWord ":" :: f.type.words ++ [punctWord ";"]
 
-def ImportName.source (n : ImportName) : String :=
-  if n.typeOnly then s!"type {n.name}" else n.name
+def ImportName.words (n : ImportName) : List Word :=
+  if n.typeOnly then [identWord "type", identWord n.name] else [identWord n.name]
 
-def exportWord (exported : Bool) : String := if exported then "export " else ""
+def exportWords (exported : Bool) : List Word := if exported then [keywordWord "export"] else []
 
-def Decl.lines : Decl → List String
+def Decl.lines : Decl → List Line
   | .import _ names source =>
-    [s!"import {enclose "{" "}" (names.map ImportName.source)} from {quote source} ;"]
+    [(0, keywordWord "import" :: enclose "{" "}" (names.map ImportName.words) ++
+      [identWord "from", [.string source], punctWord ";"])]
   | .function _ exported name params returnType body =>
-    let ret := match returnType with
-      | some t => s!" : {t.source}"
-      | none => ""
-    s!"{exportWord exported}function {name} {enclose "(" ")" (params.map Param.source)}{ret}" ::
-      body.lines
+    (0, exportWords exported ++ keywordWord "function" :: identWord name ::
+      enclose "(" ")" (params.map Param.words) ++
+      (match returnType with | some t => punctWord ":" :: t.words | none => [])) :: body.lines 0
   | .interface _ exported name fields =>
-    s!"{exportWord exported}interface {name} \{" :: indent (fields.map Field.source) ++ ["}"]
-  | .typeAlias _ exported name type => [s!"{exportWord exported}type {name} = {type.source} ;"]
-  | .exportedVar _ d => [s!"export {d.source}"]
-  | .stmt s => s.lines
+    (0, exportWords exported ++ [identWord "interface", identWord name, punctWord "{"]) ::
+      fields.map (fun f => (1, f.words)) ++ [(0, [punctWord "}"])]
+  | .typeAlias _ exported name type =>
+    [(0, exportWords exported ++ identWord "type" :: identWord name :: punctWord "=" :: type.words ++ [punctWord ";"])]
+  | .exportedVar _ d => [(0, keywordWord "export" :: d.words)]
+  | .stmt s => s.lines 0
 
-/-- The module as source, one line for each statement, ending in a line
-break. -/
-def Module.source (m : Module) : String :=
-  String.join ((m.decls.flatMap Decl.lines).map (· ++ "\n"))
+def Module.lines (m : Module) : List Line := m.decls.flatMap Decl.lines
+
+/-! ### Rendering -/
+
+def TokenKind.text : TokenKind → String
+  | .ident s | .keyword s | .number s | .bigint s | .punct s => s
+  | .string value => quote value
+  | .eof => ""
+
+def Word.text (w : Word) : String := String.join (w.map TokenKind.text)
+
+def Line.text (l : Line) : String := "".pushn ' ' (2 * l.1) ++ " ".intercalate (l.2.map Word.text)
+
+/-- The lines as source: each line ends in a line break. -/
+def render (lines : List Line) : String := String.join (lines.map (·.text ++ "\n"))
+
+/-- The module as source. -/
+def Module.source (m : Module) : String := render m.lines
 
 /-! ### Erasing spans -/
 
