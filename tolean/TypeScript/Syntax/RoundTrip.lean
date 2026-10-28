@@ -15,7 +15,8 @@ states that `p` reads the tokens of `t`, followed by any tokens that
 loop of the parser is a named step, such as `Parse.unionStep`, so that a
 lemma such as `iterate_sepBefore` can state what the loop reads.
 
-Expressions, statements and declarations come later.
+`Syntax/RoundTripExpr.lean` covers expressions. Statements and declarations
+come later.
 -/
 namespace tolean.TypeScript.Syntax
 

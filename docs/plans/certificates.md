@@ -69,9 +69,13 @@ printer gives a certificate that Lean refuses.
       programs. The proof for types is built: `types_reads` in
       `Syntax/RoundTrip.lean` states that the parser reads the tokens of
       every type it can read as that type, apart from spans, given fuel for
-      how deep the type nests. The proofs for expressions, statements and
-      declarations, and the proof that the lexer gives the printed tokens,
-      are not built yet.
+      how deep the type nests. The proof for expressions is built too:
+      `exprs_read` in `Syntax/RoundTripExpr.lean` states the same for each
+      level of the expression parser, from assignments down to primary
+      expressions. It covers every expression that the function for a level
+      can read, when the target edition has the operators that the
+      expression uses. The proofs for statements and declarations, and the
+      proof that the lexer gives the printed tokens, are not built yet.
 5. **The interpreter against Node.** A differential test runs random programs
    in the interpreter and in Node, and requires the same results. This is
    evidence that the interpreter means what JavaScript means.
