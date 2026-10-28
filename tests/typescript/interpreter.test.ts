@@ -140,21 +140,36 @@ function arbitrary(t: Ty, sig: Signatures): fc.Arbitrary<unknown> {
 
 type Call = { function: string; args: Array<Value> };
 type Program = { seed: number; source: string; calls: Array<Call> };
-type Interpreted = { parsed: false } | { parsed: true; accepted: boolean; results: Array<Value | null> };
-type NodeResult = { value: Value } | { throws: string };
+/** A result is `null` when the interpreter gives no value. */
+type Interpreted = { parsed: false } | { parsed: true; accepted: boolean; results: Array<{ value: Value } | null> };
+type NodeResult = { returns: unknown } | { throws: string };
+
+/** `x` as text, or why it is no value of the subset. */
+function shown(x: unknown): string {
+  try {
+    return canonical(encode(x));
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
+  }
+}
 
 test(`the interpreter agrees with Node ${process.version} on random programs`, async () => {
+  // First, so that the seed shows when a step below fails.
+  console.log(`interpreter: ${programCount} programs from seed ${seed} on Node ${process.version}`);
   const programs: Array<Program> = [];
   for (let i = 0; i < programCount; i++) {
-    const gen = new Gen(seed + i);
+    // The program and its arguments come from its own seed only, so
+    // `TOLEAN_SEED=<that seed>` repeats both.
+    const programSeed = seed + i;
+    const gen = new Gen(programSeed);
     const source = gen.program();
     const sig = gen.signatures();
     const calls = sig.functions.flatMap((f, j) =>
       fc
-        .sample(fc.tuple(...f.params.map((p) => arbitrary(p, sig))), { numRuns: callsPerFunction, seed: seed + i * 7 + j })
+        .sample(fc.tuple(...f.params.map((p) => arbitrary(p, sig))), { numRuns: callsPerFunction, seed: programSeed * 7 + j })
         .map((args) => ({ function: f.name, args: args.map(encode) })),
     );
-    programs.push({ seed: seed + i, source, calls });
+    programs.push({ seed: programSeed, source, calls });
   }
 
   // A few hundred programs at a time, so that no pipe holds a large input.
@@ -192,31 +207,36 @@ test(`the interpreter agrees with Node ${process.version} on random programs`, a
     }
     for (const [j, call] of program.calls.entries()) {
       const expected = lean.results[j] ?? null;
+      const where = `seed ${program.seed} (${join(dir, `case${program.seed}.ts`)}): ${call.function}(${JSON.stringify(call.args)})`;
+      const fn = mod[call.function];
+      if (typeof fn !== 'function') {
+        failures.push(`${where}: Node's module exports no function ${call.function}`);
+        continue;
+      }
+      // Only the call is in the `try`, so that a throw is Node's.
       let actual: NodeResult;
       try {
-        actual = { value: encode(mod[call.function]?.(...call.args.map(decode))) };
+        actual = { returns: fn(...call.args.map(decode)) };
       } catch (e) {
         actual = { throws: e instanceof Error ? e.name : String(e) };
       }
-      const where = `seed ${program.seed} (${join(dir, `case${program.seed}.ts`)}): ${call.function}(${JSON.stringify(call.args)})`;
       if (expected !== null) {
         tally.values++;
-        if (!('value' in actual)) {
-          failures.push(`${where}: the interpreter gives ${canonical(expected)}, Node throws ${actual.throws}`);
-        } else if (canonical(actual.value) !== canonical(expected)) {
-          failures.push(`${where}: the interpreter gives ${canonical(expected)}, Node ${canonical(actual.value)}`);
+        if (!('returns' in actual)) {
+          failures.push(`${where}: the interpreter gives ${canonical(expected.value)}, Node throws ${actual.throws}`);
+        } else if (shown(actual.returns) !== canonical(expected.value)) {
+          failures.push(`${where}: the interpreter gives ${canonical(expected.value)}, Node ${shown(actual.returns)}`);
         }
       } else if (lean.accepted) {
         tally.throws++;
-        if ('value' in actual) {
-          failures.push(`${where}: the interpreter gives no value, Node ${canonical(actual.value)}`);
+        if ('returns' in actual) {
+          failures.push(`${where}: the interpreter gives no value, Node ${shown(actual.returns)}`);
         }
       }
     }
   }
   console.log(
-    `interpreter: ${programCount} programs from seed ${seed} on Node ${process.version}: ${tally.parsed} parsed, ` +
-      `${tally.accepted} translated, ${tally.unloaded} that Node does not load; ` +
+    `interpreter: ${tally.parsed} parsed, ${tally.accepted} translated, ${tally.unloaded} that Node does not load; ` +
       `${tally.values} calls with a value, ${tally.throws} that throw`,
   );
   expect(failures).toEqual([]);

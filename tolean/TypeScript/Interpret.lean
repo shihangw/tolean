@@ -79,7 +79,9 @@ partial def ofJson (j : Json) : Except String (Val Float) :=
 def file : String := "main.ts"
 
 /-- Run one program: whether the parser and the translator accept it, and the
-result of each call, or `null` when the interpreter gives no value. -/
+result of each call. A result is `{"value": <value>}`, or `null` when the
+interpreter gives no value, so a call that returns `null` gives
+`{"value": null}`. -/
 def runProgram (p : Json) : Except String Json := do
   let source ← p.getObjValAs? String "source"
   let target := match p.getObjValAs? String "target" with
@@ -94,15 +96,14 @@ def runProgram (p : Json) : Except String Json := do
       let name ← c.getObjValAs? String "function"
       let args ← (← c.getObjValAs? (Array Json) "args").mapM ofJson
       return match Eval.runIn [(file, m)] ⟨file, name⟩ args.toList with
-        | some v => toJson v
+        | some v => Json.mkObj [("value", toJson v)]
         | none => Json.null
     return Json.mkObj [("parsed", true), ("accepted", accepted), ("results", Json.arr results)]
 
 /-- `{"programs": [{"source", "target"?, "calls": [{"function", "args"}]}]}`
 to `{"programs": [{"parsed", "accepted", "results"}]}`. -/
 def interpret (input : String) : Except String String := do
-  let programs ← (← Json.parse input).getObjValAs? (Array Json) "programs"
-  let out ← programs.mapM runProgram
+  let programs ← (← Json.parse input).getObjValAs? (Array Json) "programs"  let out ← programs.mapM runProgram
   return (Json.mkObj [("programs", Json.arr out)]).compress
 
 end tolean.TypeScript.Interpret

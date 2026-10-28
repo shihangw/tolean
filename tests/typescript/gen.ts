@@ -334,7 +334,10 @@ export class Gen {
         params.push(t);
         vars.push({ name: `p${j}`, ty: t, mutable: false, owned: false });
       }
-      const ret = this.chance(0.3) && this.structs.length > 0 ? ({ k: 'struct', name: this.pick(this.structs).name } as Ty) : this.scalar();
+      // Sometimes nullable, so that a call can return `null`.
+      const ret = this.chance(0.3) && this.structs.length > 0
+        ? ({ k: 'struct', name: this.pick(this.structs).name } as Ty)
+        : this.chance(0.15) ? ({ k: 'nullable', of: this.pick([BIGINT, NUMBER]) } as Ty) : this.scalar();
       const signature = vars.map((v) => `${v.name}: ${show(v.ty)}`).join(', ');
       const nullable = vars.filter((v) => v.ty.k === 'nullable');
       const lines: Array<string> = [];
