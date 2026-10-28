@@ -214,4 +214,161 @@ theorem parseBlock_budget {T : Edition} {fn loop : Bool} (sp : Span) (body : Lis
       (by have := Stmt.depth_le_depthOf hst; simp only [Stmt.need]; omega)⟩)
     s ts rest hT hF hL hs hl ht hr (fun h => by simp [Stmt.openIf] at h)
 
+/-! ### Functions -/
+
+theorem Parse.modify_eq (f : ParseState → ParseState) (s : ParseState) :
+    (modify f : ParseM PUnit) s = .ok () (f s) := rfl
+
+theorem leaves_inFunction {s s' : ParseState} {r : List Token} (hs : s.inFunction = false)
+    (h : Leaves { s with inFunction := true } s' r) : Leaves s { s' with inFunction := false } r where
+  rest_eq := h.rest_eq
+  left_eq := h.left_eq
+  eof_eq := h.eof_eq
+  inFunction_eq := hs.symm
+  loopDepth_eq := h.loopDepth_eq
+  target_eq := h.target_eq
+
+theorem listAfter_true {α : Type} {tokens : α → List TokenKind} {close : List TokenKind} :
+    ∀ xs : List α, ListAfter (fun _ _ => true) tokens close xs
+  | [] => trivial
+  | [_] => rfl
+  | _ :: y :: xs => ⟨rfl, listAfter_true (y :: xs)⟩
+
+/-- The words of a return type. -/
+def rtWords : Option TypeExpr → List Word
+  | some t => punctWord ":" :: t.words
+  | none => []
+
+theorem rtWords_eq (rt : Option TypeExpr) :
+    (match rt with | some t => punctWord ":" :: t.words | none => []) = rtWords rt := by
+  cases rt <;> rfl
+
+/-- `( params )`, which `listStep` and `parseParam` read. -/
+theorem params_reads {T : Edition} (params : List Param) (hps : ∀ p ∈ params, p.wf = true)
+    (s : ParseState) (its rest : List Token) (rp : Token) (hT : s.target = T) (hs : s.rest = its ++ rp :: rest)
+    (hrp : rp.kind = .punct ")") (hl : s.left = s.rest.length)
+    (ht : Touching its (commas (params.map Param.words))) (hn : ∀ y ∈ its, y.newlineBefore = false) :
+    ∃ res s', Parse.iterate (10 * (s.left + 1)) #[] (Parse.listStep ")" (fun _ => pure ()) Parse.parseParam) s =
+      .ok res s' ∧ res.toList.map Param.erase = params.map Param.erase ∧ Leaves s s' (rp :: rest) := by
+  obtain ⟨res, s', hit, he, hL⟩ := iterate_list (close := ")") (refuse := fun _ => pure ()) (by decide)
+    params (10 * (s.left + 1)) #[] s its rest rp (fun p hp => parseParam_reads p (hps p hp))
+    (fun p _ => ⟨.ident p.name, by simp [Param.words, identWord], by simp, fun _ _ _ => rfl⟩)
+    (by have := length_items ht; have : s.left = its.length + rest.length + 1 := by simp [hl, hs]; omega
+        omega) hT hs hrp hl ht hn (listAfter_true params)
+  exact ⟨res, s', hit, by simpa using he, hL⟩
+
+
+/-- `function`, a name, `( params )`, a return type or none, and a block, which
+`parseBlock` reads in a function. -/
+theorem parseFunction_reads {T : Edition} (start : Pos) (exported : Bool) (sp : Span) (name : String)
+    (params : List Param) (rt : Option TypeExpr) (bsp : Span) (bs : List Stmt)
+    (hname : exprName name = true) (hps : ∀ p ∈ params, p.wf = true) (hrt : ∀ t ∈ rt, t.wf = true)
+    (hbw : (Stmt.block bsp bs).wf T true false = true) :
+    ∀ (s : ParseState) (ts bts rest : List Token), s.target = T → s.inFunction = false →
+      s.rest = ts ++ bts ++ rest → s.left = s.rest.length →
+      Touching ts (keywordWord "function" :: identWord name :: enclose "(" ")" (params.map Param.words) ++ rtWords rt) →
+      (∀ y ∈ ts.tail, y.newlineBefore = false) → Laid bts (Stmt.block bsp bs).wordLines → rest ≠ [] →
+      ∃ d' s', Parse.parseFunction start exported s = .ok d' s' ∧
+        d'.erase = (Decl.function sp exported name params rt (.block bsp bs)).erase ∧ Leaves s s' rest := by
+  intro s ts bts rest hT hF hs hl ht hn hb hr
+  have hname' : name ∉ Parse.refusedNames := by simpa [exprName] using hname
+  obtain ⟨fk, ts₁, rfl, hfk, h₁⟩ := Touching.cons_one (by simpa [keywordWord] using ht)
+  obtain ⟨nm, ts₂, rfl, hnm, h₂⟩ := Touching.cons_one (by simpa [identWord] using h₁)
+  obtain ⟨pts, rts, rfl, hpts, hrts⟩ := Touching.append_split h₂
+  obtain ⟨lp, its, rp, rfl, hlp, hits, hrp⟩ := Touching.enclosed (by simpa [enclose] using hpts)
+  -- The block starts with `{`.
+  have hb' := hb
+  simp only [Stmt.wordLines, Stmt.lines, List.map_cons] at hb'
+  obtain ⟨ba, bb, rfl, hba, _⟩ := Laid.cons hb'
+  obtain ⟨lb, ba', rfl, hlb, _⟩ := Touching.cons_one (by simpa [punctWord] using hba)
+  have hnot1 : nm.kind ≠ .punct "*" := by rw [hnm]; simp
+  have hnot2 : lp.kind ≠ .punct "<" := by rw [hlp]; exact punct_ne (by decide)
+  have hn' : ∀ y ∈ its, y.newlineBefore = false := fun y hy => hn y (by simp [hy])
+  cases rt with
+  | none =>
+    simp [rtWords, Touching] at hrts; subst hrts
+    have hs' : s.rest = fk :: nm :: lp :: (its ++ rp :: (lb :: ba' ++ bb ++ rest)) := by simpa using hs
+    let s₁ := advanced s fk nm (lp :: (its ++ rp :: (lb :: ba' ++ bb ++ rest)))
+    let s₂ := advanced s₁ nm lp (its ++ rp :: (lb :: ba' ++ bb ++ rest))
+    let s₃ : ParseState := { s₂ with rest := its ++ rp :: (lb :: ba' ++ bb ++ rest), left := s₂.left - 1, lastStop := lp.span.stop }
+    have hl₃ : s₃.left = s₃.rest.length := by simp [s₃, s₂, s₁, hl, hs']
+    obtain ⟨res, s₄, hit, hes, hL₄⟩ := params_reads params hps s₃ its (lb :: ba' ++ bb ++ rest) rp hT rfl hrp hl₃
+      hits hn'
+    have hs₄ : s₄.rest = rp :: (lb :: ba' ++ bb ++ rest) := hL₄.rest_eq
+    let s₅ : ParseState := { s₄ with rest := lb :: ba' ++ bb ++ rest, left := s₄.left - 1, lastStop := rp.span.stop }
+    have hs₅ : s₅.rest = lb :: (ba' ++ bb ++ rest) := by simp [s₅]
+    let s₆ : ParseState := { s₅ with inFunction := true }
+    have hl₆ : s₆.left = s₆.rest.length := by simp [s₆, s₅, hL₄.left_eq, hs₄]
+    obtain ⟨body', s₇, hpb, heb, hL₇⟩ := parseBlock_budget (loop := false) bsp bs hbw s₆ (lb :: ba' ++ bb) rest
+      (hL₄.target_eq.trans hT) rfl (fun h => by cases h) (by simp [s₆, s₅]) hl₆ hb hr
+    have hc : lb.kind ≠ .punct ":" := by rw [hlb]; exact punct_ne (by decide)
+    refine ⟨.function ⟨start, s₇.lastStop⟩ exported name res.toList none body', { s₇ with inFunction := false },
+      ?_, ?_, ?_⟩
+    · simp only [Parse.parseFunction]
+      rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_eq hs')), Parse.bind_eq (Parse.peek_eq (s := s₁) rfl)]
+      rw [Parse.ite_guard (fun h => by simp [Token.isPunct, hnot1] at h)]
+      rw [Parse.bind_eq (readName_ok (s := s₁) rfl hnm hname'), Parse.bind_eq (Parse.peek_eq (s := s₂) rfl)]
+      rw [Parse.ite_guard (fun h => by simp [Token.isPunct, hnot2] at h)]
+      rw [Parse.bind_eq (Parse.expectPunct_ok (s := s₂) rfl (by simp) hlp), Parse.bind_eq (Parse.budget_eq _),
+        Parse.bind_eq hit, Parse.bind_eq (Parse.expectPunct_ok hs₄ (by simp) hrp),
+        Parse.bind_eq (Parse.peek_eq hs₅)]
+      rw [if_neg (by simp [Token.isPunct, hc]), Parse.pure_bind, Parse.bind_eq (Parse.peek_eq hs₅)]
+      rw [if_pos (by simp [Token.isPunct, hlb]), Parse.pure_bind]
+      rw [Parse.bind_eq (Parse.modify_eq _ _), Parse.bind_eq (Parse.budget_eq _), Parse.bind_eq hpb,
+        Parse.bind_eq (Parse.modify_eq _ _), Parse.bind_eq (Parse.spanFrom_eq _ _)]
+      rfl
+    · simp [Decl.erase, heb, Param.erase] at hes ⊢
+      exact hes
+    · exact leaves_trans (leaves_advanced hs' hl) (leaves_trans (leaves_advanced (s := s₁) rfl (by simp [s₁, hl, hs']))
+        (leaves_trans (leaves_advance (s := s₂) rfl (by simp [s₂, s₁, hl, hs'])) (leaves_trans hL₄
+          (leaves_trans (leaves_advance hs₄ (by rw [hL₄.left_eq, hs₄]))
+            (leaves_inFunction (by simp [s₅, hL₄.inFunction_eq, s₃, s₂, s₁, hF]) hL₇)))))
+  | some t =>
+    have htw : t.wf = true := hrt t rfl
+    obtain ⟨colon, tts, rfl, hcolon, htt⟩ := Touching.cons_one (by simpa [rtWords, punctWord] using hrts)
+    have hs' : s.rest = fk :: nm :: lp :: (its ++ rp :: (colon :: (tts ++ (lb :: ba' ++ bb ++ rest)))) := by
+      simpa using hs
+    let s₁ := advanced s fk nm (lp :: (its ++ rp :: (colon :: (tts ++ (lb :: ba' ++ bb ++ rest)))))
+    let s₂ := advanced s₁ nm lp (its ++ rp :: (colon :: (tts ++ (lb :: ba' ++ bb ++ rest))))
+    let s₃ : ParseState := { s₂ with rest := its ++ rp :: (colon :: (tts ++ (lb :: ba' ++ bb ++ rest))), left := s₂.left - 1, lastStop := lp.span.stop }
+    have hl₃ : s₃.left = s₃.rest.length := by simp [s₃, s₂, s₁, hl, hs']
+    obtain ⟨res, s₄, hit, hes, hL₄⟩ := params_reads params hps s₃ its (colon :: (tts ++ (lb :: ba' ++ bb ++ rest)))
+      rp hT rfl hrp hl₃ hits hn'
+    have hs₄ : s₄.rest = rp :: (colon :: (tts ++ (lb :: ba' ++ bb ++ rest))) := hL₄.rest_eq
+    let s₅ : ParseState := { s₄ with rest := colon :: (tts ++ (lb :: ba' ++ bb ++ rest)), left := s₄.left - 1, lastStop := rp.span.stop }
+    let s₅' : ParseState := { s₅ with rest := tts ++ (lb :: ba' ++ bb ++ rest), left := s₅.left - 1, lastStop := colon.span.stop }
+    have hl₅' : s₅'.left = s₅'.rest.length := by simp [s₅', s₅, hL₄.left_eq, hs₄]
+    obtain ⟨t', s₆, hpt, het, hL₆⟩ := parseType_budget t htw s₅' tts (lb :: ba' ++ bb ++ rest) rfl hl₅' htt.kinds
+      (fun y hy => hn y (by simp [hy])) (by simp) (followsType_punct hlb (by simp))
+    have hs₆ : s₆.rest = lb :: (ba' ++ bb ++ rest) := by simpa using hL₆.rest_eq
+    let s₇ : ParseState := { s₆ with inFunction := true }
+    have hl₇ : s₇.left = s₇.rest.length := by simp [s₇, hL₆.left_eq, hL₆.rest_eq]
+    obtain ⟨body', s₈, hpb, heb, hL₈⟩ := parseBlock_budget (loop := false) bsp bs hbw s₇ (lb :: ba' ++ bb) rest
+      (by simp [s₇, hL₆.target_eq, s₅', s₅, hL₄.target_eq, s₃, s₂, s₁, hT]) rfl (fun h => by cases h)
+      (by simpa [s₇] using hL₆.rest_eq) hl₇ hb hr
+    refine ⟨.function ⟨start, s₈.lastStop⟩ exported name res.toList (some t') body', { s₈ with inFunction := false },
+      ?_, ?_, ?_⟩
+    · simp only [Parse.parseFunction]
+      rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_eq hs')), Parse.bind_eq (Parse.peek_eq (s := s₁) rfl)]
+      rw [Parse.ite_guard (fun h => by simp [Token.isPunct, hnot1] at h)]
+      rw [Parse.bind_eq (readName_ok (s := s₁) rfl hnm hname'), Parse.bind_eq (Parse.peek_eq (s := s₂) rfl)]
+      rw [Parse.ite_guard (fun h => by simp [Token.isPunct, hnot2] at h)]
+      rw [Parse.bind_eq (Parse.expectPunct_ok (s := s₂) rfl (by simp) hlp), Parse.bind_eq (Parse.budget_eq _),
+        Parse.bind_eq hit, Parse.bind_eq (Parse.expectPunct_ok hs₄ (by simp) hrp),
+        Parse.bind_eq (Parse.peek_eq (s := s₅) rfl)]
+      rw [if_pos (by simp [Token.isPunct, hcolon])]
+      rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_cons (s := s₅) rfl (by simp))),
+        Parse.bind_eq (Parse.budget_eq _), Parse.bind_eq hpt, Parse.pure_bind, Parse.bind_eq (Parse.peek_eq hs₆)]
+      rw [if_pos (by simp [Token.isPunct, hlb]), Parse.pure_bind]
+      rw [Parse.bind_eq (Parse.modify_eq _ _), Parse.bind_eq (Parse.budget_eq _), Parse.bind_eq hpb,
+        Parse.bind_eq (Parse.modify_eq _ _), Parse.bind_eq (Parse.spanFrom_eq _ _)]
+      rfl
+    · simp [Decl.erase, heb, het, Param.erase] at hes ⊢
+      exact hes
+    · exact leaves_trans (leaves_advanced hs' hl) (leaves_trans (leaves_advanced (s := s₁) rfl (by simp [s₁, hl, hs']))
+        (leaves_trans (leaves_advance (s := s₂) rfl (by simp [s₂, s₁, hl, hs'])) (leaves_trans hL₄
+          (leaves_trans (leaves_advance hs₄ (by rw [hL₄.left_eq, hs₄]))
+            (leaves_trans (leaves_advance (s := s₅) rfl (by simp [s₅, hL₄.left_eq, hs₄]))
+              (leaves_trans hL₆ (leaves_inFunction (by simp [hL₆.inFunction_eq, s₅', s₅, hL₄.inFunction_eq, s₃, s₂, s₁, hF]) hL₈)))))))
+
 end tolean.TypeScript.Syntax
