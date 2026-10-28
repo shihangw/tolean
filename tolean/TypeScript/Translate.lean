@@ -319,11 +319,13 @@ def blockStatements : Stmt → List Stmt
 
 mutual
 
+-- Each call is on a part of its argument, so the recursion is structural and
+-- the kernel can run it, as a certificate's check of the translation needs.
+
 /-- Every path through `statements` ends in a `return`. -/
 def alwaysReturns : List Stmt → Bool
   | [] => false
-  | [s] => endsInReturn s
-  | _ :: rest => alwaysReturns rest
+  | s :: rest => if rest.isEmpty then endsInReturn s else alwaysReturns rest
 
 /-- `s`, the last statement of a list, ends every path in a `return`. -/
 def endsInReturn : Stmt → Bool
@@ -334,7 +336,9 @@ def endsInReturn : Stmt → Bool
 /-- `alwaysReturns (blockStatements s)`. -/
 def branchReturns : Stmt → Bool
   | .block _ body => alwaysReturns body
-  | s => endsInReturn s
+  | .returnStmt .. => true
+  | .ifStmt _ _ thenBranch (some elseBranch) => branchReturns thenBranch && branchReturns elseBranch
+  | _ => false
 
 end
 

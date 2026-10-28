@@ -1,7 +1,7 @@
 {
   "name": "tolean-typescript-tests",
   "private": true,
-  "description": "Checks for the TypeScript front end: the Lean parser against tsc, and the JS number laws against real doubles",
+  "description": "Checks for the TypeScript front end: the Lean parser against tsc, the JS number laws against real doubles, and the interpreter against Node",
   "type": "module",
   "scripts": {
     "check": "node check.ts",

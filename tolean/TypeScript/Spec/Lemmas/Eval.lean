@@ -2,9 +2,9 @@
 Facts about the interpreter in `tolean.TypeScript.Spec.Eval`, for certificates.
 
 They are proved from the interpreter's definitions, so they need no audit. A
-certificate for a function with a loop uses `execLoop_foldl`, and it reads
-the values of the loop's variables back out of an environment with the
-decoders at the end of this file.
+certificate writes each value as a `Val` with the encoders, and its loop
+lemmas read the values of a loop's variables back out of an environment with
+the decoders at the end of this file.
 -/
 import tolean.TypeScript.Spec.Eval
 
@@ -118,27 +118,6 @@ of its names, so the result does not depend on the order of the writes. -/
 @[simp] theorem Env.set_merge8 (ρ : Env N) (a b1 b2 b3 b4 b5 b6 b7 b8 : String) (x z y1 y2 y3 y4 y5 y6 y7 y8 : Val N) (h1 : a ≠ b1) (h2 : a ≠ b2) (h3 : a ≠ b3) (h4 : a ≠ b4) (h5 : a ≠ b5) (h6 : a ≠ b6) (h7 : a ≠ b7) (h8 : a ≠ b8) :
     (((((((((ρ.set a x).set b1 y1).set b2 y2).set b3 y3).set b4 y4).set b5 y5).set b6 y6).set b7 y7).set b8 y8).set a z = (((((((((ρ.set a z).set b1 y1).set b2 y2).set b3 y3).set b4 y4).set b5 y5).set b6 y6).set b7 y7).set b8 y8) := by
   simp only [Env.set_comm _ a _ _ _ h8, Env.set_comm _ a _ _ _ h7, Env.set_comm _ a _ _ _ h6, Env.set_comm _ a _ _ _ h5, Env.set_comm _ a _ _ _ h4, Env.set_comm _ a _ _ _ h3, Env.set_comm _ a _ _ _ h2, Env.set_comm _ a _ _ _ h1, Env.set_set]
-
-/-- A loop and a fold agree when one run of the body and one fold step agree. -/
-theorem execLoop_foldl [JSNumber N] {α σ : Type} (m : Scope) (fuel : Nat) (name : String) (body : Syntax.Stmt)
-    (encX : α → Val N) (upd : σ → Env N → Env N) (dec : Env N → σ) (step : Env N → σ → α → σ) (I : Env N → Prop)
-    (hbody : ∀ ρ s x, I ρ → execStmt m fuel ((name, encX x) :: upd s ρ) body =
-      some (.normal ((name, encX x) :: upd (step ρ s x) ρ)))
-    (hlen : ∀ s ρ, (upd s ρ).length = ρ.length)
-    (hdec : ∀ ρ, I ρ → upd (dec ρ) ρ = ρ) (xs : List α) (ρ : Env N) (hI : I ρ) :
-    execLoop m fuel ρ name body (xs.map encX) = some (.normal (upd (xs.foldl (step ρ) (dec ρ)) ρ)) := by
-  have key : ∀ (xs : List α) (s : σ), execLoop m fuel (upd s ρ) name body (xs.map encX) =
-      some (.normal (upd (xs.foldl (step ρ) s) ρ)) := by
-    intro xs
-    induction xs with
-    | nil => intro s; simp [execLoop]
-    | cons x xs ih =>
-      intro s
-      rw [List.map_cons, execLoop, hbody ρ s x hI]
-      simp only [Option.bind_eq_bind, Option.bind_some, List.length_cons, hlen]
-      rw [show ρ.length + 1 - ρ.length = 1 by omega, List.drop_one, List.tail_cons, ih, List.foldl_cons]
-  rw [← hdec ρ hI] ; exact (by simpa [hdec ρ hI] using key xs (dec ρ))
-
 
 /-! ### Encoders
 

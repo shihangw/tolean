@@ -1,6 +1,7 @@
 -- Certificate written by tolean for src/my-lib/util.ts. Do not edit.
 import tolean.TypeScript.Spec.Lemmas.Eval
 import tolean.TypeScript.Syntax.Parser
+import tolean.TypeScript.Proof.Link
 import «my-lib».Util
 
 namespace src.«my-lib».UtilCert
@@ -33,8 +34,37 @@ printer that wrote `program` need not be trusted. -/
 theorem program_parsed : tolean.TypeScript.Syntax.parseChars sourceChars .es2024 = Except.ok program :=
   tolean.TypeScript.Syntax.parseChars_eq_of_parsesTo (by decide +kernel)
 
+/-- The output tree, as the translator gives it for the program. -/
+def decls : List tolean.TypeScript.Output.Decl :=
+  [tolean.TypeScript.Output.Decl.function
+   "inc"
+   [("x", tolean.TypeScript.Output.Ty.int)]
+   (tolean.TypeScript.Output.Ty.int)
+   (tolean.TypeScript.Output.Body.value
+     (tolean.TypeScript.Output.Expr.intOp
+       (tolean.TypeScript.Output.IntOp.add)
+       (tolean.TypeScript.Output.Expr.var "x")
+       (tolean.TypeScript.Output.Expr.int 1)))]
+
+/-- The state that the translator starts from. The source text serves only in
+the message of a refusal, so the start leaves it out. -/
+def start : tolean.TypeScript.Translate.Ctx :=
+  { file := "", target := .es2024, src := #[], lineStarts := #[], fuel := 4 * sourceChars.length + 4 }
+
+/-- The translator gives `decls` for the program: the kernel runs it and
+compares the trees. With a `link` theorem for each function, the theorems
+below then trust neither the translator nor the printer. -/
+theorem program_translated : tolean.TypeScript.Proof.translatesTo program start decls = true := by
+  decide +kernel
+
+theorem inc_link {N : Type} [tolean.TypeScript.JSNumber N] (x : _) :
+    tolean.TypeScript.Output.runIn (N := N) (tolean.TypeScript.Output.functionsOf [("", decls)]) ⟨"", "inc"⟩ [(Val.int x)] =
+      some (Val.int (src.«my-lib».Util.inc x)) := by
+  link_tac [decls, Env.set_cons, Env.lookup_cons, Env.lookup_set_same, Env.lookup_set_ne, Env.set_set, Env.length_set, encList, encNull, decInt, decBool, decStr, decNum, src.«my-lib».Util.inc]
+
 theorem inc_cert {N : Type} [tolean.TypeScript.JSNumber N] (x : _) :
-    run (N := N) program "inc" [(Val.int x)] = some (Val.int (src.«my-lib».Util.inc x)) := by
-  certify_tac [program, Env.set_cons, Env.lookup_cons, Env.lookup_set_same, Env.lookup_set_ne, Env.set_set, Env.length_set, encList, encNull, decInt, decBool, decStr, decNum, src.«my-lib».Util.inc]
+    run (N := N) program "inc" [(Val.int x)] = some (Val.int (src.«my-lib».Util.inc x)) :=
+  tolean.TypeScript.Proof.decls_sound rfl rfl rfl program_translated "inc" _ 64 _
+    (inc_link x)
 
 end src.«my-lib».UtilCert

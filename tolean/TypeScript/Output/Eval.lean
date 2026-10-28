@@ -10,13 +10,14 @@ The evaluator gives it the value that the printed Lean computes, written as a
 JavaScript value: an `Int` is `Val.int`, `none` is `Val.null`, `some v` is the
 value of `v`, a list is `Val.list`, and a structure is `Val.obj` with its
 fields in the declared order. A `let` adds a binding in front, as Lean's
-shadowing does.
+shadowing does, and `let (x, y) := …` gives `x` and `y` their new values.
 
 `translate_sound` in `Proof/Module.lean` proves one direction for every
 program that the translator accepts: when this evaluator gives a value for a
 call, the interpreter gives the same value. So this file is trusted to mean
 what the printed Lean means, and to give a value where the printed Lean does.
-Step 4 of phase 6 of the certificates plan would check that for each file.
+A certificate checks that for its file (`Proof/Link.lean`), so a certified
+file does not trust this evaluator.
 -/
 namespace tolean.TypeScript.Output
 
@@ -73,10 +74,15 @@ def NumberTest.apply : NumberTest → N → Bool
   | .isNaN, a => JSNumber.isNaN a
   | .isFinite, a => JSNumber.isFinite a
 
-/-- The bindings that `let (x, y) := …` adds: each of `names`, with its value
-in `inner`. -/
+/-- The bindings that `let (x, y) := …` makes: each of `names`, with its value
+in `inner`. A name that is bound already gets the new value in its place,
+and a new name goes in front. So every lookup gives what Lean's shadowing
+gives, and a loop leaves the environment the same length, which a
+certificate's loop lemma needs. -/
 def bindState (names : List String) (inner outer : Env N) : Option (Env N) :=
-  names.foldlM (fun ρ n => do return (n, ← inner.lookup n) :: ρ) outer
+  names.foldlM (fun ρ n => do
+    let v ← inner.lookup n
+    return if (ρ.lookup n).isSome then Eval.Env.set ρ n v else (n, v) :: ρ) outer
 
 mutual
 

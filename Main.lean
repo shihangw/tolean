@@ -8,6 +8,7 @@ import tolean.Go.Translate
 import tolean.Sql.Translate
 import tolean.Chain.Check
 import tolean.TypeScript.Certify
+import tolean.TypeScript.Interpret
 import tolean.Project
 
 /-!
@@ -25,6 +26,10 @@ tolean translate-workspace
     read a workspace as JSON on stdin, {"files": [{"path", "text"}, …]} with
     tolean.json among them, and print each unit's Lean or error as JSON; it
     reads and writes no files
+tolean interpret
+    read TypeScript programs and calls as JSON on stdin, run each call in the
+    interpreter of Spec/Eval.lean on real doubles, and print the results as
+    JSON (see tolean/TypeScript/Interpret.lean); the test against Node uses it
 tolean translate [--target ES20xx] [--certify] <input> <output.lean> <Namespace>
     write <input> as Lean definitions; with --certify, also write its
     certificate next to it when some function can have one (see `certify`)
@@ -242,6 +247,10 @@ def run (target : Edition) : List String → IO UInt32
   | ["translate-workspace"] => do
     IO.println (Project.workspaceJson (← (← IO.getStdin).readToEnd))
     return 0
+  | ["interpret"] => do
+    match TypeScript.Interpret.interpret (← (← IO.getStdin).readToEnd) with
+    | .ok out => IO.println out; return 0
+    | .error e => IO.eprintln e; return 1
   | ["translate", "--config", json] => translateProject false json
   | ["translate", "--check", "--config", json] => translateProject true json
   | ["translate", "--config", json, "--check"] => translateProject true json
