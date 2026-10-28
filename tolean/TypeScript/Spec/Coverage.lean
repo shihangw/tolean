@@ -6,7 +6,7 @@ import tolean.TypeScript.Proof.Link
 import tolean.TypeScript.Syntax.Equality
 import tolean.TypeScript.Syntax.Print
 import tolean.TypeScript.Syntax.Source
-import tolean.TypeScript.Syntax.RoundTripStmt
+import tolean.TypeScript.Syntax.RoundTripDecl
 import tolean.TypeScript.Spec.Lemmas.Number
 import tolean.TypeScript.Spec.Coverage.LexicalGrammar
 import tolean.TypeScript.Spec.Coverage.Expressions
@@ -303,6 +303,11 @@ def extras : List Group := [
     ``Syntax.Parse.withLoop_ok, ``Syntax.leaves_withLoop, ``Syntax.stmt_while, ``Syntax.parseForOf_reads,
     ``Syntax.stmt_for, ``Syntax.Stmt.allWF_iff, ``Syntax.Stmt.depth_le_depthOf, ``Syntax.allStmts_succ,
     ``Syntax.stmts_read_le, ``Syntax.stmts_read]⟩,
+  ⟨"The parser's round trip: declarations and modules, as tokens",
+    [``Syntax.followsType_item, ``Syntax.parseParam_reads, ``Syntax.Stmt.wordLines_if_none,
+    ``Syntax.Stmt.wordLines_if_some, ``Syntax.Stmt.tokens_length_cons, ``Syntax.Stmt.tokensOf,
+    ``Syntax.Stmt.tokens_eq, ``Syntax.Stmt.depth_lt, ``Syntax.Stmt.depthOf_le,
+    ``Syntax.Stmt.need_le_budget, ``Syntax.parseStatement_budget, ``Syntax.parseBlock_budget]⟩,
   ⟨"The parser", [``Syntax.parseChars_eq_of_parsesTo, ``Syntax.TypeExpr.beq_iff,
     ``Syntax.TypeExpr.beqList_iff, ``Syntax.TypeExpr.beqOpt_iff, ``Syntax.Expr.beq_iff,
     ``Syntax.Expr.beqList_iff, ``Syntax.Property.beq_iff, ``Syntax.Property.beqList_iff,
