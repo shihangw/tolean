@@ -16,8 +16,9 @@ The `tolean` command.
 
 ```
 tolean parse [--target ES20xx] [--round-trip] <file>
-    print the syntax tree of <file>; with --round-trip, also print the tree
-    as source, parse that, and exit with 3 unless it gives the same tree
+    print the syntax tree of <file>; with --round-trip (TypeScript only),
+    also print the tree as source, parse that, and exit with 3 unless it
+    gives the same tree
 tolean translate [--check] [--config <json>]
     build every unit that tolean.json lists, or that the inline JSON <json>
     lists; with --check, write nothing and fail when a generated file is not
@@ -62,7 +63,7 @@ file extension selects the language: `.ts`, or `.go` for `parse` only.
 open tolean tolean.TypeScript
 
 def usage : String :=
-  "usage: tolean parse [--target ES20xx] <file.ts>\n" ++
+  "usage: tolean parse [--target ES20xx] [--round-trip] <file.ts>\n" ++
   "       tolean translate [--check] [--config <json>]\n" ++
   "       tolean translate-workspace < workspace.json\n" ++
   "       tolean translate [--target ES20xx] [--certify] <input.ts> <output.lean> <Lean.Namespace>\n" ++
@@ -91,7 +92,11 @@ def parseGoFile (path : String) : IO UInt32 := do
     return 1
 
 def parseFile (target : Edition) (path : String) (roundTrip : Bool := false) : IO UInt32 := do
-  if path.endsWith ".go" then return ← parseGoFile path
+  if path.endsWith ".go" then
+    if roundTrip then
+      IO.eprintln s!"{path}: --round-trip reads only TypeScript (.ts) files"
+      return 2
+    return ← parseGoFile path
   unless ← checkLanguage path do return 2
   let source ← IO.FS.readFile path
   match Syntax.parse source target with

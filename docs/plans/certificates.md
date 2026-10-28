@@ -66,16 +66,19 @@ printer gives a certificate that Lean refuses.
       --round-trip` prints the tree as source, parses that, and requires the
       same tree apart from spans. `tests/typescript/check.ts` runs it on
       every tree that the parser gives, on the corpus and on random
-      programs. The proof for types is built: `types_reads` in
+      programs. The proof for types is built. `types_reads` in
       `Syntax/RoundTrip.lean` states that the parser reads the tokens of
-      every type it can read as that type, apart from spans, given fuel for
-      how deep the type nests. The proof for expressions is built too:
-      `exprs_read` in `Syntax/RoundTripExpr.lean` states the same for each
-      level of the expression parser, from assignments down to primary
-      expressions. It covers every expression that the function for a level
-      can read, when the target edition has the operators that the
-      expression uses. The proofs for statements and declarations, and the
-      proof that the lexer gives the printed tokens, are not built yet.
+      every well-formed type as that type, apart from spans, given fuel for
+      how deep the type nests. `TypeExpr.wf` defines a well-formed type, and
+      it is written to match the types that `parseType` can read. The proof
+      for expressions is built too. `exprs_read` in
+      `Syntax/RoundTripExpr.lean` states the same for each level of the
+      expression parser, from assignments down to primary expressions. It
+      covers every expression that `Expr.wfAt` accepts at that level, when
+      the target edition has the operators that the expression uses. Three
+      proofs are not built yet: that every tree the parser gives is well
+      formed, the proofs for statements and declarations, and the proof that
+      the lexer gives the printed tokens.
 5. **The interpreter against Node (built).** `tests/typescript/interpreter.test.ts`
    runs random programs of the subset with random arguments in the interpreter
    and in Node, and requires the same results. This is evidence that the

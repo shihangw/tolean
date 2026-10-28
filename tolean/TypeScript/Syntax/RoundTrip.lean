@@ -7,9 +7,11 @@ The parser's round trip, on tokens: the parser reads the tokens that
 The theorems here are about the tokens that the lexer gives for the printed
 source. A separate step will relate the printed characters to these tokens.
 
-`types_reads` covers types. A type is well formed when `parseType` can read
-it: a union has two members or more, or one after a `|`, and each member is
-a primary type with `[]` after it any number of times. `Reads p t follows`
+`types_reads` covers well-formed types. A type is well formed when it has
+the shape that `parseType` reads: a union has two members or more, or one
+after a `|`, and each member is a primary type with `[]` after it any number
+of times. That every type the parser gives is well formed is not proved yet.
+`Reads p t follows`
 states that `p` reads the tokens of `t`, followed by any tokens that
 `follows` allows, as `t` apart from spans, and leaves those tokens. Each
 loop of the parser is a named step, such as `Parse.unionStep`, so that a
@@ -1004,8 +1006,9 @@ theorem allWF_iff (ms : List TypeExpr) : TypeExpr.allWF ms = true ↔ ∀ m ∈ 
   | nil => simp [TypeExpr.allWF]
   | cons m ms ih => simp [TypeExpr.allWF, ih]
 
-/-- The parser reads the tokens of every type that it can read, as that type,
-given fuel for how deep the type nests. -/
+/-- The parser reads the tokens of every well-formed type as that type, given
+fuel for how deep the type nests. That every type the parser gives is well
+formed is a separate step, and it is not proved yet. -/
 theorem types_reads : ∀ f : Nat,
     (∀ t : TypeExpr, t.wf = true → 3 * t.height + 3 ≤ f → Reads (Parse.parseType f) t FollowsType) ∧
     (∀ t : TypeExpr, t.arrayWF = true → 3 * t.height + 2 ≤ f →
