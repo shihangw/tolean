@@ -589,6 +589,15 @@ def parseVarDecl : ParseM VarDecl := do
   endStatement
   return { kind, name, type, init }
 
+/-- One step of a loop over the items of a block in `{ … }`: an item that
+`parseItem` reads, unless the `}` comes. The statements of a block and the
+fields of an interface are such items. -/
+def blockStep {α : Type} (parseItem : ParseM α) (items : Array α) : ParseM (Array α × Bool) := do
+  let t ← peek
+  if t.isPunct "}" then return (items, false)
+  if t.isEof then unexpected t "'}'"
+  return (items.push (← parseItem), true)
+
 /-- Statements that JavaScript does not allow without a block around them, in
 the body of `if`, `for` and `while`. -/
 def refuseDeclaration (t : Token) : ParseM Unit := do
@@ -688,11 +697,7 @@ def parseForOf (fuel : Nat) : ParseM Stmt := do
 def parseBlock (fuel : Nat) : ParseM Stmt := do
   let fuel + 1 := fuel | outOfFuel
   let start := (← expectPunct "{").span.start
-  let body ← iterate (← budget) #[] fun body => do
-    let t ← peek
-    if t.isPunct "}" then return (body, false)
-    if t.isEof then unexpected t "'}'"
-    return (body.push (← parseStatement fuel), true)
+  let body ← iterate (← budget) #[] (blockStep (parseStatement fuel))
   let _ ← expectPunct "}"
   return .block (← spanFrom start) body.toList
 
@@ -724,14 +729,7 @@ def parseFunction (start : Pos) (exported : Bool) : ParseM Decl := do
   let t ← peek
   if t.isPunct "<" then failAt t "generic functions are not supported"
   let _ ← expectPunct "("
-  let params ← iterate (← budget) #[] fun params => do
-    let t ← peek
-    if t.isPunct ")" then return (params, false)
-    let params := params.push (← parseParam)
-    let t ← peek
-    if t.isPunct "," then discard advance
-    else if !t.isPunct ")" then unexpected t "',' or ')'"
-    return (params, true)
+  let params ← iterate (← budget) #[] (listStep ")" (fun _ => pure ()) parseParam)
   let _ ← expectPunct ")"
   let mut returnType := none
   if (← peek).isPunct ":" then
@@ -771,11 +769,7 @@ def parseInterface (start : Pos) (exported : Bool) : ParseM Decl := do
   if t.isPunct "<" then failAt t "generic interfaces are not supported"
   if t.isKeyword "extends" then failAt t "'extends' is not supported"
   let _ ← expectPunct "{"
-  let fields ← iterate (← budget) #[] fun fields => do
-    let t ← peek
-    if t.isPunct "}" then return (fields, false)
-    if t.isEof then unexpected t "'}'"
-    return (fields.push (← parseField), true)
+  let fields ← iterate (← budget) #[] (blockStep parseField)
   let _ ← expectPunct "}"
   return .interface (← spanFrom start) exported name fields.toList
 
@@ -789,35 +783,42 @@ def parseTypeAlias (start : Pos) (exported : Bool) : ParseM Decl := do
   endStatement
   return .typeAlias (← spanFrom start) exported name type
 
+/-- What `parseImport` refuses: every form of `import` outside the subset. -/
+def refuseImport {A : Type} (t : Token) : ParseM A :=
+  failAt t "tolean supports only 'import { a, b } from \"./file.ts\"', with no default or namespace import and no 'as'"
+
+/-- One step of the loop over the names of an import: a name, with `type`
+before it if it is a type, and the `,` after it, unless the `}` comes.
+`clauseType` is `import type`, which marks every name. -/
+def importStep (clauseType : Bool) (names : Array ImportName) : ParseM (Array ImportName × Bool) := do
+  let t ← peek
+  if t.isPunct "}" then return (names, false)
+  let next ← peekAt 1
+  -- `type` marks the name after it, unless it is the name itself.
+  let typeOnly := t.isIdent "type" && next.isAnyIdent
+  if typeOnly && clauseType then failAt t "'type' cannot mark a name of 'import type', which marks them all"
+  if typeOnly then discard advance
+  let nameToken ← peek
+  let name ← readName
+  if (← peek).isIdent "as" then refuseImport (← peek)
+  let names := names.push { span := nameToken.span, typeOnly := clauseType || typeOnly, name }
+  let t ← peek
+  if t.isPunct "," then discard advance
+  else if !t.isPunct "}" then unexpected t "',' or '}'"
+  return (names, true)
+
 /-- `import { a, type B } from "./x.ts";` and `import type { B } from "./x.ts";`.
 Other forms of `import` leave the subset. -/
 def parseImport (start : Pos) : ParseM Decl := do
-  let refuse {A : Type} (t : Token) : ParseM A :=
-    failAt t "tolean supports only 'import { a, b } from \"./file.ts\"', with no default or namespace import and no 'as'"
   discard advance
   let mut clauseType := false
   if (← peek).isIdent "type" && (← peekAt 1).isPunct "{" then
     discard advance
     clauseType := true
   let t ← peek
-  unless t.isPunct "{" do refuse t
+  unless t.isPunct "{" do refuseImport t
   discard advance
-  let names ← iterate (← budget) #[] fun names => do
-    let t ← peek
-    if t.isPunct "}" then return (names, false)
-    let next ← peekAt 1
-    -- `type` marks the name after it, unless it is the name itself.
-    let typeOnly := t.isIdent "type" && next.isAnyIdent
-    if typeOnly && clauseType then failAt t "'type' cannot mark a name of 'import type', which marks them all"
-    if typeOnly then discard advance
-    let nameToken ← peek
-    let name ← readName
-    if (← peek).isIdent "as" then refuse (← peek)
-    let names := names.push { span := nameToken.span, typeOnly := clauseType || typeOnly, name }
-    let t ← peek
-    if t.isPunct "," then discard advance
-    else if !t.isPunct "}" then unexpected t "',' or '}'"
-    return (names, true)
+  let names ← iterate (← budget) #[] (importStep clauseType)
   let close ← expectPunct "}"
   if names.isEmpty then failAt close "an import must name a function or an interface"
   let t ← peek
@@ -849,10 +850,14 @@ def parseDecl : ParseM Decl := do
     return .exportedVar (← spanFrom start) decl
   else return .stmt (← parseStatement (← budget))
 
+/-- One step of the loop over the declarations of a module, unless the end of
+the file comes. -/
+def declStep (decls : Array Decl) : ParseM (Array Decl × Bool) := do
+  if (← peek).isEof then return (decls, false)
+  return (decls.push (← parseDecl), true)
+
 def parseModule : ParseM Module := do
-  let decls ← iterate (← budget) #[] fun decls => do
-    if (← peek).isEof then return (decls, false)
-    return (decls.push (← parseDecl), true)
+  let decls ← iterate (← budget) #[] declStep
   return { decls := decls.toList }
 
 end Parse
