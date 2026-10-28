@@ -2,7 +2,7 @@ import Lean
 import tolean.TypeScript.Proof.Module
 import tolean.TypeScript.Syntax.Equality
 import tolean.TypeScript.Syntax.Source
-import tolean.TypeScript.Syntax.RoundTripExpr
+import tolean.TypeScript.Syntax.RoundTripStmt
 import tolean.TypeScript.Spec.Lemmas.Number
 import tolean.TypeScript.Spec.Coverage.LexicalGrammar
 import tolean.TypeScript.Spec.Coverage.Expressions
@@ -282,6 +282,13 @@ def extras : List Group := [
     ``Syntax.Expr.height_le, ``Syntax.Expr.heightOf_le, ``Syntax.Property.height_le,
     ``Syntax.Property.heightOf_le, ``Syntax.need_le_budget, ``Syntax.parseAssign_budget,
     ``Syntax.parseExpression_budget]⟩,
+  ⟨"The parser's round trip: statements, as tokens",
+    [``Syntax.Stmt.lines_words, ``Syntax.Stmt.linesOf_words, ``Syntax.Laid.append, ``Syntax.Laid.one,
+    ``Syntax.Laid.cons, ``Syntax.TypeExpr.tokens_paren, ``Syntax.TypeExpr.tokens_array,
+    ``Syntax.TypeExpr.height_le, ``Syntax.TypeExpr.heightOf_le, ``Syntax.TypeExpr.heightOf_le_bars,
+    ``Syntax.parseType_budget, ``Syntax.readName_ok, ``Syntax.endStatement_semi, ``Syntax.VarKind.word_eq,
+    ``Syntax.followsType_eq_semi, ``Syntax.varDecl_ss, ``Syntax.varDecl_ns, ``Syntax.varDecl_sn,
+    ``Syntax.varDecl_nn, ``Syntax.parseVarDecl_reads]⟩,
   ⟨"The parser", [``Syntax.parseChars_eq_of_parsesTo, ``Syntax.TypeExpr.beq_iff,
     ``Syntax.TypeExpr.beqList_iff, ``Syntax.TypeExpr.beqOpt_iff, ``Syntax.Expr.beq_iff,
     ``Syntax.Expr.beqList_iff, ``Syntax.Property.beq_iff, ``Syntax.Property.beqList_iff,
