@@ -8,6 +8,14 @@ same declaration, apart from spans.
 A declaration parses its parts with the fuel that `budget` gives. A statement
 nests no deeper than it has tokens (`Stmt.depth_lt`), so that fuel is enough
 for a statement or a block (`parseStatement_budget`, `parseBlock_budget`).
+
+`parseDecl_reads` covers each kind of declaration that `Decl.wf` accepts. A
+statement at the top of a module starts with no `import`, `export` or
+`function`, and no name follows `interface` or `type` at its start on the same
+line (`Stmt.declStart`), so `parseDecl` hands it to `parseStatement`.
+`module_reads` proves the round trip for a module: `parseModule` reads the
+tokens of the printed lines of every well-formed module, which the end of the
+file follows, as that module apart from spans.
 -/
 namespace tolean.TypeScript.Syntax
 
@@ -1032,5 +1040,468 @@ theorem parseImport_reads (start : Pos) (sp : Span) (names : List ImportName) (s
         (leaves_trans (leaves_advanced (s := s₄) rfl (by simp [s₄, hL₃.left_eq, hs₃]))
           (leaves_trans (leaves_advanced (s := s₅) rfl (by simp [s₅, s₄, hL₃.left_eq, hs₃]))
             (leaves_advance (s := s₆) rfl (by simp [s₆, s₅, s₄, hL₃.left_eq, hs₃])))))))
+
+/-! ### Declarations -/
+
+/-- A statement at the top of a module starts with no `import`, `export` or
+`function`, and a name after `interface` or `type` at its start is not on the
+same line, so `parseDecl` hands it to `parseStatement`. -/
+theorem Stmt.declStart {T : Edition} (st : Stmt) (hw : st.wf T false false = true) {ts : List Token}
+    (ht : Laid ts st.wordLines) :
+    ∃ x ts', ts = x :: ts' ∧ x.kind ≠ .keyword "import" ∧ x.kind ≠ .keyword "export" ∧
+      x.kind ≠ .keyword "function" ∧
+      ((x.kind = .ident "interface" ∨ x.kind = .ident "type") → ∃ y ts'', ts' = y :: ts'' ∧ y.isAnyIdent = false) := by
+  cases st with
+  | exprStmt sp e =>
+    simp only [Stmt.wf, Bool.and_eq_true] at hw
+    obtain ⟨⟨_, _⟩, hk⟩ := hw
+    simp only [Stmt.wordLines, Stmt.lines, List.map_cons, List.map_nil] at ht
+    obtain ⟨h1, _⟩ := Laid.one ht
+    obtain ⟨ets, ts₁, rfl, het, h'⟩ := Touching.append_split h1
+    obtain ⟨semi, ts₂, rfl, hsemi, h''⟩ := Touching.cons_one (by simpa [punctWord] using h')
+    simp [Touching] at h''; subst h''
+    obtain ⟨x, ets', rfl, hx⟩ := Touching.head het
+    have hke := het.kinds
+    have hxk : startsExprStmt (some x.kind) = true := by
+      have : e.tokens.head? = some x.kind := by simp only [Expr.tokens, ← hke]; simp
+      rw [← this]; exact hk
+    refine ⟨x, ets' ++ [semi], by simp, ?_, ?_, ?_, fun h => ?_⟩
+    · intro h; rw [h] at hxk; simp [startsExprStmt] at hxk
+    · intro h; rw [h] at hxk; simp [startsExprStmt] at hxk
+    · intro h; rw [h] at hxk; simp [startsExprStmt] at hxk
+    · cases ets' with
+      | nil => exact ⟨semi, [], by simp, by simp [Token.isAnyIdent, hsemi]⟩
+      | cons y ets'' =>
+        refine ⟨y, ets'' ++ [semi], by simp, ?_⟩
+        have hn : NotIdent y.kind := by
+          rcases h with h | h
+          · exact Expr.second e (n := "interface") (k := y.kind) (r := ets''.map (·.kind))
+              (by simp only [Expr.tokens, ← hke, List.map_cons, h])
+          · exact Expr.second e (n := "type") (k := y.kind) (r := ets''.map (·.kind))
+              (by simp only [Expr.tokens, ← hke, List.map_cons, h])
+        cases hy : y.kind <;> simp [Token.isAnyIdent, hy, NotIdent] at hn ⊢
+  | varDecl sp d =>
+    simp only [Stmt.wordLines, Stmt.lines, List.map_cons, List.map_nil] at ht
+    obtain ⟨h1, _⟩ := Laid.one ht
+    simp only [VarDecl.words, VarKind.word_eq] at h1
+    obtain ⟨x, ts', rfl, hx, _⟩ := Touching.cons_one (by simpa using h1)
+    refine ⟨x, ts', rfl, ?_, ?_, ?_, fun h => ?_⟩
+    · rw [hx]; cases d.kind <;> simp [VarKind.token]
+    · rw [hx]; cases d.kind <;> simp [VarKind.token]
+    · rw [hx]; cases d.kind <;> simp [VarKind.token]
+    · exfalso; rw [hx] at h; revert h; cases d.kind <;> simp [VarKind.token]
+  | _ =>
+    obtain ⟨x, ts', rfl, hfirst⟩ := Laid.first hw ht
+    have hk := ht.kinds
+    refine ⟨x, ts', rfl, ?_⟩
+    first
+    | (simp [Stmt.wordLines, Stmt.lines, keywordWord, punctWord] at hk; rw [hk.1]; simp)
+    | (rename_i e; cases e <;> simp [Stmt.wordLines, Stmt.lines, keywordWord, punctWord] at hk <;> rw [hk.1] <;> simp)
+
+
+def Stmt.isBlock : Stmt → Bool
+  | .block .. => true
+  | _ => false
+
+/-- `d` is a declaration that `parseDecl` reads when the target edition is `T`. -/
+def Decl.wf (T : Edition) : Decl → Bool
+  | .«import» _ names _ => !names.isEmpty && names.all (fun n => exprName n.name)
+  | .function _ _ name params rt body => exprName name && params.all Param.wf &&
+      (match rt with | some t => t.wf | none => true) && body.isBlock && body.wf T true false
+  | .interface _ _ name fields => exprName name && fields.all (fun f => f.type.wf)
+  | .typeAlias _ _ name ty => exprName name && ty.wf
+  | .exportedVar _ d => d.wf T
+  | .stmt s => s.wf T false false
+
+/-- A declaration that ends with an `if` without `else`. -/
+def Decl.openIf : Decl → Bool
+  | .stmt s => s.openIf
+  | _ => false
+
+def Decl.wordLines (d : Decl) : List (List Word) := d.lines.map Prod.snd
+
+/-- `p` reads the tokens of the lines of `d` at the top of a module, followed by
+any rest, as `d` apart from spans, and leaves the rest. -/
+def ReadsD (T : Edition) (p : ParseM Decl) (d : Decl) : Prop :=
+  ∀ (s : ParseState) (ts rest : List Token), s.target = T → s.inFunction = false →
+    s.rest = ts ++ rest → s.left = s.rest.length → Laid ts d.wordLines → rest ≠ [] →
+    (d.openIf = true → ∀ u ∈ rest.head?, u.kind ≠ .keyword "else") →
+    ∃ d' s', p s = .ok d' s' ∧ d'.erase = d.erase ∧ Leaves s s' rest
+
+/-- A statement at the top of a module. -/
+theorem parseDecl_stmt {T : Edition} (st : Stmt) (hw : st.wf T false false = true) :
+    ReadsD T Parse.parseDecl (.stmt st) := by
+  intro s ts rest hT hF hs hl ht hr hopen
+  have ht' : Laid ts st.wordLines := by simpa [Decl.wordLines, Decl.lines, Stmt.wordLines] using ht
+  obtain ⟨x, ts', rfl, h1, h2, h3, h4⟩ := Stmt.declStart st hw ht'
+  obtain ⟨st', s', hp, he, hL⟩ := parseStatement_budget (loop := false) st hw s _ rest hT hF (fun h => by cases h)
+    hs hl ht' hr hopen
+  refine ⟨.stmt st', s', ?_, by simp [Decl.erase, he], hL⟩
+  have hs' : s.rest = x :: (ts' ++ rest) := by simpa using hs
+  have hc : ∀ n, (n = "interface" ∨ n = "type") →
+      (x.isIdent n && ((s.rest[1]?.getD s.eof).isAnyIdent && !(s.rest[1]?.getD s.eof).newlineBefore)) = false := by
+    intro n hn
+    rcases Classical.em (x.kind = .ident n) with hx | hx
+    · obtain ⟨y, ts'', rfl, hy⟩ := h4 (by rcases hn with rfl | rfl <;> simp [hx])
+      simp [hs', hy]
+    · simp [Token.isIdent, hx]
+  simp only [Parse.parseDecl]
+  rw [Parse.bind_eq (Parse.peek_eq hs')]
+  rw [if_neg (show ¬ (x.isKeyword "import" = true) by simp [Token.isKeyword, h1]), Parse.pure_bind]
+  rw [if_neg (show ¬ (x.isKeyword "export" = true) by simp [Token.isKeyword, h2]), Parse.pure_bind]
+  rw [Parse.bind_eq (Parse.peek_eq hs'), Parse.bind_eq (Parse.peekAt_rest _ _)]
+  rw [if_neg (show ¬ (x.isKeyword "function" = true) by simp [Token.isKeyword, h3])]
+  rw [if_neg (show ¬ ((x.isIdent "interface" && ((s.rest[1]?.getD s.eof).isAnyIdent &&
+      !(s.rest[1]?.getD s.eof).newlineBefore)) = true) by simp [hc "interface" (.inl rfl)])]
+  rw [if_neg (show ¬ ((x.isIdent "type" && ((s.rest[1]?.getD s.eof).isAnyIdent &&
+      !(s.rest[1]?.getD s.eof).newlineBefore)) = true) by simp [hc "type" (.inr rfl)])]
+  rw [if_neg (show ¬ (x.isKeyword "export" = true) by simp [Token.isKeyword, h2])]
+  rw [Parse.bind_eq (Parse.budget_eq _), Parse.bind_eq hp]
+  rfl
+
+
+theorem parseDecl_import {T : Edition} (sp : Span) (names : List ImportName) (source : String)
+    (hw : (Decl.«import» sp names source).wf T = true) :
+    ReadsD T Parse.parseDecl (.«import» sp names source) := by
+  intro s ts rest _ _ hs hl ht hr _
+  simp only [Decl.wf, Bool.and_eq_true, Bool.not_eq_true', List.all_eq_true] at hw
+  obtain ⟨hne, hn⟩ := hw
+  simp only [Decl.wordLines, Decl.lines, List.map_cons, List.map_nil] at ht
+  obtain ⟨h1, hnl⟩ := Laid.one ht
+  obtain ⟨ik, ts', rfl, hik, _⟩ := Touching.cons_one (by simpa [keywordWord] using h1)
+  obtain ⟨d', s', hp, he, hL⟩ := parseImport_reads ik.span.start sp names source
+    (by simpa using hne) (fun n hn' => by simpa [exprName] using hn n hn') s _ rest hs hl h1 hnl hr
+  refine ⟨d', s', ?_, he, hL⟩
+  simp only [Parse.parseDecl]
+  rw [Parse.bind_eq (Parse.peek_eq (by simpa using hs))]
+  rw [if_pos (show ik.isKeyword "import" = true by simp [Token.isKeyword, hik])]
+  rw [Parse.bind_eq hp]
+  rfl
+
+
+theorem parseDecl_typeAlias {T : Edition} (sp : Span) (exported : Bool) (name : String) (ty : TypeExpr)
+    (hw : (Decl.typeAlias sp exported name ty).wf T = true) :
+    ReadsD T Parse.parseDecl (.typeAlias sp exported name ty) := by
+  intro s ts rest _ _ hs hl ht hr _
+  simp only [Decl.wf, Bool.and_eq_true] at hw
+  obtain ⟨hname, hty⟩ := hw
+  simp only [Decl.wordLines, Decl.lines, List.map_cons, List.map_nil] at ht
+  obtain ⟨h1, hnl⟩ := Laid.one ht
+  cases exported with
+  | false =>
+    simp only [exportWords, Bool.false_eq_true, ↓reduceIte, List.nil_append] at h1
+    obtain ⟨tk, ts₁, rfl, htk, h₁⟩ := Touching.cons_one (by simpa [identWord] using h1)
+    obtain ⟨nm, ts₂, rfl, hnm, _⟩ := Touching.cons_one (by simpa [identWord] using h₁)
+    have hs' : s.rest = tk :: nm :: (ts₂ ++ rest) := by simpa using hs
+    obtain ⟨d', s', hp, he, hL⟩ := parseTypeAlias_reads tk.span.start (tk.isKeyword "export") sp name ty hname hty
+      s _ rest hs hl (by simpa using h1) hnl hr
+    have hnmn : nm.newlineBefore = false := hnl nm (by simp)
+    refine ⟨d', s', ?_, by rw [he]; simp [Decl.erase, Token.isKeyword, htk], hL⟩
+    simp only [Parse.parseDecl]
+    rw [Parse.bind_eq (Parse.peek_eq hs')]
+    rw [if_neg (show ¬ (tk.isKeyword "import" = true) by simp [Token.isKeyword, htk]), Parse.pure_bind]
+    rw [if_neg (show ¬ (tk.isKeyword "export" = true) by simp [Token.isKeyword, htk]), Parse.pure_bind]
+    rw [Parse.bind_eq (Parse.peek_eq hs'), Parse.bind_eq (Parse.peekAt_rest _ _)]
+    simp only [hs', List.getElem?_cons_succ, List.getElem?_cons_zero, Option.getD_some]
+    rw [if_neg (show ¬ (tk.isKeyword "function" = true) by simp [Token.isKeyword, htk])]
+    rw [if_neg (show ¬ ((tk.isIdent "interface" && (nm.isAnyIdent && !nm.newlineBefore)) = true) by
+      simp [Token.isIdent, htk])]
+    rw [if_pos (show (tk.isIdent "type" && (nm.isAnyIdent && !nm.newlineBefore)) = true by
+      simp [Token.isIdent, Token.isAnyIdent, htk, hnm, hnmn])]
+    exact hp
+  | true =>
+    simp only [exportWords, ↓reduceIte, List.singleton_append] at h1
+    obtain ⟨ex, ts₀, rfl, hex, h₀⟩ := Touching.cons_one (by simpa [keywordWord] using h1)
+    obtain ⟨tk, ts₁, rfl, htk, h₁⟩ := Touching.cons_one (by simpa [identWord] using h₀)
+    obtain ⟨nm, ts₂, rfl, hnm, _⟩ := Touching.cons_one (by simpa [identWord] using h₁)
+    have hs' : s.rest = ex :: tk :: nm :: (ts₂ ++ rest) := by simpa using hs
+    let s₁ := advanced s ex tk (nm :: (ts₂ ++ rest))
+    obtain ⟨d', s', hp, he, hL⟩ := parseTypeAlias_reads ex.span.start (ex.isKeyword "export") sp name ty hname hty
+      s₁ (tk :: nm :: ts₂) rest rfl (by simp [s₁, hl, hs']) h₀ (fun y hy => hnl y (by simp at hy ⊢; simp [hy])) hr
+    have hnmn : nm.newlineBefore = false := hnl nm (by simp)
+    refine ⟨d', s', ?_, by rw [he]; simp [Decl.erase, Token.isKeyword, hex], leaves_trans (leaves_advanced hs' hl) hL⟩
+    simp only [Parse.parseDecl]
+    rw [Parse.bind_eq (Parse.peek_eq hs')]
+    rw [if_neg (show ¬ (ex.isKeyword "import" = true) by simp [Token.isKeyword, hex]), Parse.pure_bind]
+    rw [if_pos (show ex.isKeyword "export" = true by simp [Token.isKeyword, hex])]
+    rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_eq hs')), Parse.bind_eq (Parse.peek_eq (s := s₁) rfl),
+      Parse.bind_eq (Parse.peekAt_rest _ _)]
+    simp only [s₁, List.getElem?_cons_succ, List.getElem?_cons_zero, Option.getD_some]
+    rw [if_neg (show ¬ (tk.isKeyword "function" = true) by simp [Token.isKeyword, htk])]
+    rw [if_neg (show ¬ ((tk.isIdent "interface" && (nm.isAnyIdent && !nm.newlineBefore)) = true) by
+      simp [Token.isIdent, htk])]
+    rw [if_pos (show (tk.isIdent "type" && (nm.isAnyIdent && !nm.newlineBefore)) = true by
+      simp [Token.isIdent, Token.isAnyIdent, htk, hnm, hnmn])]
+    exact hp
+
+
+theorem parseDecl_interface {T : Edition} (sp : Span) (exported : Bool) (name : String) (fields : List Field)
+    (hw : (Decl.interface sp exported name fields).wf T = true) :
+    ReadsD T Parse.parseDecl (.interface sp exported name fields) := by
+  intro s ts rest _ _ hs hl ht hr _
+  simp only [Decl.wf, Bool.and_eq_true, List.all_eq_true] at hw
+  obtain ⟨hname, hfs⟩ := hw
+  simp only [Decl.wordLines, Decl.lines, List.map_cons, List.map_append, List.map_map, List.map_nil] at ht
+  obtain ⟨a, b, rfl, ha, hna, _, hb⟩ := Laid.cons ht
+  obtain ⟨fts, b₂, rfl, hfts, hb₂, _⟩ := Laid.append (l₁ := fields.map Field.words) (by simpa [Function.comp_def] using hb)
+  obtain ⟨hrb, _⟩ := Laid.one hb₂
+  obtain ⟨rb, b₂', rfl, hrbk, h'⟩ := Touching.cons_one (by simpa [punctWord] using hrb)
+  simp [Touching] at h'; subst h'
+  cases exported with
+  | false =>
+    simp only [exportWords, Bool.false_eq_true, ↓reduceIte, List.nil_append] at ha
+    obtain ⟨it, a₁, rfl, hit, h₁⟩ := Touching.cons_one (by simpa [identWord] using ha)
+    obtain ⟨nm, a₂, rfl, hnm, _⟩ := Touching.cons_one (by simpa [identWord] using h₁)
+    have hs' : s.rest = it :: nm :: (a₂ ++ (fts ++ rb :: rest)) := by simpa using hs
+    obtain ⟨d', s', hp, he, hL⟩ := parseInterface_reads it.span.start (it.isKeyword "export") sp name fields hname
+      hfs s (it :: nm :: a₂) fts rest rb (by simpa using hs) hl ha hfts hrbk hr
+    have hnmn : nm.newlineBefore = false := hna nm (by simp)
+    refine ⟨d', s', ?_, by rw [he]; simp [Decl.erase, Token.isKeyword, hit], hL⟩
+    simp only [Parse.parseDecl]
+    rw [Parse.bind_eq (Parse.peek_eq hs')]
+    rw [if_neg (show ¬ (it.isKeyword "import" = true) by simp [Token.isKeyword, hit]), Parse.pure_bind]
+    rw [if_neg (show ¬ (it.isKeyword "export" = true) by simp [Token.isKeyword, hit]), Parse.pure_bind]
+    rw [Parse.bind_eq (Parse.peek_eq hs'), Parse.bind_eq (Parse.peekAt_rest _ _)]
+    simp only [hs', List.getElem?_cons_succ, List.getElem?_cons_zero, Option.getD_some]
+    rw [if_neg (show ¬ (it.isKeyword "function" = true) by simp [Token.isKeyword, hit])]
+    rw [if_pos (show (it.isIdent "interface" && (nm.isAnyIdent && !nm.newlineBefore)) = true by
+      simp [Token.isIdent, Token.isAnyIdent, hit, hnm, hnmn])]
+    exact hp
+  | true =>
+    simp only [exportWords, ↓reduceIte, List.singleton_append] at ha
+    obtain ⟨ex, a₀, rfl, hex, h₀⟩ := Touching.cons_one (by simpa [keywordWord] using ha)
+    obtain ⟨it, a₁, rfl, hit, h₁⟩ := Touching.cons_one (by simpa [identWord] using h₀)
+    obtain ⟨nm, a₂, rfl, hnm, _⟩ := Touching.cons_one (by simpa [identWord] using h₁)
+    have hs' : s.rest = ex :: it :: nm :: (a₂ ++ (fts ++ rb :: rest)) := by simpa using hs
+    let s₁ := advanced s ex it (nm :: (a₂ ++ (fts ++ rb :: rest)))
+    obtain ⟨d', s', hp, he, hL⟩ := parseInterface_reads ex.span.start (ex.isKeyword "export") sp name fields hname
+      hfs s₁ (it :: nm :: a₂) fts rest rb (by simp [s₁]) (by simp [s₁, hl, hs']) h₀ hfts hrbk hr
+    have hnmn : nm.newlineBefore = false := hna nm (by simp)
+    refine ⟨d', s', ?_, by rw [he]; simp [Decl.erase, Token.isKeyword, hex], leaves_trans (leaves_advanced hs' hl) hL⟩
+    simp only [Parse.parseDecl]
+    rw [Parse.bind_eq (Parse.peek_eq hs')]
+    rw [if_neg (show ¬ (ex.isKeyword "import" = true) by simp [Token.isKeyword, hex]), Parse.pure_bind]
+    rw [if_pos (show ex.isKeyword "export" = true by simp [Token.isKeyword, hex])]
+    rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_eq hs')), Parse.bind_eq (Parse.peek_eq (s := s₁) rfl),
+      Parse.bind_eq (Parse.peekAt_rest _ _)]
+    simp only [s₁, List.getElem?_cons_succ, List.getElem?_cons_zero, Option.getD_some]
+    rw [if_neg (show ¬ (it.isKeyword "function" = true) by simp [Token.isKeyword, hit])]
+    rw [if_pos (show (it.isIdent "interface" && (nm.isAnyIdent && !nm.newlineBefore)) = true by
+      simp [Token.isIdent, Token.isAnyIdent, hit, hnm, hnmn])]
+    exact hp
+
+
+theorem parseDecl_function {T : Edition} (sp : Span) (exported : Bool) (name : String) (params : List Param)
+    (rt : Option TypeExpr) (body : Stmt) (hw : (Decl.function sp exported name params rt body).wf T = true) :
+    ReadsD T Parse.parseDecl (.function sp exported name params rt body) := by
+  intro s ts rest hT hF hs hl ht hr _
+  simp only [Decl.wf, Bool.and_eq_true, List.all_eq_true] at hw
+  obtain ⟨⟨⟨⟨hname, hps⟩, hrt⟩, hblk⟩, hbw⟩ := hw
+  obtain ⟨bsp, bs, rfl⟩ : ∃ bsp bs, body = .block bsp bs := by
+    cases body <;> simp [Stmt.isBlock] at hblk; exact ⟨_, _, rfl⟩
+  have hrt' : ∀ t ∈ rt, t.wf = true := by
+    intro t ht; cases rt with
+    | none => cases ht
+    | some t' => simp at ht; subst ht; simpa using hrt
+  simp only [Decl.wordLines, Decl.lines, List.map_cons, rtWords_eq] at ht
+  obtain ⟨a, b, rfl, ha, hna, _, hb⟩ := Laid.cons ht
+  cases exported with
+  | false =>
+    simp only [exportWords, Bool.false_eq_true, ↓reduceIte, List.nil_append] at ha
+    obtain ⟨fk, a₁, rfl, hfk, _⟩ := Touching.cons_one (by simpa [keywordWord] using ha)
+    have hs' : s.rest = fk :: (a₁ ++ (b ++ rest)) := by simpa using hs
+    obtain ⟨d', s', hp, he, hL⟩ := parseFunction_reads fk.span.start (fk.isKeyword "export") sp name params rt bsp bs
+      hname hps hrt' hbw s (fk :: a₁) b rest hT hF (by simpa using hs) hl ha hna hb hr
+    refine ⟨d', s', ?_, by rw [he]; simp [Decl.erase, Token.isKeyword, hfk], hL⟩
+    simp only [Parse.parseDecl]
+    rw [Parse.bind_eq (Parse.peek_eq hs')]
+    rw [if_neg (show ¬ (fk.isKeyword "import" = true) by simp [Token.isKeyword, hfk]), Parse.pure_bind]
+    rw [if_neg (show ¬ (fk.isKeyword "export" = true) by simp [Token.isKeyword, hfk]), Parse.pure_bind]
+    rw [Parse.bind_eq (Parse.peek_eq hs'), Parse.bind_eq (Parse.peekAt_rest _ _)]
+    rw [if_pos (show fk.isKeyword "function" = true by simp [Token.isKeyword, hfk])]
+    exact hp
+  | true =>
+    simp only [exportWords, ↓reduceIte, List.singleton_append] at ha
+    obtain ⟨ex, a₀, rfl, hex, h₀⟩ := Touching.cons_one (by simpa [keywordWord] using ha)
+    obtain ⟨fk, a₁, rfl, hfk, _⟩ := Touching.cons_one (by simpa [keywordWord] using h₀)
+    have hs' : s.rest = ex :: fk :: (a₁ ++ (b ++ rest)) := by simpa using hs
+    let s₁ := advanced s ex fk (a₁ ++ (b ++ rest))
+    obtain ⟨d', s', hp, he, hL⟩ := parseFunction_reads ex.span.start (ex.isKeyword "export") sp name params rt bsp bs
+      hname hps hrt' hbw s₁ (fk :: a₁) b rest hT hF (by simp [s₁]) (by simp [s₁, hl, hs']) h₀
+      (fun y hy => hna y (by simp at hy ⊢; simp [hy])) hb hr
+    refine ⟨d', s', ?_, by rw [he]; simp [Decl.erase, Token.isKeyword, hex], leaves_trans (leaves_advanced hs' hl) hL⟩
+    simp only [Parse.parseDecl]
+    rw [Parse.bind_eq (Parse.peek_eq hs')]
+    rw [if_neg (show ¬ (ex.isKeyword "import" = true) by simp [Token.isKeyword, hex]), Parse.pure_bind]
+    rw [if_pos (show ex.isKeyword "export" = true by simp [Token.isKeyword, hex])]
+    rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_eq (by simpa using hs'))),
+      Parse.bind_eq (Parse.peek_eq (s := s₁) rfl), Parse.bind_eq (Parse.peekAt_rest _ _)]
+    rw [if_pos (show fk.isKeyword "function" = true by simp [Token.isKeyword, hfk])]
+    exact hp
+
+theorem parseDecl_exportedVar {T : Edition} (sp : Span) (d : VarDecl)
+    (hw : (Decl.exportedVar sp d).wf T = true) :
+    ReadsD T Parse.parseDecl (.exportedVar sp d) := by
+  intro s ts rest hT _ hs hl ht hr _
+  simp only [Decl.wf] at hw
+  simp only [Decl.wordLines, Decl.lines, List.map_cons, List.map_nil] at ht
+  obtain ⟨h1, hnl⟩ := Laid.one ht
+  obtain ⟨ex, ts₀, rfl, hex, h₀⟩ := Touching.cons_one (by simpa [keywordWord] using h1)
+  have h₀' := h₀
+  simp only [VarDecl.words, VarKind.word_eq] at h₀'
+  obtain ⟨kw, ts₁, rfl, hkw, h₁⟩ := Touching.cons_one (by simpa using h₀')
+  obtain ⟨nm, ts₂, rfl, hnm, _⟩ := Touching.cons_one (by simpa [identWord] using h₁)
+  have hs' : s.rest = ex :: kw :: nm :: (ts₂ ++ rest) := by simpa using hs
+  let s₁ := advanced s ex kw (nm :: (ts₂ ++ rest))
+  obtain ⟨d', s', hp, he, hL⟩ := parseVarDecl_reads d hw s₁ (kw :: nm :: ts₂) rest hT (by simp [s₁])
+    (by simp [s₁, hl, hs']) h₀ (fun y hy => hnl y (by simp at hy ⊢; simp [hy])) hr
+  refine ⟨.exportedVar ⟨ex.span.start, s'.lastStop⟩ d', s', ?_, by simp [Decl.erase, he],
+    leaves_trans (leaves_advanced hs' hl) hL⟩
+  simp only [Parse.parseDecl]
+  rw [Parse.bind_eq (Parse.peek_eq hs')]
+  rw [if_neg (show ¬ (ex.isKeyword "import" = true) by simp [Token.isKeyword, hex]), Parse.pure_bind]
+  rw [if_pos (show ex.isKeyword "export" = true by simp [Token.isKeyword, hex])]
+  rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_eq hs')), Parse.bind_eq (Parse.peek_eq (s := s₁) rfl),
+    Parse.bind_eq (Parse.peekAt_rest _ _)]
+  cases hk : d.kind <;> rw [hk] at hkw <;> simp only [VarKind.token] at hkw
+  all_goals
+    rw [if_neg (show ¬ (kw.isKeyword "function" = true) by simp [Token.isKeyword, hkw])]
+    rw [if_neg (show ¬ ((kw.isIdent "interface" && _) = true) by simp [Token.isIdent, hkw])]
+    rw [if_neg (show ¬ ((kw.isIdent "type" && _) = true) by simp [Token.isIdent, hkw])]
+    rw [if_pos (show ex.isKeyword "export" = true by simp [Token.isKeyword, hex])]
+    rw [if_pos (show (kw.isKeyword "const" || kw.isIdent "let") = true by simp [Token.isKeyword, Token.isIdent, hkw]),
+      Parse.pure_bind, Parse.bind_eq hp, Parse.bind_eq (Parse.spanFrom_eq _ _)]
+    rfl
+
+
+/-- Every well-formed declaration. -/
+theorem parseDecl_reads {T : Edition} (d : Decl) (hw : d.wf T = true) : ReadsD T Parse.parseDecl d := by
+  cases d with
+  | «import» sp names source => exact parseDecl_import sp names source hw
+  | function sp e n ps rt b => exact parseDecl_function sp e n ps rt b hw
+  | interface sp e n fs => exact parseDecl_interface sp e n fs hw
+  | typeAlias sp e n t => exact parseDecl_typeAlias sp e n t hw
+  | exportedVar sp d => exact parseDecl_exportedVar sp d hw
+  | stmt st => exact parseDecl_stmt st hw
+
+/-! ### Modules -/
+
+def Module.wf (T : Edition) (m : Module) : Bool := m.decls.all (Decl.wf T)
+
+/-- A declaration starts with a token that is not the end of the file and not `else`. -/
+theorem Decl.first {T : Edition} (d : Decl) (hw : d.wf T = true) {ts : List Token} (h : Laid ts d.wordLines) :
+    ∃ x ts', ts = x :: ts' ∧ x.kind ≠ .eof ∧ x.kind ≠ .keyword "else" := by
+  cases d with
+  | stmt st =>
+    obtain ⟨x, ts', rfl, hx⟩ := Laid.first (st := st) hw (by simpa [Decl.wordLines, Decl.lines, Stmt.wordLines] using h)
+    exact ⟨x, ts', rfl, hx.2.1, hx.2.2.1⟩
+  | «import» sp names source =>
+    have hk := h.kinds
+    cases ts with
+    | nil => simp [Decl.wordLines, Decl.lines, exportWords, keywordWord, identWord] at hk
+    | cons x ts' => refine ⟨x, ts', rfl, ?_⟩; simp [Decl.wordLines, Decl.lines, exportWords, keywordWord, identWord] at hk; rw [hk.1]; simp
+  | function sp e n ps rt b =>
+    have hk := h.kinds
+    cases ts with
+    | nil => cases e <;> simp [Decl.wordLines, Decl.lines, exportWords, keywordWord, identWord] at hk
+    | cons x ts' => refine ⟨x, ts', rfl, ?_⟩; cases e <;> simp [Decl.wordLines, Decl.lines, exportWords, keywordWord, identWord] at hk <;> rw [hk.1] <;> simp
+  | interface sp e n fs =>
+    have hk := h.kinds
+    cases ts with
+    | nil => cases e <;> simp [Decl.wordLines, Decl.lines, exportWords, keywordWord, identWord] at hk
+    | cons x ts' => refine ⟨x, ts', rfl, ?_⟩; cases e <;> simp [Decl.wordLines, Decl.lines, exportWords, keywordWord, identWord] at hk <;> rw [hk.1] <;> simp
+  | typeAlias sp e n t =>
+    have hk := h.kinds
+    cases ts with
+    | nil => cases e <;> simp [Decl.wordLines, Decl.lines, exportWords, keywordWord, identWord] at hk
+    | cons x ts' => refine ⟨x, ts', rfl, ?_⟩; cases e <;> simp [Decl.wordLines, Decl.lines, exportWords, keywordWord, identWord] at hk <;> rw [hk.1] <;> simp
+  | exportedVar sp d =>
+    have hk := h.kinds
+    cases ts with
+    | nil => simp [Decl.wordLines, Decl.lines, exportWords, keywordWord, identWord] at hk
+    | cons x ts' => refine ⟨x, ts', rfl, ?_⟩; simp [Decl.wordLines, Decl.lines, exportWords, keywordWord, identWord] at hk; rw [hk.1]; simp
+
+
+theorem Module.lines_words (m : Module) : m.lines.map Prod.snd = (m.decls.map Decl.wordLines).flatten := by
+  obtain ⟨decls⟩ := m
+  simp only [Module.lines]
+  induction decls with
+  | nil => rfl
+  | cons d ds ih => simp [List.flatMap_cons, ih, Decl.wordLines]
+
+theorem Laid.length_decls {T : Edition} : ∀ {decls : List Decl} {ts : List Token}, (∀ d ∈ decls, d.wf T = true) →
+    Laid ts (decls.map Decl.wordLines).flatten → decls.length ≤ ts.length
+  | [], _, _, _ => by simp
+  | d :: decls, ts, hw, h => by
+    obtain ⟨a, b, rfl, ha, hb, _⟩ := Laid.append (by simpa using h)
+    obtain ⟨x, a', rfl, _⟩ := Decl.first d (hw d (by simp)) ha
+    have := Laid.length_decls (fun e he => hw e (by simp [he])) hb
+    simp; omega
+
+/-- The loop of `parseModule` reads the declarations of a module, which the end of the file follows. -/
+theorem decl_loop {T : Edition} :
+    ∀ (decls : List Decl) (fuel : Nat) (acc : Array Decl) (s : ParseState) (ts : List Token) (c : Token),
+      (∀ d ∈ decls, d.wf T = true) → decls.length < fuel → s.target = T → s.inFunction = false →
+      s.rest = ts ++ [c] → c.kind = .eof → s.left = s.rest.length →
+      Laid ts (decls.map Decl.wordLines).flatten →
+      ∃ res s', Parse.iterate fuel acc Parse.declStep s = .ok res s' ∧
+        res.toList.map Decl.erase = (acc.toList ++ decls).map Decl.erase ∧ Leaves s s' [c] := by
+  intro decls
+  induction decls with
+  | nil =>
+    intro fuel acc s ts c _ hlen _ _ hs hc hl ht
+    obtain ⟨f', rfl⟩ : ∃ f', fuel = f' + 1 := ⟨fuel - 1, by simp at hlen; omega⟩
+    simp [Laid] at ht; subst ht
+    have hs' : s.rest = [c] := by simpa using hs
+    refine ⟨acc, s, Parse.iterate_false ?_, by simp, ⟨hs', by simp [hl, hs'], rfl, rfl, rfl, rfl⟩⟩
+    simp only [Parse.declStep]
+    rw [Parse.bind_eq (Parse.peek_eq hs')]
+    simp [Token.isEof, hc, pure, EStateM.pure]
+  | cons d decls ih =>
+    intro fuel acc s ts c hw hlen hT hF hs hc hl ht
+    obtain ⟨f', rfl⟩ : ∃ f', fuel = f' + 1 := ⟨fuel - 1, by simp at hlen; omega⟩
+    obtain ⟨a, b, rfl, ha, hb, _⟩ := Laid.append (by simpa using ht)
+    obtain ⟨x, a', rfl, hx1, _⟩ := Decl.first d (hw d (by simp)) ha
+    have hs' : s.rest = x :: (a' ++ (b ++ [c])) := by simpa using hs
+    have hnext : ∀ u ∈ (b ++ [c]).head?, u.kind ≠ .keyword "else" := by
+      cases decls with
+      | nil =>
+        simp [Laid] at hb; subst hb
+        intro u hu; simp at hu; subst hu; rw [hc]; simp
+      | cons d' ds =>
+        obtain ⟨a₂, b₂, rfl, ha₂, _, _⟩ := Laid.append (by simpa using hb)
+        obtain ⟨y, a₂', rfl, _, hy⟩ := Decl.first d' (hw d' (by simp)) ha₂
+        intro u hu; simp at hu; subst hu; exact hy
+    obtain ⟨d', s₁, hp, he, hL₁⟩ := parseDecl_reads d (hw d (by simp)) s (x :: a') (b ++ [c]) hT hF
+      (by simp [hs']) hl ha (by simp) (fun _ => hnext)
+    have hl₁ : s₁.left = s₁.rest.length := by rw [hL₁.left_eq, hL₁.rest_eq]
+    obtain ⟨res, s', hit, he', hL'⟩ := ih f' (acc.push d') s₁ b c (fun e he => hw e (by simp [he]))
+      (by simp at hlen; omega) (hL₁.target_eq.trans hT) (hL₁.inFunction_eq.trans hF) hL₁.rest_eq hc hl₁ hb
+    refine ⟨res, s', ?_, by rw [he']; simp [he], leaves_trans hL₁ hL'⟩
+    rw [Parse.iterate_true (acc' := acc.push d') (s' := s₁)]
+    · exact hit
+    · simp only [Parse.declStep]
+      rw [Parse.bind_eq (Parse.peek_eq hs')]
+      rw [if_neg (show ¬ (x.isEof = true) by simp [Token.isEof, hx1]), Parse.pure_bind, Parse.bind_eq hp]
+      rfl
+
+/-- The parser's round trip for a module, on tokens: `parseModule` reads the
+tokens of the printed lines of every well-formed module, which the end of the
+file follows, as that module apart from spans. -/
+theorem module_reads {T : Edition} (m : Module) (hm : m.wf T = true) :
+    ∀ (s : ParseState) (ts : List Token) (c : Token), s.target = T → s.inFunction = false →
+      s.rest = ts ++ [c] → c.kind = .eof → s.left = s.rest.length → Laid ts (m.lines.map Prod.snd) →
+      ∃ m' s', Parse.parseModule s = .ok m' s' ∧ m'.erase = m.erase := by
+  intro s ts c hT hF hs hc hl ht
+  rw [Module.lines_words] at ht
+  have hw : ∀ d ∈ m.decls, d.wf T = true := by simpa [Module.wf] using hm
+  have hlen := Laid.length_decls hw ht
+  obtain ⟨res, s', hit, he, _⟩ := decl_loop m.decls (10 * (s.left + 1)) #[] s ts c hw
+    (by have : s.left = ts.length + 1 := by simp [hl, hs]
+        omega) hT hF hs hc hl ht
+  refine ⟨{ decls := res.toList }, s', ?_, by simpa [Module.erase] using he⟩
+  simp only [Parse.parseModule]
+  rw [Parse.bind_eq (Parse.budget_eq _), Parse.bind_eq hit]
+  rfl
 
 end tolean.TypeScript.Syntax

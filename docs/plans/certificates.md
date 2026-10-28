@@ -80,9 +80,13 @@ printer gives a certificate that Lean refuses.
       `Syntax/RoundTripStmt.lean` states the same for `parseStatement`, on
       the tokens of a statement's printed lines. It covers every statement
       that `Stmt.wf` accepts, in a function or not and in a loop or not.
-      Three proofs are not built yet: that every tree the parser gives is
-      well formed, the proof for declarations and modules, and the proof
-      that the lexer gives the printed tokens.
+      The proof for modules completes the parser's part. `module_reads` in
+      `Syntax/RoundTripDecl.lean` states that `parseModule` reads the
+      tokens of a module's printed lines, which the end of the file
+      follows, as the same module apart from spans. It covers every module
+      that `Module.wf` accepts. Two proofs are not built yet: that every
+      tree the parser gives is well formed, and that the lexer gives the
+      printed tokens with the line breaks that `Laid` states.
 5. **The interpreter against Node (built).** `tests/typescript/interpreter.test.ts`
    runs random programs of the subset with random arguments in the interpreter
    and in Node, and requires the same results. This is evidence that the
