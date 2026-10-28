@@ -67,7 +67,7 @@ jobs:
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             binutils ca-certificates curl git xz-utils
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Installs elan with the toolchain that lean-toolchain names, and runs
       # `lake build`, which builds .lake/build/bin/tolean.
@@ -96,12 +96,12 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
 
       # The version that the Nix shell has and that wrote the lockfiles.
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v5
         with:
           version: 10.34.5
 
@@ -113,7 +113,7 @@ jobs:
           export TOLEAN_BINARY="$GITHUB_WORKSPACE/.lake/build/bin/tolean${{ runner.os == 'Windows' && '.exe' || '' }}"
           pnpm test
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: tolean-${{ matrix.platform }}
           path: .lake/build/bin/tolean${{ runner.os == 'Windows' && '.exe' || '' }}
@@ -126,17 +126,17 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v5
         with:
           version: 10.34.5
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           pattern: tolean-*-*
           path: binaries
@@ -159,7 +159,7 @@ jobs:
           grep -q '^def f' A.lean
           node -e "import('tolean').then(async (t) => { const lean = await t.translateSource({ fileName: 'a.ts', text: 'export function g(): boolean { return true; }', namespace: 'G' }); if (!lean.includes('def g')) process.exit(1); })"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: npm-packages
           path: packed/*.tgz
@@ -174,14 +174,14 @@ jobs:
       contents: write
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: npm-packages
           path: packed
