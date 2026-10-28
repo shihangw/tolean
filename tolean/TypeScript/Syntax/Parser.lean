@@ -343,6 +343,75 @@ def updateOp? (t : Token) : Option UpdateOp :=
   else if t.isPunct "--" then some .decrement
   else none
 
+/-- One step of the loop of `parseBinary`, from `start` at `minPrec`: an
+operator of at least that precedence, and its right operand, which
+`parseRhs` reads at the precedence it is given. -/
+def binaryStep (parseRhs : Nat → ParseM Expr) (start : Pos) (minPrec : Nat) (lhs : Expr) :
+    ParseM (Expr × Bool) := do
+  let some (op, width) ← peekBinaryOp | return (lhs, false)
+  if op.precedence < minPrec then return (lhs, false)
+  let opToken ← peek
+  if op == .exp && (lhs matches .unary ..) then
+    failAt opToken "put parentheses around a unary operand of '**'"
+  if op == .lt || op == .shl then refuseTypeArgumentLookalike opToken
+  if op == .exp then requireFeature opToken .exponent
+  if op == .coalesce then requireFeature opToken .nullishCoalescing
+  skip width
+  -- `**` is right-associative.
+  let rhs ← parseRhs (if op == .exp then op.precedence else op.precedence + 1)
+  if (op == .coalesce && (lhs.isLogical || rhs.isLogical)) ||
+      ((op == .and || op == .or) && (lhs.isCoalesce || rhs.isCoalesce)) then
+    failAt opToken "'??' cannot be mixed with '&&' or '||' without parentheses"
+  return (.binary (← spanFrom start) op lhs rhs, true)
+
+/-- One step of the loop of `parseLeftHandSide`, from `start`: a member, an
+index or the arguments of a call. -/
+def leftHandSideStep (parseIndex : ParseM Expr) (parseArgs : ParseM (List Expr)) (start : Pos)
+    (expr : Expr) : ParseM (Expr × Bool) := do
+  let t ← peek
+  if t.isPunct "." then
+    discard advance
+    refuseSplitMember
+    let name ← readPropertyName
+    return (.member (← spanFrom start) expr name, true)
+  else if t.isPunct "[" then
+    discard advance
+    let idx ← parseIndex
+    let _ ← expectPunct "]"
+    return (.index (← spanFrom start) expr idx, true)
+  else if t.isPunct "(" then
+    let isAsync := (expr matches .ident _ "async") && !t.newlineBefore
+    let args ← parseArgs
+    if isAsync then refuseAsyncArrowLookalike
+    return (.call (← spanFrom start) expr args, true)
+  else if t.isPunct "?." then failAt t "optional chaining is not supported"
+  else if t.isPunct "!" && !t.newlineBefore then
+    failAt t "non-null assertions are not supported"
+  else return (expr, false)
+
+/-- One step of a loop over a list in `open … close`: an item that `parseItem`
+reads, and the `,` after it, unless `close` comes. `refuse` checks the next
+token before the item. -/
+def listStep {α : Type} (close : String) (refuse : Token → ParseM Unit) (parseItem : ParseM α)
+    (items : Array α) : ParseM (Array α × Bool) := do
+  let t ← peek
+  if t.isPunct close then return (items, false)
+  refuse t
+  let items := items.push (← parseItem)
+  let t ← peek
+  if t.isPunct "," then discard advance
+  else if !t.isPunct close then unexpected t s!"',' or '{close}'"
+  return (items, true)
+
+/-- What `parseArguments` refuses before an argument. -/
+def refuseArgument (t : Token) : ParseM Unit := do
+  if t.isPunct "..." then failAt t "spread arguments are not supported"
+
+/-- What `parseArrayLiteral` refuses before an element. -/
+def refuseElement (t : Token) : ParseM Unit := do
+  if t.isPunct "," then failAt t "array holes are not supported"
+  if t.isPunct "..." then failAt t "spread elements are not supported"
+
 mutual
 
 /-- An expression where a `,` would be the comma operator. -/
@@ -383,22 +452,7 @@ def parseConditional (fuel : Nat) : ParseM Expr := do
 def parseBinary (fuel : Nat) (minPrec : Nat) : ParseM Expr := do
   let fuel + 1 := fuel | outOfFuel
   let start := (← peek).span.start
-  iterate (← budget) (← parseUnary fuel) fun lhs => do
-    let some (op, width) ← peekBinaryOp | return (lhs, false)
-    if op.precedence < minPrec then return (lhs, false)
-    let opToken ← peek
-    if op == .exp && (lhs matches .unary ..) then
-      failAt opToken "put parentheses around a unary operand of '**'"
-    if op == .lt || op == .shl then refuseTypeArgumentLookalike opToken
-    if op == .exp then requireFeature opToken .exponent
-    if op == .coalesce then requireFeature opToken .nullishCoalescing
-    skip width
-    -- `**` is right-associative.
-    let rhs ← parseBinary fuel (if op == .exp then op.precedence else op.precedence + 1)
-    if (op == .coalesce && (lhs.isLogical || rhs.isLogical)) ||
-        ((op == .and || op == .or) && (lhs.isCoalesce || rhs.isCoalesce)) then
-      failAt opToken "'??' cannot be mixed with '&&' or '||' without parentheses"
-    return (.binary (← spanFrom start) op lhs rhs, true)
+  iterate (← budget) (← parseUnary fuel) (binaryStep (parseBinary fuel) start minPrec)
 
 def parseUnary (fuel : Nat) : ParseM Expr := do
   let fuel + 1 := fuel | outOfFuel
@@ -429,56 +483,20 @@ def parsePostfix (fuel : Nat) : ParseM Expr := do
 def parseLeftHandSide (fuel : Nat) : ParseM Expr := do
   let fuel + 1 := fuel | outOfFuel
   let start := (← peek).span.start
-  iterate (← budget) (← parsePrimary fuel) fun expr => do
-    let t ← peek
-    if t.isPunct "." then
-      discard advance
-      refuseSplitMember
-      let name ← readPropertyName
-      return (.member (← spanFrom start) expr name, true)
-    else if t.isPunct "[" then
-      discard advance
-      let idx ← parseExpression fuel
-      let _ ← expectPunct "]"
-      return (.index (← spanFrom start) expr idx, true)
-    else if t.isPunct "(" then
-      let isAsync := (expr matches .ident _ "async") && !t.newlineBefore
-      let args ← parseArguments fuel
-      if isAsync then refuseAsyncArrowLookalike
-      return (.call (← spanFrom start) expr args, true)
-    else if t.isPunct "?." then failAt t "optional chaining is not supported"
-    else if t.isPunct "!" && !t.newlineBefore then
-      failAt t "non-null assertions are not supported"
-    else return (expr, false)
+  iterate (← budget) (← parsePrimary fuel)
+    (leftHandSideStep (parseExpression fuel) (parseArguments fuel) start)
 
 def parseArguments (fuel : Nat) : ParseM (List Expr) := do
   let fuel + 1 := fuel | outOfFuel
   let _ ← expectPunct "("
-  let args ← iterate (← budget) #[] fun args => do
-    let t ← peek
-    if t.isPunct ")" then return (args, false)
-    if t.isPunct "..." then failAt t "spread arguments are not supported"
-    let args := args.push (← parseAssign fuel)
-    let t ← peek
-    if t.isPunct "," then discard advance
-    else if !t.isPunct ")" then unexpected t "',' or ')'"
-    return (args, true)
+  let args ← iterate (← budget) #[] (listStep ")" refuseArgument (parseAssign fuel))
   let _ ← expectPunct ")"
   return args.toList
 
 def parseArrayLiteral (fuel : Nat) : ParseM Expr := do
   let fuel + 1 := fuel | outOfFuel
   let start := (← expectPunct "[").span.start
-  let elems ← iterate (← budget) #[] fun elems => do
-    let t ← peek
-    if t.isPunct "]" then return (elems, false)
-    if t.isPunct "," then failAt t "array holes are not supported"
-    if t.isPunct "..." then failAt t "spread elements are not supported"
-    let elems := elems.push (← parseAssign fuel)
-    let t ← peek
-    if t.isPunct "," then discard advance
-    else if !t.isPunct "]" then unexpected t "',' or ']'"
-    return (elems, true)
+  let elems ← iterate (← budget) #[] (listStep "]" refuseElement (parseAssign fuel))
   let _ ← expectPunct "]"
   return .array (← spanFrom start) elems.toList
 
@@ -508,14 +526,7 @@ def parseProperty (fuel : Nat) : ParseM Property := do
 def parseObjectLiteral (fuel : Nat) : ParseM Expr := do
   let fuel + 1 := fuel | outOfFuel
   let start := (← expectPunct "{").span.start
-  let props ← iterate (← budget) #[] fun props => do
-    let t ← peek
-    if t.isPunct "}" then return (props, false)
-    let props := props.push (← parseProperty fuel)
-    let t ← peek
-    if t.isPunct "," then discard advance
-    else if !t.isPunct "}" then unexpected t "',' or '}'"
-    return (props, true)
+  let props ← iterate (← budget) #[] (listStep "}" (fun _ => pure ()) (parseProperty fuel))
   let _ ← expectPunct "}"
   return .object (← spanFrom start) props.toList
 
