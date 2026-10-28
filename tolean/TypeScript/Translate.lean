@@ -3,6 +3,7 @@ import tolean.Version
 import tolean.TypeScript.Edition
 import tolean.TypeScript.Syntax.Parser
 import tolean.TypeScript.Output
+import tolean.TypeScript.Spec.Eval
 
 /-!
 Translate one TypeScript module, in Tolean's subset, to Lean 4 definitions that
@@ -57,6 +58,16 @@ def Ty.join (a b : Ty) : Option Ty :=
     | .nullable t, u | u, .nullable t => if t == u then some (.nullable t) else none
     | .null, t | t, .null => some (.nullable t)
     | _, _ => none
+
+/-- `T | null`. -/
+def Ty.isNullable : Ty → Bool
+  | .nullable _ => true
+  | _ => false
+
+/-- A primitive that `===` compares by value and the output compares with `=`. -/
+def Ty.isEqPrimitive : Ty → Bool
+  | .boolean | .string | .bigint => true
+  | _ => false
 
 /-- An object, which `===` compares by identity. -/
 def Ty.isObject : Ty → Bool
@@ -146,6 +157,10 @@ inductive Tail where
   | ret
   | state (names : List String)
 
+def Tail.isRet : Tail → Bool
+  | .ret => true
+  | .state _ => false
+
 def leanReserved : List String :=
   ["_root_", "abbrev", "at", "axiom", "by", "class", "def",
    "deriving", "do", "else", "end", "example", "extends", "for", "from", "fun", "have", "if",
@@ -153,57 +168,18 @@ def leanReserved : List String :=
    "private", "protected", "return", "section", "show", "structure", "then", "theorem",
    "universe", "unless", "variable", "where", "with", "Type", "Prop", "Sort"]
 
-/-! ### Literal values -/
+/-! ### Literal values
 
-def digitValue (c : Char) : Nat :=
-  if c.isDigit then c.toNat - '0'.toNat
-  else if 'a' ≤ c && c ≤ 'f' then c.toNat - 'a'.toNat + 10
-  else c.toNat - 'A'.toNat + 10
+The translator reads a literal with the interpreter's own functions,
+`Eval.bigintLiteral` and `Eval.numberLiteral`, so the two cannot disagree on
+its value. -/
 
-def digitsValue (radix : Nat) (digits : List Char) : Nat :=
-  digits.foldl (fun acc c => acc * radix + digitValue c) 0
-
-/-- The value of an integer literal with a `0x`, `0o` or `0b` prefix, or none. -/
-def prefixedValue? : List Char → Option Nat
-  | '0' :: p :: digits =>
-    if p == 'x' || p == 'X' then some (digitsValue 16 digits)
-    else if p == 'o' || p == 'O' then some (digitsValue 8 digits)
-    else if p == 'b' || p == 'B' then some (digitsValue 2 digits)
-    else none
-  | _ => none
-
-def maxSafeInteger : Nat := 2 ^ 53 - 1
+/-- The value of a bigint literal, such as `0xffn`. -/
+def bigintValue? (text : String) : Option Int := Eval.bigintLiteral text
 
 /-- The safe integer that a number literal denotes exactly, or none. A literal
 such as `0.5`, or one above `2^53 - 1`, has none. -/
-def safeIntegerValue? (text : String) : Option Nat := do
-  let chars := text.toList.filter (· != '_')
-  let value ← match prefixedValue? chars with
-    | some v => some v
-    | none =>
-      let (mantissa, exponent) := chars.span fun c => c != 'e' && c != 'E'
-      let exp : Int ← match exponent with
-        | [] => some 0
-        | _ :: '-' :: ds => some (-(digitsValue 10 ds : Int))
-        | _ :: '+' :: ds | _ :: ds => some (digitsValue 10 ds : Int)
-      let (whole, fraction) := mantissa.span (· != '.')
-      let fraction := fraction.drop 1
-      let m := digitsValue 10 (whole ++ fraction)
-      let scale := exp - fraction.length
-      if m == 0 then some 0
-      else if scale ≥ 0 then
-        -- `m ≥ 1`, so anything past 10^16 is above 2^53.
-        if scale > 16 then none else some (m * 10 ^ scale.toNat)
-      else
-        let k := (-scale).toNat
-        if k > 400 then none
-        else if m % 10 ^ k == 0 then some (m / 10 ^ k) else none
-  if value ≤ maxSafeInteger then some value else none
-
-/-- The value of a bigint literal, such as `0xffn`. -/
-def bigintValue (text : String) : Nat :=
-  let chars := (text.toList.filter (· != '_')).dropLast
-  (prefixedValue? chars).getD (digitsValue 10 chars)
+def safeIntegerValue? (text : String) : Option Int := Eval.numberLiteral text
 
 /-! ### Errors -/
 
@@ -224,6 +200,14 @@ def tooDeep {A : Type} : TM A := do
 
 /-- `Ctx.fuel`, for a call into the translator from outside it. -/
 def fuelLimit : TM Nat := do return (← get).fuel
+
+/-- The value inside `o`, or a refusal at `span`. A proof about the translator
+reads `orReject` through `orReject_ok`, which it cannot do for a
+`let some x := o | reject …`. -/
+def orReject {A : Type} (o : Option A) (span : Span) (reason : String) : TM A :=
+  match o with
+  | some a => pure a
+  | none => reject span reason
 
 /-- Refuse the node at `span` unless the target edition has `f`. -/
 def requireFeature (span : Span) (f : Feature) : TM Unit := do
@@ -321,7 +305,7 @@ mutual
 def exprChanges : Expr → List String
   | .assign _ op target value =>
     let own := match target with
-      | .ident _ name => if op matches .assign | .add | .sub | .mul then [name] else []
+      | .ident _ name => if op.isSimple then [name] else []
       | _ => []
     own ++ exprChanges target ++ exprChanges value
   | .prefix _ _ (.ident _ name) | .postfix _ _ (.ident _ name) => [name]
@@ -384,7 +368,7 @@ def nullTestOf (env : Env) (e : Expr) : Option (String × Bool × Ty) :=
   | .binary _ op l r =>
     if !(op == .strictEq || op == .strictNe) then none
     else
-      let other? := if r matches .null _ then some l else if l matches .null _ then some r else none
+      let other? := if r.isNull then some l else if l.isNull then some r else none
       match other? with
       | some (.ident _ name) =>
         match env.lookup name with
@@ -396,7 +380,7 @@ def nullTestOf (env : Env) (e : Expr) : Option (String × Bool × Ty) :=
 /-- A bigint literal other than `0n`, such as `2n` or `-(3n)`. -/
 def isNonzeroBigintLiteral : Expr → Bool
   | .paren _ inner | .unary _ .neg inner => isNonzeroBigintLiteral inner
-  | .bigint _ text => bigintValue text != 0
+  | .bigint _ text => (bigintValue? text).any (· != 0)
   | _ => false
 
 def numberTest? : String → Option Output.NumberTest
@@ -412,186 +396,20 @@ def numberConstant? : String → Option Output.NumberConstant
 
 /-! ### Expressions -/
 
-mutual
+/-- The element type of an array literal: the type that the context gives, or
+else the one type of its elements. -/
+def elementType (s : Span) (expected : Option Ty) (codes : List Code) : TM Ty :=
+  match expected with
+  | some t => pure t
+  | none => do
+    let first ← orReject codes.head? s
+      "an empty array needs a declared type, such as 'const xs: ReadonlyArray<bigint> = []'"
+    orReject (codes.foldl (fun acc c => acc.bind (·.join c.type)) (some first.type)) s
+      "the elements of an array must have one type"
 
-/-- `expected` is the type the context gives, which an object literal needs:
-the return type, a declared type, a parameter type or a field type. -/
-def translateExpr (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr) : TM Code := do
-  let fuel + 1 := fuel | tooDeep
-  match e with
-  | .paren _ inner => translateExpr fuel env expected inner
-  | .bigint _ text =>
-    -- Typed, so Lean never defaults a numeral to `Nat`, where `0 - 1 = 0`.
-    return ⟨.int (bigintValue text), false, .bigint⟩
-  | .number s text =>
-    let some v := safeIntegerValue? text | reject s "a number literal must be a safe integer"
-    return ⟨.number v, false, .number⟩
-  | .null _ => return ⟨.none, false, .null⟩
-  | .bool _ value => return ⟨.bool value, false, .boolean⟩
-  | .string _ value => return ⟨.string value, false, .string⟩
-  | .ident s name =>
-    match env.lookup name with
-    | none =>
-      let some constant := numberConstant? name
-        | reject s "only parameters and locals may be referenced"
-      return ⟨.numberConstant constant, false, .number⟩
-    | some l =>
-      if l.binding == .array && !(← get).returning then
-        reject s "an owned array may be read only in the return value"
-      return ⟨.var name, false, l.type⟩
-  | .member s obj name =>
-    let o ← translateExpr fuel env none obj
-    let ctx : Ctx ← get
-    let field? := match o.type with
-      | .struct structName =>
-        (ctx.structs.find? fun (i : StructInfo) => i.name == structName).bind
-          fun info => info.fields.lookup name
-      | _ => none
-    let some type := field? | reject s "only fields of interfaces declared in this file may be read"
-    return ⟨.field o.code (!(obj matches .ident ..)) name, false, type⟩
-  | .unary s op arg =>
-    if op == .neg && (arg matches .ident _ "Infinity") && !env.has "Infinity" then
-      return ⟨.numberConstant .negInf, false, .number⟩
-    let a ← translateExpr fuel env none arg
-    match op with
-    | .not =>
-      unless a.type == .boolean do reject s "'!' needs a boolean"
-      return if a.prop then ⟨.propNot a.code, true, .boolean⟩
-        else ⟨.not a.code, false, .boolean⟩
-    | .neg =>
-      match a.type with
-      | .bigint => return ⟨.neg a.value, false, .bigint⟩
-      | .number => return ⟨.numberNeg a.value, false, .number⟩
-      | _ => reject s "unsupported unary operator"
-    | _ => reject s "unsupported unary operator"
-  | .binary s op l r => translateBinary fuel env s op l r
-  | .cond s test ifTrue ifFalse =>
-    let c ← translateExpr fuel env none test
-    unless c.type == .boolean do reject test.span "a condition must be a boolean"
-    let a ← translateExpr fuel env expected ifTrue
-    let b ← translateExpr fuel env expected ifFalse
-    let some type := a.type.join b.type | reject s "the branches of '?:' have different types"
-    return ⟨.ite c.code a.value b.value, false, type⟩
-  | .call s callee args => translateCall fuel env s callee args
-  | .object s props => translateObject fuel env expected s props
-  | .array s elems => translateArray fuel env expected s elems
-  | _ => reject e.span "unsupported expression"
-
-/-- An array literal, as a list. In JS a literal makes a new array, and only
-an owned array may be pushed to, so nothing changes the array after it is
-made, and a Lean list has its meaning. The element type comes from the
-context, or else from the elements. -/
-def translateArray (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (elems : List Expr) :
-    TM Code := do
-  let fuel + 1 := fuel | tooDeep
-  let (values, elem) ← translateElements fuel env expected s elems
-  return ⟨.list values elem.lean, false, .array elem⟩
-
-/-- The elements of an array literal, and their type. -/
-def translateElements (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (elems : List Expr) :
-    TM (List Output.Expr × Ty) := do
-  let fuel + 1 := fuel | tooDeep
-  let expectedElem := match expected with
-    | some (.array t) => some t
-    | _ => none
-  let codes ← elems.mapM (translateExpr fuel env expectedElem)
-  let elem ← match expectedElem with
-    | some t => pure t
-    | none =>
-      let some first := codes.head?
-        | reject s "an empty array needs a declared type, such as 'const xs: ReadonlyArray<bigint> = []'"
-      let some t := codes.foldl (fun acc c => acc.bind (·.join c.type)) (some first.type)
-        | reject s "the elements of an array must have one type"
-      pure t
-  for (c, e) in codes.zip elems do
-    unless c.type.assignableTo elem do reject e.span "the element does not have the array's element type"
-  return (codes.map (·.value), elem)
-
-def translateCall (fuel : Nat) (env : Env) (s : Span) (callee : Expr) (args : List Expr) : TM Code := do
-  let fuel + 1 := fuel | tooDeep
-  -- `Number.isNaN(x)` and the like. TypeScript lets them take any value; the
-  -- model has them on numbers only.
-  if let .member _ (.ident _ "Number") test := callee then
-    if let (false, some form, [arg]) := (env.has "Number", numberTest? test, args) then
-      let a ← translateExpr fuel env none arg
-      unless a.type == .number do
-        reject arg.span s!"Number.{test} needs a number operand (narrow a nullable value first)"
-      return ⟨.numberTest form a.value, false, .boolean⟩
-  let noCall {A : Type} : TM A :=
-    reject s "calls may name only functions declared earlier in this file (no recursion)"
-  let .ident _ name := callee | noCall
-  let ctx ← get
-  if (name == "isNaN" || name == "isFinite") && !ctx.functions.any (·.name == name) then
-    reject s s!"the global {name} converts its argument to a number; use Number.{name}"
-  let some fn := ctx.functions.find? (·.name == name) | noCall
-  if env.has name then noCall
-  unless fn.params.length == args.length do reject s s!"'{name}' takes {fn.params.length} arguments"
-  let mut values := #[]
-  for (arg, paramType) in args.zip fn.params do
-    let a ← translateExpr fuel env (some paramType) arg
-    unless a.type.assignableTo paramType do
-      reject arg.span "the argument does not have the parameter's type"
-    values := values.push a.value
-  return ⟨.call name values.toList, false, fn.ret⟩
-
-def translateObject (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (props : List Property) :
-    TM Code := do
-  let fuel + 1 := fuel | tooDeep
-  let ctx ← get
-  let notStruct {A : Type} : TM A :=
-    reject s "an object literal must build an interface declared in this file"
-  let some (.struct structName) := expected | notStruct
-  let some info := ctx.structs.find? (·.name == structName) | notStruct
-  let mut seen : List String := []
-  let mut parts := #[]
-  for p in props do
-    let (key, value, span) ← match p with
-      | .shorthand ps name => pure (name, Expr.ident ps name, ps)
-      | .keyValue ps (.ident key) v => pure (key, v, ps)
-      | .keyValue ps _ _ => reject ps "object literal fields must be plain name: value pairs"
-    let some fieldType := info.fields.lookup key
-      | reject span s!"'{key}' is not a field of {structName}"
-    if seen.contains key then reject span s!"'{key}' is set twice"
-    seen := seen ++ [key]
-    let v ← translateExpr fuel env (some fieldType) value
-    unless v.type.assignableTo fieldType do reject span s!"'{key}' does not have the field's type"
-    parts := parts.push (key, v.value)
-  for (field, _) in info.fields do
-    unless seen.contains field do reject s s!"the object lacks the field '{field}'"
-  -- A JS object keeps its keys in the order the literal writes them, and the
-  -- caller can see that order, through `Object.keys` or `JSON.stringify`. A
-  -- Lean structure has no order, so the literal must use the declared one.
-  let declared := info.fields.map (·.1)
-  unless seen == declared do
-    reject s s!"write the fields in the order that {structName} declares them: {", ".intercalate declared}"
-  return ⟨.struct parts.toList structName, false, .struct structName⟩
-
-def translateBinary (fuel : Nat) (env : Env) (s : Span) (op : BinOp) (l r : Expr) : TM Code := do
-  let fuel + 1 := fuel | tooDeep
-  -- `x === null` and `x !== null`: a test on a Lean `Option`.
-  if (op == .strictEq || op == .strictNe) && ((l matches .null _) || (r matches .null _)) then
-    let other := if l matches .null _ then r else l
-    if other matches .null _ then reject s "compare null with a value, not with null"
-    let isEquality := op == .strictEq
-    -- Translate the operand even when the answer is fixed: translating is what
-    -- refuses anything outside the subset, such as an assignment inside it.
-    -- What the subset accepts has no side effects, so its value can be dropped.
-    let o ← translateExpr fuel env none other
-    match o.type with
-    | .nullable _ =>
-      return ⟨if isEquality then .isNone o.code else .isSome o.code, false, .boolean⟩
-    | type =>
-      -- Already narrowed: the answer is fixed, as it is in JS.
-      return ⟨.bool (isEquality == (type == .null)), false, .boolean⟩
-  -- `x === null || e` and `x !== null && e`: TypeScript narrows `x` in `e`,
-  -- so Lean matches on `x` and binds it to the value inside.
-  if let some (name, isNullTest, value) := nullTestOf env l then
-    if (op == .or && isNullTest) || (op == .and && !isNullTest) then
-      let whenSome ← translateExpr fuel (env.narrow name value) none r
-      unless whenSome.type == .boolean do reject r.span s!"'{op.symbol}' needs two booleans"
-      return ⟨.matchNull name (.bool (op == .or)) whenSome.value, false, .boolean⟩
-  let a ← translateExpr fuel env none l
-  let b ← translateExpr fuel env none r
+/-- The code for `op` on the operands `a` and `b`, which the translator has
+already translated. `r` is the right operand, which `/` and `%` read. -/
+def translateOperator (s : Span) (op : BinOp) (r : Expr) (a b : Code) : TM Code := do
   let bothBigInt := a.type == .bigint && b.type == .bigint
   let bothNumber := a.type == .number && b.type == .number
   let call (op : Output.NumberOp) (x y : Code) (type : Ty) : Code :=
@@ -610,11 +428,10 @@ def translateBinary (fuel : Nat) (env : Env) (s : Span) (op : BinOp) (l r : Expr
     if bothNumber then
       return if negated then ⟨.numberNe a.value b.value, false, .boolean⟩
         else call .eq a b .boolean
-    if a.type.isObject || b.type.isObject || (a.type matches .nullable _) ||
-        (b.type matches .nullable _) then
+    if a.type.isObject || b.type.isObject || a.type.isNullable || b.type.isNullable then
       reject s ("=== here would compare objects or nullable values; " ++
         "only primitives and null tests are supported")
-    unless a.type == b.type && (a.type matches .boolean | .string | .bigint) do
+    unless a.type == b.type && a.type.isEqPrimitive do
       reject s "=== needs two values of the same primitive type"
     return ⟨if negated then .ne a.value b.value else .eq a.value b.value, true, .boolean⟩
   -- bigint `/` truncates toward zero and `%` takes the sign of the dividend:
@@ -647,6 +464,177 @@ def translateBinary (fuel : Nat) (env : Env) (s : Span) (op : BinOp) (l r : Expr
   | .or => logical false
   | _ => reject s "unsupported binary operator"
 
+mutual
+
+/-- `expected` is the type the context gives, which an object literal needs:
+the return type, a declared type, a parameter type or a field type. -/
+def translateExpr (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr) : TM Code := do
+  let fuel + 1 := fuel | tooDeep
+  match e with
+  | .paren _ inner => translateExpr fuel env expected inner
+  | .bigint _ text =>
+    -- Typed, so Lean never defaults a numeral to `Nat`, where `0 - 1 = 0`.
+    let v ← orReject (bigintValue? text) e.span "a bigint literal must be an integer"
+    return ⟨.int v, false, .bigint⟩
+  | .number s text =>
+    let v ← orReject (safeIntegerValue? text) s "a number literal must be a safe integer"
+    return ⟨.number v, false, .number⟩
+  | .null _ => return ⟨.none, false, .null⟩
+  | .bool _ value => return ⟨.bool value, false, .boolean⟩
+  | .string _ value => return ⟨.string value, false, .string⟩
+  | .ident s name =>
+    match env.lookup name with
+    | none =>
+      let some constant := numberConstant? name
+        | reject s "only parameters and locals may be referenced"
+      return ⟨.numberConstant constant, false, .number⟩
+    | some l =>
+      if l.binding == .array && !(← get).returning then
+        reject s "an owned array may be read only in the return value"
+      return ⟨.var name, false, l.type⟩
+  | .member s obj name =>
+    let o ← translateExpr fuel env none obj
+    let ctx : Ctx ← get
+    let field? := match o.type with
+      | .struct structName =>
+        (ctx.structs.find? fun (i : StructInfo) => i.name == structName).bind
+          fun info => info.fields.lookup name
+      | _ => none
+    let type ← orReject field? s "only fields of interfaces declared in this file may be read"
+    return ⟨.field o.code (!obj.isIdent) name, false, type⟩
+  | .unary s op arg =>
+    if op == .neg && arg.isInfinity && !env.has "Infinity" then
+      return ⟨.numberConstant .negInf, false, .number⟩
+    let a ← translateExpr fuel env none arg
+    match op with
+    | .not =>
+      unless a.type == .boolean do reject s "'!' needs a boolean"
+      return if a.prop then ⟨.propNot a.code, true, .boolean⟩
+        else ⟨.not a.code, false, .boolean⟩
+    | .neg =>
+      match a.type with
+      | .bigint => return ⟨.neg a.value, false, .bigint⟩
+      | .number => return ⟨.numberNeg a.value, false, .number⟩
+      | _ => reject s "unsupported unary operator"
+    | _ => reject s "unsupported unary operator"
+  | .binary s op l r => translateBinary fuel env s op l r
+  | .cond s test ifTrue ifFalse =>
+    let c ← translateExpr fuel env none test
+    unless c.type == .boolean do reject test.span "a condition must be a boolean"
+    let a ← translateExpr fuel env expected ifTrue
+    let b ← translateExpr fuel env expected ifFalse
+    let type ← orReject (a.type.join b.type) s "the branches of '?:' have different types"
+    return ⟨.ite c.code a.value b.value, false, type⟩
+  | .call s callee args => translateCall fuel env s callee args
+  | .object s props => translateObject fuel env expected s props
+  | .array s elems => translateArray fuel env expected s elems
+  | _ => reject e.span "unsupported expression"
+
+/-- An array literal, as a list. In JS a literal makes a new array, and only
+an owned array may be pushed to, so nothing changes the array after it is
+made, and a Lean list has its meaning. The element type comes from the
+context, or else from the elements. -/
+def translateArray (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (elems : List Expr) :
+    TM Code := do
+  let fuel + 1 := fuel | tooDeep
+  let (values, elem) ← translateElements fuel env expected s elems
+  return ⟨.list values elem.lean, false, .array elem⟩
+
+/-- The elements of an array literal, and their type. -/
+def translateElements (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (elems : List Expr) :
+    TM (List Output.Expr × Ty) := do
+  let fuel + 1 := fuel | tooDeep
+  let expectedElem := match expected with
+    | some (.array t) => some t
+    | _ => none
+  let codes ← elems.mapM (translateExpr fuel env expectedElem)
+  let elem ← elementType s expectedElem codes
+  for (c, e) in codes.zip elems do
+    unless c.type.assignableTo elem do reject e.span "the element does not have the array's element type"
+  return (codes.map (·.value), elem)
+
+def translateCall (fuel : Nat) (env : Env) (s : Span) (callee : Expr) (args : List Expr) : TM Code := do
+  let fuel + 1 := fuel | tooDeep
+  -- `Number.isNaN(x)` and the like. TypeScript lets them take any value; the
+  -- model has them on numbers only.
+  if let .member _ (.ident _ "Number") test := callee then
+    if let (false, some form, [arg]) := (env.has "Number", numberTest? test, args) then
+      let a ← translateExpr fuel env none arg
+      unless a.type == .number do
+        reject arg.span s!"Number.{test} needs a number operand (narrow a nullable value first)"
+      return ⟨.numberTest form a.value, false, .boolean⟩
+  let noCallMessage := "calls may name only functions declared earlier in this file (no recursion)"
+  let noCall {A : Type} : TM A := reject s noCallMessage
+  let .ident _ name := callee | noCall
+  let ctx ← get
+  if (name == "isNaN" || name == "isFinite") && !ctx.functions.any (·.name == name) then
+    reject s s!"the global {name} converts its argument to a number; use Number.{name}"
+  let fn ← orReject (ctx.functions.find? (·.name == name)) s noCallMessage
+  if env.has name then noCall
+  unless fn.params.length == args.length do reject s s!"'{name}' takes {fn.params.length} arguments"
+  let values ← (args.zip fn.params).mapM fun (arg, paramType) => do
+    let a ← translateExpr fuel env (some paramType) arg
+    unless a.type.assignableTo paramType do
+      reject arg.span "the argument does not have the parameter's type"
+    pure a.value
+  return ⟨.call name values, false, fn.ret⟩
+
+def translateObject (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (props : List Property) :
+    TM Code := do
+  let fuel + 1 := fuel | tooDeep
+  let ctx ← get
+  let notStructMessage := "an object literal must build an interface declared in this file"
+  let some (.struct structName) := expected | reject s notStructMessage
+  let info ← orReject (ctx.structs.find? (·.name == structName)) s notStructMessage
+  -- The keys seen so far, and the fields translated so far.
+  let (seen, parts) ← props.foldlM (init := (([] : List String), ([] : List (String × Output.Expr))))
+    fun (seen, parts) p => do
+      let (key, value, span) ← match p with
+        | .shorthand ps name => pure (name, Expr.ident ps name, ps)
+        | .keyValue ps (.ident key) v => pure (key, v, ps)
+        | .keyValue ps _ _ => reject ps "object literal fields must be plain name: value pairs"
+      let fieldType ← orReject (info.fields.lookup key) span s!"'{key}' is not a field of {structName}"
+      if seen.contains key then reject span s!"'{key}' is set twice"
+      let v ← translateExpr fuel env (some fieldType) value
+      unless v.type.assignableTo fieldType do reject span s!"'{key}' does not have the field's type"
+      pure (seen ++ [key], parts ++ [(key, v.value)])
+  for (field, _) in info.fields do
+    unless seen.contains field do reject s s!"the object lacks the field '{field}'"
+  -- A JS object keeps its keys in the order the literal writes them, and the
+  -- caller can see that order, through `Object.keys` or `JSON.stringify`. A
+  -- Lean structure has no order, so the literal must use the declared one.
+  let declared := info.fields.map (·.1)
+  unless seen == declared do
+    reject s s!"write the fields in the order that {structName} declares them: {", ".intercalate declared}"
+  return ⟨.struct parts structName, false, .struct structName⟩
+
+def translateBinary (fuel : Nat) (env : Env) (s : Span) (op : BinOp) (l r : Expr) : TM Code := do
+  let fuel + 1 := fuel | tooDeep
+  -- `x === null` and `x !== null`: a test on a Lean `Option`.
+  if (op == .strictEq || op == .strictNe) && (l.isNull || r.isNull) then
+    let other := if l.isNull then r else l
+    if other.isNull then reject s "compare null with a value, not with null"
+    let isEquality := op == .strictEq
+    let o ← translateExpr fuel env none other
+    match o.type with
+    | .nullable _ =>
+      return ⟨if isEquality then .isNone o.code else .isSome o.code, false, .boolean⟩
+    | _ =>
+      -- The type fixes the answer, as after `if (x === null) return …`. The
+      -- test then does nothing, and a constant answer would drop the operand,
+      -- which the interpreter still evaluates. So the subset refuses it.
+      reject s "the type fixes the answer of this test with null, so it does nothing; remove it"
+  -- `x === null || e` and `x !== null && e`: TypeScript narrows `x` in `e`,
+  -- so Lean matches on `x` and binds it to the value inside.
+  if let some (name, isNullTest, value) := nullTestOf env l then
+    if (op == .or && isNullTest) || (op == .and && !isNullTest) then
+      let whenSome ← translateExpr fuel (env.narrow name value) none r
+      unless whenSome.type == .boolean do reject r.span s!"'{op.symbol}' needs two booleans"
+      return ⟨.matchNull name (.bool (op == .or)) whenSome.value, false, .boolean⟩
+  let a ← translateExpr fuel env none l
+  let b ← translateExpr fuel env none r
+  translateOperator s op r a b
+
 end
 
 /-! ### Statements -/
@@ -672,7 +660,7 @@ def translateUpdate (env : Env) (s : Span) (e : Expr) : TM (String × Output.Exp
       reject element.span "the element does not have the array's element type"
     return (target, .push target v.value)
   | .assign _ op (.ident _ name) right =>
-    unless op matches .assign | .add | .sub | .mul do refuse
+    unless op.isSimple do refuse
     let some { binding := .«let», type, .. } := env.lookup name
       | reject s "only a local declared with let may be assigned"
     let v ← translateExpr (← fuelLimit) env (some type) right
@@ -726,13 +714,13 @@ def translateStatements (fuel : Nat) (env : Env) (tail : Tail) (statements : Lis
 def translateVariable (fuel : Nat) (env : Env) (s : Span) (d : VarDecl) (rest : List Stmt)
     (tail : Tail) : TM Output.Body := do
   let fuel + 1 := fuel | tooDeep
-  let some init := d.init | reject s "declare one const or let identifier with an initializer"
+  let init ← orReject d.init s "declare one const or let identifier with an initializer"
   -- `const xs: Array<T> = [...]` (or `T[]`) is an owned array, which the
   -- function may push to. Any other array literal is a value.
   let mutableAnnotation := match d.type with
     | some (.ref _ "Array" [_]) | some (.array _ _) => true
     | _ => false
-  if init matches .array .. then
+  if init.isArrayLiteral then
     if mutableAnnotation then
       unless d.kind == .const do
         reject s "an array that the function pushes to must be 'const xs: Array<T> = [...]'; use ReadonlyArray<T> for a value"
@@ -777,7 +765,7 @@ def translateIf (fuel : Nat) (env : Env) (s : Span) (test : Expr) (thenBranch : 
     | some (name, isNullTest, _) =>
       return if isNullTest then .matchNull name whenTrue whenFalse
         else .matchNull name whenFalse whenTrue
-  if (tail matches .ret) && alwaysReturns thenStatements then
+  if tail.isRet && alwaysReturns thenStatements then
     if elseBranch.isSome && !rest.isEmpty then
       reject s "code after an if whose branches both return is unreachable"
     let whenTrue ← translateStatements fuel envTrue tail thenStatements
@@ -841,22 +829,21 @@ def translateFunction (s : Span) (name : String) (params : List Param)
     | reject s "functions must be named, typed, non-generic and synchronous"
   let name ← checkName s name
   declareTopLevel s name
-  let mut env : Env := {}
-  let mut leanParams := #[]
-  let mut types := #[]
-  for p in params do
-    let some type := p.type | reject p.span "parameters must be plain, typed identifiers"
-    let paramName ← checkName p.span p.name
-    if env.has paramName then reject p.span s!"'{paramName}' is declared twice"
-    let ty ← translateType type
-    env := env.add { name := paramName, binding := .param, type := ty }
-    leanParams := leanParams.push (paramName, ty.lean)
-    types := types.push ty
+  -- The scope of the body, and the parameters in Lean and as types.
+  let (env, leanParams, types) ← params.foldlM
+    (init := (({} : Env), ([] : List (String × Output.Ty)), ([] : List Ty)))
+    fun (env, leanParams, types) p => do
+      let type ← orReject p.type p.span "parameters must be plain, typed identifiers"
+      let paramName ← checkName p.span p.name
+      if env.has paramName then reject p.span s!"'{paramName}' is declared twice"
+      let ty ← translateType type
+      pure (env.add { name := paramName, binding := .param, type := ty },
+        leanParams ++ [(paramName, ty.lean)], types ++ [ty])
   let ret ← translateType returnType
   modify fun c => { c with currentFunction := name, returnType := ret }
   let out ← translateStatements (← fuelLimit) env .ret (blockStatements body)
-  modify fun c => { c with functions := c.functions ++ [{ name, params := types.toList, ret }] }
-  return .function name leanParams.toList ret.lean out
+  modify fun c => { c with functions := c.functions ++ [{ name, params := types, ret }] }
+  return .function name leanParams ret.lean out
 
 /-! ### The number model -/
 

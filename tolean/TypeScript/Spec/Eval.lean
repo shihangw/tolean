@@ -118,7 +118,9 @@ where
       if scale > 20 then (if m == 0 then some 0 else none) else some (m * 10 ^ scale.toNat)
     else
       let k := (-scale).toNat
-      if k > 400 then none else if m % 10 ^ k == 0 then some (m / 10 ^ k : Nat) else none
+      -- A long fraction of zeros is still zero.
+      if m == 0 then some 0
+      else if k > 400 then none else if m % 10 ^ k == 0 then some (m / 10 ^ k : Nat) else none
 
 /-- `IsStrictlyEqual` (ECMA-262 §7.2.15) on primitive values, and between
 `null` and any value. Values of different types are not equal, so `null` is
@@ -202,9 +204,11 @@ def eval (m : Module) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     | .obj fields => fields.lookup name
     | _ => none
   | .unary _ .not arg => do return .bool !(← eval m fuel env arg).truthy
-  -- The source text `-Infinity` is `negInf`, the model's name for it.
+  -- The source text `-Infinity` is `negInf`, the model's name for it. A
+  -- variable named `Infinity` is negated as any other value is.
   | .unary _ .neg (.ident _ "Infinity") => do
     match env.lookup "Infinity" with
+    | some (.int i) => some (.int (-i))
     | some (.num n) => some (.num (JSNumber.neg n))
     | some _ => none
     | none => some (.num JSNumber.negInf)
@@ -259,7 +263,10 @@ termination_by es => (fuel, sizeOf es, 0)
 def evalProps (m : Module) (fuel : Nat) (env : Env N) :
     List Property → Option (List (String × Val N))
   | [] => some []
-  | .shorthand _ name :: ps => do return (name, ← env.lookup name) :: (← evalProps m fuel env ps)
+  -- `{ a }` evaluates the name `a`, so `{ NaN }` reads the global
+  -- (`PropertyDefinitionEvaluation`, ECMA-262 §13.2.5.5).
+  | .shorthand s name :: ps => do
+    return (name, ← eval m fuel env (.ident s name)) :: (← evalProps m fuel env ps)
   | .keyValue _ (.ident key) v :: ps => do
     return (key, ← eval m fuel env v) :: (← evalProps m fuel env ps)
   | _ :: _ => none

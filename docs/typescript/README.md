@@ -66,6 +66,18 @@ The translator does not write text. It builds the Lean code as a syntax tree,
 and `tolean/TypeScript/Output.lean` prints the tree. So a theorem can state
 what the translator writes, which a proof of the translator needs.
 
+`tolean/TypeScript/Proof/` proves the translator for every program that it
+accepts. `tolean/TypeScript/Output/Eval.lean` gives the output tree a meaning:
+it evaluates the tree over the interpreter's values. The theorem
+`translate_sound` in `Proof/Module.lean` states that when the translator
+accepts a file, a function of the output tree gives a value only when the
+interpreter gives the same value for the same call. It holds for every input,
+every model of numbers and every amount of fuel. The theorem does not assume
+that the types the translator gives are right. It is about the tree, so we
+still trust the printer link: the printed Lean computes what the evaluator
+gives for the tree, and the evaluator gives a value where the printed Lean
+does. The corpus tests the printer.
+
 `tests/typescript/checkTranslate.ts` checks the translator. No second
 translator checks its meaning, so these checks show that the output does not
 change and still compiles; certificates prove more for the files they cover.
@@ -196,6 +208,10 @@ Tolean rejects these, among others:
   `/` and `%` agree with `Int.tdiv` and `Int.tmod`.
 - `===` on objects, because in JS it compares references. It also rejects
   `===` between nullable values.
+- A test with `null` whose answer the type fixes, such as `x === null` after
+  `if (x === null) return …`. The test does nothing, so the code means the
+  same without it. Refusing it keeps every part of the program in the
+  translation, which the proof of the translator relies on.
 - The global `isNaN` and `isFinite`. These convert their argument to a number
   first. Use `Number.isNaN` and `Number.isFinite` instead.
 - Assignment to a parameter, a `const` or a field, and a push onto an array
@@ -358,23 +374,24 @@ path = "node_modules/tolean/lean"
 | Step | What happens | Status | How it is checked |
 |---|---|---|---|
 | 1. Parse and type-check | Tolean's parser reads the source, and the translator types the subset itself | Trusted, tested | `tests/typescript/check.ts` compares the parser's syntax trees with `tsc`'s, on the corpus and on random programs. The type checker is tested through the translation corpus. |
-| 2. Translate | Tolean writes readable Lean definitions (the generated `.lean` files) | **Trusted, not proved**, except in certified files | The golden and reject files of the translation corpus, compiling random programs, the CI drift check, and review. A [certificate](#certificates) proves the step for one file. |
+| 2. Translate | Tolean writes readable Lean definitions (the generated `.lean` files) | **Proved** up to the printer | `translate_sound` proves the translation to the output tree for every accepted program: when the tree's evaluator gives a value, the interpreter gives the same value. The printer link is trusted: that the printed Lean computes what the evaluator gives for the tree, and that the evaluator gives a value where the printed Lean does. The golden files of the corpus, compiling random programs and the CI drift check test it, and a [certificate](#certificates) proves the whole step for one file. |
 | 3. Prove the claims | Hand-written proofs show that each claim in `Spec/*.lean` holds for the generated definitions | **Proved** | The Lean kernel, `#audit_claims`, `lake build --wfail`, and no `sorry`, `admit`, `axiom` or `native_decide` |
 | 4. Assume JS number facts | `SafeIntLaws` and `SpecialValueLaws` in `tolean/TypeScript/Spec/Number.lean` | Trusted, tested | `tests/typescript/jsNumberLaws.test.ts` checks each law against real doubles. |
 | 5. Run | Type stripping or a bundler makes the JavaScript that Node runs | Trusted | The subset uses only constructs that type stripping leaves unchanged |
 | 6. Call | The caller passes inputs that meet the theorems' preconditions | Not checked | Planned: boundary guards |
 
-So a theorem holds for the code that runs if steps 1, 2, 4 and 5 are correct
-and the inputs meet its preconditions. Step 2 is the large step that we trust
-without proof. The plan below turns it into a proof, so that we no longer need
-to trust the translator:
+So a theorem holds for the code that runs if steps 1, 4 and 5 are correct, the
+printer of step 2 is correct, and the inputs meet its preconditions. The plan
+below removes the printer from what we trust, and it tests the interpreter:
 
 | Planned piece | Purpose | Status |
 |---|---|---|
 | Differential test | Run the TypeScript in Node and the generated Lean on the same random inputs, and compare. Evidence for step 2, with a failure report that an agent can reproduce. | Not started |
 | AST as Lean data | The syntax tree of each file as Lean data (`Program`) | Built: `tolean certify` writes it |
-| Output as Lean data | The translator builds its output as a syntax tree, so that one theorem can cover every program it accepts (phase 6 of the certificates plan) | Built: `tolean/TypeScript/Output.lean`, and the translator is total. The theorem is not started. |
+| Output as Lean data | The translator builds its output as a syntax tree, so that one theorem can cover every program it accepts (phase 6 of the certificates plan) | Built: `tolean/TypeScript/Output.lean`, and the translator is total |
+| The translator's theorem | `translate_sound`: for every accepted program, the output tree computes only what the interpreter computes | Built: `tolean/TypeScript/Proof/` |
+| Printer link | For each file, a proof that the printed definitions compute what the output tree means. With the translator's theorem, every file is then proved. | Not started |
 | `eval`, a JS interpreter in Lean | The meaning of a `Program`. It is trusted, so it is tested against Node. | Started: `tolean/TypeScript/Spec/Eval.lean` covers the subset, with `number` values from the abstract model; the test against Node is not started |
 | Construct lemmas | Proved once, for example: an interpreted `for…of` equals `List.foldl` | Built: `execLoop_foldl` in `tolean/TypeScript/Spec/Lemmas/Eval.lean` |
-| Per-file certificate (`f.source`) | Proves `eval(Program)` equals the generated definition, for all inputs. Step 2 is then proved. | Built for the whole subset. All 31 accepted corpus files have one. |
+| Per-file certificate (`f.source`) | Proves `eval(Program)` equals the generated definition, for all inputs. Step 2 is then proved. | Built for the whole subset. All 29 accepted corpus files have one. |
 | Boundary guards | Check the preconditions of step 6 where callers enter the verified code | Not started |

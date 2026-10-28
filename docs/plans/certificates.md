@@ -1,6 +1,6 @@
 # Plan: certificates and round-trip proofs
 
-**Status:** phases 1 to 3 built, phase 4 step 1 built, phase 6 steps 1 and 2 built · **Date:** 2026-10-26
+**Status:** phases 1 to 3 built, phase 4 step 1 built, phase 6 steps 1 to 3 built · **Date:** 2026-10-27
 
 A certificate proves the translation of one file. It states, for each
 function, that an interpreter of the source language and the translated Lean
@@ -79,10 +79,21 @@ printer gives a certificate that Lean refuses.
       calls deep per character, so the fuel never runs out on a real file.
       If it did run out, the translator would refuse the file, and the
       theorem is only about files that the translator accepts.
-   3. **The meaning of the output.** An evaluator gives each tree a meaning,
-      over the same values as the interpreter. Tolean proves that the two
-      agree: when `translate program = .ok out`, the interpreter and the
-      evaluator give the same result for every function and every input.
+   3. **The meaning of the output (built).** `Output/Eval.lean` gives each
+      tree a meaning, over the same values as the interpreter. Tolean proves
+      `translate_sound` in `Proof/Module.lean`: when the translator accepts a
+      file, a function of the output gives a value only when the interpreter
+      gives the same value for the same call. The theorem holds for every
+      input, every model of numbers and every amount of fuel. It does not
+      need the translator's types to be right, because it follows the
+      evaluation of the output back to the source. The proof is in three
+      files. `Proof/Expr.lean` covers expressions, `Proof/Stmt.lean` covers
+      statements, and `Proof/Module.lean` covers calls by induction on the
+      fuel. While writing it, we found two interpreter rules that did not
+      follow ECMA-262, shorthand properties and `-Infinity` under a local
+      `Infinity`, and we fixed them. We also found a test against `null`
+      whose answer the type fixes. The output dropped its operand, so the
+      subset now refuses that test.
    4. **The printer link.** For each file, a theorem states that the printed
       definitions compute what the evaluator gives for the tree. Each output
       form has one lemma, so the proof follows the tree and does not search.
