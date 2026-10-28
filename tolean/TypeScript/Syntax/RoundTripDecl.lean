@@ -371,4 +371,323 @@ theorem parseFunction_reads {T : Edition} (start : Pos) (exported : Bool) (sp : 
             (leaves_trans (leaves_advance (s := s₅) rfl (by simp [s₅, hL₄.left_eq, hs₄]))
               (leaves_trans hL₆ (leaves_inFunction (by simp [hL₆.inFunction_eq, s₅', s₅, hL₄.inFunction_eq, s₃, s₂, s₁, hF]) hL₈)))))))
 
+/-! ### Type aliases -/
+
+/-- `type`, a name, `=`, a type and `;`. -/
+theorem parseTypeAlias_reads (start : Pos) (exported : Bool) (sp : Span) (name : String) (ty : TypeExpr)
+    (hname : exprName name = true) (hty : ty.wf = true) :
+    ∀ (s : ParseState) (ts rest : List Token), s.rest = ts ++ rest → s.left = s.rest.length →
+      Touching ts (identWord "type" :: identWord name :: punctWord "=" :: ty.words ++ [punctWord ";"]) →
+      (∀ y ∈ ts.tail, y.newlineBefore = false) → rest ≠ [] →
+      ∃ d' s', Parse.parseTypeAlias start exported s = .ok d' s' ∧
+        d'.erase = (Decl.typeAlias sp exported name ty).erase ∧ Leaves s s' rest := by
+  intro s ts rest hs hl ht hn hr
+  have hname' : name ∉ Parse.refusedNames := by simpa [exprName] using hname
+  obtain ⟨tk, ts₁, rfl, htk, h₁⟩ := Touching.cons_one (by simpa [identWord] using ht)
+  obtain ⟨nm, ts₂, rfl, hnm, h₂⟩ := Touching.cons_one (by simpa [identWord] using h₁)
+  obtain ⟨eq, ts₃, rfl, heq, h₃⟩ := Touching.cons_one (by simpa [punctWord] using h₂)
+  obtain ⟨tts, ts₄, rfl, htt, h₄⟩ := Touching.append_split h₃
+  obtain ⟨semi, ts₅, rfl, hsemi, h₅⟩ := Touching.cons_one (by simpa [punctWord] using h₄)
+  simp [Touching] at h₅; subst h₅
+  have hs' : s.rest = tk :: nm :: eq :: (tts ++ semi :: rest) := by simpa using hs
+  let s₁ := advanced s tk nm (eq :: (tts ++ semi :: rest))
+  let s₂ := advanced s₁ nm eq (tts ++ semi :: rest)
+  let s₃ : ParseState := { s₂ with rest := tts ++ semi :: rest, left := s₂.left - 1, lastStop := eq.span.stop }
+  have hl₃ : s₃.left = s₃.rest.length := by simp [s₃, s₂, s₁, hl, hs']
+  obtain ⟨t', s₄, hpt, het, hL₄⟩ := parseType_budget ty hty s₃ tts (semi :: rest) rfl hl₃ htt.kinds
+    (fun y hy => hn y (by simp [hy])) (by simp) (followsType_eq_semi (.inr hsemi))
+  have hs₄ : s₄.rest = semi :: rest := hL₄.rest_eq
+  have hnot : eq.kind ≠ .punct "<" := by rw [heq]; exact punct_ne (by decide)
+  refine ⟨.typeAlias ⟨start, semi.span.stop⟩ exported name t',
+    { s₄ with rest := rest, left := s₄.left - 1, lastStop := semi.span.stop }, ?_, by simp [Decl.erase, het],
+    leaves_trans (leaves_advanced hs' hl) (leaves_trans (leaves_advanced (s := s₁) rfl (by simp [s₁, hl, hs']))
+      (leaves_trans (leaves_advance (s := s₂) rfl (by simp [s₂, s₁, hl, hs'])) (leaves_trans hL₄
+        (leaves_advance hs₄ (by rw [hL₄.left_eq, hs₄])))))⟩
+  simp only [Parse.parseTypeAlias]
+  rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_eq hs')), Parse.bind_eq (readName_ok (s := s₁) rfl hnm hname'),
+    Parse.bind_eq (Parse.peek_eq (s := s₂) rfl)]
+  rw [Parse.ite_guard (fun h => by simp [Token.isPunct, hnot] at h)]
+  rw [Parse.bind_eq (Parse.expectPunct_ok (s := s₂) rfl (by simp) heq), Parse.bind_eq (Parse.budget_eq _),
+    Parse.bind_eq hpt, Parse.bind_eq (endStatement_semi hs₄ hr hsemi), Parse.bind_eq (Parse.spanFrom_eq _ _)]
+  rfl
+
+/-! ### The second token of an expression -/
+
+/-- A token kind that is not a name. -/
+def NotIdent (k : TokenKind) : Prop := ∀ m, k ≠ .ident m
+
+/-- The second token of `a ++ b` is the second of `a`, or the first of `b`. -/
+theorem second_append {a b : List TokenKind} {k₀ : TokenKind} {bs : List TokenKind} (hb : b = k₀ :: bs)
+    (hk₀ : NotIdent k₀) (ha : a ≠ [])
+    (IH : ∀ {n k r}, a = .ident n :: k :: r → NotIdent k) :
+    ∀ {n k r}, a ++ b = .ident n :: k :: r → NotIdent k := by
+  intro n k r h
+  subst hb
+  cases a with
+  | nil => exact absurd rfl ha
+  | cons x a' =>
+    cases a' with
+    | nil => simp at h; obtain ⟨_, rfl, _⟩ := h; exact hk₀
+    | cons y a'' => simp at h; obtain ⟨rfl, rfl, rfl⟩ := h; exact IH rfl
+
+theorem Expr.tokens_ne_nil (e : Expr) : e.tokens ≠ [] := by
+  obtain ⟨k, hk, _⟩ := Expr.first e; intro h; rw [h] at hk; simp at hk
+
+theorem notIdent_binOp (op : BinOp) : ∃ k ks, symbol op.symbol = k :: ks ∧ NotIdent k := by
+  cases op <;> simp [BinOp.symbol, symbol, Lex.reservedWords, punctWord, keywordWord, NotIdent]
+
+theorem notIdent_assignOp (op : AssignOp) : ∃ k ks, symbol op.symbol = k :: ks ∧ NotIdent k := by
+  cases op <;> simp [AssignOp.symbol, symbol, Lex.reservedWords, punctWord, keywordWord, NotIdent]
+
+/-- An expression that starts with a name has no name as its second token: an
+operator, a `.`, a `(` or a `[` follows the name, if anything does. -/
+theorem Expr.second : ∀ (e : Expr) {n : String} {k : TokenKind} {r : List TokenKind},
+    e.tokens = .ident n :: k :: r → NotIdent k
+  | .member sp o p, _, _, _, h => by
+    rw [Expr.tokens_member] at h
+    exact second_append rfl (by simp [NotIdent]) (Expr.tokens_ne_nil o) (fun h' => Expr.second o h') h
+  | .index sp o i, _, _, _, h => by
+    rw [Expr.tokens_index, List.append_assoc] at h
+    exact second_append rfl (by simp [NotIdent]) (Expr.tokens_ne_nil o) (fun h' => Expr.second o h') h
+  | .call sp c as, _, _, _, h => by
+    rw [Expr.tokens_call, List.append_assoc] at h
+    exact second_append rfl (by simp [NotIdent]) (Expr.tokens_ne_nil c) (fun h' => Expr.second c h') h
+  | .postfix sp op a, _, _, _, h => by
+    rw [Expr.tokens_postfix] at h
+    exact second_append rfl (by simp [NotIdent]) (Expr.tokens_ne_nil a) (fun h' => Expr.second a h') h
+  | .binary sp op l r', _, _, _, h => by
+    rw [Expr.tokens_binary, List.append_assoc] at h
+    obtain ⟨k₀, ks, hk, hn⟩ := notIdent_binOp op
+    exact second_append (by rw [hk]; rfl) hn (Expr.tokens_ne_nil l) (fun h' => Expr.second l h') h
+  | .cond sp t a b, _, _, _, h => by
+    rw [Expr.tokens_cond, List.append_assoc] at h
+    exact second_append rfl (by simp [NotIdent]) (Expr.tokens_ne_nil t) (fun h' => Expr.second t h') h
+  | .assign sp op t v, _, _, _, h => by
+    rw [Expr.tokens_assign, List.append_assoc] at h
+    obtain ⟨k₀, ks, hk, hn⟩ := notIdent_assignOp op
+    exact second_append (by rw [hk]; rfl) hn (Expr.tokens_ne_nil t) (fun h' => Expr.second t h') h
+  | .ident .., _, _, _, h | .number .., _, _, _, h | .bigint .., _, _, _, h | .string .., _, _, _, h
+  | .null _, _, _, _, h => by simp [Expr.tokens, Expr.words, identWord, keywordWord] at h
+  | .bool _ b, _, _, _, h => by cases b <;> simp [Expr.tokens, Expr.words, keywordWord] at h
+  | .array .., _, _, _, h => by simp [Expr.tokens_array] at h
+  | .object .., _, _, _, h => by simp [Expr.tokens_object] at h
+  | .paren .., _, _, _, h => by simp [Expr.tokens_paren] at h
+  | .unary _ op _, _, _, _, h => by
+    rw [Expr.tokens_unary] at h
+    cases op <;> simp [UnaryOp.symbol, symbol, Lex.reservedWords, punctWord, keywordWord] at h
+  | .prefix .., _, _, _, h => by simp [Expr.tokens_prefix] at h
+
+
+/-! ### Fields of an interface -/
+
+/-- What `Decl.erase` does to a field. -/
+def Field.erase (f : Field) : Field := { f with span := noSpan, type := f.type.erase }
+
+/-- `name: T;`, without `readonly` and `?`. -/
+theorem parseField_plain (sp : Span) (name : String) (ty : TypeExpr) (hty : ty.wf = true)
+    (s : ParseState) (ts rest : List Token) (hs : s.rest = ts ++ rest) (hl : s.left = s.rest.length)
+    (ht : Touching ts (Field.words ⟨sp, false, name, false, ty⟩)) (hn : ∀ y ∈ ts.tail, y.newlineBefore = false)
+    (hr : rest ≠ []) :
+    ∃ f' s', Parse.parseField s = .ok f' s' ∧ f'.erase = Field.erase ⟨sp, false, name, false, ty⟩ ∧
+      Leaves s s' rest := by
+  simp only [Field.words, Bool.false_eq_true, ↓reduceIte, List.nil_append] at ht
+  obtain ⟨nm, ts₁, rfl, hnm, h₁⟩ : ∃ nm ts₁, ts = nm :: ts₁ ∧ [nm.kind] = propertyName name ∧
+      Touching ts₁ (punctWord ":" :: ty.words ++ [punctWord ";"]) := by
+    obtain ⟨a, b, rfl, ha, _, hb⟩ := ht
+    have hlen := congrArg List.length ha
+    rw [List.length_map, length_propertyName] at hlen
+    match a, ha with
+    | [nm], ha => exact ⟨nm, b, rfl, by simpa using ha, hb⟩
+  obtain ⟨c, ts₂, rfl, hc, h₂⟩ := Touching.cons_one (by simpa [punctWord] using h₁)
+  obtain ⟨tts, ts₃, rfl, htt, h₃⟩ := Touching.append_split h₂
+  obtain ⟨semi, ts₄, rfl, hsemi, h₄⟩ := Touching.cons_one (by simpa [punctWord] using h₃)
+  simp [Touching] at h₄; subst h₄
+  have hs' : s.rest = nm :: c :: (tts ++ semi :: rest) := by simpa using hs
+  let s₁ := advanced s nm c (tts ++ semi :: rest)
+  let s₂ : ParseState := { s₁ with rest := tts ++ semi :: rest, left := s₁.left - 1, lastStop := c.span.stop }
+  have hl₂ : s₂.left = s₂.rest.length := by simp [s₂, s₁, hl, hs']
+  obtain ⟨t', s₃, hpt, het, hL₃⟩ := parseType_budget ty hty s₂ tts (semi :: rest) rfl hl₂ htt.kinds
+    (fun y hy => hn y (by simp [hy])) (by simp) (followsType_eq_semi (.inr hsemi))
+  have hs₃ : s₃.rest = semi :: rest := hL₃.rest_eq
+  have hc1 : (c.kind == .punct "?") = false := by simp [hc]
+  have hc2 : (c.kind == .punct "(") = false := by simp [hc]
+  have hc3 : (c.kind == .punct "<") = false := by simp [hc]
+  refine ⟨⟨⟨nm.span.start, semi.span.stop⟩, false, name, false, t'⟩,
+    { s₃ with rest := rest, left := s₃.left - 1, lastStop := semi.span.stop }, ?_, by simp [Field.erase, het],
+    leaves_trans (leaves_advanced hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))
+      (leaves_trans hL₃ (leaves_advance hs₃ (by rw [hL₃.left_eq, hs₃]))))⟩
+  simp only [Parse.parseField]
+  rw [Parse.bind_eq (Parse.peek_eq hs'), Parse.bind_eq (Parse.peekAt_rest _ _)]
+  simp only [hs', List.getElem?_cons_succ, List.getElem?_cons_zero, Option.getD_some, Token.isAnyIdent, hc,
+    Bool.and_false, Bool.or_false, Bool.false_or, Bool.false_eq_true, ↓reduceIte, Parse.pure_bind]
+  rw [Parse.bind_eq (readPropertyName_ok hs' hnm), Parse.bind_eq (Parse.peek_eq (s := s₁) rfl)]
+  rw [if_neg (show ¬ (c.isPunct "?" = true) by simp [Token.isPunct, hc]), Parse.pure_bind,
+    Parse.bind_eq (Parse.peek_eq (s := s₁) rfl)]
+  rw [Parse.ite_guard (fun h => by simp [Token.isPunct, hc] at h)]
+  rw [if_pos (show c.isPunct ":" = true by simp [Token.isPunct, hc]), Parse.pure_bind]
+  rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_cons (s := s₁) rfl (by simp))), Parse.bind_eq (Parse.budget_eq _),
+    Parse.bind_eq hpt, Parse.bind_eq (Parse.peek_eq hs₃)]
+  rw [if_pos (show (semi.isPunct ";" || semi.isPunct ",") = true by simp [Token.isPunct, hsemi])]
+  rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_cons hs₃ hr)), Parse.bind_eq (Parse.spanFrom_eq _ _)]
+  simp [Token.isPunct, hc, pure, EStateM.pure]
+
+
+/-- `name?: T;`. -/
+theorem parseField_opt (sp : Span) (name : String) (ty : TypeExpr) (hty : ty.wf = true)
+    (s : ParseState) (ts rest : List Token) (hs : s.rest = ts ++ rest) (hl : s.left = s.rest.length)
+    (ht : Touching ts (Field.words ⟨sp, false, name, true, ty⟩)) (hn : ∀ y ∈ ts.tail, y.newlineBefore = false)
+    (hr : rest ≠ []) :
+    ∃ f' s', Parse.parseField s = .ok f' s' ∧ f'.erase = Field.erase ⟨sp, false, name, true, ty⟩ ∧
+      Leaves s s' rest := by
+  simp only [Field.words, Bool.false_eq_true, ↓reduceIte, List.nil_append] at ht
+  obtain ⟨nm, ts₁, rfl, hnm, h₁⟩ : ∃ nm ts₁, ts = nm :: ts₁ ∧ [nm.kind] = propertyName name ∧
+      Touching ts₁ (punctWord "?" :: punctWord ":" :: ty.words ++ [punctWord ";"]) := by
+    obtain ⟨a, b, rfl, ha, _, hb⟩ := ht
+    have hlen := congrArg List.length ha
+    rw [List.length_map, length_propertyName] at hlen
+    match a, ha with
+    | [nm], ha => exact ⟨nm, b, rfl, by simpa using ha, hb⟩
+  obtain ⟨q, ts₀, rfl, hq, h₀⟩ := Touching.cons_one (by simpa [punctWord] using h₁)
+  obtain ⟨c, ts₂, rfl, hc, h₂⟩ := Touching.cons_one (by simpa [punctWord] using h₀)
+  obtain ⟨tts, ts₃, rfl, htt, h₃⟩ := Touching.append_split h₂
+  obtain ⟨semi, ts₄, rfl, hsemi, h₄⟩ := Touching.cons_one (by simpa [punctWord] using h₃)
+  simp [Touching] at h₄; subst h₄
+  have hs' : s.rest = nm :: q :: c :: (tts ++ semi :: rest) := by simpa using hs
+  let s₁ := advanced s nm q (c :: (tts ++ semi :: rest))
+  let s₁' := advanced s₁ q c (tts ++ semi :: rest)
+  let s₂ : ParseState := { s₁' with rest := tts ++ semi :: rest, left := s₁'.left - 1, lastStop := c.span.stop }
+  have hl₂ : s₂.left = s₂.rest.length := by simp [s₂, s₁', s₁, hl, hs']
+  obtain ⟨t', s₃, hpt, het, hL₃⟩ := parseType_budget ty hty s₂ tts (semi :: rest) rfl hl₂ htt.kinds
+    (fun y hy => hn y (by simp [hy])) (by simp) (followsType_eq_semi (.inr hsemi))
+  have hs₃ : s₃.rest = semi :: rest := hL₃.rest_eq
+  refine ⟨⟨⟨nm.span.start, semi.span.stop⟩, false, name, true, t'⟩,
+    { s₃ with rest := rest, left := s₃.left - 1, lastStop := semi.span.stop }, ?_, by simp [Field.erase, het],
+    leaves_trans (leaves_advanced hs' hl) (leaves_trans (leaves_advanced (s := s₁) rfl (by simp [s₁, hl, hs']))
+      (leaves_trans (leaves_advance (s := s₁') rfl (by simp [s₁', s₁, hl, hs']))
+        (leaves_trans hL₃ (leaves_advance hs₃ (by rw [hL₃.left_eq, hs₃])))))⟩
+  simp only [Parse.parseField]
+  rw [Parse.bind_eq (Parse.peek_eq hs'), Parse.bind_eq (Parse.peekAt_rest _ _)]
+  simp only [hs', List.getElem?_cons_succ, List.getElem?_cons_zero, Option.getD_some, Token.isAnyIdent, hq,
+    Bool.and_false, Bool.or_false, Bool.false_or, Bool.false_eq_true, ↓reduceIte, Parse.pure_bind]
+  rw [Parse.bind_eq (readPropertyName_ok hs' hnm), Parse.bind_eq (Parse.peek_eq (s := s₁) rfl)]
+  rw [if_pos (show q.isPunct "?" = true by simp [Token.isPunct, hq]),
+    Parse.bind_eq (Parse.discard_eq (Parse.advance_eq (s := s₁) rfl)), Parse.bind_eq (Parse.peek_eq (s := s₁') rfl)]
+  rw [Parse.ite_guard (fun h => by simp [Token.isPunct, hc] at h)]
+  rw [if_pos (show c.isPunct ":" = true by simp [Token.isPunct, hc]), Parse.pure_bind]
+  rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_cons (s := s₁') rfl (by simp))), Parse.bind_eq (Parse.budget_eq _),
+    Parse.bind_eq hpt, Parse.bind_eq (Parse.peek_eq hs₃)]
+  rw [if_pos (show (semi.isPunct ";" || semi.isPunct ",") = true by simp [Token.isPunct, hsemi])]
+  rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_cons hs₃ hr)), Parse.bind_eq (Parse.spanFrom_eq _ _)]
+  simp [Token.isPunct, hc, hq, pure, EStateM.pure]
+
+/-- `readonly name: T;` or `readonly name?: T;`. -/
+theorem parseField_ro (sp : Span) (name : String) (opt : Bool) (ty : TypeExpr) (hty : ty.wf = true)
+    (s : ParseState) (ts rest : List Token) (hs : s.rest = ts ++ rest) (hl : s.left = s.rest.length)
+    (ht : Touching ts (Field.words ⟨sp, true, name, opt, ty⟩)) (hn : ∀ y ∈ ts.tail, y.newlineBefore = false)
+    (hr : rest ≠ []) :
+    ∃ f' s', Parse.parseField s = .ok f' s' ∧ f'.erase = Field.erase ⟨sp, true, name, opt, ty⟩ ∧
+      Leaves s s' rest := by
+  simp only [Field.words, ↓reduceIte] at ht
+  obtain ⟨ro, ts₀, rfl, hro, ht'⟩ := Touching.cons_one (by simpa [identWord] using ht)
+  obtain ⟨nm, ts₁, rfl, hnm, h₁⟩ : ∃ nm ts₁, ts₀ = nm :: ts₁ ∧ [nm.kind] = propertyName name ∧
+      Touching ts₁ ((if opt = true then [punctWord "?"] else []) ++ punctWord ":" :: (ty.words ++ [punctWord ";"])) := by
+    obtain ⟨a, b, rfl, ha, _, hb⟩ := ht'
+    have hlen := congrArg List.length ha
+    rw [List.length_map, length_propertyName] at hlen
+    match a, ha with
+    | [nm], ha => exact ⟨nm, b, rfl, by simpa using ha, hb⟩
+  have hnmk : nm.kind = .keyword name ∨ nm.kind = .ident name := by
+    unfold propertyName at hnm; split at hnm <;> simp [keywordWord, identWord] at hnm <;> simp [hnm]
+  have hnmn : nm.newlineBefore = false := hn nm (by simp)
+  cases opt with
+  | false =>
+    obtain ⟨c, ts₂, rfl, hc, h₂⟩ := Touching.cons_one (by simpa [punctWord] using h₁)
+    obtain ⟨tts, ts₃, rfl, htt, h₃⟩ := Touching.append_split h₂
+    obtain ⟨semi, ts₄, rfl, hsemi, h₄⟩ := Touching.cons_one (by simpa [punctWord] using h₃)
+    simp [Touching] at h₄; subst h₄
+    have hs' : s.rest = ro :: nm :: c :: (tts ++ semi :: rest) := by simpa using hs
+    let s₀ := advanced s ro nm (c :: (tts ++ semi :: rest))
+    let s₁ := advanced s₀ nm c (tts ++ semi :: rest)
+    let s₂ : ParseState := { s₁ with rest := tts ++ semi :: rest, left := s₁.left - 1, lastStop := c.span.stop }
+    have hl₂ : s₂.left = s₂.rest.length := by simp [s₂, s₁, s₀, hl, hs']
+    obtain ⟨t', s₃, hpt, het, hL₃⟩ := parseType_budget ty hty s₂ tts (semi :: rest) rfl hl₂ htt.kinds
+      (fun y hy => hn y (by simp [hy])) (by simp) (followsType_eq_semi (.inr hsemi))
+    have hs₃ : s₃.rest = semi :: rest := hL₃.rest_eq
+    refine ⟨⟨⟨ro.span.start, semi.span.stop⟩, true, name, false, t'⟩,
+      { s₃ with rest := rest, left := s₃.left - 1, lastStop := semi.span.stop }, ?_, by simp [Field.erase, het],
+      leaves_trans (leaves_advanced hs' hl) (leaves_trans (leaves_advanced (s := s₀) rfl (by simp [s₀, hl, hs']))
+        (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, s₀, hl, hs']))
+          (leaves_trans hL₃ (leaves_advance hs₃ (by rw [hL₃.left_eq, hs₃])))))⟩
+    simp only [Parse.parseField]
+    rw [Parse.bind_eq (Parse.peek_eq hs'), Parse.bind_eq (Parse.peekAt_rest _ _)]
+    rcases hnmk with hnmk | hnmk
+    all_goals
+      simp only [hs', List.getElem?_cons_succ, List.getElem?_cons_zero, Option.getD_some, Token.isAnyIdent, Token.isIdent,
+        hro, hnmk, hnmn, beq_self_eq_true, Bool.true_and, Bool.not_false, Bool.true_or, Bool.or_true, Bool.and_true,
+        ↓reduceIte]
+      rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_eq hs')), Parse.bind_eq (readPropertyName_ok (s := s₀) rfl hnm),
+        Parse.bind_eq (Parse.peek_eq (s := s₁) rfl)]
+      rw [if_neg (show ¬ (c.isPunct "?" = true) by simp [Token.isPunct, hc]), Parse.pure_bind,
+        Parse.bind_eq (Parse.peek_eq (s := s₁) rfl)]
+      rw [Parse.ite_guard (fun h => by simp [Token.isPunct, hc] at h)]
+      rw [if_pos (show c.isPunct ":" = true by simp [Token.isPunct, hc]), Parse.pure_bind]
+      rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_cons (s := s₁) rfl (by simp))), Parse.bind_eq (Parse.budget_eq _),
+      Parse.bind_eq hpt, Parse.bind_eq (Parse.peek_eq hs₃)]
+      rw [if_pos (show (semi.isPunct ";" || semi.isPunct ",") = true by simp [Token.isPunct, hsemi])]
+      rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_cons hs₃ hr)), Parse.bind_eq (Parse.spanFrom_eq _ _)]
+      simp [Token.isPunct, hc, pure, EStateM.pure]
+  | true =>
+    obtain ⟨q, ts₀', rfl, hq, h₀⟩ := Touching.cons_one (by simpa [punctWord] using h₁)
+    obtain ⟨c, ts₂, rfl, hc, h₂⟩ := Touching.cons_one (by simpa [punctWord] using h₀)
+    obtain ⟨tts, ts₃, rfl, htt, h₃⟩ := Touching.append_split h₂
+    obtain ⟨semi, ts₄, rfl, hsemi, h₄⟩ := Touching.cons_one (by simpa [punctWord] using h₃)
+    simp [Touching] at h₄; subst h₄
+    have hs' : s.rest = ro :: nm :: q :: c :: (tts ++ semi :: rest) := by simpa using hs
+    let s₀ := advanced s ro nm (q :: c :: (tts ++ semi :: rest))
+    let s₁ := advanced s₀ nm q (c :: (tts ++ semi :: rest))
+    let s₁' := advanced s₁ q c (tts ++ semi :: rest)
+    let s₂ : ParseState := { s₁' with rest := tts ++ semi :: rest, left := s₁'.left - 1, lastStop := c.span.stop }
+    have hl₂ : s₂.left = s₂.rest.length := by simp [s₂, s₁', s₁, s₀, hl, hs']
+    obtain ⟨t', s₃, hpt, het, hL₃⟩ := parseType_budget ty hty s₂ tts (semi :: rest) rfl hl₂ htt.kinds
+      (fun y hy => hn y (by simp [hy])) (by simp) (followsType_eq_semi (.inr hsemi))
+    have hs₃ : s₃.rest = semi :: rest := hL₃.rest_eq
+    refine ⟨⟨⟨ro.span.start, semi.span.stop⟩, true, name, true, t'⟩,
+      { s₃ with rest := rest, left := s₃.left - 1, lastStop := semi.span.stop }, ?_, by simp [Field.erase, het],
+      leaves_trans (leaves_advanced hs' hl) (leaves_trans (leaves_advanced (s := s₀) rfl (by simp [s₀, hl, hs']))
+        (leaves_trans (leaves_advanced (s := s₁) rfl (by simp [s₁, s₀, hl, hs']))
+          (leaves_trans (leaves_advance (s := s₁') rfl (by simp [s₁', s₁, s₀, hl, hs']))
+            (leaves_trans hL₃ (leaves_advance hs₃ (by rw [hL₃.left_eq, hs₃]))))))⟩
+    simp only [Parse.parseField]
+    rw [Parse.bind_eq (Parse.peek_eq hs'), Parse.bind_eq (Parse.peekAt_rest _ _)]
+    rcases hnmk with hnmk | hnmk
+    all_goals
+      simp only [hs', List.getElem?_cons_succ, List.getElem?_cons_zero, Option.getD_some, Token.isAnyIdent, Token.isIdent,
+        hro, hnmk, hnmn, beq_self_eq_true, Bool.true_and, Bool.not_false, Bool.true_or, Bool.or_true, Bool.and_true,
+        ↓reduceIte]
+      rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_eq hs')), Parse.bind_eq (readPropertyName_ok (s := s₀) rfl hnm),
+        Parse.bind_eq (Parse.peek_eq (s := s₁) rfl)]
+      rw [if_pos (show q.isPunct "?" = true by simp [Token.isPunct, hq]),
+        Parse.bind_eq (Parse.discard_eq (Parse.advance_eq (s := s₁) rfl)), Parse.bind_eq (Parse.peek_eq (s := s₁') rfl)]
+      rw [Parse.ite_guard (fun h => by simp [Token.isPunct, hc] at h)]
+      rw [if_pos (show c.isPunct ":" = true by simp [Token.isPunct, hc]), Parse.pure_bind]
+      rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_cons (s := s₁') rfl (by simp))), Parse.bind_eq (Parse.budget_eq _),
+      Parse.bind_eq hpt, Parse.bind_eq (Parse.peek_eq hs₃)]
+      rw [if_pos (show (semi.isPunct ";" || semi.isPunct ",") = true by simp [Token.isPunct, hsemi])]
+      rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_cons hs₃ hr)), Parse.bind_eq (Parse.spanFrom_eq _ _)]
+      simp [Token.isPunct, hc, hq, pure, EStateM.pure]
+
+
+/-- A field of an interface: `readonly` or not, a name, `?` or not, `:`, a type and `;`. -/
+theorem parseField_reads (f : Field) (hty : f.type.wf = true) (s : ParseState) (ts rest : List Token)
+    (hs : s.rest = ts ++ rest) (hl : s.left = s.rest.length) (ht : Touching ts f.words)
+    (hn : ∀ y ∈ ts.tail, y.newlineBefore = false) (hr : rest ≠ []) :
+    ∃ f' s', Parse.parseField s = .ok f' s' ∧ f'.erase = f.erase ∧ Leaves s s' rest := by
+  obtain ⟨sp, ro, name, opt, ty⟩ := f
+  cases ro with
+  | true => exact parseField_ro sp name opt ty hty s ts rest hs hl ht hn hr
+  | false =>
+    cases opt with
+    | false => exact parseField_plain sp name ty hty s ts rest hs hl ht hn hr
+    | true => exact parseField_opt sp name ty hty s ts rest hs hl ht hn hr
+
 end tolean.TypeScript.Syntax
