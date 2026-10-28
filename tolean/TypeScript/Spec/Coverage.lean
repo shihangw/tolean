@@ -1,6 +1,7 @@
 import Lean
 import tolean.TypeScript.Proof.Module
 import tolean.TypeScript.Syntax.Equality
+import tolean.TypeScript.Syntax.Source
 import tolean.TypeScript.Spec.Lemmas.Number
 import tolean.TypeScript.Spec.Coverage.LexicalGrammar
 import tolean.TypeScript.Spec.Coverage.Expressions

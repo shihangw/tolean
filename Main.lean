@@ -1,5 +1,6 @@
 import tolean.TypeScript.Syntax.Parser
 import tolean.TypeScript.Syntax.Print
+import tolean.TypeScript.Syntax.Source
 import tolean.TypeScript.Translate
 import tolean.Go.Syntax.Parser
 import tolean.Go.Syntax.Print
@@ -13,8 +14,9 @@ import tolean.Project
 The `tolean` command.
 
 ```
-tolean parse [--target ES20xx] <file>
-    print the syntax tree of <file>
+tolean parse [--target ES20xx] [--round-trip] <file>
+    print the syntax tree of <file>; with --round-trip, also print the tree
+    as source, parse that, and exit with 3 unless it gives the same tree
 tolean translate [--check] [--config <json>]
     build every unit that tolean.json lists, or that the inline JSON <json>
     lists; with --check, write nothing and fail when a generated file is not
@@ -83,13 +85,17 @@ def parseGoFile (path : String) : IO UInt32 := do
     IO.eprintln (e.render path)
     return 1
 
-def parseFile (target : Edition) (path : String) : IO UInt32 := do
+def parseFile (target : Edition) (path : String) (roundTrip : Bool := false) : IO UInt32 := do
   if path.endsWith ".go" then return ← parseGoFile path
   unless ← checkLanguage path do return 2
   let source ← IO.FS.readFile path
   match Syntax.parse source target with
   | .ok m =>
     IO.println m.toSexp.render
+    if roundTrip then
+      if let .error e := Syntax.roundTrip source target then
+        IO.eprintln s!"{path}: the round trip fails: {e}"
+        return 3
     return 0
   | .error e =>
     IO.eprintln (e.render path)
@@ -230,6 +236,7 @@ def translateProject (check : Bool) (inline : Option String := none) : IO UInt32
 
 def run (target : Edition) : List String → IO UInt32
   | ["parse", path] => parseFile target path
+  | ["parse", "--round-trip", path] => parseFile target path true
   | ["translate"] => translateProject false
   | ["translate", "--check"] => translateProject true
   | ["translate-workspace"] => do

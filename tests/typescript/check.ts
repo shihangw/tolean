@@ -29,13 +29,21 @@ const CONSERVATIVE = 'tsc may read this';
 
 type LeanResult = { kind: 'tree'; sexp: string } | { kind: 'refused'; message: string };
 
+/** Each tree that the parser gives is printed as source and parsed again. */
+const roundTrips = { checked: 0, failed: [] as Array<string> };
+
 function lean(path: string, target?: string): LeanResult {
   const args = target === undefined ? [] : ['--target', target];
-  const run = spawnSync(tolean, ['parse', ...args, path], { encoding: 'utf8' });
+  const run = spawnSync(tolean, ['parse', ...args, '--round-trip', path], { encoding: 'utf8' });
   if (run.error !== undefined) {
     throw run.error;
   }
-  if (run.status === 0) {
+  // 3: the tree printed as source parses as another tree (Syntax/Source.lean).
+  if (run.status === 3) {
+    roundTrips.failed.push(run.stderr.trim());
+  }
+  if (run.status === 0 || run.status === 3) {
+    roundTrips.checked++;
     return { kind: 'tree', sexp: run.stdout.trimEnd() };
   }
   if (run.status === 1) {
@@ -358,6 +366,8 @@ accept.forEach(checkAccept);
 reject.forEach(checkReject);
 console.log(`corpus: ${accept.length} accepted files, ${reject.length} refused files`);
 fuzz(flag('--fuzz') ?? 500, flag('--seed') ?? Math.floor(Math.random() * 1e9));
+console.log(`round trip: ${roundTrips.checked} trees printed as source and parsed again, ${roundTrips.failed.length} differ`);
+failures.push(...roundTrips.failed);
 
 for (const f of failures) {
   console.error(`FAIL ${f}`);

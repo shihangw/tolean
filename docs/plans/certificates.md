@@ -60,7 +60,13 @@ printer gives a certificate that Lean refuses.
       kernel parses a 2.7 KB file in about ten seconds.
    2. **Round trips.** With a total printer from syntax trees back to source
       text, Tolean proves the round trip `parse (print t) = .ok t` for every
-      tree in the subset.
+      tree in the subset. The printer is built: `Syntax/Source.lean` writes
+      each node in one form, every statement on a line of its own and ending
+      in `;`, and every two tokens one space apart. `tolean parse
+      --round-trip` prints the tree as source, parses that, and requires the
+      same tree apart from spans. `tests/typescript/check.ts` runs it on
+      every tree that the parser gives, on the corpus and on random
+      programs. The proof for every tree is not built yet.
 5. **The interpreter against Node.** A differential test runs random programs
    in the interpreter and in Node, and requires the same results. This is
    evidence that the interpreter means what JavaScript means.
