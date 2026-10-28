@@ -79,6 +79,13 @@ still trust the printer link: the printed Lean computes what the evaluator
 gives for the tree, and the evaluator gives a value where the printed Lean
 does. The corpus tests the printer.
 
+`tolean/TypeScript/Spec/Conformance/` holds a check for each rule of
+ECMA-262 that the interpreter or the translator once broke. It has one file
+for each chapter of the spec. A theorem states the rule for every input, and
+a `#guard` checks one input. `Proof/Output.lean` does the same for the rules
+that come from Lean and the project. CI builds these files with the library,
+so a check that stops holding fails the build.
+
 `tests/typescript/checkTranslate.ts` checks the translator. No second
 translator checks its meaning, so these checks show that the output does not
 change and still compiles; certificates prove more for the files they cover.
