@@ -66,7 +66,12 @@ printer gives a certificate that Lean refuses.
       --round-trip` prints the tree as source, parses that, and requires the
       same tree apart from spans. `tests/typescript/check.ts` runs it on
       every tree that the parser gives, on the corpus and on random
-      programs. The proof for every tree is not built yet.
+      programs. The proof for types is built: `types_reads` in
+      `Syntax/RoundTrip.lean` states that the parser reads the tokens of
+      every type it can read as that type, apart from spans, given fuel for
+      how deep the type nests. The proofs for expressions, statements and
+      declarations, and the proof that the lexer gives the printed tokens,
+      are not built yet.
 5. **The interpreter against Node.** A differential test runs random programs
    in the interpreter and in Node, and requires the same results. This is
    evidence that the interpreter means what JavaScript means.

@@ -72,8 +72,13 @@ def advance : ParseM Token := do
   set { s with lastStop := t.span.stop }
   return t
 
-def skip (count : Nat) : ParseM Unit := do
-  for _ in [0:count] do discard advance
+/-- Read `count` tokens. The recursion is structural, so that a proof and the
+kernel can unfold it. -/
+def skip : Nat → ParseM Unit
+  | 0 => pure ()
+  | count + 1 => do
+    discard advance
+    skip count
 
 def spanFrom (start : Pos) : ParseM Span := do
   return ⟨start, (← get).lastStop⟩
@@ -144,6 +149,36 @@ def withLoop {A : Type} (body : ParseM A) : ParseM A := do
 
 /-! ### Types -/
 
+/-- One step of the loop over type arguments: an argument, and the `,` after
+it, if one comes. The loops of the parser are named, so that a proof can name
+them. -/
+def typeArgStep (parseArg : ParseM TypeExpr) (args : Array TypeExpr) :
+    ParseM (Array TypeExpr × Bool) := do
+  let args := args.push (← parseArg)
+  let t ← peek
+  if !t.isPunct "," then return (args, false)
+  discard advance
+  return (args, true)
+
+/-- One step of the loop over the members of a union: a `|`, and the member
+after it. -/
+def unionStep (parseMember : ParseM TypeExpr) (members : Array TypeExpr) :
+    ParseM (Array TypeExpr × Bool) := do
+  let t ← peek
+  if !t.isPunct "|" then return (members, false)
+  discard advance
+  return (members.push (← parseMember), true)
+
+/-- One step of the loop over the `[]` of an array type that starts at
+`start`. -/
+def arrayStep (start : Pos) (type : TypeExpr) : ParseM (TypeExpr × Bool) := do
+  let t ← peek
+  -- `tsc` does not read `T` `[]` across a line break as an array type.
+  if !t.isPunct "[" || t.newlineBefore then return (type, false)
+  unless (← peekAt 1).isPunct "]" do failAt t "indexed access types are not supported"
+  skip 2
+  return (.array (← spanFrom start) type, true)
+
 mutual
 
 def parseType (fuel : Nat) : ParseM TypeExpr := do
@@ -154,11 +189,7 @@ def parseType (fuel : Nat) : ParseM TypeExpr := do
   let leading := t.isPunct "|"
   if leading then discard advance
   let first ← parseArrayType fuel
-  let members ← iterate (← budget) #[first] fun members => do
-    let t ← peek
-    if !t.isPunct "|" then return (members, false)
-    discard advance
-    return (members.push (← parseArrayType fuel), true)
+  let members ← iterate (← budget) #[first] (unionStep (parseArrayType fuel))
   let t ← peek
   if t.isPunct "&" then failAt t "intersection types are not supported"
   if leading || members.size > 1 then return .union (← spanFrom start) members.toList
@@ -167,13 +198,7 @@ def parseType (fuel : Nat) : ParseM TypeExpr := do
 def parseArrayType (fuel : Nat) : ParseM TypeExpr := do
   let fuel + 1 := fuel | outOfFuel
   let start := (← peek).span.start
-  iterate (← budget) (← parsePrimaryType fuel) fun type => do
-    let t ← peek
-    -- `tsc` does not read `T` `[]` across a line break as an array type.
-    if !t.isPunct "[" || t.newlineBefore then return (type, false)
-    unless (← peekAt 1).isPunct "]" do failAt t "indexed access types are not supported"
-    skip 2
-    return (.array (← spanFrom start) type, true)
+  iterate (← budget) (← parsePrimaryType fuel) (arrayStep start)
 
 def parsePrimaryType (fuel : Nat) : ParseM TypeExpr := do
   let fuel + 1 := fuel | outOfFuel
@@ -187,12 +212,7 @@ def parsePrimaryType (fuel : Nat) : ParseM TypeExpr := do
     if refusedNames.contains name then failAt t s!"'{name}' is not supported as a name"
     if !next.isPunct "<" || next.newlineBefore then return .ref t.span name []
     discard advance
-    let args ← iterate (← budget) #[] fun args => do
-      let args := args.push (← parseType fuel)
-      let t ← peek
-      if !t.isPunct "," then return (args, false)
-      discard advance
-      return (args, true)
+    let args ← iterate (← budget) #[] (typeArgStep (parseType fuel))
     let _ ← expectPunct ">"
     return .ref (← spanFrom t.span.start) name args.toList
   | .keyword "void" => return .keyword t.span "void"

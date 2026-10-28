@@ -2,6 +2,7 @@ import Lean
 import tolean.TypeScript.Proof.Module
 import tolean.TypeScript.Syntax.Equality
 import tolean.TypeScript.Syntax.Source
+import tolean.TypeScript.Syntax.RoundTrip
 import tolean.TypeScript.Spec.Lemmas.Number
 import tolean.TypeScript.Spec.Coverage.LexicalGrammar
 import tolean.TypeScript.Spec.Coverage.Expressions
@@ -204,6 +205,27 @@ def extras : List Group := [
   ⟨"How Lean reads the output", [``Proof.eval_value, ``Proof.checkName_ok, ``Proof.checkLocalName_ok,
     ``checkLocalName_not_interface]⟩,
   ⟨"Imports across editions", [``translateImport_edition]⟩,
+  ⟨"The parser's round trip: types, as tokens",
+    [``Syntax.types_reads, ``Syntax.parseType_union, ``Syntax.parseType_plain,
+    ``Syntax.parseArrayType_reads, ``Syntax.parsePrimaryType_ref, ``Syntax.parsePrimaryType_paren,
+    ``Syntax.parsePrimaryType_ident, ``Syntax.parsePrimaryType_simple, ``Syntax.reads_one,
+    ``Syntax.iterate_brackets, ``Syntax.iterate_brackets_goal, ``Syntax.iterate_sep,
+    ``Syntax.iterate_sepBefore, ``Syntax.iterate_stop, ``Syntax.unionStep_go,
+    ``Syntax.unionStep_stop, ``Syntax.arrayWF_split, ``Syntax.arrayWF_head, ``Syntax.arrayOf_array,
+    ``Syntax.brackets_succ, ``Syntax.length_brackets, ``Syntax.tokens_ref, ``Syntax.tokens_union,
+    ``Syntax.tokens_union_one, ``Syntax.wordsOf_eq, ``Syntax.commas_flatten, ``Syntax.bars_flatten,
+    ``Syntax.joined_cons, ``Syntax.length_joined, ``Syntax.length_sepBefore,
+    ``Syntax.eraseAll_append, ``Syntax.length_eraseAll, ``Syntax.allWF_iff, ``Syntax.allArrayWF_iff,
+    ``Syntax.height_le_heightOf, ``Syntax.followsType_cons, ``Syntax.followsType_punct,
+    ``Syntax.followsArray_punct, ``Syntax.punct_ne, ``Syntax.leaves_advance,
+    ``Syntax.leaves_advanced, ``Syntax.leaves_trans, ``Syntax.Leaves.rest_eq,
+    ``Syntax.Leaves.left_eq, ``Syntax.Leaves.eof_eq, ``Syntax.Leaves.inFunction_eq,
+    ``Syntax.Leaves.loopDepth_eq, ``Syntax.Leaves.target_eq, ``Syntax.instReflBEqTokenKind,
+    ``Syntax.instLawfulBEqTokenKind, ``Syntax.Parse.bind_ok, ``Syntax.Parse.ite_state,
+    ``Syntax.Parse.pure_ok, ``Syntax.Parse.get_ok, ``Syntax.Parse.failAt_ne_ok,
+    ``Syntax.Parse.unexpected_ne_ok, ``Syntax.Parse.peek_eq, ``Syntax.Parse.peekAt_eq,
+    ``Syntax.Parse.advance_eq, ``Syntax.Parse.advance_cons, ``Syntax.Parse.expectPunct_ok,
+    ``Syntax.Parse.budget_eq, ``Syntax.Parse.iterate_succ]⟩,
   ⟨"The parser", [``Syntax.parseChars_eq_of_parsesTo, ``Syntax.TypeExpr.beq_iff,
     ``Syntax.TypeExpr.beqList_iff, ``Syntax.TypeExpr.beqOpt_iff, ``Syntax.Expr.beq_iff,
     ``Syntax.Expr.beqList_iff, ``Syntax.Property.beq_iff, ``Syntax.Property.beqList_iff,
