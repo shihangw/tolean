@@ -75,10 +75,14 @@ printer gives a certificate that Lean refuses.
       `Syntax/RoundTripExpr.lean` states the same for each level of the
       expression parser, from assignments down to primary expressions. It
       covers every expression that `Expr.wfAt` accepts at that level, when
-      the target edition has the operators that the expression uses. Three
-      proofs are not built yet: that every tree the parser gives is well
-      formed, the proofs for statements and declarations, and the proof that
-      the lexer gives the printed tokens.
+      the target edition has the operators that the expression uses. The
+      proof for statements is built as well. `stmts_read` in
+      `Syntax/RoundTripStmt.lean` states the same for `parseStatement`, on
+      the tokens of a statement's printed lines. It covers every statement
+      that `Stmt.wf` accepts, in a function or not and in a loop or not.
+      Three proofs are not built yet: that every tree the parser gives is
+      well formed, the proof for declarations and modules, and the proof
+      that the lexer gives the printed tokens.
 5. **The interpreter against Node (built).** `tests/typescript/interpreter.test.ts`
    runs random programs of the subset with random arguments in the interpreter
    and in Node, and requires the same results. This is evidence that the
