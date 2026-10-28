@@ -2,7 +2,11 @@
  "target": "ES2024",
  "sources":
  [{"sha256": "25134ca70307f867b1a6d17f399d4eb2f21d6bd80e4fc5a8bcf47d915de305d7",
-   "path": "lib/more.ts"}],
+   "path": "lib/more.ts"},
+  {"sha256": "0f748021302b578503b8667606ca3216cf654c9bf0e86fe7807cc269b9bd8466",
+   "path": "gauge.ts"},
+  {"sha256": "baadc096f1fb021757130f52019d3fdce376bb7747a47304b46066aeb35c0cf8",
+   "path": "lib/util.ts"}],
  "output":
  {"sha256": "630c166a19f2437a09916de8e715b4b79a0c43d2cd7d899fbb86014f6641e01e",
   "path": "lib/More.lean"},

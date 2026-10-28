@@ -205,14 +205,19 @@ def normalizeSegments : List String → List String → Option (List String)
 /-- The file that `import … from source` in `file` names: `source` relative to
 the directory of `file`. The source must name the `.ts` file itself, as
 Node's type stripping requires and a bundler accepts, so that the import
-names the same file wherever the code runs. Any other source names no file
-of the program. -/
+names the same file wherever the code runs. Node reads a source as a URL, so
+a source with `%`, `?`, `#` or `\` names no file here: a percent escape, a
+query, a fragment and a backslash mean something else there. So does a source
+whose last segment is not the file's name, such as `"./b.ts/."`, which names
+a directory there. Any other source names no file of the program. -/
 def resolvePath (file source : String) : Option String := do
+  if source.any fun c => c == '%' || c == '?' || c == '#' || c == '\\' then none
   let segments := source.splitOn "/"
   unless segments.head? == some "." || segments.head? == some ".." do none
-  let path ← normalizeSegments (file.splitOn "/").dropLast segments
-  let last ← path.getLast?
-  unless last.endsWith ".ts" do none
+  let raw ← segments.getLast?
+  unless raw.endsWith ".ts" && raw != ".ts" do none
+  let dir ← normalizeSegments [] (file.splitOn "/").dropLast
+  let path ← normalizeSegments dir segments
   return "/".intercalate path
 
 /-- `m` declares `name` as an exported function. -/

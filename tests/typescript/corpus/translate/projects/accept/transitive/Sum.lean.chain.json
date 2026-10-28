@@ -2,7 +2,11 @@
  "target": "ES2024",
  "sources":
  [{"sha256": "6f2ef763c032e77382f03c14613bc1fd17c3972f208e3b19c62cccb704c9da16",
-   "path": "sum.ts"}],
+   "path": "sum.ts"},
+  {"sha256": "dd01cd21927296b594ecad7d93fe0f1e77720ee998de157c3d0c5d6fb2fa4c1b",
+   "path": "outer.ts"},
+  {"sha256": "66d4d88f0d81f744785c3c821717886f97c8fa531bc406d2d88e6cd15b61f33e",
+   "path": "inner.ts"}],
  "output":
  {"sha256": "06e3ab5ab74df7984be27861b6005dc7ba757eb240f1cbc9e4d0ec9be06cf5c1",
   "path": "Sum.lean"},

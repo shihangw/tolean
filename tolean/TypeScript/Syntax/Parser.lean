@@ -756,6 +756,7 @@ def parseImport (start : Pos) : ParseM Decl := do
     let next ← peekAt 1
     -- `type` marks the name after it, unless it is the name itself.
     let typeOnly := t.isIdent "type" && next.isAnyIdent
+    if typeOnly && clauseType then failAt t "'type' cannot mark a name of 'import type', which marks them all"
     if typeOnly then discard advance
     let nameToken ← peek
     let name ← readName
@@ -765,7 +766,8 @@ def parseImport (start : Pos) : ParseM Decl := do
     if t.isPunct "," then discard advance
     else if !t.isPunct "}" then unexpected t "',' or '}'"
     return (names, true)
-  let _ ← expectPunct "}"
+  let close ← expectPunct "}"
+  if names.isEmpty then failAt close "an import must name a function or an interface"
   let t ← peek
   unless t.isIdent "from" do unexpected t "'from'"
   discard advance

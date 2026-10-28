@@ -1,0 +1,1 @@
+'./a%20b.ts' is not a relative path to a .ts file

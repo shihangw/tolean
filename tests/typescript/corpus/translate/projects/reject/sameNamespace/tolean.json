@@ -1,0 +1,1 @@
+{ "typescript": { "sources": ["*.ts"], "overrides": [{ "sources": ["*.ts"], "namespace": "App" }] } }

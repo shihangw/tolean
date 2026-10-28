@@ -58,10 +58,13 @@ theorem declareTopLevel_ok {sp : Span} {name : String} {s s' : Ctx} {u : Unit}
   split at h
   · simp at h
   · rename_i hn
-    simp only [pure_ok] at h
-    refine ⟨h.2.symm, fun f hf heq => hn ?_⟩
-    simp only [Bool.or_eq_true, List.any_eq_true, beq_iff_eq]
-    exact Or.inr ⟨f, hf, heq⟩
+    simp only [pure_bind, ite_state] at h
+    split at h
+    · simp at h
+    · simp only [pure_ok] at h
+      refine ⟨h.2.symm, fun f hf heq => hn ?_⟩
+      simp only [Bool.or_eq_true, List.any_eq_true, beq_iff_eq]
+      exact Or.inr ⟨f, hf, heq⟩
 
 end State
 
@@ -135,7 +138,7 @@ theorem translateFunction_ok {sp : Span} {ex : Bool} {name : String} {params : L
     have hps := params_fold (hstep := fun env lp ts p ctx r ctx' hg => by
         simp only [bind_ok, orReject_ok, ite_state] at hg
         obtain ⟨type, s₁, ⟨-, rfl⟩, pn, s₂, hpn, hg⟩ := hg
-        obtain ⟨rfl, -⟩ := checkName_ok hpn
+        obtain ⟨rfl, -⟩ := checkLocalName_ok hpn
         split at hg
         · simp at hg
         · simp only [pure_bind, bind_ok, pure_ok] at hg
@@ -169,6 +172,12 @@ theorem translateImport_ok {sp : Span} {names : List ImportName} {source : Strin
   unfold translateImport at h
   simp only [bind_ok, get_ok, orReject_ok] at h
   obtain ⟨c, s₁, ⟨rfl, rfl⟩, target, s₂, ⟨htarget, rfl⟩, iface, s₃, ⟨hiface, rfl⟩, hloop⟩ := h
+  simp only [ite_state] at hloop
+  split at hloop
+  · simp at hloop
+  rename_i hyear
+  clear hyear
+  simp only [pure_bind] at hloop
   have hgf := hself _ _ hiface
   simp only [declRefs, htarget]
   suffices key : s'.file = s₁.file ∧ s'.interfaces = s₁.interfaces ∧
@@ -205,7 +214,7 @@ theorem translateImport_ok {sp : Span} {names : List ImportName} {source : Strin
       try simp only [ite_state] at hstep
       split at hstep
       · simp at hstep
-      · simp only [pure_bind, bind_ok, orReject_ok, modify_ok] at hstep
+      · simp only [bind_ok, orReject_ok, modify_ok] at hstep
         obtain ⟨fn, s₆, ⟨hfind, rfl⟩, rfl⟩ := hstep
         obtain ⟨hf, hi, more, hfns, hrefs, hex, hnd, horig⟩ := ih _ hloop
         have hname : fn.name = n.name := by simpa using List.find?_some hfind
@@ -617,33 +626,27 @@ inductive ProgramTranslation :
       ProgramTranslation (p ++ [(file, m)]) (outs ++ [(file, decls)])
         (ifaces ++ [(file, finish.interface usesNumber numberVar)])
 
-theorem lookup_append_some {β : Type} {k : String} {b : β} :
-    ∀ {l l' : List (String × β)}, l.lookup k = some b → (l ++ l').lookup k = some b
-  | (k', v) :: l, l', h => by
-    simp only [List.cons_append, List.lookup] at h ⊢
-    split <;> simp_all [lookup_append_some]
-  | [], _, h => by simp at h
+theorem lookup_append_some {β : Type} {k : String} {b : β} {l l' : List (String × β)}
+    (h : l.lookup k = some b) : (l ++ l').lookup k = some b := by
+  rw [List.lookup_append, h]; rfl
 
-theorem lookup_append_none {β : Type} {k : String} :
-    ∀ {l l' : List (String × β)}, k ∉ l.map Prod.fst → (l ++ l').lookup k = l'.lookup k
-  | [], _, _ => rfl
-  | (k', v) :: l, l', h => by
-    simp only [List.map_cons, List.mem_cons, not_or] at h
-    have : (k == k') = false := beq_eq_false_iff_ne.mpr h.1
-    simp only [List.cons_append, List.lookup, this]
-    exact lookup_append_none h.2
+theorem lookup_none_of_not_mem {β : Type} {k : String} {l : List (String × β)}
+    (h : k ∉ l.map Prod.fst) : l.lookup k = none := by
+  rw [List.lookup_eq_none_iff]
+  intro p hp
+  simp only [bne_iff_ne, ne_eq]
+  rintro rfl
+  exact h (List.mem_map_of_mem hp)
 
-theorem lookup_append_mem {β : Type} {k : String} :
-    ∀ {l l' : List (String × β)}, k ∈ l.map Prod.fst → (l ++ l').lookup k = l.lookup k
-  | [], _, h => by simp at h
-  | (k', v) :: l, l', h => by
-    simp only [List.cons_append, List.lookup]
-    by_cases hk : k = k'
-    · subst hk; simp
-    · have : (k == k') = false := beq_eq_false_iff_ne.mpr hk
-      simp only [this]
-      simp only [List.map_cons, List.mem_cons, hk, false_or] at h
-      exact lookup_append_mem h
+theorem lookup_append_none {β : Type} {k : String} {l l' : List (String × β)}
+    (h : k ∉ l.map Prod.fst) : (l ++ l').lookup k = l'.lookup k := by
+  rw [List.lookup_append, lookup_none_of_not_mem h]; rfl
+
+theorem lookup_append_mem {β : Type} {k : String} {l l' : List (String × β)}
+    (h : k ∈ l.map Prod.fst) : (l ++ l').lookup k = l.lookup k := by
+  rw [List.lookup_append]
+  obtain ⟨b, hb⟩ := Option.isSome_iff_exists.mp (by rw [lookup_isSome]; simpa using h)
+  rw [hb]; rfl
 
 /-- What a program's translation gives: interfaces that name their files and
 that the program's files export, and output functions that are the

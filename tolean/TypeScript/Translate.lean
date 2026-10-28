@@ -141,6 +141,9 @@ structure Interface where
   usesNumber : Bool := false
   /-- The name under which its declarations bind the number type. -/
   numberVar : String := "N"
+  /-- The edition that it is translated for. A file may import from it only
+  when the file's own edition is at least as new. -/
+  target : Edition := .default
 
 structure Ctx where
   file : String
@@ -247,14 +250,33 @@ def requireFeature (span : Span) (f : Feature) : TM Unit := do
   let target := (← get).target
   unless target.supports f do reject span (f.refusal target)
 
+/-- The globals that the subset reads by name. A file that names one of them
+needs the number type. -/
+def isNumberName (name : String) : Bool :=
+  name == "Number" || name == "NaN" || name == "Infinity"
+
 def checkName (span : Span) (name : String) : TM String := do
   if leanReserved.contains name then reject span s!"name '{name}' is reserved in Lean"
   return name
 
+/-- The name of a parameter or a local. TypeScript keeps types and values
+apart, but Lean does not, and the output writes an interface of the file by
+its bare name. So a local with that name would hide the interface. -/
+def checkLocalName (span : Span) (name : String) : TM String := do
+  let ctx ← get
+  if ctx.structs.any fun i => i.name == name && i.file == ctx.file then
+    reject span s!"'{name}' would hide the interface {name} in Lean; choose another name"
+  checkName span name
+
 def declare (env : Env) (span : Span) (name : String) (binding : Binding) (type : Ty) :
     TM Env := do
   if env.has name then reject span s!"'{name}' shadows a name already in scope"
-  let _ ← checkName span name
+  -- A local is in its temporal dead zone from the start of its block, so a
+  -- use of the name before the declaration throws in JS. The subset reads
+  -- such a use as the function or the global, so it refuses the local.
+  if env.functions.any (·.name == name) || isNumberName name then
+    reject span s!"'{name}' would hide the function or global {name} in its whole block; choose another name"
+  let _ ← checkLocalName span name
   return env.add { name, binding, type }
 
 /-! ### Types -/
@@ -534,7 +556,8 @@ def translateExpr (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr) : T
         (ctx.knownStructs.find? fun (i : StructInfo) => i.ref == ref).bind
           fun info => info.fields.lookup name
       | _ => none
-    let type ← orReject field? s "only fields of interfaces declared in this file may be read"
+    let type ← orReject field? s
+      "only fields of interfaces declared in this file, or exported by the files before it, may be read"
     return ⟨.field o.code (!obj.isIdent) name, false, type⟩
   | .unary s op arg =>
     if op == .neg && arg.isInfinity && !env.has "Infinity" then
@@ -617,7 +640,8 @@ def translateObject (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (
     TM Code := do
   let fuel + 1 := fuel | tooDeep
   let ctx ← get
-  let notStructMessage := "an object literal must build an interface declared in this file"
+  let notStructMessage :=
+    "an object literal must build an interface declared in this file, or exported by the files before it"
   let some (.struct ref) := expected | reject s notStructMessage
   let info ← orReject (ctx.knownStructs.find? (·.ref == ref)) s notStructMessage
   let structName := ref.name
@@ -855,6 +879,10 @@ def declareTopLevel (s : Span) (name : String) : TM Unit := do
   let ctx ← get
   if ctx.structs.any (·.name == name) || ctx.functions.any (·.name == name) then
     reject s s!"'{name}' is declared twice"
+  -- A declaration of the module hides the global of the same name, and the
+  -- subset reads these names as the globals.
+  if isNumberName name then
+    reject s s!"'{name}' would hide the global {name}; choose another name"
 
 def translateInterface (s : Span) (exported : Bool) (name : String) (fields : List Field) :
     TM Output.Decl := do
@@ -880,7 +908,7 @@ def translateFunction (s : Span) (exported : Bool) (name : String) (params : Lis
     (init := (({ functions := (← get).functions } : Env), ([] : List (String × Output.Ty)), ([] : List Ty)))
     fun (env, leanParams, types) p => do
       let type ← orReject p.type p.span "parameters must be plain, typed identifiers"
-      let paramName ← checkName p.span p.name
+      let paramName ← checkLocalName p.span p.name
       if env.has paramName then reject p.span s!"'{paramName}' is declared twice"
       let ty ← translateType type
       pure (env.add { name := paramName, binding := .param, type := ty },
@@ -892,9 +920,6 @@ def translateFunction (s : Span) (exported : Bool) (name : String) (params : Lis
   return .function name leanParams ret.lean out
 
 /-! ### The number model -/
-
-def isNumberName (name : String) : Bool :=
-  name == "Number" || name == "NaN" || name == "Infinity"
 
 mutual
 
@@ -971,7 +996,8 @@ name `Number`, `NaN` or `Infinity` anywhere. A file can use
 `Number.isNaN(NaN)` with no `number` keyword, and it still needs `N`. -/
 def moduleUsesNumber (m : Module) : Bool :=
   m.decls.any fun
-    | .import _ names _ => names.any fun n => isNumberName n.name
+    -- An import of one of these names is refused, so an import adds nothing.
+    | .import .. => false
     | .function _ _ name params ret body =>
       isNumberName name ||
         params.any (fun p => isNumberName p.name || (p.type.map typeUsesNumber).getD false) ||
@@ -994,6 +1020,9 @@ def translateImport (s : Span) (names : List ImportName) (source : String) : TM 
   let iface ← orReject (ctx.interfaces.lookup target) s
     (s!"'{source}' is not a translated file of the project: an import needs a tolean.json " ++
       "project, and the file it imports from must be among its sources and translate")
+  if ctx.target.year < iface.target.year then
+    reject s (s!"'{source}' is translated for {iface.target.name}, which is newer than this " ++
+      s!"file's {ctx.target.name}")
   names.forM fun n => do
     declareTopLevel n.span n.name
     if n.typeOnly then
@@ -1025,7 +1054,7 @@ def translateDecls (m : Module) : TM (List Output.Decl) := do
 def Ctx.interface (c : Ctx) (usesNumber : Bool) (numberVar : String) : Interface :=
   { functions := c.functions.filter fun f => f.exported && f.file == c.file,
     structs := c.structs.filter fun i => i.exported && i.file == c.file,
-    usesNumber, numberVar }
+    usesNumber, numberVar, target := c.target }
 
 def lineStarts (src : Array Char) : Array Nat := Id.run do
   let mut starts := #[0]
@@ -1048,6 +1077,8 @@ structure Dependency where
   module : String
   ns : String
   interface : Interface
+  /-- The files that it imports from, and the files that those import from. -/
+  imports : List String := []
 
 /-- The files that `m`, the module of `file`, imports from, in the order of its
 imports, without repeats. -/
@@ -1097,13 +1128,34 @@ def translateTree (file source : String) (target : Edition := .default) :
   let (m, names, decls, _) ← translateFile file source target
   return (m, names, decls)
 
+/-- A TypeScript file, translated to a Lean file. -/
+structure Translated where
+  lean : String
+  /-- What the file exports. -/
+  interface : Interface
+  /-- The files that it imports from, and the files that those import from.
+  Its meaning depends on them all. -/
+  imports : List String
+
 /-- Translate `source`, the TypeScript file `file`, to a Lean file whose
 definitions are in namespace `ns`, for code that runs on the edition
-`target`: the Lean text, and what the file exports. `deps` are the files it
-may import from. -/
+`target`. `deps` are the files it may import from. -/
 def translateWith (file source ns : String) (target : Edition := .default)
-    (deps : List (String × Dependency) := []) : Except String (String × Interface) := do
+    (deps : List (String × Dependency) := []) : Except String Translated := do
   let (m, names, decls, iface) ← translateFile file source target deps
+  -- Inside `namespace A.B`, Lean finds a plain name in `A.B` and `A` first.
+  -- So a file whose namespace is, or holds, another file's would let that
+  -- file's declarations capture the plain names that the output writes, such
+  -- as `decide`, and two files with one namespace collide outright.
+  let inside (a b : String) : Bool := a == b || a.startsWith (b ++ ".")
+  if let some (f, d) := deps.find? fun (_, d) => inside ns d.ns || inside d.ns ns then
+    throw s!"{file}: its namespace {ns} and the namespace {d.ns} of {f} nest; set namespace for one of them"
+  -- The printer writes a declaration of another file with that file's
+  -- namespace, so it must know the file. The translator only names files it
+  -- sees, and this check keeps a later change from printing a bare name.
+  if let some r := (decls.flatMap Output.Decl.refs).find? fun r =>
+      r.file != file && (deps.lookup r.file).isNone then
+    throw s!"{file}: the output names '{r.name}' of '{r.file}', a file that it does not see"
   let imports := (importedFiles file m).filterMap fun f => (deps.lookup f).map (s!"import {·.module}")
   let header :=
     (if names.usesNumber then ["import tolean.TypeScript.Spec.Number"] else []) ++ imports ++
@@ -1112,13 +1164,14 @@ def translateWith (file source ns : String) (target : Edition := .default)
     ([s!"-- Generated by tolean {version} for {target.name} from {file}. Do not edit."] ++
       header ++
       [s!"namespace {ns}", "", "\n\n".intercalate (decls.map (·.print names)), "", s!"end {ns}", ""])
-  return (text, iface)
+  let chain := (importedFiles file m).flatMap fun f => f :: ((deps.lookup f).map (·.imports)).getD []
+  return { lean := text, interface := iface, imports := chain.eraseDups }
 
 /-- Translate `source`, the TypeScript file `file`, to a Lean file whose
 definitions are in namespace `ns`, for code that runs on the edition
 `target`. -/
 def translate (file source ns : String) (target : Edition := .default) :
     Except String String :=
-  (·.1) <$> translateWith file source ns target
+  (·.lean) <$> translateWith file source ns target
 
 end tolean.TypeScript.Translate

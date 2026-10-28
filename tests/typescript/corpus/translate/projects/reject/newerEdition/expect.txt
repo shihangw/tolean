@@ -1,0 +1,1 @@
+'./base.ts' is translated for ES2024, which is newer than this file's ES2020

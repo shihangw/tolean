@@ -174,6 +174,52 @@ inductive Decl where
   | function (name : String) (params : List (String × Ty)) (ret : Ty) (body : Body)
 deriving Repr, Inhabited
 
+/-! ### The declarations that the output names -/
+
+def Ty.refs : Ty → List DeclRef
+  | .struct r => [r]
+  | .option t | .list t => t.refs
+  | _ => []
+
+mutual
+
+/-- The functions and structures of the program that `e` names. -/
+def Expr.refs : Expr → List DeclRef
+  | .call r args => r :: Expr.refsList args
+  | .list elems t => Expr.refsList elems ++ t.refs
+  | .struct fields r => r :: Expr.refsFields fields
+  | .field a _ _ | .propNot a | .not a | .neg a | .numberNeg a | .isNone a | .isSome a
+  | .decide a | .numberTest _ a | .push _ a | .update _ _ a => a.refs
+  | .ite a b c => a.refs ++ b.refs ++ c.refs
+  | .matchNull _ a b | .intOp _ a b | .order _ a b | .division _ a b | .numberOp _ a b
+  | .numberNe a b | .eq a b | .ne a b | .propAnd a b | .propOr a b | .and a b | .or a b =>
+    a.refs ++ b.refs
+  | .int _ | .number _ | .numberConstant _ | .none | .bool _ | .string _ | .var _ => []
+
+def Expr.refsList : List Expr → List DeclRef
+  | [] => []
+  | e :: es => e.refs ++ Expr.refsList es
+
+def Expr.refsFields : List (String × Expr) → List DeclRef
+  | [] => []
+  | (_, e) :: fs => e.refs ++ Expr.refsFields fs
+
+end
+
+def Body.refs : Body → List DeclRef
+  | .value e => e.refs
+  | .state _ => []
+  | .let _ e rest => e.refs ++ rest.refs
+  | .letArray _ t elems rest => t.refs ++ Expr.refsList elems ++ rest.refs
+  | .ite c a b => c.refs ++ a.refs ++ b.refs
+  | .matchNull _ a b | .letState _ a b => a.refs ++ b.refs
+  | .fold _ _ body items rest _ => body.refs ++ items.refs ++ rest.refs
+
+/-- The functions and structures of the program that `d` names. -/
+def Decl.refs : Decl → List DeclRef
+  | .struct _ fields => fields.flatMap (·.2.refs)
+  | .function _ params ret body => params.flatMap (·.2.refs) ++ ret.refs ++ body.refs
+
 /-! ### Printing -/
 
 /-- Another file of the program, as the output of a file that imports from it
