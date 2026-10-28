@@ -2,6 +2,13 @@
   <img src="docs/images/banner.webp" alt="Tolean banner: Tulie the dragon carries TypeScript, Go and SQL code through a proved translator into a Lean 4 theorem" width="100%">
 </p>
 
+<p align="center">
+  <a href="https://github.com/shihangw/tolean/actions/workflows/ci.yml"><img src="https://github.com/shihangw/tolean/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI status"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/shihangw/tolean" alt="License: Apache-2.0"></a>
+  <a href="https://lean-lang.org"><img src="https://img.shields.io/badge/Lean-4-blue" alt="Lean 4"></a>
+  <a href="https://shihangw.github.io/tolean/"><img src="https://img.shields.io/badge/playground-try_it-brightgreen" alt="Try it in the playground"></a>
+</p>
+
 # Tolean
 
 Tolean translates source code into Lean 4, so that proofs about a program are
