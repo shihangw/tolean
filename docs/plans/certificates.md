@@ -1,6 +1,6 @@
 # Plan: certificates and round-trip proofs
 
-**Status:** phases 1 to 3 built, phase 4 step 1 built, phase 6 steps 1 to 3 built · **Date:** 2026-10-27
+**Status:** phases 1 to 3, 5 and 6 built, phase 4 step 1 built · **Date:** 2026-10-27
 
 A certificate proves the translation of one file. It states, for each
 function, that an interpreter of the source language and the translated Lean
@@ -61,9 +61,19 @@ printer gives a certificate that Lean refuses.
    2. **Round trips.** With a total printer from syntax trees back to source
       text, Tolean proves the round trip `parse (print t) = .ok t` for every
       tree in the subset.
-5. **The interpreter against Node.** A differential test runs random programs
-   in the interpreter and in Node, and requires the same results. This is
-   evidence that the interpreter means what JavaScript means.
+5. **The interpreter against Node (built).** `tests/typescript/interpreter.test.ts`
+   runs random programs of the subset with random arguments in the interpreter
+   and in Node, and requires the same results. This is evidence that the
+   interpreter means what JavaScript means. `tolean interpret` runs the
+   interpreter with Lean's `Float` as the number model, because a `Float` is
+   an IEEE 754 double, as a JS `number` is. The test compares numbers by their
+   64 bits, so it tells `-0` from `0`. When the interpreter gives a value, Node
+   must return the same value. When the translator accepts the program and
+   the interpreter gives no value, Node must throw. When Node does not load a
+   program, because it breaks an early error rule such as a name declared
+   twice, the translator must refuse it. `nix run .#test-engines` runs the
+   test on every maintained Node release line, with 1,000 programs from a new
+   seed each time.
 6. **The translator for all programs.** Tolean proves one theorem about the
    translator, instead of one certificate per file. The theorem covers every
    program that the translator accepts. The phase has four steps.
@@ -96,12 +106,19 @@ printer gives a certificate that Lean refuses.
       `Infinity`, and we fixed them. We also found a test against `null`
       whose answer the type fixes. The output dropped its operand, so the
       subset now refuses that test.
-   4. **The printer link.** For each file, a theorem states that the printed
-      definitions compute what the evaluator gives for the tree. Each output
-      form has one lemma, so the proof follows the tree and does not search.
-      The kernel checks `translate program = .ok out` for the file, so with
-      step 3 the whole file is proved. Every certificate then follows from
-      one theorem.
+   4. **The printer link (built).** A certificate holds the output tree as a
+      Lean term, and the kernel checks with `translatesTo` that the
+      translator gives that tree for the parsed program. For each function,
+      a `link` theorem states that the printed definition computes what the
+      evaluator gives for the tree, and `link_tac` proves it by unfolding
+      the evaluator. A loop's lemma follows from `runFold_foldl`. With step
+      3, `decls_sound` turns the link into the certificate's theorem, so
+      every certificate now follows from one theorem and none unfolds the
+      interpreter. All 29 accepted corpus files have such a certificate.
+      Two changes made this possible. `alwaysReturns` became structural, so
+      the kernel can run the translator on an `if`. And `let (x, y) := …`
+      in the evaluator gives `x` and `y` their new values in place, as every
+      lookup sees it, so a loop leaves the environment the same length.
 
 ## Why a certificate first
 

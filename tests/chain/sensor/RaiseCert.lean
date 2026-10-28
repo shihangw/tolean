@@ -1,6 +1,7 @@
 -- Certificate written by tolean for sensor/raise.ts. Do not edit.
 import tolean.TypeScript.Spec.Lemmas.Eval
 import tolean.TypeScript.Syntax.Parser
+import tolean.TypeScript.Proof.Link
 import sensor.Raise
 
 namespace sensor.RaiseCert
@@ -41,6 +42,56 @@ printer that wrote `program` need not be trusted. -/
 theorem program_parsed : tolean.TypeScript.Syntax.parseChars sourceChars .es2024 = Except.ok program :=
   tolean.TypeScript.Syntax.parseChars_eq_of_parsesTo (by decide +kernel)
 
+/-- The output tree, as the translator gives it for the program. -/
+def decls : List tolean.TypeScript.Output.Decl :=
+  [tolean.TypeScript.Output.Decl.struct
+   "Gauge"
+   [("level", tolean.TypeScript.Output.Ty.int), ("max", tolean.TypeScript.Output.Ty.int)],
+ tolean.TypeScript.Output.Decl.function
+   "raise"
+   [("g", tolean.TypeScript.Output.Ty.struct { file := "", name := "Gauge" }),
+    ("step", tolean.TypeScript.Output.Ty.int)]
+   (tolean.TypeScript.Output.Ty.struct { file := "", name := "Gauge" })
+   (tolean.TypeScript.Output.Body.ite
+     (tolean.TypeScript.Output.Expr.order
+       (tolean.TypeScript.Output.Order.gt)
+       (tolean.TypeScript.Output.Expr.intOp
+         (tolean.TypeScript.Output.IntOp.add)
+         (tolean.TypeScript.Output.Expr.field (tolean.TypeScript.Output.Expr.var "g") false "level")
+         (tolean.TypeScript.Output.Expr.var "step"))
+       (tolean.TypeScript.Output.Expr.field (tolean.TypeScript.Output.Expr.var "g") false "max"))
+     (tolean.TypeScript.Output.Body.value
+       (tolean.TypeScript.Output.Expr.struct
+         [("level",
+           tolean.TypeScript.Output.Expr.field (tolean.TypeScript.Output.Expr.var "g") false "max"),
+          ("max",
+           tolean.TypeScript.Output.Expr.field (tolean.TypeScript.Output.Expr.var "g") false "max")]
+         { file := "", name := "Gauge" }))
+     (tolean.TypeScript.Output.Body.value
+       (tolean.TypeScript.Output.Expr.struct
+         [("level",
+           tolean.TypeScript.Output.Expr.intOp
+             (tolean.TypeScript.Output.IntOp.add)
+             (tolean.TypeScript.Output.Expr.field
+               (tolean.TypeScript.Output.Expr.var "g")
+               false
+               "level")
+             (tolean.TypeScript.Output.Expr.var "step")),
+          ("max",
+           tolean.TypeScript.Output.Expr.field (tolean.TypeScript.Output.Expr.var "g") false "max")]
+         { file := "", name := "Gauge" })))]
+
+/-- The state that the translator starts from. The source text serves only in
+the message of a refusal, so the start leaves it out. -/
+def start : tolean.TypeScript.Translate.Ctx :=
+  { file := "", target := .es2024, src := #[], lineStarts := #[], fuel := 4 * sourceChars.length + 4 }
+
+/-- The translator gives `decls` for the program: the kernel runs it and
+compares the trees. With a `link` theorem for each function, the theorems
+below then trust neither the translator nor the printer. -/
+theorem program_translated : tolean.TypeScript.Proof.translatesTo program start decls = true := by
+  decide +kernel
+
 def encodeGauge {N : Type} [tolean.TypeScript.JSNumber N] (x : sensor.Raise.Gauge) : Val N := Val.obj [("level", Val.int x.level), ("max", Val.int x.max)]
 
 def decodeGauge {N : Type} [tolean.TypeScript.JSNumber N] : Option (Val N) → sensor.Raise.Gauge
@@ -50,8 +101,14 @@ def decodeGauge {N : Type} [tolean.TypeScript.JSNumber N] : Option (Val N) → s
 @[simp] theorem decodeGauge_encodeGauge {N : Type} [tolean.TypeScript.JSNumber N] (x : sensor.Raise.Gauge) : decodeGauge (some (encodeGauge (N := N) x)) = x := by
   cases x; simp [decodeGauge, encodeGauge, List.lookup, encList, encNull]
 
+theorem raise_link {N : Type} [tolean.TypeScript.JSNumber N] (g : _) (step : _) :
+    tolean.TypeScript.Output.runIn (N := N) (tolean.TypeScript.Output.functionsOf [("", decls)]) ⟨"", "raise"⟩ [(encodeGauge g), (Val.int step)] =
+      some (encodeGauge (sensor.Raise.raise g step)) := by
+  link_tac [decls, Env.set_cons, Env.lookup_cons, Env.lookup_set_same, Env.lookup_set_ne, Env.set_set, Env.length_set, encList, encNull, decInt, decBool, decStr, decNum, encodeGauge, decodeGauge, sensor.Raise.raise]
+
 theorem raise_cert {N : Type} [tolean.TypeScript.JSNumber N] (g : _) (step : _) :
-    run (N := N) program "raise" [(encodeGauge g), (Val.int step)] = some (encodeGauge (sensor.Raise.raise g step)) := by
-  certify_tac [program, Env.set_cons, Env.lookup_cons, Env.lookup_set_same, Env.lookup_set_ne, Env.set_set, Env.length_set, encList, encNull, decInt, decBool, decStr, decNum, encodeGauge, decodeGauge, sensor.Raise.raise]
+    run (N := N) program "raise" [(encodeGauge g), (Val.int step)] = some (encodeGauge (sensor.Raise.raise g step)) :=
+  tolean.TypeScript.Proof.decls_sound rfl rfl rfl program_translated "raise" _ 64 _
+    (raise_link g step)
 
 end sensor.RaiseCert

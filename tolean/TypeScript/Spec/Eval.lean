@@ -417,22 +417,3 @@ def run (m : Module) (name : String) (args : List (Val N)) (fuel : Nat := 64) : 
   runIn [("", m)] ⟨"", name⟩ args fuel
 
 end tolean.TypeScript.Eval
-
-namespace tolean.TypeScript.Eval
-
-/-- The proof of a certificate theorem: unfold the interpreter on the program
-and the translated definitions, then split on each branch. `defs` names the
-program, the encoders and the translated functions. -/
-syntax "certify_tac" "[" Lean.Parser.Tactic.simpLemma,* "]" : tactic
-macro_rules
-  | `(tactic| certify_tac [$defs,*]) =>
-    `(tactic| (
-      simp [run, runIn, eval, evalList, evalProps, execStmt, exec, execLoop, functions, functionsOf,
-        resolve, DeclRef.beq_def, binary, strictEq,
-        bigintLiteral, digitsIn, digitIn, Env.set, Val.truthy, List.lookup, $defs,*]
-      all_goals repeat' (split <;> (try simp_all [List.lookup, DeclRef.beq_def, binary, strictEq, Val.truthy,
-        Env.set, $defs,*]))
-      all_goals (try simp_all [List.lookup, DeclRef.beq_def, binary, strictEq, Val.truthy, Env.set,
-        $defs,*])))
-
-end tolean.TypeScript.Eval

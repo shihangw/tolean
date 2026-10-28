@@ -73,7 +73,7 @@ jobs:
         working-directory: tests/typescript
         run: ./checkCertify.sh
 
-      - name: JS number laws on every maintained Node release line
+      - name: JS number laws and the interpreter, on every maintained Node release line
         run: nix run .#test-engines
 
       - name: Go parser and translator against go/parser
