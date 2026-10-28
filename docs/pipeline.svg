@@ -95,8 +95,8 @@
   <path d="M800,365 V331" class="dash" marker-end="url(#arrow)"/>
 
   <path d="M668,297 H640 V397 H612" class="dash" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
-  <text x="800" y="450" text-anchor="middle" class="note">differential test (planned):</text>
-  <text x="800" y="466" text-anchor="middle" class="note">the interpreter against Node</text>
+  <text x="800" y="450" text-anchor="middle" class="note">differential test:</text>
+  <text x="800" y="466" text-anchor="middle" class="note">the interpreter against Node (interpreter.test.ts)</text>
 
   <!-- Law tests -->
   <path d="M292,597 H950 V297 H932" class="dash" marker-start="url(#arrow)" marker-end="url(#arrow)"/>

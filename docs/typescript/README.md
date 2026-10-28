@@ -461,7 +461,7 @@ below removes the printer from what we trust, and it tests the interpreter:
 | Output as Lean data | The translator builds its output as a syntax tree, so that one theorem can cover every program it accepts (phase 6 of the certificates plan) | Built: `tolean/TypeScript/Output.lean`, and the translator is total |
 | The translator's theorem | `program_sound`: for every accepted program, of one file or several, the output tree computes only what the interpreter computes | Built: `tolean/TypeScript/Proof/` |
 | Printer link | For each file, a proof that the printed definitions compute what the output tree means. With the translator's theorem, every file is then proved. | Not started |
-| `eval`, a JS interpreter in Lean | The meaning of a `Program`. It is trusted, so it is tested against Node. | Started: `tolean/TypeScript/Spec/Eval.lean` covers the subset, with `number` values from the abstract model; the test against Node is not started |
+| `eval`, a JS interpreter in Lean | The meaning of a `Program`. It is trusted, so it is tested against Node. | Built: `tolean/TypeScript/Spec/Eval.lean` covers the subset, with `number` values from the abstract model. `tests/typescript/interpreter.test.ts` runs it against Node on random programs, on every maintained Node release line. |
 | Construct lemmas | Proved once, for example: an interpreted `for…of` equals `List.foldl` | Built: `execLoop_foldl` in `tolean/TypeScript/Spec/Lemmas/Eval.lean` |
 | Per-file certificate (`f.source`) | Proves `eval(Program)` equals the generated definition, for all inputs. Step 2 is then proved. | Built for the whole subset. All 29 accepted corpus files have one. |
 | Boundary guards | Check the preconditions of step 6 where callers enter the verified code | Not started |
