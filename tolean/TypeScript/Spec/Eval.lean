@@ -218,8 +218,6 @@ def resolvePath (file source : String) : Option String := do
   unless raw.endsWith ".ts" && raw != ".ts" do none
   let dir ← normalizeSegments [] (file.splitOn "/").dropLast
   let path ← normalizeSegments dir segments
-  let last ← path.getLast?
-  unless last.endsWith ".ts" do none
   return "/".intercalate path
 
 /-- `m` declares `name` as an exported function. -/
