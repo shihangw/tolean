@@ -8,7 +8,9 @@ Errors that look like math but are syntax, names or elaboration. Lean 4.30, no M
 - **A multi-line structure update** inside a tactic `let` or `obtain` argument can fail to parse ("expected '}'"). Keep `{ s with … }` on one line.
 - **A tactic sequence over several lines** after `<;>` or inside `( … )` does not parse. Use `all_goals` with an indented block.
 - **Macros** referring to local names need `set_option hygiene false in` before the doc comment, and the macro goes after both.
-- **A theorem `Neutral.joined`** that uses the definition `joined` resolves `joined` to itself. Rename one of them.
+- **A theorem `X.foo`** resolves `foo` in its own statement and body to itself (`Neutral.joined` with `joined`, `Touching.lineBreak` with `lineBreak`). Rename the theorem (`Touching.after_lineBreak`).
+- **`simp only` does not fill `_` witnesses** of an anonymous constructor, as in `⟨_, _, by simp only [Expr.words], …⟩`. End the block with `; exact rfl`.
+- **`⟨fun _ h => by cases h, by simpa …⟩`** parses as one `cases` with two targets ("Missing eliminator"). Wrap it: `(by cases h)`.
 - **Recursion in a theorem** over a nested inductive (`Expr`, `Stmt`) works through `cases` on a subterm: Lean finds the structural recursion. Mutual theorems over `Expr` and `List Expr` go in a `mutual … end` block.
 - **An implicit argument** that no hypothesis fixes stays a metavariable and breaks later `simp_all`. Pass it explicitly, as in `bin_loop (start := start)`.
 - **Anonymous hypotheses** from `obtain ⟨x, ts', rfl, _⟩` shift what `rename_i` names. Name them.
