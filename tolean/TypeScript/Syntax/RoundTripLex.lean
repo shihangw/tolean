@@ -1101,12 +1101,6 @@ theorem lexPunct_gt (start : Pos) {more : List Char} {s : LexState} (hs : s.rest
 
 /-! ### Strings -/
 
-/-- How `quote` writes one character of a string. -/
-def escChar (c : Char) : String :=
-  if c == '"' then "\\\"" else if c == '\\' then "\\\\" else if c == '\n' then "\\n"
-  else if c == '\r' then "\\r" else if c.toNat == 0x2028 then "\\u2028"
-  else if c.toNat == 0x2029 then "\\u2029" else c.toString
-
 theorem quote_toList (v : String) :
     (quote v).toList = '"' :: (v.toList.flatMap fun c => (escChar c).toList) ++ ['"'] := by
   simp [quote, escChar, String.toList_append, String.toList_join, List.flatMap_map]

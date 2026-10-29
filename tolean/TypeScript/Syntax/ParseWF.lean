@@ -333,23 +333,14 @@ theorem Ready.tok {s : ParseState} {x : Token} (h : Ready s) (hx : x ∈ s.rest)
 theorem wordsOK_iff {T : Edition} {ws : List Word} : ws.all (Word.ok T) = true ↔ WordsOK T ws := by
   simp [WordsOK]
 
-theorem WordsOK.commas {T : Edition} : ∀ items : List (List Word), (∀ x ∈ items, WordsOK T x) →
-    WordsOK T (commas items)
+theorem WordsOK.separated {T : Edition} {sep : String} (hs : Lex.punctuators.contains sep = true) :
+    ∀ items : List (List Word), (∀ x ∈ items, WordsOK T x) → WordsOK T (separated sep items)
   | [], _ => WordsOK.nil
-  | [x], h => by simpa [commas] using h x (by simp)
+  | [x], h => by simpa [separated] using h x (by simp)
   | x :: y :: rest, h => by
-    simp only [Syntax.commas]
-    exact (h x (by simp)).append (WordsOK.cons (ok_punct (by decide))
-      (WordsOK.commas (y :: rest) (fun z hz => h z (by simp_all))))
-
-theorem WordsOK.bars {T : Edition} : ∀ items : List (List Word), (∀ x ∈ items, WordsOK T x) →
-    WordsOK T (TypeExpr.bars items)
-  | [], _ => WordsOK.nil
-  | [x], h => by simpa [TypeExpr.bars] using h x (by simp)
-  | x :: y :: rest, h => by
-    simp only [TypeExpr.bars]
-    exact (h x (by simp)).append (WordsOK.cons (ok_punct (by decide))
-      (WordsOK.bars (y :: rest) (fun z hz => h z (by simp_all))))
+    simp only [Syntax.separated]
+    exact (h x (by simp)).append (WordsOK.cons (ok_punct hs)
+      (WordsOK.separated hs (y :: rest) (fun z hz => h z (by simp_all))))
 
 theorem WordsOK.wordsOf {T : Edition} : ∀ ts : List TypeExpr, (∀ t ∈ ts, WordsOK T t.words) →
     ∀ x ∈ TypeExpr.wordsOf ts, WordsOK T x
@@ -518,7 +509,7 @@ theorem types_give (T : Edition) : ∀ f : Nat,
           · simp only [TypeExpr.wf, Bool.and_eq_true, decide_eq_true_eq]
             exact ⟨by simp, (allArrayWF_iff _).mpr ha⟩
           · simp only [TypeExpr.words]
-            exact WordsOK.bars _ (WordsOK.wordsOf _ hw)
+            exact WordsOK.separated (sep := "|") (by decide) _ (WordsOK.wordsOf _ hw)
       by_cases hl : x.isPunct "|" = true
       · have hne : x.kind ≠ .eof := by simp [Token.isPunct] at hl; rw [hl]; simp
         rw [if_pos hl, Parse.bind_eq (Parse.discard_eq (advance_past hR hs hne)), Parse.bind_ok] at h
@@ -638,7 +629,7 @@ theorem types_give (T : Edition) : ∀ f : Nat,
           rw [hal] at hargsw
           simp only [TypeExpr.words]
           exact WordsOK.cons hw (WordsOK.cons (ok_punct (by decide))
-            ((WordsOK.commas _ (WordsOK.wordsOf _ hargsw)).append (WordsOK.word (ok_punct (by decide)))))
+            ((WordsOK.separated (sep := ",") (by decide) _ (WordsOK.wordsOf _ hargsw)).append (WordsOK.word (ok_punct (by decide)))))
       | keyword w =>
         obtain ⟨rfl, hR₁⟩ := hpast (by simp)
         by_cases h1 : w = "void"
@@ -1207,7 +1198,7 @@ theorem wordsOK_enclose {T : Edition} {o c : String} {items : List (List Word)}
     (ho : Lex.punctuators.contains o = true) (hc : Lex.punctuators.contains c = true)
     (h : ∀ x ∈ items, WordsOK T x) : WordsOK T (enclose o c items) := by
   simp only [enclose]
-  exact WordsOK.cons (ok_punct ho) ((WordsOK.commas items h).append (WordsOK.word (ok_punct hc)))
+  exact WordsOK.cons (ok_punct ho) ((WordsOK.separated (sep := ",") (by decide) items h).append (WordsOK.word (ok_punct hc)))
 
 theorem wordsOK_callBreak {T : Edition} (c : Expr) : WordsOK T (callBreak c) := by
   unfold callBreak; split
@@ -1835,7 +1826,7 @@ theorem refuseElement_inv (t : Token) (s s' : ParseState) (h : Parse.refuseEleme
 
 theorem tokens_args (args : List Expr) :
     (enclose "(" ")" (Expr.wordsOf args)).flatten = .punct "(" :: joined "," (args.map Expr.tokens) ++ [.punct ")"] := by
-  simp [enclose, punctWord, commas_flatten, Expr.wordsOf_eq, List.map_map, Function.comp_def]; rfl
+  simp [enclose, punctWord, separated_flatten, Expr.wordsOf_eq, List.map_map, Function.comp_def]; rfl
 
 /-- What `parseArguments` gave when it read `( args )` from `s` to `s'`. -/
 structure GaveArgs (T : Edition) (s : ParseState) (args : List Expr) (s' : ParseState) : Prop where
@@ -2339,14 +2330,17 @@ theorem VarKind.word_ok (T : Edition) : ∀ k : VarKind, Word.ok T k.word = true
 theorem exportWords_ok (T : Edition) (e : Bool) : WordsOK T (exportWords e) := by
   cases e <;> simp only [exportWords, Bool.false_eq_true, ↓reduceIte] <;> words_ok
 
+theorem typeAnnotation_ok {T : Edition} {a : Option TypeExpr} (ht : ∀ t, a = some t → WordsOK T t.words) :
+    WordsOK T (typeAnnotation a) := by
+  cases a with
+  | none => exact WordsOK.nil
+  | some t => have := ht t rfl; simp only [typeAnnotation]; words_ok
+
 theorem VarDecl.wordsOK {T : Edition} (d : VarDecl) (hn : Word.ok T (identWord d.name) = true)
     (ht : ∀ t, d.type = some t → WordsOK T t.words) (he : ∀ e, d.init = some e → WordsOK T e.words) :
     WordsOK T d.words := by
   have hk := VarKind.word_ok T d.kind
-  have h1 : WordsOK T (match d.type with | some t => punctWord ":" :: t.words | none => []) := by
-    cases h : d.type with
-    | none => exact WordsOK.nil
-    | some t => have := ht t h; words_ok
+  have h1 := typeAnnotation_ok ht
   have h2 : WordsOK T (match d.init with | some e => punctWord "=" :: e.words | none => []) := by
     cases h : d.init with
     | none => exact WordsOK.nil
@@ -2356,10 +2350,7 @@ theorem VarDecl.wordsOK {T : Edition} (d : VarDecl) (hn : Word.ok T (identWord d
 
 theorem Param.wordsOK {T : Edition} (p : Param) (hn : Word.ok T (identWord p.name) = true)
     (ht : ∀ t, p.type = some t → WordsOK T t.words) : WordsOK T p.words := by
-  have h1 : WordsOK T (match p.type with | some t => punctWord ":" :: t.words | none => []) := by
-    cases h : p.type with
-    | none => exact WordsOK.nil
-    | some t => have := ht t h; words_ok
+  have h1 := typeAnnotation_ok ht
   unfold Param.words
   words_ok
 
@@ -3018,12 +3009,11 @@ theorem DeclOK.function {exported : Bool} {name : String} {params : List Param} 
   have h1 := exportWords_ok T exported
   have h2 := wordsOK_enclose (T := T) (o := "(") (c := ")") (items := params.map Param.words) (by decide)
     (by decide) (by intro x hx; obtain ⟨p, hp', rfl⟩ := List.mem_map.mp hx; exact hp p hp')
+  have h3 := typeAnnotation_ok hr
   intro l hl
   simp only [Decl.lines, List.mem_cons] at hl
   rcases hl with rfl | hl
-  · cases rt with
-    | none => words_ok
-    | some t => have := hr t rfl; words_ok
+  · words_ok
   · exact hb 0 l hl
 
 theorem DeclOK.interface {exported : Bool} {name : String} {fields : List Field}

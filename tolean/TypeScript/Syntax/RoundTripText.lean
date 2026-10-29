@@ -64,44 +64,37 @@ theorem Fine.word {w : Word} (hw : w ≠ []) : Fine [w] := ⟨breaksOK_of_ne _ (
 theorem Fine.cons {w : Word} {ws : List Word} (hw : w ≠ []) (h : Fine ws) : Fine (w :: ws) := by
   simpa using (Fine.word hw).append h
 
-theorem fine_commas : ∀ items : List (List Word), (∀ x ∈ items, Fine x) → breaksOK (commas items) = true ∧
-    (commas items).getLast? ≠ some []
-  | [], _ => ⟨rfl, by simp [commas]⟩
+theorem fine_separated (sep : String) : ∀ items : List (List Word), (∀ x ∈ items, Fine x) →
+    breaksOK (separated sep items) = true ∧ (separated sep items).getLast? ≠ some []
+  | [], _ => ⟨rfl, by simp [separated]⟩
   | [x], h => by have := h x (by simp); exact ⟨this.1, this.2.1⟩
   | x :: y :: rest, h => by
     have hx := h x (by simp)
-    have hr := fine_commas (y :: rest) (fun z hz => h z (by simp_all))
-    have hyr : commas (y :: rest) ≠ [] := by
+    have hr := fine_separated sep (y :: rest) (fun z hz => h z (by simp_all))
+    have hyr : separated sep (y :: rest) ≠ [] := by
       cases rest with
-      | nil => simpa [commas] using (h y (by simp)).2.2
-      | cons z rest => simp [commas]
-    have hc : Fine (punctWord "," :: commas (y :: rest)) := Fine.cons (by simp [punctWord]) ⟨hr.1, hr.2, hyr⟩
+      | nil => simpa [separated] using (h y (by simp)).2.2
+      | cons z rest => simp [separated]
+    have hc : Fine (punctWord sep :: separated sep (y :: rest)) := Fine.cons (by simp [punctWord]) ⟨hr.1, hr.2, hyr⟩
     have := hx.append hc
-    simp only [commas]
+    simp only [separated]
     exact ⟨this.1, this.2.1⟩
 
 theorem fine_enclose {o c : String} {items : List (List Word)} (h : ∀ x ∈ items, Fine x) :
     Fine (enclose o c items) := by
-  obtain ⟨h1, h2⟩ := fine_commas items h
+  obtain ⟨h1, h2⟩ := fine_separated "," items h
   simp only [enclose]
   refine Fine.cons (by simp [punctWord]) ?_
   exact ⟨breaksOK_append _ _ h1 (by rfl) (fun h' => absurd h' h2), by simp [punctWord], by simp⟩
 
-theorem nil_not_mem_commas : ∀ items : List (List Word), (∀ x ∈ items, [] ∉ x) → [] ∉ commas items
-  | [], _ => by simp [commas]
-  | [x], h => by simpa [commas] using h x (by simp)
+theorem nil_not_mem_separated (sep : String) :
+    ∀ items : List (List Word), (∀ x ∈ items, [] ∉ x) → [] ∉ separated sep items
+  | [], _ => by simp [separated]
+  | [x], h => by simpa [separated] using h x (by simp)
   | x :: y :: rest, h => by
-    simp only [commas, List.mem_append, List.mem_cons, not_or]
+    simp only [separated, List.mem_append, List.mem_cons, not_or]
     refine ⟨h x (by simp), by simp [punctWord], ?_⟩
-    simpa [commas] using nil_not_mem_commas (y :: rest) (fun z hz => h z (by simp_all))
-
-theorem nil_not_mem_bars : ∀ items : List (List Word), (∀ x ∈ items, [] ∉ x) → [] ∉ TypeExpr.bars items
-  | [], _ => by simp [TypeExpr.bars]
-  | [x], h => by simpa [TypeExpr.bars] using h x (by simp)
-  | x :: y :: rest, h => by
-    simp only [TypeExpr.bars, List.mem_append, List.mem_cons, not_or]
-    refine ⟨h x (by simp), by simp [punctWord], ?_⟩
-    simpa [TypeExpr.bars] using nil_not_mem_bars (y :: rest) (fun z hz => h z (by simp_all))
+    simpa [separated] using nil_not_mem_separated sep (y :: rest) (fun z hz => h z (by simp_all))
 
 theorem symbol_ne (s : String) (h : s ≠ "") : symbol s ≠ [] := by
   unfold symbol; split
@@ -118,21 +111,21 @@ theorem TypeExpr.fine : ∀ t : TypeExpr, [] ∉ t.words
     simp [TypeExpr.words, LitType.words, keywordWord]
   | .ref _ name [] => by simp [TypeExpr.words, identWord]
   | .ref _ name (a :: args) => by
-    have := nil_not_mem_commas _ (TypeExpr.fineAll (a :: args))
+    have := nil_not_mem_separated "," _ (TypeExpr.fineAll (a :: args))
     simp only [TypeExpr.words, List.mem_cons, List.mem_append, not_or]
     simp [identWord, punctWord, this]
   | .array _ elem => by
     have := TypeExpr.fine elem
     simp only [TypeExpr.words, List.mem_append, List.mem_cons, not_or]
     simp [punctWord, this]
-  | .union _ [] => by simp [TypeExpr.words, TypeExpr.wordsOf, TypeExpr.bars]
+  | .union _ [] => by simp [TypeExpr.words, TypeExpr.wordsOf, separated]
   | .union _ [m] => by
     have := TypeExpr.fine m
     simp only [TypeExpr.words, List.mem_cons, not_or]
     simp [punctWord, this]
   | .union _ (a :: b :: ms) => by
     simp only [TypeExpr.words]
-    exact nil_not_mem_bars _ (TypeExpr.fineAll (a :: b :: ms))
+    exact nil_not_mem_separated "|" _ (TypeExpr.fineAll (a :: b :: ms))
   | .paren _ inner => by
     have := TypeExpr.fine inner
     simp only [TypeExpr.words, List.mem_cons, List.mem_append, not_or]
@@ -255,16 +248,17 @@ theorem TypeExpr.line (t : TypeExpr) : LineOK t.words :=
 
 theorem VarKind.word_ne (k : VarKind) : k.word ≠ [] := by cases k <;> simp [VarKind.word, keywordWord, identWord]
 
+theorem typeAnnotation_line : ∀ a : Option TypeExpr, LineOK (typeAnnotation a)
+  | some t => LineOK.cons (by simp [punctWord]) (TypeExpr.line t)
+  | none => LineOK.nil
+
 theorem VarDecl.line (d : VarDecl) : LineOK d.words := by
   simp only [VarDecl.words]
-  refine (((LineOK.cons d.kind.word_ne (LineOK.word (w := identWord d.name) (by simp [identWord]))).append ?_).append
-    ?_).append (LineOK.word (w := punctWord ";") (by simp [punctWord]))
-  · split
-    · exact LineOK.cons (by simp [punctWord]) (TypeExpr.line _)
-    · exact LineOK.nil
-  · split
-    · exact LineOK.cons (by simp [punctWord]) (Expr.fine _).line
-    · exact LineOK.nil
+  refine (((LineOK.cons d.kind.word_ne (LineOK.word (w := identWord d.name) (by simp [identWord]))).append
+    (typeAnnotation_line _)).append ?_).append (LineOK.word (w := punctWord ";") (by simp [punctWord]))
+  split
+  · exact LineOK.cons (by simp [punctWord]) (Expr.fine _).line
+  · exact LineOK.nil
 
 mutual
 
@@ -356,16 +350,10 @@ theorem Decl.lineOK : ∀ d : Decl, ∀ l ∈ d.lines, LineOK l.2
         intro x hx
         simp only [List.mem_map] at hx
         obtain ⟨p, _, rfl⟩ := hx
-        unfold Param.words; split
-        · exact Fine.ofLine (by simp [identWord]) (LineOK.cons (by simp [punctWord]) (TypeExpr.line _))
-        · exact Fine.word (by simp [identWord])
-      have hrt : LineOK (match rt with | some t => punctWord ":" :: t.words | none => []) := by
-        split
-        · exact LineOK.cons (by simp [punctWord]) (TypeExpr.line _)
-        · exact LineOK.nil
+        exact Fine.ofLine (by simp [identWord]) (typeAnnotation_line _)
       have := (exportWords_line exported).append (LineOK.cons (w := keywordWord "function") (by simp [keywordWord])
         (LineOK.cons (w := identWord name) (by simp [identWord])
-          ((fine_enclose (o := "(") (c := ")") hp).line.append hrt)))
+          ((fine_enclose (o := "(") (c := ")") hp).line.append (typeAnnotation_line rt))))
       simpa [List.append_assoc] using this
     · exact Stmt.lineOK body 0 l hl
   | .interface _ exported name fields, l, hl => by

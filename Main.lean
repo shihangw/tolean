@@ -103,7 +103,7 @@ def parseFile (target : Edition) (path : String) (roundTrip : Bool := false) : I
   | .ok m =>
     IO.println m.toSexp.render
     if roundTrip then
-      if let .error e := Syntax.roundTrip source target then
+      if let .error e := Syntax.roundTrip m target then
         IO.eprintln s!"{path}: the round trip fails: {e}"
         return 3
     return 0

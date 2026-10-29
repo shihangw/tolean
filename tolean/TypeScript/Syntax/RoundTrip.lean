@@ -688,23 +688,14 @@ theorem wordsOf_eq (ts : List TypeExpr) : TypeExpr.wordsOf ts = ts.map TypeExpr.
   | nil => rfl
   | cons t ts ih => simp [TypeExpr.wordsOf, ih]
 
-theorem commas_flatten (items : List (List Word)) :
-    (commas items).flatten = joined "," (items.map List.flatten) := by
+theorem separated_flatten (sep : String) (items : List (List Word)) :
+    (separated sep items).flatten = joined sep (items.map List.flatten) := by
   induction items with
   | nil => rfl
   | cons x xs ih =>
     cases xs with
-    | nil => simp [commas, joined]
-    | cons y ys => simp [commas, joined, punctWord] at ih ⊢; rw [ih]
-
-theorem bars_flatten (items : List (List Word)) :
-    (TypeExpr.bars items).flatten = joined "|" (items.map List.flatten) := by
-  induction items with
-  | nil => rfl
-  | cons x xs ih =>
-    cases xs with
-    | nil => simp [TypeExpr.bars, joined]
-    | cons y ys => simp [TypeExpr.bars, joined, punctWord] at ih ⊢; rw [ih]
+    | nil => simp [separated, joined]
+    | cons y ys => simp [separated, joined, punctWord] at ih ⊢; rw [ih]
 
 theorem joined_cons (sep : String) (x : List TokenKind) (xs : List (List TokenKind)) :
     joined sep (x :: xs) = x ++ (xs.map fun i => .punct sep :: i).flatten := by
@@ -720,7 +711,7 @@ theorem tokens_ref (sp : Span) (name : String) (args : List TypeExpr) (h : args 
   | cons a as =>
     simp only [TypeExpr.tokens, TypeExpr.words, identWord, punctWord, List.flatten_cons,
       List.flatten_append]
-    rw [commas_flatten, wordsOf_eq]
+    rw [separated_flatten, wordsOf_eq]
     simp [List.map_map, Function.comp_def, TypeExpr.tokens]
     rfl
 
@@ -915,7 +906,7 @@ theorem tokens_union (sp : Span) (m₁ m₂ : TypeExpr) (ms : List TypeExpr) :
     (TypeExpr.union sp (m₁ :: m₂ :: ms)).tokens =
       m₁.tokens ++ ((m₂ :: ms).map fun i => .punct "|" :: i.tokens).flatten := by
   simp only [TypeExpr.tokens, TypeExpr.words]
-  rw [bars_flatten, wordsOf_eq, List.map_map]
+  rw [separated_flatten, wordsOf_eq, List.map_map]
   simp only [Function.comp_def, List.map_cons]
   rw [joined_cons]
   simp [List.map_map, Function.comp_def]

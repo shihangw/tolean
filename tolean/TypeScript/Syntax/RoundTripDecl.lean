@@ -25,9 +25,6 @@ set_option linter.unusedSimpArgs false
 
 /-! ### Parameters -/
 
-/-- What `Decl.erase` does to a parameter. -/
-def Param.erase (p : Param) : Param := { p with span := noSpan, type := p.type.map TypeExpr.erase }
-
 def Param.wf (p : Param) : Bool := exprName p.name && (match p.type with | some t => t.wf | none => true)
 
 /-- A parameter's type ends before `,` or `)`. -/
@@ -52,7 +49,7 @@ theorem parseParam_reads {T : Edition} (p : Param) (hp : p.wf = true) :
     rw [hnm]; simp
   cases type with
   | none =>
-    simp [Touching] at h'; subst h'
+    simp [Touching, typeAnnotation] at h'; subst h'
     have hs' : s.rest = nm :: u :: r := by simpa using hs
     let s₁ := advanced s nm u r
     refine ⟨⟨⟨nm.span.start, nm.span.stop⟩, name, none⟩, s₁, ?_, rfl, leaves_advanced hs' hl⟩
@@ -68,7 +65,7 @@ theorem parseParam_reads {T : Edition} (p : Param) (hp : p.wf = true) :
     rw [Parse.bind_eq (Parse.spanFrom_eq _ _)]
     rfl
   | some t =>
-    obtain ⟨colon, ts₂, rfl, hcolon, h₂⟩ := Touching.cons_one (by simpa [punctWord] using h')
+    obtain ⟨colon, ts₂, rfl, hcolon, h₂⟩ := Touching.cons_one (by simpa [punctWord, typeAnnotation] using h')
     have hs' : s.rest = nm :: colon :: (ts₂ ++ u :: r) := by simpa using hs
     let s₁ := advanced s nm colon (ts₂ ++ u :: r)
     let s₂ : ParseState := { s₁ with rest := ts₂ ++ u :: r, left := s₁.left - 1, lastStop := colon.span.stop }
@@ -242,20 +239,11 @@ theorem listAfter_true {α : Type} {tokens : α → List TokenKind} {close : Lis
   | [_] => rfl
   | _ :: y :: xs => ⟨rfl, listAfter_true (y :: xs)⟩
 
-/-- The words of a return type. -/
-def rtWords : Option TypeExpr → List Word
-  | some t => punctWord ":" :: t.words
-  | none => []
-
-theorem rtWords_eq (rt : Option TypeExpr) :
-    (match rt with | some t => punctWord ":" :: t.words | none => []) = rtWords rt := by
-  cases rt <;> rfl
-
 /-- `( params )`, which `listStep` and `parseParam` read. -/
 theorem params_reads {T : Edition} (params : List Param) (hps : ∀ p ∈ params, p.wf = true)
     (s : ParseState) (its rest : List Token) (rp : Token) (hT : s.target = T) (hs : s.rest = its ++ rp :: rest)
     (hrp : rp.kind = .punct ")") (hl : s.left = s.rest.length)
-    (ht : Touching its (commas (params.map Param.words))) (hn : ∀ y ∈ its, NoBreak y) :
+    (ht : Touching its (separated "," (params.map Param.words))) (hn : ∀ y ∈ its, NoBreak y) :
     ∃ res s', Parse.iterate (10 * (s.left + 1)) #[] (Parse.listStep ")" (fun _ => pure ()) Parse.parseParam) s =
       .ok res s' ∧ res.toList.map Param.erase = params.map Param.erase ∧ Leaves s s' (rp :: rest) := by
   obtain ⟨res, s', hit, he, hL⟩ := iterate_list (close := ")") (refuse := fun _ => pure ()) (by decide)
@@ -274,7 +262,7 @@ theorem parseFunction_reads {T : Edition} (start : Pos) (exported : Bool) (sp : 
     (hbw : (Stmt.block bsp bs).wf T true false = true) :
     ∀ (s : ParseState) (ts bts rest : List Token), s.target = T → s.inFunction = false →
       s.rest = ts ++ bts ++ rest → s.left = s.rest.length →
-      Touching ts (keywordWord "function" :: identWord name :: enclose "(" ")" (params.map Param.words) ++ rtWords rt) →
+      Touching ts (keywordWord "function" :: identWord name :: enclose "(" ")" (params.map Param.words) ++ typeAnnotation rt) →
       (∀ y ∈ ts.tail, NoBreak y) → Laid bts (Stmt.block bsp bs).wordLines → rest ≠ [] →
       ∃ d' s', Parse.parseFunction start exported s = .ok d' s' ∧
         d'.erase = (Decl.function sp exported name params rt (.block bsp bs)).erase ∧ Leaves s s' rest := by
@@ -294,7 +282,7 @@ theorem parseFunction_reads {T : Edition} (start : Pos) (exported : Bool) (sp : 
   have hn' : ∀ y ∈ its, NoBreak y := fun y hy => hn y (by simp [hy])
   cases rt with
   | none =>
-    simp [rtWords, Touching] at hrts; subst hrts
+    simp [typeAnnotation, Touching] at hrts; subst hrts
     have hs' : s.rest = fk :: nm :: lp :: (its ++ rp :: (lb :: ba' ++ bb ++ rest)) := by simpa using hs
     let s₁ := advanced s fk nm (lp :: (its ++ rp :: (lb :: ba' ++ bb ++ rest)))
     let s₂ := advanced s₁ nm lp (its ++ rp :: (lb :: ba' ++ bb ++ rest))
@@ -333,7 +321,7 @@ theorem parseFunction_reads {T : Edition} (start : Pos) (exported : Bool) (sp : 
             (leaves_inFunction (by simp [s₅, hL₄.inFunction_eq, s₃, s₂, s₁, hF]) hL₇)))))
   | some t =>
     have htw : t.wf = true := hrt t rfl
-    obtain ⟨colon, tts, rfl, hcolon, htt⟩ := Touching.cons_one (by simpa [rtWords, punctWord] using hrts)
+    obtain ⟨colon, tts, rfl, hcolon, htt⟩ := Touching.cons_one (by simpa [typeAnnotation, punctWord] using hrts)
     have hs' : s.rest = fk :: nm :: lp :: (its ++ rp :: (colon :: (tts ++ (lb :: ba' ++ bb ++ rest)))) := by
       simpa using hs
     let s₁ := advanced s fk nm (lp :: (its ++ rp :: (colon :: (tts ++ (lb :: ba' ++ bb ++ rest)))))
@@ -487,9 +475,6 @@ theorem Expr.second : ∀ (e : Expr) {n : String} {k : TokenKind} {r : List Toke
 
 
 /-! ### Fields of an interface -/
-
-/-- What `Decl.erase` does to a field. -/
-def Field.erase (f : Field) : Field := { f with span := noSpan, type := f.type.erase }
 
 /-- `name: T;`, without `readonly` and `?`. -/
 theorem parseField_plain (sp : Span) (name : String) (ty : TypeExpr) (hty : ty.wf = true)
@@ -817,9 +802,6 @@ theorem parseInterface_reads (start : Pos) (exported : Bool) (sp : Span) (name :
 
 /-! ### Imports -/
 
-/-- What `Decl.erase` does to an imported name. -/
-def ImportName.erase (n : ImportName) : ImportName := { n with span := noSpan }
-
 /-- The tokens of an imported name: `type` and the name, or the name. -/
 theorem Touching.importName {ts : List Token} {n : ImportName} (h : Touching ts n.words) :
     (n.typeOnly = true ∧ ∃ ty nm, ts = [ty, nm] ∧ ty.kind = .ident "type" ∧ nm.kind = .ident n.name) ∨
@@ -936,7 +918,7 @@ theorem import_loop :
     ∀ (names : List ImportName) (fuel : Nat) (acc : Array ImportName) (s : ParseState) (ts rest : List Token)
       (c : Token), (∀ n ∈ names, n.name ∉ Parse.refusedNames) → names.length < fuel →
       s.rest = ts ++ c :: rest → c.kind = .punct "}" → s.left = s.rest.length →
-      Touching ts (commas (names.map ImportName.words)) →
+      Touching ts (separated "," (names.map ImportName.words)) →
       ∃ res s', Parse.iterate fuel acc (Parse.importStep false) s = .ok res s' ∧
         res.toList.map ImportName.erase = (acc.toList ++ names).map ImportName.erase ∧ Leaves s s' (c :: rest) := by
   intro names
@@ -944,7 +926,7 @@ theorem import_loop :
   | nil =>
     intro fuel acc s ts rest c _ hlen hs hc hl ht
     obtain ⟨f', rfl⟩ : ∃ f', fuel = f' + 1 := ⟨fuel - 1, by simp at hlen; omega⟩
-    have hts : ts = [] := Touching.nil.mp (by simpa [commas] using ht)
+    have hts : ts = [] := Touching.nil.mp (by simpa [separated] using ht)
     subst hts
     have hs' : s.rest = c :: rest := by simpa using hs
     refine ⟨acc, s, Parse.iterate_false ?_, by simp, ⟨hs', by simp [hl, hs'], rfl, rfl, rfl, rfl⟩⟩
@@ -956,19 +938,19 @@ theorem import_loop :
     obtain ⟨f', rfl⟩ : ∃ f', fuel = f' + 1 := ⟨fuel - 1, by simp at hlen; omega⟩
     cases names with
     | nil =>
-      have ha : Touching ts n.words := by simpa [commas] using ht
+      have ha : Touching ts n.words := by simpa [separated] using ht
       obtain ⟨n', s₁, hstep, he, hL₁⟩ := importStep_ok (acc := acc) hs hl ha (hnames n (by simp)) (.inr hc)
         (fun h => absurd (hc.symm.trans h) (punct_ne (by decide)))
       have hc' : (c.kind == .punct ",") = false := by simp [hc]
       simp only [Token.isPunct, hc', Bool.false_eq_true, ↓reduceIte] at hL₁
       have hl₁ : s₁.left = s₁.rest.length := by rw [hL₁.left_eq, hL₁.rest_eq]
       obtain ⟨res, s', hit, he', hL'⟩ := ih f' (acc.push n') s₁ [] rest c (by simp) (by simp at hlen ⊢; omega)
-        (by simpa using hL₁.rest_eq) hc hl₁ (by simp [commas, Touching])
+        (by simpa using hL₁.rest_eq) hc hl₁ (by simp [separated, Touching])
       refine ⟨res, s', ?_, by rw [he']; simp [he], leaves_trans hL₁ hL'⟩
       rw [Parse.iterate_true hstep]; exact hit
     | cons y ys =>
       obtain ⟨a, more, rfl, ha, hmore⟩ := Touching.append_split (ws₁ := n.words)
-        (ws₂ := punctWord "," :: commas ((y :: ys).map ImportName.words)) (by simpa [commas] using ht)
+        (ws₂ := punctWord "," :: separated "," ((y :: ys).map ImportName.words)) (by simpa [separated] using ht)
       obtain ⟨d, more', rfl, hd, hmore'⟩ := Touching.cons_one (by simpa [punctWord] using hmore)
       obtain ⟨n', s₁, hstep, he, hL₁⟩ := importStep_ok (acc := acc) (r := more' ++ c :: rest) (by simpa using hs)
         hl ha (hnames n (by simp)) (.inl hd) (fun _ => by simp)
@@ -1303,7 +1285,7 @@ theorem parseDecl_function {T : Edition} (sp : Span) (exported : Bool) (name : S
     intro t ht; cases rt with
     | none => cases ht
     | some t' => simp at ht; subst ht; simpa using hrt
-  simp only [Decl.wordLines, Decl.lines, List.map_cons, rtWords_eq] at ht
+  simp only [Decl.wordLines, Decl.lines, List.map_cons] at ht
   obtain ⟨a, b, rfl, ha, hna, _, hb⟩ := Laid.cons ht
   cases exported with
   | false =>

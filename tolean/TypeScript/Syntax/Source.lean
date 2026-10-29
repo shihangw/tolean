@@ -9,14 +9,16 @@ trip follows the tree:
 
 - Every statement and every declaration has a line of its own, and every
   statement ends in `;`. So no `;` is inserted.
-- A statement breaks across lines only where the standard needs a line
-  break: between the name `async` and the `(` of a call of it. On one line,
-  `tsc` can read `async (` as the start of an async arrow function, such as
-  `async () : T => …`. ECMA-262 §15.9 lets no line break come between `async`
-  and the parameters of an async arrow function, and `tsc` reads none after
-  one either. So `async`, then a line break, then `(`, is a call in both. The
-  printer puts no line break at any other place inside a statement. So no
-  `[no LineTerminator here]` rule of the standard applies.
+- A statement breaks across lines in one place only: between the name
+  `async` and the `(` of a call of it. ECMA-262 reads `async (1)` on one line
+  as a call. But on one line, `tsc` can read `async (` as the start of an
+  async arrow function, such as `async () : T => …`, and so the parser
+  refuses `async (…)` before a `:` (`refuseAsyncArrowLookalike`). ECMA-262
+  §15.9 lets no line break come between `async` and the parameters of an
+  async arrow function, and `tsc` reads none after one either. So `async`,
+  then a line break, then `(`, is a call in both, and the parser reads it.
+  The printer puts no line break at any other place inside a statement. So
+  no `[no LineTerminator here]` rule of the standard applies.
 - The printer builds lines of words, and `render` writes them with one space
   between two words. A word is one token, or the `>` and `=` tokens of a
   `>=` or a `>>`, which the parser reads as tokens that touch. So no two
@@ -37,12 +39,14 @@ open tolean
 
 /-! ### Printing -/
 
+/-- One character of a string literal: itself, or its escape. -/
+def escChar (c : Char) : String :=
+  if c == '"' then "\\\"" else if c == '\\' then "\\\\" else if c == '\n' then "\\n"
+  else if c == '\r' then "\\r" else if c.toNat == 0x2028 then "\\u2028"
+  else if c.toNat == 0x2029 then "\\u2029" else c.toString
+
 /-- `s` as a string literal in double quotes. -/
-def quote (s : String) : String :=
-  "\"" ++ String.join (s.toList.map fun c =>
-    if c == '"' then "\\\"" else if c == '\\' then "\\\\" else if c == '\n' then "\\n"
-    else if c == '\r' then "\\r" else if c.toNat == 0x2028 then "\\u2028"
-    else if c.toNat == 0x2029 then "\\u2029" else c.toString) ++ "\""
+def quote (s : String) : String := "\"" ++ String.join (s.toList.map escChar) ++ "\""
 
 /-- Tokens with no space between them. A word is one token, except that the
 parser reads `>=`, `>>`, `>>>`, `>>=` and `>>>=` as `>` and `=` tokens that
@@ -62,7 +66,7 @@ next line, further in. -/
 def lineBreak : Word := []
 
 /-- The line break between the callee and the `(` of a call: one after the
-name `async`, as the standard needs, and none after any other callee. -/
+name `async`, so that `tsc` reads a call, and none after any other callee. -/
 def callBreak : Expr → List Word
   | .ident _ "async" => [lineBreak]
   | _ => []
@@ -79,15 +83,15 @@ def symbol (s : String) : Word :=
   else if Lex.reservedWords.contains s then keywordWord s
   else punctWord s
 
-/-- `items`, with a `,` between two of them. -/
-def commas : List (List Word) → List Word
+/-- `items`, with `sep` between two of them. -/
+def separated (sep : String) : List (List Word) → List Word
   | [] => []
   | [item] => item
-  | item :: rest => item ++ punctWord "," :: commas rest
+  | item :: rest => item ++ punctWord sep :: separated sep rest
 
 /-- `items` between `open` and `close`, with a `,` between two of them. -/
 def enclose (open_ close : String) (items : List (List Word)) : List Word :=
-  punctWord open_ :: commas items ++ [punctWord close]
+  punctWord open_ :: separated "," items ++ [punctWord close]
 
 def LitType.words : LitType → List Word
   | .string value => [[.string value]]
@@ -102,24 +106,23 @@ def TypeExpr.words : TypeExpr → List Word
   | .null _ => [keywordWord "null"]
   | .literal _ lit => lit.words
   | .ref _ name [] => [identWord name]
-  | .ref _ name args => identWord name :: punctWord "<" :: commas (TypeExpr.wordsOf args) ++ [punctWord ">"]
+  | .ref _ name args => identWord name :: punctWord "<" :: separated "," (TypeExpr.wordsOf args) ++ [punctWord ">"]
   | .array _ elem => elem.words ++ [punctWord "[", punctWord "]"]
   -- A union of one member is `| T`, as `type A = | T` writes it.
   | .union _ [member] => punctWord "|" :: member.words
-  | .union _ members => TypeExpr.bars (TypeExpr.wordsOf members)
+  | .union _ members => separated "|" (TypeExpr.wordsOf members)
   | .paren _ inner => punctWord "(" :: inner.words ++ [punctWord ")"]
 
 def TypeExpr.wordsOf : List TypeExpr → List (List Word)
   | [] => []
   | t :: ts => t.words :: TypeExpr.wordsOf ts
 
-/-- `members`, with a `|` between two of them. -/
-def TypeExpr.bars : List (List Word) → List Word
-  | [] => []
-  | [member] => member
-  | member :: rest => member ++ punctWord "|" :: TypeExpr.bars rest
-
 end
+
+/-- `: T` after a name or a parameter list, when the type is there. -/
+def typeAnnotation : Option TypeExpr → List Word
+  | some t => punctWord ":" :: t.words
+  | none => []
 
 def PropKey.words : PropKey → List Word
   | .ident name => [propertyName name]
@@ -168,8 +171,7 @@ def VarKind.word : VarKind → Word
   | .«let» => identWord "let"
 
 def VarDecl.words (d : VarDecl) : List Word :=
-  [d.kind.word, identWord d.name] ++
-    (match d.type with | some t => punctWord ":" :: t.words | none => []) ++
+  [d.kind.word, identWord d.name] ++ typeAnnotation d.type ++
     (match d.init with | some e => punctWord "=" :: e.words | none => []) ++ [punctWord ";"]
 
 mutual
@@ -201,8 +203,7 @@ def Stmt.linesOf (depth : Nat) : List Stmt → List Line
 
 end
 
-def Param.words (p : Param) : List Word :=
-  identWord p.name :: match p.type with | some t => punctWord ":" :: t.words | none => []
+def Param.words (p : Param) : List Word := identWord p.name :: typeAnnotation p.type
 
 def Field.words (f : Field) : List Word :=
   (if f.readonly then [identWord "readonly"] else []) ++ [propertyName f.name] ++
@@ -219,8 +220,7 @@ def Decl.lines : Decl → List Line
       [identWord "from", [.string source], punctWord ";"])]
   | .function _ exported name params returnType body =>
     (0, exportWords exported ++ keywordWord "function" :: identWord name ::
-      enclose "(" ")" (params.map Param.words) ++
-      (match returnType with | some t => punctWord ":" :: t.words | none => [])) :: body.lines 0
+      enclose "(" ")" (params.map Param.words) ++ typeAnnotation returnType) :: body.lines 0
   | .interface _ exported name fields =>
     (0, exportWords exported ++ [identWord "interface", identWord name, punctWord "{"]) ::
       fields.map (fun f => (1, f.words)) ++ [(0, [punctWord "}"])]
@@ -345,13 +345,17 @@ def Stmt.eraseAll : List Stmt → List Stmt
 
 end
 
+def Param.erase (p : Param) : Param := { p with span := noSpan, type := p.type.map TypeExpr.erase }
+
+def Field.erase (f : Field) : Field := { f with span := noSpan, type := f.type.erase }
+
+def ImportName.erase (n : ImportName) : ImportName := { n with span := noSpan }
+
 def Decl.erase : Decl → Decl
-  | .import _ names source => .import noSpan (names.map fun n => { n with span := noSpan }) source
+  | .import _ names source => .import noSpan (names.map ImportName.erase) source
   | .function _ exported name params returnType body =>
-    .function noSpan exported name (params.map fun p => { p with span := noSpan, type := p.type.map TypeExpr.erase })
-      (returnType.map TypeExpr.erase) body.erase
-  | .interface _ exported name fields =>
-    .interface noSpan exported name (fields.map fun f => { f with span := noSpan, type := f.type.erase })
+    .function noSpan exported name (params.map Param.erase) (returnType.map TypeExpr.erase) body.erase
+  | .interface _ exported name fields => .interface noSpan exported name (fields.map Field.erase)
   | .typeAlias _ exported name type => .typeAlias noSpan exported name type.erase
   | .exportedVar _ d => .exportedVar noSpan d.erase
   | .stmt s => .stmt s.erase
@@ -360,10 +364,15 @@ def Module.erase (m : Module) : Module := { decls := m.decls.map Decl.erase }
 
 /-! ### The round trip, on one module -/
 
-/-- Parse `source`, print the tree, and parse the printed source: an error
-unless the second tree is the first, apart from spans. -/
-def roundTrip (source : String) (target : Edition := .default) : Except String Unit := do
-  let m ← (parse source target).mapError (·.message)
+/-- Print the module `m`, and parse the printed source: an error unless it
+parses as `m`, apart from spans.
+
+`parseChars_reads` proves that this gives no error for every module that the
+parser gives. `tolean parse --round-trip` still runs it, because the binary
+runs compiled code. The compiler replaces functions such as `String.toList`,
+`String.append` and `String.push` with native code, which the proof does not
+cover. -/
+def roundTrip (m : Module) (target : Edition := .default) : Except String Unit := do
   let printed := m.source
   let m' ← (parse printed target).mapError fun e =>
     s!"the printed source does not parse: {e.span.start.line}:{e.span.start.col}: {e.message}\n{printed}"

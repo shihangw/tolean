@@ -720,7 +720,7 @@ theorem iterate_list {α : Type} {T : Edition} {erase : α → α} {words : α �
         ∀ (t : Token) s, t.kind = k → refuse t s = .ok () s) →
       items.length < fuel → s.target = T →
       s.rest = ts ++ c :: rest → c.kind = .punct close → s.left = s.rest.length →
-      Touching ts (commas (items.map words)) → (∀ y ∈ ts, NoBreak y) →
+      Touching ts (separated "," (items.map words)) → (∀ y ∈ ts, NoBreak y) →
       ListAfter afterOK (fun x => (words x).flatten) (.punct close :: rest.map (·.kind)) items →
       ∃ res s', Parse.iterate fuel acc (Parse.listStep close refuse p) s = .ok res s' ∧
         res.toList.map erase = (acc.toList ++ items).map erase ∧ Leaves s s' (c :: rest) := by
@@ -729,7 +729,7 @@ theorem iterate_list {α : Type} {T : Edition} {erase : α → α} {words : α �
   | nil =>
     intro fuel acc s ts rest c _ _ hlen _ hs hc hl ht _ _
     obtain ⟨f', rfl⟩ : ∃ f', fuel = f' + 1 := ⟨fuel - 1, by simp at hlen; omega⟩
-    have hts : ts = [] := Touching.nil.mp (by simpa [commas] using ht)
+    have hts : ts = [] := Touching.nil.mp (by simpa [separated] using ht)
     subst hts
     have hs' : s.rest = c :: rest := by simpa using hs
     refine ⟨acc, s, Parse.iterate_false ?_, by simp, ⟨hs', by simp [hl, hs'], rfl, rfl, rfl, rfl⟩⟩
@@ -740,12 +740,12 @@ theorem iterate_list {α : Type} {T : Edition} {erase : α → α} {words : α �
     obtain ⟨k, hk, hkc, hrefuse⟩ := hstart x (by simp)
     -- The tokens of `x`, and what follows them.
     obtain ⟨xts, more, rfl, hxt, hmore⟩ : ∃ xts more, ts = xts ++ more ∧ Touching xts (words x) ∧
-        Touching more (if items = [] then [] else punctWord "," :: commas (items.map words)) := by
+        Touching more (if items = [] then [] else punctWord "," :: separated "," (items.map words)) := by
       cases items with
-      | nil => exact ⟨ts, [], by simp, by simpa [commas] using ht, by simp [Touching]⟩
+      | nil => exact ⟨ts, [], by simp, by simpa [separated] using ht, by simp [Touching]⟩
       | cons y ys =>
-        have := Touching.append_split (ws₁ := words x) (ws₂ := punctWord "," :: commas ((y :: ys).map words))
-          (by simpa [commas] using ht)
+        have := Touching.append_split (ws₁ := words x) (ws₂ := punctWord "," :: separated "," ((y :: ys).map words))
+          (by simpa [separated] using ht)
         simpa using this
     obtain ⟨t, xts', rfl⟩ : ∃ t xts', xts = t :: xts' := by
       have hk' := hxt.kinds
@@ -771,7 +771,7 @@ theorem iterate_list {α : Type} {T : Edition} {erase : α → α} {words : α �
         simp only [if_neg (List.cons_ne_nil y ys)] at this
         simp only [ListAfter] at hafter
         rw [List.map_append, this]
-        simpa [punctWord, commas_flatten, List.map_map, Function.comp_def, hc] using hafter.1
+        simpa [punctWord, separated_flatten, List.map_map, Function.comp_def, hc] using hafter.1
     obtain ⟨x', s₁, hp, he, hL⟩ := hreads x (by simp) s (t :: xts') (more ++ c :: rest) hT (by simp [hs'])
       hl hxt (fun y hy => hn y (by simp at hy ⊢; simp [hy])) (by simp) hends hafter₁
     have hT₁ : s₁.target = T := hL.target_eq.trans hT
@@ -781,7 +781,7 @@ theorem iterate_list {α : Type} {T : Edition} {erase : α → α} {words : α �
       simp [Touching] at hmore; subst hmore
       have hs₁ : s₁.rest = c :: rest := by simpa using hL.rest_eq
       obtain ⟨res, s', hit, he', hL'⟩ := ih f' (acc.push x') s₁ [] rest c (by simp) (by simp)
-        (by simp at hlen ⊢; omega) hT₁ (by simpa using hs₁) hc hl₁ (by simp [commas, Touching]) (by simp)
+        (by simp at hlen ⊢; omega) hT₁ (by simpa using hs₁) hc hl₁ (by simp [separated, Touching]) (by simp)
         (by simp [ListAfter])
       refine ⟨res, s', ?_, ?_, leaves_trans hL hL'⟩
       · rw [Parse.iterate_true (acc' := acc.push x') (s' := s₁)]
@@ -852,9 +852,9 @@ theorem Property.listAfter {close : List TokenKind} :
 /-- The items of a list, with a `,` between two of them, are no more than its
 tokens and one. -/
 theorem length_items {α : Type} {words : α → List Word} {items : List α} {ts : List Token}
-    (h : Touching ts (commas (items.map words))) : items.length ≤ ts.length + 1 := by
+    (h : Touching ts (separated "," (items.map words))) : items.length ≤ ts.length + 1 := by
   have hk := congrArg List.length h.kinds
-  rw [List.length_map, commas_flatten] at hk
+  rw [List.length_map, separated_flatten] at hk
   have := length_joined "," ((items.map words).map List.flatten)
   rw [← hk] at this
   simpa using this
@@ -2388,11 +2388,11 @@ theorem Expr.neutral : ∀ e : Expr, Neutral e.tokens
   | .bool _ b => Neutral.all (by cases b <;> simp [Expr.tokens, Expr.words, keywordWord])
   | .array _ es => by
     have h := Neutral.encl (o := "[") (c := "]") (by simp) (by simp) (Neutral.join (Expr.neutralAll es))
-    simpa [Expr.tokens, Expr.words, enclose, punctWord, commas_flatten, Expr.wordsOf_eq, List.map_map,
+    simpa [Expr.tokens, Expr.words, enclose, punctWord, separated_flatten, Expr.wordsOf_eq, List.map_map,
       Function.comp_def] using h
   | .object _ ps => by
     have h := Neutral.encl (o := "{") (c := "}") (by simp) (by simp) (Neutral.join (Property.neutralAll ps))
-    simpa [Expr.tokens, Expr.words, enclose, punctWord, commas_flatten, Property.wordsOf_eq, List.map_map,
+    simpa [Expr.tokens, Expr.words, enclose, punctWord, separated_flatten, Property.wordsOf_eq, List.map_map,
       Function.comp_def] using h
   | .paren _ i => by
     have h := Neutral.encl (o := "(") (c := ")") (by simp) (by simp) (Expr.neutral i)
@@ -2407,7 +2407,7 @@ theorem Expr.neutral : ∀ e : Expr, Neutral e.tokens
   | .call _ c as => by
     have h := Neutral.append (Expr.neutral c)
       (Neutral.encl (o := "(") (c := ")") (by simp) (by simp) (Neutral.join (Expr.neutralAll as)))
-    simpa [Expr.tokens, Expr.words, enclose, punctWord, commas_flatten, Expr.wordsOf_eq, List.map_map,
+    simpa [Expr.tokens, Expr.words, enclose, punctWord, separated_flatten, Expr.wordsOf_eq, List.map_map,
       Function.comp_def] using h
   | .unary _ op a => by
     have h := Neutral.append (neutral_unaryOp op) (Expr.neutral a)
@@ -2472,7 +2472,7 @@ theorem AfterEquiv.closer {c : String} (hc : c ∈ [")", "]", "}"]) (a b : List 
 
 theorem neutral_args (args : List Expr) : Neutral (enclose "(" ")" (Expr.wordsOf args)).flatten := by
   have h := Neutral.encl (o := "(") (c := ")") (by simp) (by simp) (Neutral.join (Expr.neutralAll args))
-  simpa [enclose, punctWord, commas_flatten, Expr.wordsOf_eq, List.map_map, Function.comp_def] using h
+  simpa [enclose, punctWord, separated_flatten, Expr.wordsOf_eq, List.map_map, Function.comp_def] using h
 
 mutual
 
@@ -2577,12 +2577,12 @@ variable {sp : Span}
 
 theorem Expr.tokens_array (es : List Expr) :
     (Expr.array sp es).tokens = .punct "[" :: joined "," (es.map Expr.tokens) ++ [.punct "]"] := by
-  simp [Expr.tokens, Expr.words, enclose, punctWord, commas_flatten, Expr.wordsOf_eq, List.map_map,
+  simp [Expr.tokens, Expr.words, enclose, punctWord, separated_flatten, Expr.wordsOf_eq, List.map_map,
     Function.comp_def]; rfl
 
 theorem Expr.tokens_object (ps : List Property) :
     (Expr.object sp ps).tokens = .punct "{" :: joined "," (ps.map Property.tokens) ++ [.punct "}"] := by
-  simp [Expr.tokens, Expr.words, Property.tokens, enclose, punctWord, commas_flatten, Property.wordsOf_eq,
+  simp [Expr.tokens, Expr.words, Property.tokens, enclose, punctWord, separated_flatten, Property.wordsOf_eq,
     List.map_map, Function.comp_def]; rfl
 
 theorem Expr.tokens_paren (i : Expr) : (Expr.paren sp i).tokens = .punct "(" :: i.tokens ++ [.punct ")"] := by
@@ -2598,7 +2598,7 @@ theorem Expr.tokens_index (o i : Expr) :
 
 theorem Expr.tokens_call (c : Expr) (as : List Expr) :
     (Expr.call sp c as).tokens = c.tokens ++ .punct "(" :: joined "," (as.map Expr.tokens) ++ [.punct ")"] := by
-  simp [Expr.tokens, Expr.words, enclose, punctWord, commas_flatten, Expr.wordsOf_eq, List.map_map,
+  simp [Expr.tokens, Expr.words, enclose, punctWord, separated_flatten, Expr.wordsOf_eq, List.map_map,
     Function.comp_def]; rfl
 
 theorem Expr.tokens_unary (op : UnaryOp) (a : Expr) :

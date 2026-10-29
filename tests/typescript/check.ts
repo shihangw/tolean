@@ -29,7 +29,12 @@ const CONSERVATIVE = 'tsc may read this';
 
 type LeanResult = { kind: 'tree'; sexp: string } | { kind: 'refused'; message: string };
 
-/** Each tree that the parser gives is printed as source and parsed again. */
+/**
+ * Each tree that the parser gives is printed as source and parsed again.
+ * `parseChars_reads` proves that this gives the same tree, but the proof is
+ * about the Lean definitions, and the binary runs compiled code. So the test
+ * checks that the compiled code agrees, at the cost of one more parse.
+ */
 const roundTrips = { checked: 0, failed: [] as Array<string> };
 
 function lean(path: string, target?: string): LeanResult {
@@ -38,7 +43,8 @@ function lean(path: string, target?: string): LeanResult {
   if (run.error !== undefined) {
     throw run.error;
   }
-  // 3: the tree printed as source parses as another tree (Syntax/Source.lean).
+  // 3: the round trip fails: the printed source does not parse, or it parses
+  // as another tree (Syntax/Source.lean).
   if (run.status === 3) {
     roundTrips.failed.push(run.stderr.trim());
   }
