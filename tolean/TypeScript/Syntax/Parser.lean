@@ -829,12 +829,9 @@ def parseImport (start : Pos) : ParseM Decl := do
   endStatement
   return .import (← spanFrom start) names.toList source
 
-def parseDecl : ParseM Decl := do
-  let first ← peek
-  let start := first.span.start
-  if first.isKeyword "import" then return ← parseImport start
-  let exported := first.isKeyword "export"
-  if exported then discard advance
+/-- A declaration after `export`, when `exported`, or a declaration or a
+statement without it. `start` is where it starts, before any `export`. -/
+def parseDeclBody (start : Pos) (exported : Bool) : ParseM Decl := do
   let t ← peek
   let next ← peekAt 1
   -- `interface` and `type` start a declaration only before a name on the same
@@ -849,6 +846,14 @@ def parseDecl : ParseM Decl := do
     let decl ← parseVarDecl
     return .exportedVar (← spanFrom start) decl
   else return .stmt (← parseStatement (← budget))
+
+def parseDecl : ParseM Decl := do
+  let first ← peek
+  let start := first.span.start
+  if first.isKeyword "import" then return ← parseImport start
+  let exported := first.isKeyword "export"
+  if exported then discard advance
+  parseDeclBody start exported
 
 /-- One step of the loop over the declarations of a module, unless the end of
 the file comes. -/

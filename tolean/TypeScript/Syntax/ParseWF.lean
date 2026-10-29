@@ -3468,6 +3468,7 @@ theorem parseDecl_wf {T : Edition} : GivesD T Parse.parseDecl := by
   have hF₁ : s₁.inFunction = false := hK₁.inFunction_eq.trans hF
   have hL₁ : s₁.loopDepth = 0 := hK₁.loopDepth_eq.trans hL
   obtain ⟨y, r₁, hs₁⟩ := hR₁.cons
+  simp only [Parse.parseDeclBody] at h
   rw [Parse.bind_eq (Parse.peek_eq hs₁), Parse.bind_eq (Parse.peekAt_rest s₁ 1)] at h
   simp only [Parse.ite_state] at h
   split at h

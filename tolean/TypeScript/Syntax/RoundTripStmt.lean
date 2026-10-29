@@ -814,6 +814,56 @@ theorem Laid.length_le {T : Edition} {fn loop : Bool} :
     have := Laid.length_le (fun s hs => hw s (by simp [hs])) hb
     simp; omega
 
+/-- The loop that `Parse.blockStep p` runs reads items, the lines of each after the lines of the one
+before, which a `}` follows. `Inv` holds in each state between two items. `hread` states that `p` reads
+an item `x`, which the lines of the items `later` follow, and that a token other than `}` and the end of
+the file starts `x`. -/
+theorem blockStep_loop {α : Type} {p : ParseM α} {erase : α → α} {lines : α → List (List Word)}
+    {Inv : ParseState → Prop} (hInv : ∀ {s s' : ParseState} {r : List Token}, Inv s → Leaves s s' r → Inv s')
+    {items : List α} {rest : List Token} {c : Token}
+    (hread : ∀ x ∈ items, ∀ later : List α, (∀ y ∈ later, y ∈ items) →
+      ∀ (s : ParseState) (a b : List Token), Inv s → s.rest = a ++ (b ++ c :: rest) →
+        s.left = s.rest.length → Laid a (lines x) → Laid b (later.map lines).flatten →
+        ∃ x' s' k a', a = k :: a' ∧ k.kind ≠ .punct "}" ∧ k.kind ≠ .eof ∧
+          p s = .ok x' s' ∧ erase x' = erase x ∧ Leaves s s' (b ++ c :: rest))
+    (hc : c.kind = .punct "}") :
+    ∀ (later : List α), (∀ y ∈ later, y ∈ items) → ∀ (fuel : Nat) (acc : Array α) (s : ParseState)
+      (ts : List Token), later.length < fuel → Inv s → s.rest = ts ++ c :: rest → s.left = s.rest.length →
+      Laid ts (later.map lines).flatten →
+      ∃ res s', Parse.iterate fuel acc (Parse.blockStep p) s = .ok res s' ∧
+        res.toList.map erase = (acc.toList ++ later).map erase ∧ Leaves s s' (c :: rest) := by
+  intro later
+  induction later with
+  | nil =>
+    intro _ fuel acc s ts hlen _ hs hl ht
+    obtain ⟨f', rfl⟩ : ∃ f', fuel = f' + 1 := ⟨fuel - 1, by simp at hlen; omega⟩
+    simp [Laid] at ht; subst ht
+    have hs' : s.rest = c :: rest := by simpa using hs
+    refine ⟨acc, s, Parse.iterate_false ?_, by simp, Leaves.refl hs' (by simp [hl, hs'])⟩
+    simp only [Parse.blockStep]
+    rw [Parse.bind_eq (Parse.peek_eq hs')]
+    simp [Token.isPunct, hc, pure, EStateM.pure]
+  | cons x later ih =>
+    intro hsub fuel acc s ts hlen hI hs hl ht
+    obtain ⟨f', rfl⟩ : ∃ f', fuel = f' + 1 := ⟨fuel - 1, by simp at hlen; omega⟩
+    obtain ⟨a, b, rfl, ha, hb, _⟩ := Laid.append (by simpa using ht)
+    obtain ⟨x', s₁, k, a', rfl, hk1, hk2, hp, he, hL₁⟩ := hread x (hsub x (by simp)) later
+      (fun y hy => hsub y (by simp [hy])) s _ b hI (by simpa using hs) hl ha hb
+    have hs' : s.rest = k :: (a' ++ (b ++ c :: rest)) := by simpa using hs
+    have hl₁ : s₁.left = s₁.rest.length := by rw [hL₁.left_eq, hL₁.rest_eq]
+    obtain ⟨res, s', hit, he', hL'⟩ := ih (fun y hy => hsub y (by simp [hy])) f' (acc.push x') s₁ b
+      (by simp at hlen; omega) (hInv hI hL₁) hL₁.rest_eq hl₁ hb
+    refine ⟨res, s', ?_, by rw [he']; simp [he], leaves_trans hL₁ hL'⟩
+    rw [Parse.iterate_true (acc' := acc.push x') (s' := s₁)]
+    · exact hit
+    · have hb1 : (k.kind == .punct "}") = false := by simp [hk1]
+      have hb2 : (k.kind == .eof) = false := by simp [hk2]
+      simp only [Parse.blockStep]
+      rw [Parse.bind_eq (Parse.peek_eq hs')]
+      simp only [Token.isPunct, Token.isEof, hb1, hb2, Bool.false_eq_true, ↓reduceIte, Parse.pure_bind]
+      rw [Parse.bind_eq hp]
+      rfl
+
 /-- The loop of `parseBlock` reads the statements of a block, which a `}` follows. -/
 theorem block_loop {T : Edition} {fn loop : Bool} {p : ParseM Stmt} :
     ∀ (body : List Stmt) (fuel : Nat) (acc : Array Stmt) (s : ParseState) (ts rest : List Token) (c : Token),
@@ -823,42 +873,18 @@ theorem block_loop {T : Edition} {fn loop : Bool} {p : ParseM Stmt} :
       Laid ts (body.map Stmt.wordLines).flatten →
       ∃ res s', Parse.iterate fuel acc (Parse.blockStep p) s = .ok res s' ∧
         res.toList.map Stmt.erase = (acc.toList ++ body).map Stmt.erase ∧ Leaves s s' (c :: rest) := by
-  intro body
-  induction body with
-  | nil =>
-    intro fuel acc s ts rest c _ hlen _ _ _ hs hc hl ht
-    obtain ⟨f', rfl⟩ : ∃ f', fuel = f' + 1 := ⟨fuel - 1, by simp at hlen; omega⟩
-    simp [Laid] at ht; subst ht
-    have hs' : s.rest = c :: rest := by simpa using hs
-    refine ⟨acc, s, Parse.iterate_false ?_, by simp, Leaves.refl hs' (by simp [hl, hs'])⟩
-    simp only [Parse.blockStep]
-    rw [Parse.bind_eq (Parse.peek_eq hs')]
-    simp [Token.isPunct, hc, pure, EStateM.pure]
-  | cons st body ih =>
-    intro fuel acc s ts rest c hrd hlen hT hF hL hs hc hl ht
-    obtain ⟨f', rfl⟩ : ∃ f', fuel = f' + 1 := ⟨fuel - 1, by simp at hlen; omega⟩
-    obtain ⟨hw, hst⟩ := hrd st (by simp)
-    obtain ⟨a, b, rfl, ha, hb, _⟩ := Laid.append (by simpa using ht)
-    obtain ⟨x, a', rfl, hx⟩ := Laid.first hw ha
-    have hs' : s.rest = x :: (a' ++ (b ++ c :: rest)) := by simpa using hs
-    obtain ⟨st', s₁, hp, he, hL₁⟩ := hst s (x :: a') (b ++ c :: rest) hT hF hL (by simp [hs']) hl ha (by simp)
-      (fun _ => next_not_else hc (fun t ht => (hrd t (by simp [ht])).1) hb)
-    have hl₁ : s₁.left = s₁.rest.length := by rw [hL₁.left_eq, hL₁.rest_eq]
-    obtain ⟨res, s', hit, he', hL'⟩ := ih f' (acc.push st') s₁ b rest c (fun t ht => hrd t (by simp [ht]))
-      (by simp at hlen; omega) (hL₁.target_eq.trans hT) (hL₁.inFunction_eq.trans hF)
-      (fun h => by rw [hL₁.loopDepth_eq]; exact hL h) hL₁.rest_eq hc hl₁ hb
-    refine ⟨res, s', ?_, by rw [he']; simp [he], leaves_trans hL₁ hL'⟩
-    rw [Parse.iterate_true (acc' := acc.push st') (s' := s₁)]
-    · exact hit
-    · obtain ⟨h1, h2, -, -⟩ := hx
-      have hb1 : (x.kind == .punct "}") = false := by simp [h1]
-      have hb2 : (x.kind == .eof) = false := by simp [h2]
-      simp only [Parse.blockStep]
-      rw [Parse.bind_eq (Parse.peek_eq hs')]
-      simp only [Token.isPunct, Token.isEof, hb1, hb2, Bool.false_eq_true, ↓reduceIte, Parse.pure_bind]
-      rw [Parse.bind_eq hp]
-      rfl
-
+  intro body fuel acc s ts rest c hrd hlen hT hF hL hs hc hl ht
+  refine blockStep_loop (Inv := fun s => s.target = T ∧ s.inFunction = fn ∧ (loop = true → s.loopDepth ≠ 0))
+    (fun hI hL' => ⟨hL'.target_eq.trans hI.1, hL'.inFunction_eq.trans hI.2.1,
+      fun h => by rw [hL'.loopDepth_eq]; exact hI.2.2 h⟩) ?_ hc body (fun y hy => hy) fuel acc s ts hlen
+    ⟨hT, hF, hL⟩ hs hl ht
+  intro st hst later hlater s a b hI hs hl ha hb
+  obtain ⟨hw, hrs⟩ := hrd st hst
+  obtain ⟨k, a', rfl, hk⟩ := Laid.first hw ha
+  obtain ⟨h1, h2, -, -⟩ := hk
+  obtain ⟨st', s₁, hp, he, hL₁⟩ := hrs s (k :: a') (b ++ c :: rest) hI.1 hI.2.1 hI.2.2 hs hl ha (by simp)
+    (fun _ => next_not_else hc (fun t ht => (hrd t (hlater t ht)).1) hb)
+  exact ⟨st', s₁, k, a', rfl, h1, h2, hp, he, hL₁⟩
 
 theorem Stmt.eraseAll_eq (ss : List Stmt) : Stmt.eraseAll ss = ss.map Stmt.erase := by
   induction ss with
