@@ -198,11 +198,23 @@ instance : LawfulBEq TokenKind where
       | (change false = true at h; cases h)
       | rfl
 
+/-- No line break comes before `y`, unless `y` is a `(`. Inside a statement,
+the printer puts a line break only before the `(` of a call of `async`, where
+the standard needs one. Most proofs read only whether a line break comes
+before a token that is not a `(`, so this is all that they need. Where a proof
+reads it before a `(`, after `async` or after `return`, `Touching` states it
+exactly. -/
+abbrev NoBreak (y : Token) : Prop := y.kind ≠ .punct "(" → y.newlineBefore = false
+
+theorem noBreak_of {y : Token} {p : String} (hy : y.kind = .punct p) (hp : p ≠ "(") (h : NoBreak y) :
+    y.newlineBefore = false :=
+  h (by rw [hy]; simpa using hp)
+
 /-- `p` reads the tokens of `t`, followed by any rest that `follows` allows,
 as `t` apart from spans, and leaves the rest. -/
 def Reads (p : ParseM TypeExpr) (t : TypeExpr) (follows : List Token → Prop) : Prop :=
   ∀ (s : ParseState) (ts rest : List Token), s.rest = ts ++ rest → s.left = s.rest.length →
-    ts.map (·.kind) = t.tokens → (∀ x ∈ ts, x.newlineBefore = false) → rest ≠ [] → follows rest →
+    ts.map (·.kind) = t.tokens → (∀ x ∈ ts, NoBreak x) → rest ≠ [] → follows rest →
     ∃ t' s', p s = .ok t' s' ∧ t'.erase = t.erase ∧ Leaves s s' rest
 
 /-- The state after `advance` reads `x`, which `u` follows. -/
@@ -380,7 +392,7 @@ theorem iterate_brackets {step : TypeExpr → ParseM (TypeExpr × Bool)}
         { s with rest := r, left := s.left - 1 - 1, lastStop := rb.span.stop }) :
     ∀ (k fuel : Nat) (acc : TypeExpr) (s : ParseState) (ts rest : List Token), k < fuel →
       s.rest = ts ++ rest → s.left = s.rest.length → ts.map (·.kind) = brackets k →
-      (∀ x ∈ ts, x.newlineBefore = false) → rest ≠ [] → FollowsArray rest →
+      (∀ x ∈ ts, NoBreak x) → rest ≠ [] → FollowsArray rest →
       ∃ res s', Parse.iterate fuel acc step s = .ok res s' ∧ res.erase = arrayOf noSpan k acc.erase ∧
         Leaves s s' rest := by
   intro k
@@ -412,7 +424,7 @@ theorem iterate_brackets {step : TypeExpr → ParseM (TypeExpr × Bool)}
           simp [brackets] at htk; exact ⟨lb, rb, ts', rfl, htk.1, htk.2.1, htk.2.2⟩
     have hs' : s.rest = lb :: rb :: (ts' ++ rest) := by simpa using hs
     obtain ⟨sp, hstep⟩ := hgo acc s lb rb (ts' ++ rest) hs' (by simp [hr])
-      hlb hrb (hn lb (by simp))
+      hlb hrb (noBreak_of hlb (by decide) (hn lb (by simp)))
     let s₂ := { s with rest := ts' ++ rest, left := s.left - 1 - 1, lastStop := rb.span.stop }
     have hl₂ : s₂.left = s₂.rest.length := by simp [s₂, hl, hs']
     obtain ⟨res, s', hit, he, hL⟩ := ih f' (.array sp acc) s₂ ts' rest (by omega) rfl hl₂ htk'
@@ -462,7 +474,7 @@ theorem iterate_brackets_goal {step : TypeExpr → ParseM (TypeExpr × Bool)}
         { s with rest := r, left := s.left - 1 - 1, lastStop := rb.span.stop })
     {k fuel : Nat} {acc target : TypeExpr} {s₀ s : ParseState} {ts rest : List Token} (hk : k < fuel)
     (hs : s.rest = ts ++ rest) (hl : s.left = s.rest.length) (hkind : ts.map (·.kind) = brackets k)
-    (hn : ∀ x ∈ ts, x.newlineBefore = false) (hr : rest ≠ []) (hf : FollowsArray rest)
+    (hn : ∀ x ∈ ts, NoBreak x) (hr : rest ≠ []) (hf : FollowsArray rest)
     (htarget : arrayOf noSpan k acc.erase = target.erase) (hL₀ : Leaves s₀ s (ts ++ rest)) :
     ∃ res s', Parse.iterate fuel acc step s = .ok res s' ∧ res.erase = target.erase ∧
       Leaves s₀ s' rest := by
@@ -549,7 +561,7 @@ theorem iterate_sep {p : ParseM TypeExpr} {step : Array TypeExpr → ParseM (Arr
     ∀ (items : List TypeExpr) (fuel : Nat) (acc : Array TypeExpr) (s : ParseState) (ts rest : List Token),
       items ≠ [] → (∀ a ∈ items, Reads p a follows) → items.length ≤ fuel →
       s.rest = ts ++ rest → s.left = s.rest.length → ts.map (·.kind) = joined sep (items.map TypeExpr.tokens) →
-      (∀ x ∈ ts, x.newlineBefore = false) → rest ≠ [] → follows rest →
+      (∀ x ∈ ts, NoBreak x) → rest ≠ [] → follows rest →
       (∀ u ∈ rest.head?, u.kind ≠ .punct sep) →
       ∃ res s', Parse.iterate fuel acc step s = .ok res s' ∧
         TypeExpr.eraseAll res.toList = TypeExpr.eraseAll (acc.toList ++ items) ∧ Leaves s s' rest := by
@@ -613,7 +625,7 @@ theorem iterate_sepBefore {p : ParseM TypeExpr} {step : Array TypeExpr → Parse
       (∀ a ∈ items, Reads p a follows) → items.length < fuel →
       s.rest = ts ++ rest → s.left = s.rest.length →
       ts.map (·.kind) = (items.map fun i => .punct sep :: i.tokens).flatten →
-      (∀ x ∈ ts, x.newlineBefore = false) → rest ≠ [] → follows rest →
+      (∀ x ∈ ts, NoBreak x) → rest ≠ [] → follows rest →
       (∀ u ∈ rest.head?, u.kind ≠ .punct sep) →
       ∃ res s', Parse.iterate fuel acc step s = .ok res s' ∧
         TypeExpr.eraseAll res.toList = TypeExpr.eraseAll (acc.toList ++ items) ∧ Leaves s s' rest := by
@@ -785,7 +797,7 @@ theorem parsePrimaryType_ref (f : Nat) (sp : Span) (name : String) (args : List 
     (fun u hu => by simp at hu; subst hu; rw [hgt]; exact punct_ne (by decide))
   have hs₃ : s₃.rest = gt :: rest := hL.rest_eq
   have hltd : lt.kind ≠ .punct "." := by rw [hlt]; exact punct_ne (by decide)
-  have hltn : lt.newlineBefore = false := hn lt (by simp)
+  have hltn : lt.newlineBefore = false := noBreak_of hlt (by decide) (hn lt (by simp))
   refine ⟨.ref ⟨x.span.start, gt.span.stop⟩ name res.toList,
     { s₃ with rest := rest, left := s₃.left - 1, lastStop := gt.span.stop }, ?_, ?_, ?_⟩
   · simp only [s₂, s₁, advanced] at hit

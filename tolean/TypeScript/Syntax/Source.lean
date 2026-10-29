@@ -8,12 +8,19 @@ The printer writes one form for each node, so that the proof of the round
 trip follows the tree:
 
 - Every statement and every declaration has a line of its own, and every
-  statement ends in `;`. So no `;` is inserted, and no rule about a line break
-  inside a statement applies.
+  statement ends in `;`. So no `;` is inserted.
+- A statement breaks across lines only where the standard needs a line
+  break: between the name `async` and the `(` of a call of it. On one line,
+  `tsc` can read `async (` as the start of an async arrow function, such as
+  `async () : T => …`. ECMA-262 §15.9 lets no line break come between `async`
+  and the parameters of an async arrow function, and `tsc` reads none after
+  one either. So `async`, then a line break, then `(`, is a call in both. The
+  printer puts no line break at any other place inside a statement. So no
+  `[no LineTerminator here]` rule of the standard applies.
 - The printer builds lines of words, and `render` writes them with one space
   between two words. A word is one token, or the `>` and `=` tokens of a
   `>=` or a `>>`, which the parser reads as tokens that touch. So no two
-  words run together.
+  words run together. The empty word `lineBreak` stands for a line break.
 - A parenthesis stands only where the tree has a `paren` node, as the parser
   keeps them.
 - A string is printed in double quotes, with an escape only for `"`, `\`, `\n`,
@@ -48,6 +55,17 @@ abbrev Line := Nat × List Word
 def keywordWord (w : String) : Word := [.keyword w]
 def identWord (n : String) : Word := [.ident n]
 def punctWord (p : String) : Word := [.punct p]
+
+/-- A line break inside a line. It is the empty word, because it has no
+tokens. `render` ends the line there and writes the words after it on the
+next line, further in. -/
+def lineBreak : Word := []
+
+/-- The line break between the callee and the `(` of a call: one after the
+name `async`, as the standard needs, and none after any other callee. -/
+def callBreak : Expr → List Word
+  | .ident _ "async" => [lineBreak]
+  | _ => []
 
 /-- A property name after `.`, or a field name: a reserved word is a keyword
 token, and any other name an identifier. -/
@@ -122,7 +140,7 @@ def Expr.words : Expr → List Word
   | .paren _ inner => punctWord "(" :: inner.words ++ [punctWord ")"]
   | .member _ obj name => obj.words ++ [punctWord ".", propertyName name]
   | .index _ obj idx => obj.words ++ punctWord "[" :: idx.words ++ [punctWord "]"]
-  | .call _ callee args => callee.words ++ enclose "(" ")" (Expr.wordsOf args)
+  | .call _ callee args => callee.words ++ callBreak callee ++ enclose "(" ")" (Expr.wordsOf args)
   | .unary _ op arg => symbol op.symbol :: arg.words
   | .prefix _ op arg => punctWord op.symbol :: arg.words
   | .postfix _ op arg => arg.words ++ [punctWord op.symbol]
@@ -222,7 +240,19 @@ def TokenKind.text : TokenKind → String
 
 def Word.text (w : Word) : String := String.join (w.map TokenKind.text)
 
-def Line.text (l : Line) : String := "".pushn ' ' (2 * l.1) ++ " ".intercalate (l.2.map Word.text)
+/-- Words one space apart. At a `lineBreak`, the words after it go on a new
+line that starts with `indent`. -/
+def wordsText (indent : String) : List Word → String
+  | [] => ""
+  | [] :: ws => "\n" ++ indent ++ wordsText indent ws
+  | [w] => Word.text w
+  | w :: [] :: ws => Word.text w ++ wordsText indent ([] :: ws)
+  | w :: ws => Word.text w ++ " " ++ wordsText indent ws
+
+/-- A line as text, `2 * depth` spaces in. The rest of a line after a
+`lineBreak` is two steps further in. -/
+def Line.text (l : Line) : String :=
+  "".pushn ' ' (2 * l.1) ++ wordsText ("".pushn ' ' (2 * l.1 + 4)) l.2
 
 /-- The lines as source: each line ends in a line break. -/
 def render (lines : List Line) : String := String.join (lines.map (·.text ++ "\n"))

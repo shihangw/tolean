@@ -62,7 +62,12 @@ printer gives a certificate that Lean refuses.
       text, Tolean proves the round trip `parse (print t) = .ok t` for every
       tree in the subset. The printer is built: `Syntax/Source.lean` writes
       each node in one form, every statement on a line of its own and ending
-      in `;`, and every two tokens one space apart. `tolean parse
+      in `;`, and every two tokens one space apart. A statement breaks across
+      lines in one place only, between the name `async` and the `(` of a call
+      of it. ECMA-262 lets no line break come between `async` and the
+      parameters of an async arrow function, and `tsc` reads none after one.
+      So with the line break, both read a call, where on one line `tsc` could
+      read the start of an arrow function. `tolean parse
       --round-trip` prints the tree as source, parses that, and requires the
       same tree apart from spans. `tests/typescript/check.ts` runs it on
       every tree that the parser gives, on the corpus and on random

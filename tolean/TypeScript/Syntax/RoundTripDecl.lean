@@ -255,7 +255,7 @@ theorem rtWords_eq (rt : Option TypeExpr) :
 theorem params_reads {T : Edition} (params : List Param) (hps : ∀ p ∈ params, p.wf = true)
     (s : ParseState) (its rest : List Token) (rp : Token) (hT : s.target = T) (hs : s.rest = its ++ rp :: rest)
     (hrp : rp.kind = .punct ")") (hl : s.left = s.rest.length)
-    (ht : Touching its (commas (params.map Param.words))) (hn : ∀ y ∈ its, y.newlineBefore = false) :
+    (ht : Touching its (commas (params.map Param.words))) (hn : ∀ y ∈ its, NoBreak y) :
     ∃ res s', Parse.iterate (10 * (s.left + 1)) #[] (Parse.listStep ")" (fun _ => pure ()) Parse.parseParam) s =
       .ok res s' ∧ res.toList.map Param.erase = params.map Param.erase ∧ Leaves s s' (rp :: rest) := by
   obtain ⟨res, s', hit, he, hL⟩ := iterate_list (close := ")") (refuse := fun _ => pure ()) (by decide)
@@ -275,7 +275,7 @@ theorem parseFunction_reads {T : Edition} (start : Pos) (exported : Bool) (sp : 
     ∀ (s : ParseState) (ts bts rest : List Token), s.target = T → s.inFunction = false →
       s.rest = ts ++ bts ++ rest → s.left = s.rest.length →
       Touching ts (keywordWord "function" :: identWord name :: enclose "(" ")" (params.map Param.words) ++ rtWords rt) →
-      (∀ y ∈ ts.tail, y.newlineBefore = false) → Laid bts (Stmt.block bsp bs).wordLines → rest ≠ [] →
+      (∀ y ∈ ts.tail, NoBreak y) → Laid bts (Stmt.block bsp bs).wordLines → rest ≠ [] →
       ∃ d' s', Parse.parseFunction start exported s = .ok d' s' ∧
         d'.erase = (Decl.function sp exported name params rt (.block bsp bs)).erase ∧ Leaves s s' rest := by
   intro s ts bts rest hT hF hs hl ht hn hb hr
@@ -291,7 +291,7 @@ theorem parseFunction_reads {T : Edition} (start : Pos) (exported : Bool) (sp : 
   obtain ⟨lb, ba', rfl, hlb, _⟩ := Touching.cons_one (by simpa [punctWord] using hba)
   have hnot1 : nm.kind ≠ .punct "*" := by rw [hnm]; simp
   have hnot2 : lp.kind ≠ .punct "<" := by rw [hlp]; exact punct_ne (by decide)
-  have hn' : ∀ y ∈ its, y.newlineBefore = false := fun y hy => hn y (by simp [hy])
+  have hn' : ∀ y ∈ its, NoBreak y := fun y hy => hn y (by simp [hy])
   cases rt with
   | none =>
     simp [rtWords, Touching] at hrts; subst hrts
@@ -386,7 +386,7 @@ theorem parseTypeAlias_reads (start : Pos) (exported : Bool) (sp : Span) (name :
     (hname : exprName name = true) (hty : ty.wf = true) :
     ∀ (s : ParseState) (ts rest : List Token), s.rest = ts ++ rest → s.left = s.rest.length →
       Touching ts (identWord "type" :: identWord name :: punctWord "=" :: ty.words ++ [punctWord ";"]) →
-      (∀ y ∈ ts.tail, y.newlineBefore = false) → rest ≠ [] →
+      (∀ y ∈ ts.tail, NoBreak y) → rest ≠ [] →
       ∃ d' s', Parse.parseTypeAlias start exported s = .ok d' s' ∧
         d'.erase = (Decl.typeAlias sp exported name ty).erase ∧ Leaves s s' rest := by
   intro s ts rest hs hl ht hn hr
@@ -494,7 +494,7 @@ def Field.erase (f : Field) : Field := { f with span := noSpan, type := f.type.e
 /-- `name: T;`, without `readonly` and `?`. -/
 theorem parseField_plain (sp : Span) (name : String) (ty : TypeExpr) (hty : ty.wf = true)
     (s : ParseState) (ts rest : List Token) (hs : s.rest = ts ++ rest) (hl : s.left = s.rest.length)
-    (ht : Touching ts (Field.words ⟨sp, false, name, false, ty⟩)) (hn : ∀ y ∈ ts.tail, y.newlineBefore = false)
+    (ht : Touching ts (Field.words ⟨sp, false, name, false, ty⟩)) (hn : ∀ y ∈ ts.tail, NoBreak y)
     (hr : rest ≠ []) :
     ∃ f' s', Parse.parseField s = .ok f' s' ∧ f'.erase = Field.erase ⟨sp, false, name, false, ty⟩ ∧
       Leaves s s' rest := by
@@ -543,7 +543,7 @@ theorem parseField_plain (sp : Span) (name : String) (ty : TypeExpr) (hty : ty.w
 /-- `name?: T;`. -/
 theorem parseField_opt (sp : Span) (name : String) (ty : TypeExpr) (hty : ty.wf = true)
     (s : ParseState) (ts rest : List Token) (hs : s.rest = ts ++ rest) (hl : s.left = s.rest.length)
-    (ht : Touching ts (Field.words ⟨sp, false, name, true, ty⟩)) (hn : ∀ y ∈ ts.tail, y.newlineBefore = false)
+    (ht : Touching ts (Field.words ⟨sp, false, name, true, ty⟩)) (hn : ∀ y ∈ ts.tail, NoBreak y)
     (hr : rest ≠ []) :
     ∃ f' s', Parse.parseField s = .ok f' s' ∧ f'.erase = Field.erase ⟨sp, false, name, true, ty⟩ ∧
       Leaves s s' rest := by
@@ -591,7 +591,7 @@ theorem parseField_opt (sp : Span) (name : String) (ty : TypeExpr) (hty : ty.wf 
 /-- `readonly name: T;` or `readonly name?: T;`. -/
 theorem parseField_ro (sp : Span) (name : String) (opt : Bool) (ty : TypeExpr) (hty : ty.wf = true)
     (s : ParseState) (ts rest : List Token) (hs : s.rest = ts ++ rest) (hl : s.left = s.rest.length)
-    (ht : Touching ts (Field.words ⟨sp, true, name, opt, ty⟩)) (hn : ∀ y ∈ ts.tail, y.newlineBefore = false)
+    (ht : Touching ts (Field.words ⟨sp, true, name, opt, ty⟩)) (hn : ∀ y ∈ ts.tail, NoBreak y)
     (hr : rest ≠ []) :
     ∃ f' s', Parse.parseField s = .ok f' s' ∧ f'.erase = Field.erase ⟨sp, true, name, opt, ty⟩ ∧
       Leaves s s' rest := by
@@ -606,7 +606,7 @@ theorem parseField_ro (sp : Span) (name : String) (opt : Bool) (ty : TypeExpr) (
     | [nm], ha => exact ⟨nm, b, rfl, by simpa using ha, hb⟩
   have hnmk : nm.kind = .keyword name ∨ nm.kind = .ident name := by
     unfold propertyName at hnm; split at hnm <;> simp [keywordWord, identWord] at hnm <;> simp [hnm]
-  have hnmn : nm.newlineBefore = false := hn nm (by simp)
+  have hnmn : nm.newlineBefore = false := hn nm (by simp) (by rcases hnmk with h | h <;> simp [h])
   cases opt with
   | false =>
     obtain ⟨c, ts₂, rfl, hc, h₂⟩ := Touching.cons_one (by simpa [punctWord] using h₁)
@@ -688,7 +688,7 @@ theorem parseField_ro (sp : Span) (name : String) (opt : Bool) (ty : TypeExpr) (
 /-- A field of an interface: `readonly` or not, a name, `?` or not, `:`, a type and `;`. -/
 theorem parseField_reads (f : Field) (hty : f.type.wf = true) (s : ParseState) (ts rest : List Token)
     (hs : s.rest = ts ++ rest) (hl : s.left = s.rest.length) (ht : Touching ts f.words)
-    (hn : ∀ y ∈ ts.tail, y.newlineBefore = false) (hr : rest ≠ []) :
+    (hn : ∀ y ∈ ts.tail, NoBreak y) (hr : rest ≠ []) :
     ∃ f' s', Parse.parseField s = .ok f' s' ∧ f'.erase = f.erase ∧ Leaves s s' rest := by
   obtain ⟨sp, ro, name, opt, ty⟩ := f
   cases ro with
@@ -987,7 +987,7 @@ theorem parseImport_reads (start : Pos) (sp : Span) (names : List ImportName) (s
     ∀ (s : ParseState) (ts rest : List Token), s.rest = ts ++ rest → s.left = s.rest.length →
       Touching ts (keywordWord "import" :: enclose "{" "}" (names.map ImportName.words) ++
         [identWord "from", [.string source], punctWord ";"]) →
-      (∀ y ∈ ts.tail, y.newlineBefore = false) → rest ≠ [] →
+      (∀ y ∈ ts.tail, NoBreak y) → rest ≠ [] →
       ∃ d' s', Parse.parseImport start s = .ok d' s' ∧ d'.erase = (Decl.«import» sp names source).erase ∧
         Leaves s s' rest := by
   intro s ts rest hs hl ht hn hr
@@ -1195,7 +1195,7 @@ theorem parseDecl_typeAlias {T : Edition} (sp : Span) (exported : Bool) (name : 
     have hs' : s.rest = tk :: nm :: (ts₂ ++ rest) := by simpa using hs
     obtain ⟨d', s', hp, he, hL⟩ := parseTypeAlias_reads tk.span.start (tk.isKeyword "export") sp name ty hname hty
       s _ rest hs hl (by simpa using h1) hnl hr
-    have hnmn : nm.newlineBefore = false := hnl nm (by simp)
+    have hnmn : nm.newlineBefore = false := hnl nm (by simp) (by rw [hnm]; simp)
     refine ⟨d', s', ?_, by rw [he]; simp [Decl.erase, Token.isKeyword, htk], hL⟩
     simp only [Parse.parseDecl]
     rw [Parse.bind_eq (Parse.peek_eq hs')]
@@ -1218,7 +1218,7 @@ theorem parseDecl_typeAlias {T : Edition} (sp : Span) (exported : Bool) (name : 
     let s₁ := advanced s ex tk (nm :: (ts₂ ++ rest))
     obtain ⟨d', s', hp, he, hL⟩ := parseTypeAlias_reads ex.span.start (ex.isKeyword "export") sp name ty hname hty
       s₁ (tk :: nm :: ts₂) rest rfl (by simp [s₁, hl, hs']) h₀ (fun y hy => hnl y (by simp at hy ⊢; simp [hy])) hr
-    have hnmn : nm.newlineBefore = false := hnl nm (by simp)
+    have hnmn : nm.newlineBefore = false := hnl nm (by simp) (by rw [hnm]; simp)
     refine ⟨d', s', ?_, by rw [he]; simp [Decl.erase, Token.isKeyword, hex], leaves_trans (leaves_advanced hs' hl) hL⟩
     simp only [Parse.parseDecl]
     rw [Parse.bind_eq (Parse.peek_eq hs')]
@@ -1255,7 +1255,7 @@ theorem parseDecl_interface {T : Edition} (sp : Span) (exported : Bool) (name : 
     have hs' : s.rest = it :: nm :: (a₂ ++ (fts ++ rb :: rest)) := by simpa using hs
     obtain ⟨d', s', hp, he, hL⟩ := parseInterface_reads it.span.start (it.isKeyword "export") sp name fields hname
       hfs s (it :: nm :: a₂) fts rest rb (by simpa using hs) hl ha hfts hrbk hr
-    have hnmn : nm.newlineBefore = false := hna nm (by simp)
+    have hnmn : nm.newlineBefore = false := hna nm (by simp) (by rw [hnm]; simp)
     refine ⟨d', s', ?_, by rw [he]; simp [Decl.erase, Token.isKeyword, hit], hL⟩
     simp only [Parse.parseDecl]
     rw [Parse.bind_eq (Parse.peek_eq hs')]
@@ -1276,7 +1276,7 @@ theorem parseDecl_interface {T : Edition} (sp : Span) (exported : Bool) (name : 
     let s₁ := advanced s ex it (nm :: (a₂ ++ (fts ++ rb :: rest)))
     obtain ⟨d', s', hp, he, hL⟩ := parseInterface_reads ex.span.start (ex.isKeyword "export") sp name fields hname
       hfs s₁ (it :: nm :: a₂) fts rest rb (by simp [s₁]) (by simp [s₁, hl, hs']) h₀ hfts hrbk hr
-    have hnmn : nm.newlineBefore = false := hna nm (by simp)
+    have hnmn : nm.newlineBefore = false := hna nm (by simp) (by rw [hnm]; simp)
     refine ⟨d', s', ?_, by rw [he]; simp [Decl.erase, Token.isKeyword, hex], leaves_trans (leaves_advanced hs' hl) hL⟩
     simp only [Parse.parseDecl]
     rw [Parse.bind_eq (Parse.peek_eq hs')]

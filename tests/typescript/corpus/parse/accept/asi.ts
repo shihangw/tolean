@@ -15,6 +15,20 @@ export function asi(a: number, b: number): number {
   return x + y
 }
 
+// A line break after the name `async` makes `async (…)` a call: no line break
+// may come between `async` and the parameters of an async arrow function
+// (ECMAScript 15.9), and tsc reads none there either. On one line, tsc could
+// read `async (1) :` as the start of an async arrow function.
+function async(a: number): number {
+  return a
+}
+
+export function asyncCall(c: boolean): number {
+  const x = c ? async
+  (1) : 2
+  return (x)
+}
+
 // With a ';', a block may follow a parenthesized expression.
 export function block(a: number): number {
   (a);

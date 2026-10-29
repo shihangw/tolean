@@ -10,7 +10,9 @@ The expression parser has one function for each level of precedence, and
 target edition is `T`. Each level stops before a token that cannot continue
 it, and `Ends` states which tokens those are. In a few places the parser also
 looks at the tokens after a node, and `Expr.afterOK` states what it checks
-there. The tokens of a word such as `>=` touch, and `Touching` states that.
+there. The tokens of a word such as `>=` touch, and inside an expression a
+line break comes only between `async` and the `(` of a call of it.
+`Touching` states both.
 `exprs_read` proves the round trip by induction on the parser's fuel.
 
 The statement parser calls `parseExpression` and `parseAssign` with the fuel
@@ -50,12 +52,58 @@ def Chained : List Token → Prop
   | x :: y :: r => y.span.start = x.span.stop ∧ Chained (y :: r)
   | _ => True
 
+/-- How the tokens `a` of the word `w` stand, when the words `ws` and their
+tokens `b` follow: the tokens of a word touch, and the next token starts a new
+line after a `lineBreak` and after no other word. -/
+def Placed : Word → List Word → List Token → List Token → Prop
+  | [], _, _, b => ∀ y ∈ b.head?, y.newlineBefore = true
+  | _ :: _, ws, a, b => Chained a ∧ ∀ v ∈ ws.head?, v ≠ [] → ∀ y ∈ b.head?, y.newlineBefore = false
+
 /-- `ts` are the tokens of `words`, in order, and the tokens of each word
 touch. The lexer gives that for the printed source: a word such as `>=` has no
-space in it. -/
+space in it. A line break comes before the token after a `lineBreak`, and
+before no other token after the first. -/
 def Touching : List Token → List Word → Prop
   | ts, [] => ts = []
-  | ts, w :: ws => ∃ a b, ts = a ++ b ∧ a.map (·.kind) = w ∧ Chained a ∧ Touching b ws
+  | ts, w :: ws => ∃ a b, ts = a ++ b ∧ a.map (·.kind) = w ∧ Placed w ws a b ∧ Touching b ws
+
+/-- The tokens of a word touch. A `lineBreak` has no tokens, and no tokens
+touch trivially. -/
+theorem Placed.chained {w : Word} {ws : List Word} {a b : List Token} (ha : a.map (·.kind) = w)
+    (h : Placed w ws a b) : Chained a := by
+  match w, h with
+  | [], _ => simp at ha; subst ha; trivial
+  | _ :: _, h => exact h.1
+
+/-- No line break comes before the token after a word with tokens, when a word
+with tokens follows it. -/
+theorem Placed.next {w v : Word} {ws : List Word} {a : List Token} {y : Token} {b : List Token}
+    (hw : w ≠ []) (hv : v ≠ []) (h : Placed w (v :: ws) a (y :: b)) : y.newlineBefore = false := by
+  match w, hw, h with
+  | _ :: _, _, h => exact h.2 v rfl hv y rfl
+
+/-- After a `lineBreak`, the next token starts a new line. -/
+theorem Touching.after_lineBreak {ts : List Token} {ws : List Word} (h : Touching ts (lineBreak :: ws)) :
+    (∀ y ∈ ts.head?, y.newlineBefore = true) ∧ Touching ts ws := by
+  obtain ⟨a, b, rfl, ha, hp, hb⟩ := h
+  simp [lineBreak] at ha; subst ha
+  exact ⟨hp, hb⟩
+
+/-- The `callBreak` of a call has no tokens. -/
+@[simp] theorem flatten_callBreak (e : Expr) : (callBreak e).flatten = [] := by
+  unfold callBreak; split <;> rfl
+
+/-- After the callee `async`, the `(` of a call starts a new line. -/
+theorem Touching.after_callBreak {ts : List Token} {o : Expr} {ws : List Word} (h : Touching ts (callBreak o ++ ws)) :
+    (∀ sp, o = .ident sp "async" → ∀ y ∈ ts.head?, y.newlineBefore = true) ∧ Touching ts ws := by
+  cases o with
+  | ident sp name =>
+    by_cases hn : name = "async"
+    · subst hn
+      have h' : Touching ts (lineBreak :: ws) := by simpa [callBreak] using h
+      exact ⟨fun _ _ => (Touching.after_lineBreak h').1, (Touching.after_lineBreak h').2⟩
+    · exact ⟨fun _ ho => (by cases ho; exact absurd rfl hn), by simpa [callBreak, hn] using h⟩
+  | _ => exact ⟨fun _ ho => (by cases ho), by simpa [callBreak] using h⟩
 
 theorem Touching.kinds : ∀ {ts : List Token} {ws : List Word}, Touching ts ws → ts.map (·.kind) = ws.flatten
   | ts, [], h => by simp [Touching] at h; simp [h]
@@ -165,8 +213,9 @@ mutual
 
 /-- What the parser checks in the tokens after a node, when `after` follows
 `e`: no `>` closes what tsc could read as type arguments after a `<` or `<<`
-operator, no `{` follows `(…)`, and no `{` or `:` follows a call of
-`async`. -/
+operator, and no `{` follows `(…)`. The parser also checks what follows a
+call of `async`, but only when no line break comes before its `(`, and the
+printer puts one there. -/
 def Expr.afterOK (after : List TokenKind) : Expr → Bool
   | .binary _ op l r =>
     (if op == .lt || op == .shl then !closesKinds 0 (r.tokens ++ after) else true) &&
@@ -176,10 +225,7 @@ def Expr.afterOK (after : List TokenKind) : Expr → Bool
   | .index _ obj idx =>
     obj.afterOK (.punct "[" :: idx.tokens ++ .punct "]" :: after) && idx.afterOK (.punct "]" :: after)
   | .call _ callee args =>
-    (match callee with
-      | .ident _ "async" => notFirst (.punct "{") after && notFirst (.punct ":") after
-      | _ => true) &&
-      callee.afterOK ((enclose "(" ")" (Expr.wordsOf args)).flatten ++ after) &&
+    callee.afterOK ((enclose "(" ")" (Expr.wordsOf args)).flatten ++ after) &&
       Expr.afterOKList (.punct ")" :: after) args
   | .unary _ _ arg | .prefix _ _ arg => arg.afterOK after
   | .postfix _ op arg => arg.afterOK (.punct op.symbol :: after)
@@ -216,13 +262,14 @@ end
 
 /-- `p` reads the tokens of `x`, laid out as the printer writes them and
 followed by any rest that `ends` allows and that `afterOK` accepts, as `x`
-apart from spans, and leaves the rest. The target edition is `T`. No line
-break comes before a token of `x` after its first, but one may come before
-the first, as at the start of a statement. -/
+apart from spans, and leaves the rest. The target edition is `T`. After its
+first token, a line break comes only where the printer puts one, as
+`Touching` states, but one may come before the first, as at the start of a
+statement. -/
 def ReadsW {α : Type} (T : Edition) (erase : α → α) (words : α → List Word)
     (afterOK : List TokenKind → α → Bool) (p : ParseM α) (x : α) (ends : List Token → Prop) : Prop :=
   ∀ (s : ParseState) (ts rest : List Token), s.target = T → s.rest = ts ++ rest →
-    s.left = s.rest.length → Touching ts (words x) → (∀ y ∈ ts.tail, y.newlineBefore = false) → rest ≠ [] →
+    s.left = s.rest.length → Touching ts (words x) → (∀ y ∈ ts.tail, NoBreak y) → rest ≠ [] →
     ends rest → afterOK (rest.map (·.kind)) x = true →
     ∃ x' s', p s = .ok x' s' ∧ erase x' = erase x ∧ Leaves s s' rest
 
@@ -341,7 +388,21 @@ theorem Touching.append_split : ∀ {ts : List Token} {ws₁ ws₂ : List Word},
   | ts, w :: ws₁, ws₂, h => by
     obtain ⟨a, b, rfl, ha, hc, hb⟩ := h
     obtain ⟨b₁, b₂, rfl, h₁, h₂⟩ := Touching.append_split hb
-    exact ⟨a ++ b₁, b₂, by simp, ⟨a, b₁, rfl, ha, hc, h₁⟩, h₂⟩
+    refine ⟨a ++ b₁, b₂, by simp, ⟨a, b₁, rfl, ha, ?_, h₁⟩, h₂⟩
+    match w, hc with
+    | [], hc =>
+      intro y hy
+      cases b₁ with
+      | nil => simp at hy
+      | cons z _ => exact hc y (by simpa using hy)
+    | _ :: _, hc =>
+      refine ⟨hc.1, fun v hv hne y hy => ?_⟩
+      cases ws₁ with
+      | nil => simp at hv
+      | cons v' _ =>
+        cases b₁ with
+        | nil => simp at hy
+        | cons z _ => exact hc.2 v (by simpa using hv) hne y (by simpa using hy)
 
 /-- A word of one token is one token of that kind. -/
 theorem Touching.cons_one {ts : List Token} {k : TokenKind} {ws : List Word} (h : Touching ts ([k] :: ws)) :
@@ -659,7 +720,7 @@ theorem iterate_list {α : Type} {T : Edition} {erase : α → α} {words : α �
         ∀ (t : Token) s, t.kind = k → refuse t s = .ok () s) →
       items.length < fuel → s.target = T →
       s.rest = ts ++ c :: rest → c.kind = .punct close → s.left = s.rest.length →
-      Touching ts (commas (items.map words)) → (∀ y ∈ ts, y.newlineBefore = false) →
+      Touching ts (commas (items.map words)) → (∀ y ∈ ts, NoBreak y) →
       ListAfter afterOK (fun x => (words x).flatten) (.punct close :: rest.map (·.kind)) items →
       ∃ res s', Parse.iterate fuel acc (Parse.listStep close refuse p) s = .ok res s' ∧
         res.toList.map erase = (acc.toList ++ items).map erase ∧ Leaves s s' (c :: rest) := by
@@ -844,7 +905,7 @@ theorem parseArguments_reads {T : Edition} (g : Nat) (args : List Expr)
     (hargs : ∀ x ∈ args, ReadsE T (Parse.parseAssign g) x EndsAssign) :
     ∀ (s : ParseState) (ts rest : List Token), s.target = T → s.rest = ts ++ rest →
       s.left = s.rest.length → Touching ts (enclose "(" ")" (Expr.wordsOf args)) →
-      (∀ y ∈ ts, y.newlineBefore = false) → rest ≠ [] →
+      (∀ y ∈ ts, NoBreak y) → rest ≠ [] →
       Expr.afterOKList (.punct ")" :: rest.map (·.kind)) args = true →
       ∃ args' s', Parse.parseArguments (g + 1) s = .ok args' s' ∧
         Expr.eraseAll args' = Expr.eraseAll args ∧ Leaves s s' rest := by
@@ -1077,7 +1138,7 @@ def lhsHead : Expr → Expr
 def lhsSuffix : Expr → List Word
   | .member _ o n => lhsSuffix o ++ [punctWord ".", propertyName n]
   | .index _ o i => lhsSuffix o ++ punctWord "[" :: i.words ++ [punctWord "]"]
-  | .call _ o as => lhsSuffix o ++ enclose "(" ")" (Expr.wordsOf as)
+  | .call _ o as => lhsSuffix o ++ callBreak o ++ enclose "(" ")" (Expr.wordsOf as)
   | _ => []
 
 /-- The number of members, indices and calls of a chain. -/
@@ -1110,7 +1171,7 @@ theorem afterOK_lhsHead (e : Expr) (after : List TokenKind) (h : e.afterOK after
     simpa [lhsHead, lhsSuffix, punctWord, Expr.tokens] using afterOK_lhsHead o _ h.1
   | call _ o as =>
     simp only [Expr.afterOK, Bool.and_eq_true] at h
-    obtain ⟨⟨_, h⟩, _⟩ := h
+    obtain ⟨h, _⟩ := h
     simpa [lhsHead, lhsSuffix] using afterOK_lhsHead o _ h
   | _ => simpa [lhsHead, lhsSuffix] using h
 
@@ -1145,11 +1206,6 @@ theorem readPropertyName_ok {s : ParseState} {x u : Token} {r : List Token} {nam
   unfold propertyName at hx
   split at hx <;> simp [keywordWord, identWord] at hx <;>
     simp [Parse.readPropertyName, Parse.advance_eq hs, hx, bind, EStateM.bind, pure, EStateM.pure]
-
-theorem refuseAsyncArrowLookalike_ok {s : ParseState} {u : Token} {r : List Token} (hs : s.rest = u :: r)
-    (h1 : u.kind ≠ .punct "{") (h2 : u.kind ≠ .punct ":") : Parse.refuseAsyncArrowLookalike s = .ok () s := by
-  simp [Parse.refuseAsyncArrowLookalike, Parse.refuseArrowLookalike, Parse.peek_eq hs, Token.isPunct, h1, h2,
-    bind, EStateM.bind, pure, EStateM.pure]
 
 /-- A `.` and a property name. -/
 theorem lhsStep_member {pi : ParseM Expr} {pa : ParseM (List Expr)} {start : Pos} {acc : Expr}
@@ -1191,7 +1247,7 @@ theorem lhsStep_index {pi : ParseM Expr} {pa : ParseM (List Expr)} {start : Pos}
 theorem lhsStep_call {pi : ParseM Expr} {pa : ParseM (List Expr)} {start : Pos} {acc : Expr}
     {s s₂ : ParseState} {lp : Token} {r : List Token} {args' : List Expr}
     (hs : s.rest = lp :: r) (hlp : lp.kind = .punct "(") (ha : pa s = .ok args' s₂)
-    (hasync : ∀ sp, acc = .ident sp "async" → Parse.refuseAsyncArrowLookalike s₂ = .ok () s₂) :
+    (hasync : ∀ sp, acc = .ident sp "async" → lp.newlineBefore = true) :
     Parse.leftHandSideStep pi pa start acc s = .ok (.call ⟨start, s₂.lastStop⟩ acc args', true) s₂ := by
   simp only [Parse.leftHandSideStep]
   rw [Parse.bind_eq (Parse.peek_eq hs)]
@@ -1202,9 +1258,7 @@ theorem lhsStep_call {pi : ParseM Expr} {pa : ParseM (List Expr)} {start : Pos} 
   | ident sp name =>
     by_cases hn : name = "async"
     · subst hn
-      have hr := hasync sp rfl
-      by_cases hnl : lp.newlineBefore = true <;>
-        simp [hnl, hr, Parse.spanFrom_eq, bind, EStateM.bind, pure, EStateM.pure]
+      simp [hasync sp rfl, Parse.spanFrom_eq, bind, EStateM.bind, pure, EStateM.pure]
     · simp [hn, Parse.spanFrom_eq, bind, EStateM.bind, pure, EStateM.pure]
   | _ => simp [Parse.spanFrom_eq, bind, EStateM.bind, pure, EStateM.pure]
 
@@ -1225,7 +1279,7 @@ theorem lhsStep_stop {pi : ParseM Expr} {pa : ParseM (List Expr)} {start : Pos} 
 def ArgsRead (T : Edition) (pa : ParseM (List Expr)) (args : List Expr) : Prop :=
   ∀ (s : ParseState) (ts rest : List Token), s.target = T → s.rest = ts ++ rest →
     s.left = s.rest.length → Touching ts (enclose "(" ")" (Expr.wordsOf args)) →
-    (∀ y ∈ ts, y.newlineBefore = false) → rest ≠ [] →
+    (∀ y ∈ ts, NoBreak y) → rest ≠ [] →
     Expr.afterOKList (.punct ")" :: rest.map (·.kind)) args = true →
     ∃ args' s', pa s = .ok args' s' ∧ Expr.eraseAll args' = Expr.eraseAll args ∧ Leaves s s' rest
 
@@ -1244,6 +1298,12 @@ theorem Touching.propertyName {ts : List Token} {name : String} (h : Touching ts
   match a, ha with
   | [nm], ha => exact ⟨nm, by simp, by simpa using ha⟩
 
+/-- A property name is not a `(`. -/
+theorem propertyName_ne_paren {nm : Token} {name : String} (h : [nm.kind] = propertyName name) :
+    nm.kind ≠ .punct "(" := by
+  unfold propertyName at h
+  split at h <;> simp [keywordWord, identWord] at h <;> simp [h]
+
 /-- The loop of `parseLeftHandSide` reads the members, indices and calls of a
 chain after its head, and goes on with what follows them. -/
 theorem lhs_loop {T : Edition} {pi : ParseM Expr} {pa : ParseM (List Expr)} {start : Pos} {H : Nat}
@@ -1252,7 +1312,7 @@ theorem lhs_loop {T : Edition} {pi : ParseM Expr} {pa : ParseM (List Expr)} {sta
     ∀ (e : Expr), e.wfAt T .lhs = true → e.height ≤ H →
       ∀ (n : Nat) (acc : Expr) (s : ParseState) (ts rest : List Token),
       acc.erase = (lhsHead e).erase → s.target = T → s.rest = ts ++ rest → s.left = s.rest.length →
-      Touching ts (lhsSuffix e) → (∀ y ∈ ts, y.newlineBefore = false) → rest ≠ [] →
+      Touching ts (lhsSuffix e) → (∀ y ∈ ts, NoBreak y) → rest ≠ [] →
       e.afterOK (rest.map (·.kind)) = true →
       ∃ e' s', Parse.iterate (n + lhsSteps e) acc (Parse.leftHandSideStep pi pa start) s =
         Parse.iterate n e' (Parse.leftHandSideStep pi pa start) s' ∧ e'.erase = e.erase ∧ Leaves s s' rest := by
@@ -1273,7 +1333,7 @@ theorem lhs_loop {T : Edition} {pi : ParseM Expr} {pa : ParseM (List Expr)} {sta
     have hs₁ : s₁.rest = dot :: nm :: u :: r := hL.rest_eq
     have hl₁ : s₁.left = s₁.rest.length := by rw [hL.left_eq, hL.rest_eq]
     obtain ⟨sp', s₂, hstep, hL₂⟩ := lhsStep_member (pi := pi) (pa := pa) (start := start) (acc := o') hs₁ hl₁
-      hdot hnm (hn nm (by simp))
+      hdot hnm (hn nm (by simp) (propertyName_ne_paren hnm))
     refine ⟨.member sp' o' name, s₂, ?_, by simp [Expr.erase, he'], leaves_trans hL hL₂⟩
     rw [show n + lhsSteps (.member sp o name) = (n + 1) + lhsSteps o by simp [lhsSteps]; omega, hit,
       Parse.iterate_true hstep]
@@ -1309,11 +1369,12 @@ theorem lhs_loop {T : Edition} {pi : ParseM Expr} {pa : ParseM (List Expr)} {sta
     have hHo : o.height ≤ H := by simp [Expr.height] at hH; omega
     have hHa : Expr.heightOf args < H := by simp [Expr.height] at hH; omega
     simp only [lhsSuffix] at ht
-    obtain ⟨ots, ats, rfl, hot, hats⟩ := Touching.append_split ht
+    rw [List.append_assoc] at ht
+    obtain ⟨ots, ats, rfl, hot, hbats⟩ := Touching.append_split ht
+    obtain ⟨hbreak, hats⟩ := Touching.after_callBreak hbats
     obtain ⟨lp, its, rp, rfl, hlp, _, _⟩ := Touching.enclosed (by simpa [enclose] using hats)
-    have ha₀ := ha
     simp only [Expr.afterOK, Bool.and_eq_true] at ha
-    obtain ⟨⟨_, hao⟩, hargs⟩ := ha
+    obtain ⟨hao, hargs⟩ := ha
     obtain ⟨o', s₁, hit, he', hL⟩ := lhs_loop hE hA o he.1 hHo (n + 1) acc s ots (lp :: (its ++ [rp]) ++ rest)
       (by simpa [lhsHead] using hacc) hT (by simp [hs]) hl hot (fun y hy => hn y (by simp [hy])) (by simp)
       (by rw [List.map_append, hats.kinds]; exact hao)
@@ -1321,16 +1382,13 @@ theorem lhs_loop {T : Edition} {pi : ParseM Expr} {pa : ParseM (List Expr)} {sta
     have hl₁ : s₁.left = s₁.rest.length := by rw [hL.left_eq, hL.rest_eq]
     obtain ⟨args', s₂, hpa, hea, hLa⟩ := hA args hHa he.2 s₁ (lp :: (its ++ [rp])) rest (hL.target_eq.trans hT)
       hL.rest_eq hl₁ hats (fun y hy => hn y (by simp [hy])) hr hargs
-    have hasync : ∀ sp', o' = .ident sp' "async" → Parse.refuseAsyncArrowLookalike s₂ = .ok () s₂ := by
+    have hasync : ∀ sp', o' = .ident sp' "async" → lp.newlineBefore = true := by
       intro sp' ho'
       subst ho'
       obtain ⟨sp₀, rfl⟩ : ∃ sp₀, o = .ident sp₀ "async" := by
         cases o <;> simp [Expr.erase] at he'
         exact ⟨_, by rw [he']⟩
-      obtain ⟨u, r, rfl⟩ := rest_cons hr
-      simp only [Expr.afterOK, Bool.and_eq_true] at ha₀
-      obtain ⟨⟨⟨h1, h2⟩, _⟩, _⟩ := ha₀
-      exact refuseAsyncArrowLookalike_ok hLa.rest_eq (notFirst_cons h1) (notFirst_cons h2)
+      exact hbreak sp₀ rfl lp (by simp)
     refine ⟨.call ⟨start, s₂.lastStop⟩ o' args', s₂, ?_, by simp [Expr.erase, he', hea], leaves_trans hL hLa⟩
     rw [show n + lhsSteps (.call sp o args) = (n + 1) + lhsSteps o by simp [lhsSteps]; omega, hit,
       Parse.iterate_true (lhsStep_call hs₁ hlp hpa hasync)]
@@ -1484,7 +1542,8 @@ theorem parsePostfix_reads {T : Edition} (f : Nat) (e : Expr) (he : e.wfAt T .po
     simp [Touching] at hot'; subst hot'
     have hs₀ : s.rest = ats ++ o :: rest := by rw [hs, hsplit]; simp
     have hne : ats ≠ [] := by obtain ⟨_, _, rfl, _⟩ := Touching.head hat; simp
-    have hno : o.newlineBefore = false := hn o (tail_sub hsplit hne (.inr (by simp)))
+    have hno : o.newlineBefore = false :=
+      noBreak_of hok (by cases op <;> decide) (hn o (tail_sub hsplit hne (.inr (by simp))))
     have hEnd : EndsLhs (o :: rest) := fun t ht => by
       simp at ht; subst ht; rw [hok]; cases op <;> simp [UpdateOp.symbol]
     obtain ⟨arg', s₁, hpa, hea, hL₁⟩ := hL arg (by simp [Expr.height]) he.1 s ats (o :: rest) hT hs₀ hl hat
@@ -1789,7 +1848,7 @@ theorem bin_loop {T : Edition} {pr : Nat → ParseM Expr} {start : Pos} {m H : N
     ∀ (e : Expr), e.wfAt T (.bin m) = true → e.height ≤ H →
       ∀ (n : Nat) (acc : Expr) (s : ParseState) (ts rest : List Token),
       acc.erase = (binHead e).erase → s.target = T → s.rest = ts ++ rest → s.left = s.rest.length →
-      Touching ts (binSuffix e) → (∀ y ∈ ts, y.newlineBefore = false) → rest ≠ [] →
+      Touching ts (binSuffix e) → (∀ y ∈ ts, NoBreak y) → rest ≠ [] →
       NextOp e rest → e.afterOK (rest.map (·.kind)) = true →
       ∃ e' s', Parse.iterate (n + binSteps e) acc (Parse.binaryStep pr start m) s =
         Parse.iterate n e' (Parse.binaryStep pr start m) s' ∧ e'.erase = e.erase ∧ Leaves s s' rest := by
@@ -1808,7 +1867,7 @@ theorem bin_loop {T : Edition} {pr : Nat → ParseM Expr} {start : Pos} {m H : N
     obtain ⟨⟨hclose, hla⟩, hra⟩ := ha
     obtain ⟨l', s₁, hit, hel, hL⟩ := bin_loop (start := start) hR l hlw hHl (n + 1) acc s lts (a ++ u :: (b' ++ rest))
       (by simpa [binHead] using hacc) hT (by simp [hs]) hl hlt (fun y hy => hn y (by simp [hy]))
-      (by simp) (nextOp_left hlo ha' hc hu)
+      (by simp) (nextOp_left hlo ha' (hc.chained ha') hu)
       (by rw [List.map_append, ha', ← List.cons_append, List.map_append, hb.kinds]
           simpa [Expr.tokens, List.append_assoc] using hla)
     have hs₁ : s₁.rest = a ++ u :: (b' ++ rest) := hL.rest_eq
@@ -1834,7 +1893,7 @@ theorem bin_loop {T : Edition} {pr : Nat → ParseM Expr} {start : Pos} {m H : N
         ((op == .and || op == .or) && (l'.isCoalesce || r'.isCoalesce))) = false := by
       rw [isLogical_of_erase hel, isLogical_of_erase her, isCoalesce_of_erase hel, isCoalesce_of_erase her]
       cases op <;> simp at hmix ⊢ <;> exact hmix
-    have hstep := binStep_go (pr := pr) (start := start) (m := m) (acc := l') hs₁ ha' hc
+    have hstep := binStep_go (pr := pr) (start := start) (m := m) (acc := l') hs₁ ha' (hc.chained ha')
       ⟨u, b' ++ rest, rfl, hu⟩ hm hexp hlt' hT' hsk hpr hmix'
     refine ⟨.binary ⟨start, s₂.lastStop⟩ op l' r', s₂, ?_, by simp [Expr.erase, hel, her], leaves_trans hL (leaves_trans hLk hLr)⟩
     rw [show n + binSteps (.binary sp op l r) = (n + 1) + binSteps l by simp [binSteps]; omega, hit,
@@ -1991,7 +2050,7 @@ theorem parseAssign_reads {T : Edition} (f : Nat) (e : Expr) (he : e.wfAt T .ass
       rintro sp t' a' b' rfl; simp [isSimpleTarget_cond] at hsim
     obtain ⟨t', s₁, hpt, het, hL₁⟩ := hC t (by simp [Expr.height]; omega) hwt s tts (a ++ u :: (vts' ++ rest)) hT
       hs₀ hl htt (fun y hy => hn y (tail_sub hsplit hne (.inl hy))) (by simp)
-      (by rw [ends_cond_eq hnc]; exact endsCond_assignOp ha' hc hu)
+      (by rw [ends_cond_eq hnc]; exact endsCond_assignOp ha' (hc.chained ha') hu)
       (by rw [List.map_append, ha', ← List.cons_append, List.map_append, hvt.kinds]
           simpa [Expr.tokens, List.append_assoc] using hta)
     have hs₁ : s₁.rest = a ++ u :: (vts' ++ rest) := hL₁.rest_eq
@@ -2011,7 +2070,7 @@ theorem parseAssign_reads {T : Edition} (f : Nat) (e : Expr) (he : e.wfAt T .ass
     simp only [Parse.parseAssign]
     rw [Parse.bind_eq (Parse.peek_eq hs'), Parse.bind_eq hpt, Parse.bind_eq (Parse.peek_eq hs₁')]
     rw [Parse.ite_guard (fun h => by simp [Token.isPunct, hok] at h; exact absurd h hkarrow)]
-    rw [Parse.bind_eq (peekAssignOp_op hs₁ ha' hc hu)]
+    rw [Parse.bind_eq (peekAssignOp_op hs₁ ha' (hc.chained ha') hu)]
     dsimp only
     rw [if_pos hsim', Parse.pure_bind]
     cases op <;> simp only [AssignOp.allowedIn] at hop <;> dsimp only <;>
@@ -2670,7 +2729,7 @@ theorem need_le_budget {e : Expr} {level : Level} {s : ParseState} {ts rest : Li
 expression. -/
 theorem parseAssign_budget {T : Edition} (e : Expr) (he : e.wfAt T .assign = true) :
     ∀ (s : ParseState) (ts rest : List Token), s.target = T → s.rest = ts ++ rest →
-      s.left = s.rest.length → Touching ts e.words → (∀ y ∈ ts.tail, y.newlineBefore = false) →
+      s.left = s.rest.length → Touching ts e.words → (∀ y ∈ ts.tail, NoBreak y) →
       rest ≠ [] → EndsAssign rest → e.afterOK (rest.map (·.kind)) = true →
       ∃ e' s', Parse.parseAssign (10 * (s.left + 1)) s = .ok e' s' ∧ e'.erase = e.erase ∧ Leaves s s' rest :=
   fun s ts rest hT hs hl ht hn hr hE ha =>
@@ -2681,7 +2740,7 @@ theorem parseAssign_budget {T : Edition} (e : Expr) (he : e.wfAt T .assign = tru
 assignment expression that no `,` follows. -/
 theorem parseExpression_budget {T : Edition} (e : Expr) (he : e.wfAt T .assign = true) :
     ∀ (s : ParseState) (ts rest : List Token), s.target = T → s.rest = ts ++ rest →
-      s.left = s.rest.length → Touching ts e.words → (∀ y ∈ ts.tail, y.newlineBefore = false) →
+      s.left = s.rest.length → Touching ts e.words → (∀ y ∈ ts.tail, NoBreak y) →
       rest ≠ [] → EndsExpr rest → e.afterOK (rest.map (·.kind)) = true →
       ∃ e' s', Parse.parseExpression (10 * (s.left + 1)) s = .ok e' s' ∧ e'.erase = e.erase ∧
         Leaves s s' rest := by

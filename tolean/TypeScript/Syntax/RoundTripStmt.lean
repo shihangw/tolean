@@ -6,9 +6,10 @@ tokens that `Syntax/Source.lean` prints for a statement as the same
 statement, apart from spans.
 
 The printer writes a statement as lines of words. `Laid ts lines` states that
-the tokens `ts` are those lines: the tokens of a word touch, a line break
-comes before the first token of each line after the first, and none comes
-before another token. `Stmt.wf T fn loop st` is the condition under which
+the tokens `ts` are those lines: the tokens of a word touch, and a line break
+comes before the first token of each line after the first. Inside a line, a
+line break comes only where the printer puts one, before the `(` of a call
+of `async`. `Stmt.wf T fn loop st` is the condition under which
 the proofs here show that `parseStatement` reads `st`: the target edition is
 `T`, and the statement is in a function if `fn` holds and in a loop if `loop`
 holds. An `if` with an `else` needs a branch that does not end with an `if`
@@ -26,12 +27,13 @@ set_option linter.unusedSimpArgs false
 /-! ### Lines of tokens -/
 
 /-- `ts` are the tokens of the lines of words `ls`, one line after another.
-The tokens of each line touch as `Touching` states. A line break comes before
-the first token of each line after the first, and none comes before any other
-token of a line. -/
+The tokens of each line touch as `Touching` states, which also states the
+line break before the `(` of a call of `async`. A line break comes before the
+first token of each line after the first, and no other line break comes
+inside a line. -/
 def Laid : List Token → List (List Word) → Prop
   | ts, [] => ts = []
-  | ts, l :: ls => ∃ a b, ts = a ++ b ∧ Touching a l ∧ (∀ y ∈ a.tail, y.newlineBefore = false) ∧
+  | ts, l :: ls => ∃ a b, ts = a ++ b ∧ Touching a l ∧ (∀ y ∈ a.tail, NoBreak y) ∧
       (∀ y ∈ b.head?, y.newlineBefore = true) ∧ Laid b ls
 
 /-- The words of each line of a statement. They do not depend on how far in
@@ -74,13 +76,13 @@ theorem Laid.append : ∀ {ts : List Token} {l₁ l₂ : List (List Word)}, Laid
 
 /-- One line, which a line break or nothing follows. -/
 theorem Laid.one {ts : List Token} {l : List Word} (h : Laid ts [l]) :
-    Touching ts l ∧ ∀ y ∈ ts.tail, y.newlineBefore = false := by
+    Touching ts l ∧ ∀ y ∈ ts.tail, NoBreak y := by
   obtain ⟨a, b, rfl, ha, hn, _, hb⟩ := h
   simp [Laid] at hb; subst hb; simpa using ⟨ha, hn⟩
 
 /-- A line, and the lines after it. -/
 theorem Laid.cons {ts : List Token} {l : List Word} {ls : List (List Word)} (h : Laid ts (l :: ls)) :
-    ∃ a b, ts = a ++ b ∧ Touching a l ∧ (∀ y ∈ a.tail, y.newlineBefore = false) ∧
+    ∃ a b, ts = a ++ b ∧ Touching a l ∧ (∀ y ∈ a.tail, NoBreak y) ∧
       (∀ y ∈ b.head?, y.newlineBefore = true) ∧ Laid b ls := h
 
 
@@ -214,7 +216,7 @@ end
 /-- `parseType`, with the fuel that `budget` gives, reads every type. -/
 theorem parseType_budget (t : TypeExpr) (ht : t.wf = true) :
     ∀ (s : ParseState) (ts rest : List Token), s.rest = ts ++ rest → s.left = s.rest.length →
-      ts.map (·.kind) = t.tokens → (∀ y ∈ ts, y.newlineBefore = false) → rest ≠ [] → FollowsType rest →
+      ts.map (·.kind) = t.tokens → (∀ y ∈ ts, NoBreak y) → rest ≠ [] → FollowsType rest →
       ∃ t' s', Parse.parseType (10 * (s.left + 1)) s = .ok t' s' ∧ t'.erase = t.erase ∧ Leaves s s' rest := by
   intro s ts rest hs hl hk hn hr hf
   have h1 := TypeExpr.height_le t
@@ -255,7 +257,7 @@ theorem varDecl_ss {T : Edition} (kind : VarKind) (name : String) (t : TypeExpr)
     (hd : VarDecl.wf T ⟨kind, name, some t, some e⟩ = true)
     (s : ParseState) (ts rest : List Token) (hT : s.target = T) (hs : s.rest = ts ++ rest)
     (hl : s.left = s.rest.length) (ht : Touching ts (VarDecl.words ⟨kind, name, some t, some e⟩))
-    (hn : ∀ y ∈ ts.tail, y.newlineBefore = false) (hr : rest ≠ []) :
+    (hn : ∀ y ∈ ts.tail, NoBreak y) (hr : rest ≠ []) :
     ∃ d' s', Parse.parseVarDecl s = .ok d' s' ∧ d'.erase = VarDecl.erase ⟨kind, name, some t, some e⟩ ∧
       Leaves s s' rest := by
   simp only [VarDecl.wf, Bool.and_eq_true] at hd
@@ -317,7 +319,7 @@ theorem varDecl_ns {T : Edition} (kind : VarKind) (name : String) (e : Expr)
     (hd : VarDecl.wf T ⟨kind, name, none, some e⟩ = true)
     (s : ParseState) (ts rest : List Token) (hT : s.target = T) (hs : s.rest = ts ++ rest)
     (hl : s.left = s.rest.length) (ht : Touching ts (VarDecl.words ⟨kind, name, none, some e⟩))
-    (hn : ∀ y ∈ ts.tail, y.newlineBefore = false) (hr : rest ≠ []) :
+    (hn : ∀ y ∈ ts.tail, NoBreak y) (hr : rest ≠ []) :
     ∃ d' s', Parse.parseVarDecl s = .ok d' s' ∧ d'.erase = VarDecl.erase ⟨kind, name, none, some e⟩ ∧
       Leaves s s' rest := by
   simp only [VarDecl.wf, Bool.and_eq_true] at hd
@@ -369,7 +371,7 @@ theorem varDecl_sn {T : Edition} (kind : VarKind) (name : String) (t : TypeExpr)
     (hd : VarDecl.wf T ⟨kind, name, some t, none⟩ = true)
     (s : ParseState) (ts rest : List Token) (hs : s.rest = ts ++ rest)
     (hl : s.left = s.rest.length) (ht : Touching ts (VarDecl.words ⟨kind, name, some t, none⟩))
-    (hn : ∀ y ∈ ts.tail, y.newlineBefore = false) (hr : rest ≠ []) :
+    (hn : ∀ y ∈ ts.tail, NoBreak y) (hr : rest ≠ []) :
     ∃ d' s', Parse.parseVarDecl s = .ok d' s' ∧ d'.erase = VarDecl.erase ⟨kind, name, some t, none⟩ ∧
       Leaves s s' rest := by
   simp only [VarDecl.wf, Bool.and_eq_true] at hd
@@ -467,7 +469,7 @@ theorem varDecl_nn {T : Edition} (kind : VarKind) (name : String)
 /-- `const` or `let`, a name, and a type, a value, both or neither. -/
 theorem parseVarDecl_reads {T : Edition} (d : VarDecl) (hd : d.wf T = true) :
     ∀ (s : ParseState) (ts rest : List Token), s.target = T → s.rest = ts ++ rest → s.left = s.rest.length →
-      Touching ts d.words → (∀ y ∈ ts.tail, y.newlineBefore = false) → rest ≠ [] →
+      Touching ts d.words → (∀ y ∈ ts.tail, NoBreak y) → rest ≠ [] →
       ∃ d' s', Parse.parseVarDecl s = .ok d' s' ∧ d'.erase = d.erase ∧ Leaves s s' rest := by
   intro s ts rest hT hs hl ht hn hr
   obtain ⟨kind, name, type, init⟩ := d
@@ -555,6 +557,54 @@ theorem stmt_return_none {T : Edition} {loop : Bool} (f : Nat) (sp : Span) :
   rw [Parse.bind_eq (endStatement_semi (s := s₁) rfl hr hsemi), Parse.bind_eq (Parse.spanFrom_eq _ _)]
   simp [hF₁, pure, EStateM.pure]
 
+/-- The first word of an expression has tokens: no `lineBreak` starts it. -/
+theorem Expr.firstWord : ∀ e : Expr, ∃ w ws, e.words = w :: ws ∧ w ≠ []
+  | .ident _ n => ⟨_, _, by simp only [Expr.words]; exact rfl, by simp [identWord]⟩
+  | .number _ t => ⟨_, _, by simp only [Expr.words]; exact rfl, by simp⟩
+  | .bigint _ t => ⟨_, _, by simp only [Expr.words]; exact rfl, by simp⟩
+  | .string _ v => ⟨_, _, by simp only [Expr.words]; exact rfl, by simp⟩
+  | .bool _ b => ⟨_, _, by simp only [Expr.words]; exact rfl, by simp [keywordWord]⟩
+  | .null _ => ⟨_, _, by simp only [Expr.words]; exact rfl, by simp [keywordWord]⟩
+  | .array _ es => ⟨_, _, by simp only [Expr.words, enclose]; exact rfl, by simp [punctWord]⟩
+  | .object _ ps => ⟨_, _, by simp only [Expr.words, enclose]; exact rfl, by simp [punctWord]⟩
+  | .paren _ i => ⟨_, _, by simp only [Expr.words]; exact rfl, by simp [punctWord]⟩
+  | .unary _ op a => by
+    obtain ⟨k, hk, _⟩ := unaryOp_symbol op
+    exact ⟨_, _, by simp only [Expr.words]; exact rfl, by simp [hk]⟩
+  | .prefix _ op a => ⟨_, _, by simp only [Expr.words]; exact rfl, by simp [punctWord]⟩
+  | .member _ o _ => by
+    obtain ⟨w, ws, h, hw⟩ := Expr.firstWord o
+    exact ⟨w, _, by simp only [Expr.words, h, List.cons_append]; exact rfl, hw⟩
+  | .index _ o _ => by
+    obtain ⟨w, ws, h, hw⟩ := Expr.firstWord o
+    exact ⟨w, _, by simp only [Expr.words, h, List.cons_append]; exact rfl, hw⟩
+  | .call _ c _ => by
+    obtain ⟨w, ws, h, hw⟩ := Expr.firstWord c
+    exact ⟨w, _, by simp only [Expr.words, h, List.cons_append]; exact rfl, hw⟩
+  | .postfix _ _ a => by
+    obtain ⟨w, ws, h, hw⟩ := Expr.firstWord a
+    exact ⟨w, _, by simp only [Expr.words, h, List.cons_append]; exact rfl, hw⟩
+  | .binary _ _ l _ => by
+    obtain ⟨w, ws, h, hw⟩ := Expr.firstWord l
+    exact ⟨w, _, by simp only [Expr.words, h, List.cons_append]; exact rfl, hw⟩
+  | .cond _ t _ _ => by
+    obtain ⟨w, ws, h, hw⟩ := Expr.firstWord t
+    exact ⟨w, _, by simp only [Expr.words, h, List.cons_append]; exact rfl, hw⟩
+  | .assign _ _ t _ => by
+    obtain ⟨w, ws, h, hw⟩ := Expr.firstWord t
+    exact ⟨w, _, by simp only [Expr.words, h, List.cons_append]; exact rfl, hw⟩
+
+/-- No line break comes before the token after a word of one token, when a
+word with tokens follows that word. -/
+theorem Touching.after_one {k : TokenKind} {v : Word} {ws : List Word} {x₀ x : Token} {r : List Token}
+    (h : Touching (x₀ :: x :: r) ([k] :: v :: ws)) (hv : v ≠ []) : x.newlineBefore = false := by
+  obtain ⟨a, b, hab, ha, hp, _⟩ := h
+  match a, ha with
+  | [y], _ =>
+    simp at hab
+    obtain ⟨rfl, rfl⟩ := hab
+    exact Placed.next (by simp) hv hp
+
 theorem stmt_return_some {T : Edition} {loop : Bool} (f : Nat) (sp : Span) (e : Expr)
     (he : e.wfAt T .assign = true) (ha : e.afterOK [.punct ";"] = true) :
     ReadsS T true loop (Parse.parseStatement (f + 1)) (.returnStmt sp (some e)) := by
@@ -570,7 +620,11 @@ theorem stmt_return_some {T : Edition} {loop : Bool} (f : Nat) (sp : Span) (e : 
   let s₁ := advanced s kw x (ets' ++ semi :: rest)
   have hF₁ : s₁.inFunction = true := hF
   have hl₁ : s₁.left = s₁.rest.length := by simp [s₁, hl, hs']
-  have hxn : x.newlineBefore = false := hn x (by simp)
+  obtain ⟨w₀, ws₀, hw₀, hne₀⟩ := Expr.firstWord e
+  have h1' : Touching (kw :: x :: (ets' ++ [semi])) ([.keyword "return"] :: w₀ :: (ws₀ ++ [punctWord ";"])) := by
+    simpa [keywordWord, hw₀] using h1
+  -- `return` reads no value after a line break, as ECMA-262 states.
+  have hxn : x.newlineBefore = false := Touching.after_one h1' hne₀
   have hx1 : x.kind ≠ .punct ";" := fun h => by rw [h] at hx; simp [startsExpr] at hx
   have hx2 : x.kind ≠ .punct "}" := fun h => by rw [h] at hx; simp [startsExpr] at hx
   have hx3 : x.kind ≠ .eof := fun h => by rw [h] at hx; simp [startsExpr] at hx
