@@ -14,4 +14,7 @@ Errors that look like math but are syntax, names or elaboration. Lean 4.30, no M
 - **Recursion in a theorem** over a nested inductive (`Expr`, `Stmt`) works through `cases` on a subterm: Lean finds the structural recursion. Mutual theorems over `Expr` and `List Expr` go in a `mutual … end` block.
 - **An implicit argument** that no hypothesis fixes stays a metavariable and breaks later `simp_all`. Pass it explicitly, as in `bin_loop (start := start)`.
 - **Anonymous hypotheses** from `obtain ⟨x, ts', rfl, _⟩` shift what `rename_i` names. Name them.
+- **`match x with` in a `have` statement**, where `x` is a local, also matches on each hypothesis whose type mentions `x` (`match x, hr with`), so it is not the term in the definition and `cases h : x` fails ("not type correct"). Split the goal itself with `cases x`.
+- **A `by` block's next line** must be indented past the column where its first tactic starts, or it ends the tactic ("unexpected token '('; expected '⟩'"). Start the block on its own line: `(by⏎ simpa … using f⏎   (arg))`.
+- **An implicit state fixed too early**: in `listStep_wf hp hT hI hst`, `s₀` is fixed by `hT : s₁.target = T`, which is defeq to the wanted state's target, and then `hI` mismatches. Pass `(s₀ := …)`.
 - **A recursive call's `_` witnesses**, such as the span of a rebuilt node, are not inferred. Give them (`⟨start, s₂.lastStop⟩`).

@@ -1,6 +1,6 @@
 # The parser's round trip
 
-Goal: `parse (print t)` gives `t` apart from spans. `Syntax/Source.lean` prints a tree as lines of words, and a word is the token kinds that touch (`>=` is `>` then `=`). The parser's part is proven on tokens; the lexer's part is not.
+Goal: `parse (print t)` gives `t` apart from spans. `Syntax/Source.lean` prints a tree as lines of words, and a word is the token kinds that touch (`>=` is `>` then `=`). Proven on source text for every tree the parser gives: `parseChars_reads`.
 
 ## Files
 
@@ -10,6 +10,9 @@ Goal: `parse (print t)` gives `t` apart from spans. `Syntax/Source.lean` prints 
 | `Syntax/RoundTripExpr.lean` | `exprs_read` | each expression level; `afterOK` congruence; budget corollaries |
 | `Syntax/RoundTripStmt.lean` | `stmts_read` | statements; `Laid`; `parseVarDecl_reads` |
 | `Syntax/RoundTripDecl.lean` | `module_reads` | declarations, modules |
+| `Syntax/RoundTripLex.lean` | `lexChars_render` | the lexer reads `render lines` as `Laid` tokens + eof, given `Word.ok` words and `breaksOK` lines |
+| `Syntax/ParseWF.lean` | `parseTokens_wf` | parser output is `wf` and its printed words are `Word.ok` |
+| `Syntax/RoundTripText.lean` | `parseChars_reads`, `source_reads` | `Module.breaksOK` (printer); the glue |
 
 ## The shape of a reading lemma
 
@@ -22,9 +25,15 @@ Goal: `parse (print t)` gives `t` apart from spans. `Syntax/Source.lean` prints 
 - **First tokens.** `Expr.first` (a `startsExpr` token), `Expr.firstPostfix` (a `startsPrimary` token), `Expr.second` (no name as the second token after a name), `Stmt.first`, `Stmt.declStart`, `Decl.first`, `Field.first`. The token after an item (statement, field, declaration) is the next item's first token or the closer, which gives the `else` and `}` facts.
 - **Well-formedness:** `TypeExpr.wf`, `Expr.wfAt T level`, `Stmt.wf T fn loop`, `VarDecl.wf`, `Decl.wf`, `Module.wf`. Each is the condition under which its theorem holds. Adding a condition weakens the theorem, so prove a fact the parser already guarantees (as `Expr.second` does) instead of adding it.
 
-## Not proven yet
+## Parser output is well formed (`ParseWF.lean`)
 
-1. Every tree the parser gives satisfies the `wf` predicates.
-2. The lexer's part: lexing `render lines` gives tokens that satisfy `Laid` for those lines, followed by the end of the file.
+Each `*_gives` / `*_wf` theorem runs one parser function backwards from `p s = .ok x s'`.
 
-Until both exist, the theorems cover `wf` trees on tokens. Docs and PR text say that and nothing more.
+- **`Ready s`**: the state is `Good`, ends with `s.eof` (kind `.eof`), and every token left is eof or `TokenKind.ok s.target`. `Ready.tok` gives `Word.ok T [x.kind]` for a token read; `readName_words` gives it for a name.
+- **`Kept s s'`**: eof, `inFunction`, `loopDepth`, `target` unchanged. A loop's target fact comes from `hK.target_eq.trans hT`.
+- **`afterOK`**: the parser read the same brackets, `;` and `>` that the printer writes (`skel`), and the printed tokens after a node stop the `>` scan where the source tokens stop it (`Follows`).
+- **Words that lex back**: each result carries `WordsOK T` for its printed words (`GaveE.ok`, `GaveArgs.ok`, `StmtOK`, `DeclOK`). List items fold it into the Bool item predicate as `wf && words.all (Word.ok T)` (`both`, `both_left`, `both_right`). `words_ok` closes `WordsOK T ws` from hypotheses in context and fixed words; put the facts about sub-trees in context with `have` first.
+
+## Scope
+
+`parseChars_reads` covers every module the parser gives. `source_reads` covers every `wf` module whose printed words are `Word.ok`; `wf` alone does not check that a name is an identifier or that a number's text is one the lexer reads. The round trip shows the parser and printer agree, not that the parser reads TypeScript as `tsc` does; `tests/typescript/check.ts` tests that.

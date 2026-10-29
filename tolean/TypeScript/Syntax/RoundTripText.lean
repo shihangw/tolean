@@ -4,16 +4,17 @@ import tolean.TypeScript.Syntax.ParseWF
 /-!
 The parser's round trip on source text: for every module that the parser
 gives, the parser reads the printed source as the same module, apart from
-spans.
+spans (`parseChars_reads`).
 
 Three results meet here. `parseTokens_wf` (`Syntax/ParseWF.lean`) states
-that the module is well formed. `lexChars_render` (`Syntax/RoundTripLex.lean`)
+that the module is well formed, and that every word it prints is one that the
+lexer gives back (`Word.ok`). `lexChars_render` (`Syntax/RoundTripLex.lean`)
 states that the lexer reads the printed lines as tokens that `Laid`
 describes. And `module_reads` (`Syntax/RoundTripDecl.lean`) states that the
 parser reads those tokens as the module. `lexChars_render` asks two things of
-the printed words: each one lexes back (`Word.ok`), and each line break
-inside a line comes before a `(` (`breaksOK`). This file proves the second
-for every module, from the printer alone.
+the printed words: each one lexes back, and each line break inside a line
+comes before a `(` (`breaksOK`). This file proves the second for every
+module, from the printer alone.
 -/
 namespace tolean.TypeScript.Syntax
 
@@ -401,5 +402,36 @@ theorem Module.breaksOK (m : Module) : ∀ l ∈ m.lines, breaksOK l.2 = true :=
   simp only [Module.lines, List.mem_flatMap] at hl
   obtain ⟨d, _, hd⟩ := hl
   exact (Decl.lineOK d l hd).1
+
+
+/-! ### The round trip on source text -/
+
+/-- The round trip on source text for a module: the parser reads the printed
+source of every well-formed module whose printed words lex back as that
+module, apart from spans. -/
+theorem source_reads {T : Edition} (m : Module) (hm : m.wf T = true) (hw : ∀ l ∈ m.lines, WordsOK T l.2) :
+    ∃ m', parseChars m.source.toList T = .ok m' ∧ m'.erase = m.erase := by
+  obtain ⟨ts, e, hlex, hlaid, he⟩ := lexChars_render T m.lines (fun l hl w hw' => hw l hl w hw') (Module.breaksOK m)
+  obtain ⟨m', s', hp, herase⟩ := module_reads m hm
+    { rest := ts ++ [e], left := (ts ++ [e]).length,
+      eof := (ts ++ [e]).getLastD { kind := .eof, span := ⟨⟨1, 1⟩, ⟨1, 1⟩⟩, newlineBefore := false },
+      target := T } ts e rfl rfl rfl he rfl hlaid
+  refine ⟨m', ?_, herase⟩
+  simp only [List.getLastD_concat, List.length_append, List.length_singleton] at hp
+  simp [parseChars, Module.source, hlex, parseTokens, EStateM.run, bind, Except.bind, hp]
+
+/-- The parser's round trip on source text: when the parser gives the module
+`m` from some characters, it reads the printed source of `m` as `m` again,
+apart from spans. -/
+theorem parseChars_reads {T : Edition} {chars : List Char} {m : Module} (h : parseChars chars T = .ok m) :
+    ∃ m', parseChars m.source.toList T = .ok m' ∧ m'.erase = m.erase := by
+  simp only [parseChars] at h
+  cases hl : lexChars chars T with
+  | error e => rw [hl] at h; cases h
+  | ok toks =>
+    rw [hl] at h
+    obtain ⟨hwf, hw⟩ := parseTokens_wf (lexChars_last_eof T chars toks hl)
+      (fun t ht => (lexChars_ok_kinds T chars toks hl t ht).imp_right (by simpa [Word.ok] using ·)) h
+    exact source_reads m hwf hw
 
 end tolean.TypeScript.Syntax

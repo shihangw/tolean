@@ -16,6 +16,13 @@ node, and the parser looked at the source tokens after it. The two agree
 where it matters. The parser reads the same brackets, `;` and `>` that the
 printer writes (`skel`), and the printed tokens after a node end the scan for
 a `>` wherever the source tokens end it (`Follows`).
+
+The lexer reads the printed source back only when each printed word is one
+that it gives (`Word.ok`). A name or a number that the parser read comes from
+a token, and every token that the lexer gives has such a kind (`Ready`). So
+each result of the parser also carries `WordsOK` for its printed words:
+`GaveE` for expressions, `StmtOK` for statements and `DeclOK` for
+declarations.
 -/
 
 namespace tolean.TypeScript.Syntax

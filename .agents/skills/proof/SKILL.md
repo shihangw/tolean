@@ -20,5 +20,5 @@ Steps, in order. Each ends when its check passes.
 - [do-blocks.md](do-blocks.md): read for every proof that runs a parser function. Rewriting a do-block step by step, guards, `if` and `match` in do-notation.
 - [simp-and-decide.md](simp-and-decide.md): read when `simp`, `rw` or `decide` misbehaves, or before a proof about lengths, `BEq` or string tests.
 - [loops-and-fuel.md](loops-and-fuel.md): read when the code calls `Parse.iterate`, takes fuel, or calls `budget`.
-- [round-trip.md](round-trip.md): read when extending the round trip (printer, `Touching`, `Laid`, `ReadsW`, `Ends`, `afterOK`). Also lists what is not proven yet.
+- [round-trip.md](round-trip.md): read when extending the round trip (printer, `Touching`, `Laid`, `ReadsW`, `Ends`, `afterOK`) or the proof that parser output is well formed (`Ready`, `WordsOK`). Also states what the round trip covers.
 - [lean-gotchas.md](lean-gotchas.md): read when a Lean error is about syntax, a name, hygiene or termination rather than the math.

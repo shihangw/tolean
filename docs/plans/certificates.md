@@ -1,6 +1,6 @@
 # Plan: certificates and round-trip proofs
 
-**Status:** phases 1 to 3, 5 and 6 built, phase 4 step 1 built · **Date:** 2026-10-27
+**Status:** phases 1 to 6 built · **Date:** 2026-10-29
 
 A certificate proves the translation of one file. It states, for each
 function, that an interpreter of the source language and the translated Lean
@@ -58,11 +58,12 @@ printer gives a certificate that Lean refuses.
       `Syntax/Equality.lean` gives `Module.beq` and proves that it decides
       equality. This removes the term printer from the trusted links. The
       kernel parses a 2.7 KB file in about ten seconds.
-   2. **Round trips.** With a total printer from syntax trees back to source
-      text, Tolean proves the round trip `parse (print t) = .ok t` for every
-      tree in the subset. The printer is built: `Syntax/Source.lean` writes
-      each node in one form, every statement on a line of its own and ending
-      in `;`, and every two tokens one space apart. A statement breaks across
+   2. **Round trips (built).** With a total printer from syntax trees back
+      to source text, Tolean proves the round trip `parse (print t) = .ok t`,
+      apart from spans, for every tree that the parser gives. The printer
+      is built: `Syntax/Source.lean` writes each node in one form, every
+      statement on a line of its own and ending in `;`, and every two tokens
+      one space apart. A statement breaks across
       lines in one place only, between the name `async` and the `(` of a call
       of it. ECMA-262 lets no line break come between `async` and the
       parameters of an async arrow function, and `tsc` reads none after one.
@@ -89,9 +90,18 @@ printer gives a certificate that Lean refuses.
       `Syntax/RoundTripDecl.lean` states that `parseModule` reads the
       tokens of a module's printed lines, which the end of the file
       follows, as the same module apart from spans. It covers every module
-      that `Module.wf` accepts. Two proofs are not built yet: that every
-      tree the parser gives is well formed, and that the lexer gives the
-      printed tokens with the line breaks that `Laid` states.
+      that `Module.wf` accepts. Three more proofs carry the round trip from
+      tokens to source text. `parseTokens_wf` in `Syntax/ParseWF.lean`
+      states that every module the parser gives is well formed. It also
+      states that each word the module prints is one that the lexer reads
+      back. `lexChars_render` in `Syntax/RoundTripLex.lean` states that the
+      lexer reads the printed source as the tokens of the printed lines,
+      with the line breaks that `Laid` states. It needs every line break
+      inside a line to come before a `(`, and `Module.breaksOK` in
+      `Syntax/RoundTripText.lean` proves that the printer writes them so.
+      `parseChars_reads` in the same file completes the round trip. When
+      the parser gives a module from some characters, it reads the printed
+      source of that module as the same module, apart from spans.
 5. **The interpreter against Node (built).** `tests/typescript/interpreter.test.ts`
    runs random programs of the subset with random arguments in the interpreter
    and in Node, and requires the same results. This is evidence that the

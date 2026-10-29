@@ -5,12 +5,15 @@ The parser's round trip, on tokens: the parser reads the tokens that
 `Syntax/Source.lean` prints for a tree as the same tree, apart from spans.
 
 The theorems here are about the tokens that the lexer gives for the printed
-source. A separate step will relate the printed characters to these tokens.
+source. `Syntax/RoundTripLex.lean` relates the printed characters to these
+tokens, and `Syntax/RoundTripText.lean` puts the steps together as the round
+trip on source text.
 
 `types_reads` covers well-formed types. A type is well formed when it has
 the shape that `parseType` reads: a union has two members or more, or one
 after a `|`, and each member is a primary type with `[]` after it any number
-of times. That every type the parser gives is well formed is not proved yet.
+of times. `types_give` in `Syntax/ParseWF.lean` proves that every type the
+parser gives is well formed.
 `Reads p t follows`
 states that `p` reads the tokens of `t`, followed by any tokens that
 `follows` allows, as `t` apart from spans, and leaves those tokens. Each
@@ -1019,8 +1022,8 @@ theorem allWF_iff (ms : List TypeExpr) : TypeExpr.allWF ms = true ↔ ∀ m ∈ 
   | cons m ms ih => simp [TypeExpr.allWF, ih]
 
 /-- The parser reads the tokens of every well-formed type as that type, given
-fuel for how deep the type nests. That every type the parser gives is well
-formed is a separate step, and it is not proved yet. -/
+fuel for how deep the type nests. `types_give` proves that every type the
+parser gives is well formed. -/
 theorem types_reads : ∀ f : Nat,
     (∀ t : TypeExpr, t.wf = true → 3 * t.height + 3 ≤ f → Reads (Parse.parseType f) t FollowsType) ∧
     (∀ t : TypeExpr, t.arrayWF = true → 3 * t.height + 2 ≤ f →
