@@ -442,7 +442,7 @@ theorem varDecl_nn {T : Edition} (kind : VarKind) (name : String)
   have hs' : s.rest = kw :: nm :: semi :: rest := by simpa using hs
   let s₁ := past s kw (nm :: (semi :: rest))
   let s₂ := past s₁ nm (semi :: rest)
-  obtain ⟨u, r, rfl⟩ := rest_cons hr
+  obtain ⟨u, r, rfl⟩ := List.exists_cons_of_ne_nil hr
   have hnot : nm.kind ≠ .punct "[" ∧ nm.kind ≠ .punct "{" := by rw [hnm]; simp
   refine ⟨⟨.«let», name, none, none⟩, { s₂ with rest := u :: r, left := s₂.left - 1, lastStop := semi.span.stop },
     ?_, rfl, ?_⟩
@@ -925,7 +925,7 @@ theorem afterOK_closer {e : Expr} (h : e.afterOK [.punct ")"] = true) (x : List 
     e.afterOK (.punct ")" :: x) = true := by
   rw [Expr.afterOK_congr e (a := .punct ")" :: x) (b := [.punct ")"]) ⟨rfl, by simp [closesKinds]⟩]; exact h
 
-/-- The tokens of `( e )` on a line, which a statement follows. -/
+/-- A `)` ends an expression. -/
 theorem EndsExpr.closer {rp : Token} {r : List Token} (h : rp.kind = .punct ")") : EndsExpr (rp :: r) :=
   ⟨endsAssign_separator h (by simp [separators]), fun u hu => by
     simp at hu; subst hu; rw [h]; exact punct_ne (by decide)⟩
@@ -967,7 +967,7 @@ theorem stmt_if_none {T : Edition} {fn loop : Bool} (g : Nat) (sp : Span) (test 
   have hl₄ : s₄.left = s₄.rest.length := by simp [s₄, hL₃.left_eq, hs₃]
   obtain ⟨t', s₅, hpb, het', hL₅⟩ := ht s₄ b rest (hL₃.target_eq.trans hT) (hL₃.inFunction_eq.trans hF)
     (fun h => by simp only [s₄]; rw [hL₃.loopDepth_eq]; exact hL h) rfl hl₄ hb hr (fun _ => hopen rfl)
-  obtain ⟨u, r, rfl⟩ := rest_cons hr
+  obtain ⟨u, r, rfl⟩ := List.exists_cons_of_ne_nil hr
   have hu : u.kind ≠ .keyword "else" := hopen rfl u rfl
   have hs₅ : s₅.rest = u :: r := hL₅.rest_eq
   refine ⟨.ifStmt ⟨k.span.start, s₅.lastStop⟩ test' t' none, s₅, ?_,

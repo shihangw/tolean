@@ -483,41 +483,30 @@ theorem Parse.peekAt_rest (s : ParseState) (k : Nat) : Parse.peekAt k s = .ok (s
 theorem startsExpr_ne {k : TokenKind} (h : startsExpr k = true) : k ≠ .punct ">" ∧ k ≠ .punct "=" := by
   constructor <;> (intro e; subst e; simp [startsExpr] at h)
 
-theorem map_kind_cons {a : List Token} {k : TokenKind} {ks : List TokenKind} (h : a.map (·.kind) = k :: ks) :
-    ∃ x a', a = x :: a' ∧ x.kind = k ∧ a'.map (·.kind) = ks := by
-  cases a with
-  | nil => simp at h
-  | cons x a' => simp at h; exact ⟨x, a', rfl, h.1, h.2⟩
-
-theorem map_kind_nil {a : List Token} (h : a.map (·.kind) = []) : a = [] := by simpa using h
+/-- Split the tokens `ha` of an operator's symbol, and read `hc` and `hs` for them. In a hygienic
+macro, the pattern `rfl` is a name, so the steps name each equation and `subst` it. -/
+macro "op_tokens " ha:ident hc:ident hs:ident : tactic => `(tactic|
+  ((first
+      | (obtain ⟨_, hx, _⟩ := $ha; subst hx)
+      | ((repeat (replace $ha := List.map_eq_cons_iff.mp $ha; obtain ⟨_, _, hx, _, $ha:ident⟩ := $ha; subst hx));
+          have hnil := List.map_eq_nil_iff.mp $ha; subst hnil))
+    <;> (try simp [Chained] at $hc:ident) <;> simp at $hs:ident))
 
 theorem peekBinaryOp_op {s : ParseState} {op : BinOp} {a : List Token} {u : Token} {r : List Token}
     (hs : s.rest = a ++ u :: r) (ha : a.map (·.kind) = symbol op.symbol) (hc : Chained a)
     (hu : startsExpr u.kind = true) :
     Parse.peekBinaryOp s = .ok (some (op, a.length)) s := by
   have ⟨h1, h2⟩ := startsExpr_ne hu
-  cases op <;> simp [BinOp.symbol, symbol, Lex.reservedWords, punctWord, keywordWord] at ha <;>
-    (first
-      | obtain ⟨_, rfl, _⟩ := ha
-      | ((repeat (obtain ⟨_, _, rfl, _, ha⟩ := map_kind_cons ha)); have := map_kind_nil ha; subst this))
-    <;> (try simp [Chained] at hc) <;> simp at hs <;>
+  cases op <;> simp [BinOp.symbol, symbol, Lex.reservedWords, punctWord, keywordWord] at ha <;> op_tokens ha hc hs <;>
     simp [Parse.peekBinaryOp, Parse.peek, Parse.peekGreater, Parse.peekAt_rest, hs, *, Token.isPunct,
       BinOp.ofSymbol?, BinOp.all, BinOp.symbol, bind, EStateM.bind, pure, EStateM.pure]
-
-set_option hygiene false in
-/-- Split the tokens `a` of an operator's symbol, from `ha`, `hc` and `hs`. -/
-macro "op_tokens" : tactic => `(tactic|
-  ((first
-      | obtain ⟨_, rfl, _⟩ := ha
-      | ((repeat (obtain ⟨_, _, rfl, _, ha⟩ := map_kind_cons ha)); have := map_kind_nil ha; subst this))
-    <;> (try simp [Chained] at hc) <;> simp at hs))
 
 theorem peekAssignOp_op {s : ParseState} {op : AssignOp} {a : List Token} {u : Token} {r : List Token}
     (hs : s.rest = a ++ u :: r) (ha : a.map (·.kind) = symbol op.symbol) (hc : Chained a)
     (hu : startsExpr u.kind = true) :
     Parse.peekAssignOp s = .ok (some (op, a.length)) s := by
   have ⟨h1, h2⟩ := startsExpr_ne hu
-  cases op <;> simp [AssignOp.symbol, symbol, Lex.reservedWords, punctWord, keywordWord] at ha <;> op_tokens <;>
+  cases op <;> simp [AssignOp.symbol, symbol, Lex.reservedWords, punctWord, keywordWord] at ha <;> op_tokens ha hc hs <;>
     simp [Parse.peekAssignOp, Parse.peek, Parse.peekGreater, Parse.peekAt_rest, hs, *, Token.isPunct,
       AssignOp.ofSymbol?, AssignOp.all, AssignOp.symbol, bind, EStateM.bind, pure, EStateM.pure]
 
@@ -527,7 +516,7 @@ theorem peekBinaryOp_assignOp {s : ParseState} {op : AssignOp} {a : List Token} 
     (hu : startsExpr u.kind = true) :
     Parse.peekBinaryOp s = .ok none s := by
   have ⟨h1, h2⟩ := startsExpr_ne hu
-  cases op <;> simp [AssignOp.symbol, symbol, Lex.reservedWords, punctWord, keywordWord] at ha <;> op_tokens <;>
+  cases op <;> simp [AssignOp.symbol, symbol, Lex.reservedWords, punctWord, keywordWord] at ha <;> op_tokens ha hc hs <;>
     simp [Parse.peekBinaryOp, Parse.peek, Parse.peekGreater, Parse.peekAt_rest, hs, *, Token.isPunct,
       BinOp.ofSymbol?, BinOp.all, BinOp.symbol, bind, EStateM.bind, pure, EStateM.pure]
 
@@ -564,7 +553,7 @@ theorem endsBin_binOp {op : BinOp} {m : Nat} {a : List Token} {u : Token} {r : L
     (hm : op.precedence < m) : EndsBin m (a ++ u :: r) := by
   obtain ⟨k, ks, hk, hst⟩ := binOp_head op
   rw [hk] at ha
-  obtain ⟨x, a', rfl, hx, _⟩ := map_kind_cons ha
+  obtain ⟨x, a', rfl, hx, _⟩ := List.map_eq_cons_iff.mp ha
   refine ⟨endsPostfix_of (hx ▸ hst), fun s hs => ⟨_, peekBinaryOp_op (op := op) hs (ha.trans hk.symm) hc hu,
     fun op' w h => ?_⟩⟩
   simp at h; obtain ⟨rfl, _⟩ := h; exact hm
@@ -575,7 +564,7 @@ theorem endsCond_assignOp {op : AssignOp} {a : List Token} {u : Token} {r : List
     EndsCond (a ++ u :: r) := by
   obtain ⟨k, ks, hk, hst, hq, _⟩ := assignOp_head op
   rw [hk] at ha
-  obtain ⟨x, a', rfl, hx, _⟩ := map_kind_cons ha
+  obtain ⟨x, a', rfl, hx, _⟩ := List.map_eq_cons_iff.mp ha
   refine ⟨⟨endsPostfix_of (hx ▸ hst), fun s hs => ⟨_, peekBinaryOp_assignOp (op := op) hs (ha.trans hk.symm) hc hu,
     fun op' w h => by simp at h⟩⟩, fun t ht => ?_⟩
   simp at ht; subst ht; rw [hx]; exact hq
@@ -985,13 +974,14 @@ theorem Property.start (q : Property) :
     | number t => exact ⟨.number t, by simp [Property.words, PropKey.words], by simp, fun _ _ _ => rfl⟩
 
 
-set_option hygiene false in
-/-- The steps of `parseProperty` after the key of a key and value. -/
-macro "property_tail" : tactic => `(tactic| (
-  rw [Parse.bind_eq (Parse.pure_eq _ _), Parse.bind_eq (Parse.peek_eq (s := s₁) rfl)]
-  simp only [Token.isPunct, hcolon, beq_self_eq_true, ↓reduceIte]
-  rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_cons (s := s₁) rfl hne))]
-  rw [Parse.bind_eq hp, Parse.bind_eq (Parse.spanFrom_eq _ _)]
+/-- The steps of `parseProperty` after the key of a key and value, in the
+state `s₁` after the key: `hcolon` states that a `:` comes next, `hne` that
+a token follows it, and `hp` what `parseAssign` reads. -/
+macro "property_tail " s₁:ident hcolon:ident hne:ident hp:ident : tactic => `(tactic| (
+  rw [Parse.bind_eq (Parse.pure_eq _ _), Parse.bind_eq (Parse.peek_eq (s := $s₁) rfl)]
+  simp only [Token.isPunct, $hcolon:ident, beq_self_eq_true, ↓reduceIte]
+  rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_cons (s := $s₁) rfl $hne))]
+  rw [Parse.bind_eq $hp, Parse.bind_eq (Parse.spanFrom_eq _ _)]
   rfl))
 
 /-- A property, when `parseAssign` reads the value of a key and value. -/
@@ -1035,9 +1025,9 @@ theorem parseProperty_reads {T : Edition} (g : Nat) (q : Property) (hq : q.wf T 
       | ident name =>
         simp [PropKey.words, propertyName, keywordWord, identWord] at hkw
         by_cases h : name ∈ Lex.reservedWords <;> simp [h] at hkw <;> subst hkw <;> simp only [hx] <;>
-          property_tail
-      | string v => simp [PropKey.words] at hkw; subst hkw; simp only [hx]; property_tail
-      | number t => simp [PropKey.words] at hkw; subst hkw; simp only [hx]; property_tail
+          property_tail s₁ hcolon hne hp
+      | string v => simp [PropKey.words] at hkw; subst hkw; simp only [hx]; property_tail s₁ hcolon hne hp
+      | number t => simp [PropKey.words] at hkw; subst hkw; simp only [hx]; property_tail s₁ hcolon hne hp
     · exact leaves_trans (leaves_advance hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl
         (by simp [s₁, hl, hs'])) hL)
 
@@ -1073,10 +1063,7 @@ theorem expression_reads {T : Edition} (g : Nat) (e : Expr) (h : ReadsE T (Parse
     ReadsE T (Parse.parseExpression (g + 1)) e EndsExpr := by
   intro s ts rest hT hs hl ht hn hr hE ha
   obtain ⟨e', s', hp, he, hL⟩ := h s ts rest hT hs hl ht hn hr hE.1 ha
-  obtain ⟨u, r, rfl⟩ : ∃ u r, rest = u :: r := by
-    cases rest with
-    | nil => exact absurd rfl hr
-    | cons u r => exact ⟨u, r, rfl⟩
+  obtain ⟨u, r, rfl⟩ := List.exists_cons_of_ne_nil hr
   have hu : u.kind ≠ .punct "," := hE.2 u rfl
   refine ⟨e', s', ?_, he, hL⟩
   simp [Parse.parseExpression, bind, EStateM.bind, hp, Parse.peek_eq hL.rest_eq, Token.isPunct, hu, pure,
@@ -1099,10 +1086,7 @@ theorem parsePrimary_paren {T : Edition} (f : Nat) (sp : Span) (inner : Expr)
   obtain ⟨lp, its, rp, rfl, hlp, hits, hrp⟩ := Touching.enclosed (by simpa [Expr.words] using ht)
   have hs₁ : s.rest = lp :: (its ++ rp :: rest) := by simpa using hs
   simp only [Expr.afterOK, Bool.and_eq_true] at ha
-  obtain ⟨u, r, rfl⟩ : ∃ u r, rest = u :: r := by
-    cases rest with
-    | nil => exact absurd rfl hr
-    | cons u r => exact ⟨u, r, rfl⟩
+  obtain ⟨u, r, rfl⟩ := List.exists_cons_of_ne_nil hr
   have hu : u.kind ≠ .punct "{" := notFirst_cons ha.1
   let s₁ : ParseState := { s with rest := its ++ rp :: u :: r, left := s.left - 1, lastStop := lp.span.stop }
   have hl₁ : s₁.left = s₁.rest.length := by simp [s₁, hl, hs₁]
@@ -1279,11 +1263,6 @@ def ArgsRead (T : Edition) (pa : ParseM (List Expr)) (args : List Expr) : Prop :
     Expr.afterOKList (.punct ")" :: rest.map (·.kind)) args = true →
     ∃ args' s', pa s = .ok args' s' ∧ Expr.eraseAll args' = Expr.eraseAll args ∧ Leaves s s' rest
 
-theorem rest_cons {rest : List Token} (h : rest ≠ []) : ∃ u r, rest = u :: r := by
-  cases rest with
-  | nil => exact absurd rfl h
-  | cons u r => exact ⟨u, r, rfl⟩
-
 /-- A property name after `.` is one token. -/
 theorem Touching.propertyName {ts : List Token} {name : String} (h : Touching ts [propertyName name]) :
     ∃ nm, ts = [nm] ∧ [nm.kind] = propertyName name := by
@@ -1325,7 +1304,7 @@ theorem lhs_loop {T : Edition} {pi : ParseM Expr} {pa : ParseM (List Expr)} {sta
     obtain ⟨o', s₁, hit, he', hL⟩ := lhs_loop hE hA o he hHo (n + 1) acc s ots (dot :: nm :: rest)
       (by simpa [lhsHead] using hacc) hT (by simp [hs]) hl hot (fun y hy => hn y (by simp [hy])) (by simp)
       (by simpa [hdot, ← hnm] using ha)
-    obtain ⟨u, r, rfl⟩ := rest_cons hr
+    obtain ⟨u, r, rfl⟩ := List.exists_cons_of_ne_nil hr
     have hs₁ : s₁.rest = dot :: nm :: u :: r := hL.rest_eq
     have hl₁ : s₁.left = s₁.rest.length := by rw [hL.left_eq, hL.rest_eq]
     obtain ⟨sp', s₂, hstep, hL₂⟩ := lhsStep_member (pi := pi) (pa := pa) (start := start) (acc := o') hs₁ hl₁
@@ -1420,7 +1399,7 @@ theorem parseLeftHandSide_reads {T : Edition} (f : Nat) (e : Expr) (he : e.wfAt 
     (fun y hy => hn y (List.mem_append_left _ hy)) (by simp [hr]) trivial
     (by rw [List.map_append, hst.kinds]; exact afterOK_lhsHead e _ ha)
   have hl₁ : s₁.left = s₁.rest.length := by rw [hL.left_eq, hL.rest_eq]
-  obtain ⟨u, r, rfl⟩ := rest_cons hr
+  obtain ⟨u, r, rfl⟩ := List.exists_cons_of_ne_nil hr
   have hsteps : lhsSteps e ≤ sts.length := by
     have h1 := lhsSteps_le e
     have h2 : sts.length = (lhsSuffix e).flatten.length := by rw [← hst.kinds, List.length_map]
@@ -1559,7 +1538,7 @@ theorem parsePostfix_reads {T : Edition} (f : Nat) (e : Expr) (he : e.wfAt T .po
   · have he' : e.wfAt T .lhs = true := by
       rw [← wfAt_postfix_eq (fun sp op arg h' => hp ⟨sp, op, arg, h'⟩)]; exact he
     obtain ⟨arg', s₁, hpa, hea, hL₁⟩ := hL e (Nat.le_refl _) he' s (x :: ts') rest hT hs hl ht hn hr hends.1 ha
-    obtain ⟨u, r, rfl⟩ := rest_cons hr
+    obtain ⟨u, r, rfl⟩ := List.exists_cons_of_ne_nil hr
     have hs₁ : s₁.rest = u :: r := hL₁.rest_eq
     refine ⟨arg', s₁, ?_, hea, hL₁⟩
     simp only [Parse.parsePostfix]
@@ -1777,7 +1756,7 @@ theorem binStep_go {pr : Nat → ParseM Expr} {start : Pos} {m : Nat} {acc rhs :
   obtain ⟨u, r, rfl, hu⟩ := hb
   have hpk := peekBinaryOp_op hs ha hc hu
   obtain ⟨k, ks, hk, _⟩ := binOp_head op
-  obtain ⟨x, a', rfl, hx, _⟩ := map_kind_cons (ha.trans hk)
+  obtain ⟨x, a', rfl, hx, _⟩ := List.map_eq_cons_iff.mp (ha.trans hk)
   have hs' : s.rest = x :: (a' ++ u :: r) := by simp [hs]
   have hp' := hp
   unfold rhsPrec at hp'
@@ -1915,7 +1894,7 @@ theorem parseBinary_reads {T : Edition} (f m : Nat) (e : Expr) (he : e.wfAt T (.
     rcases binSuffix_first e with h | ⟨k, ks, h, hk⟩
     · have : sts = [] := by have := hst.kinds; rw [h] at this; simpa using this
       subst this; simpa using hends.1
-    · obtain ⟨y, sts', rfl, hy, _⟩ := map_kind_cons (hst.kinds.trans h)
+    · obtain ⟨y, sts', rfl, hy, _⟩ := List.map_eq_cons_iff.mp (hst.kinds.trans h)
       exact endsPostfix_of (hy ▸ hk)
   obtain ⟨h', s₁, hp, heh, hL⟩ := hU s (x :: hts') (sts ++ rest) hT (by simp [hs]) hl hht
     (fun y hy => hn y (List.mem_append_left _ hy)) (by simp [hr]) hEnd
@@ -2010,7 +1989,7 @@ theorem parseConditional_reads {T : Edition} (f : Nat) (e : Expr) (he : e.wfAt T
     have he' : e.wfAt T (.bin 0) = true := by rw [← wfAt_cond_eq hne]; exact he
     rw [ends_cond_eq hne] at hends
     obtain ⟨e', s₁, hp, hee, hL₁⟩ := hB e (Nat.le_refl _) he' s (x :: ts') rest hT hs hl ht hn hr hends.1 ha
-    obtain ⟨u, r, rfl⟩ := rest_cons hr
+    obtain ⟨u, r, rfl⟩ := List.exists_cons_of_ne_nil hr
     have hu : u.kind ≠ .punct "?" := hends.2 u rfl
     refine ⟨e', s₁, ?_, hee, hL₁⟩
     simp only [Parse.parseConditional]
@@ -2052,7 +2031,7 @@ theorem parseAssign_reads {T : Edition} (f : Nat) (e : Expr) (he : e.wfAt T .ass
     have hs₁ : s₁.rest = a ++ u :: (vts' ++ rest) := hL₁.rest_eq
     have hl₁ : s₁.left = s₁.rest.length := by rw [hL₁.left_eq, hL₁.rest_eq]
     obtain ⟨k, ks, hk, _, _, hkarrow⟩ := assignOp_head op
-    obtain ⟨o, a', rfl, hok, _⟩ := map_kind_cons (ha'.trans hk)
+    obtain ⟨o, a', rfl, hok, _⟩ := List.map_eq_cons_iff.mp (ha'.trans hk)
     have hs₁' : s₁.rest = o :: (a' ++ u :: (vts' ++ rest)) := by simp [hs₁]
     obtain ⟨s₂, hsk, hLk⟩ := Parse.skip_ok (o :: a') hs₁ (by simp) hl₁
     have hl₂ : s₂.left = s₂.rest.length := by rw [hLk.left_eq, hLk.rest_eq]
@@ -2081,7 +2060,7 @@ theorem parseAssign_reads {T : Edition} (f : Nat) (e : Expr) (he : e.wfAt T .ass
       · obtain ⟨sp, t, a, b, rfl⟩ := hc; exact hends
       · rw [ends_cond_eq (fun sp t a b h' => hc ⟨sp, t, a, b, h'⟩)]; exact hends.1
     obtain ⟨e', s₁, hp, hee, hL₁⟩ := hC e (Nat.le_refl _) he' s (x :: ts') rest hT hs hl ht hn hr hends' ha
-    obtain ⟨u, r, rfl⟩ := rest_cons hr
+    obtain ⟨u, r, rfl⟩ := List.exists_cons_of_ne_nil hr
     have hu : u.kind ≠ .punct "=>" := hends.2.1 u rfl
     have hpa := hends.2.2 s₁ hL₁.rest_eq
     refine ⟨e', s₁, ?_, hee, hL₁⟩
@@ -2128,7 +2107,7 @@ theorem readsE_one {T : Edition} {p : ParseM Expr} {e : Expr} {k : TokenKind} {E
   rw [hw] at ht
   obtain ⟨x, ts', rfl, hx, h'⟩ := Touching.cons_one ht
   simp [Touching] at h'; subst h'
-  obtain ⟨u, r, rfl⟩ := rest_cons hr
+  obtain ⟨u, r, rfl⟩ := List.exists_cons_of_ne_nil hr
   have hs' : s.rest = x :: u :: r := by simpa using hs
   obtain ⟨e', hpe, he⟩ := hp s x u r hs' hx
   exact ⟨e', _, hpe, he, leaves_advance hs' hl⟩
@@ -2312,7 +2291,7 @@ theorem Neutral.one {k : TokenKind} (h1 : k ∉ [.punct "(", .punct "[", .punct 
 
 /-- A group in brackets. -/
 theorem Neutral.enclosed {o c : String} (ho : o ∈ ["(", "[", "{"]) (hc : c ∈ [")", "]", "}"])
-    {ks : List TokenKind} (h : Neutral ks) : Neutral (.punct o :: ks ++ [.punct c]) := by
+    {ks : List TokenKind} (h : Neutral ks) : Neutral (.punct o :: (ks ++ [.punct c])) := by
   intro d a
   simp at ho hc
   have hopen : closesKinds d (.punct o :: (ks ++ .punct c :: a)) = closesKinds (d + 1) (ks ++ .punct c :: a) := by
@@ -2370,10 +2349,6 @@ theorem neutral_key (k : PropKey) : Neutral (k.words.flatten) := by
   | string v => exact Neutral.all (by simp [PropKey.words])
   | number t => exact Neutral.all (by simp [PropKey.words])
 
-theorem Neutral.encl {o c : String} (ho : o ∈ ["(", "[", "{"]) (hc : c ∈ [")", "]", "}"])
-    {ks : List TokenKind} (h : Neutral ks) : Neutral (.punct o :: (ks ++ [.punct c])) := by
-  simpa using Neutral.enclosed ho hc h
-
 mutual
 
 /-- The tokens of an expression are neutral: its brackets match, and it has no
@@ -2383,26 +2358,26 @@ theorem Expr.neutral : ∀ e : Expr, Neutral e.tokens
   | .number .. | .bigint .. | .string .. | .null _ => Neutral.all (by simp [Expr.tokens, Expr.words, keywordWord])
   | .bool _ b => Neutral.all (by cases b <;> simp [Expr.tokens, Expr.words, keywordWord])
   | .array _ es => by
-    have h := Neutral.encl (o := "[") (c := "]") (by simp) (by simp) (Neutral.join (Expr.neutralAll es))
+    have h := Neutral.enclosed (o := "[") (c := "]") (by simp) (by simp) (Neutral.join (Expr.neutralAll es))
     simpa [Expr.tokens, Expr.words, enclose, punctWord, separated_flatten, Expr.wordsOf_eq, List.map_map,
       Function.comp_def] using h
   | .object _ ps => by
-    have h := Neutral.encl (o := "{") (c := "}") (by simp) (by simp) (Neutral.join (Property.neutralAll ps))
+    have h := Neutral.enclosed (o := "{") (c := "}") (by simp) (by simp) (Neutral.join (Property.neutralAll ps))
     simpa [Expr.tokens, Expr.words, enclose, punctWord, separated_flatten, Property.wordsOf_eq, List.map_map,
       Function.comp_def] using h
   | .paren _ i => by
-    have h := Neutral.encl (o := "(") (c := ")") (by simp) (by simp) (Expr.neutral i)
+    have h := Neutral.enclosed (o := "(") (c := ")") (by simp) (by simp) (Expr.neutral i)
     simpa [Expr.tokens, Expr.words, punctWord] using h
   | .member _ o n => by
     have h := Neutral.append (Expr.neutral o) (Neutral.cons (k := .punct ".") (by simp) (neutral_propertyName n))
     simpa [Expr.tokens, Expr.words, punctWord] using h
   | .index _ o i => by
     have h := Neutral.append (Expr.neutral o)
-      (Neutral.encl (o := "[") (c := "]") (by simp) (by simp) (Expr.neutral i))
+      (Neutral.enclosed (o := "[") (c := "]") (by simp) (by simp) (Expr.neutral i))
     simpa [Expr.tokens, Expr.words, punctWord] using h
   | .call _ c as => by
     have h := Neutral.append (Expr.neutral c)
-      (Neutral.encl (o := "(") (c := ")") (by simp) (by simp) (Neutral.join (Expr.neutralAll as)))
+      (Neutral.enclosed (o := "(") (c := ")") (by simp) (by simp) (Neutral.join (Expr.neutralAll as)))
     simpa [Expr.tokens, Expr.words, enclose, punctWord, separated_flatten, Expr.wordsOf_eq, List.map_map,
       Function.comp_def] using h
   | .unary _ op a => by
@@ -2467,7 +2442,7 @@ theorem AfterEquiv.closer {c : String} (hc : c ∈ [")", "]", "}"]) (a b : List 
   ⟨rfl, by simp at hc; rcases hc with rfl | rfl | rfl <;> simp [closesKinds]⟩
 
 theorem neutral_args (args : List Expr) : Neutral (enclose "(" ")" (Expr.wordsOf args)).flatten := by
-  have h := Neutral.encl (o := "(") (c := ")") (by simp) (by simp) (Neutral.join (Expr.neutralAll args))
+  have h := Neutral.enclosed (o := "(") (c := ")") (by simp) (by simp) (Neutral.join (Expr.neutralAll args))
   simpa [enclose, punctWord, separated_flatten, Expr.wordsOf_eq, List.map_map, Function.comp_def] using h
 
 mutual
@@ -2488,7 +2463,7 @@ theorem Expr.afterOK_congr : ∀ (e : Expr) {a b : List TokenKind}, AfterEquiv a
       (Neutral.cons (by simp) (neutral_propertyName n)) (by simp) h)
   | .index _ o i, a, b, h => by
     simp only [Expr.afterOK]
-    have hx := Neutral.encl (o := "[") (c := "]") (by simp) (by simp) (Expr.neutral i)
+    have hx := Neutral.enclosed (o := "[") (c := "]") (by simp) (by simp) (Expr.neutral i)
     have ho := Expr.afterOK_congr o (AfterEquiv.prepend hx (by simp) h)
     simp only [List.cons_append, List.append_assoc, List.singleton_append, List.nil_append] at ho ⊢
     rw [ho, Expr.afterOK_congr i (AfterEquiv.closer (c := "]") (by simp) a b)]

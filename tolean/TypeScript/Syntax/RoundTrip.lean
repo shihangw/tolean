@@ -235,10 +235,7 @@ theorem reads_one {p : ParseM TypeExpr} {t : TypeExpr} {k : TokenKind} {expected
   obtain ⟨x, rfl⟩ : ∃ x, ts = [x] := by
     match ts, hk with
     | [x], _ => exact ⟨x, rfl⟩
-  obtain ⟨u, r, rfl⟩ : ∃ u r, rest = u :: r := by
-    cases rest with
-    | nil => exact absurd rfl hr
-    | cons u r => exact ⟨u, r, rfl⟩
+  obtain ⟨u, r, rfl⟩ := List.exists_cons_of_ne_nil hr
   have hs' : s.rest = x :: u :: r := by simpa using hs
   have hx : x.kind = k := by simpa using hk
   exact ⟨_, _, hp s x u r hs' hx hf, herase x, leaves_advance hs' hl⟩
@@ -286,10 +283,7 @@ theorem parsePrimaryType_simple (f : Nat) (s : ParseState) (x u : Token) (r : Li
 
 theorem Parse.advance_cons {s : ParseState} {x : Token} {r : List Token} (h : s.rest = x :: r)
     (hr : r ≠ []) : Parse.advance s = .ok x { s with rest := r, left := s.left - 1, lastStop := x.span.stop } := by
-  obtain ⟨u, r', rfl⟩ : ∃ u r', r = u :: r' := by
-    cases r with
-    | nil => exact absurd rfl hr
-    | cons u r' => exact ⟨u, r', rfl⟩
+  obtain ⟨u, r', rfl⟩ := List.exists_cons_of_ne_nil hr
   exact Parse.advance_eq h
 
 theorem Parse.expectPunct_ok {s : ParseState} {x : Token} {r : List Token} {p : String}
@@ -380,10 +374,7 @@ theorem iterate_brackets {step : TypeExpr → ParseM (TypeExpr × Bool)}
     obtain ⟨f', rfl⟩ : ∃ f', fuel = f' + 1 := ⟨fuel - 1, by omega⟩
     have hts : ts = [] := by simpa [brackets] using htk
     subst hts
-    obtain ⟨u, r, rfl⟩ : ∃ u r, rest = u :: r := by
-      cases rest with
-      | nil => exact absurd rfl hr
-      | cons u r => exact ⟨u, r, rfl⟩
+    obtain ⟨u, r, rfl⟩ := List.exists_cons_of_ne_nil hr
     have hs' : s.rest = u :: r := by simpa using hs
     refine ⟨acc, s, ?_, rfl, Leaves.refl (by simpa using hs) (by simp [hl, hs'])⟩
     rw [Parse.iterate_succ]
@@ -501,10 +492,7 @@ theorem parseArrayType_reads (f : Nat) (t : TypeExpr) (hwf : t.arrayWF = true)
   · intro acc s u r hsu hu
     simp [Parse.arrayStep, Parse.peek_eq hsu, Token.isPunct, hu, bind, EStateM.bind, pure, EStateM.pure]
   · intro acc s lb rb r hsr hr' hlb hrb hnl
-    obtain ⟨u, r', rfl⟩ : ∃ u r', r = u :: r' := by
-      cases r with
-      | nil => exact absurd rfl hr'
-      | cons u r' => exact ⟨u, r', rfl⟩
+    obtain ⟨u, r', rfl⟩ := List.exists_cons_of_ne_nil hr'
     refine ⟨⟨x0.span.start, rb.span.stop⟩, ?_⟩
     have h1 : s.rest[1]? = some rb := by simp [hsr]
     simp [Parse.arrayStep, Parse.peek_eq hsr, Parse.peekAt_eq h1, Token.isPunct, hlb, hrb, hnl, Parse.skip,
@@ -553,10 +541,7 @@ theorem iterate_sep {p : ParseM TypeExpr} {step : Array TypeExpr → ParseM (Arr
     | nil =>
       simp [joined] at hk
       obtain ⟨a', s', hp, he, hL⟩ := hreads a (by simp) s ts rest hs hl hk hn hr hf
-      obtain ⟨u, r, hur⟩ : ∃ u r, rest = u :: r := by
-        cases rest with
-        | nil => exact absurd rfl hr
-        | cons u r => exact ⟨u, r, rfl⟩
+      obtain ⟨u, r, hur⟩ := List.exists_cons_of_ne_nil hr
       have hs' : s'.rest = u :: r := by rw [hL.rest_eq, hur]
       have hu : u.kind ≠ .punct sep := hnot u (by simp [hur])
       refine ⟨acc.push a', s', ?_, ?_, hL⟩
@@ -614,10 +599,7 @@ theorem iterate_sepBefore {p : ParseM TypeExpr} {step : Array TypeExpr → Parse
     obtain ⟨f', rfl⟩ : ∃ f', fuel = f' + 1 := ⟨fuel - 1, by simp at hlen; omega⟩
     have hts : ts = [] := by simpa using hk
     subst hts
-    obtain ⟨u, r, rfl⟩ : ∃ u r, rest = u :: r := by
-      cases rest with
-      | nil => exact absurd rfl hr
-      | cons u r => exact ⟨u, r, rfl⟩
+    obtain ⟨u, r, rfl⟩ := List.exists_cons_of_ne_nil hr
     have hs' : s.rest = u :: r := by simpa using hs
     refine ⟨acc, s, ?_, by simp, Leaves.refl (by simpa using hs) (by simp [hl, hs'])⟩
     rw [Parse.iterate_succ]
@@ -836,10 +818,7 @@ theorem parseType_plain (f : Nat) (t : TypeExpr) (hwf : t.arrayWF = true)
     have := hhead x0.kind; rw [← hk] at this; simpa using this
   have hs0 : s.rest = x0 :: (ts₀ ++ rest) := by simpa using hs
   obtain ⟨first, s₁, hp, he, hL⟩ := harr s (x0 :: ts₀) rest hs hl hk hn hr hf.1
-  obtain ⟨u, r, rfl⟩ : ∃ u r, rest = u :: r := by
-    cases rest with
-    | nil => exact absurd rfl hr
-    | cons u r => exact ⟨u, r, rfl⟩
+  obtain ⟨u, r, rfl⟩ := List.exists_cons_of_ne_nil hr
   have hs₁ : s₁.rest = u :: r := hL.rest_eq
   have hu : u.kind ≠ .punct "|" := (hf.2 u rfl).1
   have hamp : u.kind ≠ .punct "&" := (hf.2 u rfl).2
@@ -891,10 +870,7 @@ theorem parseType_union (f : Nat) (sp : Span) (ms : List TypeExpr) (hwf : (TypeE
     (harr : ∀ m ∈ ms, Reads (Parse.parseArrayType f) m FollowsArray) :
     Reads (Parse.parseType (f + 1)) (.union sp ms) FollowsType := by
   intro s ts rest hs hl hk hn hr hf
-  obtain ⟨u, r, rfl⟩ : ∃ u r, rest = u :: r := by
-    cases rest with
-    | nil => exact absurd rfl hr
-    | cons u r => exact ⟨u, r, rfl⟩
+  obtain ⟨u, r, rfl⟩ := List.exists_cons_of_ne_nil hr
   have hu : u.kind ≠ .punct "|" := (hf.2 u rfl).1
   have hamp : u.kind ≠ .punct "&" := (hf.2 u rfl).2
   match ms, hwf, harr with
