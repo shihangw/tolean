@@ -1,3 +1,4 @@
+import tolean.TypeScript.Syntax.RoundTripDecl
 import tolean.TypeScript.Syntax.RoundTripLex
 
 /-!
@@ -112,7 +113,6 @@ def Ready (s : ParseState) : Prop :=
   Parse.Good s ∧ s.rest.getLast? = some s.eof ∧ s.eof.kind = .eof ∧
     ∀ t ∈ s.rest, t.kind = .eof ∨ TokenKind.ok s.target t.kind = true
 
-
 /-- Every word of `ws` lexes back, for the target `T`. -/
 def WordsOK (T : Edition) (ws : List Word) : Prop := ∀ w ∈ ws, Word.ok T w = true
 
@@ -138,10 +138,6 @@ theorem ok_punct {T : Edition} {p : String} (h : Lex.punctuators.contains p = tr
 
 theorem ok_keyword {T : Edition} {w : String} (h : Lex.reservedWords.contains w = true) :
     Word.ok T [.keyword w] = true := by simpa [Word.ok, TokenKind.ok] using h
-
-theorem ok_ident {T : Edition} {n : String} (h1 : identName n = true) (h2 : Lex.reservedWords.contains n = false) :
-    Word.ok T [.ident n] = true := by simp only [Word.ok, TokenKind.ok, h1, h2]; rfl
-
 
 theorem binOp_ok (T : Edition) (op : BinOp) : Word.ok T (symbol op.symbol) = true := by
   cases op <;> simp (config := { decide := true }) [symbol, BinOp.symbol, Lex.reservedWords, punctWord, keywordWord,
@@ -170,11 +166,9 @@ theorem Ready.suffix {s s' : ParseState} {a : List Token} (h : Ready s) (hs : s.
   rw [hu, he]
   simpa [List.getLast?_append] using h1
 
-
 theorem Ready.past {s : ParseState} {x : Token} {r : List Token} (h : Ready s) (hs : s.rest = x :: r)
     (hr : r ≠ []) : Ready (past s x r) :=
   h.suffix (a := [x]) (by simpa using hs) hr (by have := h.1.2; simp [hs] at this; simp [this]) rfl rfl
-
 
 /-- `advance` reads a token that is not the end of the file. -/
 theorem advance_past {s : ParseState} {x : Token} {r : List Token} (h : Ready s) (hs : s.rest = x :: r)
@@ -185,12 +179,6 @@ theorem advance_past {s : ParseState} {x : Token} {r : List Token} (h : Ready s)
 theorem ok_unique {α : Type} {x : ParseM α} {s s₁ s₂ : ParseState} {a b : α} (h₁ : x s = .ok a s₁)
     (h₂ : x s = .ok b s₂) : a = b ∧ s₁ = s₂ := by
   rw [h₁] at h₂; cases h₂; exact ⟨rfl, rfl⟩
-
-/-- The tokens that reading from `s` to `s'` takes. -/
-def taken (s s' : ParseState) : List Token := s.rest.take (s.rest.length - s'.rest.length)
-
-theorem taken_eq {s s' : ParseState} {a : List Token} (h : s.rest = a ++ s'.rest) : taken s s' = a := by
-  simp [taken, h]
 
 /-- `expectPunct p` reads a `p`. -/
 theorem expectPunct_inv {s s' : ParseState} {p : String} {t : Token} (h : Ready s)
@@ -266,12 +254,6 @@ theorem iterate_inv {σ : Type} {step : σ → ParseM (σ × Bool)} {I : σ → 
       obtain ⟨rfl, rfl⟩ := h
       exact ⟨hI', a, s, hI, h₁⟩
     | true => exact iterate_inv hstep n a' s₁ r s' hI' (by simpa using h)
-
-theorem budget_inv {s s' : ParseState} {n : Nat} (h : Parse.budget s = .ok n s') : s' = s := by
-  rw [Parse.budget_eq] at h; cases h; rfl
-
-theorem spanFrom_inv {s s' : ParseState} {p : Pos} {sp : Span} (h : Parse.spanFrom p s = .ok sp s') : s' = s := by
-  rw [Parse.spanFrom_eq] at h; cases h; rfl
 
 /-- The state has a first token. -/
 theorem Ready.cons {s : ParseState} (h : Ready s) : ∃ x r, s.rest = x :: r := by
@@ -585,7 +567,7 @@ theorem types_give (T : Edition) : ∀ f : Nat,
           obtain ⟨rfl, rfl⟩ := h
           exact ⟨both (by simp [TypeExpr.primaryWF, TypeExpr.allWF, hname])
             (by simpa [TypeExpr.words] using WordsOK.word hw), hR₁, Kept.past _ _ _⟩
-        simp only [hlt, Bool.false_eq_true, ↓reduceIte, Parse.pure_bind] at h
+        rw [if_neg hlt, Parse.pure_bind] at h
         have hn : n.kind = .punct "<" := by simp [Token.isPunct] at hlt; exact hlt.1
         have hne : n.kind ≠ .eof := by rw [hn]; simp
         rw [Parse.bind_eq (Parse.discard_eq (advance_past hR₁ hr hne)), Parse.bind_eq (Parse.budget_eq _),
@@ -669,14 +651,6 @@ theorem skip_inv {s s' : ParseState} {a r : List Token} (h : Ready s) (hs : s.re
   exact ⟨hL.rest_eq, h.suffix (by rw [hs, hL.rest_eq]) (by rw [hL.rest_eq]; exact hr)
     (by rw [hL.left_eq, hL.rest_eq]) hL.eof_eq hL.target_eq, hK⟩
 
-theorem Parse.peekAt_eq' (k : Nat) (s : ParseState) : Parse.peekAt k s = .ok (s.rest[k]?.getD s.eof) s := by
-  simp [Parse.peekAt, get, getThe, MonadStateOf.get, EStateM.get, bind, EStateM.bind, pure, EStateM.pure]
-
-theorem peekAt_inv {s s' : ParseState} {k : Nat} {t : Token} (h : Parse.peekAt k s = .ok t s') :
-    s' = s ∧ t = s.rest[k]?.getD s.eof := by
-  simp [Parse.peekAt, get, getThe, MonadStateOf.get, EStateM.get, bind, EStateM.bind, pure, EStateM.pure] at h
-  exact ⟨h.2.symm, h.1.symm⟩
-
 /-- A peeked token that is not the end of the file is a token of the state. -/
 theorem peekAt_real {s : ParseState} {k : Nat} (h : Ready s) (hk : (s.rest[k]?.getD s.eof).kind ≠ .eof) :
     ∃ t, s.rest[k]? = some t ∧ s.rest[k]?.getD s.eof = t := by
@@ -719,8 +693,8 @@ theorem peekGreater_eq (s : ParseState) : Parse.peekGreater s =
     .ok (greaterOf (s.rest[0]?.getD s.eof) (s.rest[1]?.getD s.eof) (s.rest[2]?.getD s.eof)
       (s.rest[3]?.getD s.eof)) s := by
   simp only [Parse.peekGreater, greaterOf]
-  rw [Parse.bind_eq (Parse.peekAt_eq' 0 s), Parse.bind_eq (Parse.peekAt_eq' 1 s),
-    Parse.bind_eq (Parse.peekAt_eq' 2 s), Parse.bind_eq (Parse.peekAt_eq' 3 s)]
+  rw [Parse.bind_eq (Parse.peekAt_rest s 0), Parse.bind_eq (Parse.peekAt_rest s 1),
+    Parse.bind_eq (Parse.peekAt_rest s 2), Parse.bind_eq (Parse.peekAt_rest s 3)]
   split <;> (try split) <;> (try split) <;> rfl
 
 /-- A peeked token of kind `punct p` is a token of the state. -/
@@ -949,7 +923,7 @@ theorem requireFeature_inv {s s' : ParseState} {t : Token} {f : Feature}
     exact ⟨h.2.symm, hc⟩
   · simp only [hc, Bool.not_false, ↓reduceIte] at h; exact absurd h (Parse.failAt_ne_ok _ _ _ _ _)
 
-theorem peek_eq' (s : ParseState) : Parse.peek s = .ok (s.rest[0]?.getD s.eof) s := Parse.peekAt_eq' 0 s
+theorem peek_eq' (s : ParseState) : Parse.peek s = .ok (s.rest[0]?.getD s.eof) s := Parse.peekAt_rest s 0
 
 theorem refuseArrowLookalike_inv {s s' : ParseState} (h : Parse.refuseArrowLookalike s = .ok () s') : s' = s := by
   simp only [Parse.refuseArrowLookalike] at h
@@ -978,7 +952,7 @@ theorem check_inv {c : Prop} [Decidable c] {t : Token} {m : String} {s s' : Pars
 
 theorem refuseSplitMember_inv {s s' : ParseState} (h : Parse.refuseSplitMember s = .ok () s') : s' = s := by
   simp only [Parse.refuseSplitMember] at h
-  rw [Parse.bind_eq (peek_eq' s), Parse.bind_eq (Parse.peekAt_eq' 1 s)] at h
+  rw [Parse.bind_eq (peek_eq' s), Parse.bind_eq (Parse.peekAt_rest s 1)] at h
   exact check_inv h
 
 /-- `readPropertyName` reads a name or a reserved word. -/
@@ -1003,8 +977,6 @@ theorem readPropertyName_inv {s s' : ParseState} {n : String} (h : Ready s)
   | _ => simp at he
 
 /-! ### Lists -/
-
-
 
 /-- Facts that a parser of list items gives for each item it reads. -/
 def GivesItem {α : Type} (T : Edition) (wf : α → Bool) (tokens : α → List TokenKind)
@@ -1235,20 +1207,6 @@ theorem GaveE.lift {T : Edition} {l l' : Level} {s s' : ParseState} {e : Expr} (
     (hw : e.wfAt T l = true → e.wfAt T l' = true) : GaveE T l' s e s' :=
   ⟨h.ready, h.kept, h.tokens, hw h.wf, h.after, h.ok⟩
 
-/-- The printed tokens of an expression are not empty. -/
-theorem Expr.tokens_ne (e : Expr) : e.tokens ≠ [] := by
-  obtain ⟨k, hk, _⟩ := Expr.first e
-  intro h; rw [h] at hk; simp at hk
-
-/-- The first token of `a ++ b`, when `a` has the first token of `e`. -/
-theorem head_src {src rest : List Token} {e : Expr} (h : (src.map (·.kind)).head? = e.tokens.head?) :
-    ((src ++ rest).map (·.kind)).head? = e.tokens.head? := by
-  obtain ⟨k, hk, _⟩ := Expr.first e
-  rw [hk] at h ⊢
-  cases src with
-  | nil => simp at h
-  | cons x xs => simpa using h
-
 /-- The first token of `src ++ x`, when `src` has the first token of `ks`. -/
 theorem head_append2 {src x : List Token} {ks y : List TokenKind} (hks : ks ≠ [])
     (h : (src.map (·.kind)).head? = ks.head?) : ((src ++ x).map (·.kind)).head? = (ks ++ y).head? := by
@@ -1257,49 +1215,6 @@ theorem head_append2 {src x : List Token} {ks y : List TokenKind} (hks : ks ≠ 
   | cons k ks => cases src with
     | nil => simp at h
     | cons t src => simpa using h
-
-section
-variable {sp : Span}
-
-theorem tokens_assign {op : AssignOp} {t v : Expr} :
-    (Expr.assign sp op t v).tokens = t.tokens ++ (symbol op.symbol ++ v.tokens) := by
-  simp [Expr.tokens, Expr.words]
-
-theorem tokens_binary {op : BinOp} {l r : Expr} :
-    (Expr.binary sp op l r).tokens = l.tokens ++ (symbol op.symbol ++ r.tokens) := by
-  simp [Expr.tokens, Expr.words]
-
-theorem tokens_cond {t a b : Expr} :
-    (Expr.cond sp t a b).tokens = t.tokens ++ (.punct "?" :: a.tokens ++ (.punct ":" :: b.tokens)) := by
-  simp [Expr.tokens, Expr.words, punctWord]
-
-theorem tokens_unary {op : UnaryOp} {a : Expr} : (Expr.unary sp op a).tokens = symbol op.symbol ++ a.tokens := by
-  simp [Expr.tokens, Expr.words]
-
-theorem tokens_prefix {op : UpdateOp} {a : Expr} :
-    (Expr.prefix sp op a).tokens = .punct op.symbol :: a.tokens := by
-  simp [Expr.tokens, Expr.words, punctWord]
-
-theorem tokens_postfix {op : UpdateOp} {a : Expr} :
-    (Expr.postfix sp op a).tokens = a.tokens ++ [.punct op.symbol] := by
-  simp [Expr.tokens, Expr.words, punctWord]
-
-theorem tokens_member {o : Expr} {n : String} :
-    (Expr.member sp o n).tokens = o.tokens ++ (.punct "." :: propertyName n) := by
-  simp [Expr.tokens, Expr.words, punctWord]
-
-theorem tokens_index {o i : Expr} :
-    (Expr.index sp o i).tokens = o.tokens ++ (.punct "[" :: i.tokens ++ [.punct "]"]) := by
-  simp [Expr.tokens, Expr.words, punctWord]
-
-theorem tokens_call {c : Expr} {args : List Expr} :
-    (Expr.call sp c args).tokens = c.tokens ++ (enclose "(" ")" (Expr.wordsOf args)).flatten := by
-  simp [Expr.tokens, Expr.words]
-
-theorem tokens_paren {i : Expr} : (Expr.paren sp i).tokens = .punct "(" :: i.tokens ++ [.punct ")"] := by
-  simp [Expr.tokens, Expr.words, punctWord]
-
-end
 
 theorem head_append_ne {a b : List TokenKind} {k : TokenKind} (ha : a.head? ≠ some k) (hne : a ≠ []) :
     (a ++ b).head? ≠ some k := by
@@ -1353,8 +1268,8 @@ theorem assign_tail {T : Edition} {f : Nat} (hA : GivesE T .assign (Parse.parseA
   refine ⟨gv.ready, gl.kept.trans (hK₂.trans gv.kept), ⟨lsrc ++ a ++ vsrc, ?_, ?_, ?_⟩, ?_, ?_,
     by simpa [Expr.words] using gl.ok.append (WordsOK.cons (assignOp_ok T op) gv.ok)⟩
   · rw [hl1, hst]; simp
-  · rw [tokens_assign]; simp only [List.map_append, skel_append, hl2, hk, hv2, List.append_assoc]
-  · rw [tokens_assign, List.append_assoc]; exact head_append2 (Expr.tokens_ne lhs) hl3
+  · rw [Expr.tokens_assign, List.append_assoc]; simp only [List.map_append, skel_append, hl2, hk, hv2, List.append_assoc]
+  · rw [Expr.tokens_assign, List.append_assoc, List.append_assoc]; exact head_append2 (Expr.tokens_ne_nil lhs) hl3
   · simp only [Expr.wfAt, Bool.and_eq_true]
     exact ⟨⟨⟨gl.wf, hsimple⟩, hallow⟩, gv.wf⟩
   · intro after hf
@@ -1451,10 +1366,10 @@ theorem parseConditional_gives {T : Edition} {f : Nat} (hA : GivesE T .assign (P
       by simpa [Expr.words, punctWord, List.append_assoc] using gt.ok.append (WordsOK.cons (ok_punct (p := "?") (by decide))
         (ga.ok.append (WordsOK.cons (ok_punct (p := ":") (by decide)) gb.ok)))⟩
     · rw [ht1, hs₁, hr₁]; simp
-    · rw [tokens_cond]
+    · rw [Expr.tokens_cond, List.append_assoc]
       simp (config := { decide := true }) only [List.map_append, List.map_cons, skel_append, skel_cons, ht2,
         ha2, hb2, hqk, hck, Bool.false_eq_true, ↓reduceIte, List.append_assoc]
-    · rw [tokens_cond, List.append_assoc]; exact head_append2 (Expr.tokens_ne test) ht3
+    · rw [Expr.tokens_cond, List.append_assoc, List.append_assoc]; exact head_append2 (Expr.tokens_ne_nil test) ht3
     · simp only [Expr.wfAt, Bool.and_eq_true]
       exact ⟨⟨gt.wf, ga.wf⟩, gb.wf⟩
     · intro after hf
@@ -1632,8 +1547,8 @@ theorem binaryStep_inv {T : Edition} {f m : Nat} {start : Pos} (hB : ∀ m', Giv
       by simpa [Expr.words] using g.ok.append (WordsOK.cons (binOp_ok T op) gr.ok)⟩, ?_⟩,
       fun hb => by simp at hb⟩
     · rw [hg1, hst]; simp
-    · rw [tokens_binary]; simp only [List.map_append, skel_append, hg2, hk, hr2, List.append_assoc]
-    · rw [tokens_binary, List.append_assoc]; exact head_append2 (Expr.tokens_ne acc) hg3
+    · rw [Expr.tokens_binary, List.append_assoc]; simp only [List.map_append, skel_append, hg2, hk, hr2, List.append_assoc]
+    · rw [Expr.tokens_binary, List.append_assoc, List.append_assoc]; exact head_append2 (Expr.tokens_ne_nil acc) hg3
     · simp only [Expr.wfAt, Bool.and_eq_true, decide_eq_true_eq]
       exact ⟨⟨⟨⟨⟨Nat.le_of_not_lt hp, hallow⟩, g.wf⟩, gr.wf⟩, hleft⟩, mixing_of hmix⟩
     · intro after hf
@@ -1704,8 +1619,8 @@ theorem parseUnary_gives {T : Edition} {f : Nat} (hU : GivesE T .unary (Parse.pa
     refine ⟨ga.ready, (Kept.past _ _ _).trans ga.kept, ⟨x :: asrc, ?_, ?_, ?_⟩, ?_, ?_,
       by simpa [Expr.words, ← hk] using WordsOK.cons (hT ▸ hR.tok (by simp [hs]) hne) ga.ok⟩
     · rw [hs]; exact congrArg (x :: ·) ha1
-    · rw [tokens_unary, ← hk]; simp only [List.map_cons, List.singleton_append, skel_cons, ha2]
-    · rw [tokens_unary, ← hk]; simp
+    · rw [Expr.tokens_unary, ← hk]; simp only [List.map_cons, List.singleton_append, skel_cons, ha2]
+    · rw [Expr.tokens_unary, ← hk]; simp
     · simpa [Expr.wfAt] using ga.wf
     · intro after hf; simpa [Expr.afterOK] using ga.after after hf
   | none =>
@@ -1726,8 +1641,8 @@ theorem parseUnary_gives {T : Edition} {f : Nat} (hU : GivesE T .unary (Parse.pa
         refine ⟨ga.ready, (Kept.past _ _ _).trans ga.kept, ⟨x :: asrc, ?_, ?_, ?_⟩, ?_, ?_,
           by simpa [Expr.words, punctWord, ← hk] using WordsOK.cons (hT ▸ hR.tok (by simp [hs]) hne) ga.ok⟩
         · rw [hs]; exact congrArg (x :: ·) ha1
-        · rw [tokens_prefix]; simp only [List.map_cons, skel_cons, ha2, hk]
-        · rw [tokens_prefix]; simp [hk]
+        · rw [Expr.tokens_prefix]; simp only [List.map_cons, skel_cons, ha2, hk]
+        · rw [Expr.tokens_prefix]; simp [hk]
         · simp only [Expr.wfAt, Bool.and_eq_true]; exact ⟨ga.wf, hsimple⟩
         · intro after hf; simpa [Expr.afterOK] using ga.after after hf
       · rw [if_neg hsimple] at h; exact absurd h (failAt_bind_ne_ok _ _ _ _ _ _)
@@ -1768,8 +1683,8 @@ theorem parsePostfix_gives {T : Edition} {f : Nat} (hL : GivesE T .lhs (Parse.pa
           simpa [Expr.words, punctWord, ← hk] using
             ga.ok.append (WordsOK.word ((ga.kept.target_eq.trans hT) ▸ ga.ready.tok (by simp [hs₁]) hne))⟩
       · rw [ha1, hs₁]; simp
-      · rw [tokens_postfix]; simp only [List.map_append, List.map_cons, List.map_nil, skel_append, ha2, hk]
-      · rw [tokens_postfix]; exact head_append2 (Expr.tokens_ne arg) ha3
+      · rw [Expr.tokens_postfix]; simp only [List.map_append, List.map_cons, List.map_nil, skel_append, ha2, hk]
+      · rw [Expr.tokens_postfix]; exact head_append2 (Expr.tokens_ne_nil arg) ha3
       · simp only [Expr.wfAt, Bool.and_eq_true]; exact ⟨ga.wf, hsimple⟩
       · intro after hf
         simp only [Expr.afterOK]
@@ -2091,10 +2006,10 @@ theorem parsePrimary_gives {T : Edition} {f : Nat} (hE : GivesE T .assign (Parse
           simpa [Expr.words, punctWord] using WordsOK.cons (ok_punct (T := T) (p := "(") (by decide))
             (gi.ok.append (WordsOK.word (ok_punct (p := ")") (by decide)))))⟩
       · rw [hs, show r = isrc ++ s₁.rest from hi1, hs₂]; simp
-      · rw [tokens_paren]
+      · rw [Expr.tokens_paren]
         simp only [List.map_append, List.map_cons, List.map_nil, List.cons_append, skel_cons, skel_append, hi2,
           hk, hrk]
-      · rw [tokens_paren]; simp [hk]
+      · rw [Expr.tokens_paren]; simp [hk]
       · simpa [Expr.wfAt] using gi.wf
       · intro after hf
         simp only [Expr.afterOK, Bool.and_eq_true, notFirst, bne_iff_ne, ne_eq]
@@ -2155,10 +2070,10 @@ theorem lhsStep_inv {T : Edition} {f : Nat} {start : Pos} (hE : GivesE T .assign
       by simpa [Expr.words, punctWord] using g.ok.append (WordsOK.cons (ok_punct (p := ".") (by decide))
         (WordsOK.word (propertyName_ok hnk hnmok)))⟩
     · rw [hg1, hs, show r = nm :: r₂ from hs₂]; simp
-    · rw [tokens_member]
+    · rw [Expr.tokens_member]
       simp only [List.map_append, skel_append, hg2]
       rw [show [x, nm].map (·.kind) = [x.kind, nm.kind] from rfl, hx1, hx2]
-    · rw [tokens_member]; exact head_append2 (Expr.tokens_ne acc) hg3
+    · rw [Expr.tokens_member]; exact head_append2 (Expr.tokens_ne_nil acc) hg3
     · simpa [Expr.wfAt] using g.wf
     · intro after hf
       simp only [Expr.afterOK]
@@ -2186,10 +2101,10 @@ theorem lhsStep_inv {T : Edition} {f : Nat} {start : Pos} (hE : GivesE T .assign
         simpa [Expr.words, punctWord] using g.ok.append (WordsOK.cons (ok_punct (p := "[") (by decide))
           (gi.ok.append (WordsOK.word (ok_punct (p := "]") (by decide)))))⟩
     · rw [hg1, hs, hr]; simp
-    · rw [tokens_index]
+    · rw [Expr.tokens_index, List.append_assoc]
       simp only [List.map_append, List.map_cons, List.map_nil, List.cons_append, skel_append, skel_cons, hg2, hi2,
         hxk, hrk, List.append_assoc]
-    · rw [tokens_index, List.append_assoc]; exact head_append2 (Expr.tokens_ne acc) hg3
+    · rw [Expr.tokens_index, List.append_assoc, List.append_assoc]; exact head_append2 (Expr.tokens_ne_nil acc) hg3
     · simp only [Expr.wfAt, Bool.and_eq_true]; exact ⟨g.wf, gi.wf⟩
     · intro after hf
       simp only [Expr.afterOK, Bool.and_eq_true]
@@ -2213,8 +2128,8 @@ theorem lhsStep_inv {T : Edition} {f : Nat} {start : Pos} (hE : GivesE T .assign
     refine ⟨ga.ready, g.kept.trans ga.kept, ⟨src ++ asrc, ?_, ?_, ?_⟩, ?_, ?_,
       by simpa [Expr.words, List.append_assoc] using g.ok.append ((wordsOK_callBreak acc).append ga.ok)⟩
     · rw [hg1, ha1]; simp
-    · rw [tokens_call]; simp only [List.map_append, skel_append, hg2, ha2]
-    · rw [tokens_call]; exact head_append2 (Expr.tokens_ne acc) hg3
+    · rw [Expr.tokens_call, List.append_assoc, ← tokens_args]; simp only [List.map_append, skel_append, hg2, ha2]
+    · rw [Expr.tokens_call, List.append_assoc, ← tokens_args]; exact head_append2 (Expr.tokens_ne_nil acc) hg3
     · simp only [Expr.wfAt, Bool.and_eq_true]; exact ⟨g.wf, ga.wf⟩
     · intro after hf
       simp only [Expr.afterOK, Bool.and_eq_true]
@@ -2423,7 +2338,6 @@ theorem StmtOK.block {body : List Stmt} (h : ∀ x ∈ body, StmtOK T x) : StmtO
 
 end
 
-
 theorem endStatement_inv {s s' : ParseState} (hR : Ready s) (h : Parse.endStatement s = .ok () s') :
     Ready s' ∧ Kept s s' := by
   obtain ⟨x, r, hs⟩ := hR.cons
@@ -2579,13 +2493,6 @@ theorem blockStep_inv {T : Edition} {p : ParseM Stmt} (hp : GivesS T p) {s₀ : 
   · exact hall x' hx'
   · exact ⟨by rw [← hK.inFunction_eq, ← hK.loopDepth_eq]; exact hw, hok⟩
 
-theorem Stmt.allWF_of {T : Edition} {fn loop : Bool} :
-    ∀ ss : List Stmt, (∀ x ∈ ss, x.wf T fn loop = true) → Stmt.allWF T fn loop ss = true
-  | [], _ => by simp [Stmt.allWF]
-  | s :: ss, h => by
-    simp only [Stmt.allWF, Bool.and_eq_true]
-    exact ⟨h s (by simp), Stmt.allWF_of ss (fun x hx => h x (by simp [hx]))⟩
-
 theorem parseBlock_gives {T : Edition} {f : Nat} (hS : GivesS T (Parse.parseStatement f)) :
     GivesS T (Parse.parseBlock (f + 1)) := by
   intro s st s' hR hT h
@@ -2604,7 +2511,7 @@ theorem parseBlock_gives {T : Edition} {f : Nat} (hS : GivesS T (Parse.parseStat
   simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h
   refine ⟨hR₃, (Kept.past _ _ _).trans (hK₂.trans (Kept.past _ _ _)), ?_, by simp [Stmt.openIf],
     by simp [Stmt.isDecl], StmtOK.block (fun x hx => (hall x hx).2)⟩
-  simpa [Stmt.wf] using Stmt.allWF_of _ (fun x hx => (hall x hx).1)
+  simpa [Stmt.wf] using Stmt.allWF_iff.mpr (fun x hx => (hall x hx).1)
 
 /-- A branch: a statement that is not a declaration. -/
 def GivesB (T : Edition) (p : ParseM Stmt) : Prop :=
@@ -2688,7 +2595,6 @@ theorem choose_inv {α β : Type} {c1 c2 : Prop} [Decidable c1] [Decidable c2] {
     · rw [if_pos h2, Parse.pure_bind] at h; exact ⟨.inr h2, b, h⟩
     · rw [if_neg h2] at h; exact absurd h (failAt_bind_ne_ok _ _ _ _ _ _)
 
-set_option maxHeartbeats 2000000 in
 theorem parseForOf_inv {T : Edition} {f : Nat} (hB : GivesB T (Parse.parseBranch f)) {s s' : ParseState} {st : Stmt}
     {x : Token} {r : List Token} (hR : Ready s) (hT : s.target = T) (hs : s.rest = x :: r) (hx : x.kind ≠ .eof)
     (h : Parse.parseForOf (f + 1) s = .ok st s') :
@@ -2780,7 +2686,6 @@ def GivesFor (T : Edition) (p : ParseM Stmt) : Prop :=
     Ready s' ∧ Kept s s' ∧ st.wf T s.inFunction (s.loopDepth != 0) = true ∧
       (st.openIf = true → ∀ u ∈ s'.rest.head?, u.kind ≠ .keyword "else") ∧ st.isDecl = false ∧ StmtOK T st
 
-set_option maxHeartbeats 4000000 in
 theorem parseStatement_gives {T : Edition} {f : Nat} (hBlk : GivesS T (Parse.parseBlock f))
     (hBr : GivesB T (Parse.parseBranch f)) (hFor : GivesFor T (Parse.parseForOf f)) :
     GivesS T (Parse.parseStatement (f + 1)) := by
@@ -2789,7 +2694,7 @@ theorem parseStatement_gives {T : Edition} {f : Nat} (hBlk : GivesS T (Parse.par
   have hne : ∀ {k}, x.kind = k → k ≠ .eof → x.kind ≠ .eof := fun hk hk' => by rw [hk]; exact hk'
   simp only [Parse.parseStatement] at h
   rw [Parse.bind_eq (Parse.peek_eq hs)] at h
-  -- A declaration or an expression statement, as the last cases of the `match` give them.
+  -- A variable declaration, as the `const` and `let` arm of the `match` gives it.
   have hdecl : (x.kind = .keyword "const" ∨ x.kind = .ident "let") →
       (Parse.parseVarDecl >>= fun decl => Parse.spanFrom x.span.start >>= fun sp => pure (Stmt.varDecl sp decl)) s =
         .ok st s' →
@@ -3126,9 +3031,6 @@ theorem Refuses.bind {α β : Type} {a : ParseM α} (ha : Refuses a) (K : α →
   obtain ⟨_, _, h1, _⟩ := hc
   rw [he] at h1; cases h1
 
-theorem failAt_refuses {α : Type} (t : Token) (m : String) : Refuses (Parse.failAt (A := α) t m) :=
-  fun _ => ⟨_, _, rfl⟩
-
 theorem unexpected_refuses {α : Type} (t : Token) (m : String) : Refuses (Parse.unexpected (A := α) t m) :=
   fun _ => ⟨_, _, rfl⟩
 
@@ -3201,7 +3103,7 @@ theorem parseField_wf {T : Edition} :
   intro s fld s' hR hT h
   obtain ⟨x, r, hs⟩ := hR.cons
   simp only [Parse.parseField] at h
-  rw [Parse.bind_eq (Parse.peek_eq hs), Parse.bind_eq (Parse.peekAt_eq' 1 s)] at h
+  rw [Parse.bind_eq (Parse.peek_eq hs), Parse.bind_eq (Parse.peekAt_rest s 1)] at h
   obtain ⟨s₁, hR₁, hK₁, h⟩ := seq_advance hR h
   rw [Parse.bind_ok] at h; obtain ⟨name, s₂, hn, h⟩ := h
   obtain ⟨nm, r₂, hnk, hs₂, rfl, hR₂⟩ := readPropertyName_inv hR₁ hn
@@ -3260,7 +3162,6 @@ def GivesD (T : Edition) (p : ParseM Decl) : Prop :=
   ∀ s d s', Ready s → s.target = T → s.inFunction = false → s.loopDepth = 0 → p s = .ok d s' →
     Ready s' ∧ Kept s s' ∧ d.wf T = true ∧ DeclOK T d
 
-set_option maxHeartbeats 4000000 in
 theorem parseFunction_wf {T : Edition} (start : Pos) (exported : Bool) :
     GivesD T (Parse.parseFunction start exported) := by
   intro s d s' hR hT hF hL h
@@ -3354,7 +3255,6 @@ theorem parseFunction_wf {T : Edition} (start : Pos) (exported : Bool) :
       parseBlock_block hb⟩, ?_⟩
     simpa [hld] using hbw
 
-
 theorem parseInterface_wf {T : Edition} (start : Pos) (exported : Bool) :
     GivesD T (Parse.parseInterface start exported) := by
   intro s d s' hR hT hF hL h
@@ -3427,7 +3327,7 @@ theorem importStep_wf {T : Edition} {ct : Bool} {s₀ : ParseState} (hT : s₀.t
   by_cases hc : x.isPunct "}" = true
   · rw [if_pos hc] at h; simp only [Parse.pure_ok, Prod.mk.injEq] at h; obtain ⟨⟨rfl, _⟩, rfl⟩ := h
     exact ⟨hR, hK, hall⟩
-  rw [if_neg hc, Parse.pure_bind, Parse.bind_eq (Parse.peekAt_eq' 1 s)] at h
+  rw [if_neg hc, Parse.pure_bind, Parse.bind_eq (Parse.peekAt_rest s 1)] at h
   obtain ⟨_, h⟩ := fail_inv h
   obtain ⟨s₁, hR₁, hK₁, h⟩ := seq_advance hR h
   obtain ⟨y, r₁, hs₁⟩ := hR₁.cons
@@ -3465,7 +3365,7 @@ theorem parseImport_wf {T : Edition} (start : Pos) : GivesD T (Parse.parseImport
   rw [Parse.bind_ok] at h; obtain ⟨_, s₁, hadv, h⟩ := h
   obtain ⟨hR₁, hK₁⟩ := discard_advance_ready hR hadv
   obtain ⟨x, r, hs⟩ := hR₁.cons
-  rw [Parse.bind_eq (Parse.peek_eq hs), Parse.bind_eq (Parse.peekAt_eq' 1 s₁)] at h
+  rw [Parse.bind_eq (Parse.peek_eq hs), Parse.bind_eq (Parse.peekAt_rest s₁ 1)] at h
   by_cases hct : (x.isIdent "type" && (s₁.rest[1]?.getD s₁.eof).isPunct "{") = true
   · have hxne : x.kind ≠ .eof := by
       simp only [Bool.and_eq_true, Token.isIdent, beq_iff_eq] at hct; rw [hct.1]; simp
@@ -3568,7 +3468,7 @@ theorem parseDecl_wf {T : Edition} : GivesD T Parse.parseDecl := by
   have hF₁ : s₁.inFunction = false := hK₁.inFunction_eq.trans hF
   have hL₁ : s₁.loopDepth = 0 := hK₁.loopDepth_eq.trans hL
   obtain ⟨y, r₁, hs₁⟩ := hR₁.cons
-  rw [Parse.bind_eq (Parse.peek_eq hs₁), Parse.bind_eq (Parse.peekAt_eq' 1 s₁)] at h
+  rw [Parse.bind_eq (Parse.peek_eq hs₁), Parse.bind_eq (Parse.peekAt_rest s₁ 1)] at h
   simp only [Parse.ite_state] at h
   split at h
   · obtain ⟨hR₂, hK₂, hw, hok⟩ := parseFunction_wf _ _ _ _ _ hR₁ hT₁ hF₁ hL₁ h; exact ⟨hR₂, hK₁.trans hK₂, hw, hok⟩

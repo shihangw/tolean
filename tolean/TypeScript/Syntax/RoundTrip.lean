@@ -1,5 +1,5 @@
 import tolean.TypeScript.EStateM
-import tolean.TypeScript.Syntax.Source
+import tolean.TypeScript.Syntax.Layout
 
 /-!
 The parser's round trip, on tokens: the parser reads the tokens that
@@ -199,18 +199,6 @@ theorem leaves_advance {s : ParseState} {x : Token} {r : List Token} (h : s.rest
   inFunction_eq := rfl
   loopDepth_eq := rfl
   target_eq := rfl
-
--- The derived `==` on token kinds is equality, so that a proof can read the
--- parser's tests such as `isPunct`.
-deriving instance ReflBEq, LawfulBEq for TokenKind
-
-/-- No line break comes before `y`, unless `y` is a `(`. Inside a line, the
-printer puts a line break only before the `(` of a call of `async`, so that
-`tsc` reads a call (`Syntax/Source.lean`). Most proofs read only whether a line break comes
-before a token that is not a `(`, so this is all that they need. Where a proof
-reads it before a `(`, after `async` or after `return`, `Touching` states it
-exactly. -/
-abbrev NoBreak (y : Token) : Prop := y.kind ≠ .punct "(" → y.newlineBefore = false
 
 theorem noBreak_of {y : Token} {p : String} (hy : y.kind = .punct p) (hp : p ≠ "(") (h : NoBreak y) :
     y.newlineBefore = false :=

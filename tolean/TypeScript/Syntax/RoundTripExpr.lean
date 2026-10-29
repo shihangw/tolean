@@ -47,26 +47,6 @@ theorem closesTypeArguments_kinds (depth : Nat) (ts : List Token) :
     simp only [Parse.closesTypeArguments, closesKinds, List.map_cons]
     split <;> simp_all
 
-/-- Each token of `ts` after the first starts where the one before it stops. -/
-def Chained : List Token → Prop
-  | x :: y :: r => y.span.start = x.span.stop ∧ Chained (y :: r)
-  | _ => True
-
-/-- How the tokens `a` of the word `w` stand, when the words `ws` and their
-tokens `b` follow: the tokens of a word touch, and the next token starts a new
-line after a `lineBreak` and after no other word. -/
-def Placed : Word → List Word → List Token → List Token → Prop
-  | [], _, _, b => ∀ y ∈ b.head?, y.newlineBefore = true
-  | _ :: _, ws, a, b => Chained a ∧ ∀ v ∈ ws.head?, v ≠ [] → ∀ y ∈ b.head?, y.newlineBefore = false
-
-/-- `ts` are the tokens of `words`, in order, and the tokens of each word
-touch. The lexer gives that for the printed source: a word such as `>=` has no
-space in it. A line break comes before the token after a `lineBreak`, and
-before no other token after the first. -/
-def Touching : List Token → List Word → Prop
-  | ts, [] => ts = []
-  | ts, w :: ws => ∃ a b, ts = a ++ b ∧ a.map (·.kind) = w ∧ Placed w ws a b ∧ Touching b ws
-
 /-- The tokens of a word touch. A `lineBreak` has no tokens, and no tokens
 touch trivially. -/
 theorem Placed.chained {w : Word} {ws : List Word} {a b : List Token} (ha : a.map (·.kind) = w)
@@ -104,12 +84,6 @@ theorem Touching.after_callBreak {ts : List Token} {o : Expr} {ws : List Word} (
       exact ⟨fun _ _ => (Touching.after_lineBreak h').1, (Touching.after_lineBreak h').2⟩
     · exact ⟨fun _ ho => (by cases ho; exact absurd rfl hn), by simpa [callBreak, hn] using h⟩
   | _ => exact ⟨fun _ ho => (by cases ho), by simpa [callBreak] using h⟩
-
-theorem Touching.kinds : ∀ {ts : List Token} {ws : List Word}, Touching ts ws → ts.map (·.kind) = ws.flatten
-  | ts, [], h => by simp [Touching] at h; simp [h]
-  | ts, w :: ws, h => by
-    obtain ⟨a, b, rfl, ha, _, hb⟩ := h
-    simp [ha, hb.kinds]
 
 /-- The levels of the expression parser, one for each of its functions. -/
 inductive Level where

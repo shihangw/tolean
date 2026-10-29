@@ -26,16 +26,6 @@ set_option linter.unusedSimpArgs false
 
 /-! ### Lines of tokens -/
 
-/-- `ts` are the tokens of the lines of words `ls`, one line after another.
-The tokens of each line touch as `Touching` states, which also states the
-line break before the `(` of a call of `async`. A line break comes before the
-first token of each line after the first, and no other line break comes
-inside a line. -/
-def Laid : List Token → List (List Word) → Prop
-  | ts, [] => ts = []
-  | ts, l :: ls => ∃ a b, ts = a ++ b ∧ Touching a l ∧ (∀ y ∈ a.tail, NoBreak y) ∧
-      (∀ y ∈ b.head?, y.newlineBefore = true) ∧ Laid b ls
-
 /-- The words of each line of a statement. They do not depend on how far in
 the statement is. -/
 def Stmt.wordLines (st : Stmt) : List (List Word) := (st.lines 0).map Prod.snd

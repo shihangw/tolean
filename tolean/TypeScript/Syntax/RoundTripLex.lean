@@ -1,4 +1,5 @@
-import tolean.TypeScript.Syntax.RoundTripDecl
+import tolean.TypeScript.EStateM
+import tolean.TypeScript.Syntax.Layout
 
 /-!
 The parser's round trip, the lexer's part: the lexer reads the source that
@@ -348,73 +349,6 @@ theorem readDigits_eq (start : Pos) (d : Char → Bool) (s : LexState) (h : Fits
       simp [digitsOf, hd, hr, Option.map_map, Function.comp_def, Nat.add_comm]
     · simp [digitsOf, hd]
 
-/-! ### `lexNumber` in named steps -/
-
-/-- The end of `lexNumber`: the `n` of a bigint, the checks on what follows, and the token. -/
-def numEnd (start : Pos) (i0 : Nat) (rest0 : List Char) (isInteger : Bool) : LexM TokenKind := do
-  let isBigint := (← peekChar) == some 'n'
-  if isBigint then
-    if !isInteger then failFrom start "a bigint literal must be an integer"
-    skipChar
-  if (← peekChar).any (fun c => isIdentStart c || c.isDigit) then
-    failFrom start "an identifier or a digit cannot follow a number directly"
-  let s ← get
-  let chars := rest0.take (s.i - i0)
-  let text := charsToString chars
-  if isBigint && !s.target.supports .bigint then
-    failFrom start (Feature.bigint.refusal s.target)
-  if chars.contains '_' && !s.target.supports .numericSeparators then
-    failFrom start (Feature.numericSeparators.refusal s.target)
-  return if isBigint then .bigint text else .number text
-
-/-- The exponent of a decimal number. -/
-def numExp (start : Pos) (i0 : Nat) (rest0 : List Char) (isInteger : Bool) : LexM TokenKind := do
-  if (← peekChar).any (fun c => c == 'e' || c == 'E') then
-    skipChar
-    if (← peekChar).any (fun c => c == '+' || c == '-') then skipChar
-    readDigits start Char.isDigit
-    numEnd start i0 rest0 false
-  else numEnd start i0 rest0 isInteger
-
-/-- The fraction of a decimal number. -/
-def numDot (start : Pos) (i0 : Nat) (rest0 : List Char) (isInteger : Bool) : LexM TokenKind := do
-  if (← peekChar) == some '.' then
-    skipChar
-    if (← peekChar).any Char.isDigit then readDigits start Char.isDigit
-    numExp start i0 rest0 false
-  else numExp start i0 rest0 isInteger
-
-/-- The radix that the first two characters choose, as `lexNumber` computes it. -/
-def radixOf (first second : Option Char) : Option (Char → Bool) :=
-  if first != some '0' then none
-  else match second with
-    | some 'x' | some 'X' => some isHexDigit
-    | some 'b' | some 'B' => some fun c => c == '0' || c == '1'
-    | some 'o' | some 'O' => some fun c => '0' ≤ c && c ≤ '7'
-    | _ => none
-
-/-- `lexNumber`, with its steps as named functions, so that a lemma can state what each step reads.
-`lexNumber_steps` shows that it is `lexNumber`. -/
-def lexNumberSteps (start : Pos) : LexM TokenKind := do
-  let i0 := (← get).i
-  let rest0 := (← get).rest
-  let first ← peekChar
-  let second ← peekChar 1
-  match radixOf first second with
-  | some isDigit =>
-    skipChar
-    skipChar
-    readDigits start isDigit
-    numEnd start i0 rest0 true
-  | none =>
-    if first == some '0' && second.any (fun c => c.isDigit || c == '_') then
-      failFrom start "a number cannot start with 0 unless it is 0 (legacy octal is not supported)"
-    if first != some '.' then readDigits start Char.isDigit
-    numDot start i0 rest0 true
-
-theorem lexNumber_steps (start : Pos) : lexNumber start = lexNumberSteps start := by
-  funext s; rfl
-
 /-! ### `lexNumber` on a list of characters -/
 
 /-- What `numEnd` gives when `lexNumber` starts at the characters `cs` and has read `n` of them: the token
@@ -511,8 +445,7 @@ theorem lexNumber_eq (start : Pos) (s : LexState) (h : Fits s) :
   have hD0 : ∀ b, okOf (numDot start s.i s.rest b s) =
       (dotOf s.target s.rest 0 b).map fun p => (p.1, skipped s p.2) := fun b => by simpa using hD 0 b
   simp only [skipped_rest, skipped_skipped] at hd
-  rw [lexNumber_steps]
-  unfold lexNumberSteps numberOf
+  unfold lexNumber numberOf
   simp only [okOf_bind, okOf_get, okOf_peekChar, Option.bind_some]
   cases hr : radixOf s.rest[0]? s.rest[1]? with
   | some d =>
@@ -676,9 +609,6 @@ theorem StopsAlike.look {r₁ r₂ : List Char} (hi : StopsAlike r₁ r₂) {f :
       · exact hf.2.1
       · exact hf.2.2
 
-theorem look_lt {t r : List Char} {j : Nat} (h : j < t.length) : (t ++ r)[j]? = t[j]? :=
-  List.getElem?_append_left h
-
 theorem look_len (t r : List Char) : (t ++ r)[t.length]? = r.head? := by
   rw [List.getElem?_append_right (Nat.le_refl _), Nat.sub_self, List.head?_eq_getElem?]
 
@@ -689,7 +619,7 @@ theorem look_eq {t r₁ r₂ : List Char} (hi : StopsAlike r₁ r₂) {j : Nat} 
     (hf : f none = false ∧ f (some ' ') = false ∧ f (some '\n') = false)
     (h : j = t.length → f (t ++ r₁)[j]? = false) : f (t ++ r₂)[j]? = f (t ++ r₁)[j]? := by
   rcases Nat.lt_or_eq_of_le hj with hj | rfl
-  · rw [look_lt hj, look_lt hj]
+  · rw [List.getElem?_append_left hj, List.getElem?_append_left hj]
   · have h1 := h rfl
     rw [look_len] at h1
     rw [look_len, look_len, h1]
@@ -785,7 +715,7 @@ theorem endOf_frame {T : Edition} {t r₁ r₂ : List Char} (hi : StopsAlike r�
           · split at h
             · simp at h
             · simp only [Option.some.injEq, Prod.mk.injEq] at h; exact h.2
-      have hb₂ : (t ++ r₂)[n]? = some 'n' := by rw [look_lt (by omega)]; rwa [look_lt (by omega)] at hb
+      have hb₂ : (t ++ r₂)[n]? = some 'n' := by rw [List.getElem?_append_left (by omega)]; rwa [List.getElem?_append_left (by omega)] at hb
       simp only [hb₂, beq_self_eq_true, Bool.true_and, if_true]
       rw [if_neg ‹_›]
       simp only [hn, look_len, List.take_left'] at h ⊢
@@ -825,9 +755,9 @@ theorem expOf_frame {T : Edition} {t r₁ r₂ : List Char} (hi : StopsAlike r�
       obtain ⟨j, hj, hk⟩ := Option.bind_eq_some_iff.mp h
       have := digitsOf_le hj; have := endOf_le hk
       split at this <;> omega
-    rw [look_lt (by omega)] at he
-    rw [look_lt (by omega), if_pos he]
-    rw [look_lt key] at h; rw [look_lt key]
+    rw [List.getElem?_append_left (by omega)] at he
+    rw [List.getElem?_append_left (by omega), if_pos he]
+    rw [List.getElem?_append_left key] at h; rw [List.getElem?_append_left key]
     obtain ⟨j, hj, hk⟩ := Option.bind_eq_some_iff.mp h
     have hj' := digitsOf_le hj
     have hk' := endOf_le hk
@@ -855,14 +785,14 @@ theorem dotOf_frame {T : Edition} {t r₁ r₂ : List Char} (hi : StopsAlike r�
       split at h₂
       · obtain ⟨j, hj, rfl⟩ := Option.map_eq_some_iff.mp h₂; omega
       · simp only [Option.some.injEq] at h₂; omega
-    rw [look_lt (by omega)] at hdot
-    rw [look_lt (by omega), if_pos hdot]
+    rw [List.getElem?_append_left (by omega)] at hdot
+    rw [List.getElem?_append_left (by omega), if_pos hdot]
     by_cases hdig : (t ++ r₁)[n + 1]?.any Char.isDigit = true
     · rw [if_pos hdig] at h₂
       obtain ⟨j, hj, rfl⟩ := Option.map_eq_some_iff.mp h₂
       have := digitsOf_le hj
-      rw [look_lt (by omega)] at hdig
-      rw [look_lt (by omega), if_pos hdig]
+      rw [List.getElem?_append_left (by omega)] at hdig
+      rw [List.getElem?_append_left (by omega), if_pos hdig]
       rw [List.drop_append_of_le_length (by omega)] at hj
       rw [List.drop_append_of_le_length (by omega),
         digitsOf_frame (by decide) hi hj (by simp only [List.length_drop]; omega)]
@@ -901,14 +831,14 @@ theorem numberOf_frame {T : Edition} {t r₁ r₂ : List Char} (hi : StopsAlike 
     numberOf T (t ++ r₂) = some (k, t.length) := by
   have hpos := (numberOf_ok h).1
   unfold numberOf at h ⊢
-  rw [look_lt hpos] at h; rw [look_lt hpos]
+  rw [List.getElem?_append_left hpos] at h; rw [List.getElem?_append_left hpos]
   cases hr : radixOf t[0]? (t ++ r₁)[1]? with
   | some d =>
     simp only [hr] at h
     obtain ⟨j, hj, he⟩ := Option.bind_eq_some_iff.mp h
     have := digitsOf_le hj; have := endOf_le he
     simp only [List.length_drop] at this
-    rw [look_lt (by omega)] at hr; rw [look_lt (by omega), hr]
+    rw [List.getElem?_append_left (by omega)] at hr; rw [List.getElem?_append_left (by omega), hr]
     simp only
     rw [List.drop_append_of_le_length (by omega)] at hj
     rw [List.drop_append_of_le_length (by omega),
@@ -930,7 +860,7 @@ theorem numberOf_frame {T : Edition} {t r₁ r₂ : List Char} (hi : StopsAlike 
       obtain ⟨n, hn, he⟩ := Option.bind_eq_some_iff.mp h
       have hle := dotOf_le he
       have hd := (numberOf_ok (T := T) (cs := t ++ r₁) (k := k) (m := t.length) (by
-        unfold numberOf; rw [look_lt hpos]; simp only [hr]; rw [if_neg hz]; exact h)).2.1
+        unfold numberOf; rw [List.getElem?_append_left hpos]; simp only [hr]; rw [if_neg hz]; exact h)).2.1
       split at hn
       · rename_i hdot
         rw [if_pos hdot]
@@ -1793,18 +1723,6 @@ theorem lexAll_lines {T : Edition} :
 
 /-! ### The tokens that the lexer gives -/
 
-theorem takeWhile_all {p : Char → Bool} :
-    ∀ {l : List Char} {x : Char}, x ∈ l.takeWhile p → p x = true
-  | [], _, h => by simp at h
-  | c :: l, x, h => by
-    simp only [List.takeWhile_cons] at h
-    split at h
-    · rename_i hc
-      rcases List.mem_cons.mp h with rfl | h
-      · exact hc
-      · exact takeWhile_all h
-    · simp at h
-
 theorem kept_skipped {s : LexState} (hf : Fits s) (n : Nat) : Kept s (skipped s n) :=
   ⟨rfl, rfl, rfl, fun _ => fits_skipped hf n⟩
 
@@ -1863,7 +1781,7 @@ theorem lexKind_ok {start : Pos} {c : Char} {s s' : LexState} {k : TokenKind}
       simp only [List.takeWhile_cons, hp, String.toList_empty, List.nil_append, if_true]
       simp only [hi, Bool.true_and, List.all_eq_true]
       intro x hx
-      exact takeWhile_all hx
+      exact List.all_eq_true.mp List.all_takeWhile _ hx
   · rename_i hi
     rw [bind_eq (peekChar_eq 1 s)] at h
     split at h
@@ -1998,7 +1916,7 @@ theorem lexChars_render (T : Edition) (lines : List Line)
 the printer can write it, and the lexer reads it back. -/
 theorem lexChars_ok_kinds (T : Edition) (chars : List Char) (toks : Array Token)
     (h : lexChars chars T = .ok toks) :
-    ∀ t ∈ toks.toList, t.kind = .eof ∨ Word.ok T [t.kind] = true := by
+    ∀ t ∈ toks.toList, t.kind = .eof ∨ TokenKind.ok T t.kind = true := by
   obtain ⟨new, e, e1, e2, e3⟩ := Lex.lexChars_tokens h
   intro t ht
   rw [e1] at ht

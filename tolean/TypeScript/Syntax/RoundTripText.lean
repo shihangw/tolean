@@ -43,49 +43,58 @@ theorem breaksOK_of_ne : ∀ ws : List Word, (∀ w ∈ ws, w ≠ []) → breaks
   | [] :: _, h => absurd rfl (h [] (by simp))
   | (k :: w) :: ws, h => by simp only [breaksOK]; exact breaksOK_of_ne ws (fun x hx => h x (by simp [hx]))
 
-/-- Words that `breaksOK` accepts, that are not empty and end with a word that has tokens. -/
-def Fine (ws : List Word) : Prop := breaksOK ws = true ∧ ws.getLast? ≠ some [] ∧ ws ≠ []
+/-- The words of a line: `breaksOK` accepts them, and the last word has tokens. -/
+def LineOK (ws : List Word) : Prop := breaksOK ws = true ∧ ws.getLast? ≠ some []
 
-theorem getLast?_append_ne {a b : List Word} (hb : b ≠ []) : (a ++ b).getLast? = b.getLast? := by
-  cases b with
-  | nil => exact absurd rfl hb
-  | cons y b =>
-    rw [List.getLast?_append]
-    cases h : (y :: b).getLast? with
-    | none => simp at h
-    | some z => rfl
+theorem LineOK.append {a b : List Word} (ha : LineOK a) (hb : LineOK b) : LineOK (a ++ b) := by
+  refine ⟨breaksOK_append a b ha.1 hb.1 (fun h => absurd h ha.2), ?_⟩
+  rw [List.getLast?_append]
+  cases h : b.getLast? with
+  | none => simpa using ha.2
+  | some x => simpa [h] using hb.2
+
+theorem LineOK.nil : LineOK [] := ⟨rfl, by simp⟩
+
+theorem LineOK.word {w : Word} (hw : w ≠ []) : LineOK [w] := ⟨breaksOK_of_ne _ (by simpa using hw), by simpa using hw⟩
+
+theorem LineOK.cons {w : Word} {ws : List Word} (hw : w ≠ []) (h : LineOK ws) : LineOK (w :: ws) := by
+  simpa using (LineOK.word hw).append h
+
+/-- Words of a line that are not empty. -/
+def Fine (ws : List Word) : Prop := LineOK ws ∧ ws ≠ []
+
+theorem Fine.line {ws : List Word} (h : Fine ws) : LineOK ws := h.1
 
 theorem Fine.append {a b : List Word} (ha : Fine a) (hb : Fine b) : Fine (a ++ b) :=
-  ⟨breaksOK_append a b ha.1 hb.1 (fun h => absurd h ha.2.1),
-    by rw [getLast?_append_ne hb.2.2]; exact hb.2.1, by simp [ha.2.2]⟩
+  ⟨ha.1.append hb.1, by simp [ha.2]⟩
 
-theorem Fine.word {w : Word} (hw : w ≠ []) : Fine [w] := ⟨breaksOK_of_ne _ (by simpa using hw), by simpa using hw, by simp⟩
+theorem Fine.word {w : Word} (hw : w ≠ []) : Fine [w] := ⟨LineOK.word hw, by simp⟩
 
-theorem Fine.cons {w : Word} {ws : List Word} (hw : w ≠ []) (h : Fine ws) : Fine (w :: ws) := by
-  simpa using (Fine.word hw).append h
+theorem Fine.cons {w : Word} {ws : List Word} (hw : w ≠ []) (h : Fine ws) : Fine (w :: ws) :=
+  ⟨LineOK.cons hw h.1, by simp⟩
 
 theorem fine_separated (sep : String) : ∀ items : List (List Word), (∀ x ∈ items, Fine x) →
-    breaksOK (separated sep items) = true ∧ (separated sep items).getLast? ≠ some []
-  | [], _ => ⟨rfl, by simp [separated]⟩
-  | [x], h => by have := h x (by simp); exact ⟨this.1, this.2.1⟩
+    LineOK (separated sep items)
+  | [], _ => LineOK.nil
+  | [x], h => (h x (by simp)).1
   | x :: y :: rest, h => by
     have hx := h x (by simp)
     have hr := fine_separated sep (y :: rest) (fun z hz => h z (by simp_all))
     have hyr : separated sep (y :: rest) ≠ [] := by
       cases rest with
-      | nil => simpa [separated] using (h y (by simp)).2.2
+      | nil => simpa [separated] using (h y (by simp)).2
       | cons z rest => simp [separated]
-    have hc : Fine (punctWord sep :: separated sep (y :: rest)) := Fine.cons (by simp [punctWord]) ⟨hr.1, hr.2, hyr⟩
+    have hc : Fine (punctWord sep :: separated sep (y :: rest)) := Fine.cons (by simp [punctWord]) ⟨hr, hyr⟩
     have := hx.append hc
     simp only [separated]
-    exact ⟨this.1, this.2.1⟩
+    exact this.1
 
 theorem fine_enclose {o c : String} {items : List (List Word)} (h : ∀ x ∈ items, Fine x) :
     Fine (enclose o c items) := by
   obtain ⟨h1, h2⟩ := fine_separated "," items h
   simp only [enclose]
   refine Fine.cons (by simp [punctWord]) ?_
-  exact ⟨breaksOK_append _ _ h1 (by rfl) (fun h' => absurd h' h2), by simp [punctWord], by simp⟩
+  exact ⟨⟨breaksOK_append _ _ h1 (by rfl) (fun h' => absurd h' h2), by simp [punctWord]⟩, by simp⟩
 
 theorem nil_not_mem_separated (sep : String) :
     ∀ items : List (List Word), (∀ x ∈ items, [] ∉ x) → [] ∉ separated sep items
@@ -104,40 +113,40 @@ theorem symbol_ne (s : String) (h : s ≠ "") : symbol s ≠ [] := by
 mutual
 
 /-- A type's words have tokens: no `lineBreak` is among them. -/
-theorem TypeExpr.fine : ∀ t : TypeExpr, [] ∉ t.words
+theorem TypeExpr.no_lineBreak : ∀ t : TypeExpr, [] ∉ t.words
   | .keyword _ name => by simp only [TypeExpr.words]; split <;> simp [keywordWord, identWord]
   | .null _ => by simp [TypeExpr.words, keywordWord]
   | .literal _ (.string _) | .literal _ (.number _) | .literal _ (.bigint _) | .literal _ (.bool _) => by
     simp [TypeExpr.words, LitType.words, keywordWord]
   | .ref _ name [] => by simp [TypeExpr.words, identWord]
   | .ref _ name (a :: args) => by
-    have := nil_not_mem_separated "," _ (TypeExpr.fineAll (a :: args))
+    have := nil_not_mem_separated "," _ (TypeExpr.no_lineBreakAll (a :: args))
     simp only [TypeExpr.words, List.mem_cons, List.mem_append, not_or]
     simp [identWord, punctWord, this]
   | .array _ elem => by
-    have := TypeExpr.fine elem
+    have := TypeExpr.no_lineBreak elem
     simp only [TypeExpr.words, List.mem_append, List.mem_cons, not_or]
     simp [punctWord, this]
   | .union _ [] => by simp [TypeExpr.words, TypeExpr.wordsOf, separated]
   | .union _ [m] => by
-    have := TypeExpr.fine m
+    have := TypeExpr.no_lineBreak m
     simp only [TypeExpr.words, List.mem_cons, not_or]
     simp [punctWord, this]
   | .union _ (a :: b :: ms) => by
     simp only [TypeExpr.words]
-    exact nil_not_mem_separated "|" _ (TypeExpr.fineAll (a :: b :: ms))
+    exact nil_not_mem_separated "|" _ (TypeExpr.no_lineBreakAll (a :: b :: ms))
   | .paren _ inner => by
-    have := TypeExpr.fine inner
+    have := TypeExpr.no_lineBreak inner
     simp only [TypeExpr.words, List.mem_cons, List.mem_append, not_or]
     simp [punctWord, this]
 
-theorem TypeExpr.fineAll : ∀ ts : List TypeExpr, ∀ x ∈ TypeExpr.wordsOf ts, [] ∉ x
+theorem TypeExpr.no_lineBreakAll : ∀ ts : List TypeExpr, ∀ x ∈ TypeExpr.wordsOf ts, [] ∉ x
   | [], _, hx => by simp [TypeExpr.wordsOf] at hx
   | t :: ts, x, hx => by
     simp only [TypeExpr.wordsOf, List.mem_cons] at hx
     rcases hx with rfl | hx
-    · exact TypeExpr.fine t
-    · exact TypeExpr.fineAll ts x hx
+    · exact TypeExpr.no_lineBreak t
+    · exact TypeExpr.no_lineBreakAll ts x hx
 
 end
 
@@ -146,9 +155,13 @@ theorem Fine.call {c : Expr} {items : List (List Word)} (h : ∀ x ∈ items, Fi
     Fine (callBreak c ++ enclose "(" ")" items) := by
   have he := fine_enclose (o := "(") (c := ")") h
   unfold callBreak; split
-  · refine ⟨?_, by simpa [getLast?_append_ne he.2.2] using he.2.1, by simp⟩
-    simp only [List.singleton_append, lineBreak, breaksOK, Bool.and_eq_true, beq_iff_eq]
-    exact ⟨by simp [enclose, punctWord], he.1⟩
+  · refine ⟨⟨?_, ?_⟩, by simp⟩
+    · simp only [List.singleton_append, lineBreak, breaksOK, Bool.and_eq_true, beq_iff_eq]
+      exact ⟨by simp [enclose, punctWord], he.1.1⟩
+    · rw [List.getLast?_append]
+      cases h : (enclose "(" ")" items).getLast? with
+      | none => simp [enclose] at h
+      | some z => simpa [h] using he.1.2
   · simpa using he
 
 theorem propertyName_ne (n : String) : propertyName n ≠ [] := by
@@ -223,28 +236,9 @@ end
 
 /-! ### Lines -/
 
-/-- The words of a line: `breaksOK` accepts them, and the last word has tokens. -/
-def LineOK (ws : List Word) : Prop := breaksOK ws = true ∧ ws.getLast? ≠ some []
-
-theorem LineOK.append {a b : List Word} (ha : LineOK a) (hb : LineOK b) : LineOK (a ++ b) := by
-  refine ⟨breaksOK_append a b ha.1 hb.1 (fun h => absurd h ha.2), ?_⟩
-  rw [List.getLast?_append]
-  cases h : b.getLast? with
-  | none => simpa using ha.2
-  | some x => simpa [h] using hb.2
-
-theorem LineOK.nil : LineOK [] := ⟨rfl, by simp⟩
-
-theorem Fine.line {ws : List Word} (h : Fine ws) : LineOK ws := ⟨h.1, h.2.1⟩
-
-theorem LineOK.word {w : Word} (hw : w ≠ []) : LineOK [w] := (Fine.word hw).line
-
-theorem LineOK.cons {w : Word} {ws : List Word} (hw : w ≠ []) (h : LineOK ws) : LineOK (w :: ws) := by
-  simpa using (LineOK.word hw).append h
-
 theorem TypeExpr.line (t : TypeExpr) : LineOK t.words :=
-  ⟨breaksOK_of_ne _ (fun _ hw he => TypeExpr.fine t (he ▸ hw)),
-    fun hl => TypeExpr.fine t (List.mem_of_getLast? hl)⟩
+  ⟨breaksOK_of_ne _ (fun _ hw he => TypeExpr.no_lineBreak t (he ▸ hw)),
+    fun hl => TypeExpr.no_lineBreak t (List.mem_of_getLast? hl)⟩
 
 theorem VarKind.word_ne (k : VarKind) : k.word ≠ [] := by cases k <;> simp [VarKind.word, keywordWord, identWord]
 
@@ -324,7 +318,7 @@ theorem Stmt.lineOKAll : ∀ (ss : List Stmt) (d : Nat), ∀ l ∈ Stmt.linesOf 
 end
 
 theorem Fine.ofLine {w : Word} {ws : List Word} (hw : w ≠ []) (h : LineOK ws) : Fine (w :: ws) :=
-  ⟨(LineOK.cons hw h).1, (LineOK.cons hw h).2, by simp⟩
+  ⟨LineOK.cons hw h, by simp⟩
 
 theorem exportWords_line (e : Bool) : LineOK (exportWords e) := by
   cases e
@@ -419,7 +413,7 @@ theorem parseChars_reads {T : Edition} {chars : List Char} {m : Module} (h : par
   | ok toks =>
     rw [hl] at h
     obtain ⟨hwf, hw⟩ := parseTokens_wf (lexChars_last_eof T chars toks hl)
-      (fun t ht => (lexChars_ok_kinds T chars toks hl t ht).imp_right (by simpa [Word.ok] using ·)) h
+      (lexChars_ok_kinds T chars toks hl) h
     exact source_reads m hwf hw
 
 end tolean.TypeScript.Syntax
