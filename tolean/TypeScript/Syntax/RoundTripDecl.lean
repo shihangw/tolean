@@ -51,8 +51,8 @@ theorem parseParam_reads {T : Edition} (p : Param) (hp : p.wf = true) :
   | none =>
     simp [Touching, typeAnnotation] at h'; subst h'
     have hs' : s.rest = nm :: u :: r := by simpa using hs
-    let s₁ := advanced s nm u r
-    refine ⟨⟨⟨nm.span.start, nm.span.stop⟩, name, none⟩, s₁, ?_, rfl, leaves_advanced hs' hl⟩
+    let s₁ := past s nm (u :: r)
+    refine ⟨⟨⟨nm.span.start, nm.span.stop⟩, name, none⟩, s₁, ?_, rfl, leaves_advance hs' hl⟩
     simp only [Parse.parseParam]
     rw [Parse.bind_eq (Parse.peek_eq hs')]
     rw [Parse.ite_guard (fun h => by simp [Token.isPunct, hn1] at h),
@@ -67,7 +67,7 @@ theorem parseParam_reads {T : Edition} (p : Param) (hp : p.wf = true) :
   | some t =>
     obtain ⟨colon, ts₂, rfl, hcolon, h₂⟩ := Touching.cons_one (by simpa [punctWord, typeAnnotation] using h')
     have hs' : s.rest = nm :: colon :: (ts₂ ++ u :: r) := by simpa using hs
-    let s₁ := advanced s nm colon (ts₂ ++ u :: r)
+    let s₁ := past s nm (colon :: (ts₂ ++ u :: r))
     let s₂ : ParseState := { s₁ with rest := ts₂ ++ u :: r, left := s₁.left - 1, lastStop := colon.span.stop }
     have hl₂ : s₂.left = s₂.rest.length := by simp [s₂, s₁, hl, hs']
     obtain ⟨t', s₃, hpt, het, hL₃⟩ := parseType_budget t (by simpa using hty) s₂ ts₂ (u :: r) rfl hl₂ h₂.kinds
@@ -75,7 +75,7 @@ theorem parseParam_reads {T : Edition} (p : Param) (hp : p.wf = true) :
     have hs₃ : s₃.rest = u :: r := hL₃.rest_eq
     have hc1 : colon.kind ≠ .punct "?" := by rw [hcolon]; exact punct_ne (by decide)
     refine ⟨⟨⟨nm.span.start, s₃.lastStop⟩, name, some t'⟩, s₃, ?_, by simp [Param.erase, het],
-      leaves_trans (leaves_advanced hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs'])) hL₃)⟩
+      leaves_trans (leaves_advance hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs'])) hL₃)⟩
     simp only [Parse.parseParam]
     rw [Parse.bind_eq (Parse.peek_eq hs')]
     rw [Parse.ite_guard (fun h => by simp [Token.isPunct, hn1] at h),
@@ -221,9 +221,6 @@ theorem parseBlock_budget {T : Edition} {fn loop : Bool} (sp : Span) (body : Lis
 
 /-! ### Functions -/
 
-theorem Parse.modify_eq (f : ParseState → ParseState) (s : ParseState) :
-    (modify f : ParseM PUnit) s = .ok () (f s) := rfl
-
 theorem leaves_inFunction {s s' : ParseState} {r : List Token} (hs : s.inFunction = false)
     (h : Leaves { s with inFunction := true } s' r) : Leaves s { s' with inFunction := false } r where
   rest_eq := h.rest_eq
@@ -284,8 +281,8 @@ theorem parseFunction_reads {T : Edition} (start : Pos) (exported : Bool) (sp : 
   | none =>
     simp [typeAnnotation, Touching] at hrts; subst hrts
     have hs' : s.rest = fk :: nm :: lp :: (its ++ rp :: (lb :: ba' ++ bb ++ rest)) := by simpa using hs
-    let s₁ := advanced s fk nm (lp :: (its ++ rp :: (lb :: ba' ++ bb ++ rest)))
-    let s₂ := advanced s₁ nm lp (its ++ rp :: (lb :: ba' ++ bb ++ rest))
+    let s₁ := past s fk (nm :: (lp :: (its ++ rp :: (lb :: ba' ++ bb ++ rest))))
+    let s₂ := past s₁ nm (lp :: (its ++ rp :: (lb :: ba' ++ bb ++ rest)))
     let s₃ : ParseState := { s₂ with rest := its ++ rp :: (lb :: ba' ++ bb ++ rest), left := s₂.left - 1, lastStop := lp.span.stop }
     have hl₃ : s₃.left = s₃.rest.length := by simp [s₃, s₂, s₁, hl, hs']
     obtain ⟨res, s₄, hit, hes, hL₄⟩ := params_reads params hps s₃ its (lb :: ba' ++ bb ++ rest) rp hT rfl hrp hl₃
@@ -315,7 +312,7 @@ theorem parseFunction_reads {T : Edition} (start : Pos) (exported : Bool) (sp : 
       rfl
     · simp [Decl.erase, heb, Param.erase] at hes ⊢
       exact hes
-    · exact leaves_trans (leaves_advanced hs' hl) (leaves_trans (leaves_advanced (s := s₁) rfl (by simp [s₁, hl, hs']))
+    · exact leaves_trans (leaves_advance hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))
         (leaves_trans (leaves_advance (s := s₂) rfl (by simp [s₂, s₁, hl, hs'])) (leaves_trans hL₄
           (leaves_trans (leaves_advance hs₄ (by rw [hL₄.left_eq, hs₄]))
             (leaves_inFunction (by simp [s₅, hL₄.inFunction_eq, s₃, s₂, s₁, hF]) hL₇)))))
@@ -324,8 +321,8 @@ theorem parseFunction_reads {T : Edition} (start : Pos) (exported : Bool) (sp : 
     obtain ⟨colon, tts, rfl, hcolon, htt⟩ := Touching.cons_one (by simpa [typeAnnotation, punctWord] using hrts)
     have hs' : s.rest = fk :: nm :: lp :: (its ++ rp :: (colon :: (tts ++ (lb :: ba' ++ bb ++ rest)))) := by
       simpa using hs
-    let s₁ := advanced s fk nm (lp :: (its ++ rp :: (colon :: (tts ++ (lb :: ba' ++ bb ++ rest)))))
-    let s₂ := advanced s₁ nm lp (its ++ rp :: (colon :: (tts ++ (lb :: ba' ++ bb ++ rest))))
+    let s₁ := past s fk (nm :: (lp :: (its ++ rp :: (colon :: (tts ++ (lb :: ba' ++ bb ++ rest))))))
+    let s₂ := past s₁ nm (lp :: (its ++ rp :: (colon :: (tts ++ (lb :: ba' ++ bb ++ rest)))))
     let s₃ : ParseState := { s₂ with rest := its ++ rp :: (colon :: (tts ++ (lb :: ba' ++ bb ++ rest))), left := s₂.left - 1, lastStop := lp.span.stop }
     have hl₃ : s₃.left = s₃.rest.length := by simp [s₃, s₂, s₁, hl, hs']
     obtain ⟨res, s₄, hit, hes, hL₄⟩ := params_reads params hps s₃ its (colon :: (tts ++ (lb :: ba' ++ bb ++ rest)))
@@ -361,7 +358,7 @@ theorem parseFunction_reads {T : Edition} (start : Pos) (exported : Bool) (sp : 
       rfl
     · simp [Decl.erase, heb, het, Param.erase] at hes ⊢
       exact hes
-    · exact leaves_trans (leaves_advanced hs' hl) (leaves_trans (leaves_advanced (s := s₁) rfl (by simp [s₁, hl, hs']))
+    · exact leaves_trans (leaves_advance hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))
         (leaves_trans (leaves_advance (s := s₂) rfl (by simp [s₂, s₁, hl, hs'])) (leaves_trans hL₄
           (leaves_trans (leaves_advance hs₄ (by rw [hL₄.left_eq, hs₄]))
             (leaves_trans (leaves_advance (s := s₅) rfl (by simp [s₅, hL₄.left_eq, hs₄]))
@@ -386,8 +383,8 @@ theorem parseTypeAlias_reads (start : Pos) (exported : Bool) (sp : Span) (name :
   obtain ⟨semi, ts₅, rfl, hsemi, h₅⟩ := Touching.cons_one (by simpa [punctWord] using h₄)
   simp [Touching] at h₅; subst h₅
   have hs' : s.rest = tk :: nm :: eq :: (tts ++ semi :: rest) := by simpa using hs
-  let s₁ := advanced s tk nm (eq :: (tts ++ semi :: rest))
-  let s₂ := advanced s₁ nm eq (tts ++ semi :: rest)
+  let s₁ := past s tk (nm :: (eq :: (tts ++ semi :: rest)))
+  let s₂ := past s₁ nm (eq :: (tts ++ semi :: rest))
   let s₃ : ParseState := { s₂ with rest := tts ++ semi :: rest, left := s₂.left - 1, lastStop := eq.span.stop }
   have hl₃ : s₃.left = s₃.rest.length := by simp [s₃, s₂, s₁, hl, hs']
   obtain ⟨t', s₄, hpt, het, hL₄⟩ := parseType_budget ty hty s₃ tts (semi :: rest) rfl hl₃ htt.kinds
@@ -396,7 +393,7 @@ theorem parseTypeAlias_reads (start : Pos) (exported : Bool) (sp : Span) (name :
   have hnot : eq.kind ≠ .punct "<" := by rw [heq]; exact punct_ne (by decide)
   refine ⟨.typeAlias ⟨start, semi.span.stop⟩ exported name t',
     { s₄ with rest := rest, left := s₄.left - 1, lastStop := semi.span.stop }, ?_, by simp [Decl.erase, het],
-    leaves_trans (leaves_advanced hs' hl) (leaves_trans (leaves_advanced (s := s₁) rfl (by simp [s₁, hl, hs']))
+    leaves_trans (leaves_advance hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))
       (leaves_trans (leaves_advance (s := s₂) rfl (by simp [s₂, s₁, hl, hs'])) (leaves_trans hL₄
         (leaves_advance hs₄ (by rw [hL₄.left_eq, hs₄])))))⟩
   simp only [Parse.parseTypeAlias]
@@ -496,7 +493,7 @@ theorem parseField_plain (sp : Span) (name : String) (ty : TypeExpr) (hty : ty.w
   obtain ⟨semi, ts₄, rfl, hsemi, h₄⟩ := Touching.cons_one (by simpa [punctWord] using h₃)
   simp [Touching] at h₄; subst h₄
   have hs' : s.rest = nm :: c :: (tts ++ semi :: rest) := by simpa using hs
-  let s₁ := advanced s nm c (tts ++ semi :: rest)
+  let s₁ := past s nm (c :: (tts ++ semi :: rest))
   let s₂ : ParseState := { s₁ with rest := tts ++ semi :: rest, left := s₁.left - 1, lastStop := c.span.stop }
   have hl₂ : s₂.left = s₂.rest.length := by simp [s₂, s₁, hl, hs']
   obtain ⟨t', s₃, hpt, het, hL₃⟩ := parseType_budget ty hty s₂ tts (semi :: rest) rfl hl₂ htt.kinds
@@ -507,7 +504,7 @@ theorem parseField_plain (sp : Span) (name : String) (ty : TypeExpr) (hty : ty.w
   have hc3 : (c.kind == .punct "<") = false := by simp [hc]
   refine ⟨⟨⟨nm.span.start, semi.span.stop⟩, false, name, false, t'⟩,
     { s₃ with rest := rest, left := s₃.left - 1, lastStop := semi.span.stop }, ?_, by simp [Field.erase, het],
-    leaves_trans (leaves_advanced hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))
+    leaves_trans (leaves_advance hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))
       (leaves_trans hL₃ (leaves_advance hs₃ (by rw [hL₃.left_eq, hs₃]))))⟩
   simp only [Parse.parseField]
   rw [Parse.bind_eq (Parse.peek_eq hs'), Parse.bind_eq (Parse.peekAt_rest _ _)]
@@ -546,8 +543,8 @@ theorem parseField_opt (sp : Span) (name : String) (ty : TypeExpr) (hty : ty.wf 
   obtain ⟨semi, ts₄, rfl, hsemi, h₄⟩ := Touching.cons_one (by simpa [punctWord] using h₃)
   simp [Touching] at h₄; subst h₄
   have hs' : s.rest = nm :: q :: c :: (tts ++ semi :: rest) := by simpa using hs
-  let s₁ := advanced s nm q (c :: (tts ++ semi :: rest))
-  let s₁' := advanced s₁ q c (tts ++ semi :: rest)
+  let s₁ := past s nm (q :: (c :: (tts ++ semi :: rest)))
+  let s₁' := past s₁ q (c :: (tts ++ semi :: rest))
   let s₂ : ParseState := { s₁' with rest := tts ++ semi :: rest, left := s₁'.left - 1, lastStop := c.span.stop }
   have hl₂ : s₂.left = s₂.rest.length := by simp [s₂, s₁', s₁, hl, hs']
   obtain ⟨t', s₃, hpt, het, hL₃⟩ := parseType_budget ty hty s₂ tts (semi :: rest) rfl hl₂ htt.kinds
@@ -555,7 +552,7 @@ theorem parseField_opt (sp : Span) (name : String) (ty : TypeExpr) (hty : ty.wf 
   have hs₃ : s₃.rest = semi :: rest := hL₃.rest_eq
   refine ⟨⟨⟨nm.span.start, semi.span.stop⟩, false, name, true, t'⟩,
     { s₃ with rest := rest, left := s₃.left - 1, lastStop := semi.span.stop }, ?_, by simp [Field.erase, het],
-    leaves_trans (leaves_advanced hs' hl) (leaves_trans (leaves_advanced (s := s₁) rfl (by simp [s₁, hl, hs']))
+    leaves_trans (leaves_advance hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))
       (leaves_trans (leaves_advance (s := s₁') rfl (by simp [s₁', s₁, hl, hs']))
         (leaves_trans hL₃ (leaves_advance hs₃ (by rw [hL₃.left_eq, hs₃])))))⟩
   simp only [Parse.parseField]
@@ -599,8 +596,8 @@ theorem parseField_ro (sp : Span) (name : String) (opt : Bool) (ty : TypeExpr) (
     obtain ⟨semi, ts₄, rfl, hsemi, h₄⟩ := Touching.cons_one (by simpa [punctWord] using h₃)
     simp [Touching] at h₄; subst h₄
     have hs' : s.rest = ro :: nm :: c :: (tts ++ semi :: rest) := by simpa using hs
-    let s₀ := advanced s ro nm (c :: (tts ++ semi :: rest))
-    let s₁ := advanced s₀ nm c (tts ++ semi :: rest)
+    let s₀ := past s ro (nm :: (c :: (tts ++ semi :: rest)))
+    let s₁ := past s₀ nm (c :: (tts ++ semi :: rest))
     let s₂ : ParseState := { s₁ with rest := tts ++ semi :: rest, left := s₁.left - 1, lastStop := c.span.stop }
     have hl₂ : s₂.left = s₂.rest.length := by simp [s₂, s₁, s₀, hl, hs']
     obtain ⟨t', s₃, hpt, het, hL₃⟩ := parseType_budget ty hty s₂ tts (semi :: rest) rfl hl₂ htt.kinds
@@ -608,7 +605,7 @@ theorem parseField_ro (sp : Span) (name : String) (opt : Bool) (ty : TypeExpr) (
     have hs₃ : s₃.rest = semi :: rest := hL₃.rest_eq
     refine ⟨⟨⟨ro.span.start, semi.span.stop⟩, true, name, false, t'⟩,
       { s₃ with rest := rest, left := s₃.left - 1, lastStop := semi.span.stop }, ?_, by simp [Field.erase, het],
-      leaves_trans (leaves_advanced hs' hl) (leaves_trans (leaves_advanced (s := s₀) rfl (by simp [s₀, hl, hs']))
+      leaves_trans (leaves_advance hs' hl) (leaves_trans (leaves_advance (s := s₀) rfl (by simp [s₀, hl, hs']))
         (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, s₀, hl, hs']))
           (leaves_trans hL₃ (leaves_advance hs₃ (by rw [hL₃.left_eq, hs₃])))))⟩
     simp only [Parse.parseField]
@@ -636,9 +633,9 @@ theorem parseField_ro (sp : Span) (name : String) (opt : Bool) (ty : TypeExpr) (
     obtain ⟨semi, ts₄, rfl, hsemi, h₄⟩ := Touching.cons_one (by simpa [punctWord] using h₃)
     simp [Touching] at h₄; subst h₄
     have hs' : s.rest = ro :: nm :: q :: c :: (tts ++ semi :: rest) := by simpa using hs
-    let s₀ := advanced s ro nm (q :: c :: (tts ++ semi :: rest))
-    let s₁ := advanced s₀ nm q (c :: (tts ++ semi :: rest))
-    let s₁' := advanced s₁ q c (tts ++ semi :: rest)
+    let s₀ := past s ro (nm :: (q :: c :: (tts ++ semi :: rest)))
+    let s₁ := past s₀ nm (q :: (c :: (tts ++ semi :: rest)))
+    let s₁' := past s₁ q (c :: (tts ++ semi :: rest))
     let s₂ : ParseState := { s₁' with rest := tts ++ semi :: rest, left := s₁'.left - 1, lastStop := c.span.stop }
     have hl₂ : s₂.left = s₂.rest.length := by simp [s₂, s₁', s₁, s₀, hl, hs']
     obtain ⟨t', s₃, hpt, het, hL₃⟩ := parseType_budget ty hty s₂ tts (semi :: rest) rfl hl₂ htt.kinds
@@ -646,8 +643,8 @@ theorem parseField_ro (sp : Span) (name : String) (opt : Bool) (ty : TypeExpr) (
     have hs₃ : s₃.rest = semi :: rest := hL₃.rest_eq
     refine ⟨⟨⟨ro.span.start, semi.span.stop⟩, true, name, true, t'⟩,
       { s₃ with rest := rest, left := s₃.left - 1, lastStop := semi.span.stop }, ?_, by simp [Field.erase, het],
-      leaves_trans (leaves_advanced hs' hl) (leaves_trans (leaves_advanced (s := s₀) rfl (by simp [s₀, hl, hs']))
-        (leaves_trans (leaves_advanced (s := s₁) rfl (by simp [s₁, s₀, hl, hs']))
+      leaves_trans (leaves_advance hs' hl) (leaves_trans (leaves_advance (s := s₀) rfl (by simp [s₀, hl, hs']))
+        (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, s₀, hl, hs']))
           (leaves_trans (leaves_advance (s := s₁') rfl (by simp [s₁', s₁, s₀, hl, hs']))
             (leaves_trans hL₃ (leaves_advance hs₃ (by rw [hL₃.left_eq, hs₃]))))))⟩
     simp only [Parse.parseField]
@@ -710,7 +707,7 @@ theorem field_loop :
     obtain ⟨f', rfl⟩ : ∃ f', fuel = f' + 1 := ⟨fuel - 1, by simp at hlen; omega⟩
     simp [Laid] at ht; subst ht
     have hs' : s.rest = c :: rest := by simpa using hs
-    refine ⟨acc, s, Parse.iterate_false ?_, by simp, ⟨hs', by simp [hl, hs'], rfl, rfl, rfl, rfl⟩⟩
+    refine ⟨acc, s, Parse.iterate_false ?_, by simp, Leaves.refl hs' (by simp [hl, hs'])⟩
     simp only [Parse.blockStep]
     rw [Parse.bind_eq (Parse.peek_eq hs')]
     simp [Token.isPunct, hc, pure, EStateM.pure]
@@ -772,8 +769,8 @@ theorem parseInterface_reads (start : Pos) (exported : Bool) (sp : Span) (name :
   obtain ⟨lb, ts₃, rfl, hlb, h₃⟩ := Touching.cons_one (by simpa [punctWord] using h₂)
   simp [Touching] at h₃; subst h₃
   have hs' : s.rest = it :: nm :: lb :: (fts ++ rb :: rest) := by simpa using hs
-  let s₁ := advanced s it nm (lb :: (fts ++ rb :: rest))
-  let s₂ := advanced s₁ nm lb (fts ++ rb :: rest)
+  let s₁ := past s it (nm :: (lb :: (fts ++ rb :: rest)))
+  let s₂ := past s₁ nm (lb :: (fts ++ rb :: rest))
   let s₃ : ParseState := { s₂ with rest := fts ++ rb :: rest, left := s₂.left - 1, lastStop := lb.span.stop }
   have hl₃ : s₃.left = s₃.rest.length := by simp [s₃, s₂, s₁, hl, hs']
   have hlen := Laid.length_fields hf
@@ -785,7 +782,7 @@ theorem parseInterface_reads (start : Pos) (exported : Bool) (sp : Span) (name :
   have hn2 : lb.kind ≠ .keyword "extends" := by rw [hlb]; simp
   refine ⟨.interface ⟨start, rb.span.stop⟩ exported name res.toList,
     { s₄ with rest := rest, left := s₄.left - 1, lastStop := rb.span.stop }, ?_, ?_,
-    leaves_trans (leaves_advanced hs' hl) (leaves_trans (leaves_advanced (s := s₁) rfl (by simp [s₁, hl, hs']))
+    leaves_trans (leaves_advance hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))
       (leaves_trans (leaves_advance (s := s₂) rfl (by simp [s₂, s₁, hl, hs'])) (leaves_trans hL₄
         (leaves_advance hs₄ (by rw [hL₄.left_eq, hs₄])))))⟩
   · simp only [Parse.parseInterface]
@@ -831,8 +828,8 @@ theorem importStep_ok {acc : Array ImportName} {s : ParseState} {n : ImportName}
   have hd1 : (d.kind == .ident "as") = false := by simp [hdi]
   rcases Touching.importName ha with ⟨hto, ty, nm, rfl, hty, hnm⟩ | ⟨hto, nm, rfl, hnm⟩
   · have hs' : s.rest = ty :: nm :: d :: r := by simpa using hs
-    let s₁ := advanced s ty nm (d :: r)
-    let s₂ := advanced s₁ nm d r
+    let s₁ := past s ty (nm :: (d :: r))
+    let s₂ := past s₁ nm (d :: r)
     have hty1 : (ty.kind == .punct "}") = false := by simp [hty]
     rcases hd with hd | hd
     · refine ⟨⟨nm.span, true, n.name⟩, { s₂ with rest := r, left := s₂.left - 1, lastStop := d.span.stop }, ?_,
@@ -852,7 +849,7 @@ theorem importStep_ok {acc : Array ImportName} {s : ParseState} {n : ImportName}
           Parse.bind_eq (Parse.discard_eq (Parse.advance_cons (s := s₂) rfl (hr hd)))]
         rfl
       · simp only [Token.isPunct, hd, beq_self_eq_true, ↓reduceIte]
-        exact leaves_trans (leaves_advanced hs' hl) (leaves_trans (leaves_advanced (s := s₁) rfl
+        exact leaves_trans (leaves_advance hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl
           (by simp [s₁, hl, hs'])) (leaves_advance (s := s₂) rfl (by simp [s₂, s₁, hl, hs'])))
     · refine ⟨⟨nm.span, true, n.name⟩, s₂, ?_, by simp [ImportName.erase, hto], ?_⟩
       · simp only [Parse.importStep]
@@ -871,9 +868,9 @@ theorem importStep_ok {acc : Array ImportName} {s : ParseState} {n : ImportName}
         rfl
       · have : (d.kind == .punct ",") = false := by simp [hd]
         simp only [Token.isPunct, this, Bool.false_eq_true, ↓reduceIte]
-        exact leaves_trans (leaves_advanced hs' hl) (leaves_advanced (s := s₁) rfl (by simp [s₁, hl, hs']))
+        exact leaves_trans (leaves_advance hs' hl) (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))
   · have hs' : s.rest = nm :: d :: r := by simpa using hs
-    let s₁ := advanced s nm d r
+    let s₁ := past s nm (d :: r)
     have hnm1 : (nm.kind == .punct "}") = false := by simp [hnm]
     have hdA : d.isAnyIdent = false := by
       rcases hd with h | h <;> simp [Token.isAnyIdent, h]
@@ -894,7 +891,7 @@ theorem importStep_ok {acc : Array ImportName} {s : ParseState} {n : ImportName}
           Parse.bind_eq (Parse.discard_eq (Parse.advance_cons (s := s₁) rfl (hr hd)))]
         rfl
       · simp only [Token.isPunct, hd, beq_self_eq_true, ↓reduceIte]
-        exact leaves_trans (leaves_advanced hs' hl) (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))
+        exact leaves_trans (leaves_advance hs' hl) (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))
     · refine ⟨⟨nm.span, false, n.name⟩, s₁, ?_, by simp [ImportName.erase, hto], ?_⟩
       · simp only [Parse.importStep]
         rw [Parse.bind_eq (Parse.peek_eq hs')]
@@ -911,7 +908,7 @@ theorem importStep_ok {acc : Array ImportName} {s : ParseState} {n : ImportName}
         rfl
       · have : (d.kind == .punct ",") = false := by simp [hd]
         simp only [Token.isPunct, this, Bool.false_eq_true, ↓reduceIte]
-        exact leaves_advanced hs' hl
+        exact leaves_advance hs' hl
 
 /-- The loop of `parseImport` reads the names of an import, with a `,` between two of them, which a `}` follows. -/
 theorem import_loop :
@@ -929,7 +926,7 @@ theorem import_loop :
     have hts : ts = [] := Touching.nil.mp (by simpa [separated] using ht)
     subst hts
     have hs' : s.rest = c :: rest := by simpa using hs
-    refine ⟨acc, s, Parse.iterate_false ?_, by simp, ⟨hs', by simp [hl, hs'], rfl, rfl, rfl, rfl⟩⟩
+    refine ⟨acc, s, Parse.iterate_false ?_, by simp, Leaves.refl hs' (by simp [hl, hs'])⟩
     simp only [Parse.importStep]
     rw [Parse.bind_eq (Parse.peek_eq hs')]
     simp [Token.isPunct, hc, pure, EStateM.pure]
@@ -981,7 +978,7 @@ theorem parseImport_reads (start : Pos) (sp : Span) (names : List ImportName) (s
   obtain ⟨semi, ts₅, rfl, hsemi, h₅⟩ := Touching.cons_one (by simpa [punctWord] using h₄)
   simp [Touching] at h₅; subst h₅
   have hs' : s.rest = ik :: lb :: (nts ++ rb :: fr :: st :: semi :: rest) := by simpa using hs
-  let s₁ := advanced s ik lb (nts ++ rb :: fr :: st :: semi :: rest)
+  let s₁ := past s ik (lb :: (nts ++ rb :: fr :: st :: semi :: rest))
   let s₂ : ParseState := { s₁ with rest := nts ++ rb :: fr :: st :: semi :: rest, left := s₁.left - 1, lastStop := lb.span.stop }
   have hl₂ : s₂.left = s₂.rest.length := by simp [s₂, s₁, hl, hs']
   have hlen := length_items hnts
@@ -990,8 +987,8 @@ theorem parseImport_reads (start : Pos) (sp : Span) (names : List ImportName) (s
     rfl hrb hl₂ hnts
   have hs₃ : s₃.rest = rb :: fr :: st :: semi :: rest := hL₃.rest_eq
   let s₄ : ParseState := { s₃ with rest := fr :: st :: semi :: rest, left := s₃.left - 1, lastStop := rb.span.stop }
-  let s₅ := advanced s₄ fr st (semi :: rest)
-  let s₆ := advanced s₅ st semi rest
+  let s₅ := past s₄ fr (st :: (semi :: rest))
+  let s₆ := past s₅ st (semi :: rest)
   have hres : res.isEmpty = false := by
     cases hres : res.toList with
     | nil => rw [hres] at he; cases names with
@@ -1017,10 +1014,10 @@ theorem parseImport_reads (start : Pos) (sp : Span) (names : List ImportName) (s
     rfl
   · simp [Decl.erase, ImportName.erase] at he ⊢
     exact he
-  · exact leaves_trans (leaves_advanced hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))
+  · exact leaves_trans (leaves_advance hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))
       (leaves_trans hL₃ (leaves_trans (leaves_advance hs₃ (by rw [hL₃.left_eq, hs₃]))
-        (leaves_trans (leaves_advanced (s := s₄) rfl (by simp [s₄, hL₃.left_eq, hs₃]))
-          (leaves_trans (leaves_advanced (s := s₅) rfl (by simp [s₅, s₄, hL₃.left_eq, hs₃]))
+        (leaves_trans (leaves_advance (s := s₄) rfl (by simp [s₄, hL₃.left_eq, hs₃]))
+          (leaves_trans (leaves_advance (s := s₅) rfl (by simp [s₅, s₄, hL₃.left_eq, hs₃]))
             (leaves_advance (s := s₆) rfl (by simp [s₆, s₅, s₄, hL₃.left_eq, hs₃])))))))
 
 /-! ### Declarations -/
@@ -1197,11 +1194,11 @@ theorem parseDecl_typeAlias {T : Edition} (sp : Span) (exported : Bool) (name : 
     obtain ⟨tk, ts₁, rfl, htk, h₁⟩ := Touching.cons_one (by simpa [identWord] using h₀)
     obtain ⟨nm, ts₂, rfl, hnm, _⟩ := Touching.cons_one (by simpa [identWord] using h₁)
     have hs' : s.rest = ex :: tk :: nm :: (ts₂ ++ rest) := by simpa using hs
-    let s₁ := advanced s ex tk (nm :: (ts₂ ++ rest))
+    let s₁ := past s ex (tk :: (nm :: (ts₂ ++ rest)))
     obtain ⟨d', s', hp, he, hL⟩ := parseTypeAlias_reads ex.span.start (ex.isKeyword "export") sp name ty hname hty
       s₁ (tk :: nm :: ts₂) rest rfl (by simp [s₁, hl, hs']) h₀ (fun y hy => hnl y (by simp at hy ⊢; simp [hy])) hr
     have hnmn : nm.newlineBefore = false := hnl nm (by simp) (by rw [hnm]; simp)
-    refine ⟨d', s', ?_, by rw [he]; simp [Decl.erase, Token.isKeyword, hex], leaves_trans (leaves_advanced hs' hl) hL⟩
+    refine ⟨d', s', ?_, by rw [he]; simp [Decl.erase, Token.isKeyword, hex], leaves_trans (leaves_advance hs' hl) hL⟩
     simp only [Parse.parseDecl]
     rw [Parse.bind_eq (Parse.peek_eq hs')]
     rw [if_neg (show ¬ (ex.isKeyword "import" = true) by simp [Token.isKeyword, hex]), Parse.pure_bind]
@@ -1255,11 +1252,11 @@ theorem parseDecl_interface {T : Edition} (sp : Span) (exported : Bool) (name : 
     obtain ⟨it, a₁, rfl, hit, h₁⟩ := Touching.cons_one (by simpa [identWord] using h₀)
     obtain ⟨nm, a₂, rfl, hnm, _⟩ := Touching.cons_one (by simpa [identWord] using h₁)
     have hs' : s.rest = ex :: it :: nm :: (a₂ ++ (fts ++ rb :: rest)) := by simpa using hs
-    let s₁ := advanced s ex it (nm :: (a₂ ++ (fts ++ rb :: rest)))
+    let s₁ := past s ex (it :: (nm :: (a₂ ++ (fts ++ rb :: rest))))
     obtain ⟨d', s', hp, he, hL⟩ := parseInterface_reads ex.span.start (ex.isKeyword "export") sp name fields hname
       hfs s₁ (it :: nm :: a₂) fts rest rb (by simp [s₁]) (by simp [s₁, hl, hs']) h₀ hfts hrbk hr
     have hnmn : nm.newlineBefore = false := hna nm (by simp) (by rw [hnm]; simp)
-    refine ⟨d', s', ?_, by rw [he]; simp [Decl.erase, Token.isKeyword, hex], leaves_trans (leaves_advanced hs' hl) hL⟩
+    refine ⟨d', s', ?_, by rw [he]; simp [Decl.erase, Token.isKeyword, hex], leaves_trans (leaves_advance hs' hl) hL⟩
     simp only [Parse.parseDecl]
     rw [Parse.bind_eq (Parse.peek_eq hs')]
     rw [if_neg (show ¬ (ex.isKeyword "import" = true) by simp [Token.isKeyword, hex]), Parse.pure_bind]
@@ -1307,11 +1304,11 @@ theorem parseDecl_function {T : Edition} (sp : Span) (exported : Bool) (name : S
     obtain ⟨ex, a₀, rfl, hex, h₀⟩ := Touching.cons_one (by simpa [keywordWord] using ha)
     obtain ⟨fk, a₁, rfl, hfk, _⟩ := Touching.cons_one (by simpa [keywordWord] using h₀)
     have hs' : s.rest = ex :: fk :: (a₁ ++ (b ++ rest)) := by simpa using hs
-    let s₁ := advanced s ex fk (a₁ ++ (b ++ rest))
+    let s₁ := past s ex (fk :: (a₁ ++ (b ++ rest)))
     obtain ⟨d', s', hp, he, hL⟩ := parseFunction_reads ex.span.start (ex.isKeyword "export") sp name params rt bsp bs
       hname hps hrt' hbw s₁ (fk :: a₁) b rest hT hF (by simp [s₁]) (by simp [s₁, hl, hs']) h₀
       (fun y hy => hna y (by simp at hy ⊢; simp [hy])) hb hr
-    refine ⟨d', s', ?_, by rw [he]; simp [Decl.erase, Token.isKeyword, hex], leaves_trans (leaves_advanced hs' hl) hL⟩
+    refine ⟨d', s', ?_, by rw [he]; simp [Decl.erase, Token.isKeyword, hex], leaves_trans (leaves_advance hs' hl) hL⟩
     simp only [Parse.parseDecl]
     rw [Parse.bind_eq (Parse.peek_eq hs')]
     rw [if_neg (show ¬ (ex.isKeyword "import" = true) by simp [Token.isKeyword, hex]), Parse.pure_bind]
@@ -1334,11 +1331,11 @@ theorem parseDecl_exportedVar {T : Edition} (sp : Span) (d : VarDecl)
   obtain ⟨kw, ts₁, rfl, hkw, h₁⟩ := Touching.cons_one (by simpa using h₀')
   obtain ⟨nm, ts₂, rfl, hnm, _⟩ := Touching.cons_one (by simpa [identWord] using h₁)
   have hs' : s.rest = ex :: kw :: nm :: (ts₂ ++ rest) := by simpa using hs
-  let s₁ := advanced s ex kw (nm :: (ts₂ ++ rest))
+  let s₁ := past s ex (kw :: (nm :: (ts₂ ++ rest)))
   obtain ⟨d', s', hp, he, hL⟩ := parseVarDecl_reads d hw s₁ (kw :: nm :: ts₂) rest hT (by simp [s₁])
     (by simp [s₁, hl, hs']) h₀ (fun y hy => hnl y (by simp at hy ⊢; simp [hy])) hr
   refine ⟨.exportedVar ⟨ex.span.start, s'.lastStop⟩ d', s', ?_, by simp [Decl.erase, he],
-    leaves_trans (leaves_advanced hs' hl) hL⟩
+    leaves_trans (leaves_advance hs' hl) hL⟩
   simp only [Parse.parseDecl]
   rw [Parse.bind_eq (Parse.peek_eq hs')]
   rw [if_neg (show ¬ (ex.isKeyword "import" = true) by simp [Token.isKeyword, hex]), Parse.pure_bind]
@@ -1435,7 +1432,7 @@ theorem decl_loop {T : Edition} :
     obtain ⟨f', rfl⟩ : ∃ f', fuel = f' + 1 := ⟨fuel - 1, by simp at hlen; omega⟩
     simp [Laid] at ht; subst ht
     have hs' : s.rest = [c] := by simpa using hs
-    refine ⟨acc, s, Parse.iterate_false ?_, by simp, ⟨hs', by simp [hl, hs'], rfl, rfl, rfl, rfl⟩⟩
+    refine ⟨acc, s, Parse.iterate_false ?_, by simp, Leaves.refl hs' (by simp [hl, hs'])⟩
     simp only [Parse.declStep]
     rw [Parse.bind_eq (Parse.peek_eq hs')]
     simp [Token.isEof, hc, pure, EStateM.pure]

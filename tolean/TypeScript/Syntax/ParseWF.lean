@@ -112,18 +112,6 @@ def Ready (s : ParseState) : Prop :=
   Parse.Good s ∧ s.rest.getLast? = some s.eof ∧ s.eof.kind = .eof ∧
     ∀ t ∈ s.rest, t.kind = .eof ∨ TokenKind.ok s.target t.kind = true
 
-/-- What reading a node leaves as it was. -/
-structure Kept (s s' : ParseState) : Prop where
-  eof_eq : s'.eof = s.eof
-  inFunction_eq : s'.inFunction = s.inFunction
-  loopDepth_eq : s'.loopDepth = s.loopDepth
-  target_eq : s'.target = s.target
-
-theorem Kept.refl (s : ParseState) : Kept s s := ⟨rfl, rfl, rfl, rfl⟩
-
-theorem Kept.trans {s₁ s₂ s₃ : ParseState} (h₁ : Kept s₁ s₂) (h₂ : Kept s₂ s₃) : Kept s₁ s₃ :=
-  ⟨h₂.eof_eq.trans h₁.eof_eq, h₂.inFunction_eq.trans h₁.inFunction_eq,
-    h₂.loopDepth_eq.trans h₁.loopDepth_eq, h₂.target_eq.trans h₁.target_eq⟩
 
 /-- Every word of `ws` lexes back, for the target `T`. -/
 def WordsOK (T : Edition) (ws : List Word) : Prop := ∀ w ∈ ws, Word.ok T w = true
@@ -182,15 +170,11 @@ theorem Ready.suffix {s s' : ParseState} {a : List Token} (h : Ready s) (hs : s.
   rw [hu, he]
   simpa [List.getLast?_append] using h1
 
-/-- The state after `advance` reads `x`. -/
-abbrev past (s : ParseState) (x : Token) (r : List Token) : ParseState :=
-  { s with rest := r, left := s.left - 1, lastStop := x.span.stop }
 
 theorem Ready.past {s : ParseState} {x : Token} {r : List Token} (h : Ready s) (hs : s.rest = x :: r)
     (hr : r ≠ []) : Ready (past s x r) :=
   h.suffix (a := [x]) (by simpa using hs) hr (by have := h.1.2; simp [hs] at this; simp [this]) rfl rfl
 
-theorem Kept.past (s : ParseState) (x : Token) (r : List Token) : Kept s (past s x r) := ⟨rfl, rfl, rfl, rfl⟩
 
 /-- `advance` reads a token that is not the end of the file. -/
 theorem advance_past {s : ParseState} {x : Token} {r : List Token} (h : Ready s) (hs : s.rest = x :: r)
@@ -2622,9 +2606,6 @@ theorem parseBlock_gives {T : Edition} {f : Nat} (hS : GivesS T (Parse.parseStat
     by simp [Stmt.isDecl], StmtOK.block (fun x hx => (hall x hx).2)⟩
   simpa [Stmt.wf] using Stmt.allWF_of _ (fun x hx => (hall x hx).1)
 
-theorem modify_eq {f : ParseState → ParseState} (s : ParseState) : (modify f : ParseM PUnit) s = .ok () (f s) := by
-  simp [modify, modifyGet, MonadStateOf.modifyGet, EStateM.modifyGet]
-
 /-- A branch: a statement that is not a declaration. -/
 def GivesB (T : Edition) (p : ParseM Stmt) : Prop :=
   ∀ s st s', Ready s → s.target = T → p s = .ok st s' →
@@ -2655,11 +2636,11 @@ theorem withLoop_inv {T : Edition} {p : ParseM Stmt} (hp : GivesB T p) {s s' : P
     Ready s' ∧ Kept s s' ∧ st.wf T s.inFunction true = true ∧
       (st.openIf = true → ∀ u ∈ s'.rest.head?, u.kind ≠ .keyword "else") ∧ st.isDecl = false ∧ StmtOK T st := by
   simp only [Parse.withLoop] at h
-  rw [Parse.bind_eq (modify_eq s), Parse.bind_ok] at h
+  rw [Parse.bind_eq (Parse.modify_eq _ s), Parse.bind_ok] at h
   obtain ⟨b, s₂, hb, h⟩ := h
   have hR₁ : Ready { s with loopDepth := s.loopDepth + 1 } := ⟨hR.1, hR.2.1, hR.2.2.1, hR.2.2.2⟩
   obtain ⟨hR₂, hK₂, hw, ho, hd, hok⟩ := hp _ _ _ hR₁ hT hb
-  rw [Parse.bind_eq (modify_eq s₂)] at h
+  rw [Parse.bind_eq (Parse.modify_eq _ s₂)] at h
   simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h
   refine ⟨⟨hR₂.1, hR₂.2.1, hR₂.2.2.1, hR₂.2.2.2⟩, ⟨hK₂.eof_eq, hK₂.inFunction_eq, ?_, hK₂.target_eq⟩, ?_, ho, hd,
     hok⟩
@@ -3326,12 +3307,12 @@ theorem parseFunction_wf {T : Edition} (start : Pos) (exported : Bool) :
     obtain ⟨w, r₇, hs₇⟩ := hR₆.cons
     rw [Parse.bind_eq (Parse.peek_eq hs₇)] at h
     obtain ⟨_, h⟩ := pass_err (unexpected_refuses _ _) h
-    rw [Parse.bind_eq (modify_eq _), Parse.bind_eq (Parse.budget_eq _), Parse.bind_ok] at h
+    rw [Parse.bind_eq (Parse.modify_eq _ _), Parse.bind_eq (Parse.budget_eq _), Parse.bind_ok] at h
     obtain ⟨body, s₈, hb, h⟩ := h
     have hR₇ : Ready { s₆ with inFunction := true } := ⟨hR₆.1, hR₆.2.1, hR₆.2.2.1, hR₆.2.2.2⟩
     obtain ⟨hR₈, hK₈, hbw, _, _, hbok⟩ := (stmts_give T _).2.2.1 _ _ _ hR₇ (by rw [show
       ({ s₆ with inFunction := true } : ParseState).target = s₆.target from rfl, hK₆.target_eq, hT]) hb
-    rw [Parse.bind_eq (modify_eq _), Parse.bind_eq (Parse.spanFrom_eq _ _)] at h
+    rw [Parse.bind_eq (Parse.modify_eq _ _), Parse.bind_eq (Parse.spanFrom_eq _ _)] at h
     simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h
     refine ⟨⟨hR₈.1, hR₈.2.1, hR₈.2.2.1, hR₈.2.2.2⟩,
       ⟨by rw [show ({ s₈ with inFunction := false } : ParseState).eof = s₈.eof from rfl, hK₈.eof_eq]; exact hK₆.eof_eq,
@@ -3352,12 +3333,12 @@ theorem parseFunction_wf {T : Edition} (start : Pos) (exported : Bool) :
     obtain ⟨w, r₇, hs₇⟩ := hR₆.cons
     rw [Parse.bind_eq (Parse.peek_eq hs₇)] at h
     obtain ⟨_, h⟩ := pass_err (unexpected_refuses _ _) h
-    rw [Parse.bind_eq (modify_eq _), Parse.bind_eq (Parse.budget_eq _), Parse.bind_ok] at h
+    rw [Parse.bind_eq (Parse.modify_eq _ _), Parse.bind_eq (Parse.budget_eq _), Parse.bind_ok] at h
     obtain ⟨body, s₈, hb, h⟩ := h
     have hR₇ : Ready { (past s₄ rp r₅) with inFunction := true } := ⟨hR₆.1, hR₆.2.1, hR₆.2.2.1, hR₆.2.2.2⟩
     obtain ⟨hR₈, hK₈, hbw, _, _, hbok⟩ := (stmts_give T _).2.2.1 _ _ _ hR₇ (by rw [show
       ({ (past s₄ rp r₅) with inFunction := true } : ParseState).target = (past s₄ rp r₅).target from rfl, hK₆.target_eq, hT]) hb
-    rw [Parse.bind_eq (modify_eq _), Parse.bind_eq (Parse.spanFrom_eq _ _)] at h
+    rw [Parse.bind_eq (Parse.modify_eq _ _), Parse.bind_eq (Parse.spanFrom_eq _ _)] at h
     simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h
     refine ⟨⟨hR₈.1, hR₈.2.1, hR₈.2.2.1, hR₈.2.2.2⟩,
       ⟨by rw [show ({ s₈ with inFunction := false } : ParseState).eof = s₈.eof from rfl, hK₈.eof_eq]; exact hK₆.eof_eq,

@@ -229,7 +229,7 @@ theorem parseType_budget (t : TypeExpr) (ht : t.wf = true) :
 
 theorem readName_ok {s : ParseState} {x u : Token} {r : List Token} {name : String}
     (hs : s.rest = x :: u :: r) (hx : x.kind = .ident name) (hn : name ∉ Parse.refusedNames) :
-    Parse.readName s = .ok name (advanced s x u r) := by
+    Parse.readName s = .ok name (past s x (u :: r)) := by
   simp [Parse.readName, Parse.advance_eq hs, hx, hn, bind, EStateM.bind, pure, EStateM.pure]
 
 theorem endStatement_semi {s : ParseState} {x : Token} {r : List Token} (hs : s.rest = x :: r) (hr : r ≠ [])
@@ -273,8 +273,8 @@ theorem varDecl_ss {T : Edition} (kind : VarKind) (name : String) (t : TypeExpr)
   obtain ⟨semi, ts₇, rfl, hsemi, h₇⟩ := Touching.cons_one (by simpa [punctWord] using h₆)
   simp [Touching] at h₇; subst h₇
   have hs' : s.rest = kw :: nm :: colon :: (tts ++ eq :: (ets ++ semi :: rest)) := by simpa using hs
-  let s₁ := advanced s kw nm (colon :: (tts ++ eq :: (ets ++ semi :: rest)))
-  let s₂ := advanced s₁ nm colon (tts ++ eq :: (ets ++ semi :: rest))
+  let s₁ := past s kw (nm :: (colon :: (tts ++ eq :: (ets ++ semi :: rest))))
+  let s₂ := past s₁ nm (colon :: (tts ++ eq :: (ets ++ semi :: rest)))
   let s₃ : ParseState := { s₂ with rest := tts ++ eq :: (ets ++ semi :: rest), left := s₂.left - 1, lastStop := colon.span.stop }
   have hl₃ : s₃.left = s₃.rest.length := by simp [s₃, s₂, s₁, hl, hs']
   obtain ⟨t', s₄, hpt, het', hL₄⟩ := parseType_budget t hwt s₃ tts (eq :: (ets ++ semi :: rest)) rfl hl₃
@@ -310,7 +310,7 @@ theorem varDecl_ss {T : Edition} (kind : VarKind) (name : String) (t : TypeExpr)
       Option.isNone_none, Bool.and_false, Bool.and_true, hsemi]
     rw [Parse.bind_eq (endStatement_semi hs₆ hr hsemi)]
     cases kind <;> simp [hkw, VarKind.token, pure, EStateM.pure]
-  · exact leaves_trans (leaves_advanced hs' hl) (leaves_trans (leaves_advanced (s := s₁) rfl (by simp [s₁, hl, hs']))
+  · exact leaves_trans (leaves_advance hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))
       (leaves_trans (leaves_advance (s := s₂) rfl (by simp [s₂, s₁, hl, hs'])) (leaves_trans hL₄
         (leaves_trans (leaves_advance hs₄ hl₄) (leaves_trans hL₆ (leaves_advance hs₆ (by rw [hL₆.left_eq, hs₆])))))))
 
@@ -333,8 +333,8 @@ theorem varDecl_ns {T : Edition} (kind : VarKind) (name : String) (e : Expr)
   obtain ⟨semi, ts₇, rfl, hsemi, h₇⟩ := Touching.cons_one (by simpa [punctWord] using h₆)
   simp [Touching] at h₇; subst h₇
   have hs' : s.rest = kw :: nm :: eq :: (ets ++ semi :: rest) := by simpa using hs
-  let s₁ := advanced s kw nm (eq :: (ets ++ semi :: rest))
-  let s₂ := advanced s₁ nm eq (ets ++ semi :: rest)
+  let s₁ := past s kw (nm :: (eq :: (ets ++ semi :: rest)))
+  let s₂ := past s₁ nm (eq :: (ets ++ semi :: rest))
   let s₅ : ParseState := { s₂ with rest := ets ++ semi :: rest, left := s₂.left - 1, lastStop := eq.span.stop }
   have hl₅ : s₅.left = s₅.rest.length := by simp [s₅, s₂, s₁, hl, hs']
   obtain ⟨e', s₆, hpe, he', hL₆⟩ := parseAssign_budget e hwe s₅ ets (semi :: rest) hT rfl hl₅ het
@@ -362,7 +362,7 @@ theorem varDecl_ns {T : Edition} (kind : VarKind) (name : String) (e : Expr)
       Option.isNone_none, Bool.and_false, Bool.and_true, reduceCtorEq, hsemi]
     rw [Parse.bind_eq (endStatement_semi hs₆ hr hsemi)]
     cases kind <;> simp [hkw, VarKind.token, pure, EStateM.pure]
-  · exact leaves_trans (leaves_advanced hs' hl) (leaves_trans (leaves_advanced (s := s₁) rfl (by simp [s₁, hl, hs']))
+  · exact leaves_trans (leaves_advance hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))
       (leaves_trans (leaves_advance (s := s₂) rfl (by simp [s₂, s₁, hl, hs'])) (leaves_trans hL₆
         (leaves_advance hs₆ (by rw [hL₆.left_eq, hs₆])))))
 
@@ -388,8 +388,8 @@ theorem varDecl_sn {T : Edition} (kind : VarKind) (name : String) (t : TypeExpr)
   simp [Touching] at h₇; subst h₇
   simp only [VarKind.token] at hkw
   have hs' : s.rest = kw :: nm :: colon :: (tts ++ semi :: rest) := by simpa using hs
-  let s₁ := advanced s kw nm (colon :: (tts ++ semi :: rest))
-  let s₂ := advanced s₁ nm colon (tts ++ semi :: rest)
+  let s₁ := past s kw (nm :: (colon :: (tts ++ semi :: rest)))
+  let s₂ := past s₁ nm (colon :: (tts ++ semi :: rest))
   let s₃ : ParseState := { s₂ with rest := tts ++ semi :: rest, left := s₂.left - 1, lastStop := colon.span.stop }
   have hl₃ : s₃.left = s₃.rest.length := by simp [s₃, s₂, s₁, hl, hs']
   obtain ⟨t', s₄, hpt, het', hL₄⟩ := parseType_budget t hwt s₃ tts (semi :: rest) rfl hl₃
@@ -416,7 +416,7 @@ theorem varDecl_sn {T : Edition} (kind : VarKind) (name : String) (t : TypeExpr)
       Option.isNone_none, Bool.and_false, Bool.and_true, reduceCtorEq, hsemi, hkw]
     rw [Parse.bind_eq (endStatement_semi hs₄ hr hsemi)]
     simp [hkw, pure, EStateM.pure]
-  · exact leaves_trans (leaves_advanced hs' hl) (leaves_trans (leaves_advanced (s := s₁) rfl (by simp [s₁, hl, hs']))
+  · exact leaves_trans (leaves_advance hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))
       (leaves_trans (leaves_advance (s := s₂) rfl (by simp [s₂, s₁, hl, hs'])) (leaves_trans hL₄
         (leaves_advance hs₄ (by rw [hL₄.left_eq, hs₄])))))
 
@@ -440,8 +440,8 @@ theorem varDecl_nn {T : Edition} (kind : VarKind) (name : String)
   simp [Touching] at h₇; subst h₇
   simp only [VarKind.token] at hkw
   have hs' : s.rest = kw :: nm :: semi :: rest := by simpa using hs
-  let s₁ := advanced s kw nm (semi :: rest)
-  let s₂ := advanced s₁ nm semi rest
+  let s₁ := past s kw (nm :: (semi :: rest))
+  let s₂ := past s₁ nm (semi :: rest)
   obtain ⟨u, r, rfl⟩ := rest_cons hr
   have hnot : nm.kind ≠ .punct "[" ∧ nm.kind ≠ .punct "{" := by rw [hnm]; simp
   refine ⟨⟨.«let», name, none, none⟩, { s₂ with rest := u :: r, left := s₂.left - 1, lastStop := semi.span.stop },
@@ -463,7 +463,7 @@ theorem varDecl_nn {T : Edition} (kind : VarKind) (name : String)
       Option.isNone_none, Bool.and_false, Bool.and_true, reduceCtorEq, hsemi, hkw]
     rw [Parse.bind_eq (endStatement_semi (s := s₂) rfl (by simp) hsemi)]
     simp [hkw, pure, EStateM.pure]
-  · exact leaves_trans (leaves_advanced hs' hl) (leaves_trans (leaves_advanced (s := s₁) rfl (by simp [s₁, hl, hs']))
+  · exact leaves_trans (leaves_advance hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))
       (leaves_advance (s := s₂) rfl (by simp [s₂, s₁, hl, hs'])))
 
 /-- `const` or `let`, a name, and a type, a value, both or neither. -/
@@ -517,10 +517,10 @@ theorem stmt_jump {T : Edition} {fn : Bool} (f : Nat) (st : Stmt) (word : String
   obtain ⟨semi, ts'', rfl, hsemi, h''⟩ := Touching.cons_one (by simpa [punctWord] using h')
   simp [Touching] at h''; subst h''
   have hs' : s.rest = kw :: semi :: rest := by simpa using hs
-  let s₁ := advanced s kw semi rest
+  let s₁ := past s kw (semi :: rest)
   have hd : s₁.loopDepth ≠ 0 := hL rfl
   refine ⟨_, { s₁ with rest := rest, left := s₁.left - 1, lastStop := semi.span.stop }, ?_, hshape ⟨kw.span.start, semi.span.stop⟩,
-    leaves_trans (leaves_advanced hs' hl) (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))⟩
+    leaves_trans (leaves_advance hs' hl) (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))⟩
   simp only [Parse.parseStatement]
   rw [Parse.bind_eq (Parse.peek_eq hs')]
   rcases hst.2 with rfl | rfl <;> simp only [hkw] <;>
@@ -539,11 +539,11 @@ theorem stmt_return_none {T : Edition} {loop : Bool} (f : Nat) (sp : Span) :
   obtain ⟨semi, ts'', rfl, hsemi, h''⟩ := Touching.cons_one (by simpa [punctWord] using h')
   simp [Touching] at h''; subst h''
   have hs' : s.rest = kw :: semi :: rest := by simpa using hs
-  let s₁ := advanced s kw semi rest
+  let s₁ := past s kw (semi :: rest)
   have hF₁ : s₁.inFunction = true := hF
   refine ⟨.returnStmt ⟨kw.span.start, semi.span.stop⟩ none,
     { s₁ with rest := rest, left := s₁.left - 1, lastStop := semi.span.stop }, ?_, rfl,
-    leaves_trans (leaves_advanced hs' hl) (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))⟩
+    leaves_trans (leaves_advance hs' hl) (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))⟩
   simp only [Parse.parseStatement]
   rw [Parse.bind_eq (Parse.peek_eq hs')]
   simp only [hkw]
@@ -617,7 +617,7 @@ theorem stmt_return_some {T : Edition} {loop : Bool} (f : Nat) (sp : Span) (e : 
   simp [Touching] at h₃; subst h₃
   obtain ⟨x, ets', rfl, hx⟩ := Touching.head het
   have hs' : s.rest = kw :: x :: (ets' ++ semi :: rest) := by simpa using hs
-  let s₁ := advanced s kw x (ets' ++ semi :: rest)
+  let s₁ := past s kw (x :: (ets' ++ semi :: rest))
   have hF₁ : s₁.inFunction = true := hF
   have hl₁ : s₁.left = s₁.rest.length := by simp [s₁, hl, hs']
   obtain ⟨w₀, ws₀, hw₀, hne₀⟩ := Expr.firstWord e
@@ -636,7 +636,7 @@ theorem stmt_return_some {T : Edition} {loop : Bool} (f : Nat) (sp : Span) (e : 
   have hs₂ : s₂.rest = semi :: rest := hL₂.rest_eq
   refine ⟨.returnStmt ⟨kw.span.start, semi.span.stop⟩ (some e'),
     { s₂ with rest := rest, left := s₂.left - 1, lastStop := semi.span.stop }, ?_, by simp [Stmt.erase, he'],
-    leaves_trans (leaves_advanced hs' hl) (leaves_trans hL₂ (leaves_advance hs₂ (by rw [hL₂.left_eq, hs₂])))⟩
+    leaves_trans (leaves_advance hs' hl) (leaves_trans hL₂ (leaves_advance hs₂ (by rw [hL₂.left_eq, hs₂])))⟩
   simp only [Parse.parseStatement]
   rw [Parse.bind_eq (Parse.peek_eq hs')]
   simp only [hkw]
@@ -840,7 +840,7 @@ theorem block_loop {T : Edition} {fn loop : Bool} {p : ParseM Stmt} :
     obtain ⟨f', rfl⟩ : ∃ f', fuel = f' + 1 := ⟨fuel - 1, by simp at hlen; omega⟩
     simp [Laid] at ht; subst ht
     have hs' : s.rest = c :: rest := by simpa using hs
-    refine ⟨acc, s, Parse.iterate_false ?_, by simp, ⟨hs', by simp [hl, hs'], rfl, rfl, rfl, rfl⟩⟩
+    refine ⟨acc, s, Parse.iterate_false ?_, by simp, Leaves.refl hs' (by simp [hl, hs'])⟩
     simp only [Parse.blockStep]
     rw [Parse.bind_eq (Parse.peek_eq hs')]
     simp [Token.isPunct, hc, pure, EStateM.pure]
@@ -956,7 +956,7 @@ theorem stmt_if_none {T : Edition} {fn loop : Bool} (g : Nat) (sp : Span) (test 
   obtain ⟨a, b, rfl, ha, hna, _, hb⟩ := Laid.cons hlaid
   obtain ⟨k, lp, tts, rp, rfl, hk, hlp, htt, hrp⟩ := Touching.keywordParen ha
   have hs' : s.rest = k :: lp :: (tts ++ rp :: (b ++ rest)) := by simpa using hs
-  let s₁ := advanced s k lp (tts ++ rp :: (b ++ rest))
+  let s₁ := past s k (lp :: (tts ++ rp :: (b ++ rest)))
   let s₂ : ParseState := { s₁ with rest := tts ++ rp :: (b ++ rest), left := s₁.left - 1, lastStop := lp.span.stop }
   have hl₂ : s₂.left = s₂.rest.length := by simp [s₂, s₁, hl, hs']
   obtain ⟨test', s₃, hpt, het, hL₃⟩ := parseExpression_budget test hwe s₂ tts (rp :: (b ++ rest)) hT rfl hl₂ htt
@@ -972,7 +972,7 @@ theorem stmt_if_none {T : Edition} {fn loop : Bool} (g : Nat) (sp : Span) (test 
   have hs₅ : s₅.rest = u :: r := hL₅.rest_eq
   refine ⟨.ifStmt ⟨k.span.start, s₅.lastStop⟩ test' t' none, s₅, ?_,
     by simp [Stmt.erase, Stmt.eraseOpt, het, het'],
-    leaves_trans (leaves_advanced hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))
+    leaves_trans (leaves_advance hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))
       (leaves_trans hL₃ (leaves_trans (leaves_advance hs₃ (by rw [hL₃.left_eq, hs₃])) hL₅)))⟩
   simp only [Parse.parseStatement]
   rw [Parse.bind_eq (Parse.peek_eq hs')]
@@ -1004,7 +1004,7 @@ theorem stmt_if_some {T : Edition} {fn loop : Bool} (g : Nat) (sp : Span) (test 
   obtain ⟨ek, el', rfl, hek, h'⟩ := Touching.cons_one (by simpa [keywordWord] using hel)
   simp [Touching] at h'; subst h'
   have hs' : s.rest = k :: lp :: (tts ++ rp :: (b₁ ++ ek :: (b₃ ++ rest))) := by simpa using hs
-  let s₁ := advanced s k lp (tts ++ rp :: (b₁ ++ ek :: (b₃ ++ rest)))
+  let s₁ := past s k (lp :: (tts ++ rp :: (b₁ ++ ek :: (b₃ ++ rest))))
   let s₂ : ParseState := { s₁ with rest := tts ++ rp :: (b₁ ++ ek :: (b₃ ++ rest)), left := s₁.left - 1, lastStop := lp.span.stop }
   have hl₂ : s₂.left = s₂.rest.length := by simp [s₂, s₁, hl, hs']
   obtain ⟨test', s₃, hpt, het, hL₃⟩ := parseExpression_budget test hwe s₂ tts (rp :: (b₁ ++ ek :: (b₃ ++ rest)))
@@ -1025,7 +1025,7 @@ theorem stmt_if_some {T : Edition} {fn loop : Bool} (g : Nat) (sp : Span) (test 
     (fun h => hopen h)
   refine ⟨.ifStmt ⟨k.span.start, s₇.lastStop⟩ test' t' (some e'), s₇, ?_,
     by simp [Stmt.erase, Stmt.eraseOpt, het, het', hee],
-    leaves_trans (leaves_advanced hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))
+    leaves_trans (leaves_advance hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))
       (leaves_trans hL₃ (leaves_trans (leaves_advance hs₃ (by rw [hL₃.left_eq, hs₃])) (leaves_trans hL₅
         (leaves_trans (leaves_advance hs₅ (by rw [hL₅.left_eq, hs₅])) hL₇)))))⟩
   simp only [Parse.parseStatement]
@@ -1070,7 +1070,7 @@ theorem stmt_while {T : Edition} {fn loop : Bool} (g : Nat) (sp : Span) (test : 
   obtain ⟨a, b, rfl, ha, hna, _, hbl⟩ := Laid.cons hlaid
   obtain ⟨k, lp, tts, rp, rfl, hk, hlp, htt, hrp⟩ := Touching.keywordParen ha
   have hs' : s.rest = k :: lp :: (tts ++ rp :: (b ++ rest)) := by simpa using hs
-  let s₁ := advanced s k lp (tts ++ rp :: (b ++ rest))
+  let s₁ := past s k (lp :: (tts ++ rp :: (b ++ rest)))
   let s₂ : ParseState := { s₁ with rest := tts ++ rp :: (b ++ rest), left := s₁.left - 1, lastStop := lp.span.stop }
   have hl₂ : s₂.left = s₂.rest.length := by simp [s₂, s₁, hl, hs']
   obtain ⟨test', s₃, hpt, het, hL₃⟩ := parseExpression_budget test hwe s₂ tts (rp :: (b ++ rest)) hT rfl hl₂ htt
@@ -1084,7 +1084,7 @@ theorem stmt_while {T : Edition} {fn loop : Bool} (g : Nat) (sp : Span) (test : 
     (fun _ => by simp [s₄']) rfl hl₄ hbl hr (fun h => hopen h)
   refine ⟨.whileStmt ⟨k.span.start, s₅.lastStop⟩ test' body', { s₅ with loopDepth := s₅.loopDepth - 1 }, ?_,
     by simp [Stmt.erase, het, heb],
-    leaves_trans (leaves_advanced hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))
+    leaves_trans (leaves_advance hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))
       (leaves_trans hL₃ (leaves_trans (leaves_advance hs₃ (by rw [hL₃.left_eq, hs₃])) (leaves_withLoop hL₅))))⟩
   simp only [Parse.parseStatement]
   rw [Parse.bind_eq (Parse.peek_eq hs')]
@@ -1118,10 +1118,10 @@ theorem parseForOf_reads {T : Edition} {fn loop : Bool} (h : Nat) (sp : Span) (k
   obtain ⟨rp, a₇, rfl, hrp, h₇⟩ := Touching.cons_one (by simpa [punctWord] using h₆)
   simp [Touching] at h₇; subst h₇
   have hs' : s.rest = fk :: lp :: kk :: nm :: ofk :: (its ++ rp :: (b ++ rest)) := by simpa using hs
-  let s₁ := advanced s fk lp (kk :: nm :: ofk :: (its ++ rp :: (b ++ rest)))
-  let s₂ := advanced s₁ lp kk (nm :: ofk :: (its ++ rp :: (b ++ rest)))
-  let s₃ := advanced s₂ kk nm (ofk :: (its ++ rp :: (b ++ rest)))
-  let s₄ := advanced s₃ nm ofk (its ++ rp :: (b ++ rest))
+  let s₁ := past s fk (lp :: (kk :: nm :: ofk :: (its ++ rp :: (b ++ rest))))
+  let s₂ := past s₁ lp (kk :: (nm :: ofk :: (its ++ rp :: (b ++ rest))))
+  let s₃ := past s₂ kk (nm :: (ofk :: (its ++ rp :: (b ++ rest))))
+  let s₄ := past s₃ nm (ofk :: (its ++ rp :: (b ++ rest)))
   let s₅ : ParseState := { s₄ with rest := its ++ rp :: (b ++ rest), left := s₄.left - 1, lastStop := ofk.span.stop }
   have hl₅ : s₅.left = s₅.rest.length := by simp [s₅, s₄, s₃, s₂, s₁, hl, hs']
   obtain ⟨it', s₆, hpi, hei, hL₆⟩ := parseAssign_budget it hwe s₅ its (rp :: (b ++ rest)) hT rfl hl₅ hit
@@ -1152,9 +1152,9 @@ theorem parseForOf_reads {T : Edition} {fn loop : Bool} (h : Nat) (sp : Span) (k
     rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_cons (s := s₄) rfl (by simp))), Parse.bind_eq (Parse.budget_eq _),
       Parse.bind_eq hpi, Parse.bind_eq (Parse.expectPunct_ok hs₆ (by simp [hr]) hrp),
       Parse.bind_eq (Parse.withLoop_ok hpb), Parse.bind_eq (Parse.spanFrom_eq _ _)] <;> rfl
-  · exact leaves_trans (leaves_advanced hs' hl) (leaves_trans (leaves_advanced (s := s₁) rfl (by simp [s₁, hl, hs']))
-      (leaves_trans (leaves_advanced (s := s₂) rfl (by simp [s₂, s₁, hl, hs']))
-        (leaves_trans (leaves_advanced (s := s₃) rfl (by simp [s₃, s₂, s₁, hl, hs']))
+  · exact leaves_trans (leaves_advance hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))
+      (leaves_trans (leaves_advance (s := s₂) rfl (by simp [s₂, s₁, hl, hs']))
+        (leaves_trans (leaves_advance (s := s₃) rfl (by simp [s₃, s₂, s₁, hl, hs']))
           (leaves_trans (leaves_advance (s := s₄) rfl (by simp [s₄, s₃, s₂, s₁, hl, hs']))
             (leaves_trans hL₆ (leaves_trans (leaves_advance hs₆ (by rw [hL₆.left_eq, hs₆])) (leaves_withLoop hL₈)))))))
 

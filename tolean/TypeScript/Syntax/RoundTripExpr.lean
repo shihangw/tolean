@@ -303,7 +303,7 @@ def simpleExpr (x : Token) : Option Expr :=
 
 theorem parsePrimary_simple (f : Nat) (s : ParseState) (x u : Token) (r : List Token) (e : Expr)
     (hs : s.rest = x :: u :: r) (he : simpleExpr x = some e) :
-    Parse.parsePrimary (f + 1) s = .ok e (advanced s x u r) := by
+    Parse.parsePrimary (f + 1) s = .ok e (past s x (u :: r)) := by
   unfold simpleExpr at he
   split at he <;> simp only [Option.some.injEq, reduceCtorEq] at he <;> subst he <;>
     simp_all [Parse.parsePrimary, Parse.peek_eq hs, Parse.advance_eq hs, discard, Functor.mapConst,
@@ -311,7 +311,7 @@ theorem parsePrimary_simple (f : Nat) (s : ParseState) (x u : Token) (r : List T
 
 theorem parsePrimary_ident (f : Nat) (s : ParseState) (x u : Token) (r : List Token) (name : String)
     (hs : s.rest = x :: u :: r) (hx : x.kind = .ident name) (hn : name ∉ Parse.refusedNames) :
-    Parse.parsePrimary (f + 1) s = .ok (.ident x.span name) (advanced s x u r) := by
+    Parse.parsePrimary (f + 1) s = .ok (.ident x.span name) (past s x (u :: r)) := by
   simp [Parse.parsePrimary, Parse.peek_eq hs, hx, Parse.readName, Parse.advance_eq hs, hn,
     bind, EStateM.bind, pure, EStateM.pure]
 
@@ -603,7 +603,7 @@ theorem Parse.requireFeature_ok {t : Token} {f : Feature} {s : ParseState} (h : 
 theorem Parse.skip_ok : ∀ (a : List Token) {b : List Token} {s : ParseState}, s.rest = a ++ b → b ≠ [] →
     s.left = s.rest.length → ∃ s', Parse.skip a.length s = .ok () s' ∧ Leaves s s' b
   | [], b, s, hs, _, hl => ⟨s, by simp [Parse.skip, pure, EStateM.pure],
-      ⟨by simpa using hs, by simp [hl, hs], rfl, rfl, rfl, rfl⟩⟩
+      Leaves.refl (by simpa using hs) (by simp [hl, hs])⟩
   | x :: a, b, s, hs, hb, hl => by
     have hs' : s.rest = x :: (a ++ b) := by simpa using hs
     have hne : a ++ b ≠ [] := by simp [hb]
@@ -732,7 +732,7 @@ theorem iterate_list {α : Type} {T : Edition} {erase : α → α} {words : α �
     have hts : ts = [] := Touching.nil.mp (by simpa [separated] using ht)
     subst hts
     have hs' : s.rest = c :: rest := by simpa using hs
-    refine ⟨acc, s, Parse.iterate_false ?_, by simp, ⟨hs', by simp [hl, hs'], rfl, rfl, rfl, rfl⟩⟩
+    refine ⟨acc, s, Parse.iterate_false ?_, by simp, Leaves.refl hs' (by simp [hl, hs'])⟩
     simp [Parse.listStep, Parse.peek_eq hs', Token.isPunct, hc, bind, EStateM.bind, pure, EStateM.pure]
   | cons x items ih =>
     intro fuel acc s ts rest c hreads hstart hlen hT hs hc hl ht hn hafter
@@ -933,10 +933,6 @@ theorem parseArguments_reads {T : Edition} (g : Nat) (args : List Expr)
   · simpa [Expr.eraseAll_eq] using he
 
 
-theorem Parse.bind_eq {α β : Type} {x : ParseM α} {f : α → ParseM β} {s s' : ParseState} {a : α}
-    (h : x s = .ok a s') : (x >>= f) s = f a s' := by
-  simp [bind, EStateM.bind, h]
-
 theorem Parse.pure_eq {α : Type} (a : α) (s : ParseState) : (pure a : ParseM α) s = .ok a s := rfl
 
 theorem Parse.discard_eq {α : Type} {x : ParseM α} {s s' : ParseState} {a : α} (h : x s = .ok a s') :
@@ -1010,9 +1006,9 @@ theorem parseProperty_reads {T : Edition} (g : Nat) (q : Property) (hq : q.wf T 
     simp [Touching] at h'; subst h'
     obtain ⟨u, r, rfl, hu⟩ := hE
     have hs' : s.rest = x :: u :: r := by simpa using hs
-    refine ⟨.shorthand x.span name, advanced s x u r, ?_, by simp [Property.erase], leaves_advanced hs' hl⟩
+    refine ⟨.shorthand x.span name, past s x (u :: r), ?_, by simp [Property.erase], leaves_advance hs' hl⟩
     rcases hu with hu | hu <;>
-      simp [Parse.parseProperty, Parse.advance_eq hs', hx, Parse.peek_eq (s := advanced s x u r) rfl,
+      simp [Parse.parseProperty, Parse.advance_eq hs', hx, Parse.peek_eq (s := past s x (u :: r)) rfl,
         Token.isPunct, hu, hname, bind, EStateM.bind, pure, EStateM.pure]
   | keyValue sp key value =>
     have hvr := hv sp key value rfl
@@ -1027,7 +1023,7 @@ theorem parseProperty_reads {T : Edition} (g : Nat) (q : Property) (hq : q.wf T 
     obtain ⟨colon, vts, rfl, hcolon, hv'⟩ := Touching.cons_one (by simpa [punctWord] using h₁)
     have hs' : s.rest = x :: colon :: (vts ++ rest) := by simpa using hs
     have hne : vts ++ rest ≠ [] := by simp [hr]
-    let s₁ := advanced s x colon (vts ++ rest)
+    let s₁ := past s x (colon :: (vts ++ rest))
     let s₂ : ParseState := { s₁ with rest := vts ++ rest, left := s₁.left - 1, lastStop := colon.span.stop }
     have hl₂ : s₂.left = s₂.rest.length := by simp [s₂, s₁, hl, hs']
     obtain ⟨v', s₃, hp, he, hL⟩ := hvr s₂ vts rest hT rfl hl₂ hv' (fun y hy => hn y (by simp [List.mem_of_mem_tail hy])) hr
@@ -1042,7 +1038,7 @@ theorem parseProperty_reads {T : Edition} (g : Nat) (q : Property) (hq : q.wf T 
           property_tail
       | string v => simp [PropKey.words] at hkw; subst hkw; simp only [hx]; property_tail
       | number t => simp [PropKey.words] at hkw; subst hkw; simp only [hx]; property_tail
-    · exact leaves_trans (leaves_advanced hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl
+    · exact leaves_trans (leaves_advance hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl
         (by simp [s₁, hl, hs'])) hL)
 
 
@@ -1202,7 +1198,7 @@ theorem refuseSplitMember_ok {s : ParseState} {x : Token} {r : List Token} (hs :
 
 theorem readPropertyName_ok {s : ParseState} {x u : Token} {r : List Token} {name : String}
     (hs : s.rest = x :: u :: r) (hx : [x.kind] = propertyName name) :
-    Parse.readPropertyName s = .ok name (advanced s x u r) := by
+    Parse.readPropertyName s = .ok name (past s x (u :: r)) := by
   unfold propertyName at hx
   split at hx <;> simp [keywordWord, identWord] at hx <;>
     simp [Parse.readPropertyName, Parse.advance_eq hs, hx, bind, EStateM.bind, pure, EStateM.pure]
@@ -1216,8 +1212,8 @@ theorem lhsStep_member {pi : ParseM Expr} {pa : ParseM (List Expr)} {start : Pos
       Leaves s s' (u :: r) := by
   let s₁ : ParseState := { s with rest := nm :: u :: r, left := s.left - 1, lastStop := dot.span.stop }
   have hl₁ : s₁.left = s₁.rest.length := by simp [s₁, hl, hs]
-  refine ⟨⟨start, nm.span.stop⟩, advanced s₁ nm u r, ?_,
-    leaves_trans (leaves_advance hs hl) (leaves_advanced (s := s₁) rfl hl₁)⟩
+  refine ⟨⟨start, nm.span.stop⟩, past s₁ nm (u :: r), ?_,
+    leaves_trans (leaves_advance hs hl) (leaves_advance (s := s₁) rfl hl₁)⟩
   simp only [Parse.leftHandSideStep]
   rw [Parse.bind_eq (Parse.peek_eq hs)]
   simp only [Token.isPunct, hdot, beq_self_eq_true, ↓reduceIte]
@@ -1395,7 +1391,7 @@ theorem lhs_loop {T : Edition} {pi : ParseM Expr} {pa : ParseM (List Expr)} {sta
   | _ =>
     simp [lhsSuffix, Touching] at ht; subst ht
     exact ⟨acc, s, by simp [lhsSteps], by simpa [lhsHead] using hacc,
-      ⟨by simpa using hs, by simp [hl, hs], rfl, rfl, rfl, rfl⟩⟩
+      Leaves.refl (by simpa using hs) (by simp [hl, hs])⟩
 
 
 /-- The first token of an expression. -/
@@ -1901,7 +1897,7 @@ theorem bin_loop {T : Edition} {pr : Nat → ParseM Expr} {start : Pos} {m H : N
   | _ =>
     simp [binSuffix, Touching] at ht; subst ht
     exact ⟨acc, s, by simp [binSteps], by simpa [binHead] using hacc,
-      ⟨by simpa using hs, by simp [hl, hs], rfl, rfl, rfl, rfl⟩⟩
+      Leaves.refl (by simpa using hs) (by simp [hl, hs])⟩
 
 
 /-- A chain of binary operators. -/
@@ -2126,7 +2122,7 @@ word is `[k]`. -/
 theorem readsE_one {T : Edition} {p : ParseM Expr} {e : Expr} {k : TokenKind} {E : List Token → Prop}
     (hw : e.words = [[k]])
     (hp : ∀ s x u r, s.rest = x :: u :: r → x.kind = k →
-      ∃ e', p s = .ok e' (advanced s x u r) ∧ e'.erase = e.erase) :
+      ∃ e', p s = .ok e' (past s x (u :: r)) ∧ e'.erase = e.erase) :
     ReadsE T p e E := by
   intro s ts rest _ hs hl ht _ hr _ _
   rw [hw] at ht
@@ -2135,7 +2131,7 @@ theorem readsE_one {T : Edition} {p : ParseM Expr} {e : Expr} {k : TokenKind} {E
   obtain ⟨u, r, rfl⟩ := rest_cons hr
   have hs' : s.rest = x :: u :: r := by simpa using hs
   obtain ⟨e', hpe, he⟩ := hp s x u r hs' hx
-  exact ⟨e', _, hpe, he, leaves_advanced hs' hl⟩
+  exact ⟨e', _, hpe, he, leaves_advance hs' hl⟩
 
 /-- `parsePrimary` reads `[`…`]` with `parseArrayLiteral`. -/
 theorem parsePrimary_array {T : Edition} (f : Nat) (sp : Span) (es : List Expr)

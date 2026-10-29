@@ -1,5 +1,6 @@
 import Lean
 import tolean.TypeScript.Certify
+import tolean.TypeScript.EStateM
 import tolean.TypeScript.Interpret
 import tolean.TypeScript.Proof.Guard
 import tolean.TypeScript.Proof.Link
@@ -216,7 +217,7 @@ def extras : List Group := [
   ⟨"The parser's round trip: types, as tokens",
     [``Syntax.types_reads, ``Syntax.parseType_union, ``Syntax.parseType_plain,
     ``Syntax.parseArrayType_reads, ``Syntax.parsePrimaryType_ref, ``Syntax.parsePrimaryType_paren,
-    ``Syntax.parsePrimaryType_ident, ``Syntax.parsePrimaryType_simple, ``Syntax.reads_one,
+    ``Syntax.parsePrimaryType_keyword, ``Syntax.parsePrimaryType_name, ``Syntax.parsePrimaryType_simple, ``Syntax.reads_one,
     ``Syntax.iterate_brackets, ``Syntax.iterate_brackets_goal, ``Syntax.iterate_sep,
     ``Syntax.iterate_sepBefore, ``Syntax.iterate_stop, ``Syntax.unionStep_go,
     ``Syntax.unionStep_stop, ``Syntax.arrayWF_split, ``Syntax.arrayWF_head, ``Syntax.arrayOf_array,
@@ -226,9 +227,9 @@ def extras : List Group := [
     ``Syntax.eraseAll_append, ``Syntax.length_eraseAll, ``Syntax.allWF_iff, ``Syntax.allArrayWF_iff,
     ``Syntax.height_le_heightOf, ``Syntax.followsType_cons, ``Syntax.followsType_punct,
     ``Syntax.followsArray_punct, ``Syntax.punct_ne, ``Syntax.leaves_advance,
-    ``Syntax.leaves_advanced, ``Syntax.leaves_trans, ``Syntax.Leaves.rest_eq,
-    ``Syntax.Leaves.left_eq, ``Syntax.Leaves.eof_eq, ``Syntax.Leaves.inFunction_eq,
-    ``Syntax.Leaves.loopDepth_eq, ``Syntax.Leaves.target_eq, ``Syntax.instReflBEqTokenKind,
+    ``Syntax.Leaves.toKept, ``Syntax.Leaves.refl, ``Syntax.leaves_trans, ``Syntax.Leaves.rest_eq,
+    ``Syntax.Leaves.left_eq,
+    ``Syntax.instReflBEqTokenKind,
     ``Syntax.instLawfulBEqTokenKind, ``Syntax.Parse.bind_ok, ``Syntax.Parse.ite_state,
     ``Syntax.Parse.pure_ok, ``Syntax.Parse.get_ok, ``Syntax.Parse.failAt_ne_ok,
     ``Syntax.Parse.unexpected_ne_ok, ``Syntax.Parse.peek_eq, ``Syntax.Parse.peekAt_eq,
@@ -419,7 +420,7 @@ def extras : List Group := [
     ``Syntax.StmtOK.brk, ``Syntax.StmtOK.cont, ``Syntax.StmtOK.empty, ``Syntax.StmtOK.ifThen, ``Syntax.StmtOK.ifElse,
     ``Syntax.StmtOK.forOf, ``Syntax.StmtOK.while, ``Syntax.linesOf_ok, ``Syntax.StmtOK.block,
     ``Syntax.endStatement_inv, ``Syntax.varDecl_tail, ``Syntax.parseVarDecl_inv, ``Syntax.blockStep_inv,
-    ``Syntax.Stmt.allWF_of, ``Syntax.parseBlock_gives, ``Syntax.modify_eq, ``Syntax.parseBranch_gives,
+    ``Syntax.Stmt.allWF_of, ``Syntax.parseBlock_gives, ``Syntax.parseBranch_gives,
     ``Syntax.withLoop_inv, ``Syntax.parseExpressionStatement_inv, ``Syntax.pass_inv, ``Syntax.choose_inv,
     ``Syntax.parseForOf_inv, ``Syntax.parenTest_inv, ``Syntax.exprStmt_gives, ``Syntax.parseStatement_gives,
     ``Syntax.stmts_give, ``Syntax.DeclOK.import, ``Syntax.DeclOK.function, ``Syntax.DeclOK.interface,

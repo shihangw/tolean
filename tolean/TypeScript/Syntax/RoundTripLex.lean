@@ -92,20 +92,8 @@ variable {α β : Type}
 
 /-! ### The lexer's monad -/
 
-theorem bind_ok {x : LexM α} {f : α → LexM β} {s s' : LexState} {b : β} :
-    (x >>= f) s = .ok b s' ↔ ∃ a s₁, x s = .ok a s₁ ∧ f a s₁ = .ok b s' := by
-  simp only [bind, EStateM.bind]
-  cases h : x s with
-  | ok a s₁ =>
-    simp only [EStateM.Result.ok.injEq]
-    constructor
-    · intro h'; exact ⟨a, s₁, ⟨rfl, rfl⟩, h'⟩
-    · rintro ⟨a', s₂, ⟨rfl, rfl⟩, h'⟩; exact h'
-  | error e s₁ => simp
-
-theorem bind_eq {x : LexM α} {f : α → LexM β} {s s₁ : LexState} {a : α} (h : x s = .ok a s₁) :
-    (x >>= f) s = f a s₁ := by
-  simp only [bind, EStateM.bind, h]
+-- `LexM` is an `EStateM`, so the shared lemmas apply.
+export EStateM (bind_ok bind_eq modify_eq)
 
 /-- The value and the state after a run that succeeds, and `none` after one that fails. A proof can then
 state what a function of the lexer gives as a function on `Option`, and step through a `bind` with
@@ -474,9 +462,9 @@ theorem numEnd_eq (start : Pos) (s : LexState) (n : Nat) (isInteger : Bool) :
   by_cases hb : s.rest[n]? = some 'n'
   · cases isInteger
     · simp [okOf_bind, hb]
-    · simp [okOf_bind, hb, Nat.add_assoc, Nat.add_sub_cancel_left]
+    · simp [-EStateM.ite_state, okOf_bind, hb, Nat.add_assoc, Nat.add_sub_cancel_left]
       (repeat' split) <;> simp_all
-  · simp [okOf_bind, hb, Nat.add_assoc, Nat.add_sub_cancel_left]
+  · simp [-EStateM.ite_state, okOf_bind, hb, Nat.add_assoc, Nat.add_sub_cancel_left]
     (repeat' split) <;> simp_all
 
 theorem numExp_eq (start : Pos) (s : LexState) (h : Fits s) (n : Nat) (isInteger : Bool) :
@@ -991,7 +979,7 @@ theorem forIn_range_skip (k n : Nat) (s : LexState) :
     (forIn (List.range' k n 1) PUnit.unit fun _ _ => do skipChar; pure (ForInStep.yield PUnit.unit) :
       LexM PUnit) s = .ok () (skipped s n) := by
   induction n generalizing k s with
-  | zero => simp [List.range']; rfl
+  | zero => simp [List.range']
   | succ n ih =>
     rw [List.range'_succ, List.forIn_cons]
     rw [bind_eq (by rw [bind_eq (skipChar_eq s)]; rfl)]
@@ -1191,7 +1179,6 @@ theorem lexKind_string (start : Pos) (v : String) {b : Char} {more : List Char} 
   have hv : (v.toList.foldl String.push "") = v := String.ext (by simp [foldl_push_toList])
   rw [hv, hq]
   simp [Nat.add_comm]
-  rfl
 
 /-! ### One token -/
 
@@ -1510,8 +1497,6 @@ theorem skipTrivia_gap : ∀ (g : List Char) (f : Nat) (s : LexState) (r : List 
       simp only [hs, List.cons_append, List.getElem?_cons_zero]
       rw [if_neg (by decide), if_pos (by decide), bind_eq hlb]
       exact h1
-
-theorem modify_eq (f : LexState → LexState) (s : LexState) : (modify f : LexM Unit) s = .ok () (f s) := rfl
 
 theorem blank_length {g r : List Char} {s : LexState} (hs : s.rest = g ++ r) (hf : Fits s) :
     g.length < s.size - s.i + 1 := by

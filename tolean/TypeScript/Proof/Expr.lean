@@ -1,3 +1,4 @@
+import tolean.TypeScript.EStateM
 import tolean.TypeScript.Translate
 import tolean.TypeScript.Output.Eval
 
@@ -28,36 +29,9 @@ section Monad
 
 variable {α β : Type}
 
-@[simp] theorem bind_ok {x : TM α} {f : α → TM β} {s s' : Ctx} {b : β} :
-    (x >>= f) s = .ok b s' ↔ ∃ a s₁, x s = .ok a s₁ ∧ f a s₁ = .ok b s' := by
-  simp only [bind, EStateM.bind]
-  cases h : x s with
-  | ok a s₁ =>
-    simp only [EStateM.Result.ok.injEq]
-    constructor
-    · intro h'; exact ⟨a, s₁, ⟨rfl, rfl⟩, h'⟩
-    · rintro ⟨a', s₂, ⟨rfl, rfl⟩, h'⟩; exact h'
-  | error e s₁ => simp
-
-@[simp] theorem map_ok {x : TM α} {f : α → β} {s s' : Ctx} {b : β} :
-    (f <$> x) s = .ok b s' ↔ ∃ a, x s = .ok a s' ∧ f a = b := by
-  show (x >>= fun a => pure (f a)) s = .ok b s' ↔ _
-  rw [bind_ok]
-  simp only [pure, EStateM.pure, EStateM.Result.ok.injEq]
-  constructor
-  · rintro ⟨a, s₁, h, rfl, rfl⟩; exact ⟨a, h, rfl⟩
-  · rintro ⟨a, h, rfl⟩; exact ⟨a, s', h, rfl, rfl⟩
-
-@[simp] theorem ite_state {c : Prop} [Decidable c] {x y : TM α} {s : Ctx} :
-    (if c then x else y) s = if c then x s else y s := by
-  split <;> rfl
-
-@[simp] theorem pure_ok {a b : α} {s s' : Ctx} : (pure a : TM α) s = .ok b s' ↔ a = b ∧ s = s' := by
-  simp [pure, EStateM.pure]
-
-@[simp] theorem get_ok {s s' c : Ctx} : (get : TM Ctx) s = .ok c s' ↔ c = s ∧ s' = s := by
-  simp [get, getThe, MonadStateOf.get, EStateM.get]
-  constructor <;> rintro ⟨rfl, rfl⟩ <;> exact ⟨rfl, rfl⟩
+-- `TM` is an `EStateM`, so the shared lemmas apply.
+export EStateM (bind_ok map_ok ite_state pure_ok get_ok)
+attribute [simp] EStateM.bind_ok EStateM.map_ok
 
 @[simp] theorem reject_ne_ok (sp : Span) (r : String) (s s' : Ctx) (a : α) :
     (reject (A := α) sp r) s ≠ .ok a s' := by

@@ -1,3 +1,4 @@
+import tolean.TypeScript.EStateM
 import tolean.TypeScript.Syntax.Source
 
 /-!
@@ -20,8 +21,8 @@ states that `p` reads the tokens of `t`, followed by any tokens that
 loop of the parser is a named step, such as `Parse.unionStep`, so that a
 lemma such as `iterate_sepBefore` can state what the loop reads.
 
-`Syntax/RoundTripExpr.lean` covers expressions. Statements and declarations
-come later.
+`Syntax/RoundTripExpr.lean` covers expressions, `Syntax/RoundTripStmt.lean`
+statements, and `Syntax/RoundTripDecl.lean` declarations and modules.
 -/
 namespace tolean.TypeScript.Syntax
 
@@ -37,28 +38,8 @@ namespace Parse
 
 variable {α β : Type}
 
-theorem bind_ok {x : ParseM α} {f : α → ParseM β} {s s' : ParseState} {b : β} :
-    (x >>= f) s = .ok b s' ↔ ∃ a s₁, x s = .ok a s₁ ∧ f a s₁ = .ok b s' := by
-  simp only [bind, EStateM.bind]
-  cases h : x s with
-  | ok a s₁ =>
-    simp only [EStateM.Result.ok.injEq]
-    constructor
-    · intro h'; exact ⟨a, s₁, ⟨rfl, rfl⟩, h'⟩
-    · rintro ⟨a', s₂, ⟨rfl, rfl⟩, h'⟩; exact h'
-  | error e s₁ => simp
-
-@[simp] theorem ite_state {c : Prop} [Decidable c] {x y : ParseM α} {s : ParseState} :
-    (if c then x else y) s = if c then x s else y s := by
-  split <;> rfl
-
-@[simp] theorem pure_ok {a b : α} {s s' : ParseState} :
-    (pure a : ParseM α) s = .ok b s' ↔ a = b ∧ s = s' := by
-  simp [pure, EStateM.pure]
-
-@[simp] theorem get_ok {s s' c : ParseState} : (get : ParseM ParseState) s = .ok c s' ↔ c = s ∧ s' = s := by
-  simp [get, getThe, MonadStateOf.get, EStateM.get]
-  constructor <;> rintro ⟨rfl, rfl⟩ <;> exact ⟨rfl, rfl⟩
+-- `ParseM` is an `EStateM`, so the shared lemmas apply.
+export EStateM (bind_ok bind_eq ite_state pure_ok get_ok modify_eq)
 
 @[simp] theorem failAt_ne_ok (t : Token) (m : String) (s s' : ParseState) (a : α) :
     (failAt (A := α) t m) s ≠ .ok a s' := by
@@ -180,30 +161,52 @@ def FollowsArray (rest : List Token) : Prop :=
 def FollowsType (rest : List Token) : Prop :=
   FollowsArray rest ∧ ∀ t ∈ rest.head?, t.kind ≠ .punct "|" ∧ t.kind ≠ .punct "&"
 
-/-- What reading `rest` from `s` leaves in the state, apart from `lastStop`. -/
-structure Leaves (s s' : ParseState) (rest : List Token) : Prop where
-  rest_eq : s'.rest = rest
-  left_eq : s'.left = rest.length
+/-- What reading a node leaves as it was. -/
+structure Kept (s s' : ParseState) : Prop where
   eof_eq : s'.eof = s.eof
   inFunction_eq : s'.inFunction = s.inFunction
   loopDepth_eq : s'.loopDepth = s.loopDepth
   target_eq : s'.target = s.target
 
-/-- The derived `==` on token kinds is equality, so that a proof can read the
-parser's tests such as `isPunct`. -/
-instance : ReflBEq TokenKind where
-  rfl {a} := by cases a <;> first | rfl | exact beq_self_eq_true (α := String) _
+theorem Kept.refl (s : ParseState) : Kept s s := ⟨rfl, rfl, rfl, rfl⟩
 
-instance : LawfulBEq TokenKind where
-  eq_of_beq {a b} h := by
-    cases a <;> cases b <;> first
-      | (change ((_ : String) == _) = true at h; rw [beq_iff_eq] at h; rw [h])
-      | (change false = true at h; cases h)
-      | rfl
+theorem Kept.trans {s₁ s₂ s₃ : ParseState} (h₁ : Kept s₁ s₂) (h₂ : Kept s₂ s₃) : Kept s₁ s₃ :=
+  ⟨h₂.eof_eq.trans h₁.eof_eq, h₂.inFunction_eq.trans h₁.inFunction_eq,
+    h₂.loopDepth_eq.trans h₁.loopDepth_eq, h₂.target_eq.trans h₁.target_eq⟩
 
-/-- No line break comes before `y`, unless `y` is a `(`. Inside a statement,
-the printer puts a line break only before the `(` of a call of `async`, where
-the standard needs one. Most proofs read only whether a line break comes
+/-- The state after `advance` reads `x`. -/
+abbrev past (s : ParseState) (x : Token) (r : List Token) : ParseState :=
+  { s with rest := r, left := s.left - 1, lastStop := x.span.stop }
+
+theorem Kept.past (s : ParseState) (x : Token) (r : List Token) : Kept s (past s x r) := ⟨rfl, rfl, rfl, rfl⟩
+
+/-- What reading `rest` from `s` leaves in the state, apart from `lastStop`. -/
+structure Leaves (s s' : ParseState) (rest : List Token) : Prop extends Kept s s' where
+  rest_eq : s'.rest = rest
+  left_eq : s'.left = rest.length
+
+/-- Reading nothing leaves the state as it was. -/
+theorem Leaves.refl {s : ParseState} {rest : List Token} (h : s.rest = rest) (hl : s.left = rest.length) :
+    Leaves s s rest :=
+  { toKept := Kept.refl s, rest_eq := h, left_eq := hl }
+
+/-- Reading one token `x`, which `r` follows, leaves `r`. -/
+theorem leaves_advance {s : ParseState} {x : Token} {r : List Token} (h : s.rest = x :: r)
+    (hl : s.left = s.rest.length) : Leaves s (past s x r) r where
+  rest_eq := rfl
+  left_eq := by simp [hl, h]
+  eof_eq := rfl
+  inFunction_eq := rfl
+  loopDepth_eq := rfl
+  target_eq := rfl
+
+-- The derived `==` on token kinds is equality, so that a proof can read the
+-- parser's tests such as `isPunct`.
+deriving instance ReflBEq, LawfulBEq for TokenKind
+
+/-- No line break comes before `y`, unless `y` is a `(`. Inside a line, the
+printer puts a line break only before the `(` of a call of `async`, so that
+`tsc` reads a call (`Syntax/Source.lean`). Most proofs read only whether a line break comes
 before a token that is not a `(`, so this is all that they need. Where a proof
 reads it before a `(`, after `async` or after `return`, `Touching` states it
 exactly. -/
@@ -220,25 +223,12 @@ def Reads (p : ParseM TypeExpr) (t : TypeExpr) (follows : List Token → Prop) :
     ts.map (·.kind) = t.tokens → (∀ x ∈ ts, NoBreak x) → rest ≠ [] → follows rest →
     ∃ t' s', p s = .ok t' s' ∧ t'.erase = t.erase ∧ Leaves s s' rest
 
-/-- The state after `advance` reads `x`, which `u` follows. -/
-abbrev advanced (s : ParseState) (x u : Token) (r : List Token) : ParseState :=
-  { s with rest := u :: r, left := s.left - 1, lastStop := x.span.stop }
-
-theorem leaves_advanced {s : ParseState} {x u : Token} {r : List Token} (hs : s.rest = x :: u :: r)
-    (hl : s.left = s.rest.length) : Leaves s (advanced s x u r) (u :: r) where
-  rest_eq := rfl
-  left_eq := by simp [hl, hs]
-  eof_eq := rfl
-  inFunction_eq := rfl
-  loopDepth_eq := rfl
-  target_eq := rfl
-
 /-- A parser that reads one token of kind `k` as `expected`, whatever follows
 that `follows` allows, reads every type whose tokens are `[k]`. -/
 theorem reads_one {p : ParseM TypeExpr} {t : TypeExpr} {k : TokenKind} {expected : Token → TypeExpr}
     {follows : List Token → Prop} (htok : t.tokens = [k]) (herase : ∀ x, (expected x).erase = t.erase)
     (hp : ∀ s x u r, s.rest = x :: u :: r → x.kind = k → follows (u :: r) →
-      p s = .ok (expected x) (advanced s x u r)) :
+      p s = .ok (expected x) (past s x (u :: r))) :
     Reads p t follows := by
   intro s ts rest hs hl hk _ hr hf
   rw [htok] at hk
@@ -251,27 +241,28 @@ theorem reads_one {p : ParseM TypeExpr} {t : TypeExpr} {k : TokenKind} {expected
     | cons u r => exact ⟨u, r, rfl⟩
   have hs' : s.rest = x :: u :: r := by simpa using hs
   have hx : x.kind = k := by simpa using hk
-  exact ⟨_, _, hp s x u r hs' hx hf, herase x, leaves_advanced hs' hl⟩
+  exact ⟨_, _, hp s x u r hs' hx hf, herase x, leaves_advance hs' hl⟩
 
-/-- `parsePrimaryType` reads an identifier `name`, which `u` follows. -/
-theorem parsePrimaryType_ident (f : Nat) (s : ParseState) (x u : Token) (r : List Token) (name : String)
-    (hs : s.rest = x :: u :: r) (hx : x.kind = .ident name) (hu : FollowsPrimary (u :: r)) :
-    Parse.parsePrimaryType (f + 1) s =
-      if name ∈ Parse.keywordTypes then .ok (.keyword x.span name) (advanced s x u r)
-      else if name ∈ Parse.typeOperatorWords ∨ name ∈ Parse.refusedNames then
-        Parse.parsePrimaryType (f + 1) s
-      else .ok (.ref x.span name []) (advanced s x u r) := by
+/-- `parsePrimaryType` reads the name of a keyword type, such as `string`, which `u` follows. -/
+theorem parsePrimaryType_keyword (f : Nat) (s : ParseState) (x u : Token) (r : List Token) (name : String)
+    (hs : s.rest = x :: u :: r) (hx : x.kind = .ident name) (hu : FollowsPrimary (u :: r))
+    (hk : name ∈ Parse.keywordTypes) :
+    Parse.parsePrimaryType (f + 1) s = .ok (.keyword x.span name) (past s x (u :: r)) := by
+  have hdot : u.kind ≠ .punct "." := (hu u rfl).2
+  simp [Parse.parsePrimaryType, Parse.advance_eq hs, hx, Parse.peek_eq (s := past s x (u :: r)) rfl,
+    Token.isPunct, hdot, hk, bind, EStateM.bind, pure, EStateM.pure]
+
+/-- `parsePrimaryType` reads a type name, which `u` follows. -/
+theorem parsePrimaryType_name (f : Nat) (s : ParseState) (x u : Token) (r : List Token) (name : String)
+    (hs : s.rest = x :: u :: r) (hx : x.kind = .ident name) (hu : FollowsPrimary (u :: r))
+    (hn : typeName name = true) :
+    Parse.parsePrimaryType (f + 1) s = .ok (.ref x.span name []) (past s x (u :: r)) := by
   have hdot : u.kind ≠ .punct "." := (hu u rfl).2
   have hlt : u.kind ≠ .punct "<" := (hu u rfl).1
-  by_cases hk : name ∈ Parse.keywordTypes
-  · simp [Parse.parsePrimaryType, Parse.advance_eq hs, hx, Parse.peek_eq (s := advanced s x u r) rfl,
-      Token.isPunct, hdot, hk, bind, EStateM.bind, pure, EStateM.pure]
-  · by_cases hop : name ∈ Parse.typeOperatorWords ∨ name ∈ Parse.refusedNames
-    · simp [hk, hop]
-    · simp only [hk, hop, if_false]
-      simp at hop
-      simp [Parse.parsePrimaryType, Parse.advance_eq hs, hx, Parse.peek_eq (s := advanced s x u r) rfl,
-        Token.isPunct, hdot, hlt, hk, hop, bind, EStateM.bind, pure, EStateM.pure]
+  have hn' : name ∉ Parse.keywordTypes ∧ name ∉ Parse.typeOperatorWords ∧ name ∉ Parse.refusedNames := by
+    simpa [typeName, and_assoc] using hn
+  simp [Parse.parsePrimaryType, Parse.advance_eq hs, hx, Parse.peek_eq (s := past s x (u :: r)) rfl,
+    Token.isPunct, hdot, hlt, hn'.1, hn'.2.1, hn'.2.2, bind, EStateM.bind, pure, EStateM.pure]
 
 /-- The type that `parsePrimaryType` gives for a token other than an
 identifier and `(`, when it reads one. -/
@@ -288,7 +279,7 @@ def simpleType (x : Token) : Option TypeExpr :=
 
 theorem parsePrimaryType_simple (f : Nat) (s : ParseState) (x u : Token) (r : List Token) (t : TypeExpr)
     (hs : s.rest = x :: u :: r) (ht : simpleType x = some t) :
-    Parse.parsePrimaryType (f + 1) s = .ok t (advanced s x u r) := by
+    Parse.parsePrimaryType (f + 1) s = .ok t (past s x (u :: r)) := by
   unfold simpleType at ht
   split at ht <;> simp only [Option.some.injEq, reduceCtorEq] at ht <;> subst ht <;>
     simp_all [Parse.parsePrimaryType, Parse.advance_eq hs, bind, EStateM.bind, pure, EStateM.pure]
@@ -308,24 +299,8 @@ theorem Parse.expectPunct_ok {s : ParseState} {x : Token} {r : List Token} {p : 
   simp [Token.isPunct, hx, Parse.advance_cons h hr]
 
 theorem leaves_trans {s₁ s₂ s₃ : ParseState} {r₂ r₃ : List Token} (h₁ : Leaves s₁ s₂ r₂)
-    (h₂ : Leaves s₂ s₃ r₃) : Leaves s₁ s₃ r₃ where
-  rest_eq := h₂.rest_eq
-  left_eq := h₂.left_eq
-  eof_eq := h₂.eof_eq.trans h₁.eof_eq
-  inFunction_eq := h₂.inFunction_eq.trans h₁.inFunction_eq
-  loopDepth_eq := h₂.loopDepth_eq.trans h₁.loopDepth_eq
-  target_eq := h₂.target_eq.trans h₁.target_eq
-
-/-- Reading one token `x`, which `r` follows, leaves `r`. -/
-theorem leaves_advance {s : ParseState} {x : Token} {r : List Token} (h : s.rest = x :: r)
-    (hl : s.left = s.rest.length) :
-    Leaves s { s with rest := r, left := s.left - 1, lastStop := x.span.stop } r where
-  rest_eq := rfl
-  left_eq := by simp [hl, h]
-  eof_eq := rfl
-  inFunction_eq := rfl
-  loopDepth_eq := rfl
-  target_eq := rfl
+    (h₂ : Leaves s₂ s₃ r₃) : Leaves s₁ s₃ r₃ :=
+  { toKept := h₁.toKept.trans h₂.toKept, rest_eq := h₂.rest_eq, left_eq := h₂.left_eq }
 
 /-- `( T )`, when `parseType` reads `T`. -/
 theorem parsePrimaryType_paren (f : Nat) (sp : Span) (inner : TypeExpr)
@@ -410,7 +385,7 @@ theorem iterate_brackets {step : TypeExpr → ParseM (TypeExpr × Bool)}
       | nil => exact absurd rfl hr
       | cons u r => exact ⟨u, r, rfl⟩
     have hs' : s.rest = u :: r := by simpa using hs
-    refine ⟨acc, s, ?_, rfl, ⟨by simpa using hs, by simp [hl, hs'], rfl, rfl, rfl, rfl⟩⟩
+    refine ⟨acc, s, ?_, rfl, Leaves.refl (by simpa using hs) (by simp [hl, hs'])⟩
     rw [Parse.iterate_succ]
     simp [bind, EStateM.bind, hstop acc s u r hs' (hf.2 u rfl), pure, EStateM.pure]
   | succ k ih =>
@@ -437,7 +412,7 @@ theorem iterate_brackets {step : TypeExpr → ParseM (TypeExpr × Bool)}
       simp only [bind, EStateM.bind, hstep]
       exact hit
     · rw [he]; simp [TypeExpr.erase, arrayOf, arrayOf_array]
-    · exact ⟨hL.rest_eq, hL.left_eq, hL.eof_eq, hL.inFunction_eq, hL.loopDepth_eq, hL.target_eq⟩
+    · exact ⟨⟨hL.eof_eq, hL.inFunction_eq, hL.loopDepth_eq, hL.target_eq⟩, hL.rest_eq, hL.left_eq⟩
 
 theorem brackets_succ (k : Nat) : brackets k ++ [.punct "[", .punct "]"] = brackets (k + 1) := by
   induction k with
@@ -533,7 +508,7 @@ theorem parseArrayType_reads (f : Nat) (t : TypeExpr) (hwf : t.arrayWF = true)
     refine ⟨⟨x0.span.start, rb.span.stop⟩, ?_⟩
     have h1 : s.rest[1]? = some rb := by simp [hsr]
     simp [Parse.arrayStep, Parse.peek_eq hsr, Parse.peekAt_eq h1, Token.isPunct, hlb, hrb, hnl, Parse.skip,
-      Parse.advance_eq hsr, Parse.advance_eq (s := advanced s lb rb (u :: r')) rfl, Parse.spanFrom,
+      Parse.advance_eq hsr, Parse.advance_eq (s := past s lb (rb :: (u :: r'))) rfl, Parse.spanFrom,
       discard, Functor.mapConst, Functor.map,
       EStateM.map, get, getThe, MonadStateOf.get, EStateM.get, bind, EStateM.bind, pure, EStateM.pure]
 
@@ -644,7 +619,7 @@ theorem iterate_sepBefore {p : ParseM TypeExpr} {step : Array TypeExpr → Parse
       | nil => exact absurd rfl hr
       | cons u r => exact ⟨u, r, rfl⟩
     have hs' : s.rest = u :: r := by simpa using hs
-    refine ⟨acc, s, ?_, by simp, ⟨by simpa using hs, by simp [hl, hs'], rfl, rfl, rfl, rfl⟩⟩
+    refine ⟨acc, s, ?_, by simp, Leaves.refl (by simpa using hs) (by simp [hl, hs'])⟩
     rw [Parse.iterate_succ]
     simp [bind, EStateM.bind, hstop acc s u r hs' (hnot u rfl), pure, EStateM.pure]
   | cons a items ih =>
@@ -767,7 +742,7 @@ theorem parsePrimaryType_ref (f : Nat) (sp : Span) (name : String) (args : List 
   have hname' : (name ∉ Parse.keywordTypes ∧ name ∉ Parse.typeOperatorWords) ∧ name ∉ Parse.refusedNames := by
     simpa [typeName] using hname
   have hs₀ : s.rest = x :: lt :: (ats ++ gt :: rest) := by simpa using hs
-  let s₁ := advanced s x lt (ats ++ gt :: rest)
+  let s₁ := past s x (lt :: (ats ++ gt :: rest))
   have hs₁ : s₁.rest = lt :: (ats ++ gt :: rest) := rfl
   let s₂ := { s₁ with rest := ats ++ gt :: rest, left := s₁.left - 1, lastStop := lt.span.stop }
   have hl₂ : s₂.left = s₂.rest.length := by simp [s₂, s₁, hl, hs₀]
@@ -794,17 +769,17 @@ theorem parsePrimaryType_ref (f : Nat) (sp : Span) (name : String) (args : List 
   have hltn : lt.newlineBefore = false := noBreak_of hlt (by decide) (hn lt (by simp))
   refine ⟨.ref ⟨x.span.start, gt.span.stop⟩ name res.toList,
     { s₃ with rest := rest, left := s₃.left - 1, lastStop := gt.span.stop }, ?_, ?_, ?_⟩
-  · simp only [s₂, s₁, advanced] at hit
+  · simp only [s₂, s₁, past] at hit
     simp only [Parse.parsePrimaryType, bind, EStateM.bind, Parse.advance_eq hs₀, hx]
-    simp [Parse.peek_eq (s := advanced s x lt (ats ++ gt :: rest)) rfl, Token.isPunct, hltd, hlt, hltn,
+    simp [Parse.peek_eq (s := past s x (lt :: (ats ++ gt :: rest))) rfl, Token.isPunct, hltd, hlt, hltn,
       hname'.1.1, hname'.1.2, hname'.2,
-      Parse.advance_cons (s := advanced s x lt (ats ++ gt :: rest)) rfl (by simp), discard,
+      Parse.advance_cons (s := past s x (lt :: (ats ++ gt :: rest))) rfl (by simp), discard,
       Functor.mapConst, Functor.map, EStateM.map, Parse.budget_eq, hit, Parse.expectPunct_ok hs₃ hr hgt,
       Parse.spanFrom, get, getThe, MonadStateOf.get, EStateM.get, bind, EStateM.bind, pure, EStateM.pure]
   · have he₂ : TypeExpr.eraseAll res.toList = TypeExpr.eraseAll args := by simpa using he
     simp [TypeExpr.erase, he₂]
   · exact leaves_trans (leaves_advance hs₀ hl)
-      (leaves_trans (leaves_advance (s := advanced s x lt (ats ++ gt :: rest)) rfl (by simp [hl, hs₀]))
+      (leaves_trans (leaves_advance (s := past s x (lt :: (ats ++ gt :: rest))) rfl (by simp [hl, hs₀]))
         (leaves_trans hL (leaves_advance hs₃ (by rw [hL.left_eq, hs₃]))))
 
 /-! ### Unions -/
@@ -1062,7 +1037,7 @@ theorem types_reads : ∀ f : Nat,
         · have hk : name ∈ Parse.keywordTypes := by simpa [TypeExpr.primaryWF, hv] using hwf
           exact reads_one (k := .ident name) (expected := fun x => .keyword x.span name)
             (by simp [TypeExpr.tokens, TypeExpr.words, identWord, hv]) (fun x => rfl)
-            fun s x u r hs hx hu => by rw [parsePrimaryType_ident f s x u r name hs hx hu]; simp [hk]
+            fun s x u r hs hx hu => parsePrimaryType_keyword f s x u r name hs hx hu hk
       | null sp =>
         exact reads_one (k := .keyword "null") (expected := fun x => .null x.span)
           (by simp [TypeExpr.tokens, TypeExpr.words, keywordWord]) (fun x => rfl)
@@ -1096,12 +1071,9 @@ theorem types_reads : ∀ f : Nat,
           simp only [TypeExpr.primaryWF, Bool.and_eq_true] at hwf; exact hwf.1
         cases args with
         | nil =>
-          have hn' : name ∉ Parse.keywordTypes ∧ ¬(name ∈ Parse.typeOperatorWords ∨ name ∈ Parse.refusedNames) := by
-            simp [typeName] at hname
-            exact ⟨hname.1.1, fun h => h.elim hname.1.2 hname.2⟩
           exact reads_one (k := .ident name) (expected := fun x => .ref x.span name [])
             (by simp [TypeExpr.tokens, TypeExpr.words, identWord]) (fun x => rfl)
-            fun s x u r hs hx hu => by rw [parsePrimaryType_ident f s x u r name hs hx hu]; simp [hn'.1, hn'.2]
+            fun s x u r hs hx hu => parsePrimaryType_name f s x u r name hs hx hu hname
         | cons a as =>
           have hall : ∀ m ∈ a :: as, m.wf = true := by
             simp only [TypeExpr.primaryWF, Bool.and_eq_true] at hwf; exact (allWF_iff _).mp hwf.2
