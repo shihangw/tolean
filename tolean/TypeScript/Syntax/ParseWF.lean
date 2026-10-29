@@ -30,8 +30,6 @@ namespace tolean.TypeScript.Syntax
 
 open tolean
 
-set_option linter.unusedSimpArgs false
-
 /-! ### Token skeletons -/
 
 /-- The token kinds that `closesKinds` reads: brackets, `;`, `>` and the end
@@ -144,7 +142,7 @@ theorem binOp_ok (T : Edition) (op : BinOp) : Word.ok T (symbol op.symbol) = tru
     Word.ok, TokenKind.ok, Lex.punctuators]
 
 theorem assignOp_ok (T : Edition) (op : AssignOp) : Word.ok T (symbol op.symbol) = true := by
-  cases op <;> simp (config := { decide := true }) [symbol, AssignOp.symbol, Lex.reservedWords, punctWord, keywordWord,
+  cases op <;> simp (config := { decide := true }) [symbol, AssignOp.symbol, punctWord,
     Word.ok, TokenKind.ok, Lex.punctuators]
 
 /-- A token that is not the end of the file has a token after it. -/
@@ -217,7 +215,7 @@ theorem readName_inv {s s' : ParseState} {n : String} (h : Ready s) (he : Parse.
     by_cases hn : name ∈ Parse.refusedNames
     · simp [hn, Functor.map, EStateM.map, Parse.failAt, throw, throwThe, MonadExceptOf.throw,
         EStateM.throw] at he
-    · simp [hn, pure, EStateM.pure] at he
+    · simp [hn, pure] at he
       obtain ⟨rfl, rfl⟩ := he
       exact ⟨x, r, hk, hn, hs, rfl, h.past hs (h.more hs hx)⟩
   | eof =>
@@ -669,7 +667,7 @@ theorem ofSymbol_assignOp {s : String} {op : AssignOp} (h : AssignOp.ofSymbol? s
 /-- An operator of one punctuator token, other than `>`, is that token. -/
 theorem symbol_binOp_punct {op : BinOp} (hl : Lex.punctuators.contains op.symbol = true)
     (hgt : op.symbol ≠ ">") : symbol op.symbol = [.punct op.symbol] := by
-  cases op <;> simp_all (config := { decide := true }) [symbol, BinOp.symbol, Lex.punctuators, Lex.reservedWords, punctWord]
+  cases op <;> simp_all (config := { decide := true }) [symbol, BinOp.symbol, punctWord]
 
 /-- A token that is not the end of the file is not the last token. -/
 theorem Ready.notLast {s : ParseState} {a r : List Token} {x : Token} (h : Ready s) (hs : s.rest = a ++ x :: r)
@@ -790,7 +788,7 @@ theorem peekBinaryOp_inv {s s' : ParseState} {v : Option (BinOp × Nat)} (h : Re
       refine ⟨rfl, fun op w he => ?_⟩
       simp only [Option.some.injEq, Prod.mk.injEq] at he; obtain ⟨rfl, rfl⟩ := he
       exact ⟨[x], r, by simpa using hs, rfl,
-        by simp (config := { decide := true }) [hk, symbol, BinOp.symbol, Lex.reservedWords, keywordWord],
+        by simp (config := { decide := true }) [hk, symbol, BinOp.symbol, keywordWord],
         h.more hs (by rw [hk]; simp)⟩
     by_cases h2 : kw = "instanceof"
     · subst h2
@@ -798,7 +796,7 @@ theorem peekBinaryOp_inv {s s' : ParseState} {v : Option (BinOp × Nat)} (h : Re
       refine ⟨rfl, fun op w he => ?_⟩
       simp only [Option.some.injEq, Prod.mk.injEq] at he; obtain ⟨rfl, rfl⟩ := he
       exact ⟨[x], r, by simpa using hs, rfl,
-        by simp (config := { decide := true }) [hk, symbol, BinOp.symbol, Lex.reservedWords, keywordWord],
+        by simp (config := { decide := true }) [hk, symbol, BinOp.symbol, keywordWord],
         h.more hs (by rw [hk]; simp)⟩
     simp [h1, h2] at hp
     obtain ⟨rfl, rfl⟩ := hp
@@ -816,7 +814,7 @@ theorem peekBinaryOp_inv {s s' : ParseState} {v : Option (BinOp × Nat)} (h : Re
       simp only [Prod.mk.injEq] at heq; obtain ⟨rfl, rfl⟩ := heq
       obtain ⟨a, r', h1, h2, h3, h4⟩ := greater_inv h hs hk hgo
       exact ⟨a, r', h1, h2, by rw [ofSymbol_binOp hop']; exact h3, h4⟩
-    · simp only [hg] at hp
+    · simp only at hp
       simp only [Parse.pure_ok] at hp; obtain ⟨rfl, rfl⟩ := hp
       refine ⟨rfl, fun op w he => ?_⟩
       obtain ⟨op', hop', heq⟩ := Option.map_eq_some_iff.mp he
@@ -832,8 +830,8 @@ theorem peekBinaryOp_inv {s s' : ParseState} {v : Option (BinOp × Nat)} (h : Re
 
 theorem symbol_assignOp_punct {op : AssignOp} (hl : Lex.punctuators.contains op.symbol = true)
     (hgt : op.symbol ≠ ">") : symbol op.symbol = [.punct op.symbol] := by
-  cases op <;> simp_all (config := { decide := true }) [symbol, AssignOp.symbol, Lex.punctuators,
-    Lex.reservedWords, punctWord]
+  cases op <;> simp_all (config := { decide := true }) [symbol, AssignOp.symbol,
+    punctWord]
 
 /-- `peekAssignOp` changes nothing, and it gives an operator whose tokens come first. -/
 theorem peekAssignOp_inv {s s' : ParseState} {v : Option (AssignOp × Nat)} (h : Ready s)
@@ -858,7 +856,7 @@ theorem peekAssignOp_inv {s s' : ParseState} {v : Option (AssignOp × Nat)} (h :
       simp only [Prod.mk.injEq] at heq; obtain ⟨rfl, rfl⟩ := heq
       obtain ⟨a, r', h1, h2, h3, h4⟩ := greater_inv h hs hk hgo
       exact ⟨a, r', h1, h2, by rw [ofSymbol_assignOp hop']; exact h3, h4⟩
-    · simp only [hg] at hp
+    · simp only at hp
       simp only [Parse.pure_ok] at hp; obtain ⟨rfl, rfl⟩ := hp
       refine ⟨rfl, fun op w he => ?_⟩
       obtain ⟨op', hop', heq⟩ := Option.map_eq_some_iff.mp he
@@ -879,14 +877,14 @@ theorem unaryOp_inv {t : Token} {op : UnaryOp} (h : Parse.unaryOp? t = some op) 
   generalize hk : t.kind = k at h
   cases k with
   | punct p =>
-    by_cases h1 : p = "!"; · subst h1; simp at h; subst h; simp (config := { decide := true }) [symbol, UnaryOp.symbol, Lex.reservedWords, punctWord]
-    by_cases h2 : p = "-"; · subst h2; simp at h; subst h; simp (config := { decide := true }) [symbol, UnaryOp.symbol, Lex.reservedWords, punctWord]
-    by_cases h3 : p = "+"; · subst h3; simp at h; subst h; simp (config := { decide := true }) [symbol, UnaryOp.symbol, Lex.reservedWords, punctWord]
-    by_cases h4 : p = "~"; · subst h4; simp at h; subst h; simp (config := { decide := true }) [symbol, UnaryOp.symbol, Lex.reservedWords, punctWord]
+    by_cases h1 : p = "!"; · subst h1; simp at h; subst h; simp (config := { decide := true }) [symbol, UnaryOp.symbol, punctWord]
+    by_cases h2 : p = "-"; · subst h2; simp at h; subst h; simp (config := { decide := true }) [symbol, UnaryOp.symbol, punctWord]
+    by_cases h3 : p = "+"; · subst h3; simp at h; subst h; simp (config := { decide := true }) [symbol, UnaryOp.symbol, punctWord]
+    by_cases h4 : p = "~"; · subst h4; simp at h; subst h; simp (config := { decide := true }) [symbol, UnaryOp.symbol, punctWord]
     simp [h1, h2, h3, h4] at h
   | keyword w =>
-    by_cases h1 : w = "typeof"; · subst h1; simp at h; subst h; simp (config := { decide := true }) [symbol, UnaryOp.symbol, Lex.reservedWords, keywordWord]
-    by_cases h2 : w = "void"; · subst h2; simp at h; subst h; simp (config := { decide := true }) [symbol, UnaryOp.symbol, Lex.reservedWords, keywordWord]
+    by_cases h1 : w = "typeof"; · subst h1; simp at h; subst h; simp (config := { decide := true }) [symbol, UnaryOp.symbol, keywordWord]
+    by_cases h2 : w = "void"; · subst h2; simp at h; subst h; simp (config := { decide := true }) [symbol, UnaryOp.symbol, keywordWord]
     simp [h1, h2] at h
   | _ => simp at h
 
@@ -919,9 +917,9 @@ theorem requireFeature_inv {s s' : ParseState} {t : Token} {f : Feature}
   simp only [Parse.requireFeature] at h
   rw [get_bind] at h
   by_cases hc : s.target.supports f = true
-  · simp only [hc, Bool.not_true, Bool.false_eq_true, ↓reduceIte, Parse.pure_ok] at h
+  · simp only [hc, ↓reduceIte, Parse.pure_ok] at h
     exact ⟨h.2.symm, hc⟩
-  · simp only [hc, Bool.not_false, ↓reduceIte] at h; exact absurd h (Parse.failAt_ne_ok _ _ _ _ _)
+  · simp only [hc] at h; exact absurd h (Parse.failAt_ne_ok _ _ _ _ _)
 
 theorem peek_eq' (s : ParseState) : Parse.peek s = .ok (s.rest[0]?.getD s.eof) s := Parse.peekAt_rest s 0
 
@@ -1181,10 +1179,10 @@ theorem propertyName_ok {T : Edition} {k : TokenKind} {n : String} (hk : k = .id
   rcases hk with rfl | rfl
   · simp only [Word.ok, TokenKind.ok, Bool.and_eq_true, Bool.not_eq_true'] at h
     have h2 : n ∉ Lex.reservedWords := by simpa using h.2
-    simp [propertyName, h2, identWord, Word.ok, TokenKind.ok, h.1, h.2]
+    simp [propertyName, h2, identWord, Word.ok, TokenKind.ok, h.1]
   · simp only [Word.ok, TokenKind.ok] at h
     have h2 : n ∈ Lex.reservedWords := by simpa using h
-    simp [propertyName, h2, keywordWord, Word.ok, TokenKind.ok, h]
+    simp [propertyName, h2, keywordWord, Word.ok, TokenKind.ok]
 
 /-- What the parser gave when it read `e` from `s` to `s'` at `level`: the
 state is still ready; the tokens it read have the skeleton and the first
@@ -1238,10 +1236,10 @@ theorem parseExpression_gives {T : Edition} {f : Nat} (hA : GivesE T .assign (Pa
     exact hg
 
 theorem symbol_assignOp_head (op : AssignOp) : (symbol op.symbol).head? ≠ some (.punct "{") := by
-  cases op <;> simp (config := { decide := true }) [symbol, AssignOp.symbol, Lex.reservedWords, punctWord]
+  cases op <;> simp (config := { decide := true }) [symbol, AssignOp.symbol, punctWord]
 
 theorem symbol_binOp_head (op : BinOp) : (symbol op.symbol).head? ≠ some (.punct "{") := by
-  cases op <;> simp (config := { decide := true }) [symbol, BinOp.symbol, Lex.reservedWords, punctWord,
+  cases op <;> simp (config := { decide := true }) [symbol, BinOp.symbol, punctWord,
     keywordWord]
 
 /-- The rest of `parseAssign` after its operator: the value, and the node. -/
@@ -1359,7 +1357,7 @@ theorem parseConditional_gives {T : Edition} {f : Nat} (hA : GivesE T .assign (P
     obtain ⟨bsrc, hb1, hb2, _⟩ := gb.tokens
     have hr₁ : r₁ = asrc ++ c :: bsrc ++ s₄.rest := by
       have h1 : (past (past s q r₁) q r₁).rest = r₁ := rfl
-      simp only [past] at ha1 hb1
+      simp only at ha1 hb1
       rw [ha1, hs₃, hb1]; simp
     refine ⟨gb.ready, gt.kept.trans ((Kept.past _ _ _).trans (ga.kept.trans ((Kept.past _ _ _).trans gb.kept))),
       ⟨tsrc ++ q :: asrc ++ c :: bsrc, ?_, ?_, ?_⟩, ?_, ?_,
@@ -1368,7 +1366,7 @@ theorem parseConditional_gives {T : Edition} {f : Nat} (hA : GivesE T .assign (P
     · rw [ht1, hs₁, hr₁]; simp
     · rw [Expr.tokens_cond, List.append_assoc]
       simp (config := { decide := true }) only [List.map_append, List.map_cons, skel_append, skel_cons, ht2,
-        ha2, hb2, hqk, hck, Bool.false_eq_true, ↓reduceIte, List.append_assoc]
+        ha2, hb2, hqk, hck, ↓reduceIte, List.append_assoc]
     · rw [Expr.tokens_cond, List.append_assoc, List.append_assoc]; exact head_append2 (Expr.tokens_ne_nil test) ht3
     · simp only [Expr.wfAt, Bool.and_eq_true]
       exact ⟨⟨gt.wf, ga.wf⟩, gb.wf⟩
@@ -1377,12 +1375,12 @@ theorem parseConditional_gives {T : Edition} {f : Nat} (hA : GivesE T .assign (P
       have hfb := hf
       have hfa : Follows ((c :: bsrc ++ s₄.rest).map (·.kind)) (.punct ":" :: b.tokens ++ after) := by
         have := hf.prefix (p := (c :: bsrc).map (·.kind)) (p' := .punct ":" :: b.tokens)
-          (by simp (config := { decide := true }) only [List.map_cons, skel_cons, hck, hb2, Bool.false_eq_true, ↓reduceIte]) (by simp)
+          (by simp (config := { decide := true }) only [List.map_cons, skel_cons, hck, hb2, ↓reduceIte]) (by simp)
         simpa [List.append_assoc] using this
       have hft : Follows ((q :: (asrc ++ c :: bsrc ++ s₄.rest)).map (·.kind))
           (.punct "?" :: a.tokens ++ .punct ":" :: b.tokens ++ after) := by
         have := hfa.prefix (p := (q :: asrc).map (·.kind)) (p' := .punct "?" :: a.tokens)
-          (by simp (config := { decide := true }) only [List.map_cons, skel_cons, hqk, ha2, Bool.false_eq_true, ↓reduceIte]) (by simp)
+          (by simp (config := { decide := true }) only [List.map_cons, skel_cons, hqk, ha2, ↓reduceIte]) (by simp)
         simpa [List.append_assoc] using this
       refine ⟨⟨gt.after _ ?_, ga.after _ ?_⟩, gb.after _ hfb⟩
       · rw [hs₁, hr₁]; simpa [List.append_assoc] using hft
@@ -1562,8 +1560,7 @@ theorem binaryStep_inv {T : Edition} {f m : Nat} {start : Pos} (hB : ∀ m', Giv
             rw [List.length_map] at this
             rw [this]
             simp only [Bool.or_eq_true, beq_iff_eq] at c
-            rcases c with rfl | rfl <;> simp (config := { decide := true }) [symbol, BinOp.symbol, punctWord,
-              Lex.reservedWords]
+            rcases c with rfl | rfl <;> simp (config := { decide := true }) [symbol, BinOp.symbol, punctWord]
           have hdrop : s₁.rest.drop 1 = rsrc ++ s₆.rest := by
             rw [hst, List.append_assoc, ← hlen, List.drop_left]
           rw [hdrop, List.map_append] at hsc
@@ -1607,7 +1604,7 @@ theorem parseUnary_gives {T : Edition} {f : Nat} (hU : GivesE T .unary (Parse.pa
     have hk := unaryOp_inv hu
     have hne : x.kind ≠ .eof := by
       intro he; rw [he] at hk
-      cases op <;> simp (config := { decide := true }) [symbol, UnaryOp.symbol, Lex.reservedWords, punctWord,
+      cases op <;> simp (config := { decide := true }) [symbol, UnaryOp.symbol, punctWord,
         keywordWord] at hk
     have hR₁ := hR.past hs (hR.more hs hne)
     rw [Parse.bind_eq (Parse.discard_eq (advance_past hR hs hne)), Parse.bind_ok] at h
@@ -1759,7 +1756,7 @@ theorem bracketed {α : Type} {wf : α → Bool} {tokens : α → List TokenKind
     fun after hf => hafter _ ?_⟩
   · rw [hs, show r = src ++ st.rest from h1, hs₂]; simp
   · simp only [List.map_append, List.map_cons, List.map_nil, skel_append, skel_cons, h2, hlp, hrk,
-      List.cons_append, List.nil_append]
+      List.cons_append]
   · have := hf.prefix (p := [rp.kind]) (p' := [.punct c]) (by rw [hrk]) (by rcases hc with rfl | rfl | rfl <;> simp)
     simpa [hs₂] using this
 
@@ -1825,8 +1822,8 @@ theorem keyValue_tail {T : Edition} {f : Nat} (hA : GivesE T .assign (Parse.pars
       skel_append]
     rw [show skel (t.kind :: c.kind :: vsrc.map (·.kind)) = skel [t.kind] ++ skel (c.kind :: vsrc.map (·.kind))
       by rw [← skel_append]; rfl, ht, hkey]
-    simp (config := { decide := true }) only [skel_cons, hc, punctWord, hv2, List.nil_append, List.singleton_append,
-      Bool.false_eq_true, ↓reduceIte, Expr.tokens]
+    simp (config := { decide := true }) only [skel_cons, hc, punctWord, hv2, List.nil_append,
+      ↓reduceIte, Expr.tokens]
     rfl
   · exact both (by simpa [Property.wf] using gv.wf) (by
       simpa [Property.words, punctWord] using hkok.append (WordsOK.cons (ok_punct (p := ":") (by decide)) gv.ok))
@@ -1986,7 +1983,7 @@ theorem parsePrimary_gives {T : Edition} {f : Nat} (hE : GivesE T .assign (Parse
       exact leaf_gives hs (hadv (by simp)) (by simp [Expr.tokens, Expr.words, keywordWord, hk])
         (by simp [Expr.wfAt]) (fun _ => by simp [Expr.afterOK])
         (by simpa [Expr.words, WordsOK, keywordWord, hk] using htok (by simp [hk]))
-    simp [h1, h2, h3] at h
+    simp at h
   | punct p =>
     by_cases h1 : p = "("
     · subst h1; simp only at h
@@ -2854,7 +2851,7 @@ theorem parseStatement_gives {T : Edition} {f : Nat} (hBlk : GivesS T (Parse.par
         exact exprStmt_gives hR hT hs (by rw [hk]; simp [startsExprStmt]) h
     simp only [not_or] at he
     obtain ⟨e1, e2, e3, e4, e5⟩ := he
-    simp [hc, hif, hfor, hwhile, hret, hb, hcn, e1, e2, e3, e4, e5] at h
+    simp at h
   | number v | bigint v | string v | eof =>
     simp only at h
     exact exprStmt_gives hR hT hs (by rw [hk]; simp [startsExprStmt]) h

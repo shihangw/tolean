@@ -21,8 +21,6 @@ namespace tolean.TypeScript.Syntax
 
 open tolean
 
-set_option linter.unusedSimpArgs false
-
 /-! ### Parameters -/
 
 def Param.wf (p : Param) : Bool := exprName p.name && (match p.type with | some t => t.wf | none => true)
@@ -271,7 +269,7 @@ theorem parseFunction_reads {T : Edition} (start : Pos) (exported : Bool) (sp : 
   obtain ⟨lp, its, rp, rfl, hlp, hits, hrp⟩ := Touching.enclosed (by simpa [enclose] using hpts)
   -- The block starts with `{`.
   have hb' := hb
-  simp only [Stmt.wordLines, Stmt.lines, List.map_cons] at hb'
+  simp only [Stmt.wordLines, Stmt.lines] at hb'
   obtain ⟨ba, bb, rfl, hba, _⟩ := Laid.cons hb'
   obtain ⟨lb, ba', rfl, hlb, _⟩ := Touching.cons_one (by simpa [punctWord] using hba)
   have hnot1 : nm.kind ≠ .punct "*" := by rw [hnm]; simp
@@ -291,7 +289,7 @@ theorem parseFunction_reads {T : Edition} (start : Pos) (exported : Bool) (sp : 
     let s₅ : ParseState := { s₄ with rest := lb :: ba' ++ bb ++ rest, left := s₄.left - 1, lastStop := rp.span.stop }
     have hs₅ : s₅.rest = lb :: (ba' ++ bb ++ rest) := by simp [s₅]
     let s₆ : ParseState := { s₅ with inFunction := true }
-    have hl₆ : s₆.left = s₆.rest.length := by simp [s₆, s₅, hL₄.left_eq, hs₄]
+    have hl₆ : s₆.left = s₆.rest.length := by simp [s₆, s₅, hL₄.left_eq]
     obtain ⟨body', s₇, hpb, heb, hL₇⟩ := parseBlock_budget (loop := false) bsp bs hbw s₆ (lb :: ba' ++ bb) rest
       (hL₄.target_eq.trans hT) rfl (fun h => by cases h) (by simp [s₆, s₅]) hl₆ hb hr
     have hc : lb.kind ≠ .punct ":" := by rw [hlb]; exact punct_ne (by decide)
@@ -310,12 +308,12 @@ theorem parseFunction_reads {T : Edition} (start : Pos) (exported : Bool) (sp : 
       rw [Parse.bind_eq (Parse.modify_eq _ _), Parse.bind_eq (Parse.budget_eq _), Parse.bind_eq hpb,
         Parse.bind_eq (Parse.modify_eq _ _), Parse.bind_eq (Parse.spanFrom_eq _ _)]
       rfl
-    · simp [Decl.erase, heb, Param.erase] at hes ⊢
+    · simp [Decl.erase, heb] at hes ⊢
       exact hes
     · exact leaves_trans (leaves_advance hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))
         (leaves_trans (leaves_advance (s := s₂) rfl (by simp [s₂, s₁, hl, hs'])) (leaves_trans hL₄
           (leaves_trans (leaves_advance hs₄ (by rw [hL₄.left_eq, hs₄]))
-            (leaves_inFunction (by simp [s₅, hL₄.inFunction_eq, s₃, s₂, s₁, hF]) hL₇)))))
+            (leaves_inFunction (by simp [hL₄.inFunction_eq, s₃, s₂, s₁, hF]) hL₇)))))
   | some t =>
     have htw : t.wf = true := hrt t rfl
     obtain ⟨colon, tts, rfl, hcolon, htt⟩ := Touching.cons_one (by simpa [typeAnnotation, punctWord] using hrts)
@@ -330,7 +328,7 @@ theorem parseFunction_reads {T : Edition} (start : Pos) (exported : Bool) (sp : 
     have hs₄ : s₄.rest = rp :: (colon :: (tts ++ (lb :: ba' ++ bb ++ rest))) := hL₄.rest_eq
     let s₅ : ParseState := { s₄ with rest := colon :: (tts ++ (lb :: ba' ++ bb ++ rest)), left := s₄.left - 1, lastStop := rp.span.stop }
     let s₅' : ParseState := { s₅ with rest := tts ++ (lb :: ba' ++ bb ++ rest), left := s₅.left - 1, lastStop := colon.span.stop }
-    have hl₅' : s₅'.left = s₅'.rest.length := by simp [s₅', s₅, hL₄.left_eq, hs₄]
+    have hl₅' : s₅'.left = s₅'.rest.length := by simp [s₅', s₅, hL₄.left_eq]
     obtain ⟨t', s₆, hpt, het, hL₆⟩ := parseType_budget t htw s₅' tts (lb :: ba' ++ bb ++ rest) rfl hl₅' htt.kinds
       (fun y hy => hn y (by simp [hy])) (by simp) (followsType_punct hlb (by simp))
     have hs₆ : s₆.rest = lb :: (ba' ++ bb ++ rest) := by simpa using hL₆.rest_eq
@@ -356,12 +354,12 @@ theorem parseFunction_reads {T : Edition} (start : Pos) (exported : Bool) (sp : 
       rw [Parse.bind_eq (Parse.modify_eq _ _), Parse.bind_eq (Parse.budget_eq _), Parse.bind_eq hpb,
         Parse.bind_eq (Parse.modify_eq _ _), Parse.bind_eq (Parse.spanFrom_eq _ _)]
       rfl
-    · simp [Decl.erase, heb, het, Param.erase] at hes ⊢
+    · simp [Decl.erase, heb, het] at hes ⊢
       exact hes
     · exact leaves_trans (leaves_advance hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))
         (leaves_trans (leaves_advance (s := s₂) rfl (by simp [s₂, s₁, hl, hs'])) (leaves_trans hL₄
           (leaves_trans (leaves_advance hs₄ (by rw [hL₄.left_eq, hs₄]))
-            (leaves_trans (leaves_advance (s := s₅) rfl (by simp [s₅, hL₄.left_eq, hs₄]))
+            (leaves_trans (leaves_advance (s := s₅) rfl (by simp [s₅, hL₄.left_eq]))
               (leaves_trans hL₆ (leaves_inFunction (by simp [hL₆.inFunction_eq, s₅', s₅, hL₄.inFunction_eq, s₃, s₂, s₁, hF]) hL₈)))))))
 
 /-! ### Type aliases -/
@@ -430,7 +428,7 @@ theorem notIdent_binOp (op : BinOp) : ∃ k ks, symbol op.symbol = k :: ks ∧ N
   cases op <;> simp [BinOp.symbol, symbol, Lex.reservedWords, punctWord, keywordWord, NotIdent]
 
 theorem notIdent_assignOp (op : AssignOp) : ∃ k ks, symbol op.symbol = k :: ks ∧ NotIdent k := by
-  cases op <;> simp [AssignOp.symbol, symbol, Lex.reservedWords, punctWord, keywordWord, NotIdent]
+  cases op <;> simp [AssignOp.symbol, symbol, Lex.reservedWords, punctWord, NotIdent]
 
 /-- An expression that starts with a name has no name as its second token: an
 operator, a `.`, a `(` or a `[` follows the name, if anything does. -/
@@ -509,7 +507,7 @@ theorem parseField_plain (sp : Span) (name : String) (ty : TypeExpr) (hty : ty.w
   simp only [Parse.parseField]
   rw [Parse.bind_eq (Parse.peek_eq hs'), Parse.bind_eq (Parse.peekAt_rest _ _)]
   simp only [hs', List.getElem?_cons_succ, List.getElem?_cons_zero, Option.getD_some, Token.isAnyIdent, hc,
-    Bool.and_false, Bool.or_false, Bool.false_or, Bool.false_eq_true, ↓reduceIte, Parse.pure_bind]
+    Bool.and_false, Bool.or_false, Bool.false_eq_true, ↓reduceIte, Parse.pure_bind]
   rw [Parse.bind_eq (readPropertyName_ok hs' hnm), Parse.bind_eq (Parse.peek_eq (s := s₁) rfl)]
   rw [if_neg (show ¬ (c.isPunct "?" = true) by simp [Token.isPunct, hc]), Parse.pure_bind,
     Parse.bind_eq (Parse.peek_eq (s := s₁) rfl)]
@@ -558,7 +556,7 @@ theorem parseField_opt (sp : Span) (name : String) (ty : TypeExpr) (hty : ty.wf 
   simp only [Parse.parseField]
   rw [Parse.bind_eq (Parse.peek_eq hs'), Parse.bind_eq (Parse.peekAt_rest _ _)]
   simp only [hs', List.getElem?_cons_succ, List.getElem?_cons_zero, Option.getD_some, Token.isAnyIdent, hq,
-    Bool.and_false, Bool.or_false, Bool.false_or, Bool.false_eq_true, ↓reduceIte, Parse.pure_bind]
+    Bool.and_false, Bool.or_false, Bool.false_eq_true, ↓reduceIte, Parse.pure_bind]
   rw [Parse.bind_eq (readPropertyName_ok hs' hnm), Parse.bind_eq (Parse.peek_eq (s := s₁) rfl)]
   rw [if_pos (show q.isPunct "?" = true by simp [Token.isPunct, hq]),
     Parse.bind_eq (Parse.discard_eq (Parse.advance_eq (s := s₁) rfl)), Parse.bind_eq (Parse.peek_eq (s := s₁') rfl)]
@@ -568,7 +566,7 @@ theorem parseField_opt (sp : Span) (name : String) (ty : TypeExpr) (hty : ty.wf 
     Parse.bind_eq hpt, Parse.bind_eq (Parse.peek_eq hs₃)]
   rw [if_pos (show (semi.isPunct ";" || semi.isPunct ",") = true by simp [Token.isPunct, hsemi])]
   rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_cons hs₃ hr)), Parse.bind_eq (Parse.spanFrom_eq _ _)]
-  simp [Token.isPunct, hc, hq, pure, EStateM.pure]
+  simp [Token.isPunct, hq, pure, EStateM.pure]
 
 /-- `readonly name: T;` or `readonly name?: T;`. -/
 theorem parseField_ro (sp : Span) (name : String) (opt : Bool) (ty : TypeExpr) (hty : ty.wf = true)
@@ -613,7 +611,7 @@ theorem parseField_ro (sp : Span) (name : String) (opt : Bool) (ty : TypeExpr) (
     rcases hnmk with hnmk | hnmk
     all_goals
       simp only [hs', List.getElem?_cons_succ, List.getElem?_cons_zero, Option.getD_some, Token.isAnyIdent, Token.isIdent,
-        hro, hnmk, hnmn, beq_self_eq_true, Bool.true_and, Bool.not_false, Bool.true_or, Bool.or_true, Bool.and_true,
+        hro, hnmk, hnmn, beq_self_eq_true, Bool.not_false, Bool.true_or, Bool.or_true, Bool.and_true,
         ↓reduceIte]
       rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_eq hs')), Parse.bind_eq (readPropertyName_ok (s := s₀) rfl hnm),
         Parse.bind_eq (Parse.peek_eq (s := s₁) rfl)]
@@ -652,7 +650,7 @@ theorem parseField_ro (sp : Span) (name : String) (opt : Bool) (ty : TypeExpr) (
     rcases hnmk with hnmk | hnmk
     all_goals
       simp only [hs', List.getElem?_cons_succ, List.getElem?_cons_zero, Option.getD_some, Token.isAnyIdent, Token.isIdent,
-        hro, hnmk, hnmn, beq_self_eq_true, Bool.true_and, Bool.not_false, Bool.true_or, Bool.or_true, Bool.and_true,
+        hro, hnmk, hnmn, beq_self_eq_true, Bool.not_false, Bool.true_or, Bool.or_true, Bool.and_true,
         ↓reduceIte]
       rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_eq hs')), Parse.bind_eq (readPropertyName_ok (s := s₀) rfl hnm),
         Parse.bind_eq (Parse.peek_eq (s := s₁) rfl)]
@@ -664,7 +662,7 @@ theorem parseField_ro (sp : Span) (name : String) (opt : Bool) (ty : TypeExpr) (
       Parse.bind_eq hpt, Parse.bind_eq (Parse.peek_eq hs₃)]
       rw [if_pos (show (semi.isPunct ";" || semi.isPunct ",") = true by simp [Token.isPunct, hsemi])]
       rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_cons hs₃ hr)), Parse.bind_eq (Parse.spanFrom_eq _ _)]
-      simp [Token.isPunct, hc, hq, pure, EStateM.pure]
+      simp [Token.isPunct, hq, pure, EStateM.pure]
 
 
 /-- A field of an interface: `readonly` or not, a name, `?` or not, `:`, a type and `;`. -/
@@ -773,7 +771,7 @@ theorem parseInterface_reads (start : Pos) (exported : Bool) (sp : Span) (name :
     rw [Parse.bind_eq (Parse.expectPunct_ok (s := s₂) rfl (by simp) hlb), Parse.bind_eq (Parse.budget_eq _),
       Parse.bind_eq hit', Parse.bind_eq (Parse.expectPunct_ok hs₄ hr hrb), Parse.bind_eq (Parse.spanFrom_eq _ _)]
     rfl
-  · simp [Decl.erase, Field.erase] at he ⊢
+  · simp [Decl.erase] at he ⊢
     exact he
 
 
@@ -819,8 +817,8 @@ theorem importStep_ok {acc : Array ImportName} {s : ParseState} {n : ImportName}
         rw [if_neg (show ¬ (ty.isPunct "}" = true) by simp [Token.isPunct, hty1]), Parse.pure_bind]
         rw [Parse.bind_eq (Parse.peekAt_rest _ _)]
         simp only [hs', List.getElem?_cons_succ, List.getElem?_cons_zero, Option.getD_some, Token.isAnyIdent,
-          Token.isIdent, hty, hnm, hd1, beq_self_eq_true, Bool.true_and, Bool.and_false, Bool.false_eq_true,
-          ↓reduceIte, Parse.pure_bind, Bool.or_true, Bool.false_or]
+          Token.isIdent, hty, hnm, beq_self_eq_true, Bool.true_and, Bool.and_false, Bool.false_eq_true,
+          ↓reduceIte, Parse.pure_bind, Bool.or_true]
         rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_eq hs')), Parse.bind_eq (Parse.peek_eq (s := s₁) rfl),
           Parse.bind_eq (readName_ok (s := s₁) rfl hnm hname), Parse.bind_eq (Parse.peek_eq (s := s₂) rfl)]
         rw [if_neg (show ¬ ((d.kind == .ident "as") = true) by simp [hd1]), Parse.pure_bind,
@@ -837,8 +835,8 @@ theorem importStep_ok {acc : Array ImportName} {s : ParseState} {n : ImportName}
         rw [if_neg (show ¬ (ty.isPunct "}" = true) by simp [Token.isPunct, hty1]), Parse.pure_bind]
         rw [Parse.bind_eq (Parse.peekAt_rest _ _)]
         simp only [hs', List.getElem?_cons_succ, List.getElem?_cons_zero, Option.getD_some, Token.isAnyIdent,
-          Token.isIdent, hty, hnm, hd1, beq_self_eq_true, Bool.true_and, Bool.and_false, Bool.false_eq_true,
-          ↓reduceIte, Parse.pure_bind, Bool.or_true, Bool.false_or]
+          Token.isIdent, hty, hnm, beq_self_eq_true, Bool.true_and, Bool.and_false, Bool.false_eq_true,
+          ↓reduceIte, Parse.pure_bind, Bool.or_true]
         rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_eq hs')), Parse.bind_eq (Parse.peek_eq (s := s₁) rfl),
           Parse.bind_eq (readName_ok (s := s₁) rfl hnm hname), Parse.bind_eq (Parse.peek_eq (s := s₂) rfl)]
         rw [if_neg (show ¬ ((d.kind == .ident "as") = true) by simp [hd1]), Parse.pure_bind,
@@ -974,7 +972,7 @@ theorem parseImport_reads (start : Pos) (sp : Span) (names : List ImportName) (s
     | nil => rw [hres] at he; cases names with
       | nil => exact absurd rfl hne
       | cons _ _ => simp at he
-    | cons _ _ => simp [Array.isEmpty_iff, ← Array.toList_eq_nil_iff, hres]
+    | cons _ _ => simp [← Array.toList_eq_nil_iff, hres]
   refine ⟨.«import» ⟨start, semi.span.stop⟩ res.toList source,
     { s₆ with rest := rest, left := s₆.left - 1, lastStop := semi.span.stop }, ?_, ?_, ?_⟩
   · simp only [Parse.parseImport]
@@ -992,13 +990,13 @@ theorem parseImport_reads (start : Pos) (sp : Span) (names : List ImportName) (s
     simp only [hst]
     rw [Parse.bind_eq (endStatement_semi (s := s₆) rfl hr hsemi), Parse.bind_eq (Parse.spanFrom_eq _ _)]
     rfl
-  · simp [Decl.erase, ImportName.erase] at he ⊢
+  · simp [Decl.erase] at he ⊢
     exact he
   · exact leaves_trans (leaves_advance hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))
       (leaves_trans hL₃ (leaves_trans (leaves_advance hs₃ (by rw [hL₃.left_eq, hs₃]))
-        (leaves_trans (leaves_advance (s := s₄) rfl (by simp [s₄, hL₃.left_eq, hs₃]))
-          (leaves_trans (leaves_advance (s := s₅) rfl (by simp [s₅, s₄, hL₃.left_eq, hs₃]))
-            (leaves_advance (s := s₆) rfl (by simp [s₆, s₅, s₄, hL₃.left_eq, hs₃])))))))
+        (leaves_trans (leaves_advance (s := s₄) rfl (by simp [s₄, hL₃.left_eq]))
+          (leaves_trans (leaves_advance (s := s₅) rfl (by simp [s₅, s₄, hL₃.left_eq]))
+            (leaves_advance (s := s₆) rfl (by simp [s₆, s₅, s₄, hL₃.left_eq])))))))
 
 /-! ### Declarations -/
 
@@ -1360,8 +1358,8 @@ theorem Decl.first {T : Edition} (d : Decl) (hw : d.wf T = true) {ts : List Toke
   | «import» sp names source =>
     have hk := h.kinds
     cases ts with
-    | nil => simp [Decl.wordLines, Decl.lines, exportWords, keywordWord, identWord] at hk
-    | cons x ts' => refine ⟨x, ts', rfl, ?_⟩; simp [Decl.wordLines, Decl.lines, exportWords, keywordWord, identWord] at hk; rw [hk.1]; simp
+    | nil => simp [Decl.wordLines, Decl.lines, keywordWord, identWord] at hk
+    | cons x ts' => refine ⟨x, ts', rfl, ?_⟩; simp [Decl.wordLines, Decl.lines, keywordWord, identWord] at hk; rw [hk.1]; simp
   | function sp e n ps rt b =>
     have hk := h.kinds
     cases ts with
@@ -1380,8 +1378,8 @@ theorem Decl.first {T : Edition} (d : Decl) (hw : d.wf T = true) {ts : List Toke
   | exportedVar sp d =>
     have hk := h.kinds
     cases ts with
-    | nil => simp [Decl.wordLines, Decl.lines, exportWords, keywordWord, identWord] at hk
-    | cons x ts' => refine ⟨x, ts', rfl, ?_⟩; simp [Decl.wordLines, Decl.lines, exportWords, keywordWord, identWord] at hk; rw [hk.1]; simp
+    | nil => simp [Decl.wordLines, Decl.lines, keywordWord] at hk
+    | cons x ts' => refine ⟨x, ts', rfl, ?_⟩; simp [Decl.wordLines, Decl.lines, keywordWord] at hk; rw [hk.1]; simp
 
 
 theorem Module.lines_words (m : Module) : m.lines.map Prod.snd = (m.decls.map Decl.wordLines).flatten := by

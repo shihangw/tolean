@@ -33,8 +33,6 @@ open tolean
 
 -- The proofs step through the lexer with one set of lemmas, so some pass a
 -- lemma that their step does not use.
-set_option linter.unusedSimpArgs false
-
 /-! ### The words that the lexer reads back -/
 
 /-- A name that the lexer reads as one identifier or keyword: an ASCII letter, `_` or `$`, then any
@@ -398,7 +396,7 @@ theorem numEnd_eq (start : Pos) (s : LexState) (n : Nat) (isInteger : Bool) :
     · simp [okOf_bind, hb]
     · simp [-EStateM.ite_state, okOf_bind, hb, Nat.add_assoc, Nat.add_sub_cancel_left]
       (repeat' split) <;> simp_all
-  · simp [-EStateM.ite_state, okOf_bind, hb, Nat.add_assoc, Nat.add_sub_cancel_left]
+  · simp [-EStateM.ite_state, okOf_bind, hb, Nat.add_sub_cancel_left]
     (repeat' split) <;> simp_all
 
 theorem numExp_eq (start : Pos) (s : LexState) (h : Fits s) (n : Nat) (isInteger : Bool) :
@@ -431,7 +429,7 @@ theorem numDot_eq (start : Pos) (s : LexState) (h : Fits s) (n : Nat) (isInteger
   · simp only [okOf_bind, okOf_skipChar, Option.bind_some, skipped_skipped, okOf_peekChar, skipped_rest,
       List.getElem?_drop, Nat.add_zero]
     split
-    · simp only [okOf_bind, hd, Option.bind_map, Function.comp_def, he, Option.map_bind, Option.map_map]
+    · simp only [okOf_bind, hd, Option.bind_map, Function.comp_def, he, Option.map_bind]
     · simp only [okOf_bind, okOf_pure, Option.bind_some, he]
   · exact he n isInteger
 
@@ -452,7 +450,7 @@ theorem lexNumber_eq (start : Pos) (s : LexState) (h : Fits s) :
     simp only [okOf_bind, okOf_skipChar, Option.bind_some, skipped_skipped, hd, Option.bind_map,
       Function.comp_def, hn, Option.map_bind]
   | none =>
-    simp only [hr]
+    simp only
     split
     · simp [okOf_bind]
     · simp only [okOf_bind, okOf_pure, Option.bind_some]
@@ -837,7 +835,7 @@ theorem numberOf_frame {T : Edition} {t r₁ r₂ : List Char} (hi : StopsAlike 
     simp only [hr] at h
     obtain ⟨j, hj, he⟩ := Option.bind_eq_some_iff.mp h
     have := digitsOf_le hj; have := endOf_le he
-    simp only [List.length_drop] at this
+    simp only at this
     rw [List.getElem?_append_left (by omega)] at hr; rw [List.getElem?_append_left (by omega), hr]
     simp only
     rw [List.drop_append_of_le_length (by omega)] at hj
@@ -900,8 +898,8 @@ theorem readWhile_eq (f : Nat) (p : Char → Bool) (acc : String) (s : LexState)
       · have hl : (skipped s 1).rest.length < f := by simp [hr] at h ⊢; omega
         have := ih (acc.push c) (skipped s 1) hl
         simp only [skipped_rest, hr, List.drop_succ_cons, List.drop_zero, skipped_skipped] at this
-        simp [hp, takeAs, okOf_bind, this, List.takeWhile_cons, Nat.add_comm]
-      · simp [hp, List.takeWhile_cons]
+        simp [hp, takeAs, okOf_bind, this, Nat.add_comm]
+      · simp [hp]
 
 /-! ### Punctuators -/
 
@@ -1143,7 +1141,7 @@ theorem lexKind_name (start : Pos) {n : String} (hn : identName n = true) {b : C
   rw [if_pos hc, bind_eq (budget_eq s)]
   have hw : s.rest.takeWhile isIdentPart = n.toList := by
     rw [hs, List.takeWhile_append_of_pos (by rw [hcs]; exact hp)]
-    simp [List.takeWhile_cons, blank_not_identPart hb]
+    simp [blank_not_identPart hb]
   have hfuel : s.rest.length < s.size - s.i + 1 := by unfold Fits at hf; omega
   rw [bind_eq (readWhile_eq _ _ _ _ hfuel), hw]
   have hv : (n.toList.foldl String.push "") = n := String.ext (by simp [foldl_push_toList])
@@ -1718,7 +1716,7 @@ theorem lexAll_lines {T : Edition} :
         · right; simp at hn ⊢; exact hn
       | nil => exact h6 (by simp) y (by simpa using hy)
     · simp only [List.length_append, k2] at h8 k10 ⊢
-      simp only [List.length_append, List.length_cons, List.length_nil] at h8 k10
+      simp only [List.length_cons] at h8 k10
       omega
 
 /-! ### The tokens that the lexer gives -/

@@ -25,8 +25,6 @@ namespace tolean.TypeScript.Syntax
 
 open tolean
 
-set_option linter.unusedSimpArgs false
-
 /-- `closesTypeArguments` on token kinds. -/
 def closesKinds (depth : Nat) : List TokenKind → Bool
   | [] => false
@@ -406,25 +404,25 @@ theorem Expr.first : ∀ e : Expr, ∃ k, e.tokens.head? = some k ∧ startsExpr
   | .paren _ i => ⟨.punct "(", by simp [Expr.tokens, Expr.words, punctWord], by decide⟩
   | .member _ o _ => by
     obtain ⟨k, h, hk⟩ := Expr.first o
-    exact ⟨k, by simp [Expr.tokens, Expr.words] at h ⊢; simp [List.head?_append, h], hk⟩
+    exact ⟨k, by simp [Expr.tokens, Expr.words] at h ⊢; simp [h], hk⟩
   | .index _ o _ => by
     obtain ⟨k, h, hk⟩ := Expr.first o
-    exact ⟨k, by simp [Expr.tokens, Expr.words] at h ⊢; simp [List.head?_append, h], hk⟩
+    exact ⟨k, by simp [Expr.tokens, Expr.words] at h ⊢; simp [h], hk⟩
   | .call _ c _ => by
     obtain ⟨k, h, hk⟩ := Expr.first c
-    exact ⟨k, by simp [Expr.tokens, Expr.words] at h ⊢; simp [List.head?_append, h], hk⟩
+    exact ⟨k, by simp [Expr.tokens, Expr.words] at h ⊢; simp [h], hk⟩
   | .postfix _ _ a => by
     obtain ⟨k, h, hk⟩ := Expr.first a
-    exact ⟨k, by simp [Expr.tokens, Expr.words] at h ⊢; simp [List.head?_append, h], hk⟩
+    exact ⟨k, by simp [Expr.tokens, Expr.words] at h ⊢; simp [h], hk⟩
   | .binary _ _ l _ => by
     obtain ⟨k, h, hk⟩ := Expr.first l
-    exact ⟨k, by simp [Expr.tokens, Expr.words] at h ⊢; simp [List.head?_append, h], hk⟩
+    exact ⟨k, by simp [Expr.tokens, Expr.words] at h ⊢; simp [h], hk⟩
   | .cond _ t _ _ => by
     obtain ⟨k, h, hk⟩ := Expr.first t
-    exact ⟨k, by simp [Expr.tokens, Expr.words] at h ⊢; simp [List.head?_append, h], hk⟩
+    exact ⟨k, by simp [Expr.tokens, Expr.words] at h ⊢; simp [h], hk⟩
   | .assign _ _ t _ => by
     obtain ⟨k, h, hk⟩ := Expr.first t
-    exact ⟨k, by simp [Expr.tokens, Expr.words] at h ⊢; simp [List.head?_append, h], hk⟩
+    exact ⟨k, by simp [Expr.tokens, Expr.words] at h ⊢; simp [h], hk⟩
   | .unary _ op _ => by
     have key : ∃ k, symbol op.symbol = [k] ∧ startsExpr k = true := by
       cases op
@@ -472,7 +470,7 @@ theorem peekBinaryOp_op {s : ParseState} {op : BinOp} {a : List Token} {u : Toke
     Parse.peekBinaryOp s = .ok (some (op, a.length)) s := by
   have ⟨h1, h2⟩ := startsExpr_ne hu
   cases op <;> simp [BinOp.symbol, symbol, Lex.reservedWords, punctWord, keywordWord] at ha <;> op_tokens ha hc hs <;>
-    simp [Parse.peekBinaryOp, Parse.peek, Parse.peekGreater, Parse.peekAt_rest, hs, *, Token.isPunct,
+    simp [Parse.peekBinaryOp, Parse.peek, Parse.peekGreater, Parse.peekAt_rest, *, Token.isPunct,
       BinOp.ofSymbol?, BinOp.all, BinOp.symbol, bind, EStateM.bind, pure, EStateM.pure]
 
 theorem peekAssignOp_op {s : ParseState} {op : AssignOp} {a : List Token} {u : Token} {r : List Token}
@@ -480,8 +478,8 @@ theorem peekAssignOp_op {s : ParseState} {op : AssignOp} {a : List Token} {u : T
     (hu : startsExpr u.kind = true) :
     Parse.peekAssignOp s = .ok (some (op, a.length)) s := by
   have ⟨h1, h2⟩ := startsExpr_ne hu
-  cases op <;> simp [AssignOp.symbol, symbol, Lex.reservedWords, punctWord, keywordWord] at ha <;> op_tokens ha hc hs <;>
-    simp [Parse.peekAssignOp, Parse.peek, Parse.peekGreater, Parse.peekAt_rest, hs, *, Token.isPunct,
+  cases op <;> simp [AssignOp.symbol, symbol, Lex.reservedWords, punctWord] at ha <;> op_tokens ha hc hs <;>
+    simp [Parse.peekAssignOp, Parse.peek, Parse.peekGreater, Parse.peekAt_rest, *, Token.isPunct,
       AssignOp.ofSymbol?, AssignOp.all, AssignOp.symbol, bind, EStateM.bind, pure, EStateM.pure]
 
 /-- No binary operator starts an assignment's symbol. -/
@@ -490,8 +488,8 @@ theorem peekBinaryOp_assignOp {s : ParseState} {op : AssignOp} {a : List Token} 
     (hu : startsExpr u.kind = true) :
     Parse.peekBinaryOp s = .ok none s := by
   have ⟨h1, h2⟩ := startsExpr_ne hu
-  cases op <;> simp [AssignOp.symbol, symbol, Lex.reservedWords, punctWord, keywordWord] at ha <;> op_tokens ha hc hs <;>
-    simp [Parse.peekBinaryOp, Parse.peek, Parse.peekGreater, Parse.peekAt_rest, hs, *, Token.isPunct,
+  cases op <;> simp [AssignOp.symbol, symbol, Lex.reservedWords, punctWord] at ha <;> op_tokens ha hc hs <;>
+    simp [Parse.peekBinaryOp, Parse.peek, Parse.peekGreater, Parse.peekAt_rest, *, Token.isPunct,
       BinOp.ofSymbol?, BinOp.all, BinOp.symbol, bind, EStateM.bind, pure, EStateM.pure]
 
 theorem peekBinaryOp_question {s : ParseState} {x : Token} {r : List Token} (hs : s.rest = x :: r)
@@ -518,7 +516,7 @@ theorem binOp_head (op : BinOp) : ∃ k ks, symbol op.symbol = k :: ks ∧ stops
 
 theorem assignOp_head (op : AssignOp) :
     ∃ k ks, symbol op.symbol = k :: ks ∧ stopsPostfix k = true ∧ k ≠ .punct "?" ∧ k ≠ .punct "=>" := by
-  cases op <;> simp [AssignOp.symbol, symbol, Lex.reservedWords, punctWord, keywordWord, stopsPostfix]
+  cases op <;> simp [AssignOp.symbol, symbol, Lex.reservedWords, punctWord, stopsPostfix]
 
 /-- A binary operator ends every level whose least precedence is above the
 operator's. -/
@@ -573,7 +571,7 @@ theorem Parse.skip_ok : ∀ (a : List Token) {b : List Token} {s : ParseState}, 
     let s₁ : ParseState := { s with rest := a ++ b, left := s.left - 1, lastStop := x.span.stop }
     obtain ⟨s', h, hL⟩ := Parse.skip_ok a (s := s₁) rfl hb (by simp [s₁, hl, hs'])
     refine ⟨s', ?_, leaves_trans (leaves_advance hs' hl) hL⟩
-    simp only [List.length_cons, Parse.skip, discard, Functor.mapConst, Function.comp_apply, bind,
+    simp only [Parse.skip, discard, Functor.mapConst, Function.comp_apply, bind,
       EStateM.bind, EStateM.map, Parse.advance_cons hs' hne]
     exact h
 
@@ -751,7 +749,7 @@ theorem iterate_list {α : Type} {T : Edition} {erase : α → α} {words : α �
         · exact hit
         · have hcc : c.kind ≠ .punct "," := by rw [hc]; exact punct_ne hclose
           simp [Parse.listStep, Parse.peek_eq hs', Token.isPunct, hkc', hrefuse t s htk, hp,
-            Parse.peek_eq hs₁, hc, hcc, hclose, bind, EStateM.bind, pure, EStateM.pure]
+            Parse.peek_eq hs₁, hc, hclose, bind, EStateM.bind, pure, EStateM.pure]
       · rw [he']; simp [he]
     | cons y ys =>
       obtain ⟨d, more', rfl, hd, hmore'⟩ := Touching.cons_one (by simpa [punctWord] using hmore)
@@ -1223,7 +1221,7 @@ theorem lhsStep_stop {pi : ParseM Expr} {pa : ParseM (List Expr)} {start : Pos} 
   obtain ⟨h1, h2, h3, h4, h5⟩ := hu u rfl
   by_cases h : u.kind = .punct "!"
   · have := h5 h
-    simp [Parse.leftHandSideStep, Parse.peek_eq hs, Token.isPunct, h1, h2, h3, h4, h, this, bind, EStateM.bind,
+    simp [Parse.leftHandSideStep, Parse.peek_eq hs, Token.isPunct, h, this, bind, EStateM.bind,
       pure, EStateM.pure]
   · simp [Parse.leftHandSideStep, Parse.peek_eq hs, Token.isPunct, h1, h2, h3, h4, h, bind, EStateM.bind,
       pure, EStateM.pure]
@@ -1420,7 +1418,7 @@ theorem Expr.firstPrimary {T : Edition} (e : Expr) (h : e.wfAt T .primary = true
     simp [Expr.tokens, Expr.words, identWord, keywordWord, punctWord, enclose, startsPrimary]
 
 theorem tokens_lhs (e : Expr) : e.tokens = (lhsHead e).tokens ++ (lhsSuffix e).flatten := by
-  simp [Expr.tokens, ← words_lhs]
+  simp [Expr.tokens]
   conv => lhs; rw [words_lhs]
   simp
 
@@ -1506,7 +1504,7 @@ theorem parsePostfix_reads {T : Edition} (f : Nat) (e : Expr) (he : e.wfAt T .po
     simp only [Parse.parsePostfix]
     rw [Parse.bind_eq (Parse.peek_eq hs'), Parse.bind_eq hpa, Parse.bind_eq (Parse.peek_eq hs₁),
       updateOp_symbol hok]
-    simp only [hno, hsim, Bool.false_eq_true, ↓reduceIte, Bool.not_true, Parse.pure_bind]
+    simp only [hno, hsim, Bool.false_eq_true, ↓reduceIte, Parse.pure_bind]
     rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_cons hs₁ hr)), Parse.bind_eq (Parse.spanFrom_eq _ _)]
     rfl
   · have he' : e.wfAt T .lhs = true := by
@@ -1572,7 +1570,7 @@ theorem parseUnary_reads {T : Edition} (f : Nat) (e : Expr) (he : e.wfAt T .unar
     rw [Parse.bind_eq (Parse.peek_eq hs'), hnone, updateOp_symbol hok]
     simp only [Parse.pure_bind]
     rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_cons hs' (by simp [hr]))), Parse.bind_eq hpa]
-    simp only [hsim, Bool.not_true, Bool.false_eq_true, ↓reduceIte, Parse.pure_bind]
+    simp only [hsim, ↓reduceIte, Parse.pure_bind]
     rw [Parse.bind_eq (Parse.spanFrom_eq _ _)]
     rfl
   · have he' : e.wfAt T .postfix = true := by
@@ -2257,7 +2255,7 @@ theorem Neutral.one {k : TokenKind} (h1 : k ∉ [.punct "(", .punct "[", .punct 
   · subst hg; simp [closesKinds, hasGreater]
   · cases k with
     | punct p =>
-      simp only [ne_eq, TokenKind.punct.injEq] at h1 h2 h3 h4 h5 h6 h7 hg
+      simp only [TokenKind.punct.injEq] at h1 h2 h3 h4 h5 h6 h7 hg
       have hg' : ">" ≠ p := fun e => hg e.symm
       simp [closesKinds, hasGreater, h1, h2, h3, h4, h5, h6, h7, hg, hg']
     | eof => exact absurd rfl h8
@@ -2272,7 +2270,7 @@ theorem Neutral.enclosed {o c : String} (ho : o ∈ ["(", "[", "{"]) (hc : c ∈
     rcases ho with rfl | rfl | rfl <;> simp [closesKinds]
   have hclose : closesKinds (d + 1) (.punct c :: a) = closesKinds d a := by
     rcases hc with rfl | rfl | rfl <;> simp [closesKinds]
-  simp only [List.cons_append, List.append_assoc, List.singleton_append, List.nil_append]
+  simp only [List.cons_append, List.append_assoc, List.nil_append]
   rw [hopen, h, hclose]
   have h1 : ">" ≠ o := by rcases ho with rfl | rfl | rfl <;> decide
   have h2 : ">" ≠ c := by rcases hc with rfl | rfl | rfl <;> decide
@@ -2303,7 +2301,7 @@ theorem neutral_binOp (op : BinOp) : Neutral (symbol op.symbol) := by
 
 theorem neutral_assignOp (op : AssignOp) : Neutral (symbol op.symbol) := by
   apply Neutral.all
-  cases op <;> simp [AssignOp.symbol, symbol, Lex.reservedWords, punctWord, keywordWord]
+  cases op <;> simp [AssignOp.symbol, symbol, Lex.reservedWords, punctWord]
 
 theorem neutral_unaryOp (op : UnaryOp) : Neutral (symbol op.symbol) := by
   apply Neutral.all
@@ -2439,10 +2437,10 @@ theorem Expr.afterOK_congr : ∀ (e : Expr) {a b : List TokenKind}, AfterEquiv a
     simp only [Expr.afterOK]
     have hx := Neutral.enclosed (o := "[") (c := "]") (by simp) (by simp) (Expr.neutral i)
     have ho := Expr.afterOK_congr o (AfterEquiv.prepend hx (by simp) h)
-    simp only [List.cons_append, List.append_assoc, List.singleton_append, List.nil_append] at ho ⊢
+    simp only [List.cons_append, List.append_assoc, List.nil_append] at ho ⊢
     rw [ho, Expr.afterOK_congr i (AfterEquiv.closer (c := "]") (by simp) a b)]
   | .call _ c as, a, b, h => by
-    simp only [Expr.afterOK, notFirst, h.1]
+    simp only [Expr.afterOK]
     rw [Expr.afterOK_congr c (AfterEquiv.prepend (neutral_args as) (by simp [enclose, punctWord]) h),
       Expr.afterOKList_congr as (AfterEquiv.closer (c := ")") (by simp) a b)]
   | .unary _ _ x, a, b, h | .prefix _ _ x, a, b, h => by
@@ -2527,7 +2525,7 @@ theorem Expr.tokens_array (es : List Expr) :
 
 theorem Expr.tokens_object (ps : List Property) :
     (Expr.object sp ps).tokens = .punct "{" :: joined "," (ps.map Property.tokens) ++ [.punct "}"] := by
-  simp [Expr.tokens, Expr.words, Property.tokens, enclose, punctWord, separated_flatten, Property.wordsOf_eq,
+  simp [Expr.tokens, Expr.words, enclose, punctWord, separated_flatten, Property.wordsOf_eq,
     List.map_map, Function.comp_def]; rfl
 
 theorem Expr.tokens_paren (i : Expr) : (Expr.paren sp i).tokens = .punct "(" :: i.tokens ++ [.punct ")"] := by

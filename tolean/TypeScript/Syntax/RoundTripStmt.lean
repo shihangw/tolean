@@ -22,8 +22,6 @@ namespace tolean.TypeScript.Syntax
 
 open tolean
 
-set_option linter.unusedSimpArgs false
-
 /-! ### Lines of tokens -/
 
 /-- The words of each line of a statement. They do not depend on how far in
@@ -286,18 +284,17 @@ theorem varDecl_ss {T : Edition} (kind : VarKind) (name : String) (t : TypeExpr)
     rw [Parse.ite_guard (fun h => by simp [Token.isPunct, hnot] at h)]
     rw [Parse.bind_eq (readName_ok (s := s₁) rfl hnm hname'), Parse.bind_eq (Parse.peek_eq (s := s₂) rfl)]
     simp (config := { decide := true }) only [Token.isPunct, Token.isKeyword, beq_self_eq_true, ↓reduceIte, beq_iff_eq,
-      TokenKind.punct.injEq, Bool.false_eq_true, Bool.not_true, Bool.not_false, Parse.pure_bind, Option.isNone_some,
+      Bool.false_eq_true, Option.isNone_some,
       Option.isNone_none, Bool.and_false, Bool.and_true, hcolon]
     rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_cons (s := s₂) rfl (by simp))),
       Parse.bind_eq (Parse.budget_eq _), Parse.bind_eq hpt, Parse.pure_bind, Parse.bind_eq (Parse.peek_eq hs₄)]
-    simp (config := { decide := true }) only [Token.isPunct, Token.isKeyword, beq_self_eq_true, ↓reduceIte, beq_iff_eq,
-      TokenKind.punct.injEq, Bool.false_eq_true, Bool.not_true, Bool.not_false, Parse.pure_bind, Option.isNone_some,
-      Option.isNone_none, Bool.and_false, Bool.and_true, heq]
+    simp (config := { decide := true }) only [beq_self_eq_true, ↓reduceIte, beq_iff_eq,
+      heq]
     rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_cons hs₄ (by simp))),
       Parse.bind_eq (Parse.budget_eq _), Parse.bind_eq hpe, Parse.pure_bind, Parse.bind_eq (Parse.peek_eq hs₆)]
-    simp (config := { decide := true }) only [Token.isPunct, Token.isKeyword, beq_self_eq_true, ↓reduceIte, beq_iff_eq,
-      TokenKind.punct.injEq, Bool.false_eq_true, Bool.not_true, Bool.not_false, Parse.pure_bind, Option.isNone_some,
-      Option.isNone_none, Bool.and_false, Bool.and_true, hsemi]
+    simp (config := { decide := true }) only [↓reduceIte, beq_iff_eq,
+      TokenKind.punct.injEq, Parse.pure_bind,
+      hsemi]
     rw [Parse.bind_eq (endStatement_semi hs₆ hr hsemi)]
     cases kind <;> simp [hkw, VarKind.token, pure, EStateM.pure]
   · exact leaves_trans (leaves_advance hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))
@@ -338,18 +335,17 @@ theorem varDecl_ns {T : Edition} (kind : VarKind) (name : String) (e : Expr)
     rw [Parse.bind_eq (Parse.advance_eq hs'), Parse.bind_eq (Parse.peek_eq (s := s₁) rfl)]
     rw [Parse.ite_guard (fun h => by simp [Token.isPunct, hnot] at h)]
     rw [Parse.bind_eq (readName_ok (s := s₁) rfl hnm hname'), Parse.bind_eq (Parse.peek_eq (s := s₂) rfl)]
-    simp (config := { decide := true }) only [Token.isPunct, Token.isKeyword, beq_self_eq_true, ↓reduceIte, beq_iff_eq,
-      TokenKind.punct.injEq, Bool.false_eq_true, Bool.not_true, Bool.not_false, Parse.pure_bind, Option.isNone_some,
-      Option.isNone_none, Bool.and_false, Bool.and_true, reduceCtorEq, heq]
+    simp (config := { decide := true }) only [Token.isPunct, Token.isKeyword, ↓reduceIte, beq_iff_eq,
+      TokenKind.punct.injEq, Bool.false_eq_true, Parse.pure_bind, Option.isNone_some,
+      Option.isNone_none, Bool.and_false, Bool.and_true, heq]
     rw [Parse.bind_eq (Parse.peek_eq (s := s₂) rfl)]
-    simp (config := { decide := true }) only [Token.isPunct, Token.isKeyword, beq_self_eq_true, ↓reduceIte, beq_iff_eq,
-      TokenKind.punct.injEq, Bool.false_eq_true, Bool.not_true, Bool.not_false, Parse.pure_bind, Option.isNone_some,
-      Option.isNone_none, Bool.and_false, Bool.and_true, reduceCtorEq, heq]
+    simp (config := { decide := true }) only [beq_self_eq_true, ↓reduceIte, beq_iff_eq,
+      heq]
     rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_cons (s := s₂) rfl (by simp))),
       Parse.bind_eq (Parse.budget_eq _), Parse.bind_eq hpe, Parse.pure_bind, Parse.bind_eq (Parse.peek_eq hs₆)]
-    simp (config := { decide := true }) only [Token.isPunct, Token.isKeyword, beq_self_eq_true, ↓reduceIte, beq_iff_eq,
-      TokenKind.punct.injEq, Bool.false_eq_true, Bool.not_true, Bool.not_false, Parse.pure_bind, Option.isNone_some,
-      Option.isNone_none, Bool.and_false, Bool.and_true, reduceCtorEq, hsemi]
+    simp (config := { decide := true }) only [↓reduceIte, beq_iff_eq,
+      TokenKind.punct.injEq, Parse.pure_bind,
+      hsemi]
     rw [Parse.bind_eq (endStatement_semi hs₆ hr hsemi)]
     cases kind <;> simp [hkw, VarKind.token, pure, EStateM.pure]
   · exact leaves_trans (leaves_advance hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))
@@ -393,19 +389,19 @@ theorem varDecl_sn {T : Edition} (kind : VarKind) (name : String) (t : TypeExpr)
     rw [Parse.ite_guard (fun h => by simp [Token.isPunct, hnot] at h)]
     rw [Parse.bind_eq (readName_ok (s := s₁) rfl hnm hname'), Parse.bind_eq (Parse.peek_eq (s := s₂) rfl)]
     simp (config := { decide := true }) only [Token.isPunct, Token.isKeyword, beq_self_eq_true, ↓reduceIte, beq_iff_eq,
-      TokenKind.punct.injEq, Bool.false_eq_true, Bool.not_true, Bool.not_false, Parse.pure_bind, Option.isNone_some,
-      Option.isNone_none, Bool.and_false, Bool.and_true, reduceCtorEq, hcolon]
+      Bool.false_eq_true, Option.isNone_some,
+      Option.isNone_none, Bool.and_false, Bool.and_true, hcolon]
     rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_cons (s := s₂) rfl (by simp))),
       Parse.bind_eq (Parse.budget_eq _), Parse.bind_eq hpt, Parse.pure_bind, Parse.bind_eq (Parse.peek_eq hs₄)]
-    simp (config := { decide := true }) only [Token.isPunct, Token.isKeyword, beq_self_eq_true, ↓reduceIte, beq_iff_eq,
-      TokenKind.punct.injEq, Bool.false_eq_true, Bool.not_true, Bool.not_false, Parse.pure_bind, Option.isNone_some,
-      Option.isNone_none, Bool.and_false, Bool.and_true, reduceCtorEq, hsemi]
+    simp (config := { decide := true }) only [↓reduceIte, beq_iff_eq,
+      TokenKind.punct.injEq, Parse.pure_bind,
+      hsemi]
     rw [Parse.bind_eq (Parse.peek_eq hs₄)]
-    simp (config := { decide := true }) only [Token.isPunct, Token.isKeyword, beq_self_eq_true, ↓reduceIte, beq_iff_eq,
-      TokenKind.punct.injEq, Bool.false_eq_true, Bool.not_true, Bool.not_false, Parse.pure_bind, Option.isNone_some,
-      Option.isNone_none, Bool.and_false, Bool.and_true, reduceCtorEq, hsemi, hkw]
+    simp (config := { decide := true }) only [↓reduceIte, beq_iff_eq,
+      TokenKind.punct.injEq, Parse.pure_bind,
+      reduceCtorEq, hsemi, hkw]
     rw [Parse.bind_eq (endStatement_semi hs₄ hr hsemi)]
-    simp [hkw, pure, EStateM.pure]
+    simp [pure, EStateM.pure]
   · exact leaves_trans (leaves_advance hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))
       (leaves_trans (leaves_advance (s := s₂) rfl (by simp [s₂, s₁, hl, hs'])) (leaves_trans hL₄
         (leaves_advance hs₄ (by rw [hL₄.left_eq, hs₄])))))
@@ -440,19 +436,19 @@ theorem varDecl_nn {T : Edition} (kind : VarKind) (name : String)
     rw [Parse.bind_eq (Parse.advance_eq hs'), Parse.bind_eq (Parse.peek_eq (s := s₁) rfl)]
     rw [Parse.ite_guard (fun h => by simp [Token.isPunct, hnot] at h)]
     rw [Parse.bind_eq (readName_ok (s := s₁) rfl hnm hname'), Parse.bind_eq (Parse.peek_eq (s := s₂) rfl)]
-    simp (config := { decide := true }) only [Token.isPunct, Token.isKeyword, beq_self_eq_true, ↓reduceIte, beq_iff_eq,
-      TokenKind.punct.injEq, Bool.false_eq_true, Bool.not_true, Bool.not_false, Parse.pure_bind, Option.isNone_some,
-      Option.isNone_none, Bool.and_false, Bool.and_true, reduceCtorEq, hsemi]
+    simp (config := { decide := true }) only [Token.isPunct, Token.isKeyword, ↓reduceIte, beq_iff_eq,
+      TokenKind.punct.injEq, Bool.false_eq_true, Parse.pure_bind, Option.isNone_some,
+      Option.isNone_none, Bool.and_false, Bool.and_true, hsemi]
     rw [Parse.bind_eq (Parse.peek_eq (s := s₂) rfl)]
-    simp (config := { decide := true }) only [Token.isPunct, Token.isKeyword, beq_self_eq_true, ↓reduceIte, beq_iff_eq,
-      TokenKind.punct.injEq, Bool.false_eq_true, Bool.not_true, Bool.not_false, Parse.pure_bind, Option.isNone_some,
-      Option.isNone_none, Bool.and_false, Bool.and_true, reduceCtorEq, hsemi]
+    simp (config := { decide := true }) only [↓reduceIte, beq_iff_eq,
+      TokenKind.punct.injEq, Parse.pure_bind,
+      hsemi]
     rw [Parse.bind_eq (Parse.peek_eq (s := s₂) rfl)]
-    simp (config := { decide := true }) only [Token.isPunct, Token.isKeyword, beq_self_eq_true, ↓reduceIte, beq_iff_eq,
-      TokenKind.punct.injEq, Bool.false_eq_true, Bool.not_true, Bool.not_false, Parse.pure_bind, Option.isNone_some,
-      Option.isNone_none, Bool.and_false, Bool.and_true, reduceCtorEq, hsemi, hkw]
+    simp (config := { decide := true }) only [↓reduceIte, beq_iff_eq,
+      TokenKind.punct.injEq, Parse.pure_bind,
+      reduceCtorEq, hsemi, hkw]
     rw [Parse.bind_eq (endStatement_semi (s := s₂) rfl (by simp) hsemi)]
-    simp [hkw, pure, EStateM.pure]
+    simp [pure, EStateM.pure]
   · exact leaves_trans (leaves_advance hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))
       (leaves_advance (s := s₂) rfl (by simp [s₂, s₁, hl, hs'])))
 
@@ -540,7 +536,7 @@ theorem stmt_return_none {T : Edition} {loop : Bool} (f : Nat) (sp : Span) :
   rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_eq hs'))]
   have hg : (get : ParseM ParseState) s₁ = .ok s₁ s₁ := rfl
   rw [Parse.bind_eq hg]
-  simp only [hF₁, Bool.not_true, Bool.false_eq_true, ↓reduceIte, Parse.pure_bind]
+  simp only [hF₁, ↓reduceIte, Parse.pure_bind]
   rw [Parse.bind_eq (Parse.peek_eq (s := s₁) rfl)]
   simp only [Token.isPunct, hsemi, beq_self_eq_true, Bool.true_or, Bool.not_true, Bool.false_eq_true, ↓reduceIte,
     Parse.pure_bind]
@@ -633,7 +629,7 @@ theorem stmt_return_some {T : Edition} {loop : Bool} (f : Nat) (sp : Span) (e : 
   rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_eq hs'))]
   have hg : (get : ParseM ParseState) s₁ = .ok s₁ s₁ := rfl
   rw [Parse.bind_eq hg]
-  simp only [hF₁, Bool.not_true, Bool.false_eq_true, ↓reduceIte, Parse.pure_bind]
+  simp only [hF₁, ↓reduceIte, Parse.pure_bind]
   rw [Parse.bind_eq (Parse.peek_eq (s := s₁) rfl)]
   have hb1 : (x.kind == .punct ";") = false := by simp [hx1]
   have hb2 : (x.kind == .punct "}") = false := by simp [hx2]
@@ -929,7 +925,7 @@ theorem stmt_block {T : Edition} {fn loop : Bool} (f : Nat) (sp : Span) (body : 
   intro s ts rest hT hF hL hs hl ht hr he
   obtain ⟨st', s', hp, hst, hL'⟩ := h s ts rest hT hF hL hs hl ht hr he
   refine ⟨st', s', ?_, hst, hL'⟩
-  simp only [Stmt.wordLines, Stmt.lines, List.map_cons] at ht
+  simp only [Stmt.wordLines, Stmt.lines] at ht
   obtain ⟨a, b, rfl, ha, _⟩ := Laid.cons ht
   obtain ⟨lb, a', rfl, hlb, _⟩ := Touching.cons_one (by simpa [punctWord] using ha)
   simp only [Parse.parseStatement]
@@ -980,7 +976,7 @@ theorem stmt_if_none {T : Edition} {fn loop : Bool} (g : Nat) (sp : Span) (test 
     (by simpa [hrp] using afterOK_closer hae _)
   have hs₃ : s₃.rest = rp :: (b ++ rest) := hL₃.rest_eq
   let s₄ : ParseState := { s₃ with rest := b ++ rest, left := s₃.left - 1, lastStop := rp.span.stop }
-  have hl₄ : s₄.left = s₄.rest.length := by simp [s₄, hL₃.left_eq, hs₃]
+  have hl₄ : s₄.left = s₄.rest.length := by simp [s₄, hL₃.left_eq]
   obtain ⟨t', s₅, hpb, het', hL₅⟩ := ht s₄ b rest (hL₃.target_eq.trans hT) (hL₃.inFunction_eq.trans hF)
     (fun h => by simp only [s₄]; rw [hL₃.loopDepth_eq]; exact hL h) rfl hl₄ hb hr (fun _ => hopen rfl)
   obtain ⟨u, r, rfl⟩ := List.exists_cons_of_ne_nil hr
@@ -1028,13 +1024,13 @@ theorem stmt_if_some {T : Edition} {fn loop : Bool} (g : Nat) (sp : Span) (test 
     (by simpa [hrp] using afterOK_closer hae _)
   have hs₃ : s₃.rest = rp :: (b₁ ++ ek :: (b₃ ++ rest)) := hL₃.rest_eq
   let s₄ : ParseState := { s₃ with rest := b₁ ++ ek :: (b₃ ++ rest), left := s₃.left - 1, lastStop := rp.span.stop }
-  have hl₄ : s₄.left = s₄.rest.length := by simp [s₄, hL₃.left_eq, hs₃]
+  have hl₄ : s₄.left = s₄.rest.length := by simp [s₄, hL₃.left_eq]
   obtain ⟨t', s₅, hpb, het', hL₅⟩ := ht s₄ b₁ (ek :: (b₃ ++ rest)) (hL₃.target_eq.trans hT)
     (hL₃.inFunction_eq.trans hF) (fun h => by simp only [s₄]; rw [hL₃.loopDepth_eq]; exact hL h) rfl hl₄ hb₁
     (by simp) (fun h => by rw [hto] at h; cases h)
   have hs₅ : s₅.rest = ek :: (b₃ ++ rest) := hL₅.rest_eq
   let s₆ : ParseState := { s₅ with rest := b₃ ++ rest, left := s₅.left - 1, lastStop := ek.span.stop }
-  have hl₆ : s₆.left = s₆.rest.length := by simp [s₆, hL₅.left_eq, hs₅]
+  have hl₆ : s₆.left = s₆.rest.length := by simp [s₆, hL₅.left_eq]
   obtain ⟨e', s₇, hpe, hee, hL₇⟩ := he s₆ b₃ rest (hL₅.target_eq.trans (hL₃.target_eq.trans hT))
     (hL₅.inFunction_eq.trans (hL₃.inFunction_eq.trans hF))
     (fun h => by simp only [s₆]; rw [hL₅.loopDepth_eq, hL₃.loopDepth_eq]; exact hL h) rfl hl₆ hb₃ hr
@@ -1095,7 +1091,7 @@ theorem stmt_while {T : Edition} {fn loop : Bool} (g : Nat) (sp : Span) (test : 
   have hs₃ : s₃.rest = rp :: (b ++ rest) := hL₃.rest_eq
   let s₄ : ParseState := { s₃ with rest := b ++ rest, left := s₃.left - 1, lastStop := rp.span.stop }
   let s₄' : ParseState := { s₄ with loopDepth := s₄.loopDepth + 1 }
-  have hl₄ : s₄'.left = s₄'.rest.length := by simp [s₄', s₄, hL₃.left_eq, hs₃]
+  have hl₄ : s₄'.left = s₄'.rest.length := by simp [s₄', s₄, hL₃.left_eq]
   obtain ⟨body', s₅, hpb, heb, hL₅⟩ := hb s₄' b rest (hL₃.target_eq.trans hT) (hL₃.inFunction_eq.trans hF)
     (fun _ => by simp [s₄']) rfl hl₄ hbl hr (fun h => hopen h)
   refine ⟨.whileStmt ⟨k.span.start, s₅.lastStop⟩ test' body', { s₅ with loopDepth := s₅.loopDepth - 1 }, ?_,
@@ -1146,7 +1142,7 @@ theorem parseForOf_reads {T : Edition} {fn loop : Bool} (h : Nat) (sp : Span) (k
   have hs₆ : s₆.rest = rp :: (b ++ rest) := hL₆.rest_eq
   let s₇ : ParseState := { s₆ with rest := b ++ rest, left := s₆.left - 1, lastStop := rp.span.stop }
   let s₇' : ParseState := { s₇ with loopDepth := s₇.loopDepth + 1 }
-  have hl₇ : s₇'.left = s₇'.rest.length := by simp [s₇', s₇, hL₆.left_eq, hs₆]
+  have hl₇ : s₇'.left = s₇'.rest.length := by simp [s₇', s₇, hL₆.left_eq]
   obtain ⟨body', s₈, hpb, heb, hL₈⟩ := hb s₇' b rest (hL₆.target_eq.trans hT) (hL₆.inFunction_eq.trans hF)
     (fun _ => by simp [s₇']) rfl hl₇ hbl hr (fun h => hopen h)
   have hnot : nm.kind ≠ .punct "[" ∧ nm.kind ≠ .punct "{" := by rw [hnm]; simp
@@ -1159,12 +1155,12 @@ theorem parseForOf_reads {T : Edition} {fn loop : Bool} (h : Nat) (sp : Span) (k
     rw [Parse.bind_eq (Parse.expectPunct_ok (s := s₁) rfl (by simp) hlp), Parse.bind_eq (Parse.peek_eq (s := s₂) rfl)]
     cases kind <;> simp only [VarKind.token] at hkk <;>
     simp (config := { decide := true }) only [Token.isPunct, Token.isKeyword, Token.isIdent, beq_self_eq_true, ↓reduceIte, beq_iff_eq,
-      TokenKind.punct.injEq, Bool.false_eq_true, Bool.not_true, Bool.not_false, Parse.pure_bind, reduceCtorEq, hkk] <;>
+      Parse.pure_bind, reduceCtorEq, hkk] <;>
     rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_eq (s := s₂) rfl)), Parse.bind_eq (Parse.peek_eq (s := s₃) rfl)] <;>
-    rw [Parse.ite_guard (fun h => by simp [Token.isPunct, hnot] at h)] <;>
+    rw [Parse.ite_guard (fun h => by simp [hnot] at h)] <;>
     rw [Parse.bind_eq (readName_ok (s := s₃) rfl hnm hname'), Parse.bind_eq (Parse.peek_eq (s := s₄) rfl)] <;>
-    simp (config := { decide := true }) only [Token.isPunct, Token.isKeyword, Token.isIdent, beq_self_eq_true, ↓reduceIte, beq_iff_eq,
-      TokenKind.punct.injEq, Bool.false_eq_true, Bool.not_true, Bool.not_false, Parse.pure_bind, reduceCtorEq, hofk] <;>
+    simp (config := { decide := true }) only [beq_self_eq_true, ↓reduceIte,
+      Parse.pure_bind, hofk] <;>
     rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_cons (s := s₄) rfl (by simp))), Parse.bind_eq (Parse.budget_eq _),
       Parse.bind_eq hpi, Parse.bind_eq (Parse.expectPunct_ok hs₆ (by simp [hr]) hrp),
       Parse.bind_eq (Parse.withLoop_ok hpb), Parse.bind_eq (Parse.spanFrom_eq _ _)] <;> rfl

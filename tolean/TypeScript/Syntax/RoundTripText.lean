@@ -20,8 +20,6 @@ namespace tolean.TypeScript.Syntax
 
 open tolean
 
-set_option linter.unusedSimpArgs false
-
 theorem breaksOK_append : ∀ (a b : List Word), breaksOK a = true → breaksOK b = true →
     (a.getLast? = some [] → b.head? = some [.punct "("]) → breaksOK (a ++ b) = true
   | [], b, _, hb, _ => by simpa using hb
@@ -296,7 +294,7 @@ theorem Stmt.lineOK : ∀ (st : Stmt) (d : Nat), ∀ l ∈ st.lines d, LineOK l.
         ((Expr.fine test).line.append (LineOK.word (w := punctWord ")") (by simp [punctWord]))))
     · exact Stmt.lineOK body _ l hl
   | .block _ body, d, l, hl => by
-    simp only [Stmt.lines, List.mem_cons, List.mem_append, List.mem_singleton] at hl
+    simp only [Stmt.lines, List.mem_cons, List.mem_append] at hl
     rcases hl with (rfl | hl) | (rfl | hl)
     · exact LineOK.word (by simp [punctWord])
     · exact Stmt.lineOKAll body _ l hl
@@ -351,7 +349,7 @@ theorem Decl.lineOK : ∀ d : Decl, ∀ l ∈ d.lines, LineOK l.2
       simpa [List.append_assoc] using this
     · exact Stmt.lineOK body 0 l hl
   | .interface _ exported name fields, l, hl => by
-    simp only [Decl.lines, List.mem_cons, List.mem_append, List.mem_map, List.mem_singleton] at hl
+    simp only [Decl.lines, List.mem_cons, List.mem_append, List.mem_map] at hl
     rcases hl with (rfl | ⟨f, _, rfl⟩) | (rfl | hl)
     · exact (exportWords_line exported).append (LineOK.cons (by simp [identWord]) (LineOK.cons (by simp [identWord])
         (LineOK.word (by simp [punctWord]))))

@@ -28,10 +28,6 @@ namespace tolean.TypeScript.Syntax
 
 open tolean
 
--- The proofs step through the parser with one set of lemmas, so some pass a
--- lemma that their step does not use.
-set_option linter.unusedSimpArgs false
-
 /-! ### The parser's monad -/
 
 namespace Parse
@@ -485,7 +481,7 @@ theorem parseArrayType_reads (f : Nat) (t : TypeExpr) (hwf : t.arrayWF = true)
     have h1 : s.rest[1]? = some rb := by simp [hsr]
     simp [Parse.arrayStep, Parse.peek_eq hsr, Parse.peekAt_eq h1, Token.isPunct, hlb, hrb, hnl, Parse.skip,
       Parse.advance_eq hsr, Parse.advance_eq (s := past s lb (rb :: (u :: r'))) rfl, Parse.spanFrom,
-      discard, Functor.mapConst, Functor.map,
+      discard, Functor.mapConst,
       EStateM.map, get, getThe, MonadStateOf.get, EStateM.get, bind, EStateM.bind, pure, EStateM.pure]
 
 /-! ### Lists with a separator -/
@@ -724,7 +720,7 @@ theorem parsePrimaryType_ref (f : Nat) (sp : Span) (name : String) (args : List 
       simp [Parse.typeArgStep, bind, EStateM.bind, hp, Parse.peek_eq hu, Token.isPunct, hne, pure, EStateM.pure])
     (fun acc s s' a c r hp hc hr hck => by
       simp [Parse.typeArgStep, bind, EStateM.bind, hp, Parse.peek_eq hc, Token.isPunct, hck, Parse.advance_cons hc hr, discard,
-        Functor.mapConst, Functor.map, EStateM.map, pure, EStateM.pure])
+        Functor.mapConst, EStateM.map, pure, EStateM.pure])
     (fun c r hc => followsType_punct hc (by decide))
     args (10 * (s₂.left + 1)) #[] s₂ ats (gt :: rest) hargs h
     (by
@@ -739,12 +735,12 @@ theorem parsePrimaryType_ref (f : Nat) (sp : Span) (name : String) (args : List 
   have hltn : lt.newlineBefore = false := noBreak_of hlt (by decide) (hn lt (by simp))
   refine ⟨.ref ⟨x.span.start, gt.span.stop⟩ name res.toList,
     { s₃ with rest := rest, left := s₃.left - 1, lastStop := gt.span.stop }, ?_, ?_, ?_⟩
-  · simp only [s₂, s₁, past] at hit
+  · simp only [s₂, s₁] at hit
     simp only [Parse.parsePrimaryType, bind, EStateM.bind, Parse.advance_eq hs₀, hx]
-    simp [Parse.peek_eq (s := past s x (lt :: (ats ++ gt :: rest))) rfl, Token.isPunct, hltd, hlt, hltn,
+    simp [Parse.peek_eq (s := past s x (lt :: (ats ++ gt :: rest))) rfl, Token.isPunct, hlt, hltn,
       hname'.1.1, hname'.1.2, hname'.2,
       Parse.advance_cons (s := past s x (lt :: (ats ++ gt :: rest))) rfl (by simp), discard,
-      Functor.mapConst, Functor.map, EStateM.map, Parse.budget_eq, hit, Parse.expectPunct_ok hs₃ hr hgt,
+      Functor.mapConst, EStateM.map, Parse.budget_eq, hit, Parse.expectPunct_ok hs₃ hr hgt,
       Parse.spanFrom, get, getThe, MonadStateOf.get, EStateM.get, bind, EStateM.bind, pure, EStateM.pure]
   · have he₂ : TypeExpr.eraseAll res.toList = TypeExpr.eraseAll args := by simpa using he
     simp [TypeExpr.erase, he₂]
