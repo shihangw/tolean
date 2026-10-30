@@ -1,8 +1,8 @@
 import tolean.TypeScript.Syntax.Parser
 
 /-!
-A syntax tree as TypeScript source, for the round trip of step 4 of the
-certificates plan: the parser reads the printed source as the same tree.
+A syntax tree as TypeScript source, for the parser's round trip: the parser
+reads the printed source as the same tree (`parseChars_reads`).
 
 The printer writes one form for each node, so that the proof of the round
 trip follows the tree:
