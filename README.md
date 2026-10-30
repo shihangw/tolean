@@ -427,8 +427,9 @@ what the subset means (`tolean/TypeScript/Spec/Eval.lean`) instead. The
 kernel checks that the parser gives the certificate's program for the file.
 `tests/typescript/interpreter.test.ts` tests the interpreter against Node on
 random programs, and a certificate also proves the printer link for its file.
-The [certificates plan](docs/plans/certificates.md) proves the parser's round
-trip next. Each language page lists its steps in more detail.
+Tolean also proves that the parser reads its own printed source back as the
+same tree (`parseChars_reads`). Each language page lists its steps in more
+detail.
 
 ## Claims and proofs
 

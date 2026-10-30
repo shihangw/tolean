@@ -161,8 +161,18 @@ the body and one step of the fold agree, the loop and the fold agree.
 Tolean also proves the parser's round trip. `parseChars_reads` in
 `tolean/TypeScript/Syntax/RoundTripText.lean` states that the parser reads
 the printed source of every module that it gives as the same module, apart
-from spans. [The certificates plan](../plans/certificates.md) describes the
-steps of that proof.
+from spans. The proof has these parts. Each compares trees apart from spans,
+and a well-formed tree is one that has the shape that the parser reads.
+
+| What it states | Theorem | File in `tolean/TypeScript/` |
+|---|---|---|
+| The parser reads the printed tokens of every well-formed type as that type, given fuel for how deep the type nests. | `types_reads` | `Syntax/RoundTrip.lean` |
+| The same for each level of the expression parser, when the target edition has the operators that the expression uses. | `exprs_read` | `Syntax/RoundTripExpr.lean` |
+| The same for statements, in a function or not and in a loop or not. | `stmts_read` | `Syntax/RoundTripStmt.lean` |
+| `parseModule` reads the tokens of the printed lines of every well-formed module, which the end of the file follows, as that module. | `module_reads` | `Syntax/RoundTripDecl.lean` |
+| Every module that the parser gives is well formed, and each word that it prints is one that the lexer reads back. | `parseTokens_wf` | `Syntax/ParseWF.lean` |
+| The lexer reads the printed source as the tokens of the printed lines, with the line breaks that `Laid` states. | `lexChars_render` | `Syntax/RoundTripLex.lean` |
+| The printer puts a line break inside a line only before a `(`. | `Module.breaksOK` | `Syntax/RoundTripText.lean` |
 
 #### Effects (planned)
 
@@ -468,10 +478,12 @@ its preconditions. The plan has these pieces:
 |---|---|---|
 | Differential test | Run the TypeScript in Node and the generated Lean on the same random inputs, and compare. Evidence for step 2, with a failure report that an agent can reproduce. | Not needed for a certified file: its certificate proves that the generated Lean computes what the interpreter computes, and `tests/typescript/interpreter.test.ts` tests the interpreter against Node |
 | AST as Lean data | The syntax tree of each file as Lean data (`Program`) | Built: `tolean certify` writes it |
-| Output as Lean data | The translator builds its output as a syntax tree, so that one theorem can cover every program it accepts (phase 6 of the certificates plan) | Built: `tolean/TypeScript/Output.lean`, and the translator is total |
+| Output as Lean data | The translator builds its output as a syntax tree, so that one theorem can cover every program it accepts | Built: `tolean/TypeScript/Output.lean`, and the translator is total |
 | The translator's theorem | `program_sound`: for every accepted program, of one file or several, the output tree computes only what the interpreter computes | Built: `tolean/TypeScript/Proof/` |
 | Printer link | For each file, a proof that the printed definitions compute what the output tree means. With the translator's theorem, every file is then proved. | Built: each certificate proves it for its file, with `tolean/TypeScript/Proof/Link.lean` |
 | `eval`, a JS interpreter in Lean | The meaning of a `Program`. It is trusted, so it is tested against Node. | Built: `tolean/TypeScript/Spec/Eval.lean` covers the subset, with `number` values from the abstract model. `tests/typescript/interpreter.test.ts` runs it against Node on random programs, on every maintained Node release line. |
 | Construct lemmas | Proved once, for example: the output's fold equals `List.foldl` | Built: `runFold_foldl` in `tolean/TypeScript/Proof/Link.lean` |
 | Per-file certificate (`f.source`) | Proves `eval(Program)` equals the generated definition, for all inputs. Step 2 is then proved. | Built for the whole subset. All 29 accepted corpus files have one. |
 | Boundary guards | Check the preconditions of step 6 where callers enter the verified code | Not started |
+| The parser against the grammar | Prove that the parser reads TypeScript as the language's grammar does, so that step 1 stops being trusted. The round trip proves only that the parser and the printer agree. | Not started. `tests/typescript/check.ts` tests the parser against `tsc`. |
+| The interpreter from a formal semantics | Derive `eval` from a formal semantics of ECMA-262, so that it stops being a trusted specification | Not started. `tests/typescript/interpreter.test.ts` tests it against Node. |
