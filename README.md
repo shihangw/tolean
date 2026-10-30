@@ -410,7 +410,8 @@ code.
   mutation in place into a pure update of a value. TypeScript has no borrow
   checker, so Tolean gets the same property from its subset instead. Only
   locals that the function owns can change, and the function can read an
-  owned array only in its return value.
+  owned array only in its return value. [Tolean and Aeneas](docs/vs_aeneas.md)
+  compares the two in more detail.
 - [Ariadne](https://github.com/nathsou/ariadne) translates a TypeScript subset
   into readable Lean definitions, and it rejects what it cannot model. Ariadne
   also proves, once for all programs, that its definitions match a JavaScript
