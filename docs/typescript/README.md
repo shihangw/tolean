@@ -243,8 +243,9 @@ from another file from the root, with that file's namespace, such as
 read and build the fields of an interface that reaches it through another
 interface's fields, without importing it. A file
 that imports from a file that uses the number model uses it too, so that it
-has a number type to pass. The command for one file, `tolean translate
-<file>`, refuses an import, because it does not see the other files.
+has a number type to pass. The command for one file,
+`tolean translate <file>`, refuses an import, because it does not see the
+other files.
 
 The interpreter runs a program of several files, and a call runs the function
 that its file declares or imports under that name. `program_sound` covers

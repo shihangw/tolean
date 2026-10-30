@@ -35,7 +35,9 @@ the translated queries keeps it.
 
 To try Tolean without installing it, open the
 [playground](https://shihangw.github.io/tolean/). There you edit an example,
-and Lean checks its proofs in the browser.
+and Lean checks its proofs in the browser. The
+[docs site](https://shihangw.github.io/tolean/docs/) has this README and
+every page in `docs/`, with an index and full-text search.
 
 ## Getting started
 
@@ -358,6 +360,7 @@ cd ../tests/go && go run ./check            # the Lean Go parser against go/pars
 cd ../sql && go run ./pgcheck corpus        # the SQL translator against PostgreSQL (see the language docs)
 (cd ../typescript && ./checkCertify.sh)     # per-file certificates for the corpus (see the TypeScript page)
 cd ../chain && ./check.sh                   # chain manifests on a sample project (see above)
+cd ../../docs && pnpm install && pnpm build # the docs site, which fails on a dead link
 ```
 
 CI runs all of these on each push and pull request, in the same Nix dev
@@ -367,9 +370,11 @@ if a check leaves a committed file changed.
 
 CI runs in stages, so a failure stops the expensive work early. The `check`
 job runs `lake build --wfail` and the checks above, on each pull request.
+The `docs` job builds the docs site on each pull request too, and it needs
+no Lean, so it finishes first.
 On `main`, when `check` passes, `wasm` builds the playground's WebAssembly
 translator and requires that it gives the native result, and `pages` then
-publishes the playground. Pull requests skip the WebAssembly build, because
+publishes the playground, with the docs site under `/docs/`. Pull requests skip the WebAssembly build, because
 only the published page needs it. To run it for a branch, start `ci` by
 hand from the Actions tab.
 
