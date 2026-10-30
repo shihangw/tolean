@@ -1,6 +1,6 @@
 # Plan: a docs site built from the repository
 
-**Status:** planned, not built · **Date:** 2026-10-29
+**Status:** built, waiting for its first deploy · **Date:** 2026-10-29
 
 The Markdown files in the repository are the only source of the docs. On
 every push to `main`, CI builds them into a site with VitePress and publishes

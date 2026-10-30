@@ -1,0 +1,19 @@
+/* The README centers its banner and its badges with <p align="center">,
+   which GitHub honours. The default theme makes every image a block, so the
+   badges would stack. */
+.vp-doc p[align='center'] {
+  text-align: center;
+}
+
+.vp-doc p[align='center'] img {
+  display: inline-block;
+}
+
+/* The line at the end of each page that names its source file. */
+.vp-doc .page-source {
+  margin-top: 48px;
+  padding-top: 16px;
+  border-top: 1px solid var(--vp-c-divider);
+  font-size: 14px;
+  color: var(--vp-c-text-2);
+}
