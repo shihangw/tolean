@@ -10,9 +10,9 @@ Steps, in order. Each ends when its check passes.
 1. **Pick the technique files** for the work (below). Read every one whose condition matches before writing the first lemma.
 2. **Develop in a scratch file** that imports the module you extend: `nix develop --command bash -c 'lake env lean <scratch>.lean'`. It checks one file in seconds. Done when the file prints no error and no `sorry`.
 3. **Merge** the scratch content into the module and run `lake build <module>`. Done when it builds clean.
-4. **List the theorems** in `tolean/TypeScript/Spec/Coverage.lean`. Build `tolean.TypeScript.Spec.Coverage`; its error names every unlisted theorem. Add each to the group for its module. A lemma nothing uses gets deleted, not listed. Done when the index builds.
+4. **List the theorems** in `tolean/TypeScript/Spec/Coverage.lean`. Build `tolean.TypeScript.Spec.Coverage`; its error names every unlisted theorem. Add each to the group for its module. A lemma nothing uses gets deleted, not listed. A `simp` lemma is in use when deleting it breaks the build, even where no proof names it. Done when the index builds.
 5. **Check the axioms** of each main theorem with `#print axioms`. Done when it lists only `propext`, `Classical.choice` and `Quot.sound`.
-6. **Run `lake build --wfail`** on the whole project. Warnings are errors, so an unused variable or a `simpa` linter hint fails it. Done when it completes.
+6. **Run `lake build --wfail`** on the whole project. Warnings are errors, so an unused variable, an unused `simp` argument or a `simpa` linter hint fails it. Remove what the linter names; keep linters on for the whole file. Done when it completes.
 7. **A parser edit** (such as naming a loop step) must not change what the parser reads: run the equivalence check in [loops-and-fuel.md](loops-and-fuel.md), then `node check.ts`, `./checkCertify.sh` and `node checkTranslate.ts` in `tests/typescript`.
 
 ## Technique files

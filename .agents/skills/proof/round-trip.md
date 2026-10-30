@@ -6,7 +6,9 @@ Goal: `parse (print t)` gives `t` apart from spans. `Syntax/Source.lean` prints 
 
 | File | Main theorem | Covers |
 |---|---|---|
-| `Syntax/RoundTrip.lean` | `types_reads` | types; monad and `Leaves` basics |
+| `tolean/TypeScript/EStateM.lean` | `bind_ok`, `bind_eq`, … | monad lemmas for every `EStateM`; `Parse` and `Lex` export them |
+| `Syntax/Layout.lean` | `Touching.kinds` | `NoBreak`, `Chained`, `Placed`, `Touching`, `Laid`; the lexer and parser proofs share them |
+| `Syntax/RoundTrip.lean` | `types_reads` | types; `Kept`, `past`, `Leaves` |
 | `Syntax/RoundTripExpr.lean` | `exprs_read` | each expression level; `afterOK` congruence; budget corollaries |
 | `Syntax/RoundTripStmt.lean` | `stmts_read` | statements; `Laid`; `parseVarDecl_reads` |
 | `Syntax/RoundTripDecl.lean` | `module_reads` | declarations, modules |
@@ -30,7 +32,7 @@ Goal: `parse (print t)` gives `t` apart from spans. `Syntax/Source.lean` prints 
 Each `*_gives` / `*_wf` theorem runs one parser function backwards from `p s = .ok x s'`.
 
 - **`Ready s`**: the state is `Good`, ends with `s.eof` (kind `.eof`), and every token left is eof or `TokenKind.ok s.target`. `Ready.tok` gives `Word.ok T [x.kind]` for a token read; `readName_words` gives it for a name.
-- **`Kept s s'`**: eof, `inFunction`, `loopDepth`, `target` unchanged. A loop's target fact comes from `hK.target_eq.trans hT`.
+- **`Kept s s'`** (`RoundTrip.lean`; `Leaves` extends it): eof, `inFunction`, `loopDepth`, `target` unchanged. A loop's target fact comes from `hK.target_eq.trans hT`.
 - **`afterOK`**: the parser read the same brackets, `;` and `>` that the printer writes (`skel`), and the printed tokens after a node stop the `>` scan where the source tokens stop it (`Follows`).
 - **Words that lex back**: each result carries `WordsOK T` for its printed words (`GaveE.ok`, `GaveArgs.ok`, `StmtOK`, `DeclOK`). List items fold it into the Bool item predicate as `wf && words.all (Word.ok T)` (`both`, `both_left`, `both_right`). `words_ok` closes `WordsOK T ws` from hypotheses in context and fixed words; put the facts about sub-trees in context with `have` first.
 

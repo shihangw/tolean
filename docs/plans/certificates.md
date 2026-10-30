@@ -58,50 +58,39 @@ printer gives a certificate that Lean refuses.
       `Syntax/Equality.lean` gives `Module.beq` and proves that it decides
       equality. This removes the term printer from the trusted links. The
       kernel parses a 2.7 KB file in about ten seconds.
-   2. **Round trips (built).** With a total printer from syntax trees back
-      to source text, Tolean proves the round trip `parse (print t) = .ok t`,
-      apart from spans, for every tree that the parser gives. The printer
-      is built: `Syntax/Source.lean` writes each node in one form, every
-      statement on a line of its own and ending in `;`, and every two tokens
-      one space apart. A statement breaks across
-      lines in one place only, between the name `async` and the `(` of a call
-      of it. ECMA-262 lets no line break come between `async` and the
-      parameters of an async arrow function, and `tsc` reads none after one.
-      So with the line break, both read a call, where on one line `tsc` could
-      read the start of an arrow function. `tolean parse
-      --round-trip` prints the tree as source, parses that, and requires the
-      same tree apart from spans. `tests/typescript/check.ts` runs it on
-      every tree that the parser gives, on the corpus and on random
-      programs. The proof for types is built. `types_reads` in
-      `Syntax/RoundTrip.lean` states that the parser reads the tokens of
-      every well-formed type as that type, apart from spans, given fuel for
-      how deep the type nests. `TypeExpr.wf` defines a well-formed type, and
-      it is written to match the types that `parseType` can read. The proof
-      for expressions is built too. `exprs_read` in
-      `Syntax/RoundTripExpr.lean` states the same for each level of the
-      expression parser, from assignments down to primary expressions. It
-      covers every expression that `Expr.wfAt` accepts at that level, when
-      the target edition has the operators that the expression uses. The
-      proof for statements is built as well. `stmts_read` in
-      `Syntax/RoundTripStmt.lean` states the same for `parseStatement`, on
-      the tokens of a statement's printed lines. It covers every statement
-      that `Stmt.wf` accepts, in a function or not and in a loop or not.
-      The proof for modules completes the parser's part. `module_reads` in
-      `Syntax/RoundTripDecl.lean` states that `parseModule` reads the
-      tokens of a module's printed lines, which the end of the file
-      follows, as the same module apart from spans. It covers every module
-      that `Module.wf` accepts. Three more proofs carry the round trip from
-      tokens to source text. `parseTokens_wf` in `Syntax/ParseWF.lean`
-      states that every module the parser gives is well formed. It also
-      states that each word the module prints is one that the lexer reads
-      back. `lexChars_render` in `Syntax/RoundTripLex.lean` states that the
-      lexer reads the printed source as the tokens of the printed lines,
-      with the line breaks that `Laid` states. It needs every line break
-      inside a line to come before a `(`, and `Module.breaksOK` in
-      `Syntax/RoundTripText.lean` proves that the printer writes them so.
-      `parseChars_reads` in the same file completes the round trip. When
-      the parser gives a module from some characters, it reads the printed
-      source of that module as the same module, apart from spans.
+   2. **Round trips (built).** Tolean proves that the parser reads its own
+      printed source back. `parseChars_reads` in `Syntax/RoundTripText.lean`
+      states it: when the parser gives a module from some characters, it
+      reads the printed source of that module as the same module, apart from
+      spans. The theorem has no hypothesis other than the parser's result.
+
+      The printer is `Syntax/Source.lean`. It writes each node in one form,
+      every statement on a line of its own and ending in `;`, and every two
+      tokens one space apart. A statement breaks across lines in one place
+      only, between the name `async` and the `(` of a call of it. ECMA-262
+      reads `async (1)` on one line as a call, but `tsc` can read it as the
+      start of an async arrow function. ECMA-262 lets no line break come
+      between `async` and the parameters of an async arrow function, and
+      `tsc` reads none after one. So with the line break, both read a call.
+
+      The proof has these parts. Each compares trees apart from spans, and
+      a well-formed tree is one that has the shape that the parser reads.
+
+      | What it states | Theorem | File |
+      |---|---|---|
+      | The parser reads the printed tokens of every well-formed type as that type, given fuel for how deep the type nests. | `types_reads` | `Syntax/RoundTrip.lean` |
+      | The same for each level of the expression parser, when the target edition has the operators that the expression uses. | `exprs_read` | `Syntax/RoundTripExpr.lean` |
+      | The same for statements, in a function or not and in a loop or not. | `stmts_read` | `Syntax/RoundTripStmt.lean` |
+      | `parseModule` reads the tokens of the printed lines of every well-formed module, which the end of the file follows, as that module. | `module_reads` | `Syntax/RoundTripDecl.lean` |
+      | Every module that the parser gives is well formed, and each word that it prints is one that the lexer reads back. | `parseTokens_wf` | `Syntax/ParseWF.lean` |
+      | The lexer reads the printed source as the tokens of the printed lines, with the line breaks that `Laid` states. | `lexChars_render` | `Syntax/RoundTripLex.lean` |
+      | The printer puts a line break inside a line only before a `(`. | `Module.breaksOK` | `Syntax/RoundTripText.lean` |
+
+      `tolean parse --round-trip` prints the tree as source, parses that,
+      and requires the same tree apart from spans.
+      `tests/typescript/check.ts` runs it on every tree that the parser
+      gives, on the corpus and on random programs. The proof is about the
+      Lean definitions, and the test checks the compiled binary.
 5. **The interpreter against Node (built).** `tests/typescript/interpreter.test.ts`
    runs random programs of the subset with random arguments in the interpreter
    and in Node, and requires the same results. This is evidence that the

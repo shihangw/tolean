@@ -17,7 +17,7 @@ Run it over the repository's TypeScript files and about a thousand programs from
 
 - One step: `Parse.iterate_true : step acc s = .ok (acc', true) s' → iterate (n+1) acc step s = iterate n acc' step s'`, and `Parse.iterate_false` for the last step.
 - **Continuation form**, for a chain built from the left (members, operators): induct on the tree and state `iterate (n + steps e) acc step s = iterate n e' step s'`. The outermost node's step runs last, so the induction hypothesis covers the inner chain and one `iterate_true` adds the node (`lhs_loop`, `bin_loop`).
-- **Item lists** (`iterate_list`, `block_loop`, `field_loop`, `import_loop`, `decl_loop`): induct on the items, generalizing `fuel`, `acc`, the state and the tokens. Each item is followed by a `,` or by the closer: split the tail as `[]` or `y :: ys`.
+- **Item lists** (`iterate_list`, `blockStep_loop`, `import_loop`, `decl_loop`): induct on the items, generalizing `fuel`, `acc`, the state and the tokens. Each item is followed by a `,` or by the closer: split the tail as `[]` or `y :: ys`. `blockStep_loop` is generic over the item type: `block_loop` and `field_loop` pass the lines of an item, the state invariant and a reader for one item.
 - Fuel: the loop gets `budget = 10 * (left + 1)`. Show `items.length < fuel` from the token count (`length_items`, `Laid.length_le`, `Laid.length_decls`).
 
 ## Fuel for recursive calls
