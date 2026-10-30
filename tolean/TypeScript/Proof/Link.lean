@@ -2,7 +2,7 @@ import tolean.TypeScript.Proof.Module
 import tolean.TypeScript.Output.Equality
 
 /-!
-The printer link for one file, step 4 of phase 6 of the certificates plan.
+The printer link for one file.
 
 `translate_sound` is about the output tree, so it trusts the printer: that the
 printed Lean computes what `Output/Eval.lean` gives for the tree. A

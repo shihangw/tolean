@@ -161,8 +161,18 @@ the body and one step of the fold agree, the loop and the fold agree.
 Tolean also proves the parser's round trip. `parseChars_reads` in
 `tolean/TypeScript/Syntax/RoundTripText.lean` states that the parser reads
 the printed source of every module that it gives as the same module, apart
-from spans. [The certificates plan](../plans/certificates.md) describes the
-steps of that proof.
+from spans. The proof has these parts. Each compares trees apart from spans,
+and a well-formed tree is one that has the shape that the parser reads.
+
+| What it states | Theorem | File in `tolean/TypeScript/` |
+|---|---|---|
+| The parser reads the printed tokens of every well-formed type as that type, given fuel for how deep the type nests. | `types_reads` | `Syntax/RoundTrip.lean` |
+| The same for each level of the expression parser, when the target edition has the operators that the expression uses. | `exprs_read` | `Syntax/RoundTripExpr.lean` |
+| The same for statements, in a function or not and in a loop or not. | `stmts_read` | `Syntax/RoundTripStmt.lean` |
+| `parseModule` reads the tokens of the printed lines of every well-formed module, which the end of the file follows, as that module. | `module_reads` | `Syntax/RoundTripDecl.lean` |
+| Every module that the parser gives is well formed, and each word that it prints is one that the lexer reads back. | `parseTokens_wf` | `Syntax/ParseWF.lean` |
+| The lexer reads the printed source as the tokens of the printed lines, with the line breaks that `Laid` states. | `lexChars_render` | `Syntax/RoundTripLex.lean` |
+| The printer puts a line break inside a line only before a `(`. | `Module.breaksOK` | `Syntax/RoundTripText.lean` |
 
 #### Effects (planned)
 
@@ -461,4 +471,10 @@ path = "node_modules/tolean/lean"
 
 So a theorem holds for the code that runs if steps 1, 4 and 5 are correct, the
 printer of step 2 is correct or the file has a certificate, and the inputs meet
-its preconditions.
+its preconditions. These goals are not built yet:
+
+| Goal | Purpose | Today |
+|---|---|---|
+| Boundary guards | Check the preconditions of step 6 where callers enter the verified code | Not started |
+| The parser against the grammar | Prove that the parser reads TypeScript as the language's grammar does, so that step 1 stops being trusted. The round trip proves only that the parser and the printer agree. | Not started. `tests/typescript/check.ts` tests the parser against `tsc`. |
+| The interpreter from a formal semantics | Derive `eval` from a formal semantics of ECMA-262, so that it stops being a trusted specification | Not started. `tests/typescript/interpreter.test.ts` tests it against Node. |

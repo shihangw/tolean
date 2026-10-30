@@ -30,7 +30,7 @@ VitePress serves a folder's `index.md` as the folder's page, so its
 |---|---|
 | `README.md` | `/docs/overview` |
 | `docs/typescript/README.md` | `/docs/typescript/` |
-| `docs/plans/certificates.md` | `/docs/plans/certificates` |
+| `docs/plans/effects.md` | `/docs/plans/effects` |
 | `docs/vs_aeneas.md` | `/docs/vs_aeneas` |
 
 The root `README.md` sits outside `docs/`, so a build step copies it into the
