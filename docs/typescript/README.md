@@ -448,13 +448,12 @@ path = "node_modules/tolean/lean"
 
 ## What is proved and what is trusted
 
-
-![The Tolean pipeline: proof path, planned certificate, and what runs](../pipeline.svg)
+![TypeScript: which links are proved, tested or trusted](verification.svg)
 
 | Step | What happens | Status | How it is checked |
 |---|---|---|---|
 | 1. Parse and type-check | Tolean's parser reads the source, and the translator types the subset itself | Trusted, tested | `tests/typescript/check.ts` compares the parser's syntax trees with `tsc`'s, on the corpus and on random programs. It also prints each tree as source and requires the parser to read it as the same tree. `parseChars_reads` proves this second check for every tree that the parser gives. The proof shows that the parser and the printer agree, but not that the parser reads TypeScript as `tsc` does. The type checker is tested through the translation corpus. |
-| 2. Translate | Tolean writes readable Lean definitions (the generated `.lean` files) | **Proved** up to the printer | `program_sound` proves the translation to the output tree for every accepted program: when the tree's evaluator gives a value, the interpreter gives the same value. The printer link is trusted: that the printed Lean computes what the evaluator gives for the tree, and that the evaluator gives a value where the printed Lean does. The golden files of the corpus, compiling random programs and the CI drift check test it, and a [certificate](#certificates) proves the link, and so the whole step, for one file. |
+| 2. Translate | Tolean writes readable Lean definitions (the generated `.lean` files) | **Proved** up to the printer | `program_sound` proves the translation to the output tree for every accepted program: when the tree's evaluator gives a value, the interpreter gives the same value. The printer link is trusted: that the printed Lean computes what the evaluator gives for the tree, and that the evaluator gives a value where the printed Lean does. No theorem can state it for every program, because the printed Lean is text that means something only after Lean compiles it. The golden files of the corpus, compiling random programs and the CI drift check test it, and a [certificate](#certificates) proves the link, and so the whole step, for one file. |
 | 3. Prove the claims | Hand-written proofs show that each claim in `Spec/*.lean` holds for the generated definitions | **Proved** | The Lean kernel, `#audit_claims`, `lake build --wfail`, and no `sorry`, `admit`, `axiom` or `native_decide` |
 | 4. Assume JS number facts | `SafeIntLaws` and `SpecialValueLaws` in `tolean/TypeScript/Spec/Number.lean` | Trusted, tested | `tests/typescript/jsNumberLaws.test.ts` checks each law against real doubles. |
 | 5. Run | Type stripping or a bundler makes the JavaScript that Node runs | Trusted | The subset uses only constructs that type stripping leaves unchanged |
@@ -472,6 +471,7 @@ its preconditions. The plan has these pieces:
 | The translator's theorem | `program_sound`: for every accepted program, of one file or several, the output tree computes only what the interpreter computes | Built: `tolean/TypeScript/Proof/` |
 | Printer link | For each file, a proof that the printed definitions compute what the output tree means. With the translator's theorem, every file is then proved. | Built: each certificate proves it for its file, with `tolean/TypeScript/Proof/Link.lean` |
 | `eval`, a JS interpreter in Lean | The meaning of a `Program`. It is trusted, so it is tested against Node. | Built: `tolean/TypeScript/Spec/Eval.lean` covers the subset, with `number` values from the abstract model. `tests/typescript/interpreter.test.ts` runs it against Node on random programs, on every maintained Node release line. |
+| Parser round trip | A proof that the parser reads the printed source of its own tree as the same tree | Built: `parseChars_reads` in `tolean/TypeScript/Syntax/RoundTripText.lean` |
 | Construct lemmas | Proved once, for example: the output's fold equals `List.foldl` | Built: `runFold_foldl` in `tolean/TypeScript/Proof/Link.lean` |
 | Per-file certificate (`f.source`) | Proves `eval(Program)` equals the generated definition, for all inputs. Step 2 is then proved. | Built for the whole subset. All 29 accepted corpus files have one. |
 | Boundary guards | Check the preconditions of step 6 where callers enter the verified code | Not started |
