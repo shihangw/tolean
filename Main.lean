@@ -1,5 +1,6 @@
 import tolean.TypeScript.Syntax.Parser
 import tolean.TypeScript.Syntax.Print
+import tolean.TypeScript.Syntax.Source
 import tolean.TypeScript.Translate
 import tolean.Go.Syntax.Parser
 import tolean.Go.Syntax.Print
@@ -14,8 +15,10 @@ import tolean.Project
 The `tolean` command.
 
 ```
-tolean parse [--target ES20xx] <file>
-    print the syntax tree of <file>
+tolean parse [--target ES20xx] [--round-trip] <file>
+    print the syntax tree of <file>; with --round-trip (TypeScript only),
+    also print the tree as source, parse that, and exit with 3 unless it
+    gives the same tree
 tolean translate [--check] [--config <json>]
     build every unit that tolean.json lists, or that the inline JSON <json>
     lists; with --check, write nothing and fail when a generated file is not
@@ -60,7 +63,7 @@ file extension selects the language: `.ts`, or `.go` for `parse` only.
 open tolean tolean.TypeScript
 
 def usage : String :=
-  "usage: tolean parse [--target ES20xx] <file.ts>\n" ++
+  "usage: tolean parse [--target ES20xx] [--round-trip] <file.ts>\n" ++
   "       tolean translate [--check] [--config <json>]\n" ++
   "       tolean translate-workspace < workspace.json\n" ++
   "       tolean translate [--target ES20xx] [--certify] <input.ts> <output.lean> <Lean.Namespace>\n" ++
@@ -88,13 +91,21 @@ def parseGoFile (path : String) : IO UInt32 := do
     IO.eprintln (e.render path)
     return 1
 
-def parseFile (target : Edition) (path : String) : IO UInt32 := do
-  if path.endsWith ".go" then return ← parseGoFile path
+def parseFile (target : Edition) (path : String) (roundTrip : Bool := false) : IO UInt32 := do
+  if path.endsWith ".go" then
+    if roundTrip then
+      IO.eprintln s!"{path}: --round-trip reads only TypeScript (.ts) files"
+      return 2
+    return ← parseGoFile path
   unless ← checkLanguage path do return 2
   let source ← IO.FS.readFile path
   match Syntax.parse source target with
   | .ok m =>
     IO.println m.toSexp.render
+    if roundTrip then
+      if let .error e := Syntax.roundTrip m target then
+        IO.eprintln s!"{path}: the round trip fails: {e}"
+        return 3
     return 0
   | .error e =>
     IO.eprintln (e.render path)
@@ -235,6 +246,7 @@ def translateProject (check : Bool) (inline : Option String := none) : IO UInt32
 
 def run (target : Edition) : List String → IO UInt32
   | ["parse", path] => parseFile target path
+  | ["parse", "--round-trip", path] => parseFile target path true
   | ["translate"] => translateProject false
   | ["translate", "--check"] => translateProject true
   | ["translate-workspace"] => do

@@ -158,8 +158,11 @@ lemma follows from `runFold_foldl`, which Tolean proves once: when one run of
 the body and one step of the fold agree, the loop and the fold agree.
 `tests/typescript/checkCertify.sh` certifies each corpus file it can, and
 `tests/chain/check.sh` checks that a wrong translation breaks a certificate.
-[The certificates plan](../plans/certificates.md) lists the next phase:
-round-trip proofs for the parser.
+Tolean also proves the parser's round trip. `parseChars_reads` in
+`tolean/TypeScript/Syntax/RoundTripText.lean` states that the parser reads
+the printed source of every module that it gives as the same module, apart
+from spans. [The certificates plan](../plans/certificates.md) describes the
+steps of that proof.
 
 #### Effects (planned)
 
@@ -450,7 +453,7 @@ path = "node_modules/tolean/lean"
 
 | Step | What happens | Status | How it is checked |
 |---|---|---|---|
-| 1. Parse and type-check | Tolean's parser reads the source, and the translator types the subset itself | Trusted, tested | `tests/typescript/check.ts` compares the parser's syntax trees with `tsc`'s, on the corpus and on random programs. The type checker is tested through the translation corpus. |
+| 1. Parse and type-check | Tolean's parser reads the source, and the translator types the subset itself | Trusted, tested | `tests/typescript/check.ts` compares the parser's syntax trees with `tsc`'s, on the corpus and on random programs. It also prints each tree as source and requires the parser to read it as the same tree. `parseChars_reads` proves this second check for every tree that the parser gives. The proof shows that the parser and the printer agree, but not that the parser reads TypeScript as `tsc` does. The type checker is tested through the translation corpus. |
 | 2. Translate | Tolean writes readable Lean definitions (the generated `.lean` files) | **Proved** up to the printer | `program_sound` proves the translation to the output tree for every accepted program: when the tree's evaluator gives a value, the interpreter gives the same value. The printer link is trusted: that the printed Lean computes what the evaluator gives for the tree, and that the evaluator gives a value where the printed Lean does. The golden files of the corpus, compiling random programs and the CI drift check test it, and a [certificate](#certificates) proves the link, and so the whole step, for one file. |
 | 3. Prove the claims | Hand-written proofs show that each claim in `Spec/*.lean` holds for the generated definitions | **Proved** | The Lean kernel, `#audit_claims`, `lake build --wfail`, and no `sorry`, `admit`, `axiom` or `native_decide` |
 | 4. Assume JS number facts | `SafeIntLaws` and `SpecialValueLaws` in `tolean/TypeScript/Spec/Number.lean` | Trusted, tested | `tests/typescript/jsNumberLaws.test.ts` checks each law against real doubles. |

@@ -198,37 +198,9 @@ def readDigits (start : Pos) (isDigit : Char → Bool) : LexM Unit := do
     else failFrom start "expected a digit"
   | none => failFrom start "expected a digit"
 
-def lexNumber (start : Pos) : LexM TokenKind := do
-  let i0 := (← get).i
-  let rest0 := (← get).rest
-  let first ← peekChar
-  let second ← peekChar 1
-  let mut isInteger := true
-  let radix? : Option (Char → Bool) :=
-    if first != some '0' then none
-    else match second with
-      | some 'x' | some 'X' => some isHexDigit
-      | some 'b' | some 'B' => some fun c => c == '0' || c == '1'
-      | some 'o' | some 'O' => some fun c => '0' ≤ c && c ≤ '7'
-      | _ => none
-  match radix? with
-  | some isDigit =>
-    skipChar
-    skipChar
-    readDigits start isDigit
-  | none =>
-    if first == some '0' && second.any (fun c => c.isDigit || c == '_') then
-      failFrom start "a number cannot start with 0 unless it is 0 (legacy octal is not supported)"
-    if first != some '.' then readDigits start Char.isDigit
-    if (← peekChar) == some '.' then
-      isInteger := false
-      skipChar
-      if (← peekChar).any Char.isDigit then readDigits start Char.isDigit
-    if (← peekChar).any (fun c => c == 'e' || c == 'E') then
-      isInteger := false
-      skipChar
-      if (← peekChar).any (fun c => c == '+' || c == '-') then skipChar
-      readDigits start Char.isDigit
+/-- The end of a number that starts at `i0`, before `rest0`: the `n` of a
+bigint, the checks on what follows, and the token. -/
+def numEnd (start : Pos) (i0 : Nat) (rest0 : List Char) (isInteger : Bool) : LexM TokenKind := do
   let isBigint := (← peekChar) == some 'n'
   if isBigint then
     if !isInteger then failFrom start "a bigint literal must be an integer"
@@ -243,6 +215,51 @@ def lexNumber (start : Pos) : LexM TokenKind := do
   if chars.contains '_' && !s.target.supports .numericSeparators then
     failFrom start (Feature.numericSeparators.refusal s.target)
   return if isBigint then .bigint text else .number text
+
+/-- The exponent of a decimal number, then its end. -/
+def numExp (start : Pos) (i0 : Nat) (rest0 : List Char) (isInteger : Bool) : LexM TokenKind := do
+  if (← peekChar).any (fun c => c == 'e' || c == 'E') then
+    skipChar
+    if (← peekChar).any (fun c => c == '+' || c == '-') then skipChar
+    readDigits start Char.isDigit
+    numEnd start i0 rest0 false
+  else numEnd start i0 rest0 isInteger
+
+/-- The fraction of a decimal number, then its exponent and its end. -/
+def numDot (start : Pos) (i0 : Nat) (rest0 : List Char) (isInteger : Bool) : LexM TokenKind := do
+  if (← peekChar) == some '.' then
+    skipChar
+    if (← peekChar).any Char.isDigit then readDigits start Char.isDigit
+    numExp start i0 rest0 false
+  else numExp start i0 rest0 isInteger
+
+/-- The radix that the first two characters of a number choose: hexadecimal, binary or octal. -/
+def radixOf (first second : Option Char) : Option (Char → Bool) :=
+  if first != some '0' then none
+  else match second with
+    | some 'x' | some 'X' => some isHexDigit
+    | some 'b' | some 'B' => some fun c => c == '0' || c == '1'
+    | some 'o' | some 'O' => some fun c => '0' ≤ c && c ≤ '7'
+    | _ => none
+
+/-- A number. Each step is a function of its own, so that a proof can state
+what the step reads. -/
+def lexNumber (start : Pos) : LexM TokenKind := do
+  let i0 := (← get).i
+  let rest0 := (← get).rest
+  let first ← peekChar
+  let second ← peekChar 1
+  match radixOf first second with
+  | some isDigit =>
+    skipChar
+    skipChar
+    readDigits start isDigit
+    numEnd start i0 rest0 true
+  | none =>
+    if first == some '0' && second.any (fun c => c.isDigit || c == '_') then
+      failFrom start "a number cannot start with 0 unless it is 0 (legacy octal is not supported)"
+    if first != some '.' then readDigits start Char.isDigit
+    numDot start i0 rest0 true
 
 def readHex (start : Pos) (count : Nat) (acc : Nat) : LexM Nat := do
   let count + 1 := count | return acc
