@@ -134,6 +134,44 @@ that it must accept and a few that it must reject. A proof does not create
 trust. It moves trust from the code to the claim, so if no person read the
 claim, nothing was verified.
 
+## What is proved and what is trusted
+
+Each link between the source and a theorem is proved by the Lean kernel,
+tested against a reference, or trusted without a test. The table gives the
+status of each link today. A theorem holds for the code that runs only as far
+as the links it relies on are right, and `tolean chain trust` lists those
+links for each claim.
+
+| Link | TypeScript | Go | PostgreSQL |
+|---|---|---|---|
+| Parser | Tested: the trees equal `tsc`'s, on the corpus and on random programs. **Proved**: the parser reads the printed source of its own tree as the same tree | Tested: the trees equal `go/parser`'s | Tested through the two translators' checks; no reference parser yet |
+| Translator | **Proved** up to the printer: for every program it accepts, when the output tree's evaluator gives a value, the interpreter gives the same value. The printer link, that the printed Lean computes what the evaluator gives, is trusted. No theorem can state it for every program, because the printed Lean is text, and it means something only after Lean compiles it. Tests check it: the corpus output is fixed and compiled, and so is the output for random programs. **Proved** in full for a file with a [certificate](docs/typescript/README.md#certificates) | Tested: the corpus output is fixed and compiled | Tested: the results agree with PostgreSQL 18 on generated scenarios |
+| Value model (the spec that generated code imports) | Tested: the number laws hold on every maintained Node release line | Trusted, not tested yet: `int64` wrapping and errors | Tested: values, errors and three-valued logic agree with PostgreSQL 18 |
+| Concurrency model | None: the subset is single-threaded | None: no goroutines | The READ COMMITTED model is tested on the server, and its theorems are **proved** |
+| Claims about the generated code | **Proved** | **Proved** | **Proved** |
+| What runs | Trusted: the JavaScript engine | Trusted: the Go compiler | Trusted: the PostgreSQL server and its constraints |
+| Callers | Not checked: inputs must meet each theorem's preconditions | Not checked; the glue between an interface and a real store is trusted | Not checked; the code that calls the queries is trusted |
+
+The playground runs the translator compiled to WebAssembly, so it also
+trusts that build: Lean's runtime built for a 32-bit target that Lean does
+not support officially, the patches in `wasm/build.sh`, and Emscripten. The
+npm package does not: it runs the native binary, built for each platform with
+Lean's own toolchain. CI tests the WebAssembly build against the native command:
+every corpus file and 200 random programs must give the same Lean or the
+same refusal. A project that runs `tolean translate --check` in CI checks
+its Lean with the native command, and a certificate holds whichever build
+wrote the Lean, because the kernel checks it.
+
+A certificate changes what one TypeScript file trusts. The file no longer
+trusts the translator. It trusts the parser and the interpreter that defines
+what the subset means (`tolean/TypeScript/Spec/Eval.lean`) instead. The
+kernel checks that the parser gives the certificate's program for the file.
+`tests/typescript/interpreter.test.ts` tests the interpreter against Node on
+random programs, and a certificate also proves the printer link for its file.
+Tolean also proves that the parser reads its own printed source back as the
+same tree (`parseChars_reads`). Each language page lists its steps in more
+detail.
+
 ## The verification chain
 
 What Tolean produces is a verification chain: a path from the source code
@@ -300,50 +338,10 @@ makes the claim the only text that a person must read. The translator writes
 the model of the code, and the kernel checks the proof. The claim is a short
 `def … : Prop`, which the chain marks as `read-by-people`.
 
-## Layout
-
-Each language has its own front end and its own translator, and both are
-written in Lean. The front end reads the source into the language's syntax
-tree. The translator then writes Lean directly, and the generated code
-imports the language's Spec.
-
-```
-source ──front end──▶ syntax tree ──translator──▶ Lean ──imports──▶ language Spec
-         (lexer and                  (one per
-          parser)                    language)
-```
-
-The languages share no intermediate form, because each one models what code
-does in its own way. A TypeScript function becomes a plain Lean function. A
-Go function that calls an interface becomes a function in a state monad. A
-SQL query becomes a function from a database to a result and a new
-database. What the languages share is small: source positions, the printed
-form of a syntax tree, the project file and the chain manifests.
-
-| Path | What it holds |
-|---|---|
-| `tolean/Source.lean`, `tolean/Sexp.lean` | Shared by all languages: positions, spans, parse errors, and the printed form of a syntax tree |
-| `tolean/Project.lean` | The project file, `tolean.json`: which units to translate, with which settings. Translation itself does no IO, so the WebAssembly build runs it too. |
-| `tolean/Chain/` | The chain manifests: what each translation relies on, and the checks for them |
-| `tolean/Audit.lean` | `#audit_claims`, which keeps claims apart from proofs |
-| `tolean/<Language>/Spec/` | **The trusted model of the language's values** (for TypeScript: JS numbers). Generated code imports it, and proofs assume only what it states. Review it with care. |
-| `tolean/<Language>/Syntax/` | The language's front end: tokens, lexer, syntax tree, parser, printer |
-| `tolean/TypeScript/Translate.lean` | The TypeScript translator: it types the subset (with `null` narrowing) and builds the Lean definitions as a syntax tree |
-| `tolean/TypeScript/Output.lean` | The syntax tree of the Lean code that the TypeScript translator writes, and its printer |
-| `tolean/Go/Translate.lean` | The Go translator: one package at a time, from root functions, with interface calls as steps in a state monad |
-| `tolean/Sql/` | The PostgreSQL front end, the schema translator that replays migrations, the query translator, and the READ COMMITTED model in `Spec/ReadCommitted.lean` |
-| `Main.lean` | The `tolean` command |
-| `wasm/` | The translator compiled to WebAssembly for the playground. `build.sh` builds it. |
-| `npm/` | The npm package: the `tolean` command and `translateSource`, which run the native binary for the platform (built by `.github/workflows/release.yml`), and the Lean runtime that generated code imports |
-| `playground/` | A static page where you edit an example and Lean checks its proofs in the browser |
-| `tests/<language>/` | Checks for the front end against the language's own compiler, for the translator on a corpus, and for the Spec against the real runtime |
-
-To add a language, create `tolean/<Language>/Spec/`,
-`tolean/<Language>/Syntax/` and `tests/<language>/`. Also write a reference
-printer that prints the language compiler's syntax tree in the same
-S-expression form, as `tests/go/goast` does with `go/parser`.
-
 ## Build and check
+
+[Repository layout](docs/repository-layout.md) describes where each part
+of Tolean lives and how to add a language.
 
 ```sh
 nix develop                                 # Lean 4.30.0, Node 24, pnpm 10
@@ -393,44 +391,6 @@ translator, the subset it accepts and how its checks work.
 | Go | One package, from named root functions | Functions in `StateM State`, with interface calls as steps | `tolean/Go/Spec/Basic.lean` | [Go](docs/go/README.md) |
 | PostgreSQL | sqlc queries and their migrations | Functions from a database to a result and a new database | `tolean/Sql/Spec/`, with a READ COMMITTED model | [PostgreSQL](docs/postgresql/README.md) |
 
-## What is proved and what is trusted
-
-Each link between the source and a theorem is proved by the Lean kernel,
-tested against a reference, or trusted without a test. The table gives the
-status of each link today. A theorem holds for the code that runs only as far
-as the links it relies on are right, and `tolean chain trust` lists those
-links for each claim.
-
-| Link | TypeScript | Go | PostgreSQL |
-|---|---|---|---|
-| Parser | Tested: the trees equal `tsc`'s, on the corpus and on random programs | Tested: the trees equal `go/parser`'s | Tested through the two translators' checks; no reference parser yet |
-| Translator | **Proved** up to the printer: for every program it accepts, when the output tree's evaluator gives a value, the interpreter gives the same value. The printer link, that the printed Lean computes what the evaluator gives, is trusted. Tests check it: the corpus output is fixed and compiled, and so is the output for random programs. **Proved** in full for a file with a [certificate](docs/typescript/README.md#certificates) | Tested: the corpus output is fixed and compiled | Tested: the results agree with PostgreSQL 18 on generated scenarios |
-| Value model (the spec that generated code imports) | Tested: the number laws hold on every maintained Node release line | Trusted, not tested yet: `int64` wrapping and errors | Tested: values, errors and three-valued logic agree with PostgreSQL 18 |
-| Concurrency model | None: the subset is single-threaded | None: no goroutines | The READ COMMITTED model is tested on the server, and its theorems are **proved** |
-| Claims about the generated code | **Proved** | **Proved** | **Proved** |
-| What runs | Trusted: the JavaScript engine | Trusted: the Go compiler | Trusted: the PostgreSQL server and its constraints |
-| Callers | Not checked: inputs must meet each theorem's preconditions | Not checked; the glue between an interface and a real store is trusted | Not checked; the code that calls the queries is trusted |
-
-The playground runs the translator compiled to WebAssembly, so it also
-trusts that build: Lean's runtime built for a 32-bit target that Lean does
-not support officially, the patches in `wasm/build.sh`, and Emscripten. The
-npm package does not: it runs the native binary, built for each platform with
-Lean's own toolchain. CI tests the WebAssembly build against the native command:
-every corpus file and 200 random programs must give the same Lean or the
-same refusal. A project that runs `tolean translate --check` in CI checks
-its Lean with the native command, and a certificate holds whichever build
-wrote the Lean, because the kernel checks it.
-
-A certificate changes what one TypeScript file trusts. The file no longer
-trusts the translator. It trusts the parser and the interpreter that defines
-what the subset means (`tolean/TypeScript/Spec/Eval.lean`) instead. The
-kernel checks that the parser gives the certificate's program for the file.
-`tests/typescript/interpreter.test.ts` tests the interpreter against Node on
-random programs, and a certificate also proves the printer link for its file.
-Tolean also proves that the parser reads its own printed source back as the
-same tree (`parseChars_reads`). Each language page lists its steps in more
-detail.
-
 ## Claims and proofs
 
 The Lean package also provides `#audit_claims Spec Proof`, in
@@ -452,7 +412,8 @@ code.
   mutation in place into a pure update of a value. TypeScript has no borrow
   checker, so Tolean gets the same property from its subset instead. Only
   locals that the function owns can change, and the function can read an
-  owned array only in its return value.
+  owned array only in its return value. [Tolean and Aeneas](docs/vs_aeneas.md)
+  compares the two in more detail.
 - [Ariadne](https://github.com/nathsou/ariadne) translates a TypeScript subset
   into readable Lean definitions, and it rejects what it cannot model. Ariadne
   also proves, once for all programs, that its definitions match a JavaScript

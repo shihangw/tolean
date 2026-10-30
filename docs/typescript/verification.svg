@@ -1,30 +1,33 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="980" height="770" viewBox="0 0 980 770" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="870" viewBox="0 0 980 870" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-labelledby="title desc">
   <title id="title">TypeScript: what is proved and what is trusted</title>
-  <desc id="desc">TypeScript source goes through Tolean's Lean parser and translator, both tested against tsc, to generated Lean definitions. People review the claims, and the Lean kernel checks the proofs. The JavaScript number laws are tested against Node. What runs is the type-stripped source on Node. A planned certificate would prove that the generated definitions mean what the source means.</desc>
+  <desc id="desc">Tolean's Lean parser reads the TypeScript source. Its trees are tested against tsc, and its round trip on its own printed source is proved. The translator is proved against the JS interpreter in Lean for every program it accepts. The printer, which writes the output tree as Lean text, is tested, and a certificate proves it for one file. The interpreter and the JavaScript number laws are tested against Node. People review the claims, and the Lean kernel checks the proofs. What runs is the type-stripped source on Node.</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M0,0 L10,5 L0,10 z" fill="#3c4043"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#1e8e3e"/>
     </marker>
     <style>
       .title { font-size: 18px; font-weight: 700; fill: #202124; }
       .head { font-size: 12px; font-weight: 700; fill: #5f6368; letter-spacing: 0.05em; }
       .name { font-size: 14px; font-weight: 700; fill: #202124; }
       .sub { font-size: 11.5px; fill: #3c4043; }
+      .pill { font-size: 11px; font-weight: 700; fill: #1e8e3e; }
       .edge { font-size: 11px; fill: #5f6368; font-style: italic; }
       .line { stroke: #3c4043; stroke-width: 1.5; fill: none; }
-      .dash { stroke: #5f6368; stroke-width: 1.5; fill: none; stroke-dasharray: 6 4; }
+      .prove { stroke: #1e8e3e; stroke-width: 2; fill: none; }
       .check { stroke: #b06000; stroke-width: 1.5; fill: none; stroke-dasharray: 2 3; }
       .proved { fill: #e6f4ea; stroke: #1e8e3e; stroke-width: 2; }
       .tested { fill: #fef7e0; stroke: #b06000; stroke-width: 2; }
       .untested { fill: #fce8e6; stroke: #c5221f; stroke-width: 2; }
       .generated { fill: #f1f3f4; stroke: #5f6368; stroke-width: 2; }
       .human { fill: #e8f0fe; stroke: #1a73e8; stroke-width: 2; }
-      .planned { fill: #ffffff; stroke: #5f6368; stroke-width: 2; stroke-dasharray: 6 4; }
       .ref { fill: #ffffff; stroke: #9aa0a6; stroke-width: 1.5; }
     </style>
   </defs>
 
-  <rect width="980" height="770" fill="#ffffff"/>
+  <rect width="980" height="870" fill="#ffffff"/>
   <text x="30" y="34" class="title">TypeScript: what is proved and what is trusted</text>
 
   <text x="170" y="74" text-anchor="middle" class="head">TRANSLATION</text>
@@ -37,92 +40,108 @@
   <text x="170" y="125" text-anchor="middle" class="sub">source in the Tolean subset</text>
 
   <!-- Parser -->
-  <path d="M170,137 V167" class="line" marker-end="url(#arrow)"/>
-  <rect x="40" y="169" width="260" height="62" rx="8" class="tested"/>
-  <text x="170" y="192" text-anchor="middle" class="name">Lean parser</text>
-  <text x="170" y="210" text-anchor="middle" class="sub">trees and spans equal tsc's on the corpus</text>
-  <text x="170" y="224" text-anchor="middle" class="sub">and 500 random programs per run</text>
+  <path d="M170,137 V165" class="line" marker-end="url(#arrow)"/>
+  <rect x="40" y="167" width="260" height="80" rx="8" class="tested"/>
+  <text x="170" y="190" text-anchor="middle" class="name">Lean parser</text>
+  <text x="170" y="208" text-anchor="middle" class="sub">trees and spans equal tsc's on the corpus</text>
+  <text x="170" y="222" text-anchor="middle" class="sub">and 500 random programs per run</text>
+  <rect x="105" y="228" width="130" height="16" rx="8" class="proved"/>
+  <text x="170" y="240" text-anchor="middle" class="pill">round trip proved</text>
 
   <!-- Translator -->
-  <path d="M170,231 V261" class="line" marker-end="url(#arrow)"/>
-  <rect x="40" y="263" width="260" height="62" rx="8" class="tested"/>
-  <text x="170" y="286" text-anchor="middle" class="name">Lean translator and type checker</text>
-  <text x="170" y="304" text-anchor="middle" class="sub">corpus output fixed by golden files;</text>
-  <text x="170" y="318" text-anchor="middle" class="sub">output for random programs compiles</text>
+  <path d="M170,247 V275" class="line" marker-end="url(#arrow)"/>
+  <rect x="40" y="277" width="260" height="62" rx="8" class="proved"/>
+  <text x="170" y="300" text-anchor="middle" class="name">Lean translator and type checker</text>
+  <text x="170" y="318" text-anchor="middle" class="sub">program_sound: the output tree computes</text>
+  <text x="170" y="332" text-anchor="middle" class="sub">only what the interpreter computes</text>
+  <path d="M300,308 H330 V124 H358" class="prove" marker-end="url(#arrow-green)"/>
+
+  <!-- Printer -->
+  <path d="M170,339 V367" class="line" marker-end="url(#arrow)"/>
+  <rect x="40" y="369" width="260" height="62" rx="8" class="tested"/>
+  <text x="170" y="392" text-anchor="middle" class="name">Printer: output tree to Lean text</text>
+  <text x="170" y="410" text-anchor="middle" class="sub">golden files and compile checks test it;</text>
+  <text x="170" y="424" text-anchor="middle" class="sub">a certificate proves it for one file</text>
 
   <!-- tsc reference -->
-  <rect x="40" y="365" width="260" height="46" rx="8" class="ref"/>
-  <text x="170" y="386" text-anchor="middle" class="name">tsc</text>
-  <text x="170" y="402" text-anchor="middle" class="sub">reference that the parser is compared against</text>
-  <path d="M300,388 H318 V200 H302" class="check"/>
+  <rect x="40" y="473" width="260" height="46" rx="8" class="ref"/>
+  <text x="170" y="494" text-anchor="middle" class="name">tsc</text>
+  <text x="170" y="510" text-anchor="middle" class="sub">reference that the parser is compared against</text>
+  <path d="M40,496 H24 V207 H38" class="check"/>
 
-  <!-- Generated Lean -->
-  <path d="M300,294 H358" class="line" marker-end="url(#arrow)"/>
-  <rect x="360" y="263" width="260" height="62" rx="8" class="generated"/>
-  <text x="490" y="286" text-anchor="middle" class="name">Generated Lean definitions</text>
-  <text x="490" y="304" text-anchor="middle" class="sub">regenerated in CI; a drift check fails</text>
-  <text x="490" y="318" text-anchor="middle" class="sub">if they differ from the committed copy</text>
+  <!-- Interpreter -->
+  <rect x="360" y="85" width="260" height="62" rx="8" class="tested"/>
+  <text x="490" y="108" text-anchor="middle" class="name">JS interpreter in Lean</text>
+  <text x="490" y="126" text-anchor="middle" class="sub">Spec/Eval.lean: what the subset means;</text>
+  <text x="490" y="140" text-anchor="middle" class="sub">tested against Node on random programs</text>
 
   <!-- Number laws -->
-  <rect x="360" y="85" width="260" height="62" rx="8" class="tested"/>
-  <text x="490" y="108" text-anchor="middle" class="name">JS number Spec and laws</text>
-  <text x="490" y="126" text-anchor="middle" class="sub">SafeIntLaws, SpecialValueLaws: tested</text>
-  <text x="490" y="140" text-anchor="middle" class="sub">against real doubles on Node 22 and 24</text>
-  <path d="M490,147 V261" class="line" marker-end="url(#arrow)"/>
-  <text x="496" y="210" class="edge">imported by</text>
+  <rect x="360" y="177" width="260" height="62" rx="8" class="tested"/>
+  <text x="490" y="200" text-anchor="middle" class="name">JS number Spec and laws</text>
+  <text x="490" y="218" text-anchor="middle" class="sub">SafeIntLaws, SpecialValueLaws: tested</text>
+  <text x="490" y="232" text-anchor="middle" class="sub">against real doubles in Node</text>
+  <path d="M490,239 V367" class="line" marker-end="url(#arrow)"/>
+  <text x="496" y="306" class="edge">imported by</text>
+
+  <!-- Generated Lean -->
+  <path d="M300,400 H358" class="line" marker-end="url(#arrow)"/>
+  <rect x="360" y="369" width="260" height="62" rx="8" class="generated"/>
+  <text x="490" y="392" text-anchor="middle" class="name">Generated Lean definitions</text>
+  <text x="490" y="410" text-anchor="middle" class="sub">regenerated in CI; a drift check fails</text>
+  <text x="490" y="424" text-anchor="middle" class="sub">if they differ from the committed copy</text>
 
   <!-- Claims -->
-  <rect x="420" y="375" width="200" height="56" rx="8" class="human"/>
-  <text x="520" y="398" text-anchor="middle" class="name">Claims (Spec files)</text>
-  <text x="520" y="416" text-anchor="middle" class="sub">what people read</text>
+  <rect x="420" y="473" width="200" height="56" rx="8" class="human"/>
+  <text x="520" y="496" text-anchor="middle" class="name">Claims (Spec files)</text>
+  <text x="520" y="514" text-anchor="middle" class="sub">what people read</text>
 
   <!-- Proofs -->
-  <path d="M385,325 V471" class="line" marker-end="url(#arrow)"/>
-  <path d="M520,431 V471" class="line" marker-end="url(#arrow)"/>
-  <rect x="360" y="473" width="260" height="62" rx="8" class="proved"/>
-  <text x="490" y="496" text-anchor="middle" class="name">Proofs</text>
-  <text x="490" y="514" text-anchor="middle" class="sub">checked by the Lean kernel; #audit_claims</text>
-  <text x="490" y="528" text-anchor="middle" class="sub">requires one theorem per claim, no sorry</text>
+  <path d="M385,431 V567" class="line" marker-end="url(#arrow)"/>
+  <path d="M520,529 V567" class="line" marker-end="url(#arrow)"/>
+  <rect x="360" y="569" width="260" height="62" rx="8" class="proved"/>
+  <text x="490" y="592" text-anchor="middle" class="name">Proofs</text>
+  <text x="490" y="610" text-anchor="middle" class="sub">checked by the Lean kernel; #audit_claims</text>
+  <text x="490" y="624" text-anchor="middle" class="sub">requires one theorem per claim, no sorry</text>
 
-  <!-- Certificate (planned) -->
-  <rect x="360" y="585" width="260" height="62" rx="8" class="planned"/>
-  <text x="490" y="608" text-anchor="middle" class="name">Certificate (planned)</text>
-  <text x="490" y="626" text-anchor="middle" class="sub">a JS interpreter in Lean, and a proof that</text>
-  <text x="490" y="640" text-anchor="middle" class="sub">eval(AST) equals the generated definitions</text>
-  <path d="M40,200 H24 V616 H358" class="dash" marker-end="url(#arrow)"/>
-  <text x="40" y="606" class="edge">AST as Lean data, from the Lean parser</text>
-  <path d="M490,585 V537" class="dash" marker-end="url(#arrow)"/>
-  <text x="496" y="566" class="edge">would remove the translator from what is trusted</text>
+  <!-- Certificate -->
+  <rect x="360" y="681" width="260" height="62" rx="8" class="proved"/>
+  <text x="490" y="704" text-anchor="middle" class="name">Certificate (optional, per file)</text>
+  <text x="490" y="722" text-anchor="middle" class="sub">the kernel checks the parse and the</text>
+  <text x="490" y="736" text-anchor="middle" class="sub">translation, and proves the printer link</text>
+  <path d="M358,712 H330 V418 H302" class="prove" marker-end="url(#arrow-green)"/>
+  <text x="324" y="706" text-anchor="end" class="edge">proves the printer link for its file</text>
 
   <!-- What runs -->
   <rect x="690" y="85" width="260" height="62" rx="8" class="untested"/>
   <text x="820" y="108" text-anchor="middle" class="name">Type stripping</text>
   <text x="820" y="126" text-anchor="middle" class="sub">trusted to leave the code unchanged;</text>
   <text x="820" y="140" text-anchor="middle" class="sub">the subset avoids anything it rewrites</text>
-  <path d="M300,111 H335 V50 H930 V83" class="line" marker-end="url(#arrow)"/>
+  <path d="M300,100 H342 V50 H930 V83" class="line" marker-end="url(#arrow)"/>
 
   <path d="M820,147 V175" class="line" marker-end="url(#arrow)"/>
   <rect x="690" y="177" width="260" height="62" rx="8" class="tested"/>
   <text x="820" y="200" text-anchor="middle" class="name">Node runs x.ts</text>
-  <text x="820" y="218" text-anchor="middle" class="sub">the engine the number laws were</text>
-  <text x="820" y="232" text-anchor="middle" class="sub">tested on (Node 22 and 24)</text>
+  <text x="820" y="218" text-anchor="middle" class="sub">the engine that the interpreter and the</text>
+  <text x="820" y="232" text-anchor="middle" class="sub">laws are tested on, every maintained line</text>
+  <path d="M620,132 H650 V208" class="check"/>
+  <path d="M620,208 H688" class="check"/>
 
-  <rect x="690" y="473" width="260" height="62" rx="8" class="untested"/>
-  <text x="820" y="496" text-anchor="middle" class="name">Callers' inputs</text>
-  <text x="820" y="514" text-anchor="middle" class="sub">must meet the theorems' preconditions;</text>
-  <text x="820" y="528" text-anchor="middle" class="sub">not checked yet (boundary guards planned)</text>
-  <path d="M688,504 H622" class="line" marker-end="url(#arrow)"/>
+  <rect x="690" y="569" width="260" height="62" rx="8" class="untested"/>
+  <text x="820" y="592" text-anchor="middle" class="name">Callers' inputs</text>
+  <text x="820" y="610" text-anchor="middle" class="sub">must meet the theorems' preconditions;</text>
+  <text x="820" y="624" text-anchor="middle" class="sub">not checked yet (boundary guards planned)</text>
+  <path d="M688,600 H622" class="line" marker-end="url(#arrow)"/>
 
   <!-- Legend -->
-  <g transform="translate(40,690)">
+  <g transform="translate(40,780)">
     <rect x="0" y="0" width="18" height="14" rx="3" class="proved"/><text x="24" y="12" class="sub">proved</text>
-    <rect x="90" y="0" width="18" height="14" rx="3" class="tested"/><text x="114" y="12" class="sub">trusted, tested</text>
-    <rect x="230" y="0" width="18" height="14" rx="3" class="untested"/><text x="254" y="12" class="sub">trusted, not tested</text>
-    <rect x="390" y="0" width="18" height="14" rx="3" class="generated"/><text x="414" y="12" class="sub">generated or input</text>
-    <rect x="540" y="0" width="18" height="14" rx="3" class="human"/><text x="564" y="12" class="sub">read by people</text>
-    <rect x="670" y="0" width="18" height="14" rx="3" class="planned"/><text x="694" y="12" class="sub">planned</text>
+    <rect x="80" y="0" width="18" height="14" rx="3" class="tested"/><text x="104" y="12" class="sub">trusted, tested</text>
+    <rect x="210" y="0" width="18" height="14" rx="3" class="untested"/><text x="234" y="12" class="sub">trusted, not tested</text>
+    <rect x="360" y="0" width="18" height="14" rx="3" class="generated"/><text x="384" y="12" class="sub">generated or input</text>
+    <rect x="505" y="0" width="18" height="14" rx="3" class="human"/><text x="529" y="12" class="sub">read by people</text>
+    <path d="M630,7 H660" class="prove"/><text x="666" y="12" class="sub">proved to agree</text>
     <path d="M770,7 H800" class="check"/><text x="806" y="12" class="sub">compared in tests</text>
   </g>
-  <text x="40" y="735" class="sub">A theorem holds for the code that runs if the translation, the number laws, type stripping and Node are as trusted,</text>
-  <text x="40" y="751" class="sub">and callers meet its preconditions.</text>
+  <text x="40" y="828" class="sub">A theorem holds for the code that runs if the parser, the interpreter, the number laws, type stripping and Node are as trusted,</text>
+  <text x="40" y="844" class="sub">the printer is right or the file has a certificate, and callers meet the theorem's preconditions.</text>
 </svg>
