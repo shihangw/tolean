@@ -1,15 +1,15 @@
 import tolean.TypeScript.Proof.Module
-import tolean.TypeScript.Output.Equality
+import tolean.TypeScript.IR.Equality
 
 /-!
 The printer link for one file.
 
-`translate_sound` is about the output tree, so it trusts the printer: that the
-printed Lean computes what `Output/Eval.lean` gives for the tree. A
-certificate closes that gap for its file. It holds the tree as a Lean term,
-and the kernel checks with `translatesTo` that the translator gives that tree
-for the parsed program. Then one theorem for each function states that the
-printed definition computes what the evaluator gives for the tree, and
+`translate_sound` is about the Tolean IR, so it trusts the printer: that the
+printed Lean computes what `IR/Eval.lean` gives for the IR. A certificate
+closes that gap for its file. It holds the IR as a Lean term, and the kernel
+checks with `translatesTo` that the translator gives that IR for the parsed
+program. Then one theorem for each function states that the printed
+definition computes what the evaluator gives for the IR, and
 `decls_sound` carries it to the interpreter. So the file is proved with no
 trust in the translator or in the printer.
 -/
@@ -22,12 +22,12 @@ variable {N : Type} [JSNumber N]
 
 /-- The translator gives `decls` for `m`, from the state `start`. The kernel
 can decide this, and a certificate does. -/
-def translatesTo (m : Module) (start : Ctx) (decls : List Output.Decl) : Bool :=
+def translatesTo (m : Module) (start : Ctx) (decls : List IR.Decl) : Bool :=
   match translateDecls m start with
   | .ok d _ => decide (d = decls)
   | .error _ _ => false
 
-theorem translatesTo_ok {m : Module} {start : Ctx} {decls : List Output.Decl}
+theorem translatesTo_ok {m : Module} {start : Ctx} {decls : List IR.Decl}
     (h : translatesTo m start decls = true) : ∃ finish, translateDecls m start = .ok decls finish := by
   unfold translatesTo at h
   split at h
@@ -40,10 +40,10 @@ theorem translatesTo_ok {m : Module} {start : Ctx} {decls : List Output.Decl}
 `decls` for `m`, from a state with the file's name and no functions, a call
 of the output gives a value only when the interpreter gives the same value
 for the same call of `m`. -/
-theorem decls_sound {file : String} {m : Module} {decls : List Output.Decl} {start : Ctx}
+theorem decls_sound {file : String} {m : Module} {decls : List IR.Decl} {start : Ctx}
     (hfile : start.file = file) (hfns : start.functions = []) (hifaces : start.interfaces = [])
     (h : translatesTo m start decls = true) (name : String) (args : List (Val N)) (fuel : Nat) (v : Val N)
-    (hv : Output.runIn (Output.functionsOf [(file, decls)]) ⟨file, name⟩ args fuel = some v) :
+    (hv : IR.runIn (IR.functionsOf [(file, decls)]) ⟨file, name⟩ args fuel = some v) :
     Eval.runIn [(file, m)] ⟨file, name⟩ args fuel = some v := by
   obtain ⟨finish, hrun⟩ := translatesTo_ok h
   exact program_sound (.snoc false "N" .nil hfile hfns hifaces hrun) (by simp) _ args fuel v hv
@@ -51,25 +51,25 @@ theorem decls_sound {file : String} {m : Module} {decls : List Output.Decl} {sta
 /-- A fold of the output and `List.foldl` agree when one run of the body and
 one step of the fold agree. A certificate proves a lemma for each loop from
 this one. -/
-theorem runFold_foldl {α σ : Type} (fs : List (DeclRef × List String × Output.Body)) (fuel : Nat)
-    (names : List String) (element : String) (body : Output.Body) (encX : α → Val N)
+theorem runFold_foldl {α σ : Type} (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
+    (names : List String) (element : String) (body : IR.Body) (encX : α → Val N)
     (upd : σ → Eval.Env N → Eval.Env N) (dec : Eval.Env N → σ) (step : Eval.Env N → σ → α → σ)
     (I : Eval.Env N → Prop)
     (hbody : ∀ ρ s x, I ρ → ∃ inner,
-      Output.Body.exec fs fuel ((element, encX x) :: upd s ρ) body = some (.normal inner) ∧
-        Output.bindState names inner (upd s ρ) = some (upd (step ρ s x) ρ))
+      IR.Body.exec fs fuel ((element, encX x) :: upd s ρ) body = some (.normal inner) ∧
+        IR.bindState names inner (upd s ρ) = some (upd (step ρ s x) ρ))
     (hdec : ∀ ρ, I ρ → upd (dec ρ) ρ = ρ) (xs : List α) (ρ : Eval.Env N) (hI : I ρ) :
-    Output.Body.runFold fs fuel names element body ρ (xs.map encX) =
+    IR.Body.runFold fs fuel names element body ρ (xs.map encX) =
       some (upd (xs.foldl (step ρ) (dec ρ)) ρ) := by
-  have key : ∀ (xs : List α) (s : σ), Output.Body.runFold fs fuel names element body (upd s ρ) (xs.map encX) =
+  have key : ∀ (xs : List α) (s : σ), IR.Body.runFold fs fuel names element body (upd s ρ) (xs.map encX) =
       some (upd (xs.foldl (step ρ) s) ρ) := by
     intro xs
     induction xs with
-    | nil => intro s; simp [Output.Body.runFold]
+    | nil => intro s; simp [IR.Body.runFold]
     | cons x xs ih =>
       intro s
       obtain ⟨inner, hex, hb⟩ := hbody ρ s x hI
-      simp only [List.map_cons, Output.Body.runFold, hex, hb, Option.bind_eq_bind, Option.bind_some,
+      simp only [List.map_cons, IR.Body.runFold, hex, hb, Option.bind_eq_bind, Option.bind_some,
         List.foldl_cons]
       exact ih (step ρ s x)
   have := key xs (dec ρ)
@@ -77,10 +77,10 @@ theorem runFold_foldl {α σ : Type} (fs : List (DeclRef × List String × Outpu
 
 end tolean.TypeScript.Proof
 
-namespace tolean.TypeScript.Output
+namespace tolean.TypeScript.IR
 
-/-- The proof of a link theorem: unfold the output's evaluator on the tree and
-the printed definitions, then split on each branch. `defs` names the tree, the
+/-- The proof of a link theorem: unfold the IR's evaluator on the IR and the
+printed definitions, then split on each branch. `defs` names the IR, the
 encoders, the printed definitions and the loop lemmas. -/
 syntax "link_tac" "[" Lean.Parser.Tactic.simpLemma,* "]" : tactic
 -- `simp` would fold the printed `if c then true else b` into `decide c || b`,
@@ -97,4 +97,4 @@ macro_rules
         -Bool.if_true_left, -Bool.if_false_right, -Bool.if_false_left, -Bool.if_true_right, $defs,*]))
       all_goals (try simp_all [bindState, eqVal, Eval.Env.set, List.lookup, DeclRef.beq_def, $defs,*])))
 
-end tolean.TypeScript.Output
+end tolean.TypeScript.IR

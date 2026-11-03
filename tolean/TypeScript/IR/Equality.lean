@@ -1,16 +1,16 @@
-import tolean.TypeScript.Output
+import tolean.TypeScript.IR
 
 /-!
-Equality of output trees, as a function that the kernel can run.
+Equality on the Tolean IR, as a function that the kernel can run.
 
 Lean cannot derive `DecidableEq` for `Expr`, which holds lists of itself. So
 `Expr.beq` compares two trees field by field, and `Expr.beq_iff` proves that
-it is true exactly when the trees are equal. The other output types then
+it is true exactly when the trees are equal. The other types of the IR then
 derive `DecidableEq`. A certificate uses this equality to check that the
-translator gives the output tree that its theorems are about: the kernel runs
-the translator and compares the trees.
+translator gives the IR that its theorems are about: the kernel runs the
+translator and compares the two.
 -/
-namespace tolean.TypeScript.Output
+namespace tolean.TypeScript.IR
 
 -- Every proof here has the same shape, so some pass a lemma that they do not use.
 set_option linter.unusedSimpArgs false
@@ -160,4 +160,4 @@ instance : DecidableEq Expr := fun a b => decidable_of_iff _ (Expr.beq_iff a b)
 
 deriving instance DecidableEq for LoopInfo, Body, Decl
 
-end tolean.TypeScript.Output
+end tolean.TypeScript.IR

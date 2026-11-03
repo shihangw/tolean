@@ -2,18 +2,20 @@ import tolean.Sexp
 import tolean.Source
 
 /-!
-The Lean code that the TypeScript translator writes, as a syntax tree.
+The Tolean IR, the Tolean intermediate representation: the Lean code that
+the TypeScript translator writes, as Lean data.
 
-The translator builds this tree, and `print` writes it as text. Each
-constructor is one form that the output can take, and it prints the way the
-translator wrote that form when it built strings. A later phase gives the tree
-a meaning, so that a theorem can state what the translator writes for every
-program it accepts.
+The translator builds the IR, and `print` writes it as text. Each constructor
+is one form that the output can take, and it prints the way the translator
+wrote that form when it built strings. `IR/Eval.lean` gives the IR a meaning,
+so that a theorem can state what the translator writes for every program it
+accepts. `docs/decisions/2026-10-30-tolean-ir.md` explains why the IR is a type of its
+own rather than `Lean.Expr`.
 
-The printer is total, and it reads nothing but the tree and the names of the
+The printer is total, and it reads nothing but the IR and the names of the
 file (`Names`).
 -/
-namespace tolean.TypeScript.Output
+namespace tolean.TypeScript.IR
 
 /-- A Lean type in the output. -/
 inductive Ty where
@@ -431,4 +433,4 @@ def Decl.print (names : Names) : Decl → String
       (s!"def {name}{generic} {" ".intercalate leanParams} : {ret.print names} :=" ::
         indent (body.lines names))
 
-end tolean.TypeScript.Output
+end tolean.TypeScript.IR

@@ -42,43 +42,38 @@ printer that wrote `program` need not be trusted. -/
 theorem program_parsed : tolean.TypeScript.Syntax.parseChars sourceChars .es2024 = Except.ok program :=
   tolean.TypeScript.Syntax.parseChars_eq_of_parsesTo (by decide +kernel)
 
-/-- The output tree, as the translator gives it for the program. -/
-def decls : List tolean.TypeScript.Output.Decl :=
-  [tolean.TypeScript.Output.Decl.struct
+/-- The Tolean IR, as the translator gives it for the program. -/
+def decls : List tolean.TypeScript.IR.Decl :=
+  [tolean.TypeScript.IR.Decl.struct
    "Gauge"
-   [("level", tolean.TypeScript.Output.Ty.int), ("max", tolean.TypeScript.Output.Ty.int)],
- tolean.TypeScript.Output.Decl.function
+   [("level", tolean.TypeScript.IR.Ty.int), ("max", tolean.TypeScript.IR.Ty.int)],
+ tolean.TypeScript.IR.Decl.function
    "raise"
-   [("g", tolean.TypeScript.Output.Ty.struct { file := "", name := "Gauge" }),
-    ("step", tolean.TypeScript.Output.Ty.int)]
-   (tolean.TypeScript.Output.Ty.struct { file := "", name := "Gauge" })
-   (tolean.TypeScript.Output.Body.ite
-     (tolean.TypeScript.Output.Expr.order
-       (tolean.TypeScript.Output.Order.gt)
-       (tolean.TypeScript.Output.Expr.intOp
-         (tolean.TypeScript.Output.IntOp.add)
-         (tolean.TypeScript.Output.Expr.field (tolean.TypeScript.Output.Expr.var "g") false "level")
-         (tolean.TypeScript.Output.Expr.var "step"))
-       (tolean.TypeScript.Output.Expr.field (tolean.TypeScript.Output.Expr.var "g") false "max"))
-     (tolean.TypeScript.Output.Body.value
-       (tolean.TypeScript.Output.Expr.struct
+   [("g", tolean.TypeScript.IR.Ty.struct { file := "", name := "Gauge" }),
+    ("step", tolean.TypeScript.IR.Ty.int)]
+   (tolean.TypeScript.IR.Ty.struct { file := "", name := "Gauge" })
+   (tolean.TypeScript.IR.Body.ite
+     (tolean.TypeScript.IR.Expr.order
+       (tolean.TypeScript.IR.Order.gt)
+       (tolean.TypeScript.IR.Expr.intOp
+         (tolean.TypeScript.IR.IntOp.add)
+         (tolean.TypeScript.IR.Expr.field (tolean.TypeScript.IR.Expr.var "g") false "level")
+         (tolean.TypeScript.IR.Expr.var "step"))
+       (tolean.TypeScript.IR.Expr.field (tolean.TypeScript.IR.Expr.var "g") false "max"))
+     (tolean.TypeScript.IR.Body.value
+       (tolean.TypeScript.IR.Expr.struct
          [("level",
-           tolean.TypeScript.Output.Expr.field (tolean.TypeScript.Output.Expr.var "g") false "max"),
-          ("max",
-           tolean.TypeScript.Output.Expr.field (tolean.TypeScript.Output.Expr.var "g") false "max")]
+           tolean.TypeScript.IR.Expr.field (tolean.TypeScript.IR.Expr.var "g") false "max"),
+          ("max", tolean.TypeScript.IR.Expr.field (tolean.TypeScript.IR.Expr.var "g") false "max")]
          { file := "", name := "Gauge" }))
-     (tolean.TypeScript.Output.Body.value
-       (tolean.TypeScript.Output.Expr.struct
+     (tolean.TypeScript.IR.Body.value
+       (tolean.TypeScript.IR.Expr.struct
          [("level",
-           tolean.TypeScript.Output.Expr.intOp
-             (tolean.TypeScript.Output.IntOp.add)
-             (tolean.TypeScript.Output.Expr.field
-               (tolean.TypeScript.Output.Expr.var "g")
-               false
-               "level")
-             (tolean.TypeScript.Output.Expr.var "step")),
-          ("max",
-           tolean.TypeScript.Output.Expr.field (tolean.TypeScript.Output.Expr.var "g") false "max")]
+           tolean.TypeScript.IR.Expr.intOp
+             (tolean.TypeScript.IR.IntOp.add)
+             (tolean.TypeScript.IR.Expr.field (tolean.TypeScript.IR.Expr.var "g") false "level")
+             (tolean.TypeScript.IR.Expr.var "step")),
+          ("max", tolean.TypeScript.IR.Expr.field (tolean.TypeScript.IR.Expr.var "g") false "max")]
          { file := "", name := "Gauge" })))]
 
 /-- The state that the translator starts from. The source text serves only in
@@ -102,7 +97,7 @@ def decodeGauge {N : Type} [tolean.TypeScript.JSNumber N] : Option (Val N) → s
   cases x; simp [decodeGauge, encodeGauge, List.lookup, encList, encNull]
 
 theorem raise_link {N : Type} [tolean.TypeScript.JSNumber N] (g : _) (step : _) :
-    tolean.TypeScript.Output.runIn (N := N) (tolean.TypeScript.Output.functionsOf [("", decls)]) ⟨"", "raise"⟩ [(encodeGauge g), (Val.int step)] =
+    tolean.TypeScript.IR.runIn (N := N) (tolean.TypeScript.IR.functionsOf [("", decls)]) ⟨"", "raise"⟩ [(encodeGauge g), (Val.int step)] =
       some (encodeGauge (sensor.Raise.raise g step)) := by
   link_tac [decls, Env.set_cons, Env.lookup_cons, Env.lookup_set_same, Env.lookup_set_ne, Env.set_set, Env.length_set, encList, encNull, decInt, decBool, decStr, decNum, encodeGauge, decodeGauge, sensor.Raise.raise]
 

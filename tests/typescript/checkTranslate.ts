@@ -170,9 +170,20 @@ function rootLeanPath(): string {
   return run.stdout.trim();
 }
 
+/** The root package's `lean`, as an absolute path. A project compiles in a
+temporary directory, which has no `lean-toolchain`, so a plain `lean` there
+would make elan pick its default toolchain instead of the pinned one. That
+Lean could not read the root's `.olean` files, and elan might download it. */
+function rootLean(): string {
+  const run = spawnSync('lake', ['env', 'lean', '--print-prefix'], { cwd: root, encoding: 'utf8' });
+  if (run.error !== undefined) throw run.error;
+  if (run.status !== 0) throw new Error(`lake env lean --print-prefix exited with ${run.status}: ${run.stderr}`);
+  return join(run.stdout.trim(), 'bin', 'lean');
+}
+
 /** Compile the Lean modules of `dir`, each after the modules of `dir` that it
-imports, and give the first error, or null. */
-function compilesProject(dir: string, leanPath: string): string | null {
+imports, with the Lean `lean`, and give the first error, or null. */
+function compilesProject(dir: string, leanPath: string, lean: string): string | null {
   const copy = mkdtempSync(join(tmpdir(), 'tolean-project-'));
   cpSync(dir, copy, { recursive: true });
   // Module names start at `moduleRoot`, as they do in the project's Lean package.
@@ -194,7 +205,7 @@ function compilesProject(dir: string, leanPath: string): string | null {
     }
     const olean = join(build, file.replace(/\.lean$/, '.olean'));
     mkdirSync(join(olean, '..'), { recursive: true });
-    const run = spawnSync('lean', ['--root=.', '-o', olean, file], {
+    const run = spawnSync(lean, ['--root=.', '-o', olean, file], {
       cwd: build,
       encoding: 'utf8',
       env: { ...process.env, LEAN_PATH: `${build}:${leanPath}` },
@@ -212,6 +223,7 @@ function compilesProject(dir: string, leanPath: string): string | null {
 const projectsDir = 'corpus/translate/projects';
 const acceptProjects = readdirSync(`${projectsDir}/accept`).sort();
 const leanPath = rootLeanPath();
+const projectLean = rootLean();
 for (const name of acceptProjects) {
   const dir = `${projectsDir}/accept/${name}`;
   const run = spawnSync(tolean, update ? ['translate'] : ['translate', '--check'], { cwd: dir, encoding: 'utf8' });
@@ -219,7 +231,7 @@ for (const name of acceptProjects) {
     failures.push(`${dir}: tolean translate${update ? '' : ' --check'} failed: ${run.stderr.trim()}`);
     continue;
   }
-  const error = compilesProject(dir, leanPath);
+  const error = compilesProject(dir, leanPath, projectLean);
   if (error !== null) failures.push(`${dir}: the Lean output does not compile:\n${error}`);
 }
 const rejectProjects = readdirSync(`${projectsDir}/reject`).sort();

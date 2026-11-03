@@ -28,19 +28,19 @@ open tolean.TypeScript.Eval (Val)
 each file comes after the files it imports from, a call of a function of the
 output gives a value only when the interpreter gives the same value for the
 same call of the program. -/
-example {N : Type} [JSNumber N] {p : Eval.Program} {outs : List (String × List Output.Decl)}
+example {N : Type} [JSNumber N] {p : Eval.Program} {outs : List (String × List IR.Decl)}
     {ifaces : List (String × Interface)} (h : ProgramTranslation p outs ifaces)
     (hnd : (p.map (·.1)).Nodup) (key : DeclRef) (args : List (Val N)) (fuel : Nat) (v : Val N)
-    (hv : Output.runIn (Output.functionsOf outs) key args fuel = some v) :
+    (hv : IR.runIn (IR.functionsOf outs) key args fuel = some v) :
     Eval.runIn p key args fuel = some v :=
   program_sound h hnd key args fuel v hv
 
 /-- The same, for one file that `translateTree` parses and translates. -/
 example {N : Type} [JSNumber N] {file source : String} {target : Edition} {m : Module}
-    {names : Output.Names} {decls : List Output.Decl}
+    {names : IR.Names} {decls : List IR.Decl}
     (h : translateTree file source target = .ok (m, names, decls))
     (name : String) (args : List (Val N)) (fuel : Nat) (v : Val N)
-    (hv : Output.runIn (Output.functionsOf [(file, decls)]) ⟨file, name⟩ args fuel = some v) :
+    (hv : IR.runIn (IR.functionsOf [(file, decls)]) ⟨file, name⟩ args fuel = some v) :
     Eval.runIn [(file, m)] ⟨file, name⟩ args fuel = some v :=
   translate_sound h name args fuel v hv
 

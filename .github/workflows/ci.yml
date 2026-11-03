@@ -51,8 +51,30 @@ jobs:
           key: lake-${{ runner.os }}-${{ hashFiles('lean-toolchain', 'lake-manifest.json', 'lakefile.toml', '**/*.lean') }}
           restore-keys: lake-${{ runner.os }}-
 
+      # The cache can be from an older commit, and Lake never deletes the build
+      # output of a module whose source was deleted since. Nothing imports such
+      # a module, so the build does not notice, but leanchecker below checks
+      # every .olean file of the library, and a stale one can name constants
+      # that no longer exist.
+      - name: Remove the build output of deleted modules
+        run: |
+          if [ -d .lake/build/lib/lean/tolean ]; then
+            find .lake/build/lib/lean/tolean -type f | while read -r f; do
+              rel=${f#.lake/build/lib/lean/}
+              [ -f "${rel%%.*}.lean" ] || rm "$f"
+            done
+          fi
+
       - name: Build the library and the tolean command
         run: lake build --wfail
+
+      # A declaration can reach an .olean file without the kernel checking it:
+      # `set_option debug.skipKernelTC true`, or a command that adds it with the
+      # check off. The build still passes, and the theorem lists no axioms.
+      # leanchecker sends every declaration of the library's .olean files to
+      # the kernel again, the ones the cache above restores included.
+      - name: The kernel accepts the built library again
+        run: lake env leanchecker tolean
 
       - name: Install the TypeScript checks' dependencies
         run: |

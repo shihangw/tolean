@@ -7,7 +7,7 @@ TypeScript program computes.
 `program_sound` states it for a program of several files, and
 `translate_sound` for one file. When the translator translates every file of
 a program, each file after the files it imports from, and a function of the
-output gives a value for some arguments in the output's evaluator, then the
+Tolean IR gives a value for some arguments in the IR's evaluator, then the
 interpreter gives the same value for the same call of the program. The
 theorem holds for every model of numbers, every argument list and every fuel.
 
@@ -27,8 +27,8 @@ Three facts make it work.
   the body with fuel `f`, so the statement theorem for the body needs only
   the calls with fuel `f`.
 
-The theorem is about the output tree. The printer link is trusted: that the
-printed Lean computes what the output's evaluator gives. A certificate proves
+The theorem is about the Tolean IR. The printer link is trusted: that the
+printed Lean computes what the IR's evaluator gives. A certificate proves
 the link for its file, with `Proof/Link.lean`.
 -/
 namespace tolean.TypeScript.Proof
@@ -117,7 +117,7 @@ theorem params_fold {α : Type}
 body is the translation of the source body, in a scope of its parameters and
 of the functions declared before it. -/
 theorem translateFunction_ok {sp : Span} {ex : Bool} {name : String} {params : List Param}
-    {ret : Option TypeExpr} {body : Stmt} {s s' : Ctx} {o : Output.Decl}
+    {ret : Option TypeExpr} {body : Stmt} {s s' : Ctx} {o : IR.Decl}
     (h : translateFunction sp ex name params ret body s = .ok o s') :
     s'.file = s.file ∧ s'.interfaces = s.interfaces ∧
       (∀ g ∈ s.functions, g.name ≠ name) ∧
@@ -243,7 +243,7 @@ theorem translateImport_ok {sp : Span} {names : List ImportName} {source : Strin
           · exact horig f hf'
 
 theorem translateInterface_ok {sp : Span} {ex : Bool} {name : String} {fields : List Field}
-    {s s' : Ctx} {o : Output.Decl} (h : translateInterface sp ex name fields s = .ok o s') :
+    {s s' : Ctx} {o : IR.Decl} (h : translateInterface sp ex name fields s = .ok o s') :
     s'.file = s.file ∧ s'.interfaces = s.interfaces ∧ s'.functions = s.functions ∧
       ∃ n fs, o = .struct n fs := by
   unfold translateInterface at h
@@ -257,7 +257,7 @@ theorem translateInterface_ok {sp : Span} {ex : Bool} {name : String} {fields : 
 /-- What one declaration does to the state: it keeps the file and the
 interfaces, adds its functions at the end, and keeps their names distinct. A
 function that it adds as exported is one that it declares as exported. -/
-theorem translateDecl_ok {d : Decl} {s s' : Ctx} {o : Option Output.Decl}
+theorem translateDecl_ok {d : Decl} {s s' : Ctx} {o : Option IR.Decl}
     (hself : IfacesSelf s.interfaces) (h : translateDecl d s = .ok o s') :
     s'.file = s.file ∧ s'.interfaces = s.interfaces ∧
       ∃ more, s'.functions = s.functions ++ more ∧ more.map FnInfo.ref = declRefs s.file d ∧
@@ -314,7 +314,7 @@ def Forall₂ {α β : Type} (R : α → β → Prop) : List α → List β → 
 from the source body, in a scope of exactly the parameters and of functions
 of `F`. -/
 def FnRelIn (F : List FnInfo) (src : String × List String × Stmt)
-    (out : String × List String × Output.Body) : Prop :=
+    (out : String × List String × IR.Body) : Prop :=
   src.1 = out.1 ∧ src.2.1 = out.2.1 ∧
     ∃ Fu env c c', translateStatements Fu env .ret (blockStatements src.2.2) c = .ok out.2.2 c' ∧
       (∀ g ∈ env.functions, g ∈ F) ∧ ∀ x, env.has x = decide (x ∈ src.2.1)
@@ -332,7 +332,7 @@ theorem FnRelIn.mono {F G : List FnInfo} (hFG : ∀ g ∈ F, g ∈ G) {src out}
 
 /-- What a list of declarations does to the state, and how its functions
 translate. -/
-theorem decls_ok : ∀ (ds : List Decl) (s s' : Ctx) (os : List (Option Output.Decl)),
+theorem decls_ok : ∀ (ds : List Decl) (s s' : Ctx) (os : List (Option IR.Decl)),
     IfacesSelf s.interfaces → ds.mapM translateDecl s = .ok os s' →
     s'.file = s.file ∧ s'.interfaces = s.interfaces ∧
       (∃ more, s'.functions = s.functions ++ more ∧ more.map FnInfo.ref = ds.flatMap (declRefs s.file) ∧
@@ -340,12 +340,12 @@ theorem decls_ok : ∀ (ds : List Decl) (s s' : Ctx) (os : List (Option Output.D
         ∀ f ∈ more, (f.file = s.file ∧ ∃ sp ex ps r b, Decl.function sp ex f.name ps r b ∈ ds) ∨
           ∃ i, s.interfaces.lookup f.file = some i ∧ ∃ g ∈ i.functions, g.name = f.name) ∧
       ((s.functions.map (·.name)).Nodup → (s'.functions.map (·.name)).Nodup) ∧
-      Forall₂ (FnRelIn s'.functions) (Eval.functions ⟨ds⟩) (Output.functions (os.filterMap id))
+      Forall₂ (FnRelIn s'.functions) (Eval.functions ⟨ds⟩) (IR.functions (os.filterMap id))
   | [], s, s', os, _, h => by
     simp only [List.mapM_nil, pure_ok] at h
     obtain ⟨rfl, rfl⟩ := h
     exact ⟨rfl, rfl, ⟨[], by simp, by simp, by simp, by simp⟩, id,
-      by simp [Eval.functions, Output.functions]; trivial⟩
+      by simp [Eval.functions, IR.functions]; trivial⟩
   | d :: ds, s, s', os, hself, h => by
     simp only [List.mapM_cons, bind_ok, pure_ok] at h
     obtain ⟨o, s₁, h₁, os', s₂, h₂, rfl, rfl⟩ := h
@@ -377,19 +377,19 @@ theorem decls_ok : ∀ (ds : List Decl) (s s' : Ctx) (os : List (Option Output.D
         obtain ⟨o', h₁, rfl⟩ := h₁
         obtain ⟨-, -, -, f, hfns, -, -, -, lp, r, out, rfl, hlp, Fu, env, c, c', ht, henv, hhas⟩ :=
           translateFunction_ok h₁
-        simp only [Eval.functions, Output.functions, List.filterMap_cons] at hrel ⊢
+        simp only [Eval.functions, IR.functions, List.filterMap_cons] at hrel ⊢
         refine ⟨⟨rfl, hlp.symm, Fu, env, c, c', ht, fun g hg => ?_, hhas⟩, hrel⟩
         rw [henv] at hg
         exact hsub g (by rw [hfns]; exact List.mem_append_left _ hg)
       | «import» sp names source =>
         simp only [translateDecl, bind_ok, pure_ok] at h₁
         obtain ⟨u, s₃, -, rfl, -⟩ := h₁
-        simpa [Eval.functions, Output.functions, List.filterMap_cons] using hrel
+        simpa [Eval.functions, IR.functions, List.filterMap_cons] using hrel
       | interface sp ex name fields =>
         simp only [translateDecl, map_ok] at h₁
         obtain ⟨o', h₁, rfl⟩ := h₁
         obtain ⟨-, -, -, n, fs, rfl⟩ := translateInterface_ok h₁
-        simpa [Eval.functions, Output.functions, List.filterMap_cons] using hrel
+        simpa [Eval.functions, IR.functions, List.filterMap_cons] using hrel
       | typeAlias sp ex name type => simp [translateDecl] at h₁
       | exportedVar sp decl => simp [translateDecl] at h₁
       | stmt st => simp [translateDecl] at h₁
@@ -523,7 +523,7 @@ translator made from the source body. Its scope binds exactly the parameters,
 and each function it may call is the one that a call of that name runs in its
 file. -/
 def FnRelP (p : Eval.Program) (src : DeclRef × List String × Stmt)
-    (out : DeclRef × List String × Output.Body) : Prop :=
+    (out : DeclRef × List String × IR.Body) : Prop :=
   src.1 = out.1 ∧ src.2.1 = out.2.1 ∧
     ∃ Fu env c c', translateStatements Fu env .ret (blockStatements src.2.2) c = .ok out.2.2 c' ∧
       Resolves ⟨p, src.1.file⟩ env ∧ ∀ x, env.has x = decide (x ∈ src.2.1)
@@ -543,8 +543,8 @@ theorem Forall₂.map {α β γ δ : Type} {R : α → β → Prop} {S : γ → 
   | [], _ :: _, h' | _ :: _, [], h' => h'.elim
 
 theorem lookup_rel {p : Eval.Program} :
-    ∀ {srcs : List (DeclRef × List String × Stmt)} {outs : List (DeclRef × List String × Output.Body)},
-      Forall₂ (FnRelP p) srcs outs → ∀ {key : DeclRef} {ps : List String} {b : Output.Body},
+    ∀ {srcs : List (DeclRef × List String × Stmt)} {outs : List (DeclRef × List String × IR.Body)},
+      Forall₂ (FnRelP p) srcs outs → ∀ {key : DeclRef} {ps : List String} {b : IR.Body},
         outs.lookup key = some (ps, b) →
         ∃ bS, srcs.lookup key = some (ps, bS) ∧ FnRelP p (key, ps, bS) (key, ps, b)
   | [], [], _, _, _, _, h => by simp at h
@@ -579,7 +579,7 @@ theorem scoped_params {m : Eval.Scope} {env : Translate.Env} {ps : List String} 
     rw [lookup_isSome, henv, List.map_reverse, List.map_fst_zip (by omega)]
     simp, hres⟩
 
-variable (p : Eval.Program) (fs : List (DeclRef × List String × Output.Body))
+variable (p : Eval.Program) (fs : List (DeclRef × List String × IR.Body))
 
 /-- Every call of the output gives what the same call of the source gives,
 for every fuel. -/
@@ -597,7 +597,7 @@ theorem calls_agree (hrel : Forall₂ (FnRelP p) (Eval.functionsOf p) fs) :
       split at h
       · simp at h
       · rename_i hlen
-        cases hb : Output.Body.exec fs fuel (ps.zip vs).reverse b with
+        cases hb : IR.Body.exec fs fuel (ps.zip vs).reverse b with
         | none => simp [hb] at h
         | some o =>
           cases o with
@@ -617,10 +617,10 @@ end Calls
 /-- The translation of a program, file by file. Each file's translation starts
 with no functions and with the interfaces of the files before it. -/
 inductive ProgramTranslation :
-    Eval.Program → List (String × List Output.Decl) → List (String × Interface) → Prop
+    Eval.Program → List (String × List IR.Decl) → List (String × Interface) → Prop
   | nil : ProgramTranslation [] [] []
-  | snoc {p : Eval.Program} {outs : List (String × List Output.Decl)} {ifaces : List (String × Interface)}
-      {file : String} {m : Module} {decls : List Output.Decl} {start finish : Ctx}
+  | snoc {p : Eval.Program} {outs : List (String × List IR.Decl)} {ifaces : List (String × Interface)}
+      {file : String} {m : Module} {decls : List IR.Decl} {start finish : Ctx}
       (usesNumber : Bool) (numberVar : String) :
       ProgramTranslation p outs ifaces → start.file = file → start.functions = [] →
       start.interfaces = ifaces → translateDecls m start = .ok decls finish →
@@ -652,11 +652,11 @@ theorem lookup_append_mem {β : Type} {k : String} {l l' : List (String × β)}
 /-- What a program's translation gives: interfaces that name their files and
 that the program's files export, and output functions that are the
 translations of the program's functions. -/
-theorem programTranslation_rel {p : Eval.Program} {outs : List (String × List Output.Decl)}
+theorem programTranslation_rel {p : Eval.Program} {outs : List (String × List IR.Decl)}
     {ifaces : List (String × Interface)} (h : ProgramTranslation p outs ifaces) :
     ∀ (P : Eval.Program), (p.map (·.1)).Nodup → (∀ t tm, p.lookup t = some tm → P.lookup t = some tm) →
       ifaces.map (·.1) = p.map (·.1) ∧ outs.map (·.1) = p.map (·.1) ∧ IfacesSelf ifaces ∧ Faithful P ifaces ∧
-        Forall₂ (FnRelP P) (Eval.functionsOf p) (Output.functionsOf outs) := by
+        Forall₂ (FnRelP P) (Eval.functionsOf p) (IR.functionsOf outs) := by
   induction h with
   | nil => intro P _ _; exact ⟨rfl, rfl, fun _ _ h => by simp at h, fun _ _ h => by simp at h, trivial⟩
   | @snoc p outs ifaces file m decls start finish u nv hrest hfile hfns hifaces htr ih =>
@@ -714,7 +714,7 @@ theorem programTranslation_rel {p : Eval.Program} {outs : List (String × List O
           simp only [Eval.exportsFunction, List.any_eq_true]
           exact ⟨_, hd, by simp⟩
         · simp at hti
-    · simp only [Eval.functionsOf, Output.functionsOf, List.flatMap_append, List.flatMap_cons,
+    · simp only [Eval.functionsOf, IR.functionsOf, List.flatMap_append, List.flatMap_cons,
         List.flatMap_nil, List.append_nil]
       refine hrel.append (Forall₂.map ?_ hrelm)
       intro x y hxy
@@ -727,22 +727,22 @@ variable {N : Type} [JSNumber N]
 program, a call of a function of the output gives a value only when the
 interpreter gives the same value for the same call of the program, for all
 arguments and all fuel. -/
-theorem program_sound {p : Eval.Program} {outs : List (String × List Output.Decl)}
+theorem program_sound {p : Eval.Program} {outs : List (String × List IR.Decl)}
     {ifaces : List (String × Interface)} (h : ProgramTranslation p outs ifaces)
     (hnd : (p.map (·.1)).Nodup) (key : DeclRef) (args : List (Val N)) (fuel : Nat) (v : Val N)
-    (hv : Output.runIn (Output.functionsOf outs) key args fuel = some v) :
+    (hv : IR.runIn (IR.functionsOf outs) key args fuel = some v) :
     Eval.runIn p key args fuel = some v :=
-  calls_agree p (Output.functionsOf outs) (programTranslation_rel h p hnd fun _ _ h => h).2.2.2.2
+  calls_agree p (IR.functionsOf outs) (programTranslation_rel h p hnd fun _ _ h => h).2.2.2.2
     (fuel + 1) key args v hv
 
 /-- The same, for one file: when `translateTree` parses the file to the module
 `m` and translates it to `decls`, a call of a function of `decls` gives a
 value only when the interpreter gives the same value for the same call of
 `m`. -/
-theorem translate_sound {file source : String} {target : Edition} {m : Module} {names : Output.Names}
-    {decls : List Output.Decl} (h : translateTree file source target = .ok (m, names, decls))
+theorem translate_sound {file source : String} {target : Edition} {m : Module} {names : IR.Names}
+    {decls : List IR.Decl} (h : translateTree file source target = .ok (m, names, decls))
     (name : String) (args : List (Val N)) (fuel : Nat) (v : Val N)
-    (hv : Output.runIn (Output.functionsOf [(file, decls)]) ⟨file, name⟩ args fuel = some v) :
+    (hv : IR.runIn (IR.functionsOf [(file, decls)]) ⟨file, name⟩ args fuel = some v) :
     Eval.runIn [(file, m)] ⟨file, name⟩ args fuel = some v := by
   unfold translateTree translateFile at h
   cases hp : parse source target with

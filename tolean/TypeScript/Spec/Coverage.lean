@@ -450,7 +450,7 @@ def extras : List Group := [
     ``Syntax.Param.beqList_iff, ``Syntax.Field.beq_iff, ``Syntax.Field.beqList_iff,
     ``Syntax.Decl.beq_iff, ``Syntax.Decl.beqList_iff, ``Syntax.Module.beq_iff]⟩,
   ⟨"Certificates: the check that the translator gives the tree", [``Proof.translatesTo_ok,
-    ``Output.Expr.beq_iff, ``Output.Expr.beqList_iff, ``Output.Expr.beqFields_iff]⟩,
+    ``IR.Expr.beq_iff, ``IR.Expr.beqList_iff, ``IR.Expr.beqFields_iff]⟩,
   ⟨"Certificates: the encoders and decoders", [``Eval.encNull_some, ``Eval.encNull_none,
     ``Eval.decInt_int, ``Eval.decBool_bool, ``Eval.decNum_num, ``Eval.decStr_str, ``Eval.decList_list,
     ``Eval.decNull_some, ``Eval.decList_nil, ``Eval.decList_cons, ``Eval.decList_encList,
