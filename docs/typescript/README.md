@@ -472,7 +472,7 @@ path = "node_modules/tolean/lean"
 | 3. Prove the claims | Hand-written proofs show that each claim in `Spec/*.lean` holds for the generated definitions | **Proved** | The Lean kernel, `#audit_claims`, `lake build --wfail`, and no `sorry`, `admit`, `axiom` or `native_decide` |
 | 4. Assume JS number facts | `SafeIntLaws` and `SpecialValueLaws` in `tolean/TypeScript/Spec/Number.lean` | Trusted, tested | `tests/typescript/jsNumberLaws.test.ts` checks each law against real doubles. |
 | 5. Run | Type stripping or a bundler makes the JavaScript that Node runs | Trusted | The subset uses only constructs that type stripping leaves unchanged |
-| 6. Call | The caller passes inputs that meet the theorems' preconditions | Not checked | Planned: boundary guards, which check the preconditions at run time where callers enter the verified code |
+| 6. Inputs | The code that calls the verified functions passes inputs that meet the theorems' preconditions | Trusted, not checked | Planned: boundary guards, which check the preconditions at run time where callers enter the verified code |
 
 So a theorem holds for the code that runs if steps 1, 4 and 5 are correct, the
 printer of step 2 is correct or the file has a certificate, and the inputs meet
