@@ -1,4 +1,5 @@
-# The npm release, run by hand from the Actions tab. `binaries` builds the
+# The npm release, run by hand from the Actions tab. To release, raise the
+# version in npm/package.json on main first. `binaries` builds the
 # native tolean on each platform, and `npm-package` packs the packages and
 # installs them as a user would. With `publish` unset this is a dry run that
 # uploads the tarballs. With `publish` set, the `publish` job waits for
@@ -31,6 +32,30 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # A publish run fails here, before the builds, when the version in
+  # npm/package.json was already released from another commit. Without this
+  # check, the run builds for an hour and waits for approval. Then npm skips
+  # every package, and only the GitHub release step fails. A tag at this same
+  # commit means a rerun after a partial failure, so the run goes on.
+  version:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: This version is not released from another commit
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          v=$(jq -r .version npm/package.json)
+          if tagged=$(gh api "repos/$GITHUB_REPOSITORY/commits/refs/tags/v$v" -q .sha 2>/dev/null) \
+              && [ "$tagged" != "$GITHUB_SHA" ]; then
+            echo "::error::v$v is already released from $tagged. Raise the version in npm/package.json, then run this again."
+            exit 1
+          fi
+          echo "v$v is not released from another commit"
+
   # Builds the native `tolean` binary for each platform that the npm package
   # ships one for, with Lean's own toolchain (elan, from lean-toolchain), not the
   # Nix shell: a Nix build links to libraries in /nix/store, so it runs only
@@ -42,6 +67,7 @@ jobs:
   # toolchain, runs the npm package's tests with it, and uploads it. Publishing
   # the platform packages is a separate step, not done here.
   binaries:
+    needs: version
     strategy:
       fail-fast: false
       matrix:
@@ -203,10 +229,16 @@ jobs:
           done
 
       # Creates the tag at this commit and a GitHub release with notes
-      # generated from the merged pull requests.
+      # generated from the merged pull requests. A rerun skips a release that
+      # an earlier attempt created. The `version` job has already checked that
+      # such a release is for this commit.
       - name: Tag and release on GitHub
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           v=$(node -p "require('./npm/package.json').version")
-          gh release create "v$v" --target "$GITHUB_SHA" --generate-notes
+          if gh release view "v$v" >/dev/null 2>&1; then
+            echo "the release v$v already exists"
+          else
+            gh release create "v$v" --target "$GITHUB_SHA" --generate-notes
+          fi
