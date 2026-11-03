@@ -62,21 +62,25 @@ read. The check covers three kinds of input:
 use `tsc`, so it types the subset itself. It gives every expression the type
 that `tsc` would give it, with the same narrowing on `null`, and it refuses
 anything it cannot type exactly. That type checker is part of what we trust.
-The translator does not write text. It builds the Lean code as a syntax tree,
-and `tolean/TypeScript/Output.lean` prints the tree. So a theorem can state
-what the translator writes, which a proof of the translator needs.
+The translator does not write text. It builds the Tolean IR, the Tolean
+intermediate representation: the Lean code that it writes, as Lean data,
+with types, expressions, bodies and declarations. `tolean/TypeScript/IR.lean`
+defines the IR and prints it as Lean text. So a theorem can state what the
+translator writes, which a proof of the translator needs. [The decision
+record on the IR](../decisions/tolean-ir.md) explains why it is a type of
+Tolean's own rather than Lean's `Expr`.
 
 `tolean/TypeScript/Proof/` proves the translator for every program that it
-accepts. `tolean/TypeScript/Output/Eval.lean` gives the output tree a meaning:
-it evaluates the tree over the interpreter's values. The theorem
-`program_sound` in `Proof/Module.lean` states that when the translator
-accepts every file of a program, a function of the output tree gives a value
-only when the interpreter gives the same value for the same call.
+accepts. `tolean/TypeScript/IR/Eval.lean` gives the IR a meaning: it
+evaluates the IR over the interpreter's values. The theorem `program_sound`
+in `Proof/Module.lean` states that when the translator accepts every file of
+a program, a function of the IR gives a value only when the interpreter
+gives the same value for the same call.
 `translate_sound` is the case of one file. It holds for every input,
 every model of numbers and every amount of fuel. The theorem does not assume
-that the types the translator gives are right. It is about the tree, so a
+that the types the translator gives are right. It is about the IR, so a
 file without a certificate still trusts the printer link: the printed Lean
-computes what the evaluator gives for the tree, and the evaluator gives a
+computes what the evaluator gives for the IR, and the evaluator gives a
 value where the printed Lean does. The corpus tests the printer, and a
 certificate proves the link for its file.
 
@@ -147,10 +151,10 @@ translation, so each theorem holds for every `N`, real doubles among them,
 and assumes none of the number laws.
 
 A certificate's theorems follow from `translate_sound`, so they do not unfold
-the interpreter. The certificate holds the translator's output tree, and the
-kernel checks that the translator gives that tree for the program. Then a
-`link` theorem for each function states that the printed definition computes
-what the output's evaluator gives for the tree, and `decls_sound` in
+the interpreter. The certificate holds the IR that the translator gives,
+and the kernel checks that the translator gives that IR for the program.
+Then a `link` theorem for each function states that the printed definition
+computes what the evaluator gives for the IR, and `decls_sound` in
 `tolean/TypeScript/Proof/Link.lean` carries it to the interpreter. A loop gets
 a lemma of its own: the evaluator runs the loop as the printed `List.foldl`,
 for every environment whose variables have values of the right types. The
@@ -463,7 +467,7 @@ path = "node_modules/tolean/lean"
 | Step | What happens | Status | How it is checked |
 |---|---|---|---|
 | 1. Parse and type-check | Tolean's parser reads the source, and the translator types the subset itself | Trusted, tested | `tests/typescript/check.ts` compares the parser's syntax trees with `tsc`'s, on the corpus and on random programs. It also prints each tree as source and requires the parser to read it as the same tree. `parseChars_reads` proves this second check for every tree that the parser gives. The proof shows that the parser and the printer agree, but not that the parser reads TypeScript as `tsc` does. The type checker is tested through the translation corpus. |
-| 2. Translate | Tolean writes readable Lean definitions (the generated `.lean` files) | **Proved** up to the printer | `program_sound` proves the translation to the output tree for every accepted program: when the tree's evaluator gives a value, the interpreter gives the same value. The printer link is trusted: that the printed Lean computes what the evaluator gives for the tree, and that the evaluator gives a value where the printed Lean does. No theorem can state it for every program, because the printed Lean is text that means something only after Lean compiles it. The golden files of the corpus, compiling random programs and the CI drift check test it, and a [certificate](#certificates) proves the link, and so the whole step, for one file. |
+| 2. Translate | Tolean writes readable Lean definitions (the generated `.lean` files) | **Proved** up to the printer | `program_sound` proves the translation to the Tolean IR for every accepted program: when the IR's evaluator gives a value, the interpreter gives the same value. The printer link is trusted: that the printed Lean computes what the evaluator gives for the IR, and that the evaluator gives a value where the printed Lean does. No theorem can state it for every program, because the printed Lean is text that means something only after Lean compiles it. The golden files of the corpus, compiling random programs and the CI drift check test it, and a [certificate](#certificates) proves the link, and so the whole step, for one file. |
 | 3. Prove the claims | Hand-written proofs show that each claim in `Spec/*.lean` holds for the generated definitions | **Proved** | The Lean kernel, `#audit_claims`, `lake build --wfail`, and no `sorry`, `admit`, `axiom` or `native_decide` |
 | 4. Assume JS number facts | `SafeIntLaws` and `SpecialValueLaws` in `tolean/TypeScript/Spec/Number.lean` | Trusted, tested | `tests/typescript/jsNumberLaws.test.ts` checks each law against real doubles. |
 | 5. Run | Type stripping or a bundler makes the JavaScript that Node runs | Trusted | The subset uses only constructs that type stripping leaves unchanged |

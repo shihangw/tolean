@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="980" height="870" viewBox="0 0 980 870" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-labelledby="title desc">
   <title id="title">TypeScript: what is proved and what is trusted</title>
-  <desc id="desc">Tolean's Lean parser reads the TypeScript source. Its trees are tested against tsc, and its round trip on its own printed source is proved. The translator is proved against the JS interpreter in Lean for every program it accepts. The printer, which writes the output tree as Lean text, is tested, and a certificate proves it for one file. The interpreter and the JavaScript number laws are tested against Node. People review the claims, and the Lean kernel checks the proofs. What runs is the type-stripped source on Node.</desc>
+  <desc id="desc">Tolean's Lean parser reads the TypeScript source. Its trees are tested against tsc, and its round trip on its own printed source is proved. The translator is proved against the JS interpreter in Lean for every program it accepts. The printer, which writes the Tolean IR as Lean text, is tested, and a certificate proves it for one file. The interpreter and the JavaScript number laws are tested against Node. People review the claims, and the Lean kernel checks the proofs. What runs is the type-stripped source on Node.</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M0,0 L10,5 L0,10 z" fill="#3c4043"/>
@@ -52,14 +52,14 @@
   <path d="M170,247 V275" class="line" marker-end="url(#arrow)"/>
   <rect x="40" y="277" width="260" height="62" rx="8" class="proved"/>
   <text x="170" y="300" text-anchor="middle" class="name">Lean translator and type checker</text>
-  <text x="170" y="318" text-anchor="middle" class="sub">program_sound: the output tree computes</text>
+  <text x="170" y="318" text-anchor="middle" class="sub">program_sound: the Tolean IR computes</text>
   <text x="170" y="332" text-anchor="middle" class="sub">only what the interpreter computes</text>
   <path d="M300,308 H330 V124 H358" class="prove" marker-end="url(#arrow-green)"/>
 
   <!-- Printer -->
   <path d="M170,339 V367" class="line" marker-end="url(#arrow)"/>
   <rect x="40" y="369" width="260" height="62" rx="8" class="tested"/>
-  <text x="170" y="392" text-anchor="middle" class="name">Printer: output tree to Lean text</text>
+  <text x="170" y="392" text-anchor="middle" class="name">Printer: Tolean IR to Lean text</text>
   <text x="170" y="410" text-anchor="middle" class="sub">golden files and compile checks test it;</text>
   <text x="170" y="424" text-anchor="middle" class="sub">a certificate proves it for one file</text>
 

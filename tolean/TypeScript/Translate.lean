@@ -2,7 +2,7 @@ import tolean.Sexp
 import tolean.Version
 import tolean.TypeScript.Edition
 import tolean.TypeScript.Syntax.Parser
-import tolean.TypeScript.Output
+import tolean.TypeScript.IR
 import tolean.TypeScript.Spec.Eval
 
 /-!
@@ -25,9 +25,9 @@ expression gets the type that `tsc` gives it, with the same narrowing on
 `null`. Where it cannot tell, it refuses. It refuses everything outside the
 subset with a position and a reason; nothing is approximated.
 
-The translator does not write text. It builds the output as a syntax tree
-(`Output.lean`), and the printer there writes it. So the translator is a
-function from one syntax tree to another, which a theorem can be about.
+The translator does not write text. It builds the Tolean IR (`IR.lean`),
+and the printer there writes it. So the translator is a function from a
+syntax tree to the IR, which a theorem can be about.
 -/
 namespace tolean.TypeScript.Translate
 
@@ -77,7 +77,7 @@ def Ty.isObject : Ty → Bool
   | _ => false
 
 /-- The Lean type that the output gives a value of type `t`. -/
-def Ty.lean : Ty → Output.Ty
+def Ty.lean : Ty → IR.Ty
   | .bigint => .int
   | .number => .number
   | .boolean => .bool
@@ -180,12 +180,12 @@ def Ctx.knownStructs (c : Ctx) : List StructInfo :=
 /-- A translated expression. `prop` is true when the code is a Lean `Prop`,
 not a `Bool`. -/
 structure Code where
-  code : Output.Expr
+  code : IR.Expr
   prop : Bool
   type : Ty
 
 /-- In value position, a `Prop` becomes a `Bool` with `decide`. -/
-def Code.value (c : Code) : Output.Expr :=
+def Code.value (c : Code) : IR.Expr :=
   if c.prop then .decide c.code else c.code
 
 /-- What a statement list ends in: a `return`, or the tuple of changed locals. -/
@@ -443,13 +443,13 @@ def isNonzeroBigintLiteral : Expr → Bool
   | .bigint _ text => (bigintValue? text).any (· != 0)
   | _ => false
 
-def numberTest? : String → Option Output.NumberTest
+def numberTest? : String → Option IR.NumberTest
   | "isSafeInteger" => some .isSafeInteger
   | "isNaN" => some .isNaN
   | "isFinite" => some .isFinite
   | _ => none
 
-def numberConstant? : String → Option Output.NumberConstant
+def numberConstant? : String → Option IR.NumberConstant
   | "NaN" => some .nan
   | "Infinity" => some .posInf
   | _ => none
@@ -472,14 +472,14 @@ already translated. `r` is the right operand, which `/` and `%` read. -/
 def translateOperator (s : Span) (op : BinOp) (r : Expr) (a b : Code) : TM Code := do
   let bothBigInt := a.type == .bigint && b.type == .bigint
   let bothNumber := a.type == .number && b.type == .number
-  let call (op : Output.NumberOp) (x y : Code) (type : Ty) : Code :=
+  let call (op : IR.NumberOp) (x y : Code) (type : Ty) : Code :=
     ⟨.numberOp op x.value y.value, false, type⟩
-  let arithmetic (bigintOp : Output.IntOp) (numberOp : Output.NumberOp) : TM Code := do
+  let arithmetic (bigintOp : IR.IntOp) (numberOp : IR.NumberOp) : TM Code := do
     if bothNumber then return call numberOp a b .number
     unless bothBigInt do reject s "arithmetic needs two bigints or two numbers"
     return ⟨.intOp bigintOp a.value b.value, false, .bigint⟩
   -- `a > b` is `b < a`, and `a >= b` is `b <= a`.
-  let compare (bigintOp : Output.Order) (numberOp : Output.NumberOp) (swap : Bool) : TM Code := do
+  let compare (bigintOp : IR.Order) (numberOp : IR.NumberOp) (swap : Bool) : TM Code := do
     if bothNumber then
       return if swap then call numberOp b a .boolean else call numberOp a b .boolean
     unless bothBigInt do reject s "ordering needs two bigints or two numbers"
@@ -497,7 +497,7 @@ def translateOperator (s : Span) (op : BinOp) (r : Expr) (a b : Code) : TM Code 
   -- bigint `/` truncates toward zero and `%` takes the sign of the dividend:
   -- Lean's `Int.tdiv` and `Int.tmod`. JS throws on a zero divisor, where Lean
   -- gives a value, so the divisor must be a nonzero literal.
-  let divide (operation : Output.Division) : TM Code := do
+  let divide (operation : IR.Division) : TM Code := do
     unless bothBigInt && isNonzeroBigintLiteral r do
       reject s "'/' and '%' need two bigints and a nonzero bigint literal divisor (JS throws on 0n)"
     requireFeature s .bigintDivision
@@ -603,7 +603,7 @@ def translateArray (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (e
 
 /-- The elements of an array literal, and their type. -/
 def translateElements (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (elems : List Expr) :
-    TM (List Output.Expr × Ty) := do
+    TM (List IR.Expr × Ty) := do
   let fuel + 1 := fuel | tooDeep
   let expectedElem := match expected with
     | some (.array t) => some t
@@ -650,7 +650,7 @@ def translateObject (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (
   let info ← orReject (ctx.knownStructs.find? (·.ref == ref)) s notStructMessage
   let structName := ref.name
   -- The keys seen so far, and the fields translated so far.
-  let (seen, parts) ← props.foldlM (init := (([] : List String), ([] : List (String × Output.Expr))))
+  let (seen, parts) ← props.foldlM (init := (([] : List String), ([] : List (String × IR.Expr))))
     fun (seen, parts) p => do
       let (key, value, span) ← match p with
         | .shorthand ps name => pure (name, Expr.ident ps name, ps)
@@ -702,14 +702,14 @@ end
 
 /-! ### Statements -/
 
-def assignOps? : AssignOp → Option (Output.IntOp × Output.NumberOp)
+def assignOps? : AssignOp → Option (IR.IntOp × IR.NumberOp)
   | .add => some (.add, .add)
   | .sub => some (.sub, .sub)
   | .mul => some (.mul, .mul)
   | _ => none
 
 /-- One mutation statement, as the local it changes and its new value. -/
-def translateUpdate (env : Env) (s : Span) (e : Expr) : TM (String × Output.Expr) := do
+def translateUpdate (env : Env) (s : Span) (e : Expr) : TM (String × IR.Expr) := do
   let refuse {A : Type} : TM A :=
     reject s "an expression statement must assign a let local or push to an owned array"
   match e with
@@ -743,7 +743,7 @@ def translateUpdate (env : Env) (s : Span) (e : Expr) : TM (String × Output.Exp
 mutual
 
 def translateStatements (fuel : Nat) (env : Env) (tail : Tail) (statements : List Stmt) :
-    TM Output.Body := do
+    TM IR.Body := do
   let fuel + 1 := fuel | tooDeep
   match statements with
   | [] =>
@@ -775,7 +775,7 @@ def translateStatements (fuel : Nat) (env : Env) (tail : Tail) (statements : Lis
     | _ => reject stmt.span "unsupported statement"
 
 def translateVariable (fuel : Nat) (env : Env) (s : Span) (d : VarDecl) (rest : List Stmt)
-    (tail : Tail) : TM Output.Body := do
+    (tail : Tail) : TM IR.Body := do
   let fuel + 1 := fuel | tooDeep
   let init ← orReject d.init s "declare one const or let identifier with an initializer"
   -- `const xs: Array<T> = [...]` (or `T[]`) is an owned array, which the
@@ -808,7 +808,7 @@ def translateVariable (fuel : Nat) (env : Env) (s : Span) (d : VarDecl) (rest : 
   return .let d.name code.value (← translateStatements fuel env' tail rest)
 
 def translateIf (fuel : Nat) (env : Env) (s : Span) (test : Expr) (thenBranch : Stmt)
-    (elseBranch : Option Stmt) (rest : List Stmt) (tail : Tail) : TM Output.Body := do
+    (elseBranch : Option Stmt) (rest : List Stmt) (tail : Tail) : TM IR.Body := do
   let fuel + 1 := fuel | tooDeep
   let thenStatements := blockStatements thenBranch
   let elseStatements := (elseBranch.map blockStatements).getD []
@@ -819,7 +819,7 @@ def translateIf (fuel : Nat) (env : Env) (s : Span) (test : Expr) (thenBranch : 
     | some (name, true, value) => (env.narrow name .null, env.narrow name value)
     | some (name, false, value) => (env.narrow name value, env.narrow name .null)
     | none => (env, env)
-  let branch (whenTrue whenFalse : Output.Body) : TM Output.Body := do
+  let branch (whenTrue whenFalse : IR.Body) : TM IR.Body := do
     match nullTest with
     | none =>
       let c ← translateExpr (← fuelLimit) env none test
@@ -847,7 +847,7 @@ def translateIf (fuel : Nat) (env : Env) (s : Span) (test : Expr) (thenBranch : 
   return .letState names (← branch whenTrue whenFalse) (← translateStatements fuel env tail rest)
 
 def translateForOf (fuel : Nat) (env : Env) (s : Span) (kind : VarKind) (element : String)
-    (iterable : Expr) (body : Stmt) (rest : List Stmt) (tail : Tail) : TM Output.Body := do
+    (iterable : Expr) (body : Stmt) (rest : List Stmt) (tail : Tail) : TM IR.Body := do
   let fuel + 1 := fuel | tooDeep
   unless kind == .const do reject s "a loop must be 'for (const x of xs)'"
   let bodyStatements := blockStatements body
@@ -858,7 +858,7 @@ def translateForOf (fuel : Nat) (env : Env) (s : Span) (kind : VarKind) (element
   let .array elemType := items.type | reject iterable.span "a loop must run over an array"
   let bodyEnv ← declare env s element .const elemType
   let bodyOut ← translateStatements fuel bodyEnv (.state names) bodyStatements
-  let info : Output.LoopInfo :=
+  let info : IR.LoopInfo :=
     { span := s, elem := elemType.lean,
       stateTypes := names.filterMap fun n => (env.lookup n).map (·.type.lean),
       scope := (env.locals.filter fun l => !names.contains l.name).map fun l => (l.name, l.type.lean) }
@@ -889,7 +889,7 @@ def declareTopLevel (s : Span) (name : String) : TM Unit := do
     reject s s!"'{name}' would hide the global {name}; choose another name"
 
 def translateInterface (s : Span) (exported : Bool) (name : String) (fields : List Field) :
-    TM Output.Decl := do
+    TM IR.Decl := do
   let name ← checkName s name
   declareTopLevel s name
   let infos ← isolated <| fields.foldlM (init := ([] : List (String × Ty))) fun infos f => do
@@ -902,14 +902,14 @@ def translateInterface (s : Span) (exported : Bool) (name : String) (fields : Li
   return .struct name (infos.map fun (field, type) => (field, type.lean))
 
 def translateFunction (s : Span) (exported : Bool) (name : String) (params : List Param)
-    (returnType : Option TypeExpr) (body : Stmt) : TM Output.Decl := do
+    (returnType : Option TypeExpr) (body : Stmt) : TM IR.Decl := do
   let some returnType := returnType
     | reject s "functions must be named, typed, non-generic and synchronous"
   let name ← checkName s name
   declareTopLevel s name
   -- The scope of the body, and the parameters in Lean and as types.
   let (env, leanParams, types) ← isolated <| params.foldlM
-    (init := (({ functions := (← get).functions } : Env), ([] : List (String × Output.Ty)), ([] : List Ty)))
+    (init := (({ functions := (← get).functions } : Env), ([] : List (String × IR.Ty)), ([] : List Ty)))
     fun (env, leanParams, types) p => do
       let type ← orReject p.type p.span "parameters must be plain, typed identifiers"
       let paramName ← checkLocalName p.span p.name
@@ -1041,7 +1041,7 @@ def translateImport (s : Span) (names : List ImportName) (source : String) : TM 
       modify fun c => { c with functions := c.functions ++ [{ fn with exported := false }] }
 
 /-- One declaration: an output declaration, or none for an import. -/
-def translateDecl : Decl → TM (Option Output.Decl)
+def translateDecl : Decl → TM (Option IR.Decl)
   | .import s names source => do translateImport s names source; return none
   | .interface s exported name fields => some <$> translateInterface s exported name fields
   | .function s exported name params ret body =>
@@ -1051,7 +1051,7 @@ def translateDecl : Decl → TM (Option Output.Decl)
 /-- The declarations of `m`, translated. This is the translator as a function
 from one syntax tree to another: `translate` parses the source before it and
 prints the result after it. -/
-def translateDecls (m : Module) : TM (List Output.Decl) := do
+def translateDecls (m : Module) : TM (List IR.Decl) := do
   return (← m.decls.mapM translateDecl).filterMap id
 
 /-- What the file exports: its own exported functions and interfaces. -/
@@ -1093,10 +1093,10 @@ def importedFiles (file : String) (m : Module) : List String :=
 
 /-- Parse and translate `source`, the TypeScript file `file`, which may import
 from the files `deps`: the parsed module, the names that the printer needs,
-the output tree, and what the file exports. -/
+the Tolean IR, and what the file exports. -/
 def translateFile (file source : String) (target : Edition := .default)
     (deps : List (String × Dependency) := []) :
-    Except String (Module × Output.Names × List Output.Decl × Interface) := do
+    Except String (Module × IR.Names × List IR.Decl × Interface) := do
   let m ← (parse source target).mapError (·.render file)
   let src := source.toList.toArray
   -- Every identifier in the source, at any level. A Lean name in this list is
@@ -1111,8 +1111,8 @@ def translateFile (file source : String) (target : Edition := .default)
   -- A file that imports from a generic file is generic too, so that it has a
   -- number type to pass.
   let usesNumber := moduleUsesNumber m || imported.any (·.2.interface.usesNumber)
-  let names : Output.Names :=
-    { clashes := Output.leanNames.map (·.1) |>.filter idents.contains,
+  let names : IR.Names :=
+    { clashes := IR.leanNames.map (·.1) |>.filter idents.contains,
       numberVar := numberVar.getD "N", usesNumber, file,
       -- Every file before this one, not only the ones it imports: a type can
       -- reach it through the field types of an imported interface.
@@ -1126,9 +1126,9 @@ def translateFile (file source : String) (target : Edition := .default)
   | .ok decls ctx' => return (m, names, decls, ctx'.interface usesNumber names.numberVar)
 
 /-- Parse and translate `source`, the TypeScript file `file`: the parsed
-module, the names that the printer needs, and the output tree. -/
+module, the names that the printer needs, and the Tolean IR. -/
 def translateTree (file source : String) (target : Edition := .default) :
-    Except String (Module × Output.Names × List Output.Decl) := do
+    Except String (Module × IR.Names × List IR.Decl) := do
   let (m, names, decls, _) ← translateFile file source target
   return (m, names, decls)
 
@@ -1157,7 +1157,7 @@ def translateWith (file source ns : String) (target : Edition := .default)
   -- The printer writes a declaration of another file with that file's
   -- namespace, so it must know the file. The translator only names files it
   -- sees, and this check keeps a later change from printing a bare name.
-  if let some r := (decls.flatMap Output.Decl.refs).find? fun r =>
+  if let some r := (decls.flatMap IR.Decl.refs).find? fun r =>
       r.file != file && (deps.lookup r.file).isNone then
     throw s!"{file}: the output names '{r.name}' of '{r.file}', a file that it does not see"
   let imports := (importedFiles file m).filterMap fun f => (deps.lookup f).map (s!"import {·.module}")

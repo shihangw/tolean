@@ -1,9 +1,11 @@
-# Plan: a shared output core and shared monad pieces
+# Plan: a shared Tolean IR and shared monad pieces
 
 **Status:** planned, not built · **Date:** 2026-10-29
 
 Today only TypeScript has the parts that let Lean prove a translator. It has
-an output tree, an evaluator for that tree, an interpreter for the source,
+a [Tolean IR](../decisions/tolean-ir.md), which is the Lean code that the
+translator writes as Lean data. It also has an evaluator for the IR, an
+interpreter for the source,
 `program_sound` and certificates. The Go and SQL translators build strings,
 and they use `partial def`, so Lean cannot reason about them. When TypeScript
 gains effects, its output stops being plain functions and becomes code in a
@@ -14,7 +16,7 @@ them again.
 
 The [effects plan](effects.md) decides what a library call may do, through
 tags such as `observe` and `fails`, and how proofs assume it. This plan is
-about the layer underneath: how the output tree, its evaluator and the proofs
+about the layer underneath: how the IR, its evaluator and the proofs
 represent those effects.
 
 ## What every language shares
@@ -24,10 +26,10 @@ that describe Lean code do not depend on the source language.
 
 | Part | What it is | Today |
 |---|---|---|
-| Pure core of the output tree | Integers, booleans, strings, `if`, `let`, structures, lists and `List.foldl` | `tolean/TypeScript/Output.lean`, for TypeScript only |
-| Its printer | One tree, printed in one way, so there is one printer to trust or certify | Part of `Output.lean` |
-| Its evaluator | The meaning of the tree. It becomes generic over the value type, so that Go can use `int64` and SQL can use its own values and three-valued logic. | `Output/Eval.lean`, over the TypeScript interpreter's `Val N` |
-| Proof plumbing | `Env` and its lemmas, fuel, the encode and decode pattern, `link_tac`, `runFold_foldl`, a lemma of the shape of `decls_sound`, and kernel-decidable equality on trees | `Env` is in `tolean/TypeScript/Spec/Eval.lean`, and the rest is under `tolean/TypeScript/Proof/` |
+| Pure core of the IR | Integers, booleans, strings, `Option`, `if`, `let`, structures, lists and `List.foldl`. Each language adds its own constructs at one extension point per layer, such as JavaScript numbers for TypeScript. | `tolean/TypeScript/IR.lean`, for TypeScript only |
+| Its printer | One IR, printed in one way, so there is one printer to trust or certify. Printing through `Lean.Syntax` is to try. | Part of `IR.lean` |
+| Its evaluator | The meaning of the IR. It becomes generic over the value type, so that Go can use `int64` and SQL can use its own values and three-valued logic. | `IR/Eval.lean`, over the TypeScript interpreter's `Val N` |
+| Proof plumbing | `Env` and its lemmas, fuel, the encode and decode pattern, `link_tac`, `runFold_foldl`, a lemma of the shape of `decls_sound`, and kernel-decidable equality on the IR | `Env` is in `tolean/TypeScript/Spec/Eval.lean`, and the rest is under `tolean/TypeScript/Proof/` |
 | Certificate generator | The layout of a certificate, and `chars!` | `tolean/TypeScript/Certify.lean` and `Certify/`, with `chars!` in `Syntax/Parser.lean` |
 | Lexer side of the round trip | `lexChars_render`, `Laid` and `NoBreak` are about tokens and lines, not about TypeScript | `tolean/TypeScript/Syntax/` |
 
@@ -90,20 +92,24 @@ TypeScript store must be a heap, which Aeneas never needs to model.
 Each step ends with all checks green, and with no change to the output of
 code that has no effects.
 
-1. Give TypeScript state and exceptions. Add them to the output tree, to its
+1. Split the Tolean IR into a shared core in `tolean/IR/` and a TypeScript
+   extension for JavaScript numbers and `null`. The printer and the
+   evaluator get a hook for each language's constructs. The output of every
+   corpus file stays the same, byte for byte.
+2. Give TypeScript state and exceptions. Add them to the IR, to its
    evaluator and to the interpreter, and extend `program_sound` and
    certificates to cover them. These two pieces are what most code needs
    first.
-2. Move the `EStateM` lemmas to a shared module, and add the lemmas for the
+3. Move the `EStateM` lemmas to a shared module, and add the lemmas for the
    state and exception pieces next to them.
-3. Make the Go translator total, and have it build an output tree on the
-   same pieces. Give Go an interpreter for its subset.
-4. Take the shared parts out of the TypeScript code, now that Go uses them
-   too: the pure core of the output tree, its printer, its evaluator with the
-   value type as a parameter, and the proof plumbing. Taking them out before
-   a second language uses them would fit them to TypeScript alone.
-5. Add the piece for external calls, and move Go's interface calls onto it.
-6. Do the same for SQL.
+4. Make the Go translator total, and have it build the Tolean IR, with a Go
+   extension for `int64` wrapping. Give Go an interpreter for its subset.
+5. Take the rest of the shared parts out of the TypeScript code, now that Go
+   uses them too: the evaluator with the value type as a parameter, and the
+   proof plumbing. Taking them out before a second language uses them would
+   fit them to TypeScript alone.
+6. Add the piece for external calls, and move Go's interface calls onto it.
+7. Do the same for SQL.
 
 ## Open questions
 
@@ -113,7 +119,7 @@ code that has no effects.
   the classes stay the interface, the pieces give the instances, and a
   certificate is about the concrete instance. Does that keep the proofs fast
   enough?
-- Should the output tree have a fixed set of effect nodes, or one point where
-  each language adds its own?
-- How should loops that may not end appear in the output: with fuel, as they
+- Should the IR have a fixed set of effect nodes in its core, or should each
+  language add its effects at the extension point, as it adds its values?
+- How should loops that may not end appear in the IR: with fuel, as they
   do now, or with a `div` result as in Aeneas?

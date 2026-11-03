@@ -13,7 +13,7 @@ changes quickly, so check its repository before you rely on a detail here.
 
 ```
 Aeneas:  Rust ──rustc + Charon──▶ LLBC ──Aeneas (OCaml)──▶ Lean functions in a Result monad
-Tolean:  TypeScript ──Tolean parser (Lean)──▶ syntax tree ──translator (Lean)──▶ output tree ──printer──▶ plain Lean functions
+Tolean:  TypeScript ──Tolean parser (Lean)──▶ syntax tree ──translator (Lean)──▶ Tolean IR ──printer──▶ plain Lean functions
 ```
 
 Charon reads a crate through `rustc` and writes it as LLBC, the low-level
@@ -22,8 +22,10 @@ Aeneas then runs LLBC symbolically and writes Lean, and it can also write
 F*, Rocq and HOL4.
 
 Tolean does every step in Lean. Its parser reads the TypeScript source, and
-its translator builds the output as a syntax tree. A printer then writes that
-tree as Lean text.
+its translator builds the [Tolean IR](decisions/tolean-ir.md), which is the
+Lean code it writes as Lean data. A printer then writes the IR as Lean text.
+LLBC sits on the source side of the translation, and the Tolean IR sits on
+the Lean side.
 
 ## Side by side
 

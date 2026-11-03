@@ -34,17 +34,17 @@ printer that wrote `program` need not be trusted. -/
 theorem program_parsed : tolean.TypeScript.Syntax.parseChars sourceChars .es2024 = Except.ok program :=
   tolean.TypeScript.Syntax.parseChars_eq_of_parsesTo (by decide +kernel)
 
-/-- The output tree, as the translator gives it for the program. -/
-def decls : List tolean.TypeScript.Output.Decl :=
-  [tolean.TypeScript.Output.Decl.function
+/-- The Tolean IR, as the translator gives it for the program. -/
+def decls : List tolean.TypeScript.IR.Decl :=
+  [tolean.TypeScript.IR.Decl.function
    "inc"
-   [("x", tolean.TypeScript.Output.Ty.int)]
-   (tolean.TypeScript.Output.Ty.int)
-   (tolean.TypeScript.Output.Body.value
-     (tolean.TypeScript.Output.Expr.intOp
-       (tolean.TypeScript.Output.IntOp.add)
-       (tolean.TypeScript.Output.Expr.var "x")
-       (tolean.TypeScript.Output.Expr.int 1)))]
+   [("x", tolean.TypeScript.IR.Ty.int)]
+   (tolean.TypeScript.IR.Ty.int)
+   (tolean.TypeScript.IR.Body.value
+     (tolean.TypeScript.IR.Expr.intOp
+       (tolean.TypeScript.IR.IntOp.add)
+       (tolean.TypeScript.IR.Expr.var "x")
+       (tolean.TypeScript.IR.Expr.int 1)))]
 
 /-- The state that the translator starts from. The source text serves only in
 the message of a refusal, so the start leaves it out. -/
@@ -58,7 +58,7 @@ theorem program_translated : tolean.TypeScript.Proof.translatesTo program start 
   decide +kernel
 
 theorem inc_link {N : Type} [tolean.TypeScript.JSNumber N] (x : _) :
-    tolean.TypeScript.Output.runIn (N := N) (tolean.TypeScript.Output.functionsOf [("", decls)]) ⟨"", "inc"⟩ [(Val.int x)] =
+    tolean.TypeScript.IR.runIn (N := N) (tolean.TypeScript.IR.functionsOf [("", decls)]) ⟨"", "inc"⟩ [(Val.int x)] =
       some (Val.int (src.«my-lib».Util.inc x)) := by
   link_tac [decls, Env.set_cons, Env.lookup_cons, Env.lookup_set_same, Env.lookup_set_ne, Env.set_set, Env.length_set, encList, encNull, decInt, decBool, decStr, decNum, src.«my-lib».Util.inc]
 

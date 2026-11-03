@@ -1,11 +1,11 @@
-import tolean.TypeScript.Output
+import tolean.TypeScript.IR
 import tolean.TypeScript.Spec.Eval
 
 /-!
-The meaning of the translator's output tree, as an evaluator over the values
+The meaning of the Tolean IR, as an evaluator over the values
 of the interpreter in `Spec/Eval.lean`.
 
-Each constructor of `Output.Expr` and `Output.Body` is one form of Lean code.
+Each constructor of `IR.Expr` and `IR.Body` is one form of Lean code.
 The evaluator gives it the value that the printed Lean computes, written as a
 JavaScript value: an `Int` is `Val.int`, `none` is `Val.null`, `some v` is the
 value of `v`, a list is `Val.list`, and a structure is `Val.obj` with its
@@ -19,7 +19,7 @@ what the printed Lean means, and to give a value where the printed Lean does.
 A certificate checks that for its file (`Proof/Link.lean`), so a certified
 file does not trust this evaluator.
 -/
-namespace tolean.TypeScript.Output
+namespace tolean.TypeScript.IR
 
 open tolean.TypeScript.Eval (Val Env Outcome)
 
@@ -241,4 +241,4 @@ def runIn (fs : List (DeclRef × List String × Body)) (key : DeclRef) (args : L
   | Outcome.ret v => some v
   | Outcome.normal _ => none
 
-end tolean.TypeScript.Output
+end tolean.TypeScript.IR

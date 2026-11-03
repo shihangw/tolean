@@ -1,13 +1,13 @@
 import tolean.TypeScript.EStateM
 import tolean.TypeScript.Translate
-import tolean.TypeScript.Output.Eval
+import tolean.TypeScript.IR.Eval
 
 /-!
 The translation of an expression means what the expression means.
 
 `expr_sound` states it for the expression functions of the translator: when
 the translator gives code for an expression, and the code evaluates to a
-value in the output's evaluator, the interpreter gives the same value for the
+value in the IR's evaluator, the interpreter gives the same value for the
 expression. The two environments must agree on every name, and a name outside
 the translator's scope must be unbound, so that `NaN` and `Number` are the
 globals.
@@ -87,35 +87,35 @@ def callS (p : Eval.Program) (fuel : Nat) (key : DeclRef) (vs : List (Val N)) : 
     | .normal _ => none
 
 /-- A call of the function `key` of the output, as its evaluator runs it. -/
-def callO (fs : List (DeclRef × List String × Output.Body)) (fuel : Nat) (key : DeclRef)
+def callO (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat) (key : DeclRef)
     (vs : List (Val N)) : Option (Val N) :=
   match fuel with
   | 0 => none
   | fuel + 1 => do
     let (params, body) ← fs.lookup key
     if params.length != vs.length then none
-    match ← Output.Body.exec fs fuel (params.zip vs).reverse body with
+    match ← IR.Body.exec fs fuel (params.zip vs).reverse body with
     | .ret v => some v
     | .normal _ => none
 
 /-- Every call that gives a value in the output gives it in the interpreter. -/
-def CallsAgree (p : Eval.Program) (fs : List (DeclRef × List String × Output.Body)) (fuel : Nat) :
+def CallsAgree (p : Eval.Program) (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat) :
     Prop :=
   ∀ key vs v, callO (N := N) fs fuel key vs = some v → callS p fuel key vs = some v
 
 /-! ### The statement -/
 
-variable (m : Eval.Scope) (fs : List (DeclRef × List String × Output.Body)) (fuel : Nat)
+variable (m : Eval.Scope) (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
 
 /-- The output code `out` means what the expression `e` means. -/
-def Sim (env : Translate.Env) (e : Expr) (out : Output.Expr) : Prop :=
+def Sim (env : Translate.Env) (e : Expr) (out : IR.Expr) : Prop :=
   ∀ (ρs ρo : Eval.Env N) v, Agree ρs ρo → Scoped m env ρs →
-    Output.Expr.eval fs fuel ρo out = some v → Eval.eval m fuel ρs e = some v
+    IR.Expr.eval fs fuel ρo out = some v → Eval.eval m fuel ρs e = some v
 
 /-- The output codes `outs` mean what the expressions `es` mean. -/
-def SimList (env : Translate.Env) (es : List Expr) (outs : List Output.Expr) : Prop :=
+def SimList (env : Translate.Env) (es : List Expr) (outs : List IR.Expr) : Prop :=
   ∀ (ρs ρo : Eval.Env N) vs, Agree ρs ρo → Scoped m env ρs →
-    Output.Expr.evalList fs fuel ρo outs = some vs → Eval.evalList m fuel ρs es = some vs
+    IR.Expr.evalList fs fuel ρo outs = some vs → Eval.evalList m fuel ρs es = some vs
 
 theorem isInfinity_eq_true {e : Expr} (h : e.isInfinity = true) : ∃ s, e = .ident s "Infinity" := by
   unfold Expr.isInfinity at h
@@ -153,167 +153,167 @@ theorem eval_neg (sp : Span) (arg : Expr) (ρ : Eval.Env N) (v : Val N)
       | (intro _ hc; cases hc)
       | (rw [h]; cases v <;> simp [negVal])
 
-/-! ### What the output's evaluator says, one form at a time -/
+/-! ### What the IR's evaluator says, one form at a time -/
 
 section Inversion
 
 variable {ρ : Eval.Env N} {v : Val N}
 
-theorem out_not {p : Output.Expr} (h : Output.Expr.eval fs fuel ρ (.not p) = some v) :
-    ∃ b, Output.Expr.eval fs fuel ρ p = some (.bool b) ∧ v = .bool !b := by
-  simp only [Output.Expr.eval] at h
-  cases hx : Output.Expr.eval fs fuel ρ p with
+theorem out_not {p : IR.Expr} (h : IR.Expr.eval fs fuel ρ (.not p) = some v) :
+    ∃ b, IR.Expr.eval fs fuel ρ p = some (.bool b) ∧ v = .bool !b := by
+  simp only [IR.Expr.eval] at h
+  cases hx : IR.Expr.eval fs fuel ρ p with
   | none => simp [hx] at h
   | some w => cases w <;> simp_all
 
-theorem out_propNot {p : Output.Expr} (h : Output.Expr.eval fs fuel ρ (.propNot p) = some v) :
-    ∃ b, Output.Expr.eval fs fuel ρ p = some (.bool b) ∧ v = .bool !b := by
-  simp only [Output.Expr.eval] at h
-  cases hx : Output.Expr.eval fs fuel ρ p with
+theorem out_propNot {p : IR.Expr} (h : IR.Expr.eval fs fuel ρ (.propNot p) = some v) :
+    ∃ b, IR.Expr.eval fs fuel ρ p = some (.bool b) ∧ v = .bool !b := by
+  simp only [IR.Expr.eval] at h
+  cases hx : IR.Expr.eval fs fuel ρ p with
   | none => simp [hx] at h
   | some w => cases w <;> simp_all
 
-theorem out_neg {a : Output.Expr} (h : Output.Expr.eval fs fuel ρ (.neg a) = some v) :
-    ∃ i, Output.Expr.eval fs fuel ρ a = some (.int i) ∧ v = .int (-i) := by
-  simp only [Output.Expr.eval] at h
-  cases hx : Output.Expr.eval fs fuel ρ a with
+theorem out_neg {a : IR.Expr} (h : IR.Expr.eval fs fuel ρ (.neg a) = some v) :
+    ∃ i, IR.Expr.eval fs fuel ρ a = some (.int i) ∧ v = .int (-i) := by
+  simp only [IR.Expr.eval] at h
+  cases hx : IR.Expr.eval fs fuel ρ a with
   | none => simp [hx] at h
   | some w => cases w <;> simp_all
 
-theorem out_numberNeg {a : Output.Expr} (h : Output.Expr.eval fs fuel ρ (.numberNeg a) = some v) :
-    ∃ n, Output.Expr.eval fs fuel ρ a = some (.num n) ∧ v = .num (JSNumber.neg n) := by
-  simp only [Output.Expr.eval] at h
-  cases hx : Output.Expr.eval fs fuel ρ a with
+theorem out_numberNeg {a : IR.Expr} (h : IR.Expr.eval fs fuel ρ (.numberNeg a) = some v) :
+    ∃ n, IR.Expr.eval fs fuel ρ a = some (.num n) ∧ v = .num (JSNumber.neg n) := by
+  simp only [IR.Expr.eval] at h
+  cases hx : IR.Expr.eval fs fuel ρ a with
   | none => simp [hx] at h
   | some w => cases w <;> simp_all
 
-theorem out_ite {c a b : Output.Expr} (h : Output.Expr.eval fs fuel ρ (.ite c a b) = some v) :
-    ∃ t, Output.Expr.eval fs fuel ρ c = some (.bool t) ∧
-      (if t then Output.Expr.eval fs fuel ρ a else Output.Expr.eval fs fuel ρ b) = some v := by
-  simp only [Output.Expr.eval] at h
-  cases hx : Output.Expr.eval fs fuel ρ c with
+theorem out_ite {c a b : IR.Expr} (h : IR.Expr.eval fs fuel ρ (.ite c a b) = some v) :
+    ∃ t, IR.Expr.eval fs fuel ρ c = some (.bool t) ∧
+      (if t then IR.Expr.eval fs fuel ρ a else IR.Expr.eval fs fuel ρ b) = some v := by
+  simp only [IR.Expr.eval] at h
+  cases hx : IR.Expr.eval fs fuel ρ c with
   | none => simp [hx] at h
   | some w => cases w <;> simp_all
 
-theorem out_numberTest {t : Output.NumberTest} {a : Output.Expr}
-    (h : Output.Expr.eval fs fuel ρ (.numberTest t a) = some v) :
-    ∃ n, Output.Expr.eval fs fuel ρ a = some (.num n) ∧ v = .bool (t.apply n) := by
-  simp only [Output.Expr.eval] at h
-  cases hx : Output.Expr.eval fs fuel ρ a with
+theorem out_numberTest {t : IR.NumberTest} {a : IR.Expr}
+    (h : IR.Expr.eval fs fuel ρ (.numberTest t a) = some v) :
+    ∃ n, IR.Expr.eval fs fuel ρ a = some (.num n) ∧ v = .bool (t.apply n) := by
+  simp only [IR.Expr.eval] at h
+  cases hx : IR.Expr.eval fs fuel ρ a with
   | none => simp [hx] at h
   | some w => cases w <;> simp_all
 
-theorem out_intOp {op : Output.IntOp} {a b : Output.Expr}
-    (h : Output.Expr.eval fs fuel ρ (.intOp op a b) = some v) :
-    ∃ x y, Output.Expr.eval fs fuel ρ a = some (.int x) ∧ Output.Expr.eval fs fuel ρ b = some (.int y) ∧
+theorem out_intOp {op : IR.IntOp} {a b : IR.Expr}
+    (h : IR.Expr.eval fs fuel ρ (.intOp op a b) = some v) :
+    ∃ x y, IR.Expr.eval fs fuel ρ a = some (.int x) ∧ IR.Expr.eval fs fuel ρ b = some (.int y) ∧
       v = .int (op.apply x y) := by
-  simp only [Output.Expr.eval] at h
-  cases hx : Output.Expr.eval fs fuel ρ a with
+  simp only [IR.Expr.eval] at h
+  cases hx : IR.Expr.eval fs fuel ρ a with
   | none => simp [hx] at h
   | some w =>
-    cases hy : Output.Expr.eval fs fuel ρ b with
+    cases hy : IR.Expr.eval fs fuel ρ b with
     | none => cases w <;> simp_all
     | some u => cases w <;> cases u <;> simp_all
 
-theorem out_order {op : Output.Order} {a b : Output.Expr}
-    (h : Output.Expr.eval fs fuel ρ (.order op a b) = some v) :
-    ∃ x y, Output.Expr.eval fs fuel ρ a = some (.int x) ∧ Output.Expr.eval fs fuel ρ b = some (.int y) ∧
+theorem out_order {op : IR.Order} {a b : IR.Expr}
+    (h : IR.Expr.eval fs fuel ρ (.order op a b) = some v) :
+    ∃ x y, IR.Expr.eval fs fuel ρ a = some (.int x) ∧ IR.Expr.eval fs fuel ρ b = some (.int y) ∧
       v = .bool (op.apply x y) := by
-  simp only [Output.Expr.eval] at h
-  cases hx : Output.Expr.eval fs fuel ρ a with
+  simp only [IR.Expr.eval] at h
+  cases hx : IR.Expr.eval fs fuel ρ a with
   | none => simp [hx] at h
   | some w =>
-    cases hy : Output.Expr.eval fs fuel ρ b with
+    cases hy : IR.Expr.eval fs fuel ρ b with
     | none => cases w <;> simp_all
     | some u => cases w <;> cases u <;> simp_all
 
-theorem out_division {op : Output.Division} {a b : Output.Expr}
-    (h : Output.Expr.eval fs fuel ρ (.division op a b) = some v) :
-    ∃ x y, Output.Expr.eval fs fuel ρ a = some (.int x) ∧ Output.Expr.eval fs fuel ρ b = some (.int y) ∧
+theorem out_division {op : IR.Division} {a b : IR.Expr}
+    (h : IR.Expr.eval fs fuel ρ (.division op a b) = some v) :
+    ∃ x y, IR.Expr.eval fs fuel ρ a = some (.int x) ∧ IR.Expr.eval fs fuel ρ b = some (.int y) ∧
       v = .int (op.apply x y) := by
-  simp only [Output.Expr.eval] at h
-  cases hx : Output.Expr.eval fs fuel ρ a with
+  simp only [IR.Expr.eval] at h
+  cases hx : IR.Expr.eval fs fuel ρ a with
   | none => simp [hx] at h
   | some w =>
-    cases hy : Output.Expr.eval fs fuel ρ b with
+    cases hy : IR.Expr.eval fs fuel ρ b with
     | none => cases w <;> simp_all
     | some u => cases w <;> cases u <;> simp_all
 
-theorem out_numberOp {op : Output.NumberOp} {a b : Output.Expr}
-    (h : Output.Expr.eval fs fuel ρ (.numberOp op a b) = some v) :
-    ∃ x y, Output.Expr.eval fs fuel ρ a = some (.num x) ∧ Output.Expr.eval fs fuel ρ b = some (.num y) ∧
+theorem out_numberOp {op : IR.NumberOp} {a b : IR.Expr}
+    (h : IR.Expr.eval fs fuel ρ (.numberOp op a b) = some v) :
+    ∃ x y, IR.Expr.eval fs fuel ρ a = some (.num x) ∧ IR.Expr.eval fs fuel ρ b = some (.num y) ∧
       v = op.apply x y := by
-  simp only [Output.Expr.eval] at h
-  cases hx : Output.Expr.eval fs fuel ρ a with
+  simp only [IR.Expr.eval] at h
+  cases hx : IR.Expr.eval fs fuel ρ a with
   | none => simp [hx] at h
   | some w =>
-    cases hy : Output.Expr.eval fs fuel ρ b with
+    cases hy : IR.Expr.eval fs fuel ρ b with
     | none => cases w <;> simp_all
     | some u => cases w <;> cases u <;> simp_all
 
-theorem out_numberNe {a b : Output.Expr}
-    (h : Output.Expr.eval fs fuel ρ (.numberNe a b) = some v) :
-    ∃ x y, Output.Expr.eval fs fuel ρ a = some (.num x) ∧ Output.Expr.eval fs fuel ρ b = some (.num y) ∧
+theorem out_numberNe {a b : IR.Expr}
+    (h : IR.Expr.eval fs fuel ρ (.numberNe a b) = some v) :
+    ∃ x y, IR.Expr.eval fs fuel ρ a = some (.num x) ∧ IR.Expr.eval fs fuel ρ b = some (.num y) ∧
       v = .bool !(JSNumber.eq x y) := by
-  simp only [Output.Expr.eval] at h
-  cases hx : Output.Expr.eval fs fuel ρ a with
+  simp only [IR.Expr.eval] at h
+  cases hx : IR.Expr.eval fs fuel ρ a with
   | none => simp [hx] at h
   | some w =>
-    cases hy : Output.Expr.eval fs fuel ρ b with
+    cases hy : IR.Expr.eval fs fuel ρ b with
     | none => cases w <;> simp_all
     | some u => cases w <;> cases u <;> simp_all
 
-theorem out_eq {a b : Output.Expr} (h : Output.Expr.eval fs fuel ρ (.eq a b) = some v) :
-    ∃ x y t, Output.Expr.eval fs fuel ρ a = some x ∧ Output.Expr.eval fs fuel ρ b = some y ∧
-      Output.eqVal x y = some t ∧ v = .bool t := by
-  simp only [Output.Expr.eval] at h
-  cases hx : Output.Expr.eval fs fuel ρ a with
+theorem out_eq {a b : IR.Expr} (h : IR.Expr.eval fs fuel ρ (.eq a b) = some v) :
+    ∃ x y t, IR.Expr.eval fs fuel ρ a = some x ∧ IR.Expr.eval fs fuel ρ b = some y ∧
+      IR.eqVal x y = some t ∧ v = .bool t := by
+  simp only [IR.Expr.eval] at h
+  cases hx : IR.Expr.eval fs fuel ρ a with
   | none => simp [hx] at h
   | some w =>
-    cases hy : Output.Expr.eval fs fuel ρ b with
+    cases hy : IR.Expr.eval fs fuel ρ b with
     | none => simp [hx, hy] at h
     | some u =>
-      cases ht : Output.eqVal w u with
+      cases ht : IR.eqVal w u with
       | none => simp [hx, hy, ht] at h
       | some t => simp [hx, hy, ht] at h; exact ⟨w, u, t, rfl, rfl, ht, h.symm⟩
 
-theorem out_ne {a b : Output.Expr} (h : Output.Expr.eval fs fuel ρ (.ne a b) = some v) :
-    ∃ x y t, Output.Expr.eval fs fuel ρ a = some x ∧ Output.Expr.eval fs fuel ρ b = some y ∧
-      Output.eqVal x y = some t ∧ v = .bool !t := by
-  simp only [Output.Expr.eval] at h
-  cases hx : Output.Expr.eval fs fuel ρ a with
+theorem out_ne {a b : IR.Expr} (h : IR.Expr.eval fs fuel ρ (.ne a b) = some v) :
+    ∃ x y t, IR.Expr.eval fs fuel ρ a = some x ∧ IR.Expr.eval fs fuel ρ b = some y ∧
+      IR.eqVal x y = some t ∧ v = .bool !t := by
+  simp only [IR.Expr.eval] at h
+  cases hx : IR.Expr.eval fs fuel ρ a with
   | none => simp [hx] at h
   | some w =>
-    cases hy : Output.Expr.eval fs fuel ρ b with
+    cases hy : IR.Expr.eval fs fuel ρ b with
     | none => simp [hx, hy] at h
     | some u =>
-      cases ht : Output.eqVal w u with
+      cases ht : IR.eqVal w u with
       | none => simp [hx, hy, ht] at h
       | some t => simp [hx, hy, ht] at h; exact ⟨w, u, t, rfl, rfl, ht, h.symm⟩
 
-theorem out_and {a b : Output.Expr}
-    (h : Output.Expr.eval fs fuel ρ (.and a b) = some v ∨ Output.Expr.eval fs fuel ρ (.propAnd a b) = some v) :
-    ∃ x y, Output.Expr.eval fs fuel ρ a = some (.bool x) ∧ Output.Expr.eval fs fuel ρ b = some (.bool y) ∧
+theorem out_and {a b : IR.Expr}
+    (h : IR.Expr.eval fs fuel ρ (.and a b) = some v ∨ IR.Expr.eval fs fuel ρ (.propAnd a b) = some v) :
+    ∃ x y, IR.Expr.eval fs fuel ρ a = some (.bool x) ∧ IR.Expr.eval fs fuel ρ b = some (.bool y) ∧
       v = .bool (x && y) := by
   rcases h with h | h <;>
-  · simp only [Output.Expr.eval] at h
-    cases hx : Output.Expr.eval fs fuel ρ a with
+  · simp only [IR.Expr.eval] at h
+    cases hx : IR.Expr.eval fs fuel ρ a with
     | none => simp [hx] at h
     | some w =>
-      cases hy : Output.Expr.eval fs fuel ρ b with
+      cases hy : IR.Expr.eval fs fuel ρ b with
       | none => cases w <;> simp_all
       | some u => cases w <;> cases u <;> simp_all
 
-theorem out_or {a b : Output.Expr}
-    (h : Output.Expr.eval fs fuel ρ (.or a b) = some v ∨ Output.Expr.eval fs fuel ρ (.propOr a b) = some v) :
-    ∃ x y, Output.Expr.eval fs fuel ρ a = some (.bool x) ∧ Output.Expr.eval fs fuel ρ b = some (.bool y) ∧
+theorem out_or {a b : IR.Expr}
+    (h : IR.Expr.eval fs fuel ρ (.or a b) = some v ∨ IR.Expr.eval fs fuel ρ (.propOr a b) = some v) :
+    ∃ x y, IR.Expr.eval fs fuel ρ a = some (.bool x) ∧ IR.Expr.eval fs fuel ρ b = some (.bool y) ∧
       v = .bool (x || y) := by
   rcases h with h | h <;>
-  · simp only [Output.Expr.eval] at h
-    cases hx : Output.Expr.eval fs fuel ρ a with
+  · simp only [IR.Expr.eval] at h
+    cases hx : IR.Expr.eval fs fuel ρ a with
     | none => simp [hx] at h
     | some w =>
-      cases hy : Output.Expr.eval fs fuel ρ b with
+      cases hy : IR.Expr.eval fs fuel ρ b with
       | none => cases w <;> simp_all
       | some u => cases w <;> cases u <;> simp_all
 
@@ -322,37 +322,37 @@ def isNullVal : Val N → Bool
   | .null => true
   | _ => false
 
-theorem out_isNone {a : Output.Expr} (h : Output.Expr.eval fs fuel ρ (.isNone a) = some v) :
-    ∃ w, Output.Expr.eval fs fuel ρ a = some w ∧ v = .bool (isNullVal w) := by
-  simp only [Output.Expr.eval] at h
-  cases hx : Output.Expr.eval fs fuel ρ a with
+theorem out_isNone {a : IR.Expr} (h : IR.Expr.eval fs fuel ρ (.isNone a) = some v) :
+    ∃ w, IR.Expr.eval fs fuel ρ a = some w ∧ v = .bool (isNullVal w) := by
+  simp only [IR.Expr.eval] at h
+  cases hx : IR.Expr.eval fs fuel ρ a with
   | none => simp [hx] at h
   | some w => cases w <;> simp_all [isNullVal]
 
-theorem out_isSome {a : Output.Expr} (h : Output.Expr.eval fs fuel ρ (.isSome a) = some v) :
-    ∃ w, Output.Expr.eval fs fuel ρ a = some w ∧ v = .bool !(isNullVal w) := by
-  simp only [Output.Expr.eval] at h
-  cases hx : Output.Expr.eval fs fuel ρ a with
+theorem out_isSome {a : IR.Expr} (h : IR.Expr.eval fs fuel ρ (.isSome a) = some v) :
+    ∃ w, IR.Expr.eval fs fuel ρ a = some w ∧ v = .bool !(isNullVal w) := by
+  simp only [IR.Expr.eval] at h
+  cases hx : IR.Expr.eval fs fuel ρ a with
   | none => simp [hx] at h
   | some w => cases w <;> simp_all [isNullVal]
 
 end Inversion
 
 /-- The output fields `outs` mean what the properties `ps` mean. -/
-def SimFields (env : Translate.Env) (ps : List Property) (outs : List (String × Output.Expr)) : Prop :=
+def SimFields (env : Translate.Env) (ps : List Property) (outs : List (String × IR.Expr)) : Prop :=
   ∀ (ρs ρo : Eval.Env N) fvs, Agree ρs ρo → Scoped m env ρs →
-    Output.Expr.evalFields fs fuel ρo outs = some fvs → Eval.evalProps m fuel ρs ps = some fvs
+    IR.Expr.evalFields fs fuel ρo outs = some fvs → Eval.evalProps m fuel ρs ps = some fvs
 
 /-- The output field `(key, o)` means what the property `p` means: the
 interpreter gives `(key, w)` for `p` when `o` has the value `w`. -/
-def PropSim (env : Translate.Env) (p : Property) (key : String) (o : Output.Expr) : Prop :=
-  ∀ (ρs ρo : Eval.Env N) w, Agree ρs ρo → Scoped m env ρs → Output.Expr.eval fs fuel ρo o = some w →
+def PropSim (env : Translate.Env) (p : Property) (key : String) (o : IR.Expr) : Prop :=
+  ∀ (ρs ρo : Eval.Env N) w, Agree ρs ρo → Scoped m env ρs → IR.Expr.eval fs fuel ρo o = some w →
     ∀ rest, Eval.evalProps m fuel ρs (p :: rest) = (Eval.evalProps m fuel ρs rest).map ((key, w) :: ·)
 
 /-- A fold that appends one field for each property, where each field means
 what its property means, gives fields that mean what the properties mean. -/
 theorem fold_sim {env : Translate.Env} {α : Type}
-    {g : α × List (String × Output.Expr) → Property → TM (α × List (String × Output.Expr))}
+    {g : α × List (String × IR.Expr) → Property → TM (α × List (String × IR.Expr))}
     (hstep : ∀ a acc p ctx r ctx', g (a, acc) p ctx = .ok r ctx' →
       ∃ key o, r.2 = acc ++ [(key, o)] ∧ PropSim (N := N) m fs fuel env p key o) :
     ∀ (ps : List Property) (a : α) acc ctx r ctx', ps.foldlM g (a, acc) ctx = .ok r ctx' →
@@ -365,7 +365,7 @@ theorem fold_sim {env : Translate.Env} {α : Type}
     obtain ⟨rfl, -⟩ := h
     refine ⟨[], by simp, ?_⟩
     intro ρs ρo fvs _ _ hv
-    simp [Output.Expr.evalFields] at hv
+    simp [IR.Expr.evalFields] at hv
     subst hv; simp [Eval.evalProps]
   | cons p ps ih =>
     intro a acc ctx r ctx' h
@@ -377,11 +377,11 @@ theorem fold_sim {env : Translate.Env} {α : Type}
     obtain ⟨new, hnew, hsim⟩ := ih a₁ _ _ _ _ h
     refine ⟨(key, o) :: new, by simp [hnew], ?_⟩
     intro ρs ρo fvs ha hs hv
-    simp only [Output.Expr.evalFields] at hv
-    cases hx : Output.Expr.eval fs fuel ρo o with
+    simp only [IR.Expr.evalFields] at hv
+    cases hx : IR.Expr.eval fs fuel ρo o with
     | none => simp [hx] at hv
     | some w =>
-      cases hxs : Output.Expr.evalFields fs fuel ρo new with
+      cases hxs : IR.Expr.evalFields fs fuel ρo new with
       | none => simp [hx, hxs] at hv
       | some ws =>
         simp [hx, hxs] at hv
@@ -390,9 +390,9 @@ theorem fold_sim {env : Translate.Env} {α : Type}
         rfl
 
 theorem eval_value (c : Code) (ρ : Eval.Env N) :
-    Output.Expr.eval fs fuel ρ c.value = Output.Expr.eval fs fuel ρ c.code := by
+    IR.Expr.eval fs fuel ρ c.value = IR.Expr.eval fs fuel ρ c.code := by
   unfold Code.value
-  split <;> simp [Output.Expr.eval]
+  split <;> simp [IR.Expr.eval]
 
 /-- When each element's translation means what the element means, the list of
 their values means what the list of elements means. -/
@@ -407,18 +407,18 @@ theorem mapM_sim {env : Translate.Env} {f : Expr → TM Code}
     simp [List.mapM_nil] at h
     obtain ⟨rfl, -⟩ := h
     intro ρs ρo vs _ _ hv
-    simp [Output.Expr.evalList] at hv
+    simp [IR.Expr.evalList] at hv
     subst hv; simp [Eval.evalList]
   | cons e es ih =>
     intro ctx codes ctx' h
     simp [List.mapM_cons] at h
     obtain ⟨c, s₁, hc, cs, hcs, rfl⟩ := h
     intro ρs ρo vs ha hs hv
-    simp only [List.map_cons, Output.Expr.evalList] at hv
-    cases hx : Output.Expr.eval fs fuel ρo c.value with
+    simp only [List.map_cons, IR.Expr.evalList] at hv
+    cases hx : IR.Expr.eval fs fuel ρo c.value with
     | none => simp [hx] at hv
     | some x =>
-      cases hxs : Output.Expr.evalList fs fuel ρo (cs.map (·.value)) with
+      cases hxs : IR.Expr.evalList fs fuel ρo (cs.map (·.value)) with
       | none => simp [hx, hxs] at hv
       | some xs =>
         simp [hx, hxs] at hv
@@ -430,9 +430,9 @@ theorem mapM_sim {env : Translate.Env} {f : Expr → TM Code}
 
 /-- When each argument's translation means what the argument means, the list
 of their codes means what the list of arguments means. -/
-theorem zip_sim {env : Translate.Env} {g : Expr × Ty → TM Output.Expr}
+theorem zip_sim {env : Translate.Env} {g : Expr × Ty → TM IR.Expr}
     (hg : ∀ x t ctx o ctx', g (x, t) ctx = .ok o ctx' → Sim (N := N) m fs fuel env x o) :
-    ∀ (args : List Expr) (ps : List Ty) (ctx : Ctx) (vals : List Output.Expr) (ctx' : Ctx),
+    ∀ (args : List Expr) (ps : List Ty) (ctx : Ctx) (vals : List IR.Expr) (ctx' : Ctx),
       args.length = ps.length → (args.zip ps).mapM g ctx = .ok vals ctx' →
       SimList (N := N) m fs fuel env args vals := by
   intro args
@@ -442,7 +442,7 @@ theorem zip_sim {env : Translate.Env} {g : Expr × Ty → TM Output.Expr}
     simp [List.mapM_nil] at h
     obtain ⟨rfl, -⟩ := h
     intro ρs ρo vs _ _ hv
-    simp [Output.Expr.evalList] at hv
+    simp [IR.Expr.evalList] at hv
     subst hv; simp [Eval.evalList]
   | cons x xs ih =>
     intro ps ctx vals ctx' hlen h
@@ -452,11 +452,11 @@ theorem zip_sim {env : Translate.Env} {g : Expr × Ty → TM Output.Expr}
       simp [List.mapM_cons] at h
       obtain ⟨o, s₁, ho, os, hos, rfl⟩ := h
       intro ρs ρo vs ha hs hv
-      simp only [Output.Expr.evalList] at hv
-      cases hx : Output.Expr.eval fs fuel ρo o with
+      simp only [IR.Expr.evalList] at hv
+      cases hx : IR.Expr.eval fs fuel ρo o with
       | none => simp [hx] at hv
       | some w =>
-        cases hxs : Output.Expr.evalList fs fuel ρo os with
+        cases hxs : IR.Expr.evalList fs fuel ρo os with
         | none => simp [hx, hxs] at hv
         | some ws =>
           simp [hx, hxs] at hv
@@ -472,11 +472,11 @@ theorem eval_call (sp sp' : Span) (name : String) (args : List Expr) (ρ : Eval.
   rw [Eval.eval]
   cases Eval.evalList m fuel ρ args <;> cases fuel <;> cases Eval.resolve m name <;> rfl
 
-theorem out_call (key : DeclRef) (args : List Output.Expr) (ρ : Eval.Env N) :
-    Output.Expr.eval fs fuel ρ (.call key args) =
-      (Output.Expr.evalList fs fuel ρ args).bind (callO fs fuel key) := by
-  rw [Output.Expr.eval]
-  cases Output.Expr.evalList fs fuel ρ args <;> cases fuel <;> rfl
+theorem out_call (key : DeclRef) (args : List IR.Expr) (ρ : Eval.Env N) :
+    IR.Expr.eval fs fuel ρ (.call key args) =
+      (IR.Expr.evalList fs fuel ρ args).bind (callO fs fuel key) := by
+  rw [IR.Expr.eval]
+  cases IR.Expr.evalList fs fuel ρ args <;> cases fuel <;> rfl
 
 /-- An operator that evaluates both operands: not `&&`, `||` or `??`. -/
 def _root_.tolean.TypeScript.Syntax.BinOp.strict : BinOp → Bool
@@ -597,9 +597,9 @@ means, when each operand's code means what the operand means. -/
 theorem operator_sound {sp s : Span} {op : BinOp} {l r : Expr} {a b c : Code} {ctx ctx' : Ctx}
     {ρs ρo : Eval.Env N} {v : Val N}
     (h : translateOperator s op r a b ctx = .ok c ctx')
-    (hl : ∀ w, Output.Expr.eval fs fuel ρo a.code = some w → Eval.eval m fuel ρs l = some w)
-    (hr : ∀ w, Output.Expr.eval fs fuel ρo b.code = some w → Eval.eval m fuel ρs r = some w)
-    (hv : Output.Expr.eval fs fuel ρo c.code = some v) :
+    (hl : ∀ w, IR.Expr.eval fs fuel ρo a.code = some w → Eval.eval m fuel ρs l = some w)
+    (hr : ∀ w, IR.Expr.eval fs fuel ρo b.code = some w → Eval.eval m fuel ρs r = some w)
+    (hv : IR.Expr.eval fs fuel ρo c.code = some v) :
     Eval.eval m fuel ρs (.binary sp op l r) = some v := by
   unfold translateOperator at h
   cases op
@@ -648,15 +648,15 @@ theorem operator_sound {sp s : Span} {op : BinOp} {l r : Expr} {a b c : Code} {c
        rw [he ρs] at hyr
        obtain rfl : y0 = y := by simpa using hyr
        rw [hl _ hx, hr _ hy]
-       simp [Eval.binary, hy0, Output.Division.apply])
+       simp [Eval.binary, hy0, IR.Division.apply])
     | (obtain ⟨x, y, t, hx, hy, ht, rfl⟩ := out_eq fs fuel hv
        rw [eval_value] at hx hy
        rw [hl _ hx, hr _ hy]
-       cases x <;> cases y <;> simp_all [Output.eqVal, Eval.binary, Eval.strictEq])
+       cases x <;> cases y <;> simp_all [IR.eqVal, Eval.binary, Eval.strictEq])
     | (obtain ⟨x, y, t, hx, hy, ht, rfl⟩ := out_ne fs fuel hv
        rw [eval_value] at hx hy
        rw [hl _ hx, hr _ hy]
-       cases x <;> cases y <;> simp_all [Output.eqVal, Eval.binary, Eval.strictEq])
+       cases x <;> cases y <;> simp_all [IR.eqVal, Eval.binary, Eval.strictEq])
 
 theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
     (∀ env exp e ctx c ctx', translateExpr F env exp e ctx = .ok c ctx' →
@@ -691,7 +691,7 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
         simp at h
         obtain ⟨n, ⟨hv, -⟩, rfl⟩ := h
         intro ρs ρo v _ _ hv'
-        simp [Output.Expr.eval] at hv'
+        simp [IR.Expr.eval] at hv'
         subst hv'
         simp [Eval.eval]; simpa [bigintValue?] using hv
       | number sp text =>
@@ -699,26 +699,26 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
         simp at h
         obtain ⟨n, ⟨hv, -⟩, rfl⟩ := h
         intro ρs ρo v _ _ hv'
-        simp [Output.Expr.eval] at hv'
+        simp [IR.Expr.eval] at hv'
         subst hv'
         simp [Eval.eval]; exact ⟨n, by simpa [safeIntegerValue?] using hv, rfl⟩
       | null sp =>
         simp [translateExpr] at h
         obtain ⟨rfl, -⟩ := h
         intro ρs ρo v _ _ hv'
-        simp [Output.Expr.eval] at hv'
+        simp [IR.Expr.eval] at hv'
         subst hv'; simp [Eval.eval]
       | bool sp b =>
         simp [translateExpr] at h
         obtain ⟨rfl, -⟩ := h
         intro ρs ρo v _ _ hv'
-        simp [Output.Expr.eval] at hv'
+        simp [IR.Expr.eval] at hv'
         subst hv'; simp [Eval.eval]
       | string sp str =>
         simp [translateExpr] at h
         obtain ⟨rfl, -⟩ := h
         intro ρs ρo v _ _ hv'
-        simp [Output.Expr.eval] at hv'
+        simp [IR.Expr.eval] at hv'
         subst hv'; simp [Eval.eval]
       | ident sp name =>
         simp only [translateExpr] at h
@@ -732,12 +732,12 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
             simp [hk] at h
             obtain ⟨rfl, -⟩ := h
             have hnone : ρs.lookup name = none := hs.none (by simp [Translate.Env.has, hl])
-            simp [Output.Expr.eval] at hv'
+            simp [IR.Expr.eval] at hv'
             subst hv'
             unfold numberConstant? at hk
             split at hk
-            · cases hk; simp only [Eval.eval, hnone]; simp [Output.NumberConstant.value]
-            · cases hk; simp only [Eval.eval, hnone]; simp [Output.NumberConstant.value]
+            · cases hk; simp only [Eval.eval, hnone]; simp [IR.NumberConstant.value]
+            · cases hk; simp only [Eval.eval, hnone]; simp [IR.NumberConstant.value]
             · cases hk
         | some l =>
           simp only [hl] at h
@@ -748,7 +748,7 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
             · simp at h
             · simp at h; rw [← h.1]
           rw [hc] at hv'
-          simp only [Output.Expr.eval] at hv'
+          simp only [IR.Expr.eval] at hv'
           rw [← ha name] at hv'
           simp only [Eval.eval, hv']
       | member sp obj name =>
@@ -756,8 +756,8 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
         simp at h
         obtain ⟨o, s₁, ho, _, _, ⟨rfl, rfl⟩, ty, ⟨-, rfl⟩, rfl⟩ := h
         intro ρs ρo v ha hs hv'
-        simp only [Output.Expr.eval] at hv'
-        cases hobj : Output.Expr.eval fs fuel ρo o.code with
+        simp only [IR.Expr.eval] at hv'
+        cases hobj : IR.Expr.eval fs fuel ρo o.code with
         | none => simp [hobj] at hv'
         | some ov =>
           have := ihE _ _ _ _ _ _ ho ρs ρo ov ha hs hobj
@@ -774,7 +774,7 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
           · simp at h
             obtain ⟨hcode, -⟩ := h
             rw [← hcode] at hv'
-            have key : ∃ b, Output.Expr.eval fs fuel ρo a.code = some (.bool b) ∧ v = .bool !b := by
+            have key : ∃ b, IR.Expr.eval fs fuel ρo a.code = some (.bool b) ∧ v = .bool !b := by
               by_cases hp : a.prop = true
               · simp only [hp, if_true] at hv'; exact out_propNot fs fuel hv'
               · simp only [hp] at hv'; exact out_not fs fuel hv'
@@ -789,7 +789,7 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
             simp at h
             obtain ⟨hcode, -⟩ := h
             rw [← hcode] at hv'
-            simp [Output.Expr.eval, Output.NumberConstant.value] at hv'
+            simp [IR.Expr.eval, IR.NumberConstant.value] at hv'
             subst hv'
             obtain ⟨hm, hhas⟩ := hcond
             have hnone := hs.none hhas
@@ -860,8 +860,8 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
       obtain ⟨values, elem, hel, hcode⟩ := h
       intro ρs ρo v ha hs hv
       rw [← hcode] at hv
-      simp only [Output.Expr.eval] at hv
-      cases hx : Output.Expr.evalList fs fuel ρo values with
+      simp only [IR.Expr.eval] at hv
+      cases hx : IR.Expr.evalList fs fuel ρo values with
       | none => simp [hx] at hv
       | some xs =>
         simp [hx] at hv
@@ -886,7 +886,7 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
               rw [← hcode] at hv
               simp only at hv
               rw [out_call] at hv
-              cases hx : Output.Expr.evalList fs fuel ρo vals with
+              cases hx : IR.Expr.evalList fs fuel ρo vals with
               | none => simp [hx] at hv
               | some vs =>
                 simp [hx] at hv
@@ -934,7 +934,7 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
                 have hnone := hs.none hN
                 unfold numberTest? at hT
                 split at hT <;> cases hT <;>
-                  simp [Eval.eval, hnone, harg, Output.NumberTest.apply]
+                  simp [Eval.eval, hnone, harg, IR.NumberTest.apply]
               · simp at h
             | [], h => simp at h
             | _ :: _ :: _, h => simp at h
@@ -961,8 +961,8 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
           rw [hparts] at hv
           simp only at hnew
           rw [hnew] at hv
-          simp only [Output.Expr.eval, List.nil_append] at hv
-          cases hx : Output.Expr.evalFields fs fuel ρo new with
+          simp only [IR.Expr.eval, List.nil_append] at hv
+          cases hx : IR.Expr.evalFields fs fuel ρo new with
           | none => simp [hx] at hv
           | some fvs =>
             simp [hx] at hv
@@ -1081,7 +1081,7 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
               have hcases : (op = .or ∧ isNullTest = true) ∨ (op = .and ∧ isNullTest = false) := by
                 revert hcond; cases op <;> cases isNullTest <;> simp +decide
               rcases hcases with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ <;> rw [Eval.eval, hl] <;>
-                cases w <;> simp +decide [Output.Expr.eval, hso, isNullVal, Val.truthy, eval_value] at hv ⊢
+                cases w <;> simp +decide [IR.Expr.eval, hso, isNullVal, Val.truthy, eval_value] at hv ⊢
               all_goals first | exact hr v hv | (subst hv; rfl) | (subst hv; simp +decide)
             · simp at h
           · exact general h
