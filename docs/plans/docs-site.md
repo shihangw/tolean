@@ -85,6 +85,11 @@ A plan also shows its status, which the config reads from the line
 are built. The build fails for a plan without a status line, so every plan
 keeps one.
 
+A decision's file name starts with the date of the decision, as in
+`docs/decisions/2026-10-25-lean-not-smt.md`. The index lists the decisions in
+that order, so a reader sees how they followed each other. The build fails
+for a decision whose file name has no date.
+
 A file can set its category with a comment on its first line, such as
 `<!-- category: Guides -->`. A comment does not show when GitHub renders the
 file, which front matter would. The comment is needed only when the folder

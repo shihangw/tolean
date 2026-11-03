@@ -140,10 +140,16 @@ export function readPages(): Page[] {
     const { title, status, summary } = describe(source, text);
     if (category === 'Plans' && status === undefined)
       throw new Error(`${source}: a plan needs a line "**Status:** …" under its title.`);
+    if (category === 'Decisions' && !/^docs\/decisions\/\d{4}-\d{2}-\d{2}-/.test(source))
+      throw new Error(`${source}: a decision's file name starts with its date, as in docs/decisions/2026-10-25-lean-not-smt.md.`);
     pages.push({ source, file, page, link, category, title, summary, status });
   }
   return pages.sort(
-    (a, b) => categories.indexOf(a.category) - categories.indexOf(b.category) || a.title.localeCompare(b.title),
+    // A decision's file name starts with its date, so decisions sort by when
+    // they were made. Every other page sorts by its title.
+    (a, b) =>
+      categories.indexOf(a.category) - categories.indexOf(b.category) ||
+      (a.category === 'Decisions' ? a.source.localeCompare(b.source) : a.title.localeCompare(b.title)),
   );
 }
 

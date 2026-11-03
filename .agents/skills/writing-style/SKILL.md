@@ -21,4 +21,4 @@ Rules:
 
 Example — bad: "Verus: low effort per proof, but less predictable." Good: "Verus asks you to write very little proof, because the solver finds most of it. The cost is that a proof can stop working after an unrelated change."
 
-Reference doc: `docs/decisions/lean-not-smt.md`.
+Reference doc: `docs/decisions/2026-10-25-lean-not-smt.md`.

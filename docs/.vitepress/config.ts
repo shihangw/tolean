@@ -12,7 +12,9 @@ const base = '/tolean/docs/';
 // A page that moved keeps its old URL working: the key is the old URL and the
 // value is the new one, both without the base, such as
 // '/guides/layout': '/project-layout'.
-const redirects: Record<string, string> = {};
+const redirects: Record<string, string> = {
+  '/decisions/lean-not-smt': '/decisions/2026-10-25-lean-not-smt',
+};
 
 const pages = readPages();
 writeGenerated(pages);

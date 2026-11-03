@@ -3,7 +3,7 @@
 **Status:** planned, not built · **Date:** 2026-10-29
 
 Today only TypeScript has the parts that let Lean prove a translator. It has
-a [Tolean IR](../decisions/tolean-ir.md), which is the Lean code that the
+a [Tolean IR](../decisions/2026-10-30-tolean-ir.md), which is the Lean code that the
 translator writes as Lean data. It also has an evaluator for the IR, an
 interpreter for the source,
 `program_sound` and certificates. The Go and SQL translators build strings,
@@ -108,7 +108,7 @@ code that has no effects.
    corpus file stays the same, byte for byte.
 2. Add the typing relation `WellTyped` on the IR, with its two theorems: the
    translator gives well-typed IR, and well-typed IR gives a value of its
-   type. Section 3 of the [decision record on the IR](../decisions/tolean-ir.md)
+   type. Section 3 of the [decision record on the IR](../decisions/2026-10-30-tolean-ir.md)
    explains why.
 3. Give TypeScript state and exceptions. Add them to the IR, to its
    evaluator and to the interpreter, and extend `program_sound` and
@@ -134,5 +134,5 @@ code that has no effects.
   language add its effects at the extension point, as it adds its values?
 - How should loops that may not end appear in the IR? The printed Lean can
   use `partial_fixpoint`, which gives a result like the `div` of Aeneas, as
-  the [decision record on the IR](../decisions/tolean-ir.md) says. The
+  the [decision record on the IR](../decisions/2026-10-30-tolean-ir.md) says. The
   evaluator could keep fuel, or give the same kind of result.

@@ -67,7 +67,7 @@ intermediate representation: the Lean code that it writes, as Lean data,
 with types, expressions, bodies and declarations. `tolean/TypeScript/IR.lean`
 defines the IR and prints it as Lean text. So a theorem can state what the
 translator writes, which a proof of the translator needs. [The decision
-record on the IR](../decisions/tolean-ir.md) explains why it is a type of
+record on the IR](../decisions/2026-10-30-tolean-ir.md) explains why it is a type of
 Tolean's own rather than Lean's `Expr`.
 
 `tolean/TypeScript/Proof/` proves the translator for every program that it

@@ -9,7 +9,7 @@ The translator builds the IR, and `print` writes it as text. Each constructor
 is one form that the output can take, and it prints the way the translator
 wrote that form when it built strings. `IR/Eval.lean` gives the IR a meaning,
 so that a theorem can state what the translator writes for every program it
-accepts. `docs/decisions/tolean-ir.md` explains why the IR is a type of its
+accepts. `docs/decisions/2026-10-30-tolean-ir.md` explains why the IR is a type of its
 own rather than `Lean.Expr`.
 
 The printer is total, and it reads nothing but the IR and the names of the

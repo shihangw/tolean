@@ -147,7 +147,7 @@ links for each claim.
 | Link | TypeScript | Go | PostgreSQL |
 |---|---|---|---|
 | Parser | **Proved**: the parser reads the printed source of its own tree as the same tree.<br>Tested: the trees equal `tsc`'s, on the corpus and on random programs. | Tested: the trees equal `go/parser`'s. | Tested: through the two translators' checks, because there is no reference parser yet. |
-| Translator | **Proved** in full for a file with a [certificate](docs/typescript/README.md#certificates).<br>**Proved** up to the printer: for every program it accepts, when the evaluator of its [Tolean IR](docs/decisions/tolean-ir.md) gives a value, the interpreter gives the same value.<br>Tested: the printer link, because the corpus output is fixed and compiled, and so is the output for random programs.<br>Trusted: the printer link, that the printed Lean computes what the evaluator gives. No theorem can state it for every program, because the printed Lean is text, and it means something only after Lean compiles it. | Tested: the corpus output is fixed and compiled. | Tested: the results agree with PostgreSQL 18 on generated scenarios. |
+| Translator | **Proved** in full for a file with a [certificate](docs/typescript/README.md#certificates).<br>**Proved** up to the printer: for every program it accepts, when the evaluator of its [Tolean IR](docs/decisions/2026-10-30-tolean-ir.md) gives a value, the interpreter gives the same value.<br>Tested: the printer link, because the corpus output is fixed and compiled, and so is the output for random programs.<br>Trusted: the printer link, that the printed Lean computes what the evaluator gives. No theorem can state it for every program, because the printed Lean is text, and it means something only after Lean compiles it. | Tested: the corpus output is fixed and compiled. | Tested: the results agree with PostgreSQL 18 on generated scenarios. |
 | Value model (the spec that generated code imports) | Tested: the number laws hold on every maintained Node release line. | Trusted: `int64` wrapping and errors, which are not tested yet. | Tested: values, errors and three-valued logic agree with PostgreSQL 18. |
 | Concurrency model | None: the subset is single-threaded. | None: no goroutines. | **Proved**: the READ COMMITTED model's theorems.<br>Tested: the model, against the server. |
 | Claims about the generated code | **Proved**. | **Proved**. | **Proved**. |
@@ -360,7 +360,7 @@ gives a stronger guarantee in four ways:
 
 The cost is effort: someone must ask for each proof, where a solver often
 finds one alone. Tactics such as `simp`, `omega` and `grind` make many proofs
-one line long. [This decision record](docs/decisions/lean-not-smt.md) gives
+one line long. [This decision record](docs/decisions/2026-10-25-lean-not-smt.md) gives
 the full comparison.
 
 Neither design can show that a claim says what its author meant. A checker
