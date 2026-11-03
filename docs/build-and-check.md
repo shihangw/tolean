@@ -47,6 +47,12 @@ tags the commit. While a release is queued, waiting or running, CI starts
 no other. So a later push starts one only when the release failed or you
 rejected it.
 
+To pause releases, for example while a known problem would break them, run
+`gh workflow disable release.yml`, or disable the workflow from the Actions
+tab. CI then starts no release, and the workflow cannot run by hand either.
+`gh workflow enable release.yml` resumes releases, and the next push to main
+starts one if npm still lacks the version.
+
 The release also runs by hand from the Actions tab. By default that is a
 dry run that uploads the packages. With `publish` set, it publishes as
 above. Use that to finish a release that failed partway.
