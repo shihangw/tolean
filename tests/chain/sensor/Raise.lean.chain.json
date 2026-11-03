@@ -1,10 +1,10 @@
-{"tolean": "0.1.0",
+{"tolean": "0.2.0",
  "target": "ES2024",
  "sources":
  [{"sha256": "28312a8a2b4846ec7e7fc3f5f409e2f6157009578576f6a1ba3243b50552e847",
    "path": "sensor/raise.ts"}],
  "output":
- {"sha256": "2e2964783efb7dff0c41ba224ef96cfbd68196da6757bc5d48d3dc44a7533b0c",
+ {"sha256": "23afc8f01e0ad4012723b390a6ca0c357c68279174b800b5351eced213e664a3",
   "path": "sensor/Raise.lean"},
  "nodes":
  [{"status": "tested",

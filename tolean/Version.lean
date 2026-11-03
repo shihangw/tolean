@@ -5,6 +5,6 @@ upgrade. It must equal `version` in `npm/package.json`;
 -/
 namespace tolean
 
-def version : String := "0.1.0"
+def version : String := "0.2.0"
 
 end tolean
