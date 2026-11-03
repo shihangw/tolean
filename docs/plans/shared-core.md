@@ -27,7 +27,7 @@ that describe Lean code do not depend on the source language.
 | Part | What it is | Today |
 |---|---|---|
 | Pure core of the IR | Integers, booleans, strings, `Option`, `if`, `let`, structures, lists and `List.foldl`. Each language adds its own constructs at one extension point per layer, such as JavaScript numbers for TypeScript. | `tolean/TypeScript/IR.lean`, for TypeScript only |
-| Its printer | One IR, printed in one way, so there is one printer to trust or certify. Printing through `Lean.Syntax` is to try. | Part of `IR.lean` |
+| Its printer | One IR, printed in one way, so there is one printer to trust or certify. The [printing plan](printing.md) hands its layout to Lean. | Part of `IR.lean` |
 | Its evaluator | The meaning of the IR. It becomes generic over the value type, so that Go can use `int64` and SQL can use its own values and three-valued logic. | `IR/Eval.lean`, over the TypeScript interpreter's `Val N` |
 | Proof plumbing | `Env` and its lemmas, fuel, the encode and decode pattern, `link_tac`, `runFold_foldl`, a lemma of the shape of `decls_sound`, and kernel-decidable equality on the IR | `Env` is in `tolean/TypeScript/Spec/Eval.lean`, and the rest is under `tolean/TypeScript/Proof/` |
 | Certificate generator | The layout of a certificate, and `chars!` | `tolean/TypeScript/Certify.lean` and `Certify/`, with `chars!` in `Syntax/Parser.lean` |
