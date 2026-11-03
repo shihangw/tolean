@@ -1,15 +1,12 @@
 # The npm release. To release, raise the version in npm/package.json and
-# merge that to main. The push starts this workflow, and `version` finds that
-# no release has that version yet. `binaries` builds the native tolean on
-# each platform, and `npm-package` packs the packages and installs them as a
-# user would. Then the `publish` job waits for approval in the `npm`
-# environment. Check that CI passed on the commit before you approve. The job
-# publishes the platform packages and then `tolean` with npm's trusted
-# publishing, and tags the commit.
-#
-# The workflow also runs by hand from the Actions tab. With `publish` unset,
-# that is a dry run that uploads the tarballs. With `publish` set, it
-# publishes as above, which is how to finish a release that failed partway.
+# merge that to main. When CI passes on main, its `release` job starts this
+# workflow with `publish` set. It also runs by hand from the Actions tab, for
+# example to finish a release that failed partway. `binaries` builds the
+# native tolean on each platform, and `npm-package` packs the packages and
+# installs them as a user would. With `publish` unset this is a dry run that
+# uploads the tarballs. With `publish` set, the `publish` job waits for
+# approval in the `npm` environment, publishes the platform packages and
+# then `tolean` with npm's trusted publishing, and tags the commit.
 #
 # Trusted publishing means that no npm token is stored anywhere. npm gives
 # this workflow a short-lived token for each run, but only for a package that
@@ -22,9 +19,6 @@
 name: release
 
 on:
-  push:
-    branches: [main]
-    paths: [npm/package.json]
   workflow_dispatch:
     inputs:
       publish:
@@ -40,54 +34,29 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Decides what this run does, before the builds. A version counts as
-  # released when its tag points at another commit. A tag at this same commit
-  # means a rerun after a partial failure, so the run goes on.
-  #
-  # On a push, an unreleased version builds and publishes. A released one
-  # means that npm/package.json changed for another reason, so nothing runs.
-  # By hand, the run always builds, and it publishes when `publish` is set.
-  # A publish of a released version fails here. Without this check, the run
-  # would build for an hour and wait for approval, and then npm would skip
-  # every package.
+  # A publish run fails here, before the builds, when the version in
+  # npm/package.json was already released from another commit. Without this
+  # check, the run builds for an hour and waits for approval. Then npm skips
+  # every package, and only the GitHub release step fails. A tag at this same
+  # commit means a rerun after a partial failure, so the run goes on.
   version:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
-    outputs:
-      build: ${{ steps.plan.outputs.build }}
-      publish: ${{ steps.plan.outputs.publish }}
     steps:
       - uses: actions/checkout@v5
 
-      - id: plan
-        name: Decide whether to build and publish
+      - name: This version is not released from another commit
+        if: inputs.publish
         env:
           GH_TOKEN: ${{ github.token }}
-          PUBLISH: ${{ inputs.publish }}
         run: |
           v=$(jq -r .version npm/package.json)
-          released=
           if tagged=$(gh api "repos/$GITHUB_REPOSITORY/commits/refs/tags/v$v" -q .sha 2>/dev/null) \
               && [ "$tagged" != "$GITHUB_SHA" ]; then
-            released=$tagged
+            echo "::error::v$v is already released from $tagged. Raise the version in npm/package.json, then run this again."
+            exit 1
           fi
-          if [ "$GITHUB_EVENT_NAME" = push ]; then
-            if [ -n "$released" ]; then
-              echo "v$v is already released from $released, so there is nothing to publish"
-              build=false publish=false
-            else
-              echo "v$v is not released yet, so this run publishes it"
-              build=true publish=true
-            fi
-          else
-            build=true publish=${PUBLISH:-false}
-            if [ "$publish" = true ] && [ -n "$released" ]; then
-              echo "::error::v$v is already released from $released. Raise the version in npm/package.json, then run this again."
-              exit 1
-            fi
-          fi
-          echo "build=$build" >> "$GITHUB_OUTPUT"
-          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          echo "v$v is not released from another commit"
 
   # Builds the native `tolean` binary for each platform that the npm package
   # ships one for, with Lean's own toolchain (elan, from lean-toolchain), not the
@@ -101,7 +70,6 @@ jobs:
   # the platform packages is a separate step, not done here.
   binaries:
     needs: version
-    if: needs.version.outputs.build == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -226,8 +194,8 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: [version, npm-package]
-    if: needs.version.outputs.publish == 'true'
+    needs: npm-package
+    if: inputs.publish
     runs-on: ubuntu-24.04
     environment: npm
     permissions:

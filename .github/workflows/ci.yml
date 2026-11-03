@@ -5,7 +5,8 @@
 # WebAssembly translator and `pages` publishes the playground with the docs
 # under docs/. Only the published page needs WebAssembly, so pull requests
 # skip `wasm` unless they change how it builds. The native binaries for the
-# npm package build only in release.yml, which runs by hand.
+# npm package build only in release.yml. On main, `release` starts that
+# workflow when the push raised the version.
 name: ci
 
 on:
@@ -277,3 +278,40 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v5
+
+  # Starts the npm release when npm does not have the version in
+  # npm/package.json yet, after every check above passed. The release builds
+  # and publishes the commit at the tip of main, and it waits for approval in
+  # the `npm` environment. While a release is queued, waiting or running, a
+  # push starts no other. So after a bump, the first push that passes CI
+  # starts the release, and a later push starts one only if it failed.
+  release:
+    needs: [check, docs, wasm]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+
+      # The release publishes `tolean` last, so npm has it only when the
+      # release is complete.
+      - name: Start the release when npm lacks this version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          v=$(jq -r .version npm/package.json)
+          if [ -n "$(npm view "tolean@$v" version 2>/dev/null)" ]; then
+            echo "tolean@$v is on npm, so there is nothing to release"
+            exit 0
+          fi
+          open=$(gh run list -R "$GITHUB_REPOSITORY" --workflow release.yml --limit 50 \
+            --json status -q '[.[] | select(.status != "completed")] | length')
+          if [ "$open" != 0 ]; then
+            echo "a release is already queued or running, so this push starts no other"
+            exit 0
+          fi
+          echo "npm does not have tolean@$v, so the release starts"
+          gh workflow run release.yml -R "$GITHUB_REPOSITORY" --ref main -f publish=true
