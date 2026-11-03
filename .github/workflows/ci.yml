@@ -4,8 +4,8 @@
 # each pull request too. On main, `wasm` then builds the playground's
 # WebAssembly translator and `pages` publishes the playground with the docs
 # under docs/. Only the published page needs WebAssembly, so pull requests
-# skip it. The native binaries for the npm package build only in
-# release.yml, which runs by hand.
+# skip `wasm` unless they change how it builds. The native binaries for the
+# npm package build only in release.yml, which runs by hand.
 name: ci
 
 on:
@@ -153,13 +153,38 @@ jobs:
           path: docs/.vitepress/dist
           if-no-files-found: error
 
+  # Decides whether `wasm` runs. It always runs on main and by hand. A pull
+  # request runs it only when it changes something that only `wasm` uses:
+  # wasm/, the playground site, or this workflow. The Lean toolchain and the
+  # flake count too, because build.sh patches the Lean runtime at the
+  # toolchain's tag and the flake pins emscripten. `check` already builds and
+  # tests the translator, so a change to tolean/ alone does not run `wasm`.
+  changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      wasm: ${{ steps.diff.outputs.wasm }}
+    steps:
+      # A pull request checks out a merge commit. Its first parent is the base
+      # branch, so the diff against it is what the pull request changes.
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
+
+      - id: diff
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != pull_request ] ||
+            git diff --name-only HEAD^1 HEAD |
+              grep -E '^(wasm/|playground/site/|flake\.(nix|lock)$|lean-toolchain$|\.github/workflows/ci\.yml$)' >/dev/null; then
+            echo wasm=true >> "$GITHUB_OUTPUT"
+          fi
+
   # The playground's WebAssembly translator: build it, require that it gives
   # the native result on the corpus and on random programs, and check the
-  # examples' proofs on the Lean that runs in the browser. It runs on main
-  # and by hand, not on pull requests, because only the published page uses it.
+  # examples' proofs on the Lean that runs in the browser.
   wasm:
-    needs: [check, docs]
-    if: github.event_name != 'pull_request'
+    needs: [changes, check, docs]
+    if: needs.changes.outputs.wasm == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     defaults:
@@ -223,7 +248,9 @@ jobs:
           if-no-files-found: error
 
       # The docs are served under /tolean/docs/, next to the playground.
-      - uses: actions/download-artifact@v7
+      # `docs` uploads them only outside pull requests.
+      - if: github.event_name != 'pull_request'
+        uses: actions/download-artifact@v7
         with:
           name: docs-site
           path: playground/site/dist/docs
