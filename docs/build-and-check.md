@@ -37,8 +37,14 @@ publishes the playground, with the docs site under `/docs/`. Pull requests skip 
 only the published page needs it. To run it for a branch, start `ci` by
 hand from the Actions tab.
 
-The npm release runs by hand, from `.github/workflows/release.yml`. It
-builds the native `tolean` on Linux, macOS and Windows, packs the npm
-packages, and installs them as a user would. By default that is a dry run
-that uploads the packages. With `publish` set, it waits for approval,
-publishes them to npm and tags the commit.
+The npm release is `.github/workflows/release.yml`. To release, raise the
+version in `npm/package.json` and `tolean/Version.lean`, and merge that to
+main. The push starts the release. It builds the native `tolean` on Linux,
+macOS and Windows, packs the npm packages, and installs them as a user
+would. Then it waits for approval, publishes the packages to npm and tags
+the commit. A push that changes `npm/package.json` but keeps a released
+version starts no release.
+
+The release also runs by hand from the Actions tab. By default that is a
+dry run that uploads the packages. With `publish` set, it publishes as
+above. Use that to finish a release that failed partway.
