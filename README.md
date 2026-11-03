@@ -146,13 +146,13 @@ links for each claim.
 
 | Link | TypeScript | Go | PostgreSQL |
 |---|---|---|---|
-| Parser | **Proved**: the parser reads the printed source of its own tree as the same tree.<br>Tested: the trees equal `tsc`'s, on the corpus and on random programs. | Tested: the trees equal `go/parser`'s | Tested through the two translators' checks; no reference parser yet |
-| Translator | **Proved** in full for a file with a [certificate](docs/typescript/README.md#certificates).<br>**Proved** up to the printer: for every program it accepts, when the evaluator of its [Tolean IR](docs/decisions/tolean-ir.md) gives a value, the interpreter gives the same value.<br>Tested: the corpus output is fixed and compiled, and so is the output for random programs.<br>Trusted: the printer link, that the printed Lean computes what the evaluator gives. No theorem can state it for every program, because the printed Lean is text, and it means something only after Lean compiles it. | Tested: the corpus output is fixed and compiled | Tested: the results agree with PostgreSQL 18 on generated scenarios |
-| Value model (the spec that generated code imports) | Tested: the number laws hold on every maintained Node release line | Trusted, not tested yet: `int64` wrapping and errors | Tested: values, errors and three-valued logic agree with PostgreSQL 18 |
-| Concurrency model | None: the subset is single-threaded | None: no goroutines | **Proved**: the READ COMMITTED model's theorems.<br>Tested: the model is tested on the server. |
-| Claims about the generated code | **Proved** | **Proved** | **Proved** |
-| What runs | Trusted: the JavaScript engine | Trusted: the Go compiler | Trusted: the PostgreSQL server and its constraints |
-| Callers | Not checked: inputs must meet each theorem's preconditions | Trusted: the glue between an interface and a real store.<br>Not checked: callers | Trusted: the code that calls the queries.<br>Not checked: callers |
+| Parser | **Proved**: the parser reads the printed source of its own tree as the same tree.<br>Tested: the trees equal `tsc`'s, on the corpus and on random programs. | Tested: the trees equal `go/parser`'s. | Tested: through the two translators' checks, because there is no reference parser yet. |
+| Translator | **Proved** in full for a file with a [certificate](docs/typescript/README.md#certificates).<br>**Proved** up to the printer: for every program it accepts, when the evaluator of its [Tolean IR](docs/decisions/tolean-ir.md) gives a value, the interpreter gives the same value.<br>Tested: the printer link, because the corpus output is fixed and compiled, and so is the output for random programs.<br>Trusted: the printer link, that the printed Lean computes what the evaluator gives. No theorem can state it for every program, because the printed Lean is text, and it means something only after Lean compiles it. | Tested: the corpus output is fixed and compiled. | Tested: the results agree with PostgreSQL 18 on generated scenarios. |
+| Value model (the spec that generated code imports) | Tested: the number laws hold on every maintained Node release line. | Trusted: `int64` wrapping and errors, which are not tested yet. | Tested: values, errors and three-valued logic agree with PostgreSQL 18. |
+| Concurrency model | None: the subset is single-threaded. | None: no goroutines. | **Proved**: the READ COMMITTED model's theorems.<br>Tested: the model, against the server. |
+| Claims about the generated code | **Proved**. | **Proved**. | **Proved**. |
+| What runs | Trusted: the JavaScript engine. | Trusted: the Go compiler. | Trusted: the PostgreSQL server and its constraints. |
+| Callers | Not checked: inputs must meet each theorem's preconditions. | Trusted: the glue between an interface and a real store.<br>Not checked: inputs must meet each theorem's preconditions. | Trusted: the code that calls the queries.<br>Not checked: inputs must meet each theorem's preconditions. |
 
 The playground runs the translator compiled to WebAssembly, so it also
 trusts that build: Lean's runtime built for a 32-bit target that Lean does
@@ -194,9 +194,12 @@ parser and the translator again inside the certificate.
 | The toolchain | `lean-toolchain` pins Lean 4.30.0 for elan, and `flake.nix` pins a `nixpkgs` commit with the same version for CI. | Trusted | Trusted |
 
 CI checks the build again with `leanchecker`, which ships with Lean. It sends
-each declaration of the built `.olean` files back to the kernel, so a stale
-or altered `.olean` file, or a declaration that a metaprogram added without
-the kernel, fails the check. `leanchecker` uses the same kernel, so it does
+each declaration of the built `.olean` files back to the kernel. A
+declaration can reach an `.olean` file without the kernel: with
+`set_option debug.skipKernelTC true`, or through a command that adds it with
+the check off. The build then passes, and the theorem lists no axioms, so
+`chain check` passes too. `leanchecker` refuses it, and it also refuses a
+stale or altered `.olean` file. `leanchecker` uses the same kernel, so it does
 not check the kernel itself. Independent kernels exist, such as
 [Lean4Lean](https://arxiv.org/abs/2403.14064), which is written in Lean and
 can check all of Mathlib. Running one in CI is a later step.

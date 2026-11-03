@@ -54,9 +54,11 @@ jobs:
       - name: Build the library and the tolean command
         run: lake build --wfail
 
-      # The build checks each module once, when it compiles it, and the cache
-      # above restores .olean files without checking them. leanchecker sends
-      # every declaration of the library's .olean files to the kernel again.
+      # A declaration can reach an .olean file without the kernel checking it:
+      # `set_option debug.skipKernelTC true`, or a command that adds it with the
+      # check off. The build still passes, and the theorem lists no axioms.
+      # leanchecker sends every declaration of the library's .olean files to
+      # the kernel again, the ones the cache above restores included.
       - name: The kernel accepts the built library again
         run: lake env leanchecker tolean
 
