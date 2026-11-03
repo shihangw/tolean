@@ -34,12 +34,19 @@ export default defineConfig({
   description: 'Translate source code into Lean 4, so that proofs about a program are about its real source.',
   cleanUrls: true,
   lastUpdated: false,
+  // VitePress adds the base to the theme's logo, but not to a link in `head`.
+  head: [
+    ['link', { rel: 'icon', href: `${base}favicon.ico`, sizes: '16x16 32x32 48x48' }],
+    ['link', { rel: 'icon', href: `${base}icon-192.png`, type: 'image/png', sizes: '192x192' }],
+    ['link', { rel: 'apple-touch-icon', href: `${base}apple-touch-icon.png` }],
+  ],
   rewrites: Object.fromEntries(pages.filter((p) => p.file !== p.page).map((p) => [p.file, p.page])),
   markdown: {
     anchor: { slugify },
     config: linksPlugin(pages),
   },
   themeConfig: {
+    logo: '/logo.png',
     nav: [
       { text: 'Playground', link: 'https://shihangw.github.io/tolean/' },
       { text: 'GitHub', link: githubRepo },

@@ -82,13 +82,10 @@ export function Icon({ name, size = 16, className }: { name: IconName; size?: nu
   );
 }
 
-/** Tolean's mark: the turnstile ⊢ that Lean prints before a goal, in a rounded square. */
+/**
+ * Tolean's logo: a ribbon that draws a T and a λ. The file is in `public/`, and
+ * the page's base is `./`, so the path is relative to the page.
+ */
 export function Mark({ size = 26 }: { size?: number }) {
-  return (
-    <svg className="mark" viewBox="0 0 32 32" width={size} height={size} aria-hidden="true">
-      <rect x="1.5" y="1.5" width="29" height="29" rx="8" fill="var(--accent)" />
-      <path d="M11 8.5v15M11 16h11" fill="none" stroke="var(--on-accent)" strokeWidth="3" strokeLinecap="round" />
-      <circle cx="22.5" cy="23" r="2" fill="var(--on-accent)" opacity=".7" />
-    </svg>
-  );
+  return <img className="mark" src="./logo.png" width={size} height={size} alt="" />;
 }

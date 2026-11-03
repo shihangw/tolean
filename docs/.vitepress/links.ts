@@ -10,7 +10,8 @@
 //   on GitHub, at the commit that the site was built from.
 //
 // It does this for Markdown links and images, and for `src` and `href` in
-// HTML tags. A link that names a scheme, such as `https:`, stays as it is.
+// HTML tags. A link that names a scheme, such as `https:`, stays as it is,
+// and in an HTML tag it opens in a new tab, as a Markdown one does.
 // The plugin also ends each page with a line that names its source file.
 //
 // VitePress checks that a link's page exists but not that its anchor does.
@@ -35,6 +36,17 @@ const files = new Set<string>();
 
 const posix = path.posix;
 const hasScheme = (url: string) => /^[a-z][a-z0-9+.-]*:/i.test(url) || url.startsWith('//');
+
+// VitePress opens an external Markdown link in a new tab, but it leaves the
+// links in HTML tags alone. The README's badges are HTML tags, so this gives
+// each `<a>` tag with an external `href` the attributes that VitePress gives
+// a Markdown link. A tag that already has a `target` keeps it.
+const newTab = (html: string) =>
+  html.replace(/<a\b([^>]*)>/g, (tag, attrs: string) => {
+    const href = attrs.match(/\bhref=(["'])(.*?)\1/)?.[2];
+    if (href === undefined || !hasScheme(href) || /\btarget=/.test(attrs)) return tag;
+    return `<a${attrs} target="_blank" rel="noreferrer">`;
+  });
 
 export function linksPlugin(pages: Page[]) {
   const bySource = new Map(pages.map((p) => [p.source, p]));
@@ -77,7 +89,9 @@ export function linksPlugin(pages: Page[]) {
   }
 
   const resolveHtml = (html: string, page: Page) =>
-    html.replace(/\b(src|href)=(["'])(.*?)\2/g, (_, attr, quote, url) => `${attr}=${quote}${resolve(url, page)}${quote}`);
+    newTab(
+      html.replace(/\b(src|href)=(["'])(.*?)\2/g, (_, attr, quote, url) => `${attr}=${quote}${resolve(url, page)}${quote}`),
+    );
 
   function resolveTokens(tokens: Token[], page: Page) {
     for (const token of tokens) {
@@ -97,9 +111,10 @@ export function linksPlugin(pages: Page[]) {
       if (!page) return;
       resolveTokens(state.tokens, page);
       const source = new state.Token('html_block', '', 0);
-      source.content =
+      source.content = newTab(
         `<p class="page-source">This page is <a href="${githubUrl(page.source)}"><code>${page.source}</code></a>` +
-        ` at commit <a href="${githubRepo}/commit/${commit}"><code>${commit.slice(0, 7)}</code></a>.</p>\n`;
+          ` at commit <a href="${githubRepo}/commit/${commit}"><code>${commit.slice(0, 7)}</code></a>.</p>\n`,
+      );
       state.tokens.push(source);
     });
   };
