@@ -31,11 +31,14 @@ CI runs in stages, so a failure stops the expensive work early. The `check`
 job runs `lake build --wfail` and the checks above, on each pull request.
 The `docs` job builds the docs site on each pull request too, and it needs
 no Lean, so it finishes first.
-On `main`, when `check` passes, `wasm` builds the playground's WebAssembly
-translator and requires that it gives the native result, and `pages` then
-publishes the playground, with the docs site under `/docs/`. Pull requests skip the WebAssembly build, because
-only the published page needs it. To run it for a branch, start `ci` by
-hand from the Actions tab.
+On `main`, when `check` passes, `.github/workflows/wasm.yml` builds the
+playground's WebAssembly translator and requires that it gives the native
+result. Then `pages` publishes the playground, with the docs site under
+`/docs/`. Only the published page needs WebAssembly, so a pull request runs
+the build only when it changes something that only the build uses:
+`wasm/`, the playground site, `wasm.yml`, the flake or the Lean toolchain.
+To run it for any branch, start `ci` by hand from the Actions tab, or run
+`gh workflow run ci.yml --ref <branch>`.
 
 The npm release runs by hand, from `.github/workflows/release.yml`. It
 builds the native `tolean` on Linux, macOS and Windows, packs the npm

@@ -1,0 +1,94 @@
+# The playground's WebAssembly translator: build it, require that it gives
+# the native result on the corpus and on random programs, and check the
+# examples' proofs on the Lean that runs in the browser. On main it also
+# uploads the page that `pages` in ci.yml publishes.
+#
+# Only ci.yml runs this workflow. It lives in its own file so that ci.yml's
+# `changes` job can tell when a pull request changes it: an edit here runs it
+# on the pull request, and an edit to the other jobs in ci.yml does not. A
+# called workflow sees the caller's event, so `github.event_name` below is
+# still push, pull_request or workflow_dispatch.
+name: wasm
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: nix develop --command bash -euo pipefail {0}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            accept-flake-config = true
+
+      - name: Cache Lean build output
+        uses: actions/cache@v5
+        with:
+          path: .lake
+          key: lake-${{ runner.os }}-${{ hashFiles('lean-toolchain', 'lake-manifest.json', 'lakefile.toml', '**/*.lean') }}
+          restore-keys: lake-${{ runner.os }}-
+
+      - name: Build the tolean command
+        run: lake build --wfail
+
+      - name: Cache the translator's WebAssembly build
+        uses: actions/cache@v5
+        with:
+          path: wasm/.build
+          key: translator-wasm-${{ hashFiles('lean-toolchain', 'flake.lock', 'wasm/build.sh') }}-${{ hashFiles('tolean/**/*.lean', 'wasm/*.lean', 'wasm/glue.c') }}
+          restore-keys: translator-wasm-${{ hashFiles('lean-toolchain', 'flake.lock', 'wasm/build.sh') }}-
+
+      - name: Build the translator as WebAssembly
+        shell: nix develop .#wasm --command bash -euo pipefail {0}
+        run: wasm/build.sh
+
+      - name: The WebAssembly translator gives the native result
+        working-directory: tests/typescript
+        run: |
+          pnpm install --frozen-lockfile
+          node checkTranslate.ts --require-wasm
+
+      - name: Cache the Lean that runs in the browser
+        uses: actions/cache@v5
+        with:
+          path: playground/site/.cache/*.tar.gz
+          key: lean-wasm-${{ hashFiles('playground/site/lean-runtime.json') }}
+
+      - name: Build the playground
+        working-directory: playground/site
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Playground examples prove on the Lean that runs in the browser
+        working-directory: playground/site
+        run: node scripts/check-wasm.ts
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: tolean-wasm
+          path: wasm/out
+          if-no-files-found: error
+
+      # The docs are served under /tolean/docs/, next to the playground.
+      # `docs` in ci.yml uploads them only outside pull requests.
+      - if: github.event_name != 'pull_request'
+        uses: actions/download-artifact@v7
+        with:
+          name: docs-site
+          path: playground/site/dist/docs
+
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: playground/site/dist
