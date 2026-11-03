@@ -39,6 +39,14 @@
             pkgs.graphviz
           ];
         };
+        # `nix develop .#docs`: only what builds the docs site (docs/), so
+        # the docs check in CI does not wait for Lean, Go or PostgreSQL.
+        docs = pkgs.mkShell {
+          packages = [
+            pkgs.nodejs_24
+            pkgs.pnpm_10
+          ];
+        };
         # `nix develop .#wasm`: the toolchain that builds the translator as
         # WebAssembly for the playground (wasm/build.sh).
         wasm = pkgs.mkShell {

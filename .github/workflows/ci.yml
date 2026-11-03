@@ -1,9 +1,11 @@
 # CI, in stages. `check` builds Tolean with `lake build --wfail` in the Nix
 # shell and runs every check that needs only the native build. It runs on
-# each pull request. On main, `wasm` then builds the playground's WebAssembly
-# translator and `pages` publishes the playground. Only the published page
-# needs WebAssembly, so pull requests skip it. The native binaries for the
-# npm package build only in release.yml, which runs by hand.
+# each pull request. `docs` builds the docs site from the Markdown files, on
+# each pull request too. On main, `wasm` then builds the playground's
+# WebAssembly translator and `pages` publishes the playground with the docs
+# under docs/. Only the published page needs WebAssembly, so pull requests
+# skip it. The native binaries for the npm package build only in
+# release.yml, which runs by hand.
 name: ci
 
 on:
@@ -97,12 +99,44 @@ jobs:
       - name: Generated files are committed and current
         run: git diff --exit-code
 
+  # The docs site: VitePress builds README.md and docs/ into the pages under
+  # /tolean/docs/. The build fails on a dead link or anchor, on two files
+  # that would be the same page, and on a plan without a status. It needs
+  # no Lean, so it does not wait for `check`.
+  docs:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: nix develop .#docs --command bash -euo pipefail {0}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            accept-flake-config = true
+
+      - name: Build the docs site
+        working-directory: docs
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      # `wasm` puts the site next to the playground.
+      - if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v6
+        with:
+          name: docs-site
+          path: docs/.vitepress/dist
+          if-no-files-found: error
+
   # The playground's WebAssembly translator: build it, require that it gives
   # the native result on the corpus and on random programs, and check the
   # examples' proofs on the Lean that runs in the browser. It runs on main
   # and by hand, not on pull requests, because only the published page uses it.
   wasm:
-    needs: check
+    needs: [check, docs]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
@@ -165,6 +199,12 @@ jobs:
           name: tolean-wasm
           path: wasm/out
           if-no-files-found: error
+
+      # The docs are served under /tolean/docs/, next to the playground.
+      - uses: actions/download-artifact@v7
+        with:
+          name: docs-site
+          path: playground/site/dist/docs
 
       - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/upload-pages-artifact@v5

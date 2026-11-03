@@ -6,3 +6,7 @@ node_modules/
 .DS_Store
 /tests/chain/.lake
 .emcache/
+/docs/.vitepress/cache
+/docs/.vitepress/dist
+/docs/overview.md
+/docs/index.md
