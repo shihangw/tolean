@@ -84,13 +84,21 @@ compile() { # SOURCE OBJECT
 }
 export -f compile
 export cflags
-for m in $closure; do
+sources=$(for m in $closure; do
   path=$(echo "$m" | tr . /).c
   for dir in "$stdlib/.lake/build/ir" "$here/../.lake/build/ir" "$here/.lake/build/ir"; do
     if [ -f "$dir/$path" ]; then echo "$dir/$path $objects/${path%.c}.o"; break; fi
   done
-done | xargs -P "$jobs" -n 2 bash -c 'compile "$0" "$1"'
+done)
+echo "$sources" | xargs -P "$jobs" -n 2 bash -c 'compile "$0" "$1"'
 compile "$here/glue.c" "$objects/glue.o"
+
+# CI restores the build directory from an older build when the sources change,
+# so it can hold objects of modules that were renamed or removed since. Delete
+# them, because the count below and the link take every object in the directory.
+find "$objects" -name '*.o' | sort |
+  comm -23 - <({ echo "$sources" | cut -d' ' -f2; echo "$objects/glue.o"; } | sort) |
+  xargs rm -f
 
 expected=$(( $(echo "$closure" | wc -l) + 1 ))
 [ "$(find "$objects" -name '*.o' | wc -l)" -eq "$expected" ] ||
