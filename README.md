@@ -7,6 +7,7 @@
   <a href="https://www.npmjs.com/package/tolean"><img src="https://img.shields.io/npm/v/tolean" alt="npm version"></a>
   <a href="https://lean-lang.org"><img src="https://img.shields.io/badge/Lean-4-blue" alt="Lean 4"></a>
   <a href="https://shihangw.github.io/tolean/"><img src="https://img.shields.io/badge/playground-try_it-brightgreen" alt="Try it in the playground"></a>
+  <a href="https://shihangw.github.io/tolean/docs/"><img src="https://img.shields.io/badge/docs-read-blue" alt="Read the docs"></a>
 </p>
 
 # Tolean
@@ -152,7 +153,8 @@ links for each claim.
 | Concurrency model | None: the subset is single-threaded. | None: no goroutines. | **Proved**: the READ COMMITTED model's theorems.<br>Tested: the model, against the server. |
 | Claims about the generated code | **Proved**. | **Proved**. | **Proved**. |
 | What runs | Trusted: the JavaScript engine. | Trusted: the Go compiler. | Trusted: the PostgreSQL server and its constraints. |
-| Callers | Not checked: inputs must meet each theorem's preconditions. | Trusted: the glue between an interface and a real store.<br>Not checked: inputs must meet each theorem's preconditions. | Trusted: the code that calls the queries.<br>Not checked: inputs must meet each theorem's preconditions. |
+| Inputs | Trusted: the inputs meet each theorem's preconditions, and the callers are responsible for it. A function can check its own inputs instead, and [a plan](docs/plans/input-checks.md) lets `tolean.json` require that. | Trusted: the inputs meet each theorem's preconditions, and the callers are responsible for it. A function can check its own inputs instead, and [a plan](docs/plans/input-checks.md) lets `tolean.json` require that. | Trusted: the inputs meet each theorem's preconditions, and the callers are responsible for it. A function can check its own inputs instead, and [a plan](docs/plans/input-checks.md) lets `tolean.json` require that. |
+| Glue code | None: the functions are pure, so they need no glue to a store or a database. | Trusted: the glue between an interface and a real store. | Trusted: the code that calls the queries. |
 
 The playground runs the translator compiled to WebAssembly, so it also
 trusts that build: Lean's runtime built for a 32-bit target that Lean does
@@ -174,247 +176,53 @@ Tolean also proves that the parser reads its own printed source back as the
 same tree (`parseChars_reads`). Each language page lists its steps in more
 detail.
 
-### What Tolean trusts in Lean itself
-
-Every link above also relies on parts of Lean. Most of them are trusted by
-every Lean proof, but they are trusted all the same, so this table lists
-them. A certified file trusts fewer of them, because the kernel runs the
-parser and the translator again inside the certificate.
-
-| Part of Lean | What Tolean uses it for | A certified file | Other files |
-|---|---|---|---|
-| The kernel | It checks every theorem. In a certificate, `decide +kernel` also runs the parser and the translator. The kernel computes with `Nat` literals through GMP and reads string literals itself, and both are part of it. | Trusted | Trusted |
-| The axioms | Each claim lists the axioms its proof may use, such as `propext` and `Quot.sound`, and `tolean chain check` fails when the proof uses another. `native_decide` and `bv_decide` add axioms that trust compiled code, so a proof that uses them fails the check. | Trusted | Trusted |
-| The elaborator and tactics, for proofs | They build the terms that the kernel checks. | Not trusted | Not trusted |
-| The elaborator, for claims | It turns the text of a `Spec` file, which people read, into the statement that the kernel checks. When a notation or a coercion means something other than what the text seems to say, the theorem is not the one that people read. | Trusted | Trusted |
-| The compiler and runtime | They run the `tolean` binary, and so the parser and the translator. Some functions of Lean's library, such as those on `String`, `Array` and `Nat`, run as C code (`@[extern]`) in the binary, and the kernel uses their Lean definitions instead. | Not trusted | Trusted |
-| `Lean.Json`, which is built on `Std.Internal.Parsec` | It reads `tolean.json`, the `--config` option, the chain manifests, and the programs that `interpreter.test.ts` gives the interpreter. A wrong reading can change which files are translated, with which settings, and what `chain check` and `chain trust` report. It cannot change what the kernel accepts. | Trusted | Trusted |
-| `Float` | `instance : JSNumber Float` in `tolean/TypeScript/Interpret.lean` runs the interpreter on C doubles, so the test of the interpreter against Node relies on it. | Trusted | Trusted |
-| Lake | `lake build --wfail` checks each module with the kernel when it compiles the module. A module that imports it reads its `.olean` file without checking it again. | Trusted | Trusted |
-| The toolchain | `lean-toolchain` pins Lean 4.30.0 for elan, and `flake.nix` pins a `nixpkgs` commit with the same version for CI. | Trusted | Trusted |
-
-CI checks the build again with `leanchecker`, which ships with Lean. It sends
-each declaration of the built `.olean` files back to the kernel. A
-declaration can reach an `.olean` file without the kernel: with
-`set_option debug.skipKernelTC true`, or through a command that adds it with
-the check off. The build then passes, and the theorem lists no axioms, so
-`chain check` passes too. `leanchecker` refuses it, and it also refuses a
-stale or altered `.olean` file. `leanchecker` uses the same kernel, so it does
-not check the kernel itself. Independent kernels exist, such as
-[Lean4Lean](https://arxiv.org/abs/2403.14064), which is written in Lean and
-can check all of Mathlib. Running one in CI is a later step.
+Every link above also relies on parts of Lean: the kernel, the axioms, the
+elaborator that reads the claims, and the compiled `tolean` binary, among
+others. [What Tolean trusts in Lean itself](docs/trusting-lean.md) lists each
+part, what Tolean uses it for, and whether a certified file trusts it. CI also
+checks the built library again with `leanchecker`, which sends every
+declaration back to the kernel.
 
 ## The verification chain
 
 What Tolean produces is a verification chain: a path from the source code
 that runs to theorems about it, where every link is proved, tested against a
-reference, or trusted. The graphs show the chain for each language, and which
-links are which:
+reference, or trusted. The graphs show the chain for
+[TypeScript](docs/typescript/verification.svg), [Go](docs/go/verification.svg)
+and [PostgreSQL](docs/postgresql/verification.svg).
 
-- [TypeScript](docs/typescript/verification.svg)
-- [Go](docs/go/verification.svg)
-- [PostgreSQL](docs/postgresql/verification.svg)
-
-Each language also splits into nested subsets: what the parser reads, what
-the translator accepts, and what is proved. [This chart](docs/subsets.svg)
-lists them.
-
-### Chain manifests
-
-The chain is also data. Each translation writes `<output>.chain.json` next to
-the Lean file. It records the Tolean version, the SHA-256 of each source file
-and of the output, and the links the output relies on (parser, translator,
-Spec, runtime), each with a status and the check that supports it.
-
-A project adds `tolean.chain.json`. It lists the file manifests, its own links
-(such as glue code or callers' preconditions), and its claims. Each claim names
-a spec, the theorem that proves it, the module that holds the theorem, and the
-axioms the proof may use:
-
-```json
-{
-  "files": ["sensor/Raise.lean.chain.json"],
-  "nodes": [{ "id": "callers", "kind": "glue", "status": "trusted",
-              "label": "callers pass a gauge with level ≤ max" }],
-  "edges": [["callers", "raise_stays_under_max"]],
-  "claims": [{ "id": "raise_stays_under_max",
-               "spec": "Spec.raise_stays_under_max",
-               "proof": "Proof.raise_stays_under_max",
-               "module": "sensor.RaiseProof",
-               "axioms": ["propext", "Quot.sound"],
-               "depends": ["sensor.Raise"] }]
-}
-```
-
-The statuses are `proved`, `tested`, `trusted`, `read-by-people`, `generated`
-and `planned`. A `tested` link names its check and who runs it: `tolean` for
-Tolean's own checks, which hold for the Tolean version that wrote the
-manifest, or `project` for the project's checks, which CI reports with
-`--passed`.
-
-```sh
-lake build && lake env tolean chain check tolean.chain.json [--passed check,…]
-tolean chain trust tolean.chain.json raise_stays_under_max
-tolean chain graph tolean.chain.json | dot -Tsvg > chain.svg
-```
-
-`chain check` fails when a source or output changed since translation, when a
-`tested` link has no passed check, or when a claim's theorem does not have
-exactly the claim's type or uses an axiom the claim does not list. It reads
-the theorems from the built `.olean` files. `chain trust` lists what a claim
-relies on that no proof covers. `chain graph` draws the chain, colored by
-status; [this is the graph](docs/chain-gauge.svg) of the sample project in
-`tests/chain`, which `tests/chain/check.sh` checks.
-
-To set up Tolean in your own project, read
-[Using Tolean in a project](docs/project-layout.md). It shows the folder
-layout and a full example for each language.
+The chain is also data. Each translation writes a manifest next to its Lean
+file, and a project lists its claims in `tolean.chain.json`. Then
+`tolean chain check` fails when the chain no longer holds, and
+`tolean chain trust` lists what a claim relies on that no proof covers.
+[The verification chain](docs/verification-chain.md) describes the manifests
+and the commands.
 
 ## The project file
 
-A project lists what to translate in `tolean.json`, at its root. Then
-`tolean translate` builds every unit, and `tolean translate --check` writes
-nothing and fails when a generated file is not current, which is the check
-that CI runs.
-
-```json
-{
-  "typescript": {
-    "target": "ES2024",
-    "sources": ["src/**/*.ts"],
-    "overrides": [{ "sources": ["src/sensor/raise.ts"], "certify": true }]
-  },
-  "go": {
-    "erasePackages": ["time"],
-    "sources": ["ledger/*.go"],
-    "overrides": [{ "sources": ["ledger/*.go"], "eraseTypes": ["Log"] }]
-  },
-  "sql": {
-    "migrations": ["db/migrations/*.up.sql"],
-    "sources": ["db/queries.sql"]
-  }
-}
-```
-
-Each language has an object. Its settings apply to every source, and each
-entry in `overrides` changes them for the files that its own `sources` match.
-Overrides apply in order, so the last value wins. In a glob, `*` matches
-within one directory and `**` matches any number of directories.
-
-Each language translates a different unit. A TypeScript file is one unit. A
-Go package is one unit, so tolean groups the matched Go files by directory.
-A SQL query file is one unit, which tolean translates against the
-migrations, in sorted order. The defaults keep most entries short:
-
-- The output goes next to the source: `src/sensor/raise.ts` gives
-  `src/sensor/Raise.lean`, the package in `ledger/` gives `ledger/Ledger.lean`,
-  and `db/queries.sql` gives `db/Queries.lean`. The namespace follows the
-  path, such as `src.sensor.Raise`. An override can set `output` and
-  `namespace` for one unit.
-- The TypeScript target is ES2024, and `certify` is off. With `certify` on, a
-  file that cannot have a certificate makes `tolean translate` fail with the
-  reason.
-- Lean module names start at the directory of `tolean.json`, so
-  `src/sensor/Raise.lean` is the module `src.sensor.Raise`. When the Lean
-  package's module names start elsewhere, set `moduleRoot` to that directory,
-  relative to `tolean.json`. An import and a certificate name the module. A
-  path component that Lean does not read as a name, such as `my-lib`, is
-  written `«my-lib»`.
-- A Go package starts from its exported functions, unless `roots` names
-  others.
-- A SQL file translates each query that it names, unless `queries` lists
-  some of them.
-
-A script that does not want a file can pass the same JSON inline, as in
-`tolean translate --config '{"go":{"sources":["sorting/*.go"]}}'`. Paths in
-the config are relative to the directory that Tolean runs in.
-
-The single-file commands still work, but they are not a stable interface,
-and their arguments can change between versions. Use `tolean.json` in your
-project and in CI.
+A project lists what to translate in `tolean.json`, at its root, as in
+[Getting started](#getting-started). `tolean translate` builds every unit,
+and `tolean translate --check`, which CI runs, fails when a generated file is
+not current. Use `tolean.json` in your project and in CI, because the
+single-file commands are not a stable interface. [The project
+file](docs/project-file.md) lists every setting.
 
 ## Why a proof kernel, not an SMT solver
 
 Tools such as Verus and Dafny send each verification goal to an SMT solver,
-such as Z3. Tolean writes Lean, and Lean's kernel checks every proof. This
-gives a stronger guarantee in four ways:
-
-- **A smaller trusted base.** A proof in Tolean relies on the Lean kernel,
-  which is a few thousand lines, and on the axioms that the proof lists.
-  `#audit_claims` and `tolean chain check` report those axioms for each claim.
-  An SMT result relies on the solver, which is hundreds of thousands of lines,
-  and on the tool's encoding of the program into the solver's logic.
-- **Proofs that can be checked again.** A Lean proof is an object. Any copy of
-  the kernel, or an independent checker, can check it again. A solver
-  usually answers only "no counterexample", with no certificate to check.
-- **Stable results.** The kernel is deterministic. A proof stays valid until
-  the definitions it is about change. A solver uses heuristics, so a proof can
-  time out after a solver upgrade or after an unrelated lemma is added.
-- **Proofs about the translator.** Lean can state and prove facts about
-  languages, such as "for every program the translator accepts, the Lean has
-  the meaning of the source". An SMT solver works on one formula at a time, so
-  it cannot prove that the translator is correct. Tolean's aim is a
-  translator that is proved correct. Its parsers and translators are tested
-  against reference implementations now, and the chain manifests mark them
-  as tested, not as proved.
-
-The cost is effort: someone must ask for each proof, where a solver often
-finds one alone. Tactics such as `simp`, `omega` and `grind` make many proofs
-one line long. [This decision record](docs/decisions/2026-10-25-lean-not-smt.md) gives
-the full comparison.
-
-Neither design can show that a claim says what its author meant. A checker
-accepts a true theorem that says nothing useful, such as "the output of sort
-is sorted" without "the output has the same elements as the input". Tolean
-makes the claim the only text that a person must read. The translator writes
-the model of the code, and the kernel checks the proof. The claim is a short
-`def … : Prop`, which the chain marks as `read-by-people`.
+such as Z3. Tolean writes Lean, and Lean's kernel checks every proof. The
+trusted base is smaller, a proof can be checked again by any copy of the
+kernel, a proof does not break when a solver changes its heuristics, and Lean
+can prove facts about the translator itself. The cost is effort: someone must
+ask for each proof, where a solver often finds one alone. [This decision
+record](docs/decisions/2026-10-25-lean-not-smt.md) gives the full comparison.
 
 ## Build and check
 
-[Repository layout](docs/repository-layout.md) describes where each part
-of Tolean lives and how to add a language.
-
-```sh
-nix develop                                 # Lean 4.30.0, Node 24, pnpm 10
-lake build --wfail                          # the library and .lake/build/bin/tolean
-lake env leanchecker tolean                 # the kernel checks every built declaration again
-.lake/build/bin/tolean parse file.ts        # print the syntax tree, or file:line:col: reason
-.lake/build/bin/tolean translate file.ts File.lean My.Namespace
-nix develop .#wasm -c wasm/build.sh         # the translator as WebAssembly, for playground/
-cd tests/typescript && pnpm install
-node check.ts                               # the Lean parser against tsc (see the language docs)
-node checkTranslate.ts                      # the translator on the corpus and on random programs
-pnpm test                                   # JS number laws and bigint division against the engine
-cd ../../npm && pnpm install && pnpm build && TOLEAN_BINARY=$PWD/../.lake/build/bin/tolean pnpm test
-cd ../tests/go && go run ./check            # the Lean Go parser against go/parser (see the language docs)
-cd ../sql && go run ./pgcheck corpus        # the SQL translator against PostgreSQL (see the language docs)
-(cd ../typescript && ./checkCertify.sh)     # per-file certificates for the corpus (see the TypeScript page)
-cd ../chain && ./check.sh                   # chain manifests on a sample project (see above)
-cd ../../docs && pnpm install && pnpm build # the docs site, which fails on a dead link
-```
-
-CI runs all of these on each push and pull request, in the same Nix dev
-shell, from `.github/workflows/ci.yml`. It also runs the number laws on
-every maintained Node release line (`nix run .#test-engines`), and it fails
-if a check leaves a committed file changed.
-
-CI runs in stages, so a failure stops the expensive work early. The `check`
-job runs `lake build --wfail` and the checks above, on each pull request.
-The `docs` job builds the docs site on each pull request too, and it needs
-no Lean, so it finishes first.
-On `main`, when `check` passes, `wasm` builds the playground's WebAssembly
-translator and requires that it gives the native result, and `pages` then
-publishes the playground, with the docs site under `/docs/`. Pull requests skip the WebAssembly build, because
-only the published page needs it. To run it for a branch, start `ci` by
-hand from the Actions tab.
-
-The npm release runs by hand, from `.github/workflows/release.yml`. It
-builds the native `tolean` on Linux, macOS and Windows, packs the npm
-packages, and installs them as a user would. By default that is a dry run
-that uploads the packages. With `publish` set, it waits for approval,
-publishes them to npm and tags the commit.
-
+To work on Tolean itself, [Build and check](docs/build-and-check.md) lists
+the commands and what CI runs, and [Repository
+layout](docs/repository-layout.md) describes where each part of Tolean lives
+and how to add a language.
 
 ## Languages
 

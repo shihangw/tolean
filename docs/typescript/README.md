@@ -472,7 +472,7 @@ path = "node_modules/tolean/lean"
 | 3. Prove the claims | Hand-written proofs show that each claim in `Spec/*.lean` holds for the generated definitions | **Proved** | The Lean kernel, `#audit_claims`, `lake build --wfail`, and no `sorry`, `admit`, `axiom` or `native_decide` |
 | 4. Assume JS number facts | `SafeIntLaws` and `SpecialValueLaws` in `tolean/TypeScript/Spec/Number.lean` | Trusted, tested | `tests/typescript/jsNumberLaws.test.ts` checks each law against real doubles. |
 | 5. Run | Type stripping or a bundler makes the JavaScript that Node runs | Trusted | The subset uses only constructs that type stripping leaves unchanged |
-| 6. Call | The caller passes inputs that meet the theorems' preconditions | Not checked | Planned: boundary guards, which check the preconditions at run time where callers enter the verified code |
+| 6. Inputs | The code that calls the verified functions passes inputs that meet the theorems' preconditions | Trusted | The callers are responsible for it. A function can check its own inputs instead, so that its claim has no precondition, and [a plan](../plans/input-checks.md) lets `tolean.json` require that. |
 
 So a theorem holds for the code that runs if steps 1, 4 and 5 are correct, the
 printer of step 2 is correct or the file has a certificate, and the inputs meet
@@ -480,6 +480,5 @@ its preconditions. These goals are not built yet:
 
 | Goal | Purpose | Today |
 |---|---|---|
-| Boundary guards | Check the preconditions of step 6 where callers enter the verified code | Not started |
 | The parser against the grammar | Prove that the parser reads TypeScript as the language's grammar does, so that step 1 stops being trusted. The round trip proves only that the parser and the printer agree. | Not started. `tests/typescript/check.ts` tests the parser against `tsc`. |
 | The interpreter from a formal semantics | Derive `eval` from a formal semantics of ECMA-262, so that it stops being a trusted specification | Not started. `tests/typescript/interpreter.test.ts` tests it against Node. |
