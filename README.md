@@ -75,6 +75,12 @@ func Sort(xs []int64) []int64 {
 }
 ```
 
+Install Tolean from npm with `npm install --save-dev tolean`. The package
+has the `tolean` command for macOS, Linux and Windows, and the Lean package
+that the generated code imports. [The npm
+package](docs/typescript/README.md#the-npm-package) describes what else it
+has.
+
 To translate it, list the source in a `tolean.json` file at the project root:
 
 ```json

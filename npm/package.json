@@ -3,6 +3,20 @@
   "version": "0.2.0",
   "license": "Apache-2.0",
   "description": "Translate a subset of TypeScript, Go and PostgreSQL to Lean 4, so proofs are about the real source",
+  "keywords": [
+    "lean",
+    "lean4",
+    "formal-verification",
+    "theorem-proving",
+    "typescript",
+    "go",
+    "postgresql",
+    "sqlc"
+  ],
+  "homepage": "https://shihangw.github.io/tolean/docs/",
+  "bugs": {
+    "url": "https://github.com/shihangw/tolean/issues"
+  },
   "type": "module",
   "repository": {
     "type": "git",
