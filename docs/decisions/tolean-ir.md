@@ -1,6 +1,6 @@
 # The Tolean IR
 
-**Status:** accepted, except printing through `Lean.Syntax`, which is to try · **Date:** 2026-10-30
+**Status:** accepted, except the two printers of section 5, which are to try · **Date:** 2026-11-03
 
 The Tolean intermediate representation, or Tolean IR, is the form a program
 takes after Tolean translates it and before it becomes Lean text. It is a
@@ -22,7 +22,7 @@ A certificate then proves, for one file, that the printed Lean computes what
 the IR computes.
 
 Today only TypeScript has an IR, in `tolean/TypeScript/IR.lean`. This record
-explains three choices about it.
+explains five choices about it.
 
 ## 1. The IR is our own type, not `Lean.Expr`
 
@@ -70,32 +70,109 @@ moves the core to `tolean/IR/` and makes JavaScript numbers the first
 extension. Go's translator then builds the same IR, with its own extension
 for `int64`.
 
-## 3. Printing through `Lean.Syntax`: to try
+## 3. A typing relation first, and a typed IR only if the proofs need it
 
-Our printer, in `IR.lean`, writes Lean text by hand. Lean's own parser and
-formatter could write it instead: the printer would build a `Lean.Syntax`
-tree, and Lean's formatter would write the text. This is worth trying,
-because code that Lean supports officially, and that every Lean user runs,
-deserves more trust than a printer of our own. Text that Lean's formatter
-writes from a syntax tree is text that Lean's parser reads back as that tree.
+The IR has types, but it does not enforce them. `Ty` lists the types, each
+function states the types of its parameters and its result, and list and
+structure literals state their own types. But an `Expr` is not indexed by its
+type, and the evaluator is untyped: `Expr.eval` gives an `Option (Val N)`,
+which is a JavaScript value or nothing.
 
-It would not remove the printer link. The link is about meaning: the printed
-Lean must compute what the IR computes. A certificate proves that for its
-file, whichever printer wrote the text. So the change makes printing bugs
-rarer, but a file without a certificate still trusts the link.
+That leaves a gap. `program_sound` goes one way: when the IR gives a value,
+the interpreter gives the same value. An IR that never gave a value would
+meet it too. A certificate rules that out for its file, because its theorem
+states that the interpreter gives `some` value for every input. For a file
+without a certificate, only the tests rule it out.
 
-These questions decide whether it works:
+So the next step is a typing relation, `WellTyped`, on the IR as it is, with
+two theorems. The first states that the translator gives well-typed IR. The
+second states that well-typed IR gives a value of its type. The subset has no
+recursion, and each loop is a fold over a list, so every call finishes. The
+depth of nested calls is at most the number of functions, so that much fuel
+is enough. With both theorems, `program_sound` says something for every
+program, not only for a certified file. The IR, its equality, the translator
+and the certificates stay as they are.
 
-- **The environment.** Lean's formatter reads the parser tables of an
-  environment, so the printer would run in `CoreM` with Lean's core
-  imported. Today the printer is a pure function.
-- **The WebAssembly build.** The playground runs the translator in the
-  browser. The formatter needs Lean's environment there too, and that may be
-  too large to load.
-- **Readability.** Lean's formatter chooses its own line breaks. The output
-  must stay as easy to read as it is now, and the golden files of the corpus
-  would all change once.
+A typed IR, in which an expression's type is part of its type in Lean, as in
+`Expr : Ctx → Ty → Type`, would give the same theorems by construction. It
+costs more:
 
-A first step is to print each corpus file both ways behind a flag, and check
-that every certificate still passes and that the WebAssembly build still
-runs.
+- **Equality in the kernel.** To compare two nodes, the kernel must first
+  compare their hidden types and then cast one to the other. The kernel can
+  reduce such a cast when the types are known, but every node carries its
+  context and its type. The IR terms in a certificate grow, and Lean takes
+  longer to elaborate them.
+- **The translator.** It must give a pair of a type and an expression of that
+  type, and check and cast types as it goes. Each certificate runs it in the
+  kernel, so each run does more work. Proofs about it meet the casts too.
+- **Structures.** The meaning of a structure type must be a Lean type, but
+  the printed code declares the structures. So a structure would mean a
+  generic record, and an isomorphism with the printed `structure` would
+  remain. A recursive interface would also break a meaning defined by
+  recursion on `Ty`.
+- **Names.** A typed IR wants de Bruijn indices, but the printer needs the
+  names of the source, so the context would carry the names too.
+
+What it buys beyond the relation is simpler `link` theorems. The evaluator
+would give Lean values instead of `Val`, so the encoders and most of the work
+of `link_tac` would go. We will build it only if the `link` proofs become the
+bottleneck.
+
+## 4. The parts of Lean that the IR uses
+
+Each part below was tried on Lean 4.30.0.
+
+| Part of Lean | Use | Why |
+|---|---|---|
+| `Int`, `Bool`, `String`, `List`, `Option` and `structure` | Used now | They are the IR's values and the printed code's types. A Lean `String` holds Unicode characters, and a JavaScript string holds UTF-16 code units. They agree while the IR has only string literals and equality, and while the lexer refuses lone surrogates. They part once the subset allows `.length` or indexing. |
+| `EStateM` | Used now | The monads of the translator, the parser and the lexer. `tolean/TypeScript/EStateM.lean` proves their lemmas once. |
+| `Int64` and `BitVec 64` | To use for Go | Go writes its own `wrap64` on `Int` today. `Int64` wraps in the same way, and it converts to `BitVec 64`, which has Lean's lemmas and `bv_omega`. |
+| `Float` | For running only | Lean has no theorems about `Float`, so proofs keep the abstract `JSNumber N`. But `instance : JSNumber Float` in `Interpret.lean` lets the printed Lean run on real doubles, which gives a cheap test against Node for a file without a certificate. |
+| `deriving ToExpr` | To try | It derives for every type of the IR, with one `deriving instance` line for each type. A certificate could then be a command, such as `#certify "sensor/raise.ts"`, that runs the parser and the translator when Lean elaborates the file and inserts the IR as a term. The kernel would still check every step. Today `tolean certify` prints the IR as text through `Repr`. |
+| `deriving ToJson` | To use | It derives for every type of the IR in the same way, so the IR can be written out for debugging, and for the playground to show. |
+| `partial_fixpoint` | To use for `while` | It defines a loop that may not end in the `Option` monad, without fuel, and Lean proves its equation. It plays the part of the `div` result of Aeneas. |
+| `StateT`, `ExceptT` and `EStateM` for effects | To use | `Std.Do` reasons about these monads, so effectful generated code uses them. The [shared core plan](../plans/shared-core.md) says more. |
+| `Std.Do` and `mvcgen` | To watch | `mvcgen` proves a `for … in` loop with `let mut` from an invariant, with no axioms beyond the usual ones. But Lean 4.30 calls it experimental and advises against it in production. Once it is stable, the printer can write loops as `for … in` instead of `List.foldl`. |
+| `deriving DecidableEq` | Not possible | It still fails for a nested inductive, such as `Expr`, which holds a `List Expr`. So `IR/Equality.lean` stays. |
+| `bv_decide` and `native_decide` | Not used | Each adds an axiom that trusts compiled code, so a proof that uses it fails `tolean chain check`. |
+| `partial def` | Not used | Lean cannot unfold it, so neither the kernel nor a proof can use what it computes. |
+| `Std.Internal.Parsec` | Only through `Lean.Json` | `Lean.Json` uses it to read `tolean.json` and the chain manifests, and the README lists it among the parts of Lean that Tolean trusts. The TypeScript parser cannot build on it. Its repetition, `manyCore`, is a `partial def`. It reads a `String` by byte positions, which the kernel reduces slowly. And it is internal to Lean, with no promise that it stays the same. |
+| `Lean.IR` | Not used | It is the IR of Lean's compiler, for making C code, and it changes between versions. |
+
+## 5. Printing: through `Std.Format` first, and then perhaps `Lean.Syntax`
+
+Our printer, in `IR.lean`, writes Lean text by hand. Two parts of Lean could
+take over some of that work. Code that Lean supports officially, and that
+every Lean user runs, deserves more trust than a printer of our own.
+
+**`Std.Format` first.** It is Lean's layout engine: a printer builds a
+document, and `Std.Format` chooses the line breaks. It is a pure function in
+`Init`, so it needs no environment and runs in the WebAssembly build. The
+printer would keep choosing the words and hand the line breaks to Lean.
+
+**`Lean.Syntax` after that, as an experiment.** The printer would build a
+`Lean.Syntax` tree, and Lean's formatter would write the text. Text that
+Lean's formatter writes from a syntax tree is text that Lean's parser reads
+back as that tree. On Lean 4.30, building the tree is pure, but formatting it
+is not:
+
+- **It needs Lean's environment.** In an empty environment, `ppCommand`
+  fails with "Unknown constant `termIfThenElse`". So the `tolean` binary
+  would load Lean's `Init` at run time. Users of the binary have a Lean
+  toolchain, which has it. The playground already runs Lean in the browser,
+  so it may have it too.
+- **Names need care.** A quotation marks its names for hygiene, and the
+  formatter prints the marks, as in `raise✝`. The printer must make each name
+  with `mkIdent` instead.
+- **The output changes.** Lean's formatter chooses its own line breaks, so
+  every golden file of the corpus would change once. The output must stay as
+  easy to read as it is now.
+
+Neither printer removes the printer link. The link is about meaning: the
+printed Lean must compute what the IR computes. A certificate proves that for
+its file, whichever printer wrote the text. So both changes make printing
+bugs rarer, but a file without a certificate still trusts the link.
+
+A first step for each is to print every corpus file both ways behind a flag,
+and to check that every certificate still passes and that the WebAssembly
+build still runs.

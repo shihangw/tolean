@@ -375,6 +375,7 @@ of Tolean lives and how to add a language.
 ```sh
 nix develop                                 # Lean 4.30.0, Node 24, pnpm 10
 lake build --wfail                          # the library and .lake/build/bin/tolean
+lake env leanchecker tolean                 # the kernel checks every built declaration again
 .lake/build/bin/tolean parse file.ts        # print the syntax tree, or file:line:col: reason
 .lake/build/bin/tolean translate file.ts File.lean My.Namespace
 nix develop .#wasm -c wasm/build.sh         # the translator as WebAssembly, for playground/

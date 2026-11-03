@@ -54,6 +54,12 @@ jobs:
       - name: Build the library and the tolean command
         run: lake build --wfail
 
+      # The build checks each module once, when it compiles it, and the cache
+      # above restores .olean files without checking them. leanchecker sends
+      # every declaration of the library's .olean files to the kernel again.
+      - name: The kernel accepts the built library again
+        run: lake env leanchecker tolean
+
       - name: Install the TypeScript checks' dependencies
         run: |
           (cd tests/typescript && pnpm install --frozen-lockfile)
