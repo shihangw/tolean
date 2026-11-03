@@ -1,5 +1,7 @@
-# The npm release, run by hand from the Actions tab. To release, raise the
-# version in npm/package.json on main first. `binaries` builds the
+# The npm release. To release, raise the version in npm/package.json and
+# merge that to main. When CI passes on main, its `release` job starts this
+# workflow with `publish` set. It also runs by hand from the Actions tab, for
+# example to finish a release that failed partway. `binaries` builds the
 # native tolean on each platform, and `npm-package` packs the packages and
 # installs them as a user would. With `publish` unset this is a dry run that
 # uploads the tarballs. With `publish` set, the `publish` job waits for

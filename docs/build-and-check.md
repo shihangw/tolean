@@ -37,8 +37,22 @@ publishes the playground, with the docs site under `/docs/`. Pull requests skip 
 only the published page needs it. To run it for a branch, start `ci` by
 hand from the Actions tab.
 
-The npm release runs by hand, from `.github/workflows/release.yml`. It
-builds the native `tolean` on Linux, macOS and Windows, packs the npm
-packages, and installs them as a user would. By default that is a dry run
-that uploads the packages. With `publish` set, it waits for approval,
-publishes them to npm and tags the commit.
+The npm release is `.github/workflows/release.yml`. To release, raise the
+version in `npm/package.json` and `tolean/Version.lean`, and merge that to
+main. When CI passes on main and that version has no GitHub release yet,
+CI's last job starts the release. The release builds the native `tolean` on
+Linux, macOS and Windows, packs the npm packages, and installs them as a
+user would. Then it waits for approval, publishes the packages to npm and
+tags the commit. While a release is queued, waiting or running, CI starts
+no other. So a later push starts one only when the release failed or you
+rejected it.
+
+To pause releases, for example while a known problem would break them, run
+`gh workflow disable release.yml`, or disable the workflow from the Actions
+tab. CI then starts no release, and the workflow cannot run by hand either.
+`gh workflow enable release.yml` resumes releases, and the next push to main
+starts one if npm still lacks the version.
+
+The release also runs by hand from the Actions tab. By default that is a
+dry run that uploads the packages. With `publish` set, it publishes as
+above. Use that to finish a release that failed partway.
