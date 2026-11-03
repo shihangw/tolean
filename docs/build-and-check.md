@@ -39,8 +39,8 @@ hand from the Actions tab.
 
 The npm release is `.github/workflows/release.yml`. To release, raise the
 version in `npm/package.json` and `tolean/Version.lean`, and merge that to
-main. When CI passes on main and npm does not have that version yet, CI's
-last job starts the release. The release builds the native `tolean` on
+main. When CI passes on main and that version has no GitHub release yet,
+CI's last job starts the release. The release builds the native `tolean` on
 Linux, macOS and Windows, packs the npm packages, and installs them as a
 user would. Then it waits for approval, publishes the packages to npm and
 tags the commit. While a release is queued, waiting or running, CI starts
