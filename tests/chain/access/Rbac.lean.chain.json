@@ -1,10 +1,10 @@
-{"tolean": "0.1.0",
+{"tolean": "0.2.0",
  "target": "ES2024",
  "sources":
  [{"sha256": "d3e7feceac8d0df0d50d872502067238023379759c43ab8ab96ced683422b727",
    "path": "access/rbac.ts"}],
  "output":
- {"sha256": "c0760c4bd7592a94b8d0abcb0eff9cfa9870d90f58a1629ec6bac62bb9252b82",
+ {"sha256": "76e492c52e23b1808b614cfda5c16357a4e04ef89c3b8f3d1081c2c82baba27c",
   "path": "access/Rbac.lean"},
  "nodes":
  [{"status": "tested",
