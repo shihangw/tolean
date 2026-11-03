@@ -437,16 +437,16 @@ tolean translate --target ES2022 input.ts Output.lean My.Namespace
 
 ## The npm package
 
-`npm/` is the `tolean` package. Its `package.json` sets `"private": true`, so
-nobody can publish it by accident. To publish it, remove that line. The
-package contains the `tolean` command, the `translateSource` and
-`translateWorkspace` functions, and the Lean runtime in `lean/`. All of them
-run the native `tolean` binary for the platform, which
+`npm/` is the `tolean` package on npm. It contains the `tolean` command, the
+`translateSource` and `translateWorkspace` functions, and the Lean runtime in
+`lean/`. All of them run the native `tolean` binary for the platform, which
 `.github/workflows/release.yml` builds with Lean's own toolchain for each
-platform that Lean supports. Until those binaries are published as
-`@tolean/<platform>` packages, set `TOLEAN_BINARY` to a `tolean` that Lake
-built. `translateSource` returns a promise, because it runs the binary as a
-child process.
+platform that Lean supports. Each binary is its own package, such as
+`@tolean/darwin-arm64`, and npm installs only the one for the platform. To
+run another binary, such as one that Lake built, set `TOLEAN_BINARY` to its
+path. `translateSource` returns a promise, because it runs the binary as a
+child process. The package's README is this repository's README, which the
+npm build copies with each relative link made absolute.
 
 ```sh
 tolean <input.ts> <output.lean> <Lean.Namespace>

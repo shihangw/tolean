@@ -3,6 +3,7 @@ node_modules/
 /npm/dist
 /npm/lean
 /npm/LICENSE
+/npm/README.md
 .DS_Store
 /tests/chain/.lake
 .emcache/
