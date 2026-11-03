@@ -152,7 +152,7 @@ links for each claim.
 | Concurrency model | None: the subset is single-threaded. | None: no goroutines. | **Proved**: the READ COMMITTED model's theorems.<br>Tested: the model, against the server. |
 | Claims about the generated code | **Proved**. | **Proved**. | **Proved**. |
 | What runs | Trusted: the JavaScript engine. | Trusted: the Go compiler. | Trusted: the PostgreSQL server and its constraints. |
-| Inputs | Trusted: the inputs meet each theorem's preconditions. Nothing checks it yet, and boundary guards are planned. | Trusted: the inputs meet each theorem's preconditions. Nothing checks it yet. | Trusted: the inputs meet each theorem's preconditions. Nothing checks it yet. |
+| Inputs | Trusted: the inputs meet each theorem's preconditions, and the callers are responsible for it. A function can check its own inputs instead, and [a plan](docs/plans/input-checks.md) lets `tolean.json` require that. | Trusted: the inputs meet each theorem's preconditions, and the callers are responsible for it. A function can check its own inputs instead, and [a plan](docs/plans/input-checks.md) lets `tolean.json` require that. | Trusted: the inputs meet each theorem's preconditions, and the callers are responsible for it. A function can check its own inputs instead, and [a plan](docs/plans/input-checks.md) lets `tolean.json` require that. |
 | Glue code | None: the functions are pure, so they need no glue to a store or a database. | Trusted: the glue between an interface and a real store. | Trusted: the code that calls the queries. |
 
 The playground runs the translator compiled to WebAssembly, so it also
