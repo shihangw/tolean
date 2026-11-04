@@ -140,21 +140,59 @@ pieces](shared-core.md) adds exceptions to the IR, and this stage uses them.
 
 ### Strings
 
+The string model comes before every other step, because the current mapping
+of `string` stops being exact as soon as any string operation exists.
+
+#### The string model
+
+A JavaScript string is a sequence of UTF-16 code units (§6.1.4), and it can
+hold a lone surrogate. A Lean `String` is a sequence of Unicode scalar values,
+so it cannot hold a lone surrogate, and it orders and measures text in a
+different way. For example, U+FFFF sorts after U+10000 in JavaScript, because
+U+10000 starts with the code unit 0xD800. In Lean it sorts before it. The
+mapping of `string` to `String` is exact today only because the subset has no
+string operation except `===`.
+
+So `string` becomes a new type, `JSString`, a structure around
+`List UInt16`. That is the definition in the spec, so the model is exact for
+every string, lone surrogates included. Each string operation becomes an
+ordinary function on the list, written from the algorithm in the spec, and
+proofs use the usual `List` lemmas.
+
+A literal such as `"abc"` prints as `JSString.ofString "abc"`, which encodes
+the text as UTF-16. A literal that holds a lone surrogate, such as
+`"\uD800"`, prints its code units, because a Lean `String` cannot hold it.
+A coercion and a lemma that `ofString` is injective let a claim state a
+literal such as `"abc"` directly.
+
+We considered two other models and rejected both:
+
+- **Keep `String` and refuse the operations whose result differs.** Whether
+  `<` or `length` differs depends on whether a value holds a character
+  above U+FFFF. The translator cannot know that when it translates, so it
+  would have to approximate.
+- **An abstract type with laws, as `number` has.** `number` is abstract
+  because an exact model of doubles is hard. An exact model of strings is
+  easy, and a concrete model with proved lemmas needs no laws to test.
+
+The new type has costs. The generated Lean is less readable, because each
+literal carries `JSString.ofString`. A theorem about a string input now
+covers every list of code units, lone surrogates included. That is correct,
+because a JavaScript caller can pass such a string. A certificate that runs
+string code in the kernel is slower on a list of code units than on a
+`String`.
+
+#### Operations
+
 | TypeScript | Lean | Refused |
 |---|---|---|
-| Template literals whose parts are `string`, `boolean`, `bigint` or a safe integer `number` | `String.append` and `toString`. ECMA-262 defines how each converts (§6.1.6.1.20 and §6.1.6.2.21). | A part that is a non-integer `number` or an object |
-| `<` and `===` on strings | The order of UTF-16 code units (§7.2.13) | `localeCompare`, which depends on the locale |
-| `length`, `slice` (§22.1.3.22), `startsWith`, `endsWith`, `includes`, `indexOf`, `split` with a string separator (§22.1.3.23), `padStart`, `padEnd` and `trim` | Functions on the list of code units | `split` with a regular expression, and every regular expression in the first version |
-| `toUpperCase` and `toLowerCase` (§22.1.3.30 and §22.1.3.28) | Only for strings that the translator can show are ASCII | Other strings, because the result follows the Unicode version of the engine, and that version changes between Node releases |
+| `===` and `!==` on strings | List equality, as SameValueNonNumber compares strings (§7.2.12) | |
+| `<`, `<=`, `>` and `>=` on strings | Lexicographic order on code units, as IsLessThan defines it (§7.2.13) | `localeCompare`, which depends on the locale |
+| `+` on strings, and template literals whose parts are `string`, `boolean`, `bigint` or a safe integer `number` | `List.append`. Numbers and `bigint` values convert to ASCII digits (§6.1.6.1.20 and §6.1.6.2.21). | A part that is a non-integer `number` or an object |
+| `length`, `at` (§22.1.3.1), `slice` (§22.1.3.22), `startsWith`, `endsWith`, `includes`, `indexOf`, `split` with a string separator (§22.1.3.23), `padStart`, `padEnd` and `trim` | Functions on the list of code units. `slice` and `at` follow the spec for negative and out-of-range indexes. | `split` with a regular expression, and every regular expression in the first version |
+| `for (const c of s)` and `[...s]` | Iteration by code point, which joins each surrogate pair (§22.1.3.36 and §22.1.5) | |
+| `toUpperCase` and `toLowerCase` (§22.1.3.30 and §22.1.3.28) | Only for strings that the translator can show are ASCII | `normalize` (§22.1.3.15), and case changes of other strings, because their results follow the Unicode version of the engine, and that version changes between Node releases |
 | `JSON.stringify(x)` | An opaque function | |
-
-A JavaScript string is a sequence of UTF-16 code units (§6.1.4), and it may
-hold a lone surrogate. A Lean `String` is a sequence of Unicode scalar values,
-so it cannot hold a lone surrogate, and its order and its length differ. For
-example, U+FFFF sorts after U+10000 in JavaScript, because U+10000 starts with
-the code unit 0xD800, but it sorts before it in Lean. So `string` becomes a
-list of code units in this stage. The current mapping to `String` is exact
-only because the subset has no string operation except `===`.
 
 `JSON.stringify` is deterministic and fully specified (§25.5.2), but a model
 of it is large. Code calls it mostly to build error messages. The first
@@ -221,31 +259,36 @@ be exact:
 ## Steps
 
 Each step ends with all checks green, with both translators in agreement, and
-with no change to the output of code that is already in the subset.
+with no change to the output of code that is already in the subset. Step 1
+is the one exception, because it changes the type of every `string`.
 
-1. Types and narrowing: aliases, literal unions, tagged unions with
+1. Switch `string` to `JSString`. Today a string appears only in fields,
+   literals and `===`, so the switch changes the generated types but breaks
+   almost no proof. Every project that writes proofs over Lean's `String`
+   makes the switch more costly later, so it comes first.
+2. Types and narrowing: aliases, literal unions, tagged unions with
    `switch`, optional fields, and the `null` and `undefined` operators.
-2. Generic functions and types whose type parameters have no constraint,
+3. Generic functions and types whose type parameters have no constraint,
    tuples, string enums, `typeof` tests and type guards.
-3. Callbacks that read only `const` values, the array methods without
+4. Callbacks that read only `const` values, the array methods without
    `sort`, indexing, and object spread.
-4. Control flow: `return` inside a loop, `break`, `continue`, and the counted
+5. Control flow: `return` inside a loop, `break`, `continue`, and the counted
    `for` loop.
-5. Errors, after step 3 of the [shared core plan](shared-core.md) adds
+6. Errors, after step 3 of the [shared core plan](shared-core.md) adds
    exceptions to the IR.
-6. Local functions that change variables of the enclosing function, by lifting
+7. Local functions that change variables of the enclosing function, by lifting
    them out and threading the variables through each call.
-7. `Map` and `Set`, with owned values and the borrow for a map that a caller
+8. `Map` and `Set`, with owned values and the borrow for a map that a caller
    passes in.
-8. Strings: the model as a list of code units, template literals, string
-   order, the string methods, and the opaque `JSON.stringify`.
-9. Sorting with consistent comparators.
-10. Recursion: structural recursion and types that refer to themselves first,
+9. Strings: template literals, string order, the string methods, iteration
+   by code point, and the opaque `JSON.stringify`.
+10. Sorting with consistent comparators.
+11. Recursion: structural recursion and types that refer to themselves first,
     then `@decreases`, mutual recursion, and `while` loops.
-11. The new number and `bigint` operations, and the `Date` methods.
-12. Classes with `readonly` fields and methods that do not change `this`.
+12. The new number and `bigint` operations, and the `Date` methods.
+13. Classes with `readonly` fields and methods that do not change `this`.
 
-Steps 1 and 3 cover most of the code in the survey. Steps 6 and 7 matter
+Steps 2 and 4 cover most of the code in the survey. Steps 7 and 8 matter
 most for proofs, because a fold over events keeps its state in local
 variables and in maps.
 
