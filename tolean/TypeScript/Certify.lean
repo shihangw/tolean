@@ -232,21 +232,21 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
   let names := { names with namespacePrefix := r.full transNs ++ "." }
   let fns := certifiable m
   if fns.isEmpty then throw s!"{file}: there is no function to certify"
-  let nv := names.numberVar
+  let nv := names.typeParam
   -- Every theorem is about every number model.
   let generic := s!"\{{nv} : Type} [tolean.TypeScript.JSNumber {nv}]"
   -- A generic translated definition takes the model by name, as the
   -- translation's own calls do.
-  let callN := if names.usesNumber then s!" ({nv} := {nv})" else ""
-  let structTy (name : String) : String := (IR.Ty.struct ⟨"", name⟩).print names
+  let callN := if names.generic then s!" ({nv} := {nv})" else ""
+  let structTy (name : String) : String := (IR.Ty.struct ⟨"", name⟩ : IR.Ty).print names
   let mut encs : Array String := #[]
   let mut lemmaNames : Array String :=
     #["encList", "decInt", "decBool", "decStr", "decNum"].map r.eval
   -- A literal union: each constructor is its string.
   for d in decls do
     if let .enum name members := d then
-      let ty := (IR.Ty.enum ⟨"", name⟩).print names
-      let ctor (m : String) : String := (IR.Expr.enumCase ⟨"", name⟩ m).print names
+      let ty := (IR.Ty.enum ⟨"", name⟩ : IR.Ty).print names
+      let ctor (m : String) : String := (IR.Expr.enumCase ⟨"", name⟩ m : IR.Expr).print names
       let first := members.head?.getD ""
       encs := encs.push <|
         s!"def encode{name} {generic} : {ty} → Val {nv}\n" ++

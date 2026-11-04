@@ -152,283 +152,226 @@ theorem program_parsed : tolean.TypeScript.Syntax.parseChars sourceChars .es2024
 
 /-- The Tolean IR, as the translator gives it for the program. -/
 def decls : List tolean.TypeScript.IR.Decl :=
-  [tolean.TypeScript.IR.Decl.struct
+  [tolean.IR.Decl.struct
    "Binding"
-   [("tenant", tolean.TypeScript.IR.Ty.string),
-    ("role", tolean.TypeScript.IR.Ty.string),
-    ("member", tolean.TypeScript.IR.Ty.string)],
- tolean.TypeScript.IR.Decl.struct
-   "Grant"
-   [("role", tolean.TypeScript.IR.Ty.string), ("permission", tolean.TypeScript.IR.Ty.string)],
- tolean.TypeScript.IR.Decl.struct
+   [("tenant", tolean.IR.Ty.string),
+    ("role", tolean.IR.Ty.string),
+    ("member", tolean.IR.Ty.string)],
+ tolean.IR.Decl.struct "Grant" [("role", tolean.IR.Ty.string), ("permission", tolean.IR.Ty.string)],
+ tolean.IR.Decl.struct
    "Membership"
-   [("group", tolean.TypeScript.IR.Ty.string), ("principal", tolean.TypeScript.IR.Ty.string)],
- tolean.TypeScript.IR.Decl.struct
+   [("group", tolean.IR.Ty.string), ("principal", tolean.IR.Ty.string)],
+ tolean.IR.Decl.struct
    "Deny"
-   [("tenant", tolean.TypeScript.IR.Ty.string),
-    ("permission", tolean.TypeScript.IR.Ty.string),
-    ("member", tolean.TypeScript.IR.Ty.string)],
- tolean.TypeScript.IR.Decl.struct
+   [("tenant", tolean.IR.Ty.string),
+    ("permission", tolean.IR.Ty.string),
+    ("member", tolean.IR.Ty.string)],
+ tolean.IR.Decl.struct
    "Policy"
-   [("bindings",
-     tolean.TypeScript.IR.Ty.list
-       (tolean.TypeScript.IR.Ty.struct { file := "", name := "Binding" })),
-    ("grants",
-     tolean.TypeScript.IR.Ty.list (tolean.TypeScript.IR.Ty.struct { file := "", name := "Grant" })),
-    ("groups",
-     tolean.TypeScript.IR.Ty.list
-       (tolean.TypeScript.IR.Ty.struct { file := "", name := "Membership" })),
-    ("denies",
-     tolean.TypeScript.IR.Ty.list (tolean.TypeScript.IR.Ty.struct { file := "", name := "Deny" }))],
- tolean.TypeScript.IR.Decl.struct
+   [("bindings", tolean.IR.Ty.list (tolean.IR.Ty.struct { file := "", name := "Binding" })),
+    ("grants", tolean.IR.Ty.list (tolean.IR.Ty.struct { file := "", name := "Grant" })),
+    ("groups", tolean.IR.Ty.list (tolean.IR.Ty.struct { file := "", name := "Membership" })),
+    ("denies", tolean.IR.Ty.list (tolean.IR.Ty.struct { file := "", name := "Deny" }))],
+ tolean.IR.Decl.struct
    "Request"
-   [("tenant", tolean.TypeScript.IR.Ty.string),
-    ("principal", tolean.TypeScript.IR.Ty.string),
-    ("permission", tolean.TypeScript.IR.Ty.string)],
- tolean.TypeScript.IR.Decl.function
+   [("tenant", tolean.IR.Ty.string),
+    ("principal", tolean.IR.Ty.string),
+    ("permission", tolean.IR.Ty.string)],
+ tolean.IR.Decl.function
    "inGroup"
-   [("groups",
-     tolean.TypeScript.IR.Ty.list
-       (tolean.TypeScript.IR.Ty.struct { file := "", name := "Membership" })),
-    ("group", tolean.TypeScript.IR.Ty.string),
-    ("principal", tolean.TypeScript.IR.Ty.string)]
-   (tolean.TypeScript.IR.Ty.bool)
-   (tolean.TypeScript.IR.Body.let
+   [("groups", tolean.IR.Ty.list (tolean.IR.Ty.struct { file := "", name := "Membership" })),
+    ("group", tolean.IR.Ty.string),
+    ("principal", tolean.IR.Ty.string)]
+   (tolean.IR.Ty.bool)
+   (tolean.IR.Body.let
      "found"
-     (tolean.TypeScript.IR.Expr.bool false)
-     (tolean.TypeScript.IR.Body.fold
+     (tolean.IR.Expr.bool false)
+     (tolean.IR.Body.fold
        ["found"]
        "m"
-       (tolean.TypeScript.IR.Body.letState
+       (tolean.IR.Body.letState
          ["found"]
-         (tolean.TypeScript.IR.Body.ite
-           (tolean.TypeScript.IR.Expr.propAnd
-             (tolean.TypeScript.IR.Expr.eq
-               (tolean.TypeScript.IR.Expr.field (tolean.TypeScript.IR.Expr.var "m") false "group")
-               (tolean.TypeScript.IR.Expr.var "group"))
-             (tolean.TypeScript.IR.Expr.eq
-               (tolean.TypeScript.IR.Expr.field
-                 (tolean.TypeScript.IR.Expr.var "m")
-                 false
-                 "principal")
-               (tolean.TypeScript.IR.Expr.var "principal")))
-           (tolean.TypeScript.IR.Body.let
-             "found"
-             (tolean.TypeScript.IR.Expr.bool true)
-             (tolean.TypeScript.IR.Body.state ["found"]))
-           (tolean.TypeScript.IR.Body.state ["found"]))
-         (tolean.TypeScript.IR.Body.state ["found"]))
-       (tolean.TypeScript.IR.Expr.var "groups")
-       (tolean.TypeScript.IR.Body.value (tolean.TypeScript.IR.Expr.var "found"))
+         (tolean.IR.Body.ite
+           (tolean.IR.Expr.propAnd
+             (tolean.IR.Expr.eq
+               (tolean.IR.Expr.field (tolean.IR.Expr.var "m") false "group")
+               (tolean.IR.Expr.var "group"))
+             (tolean.IR.Expr.eq
+               (tolean.IR.Expr.field (tolean.IR.Expr.var "m") false "principal")
+               (tolean.IR.Expr.var "principal")))
+           (tolean.IR.Body.let "found" (tolean.IR.Expr.bool true) (tolean.IR.Body.state ["found"]))
+           (tolean.IR.Body.state ["found"]))
+         (tolean.IR.Body.state ["found"]))
+       (tolean.IR.Expr.var "groups")
+       (tolean.IR.Body.value (tolean.IR.Expr.var "found"))
        { span := { start := { line := 44, col := 3 }, stop := { line := 48, col := 4 } },
-         stateTypes := [tolean.TypeScript.IR.Ty.bool],
-         elem := tolean.TypeScript.IR.Ty.struct { file := "", name := "Membership" },
+         stateTypes := [tolean.IR.Ty.bool],
+         elem := tolean.IR.Ty.struct { file := "", name := "Membership" },
          scope := [("groups",
-                    tolean.TypeScript.IR.Ty.list
-                      (tolean.TypeScript.IR.Ty.struct { file := "", name := "Membership" })),
-                   ("group", tolean.TypeScript.IR.Ty.string),
-                   ("principal", tolean.TypeScript.IR.Ty.string)] })),
- tolean.TypeScript.IR.Decl.function
+                    tolean.IR.Ty.list (tolean.IR.Ty.struct { file := "", name := "Membership" })),
+                   ("group", tolean.IR.Ty.string),
+                   ("principal", tolean.IR.Ty.string)] })),
+ tolean.IR.Decl.function
    "isMember"
-   [("groups",
-     tolean.TypeScript.IR.Ty.list
-       (tolean.TypeScript.IR.Ty.struct { file := "", name := "Membership" })),
-    ("member", tolean.TypeScript.IR.Ty.string),
-    ("principal", tolean.TypeScript.IR.Ty.string)]
-   (tolean.TypeScript.IR.Ty.bool)
-   (tolean.TypeScript.IR.Body.value
-     (tolean.TypeScript.IR.Expr.or
-       (tolean.TypeScript.IR.Expr.decide
-         (tolean.TypeScript.IR.Expr.eq
-           (tolean.TypeScript.IR.Expr.var "member")
-           (tolean.TypeScript.IR.Expr.var "principal")))
-       (tolean.TypeScript.IR.Expr.call
+   [("groups", tolean.IR.Ty.list (tolean.IR.Ty.struct { file := "", name := "Membership" })),
+    ("member", tolean.IR.Ty.string),
+    ("principal", tolean.IR.Ty.string)]
+   (tolean.IR.Ty.bool)
+   (tolean.IR.Body.value
+     (tolean.IR.Expr.or
+       (tolean.IR.Expr.decide
+         (tolean.IR.Expr.eq (tolean.IR.Expr.var "member") (tolean.IR.Expr.var "principal")))
+       (tolean.IR.Expr.call
          { file := "", name := "inGroup" }
-         [tolean.TypeScript.IR.Expr.var "groups",
-          tolean.TypeScript.IR.Expr.var "member",
-          tolean.TypeScript.IR.Expr.var "principal"]))),
- tolean.TypeScript.IR.Decl.function
+         [tolean.IR.Expr.var "groups",
+          tolean.IR.Expr.var "member",
+          tolean.IR.Expr.var "principal"]))),
+ tolean.IR.Decl.function
    "roleGrants"
-   [("grants",
-     tolean.TypeScript.IR.Ty.list (tolean.TypeScript.IR.Ty.struct { file := "", name := "Grant" })),
-    ("role", tolean.TypeScript.IR.Ty.string),
-    ("permission", tolean.TypeScript.IR.Ty.string)]
-   (tolean.TypeScript.IR.Ty.bool)
-   (tolean.TypeScript.IR.Body.let
+   [("grants", tolean.IR.Ty.list (tolean.IR.Ty.struct { file := "", name := "Grant" })),
+    ("role", tolean.IR.Ty.string),
+    ("permission", tolean.IR.Ty.string)]
+   (tolean.IR.Ty.bool)
+   (tolean.IR.Body.let
      "found"
-     (tolean.TypeScript.IR.Expr.bool false)
-     (tolean.TypeScript.IR.Body.fold
+     (tolean.IR.Expr.bool false)
+     (tolean.IR.Body.fold
        ["found"]
        "g"
-       (tolean.TypeScript.IR.Body.letState
+       (tolean.IR.Body.letState
          ["found"]
-         (tolean.TypeScript.IR.Body.ite
-           (tolean.TypeScript.IR.Expr.propAnd
-             (tolean.TypeScript.IR.Expr.eq
-               (tolean.TypeScript.IR.Expr.field (tolean.TypeScript.IR.Expr.var "g") false "role")
-               (tolean.TypeScript.IR.Expr.var "role"))
-             (tolean.TypeScript.IR.Expr.eq
-               (tolean.TypeScript.IR.Expr.field
-                 (tolean.TypeScript.IR.Expr.var "g")
-                 false
-                 "permission")
-               (tolean.TypeScript.IR.Expr.var "permission")))
-           (tolean.TypeScript.IR.Body.let
-             "found"
-             (tolean.TypeScript.IR.Expr.bool true)
-             (tolean.TypeScript.IR.Body.state ["found"]))
-           (tolean.TypeScript.IR.Body.state ["found"]))
-         (tolean.TypeScript.IR.Body.state ["found"]))
-       (tolean.TypeScript.IR.Expr.var "grants")
-       (tolean.TypeScript.IR.Body.value (tolean.TypeScript.IR.Expr.var "found"))
+         (tolean.IR.Body.ite
+           (tolean.IR.Expr.propAnd
+             (tolean.IR.Expr.eq
+               (tolean.IR.Expr.field (tolean.IR.Expr.var "g") false "role")
+               (tolean.IR.Expr.var "role"))
+             (tolean.IR.Expr.eq
+               (tolean.IR.Expr.field (tolean.IR.Expr.var "g") false "permission")
+               (tolean.IR.Expr.var "permission")))
+           (tolean.IR.Body.let "found" (tolean.IR.Expr.bool true) (tolean.IR.Body.state ["found"]))
+           (tolean.IR.Body.state ["found"]))
+         (tolean.IR.Body.state ["found"]))
+       (tolean.IR.Expr.var "grants")
+       (tolean.IR.Body.value (tolean.IR.Expr.var "found"))
        { span := { start := { line := 59, col := 3 }, stop := { line := 63, col := 4 } },
-         stateTypes := [tolean.TypeScript.IR.Ty.bool],
-         elem := tolean.TypeScript.IR.Ty.struct { file := "", name := "Grant" },
+         stateTypes := [tolean.IR.Ty.bool],
+         elem := tolean.IR.Ty.struct { file := "", name := "Grant" },
          scope := [("grants",
-                    tolean.TypeScript.IR.Ty.list
-                      (tolean.TypeScript.IR.Ty.struct { file := "", name := "Grant" })),
-                   ("role", tolean.TypeScript.IR.Ty.string),
-                   ("permission", tolean.TypeScript.IR.Ty.string)] })),
- tolean.TypeScript.IR.Decl.function
+                    tolean.IR.Ty.list (tolean.IR.Ty.struct { file := "", name := "Grant" })),
+                   ("role", tolean.IR.Ty.string),
+                   ("permission", tolean.IR.Ty.string)] })),
+ tolean.IR.Decl.function
    "bindingAllows"
-   [("p", tolean.TypeScript.IR.Ty.struct { file := "", name := "Policy" }),
-    ("b", tolean.TypeScript.IR.Ty.struct { file := "", name := "Binding" }),
-    ("req", tolean.TypeScript.IR.Ty.struct { file := "", name := "Request" })]
-   (tolean.TypeScript.IR.Ty.bool)
-   (tolean.TypeScript.IR.Body.value
-     (tolean.TypeScript.IR.Expr.and
-       (tolean.TypeScript.IR.Expr.and
-         (tolean.TypeScript.IR.Expr.decide
-           (tolean.TypeScript.IR.Expr.eq
-             (tolean.TypeScript.IR.Expr.field (tolean.TypeScript.IR.Expr.var "b") false "tenant")
-             (tolean.TypeScript.IR.Expr.field
-               (tolean.TypeScript.IR.Expr.var "req")
-               false
-               "tenant")))
-         (tolean.TypeScript.IR.Expr.call
+   [("p", tolean.IR.Ty.struct { file := "", name := "Policy" }),
+    ("b", tolean.IR.Ty.struct { file := "", name := "Binding" }),
+    ("req", tolean.IR.Ty.struct { file := "", name := "Request" })]
+   (tolean.IR.Ty.bool)
+   (tolean.IR.Body.value
+     (tolean.IR.Expr.and
+       (tolean.IR.Expr.and
+         (tolean.IR.Expr.decide
+           (tolean.IR.Expr.eq
+             (tolean.IR.Expr.field (tolean.IR.Expr.var "b") false "tenant")
+             (tolean.IR.Expr.field (tolean.IR.Expr.var "req") false "tenant")))
+         (tolean.IR.Expr.call
            { file := "", name := "isMember" }
-           [tolean.TypeScript.IR.Expr.field (tolean.TypeScript.IR.Expr.var "p") false "groups",
-            tolean.TypeScript.IR.Expr.field (tolean.TypeScript.IR.Expr.var "b") false "member",
-            tolean.TypeScript.IR.Expr.field
-              (tolean.TypeScript.IR.Expr.var "req")
-              false
-              "principal"]))
-       (tolean.TypeScript.IR.Expr.call
+           [tolean.IR.Expr.field (tolean.IR.Expr.var "p") false "groups",
+            tolean.IR.Expr.field (tolean.IR.Expr.var "b") false "member",
+            tolean.IR.Expr.field (tolean.IR.Expr.var "req") false "principal"]))
+       (tolean.IR.Expr.call
          { file := "", name := "roleGrants" }
-         [tolean.TypeScript.IR.Expr.field (tolean.TypeScript.IR.Expr.var "p") false "grants",
-          tolean.TypeScript.IR.Expr.field (tolean.TypeScript.IR.Expr.var "b") false "role",
-          tolean.TypeScript.IR.Expr.field
-            (tolean.TypeScript.IR.Expr.var "req")
-            false
-            "permission"]))),
- tolean.TypeScript.IR.Decl.function
+         [tolean.IR.Expr.field (tolean.IR.Expr.var "p") false "grants",
+          tolean.IR.Expr.field (tolean.IR.Expr.var "b") false "role",
+          tolean.IR.Expr.field (tolean.IR.Expr.var "req") false "permission"]))),
+ tolean.IR.Decl.function
    "denyApplies"
-   [("p", tolean.TypeScript.IR.Ty.struct { file := "", name := "Policy" }),
-    ("d", tolean.TypeScript.IR.Ty.struct { file := "", name := "Deny" }),
-    ("req", tolean.TypeScript.IR.Ty.struct { file := "", name := "Request" })]
-   (tolean.TypeScript.IR.Ty.bool)
-   (tolean.TypeScript.IR.Body.value
-     (tolean.TypeScript.IR.Expr.and
-       (tolean.TypeScript.IR.Expr.decide
-         (tolean.TypeScript.IR.Expr.propAnd
-           (tolean.TypeScript.IR.Expr.eq
-             (tolean.TypeScript.IR.Expr.field (tolean.TypeScript.IR.Expr.var "d") false "tenant")
-             (tolean.TypeScript.IR.Expr.field (tolean.TypeScript.IR.Expr.var "req") false "tenant"))
-           (tolean.TypeScript.IR.Expr.eq
-             (tolean.TypeScript.IR.Expr.field
-               (tolean.TypeScript.IR.Expr.var "d")
-               false
-               "permission")
-             (tolean.TypeScript.IR.Expr.field
-               (tolean.TypeScript.IR.Expr.var "req")
-               false
-               "permission"))))
-       (tolean.TypeScript.IR.Expr.call
+   [("p", tolean.IR.Ty.struct { file := "", name := "Policy" }),
+    ("d", tolean.IR.Ty.struct { file := "", name := "Deny" }),
+    ("req", tolean.IR.Ty.struct { file := "", name := "Request" })]
+   (tolean.IR.Ty.bool)
+   (tolean.IR.Body.value
+     (tolean.IR.Expr.and
+       (tolean.IR.Expr.decide
+         (tolean.IR.Expr.propAnd
+           (tolean.IR.Expr.eq
+             (tolean.IR.Expr.field (tolean.IR.Expr.var "d") false "tenant")
+             (tolean.IR.Expr.field (tolean.IR.Expr.var "req") false "tenant"))
+           (tolean.IR.Expr.eq
+             (tolean.IR.Expr.field (tolean.IR.Expr.var "d") false "permission")
+             (tolean.IR.Expr.field (tolean.IR.Expr.var "req") false "permission"))))
+       (tolean.IR.Expr.call
          { file := "", name := "isMember" }
-         [tolean.TypeScript.IR.Expr.field (tolean.TypeScript.IR.Expr.var "p") false "groups",
-          tolean.TypeScript.IR.Expr.field (tolean.TypeScript.IR.Expr.var "d") false "member",
-          tolean.TypeScript.IR.Expr.field
-            (tolean.TypeScript.IR.Expr.var "req")
-            false
-            "principal"]))),
- tolean.TypeScript.IR.Decl.function
+         [tolean.IR.Expr.field (tolean.IR.Expr.var "p") false "groups",
+          tolean.IR.Expr.field (tolean.IR.Expr.var "d") false "member",
+          tolean.IR.Expr.field (tolean.IR.Expr.var "req") false "principal"]))),
+ tolean.IR.Decl.function
    "allowed"
-   [("p", tolean.TypeScript.IR.Ty.struct { file := "", name := "Policy" }),
-    ("req", tolean.TypeScript.IR.Ty.struct { file := "", name := "Request" })]
-   (tolean.TypeScript.IR.Ty.bool)
-   (tolean.TypeScript.IR.Body.let
+   [("p", tolean.IR.Ty.struct { file := "", name := "Policy" }),
+    ("req", tolean.IR.Ty.struct { file := "", name := "Request" })]
+   (tolean.IR.Ty.bool)
+   (tolean.IR.Body.let
      "found"
-     (tolean.TypeScript.IR.Expr.bool false)
-     (tolean.TypeScript.IR.Body.fold
+     (tolean.IR.Expr.bool false)
+     (tolean.IR.Body.fold
        ["found"]
        "b"
-       (tolean.TypeScript.IR.Body.letState
+       (tolean.IR.Body.letState
          ["found"]
-         (tolean.TypeScript.IR.Body.ite
-           (tolean.TypeScript.IR.Expr.call
+         (tolean.IR.Body.ite
+           (tolean.IR.Expr.call
              { file := "", name := "bindingAllows" }
-             [tolean.TypeScript.IR.Expr.var "p",
-              tolean.TypeScript.IR.Expr.var "b",
-              tolean.TypeScript.IR.Expr.var "req"])
-           (tolean.TypeScript.IR.Body.let
-             "found"
-             (tolean.TypeScript.IR.Expr.bool true)
-             (tolean.TypeScript.IR.Body.state ["found"]))
-           (tolean.TypeScript.IR.Body.state ["found"]))
-         (tolean.TypeScript.IR.Body.state ["found"]))
-       (tolean.TypeScript.IR.Expr.field (tolean.TypeScript.IR.Expr.var "p") false "bindings")
-       (tolean.TypeScript.IR.Body.value (tolean.TypeScript.IR.Expr.var "found"))
+             [tolean.IR.Expr.var "p", tolean.IR.Expr.var "b", tolean.IR.Expr.var "req"])
+           (tolean.IR.Body.let "found" (tolean.IR.Expr.bool true) (tolean.IR.Body.state ["found"]))
+           (tolean.IR.Body.state ["found"]))
+         (tolean.IR.Body.state ["found"]))
+       (tolean.IR.Expr.field (tolean.IR.Expr.var "p") false "bindings")
+       (tolean.IR.Body.value (tolean.IR.Expr.var "found"))
        { span := { start := { line := 79, col := 3 }, stop := { line := 83, col := 4 } },
-         stateTypes := [tolean.TypeScript.IR.Ty.bool],
-         elem := tolean.TypeScript.IR.Ty.struct { file := "", name := "Binding" },
-         scope := [("p", tolean.TypeScript.IR.Ty.struct { file := "", name := "Policy" }),
-                   ("req", tolean.TypeScript.IR.Ty.struct { file := "", name := "Request" })] })),
- tolean.TypeScript.IR.Decl.function
+         stateTypes := [tolean.IR.Ty.bool],
+         elem := tolean.IR.Ty.struct { file := "", name := "Binding" },
+         scope := [("p", tolean.IR.Ty.struct { file := "", name := "Policy" }),
+                   ("req", tolean.IR.Ty.struct { file := "", name := "Request" })] })),
+ tolean.IR.Decl.function
    "denied"
-   [("p", tolean.TypeScript.IR.Ty.struct { file := "", name := "Policy" }),
-    ("req", tolean.TypeScript.IR.Ty.struct { file := "", name := "Request" })]
-   (tolean.TypeScript.IR.Ty.bool)
-   (tolean.TypeScript.IR.Body.let
+   [("p", tolean.IR.Ty.struct { file := "", name := "Policy" }),
+    ("req", tolean.IR.Ty.struct { file := "", name := "Request" })]
+   (tolean.IR.Ty.bool)
+   (tolean.IR.Body.let
      "found"
-     (tolean.TypeScript.IR.Expr.bool false)
-     (tolean.TypeScript.IR.Body.fold
+     (tolean.IR.Expr.bool false)
+     (tolean.IR.Body.fold
        ["found"]
        "d"
-       (tolean.TypeScript.IR.Body.letState
+       (tolean.IR.Body.letState
          ["found"]
-         (tolean.TypeScript.IR.Body.ite
-           (tolean.TypeScript.IR.Expr.call
+         (tolean.IR.Body.ite
+           (tolean.IR.Expr.call
              { file := "", name := "denyApplies" }
-             [tolean.TypeScript.IR.Expr.var "p",
-              tolean.TypeScript.IR.Expr.var "d",
-              tolean.TypeScript.IR.Expr.var "req"])
-           (tolean.TypeScript.IR.Body.let
-             "found"
-             (tolean.TypeScript.IR.Expr.bool true)
-             (tolean.TypeScript.IR.Body.state ["found"]))
-           (tolean.TypeScript.IR.Body.state ["found"]))
-         (tolean.TypeScript.IR.Body.state ["found"]))
-       (tolean.TypeScript.IR.Expr.field (tolean.TypeScript.IR.Expr.var "p") false "denies")
-       (tolean.TypeScript.IR.Body.value (tolean.TypeScript.IR.Expr.var "found"))
+             [tolean.IR.Expr.var "p", tolean.IR.Expr.var "d", tolean.IR.Expr.var "req"])
+           (tolean.IR.Body.let "found" (tolean.IR.Expr.bool true) (tolean.IR.Body.state ["found"]))
+           (tolean.IR.Body.state ["found"]))
+         (tolean.IR.Body.state ["found"]))
+       (tolean.IR.Expr.field (tolean.IR.Expr.var "p") false "denies")
+       (tolean.IR.Body.value (tolean.IR.Expr.var "found"))
        { span := { start := { line := 89, col := 3 }, stop := { line := 93, col := 4 } },
-         stateTypes := [tolean.TypeScript.IR.Ty.bool],
-         elem := tolean.TypeScript.IR.Ty.struct { file := "", name := "Deny" },
-         scope := [("p", tolean.TypeScript.IR.Ty.struct { file := "", name := "Policy" }),
-                   ("req", tolean.TypeScript.IR.Ty.struct { file := "", name := "Request" })] })),
- tolean.TypeScript.IR.Decl.function
+         stateTypes := [tolean.IR.Ty.bool],
+         elem := tolean.IR.Ty.struct { file := "", name := "Deny" },
+         scope := [("p", tolean.IR.Ty.struct { file := "", name := "Policy" }),
+                   ("req", tolean.IR.Ty.struct { file := "", name := "Request" })] })),
+ tolean.IR.Decl.function
    "permits"
-   [("p", tolean.TypeScript.IR.Ty.struct { file := "", name := "Policy" }),
-    ("req", tolean.TypeScript.IR.Ty.struct { file := "", name := "Request" })]
-   (tolean.TypeScript.IR.Ty.bool)
-   (tolean.TypeScript.IR.Body.value
-     (tolean.TypeScript.IR.Expr.and
-       (tolean.TypeScript.IR.Expr.call
+   [("p", tolean.IR.Ty.struct { file := "", name := "Policy" }),
+    ("req", tolean.IR.Ty.struct { file := "", name := "Request" })]
+   (tolean.IR.Ty.bool)
+   (tolean.IR.Body.value
+     (tolean.IR.Expr.and
+       (tolean.IR.Expr.call
          { file := "", name := "allowed" }
-         [tolean.TypeScript.IR.Expr.var "p", tolean.TypeScript.IR.Expr.var "req"])
-       (tolean.TypeScript.IR.Expr.not
-         (tolean.TypeScript.IR.Expr.call
+         [tolean.IR.Expr.var "p", tolean.IR.Expr.var "req"])
+       (tolean.IR.Expr.not
+         (tolean.IR.Expr.call
            { file := "", name := "denied" }
-           [tolean.TypeScript.IR.Expr.var "p", tolean.TypeScript.IR.Expr.var "req"]))))]
+           [tolean.IR.Expr.var "p", tolean.IR.Expr.var "req"]))))]
 
 /-- The state that the translator starts from. The source text serves only in
 the message of a refusal, so the start leaves it out. -/
@@ -516,22 +459,19 @@ def decodeRequest {N : Type} [tolean.TypeScript.JSNumber N] : Option (Val N) →
 theorem inGroup_loop1 {N : Type} [tolean.TypeScript.JSNumber N] (fs : List (tolean.DeclRef × List String × tolean.TypeScript.IR.Body))
     (fuel : Nat) (items : List access.Rbac.Membership) (ρ : Env N) (hI : ρ.lookup "found" = some (Val.bool (decBool (ρ.lookup "found"))) ∧ ρ.lookup "groups" = some ((encList encodeMembership) ((decList decodeMembership) (ρ.lookup "groups"))) ∧ ρ.lookup "group" = some (Val.str (decStr (ρ.lookup "group"))) ∧ ρ.lookup "principal" = some (Val.str (decStr (ρ.lookup "principal")))) :
     tolean.TypeScript.IR.Body.runFold fs fuel ["found"] "m"
-      (tolean.TypeScript.IR.Body.letState
+      (tolean.IR.Body.letState
   ["found"]
-  (tolean.TypeScript.IR.Body.ite
-    (tolean.TypeScript.IR.Expr.propAnd
-      (tolean.TypeScript.IR.Expr.eq
-        (tolean.TypeScript.IR.Expr.field (tolean.TypeScript.IR.Expr.var "m") false "group")
-        (tolean.TypeScript.IR.Expr.var "group"))
-      (tolean.TypeScript.IR.Expr.eq
-        (tolean.TypeScript.IR.Expr.field (tolean.TypeScript.IR.Expr.var "m") false "principal")
-        (tolean.TypeScript.IR.Expr.var "principal")))
-    (tolean.TypeScript.IR.Body.let
-      "found"
-      (tolean.TypeScript.IR.Expr.bool true)
-      (tolean.TypeScript.IR.Body.state ["found"]))
-    (tolean.TypeScript.IR.Body.state ["found"]))
-  (tolean.TypeScript.IR.Body.state ["found"])) ρ (List.map encodeMembership items) =
+  (tolean.IR.Body.ite
+    (tolean.IR.Expr.propAnd
+      (tolean.IR.Expr.eq
+        (tolean.IR.Expr.field (tolean.IR.Expr.var "m") false "group")
+        (tolean.IR.Expr.var "group"))
+      (tolean.IR.Expr.eq
+        (tolean.IR.Expr.field (tolean.IR.Expr.var "m") false "principal")
+        (tolean.IR.Expr.var "principal")))
+    (tolean.IR.Body.let "found" (tolean.IR.Expr.bool true) (tolean.IR.Body.state ["found"]))
+    (tolean.IR.Body.state ["found"]))
+  (tolean.IR.Body.state ["found"])) ρ (List.map encodeMembership items) =
       some (ρ.set "found" (Val.bool (List.foldl (((fun groups group principal => fun found m =>
         let found :=
           if (m.group = group) ∧ (m.principal = principal) then
@@ -586,22 +526,19 @@ theorem isMember_cert {N : Type} [tolean.TypeScript.JSNumber N] (groups : _) (me
 theorem roleGrants_loop1 {N : Type} [tolean.TypeScript.JSNumber N] (fs : List (tolean.DeclRef × List String × tolean.TypeScript.IR.Body))
     (fuel : Nat) (items : List access.Rbac.Grant) (ρ : Env N) (hI : ρ.lookup "found" = some (Val.bool (decBool (ρ.lookup "found"))) ∧ ρ.lookup "grants" = some ((encList encodeGrant) ((decList decodeGrant) (ρ.lookup "grants"))) ∧ ρ.lookup "role" = some (Val.str (decStr (ρ.lookup "role"))) ∧ ρ.lookup "permission" = some (Val.str (decStr (ρ.lookup "permission")))) :
     tolean.TypeScript.IR.Body.runFold fs fuel ["found"] "g"
-      (tolean.TypeScript.IR.Body.letState
+      (tolean.IR.Body.letState
   ["found"]
-  (tolean.TypeScript.IR.Body.ite
-    (tolean.TypeScript.IR.Expr.propAnd
-      (tolean.TypeScript.IR.Expr.eq
-        (tolean.TypeScript.IR.Expr.field (tolean.TypeScript.IR.Expr.var "g") false "role")
-        (tolean.TypeScript.IR.Expr.var "role"))
-      (tolean.TypeScript.IR.Expr.eq
-        (tolean.TypeScript.IR.Expr.field (tolean.TypeScript.IR.Expr.var "g") false "permission")
-        (tolean.TypeScript.IR.Expr.var "permission")))
-    (tolean.TypeScript.IR.Body.let
-      "found"
-      (tolean.TypeScript.IR.Expr.bool true)
-      (tolean.TypeScript.IR.Body.state ["found"]))
-    (tolean.TypeScript.IR.Body.state ["found"]))
-  (tolean.TypeScript.IR.Body.state ["found"])) ρ (List.map encodeGrant items) =
+  (tolean.IR.Body.ite
+    (tolean.IR.Expr.propAnd
+      (tolean.IR.Expr.eq
+        (tolean.IR.Expr.field (tolean.IR.Expr.var "g") false "role")
+        (tolean.IR.Expr.var "role"))
+      (tolean.IR.Expr.eq
+        (tolean.IR.Expr.field (tolean.IR.Expr.var "g") false "permission")
+        (tolean.IR.Expr.var "permission")))
+    (tolean.IR.Body.let "found" (tolean.IR.Expr.bool true) (tolean.IR.Body.state ["found"]))
+    (tolean.IR.Body.state ["found"]))
+  (tolean.IR.Body.state ["found"])) ρ (List.map encodeGrant items) =
       some (ρ.set "found" (Val.bool (List.foldl (((fun grants role permission => fun found g =>
         let found :=
           if (g.role = role) ∧ (g.permission = permission) then
@@ -666,20 +603,15 @@ theorem denyApplies_cert {N : Type} [tolean.TypeScript.JSNumber N] (p : _) (d : 
 theorem allowed_loop1 {N : Type} [tolean.TypeScript.JSNumber N] (fs : List (tolean.DeclRef × List String × tolean.TypeScript.IR.Body)) (hfs : fs = (tolean.TypeScript.IR.functionsOf [("", decls)]))
     (fuel : Nat) (items : List access.Rbac.Binding) (ρ : Env N) (hI : ρ.lookup "found" = some (Val.bool (decBool (ρ.lookup "found"))) ∧ ρ.lookup "p" = some (encodePolicy (decodePolicy (ρ.lookup "p"))) ∧ ρ.lookup "req" = some (encodeRequest (decodeRequest (ρ.lookup "req")))) :
     tolean.TypeScript.IR.Body.runFold fs (fuel + 3) ["found"] "b"
-      (tolean.TypeScript.IR.Body.letState
+      (tolean.IR.Body.letState
   ["found"]
-  (tolean.TypeScript.IR.Body.ite
-    (tolean.TypeScript.IR.Expr.call
+  (tolean.IR.Body.ite
+    (tolean.IR.Expr.call
       { file := "", name := "bindingAllows" }
-      [tolean.TypeScript.IR.Expr.var "p",
-       tolean.TypeScript.IR.Expr.var "b",
-       tolean.TypeScript.IR.Expr.var "req"])
-    (tolean.TypeScript.IR.Body.let
-      "found"
-      (tolean.TypeScript.IR.Expr.bool true)
-      (tolean.TypeScript.IR.Body.state ["found"]))
-    (tolean.TypeScript.IR.Body.state ["found"]))
-  (tolean.TypeScript.IR.Body.state ["found"])) ρ (List.map encodeBinding items) =
+      [tolean.IR.Expr.var "p", tolean.IR.Expr.var "b", tolean.IR.Expr.var "req"])
+    (tolean.IR.Body.let "found" (tolean.IR.Expr.bool true) (tolean.IR.Body.state ["found"]))
+    (tolean.IR.Body.state ["found"]))
+  (tolean.IR.Body.state ["found"])) ρ (List.map encodeBinding items) =
       some (ρ.set "found" (Val.bool (List.foldl (((fun p req => fun found b =>
         let found :=
           if (access.Rbac.bindingAllows p b req) then
@@ -724,20 +656,15 @@ theorem allowed_cert {N : Type} [tolean.TypeScript.JSNumber N] (p : _) (req : _)
 theorem denied_loop1 {N : Type} [tolean.TypeScript.JSNumber N] (fs : List (tolean.DeclRef × List String × tolean.TypeScript.IR.Body)) (hfs : fs = (tolean.TypeScript.IR.functionsOf [("", decls)]))
     (fuel : Nat) (items : List access.Rbac.Deny) (ρ : Env N) (hI : ρ.lookup "found" = some (Val.bool (decBool (ρ.lookup "found"))) ∧ ρ.lookup "p" = some (encodePolicy (decodePolicy (ρ.lookup "p"))) ∧ ρ.lookup "req" = some (encodeRequest (decodeRequest (ρ.lookup "req")))) :
     tolean.TypeScript.IR.Body.runFold fs (fuel + 3) ["found"] "d"
-      (tolean.TypeScript.IR.Body.letState
+      (tolean.IR.Body.letState
   ["found"]
-  (tolean.TypeScript.IR.Body.ite
-    (tolean.TypeScript.IR.Expr.call
+  (tolean.IR.Body.ite
+    (tolean.IR.Expr.call
       { file := "", name := "denyApplies" }
-      [tolean.TypeScript.IR.Expr.var "p",
-       tolean.TypeScript.IR.Expr.var "d",
-       tolean.TypeScript.IR.Expr.var "req"])
-    (tolean.TypeScript.IR.Body.let
-      "found"
-      (tolean.TypeScript.IR.Expr.bool true)
-      (tolean.TypeScript.IR.Body.state ["found"]))
-    (tolean.TypeScript.IR.Body.state ["found"]))
-  (tolean.TypeScript.IR.Body.state ["found"])) ρ (List.map encodeDeny items) =
+      [tolean.IR.Expr.var "p", tolean.IR.Expr.var "d", tolean.IR.Expr.var "req"])
+    (tolean.IR.Body.let "found" (tolean.IR.Expr.bool true) (tolean.IR.Body.state ["found"]))
+    (tolean.IR.Body.state ["found"]))
+  (tolean.IR.Body.state ["found"])) ρ (List.map encodeDeny items) =
       some (ρ.set "found" (Val.bool (List.foldl (((fun p req => fun found d =>
         let found :=
           if (access.Rbac.denyApplies p d req) then

@@ -2,15 +2,17 @@ import tolean.TypeScript.IR
 import tolean.TypeScript.Spec.Eval
 
 /-!
-The meaning of the Tolean IR, as an evaluator over the values
-of the interpreter in `Spec/Eval.lean`.
+The meaning of the Tolean IR with the TypeScript extension, as an evaluator
+over the values of the interpreter in `Spec/Eval.lean`.
 
 Each constructor of `IR.Expr` and `IR.Body` is one form of Lean code.
 The evaluator gives it the value that the printed Lean computes, written as a
 JavaScript value: an `Int` is `Val.int`, `none` is `Val.null`, `some v` is the
 value of `v`, a list is `Val.list`, and a structure is `Val.obj` with its
 fields in the declared order. A `let` adds a binding in front, as Lean's
-shadowing does, and `let (x, y) := …` gives `x` and `y` their new values.
+shadowing does, and `let (x, y) := …` gives `x` and `y` their new values. An
+operation that TypeScript adds, such as `JSNumber.add`, gets the values of its
+arguments, and `ExprExt.apply` gives its value.
 
 `translate_sound` in `Proof/Module.lean` proves one direction for every
 program that the translator accepts: when this evaluator gives a value for a
@@ -46,18 +48,6 @@ def eqVal : Val N → Val N → Option Bool
   | .str a, .str b => some (decide (a = b))
   | _, _ => none
 
-def IntOp.apply : IntOp → Int → Int → Int
-  | .add => (· + ·) | .sub => (· - ·) | .mul => (· * ·)
-
-def Order.apply : Order → Int → Int → Bool
-  | .lt, a, b => decide (a < b)
-  | .le, a, b => decide (a ≤ b)
-  | .gt, a, b => decide (a > b)
-  | .ge, a, b => decide (a ≥ b)
-
-def Division.apply : Division → Int → Int → Int
-  | .tdiv => Int.tdiv | .tmod => Int.tmod
-
 def NumberOp.apply : NumberOp → N → N → Val N
   | .add, a, b => .num (JSNumber.add a b)
   | .sub, a, b => .num (JSNumber.sub a b)
@@ -73,6 +63,16 @@ def NumberTest.apply : NumberTest → N → Bool
   | .isSafeInteger, a => (JSNumber.toSafeInt a).isSome
   | .isNaN, a => JSNumber.isNaN a
   | .isFinite, a => JSNumber.isFinite a
+
+/-- An operation that TypeScript adds, on the values of its arguments. -/
+def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
+  | .number n, [] => some (.num (JSNumber.ofSafeInt n))
+  | .numberConstant c, [] => some (.num c.value)
+  | .numberNeg, [.num a] => some (.num (JSNumber.neg a))
+  | .numberOp op, [.num a, .num b] => some (op.apply a b)
+  | .numberNe, [.num a, .num b] => some (.bool !(JSNumber.eq a b))
+  | .numberTest test, [.num a] => some (.bool (test.apply a))
+  | _, _ => none
 
 /-- The bindings that `let (x, y) := …` makes: each of `names`, with its value
 in `inner`. A name that is bound already gets the new value in its place,
@@ -90,8 +90,6 @@ mutual
 def Expr.eval (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : Env N) :
     Expr → Option (Val N)
   | .int n => some (.int n)
-  | .number n => some (.num (JSNumber.ofSafeInt n))
-  | .numberConstant c => some (.num c.value)
   | .none => some .null
   | .bool b => some (.bool b)
   | .string s => some (.str s)
@@ -108,9 +106,6 @@ def Expr.eval (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
   | .neg a => do
     let .int i ← Expr.eval fs fuel ρ a | none
     return .int (-i)
-  | .numberNeg a => do
-    let .num n ← Expr.eval fs fuel ρ a | none
-    return .num (JSNumber.neg n)
   | .ite c a b => do
     let .bool t ← Expr.eval fs fuel ρ c | none
     if t then Expr.eval fs fuel ρ a else Expr.eval fs fuel ρ b
@@ -156,14 +151,6 @@ def Expr.eval (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
     let .int x ← Expr.eval fs fuel ρ a | none
     let .int y ← Expr.eval fs fuel ρ b | none
     return .int (op.apply x y)
-  | .numberOp op a b => do
-    let .num x ← Expr.eval fs fuel ρ a | none
-    let .num y ← Expr.eval fs fuel ρ b | none
-    return op.apply x y
-  | .numberNe a b => do
-    let .num x ← Expr.eval fs fuel ρ a | none
-    let .num y ← Expr.eval fs fuel ρ b | none
-    return .bool !(JSNumber.eq x y)
   | .eq a b => do
     return .bool (← eqVal (← Expr.eval fs fuel ρ a) (← Expr.eval fs fuel ρ b))
   | .ne a b => do
@@ -177,9 +164,6 @@ def Expr.eval (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
     let .bool y ← Expr.eval fs fuel ρ q | none
     return .bool (x || y)
   | .decide p => Expr.eval fs fuel ρ p
-  | .numberTest test a => do
-    let .num n ← Expr.eval fs fuel ρ a | none
-    return .bool (test.apply n)
   | .push name a => do
     let .list xs ← ρ.lookup name | none
     return .list (xs ++ [← Expr.eval fs fuel ρ a])
@@ -187,6 +171,7 @@ def Expr.eval (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
     let .int x ← ρ.lookup name | none
     let .int y ← Expr.eval fs fuel ρ a | none
     return .int (op.apply x y)
+  | .ext op args => do op.apply (← Expr.evalList fs fuel ρ args)
 termination_by e => (fuel, sizeOf e, 0)
 
 def Expr.evalList (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : Env N) :

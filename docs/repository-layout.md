@@ -27,7 +27,8 @@ form of a syntax tree, the project file and the chain manifests.
 | `tolean/<Language>/Spec/` | **The trusted model of the language's values** (for TypeScript: JS numbers). Generated code imports it, and proofs assume only what it states. Review it with care. |
 | `tolean/<Language>/Syntax/` | The language's front end: tokens, lexer, syntax tree, parser, printer |
 | `tolean/TypeScript/Translate.lean` | The TypeScript translator: it types the subset (with `null` narrowing) and builds the Lean definitions as a syntax tree |
-| `tolean/TypeScript/IR.lean`, `tolean/TypeScript/IR/` | The [Tolean IR](decisions/2026-10-30-tolean-ir.md): the Lean code that the TypeScript translator writes, as Lean data, with its printer, its evaluator and its equality |
+| `tolean/IR.lean`, `tolean/IR/` | The shared core of the [Tolean IR](decisions/2026-10-30-tolean-ir.md): the Lean code that a translator writes, as Lean data, with its printer and its equality. A language adds its own types and operations at the core's extension points. |
+| `tolean/TypeScript/IR.lean`, `tolean/TypeScript/IR/` | The TypeScript extension of the IR, which adds JavaScript numbers and `null`, and the IR's evaluator over the TypeScript interpreter's values |
 | `tolean/Go/Translate.lean` | The Go translator: one package at a time, from root functions, with interface calls as steps in a state monad |
 | `tolean/Sql/` | The PostgreSQL front end, the schema translator that replays migrations, the query translator, and the READ COMMITTED model in `Spec/ReadCommitted.lean` |
 | `Main.lean` | The `tolean` command |
