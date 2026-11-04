@@ -1,0 +1,233 @@
+# Plan: translate the pure TypeScript that real modules use
+
+**Status:** planned, not built · **Date:** 2026-11-03
+
+Pure TypeScript in practice uses much more of the language than the subset
+accepts. A function is pure when it does no input or output and depends only
+on its arguments. But the subset also refuses generics, recursion,
+callbacks, closures, exceptions, `Map`, `switch` and template literals, and
+pure code uses all of them. A survey of one pure module of about 2,000 lines, which folds a list of
+events into a state, found the features below in almost every file. Tolean could
+translate none of its fourteen files. Only two small functions went through,
+after someone rewrote them into the subset.
+
+This plan lists what to add so that such a module translates without a
+rewrite. It also states the rules that each addition must keep, and the
+behavior that Tolean must still refuse.
+
+## The rules for every addition
+
+Every new construct keeps three rules. A construct that cannot keep them
+stays refused, even when the code that uses it is pure.
+
+1. **ECMA-262 specifies the behavior, and it is deterministic.** The spec
+   must define the result, and the result must be the same in every edition
+   that a target allows. Each construct records the edition that added it and
+   the section that defines it, in `tolean/TypeScript/Edition.lean`. The
+   section numbers in this plan are those of ES2024. Behavior
+   that the spec leaves to the engine, the locale or the time zone stays
+   refused.
+2. **The translation sees every change to state.** The translation is a
+   shallow embedding, so a Lean value cannot change behind a name. A `Map`, a
+   `Set`, a `Date` and a class instance are references in JavaScript, so two
+   names can point to one object. Each of them gets the ownership rule that
+   arrays have now: only the function that created the object may change it,
+   and nothing else may hold it while it changes.
+3. **The proof of the translator still covers it.** Each construct extends
+   the Tolean IR, its evaluator and the interpreter, so `program_sound` holds
+   for programs that use it. `tests/typescript/interpreter.test.ts` checks
+   the interpreter against Node on random programs that use it. Both
+   translators give the same output, byte for byte.
+
+## What to add
+
+The tables group the constructs by the stage that adds them. Each row says
+what the Lean output is, and what Tolean refuses so that the translation stays
+exact.
+
+### Types and narrowing
+
+| TypeScript | Lean | Refused |
+|---|---|---|
+| `type T = …` aliases, and string literal types such as `'open' \| 'closed'` | `abbrev`, and an `inductive` with one constructor per literal | A literal union mixed with `string` |
+| A union of interfaces with a literal tag field, such as `kind` | An `inductive` with one constructor per member | A union without a common tag |
+| `switch` on the tag, with a `default` that assigns to `never` | `match` on the constructor | Fallthrough between cases |
+| `x?: T` fields and parameters, `undefined` | `Option T` | `'x' in obj`, which can tell a missing key from `undefined` |
+| `x == null`, `x ?? y`, `x?.f`, `x ??= y` | `Option` matches | `==` against anything except `null` and `undefined` |
+| `export { … }` and re-exports | Nothing: the names stay in scope | `export *` |
+
+### Functions
+
+| TypeScript | Lean | Refused |
+|---|---|---|
+| An arrow function passed as an argument, which reads only `const` values and parameters | `fun` | A callback that changes a variable outside itself |
+| A local function or arrow function stored in a `const` and called later, which changes `let` variables of the enclosing function | A Lean function that takes those variables and returns their new values. The translator lifts it out and threads the variables through each call. | A local function that escapes: one that is returned, stored in a field or passed on |
+| A function-typed field or parameter, such as a comparator in an options object | A field of a function type | A function value that changes state when it is called |
+| A destructured parameter, such as `{ a, b }: Options` | A pattern on the structure | Defaults inside the pattern |
+| A default parameter value | `Option` with a default at the call | A default that reads another parameter |
+| `return` inside a loop, `break`, `continue`, and `for (let i = a; i < b; i++)` | A fold whose state records that the loop stopped | A `for` loop of another shape, `while`, and labels |
+
+
+### Generics
+
+| TypeScript | Lean | Refused |
+|---|---|---|
+| A function with type parameters that have no constraint, such as `function last<T>(xs: ReadonlyArray<T>): T \| null` | `def last {T : Type} …` | `===` on a value of a type parameter, because it compares references when the type is an object |
+| A generic interface or type alias, such as `interface Pair<A, B>` | `structure Pair (A B : Type)` | |
+| A type parameter with a constraint, such as `T extends Named` | Nothing in the first version | All constraints, until the open question below is settled |
+
+The translator already makes each function generic over the number type `N`.
+User type parameters become further implicit arguments next to it. A
+constraint is harder, because TypeScript checks it by the shape of a type and
+Lean has no subtyping by shape.
+
+### Recursion
+
+| TypeScript | Lean | Refused |
+|---|---|---|
+| A function that calls itself on a part of its argument, such as the rest of a list or a child of a tree node | A `def` with structural recursion. Lean checks that it ends without help. | |
+| Other recursion, with a `@decreases` JSDoc tag that names a measure | A `def` with `termination_by` that measure. Lean must prove that each call makes the measure smaller, and the translator refuses the file when Lean cannot. | Recursion without such a proof |
+| Functions in one file that call each other | A `mutual` block | Recursion across files |
+| An interface that refers to itself, such as a tree node with `children: ReadonlyArray<Node>` | A nested `inductive` | |
+
+Lean also accepts `partial def` without a proof that the function ends. But
+Lean cannot prove anything about a partial function, so Tolean never writes
+one. A JavaScript call can also fail where the Lean function does not: deep
+recursion makes Node throw a `RangeError` when the stack runs out. So a claim
+about a recursive function holds when the JavaScript call returns, as every
+value claim already does.
+
+### Arrays
+
+| TypeScript | Lean | Refused |
+|---|---|---|
+| `map`, `filter`, `reduce`, `some`, `every`, `find`, `findIndex`, `findLast`, `slice`, `entries` | The `List` functions with the same meaning | The `index` and `array` arguments of a callback, until a later step adds them |
+| `includes` | `List.contains` with SameValueZero, which treats `NaN` as equal to itself | |
+| `[...xs]`, `[...xs, x]`, and array destructuring | `List.append` and patterns | Spread of anything that is not an array |
+| `[...xs].sort(cmp)` and `xs.toSorted(cmp)` | A stable merge sort. ECMA-262 has required a stable sort since ES2019 (§23.1.3.30). | `sort` on an array that the function does not own, and a comparator that is not consistent |
+
+A comparator is consistent when it orders values as a total preorder. The
+spec leaves the result undefined for any other comparator, so the translator
+must refuse it or prove it consistent. The first version accepts two shapes
+whose consistency Tolean proves once: a comparison of integer keys, and a
+chain of such comparisons. A comparator such as `(a, b) => a.t - b.t` on
+`number` keys is consistent only when no key is `NaN`, so it becomes a
+precondition of each claim.
+
+### Errors
+
+| TypeScript | Lean | Refused |
+|---|---|---|
+| `throw new Error(message)` and `throw` of a declared error class | `Except E`. A function that can throw returns `Except`, and its callers pass the error on. | `try` and `catch` in the first version |
+| A class that extends `Error` and only sets `readonly` fields in its constructor | A structure | Methods, `static` members, and reads of `stack` |
+
+ECMA-262 does not define `Error.prototype.stack`, so a read of `stack` stays
+refused. A claim about a function that can throw says what holds when the
+function returns normally. A separate claim can show that it does not throw
+when its inputs meet a precondition. The plan for [shared monad
+pieces](shared-core.md) adds exceptions to the IR, and this stage uses them.
+
+### Strings
+
+| TypeScript | Lean | Refused |
+|---|---|---|
+| Template literals whose parts are `string`, `boolean`, `bigint` or a safe integer `number` | `String.append` and `toString`. ECMA-262 defines how each converts (§6.1.6.1.20 and §6.1.6.2.21). | A part that is a non-integer `number` or an object |
+| `<` and `===` on strings | The order of UTF-16 code units (§7.2.13) | `localeCompare`, which depends on the locale |
+| `JSON.stringify(x)` | An opaque function | |
+
+`JSON.stringify` is deterministic and fully specified (§25.5.2), but a model
+of it is large. Code calls it mostly to build error messages. The first
+version makes it a function that the generated Lean declares but never
+defines. A theorem then cannot depend on the text that it returns, so every
+theorem still holds for the real function. A claim about the text needs the
+full model, which a later step can add.
+
+### Maps and sets
+
+| TypeScript | Lean | Refused |
+|---|---|---|
+| `new Map()`, `new Set()`, `get`, `has`, `set`, `add`, `delete`, `size`, and `for … of` over them | A list of entries in insertion order. ECMA-262 fixes that order (§24.1 and §24.2). | Keys that are objects, and `number` keys that can be `NaN` or `-0` |
+| A function that changes a map that its caller passes in | A function that returns the new map. The caller takes the result in place of the old map. | A call where the caller keeps another name for the same map |
+
+The second row is the borrow that Aeneas uses for Rust. It is sound here only
+because the translator checks that the caller owns the map and holds no other
+name for it during the call. Key equality is SameValueZero. For `string` and
+`bigint` keys that is Lean's equality. For `number` keys it is Lean's
+equality only when no key is `NaN` or `-0`.
+
+### Numbers and dates
+
+| TypeScript | Lean | Refused |
+|---|---|---|
+| `Math.min`, `Math.max`, `Math.floor`, `Number.isInteger`, and `/` on `number` | New `JSNumber` operations, with laws for safe integers and for `NaN` and the infinities | `Math` functions whose results the spec allows to differ between engines, such as `Math.sin` (§21.3.2) |
+| `new Date(t).toISOString()`, `Date.UTC`, `getTime`, and the UTC getters | A model of the time value (§21.4.1) | Local-time getters, setters, and `Date.now()` |
+| `Date.parse(s)` | Only when the translator can show that `s` is in the Date Time String Format (§21.4.1.32) | Any other string, because the spec leaves its result to the engine |
+
+`toISOString` throws a `RangeError` for an invalid date, so it uses the
+`Except` from the errors stage. The new number laws are hypotheses, as the
+current ones are. `jsNumberLaws.test.ts` checks each of them on every
+maintained Node release line.
+
+## What stays refused
+
+These stay refused after the plan is done, because no translation of them can
+be exact:
+
+- `localeCompare`, `Intl`, and every local-time `Date` method, because their
+  results depend on the host.
+- `Date.now()`, `Math.random()` and `crypto`, because they are not
+  deterministic. The [effects plan](effects.md) makes them inputs.
+- `Error.prototype.stack`, and every other property that ECMA-262 does not
+  define.
+- Assignment to an array's `length`, `delete` on objects, and `Object.assign`
+  onto an object that the function does not own.
+- `Object.keys`, `Object.entries` and `for … in` on objects with keys that look
+  like integers. ECMA-262 lists those keys first, in numeric order
+  (§10.1.11.1), so the order differs from the order of the literal. These
+  are accepted on objects whose keys the type fixes and none of which looks
+  like an integer.
+
+## Steps
+
+Each step ends with all checks green, with both translators in agreement, and
+with no change to the output of code that is already in the subset.
+
+1. Types and narrowing: aliases, literal unions, tagged unions with
+   `switch`, optional fields, and the `null` and `undefined` operators.
+2. Generic functions and types whose type parameters have no constraint.
+3. Callbacks that read only `const` values, and the array methods without
+   `sort`.
+4. Control flow: `return` inside a loop, `break`, `continue`, and the counted
+   `for` loop.
+5. Errors, after step 3 of the [shared core plan](shared-core.md) adds
+   exceptions to the IR.
+6. Local functions that change variables of the enclosing function, by lifting
+   them out and threading the variables through each call.
+7. `Map` and `Set`, with owned values and the borrow for a map that a caller
+   passes in.
+8. Strings: template literals, string order, and the opaque `JSON.stringify`.
+9. Sorting with consistent comparators.
+10. Recursion: structural recursion and types that refer to themselves first,
+    then `@decreases` and mutual recursion.
+11. The new number operations and the `Date` methods.
+
+Steps 1 and 3 cover most of the code in the survey. Steps 6 and 7 matter
+most for proofs, because a fold over events keeps its state in local
+variables and in maps.
+
+## Open questions
+
+- How should a type parameter with a constraint translate? One option is a
+  type class that the translator writes for each constraint, with one
+  method per field that the constraint names. Another is to pass the
+  fields that the function reads as explicit arguments.
+- Should `try` and `catch` come in a later step? The survey had none, but much
+  other pure code catches its own errors.
+- Should a map that a caller passes in become a borrow, as above, or should the
+  callee run in a state monad? A borrow keeps the output plain, but it only
+  covers a call that changes one map.
+- Should `tolean.json` accept imports without the `.ts` extension, for
+  projects that use bundler resolution? Tolean refuses them now because Node
+  reads an import as a URL.
+- Should a comparator that is not one of the two shapes be accepted when the
+  project supplies a proof that it is consistent?
