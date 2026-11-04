@@ -77,7 +77,8 @@ The Go translator moves from one fixed `StateM State` to these classes. The
 store interface becomes a declared resource, and today's erasure becomes the
 `observe` tag. The TypeScript translator gains effectful functions. A
 function that calls an effect becomes Lean `do` code, and a pure function
-stays a plain term, as it is now.
+stays a plain term, as it is now. An `async` function also becomes `do` code,
+and the [async plan](async.md) adds what `await` and race conditions need.
 
 ## 4. Seam rules
 

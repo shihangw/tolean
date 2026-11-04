@@ -81,7 +81,7 @@ for that stack too.
   pointers. SQL has tables.
 - **The concurrency model.** The event loop, Go's scheduler and READ
   COMMITTED differ too much to share. PostgreSQL already has its own proved
-  model.
+  model. The [async plan](async.md) gives TypeScript its model.
 
 ## What Aeneas shows
 
