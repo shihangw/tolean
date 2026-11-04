@@ -55,6 +55,12 @@ exact.
 | `x?: T` fields and parameters, `undefined` | `Option T` | `'x' in obj`, which can tell a missing key from `undefined` |
 | `x == null`, `x ?? y`, `x?.f`, `x ??= y` | `Option` matches | `==` against anything except `null` and `undefined` |
 | `export { … }` and re-exports | Nothing: the names stay in scope | `export *` |
+| `typeof x === 'string'` and the other `typeof` tests on a union of primitive types (§13.5.3) | A `match` on a sum type | `typeof` on a union that includes objects or functions |
+| A tuple type such as `readonly [string, bigint]` | A product type | Tuples that a function changes |
+| A string `enum` | An `inductive` | A numeric `enum`, because it also maps each number back to its name |
+| `as const` and `satisfies` | Nothing: they only check types | `as T` and the non-null assertion `x!`, because TypeScript does not check them |
+| A type guard `x is T` | A `Bool` function | A guard whose body the translator cannot show to be a test of the tag |
+| `Record<K, V>` where `K` is a union of string literals | A structure with one field per key | `Record<string, V>` and index signatures. Code that needs those can use a `Map`. |
 
 ### Functions
 
@@ -65,7 +71,10 @@ exact.
 | A function-typed field or parameter, such as a comparator in an options object | A field of a function type | A function value that changes state when it is called |
 | A destructured parameter, such as `{ a, b }: Options` | A pattern on the structure | Defaults inside the pattern |
 | A default parameter value | `Option` with a default at the call | A default that reads another parameter |
-| `return` inside a loop, `break`, `continue`, and `for (let i = a; i < b; i++)` | A fold whose state records that the loop stopped | A `for` loop of another shape, `while`, and labels |
+| `return` inside a loop, `break`, `continue`, and `for (let i = a; i < b; i++)` | A fold whose state records that the loop stopped | A `for` loop of another shape, and labels |
+| `while` and `do … while`, with a `@decreases` tag that names a measure | A recursive function with `termination_by`, as for recursion below | A loop without such a measure |
+| A rest parameter `...xs: T[]`, and a spread argument `f(...xs)` | A `List T` argument | A spread argument to a function whose parameters are not a rest parameter |
+| A class with `readonly` fields and methods that do not change `this` | A structure and one function per method | Methods that change `this`, inheritance other than from `Error`, getters, setters and `static` state |
 
 
 ### Generics
@@ -104,6 +113,8 @@ value claim already does.
 | `map`, `filter`, `reduce`, `some`, `every`, `find`, `findIndex`, `findLast`, `slice`, `entries` | The `List` functions with the same meaning | The `index` and `array` arguments of a callback, until a later step adds them |
 | `includes` | `List.contains` with SameValueZero, which treats `NaN` as equal to itself | |
 | `[...xs]`, `[...xs, x]`, and array destructuring | `List.append` and patterns | Spread of anything that is not an array |
+| `xs.length`, `xs[i]` and `xs.at(i)` (§23.1.3.1) | `List.length`, and `xs[i]?` of type `Option T`. An index outside the array gives `undefined`. | `xs[i]` in a project without `noUncheckedIndexedAccess`, because there TypeScript types the result as `T` although it can be `undefined` |
+| `{ ...a, f: e }`, where `a` has the declared interface of the result | `{ a with f := e }`. The spread keeps the keys of `a` in their order, so the result keeps the declared order. | Spread of an object of another type, which can change the order of the keys |
 | `[...xs].sort(cmp)` and `xs.toSorted(cmp)` | A stable merge sort. ECMA-262 has required a stable sort since ES2019 (§23.1.3.30). | `sort` on an array that the function does not own, and a comparator that is not consistent |
 
 A comparator is consistent when it orders values as a total preorder. The
@@ -133,7 +144,17 @@ pieces](shared-core.md) adds exceptions to the IR, and this stage uses them.
 |---|---|---|
 | Template literals whose parts are `string`, `boolean`, `bigint` or a safe integer `number` | `String.append` and `toString`. ECMA-262 defines how each converts (§6.1.6.1.20 and §6.1.6.2.21). | A part that is a non-integer `number` or an object |
 | `<` and `===` on strings | The order of UTF-16 code units (§7.2.13) | `localeCompare`, which depends on the locale |
+| `length`, `slice` (§22.1.3.22), `startsWith`, `endsWith`, `includes`, `indexOf`, `split` with a string separator (§22.1.3.23), `padStart`, `padEnd` and `trim` | Functions on the list of code units | `split` with a regular expression, and every regular expression in the first version |
+| `toUpperCase` and `toLowerCase` (§22.1.3.30 and §22.1.3.28) | Only for strings that the translator can show are ASCII | Other strings, because the result follows the Unicode version of the engine, and that version changes between Node releases |
 | `JSON.stringify(x)` | An opaque function | |
+
+A JavaScript string is a sequence of UTF-16 code units (§6.1.4), and it may
+hold a lone surrogate. A Lean `String` is a sequence of Unicode scalar values,
+so it cannot hold a lone surrogate, and its order and its length differ. For
+example, U+FFFF sorts after U+10000 in JavaScript, because U+10000 starts with
+the code unit 0xD800, but it sorts before it in Lean. So `string` becomes a
+list of code units in this stage. The current mapping to `String` is exact
+only because the subset has no string operation except `===`.
 
 `JSON.stringify` is deterministic and fully specified (§25.5.2), but a model
 of it is large. Code calls it mostly to build error messages. The first
@@ -159,7 +180,11 @@ equality only when no key is `NaN` or `-0`.
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| `Math.min`, `Math.max`, `Math.floor`, `Number.isInteger`, and `/` on `number` | New `JSNumber` operations, with laws for safe integers and for `NaN` and the infinities | `Math` functions whose results the spec allows to differ between engines, such as `Math.sin` (§21.3.2) |
+| `Math.min`, `Math.max`, `Math.floor`, `Math.ceil`, `Math.trunc` (§21.3.2.35), `Math.round` (§21.3.2.28), `Math.abs`, `Number.isInteger`, and `/` on `number` | New `JSNumber` operations, with laws for safe integers and for `NaN` and the infinities | `Math` functions whose results the spec allows to differ between engines, such as `Math.sin` (§21.3.2) |
+| `**` on `bigint` (§6.1.6.2.3), and the bitwise operators on `bigint` | The same operations on `Int` | `**` with a negative exponent, and `>>>`, because both throw on a `bigint` |
+| `BigInt(n)` (§21.2.1.1) and `Number(b)` (§21.1.1.1) | Conversions. `BigInt(n)` throws a `RangeError` when `n` is not an integer, so it uses the `Except` from the errors stage. | `Number(b)` on a `bigint` that is not a safe integer, until the model rounds to the nearest double |
+| The bitwise operators on `number` | `ToInt32` (§7.1.6) and the operation on 32-bit integers | |
+| `Object.is` (§20.1.2.15) | SameValue (§7.2.10), which tells `NaN` and `-0` apart | |
 | `new Date(t).toISOString()`, `Date.UTC`, `getTime`, and the UTC getters | A model of the time value (§21.4.1) | Local-time getters, setters, and `Date.now()` |
 | `Date.parse(s)` | Only when the translator can show that `s` is in the Date Time String Format (§21.4.1.32) | Any other string, because the spec leaves its result to the engine |
 
@@ -179,6 +204,12 @@ be exact:
   deterministic. The [effects plan](effects.md) makes them inputs.
 - `Error.prototype.stack`, and every other property that ECMA-262 does not
   define.
+- `toLocaleString` and the other `toLocale…` methods, and `Number.prototype.toFixed`
+  and its relatives until the model of `Number::toString` covers fractions.
+- `structuredClone`, `setTimeout` and the other functions that the host
+  provides, because ECMA-262 does not define them.
+- `Symbol`, `Proxy`, `Reflect`, `eval`, `with`, `arguments`, and getters on
+  object literals.
 - Assignment to an array's `length`, `delete` on objects, and `Object.assign`
   onto an object that the function does not own.
 - `Object.keys`, `Object.entries` and `for … in` on objects with keys that look
@@ -194,9 +225,10 @@ with no change to the output of code that is already in the subset.
 
 1. Types and narrowing: aliases, literal unions, tagged unions with
    `switch`, optional fields, and the `null` and `undefined` operators.
-2. Generic functions and types whose type parameters have no constraint.
-3. Callbacks that read only `const` values, and the array methods without
-   `sort`.
+2. Generic functions and types whose type parameters have no constraint,
+   tuples, string enums, `typeof` tests and type guards.
+3. Callbacks that read only `const` values, the array methods without
+   `sort`, indexing, and object spread.
 4. Control flow: `return` inside a loop, `break`, `continue`, and the counted
    `for` loop.
 5. Errors, after step 3 of the [shared core plan](shared-core.md) adds
@@ -205,11 +237,13 @@ with no change to the output of code that is already in the subset.
    them out and threading the variables through each call.
 7. `Map` and `Set`, with owned values and the borrow for a map that a caller
    passes in.
-8. Strings: template literals, string order, and the opaque `JSON.stringify`.
+8. Strings: the model as a list of code units, template literals, string
+   order, the string methods, and the opaque `JSON.stringify`.
 9. Sorting with consistent comparators.
 10. Recursion: structural recursion and types that refer to themselves first,
-    then `@decreases` and mutual recursion.
-11. The new number operations and the `Date` methods.
+    then `@decreases`, mutual recursion, and `while` loops.
+11. The new number and `bigint` operations, and the `Date` methods.
+12. Classes with `readonly` fields and methods that do not change `this`.
 
 Steps 1 and 3 cover most of the code in the survey. Steps 6 and 7 matter
 most for proofs, because a fold over events keeps its state in local
