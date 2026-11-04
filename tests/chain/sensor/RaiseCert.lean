@@ -94,7 +94,7 @@ def decodeGauge {N : Type} [tolean.TypeScript.JSNumber N] : Option (Val N) → s
   | _ => { level := decInt (none : Option (Val N)), max := decInt (none : Option (Val N)) }
 
 @[simp] theorem decodeGauge_encodeGauge {N : Type} [tolean.TypeScript.JSNumber N] (x : sensor.Raise.Gauge) : decodeGauge (some (encodeGauge (N := N) x)) = x := by
-  cases x; simp [decodeGauge, encodeGauge, List.lookup, encList, encNull]
+  cases x; simp [decodeGauge, encodeGauge, List.lookup, encList]
 
 theorem raise_link {N : Type} [tolean.TypeScript.JSNumber N] (g : _) (step : _) :
     tolean.TypeScript.IR.runIn (N := N) (tolean.TypeScript.IR.functionsOf [("", decls)]) ⟨"", "raise"⟩ [(encodeGauge g), (Val.int step)] =
