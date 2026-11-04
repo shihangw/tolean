@@ -43,7 +43,7 @@ theorem checkLocalName_not_interface {sp : Span} {name r : String} {s s' : Ctx}
 -- The check before printing sees every declaration that the output names: a
 -- call, and a structure in a type.
 #guard IR.Decl.refs
-    (.function "f" [("g", .struct ⟨"a.ts", "G"⟩)] .int (.value (.call ⟨"b.ts", "h"⟩ []))) ==
+    (.function "f" [("g", .struct ⟨"a.ts", "G"⟩)] .int (.value (.call ⟨"b.ts", "h"⟩ [])) : IR.Decl) ==
   [⟨"a.ts", "G"⟩, ⟨"b.ts", "h"⟩]
 
 /-! ### Extras: Imports across editions -/

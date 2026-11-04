@@ -1,11 +1,11 @@
 # Plan: a shared Tolean IR and shared monad pieces
 
-**Status:** planned, not built · **Date:** 2026-10-29
+**Status:** in progress, see [Progress](#progress) · **Date:** 2026-10-29
 
-Today only TypeScript has the parts that let Lean prove a translator. It has
-a [Tolean IR](../decisions/2026-10-30-tolean-ir.md), which is the Lean code that the
-translator writes as Lean data. It also has an evaluator for the IR, an
-interpreter for the source,
+Today only TypeScript has the parts that let Lean prove a translator. It
+builds the [Tolean IR](../decisions/2026-10-30-tolean-ir.md), which is the Lean
+code that the translator writes as Lean data. It also has an evaluator for
+the IR, an interpreter for the source,
 `program_sound` and certificates. The Go and SQL translators build strings,
 and they use `partial def`, so Lean cannot reason about them. When TypeScript
 gains effects, its output stops being plain functions and becomes code in a
@@ -19,6 +19,15 @@ tags such as `observe` and `fails`, and how proofs assume it. This plan is
 about the layer underneath: how the IR, its evaluator and the proofs
 represent those effects.
 
+## Progress
+
+Each row is a step of the plan that is built, with the pull request that
+built it.
+
+| Step | What is built | Pull request |
+|---|---|---|
+| 1 | The shared core of the IR, its printer and its equality are in `tolean/IR.lean` and `tolean/IR/`. The core includes inductive types whose constructors take no arguments, which TypeScript uses for literal unions and SQL could use for its enums. TypeScript adds JavaScript numbers and `null` in `tolean/TypeScript/IR.lean`. Every corpus file translates to the same text as before. | [#50](https://github.com/shihangw/tolean/pull/50) |
+
 ## What every language shares
 
 Every language translates into the same target, which is Lean. So the parts
@@ -26,9 +35,9 @@ that describe Lean code do not depend on the source language.
 
 | Part | What it is | Today |
 |---|---|---|
-| Pure core of the IR | Integers, booleans, strings, `Option`, `if`, `let`, structures, lists and `List.foldl`. Each language adds its own constructs at one extension point per layer, such as JavaScript numbers for TypeScript. | `tolean/TypeScript/IR.lean`, for TypeScript only |
-| Its printer | One IR, printed in one way, so there is one printer to trust or certify. The [printing plan](printing.md) hands its layout to Lean. | Part of `IR.lean` |
-| Its evaluator | The meaning of the IR. It becomes generic over the value type, so that Go can use `int64` and SQL can use its own values and three-valued logic. | `IR/Eval.lean`, over the TypeScript interpreter's `Val N` |
+| Pure core of the IR | Integers, booleans, strings, `Option`, `if`, `let`, structures, lists and `List.foldl`. Each language adds its own constructs at one extension point per layer, such as JavaScript numbers for TypeScript. | `tolean/IR.lean`, with the TypeScript extension in `tolean/TypeScript/IR.lean` |
+| Its printer | One IR, printed in one way, so there is one printer to trust or certify. The [printing plan](printing.md) hands its layout to Lean. | Part of `tolean/IR.lean`, which asks each language how to print what it adds |
+| Its evaluator | The meaning of the IR. It becomes generic over the value type, so that Go can use `int64` and SQL can use its own values and three-valued logic. | `tolean/TypeScript/IR/Eval.lean`, over the TypeScript interpreter's `Val N` |
 | Proof plumbing | `Env` and its lemmas, fuel, the encode and decode pattern, `link_tac`, `runFold_foldl`, a lemma of the shape of `decls_sound`, and kernel-decidable equality on the IR | `Env` is in `tolean/TypeScript/Spec/Eval.lean`, and the rest is under `tolean/TypeScript/Proof/` |
 | Certificate generator | The layout of a certificate, and `chars!` | `tolean/TypeScript/Certify.lean` and `Certify/`, with `chars!` in `Syntax/Parser.lean` |
 | Lexer side of the round trip | `lexChars_render`, `Laid` and `NoBreak` are about tokens and lines, not about TypeScript | `tolean/TypeScript/Syntax/` |

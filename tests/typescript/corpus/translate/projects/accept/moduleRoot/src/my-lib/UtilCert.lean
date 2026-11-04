@@ -36,15 +36,12 @@ theorem program_parsed : tolean.TypeScript.Syntax.parseChars sourceChars .es2024
 
 /-- The Tolean IR, as the translator gives it for the program. -/
 def decls : List tolean.TypeScript.IR.Decl :=
-  [tolean.TypeScript.IR.Decl.function
+  [tolean.IR.Decl.function
    "inc"
-   [("x", tolean.TypeScript.IR.Ty.int)]
-   (tolean.TypeScript.IR.Ty.int)
-   (tolean.TypeScript.IR.Body.value
-     (tolean.TypeScript.IR.Expr.intOp
-       (tolean.TypeScript.IR.IntOp.add)
-       (tolean.TypeScript.IR.Expr.var "x")
-       (tolean.TypeScript.IR.Expr.int 1)))]
+   [("x", tolean.IR.Ty.int)]
+   (tolean.IR.Ty.int)
+   (tolean.IR.Body.value
+     (tolean.IR.Expr.intOp (tolean.IR.IntOp.add) (tolean.IR.Expr.var "x") (tolean.IR.Expr.int 1)))]
 
 /-- The state that the translator starts from. The source text serves only in
 the message of a refusal, so the start leaves it out. -/

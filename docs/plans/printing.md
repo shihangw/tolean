@@ -2,7 +2,7 @@
 
 **Status:** planned, not built · **Date:** 2026-11-03
 
-The printer in `tolean/TypeScript/IR.lean` writes the [Tolean
+The printer in `tolean/IR.lean` writes the [Tolean
 IR](../decisions/2026-10-30-tolean-ir.md) as Lean text by hand. It chooses
 every word and every line break itself. Two parts of Lean could take over
 some of that work, and code that Lean supports officially, and that every

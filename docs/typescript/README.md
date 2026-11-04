@@ -64,8 +64,10 @@ that `tsc` would give it, with the same narrowing on `null`, and it refuses
 anything it cannot type exactly. That type checker is part of what we trust.
 The translator does not write text. It builds the Tolean IR, the Tolean
 intermediate representation: the Lean code that it writes, as Lean data,
-with types, expressions, bodies and declarations. `tolean/TypeScript/IR.lean`
-defines the IR and prints it as Lean text. So a theorem can state what the
+with types, expressions, bodies and declarations. `tolean/IR.lean` defines
+the part of the IR that every language shares and prints it as Lean text.
+`tolean/TypeScript/IR.lean` adds what only TypeScript needs: JavaScript
+numbers and `null`. So a theorem can state what the
 translator writes, which a proof of the translator needs. [The decision
 record on the IR](../decisions/2026-10-30-tolean-ir.md) explains why it is a type of
 Tolean's own rather than Lean's `Expr`.

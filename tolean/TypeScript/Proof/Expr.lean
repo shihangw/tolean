@@ -182,10 +182,10 @@ theorem out_neg {a : IR.Expr} (h : IR.Expr.eval fs fuel ρ (.neg a) = some v) :
 
 theorem out_numberNeg {a : IR.Expr} (h : IR.Expr.eval fs fuel ρ (.numberNeg a) = some v) :
     ∃ n, IR.Expr.eval fs fuel ρ a = some (.num n) ∧ v = .num (JSNumber.neg n) := by
-  simp only [IR.Expr.eval] at h
+  simp only [IR.Expr.eval, IR.Expr.evalList] at h
   cases hx : IR.Expr.eval fs fuel ρ a with
-  | none => simp [hx] at h
-  | some w => cases w <;> simp_all
+  | none => simp [hx, IR.ExprExt.apply] at h
+  | some w => cases w <;> simp_all [IR.ExprExt.apply]
 
 theorem out_ite {c a b : IR.Expr} (h : IR.Expr.eval fs fuel ρ (.ite c a b) = some v) :
     ∃ t, IR.Expr.eval fs fuel ρ c = some (.bool t) ∧
@@ -198,10 +198,10 @@ theorem out_ite {c a b : IR.Expr} (h : IR.Expr.eval fs fuel ρ (.ite c a b) = so
 theorem out_numberTest {t : IR.NumberTest} {a : IR.Expr}
     (h : IR.Expr.eval fs fuel ρ (.numberTest t a) = some v) :
     ∃ n, IR.Expr.eval fs fuel ρ a = some (.num n) ∧ v = .bool (t.apply n) := by
-  simp only [IR.Expr.eval] at h
+  simp only [IR.Expr.eval, IR.Expr.evalList] at h
   cases hx : IR.Expr.eval fs fuel ρ a with
-  | none => simp [hx] at h
-  | some w => cases w <;> simp_all
+  | none => simp [hx, IR.ExprExt.apply] at h
+  | some w => cases w <;> simp_all [IR.ExprExt.apply]
 
 theorem out_intOp {op : IR.IntOp} {a b : IR.Expr}
     (h : IR.Expr.eval fs fuel ρ (.intOp op a b) = some v) :
@@ -243,25 +243,25 @@ theorem out_numberOp {op : IR.NumberOp} {a b : IR.Expr}
     (h : IR.Expr.eval fs fuel ρ (.numberOp op a b) = some v) :
     ∃ x y, IR.Expr.eval fs fuel ρ a = some (.num x) ∧ IR.Expr.eval fs fuel ρ b = some (.num y) ∧
       v = op.apply x y := by
-  simp only [IR.Expr.eval] at h
+  simp only [IR.Expr.eval, IR.Expr.evalList] at h
   cases hx : IR.Expr.eval fs fuel ρ a with
-  | none => simp [hx] at h
+  | none => simp [hx, IR.ExprExt.apply] at h
   | some w =>
     cases hy : IR.Expr.eval fs fuel ρ b with
-    | none => cases w <;> simp_all
-    | some u => cases w <;> cases u <;> simp_all
+    | none => cases w <;> simp_all [IR.ExprExt.apply]
+    | some u => cases w <;> cases u <;> simp_all [IR.ExprExt.apply]
 
 theorem out_numberNe {a b : IR.Expr}
     (h : IR.Expr.eval fs fuel ρ (.numberNe a b) = some v) :
     ∃ x y, IR.Expr.eval fs fuel ρ a = some (.num x) ∧ IR.Expr.eval fs fuel ρ b = some (.num y) ∧
       v = .bool !(JSNumber.eq x y) := by
-  simp only [IR.Expr.eval] at h
+  simp only [IR.Expr.eval, IR.Expr.evalList] at h
   cases hx : IR.Expr.eval fs fuel ρ a with
-  | none => simp [hx] at h
+  | none => simp [hx, IR.ExprExt.apply] at h
   | some w =>
     cases hy : IR.Expr.eval fs fuel ρ b with
-    | none => cases w <;> simp_all
-    | some u => cases w <;> cases u <;> simp_all
+    | none => cases w <;> simp_all [IR.ExprExt.apply]
+    | some u => cases w <;> cases u <;> simp_all [IR.ExprExt.apply]
 
 theorem out_eq {a b : IR.Expr} (h : IR.Expr.eval fs fuel ρ (.eq a b) = some v) :
     ∃ x y t, IR.Expr.eval fs fuel ρ a = some x ∧ IR.Expr.eval fs fuel ρ b = some y ∧
@@ -748,7 +748,7 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
         simp at h
         obtain ⟨n, ⟨hv, -⟩, rfl⟩ := h
         intro ρs ρo v _ _ hv'
-        simp [IR.Expr.eval] at hv'
+        simp [IR.Expr.eval, IR.Expr.evalList, IR.ExprExt.apply] at hv'
         subst hv'
         simp [Eval.eval]; exact ⟨n, by simpa [safeIntegerValue?] using hv, rfl⟩
       | null sp =>
@@ -795,7 +795,7 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
             simp [hk] at h
             obtain ⟨rfl, -⟩ := h
             have hnone : ρs.lookup name = none := hs.none (by simp [Translate.Env.has, hl])
-            simp [IR.Expr.eval] at hv'
+            simp [IR.Expr.eval, IR.Expr.evalList, IR.ExprExt.apply] at hv'
             subst hv'
             unfold numberConstant? at hk
             split at hk
@@ -852,7 +852,7 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
             simp at h
             obtain ⟨hcode, -⟩ := h
             rw [← hcode] at hv'
-            simp [IR.Expr.eval, IR.NumberConstant.value] at hv'
+            simp [IR.Expr.eval, IR.Expr.evalList, IR.ExprExt.apply, IR.NumberConstant.value] at hv'
             subst hv'
             obtain ⟨hm, hhas⟩ := hcond
             have hnone := hs.none hhas
