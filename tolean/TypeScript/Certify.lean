@@ -82,7 +82,7 @@ def encoderOf (r : Refs) : IR.Ty → Option String
   | .string => some (r.eval "Val.str")
   | .option t => do return s!"({r.eval "encNull"} {← encoderOf r t})"
   | .list t => do return s!"({r.eval "encList"} {← encoderOf r t})"
-  | .struct ref => some (r.cert s!"encode{ref.name}")
+  | .struct ref | .enum ref => some (r.cert s!"encode{ref.name}")
   | .number => some (r.eval "Val.num")
   | .null => none
 
@@ -93,7 +93,7 @@ def decoderOf (r : Refs) : IR.Ty → Option String
   | .string => some (r.eval "decStr")
   | .option t => do return s!"({r.eval "decNull"} {← decoderOf r t})"
   | .list t => do return s!"({r.eval "decList"} {← decoderOf r t})"
-  | .struct ref => some (r.cert s!"decode{ref.name}")
+  | .struct ref | .enum ref => some (r.cert s!"decode{ref.name}")
   | .number => some (r.eval "decNum")
   | .null => none
 
@@ -166,14 +166,16 @@ def loopBody (s : Stmt) (span : Span) : Option Stmt :=
     | _ => none
 
 /-- The tactics that split the variable `name` of type `t`, so that each case
-sees a known value: a nullable value on `none` and `some`, and a value of an
-interface of the file into its fields, each of which is split in turn. So
+sees a known value: a nullable value on `none` and `some`, a literal union on
+its constructors, and a value of an interface of the file into its fields,
+each of which is split in turn. So
 `p.inner.x ?? 1n` sees a known value for `x`, and so does a field of a
 nullable interface. An interface names only the interfaces before it, so
 `fuel`, the number of declarations, bounds how deep the fields nest. -/
 def splitSteps (decls : List IR.Decl) : Nat → String → IR.Ty → List String
   | 0, _, _ => []
   | fuel + 1, name, .option t => s!"rcases {name} with _ | {name}" :: splitSteps decls fuel name t
+  | _ + 1, name, .enum _ => [s!"cases {name}"]
   | fuel + 1, name, .struct ref =>
     let fields := decls.findSome? fun
       | .struct n fields => if n == ref.name then some fields else none
@@ -240,6 +242,36 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
   let mut encs : Array String := #[]
   let mut lemmaNames : Array String :=
     #["encList", "decInt", "decBool", "decStr", "decNum"].map r.eval
+  -- A literal union: each constructor is its string.
+  for d in decls do
+    if let .enum name members := d then
+      let ty := (IR.Ty.enum ⟨"", name⟩).print names
+      let ctor (m : String) : String := (IR.Expr.enumCase ⟨"", name⟩ m).print names
+      let first := members.head?.getD ""
+      encs := encs.push <|
+        s!"def encode{name} {generic} : {ty} → Val {nv}\n" ++
+        "\n".intercalate (members.map fun m => s!"  | {ctor m} => Val.str {str m}")
+      encs := encs.push <|
+        s!"def decode{name} {generic} : Option (Val {nv}) → {ty}\n" ++
+        String.join (members.map fun m => s!"  | some (.str {str m}) => {ctor m}\n") ++
+        s!"  | _ => {ctor first}"
+      encs := encs.push <|
+        s!"@[simp] theorem decode{name}_encode{name} {generic} (x : {ty}) : decode{name} (some (encode{name} ({nv} := {nv}) x)) = x := by\n" ++
+        s!"  cases x <;> rfl"
+      encs := encs.push <|
+        s!"@[simp] theorem encode{name}_ne_null {generic} (x : {ty}) : encode{name} ({nv} := {nv}) x ≠ Val.null := by\n" ++
+        s!"  cases x <;> simp [encode{name}]"
+      encs := encs.push <|
+        s!"@[simp] theorem decList_decode{name} {generic} (xs : List {ty}) : decList decode{name} (some (Val.list (List.map (encode{name} ({nv} := {nv})) xs))) = xs :=\n" ++
+        s!"  decList_list _ _ decode{name}_encode{name} xs"
+      -- `simp` keeps the encoder and the decoder folded and uses these, so
+      -- that `decode{name}_encode{name}` still applies where a value is not
+      -- split.
+      for (m, i) in members.zipIdx do
+        encs := encs.push <|
+          s!"@[simp] theorem encode{name}_{i} {generic} : encode{name} ({nv} := {nv}) {ctor m} = Val.str {str m} := rfl"
+        encs := encs.push <|
+          s!"@[simp] theorem decode{name}_{i} {generic} : decode{name} ({nv} := {nv}) (some (Val.str {str m})) = {ctor m} := rfl"
   for d in decls do
     if let .struct name fields := d then
       let parts ← fields.mapM fun (f, t) => do
@@ -344,7 +376,8 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         s!"      some {upd s!"(List.foldl {stepFn "ρ"} {decState "ρ"} items)" "ρ"} := by\n" ++
         s!"  refine tolean.TypeScript.Proof.runFold_foldl fs {fuel} _ {str element} _ {encX} (fun s ρ => {upd "s" "ρ"})\n" ++
         s!"    (fun ρ => {decState "ρ"}) (fun ρ => {stepFn "ρ"}) (fun ρ => {inv "ρ"}) ?_ ?_ items ρ hI\n" ++
-        s!"  · intro ρ s x hI\n" ++ substHfs ++
+        s!"  · intro ρ s x hI\n" ++
+        substHfs ++
         s!"    obtain {hyps} := hI\n    try simp only []\n" ++
         generalize "ρ" coded ++ destruct ++
         s!"    {casesOn decls loopVars}link_tac [{simpSet}, {", ".intercalate hypNames}]\n" ++

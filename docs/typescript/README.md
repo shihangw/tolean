@@ -285,6 +285,7 @@ the file, the line and the reason. It never approximates.
 | `ReadonlyArray<T>`, `Array<T>`, `T[]` | `List T` |
 | `interface` with `readonly`, required fields | `structure` |
 | `type T = U`, declared before its uses | `abbrev T := U`. The output writes `U` itself wherever the source names `T`, so the `abbrev` is only for claims. |
+| `type T = 'a' \| 'b'`, a union of string literals | `inductive T` with the constructors `a` and `b`, which derives `DecidableEq`. A literal becomes `T.a` where the context expects a `T`, and `t === 'a'` becomes `t = T.a`. The output writes every constructor in `«»`, such as `T.«open»`, because Lean reads some strings as keywords or modifiers. A claim can still write `T.a`. |
 | `function` with typed parameters and return type | `def` |
 | `const x = e`, `let x = e` | `let x := e` |
 | `x = e`, `x += e`, `x -= e`, `x *= e` on a `let` local | `let x := …` (shadowing) |
@@ -329,6 +330,11 @@ Tolean rejects these, among others:
   function pushes to must be a `const`; for a value, use `ReadonlyArray<T>`.
   An empty `[]` needs a type from its context, and the elements of a literal
   need one type.
+- A literal union that is not the whole of a type alias, such as `(s: 'a' | 'b')`,
+  because the output needs a name for its inductive type. Tolean also refuses
+  a union of string literals and other types, a string that is not an ASCII
+  name or that Lean declares for every inductive type, such as `'rec'`, and a
+  value of a literal union where a `string` is expected.
 - An object literal whose fields are not in the order that the interface
   declares them. A JS object keeps its keys in the order the literal writes
   them, and a caller can see that order through `Object.keys` or

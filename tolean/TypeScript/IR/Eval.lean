@@ -30,7 +30,7 @@ body. -/
 def functions (decls : List Decl) : List (String × List String × Body) :=
   decls.filterMap fun
     | .function name params _ body => some (name, params.map (·.1), body)
-    | .struct .. | .alias .. => none
+    | .struct .. | .alias .. | .enum .. => none
 
 /-- The functions of the output of a program, under the file of each: the
 output of each file, with that file's path. -/
@@ -96,6 +96,8 @@ def Expr.eval (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
   | .bool b => some (.bool b)
   | .string s => some (.str s)
   | .var name => ρ.lookup name
+  -- A constructor of a literal union is its string, as in JS.
+  | .enumCase _ member => some (.str member)
   | .field obj _ name => do
     match ← Expr.eval fs fuel ρ obj with
     | .obj fields => fields.lookup name

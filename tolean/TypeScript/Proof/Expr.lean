@@ -615,14 +615,14 @@ theorem nonzero_literal (e : Expr) (h : isNonzeroBigintLiteral e = true) :
 
 /-- The operator step means what the interpreter's rule for the operator
 means, when each operand's code means what the operand means. -/
-theorem operator_sound {sp s : Span} {op : BinOp} {l r : Expr} {a b c : Code} {ctx ctx' : Ctx}
+theorem applyOperator_sound {sp s : Span} {op : BinOp} {l r : Expr} {a b c : Code} {ctx ctx' : Ctx}
     {ρs ρo : Eval.Env N} {v : Val N}
-    (h : translateOperator s op r a b ctx = .ok c ctx')
+    (h : applyOperator s op r a b ctx = .ok c ctx')
     (hl : ∀ w, IR.Expr.eval fs fuel ρo a.code = some w → Eval.eval m fuel ρs l = some w)
     (hr : ∀ w, IR.Expr.eval fs fuel ρo b.code = some w → Eval.eval m fuel ρs r = some w)
     (hv : IR.Expr.eval fs fuel ρo c.code = some v) :
     Eval.eval m fuel ρs (.binary sp op l r) = some v := by
-  unfold translateOperator at h
+  unfold applyOperator at h
   cases op
   all_goals simp only [ite_state] at h
   all_goals (repeat' split at h)
@@ -678,6 +678,34 @@ theorem operator_sound {sp s : Span} {op : BinOp} {l r : Expr} {a b c : Code} {c
        rw [eval_value] at hx hy
        rw [hl _ hx, hr _ hy]
        cases x <;> cases y <;> simp_all [IR.eqVal, Eval.binary, Eval.strictEq])
+
+/-- A string that becomes the constructor of a literal union has the same
+value: the evaluator gives a constructor its string. -/
+theorem enumOperand_code (known : List EnumInfo) (c : Code) (t : Ty) (ρ : Eval.Env N) :
+    IR.Expr.eval fs fuel ρ (enumOperand known c t).code = IR.Expr.eval fs fuel ρ c.code := by
+  unfold enumOperand
+  split
+  · rename_i m ref hc
+    split
+    · simp [hc, IR.Expr.eval]
+    · rfl
+  · rfl
+
+/-- The operator step means what the interpreter's rule for the operator
+means, when each operand's code means what the operand means. -/
+theorem operator_sound {sp s : Span} {op : BinOp} {l r : Expr} {a b c : Code} {ctx ctx' : Ctx}
+    {ρs ρo : Eval.Env N} {v : Val N}
+    (h : translateOperator s op r a b ctx = .ok c ctx')
+    (hl : ∀ w, IR.Expr.eval fs fuel ρo a.code = some w → Eval.eval m fuel ρs l = some w)
+    (hr : ∀ w, IR.Expr.eval fs fuel ρo b.code = some w → Eval.eval m fuel ρs r = some w)
+    (hv : IR.Expr.eval fs fuel ρo c.code = some v) :
+    Eval.eval m fuel ρs (.binary sp op l r) = some v := by
+  unfold translateOperator at h
+  simp only [bind_ok, get_ok] at h
+  obtain ⟨_, _, ⟨rfl, rfl⟩, h⟩ := h
+  exact applyOperator_sound m fs fuel h
+    (fun w hw => hl w (by rwa [enumOperand_code] at hw))
+    (fun w hw => hr w (by rwa [enumOperand_code] at hw)) hv
 
 theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
     (∀ env exp e ctx c ctx', translateExpr F env exp e ctx = .ok c ctx' →
@@ -736,10 +764,24 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
         simp [IR.Expr.eval] at hv'
         subst hv'; simp [Eval.eval]
       | string sp str =>
-        simp [translateExpr] at h
-        obtain ⟨rfl, -⟩ := h
+        -- A string, or the constructor of a literal union for it: either is
+        -- the string.
+        have hcode : ∀ ρ : Eval.Env N, IR.Expr.eval fs fuel ρ c.code = some (.str str) := by
+          intro ρ
+          simp only [translateExpr] at h
+          split at h
+          all_goals simp only [bind_ok, get_ok, orReject_ok, ite_state, pure_ok] at h
+          all_goals first
+            | (obtain ⟨rfl, -⟩ := h; simp [IR.Expr.eval])
+            | (obtain ⟨_, _, ⟨rfl, rfl⟩, _, _, ⟨-, rfl⟩, h⟩ := h
+               split at h
+               · simp at h
+                 obtain ⟨rfl, -⟩ := h
+                 simp [IR.Expr.eval]
+               · simp at h)
         intro ρs ρo v _ _ hv'
-        simp [IR.Expr.eval] at hv'
+        rw [hcode] at hv'
+        simp at hv'
         subst hv'; simp [Eval.eval]
       | ident sp name =>
         simp only [translateExpr] at h

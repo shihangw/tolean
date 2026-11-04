@@ -17,6 +17,14 @@ file (`Names`).
 -/
 namespace tolean.TypeScript.IR
 
+/-- Words that Lean reads as keywords, so a plain name cannot be one. -/
+def leanReserved : List String :=
+  ["_root_", "abbrev", "at", "axiom", "by", "class", "def",
+   "deriving", "do", "else", "end", "example", "extends", "for", "from", "fun", "have", "if",
+   "import", "in", "inductive", "instance", "let", "match", "mut", "namespace", "open",
+   "private", "protected", "return", "section", "show", "structure", "then", "theorem",
+   "universe", "unless", "variable", "where", "with", "Type", "Prop", "Sort"]
+
 /-- A Lean type in the output. -/
 inductive Ty where
   | int | bool | string
@@ -29,6 +37,9 @@ inductive Ty where
   /-- A structure of the program: one that the file declares, or one that it
   imports. -/
   | struct (ref : DeclRef)
+  /-- An inductive type with one constructor for each string of a literal
+  union, `type T = 'a' | 'b'`. -/
+  | enum (ref : DeclRef)
 deriving BEq, Repr, Inhabited
 
 /-- `+`, `-` and `*` on `Int`. -/
@@ -100,6 +111,8 @@ inductive Expr where
   | isSome (a : Expr)
   /-- `(match x with | none => a | some x => b)`. -/
   | matchNull (name : String) (whenNull whenValue : Expr)
+  /-- `T.a`: the constructor of the inductive type `T` for the string `a`. -/
+  | enumCase (ref : DeclRef) (member : String)
   /-- `(Option.getD a b)`, or `(Option.or a b)` when `nullable` is true: the
   value of `a ?? b`. `b` is a `T` in the first, and an `Option T` in the
   second. -/
@@ -180,6 +193,9 @@ inductive Decl where
   wherever the source names `T`, so the output names `T` only here, for the
   claims about it to use. -/
   | alias (name : String) (type : Ty)
+  /-- `inductive T where | a | b`, with decidable equality: the type of the
+  literal union `type T = 'a' | 'b'`. -/
+  | enum (name : String) (members : List String)
   /-- `def f (x : T) : R :=`, then the body. -/
   | function (name : String) (params : List (String × Ty)) (ret : Ty) (body : Body)
 deriving Repr, Inhabited
@@ -187,7 +203,7 @@ deriving Repr, Inhabited
 /-! ### The declarations that the output names -/
 
 def Ty.refs : Ty → List DeclRef
-  | .struct r => [r]
+  | .struct r | .enum r => [r]
   | .option t | .list t => t.refs
   | _ => []
 
@@ -204,6 +220,7 @@ def Expr.refs : Expr → List DeclRef
   | .matchNull _ a b | .coalesce a b _ | .intOp _ a b | .order _ a b | .division _ a b
   | .numberOp _ a b | .numberNe a b | .eq a b | .ne a b | .propAnd a b | .propOr a b | .and a b | .or a b =>
     a.refs ++ b.refs
+  | .enumCase r _ => [r]
   | .int _ | .number _ | .numberConstant _ | .none | .bool _ | .string _ | .var _ => []
 
 def Expr.refsList : List Expr → List DeclRef
@@ -229,6 +246,7 @@ def Body.refs : Body → List DeclRef
 def Decl.refs : Decl → List DeclRef
   | .struct _ fields => fields.flatMap (·.2.refs)
   | .alias _ type => type.refs
+  | .enum .. => []
   | .function _ params ret body => params.flatMap (·.2.refs) ++ ret.refs ++ body.refs
 
 /-! ### Printing -/
@@ -277,7 +295,8 @@ def Names.ref (names : Names) (r : DeclRef) : String × Option String :=
 def leanNames : List (String × String) :=
   [("decide", "Decidable.decide"), ("List", "List"), ("Option", "Option"),
    ("some", "Option.some"), ("none", "Option.none"), ("Int", "Int"), ("Bool", "Bool"),
-   ("String", "String"), ("JSNumber", "tolean.TypeScript.JSNumber")]
+   ("String", "String"), ("JSNumber", "tolean.TypeScript.JSNumber"),
+   ("DecidableEq", "DecidableEq"), ("Repr", "Repr")]
 
 /-- Write the Lean name `name` (or `name.rest`), from the root when the source
 declares the same name. -/
@@ -307,6 +326,13 @@ def indentBy (by_ : String) (lines : List String) : List String := lines.map (by
 
 def indent (lines : List String) : List String := indentBy "  " lines
 
+/-- A constructor of an inductive type as the output names it: always in
+`«»`. Lean reads some words as keywords or modifiers, such as `open` or
+`unsafe`, and no list of them stays complete across Lean versions. The
+quotes change only how the name is written, so a claim can still name the
+constructor `T.closed`. -/
+def memberName (member : String) : String := s!"«{member}»"
+
 def Ty.print (names : Names) : Ty → String
   | .int => leanName names "Int"
   | .number => names.numberVar
@@ -319,6 +345,7 @@ def Ty.print (names : Names) : Ty → String
     match names.ref ref with
     | (name, some _) => s!"({name} {names.numberVar})"
     | (name, Option.none) => name
+  | .enum ref => (names.ref ref).1
 
 /-- The printed type names the number type, so a declaration of it must bind
 `N`. -/
@@ -354,6 +381,7 @@ def Expr.print (names : Names) : Expr → String
   | .bool b => if b then "true" else "false"
   | .string s => Sexp.quote s
   | .var name => name
+  | .enumCase ref member => s!"{(names.ref ref).1}.{memberName member}"
   | .field obj wrap name =>
     let o := obj.print names
     s!"{if wrap then s!"({o})" else o}.{name}"
@@ -444,6 +472,10 @@ def Decl.print (names : Names) : Decl → String
     let generic := if names.usesNumber then s!" ({names.numberVar} : Type)" else ""
     "\n".intercalate (s!"structure {name}{generic} where" ::
       fields.map fun (field, type) => s!"  {field} : {type.print names}")
+  | .enum name members =>
+    "\n".intercalate (s!"inductive {name} where" ::
+      members.map (s!"  | {memberName ·}") ++
+      [s!"deriving {leanName names "DecidableEq"}, {leanName names "Repr"}"])
   | .alias name type =>
     let generic := if type.namesNumber names then s!" ({names.numberVar} : Type)" else ""
     s!"abbrev {name}{generic} := {type.print names}"
