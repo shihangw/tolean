@@ -44,6 +44,11 @@ inductive Ty where
   | struct (ref : DeclRef)
   /-- A literal union of strings, `type T = 'a' | 'b'`, of the program. -/
   | enum (ref : DeclRef)
+  /-- A tagged union of interfaces of the program, `type T = A | B`, narrowed
+  to the members with the tags `tags`. -/
+  | tagged (ref : DeclRef) (tags : List String)
+  /-- The type of a tag field, one string literal such as `'circle'`. -/
+  | literal (value : String)
 deriving BEq, Repr, Inhabited
 
 /-- A value of type `source` can stand where `target` is expected. Arrays and
@@ -52,6 +57,11 @@ def Ty.assignableTo (source target : Ty) : Bool :=
   source == target ||
     match target with
     | .nullable value => source == .null || source == value
+    -- A union narrowed to some of its members is a value of the union.
+    | .tagged ref tags =>
+      match source with
+      | .tagged ref' tags' => ref' == ref && tags'.all tags.contains
+      | _ => false
     | _ => false
 
 /-- The type of `c ? a : b`. -/
@@ -75,7 +85,7 @@ def Ty.isEqPrimitive : Ty → Bool
 
 /-- An object, which `===` compares by identity. -/
 def Ty.isObject : Ty → Bool
-  | .array _ | .struct _ => true
+  | .array _ | .struct _ | .tagged .. => true
   | _ => false
 
 /-- The Lean type that the output gives a value of type `t`. -/
@@ -89,6 +99,20 @@ def Ty.lean : Ty → IR.Ty
   | .array t => .list t.lean
   | .struct ref => .struct ref
   | .enum ref => .enum ref
+  | .tagged ref _ => .tagged ref
+  | .literal value => .tag value
+
+/-- A tagged union of interfaces of the program, `type T = A | B`, with the
+file that declares it. Each member has the field `field`, whose type is one
+string literal, and `members` maps each such tag to its interface. -/
+structure UnionInfo where
+  file : String
+  name : String
+  exported : Bool := false
+  field : String
+  members : List (String × DeclRef)
+
+def UnionInfo.ref (i : UnionInfo) : DeclRef := ⟨i.file, i.name⟩
 
 /-- How a name in scope may be used. Only `let` and `array` locals change. -/
 inductive Binding where
@@ -124,6 +148,8 @@ that a call may name. -/
 structure Env where
   locals : List Local := []
   functions : List FnInfo := []
+  /-- The tagged unions whose tags a test may read. -/
+  unions : List UnionInfo := []
 
 def Env.lookup (env : Env) (name : String) : Option Local := env.locals.find? (·.name == name)
 
@@ -162,6 +188,7 @@ structure Interface where
   structs : List StructInfo := []
   aliases : List AliasInfo := []
   enums : List EnumInfo := []
+  unions : List UnionInfo := []
   usesNumber : Bool := false
   /-- The name under which its declarations bind the number type. -/
   numberVar : String := "N"
@@ -180,6 +207,8 @@ structure Ctx where
   aliases : List AliasInfo := []
   /-- The literal unions that the file declares or imports. -/
   enums : List EnumInfo := []
+  /-- The tagged unions that the file declares or imports. -/
+  unions : List UnionInfo := []
   functions : List FnInfo := []
   /-- The files that this file may import from, by path. -/
   interfaces : List (String × Interface) := []
@@ -210,6 +239,11 @@ it imports, and the exported ones of the files before it, which can reach it
 through a field. -/
 def Ctx.knownEnums (c : Ctx) : List EnumInfo :=
   c.enums ++ c.interfaces.flatMap (·.2.enums)
+
+/-- The tagged unions whose values the file may build and test, as
+`knownStructs` has the interfaces. -/
+def Ctx.knownUnions (c : Ctx) : List UnionInfo :=
+  c.unions ++ c.interfaces.flatMap (·.2.unions)
 
 /-- A translated expression. `prop` is true when the code is a Lean `Prop`,
 not a `Bool`. -/
@@ -295,7 +329,8 @@ def checkLocalName (span : Span) (name : String) : TM String := do
   let ctx ← get
   if ctx.structs.any fun i => i.name == name && i.file == ctx.file then
     reject span s!"'{name}' would hide the interface {name} in Lean; choose another name"
-  if ctx.enums.any fun i => i.name == name && i.file == ctx.file then
+  if (ctx.enums.any fun i => i.name == name && i.file == ctx.file) ||
+      (ctx.unions.any fun i => i.name == name && i.file == ctx.file) then
     reject span s!"'{name}' would hide the type {name} in Lean; choose another name"
   checkName span name
 
@@ -362,9 +397,12 @@ def translateType (t : TypeExpr) : TM Ty := do
       match ctx.enums.find? (·.name == name) with
       | some info => return .enum info.ref
       | none =>
-        match ctx.aliases.find? (·.name == name) with
-        | some info => return info.type
-        | none => unsupportedType t
+        match ctx.unions.find? (·.name == name) with
+        | some info => return .tagged info.ref (info.members.map (·.1))
+        | none =>
+          match ctx.aliases.find? (·.name == name) with
+          | some info => return info.type
+          | none => unsupportedType t
   | _ => unsupportedType t
 
 /-! ### What statements do -/
@@ -503,6 +541,66 @@ def nullTestOf (env : Env) (e : Expr) : Option (String × Bool × Ty) :=
       | _ => none
   | _ => none
 
+/-- The tag that an object literal sets: the string of its property `field`. -/
+def tagOfProps (field : String) (props : List Property) : Option String :=
+  props.findSome? fun
+    | .keyValue _ (.ident k) (.string _ v) => if k == field then some v else none
+    | _ => none
+
+/-- A test of the tag of a tagged union, as `x.kind === 'circle'` reads it:
+the local, the union, its tag field and the tag, whether the test is `===`,
+and the types of the local where the tag matches and where it does not. When
+one member is left where it does not, `other` is its tag. -/
+structure TagTest where
+  name : String
+  ref : DeclRef
+  field : String
+  tag : String
+  isEq : Bool
+  whenTag : Ty
+  whenOther : Ty
+  other : Option String
+
+/-- The local, the field and the string of `x.kind` and `'circle'`, in either
+order. -/
+def tagSide (l r : Expr) : Option (String × String × String) :=
+  match l, r with
+  | .member _ (.ident _ n) f, .string _ t => some (n, f, t)
+  | .string _ t, .member _ (.ident _ n) f => some (n, f, t)
+  | _, _ => none
+
+/-- The type of a local of the union `ref` where its tag is none of the one
+just tested, and the tag of the member when one is left. -/
+def otherOf (u : UnionInfo) (ref : DeclRef) (rest : List String) : Ty × Option String :=
+  match rest with
+  | [o] =>
+    match u.members.lookup o with
+    | some oref => (.struct oref, some o)
+    | none => (.tagged ref rest, none)
+  | _ => (.tagged ref rest, none)
+
+/-- `x.kind === 'circle'` or `x.kind !== 'circle'`, with the string on either
+side, where `x` is a local of a tagged union whose tag field is `kind` and
+which may have the tag here. -/
+def tagTestOf (env : Env) (e : Expr) : Option TagTest := do
+  let .binary _ op l r := e.stripParens | none
+  unless op == .strictEq || op == .strictNe do none
+  let (n, f, t) ← tagSide l r
+  let local_ ← env.lookup n
+  let .tagged ref tags := local_.type | none
+  let u ← env.unions.find? (·.ref == ref)
+  let member ← u.members.lookup t
+  unless u.field == f && tags.contains t do none
+  let (whenOther, other) := otherOf u ref (tags.filter (· != t))
+  return { name := n, ref, field := f, tag := t, isEq := op == .strictEq,
+           whenTag := .struct member, whenOther, other }
+
+/-- The arm for the other members of a test of `name`'s tag tests it again
+only as more arms of the same `match`: first, or not at all. -/
+def nestsTag (name : String) : IR.Body → Bool
+  | .matchTag n .. => n == name
+  | b => !b.testsTag name
+
 /-- A bigint literal other than `0n`, such as `2n` or `-(3n)`. -/
 def isNonzeroBigintLiteral : Expr → Bool
   | .paren _ inner | .unary _ .neg inner => isNonzeroBigintLiteral inner
@@ -631,6 +729,10 @@ def translateExpr (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr) : T
       unless info.members.contains value do
         reject s s!"'{value}' is not one of the strings of {info.name}"
       return ⟨.enumCase ref value, false, .enum ref⟩
+    -- The tag field of an object literal of an interface.
+    | some (.literal tag) =>
+      unless value == tag do reject s s!"the tag here must be '{tag}'"
+      return ⟨.tagValue value, false, .literal value⟩
     | _ => return ⟨.string value, false, .string⟩
   | .ident s name =>
     match env.lookup name with
@@ -650,8 +752,14 @@ def translateExpr (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr) : T
         (ctx.knownStructs.find? fun (i : StructInfo) => i.ref == ref).bind
           fun info => info.fields.lookup name
       | _ => none
-    let type ← orReject field? s
-      "only fields of interfaces declared in this file, or exported by the files before it, may be read"
+    let message := match o.type, field? with
+      | .tagged .., _ => "a field of a tagged union may be read only after a test of its tag"
+      | _, some (.literal _) =>
+        "a tag field may be read only in a test of its union, such as x.kind === 'circle'"
+      | _, _ =>
+        "only fields of interfaces declared in this file, or exported by the files before it, may be read"
+    -- The structure has no tag field, so the output cannot read one.
+    let type ← orReject (field?.filter fun t => !(t matches .literal _)) s message
     return ⟨.field o.code (!obj.isIdent) name, false, type⟩
   | .unary s op arg =>
     if op == .neg && arg.isInfinity && !env.has "Infinity" then
@@ -674,7 +782,12 @@ def translateExpr (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr) : T
     unless c.type == .boolean do reject test.span "a condition must be a boolean"
     let a ← translateExpr fuel env expected ifTrue
     let b ← translateExpr fuel env expected ifFalse
-    let type ← orReject (a.type.join b.type) s "the branches of '?:' have different types"
+    -- A tag field holds the string itself, which the output leaves out, so
+    -- it may not be the value of '?:'.
+    let message := match a.type.join b.type with
+      | some (.literal _) => "a tag field must be its string literal itself, not the value of '?:'"
+      | _ => "the branches of '?:' have different types"
+    let type ← orReject ((a.type.join b.type).filter fun t => !(t matches .literal _)) s message
     return ⟨.ite c.code a.value b.value, false, type⟩
   | .call s callee args => translateCall fuel env s callee args
   | .object s props => translateObject fuel env expected s props
@@ -736,6 +849,16 @@ def translateObject (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (
   let ctx ← get
   let notStructMessage :=
     "an object literal must build an interface declared in this file, or exported by the files before it"
+  -- A member of a tagged union: its tag picks the interface, and the
+  -- output wraps the structure in the member's constructor.
+  if let some (.tagged uref tags) := expected then
+    let union ← orReject (ctx.knownUnions.find? (·.ref == uref)) s notStructMessage
+    let tag ← orReject (tagOfProps union.field props) s
+      s!"an object of {union.name} must set '{union.field}' to one of its tags"
+    unless tags.contains tag do reject s s!"'{tag}' is not a tag of {union.name} here"
+    let member ← orReject (union.members.lookup tag) s s!"'{tag}' is not a tag of {union.name}"
+    let c ← translateObject fuel env (some (.struct member)) s props
+    return ⟨.inject uref tag c.code, false, .tagged uref tags⟩
   let some (.struct ref) := expected | reject s notStructMessage
   let info ← orReject (ctx.knownStructs.find? (·.ref == ref)) s notStructMessage
   let structName := ref.name
@@ -916,19 +1039,35 @@ def translateIf (fuel : Nat) (env : Env) (s : Span) (test : Expr) (thenBranch : 
   -- `if (x === null)` and `if (x !== null)`: TypeScript narrows `x` in each
   -- branch, so Lean matches on `x` and binds it to the value.
   let nullTest := nullTestOf env test
-  let (envTrue, envFalse) := match nullTest with
-    | some (name, true, value) => (env.narrow name .null, env.narrow name value)
-    | some (name, false, value) => (env.narrow name value, env.narrow name .null)
-    | none => (env, env)
+  -- `if (x.kind === 'circle')`: TypeScript narrows `x` to the member in one
+  -- branch and to the other members in the other, so Lean matches on the
+  -- constructor.
+  let tagTest := tagTestOf env test
+  let (envTrue, envFalse) := match nullTest, tagTest with
+    | some (name, true, value), _ => (env.narrow name .null, env.narrow name value)
+    | some (name, false, value), _ => (env.narrow name value, env.narrow name .null)
+    | none, some t =>
+      if t.isEq then (env.narrow t.name t.whenTag, env.narrow t.name t.whenOther)
+      else (env.narrow t.name t.whenOther, env.narrow t.name t.whenTag)
+    | none, none => (env, env)
   let branch (whenTrue whenFalse : IR.Body) : TM IR.Body := do
-    match nullTest with
-    | none =>
+    match nullTest, tagTest with
+    | none, none =>
       let c ← translateExpr (← fuelLimit) env none test
       unless c.type == .boolean do reject test.span "a condition must be a boolean"
       return .ite c.code whenTrue whenFalse
-    | some (name, isNullTest, _) =>
+    | some (name, isNullTest, _), _ =>
       return if isNullTest then .matchNull name whenTrue whenFalse
         else .matchNull name whenFalse whenTrue
+    | none, some t =>
+      let (whenTag, whenOther) := if t.isEq then (whenTrue, whenFalse) else (whenFalse, whenTrue)
+      -- Where more than one member is left, Lean matches the others with a
+      -- catch-all. A further test of the local is exhaustive only as more
+      -- arms of the same `match`, so it must come first there.
+      if t.other.isNone && !(nestsTag t.name whenOther) then
+        reject s ("where more than one member of the union is left, a further test of its tag " ++
+          "must come right after, as in a chain of 'if (x.kind === 'a') return …'")
+      return .matchTag t.name t.ref t.field t.tag t.other whenTag whenOther
   if tail.isRet && alwaysReturns thenStatements then
     if elseBranch.isSome && !rest.isEmpty then
       reject s "code after an if whose branches both return is unreachable"
@@ -939,9 +1078,13 @@ def translateIf (fuel : Nat) (env : Env) (s : Span) (test : Expr) (thenBranch : 
     reject s "a branch that does not always return may not return, break or continue"
   let names := changedNames (thenStatements ++ elseStatements) env
   if names.isEmpty then reject s "an if without a return must change a local"
-  if let some (name, _, _) := nullTest then
+  let tested := match nullTest, tagTest with
+    | some (name, _, _), _ => some name
+    | none, some t => some t.name
+    | none, none => none
+  if let some name := tested then
     if names.contains name then
-      reject s "a local tested against null may not be assigned in that if"
+      reject s "a local that the test narrows may not be assigned in that if"
   let state := Tail.state names
   let whenTrue ← translateStatements fuel envTrue state thenStatements
   let whenFalse ← translateStatements fuel envFalse state elseStatements
@@ -983,7 +1126,8 @@ def isolated {A : Type} (x : TM A) : TM A := do
 def declareTopLevel (s : Span) (name : String) : TM Unit := do
   let ctx ← get
   if ctx.structs.any (·.name == name) || ctx.aliases.any (·.name == name) ||
-      ctx.enums.any (·.name == name) || ctx.functions.any (·.name == name) then
+      ctx.enums.any (·.name == name) || ctx.unions.any (·.name == name) ||
+      ctx.functions.any (·.name == name) then
     reject s s!"'{name}' is declared twice"
   -- A declaration of the module hides the global of the same name, and the
   -- subset reads these names as the globals.
@@ -999,7 +1143,11 @@ def translateInterface (s : Span) (exported : Bool) (name : String) (fields : Li
       reject f.span "interface fields must be readonly, required and typed"
     let field ← checkName f.span f.name
     if infos.any (·.1 == field) then reject f.span s!"'{field}' is declared twice"
-    pure (infos ++ [(field, ← translateType f.type)])
+    -- A field of one string literal type is a tag, which a union reads.
+    let type ← match f.type with
+      | .literal _ (.string v) => pure (Ty.literal v)
+      | t => translateType t
+    pure (infos ++ [(field, type)])
   modify fun c => { c with structs := c.structs ++ [{ file := c.file, name, exported, fields := infos }] }
   return .struct name (infos.map fun (field, type) => (field, type.lean))
 
@@ -1036,6 +1184,46 @@ def translateEnum (s : Span) (exported : Bool) (name : String) (members : List S
     modify fun c => { c with enums := c.enums ++ [{ file := c.file, name, exported, members }] }
     return .enum name members
 
+/-- The interfaces of a union `A | B` of interfaces that the file declares or
+imports, or none when a member is something else. -/
+def unionMembers (structs : List StructInfo) : TypeExpr → Option (List StructInfo)
+  | .union _ members => members.mapM fun
+    | .ref _ n [] => structs.find? (·.name == n)
+    | _ => none
+  | _ => none
+
+/-- The tag field of interfaces: a field that each of them has, with one
+string literal type, and a different one in each. -/
+def tagFieldOf (members : List StructInfo) : Option (String × List String) :=
+  match members with
+  | [] => none
+  | first :: _ =>
+    first.fields.findSome? fun (f, _) =>
+      let tags := members.filterMap fun m =>
+        match m.fields.lookup f with
+        | some (.literal t) => some t
+        | _ => none
+      if tags.length == members.length && tags.eraseDups.length == tags.length then some (f, tags)
+      else none
+
+/-- `type T = A | B`, a union of interfaces with a tag field. The output gives
+the type one constructor for each member, which holds the member's
+structure, so a claim can match on it. In JS and in the interpreter a value
+is still the object, which has the tag. -/
+def translateUnion (s : Span) (exported : Bool) (name : String) (members : List StructInfo) :
+    TM IR.Decl := do
+  match tagFieldOf members with
+  | none =>
+    reject s ("a union of interfaces needs a tag: a field that each of them has, " ++
+      "with a different string literal type, such as kind: 'circle'")
+  | some (field, tags) =>
+    match badMember tags with
+    | some reason => reject s reason
+    | none =>
+      let pairs := tags.zip (members.map (·.ref))
+      modify fun c => { c with unions := c.unions ++ [{ file := c.file, name, exported, field, members := pairs }] }
+      return .tagged name field pairs
+
 /-- `type T = U`. The translator writes the type of `U` wherever the source
 names `T`, so a type alias changes no code. The output declares it as an
 `abbrev`, for the claims about the code to use. An alias must come before its
@@ -1046,6 +1234,8 @@ def translateAlias (s : Span) (exported : Bool) (name : String) (type : TypeExpr
   declareTopLevel s name
   if let some members := stringLiterals type then
     return ← translateEnum s exported name members
+  if let some members := unionMembers (← get).structs type then
+    return ← translateUnion s exported name members
   let ty ← isolated (translateType type)
   modify fun c => { c with aliases := c.aliases ++ [{ file := c.file, name, exported, type := ty }] }
   return .alias name ty.lean
@@ -1058,7 +1248,7 @@ def translateFunction (s : Span) (exported : Bool) (name : String) (params : Lis
   declareTopLevel s name
   -- The scope of the body, and the parameters in Lean and as types.
   let (env, leanParams, types) ← isolated <| params.foldlM
-    (init := (({ functions := (← get).functions } : Env), ([] : List (String × IR.Ty)), ([] : List Ty)))
+    (init := (({ functions := (← get).functions, unions := (← get).knownUnions } : Env), ([] : List (String × IR.Ty)), ([] : List Ty)))
     fun (env, leanParams, types) p => do
       let type ← orReject p.type p.span "parameters must be plain, typed identifiers"
       let paramName ← checkLocalName p.span p.name
@@ -1186,13 +1376,18 @@ def translateImport (s : Span) (names : List ImportName) (source : String) : TM 
       | none, some info =>
         modify fun c => { c with enums := c.enums ++ [{ info with exported := false }] }
       | none, none =>
+      match iface.unions.find? fun u => u.name == n.name && u.exported with
+      | some info =>
+        modify fun c => { c with unions := c.unions ++ [{ info with exported := false }] }
+      | none =>
         let info ← orReject (iface.structs.find? fun i => i.name == n.name && i.exported) n.span
           s!"'{source}' exports no interface or type named '{n.name}'"
         modify fun c => { c with structs := c.structs ++ [{ info with exported := false }] }
     else
       if iface.structs.any fun i => i.name == n.name && i.exported then
         reject n.span s!"'{n.name}' is an interface; import it with 'type {n.name}'"
-      if iface.aliases.any (·.name == n.name) || iface.enums.any fun e => e.name == n.name && e.exported then
+      if iface.aliases.any (·.name == n.name) || (iface.enums.any fun e => e.name == n.name && e.exported) ||
+          iface.unions.any fun u => u.name == n.name && u.exported then
         reject n.span s!"'{n.name}' is a type; import it with 'type {n.name}'"
       let fn ← orReject (iface.functions.find? (·.name == n.name)) n.span
         s!"'{source}' exports no function named '{n.name}'"
@@ -1213,45 +1408,50 @@ prints the result after it. -/
 def translateDecls (m : Module) : TM (List IR.Decl) := do
   return (← m.decls.mapM translateDecl).filterMap id
 
-/-- The interfaces that a type names. -/
-def Ty.structRefs : Ty → List DeclRef
-  | .struct r => [r]
-  | .nullable t | .array t => t.structRefs
+/-- The declarations that a type names: interfaces, literal unions and
+tagged unions. -/
+def Ty.declRefs : Ty → List DeclRef
+  | .struct r | .enum r | .tagged r _ => [r]
+  | .nullable t | .array t => t.declRefs
   | _ => []
 
-/-- The file's interfaces that a file importing from it needs the fields of:
-the exported ones, and the private ones that an exported alias, interface or
-function names, directly or through the fields of another. An interface
-names only the ones before it, so as many rounds as the file has interfaces
-find them all. -/
-def Ctx.reachableStructs (c : Ctx) : List StructInfo :=
+/-- The file's own types that a file importing from it needs: the exported
+ones, and the private ones that an exported alias, interface, union or
+function names, directly or through the fields of an interface or the
+members of a union. A type names only the ones before it, so as many rounds
+as the file has types find them all. -/
+def Ctx.reachable (c : Ctx) : List DeclRef :=
   let own := c.structs.filter (·.file == c.file)
-  let roots := (c.aliases.filter fun a => a.exported && a.file == c.file).flatMap (·.type.structRefs) ++
-    (own.filter (·.exported)).flatMap (·.fields.flatMap (·.2.structRefs)) ++
+  let ownUnions := c.unions.filter (·.file == c.file)
+  let roots := (c.aliases.filter fun a => a.exported && a.file == c.file).flatMap (·.type.declRefs) ++
+    (own.filter (·.exported)).map (·.ref) ++
+    (c.enums.filter fun e => e.exported && e.file == c.file).map (·.ref) ++
+    (ownUnions.filter (·.exported)).map (·.ref) ++
     (c.functions.filter fun f => f.exported && f.file == c.file).flatMap
-      fun f => (f.ret :: f.params).flatMap (·.structRefs)
+      fun f => (f.ret :: f.params).flatMap (·.declRefs)
   let step (seen : List DeclRef) : List DeclRef :=
-    seen ++ (own.filter fun i => seen.contains i.ref).flatMap (·.fields.flatMap (·.2.structRefs))
-  let reached := (List.range own.length).foldl (fun acc _ => step acc) roots
-  own.filter fun i => i.exported || reached.contains i.ref
+    seen ++ (own.filter fun i => seen.contains i.ref).flatMap (·.fields.flatMap (·.2.declRefs)) ++
+      (ownUnions.filter fun u => seen.contains u.ref).flatMap (·.members.map (·.2))
+  (List.range (own.length + ownUnions.length)).foldl (fun acc _ => step acc) roots
 
-/-- The literal unions that a type names. -/
-def Ty.enumRefs : Ty → List DeclRef
-  | .enum r => [r]
-  | .nullable t | .array t => t.enumRefs
-  | _ => []
+/-- The file's interfaces that a file importing from it needs the fields of.
+The private ones keep `exported := false`, so no file can import them by
+name. -/
+def Ctx.reachableStructs (c : Ctx) : List StructInfo :=
+  let reached := c.reachable
+  c.structs.filter fun i => i.file == c.file && (i.exported || reached.contains i.ref)
 
 /-- The file's literal unions that a file importing from it needs the strings
-of: the exported ones, and the private ones that an exported alias or
-function names, or a field of an interface that the importing file can
-reach. -/
+of. -/
 def Ctx.reachableEnums (c : Ctx) : List EnumInfo :=
-  let own := c.enums.filter (·.file == c.file)
-  let named := (c.aliases.filter fun a => a.exported && a.file == c.file).flatMap (·.type.enumRefs) ++
-    c.reachableStructs.flatMap (·.fields.flatMap (·.2.enumRefs)) ++
-    (c.functions.filter fun f => f.exported && f.file == c.file).flatMap
-      fun f => (f.ret :: f.params).flatMap (·.enumRefs)
-  own.filter fun e => e.exported || named.contains e.ref
+  let reached := c.reachable
+  c.enums.filter fun e => e.file == c.file && (e.exported || reached.contains e.ref)
+
+/-- The file's tagged unions that a file importing from it needs the members
+of. -/
+def Ctx.reachableUnions (c : Ctx) : List UnionInfo :=
+  let reached := c.reachable
+  c.unions.filter fun u => u.file == c.file && (u.exported || reached.contains u.ref)
 
 /-- What the file exports: its own exported functions, interfaces and type
 aliases. The interfaces include the private ones that an exported declaration
@@ -1262,6 +1462,7 @@ def Ctx.interface (c : Ctx) (usesNumber : Bool) (numberVar : String) : Interface
     structs := c.reachableStructs,
     aliases := c.aliases.filter fun a => a.exported && a.file == c.file,
     enums := c.reachableEnums,
+    unions := c.reachableUnions,
     usesNumber, numberVar, target := c.target }
 
 def lineStarts (src : Array Char) : Array Nat := Id.run do

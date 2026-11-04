@@ -130,11 +130,12 @@ theorem translateFunction_ok {sp : Span} {ex : Bool} {name : String} {params : L
   | none => simp at h
   | some returnType =>
     simp only [bind_ok] at h
-    obtain ⟨name', s₁, hname, u, s₂, htop, c, s₃, hget, ⟨env, lp, ts⟩, s₄, hfold, h⟩ := h
+    obtain ⟨name', s₁, hname, u, s₂, htop, c, s₃, hget, c', s₃', hget', ⟨env, lp, ts⟩, s₄, hfold, h⟩ := h
     obtain ⟨rfl, rfl⟩ := checkName_ok hname
     obtain ⟨rfl, hfresh⟩ := declareTopLevel_ok htop
-    simp only [get_ok] at hget
+    simp only [get_ok] at hget hget'
     obtain ⟨rfl, rfl⟩ := hget
+    obtain ⟨rfl, rfl⟩ := hget'
     obtain ⟨rfl, s₅, hfold⟩ := isolated_ok hfold
     have hps := params_fold (hstep := fun env lp ts p ctx r ctx' hg => by
         simp only [bind_ok, orReject_ok, ite_state] at hg
@@ -222,7 +223,15 @@ theorem translateImport_ok {sp : Span} {names : List ImportName} {source : Strin
         refine ⟨hf, hi, more, hfns, ?_, hex, hnd, horig⟩
         simp [htype, hrefs]
       | none =>
-        simp only [hfa, hfe, bind_ok, orReject_ok, modify_ok] at hstep
+      cases hfu : iface.unions.find? (fun u => u.name == n.name && u.exported) with
+      | some info =>
+        simp only [hfa, hfe, hfu, modify_ok] at hstep
+        subst hstep
+        obtain ⟨hf, hi, more, hfns, hrefs, hex, hnd, horig⟩ := ih _ hloop
+        refine ⟨hf, hi, more, hfns, ?_, hex, hnd, horig⟩
+        simp [htype, hrefs]
+      | none =>
+        simp only [hfa, hfe, hfu, bind_ok, orReject_ok, modify_ok] at hstep
         obtain ⟨info, s₆, ⟨-, rfl⟩, rfl⟩ := hstep
         obtain ⟨hf, hi, more, hfns, hrefs, hex, hnd, horig⟩ := ih _ hloop
         refine ⟨hf, hi, more, hfns, ?_, hex, hnd, horig⟩
@@ -272,10 +281,26 @@ theorem translateEnum_ok {sp : Span} {ex : Bool} {name : String} {members : List
     obtain ⟨_, _, rfl, rfl, rfl⟩ := h
     exact ⟨rfl, rfl, rfl, rfl⟩
 
+theorem translateUnion_ok {sp : Span} {ex : Bool} {name : String} {members : List StructInfo}
+    {s s' : Ctx} {o : IR.Decl} (h : translateUnion sp ex name members s = .ok o s') :
+    s'.file = s.file ∧ s'.interfaces = s.interfaces ∧ s'.functions = s.functions ∧
+      ∃ f ps, o = .tagged name f ps := by
+  unfold translateUnion at h
+  cases ht : tagFieldOf members with
+  | none => simp [ht] at h
+  | some p =>
+    obtain ⟨field, tags⟩ := p
+    cases hb : badMember tags with
+    | some r => simp [ht, hb] at h
+    | none =>
+      simp only [ht, hb, bind_ok, modify_ok, pure_ok] at h
+      obtain ⟨_, _, rfl, rfl, rfl⟩ := h
+      exact ⟨rfl, rfl, rfl, _, _, rfl⟩
+
 theorem translateAlias_ok {sp : Span} {ex : Bool} {name : String} {type : TypeExpr}
     {s s' : Ctx} {o : IR.Decl} (h : translateAlias sp ex name type s = .ok o s') :
     s'.file = s.file ∧ s'.interfaces = s.interfaces ∧ s'.functions = s.functions ∧
-      ((∃ n t, o = .alias n t) ∨ ∃ n ms, o = .enum n ms) := by
+      ((∃ n t, o = .alias n t) ∨ (∃ n ms, o = .enum n ms) ∨ ∃ n f ps, o = .tagged n f ps) := by
   unfold translateAlias at h
   simp only [bind_ok] at h
   obtain ⟨name', s₁, hname, u, s₂, htop, h⟩ := h
@@ -286,12 +311,23 @@ theorem translateAlias_ok {sp : Span} {ex : Bool} {name : String} {type : TypeEx
     simp only [hl, bind_ok, pure_ok] at h
     obtain ⟨d, s₃, he, rfl, rfl⟩ := h
     obtain ⟨h1, h2, h3, rfl⟩ := translateEnum_ok he
-    exact ⟨h1, h2, h3, .inr ⟨_, _, rfl⟩⟩
+    exact ⟨h1, h2, h3, .inr (.inl ⟨_, _, rfl⟩)⟩
   | none =>
-    simp only [hl, bind_ok, modify_ok, pure_ok, pure_bind] at h
-    obtain ⟨ty, s₃, hty, _, s₄, rfl, rfl, rfl⟩ := h
-    obtain ⟨rfl, -⟩ := isolated_ok hty
-    exact ⟨rfl, rfl, rfl, .inl ⟨_, _, rfl⟩⟩
+    simp only [hl, bind_ok, get_ok, pure_ok] at h
+    obtain ⟨_, s₃, ⟨-, hs⟩, c, s₄, ⟨hc, hc4⟩, h⟩ := h
+    cases hu : unionMembers c.structs type with
+    | some ms =>
+      simp only [hu, bind_ok, pure_ok] at h
+      obtain ⟨d, s₅, hd, rfl, rfl⟩ := h
+      obtain ⟨h1, h2, h3, f, ps, rfl⟩ := translateUnion_ok hd
+      subst_vars
+      exact ⟨h1, h2, h3, .inr (.inr ⟨_, _, _, rfl⟩)⟩
+    | none =>
+      simp only [hu, bind_ok, modify_ok, pure_ok, pure_bind] at h
+      obtain ⟨ty, s₅, hty, _, s₆, rfl, rfl, rfl⟩ := h
+      obtain ⟨rfl, -⟩ := isolated_ok hty
+      subst_vars
+      exact ⟨rfl, rfl, rfl, .inl ⟨_, _, rfl⟩⟩
 
 theorem translateInterface_ok {sp : Span} {ex : Bool} {name : String} {fields : List Field}
     {s s' : Ctx} {o : IR.Decl} (h : translateInterface sp ex name fields s = .ok o s') :
@@ -448,7 +484,7 @@ theorem decls_ok : ∀ (ds : List Decl) (s s' : Ctx) (os : List (Option IR.Decl)
       | typeAlias sp ex name type =>
         simp only [translateDecl, map_ok] at h₁
         obtain ⟨o', h₁, rfl⟩ := h₁
-        obtain ⟨-, -, -, ⟨n, t, rfl⟩ | ⟨n, ms, rfl⟩⟩ := translateAlias_ok h₁ <;>
+        obtain ⟨-, -, -, ⟨n, t, rfl⟩ | ⟨n, ms, rfl⟩ | ⟨n, f, ps, rfl⟩⟩ := translateAlias_ok h₁ <;>
           simpa [Eval.functions, IR.functions, List.filterMap_cons] using hrel
       | exportedVar sp decl => simp [translateDecl] at h₁
       | stmt st => simp [translateDecl] at h₁

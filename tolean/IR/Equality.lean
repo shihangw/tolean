@@ -29,6 +29,8 @@ def Expr.beq : Expr T E → Expr T E → Bool
   | .string a0, .string b0 => Decidable.decide (a0 = b0)
   | .var a0, .var b0 => Decidable.decide (a0 = b0)
   | .enumCase a0 a1, .enumCase b0 b1 => Decidable.decide (a0 = b0) && Decidable.decide (a1 = b1)
+  | .tagValue a0, .tagValue b0 => Decidable.decide (a0 = b0)
+  | .inject a0 a1 a2, .inject b0 b1 b2 => Decidable.decide (a0 = b0) && Decidable.decide (a1 = b1) && Expr.beq a2 b2
   | .field a0 a1 a2, .field b0 b1 b2 => Expr.beq a0 b0 && Decidable.decide (a1 = b1) && Decidable.decide (a2 = b2)
   | .propNot a0, .propNot b0 => Expr.beq a0 b0
   | .not a0, .not b0 => Expr.beq a0 b0
@@ -83,6 +85,10 @@ theorem Expr.beq_iff : (a b : Expr T E) → Expr.beq a b = true ↔ a = b
     cases b <;> simp [and_assoc, Expr.beq]
   | .enumCase a0 a1, b => by
     cases b <;> simp [and_assoc, Expr.beq]
+  | .tagValue a0, b => by
+    cases b <;> simp [and_assoc, Expr.beq]
+  | .inject a0 a1 a2, b => by
+    cases b <;> simp [and_assoc, Expr.beq, Expr.beq_iff a2]
   | .field a0 a1 a2, b => by
     cases b <;> simp [and_assoc, Expr.beq, Expr.beq_iff a0]
   | .propNot a0, b => by

@@ -82,9 +82,9 @@ def encoderOf (r : Refs) : IR.Ty → Option String
   | .string => some (r.eval "Val.str")
   | .option t => do return s!"({r.eval "encNull"} {← encoderOf r t})"
   | .list t => do return s!"({r.eval "encList"} {← encoderOf r t})"
-  | .struct ref | .enum ref => some (r.cert s!"encode{ref.name}")
+  | .struct ref | .enum ref | .tagged ref => some (r.cert s!"encode{ref.name}")
   | .number => some (r.eval "Val.num")
-  | .null => none
+  | .null | .tag _ => none
 
 /-- How a variable's value becomes a Lean value of type `t` again. -/
 def decoderOf (r : Refs) : IR.Ty → Option String
@@ -93,9 +93,9 @@ def decoderOf (r : Refs) : IR.Ty → Option String
   | .string => some (r.eval "decStr")
   | .option t => do return s!"({r.eval "decNull"} {← decoderOf r t})"
   | .list t => do return s!"({r.eval "decList"} {← decoderOf r t})"
-  | .struct ref | .enum ref => some (r.cert s!"decode{ref.name}")
+  | .struct ref | .enum ref | .tagged ref => some (r.cert s!"decode{ref.name}")
   | .number => some (r.eval "decNum")
-  | .null => none
+  | .null | .tag _ => none
 
 /-- The statements of a function body, with nested ones. -/
 partial def stmtsOf : Stmt → List Stmt
@@ -182,9 +182,20 @@ def splitSteps (decls : List IR.Decl) : Nat → String → IR.Ty → List String
       | _ => none
     match fields with
     | some fields =>
+      -- The structure leaves its tag fields out.
+      let fields := fields.filter fun (_, ft) => !(ft matches .tag _)
       let inner := fields.flatMap fun (f, ft) => splitSteps decls fuel s!"{name}_{f}" ft
       if inner.isEmpty then []
       else s!"rcases {name} with ⟨{", ".intercalate (fields.map fun (f, _) => s!"{name}_{f}")}⟩" :: inner
+    | none => []
+  | fuel + 1, name, .tagged ref =>
+    let members := decls.findSome? fun
+      | .tagged n _ members => if n == ref.name then some members else none
+      | _ => none
+    match members with
+    | some members =>
+      s!"rcases {name} with {" | ".intercalate (members.map fun _ => name)}" ::
+        members.flatMap fun (_, member) => splitSteps decls fuel name (.struct member)
     | none => []
   | _ + 1, _, _ => []
 
@@ -199,7 +210,7 @@ def casesOn (decls : List IR.Decl) (vars : List (String × IR.Ty)) : String :=
 partial def loopsOf : IR.Body → List (List String × String × IR.Body × IR.LoopInfo)
   | .value _ | .state _ => []
   | .let _ _ rest | .letArray _ _ _ rest => loopsOf rest
-  | .ite _ a b | .matchNull _ a b => loopsOf a ++ loopsOf b
+  | .ite _ a b | .matchNull _ a b | .matchTag _ _ _ _ _ a b => loopsOf a ++ loopsOf b
   | .letState _ branch rest => loopsOf branch ++ loopsOf rest
   | .fold names element body _ rest info => loopsOf body ++ [(names, element, body, info)] ++ loopsOf rest
 
@@ -242,8 +253,10 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
   let mut encs : Array String := #[]
   let mut lemmaNames : Array String :=
     #["encList", "decInt", "decBool", "decStr", "decNum"].map r.eval
-  -- A literal union: each constructor is its string.
+  -- The codecs of the declarations, in their order: a type names only the
+  -- types before it, so each codec comes after the codecs it uses.
   for d in decls do
+    -- A literal union: each constructor is its string.
     if let .enum name members := d then
       let ty := (IR.Ty.enum ⟨"", name⟩ : IR.Ty).print names
       let ctor (m : String) : String := (IR.Expr.enumCase ⟨"", name⟩ m : IR.Expr).print names
@@ -272,11 +285,14 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           s!"@[simp] theorem encode{name}_{i} {generic} : encode{name} ({nv} := {nv}) {ctor m} = Val.str {str m} := rfl"
         encs := encs.push <|
           s!"@[simp] theorem decode{name}_{i} {generic} : decode{name} ({nv} := {nv}) (some (Val.str {str m})) = {ctor m} := rfl"
-  for d in decls do
-    if let .struct name fields := d then
-      let parts ← fields.mapM fun (f, t) => do
+    -- An interface.
+    if let .struct name allFields := d then
+      let parts ← allFields.mapM fun (f, t) => do
+        if let .tag v := t then return s!"({str f}, Val.str {str v})"
         let some e := encoderOf r t | throw s!"{file}: cannot encode the field {name}.{f}"
         return s!"({str f}, {e} x.{f})"
+      -- The structure has no tag fields, so the decoder reads none.
+      let fields := allFields.filter fun (_, t) => !(t matches .tag _)
       let decs ← fields.mapM fun (f, t) => do
         let some dec := decoderOf r t | throw s!"{file}: cannot decode the field {name}.{f}"
         return (f, dec)
@@ -295,6 +311,33 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       -- the certificate states it.
       encs := encs.push <|
         s!"@[simp] theorem decList_decode{name} {generic} (xs : List {structTy name}) : decList decode{name} (some (Val.list (List.map (encode{name} ({nv} := {nv})) xs))) = xs :=\n" ++
+        s!"  decList_list _ _ decode{name}_encode{name} xs"
+      lemmaNames := lemmaNames ++ #[r.cert s!"encode{name}", r.cert s!"decode{name}"]
+    -- A tagged union: each member is the object of its structure, which
+    -- holds the tag, and the decoder reads the tag to pick the member.
+    if let .tagged name field members := d then
+      let ty := (IR.Ty.tagged ⟨"", name⟩ : IR.Ty).print names
+      let ctor (t : String) : String := s!"{(names.ref ⟨"", name⟩).1}.{IR.memberName t}"
+      let some (firstTag, firstRef) := members.head? | throw s!"{file}: the union {name} has no members"
+      encs := encs.push <|
+        s!"def encode{name} {generic} : {ty} → Val {nv}\n" ++
+        "\n".intercalate (members.map fun (t, m) => s!"  | {ctor t} v => encode{m.name} v")
+      encs := encs.push <|
+        s!"def decode{name} {generic} : Option (Val {nv}) → {ty}\n" ++
+        s!"  | some (.obj fs) =>\n    match fs.lookup {str field} with\n" ++
+        String.join (members.map fun (t, m) =>
+          s!"    | some (.str {str t}) => {ctor t} (decode{m.name} ({nv} := {nv}) (some (.obj fs)))\n") ++
+        s!"    | _ => {ctor firstTag} (decode{firstRef.name} ({nv} := {nv}) none)\n" ++
+        s!"  | _ => {ctor firstTag} (decode{firstRef.name} ({nv} := {nv}) none)"
+      let memberDefs := ", ".intercalate (members.flatMap fun (_, m) => [s!"encode{m.name}", s!"decode{m.name}"])
+      encs := encs.push <|
+        s!"@[simp] theorem decode{name}_encode{name} {generic} (x : {ty}) : decode{name} (some (encode{name} ({nv} := {nv}) x)) = x := by\n" ++
+        s!"  cases x <;> rename_i v <;> cases v <;> simp [decode{name}, encode{name}, {memberDefs}, List.lookup, encList]"
+      encs := encs.push <|
+        s!"@[simp] theorem encode{name}_ne_null {generic} (x : {ty}) : encode{name} ({nv} := {nv}) x ≠ Val.null := by\n" ++
+        s!"  cases x <;> simp [encode{name}, {memberDefs}]"
+      encs := encs.push <|
+        s!"@[simp] theorem decList_decode{name} {generic} (xs : List {ty}) : decList decode{name} (some (Val.list (List.map (encode{name} ({nv} := {nv})) xs))) = xs :=\n" ++
         s!"  decList_list _ _ decode{name}_encode{name} xs"
       lemmaNames := lemmaNames ++ #[r.cert s!"encode{name}", r.cert s!"decode{name}"]
   let defs := (functionsOf m).map fun f => r.full s!"{transNs}.{f.1}"

@@ -97,6 +97,9 @@ macro_rules
         tolean.IR.Order.apply, tolean.IR.Division.apply, ExprExt.apply, NumberOp.apply,
         NumberTest.apply, Eval.Env.set, List.lookup, DeclRef.beq_def,
         -Bool.if_true_left, -Bool.if_false_right, -Bool.if_false_left, -Bool.if_true_right, $defs,*]))
-      all_goals (try simp_all [bindState, eqVal, Eval.Env.set, List.lookup, DeclRef.beq_def, $defs,*])))
+      all_goals (try simp_all [bindState, eqVal, Eval.Env.set, List.lookup, DeclRef.beq_def, $defs,*])
+      -- Two `match`es that differ only in their auxiliary functions, as a
+      -- loop lemma's step and the printed definition can, agree by `rfl`.
+      all_goals (try rfl)))
 
 end tolean.TypeScript.IR

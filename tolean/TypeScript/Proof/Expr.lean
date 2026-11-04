@@ -577,6 +577,72 @@ theorem nullTestOf_eval {env : Translate.Env} {l : Expr} {name : String} {isNull
       · simp at h
   | _ => simp at h
 
+/-- The two shapes that `tagSide` reads. -/
+theorem tagSide_spec {l r : Expr} {n f t : String} (h : tagSide l r = some (n, f, t)) :
+    (∃ s1 s2 s3, l = .member s1 (.ident s2 n) f ∧ r = .string s3 t) ∨
+      (∃ s1 s2 s3, l = .string s3 t ∧ r = .member s1 (.ident s2 n) f) := by
+  unfold tagSide at h
+  split at h
+  · simp only [Option.some.injEq, Prod.mk.injEq] at h
+    obtain ⟨rfl, rfl, rfl⟩ := h
+    exact .inl ⟨_, _, _, rfl, rfl⟩
+  · simp only [Option.some.injEq, Prod.mk.injEq] at h
+    obtain ⟨rfl, rfl, rfl⟩ := h
+    exact .inr ⟨_, _, _, rfl, rfl⟩
+  · simp at h
+
+/-- A test that `tagTestOf` finds gives whether the local's tag is the one it
+names, when the local is an object whose tag field holds a string. -/
+theorem tagTestOf_eval {env : Translate.Env} {e : Expr} {t : TagTest}
+    (h : tagTestOf env e = some t) {ρ : Eval.Env N} (hs : Scoped m env ρ) :
+    ∃ w, ρ.lookup t.name = some w ∧ ∀ fields k, w = .obj fields → fields.lookup t.field = some (.str k) →
+      Eval.eval m fuel ρ e = some (.bool (if t.isEq then k == t.tag else !(k == t.tag))) := by
+  unfold tagTestOf at h
+  rw [← eval_stripParens]
+  generalize e.stripParens = e' at h ⊢
+  cases e' with
+  | binary sp op l r =>
+    simp only [Option.bind_eq_bind] at h
+    split at h
+    · rename_i hop
+      have hop' : op = .strictEq ∨ op = .strictNe := by
+        revert hop; cases op <;> first | (intro; left; rfl) | (intro; right; rfl) | decide
+      simp only [Option.pure_def, Option.bind_some, Option.bind_eq_some_iff] at h
+      obtain ⟨⟨n, f, tg⟩, hside, loc, hloc, h⟩ := h
+      split at h
+      · rename_i ref tags hty
+        try dsimp only at h hloc
+        cases hu : List.find? (fun x => x.ref == ref) env.unions with
+        | none => rw [hu] at h; simp at h
+        | some u =>
+        rw [hu] at h
+        simp only [Option.bind_some] at h
+        cases hm : List.lookup tg u.members with
+        | none => rw [hm] at h; simp at h
+        | some member =>
+        rw [hm] at h
+        simp only [Option.bind_some] at h
+        split at h
+        · simp only [Option.some.injEq] at h
+          subst h
+          have hhas : env.has n = true := by simp [Env.has, hloc]
+          obtain ⟨w, hw⟩ := Option.isSome_iff_exists.mp (hs.some hhas)
+          refine ⟨w, hw, ?_⟩
+          intro fields k hwf hk
+          subst hwf
+          rw [eval_binary m fuel sp op l r ρ (by rcases hop' with rfl | rfl <;> rfl)]
+          rcases tagSide_spec hside with ⟨s1, s2, s3, rfl, rfl⟩ | ⟨s1, s2, s3, rfl, rfl⟩ <;>
+            rcases hop' with rfl | rfl <;>
+            simp +decide [Eval.eval, hw, hk, Eval.binary, Eval.strictEq]
+          all_goals by_cases hkt : k = tg
+          all_goals first
+            | (simp_all; done)
+            | simp [hkt, show ¬ tg = k from fun e => hkt e.symm]
+        · simp at h
+      · simp at h
+    · simp at h
+  | _ => simp at h
+
 /-- A nonzero bigint literal has the same nonzero value in every environment. -/
 theorem nonzero_literal (e : Expr) (h : isNonzeroBigintLiteral e = true) :
     ∃ y : Int, y ≠ 0 ∧ ∀ ρ : Eval.Env N, Eval.eval m fuel ρ e = some (.int y) := by
@@ -777,6 +843,10 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
                split at h
                · simp at h
                  obtain ⟨rfl, -⟩ := h
+                 simp [IR.Expr.eval]
+               · simp at h)
+            | (split at h
+               · obtain ⟨rfl, -⟩ := h
                  simp [IR.Expr.eval]
                · simp at h)
         intro ρs ρo v _ _ hv'
@@ -1010,7 +1080,22 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
       cases exp with
       | none => simp at h
       | some t =>
-        cases t <;> simp at h
+        cases t
+        case tagged uref tags =>
+          -- A member of a tagged union: the structure of the member, which the
+          -- evaluator gives as it is.
+          simp only [bind_ok, orReject_ok, ite_state] at h
+          obtain ⟨union, _, ⟨-, rfl⟩, tag, _, ⟨-, rfl⟩, h⟩ := h
+          split at h
+          · simp only [bind_ok, orReject_ok] at h
+            obtain ⟨member, _, ⟨-, rfl⟩, h⟩ := h
+            simp only [map_ok] at h
+            obtain ⟨inner, hinner, rfl⟩ := h
+            intro ρs ρo v ha hs hv
+            simp only [IR.Expr.eval] at hv
+            exact ihO _ _ _ _ _ _ _ hinner ρs ρo v ha hs hv
+          · simp at h
+        all_goals try simp at h
         rename_i structName
         obtain ⟨info, _, ⟨-, rfl⟩, seen, parts, s₂, hfold, h⟩ := h
         have hparts : c.code = .struct parts structName := by
