@@ -4,9 +4,9 @@
 
 Pure TypeScript in practice uses much more of the language than the subset
 accepts. A function is pure when it does no input or output and depends only
-on its arguments. But the subset also refuses callbacks, closures,
-exceptions, `Map`, `switch` and template literals, and pure code uses all of
-them. A survey of one pure module of about 2,000 lines, which folds a list of
+on its arguments. But the subset also refuses generics, recursion,
+callbacks, closures, exceptions, `Map`, `switch` and template literals, and
+pure code uses all of them. A survey of one pure module of about 2,000 lines, which folds a list of
 events into a state, found the features below in almost every file. Tolean could
 translate none of its fourteen files. Only two small functions went through,
 after someone rewrote them into the subset.
@@ -67,8 +67,35 @@ exact.
 | A default parameter value | `Option` with a default at the call | A default that reads another parameter |
 | `return` inside a loop, `break`, `continue`, and `for (let i = a; i < b; i++)` | A fold whose state records that the loop stopped | A `for` loop of another shape, `while`, and labels |
 
-Recursion stays out of this plan. It needs a termination argument that the
-translator cannot find by itself, and the survey found no recursion.
+
+### Generics
+
+| TypeScript | Lean | Refused |
+|---|---|---|
+| A function with type parameters that have no constraint, such as `function last<T>(xs: ReadonlyArray<T>): T \| null` | `def last {T : Type} …` | `===` on a value of a type parameter, because it compares references when the type is an object |
+| A generic interface or type alias, such as `interface Pair<A, B>` | `structure Pair (A B : Type)` | |
+| A type parameter with a constraint, such as `T extends Named` | Nothing in the first version | All constraints, until the open question below is settled |
+
+The translator already makes each function generic over the number type `N`.
+User type parameters become further implicit arguments next to it. A
+constraint is harder, because TypeScript checks it by the shape of a type and
+Lean has no subtyping by shape.
+
+### Recursion
+
+| TypeScript | Lean | Refused |
+|---|---|---|
+| A function that calls itself on a part of its argument, such as the rest of a list or a child of a tree node | A `def` with structural recursion. Lean checks that it ends without help. | |
+| Other recursion, with a `@decreases` JSDoc tag that names a measure | A `def` with `termination_by` that measure. Lean must prove that each call makes the measure smaller, and the translator refuses the file when Lean cannot. | Recursion without such a proof |
+| Functions in one file that call each other | A `mutual` block | Recursion across files |
+| An interface that refers to itself, such as a tree node with `children: ReadonlyArray<Node>` | A nested `inductive` | |
+
+Lean also accepts `partial def` without a proof that the function ends. But
+Lean cannot prove anything about a partial function, so Tolean never writes
+one. A JavaScript call can also fail where the Lean function does not: deep
+recursion makes Node throw a `RangeError` when the stack runs out. So a claim
+about a recursive function holds when the JavaScript call returns, as every
+value claim already does.
 
 ### Arrays
 
@@ -167,26 +194,33 @@ with no change to the output of code that is already in the subset.
 
 1. Types and narrowing: aliases, literal unions, tagged unions with
    `switch`, optional fields, and the `null` and `undefined` operators.
-2. Callbacks that read only `const` values, and the array methods without
+2. Generic functions and types whose type parameters have no constraint.
+3. Callbacks that read only `const` values, and the array methods without
    `sort`.
-3. Control flow: `return` inside a loop, `break`, `continue`, and the counted
+4. Control flow: `return` inside a loop, `break`, `continue`, and the counted
    `for` loop.
-4. Errors, after step 3 of the [shared core plan](shared-core.md) adds
+5. Errors, after step 3 of the [shared core plan](shared-core.md) adds
    exceptions to the IR.
-5. Local functions that change variables of the enclosing function, by lifting
+6. Local functions that change variables of the enclosing function, by lifting
    them out and threading the variables through each call.
-6. `Map` and `Set`, with owned values and the borrow for a map that a caller
+7. `Map` and `Set`, with owned values and the borrow for a map that a caller
    passes in.
-7. Strings: template literals, string order, and the opaque `JSON.stringify`.
-8. Sorting with consistent comparators.
-9. The new number operations and the `Date` methods.
+8. Strings: template literals, string order, and the opaque `JSON.stringify`.
+9. Sorting with consistent comparators.
+10. Recursion: structural recursion and types that refer to themselves first,
+    then `@decreases` and mutual recursion.
+11. The new number operations and the `Date` methods.
 
-Steps 1 and 2 cover most of the code in the survey. Steps 5 and 6 matter
+Steps 1 and 3 cover most of the code in the survey. Steps 6 and 7 matter
 most for proofs, because a fold over events keeps its state in local
 variables and in maps.
 
 ## Open questions
 
+- How should a type parameter with a constraint translate? One option is a
+  type class that the translator writes for each constraint, with one
+  method per field that the constraint names. Another is to pass the
+  fields that the function reads as explicit arguments.
 - Should `try` and `catch` come in a later step? The survey had none, but much
   other pure code catches its own errors.
 - Should a map that a caller passes in become a borrow, as above, or should the
