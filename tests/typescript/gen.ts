@@ -163,7 +163,7 @@ export class Gen {
           () => `(${this.expr(t, vars, d)})`,
         );
         {
-          // `x ?? e`, which the interpreter runs and the translator refuses.
+          // `x ?? e`: `x` unless it is `null`.
           const nullable = readable.filter((v) => v.ty.k === 'nullable' && same(v.ty.of, t));
           if (nullable.length > 0) {
             options.push(() => `${this.pick(nullable).name} ?? ${this.expr(t, vars, d)}`);
@@ -200,10 +200,12 @@ export class Gen {
           options.push(() => {
             const v = this.pick(nullable);
             const narrowed = vars.map((x) => (x.name === v.name && x.ty.k === 'nullable' ? { ...x, ty: x.ty.of } : x));
+            // `==` and `!=` test for `null` as `===` and `!==` do, because the
+            // subset has no `undefined`.
             return this.chance(0.5)
-              ? `${v.name} === null || ${this.expr(BOOLEAN, narrowed, d)}`
-              : `${v.name} !== null && ${this.expr(BOOLEAN, narrowed, d)}`;
-          }, () => `${this.pick(nullable).name} ${this.pick(['===', '!=='])} null`);
+              ? `${v.name} ${this.pick(['===', '=='])} null || ${this.expr(BOOLEAN, narrowed, d)}`
+              : `${v.name} ${this.pick(['!==', '!='])} null && ${this.expr(BOOLEAN, narrowed, d)}`;
+          }, () => `${this.pick(nullable).name} ${this.pick(['===', '!==', '==', '!='])} null`);
         }
         break;
       }

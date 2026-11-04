@@ -100,6 +100,10 @@ inductive Expr where
   | isSome (a : Expr)
   /-- `(match x with | none => a | some x => b)`. -/
   | matchNull (name : String) (whenNull whenValue : Expr)
+  /-- `(Option.getD a b)`, or `(Option.or a b)` when `nullable` is true: the
+  value of `a ?? b`. `b` is a `T` in the first, and an `Option T` in the
+  second. -/
+  | coalesce (a b : Expr) (nullable : Bool)
   /-- `(a + b)`. -/
   | intOp (op : IntOp) (a b : Expr)
   /-- `a < b`, a `Prop`. -/
@@ -193,8 +197,8 @@ def Expr.refs : Expr → List DeclRef
   | .field a _ _ | .propNot a | .not a | .neg a | .numberNeg a | .isNone a | .isSome a
   | .decide a | .numberTest _ a | .push _ a | .update _ _ a => a.refs
   | .ite a b c => a.refs ++ b.refs ++ c.refs
-  | .matchNull _ a b | .intOp _ a b | .order _ a b | .division _ a b | .numberOp _ a b
-  | .numberNe a b | .eq a b | .ne a b | .propAnd a b | .propOr a b | .and a b | .or a b =>
+  | .matchNull _ a b | .coalesce a b _ | .intOp _ a b | .order _ a b | .division _ a b
+  | .numberOp _ a b | .numberNe a b | .eq a b | .ne a b | .propAnd a b | .propOr a b | .and a b | .or a b =>
     a.refs ++ b.refs
   | .int _ | .number _ | .numberConstant _ | .none | .bool _ | .string _ | .var _ => []
 
@@ -361,6 +365,9 @@ def Expr.print (names : Names) : Expr → String
   | .matchNull name whenNull whenValue =>
     s!"(match {name} with | {leanName names "none"} => {whenNull.print names} | " ++
       s!"{leanName names "some"} {name} => {whenValue.print names})"
+  | .coalesce a b nullable =>
+    let fn := leanName names (if nullable then "Option.or" else "Option.getD")
+    s!"({fn} {argument (a.print names)} {argument (b.print names)})"
   | .intOp op a b => s!"({a.print names} {op.symbol} {b.print names})"
   | .order op a b => s!"{a.print names} {op.symbol} {b.print names}"
   | .division op a b =>

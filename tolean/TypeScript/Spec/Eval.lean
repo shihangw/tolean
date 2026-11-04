@@ -138,6 +138,15 @@ def strictEq : Val N → Val N → Option Bool
   | .obj _, .null => some false
   | _, _ => none
 
+/-- `IsLooselyEqual` (ECMA-262 §7.2.14) when one operand is `null`. `null` is
+loosely equal only to `null` and `undefined`, and the subset has no
+`undefined`, so the test is `IsStrictlyEqual`. Between two other values `==`
+converts its operands, which the subset does not model, so they leave it. -/
+def looseEq : Val N → Val N → Option Bool
+  | .null, b => strictEq .null b
+  | a, .null => strictEq a .null
+  | _, _ => none
+
 /-- A binary operator on two values, when neither operand short-circuits.
 Bigint `/` and `%` truncate toward zero and throw on a zero divisor
 (`BigInt::divide`, `BigInt::remainder`). On numbers, `a > b` is `b < a` and
@@ -162,6 +171,8 @@ def binary : BinOp → Val N → Val N → Option (Val N)
   | .ge, .num a, .num b => some (.bool (JSNumber.le b a))
   | .strictEq, a, b => (strictEq a b).map .bool
   | .strictNe, a, b => (strictEq a b).map (.bool ∘ not)
+  | .looseEq, a, b => (looseEq a b).map .bool
+  | .looseNe, a, b => (looseEq a b).map (.bool ∘ not)
   | _, _, _ => none
 
 /-- What a statement list does: it runs to its end with the variables it

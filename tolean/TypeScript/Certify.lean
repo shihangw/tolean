@@ -189,10 +189,27 @@ partial def isNullable : TypeExpr → Bool
   | _ => false
 
 /-- Split each nullable parameter first, so that each case sees a known
-value. -/
-def casesOn (params : List Param) : String :=
+value. A parameter of an interface of the file with nullable fields is taken
+apart, and each of those fields is split, so that `a.f ?? b` and
+`a.f === null` see a known value too. -/
+def casesOn (decls : List IR.Decl) (params : List Param) : String :=
   String.join (params.filterMap fun p =>
-    if (p.type.map isNullable).getD false then some s!"cases {p.name} <;> " else none)
+    if (p.type.map isNullable).getD false then some s!"cases {p.name} <;> "
+    else match p.type with
+      | some (.ref _ name []) =>
+        let fields := decls.findSome? fun
+          | .struct n fields => if n == name then some fields else none
+          | _ => none
+        match fields with
+        | some fields =>
+          if fields.any (·.2 matches .option _) then
+            let parts := fields.map fun (f, _) => s!"{p.name}_{f}"
+            some (s!"rcases {p.name} with ⟨{", ".intercalate parts}⟩ <;> " ++
+              String.join (fields.filterMap fun (f, t) =>
+                if t matches .option _ then some s!"cases {p.name}_{f} <;> " else none))
+          else none
+        | none => none
+      | _ => none)
 
 /-- The loops of a body, inner ones first, in the order of the source. -/
 partial def loopsOf : IR.Body → List (List String × String × IR.Body × IR.LoopInfo)
@@ -258,7 +275,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         s!"  | _ => \{ {none_} }"
       encs := encs.push <|
         s!"@[simp] theorem decode{name}_encode{name} {generic} (x : {structTy name}) : decode{name} (some (encode{name} ({nv} := {nv}) x)) = x := by\n" ++
-        s!"  cases x; simp [decode{name}, encode{name}, List.lookup, encList, encNull]"
+        s!"  cases x; simp [decode{name}, encode{name}, List.lookup, encList]"
       lemmaNames := lemmaNames ++ #[r.cert s!"encode{name}", r.cert s!"decode{name}"]
   let defs := (functionsOf m).map fun f => r.full s!"{transNs}.{f.1}"
   let outputFs := s!"({r.full "tolean.TypeScript.IR.functionsOf"} [(\"\", {r.cert "decls"})])"
@@ -355,7 +372,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       s!"theorem {name}_link {generic} {binders} :\n" ++
       s!"    {r.full "tolean.TypeScript.IR.runIn"} (N := {nv}) {outputFs} ⟨\"\", {str name}⟩ {list args} =\n" ++
       s!"      {some_} ({retEnc} ({call})) := by\n" ++
-      s!"  {casesOn params}link_tac [{simpSet}]"
+      s!"  {casesOn decls params}link_tac [{simpSet}]"
     thms := thms.push <|
       s!"theorem {name}_cert {generic} {binders} :\n" ++
       s!"    {r.eval "run"} (N := {nv}) {r.cert "program"} {str name} {list args} = {some_} ({retEnc} ({call})) :=\n" ++
