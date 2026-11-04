@@ -201,8 +201,8 @@ it by the name in the source. The number type parameter is `N`, or `N1`,
 
 ### Imports
 
-A file may import the exported functions and interfaces of other files of
-the project:
+A file may import the exported functions, interfaces and type aliases of
+other files of the project:
 
 ```ts
 import { clamp, type Gauge } from "./lib/util.ts";
@@ -216,7 +216,8 @@ import { clamp, type Gauge } from "./lib/util.ts";
   `"./util.ts/."` that names a directory there. The file must be among the
   sources of `tolean.json`, and its edition may not be newer than the
   importing file's.
-- An interface needs `type`, either before its name or as `import type`.
+- An interface or a type alias needs `type`, either before its name or as
+  `import type`.
   Node's type stripping removes only imports that say `type`, so without it
   the JavaScript would import a name that does not exist at run time.
 - Only named imports are supported. Tolean refuses `as`, a default or
@@ -283,6 +284,7 @@ the file, the line and the reason. It never approximates.
 | `string` | `String` |
 | `ReadonlyArray<T>`, `Array<T>`, `T[]` | `List T` |
 | `interface` with `readonly`, required fields | `structure` |
+| `type T = U`, declared before its uses | `abbrev T := U`. The output writes `U` itself wherever the source names `T`, so the `abbrev` is only for claims. |
 | `function` with typed parameters and return type | `def` |
 | `const x = e`, `let x = e` | `let x := e` |
 | `x = e`, `x += e`, `x -= e`, `x *= e` on a `let` local | `let x := …` (shadowing) |

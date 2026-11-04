@@ -24,6 +24,7 @@ row, and the corpus files for each row certify.
 | Step | What Tolean translates now | Pull request |
 |---|---|---|
 | 2 | `x ?? y`, and `x == null` and `x != null`, on values of type `T \| null` | [#44](https://github.com/shihangw/tolean/pull/44) |
+| 2 | `type T = U` aliases of the types of the subset, exported and imported | [#45](https://github.com/shihangw/tolean/pull/45) |
 
 ## The rules for every addition
 

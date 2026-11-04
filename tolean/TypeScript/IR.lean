@@ -176,6 +176,10 @@ deriving Repr, Inhabited
 inductive Decl where
   /-- `structure S where`, with one field per line. -/
   | struct (name : String) (fields : List (String × Ty))
+  /-- `abbrev T := U`: a type alias. The translator writes the type `U` itself
+  wherever the source names `T`, so the output names `T` only here, for the
+  claims about it to use. -/
+  | alias (name : String) (type : Ty)
   /-- `def f (x : T) : R :=`, then the body. -/
   | function (name : String) (params : List (String × Ty)) (ret : Ty) (body : Body)
 deriving Repr, Inhabited
@@ -224,6 +228,7 @@ def Body.refs : Body → List DeclRef
 /-- The functions and structures of the program that `d` names. -/
 def Decl.refs : Decl → List DeclRef
   | .struct _ fields => fields.flatMap (·.2.refs)
+  | .alias _ type => type.refs
   | .function _ params ret body => params.flatMap (·.2.refs) ++ ret.refs ++ body.refs
 
 /-! ### Printing -/
@@ -314,6 +319,14 @@ def Ty.print (names : Names) : Ty → String
     match names.ref ref with
     | (name, some _) => s!"({name} {names.numberVar})"
     | (name, Option.none) => name
+
+/-- The printed type names the number type, so a declaration of it must bind
+`N`. -/
+def Ty.namesNumber (names : Names) : Ty → Bool
+  | .number => true
+  | .struct ref => (names.ref ref).2.isSome
+  | .option t | .list t => t.namesNumber names
+  | _ => false
 
 def IntOp.symbol : IntOp → String
   | .add => "+" | .sub => "-" | .mul => "*"
@@ -431,6 +444,9 @@ def Decl.print (names : Names) : Decl → String
     let generic := if names.usesNumber then s!" ({names.numberVar} : Type)" else ""
     "\n".intercalate (s!"structure {name}{generic} where" ::
       fields.map fun (field, type) => s!"  {field} : {type.print names}")
+  | .alias name type =>
+    let generic := if type.namesNumber names then s!" ({names.numberVar} : Type)" else ""
+    s!"abbrev {name}{generic} := {type.print names}"
   | .function name params ret body =>
     let n := names.numberVar
     let generic :=
