@@ -30,7 +30,7 @@ body. -/
 def functions (decls : List Decl) : List (String × List String × Body) :=
   decls.filterMap fun
     | .function name params _ body => some (name, params.map (·.1), body)
-    | .struct .. => none
+    | .struct .. | .alias .. => none
 
 /-- The functions of the output of a program, under the file of each: the
 output of each file, with that file's path. -/

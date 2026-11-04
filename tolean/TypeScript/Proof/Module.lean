@@ -204,15 +204,25 @@ theorem translateImport_ok {sp : Span} {names : List ImportName} {source : Strin
     obtain ⟨u₂, s₅, htop, hstep⟩ := hstep
     obtain ⟨rfl, hfresh⟩ := declareTopLevel_ok htop
     split at hstep
-    · -- An interface: the functions do not change.
+    · -- A type alias or an interface: the functions do not change.
       rename_i htype
-      simp only [bind_ok, orReject_ok, modify_ok] at hstep
-      obtain ⟨info, s₆, ⟨-, rfl⟩, rfl⟩ := hstep
-      obtain ⟨hf, hi, more, hfns, hrefs, hex, hnd, horig⟩ := ih _ hloop
-      refine ⟨hf, hi, more, hfns, ?_, hex, hnd, horig⟩
-      simp [htype, hrefs]
+      cases hfa : iface.aliases.find? (·.name == n.name) with
+      | some info =>
+        simp only [hfa, modify_ok] at hstep
+        subst hstep
+        obtain ⟨hf, hi, more, hfns, hrefs, hex, hnd, horig⟩ := ih _ hloop
+        refine ⟨hf, hi, more, hfns, ?_, hex, hnd, horig⟩
+        simp [htype, hrefs]
+      | none =>
+        simp only [hfa, bind_ok, orReject_ok, modify_ok] at hstep
+        obtain ⟨info, s₆, ⟨-, rfl⟩, rfl⟩ := hstep
+        obtain ⟨hf, hi, more, hfns, hrefs, hex, hnd, horig⟩ := ih _ hloop
+        refine ⟨hf, hi, more, hfns, ?_, hex, hnd, horig⟩
+        simp [htype, hrefs]
     · rename_i htype
       try simp only [ite_state] at hstep
+      split at hstep
+      · simp at hstep
       split at hstep
       · simp at hstep
       · simp only [bind_ok, orReject_ok, modify_ok] at hstep
@@ -241,6 +251,18 @@ theorem translateImport_ok {sp : Span} {names : List ImportName} {source : Strin
           rcases List.mem_cons.mp hf' with rfl | hf'
           · exact ⟨hfile, fn, List.mem_of_find?_eq_some hfind, rfl⟩
           · exact horig f hf'
+
+theorem translateAlias_ok {sp : Span} {ex : Bool} {name : String} {type : TypeExpr}
+    {s s' : Ctx} {o : IR.Decl} (h : translateAlias sp ex name type s = .ok o s') :
+    s'.file = s.file ∧ s'.interfaces = s.interfaces ∧ s'.functions = s.functions ∧
+      ∃ n t, o = .alias n t := by
+  unfold translateAlias at h
+  simp only [bind_ok, modify_ok, pure_ok] at h
+  obtain ⟨name', s₁, hname, u, s₂, htop, ty, s₃, hty, _, s₄, rfl, rfl, rfl⟩ := h
+  obtain ⟨rfl, rfl⟩ := checkName_ok hname
+  obtain ⟨rfl, -⟩ := declareTopLevel_ok htop
+  obtain ⟨rfl, -⟩ := isolated_ok hty
+  exact ⟨rfl, rfl, rfl, _, _, rfl⟩
 
 theorem translateInterface_ok {sp : Span} {ex : Bool} {name : String} {fields : List Field}
     {s s' : Ctx} {o : IR.Decl} (h : translateInterface sp ex name fields s = .ok o s') :
@@ -277,6 +299,11 @@ theorem translateDecl_ok {d : Decl} {s s' : Ctx} {o : Option IR.Decl}
     obtain ⟨o', h₁, rfl⟩ := h
     obtain ⟨hf, hi, hfns, -⟩ := translateInterface_ok h₁
     exact ⟨hf, hi, [], by simp [hfns], by simp [declRefs], by simp [hfns], by simp, by simp⟩
+  | typeAlias sp ex name type =>
+    simp only [translateDecl, map_ok] at h
+    obtain ⟨o', h₁, rfl⟩ := h
+    obtain ⟨hf, hi, hfns, -⟩ := translateAlias_ok h₁
+    exact ⟨hf, hi, [], by simp [hfns], by simp [declRefs], by simp [hfns], by simp, by simp⟩
   | function sp ex name params ret body =>
     simp only [translateDecl, map_ok] at h
     obtain ⟨o', h₁, rfl⟩ := h
@@ -299,7 +326,6 @@ theorem translateDecl_ok {d : Decl} {s s' : Ctx} {o : Option IR.Decl}
       simp only [List.mem_singleton] at hg
       subst hg
       exact .inl ⟨hfile, sp, ex, params, ret, body, by rw [hname]⟩
-  | typeAlias sp ex name type => simp [translateDecl] at h
   | exportedVar sp decl => simp [translateDecl] at h
   | stmt st => simp [translateDecl] at h
 
@@ -390,7 +416,11 @@ theorem decls_ok : ∀ (ds : List Decl) (s s' : Ctx) (os : List (Option IR.Decl)
         obtain ⟨o', h₁, rfl⟩ := h₁
         obtain ⟨-, -, -, n, fs, rfl⟩ := translateInterface_ok h₁
         simpa [Eval.functions, IR.functions, List.filterMap_cons] using hrel
-      | typeAlias sp ex name type => simp [translateDecl] at h₁
+      | typeAlias sp ex name type =>
+        simp only [translateDecl, map_ok] at h₁
+        obtain ⟨o', h₁, rfl⟩ := h₁
+        obtain ⟨-, -, -, n, t, rfl⟩ := translateAlias_ok h₁
+        simpa [Eval.functions, IR.functions, List.filterMap_cons] using hrel
       | exportedVar sp decl => simp [translateDecl] at h₁
       | stmt st => simp [translateDecl] at h₁
 

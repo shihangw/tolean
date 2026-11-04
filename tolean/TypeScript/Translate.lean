@@ -132,12 +132,22 @@ def Env.add (env : Env) (l : Local) : Env := { env with locals := env.locals ++ 
 def Env.narrow (env : Env) (name : String) (type : Ty) : Env :=
   { env with locals := env.locals.map fun l => if l.name == name then { l with type } else l }
 
-/-- What a file offers the files that import from it: its exported functions
-and interfaces, and whether its declarations are generic over the number
-type. -/
+/-- A type alias of the program, `type T = U`, with the file that declares
+it. `type` is the type of `U`, which the translator writes wherever the
+source names `T`. -/
+structure AliasInfo where
+  file : String
+  name : String
+  exported : Bool := false
+  type : Ty
+
+/-- What a file offers the files that import from it: its exported functions,
+interfaces and type aliases, and whether its declarations are generic over
+the number type. -/
 structure Interface where
   functions : List FnInfo := []
   structs : List StructInfo := []
+  aliases : List AliasInfo := []
   usesNumber : Bool := false
   /-- The name under which its declarations bind the number type. -/
   numberVar : String := "N"
@@ -152,6 +162,8 @@ structure Ctx where
   src : Array Char
   lineStarts : Array Nat
   structs : List StructInfo := []
+  /-- The type aliases that the file declares or imports. -/
+  aliases : List AliasInfo := []
   functions : List FnInfo := []
   /-- The files that this file may import from, by path. -/
   interfaces : List (String × Interface) := []
@@ -284,7 +296,7 @@ def declare (env : Env) (span : Span) (name : String) (binding : Binding) (type 
 def unsupportedType {A : Type} (t : TypeExpr) : TM A :=
   reject t.span
     ("unsupported type (use bigint, number, boolean, string, T | null, arrays, " ++
-      "or an interface declared above)")
+      "or an interface or type declared above)")
 
 /-- The type of `t` in the subset. The output writes it as `Ty.lean`. -/
 def translateType (t : TypeExpr) : TM Ty := do
@@ -299,16 +311,25 @@ def translateType (t : TypeExpr) : TM Ty := do
     -- `T | null`: exactly two members, one of them `null`.
     match a, b with
     | .null _, .null _ => unsupportedType t
-    | .null _, value | value, .null _ => return .nullable (← translateType value)
+    | .null _, value | value, .null _ =>
+      -- `Maybe | null`, where the alias `Maybe` is nullable already, is
+      -- `Maybe`, as in TypeScript.
+      match ← translateType value with
+      | .nullable t => return .nullable t
+      | t => return .nullable t
     | _, _ => unsupportedType t
   | .array _ elem => return .array (← translateType elem)
   | .ref _ name [elem] =>
     unless name == "Array" || name == "ReadonlyArray" do unsupportedType t
     return .array (← translateType elem)
   | .ref _ name [] =>
-    match (← get).structs.find? (·.name == name) with
+    let ctx ← get
+    match ctx.structs.find? (·.name == name) with
     | some info => return .struct info.ref
-    | none => unsupportedType t
+    | none =>
+      match ctx.aliases.find? (·.name == name) with
+      | some info => return info.type
+      | none => unsupportedType t
   | _ => unsupportedType t
 
 /-! ### What statements do -/
@@ -902,7 +923,8 @@ def isolated {A : Type} (x : TM A) : TM A := do
 
 def declareTopLevel (s : Span) (name : String) : TM Unit := do
   let ctx ← get
-  if ctx.structs.any (·.name == name) || ctx.functions.any (·.name == name) then
+  if ctx.structs.any (·.name == name) || ctx.aliases.any (·.name == name) ||
+      ctx.functions.any (·.name == name) then
     reject s s!"'{name}' is declared twice"
   -- A declaration of the module hides the global of the same name, and the
   -- subset reads these names as the globals.
@@ -921,6 +943,18 @@ def translateInterface (s : Span) (exported : Bool) (name : String) (fields : Li
     pure (infos ++ [(field, ← translateType f.type)])
   modify fun c => { c with structs := c.structs ++ [{ file := c.file, name, exported, fields := infos }] }
   return .struct name (infos.map fun (field, type) => (field, type.lean))
+
+/-- `type T = U`. The translator writes the type of `U` wherever the source
+names `T`, so a type alias changes no code. The output declares it as an
+`abbrev`, for the claims about the code to use. An alias must come before its
+uses, as an interface must. -/
+def translateAlias (s : Span) (exported : Bool) (name : String) (type : TypeExpr) :
+    TM IR.Decl := do
+  let name ← checkName s name
+  declareTopLevel s name
+  let ty ← isolated (translateType type)
+  modify fun c => { c with aliases := c.aliases ++ [{ file := c.file, name, exported, type := ty }] }
+  return .alias name ty.lean
 
 def translateFunction (s : Span) (exported : Bool) (name : String) (params : List Param)
     (returnType : Option TypeExpr) (body : Stmt) : TM IR.Decl := do
@@ -1051,12 +1085,18 @@ def translateImport (s : Span) (names : List ImportName) (source : String) : TM 
   names.forM fun n => do
     declareTopLevel n.span n.name
     if n.typeOnly then
-      let info ← orReject (iface.structs.find? (·.name == n.name)) n.span
-        s!"'{source}' exports no interface named '{n.name}'"
-      modify fun c => { c with structs := c.structs ++ [{ info with exported := false }] }
+      match iface.aliases.find? (·.name == n.name) with
+      | some info =>
+        modify fun c => { c with aliases := c.aliases ++ [{ info with exported := false }] }
+      | none =>
+        let info ← orReject (iface.structs.find? fun i => i.name == n.name && i.exported) n.span
+          s!"'{source}' exports no interface or type named '{n.name}'"
+        modify fun c => { c with structs := c.structs ++ [{ info with exported := false }] }
     else
-      if iface.structs.any (·.name == n.name) then
+      if iface.structs.any fun i => i.name == n.name && i.exported then
         reject n.span s!"'{n.name}' is an interface; import it with 'type {n.name}'"
+      if iface.aliases.any (·.name == n.name) then
+        reject n.span s!"'{n.name}' is a type; import it with 'type {n.name}'"
       let fn ← orReject (iface.functions.find? (·.name == n.name)) n.span
         s!"'{source}' exports no function named '{n.name}'"
       modify fun c => { c with functions := c.functions ++ [{ fn with exported := false }] }
@@ -1065,9 +1105,10 @@ def translateImport (s : Span) (names : List ImportName) (source : String) : TM 
 def translateDecl : Decl → TM (Option IR.Decl)
   | .import s names source => do translateImport s names source; return none
   | .interface s exported name fields => some <$> translateInterface s exported name fields
+  | .typeAlias s exported name type => some <$> translateAlias s exported name type
   | .function s exported name params ret body =>
     some <$> translateFunction s exported name params ret body
-  | d => reject d.span "only imports, interfaces and functions may appear at top level"
+  | d => reject d.span "only imports, interfaces, types and functions may appear at top level"
 
 /-- The declarations of `m`, translated. This is the translator as a function
 from one syntax tree to another: `translate` parses the source before it and
@@ -1075,10 +1116,36 @@ prints the result after it. -/
 def translateDecls (m : Module) : TM (List IR.Decl) := do
   return (← m.decls.mapM translateDecl).filterMap id
 
-/-- What the file exports: its own exported functions and interfaces. -/
+/-- The interfaces that a type names. -/
+def Ty.structRefs : Ty → List DeclRef
+  | .struct r => [r]
+  | .nullable t | .array t => t.structRefs
+  | _ => []
+
+/-- The file's interfaces that a file importing from it needs the fields of:
+the exported ones, and the private ones that an exported alias, interface or
+function names, directly or through the fields of another. An interface
+names only the ones before it, so as many rounds as the file has interfaces
+find them all. -/
+def Ctx.reachableStructs (c : Ctx) : List StructInfo :=
+  let own := c.structs.filter (·.file == c.file)
+  let roots := (c.aliases.filter fun a => a.exported && a.file == c.file).flatMap (·.type.structRefs) ++
+    (own.filter (·.exported)).flatMap (·.fields.flatMap (·.2.structRefs)) ++
+    (c.functions.filter fun f => f.exported && f.file == c.file).flatMap
+      fun f => (f.ret :: f.params).flatMap (·.structRefs)
+  let step (seen : List DeclRef) : List DeclRef :=
+    seen ++ (own.filter fun i => seen.contains i.ref).flatMap (·.fields.flatMap (·.2.structRefs))
+  let reached := (List.range own.length).foldl (fun acc _ => step acc) roots
+  own.filter fun i => i.exported || reached.contains i.ref
+
+/-- What the file exports: its own exported functions, interfaces and type
+aliases. The interfaces include the private ones that an exported declaration
+names, so that a file that imports it can read and build their fields. They
+keep `exported := false`, so that no file can import them by name. -/
 def Ctx.interface (c : Ctx) (usesNumber : Bool) (numberVar : String) : Interface :=
   { functions := c.functions.filter fun f => f.exported && f.file == c.file,
-    structs := c.structs.filter fun i => i.exported && i.file == c.file,
+    structs := c.reachableStructs,
+    aliases := c.aliases.filter fun a => a.exported && a.file == c.file,
     usesNumber, numberVar, target := c.target }
 
 def lineStarts (src : Array Char) : Array Nat := Id.run do
