@@ -420,19 +420,29 @@ def changedNames (statements : List Stmt) (env : Env) : List String :=
   let changed := stmtsChanges statements
   (env.locals.filter fun l => changed.contains l.name).map (·.name)
 
-/-- `x === null` or `x !== null`, where `x` is a name in scope that may be
-`null` here: `(x, the test is ===, the type of x when not null)`. A name
-already narrowed is not an `Option` in Lean any more, so it gets no `match`. -/
+/-- The operators that can test a value against `null`: `some true` for `===`
+and `==`, and `some false` for `!==` and `!=`. In the subset `==` and `===`
+agree on such a test, because no value is `undefined` (`Eval.looseEq`). -/
+def nullOp? : BinOp → Option Bool
+  | .strictEq | .looseEq => some true
+  | .strictNe | .looseNe => some false
+  | _ => none
+
+/-- `x === null` or `x !== null`, or the same with `==` and `!=`, where `x`
+is a name in scope that may be `null` here: `(x, the test is equality, the
+type of x when not null)`. A name already narrowed is not an `Option` in Lean
+any more, so it gets no `match`. -/
 def nullTestOf (env : Env) (e : Expr) : Option (String × Bool × Ty) :=
   match e.stripParens with
   | .binary _ op l r =>
-    if !(op == .strictEq || op == .strictNe) then none
-    else
+    match nullOp? op with
+    | none => none
+    | some isEquality =>
       let other? := if r.isNull then some l else if l.isNull then some r else none
       match other? with
       | some (.ident _ name) =>
         match env.lookup name with
-        | some { type := .nullable value, .. } => some (name, op == .strictEq, value)
+        | some { type := .nullable value, .. } => some (name, isEquality, value)
         | _ => none
       | _ => none
   | _ => none
@@ -673,11 +683,22 @@ def translateObject (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (
 
 def translateBinary (fuel : Nat) (env : Env) (s : Span) (op : BinOp) (l r : Expr) : TM Code := do
   let fuel + 1 := fuel | tooDeep
-  -- `x === null` and `x !== null`: a test on a Lean `Option`.
-  if (op == .strictEq || op == .strictNe) && (l.isNull || r.isNull) then
+  -- `a ?? b`: `a` unless it is `null`. JS evaluates `b` only when `a` is
+  -- `null`, and so does the evaluator of the output.
+  if op == .coalesce then
+    let a ← translateExpr fuel env none l
+    let .nullable value := a.type
+      | reject l.span "the left side of '??' is never null here, so '??' does nothing; remove it"
+    let b ← translateExpr fuel env (some value) r
+    if b.type.assignableTo value then return ⟨.coalesce a.value b.value false, false, value⟩
+    unless b.type.assignableTo a.type do
+      reject r.span "the right side of '??' must have the type of the left side"
+    return ⟨.coalesce a.value b.value true, false, a.type⟩
+  -- `x === null` and `x !== null`, or `==` and `!=`: a test on a Lean `Option`.
+  if (nullOp? op).isSome && (l.isNull || r.isNull) then
     let other := if l.isNull then r else l
     if other.isNull then reject s "compare null with a value, not with null"
-    let isEquality := op == .strictEq
+    let isEquality := nullOp? op == some true
     let o ← translateExpr fuel env none other
     match o.type with
     | .nullable _ =>

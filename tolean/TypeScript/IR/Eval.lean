@@ -136,6 +136,12 @@ def Expr.eval (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
     match ← ρ.lookup name with
     | .null => Expr.eval fs fuel ρ whenNull
     | _ => Expr.eval fs fuel ρ whenValue
+  -- `none` is `null`, and `some v` is the value of `v`, so both forms take
+  -- `a` unless it is `null`, and only then evaluate `b`.
+  | .coalesce a b _ => do
+    match ← Expr.eval fs fuel ρ a with
+    | .null => Expr.eval fs fuel ρ b
+    | w => some w
   | .intOp op a b => do
     let .int x ← Expr.eval fs fuel ρ a | none
     let .int y ← Expr.eval fs fuel ρ b | none

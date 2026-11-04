@@ -39,6 +39,7 @@ def Expr.beq : Expr → Expr → Bool
   | .isNone a0, .isNone b0 => Expr.beq a0 b0
   | .isSome a0, .isSome b0 => Expr.beq a0 b0
   | .matchNull a0 a1 a2, .matchNull b0 b1 b2 => Decidable.decide (a0 = b0) && Expr.beq a1 b1 && Expr.beq a2 b2
+  | .coalesce a0 a1 a2, .coalesce b0 b1 b2 => Expr.beq a0 b0 && Expr.beq a1 b1 && Decidable.decide (a2 = b2)
   | .intOp a0 a1 a2, .intOp b0 b1 b2 => Decidable.decide (a0 = b0) && Expr.beq a1 b1 && Expr.beq a2 b2
   | .order a0 a1 a2, .order b0 b1 b2 => Decidable.decide (a0 = b0) && Expr.beq a1 b1 && Expr.beq a2 b2
   | .division a0 a1 a2, .division b0 b1 b2 => Decidable.decide (a0 = b0) && Expr.beq a1 b1 && Expr.beq a2 b2
@@ -109,6 +110,8 @@ theorem Expr.beq_iff : (a b : Expr) → Expr.beq a b = true ↔ a = b
     cases b <;> simp [and_assoc, Expr.beq, Expr.beq_iff a0]
   | .matchNull a0 a1 a2, b => by
     cases b <;> simp [and_assoc, Expr.beq, Expr.beq_iff a1, Expr.beq_iff a2]
+  | .coalesce a0 a1 a2, b => by
+    cases b <;> simp [and_assoc, Expr.beq, Expr.beq_iff a0, Expr.beq_iff a1]
   | .intOp a0 a1 a2, b => by
     cases b <;> simp [and_assoc, Expr.beq, Expr.beq_iff a1, Expr.beq_iff a2]
   | .order a0 a1 a2, b => by

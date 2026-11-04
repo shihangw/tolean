@@ -62,5 +62,5 @@
   ["semantics", "certificate:inc"],
   ["certificate:inc", "translator"]],
  "certificate":
- {"sha256": "71de1a2053594363a5168408bf124e8b7062b76cd7d33844751532fea4c0bf39",
+ {"sha256": "e50737811d3dc1cf82713fd0f74e3a1127e1d9be5e8bc4d2ea35ec8111638263",
   "path": "src/my-lib/UtilCert.lean"}}

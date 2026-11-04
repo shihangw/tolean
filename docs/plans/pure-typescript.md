@@ -1,6 +1,6 @@
 # Plan: translate the pure TypeScript that real modules use
 
-**Status:** planned, not built · **Date:** 2026-11-03
+**Status:** in progress, see [Progress](#progress) · **Date:** 2026-11-03
 
 Pure TypeScript in practice uses much more of the language than the subset
 accepts. A function is pure when it does no input or output and depends only
@@ -14,6 +14,16 @@ after someone rewrote them into the subset.
 This plan lists what to add so that such a module translates without a
 rewrite. It also states the rules that each addition must keep, and the
 behavior that Tolean must still refuse.
+
+## Progress
+
+Each row is a part of the plan that Tolean translates now, with the step it
+belongs to and the pull request that added it. `program_sound` covers every
+row, and the corpus files for each row certify.
+
+| Step | What Tolean translates now | Pull request |
+|---|---|---|
+| 2 | `x ?? y`, and `x == null` and `x != null`, on values of type `T \| null` | [#44](https://github.com/shihangw/tolean/pull/44) |
 
 ## The rules for every addition
 

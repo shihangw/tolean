@@ -132,5 +132,5 @@
   ["semantics", "certificate:permits"],
   ["certificate:permits", "translator"]],
  "certificate":
- {"sha256": "c691111e0799c8878027b38f2e40072518d8653c4120a2014cb824409435583d",
+ {"sha256": "c416caaaedc8043860e78d1e1efcb08e8a3a7fd818fa04b79634ce8b01ad68ac",
   "path": "access/RbacCert.lean"}}

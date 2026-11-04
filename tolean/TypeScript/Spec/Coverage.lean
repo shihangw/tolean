@@ -98,6 +98,8 @@ def sections : List Section := [
   ⟨"sec-ecmascript-language-types-bigint-type", "6.1.6.2", "The BigInt Type", []⟩,
   -- §7 Abstract Operations {#sec-abstract-operations}
   ⟨"sec-toboolean", "7.1.2", "ToBoolean", []⟩,
+  ⟨"sec-islooselyequal", "7.2.14", "IsLooselyEqual",
+    [``Eval.looseEq_null_left, ``Eval.looseEq_null_right]⟩,
   ⟨"sec-isstrictlyequal", "7.2.15", "IsStrictlyEqual", []⟩,
   -- §9 Executable Code and Execution Contexts {#sec-executable-code-and-execution-contexts}
   ⟨"sec-declarative-environment-records", "9.1.1.1", "Declarative Environment Records",
@@ -140,9 +142,10 @@ def sections : List Section := [
   ⟨"sec-equality-operators", "13.11", "Equality Operators",
     [``Proof.operator_sound, ``Proof.eval_binary, ``Proof.out_eq, ``Proof.out_ne,
     ``Proof.out_numberOp, ``Proof.out_numberNe, ``Proof.out_isNone, ``Proof.out_isSome,
-    ``Proof.isNull_eq_true, ``Proof.nullTestOf_eval]⟩,
+    ``Proof.isNull_eq_true, ``Proof.nullTestOf_eval, ``Proof.nullOp_strict,
+    ``Proof.nullOp_binary]⟩,
   ⟨"sec-binary-logical-operators", "13.13", "Binary Logical Operators",
-    [``Proof.operator_sound, ``Proof.out_and, ``Proof.out_or]⟩,
+    [``Proof.operator_sound, ``Proof.out_and, ``Proof.out_or, ``Proof.out_coalesce]⟩,
   ⟨"sec-conditional-operator", "13.14", "Conditional Operator",
     [``Proof.out_ite]⟩,
   ⟨"sec-assignment-operators", "13.15", "Assignment Operators",

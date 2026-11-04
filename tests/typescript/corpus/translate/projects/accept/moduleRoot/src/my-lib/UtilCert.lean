@@ -60,7 +60,7 @@ theorem program_translated : tolean.TypeScript.Proof.translatesTo program start 
 theorem inc_link {N : Type} [tolean.TypeScript.JSNumber N] (x : _) :
     tolean.TypeScript.IR.runIn (N := N) (tolean.TypeScript.IR.functionsOf [("", decls)]) ⟨"", "inc"⟩ [(Val.int x)] =
       some (Val.int (src.«my-lib».Util.inc x)) := by
-  link_tac [decls, Env.set_cons, Env.lookup_cons, Env.lookup_set_same, Env.lookup_set_ne, Env.set_set, Env.length_set, encList, encNull, decInt, decBool, decStr, decNum, src.«my-lib».Util.inc]
+  link_tac [decls, Env.set_cons, Env.lookup_cons, Env.lookup_set_same, Env.lookup_set_ne, Env.set_set, Env.length_set, encList, decInt, decBool, decStr, decNum, src.«my-lib».Util.inc]
 
 theorem inc_cert {N : Type} [tolean.TypeScript.JSNumber N] (x : _) :
     run (N := N) program "inc" [(Val.int x)] = some (Val.int (src.«my-lib».Util.inc x)) :=

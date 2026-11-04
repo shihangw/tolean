@@ -12,6 +12,22 @@ namespace tolean.TypeScript.Eval
 
 variable {N : Type}
 
+/-! ### Equality with `null` -/
+
+section
+variable [JSNumber N]
+
+/-- `null == b` is `null === b`. `null` is loosely equal only to `null` and
+`undefined` (ECMA-262 §7.2.14), and the subset has no `undefined`. -/
+theorem looseEq_null_left (b : Val N) : looseEq .null b = strictEq .null b := by
+  cases b <;> rfl
+
+/-- `a == null` is `a === null`, for the same reason. -/
+theorem looseEq_null_right (a : Val N) : looseEq a .null = strictEq a .null := by
+  cases a <;> rfl
+
+end
+
 /-! ### Environments -/
 
 theorem Env.set_cons (k n : String) (w v : Val N) (rest : Env N) :

@@ -275,7 +275,10 @@ the file, the line and the reason. It never approximates.
 | `NaN`, `Infinity`, `-Infinity` | `JSNumber.nan`, `posInf`, `negInf` |
 | `T \| null`, `null` | `Option T`, `none` |
 | `x === null`, `x !== null` | `x.isNone`, `x.isSome` |
+| `x == null`, `x != null` | the same as `===` and `!==`, because no value of the subset is `undefined` |
 | `x === null \|\| e`, `x !== null && e` | `match x with \| none => … \| some x => e` (TypeScript's narrowing) |
+| `a ?? b` on `T \| null`, where `b` is a `T` | `Option.getD a b` |
+| `a ?? b` on `T \| null`, where `b` may be `null` | `Option.or a b` |
 | `boolean` | `Bool` |
 | `string` | `String` |
 | `ReadonlyArray<T>`, `Array<T>`, `T[]` | `List T` |
@@ -302,10 +305,14 @@ Tolean rejects these, among others:
   `/` and `%` agree with `Int.tdiv` and `Int.tmod`.
 - `===` on objects, because in JS it compares references. It also rejects
   `===` between nullable values.
+- `==` and `!=` anywhere except in a test against `null`. Between two other
+  values they convert their operands, as in `0 == ""`, and the subset does
+  not model that.
 - A test with `null` whose answer the type fixes, such as `x === null` after
   `if (x === null) return …`. The test does nothing, so the code means the
   same without it. Refusing it keeps every part of the program in the
-  translation, which the proof of the translator relies on.
+  translation, which the proof of the translator relies on. For the same
+  reason Tolean refuses `a ?? b` when `a` cannot be `null`.
 - The global `isNaN` and `isFinite`. These convert their argument to a number
   first. Use `Number.isNaN` and `Number.isFinite` instead.
 - Assignment to a parameter, a `const` or a field, and a push onto an array
