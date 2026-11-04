@@ -75,25 +75,7 @@ def sourceIdents (source : String) (target : Edition) : List String :=
     | _ => none
   | .error _ => []
 
-/-- How a value of a TypeScript type becomes a `Val`, as a Lean function. -/
-partial def encoder (r : Refs) : TypeExpr → Option String
-  | .keyword _ "bigint" => some (r.eval "Val.int")
-  | .keyword _ "number" => some (r.eval "Val.num")
-  | .keyword _ "boolean" => some (r.eval "Val.bool")
-  | .keyword _ "string" => some (r.eval "Val.str")
-  | .paren _ t => encoder r t
-  | .union _ [a, b] => do
-    let inner ← match a, b with
-      | .null _, t | t, .null _ => encoder r t
-      | _, _ => none
-    return s!"({r.eval "encNull"} {inner})"
-  | .array _ t => do return s!"({r.eval "encList"} {← encoder r t})"
-  | .ref _ "Array" [t] | .ref _ "ReadonlyArray" [t] => do return s!"({r.eval "encList"} {← encoder r t})"
-  | .ref _ name [] => some (r.cert s!"encode{name}")
-  | _ => none
-
-/-- How a value of a Lean type of the output becomes a `Val`, as `encoder`
-writes it. -/
+/-- How a value of a Lean type of the output becomes a `Val`. -/
 def encoderOf (r : Refs) : IR.Ty → Option String
   | .int => some (r.eval "Val.int")
   | .bool => some (r.eval "Val.bool")
@@ -183,33 +165,33 @@ def loopBody (s : Stmt) (span : Span) : Option Stmt :=
     | .forOfStmt sp _ _ _ body => if sp == span then some body else none
     | _ => none
 
-partial def isNullable : TypeExpr → Bool
-  | .union _ [.null _, _] | .union _ [_, .null _] => true
-  | .paren _ t => isNullable t
-  | _ => false
+/-- The tactics that split the variable `name` of type `t`, so that each case
+sees a known value: a nullable value on `none` and `some`, and a value of an
+interface of the file into its fields, each of which is split in turn. So
+`p.inner.x ?? 1n` sees a known value for `x`, and so does a field of a
+nullable interface. An interface names only the interfaces before it, so
+`fuel`, the number of declarations, bounds how deep the fields nest. -/
+def splitSteps (decls : List IR.Decl) : Nat → String → IR.Ty → List String
+  | 0, _, _ => []
+  | fuel + 1, name, .option t => s!"rcases {name} with _ | {name}" :: splitSteps decls fuel name t
+  | fuel + 1, name, .struct ref =>
+    let fields := decls.findSome? fun
+      | .struct n fields => if n == ref.name then some fields else none
+      | _ => none
+    match fields with
+    | some fields =>
+      let inner := fields.flatMap fun (f, ft) => splitSteps decls fuel s!"{name}_{f}" ft
+      if inner.isEmpty then []
+      else s!"rcases {name} with ⟨{", ".intercalate (fields.map fun (f, _) => s!"{name}_{f}")}⟩" :: inner
+    | none => []
+  | _ + 1, _, _ => []
 
-/-- Split each nullable parameter first, so that each case sees a known
-value. A parameter of an interface of the file with nullable fields is taken
-apart, and each of those fields is split, so that `a.f ?? b` and
-`a.f === null` see a known value too. -/
-def casesOn (decls : List IR.Decl) (params : List Param) : String :=
-  String.join (params.filterMap fun p =>
-    if (p.type.map isNullable).getD false then some s!"cases {p.name} <;> "
-    else match p.type with
-      | some (.ref _ name []) =>
-        let fields := decls.findSome? fun
-          | .struct n fields => if n == name then some fields else none
-          | _ => none
-        match fields with
-        | some fields =>
-          if fields.any (·.2 matches .option _) then
-            let parts := fields.map fun (f, _) => s!"{p.name}_{f}"
-            some (s!"rcases {p.name} with ⟨{", ".intercalate parts}⟩ <;> " ++
-              String.join (fields.filterMap fun (f, t) =>
-                if t matches .option _ then some s!"cases {p.name}_{f} <;> " else none))
-          else none
-        | none => none
-      | _ => none)
+/-- The splits of `vars`, as a prefix of the tactic that follows them. Each
+split runs under `try`, because the `none` case of a nullable value has no
+fields to split. -/
+def casesOn (decls : List IR.Decl) (vars : List (String × IR.Ty)) : String :=
+  String.join ((vars.flatMap fun (n, t) => splitSteps decls (decls.length + 1) n t).map
+    (s!"(try {·}) <;> "))
 
 /-- The loops of a body, inner ones first, in the order of the source. -/
 partial def loopsOf : IR.Body → List (List String × String × IR.Body × IR.LoopInfo)
@@ -257,7 +239,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
   let structTy (name : String) : String := (IR.Ty.struct ⟨"", name⟩).print names
   let mut encs : Array String := #[]
   let mut lemmaNames : Array String :=
-    #["encList", "encNull", "decInt", "decBool", "decStr", "decNum"].map r.eval
+    #["encList", "decInt", "decBool", "decStr", "decNum"].map r.eval
   for d in decls do
     if let .struct name fields := d then
       let parts ← fields.mapM fun (f, t) => do
@@ -276,6 +258,12 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       encs := encs.push <|
         s!"@[simp] theorem decode{name}_encode{name} {generic} (x : {structTy name}) : decode{name} (some (encode{name} ({nv} := {nv}) x)) = x := by\n" ++
         s!"  cases x; simp [decode{name}, encode{name}, List.lookup, encList]"
+      -- An array of the interface, as a loop over it reads its variable back.
+      -- `simp` cannot find this from `decList_list` when the fields nest, so
+      -- the certificate states it.
+      encs := encs.push <|
+        s!"@[simp] theorem decList_decode{name} {generic} (xs : List {structTy name}) : decList decode{name} (some (Val.list (List.map (encode{name} ({nv} := {nv})) xs))) = xs :=\n" ++
+        s!"  decList_list _ _ decode{name}_encode{name} xs"
       lemmaNames := lemmaNames ++ #[r.cert s!"encode{name}", r.cert s!"decode{name}"]
   let defs := (functionsOf m).map fun f => r.full s!"{transNs}.{f.1}"
   let outputFs := s!"({r.full "tolean.TypeScript.IR.functionsOf"} [(\"\", {r.cert "decls"})])"
@@ -284,9 +272,9 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
   let mut loopLemmas : Array String := #[]
   let mut thms : Array String := #[]
   for d in m.decls do
-    let .function _ _ name params ret syntaxBody := d | continue
+    let .function _ _ name params _ syntaxBody := d | continue
     unless fns.contains name do continue
-    let some (.function _ _ _ outBody) := decls.find? fun
+    let some (.function _ outParams outRet outBody) := decls.find? fun
         | .function n .. => n == name
         | _ => false
       | throw s!"{file}: no translation of {name}"
@@ -342,6 +330,11 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       let destruct := if count ≤ 1 then "" else
         s!"    obtain ⟨{", ".intercalate ((List.range count).map (s!"s{·}"))}⟩ := s\n"
       let simpSet := ", ".intercalate (hfsName ++ envLemmas ++ lemmaNames.toList ++ loopLemmas.toList ++ defs)
+      -- The values that one step sees: the element, the state, and the other
+      -- locals, which the lemma generalizes to `v0`, `v1` and so on.
+      let stateVars := if count ≤ 1 then ["s"].zip info.stateTypes
+        else (List.range count).map (s!"s{·}") |>.zip info.stateTypes
+      let loopVars := ("x", info.elem) :: stateVars ++ vars.zipIdx.map fun ((_, t), i) => (s!"v{i}", t)
       loopLemmas := loopLemmas.push (r.cert lemmaName)
       thms := thms.push <|
         s!"theorem {lemmaName} {generic} (fs : List (tolean.DeclRef × List String × tolean.TypeScript.IR.Body)){hfs}\n" ++
@@ -354,15 +347,17 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         s!"  · intro ρ s x hI\n" ++ substHfs ++
         s!"    obtain {hyps} := hI\n    try simp only []\n" ++
         generalize "ρ" coded ++ destruct ++
-        s!"    link_tac [{simpSet}, {", ".intercalate hypNames}]\n" ++
+        s!"    {casesOn decls loopVars}link_tac [{simpSet}, {", ".intercalate hypNames}]\n" ++
         s!"  · intro ρ hI\n" ++
         s!"    obtain {hyps} := hI\n    try simp only []\n" ++
         generalize "ρ" stateCoded ++
         s!"    simp [{", ".intercalate ((List.range count).map fun i => s!"Env.set_of_lookup _ _ _ h{i}")}]"
-    let some retEnc := ret.bind (encoder r) | throw s!"{file}: cannot encode the result of {name}"
-    let args ← params.mapM fun p => do
-      let some e := p.type.bind (encoder r) | throw s!"{file}: cannot encode the parameter {p.name}"
-      return s!"({e} {p.name})"
+    -- The encoders follow the types of the output, which the translator has
+    -- already worked out from the source's types.
+    let some retEnc := encoderOf r outRet | throw s!"{file}: cannot encode the result of {name}"
+    let args ← outParams.mapM fun (p, t) => do
+      let some e := encoderOf r t | throw s!"{file}: cannot encode the parameter {p}"
+      return s!"({e} {p})"
     let binders := " ".intercalate (params.map fun p => s!"({p.name} : _)")
     let call := " ".intercalate ((r.full s!"{transNs}.{name}" ++ callN) :: params.map (·.name))
     let simpSet := ", ".intercalate ([r.cert "decls"] ++ envLemmas ++ lemmaNames.toList ++ loopLemmas.toList ++ defs)
@@ -372,7 +367,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       s!"theorem {name}_link {generic} {binders} :\n" ++
       s!"    {r.full "tolean.TypeScript.IR.runIn"} (N := {nv}) {outputFs} ⟨\"\", {str name}⟩ {list args} =\n" ++
       s!"      {some_} ({retEnc} ({call})) := by\n" ++
-      s!"  {casesOn decls params}link_tac [{simpSet}]"
+      s!"  {casesOn decls outParams}link_tac [{simpSet}]"
     thms := thms.push <|
       s!"theorem {name}_cert {generic} {binders} :\n" ++
       s!"    {r.eval "run"} (N := {nv}) {r.cert "program"} {str name} {list args} = {some_} ({retEnc} ({call})) :=\n" ++
