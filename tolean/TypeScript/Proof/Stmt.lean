@@ -189,8 +189,10 @@ theorem checkLocalName_ok {sp : Span} {name r : String} {s s' : Ctx}
   obtain ⟨c, s₁, ⟨rfl, rfl⟩, h⟩ := h
   split at h
   · simp at h
-  · simp only [pure_bind] at h
-    exact checkName_ok h
+  · simp only [pure_bind, ite_state] at h
+    split at h
+    · simp at h
+    · exact checkName_ok h
 
 theorem declare_ok {env env' : Translate.Env} {sp : Span} {name : String} {b : Binding} {t : Ty}
     {s s' : Ctx} (h : declare env sp name b t s = .ok env' s') :

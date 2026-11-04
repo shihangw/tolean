@@ -25,6 +25,7 @@ row, and the corpus files for each row certify.
 |---|---|---|
 | 2 | `x ?? y`, and `x == null` and `x != null`, on values of type `T \| null` | [#44](https://github.com/shihangw/tolean/pull/44) |
 | 2 | `type T = U` aliases of the types of the subset, exported and imported | [#45](https://github.com/shihangw/tolean/pull/45) |
+| 2 | Literal unions of strings, `type T = 'a' \| 'b'`, as an `inductive` | [#47](https://github.com/shihangw/tolean/pull/47) |
 
 ## The rules for every addition
 
