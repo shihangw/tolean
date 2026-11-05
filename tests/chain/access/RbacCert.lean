@@ -384,7 +384,7 @@ below then trust neither the translator nor the printer. -/
 theorem program_translated : tolean.TypeScript.Proof.translatesTo program start decls = true := by
   decide +kernel
 
-def encodeBinding {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Binding) : Val N := Val.obj ([("tenant", Val.str x.tenant), ("role", Val.str x.role), ("member", Val.str x.member)])
+def encodeBinding {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Binding) : Val N := Val.obj [("tenant", Val.str x.tenant), ("role", Val.str x.role), ("member", Val.str x.member)]
 
 def decodeBinding {N : Type} [tolean.TypeScript.JSNumber N] : Option (Val N) → access.Rbac.Binding
   | some (.obj fs) => { tenant := decStr (fs.lookup "tenant"), role := decStr (fs.lookup "role"), member := decStr (fs.lookup "member") }
@@ -399,7 +399,7 @@ def decodeBinding {N : Type} [tolean.TypeScript.JSNumber N] : Option (Val N) →
 @[simp] theorem decList_decodeBinding {N : Type} [tolean.TypeScript.JSNumber N] (xs : List access.Rbac.Binding) : decList decodeBinding (some (Val.list (List.map (encodeBinding (N := N)) xs))) = xs :=
   decList_list _ _ decodeBinding_encodeBinding xs
 
-def encodeGrant {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Grant) : Val N := Val.obj ([("role", Val.str x.role), ("permission", Val.str x.permission)])
+def encodeGrant {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Grant) : Val N := Val.obj [("role", Val.str x.role), ("permission", Val.str x.permission)]
 
 def decodeGrant {N : Type} [tolean.TypeScript.JSNumber N] : Option (Val N) → access.Rbac.Grant
   | some (.obj fs) => { role := decStr (fs.lookup "role"), permission := decStr (fs.lookup "permission") }
@@ -414,7 +414,7 @@ def decodeGrant {N : Type} [tolean.TypeScript.JSNumber N] : Option (Val N) → a
 @[simp] theorem decList_decodeGrant {N : Type} [tolean.TypeScript.JSNumber N] (xs : List access.Rbac.Grant) : decList decodeGrant (some (Val.list (List.map (encodeGrant (N := N)) xs))) = xs :=
   decList_list _ _ decodeGrant_encodeGrant xs
 
-def encodeMembership {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Membership) : Val N := Val.obj ([("group", Val.str x.group), ("principal", Val.str x.principal)])
+def encodeMembership {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Membership) : Val N := Val.obj [("group", Val.str x.group), ("principal", Val.str x.principal)]
 
 def decodeMembership {N : Type} [tolean.TypeScript.JSNumber N] : Option (Val N) → access.Rbac.Membership
   | some (.obj fs) => { group := decStr (fs.lookup "group"), principal := decStr (fs.lookup "principal") }
@@ -429,7 +429,7 @@ def decodeMembership {N : Type} [tolean.TypeScript.JSNumber N] : Option (Val N) 
 @[simp] theorem decList_decodeMembership {N : Type} [tolean.TypeScript.JSNumber N] (xs : List access.Rbac.Membership) : decList decodeMembership (some (Val.list (List.map (encodeMembership (N := N)) xs))) = xs :=
   decList_list _ _ decodeMembership_encodeMembership xs
 
-def encodeDeny {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Deny) : Val N := Val.obj ([("tenant", Val.str x.tenant), ("permission", Val.str x.permission), ("member", Val.str x.member)])
+def encodeDeny {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Deny) : Val N := Val.obj [("tenant", Val.str x.tenant), ("permission", Val.str x.permission), ("member", Val.str x.member)]
 
 def decodeDeny {N : Type} [tolean.TypeScript.JSNumber N] : Option (Val N) → access.Rbac.Deny
   | some (.obj fs) => { tenant := decStr (fs.lookup "tenant"), permission := decStr (fs.lookup "permission"), member := decStr (fs.lookup "member") }
@@ -444,7 +444,7 @@ def decodeDeny {N : Type} [tolean.TypeScript.JSNumber N] : Option (Val N) → ac
 @[simp] theorem decList_decodeDeny {N : Type} [tolean.TypeScript.JSNumber N] (xs : List access.Rbac.Deny) : decList decodeDeny (some (Val.list (List.map (encodeDeny (N := N)) xs))) = xs :=
   decList_list _ _ decodeDeny_encodeDeny xs
 
-def encodePolicy {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Policy) : Val N := Val.obj ([("bindings", (encList encodeBinding) x.bindings), ("grants", (encList encodeGrant) x.grants), ("groups", (encList encodeMembership) x.groups), ("denies", (encList encodeDeny) x.denies)])
+def encodePolicy {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Policy) : Val N := Val.obj [("bindings", (encList encodeBinding) x.bindings), ("grants", (encList encodeGrant) x.grants), ("groups", (encList encodeMembership) x.groups), ("denies", (encList encodeDeny) x.denies)]
 
 def decodePolicy {N : Type} [tolean.TypeScript.JSNumber N] : Option (Val N) → access.Rbac.Policy
   | some (.obj fs) => { bindings := (decList decodeBinding) (fs.lookup "bindings"), grants := (decList decodeGrant) (fs.lookup "grants"), groups := (decList decodeMembership) (fs.lookup "groups"), denies := (decList decodeDeny) (fs.lookup "denies") }
@@ -459,7 +459,7 @@ def decodePolicy {N : Type} [tolean.TypeScript.JSNumber N] : Option (Val N) → 
 @[simp] theorem decList_decodePolicy {N : Type} [tolean.TypeScript.JSNumber N] (xs : List access.Rbac.Policy) : decList decodePolicy (some (Val.list (List.map (encodePolicy (N := N)) xs))) = xs :=
   decList_list _ _ decodePolicy_encodePolicy xs
 
-def encodeRequest {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Request) : Val N := Val.obj ([("tenant", Val.str x.tenant), ("principal", Val.str x.principal), ("permission", Val.str x.permission)])
+def encodeRequest {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Request) : Val N := Val.obj [("tenant", Val.str x.tenant), ("principal", Val.str x.principal), ("permission", Val.str x.permission)]
 
 def decodeRequest {N : Type} [tolean.TypeScript.JSNumber N] : Option (Val N) → access.Rbac.Request
   | some (.obj fs) => { tenant := decStr (fs.lookup "tenant"), principal := decStr (fs.lookup "principal"), permission := decStr (fs.lookup "permission") }
