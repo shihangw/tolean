@@ -182,6 +182,9 @@ theorem Expr.fine : ∀ e : Expr, Fine e.words
   | .member _ o n => by
     simpa [Expr.words] using (Expr.fine o).append
       (Fine.cons (w := punctWord ".") (by simp [punctWord]) (Fine.word (propertyName_ne n)))
+  | .optMember _ o n => by
+    simpa [Expr.words] using (Expr.fine o).append
+      (Fine.cons (w := punctWord "?.") (by simp [punctWord]) (Fine.word (propertyName_ne n)))
   | .index _ o i => by
     simpa [Expr.words] using (Expr.fine o).append (Fine.cons (w := punctWord "[") (by simp [punctWord])
       ((Expr.fine i).append (Fine.word (w := punctWord "]") (by simp [punctWord]))))

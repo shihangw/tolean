@@ -1053,7 +1053,9 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
           rw [← ha name] at hv'
           simp only [Eval.eval, hv']
       | member sp obj name =>
-        simp only [translateExpr] at h
+        simp only [translateExpr, ite_state] at h
+        split at h
+        · simp at h
         simp at h
         obtain ⟨o, s₁, ho, _, _, ⟨rfl, rfl⟩, ty, ⟨-, rfl⟩, rfl⟩ := h
         intro ρs ρo v ha hs hv'
@@ -1064,6 +1066,20 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
           have := ihE _ _ _ _ _ _ ho ρs ρo ov ha hs hobj
           simp only [Eval.eval, this]
           simpa [hobj] using hv'
+      | optMember sp obj name =>
+        simp only [translateExpr, bind_ok] at h
+        obtain ⟨o, s₁, ho, ⟨bind, ty⟩, s₂, -, h⟩ := h
+        simp only [pure_ok] at h
+        obtain ⟨rfl, -⟩ := h
+        intro ρs ρo v ha hs hv'
+        simp only [IR.Expr.eval, IR.Expr.evalList] at hv'
+        cases hobj : IR.Expr.eval fs fuel ρo o.code with
+        | none => simp [hobj] at hv'
+        | some ov =>
+          have := ihE _ _ _ _ _ _ ho ρs ρo ov ha hs hobj
+          simp only [hobj] at hv'
+          simp only [Eval.eval, this, Option.bind_eq_bind, Option.bind_some]
+          cases ov <;> simp only [IR.ExprExt.apply] at hv' <;> first | exact hv' | simp at hv'
       | unary sp op arg =>
         simp only [translateExpr] at h
         intro ρs ρo v ha hs hv'

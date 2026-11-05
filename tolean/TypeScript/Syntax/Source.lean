@@ -142,6 +142,7 @@ def Expr.words : Expr → List Word
   | .object _ props => enclose "{" "}" (Property.wordsOf props)
   | .paren _ inner => punctWord "(" :: inner.words ++ [punctWord ")"]
   | .member _ obj name => obj.words ++ [punctWord ".", propertyName name]
+  | .optMember _ obj name => obj.words ++ [punctWord "?.", propertyName name]
   | .index _ obj idx => obj.words ++ punctWord "[" :: idx.words ++ [punctWord "]"]
   | .call _ callee args => callee.words ++ callBreak callee ++ enclose "(" ")" (Expr.wordsOf args)
   | .unary _ op arg => symbol op.symbol :: arg.words
@@ -295,6 +296,7 @@ def Expr.erase : Expr → Expr
   | .object _ props => .object noSpan (Property.eraseAll props)
   | .paren _ inner => .paren noSpan inner.erase
   | .member _ obj name => .member noSpan obj.erase name
+  | .optMember _ obj name => .optMember noSpan obj.erase name
   | .index _ obj idx => .index noSpan obj.erase idx.erase
   | .call _ callee args => .call noSpan callee.erase (Expr.eraseAll args)
   | .unary _ op arg => .unary noSpan op arg.erase

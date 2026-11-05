@@ -83,6 +83,7 @@ def Expr.beq : Expr → Expr → Bool
   | .object a0 a1, .object b0 b1 => decide (a0 = b0) && Property.beqList a1 b1
   | .paren a0 a1, .paren b0 b1 => decide (a0 = b0) && Expr.beq a1 b1
   | .member a0 a1 a2, .member b0 b1 b2 => decide (a0 = b0) && Expr.beq a1 b1 && decide (a2 = b2)
+  | .optMember a0 a1 a2, .optMember b0 b1 b2 => decide (a0 = b0) && Expr.beq a1 b1 && decide (a2 = b2)
   | .index a0 a1 a2, .index b0 b1 b2 => decide (a0 = b0) && Expr.beq a1 b1 && Expr.beq a2 b2
   | .call a0 a1 a2, .call b0 b1 b2 => decide (a0 = b0) && Expr.beq a1 b1 && Expr.beqList a2 b2
   | .unary a0 a1 a2, .unary b0 b1 b2 => decide (a0 = b0) && decide (a1 = b1) && Expr.beq a2 b2
@@ -137,6 +138,8 @@ theorem Expr.beq_iff : (a b : Expr) → Expr.beq a b = true ↔ a = b
   | .paren a0 a1, b => by
     cases b <;> simp [and_assoc, Expr.beq, Expr.beq_iff a1]
   | .member a0 a1 a2, b => by
+    cases b <;> simp [and_assoc, Expr.beq, Expr.beq_iff a1]
+  | .optMember a0 a1 a2, b => by
     cases b <;> simp [and_assoc, Expr.beq, Expr.beq_iff a1]
   | .index a0 a1 a2, b => by
     cases b <;> simp [and_assoc, Expr.beq, Expr.beq_iff a1, Expr.beq_iff a2]

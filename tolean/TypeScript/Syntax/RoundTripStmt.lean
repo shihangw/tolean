@@ -561,6 +561,9 @@ theorem Expr.firstWord : ∀ e : Expr, ∃ w ws, e.words = w :: ws ∧ w ≠ []
   | .member _ o _ => by
     obtain ⟨w, ws, h, hw⟩ := Expr.firstWord o
     exact ⟨w, _, by simp only [Expr.words, h, List.cons_append]; exact rfl, hw⟩
+  | .optMember _ o _ => by
+    obtain ⟨w, ws, h, hw⟩ := Expr.firstWord o
+    exact ⟨w, _, by simp only [Expr.words, h, List.cons_append]; exact rfl, hw⟩
   | .index _ o _ => by
     obtain ⟨w, ws, h, hw⟩ := Expr.firstWord o
     exact ⟨w, _, by simp only [Expr.words, h, List.cons_append]; exact rfl, hw⟩

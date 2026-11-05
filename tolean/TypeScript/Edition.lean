@@ -53,6 +53,8 @@ inductive Feature where
   | bigintDivision
   /-- `??`: `CoalesceExpression`. -/
   | nullishCoalescing
+  /-- `x?.f`: `OptionalExpression`. -/
+  | optionalChaining
   /-- `&&=`, `||=` and `??=`: logical assignment in `AssignmentExpression`. -/
   | logicalAssignment
   /-- `1_000`: `NumericLiteralSeparator`. -/
@@ -61,7 +63,7 @@ deriving BEq, Repr, Inhabited
 
 def Feature.since : Feature → Edition
   | .exponent => .es2016
-  | .bigint | .bigintDivision | .nullishCoalescing => .es2020
+  | .bigint | .bigintDivision | .nullishCoalescing | .optionalChaining => .es2020
   | .logicalAssignment | .numericSeparators => .es2021
 
 def Feature.describe : Feature → String
@@ -69,6 +71,7 @@ def Feature.describe : Feature → String
   | .bigint => "bigint"
   | .bigintDivision => "bigint '/' and '%'"
   | .nullishCoalescing => "'??'"
+  | .optionalChaining => "'?.'"
   | .logicalAssignment => "'&&=', '||=' and '??='"
   | .numericSeparators => "numeric separators"
 

@@ -496,10 +496,11 @@ class Printer {
       return this.node('paren', e, [], [this.expr(e.expression)]);
     }
     if (ts.isPropertyAccessExpression(e)) {
-      if (e.questionDotToken !== undefined || !ts.isIdentifier(e.name)) {
-        refuse(e, 'optional chain or private name');
+      if (!ts.isIdentifier(e.name)) {
+        refuse(e, 'private name');
       }
-      return this.node('member', e, [e.name.text], [this.expr(e.expression)]);
+      const kind = e.questionDotToken !== undefined ? 'optMember' : 'member';
+      return this.node(kind, e, [e.name.text], [this.expr(e.expression)]);
     }
     if (ts.isElementAccessExpression(e)) {
       if (e.questionDotToken !== undefined) {

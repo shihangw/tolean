@@ -60,6 +60,9 @@ inductive ExprExt where
   | isUndefined
   /-- `a.isSome`, on an optional value: `a !== undefined`. -/
   | isDefined
+  /-- `a.map (·.f)`, or `a.bind (·.f)` when the field `f` is optional:
+  `a?.f`, which is `undefined` when `a` is `null` or `undefined`. -/
+  | optField (name : String) (bind : Bool)
 deriving BEq, Repr, Inhabited, DecidableEq
 
 abbrev Ty := tolean.IR.Ty TyExt
@@ -130,6 +133,7 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
   | .numberTest .isFinite, [a] => s!"({js}.isFinite {argument a})"
   | .isUndefined, [a] => s!"{argument a}.isNone"
   | .isDefined, [a] => s!"{argument a}.isSome"
+  | .optField f bind, [a] => s!"({argument a}.{if bind then "bind" else "map"} (·.{f}))"
   | _, _ => ""
 
 instance : tolean.IR.PrintOp ExprExt := ⟨ExprExt.print⟩

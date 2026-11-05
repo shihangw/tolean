@@ -75,6 +75,9 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   -- `a === undefined` and `a !== undefined`, as `IsStrictlyEqual` gives them.
   | .isUndefined, [a] => some (.bool (a matches .undefined))
   | .isDefined, [a] => some (.bool !(a matches .undefined))
+  -- `a?.f`, as the spec evaluates it.
+  | .optField _ _, [.null] | .optField _ _, [.undefined] => some .undefined
+  | .optField f _, [.obj fields] => Eval.getProp fields f
   | _, _ => none
 
 /-- The bindings that `let (x, y) := …` makes: each of `names`, with its value

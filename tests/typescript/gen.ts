@@ -101,6 +101,10 @@ export class Gen {
     if (roll < 0.65) {
       return { k: 'nullable', of: this.pick([BIGINT, NUMBER]) };
     }
+    if (roll < 0.7 && this.structs.length > 0) {
+      // A nullable structure, which `p?.f` reads.
+      return { k: 'nullable', of: { k: 'struct', name: this.pick(this.structs).name } };
+    }
     if (roll < 0.8 && this.structs.length > 0) {
       return { k: 'struct', name: this.pick(this.structs).name };
     }
@@ -167,6 +171,15 @@ export class Gen {
           const nullable = readable.filter((v) => v.ty.k === 'nullable' && same(v.ty.of, t));
           if (nullable.length > 0) {
             options.push(() => `${this.pick(nullable).name} ?? ${this.expr(t, vars, d)}`);
+          }
+          // `p?.f ?? e`, on a nullable structure with a field of type `t`.
+          const chains = readable.flatMap((v) => {
+            const of = v.ty.k === 'nullable' ? v.ty.of : undefined;
+            const s = of?.k === 'struct' ? this.structs.find((x) => x.name === of.name) : undefined;
+            return (s?.fields ?? []).filter(([, ft]) => same(ft, t)).map(([f]) => `${v.name}?.${f}`);
+          });
+          if (chains.length > 0) {
+            options.push(() => `(${this.pick(chains)} ?? ${this.expr(t, vars, d)})`);
           }
         }
         if (t.k === 'bigint') {

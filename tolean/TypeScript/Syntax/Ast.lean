@@ -122,6 +122,8 @@ inductive Expr where
   | object (span : Span) (props : List Property)
   | paren (span : Span) (inner : Expr)
   | member (span : Span) (obj : Expr) (name : String)
+  /-- `obj?.name`: `undefined` when `obj` is `null` or `undefined`. -/
+  | optMember (span : Span) (obj : Expr) (name : String)
   | index (span : Span) (obj : Expr) (idx : Expr)
   | call (span : Span) (callee : Expr) (args : List Expr)
   | unary (span : Span) (op : UnaryOp) (arg : Expr)
@@ -271,7 +273,7 @@ def TypeExpr.span : TypeExpr → Span
 
 def Expr.span : Expr → Span
   | .ident s _ | .number s _ | .bigint s _ | .string s _ | .bool s _ | .null s | .array s _
-  | .object s _ | .paren s _ | .member s _ _ | .index s _ _ | .call s _ _ | .unary s _ _
+  | .object s _ | .paren s _ | .member s _ _ | .optMember s _ _ | .index s _ _ | .call s _ _ | .unary s _ _
   | .prefix s _ _ | .postfix s _ _ | .binary s _ _ _ | .cond s _ _ _ | .assign s _ _ _ => s
 
 def Stmt.span : Stmt → Span

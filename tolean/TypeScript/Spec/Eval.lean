@@ -309,6 +309,15 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     match ← eval m fuel env obj with
     | .obj fields => getProp fields name
     | _ => none
+  -- `obj?.name` is `undefined` when `obj` is `null` or `undefined`
+  -- (ECMA-262 §13.3.9.1). A chain after it, as in `obj?.a.b`, would skip the
+  -- rest of the chain too. This model does not: it reads `.b` of `undefined`,
+  -- which gives no value, so it is only less defined than JS there.
+  | .optMember _ obj name => do
+    match ← eval m fuel env obj with
+    | .null | .undefined => some .undefined
+    | .obj fields => getProp fields name
+    | _ => none
   | .unary _ .not arg => do return .bool !(← eval m fuel env arg).truthy
   -- The source text `-Infinity` is `negInf`, the model's name for it. A
   -- variable named `Infinity` is negated as any other value is.

@@ -710,6 +710,27 @@ def applyOperator (s : Span) (op : BinOp) (r : Expr) (a b : Code) : TM Code := d
   | .or => logical false
   | _ => reject s "unsupported binary operator"
 
+/-- The field `name` that `obj?.name` reads from a value of type `t`: whether
+the field is optional, and the type of `obj?.name`. -/
+def optFieldType (s : Span) (t : Ty) (name : String) : TM (Bool × Ty) := do
+  let some ref := (match t with
+      | .nullable (.struct ref) | .optional (.struct ref) => some ref
+      | _ => none : Option DeclRef)
+    | reject s (if t matches .struct _ then
+        "the left side of '?.' is never null or undefined here, so '?.' does nothing; use '.'"
+      else "'?.' needs a value of an interface type, or null or undefined")
+  let ctx : Ctx ← get
+  let field? := (ctx.knownStructs.find? fun (i : StructInfo) => i.ref == ref).bind
+    fun info => info.fields.lookup name
+  match field? with
+  | some (.optional v) => return (true, .optional v)
+  | some (.literal _) => reject s "a tag field may be read only in a test of its union, such as x.kind === 'circle'"
+  | some v =>
+    if v.isNullable then
+      reject s "'?.' may not read a nullable field, because the value could be null or undefined"
+    return (false, .optional v)
+  | none => reject s "only fields of interfaces declared in this file, or exported by the files before it, may be read"
+
 /-- `applyOperator`, after a string operand becomes a constructor where the
 other operand is of a literal union. -/
 def translateOperator (s : Span) (op : BinOp) (r : Expr) (a b : Code) : TM Code := do
@@ -757,6 +778,9 @@ def translateExpr (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr) : T
         reject s "an owned array may be read only in the return value"
       return ⟨.var name, false, l.type⟩
   | .member s obj name =>
+    -- JS skips the rest of a chain after a `?.` that meets null, so
+    -- `a?.b.c` is not `(a?.b).c`, and the subset leaves the chain out.
+    if obj matches .optMember .. then reject s "a chain after '?.', such as a?.b.c, is not supported"
     let o ← translateExpr fuel env none obj
     let ctx : Ctx ← get
     let field? := match o.type with
@@ -773,6 +797,10 @@ def translateExpr (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr) : T
     -- The structure has no tag field, so the output cannot read one.
     let type ← orReject (field?.filter fun t => !(t matches .literal _)) s message
     return ⟨.field o.code (!obj.isIdent) name, false, type⟩
+  | .optMember s obj name =>
+    let o ← translateExpr fuel env none obj
+    let (bind, type) ← optFieldType s o.type name
+    return ⟨.ext (.optField name bind) [o.code], false, type⟩
   | .unary s op arg =>
     if op == .neg && arg.isInfinity && !env.has "Infinity" then
       return ⟨.numberConstant .negInf, false, .number⟩

@@ -858,6 +858,69 @@ theorem loop_sim {env bodyEnv : Translate.Env} {x : String} {elemType : Ty} {nam
           · rw [stmtsChanges_block] at hfr'
             exact (hfr₂.trans hfr').mono fun n hn => by simp at hn; exact hn
 
+/-- A `for…of` loop, the last case of `stmts_sound`, on its own so that the
+mutual proof stays within its heartbeat budget. -/
+theorem translateForOf_sound (hc : CallsAgree (N := N) m.program fs fuel) {F : Nat}
+    (ihS : ∀ env tail ss ctx body ctx', translateStatements F env tail ss ctx = .ok body ctx' →
+      StmtSim (N := N) m fs fuel env tail ss body)
+    {env : Translate.Env} {s : Span} {kind : VarKind} {x : String} {iterable : Expr} {b : Stmt}
+    {rest : List Stmt} {tail : Tail} {ctx ctx' : Ctx} {body : IR.Body}
+    (h : translateForOf (F + 1) env s kind x iterable b rest tail ctx = .ok body ctx') :
+    StmtSim (N := N) m fs fuel env tail (.forOfStmt s kind x iterable b :: rest) body := by
+  unfold translateForOf at h
+  simp only [ite_state] at h
+  split at h
+  · rename_i hkind
+    obtain rfl : kind = .const := by
+      cases kind <;> first | rfl | simp +decide at hkind
+    simp only [pure_bind, ite_state] at h
+    split at h
+    · simp at h
+    · try simp only [pure_bind, ite_state] at h
+      split at h
+      · simp at h
+      · simp only [bind_ok, fuelLimit_ok] at h
+        obtain ⟨_, _, ⟨rfl, rfl⟩, items, s₁, hitems, h⟩ := h
+        cases hty : items.type <;> simp [hty] at h
+        rename_i elemType
+        obtain ⟨bodyEnv, s₂, hdecl, bodyOut, s₃, hbody, rb, hrb, hbodyEq⟩ := h
+        obtain ⟨hfresh, rfl, -⟩ := declare_ok hdecl
+        have hsimI := (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hitems
+        have hloop := loop_sim m fs fuel (ihS _ _ _ _ _ _ hbody) rfl hfresh rfl
+        have hrest := ihS _ _ _ _ _ _ hrb
+        intro ρs ρo ha hs
+        have key : ∀ o, IR.Body.exec fs fuel ρo body = some o →
+            ∃ mod ρo₂, Eval.execStmt m fuel ρs (.forOfStmt s .const x iterable b) = some (.normal mod) ∧
+              Agree mod ρo₂ ∧ Frame (stmtChanges (.forOfStmt s .const x iterable b)) mod ρs ∧
+              IR.Body.exec fs fuel ρo₂ rb = some o := by
+          intro o ho
+          rw [← hbodyEq] at ho
+          simp only [IR.Body.exec] at ho
+          cases hi : IR.Expr.eval fs fuel ρo items.code with
+          | none => simp [hi] at ho
+          | some u =>
+            cases u <;> simp [hi] at ho
+            rename_i vs
+            cases hf : IR.Body.runFold fs fuel (changedNames (blockStatements b) env) x bodyOut ρo vs with
+            | none => simp [hf] at ho
+            | some ρo₂ =>
+              simp [hf] at ho
+              obtain ⟨mod, hl, hag, hfr⟩ := hloop vs ρs ρo ρo₂ ha hs hf
+              refine ⟨mod, ρo₂, ?_, hag, hfr.mono fun n hn => by simp [stmtChanges, hn], ho⟩
+              simp [Eval.execStmt, hsimI ρs ρo _ ha hs hi, hl]
+        constructor
+        · intro v hv
+          obtain ⟨mod, ρo₂, hst, hag, hfr, hb⟩ := key _ hv
+          have := (hrest mod ρo₂ hag (scoped_frame hs hfr)).1 v hb
+          simp [Eval.exec, hst, this]
+        · intro ρo' hv
+          obtain ⟨mod, ρo₂, hst, hag, hfr, hb⟩ := key _ hv
+          obtain ⟨htail, new, mod₂, hex, hag₂, hnew, hfr₂⟩ :=
+            (hrest mod ρo₂ hag (scoped_frame hs hfr)).2 ρo' hb
+          refine ⟨htail, new, mod₂, by simp [Eval.exec, hst, hex], hag₂, hnew, ?_⟩
+          simpa [stmtsChanges] using hfr₂.trans hfr
+  · simp at h
+
 theorem stmts_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
     (∀ env tail ss ctx body ctx', translateStatements F env tail ss ctx = .ok body ctx' →
       StmtSim (N := N) m fs fuel env tail ss body) ∧
@@ -1147,58 +1210,6 @@ theorem stmts_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
                   exact if_state_sim m fs fuel (narrow_has _ _ _) (narrow_has _ _ _) rfl rfl rfl (hb wt wf)
                     (ihS _ _ _ _ _ _ hwt) (ihS _ _ _ _ _ _ hwf) (ihS _ _ _ _ _ _ hrb)
     · intro env s kind x iterable b rest tail ctx body ctx' h
-      unfold translateForOf at h
-      simp only [ite_state] at h
-      split at h
-      · rename_i hkind
-        obtain rfl : kind = .const := by
-          cases kind <;> first | rfl | simp +decide at hkind
-        simp only [pure_bind, ite_state] at h
-        split at h
-        · simp at h
-        · try simp only [pure_bind, ite_state] at h
-          split at h
-          · simp at h
-          · simp only [bind_ok, fuelLimit_ok] at h
-            obtain ⟨_, _, ⟨rfl, rfl⟩, items, s₁, hitems, h⟩ := h
-            cases hty : items.type <;> simp [hty] at h
-            rename_i elemType
-            obtain ⟨bodyEnv, s₂, hdecl, bodyOut, s₃, hbody, rb, hrb, hbodyEq⟩ := h
-            obtain ⟨hfresh, rfl, -⟩ := declare_ok hdecl
-            have hsimI := (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hitems
-            have hloop := loop_sim m fs fuel (ihS _ _ _ _ _ _ hbody) rfl hfresh rfl
-            have hrest := ihS _ _ _ _ _ _ hrb
-            intro ρs ρo ha hs
-            have key : ∀ o, IR.Body.exec fs fuel ρo body = some o →
-                ∃ mod ρo₂, Eval.execStmt m fuel ρs (.forOfStmt s .const x iterable b) = some (.normal mod) ∧
-                  Agree mod ρo₂ ∧ Frame (stmtChanges (.forOfStmt s .const x iterable b)) mod ρs ∧
-                  IR.Body.exec fs fuel ρo₂ rb = some o := by
-              intro o ho
-              rw [← hbodyEq] at ho
-              simp only [IR.Body.exec] at ho
-              cases hi : IR.Expr.eval fs fuel ρo items.code with
-              | none => simp [hi] at ho
-              | some u =>
-                cases u <;> simp [hi] at ho
-                rename_i vs
-                cases hf : IR.Body.runFold fs fuel (changedNames (blockStatements b) env) x bodyOut ρo vs with
-                | none => simp [hf] at ho
-                | some ρo₂ =>
-                  simp [hf] at ho
-                  obtain ⟨mod, hl, hag, hfr⟩ := hloop vs ρs ρo ρo₂ ha hs hf
-                  refine ⟨mod, ρo₂, ?_, hag, hfr.mono fun n hn => by simp [stmtChanges, hn], ho⟩
-                  simp [Eval.execStmt, hsimI ρs ρo _ ha hs hi, hl]
-            constructor
-            · intro v hv
-              obtain ⟨mod, ρo₂, hst, hag, hfr, hb⟩ := key _ hv
-              have := (hrest mod ρo₂ hag (scoped_frame hs hfr)).1 v hb
-              simp [Eval.exec, hst, this]
-            · intro ρo' hv
-              obtain ⟨mod, ρo₂, hst, hag, hfr, hb⟩ := key _ hv
-              obtain ⟨htail, new, mod₂, hex, hag₂, hnew, hfr₂⟩ :=
-                (hrest mod ρo₂ hag (scoped_frame hs hfr)).2 ρo' hb
-              refine ⟨htail, new, mod₂, by simp [Eval.exec, hst, hex], hag₂, hnew, ?_⟩
-              simpa [stmtsChanges] using hfr₂.trans hfr
-      · simp at h
+      exact translateForOf_sound m fs fuel hc ihS h
 
 end tolean.TypeScript.Proof
