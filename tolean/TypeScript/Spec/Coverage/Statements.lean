@@ -17,7 +17,8 @@ function or the global where JS reads the local before its declaration, and
 throws. -/
 theorem declare_not_callable {env env' : Translate.Env} {sp : Span} {name : String} {b : Binding}
     {t : Ty} {s s' : Ctx} (h : declare env sp name b t s = .ok env' s') :
-    (∀ f ∈ env.functions, f.name ≠ name) ∧ name ≠ "NaN" ∧ name ≠ "Infinity" ∧ name ≠ "Number" := by
+    (∀ f ∈ env.functions, f.name ≠ name) ∧ name ≠ "NaN" ∧ name ≠ "Infinity" ∧ name ≠ "Number" ∧
+      name ≠ "undefined" := by
   simp only [declare, ite_state] at h
   split at h
   · simp at h
@@ -25,9 +26,9 @@ theorem declare_not_callable {env env' : Translate.Env} {sp : Span} {name : Stri
     split at h
     · simp at h
     · rename_i hg
-      refine ⟨fun f hf hn => hg ?_, ?_, ?_, ?_⟩
+      refine ⟨fun f hf hn => hg ?_, ?_, ?_, ?_, ?_⟩
       · simp only [Bool.or_eq_true, List.any_eq_true, beq_iff_eq]
         exact Or.inl ⟨f, hf, hn⟩
-      all_goals rintro rfl; simp [isNumberName] at hg
+      all_goals rintro rfl; simp [isGlobalName, isNumberName] at hg
 
 end tolean.TypeScript.Coverage

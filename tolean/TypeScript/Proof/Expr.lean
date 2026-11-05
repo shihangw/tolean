@@ -1307,7 +1307,9 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
           | keyValue ps key val =>
             cases key with
             | ident key =>
-              simp at hg
+              by_cases hk : key = "__proto__"
+              · subst hk; simp at hg
+              simp [hk] at hg
               obtain ⟨fieldType, _, ⟨-, rfl⟩, hg⟩ := hg
               split at hg
               · simp at hg
@@ -1320,7 +1322,7 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
                   intro ρs ρo w ha hs hw rest
                   rw [eval_value] at hw
                   have := ihE _ _ _ _ _ _ hv ρs ρo w ha hs hw
-                  simp [Eval.evalProps, this]
+                  simp [Eval.evalProps, this, hk]
                   cases Eval.evalProps m fuel ρs rest <;> rfl
                 · simp at hg
             | _ => simp at hg
