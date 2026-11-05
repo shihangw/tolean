@@ -70,3 +70,18 @@ export function time(e: Event, now: bigint): bigint {
       return e.time;
   }
 }
+
+// A loop inside a case: the certificate finds it in the clause.
+export function sides(s: Shape, xs: ReadonlyArray<bigint>): bigint {
+  switch (s.kind) {
+    case 'square': {
+      let n = 0n;
+      for (const x of xs) {
+        n += x;
+      }
+      return n;
+    }
+    default:
+      return 0n;
+  }
+}

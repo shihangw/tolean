@@ -1004,7 +1004,7 @@ theorem clauses_case_sim {env envT envO : Translate.Env} {sw : SwitchOn} {known 
 /-- A `switch` whose first clause is a case, in a body that returns. -/
 theorem switch_sim {env : Translate.Env} {sp : Span} {disc : Expr} {sw : SwitchOn} {test : Expr}
     {body : List Stmt} {more : List (Option Expr × List Stmt)} {rest : List Stmt} {tail : Tail} {b : IR.Body}
-    (hsw : switchOf env disc = some sw)
+    (hsw : switchOf env disc = some sw) (hdecl : clausesDeclare ((some test, body) :: more) = false)
     (hc : ClauseSim (N := N) m fs fuel env sw none ((some test, body) :: more) rest b) :
     StmtSim (N := N) m fs fuel env tail (.switchStmt sp disc ((some test, body) :: more) :: rest) b := by
   intro ρs ρo ha hs
@@ -1013,8 +1013,8 @@ theorem switch_sim {env : Translate.Env} {sp : Span} {disc : Expr} {sw : SwitchO
   obtain ⟨fields, k, hl, hk⟩ := hfirst rfl ⟨test, body, more, rfl⟩
   have hd := switchOf_eval m fuel hsw hl hk
   rcases hmain fields k hl hk (fun _ h => by cases h) with h1 | ⟨h1, h2⟩
-  · simp [Eval.exec, Eval.execStmt, hd, h1]
-  · simp [Eval.exec, Eval.execStmt, hd, h1, h2]
+  · simp [Eval.exec, Eval.execStmt, hdecl, hd, h1]
+  · simp [Eval.exec, Eval.execStmt, hdecl, hd, h1, h2]
 
 /-- `translateForOf` is sound, when `translateStatements` is with one unit of fuel less. -/
 theorem translateForOf_sound (hc : CallsAgree (N := N) m.program fs fuel) {F : Nat}
@@ -1091,13 +1091,17 @@ theorem translateSwitch_sound {F : Nat}
   | none => simp [hsw] at h
   | some sw =>
     simp only [hsw, ite_state] at h
-    split at h <;> (try (simp at h; done))
+    split at h
+    · simp at h
+    rename_i hdecl
     simp only [pure_bind, ite_state] at h
+    split at h <;> (try (simp at h; done))
+    try simp only [pure_bind, ite_state] at h
     split at h <;> (try (simp at h; done))
     rcases cs with _ | ⟨⟨_ | test, cb⟩, more⟩
     · simp at h
     · simp at h
-    · exact switch_sim m fs fuel hsw (ihC _ _ _ _ _ _ _ _ _ _ h)
+    · exact switch_sim m fs fuel hsw (by simpa using hdecl) (ihC _ _ _ _ _ _ _ _ _ _ h)
 
 /-- `translateClauses` is sound, when the statement functions are with one unit of fuel less. -/
 theorem translateClauses_sound {F : Nat}
