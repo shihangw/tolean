@@ -27,7 +27,7 @@ row, and the corpus files for each row certify.
 | 2 | `type T = U` aliases of the types of the subset, exported and imported | [#45](https://github.com/shihangw/tolean/pull/45) |
 | 2 | Literal unions of strings, `type T = 'a' \| 'b'`, as an `inductive` | [#47](https://github.com/shihangw/tolean/pull/47) |
 | 2 | Tagged unions of interfaces, narrowed by `if (x.kind === 'a')` | [#51](https://github.com/shihangw/tolean/pull/51) |
-| 3 | Unions of primitive types, `type T = string \| bigint`, narrowed by `if (typeof x === 'string')` | [#PRNUM](https://github.com/shihangw/tolean/pull/PRNUM) |
+| 3 | Unions of primitive types, `type T = string \| bigint`, narrowed by `if (typeof x === 'string')` | [#56](https://github.com/shihangw/tolean/pull/56) |
 
 ## The rules for every addition
 
