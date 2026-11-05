@@ -1,16 +1,16 @@
-// expect: 8:3 a loop body may not return, break or continue
+// expect: 12:10 a clause of a switch that ends in break may not return
 interface Circle { readonly kind: 'circle'; readonly r: bigint; }
 interface Square { readonly kind: 'square'; readonly side: bigint; }
 interface Dot { readonly kind: 'dot'; }
 type Shape = Circle | Square | Dot;
-export function f(shapes: ReadonlyArray<Shape>): bigint {
+export function f(s: Shape): bigint {
   let n = 0n;
-  for (const s of shapes) {
-    switch (s.kind) {
-      case 'circle':
-        n += 1n;
-        break;
-    }
+  switch (s.kind) {
+    case 'circle':
+      n = 1n;
+      break;
+    case 'square':
+      return 2n;
   }
   return n;
 }

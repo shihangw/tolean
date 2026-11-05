@@ -311,7 +311,7 @@ export class Gen {
 
   /** A `switch` on a scalar. The translator takes only a switch on a tag,
    * so this one is for the interpreter test: its clauses assign a `let`,
-   * return, or run into the next clause, and the `default` can stand
+   * then return, break, or run into the next clause, and the `default` can stand
    * anywhere, where the interpreter leaves the subset unless it is last. */
   private switchStatement(vars: ReadonlyArray<Var>, ret: Ty, lets: ReadonlyArray<Var>): Array<string> {
     const t = this.pick([BIGINT, NUMBER, STRING, BOOLEAN]);
@@ -329,6 +329,8 @@ export class Gen {
       }
       if (this.chance(0.5)) {
         lines.push(`    return ${this.expr(ret, vars, 1)};`);
+      } else if (this.chance(0.5)) {
+        lines.push('    break;');
       }
     }
     lines.push('}');
