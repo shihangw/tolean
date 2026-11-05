@@ -60,3 +60,38 @@ export function deposits(e: Event, n: bigint): bigint {
   }
   return count;
 }
+
+// A clause that calls a function, inside a loop: the loop's certificate needs
+// the call.
+function fee(amount: bigint): bigint {
+  return amount / 10n;
+}
+
+export function fees(events: ReadonlyArray<Event>): bigint {
+  let total = 0n;
+  for (const e of events) {
+    switch (e.type) {
+      case 'withdraw':
+        total += fee(e.amount);
+        break;
+      default:
+        break;
+    }
+  }
+  return total;
+}
+
+// A loop inside a clause that ends in break.
+export function repeated(e: Event, xs: ReadonlyArray<bigint>): bigint {
+  let total = 0n;
+  switch (e.type) {
+    case 'deposit':
+      for (const x of xs) {
+        total += x;
+      }
+      break;
+    default:
+      break;
+  }
+  return total;
+}

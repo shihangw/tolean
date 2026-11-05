@@ -1004,7 +1004,7 @@ theorem clauses_case_sim {env envT envO : Translate.Env} {sw : SwitchOn} {known 
 /-- A `switch` whose first clause is a case, in a body that returns. -/
 theorem switch_sim {env : Translate.Env} {sp : Span} {disc : Expr} {sw : SwitchOn} {test : Expr}
     {body : List Stmt} {more : List (Option Expr × List Stmt)} {rest : List Stmt} {tail : Tail} {b : IR.Body}
-    (hsw : switchOf env disc = some sw)
+    (hsw : switchOf env disc = some sw) (hdecl : clausesDeclare ((some test, body) :: more) = false)
     (hc : ClauseSim (N := N) m fs fuel env sw none ((some test, body) :: more) rest b) :
     StmtSim (N := N) m fs fuel env tail (.switchStmt sp disc ((some test, body) :: more) :: rest) b := by
   intro ρs ρo ha hs
@@ -1013,8 +1013,8 @@ theorem switch_sim {env : Translate.Env} {sp : Span} {disc : Expr} {sw : SwitchO
   obtain ⟨fields, k, hl, hk⟩ := hfirst rfl ⟨test, body, more, rfl⟩
   have hd := switchOf_eval m fuel hsw hl hk
   rcases hmain fields k hl hk (fun _ h => by cases h) with h1 | ⟨h1, h2⟩
-  · simp [Eval.exec, Eval.execStmt, hd, h1]
-  · simp [Eval.exec, Eval.execStmt, hd, h1, h2]
+  · simp [Eval.exec, Eval.execStmt, hdecl, hd, h1]
+  · simp [Eval.exec, Eval.execStmt, hdecl, hd, h1, h2]
 
 /-! ### `switch` clauses that end in `break` -/
 
@@ -1241,7 +1241,7 @@ theorem state_case_sim {env envT envO : Translate.Env} {sw : SwitchOn} {known ot
 theorem switch_state_sim {env : Translate.Env} {sp : Span} {disc : Expr} {sw : SwitchOn} {test : Expr}
     {body : List Stmt} {more : List (Option Expr × List Stmt)} {rest : List Stmt} {tail : Tail}
     {b rb : IR.Body} {names : List String}
-    (hsw : switchOf env disc = some sw)
+    (hsw : switchOf env disc = some sw) (hdecl : clausesDeclare ((some test, body) :: more) = false)
     (hnames : names = changedNames (((some test, body) :: more).flatMap (·.2)) env)
     (hc : StateClauseSim (N := N) m fs fuel env sw none ((some test, body) :: more) b)
     (hrest : StmtSim (N := N) m fs fuel env tail rest rb) :
@@ -1253,7 +1253,7 @@ theorem switch_state_sim {env : Translate.Env} {sp : Span} {disc : Expr} {sw : S
     obtain ⟨fields, k, hl, hk⟩ := hfirst rfl ⟨test, body, more, rfl⟩
     obtain ⟨new, mod, hex, hag, hnew, hfr⟩ := hmain fields k hl hk (fun _ h => by cases h)
     refine ⟨new, mod, ?_, hag, hnew, hfr⟩
-    simp [Eval.execStmt, switchOf_eval m fuel hsw hl hk, hex, hfr.length]
+    simp [Eval.execStmt, hdecl, switchOf_eval m fuel hsw hl hk, hex, hfr.length]
 
 /-- `translateStateClause` is sound, when `translateStatements` is with one unit of fuel less. -/
 theorem translateStateClause_sound {F : Nat}
@@ -1530,24 +1530,28 @@ theorem translateSwitch_sound {F : Nat}
   | none => simp [hsw] at h
   | some sw =>
     simp only [hsw, ite_state] at h
+    split at h
+    · simp at h
+    rename_i hdecl
+    try simp only [pure_bind, ite_state] at h
     split at h <;> (try (simp at h; done))
     rcases cs with _ | ⟨⟨_ | test, cb⟩, more⟩
     · simp at h
     · simp at h
     · simp only at h
       split at h
-      · exact switch_sim m fs fuel hsw (ihC _ _ _ _ _ _ _ _ _ _ h)
+      · exact switch_sim m fs fuel hsw (by simpa using hdecl) (ihC _ _ _ _ _ _ _ _ _ _ h)
       · split at h
         · simp at h
         split at h
         · simp at h
         split at h
         · simp at h
-        simp only [pure_bind, bind_ok] at h
+        simp only [bind_ok] at h
         obtain ⟨br, s₁, hbr, rb, s₂, hrb, h⟩ := h
         simp only [pure_ok] at h
         obtain ⟨rfl, -⟩ := h
-        exact switch_state_sim m fs fuel hsw rfl (ihSC _ _ _ _ _ _ _ _ _ _ hbr) (ihS _ _ _ _ _ _ hrb)
+        exact switch_state_sim m fs fuel hsw (by simpa using hdecl) rfl (ihSC _ _ _ _ _ _ _ _ _ _ hbr) (ihS _ _ _ _ _ _ hrb)
 
 /-- `translateClauses` is sound, when the statement functions are with one unit of fuel less. -/
 theorem translateClauses_sound {F : Nat}

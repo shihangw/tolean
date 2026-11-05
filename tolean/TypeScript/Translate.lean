@@ -1156,6 +1156,8 @@ def translateSwitch (fuel : Nat) (env : Env) (s : Span) (disc : Expr)
   let fuel + 1 := fuel | tooDeep
   let some sw := switchOf env disc
     | reject disc.span "a switch must test the tag of a local of a tagged union, as 'switch (x.kind)' does"
+  if clausesDeclare clauses then
+    reject s "a case that declares a local needs braces, as in case 'a': { const n = 1n; return n; }"
   unless 2 ≤ sw.tags.length do reject s "a switch needs at least two members of its union left to test"
   match clauses with
   | (some _, _) :: _ =>

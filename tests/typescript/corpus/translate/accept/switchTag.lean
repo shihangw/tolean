@@ -58,4 +58,18 @@ def time (e : Event) (now : Int) : Int :=
   | Event.«start» e =>
     e.time
 
+def sides (s : Shape) (xs : List Int) : Int :=
+  match s with
+  | Shape.«square» s =>
+    let n := (0 : Int)
+    let n :=
+      List.foldl
+        (fun n x =>
+          let n := n + x
+          n)
+        n xs
+    n
+  | s =>
+    (0 : Int)
+
 end Test

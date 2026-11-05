@@ -389,8 +389,10 @@ def execStmt (m : Scope) (fuel : Nat) (env : Env N) : Stmt → Option (Outcome N
     execLoop m fuel env name body items
   -- `switch (d) { … }` (`SwitchStatement` Evaluation, ECMA-262 §14.12.4): the
   -- clauses run in a new scope, and a `break` at the top of a clause ends the
-  -- statement.
+  -- statement. The model leaves out a local declared at the top of a clause,
+  -- which the whole case block shares.
   | .switchStmt _ disc clauses => do
+    if clausesDeclare clauses then none
     let v ← eval m fuel env disc
     match ← execSwitch m fuel env v clauses with
     | .ret r => some (.ret r)

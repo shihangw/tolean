@@ -359,6 +359,10 @@ Tolean rejects these, among others:
   earlier case already takes, an assignment to the local that the `switch`
   tests, and code after a `switch` whose cases cover every member and
   return.
+- A `const` or `let` at the top of a `case` clause, outside braces. The
+  clauses share one scope, so two clauses may not declare the same name, and
+  a clause that runs first cannot read an outer name that a later clause
+  declares. Put the clause in braces: `case 'a': { const n = 1n; return n; }`.
 - An object literal whose fields are not in the order that the interface
   declares them. A JS object keeps its keys in the order the literal writes
   them, and a caller can see that order through `Object.keys` or

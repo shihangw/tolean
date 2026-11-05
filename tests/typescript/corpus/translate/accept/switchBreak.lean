@@ -63,4 +63,39 @@ def deposits (e : Event) (n : Int) : Int :=
       count
   count
 
+def fee (amount : Int) : Int :=
+  (Int.tdiv amount ((10 : Int)))
+
+def fees (events : List Event) : Int :=
+  let total := (0 : Int)
+  let total :=
+    List.foldl
+      (fun total e =>
+        let total :=
+          match e with
+          | Event.«withdraw» e =>
+            let total := total + (fee e.amount)
+            total
+          | e =>
+            total
+        total)
+      total events
+  total
+
+def repeated (e : Event) (xs : List Int) : Int :=
+  let total := (0 : Int)
+  let total :=
+    match e with
+    | Event.«deposit» e =>
+      let total :=
+        List.foldl
+          (fun total x =>
+            let total := total + x
+            total)
+          total xs
+      total
+    | e =>
+      total
+  total
+
 end Test
