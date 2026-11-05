@@ -207,8 +207,11 @@ theorem declare_ok {env env' : Translate.Env} {sp : Span} {name : String} {b : B
     · simp only [bind_ok] at h
       obtain ⟨r, s₁, hr, h⟩ := h
       obtain ⟨-, rfl⟩ := checkLocalName_ok hr
-      simp only [pure_ok] at h
-      exact ⟨by simpa using hn, h.1.symm, h.2.symm⟩
+      simp only [ite_state] at h
+      split at h
+      · simp at h
+      · simp only [pure_ok] at h
+        exact ⟨by simpa using hn, h.1.symm, h.2.symm⟩
 
 end Monad
 
@@ -260,6 +263,25 @@ theorem out_update {ρ : Eval.Env N} {op : IR.IntOp} {name : String} {a : IR.Exp
     | none => simp [hy] at h
     | some u => cases u <;> simp_all
 
+/-- Writing out the type of a value does not change it. -/
+theorem eval_withType (e : IR.Expr) (t source : Ty) (ρ : Eval.Env N) :
+    IR.Expr.eval fs fuel ρ (withType e t source) = IR.Expr.eval fs fuel ρ e := by
+  unfold withType
+  cases e <;> (try simp only) <;> (try split) <;> simp [IR.Expr.eval]
+
+omit [JSNumber N] in
+/-- Setting a name to the value it has leaves the environment as it is. -/
+theorem env_set_self {n : String} {v : Val N} : ∀ {ρ : Eval.Env N}, ρ.lookup n = some v → ρ.set n v = ρ
+  | [], h => by simp [List.lookup] at h
+  | (k, w) :: rest, h => by
+    rw [Eval.Env.lookup_cons] at h
+    rw [Eval.Env.set_cons]
+    by_cases hk : k = n
+    · subst hk; simp at h; simp [h]
+    · rw [if_neg (Ne.symm hk)] at h
+      simp only [hk, ↓reduceIte]
+      rw [env_set_self h]
+
 /-- An update statement sets a name in scope to the value of the output's
 update. -/
 theorem update_sound (hc : CallsAgree (N := N) m.program fs fuel) {env : Translate.Env} {sp : Span} {e : Expr}
@@ -303,34 +325,61 @@ theorem update_sound (hc : CallsAgree (N := N) m.program fs fuel) {env : Transla
     rename_i sp1 x
     simp only [ite_state] at h
     split at h
-    · rename_i hsimple
+    · -- `x ??= e`: `x` unless it is `null`, and then `e`.
+      rename_i hco
+      obtain rfl : op = .coalesce := by cases op <;> first | rfl | exact absurd hco (by decide)
       cases hl : env.lookup x with
       | none => simp [hl] at h
       | some loc =>
         obtain ⟨lname, lb, lt⟩ := loc
-        cases lb <;> simp [hl] at h
+        cases lb <;> cases lt <;> simp [hl] at h
+        rename_i value
         obtain ⟨v, s₂, hv, h⟩ := h
         obtain ⟨rfl, rfl⟩ := hv
         obtain ⟨a, s₃, ha', h⟩ := h
-        have hsim := (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ ha'
-        have hhas : env.has x = true := by simp [Env.has, hl]
-        cases op <;> simp [AssignOp.isSimple] at hsimple <;> simp only [assignOps?, ite_state] at h
-        all_goals (repeat' split at h) <;> simp at h
-        all_goals obtain ⟨⟨rfl, rfl⟩, -⟩ := h
-        all_goals refine ⟨hhas, by simp [exprChanges, AssignOp.isSimple], ?_⟩
-        · rw [eval_value] at hw
-          simp [Eval.execStmt, hsim ρs ρo w ha hs hw]
-        all_goals first
-          | (obtain ⟨p, q, hp, hq, rfl⟩ := out_numberOp fs fuel hw
-             simp only [IR.Expr.eval] at hp
-             rw [eval_value] at hq
-             rw [← ha x] at hp
-             simp [Eval.execStmt, hp, hsim ρs ρo _ ha hs hq, Eval.binary, IR.NumberOp.apply])
-          | (obtain ⟨p, q, hp, hq, rfl⟩ := out_update fs fuel hw
-             rw [eval_value] at hq
-             rw [← ha x] at hp
-             simp [Eval.execStmt, hp, hsim ρs ρo _ ha hs hq, Eval.binary, IR.IntOp.apply])
-    · simp at h
+        split at h
+        · simp at h
+          obtain ⟨⟨rfl, rfl⟩, -⟩ := h
+          have hsim := (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ ha'
+          have hhas : env.has x = true := by simp [Env.has, hl]
+          refine ⟨hhas, by simp [exprChanges, show (AssignOp.coalesce == AssignOp.coalesce) = true from rfl], ?_⟩
+          obtain ⟨u, hu, hcase⟩ := out_coalesce fs fuel hw
+          simp only [IR.Expr.eval] at hu
+          rw [← ha x] at hu
+          rcases hcase with ⟨hnu, hbv⟩ | ⟨hn, hnu, rfl⟩
+          · rw [eval_value] at hbv
+            rcases hnu with rfl | rfl <;> simp [Eval.execStmt, hu, hsim ρs ρo w ha hs hbv]
+          · cases w <;> simp_all [Eval.execStmt, isNullVal, env_set_self]
+        · simp at h
+    · split at h
+      · rename_i hsimple
+        cases hl : env.lookup x with
+        | none => simp [hl] at h
+        | some loc =>
+          obtain ⟨lname, lb, lt⟩ := loc
+          cases lb <;> simp [hl] at h
+          obtain ⟨v, s₂, hv, h⟩ := h
+          obtain ⟨rfl, rfl⟩ := hv
+          obtain ⟨a, s₃, ha', h⟩ := h
+          have hsim := (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ ha'
+          have hhas : env.has x = true := by simp [Env.has, hl]
+          cases op <;> simp [AssignOp.isSimple] at hsimple <;> simp only [assignOps?, ite_state] at h
+          all_goals (repeat' split at h) <;> simp at h
+          all_goals obtain ⟨⟨rfl, rfl⟩, -⟩ := h
+          all_goals refine ⟨hhas, by simp [exprChanges, AssignOp.isSimple], ?_⟩
+          · rw [eval_withType, eval_value] at hw
+            simp [Eval.execStmt, hsim ρs ρo w ha hs hw]
+          all_goals first
+            | (obtain ⟨p, q, hp, hq, rfl⟩ := out_numberOp fs fuel hw
+               simp only [IR.Expr.eval] at hp
+               rw [eval_value] at hq
+               rw [← ha x] at hp
+               simp [Eval.execStmt, hp, hsim ρs ρo _ ha hs hq, Eval.binary, IR.NumberOp.apply])
+            | (obtain ⟨p, q, hp, hq, rfl⟩ := out_update fs fuel hw
+               rw [eval_value] at hq
+               rw [← ha x] at hp
+               simp [Eval.execStmt, hp, hsim ρs ρo _ ha hs hq, Eval.binary, IR.IntOp.apply])
+      · simp at h
 
 /-- The output body `body` means what the statements `ss` mean. A return gives
 the same value. An end, which only a body for a branch or a loop has, gives
@@ -926,7 +975,7 @@ theorem stmts_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
         have hsim := (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hcode
         exact decl_sim m fs fuel (d := ⟨kind, name, none, some init⟩) rfl hfresh rfl
           (fun ρo o ho => by
-            simp only [IR.Body.exec] at ho
+            simp only [IR.Body.exec, eval_withType] at ho
             cases hw : IR.Expr.eval fs fuel ρo code.value with
             | none => simp [hw] at ho
             | some w =>
@@ -948,7 +997,7 @@ theorem stmts_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
                have hsim := (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hcode
                exact decl_sim m fs fuel (d := ⟨kind, name, some annotation, some init⟩) rfl hfresh rfl
                  (fun ρo o ho => by
-                   simp only [IR.Body.exec] at ho
+                   simp only [IR.Body.exec, eval_withType] at ho
                    cases hw : IR.Expr.eval fs fuel ρo code.value with
                    | none => simp [hw] at ho
                    | some w =>
@@ -966,7 +1015,7 @@ theorem stmts_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
                have hsim := (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hcode
                exact decl_sim m fs fuel (d := ⟨kind, name, some annotation, some init⟩) rfl hfresh rfl
                  (fun ρo o ho => by
-                   simp only [IR.Body.exec] at ho
+                   simp only [IR.Body.exec, eval_withType] at ho
                    cases hw : IR.Expr.eval fs fuel ρo code.value with
                    | none => simp [hw] at ho
                    | some w =>

@@ -393,6 +393,12 @@ def execStmt (m : Scope) (fuel : Nat) (env : Env N) : Stmt → Option (Outcome N
     return .normal (env.set name (.list (items ++ [← eval m fuel env arg])))
   | .exprStmt _ (.assign _ .assign (.ident _ name) value) => do
     return .normal (env.set name (← eval m fuel env value))
+  -- `x ??= e` (`LogicalAssignment`, ECMA-262 §13.15.2): `e` runs, and its
+  -- value goes to `x`, only when `x` is `null` or `undefined`.
+  | .exprStmt _ (.assign _ .coalesce (.ident _ name) value) => do
+    match ← env.lookup name with
+    | .null | .undefined => return .normal (env.set name (← eval m fuel env value))
+    | _ => return .normal env
   | .exprStmt _ (.assign _ op (.ident _ name) value) => do
     let bop ← match op with
       | .add => some BinOp.add | .sub => some .sub | .mul => some .mul | _ => none
