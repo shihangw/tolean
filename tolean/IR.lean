@@ -43,6 +43,12 @@ inductive Ty (T : Type) where
   /-- An inductive type of the program whose constructors take no arguments,
   such as the type of the TypeScript literal union `type T = 'a' | 'b'`. -/
   | enum (ref : DeclRef)
+  /-- An inductive type with one constructor for each member of a tagged
+  union of structures, such as TypeScript's `type T = A | B`. -/
+  | tagged (ref : DeclRef)
+  /-- The type of a tag field, such as `kind: 'circle'`. A structure leaves
+  the field out, because its value never changes. -/
+  | tag (value : String)
   /-- A type that the language adds. -/
   | ext (t : T)
 deriving BEq, Repr, Inhabited
@@ -99,6 +105,12 @@ inductive Expr (T E : Type) where
   | matchNull (name : String) (whenNull whenValue : Expr T E)
   /-- `T.a`: the constructor `a` of the inductive type `T`. -/
   | enumCase (ref : DeclRef) (member : String)
+  /-- The value of a tag field in a structure instance, such as `kind:
+  'circle'`. The printer leaves it out, because the structure has no such
+  field, but the source's object has it. -/
+  | tagValue (value : String)
+  /-- `(T.a e)`: the member `a` of a tagged union `T`, from the structure `e`. -/
+  | inject (ref : DeclRef) (tag : String) (e : Expr T E)
   /-- `(Option.getD a b)`, or `(Option.or a b)` when `nullable` is true: the
   value of `a ?? b`. `b` is a `T` in the first, and an `Option T` in the
   second. -/
@@ -158,6 +170,12 @@ inductive Body (T E : Type) where
   | ite (c : Expr T E) (whenTrue whenFalse : Body T E)
   /-- `match x with | none => … | some x => …`. -/
   | matchNull (name : String) (whenNull whenValue : Body T E)
+  /-- `match x with | T.a x => … | T.b x => …`: a test of the tag field
+  `field` of `x`, a value of the tagged union `T`. The first branch is for the
+  tag `tag`. The second names the member `other` when it is the only one
+  left, or else matches every other member. -/
+  | matchTag (name : String) (ref : DeclRef) (field tag : String) (other : Option String)
+      (whenTag whenOther : Body T E)
   /-- `let (x, y) := branch`, where `branch` is an `ite` or a `matchNull`
   that ends in the state, then `rest`. -/
   | letState (names : List String) (branch : Body T E) (rest : Body T E)
@@ -178,6 +196,10 @@ inductive Decl (T E : Type) where
   /-- `inductive T where | a | b`, with decidable equality: a type whose
   constructors take no arguments. -/
   | enum (name : String) (members : List String)
+  /-- `inductive T where | a (value : A) | b (value : B)`: a tagged union of
+  structures, whose source objects tell the members apart by the field
+  `field`. -/
+  | tagged (name : String) (field : String) (members : List (String × DeclRef))
   /-- `def f (x : T) : R :=`, then the body. -/
   | function (name : String) (params : List (String × Ty T)) (ret : Ty T) (body : Body T E)
 deriving Repr, Inhabited
@@ -187,7 +209,7 @@ variable {T E : Type}
 /-! ### The declarations that the output names -/
 
 def Ty.refs : Ty T → List DeclRef
-  | .struct r | .enum r => [r]
+  | .struct r | .enum r | .tagged r => [r]
   | .option t | .list t => t.refs
   | _ => []
 
@@ -206,6 +228,8 @@ def Expr.refs : Expr T E → List DeclRef
   | .eq a b | .ne a b | .propAnd a b | .propOr a b | .and a b | .or a b =>
     a.refs ++ b.refs
   | .enumCase r _ => [r]
+  | .inject r _ e => r :: e.refs
+  | .tagValue _ => []
   | .int _ | .none | .bool _ | .string _ | .var _ => []
 
 def Expr.refsList : List (Expr T E) → List DeclRef
@@ -225,6 +249,7 @@ def Body.refs : Body T E → List DeclRef
   | .letArray _ t elems rest => t.refs ++ Expr.refsList elems ++ rest.refs
   | .ite c a b => c.refs ++ a.refs ++ b.refs
   | .matchNull _ a b | .letState _ a b => a.refs ++ b.refs
+  | .matchTag _ r _ _ _ a b => r :: (a.refs ++ b.refs)
   | .fold _ _ body items rest _ => body.refs ++ items.refs ++ rest.refs
 
 /-- The functions and structures of the program that `d` names. -/
@@ -232,6 +257,7 @@ def Decl.refs : Decl T E → List DeclRef
   | .struct _ fields => fields.flatMap (·.2.refs)
   | .alias _ type => type.refs
   | .enum .. => []
+  | .tagged _ _ members => members.map (·.2)
   | .function _ params ret body => params.flatMap (·.2.refs) ++ ret.refs ++ body.refs
 
 /-! ### Printing -/
@@ -349,12 +375,17 @@ def Ty.print [PrintTy T] (names : Names) : Ty T → String
     | (name, some _) => s!"({name} {names.typeParam})"
     | (name, Option.none) => name
   | .enum ref => (names.ref ref).1
+  | .tagged ref =>
+    match names.ref ref with
+    | (name, some _) => s!"({name} {names.typeParam})"
+    | (name, Option.none) => name
+  | .tag _ => leanName names "String"
   | .ext t => PrintTy.print names t
 
 /-- The printed type names the type parameter, so a declaration of it must
 bind it. -/
 def Ty.namesParam [PrintTy T] (names : Names) : Ty T → Bool
-  | .struct ref => (names.ref ref).2.isSome
+  | .struct ref | .tagged ref => (names.ref ref).2.isSome
   | .option t | .list t => t.namesParam names
   | .ext t => PrintTy.namesParam names t
   | _ => false
@@ -382,6 +413,14 @@ def Order.apply : Order → Int → Int → Bool
 def Division.apply : Division → Int → Int → Int
   | .tdiv => Int.tdiv | .tmod => Int.tmod
 
+/-- The body tests the tag of the local `name` somewhere. -/
+def Body.testsTag (name : String) : Body T E → Bool
+  | .matchTag n _ _ _ _ a b => n == name || a.testsTag name || b.testsTag name
+  | .let _ _ rest | .letArray _ _ _ rest => rest.testsTag name
+  | .ite _ a b | .matchNull _ a b | .letState _ a b => a.testsTag name || b.testsTag name
+  | .fold _ _ body _ rest _ => body.testsTag name || rest.testsTag name
+  | .value _ | .state _ => false
+
 section
 variable [PrintTy T] [PrintOp E]
 
@@ -394,6 +433,8 @@ def Expr.print (names : Names) : Expr T E → String
   | .string s => Sexp.quote s
   | .var name => name
   | .enumCase ref member => s!"{(names.ref ref).1}.{memberName member}"
+  | .tagValue value => Sexp.quote value
+  | .inject ref tag e => s!"({(names.ref ref).1}.{memberName tag} {argument (e.print names)})"
   | .field obj wrap name =>
     let o := obj.print names
     s!"{if wrap then s!"({o})" else o}.{name}"
@@ -442,9 +483,15 @@ def Expr.printList (names : Names) : List (Expr T E) → List String
 
 def Expr.printFields (names : Names) : List (String × Expr T E) → List String
   | [] => []
-  | (key, e) :: fs => s!"{key} := {e.print names}" :: Expr.printFields names fs
+  | (key, e) :: fs =>
+    match e with
+    -- The structure has no tag field.
+    | .tagValue _ => Expr.printFields names fs
+    | _ => s!"{key} := {e.print names}" :: Expr.printFields names fs
 
 end
+
+mutual
 
 /-- The lines of a body. -/
 def Body.lines (names : Names) : Body T E → List String
@@ -460,6 +507,17 @@ def Body.lines (names : Names) : Body T E → List String
   | .matchNull name whenNull whenValue =>
     [s!"match {name} with", s!"| {leanName names "none"} =>"] ++ indent (whenNull.lines names) ++
       [s!"| {leanName names "some"} {name} =>"] ++ indent (whenValue.lines names)
+  | .matchTag name ref _ tag other whenTag whenOther =>
+    let ctor (t : String) := s!"{(names.ref ref).1}.{memberName t}"
+    let rest : List String := match other with
+      | some t => s!"| {ctor t} {name} =>" :: indent (whenOther.lines names)
+      | Option.none =>
+        match whenOther with
+        | .matchTag n .. =>
+          if n == name then Body.tagArms names name whenOther
+          else s!"| {name} =>" :: indent (whenOther.lines names)
+        | _ => s!"| {name} =>" :: indent (whenOther.lines names)
+    s!"match {name} with" :: s!"| {ctor tag} {name} =>" :: indent (whenTag.lines names) ++ rest
   | .letState ns branch rest =>
     [s!"let {tuple ns} :="] ++ indent (branch.lines names) ++ rest.lines names
   | .fold ns element body items rest _ =>
@@ -469,11 +527,38 @@ def Body.lines (names : Names) : Body T E → List String
       indentBy "      " (bodyLines.dropLast ++ [lastLine ++ ")"]) ++
       [s!"    {tuple ns} {items.print names}"] ++ rest.lines names
 
+/-- The arms of `match name with` for a test of its tag, nested in the arm
+for the other members of a test of the same local. They join the outer
+`match`, so that Lean sees that the arms cover every member: a nested
+`match` would not know which members the outer one ruled out. -/
+def Body.tagArms (names : Names) (name : String) : Body T E → List String
+  | .matchTag _ ref _ tag other whenTag whenOther =>
+    let ctor (t : String) := s!"{(names.ref ref).1}.{memberName t}"
+    let rest : List String := match other with
+      | some t => s!"| {ctor t} {name} =>" :: indent (whenOther.lines names)
+      | Option.none =>
+        match whenOther with
+        | .matchTag n .. =>
+          if n == name then Body.tagArms names name whenOther
+          else s!"| {name} =>" :: indent (whenOther.lines names)
+        | _ => s!"| {name} =>" :: indent (whenOther.lines names)
+    s!"| {ctor tag} {name} =>" :: indent (whenTag.lines names) ++ rest
+  -- `Body.lines` calls this only on a test of a tag.
+  | _ => []
+
+end
+
 def Decl.print (names : Names) : Decl T E → String
   | .struct name fields =>
     let generic := if names.generic then s!" ({names.typeParam} : Type)" else ""
+    -- A tag field never changes, so the structure leaves it out.
+    let kept := fields.filter fun (_, type) => !(type matches .tag _)
     "\n".intercalate (s!"structure {name}{generic} where" ::
-      fields.map fun (field, type) => s!"  {field} : {type.print names}")
+      kept.map fun (field, type) => s!"  {field} : {type.print names}")
+  | .tagged name _ members =>
+    let generic := if names.generic then s!" ({names.typeParam} : Type)" else ""
+    "\n".intercalate (s!"inductive {name}{generic} where" ::
+      members.map fun (tag, ref) => s!"  | {memberName tag} (value : {(Ty.struct ref : Ty T).print names})")
   | .enum name members =>
     "\n".intercalate (s!"inductive {name} where" ::
       members.map (s!"  | {memberName ·}") ++

@@ -288,6 +288,8 @@ the file, the line and the reason. It never approximates.
 | `interface` with `readonly`, required fields | `structure` |
 | `type T = U`, declared before its uses | `abbrev T := U`. The output writes `U` itself wherever the source names `T`, so the `abbrev` is only for claims. |
 | `type T = 'a' \| 'b'`, a union of string literals | `inductive T` with the constructors `a` and `b`, which derives `DecidableEq`. A literal becomes `T.a` where the context expects a `T`, and `t === 'a'` becomes `t = T.a`. The output writes every constructor in `«»`, such as `T.«open»`, because Lean reads some strings as keywords or modifiers. A claim can still write `T.a`. |
+| `type T = A \| B`, a union of interfaces with a tag field such as `kind: 'circle'` | `inductive T` with a constructor for each member, which holds the member's structure. The structure leaves the tag field out, because its value never changes. An object literal where a `T` is expected becomes the constructor of its tag. |
+| `if (s.kind === 'circle')`, with `===` or `!==` and the string on either side | `match s with \| T.circle s => … \| …`. TypeScript narrows `s` in each branch, and so does the output. A chain of such tests on the same value becomes one `match`. |
 | `function` with typed parameters and return type | `def` |
 | `const x = e`, `let x = e` | `let x := e` |
 | `x = e`, `x += e`, `x -= e`, `x *= e` on a `let` local | `let x := …` (shadowing) |
@@ -337,6 +339,13 @@ Tolean rejects these, among others:
   a union of string literals and other types, a string that is not an ASCII
   name or that Lean declares for every inductive type, such as `'rec'`, and a
   value of a literal union where a `string` is expected.
+- A field of a tagged union read before a test of its tag, a read of the tag
+  field outside such a test, and a union of interfaces without a tag. Tolean
+  also refuses a member, such as a `Circle`, where the union is expected,
+  except as an object literal. Where a test leaves more than one member, a
+  further test of the same value must come first in the other branch, as in
+  a chain of `if (s.kind === 'a') return …`, so that Lean sees one `match`
+  that covers every member.
 - An object literal whose fields are not in the order that the interface
   declares them. A JS object keeps its keys in the order the literal writes
   them, and a caller can see that order through `Object.keys` or

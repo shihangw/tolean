@@ -32,7 +32,7 @@ body. -/
 def functions (decls : List Decl) : List (String × List String × Body) :=
   decls.filterMap fun
     | .function name params _ body => some (name, params.map (·.1), body)
-    | .struct .. | .alias .. | .enum .. => none
+    | .struct .. | .alias .. | .enum .. | .tagged .. => none
 
 /-- The functions of the output of a program, under the file of each: the
 output of each file, with that file's path. -/
@@ -96,6 +96,10 @@ def Expr.eval (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
   | .var name => ρ.lookup name
   -- A constructor of a literal union is its string, as in JS.
   | .enumCase _ member => some (.str member)
+  -- A tag field is its string in the object.
+  | .tagValue value => some (.str value)
+  -- A member of a tagged union is the object of its structure.
+  | .inject _ _ e => Expr.eval fs fuel ρ e
   | .field obj _ name => do
     match ← Expr.eval fs fuel ρ obj with
     | .obj fields => fields.lookup name
@@ -203,6 +207,11 @@ def Body.exec (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
     match ← ρ.lookup name with
     | .null => Body.exec fs fuel ρ whenNull
     | _ => Body.exec fs fuel ρ whenValue
+  -- The tag is a field of the object, so the evaluator reads it, as JS does.
+  | .matchTag name _ field tag _ whenTag whenOther => do
+    let .obj fields ← ρ.lookup name | none
+    let .str k ← fields.lookup field | none
+    if k == tag then Body.exec fs fuel ρ whenTag else Body.exec fs fuel ρ whenOther
   | .letState names branch rest => do
     match ← Body.exec fs fuel ρ branch with
     | .normal inner => Body.exec fs fuel (← bindState names inner ρ) rest

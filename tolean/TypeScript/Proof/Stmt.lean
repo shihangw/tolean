@@ -691,6 +691,29 @@ theorem branch_null {env : Translate.Env} {test : Expr} {name : String} {isNullT
   cases isNullTest <;> simp only [Bool.false_eq_true, ↓reduceIte, IR.Body.exec, hwo,
     Option.bind_eq_bind, Option.bind_some] at ho <;> cases w <;> simpa [isNullVal, Val.truthy] using ho
 
+theorem branch_tag {env : Translate.Env} {test : Expr} {t : TagTest} {wt wf : IR.Body}
+    (ht : tagTestOf env test = some t) :
+    BranchSim (N := N) m fs fuel env test
+      (if t.isEq then .matchTag t.name t.ref t.field t.tag t.other wt wf
+        else .matchTag t.name t.ref t.field t.tag t.other wf wt) wt wf := by
+  intro ρs ρo o ha hs ho
+  obtain ⟨w, hw, hl⟩ := tagTestOf_eval m fuel ht hs
+  have hwo : ρo.lookup t.name = some w := by rw [← ha]; exact hw
+  cases hie : t.isEq <;> simp only [hie, Bool.false_eq_true, ↓reduceIte] at ho hl
+  all_goals
+    cases w with
+    | obj fields =>
+      cases hk : fields.lookup t.field with
+      | none => simp [IR.Body.exec, hwo, hk] at ho
+      | some v =>
+        cases v with
+        | str k =>
+          refine ⟨_, hl fields k rfl hk, ?_⟩
+          simp only [IR.Body.exec, hwo] at ho
+          by_cases hkt : (k == t.tag) = true <;> simp_all [Val.truthy]
+        | _ => simp [IR.Body.exec, hwo, hk] at ho
+    | _ => simp [IR.Body.exec, hwo] at ho
+
 /-- The loop `for (const x of …)` over `vs` means what the output's fold means,
 when the body does. -/
 theorem loop_sim {env bodyEnv : Translate.Env} {x : String} {elemType : Ty} {names : List String}
@@ -794,8 +817,11 @@ theorem stmts_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
       StmtSim (N := N) m fs fuel env tail (.forOfStmt s kind x iterable b :: rest) body) := by
   induction F with
   | zero =>
-    refine ⟨?_, ?_, ?_, ?_⟩ <;> intros <;>
-      simp_all [translateStatements, translateVariable, translateIf, translateForOf]
+    refine ⟨?_, ?_, ?_, ?_⟩
+    · intro _ _ _ _ _ _ h; simp [translateStatements] at h
+    · intro _ _ _ _ _ _ _ _ h; simp [translateVariable] at h
+    · intro _ _ _ _ _ _ _ _ _ _ h; simp [translateIf] at h
+    · intro _ _ _ _ _ _ _ _ _ _ _ h; simp [translateForOf] at h
   | succ F ih =>
     obtain ⟨ihS, ihV, ihI, ihF⟩ := ih
     refine ⟨?_, ?_, ?_, ?_⟩
@@ -963,42 +989,82 @@ theorem stmts_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
       unfold translateIf at h
       cases hn : nullTestOf env test with
       | none =>
-        simp only [hn, ite_state] at h
-        split at h
-        · rename_i hret
-          simp only [Bool.and_eq_true] at hret
+        cases ht : tagTestOf env test with
+        | some tt =>
+          -- `if (x.kind === 'a')`: a match on the member.
+          have hb := fun wt wf => branch_tag (N := N) (wt := wt) (wf := wf) m fs fuel ht
+          cases hie : tt.isEq <;> simp only [hn, ht, hie, ite_state, Bool.false_eq_true, ↓reduceIte] at h hb
+          all_goals
+            split at h
+            · rename_i hret
+              simp only [Bool.and_eq_true] at hret
+              split at h
+              · simp only [bind_ok, reject_ne_ok, false_and, exists_false, reject_ne_ok] at h
+              · rename_i hrest
+                simp only [pure_bind, bind_ok] at h
+                obtain ⟨wt, s₁, hwt, wf, s₂, hwf, h⟩ := h
+                split at h
+                · simp only [bind_ok, reject_ne_ok, false_and, exists_false, reject_ne_ok] at h
+                · simp only [pure_ok] at h
+                  obtain ⟨_, _, ⟨rfl, rfl⟩, rfl, -⟩ := h
+                  exact if_ret_sim m fs fuel (narrow_has _ _ _) (narrow_has _ _ _) rfl rfl hret.1
+                    (fun he => by simpa [he] using hrest) (hb wt wf) (ihS _ _ _ _ _ _ hwt)
+                    (ihS _ _ _ _ _ _ hwf)
+            · simp only [pure_bind, ite_state] at h
+              split at h
+              · simp only [bind_ok, reject_ne_ok, false_and, exists_false, reject_ne_ok] at h
+              · try simp only [pure_bind, ite_state] at h
+                split at h
+                · simp only [bind_ok, reject_ne_ok, false_and, exists_false, reject_ne_ok] at h
+                · try simp only [pure_bind, ite_state] at h
+                  split at h
+                  · simp only [bind_ok, reject_ne_ok, false_and, exists_false, reject_ne_ok] at h
+                  · simp only [bind_ok] at h
+                    obtain ⟨wt, s₁, hwt, wf, s₂, hwf, br, s₃, hbr, rb, s₄, hrb, rfl, -⟩ := h
+                    simp only [ite_state] at hbr
+                    split at hbr
+                    · simp at hbr
+                    · simp only [pure_ok] at hbr
+                      obtain ⟨rfl, -⟩ := hbr
+                      exact if_state_sim m fs fuel (narrow_has _ _ _) (narrow_has _ _ _) rfl rfl rfl
+                        (hb wt wf) (ihS _ _ _ _ _ _ hwt) (ihS _ _ _ _ _ _ hwf) (ihS _ _ _ _ _ _ hrb)
+        | none =>
+          simp only [hn, ht, ite_state] at h
           split at h
-          · simp at h
-          · rename_i hrest
-            simp only [pure_bind, bind_ok, fuelLimit_ok, pure_ok] at h
-            obtain ⟨wt, s₁, hwt, wf, s₂, hwf, br, s₃, hbr, rfl, -⟩ := h
-            obtain ⟨_, _, ⟨rfl, rfl⟩, c, s₄, hce, hbr⟩ := hbr
-            simp only [ite_state] at hbr
-            split at hbr
-            · simp only [pure_ok] at hbr
-              obtain ⟨rfl, -⟩ := hbr
-              exact if_ret_sim m fs fuel (fun _ => rfl) (fun _ => rfl) rfl rfl hret.1
-                (fun he => by simpa [he] using hrest)
-                (branch_ite m fs fuel ((expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hce))
-                (ihS _ _ _ _ _ _ hwt) (ihS _ _ _ _ _ _ hwf)
-            · simp at hbr
-        · simp only [pure_bind, ite_state] at h
-          split at h
-          · simp at h
-          · try simp only [pure_bind, ite_state] at h
+          · rename_i hret
+            simp only [Bool.and_eq_true] at hret
             split at h
             · simp at h
-            · simp only [bind_ok, fuelLimit_ok, pure_ok] at h
-              obtain ⟨wt, s₁, hwt, wf, s₂, hwf, br, s₃, hbr, rb, s₄, hrb, rfl, -⟩ := h
-              obtain ⟨_, _, ⟨rfl, rfl⟩, c, s₅, hce, hbr⟩ := hbr
+            · rename_i hrest
+              simp only [pure_bind, bind_ok, fuelLimit_ok, pure_ok] at h
+              obtain ⟨wt, s₁, hwt, wf, s₂, hwf, br, s₃, hbr, rfl, -⟩ := h
+              obtain ⟨_, _, ⟨rfl, rfl⟩, c, s₄, hce, hbr⟩ := hbr
               simp only [ite_state] at hbr
               split at hbr
               · simp only [pure_ok] at hbr
                 obtain ⟨rfl, -⟩ := hbr
-                exact if_state_sim m fs fuel (fun _ => rfl) (fun _ => rfl) rfl rfl rfl
+                exact if_ret_sim m fs fuel (fun _ => rfl) (fun _ => rfl) rfl rfl hret.1
+                  (fun he => by simpa [he] using hrest)
                   (branch_ite m fs fuel ((expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hce))
-                  (ihS _ _ _ _ _ _ hwt) (ihS _ _ _ _ _ _ hwf) (ihS _ _ _ _ _ _ hrb)
+                  (ihS _ _ _ _ _ _ hwt) (ihS _ _ _ _ _ _ hwf)
               · simp at hbr
+          · simp only [pure_bind, ite_state] at h
+            split at h
+            · simp at h
+            · try simp only [pure_bind, ite_state] at h
+              split at h
+              · simp at h
+              · simp only [bind_ok, fuelLimit_ok, pure_ok] at h
+                obtain ⟨wt, s₁, hwt, wf, s₂, hwf, br, s₃, hbr, rb, s₄, hrb, rfl, -⟩ := h
+                obtain ⟨_, _, ⟨rfl, rfl⟩, c, s₅, hce, hbr⟩ := hbr
+                simp only [ite_state] at hbr
+                split at hbr
+                · simp only [pure_ok] at hbr
+                  obtain ⟨rfl, -⟩ := hbr
+                  exact if_state_sim m fs fuel (fun _ => rfl) (fun _ => rfl) rfl rfl rfl
+                    (branch_ite m fs fuel ((expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hce))
+                    (ihS _ _ _ _ _ _ hwt) (ihS _ _ _ _ _ _ hwf) (ihS _ _ _ _ _ _ hrb)
+                · simp at hbr
       | some nt =>
         obtain ⟨name, isNullTest, value⟩ := nt
         have hb := fun wt wf => branch_null (N := N) (wt := wt) (wf := wf) m fs fuel hn
