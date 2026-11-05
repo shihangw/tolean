@@ -56,17 +56,16 @@ stays refused, even when the code that uses it is pure.
 
 The tables group the constructs by the stage that adds them. Each row says
 what the Lean output is, and what Tolean refuses so that the translation stays
-exact.
+exact. A construct leaves these tables when Tolean translates it, and the
+[Progress](#progress) table lists it from then on.
 
 ### Types and narrowing
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| `type T = …` aliases, and string literal types such as `'open' \| 'closed'` | `abbrev`, and an `inductive` with one constructor per literal | A literal union mixed with `string` |
-| A union of interfaces with a literal tag field, such as `kind` | An `inductive` with one constructor per member | A union without a common tag |
 | `switch` on the tag, with a `default` that assigns to `never` | `match` on the constructor | Fallthrough between cases |
 | `x?: T` fields and parameters, `undefined` | `Option T` | `'x' in obj`, which can tell a missing key from `undefined` |
-| `x == null`, `x ?? y`, `x?.f`, `x ??= y` | `Option` matches | `==` against anything except `null` and `undefined` |
+| `x?.f` and `x ??= y` | `Option` matches | `==` against anything except `null` and `undefined` |
 | `export { … }` and re-exports | Nothing: the names stay in scope | `export *` |
 | `typeof x === 'string'` and the other `typeof` tests on a union of primitive types (§13.5.3) | A `match` on a sum type | `typeof` on a union that includes objects or functions |
 | A tuple type such as `readonly [string, bigint]` | A product type | Tuples that a function changes |
@@ -279,8 +278,8 @@ is the one exception, because it changes the type of every `string`.
    literals and `===`, so the switch changes the generated types but breaks
    almost no proof. Every project that writes proofs over Lean's `String`
    makes the switch more costly later, so it comes first.
-2. Types and narrowing: aliases, literal unions, tagged unions with
-   `switch`, optional fields, and the `null` and `undefined` operators.
+2. Types and narrowing: `switch` on the tag of a tagged union, optional
+   fields, `x?.f` and `x ??= y`.
 3. Generic functions and types whose type parameters have no constraint,
    tuples, string enums, `typeof` tests and type guards.
 4. Callbacks that read only `const` values, the array methods without
