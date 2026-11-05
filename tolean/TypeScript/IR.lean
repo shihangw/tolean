@@ -56,6 +56,10 @@ inductive ExprExt where
   | numberNe
   /-- `(JSNumber.isNaN a)`, or `(JSNumber.toSafeInt a).isSome`. -/
   | numberTest (test : NumberTest)
+  /-- `a.isNone`, on an optional value: `a === undefined`. -/
+  | isUndefined
+  /-- `a.isSome`, on an optional value: `a !== undefined`. -/
+  | isDefined
 deriving BEq, Repr, Inhabited, DecidableEq
 
 abbrev Ty := tolean.IR.Ty TyExt
@@ -78,6 +82,8 @@ abbrev LoopInfo := tolean.IR.LoopInfo TyExt
 @[match_pattern] abbrev Expr.numberNe (a b : Expr) : Expr := .ext .numberNe [a, b]
 @[match_pattern] abbrev Expr.numberTest (test : NumberTest) (a : Expr) : Expr :=
   .ext (.numberTest test) [a]
+@[match_pattern] abbrev Expr.isUndefined (a : Expr) : Expr := .ext .isUndefined [a]
+@[match_pattern] abbrev Expr.isDefined (a : Expr) : Expr := .ext .isDefined [a]
 
 /-! ### Printing -/
 
@@ -122,6 +128,8 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
   | .numberTest .isSafeInteger, [a] => s!"({js}.toSafeInt {argument a}).isSome"
   | .numberTest .isNaN, [a] => s!"({js}.isNaN {argument a})"
   | .numberTest .isFinite, [a] => s!"({js}.isFinite {argument a})"
+  | .isUndefined, [a] => s!"{argument a}.isNone"
+  | .isDefined, [a] => s!"{argument a}.isSome"
   | _, _ => ""
 
 instance : tolean.IR.PrintOp ExprExt := ⟨ExprExt.print⟩

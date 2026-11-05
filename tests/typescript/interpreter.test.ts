@@ -49,6 +49,7 @@ type Value =
   | boolean
   | string
   | null
+  | { undefined: true }
   | Array<Value>
   | { object: Array<[string, Value]> };
 
@@ -73,6 +74,8 @@ function encode(x: unknown): Value {
     case 'boolean':
     case 'string':
       return x;
+    case 'undefined':
+      return { undefined: true };
     case 'object':
       if (x === null) return null;
       if (Array.isArray(x)) return x.map(encode);
@@ -85,6 +88,7 @@ function encode(x: unknown): Value {
 function decode(v: Value): unknown {
   if (v === null || typeof v === 'boolean' || typeof v === 'string') return v;
   if (Array.isArray(v)) return v.map(decode);
+  if ('undefined' in v) return undefined;
   if ('bigint' in v) return BigInt(v.bigint);
   if ('number' in v) return ofBits(v.number);
   return Object.fromEntries(v.object.map(([k, x]) => [k, decode(x)]));
@@ -96,7 +100,7 @@ function canonical(v: Value): string {
     if (w === null || typeof w === 'boolean' || typeof w === 'string') return w;
     if (Array.isArray(w)) return w.map(strip);
     if ('number' in w) return { number: Number.isNaN(ofBits(w.number)) ? 'NaN' : w.number };
-    if ('bigint' in w) return w;
+    if ('bigint' in w || 'undefined' in w) return w;
     return { object: w.object.map(([k, x]) => [k, strip(x)]) };
   };
   return JSON.stringify(strip(v));

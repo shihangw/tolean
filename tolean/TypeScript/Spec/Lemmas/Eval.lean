@@ -17,14 +17,15 @@ variable {N : Type}
 section
 variable [JSNumber N]
 
-/-- `null == b` is `null === b`. `null` is loosely equal only to `null` and
-`undefined` (ECMA-262 §7.2.14), and the subset has no `undefined`. -/
-theorem looseEq_null_left (b : Val N) : looseEq .null b = strictEq .null b := by
-  cases b <;> rfl
+/-- `null == b` is `null === b` when `b` is not `undefined`. `null` is
+loosely equal only to `null` and `undefined` (ECMA-262 §7.2.14). -/
+theorem looseEq_null_left (b : Val N) (hb : b ≠ .undefined) : looseEq .null b = strictEq .null b := by
+  cases b <;> first | rfl | exact absurd rfl hb
 
-/-- `a == null` is `a === null`, for the same reason. -/
-theorem looseEq_null_right (a : Val N) : looseEq a .null = strictEq a .null := by
-  cases a <;> rfl
+/-- `a == null` is `a === null` when `a` is not `undefined`, for the same
+reason. -/
+theorem looseEq_null_right (a : Val N) (ha : a ≠ .undefined) : looseEq a .null = strictEq a .null := by
+  cases a <;> first | rfl | exact absurd rfl ha
 
 end
 
@@ -151,6 +152,25 @@ def encNull {α : Type} (enc : α → Val N) : Option α → Val N
 @[simp] theorem encNull_some {α : Type} (enc : α → Val N) (v : α) : encNull enc (some v) = enc v := rfl
 @[simp] theorem encNull_none {α : Type} (enc : α → Val N) : encNull enc none = .null := rfl
 
+/-- An optional value: `none` is `undefined`. -/
+def encUndef {α : Type} (enc : α → Val N) : Option α → Val N
+  | some v => enc v
+  | none => .undefined
+
+@[simp] theorem encUndef_some {α : Type} (enc : α → Val N) (v : α) : encUndef enc (some v) = enc v := rfl
+@[simp] theorem encUndef_none {α : Type} (enc : α → Val N) : encUndef enc none = .undefined := rfl
+
+/-- The entry of an optional field in an object: none for `none`, as an
+object literal that leaves the field out has no such key. -/
+def encField {α : Type} (key : String) (enc : α → Val N) : Option α → List (String × Val N)
+  | some v => [(key, enc v)]
+  | none => []
+
+@[simp] theorem encField_some {α : Type} (key : String) (enc : α → Val N) (v : α) :
+    encField key enc (some v) = [(key, enc v)] := rfl
+@[simp] theorem encField_none {α : Type} (key : String) (enc : α → Val N) :
+    encField key enc none = [] := rfl
+
 /-! ### Decoders
 
 A decoder reads a Lean value back out of a variable's value. It gives a
@@ -181,6 +201,27 @@ def decList {α : Type} (dec : Option (Val N) → α) : Option (Val N) → List 
 def decNull {α : Type} (dec : Option (Val N) → α) : Option (Val N) → Option α
   | some .null => none
   | o => some (dec o)
+
+/-- An optional value, or an optional field: a missing key and `undefined`
+are `none`. -/
+def decUndef {α : Type} (dec : Option (Val N) → α) : Option (Val N) → Option α
+  | none | some .undefined => none
+  | o => some (dec o)
+
+@[simp] theorem decUndef_none {α : Type} (dec : Option (Val N) → α) : decUndef dec none = none := rfl
+@[simp] theorem decUndef_undefined {α : Type} (dec : Option (Val N) → α) :
+    decUndef dec (some .undefined) = none := rfl
+
+@[simp] theorem decUndef_some {α : Type} (dec : Option (Val N) → α) (v : Val N) (h : v ≠ .undefined) :
+    decUndef dec (some v) = some (dec (some v)) := by
+  cases v <;> simp_all [decUndef]
+
+@[simp] theorem decUndef_encUndef {α : Type} (dec : Option (Val N) → α) (enc : α → Val N)
+    (h : ∀ x, dec (some (enc x)) = x) (hn : ∀ x, enc x ≠ .undefined) (o : Option α) :
+    decUndef dec (some (encUndef enc o)) = o := by
+  cases o with
+  | none => rfl
+  | some v => simp [decUndef_some dec (enc v) (hn v), h]
 
 @[simp] theorem decInt_int (i : Int) : decInt (some (Val.int (N := N) i)) = i := rfl
 @[simp] theorem decBool_bool (b : Bool) : decBool (some (Val.bool (N := N) b)) = b := rfl

@@ -323,14 +323,14 @@ def isNullVal : Val N → Bool
   | _ => false
 
 theorem out_isNone {a : IR.Expr} (h : IR.Expr.eval fs fuel ρ (.isNone a) = some v) :
-    ∃ w, IR.Expr.eval fs fuel ρ a = some w ∧ v = .bool (isNullVal w) := by
+    ∃ w, IR.Expr.eval fs fuel ρ a = some w ∧ w ≠ .undefined ∧ v = .bool (isNullVal w) := by
   simp only [IR.Expr.eval] at h
   cases hx : IR.Expr.eval fs fuel ρ a with
   | none => simp [hx] at h
   | some w => cases w <;> simp_all [isNullVal]
 
 theorem out_isSome {a : IR.Expr} (h : IR.Expr.eval fs fuel ρ (.isSome a) = some v) :
-    ∃ w, IR.Expr.eval fs fuel ρ a = some w ∧ v = .bool !(isNullVal w) := by
+    ∃ w, IR.Expr.eval fs fuel ρ a = some w ∧ w ≠ .undefined ∧ v = .bool !(isNullVal w) := by
   simp only [IR.Expr.eval] at h
   cases hx : IR.Expr.eval fs fuel ρ a with
   | none => simp [hx] at h
@@ -339,13 +339,14 @@ theorem out_isSome {a : IR.Expr} (h : IR.Expr.eval fs fuel ρ (.isSome a) = some
 theorem out_coalesce {a b : IR.Expr} {nullable : Bool}
     (h : IR.Expr.eval fs fuel ρ (.coalesce a b nullable) = some v) :
     ∃ w, IR.Expr.eval fs fuel ρ a = some w ∧
-      ((w = .null ∧ IR.Expr.eval fs fuel ρ b = some v) ∨ (isNullVal w = false ∧ v = w)) := by
+      (((w = .null ∨ w = .undefined) ∧ IR.Expr.eval fs fuel ρ b = some v) ∨
+        (isNullVal w = false ∧ w ≠ .undefined ∧ v = w)) := by
   simp only [IR.Expr.eval] at h
   cases hx : IR.Expr.eval fs fuel ρ a with
   | none => simp [hx] at h
   | some w =>
     refine ⟨w, rfl, ?_⟩
-    cases w <;> simp [hx] at h <;> simp [isNullVal, h]
+    cases w <;> simp [hx] at h <;> first | (subst h; simp [isNullVal]) | simp [isNullVal, h]
 
 end Inversion
 
@@ -506,11 +507,29 @@ theorem nullOp_strict {op : BinOp} {b : Bool} (h : nullOp? op = some b) : op.str
 
 /-- With `null` on one side, an operator that `nullOp?` names gives whether
 the other value is `null`, or the negation. -/
-theorem nullOp_binary {op : BinOp} {b : Bool} (h : nullOp? op = some b) (w : Val N) :
+theorem nullOp_binary {op : BinOp} {b : Bool} (h : nullOp? op = some b) (w : Val N) (hw : w ≠ .undefined) :
     Eval.binary op w .null = some (.bool (if b then isNullVal w else !isNullVal w)) ∧
       Eval.binary op .null w = some (.bool (if b then isNullVal w else !isNullVal w)) := by
   cases op <;> simp [nullOp?] at h <;> subst h <;> cases w <;>
-    simp +decide [Eval.binary, Eval.strictEq, Eval.looseEq, isNullVal]
+    simp_all +decide [Eval.binary, Eval.strictEq, Eval.looseEq, isNullVal]
+
+omit [JSNumber N] in
+theorem isUndefinedName_eq {e : Expr} (h : e.isUndefinedName = true) : ∃ s, e = .ident s "undefined" := by
+  unfold Expr.isUndefinedName at h
+  split at h
+  · exact ⟨_, rfl⟩
+  · simp at h
+
+/-- The global `undefined`, when no variable hides it. -/
+theorem eval_undefined {ρ : Eval.Env N} (s : Span) (h : ρ.lookup "undefined" = none) :
+    Eval.eval m fuel ρ (.ident s "undefined") = some .undefined := by
+  simp [Eval.eval, h]
+
+/-- `===` with `undefined` tells whether the value is `undefined`. -/
+theorem strictEq_undefined (w : Val N) :
+    Eval.strictEq w .undefined = some (w matches .undefined) ∧
+      Eval.strictEq .undefined w = some (w matches .undefined) := by
+  cases w <;> simp [Eval.strictEq]
 
 theorem isNull_eq_true {e : Expr} (h : e.isNull = true) : ∃ s, e = .null s := by
   cases e <;> simp [Expr.isNull] at h ⊢
@@ -534,8 +553,8 @@ theorem narrow_has (env : Translate.Env) (n : String) (t : Ty) (x : String) :
 theorem nullTestOf_eval {env : Translate.Env} {l : Expr} {name : String} {isNullTest : Bool}
     {value : Ty} (h : nullTestOf env l = some (name, isNullTest, value)) {ρ : Eval.Env N}
     (hs : Scoped m env ρ) :
-    ∃ w, ρ.lookup name = some w ∧
-      Eval.eval m fuel ρ l = some (.bool (if isNullTest then isNullVal w else !isNullVal w)) := by
+    ∃ w, ρ.lookup name = some w ∧ (w ≠ .undefined →
+      Eval.eval m fuel ρ l = some (.bool (if isNullTest then isNullVal w else !isNullVal w))) := by
   unfold nullTestOf at h
   rw [← eval_stripParens]
   generalize l.stripParens = e at h ⊢
@@ -557,21 +576,21 @@ theorem nullTestOf_eval {env : Translate.Env} {l : Expr} {name : String} {isNull
           have hhas : env.has n0 = true := by simp [Env.has, hloc]
           obtain ⟨w, hw⟩ := Option.isSome_iff_exists.mp (hs.some hhas)
           have hid : Eval.eval m fuel ρ (.ident s0 n0) = some w := by simp [Eval.eval, hw]
-          refine ⟨w, hw, ?_⟩
+          refine ⟨w, hw, fun hwu => ?_⟩
           split at hother
           · rename_i hbn
             obtain ⟨sb, rfl⟩ := isNull_eq_true hbn
             simp only [Option.some.injEq] at hother
             subst hother
             rw [hid]
-            simp [Eval.eval, (hb w).1]
+            simp [Eval.eval, (hb w hwu).1]
           · split at hother
             · rename_i _ ha
               obtain ⟨sa, rfl⟩ := isNull_eq_true ha
               simp only [Option.some.injEq] at hother
               subst hother
               rw [hid]
-              simp [Eval.eval, (hb w).2]
+              simp [Eval.eval, (hb w hwu).2]
             · simp at hother
         · simp at h
       · simp at h
@@ -633,7 +652,7 @@ theorem tagTestOf_eval {env : Translate.Env} {e : Expr} {t : TagTest}
           rw [eval_binary m fuel sp op l r ρ (by rcases hop' with rfl | rfl <;> rfl)]
           rcases tagSide_spec hside with ⟨s1, s2, s3, rfl, rfl⟩ | ⟨s1, s2, s3, rfl, rfl⟩ <;>
             rcases hop' with rfl | rfl <;>
-            simp +decide [Eval.eval, hw, hk, Eval.binary, Eval.strictEq]
+            simp +decide [Eval.eval, hw, Eval.getProp, hk, Eval.binary, Eval.strictEq]
           all_goals by_cases hkt : k = tg
           all_goals first
             | (simp_all; done)
@@ -772,6 +791,155 @@ theorem operator_sound {sp s : Span} {op : BinOp} {l r : Expr} {a b c : Code} {c
   exact applyOperator_sound m fs fuel h
     (fun w hw => hl w (by rwa [enumOperand_code] at hw))
     (fun w hw => hr w (by rwa [enumOperand_code] at hw)) hv
+
+/-- `translateBinary` is sound, when `translateExpr` is with one unit of fuel less. -/
+theorem translateBinary_sound {F : Nat}
+    (ihE : ∀ env exp e ctx c ctx', translateExpr F env exp e ctx = .ok c ctx' →
+      Sim (N := N) m fs fuel env e c.code) :
+    ∀ env sp op l r ctx c ctx', translateBinary (F + 1) env sp op l r ctx = .ok c ctx' →
+      Sim (N := N) m fs fuel env (.binary sp op l r) c.code := by
+  intro env sp op l r ctx c ctx' h
+  unfold translateBinary at h
+  simp only [ite_state] at h
+  -- The general path: both operands, then the operator.
+  have general : ∀ {s₀ : Ctx}, (translateExpr F env none l >>= fun a => do
+        let b ← translateExpr F env none r
+        translateOperator sp op r a b) s₀ = .ok c ctx' →
+      Sim (N := N) m fs fuel env (.binary sp op l r) c.code := by
+    intro s₀ h
+    simp only [bind_ok] at h
+    obtain ⟨a, s₁, ha, b, s₂, hb, ho⟩ := h
+    intro ρs ρo v hag hs hv
+    exact operator_sound m fs fuel ho (fun w hw => ihE _ _ _ _ _ _ ha ρs ρo w hag hs hw)
+      (fun w hw => ihE _ _ _ _ _ _ hb ρs ρo w hag hs hw) hv
+  split at h
+  · -- `a ?? b`: the value of `a`, unless it is `null`.
+    rename_i hco
+    obtain rfl : op = .coalesce := by cases op <;> first | rfl | exact absurd hco (by decide)
+    simp only [bind_ok] at h
+    obtain ⟨a, s₁, ha, h⟩ := h
+    cases hty : a.type with
+    | nullable value | optional value =>
+      simp only [hty, bind_ok] at h
+      obtain ⟨b, s₂, hb, h⟩ := h
+      have hcode : ∃ nb, c.code = .coalesce a.value b.value nb := by
+        repeat' split at h
+        all_goals simp at h
+        all_goals first | exact ⟨_, (congrArg Code.code h.1).symm⟩ | simp_all
+      obtain ⟨nb, hcode⟩ := hcode
+      intro ρs ρo v hag hs hv
+      rw [hcode] at hv
+      obtain ⟨w, hw, hcase⟩ := out_coalesce fs fuel hv
+      rw [eval_value] at hw
+      rw [Eval.eval, ihE _ _ _ _ _ _ ha ρs ρo w hag hs hw]
+      rcases hcase with ⟨hnu, hbv⟩ | ⟨hn, hu, hvw⟩
+      · rw [eval_value] at hbv
+        rcases hnu with rfl | rfl <;> exact ihE _ _ _ _ _ _ hb ρs ρo v hag hs hbv
+      · rw [hvw]
+        cases w <;> simp_all [isNullVal]
+    | _ => simp [hty] at h
+  split at h
+  · -- `x === undefined` and `x !== undefined`, on an optional value.
+    rename_i hund
+    simp only [Bool.and_eq_true, Bool.or_eq_true, Bool.not_eq_true'] at hund
+    obtain ⟨⟨hside, hnu⟩, hop⟩ := hund
+    replace hop : op = .strictEq ∨ op = .strictNe := by
+      revert hop; cases op <;> simp +decide
+    simp only [pure_bind, bind_ok] at h
+    obtain ⟨o, s₁, ho, h⟩ := h
+    cases hty : o.type <;> simp [hty] at h
+    obtain ⟨rfl, -⟩ := h
+    intro ρs ρo v hag hs hv
+    have hstrict : op.strict = true := by rcases hop with rfl | rfl <;> rfl
+    rw [eval_binary m fuel sp op l r ρs hstrict]
+    have hlook : ρs.lookup "undefined" = none := hs.none hnu
+    obtain ⟨w, hw, rfl⟩ : ∃ w, IR.Expr.eval fs fuel ρo o.code = some w ∧
+        v = .bool (if op = .strictEq then (w matches .undefined) else !(w matches .undefined)) := by
+      have he : (BinOp.strictEq == BinOp.strictEq) = true := rfl
+      have hn : (BinOp.strictNe == BinOp.strictEq) = false := rfl
+      cases hx : IR.Expr.eval fs fuel ρo o.code with
+      | none =>
+        rcases hop with rfl | rfl <;> simp [he, hn, IR.Expr.eval, IR.Expr.evalList, hx] at hv
+      | some w =>
+        refine ⟨w, rfl, ?_⟩
+        rcases hop with rfl | rfl <;>
+          simp [he, hn, IR.Expr.eval, IR.Expr.evalList, hx, IR.ExprExt.apply] at hv <;> (subst hv; cases w <;> rfl)
+    have hw' := ihE _ _ _ _ _ _ ho ρs ρo w hag hs hw
+    have hu := strictEq_undefined (N := N) w
+    by_cases hl : l.isUndefinedName = true
+    · obtain ⟨sl, rfl⟩ := isUndefinedName_eq hl
+      simp only [hl, ↓reduceIte] at hw'
+      rcases hop with rfl | rfl <;> simp [eval_undefined m fuel sl hlook, hw', Eval.binary, hu.2]
+    · have hr : r.isUndefinedName = true := by simpa [hl] using hside
+      obtain ⟨sr, rfl⟩ := isUndefinedName_eq hr
+      simp only [hl, Bool.false_eq_true, ↓reduceIte] at hw'
+      rcases hop with rfl | rfl <;> simp [eval_undefined m fuel sr hlook, hw', Eval.binary, hu.1]
+  split at h
+  · -- `x === null` and `x !== null`, or `==` and `!=`.
+    rename_i hnull
+    obtain ⟨isEq, hop⟩ := Option.isSome_iff_exists.mp ((Bool.and_eq_true _ _).mp hnull).1
+    have hside : l.isNull = true ∨ r.isNull = true := by
+      simpa using ((Bool.and_eq_true _ _).mp hnull).2
+    generalize hother : (if l.isNull = true then r else l) = other at h
+    split at h
+    · simp at h
+    · simp only [pure_bind, bind_ok] at h
+      obtain ⟨o, s₁, ho, h⟩ := h
+      cases hty : o.type <;> simp [hty] at h
+      obtain ⟨rfl, -⟩ := h
+      subst hother
+      intro ρs ρo v hag hs hv
+      have key := fun w hw => ihE _ _ _ _ _ _ ho ρs ρo w hag hs hw
+      rw [eval_binary m fuel sp op l r ρs (nullOp_strict hop)]
+      have hb := nullOp_binary (N := N) hop
+      obtain ⟨w, hw, hu, rfl⟩ : ∃ w, IR.Expr.eval fs fuel ρo o.code = some w ∧ w ≠ .undefined ∧
+          v = .bool (if isEq then isNullVal w else !isNullVal w) := by
+        rw [hop] at hv
+        cases isEq <;> simp at hv
+        · obtain ⟨w, hw, hu, rfl⟩ := out_isSome fs fuel hv
+          exact ⟨w, hw, hu, by simp⟩
+        · obtain ⟨w, hw, hu, rfl⟩ := out_isNone fs fuel hv
+          exact ⟨w, hw, hu, by simp⟩
+      have hw' := key w hw
+      by_cases hl : l.isNull = true
+      · obtain ⟨sl, rfl⟩ := isNull_eq_true hl
+        simp [Expr.isNull] at hw'
+        simp [hw', Eval.eval, (hb w hu).2]
+      · have hr : r.isNull = true := by simpa [hl] using hside
+        obtain ⟨sr, rfl⟩ := isNull_eq_true hr
+        simp [hl] at hw'
+        simp [hw', Eval.eval, (hb w hu).1]
+  · cases hn : nullTestOf env l with
+    | none =>
+      simp only [hn, pure_bind] at h
+      exact general h
+    | some t =>
+      obtain ⟨name, isNullTest, value⟩ := t
+      simp only [hn, pure_bind] at h
+      split at h
+      · -- `x === null || e` and `x !== null && e`: `e` sees `x` narrowed.
+        rename_i hcond
+        simp only [bind_ok, ite_state] at h
+        obtain ⟨ws, s₁, hws, h⟩ := h
+        split at h
+        · simp at h
+          obtain ⟨rfl, -⟩ := h
+          intro ρs ρo v hag hs hv
+          obtain ⟨w, hw, hl⟩ := nullTestOf_eval m fuel hn hs
+          have hso : ρo.lookup name = some w := by rw [← hag]; exact hw
+          by_cases hu : w = .undefined
+          · subst hu; simp [IR.Expr.eval, hso] at hv
+          replace hl := hl hu
+          have hs' : Scoped m (env.narrow name value) ρs :=
+            ⟨fun x => by rw [narrow_has]; exact hs.1 x, hs.2⟩
+          have hr := fun u hu => ihE _ _ _ _ _ _ hws ρs ρo u hag hs' hu
+          have hcases : (op = .or ∧ isNullTest = true) ∨ (op = .and ∧ isNullTest = false) := by
+            revert hcond; cases op <;> cases isNullTest <;> simp +decide
+          rcases hcases with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ <;> rw [Eval.eval, hl] <;>
+            cases w <;> simp +decide [IR.Expr.eval, hso, isNullVal, Val.truthy, eval_value] at hv ⊢
+          all_goals first | exact hr v hv | (subst hv; rfl) | (subst hv; simp +decide)
+        · simp at h
+      · exact general h
 
 theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
     (∀ env exp e ctx c ctx', translateExpr F env exp e ctx = .ok c ctx' →
@@ -1156,108 +1324,6 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
                   cases Eval.evalProps m fuel ρs rest <;> rfl
                 · simp at hg
             | _ => simp at hg
-    · intro env sp op l r ctx c ctx' h
-      unfold translateBinary at h
-      simp only [ite_state] at h
-      -- The general path: both operands, then the operator.
-      have general : ∀ {s₀ : Ctx}, (translateExpr F env none l >>= fun a => do
-            let b ← translateExpr F env none r
-            translateOperator sp op r a b) s₀ = .ok c ctx' →
-          Sim (N := N) m fs fuel env (.binary sp op l r) c.code := by
-        intro s₀ h
-        simp only [bind_ok] at h
-        obtain ⟨a, s₁, ha, b, s₂, hb, ho⟩ := h
-        intro ρs ρo v hag hs hv
-        exact operator_sound m fs fuel ho (fun w hw => ihE _ _ _ _ _ _ ha ρs ρo w hag hs hw)
-          (fun w hw => ihE _ _ _ _ _ _ hb ρs ρo w hag hs hw) hv
-      split at h
-      · -- `a ?? b`: the value of `a`, unless it is `null`.
-        rename_i hco
-        obtain rfl : op = .coalesce := by cases op <;> first | rfl | exact absurd hco (by decide)
-        simp only [bind_ok] at h
-        obtain ⟨a, s₁, ha, h⟩ := h
-        cases hty : a.type with
-        | nullable value =>
-          simp only [hty, bind_ok] at h
-          obtain ⟨b, s₂, hb, h⟩ := h
-          have hcode : ∃ nb, c.code = .coalesce a.value b.value nb := by
-            repeat' split at h
-            all_goals simp at h
-            all_goals first | exact ⟨_, (congrArg Code.code h.1).symm⟩ | simp_all
-          obtain ⟨nb, hcode⟩ := hcode
-          intro ρs ρo v hag hs hv
-          rw [hcode] at hv
-          obtain ⟨w, hw, hcase⟩ := out_coalesce fs fuel hv
-          rw [eval_value] at hw
-          rw [Eval.eval, ihE _ _ _ _ _ _ ha ρs ρo w hag hs hw]
-          rcases hcase with ⟨rfl, hbv⟩ | ⟨hn, hvw⟩
-          · rw [eval_value] at hbv
-            exact ihE _ _ _ _ _ _ hb ρs ρo v hag hs hbv
-          · rw [hvw]
-            cases w <;> simp_all [isNullVal]
-        | _ => simp [hty] at h
-      split at h
-      · -- `x === null` and `x !== null`, or `==` and `!=`.
-        rename_i hnull
-        obtain ⟨isEq, hop⟩ := Option.isSome_iff_exists.mp ((Bool.and_eq_true _ _).mp hnull).1
-        have hside : l.isNull = true ∨ r.isNull = true := by
-          simpa using ((Bool.and_eq_true _ _).mp hnull).2
-        generalize hother : (if l.isNull = true then r else l) = other at h
-        split at h
-        · simp at h
-        · simp only [pure_bind, bind_ok] at h
-          obtain ⟨o, s₁, ho, h⟩ := h
-          cases hty : o.type <;> simp [hty] at h
-          obtain ⟨rfl, -⟩ := h
-          subst hother
-          intro ρs ρo v hag hs hv
-          have key := fun w hw => ihE _ _ _ _ _ _ ho ρs ρo w hag hs hw
-          rw [eval_binary m fuel sp op l r ρs (nullOp_strict hop)]
-          have hb := nullOp_binary (N := N) hop
-          obtain ⟨w, hw, rfl⟩ : ∃ w, IR.Expr.eval fs fuel ρo o.code = some w ∧
-              v = .bool (if isEq then isNullVal w else !isNullVal w) := by
-            rw [hop] at hv
-            cases isEq <;> simp at hv
-            · obtain ⟨w, hw, rfl⟩ := out_isSome fs fuel hv
-              exact ⟨w, hw, by simp⟩
-            · obtain ⟨w, hw, rfl⟩ := out_isNone fs fuel hv
-              exact ⟨w, hw, by simp⟩
-          have hw' := key w hw
-          by_cases hl : l.isNull = true
-          · obtain ⟨sl, rfl⟩ := isNull_eq_true hl
-            simp [Expr.isNull] at hw'
-            simp [hw', Eval.eval, (hb w).2]
-          · have hr : r.isNull = true := by simpa [hl] using hside
-            obtain ⟨sr, rfl⟩ := isNull_eq_true hr
-            simp [hl] at hw'
-            simp [hw', Eval.eval, (hb w).1]
-      · cases hn : nullTestOf env l with
-        | none =>
-          simp only [hn, pure_bind] at h
-          exact general h
-        | some t =>
-          obtain ⟨name, isNullTest, value⟩ := t
-          simp only [hn, pure_bind] at h
-          split at h
-          · -- `x === null || e` and `x !== null && e`: `e` sees `x` narrowed.
-            rename_i hcond
-            simp only [bind_ok, ite_state] at h
-            obtain ⟨ws, s₁, hws, h⟩ := h
-            split at h
-            · simp at h
-              obtain ⟨rfl, -⟩ := h
-              intro ρs ρo v hag hs hv
-              obtain ⟨w, hw, hl⟩ := nullTestOf_eval m fuel hn hs
-              have hso : ρo.lookup name = some w := by rw [← hag]; exact hw
-              have hs' : Scoped m (env.narrow name value) ρs :=
-                ⟨fun x => by rw [narrow_has]; exact hs.1 x, hs.2⟩
-              have hr := fun u hu => ihE _ _ _ _ _ _ hws ρs ρo u hag hs' hu
-              have hcases : (op = .or ∧ isNullTest = true) ∨ (op = .and ∧ isNullTest = false) := by
-                revert hcond; cases op <;> cases isNullTest <;> simp +decide
-              rcases hcases with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ <;> rw [Eval.eval, hl] <;>
-                cases w <;> simp +decide [IR.Expr.eval, hso, isNullVal, Val.truthy, eval_value] at hv ⊢
-              all_goals first | exact hr v hv | (subst hv; rfl) | (subst hv; simp +decide)
-            · simp at h
-          · exact general h
+    · exact translateBinary_sound m fs fuel ihE
 
 end tolean.TypeScript.Proof

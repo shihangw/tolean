@@ -53,6 +53,7 @@ partial def toJson : Val Float → Json
   | .bool b => Json.bool b
   | .str s => Json.str s
   | .null => Json.null
+  | .undefined => Json.mkObj [("undefined", Json.bool true)]
   | .list xs => Json.arr (xs.map toJson).toArray
   | .obj fs => Json.mkObj [("object", Json.arr (fs.map fun (k, v) => Json.arr #[Json.str k, toJson v]).toArray)]
 
@@ -63,6 +64,7 @@ partial def ofJson (j : Json) : Except String (Val Float) :=
   | .null => pure .null
   | .arr xs => (.list ∘ Array.toList) <$> xs.mapM ofJson
   | j => do
+    if let .ok true := j.getObjValAs? Bool "undefined" then return .undefined
     if let .ok (s : String) := j.getObjValAs? String "bigint" then
       let some i := s.toInt? | throw s!"not a bigint: {s}"
       return .int i

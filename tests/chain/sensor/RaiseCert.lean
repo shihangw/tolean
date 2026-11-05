@@ -83,7 +83,7 @@ below then trust neither the translator nor the printer. -/
 theorem program_translated : tolean.TypeScript.Proof.translatesTo program start decls = true := by
   decide +kernel
 
-def encodeGauge {N : Type} [tolean.TypeScript.JSNumber N] (x : sensor.Raise.Gauge) : Val N := Val.obj [("level", Val.int x.level), ("max", Val.int x.max)]
+def encodeGauge {N : Type} [tolean.TypeScript.JSNumber N] (x : sensor.Raise.Gauge) : Val N := Val.obj ([("level", Val.int x.level), ("max", Val.int x.max)])
 
 def decodeGauge {N : Type} [tolean.TypeScript.JSNumber N] : Option (Val N) → sensor.Raise.Gauge
   | some (.obj fs) => { level := decInt (fs.lookup "level"), max := decInt (fs.lookup "max") }
@@ -91,6 +91,9 @@ def decodeGauge {N : Type} [tolean.TypeScript.JSNumber N] : Option (Val N) → s
 
 @[simp] theorem decodeGauge_encodeGauge {N : Type} [tolean.TypeScript.JSNumber N] (x : sensor.Raise.Gauge) : decodeGauge (some (encodeGauge (N := N) x)) = x := by
   cases x; simp [decodeGauge, encodeGauge, List.lookup, encList]
+
+@[simp] theorem encodeGauge_ne_undefined {N : Type} [tolean.TypeScript.JSNumber N] (x : sensor.Raise.Gauge) : encodeGauge (N := N) x ≠ Val.undefined := by
+  simp [encodeGauge]
 
 @[simp] theorem decList_decodeGauge {N : Type} [tolean.TypeScript.JSNumber N] (xs : List sensor.Raise.Gauge) : decList decodeGauge (some (Val.list (List.map (encodeGauge (N := N)) xs))) = xs :=
   decList_list _ _ decodeGauge_encodeGauge xs

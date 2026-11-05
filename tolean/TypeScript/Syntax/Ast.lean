@@ -161,6 +161,11 @@ def Expr.isNull : Expr → Bool
   | .null _ => true
   | _ => false
 
+/-- The name `undefined`, not in parentheses. -/
+def Expr.isUndefinedName : Expr → Bool
+  | .ident _ "undefined" => true
+  | _ => false
+
 /-- A name, not in parentheses. -/
 def Expr.isIdent : Expr → Bool
   | .ident .. => true

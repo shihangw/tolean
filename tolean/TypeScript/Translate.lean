@@ -38,6 +38,9 @@ inductive Ty where
   | bigint | number | boolean | string | null
   /-- `T | null`, where `T` is not `null` and not nullable. -/
   | nullable (value : Ty)
+  /-- The value of an optional field `f?: T`: a `T`, or `undefined` when the
+  object has no such field. `T` is neither nullable nor optional. -/
+  | optional (value : Ty)
   | array (elem : Ty)
   /-- An interface of the program: one that the file declares, or one that it
   imports. -/
@@ -73,6 +76,11 @@ def Ty.join (a b : Ty) : Option Ty :=
     | .null, t | t, .null => some (.nullable t)
     | _, _ => none
 
+/-- The type of the value that an optional field holds when it is set. -/
+def Ty.unoptional : Ty → Ty
+  | .optional t => t
+  | t => t
+
 /-- `T | null`. -/
 def Ty.isNullable : Ty → Bool
   | .nullable _ => true
@@ -96,6 +104,7 @@ def Ty.lean : Ty → IR.Ty
   | .string => .string
   | .null => .null
   | .nullable t => .option t.lean
+  | .optional t => .optional t.lean
   | .array t => .list t.lean
   | .struct ref => .struct ref
   | .enum ref => .enum ref
@@ -871,15 +880,19 @@ def translateObject (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (
         | .keyValue ps _ _ => reject ps "object literal fields must be plain name: value pairs"
       let fieldType ← orReject (info.fields.lookup key) span s!"'{key}' is not a field of {structName}"
       if seen.contains key then reject span s!"'{key}' is set twice"
-      let v ← translateExpr fuel env (some fieldType) value
-      unless v.type.assignableTo fieldType do reject span s!"'{key}' does not have the field's type"
+      -- An optional field holds a `T` when the literal sets it. A key that
+      -- holds `undefined` is not the same JS value as no key, and Lean has
+      -- one `none` for both, so the literal must leave the field out instead.
+      let v ← translateExpr fuel env (some fieldType.unoptional) value
+      unless v.type.assignableTo fieldType.unoptional do reject span s!"'{key}' does not have the field's type"
       pure (seen ++ [key], parts ++ [(key, v.value)])
-  for (field, _) in info.fields do
-    unless seen.contains field do reject s s!"the object lacks the field '{field}'"
+  for (field, type) in info.fields do
+    unless seen.contains field || type matches .optional _ do
+      reject s s!"the object lacks the field '{field}'"
   -- A JS object keeps its keys in the order the literal writes them, and the
   -- caller can see that order, through `Object.keys` or `JSON.stringify`. A
   -- Lean structure has no order, so the literal must use the declared one.
-  let declared := info.fields.map (·.1)
+  let declared := (info.fields.map (·.1)).filter seen.contains
   unless seen == declared do
     reject s s!"write the fields in the order that {structName} declares them: {", ".intercalate declared}"
   return ⟨.struct parts ref, false, .struct ref⟩
@@ -890,13 +903,23 @@ def translateBinary (fuel : Nat) (env : Env) (s : Span) (op : BinOp) (l r : Expr
   -- `null`, and so does the evaluator of the output.
   if op == .coalesce then
     let a ← translateExpr fuel env none l
-    let .nullable value := a.type
+    let some value := (match a.type with
+        | .nullable v | .optional v => some v
+        | _ => none : Option Ty)
       | reject l.span "the left side of '??' is never null here, so '??' does nothing; remove it"
     let b ← translateExpr fuel env (some value) r
     if b.type.assignableTo value then return ⟨.coalesce a.value b.value false, false, value⟩
     unless b.type.assignableTo a.type do
       reject r.span "the right side of '??' must have the type of the left side"
     return ⟨.coalesce a.value b.value true, false, a.type⟩
+  -- `x === undefined` and `x !== undefined`, on an optional value: a test on
+  -- a Lean `Option`, unless a local hides `undefined`. Other uses of
+  -- `undefined` reach the general path, which refuses the name.
+  if (l.isUndefinedName || r.isUndefinedName) && !env.has "undefined" && (op == .strictEq || op == .strictNe) then
+    let o ← translateExpr fuel env none (if l.isUndefinedName then r else l)
+    match o.type with
+    | .optional _ => return ⟨if op == .strictEq then .isUndefined o.code else .isDefined o.code, false, .boolean⟩
+    | _ => reject s "only the value of an optional field can be undefined here"
   -- `x === null` and `x !== null`, or `==` and `!=`: a test on a Lean `Option`.
   if (nullOp? op).isSome && (l.isNull || r.isNull) then
     let other := if l.isNull then r else l
@@ -910,7 +933,9 @@ def translateBinary (fuel : Nat) (env : Env) (s : Span) (op : BinOp) (l r : Expr
       -- The type fixes the answer, as after `if (x === null) return …`. The
       -- test then does nothing, and a constant answer would drop the operand,
       -- which the interpreter still evaluates. So the subset refuses it.
-      reject s "the type fixes the answer of this test with null, so it does nothing; remove it"
+      reject s (if o.type matches .optional _ then
+          "the value of an optional field is undefined when the object lacks it, not null; compare it with === undefined"
+        else "the type fixes the answer of this test with null, so it does nothing; remove it")
   -- `x === null || e` and `x !== null && e`: TypeScript narrows `x` in `e`,
   -- so Lean matches on `x` and binds it to the value inside.
   if let some (name, isNullTest, value) := nullTestOf env l then
@@ -1139,14 +1164,23 @@ def translateInterface (s : Span) (exported : Bool) (name : String) (fields : Li
   let name ← checkName s name
   declareTopLevel s name
   let infos ← isolated <| fields.foldlM (init := ([] : List (String × Ty))) fun infos f => do
-    unless f.readonly && !f.optional do
-      reject f.span "interface fields must be readonly, required and typed"
+    unless f.readonly do
+      reject f.span "interface fields must be readonly and typed"
     let field ← checkName f.span f.name
     if infos.any (·.1 == field) then reject f.span s!"'{field}' is declared twice"
     -- A field of one string literal type is a tag, which a union reads.
     let type ← match f.type with
-      | .literal _ (.string v) => pure (Ty.literal v)
+      | .literal _ (.string v) =>
+        if f.optional then reject f.span "a tag field may not be optional" else pure (Ty.literal v)
       | t => translateType t
+    -- `f?: T`: an object may leave the field out, and a read of it then gives
+    -- `undefined`. An object without the field would inherit a property of
+    -- `Object.prototype` of the same name.
+    let type ← if !f.optional then pure type
+      else if type.isNullable then reject f.span "an optional field may not also be nullable"
+      else if Eval.objectPrototypeNames.contains field then
+        reject f.span s!"an optional field may not be named '{field}', because an object without it has Object.prototype.{field}"
+      else pure (Ty.optional type)
     pure (infos ++ [(field, type)])
   modify fun c => { c with structs := c.structs ++ [{ file := c.file, name, exported, fields := infos }] }
   return .struct name (infos.map fun (field, type) => (field, type.lean))
@@ -1412,7 +1446,7 @@ def translateDecls (m : Module) : TM (List IR.Decl) := do
 tagged unions. -/
 def Ty.declRefs : Ty → List DeclRef
   | .struct r | .enum r | .tagged r _ => [r]
-  | .nullable t | .array t => t.declRefs
+  | .nullable t | .optional t | .array t => t.declRefs
   | _ => []
 
 /-- The file's own types that a file importing from it needs: the exported

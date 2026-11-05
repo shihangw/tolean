@@ -278,7 +278,7 @@ the file, the line and the reason. It never approximates.
 | `NaN`, `Infinity`, `-Infinity` | `JSNumber.nan`, `posInf`, `negInf` |
 | `T \| null`, `null` | `Option T`, `none` |
 | `x === null`, `x !== null` | `x.isNone`, `x.isSome` |
-| `x == null`, `x != null` | the same as `===` and `!==`, because no value of the subset is `undefined` |
+| `x == null`, `x != null` | the same as `===` and `!==`, because a value of `T \| null` is never `undefined` |
 | `x === null \|\| e`, `x !== null && e` | `match x with \| none => … \| some x => e` (TypeScript's narrowing) |
 | `a ?? b` on `T \| null`, where `b` is a `T` | `Option.getD a b` |
 | `a ?? b` on `T \| null`, where `b` may be `null` | `Option.or a b` |
@@ -286,6 +286,7 @@ the file, the line and the reason. It never approximates.
 | `string` | `String` |
 | `ReadonlyArray<T>`, `Array<T>`, `T[]` | `List T` |
 | `interface` with `readonly`, required fields | `structure` |
+| `readonly f?: T`, an optional field | `f : Option T := none`. An object literal may leave the field out, or set it to a `T`. A read of a field that the object lacks gives `undefined`, which is `none`. `s.f ?? d` is `Option.getD s.f d`, and `s.f === undefined` is `s.f.isNone`. |
 | `type T = U`, declared before its uses | `abbrev T := U`. The output writes `U` itself wherever the source names `T`, so the `abbrev` is only for claims. |
 | `type T = 'a' \| 'b'`, a union of string literals | `inductive T` with the constructors `a` and `b`, which derives `DecidableEq`. A literal becomes `T.a` where the context expects a `T`, and `t === 'a'` becomes `t = T.a`. The output writes every constructor in `«»`, such as `T.«open»`, because Lean reads some strings as keywords or modifiers. A claim can still write `T.a`. |
 | `type T = A \| B`, a union of interfaces with a tag field such as `kind: 'circle'` | `inductive T` with a constructor for each member, which holds the member's structure. The structure leaves the tag field out, because its value never changes. An object literal where a `T` is expected becomes the constructor of its tag. |
@@ -352,8 +353,17 @@ Tolean rejects these, among others:
   `JSON.stringify`. A Lean structure has no order, so the literal must use
   the declared one. Code in the subset can only read a field by name, so
   inside the subset the order never changes a result.
+- An optional field that is also nullable, a tag field that is optional, and
+  an optional field with the name of a property of `Object.prototype`, such
+  as `toString`, because an object without the field has that property.
+  Tolean also refuses `undefined` as a value, so a literal must leave an
+  optional field out rather than set it to `undefined`, or to the value of
+  another optional field. JS tells an object without the key from one whose
+  key holds `undefined`, and Lean has one `none` for both. It also refuses
+  `== null` and `=== null` on an optional value, optional parameters, and a
+  test of an optional value that narrows it.
 - Recursion, closures and arrow functions, classes, `async`, exceptions, and
-  optional or mutable interface fields.
+  mutable interface fields.
 - Imports other than the named imports of [Imports](#imports).
 
 The files in `tests/typescript/corpus/translate/reject/` state in executable
