@@ -322,3 +322,8 @@ variables and in maps.
   reads an import as a URL.
 - Should a comparator that is not one of the two shapes be accepted when the
   project supplies a proof that it is consistent?
+- How should the spec model `const`? Its environment holds values only, so
+  `x = e`, `x += e` and `x ??= e` on a `const` write the new value where Node
+  throws a `TypeError`. The translator refuses each of them, so no certified
+  program meets the gap. Closing it means a binding kind in `Eval.Env`, and
+  `Agree` and every statement proof would then compare kinds too.
