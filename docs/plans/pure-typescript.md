@@ -28,7 +28,7 @@ row, and the corpus files for each row certify.
 | 2 | Literal unions of strings, `type T = 'a' \| 'b'`, as an `inductive` | [#47](https://github.com/shihangw/tolean/pull/47) |
 | 2 | Tagged unions of interfaces, narrowed by `if (x.kind === 'a')` | [#51](https://github.com/shihangw/tolean/pull/51) |
 | 2 | Optional fields `f?: T` of interfaces, read with `??` and `=== undefined` | [#55](https://github.com/shihangw/tolean/pull/55) |
-| 2 | `x ??= y` on a `let` local of type `T \| null` | [#57](https://github.com/shihangw/tolean/pull/57) |
+| 2 | `x ??= y` on a `let` local of type `T \| null` | [#58](https://github.com/shihangw/tolean/pull/58) |
 
 ## The rules for every addition
 
