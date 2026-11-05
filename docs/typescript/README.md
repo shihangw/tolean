@@ -372,6 +372,12 @@ Tolean rejects these, among others:
   whole chain and gives `undefined`, so `a?.b.c` is not `(a?.b).c`. Tolean
   also refuses `?.` where the value cannot be `null` or `undefined`, `?.` on
   a nullable field, and `a?.[i]` and `f?.()`.
+- A local or a function named `undefined`, which would hide the global the
+  subset reads. Tolean also refuses a value that may be either `undefined` or
+  `null`, such as `b ? s.f : null`, because the output has one `none` for
+  both.
+- A `__proto__: v` key in an object literal. It sets the object's prototype,
+  not a field.
 - Recursion, closures and arrow functions, classes, `async`, exceptions, and
   mutable interface fields.
 - Imports other than the named imports of [Imports](#imports).

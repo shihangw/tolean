@@ -383,7 +383,11 @@ def evalProps (m : Scope) (fuel : Nat) (env : Env N) :
   -- (`PropertyDefinitionEvaluation`, ECMA-262 §13.2.5.5).
   | .shorthand s name :: ps => do
     return (name, ← eval m fuel env (.ident s name)) :: (← evalProps m fuel env ps)
+  -- `{ __proto__: v }` sets the prototype of the object instead of a key
+  -- (ECMA-262 §13.2.5.5), and the model has no prototypes but
+  -- `Object.prototype`.
   | .keyValue _ (.ident key) v :: ps => do
+    if key == "__proto__" then none
     return (key, ← eval m fuel env v) :: (← evalProps m fuel env ps)
   | _ :: _ => none
 termination_by ps => (fuel, sizeOf ps, 0)
