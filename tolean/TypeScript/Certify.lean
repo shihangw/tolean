@@ -97,6 +97,14 @@ def decoderOf (r : Refs) : IR.Ty → Option String
   | .number => some (r.eval "decNum")
   | .null | .tag _ => none
 
+/-- The constructor of `Val` for a value of the primitive type `t`. -/
+def valPattern : IR.Ty → Option String
+  | .int => some ".int"
+  | .bool => some ".bool"
+  | .string => some ".str"
+  | .number => some ".num"
+  | _ => none
+
 /-- The statements of a function body, with nested ones. -/
 partial def stmtsOf : Stmt → List Stmt
   | .block _ body => .block default body :: body.flatMap stmtsOf
@@ -195,7 +203,7 @@ def splitSteps (decls : List IR.Decl) : Nat → String → IR.Ty → List String
     match members with
     | some members =>
       s!"rcases {name} with {" | ".intercalate (members.map fun _ => name)}" ::
-        members.flatMap fun (_, member) => splitSteps decls fuel name (.struct member)
+        members.flatMap fun (_, member) => splitSteps decls fuel name member
     | none => []
   | _ + 1, _, _ => []
 
@@ -313,11 +321,43 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         s!"@[simp] theorem decList_decode{name} {generic} (xs : List {structTy name}) : decList decode{name} (some (Val.list (List.map (encode{name} ({nv} := {nv})) xs))) = xs :=\n" ++
         s!"  decList_list _ _ decode{name}_encode{name} xs"
       lemmaNames := lemmaNames ++ #[r.cert s!"encode{name}", r.cert s!"decode{name}"]
-    -- A tagged union: each member is the object of its structure, which
-    -- holds the tag, and the decoder reads the tag to pick the member.
-    if let .tagged name field members := d then
+    -- A union of primitive types: each member is its value, and the decoder
+    -- reads the kind of the value to pick the member.
+    if let .tagged name none members := d then
       let ty := (IR.Ty.tagged ⟨"", name⟩ : IR.Ty).print names
       let ctor (t : String) : String := s!"{(names.ref ⟨"", name⟩).1}.{IR.memberName t}"
+      let some (firstTag, firstTy) := members.head? | throw s!"{file}: the union {name} has no members"
+      let some firstDec := decoderOf r firstTy | throw s!"{file}: cannot decode the union {name}"
+      let codecs ← members.mapM fun (t, mt) => do
+        let (some enc, some pat) := (encoderOf r mt, valPattern mt)
+          | throw s!"{file}: cannot encode the member {t} of {name}"
+        return (t, enc, pat)
+      encs := encs.push <|
+        s!"def encode{name} {generic} : {ty} → Val {nv}\n" ++
+        "\n".intercalate (codecs.map fun (t, enc, _) => s!"  | {ctor t} v => {enc} v")
+      encs := encs.push <|
+        s!"def decode{name} {generic} : Option (Val {nv}) → {ty}\n" ++
+        String.join (codecs.map fun (t, _, pat) => s!"  | some ({pat} v) => {ctor t} v\n") ++
+        s!"  | _ => {ctor firstTag} ({firstDec} (none : Option (Val {nv})))"
+      encs := encs.push <|
+        s!"@[simp] theorem decode{name}_encode{name} {generic} (x : {ty}) : decode{name} (some (encode{name} ({nv} := {nv}) x)) = x := by\n" ++
+        s!"  cases x <;> rfl"
+      encs := encs.push <|
+        s!"@[simp] theorem encode{name}_ne_null {generic} (x : {ty}) : encode{name} ({nv} := {nv}) x ≠ Val.null := by\n" ++
+        s!"  cases x <;> simp [encode{name}]"
+      encs := encs.push <|
+        s!"@[simp] theorem decList_decode{name} {generic} (xs : List {ty}) : decList decode{name} (some (Val.list (List.map (encode{name} ({nv} := {nv})) xs))) = xs :=\n" ++
+        s!"  decList_list _ _ decode{name}_encode{name} xs"
+      lemmaNames := lemmaNames ++ #[r.cert s!"encode{name}", r.cert s!"decode{name}"]
+    -- A tagged union of structures: each member is the object of its
+    -- structure, which holds the tag, and the decoder reads the tag to pick
+    -- the member.
+    if let .tagged name (some field) members := d then
+      let ty := (IR.Ty.tagged ⟨"", name⟩ : IR.Ty).print names
+      let ctor (t : String) : String := s!"{(names.ref ⟨"", name⟩).1}.{IR.memberName t}"
+      let members := members.filterMap fun
+        | (t, .struct m) => some (t, m)
+        | _ => none
       let some (firstTag, firstRef) := members.head? | throw s!"{file}: the union {name} has no members"
       encs := encs.push <|
         s!"def encode{name} {generic} : {ty} → Val {nv}\n" ++

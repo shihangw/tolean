@@ -74,6 +74,16 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   | .numberTest test, [.num a] => some (.bool (test.apply a))
   | _, _ => none
 
+/-- The tag of `v`, a value of a tagged union: the string in its tag field
+`field`, or the result of `typeof v` when the union has no tag field. -/
+def tagOf : Option String → Val N → Option String
+  | some field, .obj fields =>
+    match fields.lookup field with
+    | some (.str k) => some k
+    | _ => none
+  | some _, _ => none
+  | none, v => some v.typeOf
+
 /-- The bindings that `let (x, y) := …` makes: each of `names`, with its value
 in `inner`. A name that is bound already gets the new value in its place,
 and a new name goes in front. So every lookup gives what Lean's shadowing
@@ -98,7 +108,8 @@ def Expr.eval (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
   | .enumCase _ member => some (.str member)
   -- A tag field is its string in the object.
   | .tagValue value => some (.str value)
-  -- A member of a tagged union is the object of its structure.
+  -- A member of a tagged union is the value of the member: the object of
+  -- its structure, or the primitive value itself.
   | .inject _ _ e => Expr.eval fs fuel ρ e
   | .field obj _ name => do
     match ← Expr.eval fs fuel ρ obj with
@@ -207,10 +218,10 @@ def Body.exec (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
     match ← ρ.lookup name with
     | .null => Body.exec fs fuel ρ whenNull
     | _ => Body.exec fs fuel ρ whenValue
-  -- The tag is a field of the object, so the evaluator reads it, as JS does.
+  -- The tag is a field of the object, or the type of the value, so the
+  -- evaluator reads it, as JS does.
   | .matchTag name _ field tag _ whenTag whenOther => do
-    let .obj fields ← ρ.lookup name | none
-    let .str k ← fields.lookup field | none
+    let k ← tagOf field (← ρ.lookup name)
     if k == tag then Body.exec fs fuel ρ whenTag else Body.exec fs fuel ρ whenOther
   | .letState names branch rest => do
     match ← Body.exec fs fuel ρ branch with

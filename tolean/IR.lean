@@ -44,7 +44,9 @@ inductive Ty (T : Type) where
   such as the type of the TypeScript literal union `type T = 'a' | 'b'`. -/
   | enum (ref : DeclRef)
   /-- An inductive type with one constructor for each member of a tagged
-  union of structures, such as TypeScript's `type T = A | B`. -/
+  union, each of which holds a value of the member: a union of structures,
+  such as TypeScript's `type T = A | B`, or a union of primitive types, such
+  as `type T = string | bigint`. -/
   | tagged (ref : DeclRef)
   /-- The type of a tag field, such as `kind: 'circle'`. A structure leaves
   the field out, because its value never changes. -/
@@ -109,7 +111,8 @@ inductive Expr (T E : Type) where
   'circle'`. The printer leaves it out, because the structure has no such
   field, but the source's object has it. -/
   | tagValue (value : String)
-  /-- `(T.a e)`: the member `a` of a tagged union `T`, from the structure `e`. -/
+  /-- `(T.a e)`: the member `a` of a tagged union `T`, from the value `e` of
+  that member. -/
   | inject (ref : DeclRef) (tag : String) (e : Expr T E)
   /-- `(Option.getD a b)`, or `(Option.or a b)` when `nullable` is true: the
   value of `a ?? b`. `b` is a `T` in the first, and an `Option T` in the
@@ -170,12 +173,13 @@ inductive Body (T E : Type) where
   | ite (c : Expr T E) (whenTrue whenFalse : Body T E)
   /-- `match x with | none => … | some x => …`. -/
   | matchNull (name : String) (whenNull whenValue : Body T E)
-  /-- `match x with | T.a x => … | T.b x => …`: a test of the tag field
-  `field` of `x`, a value of the tagged union `T`. The first branch is for the
-  tag `tag`. The second names the member `other` when it is the only one
-  left, or else matches every other member. -/
-  | matchTag (name : String) (ref : DeclRef) (field tag : String) (other : Option String)
-      (whenTag whenOther : Body T E)
+  /-- `match x with | T.a x => … | T.b x => …`: a test of the tag of `x`, a
+  value of the tagged union `T`. The tag is the tag field `field` of the
+  source's value, or its type, such as TypeScript's `typeof x`, when `field`
+  is none. The first branch is for the tag `tag`. The second names the member
+  `other` when it is the only one left, or else matches every other member. -/
+  | matchTag (name : String) (ref : DeclRef) (field : Option String) (tag : String)
+      (other : Option String) (whenTag whenOther : Body T E)
   /-- `let (x, y) := branch`, where `branch` is an `ite` or a `matchNull`
   that ends in the state, then `rest`. -/
   | letState (names : List String) (branch : Body T E) (rest : Body T E)
@@ -196,10 +200,12 @@ inductive Decl (T E : Type) where
   /-- `inductive T where | a | b`, with decidable equality: a type whose
   constructors take no arguments. -/
   | enum (name : String) (members : List String)
-  /-- `inductive T where | a (value : A) | b (value : B)`: a tagged union of
-  structures, whose source objects tell the members apart by the field
-  `field`. -/
-  | tagged (name : String) (field : String) (members : List (String × DeclRef))
+  /-- `inductive T where | a (value : A) | b (value : B)`: a tagged union,
+  with the tag and the type of each member. The source's values tell the
+  members apart by the field `field`, as objects of a union of structures do,
+  or by their type when `field` is none, as values of a union of primitive
+  types do. -/
+  | tagged (name : String) (field : Option String) (members : List (String × Ty T))
   /-- `def f (x : T) : R :=`, then the body. -/
   | function (name : String) (params : List (String × Ty T)) (ret : Ty T) (body : Body T E)
 deriving Repr, Inhabited
@@ -257,7 +263,7 @@ def Decl.refs : Decl T E → List DeclRef
   | .struct _ fields => fields.flatMap (·.2.refs)
   | .alias _ type => type.refs
   | .enum .. => []
-  | .tagged _ _ members => members.map (·.2)
+  | .tagged _ _ members => members.flatMap (·.2.refs)
   | .function _ params ret body => params.flatMap (·.2.refs) ++ ret.refs ++ body.refs
 
 /-! ### Printing -/
@@ -558,7 +564,7 @@ def Decl.print (names : Names) : Decl T E → String
   | .tagged name _ members =>
     let generic := if names.generic then s!" ({names.typeParam} : Type)" else ""
     "\n".intercalate (s!"inductive {name}{generic} where" ::
-      members.map fun (tag, ref) => s!"  | {memberName tag} (value : {(Ty.struct ref : Ty T).print names})")
+      members.map fun (tag, type) => s!"  | {memberName tag} (value : {type.print names})")
   | .enum name members =>
     "\n".intercalate (s!"inductive {name} where" ::
       members.map (s!"  | {memberName ·}") ++

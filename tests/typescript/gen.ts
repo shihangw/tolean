@@ -191,6 +191,16 @@ export class Gen {
           },
           () => `Number.${this.pick(['isNaN', 'isFinite', 'isSafeInteger'])}(${this.expr(NUMBER, vars, d)})`,
         );
+        // `typeof` on a value of any type, which checks the interpreter's rule
+        // against Node. The translator refuses it here, so it comes only
+        // sometimes, and most programs still translate.
+        if (this.chance(0.3)) {
+          options.push(
+            () =>
+              `typeof (${this.expr(this.anyType(), vars, d)}) ${this.pick(['===', '!=='])} ` +
+              `'${this.pick(['bigint', 'number', 'boolean', 'string', 'object'])}'`,
+          );
+        }
         // Not two literals: tsc refuses `'a' === 'b'` (TS2367).
         const strings = [...readable.filter((v) => v.ty.k === 'string').map((v) => v.name), ...this.fieldReads(STRING, readable)];
         if (strings.length > 0) {
@@ -209,6 +219,13 @@ export class Gen {
         }
         break;
       }
+      case 'string':
+        // `typeof` on a value of any type. The translator accepts it only in
+        // the test of an `if` on a union of primitive types, but the
+        // interpreter runs it anywhere, so this and the comparison of
+        // booleans above check its rule against Node.
+        options.push(() => `typeof (${this.expr(this.anyType(), vars, d)})`);
+        break;
       default:
         break;
     }

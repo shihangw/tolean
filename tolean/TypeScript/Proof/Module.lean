@@ -281,6 +281,19 @@ theorem translateEnum_ok {sp : Span} {ex : Bool} {name : String} {members : List
     obtain ⟨_, _, rfl, rfl, rfl⟩ := h
     exact ⟨rfl, rfl, rfl, rfl⟩
 
+theorem declareUnion_ok {sp : Span} {ex : Bool} {name : String} {field : Option String}
+    {members : List (String × Ty)} {s s' : Ctx} {o : IR.Decl}
+    (h : declareUnion sp ex name field members s = .ok o s') :
+    s'.file = s.file ∧ s'.interfaces = s.interfaces ∧ s'.functions = s.functions ∧
+      ∃ f ps, o = .tagged name f ps := by
+  unfold declareUnion at h
+  cases hb : badMember (members.map (·.1)) with
+  | some r => simp [hb] at h
+  | none =>
+    simp only [hb, bind_ok, modify_ok, pure_ok] at h
+    obtain ⟨_, _, rfl, rfl, rfl⟩ := h
+    exact ⟨rfl, rfl, rfl, _, _, rfl⟩
+
 theorem translateUnion_ok {sp : Span} {ex : Bool} {name : String} {members : List StructInfo}
     {s s' : Ctx} {o : IR.Decl} (h : translateUnion sp ex name members s = .ok o s') :
     s'.file = s.file ∧ s'.interfaces = s.interfaces ∧ s'.functions = s.functions ∧
@@ -288,14 +301,20 @@ theorem translateUnion_ok {sp : Span} {ex : Bool} {name : String} {members : Lis
   unfold translateUnion at h
   cases ht : tagFieldOf members with
   | none => simp [ht] at h
-  | some p =>
-    obtain ⟨field, tags⟩ := p
-    cases hb : badMember tags with
-    | some r => simp [ht, hb] at h
-    | none =>
-      simp only [ht, hb, bind_ok, modify_ok, pure_ok] at h
-      obtain ⟨_, _, rfl, rfl, rfl⟩ := h
-      exact ⟨rfl, rfl, rfl, _, _, rfl⟩
+  | some p => simp only [ht] at h; exact declareUnion_ok h
+
+theorem translatePrimitiveUnion_ok {sp : Span} {ex : Bool} {name : String} {members : List String}
+    {s s' : Ctx} {o : IR.Decl} (h : translatePrimitiveUnion sp ex name members s = .ok o s') :
+    s'.file = s.file ∧ s'.interfaces = s.interfaces ∧ s'.functions = s.functions ∧
+      ∃ f ps, o = .tagged name f ps := by
+  unfold translatePrimitiveUnion at h
+  simp only [ite_state] at h
+  split at h
+  · simp only [bind_ok, requireFeature_ok] at h
+    obtain ⟨_, _, ⟨-, rfl⟩, h⟩ := h
+    exact declareUnion_ok h
+  · simp only [pure_bind] at h
+    exact declareUnion_ok h
 
 theorem translateAlias_ok {sp : Span} {ex : Bool} {name : String} {type : TypeExpr}
     {s s' : Ctx} {o : IR.Decl} (h : translateAlias sp ex name type s = .ok o s') :
@@ -323,7 +342,15 @@ theorem translateAlias_ok {sp : Span} {ex : Bool} {name : String} {type : TypeEx
       subst_vars
       exact ⟨h1, h2, h3, .inr (.inr ⟨_, _, _, rfl⟩)⟩
     | none =>
-      simp only [hu, bind_ok, modify_ok, pure_ok, pure_bind] at h
+    cases hp : primitiveMembers type with
+    | some ms =>
+      simp only [hu, hp, bind_ok, pure_ok, pure_bind] at h
+      obtain ⟨d, s₅, hd, rfl, rfl⟩ := h
+      obtain ⟨h1, h2, h3, f, ps, rfl⟩ := translatePrimitiveUnion_ok hd
+      subst_vars
+      exact ⟨h1, h2, h3, .inr (.inr ⟨_, _, _, rfl⟩)⟩
+    | none =>
+      simp only [hu, hp, bind_ok, modify_ok, pure_ok, pure_bind] at h
       obtain ⟨ty, s₅, hty, _, s₆, rfl, rfl, rfl⟩ := h
       obtain ⟨rfl, -⟩ := isolated_ok hty
       subst_vars

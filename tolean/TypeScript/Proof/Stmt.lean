@@ -701,18 +701,12 @@ theorem branch_tag {env : Translate.Env} {test : Expr} {t : TagTest} {wt wf : IR
   have hwo : ρo.lookup t.name = some w := by rw [← ha]; exact hw
   cases hie : t.isEq <;> simp only [hie, Bool.false_eq_true, ↓reduceIte] at ho hl
   all_goals
-    cases w with
-    | obj fields =>
-      cases hk : fields.lookup t.field with
-      | none => simp [IR.Body.exec, hwo, hk] at ho
-      | some v =>
-        cases v with
-        | str k =>
-          refine ⟨_, hl fields k rfl hk, ?_⟩
-          simp only [IR.Body.exec, hwo] at ho
-          by_cases hkt : (k == t.tag) = true <;> simp_all [Val.truthy]
-        | _ => simp [IR.Body.exec, hwo, hk] at ho
-    | _ => simp [IR.Body.exec, hwo] at ho
+    cases hk : IR.tagOf t.field w with
+    | none => simp [IR.Body.exec, hwo, hk] at ho
+    | some k =>
+      refine ⟨_, hl k hk, ?_⟩
+      simp only [IR.Body.exec, hwo, hk, Option.bind_eq_bind, Option.bind_some] at ho
+      by_cases hkt : (k == t.tag) = true <;> simp_all [Val.truthy]
 
 /-- The loop `for (const x of …)` over `vs` means what the output's fold means,
 when the body does. -/

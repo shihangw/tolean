@@ -88,6 +88,15 @@ def Ty.isObject : Ty → Bool
   | .array _ | .struct _ | .tagged .. => true
   | _ => false
 
+/-- What `typeof` gives for a value of type `t`, when `t` is a primitive type
+that a union of primitive types may have as a member. -/
+def Ty.typeOf? : Ty → Option String
+  | .bigint => some "bigint"
+  | .number => some "number"
+  | .boolean => some "boolean"
+  | .string => some "string"
+  | _ => none
+
 /-- The Lean type that the output gives a value of type `t`. -/
 def Ty.lean : Ty → IR.Ty
   | .bigint => .int
@@ -102,15 +111,18 @@ def Ty.lean : Ty → IR.Ty
   | .tagged ref _ => .tagged ref
   | .literal value => .tag value
 
-/-- A tagged union of interfaces of the program, `type T = A | B`, with the
-file that declares it. Each member has the field `field`, whose type is one
-string literal, and `members` maps each such tag to its interface. -/
+/-- A tagged union of the program, with the file that declares it: a union
+of interfaces, `type T = A | B`, or a union of primitive types,
+`type T = string | bigint`. `members` maps each tag to the type of its
+member. Each interface of a union of interfaces has the field `field`, whose
+type is one string literal, the tag. A union of primitive types has no
+`field`, and the tag of each member is the `typeof` of its values. -/
 structure UnionInfo where
   file : String
   name : String
   exported : Bool := false
-  field : String
-  members : List (String × DeclRef)
+  field : Option String
+  members : List (String × Ty)
 
 def UnionInfo.ref (i : UnionInfo) : DeclRef := ⟨i.file, i.name⟩
 
@@ -256,6 +268,21 @@ structure Code where
 def Code.value (c : Code) : IR.Expr :=
   if c.prop then .decide c.code else c.code
 
+/-- `c` where the context expects a value of type `expected`. A value of a
+member of a union of primitive types, such as a `string` where
+`string | bigint` is expected, becomes the member's constructor. In JS the
+value stays the same. -/
+def Code.into (unions : List UnionInfo) (c : Code) (expected : Option Ty) : Code :=
+  match expected with
+  | some (.tagged ref tags) | some (.nullable (.tagged ref tags)) =>
+    match c.type.typeOf? with
+    | some k =>
+      if (unions.any fun u => u.ref == ref && u.field.isNone) && tags.contains k then
+        ⟨.inject ref k c.value, false, .tagged ref tags⟩
+      else c
+    | none => c
+  | _ => c
+
 /-- What a statement list ends in: a `return`, or the tuple of changed locals. -/
 inductive Tail where
   | ret
@@ -362,11 +389,36 @@ def stringLiterals : TypeExpr → Option (List String)
     | _ => none
   | _ => none
 
+/-- The primitive types that a union of primitive types may have as members,
+by the `typeof` of their values. -/
+def primitiveType? : String → Option Ty
+  | "bigint" => some .bigint
+  | "number" => some .number
+  | "boolean" => some .boolean
+  | "string" => some .string
+  | _ => none
+
+/-- The keywords of a union of primitive types, such as `string | bigint`. -/
+def primitiveMembers : TypeExpr → Option (List String)
+  | .union _ members => members.mapM fun
+    | .keyword _ k => if (primitiveType? k).isSome then some k else none
+    | _ => none
+  | _ => none
+
 /-- The type of `t` in the subset. The output writes it as `Ty.lean`. -/
 def translateType (t : TypeExpr) : TM Ty := do
-  -- The output needs a name for the inductive type of a literal union.
+  -- The output needs a name for the inductive type of a literal union, and of
+  -- a union of primitive types.
   if (stringLiterals t).isSome then
     reject t.span "a literal union needs a name; declare it as a type, such as type T = 'a' | 'b'"
+  if (primitiveMembers t).isSome then
+    reject t.span
+      "a union of primitive types needs a name; declare it as a type, such as type T = string | bigint"
+  if let .union s members := t then
+    let rest := members.filter fun m => !(m matches .null _)
+    if rest.length ≥ 2 && rest.length < members.length && (primitiveMembers (.union s rest)).isSome then
+      reject t.span ("a union of primitive types and null needs a name for its primitive types; " ++
+        "declare type T = string | bigint and write T | null")
   match t with
   | .keyword s "bigint" =>
     requireFeature s .bigint
@@ -547,26 +599,29 @@ def tagOfProps (field : String) (props : List Property) : Option String :=
     | .keyValue _ (.ident k) (.string _ v) => if k == field then some v else none
     | _ => none
 
-/-- A test of the tag of a tagged union, as `x.kind === 'circle'` reads it:
-the local, the union, its tag field and the tag, whether the test is `===`,
-and the types of the local where the tag matches and where it does not. When
-one member is left where it does not, `other` is its tag. -/
+/-- A test of the tag of a tagged union, as `x.kind === 'circle'` or
+`typeof x === 'string'` reads it: the local, the union, its tag field and
+the tag, whether the test is `===`, and the types of the local where the tag
+matches and where it does not. A test of `typeof` has no tag field. When one
+member is left where the tag does not match, `other` is its tag. -/
 structure TagTest where
   name : String
   ref : DeclRef
-  field : String
+  field : Option String
   tag : String
   isEq : Bool
   whenTag : Ty
   whenOther : Ty
   other : Option String
 
-/-- The local, the field and the string of `x.kind` and `'circle'`, in either
-order. -/
-def tagSide (l r : Expr) : Option (String × String × String) :=
+/-- The local, the field and the string of `x.kind` and `'circle'`, or the
+local and the string of `typeof x` and `'string'`, in either order. -/
+def tagSide (l r : Expr) : Option (String × Option String × String) :=
   match l, r with
-  | .member _ (.ident _ n) f, .string _ t => some (n, f, t)
-  | .string _ t, .member _ (.ident _ n) f => some (n, f, t)
+  | .member _ (.ident _ n) f, .string _ t => some (n, some f, t)
+  | .string _ t, .member _ (.ident _ n) f => some (n, some f, t)
+  | .unary _ .typeof (.ident _ n), .string _ t => some (n, none, t)
+  | .string _ t, .unary _ .typeof (.ident _ n) => some (n, none, t)
   | _, _ => none
 
 /-- The type of a local of the union `ref` where its tag is none of the one
@@ -575,13 +630,14 @@ def otherOf (u : UnionInfo) (ref : DeclRef) (rest : List String) : Ty × Option 
   match rest with
   | [o] =>
     match u.members.lookup o with
-    | some oref => (.struct oref, some o)
+    | some member => (member, some o)
     | none => (.tagged ref rest, none)
   | _ => (.tagged ref rest, none)
 
 /-- `x.kind === 'circle'` or `x.kind !== 'circle'`, with the string on either
 side, where `x` is a local of a tagged union whose tag field is `kind` and
-which may have the tag here. -/
+which may have the tag here. Or `typeof x === 'string'` and the like, where
+`x` is a local of a union of primitive types. -/
 def tagTestOf (env : Env) (e : Expr) : Option TagTest := do
   let .binary _ op l r := e.stripParens | none
   unless op == .strictEq || op == .strictNe do none
@@ -593,7 +649,7 @@ def tagTestOf (env : Env) (e : Expr) : Option TagTest := do
   unless u.field == f && tags.contains t do none
   let (whenOther, other) := otherOf u ref (tags.filter (· != t))
   return { name := n, ref, field := f, tag := t, isEq := op == .strictEq,
-           whenTag := .struct member, whenOther, other }
+           whenTag := member, whenOther, other }
 
 /-- The arm for the other members of a test of `name`'s tag tests it again
 only as more arms of the same `match`: first, or not at all. -/
@@ -707,8 +763,16 @@ def translateOperator (s : Span) (op : BinOp) (r : Expr) (a b : Code) : TM Code 
 mutual
 
 /-- `expected` is the type the context gives, which an object literal needs:
-the return type, a declared type, a parameter type or a field type. -/
+the return type, a declared type, a parameter type or a field type. Where it
+is a union of primitive types, a value of one of its members becomes the
+member's constructor. -/
 def translateExpr (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr) : TM Code := do
+  let fuel + 1 := fuel | tooDeep
+  return (← translateExprCore fuel env expected e).into env.unions expected
+
+/-- `translateExpr`, before a value becomes a member of the union that the
+context expects. -/
+def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr) : TM Code := do
   let fuel + 1 := fuel | tooDeep
   match e with
   | .paren _ inner => translateExpr fuel env expected inner
@@ -775,6 +839,10 @@ def translateExpr (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr) : T
       | .bigint => return ⟨.neg a.value, false, .bigint⟩
       | .number => return ⟨.numberNeg a.value, false, .number⟩
       | _ => reject s "unsupported unary operator"
+    | .typeof =>
+      reject s ("typeof may only test, in an if, a local of a union of primitive types " ++
+        "against one of its members, as in if (typeof x === 'string') where x has a type " ++
+        "such as type T = string | bigint; test a nullable value against null first")
     | _ => reject s "unsupported unary operator"
   | .binary s op l r => translateBinary fuel env s op l r
   | .cond s test ifTrue ifFalse =>
@@ -853,11 +921,13 @@ def translateObject (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (
   -- output wraps the structure in the member's constructor.
   if let some (.tagged uref tags) := expected then
     let union ← orReject (ctx.knownUnions.find? (·.ref == uref)) s notStructMessage
-    let tag ← orReject (tagOfProps union.field props) s
-      s!"an object of {union.name} must set '{union.field}' to one of its tags"
+    -- A union of primitive types has no tag field, and no object member.
+    let field ← orReject union.field s notStructMessage
+    let tag ← orReject (tagOfProps field props) s
+      s!"an object of {union.name} must set '{field}' to one of its tags"
     unless tags.contains tag do reject s s!"'{tag}' is not a tag of {union.name} here"
     let member ← orReject (union.members.lookup tag) s s!"'{tag}' is not a tag of {union.name}"
-    let c ← translateObject fuel env (some (.struct member)) s props
+    let c ← translateObject fuel env (some member) s props
     return ⟨.inject uref tag c.code, false, .tagged uref tags⟩
   let some (.struct ref) := expected | reject s notStructMessage
   let info ← orReject (ctx.knownStructs.find? (·.ref == ref)) s notStructMessage
@@ -1206,10 +1276,20 @@ def tagFieldOf (members : List StructInfo) : Option (String × List String) :=
       if tags.length == members.length && tags.eraseDups.length == tags.length then some (f, tags)
       else none
 
-/-- `type T = A | B`, a union of interfaces with a tag field. The output gives
-the type one constructor for each member, which holds the member's
-structure, so a claim can match on it. In JS and in the interpreter a value
-is still the object, which has the tag. -/
+/-- A tagged union with the tag field `field`, or none, and the tag and the
+type of each member. The output gives the type one constructor for each
+member, which holds the member's value, so a claim can match on it. -/
+def declareUnion (s : Span) (exported : Bool) (name : String) (field : Option String)
+    (members : List (String × Ty)) : TM IR.Decl := do
+  match badMember (members.map (·.1)) with
+  | some reason => reject s reason
+  | none =>
+    modify fun c => { c with unions := c.unions ++ [{ file := c.file, name, exported, field, members }] }
+    return .tagged name field (members.map fun (tag, type) => (tag, type.lean))
+
+/-- `type T = A | B`, a union of interfaces with a tag field. Each constructor
+holds the member's structure. In JS and in the interpreter a value is still
+the object, which has the tag. -/
 def translateUnion (s : Span) (exported : Bool) (name : String) (members : List StructInfo) :
     TM IR.Decl := do
   match tagFieldOf members with
@@ -1217,12 +1297,16 @@ def translateUnion (s : Span) (exported : Bool) (name : String) (members : List 
     reject s ("a union of interfaces needs a tag: a field that each of them has, " ++
       "with a different string literal type, such as kind: 'circle'")
   | some (field, tags) =>
-    match badMember tags with
-    | some reason => reject s reason
-    | none =>
-      let pairs := tags.zip (members.map (·.ref))
-      modify fun c => { c with unions := c.unions ++ [{ file := c.file, name, exported, field, members := pairs }] }
-      return .tagged name field pairs
+    declareUnion s exported name (some field) (tags.zip (members.map (.struct ·.ref)))
+
+/-- `type T = string | bigint`, a union of primitive types. Each constructor
+holds a value of its type, and its tag is what `typeof` gives for that value,
+so `typeof x === 'string'` tests it. In JS and in the interpreter a value is
+still the primitive value. -/
+def translatePrimitiveUnion (s : Span) (exported : Bool) (name : String) (members : List String) :
+    TM IR.Decl := do
+  if members.contains "bigint" then requireFeature s .bigint
+  declareUnion s exported name none (members.filterMap fun k => (primitiveType? k).map (k, ·))
 
 /-- `type T = U`. The translator writes the type of `U` wherever the source
 names `T`, so a type alias changes no code. The output declares it as an
@@ -1236,6 +1320,8 @@ def translateAlias (s : Span) (exported : Bool) (name : String) (type : TypeExpr
     return ← translateEnum s exported name members
   if let some members := unionMembers (← get).structs type then
     return ← translateUnion s exported name members
+  if let some members := primitiveMembers type then
+    return ← translatePrimitiveUnion s exported name members
   let ty ← isolated (translateType type)
   modify fun c => { c with aliases := c.aliases ++ [{ file := c.file, name, exported, type := ty }] }
   return .alias name ty.lean
@@ -1431,7 +1517,7 @@ def Ctx.reachable (c : Ctx) : List DeclRef :=
       fun f => (f.ret :: f.params).flatMap (·.declRefs)
   let step (seen : List DeclRef) : List DeclRef :=
     seen ++ (own.filter fun i => seen.contains i.ref).flatMap (·.fields.flatMap (·.2.declRefs)) ++
-      (ownUnions.filter fun u => seen.contains u.ref).flatMap (·.members.map (·.2))
+      (ownUnions.filter fun u => seen.contains u.ref).flatMap (·.members.flatMap (·.2.declRefs))
   (List.range (own.length + ownUnions.length)).foldl (fun acc _ => step acc) roots
 
 /-- The file's interfaces that a file importing from it needs the fields of.

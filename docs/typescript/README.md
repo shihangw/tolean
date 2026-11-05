@@ -290,6 +290,8 @@ the file, the line and the reason. It never approximates.
 | `type T = 'a' \| 'b'`, a union of string literals | `inductive T` with the constructors `a` and `b`, which derives `DecidableEq`. A literal becomes `T.a` where the context expects a `T`, and `t === 'a'` becomes `t = T.a`. The output writes every constructor in `«»`, such as `T.«open»`, because Lean reads some strings as keywords or modifiers. A claim can still write `T.a`. |
 | `type T = A \| B`, a union of interfaces with a tag field such as `kind: 'circle'` | `inductive T` with a constructor for each member, which holds the member's structure. The structure leaves the tag field out, because its value never changes. An object literal where a `T` is expected becomes the constructor of its tag. |
 | `if (s.kind === 'circle')`, with `===` or `!==` and the string on either side | `match s with \| T.circle s => … \| …`. TypeScript narrows `s` in each branch, and so does the output. A chain of such tests on the same value becomes one `match`. |
+| `type T = string \| bigint`, a union of two or more of `string`, `number`, `bigint` and `boolean` | `inductive T` with a constructor for each member, which holds a value of its type, such as `T.string (value : String)`. The constructor is named after what `typeof` gives for the value. A value of a member where a `T` is expected becomes that member's constructor. |
+| `if (typeof x === 'string')`, with `===` or `!==` and the string on either side, where `x` is a local of such a union | `match x with \| T.string x => … \| …`, which narrows `x` as a test of a tag does |
 | `function` with typed parameters and return type | `def` |
 | `const x = e`, `let x = e` | `let x := e` |
 | `x = e`, `x += e`, `x -= e`, `x *= e` on a `let` local | `let x := …` (shadowing) |
@@ -346,6 +348,14 @@ Tolean rejects these, among others:
   further test of the same value must come first in the other branch, as in
   a chain of `if (s.kind === 'a') return …`, so that Lean sees one `match`
   that covers every member.
+- A union of primitive types that is not the whole of a type alias, such as
+  `(x: string | bigint)`, because the output needs a name for its inductive
+  type. A union of primitive types and `null` needs that name too: declare
+  `type T = string | bigint`, then write `T | null`. Tolean also refuses
+  `typeof` anywhere except in the test of an `if` on a local of such a
+  union, against one of its members. So it refuses `typeof` on a union of
+  interfaces, on a value that may be `null`, and as a value, as in
+  `return typeof x === 'string'`.
 - An object literal whose fields are not in the order that the interface
   declares them. A JS object keeps its keys in the order the literal writes
   them, and a caller can see that order through `Object.keys` or
