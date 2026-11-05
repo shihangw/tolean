@@ -362,6 +362,12 @@ Tolean rejects these, among others:
   key holds `undefined`, and Lean has one `none` for both. It also refuses
   `== null` and `=== null` on an optional value, optional parameters, and a
   test of an optional value that narrows it.
+- A local or a function named `undefined`, which would hide the global the
+  subset reads. Tolean also refuses a value that may be either `undefined` or
+  `null`, such as `b ? s.f : null`, because the output has one `none` for
+  both.
+- A `__proto__: v` key in an object literal. It sets the object's prototype,
+  not a field.
 - Recursion, closures and arrow functions, classes, `async`, exceptions, and
   mutable interface fields.
 - Imports other than the named imports of [Imports](#imports).

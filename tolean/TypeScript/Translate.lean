@@ -73,6 +73,9 @@ def Ty.join (a b : Ty) : Option Ty :=
   else match a, b with
     | .null, .nullable t | .nullable t, .null => some (.nullable t)
     | .nullable t, u | u, .nullable t => if t == u then some (.nullable t) else none
+    -- The output has one `none` for both `undefined` and `null`, so it cannot
+    -- hold a value that may be either.
+    | .null, .optional _ | .optional _, .null => none
     | .null, t | t, .null => some (.nullable t)
     | _, _ => none
 
@@ -327,6 +330,11 @@ needs the number type. -/
 def isNumberName (name : String) : Bool :=
   name == "Number" || name == "NaN" || name == "Infinity"
 
+/-- The globals that the subset reads by name, so that no declaration may
+hide them. -/
+def isGlobalName (name : String) : Bool :=
+  isNumberName name || name == "undefined"
+
 def checkName (span : Span) (name : String) : TM String := do
   if leanReserved.contains name then reject span s!"name '{name}' is reserved in Lean"
   return name
@@ -349,7 +357,7 @@ def declare (env : Env) (span : Span) (name : String) (binding : Binding) (type 
   -- A local is in its temporal dead zone from the start of its block, so a
   -- use of the name before the declaration throws in JS. The subset reads
   -- such a use as the function or the global, so it refuses the local.
-  if env.functions.any (·.name == name) || isNumberName name then
+  if env.functions.any (·.name == name) || isGlobalName name then
     reject span s!"'{name}' would hide the function or global {name} in its whole block; choose another name"
   let _ ← checkLocalName span name
   return env.add { name, binding, type }
@@ -876,7 +884,9 @@ def translateObject (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (
     fun (seen, parts) p => do
       let (key, value, span) ← match p with
         | .shorthand ps name => pure (name, Expr.ident ps name, ps)
-        | .keyValue ps (.ident key) v => pure (key, v, ps)
+        | .keyValue ps (.ident key) v =>
+          if key == "__proto__" then reject ps "'__proto__: v' sets the prototype of the object, not a field"
+          else pure (key, v, ps)
         | .keyValue ps _ _ => reject ps "object literal fields must be plain name: value pairs"
       let fieldType ← orReject (info.fields.lookup key) span s!"'{key}' is not a field of {structName}"
       if seen.contains key then reject span s!"'{key}' is set twice"
@@ -1156,7 +1166,7 @@ def declareTopLevel (s : Span) (name : String) : TM Unit := do
     reject s s!"'{name}' is declared twice"
   -- A declaration of the module hides the global of the same name, and the
   -- subset reads these names as the globals.
-  if isNumberName name then
+  if isGlobalName name then
     reject s s!"'{name}' would hide the global {name}; choose another name"
 
 def translateInterface (s : Span) (exported : Bool) (name : String) (fields : List Field) :
