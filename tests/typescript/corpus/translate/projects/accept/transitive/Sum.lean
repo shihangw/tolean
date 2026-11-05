@@ -8,7 +8,7 @@ def sum (o : _root_.Outer.Outer) : Int :=
   let s := (0 : Int)
   let s :=
     List.foldl
-      (fun s x =>
+      (fun (s : Int) (x : _root_.Inner.Inner) =>
         let s := s + x.v
         s)
       s xs
