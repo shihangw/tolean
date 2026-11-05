@@ -38,6 +38,9 @@ partial def TypeExpr.toSexp : TypeExpr → Sexp
   | .union s members => node "type-union" s [] (members.map toSexp)
   | .paren s inner => node "type-paren" s [] [inner.toSexp]
 
+def Param.toSexp (p : Param) : Sexp :=
+  node "param" p.span [p.name] (p.type.map TypeExpr.toSexp).toList
+
 mutual
 
 partial def Expr.toSexp : Expr → Sexp
@@ -59,6 +62,7 @@ partial def Expr.toSexp : Expr → Sexp
   | .binary s op lhs rhs => node "binary" s [op.symbol] [lhs.toSexp, rhs.toSexp]
   | .cond s test ifTrue ifFalse => node "cond" s [] [test.toSexp, ifTrue.toSexp, ifFalse.toSexp]
   | .assign s op target value => node "assign" s [op.symbol] [target.toSexp, value.toSexp]
+  | .arrow s _ params body => node "arrow" s [] (params.map Param.toSexp ++ [body.toSexp])
 
 partial def Property.toSexp : Property → Sexp
   | .shorthand s name => node "shorthand" s [name] []
@@ -83,9 +87,6 @@ partial def Stmt.toSexp : Stmt → Sexp
   | .breakStmt s => node "break" s [] []
   | .continueStmt s => node "continue" s [] []
   | .empty s => node "empty" s [] []
-
-def Param.toSexp (p : Param) : Sexp :=
-  node "param" p.span [p.name] (p.type.map TypeExpr.toSexp).toList
 
 def Field.toSexp (f : Field) : Sexp :=
   node "field" f.span ([f.name] ++ flag f.readonly "readonly" ++ flag f.optional "optional")
