@@ -16,7 +16,7 @@ A PR is yours to **tend** from the first push until it merges or closes: every r
      ROUNDS=0 .agents/skills/code-contributor/watch-prs.sh "$CLAUDE_JOB_DIR/tmp/prs.seen" 58 59 60
      .agents/skills/code-contributor/watch-prs.sh "$CLAUDE_JOB_DIR/tmp/prs.seen" 58 59 60
      ```
-     Skip the seeding run when you start by answering what is already there (step 2), and seed after that.
+     The seeding run prints every check that is red already; treat each as a new item in step 2. Skip the seeding run when you start by answering what is already there (step 2), and seed after that.
    Done when a watch is armed for every open PR you own.
 
 2. **Triage each new item**, oldest first. Read the whole thread and reproduce the claim before you judge it.

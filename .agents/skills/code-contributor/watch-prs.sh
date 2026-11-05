@@ -6,6 +6,7 @@
 # usage: watch-prs.sh <state-file> <pr>...
 #
 # Prints one line per new item and exits 0 at the first round that has any.
+# A seeding run (ROUNDS=0) prints the checks that are red already.
 # Exits 3 when every round passes quietly. The state file keeps what was
 # already seen, so the next run reports only what is newer. Run it once with a
 # fresh state file and ROUNDS=0 to mark everything that exists as seen.
@@ -47,7 +48,11 @@ check_new() {
 }
 
 if [ "$rounds" -eq 0 ]; then
-  snapshot "$@" >>"$state"
+  # Seeding marks everything as seen, so print the checks that are red now:
+  # the watch would never report them.
+  current=$(snapshot "$@")
+  printf '%s\n' "$current" >>"$state"
+  printf '%s\n' "$current" | grep ' check .* fail$' || true
   exit 0
 fi
 for ((i = 1; i <= rounds; i++)); do
