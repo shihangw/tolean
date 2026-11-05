@@ -393,11 +393,17 @@ def decodeBinding {N : Type} [tolean.TypeScript.JSNumber N] : Option (Val N) →
 @[simp] theorem decodeBinding_encodeBinding {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Binding) : decodeBinding (some (encodeBinding (N := N) x)) = x := by
   cases x; simp [decodeBinding, encodeBinding, List.lookup, encList]
 
+@[simp] theorem encodeBinding_ne_null {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Binding) : encodeBinding (N := N) x ≠ Val.null := by
+  simp [encodeBinding]
+
 @[simp] theorem encodeBinding_ne_undefined {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Binding) : encodeBinding (N := N) x ≠ Val.undefined := by
   simp [encodeBinding]
 
 @[simp] theorem decList_decodeBinding {N : Type} [tolean.TypeScript.JSNumber N] (xs : List access.Rbac.Binding) : decList decodeBinding (some (Val.list (List.map (encodeBinding (N := N)) xs))) = xs :=
   decList_list _ _ decodeBinding_encodeBinding xs
+
+@[simp] theorem decList_decNull_decodeBinding {N : Type} [tolean.TypeScript.JSNumber N] (xs : List (Option access.Rbac.Binding)) : decList (decNull decodeBinding) (some (Val.list (List.map (encNull (encodeBinding (N := N))) xs))) = xs :=
+  decList_list_null _ _ decodeBinding_encodeBinding encodeBinding_ne_null xs
 
 def encodeGrant {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Grant) : Val N := Val.obj [("role", Val.str x.role), ("permission", Val.str x.permission)]
 
@@ -408,11 +414,17 @@ def decodeGrant {N : Type} [tolean.TypeScript.JSNumber N] : Option (Val N) → a
 @[simp] theorem decodeGrant_encodeGrant {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Grant) : decodeGrant (some (encodeGrant (N := N) x)) = x := by
   cases x; simp [decodeGrant, encodeGrant, List.lookup, encList]
 
+@[simp] theorem encodeGrant_ne_null {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Grant) : encodeGrant (N := N) x ≠ Val.null := by
+  simp [encodeGrant]
+
 @[simp] theorem encodeGrant_ne_undefined {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Grant) : encodeGrant (N := N) x ≠ Val.undefined := by
   simp [encodeGrant]
 
 @[simp] theorem decList_decodeGrant {N : Type} [tolean.TypeScript.JSNumber N] (xs : List access.Rbac.Grant) : decList decodeGrant (some (Val.list (List.map (encodeGrant (N := N)) xs))) = xs :=
   decList_list _ _ decodeGrant_encodeGrant xs
+
+@[simp] theorem decList_decNull_decodeGrant {N : Type} [tolean.TypeScript.JSNumber N] (xs : List (Option access.Rbac.Grant)) : decList (decNull decodeGrant) (some (Val.list (List.map (encNull (encodeGrant (N := N))) xs))) = xs :=
+  decList_list_null _ _ decodeGrant_encodeGrant encodeGrant_ne_null xs
 
 def encodeMembership {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Membership) : Val N := Val.obj [("group", Val.str x.group), ("principal", Val.str x.principal)]
 
@@ -423,11 +435,17 @@ def decodeMembership {N : Type} [tolean.TypeScript.JSNumber N] : Option (Val N) 
 @[simp] theorem decodeMembership_encodeMembership {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Membership) : decodeMembership (some (encodeMembership (N := N) x)) = x := by
   cases x; simp [decodeMembership, encodeMembership, List.lookup, encList]
 
+@[simp] theorem encodeMembership_ne_null {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Membership) : encodeMembership (N := N) x ≠ Val.null := by
+  simp [encodeMembership]
+
 @[simp] theorem encodeMembership_ne_undefined {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Membership) : encodeMembership (N := N) x ≠ Val.undefined := by
   simp [encodeMembership]
 
 @[simp] theorem decList_decodeMembership {N : Type} [tolean.TypeScript.JSNumber N] (xs : List access.Rbac.Membership) : decList decodeMembership (some (Val.list (List.map (encodeMembership (N := N)) xs))) = xs :=
   decList_list _ _ decodeMembership_encodeMembership xs
+
+@[simp] theorem decList_decNull_decodeMembership {N : Type} [tolean.TypeScript.JSNumber N] (xs : List (Option access.Rbac.Membership)) : decList (decNull decodeMembership) (some (Val.list (List.map (encNull (encodeMembership (N := N))) xs))) = xs :=
+  decList_list_null _ _ decodeMembership_encodeMembership encodeMembership_ne_null xs
 
 def encodeDeny {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Deny) : Val N := Val.obj [("tenant", Val.str x.tenant), ("permission", Val.str x.permission), ("member", Val.str x.member)]
 
@@ -438,11 +456,17 @@ def decodeDeny {N : Type} [tolean.TypeScript.JSNumber N] : Option (Val N) → ac
 @[simp] theorem decodeDeny_encodeDeny {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Deny) : decodeDeny (some (encodeDeny (N := N) x)) = x := by
   cases x; simp [decodeDeny, encodeDeny, List.lookup, encList]
 
+@[simp] theorem encodeDeny_ne_null {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Deny) : encodeDeny (N := N) x ≠ Val.null := by
+  simp [encodeDeny]
+
 @[simp] theorem encodeDeny_ne_undefined {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Deny) : encodeDeny (N := N) x ≠ Val.undefined := by
   simp [encodeDeny]
 
 @[simp] theorem decList_decodeDeny {N : Type} [tolean.TypeScript.JSNumber N] (xs : List access.Rbac.Deny) : decList decodeDeny (some (Val.list (List.map (encodeDeny (N := N)) xs))) = xs :=
   decList_list _ _ decodeDeny_encodeDeny xs
+
+@[simp] theorem decList_decNull_decodeDeny {N : Type} [tolean.TypeScript.JSNumber N] (xs : List (Option access.Rbac.Deny)) : decList (decNull decodeDeny) (some (Val.list (List.map (encNull (encodeDeny (N := N))) xs))) = xs :=
+  decList_list_null _ _ decodeDeny_encodeDeny encodeDeny_ne_null xs
 
 def encodePolicy {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Policy) : Val N := Val.obj [("bindings", (encList encodeBinding) x.bindings), ("grants", (encList encodeGrant) x.grants), ("groups", (encList encodeMembership) x.groups), ("denies", (encList encodeDeny) x.denies)]
 
@@ -453,11 +477,17 @@ def decodePolicy {N : Type} [tolean.TypeScript.JSNumber N] : Option (Val N) → 
 @[simp] theorem decodePolicy_encodePolicy {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Policy) : decodePolicy (some (encodePolicy (N := N) x)) = x := by
   cases x; simp [decodePolicy, encodePolicy, List.lookup, encList]
 
+@[simp] theorem encodePolicy_ne_null {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Policy) : encodePolicy (N := N) x ≠ Val.null := by
+  simp [encodePolicy]
+
 @[simp] theorem encodePolicy_ne_undefined {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Policy) : encodePolicy (N := N) x ≠ Val.undefined := by
   simp [encodePolicy]
 
 @[simp] theorem decList_decodePolicy {N : Type} [tolean.TypeScript.JSNumber N] (xs : List access.Rbac.Policy) : decList decodePolicy (some (Val.list (List.map (encodePolicy (N := N)) xs))) = xs :=
   decList_list _ _ decodePolicy_encodePolicy xs
+
+@[simp] theorem decList_decNull_decodePolicy {N : Type} [tolean.TypeScript.JSNumber N] (xs : List (Option access.Rbac.Policy)) : decList (decNull decodePolicy) (some (Val.list (List.map (encNull (encodePolicy (N := N))) xs))) = xs :=
+  decList_list_null _ _ decodePolicy_encodePolicy encodePolicy_ne_null xs
 
 def encodeRequest {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Request) : Val N := Val.obj [("tenant", Val.str x.tenant), ("principal", Val.str x.principal), ("permission", Val.str x.permission)]
 
@@ -468,11 +498,17 @@ def decodeRequest {N : Type} [tolean.TypeScript.JSNumber N] : Option (Val N) →
 @[simp] theorem decodeRequest_encodeRequest {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Request) : decodeRequest (some (encodeRequest (N := N) x)) = x := by
   cases x; simp [decodeRequest, encodeRequest, List.lookup, encList]
 
+@[simp] theorem encodeRequest_ne_null {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Request) : encodeRequest (N := N) x ≠ Val.null := by
+  simp [encodeRequest]
+
 @[simp] theorem encodeRequest_ne_undefined {N : Type} [tolean.TypeScript.JSNumber N] (x : access.Rbac.Request) : encodeRequest (N := N) x ≠ Val.undefined := by
   simp [encodeRequest]
 
 @[simp] theorem decList_decodeRequest {N : Type} [tolean.TypeScript.JSNumber N] (xs : List access.Rbac.Request) : decList decodeRequest (some (Val.list (List.map (encodeRequest (N := N)) xs))) = xs :=
   decList_list _ _ decodeRequest_encodeRequest xs
+
+@[simp] theorem decList_decNull_decodeRequest {N : Type} [tolean.TypeScript.JSNumber N] (xs : List (Option access.Rbac.Request)) : decList (decNull decodeRequest) (some (Val.list (List.map (encNull (encodeRequest (N := N))) xs))) = xs :=
+  decList_list_null _ _ decodeRequest_encodeRequest encodeRequest_ne_null xs
 
 theorem inGroup_loop1 {N : Type} [tolean.TypeScript.JSNumber N] (fs : List (tolean.DeclRef × List String × tolean.TypeScript.IR.Body))
     (fuel : Nat) (items : List access.Rbac.Membership) (ρ : Env N) (hI : ρ.lookup "found" = some (Val.bool (decBool (ρ.lookup "found"))) ∧ ρ.lookup "groups" = some ((encList encodeMembership) ((decList decodeMembership) (ρ.lookup "groups"))) ∧ ρ.lookup "group" = some (Val.str (decStr (ρ.lookup "group"))) ∧ ρ.lookup "principal" = some (Val.str (decStr (ρ.lookup "principal")))) :

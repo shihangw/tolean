@@ -483,7 +483,8 @@ def exprChanges : Expr → List String
       | _ => []
     own ++ exprChanges target ++ exprChanges value
   | .prefix _ _ (.ident _ name) | .postfix _ _ (.ident _ name) => [name]
-  | .prefix _ _ e | .postfix _ _ e | .paren _ e | .unary _ _ e | .member _ e _ => exprChanges e
+  | .prefix _ _ e | .postfix _ _ e | .paren _ e | .unary _ _ e | .member _ e _ | .optMember _ e _ =>
+    exprChanges e
   | .call _ callee args =>
     let own := match callee with
       | .member _ (.ident _ name) "push" => [name]
@@ -1381,7 +1382,7 @@ mutual
 def exprUsesNumber : Expr → Bool
   | .ident _ name => isNumberName name
   | .number .. => true
-  | .member _ obj name => isNumberName name || exprUsesNumber obj
+  | .member _ obj name | .optMember _ obj name => isNumberName name || exprUsesNumber obj
   | .object _ props => propsUseNumber props
   | .array _ es => exprsUseNumber es
   | .call _ f args => exprUsesNumber f || exprsUseNumber args

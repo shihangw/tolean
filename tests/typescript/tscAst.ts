@@ -594,10 +594,12 @@ class Printer {
     while (ts.isParenthesizedExpression(inner)) {
       inner = inner.expression;
     }
+    // tsc parses `a?.b = 1` and `a?.b++`, and only its checker reports them;
+    // JS refuses them as early errors, and so does the Lean parser.
+    const optional = ts.isPropertyAccessExpression(inner) && inner.questionDotToken !== undefined;
     if (
-      !ts.isIdentifier(inner) &&
-      !ts.isPropertyAccessExpression(inner) &&
-      !ts.isElementAccessExpression(inner)
+      optional ||
+      (!ts.isIdentifier(inner) && !ts.isPropertyAccessExpression(inner) && !ts.isElementAccessExpression(inner))
     ) {
       refuse(e, 'assignment target');
     }

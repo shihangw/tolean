@@ -25,4 +25,17 @@ def xOrZero (p : Option Point) : Int :=
   let x := (p.map (·.x))
   (Option.getD x ((0 : Int)))
 
+def same (p : Option Point) : Option Point :=
+  p
+
+def sumX (ps : List (Option Point)) : Int :=
+  let n := (0 : Int)
+  let n :=
+    List.foldl
+      (fun n p =>
+        let n := n + (Option.getD ((((same p)).map (·.x))) ((0 : Int)))
+        n)
+      n ps
+  n
+
 end Test

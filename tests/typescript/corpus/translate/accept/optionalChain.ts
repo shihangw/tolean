@@ -29,3 +29,16 @@ export function xOrZero(p: Point | null): bigint {
   const x = p?.x;
   return x ?? 0n;
 }
+
+// A call under `?.` in a loop: the loop's certificate needs the call.
+function same(p: Point | null): Point | null {
+  return p;
+}
+
+export function sumX(ps: ReadonlyArray<Point | null>): bigint {
+  let n = 0n;
+  for (const p of ps) {
+    n += same(p)?.x ?? 0n;
+  }
+  return n;
+}
