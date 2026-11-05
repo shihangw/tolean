@@ -26,10 +26,10 @@ A PR is yours to **tend** from the first push until it merges or closes: every r
    - A red check: read its log (`gh run view <id> --log-failed`), fix the cause, push.
    Done when every new item has a reply in its own thread that names the commit or the evidence.
 
-3. **Re-arm** the watch from step 1, with the same state file. Stop when every PR has merged or closed, or when a full watch (10 rounds) ends quietly; then report each PR's state: merged, waiting on review, or red, with its link.
+3. **Re-arm** the watch from step 1, with the same state file. Stop when every PR has merged or closed, or when a full watch (10 rounds) exits 3; then report each PR's state: merged, waiting on review, or red, with its link.
 
 ## Reference
 
 - Reply in the thread the comment opened: `gh api repos/{owner}/{repo}/pulls/<n>/comments/<id>/replies -f body=…` for a review comment, `gh pr comment <n>` for a review or an issue comment.
-- `watch-prs.sh` exits 0 with the new items on stdout, 3 when all rounds pass quietly, 2 when `gh` cannot see the repository. `INTERVAL` (seconds) and `ROUNDS` change the defaults.
+- `watch-prs.sh` exits 0 with the new items on stdout, 3 when every round fetched everything and found nothing new, 4 when some round could not fetch (an outage or a rate limit: its silence proves nothing, so re-arm, and report if it repeats), and 2 when `gh` cannot see the repository. `INTERVAL` (seconds) and `ROUNDS` change the defaults.
 - A fix on a stacked PR's base reaches the PRs above it only after the merge into each; check their CI too.
