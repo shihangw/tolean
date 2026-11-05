@@ -27,6 +27,7 @@ row, and the corpus files for each row certify.
 | 2 | `type T = U` aliases of the types of the subset, exported and imported | [#45](https://github.com/shihangw/tolean/pull/45) |
 | 2 | Literal unions of strings, `type T = 'a' \| 'b'`, as an `inductive` | [#47](https://github.com/shihangw/tolean/pull/47) |
 | 2 | Tagged unions of interfaces, narrowed by `if (x.kind === 'a')` | [#51](https://github.com/shihangw/tolean/pull/51) |
+| 2 | `switch (x.kind)` on a tagged union, where every clause returns | [#53](https://github.com/shihangw/tolean/pull/53) |
 
 ## The rules for every addition
 
@@ -64,7 +65,7 @@ exact.
 |---|---|---|
 | `type T = …` aliases, and string literal types such as `'open' \| 'closed'` | `abbrev`, and an `inductive` with one constructor per literal | A literal union mixed with `string` |
 | A union of interfaces with a literal tag field, such as `kind` | An `inductive` with one constructor per member | A union without a common tag |
-| `switch` on the tag, with a `default` that assigns to `never` | `match` on the constructor | Fallthrough between cases |
+| A `switch` on the tag whose clauses end in `break` and change locals, and a `default` that assigns the value to `never` | A `match` on the constructor that ends in the locals it changes | Fallthrough between cases |
 | `x?: T` fields and parameters, `undefined` | `Option T` | `'x' in obj`, which can tell a missing key from `undefined` |
 | `x == null`, `x ?? y`, `x?.f`, `x ??= y` | `Option` matches | `==` against anything except `null` and `undefined` |
 | `export { … }` and re-exports | Nothing: the names stay in scope | `export *` |
