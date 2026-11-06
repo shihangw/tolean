@@ -319,6 +319,15 @@ theorem Stmt.lineOK : ∀ (st : Stmt) (d : Nat), ∀ l ∈ st.lines d, LineOK l.
     simp [Stmt.lines] at hl; subst hl
     exact LineOK.cons (by simp [keywordWord]) (LineOK.word (w := punctWord ";") (by simp [punctWord]))
   | .empty _, d, l, hl => by simp [Stmt.lines] at hl; subst hl; exact LineOK.word (by simp [punctWord])
+  | .switchStmt _ disc cs, d, l, hl => by
+    simp only [Stmt.lines, List.mem_cons, List.mem_append] at hl
+    rcases hl with (rfl | hl) | (rfl | hl)
+    · exact LineOK.cons (by simp [keywordWord]) (LineOK.cons (by simp [punctWord])
+        ((Expr.fine disc).line.append (LineOK.cons (by simp [punctWord])
+          (LineOK.word (w := punctWord "{") (by simp [punctWord])))))
+    · exact Stmt.lineOKClauses cs _ l hl
+    · exact LineOK.word (by simp [punctWord])
+    · simp at hl
 
 theorem Stmt.lineOKAll : ∀ (ss : List Stmt) (d : Nat), ∀ l ∈ Stmt.linesOf d ss, LineOK l.2
   | [], _, l, hl => by simp [Stmt.linesOf] at hl
@@ -327,6 +336,20 @@ theorem Stmt.lineOKAll : ∀ (ss : List Stmt) (d : Nat), ∀ l ∈ Stmt.linesOf 
     rcases hl with hl | hl
     · exact Stmt.lineOK s d l hl
     · exact Stmt.lineOKAll ss d l hl
+
+theorem Stmt.lineOKClauses : ∀ (cs : List (Option Expr × List Stmt)) (d : Nat),
+    ∀ l ∈ Stmt.clauseLines d cs, LineOK l.2
+  | [], _, l, hl => by simp [Stmt.clauseLines] at hl
+  | (t, b) :: cs, d, l, hl => by
+    simp only [Stmt.clauseLines, List.mem_cons, List.mem_append] at hl
+    rcases hl with (rfl | hl) | hl
+    · cases t with
+      | some e =>
+        exact LineOK.cons (by simp [keywordWord])
+          ((Expr.fine e).line.append (LineOK.word (w := punctWord ":") (by simp [punctWord])))
+      | none => exact LineOK.cons (by simp [keywordWord]) (LineOK.word (w := punctWord ":") (by simp [punctWord]))
+    · exact Stmt.lineOKAll b _ l hl
+    · exact Stmt.lineOKClauses cs d l hl
 
 end
 

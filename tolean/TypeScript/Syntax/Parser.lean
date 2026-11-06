@@ -661,6 +661,18 @@ def blockStep {α : Type} (parseItem : ParseM α) (items : Array α) : ParseM (A
   if t.isEof then unexpected t "'}'"
   return (items.push (← parseItem), true)
 
+/-- One step of the loop over the statements of a `switch` clause: a
+statement that `parseItem` reads, unless the next clause or the `}` comes. -/
+def clauseStep {α : Type} (parseItem : ParseM α) (items : Array α) : ParseM (Array α × Bool) := do
+  let t ← peek
+  if t.isPunct "}" || t.isKeyword "case" || t.isKeyword "default" then return (items, false)
+  if t.isEof then unexpected t "'}'"
+  return (items.push (← parseItem), true)
+
+/-- The number of `default` clauses. -/
+def defaultCount (clauses : List (Option Expr × List Stmt)) : Nat :=
+  (clauses.filter (·.1.isNone)).length
+
 /-- Statements that JavaScript does not allow without a block around them, in
 the body of `if`, `for` and `while`. -/
 def refuseDeclaration (t : Token) : ParseM Unit := do
@@ -717,6 +729,16 @@ def parseStatement (fuel : Nat) : ParseM Stmt := do
     endStatement
     let span ← spanFrom start
     return if t.isKeyword "break" then .breakStmt span else .continueStmt span
+  | .keyword "switch" =>
+    discard advance
+    let _ ← expectPunct "("
+    let disc ← parseExpression (← budget)
+    let _ ← expectPunct ")"
+    let _ ← expectPunct "{"
+    let clauses ← iterate (← budget) #[] (blockStep (parseClause fuel))
+    let _ ← expectPunct "}"
+    if 1 < defaultCount clauses.toList then failAt t "a switch may have only one default"
+    return .switchStmt (← spanFrom start) disc clauses.toList
   | .keyword "true" | .keyword "false" | .keyword "null" | .keyword "typeof"
   | .keyword "void" => parseExpressionStatement fuel
   | .keyword word => failAt t s!"'{word}' is not supported here"
@@ -763,6 +785,23 @@ def parseBlock (fuel : Nat) : ParseM Stmt := do
   let body ← iterate (← budget) #[] (blockStep (parseStatement fuel))
   let _ ← expectPunct "}"
   return .block (← spanFrom start) body.toList
+
+/-- A clause of a `switch`: `case test:` or `default:`, then its statements,
+up to the next clause or the `}`. A test may not use `<` or `<<`, because a
+`:` does not end the parser's search for a `>` after one, and the round trip
+would then depend on the statements of the clause. -/
+def parseClause (fuel : Nat) : ParseM (Option Expr × List Stmt) := do
+  let fuel + 1 := fuel | outOfFuel
+  let t ← advance
+  let test ← if t.isKeyword "case" then do
+      let e ← parseExpression (← budget)
+      unless e.lessFree do failAt t "a case test may not use '<' or '<<'"
+      pure (some e)
+    else if t.isKeyword "default" then pure none
+    else unexpected t "'case', 'default' or '}'"
+  let _ ← expectPunct ":"
+  let body ← iterate (← budget) #[] (clauseStep (parseStatement fuel))
+  return (test, body.toList)
 
 end
 

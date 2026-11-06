@@ -219,6 +219,7 @@ def Stmt.beq : Stmt → Stmt → Bool
   | .breakStmt a0, .breakStmt b0 => decide (a0 = b0)
   | .continueStmt a0, .continueStmt b0 => decide (a0 = b0)
   | .empty a0, .empty b0 => decide (a0 = b0)
+  | .switchStmt a0 a1 a2, .switchStmt b0 b1 b2 => decide (a0 = b0) && Expr.beq a1 b1 && Stmt.beqClauses a2 b2
   | _, _ => false
 
 def Stmt.beqList : List Stmt → List Stmt → Bool
@@ -229,6 +230,11 @@ def Stmt.beqList : List Stmt → List Stmt → Bool
 def Stmt.beqOpt : Option Stmt → Option Stmt → Bool
   | none, none => true
   | some x, some y => Stmt.beq x y
+  | _, _ => false
+
+def Stmt.beqClauses : List (Option Expr × List Stmt) → List (Option Expr × List Stmt) → Bool
+  | [], [] => true
+  | (t, b) :: xs, (u, c) :: ys => Expr.beqOpt t u && Stmt.beqList b c && Stmt.beqClauses xs ys
   | _, _ => false
 
 end
@@ -256,6 +262,8 @@ theorem Stmt.beq_iff : (a b : Stmt) → Stmt.beq a b = true ↔ a = b
     cases b <;> simp [and_assoc, Stmt.beq]
   | .empty a0, b => by
     cases b <;> simp [and_assoc, Stmt.beq]
+  | .switchStmt a0 a1 a2, b => by
+    cases b <;> simp [and_assoc, Stmt.beq, Expr.beq_iff a1, Stmt.beqClauses_iff a2]
 
 theorem Stmt.beqList_iff : (xs ys : List Stmt) → Stmt.beqList xs ys = true ↔ xs = ys
   | [], ys => by cases ys <;> simp [and_assoc, Stmt.beqList]
@@ -266,6 +274,15 @@ theorem Stmt.beqOpt_iff : (o p : Option Stmt) → Stmt.beqOpt o p = true ↔ o =
   | none, p => by cases p <;> simp [and_assoc, Stmt.beqOpt]
   | some x, p => by
     cases p <;> simp [and_assoc, Stmt.beqOpt, Stmt.beq_iff x]
+
+theorem Stmt.beqClauses_iff : (xs ys : List (Option Expr × List Stmt)) → Stmt.beqClauses xs ys = true ↔ xs = ys
+  | [], ys => by cases ys <;> simp [Stmt.beqClauses]
+  | (t, b) :: xs, ys => by
+    cases ys with
+    | nil => simp [Stmt.beqClauses]
+    | cons y ys =>
+      obtain ⟨u, c⟩ := y
+      simp [and_assoc, Stmt.beqClauses, Expr.beqOpt_iff t, Stmt.beqList_iff b, Stmt.beqClauses_iff xs]
 
 end
 

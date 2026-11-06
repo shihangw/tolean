@@ -26,6 +26,18 @@ export type TscResult =
 
 class Refused extends Error {}
 
+/** A `<` or `<<` operator anywhere in `node`, which the Lean parser refuses in a case test. */
+function hasLessThan(node: ts.Node): boolean {
+  if (
+    ts.isBinaryExpression(node) &&
+    (node.operatorToken.kind === ts.SyntaxKind.LessThanToken ||
+      node.operatorToken.kind === ts.SyntaxKind.LessThanLessThanToken)
+  ) {
+    return true;
+  }
+  return ts.forEachChild(node, hasLessThan) ?? false;
+}
+
 /** The same rendering as `Sexp.render` in `tolean/Sexp.lean`. */
 export function render(s: Sexp, indent = 0): string {
   const first = [s.head, ...(s.span === undefined ? [] : [s.span]), ...s.atoms].join(' ');
@@ -446,6 +458,28 @@ class Printer {
     }
     if (ts.isEmptyStatement(s)) {
       return this.node('empty', s, [], []);
+    }
+    if (ts.isSwitchStatement(s)) {
+      const clauses = s.caseBlock.clauses;
+      if (clauses.filter((c) => ts.isDefaultClause(c)).length > 1) {
+        refuse(s, 'more than one default');
+      }
+      // The Lean tree keeps no span for a clause.
+      const children = clauses.map((c): Sexp => {
+        const test: Array<Sexp> = [];
+        if (ts.isCaseClause(c)) {
+          if (hasLessThan(c.expression)) {
+            refuse(c, "'<' or '<<' in a case test");
+          }
+          test.push(this.expr(c.expression));
+        }
+        return {
+          head: ts.isCaseClause(c) ? 'case' : 'default',
+          atoms: [],
+          children: [...test, ...c.statements.map((st) => this.statement(st))],
+        };
+      });
+      return this.node('switch', s, [], [this.expr(s.expression), ...children]);
     }
     refuse(s, 'unsupported statement');
   }
