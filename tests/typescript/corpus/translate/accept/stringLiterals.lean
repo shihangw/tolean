@@ -39,7 +39,7 @@ def countOpen (ts : List Ticket) : Int :=
   let n := (0 : Int)
   let n :=
     List.foldl
-      (fun n t =>
+      (fun (n : Int) (t : Ticket) =>
         let n :=
           if t.status ≠ Status.«closed» then
             let n := n + (1 : Int)
@@ -54,7 +54,7 @@ def lastStatus (ts : List Ticket) : Status :=
   let s := Status.«open»
   let s :=
     List.foldl
-      (fun s t =>
+      (fun (s : Status) (t : Ticket) =>
         let s :=
           if s ≠ Status.«closed» then
             let s := t.status

@@ -661,12 +661,23 @@ def blockStep {α : Type} (parseItem : ParseM α) (items : Array α) : ParseM (A
   if t.isEof then unexpected t "'}'"
   return (items.push (← parseItem), true)
 
+/-- `break;` at the top of a clause of a `switch`. It ends the `switch`, so
+JavaScript allows it outside a loop. -/
+def parseClauseBreak : ParseM Stmt := do
+  let t ← advance
+  let next ← peek
+  if next.isAnyIdent && !next.newlineBefore then failAt next "labels are not supported"
+  endStatement
+  return .breakStmt (← spanFrom t.span.start)
+
 /-- One step of the loop over the statements of a `switch` clause: a
-statement that `parseItem` reads, unless the next clause or the `}` comes. -/
-def clauseStep {α : Type} (parseItem : ParseM α) (items : Array α) : ParseM (Array α × Bool) := do
+statement that `parseItem` reads, or a `break`, unless the next clause or the
+`}` comes. -/
+def clauseStep (parseItem : ParseM Stmt) (items : Array Stmt) : ParseM (Array Stmt × Bool) := do
   let t ← peek
   if t.isPunct "}" || t.isKeyword "case" || t.isKeyword "default" then return (items, false)
   if t.isEof then unexpected t "'}'"
+  if t.isKeyword "break" then return (items.push (← parseClauseBreak), true)
   return (items.push (← parseItem), true)
 
 /-- The number of `default` clauses. -/

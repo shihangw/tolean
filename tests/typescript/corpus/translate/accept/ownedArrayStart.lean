@@ -5,7 +5,7 @@ def withZero (xs : List Int) : List Int :=
   let out : List Int := [(0 : Int)]
   let out :=
     List.foldl
-      (fun out x =>
+      (fun (out : List Int) (x : Int) =>
         let out := out ++ [x]
         out)
       out xs

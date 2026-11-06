@@ -34,7 +34,7 @@ def inGroup (groups : List Membership) (group : String) (principal : String) : B
   let found := false
   let found :=
     List.foldl
-      (fun found m =>
+      (fun (found : Bool) (m : Membership) =>
         let found :=
           if (m.group = group) ∧ (m.principal = principal) then
             let found := true
@@ -52,7 +52,7 @@ def roleGrants (grants : List Grant) (role : String) (permission : String) : Boo
   let found := false
   let found :=
     List.foldl
-      (fun found g =>
+      (fun (found : Bool) (g : Grant) =>
         let found :=
           if (g.role = role) ∧ (g.permission = permission) then
             let found := true
@@ -73,7 +73,7 @@ def allowed (p : Policy) (req : Request) : Bool :=
   let found := false
   let found :=
     List.foldl
-      (fun found b =>
+      (fun (found : Bool) (b : Binding) =>
         let found :=
           if (bindingAllows p b req) then
             let found := true
@@ -88,7 +88,7 @@ def denied (p : Policy) (req : Request) : Bool :=
   let found := false
   let found :=
     List.foldl
-      (fun found d =>
+      (fun (found : Bool) (d : Deny) =>
         let found :=
           if (denyApplies p d req) then
             let found := true

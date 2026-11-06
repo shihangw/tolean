@@ -145,7 +145,13 @@ def Stmt.allWF (T : Edition) (fn loop : Bool) : List Stmt → Bool
 
 def Stmt.clausesWF (T : Edition) (fn loop : Bool) : List (Option Expr × List Stmt) → Bool
   | [] => true
-  | (test, body) :: cs => Expr.caseWF T test && Stmt.allWF T fn loop body && Stmt.clausesWF T fn loop cs
+  | (test, body) :: cs => Expr.caseWF T test && Stmt.allClauseWF T fn loop body && Stmt.clausesWF T fn loop cs
+
+/-- The statements of a clause: each is a `break`, which `parseClause` reads
+itself, or a statement that `parseStatement` reads. -/
+def Stmt.allClauseWF (T : Edition) (fn loop : Bool) : List Stmt → Bool
+  | [] => true
+  | s :: ss => (s.isBreak || s.wf T fn loop) && Stmt.allClauseWF T fn loop ss
 
 end
 
@@ -1326,7 +1332,7 @@ theorem defaultCount_erase : ∀ cs : List (Option Expr × List Stmt),
 
 theorem Stmt.clausesWF_mem {T : Edition} {fn loop : Bool} :
     ∀ {cs : List (Option Expr × List Stmt)} {c : Option Expr × List Stmt}, Stmt.clausesWF T fn loop cs = true →
-      c ∈ cs → Expr.caseWF T c.1 = true ∧ Stmt.allWF T fn loop c.2 = true
+      c ∈ cs → Expr.caseWF T c.1 = true ∧ Stmt.allClauseWF T fn loop c.2 = true
   | (t, b) :: cs, c, h, hc => by
     simp only [Stmt.clausesWF, Bool.and_eq_true] at h
     simp only [List.mem_cons] at hc
@@ -1341,23 +1347,104 @@ def ClauseEnd (k : TokenKind) : Prop := k = .punct "}" ∨ k = .keyword "case" �
 theorem ClauseEnd.not_else {k : TokenKind} (h : ClauseEnd k) : k ≠ .keyword "else" := by
   rcases h with rfl | rfl | rfl <;> simp
 
+theorem Stmt.allClauseWF_iff {T : Edition} {fn loop : Bool} :
+    ∀ {ss : List Stmt}, Stmt.allClauseWF T fn loop ss = true ↔
+      ∀ st ∈ ss, st.isBreak = true ∨ st.wf T fn loop = true
+  | [] => by simp [Stmt.allClauseWF]
+  | st :: ss => by simp [Stmt.allClauseWF, Stmt.allClauseWF_iff]
+
+/-- Only a `break` starts with `break`. -/
+theorem Stmt.first_break {T : Edition} {fn loop : Bool} (st : Stmt) (hw : st.wf T fn loop = true)
+    (h : st.wordLines.flatten.flatten.head? = some (.keyword "break")) : st.isBreak = true := by
+  cases st with
+  | exprStmt sp e =>
+    simp only [Stmt.wf, Bool.and_eq_true] at hw
+    obtain ⟨k, hk, _⟩ := Expr.first e
+    simp only [Stmt.wordLines, Stmt.lines, List.map_cons, List.map_nil, List.flatten_cons, List.flatten_nil,
+      List.append_nil, List.flatten_append] at h
+    have hk' : startsExprStmt (some k) = true := hk ▸ hw.2
+    rw [show (e.words.flatten ++ punctWord ";").head? = some k from head_append_of hk] at h
+    simp only [Option.some.injEq] at h
+    subst h
+    simp [startsExprStmt] at hk'
+  | varDecl sp d =>
+    cases hk : d.kind <;> simp [Stmt.wordLines, Stmt.lines, VarDecl.words, hk, VarKind.word, keywordWord,
+      identWord] at h
+  | returnStmt sp v => cases v <;> simp [Stmt.wordLines, Stmt.lines, keywordWord] at h
+  | ifStmt sp t a e => cases e <;> simp [Stmt.wordLines, Stmt.lines, keywordWord] at h
+  | breakStmt _ => rfl
+  | forOfStmt _ _ _ _ _ => simp [Stmt.wordLines, Stmt.lines, keywordWord] at h
+  | whileStmt _ _ _ => simp [Stmt.wordLines, Stmt.lines, keywordWord] at h
+  | continueStmt _ => simp [Stmt.wordLines, Stmt.lines, keywordWord] at h
+  | switchStmt _ _ _ => simp [Stmt.wordLines, Stmt.lines, keywordWord] at h
+  | block _ _ => simp [Stmt.wordLines, Stmt.lines, punctWord] at h
+  | empty _ => simp [Stmt.wordLines, Stmt.lines, punctWord] at h
+
+/-- What a statement of a clause starts with: not what ends the clause, and
+`break` only for a `break`. -/
+theorem Laid.itemFirst {T : Edition} {fn loop : Bool} {st : Stmt} {ts : List Token}
+    (hw : st.isBreak = true ∨ st.wf T fn loop = true) (h : Laid ts st.wordLines) :
+    ∃ x ts', ts = x :: ts' ∧ x.kind ≠ .punct "}" ∧ x.kind ≠ .eof ∧ x.kind ≠ .keyword "else" ∧
+      x.kind ≠ .keyword "case" ∧ x.kind ≠ .keyword "default" ∧
+      (x.kind = .keyword "break" → st.isBreak = true) := by
+  by_cases hb : st.isBreak = true
+  · cases st <;> simp [Stmt.isBreak] at hb
+    have hk := h.kinds
+    cases ts with
+    | nil => simp [Stmt.wordLines, Stmt.lines, keywordWord, punctWord] at hk
+    | cons x ts' =>
+      refine ⟨x, ts', rfl, ?_⟩
+      simp [Stmt.wordLines, Stmt.lines, keywordWord, punctWord] at hk
+      simp [hk.1, Stmt.isBreak]
+  · have hw' : st.wf T fn loop = true := by simpa [hb] using hw
+    obtain ⟨x, ts', rfl, h1, h2, h3, -, h5, h6⟩ := Laid.first hw' h
+    refine ⟨x, ts', rfl, h1, h2, h3, h5, h6, fun hk => Stmt.first_break st hw' ?_⟩
+    have := h.kinds
+    rw [← hk]
+    cases hl : st.wordLines.flatten.flatten with
+    | nil => rw [hl] at this; simp at this
+    | cons y ys => rw [hl] at this; simp at this; simp [this.1]
+
+theorem Laid.items_length_le {T : Edition} {fn loop : Bool} :
+    ∀ {body : List Stmt} {ts : List Token}, (∀ st ∈ body, st.isBreak = true ∨ st.wf T fn loop = true) →
+      Laid ts (body.map Stmt.wordLines).flatten → body.length ≤ ts.length
+  | [], _, _, _ => by simp
+  | st :: body, ts, hw, h => by
+    obtain ⟨a, b, rfl, ha, hb, _⟩ := Laid.append (by simpa using h)
+    obtain ⟨x, a', rfl, _⟩ := Laid.itemFirst (hw st (by simp)) ha
+    have := Laid.items_length_le (fun s hs => hw s (by simp [hs])) hb
+    simp; omega
+
+/-- `parseClauseBreak` reads `break ;`. -/
+theorem parseClauseBreak_reads {s : ParseState} {kw semi : Token} {rest : List Token}
+    (hs : s.rest = kw :: semi :: rest) (hl : s.left = s.rest.length) (hr : rest ≠ [])
+    (hsemi : semi.kind = .punct ";") :
+    ∃ s', Parse.parseClauseBreak s = .ok (.breakStmt ⟨kw.span.start, semi.span.stop⟩) s' ∧ Leaves s s' rest := by
+  let s₁ := past s kw (semi :: rest)
+  refine ⟨{ s₁ with rest := rest, left := s₁.left - 1, lastStop := semi.span.stop }, ?_,
+    leaves_trans (leaves_advance hs hl) (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs]))⟩
+  simp only [Parse.parseClauseBreak]
+  rw [Parse.bind_eq (Parse.advance_eq hs)]
+  simp [s₁, Parse.peek_eq (s := s₁) rfl, hsemi, Token.isAnyIdent, endStatement_semi (s := s₁) rfl hr hsemi,
+    Parse.spanFrom_eq, bind, EStateM.bind, pure, EStateM.pure]
+
 /-- After the statements of a clause comes a statement or the end of the clause, and no `else`. -/
 theorem clause_not_else {T : Edition} {fn loop : Bool} {c : Token} {rest : List Token} (hc : ClauseEnd c.kind) :
-    ∀ {body : List Stmt} {b : List Token}, (∀ st ∈ body, st.wf T fn loop = true) →
+    ∀ {body : List Stmt} {b : List Token}, (∀ st ∈ body, st.isBreak = true ∨ st.wf T fn loop = true) →
       Laid b (body.map Stmt.wordLines).flatten → ∀ u ∈ (b ++ c :: rest).head?, u.kind ≠ .keyword "else"
   | [], b, _, hb => by
     simp [Laid] at hb; subst hb; intro u hu; simp at hu; subst hu; exact hc.not_else
   | st :: body, b, hw, hb => by
     obtain ⟨a, b', rfl, ha, _, _⟩ := Laid.append (by simpa using hb)
-    obtain ⟨x, a', rfl, hx⟩ := Laid.first (hw st (by simp)) ha
+    obtain ⟨x, a', rfl, hx⟩ := Laid.itemFirst (hw st (by simp)) ha
     intro u hu; simp at hu; subst hu; exact hx.2.2.1
 
 /-- The loop of `parseClause` reads the statements of a clause, which the next
 clause or the `}` follows. -/
 theorem clause_loop {T : Edition} {fn loop : Bool} {p : ParseM Stmt} :
     ∀ (body : List Stmt) (fuel : Nat) (acc : Array Stmt) (s : ParseState) (ts rest : List Token) (c : Token),
-      (∀ st ∈ body, st.wf T fn loop = true ∧ ReadsS T fn loop p st) → body.length < fuel →
-      s.target = T → s.inFunction = fn → (loop = true → s.loopDepth ≠ 0) →
+      (∀ st ∈ body, st.isBreak = true ∨ (st.wf T fn loop = true ∧ ReadsS T fn loop p st)) →
+      body.length < fuel → s.target = T → s.inFunction = fn → (loop = true → s.loopDepth ≠ 0) →
       s.rest = ts ++ c :: rest → ClauseEnd c.kind → s.left = s.rest.length →
       Laid ts (body.map Stmt.wordLines).flatten →
       ∃ res s', Parse.iterate fuel acc (Parse.clauseStep p) s = .ok res s' ∧
@@ -1373,34 +1460,67 @@ theorem clause_loop {T : Edition} {fn loop : Bool} {p : ParseM Stmt} :
   | st :: body, fuel, acc, s, ts, rest, c, hrd, hlen, hT, hF, hL, hs, hc, hl, ht => by
     obtain ⟨f', rfl⟩ : ∃ f', fuel = f' + 1 := ⟨fuel - 1, by simp at hlen; omega⟩
     obtain ⟨a, b, rfl, ha, hb, _⟩ := Laid.append (by simpa using ht)
-    obtain ⟨hw, hrs⟩ := hrd st (by simp)
-    obtain ⟨k, a', rfl, hk⟩ := Laid.first hw ha
-    obtain ⟨hk1, hk2, -, -, hk5, hk6⟩ := hk
-    have hs' : s.rest = k :: (a' ++ (b ++ c :: rest)) := by simpa using hs
-    obtain ⟨st', s₁, hp, he, hL₁⟩ := hrs s (k :: a') (b ++ c :: rest) hT hF hL (by simpa using hs) hl ha
-      (by simp) (fun _ => clause_not_else hc (fun t ht => (hrd t (by simp [ht])).1) hb)
+    have hitem : ∀ t ∈ body, t.isBreak = true ∨ t.wf T fn loop = true := fun t ht =>
+      (hrd t (by simp [ht])).imp id (·.1)
+    -- The statement, as the parser reads it: `parseClauseBreak` for a `break`,
+    -- and `p` for any other.
+    obtain ⟨st', s₁, k, a', rfl, hk1, hk2, hk5, hk6, hstep, he, hL₁⟩ : ∃ st' s₁ k a', a = k :: a' ∧
+        k.kind ≠ .punct "}" ∧ k.kind ≠ .eof ∧ k.kind ≠ .keyword "case" ∧ k.kind ≠ .keyword "default" ∧
+        (∀ items : Array Stmt, Parse.clauseStep p items s = .ok (items.push st', true) s₁) ∧
+        st'.erase = st.erase ∧ Leaves s s₁ (b ++ c :: rest) := by
+      obtain ⟨k, a', rfl, hk1, hk2, -, hk5, hk6, hkb⟩ := Laid.itemFirst ((hrd st (by simp)).imp id (·.1)) ha
+      have hs' : s.rest = k :: (a' ++ (b ++ c :: rest)) := by simpa using hs
+      have hb1 : (k.kind == .punct "}") = false := by simp [hk1]
+      have hb2 : (k.kind == .eof) = false := by simp [hk2]
+      have hb3 : (k.kind == .keyword "case") = false := by simp [hk5]
+      have hb4 : (k.kind == .keyword "default") = false := by simp [hk6]
+      by_cases hbr : st.isBreak = true
+      · obtain ⟨sp, rfl⟩ : ∃ sp, st = .breakStmt sp := by
+          cases st <;> simp [Stmt.isBreak] at hbr; exact ⟨_, rfl⟩
+        simp only [Stmt.wordLines, Stmt.lines, List.map_cons, List.map_nil] at ha
+        obtain ⟨h1, _⟩ := Laid.one ha
+        obtain ⟨kw, ts', hkw', hkw, h'⟩ := Touching.cons_one (by simpa [keywordWord] using h1)
+        obtain ⟨semi, ts'', rfl, hsemi, h''⟩ := Touching.cons_one (by simpa [punctWord] using h')
+        simp [Touching] at h''; subst h''
+        obtain ⟨rfl, rfl⟩ := List.cons.inj hkw'
+        have hs₂ : s.rest = k :: semi :: (b ++ c :: rest) := by simpa using hs
+        obtain ⟨s₁, hp, hL₁⟩ := parseClauseBreak_reads hs₂ hl (by simp) hsemi
+        refine ⟨.breakStmt ⟨k.span.start, semi.span.stop⟩, s₁, k, [semi], rfl, hk1, hk2, hk5, hk6,
+          fun items => ?_, rfl, hL₁⟩
+        have hb5 : (k.kind == .keyword "break") = true := by simp [hkw]
+        simp only [Parse.clauseStep]
+        rw [Parse.bind_eq (Parse.peek_eq hs₂)]
+        simp only [Token.isPunct, Token.isKeyword, Token.isEof, hb1, hb2, hb3, hb4, hb5, Bool.or_false,
+          Bool.false_eq_true, ↓reduceIte, Parse.pure_bind]
+        rw [Parse.bind_eq hp]
+        rfl
+      · obtain ⟨hw, hrs⟩ := (hrd st (by simp)).resolve_left hbr
+        obtain ⟨st', s₁, hp, he, hL₁⟩ := hrs s (k :: a') (b ++ c :: rest) hT hF hL (by simpa using hs) hl ha
+          (by simp) (fun _ => clause_not_else hc hitem hb)
+        have hb5 : (k.kind == .keyword "break") = false := by
+          cases h : k.kind == .keyword "break"
+          · rfl
+          · exact absurd (hkb (by simpa using h)) hbr
+        refine ⟨st', s₁, k, a', rfl, hk1, hk2, hk5, hk6, fun items => ?_, he, hL₁⟩
+        simp only [Parse.clauseStep]
+        rw [Parse.bind_eq (Parse.peek_eq hs')]
+        simp only [Token.isPunct, Token.isKeyword, Token.isEof, hb1, hb2, hb3, hb4, hb5, Bool.or_false,
+          Bool.false_eq_true, ↓reduceIte, Parse.pure_bind]
+        rw [Parse.bind_eq hp]
+        rfl
     have hl₁ : s₁.left = s₁.rest.length := by rw [hL₁.left_eq, hL₁.rest_eq]
     obtain ⟨res, s', hit, he', hL'⟩ := clause_loop body f' (acc.push st') s₁ b rest c
       (fun t ht => hrd t (by simp [ht])) (by simp at hlen; omega) (hL₁.target_eq.trans hT)
       (hL₁.inFunction_eq.trans hF) (fun h => by rw [hL₁.loopDepth_eq]; exact hL h) hL₁.rest_eq hc hl₁ hb
     refine ⟨res, s', ?_, by rw [he']; simp [he], leaves_trans hL₁ hL'⟩
-    rw [Parse.iterate_true (acc' := acc.push st') (s' := s₁)]
-    · exact hit
-    · have hb1 : (k.kind == .punct "}") = false := by simp [hk1]
-      have hb2 : (k.kind == .eof) = false := by simp [hk2]
-      have hb3 : (k.kind == .keyword "case") = false := by simp [hk5]
-      have hb4 : (k.kind == .keyword "default") = false := by simp [hk6]
-      simp only [Parse.clauseStep]
-      rw [Parse.bind_eq (Parse.peek_eq hs')]
-      simp only [Token.isPunct, Token.isKeyword, Token.isEof, hb1, hb2, hb3, hb4, Bool.or_false,
-        Bool.false_eq_true, ↓reduceIte, Parse.pure_bind]
-      rw [Parse.bind_eq hp]
-      rfl
+    rw [Parse.iterate_true (acc' := acc.push st') (s' := s₁) (hstep acc)]
+    exact hit
 
 /-- `parseClause` reads a clause, which the next clause or the `}` follows. -/
 theorem parseClause_reads {T : Edition} {fn loop : Bool} (g : Nat) (test : Option Expr) (body : List Stmt)
     (htw : Expr.caseWF T test = true)
-    (hrd : ∀ st ∈ body, st.wf T fn loop = true ∧ ReadsS T fn loop (Parse.parseStatement g) st)
+    (hrd : ∀ st ∈ body, st.isBreak = true ∨
+      (st.wf T fn loop = true ∧ ReadsS T fn loop (Parse.parseStatement g) st))
     (s : ParseState) (a after : List Token) (hT : s.target = T) (hF : s.inFunction = fn)
     (hL : loop = true → s.loopDepth ≠ 0) (hs : s.rest = a ++ after)
     (hafter : ∃ c r, after = c :: r ∧ ClauseEnd c.kind)
@@ -1411,7 +1531,7 @@ theorem parseClause_reads {T : Edition} {fn loop : Bool} (g : Nat) (test : Optio
   obtain ⟨c, r, rfl, hc⟩ := hafter
   simp only [clauseWordLines] at ha
   obtain ⟨a₁, a₂, rfl, ha₁, hna, _, ha₂⟩ := Laid.cons ha
-  have hlen := Laid.length_le (fun st h => (hrd st h).1) ha₂
+  have hlen := Laid.items_length_le (fun st h => (hrd st h).imp id (·.1)) ha₂
   cases test with
   | none =>
     simp only [clauseHead] at ha₁
@@ -1515,7 +1635,8 @@ theorem Touching.switchHead {ts : List Token} {disc : Expr}
 /-- `switch ( disc ) {`, its clauses, which `parseClause` reads, and `}`. -/
 theorem stmt_switch {T : Edition} {fn loop : Bool} (g : Nat) (sp : Span) (disc : Expr)
     (cs : List (Option Expr × List Stmt)) (hw : (Stmt.switchStmt sp disc cs).wf T fn loop = true)
-    (hrd : ∀ c ∈ cs, ∀ st ∈ c.2, st.wf T fn loop = true ∧ ReadsS T fn loop (Parse.parseStatement g) st) :
+    (hrd : ∀ c ∈ cs, ∀ st ∈ c.2, st.isBreak = true ∨
+      (st.wf T fn loop = true ∧ ReadsS T fn loop (Parse.parseStatement g) st)) :
     ReadsS T fn loop (Parse.parseStatement (g + 1 + 1)) (.switchStmt sp disc cs) := by
   intro s ts rest hT hF hL hs hl hlaid hr _
   simp only [Stmt.wf, Bool.and_eq_true, Expr.wfParen, decide_eq_true_eq] at hw
@@ -1605,7 +1726,7 @@ theorem Stmt.depth_le_depthOf {st : Stmt} : ∀ {ss : List Stmt}, st ∈ ss → 
 
 theorem Stmt.clausesWF_iff {T : Edition} {fn loop : Bool} :
     ∀ {cs : List (Option Expr × List Stmt)}, Stmt.clausesWF T fn loop cs = true ↔
-      ∀ c ∈ cs, Expr.caseWF T c.1 = true ∧ Stmt.allWF T fn loop c.2 = true
+      ∀ c ∈ cs, Expr.caseWF T c.1 = true ∧ Stmt.allClauseWF T fn loop c.2 = true
   | [] => by simp [Stmt.clausesWF]
   | (t, b) :: cs => by simp [Stmt.clausesWF, Stmt.clausesWF_iff, and_assoc]
 
@@ -1690,9 +1811,9 @@ theorem allStmts_succ {T : Edition} (f : Nat) (IH : ∀ g ≤ f, AllStmts T g) :
     have hw' := hw
     simp only [Stmt.wf, Bool.and_eq_true] at hw'
     exact stmt_switch g sp disc cs hw fun c hc st hst =>
-      have hwst := Stmt.allWF_iff.mp (Stmt.clausesWF_mem hw'.2 hc).2 st hst
-      ⟨hwst, IH g (by omega) fn loop st hwst
-        (by have := Stmt.depth_le_depthClauses hc hst; simp [Stmt.need]; omega)⟩
+      (Stmt.allClauseWF_iff.mp (Stmt.clausesWF_mem hw'.2 hc).2 st hst).imp id fun hwst =>
+        ⟨hwst, IH g (by omega) fn loop st hwst
+          (by have := Stmt.depth_le_depthClauses hc hst; simp [Stmt.need]; omega)⟩
 
 theorem stmts_read_le (T : Edition) : ∀ f, ∀ g ≤ f, AllStmts T g := by
   intro f

@@ -400,6 +400,18 @@ class Printer {
     return body;
   }
 
+  /** A statement of a `switch` clause: a `break` at its top ends the
+   * `switch`, so it may stand outside a loop. */
+  private clauseItem(s: ts.Statement): Sexp {
+    if (ts.isBreakStatement(s)) {
+      if (s.label !== undefined) {
+        refuse(s, 'label');
+      }
+      return this.node('break', s, [], []);
+    }
+    return this.statement(s);
+  }
+
   private statement(s: ts.Statement): Sexp {
     if (ts.isVariableStatement(s)) {
       this.modifiers(s, []);
@@ -476,7 +488,7 @@ class Printer {
         return {
           head: ts.isCaseClause(c) ? 'case' : 'default',
           atoms: [],
-          children: [...test, ...c.statements.map((st) => this.statement(st))],
+          children: [...test, ...c.statements.map((st) => this.clauseItem(st))],
         };
       });
       return this.node('switch', s, [], [this.expr(s.expression), ...children]);

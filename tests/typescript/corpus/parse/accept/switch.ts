@@ -30,6 +30,21 @@ export function loop(xs: ReadonlyArray<string>): bigint {
   return count;
 }
 
+export function count(x: string): bigint {
+  let n = 0n;
+  switch (x) {
+    case 'a':
+      n = 1n;
+      break;
+    case 'b':
+      n = 2n;
+      break
+    default:
+      break;
+  }
+  return n;
+}
+
 export function empty(x: string): bigint {
   switch (x) {
   }

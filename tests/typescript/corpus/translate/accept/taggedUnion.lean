@@ -28,7 +28,7 @@ def total (shapes : List Shape) : Int :=
   let sum := (0 : Int)
   let sum :=
     List.foldl
-      (fun sum s =>
+      (fun (sum : Int) (s : Shape) =>
         let sum :=
           match s with
           | Shape.«square» s =>

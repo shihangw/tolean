@@ -18,7 +18,7 @@ def total {N : Type} [JSNumber N] (ids : List Int) : Int :=
   let sum := (0 : Int)
   let sum :=
     List.foldl
-      (fun sum id =>
+      (fun (sum : Int) (id : Int) =>
         let sum := sum + id
         sum)
       sum ids
