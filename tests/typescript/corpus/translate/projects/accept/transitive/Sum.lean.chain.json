@@ -8,7 +8,7 @@
   {"sha256": "66d4d88f0d81f744785c3c821717886f97c8fa531bc406d2d88e6cd15b61f33e",
    "path": "inner.ts"}],
  "output":
- {"sha256": "576e742f65658c038e1a5b3cc1870dc123d87baec15f6a4e53477cf0a061dde0",
+ {"sha256": "e4798938b001ab3de1e09f55582bdd5ab71dab66c9366c029ff51669bf220bc4",
   "path": "Sum.lean"},
  "nodes":
  [{"status": "tested",

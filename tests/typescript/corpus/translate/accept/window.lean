@@ -18,7 +18,7 @@ def countSafe {N : Type} [JSNumber N] (values : List N) : N :=
   let count := (JSNumber.ofSafeInt (N := N) (0 : Int))
   let count :=
     List.foldl
-      (fun count v =>
+      (fun (count : N) (v : N) =>
         let count :=
           if ((JSNumber.toSafeInt v).isSome && !((JSNumber.isNaN v))) then
             let count := (JSNumber.add count ((JSNumber.ofSafeInt (N := N) (1 : Int))))

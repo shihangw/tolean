@@ -1,0 +1,4 @@
+interface:
+  display_name: "Independent Code Reviewer"
+  short_description: "Review PRs and follow up without duplicate findings"
+  default_prompt: "Use $independent-code-reviewer to review these PRs, post new findings, and follow existing threads through verified fixes."

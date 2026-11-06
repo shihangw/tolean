@@ -28,6 +28,7 @@ row, and the corpus files for each row certify.
 | 2 | Literal unions of strings, `type T = 'a' \| 'b'`, as an `inductive` | [#47](https://github.com/shihangw/tolean/pull/47) |
 | 2 | Tagged unions of interfaces, narrowed by `if (x.kind === 'a')` | [#51](https://github.com/shihangw/tolean/pull/51) |
 | 2 | `switch (x.kind)` on a tagged union, where every clause returns | [#53](https://github.com/shihangw/tolean/pull/53) |
+| 2 | The same `switch`, where every clause changes locals and ends in `break`, also in a loop | [#54](https://github.com/shihangw/tolean/pull/54) |
 | 2 | Optional fields `f?: T` of interfaces, read with `??` and `=== undefined` | [#55](https://github.com/shihangw/tolean/pull/55) |
 | 2 | `x ??= y` on a `let` local of type `T \| null` | [#63](https://github.com/shihangw/tolean/pull/63) |
 
@@ -66,7 +67,7 @@ exact. A construct leaves these tables when Tolean translates it, and the
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| A `switch` on the tag whose clauses end in `break` and change locals, and a `default` that assigns the value to `never` | A `match` on the constructor that ends in the locals it changes | Fallthrough between cases |
+| A `default` that assigns the value to `never`, to check that the cases of a `switch` cover every member | Nothing: the `match` already covers them | A `default` that runs |
 | `x?: T` parameters, `undefined` as a value, and a test such as `x !== undefined` that narrows an optional value | `Option T` | `'x' in obj`, which can tell a missing key from `undefined` |
 | `x?.f` | `Option` matches | `==` against anything except `null` and `undefined` |
 | `export { … }` and re-exports | Nothing: the names stay in scope | `export *` |
@@ -281,8 +282,7 @@ is the one exception, because it changes the type of every `string`.
    literals and `===`, so the switch changes the generated types but breaks
    almost no proof. Every project that writes proofs over Lean's `String`
    makes the switch more costly later, so it comes first.
-2. Types and narrowing: `switch` clauses that end in `break`, optional
-   parameters and `x?.f`.
+2. Types and narrowing: optional parameters and `x?.f`.
 3. Generic functions and types whose type parameters have no constraint,
    tuples, string enums, `typeof` tests and type guards.
 4. Callbacks that read only `const` values, the array methods without

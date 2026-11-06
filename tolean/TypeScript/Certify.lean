@@ -355,9 +355,22 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         s!"    | _ => {ctor firstTag} (decode{firstRef.name} ({nv} := {nv}) none)\n" ++
         s!"  | _ => {ctor firstTag} (decode{firstRef.name} ({nv} := {nv}) none)"
       let memberDefs := ", ".intercalate (members.flatMap fun (_, m) => [s!"encode{m.name}", s!"decode{m.name}"])
+      -- One arm for each member. As for an interface, the proof splits each
+      -- optional field of the member's structure into its two cases.
+      let memberFields (ref : DeclRef) : List (String × IR.Ty) :=
+        ((decls.findSome? fun
+          | .struct n fs => if n == ref.name then some fs else none
+          | _ => none).getD []).filter fun (_, t) => !(t matches .tag _)
+      let arms := members.map fun (t, m) =>
+        let fs := memberFields m
+        let opts := fs.filterMap fun (f, t) => if t matches .optional _ then some f else none
+        let split := if opts.isEmpty then "cases v <;> "
+          else s!"obtain ⟨{", ".intercalate (fs.map fun (f, _) => s!"v_{f}")}⟩ := v\n    " ++
+            String.join (opts.map fun f => s!"cases v_{f} <;> ")
+        s!"  | {IR.memberName t} v =>\n    {split}simp [decode{name}, encode{name}, {memberDefs}, List.lookup, encList]"
       encs := encs.push <|
         s!"@[simp] theorem decode{name}_encode{name} {generic} (x : {ty}) : decode{name} (some (encode{name} ({nv} := {nv}) x)) = x := by\n" ++
-        s!"  cases x <;> rename_i v <;> cases v <;> simp [decode{name}, encode{name}, {memberDefs}, List.lookup, encList]"
+        "  cases x with\n" ++ "\n".intercalate arms
       encs := encs.push <|
         s!"@[simp] theorem encode{name}_ne_null {generic} (x : {ty}) : encode{name} ({nv} := {nv}) x ≠ Val.null := by\n" ++
         s!"  cases x <;> simp [encode{name}, {memberDefs}]"
@@ -412,9 +425,14 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           s!"{ρ}.lookup {str n} = some ({e} ({dec} ({ρ}.lookup {str n})))")
       let scopeNames := info.scope.map (·.1)
       let stepLines := IR.indentBy "        " (body.lines names)
-      let captured := if scopeNames.isEmpty then "" else s!"fun {" ".intercalate scopeNames} => "
+      -- Every binder has its type, as in the output's loop (see `IR.foldBinders`).
+      let captured := if scopeNames.isEmpty then "" else
+        s!"fun {" ".intercalate (info.scope.map fun (n, t) => s!"({n} : {t.print names})")} => "
       let stepFn (ρ : String) : String :=
-        s!"((({captured}fun {IR.tuple stateNames} {element} =>\n" ++ "\n".intercalate stepLines ++ ")" ++
+        -- The result has its type too: alone, Lean would not coerce a `T` in
+        -- the body to the state's `Option T`.
+        s!"((({captured}fun {IR.foldBinders names stateNames element info} => (\n" ++ "\n".intercalate stepLines ++
+          s!" : {IR.foldState names info}))" ++
           String.join (scopeNames.map fun n => s!" {decode ρ n}") ++ "))"
       let depth := callDepth m bodyStmt
       let fuel := if depth == 0 then "fuel" else s!"(fuel + {depth})"

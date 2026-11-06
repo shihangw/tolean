@@ -26,7 +26,7 @@ def countOn (xs : List Outer) : Int :=
   let n := (0 : Int)
   let n :=
     List.foldl
-      (fun n x =>
+      (fun (n : Int) (x : Outer) =>
         let n :=
           if (x.inner).s = Status.«on» then
             let n := n + (1 : Int)
