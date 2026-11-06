@@ -94,7 +94,6 @@ def Expr.eval (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
     Expr → Option (Val N)
   | .int n => some (.int n)
   | .none => some .null
-  | .ascribe e _ => Expr.eval fs fuel ρ e
   | .bool b => some (.bool b)
   | .string s => some (.str s)
   | .var name => ρ.lookup name

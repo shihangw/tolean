@@ -297,7 +297,6 @@ the file, the line and the reason. It never approximates.
 | `function` with typed parameters and return type | `def` |
 | `const x = e`, `let x = e` | `let x := e` |
 | `x = e`, `x += e`, `x -= e`, `x *= e` on a `let` local | `let x := …` (shadowing) |
-| `x ??= e` on a `let` local of type `T \| null` | `let x := Option.or x e`. JS evaluates `e` only when `x` is `null`. Lean evaluates it either way, but the result is the same, because the subset has no side effects. |
 | `[a, b]` with the element type from the context or the elements, such as `return [a, b]` or `const xs: ReadonlyArray<T> = []` | `([a, b] : List T)` |
 | `const xs: Array<T> = [...]`, then `xs.push(e)`; `xs` read only in the `return` | `let xs := xs ++ [e]` |
 | `for (const x of xs) { … }` | `List.foldl` over the tuple of locals the body changes |
@@ -325,10 +324,6 @@ Tolean rejects these, among others:
   same without it. Refusing it keeps every part of the program in the
   translation, which the proof of the translator relies on. For the same
   reason Tolean refuses `a ?? b` when `a` cannot be `null`.
-- A local of type `null`, such as `let x = null`. Lean would give it the type
-  `Option Empty`, which no other value has. Write the type instead, as in
-  `let x: bigint | null = null`.
-- `x ??= e` where `x` is a `const`, or where its type does not include `null`.
 - The global `isNaN` and `isFinite`. These convert their argument to a number
   first. Use `Number.isNaN` and `Number.isFinite` instead.
 - Assignment to a parameter, a `const` or a field, and a push onto an array

@@ -28,7 +28,7 @@ def hasScore {N : Type} [JSNumber N] (p : (Player N)) : Bool :=
   p.score.isSome
 
 def reset {N : Type} [JSNumber N] (p : (Player N)) : (Player N) :=
-  let cleared := (none : Option N)
+  let cleared := none
   ({ id := p.id, score := cleared } : (Player N))
 
 end Test

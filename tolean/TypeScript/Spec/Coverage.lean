@@ -152,7 +152,7 @@ def sections : List Section := [
   ⟨"sec-conditional-operator", "13.14", "Conditional Operator",
     [``Proof.out_ite]⟩,
   ⟨"sec-assignment-operators", "13.15", "Assignment Operators",
-    [``Proof.update_sound, ``Proof.out_update, ``Proof.agree_set, ``Proof.env_set_self]⟩,
+    [``Proof.update_sound, ``Proof.out_update, ``Proof.agree_set]⟩,
   -- §14 ECMAScript Language: Statements and Declarations {#sec-ecmascript-language-statements-and-declarations}
   ⟨"sec-block", "14.2", "Block",
     [``Proof.exec_single, ``Proof.blockStatements_eq, ``Proof.execStmt_block, ``Proof.block_ret,
@@ -162,11 +162,10 @@ def sections : List Section := [
     ``Proof.Frame.trans, ``Proof.Frame.lookup, ``Proof.Frame.isSome, ``Proof.Frame.set,
     ``Proof.Frame.append, ``Proof.Frame.mem, ``Proof.Frame.split]⟩,
   ⟨"sec-let-and-const-declarations", "14.3.1", "Let and Const Declarations",
-    [``Proof.decl_sim, ``Proof.declare_ok, ``Proof.has_add, ``declare_not_callable, ``Proof.eval_withType]⟩,
+    [``Proof.decl_sim, ``Proof.declare_ok, ``Proof.has_add, ``declare_not_callable]⟩,
   ⟨"sec-if-statement", "14.6", "The if Statement",
     [``Proof.execStmt_if, ``Proof.if_ret, ``Proof.if_normal, ``Proof.if_ret_sim,
-    ``Proof.if_state_sim, ``Proof.branch_ite, ``Proof.branch_null, ``Proof.branch_tag,
-    ``Proof.translateIf_sound]⟩,
+    ``Proof.if_state_sim, ``Proof.branch_ite, ``Proof.branch_null, ``Proof.branch_tag]⟩,
   ⟨"sec-for-in-and-for-of-statements", "14.7.5",
     "The for-in, for-of, and for-await-of Statements",
     [``Proof.loop_sim, ``Proof.runFold_foldl, ``Proof.translateForOf_sound]⟩,
@@ -477,7 +476,7 @@ def extras : List Group := [
   ⟨"Certificates: the encoders and decoders", [``Eval.encNull_some, ``Eval.encNull_none,
     ``Eval.decInt_int, ``Eval.decBool_bool, ``Eval.decNum_num, ``Eval.decStr_str, ``Eval.decList_list,
     ``Eval.decNull_some, ``Eval.decList_nil, ``Eval.decList_cons, ``Eval.decList_encList,
-    ``Eval.decNull_encNull, ``Eval.decNull_null, ``Eval.decList_list_null, ``Eval.decList_encList_null, ``Eval.encUndef_some, ``Eval.encUndef_none,
+    ``Eval.decNull_encNull, ``Eval.decNull_null, ``Eval.encUndef_some, ``Eval.encUndef_none,
     ``Eval.encField_some, ``Eval.encField_none, ``Eval.decUndef_none, ``Eval.decUndef_undefined,
     ``Eval.decUndef_some, ``Eval.decUndef_encUndef]⟩]
 

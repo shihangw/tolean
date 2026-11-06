@@ -263,20 +263,15 @@ export class Gen {
       const roll = this.next();
       const lets = vars.filter((v) => v.mutable);
       if (roll < 0.3) {
-        const t = this.pick([BIGINT, NUMBER, BOOLEAN, STRING, { k: 'nullable', of: BIGINT } as Ty,
-          ...(this.structs.length > 0 ? [{ k: 'struct', name: this.pick(this.structs).name } as Ty] : [])]);
+        const t = this.pick([BIGINT, NUMBER, BOOLEAN, STRING, ...(this.structs.length > 0 ? [{ k: 'struct', name: this.pick(this.structs).name } as Ty] : [])]);
         const name = this.fresh('v');
         const mutable = this.chance(0.6);
-        const value = this.expr(t, vars, 2);
-        // A bare `null` gives the local the type `null`, which Tolean refuses.
-        const annotate = t.k === 'struct' || value === 'null' || this.chance(0.2);
-        lines.push(`${mutable ? 'let' : 'const'} ${name}${annotate ? `: ${show(t)}` : ''} = ${value};`);
+        const annotate = t.k === 'struct' || this.chance(0.2);
+        lines.push(`${mutable ? 'let' : 'const'} ${name}${annotate ? `: ${show(t)}` : ''} = ${this.expr(t, vars, 2)};`);
         vars.push({ name, ty: t, mutable, owned: false });
       } else if (roll < 0.5 && lets.length > 0) {
         const v = this.pick(lets);
-        // `x ??= e` assigns only when `x` is null.
-        const op = v.ty.k === 'bigint' || v.ty.k === 'number' ? this.pick(['=', '+=', '-=', '*='])
-          : v.ty.k === 'nullable' ? this.pick(['=', '??=']) : '=';
+        const op = v.ty.k === 'bigint' || v.ty.k === 'number' ? this.pick(['=', '+=', '-=', '*=']) : '=';
         lines.push(`${v.name} ${op} ${this.expr(v.ty, vars, 2)};`);
       } else if (roll < 0.65 && depth > 0 && lets.length > 0) {
         const v = this.pick(lets);

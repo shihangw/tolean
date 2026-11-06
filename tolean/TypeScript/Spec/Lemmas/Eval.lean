@@ -257,19 +257,6 @@ def decUndef {α : Type} (dec : Option (Val N) → α) : Option (Val N) → Opti
   | none => rfl
   | some v => simp [decNull_some dec (enc v) (hn v), h]
 
-/-- `decList_list` on a list of nullable values, in one step. Its side
-conditions are about `enc` alone, so `simp` can discharge them when it uses
-this lemma for a side condition itself, as in a loop's invariant. -/
-@[simp] theorem decList_list_null {α : Type} (dec : Option (Val N) → α) (enc : α → Val N)
-    (h : ∀ x, dec (some (enc x)) = x) (hn : ∀ x, enc x ≠ .null) (xs : List (Option α)) :
-    decList (decNull dec) (some (.list (xs.map (encNull enc)))) = xs :=
-  decList_list _ _ (decNull_encNull dec enc h hn) xs
-
-@[simp] theorem decList_encList_null {α : Type} (dec : Option (Val N) → α) (enc : α → Val N)
-    (h : ∀ x, dec (some (enc x)) = x) (hn : ∀ x, enc x ≠ .null) (xs : List (Option α)) :
-    decList (decNull dec) (some (encList (encNull enc) xs)) = xs :=
-  decList_list_null dec enc h hn xs
-
 @[simp] theorem decNull_null {α : Type} (dec : Option (Val N) → α) : decNull dec (some .null) = none := rfl
 
 end tolean.TypeScript.Eval

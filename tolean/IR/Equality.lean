@@ -25,7 +25,6 @@ mutual
 def Expr.beq : Expr T E → Expr T E → Bool
   | .int a0, .int b0 => Decidable.decide (a0 = b0)
   | .none, .none => true
-  | .ascribe a0 a1, .ascribe b0 b1 => Expr.beq a0 b0 && Decidable.decide (a1 = b1)
   | .bool a0, .bool b0 => Decidable.decide (a0 = b0)
   | .string a0, .string b0 => Decidable.decide (a0 = b0)
   | .var a0, .var b0 => Decidable.decide (a0 = b0)
@@ -78,8 +77,6 @@ theorem Expr.beq_iff : (a b : Expr T E) → Expr.beq a b = true ↔ a = b
     cases b <;> simp [and_assoc, Expr.beq]
   | .none, b => by
     cases b <;> simp [and_assoc, Expr.beq]
-  | .ascribe a0 a1, b => by
-    cases b <;> simp [and_assoc, Expr.beq, Expr.beq_iff a0]
   | .bool a0, b => by
     cases b <;> simp [and_assoc, Expr.beq]
   | .string a0, b => by
