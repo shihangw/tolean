@@ -70,6 +70,23 @@ theorem TypeExpr.beqOpt_iff : (o p : Option TypeExpr) → TypeExpr.beqOpt o p = 
   | some x, p => by
     cases p <;> simp [and_assoc, TypeExpr.beqOpt, TypeExpr.beq_iff x]
 
+def Param.beq (a b : Param) : Bool := decide (a.span = b.span) && decide (a.name = b.name) && TypeExpr.beqOpt a.type b.type
+
+theorem Param.beq_iff (a b : Param) : Param.beq a b = true ↔ a = b := by
+  obtain ⟨span, name, type⟩ := a
+  cases b
+  simp [and_assoc, Param.beq, TypeExpr.beqOpt_iff type]
+
+def Param.beqList : List Param → List Param → Bool
+  | [], [] => true
+  | x :: xs, y :: ys => Param.beq x y && Param.beqList xs ys
+  | _, _ => false
+
+theorem Param.beqList_iff : (xs ys : List Param) → Param.beqList xs ys = true ↔ xs = ys
+  | [], ys => by cases ys <;> simp [and_assoc, Param.beqList]
+  | x :: xs, ys => by
+    cases ys <;> simp [and_assoc, Param.beqList, Param.beq_iff x, Param.beqList_iff xs]
+
 mutual
 
 def Expr.beq : Expr → Expr → Bool
@@ -92,6 +109,8 @@ def Expr.beq : Expr → Expr → Bool
   | .binary a0 a1 a2 a3, .binary b0 b1 b2 b3 => decide (a0 = b0) && decide (a1 = b1) && Expr.beq a2 b2 && Expr.beq a3 b3
   | .cond a0 a1 a2 a3, .cond b0 b1 b2 b3 => decide (a0 = b0) && Expr.beq a1 b1 && Expr.beq a2 b2 && Expr.beq a3 b3
   | .assign a0 a1 a2 a3, .assign b0 b1 b2 b3 => decide (a0 = b0) && decide (a1 = b1) && Expr.beq a2 b2 && Expr.beq a3 b3
+  | .arrow a0 a1 a2 a3, .arrow b0 b1 b2 b3 =>
+    decide (a0 = b0) && decide (a1 = b1) && Param.beqList a2 b2 && Expr.beq a3 b3
   | _, _ => false
 
 def Expr.beqList : List Expr → List Expr → Bool
@@ -157,6 +176,8 @@ theorem Expr.beq_iff : (a b : Expr) → Expr.beq a b = true ↔ a = b
     cases b <;> simp [and_assoc, Expr.beq, Expr.beq_iff a1, Expr.beq_iff a2, Expr.beq_iff a3]
   | .assign a0 a1 a2 a3, b => by
     cases b <;> simp [and_assoc, Expr.beq, Expr.beq_iff a2, Expr.beq_iff a3]
+  | .arrow a0 a1 a2 a3, b => by
+    cases b <;> simp [and_assoc, Expr.beq, Param.beqList_iff a2, Expr.beq_iff a3]
 
 theorem Expr.beqList_iff : (xs ys : List Expr) → Expr.beqList xs ys = true ↔ xs = ys
   | [], ys => by cases ys <;> simp [and_assoc, Expr.beqList]
@@ -267,23 +288,6 @@ theorem Stmt.beqClauses_iff : (xs ys : List (Option Expr × List Stmt)) → Stmt
       simp [and_assoc, Stmt.beqClauses, Expr.beqOpt_iff t, Stmt.beqList_iff b, Stmt.beqClauses_iff xs]
 
 end
-
-def Param.beq (a b : Param) : Bool := decide (a.span = b.span) && decide (a.name = b.name) && TypeExpr.beqOpt a.type b.type
-
-theorem Param.beq_iff (a b : Param) : Param.beq a b = true ↔ a = b := by
-  obtain ⟨span, name, type⟩ := a
-  cases b
-  simp [and_assoc, Param.beq, TypeExpr.beqOpt_iff type]
-
-def Param.beqList : List Param → List Param → Bool
-  | [], [] => true
-  | x :: xs, y :: ys => Param.beq x y && Param.beqList xs ys
-  | _, _ => false
-
-theorem Param.beqList_iff : (xs ys : List Param) → Param.beqList xs ys = true ↔ xs = ys
-  | [], ys => by cases ys <;> simp [and_assoc, Param.beqList]
-  | x :: xs, ys => by
-    cases ys <;> simp [and_assoc, Param.beqList, Param.beq_iff x, Param.beqList_iff xs]
 
 def Field.beq (a b : Field) : Bool := decide (a.span = b.span) && decide (a.readonly = b.readonly) && decide (a.name = b.name) && decide (a.optional = b.optional) && TypeExpr.beq a.type b.type
 

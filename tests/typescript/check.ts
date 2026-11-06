@@ -206,7 +206,36 @@ class Gen {
       () => ['{', ...this.props(d), '}'],
       () => [this.pick(['++', '--']), ...this.target(d)],
       () => [...this.target(d), this.pick(['++', '--'])],
+      () => [...this.arrowParams(d), this.pick(['=>', '=>', '=>', '\n=>']), ...this.arrowBody(d)],
+      () => ['(', this.name(), this.pick([',', ':', ')']), ...this.expr(d), ')'],
     ])();
+  }
+
+  /** The parameters of an arrow function, or something that starts like them. */
+  private arrowParams(depth: number): Array<string> {
+    if (this.chance(0.3)) {
+      return [this.name()];
+    }
+    const items: Array<string> = ['('];
+    const count = Math.floor(this.next() * 3);
+    for (let i = 0; i < count; i++) {
+      if (i > 0) {
+        items.push(',');
+      }
+      items.push(this.name());
+      if (this.chance(0.4)) {
+        items.push(':', ...this.type(depth));
+      }
+    }
+    items.push(')');
+    if (this.chance(0.1)) {
+      items.push(':', ...this.type(depth));
+    }
+    return items;
+  }
+
+  private arrowBody(depth: number): Array<string> {
+    return this.chance(0.1) ? ['{', '}'] : this.expr(depth);
   }
 
   private list(depth: number): Array<string> {

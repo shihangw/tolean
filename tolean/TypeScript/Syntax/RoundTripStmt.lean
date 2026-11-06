@@ -176,80 +176,7 @@ def Stmt.depthClauses : List (Option Expr × List Stmt) → Nat
 
 end
 
-/-! ### Fuel for a type -/
-
-theorem TypeExpr.tokens_paren (sp : Span) (i : TypeExpr) :
-    (TypeExpr.paren sp i).tokens = .punct "(" :: i.tokens ++ [.punct ")"] := by
-  simp [TypeExpr.tokens, TypeExpr.words, punctWord]
-
-theorem TypeExpr.tokens_array (sp : Span) (e : TypeExpr) :
-    (TypeExpr.array sp e).tokens = e.tokens ++ [.punct "[", .punct "]"] := by
-  simp [TypeExpr.tokens, TypeExpr.words, punctWord]
-
-mutual
-
-/-- A type nests no deeper than it has tokens. -/
-theorem TypeExpr.height_le : ∀ t : TypeExpr, t.height ≤ t.tokens.length
-  | .ref _ _ [] => by simp [TypeExpr.height, TypeExpr.heightOf, TypeExpr.tokens, TypeExpr.words, identWord]
-  | .ref sp n (a :: as) => by
-    have := TypeExpr.heightOf_le (a :: as)
-    rw [tokens_ref sp n _ (by simp)]
-    simp only [TypeExpr.height, List.length_cons, List.length_append, List.length_nil]; omega
-  | .paren sp i => by
-    have := TypeExpr.height_le i
-    rw [TypeExpr.tokens_paren]; simp only [TypeExpr.height, List.length_cons, List.length_append, List.length_nil]
-    omega
-  | .array sp e => by
-    have := TypeExpr.height_le e
-    rw [TypeExpr.tokens_array]; simp only [TypeExpr.height, List.length_cons, List.length_append, List.length_nil]
-    omega
-  | .union _ [] => by simp [TypeExpr.height, TypeExpr.heightOf]
-  | .union sp [m] => by
-    have := TypeExpr.height_le m
-    rw [tokens_union_one]; simp only [TypeExpr.height, TypeExpr.heightOf, List.length_cons]; omega
-  | .union sp (m₁ :: m₂ :: ms) => by
-    have := TypeExpr.height_le m₁; have := TypeExpr.heightOf_le_bars (m₂ :: ms)
-    rw [tokens_union]
-    simp only [TypeExpr.height, TypeExpr.heightOf, List.length_append] at this ⊢; omega
-  | .keyword .. | .null _ | .literal .. => by simp [TypeExpr.height]
-
-theorem TypeExpr.heightOf_le : ∀ ts : List TypeExpr, TypeExpr.heightOf ts ≤ (joined "," (ts.map TypeExpr.tokens)).length
-  | [] => by simp [TypeExpr.heightOf, joined]
-  | [t] => by have := TypeExpr.height_le t; simp [TypeExpr.heightOf, joined]; omega
-  | t :: u :: ts => by
-    have := TypeExpr.height_le t; have := TypeExpr.heightOf_le (u :: ts)
-    show max t.height (TypeExpr.heightOf (u :: ts)) ≤
-      (t.tokens ++ .punct "," :: joined "," ((u :: ts).map TypeExpr.tokens)).length
-    simp only [List.length_append, List.length_cons]; omega
-
-theorem TypeExpr.heightOf_le_bars : ∀ ts : List TypeExpr,
-    TypeExpr.heightOf ts ≤ (ts.map fun i => .punct "|" :: i.tokens).flatten.length
-  | [] => by simp [TypeExpr.heightOf]
-  | t :: ts => by
-    have := TypeExpr.height_le t; have := TypeExpr.heightOf_le_bars ts
-    simp only [TypeExpr.heightOf, List.map_cons, List.flatten_cons, List.length_append, List.length_cons]
-    omega
-
-end
-
-/-- `parseType`, with the fuel that `budget` gives, reads every type. -/
-theorem parseType_budget (t : TypeExpr) (ht : t.wf = true) :
-    ∀ (s : ParseState) (ts rest : List Token), s.rest = ts ++ rest → s.left = s.rest.length →
-      ts.map (·.kind) = t.tokens → (∀ y ∈ ts, NoBreak y) → rest ≠ [] → FollowsType rest →
-      ∃ t' s', Parse.parseType (10 * (s.left + 1)) s = .ok t' s' ∧ t'.erase = t.erase ∧ Leaves s s' rest := by
-  intro s ts rest hs hl hk hn hr hf
-  have h1 := TypeExpr.height_le t
-  have h2 : ts.length = t.tokens.length := by rw [← hk, List.length_map]
-  have h3 : ts.length ≤ s.left := by rw [hl, hs, List.length_append]; omega
-  exact (types_reads _).1 t ht (by omega) s ts rest hs hl hk hn hr hf
-
-
 /-! ### Declarations of variables -/
-
-theorem readName_ok {s : ParseState} {x u : Token} {r : List Token} {name : String}
-    (hs : s.rest = x :: u :: r) (hx : x.kind = .ident name) (hn : name ∉ Parse.refusedNames) :
-    Parse.readName s = .ok name (past s x (u :: r)) := by
-  simp [Parse.readName, Parse.advance_eq hs, hx, hn, bind, EStateM.bind, pure, EStateM.pure]
 
 theorem endStatement_semi {s : ParseState} {x : Token} {r : List Token} (hs : s.rest = x :: r) (hr : r ≠ [])
     (hx : x.kind = .punct ";") :
@@ -585,6 +512,10 @@ theorem Expr.firstWord : ∀ e : Expr, ∃ w ws, e.words = w :: ws ∧ w ≠ []
   | .array _ es => ⟨_, _, by simp only [Expr.words, enclose]; exact rfl, by simp [punctWord]⟩
   | .object _ ps => ⟨_, _, by simp only [Expr.words, enclose]; exact rfl, by simp [punctWord]⟩
   | .paren _ i => ⟨_, _, by simp only [Expr.words]; exact rfl, by simp [punctWord]⟩
+  | .arrow _ parens ps _ => by
+    rcases arrowParams_cases parens ps with ⟨p, _, _, h⟩ | h
+    · exact ⟨_, _, by simp only [Expr.words, h]; exact rfl, by simp [identWord]⟩
+    · exact ⟨_, _, by simp only [Expr.words, h, enclose]; exact rfl, by simp [punctWord]⟩
   | .unary _ op a => by
     obtain ⟨k, hk, _⟩ := unaryOp_symbol op
     exact ⟨_, _, by simp only [Expr.words]; exact rfl, by simp [hk]⟩
@@ -1237,6 +1168,7 @@ theorem Expr.lessFree_erase : ∀ e : Expr, e.erase.lessFree = e.lessFree
   | .paren _ e => by simp only [Expr.erase, Expr.lessFree]; exact Expr.lessFree_erase e
   | .member _ e _ => by simp only [Expr.erase, Expr.lessFree]; exact Expr.lessFree_erase e
   | .optMember _ e _ => by simp only [Expr.erase, Expr.lessFree]; exact Expr.lessFree_erase e
+  | .arrow _ _ _ e => by simp only [Expr.erase, Expr.lessFree]; exact Expr.lessFree_erase e
   | .unary _ _ e => by simp only [Expr.erase, Expr.lessFree]; exact Expr.lessFree_erase e
   | .prefix _ _ e => by simp only [Expr.erase, Expr.lessFree]; exact Expr.lessFree_erase e
   | .postfix _ _ e => by simp only [Expr.erase, Expr.lessFree]; exact Expr.lessFree_erase e
@@ -1288,6 +1220,8 @@ theorem Expr.afterOK_head : ∀ (e : Expr) {a b : List TokenKind}, e.lessFree = 
   | .optMember _ o _, _, _, hf, _ => by
     simp only [Expr.lessFree] at hf
     simp only [Expr.afterOK]; exact Expr.afterOK_head o hf rfl
+  | .arrow _ _ _ b, _, _, hf, h => by
+    simp only [Expr.lessFree] at hf; simp only [Expr.afterOK]; exact Expr.afterOK_head b hf h
   | .index _ o i, a, b, hf, h => by
     simp only [Expr.lessFree, Bool.and_eq_true] at hf
     simp only [Expr.afterOK]

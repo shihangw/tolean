@@ -101,6 +101,12 @@ inductive TypeExpr where
   | union (span : Span) (members : List TypeExpr)
   | paren (span : Span) (inner : TypeExpr)
 
+/-- A parameter of a function or an arrow function. -/
+structure Param where
+  span : Span
+  name : String
+  type : Option TypeExpr
+
 /-- The key of an object literal property. -/
 inductive PropKey where
   | ident (name : String)
@@ -132,6 +138,9 @@ inductive Expr where
   | binary (span : Span) (op : BinOp) (lhs rhs : Expr)
   | cond (span : Span) (test ifTrue ifFalse : Expr)
   | assign (span : Span) (op : AssignOp) (target value : Expr)
+  /-- `(a: T, b) => body`, or `a => body` when `parens` is false. The body is
+  an expression. -/
+  | arrow (span : Span) (parens : Bool) (params : List Param) (body : Expr)
 
 inductive Property where
   /-- `{ a }`. -/
@@ -220,17 +229,103 @@ inductive Stmt where
 
 instance : Inhabited Stmt := ⟨.empty default⟩
 
+/-- `e` is the name `n` as an assignment target, as in `n = 1` or `(n) = 1`. -/
+def Expr.namesTarget (n : String) : Expr → Bool
+  | .ident _ m => m == n
+  | .paren _ e => e.namesTarget n
+  | _ => false
+
+mutual
+
+/-- `e` assigns the name `n` somewhere inside it, with `=`, `+=`, `??=`,
+`++` or another assignment. The cases list every constructor, so a new one
+cannot be missed. -/
+def Expr.assigns (n : String) : Expr → Bool
+  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => false
+  | .array _ es => Expr.assignsList n es
+  | .object _ ps => Property.assignsList n ps
+  | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e => e.assigns n
+  | .prefix _ _ e | .postfix _ _ e => e.namesTarget n || e.assigns n
+  | .index _ a b | .binary _ _ a b => a.assigns n || b.assigns n
+  | .call _ c args => c.assigns n || Expr.assignsList n args
+  | .cond _ a b c => a.assigns n || b.assigns n || c.assigns n
+  | .assign _ _ target value => target.namesTarget n || target.assigns n || value.assigns n
+  -- The body runs only when the arrow is called; counting it anyway only
+  -- refuses more.
+  | .arrow _ _ _ body => body.assigns n
+
+def Expr.assignsList (n : String) : List Expr → Bool
+  | [] => false
+  | e :: es => e.assigns n || Expr.assignsList n es
+
+def Property.assignsList (n : String) : List Property → Bool
+  | [] => false
+  | .shorthand .. :: ps => Property.assignsList n ps
+  | .keyValue _ _ v :: ps => v.assigns n || Property.assignsList n ps
+
+end
+
+mutual
+
+/-- `s` assigns the name `n` somewhere inside it. -/
+def Stmt.assigns (n : String) : Stmt → Bool
+  | .varDecl _ d => match d.init with
+    | some e => e.assigns n
+    | none => false
+  | .exprStmt _ e => e.assigns n
+  | .returnStmt _ e => match e with
+    | some e => e.assigns n
+    | none => false
+  | .ifStmt _ t a b => t.assigns n || a.assigns n || (match b with
+    | some b => b.assigns n
+    | none => false)
+  | .forOfStmt _ _ _ it b => it.assigns n || b.assigns n
+  | .whileStmt _ t b => t.assigns n || b.assigns n
+  | .block _ ss => Stmt.assignsList n ss
+  | .breakStmt _ | .continueStmt _ | .empty _ => false
+  | .switchStmt _ d cs => d.assigns n || Stmt.assignsClauses n cs
+
+def Stmt.assignsList (n : String) : List Stmt → Bool
+  | [] => false
+  | s :: ss => s.assigns n || Stmt.assignsList n ss
+
+def Stmt.assignsClauses (n : String) : List (Option Expr × List Stmt) → Bool
+  | [] => false
+  | (t, body) :: cs => (match t with
+    | some t => t.assigns n
+    | none => false) || Stmt.assignsList n body || Stmt.assignsClauses n cs
+
+end
+
+/-- `s` declares a `const` that a statement of `rest` assigns. In JS that
+assignment throws a `TypeError` (ECMA-262 §9.1.1.1.5), so the spec gives no
+value for such a block, and the translator refuses it. -/
+def Stmt.constAssignedIn (s : Stmt) (rest : List Stmt) : Bool :=
+  match s with
+  | .varDecl _ d => d.kind == .const && Stmt.assignsList d.name rest
+  | _ => false
+
+/-- Only a declaration can be a `const` that a later statement assigns. -/
+@[simp] theorem Stmt.constAssignedIn_exprStmt : (Stmt.exprStmt sp e).constAssignedIn rest = false := rfl
+@[simp] theorem Stmt.constAssignedIn_returnStmt : (Stmt.returnStmt sp e).constAssignedIn rest = false := rfl
+@[simp] theorem Stmt.constAssignedIn_ifStmt : (Stmt.ifStmt sp t a b).constAssignedIn rest = false := rfl
+@[simp] theorem Stmt.constAssignedIn_forOfStmt : (Stmt.forOfStmt sp k x it b).constAssignedIn rest = false := rfl
+@[simp] theorem Stmt.constAssignedIn_whileStmt : (Stmt.whileStmt sp t b).constAssignedIn rest = false := rfl
+@[simp] theorem Stmt.constAssignedIn_block : (Stmt.block sp ss).constAssignedIn rest = false := rfl
+@[simp] theorem Stmt.constAssignedIn_breakStmt : (Stmt.breakStmt sp).constAssignedIn rest = false := rfl
+@[simp] theorem Stmt.constAssignedIn_continueStmt : (Stmt.continueStmt sp).constAssignedIn rest = false := rfl
+@[simp] theorem Stmt.constAssignedIn_empty : (Stmt.empty sp).constAssignedIn rest = false := rfl
+@[simp] theorem Stmt.constAssignedIn_switchStmt : (Stmt.switchStmt sp d cs).constAssignedIn rest = false := rfl
+
+@[simp] theorem Stmt.constAssignedIn_nil (s : Stmt) : s.constAssignedIn [] = false := by
+  cases s <;> simp [Stmt.constAssignedIn, Stmt.assignsList]
+
 /-- A clause of a `switch` declares a local at its top, outside braces. The
 clauses share one scope (ECMA-262 §14.12.2, §14.12.4): such a local is in
 its temporal dead zone from the start of the case block, and two clauses
 may not declare the same name. -/
 def clausesDeclare (clauses : List (Option Expr × List Stmt)) : Bool :=
   clauses.any fun (_, body) => body.any fun s => s matches .varDecl ..
-
-structure Param where
-  span : Span
-  name : String
-  type : Option TypeExpr
 
 /-- A property of an interface. -/
 structure Field where
@@ -284,7 +379,8 @@ def TypeExpr.span : TypeExpr → Span
 def Expr.span : Expr → Span
   | .ident s _ | .number s _ | .bigint s _ | .string s _ | .bool s _ | .null s | .array s _
   | .object s _ | .paren s _ | .member s _ _ | .optMember s _ _ | .index s _ _ | .call s _ _ | .unary s _ _
-  | .prefix s _ _ | .postfix s _ _ | .binary s _ _ _ | .cond s _ _ _ | .assign s _ _ _ => s
+  | .prefix s _ _ | .postfix s _ _ | .binary s _ _ _ | .cond s _ _ _ | .assign s _ _ _
+  | .arrow s _ _ _ => s
 
 def Stmt.span : Stmt → Span
   | .varDecl s _ | .exprStmt s _ | .returnStmt s _ | .ifStmt s _ _ _ | .forOfStmt s _ _ _ _
@@ -302,6 +398,8 @@ def Expr.lessFree : Expr → Bool
   | .index _ a b | .assign _ _ a b => a.lessFree && b.lessFree
   | .call _ c args => c.lessFree && Expr.lessFreeList args
   | .cond _ a b c => a.lessFree && b.lessFree && c.lessFree
+  -- What the parser checks after an arrow is what it checks after its body.
+  | .arrow _ _ _ body => body.lessFree
   | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => true
 
 def Expr.lessFreeList : List Expr → Bool

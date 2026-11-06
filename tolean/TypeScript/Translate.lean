@@ -1143,6 +1143,8 @@ def translateStatements (fuel : Nat) (env : Env) (tail : Tail) (statements : Lis
 def translateVariable (fuel : Nat) (env : Env) (s : Span) (d : VarDecl) (rest : List Stmt)
     (tail : Tail) : TM IR.Body := do
   let fuel + 1 := fuel | tooDeep
+  if (Stmt.varDecl s d).constAssignedIn rest then
+    reject s s!"'{d.name}' is a const, and a later statement assigns it; declare it with let"
   let init ← orReject d.init s "declare one const or let identifier with an initializer"
   -- `const xs: Array<T> = [...]` (or `T[]`) is an owned array, which the
   -- function may push to. Any other array literal is a value.

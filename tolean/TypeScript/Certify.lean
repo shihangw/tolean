@@ -372,9 +372,22 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         s!"    | _ => {ctor firstTag} (decode{firstRef.name} ({nv} := {nv}) none)\n" ++
         s!"  | _ => {ctor firstTag} (decode{firstRef.name} ({nv} := {nv}) none)"
       let memberDefs := ", ".intercalate (members.flatMap fun (_, m) => [s!"encode{m.name}", s!"decode{m.name}"])
+      -- One arm for each member. As for an interface, the proof splits each
+      -- optional field of the member's structure into its two cases.
+      let memberFields (ref : DeclRef) : List (String × IR.Ty) :=
+        ((decls.findSome? fun
+          | .struct n fs => if n == ref.name then some fs else none
+          | _ => none).getD []).filter fun (_, t) => !(t matches .tag _)
+      let arms := members.map fun (t, m) =>
+        let fs := memberFields m
+        let opts := fs.filterMap fun (f, t) => if t matches .optional _ then some f else none
+        let split := if opts.isEmpty then "cases v <;> "
+          else s!"obtain ⟨{", ".intercalate (fs.map fun (f, _) => s!"v_{f}")}⟩ := v\n    " ++
+            String.join (opts.map fun f => s!"cases v_{f} <;> ")
+        s!"  | {IR.memberName t} v =>\n    {split}simp [decode{name}, encode{name}, {memberDefs}, List.lookup, encList]"
       encs := encs.push <|
         s!"@[simp] theorem decode{name}_encode{name} {generic} (x : {ty}) : decode{name} (some (encode{name} ({nv} := {nv}) x)) = x := by\n" ++
-        s!"  cases x <;> rename_i v <;> cases v <;> simp [decode{name}, encode{name}, {memberDefs}, List.lookup, encList]"
+        "  cases x with\n" ++ "\n".intercalate arms
       encs := encs.push <|
         s!"@[simp] theorem encode{name}_ne_null {generic} (x : {ty}) : encode{name} ({nv} := {nv}) x ≠ Val.null := by\n" ++
         s!"  cases x <;> simp [encode{name}, {memberDefs}]"

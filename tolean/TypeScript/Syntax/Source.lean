@@ -124,6 +124,14 @@ def typeAnnotation : Option TypeExpr → List Word
   | some t => punctWord ":" :: t.words
   | none => []
 
+def Param.words (p : Param) : List Word := identWord p.name :: typeAnnotation p.type
+
+/-- The parameters of an arrow function: one name, when the source has no
+parentheses around it, or the list in parentheses. -/
+def arrowParams : Bool → List Param → List Word
+  | false, [p] => [identWord p.name]
+  | _, params => enclose "(" ")" (params.map Param.words)
+
 def PropKey.words : PropKey → List Word
   | .ident name => [propertyName name]
   | .string value => [[.string value]]
@@ -151,6 +159,7 @@ def Expr.words : Expr → List Word
   | .binary _ op lhs rhs => lhs.words ++ symbol op.symbol :: rhs.words
   | .cond _ test a b => test.words ++ punctWord "?" :: a.words ++ punctWord ":" :: b.words
   | .assign _ op target value => target.words ++ symbol op.symbol :: value.words
+  | .arrow _ parens params body => arrowParams parens params ++ punctWord "=>" :: body.words
 
 def Expr.wordsOf : List Expr → List (List Word)
   | [] => []
@@ -217,8 +226,6 @@ def Stmt.clauseLines (depth : Nat) : List (Option Expr × List Stmt) → List Li
   | (test, body) :: cs => (depth, clauseHead test) :: Stmt.linesOf (depth + 1) body ++ Stmt.clauseLines depth cs
 
 end
-
-def Param.words (p : Param) : List Word := identWord p.name :: typeAnnotation p.type
 
 def Field.words (f : Field) : List Word :=
   (if f.readonly then [identWord "readonly"] else []) ++ [propertyName f.name] ++
@@ -297,6 +304,8 @@ def TypeExpr.eraseAll : List TypeExpr → List TypeExpr
 
 end
 
+def Param.erase (p : Param) : Param := { p with span := noSpan, type := p.type.map TypeExpr.erase }
+
 mutual
 
 def Expr.erase : Expr → Expr
@@ -319,6 +328,7 @@ def Expr.erase : Expr → Expr
   | .binary _ op lhs rhs => .binary noSpan op lhs.erase rhs.erase
   | .cond _ test a b => .cond noSpan test.erase a.erase b.erase
   | .assign _ op target value => .assign noSpan op target.erase value.erase
+  | .arrow _ parens params body => .arrow noSpan parens (params.map Param.erase) body.erase
 
 def Expr.eraseAll : List Expr → List Expr
   | [] => []
@@ -365,8 +375,6 @@ def Stmt.eraseClauses : List (Option Expr × List Stmt) → List (Option Expr ×
   | (test, body) :: cs => (test.map Expr.erase, Stmt.eraseAll body) :: Stmt.eraseClauses cs
 
 end
-
-def Param.erase (p : Param) : Param := { p with span := noSpan, type := p.type.map TypeExpr.erase }
 
 def Field.erase (f : Field) : Field := { f with span := noSpan, type := f.type.erase }
 

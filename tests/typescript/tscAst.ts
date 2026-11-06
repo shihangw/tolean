@@ -295,21 +295,7 @@ class Printer {
     if (s.name === undefined || s.body === undefined) {
       refuse(s, 'function without a name or a body');
     }
-    const params = s.parameters.map((p) => {
-      this.modifiers(p, []);
-      if (p.dotDotDotToken !== undefined || p.questionToken !== undefined) {
-        refuse(p, 'rest or optional parameter');
-      }
-      if (p.initializer !== undefined) {
-        refuse(p, 'default value');
-      }
-      return this.node(
-        'param',
-        p,
-        [this.name(p.name)],
-        p.type === undefined ? [] : [this.type(p.type)],
-      );
-    });
+    const params = s.parameters.map((p) => this.param(p));
     const returnType = s.type === undefined ? [] : [this.type(s.type)];
     this.inFunction = true;
     const body = this.statement(s.body);
@@ -319,6 +305,22 @@ class Printer {
       s,
       [this.name(s.name), ...(exported ? ['export'] : [])],
       [...params, ...returnType, body],
+    );
+  }
+
+  private param(p: ts.ParameterDeclaration): Sexp {
+    this.modifiers(p, []);
+    if (p.dotDotDotToken !== undefined || p.questionToken !== undefined) {
+      refuse(p, 'rest or optional parameter');
+    }
+    if (p.initializer !== undefined) {
+      refuse(p, 'default value');
+    }
+    return this.node(
+      'param',
+      p,
+      [this.name(p.name)],
+      p.type === undefined ? [] : [this.type(p.type)],
     );
   }
 
@@ -606,6 +608,19 @@ class Printer {
         this.expr(e.whenTrue),
         this.expr(e.whenFalse),
       ]);
+    }
+    if (ts.isArrowFunction(e)) {
+      this.modifiers(e, []);
+      if (e.typeParameters !== undefined) {
+        refuse(e, 'generic arrow function');
+      }
+      if (e.type !== undefined) {
+        refuse(e, 'return type of an arrow function');
+      }
+      if (ts.isBlock(e.body)) {
+        refuse(e, 'arrow function with a body in braces');
+      }
+      return this.node('arrow', e, [], [...e.parameters.map((p) => this.param(p)), this.expr(e.body)]);
     }
     refuse(e, 'unsupported expression');
   }

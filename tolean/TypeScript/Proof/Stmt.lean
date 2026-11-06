@@ -396,7 +396,7 @@ def StmtSim (env : Translate.Env) (tail : Tail) (ss : List Stmt) (body : IR.Body
 /-! ### The interpreter on statements -/
 
 theorem exec_single (t : Stmt) (ρ : Eval.Env N) : Eval.exec m fuel ρ [t] = Eval.execStmt m fuel ρ t := by
-  simp only [Eval.exec]
+  simp only [Eval.exec, Stmt.constAssignedIn_nil, Bool.false_eq_true, ↓reduceIte, pure_bind]
   cases h : Eval.execStmt m fuel ρ t with
   | none => rfl
   | some o => cases o <;> simp
@@ -516,7 +516,8 @@ theorem mem_changedNames {ss : List Stmt} {env : Translate.Env} {n : String} :
 initializer, means what the source means, when the rest does. -/
 theorem decl_sim {env env' : Translate.Env} {s : Span} {d : VarDecl} {init : Expr} {rest : List Stmt}
     {tail : Tail} {body rb : IR.Body} {b : Binding} {ty : Ty}
-    (hinit : d.init = some init) (hfresh : env.has d.name = false)
+    (hinit : d.init = some init) (hconst : (Stmt.varDecl s d).constAssignedIn rest = false)
+    (hfresh : env.has d.name = false)
     (henv : env' = env.add { name := d.name, binding := b, type := ty })
     (hbody : ∀ (ρo : Eval.Env N) (o : Outcome N), IR.Body.exec fs fuel ρo body = some o → ∃ w,
       (∀ ρs, Agree ρs ρo → Scoped m env ρs → Eval.eval m fuel ρs init = some w) ∧
@@ -545,7 +546,7 @@ theorem decl_sim {env env' : Translate.Env} {s : Span} {d : VarDecl} {init : Exp
       Eval.exec m fuel ρs (.varDecl s { kind, name, type, init := some init } :: rest) =
         Eval.exec m fuel ((name, w) :: ρs) rest := by
     intro w hw
-    simp [Eval.exec, Eval.execStmt, hw]
+    simp [Eval.exec, Eval.execStmt, hw, hconst]
   constructor
   · intro v hv
     obtain ⟨w, hw, hb⟩ := hbody ρo _ hv
@@ -860,6 +861,26 @@ theorem loop_sim {env bodyEnv : Translate.Env} {x : String} {elemType : Ty} {nam
 
 /-! ### `switch` -/
 
+omit [JSNumber N] in
+/-- A `break` assigns nothing, so leaving it out changes no assignment. -/
+theorem assignsList_dropBreak (n : String) : ∀ l : List Stmt,
+    Stmt.assignsList n (dropBreak l) = Stmt.assignsList n l
+  | [] => rfl
+  | [s] => by
+    by_cases hb : s.isBreak = true
+    · obtain ⟨sp, rfl⟩ : ∃ sp, s = .breakStmt sp := by
+        cases s <;> simp [Stmt.isBreak] at hb; exact ⟨_, rfl⟩
+      simp [dropBreak, Stmt.isBreak, Stmt.assignsList, Stmt.assigns]
+    · simp [dropBreak, hb]
+  | s :: t :: rest => by
+    simp only [dropBreak, Stmt.assignsList, assignsList_dropBreak n (t :: rest)]
+
+omit [JSNumber N] in
+theorem constAssignedIn_dropBreak (s : Stmt) (l : List Stmt) :
+    s.constAssignedIn (dropBreak l) = s.constAssignedIn l := by
+  cases s <;> simp [Stmt.constAssignedIn, assignsList_dropBreak]
+
+
 /-- A clause that returns, with no `break` before its `return`, returns from
 the case block. -/
 theorem execCase_ret {v : Val N} : ∀ {ss : List Stmt} {ρ : Eval.Env N},
@@ -871,13 +892,16 @@ theorem execCase_ret {v : Val N} : ∀ {ss : List Stmt} {ρ : Eval.Env N},
     simp only [Eval.exec] at h
     rw [Eval.execCase.eq_3 _ _ _ _ _ hnb]
     simp only [Bool.false_eq_true, ↓reduceIte]
+    by_cases hc : s.constAssignedIn rest = true
+    · simp [hc] at h
+    simp only [hc, Bool.false_eq_true, ↓reduceIte] at h ⊢
     cases hs : Eval.execStmt m fuel ρ s with
     | none => simp [hs] at h
     | some o =>
       cases o with
       | ret r => simp [hs] at h ⊢; exact h
       | normal ρ' =>
-        simp only [hs, Option.bind_eq_bind, Option.bind_some] at h ⊢
+        simp only [hs, Option.bind_eq_bind, Option.bind_some, pure_bind] at h ⊢
         exact execCase_ret h
 
 theorem exec_clauseStatements {v : Val N} {ρ : Eval.Env N} {body : List Stmt}
@@ -1097,13 +1121,17 @@ theorem execCase_drop {e : Eval.Env N} : ∀ {body : List Stmt} {ρ : Eval.Env N
     simp only [dropBreak, Eval.exec] at h
     rw [Eval.execCase.eq_3 _ _ _ _ _ hnb]
     simp only [Bool.false_eq_true, ↓reduceIte]
+    rw [← constAssignedIn_dropBreak s (t :: rest)]
+    by_cases hc : s.constAssignedIn (dropBreak (t :: rest)) = true
+    · simp [hc] at h
+    simp only [hc, Bool.false_eq_true, ↓reduceIte] at h ⊢
     cases hs : Eval.execStmt m fuel ρ s with
     | none => simp [hs] at h
     | some o =>
       cases o with
       | ret r => simp [hs] at h
       | normal ρ' =>
-        simp only [hs, Option.bind_eq_bind, Option.bind_some] at h ⊢
+        simp only [hs, Option.bind_eq_bind, Option.bind_some, pure_bind] at h ⊢
         rw [execCase_drop h]
         simp [endsInBreak]
 
@@ -1148,7 +1176,7 @@ theorem stmtsChanges_flatMap : ∀ (cs : List (Option Expr × List Stmt)),
 without a return or a `switch` whose clauses end in `break` does, and then
 `rest`: `let (x, y) := br`, then `rb`. -/
 theorem letState_sim {env : Translate.Env} {st : Stmt} {rest : List Stmt} {tail : Tail} {br rb : IR.Body}
-    {names : List String} {ss : List Stmt}
+    {names : List String} {ss : List Stmt} (hst0 : st.constAssignedIn rest = false)
     (hnames : names = changedNames ss env)
     (hsub : ∀ n, n ∈ stmtsChanges ss → n ∈ stmtChanges st)
     (hbr : ∀ (ρs ρo inner : Eval.Env N), Agree ρs ρo → Scoped m env ρs →
@@ -1196,11 +1224,11 @@ theorem letState_sim {env : Translate.Env} {st : Stmt} {rest : List Stmt} {tail 
   · intro v hv
     obtain ⟨mod, ρo₂, hst, hag, hfr, hb⟩ := key _ hv
     have := (hrest mod ρo₂ hag (scoped_frame hs hfr)).1 v hb
-    simp [Eval.exec, hst, this]
+    simp [Eval.exec, hst0, hst, this]
   · intro ρo' hv
     obtain ⟨mod, ρo₂, hst, hag, hfr, hb⟩ := key _ hv
     obtain ⟨htail, new, mod₂, hex, hag₂, hnew, hfr₂⟩ := (hrest mod ρo₂ hag (scoped_frame hs hfr)).2 ρo' hb
-    refine ⟨htail, new, mod₂, by simp [Eval.exec, hst, hex], hag₂, hnew, ?_⟩
+    refine ⟨htail, new, mod₂, by simp [Eval.exec, hst0, hst, hex], hag₂, hnew, ?_⟩
     simpa [stmtsChanges] using hfr₂.trans hfr
 
 /-- The output `body` of the clauses `cs` of a `switch` on `sw` whose clauses
@@ -1301,7 +1329,7 @@ theorem switch_state_sim {env : Translate.Env} {sp : Span} {disc : Expr} {sw : S
     (hrest : StmtSim (N := N) m fs fuel env tail rest rb) :
     StmtSim (N := N) m fs fuel env tail (.switchStmt sp disc ((some test, body) :: more) :: rest)
       (.letState names b rb) := by
-  refine letState_sim m fs fuel hnames (fun n hn => ?_) (fun ρs ρo inner ha hs hv => ?_) hrest
+  refine letState_sim m fs fuel rfl hnames (fun n hn => ?_) (fun ρs ρo inner ha hs hv => ?_) hrest
   · simp only [stmtChanges, List.mem_append]; exact .inr (stmtsChanges_flatMap _ n hn)
   · obtain ⟨hfirst, hmain⟩ := hc ρs ρo inner ha hs hv
     obtain ⟨fields, k, hl, hk⟩ := hfirst rfl ⟨test, body, more, rfl⟩
@@ -1673,6 +1701,99 @@ theorem translateClauses_sound {F : Nat}
     | _ => simp at h
 
 
+/-- A declaration, a case of `stmts_sound`, on its own so that the mutual
+proof stays within its heartbeat budget. -/
+theorem translateVariable_sound (hc : CallsAgree (N := N) m.program fs fuel) {F : Nat}
+    (ihS : ∀ env tail ss ctx body ctx', translateStatements F env tail ss ctx = .ok body ctx' →
+      StmtSim (N := N) m fs fuel env tail ss body) :
+    ∀ env s d rest tail ctx body ctx', translateVariable (F + 1) env s d rest tail ctx = .ok body ctx' →
+      StmtSim (N := N) m fs fuel env tail (.varDecl s d :: rest) body := by
+  intro env s d rest tail ctx body ctx' h
+  obtain ⟨kind, name, type, init?⟩ := d
+  unfold translateVariable at h
+  simp only [ite_state] at h
+  split at h
+  · simp at h
+  rename_i hconst
+  simp only [pure_bind] at h
+  simp only [bind_ok, orReject_ok] at h
+  obtain ⟨init, s₁, ⟨rfl, rfl⟩, h⟩ := h
+  simp only [ite_state] at h
+  cases type with
+  | none =>
+    simp only [Bool.false_eq_true, ite_false, ite_self] at h
+    simp only [bind_ok, fuelLimit_ok] at h
+    obtain ⟨_, _, ⟨rfl, rfl⟩, code, s₂, hcode, env', s₃, hdecl, rb, s₄, hrb, h⟩ := h
+    simp only [pure_ok] at h
+    obtain ⟨rfl, -⟩ := h
+    obtain ⟨hfresh, rfl, -⟩ := declare_ok hdecl
+    have hsim := (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hcode
+    exact decl_sim m fs fuel (d := ⟨kind, name, none, some init⟩) rfl (by simpa using hconst) hfresh rfl
+      (fun ρo o ho => by
+        simp only [IR.Body.exec, eval_withType] at ho
+        cases hw : IR.Expr.eval fs fuel ρo code.value with
+        | none => simp [hw] at ho
+        | some w =>
+          exact ⟨w, fun ρs ha hs => hsim ρs ρo w ha hs (by rwa [eval_value] at hw),
+            by simpa [hw] using ho⟩)
+      (ihS _ _ _ _ _ _ hrb)
+  | some annotation =>
+    simp only at h
+    repeat' split at h
+    all_goals first
+      | (simp at h; done)
+      | (simp only [bind_ok, map_ok, fuelLimit_ok] at h
+         obtain ⟨ty, s₂, hty, _, _, ⟨rfl, rfl⟩, code, s₃, hcode, h⟩ := h
+         simp only [ite_state] at h
+         split at h
+         · simp only [bind_ok, map_ok] at h
+           obtain ⟨env', s₄, hdecl, rb, hrb, rfl⟩ := h
+           obtain ⟨hfresh, rfl, -⟩ := declare_ok hdecl
+           have hsim := (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hcode
+           exact decl_sim m fs fuel (d := ⟨kind, name, some annotation, some init⟩) rfl (by simpa using hconst) hfresh rfl
+             (fun ρo o ho => by
+               simp only [IR.Body.exec, eval_withType] at ho
+               cases hw : IR.Expr.eval fs fuel ρo code.value with
+               | none => simp [hw] at ho
+               | some w =>
+                 exact ⟨w, fun ρs ha hs => hsim ρs ρo w ha hs (by rwa [eval_value] at hw),
+                   by simpa [hw] using ho⟩)
+             (ihS _ _ _ _ _ _ hrb)
+         · simp at h)
+      | (simp only [bind_ok, map_ok, fuelLimit_ok] at h
+         obtain ⟨_, s₂, ⟨ty, hty, rfl⟩, _, _, ⟨rfl, rfl⟩, code, s₃, hcode, h⟩ := h
+         simp only [ite_state] at h
+         split at h
+         · simp only [bind_ok, pure_ok] at h
+           obtain ⟨env', s₄, hdecl, rb, s₅, hrb, rfl, -⟩ := h
+           obtain ⟨hfresh, rfl, -⟩ := declare_ok hdecl
+           have hsim := (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hcode
+           exact decl_sim m fs fuel (d := ⟨kind, name, some annotation, some init⟩) rfl (by simpa using hconst) hfresh rfl
+             (fun ρo o ho => by
+               simp only [IR.Body.exec, eval_withType] at ho
+               cases hw : IR.Expr.eval fs fuel ρo code.value with
+               | none => simp [hw] at ho
+               | some w =>
+                 exact ⟨w, fun ρs ha hs => hsim ρs ρo w ha hs (by rwa [eval_value] at hw),
+                   by simpa [hw] using ho⟩)
+             (ihS _ _ _ _ _ _ hrb)
+         · simp at h)
+      | (exfalso; cases init <;> simp_all [Expr.isArrayLiteral])
+      | (simp only [bind_ok, fuelLimit_ok, pure_ok] at h
+         obtain ⟨ty, s₂, hty, _, _, ⟨rfl, rfl⟩, r, s₃, hel, env', s₄, hdecl, rb, s₅, hrb,
+           rfl, -⟩ := h
+         obtain ⟨hfresh, rfl, -⟩ := declare_ok hdecl
+         have hsim := (expr_sound m fs fuel hc _).2.1 _ _ _ _ _ _ _ hel
+         exact decl_sim m fs fuel (d := ⟨kind, name, some annotation, some _⟩) rfl (by simpa using hconst) hfresh rfl
+           (fun ρo o ho => by
+             simp only [IR.Body.exec] at ho
+             cases hw : IR.Expr.evalList fs fuel ρo r.1 with
+             | none => simp [hw] at ho
+             | some ws =>
+               exact ⟨.list ws, fun ρs ha hs => by
+                 rw [Eval.eval]; simp [hsim ρs ρo ws ha hs hw], by simpa [hw] using ho⟩)
+           (ihS _ _ _ _ _ _ hrb))
+
 theorem stmts_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
     (∀ env tail ss ctx body ctx', translateStatements F env tail ss ctx = .ok body ctx' →
       StmtSim (N := N) m fs fuel env tail ss body) ∧
@@ -1789,86 +1910,7 @@ theorem stmts_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
             · exact .inr hn
         | switchStmt sp disc cs => exact ihW _ _ _ _ _ _ _ _ _ h
         | _ => simp at h
-    · intro env s d rest tail ctx body ctx' h
-      obtain ⟨kind, name, type, init?⟩ := d
-      unfold translateVariable at h
-      simp only [bind_ok, orReject_ok] at h
-      obtain ⟨init, s₁, ⟨rfl, rfl⟩, h⟩ := h
-      simp only [ite_state] at h
-      cases type with
-      | none =>
-        simp only [Bool.false_eq_true, ite_false, ite_self] at h
-        simp only [pure_bind, bind_ok, fuelLimit_ok] at h
-        obtain ⟨_, _, ⟨rfl, rfl⟩, code, s₂, hcode, env', s₃, hdecl, rb, s₄, hrb, h⟩ := h
-        simp only [pure_ok] at h
-        obtain ⟨rfl, -⟩ := h
-        obtain ⟨hfresh, rfl, -⟩ := declare_ok hdecl
-        have hsim := (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hcode
-        exact decl_sim m fs fuel (d := ⟨kind, name, none, some init⟩) rfl hfresh rfl
-          (fun ρo o ho => by
-            simp only [IR.Body.exec, eval_withType] at ho
-            cases hw : IR.Expr.eval fs fuel ρo code.value with
-            | none => simp [hw] at ho
-            | some w =>
-              exact ⟨w, fun ρs ha hs => hsim ρs ρo w ha hs (by rwa [eval_value] at hw),
-                by simpa [hw] using ho⟩)
-          (ihS _ _ _ _ _ _ hrb)
-      | some annotation =>
-        simp only at h
-        repeat' split at h
-        all_goals first
-          | (simp at h; done)
-          | (simp only [bind_ok, map_ok, fuelLimit_ok, pure_bind] at h
-             obtain ⟨ty, s₂, hty, _, _, ⟨rfl, rfl⟩, code, s₃, hcode, h⟩ := h
-             simp only [ite_state] at h
-             split at h
-             · simp only [bind_ok, map_ok] at h
-               obtain ⟨env', s₄, hdecl, rb, hrb, rfl⟩ := h
-               obtain ⟨hfresh, rfl, -⟩ := declare_ok hdecl
-               have hsim := (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hcode
-               exact decl_sim m fs fuel (d := ⟨kind, name, some annotation, some init⟩) rfl hfresh rfl
-                 (fun ρo o ho => by
-                   simp only [IR.Body.exec, eval_withType] at ho
-                   cases hw : IR.Expr.eval fs fuel ρo code.value with
-                   | none => simp [hw] at ho
-                   | some w =>
-                     exact ⟨w, fun ρs ha hs => hsim ρs ρo w ha hs (by rwa [eval_value] at hw),
-                       by simpa [hw] using ho⟩)
-                 (ihS _ _ _ _ _ _ hrb)
-             · simp at h)
-          | (simp only [pure_bind, bind_ok, map_ok, fuelLimit_ok] at h
-             obtain ⟨_, s₂, ⟨ty, hty, rfl⟩, _, _, ⟨rfl, rfl⟩, code, s₃, hcode, h⟩ := h
-             simp only [ite_state] at h
-             split at h
-             · simp only [bind_ok, pure_ok] at h
-               obtain ⟨env', s₄, hdecl, rb, s₅, hrb, rfl, -⟩ := h
-               obtain ⟨hfresh, rfl, -⟩ := declare_ok hdecl
-               have hsim := (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hcode
-               exact decl_sim m fs fuel (d := ⟨kind, name, some annotation, some init⟩) rfl hfresh rfl
-                 (fun ρo o ho => by
-                   simp only [IR.Body.exec, eval_withType] at ho
-                   cases hw : IR.Expr.eval fs fuel ρo code.value with
-                   | none => simp [hw] at ho
-                   | some w =>
-                     exact ⟨w, fun ρs ha hs => hsim ρs ρo w ha hs (by rwa [eval_value] at hw),
-                       by simpa [hw] using ho⟩)
-                 (ihS _ _ _ _ _ _ hrb)
-             · simp at h)
-          | (exfalso; cases init <;> simp_all [Expr.isArrayLiteral])
-          | (simp only [pure_bind, bind_ok, fuelLimit_ok, pure_ok] at h
-             obtain ⟨ty, s₂, hty, _, _, ⟨rfl, rfl⟩, r, s₃, hel, env', s₄, hdecl, rb, s₅, hrb,
-               rfl, -⟩ := h
-             obtain ⟨hfresh, rfl, -⟩ := declare_ok hdecl
-             have hsim := (expr_sound m fs fuel hc _).2.1 _ _ _ _ _ _ _ hel
-             exact decl_sim m fs fuel (d := ⟨kind, name, some annotation, some _⟩) rfl hfresh rfl
-               (fun ρo o ho => by
-                 simp only [IR.Body.exec] at ho
-                 cases hw : IR.Expr.evalList fs fuel ρo r.1 with
-                 | none => simp [hw] at ho
-                 | some ws =>
-                   exact ⟨.list ws, fun ρs ha hs => by
-                     rw [Eval.eval]; simp [hsim ρs ρo ws ha hs hw], by simpa [hw] using ho⟩)
-               (ihS _ _ _ _ _ _ hrb))
+    · exact translateVariable_sound m fs fuel hc ihS
     · exact translateIf_sound m fs fuel hc ihS
     · exact translateForOf_sound m fs fuel hc ihS
     · exact translateSwitch_sound m fs fuel ihS ihC ihSC

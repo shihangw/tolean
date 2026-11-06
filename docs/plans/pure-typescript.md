@@ -30,7 +30,7 @@ row, and the corpus files for each row certify.
 | 2 | `switch (x.kind)` on a tagged union, where every clause returns | [#53](https://github.com/shihangw/tolean/pull/53) |
 | 2 | The same `switch`, where every clause changes locals and ends in `break`, also in a loop | [#54](https://github.com/shihangw/tolean/pull/54) |
 | 2 | Optional fields `f?: T` of interfaces, read with `??` and `=== undefined` | [#55](https://github.com/shihangw/tolean/pull/55) |
-| 2 | `x ??= y` on a `let` local of type `T \| null` | [#58](https://github.com/shihangw/tolean/pull/58) |
+| 2 | `x ??= y` on a `let` local of type `T \| null` | [#63](https://github.com/shihangw/tolean/pull/63) |
 | 2 | `p?.f` on a nullable structure, read with `??` and `=== undefined` | [#60](https://github.com/shihangw/tolean/pull/60) |
 
 ## The rules for every addition
