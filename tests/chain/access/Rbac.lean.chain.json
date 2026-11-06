@@ -4,7 +4,7 @@
  [{"sha256": "d3e7feceac8d0df0d50d872502067238023379759c43ab8ab96ced683422b727",
    "path": "access/rbac.ts"}],
  "output":
- {"sha256": "76e492c52e23b1808b614cfda5c16357a4e04ef89c3b8f3d1081c2c82baba27c",
+ {"sha256": "4a39a6190c895af1cbe1aa7988bf09c6cb1fb7a8581d7d80ce9912d339e374b9",
   "path": "access/Rbac.lean"},
  "nodes":
  [{"status": "tested",
@@ -132,5 +132,5 @@
   ["semantics", "certificate:permits"],
   ["certificate:permits", "translator"]],
  "certificate":
- {"sha256": "c5fe36d60a958d51c870244cce4fd0131df0e095d273fd2fdb0f3aba0629608a",
+ {"sha256": "0e4b171ce536c1c34b1a8fd197b6a78847d756a3e0d55b9d3f9ad41c5c9ffa01",
   "path": "access/RbacCert.lean"}}

@@ -12,7 +12,7 @@ def sumFrom (points : List Point) (start : Point) : Point :=
   let total := start
   let total :=
     List.foldl
-      (fun total p =>
+      (fun (total : Point) (p : Point) =>
         let total := (add total p)
         total)
       total points
@@ -29,7 +29,7 @@ def farthest (points : List Point) : Int :=
   let best := (-(1 : Int))
   let best :=
     List.foldl
-      (fun best p =>
+      (fun (best : Int) (p : Point) =>
         let d := ((p.x * p.x) + (p.y * p.y))
         let best :=
           if d > best then

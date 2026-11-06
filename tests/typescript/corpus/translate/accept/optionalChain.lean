@@ -32,7 +32,7 @@ def sumX (ps : List (Option Point)) : Int :=
   let n := (0 : Int)
   let n :=
     List.foldl
-      (fun n p =>
+      (fun (n : Int) (p : Option Point) =>
         let n := n + (Option.getD ((((same p)).map (·.x))) ((0 : Int)))
         n)
       n ps
