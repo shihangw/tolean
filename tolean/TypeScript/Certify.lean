@@ -423,7 +423,8 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       let hfs := if depth == 0 then "" else s!" (hfs : fs = {outputFs})"
       let substHfs := if depth == 0 then "" else "    subst hfs\n"
       let hfsName := if depth == 0 then [] else [r.cert "decls"]
-      let elemTy := info.elem.print names
+      -- `List (Option Int)`, with the parentheses that an element type needs.
+      let itemsTy := (tolean.IR.Ty.list info.elem).print names
       let hypNames := (List.range coded.length).map (s!"h{·}")
       let hyps := if hypNames.length == 1 then "h0" else "⟨" ++ ", ".intercalate hypNames ++ "⟩"
       let generalize (ρ : String) (which : List (String × String × String)) : String :=
@@ -441,7 +442,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       loopLemmas := loopLemmas.push (r.cert lemmaName)
       thms := thms.push <|
         s!"theorem {lemmaName} {generic} (fs : List (tolean.DeclRef × List String × tolean.TypeScript.IR.Body)){hfs}\n" ++
-        s!"    (fuel : Nat) (items : List {elemTy}) (ρ : Env {nv}) (hI : {inv "ρ"}) :\n" ++
+        s!"    (fuel : Nat) (items : {itemsTy}) (ρ : Env {nv}) (hI : {inv "ρ"}) :\n" ++
         s!"    tolean.TypeScript.IR.Body.runFold fs {fuel} {list (stateNames.map str)} {str element}\n" ++
         s!"      ({term body}) ρ (List.map {encX} items) =\n" ++
         s!"      some {upd s!"(List.foldl {stepFn "ρ"} {decState "ρ"} items)" "ρ"} := by\n" ++
