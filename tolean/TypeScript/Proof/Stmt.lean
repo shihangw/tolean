@@ -805,6 +805,370 @@ theorem loop_sim {env bodyEnv : Translate.Env} {x : String} {elemType : Ty} {nam
           · rw [stmtsChanges_block] at hfr'
             exact (hfr₂.trans hfr').mono fun n hn => by simp at hn; exact hn
 
+/-! ### `switch` -/
+
+/-- A clause that returns, with no `break` before its `return`, returns from
+the case block. -/
+theorem execCase_ret {v : Val N} : ∀ {ss : List Stmt} {ρ : Eval.Env N},
+    Eval.exec m fuel ρ ss = some (.ret v) → Eval.execCase m fuel ρ ss = some (.ret v, false)
+  | [], ρ, h => by simp [Eval.exec] at h
+  | s :: rest, ρ, h => by
+    have hnb : ∀ sp, s ≠ .breakStmt sp := by
+      rintro sp rfl; simp [Eval.exec, Eval.execStmt] at h
+    simp only [Eval.exec] at h
+    rw [Eval.execCase.eq_3 _ _ _ _ _ hnb]
+    simp only [Bool.false_eq_true, ↓reduceIte]
+    cases hs : Eval.execStmt m fuel ρ s with
+    | none => simp [hs] at h
+    | some o =>
+      cases o with
+      | ret r => simp [hs] at h ⊢; exact h
+      | normal ρ' =>
+        simp only [hs, Option.bind_eq_bind, Option.bind_some] at h ⊢
+        exact execCase_ret h
+
+theorem exec_clauseStatements {v : Val N} {ρ : Eval.Env N} {body : List Stmt}
+    (h : Eval.exec m fuel ρ (clauseStatements body) = some (.ret v)) : Eval.exec m fuel ρ body = some (.ret v) := by
+  unfold clauseStatements at h
+  split at h
+  · rename_i sp ss
+    rw [exec_single, execStmt_block, h]; rfl
+  · exact h
+
+/-- A clause that returns, from the clause the test selected. -/
+theorem execFrom_ret {v : Val N} {ρ : Eval.Env N} {t : Option Expr} {body : List Stmt}
+    {more : List (Option Expr × List Stmt)} (h : Eval.exec m fuel ρ (clauseStatements body) = some (.ret v)) :
+    Eval.execFrom m fuel ρ ((t, body) :: more) = some (.ret v) := by
+  rw [Eval.execFrom, execCase_ret m fuel (exec_clauseStatements m fuel h)]
+  rfl
+
+/-- A `case` whose test is a string: the clause runs for that tag, and the
+later clauses decide for every other. -/
+theorem execSwitch_case {ρ : Eval.Env N} {test : Expr} {body : List Stmt}
+    {more : List (Option Expr × List Stmt)} {tsp : Span} {k tag : String}
+    (hst : test.stripParens = .string tsp tag) :
+    Eval.execSwitch m fuel ρ (.str k) ((some test, body) :: more) =
+      if k = tag then Eval.execFrom m fuel ρ ((some test, body) :: more)
+      else Eval.execSwitch m fuel ρ (.str k) more := by
+  have ht : Eval.eval m fuel ρ test = some (.str tag) := by
+    rw [← eval_stripParens, hst]; simp [Eval.eval]
+  rw [Eval.execSwitch]
+  simp only [ht, Option.bind_eq_bind, Option.bind_some, Eval.strictEq]
+  by_cases hk : k = tag <;> simp [hk]
+
+/-- What `matchTag` runs: the arm of the tag, or the other arm, only for
+the member that it names when it names one. -/
+theorem matchTag_exec {n f tag : String} {r : DeclRef} {other : Option String} {wt wo : IR.Body}
+    {ρ : Eval.Env N} {o : Outcome N} (h : IR.Body.exec fs fuel ρ (.matchTag n r f tag other wt wo) = some o) :
+    ∃ fields k, ρ.lookup n = some (.obj fields) ∧ fields.lookup f = some (.str k) ∧
+      ((k = tag ∧ IR.Body.exec fs fuel ρ wt = some o) ∨
+        (k ≠ tag ∧ (∀ x, other = some x → k = x) ∧ IR.Body.exec fs fuel ρ wo = some o)) := by
+  simp only [IR.Body.exec] at h
+  cases hl : ρ.lookup n with
+  | none => simp [hl] at h
+  | some w =>
+    cases w <;> simp [hl] at h
+    rename_i fields
+    cases hk : fields.lookup f with
+    | none => simp [hk] at h
+    | some u =>
+      cases u <;> simp [hk] at h
+      rename_i k
+      refine ⟨fields, k, rfl, hk, ?_⟩
+      by_cases hkt : k = tag
+      · simp [hkt] at h; exact .inl ⟨hkt, h⟩
+      · simp only [hkt, ↓reduceIte] at h
+        split at h
+        · rename_i hall
+          refine .inr ⟨hkt, fun x hx => ?_, h⟩
+          subst hx
+          have : x = k := by simpa using hall
+          exact this.symm
+        · simp at h
+
+/-- `switch (x.kind)` evaluates the tag of `x`. -/
+theorem switchOf_eval {env : Translate.Env} {disc : Expr} {sw : SwitchOn} (h : switchOf env disc = some sw)
+    {ρ : Eval.Env N} {fields : List (String × Val N)} {k : String}
+    (hl : ρ.lookup sw.name = some (.obj fields)) (hk : fields.lookup sw.field = some (.str k)) :
+    Eval.eval m fuel ρ disc = some (.str k) := by
+  unfold switchOf at h
+  rw [← eval_stripParens]
+  generalize disc.stripParens = d at h ⊢
+  cases d with
+  | member sp o f =>
+    cases o with
+    | ident sp' n =>
+      simp only [Option.bind_eq_bind, Option.bind_eq_some_iff] at h
+      obtain ⟨loc, hloc, h⟩ := h
+      split at h
+      · rename_i ref tags hty
+        simp only [Option.bind_eq_some_iff] at h
+        obtain ⟨u, hu, h⟩ := h
+        split at h
+        · simp only [Option.pure_def, Option.bind_some, Option.some.injEq] at h
+          subst h
+          simp [Eval.eval, hl, hk]
+        · simp at h
+      · simp at h
+    | _ => simp at h
+  | _ => simp at h
+
+/-- The output `body` of the clauses `cs` of a `switch` on `sw`, and of the
+statements `rest` after it, where an outer `match` has found that the tag is
+`known`. The body never ends without a return. When it returns a value, the
+local is an object with a string in its tag field, if the first clause is a
+case and no outer `match` came before. For that tag, the case block returns
+the value, or ends, and then `rest` returns it. -/
+def ClauseSim (env : Translate.Env) (sw : SwitchOn) (known : Option String)
+    (cs : List (Option Expr × List Stmt)) (rest : List Stmt) (body : IR.Body) : Prop :=
+  ∀ (ρs ρo : Eval.Env N), Agree ρs ρo → Scoped m env ρs →
+    (∀ ρo', IR.Body.exec fs fuel ρo body ≠ some (.normal ρo')) ∧
+    ∀ v, IR.Body.exec fs fuel ρo body = some (.ret v) →
+      (known = none → (∃ t b more, cs = (some t, b) :: more) →
+        ∃ fields k, ρs.lookup sw.name = some (.obj fields) ∧ fields.lookup sw.field = some (.str k)) ∧
+      ∀ fields k, ρs.lookup sw.name = some (.obj fields) → fields.lookup sw.field = some (.str k) →
+        (∀ o, known = some o → k = o) →
+        Eval.execSwitch m fuel ρs (.str k) cs = some (.ret v) ∨
+          (Eval.execSwitch m fuel ρs (.str k) cs = some (.normal ρs) ∧ Eval.exec m fuel ρs rest = some (.ret v))
+
+/-- No clause is left: the statements after the `switch` run. -/
+theorem clauses_nil_sim {env : Translate.Env} {sw : SwitchOn} {known : Option String} {rest : List Stmt}
+    {b : IR.Body} (hrest : StmtSim (N := N) m fs fuel env .ret rest b) :
+    ClauseSim (N := N) m fs fuel env sw known [] rest b := by
+  intro ρs ρo ha hs
+  refine ⟨fun ρo' hv => absurd ((hrest ρs ρo ha hs).2 ρo' hv).1 (by simp [Tail.isRet]), fun v hv => ⟨?_, ?_⟩⟩
+  · intro _ ⟨_, _, _, h⟩; cases h
+  · intro _ _ _ _ _
+    exact .inr ⟨by simp [Eval.execSwitch], (hrest ρs ρo ha hs).1 v hv⟩
+
+/-- The `default` clause, last. -/
+theorem clauses_default_sim {env : Translate.Env} {sw : SwitchOn} {known : Option String} {body : List Stmt}
+    {rest : List Stmt} {b : IR.Body} (hb : StmtSim (N := N) m fs fuel env .ret (clauseStatements body) b) :
+    ClauseSim (N := N) m fs fuel env sw known [(none, body)] rest b := by
+  intro ρs ρo ha hs
+  refine ⟨fun ρo' hv => absurd ((hb ρs ρo ha hs).2 ρo' hv).1 (by simp [Tail.isRet]), fun v hv => ⟨?_, ?_⟩⟩
+  · intro _ ⟨_, _, _, h⟩; cases h
+  · intro _ _ _ _ _
+    left
+    rw [Eval.execSwitch]
+    exact execFrom_ret m fuel ((hb ρs ρo ha hs).1 v hv)
+
+/-- The case of the one member left, which an outer `match` has tested. -/
+theorem clauses_last_sim {env envT : Translate.Env} {sw : SwitchOn} {test : Expr} {body : List Stmt}
+    {more : List (Option Expr × List Stmt)} {rest : List Stmt} {tsp : Span} {tag : String} {b : IR.Body}
+    (hT : ∀ x, envT.has x = env.has x) (hTf : envT.functions = env.functions)
+    (hst : test.stripParens = .string tsp tag)
+    (hb : StmtSim (N := N) m fs fuel envT .ret (clauseStatements body) b) :
+    ClauseSim (N := N) m fs fuel env sw (some tag) ((some test, body) :: more) rest b := by
+  intro ρs ρo ha hs
+  have hsT : Scoped m envT ρs := ⟨fun x => (hs.1 x).trans (hT x).symm, fun f hf => hs.2 f (hTf ▸ hf)⟩
+  refine ⟨fun ρo' hv => absurd ((hb ρs ρo ha hsT).2 ρo' hv).1 (by simp [Tail.isRet]), fun v hv => ⟨?_, ?_⟩⟩
+  · intro h; cases h
+  · intro fields k _ _ hknown
+    left
+    rw [execSwitch_case m fuel hst, if_pos (hknown tag rfl)]
+    exact execFrom_ret m fuel ((hb ρs ρo ha hsT).1 v hv)
+
+/-- A case with members left after it: a `match` on its tag. -/
+theorem clauses_case_sim {env envT envO : Translate.Env} {sw : SwitchOn} {known other : Option String}
+    {test : Expr} {body : List Stmt} {more : List (Option Expr × List Stmt)} {rest : List Stmt} {tsp : Span}
+    {tag : String} {wt wo : IR.Body}
+    (hT : ∀ x, envT.has x = env.has x) (hTf : envT.functions = env.functions)
+    (hO : ∀ x, envO.has x = env.has x) (hOf : envO.functions = env.functions)
+    (hst : test.stripParens = .string tsp tag)
+    (hwt : StmtSim (N := N) m fs fuel envT .ret (clauseStatements body) wt)
+    (hwo : ClauseSim (N := N) m fs fuel envO sw other more rest wo) :
+    ClauseSim (N := N) m fs fuel env sw known ((some test, body) :: more) rest
+      (.matchTag sw.name sw.ref sw.field tag other wt wo) := by
+  intro ρs ρo ha hs
+  have hsT : Scoped m envT ρs := ⟨fun x => (hs.1 x).trans (hT x).symm, fun f hf => hs.2 f (hTf ▸ hf)⟩
+  have hsO : Scoped m envO ρs := ⟨fun x => (hs.1 x).trans (hO x).symm, fun f hf => hs.2 f (hOf ▸ hf)⟩
+  refine ⟨fun ρo' hv => ?_, fun v hv => ?_⟩
+  · obtain ⟨_, _, _, _, ⟨_, h⟩ | ⟨_, _, h⟩⟩ := matchTag_exec fs fuel hv
+    · exact absurd ((hwt ρs ρo ha hsT).2 ρo' h).1 (by simp [Tail.isRet])
+    · exact (hwo ρs ρo ha hsO).1 ρo' h
+  · obtain ⟨fields, k, hl, hk, hbr⟩ := matchTag_exec fs fuel hv
+    have hl' : ρs.lookup sw.name = some (.obj fields) := by rw [ha]; exact hl
+    refine ⟨fun _ _ => ⟨fields, k, hl', hk⟩, fun fields' k' hl2 hk2 _ => ?_⟩
+    rw [hl'] at hl2
+    cases hl2
+    rw [hk] at hk2
+    cases hk2
+    rcases hbr with ⟨rfl, h⟩ | ⟨hne, hother, h⟩
+    · left
+      rw [execSwitch_case m fuel hst, if_pos rfl]
+      exact execFrom_ret m fuel ((hwt ρs ρo ha hsT).1 v h)
+    · rw [execSwitch_case m fuel hst, if_neg hne]
+      exact ((hwo ρs ρo ha hsO).2 v h).2 fields k hl' hk hother
+
+/-- A `switch` whose first clause is a case, in a body that returns. -/
+theorem switch_sim {env : Translate.Env} {sp : Span} {disc : Expr} {sw : SwitchOn} {test : Expr}
+    {body : List Stmt} {more : List (Option Expr × List Stmt)} {rest : List Stmt} {tail : Tail} {b : IR.Body}
+    (hsw : switchOf env disc = some sw) (hdecl : clausesDeclare ((some test, body) :: more) = false)
+    (hc : ClauseSim (N := N) m fs fuel env sw none ((some test, body) :: more) rest b) :
+    StmtSim (N := N) m fs fuel env tail (.switchStmt sp disc ((some test, body) :: more) :: rest) b := by
+  intro ρs ρo ha hs
+  refine ⟨fun v hv => ?_, fun ρo' hv => absurd hv ((hc ρs ρo ha hs).1 ρo')⟩
+  obtain ⟨hfirst, hmain⟩ := (hc ρs ρo ha hs).2 v hv
+  obtain ⟨fields, k, hl, hk⟩ := hfirst rfl ⟨test, body, more, rfl⟩
+  have hd := switchOf_eval m fuel hsw hl hk
+  rcases hmain fields k hl hk (fun _ h => by cases h) with h1 | ⟨h1, h2⟩
+  · simp [Eval.exec, Eval.execStmt, hdecl, hd, h1]
+  · simp [Eval.exec, Eval.execStmt, hdecl, hd, h1, h2]
+
+/-- `translateForOf` is sound, when `translateStatements` is with one unit of fuel less. -/
+theorem translateForOf_sound (hc : CallsAgree (N := N) m.program fs fuel) {F : Nat}
+    (ihS : ∀ env tail ss ctx body ctx', translateStatements F env tail ss ctx = .ok body ctx' →
+      StmtSim (N := N) m fs fuel env tail ss body) :
+    ∀ env s kind x iterable b rest tail ctx body ctx',
+      translateForOf (F + 1) env s kind x iterable b rest tail ctx = .ok body ctx' →
+      StmtSim (N := N) m fs fuel env tail (.forOfStmt s kind x iterable b :: rest) body := by
+  intro env s kind x iterable b rest tail ctx body ctx' h
+  unfold translateForOf at h
+  simp only [ite_state] at h
+  split at h
+  · rename_i hkind
+    obtain rfl : kind = .const := by
+      cases kind <;> first | rfl | simp +decide at hkind
+    simp only [pure_bind, ite_state] at h
+    split at h
+    · simp at h
+    · try simp only [pure_bind, ite_state] at h
+      split at h
+      · simp at h
+      · simp only [bind_ok, fuelLimit_ok] at h
+        obtain ⟨_, _, ⟨rfl, rfl⟩, items, s₁, hitems, h⟩ := h
+        cases hty : items.type <;> simp [hty] at h
+        rename_i elemType
+        obtain ⟨bodyEnv, s₂, hdecl, bodyOut, s₃, hbody, rb, hrb, hbodyEq⟩ := h
+        obtain ⟨hfresh, rfl, -⟩ := declare_ok hdecl
+        have hsimI := (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hitems
+        have hloop := loop_sim m fs fuel (ihS _ _ _ _ _ _ hbody) rfl hfresh rfl
+        have hrest := ihS _ _ _ _ _ _ hrb
+        intro ρs ρo ha hs
+        have key : ∀ o, IR.Body.exec fs fuel ρo body = some o →
+            ∃ mod ρo₂, Eval.execStmt m fuel ρs (.forOfStmt s .const x iterable b) = some (.normal mod) ∧
+              Agree mod ρo₂ ∧ Frame (stmtChanges (.forOfStmt s .const x iterable b)) mod ρs ∧
+              IR.Body.exec fs fuel ρo₂ rb = some o := by
+          intro o ho
+          rw [← hbodyEq] at ho
+          simp only [IR.Body.exec] at ho
+          cases hi : IR.Expr.eval fs fuel ρo items.code with
+          | none => simp [hi] at ho
+          | some u =>
+            cases u <;> simp [hi] at ho
+            rename_i vs
+            cases hf : IR.Body.runFold fs fuel (changedNames (blockStatements b) env) x bodyOut ρo vs with
+            | none => simp [hf] at ho
+            | some ρo₂ =>
+              simp [hf] at ho
+              obtain ⟨mod, hl, hag, hfr⟩ := hloop vs ρs ρo ρo₂ ha hs hf
+              refine ⟨mod, ρo₂, ?_, hag, hfr.mono fun n hn => by simp [stmtChanges, hn], ho⟩
+              simp [Eval.execStmt, hsimI ρs ρo _ ha hs hi, hl]
+        constructor
+        · intro v hv
+          obtain ⟨mod, ρo₂, hst, hag, hfr, hb⟩ := key _ hv
+          have := (hrest mod ρo₂ hag (scoped_frame hs hfr)).1 v hb
+          simp [Eval.exec, hst, this]
+        · intro ρo' hv
+          obtain ⟨mod, ρo₂, hst, hag, hfr, hb⟩ := key _ hv
+          obtain ⟨htail, new, mod₂, hex, hag₂, hnew, hfr₂⟩ :=
+            (hrest mod ρo₂ hag (scoped_frame hs hfr)).2 ρo' hb
+          refine ⟨htail, new, mod₂, by simp [Eval.exec, hst, hex], hag₂, hnew, ?_⟩
+          simpa [stmtsChanges] using hfr₂.trans hfr
+  · simp at h
+
+/-- `translateSwitch` is sound, when `translateClauses` is with one unit of fuel less. -/
+theorem translateSwitch_sound {F : Nat}
+    (ihC : ∀ env s sw tags known cs rest ctx body ctx',
+      translateClauses F env s sw tags known cs rest ctx = .ok body ctx' →
+      ClauseSim (N := N) m fs fuel env sw known cs rest body) :
+    ∀ env s disc cs rest tail ctx body ctx', translateSwitch (F + 1) env s disc cs rest tail ctx = .ok body ctx' →
+      StmtSim (N := N) m fs fuel env tail (.switchStmt s disc cs :: rest) body := by
+  intro env s disc cs rest tail ctx body ctx' h
+  unfold translateSwitch at h
+  cases hsw : switchOf env disc with
+  | none => simp [hsw] at h
+  | some sw =>
+    simp only [hsw, ite_state] at h
+    split at h
+    · simp at h
+    rename_i hdecl
+    simp only [pure_bind, ite_state] at h
+    split at h <;> (try (simp at h; done))
+    try simp only [pure_bind, ite_state] at h
+    split at h <;> (try (simp at h; done))
+    rcases cs with _ | ⟨⟨_ | test, cb⟩, more⟩
+    · simp at h
+    · simp at h
+    · exact switch_sim m fs fuel hsw (by simpa using hdecl) (ihC _ _ _ _ _ _ _ _ _ _ h)
+
+/-- `translateClauses` is sound, when the statement functions are with one unit of fuel less. -/
+theorem translateClauses_sound {F : Nat}
+    (ihS : ∀ env tail ss ctx body ctx', translateStatements F env tail ss ctx = .ok body ctx' →
+      StmtSim (N := N) m fs fuel env tail ss body)
+    (ihC : ∀ env s sw tags known cs rest ctx body ctx',
+      translateClauses F env s sw tags known cs rest ctx = .ok body ctx' →
+      ClauseSim (N := N) m fs fuel env sw known cs rest body) :
+    ∀ env s sw tags known cs rest ctx body ctx',
+      translateClauses (F + 1) env s sw tags known cs rest ctx = .ok body ctx' →
+      ClauseSim (N := N) m fs fuel env sw known cs rest body := by
+  intro env s sw tags known cs rest ctx body ctx' h
+  unfold translateClauses at h
+  rcases cs with _ | ⟨⟨_ | test, cb⟩, more⟩
+  · simp only [ite_state] at h
+    split at h
+    · simp at h
+    exact clauses_nil_sim m fs fuel (ihS _ _ _ _ _ _ h)
+  · cases more with
+    | nil =>
+      simp only [ite_state] at h
+      split at h
+      · simp at h
+      split at h
+      · simp at h
+      exact clauses_default_sim m fs fuel (ihS _ _ _ _ _ _ h)
+    | cons _ _ => simp at h
+  · simp only at h
+    generalize hst : test.stripParens = st at h
+    cases st with
+    | string tsp tag =>
+      simp only at h
+      cases hmem : sw.union.members.lookup tag with
+      | none => simp [hmem] at h
+      | some member =>
+        simp only [hmem, ite_state] at h
+        split at h
+        · simp at h
+        split at h
+        · simp at h
+        simp only [bind_ok] at h
+        obtain ⟨wt, s₁, hwt, h⟩ := h
+        simp only [ite_state] at h
+        split at h
+        · split at h <;> (try (simp at h; done))
+          rename_i hknown
+          split at h
+          · simp at h
+          split at h
+          · simp at h
+          simp only [pure_ok] at h
+          obtain ⟨rfl, -⟩ := h
+          have hk : known = some tag := by simpa using hknown
+          subst hk
+          exact clauses_last_sim m fs fuel (narrow_has _ _ _) rfl hst (ihS _ _ _ _ _ _ hwt)
+        · simp only [bind_ok] at h
+          obtain ⟨wo, s₂, hwo, h⟩ := h
+          simp only [ite_state] at h
+          split at h
+          · simp at h
+          simp only [pure_ok] at h
+          obtain ⟨rfl, -⟩ := h
+          exact clauses_case_sim m fs fuel (narrow_has _ _ _) rfl (narrow_has _ _ _) rfl hst
+            (ihS _ _ _ _ _ _ hwt) (ihC _ _ _ _ _ _ _ _ _ _ hwo)
+    | _ => simp at h
+
+
 theorem stmts_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
     (∀ env tail ss ctx body ctx', translateStatements F env tail ss ctx = .ok body ctx' →
       StmtSim (N := N) m fs fuel env tail ss body) ∧
@@ -814,17 +1178,24 @@ theorem stmts_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
       StmtSim (N := N) m fs fuel env tail (.ifStmt s test t e :: rest) body) ∧
     (∀ env s kind x iterable b rest tail ctx body ctx',
       translateForOf F env s kind x iterable b rest tail ctx = .ok body ctx' →
-      StmtSim (N := N) m fs fuel env tail (.forOfStmt s kind x iterable b :: rest) body) := by
+      StmtSim (N := N) m fs fuel env tail (.forOfStmt s kind x iterable b :: rest) body) ∧
+    (∀ env s disc cs rest tail ctx body ctx', translateSwitch F env s disc cs rest tail ctx = .ok body ctx' →
+      StmtSim (N := N) m fs fuel env tail (.switchStmt s disc cs :: rest) body) ∧
+    (∀ env s sw tags known cs rest ctx body ctx',
+      translateClauses F env s sw tags known cs rest ctx = .ok body ctx' →
+      ClauseSim (N := N) m fs fuel env sw known cs rest body) := by
   induction F with
   | zero =>
-    refine ⟨?_, ?_, ?_, ?_⟩
+    refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
     · intro _ _ _ _ _ _ h; simp [translateStatements] at h
     · intro _ _ _ _ _ _ _ _ h; simp [translateVariable] at h
     · intro _ _ _ _ _ _ _ _ _ _ h; simp [translateIf] at h
     · intro _ _ _ _ _ _ _ _ _ _ _ h; simp [translateForOf] at h
+    · intro _ _ _ _ _ _ _ _ _ h; simp [translateSwitch] at h
+    · intro _ _ _ _ _ _ _ _ _ _ h; simp [translateClauses] at h
   | succ F ih =>
-    obtain ⟨ihS, ihV, ihI, ihF⟩ := ih
-    refine ⟨?_, ?_, ?_, ?_⟩
+    obtain ⟨ihS, ihV, ihI, ihF, ihW, ihC⟩ := ih
+    refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
     · intro env tail ss ctx body ctx' h
       unfold translateStatements at h
       cases ss with
@@ -904,6 +1275,7 @@ theorem stmts_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
             rcases hn with rfl | hn
             · exact .inl hch
             · exact .inr hn
+        | switchStmt sp disc cs => exact ihW _ _ _ _ _ _ _ _ _ h
         | _ => simp at h
     · intro env s d rest tail ctx body ctx' h
       obtain ⟨kind, name, type, init?⟩ := d
@@ -1093,59 +1465,8 @@ theorem stmts_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
                   obtain ⟨wt, s₁, hwt, wf, s₂, hwf, rb, s₄, hrb, rfl, -⟩ := h
                   exact if_state_sim m fs fuel (narrow_has _ _ _) (narrow_has _ _ _) rfl rfl rfl (hb wt wf)
                     (ihS _ _ _ _ _ _ hwt) (ihS _ _ _ _ _ _ hwf) (ihS _ _ _ _ _ _ hrb)
-    · intro env s kind x iterable b rest tail ctx body ctx' h
-      unfold translateForOf at h
-      simp only [ite_state] at h
-      split at h
-      · rename_i hkind
-        obtain rfl : kind = .const := by
-          cases kind <;> first | rfl | simp +decide at hkind
-        simp only [pure_bind, ite_state] at h
-        split at h
-        · simp at h
-        · try simp only [pure_bind, ite_state] at h
-          split at h
-          · simp at h
-          · simp only [bind_ok, fuelLimit_ok] at h
-            obtain ⟨_, _, ⟨rfl, rfl⟩, items, s₁, hitems, h⟩ := h
-            cases hty : items.type <;> simp [hty] at h
-            rename_i elemType
-            obtain ⟨bodyEnv, s₂, hdecl, bodyOut, s₃, hbody, rb, hrb, hbodyEq⟩ := h
-            obtain ⟨hfresh, rfl, -⟩ := declare_ok hdecl
-            have hsimI := (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hitems
-            have hloop := loop_sim m fs fuel (ihS _ _ _ _ _ _ hbody) rfl hfresh rfl
-            have hrest := ihS _ _ _ _ _ _ hrb
-            intro ρs ρo ha hs
-            have key : ∀ o, IR.Body.exec fs fuel ρo body = some o →
-                ∃ mod ρo₂, Eval.execStmt m fuel ρs (.forOfStmt s .const x iterable b) = some (.normal mod) ∧
-                  Agree mod ρo₂ ∧ Frame (stmtChanges (.forOfStmt s .const x iterable b)) mod ρs ∧
-                  IR.Body.exec fs fuel ρo₂ rb = some o := by
-              intro o ho
-              rw [← hbodyEq] at ho
-              simp only [IR.Body.exec] at ho
-              cases hi : IR.Expr.eval fs fuel ρo items.code with
-              | none => simp [hi] at ho
-              | some u =>
-                cases u <;> simp [hi] at ho
-                rename_i vs
-                cases hf : IR.Body.runFold fs fuel (changedNames (blockStatements b) env) x bodyOut ρo vs with
-                | none => simp [hf] at ho
-                | some ρo₂ =>
-                  simp [hf] at ho
-                  obtain ⟨mod, hl, hag, hfr⟩ := hloop vs ρs ρo ρo₂ ha hs hf
-                  refine ⟨mod, ρo₂, ?_, hag, hfr.mono fun n hn => by simp [stmtChanges, hn], ho⟩
-                  simp [Eval.execStmt, hsimI ρs ρo _ ha hs hi, hl]
-            constructor
-            · intro v hv
-              obtain ⟨mod, ρo₂, hst, hag, hfr, hb⟩ := key _ hv
-              have := (hrest mod ρo₂ hag (scoped_frame hs hfr)).1 v hb
-              simp [Eval.exec, hst, this]
-            · intro ρo' hv
-              obtain ⟨mod, ρo₂, hst, hag, hfr, hb⟩ := key _ hv
-              obtain ⟨htail, new, mod₂, hex, hag₂, hnew, hfr₂⟩ :=
-                (hrest mod ρo₂ hag (scoped_frame hs hfr)).2 ρo' hb
-              refine ⟨htail, new, mod₂, by simp [Eval.exec, hst, hex], hag₂, hnew, ?_⟩
-              simpa [stmtsChanges] using hfr₂.trans hfr
-      · simp at h
+    · exact translateForOf_sound m fs fuel hc ihS
+    · exact translateSwitch_sound m fs fuel ihC
+    · exact translateClauses_sound m fs fuel ihS ihC
 
 end tolean.TypeScript.Proof
