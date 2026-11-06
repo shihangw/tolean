@@ -596,25 +596,46 @@ theorem nullTestOf_eval {env : Translate.Env} {l : Expr} {name : String} {isNull
       · simp at h
   | _ => simp at h
 
-/-- The two shapes that `tagSide` reads. -/
-theorem tagSide_spec {l r : Expr} {n f t : String} (h : tagSide l r = some (n, f, t)) :
-    (∃ s1 s2 s3, l = .member s1 (.ident s2 n) f ∧ r = .string s3 t) ∨
-      (∃ s1 s2 s3, l = .string s3 t ∧ r = .member s1 (.ident s2 n) f) := by
+/-- The two sides that `tagSide` reads: a read of the tag of the local `n`,
+as `n.kind` or `typeof n`, and the string `t`, in either order. The read
+gives the tag that the IR's evaluator reads. -/
+theorem tagSide_eval {l r : Expr} {n : String} {f : Option String} {t : String}
+    (h : tagSide l r = some (n, f, t)) {ρ : Eval.Env N} {w : Val N} (hw : ρ.lookup n = some w)
+    {k : String} (hk : IR.tagOf f w = some k) :
+    (Eval.eval m fuel ρ l = some (.str k) ∧ Eval.eval m fuel ρ r = some (.str t)) ∨
+      (Eval.eval m fuel ρ l = some (.str t) ∧ Eval.eval m fuel ρ r = some (.str k)) := by
+  have hfield : ∀ sp sp' field, f = some field →
+      Eval.eval m fuel ρ (.member sp (.ident sp' n) field) = some (.str k) := by
+    rintro sp sp' field rfl
+    cases w with
+    | obj fields =>
+      simp only [IR.tagOf] at hk
+      split at hk
+      · rename_i k' hk'
+        simp only [Option.some.injEq] at hk
+        subst hk
+        simp [Eval.eval, hw, Eval.getProp, hk']
+      · simp at hk
+    | _ => simp [IR.tagOf] at hk
+  have htype : ∀ sp sp', f = none →
+      Eval.eval m fuel ρ (.unary sp .typeof (.ident sp' n)) = some (.str k) := by
+    rintro sp sp' rfl
+    simp only [IR.tagOf, Option.some.injEq] at hk
+    subst hk
+    simp [Eval.eval, hw]
   unfold tagSide at h
-  split at h
-  · simp only [Option.some.injEq, Prod.mk.injEq] at h
-    obtain ⟨rfl, rfl, rfl⟩ := h
-    exact .inl ⟨_, _, _, rfl, rfl⟩
-  · simp only [Option.some.injEq, Prod.mk.injEq] at h
-    obtain ⟨rfl, rfl, rfl⟩ := h
-    exact .inr ⟨_, _, _, rfl, rfl⟩
-  · simp at h
+  split at h <;> simp only [Option.some.injEq, Prod.mk.injEq, reduceCtorEq] at h
+  all_goals obtain ⟨rfl, rfl, rfl⟩ := h
+  · exact .inl ⟨hfield _ _ _ rfl, by simp [Eval.eval]⟩
+  · exact .inr ⟨by simp [Eval.eval], hfield _ _ _ rfl⟩
+  · exact .inl ⟨htype _ _ rfl, by simp [Eval.eval]⟩
+  · exact .inr ⟨by simp [Eval.eval], htype _ _ rfl⟩
 
 /-- A test that `tagTestOf` finds gives whether the local's tag is the one it
-names, when the local is an object whose tag field holds a string. -/
+names, when the IR's evaluator reads a tag from the local. -/
 theorem tagTestOf_eval {env : Translate.Env} {e : Expr} {t : TagTest}
     (h : tagTestOf env e = some t) {ρ : Eval.Env N} (hs : Scoped m env ρ) :
-    ∃ w, ρ.lookup t.name = some w ∧ ∀ fields k, w = .obj fields → fields.lookup t.field = some (.str k) →
+    ∃ w, ρ.lookup t.name = some w ∧ ∀ k, IR.tagOf t.field w = some k →
       Eval.eval m fuel ρ e = some (.bool (if t.isEq then k == t.tag else !(k == t.tag))) := by
   unfold tagTestOf at h
   rw [← eval_stripParens]
@@ -647,12 +668,11 @@ theorem tagTestOf_eval {env : Translate.Env} {e : Expr} {t : TagTest}
           have hhas : env.has n = true := by simp [Env.has, hloc]
           obtain ⟨w, hw⟩ := Option.isSome_iff_exists.mp (hs.some hhas)
           refine ⟨w, hw, ?_⟩
-          intro fields k hwf hk
-          subst hwf
+          intro k hk
           rw [eval_binary m fuel sp op l r ρ (by rcases hop' with rfl | rfl <;> rfl)]
-          rcases tagSide_spec hside with ⟨s1, s2, s3, rfl, rfl⟩ | ⟨s1, s2, s3, rfl, rfl⟩ <;>
+          rcases tagSide_eval m fuel hside hw hk with ⟨hl, hr⟩ | ⟨hl, hr⟩ <;>
             rcases hop' with rfl | rfl <;>
-            simp +decide [Eval.eval, hw, Eval.getProp, hk, Eval.binary, Eval.strictEq]
+            simp +decide [hl, hr, Eval.binary, Eval.strictEq]
           all_goals by_cases hkt : k = tg
           all_goals first
             | (simp_all; done)
@@ -661,6 +681,14 @@ theorem tagTestOf_eval {env : Translate.Env} {e : Expr} {t : TagTest}
       · simp at h
     · simp at h
   | _ => simp at h
+
+/-- A value that becomes a member of a union of primitive types keeps its
+value: the evaluator gives a member's constructor the value inside. -/
+theorem eval_into (unions : List UnionInfo) (c : Code) (expected : Option Ty) (ρ : Eval.Env N) :
+    IR.Expr.eval fs fuel ρ (c.into unions expected).code = IR.Expr.eval fs fuel ρ c.code := by
+  unfold Code.into
+  repeat' split
+  all_goals simp [IR.Expr.eval, eval_value]
 
 /-- A nonzero bigint literal has the same nonzero value in every environment. -/
 theorem nonzero_literal (e : Expr) (h : isNonzeroBigintLiteral e = true) :
@@ -953,24 +981,28 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
     (∀ env exp s ps ctx c ctx', translateObject F env exp s ps ctx = .ok c ctx' →
       Sim (N := N) m fs fuel env (.object s ps) c.code) ∧
     (∀ env s op l r ctx c ctx', translateBinary F env s op l r ctx = .ok c ctx' →
-      Sim (N := N) m fs fuel env (.binary s op l r) c.code) := by
+      Sim (N := N) m fs fuel env (.binary s op l r) c.code) ∧
+    (∀ env exp e ctx c ctx', translateExprCore F env exp e ctx = .ok c ctx' →
+      Sim (N := N) m fs fuel env e c.code) := by
   induction F with
   | zero =>
-    refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩ <;> intros <;>
+    refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_⟩ <;> intros <;>
       simp_all [translateExpr, translateElements, translateArray, translateCall, translateObject,
-        translateBinary]
+        translateBinary, translateExprCore]
   | succ F ih =>
-    obtain ⟨ihE, ihL, ihA, ihC, ihO, ihB⟩ := ih
-    refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
+    obtain ⟨ihE, ihL, ihA, ihC, ihO, ihB, ihX⟩ := ih
+    refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+    -- The core first, then the step that makes a value a member of a union.
+    rotate_right
     · intro env exp e ctx c ctx' h
       cases e with
       | paren sp inner =>
-        simp only [translateExpr] at h
+        simp only [translateExprCore] at h
         intro ρs ρo v ha hs hv
         rw [Eval.eval]
         exact ihE _ _ _ _ _ _ h ρs ρo v ha hs hv
       | bigint sp text =>
-        simp only [translateExpr] at h
+        simp only [translateExprCore] at h
         simp at h
         obtain ⟨n, ⟨hv, -⟩, rfl⟩ := h
         intro ρs ρo v _ _ hv'
@@ -978,7 +1010,7 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
         subst hv'
         simp [Eval.eval]; simpa [bigintValue?] using hv
       | number sp text =>
-        simp only [translateExpr] at h
+        simp only [translateExprCore] at h
         simp at h
         obtain ⟨n, ⟨hv, -⟩, rfl⟩ := h
         intro ρs ρo v _ _ hv'
@@ -986,13 +1018,13 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
         subst hv'
         simp [Eval.eval]; exact ⟨n, by simpa [safeIntegerValue?] using hv, rfl⟩
       | null sp =>
-        simp [translateExpr] at h
+        simp [translateExprCore] at h
         obtain ⟨rfl, -⟩ := h
         intro ρs ρo v _ _ hv'
         simp [IR.Expr.eval] at hv'
         subst hv'; simp [Eval.eval]
       | bool sp b =>
-        simp [translateExpr] at h
+        simp [translateExprCore] at h
         obtain ⟨rfl, -⟩ := h
         intro ρs ρo v _ _ hv'
         simp [IR.Expr.eval] at hv'
@@ -1002,7 +1034,7 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
         -- the string.
         have hcode : ∀ ρ : Eval.Env N, IR.Expr.eval fs fuel ρ c.code = some (.str str) := by
           intro ρ
-          simp only [translateExpr] at h
+          simp only [translateExprCore] at h
           split at h
           all_goals simp only [bind_ok, get_ok, orReject_ok, ite_state, pure_ok] at h
           all_goals first
@@ -1022,7 +1054,7 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
         simp at hv'
         subst hv'; simp [Eval.eval]
       | ident sp name =>
-        simp only [translateExpr] at h
+        simp only [translateExprCore] at h
         intro ρs ρo v ha hs hv'
         cases hl : env.lookup name with
         | none =>
@@ -1053,7 +1085,7 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
           rw [← ha name] at hv'
           simp only [Eval.eval, hv']
       | member sp obj name =>
-        simp only [translateExpr, ite_state] at h
+        simp only [translateExprCore, ite_state] at h
         split at h
         · simp at h
         simp at h
@@ -1067,7 +1099,7 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
           simp only [Eval.eval, this]
           simpa [hobj] using hv'
       | optMember sp obj name =>
-        simp only [translateExpr, bind_ok] at h
+        simp only [translateExprCore, bind_ok] at h
         obtain ⟨o, s₁, ho, ⟨bind, ty⟩, s₂, -, h⟩ := h
         simp only [pure_ok] at h
         obtain ⟨rfl, -⟩ := h
@@ -1081,7 +1113,7 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
           simp only [Eval.eval, this, Option.bind_eq_bind, Option.bind_some]
           cases ov <;> simp only [IR.ExprExt.apply] at hv' <;> first | exact hv' | simp at hv'
       | unary sp op arg =>
-        simp only [translateExpr] at h
+        simp only [translateExprCore] at h
         intro ρs ρo v ha hs hv'
         cases op with
         | not =>
@@ -1134,19 +1166,19 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
               rw [eval_neg m fuel sp arg ρs _ this hInf]; rfl
         | _ => simp +decide at h
       | binary sp op l r =>
-        simp only [translateExpr] at h
+        simp only [translateExprCore] at h
         exact ihB _ _ _ _ _ _ _ _ h
       | call sp callee args =>
-        simp only [translateExpr] at h
+        simp only [translateExprCore] at h
         exact ihC _ _ _ _ _ _ _ h
       | object sp props =>
-        simp only [translateExpr] at h
+        simp only [translateExprCore] at h
         exact ihO _ _ _ _ _ _ _ h
       | array sp elems =>
-        simp only [translateExpr] at h
+        simp only [translateExprCore] at h
         exact ihA _ _ _ _ _ _ _ h
       | cond sp test ifTrue ifFalse =>
-        simp only [translateExpr] at h
+        simp only [translateExprCore] at h
         simp at h
         obtain ⟨tc, s₁, htc, h⟩ := h
         split at h
@@ -1164,7 +1196,13 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
           · simp only [if_true, eval_value] at hbr ⊢
             exact ihE _ _ _ _ _ _ hta ρs ρo _ ha hs hbr
         · simp at h
-      | _ => simp [translateExpr] at h
+      | _ => simp [translateExprCore] at h
+    · intro env exp e ctx c ctx' h
+      simp only [translateExpr, bind_ok, pure_ok] at h
+      obtain ⟨c₀, s₁, h₀, rfl, -⟩ := h
+      intro ρs ρo v ha hs hv
+      rw [eval_into] at hv
+      exact ihX _ _ _ _ _ _ h₀ ρs ρo v ha hs hv
     · intro env exp sp es ctx r ctx' h
       simp only [translateElements] at h
       simp at h
@@ -1269,7 +1307,7 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
           -- A member of a tagged union: the structure of the member, which the
           -- evaluator gives as it is.
           simp only [bind_ok, orReject_ok, ite_state] at h
-          obtain ⟨union, _, ⟨-, rfl⟩, tag, _, ⟨-, rfl⟩, h⟩ := h
+          obtain ⟨union, _, ⟨-, rfl⟩, field, _, ⟨-, rfl⟩, tag, _, ⟨-, rfl⟩, h⟩ := h
           split at h
           · simp only [bind_ok, orReject_ok] at h
             obtain ⟨member, _, ⟨-, rfl⟩, h⟩ := h

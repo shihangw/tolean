@@ -755,18 +755,12 @@ theorem branch_tag {env : Translate.Env} {test : Expr} {t : TagTest} {wt wf : IR
   have hwo : ρo.lookup t.name = some w := by rw [← ha]; exact hw
   cases hie : t.isEq <;> simp only [hie, Bool.false_eq_true, ↓reduceIte] at ho hl
   all_goals
-    cases w with
-    | obj fields =>
-      cases hk : fields.lookup t.field with
-      | none => simp [IR.Body.exec, hwo, hk] at ho
-      | some v =>
-        cases v with
-        | str k =>
-          refine ⟨_, hl fields k rfl hk, ?_⟩
-          simp only [IR.Body.exec, hwo] at ho
-          by_cases hkt : (k == t.tag) = true <;> simp_all [Val.truthy]
-        | _ => simp [IR.Body.exec, hwo, hk] at ho
-    | _ => simp [IR.Body.exec, hwo] at ho
+    cases hk : IR.tagOf t.field w with
+    | none => simp [IR.Body.exec, hwo, hk] at ho
+    | some k =>
+      refine ⟨_, hl k hk, ?_⟩
+      simp only [IR.Body.exec, hwo, hk, Option.bind_eq_bind, Option.bind_some] at ho
+      by_cases hkt : (k == t.tag) = true <;> simp_all [Val.truthy]
 
 /-- The loop `for (const x of …)` over `vs` means what the output's fold means,
 when the body does. -/
@@ -936,11 +930,11 @@ theorem execSwitch_case {ρ : Eval.Env N} {test : Expr} {body : List Stmt}
 /-- What `matchTag` runs: the arm of the tag, or the other arm, only for
 the member that it names when it names one. -/
 theorem matchTag_exec {n f tag : String} {r : DeclRef} {other : Option String} {wt wo : IR.Body}
-    {ρ : Eval.Env N} {o : Outcome N} (h : IR.Body.exec fs fuel ρ (.matchTag n r f tag other wt wo) = some o) :
+    {ρ : Eval.Env N} {o : Outcome N} (h : IR.Body.exec fs fuel ρ (.matchTag n r (some f) tag other wt wo) = some o) :
     ∃ fields k, ρ.lookup n = some (.obj fields) ∧ fields.lookup f = some (.str k) ∧
       ((k = tag ∧ IR.Body.exec fs fuel ρ wt = some o) ∨
         (k ≠ tag ∧ (∀ x, other = some x → k = x) ∧ IR.Body.exec fs fuel ρ wo = some o)) := by
-  simp only [IR.Body.exec] at h
+  simp only [IR.Body.exec, IR.tagOf] at h
   cases hl : ρ.lookup n with
   | none => simp [hl] at h
   | some w =>

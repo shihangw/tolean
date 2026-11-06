@@ -52,6 +52,17 @@ def Val.truthy : Val N → Bool
   | .null | .undefined => false
   | .list _ | .obj _ => true
 
+/-- The result of `typeof` (ECMA-262 §13.5.3.1) on the values of the
+subset. `null` is `"object"`, and so are an array and an object, which are
+not callable. -/
+def Val.typeOf : Val N → String
+  | .int _ => "bigint"
+  | .num _ => "number"
+  | .bool _ => "boolean"
+  | .str _ => "string"
+  | .undefined => "undefined"
+  | .null | .list _ | .obj _ => "object"
+
 /-- The variables in scope, innermost first. -/
 abbrev Env (N : Type) := List (String × Val N)
 
@@ -319,6 +330,10 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     | .obj fields => getProp fields name
     | _ => none
   | .unary _ .not arg => do return .bool !(← eval m fuel env arg).truthy
+  -- `typeof x` names the type of the value of `x` (ECMA-262 §13.5.3.1). On a
+  -- name that is not bound, JS gives `"undefined"`, and the subset has no
+  -- such value, so the rule gives none there, as for every unbound name.
+  | .unary _ .typeof arg => do return .str (← eval m fuel env arg).typeOf
   -- The source text `-Infinity` is `negInf`, the model's name for it. A
   -- variable named `Infinity` is negated as any other value is.
   | .unary _ .neg (.ident _ "Infinity") => do

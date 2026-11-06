@@ -32,6 +32,7 @@ row, and the corpus files for each row certify.
 | 2 | Optional fields `f?: T` of interfaces, read with `??` and `=== undefined` | [#55](https://github.com/shihangw/tolean/pull/55) |
 | 2 | `x ??= y` on a `let` local of type `T \| null` | [#63](https://github.com/shihangw/tolean/pull/63) |
 | 2 | `p?.f` on a nullable structure, read with `??` and `=== undefined` | [#60](https://github.com/shihangw/tolean/pull/60) |
+| 3 | Unions of primitive types, `type T = string \| bigint`, narrowed by `if (typeof x === 'string')` | [#56](https://github.com/shihangw/tolean/pull/56) |
 
 ## The rules for every addition
 
@@ -72,7 +73,6 @@ exact. A construct leaves these tables when Tolean translates it, and the
 | `x?: T` parameters, `undefined` as a value, and a test such as `x !== undefined` that narrows an optional value | `Option T` | `'x' in obj`, which can tell a missing key from `undefined` |
 | A chain after `?.`, such as `a?.b.c`, and `a?.[i]` and `f?.()` | `Option.bind` | `==` against anything except `null` and `undefined` |
 | `export { … }` and re-exports | Nothing: the names stay in scope | `export *` |
-| `typeof x === 'string'` and the other `typeof` tests on a union of primitive types (§13.5.3) | A `match` on a sum type | `typeof` on a union that includes objects or functions |
 | A tuple type such as `readonly [string, bigint]` | A product type | Tuples that a function changes |
 | A string `enum` | An `inductive` | A numeric `enum`, because it also maps each number back to its name |
 | `as const` and `satisfies` | Nothing: they only check types | `as T` and the non-null assertion `x!`, because TypeScript does not check them |
@@ -286,7 +286,7 @@ is the one exception, because it changes the type of every `string`.
 2. Types and narrowing: optional parameters, and the rest of a chain after
    `?.`.
 3. Generic functions and types whose type parameters have no constraint,
-   tuples, string enums, `typeof` tests and type guards.
+   tuples, string enums and type guards.
 4. Callbacks that read only `const` values, the array methods without
    `sort`, indexing, and object spread.
 5. Control flow: `return` inside a loop, `break`, `continue`, and the counted
