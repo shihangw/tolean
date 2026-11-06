@@ -128,6 +128,8 @@ inductive Expr where
   | object (span : Span) (props : List Property)
   | paren (span : Span) (inner : Expr)
   | member (span : Span) (obj : Expr) (name : String)
+  /-- `obj?.name`: `undefined` when `obj` is `null` or `undefined`. -/
+  | optMember (span : Span) (obj : Expr) (name : String)
   | index (span : Span) (obj : Expr) (idx : Expr)
   | call (span : Span) (callee : Expr) (args : List Expr)
   | unary (span : Span) (op : UnaryOp) (arg : Expr)
@@ -242,7 +244,7 @@ def Expr.assigns (n : String) : Expr → Bool
   | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => false
   | .array _ es => Expr.assignsList n es
   | .object _ ps => Property.assignsList n ps
-  | .paren _ e | .member _ e _ | .unary _ _ e => e.assigns n
+  | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e => e.assigns n
   | .prefix _ _ e | .postfix _ _ e => e.namesTarget n || e.assigns n
   | .index _ a b | .binary _ _ a b => a.assigns n || b.assigns n
   | .call _ c args => c.assigns n || Expr.assignsList n args
@@ -376,7 +378,7 @@ def TypeExpr.span : TypeExpr → Span
 
 def Expr.span : Expr → Span
   | .ident s _ | .number s _ | .bigint s _ | .string s _ | .bool s _ | .null s | .array s _
-  | .object s _ | .paren s _ | .member s _ _ | .index s _ _ | .call s _ _ | .unary s _ _
+  | .object s _ | .paren s _ | .member s _ _ | .optMember s _ _ | .index s _ _ | .call s _ _ | .unary s _ _
   | .prefix s _ _ | .postfix s _ _ | .binary s _ _ _ | .cond s _ _ _ | .assign s _ _ _
   | .arrow s _ _ _ => s
 
@@ -391,7 +393,8 @@ def Expr.lessFree : Expr → Bool
   | .binary _ op l r => op != .lt && op != .shl && l.lessFree && r.lessFree
   | .array _ es => Expr.lessFreeList es
   | .object _ ps => Property.lessFreeList ps
-  | .paren _ e | .member _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e => e.lessFree
+  | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e =>
+    e.lessFree
   | .index _ a b | .assign _ _ a b => a.lessFree && b.lessFree
   | .call _ c args => c.lessFree && Expr.lessFreeList args
   | .cond _ a b c => a.lessFree && b.lessFree && c.lessFree

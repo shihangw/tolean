@@ -366,6 +366,9 @@ theorem Expr.second : ∀ (e : Expr) {n : String} {k : TokenKind} {r : List Toke
   | .member sp o p, _, _, _, h => by
     rw [Expr.tokens_member] at h
     exact second_append rfl (by simp [NotIdent]) (Expr.tokens_ne_nil o) (fun h' => Expr.second o h') h
+  | .optMember sp o p, _, _, _, h => by
+    rw [Expr.tokens_optMember] at h
+    exact second_append rfl (by simp [NotIdent]) (Expr.tokens_ne_nil o) (fun h' => Expr.second o h') h
   | .index sp o i, _, _, _, h => by
     rw [Expr.tokens_index, List.append_assoc] at h
     exact second_append rfl (by simp [NotIdent]) (Expr.tokens_ne_nil o) (fun h' => Expr.second o h') h

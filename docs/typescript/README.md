@@ -297,6 +297,7 @@ the file, the line and the reason. It never approximates.
 | `ReadonlyArray<T>`, `Array<T>`, `T[]` | `List T` |
 | `interface` with `readonly`, required fields | `structure` |
 | `readonly f?: T`, an optional field | `f : Option T := none`. An object literal may leave the field out, or set it to a `T`. A read of a field that the object lacks gives `undefined`, which is `none`. `s.f ?? d` is `Option.getD s.f d`, and `s.f === undefined` is `s.f.isNone`. |
+| `p?.f`, where `p` is a `S \| null` or an optional field of type `S` | `p.map (·.f)`, or `p.bind (·.f)` when `f` is optional. The value is `undefined` when `p` is `null` or `undefined`, so it has the type of an optional field: `p?.f ?? d` and `p?.f === undefined` work as they do on `s.f`. |
 | `type T = U`, declared before its uses | `abbrev T := U`. The output writes `U` itself wherever the source names `T`, so the `abbrev` is only for claims. |
 | `type T = 'a' \| 'b'`, a union of string literals | `inductive T` with the constructors `a` and `b`, which derives `DecidableEq`. A literal becomes `T.a` where the context expects a `T`, and `t === 'a'` becomes `t = T.a`. The output writes every constructor in `«»`, such as `T.«open»`, because Lean reads some strings as keywords or modifiers. A claim can still write `T.a`. |
 | `type T = A \| B`, a union of interfaces with a tag field such as `kind: 'circle'` | `inductive T` with a constructor for each member, which holds the member's structure. The structure leaves the tag field out, because its value never changes. An object literal where a `T` is expected becomes the constructor of its tag. |
@@ -403,6 +404,10 @@ Tolean rejects these, among others:
   key holds `undefined`, and Lean has one `none` for both. It also refuses
   `== null` and `=== null` on an optional value, optional parameters, and a
   test of an optional value that narrows it.
+- A chain after `?.`, such as `a?.b.c`. When `a` is `null`, JS skips the
+  whole chain and gives `undefined`, so `a?.b.c` is not `(a?.b).c`. Tolean
+  also refuses `?.` where the value cannot be `null` or `undefined`, `?.` on
+  a nullable field, and `a?.[i]` and `f?.()`.
 - A local or a function named `undefined`, which would hide the global the
   subset reads. Tolean also refuses a value that may be either `undefined` or
   `null`, such as `b ? s.f : null`, because the output has one `none` for
@@ -504,6 +509,7 @@ tolean translate --target ES2022 input.ts Output.lean My.Namespace
   | bigint (literals, type, `+ - *`, comparisons) | ES2020 |
   | bigint `/` and `%` (`BigInt::divide`, `BigInt::remainder`) | ES2020 |
   | `??` | ES2020 |
+  | `?.` | ES2020 |
   | `&&=`, `\|\|=`, `??=` | ES2021 |
   | numeric separators (`1_000`) | ES2021 |
 

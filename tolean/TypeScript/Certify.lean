@@ -119,7 +119,8 @@ partial def stmtsOf : Stmt → List Stmt
 partial def exprCalls : Expr → List String
   | .call _ (.ident _ f) args => f :: args.flatMap exprCalls
   | .call _ c args => exprCalls c ++ args.flatMap exprCalls
-  | .paren _ e | .member _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e => exprCalls e
+  | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e =>
+    exprCalls e
   | .index _ a b | .binary _ _ a b | .assign _ _ a b => exprCalls a ++ exprCalls b
   | .cond _ a b c => exprCalls a ++ exprCalls b ++ exprCalls c
   | .array _ es => es.flatMap exprCalls
@@ -130,7 +131,8 @@ partial def exprCalls : Expr → List String
 partial def exprNumbers : Expr → List String
   | .number _ t => [t]
   | .call _ c args => exprNumbers c ++ args.flatMap exprNumbers
-  | .paren _ e | .member _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e => exprNumbers e
+  | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e =>
+    exprNumbers e
   | .index _ a b | .binary _ _ a b | .assign _ _ a b => exprNumbers a ++ exprNumbers b
   | .cond _ a b c => exprNumbers a ++ exprNumbers b ++ exprNumbers c
   | .array _ es => es.flatMap exprNumbers
@@ -293,6 +295,12 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       encs := encs.push <|
         s!"@[simp] theorem decList_decode{name} {generic} (xs : List {ty}) : decList decode{name} (some (Val.list (List.map (encode{name} ({nv} := {nv})) xs))) = xs :=\n" ++
         s!"  decList_list _ _ decode{name}_encode{name} xs"
+      -- The same for an array of nullable values, which `simp` would
+      -- otherwise reach only through side conditions that it cannot discharge
+      -- once it unfolds the encoder.
+      encs := encs.push <|
+        s!"@[simp] theorem decList_decNull_decode{name} {generic} (xs : List (Option {ty})) : decList (decNull decode{name}) (some (Val.list (List.map (encNull (encode{name} ({nv} := {nv}))) xs))) = xs :=\n" ++
+        s!"  decList_list_null _ _ decode{name}_encode{name} encode{name}_ne_null xs"
       -- `simp` keeps the encoder and the decoder folded and uses these, so
       -- that `decode{name}_encode{name}` still applies where a value is not
       -- split.
@@ -337,6 +345,9 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         s!"@[simp] theorem decode{name}_encode{name} {generic} (x : {structTy name}) : decode{name} (some (encode{name} ({nv} := {nv}) x)) = x := by\n" ++
         s!"  {splitOptional}{if optionalFields.isEmpty then "; " else ""}simp [decode{name}, encode{name}, List.lookup, encList]"
       encs := encs.push <|
+        s!"@[simp] theorem encode{name}_ne_null {generic} (x : {structTy name}) : encode{name} ({nv} := {nv}) x ≠ Val.null := by\n" ++
+        s!"  simp [encode{name}]"
+      encs := encs.push <|
         s!"@[simp] theorem encode{name}_ne_undefined {generic} (x : {structTy name}) : encode{name} ({nv} := {nv}) x ≠ Val.undefined := by\n" ++
         s!"  simp [encode{name}]"
       -- An array of the interface, as a loop over it reads its variable back.
@@ -345,6 +356,12 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       encs := encs.push <|
         s!"@[simp] theorem decList_decode{name} {generic} (xs : List {structTy name}) : decList decode{name} (some (Val.list (List.map (encode{name} ({nv} := {nv})) xs))) = xs :=\n" ++
         s!"  decList_list _ _ decode{name}_encode{name} xs"
+      -- The same for an array of nullable values, which `simp` would
+      -- otherwise reach only through side conditions that it cannot discharge
+      -- once it unfolds the encoder.
+      encs := encs.push <|
+        s!"@[simp] theorem decList_decNull_decode{name} {generic} (xs : List (Option {structTy name})) : decList (decNull decode{name}) (some (Val.list (List.map (encNull (encode{name} ({nv} := {nv}))) xs))) = xs :=\n" ++
+        s!"  decList_list_null _ _ decode{name}_encode{name} encode{name}_ne_null xs"
       lemmaNames := lemmaNames ++ #[r.cert s!"encode{name}", r.cert s!"decode{name}"]
     -- A union of primitive types: each member is its value, and the decoder
     -- reads the kind of the value to pick the member.
@@ -420,6 +437,12 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       encs := encs.push <|
         s!"@[simp] theorem decList_decode{name} {generic} (xs : List {ty}) : decList decode{name} (some (Val.list (List.map (encode{name} ({nv} := {nv})) xs))) = xs :=\n" ++
         s!"  decList_list _ _ decode{name}_encode{name} xs"
+      -- The same for an array of nullable values, which `simp` would
+      -- otherwise reach only through side conditions that it cannot discharge
+      -- once it unfolds the encoder.
+      encs := encs.push <|
+        s!"@[simp] theorem decList_decNull_decode{name} {generic} (xs : List (Option {ty})) : decList (decNull decode{name}) (some (Val.list (List.map (encNull (encode{name} ({nv} := {nv}))) xs))) = xs :=\n" ++
+        s!"  decList_list_null _ _ decode{name}_encode{name} encode{name}_ne_null xs"
       lemmaNames := lemmaNames ++ #[r.cert s!"encode{name}", r.cert s!"decode{name}"]
   let defs := (functionsOf m).map fun f => r.full s!"{transNs}.{f.1}"
   let outputFs := s!"({r.full "tolean.TypeScript.IR.functionsOf"} [(\"\", {r.cert "decls"})])"

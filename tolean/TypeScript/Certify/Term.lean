@@ -90,6 +90,7 @@ def expr : Expr → String
   | .object s ps => s!"({ns}Expr.object {span s} {list (props ps)})"
   | .paren s e => s!"({ns}Expr.paren {span s} {expr e})"
   | .member s o n => s!"({ns}Expr.member {span s} {expr o} {str n})"
+  | .optMember s o n => s!"({ns}Expr.optMember {span s} {expr o} {str n})"
   | .index s o i => s!"({ns}Expr.index {span s} {expr o} {expr i})"
   | .call s c as => s!"({ns}Expr.call {span s} {expr c} {list (exprs as)})"
   | .unary s op a => s!"({ns}Expr.unary {span s} {unaryOp op} {expr a})"

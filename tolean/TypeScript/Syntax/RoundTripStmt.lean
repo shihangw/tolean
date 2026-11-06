@@ -523,6 +523,9 @@ theorem Expr.firstWord : ∀ e : Expr, ∃ w ws, e.words = w :: ws ∧ w ≠ []
   | .member _ o _ => by
     obtain ⟨w, ws, h, hw⟩ := Expr.firstWord o
     exact ⟨w, _, by simp only [Expr.words, h, List.cons_append]; exact rfl, hw⟩
+  | .optMember _ o _ => by
+    obtain ⟨w, ws, h, hw⟩ := Expr.firstWord o
+    exact ⟨w, _, by simp only [Expr.words, h, List.cons_append]; exact rfl, hw⟩
   | .index _ o _ => by
     obtain ⟨w, ws, h, hw⟩ := Expr.firstWord o
     exact ⟨w, _, by simp only [Expr.words, h, List.cons_append]; exact rfl, hw⟩
@@ -1164,6 +1167,7 @@ theorem Expr.lessFree_erase : ∀ e : Expr, e.erase.lessFree = e.lessFree
   | .object _ ps => by simp only [Expr.erase, Expr.lessFree]; exact Property.lessFreeList_eraseAll ps
   | .paren _ e => by simp only [Expr.erase, Expr.lessFree]; exact Expr.lessFree_erase e
   | .member _ e _ => by simp only [Expr.erase, Expr.lessFree]; exact Expr.lessFree_erase e
+  | .optMember _ e _ => by simp only [Expr.erase, Expr.lessFree]; exact Expr.lessFree_erase e
   | .arrow _ _ _ e => by simp only [Expr.erase, Expr.lessFree]; exact Expr.lessFree_erase e
   | .unary _ _ e => by simp only [Expr.erase, Expr.lessFree]; exact Expr.lessFree_erase e
   | .prefix _ _ e => by simp only [Expr.erase, Expr.lessFree]; exact Expr.lessFree_erase e
@@ -1211,6 +1215,9 @@ theorem Expr.afterOK_head : ∀ (e : Expr) {a b : List TokenKind}, e.lessFree = 
     simp only [Expr.lessFree] at hf
     simp only [Expr.afterOK, notFirst, h, Expr.afterOK_head i (a := .punct ")" :: a) (b := .punct ")" :: b) hf rfl]
   | .member _ o _, _, _, hf, _ => by
+    simp only [Expr.lessFree] at hf
+    simp only [Expr.afterOK]; exact Expr.afterOK_head o hf rfl
+  | .optMember _ o _, _, _, hf, _ => by
     simp only [Expr.lessFree] at hf
     simp only [Expr.afterOK]; exact Expr.afterOK_head o hf rfl
   | .arrow _ _ _ b, _, _, hf, h => by

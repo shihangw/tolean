@@ -197,7 +197,7 @@ class Gen {
       () => [this.pick(['!', '-', '+', '~', 'typeof', 'void']), ...this.expr(d)],
       () => [...this.expr(d), '?', ...this.expr(d), ':', ...this.expr(d)],
       () => [...this.target(d), this.pick(ASSIGN), ...this.expr(d)],
-      () => [...this.expr(d), '.', this.pick(['p', 'length', 'default'])],
+      () => [...this.expr(d), this.pick(['.', '.', '?.']), this.pick(['p', 'length', 'default'])],
       () => [...this.expr(d), '[', ...this.expr(d), ']'],
       () => [...this.expr(d), '(', ...this.list(d), ')'],
       () => ['(', ...this.expr(d), ')'],

@@ -54,6 +54,7 @@ partial def Expr.toSexp : Expr → Sexp
   | .object s props => node "object" s [] (props.map Property.toSexp)
   | .paren s inner => node "paren" s [] [inner.toSexp]
   | .member s obj name => node "member" s [name] [obj.toSexp]
+  | .optMember s obj name => node "optMember" s [name] [obj.toSexp]
   | .index s obj idx => node "index" s [] [obj.toSexp, idx.toSexp]
   | .call s callee args => node "call" s [] (callee.toSexp :: args.map Expr.toSexp)
   | .unary s op arg => node "unary" s [op.symbol] [arg.toSexp]

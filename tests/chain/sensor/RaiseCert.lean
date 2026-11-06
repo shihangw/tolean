@@ -92,11 +92,17 @@ def decodeGauge {N : Type} [tolean.TypeScript.JSNumber N] : Option (Val N) → s
 @[simp] theorem decodeGauge_encodeGauge {N : Type} [tolean.TypeScript.JSNumber N] (x : sensor.Raise.Gauge) : decodeGauge (some (encodeGauge (N := N) x)) = x := by
   cases x; simp [decodeGauge, encodeGauge, List.lookup, encList]
 
+@[simp] theorem encodeGauge_ne_null {N : Type} [tolean.TypeScript.JSNumber N] (x : sensor.Raise.Gauge) : encodeGauge (N := N) x ≠ Val.null := by
+  simp [encodeGauge]
+
 @[simp] theorem encodeGauge_ne_undefined {N : Type} [tolean.TypeScript.JSNumber N] (x : sensor.Raise.Gauge) : encodeGauge (N := N) x ≠ Val.undefined := by
   simp [encodeGauge]
 
 @[simp] theorem decList_decodeGauge {N : Type} [tolean.TypeScript.JSNumber N] (xs : List sensor.Raise.Gauge) : decList decodeGauge (some (Val.list (List.map (encodeGauge (N := N)) xs))) = xs :=
   decList_list _ _ decodeGauge_encodeGauge xs
+
+@[simp] theorem decList_decNull_decodeGauge {N : Type} [tolean.TypeScript.JSNumber N] (xs : List (Option sensor.Raise.Gauge)) : decList (decNull decodeGauge) (some (Val.list (List.map (encNull (encodeGauge (N := N))) xs))) = xs :=
+  decList_list_null _ _ decodeGauge_encodeGauge encodeGauge_ne_null xs
 
 theorem raise_link {N : Type} [tolean.TypeScript.JSNumber N] (g : _) (step : _) :
     tolean.TypeScript.IR.runIn (N := N) (tolean.TypeScript.IR.functionsOf [("", decls)]) ⟨"", "raise"⟩ [(encodeGauge g), (Val.int step)] =

@@ -1472,8 +1472,8 @@ theorem wfAt_bin_mono {T : Edition} {m m' : Nat} (hm : m' ≤ m) :
     obtain ⟨⟨⟨⟨⟨h1, h2⟩, h3⟩, h4⟩, h5⟩, h6⟩ := h
     exact ⟨⟨⟨⟨⟨by omega, h2⟩, wfAt_bin_mono hm h3⟩, h4⟩, h5⟩, h6⟩
   | .ident .., h | .number .., h | .bigint .., h | .string .., h | .bool .., h | .null _, h | .array .., h
-  | .object .., h | .paren .., h | .member .., h | .index .., h | .call .., h | .unary .., h | .prefix .., h
-  | .postfix .., h | .cond .., h | .assign .., h | .arrow .., h => by simp_all [Expr.wfAt]
+  | .object .., h | .paren .., h | .member .., h | .optMember .., h | .index .., h | .call .., h
+  | .unary .., h | .prefix .., h | .postfix .., h | .cond .., h | .assign .., h | .arrow .., h => by simp_all [Expr.wfAt]
 
 theorem wfAt_cond_of_bin {T : Edition} {m : Nat} : ∀ {e : Expr}, e.wfAt T (.bin m) = true → e.wfAt T .cond = true := by
   intro e h
@@ -2485,7 +2485,45 @@ theorem lhsStep_inv {T : Edition} {f : Nat} {start : Pos} (hE : GivesE T .assign
       simpa [ha1] using this
   rw [if_neg hlp] at h
   by_cases hq : x.isPunct "?." = true
-  · rw [if_pos hq] at h; exact absurd h (Parse.failAt_ne_ok _ _ _ _ _)
+  · rw [if_pos hq, Parse.bind_ok] at h
+    obtain ⟨_, s₀, hrf, h⟩ := h
+    obtain ⟨hs₀, hsup⟩ := requireFeature_inv hrf
+    rw [hs₀] at h
+    have hxk : x.kind = .punct "?." := by simpa [Token.isPunct] using hq
+    have hne : x.kind ≠ .eof := by rw [hxk]; simp
+    have hR₁ := hR.past hs (hR.more hs hne)
+    rw [Parse.bind_eq (Parse.discard_eq (advance_past hR hs hne)), Parse.bind_ok] at h
+    obtain ⟨_, s₁, hsm, h⟩ := h
+    obtain rfl := refuseSplitMember_inv hsm
+    rw [Parse.bind_ok] at h; obtain ⟨name, s₂, hn, h⟩ := h
+    obtain ⟨nm, r₂, hnk, hs₂, rfl, hR₂⟩ := readPropertyName_inv hR₁ hn
+    rw [Parse.bind_eq (Parse.spanFrom_eq _ _)] at h
+    simp only [Parse.pure_ok, Prod.mk.injEq] at h; obtain ⟨⟨rfl, _⟩, rfl⟩ := h
+    have hskn : skel [nm.kind] = [] := by rcases hnk with h' | h' <;> simp [h', skel, skelKind]
+    have hdot0 : skel [TokenKind.punct "?."] = [] := skel_one (by decide)
+    have hx1 : skel [x.kind, nm.kind] = [] := by
+      rw [show [x.kind, nm.kind] = [x.kind] ++ [nm.kind] from rfl, skel_append, hskn, hxk, hdot0]; rfl
+    have hx2 : skel (.punct "?." :: propertyName name) = [] := by
+      rw [show (TokenKind.punct "?." :: propertyName name) = [.punct "?."] ++ propertyName name from rfl,
+        skel_append, hdot0, skel_propertyName]; rfl
+    have hnmok : Word.ok T [nm.kind] = true := hTs ▸ hR₁.tok (s := past st x r)
+      (by rw [show r = nm :: r₂ from hs₂]; simp)
+      (by rcases hnk with h' | h' <;> rw [h'] <;> simp)
+    refine ⟨hR₂, g.kept.trans ((Kept.past _ _ _).trans (Kept.past _ _ _)), ⟨src ++ [x, nm], ?_, ?_, ?_⟩, ?_, ?_,
+      by simpa [Expr.words, punctWord] using g.ok.append (WordsOK.cons (ok_punct (p := "?.") (by decide))
+        (WordsOK.word (propertyName_ok hnk hnmok)))⟩
+    · rw [hg1, hs, show r = nm :: r₂ from hs₂]; simp
+    · rw [Expr.tokens_optMember]
+      simp only [List.map_append, skel_append, hg2]
+      rw [show [x, nm].map (·.kind) = [x.kind, nm.kind] from rfl, hx1, hx2]
+    · rw [Expr.tokens_optMember]; exact head_append2 (Expr.tokens_ne_nil acc) hg3
+    · simp only [Expr.wfAt, Bool.and_eq_true]; exact ⟨hTs ▸ hsup, g.wf⟩
+    · intro after hf
+      simp only [Expr.afterOK]
+      apply g.after
+      have := hf.prefix (p := [x.kind, nm.kind]) (p' := .punct "?." :: propertyName name)
+        (by rw [hx1, hx2]) (by simp)
+      simpa [hs, show r = nm :: r₂ from hs₂] using this
   rw [if_neg hq] at h
   by_cases hb : (x.isPunct "!" && !x.newlineBefore) = true
   · rw [if_pos hb] at h; exact absurd h (Parse.failAt_ne_ok _ _ _ _ _)

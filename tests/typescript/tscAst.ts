@@ -544,10 +544,11 @@ class Printer {
       return this.node('paren', e, [], [this.expr(e.expression)]);
     }
     if (ts.isPropertyAccessExpression(e)) {
-      if (e.questionDotToken !== undefined || !ts.isIdentifier(e.name)) {
-        refuse(e, 'optional chain or private name');
+      if (!ts.isIdentifier(e.name)) {
+        refuse(e, 'private name');
       }
-      return this.node('member', e, [e.name.text], [this.expr(e.expression)]);
+      const kind = e.questionDotToken !== undefined ? 'optMember' : 'member';
+      return this.node(kind, e, [e.name.text], [this.expr(e.expression)]);
     }
     if (ts.isElementAccessExpression(e)) {
       if (e.questionDotToken !== undefined) {
@@ -654,10 +655,12 @@ class Printer {
     while (ts.isParenthesizedExpression(inner)) {
       inner = inner.expression;
     }
+    // tsc parses `a?.b = 1` and `a?.b++`, and only its checker reports them;
+    // JS refuses them as early errors, and so does the Lean parser.
+    const optional = ts.isPropertyAccessExpression(inner) && inner.questionDotToken !== undefined;
     if (
-      !ts.isIdentifier(inner) &&
-      !ts.isPropertyAccessExpression(inner) &&
-      !ts.isElementAccessExpression(inner)
+      optional ||
+      (!ts.isIdentifier(inner) && !ts.isPropertyAccessExpression(inner) && !ts.isElementAccessExpression(inner))
     ) {
       refuse(e, 'assignment target');
     }

@@ -384,7 +384,12 @@ def leftHandSideStep (parseIndex : ParseM Expr) (parseArgs : ParseM (List Expr))
     let args ← parseArgs
     if isAsync then refuseAsyncArrowLookalike
     return (.call (← spanFrom start) expr args, true)
-  else if t.isPunct "?." then failAt t "optional chaining is not supported"
+  else if t.isPunct "?." then
+    requireFeature t .optionalChaining
+    discard advance
+    refuseSplitMember
+    let name ← readPropertyName
+    return (.optMember (← spanFrom start) expr name, true)
   else if t.isPunct "!" && !t.newlineBefore then
     failAt t "non-null assertions are not supported"
   else return (expr, false)
