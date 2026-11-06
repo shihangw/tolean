@@ -307,6 +307,11 @@ def Property.lessFreeList : List Property → Bool
 
 end
 
+/-- A `break`. -/
+def Stmt.isBreak : Stmt → Bool
+  | .breakStmt _ => true
+  | _ => false
+
 def Decl.span : Decl → Span
   | .import s .. | .function s .. | .interface s .. | .typeAlias s .. | .exportedVar s _ => s
   | .stmt st => st.span

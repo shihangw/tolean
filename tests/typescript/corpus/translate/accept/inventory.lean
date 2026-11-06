@@ -22,7 +22,7 @@ def planOrder (lines : List Line) (wanted : Int) : Order :=
   let amounts : List Int := []
   let (left, total, amounts) :=
     List.foldl
-      (fun (left, total, amounts) line =>
+      (fun ((left, total, amounts) : Int × Int × List Int) (line : Line) =>
         let amount := (orderFor line left)
         let amounts := amounts ++ [amount]
         let left := left - amount

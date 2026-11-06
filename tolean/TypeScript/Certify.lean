@@ -426,9 +426,14 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           s!"{ρ}.lookup {str n} = some ({e} ({dec} ({ρ}.lookup {str n})))")
       let scopeNames := info.scope.map (·.1)
       let stepLines := IR.indentBy "        " (body.lines names)
-      let captured := if scopeNames.isEmpty then "" else s!"fun {" ".intercalate scopeNames} => "
+      -- Every binder has its type, as in the output's loop (see `IR.foldBinders`).
+      let captured := if scopeNames.isEmpty then "" else
+        s!"fun {" ".intercalate (info.scope.map fun (n, t) => s!"({n} : {t.print names})")} => "
       let stepFn (ρ : String) : String :=
-        s!"((({captured}fun {IR.tuple stateNames} {element} =>\n" ++ "\n".intercalate stepLines ++ ")" ++
+        -- The result has its type too: alone, Lean would not coerce a `T` in
+        -- the body to the state's `Option T`.
+        s!"((({captured}fun {IR.foldBinders names stateNames element info} => (\n" ++ "\n".intercalate stepLines ++
+          s!" : {IR.foldState names info}))" ++
           String.join (scopeNames.map fun n => s!" {decode ρ n}") ++ "))"
       let depth := callDepth m bodyStmt
       let fuel := if depth == 0 then "fuel" else s!"(fuel + {depth})"

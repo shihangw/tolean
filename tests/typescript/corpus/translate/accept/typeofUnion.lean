@@ -80,7 +80,7 @@ def total {N : Type} [JSNumber N] (cells : List (Cell N)) : N :=
   let sum := (JSNumber.ofSafeInt (N := N) (0 : Int))
   let sum :=
     List.foldl
-      (fun sum c =>
+      (fun (sum : N) (c : (Cell N)) =>
         let sum :=
           match c with
           | Cell.«number» c =>

@@ -463,6 +463,18 @@ def blockStatements : Stmt → List Stmt
   | .block _ body => body
   | s => [s]
 
+/-- The clause ends in `break`. -/
+def endsInBreak : List Stmt → Bool
+  | [] => false
+  | [s] => s.isBreak
+  | _ :: rest => endsInBreak rest
+
+/-- The statements of a clause without the `break` it ends in. -/
+def dropBreak : List Stmt → List Stmt
+  | [] => []
+  | [s] => if s.isBreak then [] else [s]
+  | s :: rest => s :: dropBreak rest
+
 mutual
 
 -- Each call is on a part of its argument, so the recursion is structural and
@@ -504,9 +516,16 @@ def anyContainsJump : List Stmt → Bool
   | [] => false
   | s :: rest => containsJump s || anyContainsJump rest
 
+/-- The statements of a clause contain a jump, apart from the `break` they
+end in, which leaves only the `switch`. -/
+def clauseContainsJump : List Stmt → Bool
+  | [] => false
+  | [s] => !s.isBreak && containsJump s
+  | s :: rest => containsJump s || clauseContainsJump rest
+
 def clausesContainJump : List (Option Expr × List Stmt) → Bool
   | [] => false
-  | (_, body) :: rest => anyContainsJump body || clausesContainJump rest
+  | (_, body) :: rest => clauseContainsJump body || clausesContainJump rest
 
 end
 
@@ -688,7 +707,7 @@ def clauseStatements : List Stmt → List Stmt
 
 /-- Why a clause of a `switch` must end in `return`. -/
 def fallthroughReason : String :=
-  "every clause of a switch must end in a return; Tolean translates neither fallthrough nor break in a switch"
+  "every clause of a switch must end in a return, or every clause in a break; Tolean does not translate fallthrough"
 
 /-- The arm for the other members of a test of `name`'s tag tests it again
 only as more arms of the same `match`: first, or not at all. -/
@@ -1209,10 +1228,23 @@ def translateSwitch (fuel : Nat) (env : Env) (s : Span) (disc : Expr)
     | reject disc.span "a switch must test the tag of a local of a tagged union, as 'switch (x.kind)' does"
   if clausesDeclare clauses then
     reject s "a case that declares a local needs braces, as in case 'a': { const n = 1n; return n; }"
-  unless tail.isRet do reject s fallthroughReason
   unless 2 ≤ sw.tags.length do reject s "a switch needs at least two members of its union left to test"
   match clauses with
-  | (some _, _) :: _ => translateClauses fuel env s sw sw.tags none clauses rest
+  | (some _, _) :: _ =>
+    if tail.isRet && clauses.all (fun c => alwaysReturns (clauseStatements c.2)) then
+      translateClauses fuel env s sw sw.tags none clauses rest
+    else if clauses.dropLast.any (fun c => !(alwaysReturns (clauseStatements c.2) || endsInBreak c.2)) then
+      reject s fallthroughReason
+    else
+      -- The clauses end in `break` and change locals, as the branches of an
+      -- `if` without a return do.
+      let names := changedNames (clauses.flatMap (·.2)) env
+      if names.isEmpty then reject s "a switch whose clauses do not return must change a local"
+      else if names.contains sw.name then
+        reject s "the local that a switch tests may not be assigned in its clauses"
+      else
+        let branch ← translateStateClauses fuel env s sw sw.tags none names clauses
+        return .letState names branch (← translateStatements fuel env tail rest)
   | _ => reject s "the first clause of a switch must be a case"
 
 /-- The clauses of a `switch` from one of them on, where the local may have
@@ -1264,6 +1296,57 @@ def translateClauses (fuel : Nat) (env : Env) (s : Span) (sw : SwitchOn) (tags :
             else return .matchTag sw.name sw.ref sw.field tag o.2 whenTag whenOther
       | none => reject test.span s!"'{tag}' is not the tag of a member of the union"
     | _ => reject test.span "a case of a switch on a tag must be a string"
+
+/-- The clauses of a `switch` whose clauses end in `break`, from one of them
+on, as `translateClauses` reads them. Each arm ends in the state of `names`,
+and the members that no clause takes keep it as it is. -/
+def translateStateClauses (fuel : Nat) (env : Env) (s : Span) (sw : SwitchOn) (tags : List String)
+    (known : Option String) (names : List String) (clauses : List (Option Expr × List Stmt)) :
+    TM IR.Body := do
+  let fuel + 1 := fuel | tooDeep
+  match clauses with
+  | [] =>
+    if tags.isEmpty then reject s "the cases of the switch cover every member, so nothing is left"
+    else return .state names
+  | [(none, body)] => translateStateClause fuel env s names true body
+  | (none, _) :: _ :: _ => reject s "the default must be the last clause of a switch"
+  | (some test, body) :: more =>
+    match test.stripParens with
+    | .string _ tag =>
+      match sw.union.members.lookup tag with
+      | some member =>
+        if !tags.contains tag then
+          reject test.span s!"an earlier case of the switch already takes '{tag}'"
+        else
+          let whenTag ←
+            translateStateClause fuel (env.narrow sw.name member) test.span names more.isEmpty body
+          let others := tags.filter (· != tag)
+          if others.isEmpty then
+            if known != some tag then
+              reject test.span "the member of this case must be the one left after the cases before it"
+            else if !more.isEmpty then
+              reject s "the cases before this clause cover every member, so it never runs"
+            else return whenTag
+          else
+            let o := otherOf sw.union sw.ref others
+            let whenOther ← translateStateClauses fuel (env.narrow sw.name o.1) s sw others o.2 names more
+            if o.2.isNone && !(nestsTag sw.name whenOther) then
+              reject s ("where more than one member of the union is left, a further test of its tag " ++
+                "must be the next case of the switch")
+            else return .matchTag sw.name sw.ref sw.field tag o.2 whenTag whenOther
+      | none => reject test.span s!"'{tag}' is not the tag of a member of the union"
+    | _ => reject test.span "a case of a switch on a tag must be a string"
+
+/-- One clause of a `switch` whose clauses end in `break`: its statements,
+which end in the state of `names`. Only the last clause may leave out its
+`break`. -/
+def translateStateClause (fuel : Nat) (env : Env) (s : Span) (names : List String) (last : Bool)
+    (body : List Stmt) : TM IR.Body := do
+  let fuel + 1 := fuel | tooDeep
+  if !(last || endsInBreak body) then reject s fallthroughReason
+  else if anyContainsJump (dropBreak body) then
+    reject s "a clause of a switch that ends in break may not return, break or continue before its end"
+  else translateStatements fuel env (.state names) (dropBreak body)
 
 def translateForOf (fuel : Nat) (env : Env) (s : Span) (kind : VarKind) (element : String)
     (iterable : Expr) (body : Stmt) (rest : List Stmt) (tail : Tail) : TM IR.Body := do
