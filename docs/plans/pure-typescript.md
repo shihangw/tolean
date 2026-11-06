@@ -29,7 +29,7 @@ row, and the corpus files for each row certify.
 | 2 | Tagged unions of interfaces, narrowed by `if (x.kind === 'a')` | [#51](https://github.com/shihangw/tolean/pull/51) |
 | 2 | `switch (x.kind)` on a tagged union, where every clause returns | [#53](https://github.com/shihangw/tolean/pull/53) |
 | 2 | Optional fields `f?: T` of interfaces, read with `??` and `=== undefined` | [#55](https://github.com/shihangw/tolean/pull/55) |
-| 2 | `x ??= y` on a `let` local of type `T \| null` | [#58](https://github.com/shihangw/tolean/pull/58) |
+| 2 | `x ??= y` on a `let` local of type `T \| null` | [#63](https://github.com/shihangw/tolean/pull/63) |
 
 ## The rules for every addition
 
