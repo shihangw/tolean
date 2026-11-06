@@ -162,6 +162,26 @@ theorem Fine.call {c : Expr} {items : List (List Word)} (h : ∀ x ∈ items, Fi
       | some z => simpa [h] using he.1.2
   · simpa using he
 
+theorem TypeExpr.line (t : TypeExpr) : LineOK t.words :=
+  ⟨breaksOK_of_ne _ (fun _ hw he => TypeExpr.no_lineBreak t (he ▸ hw)),
+    fun hl => TypeExpr.no_lineBreak t (List.mem_of_getLast? hl)⟩
+
+theorem typeAnnotation_line : ∀ a : Option TypeExpr, LineOK (typeAnnotation a)
+  | some t => LineOK.cons (by simp [punctWord]) (TypeExpr.line t)
+  | none => LineOK.nil
+
+theorem Fine.ofLine {w : Word} {ws : List Word} (hw : w ≠ []) (h : LineOK ws) : Fine (w :: ws) :=
+  ⟨LineOK.cons hw h, by simp⟩
+
+theorem arrowParams_fine (parens : Bool) (ps : List Param) : Fine (arrowParams parens ps) := by
+  rcases arrowParams_cases parens ps with ⟨p, _, _, h⟩ | h
+  · rw [h]; exact Fine.word (by simp [identWord])
+  · rw [h]
+    exact fine_enclose (fun x hx => by
+      simp only [List.mem_map] at hx
+      obtain ⟨p, _, rfl⟩ := hx
+      exact Fine.ofLine (by simp [identWord]) (typeAnnotation_line _))
+
 theorem propertyName_ne (n : String) : propertyName n ≠ [] := by
   unfold propertyName; split <;> simp [keywordWord, identWord]
 
@@ -203,6 +223,9 @@ theorem Expr.fine : ∀ e : Expr, Fine e.words
   | .assign _ op t v => by
     simpa [Expr.words] using (Expr.fine t).append
       (Fine.cons (symbol_ne _ (by cases op <;> simp [AssignOp.symbol])) (Expr.fine v))
+  | .arrow _ parens ps b => by
+    simpa [Expr.words] using (arrowParams_fine parens ps).append
+      (Fine.cons (w := punctWord "=>") (by simp [punctWord]) (Expr.fine b))
 
 theorem Expr.fineAll : ∀ es : List Expr, ∀ x ∈ Expr.wordsOf es, Fine x
   | [], _, hx => by simp [Expr.wordsOf] at hx
@@ -234,15 +257,7 @@ end
 
 /-! ### Lines -/
 
-theorem TypeExpr.line (t : TypeExpr) : LineOK t.words :=
-  ⟨breaksOK_of_ne _ (fun _ hw he => TypeExpr.no_lineBreak t (he ▸ hw)),
-    fun hl => TypeExpr.no_lineBreak t (List.mem_of_getLast? hl)⟩
-
 theorem VarKind.word_ne (k : VarKind) : k.word ≠ [] := by cases k <;> simp [VarKind.word, keywordWord, identWord]
-
-theorem typeAnnotation_line : ∀ a : Option TypeExpr, LineOK (typeAnnotation a)
-  | some t => LineOK.cons (by simp [punctWord]) (TypeExpr.line t)
-  | none => LineOK.nil
 
 theorem VarDecl.line (d : VarDecl) : LineOK d.words := by
   simp only [VarDecl.words]
@@ -337,9 +352,6 @@ theorem Stmt.lineOKClauses : ∀ (cs : List (Option Expr × List Stmt)) (d : Nat
     · exact Stmt.lineOKClauses cs d l hl
 
 end
-
-theorem Fine.ofLine {w : Word} {ws : List Word} (hw : w ≠ []) (h : LineOK ws) : Fine (w :: ws) :=
-  ⟨LineOK.cons hw h, by simp⟩
 
 theorem exportWords_line (e : Bool) : LineOK (exportWords e) := by
   cases e

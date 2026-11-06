@@ -19,7 +19,7 @@ def balance (events : List Event) : Int :=
   let frozen := false
   let (total, frozen) :=
     List.foldl
-      (fun (total, frozen) e =>
+      (fun ((total, frozen) : Int × Bool) (e : Event) =>
         let (total, frozen) :=
           match e with
           | Event.«deposit» e =>
@@ -70,7 +70,7 @@ def fees (events : List Event) : Int :=
   let total := (0 : Int)
   let total :=
     List.foldl
-      (fun total e =>
+      (fun (total : Int) (e : Event) =>
         let total :=
           match e with
           | Event.«withdraw» e =>
@@ -89,7 +89,7 @@ def repeated (e : Event) (xs : List Int) : Int :=
     | Event.«deposit» e =>
       let total :=
         List.foldl
-          (fun total x =>
+          (fun (total : Int) (x : Int) =>
             let total := total + x
             total)
           total xs

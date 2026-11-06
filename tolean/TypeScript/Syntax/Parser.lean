@@ -412,6 +412,50 @@ def refuseElement (t : Token) : ParseM Unit := do
   if t.isPunct "," then failAt t "array holes are not supported"
   if t.isPunct "..." then failAt t "spread elements are not supported"
 
+def parseParam : ParseM Param := do
+  let t ← peek
+  if t.isPunct "..." then failAt t "rest parameters are not supported"
+  if t.isPunct "[" || t.isPunct "{" then failAt t "destructuring is not supported"
+  if t.isKeyword "this" then failAt t "'this' parameters are not supported"
+  let name ← readName
+  let next ← peek
+  if next.isPunct "?" then failAt next "optional parameters are not supported"
+  let mut type := none
+  if next.isPunct ":" then
+    discard advance
+    type := some (← parseType (← budget))
+  let next ← peek
+  if next.isPunct "=" then failAt next "default values are not supported"
+  return { span := ← spanFrom t.span.start, name, type }
+
+/-- The kinds of the first tokens of an arrow function: `a =>`, `()`, `(a,`,
+`(a:` or `(a) =>`. No other expression starts with one of them, because the
+subset has no comma operator, and a name in an expression is never followed by
+`:` or `=>`. -/
+def arrowStart : List TokenKind → Bool
+  | a :: b :: rest =>
+    (a matches .ident _) && b == .punct "=>" ||
+      a == .punct "(" && (b == .punct ")" || (b matches .ident _) && match rest with
+        | c :: rest' => c == .punct "," || c == .punct ":" ||
+            c == .punct ")" && rest'.head? == some (.punct "=>")
+        | [] => false)
+  | _ => false
+
+/-- An arrow function starts at the next token. -/
+def startsArrow : ParseM Bool := do
+  return arrowStart (((← get).rest.take 4).map (·.kind))
+
+/-- The parameters of an arrow function: a list in parentheses, or one name. -/
+def parseArrowParams : ParseM (List Param) := do
+  let t ← peek
+  if !t.isPunct "(" then
+    let name ← readName
+    return [{ span := t.span, name, type := none }]
+  discard advance
+  let params ← iterate (← budget) #[] (listStep ")" (fun _ => pure ()) parseParam)
+  let _ ← expectPunct ")"
+  return params.toList
+
 mutual
 
 /-- An expression where a `,` would be the comma operator. -/
@@ -424,10 +468,11 @@ def parseExpression (fuel : Nat) : ParseM Expr := do
 
 def parseAssign (fuel : Nat) : ParseM Expr := do
   let fuel + 1 := fuel | outOfFuel
+  if ← startsArrow then return ← parseArrow fuel
   let start := (← peek).span.start
   let lhs ← parseConditional fuel
   let t ← peek
-  if t.isPunct "=>" then failAt t "arrow functions are not supported"
+  if t.isPunct "=>" then failAt t "an arrow function cannot stand here; put it in parentheses"
   let some (op, width) ← peekAssignOp | return lhs
   unless lhs.isSimpleTarget do failAt t "only a name, a property or an element can be assigned"
   match op with
@@ -437,6 +482,24 @@ def parseAssign (fuel : Nat) : ParseM Expr := do
   skip width
   let value ← parseAssign fuel
   return .assign (← spanFrom start) op lhs value
+
+/-- An arrow function, where `startsArrow` found one. Its body is an
+expression: a body in braces is refused. -/
+def parseArrow (fuel : Nat) : ParseM Expr := do
+  let fuel + 1 := fuel | outOfFuel
+  let first ← peek
+  let params ← parseArrowParams
+  let t ← peek
+  if t.isPunct ":" then failAt t "return types of arrow functions are not supported"
+  if !t.isPunct "=>" then
+    failAt t "expected '=>' after the parameters of an arrow function (the comma operator is not supported)"
+  let arrow ← expectPunct "=>"
+  -- ECMA-262 allows no line break before `=>` (§15.3).
+  if arrow.newlineBefore then failAt arrow "tsc may read this '=>' after a line break as an arrow function, which ECMA-262 does not allow"
+  let t ← peek
+  if t.isPunct "{" then failAt t "arrow functions with a body in braces are not supported"
+  let body ← parseAssign fuel
+  return .arrow (← spanFrom first.span.start) (first.isPunct "(") params body
 
 def parseConditional (fuel : Nat) : ParseM Expr := do
   let fuel + 1 := fuel | outOfFuel
@@ -754,22 +817,6 @@ def parseClause (fuel : Nat) : ParseM (Option Expr × List Stmt) := do
 end
 
 /-! ### Declarations -/
-
-def parseParam : ParseM Param := do
-  let t ← peek
-  if t.isPunct "..." then failAt t "rest parameters are not supported"
-  if t.isPunct "[" || t.isPunct "{" then failAt t "destructuring is not supported"
-  if t.isKeyword "this" then failAt t "'this' parameters are not supported"
-  let name ← readName
-  let next ← peek
-  if next.isPunct "?" then failAt next "optional parameters are not supported"
-  let mut type := none
-  if next.isPunct ":" then
-    discard advance
-    type := some (← parseType (← budget))
-  let next ← peek
-  if next.isPunct "=" then failAt next "default values are not supported"
-  return { span := ← spanFrom t.span.start, name, type }
 
 def parseFunction (start : Pos) (exported : Bool) : ParseM Decl := do
   discard advance
