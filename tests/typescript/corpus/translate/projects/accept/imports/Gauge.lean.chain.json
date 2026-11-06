@@ -1,4 +1,4 @@
-{"tolean": "0.2.0",
+{"tolean": "0.3.0",
  "target": "ES2024",
  "sources":
  [{"sha256": "0f748021302b578503b8667606ca3216cf654c9bf0e86fe7807cc269b9bd8466",
@@ -6,7 +6,7 @@
   {"sha256": "baadc096f1fb021757130f52019d3fdce376bb7747a47304b46066aeb35c0cf8",
    "path": "lib/util.ts"}],
  "output":
- {"sha256": "e19d1476a41fc8261acd2073c789a7c4155511d8fac2956a6c40b57388d0029b",
+ {"sha256": "475a76803b7f9fa59b300920ee54e808cc64a2f70c3f3d22529f12c9b791a5cc",
   "path": "Gauge.lean"},
  "nodes":
  [{"status": "tested",
