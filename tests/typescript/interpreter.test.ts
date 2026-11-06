@@ -245,3 +245,30 @@ test(`the interpreter agrees with Node ${process.version} on random programs`, a
   );
   expect(failures).toEqual([]);
 }, 600_000);
+
+// An assignment to a `const` throws a `TypeError` in Node, so the interpreter
+// must give no value for it, whatever the operator.
+test('the interpreter gives no value where an assignment to a const throws', async () => {
+  const sources = [
+    'export function f(): bigint | null { const x: bigint | null = null; x ??= 1n; return x; }',
+    'export function f(): bigint { const x = 1n; x = 2n; return x; }',
+    'export function f(): bigint { const x = 1n; x += 2n; return x; }',
+    'export function f(): bigint { const x = 1n; x++; return x; }',
+    'export function f(b: boolean): bigint { const x = 1n; if (b) { x = 2n; } return x; }',
+  ];
+  const input = { programs: sources.map((source) => ({ source, calls: [{ function: 'f', args: [true] }] })) };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const results = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-const-'));
+  for (const [i, source] of sources.entries()) {
+    const lean = results[i];
+    expect(lean?.parsed, source).toBe(true);
+    if (lean === undefined || !lean.parsed) continue;
+    expect(lean.results[0] ?? null, source).toBeNull();
+    const path = join(dir, `case${i}.mjs`);
+    writeFileSync(path, ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext } }).outputText);
+    const mod = (await import(pathToFileURL(path).href)) as { f: (b: boolean) => unknown };
+    expect(() => mod.f(true), source).toThrow(TypeError);
+  }
+});
