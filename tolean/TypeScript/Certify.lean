@@ -105,6 +105,7 @@ partial def stmtsOf : Stmt → List Stmt
   | .ifStmt s t a b => .ifStmt s t a b :: stmtsOf a ++ ((b.map stmtsOf).getD [])
   | .forOfStmt s k n i b => .forOfStmt s k n i b :: stmtsOf b
   | .whileStmt s t b => .whileStmt s t b :: stmtsOf b
+  | .switchStmt s d cs => .switchStmt s d cs :: cs.flatMap fun (_, body) => body.flatMap stmtsOf
   | s => [s]
 
 partial def exprCalls : Expr → List String
@@ -140,6 +141,7 @@ def stmtCalls : Stmt → List String
   | .varDecl _ d => (d.init.map exprCalls).getD []
   | .exprStmt _ e | .ifStmt _ e _ _ | .whileStmt _ e _ | .forOfStmt _ _ _ e _ => exprCalls e
   | .returnStmt _ e => (e.map exprCalls).getD []
+  | .switchStmt _ d cs => exprCalls d ++ cs.flatMap fun (t, _) => (t.map exprCalls).getD []
   | _ => []
 
 def functionsOf (m : Module) : List (String × List Param × Option TypeExpr × Stmt) :=

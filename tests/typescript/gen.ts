@@ -312,6 +312,8 @@ export class Gen {
         const start = this.chance(0.5) ? this.expr(t, vars, 0) : '';
         lines.push(`const ${name}: Array<${show(t)}> = [${start}];`, `${name}.push(${this.expr(t, vars, 1)});`);
         vars.push({ name, ty: { k: 'array', of: t }, mutable: false, owned: false });
+      } else if (roll < 0.94 && depth > 0 && !inLoop) {
+        lines.push(...this.switchStatement(vars, ret, lets));
       } else if (!inLoop && this.chance(0.3)) {
         // Rarely, something outside the subset or ill-typed, to check that both refuse.
         lines.push(this.pick([
@@ -322,6 +324,32 @@ export class Gen {
       }
     }
     lines.push(`return ${this.expr(ret, vars, 2)};`);
+    return lines;
+  }
+
+  /** A `switch` on a scalar. The translator takes only a switch on a tag,
+   * so this one is for the interpreter test: its clauses assign a `let`,
+   * return, or run into the next clause, and the `default` can stand
+   * anywhere, where the interpreter leaves the subset unless it is last. */
+  private switchStatement(vars: ReadonlyArray<Var>, ret: Ty, lets: ReadonlyArray<Var>): Array<string> {
+    const t = this.pick([BIGINT, NUMBER, STRING, BOOLEAN]);
+    const clauses: Array<string> = Array.from({ length: 1 + Math.floor(this.next() * 3) }, () =>
+      `  case ${this.expr(t, vars, 0)}:`);
+    if (this.chance(0.6)) {
+      clauses.splice(Math.floor(this.next() * (clauses.length + 1)), 0, '  default:');
+    }
+    const lines = [`switch (${this.expr(t, vars, 1)}) {`];
+    for (const head of clauses) {
+      lines.push(head);
+      if (lets.length > 0 && this.chance(0.6)) {
+        const v = this.pick(lets);
+        lines.push(`    ${v.name} = ${this.expr(v.ty, vars, 1)};`);
+      }
+      if (this.chance(0.5)) {
+        lines.push(`    return ${this.expr(ret, vars, 1)};`);
+      }
+    }
+    lines.push('}');
     return lines;
   }
 

@@ -17,8 +17,10 @@ marks which links are proved, tested against a reference, or trusted.
 - **Declarations:** functions, interfaces, type aliases, and `const` and `let`,
   each of them possibly exported.
 - **Statements:** `const` and `let` declarations, expression statements,
-  `return`, `if` and `else`, `for … of`, `while`, blocks, `break`,
-  `continue` and the empty statement.
+  `return`, `if` and `else`, `for … of`, `while`, `switch`, blocks, `break`,
+  `continue` and the empty statement. The parser refuses a `case` test that
+  uses `<` or `<<`, because a `:` does not end its search for a `>` after
+  one, and a `switch` with two `default` clauses.
 - **Expressions:** names; number, bigint, string, boolean and `null` literals;
   array and object literals, with shorthand and `key: value` properties;
   parentheses, member access, indexing and calls; the unary operators `!`,
@@ -292,6 +294,7 @@ the file, the line and the reason. It never approximates.
 | `type T = 'a' \| 'b'`, a union of string literals | `inductive T` with the constructors `a` and `b`, which derives `DecidableEq`. A literal becomes `T.a` where the context expects a `T`, and `t === 'a'` becomes `t = T.a`. The output writes every constructor in `«»`, such as `T.«open»`, because Lean reads some strings as keywords or modifiers. A claim can still write `T.a`. |
 | `type T = A \| B`, a union of interfaces with a tag field such as `kind: 'circle'` | `inductive T` with a constructor for each member, which holds the member's structure. The structure leaves the tag field out, because its value never changes. An object literal where a `T` is expected becomes the constructor of its tag. |
 | `if (s.kind === 'circle')`, with `===` or `!==` and the string on either side | `match s with \| T.circle s => … \| …`. TypeScript narrows `s` in each branch, and so does the output. A chain of such tests on the same value becomes one `match`. |
+| `switch (s.kind)` with a `case 'circle':` for each member, or a `default:` last, where every clause returns | The same `match`, with one arm for each case. The `default`, or the code after the `switch` when it has no `default`, becomes the arm for the members that no case names. |
 | `function` with typed parameters and return type | `def` |
 | `const x = e`, `let x = e` | `let x := e` |
 | `x = e`, `x += e`, `x -= e`, `x *= e` on a `let` local | `let x := …` (shadowing) |
@@ -353,6 +356,16 @@ Tolean rejects these, among others:
   further test of the same value must come first in the other branch, as in
   a chain of `if (s.kind === 'a') return …`, so that Lean sees one `match`
   that covers every member.
+- A `switch` that does not test the tag of a tagged union, and a clause that
+  does not end in `return`. So Tolean refuses fallthrough, `break` in a
+  `switch`, and a `switch` in a loop. It also refuses a `default` that is
+  not the last clause or that no member can reach, a first clause that is a
+  `default`, a case that an earlier case already takes, and code after a
+  `switch` whose cases cover every member.
+- A `const` or `let` at the top of a `case` clause, outside braces. The
+  clauses share one scope, so two clauses may not declare the same name, and
+  a clause that runs first cannot read an outer name that a later clause
+  declares. Put the clause in braces: `case 'a': { const n = 1n; return n; }`.
 - An object literal whose fields are not in the order that the interface
   declares them. A JS object keeps its keys in the order the literal writes
   them, and a caller can see that order through `Object.keys` or

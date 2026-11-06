@@ -224,10 +224,13 @@ def Body.exec (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
     | .undefined => none
     | _ => Body.exec fs fuel ρ whenValue
   -- The tag is a field of the object, so the evaluator reads it, as JS does.
-  | .matchTag name _ field tag _ whenTag whenOther => do
+  -- The arm of the one member left runs only for its tag, as the printed
+  -- `match` on its constructor does.
+  | .matchTag name _ field tag other whenTag whenOther => do
     let .obj fields ← ρ.lookup name | none
     let .str k ← fields.lookup field | none
-    if k == tag then Body.exec fs fuel ρ whenTag else Body.exec fs fuel ρ whenOther
+    if k == tag then Body.exec fs fuel ρ whenTag
+    else if other.all (· == k) then Body.exec fs fuel ρ whenOther else none
   | .letState names branch rest => do
     match ← Body.exec fs fuel ρ branch with
     | .normal inner => Body.exec fs fuel (← bindState names inner ρ) rest

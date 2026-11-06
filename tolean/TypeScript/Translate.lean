@@ -465,11 +465,16 @@ def containsJump : Stmt → Bool
   | .ifStmt _ _ t none => containsJump t
   | .forOfStmt _ _ _ _ body | .whileStmt _ _ body => containsJump body
   | .block _ body => anyContainsJump body
+  | .switchStmt _ _ clauses => clausesContainJump clauses
   | _ => false
 
 def anyContainsJump : List Stmt → Bool
   | [] => false
   | s :: rest => containsJump s || anyContainsJump rest
+
+def clausesContainJump : List (Option Expr × List Stmt) → Bool
+  | [] => false
+  | (_, body) :: rest => anyContainsJump body || clausesContainJump rest
 
 end
 
@@ -522,11 +527,16 @@ def stmtChanges : Stmt → List String
   | .forOfStmt _ _ _ iterable body => exprChanges iterable ++ stmtChanges body
   | .whileStmt _ test body => exprChanges test ++ stmtChanges body
   | .block _ body => stmtsChanges body
+  | .switchStmt _ disc clauses => exprChanges disc ++ clausesChanges clauses
   | _ => []
 
 def stmtsChanges : List Stmt → List String
   | [] => []
   | s :: rest => stmtChanges s ++ stmtsChanges rest
+
+def clausesChanges : List (Option Expr × List Stmt) → List String
+  | [] => []
+  | (test, body) :: rest => optionChanges test ++ stmtsChanges body ++ clausesChanges rest
 
 end
 
@@ -615,6 +625,35 @@ def tagTestOf (env : Env) (e : Expr) : Option TagTest := do
   let (whenOther, other) := otherOf u ref (tags.filter (· != t))
   return { name := n, ref, field := f, tag := t, isEq := op == .strictEq,
            whenTag := .struct member, whenOther, other }
+
+/-- What `switch (x.kind)` tests: the local, its tagged union, the union's
+tag field, and the tags that the local may have where the `switch` starts. -/
+structure SwitchOn where
+  name : String
+  ref : DeclRef
+  field : String
+  union : UnionInfo
+  tags : List String
+
+/-- `switch (x.kind)`, where `x` is a local of a tagged union whose tag field
+is `kind`. -/
+def switchOf (env : Env) (disc : Expr) : Option SwitchOn := do
+  let .member _ (.ident _ n) f := disc.stripParens | none
+  let local_ ← env.lookup n
+  let .tagged ref tags := local_.type | none
+  let u ← env.unions.find? (·.ref == ref)
+  unless u.field == f do none
+  return { name := n, ref, field := f, union := u, tags }
+
+/-- The statements of a clause of a `switch`: those of its block, when it is
+one block, as in `case 'a': { … }`. -/
+def clauseStatements : List Stmt → List Stmt
+  | [.block _ body] => body
+  | body => body
+
+/-- Why a clause of a `switch` must end in `return`. -/
+def fallthroughReason : String :=
+  "every clause of a switch must end in a return; Tolean translates neither fallthrough nor break in a switch"
 
 /-- The arm for the other members of a test of `name`'s tag tests it again
 only as more arms of the same `match`: first, or not at all. -/
@@ -1079,6 +1118,7 @@ def translateStatements (fuel : Nat) (env : Env) (tail : Tail) (statements : Lis
       translateIf fuel env s test thenBranch elseBranch rest tail
     | .forOfStmt s kind name iterable body =>
       translateForOf fuel env s kind name iterable body rest tail
+    | .switchStmt s disc clauses => translateSwitch fuel env s disc clauses rest tail
     | _ => reject stmt.span "unsupported statement"
 
 def translateVariable (fuel : Nat) (env : Env) (s : Span) (d : VarDecl) (rest : List Stmt)
@@ -1172,6 +1212,71 @@ def translateIf (fuel : Nat) (env : Env) (s : Span) (test : Expr) (thenBranch : 
   let whenTrue ← translateStatements fuel envTrue state thenStatements
   let whenFalse ← translateStatements fuel envFalse state elseStatements
   return .letState names (← branch whenTrue whenFalse) (← translateStatements fuel env tail rest)
+
+/-- `switch (x.kind) { … }`, where every clause returns: a `match` on the
+member, as a chain of `if (x.kind === 'a') return …` gives. -/
+def translateSwitch (fuel : Nat) (env : Env) (s : Span) (disc : Expr)
+    (clauses : List (Option Expr × List Stmt)) (rest : List Stmt) (tail : Tail) : TM IR.Body := do
+  let fuel + 1 := fuel | tooDeep
+  let some sw := switchOf env disc
+    | reject disc.span "a switch must test the tag of a local of a tagged union, as 'switch (x.kind)' does"
+  if clausesDeclare clauses then
+    reject s "a case that declares a local needs braces, as in case 'a': { const n = 1n; return n; }"
+  unless tail.isRet do reject s fallthroughReason
+  unless 2 ≤ sw.tags.length do reject s "a switch needs at least two members of its union left to test"
+  match clauses with
+  | (some _, _) :: _ => translateClauses fuel env s sw sw.tags none clauses rest
+  | _ => reject s "the first clause of a switch must be a case"
+
+/-- The clauses of a `switch` from one of them on, where the local may have
+the tags `tags`, and where an outer `match` has already found that its tag is
+`known`. Each case adds an arm to the `match`. Where one member is left, its
+arm runs only for its tag, so the case that names it needs no test of its
+own. -/
+def translateClauses (fuel : Nat) (env : Env) (s : Span) (sw : SwitchOn) (tags : List String)
+    (known : Option String) (clauses : List (Option Expr × List Stmt)) (rest : List Stmt) :
+    TM IR.Body := do
+  let fuel + 1 := fuel | tooDeep
+  match clauses with
+  | [] =>
+    if tags.isEmpty then reject s "code after a switch whose cases cover every member is unreachable"
+    else translateStatements fuel env .ret rest
+  | [(none, body)] =>
+    if !rest.isEmpty then reject s "code after a switch with a default is unreachable"
+    else if !alwaysReturns (clauseStatements body) then reject s fallthroughReason
+    else translateStatements fuel env .ret (clauseStatements body)
+  | (none, _) :: _ :: _ => reject s "the default must be the last clause of a switch"
+  | (some test, body) :: more =>
+    match test.stripParens with
+    | .string _ tag =>
+      match sw.union.members.lookup tag with
+      | some member =>
+        if !tags.contains tag then
+          reject test.span s!"an earlier case of the switch already takes '{tag}'"
+        else if !alwaysReturns (clauseStatements body) then reject test.span fallthroughReason
+        else
+          let whenTag ←
+            translateStatements fuel (env.narrow sw.name (.struct member)) .ret (clauseStatements body)
+          let others := tags.filter (· != tag)
+          if others.isEmpty then
+            if known != some tag then
+              reject test.span "the member of this case must be the one left after the cases before it"
+            else if !more.isEmpty then
+              reject s "the cases before this clause cover every member, so it never runs"
+            else if !rest.isEmpty then
+              reject s "code after a switch whose cases cover every member is unreachable"
+            else return whenTag
+          else
+            -- The type of the local where the tag is none of the cases so
+            -- far, and the member left, when only one is.
+            let o := otherOf sw.union sw.ref others
+            let whenOther ← translateClauses fuel (env.narrow sw.name o.1) s sw others o.2 more rest
+            if o.2.isNone && !(nestsTag sw.name whenOther) then
+              reject s ("where more than one member of the union is left, a further test of its tag " ++
+                "must be the next case of the switch")
+            else return .matchTag sw.name sw.ref sw.field tag o.2 whenTag whenOther
+      | none => reject test.span s!"'{tag}' is not the tag of a member of the union"
+    | _ => reject test.span "a case of a switch on a tag must be a string"
 
 def translateForOf (fuel : Nat) (env : Env) (s : Span) (kind : VarKind) (element : String)
     (iterable : Expr) (body : Stmt) (rest : List Stmt) (tail : Tail) : TM IR.Body := do

@@ -27,6 +27,7 @@ row, and the corpus files for each row certify.
 | 2 | `type T = U` aliases of the types of the subset, exported and imported | [#45](https://github.com/shihangw/tolean/pull/45) |
 | 2 | Literal unions of strings, `type T = 'a' \| 'b'`, as an `inductive` | [#47](https://github.com/shihangw/tolean/pull/47) |
 | 2 | Tagged unions of interfaces, narrowed by `if (x.kind === 'a')` | [#51](https://github.com/shihangw/tolean/pull/51) |
+| 2 | `switch (x.kind)` on a tagged union, where every clause returns | [#53](https://github.com/shihangw/tolean/pull/53) |
 | 2 | Optional fields `f?: T` of interfaces, read with `??` and `=== undefined` | [#55](https://github.com/shihangw/tolean/pull/55) |
 | 2 | `x ??= y` on a `let` local of type `T \| null` | [#58](https://github.com/shihangw/tolean/pull/58) |
 | 2 | `p?.f` on a nullable structure, read with `??` and `=== undefined` | [#60](https://github.com/shihangw/tolean/pull/60) |
@@ -66,7 +67,7 @@ exact. A construct leaves these tables when Tolean translates it, and the
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| `switch` on the tag, with a `default` that assigns to `never` | `match` on the constructor | Fallthrough between cases |
+| A `switch` on the tag whose clauses end in `break` and change locals, and a `default` that assigns the value to `never` | A `match` on the constructor that ends in the locals it changes | Fallthrough between cases |
 | `x?: T` parameters, `undefined` as a value, and a test such as `x !== undefined` that narrows an optional value | `Option T` | `'x' in obj`, which can tell a missing key from `undefined` |
 | A chain after `?.`, such as `a?.b.c`, and `a?.[i]` and `f?.()` | `Option.bind` | `==` against anything except `null` and `undefined` |
 | `export { … }` and re-exports | Nothing: the names stay in scope | `export *` |
@@ -281,7 +282,7 @@ is the one exception, because it changes the type of every `string`.
    literals and `===`, so the switch changes the generated types but breaks
    almost no proof. Every project that writes proofs over Lean's `String`
    makes the switch more costly later, so it comes first.
-2. Types and narrowing: `switch` on the tag of a tagged union, optional
+2. Types and narrowing: `switch` clauses that end in `break`, optional
    parameters, and the rest of a chain after `?.`.
 3. Generic functions and types whose type parameters have no constraint,
    tuples, string enums, `typeof` tests and type guards.

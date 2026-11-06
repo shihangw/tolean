@@ -131,6 +131,7 @@ def stmt : Stmt → String
   | .breakStmt s => s!"({ns}Stmt.breakStmt {span s})"
   | .continueStmt s => s!"({ns}Stmt.continueStmt {span s})"
   | .empty s => s!"({ns}Stmt.empty {span s})"
+  | .switchStmt s d cs => s!"({ns}Stmt.switchStmt {span s} {expr d} {list (clauses cs)})"
 
 def optStmt : Option Stmt → Option String
   | some s => some (stmt s)
@@ -139,6 +140,10 @@ def optStmt : Option Stmt → Option String
 def stmts : List Stmt → List String
   | [] => []
   | s :: ss => stmt s :: stmts ss
+
+def clauses : List (Option Expr × List Stmt) → List String
+  | [] => []
+  | (t, b) :: cs => s!"({option (t.map expr)}, {list (stmts b)})" :: clauses cs
 
 end
 
