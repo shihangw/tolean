@@ -17,16 +17,16 @@ def next {N : Type} [JSNumber N] (id : (Id N)) : Int :=
 
 def pick {N : Type} [JSNumber N] (named : Bool) (n : Int) : (Id N) :=
   if named then
-    (Id.«string» "first")
+    (Id.«string» (N := N) "first")
   else
-    (Id.«bigint» n)
+    (Id.«bigint» (N := N) n)
 
 def rename {N : Type} [JSNumber N] (id : (Id N)) (name : String) : (Id N) :=
   let out := id
   let out :=
     match id with
     | Id.«bigint» id =>
-      let out := (Id.«string» name)
+      let out := (Id.«string» (N := N) name)
       out
     | Id.«string» id =>
       out
@@ -40,19 +40,19 @@ def maybeNext {N : Type} [JSNumber N] (id : Option (Id N)) : Int :=
     (next (N := N) id)
 
 def count {N : Type} [JSNumber N] (n : Int) : Int :=
-  (next (N := N) ((Id.«bigint» n)))
+  (next (N := N) ((Id.«bigint» (N := N) n)))
 
 def choose {N : Type} [JSNumber N] (flag : Bool) : (Id N) :=
-  (if flag then (Id.«string» "a") else (Id.«bigint» ((5 : Int))))
+  (if flag then (Id.«string» (N := N) "a") else (Id.«bigint» (N := N) ((5 : Int))))
 
 def orDefault {N : Type} [JSNumber N] (id : Option (Id N)) : (Id N) :=
-  (Option.getD id ((Id.«string» "none")))
+  (Option.getD id ((Id.«string» (N := N) "none")))
 
 structure Box (N : Type) where
   id : (Id N)
 
 def box {N : Type} [JSNumber N] (n : Int) : (Box N) :=
-  ({ id := (Id.«bigint» n) } : (Box N))
+  ({ id := (Id.«bigint» (N := N) n) } : (Box N))
 
 def unbox {N : Type} [JSNumber N] (b : (Box N)) : Int :=
   let id := b.id
@@ -94,6 +94,6 @@ def total {N : Type} [JSNumber N] (cells : List (Cell N)) : N :=
   sum
 
 def cells {N : Type} [JSNumber N] (flag : Bool) (n : N) : List (Cell N) :=
-  ([(Cell.«boolean» flag), (Cell.«number» n), (Cell.«string» "x")] : List (Cell N))
+  ([(Cell.«boolean» (N := N) flag), (Cell.«number» (N := N) n), (Cell.«string» (N := N) "x")] : List (Cell N))
 
 end Test

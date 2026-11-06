@@ -116,7 +116,8 @@ inductive Expr (T E : Type) where
   field, but the source's object has it. -/
   | tagValue (value : String)
   /-- `(T.a e)`: the member `a` of a tagged union `T`, from the value `e` of
-  that member. -/
+  that member. When `T` is generic over the type parameter, the constructor
+  gets it by name: `(T.a (N := N) e)`. -/
   | inject (ref : DeclRef) (tag : String) (e : Expr T E)
   /-- `(Option.getD a b)`, or `(Option.or a b)` when `nullable` is true: the
   value of `a ?? b`. `b` is a `T` in the first, and an `Option T` in the
@@ -457,7 +458,14 @@ def Expr.print (names : Names) : Expr T E → String
   | .var name => name
   | .enumCase ref member => s!"{(names.ref ref).1}.{memberName member}"
   | .tagValue value => Sexp.quote value
-  | .inject ref tag e => s!"({(names.ref ref).1}.{memberName tag} {argument (e.print names)})"
+  | .inject ref tag e =>
+    -- The constructor gets the type parameter by name, as a call does. A
+    -- value such as `(1 : Int)` does not mention the parameter, so Lean
+    -- could not infer it.
+    let head := match names.ref ref with
+      | (name, some binder) => s!"{name}.{memberName tag} ({binder} := {names.typeParam})"
+      | (name, Option.none) => s!"{name}.{memberName tag}"
+    s!"({head} {argument (e.print names)})"
   | .field obj wrap name =>
     let o := obj.print names
     s!"{if wrap then s!"({o})" else o}.{name}"
