@@ -165,12 +165,30 @@ theorem Stmt.depth_lt : ∀ st : Stmt, st.depth < st.tokens.length
   | .returnStmt _ v => by cases v <;> simp [Stmt.depth, Stmt.tokens, Stmt.wordLines, Stmt.lines, keywordWord]
   | .breakStmt _ | .continueStmt _ => by simp [Stmt.depth, Stmt.tokens, Stmt.wordLines, Stmt.lines, keywordWord]
   | .empty _ => by simp [Stmt.depth, Stmt.tokens, Stmt.wordLines, Stmt.lines, punctWord]
+  | .switchStmt sp d cs => by
+    have := Stmt.depthClauses_le cs
+    rw [Stmt.tokens_length_cons (l := keywordWord "switch" :: punctWord "(" :: d.words ++
+      [punctWord ")", punctWord "{"]) (ls := (cs.map clauseWordLines).flatten ++ [[punctWord "}"]])
+      (by simp [Stmt.wordLines, Stmt.lines, Stmt.clauseLines_wordLines])]
+    simp only [Stmt.depth, List.flatten_append, List.length_append, punctWord, List.flatten_cons,
+      List.flatten_nil, List.append_nil, List.length_cons, List.length_nil]
+    omega
 
 theorem Stmt.depthOf_le : ∀ ss : List Stmt, Stmt.depthOf ss ≤ (ss.map Stmt.tokens).flatten.length
   | [] => by simp [Stmt.depthOf]
   | st :: ss => by
     have := Stmt.depth_lt st; have := Stmt.depthOf_le ss
     simp only [Stmt.depthOf, List.map_cons, List.flatten_cons, List.length_append]
+    omega
+
+theorem Stmt.depthClauses_le : ∀ cs : List (Option Expr × List Stmt),
+    Stmt.depthClauses cs ≤ (cs.map clauseWordLines).flatten.flatten.flatten.length
+  | [] => by simp [Stmt.depthClauses]
+  | (t, b) :: cs => by
+    have h1 := Stmt.depthOf_le b; have := Stmt.depthClauses_le cs
+    rw [← Stmt.tokensOf] at h1
+    simp only [Stmt.depthClauses, List.map_cons, List.flatten_cons, clauseWordLines, List.flatten_append,
+      List.length_append]
     omega
 
 end

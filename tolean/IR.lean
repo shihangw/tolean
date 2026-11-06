@@ -177,7 +177,8 @@ inductive Body (T E : Type) where
   /-- `match x with | T.a x => … | T.b x => …`: a test of the tag field
   `field` of `x`, a value of the tagged union `T`. The first branch is for the
   tag `tag`. The second names the member `other` when it is the only one
-  left, or else matches every other member. -/
+  left, and then runs only for its tag, as Lean's `match` does, or else
+  matches every other member. -/
   | matchTag (name : String) (ref : DeclRef) (field tag : String) (other : Option String)
       (whenTag whenOther : Body T E)
   /-- `let (x, y) := branch`, where `branch` is an `ite` or a `matchNull`
