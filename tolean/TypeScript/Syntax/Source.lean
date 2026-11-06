@@ -174,6 +174,11 @@ def VarDecl.words (d : VarDecl) : List Word :=
   [d.kind.word, identWord d.name] ++ typeAnnotation d.type ++
     (match d.init with | some e => punctWord "=" :: e.words | none => []) ++ [punctWord ";"]
 
+/-- `case test :`, or `default :`. -/
+def clauseHead : Option Expr → List Word
+  | some e => keywordWord "case" :: e.words ++ [punctWord ":"]
+  | none => [keywordWord "default", punctWord ":"]
+
 mutual
 
 /-- The lines of a statement, `depth` steps in. -/
@@ -196,10 +201,19 @@ def Stmt.lines (depth : Nat) : Stmt → List Line
   | .breakStmt _ => [(depth, [keywordWord "break", punctWord ";"])]
   | .continueStmt _ => [(depth, [keywordWord "continue", punctWord ";"])]
   | .empty _ => [(depth, [punctWord ";"])]
+  | .switchStmt _ disc clauses =>
+    (depth, keywordWord "switch" :: punctWord "(" :: disc.words ++ [punctWord ")", punctWord "{"]) ::
+      Stmt.clauseLines (depth + 1) clauses ++ [(depth, [punctWord "}"])]
 
 def Stmt.linesOf (depth : Nat) : List Stmt → List Line
   | [] => []
   | s :: ss => s.lines depth ++ Stmt.linesOf depth ss
+
+/-- The clauses of a `switch`: the head of each on a line of its own, and its
+statements one step further in. -/
+def Stmt.clauseLines (depth : Nat) : List (Option Expr × List Stmt) → List Line
+  | [] => []
+  | (test, body) :: cs => (depth, clauseHead test) :: Stmt.linesOf (depth + 1) body ++ Stmt.clauseLines depth cs
 
 end
 
@@ -334,6 +348,7 @@ def Stmt.erase : Stmt → Stmt
   | .breakStmt _ => .breakStmt noSpan
   | .continueStmt _ => .continueStmt noSpan
   | .empty _ => .empty noSpan
+  | .switchStmt _ disc clauses => .switchStmt noSpan disc.erase (Stmt.eraseClauses clauses)
 
 def Stmt.eraseOpt : Option Stmt → Option Stmt
   | none => none
@@ -342,6 +357,10 @@ def Stmt.eraseOpt : Option Stmt → Option Stmt
 def Stmt.eraseAll : List Stmt → List Stmt
   | [] => []
   | s :: ss => s.erase :: Stmt.eraseAll ss
+
+def Stmt.eraseClauses : List (Option Expr × List Stmt) → List (Option Expr × List Stmt)
+  | [] => []
+  | (test, body) :: cs => (test.map Expr.erase, Stmt.eraseAll body) :: Stmt.eraseClauses cs
 
 end
 

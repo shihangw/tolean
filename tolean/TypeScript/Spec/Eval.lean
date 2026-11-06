@@ -426,8 +426,57 @@ def execStmt (m : Scope) (fuel : Nat) (env : Env N) : Stmt → Option (Outcome N
   | .forOfStmt _ .const name iterable body => do
     let .list items ← eval m fuel env iterable | none
     execLoop m fuel env name body items
+  -- `switch (d) { … }` (`SwitchStatement` Evaluation, ECMA-262 §14.12.4): the
+  -- clauses run in a new scope, and a `break` at the top of a clause ends the
+  -- statement. The model leaves out a local declared at the top of a clause,
+  -- which the whole case block shares.
+  | .switchStmt _ disc clauses => do
+    if clausesDeclare clauses then none
+    let v ← eval m fuel env disc
+    match ← execSwitch m fuel env v clauses with
+    | .ret r => some (.ret r)
+    | .normal env' => some (.normal (env'.drop (env'.length - env.length)))
   | _ => none
 termination_by s => (fuel, sizeOf s, 0)
+
+/-- `CaseBlockEvaluation` (ECMA-262 §14.12.4), for a case block whose
+`default`, if it has one, is its last clause: the tests of the `case` clauses
+run in order, and the first that is `===` to `v` selects its clause. That
+clause and the ones after it run. When no test holds, the `default` clause
+runs. The interpreter leaves a `default` before other clauses out of the
+subset. -/
+def execSwitch (m : Scope) (fuel : Nat) (env : Env N) (v : Val N) :
+    List (Option Expr × List Stmt) → Option (Outcome N)
+  | [] => some (.normal env)
+  | [(none, body)] => execFrom m fuel env [(none, body)]
+  | (none, _) :: _ :: _ => none
+  | (some test, body) :: rest => do
+    if ← strictEq v (← eval m fuel env test) then execFrom m fuel env ((some test, body) :: rest)
+    else execSwitch m fuel env v rest
+termination_by cs => (fuel, sizeOf cs, 1)
+
+/-- Run the statements of `clauses`, from the selected one on: a clause that
+does not end in `break` or `return` runs into the next. -/
+def execFrom (m : Scope) (fuel : Nat) (env : Env N) :
+    List (Option Expr × List Stmt) → Option (Outcome N)
+  | [] => some (.normal env)
+  | (_, body) :: rest => do
+    match ← execCase m fuel env body with
+    | (.ret r, _) => some (.ret r)
+    | (.normal env', true) => some (.normal env')
+    | (.normal env', false) => execFrom m fuel env' rest
+termination_by cs => (fuel, sizeOf cs, 0)
+
+/-- Run the statements of one clause, up to a `break` at its top or a
+`return`. The flag says whether a `break` ended it. -/
+def execCase (m : Scope) (fuel : Nat) (env : Env N) : List Stmt → Option (Outcome N × Bool)
+  | [] => some (.normal env, false)
+  | s :: rest =>
+    if s matches .breakStmt _ then some (.normal env, true) else do
+      match ← execStmt m fuel env s with
+      | .ret r => some (.ret r, false)
+      | .normal env' => execCase m fuel env' rest
+termination_by ss => (fuel, sizeOf ss, 0)
 
 /-- Run the body of `for (const name of …)` once for each of `items`. Each
 run keeps the changes to outer variables, and drops `name` and the variables
