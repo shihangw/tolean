@@ -16,7 +16,7 @@ def total (xs : List (Option Int)) (d : Int) : Int :=
   let sum := (0 : Int)
   let sum :=
     List.foldl
-      (fun sum x =>
+      (fun (sum : Int) (x : Option Int) =>
         let v := x
         let v := (Option.or v d)
         let sum := sum + (Option.getD v ((0 : Int)))

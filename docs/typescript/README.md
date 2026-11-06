@@ -335,7 +335,9 @@ Tolean rejects these, among others:
   first. Use `Number.isNaN` and `Number.isFinite` instead.
 - Assignment to a parameter, a `const` or a field, and a push onto an array
   that the function did not create. It also rejects `break`, `continue`, and
-  `return` inside a loop.
+  `return` inside a loop. An assignment to a `const` throws a `TypeError`, so
+  the interpreter gives no value for a block where a statement after a
+  `const` assigns it, and the translator refuses the `const`.
 - A read of an owned array anywhere except in the `return` value. If code
   kept an alias, stored the array in a field or looped over it, it would miss
   a later push. In Lean a push makes a new list, but in JS it changes the

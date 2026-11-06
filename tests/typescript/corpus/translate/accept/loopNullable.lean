@@ -22,7 +22,7 @@ def lastBigint {N : Type} [JSNumber N] (xs : List Int) (start : Option Int) : Op
   let last :=
     List.foldl
       (fun (last : Option Int) (x : Int) =>
-        let last := x
+        let last := (x : Option Int)
         last)
       last xs
   last

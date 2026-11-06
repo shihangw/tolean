@@ -473,6 +473,8 @@ def execCase (m : Scope) (fuel : Nat) (env : Env N) : List Stmt → Option (Outc
   | [] => some (.normal env, false)
   | s :: rest =>
     if s matches .breakStmt _ then some (.normal env, true) else do
+      -- As in `exec`: an assignment to a `const` throws.
+      if s.constAssignedIn rest then none
       match ← execStmt m fuel env s with
       | .ret r => some (.ret r, false)
       | .normal env' => execCase m fuel env' rest
@@ -494,6 +496,8 @@ termination_by xs => (fuel, sizeOf body, xs.length + 1)
 def exec (m : Scope) (fuel : Nat) (env : Env N) : List Stmt → Option (Outcome N)
   | [] => some (.normal env)
   | s :: rest => do
+    -- An assignment to a `const` throws; the model gives no value then.
+    if s.constAssignedIn rest then none
     match ← execStmt m fuel env s with
     | .ret v => some (.ret v)
     | .normal env' => exec m fuel env' rest
