@@ -83,6 +83,11 @@ partial def Stmt.toSexp : Stmt → Sexp
   | .breakStmt s => node "break" s [] []
   | .continueStmt s => node "continue" s [] []
   | .empty s => node "empty" s [] []
+  -- A clause keeps no span, so its node has none.
+  | .switchStmt s disc clauses =>
+    node "switch" s [] (disc.toSexp :: clauses.map fun (test, body) =>
+      .node (if test.isSome then "case" else "default") none []
+        ((test.map Expr.toSexp).toList ++ body.map toSexp))
 
 def Param.toSexp (p : Param) : Sexp :=
   node "param" p.span [p.name] (p.type.map TypeExpr.toSexp).toList

@@ -177,7 +177,8 @@ inductive Body (T E : Type) where
   value of the tagged union `T`. The tag is the tag field `field` of the
   source's value, or its type, such as TypeScript's `typeof x`, when `field`
   is none. The first branch is for the tag `tag`. The second names the member
-  `other` when it is the only one left, or else matches every other member. -/
+  `other` when it is the only one left, and then runs only for its tag, as
+  Lean's `match` does, or else matches every other member. -/
   | matchTag (name : String) (ref : DeclRef) (field : Option String) (tag : String)
       (other : Option String) (whenTag whenOther : Body T E)
   /-- `let (x, y) := branch`, where `branch` is an `ite` or a `matchNull`

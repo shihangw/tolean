@@ -207,8 +207,18 @@ inductive Stmt where
   | breakStmt (span : Span)
   | continueStmt (span : Span)
   | empty (span : Span)
+  /-- `switch (disc) { … }`, with its clauses in source order. A clause is
+  `case test:` or, when `test` is `none`, `default:`, with its statements. -/
+  | switchStmt (span : Span) (disc : Expr) (clauses : List (Option Expr × List Stmt))
 
 instance : Inhabited Stmt := ⟨.empty default⟩
+
+/-- A clause of a `switch` declares a local at its top, outside braces. The
+clauses share one scope (ECMA-262 §14.12.2, §14.12.4): such a local is in
+its temporal dead zone from the start of the case block, and two clauses
+may not declare the same name. -/
+def clausesDeclare (clauses : List (Option Expr × List Stmt)) : Bool :=
+  clauses.any fun (_, body) => body.any fun s => s matches .varDecl ..
 
 structure Param where
   span : Span
@@ -271,7 +281,31 @@ def Expr.span : Expr → Span
 
 def Stmt.span : Stmt → Span
   | .varDecl s _ | .exprStmt s _ | .returnStmt s _ | .ifStmt s _ _ _ | .forOfStmt s _ _ _ _
-  | .whileStmt s _ _ | .block s _ | .breakStmt s | .continueStmt s | .empty s => s
+  | .whileStmt s _ _ | .block s _ | .breakStmt s | .continueStmt s | .empty s | .switchStmt s _ _ => s
+
+mutual
+
+/-- `e` has no `<` or `<<` operator. -/
+def Expr.lessFree : Expr → Bool
+  | .binary _ op l r => op != .lt && op != .shl && l.lessFree && r.lessFree
+  | .array _ es => Expr.lessFreeList es
+  | .object _ ps => Property.lessFreeList ps
+  | .paren _ e | .member _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e => e.lessFree
+  | .index _ a b | .assign _ _ a b => a.lessFree && b.lessFree
+  | .call _ c args => c.lessFree && Expr.lessFreeList args
+  | .cond _ a b c => a.lessFree && b.lessFree && c.lessFree
+  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => true
+
+def Expr.lessFreeList : List Expr → Bool
+  | [] => true
+  | e :: es => e.lessFree && Expr.lessFreeList es
+
+def Property.lessFreeList : List Property → Bool
+  | [] => true
+  | .shorthand .. :: ps => Property.lessFreeList ps
+  | .keyValue _ _ v :: ps => v.lessFree && Property.lessFreeList ps
+
+end
 
 def Decl.span : Decl → Span
   | .import s .. | .function s .. | .interface s .. | .typeAlias s .. | .exportedVar s _ => s
