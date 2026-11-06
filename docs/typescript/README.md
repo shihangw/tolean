@@ -27,19 +27,26 @@ marks which links are proved, tested against a reference, or trusted.
   parentheses, member access, indexing and calls; the unary operators `!`,
   `-`, `+`, `~`, `typeof` and `void`; `++` and `--` before or after; the
   binary operators, including `??`, `**`, `in` and `instanceof`; the
-  conditional operator; and assignment, with every compound operator.
+  conditional operator; assignment, with every compound operator; and arrow
+  functions whose body is an expression, such as `x => x + 1` and
+  `(a: number, b) => a * b`.
 - **Types:** keyword types such as `number`, `null`, literal types, named types
   with type arguments, arrays, unions and parentheses.
 
 The translator accepts less than the parser reads; see
 [The TypeScript subset](#the-subset). Sometimes `tsc` and JavaScript read the same tokens in two different
 ways. When that happens, the parser refuses the code instead of choosing one
-reading. There are two such cases:
+reading. There are three such cases:
 
 - `f < A, B > (x)`. `tsc` reads type arguments, but JavaScript reads two
   comparisons.
 - `(a)` followed by `{`. `tsc` reads an arrow function that is missing its
   `=>`, but JavaScript reads `(a); {`.
+- `(a)`, then a line break, then `=>`. `tsc` reads an arrow function, but
+  ECMA-262 allows no line break before `=>`, so JavaScript refuses the code.
+
+The parser also refuses an arrow function with a return type, and one whose
+body is in braces. The translator refuses every arrow function for now.
 
 The parser also refuses code that Tolean cannot represent exactly. Examples
 are lone surrogates, legacy octal literals, template literals and non-ASCII
