@@ -425,6 +425,18 @@ def Body.testsTag (name : String) : Body T E → Bool
 section
 variable [PrintTy T] [PrintOp E]
 
+/-- The type of a loop's state, such as `Int × Bool`. -/
+def foldState (names : Names) (info : LoopInfo T) : String :=
+  " × ".intercalate (info.stateTypes.map (·.print names))
+
+/-- The binders of the function that `List.foldl` runs for a loop, with their
+types: `((x, y) : Int × Bool) (e : T)`. Lean elaborates the body before it
+knows the types, so in `{ f := e }` with a field of type `Option N` it would
+take `e` to be an `Option N`, not an `N` to wrap. -/
+def foldBinders (names : Names) (state : List String) (element : String) (info : LoopInfo T) :
+    String :=
+  s!"({tuple state} : {foldState names info}) ({element} : {info.elem.print names})"
+
 mutual
 
 def Expr.print (names : Names) : Expr T E → String
@@ -521,10 +533,11 @@ def Body.lines (names : Names) : Body T E → List String
     s!"match {name} with" :: s!"| {ctor tag} {name} =>" :: indent (whenTag.lines names) ++ rest
   | .letState ns branch rest =>
     [s!"let {tuple ns} :="] ++ indent (branch.lines names) ++ rest.lines names
-  | .fold ns element body items rest _ =>
+  | .fold ns element body items rest info =>
     let bodyLines := body.lines names
     let lastLine := bodyLines.getLast?.getD ""
-    [s!"let {tuple ns} :=", s!"  {leanName names "List.foldl"}", s!"    (fun {tuple ns} {element} =>"] ++
+    [s!"let {tuple ns} :=", s!"  {leanName names "List.foldl"}",
+      s!"    (fun {foldBinders names ns element info} =>"] ++
       indentBy "      " (bodyLines.dropLast ++ [lastLine ++ ")"]) ++
       [s!"    {tuple ns} {items.print names}"] ++ rest.lines names
 

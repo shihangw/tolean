@@ -9,7 +9,7 @@ def total (xs : List Int) : Int :=
   let s := (0 : Int)
   let s :=
     List.foldl
-      (fun s x =>
+      (fun (s : Int) (x : Int) =>
         let s := s + x
         s)
       s xs

@@ -20,7 +20,7 @@ def pick {N1 : Type} [JSNumber N1] (items : _root_.List (List N1)) (N : N1) : In
   let total := (0 : Int)
   let total :=
     _root_.List.foldl
-      (fun total String =>
+      (fun (total : Int) (String : (List N1)) =>
         let total :=
           if String.none = (JSNumber.isNaN N) then
             let total := total + String.some
