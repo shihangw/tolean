@@ -6,7 +6,8 @@
 # usage: watch-prs.sh <state-file> <pr>...
 #
 # Prints one line per new item and exits 0 at the first round that has any.
-# A seeding run (ROUNDS=0) prints the checks that are red already.
+# A seeding run (ROUNDS=0) prints what is open already: the checks that are
+# red and the review threads that are not resolved.
 # Exits 3 when every round fetched everything and found nothing new, and 4
 # when some round could not fetch, so its silence proves nothing. The state
 # file keeps what was already seen, so the next run reports only what is
@@ -24,6 +25,24 @@ trap 'rm -f "$failed"' EXIT
 # One listing, every page of it. A failure marks the snapshot incomplete.
 list() {
   gh api --paginate "$1" --jq "$2" || echo "$1" >>"$failed"
+}
+
+# The review threads of PR $1 that no one has resolved, one line each. The
+# reviewer resolves a thread when its finding is settled, so an open thread
+# may still need an answer even when it has replies.
+unresolved() {
+  gh api graphql -F owner="${repo%/*}" -F name="${repo#*/}" -F n="$1" -f query='
+    query($owner: String!, $name: String!, $n: Int!) {
+      repository(owner: $owner, name: $name) {
+        pullRequest(number: $n) {
+          reviewThreads(first: 100) {
+            nodes { isResolved comments(first: 1) { nodes { databaseId path body } } }
+          }
+        }
+      }
+    }' --jq ".data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved | not)
+      | .comments.nodes[0] | \"#$1 unresolved \(.databaseId) \(.path): \(.body | gsub(\"\\n\"; \" \") | .[0:200])\"" \
+    || echo "unresolved threads of #$1" >>"$failed"
 }
 
 snapshot() {
@@ -74,8 +93,14 @@ if [ "$rounds" -eq 0 ]; then
     echo "could not fetch: $(paste -sd, "$failed")" >&2
     exit 4
   fi
+  open=$(for n in "$@"; do unresolved "$n"; done)
+  if [ -s "$failed" ]; then
+    echo "could not fetch: $(paste -sd, "$failed")" >&2
+    exit 4
+  fi
   printf '%s\n' "$current" >>"$state"
   printf '%s\n' "$current" | grep ' check .* fail$' || true
+  [ -n "$open" ] && printf '%s\n' "$open"
   exit 0
 fi
 incomplete=0
