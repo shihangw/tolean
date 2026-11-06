@@ -6,7 +6,7 @@ def insert (xs : List Int) (x : Int) : List Int :=
   let placed := false
   let (out, placed) :=
     List.foldl
-      (fun (out, placed) y =>
+      (fun ((out, placed) : List Int × Bool) (y : Int) =>
         let (out, placed) :=
           if (!(placed) && decide (x ≤ y)) then
             let out := out ++ [x]
@@ -29,7 +29,7 @@ def sort (xs : List Int) : List Int :=
   let out := ([] : List Int)
   let out :=
     List.foldl
-      (fun out x =>
+      (fun (out : List Int) (x : Int) =>
         let out := (insert out x)
         out)
       out xs

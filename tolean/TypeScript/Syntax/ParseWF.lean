@@ -2713,13 +2713,29 @@ theorem exprStmt_gives {T : Edition} {n : Nat} {s s' : ParseState} {st : Stmt} {
   simp only [Stmt.wf, Bool.and_eq_true]
   exact ⟨⟨hw, ha⟩, by rw [hh]; exact hx⟩
 
+/-- `parseClauseBreak` gives a `break`. -/
+theorem parseClauseBreak_inv {s s' : ParseState} {st : Stmt} {x : Token} {r : List Token} (hR : Ready s)
+    (hs : s.rest = x :: r) (hx : x.kind ≠ .eof) (h : Parse.parseClauseBreak s = .ok st s') :
+    Ready s' ∧ Kept s s' ∧ ∃ sp, st = .breakStmt sp := by
+  simp only [Parse.parseClauseBreak] at h
+  rw [Parse.bind_eq (advance_past hR hs hx)] at h
+  have hR₁ := hR.past hs (hR.more hs hx)
+  obtain ⟨y, r₁, hs₁⟩ := hR₁.cons
+  rw [Parse.bind_eq (Parse.peek_eq hs₁)] at h
+  obtain ⟨_, h⟩ := fail_inv h
+  rw [Parse.bind_ok] at h; obtain ⟨_, s₂, hend, h⟩ := h
+  obtain ⟨hR₂, hK₂⟩ := endStatement_inv hR₁ hend
+  rw [Parse.bind_eq (Parse.spanFrom_eq _ _)] at h
+  simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h
+  exact ⟨hR₂, (Kept.past _ _ _).trans hK₂, _, rfl⟩
+
 /-- One step of the loop over the statements of a clause keeps its invariant. -/
 theorem clauseStep_inv {T : Edition} {p : ParseM Stmt} (hp : GivesS T p) {s₀ : ParseState}
     {items items' : Array Stmt} {b : Bool} {st st' : ParseState} (hT : s₀.target = T)
     (hI : Ready st ∧ Kept s₀ st ∧
-      ∀ x ∈ items.toList, x.wf T s₀.inFunction (s₀.loopDepth != 0) = true ∧ StmtOK T x)
+      ∀ x ∈ items.toList, (x.isBreak = true ∨ x.wf T s₀.inFunction (s₀.loopDepth != 0) = true) ∧ StmtOK T x)
     (h : Parse.clauseStep p items st = .ok (items', b) st') :
-    Ready st' ∧ Kept s₀ st' ∧ ∀ x ∈ items'.toList, x.wf T s₀.inFunction (s₀.loopDepth != 0) = true ∧ StmtOK T x := by
+    Ready st' ∧ Kept s₀ st' ∧ ∀ x ∈ items'.toList, (x.isBreak = true ∨ x.wf T s₀.inFunction (s₀.loopDepth != 0) = true) ∧ StmtOK T x := by
   obtain ⟨hR, hK, hall⟩ := hI
   obtain ⟨x, r, hs⟩ := hR.cons
   simp only [Parse.clauseStep] at h
@@ -2730,7 +2746,21 @@ theorem clauseStep_inv {T : Edition} {p : ParseM Stmt} (hp : GivesS T p) {s₀ :
   rw [if_neg hc, Parse.pure_bind] at h
   by_cases he : x.isEof = true
   · rw [if_pos he] at h; exact absurd h (unexpected_bind_ne_ok _ _ _ _ _ _)
-  rw [if_neg he, Parse.pure_bind, Parse.bind_ok] at h
+  rw [if_neg he, Parse.pure_bind] at h
+  by_cases hb : x.isKeyword "break" = true
+  · rw [if_pos hb, Parse.bind_ok] at h
+    obtain ⟨y, s₁, hy, h⟩ := h
+    have hx : x.kind ≠ .eof := by
+      have : x.kind = .keyword "break" := by simpa [Token.isKeyword] using hb
+      rw [this]; simp
+    obtain ⟨hR₁, hK₁, sp, rfl⟩ := parseClauseBreak_inv hR hs hx hy
+    simp only [Parse.pure_ok, Prod.mk.injEq] at h; obtain ⟨⟨rfl, _⟩, rfl⟩ := h
+    refine ⟨hR₁, hK.trans hK₁, fun x' hx' => ?_⟩
+    simp only [Array.toList_push, List.mem_append, List.mem_singleton] at hx'
+    rcases hx' with hx' | rfl
+    · exact hall x' hx'
+    · exact ⟨.inl rfl, StmtOK.brk⟩
+  rw [if_neg hb, Parse.pure_bind, Parse.bind_ok] at h
   obtain ⟨y, s₁, hy, h⟩ := h
   obtain ⟨hR₁, hK₁, hw, _, _, hok⟩ := hp _ _ _ hR (hK.target_eq.trans hT) hy
   simp only [Parse.pure_ok, Prod.mk.injEq] at h; obtain ⟨⟨rfl, _⟩, rfl⟩ := h
@@ -2738,14 +2768,14 @@ theorem clauseStep_inv {T : Edition} {p : ParseM Stmt} (hp : GivesS T p) {s₀ :
   simp only [Array.toList_push, List.mem_append, List.mem_singleton] at hx'
   rcases hx' with hx' | rfl
   · exact hall x' hx'
-  · exact ⟨by rw [← hK.inFunction_eq, ← hK.loopDepth_eq]; exact hw, hok⟩
+  · exact ⟨.inr (by rw [← hK.inFunction_eq, ← hK.loopDepth_eq]; exact hw), hok⟩
 
 /-- What `parseClause` gives: a clause whose test `Expr.caseWF` accepts, and
 whose statements `Stmt.wf` accepts in the state's function and loop. -/
 def GivesC (T : Edition) (p : ParseM (Option Expr × List Stmt)) : Prop :=
   ∀ s c s', Ready s → s.target = T → p s = .ok c s' →
     Ready s' ∧ Kept s s' ∧ Expr.caseWF T c.1 = true ∧
-      (∀ x ∈ c.2, x.wf T s.inFunction (s.loopDepth != 0) = true) ∧ ClauseOK T c
+      (∀ x ∈ c.2, (x.isBreak = true ∨ x.wf T s.inFunction (s.loopDepth != 0) = true)) ∧ ClauseOK T c
 
 /-- The `:` of a clause and its statements. -/
 theorem clauseTail_inv {T : Edition} {f : Nat} (hS : GivesS T (Parse.parseStatement f)) {s₂ s' : ParseState}
@@ -2754,13 +2784,13 @@ theorem clauseTail_inv {T : Edition} {f : Nat} (hS : GivesS T (Parse.parseStatem
       Parse.iterate b #[] (Parse.clauseStep (Parse.parseStatement f)) >>= fun body => pure (y, body.toList)) s₂ =
         .ok c s') :
     Ready s' ∧ Kept s₂ s' ∧ c.1 = y ∧
-      ∀ x ∈ c.2, x.wf T s₂.inFunction (s₂.loopDepth != 0) = true ∧ StmtOK T x := by
+      ∀ x ∈ c.2, (x.isBreak = true ∨ x.wf T s₂.inFunction (s₂.loopDepth != 0) = true) ∧ StmtOK T x := by
   rw [Parse.bind_ok] at h; obtain ⟨colon, s₃, hc, h⟩ := h
   obtain ⟨_, r₃, _, rfl, hR₃⟩ := expectPunct_inv hR hc
   rw [Parse.bind_eq (Parse.budget_eq _), Parse.bind_ok] at h; obtain ⟨items, s₄, hit, h⟩ := h
   obtain ⟨hR₄, hK₄, hall⟩ := (iterate_inv
     (I := fun a st => Ready st ∧ Kept (past s₂ colon r₃) st ∧
-      ∀ x ∈ a.toList, x.wf T (past s₂ colon r₃).inFunction ((past s₂ colon r₃).loopDepth != 0) = true ∧
+      ∀ x ∈ a.toList, (x.isBreak = true ∨ x.wf T (past s₂ colon r₃).inFunction ((past s₂ colon r₃).loopDepth != 0) = true) ∧
         StmtOK T x)
     (fun _ _ _ _ _ hI hst => clauseStep_inv (s₀ := past s₂ colon r₃) hS
       (show (past s₂ colon r₃).target = T from hT) hI hst)
@@ -2817,10 +2847,10 @@ theorem clauseBlockStep_inv {T : Edition} {p : ParseM (Option Expr × List Stmt)
     {s₀ : ParseState} {items items' : Array (Option Expr × List Stmt)} {b : Bool} {st st' : ParseState}
     (hT : s₀.target = T)
     (hI : Ready st ∧ Kept s₀ st ∧ ∀ c ∈ items.toList, Expr.caseWF T c.1 = true ∧
-      (∀ x ∈ c.2, x.wf T s₀.inFunction (s₀.loopDepth != 0) = true) ∧ ClauseOK T c)
+      (∀ x ∈ c.2, (x.isBreak = true ∨ x.wf T s₀.inFunction (s₀.loopDepth != 0) = true)) ∧ ClauseOK T c)
     (h : Parse.blockStep p items st = .ok (items', b) st') :
     Ready st' ∧ Kept s₀ st' ∧ ∀ c ∈ items'.toList, Expr.caseWF T c.1 = true ∧
-      (∀ x ∈ c.2, x.wf T s₀.inFunction (s₀.loopDepth != 0) = true) ∧ ClauseOK T c := by
+      (∀ x ∈ c.2, (x.isBreak = true ∨ x.wf T s₀.inFunction (s₀.loopDepth != 0) = true)) ∧ ClauseOK T c := by
   obtain ⟨hR, hK, hall⟩ := hI
   obtain ⟨x, r, hs⟩ := hR.cons
   simp only [Parse.blockStep] at h
@@ -3023,7 +3053,7 @@ theorem parseStatement_gives {T : Edition} {f : Nat} (hBlk : GivesS T (Parse.par
       have hT₃ : (past s₁ lb r₃).target = T := hK.target_eq.trans hT
       obtain ⟨hR₄, hK₄, hall⟩ := (iterate_inv
         (I := fun a st => Ready st ∧ Kept (past s₁ lb r₃) st ∧ ∀ c ∈ a.toList, Expr.caseWF T c.1 = true ∧
-          (∀ x ∈ c.2, x.wf T (past s₁ lb r₃).inFunction ((past s₁ lb r₃).loopDepth != 0) = true) ∧
+          (∀ x ∈ c.2, x.isBreak = true ∨ x.wf T (past s₁ lb r₃).inFunction ((past s₁ lb r₃).loopDepth != 0) = true) ∧
             ClauseOK T c)
         (fun _ _ _ _ _ hI hst => clauseBlockStep_inv (s₀ := past s₁ lb r₃) hCl hT₃ hI hst)
         _ #[] _ items s₄ ⟨hR₃, Kept.refl _, by simp⟩ hit).1
@@ -3035,7 +3065,7 @@ theorem parseStatement_gives {T : Edition} {f : Nat} (hBlk : GivesS T (Parse.par
       refine ⟨hR₅, hK.trans (hK₄.trans (Kept.past _ _ _)), ?_, by simp [Stmt.openIf], by simp [Stmt.isDecl],
         StmtOK.switch hdok (fun c hc => (hall c hc).2.2)⟩
       simp only [Stmt.wf, Bool.and_eq_true, decide_eq_true_eq]
-      refine ⟨⟨hdw, by omega⟩, Stmt.clausesWF_iff.mpr fun c hc => ⟨(hall c hc).1, Stmt.allWF_iff.mpr
+      refine ⟨⟨hdw, by omega⟩, Stmt.clausesWF_iff.mpr fun c hc => ⟨(hall c hc).1, Stmt.allClauseWF_iff.mpr
         fun x hx => by rw [← hK.inFunction_eq, ← hK.loopDepth_eq]; exact (hall c hc).2.1 x hx⟩⟩
     by_cases he : w = "true" ∨ w = "false" ∨ w = "null" ∨ w = "typeof" ∨ w = "void"
     · rcases he with rfl | rfl | rfl | rfl | rfl <;> simp only at h <;>

@@ -64,7 +64,7 @@ def sides (s : Shape) (xs : List Int) : Int :=
     let n := (0 : Int)
     let n :=
       List.foldl
-        (fun n x =>
+        (fun (n : Int) (x : Int) =>
           let n := n + x
           n)
         n xs

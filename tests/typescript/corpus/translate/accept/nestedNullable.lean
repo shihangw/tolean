@@ -21,7 +21,7 @@ def total (ps : List Outer) : Int :=
   let n := (0 : Int)
   let n :=
     List.foldl
-      (fun n p =>
+      (fun (n : Int) (p : Outer) =>
         let n := n + (Option.getD (p.inner).x ((0 : Int)))
         n)
       n ps
