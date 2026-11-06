@@ -387,6 +387,9 @@ def declare (env : Env) (span : Span) (name : String) (binding : Binding) (type 
   if env.functions.any (·.name == name) || isGlobalName name then
     reject span s!"'{name}' would hide the function or global {name} in its whole block; choose another name"
   let _ ← checkLocalName span name
+  -- A local of type `null` is always `null`, and Lean gives it the type
+  -- `Option Empty`, which no other value of a nullable type has.
+  if type == .null then reject span s!"'{name}' is always null; declare its type, such as bigint | null"
   return env.add { name, binding, type }
 
 /-! ### Types -/
@@ -552,7 +555,7 @@ mutual
 def exprChanges : Expr → List String
   | .assign _ op target value =>
     let own := match target with
-      | .ident _ name => if op.isSimple then [name] else []
+      | .ident _ name => if op.isSimple || op == .coalesce then [name] else []
       | _ => []
     own ++ exprChanges target ++ exprChanges value
   | .prefix _ _ (.ident _ name) | .postfix _ _ (.ident _ name) => [name]
@@ -1095,6 +1098,14 @@ def assignOps? : AssignOp → Option (IR.IntOp × IR.NumberOp)
   | .mul => some (.mul, .mul)
   | _ => none
 
+/-- The value `e`, of type `source`, of a local of type `t`, with the type
+written out where Lean would infer another: a `T` or `null` where the local
+is `T | null`, and an `if` with `none` in one branch. -/
+def withType (e : IR.Expr) (t source : Ty) : IR.Expr :=
+  if t.isNullable && (source != t || e matches .none || e matches .ite ..) then
+    .ascribe e t.lean
+  else e
+
 /-- One mutation statement, as the local it changes and its new value. -/
 def translateUpdate (env : Env) (s : Span) (e : Expr) : TM (String × IR.Expr) := do
   let refuse {A : Type} : TM A :=
@@ -1110,6 +1121,14 @@ def translateUpdate (env : Env) (s : Span) (e : Expr) : TM (String × IR.Expr) :
       reject element.span "the element does not have the array's element type"
     return (target, .push target v.value)
   | .assign _ op (.ident _ name) right =>
+    -- `x ??= e` on a local of `T | null`: `x` unless it is `null`, and then
+    -- `e`, which JS evaluates only then. `x` keeps its type.
+    if op == .coalesce then
+      let some { binding := .«let», type := .nullable value, .. } := env.lookup name
+        | reject s "'??=' needs a local declared with let, of a type T | null"
+      let v ← translateExpr (← fuelLimit) env (some value) right
+      unless v.type.assignableTo (.nullable value) do reject s "the value does not have the local's type"
+      return (name, .coalesce (.var name) v.value true)
     unless op.isSimple do refuse
     let some { binding := .«let», type, .. } := env.lookup name
       | reject s "only a local declared with let may be assigned"
@@ -1117,7 +1136,7 @@ def translateUpdate (env : Env) (s : Span) (e : Expr) : TM (String × IR.Expr) :
     match assignOps? op with
     | none =>
       unless v.type.assignableTo type do reject s "the value does not have the local's type"
-      return (name, v.value)
+      return (name, withType v.value type v.type)
     | some (bigintOp, numberOp) =>
       -- On `number` the operation goes through the abstract number model.
       if type == .number && v.type == .number then
@@ -1165,6 +1184,8 @@ def translateStatements (fuel : Nat) (env : Env) (tail : Tail) (statements : Lis
 def translateVariable (fuel : Nat) (env : Env) (s : Span) (d : VarDecl) (rest : List Stmt)
     (tail : Tail) : TM IR.Body := do
   let fuel + 1 := fuel | tooDeep
+  if (Stmt.varDecl s d).constAssignedIn rest then
+    reject s s!"'{d.name}' is a const, and a later statement assigns it; declare it with let"
   let init ← orReject d.init s "declare one const or let identifier with an initializer"
   -- `const xs: Array<T> = [...]` (or `T[]`) is an owned array, which the
   -- function may push to. Any other array literal is a value.
@@ -1193,7 +1214,7 @@ def translateVariable (fuel : Nat) (env : Env) (s : Span) (d : VarDecl) (rest : 
     | none => pure code.type
   let binding := if d.kind == .const then Binding.const else .«let»
   let env' ← declare env s d.name binding type
-  return .let d.name code.value (← translateStatements fuel env' tail rest)
+  return .let d.name (withType code.value type code.type) (← translateStatements fuel env' tail rest)
 
 def translateIf (fuel : Nat) (env : Env) (s : Span) (test : Expr) (thenBranch : Stmt)
     (elseBranch : Option Stmt) (rest : List Stmt) (tail : Tail) : TM IR.Body := do

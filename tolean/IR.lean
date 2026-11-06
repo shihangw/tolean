@@ -149,6 +149,9 @@ inductive Expr (T E : Type) where
   | update (op : IntOp) (name : String) (a : Expr T E)
   /-- An operation that the language adds, on `args`. -/
   | ext (op : E) (args : List (Expr T E))
+  /-- `(e : T)`: `e` with its type written out, where Lean cannot infer it,
+  such as a `let` of `none` that nothing else uses. -/
+  | ascribe (e : Expr T E) (type : Ty T)
 deriving Repr, Inhabited
 
 /-- What a certificate needs to know about a loop, besides its code. The
@@ -241,6 +244,7 @@ def Expr.refs : Expr T E → List DeclRef
     a.refs ++ b.refs
   | .enumCase r _ => [r]
   | .inject r _ e => r :: e.refs
+  | .ascribe e t => e.refs ++ t.refs
   | .tagValue _ => []
   | .int _ | .none | .bool _ | .string _ | .var _ => []
 
@@ -453,6 +457,7 @@ mutual
 def Expr.print (names : Names) : Expr T E → String
   | .int n => s!"({n} : {leanName names "Int"})"
   | .none => leanName names "none"
+  | .ascribe e t => s!"({e.print names} : {t.print names})"
   | .bool b => if b then "true" else "false"
   | .string s => Sexp.quote s
   | .var name => name

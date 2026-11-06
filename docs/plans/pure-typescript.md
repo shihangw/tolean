@@ -30,6 +30,7 @@ row, and the corpus files for each row certify.
 | 2 | `switch (x.kind)` on a tagged union, where every clause returns | [#53](https://github.com/shihangw/tolean/pull/53) |
 | 2 | The same `switch`, where every clause changes locals and ends in `break`, also in a loop | [#54](https://github.com/shihangw/tolean/pull/54) |
 | 2 | Optional fields `f?: T` of interfaces, read with `??` and `=== undefined` | [#55](https://github.com/shihangw/tolean/pull/55) |
+| 2 | `x ??= y` on a `let` local of type `T \| null` | [#63](https://github.com/shihangw/tolean/pull/63) |
 | 3 | Unions of primitive types, `type T = string \| bigint`, narrowed by `if (typeof x === 'string')` | [#56](https://github.com/shihangw/tolean/pull/56) |
 
 ## The rules for every addition
@@ -69,7 +70,7 @@ exact. A construct leaves these tables when Tolean translates it, and the
 |---|---|---|
 | A `default` that assigns the value to `never`, to check that the cases of a `switch` cover every member | Nothing: the `match` already covers them | A `default` that runs |
 | `x?: T` parameters, `undefined` as a value, and a test such as `x !== undefined` that narrows an optional value | `Option T` | `'x' in obj`, which can tell a missing key from `undefined` |
-| `x?.f` and `x ??= y` | `Option` matches | `==` against anything except `null` and `undefined` |
+| `x?.f` | `Option` matches | `==` against anything except `null` and `undefined` |
 | `export { … }` and re-exports | Nothing: the names stay in scope | `export *` |
 | A tuple type such as `readonly [string, bigint]` | A product type | Tuples that a function changes |
 | A string `enum` | An `inductive` | A numeric `enum`, because it also maps each number back to its name |
@@ -281,7 +282,7 @@ is the one exception, because it changes the type of every `string`.
    literals and `===`, so the switch changes the generated types but breaks
    almost no proof. Every project that writes proofs over Lean's `String`
    makes the switch more costly later, so it comes first.
-2. Types and narrowing: optional parameters, `x?.f` and `x ??= y`.
+2. Types and narrowing: optional parameters and `x?.f`.
 3. Generic functions and types whose type parameters have no constraint,
    tuples, string enums and type guards.
 4. Callbacks that read only `const` values, the array methods without
@@ -322,3 +323,8 @@ variables and in maps.
   reads an import as a URL.
 - Should a comparator that is not one of the two shapes be accepted when the
   project supplies a proof that it is consistent?
+- How should the spec model `const`? Its environment holds values only, so
+  `x = e`, `x += e` and `x ??= e` on a `const` write the new value where Node
+  throws a `TypeError`. The translator refuses each of them, so no certified
+  program meets the gap. Closing it means a binding kind in `Eval.Env`, and
+  `Agree` and every statement proof would then compare kinds too.

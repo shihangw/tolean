@@ -16,7 +16,7 @@ A PR is yours to **tend** from the first push until it merges or closes: every r
      ROUNDS=0 .agents/skills/code-contributor/watch-prs.sh "$CLAUDE_JOB_DIR/tmp/prs.seen" 58 59 60
      .agents/skills/code-contributor/watch-prs.sh "$CLAUDE_JOB_DIR/tmp/prs.seen" 58 59 60
      ```
-     The seeding run prints every check that is red already; treat each as a new item in step 2. Skip the seeding run when you start by answering what is already there (step 2), and seed after that.
+     The seeding run prints what is open already: every red check and every unresolved review thread. Treat each as a new item in step 2, because the watch reports only what comes after the seed. A thread with your reply can still be open: the reviewer may have answered the reply, or kept the finding.
    Done when a watch is armed for every open PR you own.
 
 2. **Triage each new item**, oldest first. Read the whole thread and reproduce the claim before you judge it.
@@ -24,7 +24,7 @@ A PR is yours to **tend** from the first push until it merges or closes: every r
    - Not real, or already fixed: reply with the evidence, such as the commit that fixed it, the command and its output, or the spec section.
    - Out of scope: reply with where it goes instead (a follow-up PR, or the plan's open questions).
    - A red check: read its log (`gh run view <id> --log-failed`), fix the cause, push.
-   Done when every new item has a reply in its own thread that names the commit or the evidence.
+   Done when every new item has a reply in its own thread that names the commit or the evidence, and a fresh seeding run prints no thread that waits on you.
 
 3. **Re-arm** the watch from step 1, with the same state file. Stop when every PR has merged or closed, or when a full watch (10 rounds) exits 3; then report each PR's state: merged, waiting on review, or red, with its link.
 
