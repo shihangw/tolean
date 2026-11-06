@@ -36,6 +36,8 @@ inductive Val (N : Type) where
   | bool (b : Bool)
   | str (s : String)
   | null
+  /-- `undefined`, the value of a property that an object does not have. -/
+  | undefined
   | list (items : List (Val N))
   | obj (fields : List (String × Val N))
 deriving Inhabited
@@ -47,7 +49,7 @@ def Val.truthy : Val N → Bool
   | .num n => !(JSNumber.isNaN n || JSNumber.eq n (JSNumber.ofSafeInt 0))
   | .bool b => b
   | .str s => !s.isEmpty
-  | .null => false
+  | .null | .undefined => false
   | .list _ | .obj _ => true
 
 /-- The result of `typeof` (ECMA-262 §13.5.3.1) on the values of the
@@ -58,6 +60,7 @@ def Val.typeOf : Val N → String
   | .num _ => "number"
   | .bool _ => "boolean"
   | .str _ => "string"
+  | .undefined => "undefined"
   | .null | .list _ | .obj _ => "object"
 
 /-- The variables in scope, innermost first. -/
@@ -142,20 +145,46 @@ def strictEq : Val N → Val N → Option Bool
   | .bool a, .bool b => some (decide (a = b))
   | .str a, .str b => some (decide (a = b))
   | .null, .null => some true
+  | .undefined, .undefined => some true
+  | .undefined, .int _ | .undefined, .num _ | .undefined, .bool _ | .undefined, .str _
+  | .undefined, .null | .undefined, .list _ | .undefined, .obj _ => some false
+  | .int _, .undefined | .num _, .undefined | .bool _, .undefined | .str _, .undefined
+  | .null, .undefined | .list _, .undefined | .obj _, .undefined => some false
   | .null, .int _ | .null, .num _ | .null, .bool _ | .null, .str _ | .null, .list _
   | .null, .obj _ => some false
   | .int _, .null | .num _, .null | .bool _, .null | .str _, .null | .list _, .null
   | .obj _, .null => some false
   | _, _ => none
 
-/-- `IsLooselyEqual` (ECMA-262 §7.2.14) when one operand is `null`. `null` is
-loosely equal only to `null` and `undefined`, and the subset has no
-`undefined`, so the test is `IsStrictlyEqual`. Between two other values `==`
-converts its operands, which the subset does not model, so they leave it. -/
+/-- `IsLooselyEqual` (ECMA-262 §7.2.14) when one operand is `null` or
+`undefined`. Each is loosely equal to itself and to the other, and to no
+other value, so against any other value the test is `IsStrictlyEqual`.
+Between two other values `==` converts its operands, which the subset does
+not model, so they leave it. -/
 def looseEq : Val N → Val N → Option Bool
+  | .null, .undefined | .undefined, .null | .undefined, .undefined => some true
+  | .undefined, b => strictEq .undefined b
+  | a, .undefined => strictEq a .undefined
   | .null, b => strictEq .null b
   | a, .null => strictEq a .null
   | _, _ => none
+
+/-- The properties of `Object.prototype` (ECMA-262 §20.1.3, and `__proto__`
+and the accessor methods of Annex B.2.2). An object of the subset is an
+object literal, so a read of a property that it does not have finds one of
+these, or else `undefined`. -/
+def objectPrototypeNames : List String :=
+  ["constructor", "hasOwnProperty", "isPrototypeOf", "propertyIsEnumerable", "toLocaleString",
+   "toString", "valueOf", "__proto__", "__defineGetter__", "__defineSetter__", "__lookupGetter__",
+   "__lookupSetter__"]
+
+/-- `obj.name` on an object literal with `fields` (`OrdinaryGet`, ECMA-262
+§10.1.8.1): the value of its own property, or `undefined` when it has none.
+A property of `Object.prototype` leaves the subset. -/
+def getProp (fields : List (String × Val N)) (name : String) : Option (Val N) :=
+  match fields.lookup name with
+  | some v => some v
+  | none => if objectPrototypeNames.contains name then none else some .undefined
 
 /-- A binary operator on two values, when neither operand short-circuits.
 Bigint `/` and `%` truncate toward zero and throw on a zero divisor
@@ -277,6 +306,7 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     | none =>
       if name == "NaN" then some (.num JSNumber.nan)
       else if name == "Infinity" then some (.num JSNumber.posInf)
+      else if name == "undefined" then some .undefined
       else none
   | .bigint _ text => (bigintLiteral text).map .int
   | .number _ text => (numberLiteral text).map (.num ∘ JSNumber.ofSafeInt)
@@ -288,7 +318,7 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
   | .object _ props => (evalProps m fuel env props).map .obj
   | .member _ obj name => do
     match ← eval m fuel env obj with
-    | .obj fields => fields.lookup name
+    | .obj fields => getProp fields name
     | _ => none
   | .unary _ .not arg => do return .bool !(← eval m fuel env arg).truthy
   -- `typeof x` names the type of the value of `x` (ECMA-262 §13.5.3.1). On a
@@ -319,7 +349,7 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
   | .binary _ .coalesce l r => do
     let a ← eval m fuel env l
     match a with
-    | .null => eval m fuel env r
+    | .null | .undefined => eval m fuel env r
     | _ => some a
   | .binary _ op l r => do binary op (← eval m fuel env l) (← eval m fuel env r)
   | .cond _ test t f => do
@@ -359,7 +389,11 @@ def evalProps (m : Scope) (fuel : Nat) (env : Env N) :
   -- (`PropertyDefinitionEvaluation`, ECMA-262 §13.2.5.5).
   | .shorthand s name :: ps => do
     return (name, ← eval m fuel env (.ident s name)) :: (← evalProps m fuel env ps)
+  -- `{ __proto__: v }` sets the prototype of the object instead of a key
+  -- (ECMA-262 §13.2.5.5), and the model has no prototypes but
+  -- `Object.prototype`.
   | .keyValue _ (.ident key) v :: ps => do
+    if key == "__proto__" then none
     return (key, ← eval m fuel env v) :: (← evalProps m fuel env ps)
   | _ :: _ => none
 termination_by ps => (fuel, sizeOf ps, 0)

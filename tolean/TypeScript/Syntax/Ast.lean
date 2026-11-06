@@ -101,6 +101,12 @@ inductive TypeExpr where
   | union (span : Span) (members : List TypeExpr)
   | paren (span : Span) (inner : TypeExpr)
 
+/-- A parameter of a function or an arrow function. -/
+structure Param where
+  span : Span
+  name : String
+  type : Option TypeExpr
+
 /-- The key of an object literal property. -/
 inductive PropKey where
   | ident (name : String)
@@ -130,6 +136,9 @@ inductive Expr where
   | binary (span : Span) (op : BinOp) (lhs rhs : Expr)
   | cond (span : Span) (test ifTrue ifFalse : Expr)
   | assign (span : Span) (op : AssignOp) (target value : Expr)
+  /-- `(a: T, b) => body`, or `a => body` when `parens` is false. The body is
+  an expression. -/
+  | arrow (span : Span) (parens : Bool) (params : List Param) (body : Expr)
 
 inductive Property where
   /-- `{ a }`. -/
@@ -159,6 +168,11 @@ def AssignOp.isSimple : AssignOp → Bool
 /-- `null`, not in parentheses. -/
 def Expr.isNull : Expr → Bool
   | .null _ => true
+  | _ => false
+
+/-- The name `undefined`, not in parentheses. -/
+def Expr.isUndefinedName : Expr → Bool
+  | .ident _ "undefined" => true
   | _ => false
 
 /-- A name, not in parentheses. -/
@@ -220,11 +234,6 @@ may not declare the same name. -/
 def clausesDeclare (clauses : List (Option Expr × List Stmt)) : Bool :=
   clauses.any fun (_, body) => body.any fun s => s matches .varDecl ..
 
-structure Param where
-  span : Span
-  name : String
-  type : Option TypeExpr
-
 /-- A property of an interface. -/
 structure Field where
   span : Span
@@ -277,7 +286,8 @@ def TypeExpr.span : TypeExpr → Span
 def Expr.span : Expr → Span
   | .ident s _ | .number s _ | .bigint s _ | .string s _ | .bool s _ | .null s | .array s _
   | .object s _ | .paren s _ | .member s _ _ | .index s _ _ | .call s _ _ | .unary s _ _
-  | .prefix s _ _ | .postfix s _ _ | .binary s _ _ _ | .cond s _ _ _ | .assign s _ _ _ => s
+  | .prefix s _ _ | .postfix s _ _ | .binary s _ _ _ | .cond s _ _ _ | .assign s _ _ _
+  | .arrow s _ _ _ => s
 
 def Stmt.span : Stmt → Span
   | .varDecl s _ | .exprStmt s _ | .returnStmt s _ | .ifStmt s _ _ _ | .forOfStmt s _ _ _ _
@@ -294,6 +304,8 @@ def Expr.lessFree : Expr → Bool
   | .index _ a b | .assign _ _ a b => a.lessFree && b.lessFree
   | .call _ c args => c.lessFree && Expr.lessFreeList args
   | .cond _ a b c => a.lessFree && b.lessFree && c.lessFree
+  -- What the parser checks after an arrow is what it checks after its body.
+  | .arrow _ _ _ body => body.lessFree
   | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => true
 
 def Expr.lessFreeList : List Expr → Bool

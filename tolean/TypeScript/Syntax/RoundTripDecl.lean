@@ -21,74 +21,6 @@ namespace tolean.TypeScript.Syntax
 
 open tolean
 
-/-! ### Parameters -/
-
-def Param.wf (p : Param) : Bool := exprName p.name && (match p.type with | some t => t.wf | none => true)
-
-/-- A parameter's type ends before `,` or `)`. -/
-theorem followsType_item {u : Token} {r : List Token} (hu : u.kind = .punct "," ∨ u.kind = .punct ")") :
-    FollowsType (u :: r) := by
-  rcases hu with hu | hu <;> exact followsType_punct hu (by simp)
-
-theorem parseParam_reads {T : Edition} (p : Param) (hp : p.wf = true) :
-    ReadsW T Param.erase Param.words (fun _ _ => true) Parse.parseParam p (EndsItem ")") := by
-  intro s ts rest _ hs hl ht hn hr hE _
-  obtain ⟨sp, name, type⟩ := p
-  simp only [Param.wf, Bool.and_eq_true] at hp
-  obtain ⟨hname, hty⟩ := hp
-  have hname' : name ∉ Parse.refusedNames := by simpa [exprName] using hname
-  obtain ⟨u, r, rfl, hu⟩ := hE
-  have hu1 : u.kind ≠ .punct "?" := by rcases hu with h | h <;> rw [h] <;> exact punct_ne (by decide)
-  have hu2 : u.kind ≠ .punct "=" := by rcases hu with h | h <;> rw [h] <;> exact punct_ne (by decide)
-  have hu3 : u.kind ≠ .punct ":" := by rcases hu with h | h <;> rw [h] <;> exact punct_ne (by decide)
-  simp only [Param.words] at ht
-  obtain ⟨nm, ts', rfl, hnm, h'⟩ := Touching.cons_one (by simpa [identWord] using ht)
-  have hn1 : nm.kind ≠ .punct "..." ∧ nm.kind ≠ .punct "[" ∧ nm.kind ≠ .punct "{" ∧ nm.kind ≠ .keyword "this" := by
-    rw [hnm]; simp
-  cases type with
-  | none =>
-    simp [Touching, typeAnnotation] at h'; subst h'
-    have hs' : s.rest = nm :: u :: r := by simpa using hs
-    let s₁ := past s nm (u :: r)
-    refine ⟨⟨⟨nm.span.start, nm.span.stop⟩, name, none⟩, s₁, ?_, rfl, leaves_advance hs' hl⟩
-    simp only [Parse.parseParam]
-    rw [Parse.bind_eq (Parse.peek_eq hs')]
-    rw [Parse.ite_guard (fun h => by simp [Token.isPunct, hn1] at h),
-      Parse.ite_guard (fun h => by simp [Token.isPunct, hn1] at h),
-      Parse.ite_guard (fun h => by simp [Token.isKeyword, hn1] at h)]
-    rw [Parse.bind_eq (readName_ok hs' hnm hname'), Parse.bind_eq (Parse.peek_eq (s := s₁) rfl)]
-    rw [Parse.ite_guard (fun h => by simp [Token.isPunct, hu1] at h)]
-    rw [if_neg (by simp [Token.isPunct, hu3]), Parse.pure_bind, Parse.bind_eq (Parse.peek_eq (s := s₁) rfl)]
-    rw [Parse.ite_guard (fun h => by simp [Token.isPunct, hu2] at h)]
-    rw [Parse.bind_eq (Parse.spanFrom_eq _ _)]
-    rfl
-  | some t =>
-    obtain ⟨colon, ts₂, rfl, hcolon, h₂⟩ := Touching.cons_one (by simpa [punctWord, typeAnnotation] using h')
-    have hs' : s.rest = nm :: colon :: (ts₂ ++ u :: r) := by simpa using hs
-    let s₁ := past s nm (colon :: (ts₂ ++ u :: r))
-    let s₂ : ParseState := { s₁ with rest := ts₂ ++ u :: r, left := s₁.left - 1, lastStop := colon.span.stop }
-    have hl₂ : s₂.left = s₂.rest.length := by simp [s₂, s₁, hl, hs']
-    obtain ⟨t', s₃, hpt, het, hL₃⟩ := parseType_budget t (by simpa using hty) s₂ ts₂ (u :: r) rfl hl₂ h₂.kinds
-      (fun y hy => hn y (by simp [hy])) (by simp) (followsType_item hu)
-    have hs₃ : s₃.rest = u :: r := hL₃.rest_eq
-    have hc1 : colon.kind ≠ .punct "?" := by rw [hcolon]; exact punct_ne (by decide)
-    refine ⟨⟨⟨nm.span.start, s₃.lastStop⟩, name, some t'⟩, s₃, ?_, by simp [Param.erase, het],
-      leaves_trans (leaves_advance hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs'])) hL₃)⟩
-    simp only [Parse.parseParam]
-    rw [Parse.bind_eq (Parse.peek_eq hs')]
-    rw [Parse.ite_guard (fun h => by simp [Token.isPunct, hn1] at h),
-      Parse.ite_guard (fun h => by simp [Token.isPunct, hn1] at h),
-      Parse.ite_guard (fun h => by simp [Token.isKeyword, hn1] at h)]
-    rw [Parse.bind_eq (readName_ok hs' hnm hname'), Parse.bind_eq (Parse.peek_eq (s := s₁) rfl)]
-    rw [Parse.ite_guard (fun h => by simp [Token.isPunct, hc1] at h)]
-    rw [if_pos (by simp [Token.isPunct, hcolon])]
-    rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_cons (s := s₁) rfl (by simp))),
-      Parse.bind_eq (Parse.budget_eq _), Parse.bind_eq hpt, Parse.pure_bind, Parse.bind_eq (Parse.peek_eq hs₃)]
-    rw [Parse.ite_guard (fun h => by simp [Token.isPunct, hu2] at h)]
-    rw [Parse.bind_eq (Parse.spanFrom_eq _ _)]
-    rfl
-
-
 /-! ### Fuel for a statement -/
 
 /-- The tokens of a statement's lines. -/
@@ -245,27 +177,6 @@ theorem leaves_inFunction {s s' : ParseState} {r : List Token} (hs : s.inFunctio
   inFunction_eq := hs.symm
   loopDepth_eq := h.loopDepth_eq
   target_eq := h.target_eq
-
-theorem listAfter_true {α : Type} {tokens : α → List TokenKind} {close : List TokenKind} :
-    ∀ xs : List α, ListAfter (fun _ _ => true) tokens close xs
-  | [] => trivial
-  | [_] => rfl
-  | _ :: y :: xs => ⟨rfl, listAfter_true (y :: xs)⟩
-
-/-- `( params )`, which `listStep` and `parseParam` read. -/
-theorem params_reads {T : Edition} (params : List Param) (hps : ∀ p ∈ params, p.wf = true)
-    (s : ParseState) (its rest : List Token) (rp : Token) (hT : s.target = T) (hs : s.rest = its ++ rp :: rest)
-    (hrp : rp.kind = .punct ")") (hl : s.left = s.rest.length)
-    (ht : Touching its (separated "," (params.map Param.words))) (hn : ∀ y ∈ its, NoBreak y) :
-    ∃ res s', Parse.iterate (10 * (s.left + 1)) #[] (Parse.listStep ")" (fun _ => pure ()) Parse.parseParam) s =
-      .ok res s' ∧ res.toList.map Param.erase = params.map Param.erase ∧ Leaves s s' (rp :: rest) := by
-  obtain ⟨res, s', hit, he, hL⟩ := iterate_list (close := ")") (refuse := fun _ => pure ()) (by decide)
-    params (10 * (s.left + 1)) #[] s its rest rp (fun p hp => parseParam_reads p (hps p hp))
-    (fun p _ => ⟨.ident p.name, by simp [Param.words, identWord], by simp, fun _ _ _ => rfl⟩)
-    (by have := length_items ht; have : s.left = its.length + rest.length + 1 := by simp [hl, hs]; omega
-        omega) hT hs hrp hl ht hn (listAfter_true params)
-  exact ⟨res, s', hit, by simpa using he, hL⟩
-
 
 /-- `function`, a name, `( params )`, a return type or none, and a block, which
 `parseBlock` reads in a function. -/
@@ -485,6 +396,11 @@ theorem Expr.second : ∀ (e : Expr) {n : String} {k : TokenKind} {r : List Toke
     rw [Expr.tokens_unary] at h
     cases op <;> simp [UnaryOp.symbol, symbol, Lex.reservedWords, punctWord, keywordWord] at h
   | .prefix .., _, _, _, h => by simp [Expr.tokens_prefix] at h
+  | .arrow _ parens ps _, _, _, _, h => by
+    rw [Expr.tokens_arrow] at h
+    rcases arrowParams_cases parens ps with ⟨p, _, _, hp⟩ | hp
+    · simp [hp, identWord] at h; rw [← h.2.1]; simp [NotIdent]
+    · simp [hp, enclose, punctWord] at h
 
 
 /-! ### Fields of an interface -/

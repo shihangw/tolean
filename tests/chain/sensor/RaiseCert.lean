@@ -92,6 +92,9 @@ def decodeGauge {N : Type} [tolean.TypeScript.JSNumber N] : Option (Val N) → s
 @[simp] theorem decodeGauge_encodeGauge {N : Type} [tolean.TypeScript.JSNumber N] (x : sensor.Raise.Gauge) : decodeGauge (some (encodeGauge (N := N) x)) = x := by
   cases x; simp [decodeGauge, encodeGauge, List.lookup, encList]
 
+@[simp] theorem encodeGauge_ne_undefined {N : Type} [tolean.TypeScript.JSNumber N] (x : sensor.Raise.Gauge) : encodeGauge (N := N) x ≠ Val.undefined := by
+  simp [encodeGauge]
+
 @[simp] theorem decList_decodeGauge {N : Type} [tolean.TypeScript.JSNumber N] (xs : List sensor.Raise.Gauge) : decList decodeGauge (some (Val.list (List.map (encodeGauge (N := N)) xs))) = xs :=
   decList_list _ _ decodeGauge_encodeGauge xs
 

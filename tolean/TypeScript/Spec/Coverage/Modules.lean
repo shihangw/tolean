@@ -11,11 +11,11 @@ A module binds each of its function declarations in the module's
 environment, and the outer environment of that one is the global one. So a
 function of the module hides a global of the same name. -/
 
-/-- A function or an interface is never named `NaN`, `Infinity` or `Number`,
+/-- A function or an interface is never named `NaN`, `Infinity`, `Number` or `undefined`,
 which would hide the global that the subset reads under that name. -/
 theorem declareTopLevel_not_global {sp : Span} {name : String} {s s' : Ctx} {u : Unit}
     (h : declareTopLevel sp name s = .ok u s') :
-    name ≠ "NaN" ∧ name ≠ "Infinity" ∧ name ≠ "Number" := by
+    name ≠ "NaN" ∧ name ≠ "Infinity" ∧ name ≠ "Number" ∧ name ≠ "undefined" := by
   simp only [declareTopLevel, bind_ok, get_ok, ite_state] at h
   obtain ⟨c, s₁, ⟨rfl, rfl⟩, h⟩ := h
   split at h
@@ -24,7 +24,7 @@ theorem declareTopLevel_not_global {sp : Span} {name : String} {s s' : Ctx} {u :
     split at h
     · simp at h
     · rename_i hg
-      refine ⟨?_, ?_, ?_⟩ <;> rintro rfl <;> simp [isNumberName] at hg
+      refine ⟨?_, ?_, ?_, ?_⟩ <;> rintro rfl <;> simp [isGlobalName, isNumberName] at hg
 
 /-! ### §16.2.1.8 HostLoadImportedModule {#sec-HostLoadImportedModule}
 

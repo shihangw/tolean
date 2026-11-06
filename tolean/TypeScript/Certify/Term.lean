@@ -74,6 +74,9 @@ def propKey (k : PropKey) : String :=
   | .string v => s!"({ns}PropKey.string {str v})"
   | .number t => s!"({ns}PropKey.number {str t})"
 
+def param (p : Param) : String :=
+  s!"\{ span := {span p.span}, name := {str p.name}, type := {option (p.type.map typeExpr)} }"
+
 mutual
 
 def expr : Expr → String
@@ -95,6 +98,7 @@ def expr : Expr → String
   | .binary s op l r => s!"({ns}Expr.binary {span s} {binOp op} {expr l} {expr r})"
   | .cond s t a b => s!"({ns}Expr.cond {span s} {expr t} {expr a} {expr b})"
   | .assign s op t v => s!"({ns}Expr.assign {span s} {assignOp op} {expr t} {expr v})"
+  | .arrow s p ps b => s!"({ns}Expr.arrow {span s} {p} {list (ps.map param)} {expr b})"
 
 def exprs : List Expr → List String
   | [] => []
@@ -145,9 +149,6 @@ def clauses : List (Option Expr × List Stmt) → List String
   | (t, b) :: cs => s!"({option (t.map expr)}, {list (stmts b)})" :: clauses cs
 
 end
-
-def param (p : Param) : String :=
-  s!"\{ span := {span p.span}, name := {str p.name}, type := {option (p.type.map typeExpr)} }"
 
 def field (f : Field) : String :=
   s!"\{ span := {span f.span}, readonly := {f.readonly}, name := {str f.name}, " ++
