@@ -36,6 +36,10 @@ def leanReserved : List String :=
 inductive Ty (T : Type) where
   | int | bool | string
   | option (value : Ty T)
+  /-- `Option T`, for a value that a language leaves out rather than setting to
+  a null, such as TypeScript's optional field `f?: T`. A structure gives such
+  a field the default `none`, so that an instance can leave it out too. -/
+  | optional (value : Ty T)
   | list (elem : Ty T)
   /-- A structure of the program: one that the file declares, or one that it
   imports. -/
@@ -211,7 +215,7 @@ variable {T E : Type}
 
 def Ty.refs : Ty T → List DeclRef
   | .struct r | .enum r | .tagged r => [r]
-  | .option t | .list t => t.refs
+  | .option t | .optional t | .list t => t.refs
   | _ => []
 
 mutual
@@ -369,7 +373,7 @@ def Ty.print [PrintTy T] (names : Names) : Ty T → String
   | .int => leanName names "Int"
   | .bool => leanName names "Bool"
   | .string => leanName names "String"
-  | .option t => wrapped (leanName names "Option") (t.print names)
+  | .option t | .optional t => wrapped (leanName names "Option") (t.print names)
   | .list t => wrapped (leanName names "List") (t.print names)
   | .struct ref =>
     match names.ref ref with
@@ -387,7 +391,7 @@ def Ty.print [PrintTy T] (names : Names) : Ty T → String
 bind it. -/
 def Ty.namesParam [PrintTy T] (names : Names) : Ty T → Bool
   | .struct ref | .tagged ref => (names.ref ref).2.isSome
-  | .option t | .list t => t.namesParam names
+  | .option t | .optional t | .list t => t.namesParam names
   | .ext t => PrintTy.namesParam names t
   | _ => false
 
@@ -568,7 +572,9 @@ def Decl.print (names : Names) : Decl T E → String
     -- A tag field never changes, so the structure leaves it out.
     let kept := fields.filter fun (_, type) => !(type matches .tag _)
     "\n".intercalate (s!"structure {name}{generic} where" ::
-      kept.map fun (field, type) => s!"  {field} : {type.print names}")
+      kept.map fun (field, type) =>
+        let default := if type matches .optional _ then s!" := {leanName names "none"}" else ""
+        s!"  {field} : {type.print names}{default}")
   | .tagged name _ members =>
     let generic := if names.generic then s!" ({names.typeParam} : Type)" else ""
     "\n".intercalate (s!"inductive {name}{generic} where" ::

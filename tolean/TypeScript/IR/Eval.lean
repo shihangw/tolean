@@ -72,6 +72,9 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   | .numberOp op, [.num a, .num b] => some (op.apply a b)
   | .numberNe, [.num a, .num b] => some (.bool !(JSNumber.eq a b))
   | .numberTest test, [.num a] => some (.bool (test.apply a))
+  -- `a === undefined` and `a !== undefined`, as `IsStrictlyEqual` gives them.
+  | .isUndefined, [a] => some (.bool (a matches .undefined))
+  | .isDefined, [a] => some (.bool !(a matches .undefined))
   | _, _ => none
 
 /-- The bindings that `let (x, y) := …` makes: each of `names`, with its value
@@ -100,9 +103,10 @@ def Expr.eval (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
   | .tagValue value => some (.str value)
   -- A member of a tagged union is the object of its structure.
   | .inject _ _ e => Expr.eval fs fuel ρ e
+  -- A field that the object does not have is `undefined`, as in JS.
   | .field obj _ name => do
     match ← Expr.eval fs fuel ρ obj with
-    | .obj fields => fields.lookup name
+    | .obj fields => Eval.getProp fields name
     | _ => none
   | .propNot p | .not p => do
     let .bool b ← Expr.eval fs fuel ρ p | none
@@ -125,23 +129,30 @@ def Expr.eval (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
       | .normal _ => none
   | .list elems _ => do return .list (← Expr.evalList fs fuel ρ elems)
   | .struct fields _ => do return .obj (← Expr.evalFields fs fuel ρ fields)
+  -- A value of `T | null` is never `undefined`. JS tells `undefined` from
+  -- `null` with `===` but not with `==`, so the tests of `null` give no value
+  -- for it.
   | .isNone a => do
     match ← Expr.eval fs fuel ρ a with
     | .null => return .bool true
+    | .undefined => none
     | _ => return .bool false
   | .isSome a => do
     match ← Expr.eval fs fuel ρ a with
     | .null => return .bool false
+    | .undefined => none
     | _ => return .bool true
   | .matchNull name whenNull whenValue => do
     match ← ρ.lookup name with
     | .null => Expr.eval fs fuel ρ whenNull
+    | .undefined => none
     | _ => Expr.eval fs fuel ρ whenValue
-  -- `none` is `null`, and `some v` is the value of `v`, so both forms take
-  -- `a` unless it is `null`, and only then evaluate `b`.
+  -- `none` is `null`, or `undefined` for an optional field, and `some v` is
+  -- the value of `v`. So both forms take `a` unless it is `null` or
+  -- `undefined`, as `??` does, and only then evaluate `b`.
   | .coalesce a b _ => do
     match ← Expr.eval fs fuel ρ a with
-    | .null => Expr.eval fs fuel ρ b
+    | .null | .undefined => Expr.eval fs fuel ρ b
     | w => some w
   | .intOp op a b => do
     let .int x ← Expr.eval fs fuel ρ a | none
@@ -206,6 +217,7 @@ def Body.exec (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
   | .matchNull name whenNull whenValue => do
     match ← ρ.lookup name with
     | .null => Body.exec fs fuel ρ whenNull
+    | .undefined => none
     | _ => Body.exec fs fuel ρ whenValue
   -- The tag is a field of the object, so the evaluator reads it, as JS does.
   -- The arm of the one member left runs only for its tag, as the printed

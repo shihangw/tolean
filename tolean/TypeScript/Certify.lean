@@ -81,6 +81,7 @@ def encoderOf (r : Refs) : IR.Ty → Option String
   | .bool => some (r.eval "Val.bool")
   | .string => some (r.eval "Val.str")
   | .option t => do return s!"({r.eval "encNull"} {← encoderOf r t})"
+  | .optional t => do return s!"({r.eval "encUndef"} {← encoderOf r t})"
   | .list t => do return s!"({r.eval "encList"} {← encoderOf r t})"
   | .struct ref | .enum ref | .tagged ref => some (r.cert s!"encode{ref.name}")
   | .number => some (r.eval "Val.num")
@@ -92,6 +93,7 @@ def decoderOf (r : Refs) : IR.Ty → Option String
   | .bool => some (r.eval "decBool")
   | .string => some (r.eval "decStr")
   | .option t => do return s!"({r.eval "decNull"} {← decoderOf r t})"
+  | .optional t => do return s!"({r.eval "decUndef"} {← decoderOf r t})"
   | .list t => do return s!"({r.eval "decList"} {← decoderOf r t})"
   | .struct ref | .enum ref | .tagged ref => some (r.cert s!"decode{ref.name}")
   | .number => some (r.eval "decNum")
@@ -176,7 +178,8 @@ nullable interface. An interface names only the interfaces before it, so
 `fuel`, the number of declarations, bounds how deep the fields nest. -/
 def splitSteps (decls : List IR.Decl) : Nat → String → IR.Ty → List String
   | 0, _, _ => []
-  | fuel + 1, name, .option t => s!"rcases {name} with _ | {name}" :: splitSteps decls fuel name t
+  | fuel + 1, name, .option t | fuel + 1, name, .optional t =>
+    s!"rcases {name} with _ | {name}" :: splitSteps decls fuel name t
   | _ + 1, name, .enum _ => [s!"cases {name}"]
   | fuel + 1, name, .struct ref =>
     let fields := decls.findSome? fun
@@ -277,6 +280,9 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         s!"@[simp] theorem encode{name}_ne_null {generic} (x : {ty}) : encode{name} ({nv} := {nv}) x ≠ Val.null := by\n" ++
         s!"  cases x <;> simp [encode{name}]"
       encs := encs.push <|
+        s!"@[simp] theorem encode{name}_ne_undefined {generic} (x : {ty}) : encode{name} ({nv} := {nv}) x ≠ Val.undefined := by\n" ++
+        s!"  cases x <;> simp [encode{name}]"
+      encs := encs.push <|
         s!"@[simp] theorem decList_decode{name} {generic} (xs : List {ty}) : decList decode{name} (some (Val.list (List.map (encode{name} ({nv} := {nv})) xs))) = xs :=\n" ++
         s!"  decList_list _ _ decode{name}_encode{name} xs"
       -- `simp` keeps the encoder and the decoder folded and uses these, so
@@ -289,10 +295,19 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           s!"@[simp] theorem decode{name}_{i} {generic} : decode{name} ({nv} := {nv}) (some (Val.str {str m})) = {ctor m} := rfl"
     -- An interface.
     if let .struct name allFields := d then
+      -- An optional field is a key only when it holds a value, as in an
+      -- object literal that leaves it out.
       let parts ← allFields.mapM fun (f, t) => do
-        if let .tag v := t then return s!"({str f}, Val.str {str v})"
+        if let .tag v := t then return (s!"({str f}, Val.str {str v})", false)
+        if let .optional u := t then
+          let some e := encoderOf r u | throw s!"{file}: cannot encode the field {name}.{f}"
+          return (s!"({r.eval "encField"} {str f} {e} x.{f})", true)
         let some e := encoderOf r t | throw s!"{file}: cannot encode the field {name}.{f}"
-        return s!"({str f}, {e} x.{f})"
+        return (s!"({str f}, {e} x.{f})", false)
+      let hasOptional := parts.any (·.2)
+      let objList := if hasOptional then
+          " ++ ".intercalate (parts.map fun (p, opt) => if opt then p else s!"[{p}]")
+        else list (parts.map (·.1))
       -- The structure has no tag fields, so the decoder reads none.
       let fields := allFields.filter fun (_, t) => !(t matches .tag _)
       let decs ← fields.mapM fun (f, t) => do
@@ -300,14 +315,22 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         return (f, dec)
       let some_ := ", ".intercalate (decs.map fun (f, dec) => s!"{f} := {dec} (fs.lookup {str f})")
       let none_ := ", ".intercalate (decs.map fun (f, dec) => s!"{f} := {dec} (none : Option (Val {nv}))")
-      encs := encs.push s!"def encode{name} {generic} (x : {structTy name}) : Val {nv} := Val.obj {list parts}"
+      encs := encs.push s!"def encode{name} {generic} (x : {structTy name}) : Val {nv} := Val.obj {if hasOptional then s!"({objList})" else objList}"
       encs := encs.push <|
         s!"def decode{name} {generic} : Option (Val {nv}) → {structTy name}\n" ++
         s!"  | some (.obj fs) => \{ {some_} }\n" ++
         s!"  | _ => \{ {none_} }"
+      -- With optional fields, the proof splits each into its two cases.
+      let optionalFields := fields.filterMap fun (f, t) => if t matches .optional _ then some f else none
+      let splitOptional := if optionalFields.isEmpty then "cases x"
+        else s!"obtain ⟨{", ".intercalate (fields.map fun (f, _) => s!"x_{f}")}⟩ := x\n  " ++
+          String.join (optionalFields.map fun f => s!"cases x_{f} <;> ")
       encs := encs.push <|
         s!"@[simp] theorem decode{name}_encode{name} {generic} (x : {structTy name}) : decode{name} (some (encode{name} ({nv} := {nv}) x)) = x := by\n" ++
-        s!"  cases x; simp [decode{name}, encode{name}, List.lookup, encList]"
+        s!"  {splitOptional}{if optionalFields.isEmpty then "; " else ""}simp [decode{name}, encode{name}, List.lookup, encList]"
+      encs := encs.push <|
+        s!"@[simp] theorem encode{name}_ne_undefined {generic} (x : {structTy name}) : encode{name} ({nv} := {nv}) x ≠ Val.undefined := by\n" ++
+        s!"  simp [encode{name}]"
       -- An array of the interface, as a loop over it reads its variable back.
       -- `simp` cannot find this from `decList_list` when the fields nest, so
       -- the certificate states it.
@@ -332,11 +355,27 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         s!"    | _ => {ctor firstTag} (decode{firstRef.name} ({nv} := {nv}) none)\n" ++
         s!"  | _ => {ctor firstTag} (decode{firstRef.name} ({nv} := {nv}) none)"
       let memberDefs := ", ".intercalate (members.flatMap fun (_, m) => [s!"encode{m.name}", s!"decode{m.name}"])
+      -- One arm for each member. As for an interface, the proof splits each
+      -- optional field of the member's structure into its two cases.
+      let memberFields (ref : DeclRef) : List (String × IR.Ty) :=
+        ((decls.findSome? fun
+          | .struct n fs => if n == ref.name then some fs else none
+          | _ => none).getD []).filter fun (_, t) => !(t matches .tag _)
+      let arms := members.map fun (t, m) =>
+        let fs := memberFields m
+        let opts := fs.filterMap fun (f, t) => if t matches .optional _ then some f else none
+        let split := if opts.isEmpty then "cases v <;> "
+          else s!"obtain ⟨{", ".intercalate (fs.map fun (f, _) => s!"v_{f}")}⟩ := v\n    " ++
+            String.join (opts.map fun f => s!"cases v_{f} <;> ")
+        s!"  | {IR.memberName t} v =>\n    {split}simp [decode{name}, encode{name}, {memberDefs}, List.lookup, encList]"
       encs := encs.push <|
         s!"@[simp] theorem decode{name}_encode{name} {generic} (x : {ty}) : decode{name} (some (encode{name} ({nv} := {nv}) x)) = x := by\n" ++
-        s!"  cases x <;> rename_i v <;> cases v <;> simp [decode{name}, encode{name}, {memberDefs}, List.lookup, encList]"
+        "  cases x with\n" ++ "\n".intercalate arms
       encs := encs.push <|
         s!"@[simp] theorem encode{name}_ne_null {generic} (x : {ty}) : encode{name} ({nv} := {nv}) x ≠ Val.null := by\n" ++
+        s!"  cases x <;> simp [encode{name}, {memberDefs}]"
+      encs := encs.push <|
+        s!"@[simp] theorem encode{name}_ne_undefined {generic} (x : {ty}) : encode{name} ({nv} := {nv}) x ≠ Val.undefined := by\n" ++
         s!"  cases x <;> simp [encode{name}, {memberDefs}]"
       encs := encs.push <|
         s!"@[simp] theorem decList_decode{name} {generic} (xs : List {ty}) : decList decode{name} (some (Val.list (List.map (encode{name} ({nv} := {nv})) xs))) = xs :=\n" ++

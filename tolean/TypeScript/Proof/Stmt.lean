@@ -687,9 +687,13 @@ theorem branch_null {env : Translate.Env} {test : Expr} {name : String} {isNullT
   intro ρs ρo o ha hs ho
   obtain ⟨w, hw, hl⟩ := nullTestOf_eval m fuel hn hs
   have hwo : ρo.lookup name = some w := by rw [← ha]; exact hw
-  refine ⟨_, hl, ?_⟩
+  by_cases hu : w = .undefined
+  · subst hu
+    cases isNullTest <;> simp [IR.Body.exec, hwo] at ho
+  refine ⟨_, hl hu, ?_⟩
   cases isNullTest <;> simp only [Bool.false_eq_true, ↓reduceIte, IR.Body.exec, hwo,
-    Option.bind_eq_bind, Option.bind_some] at ho <;> cases w <;> simpa [isNullVal, Val.truthy] using ho
+    Option.bind_eq_bind, Option.bind_some] at ho <;> cases w <;>
+    first | exact absurd rfl hu | simpa [isNullVal, Val.truthy] using ho
 
 theorem branch_tag {env : Translate.Env} {test : Expr} {t : TagTest} {wt wf : IR.Body}
     (ht : tagTestOf env test = some t) :
@@ -907,7 +911,8 @@ theorem switchOf_eval {env : Translate.Env} {disc : Expr} {sw : SwitchOn} (h : s
         split at h
         · simp only [Option.pure_def, Option.bind_some, Option.some.injEq] at h
           subst h
-          simp [Eval.eval, hl, hk]
+          simp only at hl hk
+          simp [Eval.eval, Eval.getProp, hl, hk]
         · simp at h
       · simp at h
     | _ => simp at h

@@ -144,6 +144,8 @@ def sections : List Section := [
     ``Proof.out_numberOp, ``Proof.out_numberNe, ``Proof.out_isNone, ``Proof.out_isSome,
     ``Proof.isNull_eq_true, ``Proof.nullTestOf_eval, ``Proof.nullOp_strict,
     ``Proof.nullOp_binary, ``Proof.applyOperator_sound, ``Proof.enumOperand_code,
+    ``Proof.isUndefinedName_eq, ``Proof.eval_undefined, ``Proof.strictEq_undefined,
+    ``Proof.translateBinary_sound,
     ``Proof.tagSide_spec, ``Proof.tagTestOf_eval]⟩,
   ⟨"sec-binary-logical-operators", "13.13", "Binary Logical Operators",
     [``Proof.operator_sound, ``Proof.out_and, ``Proof.out_or, ``Proof.out_coalesce]⟩,
@@ -493,7 +495,9 @@ def extras : List Group := [
   ⟨"Certificates: the encoders and decoders", [``Eval.encNull_some, ``Eval.encNull_none,
     ``Eval.decInt_int, ``Eval.decBool_bool, ``Eval.decNum_num, ``Eval.decStr_str, ``Eval.decList_list,
     ``Eval.decNull_some, ``Eval.decList_nil, ``Eval.decList_cons, ``Eval.decList_encList,
-    ``Eval.decNull_encNull, ``Eval.decNull_null]⟩]
+    ``Eval.decNull_encNull, ``Eval.decNull_null, ``Eval.encUndef_some, ``Eval.encUndef_none,
+    ``Eval.encField_some, ``Eval.encField_none, ``Eval.decUndef_none, ``Eval.decUndef_undefined,
+    ``Eval.decUndef_some, ``Eval.decUndef_encUndef]⟩]
 
 open Meta in
 /-- The theorems of the TypeScript modules that the index does not list. A
