@@ -227,9 +227,7 @@ class Printer {
     }
     if (ts.isInterfaceDeclaration(s)) {
       const exported = this.modifiers(s, [ts.SyntaxKind.ExportKeyword]).size > 0;
-      if (s.typeParameters !== undefined) {
-        refuse(s, 'generic interface');
-      }
+      const typeParams = this.typeParams(s);
       if (s.heritageClauses !== undefined) {
         refuse(s, 'extends');
       }
@@ -237,19 +235,17 @@ class Printer {
         'interface',
         s,
         [this.name(s.name), ...(exported ? ['export'] : [])],
-        s.members.map((m) => this.field(m)),
+        [...typeParams, ...s.members.map((m) => this.field(m))],
       );
     }
     if (ts.isTypeAliasDeclaration(s)) {
       const exported = this.modifiers(s, [ts.SyntaxKind.ExportKeyword]).size > 0;
-      if (s.typeParameters !== undefined) {
-        refuse(s, 'generic type alias');
-      }
+      const typeParams = this.typeParams(s);
       return this.node(
         'type',
         s,
         [this.name(s.name), ...(exported ? ['export'] : [])],
-        [this.type(s.type)],
+        [...typeParams, this.type(s.type)],
       );
     }
     if (ts.isEnumDeclaration(s)) {
@@ -304,14 +300,15 @@ class Printer {
     return this.node('import', s, [JSON.stringify(source)], names);
   }
 
-  private functionDecl(s: ts.FunctionDeclaration): Sexp {
-    const exported = this.modifiers(s, [ts.SyntaxKind.ExportKeyword]).size > 0;
-    if (s.asteriskToken !== undefined) {
-      refuse(s, 'generator');
+  // Type parameters have no constraint, no default and no modifier. Tolean
+  // keeps no span for them.
+  private typeParams(
+    s: ts.FunctionDeclaration | ts.InterfaceDeclaration | ts.TypeAliasDeclaration,
+  ): Array<Sexp> {
+    if (s.typeParameters?.hasTrailingComma) {
+      refuse(s, "',' after the last type parameter");
     }
-    // Type parameters have no constraint, no default and no modifier. Tolean
-    // keeps no span for them.
-    const typeParams: Array<Sexp> = (s.typeParameters ?? []).map((tp) => {
+    return (s.typeParameters ?? []).map((tp) => {
       if (tp.constraint !== undefined) {
         refuse(tp, 'type parameter with a constraint');
       }
@@ -323,9 +320,14 @@ class Printer {
       }
       return { head: 'type-param', atoms: [this.name(tp.name)], children: [] };
     });
-    if (s.typeParameters?.hasTrailingComma) {
-      refuse(s, "',' after the last type parameter");
+  }
+
+  private functionDecl(s: ts.FunctionDeclaration): Sexp {
+    const exported = this.modifiers(s, [ts.SyntaxKind.ExportKeyword]).size > 0;
+    if (s.asteriskToken !== undefined) {
+      refuse(s, 'generator');
     }
+    const typeParams = this.typeParams(s);
     if (s.name === undefined || s.body === undefined) {
       refuse(s, 'function without a name or a body');
     }

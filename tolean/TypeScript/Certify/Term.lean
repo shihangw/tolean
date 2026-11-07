@@ -167,8 +167,9 @@ def decl : Decl → String
   | .function s e n tps ps r b =>
     s!"({ns}Decl.function {span s} {e} {str n} {list (tps.map str)} {list (ps.map param)} " ++
       s!"{option (r.map typeExpr)}\n    {stmt b})"
-  | .interface s e n fs => s!"({ns}Decl.interface {span s} {e} {str n} {list (fs.map field)})"
-  | .typeAlias s e n t => s!"({ns}Decl.typeAlias {span s} {e} {str n} {typeExpr t})"
+  | .interface s e n tps fs =>
+    s!"({ns}Decl.interface {span s} {e} {str n} {list (tps.map str)} {list (fs.map field)})"
+  | .typeAlias s e n tps t => s!"({ns}Decl.typeAlias {span s} {e} {str n} {list (tps.map str)} {typeExpr t})"
   | .enum s e n ms => s!"({ns}Decl.enum {span s} {e} {str n} {list (ms.map enumMember)})"
   | .exportedVar s d => s!"({ns}Decl.exportedVar {span s} {varDecl d})"
   | .stmt s => s!"({ns}Decl.stmt {stmt s})"
