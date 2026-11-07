@@ -723,7 +723,7 @@ theorem calls_agree (hrel : Forall₂ (FnRelP p) (Eval.functionsOf p) fs) :
         | none => simp [hb] at h
         | some o =>
           cases o with
-          | normal _ => simp [hb] at h
+          | normal _ | brk _ | cont _ => simp [hb] at h
           | ret w =>
             simp [hb] at h
             subst h
