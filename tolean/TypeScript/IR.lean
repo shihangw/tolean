@@ -92,7 +92,8 @@ abbrev LoopInfo := tolean.IR.LoopInfo TyExt
 
 /-- The Lean names the output uses, with their full names from the root. -/
 def leanNames : List (String × String) :=
-  tolean.IR.leanNames ++ [("JSNumber", "tolean.TypeScript.JSNumber")]
+  tolean.IR.leanNames ++
+    [("JSNumber", "tolean.TypeScript.JSNumber"), ("JSString", "tolean.TypeScript.JSString")]
 
 /-- Write the Lean name `name` (or `name.rest`), from the root when the source
 declares the same name. -/
@@ -115,6 +116,10 @@ instance : tolean.IR.PrintTy TyExt where
   binders names :=
     let n := names.typeParam
     s!" \{{n} : Type} [{leanName names "JSNumber"} {n}]"
+  -- A JS string is a list of UTF-16 code units, not a Lean `String`
+  -- (`Spec/String.lean`), and a literal encodes its text.
+  string names := leanName names "JSString"
+  stringLit names s := s!"{leanName names "JSString.ofString"} {tolean.Sexp.quote s}"
 
 open tolean.IR (argument) in
 /-- An operation on its printed arguments. The translator gives each one the

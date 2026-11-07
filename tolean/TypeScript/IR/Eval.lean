@@ -82,13 +82,13 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
 
 /-- The tag of `v`, a value of a tagged union: the string in its tag field
 `field`, or the result of `typeof v` when the union has no tag field. -/
-def tagOf : Option String → Val N → Option String
+def tagOf : Option String → Val N → Option JSString
   | some field, .obj fields =>
     match fields.lookup field with
     | some (.str k) => some k
     | _ => none
   | some _, _ => none
-  | none, v => some v.typeOf
+  | none, v => some (JSString.ofString v.typeOf)
 
 /-- The bindings that `let (x, y) := …` makes: each of `names`, with its value
 in `inner`. A name that is bound already gets the new value in its place,
@@ -109,12 +109,12 @@ def Expr.eval (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
   | .none => some .null
   | .ascribe e _ => Expr.eval fs fuel ρ e
   | .bool b => some (.bool b)
-  | .string s => some (.str s)
+  | .string s => some (.str (JSString.ofString s))
   | .var name => ρ.lookup name
   -- A constructor of a literal union is its string, as in JS.
-  | .enumCase _ member => some (.str member)
+  | .enumCase _ member => some (.str (JSString.ofString member))
   -- A tag field is its string in the object.
-  | .tagValue value => some (.str value)
+  | .tagValue value => some (.str (JSString.ofString value))
   -- A member of a tagged union is the value of the member: the object of
   -- its structure, or the primitive value itself.
   | .inject _ _ e => Expr.eval fs fuel ρ e
@@ -239,8 +239,8 @@ def Body.exec (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
   -- for its tag, as the printed `match` on its constructor does.
   | .matchTag name _ field tag other whenTag whenOther => do
     let k ← tagOf field (← ρ.lookup name)
-    if k == tag then Body.exec fs fuel ρ whenTag
-    else if other.all (· == k) then Body.exec fs fuel ρ whenOther else none
+    if k == JSString.ofString tag then Body.exec fs fuel ρ whenTag
+    else if other.all (JSString.ofString · == k) then Body.exec fs fuel ρ whenOther else none
   | .letState names branch rest => do
     match ← Body.exec fs fuel ρ branch with
     | .normal inner => Body.exec fs fuel (← bindState names inner ρ) rest

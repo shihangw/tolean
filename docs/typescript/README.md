@@ -203,7 +203,7 @@ library removes.
 A source name never hides a Lean name that the output uses. Before it
 translates a file, the translator collects every identifier in it. When the
 file declares a name that the output also uses, such as `List`, `Option`,
-`some`, `none`, `decide`, `Int`, `Bool`, `String` or `JSNumber`, the output
+`some`, `none`, `decide`, `Int`, `Bool`, `JSString` or `JSNumber`, the output
 writes the Lean name in full from the root, as `_root_.List` or
 `_root_.Option.none`. The source name stays as it is, so a claim refers to
 it by the name in the source. The number type parameter is `N`, or `N1`,
@@ -293,7 +293,7 @@ the file, the line and the reason. It never approximates.
 | `a ?? b` on `T \| null`, where `b` is a `T` | `Option.getD a b` |
 | `a ?? b` on `T \| null`, where `b` may be `null` | `Option.or a b` |
 | `boolean` | `Bool` |
-| `string` | `String` |
+| `string`, `"abc"` | `JSString`, `JSString.ofString "abc"`. A `JSString` holds the UTF-16 code units of the string, as ECMA-262 defines a string, so a value can hold a lone surrogate, which a Lean `String` cannot. `ofString` is injective, so a claim can state a literal as a Lean `String`. |
 | `ReadonlyArray<T>`, `Array<T>`, `T[]` | `List T` |
 | `interface` with `readonly`, required fields | `structure` |
 | `readonly f?: T`, an optional field | `f : Option T := none`. An object literal may leave the field out, or set it to a `T`. A read of a field that the object lacks gives `undefined`, which is `none`. `s.f ?? d` is `Option.getD s.f d`, and `s.f === undefined` is `s.f.isNone`. |
@@ -304,7 +304,7 @@ the file, the line and the reason. It never approximates.
 | `if (s.kind === 'circle')`, with `===` or `!==` and the string on either side | `match s with \| T.circle s => … \| …`. TypeScript narrows `s` in each branch, and so does the output. A chain of such tests on the same value becomes one `match`. |
 | `switch (s.kind)` with a `case 'circle':` for each member, or a `default:` last, where every clause returns | The same `match`, with one arm for each case. The `default`, or the code after the `switch` when it has no `default`, becomes the arm for the members that no case names. |
 | The same `switch`, where every clause changes locals and ends in `break` | `let (x, y) := match s with …`, as for an `if` that changes locals. The last clause may leave out its `break`. Without a `default`, the arm for the members that no case names keeps the locals as they are. In a loop body, the `match` is the step of the `List.foldl`. |
-| `type T = string \| bigint`, a union of two or more of `string`, `number`, `bigint` and `boolean` | `inductive T` with a constructor for each member, which holds a value of its type, such as `T.string (value : String)`. The constructor is named after what `typeof` gives for the value. A value of a member where a `T` is expected becomes that member's constructor. |
+| `type T = string \| bigint`, a union of two or more of `string`, `number`, `bigint` and `boolean` | `inductive T` with a constructor for each member, which holds a value of its type, such as `T.string (value : JSString)`. The constructor is named after what `typeof` gives for the value. A value of a member where a `T` is expected becomes that member's constructor. |
 | `if (typeof x === 'string')`, with `===` or `!==` and the string on either side, where `x` is a local of such a union | `match x with \| T.string x => … \| …`, which narrows `x` as a test of a tag does |
 | `function` with typed parameters and return type | `def` |
 | `const x = e`, `let x = e` | `let x := e` |

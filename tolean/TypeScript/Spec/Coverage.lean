@@ -59,7 +59,7 @@ the extras is `### Extras: <heading>`, with the heading of its group in
 
 Each section has its anchor in the spec, its number in ES2024, the default
 target, and its title. The anchor, such as `sec-unary-minus-operator`, stays
-the same from one edition to the next, but numbers move: four of the 38
+the same from one edition to the next, but numbers move: four of the 39
 sections here have another number in ES2025 or ES2026. So when the default
 target moves to a newer edition, each number can be read again from that
 edition's table of contents by its anchor.
@@ -92,6 +92,8 @@ def everySection : Group :=
 the spec, with the theorems about each. -/
 def sections : List Section := [
   -- §6 ECMAScript Data Types and Values {#sec-ecmascript-data-types-and-values}
+  ⟨"sec-ecmascript-language-types-string-type", "6.1.4", "The String Type",
+    [``JSString.ofString_inj, ``JSString.toString_ofString, ``JSString.decode_flatMap_utf16]⟩,
   ⟨"sec-ecmascript-language-types-number-type", "6.1.6.1", "The Number Type",
     [``eq_refl_of_safe, ``le_refl_of_safe, ``lt_irrefl_of_safe, ``eq_self_eq_not_isNaN,
     ``eq_posInf_posInf, ``eq_negInf_negInf, ``isNaN_eq_false_of_safe]⟩,

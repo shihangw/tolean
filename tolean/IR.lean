@@ -276,6 +276,63 @@ def Decl.refs : Decl T E → List DeclRef
   | .tagged _ _ members => members.flatMap (·.2.refs)
   | .function _ params ret body => params.flatMap (·.2.refs) ++ ret.refs ++ body.refs
 
+/-! ### The declarations that name the string type -/
+
+/-- The printed type names the string type. A tag field has a string type,
+but the printer leaves tag fields out. -/
+def Ty.usesString : Ty T → Bool
+  | .string => true
+  | .option t | .optional t | .list t => t.usesString
+  | _ => false
+
+mutual
+
+/-- `e` names the string type or holds a string literal. -/
+def Expr.usesString : Expr T E → Bool
+  | .string _ => true
+  | .call _ args | .ext _ args => Expr.usesStringList args
+  | .list elems t => Expr.usesStringList elems || t.usesString
+  | .struct fields _ => Expr.usesStringFields fields
+  | .field a _ _ | .propNot a | .not a | .neg a | .isNone a | .isSome a
+  | .decide a | .push _ a | .update _ _ a | .inject _ _ a => a.usesString
+  | .ite a b c => a.usesString || b.usesString || c.usesString
+  | .matchNull _ a b | .coalesce a b _ | .intOp _ a b | .order _ a b | .division _ a b
+  | .eq a b | .ne a b | .propAnd a b | .propOr a b | .and a b | .or a b =>
+    a.usesString || b.usesString
+  | .ascribe e t => e.usesString || t.usesString
+  -- The printer leaves a tag value out, as it leaves the tag field out.
+  | .int _ | .none | .bool _ | .var _ | .enumCase .. | .tagValue _ => false
+
+def Expr.usesStringList : List (Expr T E) → Bool
+  | [] => false
+  | e :: es => e.usesString || Expr.usesStringList es
+
+def Expr.usesStringFields : List (String × Expr T E) → Bool
+  | [] => false
+  | (_, e) :: fs => e.usesString || Expr.usesStringFields fs
+
+end
+
+def Body.usesString : Body T E → Bool
+  | .value e => e.usesString
+  | .state _ => false
+  | .let _ e rest => e.usesString || rest.usesString
+  | .letArray _ t elems rest => t.usesString || Expr.usesStringList elems || rest.usesString
+  | .ite c a b => c.usesString || a.usesString || b.usesString
+  | .matchNull _ a b | .letState _ a b | .matchTag _ _ _ _ _ a b => a.usesString || b.usesString
+  | .fold _ _ body items rest info =>
+    body.usesString || items.usesString || rest.usesString ||
+      info.stateTypes.any (·.usesString) || info.elem.usesString
+
+/-- The output of `d` names the string type, or holds a string literal. A
+language whose strings are not Lean's `String` imports its model then. -/
+def Decl.usesString : Decl T E → Bool
+  | .struct _ fields => fields.any (·.2.usesString)
+  | .alias _ type => type.usesString
+  | .enum .. => false
+  | .tagged _ _ members => members.any (·.2.usesString)
+  | .function _ params ret body => params.any (·.2.usesString) || ret.usesString || body.usesString
+
 /-! ### Printing -/
 
 /-- Another file of the program, as the output of a file that imports from it
@@ -374,6 +431,13 @@ class PrintTy (T : Type) where
   /-- What a function that is generic over the type parameter binds after its
   name, such as ` {N : Type} [JSNumber N]`. -/
   binders : Names → String
+  /-- The string type. A language whose strings are not Lean's `String`
+  writes its own, as TypeScript writes `JSString`. -/
+  string : Names → String := fun names => leanName names "String"
+  /-- The string literal `s`, written as a value of the string type. It may
+  be an application, such as `JSString.ofString "a"`, so the printer puts it
+  in parentheses where it is an argument. -/
+  stringLit : Names → String → String := fun _ s => Sexp.quote s
 
 /-- How a language prints the operations it adds, given its arguments as
 printed code. -/
@@ -383,7 +447,7 @@ class PrintOp (E : Type) where
 def Ty.print [PrintTy T] (names : Names) : Ty T → String
   | .int => leanName names "Int"
   | .bool => leanName names "Bool"
-  | .string => leanName names "String"
+  | .string => PrintTy.string (T := T) names
   | .option t | .optional t => wrapped (leanName names "Option") (t.print names)
   | .list t => wrapped (leanName names "List") (t.print names)
   | .struct ref =>
@@ -395,7 +459,7 @@ def Ty.print [PrintTy T] (names : Names) : Ty T → String
     match names.ref ref with
     | (name, some _) => s!"({name} {names.typeParam})"
     | (name, Option.none) => name
-  | .tag _ => leanName names "String"
+  | .tag _ => PrintTy.string (T := T) names
   | .ext t => PrintTy.print names t
 
 /-- The printed type names the type parameter, so a declaration of it must
@@ -459,10 +523,10 @@ def Expr.print (names : Names) : Expr T E → String
   | .none => leanName names "none"
   | .ascribe e t => s!"({e.print names} : {t.print names})"
   | .bool b => if b then "true" else "false"
-  | .string s => Sexp.quote s
+  | .string s => PrintTy.stringLit (T := T) names s
   | .var name => name
   | .enumCase ref member => s!"{(names.ref ref).1}.{memberName member}"
-  | .tagValue value => Sexp.quote value
+  | .tagValue value => PrintTy.stringLit (T := T) names value
   | .inject ref tag e =>
     -- The constructor gets the type parameter by name, as a call does. A
     -- value such as `(1 : Int)` does not mention the parameter, so Lean

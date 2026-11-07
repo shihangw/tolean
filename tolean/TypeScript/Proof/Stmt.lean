@@ -916,24 +916,25 @@ theorem execFrom_ret {v : Val N} {ρ : Eval.Env N} {t : Option Expr} {body : Lis
 /-- A `case` whose test is a string: the clause runs for that tag, and the
 later clauses decide for every other. -/
 theorem execSwitch_case {ρ : Eval.Env N} {test : Expr} {body : List Stmt}
-    {more : List (Option Expr × List Stmt)} {tsp : Span} {k tag : String}
+    {more : List (Option Expr × List Stmt)} {tsp : Span} {k : JSString} {tag : String}
     (hst : test.stripParens = .string tsp tag) :
     Eval.execSwitch m fuel ρ (.str k) ((some test, body) :: more) =
-      if k = tag then Eval.execFrom m fuel ρ ((some test, body) :: more)
+      if k = .ofString tag then Eval.execFrom m fuel ρ ((some test, body) :: more)
       else Eval.execSwitch m fuel ρ (.str k) more := by
-  have ht : Eval.eval m fuel ρ test = some (.str tag) := by
+  have ht : Eval.eval m fuel ρ test = some (.str (.ofString tag)) := by
     rw [← eval_stripParens, hst]; simp [Eval.eval]
   rw [Eval.execSwitch]
   simp only [ht, Option.bind_eq_bind, Option.bind_some, Eval.strictEq]
-  by_cases hk : k = tag <;> simp [hk]
+  by_cases hk : k = .ofString tag <;> simp [hk]
 
 /-- What `matchTag` runs: the arm of the tag, or the other arm, only for
 the member that it names when it names one. -/
 theorem matchTag_exec {n f tag : String} {r : DeclRef} {other : Option String} {wt wo : IR.Body}
     {ρ : Eval.Env N} {o : Outcome N} (h : IR.Body.exec fs fuel ρ (.matchTag n r (some f) tag other wt wo) = some o) :
     ∃ fields k, ρ.lookup n = some (.obj fields) ∧ fields.lookup f = some (.str k) ∧
-      ((k = tag ∧ IR.Body.exec fs fuel ρ wt = some o) ∨
-        (k ≠ tag ∧ (∀ x, other = some x → k = x) ∧ IR.Body.exec fs fuel ρ wo = some o)) := by
+      ((k = .ofString tag ∧ IR.Body.exec fs fuel ρ wt = some o) ∨
+        (k ≠ .ofString tag ∧ (∀ x, other = some x → k = .ofString x) ∧
+          IR.Body.exec fs fuel ρ wo = some o)) := by
   simp only [IR.Body.exec, IR.tagOf] at h
   cases hl : ρ.lookup n with
   | none => simp [hl] at h
@@ -946,20 +947,20 @@ theorem matchTag_exec {n f tag : String} {r : DeclRef} {other : Option String} {
       cases u <;> simp [hk] at h
       rename_i k
       refine ⟨fields, k, rfl, hk, ?_⟩
-      by_cases hkt : k = tag
+      by_cases hkt : k = .ofString tag
       · simp [hkt] at h; exact .inl ⟨hkt, h⟩
       · simp only [hkt, ↓reduceIte] at h
         split at h
         · rename_i hall
           refine .inr ⟨hkt, fun x hx => ?_, h⟩
           subst hx
-          have : x = k := by simpa using hall
+          have : JSString.ofString x = k := by simpa using hall
           exact this.symm
         · simp at h
 
 /-- `switch (x.kind)` evaluates the tag of `x`. -/
 theorem switchOf_eval {env : Translate.Env} {disc : Expr} {sw : SwitchOn} (h : switchOf env disc = some sw)
-    {ρ : Eval.Env N} {fields : List (String × Val N)} {k : String}
+    {ρ : Eval.Env N} {fields : List (String × Val N)} {k : JSString}
     (hl : ρ.lookup sw.name = some (.obj fields)) (hk : fields.lookup sw.field = some (.str k)) :
     Eval.eval m fuel ρ disc = some (.str k) := by
   unfold switchOf at h
