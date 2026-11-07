@@ -112,6 +112,7 @@ partial def stmtsOf : Stmt → List Stmt
   | .block _ body => .block default body :: body.flatMap stmtsOf
   | .ifStmt s t a b => .ifStmt s t a b :: stmtsOf a ++ ((b.map stmtsOf).getD [])
   | .forOfStmt s k n i b => .forOfStmt s k n i b :: stmtsOf b
+  | .forStmt s i t u b => .forStmt s i t u b :: stmtsOf b
   | .whileStmt s t b => .whileStmt s t b :: stmtsOf b
   | .switchStmt s d cs => .switchStmt s d cs :: cs.flatMap fun (_, body) => body.flatMap stmtsOf
   | s => [s]
@@ -143,12 +144,16 @@ def stmtNumbers : Stmt → List String
   | .varDecl _ d => (d.init.map exprNumbers).getD []
   | .exprStmt _ e | .ifStmt _ e _ _ | .whileStmt _ e _ | .forOfStmt _ _ _ e _ => exprNumbers e
   | .returnStmt _ e => (e.map exprNumbers).getD []
+  | .forStmt _ i t u _ =>
+    (((i.bind (·.init)).map exprNumbers).getD []) ++ ((t.map exprNumbers).getD []) ++ ((u.map exprNumbers).getD [])
   | _ => []
 
 def stmtCalls : Stmt → List String
   | .varDecl _ d => (d.init.map exprCalls).getD []
   | .exprStmt _ e | .ifStmt _ e _ _ | .whileStmt _ e _ | .forOfStmt _ _ _ e _ => exprCalls e
   | .returnStmt _ e => (e.map exprCalls).getD []
+  | .forStmt _ i t u _ =>
+    (((i.bind (·.init)).map exprCalls).getD []) ++ ((t.map exprCalls).getD []) ++ ((u.map exprCalls).getD [])
   | .switchStmt _ d cs => exprCalls d ++ cs.flatMap fun (t, _) => (t.map exprCalls).getD []
   | _ => []
 
