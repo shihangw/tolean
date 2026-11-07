@@ -1,6 +1,6 @@
 # Plan: translate the pure TypeScript that real modules use
 
-**Status:** in progress, see [Progress](#progress) · **Date:** 2026-11-03
+**Status:** in progress · **Date:** 2026-11-03
 
 Pure TypeScript in practice uses much more of the language than the subset
 accepts. A function is pure when it does no input or output and depends only
@@ -9,31 +9,12 @@ closures, exceptions, `Map`, `switch` and template literals, and pure code
 uses all of them. A survey of one pure module of about 2,000 lines, which
 folds a list of events into a state, found the features below in almost
 every file. Tolean could translate none of its fourteen files. Only two small
-functions went through, after someone rewrote them into the subset. The
-[Progress](#progress) table lists what Tolean translates since.
+functions went through, after someone rewrote them into the subset. What
+Tolean translates now is in the [TypeScript guide](../typescript/README.md).
 
 This plan lists what to add so that such a module translates without a
 rewrite. It also states the rules that each addition must keep, and the
 behavior that Tolean must still refuse.
-
-## Progress
-
-Each row is a part of the plan that Tolean translates now, with the step it
-belongs to and the pull request that added it. `program_sound` covers every
-row, and the corpus files for each row certify.
-
-| Step | What Tolean translates now | Pull request |
-|---|---|---|
-| 2 | `x ?? y`, and `x == null` and `x != null`, on values of type `T \| null` | [#44](https://github.com/shihangw/tolean/pull/44) |
-| 2 | `type T = U` aliases of the types of the subset, exported and imported | [#45](https://github.com/shihangw/tolean/pull/45) |
-| 2 | Literal unions of strings, `type T = 'a' \| 'b'`, as an `inductive` | [#47](https://github.com/shihangw/tolean/pull/47) |
-| 2 | Tagged unions of interfaces, narrowed by `if (x.kind === 'a')` | [#51](https://github.com/shihangw/tolean/pull/51) |
-| 2 | `switch (x.kind)` on a tagged union, where every clause returns | [#53](https://github.com/shihangw/tolean/pull/53) |
-| 2 | The same `switch`, where every clause changes locals and ends in `break`, also in a loop | [#54](https://github.com/shihangw/tolean/pull/54) |
-| 2 | Optional fields `f?: T` of interfaces, read with `??` and `=== undefined` | [#55](https://github.com/shihangw/tolean/pull/55) |
-| 2 | `x ??= y` on a `let` local of type `T \| null` | [#63](https://github.com/shihangw/tolean/pull/63) |
-| 2 | `p?.f` on a nullable structure, read with `??` and `=== undefined` | [#60](https://github.com/shihangw/tolean/pull/60) |
-| 3 | Unions of primitive types, `type T = string \| bigint`, narrowed by `if (typeof x === 'string')` | [#56](https://github.com/shihangw/tolean/pull/56) |
 
 ## The rules for every addition
 
@@ -64,7 +45,7 @@ stays refused, even when the code that uses it is pure.
 The tables group the constructs by the stage that adds them. Each row says
 what the Lean output is, and what Tolean refuses so that the translation stays
 exact. A construct leaves these tables when Tolean translates it, and the
-[Progress](#progress) table lists it from then on.
+[TypeScript guide](../typescript/README.md) documents it from then on.
 
 ### Types and narrowing
 
