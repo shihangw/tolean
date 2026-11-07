@@ -321,12 +321,15 @@ def safeIntegerValue? (text : String) : Option Int := Eval.numberLiteral text
 
 /-! ### Errors -/
 
-/-- The source text of `span`, at most 80 characters. -/
+/-- The source text of `span`, at most 80 characters, without the spaces
+that the cut may leave at its end. A message never ends in a space, so the
+native command and the WebAssembly build give the same text whether or not
+their caller trims it. -/
 def spanText (ctx : Ctx) (span : Span) : String :=
   let index (p : Pos) : Nat := (ctx.lineStarts[p.line - 1]?.getD 0) + p.col - 1
   let first := index span.start
   let last := min (index span.stop) (first + 80)
-  (ctx.src.extract first last).foldl String.push ""
+  ((ctx.src.extract first last).foldl String.push "").trimAsciiEnd.toString
 
 def reject {A : Type} (span : Span) (reason : String) : TM A := do
   let ctx ← get
