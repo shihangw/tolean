@@ -4,12 +4,13 @@
 
 Pure TypeScript in practice uses much more of the language than the subset
 accepts. A function is pure when it does no input or output and depends only
-on its arguments. But the subset also refuses generics, recursion,
-callbacks, closures, exceptions, `Map`, `switch` and template literals, and
-pure code uses all of them. A survey of one pure module of about 2,000 lines, which folds a list of
-events into a state, found the features below in almost every file. Tolean could
-translate none of its fourteen files. Only two small functions went through,
-after someone rewrote them into the subset.
+on its arguments. But the subset refused generics, recursion, callbacks,
+closures, exceptions, `Map`, `switch` and template literals, and pure code
+uses all of them. A survey of one pure module of about 2,000 lines, which
+folds a list of events into a state, found the features below in almost
+every file. Tolean could translate none of its fourteen files. Only two small
+functions went through, after someone rewrote them into the subset. The
+[Progress](#progress) table lists what Tolean translates since.
 
 This plan lists what to add so that such a module translates without a
 rewrite. It also states the rules that each addition must keep, and the
@@ -83,7 +84,7 @@ exact. A construct leaves these tables when Tolean translates it, and the
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| An arrow function passed as an argument, which reads only `const` values and parameters | `fun` | A callback that changes a variable outside itself |
+| An arrow function passed as an argument, which reads only `const` values and parameters. The parser reads arrow functions whose body is an expression ([#57](https://github.com/shihangw/tolean/pull/57)), and the translator refuses them for now. | `fun` | A callback that changes a variable outside itself |
 | A local function or arrow function stored in a `const` and called later, which changes `let` variables of the enclosing function | A Lean function that takes those variables and returns their new values. The translator lifts it out and threads the variables through each call. | A local function that escapes: one that is returned, stored in a field or passed on |
 | A function-typed field or parameter, such as a comparator in an options object | A field of a function type | A function value that changes state when it is called |
 | A destructured parameter, such as `{ a, b }: Options` | A pattern on the structure | Defaults inside the pattern |
@@ -277,18 +278,25 @@ be exact:
 
 Each step ends with all checks green, with both translators in agreement, and
 with no change to the output of code that is already in the subset. Step 1
-is the one exception, because it changes the type of every `string`.
+is the one planned exception, because it changes the type of every `string`.
+A fix for output that Lean does not accept may change it too: the binders of
+a loop now carry their types ([#59](https://github.com/shihangw/tolean/pull/59)),
+and a `let` of a `T | null` local writes its type where Lean would infer
+another ([#63](https://github.com/shihangw/tolean/pull/63)).
 
 1. Switch `string` to `JSString`. Today a string appears only in fields,
    literals and `===`, so the switch changes the generated types but breaks
    almost no proof. Every project that writes proofs over Lean's `String`
    makes the switch more costly later, so it comes first.
-2. Types and narrowing: optional parameters, and the rest of a chain after
-   `?.`.
+2. Types and narrowing: optional parameters and `undefined` as a value, the
+   rest of a chain after `?.`, a `default` that assigns to `never`,
+   `export { … }` and re-exports, `as const` and `satisfies`, and `Record`
+   over a union of string literals.
 3. Generic functions and types whose type parameters have no constraint,
    tuples, string enums and type guards.
 4. Callbacks that read only `const` values, the array methods without
-   `sort`, indexing, and object spread.
+   `sort`, indexing, and object spread. The parser already reads arrow
+   functions whose body is an expression.
 5. Control flow: `return` inside a loop, `break`, `continue`, and the counted
    `for` loop.
 6. Errors, after step 3 of the [shared core plan](shared-core.md) adds
@@ -325,8 +333,13 @@ variables and in maps.
   reads an import as a URL.
 - Should a comparator that is not one of the two shapes be accepted when the
   project supplies a proof that it is consistent?
-- How should the spec model `const`? Its environment holds values only, so
-  `x = e`, `x += e` and `x ??= e` on a `const` write the new value where Node
-  throws a `TypeError`. The translator refuses each of them, so no certified
-  program meets the gap. Closing it means a binding kind in `Eval.Env`, and
-  `Agree` and every statement proof would then compare kinds too.
+- How should the spec model `const` in full? Its environment holds values
+  only. Since [#63](https://github.com/shihangw/tolean/pull/63), the spec gives
+  no value for a block where a statement after a `const` declaration assigns
+  it, which covers `=`, `+=`, `??=` and `++`. A `for (const x of xs)` loop is
+  left: an assignment to `x` in the body writes the new value, where Node
+  throws a `TypeError`. The translator refuses it, so no certified program
+  meets the gap, but `interpreter.test.ts` asks the interpreter to agree with
+  Node on every program that it parses. The same check on the loop's body
+  would close it. A binding kind in `Eval.Env` would cover every case, but
+  then `Agree` and every statement proof would compare kinds too.
