@@ -14,8 +14,8 @@ marks which links are proved, tested against a reference, or trusted.
 
 `tolean/TypeScript/Syntax/` puts a span on every node. It reads:
 
-- **Declarations:** functions, interfaces, type aliases, and `const` and `let`,
-  each of them possibly exported.
+- **Declarations:** functions, interfaces, type aliases, enums whose members
+  are strings, and `const` and `let`, each of them possibly exported.
 - **Statements:** `const` and `let` declarations, expression statements,
   `return`, `if` and `else`, `for … of`, `while`, `switch`, blocks, `break`,
   `continue` and the empty statement. A `break` at the top of a `switch`
@@ -300,6 +300,7 @@ the file, the line and the reason. It never approximates.
 | `p?.f`, where `p` is a `S \| null` or an optional field of type `S` | `p.map (·.f)`, or `p.bind (·.f)` when `f` is optional. The value is `undefined` when `p` is `null` or `undefined`, so it has the type of an optional field: `p?.f ?? d` and `p?.f === undefined` work as they do on `s.f`. |
 | `type T = U`, declared before its uses | `abbrev T := U`. The output writes `U` itself wherever the source names `T`, so the `abbrev` is only for claims. |
 | `type T = 'a' \| 'b'`, a union of string literals | `inductive T` with the constructors `a` and `b`, which derives `DecidableEq`. A literal becomes `T.a` where the context expects a `T`, and `t === 'a'` becomes `t = T.a`. The output writes every constructor in `«»`, such as `T.«open»`, because Lean reads some strings as keywords or modifiers. A claim can still write `T.a`. |
+| `enum T { A = 'a', B = 'b' }`, an enum whose members are strings | The same `inductive T` as for `'a' \| 'b'`, with the constructors named after the strings, so `T.A` becomes `T.«a»`. TypeScript compiles the enum to an object with one property for each member, and `T.A` reads it. The output has no such object, so only `T.A` reads a member, and a file that imports the enum without `type` may read its members too. |
 | `type T = A \| B`, a union of interfaces with a tag field such as `kind: 'circle'` | `inductive T` with a constructor for each member, which holds the member's structure. The structure leaves the tag field out, because its value never changes. An object literal where a `T` is expected becomes the constructor of its tag. |
 | `if (s.kind === 'circle')`, with `===` or `!==` and the string on either side | `match s with \| T.circle s => … \| …`. TypeScript narrows `s` in each branch, and so does the output. A chain of such tests on the same value becomes one `match`. |
 | `switch (s.kind)` with a `case 'circle':` for each member, or a `default:` last, where every clause returns | The same `match`, with one arm for each case. The `default`, or the code after the `switch` when it has no `default`, becomes the arm for the members that no case names. |
@@ -362,6 +363,13 @@ Tolean rejects these, among others:
   a union of string literals and other types, a string that is not an ASCII
   name or that Lean declares for every inductive type, such as `'rec'`, and a
   value of a literal union where a `string` is expected.
+- A numeric enum, an enum member without a value, a `const enum`, and an enum
+  inside a function. Tolean also refuses an enum without members, two members
+  with one name or one string, and a member named after a property of
+  `Object.prototype`, such as `__proto__`. In TypeScript a value of a string
+  enum is one of its members, so Tolean refuses a string such as `'a'` where
+  the enum is expected, and a member where a `string` is expected. It also
+  refuses the enum's object as a value, and a local with the enum's name.
 - A field of a tagged union read before a test of its tag, a read of the tag
   field outside such a test, and a union of interfaces without a tag. Tolean
   also refuses a member, such as a `Circle`, where the union is expected,
@@ -560,7 +568,7 @@ path = "node_modules/tolean/lean"
 | 2. Translate | Tolean writes readable Lean definitions (the generated `.lean` files) | **Proved** up to the printer | `program_sound` proves the translation to the Tolean IR for every accepted program: when the IR's evaluator gives a value, the interpreter gives the same value. The printer link is trusted: that the printed Lean computes what the evaluator gives for the IR, and that the evaluator gives a value where the printed Lean does. No theorem can state it for every program, because the printed Lean is text that means something only after Lean compiles it. The golden files of the corpus, compiling random programs and the CI drift check test it, and a [certificate](#certificates) proves the link, and so the whole step, for one file. |
 | 3. Prove the claims | Hand-written proofs show that each claim in `Spec/*.lean` holds for the generated definitions | **Proved** | The Lean kernel, `#audit_claims`, `lake build --wfail`, and no `sorry`, `admit`, `axiom` or `native_decide` |
 | 4. Assume JS number facts | `SafeIntLaws` and `SpecialValueLaws` in `tolean/TypeScript/Spec/Number.lean` | Trusted, tested | `tests/typescript/jsNumberLaws.test.ts` checks each law against real doubles. |
-| 5. Run | Type stripping or a bundler makes the JavaScript that Node runs | Trusted | The subset uses only constructs that type stripping leaves unchanged |
+| 5. Run | Type stripping or a bundler makes the JavaScript that Node runs | Trusted | The subset uses only constructs that type stripping leaves unchanged, except `enum`. Type stripping refuses an enum, so code with one needs `tsc`, a bundler or Node's `--experimental-transform-types`. The interpreter reads an enum as the object that `tsc` makes for it. |
 | 6. Inputs | The code that calls the verified functions passes inputs that meet the theorems' preconditions | Trusted | The callers are responsible for it. A function can check its own inputs instead, so that its claim has no precondition, and [a plan](../plans/input-checks.md) lets `tolean.json` require that. |
 
 So a theorem holds for the code that runs if steps 1, 4 and 5 are correct, the

@@ -311,6 +311,7 @@ def Decl.beq : Decl → Decl → Bool
   | .function a0 a1 a2 a3 a4 a5, .function b0 b1 b2 b3 b4 b5 => decide (a0 = b0) && decide (a1 = b1) && decide (a2 = b2) && Param.beqList a3 b3 && TypeExpr.beqOpt a4 b4 && Stmt.beq a5 b5
   | .interface a0 a1 a2 a3, .interface b0 b1 b2 b3 => decide (a0 = b0) && decide (a1 = b1) && decide (a2 = b2) && Field.beqList a3 b3
   | .typeAlias a0 a1 a2 a3, .typeAlias b0 b1 b2 b3 => decide (a0 = b0) && decide (a1 = b1) && decide (a2 = b2) && TypeExpr.beq a3 b3
+  | .enum a0 a1 a2 a3, .enum b0 b1 b2 b3 => decide (a0 = b0) && decide (a1 = b1) && decide (a2 = b2) && decide (a3 = b3)
   | .exportedVar a0 a1, .exportedVar b0 b1 => decide (a0 = b0) && VarDecl.beq a1 b1
   | .stmt a0, .stmt b0 => Stmt.beq a0 b0
   | _, _ => false
@@ -324,6 +325,8 @@ theorem Decl.beq_iff : (a b : Decl) → Decl.beq a b = true ↔ a = b
     cases b <;> simp [and_assoc, Decl.beq, Field.beqList_iff a3]
   | .typeAlias a0 a1 a2 a3, b => by
     cases b <;> simp [and_assoc, Decl.beq, TypeExpr.beq_iff a3]
+  | .enum a0 a1 a2 a3, b => by
+    cases b <;> simp [and_assoc, Decl.beq]
   | .exportedVar a0 a1, b => by
     cases b <;> simp [and_assoc, Decl.beq, VarDecl.beq_iff a1]
   | .stmt a0, b => by

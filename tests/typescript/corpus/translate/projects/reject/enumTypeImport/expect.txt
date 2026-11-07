@@ -1,0 +1,1 @@
+only parameters and locals may be referenced

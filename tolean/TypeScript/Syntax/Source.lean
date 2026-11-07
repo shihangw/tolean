@@ -231,6 +231,10 @@ def Field.words (f : Field) : List Word :=
   (if f.readonly then [identWord "readonly"] else []) ++ [propertyName f.name] ++
     (if f.optional then [punctWord "?"] else []) ++ punctWord ":" :: f.type.words ++ [punctWord ";"]
 
+/-- `Name = "value",`. A `,` may follow the last member too. -/
+def EnumMember.words (m : EnumMember) : List Word :=
+  [propertyName m.name, punctWord "=", [.string m.value], punctWord ","]
+
 def ImportName.words (n : ImportName) : List Word :=
   if n.typeOnly then [identWord "type", identWord n.name] else [identWord n.name]
 
@@ -248,6 +252,9 @@ def Decl.lines : Decl → List Line
       fields.map (fun f => (1, f.words)) ++ [(0, [punctWord "}"])]
   | .typeAlias _ exported name type =>
     [(0, exportWords exported ++ identWord "type" :: identWord name :: punctWord "=" :: type.words ++ [punctWord ";"])]
+  | .enum _ exported name members =>
+    (0, exportWords exported ++ [keywordWord "enum", identWord name, punctWord "{"]) ::
+      members.map (fun m => (1, m.words)) ++ [(0, [punctWord "}"])]
   | .exportedVar _ d => [(0, keywordWord "export" :: d.words)]
   | .stmt s => s.lines 0
 
@@ -380,12 +387,15 @@ def Field.erase (f : Field) : Field := { f with span := noSpan, type := f.type.e
 
 def ImportName.erase (n : ImportName) : ImportName := { n with span := noSpan }
 
+def EnumMember.erase (m : EnumMember) : EnumMember := { m with span := noSpan }
+
 def Decl.erase : Decl → Decl
   | .import _ names source => .import noSpan (names.map ImportName.erase) source
   | .function _ exported name params returnType body =>
     .function noSpan exported name (params.map Param.erase) (returnType.map TypeExpr.erase) body.erase
   | .interface _ exported name fields => .interface noSpan exported name (fields.map Field.erase)
   | .typeAlias _ exported name type => .typeAlias noSpan exported name type.erase
+  | .enum _ exported name members => .enum noSpan exported name (members.map EnumMember.erase)
   | .exportedVar _ d => .exportedVar noSpan d.erase
   | .stmt s => .stmt s.erase
 
