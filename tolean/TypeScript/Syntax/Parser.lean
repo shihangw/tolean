@@ -931,6 +931,32 @@ def parseImport (start : Pos) : ParseM Decl := do
   endStatement
   return .import (← spanFrom start) names.toList source
 
+/-- `export { a, type B };` and `export { a } from "./x.ts";`, after the
+`export`. `export type { … }` marks every name. Other forms of `export` leave
+the subset. -/
+def parseExportList (start : Pos) : ParseM Decl := do
+  let mut clauseType := false
+  if (← peek).isIdent "type" then
+    discard advance
+    clauseType := true
+  discard advance
+  let names ← iterate (← budget) #[] (importStep clauseType)
+  let close ← expectPunct "}"
+  if names.isEmpty then failAt close "an export list must name a function or a type"
+  if !(← peek).isIdent "from" then
+    endStatement
+    return .exports (← spanFrom start) names.toList none
+  discard advance
+  let t ← advance
+  let .string source := t.kind | unexpected t "a string"
+  endStatement
+  return .exports (← spanFrom start) names.toList (some source)
+
+/-- An export list starts here: `{`, or `type {`. -/
+def startsExportList : ParseM Bool := do
+  let t ← peek
+  return t.isPunct "{" || (t.isIdent "type" && (← peekAt 1).isPunct "{")
+
 /-- A declaration after `export`, when `exported`, or a declaration or a
 statement without it. `start` is where it starts, before any `export`. -/
 def parseDeclBody (start : Pos) (exported : Bool) : ParseM Decl := do
@@ -955,6 +981,7 @@ def parseDecl : ParseM Decl := do
   if first.isKeyword "import" then return ← parseImport start
   let exported := first.isKeyword "export"
   if exported then discard advance
+  if exported && (← startsExportList) then return ← parseExportList start
   parseDeclBody start exported
 
 /-- One step of the loop over the declarations of a module, unless the end of

@@ -219,6 +219,9 @@ class Printer {
   }
 
   private topLevel(s: ts.Statement): Sexp {
+    if (ts.isExportDeclaration(s)) {
+      return this.exportDecl(s);
+    }
     if (ts.isImportDeclaration(s)) {
       return this.importDecl(s);
     }
@@ -282,6 +285,27 @@ class Printer {
     });
     const source = (s.moduleSpecifier as ts.StringLiteral).text;
     return this.node('import', s, [JSON.stringify(source)], names);
+  }
+
+  // `export { a, type B }`, `export type { B }` and `export { a } from "./x.ts"`.
+  private exportDecl(s: ts.ExportDeclaration): Sexp {
+    const clause = s.exportClause;
+    if (clause === undefined || !ts.isNamedExports(clause) || s.attributes !== undefined ||
+        (s.modifiers !== undefined && s.modifiers.length > 0)) {
+      refuse(s, 'export form');
+    }
+    if (clause.elements.length === 0) {
+      refuse(s, 'empty export list');
+    }
+    const names = clause.elements.map((el) => {
+      if (el.propertyName !== undefined || !ts.isIdentifier(el.name)) {
+        refuse(el, 'export alias');
+      }
+      const typeOnly = s.isTypeOnly || el.isTypeOnly;
+      return this.node('name', el.name, [this.name(el.name), ...(typeOnly ? ['type'] : [])], []);
+    });
+    const atoms = s.moduleSpecifier === undefined ? [] : [JSON.stringify((s.moduleSpecifier as ts.StringLiteral).text)];
+    return this.node('export', s, atoms, names);
   }
 
   private functionDecl(s: ts.FunctionDeclaration): Sexp {

@@ -236,10 +236,18 @@ def ImportName.words (n : ImportName) : List Word :=
 
 def exportWords (exported : Bool) : List Word := if exported then [keywordWord "export"] else []
 
+/-- `from "source"` after the names of an export list, when it has a source. -/
+def fromWords : Option String → List Word
+  | some source => [identWord "from", [.string source]]
+  | none => []
+
 def Decl.lines : Decl → List Line
   | .import _ names source =>
     [(0, keywordWord "import" :: enclose "{" "}" (names.map ImportName.words) ++
       [identWord "from", [.string source], punctWord ";"])]
+  | .exports _ names source =>
+    [(0, keywordWord "export" :: enclose "{" "}" (names.map ImportName.words) ++
+      fromWords source ++ [punctWord ";"])]
   | .function _ exported name params returnType body =>
     (0, exportWords exported ++ keywordWord "function" :: identWord name ::
       enclose "(" ")" (params.map Param.words) ++ typeAnnotation returnType) :: body.lines 0
@@ -382,6 +390,7 @@ def ImportName.erase (n : ImportName) : ImportName := { n with span := noSpan }
 
 def Decl.erase : Decl → Decl
   | .import _ names source => .import noSpan (names.map ImportName.erase) source
+  | .exports _ names source => .exports noSpan (names.map ImportName.erase) source
   | .function _ exported name params returnType body =>
     .function noSpan exported name (params.map Param.erase) (returnType.map TypeExpr.erase) body.erase
   | .interface _ exported name fields => .interface noSpan exported name (fields.map Field.erase)

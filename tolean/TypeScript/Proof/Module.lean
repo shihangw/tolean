@@ -368,6 +368,61 @@ theorem translateInterface_ok {sp : Span} {ex : Bool} {name : String} {fields : 
   obtain ⟨rfl, -⟩ := isolated_ok hinfos
   exact ⟨rfl, rfl, rfl, _, _, rfl⟩
 
+/-- An export list only checks the state: it adds no declaration and keeps the
+state. -/
+theorem translateExports_ok {sp : Span} {names : List ImportName} {source : Option String} {s s' : Ctx}
+    {o : Option IR.Decl} (h : translateDecl (.exports sp names source) s = .ok o s') : o = none ∧ s' = s := by
+  simp only [translateDecl] at h
+  by_cases hs : source.isSome = true
+  · rw [if_pos hs] at h; simp at h
+  rw [if_neg hs, pure_bind, bind_ok] at h
+  obtain ⟨c, s₁, hg, h⟩ := h
+  simp only [get, getThe, MonadStateOf.get, EStateM.get, EStateM.Result.ok.injEq] at hg
+  obtain ⟨rfl, rfl⟩ := hg
+  cases he : exportsError? s names with
+  | some pm => simp [he] at h
+  | none =>
+    simp only [he, pure_bind, pure_ok] at h
+    exact ⟨h.1.symm, h.2.symm⟩
+
+/-- `translateDecls` translates each declaration, after it checks that no
+name is in two export lists. -/
+theorem translateDecls_ok {m : Module} {s s' : Ctx} {ds : List IR.Decl}
+    (h : translateDecls m s = .ok ds s') :
+    ∃ os, m.decls.mapM translateDecl s = .ok os s' ∧ ds = os.filterMap id := by
+  simp only [translateDecls] at h
+  cases hd : duplicateExport? m with
+  | some n => simp [hd] at h
+  | none =>
+    simp only [hd, pure_bind, bind_ok, pure_ok] at h
+    obtain ⟨os, s₁, hos, rfl, rfl⟩ := h
+    exact ⟨os, hos, rfl⟩
+
+/-- A function of `c.withExports L` is one of `c`, exported there or named by
+`L` without `type`. -/
+theorem mem_withExports_functions {c : Ctx} {L : List ImportName} {g : FnInfo}
+    (h : g ∈ (c.withExports L).functions) :
+    ∃ f ∈ c.functions, g.name = f.name ∧ g.file = f.file ∧
+      (g.exported = true → f.exported = true ∨ f.name ∈ (L.filter (!·.typeOnly)).map (·.name)) := by
+  simp only [Ctx.withExports, List.mem_map] at h
+  obtain ⟨f, hf, rfl⟩ := h
+  refine ⟨f, hf, ?_⟩
+  split
+  · rename_i hm
+    simp only [Bool.and_eq_true, beq_iff_eq, List.contains_iff_mem] at hm
+    exact ⟨rfl, rfl, fun _ => .inr hm.2⟩
+  · exact ⟨rfl, rfl, .inl⟩
+
+/-- A name that an export list of `m` names without `type`. -/
+theorem listsExport_of {m : Module} {name : String}
+    (h : name ∈ ((exportListed m).filter (!·.typeOnly)).map (·.name)) : Eval.listsExport m name = true := by
+  simp only [List.mem_map, List.mem_filter, exportListed, List.mem_flatMap] at h
+  obtain ⟨n, ⟨⟨d, hd, hn⟩, ht⟩, rfl⟩ := h
+  simp only [Eval.listsExport, List.any_eq_true]
+  refine ⟨d, hd, ?_⟩
+  rcases d with _ | ⟨_, names, _ | _⟩ | _ | _ | _ | _ | _ <;> simp_all
+  exact ⟨n, hn, by simpa using ht⟩
+
 /-- What one declaration does to the state: it keeps the file and the
 interfaces, adds its functions at the end, and keeps their names distinct. A
 function that it adds as exported is one that it declares as exported. -/
@@ -418,6 +473,9 @@ theorem translateDecl_ok {d : Decl} {s s' : Ctx} {o : Option IR.Decl}
       simp only [List.mem_singleton] at hg
       subst hg
       exact .inl ⟨hfile, sp, ex, params, ret, body, by rw [hname]⟩
+  | exports sp names source =>
+    obtain ⟨rfl, rfl⟩ := translateExports_ok h
+    exact ⟨rfl, rfl, [], by simp, by simp [declRefs], id, by simp, by simp⟩
   | exportedVar sp decl => simp [translateDecl] at h
   | stmt st => simp [translateDecl] at h
 
@@ -513,6 +571,9 @@ theorem decls_ok : ∀ (ds : List Decl) (s s' : Ctx) (os : List (Option IR.Decl)
         obtain ⟨o', h₁, rfl⟩ := h₁
         obtain ⟨-, -, -, ⟨n, t, rfl⟩ | ⟨n, ms, rfl⟩ | ⟨n, f, ps, rfl⟩⟩ := translateAlias_ok h₁ <;>
           simpa [Eval.functions, IR.functions, List.filterMap_cons] using hrel
+      | exports sp names source =>
+        obtain ⟨rfl, rfl⟩ := translateExports_ok h₁
+        simpa [Eval.functions, IR.functions, List.filterMap_cons] using hrel
       | exportedVar sp decl => simp [translateDecl] at h₁
       | stmt st => simp [translateDecl] at h₁
 
@@ -747,7 +808,7 @@ inductive ProgramTranslation :
       ProgramTranslation p outs ifaces → start.file = file → start.functions = [] →
       start.interfaces = ifaces → translateDecls m start = .ok decls finish →
       ProgramTranslation (p ++ [(file, m)]) (outs ++ [(file, decls)])
-        (ifaces ++ [(file, finish.interface usesNumber numberVar)])
+        (ifaces ++ [(file, (finish.withExports (exportListed m)).interface usesNumber numberVar)])
 
 theorem lookup_append_some {β : Type} {k : String} {b : β} {l l' : List (String × β)}
     (h : l.lookup k = some b) : (l ++ l').lookup k = some b := by
@@ -790,8 +851,7 @@ theorem programTranslation_rel {p : Eval.Program} {outs : List (String × List I
     obtain ⟨hik, hok, hself, hfaith, hrel⟩ := ih P hnd.1 hP'
     have hPm : P.lookup file = some m := hP file m (by rw [lookup_append_none hnotin]; simp)
     -- The file's own translation.
-    simp only [translateDecls, bind_ok, pure_ok] at htr
-    obtain ⟨os, finish, hos, rfl, rfl⟩ := htr
+    obtain ⟨os, hos, rfl⟩ := translateDecls_ok htr
     obtain ⟨hf, hi, ⟨more, hfns', hrefs, hex, horig⟩, hnd', hrelm⟩ :=
       decls_ok m.decls start finish os (by rw [hifaces]; exact hself) hos
     rw [hfns, List.nil_append] at hfns'
@@ -815,7 +875,8 @@ theorem programTranslation_rel {p : Eval.Program} {outs : List (String × List I
           simp only [Option.some.injEq] at hti
           subst hti
           simp only [Ctx.interface, List.mem_filter, Bool.and_eq_true, beq_iff_eq] at hg
-          rw [hg.2.2, hf, hfile]
+          have hgf : g.file = finish.file := hg.2.2
+          rw [hgf, hf, hfile]
           exact (by simpa using hte : t = file).symm
         · simp at hti
     · intro t i hti g hg
@@ -830,11 +891,22 @@ theorem programTranslation_rel {p : Eval.Program} {outs : List (String × List I
           simp only [Option.some.injEq] at hti
           subst hti
           simp only [Ctx.interface, List.mem_filter, Bool.and_eq_true, beq_iff_eq] at hg
-          rw [hfns'] at hg
-          obtain ⟨sp, ps, r, b, hd⟩ := hex g hg.1 hg.2.1
+          obtain ⟨hgm, hge, hgf⟩ := hg
+          obtain ⟨f, hf₀, hn, hgf₀, hex'⟩ := mem_withExports_functions hgm
+          rw [hfns'] at hf₀
           refine ⟨m, hPm, ?_⟩
           simp only [Eval.exportsFunction, List.any_eq_true]
-          exact ⟨_, hd, by simp⟩
+          rcases hex' hge with he | hl
+          · obtain ⟨sp, ps, r, b, hd⟩ := hex f hf₀ he
+            exact ⟨_, hd, by simp [hn]⟩
+          · rcases horig f hf₀ with ⟨-, sp, ex, ps, r, b, hd⟩ | ⟨i, hi', -⟩
+            · refine ⟨_, hd, ?_⟩
+              simp [hn, listsExport_of hl]
+            · have hff : f.file = t := by
+                have hgf' : g.file = finish.file := hgf
+                rw [← hgf₀, hgf', hf, hfile]
+              rw [hff, hifaces, lookup_none_of_not_mem hkeys] at hi'
+              cases hi'
         · simp at hti
     · simp only [Eval.functionsOf, IR.functionsOf, List.flatMap_append, List.flatMap_cons,
         List.flatMap_nil, List.append_nil]

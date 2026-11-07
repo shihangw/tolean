@@ -373,6 +373,22 @@ theorem Decl.lineOK : ∀ d : Decl, ∀ l ∈ d.lines, LineOK l.2
       · exact Fine.word (by simp [identWord])
     exact LineOK.cons (by simp [keywordWord]) ((fine_enclose hn).line.append
       (LineOK.cons (by simp [identWord]) (LineOK.cons (by simp) (LineOK.word (by simp [punctWord])))))
+  | .exports _ names source, l, hl => by
+    simp [Decl.lines] at hl; subst hl
+    have hn : ∀ x ∈ names.map ImportName.words, Fine x := by
+      intro x hx
+      simp only [List.mem_map] at hx
+      obtain ⟨n, _, rfl⟩ := hx
+      unfold ImportName.words; split
+      · exact Fine.ofLine (by simp [identWord]) (LineOK.word (by simp [identWord]))
+      · exact Fine.word (by simp [identWord])
+    cases source with
+    | none =>
+      simpa [fromWords] using LineOK.cons (by simp [keywordWord]) ((fine_enclose hn).line.append
+        (LineOK.word (w := punctWord ";") (by simp [punctWord])))
+    | some src =>
+      simpa [fromWords] using LineOK.cons (by simp [keywordWord]) ((fine_enclose hn).line.append
+        (LineOK.cons (by simp [identWord]) (LineOK.cons (by simp) (LineOK.word (w := punctWord ";") (by simp [punctWord])))))
   | .function _ exported name params rt body, l, hl => by
     simp only [Decl.lines, List.mem_cons] at hl
     rcases hl with rfl | hl

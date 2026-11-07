@@ -346,6 +346,9 @@ deriving DecidableEq
 inductive Decl where
   /-- `import { a, b } from "source"`: named imports from another file. -/
   | «import» (span : Span) (names : List ImportName) (source : String)
+  /-- `export { a, type B }`, which exports declarations of the file, or
+  `export { a } from "source"`, which exports names of another file. -/
+  | exports (span : Span) (names : List ImportName) (source : Option String)
   /-- `body` is a `block`. -/
   | function (span : Span) (exported : Bool) (name : String) (params : List Param)
       (returnType : Option TypeExpr) (body : Stmt)
@@ -419,7 +422,7 @@ def Stmt.isBreak : Stmt → Bool
   | _ => false
 
 def Decl.span : Decl → Span
-  | .import s .. | .function s .. | .interface s .. | .typeAlias s .. | .exportedVar s _ => s
+  | .import s .. | .exports s .. | .function s .. | .interface s .. | .typeAlias s .. | .exportedVar s _ => s
   | .stmt st => st.span
 
 /-- `e` without the parentheses around it. -/
