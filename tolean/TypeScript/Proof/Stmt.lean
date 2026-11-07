@@ -979,7 +979,7 @@ theorem switchOf_eval {env : Translate.Env} {disc : Expr} {sw : SwitchOn} (h : s
         · simp only [Option.pure_def, Option.bind_some, Option.some.injEq] at h
           subst h
           simp only at hl hk
-          simp [Eval.eval, Eval.getProp, hl, hk]
+          simp [Eval.eval, Eval.getProp, hl, hk, Expr.optSpine]
         · simp at h
       · simp at h
     | _ => simp at h
