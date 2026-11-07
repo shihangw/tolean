@@ -276,7 +276,7 @@ the P2 steps. Steps with the same priority keep the order of their numbers.
    `export { … }` and re-exports, `as const` and `satisfies`, and `Record`
    over a union of string literals.
 3. **P1.** Generic functions and types whose type parameters have no
-   constraint, tuples, string enums and type guards.
+   constraint, tuples and type guards.
 4. **P0.** Callbacks that read only `const` values, the array methods without
    `sort`, indexing, and object spread. The parser already reads arrow
    functions whose body is an expression.
