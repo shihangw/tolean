@@ -562,7 +562,8 @@ def exprChanges : Expr → List String
       | _ => []
     own ++ exprChanges target ++ exprChanges value
   | .prefix _ _ (.ident _ name) | .postfix _ _ (.ident _ name) => [name]
-  | .prefix _ _ e | .postfix _ _ e | .paren _ e | .unary _ _ e | .member _ e _ | .optMember _ e _ =>
+  | .prefix _ _ e | .postfix _ _ e | .paren _ e | .unary _ _ e | .member _ e _ | .optMember _ e _
+  | .asConst _ e | .satisfies _ e _ =>
     exprChanges e
   | .call _ callee args =>
     let own := match callee with
@@ -879,6 +880,17 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
   let fuel + 1 := fuel | tooDeep
   match e with
   | .paren _ inner => translateExpr fuel env expected inner
+  -- Type stripping removes `as const`, which only keeps the literal types of
+  -- the value. The output types a literal by its context, as without it.
+  | .asConst _ inner => translateExpr fuel env expected inner
+  -- `satisfies T` types the value in the context of `T` and checks it
+  -- against `T`, and the value keeps its own type.
+  | .satisfies s inner type =>
+    let t ← translateType type
+    let code ← translateExpr fuel env (some t) inner
+    unless code.type.assignableTo t do
+      reject s "the value does not have the type that 'satisfies' names"
+    return code
   | .bigint _ text =>
     -- Typed, so Lean never defaults a numeral to `Nat`, where `0 - 1 = 0`.
     let v ← orReject (bigintValue? text) e.span "a bigint literal must be an integer"
@@ -1666,6 +1678,8 @@ def exprUsesNumber : Expr → Bool
   | .array _ es => exprsUseNumber es
   | .call _ f args => exprUsesNumber f || exprsUseNumber args
   | .paren _ e | .unary _ _ e | .prefix _ _ e | .postfix _ _ e => exprUsesNumber e
+  | .asConst _ e => exprUsesNumber e
+  | .satisfies _ e t => exprUsesNumber e || typeUsesNumber t
   | .index _ a b | .binary _ _ a b | .assign _ _ a b => exprUsesNumber a || exprUsesNumber b
   | .cond _ a b c => exprUsesNumber a || exprUsesNumber b || exprUsesNumber c
   | _ => false

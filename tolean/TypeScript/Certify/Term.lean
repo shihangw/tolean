@@ -100,6 +100,8 @@ def expr : Expr → String
   | .cond s t a b => s!"({ns}Expr.cond {span s} {expr t} {expr a} {expr b})"
   | .assign s op t v => s!"({ns}Expr.assign {span s} {assignOp op} {expr t} {expr v})"
   | .arrow s p ps b => s!"({ns}Expr.arrow {span s} {p} {list (ps.map param)} {expr b})"
+  | .asConst s e => s!"({ns}Expr.asConst {span s} {expr e})"
+  | .satisfies s e t => s!"({ns}Expr.satisfies {span s} {expr e} {typeExpr t})"
 
 def exprs : List Expr → List String
   | [] => []

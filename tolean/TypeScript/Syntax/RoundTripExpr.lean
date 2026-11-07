@@ -110,6 +110,30 @@ def leftOK (op : BinOp) : Expr → Bool
   | .unary .. => op != .exp
   | _ => true
 
+/-- What the operand `l` of `as const` or `satisfies T` must be: a binary
+operand binds at least as tightly as `<`, whose precedence they have, and
+the operand is no name that the parser refuses there. -/
+def leftOKType : Expr → Bool
+  | .binary _ op' _ _ => decide (BinOp.lt.precedence ≤ op'.precedence)
+  | e => !Parse.refusedBeforeType e
+
+/-- `e` ends in `as const` or `satisfies T`: it is one, or it is a binary node
+whose right operand ends in one. -/
+def Expr.endsInType : Expr → Bool
+  | .asConst .. | .satisfies .. => true
+  | .binary _ _ _ r => r.endsInType
+  | _ => false
+
+/-- An operator whose symbol starts with one of `Parse.typeEnders`, so that it
+may not follow `as const` or `satisfies T`. -/
+def BinOp.followsType : BinOp → Bool
+  | .lt | .shl | .bitOr | .bitAnd => false
+  | _ => true
+
+/-- The token after `as const` or `satisfies T` is none of `Parse.typeEnders`. -/
+def TypeOK (rest : List Token) : Prop :=
+  ∀ u ∈ rest.head?, ∀ p, u.kind = .punct p → p ∉ Parse.typeEnders
+
 /-- A name that an expression reads, or that a shorthand property binds. -/
 def exprName (n : String) : Bool := !Parse.refusedNames.contains n
 
@@ -158,13 +182,19 @@ def Expr.wfAt (T : Edition) : Level → Expr → Bool
     (parens || bareParam params) && params.all Param.wf && body.wfAt T .assign &&
       notFirst (.punct "{") body.tokens
   | .assign, e => e.wfAt T .cond
-  | .cond, .cond _ test a b => test.wfAt T (.bin 0) && a.wfAt T .assign && b.wfAt T .assign
+  | .cond, .cond _ test a b =>
+    test.wfAt T (.bin 0) && a.wfAt T .assign && b.wfAt T .assign && !test.endsInType
   | .cond, e => e.wfAt T (.bin 0)
   | .bin m, .binary _ op l r =>
     decide (m ≤ op.precedence) && op.allowedIn T && l.wfAt T (.bin m) && r.wfAt T (.bin (rhsPrec op)) &&
       leftOK op l &&
       (if op == .coalesce then !l.isLogical && !r.isLogical
-       else if op == .and || op == .or then !l.isCoalesce && !r.isCoalesce else true)
+       else if op == .and || op == .or then !l.isCoalesce && !r.isCoalesce else true) &&
+      (!l.endsInType || op.followsType)
+  | .bin m, .asConst _ e =>
+    decide (m ≤ BinOp.lt.precedence) && e.wfAt T (.bin m) && leftOKType e
+  | .bin m, .satisfies _ e t =>
+    decide (m ≤ BinOp.lt.precedence) && e.wfAt T (.bin m) && leftOKType e && t.wf
   | .bin _, e => e.wfAt T .unary
   | .unary, .unary _ _ arg => arg.wfAt T .unary
   | .unary, .prefix _ _ arg => arg.wfAt T .lhs && arg.isSimpleTarget
@@ -229,6 +259,8 @@ def Expr.afterOK (after : List TokenKind) : Expr → Bool
   | .assign _ op target value => target.afterOK (symbol op.symbol ++ value.tokens ++ after) &&
       value.afterOK after
   | .arrow _ _ _ body => body.afterOK after
+  | .asConst _ e => e.afterOK (.ident "as" :: .keyword "const" :: after)
+  | .satisfies _ e t => e.afterOK (.ident "satisfies" :: t.tokens ++ after)
   | .array _ elems => Expr.afterOKList (.punct "]" :: after) elems
   | .object _ props => Property.afterOKList (.punct "}" :: after) props
   | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => true
@@ -322,10 +354,25 @@ def EndsLhs (rest : List Token) : Prop :=
 def EndsPostfix (rest : List Token) : Prop :=
   EndsLhs rest ∧ ∀ u ∈ rest.head?, (u.kind = .punct "++" ∨ u.kind = .punct "--") → u.newlineBefore = true
 
+/-- No `as` or `satisfies` on the same line comes next, unless `m` is above the
+precedence of `<`, which they have. -/
+def NoTypeOp (m : Nat) (rest : List Token) : Prop :=
+  ∀ u ∈ rest.head?, Parse.isTypeOperator u = true → BinOp.lt.precedence < m
+
+/-- A token that is not a name is not `as` or `satisfies`. -/
+theorem noTypeOp_of {m : Nat} {x : Token} {r : List Token} (hx : ∀ n, x.kind ≠ .ident n) :
+    NoTypeOp m (x :: r) := by
+  intro u hu h
+  simp only [List.head?_cons, Option.mem_def, Option.some.injEq] at hu
+  subst hu
+  simp only [Parse.isTypeOperator, Token.isIdent, Bool.and_eq_true, Bool.or_eq_true, beq_iff_eq] at h
+  rcases h.1 with h' | h' <;> exact absurd h' (hx _)
+
 /-- Nor a binary operator of precedence `m` or more. -/
 def EndsBin (m : Nat) (rest : List Token) : Prop :=
-  EndsPostfix rest ∧ ∀ s, s.rest = rest →
-    ∃ o, Parse.peekBinaryOp s = .ok o s ∧ ∀ op w, o = some (op, w) → op.precedence < m
+  EndsPostfix rest ∧ (∀ s, s.rest = rest →
+    ∃ o, Parse.peekBinaryOp s = .ok o s ∧ ∀ op w, o = some (op, w) → op.precedence < m) ∧
+    NoTypeOp m rest
 
 /-- Nor a `?`. -/
 def EndsCond (rest : List Token) : Prop :=
@@ -364,8 +411,8 @@ theorem endsAssign_separator {u : Token} {r : List Token} {p : String} (hu : u.k
     (hp : p ∈ separators) : EndsAssign (u :: r) := by
   have hne : ∀ q, q ∉ separators → u.kind ≠ .punct q := fun q hq h => by
     rw [hu] at h; injection h with h; subst h; exact hq hp
-  refine ⟨⟨⟨⟨fun t ht => ?_, fun t ht => ?_⟩, fun s hs => ⟨none, peekBinaryOp_separator hs hu hp, by simp⟩⟩,
-    fun t ht => ?_⟩, fun t ht => ?_, fun s hs => peekAssignOp_separator hs hu hp⟩ <;>
+  refine ⟨⟨⟨⟨fun t ht => ?_, fun t ht => ?_⟩, fun s hs => ⟨none, peekBinaryOp_separator hs hu hp, by simp⟩,
+    noTypeOp_of (by simp [hu])⟩, fun t ht => ?_⟩, fun t ht => ?_, fun s hs => peekAssignOp_separator hs hu hp⟩ <;>
     simp at ht <;> subst ht
   · refine ⟨hne "." (by decide), hne "[" (by decide), hne "(" (by decide), hne "?." (by decide),
       fun h => absurd h (hne "!" (by decide))⟩
@@ -445,6 +492,12 @@ theorem Expr.first : ∀ e : Expr, ∃ k, e.tokens.head? = some k ∧ startsExpr
     obtain ⟨k, h, hk⟩ := Expr.first a
     exact ⟨k, by simp [Expr.tokens, Expr.words] at h ⊢; simp [h], hk⟩
   | .binary _ _ l _ => by
+    obtain ⟨k, h, hk⟩ := Expr.first l
+    exact ⟨k, by simp [Expr.tokens, Expr.words] at h ⊢; simp [h], hk⟩
+  | .asConst _ l => by
+    obtain ⟨k, h, hk⟩ := Expr.first l
+    exact ⟨k, by simp [Expr.tokens, Expr.words] at h ⊢; simp [h], hk⟩
+  | .satisfies _ l _ => by
     obtain ⟨k, h, hk⟩ := Expr.first l
     exact ⟨k, by simp [Expr.tokens, Expr.words] at h ⊢; simp [h], hk⟩
   | .cond _ t _ _ => by
@@ -548,16 +601,27 @@ theorem assignOp_head (op : AssignOp) :
     ∃ k ks, symbol op.symbol = k :: ks ∧ stopsPostfix k = true ∧ k ≠ .punct "?" ∧ k ≠ .punct "=>" := by
   cases op <;> simp [AssignOp.symbol, symbol, Lex.reservedWords, punctWord, stopsPostfix]
 
+theorem binOp_notIdent (op : BinOp) {k : TokenKind} {ks : List TokenKind} (h : symbol op.symbol = k :: ks)
+    (n : String) : k ≠ .ident n := by
+  cases op <;> simp [BinOp.symbol, symbol, Lex.reservedWords, punctWord, keywordWord] at h <;>
+    (try obtain ⟨rfl, -⟩ := h) <;> (try rw [← h.1]) <;> simp
+
+theorem assignOp_notIdent (op : AssignOp) {k : TokenKind} {ks : List TokenKind} (h : symbol op.symbol = k :: ks)
+    (n : String) : k ≠ .ident n := by
+  cases op <;> simp [AssignOp.symbol, symbol, Lex.reservedWords, punctWord] at h <;>
+    (try obtain ⟨rfl, -⟩ := h) <;> (try rw [← h.1]) <;> simp
+
 /-- A binary operator ends every level whose least precedence is above the
 operator's. -/
 theorem endsBin_binOp {op : BinOp} {m : Nat} {a : List Token} {u : Token} {r : List Token}
     (ha : a.map (·.kind) = symbol op.symbol) (hc : Chained a) (hu : startsExpr u.kind = true)
     (hm : op.precedence < m) : EndsBin m (a ++ u :: r) := by
   obtain ⟨k, ks, hk, hst⟩ := binOp_head op
+  have hni := binOp_notIdent op hk
   rw [hk] at ha
   obtain ⟨x, a', rfl, hx, _⟩ := List.map_eq_cons_iff.mp ha
   refine ⟨endsPostfix_of (hx ▸ hst), fun s hs => ⟨_, peekBinaryOp_op (op := op) hs (ha.trans hk.symm) hc hu,
-    fun op' w h => ?_⟩⟩
+    fun op' w h => ?_⟩, noTypeOp_of (fun n => hx ▸ hni n)⟩
   simp at h; obtain ⟨rfl, _⟩ := h; exact hm
 
 /-- An assignment's symbol ends a conditional expression. -/
@@ -565,19 +629,22 @@ theorem endsCond_assignOp {op : AssignOp} {a : List Token} {u : Token} {r : List
     (ha : a.map (·.kind) = symbol op.symbol) (hc : Chained a) (hu : startsExpr u.kind = true) :
     EndsCond (a ++ u :: r) := by
   obtain ⟨k, ks, hk, hst, hq, _⟩ := assignOp_head op
+  have hni := assignOp_notIdent op hk
   rw [hk] at ha
   obtain ⟨x, a', rfl, hx, _⟩ := List.map_eq_cons_iff.mp ha
   refine ⟨⟨endsPostfix_of (hx ▸ hst), fun s hs => ⟨_, peekBinaryOp_assignOp (op := op) hs (ha.trans hk.symm) hc hu,
-    fun op' w h => by simp at h⟩⟩, fun t ht => ?_⟩
+    fun op' w h => by simp at h⟩, noTypeOp_of (fun n => hx ▸ hni n)⟩, fun t ht => ?_⟩
   simp at ht; subst ht; rw [hx]; exact hq
 
 theorem endsBin_question {x : Token} {r : List Token} (hx : x.kind = .punct "?") : EndsBin 0 (x :: r) :=
-  ⟨endsPostfix_of (by simp [hx, stopsPostfix]), fun s hs => ⟨_, peekBinaryOp_question hs hx, by simp⟩⟩
+  ⟨endsPostfix_of (by simp [hx, stopsPostfix]), fun s hs => ⟨_, peekBinaryOp_question hs hx, by simp⟩,
+    noTypeOp_of (by simp [hx])⟩
 
 theorem EndsBin.mono {m m' : Nat} {rest : List Token} (h : EndsBin m rest) (hm : m ≤ m') : EndsBin m' rest :=
   ⟨h.1, fun s hs => by
-    obtain ⟨o, ho, hp⟩ := h.2 s hs
-    exact ⟨o, ho, fun op w e => Nat.lt_of_lt_of_le (hp op w e) hm⟩⟩
+    obtain ⟨o, ho, hp⟩ := h.2.1 s hs
+    exact ⟨o, ho, fun op w e => Nat.lt_of_lt_of_le (hp op w e) hm⟩,
+    fun u hu ht => Nat.lt_of_lt_of_le (h.2.2 u hu ht) hm⟩
 
 /-! ### Steps of the parser -/
 
@@ -628,7 +695,7 @@ def Expr.height : Expr → Nat
   | .index _ o i | .binary _ _ o i | .assign _ _ o i => max o.height i.height + 1
   | .call _ c as => max c.height (Expr.heightOf as) + 1
   | .cond _ t a b => max t.height (max a.height b.height) + 1
-  | .arrow _ _ _ b => b.height + 1
+  | .arrow _ _ _ b | .asConst _ b | .satisfies _ b _ => b.height + 1
   | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => 0
 
 def Expr.heightOf : List Expr → Nat
@@ -670,7 +737,7 @@ def Ends : Level → Expr → List Token → Prop
   | .assign, _ => EndsAssign
   | .cond, .cond .. => EndsAssign
   | .cond, _ => EndsCond
-  | .bin m, _ => EndsBin m
+  | .bin m, e => fun rest => EndsBin m rest ∧ (e.endsInType = true → TypeOK rest)
   | .unary, _ | .postfix, _ => EndsPostfix
   | .lhs, _ => EndsLhs
   | .primary, _ => fun _ => True
@@ -1647,7 +1714,8 @@ theorem Expr.isSimpleTarget_erase : ∀ e : Expr, e.erase.isSimpleTarget = e.isS
   | .paren _ i => by simp [Expr.erase, Expr.isSimpleTarget, Expr.isSimpleTarget_erase i]
   | .ident .. | .member .. | .index .. => by simp [Expr.erase, Expr.isSimpleTarget]
   | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .array .. | .object .. | .call .. | .optMember ..
-  | .unary .. | .prefix .. | .postfix .. | .binary .. | .cond .. | .assign .. | .arrow .. => by
+  | .unary .. | .prefix .. | .postfix .. | .binary .. | .cond .. | .assign .. | .arrow .. | .asConst ..
+  | .satisfies .. => by
     simp [Expr.erase, Expr.isSimpleTarget]
 
 theorem isSimpleTarget_of_erase {e e' : Expr} (h : e'.erase = e.erase) : e'.isSimpleTarget = e.isSimpleTarget := by
@@ -1852,17 +1920,19 @@ instance : LawfulBEq BinOp where
 
 /-- The operand that a chain of binary operators starts with. -/
 def binHead : Expr → Expr
-  | .binary _ _ l _ => binHead l
+  | .binary _ _ l _ | .asConst _ l | .satisfies _ l _ => binHead l
   | e => e
 
 /-- The words of the operators and right operands of a chain, after its head. -/
 def binSuffix : Expr → List Word
   | .binary _ op l r => binSuffix l ++ symbol op.symbol :: r.words
+  | .asConst _ l => binSuffix l ++ [identWord "as", keywordWord "const"]
+  | .satisfies _ l t => binSuffix l ++ identWord "satisfies" :: t.words
   | _ => []
 
 /-- The number of operators of a chain. -/
 def binSteps : Expr → Nat
-  | .binary _ _ l _ => binSteps l + 1
+  | .binary _ _ l _ | .asConst _ l | .satisfies _ l _ => binSteps l + 1
   | _ => 0
 
 /-- What may follow the last right operand of a chain. -/
@@ -1873,6 +1943,8 @@ def NextOp : Expr → List Token → Prop
 theorem words_bin (e : Expr) : e.words = (binHead e).words ++ binSuffix e := by
   cases e with
   | binary _ op l r => simp [binHead, binSuffix, Expr.words, words_bin l]
+  | asConst _ l => simp [binHead, binSuffix, Expr.words, words_bin l]
+  | satisfies _ l t => simp [binHead, binSuffix, Expr.words, words_bin l]
   | _ => simp [binHead, binSuffix]
 
 theorem wf_binHead {T : Edition} {m : Nat} (e : Expr) (h : e.wfAt T (.bin m) = true) :
@@ -1880,8 +1952,14 @@ theorem wf_binHead {T : Edition} {m : Nat} (e : Expr) (h : e.wfAt T (.bin m) = t
   cases e with
   | binary _ op l r =>
     simp only [Expr.wfAt, Bool.and_eq_true] at h
-    obtain ⟨⟨⟨⟨⟨_, _⟩, hl⟩, _⟩, _⟩, _⟩ := h
+    obtain ⟨⟨⟨⟨⟨⟨_, _⟩, hl⟩, _⟩, _⟩, _⟩, _⟩ := h
     simpa [binHead] using wf_binHead l hl
+  | asConst _ l =>
+    simp only [Expr.wfAt, Bool.and_eq_true] at h
+    simpa [binHead] using wf_binHead l h.1.2
+  | satisfies _ l t =>
+    simp only [Expr.wfAt, Bool.and_eq_true] at h
+    simpa [binHead] using wf_binHead l h.1.1.2
   | _ => simp_all [binHead, Expr.wfAt]
 
 theorem afterOK_binHead (e : Expr) (after : List TokenKind) (h : e.afterOK after = true) :
@@ -1890,11 +1968,19 @@ theorem afterOK_binHead (e : Expr) (after : List TokenKind) (h : e.afterOK after
   | binary _ op l r =>
     simp only [Expr.afterOK, Bool.and_eq_true] at h
     simpa [binHead, binSuffix, Expr.tokens] using afterOK_binHead l _ h.1.2
+  | asConst _ l =>
+    simp only [Expr.afterOK] at h
+    simpa [binHead, binSuffix, identWord, keywordWord] using afterOK_binHead l _ h
+  | satisfies _ l t =>
+    simp only [Expr.afterOK] at h
+    simpa [binHead, binSuffix, identWord, TypeExpr.tokens] using afterOK_binHead l _ h
   | _ => simpa [binHead, binSuffix] using h
 
 theorem height_binHead (e : Expr) : (binHead e).height ≤ e.height := by
   cases e with
   | binary _ op l r => have := height_binHead l; simp [binHead, Expr.height]; omega
+  | asConst _ l => have := height_binHead l; simp [binHead, Expr.height]; omega
+  | satisfies _ l t => have := height_binHead l; simp [binHead, Expr.height]; omega
   | _ => simp [binHead]
 
 theorem binSteps_le (e : Expr) : binSteps e ≤ (binSuffix e).flatten.length := by
@@ -1903,6 +1989,12 @@ theorem binSteps_le (e : Expr) : binSteps e ≤ (binSuffix e).flatten.length := 
     have := binSteps_le l
     obtain ⟨k, ks, hk, _⟩ := binOp_head op
     simp [binSteps, binSuffix, hk] at this ⊢; omega
+  | asConst _ l =>
+    have := binSteps_le l
+    simp [binSteps, binSuffix, identWord, keywordWord] at this ⊢; omega
+  | satisfies _ l t =>
+    have := binSteps_le l
+    simp [binSteps, binSuffix, identWord] at this ⊢; omega
   | _ => simp [binSteps]
 
 /-- The tokens after the head of a chain start with an operator, if there are any. -/
@@ -1913,6 +2005,14 @@ theorem binSuffix_first : ∀ e : Expr, (binSuffix e).flatten = [] ∨
     · obtain ⟨k, ks, hs, hk⟩ := binOp_head op
       exact .inr ⟨k, ks ++ r.words.flatten, by simp [binSuffix, h, hs], hk⟩
     · exact .inr ⟨k, ks ++ (symbol op.symbol ++ r.words.flatten), by simp [binSuffix, h], hk⟩
+  | .asConst _ l => by
+    rcases binSuffix_first l with h | ⟨k, ks, h, hk⟩
+    · exact .inr ⟨.ident "as", [.keyword "const"], by simp [binSuffix, h, identWord, keywordWord], rfl⟩
+    · exact .inr ⟨k, ks ++ [.ident "as", .keyword "const"], by simp [binSuffix, h, identWord, keywordWord], hk⟩
+  | .satisfies _ l t => by
+    rcases binSuffix_first l with h | ⟨k, ks, h, hk⟩
+    · exact .inr ⟨.ident "satisfies", t.words.flatten, by simp [binSuffix, h, identWord], rfl⟩
+    · exact .inr ⟨k, ks ++ (.ident "satisfies" :: t.words.flatten), by simp [binSuffix, h, identWord], hk⟩
   | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .array .. | .object ..
   | .paren .. | .member .. | .optMember .. | .index .. | .call .. | .unary .. | .prefix .. | .postfix ..
   | .cond .. | .assign .. | .arrow .. => .inl (by simp [binSuffix])
@@ -1944,19 +2044,147 @@ theorem precedence_lt_exp {op : BinOp} (h : op ≠ .exp) : op.precedence < BinOp
   cases op <;> simp_all [BinOp.precedence]
 
 /-- The loop stops before an operator that binds less tightly than `m`. -/
-theorem binStep_stop {pr : Nat → ParseM Expr} {start : Pos} {m : Nat} {acc : Expr} {s : ParseState}
-    (h : EndsBin m s.rest) : Parse.binaryStep pr start m acc s = .ok (acc, false) s := by
-  obtain ⟨o, ho, hp⟩ := h.2 s rfl
+theorem binStep_stop {pr : Nat → ParseM Expr} {pt : ParseM TypeExpr} {start : Pos} {m : Nat} {acc : Expr}
+    {s : ParseState} (h : EndsBin m s.rest) (hr : s.rest ≠ []) :
+    Parse.binaryStep pr pt start m acc s = .ok (acc, false) s := by
+  obtain ⟨o, ho, hp⟩ := h.2.1 s rfl
+  obtain ⟨u, r, hur⟩ := List.exists_cons_of_ne_nil hr
   simp only [Parse.binaryStep]
   rw [Parse.bind_eq ho]
   rcases o with _ | ⟨op, w⟩
-  · rfl
+  · have hnt := h.2.2 u (by simp [hur])
+    simp only [Parse.typeOperatorStep]
+    rw [Parse.bind_eq (Parse.peek_eq hur)]
+    by_cases ht : Parse.isTypeOperator u = true
+    · simp [ht, hnt ht, pure, EStateM.pure]
+    · simp [ht, pure, EStateM.pure]
   · have := hp op w rfl
     simp [this, pure, EStateM.pure]
 
+theorem peekBinaryOp_ident {s : ParseState} {x : Token} {r : List Token} {n : String} (hs : s.rest = x :: r)
+    (hx : x.kind = .ident n) : Parse.peekBinaryOp s = .ok none s := by
+  simp [Parse.peekBinaryOp, Parse.peek_eq hs, hx, bind, EStateM.bind, pure, EStateM.pure]
+
+/-- `as const`, which a token that is none of `typeEnders` follows. -/
+theorem asStep_go {pr : Nat → ParseM Expr} {pt : ParseM TypeExpr} {start : Pos} {m : Nat} {acc : Expr}
+    {s : ParseState} {x c u : Token} {r : List Token}
+    (hs : s.rest = x :: c :: u :: r) (hx : x.kind = .ident "as") (hxn : x.newlineBefore = false)
+    (hc : c.kind = .keyword "const") (hu : ∀ p, u.kind = .punct p → p ∉ Parse.typeEnders)
+    (hm : m ≤ BinOp.lt.precedence) (hacc : Parse.refusedBeforeType acc = false) :
+    Parse.binaryStep pr pt start m acc s =
+      .ok (.asConst ⟨start, c.span.stop⟩ acc, true) (past (past s x (c :: u :: r)) c (u :: r)) := by
+  have hnt : ¬ BinOp.lt.precedence < m := by omega
+  have hue : ¬ ∃ q, q ∈ Parse.typeEnders ∧ u.isPunct q = true := by
+    rintro ⟨q, hq, h⟩
+    simp only [Token.isPunct, beq_iff_eq] at h
+    exact hu q h hq
+  simp [Parse.binaryStep, peekBinaryOp_ident hs hx, Parse.typeOperatorStep, Parse.peek_eq hs,
+    Parse.isTypeOperator, Token.isIdent, hx, hxn, hnt, hacc, Parse.advance_eq hs,
+    Parse.peek_eq (s := past s x (c :: u :: r)) rfl,
+    Parse.advance_eq (s := past s x (c :: u :: r)) rfl, Parse.peek_eq (s := past (past s x (c :: u :: r)) c (u :: r)) rfl,
+    discard, Functor.mapConst, EStateM.map, Token.isKeyword, hc, Parse.refuseAfterType, hue, Parse.spanFrom,
+    bind, EStateM.bind, pure, EStateM.pure, get, getThe, MonadStateOf.get, EStateM.get]
+
+/-- `satisfies T`, where `pt` reads `T`, which a token that is none of
+`typeEnders` follows. -/
+theorem satisfiesStep_go {pr : Nat → ParseM Expr} {pt : ParseM TypeExpr} {start : Pos} {m : Nat} {acc : Expr}
+    {s s₁ : ParseState} {x u : Token} {r rest : List Token} {t : TypeExpr}
+    (hs : s.rest = x :: rest) (hne : rest ≠ []) (hx : x.kind = .ident "satisfies") (hxn : x.newlineBefore = false)
+    (hp : pt (past s x rest) = .ok t s₁) (hs₁ : s₁.rest = u :: r)
+    (hu : ∀ p, u.kind = .punct p → p ∉ Parse.typeEnders) (hm : m ≤ BinOp.lt.precedence)
+    (hacc : Parse.refusedBeforeType acc = false) :
+    Parse.binaryStep pr pt start m acc s = .ok (.satisfies ⟨start, s₁.lastStop⟩ acc t, true) s₁ := by
+  have hnt : ¬ BinOp.lt.precedence < m := by omega
+  have hue : ¬ ∃ q, q ∈ Parse.typeEnders ∧ u.isPunct q = true := by
+    rintro ⟨q, hq, h⟩
+    simp only [Token.isPunct, beq_iff_eq] at h
+    exact hu q h hq
+  simp [Parse.binaryStep, peekBinaryOp_ident hs hx, Parse.typeOperatorStep, Parse.peek_eq hs,
+    Parse.isTypeOperator, Token.isIdent, hx, hxn, hnt, hacc, Parse.advance_cons hs hne, hp, Parse.peek_eq hs₁,
+    discard, Functor.mapConst, EStateM.map, Parse.refuseAfterType, hue, Parse.spanFrom,
+    bind, EStateM.bind, pure, EStateM.pure, get, getThe, MonadStateOf.get, EStateM.get]
+
+theorem refusedBeforeType_of_erase {e e' : Expr} (h : e'.erase = e.erase) :
+    Parse.refusedBeforeType e' = Parse.refusedBeforeType e := by
+  cases e <;> cases e' <;> simp_all [Expr.erase, Parse.refusedBeforeType]
+
+theorem leftOKType_refused {l : Expr} (h : leftOKType l = true) : Parse.refusedBeforeType l = false := by
+  cases l <;> simp_all [leftOKType, Parse.refusedBeforeType]
+
+/-- An operator that `BinOp.followsType` allows may follow a type. -/
+theorem typeOK_binOp {op : BinOp} {a rest : List Token} (h : op.followsType = true)
+    (ha : a.map (·.kind) = symbol op.symbol) : TypeOK (a ++ rest) := by
+  intro u hu p hp hmem
+  cases a with
+  | nil => cases op <;> simp [BinOp.symbol, symbol, Lex.reservedWords, punctWord, keywordWord] at ha
+  | cons x a' =>
+    simp only [List.cons_append, List.head?_cons, Option.mem_def, Option.some.injEq] at hu
+    obtain rfl := hu
+    simp only [List.map_cons] at ha
+    simp only [Parse.typeEnders, List.mem_cons, List.not_mem_nil, or_false] at hmem
+    cases op <;> simp [BinOp.followsType] at h <;>
+      simp [BinOp.symbol, symbol, Lex.reservedWords, punctWord, keywordWord, hp] at ha <;>
+      (try obtain ⟨ha, -⟩ := ha) <;> subst ha <;> simp at hmem
+
+theorem typeOK_cons {u : Token} {r : List Token} (h : TypeOK (u :: r)) :
+    ∀ p, u.kind = .punct p → p ∉ Parse.typeEnders := h u rfl
+
+theorem noTypeOk_ident {x : Token} {r : List Token} {n : String} (hx : x.kind = .ident n) : TypeOK (x :: r) := by
+  intro u hu p hp
+  simp only [List.head?_cons, Option.mem_def, Option.some.injEq] at hu
+  subst hu; rw [hx] at hp; cases hp
+
+/-- What ends a conditional expression ends one that ends in a type. -/
+theorem typeOK_of_endsCond {rest : List Token} (h : EndsCond rest) : TypeOK rest := by
+  intro u hu p hp hmem
+  cases rest with
+  | nil => simp at hu
+  | cons x r =>
+    simp only [List.head?_cons, Option.mem_def, Option.some.injEq] at hu
+    obtain rfl := hu
+    have hl := h.1.1.1 x rfl
+    have hq := h.2 x rfl
+    obtain ⟨o, ho, hop⟩ := h.1.2.1 { rest := x :: r, left := 0, eof := x } rfl
+    simp only [Parse.typeEnders, List.mem_cons, List.not_mem_nil, or_false] at hmem
+    rcases hmem with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl
+    all_goals first
+      | exact hq hp
+      | exact hl.1 hp
+      | exact hl.2.1 hp
+      | exact hl.2.2.1 hp
+      | (simp [Parse.peekBinaryOp, Parse.peek, Parse.peekAt, hp, BinOp.ofSymbol?, BinOp.all, BinOp.symbol, bind,
+            EStateM.bind, pure, EStateM.pure, get, getThe, MonadStateOf.get, EStateM.get] at ho
+         subst ho; exact absurd (hop _ _ rfl) (Nat.not_lt_zero _))
+
+theorem followsType_of {u : Token} {r : List Token} (h : ∀ p, u.kind = .punct p → p ∉ Parse.typeEnders) :
+    FollowsType (u :: r) := by
+  refine ⟨⟨fun t ht => ?_, fun t ht => ?_⟩, fun t ht => ?_⟩ <;> simp at ht <;> subst ht
+  · exact ⟨fun e => h "<" e (by decide), fun e => h "." e (by decide)⟩
+  · exact fun e => h "[" e (by decide)
+  · exact ⟨fun e => h "|" e (by decide), fun e => h "&" e (by decide)⟩
+
+/-- `as` or `satisfies` ends the right operand of an operator that binds
+more tightly than `<`. -/
+theorem endsBin_typeOp {k : Nat} {x : Token} {r : List Token} {n : String} (hx : x.kind = .ident n)
+    (hk : BinOp.lt.precedence < k) : EndsBin k (x :: r) :=
+  ⟨endsPostfix_of (by simp [hx, stopsPostfix]), fun s hs => ⟨none, peekBinaryOp_ident hs hx, by simp⟩,
+    fun _ _ _ => hk⟩
+
+theorem nextOp_type {l : Expr} (hl : leftOKType l = true) {x : Token} {r : List Token} {n : String}
+    (hx : x.kind = .ident n) : NextOp l (x :: r) := by
+  cases l with
+  | binary sp op' l' r' =>
+    simp only [leftOKType, decide_eq_true_eq] at hl
+    refine endsBin_typeOp hx ?_
+    unfold rhsPrec
+    split
+    · rename_i h; simp at h; subst h; simp [BinOp.precedence]
+    · omega
+  | _ => trivial
+
 
 /-- One operator and its right operand, which `pr` reads. -/
-theorem binStep_go {pr : Nat → ParseM Expr} {start : Pos} {m : Nat} {acc rhs : Expr}
+theorem binStep_go {pr : Nat → ParseM Expr} {pt : ParseM TypeExpr} {start : Pos} {m : Nat} {acc rhs : Expr}
     {s s₁ s₂ : ParseState} {op : BinOp} {a b : List Token}
     (hs : s.rest = a ++ b) (ha : a.map (·.kind) = symbol op.symbol) (hc : Chained a)
     (hb : ∃ u r, b = u :: r ∧ startsExpr u.kind = true) (hm : m ≤ op.precedence)
@@ -1967,7 +2195,7 @@ theorem binStep_go {pr : Nat → ParseM Expr} {start : Pos} {m : Nat} {acc rhs :
     (hp : pr (rhsPrec op) s₁ = .ok rhs s₂)
     (hmix : ((op == .coalesce && (acc.isLogical || rhs.isLogical)) ||
       ((op == .and || op == .or) && (acc.isCoalesce || rhs.isCoalesce))) = false) :
-    Parse.binaryStep pr start m acc s = .ok (.binary ⟨start, s₂.lastStop⟩ op acc rhs, true) s₂ := by
+    Parse.binaryStep pr pt start m acc s = .ok (.binary ⟨start, s₂.lastStop⟩ op acc rhs, true) s₂ := by
   obtain ⟨u, r, rfl, hu⟩ := hb
   have hpk := peekBinaryOp_op hs ha hc hu
   obtain ⟨k, ks, hk, _⟩ := binOp_head op
@@ -2033,20 +2261,21 @@ theorem nextOp_left {op : BinOp} {l : Expr} (hl : leftOK op l = true) {a : List 
 
 /-- The loop of `parseBinary` reads the operators and right operands of a
 chain after its head, and goes on with what follows them. -/
-theorem bin_loop {T : Edition} {pr : Nat → ParseM Expr} {start : Pos} {m H : Nat}
-    (hR : ∀ (x : Expr) (k : Nat), x.height < H → x.wfAt T (.bin k) = true → ReadsE T (pr k) x (EndsBin k)) :
+theorem bin_loop {T : Edition} {pr : Nat → ParseM Expr} {pt : ParseM TypeExpr} {start : Pos} {m H K : Nat}
+    (hR : ∀ (x : Expr) (k : Nat), x.height < H → x.wfAt T (.bin k) = true → ReadsE T (pr k) x (Ends (.bin k) x))
+    (hTy : ∀ t : TypeExpr, t.wf = true → t.tokens.length ≤ K → Reads pt t FollowsType) :
     ∀ (e : Expr), e.wfAt T (.bin m) = true → e.height ≤ H →
       ∀ (n : Nat) (acc : Expr) (s : ParseState) (ts rest : List Token),
       acc.erase = (binHead e).erase → s.target = T → s.rest = ts ++ rest → s.left = s.rest.length →
-      Touching ts (binSuffix e) → (∀ y ∈ ts, NoBreak y) → rest ≠ [] →
-      NextOp e rest → e.afterOK (rest.map (·.kind)) = true →
-      ∃ e' s', Parse.iterate (n + binSteps e) acc (Parse.binaryStep pr start m) s =
-        Parse.iterate n e' (Parse.binaryStep pr start m) s' ∧ e'.erase = e.erase ∧ Leaves s s' rest := by
-  intro e he hH n acc s ts rest hacc hT hs hl ht hn hr hnext ha
+      Touching ts (binSuffix e) → (∀ y ∈ ts, NoBreak y) → rest ≠ [] → ts.length ≤ K →
+      NextOp e rest → (e.endsInType = true → TypeOK rest) → e.afterOK (rest.map (·.kind)) = true →
+      ∃ e' s', Parse.iterate (n + binSteps e) acc (Parse.binaryStep pr pt start m) s =
+        Parse.iterate n e' (Parse.binaryStep pr pt start m) s' ∧ e'.erase = e.erase ∧ Leaves s s' rest := by
+  intro e he hH n acc s ts rest hacc hT hs hl ht hn hr hK hnext hTR ha
   cases e with
   | binary sp op l r =>
     simp only [Expr.wfAt, Bool.and_eq_true, decide_eq_true_eq] at he
-    obtain ⟨⟨⟨⟨⟨hm, hA⟩, hlw⟩, hrw⟩, hlo⟩, hmix⟩ := he
+    obtain ⟨⟨⟨⟨⟨⟨hm, hA⟩, hlw⟩, hrw⟩, hlo⟩, hmix⟩, htl⟩ := he
     have hHl : l.height ≤ H := by simp [Expr.height] at hH; omega
     have hHr : r.height < H := by simp [Expr.height] at hH; omega
     simp only [binSuffix] at ht
@@ -2055,9 +2284,11 @@ theorem bin_loop {T : Edition} {pr : Nat → ParseM Expr} {start : Pos} {m H : N
     obtain ⟨u, b', rfl, hu⟩ := Touching.head hb
     simp only [Expr.afterOK, Bool.and_eq_true] at ha
     obtain ⟨⟨hclose, hla⟩, hra⟩ := ha
-    obtain ⟨l', s₁, hit, hel, hL⟩ := bin_loop (start := start) hR l hlw hHl (n + 1) acc s lts (a ++ u :: (b' ++ rest))
+    obtain ⟨l', s₁, hit, hel, hL⟩ := bin_loop (start := start) hR hTy l hlw hHl (n + 1) acc s lts
+      (a ++ u :: (b' ++ rest))
       (by simpa [binHead] using hacc) hT (by simp [hs]) hl hlt (fun y hy => hn y (by simp [hy]))
-      (by simp) (nextOp_left hlo ha' (hc.chained ha') hu)
+      (by simp) (by simp at hK; omega) (nextOp_left hlo ha' (hc.chained ha') hu)
+      (fun hle => typeOK_binOp (by simpa [hle] using htl) ha')
       (by rw [List.map_append, ha', ← List.cons_append, List.map_append, hb.kinds]
           simpa [Expr.tokens, List.append_assoc] using hla)
     have hs₁ : s₁.rest = a ++ u :: (b' ++ rest) := hL.rest_eq
@@ -2066,7 +2297,8 @@ theorem bin_loop {T : Edition} {pr : Nat → ParseM Expr} {start : Pos} {m H : N
     have hl₁' : s₁'.left = s₁'.rest.length := by rw [hLk.left_eq, hLk.rest_eq]
     obtain ⟨r', s₂, hpr, her, hLr⟩ := hR r (rhsPrec op) hHr hrw s₁' (u :: b') rest
       (hLk.target_eq.trans (hL.target_eq.trans hT)) (by simpa using hLk.rest_eq) hl₁' hb
-      (fun y hy => hn y (by simp at hy ⊢; simp [hy])) hr hnext hra
+      (fun y hy => hn y (by simp at hy ⊢; simp [hy])) hr ⟨hnext, fun h => hTR (by simpa [Expr.endsInType] using h)⟩
+      hra
     have hexp : op = .exp → ∀ sp o x, l' ≠ .unary sp o x := fun h =>
       notUnary_of_erase hel (leftOK_exp (h ▸ hlo))
     have hlt' : op = .lt ∨ op = .shl → Parse.closesTypeArguments 0 (u :: (b' ++ rest)) = false := by
@@ -2083,10 +2315,66 @@ theorem bin_loop {T : Edition} {pr : Nat → ParseM Expr} {start : Pos} {m H : N
         ((op == .and || op == .or) && (l'.isCoalesce || r'.isCoalesce))) = false := by
       rw [isLogical_of_erase hel, isLogical_of_erase her, isCoalesce_of_erase hel, isCoalesce_of_erase her]
       cases op <;> simp at hmix ⊢ <;> exact hmix
-    have hstep := binStep_go (pr := pr) (start := start) (m := m) (acc := l') hs₁ ha' (hc.chained ha')
+    have hstep := binStep_go (pr := pr) (pt := pt) (start := start) (m := m) (acc := l') hs₁ ha' (hc.chained ha')
       ⟨u, b' ++ rest, rfl, hu⟩ hm hexp hlt' hT' hsk hpr hmix'
     refine ⟨.binary ⟨start, s₂.lastStop⟩ op l' r', s₂, ?_, by simp [Expr.erase, hel, her], leaves_trans hL (leaves_trans hLk hLr)⟩
     rw [show n + binSteps (.binary sp op l r) = (n + 1) + binSteps l by simp [binSteps]; omega, hit,
+      Parse.iterate_true hstep]
+  | asConst sp l =>
+    simp only [Expr.wfAt, Bool.and_eq_true, decide_eq_true_eq] at he
+    obtain ⟨⟨hm, hlw⟩, hlo⟩ := he
+    have hHl : l.height ≤ H := by simp [Expr.height] at hH; omega
+    simp only [binSuffix] at ht
+    obtain ⟨lts, more, rfl, hlt, hmore⟩ := Touching.append_split ht
+    obtain ⟨x, more', rfl, hx, hmore'⟩ := Touching.cons_one (by simpa [identWord] using hmore)
+    obtain ⟨c, more'', rfl, hc, hmore''⟩ := Touching.cons_one (by simpa [keywordWord] using hmore')
+    have : more'' = [] := by simpa [Touching] using hmore''
+    subst this
+    obtain ⟨u, r, rfl⟩ := List.exists_cons_of_ne_nil hr
+    simp only [Expr.afterOK] at ha
+    have hat := typeOK_cons (hTR rfl)
+    obtain ⟨l', s₁, hit, hel, hL⟩ := bin_loop (start := start) hR hTy l hlw hHl (n + 1) acc s lts
+      (x :: c :: u :: r) (by simpa [binHead] using hacc) hT (by simp [hs]) hl hlt
+      (fun y hy => hn y (by simp [hy])) (by simp) (by simp at hK; omega) (nextOp_type hlo hx)
+      (fun _ => noTypeOk_ident hx) (by simpa [hx, hc] using ha)
+    have hs₁ : s₁.rest = x :: c :: u :: r := hL.rest_eq
+    have hl₁ : s₁.left = s₁.rest.length := by rw [hL.left_eq, hL.rest_eq]
+    have hxn : x.newlineBefore = false := hn x (by simp) (by rw [hx]; simp)
+    have hstep := asStep_go (pr := pr) (pt := pt) (start := start) (acc := l') hs₁ hx hxn hc
+      hat hm (by rw [refusedBeforeType_of_erase hel]; exact leftOKType_refused hlo)
+    refine ⟨.asConst ⟨start, c.span.stop⟩ l', _, ?_, by simp [Expr.erase, hel],
+      leaves_trans hL (leaves_trans (leaves_advance hs₁ hl₁) (leaves_advance rfl (by simp [hl₁, hs₁])))⟩
+    rw [show n + binSteps (.asConst sp l) = (n + 1) + binSteps l by simp [binSteps]; omega, hit,
+      Parse.iterate_true hstep]
+  | satisfies sp l t =>
+    simp only [Expr.wfAt, Bool.and_eq_true, decide_eq_true_eq] at he
+    obtain ⟨⟨⟨hm, hlw⟩, hlo⟩, htw⟩ := he
+    have hHl : l.height ≤ H := by simp [Expr.height] at hH; omega
+    simp only [binSuffix] at ht
+    obtain ⟨lts, more, rfl, hlt, hmore⟩ := Touching.append_split ht
+    obtain ⟨x, tts, rfl, hx, htts⟩ := Touching.cons_one (by simpa [identWord] using hmore)
+    obtain ⟨u, r, rfl⟩ := List.exists_cons_of_ne_nil hr
+    simp only [Expr.afterOK] at ha
+    have hat := typeOK_cons (hTR rfl)
+    obtain ⟨l', s₁, hit, hel, hL⟩ := bin_loop (start := start) hR hTy l hlw hHl (n + 1) acc s lts
+      (x :: (tts ++ u :: r)) (by simpa [binHead] using hacc) hT (by simp [hs]) hl hlt
+      (fun y hy => hn y (by simp [hy])) (by simp) (by simp at hK; omega) (nextOp_type hlo hx)
+      (fun _ => noTypeOk_ident hx)
+      (by rw [List.map_cons, List.map_append, htts.kinds, hx]; simpa [TypeExpr.tokens] using ha)
+    have hs₁ : s₁.rest = x :: (tts ++ u :: r) := hL.rest_eq
+    have hl₁ : s₁.left = s₁.rest.length := by rw [hL.left_eq, hL.rest_eq]
+    have hxn : x.newlineBefore = false := hn x (by simp) (by rw [hx]; simp)
+    have htk : tts.length ≤ K := by simp at hK; omega
+    have hlen : t.tokens.length ≤ K := by
+      rw [TypeExpr.tokens, ← htts.kinds, List.length_map]; exact htk
+    obtain ⟨t', s₂, hpt, het, hL₂⟩ := hTy t htw hlen (past s₁ x (tts ++ u :: r)) tts (u :: r) rfl
+      (by simp [hl₁, hs₁]) (by rw [htts.kinds]; rfl) (fun y hy => hn y (by simp [hy])) (by simp)
+      (followsType_of hat)
+    have hstep := satisfiesStep_go (pr := pr) (start := start) (acc := l') hs₁ (by simp) hx hxn hpt
+      hL₂.rest_eq hat hm (by rw [refusedBeforeType_of_erase hel]; exact leftOKType_refused hlo)
+    refine ⟨.satisfies ⟨start, s₂.lastStop⟩ l' t', s₂, ?_, by simp [Expr.erase, hel, het],
+      leaves_trans hL (leaves_trans (leaves_advance hs₁ hl₁) hL₂)⟩
+    rw [show n + binSteps (.satisfies sp l t) = (n + 1) + binSteps l by simp [binSteps]; omega, hit,
       Parse.iterate_true hstep]
   | _ =>
     simp [binSuffix, Touching] at ht; subst ht
@@ -2098,8 +2386,8 @@ theorem bin_loop {T : Edition} {pr : Nat → ParseM Expr} {start : Pos} {m H : N
 theorem parseBinary_reads {T : Edition} (f m : Nat) (e : Expr) (he : e.wfAt T (.bin m) = true)
     (hU : ReadsE T (Parse.parseUnary f) (binHead e) EndsPostfix)
     (hR : ∀ (x : Expr) (k : Nat), x.height < e.height → x.wfAt T (.bin k) = true →
-      ReadsE T (Parse.parseBinary f k) x (EndsBin k)) :
-    ReadsE T (Parse.parseBinary (f + 1) m) e (EndsBin m) := by
+      ReadsE T (Parse.parseBinary f k) x (Ends (.bin k) x)) :
+    ReadsE T (Parse.parseBinary (f + 1) m) e (Ends (.bin m) e) := by
   intro s ts rest hT hs hl ht hn hr hends ha
   rw [words_bin] at ht
   obtain ⟨hts, sts, rfl, hht, hst⟩ := Touching.append_split ht
@@ -2108,7 +2396,7 @@ theorem parseBinary_reads {T : Edition} (f m : Nat) (e : Expr) (he : e.wfAt T (.
   have hEnd : EndsPostfix (sts ++ rest) := by
     rcases binSuffix_first e with h | ⟨k, ks, h, hk⟩
     · have : sts = [] := by have := hst.kinds; rw [h] at this; simpa using this
-      subst this; simpa using hends.1
+      subst this; simpa using hends.1.1
     · obtain ⟨y, sts', rfl, hy, _⟩ := List.map_eq_cons_iff.mp (hst.kinds.trans h)
       exact endsPostfix_of (hy ▸ hk)
   obtain ⟨h', s₁, hp, heh, hL⟩ := hU s (x :: hts') (sts ++ rest) hT (by simp [hs]) hl hht
@@ -2125,15 +2413,22 @@ theorem parseBinary_reads {T : Edition} (f m : Nat) (e : Expr) (he : e.wfAt T (.
     cases e with
     | binary sp op l r =>
       simp only [Expr.wfAt, Bool.and_eq_true, decide_eq_true_eq] at he
-      exact hends.mono (Nat.le_trans he.1.1.1.1.1 (le_rhsPrec op))
+      exact hends.1.mono (Nat.le_trans he.1.1.1.1.1.1 (le_rhsPrec op))
     | _ => trivial
+  have hTy : ∀ t : TypeExpr, t.wf = true → t.tokens.length ≤ sts.length →
+      Reads (Parse.parseType (10 * (s₁.left + 1))) t FollowsType := by
+    intro t ht hlen
+    have h1 := TypeExpr.height_le t
+    have h2 : sts.length ≤ s₁.left := by rw [hl₁, hL.rest_eq, List.length_append]; omega
+    exact (types_reads _).1 t ht (by omega)
   obtain ⟨e', s₂, hit, he', hL₂⟩ := bin_loop (pr := Parse.parseBinary f) (start := x.span.start) (m := m)
-    (H := e.height) hR e he (Nat.le_refl _) (k + 1) h' s₁ sts rest heh (hL.target_eq.trans hT) hL.rest_eq hl₁
-    hst (fun y hy => hn y (List.mem_append_right _ hy)) hr hnext ha
+    (H := e.height) hR hTy e he (Nat.le_refl _) (k + 1) h' s₁ sts rest heh (hL.target_eq.trans hT) hL.rest_eq hl₁
+    hst (fun y hy => hn y (List.mem_append_right _ hy)) hr (Nat.le_refl _) hnext hends.2 ha
   refine ⟨e', s₂, ?_, he', leaves_trans hL hL₂⟩
   simp only [Parse.parseBinary]
-  rw [Parse.bind_eq (Parse.peek_eq hs'), Parse.bind_eq (Parse.budget_eq _), Parse.bind_eq hp, hk, hit,
-    Parse.iterate_false (binStep_stop (by rw [hL₂.rest_eq]; exact hends))]
+  rw [Parse.bind_eq (Parse.peek_eq hs'), Parse.bind_eq (Parse.budget_eq _), Parse.bind_eq hp,
+    Parse.bind_eq (Parse.budget_eq _), hk, hit,
+    Parse.iterate_false (binStep_stop (by rw [hL₂.rest_eq]; exact hends.1) (by rw [hL₂.rest_eq]; exact hr))]
 
 theorem wfAt_cond_eq {T : Edition} {e : Expr} (h : ∀ sp t a b, e ≠ .cond sp t a b) :
     e.wfAt T .cond = e.wfAt T (.bin 0) := by
@@ -2150,7 +2445,7 @@ theorem ends_cond_eq {e : Expr} (h : ∀ sp t a b, e ≠ .cond sp t a b) : Ends 
 /-- A conditional expression, or what `parseBinary` reads. -/
 theorem parseConditional_reads {T : Edition} (f : Nat) (e : Expr) (he : e.wfAt T .cond = true)
     (hB : ∀ x : Expr, x.height ≤ e.height → x.wfAt T (.bin 0) = true →
-      ReadsE T (Parse.parseBinary f 0) x (EndsBin 0))
+      ReadsE T (Parse.parseBinary f 0) x (Ends (.bin 0) x))
     (hA : ∀ x : Expr, x.height < e.height → x.wfAt T .assign = true →
       ReadsE T (Parse.parseAssign f) x EndsAssign) :
     ReadsE T (Parse.parseConditional (f + 1)) e (Ends .cond e) := by
@@ -2160,7 +2455,7 @@ theorem parseConditional_reads {T : Edition} (f : Nat) (e : Expr) (he : e.wfAt T
   by_cases hc : ∃ sp t a b, e = .cond sp t a b
   · obtain ⟨sp, t, a, b, rfl⟩ := hc
     simp only [Expr.wfAt, Bool.and_eq_true] at he
-    obtain ⟨⟨hwt, hwa⟩, hwb⟩ := he
+    obtain ⟨⟨⟨hwt, hwa⟩, hwb⟩, hnt⟩ := he
     simp only [Ends] at hends
     simp only [Expr.words, List.append_assoc, List.cons_append] at ht
     obtain ⟨tts, more, hsplit, htt, hmore⟩ := Touching.append_split ht
@@ -2173,7 +2468,7 @@ theorem parseConditional_reads {T : Edition} (f : Nat) (e : Expr) (he : e.wfAt T
     have hne : tts ≠ [] := by obtain ⟨_, _, rfl, _⟩ := Touching.head htt; simp
     obtain ⟨t', s₁, hpt, het, hL₁⟩ := hB t (by simp [Expr.height]; omega) hwt s tts
       (q :: (ats ++ c :: (bts ++ rest))) hT hs₀ hl htt (fun y hy => hn y (tail_sub hsplit hne (.inl hy))) (by simp)
-      (endsBin_question hq)
+      ⟨endsBin_question hq, fun h => by simp [h] at hnt⟩
       (by simpa [hq, hcolon, hat.kinds, hbt.kinds, Expr.tokens, List.append_assoc] using hat')
     have hs₁ : s₁.rest = q :: (ats ++ c :: (bts ++ rest)) := hL₁.rest_eq
     have hl₁ : s₁.left = s₁.rest.length := by rw [hL₁.left_eq, hL₁.rest_eq]
@@ -2203,7 +2498,8 @@ theorem parseConditional_reads {T : Edition} (f : Nat) (e : Expr) (he : e.wfAt T
   · have hne : ∀ sp t a b, e ≠ .cond sp t a b := fun sp t a b h' => hc ⟨sp, t, a, b, h'⟩
     have he' : e.wfAt T (.bin 0) = true := by rw [← wfAt_cond_eq hne]; exact he
     rw [ends_cond_eq hne] at hends
-    obtain ⟨e', s₁, hp, hee, hL₁⟩ := hB e (Nat.le_refl _) he' s (x :: ts') rest hT hs hl ht hn hr hends.1 ha
+    obtain ⟨e', s₁, hp, hee, hL₁⟩ := hB e (Nat.le_refl _) he' s (x :: ts') rest hT hs hl ht hn hr
+      ⟨hends.1, fun _ => typeOK_of_endsCond hends⟩ ha
     obtain ⟨u, r, rfl⟩ := List.exists_cons_of_ne_nil hr
     have hu : u.kind ≠ .punct "?" := hends.2 u rfl
     refine ⟨e', s₁, ?_, hee, hL₁⟩
@@ -2260,6 +2556,14 @@ theorem Expr.tokens_postfix (op : UpdateOp) (a : Expr) :
 theorem Expr.tokens_binary (op : BinOp) (l r : Expr) :
     (Expr.binary sp op l r).tokens = l.tokens ++ symbol op.symbol ++ r.tokens := by
   simp [Expr.tokens, Expr.words]
+
+theorem Expr.tokens_asConst (l : Expr) :
+    (Expr.asConst sp l).tokens = l.tokens ++ .ident "as" :: [.keyword "const"] := by
+  simp [Expr.tokens, Expr.words, identWord, keywordWord]
+
+theorem Expr.tokens_satisfies (l : Expr) (t : TypeExpr) :
+    (Expr.satisfies sp l t).tokens = l.tokens ++ .ident "satisfies" :: t.tokens := by
+  simp [Expr.tokens, Expr.words, identWord, TypeExpr.tokens]
 
 theorem Expr.tokens_cond (t a b : Expr) :
     (Expr.cond sp t a b).tokens = t.tokens ++ .punct "?" :: a.tokens ++ .punct ":" :: b.tokens := by
@@ -2356,6 +2660,14 @@ theorem Expr.second_ok : ∀ e : Expr, ∀ n k r, e.tokens = .ident n :: k :: r 
     obtain ⟨c, cs, hc, hck, _⟩ := secondOK_binOp op
     rw [hc] at h
     exact secondOK_append (by intro h'; simp [h'] at hx) (Expr.second_ok l) hck n k r (by simpa using h)
+  | .asConst _ l, n, k, r, h => by
+    rw [Expr.tokens_asConst] at h
+    obtain ⟨x, hx, _⟩ := Expr.first l
+    exact secondOK_append (by intro h'; simp [h'] at hx) (Expr.second_ok l) (by decide) n k r h
+  | .satisfies _ l t, n, k, r, h => by
+    rw [Expr.tokens_satisfies] at h
+    obtain ⟨x, hx, _⟩ := Expr.first l
+    exact secondOK_append (by intro h'; simp [h'] at hx) (Expr.second_ok l) (by decide) n k r h
   | .cond _ t a b, n, k, r, h => by
     simp only [Expr.tokens_cond, List.append_assoc, List.cons_append] at h
     obtain ⟨x, hx, _⟩ := Expr.first t
@@ -2372,7 +2684,7 @@ left operands, callees and objects that the tokens of `e` start with. -/
 def Expr.leftArrow : Expr → Bool
   | .arrow .. => true
   | .member _ o _ | .optMember _ o _ | .index _ o _ | .call _ o _ | .postfix _ _ o | .binary _ _ o _
-  | .cond _ o _ _ | .assign _ _ o _ => o.leftArrow
+  | .cond _ o _ _ | .assign _ _ o _ | .asConst _ o | .satisfies _ o _ => o.leftArrow
   | _ => false
 
 theorem arrowStart_cons {k : TokenKind} (hk : ∀ n, k ≠ .ident n) (hp : k ≠ .punct "(") (ks : List TokenKind) :
@@ -2449,6 +2761,12 @@ theorem Expr.arrowStart_false : ∀ e : Expr, e.leftArrow = false → ∀ after 
     rw [hc]
     simpa using arrowStart_append (b := cs ++ r.tokens ++ after)
       (Expr.arrowStart_false l (by simpa [Expr.leftArrow] using h)) hck
+  | .asConst _ l, h, after, _ => by
+    rw [Expr.tokens_asConst, List.append_assoc]
+    exact arrowStart_append (Expr.arrowStart_false l (by simpa [Expr.leftArrow] using h)) (by simp)
+  | .satisfies _ l t, h, after, _ => by
+    rw [Expr.tokens_satisfies, List.append_assoc]
+    exact arrowStart_append (Expr.arrowStart_false l (by simpa [Expr.leftArrow] using h)) (by simp)
   | .cond _ t a b, h, after, _ => by
     simp only [Expr.tokens_cond, List.append_assoc, List.cons_append]
     exact arrowStart_append (Expr.arrowStart_false t (by simpa [Expr.leftArrow] using h)) (by simp)
@@ -2477,8 +2795,26 @@ theorem Expr.leftArrow_wf {T : Edition} : ∀ (e : Expr) (level : Level), e.wfAt
     have : ∃ m, o.wfAt T (.bin m) = true := by
       cases level with
       | assign => exact absurd rfl hl
-      | cond => simp only [Expr.wfAt, Bool.and_eq_true] at h; exact ⟨0, h.1.1.1.2⟩
-      | bin m => simp only [Expr.wfAt, Bool.and_eq_true] at h; exact ⟨m, h.1.1.1.2⟩
+      | cond => simp only [Expr.wfAt, Bool.and_eq_true] at h; exact ⟨0, h.1.1.1.1.2⟩
+      | bin m => simp only [Expr.wfAt, Bool.and_eq_true] at h; exact ⟨m, h.1.1.1.1.2⟩
+      | _ => simp [Expr.wfAt] at h
+    obtain ⟨m, hm⟩ := this
+    simpa [Expr.leftArrow] using Expr.leftArrow_wf o (.bin m) hm (by simp)
+  | .asConst _ o, level, h, hl => by
+    have : ∃ m, o.wfAt T (.bin m) = true := by
+      cases level with
+      | assign => exact absurd rfl hl
+      | cond => simp only [Expr.wfAt, Bool.and_eq_true] at h; exact ⟨0, h.1.2⟩
+      | bin m => simp only [Expr.wfAt, Bool.and_eq_true] at h; exact ⟨m, h.1.2⟩
+      | _ => simp [Expr.wfAt] at h
+    obtain ⟨m, hm⟩ := this
+    simpa [Expr.leftArrow] using Expr.leftArrow_wf o (.bin m) hm (by simp)
+  | .satisfies _ o _, level, h, hl => by
+    have : ∃ m, o.wfAt T (.bin m) = true := by
+      cases level with
+      | assign => exact absurd rfl hl
+      | cond => simp only [Expr.wfAt, Bool.and_eq_true] at h; exact ⟨0, h.1.1.2⟩
+      | bin m => simp only [Expr.wfAt, Bool.and_eq_true] at h; exact ⟨m, h.1.1.2⟩
       | _ => simp [Expr.wfAt] at h
     obtain ⟨m, hm⟩ := this
     simpa [Expr.leftArrow] using Expr.leftArrow_wf o (.bin m) hm (by simp)
@@ -2486,7 +2822,7 @@ theorem Expr.leftArrow_wf {T : Edition} : ∀ (e : Expr) (level : Level), e.wfAt
     have : o.wfAt T (.bin 0) = true := by
       cases level with
       | assign => exact absurd rfl hl
-      | cond => simp [Expr.wfAt] at h; exact h.1.1
+      | cond => simp [Expr.wfAt] at h; exact h.1.1.1
       | _ => simp [Expr.wfAt] at h
     simpa [Expr.leftArrow] using Expr.leftArrow_wf o (.bin 0) this (by simp)
   | .assign .., level, h, hl => by cases level <;> simp_all [Expr.wfAt]
@@ -3129,6 +3465,12 @@ theorem Expr.neutral : ∀ e : Expr, Neutral e.tokens
   | .binary _ op l r => by
     have h := Neutral.append (Expr.neutral l) (Neutral.append (neutral_binOp op) (Expr.neutral r))
     simpa [Expr.tokens, Expr.words] using h
+  | .asConst _ l => by
+    have h := Neutral.append (Expr.neutral l) (Neutral.all (ks := [.ident "as", .keyword "const"]) (by simp))
+    rw [Expr.tokens_asConst]; exact h
+  | .satisfies _ l t => by
+    have h := Neutral.append (Expr.neutral l) (Neutral.cons (k := .ident "satisfies") (by simp) (TypeExpr.neutral t))
+    rw [Expr.tokens_satisfies]; exact h
   | .cond _ t a b => by
     have h := Neutral.append (Expr.neutral t) (Neutral.cons (k := .punct "?") (by simp)
       (Neutral.append (Expr.neutral a) (Neutral.cons (k := .punct ":") (by simp) (Expr.neutral b))))
@@ -3228,6 +3570,14 @@ theorem Expr.afterOK_congr : ∀ (e : Expr) {a b : List TokenKind}, AfterEquiv a
   | .postfix _ op x, a, b, h => by
     simp only [Expr.afterOK]
     exact Expr.afterOK_congr x (AfterEquiv.prepend (x := [.punct op.symbol]) (neutral_updateOp op) (by simp) h)
+  | .asConst _ x, a, b, h => by
+    simp only [Expr.afterOK]
+    have hc := Expr.afterOK_congr x (AfterEquiv.prepend (x := [.ident "as", .keyword "const"]) (Neutral.all (by simp))
+      (by simp) h)
+    simpa only [List.cons_append, List.nil_append] using hc
+  | .satisfies _ x t, a, b, h => by
+    simp only [Expr.afterOK]
+    exact Expr.afterOK_congr x (AfterEquiv.prepend (Neutral.cons (by simp) (TypeExpr.neutral t)) (by simp) h)
   | .cond _ t x y, a, b, h => by
     simp only [Expr.afterOK]
     have hy := AfterEquiv.prepend (x := .punct ":" :: y.tokens) (Neutral.cons (by simp) (Expr.neutral y))
@@ -3327,6 +3677,14 @@ theorem Expr.height_le : ∀ e : Expr, e.height ≤ e.tokens.length
   | .call _ c as => by
     have := Expr.height_le c; have := Expr.heightOf_le as
     rw [Expr.tokens_call]; simp only [Expr.height, List.length_cons, List.length_append, List.length_nil]
+    omega
+  | .asConst _ l => by
+    have := Expr.height_le l
+    rw [Expr.tokens_asConst]; simp only [Expr.height, List.length_cons, List.length_append, List.length_nil]
+    omega
+  | .satisfies _ l t => by
+    have := Expr.height_le l
+    rw [Expr.tokens_satisfies]; simp only [Expr.height, List.length_cons, List.length_append]
     omega
   | .unary _ op a => by
     have := Expr.height_le a; have := length_symbol_unaryOp op

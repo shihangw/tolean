@@ -208,6 +208,8 @@ class Gen {
       () => [...this.target(d), this.pick(['++', '--'])],
       () => [...this.arrowParams(d), this.pick(['=>', '=>', '=>', '\n=>']), ...this.arrowBody(d)],
       () => ['(', this.name(), this.pick([',', ':', ')']), ...this.expr(d), ')'],
+      () => [...this.expr(d), 'as', this.pick(['const', 'const', 'T'])],
+      () => [...this.expr(d), 'satisfies', ...this.type(d)],
     ])();
   }
 

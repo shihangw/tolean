@@ -343,12 +343,70 @@ def updateOp? (t : Token) : Option UpdateOp :=
   else if t.isPunct "--" then some .decrement
   else none
 
+/-- `as` or `satisfies` with no line break before it. `tsc` reads it after an
+operand as a binary operator with the precedence of `<`, whose right side is
+a type. After a line break, it starts the next statement. -/
+def isTypeOperator (t : Token) : Bool :=
+  (t.isIdent "as" || t.isIdent "satisfies") && !t.newlineBefore
+
+/-- The punctuators that may not follow `as const` or `satisfies T`. `tsc`
+reads a `<` as type arguments, and so a `<<` too, which it reads again as
+`<`. It reads a `|` or `&` as a part of the type, and a `?`
+can make the type nullable, so each of them could change the tree. `.`, `[`
+and `(` do not continue the expression in `tsc`, but type stripping leaves
+blanks in place of the type, so after a line break JavaScript could read the
+next line as a part of the operand, as in `x as const` followed by `[0]` on
+the next line. -/
+def typeEnders : List String := ["<", "<<", "?", "|", "&", "[", "(", "."]
+
+/-- Words that start a declaration in `tsc` when a name follows them on the
+same line, as in `type T = …` or `declare const x: T`. -/
+def declarationWords : List String :=
+  ["type", "interface", "declare", "abstract", "namespace", "module", "global", "async", "using",
+   "accessor", "readonly", "override", "let"]
+
+/-- An operand that `as` or `satisfies` may not follow: one of
+`declarationWords`, which a name would then follow. At the start of a
+statement, `tsc` would read `type as const` as a declaration. -/
+def refusedBeforeType : Expr → Bool
+  | .ident _ w => declarationWords.contains w
+  | _ => false
+
+/-- Refuse a punctuator of `typeEnders` after `word`. -/
+def refuseAfterType (word : String) : ParseM Unit := do
+  let n ← peek
+  if typeEnders.any n.isPunct then
+    failAt n s!"tsc may read this token after '{word}' as a part of the type, or JavaScript as a part of the operand; put parentheses around the expression"
+
+/-- The step of the loop of `parseBinary` where no binary operator comes: `as
+const` or `satisfies T` after `lhs`, when `minPrec` allows an operator with
+the precedence of `<`. `parseTy` reads the type. Other type assertions stay
+refused, because `tsc` does not check them. -/
+def typeOperatorStep (parseTy : ParseM TypeExpr) (start : Pos) (minPrec : Nat) (lhs : Expr) :
+    ParseM (Expr × Bool) := do
+  let t ← peek
+  if !isTypeOperator t || BinOp.lt.precedence < minPrec then return (lhs, false)
+  if refusedBeforeType lhs then
+    failAt t "tsc may read this word and the name before it as the start of a declaration; put parentheses around the name"
+  discard advance
+  if t.isIdent "as" then
+    let c ← peek
+    unless c.isKeyword "const" do
+      failAt t "'as' is supported only in 'as const', because TypeScript does not check other type assertions"
+    discard advance
+    refuseAfterType "as const"
+    return (.asConst (← spanFrom start) lhs, true)
+  let type ← parseTy
+  refuseAfterType "satisfies"
+  return (.satisfies (← spanFrom start) lhs type, true)
+
 /-- One step of the loop of `parseBinary`, from `start` at `minPrec`: an
 operator of at least that precedence, and its right operand, which
-`parseRhs` reads at the precedence it is given. -/
-def binaryStep (parseRhs : Nat → ParseM Expr) (start : Pos) (minPrec : Nat) (lhs : Expr) :
-    ParseM (Expr × Bool) := do
-  let some (op, width) ← peekBinaryOp | return (lhs, false)
+`parseRhs` reads at the precedence it is given, or `as const` or `satisfies
+T`, whose type `parseTy` reads. -/
+def binaryStep (parseRhs : Nat → ParseM Expr) (parseTy : ParseM TypeExpr) (start : Pos) (minPrec : Nat)
+    (lhs : Expr) : ParseM (Expr × Bool) := do
+  let some (op, width) ← peekBinaryOp | typeOperatorStep parseTy start minPrec lhs
   if op.precedence < minPrec then return (lhs, false)
   let opToken ← peek
   if op == .exp && (lhs matches .unary ..) then
@@ -520,7 +578,7 @@ def parseConditional (fuel : Nat) : ParseM Expr := do
 def parseBinary (fuel : Nat) (minPrec : Nat) : ParseM Expr := do
   let fuel + 1 := fuel | outOfFuel
   let start := (← peek).span.start
-  iterate (← budget) (← parseUnary fuel) (binaryStep (parseBinary fuel) start minPrec)
+  iterate (← budget) (← parseUnary fuel) (binaryStep (parseBinary fuel) (parseType (← budget)) start minPrec)
 
 def parseUnary (fuel : Nat) : ParseM Expr := do
   let fuel + 1 := fuel | outOfFuel
