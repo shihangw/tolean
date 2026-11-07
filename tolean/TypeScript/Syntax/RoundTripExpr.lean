@@ -479,9 +479,6 @@ instance : ReflBEq Pos where
 instance : LawfulBEq Pos where
   eq_of_beq {a b} h := by cases a; cases b; simp [BEq.beq, instBEqPos.beq] at h; simp [h]
 
-theorem Parse.peekAt_rest (s : ParseState) (k : Nat) : Parse.peekAt k s = .ok (s.rest[k]?.getD s.eof) s := by
-  simp [Parse.peekAt, get, getThe, MonadStateOf.get, EStateM.get, bind, EStateM.bind, pure, EStateM.pure]
-
 theorem startsExpr_ne {k : TokenKind} (h : startsExpr k = true) : k ≠ .punct ">" ∧ k ≠ .punct "=" := by
   constructor <;> (intro e; subst e; simp [startsExpr] at h)
 
@@ -946,6 +943,15 @@ theorem TypeExpr.height_le : ∀ t : TypeExpr, t.height ≤ t.tokens.length
     have := TypeExpr.height_le m₁; have := TypeExpr.heightOf_le_bars (m₂ :: ms)
     rw [tokens_union]
     simp only [TypeExpr.height, TypeExpr.heightOf, List.length_append] at this ⊢; omega
+  | .tuple sp false es => by
+    have := TypeExpr.heightOf_le es
+    rw [tokens_tuple]; simp only [TypeExpr.height, List.length_cons, List.length_append, List.length_nil]
+    simp; omega
+  | .tuple sp true es => by
+    have := TypeExpr.heightOf_le es
+    rw [tokens_readonly, tokens_tuple]
+    simp only [TypeExpr.height, List.length_cons, List.length_append, List.length_nil]
+    simp; omega
   | .keyword .. | .null _ | .literal .. => by simp [TypeExpr.height]
 
 theorem TypeExpr.heightOf_le : ∀ ts : List TypeExpr, TypeExpr.heightOf ts ≤ (joined "," (ts.map TypeExpr.tokens)).length
@@ -3057,6 +3063,13 @@ theorem TypeExpr.neutral : ∀ t : TypeExpr, Neutral t.tokens
   | .null _ => Neutral.all (by simp [TypeExpr.tokens, TypeExpr.words, keywordWord])
   | .literal _ l => Neutral.all (by
       cases l <;> simp [TypeExpr.tokens, TypeExpr.words, LitType.words, keywordWord])
+  | .tuple sp false es => by
+    rw [tokens_tuple]
+    exact Neutral.enclosed (o := "[") (c := "]") (by simp) (by simp) (Neutral.join (TypeExpr.neutralAll es))
+  | .tuple sp true es => by
+    rw [tokens_readonly, tokens_tuple]
+    exact Neutral.cons (by simp)
+      (Neutral.enclosed (o := "[") (c := "]") (by simp) (by simp) (Neutral.join (TypeExpr.neutralAll es)))
 
 theorem TypeExpr.neutralAll : ∀ ts : List TypeExpr, ∀ x ∈ ts.map TypeExpr.tokens, Neutral x
   | [], _, h => by simp at h

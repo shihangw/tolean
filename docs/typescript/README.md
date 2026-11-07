@@ -31,7 +31,8 @@ marks which links are proved, tested against a reference, or trusted.
   functions whose body is an expression, such as `x => x + 1` and
   `(a: number, b) => a * b`.
 - **Types:** keyword types such as `number`, `null`, literal types, named types
-  with type arguments, arrays, unions and parentheses.
+  with type arguments, arrays, tuples such as `[A, B]` and `readonly [A, B]`,
+  unions and parentheses.
 
 The translator accepts less than the parser reads; see
 [The TypeScript subset](#the-subset). Sometimes `tsc` and JavaScript read the same tokens in two different
@@ -312,6 +313,9 @@ the file, the line and the reason. It never approximates.
 | `x = e`, `x += e`, `x -= e`, `x *= e` on a `let` local | `let x := …` (shadowing) |
 | `x ??= e` on a `let` local of type `T \| null` | `let x := Option.or x e`. JS evaluates `e` only when `x` is `null`. Lean evaluates it either way, but the result is the same, because the subset has no side effects. |
 | `[a, b]` with the element type from the context or the elements, such as `return [a, b]` or `const xs: ReadonlyArray<T> = []` | `([a, b] : List T)` |
+| `[A, B]` and `readonly [A, B]`, a tuple of two elements or more | `A × B`. In JS a tuple is an array. |
+| `[a, b]` where the context expects a tuple, such as a return value | `(a, b)`, with each element translated where its own type is expected |
+| `t[0]`, an element of a tuple at an index that is a number literal | `t.1`, and `t.2.1` or `t.2.2` for the second or the last of three, as Lean nests the product to the right |
 | `const xs: Array<T> = [...]`, then `xs.push(e)`; `xs` read only in the `return` | `let xs := xs ++ [e]` |
 | `for (const x of xs) { … }` | `List.foldl` over the tuple of locals the body changes |
 | `if` that returns, `if` that changes locals, `c ? a : b` | `if … then … else …` |
@@ -358,6 +362,13 @@ Tolean rejects these, among others:
   function pushes to must be a `const`; for a value, use `ReadonlyArray<T>`.
   An empty `[]` needs a type from its context, and the elements of a literal
   need one type.
+- A tuple of one element, an empty tuple, named, optional and rest elements,
+  and a `,` after the last element. Tolean also refuses `readonly` before
+  anything but a tuple, such as `readonly bigint[]`, and `readonly [A, B][]`,
+  which `tsc` reads as a readonly array of tuples. An index of a tuple must be
+  a number literal within the tuple, and an index of any other value is
+  refused. `===` on tuples is refused, because in JS it compares the arrays
+  by reference.
 - A literal union that is not the whole of a type alias, such as `(s: 'a' | 'b')`,
   because the output needs a name for its inductive type. Tolean also refuses
   a union of string literals and other types, a string that is not an ASCII

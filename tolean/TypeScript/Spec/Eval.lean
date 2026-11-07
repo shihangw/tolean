@@ -214,6 +214,12 @@ def binary : BinOp → Val N → Val N → Option (Val N)
   | .looseNe, a, b => (looseEq a b).map (.bool ∘ not)
   | _, _, _ => none
 
+/-- The element of the array `items` whose index is the safe integer `i`, or
+`undefined` when `i` is none or no index of the array. -/
+def elementAt (items : List (Val N)) : Option Int → Val N
+  | some i => if 0 ≤ i then items[i.toNat]?.getD .undefined else .undefined
+  | none => .undefined
+
 /-- What a statement list does: it runs to its end with the variables it
 leaves, or it returns a value. -/
 inductive Outcome (N : Type) where
@@ -377,6 +383,19 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     | .null | .undefined => some .undefined
     | .obj fields => getProp fields name
     | _ => none
+  -- `xs[i]` on an array, with a number `i` (`OrdinaryGet` on an array exotic
+  -- object, ECMA-262 §10.4.2): the element when `i` is an index of the
+  -- array. Any other number is `undefined`, because no element and no
+  -- property of `Array.prototype` has its string as a key. `-0` reads the
+  -- element `0`, as its string is `"0"`. A number literal is the integer it
+  -- names, whatever the model of numbers, so the rule reads that integer.
+  | .index _ obj (.number _ text) => do
+    let .list items ← eval m fuel env obj | none
+    return elementAt items (some (← numberLiteral text))
+  | .index _ obj idx => do
+    let .list items ← eval m fuel env obj | none
+    let .num n ← eval m fuel env idx | none
+    return elementAt items (JSNumber.toSafeInt n)
   | .unary _ .not arg => do return .bool !(← eval m fuel env arg).truthy
   -- `typeof x` names the type of the value of `x` (ECMA-262 §13.5.3.1). On a
   -- name that is not bound, JS gives `"undefined"`, and the subset has no

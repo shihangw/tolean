@@ -200,8 +200,16 @@ def parseType (fuel : Nat) : ParseM TypeExpr := do
 
 def parseArrayType (fuel : Nat) : ParseM TypeExpr := do
   let fuel + 1 := fuel | outOfFuel
-  let start := (← peek).span.start
-  iterate (← budget) (← parsePrimaryType fuel) (arrayStep start)
+  let t ← peek
+  let next ← peekAt 1
+  -- `readonly` applies to the whole array type after it, as in `tsc`: so
+  -- `readonly [A, B][]` is a readonly array of tuples. Only a tuple may follow.
+  if t.isIdent "readonly" && next.isPunct "[" && !next.newlineBefore then
+    discard advance
+    let .tuple _ false elems ← parseArrayType fuel
+      | failAt t "'readonly' is supported only before a tuple type, such as readonly [A, B]"
+    return .tuple (← spanFrom t.span.start) true elems
+  iterate (← budget) (← parsePrimaryType fuel) (arrayStep t.span.start)
 
 def parsePrimaryType (fuel : Nat) : ParseM TypeExpr := do
   let fuel + 1 := fuel | outOfFuel
@@ -229,6 +237,11 @@ def parsePrimaryType (fuel : Nat) : ParseM TypeExpr := do
     let inner ← parseType fuel
     let _ ← expectPunct ")"
     return .paren (← spanFrom t.span.start) inner
+  -- `[A, B]`: a tuple type, with at least one element and no `,` after the last.
+  | .punct "[" =>
+    let elems ← iterate (← budget) #[] (typeArgStep (parseType fuel))
+    let _ ← expectPunct "]"
+    return .tuple (← spanFrom t.span.start) false elems.toList
   | _ => unexpected t "a type"
 
 end

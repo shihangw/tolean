@@ -171,6 +171,21 @@ def encField {α : Type} (key : String) (enc : α → Val N) : Option α → Lis
 @[simp] theorem encField_none {α : Type} (key : String) (enc : α → Val N) :
     encField key enc none = [] := rfl
 
+/-- A tuple as a JS array, from the list of its elements. Lean nests a tuple
+to the right, so `encCons` writes an element and the elements after it, and
+`encLast` writes the last one. -/
+def encTuple {α : Type} (enc : α → List (Val N)) (x : α) : Val N := .list (enc x)
+
+def encLast {α : Type} (enc : α → Val N) (x : α) : List (Val N) := [enc x]
+
+def encCons {α β : Type} (enc : α → Val N) (rest : β → List (Val N)) (x : α × β) : List (Val N) :=
+  enc x.1 :: rest x.2
+
+@[simp] theorem encTuple_def {α : Type} (enc : α → List (Val N)) (x : α) : encTuple enc x = .list (enc x) := rfl
+@[simp] theorem encLast_def {α : Type} (enc : α → Val N) (x : α) : encLast enc x = [enc x] := rfl
+@[simp] theorem encCons_def {α β : Type} (enc : α → Val N) (rest : β → List (Val N)) (x : α × β) :
+    encCons enc rest x = enc x.1 :: rest x.2 := rfl
+
 /-! ### Decoders
 
 A decoder reads a Lean value back out of a variable's value. It gives a
@@ -222,6 +237,25 @@ def decUndef {α : Type} (dec : Option (Val N) → α) : Option (Val N) → Opti
   cases o with
   | none => rfl
   | some v => simp [decUndef_some dec (enc v) (hn v), h]
+
+/-- A tuple, from a JS array: its elements in order, as `encTuple` writes
+them. -/
+def decTuple {α : Type} (dec : List (Val N) → α) : Option (Val N) → α
+  | some (.list vs) => dec vs
+  | _ => dec []
+
+def decLast {α : Type} (dec : Option (Val N) → α) (vs : List (Val N)) : α := dec vs.head?
+
+def decCons {α β : Type} (dec : Option (Val N) → α) (rest : List (Val N) → β) (vs : List (Val N)) :
+    α × β :=
+  (dec vs.head?, rest vs.tail)
+
+@[simp] theorem decTuple_list {α : Type} (dec : List (Val N) → α) (vs : List (Val N)) :
+    decTuple dec (some (.list vs)) = dec vs := rfl
+@[simp] theorem decLast_cons {α : Type} (dec : Option (Val N) → α) (v : Val N) (vs : List (Val N)) :
+    decLast dec (v :: vs) = dec (some v) := rfl
+@[simp] theorem decCons_cons {α β : Type} (dec : Option (Val N) → α) (rest : List (Val N) → β) (v : Val N)
+    (vs : List (Val N)) : decCons dec rest (v :: vs) = (dec (some v), rest vs) := rfl
 
 @[simp] theorem decInt_int (i : Int) : decInt (some (Val.int (N := N) i)) = i := rfl
 @[simp] theorem decBool_bool (b : Bool) : decBool (some (Val.bool (N := N) b)) = b := rfl

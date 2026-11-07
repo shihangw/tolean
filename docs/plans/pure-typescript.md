@@ -55,7 +55,6 @@ exact. A construct leaves these tables when Tolean translates it, and the
 | `x?: T` parameters, `undefined` as a value, and a test such as `x !== undefined` that narrows an optional value | `Option T` | `'x' in obj`, which can tell a missing key from `undefined` |
 | A chain after `?.`, such as `a?.b.c`, and `a?.[i]` and `f?.()` | `Option.bind` | `==` against anything except `null` and `undefined` |
 | `export { … }` and re-exports | Nothing: the names stay in scope | `export *` |
-| A tuple type such as `readonly [string, bigint]` | A product type | Tuples that a function changes |
 | `as const` and `satisfies` | Nothing: they only check types | `as T` and the non-null assertion `x!`, because TypeScript does not check them |
 | A type guard `x is T` | A `Bool` function | A guard whose body the translator cannot show to be a test of the tag |
 | `Record<K, V>` where `K` is a union of string literals | A structure with one field per key | `Record<string, V>` and index signatures. Code that needs those can use a `Map`. |
@@ -276,7 +275,7 @@ the P2 steps. Steps with the same priority keep the order of their numbers.
    `export { … }` and re-exports, `as const` and `satisfies`, and `Record`
    over a union of string literals.
 3. **P1.** Generic functions and types whose type parameters have no
-   constraint, tuples and type guards.
+   constraint, and type guards.
 4. **P0.** Callbacks that read only `const` values, the array methods without
    `sort`, indexing, and object spread. The parser already reads arrow
    functions whose body is an expression.

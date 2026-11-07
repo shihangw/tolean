@@ -112,6 +112,9 @@ def TypeExpr.words : TypeExpr → List Word
   | .union _ [member] => punctWord "|" :: member.words
   | .union _ members => separated "|" (TypeExpr.wordsOf members)
   | .paren _ inner => punctWord "(" :: inner.words ++ [punctWord ")"]
+  | .tuple _ readonly elems =>
+    (if readonly then [identWord "readonly"] else []) ++
+      punctWord "[" :: separated "," (TypeExpr.wordsOf elems) ++ [punctWord "]"]
 
 def TypeExpr.wordsOf : List TypeExpr → List (List Word)
   | [] => []
@@ -304,6 +307,7 @@ def TypeExpr.erase : TypeExpr → TypeExpr
   | .array _ elem => .array noSpan elem.erase
   | .union _ members => .union noSpan (TypeExpr.eraseAll members)
   | .paren _ inner => .paren noSpan inner.erase
+  | .tuple _ readonly elems => .tuple noSpan readonly (TypeExpr.eraseAll elems)
 
 def TypeExpr.eraseAll : List TypeExpr → List TypeExpr
   | [] => []

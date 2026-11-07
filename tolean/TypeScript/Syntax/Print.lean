@@ -37,6 +37,7 @@ partial def TypeExpr.toSexp : TypeExpr → Sexp
   | .array s elem => node "type-array" s [] [elem.toSexp]
   | .union s members => node "type-union" s [] (members.map toSexp)
   | .paren s inner => node "type-paren" s [] [inner.toSexp]
+  | .tuple s readonly elems => node "type-tuple" s (flag readonly "readonly") (elems.map toSexp)
 
 def Param.toSexp (p : Param) : Sexp :=
   node "param" p.span [p.name] (p.type.map TypeExpr.toSexp).toList

@@ -100,6 +100,8 @@ inductive TypeExpr where
   | array (span : Span) (elem : TypeExpr)
   | union (span : Span) (members : List TypeExpr)
   | paren (span : Span) (inner : TypeExpr)
+  /-- `[A, B]`, or `readonly [A, B]` when `readonly` is true: a tuple type. -/
+  | tuple (span : Span) (readonly : Bool) (elems : List TypeExpr)
 
 /-- A parameter of a function or an arrow function. -/
 structure Param where
@@ -383,7 +385,8 @@ namespace tolean.TypeScript.Syntax
 open tolean
 
 def TypeExpr.span : TypeExpr → Span
-  | .keyword s _ | .null s | .literal s _ | .ref s _ _ | .array s _ | .union s _ | .paren s _ => s
+  | .keyword s _ | .null s | .literal s _ | .ref s _ _ | .array s _ | .union s _ | .paren s _
+  | .tuple s _ _ => s
 
 def Expr.span : Expr → Span
   | .ident s _ | .number s _ | .bigint s _ | .string s _ | .bool s _ | .null s | .array s _
