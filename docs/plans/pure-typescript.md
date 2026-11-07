@@ -65,7 +65,7 @@ exact. A construct leaves these tables when Tolean translates it, and the
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| An arrow function passed as an argument, which reads only `const` values and parameters. The parser reads arrow functions whose body is an expression ([#57](https://github.com/shihangw/tolean/pull/57)), and the translator refuses them for now. | `fun` | A callback that changes a variable outside itself |
+| An arrow function passed to a function of the program, which reads only `const` values and parameters. The translator accepts arrow functions now only as the callback of an array method. | `fun` | A callback that changes a variable outside itself |
 | A local function or arrow function stored in a `const` and called later, which changes `let` variables of the enclosing function | A Lean function that takes those variables and returns their new values. The translator lifts it out and threads the variables through each call. | A local function that escapes: one that is returned, stored in a field or passed on |
 | A function-typed field or parameter, such as a comparator in an options object | A field of a function type | A function value that changes state when it is called |
 | A destructured parameter, such as `{ a, b }: Options` | A pattern on the structure | Defaults inside the pattern |
@@ -109,7 +109,7 @@ value claim already does.
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| `map`, `filter`, `reduce`, `some`, `every`, `find`, `findIndex`, `findLast`, `slice`, `entries` | The `List` functions with the same meaning | The `index` and `array` arguments of a callback, until a later step adds them |
+| `reduce`, `findIndex`, `findLast`, `slice`, `entries` | The `List` functions with the same meaning | The `index` and `array` arguments of a callback, until a later step adds them |
 | `includes` | `List.contains` with SameValueZero, which treats `NaN` as equal to itself | |
 | `[...xs]`, `[...xs, x]`, and array destructuring | `List.append` and patterns | Spread of anything that is not an array |
 | `xs.length`, `xs[i]` and `xs.at(i)` (§23.1.3.1) | `List.length`, and `xs[i]?` of type `Option T`. An index outside the array gives `undefined`. | `xs[i]` in a project without `noUncheckedIndexedAccess`, because there TypeScript types the result as `T` although it can be `undefined` |
@@ -275,9 +275,8 @@ another ([#63](https://github.com/shihangw/tolean/pull/63)).
    over a union of string literals.
 3. Generic functions and types whose type parameters have no constraint,
    tuples, string enums and type guards.
-4. Callbacks that read only `const` values, the array methods without
-   `sort`, indexing, and object spread. The parser already reads arrow
-   functions whose body is an expression.
+4. The other array methods without `sort`, such as `reduce` and `slice`,
+   indexing, and object spread.
 5. Control flow: `return` inside a loop, `break`, `continue`, and the counted
    `for` loop.
 6. Errors, after step 3 of the [shared core plan](shared-core.md) adds

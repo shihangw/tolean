@@ -372,6 +372,23 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     else if test == "isFinite" then some (.bool (JSNumber.isFinite n))
     else if test == "isSafeInteger" then some (.bool (JSNumber.toSafeInt n).isSome)
     else none
+  -- `xs.map(x => e)` and the other methods of an array that take a callback
+  -- (`Array.prototype.map`, `filter`, `some`, `every` and `find`, ECMA-262
+  -- §23.1.3.21, §23.1.3.8, §23.1.3.29, §23.1.3.6 and §23.1.3.9). The callback
+  -- runs on each element in order, with `x` bound to it, until the method has
+  -- its answer. It is an arrow function written at the call, so it sees the
+  -- variables of the call, and nothing changes them while the method runs. The
+  -- method also passes the index and the array, which an arrow with one
+  -- parameter ignores.
+  | .call _ (.member _ recv method) [.arrow _ _ [p] body] => do
+    let .list items ← eval m fuel env recv | none
+    if method == "map" then return .list (← evalMap m fuel env p.name body items)
+    else if method == "filter" then return .list (← evalFilter m fuel env p.name body items)
+    else if method == "some" then return .bool (← evalFind m fuel env p.name body true items).isSome
+    else if method == "every" then
+      return .bool (← evalFind m fuel env p.name body false items).isNone
+    else if method == "find" then return (← evalFind m fuel env p.name body true items).getD .undefined
+    else none
   | .call _ (.ident _ name) args => do
     let vs ← evalList m fuel env args
     match fuel with
@@ -406,6 +423,38 @@ def evalProps (m : Scope) (fuel : Nat) (env : Env N) :
     return (key, ← eval m fuel env v) :: (← evalProps m fuel env ps)
   | _ :: _ => none
 termination_by ps => (fuel, sizeOf ps, 0)
+
+/-- The callback `(name) => body` on each of `items`: the values that
+`Array.prototype.map` puts in its new array. -/
+def evalMap (m : Scope) (fuel : Nat) (env : Env N) (name : String) (body : Expr) :
+    List (Val N) → Option (List (Val N))
+  | [] => some []
+  | x :: xs => do
+    return (← eval m fuel ((name, x) :: env) body) :: (← evalMap m fuel env name body xs)
+termination_by xs => (fuel, sizeOf body, xs.length + 1)
+
+/-- The elements of `items` for which the callback `(name) => body` gives a
+truthy value, in order: what `Array.prototype.filter` keeps. -/
+def evalFilter (m : Scope) (fuel : Nat) (env : Env N) (name : String) (body : Expr) :
+    List (Val N) → Option (List (Val N))
+  | [] => some []
+  | x :: xs => do
+    let keep := (← eval m fuel ((name, x) :: env) body).truthy
+    let rest ← evalFilter m fuel env name body xs
+    return if keep then x :: rest else rest
+termination_by xs => (fuel, sizeOf body, xs.length + 1)
+
+/-- The first of `items` for which `ToBoolean` of the callback
+`(name) => body` is `want`, or none. The callback does not run on the
+elements after it. `find` and `some` stop at the first truthy value, and
+`every` at the first falsy one. -/
+def evalFind (m : Scope) (fuel : Nat) (env : Env N) (name : String) (body : Expr) (want : Bool) :
+    List (Val N) → Option (Option (Val N))
+  | [] => some none
+  | x :: xs => do
+    if (← eval m fuel ((name, x) :: env) body).truthy == want then return some x
+    evalFind m fuel env name body want xs
+termination_by xs => (fuel, sizeOf body, xs.length + 1)
 
 /-- Run one statement. A block, and the branch of an `if`, keep the changes
 they make to outer variables and drop the variables they declare. -/

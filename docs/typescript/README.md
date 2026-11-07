@@ -46,7 +46,8 @@ reading. There are three such cases:
   ECMA-262 allows no line break before `=>`, so JavaScript refuses the code.
 
 The parser also refuses an arrow function with a return type, and one whose
-body is in braces. The translator refuses every arrow function for now.
+body is in braces. The translator accepts an arrow function only as the
+callback of an array method, such as `xs.map(x => x + 1n)`.
 
 The parser also refuses code that Tolean cannot represent exactly. Examples
 are lone surrogates, legacy octal literals, template literals and non-ASCII
@@ -313,6 +314,9 @@ the file, the line and the reason. It never approximates.
 | `[a, b]` with the element type from the context or the elements, such as `return [a, b]` or `const xs: ReadonlyArray<T> = []` | `([a, b] : List T)` |
 | `const xs: Array<T> = [...]`, then `xs.push(e)`; `xs` read only in the `return` | `let xs := xs ++ [e]` |
 | `for (const x of xs) { … }` | `List.foldl` over the tuple of locals the body changes |
+| `xs.map(x => e)`, `xs.filter(x => p)` | `List.map (fun (x : T) => e) xs`, `List.filter (fun (x : T) => p) xs` |
+| `xs.some(x => p)`, `xs.every(x => p)` | `List.any xs (fun (x : T) => p)`, `List.all xs (fun (x : T) => p)` |
+| `xs.find(x => p)` | `List.find? (fun (x : T) => p) xs`. The value is `undefined` when no element passes, so it has the type of an optional field: `xs.find(p) ?? d`, `xs.find(p)?.f` and `xs.find(p) === undefined` work as they do on `s.f`. |
 | `if` that returns, `if` that changes locals, `c ? a : b` | `if … then … else …` |
 | `+ - *`, `< <= > >=`, `=== !==`, `&& \|\| !` | the same operators on `Int`, `Bool`, `Prop` |
 | `a / k`, `a % k` on `bigint`, where `k` is a nonzero literal | `Int.tdiv a k`, `Int.tmod a k` (both truncate toward zero, as JS does) |
@@ -353,6 +357,13 @@ Tolean rejects these, among others:
   a later push. In Lean a push makes a new list, but in JS it changes the
   shared one. An array literal is safe anywhere else: in JS it makes a new
   array, and nothing may push to an array that the function does not own.
+- An arrow function anywhere except as the callback of `map`, `filter`,
+  `some`, `every` and `find`, a callback with more than one parameter, and a
+  named function as a callback. JS passes the index and the array too, which
+  a later step will translate. The body of a callback must not assign, and
+  for every method but `map` it must give a boolean. Tolean also refuses
+  `find` on an array of nullable values, because Lean's `none` would stand
+  for both `null` and `undefined`.
 - An array declared with `let` and the type `Array<T>`. An array that the
   function pushes to must be a `const`; for a value, use `ReadonlyArray<T>`.
   An empty `[]` needs a type from its context, and the elements of a literal
