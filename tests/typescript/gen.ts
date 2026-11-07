@@ -3,7 +3,8 @@
  *
  * `checkTranslate.ts` translates them and compiles the output, and
  * `interpreter.test.ts` runs them in the interpreter and in Node. A program has
- * up to three interfaces and up to three exported functions. A function calls
+ * up to three interfaces, some of them declared as a `Record` over a literal
+ * union, and up to three exported functions. A function calls
  * only the functions before it, so no program recurses.
  */
 
@@ -62,6 +63,8 @@ export function show(t: Ty): string {
 export class Gen {
   private readonly next: () => number;
   private structs: Array<{ name: string; fields: Array<[string, Ty]> }> = [];
+  /** The structures that are declared as `Record<K, T>`. */
+  private records = new Set<string>();
   private functions: Array<{ name: string; params: Array<Ty>; ret: Ty }> = [];
   private counter = 0;
 
@@ -270,7 +273,7 @@ export class Gen {
       const s = this.structs.find((x) => x.name === name);
       for (const [field, ty] of s?.fields ?? []) {
         if (same(ty, t)) {
-          reads.push(`${v.name}.${field}`);
+          reads.push(this.records.has(name) && this.chance(0.5) ? `${v.name}['${field}']` : `${v.name}.${field}`);
         }
       }
     }
@@ -384,10 +387,22 @@ export class Gen {
       const name = `S${i}`;
       const fields: Array<[string, Ty]> = [];
       const n = 1 + Math.floor(this.next() * 3);
-      for (let j = 0; j < n; j++) {
-        fields.push([`f${j}`, this.pick([BIGINT, NUMBER, BOOLEAN, STRING, { k: 'nullable', of: NUMBER } as Ty])]);
+      const types: ReadonlyArray<Ty> = [BIGINT, NUMBER, BOOLEAN, STRING, { k: 'nullable', of: NUMBER }];
+      if (this.chance(0.3)) {
+        // A Record over a literal union: a structure whose fields all have
+        // one type, which `r['f0']` reads too.
+        const t = this.pick(types);
+        for (let j = 0; j < n; j++) {
+          fields.push([`f${j}`, t]);
+        }
+        out.push(`type K${i} = ${fields.map(([f]) => `'${f}'`).join(' | ')};`, `type ${name} = Record<K${i}, ${show(t)}>;`);
+        this.records.add(name);
+      } else {
+        for (let j = 0; j < n; j++) {
+          fields.push([`f${j}`, this.pick(types)]);
+        }
+        out.push(`interface ${name} {`, ...fields.map(([f, t]) => `  readonly ${f}: ${show(t)};`), '}');
       }
-      out.push(`interface ${name} {`, ...fields.map(([f, t]) => `  readonly ${f}: ${show(t)};`), '}');
       this.structs.push({ name, fields });
     }
     const fnCount = 1 + Math.floor(this.next() * 3);
