@@ -15,7 +15,8 @@ marks which links are proved, tested against a reference, or trusted.
 `tolean/TypeScript/Syntax/` puts a span on every node. It reads:
 
 - **Declarations:** functions, interfaces, type aliases, and `const` and `let`,
-  each of them possibly exported.
+  each of them possibly exported; and export lists, such as `export { a, type
+  B }` and `export { a } from "./x.ts"`.
 - **Statements:** `const` and `let` declarations, expression statements,
   `return`, `if` and `else`, `for … of`, `while`, `switch`, blocks, `break`,
   `continue` and the empty statement. A `break` at the top of a `switch`
@@ -234,7 +235,15 @@ import { clamp, type Gauge } from "./lib/util.ts";
   the JavaScript would import a name that does not exist at run time.
 - Only named imports are supported. Tolean refuses `as`, a default or
   namespace import, an import with no names or for its side effects, a
-  re-export, and an import cycle.
+  re-export such as `export { a } from "./x.ts"`, and an import cycle.
+- An export list, such as `export { clamp, type Range }`, exports
+  declarations of the file, as `export` before each of them would. It may
+  name only functions, interfaces and types that the file declares before the
+  list and does not export already, and no name twice. An interface or a type
+  needs `type`, and a function may not have it, because Node's type stripping
+  removes exactly the names that say `type`. The output does not change,
+  because the names stay in scope. Tolean refuses `as` in an export list, and
+  `export *`.
 - A function or an interface may not be named `NaN`, `Infinity` or `Number`,
   because it would hide the global that the subset reads under that name.
 - A local may not have the name of a function that the file declares or

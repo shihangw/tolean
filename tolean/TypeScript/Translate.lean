@@ -1711,7 +1711,8 @@ name `Number`, `NaN` or `Infinity` anywhere. A file can use
 def moduleUsesNumber (m : Module) : Bool :=
   m.decls.any fun
     -- An import of one of these names is refused, so an import adds nothing.
-    | .import .. => false
+    -- An export list names declarations that the other cases see.
+    | .import .. | .exports .. => false
     | .function _ _ name params ret body =>
       isNumberName name ||
         params.any (fun p => isNumberName p.name || (p.type.map typeUsesNumber).getD false) ||
@@ -1764,19 +1765,63 @@ def translateImport (s : Span) (names : List ImportName) (source : String) : TM 
         s!"'{source}' exports no function named '{n.name}'"
       modify fun c => { c with functions := c.functions ++ [{ fn with exported := false }] }
 
-/-- One declaration: an output declaration, or none for an import. -/
+/-- Why the export list `names` is wrong in `c`, if it is. Each name must be
+a function, or with `type` an interface or a type, that the file declares
+before the list and does not export already. Node's type stripping removes a
+name with `type`, so a function may not have it, and a type must. -/
+def exportsError? (c : Ctx) (names : List ImportName) : Option (Span × String) :=
+  names.findSome? fun n =>
+    let ownFn := c.functions.find? fun f => f.file == c.file && f.name == n.name
+    let ownType : Option Bool :=
+      ((c.structs.find? fun i => i.file == c.file && i.name == n.name).map (·.exported)).orElse fun _ =>
+      ((c.aliases.find? fun a => a.file == c.file && a.name == n.name).map (·.exported)).orElse fun _ =>
+      ((c.enums.find? fun e => e.file == c.file && e.name == n.name).map (·.exported)).orElse fun _ =>
+      (c.unions.find? fun u => u.file == c.file && u.name == n.name).map (·.exported)
+    if n.typeOnly then
+      match ownType with
+      | some true => some (n.span, s!"'{n.name}' is exported already")
+      | some false => none
+      | none => some (n.span, s!"this file declares no interface or type named '{n.name}' before this export list")
+    else
+      match ownFn, ownType with
+      | some f, _ => if f.exported then some (n.span, s!"'{n.name}' is exported already") else none
+      | none, some _ => some (n.span, s!"'{n.name}' is a type; export it with 'type {n.name}'")
+      | none, none =>
+        some (n.span, s!"this file declares no function named '{n.name}' before this export list")
+
+/-- One declaration: an output declaration, or none for an import or an
+export list. -/
 def translateDecl : Decl → TM (Option IR.Decl)
   | .import s names source => do translateImport s names source; return none
+  | .exports s names source => do
+    if source.isSome then
+      reject s "tolean does not translate a re-export such as 'export { a } from \"./x.ts\"'; import the names instead"
+    if let some (sp, msg) := exportsError? (← get) names then reject sp msg
+    return none
   | .interface s exported name fields => some <$> translateInterface s exported name fields
   | .typeAlias s exported name type => some <$> translateAlias s exported name type
   | .function s exported name params ret body =>
     some <$> translateFunction s exported name params ret body
   | d => reject d.span "only imports, interfaces, types and functions may appear at top level"
 
+/-- The names of the export lists of `m` that name declarations of the file:
+`export { a, type B }`. -/
+def exportListed (m : Module) : List ImportName :=
+  m.decls.flatMap fun
+    | .exports _ names none => names
+    | _ => []
+
+/-- A name that two export lists of `m` name, or one list twice. -/
+def duplicateExport? (m : Module) : Option ImportName :=
+  let listed := exportListed m
+  listed.zipIdx.findSome? fun (n, i) =>
+    if (listed.take i).any (·.name == n.name) then some n else none
+
 /-- The declarations of `m`, translated. This is the translator as a function
 from one syntax tree to another: `translate` parses the source before it and
 prints the result after it. -/
 def translateDecls (m : Module) : TM (List IR.Decl) := do
+  if let some n := duplicateExport? m then reject n.span s!"'{n.name}' is in two export lists"
   return (← m.decls.mapM translateDecl).filterMap id
 
 /-- The declarations that a type names: interfaces, literal unions and
@@ -1823,6 +1868,20 @@ of. -/
 def Ctx.reachableUnions (c : Ctx) : List UnionInfo :=
   let reached := c.reachable
   c.unions.filter fun u => u.file == c.file && (u.exported || reached.contains u.ref)
+
+/-- `c` with the file's own declarations that `listed` names marked as
+exported: functions by the names without `type`, and types by the names with
+it. -/
+def Ctx.withExports (c : Ctx) (listed : List ImportName) : Ctx :=
+  let fns := (listed.filter (!·.typeOnly)).map (·.name)
+  let tys := (listed.filter (·.typeOnly)).map (·.name)
+  let mark (file name : String) (names : List String) : Bool := file == c.file && names.contains name
+  { c with
+    functions := c.functions.map fun f => if mark f.file f.name fns then { f with exported := true } else f
+    structs := c.structs.map fun i => if mark i.file i.name tys then { i with exported := true } else i
+    aliases := c.aliases.map fun a => if mark a.file a.name tys then { a with exported := true } else a
+    enums := c.enums.map fun e => if mark e.file e.name tys then { e with exported := true } else e
+    unions := c.unions.map fun u => if mark u.file u.name tys then { u with exported := true } else u }
 
 /-- What the file exports: its own exported functions, interfaces and type
 aliases. The interfaces include the private ones that an exported declaration
@@ -1899,7 +1958,7 @@ def translateFile (file source : String) (target : Edition := .default)
       interfaces := deps.map fun (f, d) => (f, d.interface) }
   match (translateDecls m).run ctx with
   | .error e _ => .error e
-  | .ok decls ctx' => return (m, names, decls, ctx'.interface usesNumber names.typeParam)
+  | .ok decls ctx' => return (m, names, decls, (ctx'.withExports (exportListed m)).interface usesNumber names.typeParam)
 
 /-- Parse and translate `source`, the TypeScript file `file`: the parsed
 module, the names that the printer needs, and the Tolean IR. -/
