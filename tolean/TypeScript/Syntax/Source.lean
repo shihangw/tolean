@@ -243,12 +243,17 @@ def ImportName.words (n : ImportName) : List Word :=
 
 def exportWords (exported : Bool) : List Word := if exported then [keywordWord "export"] else []
 
+/-- `<A, B>` after the name of a generic function, or nothing. -/
+def typeParamWords : List String → List Word
+  | [] => []
+  | n :: more => enclose "<" ">" ((n :: more).map fun k => [identWord k])
+
 def Decl.lines : Decl → List Line
   | .import _ names source =>
     [(0, keywordWord "import" :: enclose "{" "}" (names.map ImportName.words) ++
       [identWord "from", [.string source], punctWord ";"])]
-  | .function _ exported name params returnType body =>
-    (0, exportWords exported ++ keywordWord "function" :: identWord name ::
+  | .function _ exported name typeParams params returnType body =>
+    (0, exportWords exported ++ keywordWord "function" :: identWord name :: typeParamWords typeParams ++
       enclose "(" ")" (params.map Param.words) ++ typeAnnotation returnType) :: body.lines 0
   | .interface _ exported name fields =>
     (0, exportWords exported ++ [identWord "interface", identWord name, punctWord "{"]) ::
@@ -395,8 +400,8 @@ def EnumMember.erase (m : EnumMember) : EnumMember := { m with span := noSpan }
 
 def Decl.erase : Decl → Decl
   | .import _ names source => .import noSpan (names.map ImportName.erase) source
-  | .function _ exported name params returnType body =>
-    .function noSpan exported name (params.map Param.erase) (returnType.map TypeExpr.erase) body.erase
+  | .function _ exported name typeParams params returnType body =>
+    .function noSpan exported name typeParams (params.map Param.erase) (returnType.map TypeExpr.erase) body.erase
   | .interface _ exported name fields => .interface noSpan exported name (fields.map Field.erase)
   | .typeAlias _ exported name type => .typeAlias noSpan exported name type.erase
   | .enum _ exported name members => .enum noSpan exported name (members.map EnumMember.erase)

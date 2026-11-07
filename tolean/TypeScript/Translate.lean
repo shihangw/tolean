@@ -54,6 +54,9 @@ inductive Ty where
   | literal (value : String)
   /-- A tuple `[A, B]` of two elements or more. -/
   | tuple (elems : List Ty)
+  /-- A type parameter of a generic function, such as `T` in
+  `function first<T>(xs: T[]): T | null`. -/
+  | param (name : String)
 deriving Repr, Inhabited
 
 -- `Ty` holds lists of itself, so Lean's derived `BEq` would not reduce in the
@@ -68,6 +71,7 @@ def Ty.beq : Ty → Ty → Bool
   | .tagged a ts, .tagged b us => a == b && ts == us
   | .literal a, .literal b => a == b
   | .tuple as, .tuple bs => Ty.beqList as bs
+  | .param a, .param b => a == b
   | _, _ => false
 
 def Ty.beqList : List Ty → List Ty → Bool
@@ -150,10 +154,59 @@ def Ty.lean : Ty → IR.Ty
   | .tagged ref _ => .tagged ref
   | .literal value => .tag value
   | .tuple ts => .tuple (Ty.leanList ts)
+  | .param name => .param name
 
 def Ty.leanList : List Ty → List IR.Ty
   | [] => []
   | t :: ts => t.lean :: Ty.leanList ts
+
+end
+
+/-- `t` names a type parameter. -/
+def Ty.isGeneric (t : Ty) : Bool := !t.lean.typeVars.isEmpty
+
+/-- A type that a type parameter may stand for. `T | null` stands for one
+Lean type, `Option T`, so `T` may not be nullable itself: `Option (Option U)`
+has two values where JS has one `null`. A tag literal is not a type of its
+own in the output. -/
+def Ty.bindable : Ty → Bool
+  | .null | .nullable _ | .optional _ | .literal _ => false
+  | _ => true
+
+mutual
+
+/-- `t` with each type parameter that `sol` gives a type replaced by it. -/
+def Ty.subst (sol : List (String × Ty)) : Ty → Ty
+  | .param name => (sol.lookup name).getD (.param name)
+  | .nullable t => .nullable (t.subst sol)
+  | .optional t => .optional (t.subst sol)
+  | .array t => .array (t.subst sol)
+  | .tuple ts => .tuple (Ty.substList sol ts)
+  | t => t
+
+def Ty.substList (sol : List (String × Ty)) : List Ty → List Ty
+  | [] => []
+  | t :: ts => t.subst sol :: Ty.substList sol ts
+
+end
+
+mutual
+
+/-- `sol`, the types found so far for the type parameters of a call, with the
+ones that an argument of type `t` gives for a parameter of type `pattern`. A
+parameter of type `T | null` takes `null` without fixing `T`. -/
+def Ty.unify (sol : List (String × Ty)) : Ty → Ty → List (String × Ty)
+  | .param name, t => if (sol.lookup name).isNone && t.bindable then sol ++ [(name, t)] else sol
+  | .nullable p, .nullable t => Ty.unify sol p t
+  | .nullable p, t => Ty.unify sol p t
+  | .optional p, .optional t => Ty.unify sol p t
+  | .array p, .array t => Ty.unify sol p t
+  | .tuple ps, .tuple ts => Ty.unifyList sol ps ts
+  | _, _ => sol
+
+def Ty.unifyList (sol : List (String × Ty)) : List Ty → List Ty → List (String × Ty)
+  | p :: ps, t :: ts => Ty.unifyList (Ty.unify sol p t) ps ts
+  | _, _ => sol
 
 end
 
@@ -196,6 +249,9 @@ structure FnInfo where
   file : String
   name : String
   exported : Bool := false
+  /-- The type parameters of a generic function, which its parameter types
+  and its result type name. -/
+  typeParams : List String := []
   params : List Ty
   ret : Ty
 
@@ -287,6 +343,8 @@ structure Ctx where
   /-- The files that this file may import from, by path. -/
   interfaces : List (String × Interface) := []
   currentFunction : String := ""
+  /-- The type parameters of the function being translated. -/
+  typeParams : List String := []
   returnType : Ty := .boolean
   /-- A bound on how deep the translator's calls nest. Each nesting of the
   program takes at most a few calls, so four per character of the source is
@@ -429,6 +487,8 @@ def checkLocalName (span : Span) (name : String) : TM String := do
   if (ctx.enums.any fun i => i.name == name && i.file == ctx.file) ||
       (ctx.unions.any fun i => i.name == name && i.file == ctx.file) then
     reject span s!"'{name}' would hide the type {name} in Lean; choose another name"
+  if ctx.typeParams.contains name then
+    reject span s!"'{name}' would hide the type parameter {name} in Lean; choose another name"
   checkName span name
 
 def declare (env : Env) (span : Span) (name : String) (binding : Binding) (type : Ty) :
@@ -520,6 +580,7 @@ def translateType (t : TypeExpr) : TM Ty := do
     return .array (← translateType elem)
   | .ref _ name [] =>
     let ctx ← get
+    if ctx.typeParams.contains name then return .param name
     match ctx.structs.find? (·.name == name) with
     | some info => return .struct info.ref
     | none =>
@@ -1119,12 +1180,18 @@ def translateCall (fuel : Nat) (env : Env) (s : Span) (callee : Expr) (args : Li
   let fn ← orReject (env.functions.find? (·.name == name)) s noCallMessage
   if env.has name then noCall
   unless fn.params.length == args.length do reject s s!"'{name}' takes {fn.params.length} arguments"
-  let values ← (args.zip fn.params).mapM fun (arg, paramType) => do
-    let a ← translateExpr fuel env (some paramType) arg
-    unless a.type.assignableTo paramType do
+  -- An argument is translated where its parameter's type is expected, unless
+  -- that type names a type parameter: then the arguments' types fix it.
+  let codes ← (args.zip fn.params).mapM fun (arg, paramType) =>
+    translateExpr fuel env (if paramType.isGeneric then none else some paramType) arg
+  let sol := Ty.unifyList [] fn.params (codes.map (·.type))
+  fn.typeParams.forM fun v => do
+    unless (sol.lookup v).isSome do
+      reject s s!"the arguments do not fix the type parameter {v} of '{name}'"
+  (args.zip (codes.zip fn.params)).forM fun (arg, c, paramType) => do
+    unless c.type.assignableTo (paramType.subst sol) do
       reject arg.span "the argument does not have the parameter's type"
-    pure a.value
-  return ⟨.call fn.ref values, false, fn.ret⟩
+  return ⟨.call fn.ref (codes.map (·.value)), false, fn.ret.subst sol⟩
 
 def translateObject (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (props : List Property) :
     TM Code := do
@@ -1758,12 +1825,44 @@ def translateAlias (s : Span) (exported : Bool) (name : String) (type : TypeExpr
   modify fun c => { c with aliases := c.aliases ++ [{ file := c.file, name, exported, type := ty }] }
   return .alias name ty.lean
 
-def translateFunction (s : Span) (exported : Bool) (name : String) (params : List Param)
-    (returnType : Option TypeExpr) (body : Stmt) : TM IR.Decl := do
+mutual
+
+/-- `t` names the type `name`, as a type parameter does in the types that use
+it. -/
+def typeNames (name : String) : TypeExpr → Bool
+  | .ref _ n args => n == name || typesName name args
+  | .array _ e | .paren _ e => typeNames name e
+  | .union _ members | .tuple _ _ members => typesName name members
+  | _ => false
+
+def typesName (name : String) : List TypeExpr → Bool
+  | [] => false
+  | t :: ts => typeNames name t || typesName name ts
+
+end
+
+/-- The type parameters `vs` of a function, after the ones in `seen`: each
+one a fresh name that a parameter's type names, so that the arguments of a
+call fix it. -/
+def checkTypeParams (s : Span) (params : List Param) (seen : List String) : List String → TM Unit
+  | [] => return ()
+  | v :: vs => do
+    let _ ← checkName s v
+    if seen.contains v then reject s s!"the type parameter '{v}' is declared twice"
+    if (← get).taken v then
+      reject s s!"the type parameter '{v}' would hide the type or function {v} in Lean; choose another name"
+    unless params.any (fun p => (p.type.map (typeNames v)).getD false) do
+      reject s s!"no parameter's type names the type parameter '{v}', so a call could not fix it"
+    checkTypeParams s params (seen ++ [v]) vs
+
+def translateFunction (s : Span) (exported : Bool) (name : String) (typeParams : List String)
+    (params : List Param) (returnType : Option TypeExpr) (body : Stmt) : TM IR.Decl := do
   let some returnType := returnType
-    | reject s "functions must be named, typed, non-generic and synchronous"
+    | reject s "functions must be named, typed and synchronous"
   let name ← checkName s name
   declareTopLevel s name
+  checkTypeParams s params [] typeParams
+  modify fun c => { c with typeParams }
   -- The scope of the body, and the parameters in Lean and as types.
   let ctx ← get
   let start : Env := { functions := ctx.functions, unions := ctx.knownUnions, enums := ctx.enumValues }
@@ -1779,7 +1878,8 @@ def translateFunction (s : Span) (exported : Bool) (name : String) (params : Lis
   let ret ← isolated (translateType returnType)
   modify fun c => { c with currentFunction := name, returnType := ret }
   let out ← isolated (translateStatements (← fuelLimit) env .ret (blockStatements body))
-  modify fun c => { c with functions := c.functions ++ [{ file := c.file, name, exported, params := types, ret }] }
+  modify fun c => { c with
+    typeParams := [], functions := c.functions ++ [{ file := c.file, name, exported, typeParams, params := types, ret }] }
   return .function name leanParams ret.lean out
 
 /-! ### The number model -/
@@ -1863,7 +1963,7 @@ def moduleUsesNumber (m : Module) : Bool :=
   m.decls.any fun
     -- An import of one of these names is refused, so an import adds nothing.
     | .import .. => false
-    | .function _ _ name params ret body =>
+    | .function _ _ name _ params ret body =>
       isNumberName name ||
         params.any (fun p => isNumberName p.name || (p.type.map typeUsesNumber).getD false) ||
         (ret.map typeUsesNumber).getD false || stmtUsesNumber body
@@ -1936,8 +2036,8 @@ def translateDecl : Decl → TM (Option IR.Decl)
   | .import s names source => do translateImport s names source; return none
   | .interface s exported name fields => some <$> translateInterface s exported name fields
   | .typeAlias s exported name type => some <$> translateAlias s exported name type
-  | .function s exported name params ret body =>
-    some <$> translateFunction s exported name params ret body
+  | .function s exported name typeParams params ret body =>
+    some <$> translateFunction s exported name typeParams params ret body
   | .enum s exported name members => some <$> translateStringEnum s exported name members
   | d => reject d.span "only imports, interfaces, types, enums and functions may appear at top level"
 

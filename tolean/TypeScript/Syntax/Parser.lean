@@ -836,13 +836,35 @@ end
 
 /-! ### Declarations -/
 
+/-- One step of the loop over the type parameters of a function: a name, and
+the `,` after it, if one comes. A parameter has no constraint and no default. -/
+def typeParamStep (names : Array String) : ParseM (Array String × Bool) := do
+  let t ← advance
+  let .ident name := t.kind | unexpected t "a type parameter"
+  if keywordTypes.contains name || typeOperatorWords.contains name || refusedNames.contains name then
+    failAt t s!"'{name}' cannot name a type parameter"
+  let next ← peek
+  if next.isKeyword "extends" then failAt next "type parameters with a constraint are not supported"
+  if next.isPunct "=" then failAt next "type parameters with a default are not supported"
+  let names := names.push name
+  if !next.isPunct "," then return (names, false)
+  discard advance
+  return (names, true)
+
+/-- `<A, B>` after the name of a generic function, or nothing. -/
+def parseTypeParams : ParseM (List String) := do
+  unless (← peek).isPunct "<" do return []
+  discard advance
+  let names ← iterate (← budget) #[] typeParamStep
+  let _ ← expectPunct ">"
+  return names.toList
+
 def parseFunction (start : Pos) (exported : Bool) : ParseM Decl := do
   discard advance
   let t ← peek
   if t.isPunct "*" then failAt t "generators are not supported"
   let name ← readName
-  let t ← peek
-  if t.isPunct "<" then failAt t "generic functions are not supported"
+  let typeParams ← parseTypeParams
   let _ ← expectPunct "("
   let params ← iterate (← budget) #[] (listStep ")" (fun _ => pure ()) parseParam)
   let _ ← expectPunct ")"
@@ -855,7 +877,7 @@ def parseFunction (start : Pos) (exported : Bool) : ParseM Decl := do
   modify fun s => { s with inFunction := true }
   let body ← parseBlock (← budget)
   modify fun s => { s with inFunction := false }
-  return .function (← spanFrom start) exported name params.toList returnType body
+  return .function (← spanFrom start) exported name typeParams params.toList returnType body
 
 def parseField : ParseM Field := do
   let t ← peek
