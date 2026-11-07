@@ -1,0 +1,1 @@
+whose key type K this file declares or imports, may be indexed

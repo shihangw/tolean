@@ -329,6 +329,13 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     | .null | .undefined => some .undefined
     | .obj fields => getProp fields name
     | _ => none
+  -- `obj[key]` with a string key (ECMA-262 §13.3.2.1): `ToPropertyKey` of a
+  -- string is the string itself, so this reads the property as `obj.key`
+  -- does. An array, or a key of another type, leaves the subset.
+  | .index _ obj key => do
+    match ← eval m fuel env obj, ← eval m fuel env key with
+    | .obj fields, .str name => getProp fields name
+    | _, _ => none
   | .unary _ .not arg => do return .bool !(← eval m fuel env arg).truthy
   -- `typeof x` names the type of the value of `x` (ECMA-262 §13.5.3.1). On a
   -- name that is not bound, JS gives `"undefined"`, and the subset has no

@@ -154,6 +154,9 @@ structure StructInfo where
   name : String
   exported : Bool := false
   fields : List (String × Ty)
+  /-- For `type T = Record<K, V>`, the literal union `K`, whose strings are
+  the fields. An index `r[k]` with a key of type `K` reads one. -/
+  key : Option DeclRef := none
 
 def StructInfo.ref (i : StructInfo) : DeclRef := ⟨i.file, i.name⟩
 
@@ -461,6 +464,8 @@ def translateType (t : TypeExpr) : TM Ty := do
       | t => return .nullable t
     | _, _ => unsupportedType t
   | .array _ elem => return .array (← translateType elem)
+  | .ref _ "Record" [_, _] | .ref _ "Readonly" [.ref _ "Record" [_, _]] =>
+    reject t.span "a Record type needs a name; declare it as a type, such as type T = Record<K, V>"
   | .ref _ name [elem] =>
     unless name == "Array" || name == "ReadonlyArray" do unsupportedType t
     return .array (← translateType elem)
@@ -756,6 +761,18 @@ def numberConstant? : String → Option IR.NumberConstant
   | "Infinity" => some .posInf
   | _ => none
 
+/-- For a value of type `t`, a `Record<K, V>`: the literal union `K`, the
+keys, and `V`. The file must declare or import `K`, so that the output can
+name its constructors. -/
+def recordIndex (c : Ctx) : Ty → Option (DeclRef × List String × Ty)
+  | .struct ref => do
+    let info ← c.knownStructs.find? (·.ref == ref)
+    let key ← info.key
+    let _ ← c.enums.find? (·.ref == key)
+    let (_, type) ← info.fields.head?
+    return (key, info.fields.map (·.1), type)
+  | _ => none
+
 /-! ### Expressions -/
 
 /-- The element type of an array literal: the type that the context gives, or
@@ -935,6 +952,13 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
     let o ← translateExpr fuel env none obj
     let (bind, type) ← optFieldType s o.type name
     return ⟨.ext (.optField name bind) [o.code], false, type⟩
+  | .index s obj key =>
+    let o ← translateExpr fuel env none obj
+    let (keyRef, keys, type) ← orReject (recordIndex (← get) o.type) s
+      "only a value of a Record type, such as type T = Record<K, V>, whose key type K this file declares or imports, may be indexed"
+    let k ← translateExpr fuel env (some (.enum keyRef)) key
+    unless k.type == .enum keyRef do reject key.span "the key must have the key type of the Record"
+    return ⟨.ext (.recordGet keyRef keys) [o.code, k.value], false, type⟩
   | .unary s op arg =>
     if op == .neg && arg.isInfinity && !env.has "Infinity" then
       return ⟨.numberConstant .negInf, false, .number⟩
@@ -1593,6 +1617,33 @@ def translatePrimitiveUnion (s : Span) (exported : Bool) (name : String) (member
   if members.contains "bigint" then requireFeature s .bigint
   declareUnion s exported name none (members.filterMap fun k => (primitiveType? k).map (k, ·))
 
+/-- The key type and the value type of `Record<K, V>`, or of
+`Readonly<Record<K, V>>`. -/
+def recordArgs : TypeExpr → Option (TypeExpr × TypeExpr)
+  | .ref _ "Record" [k, v] | .ref _ "Readonly" [.ref _ "Record" [k, v]] => some (k, v)
+  | _ => none
+
+/-- `type T = Record<K, V>`, where `K` is a literal union of strings that the
+file declares or imports. A value of the type has a property for each string
+of `K`, so the output declares a structure with one field of type `V` for
+each, in the order of `K`. An object literal must set every key in that
+order, as for an interface. `r[k]` reads the field that `k` names. -/
+def translateRecord (exported : Bool) (name : String) (key value : TypeExpr) :
+    TM IR.Decl := do
+  let keyType ← isolated (translateType key)
+  let ctx ← get
+  let info ← orReject (match keyType with
+      | .enum ref => ctx.enums.find? (·.ref == ref)
+      | _ => none) key.span
+    "the keys of a Record must be a literal union of strings that this file declares or imports, such as type K = 'a' | 'b'"
+  let type ← isolated (translateType value)
+  if let some m := info.members.find? leanReserved.contains then
+    reject key.span s!"name '{m}' is reserved in Lean, so it cannot name a field of the Record"
+  let fields := info.members.map fun m => (m, type)
+  modify fun c =>
+    { c with structs := c.structs ++ [{ file := c.file, name, exported, fields, key := some info.ref }] }
+  return .struct name (fields.map fun (field, type) => (field, type.lean))
+
 /-- `type T = U`. The translator writes the type of `U` wherever the source
 names `T`, so a type alias changes no code. The output declares it as an
 `abbrev`, for the claims about the code to use. An alias must come before its
@@ -1607,6 +1658,8 @@ def translateAlias (s : Span) (exported : Bool) (name : String) (type : TypeExpr
     return ← translateUnion s exported name members
   if let some members := primitiveMembers type then
     return ← translatePrimitiveUnion s exported name members
+  if let some (key, value) := recordArgs type then
+    return ← translateRecord exported name key value
   let ty ← isolated (translateType type)
   modify fun c => { c with aliases := c.aliases ++ [{ file := c.file, name, exported, type := ty }] }
   return .alias name ty.lean

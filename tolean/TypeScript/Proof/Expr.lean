@@ -1112,6 +1112,28 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
           simp only [hobj] at hv'
           simp only [Eval.eval, this, Option.bind_eq_bind, Option.bind_some]
           cases ov <;> simp only [IR.ExprExt.apply] at hv' <;> first | exact hv' | simp at hv'
+      | index sp obj key =>
+        -- `r[k]` on a `Record<K, V>`: the evaluator reads the property that
+        -- the string names, as the spec does.
+        simp [translateExprCore] at h
+        obtain ⟨o, s₁, ho, _, _, ⟨rfl, rfl⟩, keyRef, keys, ty, _, ⟨-, rfl⟩, k, s₃, hk, h⟩ := h
+        split at h
+        · simp only [pure_ok] at h
+          obtain ⟨rfl, -⟩ := h
+          intro ρs ρo v ha hs hv'
+          simp only [IR.Expr.eval, IR.Expr.evalList, eval_value] at hv'
+          cases hobj : IR.Expr.eval fs fuel ρo o.code with
+          | none => simp [hobj] at hv'
+          | some ov =>
+            cases hkey : IR.Expr.eval fs fuel ρo k.code with
+            | none => simp [hobj, hkey] at hv'
+            | some kv =>
+              have h1 := ihE _ _ _ _ _ _ ho ρs ρo ov ha hs hobj
+              have h2 := ihE _ _ _ _ _ _ hk ρs ρo kv ha hs hkey
+              simp only [hobj, hkey, Option.bind_eq_bind, Option.bind_some, pure_bind] at hv'
+              simp only [Eval.eval, h1, h2, Option.bind_eq_bind, Option.bind_some]
+              cases ov <;> cases kv <;> simp_all [IR.ExprExt.apply]
+        · simp at h
       | unary sp op arg =>
         simp only [translateExprCore] at h
         intro ρs ρo v ha hs hv'
