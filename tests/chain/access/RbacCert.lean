@@ -211,7 +211,8 @@ def decls : List tolean.TypeScript.IR.Decl :=
                     tolean.IR.Ty.list (tolean.IR.Ty.struct { file := "", name := "Membership" })),
                    ("group", tolean.IR.Ty.string),
                    ("principal", tolean.IR.Ty.string)],
-         breaks := false })),
+         breaks := false,
+         returns := none })),
  tolean.IR.Decl.function
    "isMember"
    [("groups", tolean.IR.Ty.list (tolean.IR.Ty.struct { file := "", name := "Membership" })),
@@ -261,7 +262,8 @@ def decls : List tolean.TypeScript.IR.Decl :=
                     tolean.IR.Ty.list (tolean.IR.Ty.struct { file := "", name := "Grant" })),
                    ("role", tolean.IR.Ty.string),
                    ("permission", tolean.IR.Ty.string)],
-         breaks := false })),
+         breaks := false,
+         returns := none })),
  tolean.IR.Decl.function
    "bindingAllows"
    [("p", tolean.IR.Ty.struct { file := "", name := "Policy" }),
@@ -333,7 +335,8 @@ def decls : List tolean.TypeScript.IR.Decl :=
          elem := tolean.IR.Ty.struct { file := "", name := "Binding" },
          scope := [("p", tolean.IR.Ty.struct { file := "", name := "Policy" }),
                    ("req", tolean.IR.Ty.struct { file := "", name := "Request" })],
-         breaks := false })),
+         breaks := false,
+         returns := none })),
  tolean.IR.Decl.function
    "denied"
    [("p", tolean.IR.Ty.struct { file := "", name := "Policy" }),
@@ -361,7 +364,8 @@ def decls : List tolean.TypeScript.IR.Decl :=
          elem := tolean.IR.Ty.struct { file := "", name := "Deny" },
          scope := [("p", tolean.IR.Ty.struct { file := "", name := "Policy" }),
                    ("req", tolean.IR.Ty.struct { file := "", name := "Request" })],
-         breaks := false })),
+         breaks := false,
+         returns := none })),
  tolean.IR.Decl.function
    "permits"
    [("p", tolean.IR.Ty.struct { file := "", name := "Policy" }),
@@ -530,14 +534,14 @@ theorem inGroup_loop1 {N : Type} [tolean.TypeScript.JSNumber N] (fs : List (tole
     (tolean.IR.Body.let "found" (tolean.IR.Expr.bool true) (tolean.IR.Body.state ["found"]))
     (tolean.IR.Body.state ["found"]))
   (tolean.IR.Body.state ["found"])) ρ (List.map encodeMembership items) =
-      some (ρ.set "found" (Val.bool (List.foldl (((fun (groups : List access.Rbac.Membership) (group : String) (principal : String) => fun (found : Bool) (m : access.Rbac.Membership) => (
+      some (.normal (ρ.set "found" (Val.bool (List.foldl (((fun (groups : List access.Rbac.Membership) (group : String) (principal : String) => fun (found : Bool) (m : access.Rbac.Membership) => (
         let found :=
           if (m.group = group) ∧ (m.principal = principal) then
             let found := true
             found
           else
             found
-        found : Bool)) ((decList decodeMembership) (ρ.lookup "groups")) (decStr (ρ.lookup "group")) (decStr (ρ.lookup "principal")))) (decBool (ρ.lookup "found")) items))) := by
+        found : Bool)) ((decList decodeMembership) (ρ.lookup "groups")) (decStr (ρ.lookup "group")) (decStr (ρ.lookup "principal")))) (decBool (ρ.lookup "found")) items)))) := by
   refine tolean.TypeScript.Proof.runFold_foldl fs fuel _ "m" _ encodeMembership (fun s ρ => (ρ.set "found" (Val.bool s)))
     (fun ρ => (decBool (ρ.lookup "found"))) (fun ρ => (((fun (groups : List access.Rbac.Membership) (group : String) (principal : String) => fun (found : Bool) (m : access.Rbac.Membership) => (
         let found :=
@@ -559,7 +563,7 @@ theorem inGroup_loop1 {N : Type} [tolean.TypeScript.JSNumber N] (fs : List (tole
     obtain ⟨h0, h1, h2, h3⟩ := hI
     try simp only []
     generalize decBool (ρ.lookup "found") = v0 at h0 ⊢
-    simp [Env.set_of_lookup _ _ _ h0]
+    all_goals simp [Env.set_of_lookup _ _ _ h0]
 
 theorem inGroup_link {N : Type} [tolean.TypeScript.JSNumber N] (groups : _) (group : _) (principal : _) :
     tolean.TypeScript.IR.runIn (N := N) (tolean.TypeScript.IR.functionsOf [("", decls)]) ⟨"", "inGroup"⟩ [((encList encodeMembership) groups), (Val.str group), (Val.str principal)] =
@@ -597,14 +601,14 @@ theorem roleGrants_loop1 {N : Type} [tolean.TypeScript.JSNumber N] (fs : List (t
     (tolean.IR.Body.let "found" (tolean.IR.Expr.bool true) (tolean.IR.Body.state ["found"]))
     (tolean.IR.Body.state ["found"]))
   (tolean.IR.Body.state ["found"])) ρ (List.map encodeGrant items) =
-      some (ρ.set "found" (Val.bool (List.foldl (((fun (grants : List access.Rbac.Grant) (role : String) (permission : String) => fun (found : Bool) (g : access.Rbac.Grant) => (
+      some (.normal (ρ.set "found" (Val.bool (List.foldl (((fun (grants : List access.Rbac.Grant) (role : String) (permission : String) => fun (found : Bool) (g : access.Rbac.Grant) => (
         let found :=
           if (g.role = role) ∧ (g.permission = permission) then
             let found := true
             found
           else
             found
-        found : Bool)) ((decList decodeGrant) (ρ.lookup "grants")) (decStr (ρ.lookup "role")) (decStr (ρ.lookup "permission")))) (decBool (ρ.lookup "found")) items))) := by
+        found : Bool)) ((decList decodeGrant) (ρ.lookup "grants")) (decStr (ρ.lookup "role")) (decStr (ρ.lookup "permission")))) (decBool (ρ.lookup "found")) items)))) := by
   refine tolean.TypeScript.Proof.runFold_foldl fs fuel _ "g" _ encodeGrant (fun s ρ => (ρ.set "found" (Val.bool s)))
     (fun ρ => (decBool (ρ.lookup "found"))) (fun ρ => (((fun (grants : List access.Rbac.Grant) (role : String) (permission : String) => fun (found : Bool) (g : access.Rbac.Grant) => (
         let found :=
@@ -626,7 +630,7 @@ theorem roleGrants_loop1 {N : Type} [tolean.TypeScript.JSNumber N] (fs : List (t
     obtain ⟨h0, h1, h2, h3⟩ := hI
     try simp only []
     generalize decBool (ρ.lookup "found") = v0 at h0 ⊢
-    simp [Env.set_of_lookup _ _ _ h0]
+    all_goals simp [Env.set_of_lookup _ _ _ h0]
 
 theorem roleGrants_link {N : Type} [tolean.TypeScript.JSNumber N] (grants : _) (role : _) (permission : _) :
     tolean.TypeScript.IR.runIn (N := N) (tolean.TypeScript.IR.functionsOf [("", decls)]) ⟨"", "roleGrants"⟩ [((encList encodeGrant) grants), (Val.str role), (Val.str permission)] =
@@ -670,14 +674,14 @@ theorem allowed_loop1 {N : Type} [tolean.TypeScript.JSNumber N] (fs : List (tole
     (tolean.IR.Body.let "found" (tolean.IR.Expr.bool true) (tolean.IR.Body.state ["found"]))
     (tolean.IR.Body.state ["found"]))
   (tolean.IR.Body.state ["found"])) ρ (List.map encodeBinding items) =
-      some (ρ.set "found" (Val.bool (List.foldl (((fun (p : access.Rbac.Policy) (req : access.Rbac.Request) => fun (found : Bool) (b : access.Rbac.Binding) => (
+      some (.normal (ρ.set "found" (Val.bool (List.foldl (((fun (p : access.Rbac.Policy) (req : access.Rbac.Request) => fun (found : Bool) (b : access.Rbac.Binding) => (
         let found :=
           if (access.Rbac.bindingAllows p b req) then
             let found := true
             found
           else
             found
-        found : Bool)) (decodePolicy (ρ.lookup "p")) (decodeRequest (ρ.lookup "req")))) (decBool (ρ.lookup "found")) items))) := by
+        found : Bool)) (decodePolicy (ρ.lookup "p")) (decodeRequest (ρ.lookup "req")))) (decBool (ρ.lookup "found")) items)))) := by
   refine tolean.TypeScript.Proof.runFold_foldl fs (fuel + 3) _ "b" _ encodeBinding (fun s ρ => (ρ.set "found" (Val.bool s)))
     (fun ρ => (decBool (ρ.lookup "found"))) (fun ρ => (((fun (p : access.Rbac.Policy) (req : access.Rbac.Request) => fun (found : Bool) (b : access.Rbac.Binding) => (
         let found :=
@@ -699,7 +703,7 @@ theorem allowed_loop1 {N : Type} [tolean.TypeScript.JSNumber N] (fs : List (tole
     obtain ⟨h0, h1, h2⟩ := hI
     try simp only []
     generalize decBool (ρ.lookup "found") = v0 at h0 ⊢
-    simp [Env.set_of_lookup _ _ _ h0]
+    all_goals simp [Env.set_of_lookup _ _ _ h0]
 
 theorem allowed_link {N : Type} [tolean.TypeScript.JSNumber N] (p : _) (req : _) :
     tolean.TypeScript.IR.runIn (N := N) (tolean.TypeScript.IR.functionsOf [("", decls)]) ⟨"", "allowed"⟩ [(encodePolicy p), (encodeRequest req)] =
@@ -723,14 +727,14 @@ theorem denied_loop1 {N : Type} [tolean.TypeScript.JSNumber N] (fs : List (tolea
     (tolean.IR.Body.let "found" (tolean.IR.Expr.bool true) (tolean.IR.Body.state ["found"]))
     (tolean.IR.Body.state ["found"]))
   (tolean.IR.Body.state ["found"])) ρ (List.map encodeDeny items) =
-      some (ρ.set "found" (Val.bool (List.foldl (((fun (p : access.Rbac.Policy) (req : access.Rbac.Request) => fun (found : Bool) (d : access.Rbac.Deny) => (
+      some (.normal (ρ.set "found" (Val.bool (List.foldl (((fun (p : access.Rbac.Policy) (req : access.Rbac.Request) => fun (found : Bool) (d : access.Rbac.Deny) => (
         let found :=
           if (access.Rbac.denyApplies p d req) then
             let found := true
             found
           else
             found
-        found : Bool)) (decodePolicy (ρ.lookup "p")) (decodeRequest (ρ.lookup "req")))) (decBool (ρ.lookup "found")) items))) := by
+        found : Bool)) (decodePolicy (ρ.lookup "p")) (decodeRequest (ρ.lookup "req")))) (decBool (ρ.lookup "found")) items)))) := by
   refine tolean.TypeScript.Proof.runFold_foldl fs (fuel + 3) _ "d" _ encodeDeny (fun s ρ => (ρ.set "found" (Val.bool s)))
     (fun ρ => (decBool (ρ.lookup "found"))) (fun ρ => (((fun (p : access.Rbac.Policy) (req : access.Rbac.Request) => fun (found : Bool) (d : access.Rbac.Deny) => (
         let found :=
@@ -752,7 +756,7 @@ theorem denied_loop1 {N : Type} [tolean.TypeScript.JSNumber N] (fs : List (tolea
     obtain ⟨h0, h1, h2⟩ := hI
     try simp only []
     generalize decBool (ρ.lookup "found") = v0 at h0 ⊢
-    simp [Env.set_of_lookup _ _ _ h0]
+    all_goals simp [Env.set_of_lookup _ _ _ h0]
 
 theorem denied_link {N : Type} [tolean.TypeScript.JSNumber N] (p : _) (req : _) :
     tolean.TypeScript.IR.runIn (N := N) (tolean.TypeScript.IR.functionsOf [("", decls)]) ⟨"", "denied"⟩ [(encodePolicy p), (encodeRequest req)] =

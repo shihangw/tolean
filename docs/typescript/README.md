@@ -173,7 +173,8 @@ for every environment whose variables have values of the right types. The
 lemma follows from `runFold_foldl`, which Tolean proves once: when one run of
 the body and one step of the fold agree, the loop and the fold agree. A loop
 with a `break` runs as the printed `forIn` instead, and its lemma follows from
-`runFold_forIn` in the same way.
+`runFold_forIn` in the same way, or from `runFold_forInRet` when a `return`
+can end it.
 `tests/typescript/checkCertify.sh` certifies each corpus file it can, and
 `tests/chain/check.sh` checks that a wrong translation breaks a certificate.
 Tolean also proves the parser's round trip. `parseChars_reads` in
@@ -317,6 +318,7 @@ the file, the line and the reason. It never approximates.
 | `for (const x of xs) { … }` | `List.foldl` over the tuple of locals the body changes |
 | `if (c) continue;` at the top of a loop body, or a branch of that `if` that ends in `continue` on every path | `if c then (x, y) else …`, where the rest of the body is the `else` branch, as after an `if` that returns. A test of `null` or of a tag narrows the local for the rest of the body. |
 | `break` in a `for (const x of xs)` loop, in the same places as `continue` | `Id.run (forIn xs (x, y) (fun e (x, y) => …))`. A `break` is `ForInStep.done (x, y)`, which ends the loop, and the end of the body or a `continue` is `ForInStep.yield (x, y)`. A loop without a `break` stays a `List.foldl`. |
+| `return e` in the same places, in a loop where the statements after it end in a `return` | `match Id.run (forIn xs (none, x, y) (fun e (_, x, y) => …)) with`, with the arms `\| (some r, _) => r` and `\| (none, x, y) => …` for the statements after the loop. The state starts with the value to return: a `return e` is `ForInStep.done (some e, x, y)`, and the other step ends hold `none`. |
 | `if` that returns, `if` that changes locals, `c ? a : b` | `if … then … else …` |
 | `+ - *`, `< <= > >=`, `=== !==`, `&& \|\| !` | the same operators on `Int`, `Bool`, `Prop` |
 | `a / k`, `a % k` on `bigint`, where `k` is a nonzero literal | `Int.tdiv a k`, `Int.tmod a k` (both truncate toward zero, as JS does) |
@@ -348,10 +350,12 @@ Tolean rejects these, among others:
 - The global `isNaN` and `isFinite`. These convert their argument to a number
   first. Use `Number.isNaN` and `Number.isFinite` instead.
 - Assignment to a parameter, a `const` or a field, and a push onto an array
-  that the function did not create. It also rejects `return` inside a loop.
-  A `continue` or a `break` must end the loop body, or a branch of an `if` at
-  the top of the body; code after the `if` must then go in its `else` branch,
-  if it has one. An assignment to a `const` throws a `TypeError`, so
+  that the function did not create. A `continue`, a `break` or a `return`
+  must end the loop body, or a branch of an `if` at the top of the body; code
+  after the `if` must then go in its `else` branch, if it has one. A `return`
+  in a loop also needs the statements after the loop to end in a `return`, so
+  Tolean rejects it in a loop inside another loop or in a branch that changes
+  locals. An assignment to a `const` throws a `TypeError`, so
   the interpreter gives no value for a block where a statement after a
   `const` assigns it, and the translator refuses the `const`.
 - A read of an owned array anywhere except in the `return` value. If code

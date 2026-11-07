@@ -177,7 +177,7 @@ def sections : List Section := [
     ``Proof.letState_sim, ``Proof.translateIf_sound]⟩,
   ⟨"sec-for-in-and-for-of-statements", "14.7.5",
     "The for-in, for-of, and for-await-of Statements",
-    [``Proof.loop_sim, ``Proof.runFold_foldl, ``Proof.runFold_forIn, ``Proof.translateForOf_sound]⟩,
+    [``Proof.loop_sim, ``Proof.runFold_foldl, ``Proof.runFold_forIn, ``Proof.runFold_forInRet, ``Proof.translateForOf_sound]⟩,
   ⟨"sec-break-statement", "14.8", "The break Statement",
     [``Proof.Ends.brk, ``Proof.Ends.of_brk, ``Proof.endOf_normal]⟩,
   ⟨"sec-continue-statement", "14.9", "The continue Statement",
