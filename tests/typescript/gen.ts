@@ -172,11 +172,17 @@ export class Gen {
           if (nullable.length > 0) {
             options.push(() => `${this.pick(nullable).name} ?? ${this.expr(t, vars, d)}`);
           }
-          // `p?.f ?? e`, on a nullable structure with a field of type `t`.
+          // `p?.f ?? e` and `p?.f.g ?? e`, on a nullable structure with a
+          // field of type `t`, or a field of a structure whose field has it.
           const chains = readable.flatMap((v) => {
             const of = v.ty.k === 'nullable' ? v.ty.of : undefined;
             const s = of?.k === 'struct' ? this.structs.find((x) => x.name === of.name) : undefined;
-            return (s?.fields ?? []).filter(([, ft]) => same(ft, t)).map(([f]) => `${v.name}?.${f}`);
+            const direct = (s?.fields ?? []).filter(([, ft]) => same(ft, t)).map(([f]) => `${v.name}?.${f}`);
+            const nested = (s?.fields ?? []).flatMap(([f, ft]) => {
+              const inner = ft.k === 'struct' ? this.structs.find((x) => x.name === ft.name) : undefined;
+              return (inner?.fields ?? []).filter(([, gt]) => same(gt, t)).map(([g]) => `${v.name}?.${f}.${g}`);
+            });
+            return [...direct, ...nested];
           });
           if (chains.length > 0) {
             options.push(() => `(${this.pick(chains)} ?? ${this.expr(t, vars, d)})`);

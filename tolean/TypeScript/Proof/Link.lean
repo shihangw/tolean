@@ -91,15 +91,15 @@ macro_rules
       simp [runIn, functionsOf, functions, Body.exec, Body.runFold, Expr.eval, Expr.evalList,
         Expr.evalFields, bindState, eqVal, tolean.IR.IntOp.apply, tolean.IR.Order.apply,
         tolean.IR.Division.apply, ExprExt.apply, NumberOp.apply, NumberConstant.value,
-        NumberTest.apply, tagOf, Eval.Val.typeOf, Eval.Env.set, Eval.getProp,
+        NumberTest.apply, tagOf, Eval.Val.typeOf, Eval.Env.set, Eval.getProp, Eval.getPath,
         Eval.objectPrototypeNames, List.lookup, DeclRef.beq_def,
         -Bool.if_true_left, -Bool.if_false_right, -Bool.if_false_left, -Bool.if_true_right, $defs,*]
       all_goals repeat' (split <;> (try simp_all [bindState, eqVal, tolean.IR.IntOp.apply,
         tolean.IR.Order.apply, tolean.IR.Division.apply, ExprExt.apply, NumberOp.apply,
-        NumberTest.apply, tagOf, Eval.Val.typeOf, Eval.Env.set, Eval.getProp,
+        NumberTest.apply, tagOf, Eval.Val.typeOf, Eval.Env.set, Eval.getProp, Eval.getPath,
         Eval.objectPrototypeNames, List.lookup, DeclRef.beq_def,
         -Bool.if_true_left, -Bool.if_false_right, -Bool.if_false_left, -Bool.if_true_right, $defs,*]))
-      all_goals (try simp_all [bindState, eqVal, Eval.Env.set, Eval.getProp, Eval.objectPrototypeNames, List.lookup, DeclRef.beq_def, $defs,*])
+      all_goals (try simp_all [bindState, eqVal, Eval.Env.set, Eval.getProp, Eval.getPath, Eval.getPath, Eval.objectPrototypeNames, List.lookup, DeclRef.beq_def, $defs,*])
       -- Two `match`es that differ only in their auxiliary functions, as a
       -- loop lemma's step and the printed definition can, agree by `rfl`.
       all_goals (try rfl)))
