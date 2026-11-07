@@ -148,7 +148,7 @@ def Expr.eval (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
   | .proj e index _ => do
     let .list items ← Expr.eval fs fuel ρ e | none
     items[index]?
-  | .struct fields _ => do return .obj (← Expr.evalFields fs fuel ρ fields)
+  | .struct fields _ _ => do return .obj (← Expr.evalFields fs fuel ρ fields)
   -- A value of `T | null` is never `undefined`. JS tells `undefined` from
   -- `null` with `===` but not with `==`, so the tests of `null` give no value
   -- for it.

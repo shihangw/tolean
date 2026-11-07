@@ -34,6 +34,7 @@ def Ty.beq : Ty T → Ty T → Bool
   | .tag a, .tag b => Decidable.decide (a = b)
   | .tuple a, .tuple b => Ty.beqList a b
   | .param a, .param b => Decidable.decide (a = b)
+  | .app a as, .app b bs => Decidable.decide (a = b) && Ty.beqList as bs
   | .ext a, .ext b => Decidable.decide (a = b)
   | _, _ => false
 
@@ -53,6 +54,8 @@ theorem Ty.beq_iff : (a b : Ty T) → Ty.beq a b = true ↔ a = b
   | .option a, b | .optional a, b | .list a, b => by
     cases b <;> simp [Ty.beq, Ty.beq_iff a]
   | .tuple a, b => by
+    cases b <;> simp [Ty.beq, Ty.beqList_iff a]
+  | .app r a, b => by
     cases b <;> simp [Ty.beq, Ty.beqList_iff a]
 
 theorem Ty.beqList_iff : (xs ys : List (Ty T)) → Ty.beqList xs ys = true ↔ xs = ys
@@ -83,7 +86,7 @@ def Expr.beq : Expr T E → Expr T E → Bool
   | .ite a0 a1 a2, .ite b0 b1 b2 => Expr.beq a0 b0 && Expr.beq a1 b1 && Expr.beq a2 b2
   | .call a0 a1, .call b0 b1 => Decidable.decide (a0 = b0) && Expr.beqList a1 b1
   | .list a0 a1, .list b0 b1 => Expr.beqList a0 b0 && Decidable.decide (a1 = b1)
-  | .struct a0 a1, .struct b0 b1 => Expr.beqFields a0 b0 && Decidable.decide (a1 = b1)
+  | .struct a0 a1 a2, .struct b0 b1 b2 => Expr.beqFields a0 b0 && Decidable.decide (a1 = b1) && Decidable.decide (a2 = b2)
   | .isNone a0, .isNone b0 => Expr.beq a0 b0
   | .isSome a0, .isSome b0 => Expr.beq a0 b0
   | .matchNull a0 a1 a2, .matchNull b0 b1 b2 => Decidable.decide (a0 = b0) && Expr.beq a1 b1 && Expr.beq a2 b2
@@ -152,7 +155,7 @@ theorem Expr.beq_iff : (a b : Expr T E) → Expr.beq a b = true ↔ a = b
     cases b <;> simp [and_assoc, Expr.beq, Expr.beqList_iff a1]
   | .list a0 a1, b => by
     cases b <;> simp [and_assoc, Expr.beq, Expr.beqList_iff a0]
-  | .struct a0 a1, b => by
+  | .struct a0 a1 a2, b => by
     cases b <;> simp [and_assoc, Expr.beq, Expr.beqFields_iff a0]
   | .isNone a0, b => by
     cases b <;> simp [and_assoc, Expr.beq, Expr.beq_iff a0]

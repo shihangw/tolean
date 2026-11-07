@@ -902,23 +902,22 @@ def parseField : ParseM Field := do
 def parseInterface (start : Pos) (exported : Bool) : ParseM Decl := do
   discard advance
   let name ← readName
+  let typeParams ← parseTypeParams
   let t ← peek
-  if t.isPunct "<" then failAt t "generic interfaces are not supported"
   if t.isKeyword "extends" then failAt t "'extends' is not supported"
   let _ ← expectPunct "{"
   let fields ← iterate (← budget) #[] (blockStep parseField)
   let _ ← expectPunct "}"
-  return .interface (← spanFrom start) exported name fields.toList
+  return .interface (← spanFrom start) exported name typeParams fields.toList
 
 def parseTypeAlias (start : Pos) (exported : Bool) : ParseM Decl := do
   discard advance
   let name ← readName
-  let t ← peek
-  if t.isPunct "<" then failAt t "generic type aliases are not supported"
+  let typeParams ← parseTypeParams
   let _ ← expectPunct "="
   let type ← parseType (← budget)
   endStatement
-  return .typeAlias (← spanFrom start) exported name type
+  return .typeAlias (← spanFrom start) exported name typeParams type
 
 /-- What an enum member must be: a name and a string. -/
 def refuseEnumMember {A : Type} (t : Token) : ParseM A :=

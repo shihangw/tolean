@@ -88,8 +88,9 @@ def encoderOf (r : Refs) : IR.Ty → Option String
   | .struct ref | .enum ref | .tagged ref => some (r.cert s!"encode{ref.name}")
   | .number => some (r.eval "Val.num")
   | .tuple ts => do return s!"({r.eval "encTuple"} {← elementsEncoder r ts})"
-  -- A type parameter has no encoder, so a generic function gets no certificate yet.
-  | .null | .tag _ | .param _ => none
+  -- A type parameter has no encoder, so a generic function or interface gets no
+  -- certificate yet.
+  | .null | .tag _ | .param _ | .app .. => none
 
 /-- How the elements of a tuple of the types `ts` become a list of `Val`s. -/
 def elementsEncoder (r : Refs) : List IR.Ty → Option String
@@ -112,7 +113,7 @@ def decoderOf (r : Refs) : IR.Ty → Option String
   | .struct ref | .enum ref | .tagged ref => some (r.cert s!"decode{ref.name}")
   | .number => some (r.eval "decNum")
   | .tuple ts => do return s!"({r.eval "decTuple"} {← elementsDecoder r ts})"
-  | .null | .tag _ | .param _ => none
+  | .null | .tag _ | .param _ | .app .. => none
 
 /-- How a list of `Val`s becomes the elements of a tuple of the types `ts`. -/
 def elementsDecoder (r : Refs) : List IR.Ty → Option String
@@ -216,7 +217,7 @@ def splitSteps (decls : List IR.Decl) : Nat → String → IR.Ty → List String
   | _ + 1, name, .enum _ => [s!"cases {name}"]
   | fuel + 1, name, .struct ref =>
     let fields := decls.findSome? fun
-      | .struct n fields => if n == ref.name then some fields else none
+      | .struct n _ fields => if n == ref.name then some fields else none
       | _ => none
     match fields with
     | some fields =>
@@ -338,7 +339,8 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         encs := encs.push <|
           s!"@[simp] theorem decode{name}_{i} {generic} : decode{name} ({nv} := {nv}) (some (Val.str {str m})) = {ctor m} := rfl"
     -- An interface.
-    if let .struct name allFields := d then
+    if let .struct name typeParams allFields := d then
+      unless typeParams.isEmpty do throw s!"{file}: the generic interface {name} has no certificate yet"
       -- An optional field is a key only when it holds a value, as in an
       -- object literal that leaves it out.
       let parts ← allFields.mapM fun (f, t) => do
@@ -444,7 +446,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       -- optional field of the member's structure into its two cases.
       let memberFields (ref : DeclRef) : List (String × IR.Ty) :=
         ((decls.findSome? fun
-          | .struct n fs => if n == ref.name then some fs else none
+          | .struct n _ fs => if n == ref.name then some fs else none
           | _ => none).getD []).filter fun (_, t) => !(t matches .tag _)
       let arms := members.map fun (t, m) =>
         let fs := memberFields m
