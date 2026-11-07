@@ -2901,6 +2901,24 @@ theorem StmtOK.forOf {kind : VarKind} {name : String} {it : Expr} {body : Stmt} 
   have hk := VarKind.word_ok T kind
   exact StmtOK.head (fun _ => rfl) (by words_ok) hb
 
+theorem StmtOK.counted {init : Option VarDecl} {test update : Option Expr} {body : Stmt}
+    (hi : ∀ d, init = some d → WordsOK T d.words) (ht : ∀ e, test = some e → WordsOK T e.words)
+    (hu : ∀ e, update = some e → WordsOK T e.words) (hb : StmtOK T body) :
+    StmtOK T (.forStmt sp init test update body) := by
+  have h1 : WordsOK T (forInitWords init) := by
+    cases init with
+    | none => simp only [forInitWords]; words_ok
+    | some d => exact hi d rfl
+  have h2 : WordsOK T (optWords test) := by
+    cases test with
+    | none => exact WordsOK.nil
+    | some e => exact ht e rfl
+  have h3 : WordsOK T (optWords update) := by
+    cases update with
+    | none => exact WordsOK.nil
+    | some e => exact hu e rfl
+  exact StmtOK.head (fun _ => rfl) (by words_ok) hb
+
 theorem StmtOK.while {test : Expr} {body : Stmt} (h1 : WordsOK T test.words) (hb : StmtOK T body) :
     StmtOK T (.whileStmt sp test body) :=
   StmtOK.head (fun _ => rfl) (by words_ok) hb
@@ -2962,33 +2980,29 @@ theorem endStatement_inv {s s' : ParseState} (hR : Ready s) (h : Parse.endStatem
     · simp only [Parse.pure_ok] at h; obtain ⟨_, rfl⟩ := h; exact ⟨hR, Kept.refl _⟩
     · exact absurd h (Parse.unexpected_ne_ok _ _ _ _ _)
 
-/-- The end of `parseVarDecl`: no second variable, a `const` has a value, and
-the statement ends. -/
+/-- The end of `parseDeclaration`: no second variable, and a `const` has a
+value. -/
 theorem varDecl_tail {β : Type} {st s' : ParseState} {c : Prop} [Decidable c] {kw : Token} {d d' : β}
     (hR : Ready st)
     (h : (Parse.peek >>= fun t =>
       if t.isPunct "," = true then (Parse.failAt (A := PUnit) t "declare one variable per statement" >>= fun _ =>
-        if c then Parse.failAt (A := PUnit) kw "a 'const' needs a value" >>= fun _ => Parse.endStatement >>= fun _ =>
-          pure d
-        else pure PUnit.unit >>= fun _ => Parse.endStatement >>= fun _ => pure d)
+        if c then Parse.failAt (A := PUnit) kw "a 'const' needs a value" >>= fun _ => pure d
+        else pure PUnit.unit >>= fun _ => pure d)
       else (pure PUnit.unit >>= fun _ =>
-        if c then Parse.failAt (A := PUnit) kw "a 'const' needs a value" >>= fun _ => Parse.endStatement >>= fun _ =>
-          pure d
-        else pure PUnit.unit >>= fun _ => Parse.endStatement >>= fun _ => pure d)) st = .ok d' s') :
+        if c then Parse.failAt (A := PUnit) kw "a 'const' needs a value" >>= fun _ => pure d
+        else pure PUnit.unit >>= fun _ => pure d)) st = .ok d' s') :
     ¬c ∧ d' = d ∧ Ready s' ∧ Kept st s' := by
   obtain ⟨t, r, hs⟩ := hR.cons
   rw [Parse.bind_eq (Parse.peek_eq hs)] at h
   obtain ⟨_, h⟩ := fail_inv h
   obtain ⟨hc, h⟩ := fail_inv h
-  rw [Parse.bind_ok] at h; obtain ⟨_, s₂, he, h⟩ := h
-  obtain ⟨hR₂, hK₂⟩ := endStatement_inv hR he
   simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h
-  exact ⟨hc, rfl, hR₂, hK₂⟩
+  exact ⟨hc, rfl, hR, Kept.refl _⟩
 
-theorem parseVarDecl_inv {T : Edition} {s s' : ParseState} {d : VarDecl} {x : Token} {r : List Token}
+theorem parseDeclaration_inv {T : Edition} {s s' : ParseState} {d : VarDecl} {x : Token} {r : List Token}
     (hR : Ready s) (hT : s.target = T) (hs : s.rest = x :: r) (hx : x.kind ≠ .eof)
-    (h : Parse.parseVarDecl s = .ok d s') : Ready s' ∧ Kept s s' ∧ d.wf T = true ∧ WordsOK T d.words := by
-  simp only [Parse.parseVarDecl] at h
+    (h : Parse.parseDeclaration s = .ok d s') : Ready s' ∧ Kept s s' ∧ d.wf T = true ∧ WordsOK T d.words := by
+  simp only [Parse.parseDeclaration] at h
   rw [Parse.bind_eq (advance_past hR hs hx)] at h
   have hR₁ := hR.past hs (hR.more hs hx)
   obtain ⟨y, r₁, hs₁⟩ := hR₁.cons
@@ -3063,6 +3077,17 @@ theorem parseVarDecl_inv {T : Edition} {s s' : ParseState} {d : VarDecl} {x : To
       simp only [VarDecl.wf, Bool.and_eq_true]
       refine ⟨⟨hname, trivial⟩, ?_⟩
       revert hc; cases x.isKeyword "const" <;> decide
+
+theorem parseVarDecl_inv {T : Edition} {s s' : ParseState} {d : VarDecl} {x : Token} {r : List Token}
+    (hR : Ready s) (hT : s.target = T) (hs : s.rest = x :: r) (hx : x.kind ≠ .eof)
+    (h : Parse.parseVarDecl s = .ok d s') : Ready s' ∧ Kept s s' ∧ d.wf T = true ∧ WordsOK T d.words := by
+  simp only [Parse.parseVarDecl] at h
+  rw [Parse.bind_ok] at h; obtain ⟨d₁, s₁, hd, h⟩ := h
+  obtain ⟨hR₁, hK₁, hw, hok⟩ := parseDeclaration_inv hR hT hs hx hd
+  rw [Parse.bind_ok] at h; obtain ⟨_, s₂, he, h⟩ := h
+  obtain ⟨hR₂, hK₂⟩ := endStatement_inv hR₁ he
+  simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h
+  exact ⟨hR₂, hK₁.trans hK₂, hw, hok⟩
 
 /-- What a function of the statement parser gives: a statement that `Stmt.wf`
 accepts in the state's function and loop. A statement that ends with an `if`
@@ -3257,6 +3282,93 @@ theorem parseForOf_inv {T : Edition} {f : Nat} (hB : GivesB T (Parse.parseBranch
   refine ⟨⟨⟨by simpa [exprName] using hnr, git.wf, git.after _ (follows_end (.inr rfl))⟩, hbd⟩, ?_⟩
   rw [← hK.inFunction_eq]; exact hbw
 
+/-- The declaration at the start of a counted `for`. -/
+theorem parseForDeclaration_inv {T : Edition} {s s' : ParseState} {d : VarDecl} (hR : Ready s) (hT : s.target = T)
+    (h : Parse.parseForDeclaration s = .ok d s') :
+    Ready s' ∧ Kept s s' ∧ d.wf T = true ∧ d.inFree = true ∧ WordsOK T d.words := by
+  obtain ⟨x, r, hs⟩ := hR.cons
+  simp only [Parse.parseForDeclaration] at h
+  rw [Parse.bind_eq (Parse.peek_eq hs)] at h
+  obtain ⟨hk, h⟩ := pass_inv h
+  have hx : x.kind ≠ .eof := by
+    simp only [Bool.or_eq_true, Token.isKeyword, Token.isIdent, beq_iff_eq] at hk
+    rcases hk with hk | hk <;> rw [hk] <;> simp
+  rw [Parse.bind_ok] at h; obtain ⟨d₁, s₁, hd, h⟩ := h
+  obtain ⟨hR₁, hK₁, hw, hok⟩ := parseDeclaration_inv hR hT hs hx hd
+  obtain ⟨hi, h⟩ := fail_inv h
+  simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h
+  exact ⟨hR₁, hK₁, hw, by simpa using hi, hok⟩
+
+/-- The first part of a counted `for`: nothing, or a declaration. -/
+theorem forInit_inv {T : Edition} {s s' : ParseState} {i : Option VarDecl} (hR : Ready s) (hT : s.target = T)
+    (h : Parse.unlessPunct ";" Parse.parseForDeclaration s = .ok i s') :
+    Ready s' ∧ Kept s s' ∧ VarDecl.forWF T i = true ∧ ∀ d, i = some d → WordsOK T d.words := by
+  obtain ⟨x, r, hs⟩ := hR.cons
+  simp only [Parse.unlessPunct] at h
+  rw [Parse.bind_eq (Parse.peek_eq hs)] at h
+  split at h
+  · simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h
+    exact ⟨hR, Kept.refl _, rfl, by simp⟩
+  · rw [Parse.pure_bind, Parse.bind_ok] at h; obtain ⟨d, s₁, hd, h⟩ := h
+    obtain ⟨hR₁, hK₁, hw, hi, hok⟩ := parseForDeclaration_inv hR hT hd
+    simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h
+    refine ⟨hR₁, hK₁, ?_, fun d' hd' => by cases hd'; exact hok⟩
+    simp only [VarDecl.forWF, Bool.and_eq_true]; exact ⟨hw, hi⟩
+
+/-- The test or the update of a counted `for`, or nothing, before the `;` or
+`)` that `stop` names. -/
+theorem forPart_inv {T : Edition} {stop : String} (hstop : stop = ";" ∨ stop = ")") {s s' : ParseState}
+    {o : Option Expr} (hR : Ready s) (hT : s.target = T)
+    (h : Parse.unlessPunct stop (do Parse.parseExpression (← Parse.budget)) s = .ok o s') :
+    Ready s' ∧ Kept s s' ∧ Expr.optWF T stop o = true ∧ ∀ e, o = some e → WordsOK T e.words := by
+  obtain ⟨x, r, hs⟩ := hR.cons
+  simp only [Parse.unlessPunct] at h
+  rw [Parse.bind_eq (Parse.peek_eq hs)] at h
+  split at h
+  · simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h
+    exact ⟨hR, Kept.refl _, rfl, by simp⟩
+  · rw [Parse.pure_bind, Parse.bind_ok] at h; obtain ⟨e, s₁, he, h⟩ := h
+    rw [Parse.bind_eq (Parse.budget_eq _)] at he
+    have ge := (exprs_give T _).1 _ _ _ hR hT he
+    simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h
+    refine ⟨ge.ready, ge.kept, ?_, fun e' he' => by cases he'; exact ge.ok⟩
+    simp only [Expr.optWF, Bool.and_eq_true]; exact ⟨ge.wf, ge.after _ (follows_end hstop)⟩
+
+theorem parseFor_inv {T : Edition} {f : Nat} (hB : GivesB T (Parse.parseBranch f)) {s s' : ParseState} {st : Stmt}
+    {x : Token} {r : List Token} (hR : Ready s) (hT : s.target = T) (hs : s.rest = x :: r) (hx : x.kind ≠ .eof)
+    (h : Parse.parseFor (f + 1) s = .ok st s') :
+    Ready s' ∧ Kept s s' ∧ st.wf T s.inFunction (s.loopDepth != 0) = true ∧
+      (st.openIf = true → ∀ u ∈ s'.rest.head?, u.kind ≠ .keyword "else") ∧ st.isDecl = false ∧ StmtOK T st := by
+  simp only [Parse.parseFor] at h
+  rw [Parse.bind_eq (advance_past hR hs hx)] at h
+  have hR₁ := hR.past hs (hR.more hs hx)
+  rw [Parse.bind_ok] at h; obtain ⟨lp, s₂, hlp, h⟩ := h
+  obtain ⟨_, r₂, _, rfl, hR₂⟩ := expectPunct_inv hR₁ hlp
+  rw [Parse.bind_ok] at h; obtain ⟨init, s₃, hinit, h⟩ := h
+  obtain ⟨hR₃, hK₃, hiw, hiok⟩ := forInit_inv hR₂ hT hinit
+  rw [Parse.bind_ok] at h; obtain ⟨sm, s₄, hsm, h⟩ := h
+  obtain ⟨_, r₄, _, rfl, hR₄⟩ := expectPunct_inv hR₃ hsm
+  have hK₄ : Kept s (past s₃ sm r₄) := (Kept.past _ _ _).trans ((Kept.past _ _ _).trans (hK₃.trans (Kept.past _ _ _)))
+  rw [Parse.bind_ok] at h; obtain ⟨test, s₅, htest, h⟩ := h
+  obtain ⟨hR₅, hK₅, htw, htok⟩ := forPart_inv (.inl rfl) hR₄ (hK₄.target_eq.trans hT) htest
+  rw [Parse.bind_ok] at h; obtain ⟨sm₂, s₆, hsm₂, h⟩ := h
+  obtain ⟨_, r₆, _, rfl, hR₆⟩ := expectPunct_inv hR₅ hsm₂
+  have hK₆ : Kept s (past s₅ sm₂ r₆) := hK₄.trans (hK₅.trans (Kept.past _ _ _))
+  rw [Parse.bind_ok] at h; obtain ⟨update, s₇, hupdate, h⟩ := h
+  obtain ⟨hR₇, hK₇, huw, huok⟩ := forPart_inv (.inr rfl) hR₆ (hK₆.target_eq.trans hT) hupdate
+  rw [Parse.bind_ok] at h; obtain ⟨rp, s₈, hrp, h⟩ := h
+  obtain ⟨_, r₈, _, rfl, hR₈⟩ := expectPunct_inv hR₇ hrp
+  have hK₈ : Kept s (past s₇ rp r₈) := hK₆.trans (hK₇.trans (Kept.past _ _ _))
+  rw [Parse.bind_ok] at h; obtain ⟨body, s₉, hbody, h⟩ := h
+  obtain ⟨hR₉, hK₉, hbw, hbo, hbd, hbok⟩ := withLoop_inv hB hR₈ (hK₈.target_eq.trans hT) hbody
+  rw [Parse.bind_eq (Parse.spanFrom_eq _ _)] at h
+  simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h
+  refine ⟨hR₉, hK₈.trans hK₉, ?_, by simpa [Stmt.openIf] using hbo, by simp [Stmt.isDecl],
+    StmtOK.counted hiok htok huok hbok⟩
+  simp only [Stmt.wf, Bool.and_eq_true, Bool.not_eq_true']
+  refine ⟨⟨⟨⟨hiw, htw⟩, huw⟩, hbd⟩, ?_⟩
+  rw [← hK₈.inFunction_eq]; exact hbw
+
 /-- `( test )`, after `if` or `while`. -/
 theorem parenTest_inv {β : Type} {T : Edition} {s s' : ParseState} {K : Expr → ParseM β} {res : β}
     (hR : Ready s) (hT : s.target = T)
@@ -3446,7 +3558,7 @@ theorem clauseBlockStep_inv {T : Edition} {p : ParseM (Option Expr × List Stmt)
   · exact hall c hc'
   · exact ⟨hw, fun x hx => by rw [← hK.inFunction_eq, ← hK.loopDepth_eq]; exact hbody x hx, hok⟩
 
-/-- What `parseForOf` gives, when it starts at a token other than the end of the file. -/
+/-- What `parseForOf` or `parseFor` gives, when it starts at a token other than the end of the file. -/
 def GivesFor (T : Edition) (p : ParseM Stmt) : Prop :=
   ∀ s st s' x r, Ready s → s.target = T → s.rest = x :: r → x.kind ≠ .eof → p s = .ok st s' →
     Ready s' ∧ Kept s s' ∧ st.wf T s.inFunction (s.loopDepth != 0) = true ∧
@@ -3454,7 +3566,7 @@ def GivesFor (T : Edition) (p : ParseM Stmt) : Prop :=
 
 theorem parseStatement_gives {T : Edition} {f : Nat} (hBlk : GivesS T (Parse.parseBlock f))
     (hBr : GivesB T (Parse.parseBranch f)) (hFor : GivesFor T (Parse.parseForOf f))
-    (hCl : GivesC T (Parse.parseClause f)) :
+    (hCnt : GivesFor T (Parse.parseFor f)) (hCl : GivesC T (Parse.parseClause f)) :
     GivesS T (Parse.parseStatement (f + 1)) := by
   intro s st s' hR hT h
   obtain ⟨x, r, hs⟩ := hR.cons
@@ -3542,8 +3654,12 @@ theorem parseStatement_gives {T : Edition} {f : Nat} (hBlk : GivesS T (Parse.par
         · simp [hs₃] at hu; subst hu; simpa [Token.isKeyword] using he
     by_cases hfor : w = "for"
     · subst hfor; simp only at h
-      obtain ⟨hR', hK', hw, ho, hd, hok⟩ := hFor _ _ _ x r hR hT hs (hne hk (by simp)) h
-      exact ⟨hR', hK', hw, ho, by simp [hd], hok⟩
+      rw [Parse.bind_eq (Parse.countedFor_eq s)] at h
+      split at h
+      · obtain ⟨hR', hK', hw, ho, hd, hok⟩ := hCnt _ _ _ x r hR hT hs (hne hk (by simp)) h
+        exact ⟨hR', hK', hw, ho, by simp [hd], hok⟩
+      · obtain ⟨hR', hK', hw, ho, hd, hok⟩ := hFor _ _ _ x r hR hT hs (hne hk (by simp)) h
+        exact ⟨hR', hK', hw, ho, by simp [hd], hok⟩
     by_cases hwhile : w = "while"
     · subst hwhile; simp only at h
       have hx := hne hk (by simp)
@@ -3656,16 +3772,18 @@ theorem parseStatement_gives {T : Edition} {f : Nat} (hBlk : GivesS T (Parse.par
 every amount of fuel. -/
 theorem stmts_give (T : Edition) : ∀ f : Nat,
     GivesS T (Parse.parseStatement f) ∧ GivesB T (Parse.parseBranch f) ∧ GivesS T (Parse.parseBlock f) ∧
-      GivesFor T (Parse.parseForOf f) ∧ GivesC T (Parse.parseClause f)
+      GivesFor T (Parse.parseForOf f) ∧ GivesFor T (Parse.parseFor f) ∧ GivesC T (Parse.parseClause f)
   | 0 => ⟨fun _ _ _ _ _ h => absurd h (by simp only [Parse.parseStatement]; exact outOfFuel_ne_ok _ _ _),
       fun _ _ _ _ _ h => absurd h (by simp only [Parse.parseBranch]; exact outOfFuel_ne_ok _ _ _),
       fun _ _ _ _ _ h => absurd h (by simp only [Parse.parseBlock]; exact outOfFuel_ne_ok _ _ _),
       fun _ _ _ _ _ _ _ _ _ h => absurd h (by simp only [Parse.parseForOf]; exact outOfFuel_ne_ok _ _ _),
+      fun _ _ _ _ _ _ _ _ _ h => absurd h (by simp only [Parse.parseFor]; exact outOfFuel_ne_ok _ _ _),
       fun _ _ _ _ _ h => absurd h (by simp only [Parse.parseClause]; exact outOfFuel_ne_ok _ _ _)⟩
   | f + 1 =>
-    let ⟨hS, hBr, hBlk, hFor, hCl⟩ := stmts_give T f
-    ⟨parseStatement_gives hBlk hBr hFor hCl, parseBranch_gives hS, parseBlock_gives hS,
-      fun _ _ _ _ _ hR hT hs hx h => parseForOf_inv hBr hR hT hs hx h, parseClause_gives hS⟩
+    let ⟨hS, hBr, hBlk, hFor, hCnt, hCl⟩ := stmts_give T f
+    ⟨parseStatement_gives hBlk hBr hFor hCnt hCl, parseBranch_gives hS, parseBlock_gives hS,
+      fun _ _ _ _ _ hR hT hs hx h => parseForOf_inv hBr hR hT hs hx h,
+      fun _ _ _ _ _ hR hT hs hx h => parseFor_inv hBr hR hT hs hx h, parseClause_gives hS⟩
 
 /-! ### Declarations -/
 

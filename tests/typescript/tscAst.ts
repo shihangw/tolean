@@ -374,6 +374,29 @@ class Printer {
     );
   }
 
+  /** The declaration at the start of a counted `for`. */
+  private forDeclaration(list: ts.VariableDeclarationList): Sexp {
+    const kind = this.declarationKind(list);
+    const [decl, ...more] = list.declarations;
+    if (decl === undefined || more.length > 0) {
+      refuse(list, 'not exactly one declarator');
+    }
+    if (decl.exclamationToken !== undefined) {
+      refuse(decl, 'definite assignment');
+    }
+    if (kind === 'const' && decl.initializer === undefined) {
+      refuse(decl, 'const without a value');
+    }
+    return {
+      head: kind,
+      atoms: [this.name(decl.name)],
+      children: [
+        ...(decl.type === undefined ? [] : [this.type(decl.type)]),
+        ...(decl.initializer === undefined ? [] : [this.expr(decl.initializer)]),
+      ],
+    };
+  }
+
   private declarationKind(list: ts.VariableDeclarationList): 'const' | 'let' {
     const flags = list.flags & ts.NodeFlags.BlockScoped;
     if (flags === ts.NodeFlags.Const) {
@@ -452,6 +475,22 @@ class Printer {
         [kind, this.name(decl.name)],
         [this.expr(s.expression), this.loopBody(s.statement)],
       );
+    }
+    if (ts.isForStatement(s)) {
+      // The three parts keep no span in the Lean tree, so their nodes have none.
+      const init: Array<Sexp> = [];
+      if (s.initializer !== undefined) {
+        if (!ts.isVariableDeclarationList(s.initializer)) {
+          refuse(s.initializer, 'for without a declaration');
+        }
+        init.push(this.forDeclaration(s.initializer));
+      }
+      return this.node('for', s, [], [
+        { head: 'init', atoms: [], children: init },
+        { head: 'test', atoms: [], children: s.condition === undefined ? [] : [this.expr(s.condition)] },
+        { head: 'update', atoms: [], children: s.incrementor === undefined ? [] : [this.expr(s.incrementor)] },
+        this.loopBody(s.statement),
+      ]);
     }
     if (ts.isWhileStatement(s)) {
       return this.node('while', s, [], [this.expr(s.expression), this.loopBody(s.statement)]);
