@@ -265,34 +265,38 @@ a loop now carry their types ([#59](https://github.com/shihangw/tolean/pull/59))
 and a `let` of a `T | null` local writes its type where Lean would infer
 another ([#63](https://github.com/shihangw/tolean/pull/63)).
 
-1. Switch `string` to `JSString`. Today a string appears only in fields,
-   literals and `===`, so the switch changes the generated types but breaks
-   almost no proof. Every project that writes proofs over Lean's `String`
-   makes the switch more costly later, so it comes first.
-2. Types and narrowing: optional parameters and `undefined` as a value, the
-   rest of a chain after `?.`, a `default` that assigns to `never`,
+Each step has a priority. The P0 steps come first, then the P1 steps, then
+the P2 steps. Steps with the same priority keep the order of their numbers.
+
+1. **P0.** Switch `string` to `JSString`. Today a string appears only in
+   fields, literals and `===`, so the switch changes the generated types but
+   breaks almost no proof. Every project that writes proofs over Lean's
+   `String` makes the switch more costly later, so it comes first.
+2. **P0.** Types and narrowing: optional parameters and `undefined` as a
+   value, the rest of a chain after `?.`, a `default` that assigns to `never`,
    `export { … }` and re-exports, `as const` and `satisfies`, and `Record`
    over a union of string literals.
-3. Generic functions and types whose type parameters have no constraint,
-   tuples, string enums and type guards.
-4. Callbacks that read only `const` values, the array methods without
+3. **P1.** Generic functions and types whose type parameters have no
+   constraint, tuples, string enums and type guards.
+4. **P0.** Callbacks that read only `const` values, the array methods without
    `sort`, indexing, and object spread. The parser already reads arrow
    functions whose body is an expression.
-5. Control flow: `return` inside a loop, `break`, `continue`, and the counted
-   `for` loop.
-6. Errors, after step 3 of the [shared core plan](shared-core.md) adds
+5. **P0.** Control flow: `return` inside a loop, `break`, `continue`, and the
+   counted `for` loop.
+6. **P0.** Errors, after step 3 of the [shared core plan](shared-core.md) adds
    exceptions to the IR.
-7. Local functions that change variables of the enclosing function, by lifting
-   them out and threading the variables through each call.
-8. `Map` and `Set`, with owned values and the borrow for a map that a caller
-   passes in.
-9. Strings: template literals, string order, the string methods, iteration
-   by code point, and the opaque `JSON.stringify`.
-10. Sorting with consistent comparators.
-11. Recursion: structural recursion and types that refer to themselves first,
-    then `@decreases`, mutual recursion, and `while` loops.
-12. The new number and `bigint` operations, and the `Date` methods.
-13. Classes with `readonly` fields and methods that do not change `this`.
+7. **P0.** Local functions that change variables of the enclosing function, by
+   lifting them out and threading the variables through each call.
+8. **P0.** `Map` and `Set`, with owned values and the borrow for a map that a
+   caller passes in.
+9. **P1.** Strings: template literals, string order, the string methods,
+   iteration by code point, and the opaque `JSON.stringify`.
+10. **P1.** Sorting with consistent comparators.
+11. **P2.** Recursion: structural recursion and types that refer to themselves
+    first, then `@decreases`, mutual recursion, and `while` loops.
+12. **P1.** The new number and `bigint` operations, and the `Date` methods.
+13. **P2.** Classes with `readonly` fields and methods that do not change
+    `this`.
 
 Steps 2 and 4 cover most of the code in the survey. Steps 7 and 8 matter
 most for proofs, because a fold over events keeps its state in local
