@@ -757,7 +757,29 @@ class Printer {
     if (ts.isParenthesizedTypeNode(t)) {
       return this.node('type-paren', t, [], [this.type(t.type)]);
     }
+    if (ts.isTupleTypeNode(t)) {
+      return this.node('type-tuple', t, [], this.tupleElements(t));
+    }
+    // `readonly [A, B]`. `readonly` takes the whole array type after it, so
+    // only a tuple may follow.
+    if (ts.isTypeOperatorNode(t) && t.operator === ts.SyntaxKind.ReadonlyKeyword && ts.isTupleTypeNode(t.type)) {
+      return this.node('type-tuple', t, ['readonly'], this.tupleElements(t.type));
+    }
     refuse(t, 'unsupported type');
+  }
+
+  // The elements of a tuple type: at least one, each a plain type, and no `,`
+  // after the last.
+  private tupleElements(t: ts.TupleTypeNode): Array<Sexp> {
+    if (t.elements.length === 0 || t.elements.hasTrailingComma) {
+      refuse(t, 'empty tuple or trailing comma');
+    }
+    return t.elements.map((e) => {
+      if (ts.isNamedTupleMember(e) || ts.isOptionalTypeNode(e) || ts.isRestTypeNode(e)) {
+        refuse(e, 'named, optional or rest tuple element');
+      }
+      return this.type(e);
+    });
   }
 }
 

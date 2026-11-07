@@ -167,6 +167,16 @@ export class Gen {
           () => `-${this.expr(t, vars, d)}`,
           () => `(${this.expr(t, vars, d)})`,
         );
+        // An element of an array, by an index that is a number literal,
+        // which checks the interpreter's rule for `xs[i]` against Node. The
+        // index `2` is past the end, which is `undefined`. The translator
+        // refuses an index of anything but a tuple, so it comes only
+        // sometimes.
+        if (this.chance(0.1)) {
+          options.push(
+            () => `[${this.expr(t, vars, d)}, ${this.expr(t, vars, d)}][${this.pick(['0', '1', '2', '0x1'])}]`,
+          );
+        }
         {
           // `x ?? e`: `x` unless it is `null`.
           const nullable = readable.filter((v) => v.ty.k === 'nullable' && same(v.ty.of, t));
