@@ -225,7 +225,7 @@ def casesOn (decls : List IR.Decl) (vars : List (String × IR.Ty)) : String :=
 partial def loopsOf : IR.Body → List (List String × String × IR.Body × IR.LoopInfo)
   | .value _ | .state _ => []
   | .let _ _ rest | .letArray _ _ _ rest => loopsOf rest
-  | .ite _ a b | .matchNull _ a b | .matchTag _ _ _ _ _ a b => loopsOf a ++ loopsOf b
+  | .ite _ a b | .matchNull _ _ a b | .matchTag _ _ _ _ _ a b => loopsOf a ++ loopsOf b
   | .letState _ branch rest => loopsOf branch ++ loopsOf rest
   | .fold names element body _ rest info => loopsOf body ++ [(names, element, body, info)] ++ loopsOf rest
 

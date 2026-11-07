@@ -135,7 +135,7 @@ def Param.wf (p : Param) : Bool := exprName p.name && (match p.type with | some 
 /-- One parameter without a type, which an arrow function may have without
 parentheses. -/
 def bareParam : List Param → Bool
-  | [⟨_, _, none⟩] => true
+  | [⟨_, _, _, none⟩] => true
   | _ => false
 
 theorem arrowParams_cases (parens : Bool) (ps : List Param) :
@@ -155,7 +155,7 @@ def Expr.wfAt (T : Edition) : Level → Expr → Bool
   | .assign, .assign _ op target value =>
     target.wfAt T .cond && target.isSimpleTarget && op.allowedIn T && value.wfAt T .assign
   | .assign, .arrow _ parens params body =>
-    (parens || bareParam params) && params.all Param.wf && body.wfAt T .assign &&
+    (parens || bareParam params) && params.all (fun p => p.wf && !p.optional) && body.wfAt T .assign &&
       notFirst (.punct "{") body.tokens
   | .assign, e => e.wfAt T .cond
   | .cond, .cond _ test a b => test.wfAt T (.bin 0) && a.wfAt T .assign && b.wfAt T .assign
@@ -991,10 +991,34 @@ theorem followsType_item {u : Token} {r : List Token} (hu : u.kind = .punct "," 
     FollowsType (u :: r) := by
   rcases hu with hu | hu <;> exact followsType_punct hu (by simp)
 
-theorem parseParam_reads {T : Edition} (p : Param) (hp : p.wf = true) :
-    ReadsW T Param.erase Param.words (fun _ _ => true) Parse.parseParam p (EndsItem ")") := by
+theorem readName_ok' {s : ParseState} {x : Token} {r : List Token} {name : String}
+    (hs : s.rest = x :: r) (hr : r ≠ []) (hx : x.kind = .ident name) (hn : name ∉ Parse.refusedNames) :
+    Parse.readName s = .ok name (past s x r) := by
+  obtain ⟨u, r', rfl⟩ := List.exists_cons_of_ne_nil hr
+  exact readName_ok hs hx hn
+
+/-- `readOptionalMark` reads nothing before a token other than `?`. -/
+theorem readOptionalMark_none {ok : Bool} {s : ParseState} {u : Token} {r : List Token}
+    (hs : s.rest = u :: r) (hu : u.kind ≠ .punct "?") : Parse.readOptionalMark ok s = .ok false s := by
+  simp only [Parse.readOptionalMark]
+  rw [Parse.bind_eq (Parse.peek_eq hs), if_neg (by simp [Token.isPunct, hu])]
+  rfl
+
+/-- `readOptionalMark` reads a `?` where an optional parameter may stand. -/
+theorem readOptionalMark_some {s : ParseState} {q : Token} {r : List Token}
+    (hs : s.rest = q :: r) (hr : r ≠ []) (hq : q.kind = .punct "?") :
+    Parse.readOptionalMark true s = .ok true (past s q r) := by
+  simp only [Parse.readOptionalMark]
+  rw [Parse.bind_eq (Parse.peek_eq hs), if_pos (by simp [Token.isPunct, hq])]
+  rw [Parse.ite_guard (fun h => by simp at h)]
+  rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_cons hs hr))]
+  rfl
+
+theorem parseParam_reads {T : Edition} {ok : Bool} (p : Param) (hp : p.wf = true)
+    (hopt : p.optional = true → ok = true) :
+    ReadsW T Param.erase Param.words (fun _ _ => true) (Parse.parseParam ok) p (EndsItem ")") := by
   intro s ts rest _ hs hl ht hn hr hE _
-  obtain ⟨sp, name, type⟩ := p
+  obtain ⟨sp, name, optional, type⟩ := p
   simp only [Param.wf, Bool.and_eq_true] at hp
   obtain ⟨hname, hty⟩ := hp
   have hname' : name ∉ Parse.refusedNames := by simpa [exprName] using hname
@@ -1006,44 +1030,69 @@ theorem parseParam_reads {T : Edition} (p : Param) (hp : p.wf = true) :
   obtain ⟨nm, ts', rfl, hnm, h'⟩ := Touching.cons_one (by simpa [identWord] using ht)
   have hn1 : nm.kind ≠ .punct "..." ∧ nm.kind ≠ .punct "[" ∧ nm.kind ≠ .punct "{" ∧ nm.kind ≠ .keyword "this" := by
     rw [hnm]; simp
+  have hs' : s.rest = nm :: (ts' ++ u :: r) := by simpa using hs
+  have hl₀ : (past s nm (ts' ++ u :: r)).left = (past s nm (ts' ++ u :: r)).rest.length := by simp [hl, hs']
+  -- The `?` of an optional parameter, and then the tokens of its type.
+  obtain ⟨tts, s₁, hmark, hs₁, hl₁, hL₁, htt, hsub⟩ : ∃ tts s₁,
+      Parse.readOptionalMark ok (past s nm (ts' ++ u :: r)) = .ok optional s₁ ∧
+      s₁.rest = tts ++ u :: r ∧ s₁.left = s₁.rest.length ∧ Leaves s s₁ (tts ++ u :: r) ∧
+      Touching tts (typeAnnotation type) ∧ ∀ y ∈ tts, y ∈ ts' := by
+    cases optional with
+    | false =>
+      have hfirst : ∀ y, (ts' ++ u :: r).head? = some y → y.kind ≠ .punct "?" := by
+        intro y hy
+        cases type with
+        | none =>
+          simp [Touching, optionalMark, typeAnnotation] at h'; subst h'
+          simp at hy; subst hy; exact hu1
+        | some t =>
+          obtain ⟨colon, ts₂, rfl, hcolon, -⟩ :=
+            Touching.cons_one (by simpa [punctWord, typeAnnotation, optionalMark] using h')
+          simp at hy; subst hy; rw [hcolon]; exact punct_ne (by decide)
+      obtain ⟨y, r', hyr⟩ : ∃ y r', ts' ++ u :: r = y :: r' := List.exists_cons_of_ne_nil (by simp)
+      refine ⟨ts', _, readOptionalMark_none (u := y) (r := r') (s := past s nm (ts' ++ u :: r)) (by simp [hyr])
+        (hfirst y (by simp [hyr])), rfl, hl₀, leaves_advance hs' hl, by simpa [optionalMark] using h',
+        fun _ h => h⟩
+    | true =>
+      obtain ⟨q, tts, rfl, hq, htt⟩ := Touching.cons_one (by simpa [optionalMark, punctWord] using h')
+      refine ⟨tts, _, ?_, rfl, by simp [hl, hs'], leaves_trans (leaves_advance hs' hl)
+        (leaves_advance (s := past s nm (q :: (tts ++ u :: r))) rfl hl₀), htt, fun _ h => by simp [h]⟩
+      rw [hopt rfl]
+      exact readOptionalMark_some rfl (by simp) hq
+  have hnr : ts' ++ u :: r ≠ [] := by simp
   cases type with
   | none =>
-    simp [Touching, typeAnnotation] at h'; subst h'
-    have hs' : s.rest = nm :: u :: r := by simpa using hs
-    let s₁ := past s nm (u :: r)
-    refine ⟨⟨⟨nm.span.start, nm.span.stop⟩, name, none⟩, s₁, ?_, rfl, leaves_advance hs' hl⟩
+    simp [Touching, typeAnnotation] at htt; subst htt
+    simp only [List.nil_append] at hs₁ hL₁
+    refine ⟨⟨⟨nm.span.start, s₁.lastStop⟩, name, optional, none⟩, s₁, ?_, rfl, hL₁⟩
     simp only [Parse.parseParam]
     rw [Parse.bind_eq (Parse.peek_eq hs')]
     rw [Parse.ite_guard (fun h => by simp [Token.isPunct, hn1] at h),
       Parse.ite_guard (fun h => by simp [Token.isPunct, hn1] at h),
       Parse.ite_guard (fun h => by simp [Token.isKeyword, hn1] at h)]
-    rw [Parse.bind_eq (readName_ok hs' hnm hname'), Parse.bind_eq (Parse.peek_eq (s := s₁) rfl)]
-    rw [Parse.ite_guard (fun h => by simp [Token.isPunct, hu1] at h)]
-    rw [if_neg (by simp [Token.isPunct, hu3]), Parse.pure_bind, Parse.bind_eq (Parse.peek_eq (s := s₁) rfl)]
+    rw [Parse.bind_eq (readName_ok' hs' hnr hnm hname'), Parse.bind_eq hmark, Parse.bind_eq (Parse.peek_eq hs₁)]
+    rw [if_neg (by simp [Token.isPunct, hu3]), Parse.pure_bind, Parse.bind_eq (Parse.peek_eq hs₁)]
     rw [Parse.ite_guard (fun h => by simp [Token.isPunct, hu2] at h)]
     rw [Parse.bind_eq (Parse.spanFrom_eq _ _)]
     rfl
   | some t =>
-    obtain ⟨colon, ts₂, rfl, hcolon, h₂⟩ := Touching.cons_one (by simpa [punctWord, typeAnnotation] using h')
-    have hs' : s.rest = nm :: colon :: (ts₂ ++ u :: r) := by simpa using hs
-    let s₁ := past s nm (colon :: (ts₂ ++ u :: r))
-    let s₂ : ParseState := { s₁ with rest := ts₂ ++ u :: r, left := s₁.left - 1, lastStop := colon.span.stop }
-    have hl₂ : s₂.left = s₂.rest.length := by simp [s₂, s₁, hl, hs']
+    obtain ⟨colon, ts₂, rfl, hcolon, h₂⟩ := Touching.cons_one (by simpa [punctWord, typeAnnotation] using htt)
+    let s₂ := past s₁ colon (ts₂ ++ u :: r)
+    have hl₂ : s₂.left = s₂.rest.length := by simp [s₂, hl₁, hs₁]
     obtain ⟨t', s₃, hpt, het, hL₃⟩ := parseType_budget t (by simpa using hty) s₂ ts₂ (u :: r) rfl hl₂ h₂.kinds
-      (fun y hy => hn y (by simp [hy])) (by simp) (followsType_item hu)
+      (fun y hy => hn y (by simpa using hsub y (by simp [hy]))) (by simp) (followsType_item hu)
     have hs₃ : s₃.rest = u :: r := hL₃.rest_eq
-    have hc1 : colon.kind ≠ .punct "?" := by rw [hcolon]; exact punct_ne (by decide)
-    refine ⟨⟨⟨nm.span.start, s₃.lastStop⟩, name, some t'⟩, s₃, ?_, by simp [Param.erase, het],
-      leaves_trans (leaves_advance hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs'])) hL₃)⟩
+    refine ⟨⟨⟨nm.span.start, s₃.lastStop⟩, name, optional, some t'⟩, s₃, ?_, by simp [Param.erase, het],
+      leaves_trans hL₁ (leaves_trans (leaves_advance (s := s₁) (by simpa using hs₁) hl₁) hL₃)⟩
     simp only [Parse.parseParam]
     rw [Parse.bind_eq (Parse.peek_eq hs')]
     rw [Parse.ite_guard (fun h => by simp [Token.isPunct, hn1] at h),
       Parse.ite_guard (fun h => by simp [Token.isPunct, hn1] at h),
       Parse.ite_guard (fun h => by simp [Token.isKeyword, hn1] at h)]
-    rw [Parse.bind_eq (readName_ok hs' hnm hname'), Parse.bind_eq (Parse.peek_eq (s := s₁) rfl)]
-    rw [Parse.ite_guard (fun h => by simp [Token.isPunct, hc1] at h)]
+    rw [Parse.bind_eq (readName_ok' hs' hnr hnm hname'), Parse.bind_eq hmark,
+      Parse.bind_eq (Parse.peek_eq (by simpa using hs₁))]
     rw [if_pos (by simp [Token.isPunct, hcolon])]
-    rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_cons (s := s₁) rfl (by simp))),
+    rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_cons (s := s₁) (by simpa using hs₁) (by simp))),
       Parse.bind_eq (Parse.budget_eq _), Parse.bind_eq hpt, Parse.pure_bind, Parse.bind_eq (Parse.peek_eq hs₃)]
     rw [Parse.ite_guard (fun h => by simp [Token.isPunct, hu2] at h)]
     rw [Parse.bind_eq (Parse.spanFrom_eq _ _)]
@@ -1057,14 +1106,15 @@ theorem listAfter_true {α : Type} {tokens : α → List TokenKind} {close : Lis
   | _ :: y :: xs => ⟨rfl, listAfter_true (y :: xs)⟩
 
 /-- `( params )`, which `listStep` and `parseParam` read. -/
-theorem params_reads {T : Edition} (params : List Param) (hps : ∀ p ∈ params, p.wf = true)
+theorem params_reads {T : Edition} {ok : Bool} (params : List Param) (hps : ∀ p ∈ params, p.wf = true)
+    (hopt : ∀ p ∈ params, p.optional = true → ok = true)
     (s : ParseState) (its rest : List Token) (rp : Token) (hT : s.target = T) (hs : s.rest = its ++ rp :: rest)
     (hrp : rp.kind = .punct ")") (hl : s.left = s.rest.length)
     (ht : Touching its (separated "," (params.map Param.words))) (hn : ∀ y ∈ its, NoBreak y) :
-    ∃ res s', Parse.iterate (10 * (s.left + 1)) #[] (Parse.listStep ")" (fun _ => pure ()) Parse.parseParam) s =
+    ∃ res s', Parse.iterate (10 * (s.left + 1)) #[] (Parse.listStep ")" (fun _ => pure ()) (Parse.parseParam ok)) s =
       .ok res s' ∧ res.toList.map Param.erase = params.map Param.erase ∧ Leaves s s' (rp :: rest) := by
   obtain ⟨res, s', hit, he, hL⟩ := iterate_list (close := ")") (refuse := fun _ => pure ()) (by decide)
-    params (10 * (s.left + 1)) #[] s its rest rp (fun p hp => parseParam_reads p (hps p hp))
+    params (10 * (s.left + 1)) #[] s its rest rp (fun p hp => parseParam_reads p (hps p hp) (hopt p hp))
     (fun p _ => ⟨.ident p.name, by simp [Param.words, identWord], by simp, fun _ _ _ => rfl⟩)
     (by have := length_items ht; have : s.left = its.length + rest.length + 1 := by simp [hl, hs]; omega
         omega) hT hs hrp hl ht hn (listAfter_true params)
@@ -2506,19 +2556,27 @@ theorem Expr.leftArrow_assign {T : Edition} {e : Expr} (he : e.wfAt T .assign = 
     exact Expr.leftArrow_wf e .cond (by rw [← wfAt_assign_eq hne hna]; exact he) (by simp)
 
 /-- `arrowStart` finds every arrow function that the printer writes. -/
-theorem arrowStart_arrow (sp : Span) (parens : Bool) (ps : List Param) (b : Expr) (after : List TokenKind) :
+theorem arrowStart_arrow (sp : Span) (parens : Bool) (ps : List Param) (b : Expr) (after : List TokenKind)
+    (hopt : ∀ p ∈ ps, p.optional = false) :
     Parse.arrowStart ((Expr.arrow sp parens ps b).tokens ++ after) = true := by
   rw [Expr.tokens_arrow]
   rcases arrowParams_cases parens ps with ⟨p, _, _, hp⟩ | hp
   · simp [hp, identWord, Parse.arrowStart]
   rw [hp, enclose_params_flatten]
-  match ps with
-  | [] => simp [Parse.arrowStart, joined]
-  | [⟨_, n, none⟩] => simp [Parse.arrowStart, joined, Param.words, typeAnnotation, identWord]
-  | [⟨_, n, some t⟩] => simp [Parse.arrowStart, joined, Param.words, typeAnnotation, identWord, punctWord]
-  | ⟨_, n, none⟩ :: q :: qs => simp [Parse.arrowStart, joined, Param.words, typeAnnotation, identWord]
-  | ⟨_, n, some t⟩ :: q :: qs =>
-    simp [Parse.arrowStart, joined, Param.words, typeAnnotation, identWord, punctWord]
+  match ps, hopt with
+  | [], _ => simp [Parse.arrowStart, joined]
+  | [⟨_, n, o, none⟩], h =>
+    obtain rfl : o = false := h _ List.mem_cons_self
+    simp [Parse.arrowStart, joined, Param.words, optionalMark, typeAnnotation, identWord]
+  | [⟨_, n, o, some t⟩], h =>
+    obtain rfl : o = false := h _ List.mem_cons_self
+    simp [Parse.arrowStart, joined, Param.words, optionalMark, typeAnnotation, identWord, punctWord]
+  | ⟨_, n, o, none⟩ :: q :: qs, h =>
+    obtain rfl : o = false := h _ List.mem_cons_self
+    simp [Parse.arrowStart, joined, Param.words, optionalMark, typeAnnotation, identWord]
+  | ⟨_, n, o, some t⟩ :: q :: qs, h =>
+    obtain rfl : o = false := h _ List.mem_cons_self
+    simp [Parse.arrowStart, joined, Param.words, optionalMark, typeAnnotation, identWord, punctWord]
 
 theorem arrowStart_take : ∀ ks : List TokenKind, Parse.arrowStart (ks.take 4) = Parse.arrowStart ks
   | [] | [_] | [_, _] | [_, _, _] | [_, _, _, _] => rfl
@@ -2530,7 +2588,8 @@ theorem Parse.startsArrow_eq (s : ParseState) :
   rw [this, List.map_take, arrowStart_take]
 
 /-- `( params )`, which `parseArrowParams` reads. -/
-theorem parseArrowParams_reads {T : Edition} (ps : List Param) (hps : ∀ p ∈ ps, p.wf = true)
+theorem parseArrowParams_reads {T : Edition} (ps : List Param)
+    (hps : ∀ p ∈ ps, p.wf = true ∧ (!p.optional) = true)
     (s : ParseState) (lp rp : Token) (its rest : List Token) (hT : s.target = T)
     (hs : s.rest = lp :: (its ++ rp :: rest)) (hl : s.left = s.rest.length) (hlp : lp.kind = .punct "(")
     (hrp : rp.kind = .punct ")") (ht : Touching its (separated "," (ps.map Param.words)))
@@ -2539,7 +2598,8 @@ theorem parseArrowParams_reads {T : Edition} (ps : List Param) (hps : ∀ p ∈ 
       Leaves s s' rest := by
   let s₁ : ParseState := { s with rest := its ++ rp :: rest, left := s.left - 1, lastStop := lp.span.stop }
   have hl₁ : s₁.left = s₁.rest.length := by simp [s₁, hl, hs]
-  obtain ⟨res, s₂, hit, hes, hL₂⟩ := params_reads ps hps s₁ its rest rp hT rfl hrp hl₁ ht hn
+  obtain ⟨res, s₂, hit, hes, hL₂⟩ := params_reads (ok := false) ps (fun p hp => (hps p hp).1)
+    (fun p hp h => by have := (hps p hp).2; simp [h] at this) s₁ its rest rp hT rfl hrp hl₁ ht hn
   have hs₂ : s₂.rest = rp :: rest := hL₂.rest_eq
   refine ⟨res.toList, { s₂ with rest := rest, left := s₂.left - 1, lastStop := rp.span.stop }, ?_, hes,
     leaves_trans (leaves_advance hs hl) (leaves_trans hL₂ (leaves_advance hs₂ (by rw [hL₂.left_eq, hs₂])))⟩
@@ -2589,7 +2649,7 @@ theorem parseArrow_ok {T : Edition} {g : Nat} {b : Expr} {s s₁ : ParseState} {
 /-- An arrow function, which `parseArrow` reads when `parseAssign` reads its
 body. -/
 theorem parseArrow_reads {T : Edition} (g : Nat) (sp : Span) (parens : Bool) (ps : List Param) (b : Expr)
-    (hshape : (parens || bareParam ps) = true) (hps : ∀ p ∈ ps, p.wf = true)
+    (hshape : (parens || bareParam ps) = true) (hps : ∀ p ∈ ps, p.wf = true ∧ (!p.optional) = true)
     (hbrace : notFirst (.punct "{") b.tokens = true)
     (hb : ReadsE T (Parse.parseAssign g) b EndsAssign) :
     ReadsE T (Parse.parseArrow (g + 1)) (.arrow sp parens ps b) EndsAssign := by
@@ -2600,11 +2660,12 @@ theorem parseArrow_reads {T : Edition} (g : Nat) (sp : Span) (parens : Bool) (ps
   obtain ⟨ar, bts, rfl, har, hbt⟩ := Touching.cons_one (by simpa [punctWord] using hmore)
   rcases arrowParams_cases parens ps with ⟨p, rfl, rfl, hp⟩ | hp
   · -- One name, without parentheses.
-    obtain ⟨psp, n, ty⟩ := p
+    obtain ⟨psp, n, o, ty⟩ := p
     cases ty with
     | some _ => simp [bareParam] at hshape
     | none =>
-    have hn' : n ∉ Parse.refusedNames := by simpa [Param.wf, exprName] using hps ⟨psp, n, none⟩ (by simp)
+    obtain rfl : o = false := by simpa using (hps ⟨psp, n, o, none⟩ (by simp)).2
+    have hn' : n ∉ Parse.refusedNames := by simpa [Param.wf, exprName] using (hps ⟨psp, n, false, none⟩ (by simp)).1
     rw [hp] at hpts
     obtain ⟨nm, ts₁, rfl, hnm, h₁⟩ := Touching.cons_one (by simpa [identWord] using hpts)
     simp [Touching] at h₁; subst h₁
@@ -2613,7 +2674,7 @@ theorem parseArrow_reads {T : Edition} (g : Nat) (sp : Span) (parens : Bool) (ps
     let s₁ := past s nm (ar :: (bts ++ rest))
     have hl₁ : s₁.left = s₁.rest.length := by simp [s₁, hl, hs']
     have hnp : nm.isPunct "(" = false := by simp [Token.isPunct, hnm]
-    have hpa : Parse.parseArrowParams s = .ok [⟨nm.span, n, none⟩] s₁ := by
+    have hpa : Parse.parseArrowParams s = .ok [⟨nm.span, n, false, none⟩] s₁ := by
       simp only [Parse.parseArrowParams]
       rw [Parse.bind_eq (Parse.peek_eq hs')]
       simp only [hnp, Bool.not_false, ↓reduceIte]
@@ -2630,9 +2691,9 @@ theorem parseArrow_reads {T : Edition} (g : Nat) (sp : Span) (parens : Bool) (ps
       | false =>
         simp only [Bool.false_or] at hshape
         match ps, hshape, hp with
-        | [⟨_, _, none⟩], _, hp => simp [arrowParams, enclose, identWord, punctWord] at hp
+        | [⟨_, _, _, none⟩], _, hp => simp [arrowParams, enclose, identWord, punctWord] at hp
         | [], h, _ => simp [bareParam] at h
-        | [⟨_, _, some _⟩], h, _ => simp [bareParam] at h
+        | [⟨_, _, _, some _⟩], h, _ => simp [bareParam] at h
         | _ :: _ :: _, h, _ => simp [bareParam] at h
     subst hparens
     rw [hp] at hpts
@@ -2668,7 +2729,10 @@ theorem parseAssign_reads {T : Edition} (f : Nat) (e : Expr) (he : e.wfAt T .ass
     obtain ⟨e', s₁, hp, hee, hL⟩ := hR sp p ps b rfl s ts rest hT hs hl ht hn hr hends ha
     refine ⟨e', s₁, ?_, hee, hL⟩
     simp only [Parse.parseAssign]
-    rw [Parse.bind_eq (Parse.startsArrow_eq s), hkinds, arrowStart_arrow]
+    have hopt : ∀ q ∈ ps, q.optional = false := fun q hq => by
+      simp only [Expr.wfAt, Bool.and_eq_true, List.all_eq_true] at he
+      simpa using (he.1.1.2 q hq).2
+    rw [Parse.bind_eq (Parse.startsArrow_eq s), hkinds, arrowStart_arrow _ _ _ _ _ hopt]
     simp only [↓reduceIte]
     rw [Parse.bind_eq hp]
     rfl
@@ -3076,12 +3140,16 @@ theorem TypeExpr.neutralBars : ∀ ts : List TypeExpr,
 end
 
 theorem Param.neutral (p : Param) : Neutral p.words.flatten := by
-  obtain ⟨_, n, ty⟩ := p
-  cases ty with
-  | none => exact Neutral.all (by simp [Param.words, typeAnnotation, identWord])
+  obtain ⟨_, n, o, ty⟩ := p
+  cases o <;> cases ty with
+  | none => exact Neutral.all (by simp [Param.words, optionalMark, typeAnnotation, identWord, punctWord])
   | some t =>
-    have := Neutral.cons (k := .ident n) (by simp) (Neutral.cons (k := .punct ":") (by simp) (TypeExpr.neutral t))
-    simpa [Param.words, typeAnnotation, identWord, punctWord, TypeExpr.tokens] using this
+    first
+    | have := Neutral.cons (k := .ident n) (by simp) (Neutral.cons (k := .punct ":") (by simp) (TypeExpr.neutral t))
+      simpa [Param.words, optionalMark, typeAnnotation, identWord, punctWord, TypeExpr.tokens] using this
+    | have := Neutral.cons (k := .ident n) (by simp) (Neutral.cons (k := .punct "?") (by simp)
+        (Neutral.cons (k := .punct ":") (by simp) (TypeExpr.neutral t)))
+      simpa [Param.words, optionalMark, typeAnnotation, identWord, punctWord, TypeExpr.tokens] using this
 
 mutual
 

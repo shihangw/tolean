@@ -2577,18 +2577,54 @@ theorem typeAnnotation_ok {T : Edition} {a : Option TypeExpr} (ht : ∀ t, a = s
   | none => exact WordsOK.nil
   | some t => have := ht t rfl; simp only [typeAnnotation]; words_ok
 
+theorem optionalMark_ok {T : Edition} : ∀ o : Bool, WordsOK T (optionalMark o)
+  | false => WordsOK.nil
+  | true => WordsOK.word (ok_punct (by decide))
+
 theorem Param.wordsOK {T : Edition} (p : Param) (hn : Word.ok T (identWord p.name) = true)
     (ht : ∀ t, p.type = some t → WordsOK T t.words) : WordsOK T p.words := by
   have h1 := typeAnnotation_ok ht
   unfold Param.words
-  words_ok
+  exact WordsOK.cons hn ((optionalMark_ok p.optional).append h1)
+
+/-- What `readOptionalMark` reads: nothing, or a `?` where an optional
+parameter may stand. -/
+theorem readOptionalMark_inv {ok b : Bool} {s s' : ParseState} (hR : Ready s)
+    (h : Parse.readOptionalMark ok s = .ok b s') :
+    (b = false ∧ s' = s) ∨
+      (b = true ∧ ok = true ∧ ∃ q r, s.rest = q :: r ∧ q.kind = .punct "?" ∧ s' = past s q r ∧ Ready s') := by
+  obtain ⟨x, r, hs⟩ := hR.cons
+  simp only [Parse.readOptionalMark] at h
+  rw [Parse.bind_eq (Parse.peek_eq hs)] at h
+  by_cases hq : x.isPunct "?" = true
+  · have hk : x.kind = .punct "?" := by simpa [Token.isPunct] using hq
+    have hne : x.kind ≠ .eof := by rw [hk]; simp
+    rw [if_pos hq] at h
+    obtain ⟨hok, h⟩ := fail_inv h
+    rw [Parse.bind_eq (Parse.discard_eq (advance_past hR hs hne))] at h
+    simp only [Parse.pure_ok] at h
+    obtain ⟨rfl, rfl⟩ := h
+    exact .inr ⟨rfl, by simpa using hok, x, r, hs, hk, rfl, hR.past hs (hR.more hs hne)⟩
+  · rw [if_neg hq] at h
+    cases h
+    exact .inl ⟨rfl, rfl⟩
+
+/-- After a name, `readOptionalMark` leaves a ready state, and reads the
+skeleton of the `?` it gives. -/
+theorem readOptionalMark_past {ok b : Bool} {s s' : ParseState} (hR : Ready s)
+    (h : Parse.readOptionalMark ok s = .ok b s') :
+    Ready s' ∧ Kept s s' ∧ PastSkel s s' (skel (optionalMark b).flatten) ∧ (ok = false → b = false) := by
+  rcases readOptionalMark_inv hR h with ⟨rfl, rfl⟩ | ⟨rfl, hok, q, r, hq1, hq2, rfl, hR'⟩
+  · exact ⟨hR, Kept.refl _, (PastSkel.refl _).of_eq (by simp [optionalMark, skel]), fun _ => rfl⟩
+  · exact ⟨hR', Kept.past _ _ _, (PastSkel.tok hq1).of_eq (by simp [optionalMark, punctWord, hq2]),
+      by simp [hok]⟩
 
 /-- What a parser of items that hold no expression gives: an item that `P` accepts. -/
 def GivesW {α : Type} (T : Edition) (P : α → Prop) (p : ParseM α) : Prop :=
   ∀ s x s', Ready s → s.target = T → p s = .ok x s' → Ready s' ∧ Kept s s' ∧ P x
 
-theorem parseParam_wf {T : Edition} :
-    GivesW T (fun p : Param => Param.wf p = true ∧ WordsOK T p.words) Parse.parseParam := by
+theorem parseParam_wf {T : Edition} {ok : Bool} :
+    GivesW T (fun p : Param => Param.wf p = true ∧ WordsOK T p.words) (Parse.parseParam ok) := by
   intro s p s' hR hT h
   obtain ⟨x, r, hs⟩ := hR.cons
   simp only [Parse.parseParam] at h
@@ -2598,17 +2634,19 @@ theorem parseParam_wf {T : Edition} :
   obtain ⟨_, h⟩ := fail_inv h
   rw [Parse.bind_ok] at h; obtain ⟨name, s₁, hn, h⟩ := h
   have hnok := readName_words hR hT hn
-  obtain ⟨tn, r₁, _, hnr, _, rfl, hR₁⟩ := readName_inv hR hn
+  obtain ⟨tn, r₁, _, hnr, _, rfl, hR₀⟩ := readName_inv hR hn
   have hname : exprName name = true := by simpa [exprName] using hnr
+  rw [Parse.bind_ok] at h; obtain ⟨b, s₁, hm, h⟩ := h
+  obtain ⟨hR₁, hK₁, -, -⟩ := readOptionalMark_past hR₀ hm
+  have hT₁ : s₁.target = T := hK₁.target_eq.trans hT
   obtain ⟨y, r₂, hs₂⟩ := hR₁.cons
   rw [Parse.bind_eq (Parse.peek_eq hs₂)] at h
-  obtain ⟨_, h⟩ := fail_inv h
   by_cases hc : y.isPunct ":" = true
   · have hne : y.kind ≠ .eof := by simp [Token.isPunct] at hc; rw [hc]; simp
     rw [if_pos hc, Parse.bind_eq (Parse.discard_eq (advance_past hR₁ hs₂ hne)), Parse.bind_eq (Parse.budget_eq _),
       Parse.bind_ok] at h
     obtain ⟨ty, s₂, hty, h⟩ := h
-    obtain ⟨htwo, hR₂, hK₂⟩ := (types_give T _).1 _ _ _ (hR₁.past hs₂ (hR₁.more hs₂ hne)) hT hty
+    obtain ⟨htwo, hR₂, hK₂⟩ := (types_give T _).1 _ _ _ (hR₁.past hs₂ (hR₁.more hs₂ hne)) hT₁ hty
     have htw := both_left htwo
     rw [Parse.pure_bind] at h
     obtain ⟨z, r₃, hs₃⟩ := hR₂.cons
@@ -2616,19 +2654,58 @@ theorem parseParam_wf {T : Edition} :
     obtain ⟨_, h⟩ := fail_inv h
     rw [Parse.bind_eq (Parse.spanFrom_eq _ _)] at h
     simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h
-    exact ⟨hR₂, (Kept.past _ _ _).trans ((Kept.past _ _ _).trans hK₂), by simp [Param.wf, hname, htw],
+    exact ⟨hR₂, (Kept.past _ _ _).trans (hK₁.trans ((Kept.past _ _ _).trans hK₂)), by simp [Param.wf, hname, htw],
       Param.wordsOK _ hnok (fun t ht => by simp at ht; subst ht; exact both_right htwo)⟩
   · rw [if_neg hc, Parse.pure_bind] at h
     rw [Parse.bind_eq (Parse.peek_eq hs₂)] at h
     obtain ⟨_, h⟩ := fail_inv h
     rw [Parse.bind_eq (Parse.spanFrom_eq _ _)] at h
     simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h
-    exact ⟨hR₁, Kept.past _ _ _, by simp [Param.wf, hname], Param.wordsOK _ hnok (fun t ht => by simp at ht)⟩
+    exact ⟨hR₁, (Kept.past _ _ _).trans hK₁, by simp [Param.wf, hname],
+      Param.wordsOK _ hnok (fun t ht => by simp at ht)⟩
+
+/-- An arrow function's parameter is never optional. -/
+theorem parseParam_notOptional {s s' : ParseState} {p : Param} (hR : Ready s)
+    (h : Parse.parseParam false s = .ok p s') : p.optional = false := by
+  obtain ⟨x, r, hs⟩ := hR.cons
+  simp only [Parse.parseParam] at h
+  rw [Parse.bind_eq (Parse.peek_eq hs)] at h
+  obtain ⟨_, h⟩ := fail_inv h
+  obtain ⟨_, h⟩ := fail_inv h
+  obtain ⟨_, h⟩ := fail_inv h
+  rw [Parse.bind_ok] at h; obtain ⟨name, s₁, hn, h⟩ := h
+  obtain ⟨tn, r₁, _, _, _, rfl, hR₀⟩ := readName_inv hR hn
+  rw [Parse.bind_ok] at h; obtain ⟨b, s₁, hm, h⟩ := h
+  obtain ⟨hR₁, -, -, hb⟩ := readOptionalMark_past hR₀ hm
+  have hb' := hb rfl
+  subst hb'
+  obtain ⟨y, r₂, hs₂⟩ := hR₁.cons
+  rw [Parse.bind_eq (Parse.peek_eq hs₂)] at h
+  by_cases hc : y.isPunct ":" = true
+  · have hne : y.kind ≠ .eof := by simp [Token.isPunct] at hc; rw [hc]; simp
+    rw [if_pos hc, Parse.bind_eq (Parse.discard_eq (advance_past hR₁ hs₂ hne)), Parse.bind_eq (Parse.budget_eq _),
+      Parse.bind_ok] at h
+    obtain ⟨ty, s₂, hty, h⟩ := h
+    obtain ⟨-, hR₂, -⟩ := (types_give _ _).1 _ _ _ (hR₁.past hs₂ (hR₁.more hs₂ hne)) rfl hty
+    rw [Parse.pure_bind] at h
+    obtain ⟨z, r₃, hs₃⟩ := hR₂.cons
+    rw [Parse.bind_eq (Parse.peek_eq hs₃)] at h
+    obtain ⟨_, h⟩ := fail_inv h
+    rw [Parse.bind_eq (Parse.spanFrom_eq _ _)] at h
+    simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h
+    rfl
+  · rw [if_neg hc, Parse.pure_bind] at h
+    rw [Parse.bind_eq (Parse.peek_eq hs₂)] at h
+    obtain ⟨_, h⟩ := fail_inv h
+    rw [Parse.bind_eq (Parse.spanFrom_eq _ _)] at h
+    simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h
+    rfl
 
 /-! ### Arrow functions -/
 
 /-- `parseParam` reads tokens with the skeleton of the printed parameter. -/
-theorem parseParam_skel {s s' : ParseState} {p : Param} (hR : Ready s) (h : Parse.parseParam s = .ok p s') :
+theorem parseParam_skel {ok : Bool} {s s' : ParseState} {p : Param} (hR : Ready s)
+    (h : Parse.parseParam ok s = .ok p s') :
     PastSkel s s' (skel p.words.flatten) := by
   obtain ⟨x, r, hs⟩ := hR.cons
   simp only [Parse.parseParam] at h
@@ -2637,11 +2714,13 @@ theorem parseParam_skel {s s' : ParseState} {p : Param} (hR : Ready s) (h : Pars
   obtain ⟨_, h⟩ := fail_inv h
   obtain ⟨_, h⟩ := fail_inv h
   rw [Parse.bind_ok] at h; obtain ⟨name, s₁, hn, h⟩ := h
-  obtain ⟨tn, r₁, htk, _, hs₀, rfl, hR₁⟩ := readName_inv hR hn
-  have hP₁ : PastSkel s (past s tn r₁) [] := (PastSkel.tok hs₀).of_eq (by rw [htk]; rfl)
+  obtain ⟨tn, r₁, htk, _, hs₀, rfl, hR₀⟩ := readName_inv hR hn
+  have hP₀ : PastSkel s (past s tn r₁) [] := (PastSkel.tok hs₀).of_eq (by rw [htk]; rfl)
+  rw [Parse.bind_ok] at h; obtain ⟨b, s₁, hm, h⟩ := h
+  obtain ⟨hR₁, -, hPm, -⟩ := readOptionalMark_past hR₀ hm
+  have hP₁ := hP₀.trans hPm
   obtain ⟨y, r₂, hs₂⟩ := hR₁.cons
   rw [Parse.bind_eq (Parse.peek_eq hs₂)] at h
-  obtain ⟨_, h⟩ := fail_inv h
   by_cases hc : y.isPunct ":" = true
   · have hyk : y.kind = .punct ":" := by simpa [Token.isPunct] using hc
     have hne : y.kind ≠ .eof := by rw [hyk]; simp
@@ -2656,23 +2735,25 @@ theorem parseParam_skel {s s' : ParseState} {p : Param} (hR : Ready s) (h : Pars
     rw [Parse.bind_eq (Parse.spanFrom_eq _ _)] at h
     simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h
     exact ((hP₁.trans (PastSkel.tok hs₂)).trans hP₂).of_eq (by
-      rw [hyk]; simp [Param.words, typeAnnotation, identWord, punctWord, TypeExpr.tokens, skel, skelKind])
+      rw [hyk]; cases b <;>
+        simp [Param.words, optionalMark, typeAnnotation, identWord, punctWord, TypeExpr.tokens, skel, skelKind])
   · rw [if_neg hc, Parse.pure_bind] at h
     rw [Parse.bind_eq (Parse.peek_eq hs₂)] at h
     obtain ⟨_, h⟩ := fail_inv h
     rw [Parse.bind_eq (Parse.spanFrom_eq _ _)] at h
     simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h
-    exact hP₁.of_eq (by simp [Param.words, typeAnnotation, identWord, skel, skelKind])
+    exact hP₁.of_eq (by cases b <;> simp [Param.words, optionalMark, typeAnnotation, identWord, punctWord, skel, skelKind])
 
-/-- `parseParam` reads items of a list. -/
+/-- `parseParam` reads items of a list, which are not optional in an arrow
+function. -/
 theorem parseParam_item {T : Edition} :
-    GivesItem T (fun p : Param => p.wf && p.words.all (Word.ok T)) (fun p => p.words.flatten) (fun _ _ => true)
-      Parse.parseParam := by
+    GivesItem T (fun p : Param => (p.wf && !p.optional) && p.words.all (Word.ok T)) (fun p => p.words.flatten)
+      (fun _ _ => true) (Parse.parseParam false) := by
   intro s p s' hR hT h
   obtain ⟨hR', hK, hwf, hok⟩ := parseParam_wf s p s' hR hT h
   obtain ⟨src, h1, h2⟩ := parseParam_skel hR h
-  exact ⟨hR', hK, ⟨src, h1, h2⟩, both hwf (wordsOK_iff.mp (by simpa [WordsOK] using hok) |> fun _ => hok),
-    fun _ _ => rfl⟩
+  have hno := parseParam_notOptional hR h
+  exact ⟨hR', hK, ⟨src, h1, h2⟩, both (by simp [hwf, hno]) hok, fun _ _ => rfl⟩
 
 /-- The parameters of an arrow function, as `parseArrowParams` gives them:
 one name, or the list in parentheses, as the first token says. -/
@@ -2681,7 +2762,7 @@ theorem parseArrowParams_gives {T : Edition} {s s' : ParseState} {ps : List Para
     (h : Parse.parseArrowParams s = .ok ps s') :
     Ready s' ∧ Kept s s' ∧ PastSkel s s' (skel (arrowParams (first.isPunct "(") ps).flatten) ∧
       (arrowParams (first.isPunct "(") ps).flatten.head? = some first.kind ∧
-      (first.isPunct "(" || bareParam ps) = true ∧ (∀ p ∈ ps, p.wf = true) ∧
+      (first.isPunct "(" || bareParam ps) = true ∧ (∀ p ∈ ps, p.wf = true ∧ (!p.optional) = true) ∧
       WordsOK T (arrowParams (first.isPunct "(") ps) := by
   simp only [Parse.parseArrowParams] at h
   rw [Parse.bind_eq (Parse.peek_eq hs)] at h
@@ -2701,7 +2782,8 @@ theorem parseArrowParams_gives {T : Edition} {s s' : ParseState} {ps : List Para
     rw [hp]
     have hpar : arrowParams true items.toList = enclose "(" ")" (items.toList.map Param.words) := rfl
     refine ⟨hR₂, (Kept.past _ _ _).trans hK₂, ⟨src, h1, by rw [h2, hpar, enclose_params_flatten, List.cons_append]⟩,
-      by rw [hpar, enclose_params_flatten, hlk]; rfl, rfl, fun p hp => both_left (hwf p hp), ?_⟩
+      by rw [hpar, enclose_params_flatten, hlk]; rfl, rfl,
+      fun p hp => by simpa using both_left (hwf p hp), ?_⟩
     rw [hpar]
     exact wordsOK_enclose (by decide) (by decide) (fun x hx => by
       simp only [List.mem_map] at hx
