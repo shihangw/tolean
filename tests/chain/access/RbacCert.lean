@@ -210,7 +210,8 @@ def decls : List tolean.TypeScript.IR.Decl :=
          scope := [("groups",
                     tolean.IR.Ty.list (tolean.IR.Ty.struct { file := "", name := "Membership" })),
                    ("group", tolean.IR.Ty.string),
-                   ("principal", tolean.IR.Ty.string)] })),
+                   ("principal", tolean.IR.Ty.string)],
+         breaks := false })),
  tolean.IR.Decl.function
    "isMember"
    [("groups", tolean.IR.Ty.list (tolean.IR.Ty.struct { file := "", name := "Membership" })),
@@ -259,7 +260,8 @@ def decls : List tolean.TypeScript.IR.Decl :=
          scope := [("grants",
                     tolean.IR.Ty.list (tolean.IR.Ty.struct { file := "", name := "Grant" })),
                    ("role", tolean.IR.Ty.string),
-                   ("permission", tolean.IR.Ty.string)] })),
+                   ("permission", tolean.IR.Ty.string)],
+         breaks := false })),
  tolean.IR.Decl.function
    "bindingAllows"
    [("p", tolean.IR.Ty.struct { file := "", name := "Policy" }),
@@ -330,7 +332,8 @@ def decls : List tolean.TypeScript.IR.Decl :=
          stateTypes := [tolean.IR.Ty.bool],
          elem := tolean.IR.Ty.struct { file := "", name := "Binding" },
          scope := [("p", tolean.IR.Ty.struct { file := "", name := "Policy" }),
-                   ("req", tolean.IR.Ty.struct { file := "", name := "Request" })] })),
+                   ("req", tolean.IR.Ty.struct { file := "", name := "Request" })],
+         breaks := false })),
  tolean.IR.Decl.function
    "denied"
    [("p", tolean.IR.Ty.struct { file := "", name := "Policy" }),
@@ -357,7 +360,8 @@ def decls : List tolean.TypeScript.IR.Decl :=
          stateTypes := [tolean.IR.Ty.bool],
          elem := tolean.IR.Ty.struct { file := "", name := "Deny" },
          scope := [("p", tolean.IR.Ty.struct { file := "", name := "Policy" }),
-                   ("req", tolean.IR.Ty.struct { file := "", name := "Request" })] })),
+                   ("req", tolean.IR.Ty.struct { file := "", name := "Request" })],
+         breaks := false })),
  tolean.IR.Decl.function
    "permits"
    [("p", tolean.IR.Ty.struct { file := "", name := "Policy" }),

@@ -321,8 +321,7 @@ export class Gen {
             const inner = [...vars, { name: element, ty: xs.ty.of, mutable: false, owned: false }];
             const assign = `${target.name} = ${this.expr(target.ty, inner, 1)};`;
             // A `continue` skips the assignment for some elements, and a
-            // `break` ends the loop there. The translator refuses `break` in a
-            // loop for now, but the interpreter runs it.
+            // `break` ends the loop there.
             const jump = this.next();
             const body = jump < 0.2 ? [`  if (${this.test(inner, 1)}) continue;`, `  ${assign}`]
               : jump < 0.3 ? [`  if (${this.test(inner, 1)}) {`, `    ${assign}`, '    continue;', '  }', `  ${assign}`]

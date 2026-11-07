@@ -222,7 +222,8 @@ branch or a loop body, with the bindings it has made. -/
 def Body.exec (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : Env N) :
     Body → Option (Outcome N)
   | .value e => do return .ret (← Expr.eval fs fuel ρ e)
-  | .state _ => some (.normal ρ)
+  | .state _ | .yield _ => some (.normal ρ)
+  | .done _ => some (.brk ρ)
   | .let name e rest => do Body.exec fs fuel ((name, ← Expr.eval fs fuel ρ e) :: ρ) rest
   | .letArray name _ elems rest => do
     Body.exec fs fuel ((name, .list (← Expr.evalList fs fuel ρ elems)) :: ρ) rest
@@ -251,14 +252,17 @@ def Body.exec (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
 termination_by b => (fuel, sizeOf b, 0)
 
 /-- `List.foldl` over `items` with the step `fun (names) element => body`: the
-bindings of `names` after each element, on top of `ρ`. -/
+bindings of `names` after each element, on top of `ρ`. A `break` in the body
+ends the loop with the bindings it has then, as `forIn` stops at a
+`ForInStep.done`. -/
 def Body.runFold (fs : List (DeclRef × List String × Body)) (fuel : Nat) (names : List String)
     (element : String) (body : Body) (ρ : Env N) : List (Val N) → Option (Env N)
   | [] => some ρ
   | x :: xs => do
     match ← Body.exec fs fuel ((element, x) :: ρ) body with
     | .normal inner => Body.runFold fs fuel names element body (← bindState names inner ρ) xs
-    | .ret _ | .brk _ | .cont _ => none
+    | .brk inner => bindState names inner ρ
+    | .ret _ | .cont _ => none
 termination_by xs => (fuel, sizeOf body, xs.length + 1)
 
 end
