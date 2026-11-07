@@ -27,9 +27,10 @@ marks which links are proved, tested against a reference, or trusted.
   parentheses, member access, indexing and calls; the unary operators `!`,
   `-`, `+`, `~`, `typeof` and `void`; `++` and `--` before or after; the
   binary operators, including `??`, `**`, `in` and `instanceof`; the
-  conditional operator; assignment, with every compound operator; and arrow
+  conditional operator; assignment, with every compound operator; arrow
   functions whose body is an expression, such as `x => x + 1` and
-  `(a: number, b) => a * b`.
+  `(a: number, b) => a * b`; and `e as const` and `e satisfies T`, which
+  bind as `<` does, as they do in `tsc`.
 - **Types:** keyword types such as `number`, `null`, literal types, named types
   with type arguments, arrays, unions and parentheses.
 
@@ -47,6 +48,21 @@ reading. There are three such cases:
 
 The parser also refuses an arrow function with a return type, and one whose
 body is in braces. The translator refuses every arrow function for now.
+
+`as const` and `satisfies T` have two more lookalikes, and the parser refuses
+both:
+
+- `<`, `<<`, `?`, `|`, `&`, `[`, `(` or `.` right after the type. `tsc` may
+  read the token as a part of the type, as it reads `x as const < y` with type
+  arguments. Type stripping leaves blanks in place of the type, so after a
+  line break JavaScript may read the next line as a part of the operand, as
+  in `x as const` and then `[0]` on the next line.
+- `as` or `satisfies` right after a name that starts a declaration in `tsc`,
+  such as `type` or `declare`. At the start of a statement, `tsc` reads
+  `type as const` as a type alias.
+
+The parser refuses every other type assertion, such as `x as T`, `<T>x` and
+the non-null assertion `x!`, because TypeScript does not check them.
 
 The parser also refuses code that Tolean cannot represent exactly. Examples
 are lone surrogates, legacy octal literals, template literals and non-ASCII
@@ -298,6 +314,7 @@ the file, the line and the reason. It never approximates.
 | `interface` with `readonly`, required fields | `structure` |
 | `readonly f?: T`, an optional field | `f : Option T := none`. An object literal may leave the field out, or set it to a `T`. A read of a field that the object lacks gives `undefined`, which is `none`. `s.f ?? d` is `Option.getD s.f d`, and `s.f === undefined` is `s.f.isNone`. |
 | `p?.f`, where `p` is a `S \| null` or an optional field of type `S` | `p.map (·.f)`, or `p.bind (·.f)` when `f` is optional. The value is `undefined` when `p` is `null` or `undefined`, so it has the type of an optional field: `p?.f ?? d` and `p?.f === undefined` work as they do on `s.f`. |
+| `e as const` and `e satisfies T` | `e`. Type stripping removes both, so the value is the value of `e`. Tolean types `e` in the context of `T` and checks that the value has the type `T`, as `tsc` does. The value keeps its own type, which can be wider than the type `tsc` gives it, because the output types a literal by its context, as it does without `as const`. |
 | `type T = U`, declared before its uses | `abbrev T := U`. The output writes `U` itself wherever the source names `T`, so the `abbrev` is only for claims. |
 | `type T = 'a' \| 'b'`, a union of string literals | `inductive T` with the constructors `a` and `b`, which derives `DecidableEq`. A literal becomes `T.a` where the context expects a `T`, and `t === 'a'` becomes `t = T.a`. The output writes every constructor in `«»`, such as `T.«open»`, because Lean reads some strings as keywords or modifiers. A claim can still write `T.a`. |
 | `type T = A \| B`, a union of interfaces with a tag field such as `kind: 'circle'` | `inductive T` with a constructor for each member, which holds the member's structure. The structure leaves the tag field out, because its value never changes. An object literal where a `T` is expected becomes the constructor of its tag. |

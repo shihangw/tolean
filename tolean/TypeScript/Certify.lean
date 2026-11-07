@@ -119,7 +119,8 @@ partial def stmtsOf : Stmt → List Stmt
 partial def exprCalls : Expr → List String
   | .call _ (.ident _ f) args => f :: args.flatMap exprCalls
   | .call _ c args => exprCalls c ++ args.flatMap exprCalls
-  | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e =>
+  | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e
+  | .asConst _ e | .satisfies _ e _ =>
     exprCalls e
   | .index _ a b | .binary _ _ a b | .assign _ _ a b => exprCalls a ++ exprCalls b
   | .cond _ a b c => exprCalls a ++ exprCalls b ++ exprCalls c
@@ -131,7 +132,8 @@ partial def exprCalls : Expr → List String
 partial def exprNumbers : Expr → List String
   | .number _ t => [t]
   | .call _ c args => exprNumbers c ++ args.flatMap exprNumbers
-  | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e =>
+  | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e
+  | .asConst _ e | .satisfies _ e _ =>
     exprNumbers e
   | .index _ a b | .binary _ _ a b | .assign _ _ a b => exprNumbers a ++ exprNumbers b
   | .cond _ a b c => exprNumbers a ++ exprNumbers b ++ exprNumbers c

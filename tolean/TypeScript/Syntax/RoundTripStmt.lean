@@ -544,6 +544,12 @@ theorem Expr.firstWord : ∀ e : Expr, ∃ w ws, e.words = w :: ws ∧ w ≠ []
   | .assign _ _ t _ => by
     obtain ⟨w, ws, h, hw⟩ := Expr.firstWord t
     exact ⟨w, _, by simp only [Expr.words, h, List.cons_append]; exact rfl, hw⟩
+  | .asConst _ l => by
+    obtain ⟨w, ws, h, hw⟩ := Expr.firstWord l
+    exact ⟨w, _, by simp only [Expr.words, h, List.cons_append]; exact rfl, hw⟩
+  | .satisfies _ l _ => by
+    obtain ⟨w, ws, h, hw⟩ := Expr.firstWord l
+    exact ⟨w, _, by simp only [Expr.words, h, List.cons_append]; exact rfl, hw⟩
 
 /-- No line break comes before the token after a word of one token, when a
 word with tokens follows that word. -/
@@ -1179,6 +1185,8 @@ theorem Expr.lessFree_erase : ∀ e : Expr, e.erase.lessFree = e.lessFree
   | .cond _ a b c => by
     simp only [Expr.erase, Expr.lessFree, Expr.lessFree_erase a, Expr.lessFree_erase b, Expr.lessFree_erase c]
   | .binary _ _ l r => by simp only [Expr.erase, Expr.lessFree, Expr.lessFree_erase l, Expr.lessFree_erase r]
+  | .asConst _ e => by simp only [Expr.erase, Expr.lessFree]; exact Expr.lessFree_erase e
+  | .satisfies _ e _ => by simp only [Expr.erase, Expr.lessFree]; exact Expr.lessFree_erase e
 
 theorem Expr.lessFreeList_eraseAll : ∀ es : List Expr, Expr.lessFreeList (Expr.eraseAll es) = Expr.lessFreeList es
   | [] => rfl
@@ -1240,6 +1248,14 @@ theorem Expr.afterOK_head : ∀ (e : Expr) {a b : List TokenKind}, e.lessFree = 
     simp only [Expr.lessFree] at hf; simp only [Expr.afterOK]; exact Expr.afterOK_head x hf h
   | .postfix _ _ x, _, _, hf, _ => by
     simp only [Expr.lessFree] at hf; simp only [Expr.afterOK]; exact Expr.afterOK_head x hf rfl
+  | .asConst _ x, a, b, hf, h => by
+    simp only [Expr.lessFree] at hf; simp only [Expr.afterOK]
+    rw [Expr.afterOK_head x (a := .ident "as" :: .keyword "const" :: a)
+      (b := .ident "as" :: .keyword "const" :: b) hf rfl]
+  | .satisfies _ x t, a, b, hf, h => by
+    simp only [Expr.lessFree] at hf; simp only [Expr.afterOK]
+    rw [Expr.afterOK_head x (a := (.ident "satisfies" :: t.tokens) ++ a)
+      (b := (.ident "satisfies" :: t.tokens) ++ b) hf rfl]
   | .cond _ t x y, _, _, hf, h => by
     simp only [Expr.lessFree, Bool.and_eq_true] at hf
     obtain ⟨⟨ht, hx⟩, hy⟩ := hf

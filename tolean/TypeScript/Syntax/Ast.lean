@@ -141,6 +141,12 @@ inductive Expr where
   /-- `(a: T, b) => body`, or `a => body` when `parens` is false. The body is
   an expression. -/
   | arrow (span : Span) (parens : Bool) (params : List Param) (body : Expr)
+  /-- `expr as const`. Type stripping removes `as const`, so it has the value
+  of `expr`. -/
+  | asConst (span : Span) (expr : Expr)
+  /-- `expr satisfies type`. Type stripping removes `satisfies type`, so it has
+  the value of `expr`. -/
+  | satisfies (span : Span) (expr : Expr) (type : TypeExpr)
 
 inductive Property where
   /-- `{ a }`. -/
@@ -253,6 +259,7 @@ def Expr.assigns (n : String) : Expr → Bool
   -- The body runs only when the arrow is called; counting it anyway only
   -- refuses more.
   | .arrow _ _ _ body => body.assigns n
+  | .asConst _ e | .satisfies _ e _ => e.assigns n
 
 def Expr.assignsList (n : String) : List Expr → Bool
   | [] => false
@@ -380,7 +387,7 @@ def Expr.span : Expr → Span
   | .ident s _ | .number s _ | .bigint s _ | .string s _ | .bool s _ | .null s | .array s _
   | .object s _ | .paren s _ | .member s _ _ | .optMember s _ _ | .index s _ _ | .call s _ _ | .unary s _ _
   | .prefix s _ _ | .postfix s _ _ | .binary s _ _ _ | .cond s _ _ _ | .assign s _ _ _
-  | .arrow s _ _ _ => s
+  | .arrow s _ _ _ | .asConst s _ | .satisfies s _ _ => s
 
 def Stmt.span : Stmt → Span
   | .varDecl s _ | .exprStmt s _ | .returnStmt s _ | .ifStmt s _ _ _ | .forOfStmt s _ _ _ _
@@ -400,6 +407,8 @@ def Expr.lessFree : Expr → Bool
   | .cond _ a b c => a.lessFree && b.lessFree && c.lessFree
   -- What the parser checks after an arrow is what it checks after its body.
   | .arrow _ _ _ body => body.lessFree
+  -- A `<` in the type reads type arguments, which the parser checks itself.
+  | .asConst _ e | .satisfies _ e _ => e.lessFree
   | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => true
 
 def Expr.lessFreeList : List Expr → Bool
