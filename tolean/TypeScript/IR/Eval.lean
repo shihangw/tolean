@@ -202,7 +202,47 @@ def Expr.eval (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
     let .int y ← Expr.eval fs fuel ρ a | none
     return .int (op.apply x y)
   | .ext op args => do op.apply (← Expr.evalList fs fuel ρ args)
+  -- `fun x => body` runs on each element in order, as the callback of the
+  -- source's method does, and `List.any`, `List.all` and `List.find?` stop
+  -- where it does. `List.find?` gives `none` when no element passes, which is
+  -- `undefined`, as in JS.
+  | .listMethod method items param _ body _ => do
+    let .list xs ← Expr.eval fs fuel ρ items | none
+    match method with
+    | .map => return .list (← Expr.evalMap fs fuel ρ param body xs)
+    | .filter => return .list (← Expr.evalFilter fs fuel ρ param body xs)
+    | .any => return .bool (← Expr.evalFind fs fuel ρ param body true xs).isSome
+    | .all => return .bool (← Expr.evalFind fs fuel ρ param body false xs).isNone
+    | .find => return (← Expr.evalFind fs fuel ρ param body true xs).getD .undefined
 termination_by e => (fuel, sizeOf e, 0)
+
+/-- `List.map (fun param => body)` on `xs`. -/
+def Expr.evalMap (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : Env N)
+    (param : String) (body : Expr) : List (Val N) → Option (List (Val N))
+  | [] => some []
+  | x :: xs => do
+    return (← Expr.eval fs fuel ((param, x) :: ρ) body) :: (← Expr.evalMap fs fuel ρ param body xs)
+termination_by xs => (fuel, sizeOf body, xs.length + 1)
+
+/-- `List.filter (fun param => body)` on `xs`, where `body` is a `Bool`. -/
+def Expr.evalFilter (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : Env N)
+    (param : String) (body : Expr) : List (Val N) → Option (List (Val N))
+  | [] => some []
+  | x :: xs => do
+    let .bool keep ← Expr.eval fs fuel ((param, x) :: ρ) body | none
+    let rest ← Expr.evalFilter fs fuel ρ param body xs
+    return if keep then x :: rest else rest
+termination_by xs => (fuel, sizeOf body, xs.length + 1)
+
+/-- The first of `xs` for which the `Bool` `body` is `want`, or none. -/
+def Expr.evalFind (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : Env N)
+    (param : String) (body : Expr) (want : Bool) : List (Val N) → Option (Option (Val N))
+  | [] => some none
+  | x :: xs => do
+    let .bool b ← Expr.eval fs fuel ((param, x) :: ρ) body | none
+    if b == want then return some x
+    Expr.evalFind fs fuel ρ param body want xs
+termination_by xs => (fuel, sizeOf body, xs.length + 1)
 
 def Expr.evalList (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : Env N) :
     List Expr → Option (List (Val N))

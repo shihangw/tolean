@@ -191,6 +191,9 @@ def sections : List Section := [
   -- §15 ECMAScript Language: Functions and Classes {#sec-ecmascript-language-functions-and-classes}
   ⟨"sec-function-definitions", "15.2", "Function Definitions",
     [``Proof.translateFunction_ok, ``Proof.params_fold]⟩,
+  ⟨"sec-arrow-function-definitions", "15.3", "Arrow Function Definitions",
+    [``Proof.callbackOf_some, ``Proof.bodySim_of, ``Proof.eval_arrayMethod, ``Proof.out_listMethod,
+    ``Proof.methodVal_sim, ``Proof.translateArrayMethod_sound]⟩,
   -- §16 ECMAScript Language: Scripts and Modules {#sec-ecmascript-language-scripts-and-modules}
   ⟨"sec-source-text-module-record-initialize-environment", "16.2.1.6.4", "InitializeEnvironment",
     [``Proof.module_resolves, ``Proof.declareTopLevel_ok, ``Proof.translateDecl_ok,
@@ -207,8 +210,16 @@ def sections : List Section := [
   ⟨"sec-properties-of-the-number-constructor", "21.1.2", "Properties of the Number Constructor",
     [``Proof.out_numberTest]⟩,
   -- §23 Indexed Collections {#sec-indexed-collections}
+  ⟨"sec-array.prototype.every", "23.1.3.6", "Array.prototype.every", []⟩,
+  ⟨"sec-array.prototype.filter", "23.1.3.8", "Array.prototype.filter",
+    [``Proof.evalFilter_sim]⟩,
+  ⟨"sec-array.prototype.find", "23.1.3.9", "Array.prototype.find",
+    [``Proof.evalFind_sim]⟩,
+  ⟨"sec-array.prototype.map", "23.1.3.21", "Array.prototype.map",
+    [``Proof.evalMap_sim]⟩,
   ⟨"sec-array.prototype.push", "23.1.3.23", "Array.prototype.push",
     [``Proof.out_push]⟩,
+  ⟨"sec-array.prototype.some", "23.1.3.29", "Array.prototype.some", []⟩,
   ⟨"sec-createarrayiterator", "23.1.5.1", "CreateArrayIterator", []⟩]
 
 /-- The laws of the number model, from §6.1.6.1 The Number Type. The proofs
@@ -507,7 +518,10 @@ def extras : List Group := [
     ``Eval.decNull_some, ``Eval.decList_nil, ``Eval.decList_cons, ``Eval.decList_encList,
     ``Eval.decNull_encNull, ``Eval.decNull_null, ``Eval.decList_list_null, ``Eval.decList_encList_null, ``Eval.encUndef_some, ``Eval.encUndef_none,
     ``Eval.encField_some, ``Eval.encField_none, ``Eval.decUndef_none, ``Eval.decUndef_undefined,
-    ``Eval.decUndef_some, ``Eval.decUndef_encUndef]⟩]
+    ``Eval.decUndef_some, ``Eval.decUndef_encUndef]⟩,
+  ⟨"Certificates: callbacks and the List functions", [``Proof.evalMap_map, ``Proof.evalFilter_filter,
+    ``Proof.evalFind_find, ``Proof.evalFind_true, ``Proof.evalFind_false, ``Proof.find?_isSome,
+    ``Proof.find?_not_isNone, ``Proof.getD_map_undefined]⟩]
 
 open Meta in
 /-- The theorems of the TypeScript modules that the index does not list. A
