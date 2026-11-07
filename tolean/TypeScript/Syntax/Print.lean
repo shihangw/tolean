@@ -39,7 +39,7 @@ partial def TypeExpr.toSexp : TypeExpr → Sexp
   | .paren s inner => node "type-paren" s [] [inner.toSexp]
 
 def Param.toSexp (p : Param) : Sexp :=
-  node "param" p.span [p.name] (p.type.map TypeExpr.toSexp).toList
+  node "param" p.span ([p.name] ++ flag p.optional "optional") (p.type.map TypeExpr.toSexp).toList
 
 mutual
 

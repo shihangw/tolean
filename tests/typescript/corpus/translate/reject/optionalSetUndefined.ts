@@ -1,4 +1,4 @@
-// expect: 7:33 only parameters and locals may be referenced
+// expect: 7:33 undefined may stand only where an optional value is expected
 interface Item {
   readonly price: bigint;
   readonly discount?: bigint;

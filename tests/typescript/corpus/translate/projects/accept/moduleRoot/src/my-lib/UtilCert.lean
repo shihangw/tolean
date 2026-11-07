@@ -15,7 +15,7 @@ set_option linter.unusedVariables false
 /-- The program, as the parser read it. -/
 def program : tolean.TypeScript.Syntax.Module :=
   { decls := [
-  (tolean.TypeScript.Syntax.Decl.function (sp 2 1 4 2) true "inc" [{ span := (sp 2 21 2 30), name := "x", type := (some (tolean.TypeScript.Syntax.TypeExpr.keyword (sp 2 24 2 30) "bigint")) }] (some (tolean.TypeScript.Syntax.TypeExpr.keyword (sp 2 33 2 39) "bigint"))
+  (tolean.TypeScript.Syntax.Decl.function (sp 2 1 4 2) true "inc" [{ span := (sp 2 21 2 30), name := "x", optional := false, type := (some (tolean.TypeScript.Syntax.TypeExpr.keyword (sp 2 24 2 30) "bigint")) }] (some (tolean.TypeScript.Syntax.TypeExpr.keyword (sp 2 33 2 39) "bigint"))
     (tolean.TypeScript.Syntax.Stmt.block (sp 2 40 4 2) [(tolean.TypeScript.Syntax.Stmt.returnStmt (sp 3 3 3 17) (some (tolean.TypeScript.Syntax.Expr.binary (sp 3 10 3 16) tolean.TypeScript.Syntax.BinOp.add (tolean.TypeScript.Syntax.Expr.ident (sp 3 10 3 11) "x") (tolean.TypeScript.Syntax.Expr.bigint (sp 3 14 3 16) "1n"))))]))] }
 
 /-- The source file, one line at a time. -/

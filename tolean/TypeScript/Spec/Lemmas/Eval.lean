@@ -12,6 +12,29 @@ namespace tolean.TypeScript.Eval
 
 variable {N : Type}
 
+/-! ### Calls -/
+
+/-- A call with an argument for each parameter binds each parameter to its
+argument. -/
+@[simp] theorem bindArgs_of_length {params : List String} {vs : List (Val N)}
+    (h : params.length = vs.length) : bindArgs params vs = some (params.zip vs).reverse := by
+  simp [bindArgs, h]
+
+/-- A call that passes `undefined` for its last parameters binds what a call
+that leaves them out binds. -/
+theorem bindArgs_append_undefined {params : List String} {vs : List (Val N)} {k : Nat} {env : Env N}
+    (h : bindArgs params (vs ++ List.replicate k .undefined) = some env) : bindArgs params vs = some env := by
+  unfold bindArgs at h ⊢
+  simp only [List.length_append, List.length_replicate] at h
+  split at h
+  · simp at h
+  · rename_i hle
+    rw [if_neg (by omega)]
+    simp only [Option.some.injEq] at h ⊢
+    rw [← h, List.append_assoc, List.replicate_append_replicate]
+    congr 4
+    omega
+
 /-! ### Equality with `null` -/
 
 section

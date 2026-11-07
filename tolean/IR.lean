@@ -179,8 +179,10 @@ inductive Body (T E : Type) where
   | letArray (name : String) (type : Ty T) (elems : List (Expr T E)) (rest : Body T E)
   /-- `if c then … else …`. -/
   | ite (c : Expr T E) (whenTrue whenFalse : Body T E)
-  /-- `match x with | none => … | some x => …`. -/
-  | matchNull (name : String) (whenNull whenValue : Body T E)
+  /-- `match x with | none => … | some x => …`. When `optional` is true, `x`
+  is an optional value, whose `none` the source writes as a value left out
+  rather than a null, as `Ty.optional` is. -/
+  | matchNull (name : String) (optional : Bool) (whenNull whenValue : Body T E)
   /-- `match x with | T.a x => … | T.b x => …`: a test of the tag of `x`, a
   value of the tagged union `T`. The tag is the tag field `field` of the
   source's value, or its type, such as TypeScript's `typeof x`, when `field`
@@ -264,7 +266,7 @@ def Body.refs : Body T E → List DeclRef
   | .let _ e rest => e.refs ++ rest.refs
   | .letArray _ t elems rest => t.refs ++ Expr.refsList elems ++ rest.refs
   | .ite c a b => c.refs ++ a.refs ++ b.refs
-  | .matchNull _ a b | .letState _ a b => a.refs ++ b.refs
+  | .matchNull _ _ a b | .letState _ a b => a.refs ++ b.refs
   | .matchTag _ r _ _ _ a b => r :: (a.refs ++ b.refs)
   | .fold _ _ body items rest _ => body.refs ++ items.refs ++ rest.refs
 
@@ -433,7 +435,7 @@ def Division.apply : Division → Int → Int → Int
 def Body.testsTag (name : String) : Body T E → Bool
   | .matchTag n _ _ _ _ a b => n == name || a.testsTag name || b.testsTag name
   | .let _ _ rest | .letArray _ _ _ rest => rest.testsTag name
-  | .ite _ a b | .matchNull _ a b | .letState _ a b => a.testsTag name || b.testsTag name
+  | .ite _ a b | .matchNull _ _ a b | .letState _ a b => a.testsTag name || b.testsTag name
   | .fold _ _ body _ rest _ => body.testsTag name || rest.testsTag name
   | .value _ | .state _ => false
 
@@ -540,7 +542,7 @@ def Body.lines (names : Names) : Body T E → List String
   | .ite c whenTrue whenFalse =>
     [s!"if {c.print names} then"] ++ indent (whenTrue.lines names) ++ ["else"] ++
       indent (whenFalse.lines names)
-  | .matchNull name whenNull whenValue =>
+  | .matchNull name _ whenNull whenValue =>
     [s!"match {name} with", s!"| {leanName names "none"} =>"] ++ indent (whenNull.lines names) ++
       [s!"| {leanName names "some"} {name} =>"] ++ indent (whenValue.lines names)
   | .matchTag name ref _ tag other whenTag whenOther =>
@@ -607,7 +609,11 @@ def Decl.print (names : Names) : Decl T E → String
     s!"abbrev {name}{generic} := {type.print names}"
   | .function name params ret body =>
     let generic := if names.generic then PrintTy.binders (T := T) names else ""
-    let leanParams := params.map fun (param, type) => s!"({param} : {type.print names})"
+    -- An optional parameter defaults to `none`, so that a claim may leave
+    -- it out, as a call in the source may.
+    let leanParams := params.map fun (param, type) =>
+      let default := if type matches .optional _ then s!" := {leanName names "none"}" else ""
+      s!"({param} : {type.print names}{default})"
     "\n".intercalate
       (s!"def {name}{generic} {" ".intercalate leanParams} : {ret.print names} :=" ::
         indent (body.lines names))

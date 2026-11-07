@@ -212,7 +212,7 @@ theorem parseFunction_reads {T : Edition} (start : Pos) (exported : Bool) (sp : 
     let s₂ := past s₁ nm (lp :: (its ++ rp :: (lb :: ba' ++ bb ++ rest)))
     let s₃ : ParseState := { s₂ with rest := its ++ rp :: (lb :: ba' ++ bb ++ rest), left := s₂.left - 1, lastStop := lp.span.stop }
     have hl₃ : s₃.left = s₃.rest.length := by simp [s₃, s₂, s₁, hl, hs']
-    obtain ⟨res, s₄, hit, hes, hL₄⟩ := params_reads params hps s₃ its (lb :: ba' ++ bb ++ rest) rp hT rfl hrp hl₃
+    obtain ⟨res, s₄, hit, hes, hL₄⟩ := params_reads (ok := true) params hps (fun _ _ _ => rfl) s₃ its (lb :: ba' ++ bb ++ rest) rp hT rfl hrp hl₃
       hits hn'
     have hs₄ : s₄.rest = rp :: (lb :: ba' ++ bb ++ rest) := hL₄.rest_eq
     let s₅ : ParseState := { s₄ with rest := lb :: ba' ++ bb ++ rest, left := s₄.left - 1, lastStop := rp.span.stop }
@@ -252,7 +252,7 @@ theorem parseFunction_reads {T : Edition} (start : Pos) (exported : Bool) (sp : 
     let s₂ := past s₁ nm (lp :: (its ++ rp :: (colon :: (tts ++ (lb :: ba' ++ bb ++ rest)))))
     let s₃ : ParseState := { s₂ with rest := its ++ rp :: (colon :: (tts ++ (lb :: ba' ++ bb ++ rest))), left := s₂.left - 1, lastStop := lp.span.stop }
     have hl₃ : s₃.left = s₃.rest.length := by simp [s₃, s₂, s₁, hl, hs']
-    obtain ⟨res, s₄, hit, hes, hL₄⟩ := params_reads params hps s₃ its (colon :: (tts ++ (lb :: ba' ++ bb ++ rest)))
+    obtain ⟨res, s₄, hit, hes, hL₄⟩ := params_reads (ok := true) params hps (fun _ _ _ => rfl) s₃ its (colon :: (tts ++ (lb :: ba' ++ bb ++ rest)))
       rp hT rfl hrp hl₃ hits hn'
     have hs₄ : s₄.rest = rp :: (colon :: (tts ++ (lb :: ba' ++ bb ++ rest))) := hL₄.rest_eq
     let s₅ : ParseState := { s₄ with rest := colon :: (tts ++ (lb :: ba' ++ bb ++ rest)), left := s₄.left - 1, lastStop := rp.span.stop }
