@@ -31,8 +31,8 @@ by unfolding the evaluator.
 A loop gets a lemma of its own before the theorem of its function. The lemma
 states that the evaluator runs the loop's fold as the printed `List.foldl`,
 for every environment whose variables have values of the right types. It
-follows from `runFold_foldl`, and the theorem of the function uses it as a
-rewrite rule. To be usable that way, the lemma reads the loop's starting
+follows from `runFold_foldl`, or from `runFold_forIn` for a loop that a
+`break` can end, and the theorem of the function uses it as a rewrite rule. To be usable that way, the lemma reads the loop's starting
 state, and the other variables that the body reads, back out of the
 environment with decoders.
 
@@ -223,7 +223,7 @@ def casesOn (decls : List IR.Decl) (vars : List (String × IR.Ty)) : String :=
 
 /-- The loops of a body, inner ones first, in the order of the source. -/
 partial def loopsOf : IR.Body → List (List String × String × IR.Body × IR.LoopInfo)
-  | .value _ | .state _ => []
+  | .value _ | .state _ | .yield _ | .done _ => []
   | .let _ _ rest | .letArray _ _ _ rest => loopsOf rest
   | .ite _ a b | .matchNull _ a b | .matchTag _ _ _ _ _ a b => loopsOf a ++ loopsOf b
   | .letState _ branch rest => loopsOf branch ++ loopsOf rest
@@ -491,12 +491,23 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       -- Every binder has its type, as in the output's loop (see `IR.foldBinders`).
       let captured := if scopeNames.isEmpty then "" else
         s!"fun {" ".intercalate (info.scope.map fun (n, t) => s!"({n} : {t.print names})")} => "
+      -- A loop that a `break` can end runs with `forIn`, and its step gives a
+      -- `ForInStep` of the state. The type says `Id`, as `forIn` expects in the
+      -- printed definition, so that the two `if`s have the same type and the
+      -- link theorem can rewrite one with the other.
+      let stepTy := if info.breaks then s!"Id (ForInStep ({IR.foldState names info}))"
+        else IR.foldState names info
       let stepFn (ρ : String) : String :=
         -- The result has its type too: alone, Lean would not coerce a `T` in
         -- the body to the state's `Option T`.
         s!"((({captured}fun {IR.foldBinders names stateNames element info} => (\n" ++ "\n".intercalate stepLines ++
-          s!" : {IR.foldState names info}))" ++
+          s!" : {stepTy}))" ++
           String.join (scopeNames.map fun n => s!" {decode ρ n}") ++ "))"
+      let runLoop (ρ : String) : String :=
+        if info.breaks then s!"(Id.run (forIn items {decState ρ} {stepFn ρ}))"
+        else s!"(List.foldl {stepFn ρ} {decState ρ} items)"
+      let loopLemma := if info.breaks then "runFold_forIn" else "runFold_foldl"
+      let stepNames := if info.breaks then ["tolean.TypeScript.Proof.stepOutcome", "ForInStep.value"] else []
       let depth := callDepth m bodyStmt
       let fuel := if depth == 0 then "fuel" else s!"(fuel + {depth})"
       -- A body with calls looks the functions up in the output, so the lemma
@@ -514,7 +525,8 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       let stateCoded := coded.take count
       let destruct := if count ≤ 1 then "" else
         s!"    obtain ⟨{", ".intercalate ((List.range count).map (s!"s{·}"))}⟩ := s\n"
-      let simpSet := ", ".intercalate (hfsName ++ envLemmas ++ lemmaNames.toList ++ loopLemmas.toList ++ defs)
+      let simpSet := ", ".intercalate (hfsName ++ stepNames ++ envLemmas ++ lemmaNames.toList ++
+        loopLemmas.toList ++ defs)
       -- The values that one step sees: the element, the state, and the other
       -- locals, which the lemma generalizes to `v0`, `v1` and so on.
       let stateVars := if count ≤ 1 then ["s"].zip info.stateTypes
@@ -526,8 +538,8 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         s!"    (fuel : Nat) (items : {itemsTy}) (ρ : Env {nv}) (hI : {inv "ρ"}) :\n" ++
         s!"    tolean.TypeScript.IR.Body.runFold fs {fuel} {list (stateNames.map str)} {str element}\n" ++
         s!"      ({term body}) ρ (List.map {encX} items) =\n" ++
-        s!"      some {upd s!"(List.foldl {stepFn "ρ"} {decState "ρ"} items)" "ρ"} := by\n" ++
-        s!"  refine tolean.TypeScript.Proof.runFold_foldl fs {fuel} _ {str element} _ {encX} (fun s ρ => {upd "s" "ρ"})\n" ++
+        s!"      some {upd (runLoop "ρ") "ρ"} := by\n" ++
+        s!"  refine tolean.TypeScript.Proof.{loopLemma} fs {fuel} _ {str element} _ {encX} (fun s ρ => {upd "s" "ρ"})\n" ++
         s!"    (fun ρ => {decState "ρ"}) (fun ρ => {stepFn "ρ"}) (fun ρ => {inv "ρ"}) ?_ ?_ items ρ hI\n" ++
         s!"  · intro ρ s x hI\n" ++
         substHfs ++
