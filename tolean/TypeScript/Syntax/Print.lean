@@ -109,6 +109,9 @@ def Decl.toSexp : Decl → Sexp
     node "interface" s ([name] ++ flag exported "export") (fields.map Field.toSexp)
   | .typeAlias s exported name type =>
     node "type" s ([name] ++ flag exported "export") [type.toSexp]
+  | .enum s exported name members =>
+    node "enum" s ([name] ++ flag exported "export")
+      (members.map fun m => node "member" m.span [m.name, Sexp.quote m.value] [])
   | .exportedVar s d => d.toSexp s true
   | .stmt st => st.toSexp
 

@@ -2843,6 +2843,11 @@ theorem Field.wordsOK {T : Edition} (f : Field) (hn : Word.ok T (propertyName f.
   unfold Field.words
   split <;> split <;> words_ok
 
+theorem EnumMember.wordsOK {T : Edition} (m : EnumMember) (hn : Word.ok T (propertyName m.name) = true)
+    (hv : Word.ok T [.string m.value] = true) : WordsOK T m.words := by
+  unfold EnumMember.words
+  words_ok
+
 theorem ImportName.wordsOK {T : Edition} (n : ImportName) (hn : Word.ok T (identWord n.name) = true) :
     WordsOK T n.words := by
   unfold ImportName.words
@@ -3714,6 +3719,17 @@ theorem DeclOK.typeAlias {exported : Bool} {name : String} {type : TypeExpr}
   intro l hl; simp only [Decl.lines, List.mem_singleton] at hl; subst hl
   words_ok
 
+theorem DeclOK.enum {exported : Bool} {name : String} {members : List EnumMember}
+    (hn : Word.ok T (identWord name) = true) (hm : ∀ m ∈ members, WordsOK T m.words) :
+    DeclOK T (.enum sp exported name members) := by
+  have h1 := exportWords_ok T exported
+  intro l hl
+  simp only [Decl.lines, List.mem_cons, List.mem_append, List.mem_map, List.not_mem_nil, or_false] at hl
+  rcases hl with (rfl | ⟨m, hm', rfl⟩) | rfl
+  · words_ok
+  · exact hm m hm'
+  · words_ok
+
 theorem DeclOK.exportedVar {d : VarDecl} (hd : WordsOK T d.words) : DeclOK T (.exportedVar sp d) := by
   intro l hl; simp only [Decl.lines, List.mem_singleton] at hl; subst hl
   words_ok
@@ -3827,6 +3843,9 @@ theorem unexpected_refuses {α : Type} (t : Token) (m : String) : Refuses (Parse
 theorem refuseImport_refuses {α : Type} (t : Token) : Refuses (Parse.refuseImport (A := α) t) :=
   fun _ => ⟨_, _, rfl⟩
 
+theorem refuseEnumMember_refuses {α : Type} (t : Token) : Refuses (Parse.refuseEnumMember (A := α) t) :=
+  fun _ => ⟨_, _, rfl⟩
+
 theorem pass_err {β : Type} {c : Prop} [Decidable c] {a : ParseM PUnit} (ha : Refuses a) {K : PUnit → ParseM β}
     {s s' : ParseState} {r : β} (h : (if c then pure PUnit.unit >>= K else a >>= K) s = .ok r s') :
     c ∧ K () s = .ok r s' := by
@@ -3892,6 +3911,56 @@ theorem parseField_wf {T : Edition} :
     rw [Parse.bind_eq (Parse.spanFrom_eq _ _)] at h
     simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h
     exact ⟨hR₅, hK, htw, Field.wordsOK _ hnmok (both_right htwo)⟩
+
+theorem parseEnumMember_wf {T : Edition} :
+    GivesW T (fun m : EnumMember => WordsOK T m.words) Parse.parseEnumMember := by
+  intro s m s' hR hT h
+  obtain ⟨x, r, hs⟩ := hR.cons
+  simp only [Parse.parseEnumMember] at h
+  rw [Parse.bind_eq (Parse.peek_eq hs), Parse.bind_ok] at h
+  obtain ⟨name, s₁, hn, h⟩ := h
+  obtain ⟨nm, r₁, hnk, hs₁, rfl, hR₁⟩ := readPropertyName_inv hR hn
+  have hnmok : Word.ok T (propertyName name) = true := propertyName_ok hnk (hT ▸ hR.tok (by rw [hs₁]; simp)
+    (by rcases hnk with h' | h' <;> rw [h'] <;> simp))
+  obtain ⟨y, r₂, hs₂⟩ := hR₁.cons
+  rw [Parse.bind_eq (Parse.peek_eq hs₂)] at h
+  obtain ⟨hy, h⟩ := pass_err (refuseEnumMember_refuses _) h
+  have hyne : y.kind ≠ .eof := by simp [Token.isPunct] at hy; rw [hy]; simp
+  rw [Parse.bind_eq (Parse.discard_eq (advance_past hR₁ hs₂ hyne))] at h
+  have hR₂ := hR₁.past hs₂ (hR₁.more hs₂ hyne)
+  obtain ⟨z, r₃, hs₃⟩ := hR₂.cons
+  rw [Parse.bind_ok] at h
+  obtain ⟨v, s₃, hv, h⟩ := h
+  obtain ⟨rfl, hpast⟩ := advance_inv hR₂ hs₃ hv
+  generalize hk : v.kind = k at h
+  cases k
+  all_goals first
+    | (simp only at h
+       obtain ⟨_, _, he⟩ := refuseEnumMember_refuses (α := EnumMember) v s₃
+       rw [he] at h; cases h)
+    | skip
+  rename_i value
+  simp only at h
+  have hzne : v.kind ≠ .eof := by rw [hk]; simp
+  obtain ⟨rfl, hR₃⟩ := hpast hzne
+  have hvok : Word.ok T [.string value] = true := by
+    have := hR₂.tok (x := v) (by rw [hs₃]; simp) hzne
+    rw [hk] at this
+    simpa [past, hT] using this
+  rw [Parse.bind_eq (Parse.spanFrom_eq _ _)] at h
+  obtain ⟨w, r₄, hs₄⟩ := hR₃.cons
+  rw [Parse.bind_eq (Parse.peek_eq hs₄)] at h
+  have hK : Kept s (past (past (past s nm r₁) y r₂) v r₃) :=
+    (Kept.past _ _ _).trans ((Kept.past _ _ _).trans (Kept.past _ _ _))
+  by_cases hsep : w.isPunct "," = true
+  · have hwne : w.kind ≠ .eof := by simp [Token.isPunct] at hsep; rw [hsep]; simp
+    rw [if_pos hsep, Parse.bind_eq (Parse.discard_eq (advance_past hR₃ hs₄ hwne))] at h
+    simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h
+    exact ⟨hR₃.past hs₄ (hR₃.more hs₄ hwne), hK.trans (Kept.past _ _ _), EnumMember.wordsOK _ hnmok hvok⟩
+  · rw [if_neg hsep] at h
+    obtain ⟨_, h⟩ := fail_err (unexpected_refuses _ _) h
+    simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h
+    exact ⟨hR₃, hK, EnumMember.wordsOK _ hnmok hvok⟩
 
 /-- `parseBlock` gives a block. -/
 theorem parseBlock_block {n : Nat} {s s' : ParseState} {st : Stmt} (h : Parse.parseBlock n s = .ok st s') :
@@ -4067,6 +4136,32 @@ theorem parseTypeAlias_wf {T : Edition} (start : Pos) (exported : Bool) :
   simp only [Decl.wf, Bool.and_eq_true]
   exact ⟨by simpa [exprName] using hnr, htw⟩
 
+theorem parseEnum_wf {T : Edition} (start : Pos) (exported : Bool) :
+    GivesD T (Parse.parseEnum start exported) := by
+  intro s d s' hR hT hF hL h
+  simp only [Parse.parseEnum] at h
+  rw [Parse.bind_ok] at h; obtain ⟨_, s₁, hadv, h⟩ := h
+  obtain ⟨hR₁, hK₁⟩ := discard_advance_ready hR hadv
+  rw [Parse.bind_ok] at h; obtain ⟨name, s₂, hn, h⟩ := h
+  have hT₁ : s₁.target = T := hK₁.target_eq.trans hT
+  have hnok := readName_words hR₁ hT₁ hn
+  obtain ⟨tn, r₂, _, hnr, _, rfl, hR₂⟩ := readName_inv hR₁ hn
+  rw [Parse.bind_ok] at h; obtain ⟨lb, s₃, hlb, h⟩ := h
+  obtain ⟨_, r₄, _, rfl, hR₃⟩ := expectPunct_inv hR₂ hlb
+  rw [Parse.bind_eq (Parse.budget_eq _), Parse.bind_ok] at h
+  obtain ⟨members, s₄, hms, h⟩ := h
+  obtain ⟨hR₄, hK₄, hmw⟩ := (iterate_inv
+    (I := fun a st => Ready st ∧ Kept (past (past s₁ tn r₂) lb r₄) st ∧ ∀ x ∈ a.toList, WordsOK T x.words)
+    (fun _ _ _ _ _ hI hst => blockStep_wf parseEnumMember_wf (s₀ := past (past s₁ tn r₂) lb r₄) hT₁ hI hst)
+    _ #[] _ members s₄ ⟨hR₃, Kept.refl _, by simp⟩ hms).1
+  rw [Parse.bind_ok] at h; obtain ⟨rb, s₅, hrb, h⟩ := h
+  obtain ⟨_, r₅, _, rfl, hR₅⟩ := expectPunct_inv hR₄ hrb
+  rw [Parse.bind_eq (Parse.spanFrom_eq _ _)] at h
+  simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h
+  refine ⟨hR₅, hK₁.trans ((Kept.past _ _ _).trans ((Kept.past _ _ _).trans (hK₄.trans (Kept.past _ _ _)))), ?_,
+    DeclOK.enum hnok (fun m hm => hmw m (by simpa using hm))⟩
+  simpa [Decl.wf, exprName] using hnr
+
 theorem importStep_wf {T : Edition} {ct : Bool} {s₀ : ParseState} (hT : s₀.target = T)
     {names names' : Array ImportName} {b : Bool} {s s' : ParseState}
     (hI : Ready s ∧ Kept s₀ s ∧ ∀ n ∈ names.toList, exprName n.name = true ∧ WordsOK T n.words)
@@ -4229,6 +4324,8 @@ theorem parseDecl_wf {T : Edition} : GivesD T Parse.parseDecl := by
   · obtain ⟨hR₂, hK₂, hw, hok⟩ := parseInterface_wf _ _ _ _ _ hR₁ hT₁ hF₁ hL₁ h; exact ⟨hR₂, hK₁.trans hK₂, hw, hok⟩
   split at h
   · obtain ⟨hR₂, hK₂, hw, hok⟩ := parseTypeAlias_wf _ _ _ _ _ hR₁ hT₁ hF₁ hL₁ h; exact ⟨hR₂, hK₁.trans hK₂, hw, hok⟩
+  split at h
+  · obtain ⟨hR₂, hK₂, hw, hok⟩ := parseEnum_wf _ _ _ _ _ hR₁ hT₁ hF₁ hL₁ h; exact ⟨hR₂, hK₁.trans hK₂, hw, hok⟩
   split at h
   · split at h
     rotate_left

@@ -56,7 +56,6 @@ exact. A construct leaves these tables when Tolean translates it, and the
 | A chain after `?.`, such as `a?.b.c`, and `a?.[i]` and `f?.()` | `Option.bind` | `==` against anything except `null` and `undefined` |
 | `export { … }` and re-exports | Nothing: the names stay in scope | `export *` |
 | A tuple type such as `readonly [string, bigint]` | A product type | Tuples that a function changes |
-| A string `enum` | An `inductive` | A numeric `enum`, because it also maps each number back to its name |
 | `as const` and `satisfies` | Nothing: they only check types | `as T` and the non-null assertion `x!`, because TypeScript does not check them |
 | A type guard `x is T` | A `Bool` function | A guard whose body the translator cannot show to be a test of the tag |
 | `Record<K, V>` where `K` is a union of string literals | A structure with one field per key | `Record<string, V>` and index signatures. Code that needs those can use a `Map`. |

@@ -62,6 +62,7 @@ export function show(t: Ty): string {
 export class Gen {
   private readonly next: () => number;
   private structs: Array<{ name: string; fields: Array<[string, Ty]> }> = [];
+  private enums: Array<{ name: string; members: Array<string> }> = [];
   private functions: Array<{ name: string; params: Array<Ty>; ret: Ty }> = [];
   private counter = 0;
 
@@ -238,6 +239,15 @@ export class Gen {
         // interpreter runs it anywhere, so this and the comparison of
         // booleans above check its rule against Node.
         options.push(() => `typeof (${this.expr(this.anyType(), vars, d)})`);
+        // A member of a string enum, which is a string. The translator
+        // refuses it where a `string` is expected, but the interpreter reads
+        // it from the enum's object, so this checks that rule against Node.
+        if (this.enums.length > 0) {
+          options.push(() => {
+            const e = this.pick(this.enums);
+            return `${e.name}.${this.pick(e.members)}`;
+          });
+        }
         break;
       default:
         break;
@@ -379,6 +389,15 @@ export class Gen {
 
   program(): string {
     const out: Array<string> = [];
+    if (this.chance(0.3)) {
+      // A string enum. Two members may have one string, which the
+      // translator refuses and the interpreter reads as JS does.
+      const members = ['A', 'B', 'default'].slice(0, 1 + Math.floor(this.next() * 3));
+      const values = members.map(() => this.pick(['a', 'b', 'c']));
+      const exported = this.chance(0.5) ? 'export ' : '';
+      out.push(`${exported}enum E0 {`, ...members.map((m, i) => `  ${m} = '${values[i]}',`), '}');
+      this.enums.push({ name: 'E0', members });
+    }
     const structCount = Math.floor(this.next() * 3);
     for (let i = 0; i < structCount; i++) {
       const name = `S${i}`;

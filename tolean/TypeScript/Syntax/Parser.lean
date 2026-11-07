@@ -885,6 +885,36 @@ def parseTypeAlias (start : Pos) (exported : Bool) : ParseM Decl := do
   endStatement
   return .typeAlias (← spanFrom start) exported name type
 
+/-- What an enum member must be: a name and a string. -/
+def refuseEnumMember {A : Type} (t : Token) : ParseM A :=
+  failAt t "tolean supports only enum members with a string value, such as 'A = \"a\"'"
+
+/-- A member of a string enum: a name, `=`, a string, and the `,` after it,
+unless the `}` comes. -/
+def parseEnumMember : ParseM EnumMember := do
+  let t ← peek
+  let name ← readPropertyName
+  let eq ← peek
+  unless eq.isPunct "=" do refuseEnumMember eq
+  discard advance
+  let v ← advance
+  let .string value := v.kind | refuseEnumMember v
+  -- The member ends at its value, as in `tsc`; the `,` is not part of it.
+  let span ← spanFrom t.span.start
+  let next ← peek
+  if next.isPunct "," then discard advance
+  else if !next.isPunct "}" then unexpected next "',' or '}'"
+  return { span, name, value }
+
+/-- `enum`, a name and `{`, the members, and `}`. -/
+def parseEnum (start : Pos) (exported : Bool) : ParseM Decl := do
+  discard advance
+  let name ← readName
+  let _ ← expectPunct "{"
+  let members ← iterate (← budget) #[] (blockStep parseEnumMember)
+  let _ ← expectPunct "}"
+  return .enum (← spanFrom start) exported name members.toList
+
 /-- What `parseImport` refuses: every form of `import` outside the subset. -/
 def refuseImport {A : Type} (t : Token) : ParseM A :=
   failAt t "tolean supports only 'import { a, b } from \"./file.ts\"', with no default or namespace import and no 'as'"
@@ -942,9 +972,10 @@ def parseDeclBody (start : Pos) (exported : Bool) : ParseM Decl := do
   if t.isKeyword "function" then parseFunction start exported
   else if t.isIdent "interface" && nameFollows then parseInterface start exported
   else if t.isIdent "type" && nameFollows then parseTypeAlias start exported
+  else if t.isKeyword "enum" then parseEnum start exported
   else if exported then
     unless t.isKeyword "const" || t.isIdent "let" do
-      failAt t "tolean supports 'export' only of a function, an interface, a type or a variable"
+      failAt t "tolean supports 'export' only of a function, an interface, a type, an enum or a variable"
     let decl ← parseVarDecl
     return .exportedVar (← spanFrom start) decl
   else return .stmt (← parseStatement (← budget))
