@@ -534,7 +534,7 @@ theorem inGroup_loop1 {N : Type} [tolean.TypeScript.JSNumber N] (fs : List (tole
     (tolean.IR.Body.let "found" (tolean.IR.Expr.bool true) (tolean.IR.Body.state ["found"]))
     (tolean.IR.Body.state ["found"]))
   (tolean.IR.Body.state ["found"])) ρ (List.map encodeMembership items) =
-      some (.normal (ρ.set "found" (Val.bool (List.foldl (((fun (groups : List access.Rbac.Membership) (group : String) (principal : String) => fun (found : Bool) (m : access.Rbac.Membership) => (
+      some (.normal (ρ.set "found" (Val.bool (List.foldl (((fun (groups : List access.Rbac.Membership) (group : JSString) (principal : JSString) => fun (found : Bool) (m : access.Rbac.Membership) => (
         let found :=
           if (m.group = group) ∧ (m.principal = principal) then
             let found := true
@@ -543,7 +543,7 @@ theorem inGroup_loop1 {N : Type} [tolean.TypeScript.JSNumber N] (fs : List (tole
             found
         found : Bool)) ((decList decodeMembership) (ρ.lookup "groups")) (decStr (ρ.lookup "group")) (decStr (ρ.lookup "principal")))) (decBool (ρ.lookup "found")) items)))) := by
   refine tolean.TypeScript.Proof.runFold_foldl fs fuel _ "m" _ encodeMembership (fun s ρ => (ρ.set "found" (Val.bool s)))
-    (fun ρ => (decBool (ρ.lookup "found"))) (fun ρ => (((fun (groups : List access.Rbac.Membership) (group : String) (principal : String) => fun (found : Bool) (m : access.Rbac.Membership) => (
+    (fun ρ => (decBool (ρ.lookup "found"))) (fun ρ => (((fun (groups : List access.Rbac.Membership) (group : JSString) (principal : JSString) => fun (found : Bool) (m : access.Rbac.Membership) => (
         let found :=
           if (m.group = group) ∧ (m.principal = principal) then
             let found := true
@@ -601,7 +601,7 @@ theorem roleGrants_loop1 {N : Type} [tolean.TypeScript.JSNumber N] (fs : List (t
     (tolean.IR.Body.let "found" (tolean.IR.Expr.bool true) (tolean.IR.Body.state ["found"]))
     (tolean.IR.Body.state ["found"]))
   (tolean.IR.Body.state ["found"])) ρ (List.map encodeGrant items) =
-      some (.normal (ρ.set "found" (Val.bool (List.foldl (((fun (grants : List access.Rbac.Grant) (role : String) (permission : String) => fun (found : Bool) (g : access.Rbac.Grant) => (
+      some (.normal (ρ.set "found" (Val.bool (List.foldl (((fun (grants : List access.Rbac.Grant) (role : JSString) (permission : JSString) => fun (found : Bool) (g : access.Rbac.Grant) => (
         let found :=
           if (g.role = role) ∧ (g.permission = permission) then
             let found := true
@@ -610,7 +610,7 @@ theorem roleGrants_loop1 {N : Type} [tolean.TypeScript.JSNumber N] (fs : List (t
             found
         found : Bool)) ((decList decodeGrant) (ρ.lookup "grants")) (decStr (ρ.lookup "role")) (decStr (ρ.lookup "permission")))) (decBool (ρ.lookup "found")) items)))) := by
   refine tolean.TypeScript.Proof.runFold_foldl fs fuel _ "g" _ encodeGrant (fun s ρ => (ρ.set "found" (Val.bool s)))
-    (fun ρ => (decBool (ρ.lookup "found"))) (fun ρ => (((fun (grants : List access.Rbac.Grant) (role : String) (permission : String) => fun (found : Bool) (g : access.Rbac.Grant) => (
+    (fun ρ => (decBool (ρ.lookup "found"))) (fun ρ => (((fun (grants : List access.Rbac.Grant) (role : JSString) (permission : JSString) => fun (found : Bool) (g : access.Rbac.Grant) => (
         let found :=
           if (g.role = role) ∧ (g.permission = permission) then
             let found := true

@@ -17,8 +17,10 @@ marks which links are proved, tested against a reference, or trusted.
 - **Declarations:** functions, interfaces, type aliases, and `const` and `let`,
   each of them possibly exported.
 - **Statements:** `const` and `let` declarations, expression statements,
-  `return`, `if` and `else`, `for … of`, `while`, `switch`, blocks, `break`,
-  `continue` and the empty statement. A `break` at the top of a `switch`
+  `return`, `if` and `else`, `for … of`, the counted `for`, `while`, `switch`,
+  blocks, `break`, `continue` and the empty statement. A counted `for`, such
+  as `for (let i = 0; i < n; i++)`, starts with a `const` or `let`
+  declaration or with nothing. A `break` at the top of a `switch`
   clause ends the `switch`, so it may stand outside a loop. The parser
   refuses a `case` test that uses `<` or `<<`, because a `:` does not end its
   search for a `>` after one, and a `switch` with two `default` clauses.
@@ -46,7 +48,14 @@ reading. There are three such cases:
   ECMA-262 allows no line break before `=>`, so JavaScript refuses the code.
 
 The parser also refuses an arrow function with a return type, and one whose
-body is in braces. The translator refuses every arrow function for now.
+body is in braces. The translator accepts an arrow function only as the
+callback of an array method, such as `xs.map(x => x + 1n)`.
+
+In the declaration at the start of a counted `for`, the parser refuses an `in`
+operator unless parentheses, braces, the arguments of a call or an index hold
+it. ECMA-262 reads such an `in` as the start of a `for … in` loop. It allows
+one inside `[ … ]`, but `tsc` does not, so the parser refuses that too. The
+translator refuses every counted `for` for now.
 
 The parser also refuses code that Tolean cannot represent exactly. Examples
 are lone surrogates, legacy octal literals, template literals and non-ASCII
@@ -206,7 +215,7 @@ library removes.
 A source name never hides a Lean name that the output uses. Before it
 translates a file, the translator collects every identifier in it. When the
 file declares a name that the output also uses, such as `List`, `Option`,
-`some`, `none`, `decide`, `Int`, `Bool`, `String` or `JSNumber`, the output
+`some`, `none`, `decide`, `Int`, `Bool`, `JSString` or `JSNumber`, the output
 writes the Lean name in full from the root, as `_root_.List` or
 `_root_.Option.none`. The source name stays as it is, so a claim refers to
 it by the name in the source. The number type parameter is `N`, or `N1`,
@@ -296,7 +305,7 @@ the file, the line and the reason. It never approximates.
 | `a ?? b` on `T \| null`, where `b` is a `T` | `Option.getD a b` |
 | `a ?? b` on `T \| null`, where `b` may be `null` | `Option.or a b` |
 | `boolean` | `Bool` |
-| `string` | `String` |
+| `string`, `"abc"` | `JSString`, `JSString.ofString "abc"`. A `JSString` holds the UTF-16 code units of the string, as ECMA-262 defines a string, so a value can hold a lone surrogate, which a Lean `String` cannot. `ofString` is injective, so a claim can state a literal as a Lean `String`. |
 | `ReadonlyArray<T>`, `Array<T>`, `T[]` | `List T` |
 | `interface` with `readonly`, required fields | `structure` |
 | `readonly f?: T`, an optional field | `f : Option T := none`. An object literal may leave the field out, or set it to a `T`. A read of a field that the object lacks gives `undefined`, which is `none`. `s.f ?? d` is `Option.getD s.f d`, and `s.f === undefined` is `s.f.isNone`. |
@@ -307,8 +316,11 @@ the file, the line and the reason. It never approximates.
 | `if (s.kind === 'circle')`, with `===` or `!==` and the string on either side | `match s with \| T.circle s => … \| …`. TypeScript narrows `s` in each branch, and so does the output. A chain of such tests on the same value becomes one `match`. |
 | `switch (s.kind)` with a `case 'circle':` for each member, or a `default:` last, where every clause returns | The same `match`, with one arm for each case. The `default`, or the code after the `switch` when it has no `default`, becomes the arm for the members that no case names. |
 | The same `switch`, where every clause changes locals and ends in `break` | `let (x, y) := match s with …`, as for an `if` that changes locals. The last clause may leave out its `break`. Without a `default`, the arm for the members that no case names keeps the locals as they are. In a loop body, the `match` is the step of the `List.foldl`. |
-| `type T = string \| bigint`, a union of two or more of `string`, `number`, `bigint` and `boolean` | `inductive T` with a constructor for each member, which holds a value of its type, such as `T.string (value : String)`. The constructor is named after what `typeof` gives for the value. A value of a member where a `T` is expected becomes that member's constructor. |
+| The same `switch`, where the cases cover every member and a last `default: { const x: never = s; … }` checks it | The same `match`, without the `default`. TypeScript accepts the check only where no member is left, so the clause never runs. The statements after the check are not translated. In a `switch` whose clauses end in `break`, the last case needs its `break`, because without it the case would run into the `default`. |
+| `type T = string \| bigint`, a union of two or more of `string`, `number`, `bigint` and `boolean` | `inductive T` with a constructor for each member, which holds a value of its type, such as `T.string (value : JSString)`. The constructor is named after what `typeof` gives for the value. A value of a member where a `T` is expected becomes that member's constructor. |
 | `if (typeof x === 'string')`, with `===` or `!==` and the string on either side, where `x` is a local of such a union | `match x with \| T.string x => … \| …`, which narrows `x` as a test of a tag does |
+| `type R = Record<K, V>` or `Readonly<Record<K, V>>`, where `K` is a literal union of strings | `structure R` with one field of type `V` for each string of `K`, in the order of `K`. A value has a property for each string, so an object literal must set every key, in that order, as for an interface. `r.a` and `r['a']` read a field. |
+| `r[k]`, where `r` is such a `Record` and `k` has the type `K` | `match k with \| K.a => r.a \| …`, which reads the field that `k` names |
 | `function` with typed parameters and return type | `def` |
 | `const x = e`, `let x = e` | `let x := e` |
 | `x = e`, `x += e`, `x -= e`, `x *= e` on a `let` local | `let x := …` (shadowing) |
@@ -319,6 +331,9 @@ the file, the line and the reason. It never approximates.
 | `if (c) continue;` at the top of a loop body, or a branch of that `if` that ends in `continue` on every path | `if c then (x, y) else …`, where the rest of the body is the `else` branch, as after an `if` that returns. A test of `null` or of a tag narrows the local for the rest of the body. |
 | `break` in a `for (const x of xs)` loop, in the same places as `continue` | `Id.run (forIn xs (x, y) (fun e (x, y) => …))`. A `break` is `ForInStep.done (x, y)`, which ends the loop, and the end of the body or a `continue` is `ForInStep.yield (x, y)`. A loop without a `break` stays a `List.foldl`. |
 | `return e` in the same places, in a loop where the statements after it end in a `return` | `match Id.run (forIn xs (none, x, y) (fun e (_, x, y) => …)) with`, with the arms `\| (some r, _) => r` and `\| (none, x, y) => …` for the statements after the loop. The state starts with the value to return: a `return e` is `ForInStep.done (some e, x, y)`, and the other step ends hold `none`. |
+| `xs.map(x => e)`, `xs.filter(x => p)` | `List.map (fun (x : T) => e) xs`, `List.filter (fun (x : T) => p) xs` |
+| `xs.some(x => p)`, `xs.every(x => p)` | `List.any xs (fun (x : T) => p)`, `List.all xs (fun (x : T) => p)` |
+| `xs.find(x => p)` | `List.find? (fun (x : T) => p) xs`. The value is `undefined` when no element passes, so it has the type of an optional field: `xs.find(p) ?? d`, `xs.find(p)?.f` and `xs.find(p) === undefined` work as they do on `s.f`. |
 | `if` that returns, `if` that changes locals, `c ? a : b` | `if … then … else …` |
 | `+ - *`, `< <= > >=`, `=== !==`, `&& \|\| !` | the same operators on `Int`, `Bool`, `Prop` |
 | `a / k`, `a % k` on `bigint`, where `k` is a nonzero literal | `Int.tdiv a k`, `Int.tmod a k` (both truncate toward zero, as JS does) |
@@ -363,6 +378,13 @@ Tolean rejects these, among others:
   a later push. In Lean a push makes a new list, but in JS it changes the
   shared one. An array literal is safe anywhere else: in JS it makes a new
   array, and nothing may push to an array that the function does not own.
+- An arrow function anywhere except as the callback of `map`, `filter`,
+  `some`, `every` and `find`, a callback with more than one parameter, and a
+  named function as a callback. JS passes the index and the array too, which
+  a later step will translate. The body of a callback must not assign, and
+  for every method but `map` it must give a boolean. Tolean also refuses
+  `find` on an array of nullable values, because Lean's `none` would stand
+  for both `null` and `undefined`.
 - An array declared with `let` and the type `Array<T>`. An array that the
   function pushes to must be a `const`; for a value, use `ReadonlyArray<T>`.
   An empty `[]` needs a type from its context, and the elements of a literal
@@ -382,8 +404,10 @@ Tolean rejects these, among others:
 - A `switch` that does not test the tag of a tagged union, and fallthrough:
   each clause must end in `return`, or each in `break`. A clause that ends in
   `break` may not return, and may not break or continue before its end.
-  Tolean also refuses a `default` that is not the last clause or that no
-  member can reach, a first clause that is a `default`, a case that an
+  Tolean also refuses a `default` that is not the last clause, and one that
+  no member can reach unless it assigns the local to `never`. It refuses a
+  `default` that assigns the local to `never` while a member is left, a
+  first clause that is a `default`, a case that an
   earlier case already takes, an assignment to the local that the `switch`
   tests, and code after a `switch` whose cases cover every member and
   return.
@@ -399,6 +423,15 @@ Tolean rejects these, among others:
   union, against one of its members. So it refuses `typeof` on a union of
   interfaces, on a value that may be `null`, and as a value, as in
   `return typeof x === 'string'`.
+- A `Record` that is not the whole of a type alias, such as
+  `(r: Record<K, V>)`, because the output needs a name for its structure.
+  Tolean also refuses `Record<string, V>` and other keys that are not a
+  literal union of strings, index signatures, and a key that Lean reserves,
+  such as `'def'`. It refuses an index into anything but such a `Record`, an
+  index whose key does not have the type `K`, and an index in a file that
+  does not declare or import `K`, because the output names the constructors
+  of `K`. Code that needs keys of type `string` can use a `Map` once Tolean
+  translates it.
 - An object literal whose fields are not in the order that the interface
   declares them. A JS object keeps its keys in the order the literal writes
   them, and a caller can see that order through `Object.keys` or

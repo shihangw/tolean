@@ -21,3 +21,7 @@ export function pick(items: ReadonlyArray<List>, N: number): bigint {
   }
   return total;
 }
+
+export function label(JSString: boolean): string {
+  return JSString ? "yes" : "no";
+}

@@ -51,7 +51,8 @@ partial def toJson : Val Float → Json
   | .int i => Json.mkObj [("bigint", toString i)]
   | .num n => Json.mkObj [("number", toString n.toBits)]
   | .bool b => Json.bool b
-  | .str s => Json.str s
+  -- No string of the subset holds a lone surrogate yet, so the text is exact.
+  | .str s => Json.str s.toString
   | .null => Json.null
   | .undefined => Json.mkObj [("undefined", Json.bool true)]
   | .list xs => Json.arr (xs.map toJson).toArray
@@ -60,7 +61,7 @@ partial def toJson : Val Float → Json
 partial def ofJson (j : Json) : Except String (Val Float) :=
   match j with
   | .bool b => pure (.bool b)
-  | .str s => pure (.str s)
+  | .str s => pure (.str (JSString.ofString s))
   | .null => pure .null
   | .arr xs => (.list ∘ Array.toList) <$> xs.mapM ofJson
   | j => do
