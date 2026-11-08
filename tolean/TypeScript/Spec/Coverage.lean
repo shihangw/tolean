@@ -126,7 +126,7 @@ def sections : List Section := [
     [``Proof.fold_sim, ``shorthand_reads_global]⟩,
   ⟨"sec-grouping-operator", "13.2.9", "The Grouping Operator",
     [``Proof.eval_stripParens]⟩,
-  ⟨"sec-property-accessors", "13.3.2", "Property Accessors", [``Eval.eval_index_str, ``Eval.getPropKey_ofString]⟩,
+  ⟨"sec-property-accessors", "13.3.2", "Property Accessors", [``Eval.eval_index_str]⟩,
   ⟨"sec-function-calls", "13.3.6", "Function Calls",
     [``Proof.eval_call, ``Proof.out_call, ``Proof.zip_sim, ``Proof.calls_agree]⟩,
   ⟨"sec-typeof-operator", "13.5.3", "The typeof Operator",
