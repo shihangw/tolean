@@ -57,6 +57,21 @@ structure Refs where
 def Refs.write (r : Refs) (short full : String) : String :=
   if r.idents.contains ((short.splitOn ".").headD short) then s!"_root_.{full}" else short
 
+/-- The string literal `s` as a `JSString`, as the interpreter gives it. -/
+def Refs.jsString (r : Refs) (s : String) : String :=
+  s!"({r.write "JSString.ofString" "tolean.TypeScript.JSString.ofString"} {str s})"
+
+/-- Lean code that picks the arm of the string `s`: `if s = "a" then x else
+if …`, with `other` when no arm's string is `s`. A `match` cannot test a
+`JSString` against `JSString.ofString "a"`, which is not a constructor. `simp`
+decides each test with `JSString.ofString_inj`, and `rfl` decides it because
+the kernel reduces `ofString` on a literal. -/
+def Refs.strArms (r : Refs) (indent : String) (arms : List (String × String)) (other : String) :
+    String :=
+  String.join (arms.zipIdx.map fun ((t, code), i) =>
+    s!"{indent}{if i == 0 then "" else "else "}if s = {r.jsString t} then {code}\n") ++
+  s!"{indent}else {other}\n"
+
 /-- A name of `Spec/Eval.lean` or of its lemmas, which the certificate opens. -/
 def Refs.eval (r : Refs) (name : String) : String := r.write name s!"tolean.TypeScript.Eval.{name}"
 
@@ -112,6 +127,7 @@ partial def stmtsOf : Stmt → List Stmt
   | .block _ body => .block default body :: body.flatMap stmtsOf
   | .ifStmt s t a b => .ifStmt s t a b :: stmtsOf a ++ ((b.map stmtsOf).getD [])
   | .forOfStmt s k n i b => .forOfStmt s k n i b :: stmtsOf b
+  | .forStmt s i t u b => .forStmt s i t u b :: stmtsOf b
   | .whileStmt s t b => .whileStmt s t b :: stmtsOf b
   | .switchStmt s d cs => .switchStmt s d cs :: cs.flatMap fun (_, body) => body.flatMap stmtsOf
   | s => [s]
@@ -125,6 +141,7 @@ partial def exprCalls : Expr → List String
   | .cond _ a b c => exprCalls a ++ exprCalls b ++ exprCalls c
   | .array _ es => es.flatMap exprCalls
   | .object _ ps => ps.flatMap fun | .keyValue _ _ v => exprCalls v | _ => []
+  | .arrow _ _ _ body => exprCalls body
   | _ => []
 
 /-- The text of each number literal in `e`. -/
@@ -137,18 +154,23 @@ partial def exprNumbers : Expr → List String
   | .cond _ a b c => exprNumbers a ++ exprNumbers b ++ exprNumbers c
   | .array _ es => es.flatMap exprNumbers
   | .object _ ps => ps.flatMap fun | .keyValue _ _ v => exprNumbers v | _ => []
+  | .arrow _ _ _ body => exprNumbers body
   | _ => []
 
 def stmtNumbers : Stmt → List String
   | .varDecl _ d => (d.init.map exprNumbers).getD []
   | .exprStmt _ e | .ifStmt _ e _ _ | .whileStmt _ e _ | .forOfStmt _ _ _ e _ => exprNumbers e
   | .returnStmt _ e => (e.map exprNumbers).getD []
+  | .forStmt _ i t u _ =>
+    (((i.bind (·.init)).map exprNumbers).getD []) ++ ((t.map exprNumbers).getD []) ++ ((u.map exprNumbers).getD [])
   | _ => []
 
 def stmtCalls : Stmt → List String
   | .varDecl _ d => (d.init.map exprCalls).getD []
   | .exprStmt _ e | .ifStmt _ e _ _ | .whileStmt _ e _ | .forOfStmt _ _ _ e _ => exprCalls e
   | .returnStmt _ e => (e.map exprCalls).getD []
+  | .forStmt _ i t u _ =>
+    (((i.bind (·.init)).map exprCalls).getD []) ++ ((t.map exprCalls).getD []) ++ ((u.map exprCalls).getD [])
   | .switchStmt _ d cs => exprCalls d ++ cs.flatMap fun (t, _) => (t.map exprCalls).getD []
   | _ => []
 
@@ -160,18 +182,97 @@ def functionsOf (m : Module) : List (String × List Param × Option TypeExpr × 
 /-- The functions that get a certificate: all of them. -/
 def certifiable (m : Module) : List String := (functionsOf m).map (·.1)
 
-/-- How deep the calls in `s` nest: the fuel that the interpreter needs to run
-them. The subset has no recursion, so the depth is finite. -/
-partial def callDepth (m : Module) (s : Stmt) : Nat :=
-  let rec go (fuel : Nat) (s : Stmt) : Nat :=
+/-- How deep the calls of `calls`, and the calls in their bodies, nest: the
+fuel that the interpreter needs to run them. The subset has no recursion, so
+the depth is finite. -/
+partial def callsDepth (m : Module) (calls : List String) : Nat :=
+  let rec go (fuel : Nat) (calls : List String) : Nat :=
     match fuel with
     | 0 => 0
     | fuel + 1 =>
-      ((stmtsOf s).flatMap stmtCalls).foldl (init := 0) fun acc f =>
+      calls.foldl (init := 0) fun acc f =>
         match (functionsOf m).find? (·.1 == f) with
-        | some (_, _, _, body) => max acc (go fuel body + 1)
+        | some (_, _, _, body) => max acc (go fuel ((stmtsOf body).flatMap stmtCalls) + 1)
         | none => acc
-  go ((functionsOf m).length + 1) s
+  go ((functionsOf m).length + 1) calls
+
+/-- How deep the calls in `s` nest. -/
+def callDepth (m : Module) (s : Stmt) : Nat := callsDepth m ((stmtsOf s).flatMap stmtCalls)
+
+/-- `e` and every expression inside it. -/
+partial def subExprs (e : Expr) : List Expr :=
+  e :: match e with
+    | .call _ c args => subExprs c ++ args.flatMap subExprs
+    | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e
+    | .arrow _ _ _ e => subExprs e
+    | .index _ a b | .binary _ _ a b | .assign _ _ a b => subExprs a ++ subExprs b
+    | .cond _ a b c => subExprs a ++ subExprs b ++ subExprs c
+    | .array _ es => es.flatMap subExprs
+    | .object _ ps => ps.flatMap fun | .keyValue _ _ v => subExprs v | _ => []
+    | _ => []
+
+/-- The expressions that a statement holds, outside its nested statements. -/
+def stmtExprs : Stmt → List Expr
+  | .varDecl _ d => d.init.toList
+  | .exprStmt _ e | .ifStmt _ e _ _ | .whileStmt _ e _ | .forOfStmt _ _ _ e _ => [e]
+  | .returnStmt _ e => e.toList
+  | .switchStmt _ d cs => d :: cs.filterMap (·.1)
+  | _ => []
+
+/-- The call at `span` in `s`, such as `xs.map(x => e)`. -/
+def callAt (s : Stmt) (span : Span) : Option Expr :=
+  ((stmtsOf s).flatMap stmtExprs).findSome? fun e =>
+    (subExprs e).find? fun
+      | .call sp _ _ => sp == span
+      | _ => false
+
+/-- A call of a `List` function with a callback: the method, the parameter,
+its type, the body and what a certificate needs to know about it. -/
+abbrev Callback := IR.ListMethod × String × IR.Ty × IR.Expr × IR.CallbackInfo IR.TyExt
+
+mutual
+
+/-- The callbacks in `e`, inner ones first, in the order of the source. -/
+partial def exprCallbacks : IR.Expr → List Callback
+  | .listMethod method items param elem body info =>
+    exprCallbacks items ++ exprCallbacks body ++ [(method, param, elem, body, info)]
+  | .field a _ _ | .propNot a | .not a | .neg a | .isNone a | .isSome a | .decide a | .push _ a
+  | .update _ _ a | .inject _ _ a | .ascribe a _ => exprCallbacks a
+  | .ite a b c => exprCallbacks a ++ exprCallbacks b ++ exprCallbacks c
+  | .matchNull _ a b | .coalesce a b _ | .intOp _ a b | .order _ a b | .division _ a b
+  | .eq a b | .ne a b | .propAnd a b | .propOr a b | .and a b | .or a b =>
+    exprCallbacks a ++ exprCallbacks b
+  | .call _ args | .list args _ | .ext _ args => args.flatMap exprCallbacks
+  | .struct fields _ => fields.flatMap (exprCallbacks ·.2)
+  | .int _ | .none | .bool _ | .string _ | .var _ | .enumCase .. | .tagValue _ => []
+
+/-- The names that `e` reads. -/
+partial def exprNames : IR.Expr → List String
+  | .var n => [n]
+  | .listMethod _ items _ _ body _ => exprNames items ++ exprNames body
+  | .push n a | .update _ n a => n :: exprNames a
+  | .matchNull n a b => n :: exprNames a ++ exprNames b
+  | .field a _ _ | .propNot a | .not a | .neg a | .isNone a | .isSome a | .decide a
+  | .inject _ _ a | .ascribe a _ => exprNames a
+  | .ite a b c => exprNames a ++ exprNames b ++ exprNames c
+  | .coalesce a b _ | .intOp _ a b | .order _ a b | .division _ a b
+  | .eq a b | .ne a b | .propAnd a b | .propOr a b | .and a b | .or a b =>
+    exprNames a ++ exprNames b
+  | .call _ args | .list args _ | .ext _ args => args.flatMap exprNames
+  | .struct fields _ => fields.flatMap (exprNames ·.2)
+  | .int _ | .none | .bool _ | .string _ | .enumCase .. | .tagValue _ => []
+
+/-- The callbacks in a body, inner ones first, in the order of the source. -/
+partial def bodyCallbacks : IR.Body → List Callback
+  | .value e => exprCallbacks e
+  | .state _ => []
+  | .let _ e rest => exprCallbacks e ++ bodyCallbacks rest
+  | .letArray _ _ elems rest => elems.flatMap exprCallbacks ++ bodyCallbacks rest
+  | .ite c a b => exprCallbacks c ++ bodyCallbacks a ++ bodyCallbacks b
+  | .matchNull _ a b | .matchTag _ _ _ _ _ a b | .letState _ a b => bodyCallbacks a ++ bodyCallbacks b
+  | .fold _ _ body items rest _ => exprCallbacks items ++ bodyCallbacks body ++ bodyCallbacks rest
+
+end
 
 /-- The body of the `for…of` statement at `span`. -/
 def loopBody (s : Stmt) (span : Span) : Option Stmt :=
@@ -278,10 +379,11 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       let first := members.head?.getD ""
       encs := encs.push <|
         s!"def encode{name} {generic} : {ty} → Val {nv}\n" ++
-        "\n".intercalate (members.map fun m => s!"  | {ctor m} => Val.str {str m}")
+        "\n".intercalate (members.map fun m => s!"  | {ctor m} => Val.str {r.jsString m}")
       encs := encs.push <|
         s!"def decode{name} {generic} : Option (Val {nv}) → {ty}\n" ++
-        String.join (members.map fun m => s!"  | some (.str {str m}) => {ctor m}\n") ++
+        "  | some (.str s) =>\n" ++
+        r.strArms "    " (members.map fun m => (m, ctor m)) (ctor first) ++
         s!"  | _ => {ctor first}"
       encs := encs.push <|
         s!"@[simp] theorem decode{name}_encode{name} {generic} (x : {ty}) : decode{name} (some (encode{name} ({nv} := {nv}) x)) = x := by\n" ++
@@ -306,15 +408,15 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       -- split.
       for (m, i) in members.zipIdx do
         encs := encs.push <|
-          s!"@[simp] theorem encode{name}_{i} {generic} : encode{name} ({nv} := {nv}) {ctor m} = Val.str {str m} := rfl"
+          s!"@[simp] theorem encode{name}_{i} {generic} : encode{name} ({nv} := {nv}) {ctor m} = Val.str {r.jsString m} := rfl"
         encs := encs.push <|
-          s!"@[simp] theorem decode{name}_{i} {generic} : decode{name} ({nv} := {nv}) (some (Val.str {str m})) = {ctor m} := rfl"
+          s!"@[simp] theorem decode{name}_{i} {generic} : decode{name} ({nv} := {nv}) (some (Val.str {r.jsString m})) = {ctor m} := rfl"
     -- An interface.
     if let .struct name allFields := d then
       -- An optional field is a key only when it holds a value, as in an
       -- object literal that leaves it out.
       let parts ← allFields.mapM fun (f, t) => do
-        if let .tag v := t then return (s!"({str f}, Val.str {str v})", false)
+        if let .tag v := t then return (s!"({str f}, Val.str {r.jsString v})", false)
         if let .optional u := t then
           let some e := encoderOf r u | throw s!"{file}: cannot encode the field {name}.{f}"
           return (s!"({r.eval "encField"} {str f} {e} x.{f})", true)
@@ -407,8 +509,10 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       encs := encs.push <|
         s!"def decode{name} {generic} : Option (Val {nv}) → {ty}\n" ++
         s!"  | some (.obj fs) =>\n    match fs.lookup {str field} with\n" ++
-        String.join (members.map fun (t, m) =>
-          s!"    | some (.str {str t}) => {ctor t} (decode{m.name} ({nv} := {nv}) (some (.obj fs)))\n") ++
+        "    | some (.str s) =>\n" ++
+        r.strArms "      "
+          (members.map fun (t, m) => (t, s!"{ctor t} (decode{m.name} ({nv} := {nv}) (some (.obj fs)))"))
+          s!"{ctor firstTag} (decode{firstRef.name} ({nv} := {nv}) none)" ++
         s!"    | _ => {ctor firstTag} (decode{firstRef.name} ({nv} := {nv}) none)\n" ++
         s!"  | _ => {ctor firstTag} (decode{firstRef.name} ({nv} := {nv}) none)"
       let memberDefs := ", ".intercalate (members.flatMap fun (_, m) => [s!"encode{m.name}", s!"decode{m.name}"])
@@ -457,6 +561,73 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         | .function n .. => n == name
         | _ => false
       | throw s!"{file}: no translation of {name}"
+    -- A callback gets a lemma before the loops, because a loop's body can
+    -- hold one, and before the callbacks that hold it.
+    let mut cbIndex := 0
+    for (method, param, elem, cbBody, info) in bodyCallbacks outBody do
+      cbIndex := cbIndex + 1
+      let lemmaName := s!"{name}_cb{cbIndex}"
+      let some encX := encoderOf r elem
+        | throw s!"{file}: cannot encode the elements of a callback in {name}"
+      let some encY := encoderOf r info.result
+        | throw s!"{file}: cannot encode the value of a callback in {name}"
+      -- The lemma reads back only the locals that the body reads.
+      let reads := exprNames cbBody
+      let scope := info.scope.filter fun (n, _) => reads.contains n
+      let coded ← scope.mapM fun (n, t) => do
+        let (some e, some dec) := (encoderOf r t, decoderOf r t)
+          | throw s!"{file}: cannot encode the variable {n} in {name}"
+        return (n, e, dec)
+      let decode (n : String) : String :=
+        match coded.find? (·.1 == n) with
+        | some (_, _, dec) => s!"({dec} (ρ.lookup {str n}))"
+        | none => "default"
+      -- The callback's function binds the locals that its body reads, as a
+      -- loop's step does, and the lemma reads them back out of `ρ`.
+      let captured := if scope.isEmpty then "" else
+        s!"fun {" ".intercalate (scope.map fun (n, t) => s!"({n} : {t.print names})")} => "
+      let fn := s!"(({captured}fun ({param} : {elem.print names}) => ({cbBody.print names} : {info.result.print names}))" ++
+        String.join (scope.map fun (n, _) => s!" {decode n}") ++ ")"
+      -- A body with calls needs the fuel of their depth, as a loop's does.
+      let depth := match callAt syntaxBody info.span with
+        | some (.call _ _ [.arrow _ _ _ arrowBody]) => callsDepth m (exprCalls arrowBody)
+        | _ => 0
+      let fuel := if depth == 0 then "fuel" else s!"(fuel + {depth})"
+      let hfs := if depth == 0 then "" else s!" (hfs : fs = {outputFs})"
+      let substHfs := if depth == 0 then "" else "  subst hfs\n"
+      let hfsName := if depth == 0 then [] else [r.cert "decls"]
+      let inv := " ∧ ".intercalate (coded.map fun (n, e, dec) =>
+        s!"ρ.lookup {str n} = some ({e} ({dec} (ρ.lookup {str n})))")
+      let hI := if coded.isEmpty then "" else s!" (hI : {inv})"
+      let hypNames := (List.range coded.length).map (s!"h{·}")
+      let unpack := if coded.isEmpty then "" else
+        -- Here `obtain` would give names that the tactics after it cannot
+        -- see, so each part of `hI` gets a `have`.
+        String.join (hypNames.zipIdx.map fun (h, i) => s!"  have {h} := hI{project "" coded.length i}\n") ++
+          "  try simp only []\n" ++
+          String.join (coded.zipIdx.map fun ((n, _, dec), i) =>
+            s!"  generalize {dec} (ρ.lookup {str n}) = v{i} at h{i} ⊢\n")
+      let (evalFn, want, result, fromLemma) := match method with
+        | .map => ("evalMap", "", s!"List.map {encY} (List.map {fn} items)",
+            s!"evalMap_map fs {fuel} ρ {str param} _ {encX} {encY} {fn}")
+        | .filter => ("evalFilter", "", s!"List.map {encX} (List.filter {fn} items)",
+            s!"evalFilter_filter fs {fuel} ρ {str param} _ {encX} {fn}")
+        | .any | .find => ("evalFind", " true", s!"Option.map {encX} (List.find? {fn} items)",
+            s!"evalFind_true fs {fuel} ρ {str param} _ {encX} {fn}")
+        | .all => ("evalFind", " false", s!"Option.map {encX} (List.find? (fun x => !({fn} x)) items)",
+            s!"evalFind_false fs {fuel} ρ {str param} _ {encX} {fn}")
+      let itemsTy := (IR.Ty.list elem).print names
+      let vars := ("x", elem) :: scope.zipIdx.map fun ((_, t), i) => (s!"v{i}", t)
+      let simpSet := ", ".intercalate (hfsName ++ envLemmas ++ lemmaNames.toList ++ loopLemmas.toList ++ defs ++ hypNames)
+      loopLemmas := loopLemmas.push (r.cert lemmaName)
+      thms := thms.push <|
+        s!"theorem {lemmaName} {generic} (fs : List (tolean.DeclRef × List String × tolean.TypeScript.IR.Body)){hfs}\n" ++
+        s!"    (fuel : Nat) (ρ : Env {nv}){hI} (items : {itemsTy}) :\n" ++
+        s!"    tolean.TypeScript.IR.Expr.{evalFn} fs {fuel} ρ {str param} ({term cbBody}){want}\n" ++
+        s!"      (List.map {encX} items) = some ({result}) := by\n" ++
+        s!"  refine tolean.TypeScript.Proof.{fromLemma} ?_ items\n" ++
+        s!"  intro x\n" ++ substHfs ++ unpack ++
+        s!"  {casesOn decls vars}link_tac [{simpSet}]"
     let mut index := 0
     for (stateNames, element, body, info) in loopsOf outBody do
       index := index + 1

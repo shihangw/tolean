@@ -59,7 +59,7 @@ the extras is `### Extras: <heading>`, with the heading of its group in
 
 Each section has its anchor in the spec, its number in ES2024, the default
 target, and its title. The anchor, such as `sec-unary-minus-operator`, stays
-the same from one edition to the next, but numbers move: four of the 38
+the same from one edition to the next, but numbers move: four of the 39
 sections here have another number in ES2025 or ES2026. So when the default
 target moves to a newer edition, each number can be read again from that
 edition's table of contents by its anchor.
@@ -92,6 +92,8 @@ def everySection : Group :=
 the spec, with the theorems about each. -/
 def sections : List Section := [
   -- §6 ECMAScript Data Types and Values {#sec-ecmascript-data-types-and-values}
+  ⟨"sec-ecmascript-language-types-string-type", "6.1.4", "The String Type",
+    [``JSString.ofString_inj, ``JSString.toString_ofString, ``JSString.decode_flatMap_utf16]⟩,
   ⟨"sec-ecmascript-language-types-number-type", "6.1.6.1", "The Number Type",
     [``eq_refl_of_safe, ``le_refl_of_safe, ``lt_irrefl_of_safe, ``eq_self_eq_not_isNaN,
     ``eq_posInf_posInf, ``eq_negInf_negInf, ``isNaN_eq_false_of_safe]⟩,
@@ -124,7 +126,7 @@ def sections : List Section := [
     [``Proof.fold_sim, ``shorthand_reads_global]⟩,
   ⟨"sec-grouping-operator", "13.2.9", "The Grouping Operator",
     [``Proof.eval_stripParens]⟩,
-  ⟨"sec-property-accessors", "13.3.2", "Property Accessors", []⟩,
+  ⟨"sec-property-accessors", "13.3.2", "Property Accessors", [``Eval.eval_index_str]⟩,
   ⟨"sec-function-calls", "13.3.6", "Function Calls",
     [``Proof.eval_call, ``Proof.out_call, ``Proof.zip_sim, ``Proof.calls_agree]⟩,
   ⟨"sec-typeof-operator", "13.5.3", "The typeof Operator",
@@ -167,8 +169,8 @@ def sections : List Section := [
     [``Proof.decl_sim, ``Proof.declare_ok, ``Proof.has_add, ``declare_not_callable, ``Proof.eval_withType,
     ``Proof.translateVariable_sound, ``Syntax.Stmt.constAssignedIn_nil, ``Syntax.Stmt.constAssignedIn_exprStmt,
     ``Syntax.Stmt.constAssignedIn_returnStmt, ``Syntax.Stmt.constAssignedIn_ifStmt,
-    ``Syntax.Stmt.constAssignedIn_forOfStmt, ``Syntax.Stmt.constAssignedIn_whileStmt,
-    ``Syntax.Stmt.constAssignedIn_block, ``Syntax.Stmt.constAssignedIn_breakStmt,
+    ``Syntax.Stmt.constAssignedIn_forOfStmt, ``Syntax.Stmt.constAssignedIn_forStmt,
+    ``Syntax.Stmt.constAssignedIn_whileStmt, ``Syntax.Stmt.constAssignedIn_block, ``Syntax.Stmt.constAssignedIn_breakStmt,
     ``Syntax.Stmt.constAssignedIn_continueStmt, ``Syntax.Stmt.constAssignedIn_empty,
     ``Syntax.Stmt.constAssignedIn_switchStmt]⟩,
   ⟨"sec-if-statement", "14.6", "The if Statement",
@@ -193,6 +195,9 @@ def sections : List Section := [
   -- §15 ECMAScript Language: Functions and Classes {#sec-ecmascript-language-functions-and-classes}
   ⟨"sec-function-definitions", "15.2", "Function Definitions",
     [``Proof.translateFunction_ok, ``Proof.params_fold]⟩,
+  ⟨"sec-arrow-function-definitions", "15.3", "Arrow Function Definitions",
+    [``Proof.callbackOf_some, ``Proof.bodySim_of, ``Proof.eval_arrayMethod, ``Proof.out_listMethod,
+    ``Proof.methodVal_sim, ``Proof.translateArrayMethod_sound]⟩,
   -- §16 ECMAScript Language: Scripts and Modules {#sec-ecmascript-language-scripts-and-modules}
   ⟨"sec-source-text-module-record-initialize-environment", "16.2.1.6.4", "InitializeEnvironment",
     [``Proof.module_resolves, ``Proof.declareTopLevel_ok, ``Proof.translateDecl_ok,
@@ -209,8 +214,16 @@ def sections : List Section := [
   ⟨"sec-properties-of-the-number-constructor", "21.1.2", "Properties of the Number Constructor",
     [``Proof.out_numberTest]⟩,
   -- §23 Indexed Collections {#sec-indexed-collections}
+  ⟨"sec-array.prototype.every", "23.1.3.6", "Array.prototype.every", []⟩,
+  ⟨"sec-array.prototype.filter", "23.1.3.8", "Array.prototype.filter",
+    [``Proof.evalFilter_sim]⟩,
+  ⟨"sec-array.prototype.find", "23.1.3.9", "Array.prototype.find",
+    [``Proof.evalFind_sim]⟩,
+  ⟨"sec-array.prototype.map", "23.1.3.21", "Array.prototype.map",
+    [``Proof.evalMap_sim]⟩,
   ⟨"sec-array.prototype.push", "23.1.3.23", "Array.prototype.push",
     [``Proof.out_push]⟩,
+  ⟨"sec-array.prototype.some", "23.1.3.29", "Array.prototype.some", []⟩,
   ⟨"sec-createarrayiterator", "23.1.5.1", "CreateArrayIterator", []⟩]
 
 /-- The laws of the number model, from §6.1.6.1 The Number Type. The proofs
@@ -238,7 +251,7 @@ def extras : List Group := [
     ``Proof.lookup_isSome, ``Proof.lookup_append_some, ``Proof.lookup_none_of_not_mem,
     ``Proof.lookup_append_none, ``Proof.lookup_append_mem]⟩,
   ⟨"TypeScript types, which JS does not have", [``Proof.narrow_has, ``Proof.translateInterface_ok,
-    ``Proof.translateAlias_ok, ``Proof.translateEnum_ok, ``Proof.translateUnion_ok,
+    ``Proof.translateAlias_ok, ``Proof.translateRecord_ok, ``Proof.translateEnum_ok, ``Proof.translateUnion_ok,
     ``Proof.declareUnion_ok, ``Proof.translatePrimitiveUnion_ok, ``Proof.eval_into]⟩,
   ⟨"How Lean reads the output", [``Proof.eval_value, ``Proof.checkName_ok, ``Proof.checkLocalName_ok,
     ``checkLocalName_not_interface]⟩,
@@ -338,7 +351,7 @@ def extras : List Group := [
     [``Syntax.Stmt.lines_words, ``Syntax.Stmt.linesOf_words, ``Syntax.Laid.append, ``Syntax.Laid.one,
     ``Syntax.Laid.cons, ``Syntax.endStatement_semi, ``Syntax.VarKind.word_eq,
     ``Syntax.followsType_eq_semi, ``Syntax.varDecl_ss, ``Syntax.varDecl_ns, ``Syntax.varDecl_sn,
-    ``Syntax.varDecl_nn, ``Syntax.parseVarDecl_reads,
+    ``Syntax.varDecl_nn, ``Syntax.parseDeclaration_reads, ``Syntax.parseVarDecl_reads,
     ``Syntax.stmt_empty, ``Syntax.stmt_jump, ``Syntax.stmt_return_none, ``Syntax.stmt_return_some,
     ``Syntax.parseStatement_expr, ``Syntax.stmt_expr, ``Syntax.stmt_varDecl, ``Syntax.Laid.kinds,
     ``Syntax.Stmt.first, ``Syntax.Laid.first, ``Syntax.parseBranch_reads, ``Syntax.Stmt.linesOf_wordLines,
@@ -346,7 +359,12 @@ def extras : List Group := [
     ``Syntax.parseBlock_reads, ``Syntax.stmt_block, ``Syntax.afterOK_closer, ``Syntax.EndsExpr.closer,
     ``Syntax.Touching.keywordParen, ``Syntax.stmt_if_none, ``Syntax.stmt_if_some,
     ``Syntax.Parse.withLoop_ok, ``Syntax.leaves_withLoop, ``Syntax.stmt_while, ``Syntax.parseForOf_reads,
-    ``Syntax.stmt_for, ``Syntax.Stmt.allWF_iff, ``Syntax.Stmt.depth_le_depthOf, ``Syntax.allStmts_succ,
+    ``Syntax.stmt_for, ``Syntax.Parse.countedFor_eq, ``Syntax.Parse.unlessPunct_some,
+    ``Syntax.Parse.unlessPunct_none, ``Syntax.Expr.inFree_erase, ``Syntax.Expr.inFreeList_eraseAll,
+    ``Syntax.VarDecl.inFree_erase,
+    ``Syntax.VarDecl.three_tokens, ``Syntax.parseForDeclaration_reads, ``Syntax.forInit_reads,
+    ``Syntax.forPart_reads, ``Syntax.parseFor_reads, ``Syntax.stmt_counted, ``Syntax.Stmt.allWF_iff,
+    ``Syntax.Stmt.depth_le_depthOf, ``Syntax.allStmts_succ,
     ``Syntax.stmts_read_le, ``Syntax.stmts_read,
     ``Syntax.Expr.firstWord, ``Syntax.Touching.after_one,
     ``Syntax.Stmt.clauseLines_words, ``Syntax.Expr.lessFree_erase, ``Syntax.Expr.lessFreeList_eraseAll,
@@ -470,11 +488,12 @@ def extras : List Group := [
     ``Syntax.Field.wordsOK, ``Syntax.ImportName.wordsOK, ``Syntax.StmtOK.one, ``Syntax.StmtOK.head,
     ``Syntax.StmtOK.varDecl, ``Syntax.StmtOK.exprStmt, ``Syntax.StmtOK.retNone, ``Syntax.StmtOK.retSome,
     ``Syntax.StmtOK.brk, ``Syntax.StmtOK.cont, ``Syntax.StmtOK.empty, ``Syntax.StmtOK.ifThen, ``Syntax.StmtOK.ifElse,
-    ``Syntax.StmtOK.forOf, ``Syntax.StmtOK.while, ``Syntax.linesOf_ok, ``Syntax.StmtOK.block,
-    ``Syntax.endStatement_inv, ``Syntax.varDecl_tail, ``Syntax.parseVarDecl_inv, ``Syntax.blockStep_inv,
+    ``Syntax.StmtOK.forOf, ``Syntax.StmtOK.counted, ``Syntax.StmtOK.while, ``Syntax.linesOf_ok, ``Syntax.StmtOK.block,
+    ``Syntax.endStatement_inv, ``Syntax.varDecl_tail, ``Syntax.parseDeclaration_inv, ``Syntax.parseVarDecl_inv, ``Syntax.blockStep_inv,
     ``Syntax.parseBlock_gives, ``Syntax.parseBranch_gives,
     ``Syntax.withLoop_inv, ``Syntax.parseExpressionStatement_inv, ``Syntax.pass_inv, ``Syntax.choose_inv,
-    ``Syntax.parseForOf_inv, ``Syntax.parenTest_inv, ``Syntax.exprStmt_gives, ``Syntax.parseStatement_gives,
+    ``Syntax.parseForOf_inv, ``Syntax.parseForDeclaration_inv, ``Syntax.forInit_inv,
+    ``Syntax.forPart_inv, ``Syntax.parseFor_inv, ``Syntax.parenTest_inv, ``Syntax.exprStmt_gives, ``Syntax.parseStatement_gives,
     ``Syntax.stmts_give, ``Syntax.DeclOK.import, ``Syntax.DeclOK.function, ``Syntax.DeclOK.interface,
     ``Syntax.DeclOK.typeAlias, ``Syntax.DeclOK.exportedVar, ``Syntax.DeclOK.stmt, ``Syntax.listStep_wf,
     ``Syntax.blockStep_wf, ``Syntax.advance_ready, ``Syntax.discard_advance_ready, ``Syntax.Refuses.bind,
@@ -498,7 +517,7 @@ def extras : List Group := [
   ⟨"The parser", [``Syntax.parseChars_eq_of_parsesTo, ``Syntax.TypeExpr.beq_iff,
     ``Syntax.TypeExpr.beqList_iff, ``Syntax.TypeExpr.beqOpt_iff, ``Syntax.Expr.beq_iff,
     ``Syntax.Expr.beqList_iff, ``Syntax.Property.beq_iff, ``Syntax.Property.beqList_iff,
-    ``Syntax.Expr.beqOpt_iff, ``Syntax.VarDecl.beq_iff, ``Syntax.Stmt.beq_iff,
+    ``Syntax.Expr.beqOpt_iff, ``Syntax.VarDecl.beq_iff, ``Syntax.VarDecl.beqOpt_iff, ``Syntax.Stmt.beq_iff,
     ``Syntax.Stmt.beqList_iff, ``Syntax.Stmt.beqOpt_iff, ``Syntax.Stmt.beqClauses_iff, ``Syntax.Param.beq_iff,
     ``Syntax.Param.beqList_iff, ``Syntax.Field.beq_iff, ``Syntax.Field.beqList_iff,
     ``Syntax.Decl.beq_iff, ``Syntax.Decl.beqList_iff, ``Syntax.Module.beq_iff]⟩,
@@ -509,7 +528,10 @@ def extras : List Group := [
     ``Eval.decNull_some, ``Eval.decList_nil, ``Eval.decList_cons, ``Eval.decList_encList,
     ``Eval.decNull_encNull, ``Eval.decNull_null, ``Eval.decList_list_null, ``Eval.decList_encList_null, ``Eval.encUndef_some, ``Eval.encUndef_none,
     ``Eval.encField_some, ``Eval.encField_none, ``Eval.decUndef_none, ``Eval.decUndef_undefined,
-    ``Eval.decUndef_some, ``Eval.decUndef_encUndef]⟩]
+    ``Eval.decUndef_some, ``Eval.decUndef_encUndef]⟩,
+  ⟨"Certificates: callbacks and the List functions", [``Proof.evalMap_map, ``Proof.evalFilter_filter,
+    ``Proof.evalFind_find, ``Proof.evalFind_true, ``Proof.evalFind_false, ``Proof.find?_isSome,
+    ``Proof.find?_not_isNone, ``Proof.getD_map_undefined]⟩]
 
 open Meta in
 /-- The theorems of the TypeScript modules that the index does not list. A

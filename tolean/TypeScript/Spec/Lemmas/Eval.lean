@@ -27,6 +27,15 @@ reason. -/
 theorem looseEq_null_right (a : Val N) (ha : a ≠ .undefined) : looseEq a .null = strictEq a .null := by
   cases a <;> first | rfl | exact absurd rfl ha
 
+/-- `obj[key]` with a string key reads the property that the string names, as
+`obj.name` does, because `ToPropertyKey` of a string is the string itself
+(ECMA-262 §13.3.2.1). -/
+theorem eval_index_str {m : Scope} {fuel : Nat} {env : Env N} {sp obj key}
+    {fields : List (String × Val N)} {name : String}
+    (ho : eval m fuel env obj = some (.obj fields)) (hk : eval m fuel env key = some (.str name)) :
+    eval m fuel env (.index sp obj key) = getProp fields name := by
+  simp [eval, ho, hk]
+
 end
 
 /-! ### Environments -/
@@ -189,9 +198,9 @@ def decNum [JSNumber N] : Option (Val N) → N
   | some (.num n) => n
   | _ => JSNumber.ofSafeInt 0
 
-def decStr : Option (Val N) → String
+def decStr : Option (Val N) → JSString
   | some (.str s) => s
-  | _ => ""
+  | _ => JSString.ofString ""
 
 def decList {α : Type} (dec : Option (Val N) → α) : Option (Val N) → List α
   | some (.list vs) => vs.map (fun v => dec (some v))
@@ -226,7 +235,7 @@ def decUndef {α : Type} (dec : Option (Val N) → α) : Option (Val N) → Opti
 @[simp] theorem decInt_int (i : Int) : decInt (some (Val.int (N := N) i)) = i := rfl
 @[simp] theorem decBool_bool (b : Bool) : decBool (some (Val.bool (N := N) b)) = b := rfl
 @[simp] theorem decNum_num [JSNumber N] (n : N) : decNum (some (Val.num n)) = n := rfl
-@[simp] theorem decStr_str (s : String) : decStr (some (Val.str (N := N) s)) = s := rfl
+@[simp] theorem decStr_str (s : JSString) : decStr (some (Val.str (N := N) s)) = s := rfl
 
 @[simp] theorem decList_list {α : Type} (dec : Option (Val N) → α) (enc : α → Val N)
     (h : ∀ x, dec (some (enc x)) = x) (xs : List α) :
