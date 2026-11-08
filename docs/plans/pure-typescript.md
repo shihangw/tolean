@@ -137,53 +137,18 @@ pieces](shared-core.md) adds exceptions to the IR, and this stage uses them.
 
 ### Strings
 
-The string model comes before every other step, because the current mapping
-of `string` stops being exact as soon as any string operation exists.
+Tolean translates `string` to `JSString`, the list of a string's UTF-16 code
+units, and `===` compares the lists. [A decision
+record](../decisions/2026-11-06-jsstring.md) explains why. Each operation
+below becomes a function on that list, written from its algorithm in the
+spec.
 
-#### The string model
-
-A JavaScript string is a sequence of UTF-16 code units (§6.1.4), and it can
-hold a lone surrogate. A Lean `String` is a sequence of Unicode scalar values,
-so it cannot hold a lone surrogate, and it orders and measures text in a
-different way. For example, U+FFFF sorts after U+10000 in JavaScript, because
-U+10000 starts with the code unit 0xD800. In Lean it sorts before it. The
-mapping of `string` to `String` is exact today only because the subset has no
-string operation except `===`.
-
-So `string` becomes a new type, `JSString`, a structure around
-`List UInt16`. That is the definition in the spec, so the model is exact for
-every string, lone surrogates included. Each string operation becomes an
-ordinary function on the list, written from the algorithm in the spec, and
-proofs use the usual `List` lemmas.
-
-A literal such as `"abc"` prints as `JSString.ofString "abc"`, which encodes
-the text as UTF-16. A literal that holds a lone surrogate, such as
-`"\uD800"`, prints its code units, because a Lean `String` cannot hold it.
-A coercion and a lemma that `ofString` is injective let a claim state a
-literal such as `"abc"` directly.
-
-We considered two other models and rejected both:
-
-- **Keep `String` and refuse the operations whose result differs.** Whether
-  `<` or `length` differs depends on whether a value holds a character
-  above U+FFFF. The translator cannot know that when it translates, so it
-  would have to approximate.
-- **An abstract type with laws, as `number` has.** `number` is abstract
-  because an exact model of doubles is hard. An exact model of strings is
-  easy, and a concrete model with proved lemmas needs no laws to test.
-
-The new type has costs. The generated Lean is less readable, because each
-literal carries `JSString.ofString`. A theorem about a string input now
-covers every list of code units, lone surrogates included. That is correct,
-because a JavaScript caller can pass such a string. A certificate that runs
-string code in the kernel is slower on a list of code units than on a
-`String`.
-
-#### Operations
+One part of the model is left. The lexer refuses a literal that holds a lone
+surrogate, such as `"\uD800"`, because the syntax tree keeps the text of a
+literal as a Lean `String`. Such a literal should print its code units.
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| `===` and `!==` on strings | List equality, as SameValueNonNumber compares strings (§7.2.12) | |
 | `<`, `<=`, `>` and `>=` on strings | Lexicographic order on code units, as IsLessThan defines it (§7.2.13) | `localeCompare`, which depends on the locale |
 | `+` on strings, and template literals whose parts are `string`, `boolean`, `bigint` or a safe integer `number` | `List.append`. Numbers and `bigint` values convert to ASCII digits (§6.1.6.1.20 and §6.1.6.2.21). | A part that is a non-integer `number` or an object |
 | `length`, `at` (§22.1.3.1), `slice` (§22.1.3.22), `startsWith`, `endsWith`, `includes`, `indexOf`, `split` with a string separator (§22.1.3.23), `padStart`, `padEnd` and `trim` | Functions on the list of code units. `slice` and `at` follow the spec for negative and out-of-range indexes. | `split` with a regular expression, and every regular expression in the first version |
@@ -256,9 +221,8 @@ be exact:
 ## Steps
 
 Each step ends with all checks green, with both translators in agreement, and
-with no change to the output of code that is already in the subset. Step 1
-is the one planned exception, because it changes the type of every `string`.
-A fix for output that Lean does not accept may change it too: the binders of
+with no change to the output of code that is already in the subset. A fix
+for output that Lean does not accept may change it too: the binders of
 a loop now carry their types ([#59](https://github.com/shihangw/tolean/pull/59)),
 and a `let` of a `T | null` local writes its type where Lean would infer
 another ([#63](https://github.com/shihangw/tolean/pull/63)).
@@ -266,10 +230,6 @@ another ([#63](https://github.com/shihangw/tolean/pull/63)).
 Each step has a priority. The P0 steps come first, then the P1 steps, then
 the P2 steps. Steps with the same priority keep the order of their numbers.
 
-1. **P0.** Switch `string` to `JSString`. Today a string appears only in
-   fields, literals and `===`, so the switch changes the generated types but
-   breaks almost no proof. Every project that writes proofs over Lean's
-   `String` makes the switch more costly later, so it comes first.
 2. **P0.** Types and narrowing: optional parameters and `undefined` as a
    value, the rest of a chain after `?.`, a `default` that assigns to `never`,
    `export { … }` and re-exports, `as const` and `satisfies`, and `Record`

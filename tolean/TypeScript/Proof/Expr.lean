@@ -644,9 +644,9 @@ as `n.kind` or `typeof n`, and the string `t`, in either order. The read
 gives the tag that the IR's evaluator reads. -/
 theorem tagSide_eval {l r : Expr} {n : String} {f : Option String} {t : String}
     (h : tagSide l r = some (n, f, t)) {ρ : Eval.Env N} {w : Val N} (hw : ρ.lookup n = some w)
-    {k : String} (hk : IR.tagOf f w = some k) :
-    (Eval.eval m fuel ρ l = some (.str k) ∧ Eval.eval m fuel ρ r = some (.str t)) ∨
-      (Eval.eval m fuel ρ l = some (.str t) ∧ Eval.eval m fuel ρ r = some (.str k)) := by
+    {k : JSString} (hk : IR.tagOf f w = some k) :
+    (Eval.eval m fuel ρ l = some (.str k) ∧ Eval.eval m fuel ρ r = some (.str (.ofString t))) ∨
+      (Eval.eval m fuel ρ l = some (.str (.ofString t)) ∧ Eval.eval m fuel ρ r = some (.str k)) := by
   have hfield : ∀ sp sp' field, f = some field →
       Eval.eval m fuel ρ (.member sp (.ident sp' n) field) = some (.str k) := by
     rintro sp sp' field rfl
@@ -679,7 +679,8 @@ names, when the IR's evaluator reads a tag from the local. -/
 theorem tagTestOf_eval {env : Translate.Env} {e : Expr} {t : TagTest}
     (h : tagTestOf env e = some t) {ρ : Eval.Env N} (hs : Scoped m env ρ) :
     ∃ w, ρ.lookup t.name = some w ∧ ∀ k, IR.tagOf t.field w = some k →
-      Eval.eval m fuel ρ e = some (.bool (if t.isEq then k == t.tag else !(k == t.tag))) := by
+      Eval.eval m fuel ρ e =
+        some (.bool (if t.isEq then k == .ofString t.tag else !(k == .ofString t.tag))) := by
   unfold tagTestOf at h
   rw [← eval_stripParens]
   generalize e.stripParens = e' at h ⊢
@@ -716,10 +717,10 @@ theorem tagTestOf_eval {env : Translate.Env} {e : Expr} {t : TagTest}
           rcases tagSide_eval m fuel hside hw hk with ⟨hl, hr⟩ | ⟨hl, hr⟩ <;>
             rcases hop' with rfl | rfl <;>
             simp +decide [hl, hr, Eval.binary, Eval.strictEq]
-          all_goals by_cases hkt : k = tg
+          all_goals by_cases hkt : k = .ofString tg
           all_goals first
             | (simp_all; done)
-            | simp [hkt, show ¬ tg = k from fun e => hkt e.symm]
+            | simp [hkt, show ¬ JSString.ofString tg = k from fun e => hkt e.symm]
         · simp at h
       · simp at h
     · simp at h

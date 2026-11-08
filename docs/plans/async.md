@@ -62,7 +62,7 @@ async function getUser(id: string): Promise<User> {
 
 ```lean
 def getUser [Monad m] [MonadExcept Err m] [Reads Db m] [Await m]
-    (id : String) : m User := do
+    (id : JSString) : m User := do
   let row ← Db.find id
   Await.yield
   match row with

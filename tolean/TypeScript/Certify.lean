@@ -57,6 +57,21 @@ structure Refs where
 def Refs.write (r : Refs) (short full : String) : String :=
   if r.idents.contains ((short.splitOn ".").headD short) then s!"_root_.{full}" else short
 
+/-- The string literal `s` as a `JSString`, as the interpreter gives it. -/
+def Refs.jsString (r : Refs) (s : String) : String :=
+  s!"({r.write "JSString.ofString" "tolean.TypeScript.JSString.ofString"} {str s})"
+
+/-- Lean code that picks the arm of the string `s`: `if s = "a" then x else
+if …`, with `other` when no arm's string is `s`. A `match` cannot test a
+`JSString` against `JSString.ofString "a"`, which is not a constructor. `simp`
+decides each test with `JSString.ofString_inj`, and `rfl` decides it because
+the kernel reduces `ofString` on a literal. -/
+def Refs.strArms (r : Refs) (indent : String) (arms : List (String × String)) (other : String) :
+    String :=
+  String.join (arms.zipIdx.map fun ((t, code), i) =>
+    s!"{indent}{if i == 0 then "" else "else "}if s = {r.jsString t} then {code}\n") ++
+  s!"{indent}else {other}\n"
+
 /-- A name of `Spec/Eval.lean` or of its lemmas, which the certificate opens. -/
 def Refs.eval (r : Refs) (name : String) : String := r.write name s!"tolean.TypeScript.Eval.{name}"
 
@@ -364,10 +379,11 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       let first := members.head?.getD ""
       encs := encs.push <|
         s!"def encode{name} {generic} : {ty} → Val {nv}\n" ++
-        "\n".intercalate (members.map fun m => s!"  | {ctor m} => Val.str {str m}")
+        "\n".intercalate (members.map fun m => s!"  | {ctor m} => Val.str {r.jsString m}")
       encs := encs.push <|
         s!"def decode{name} {generic} : Option (Val {nv}) → {ty}\n" ++
-        String.join (members.map fun m => s!"  | some (.str {str m}) => {ctor m}\n") ++
+        "  | some (.str s) =>\n" ++
+        r.strArms "    " (members.map fun m => (m, ctor m)) (ctor first) ++
         s!"  | _ => {ctor first}"
       encs := encs.push <|
         s!"@[simp] theorem decode{name}_encode{name} {generic} (x : {ty}) : decode{name} (some (encode{name} ({nv} := {nv}) x)) = x := by\n" ++
@@ -392,15 +408,15 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       -- split.
       for (m, i) in members.zipIdx do
         encs := encs.push <|
-          s!"@[simp] theorem encode{name}_{i} {generic} : encode{name} ({nv} := {nv}) {ctor m} = Val.str {str m} := rfl"
+          s!"@[simp] theorem encode{name}_{i} {generic} : encode{name} ({nv} := {nv}) {ctor m} = Val.str {r.jsString m} := rfl"
         encs := encs.push <|
-          s!"@[simp] theorem decode{name}_{i} {generic} : decode{name} ({nv} := {nv}) (some (Val.str {str m})) = {ctor m} := rfl"
+          s!"@[simp] theorem decode{name}_{i} {generic} : decode{name} ({nv} := {nv}) (some (Val.str {r.jsString m})) = {ctor m} := rfl"
     -- An interface.
     if let .struct name allFields := d then
       -- An optional field is a key only when it holds a value, as in an
       -- object literal that leaves it out.
       let parts ← allFields.mapM fun (f, t) => do
-        if let .tag v := t then return (s!"({str f}, Val.str {str v})", false)
+        if let .tag v := t then return (s!"({str f}, Val.str {r.jsString v})", false)
         if let .optional u := t then
           let some e := encoderOf r u | throw s!"{file}: cannot encode the field {name}.{f}"
           return (s!"({r.eval "encField"} {str f} {e} x.{f})", true)
@@ -493,8 +509,10 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       encs := encs.push <|
         s!"def decode{name} {generic} : Option (Val {nv}) → {ty}\n" ++
         s!"  | some (.obj fs) =>\n    match fs.lookup {str field} with\n" ++
-        String.join (members.map fun (t, m) =>
-          s!"    | some (.str {str t}) => {ctor t} (decode{m.name} ({nv} := {nv}) (some (.obj fs)))\n") ++
+        "    | some (.str s) =>\n" ++
+        r.strArms "      "
+          (members.map fun (t, m) => (t, s!"{ctor t} (decode{m.name} ({nv} := {nv}) (some (.obj fs)))"))
+          s!"{ctor firstTag} (decode{firstRef.name} ({nv} := {nv}) none)" ++
         s!"    | _ => {ctor firstTag} (decode{firstRef.name} ({nv} := {nv}) none)\n" ++
         s!"  | _ => {ctor firstTag} (decode{firstRef.name} ({nv} := {nv}) none)"
       let memberDefs := ", ".intercalate (members.flatMap fun (_, m) => [s!"encode{m.name}", s!"decode{m.name}"])

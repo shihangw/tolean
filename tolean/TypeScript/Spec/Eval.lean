@@ -1,5 +1,6 @@
 import tolean.TypeScript.Syntax.Ast
 import tolean.TypeScript.Spec.Number
+import tolean.TypeScript.Spec.String
 
 /-!
 The meaning of the translated TypeScript subset, as an interpreter in Lean.
@@ -28,13 +29,14 @@ variable {N : Type} [JSNumber N]
 /-- A span, written short in certificates. -/
 abbrev sp (a b c d : Nat) : tolean.Span := ⟨⟨a, b⟩, ⟨c, d⟩⟩
 
-/-- A JavaScript value of the subset. An object is a list of fields, in the
-order the program wrote them. -/
+/-- A JavaScript value of the subset. A string is a `JSString`, its UTF-16
+code units (`Spec/String.lean`). An object is a list of fields, in the order
+the program wrote them. -/
 inductive Val (N : Type) where
   | int (i : Int)
   | num (n : N)
   | bool (b : Bool)
-  | str (s : String)
+  | str (s : JSString)
   | null
   /-- `undefined`, the value of a property that an object does not have. -/
   | undefined
@@ -311,7 +313,7 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
   | .bigint _ text => (bigintLiteral text).map .int
   | .number _ text => (numberLiteral text).map (.num ∘ JSNumber.ofSafeInt)
   | .bool _ b => some (.bool b)
-  | .string _ s => some (.str s)
+  | .string _ s => some (.str (JSString.ofString s))
   | .null _ => some .null
   | .paren _ inner => eval m fuel env inner
   | .array _ elems => (evalList m fuel env elems).map .list
@@ -340,7 +342,7 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
   -- `typeof x` names the type of the value of `x` (ECMA-262 §13.5.3.1). On a
   -- name that is not bound, JS gives `"undefined"`, and the subset has no
   -- such value, so the rule gives none there, as for every unbound name.
-  | .unary _ .typeof arg => do return .str (← eval m fuel env arg).typeOf
+  | .unary _ .typeof arg => do return .str (JSString.ofString (← eval m fuel env arg).typeOf)
   -- The source text `-Infinity` is `negInf`, the model's name for it. A
   -- variable named `Infinity` is negated as any other value is.
   | .unary _ .neg (.ident _ "Infinity") => do
