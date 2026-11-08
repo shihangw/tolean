@@ -27,6 +27,15 @@ reason. -/
 theorem looseEq_null_right (a : Val N) (ha : a ≠ .undefined) : looseEq a .null = strictEq a .null := by
   cases a <;> first | rfl | exact absurd rfl ha
 
+/-- `obj[key]` with a string key reads the property that the string names, as
+`obj.name` does, because `ToPropertyKey` of a string is the string itself
+(ECMA-262 §13.3.2.1). -/
+theorem eval_index_str {m : Scope} {fuel : Nat} {env : Env N} {sp obj key}
+    {fields : List (String × Val N)} {name : String}
+    (ho : eval m fuel env obj = some (.obj fields)) (hk : eval m fuel env key = some (.str name)) :
+    eval m fuel env (.index sp obj key) = getProp fields name := by
+  simp [eval, ho, hk]
+
 end
 
 /-! ### Environments -/

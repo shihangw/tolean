@@ -307,6 +307,8 @@ the file, the line and the reason. It never approximates.
 | The same `switch`, where the cases cover every member and a last `default: { const x: never = s; … }` checks it | The same `match`, without the `default`. TypeScript accepts the check only where no member is left, so the clause never runs. The statements after the check are not translated. In a `switch` whose clauses end in `break`, the last case needs its `break`, because without it the case would run into the `default`. |
 | `type T = string \| bigint`, a union of two or more of `string`, `number`, `bigint` and `boolean` | `inductive T` with a constructor for each member, which holds a value of its type, such as `T.string (value : String)`. The constructor is named after what `typeof` gives for the value. A value of a member where a `T` is expected becomes that member's constructor. |
 | `if (typeof x === 'string')`, with `===` or `!==` and the string on either side, where `x` is a local of such a union | `match x with \| T.string x => … \| …`, which narrows `x` as a test of a tag does |
+| `type R = Record<K, V>` or `Readonly<Record<K, V>>`, where `K` is a literal union of strings | `structure R` with one field of type `V` for each string of `K`, in the order of `K`. A value has a property for each string, so an object literal must set every key, in that order, as for an interface. `r.a` and `r['a']` read a field. |
+| `r[k]`, where `r` is such a `Record` and `k` has the type `K` | `match k with \| K.a => r.a \| …`, which reads the field that `k` names |
 | `function` with typed parameters and return type | `def` |
 | `const x = e`, `let x = e` | `let x := e` |
 | `x = e`, `x += e`, `x -= e`, `x *= e` on a `let` local | `let x := …` (shadowing) |
@@ -392,6 +394,15 @@ Tolean rejects these, among others:
   union, against one of its members. So it refuses `typeof` on a union of
   interfaces, on a value that may be `null`, and as a value, as in
   `return typeof x === 'string'`.
+- A `Record` that is not the whole of a type alias, such as
+  `(r: Record<K, V>)`, because the output needs a name for its structure.
+  Tolean also refuses `Record<string, V>` and other keys that are not a
+  literal union of strings, index signatures, and a key that Lean reserves,
+  such as `'def'`. It refuses an index into anything but such a `Record`, an
+  index whose key does not have the type `K`, and an index in a file that
+  does not declare or import `K`, because the output names the constructors
+  of `K`. Code that needs keys of type `string` can use a `Map` once Tolean
+  translates it.
 - An object literal whose fields are not in the order that the interface
   declares them. A JS object keeps its keys in the order the literal writes
   them, and a caller can see that order through `Object.keys` or
