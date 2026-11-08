@@ -34,7 +34,7 @@ theorem eval_index_str {m : Scope} {fuel : Nat} {env : Env N} {sp obj key}
     {fields : List (String × Val N)} {name : String}
     (ho : eval m fuel env obj = some (.obj fields)) (hk : eval m fuel env key = some (.str name)) :
     eval m fuel env (.index sp obj key) = getProp fields name := by
-  simp [eval, ho, hk]
+  simp [eval, ho, hk, getKey]
 
 end
 
