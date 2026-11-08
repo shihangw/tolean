@@ -363,8 +363,7 @@ def Expr.usesString : Expr T E → Bool
   | .ascribe e t => e.usesString || t.usesString
   | .tuple es => Expr.usesStringList es
   | .proj e _ _ => e.usesString
-  | .listMethod _ items _ elem body info =>
-    items.usesString || elem.usesString || body.usesString || info.result.usesString
+  | .listMethod _ items _ t body _ => items.usesString || t.usesString || body.usesString
   -- The printer leaves a tag value out, as it leaves the tag field out.
   | .int _ | .none | .bool _ | .var _ | .enumCase .. | .tagValue _ => false
 
