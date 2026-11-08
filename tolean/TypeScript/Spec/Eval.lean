@@ -1,5 +1,6 @@
 import tolean.TypeScript.Syntax.Ast
 import tolean.TypeScript.Spec.Number
+import tolean.TypeScript.Spec.String
 
 /-!
 The meaning of the translated TypeScript subset, as an interpreter in Lean.
@@ -28,13 +29,14 @@ variable {N : Type} [JSNumber N]
 /-- A span, written short in certificates. -/
 abbrev sp (a b c d : Nat) : tolean.Span := ⟨⟨a, b⟩, ⟨c, d⟩⟩
 
-/-- A JavaScript value of the subset. An object is a list of fields, in the
-order the program wrote them. -/
+/-- A JavaScript value of the subset. A string is a `JSString`, its UTF-16
+code units (`Spec/String.lean`). An object is a list of fields, in the order
+the program wrote them. -/
 inductive Val (N : Type) where
   | int (i : Int)
   | num (n : N)
   | bool (b : Bool)
-  | str (s : String)
+  | str (s : JSString)
   | null
   /-- `undefined`, the value of a property that an object does not have. -/
   | undefined
@@ -186,6 +188,13 @@ def getProp (fields : List (String × Val N)) (name : String) : Option (Val N) :
   | some v => some v
   | none => if objectPrototypeNames.contains name then none else some .undefined
 
+/-- `getProp` with a string value as the key: the property whose name has the
+code units of `key`. -/
+def getPropKey (fields : List (String × Val N)) (key : JSString) : Option (Val N) :=
+  match fields.find? (fun f => JSString.ofString f.1 == key) with
+  | some (_, v) => some v
+  | none => if objectPrototypeNames.any (fun n => JSString.ofString n == key) then none else some .undefined
+
 /-- A binary operator on two values, when neither operand short-circuits.
 Bigint `/` and `%` truncate toward zero and throw on a zero divisor
 (`BigInt::divide`, `BigInt::remainder`). On numbers, `a > b` is `b < a` and
@@ -226,6 +235,11 @@ inductive Outcome (N : Type) where
   | normal (env : Env N)
   | ret (v : Val N)
 deriving Inhabited
+
+/-- The text of a number literal. -/
+def numberText? : Expr → Option String
+  | .number _ text => some text
+  | _ => none
 
 /-- The functions of the module, by name. -/
 def functions (m : Module) : List (String × List String × Stmt) :=
@@ -365,7 +379,7 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
   | .bigint _ text => (bigintLiteral text).map .int
   | .number _ text => (numberLiteral text).map (.num ∘ JSNumber.ofSafeInt)
   | .bool _ b => some (.bool b)
-  | .string _ s => some (.str s)
+  | .string _ s => some (.str (JSString.ofString s))
   | .null _ => some .null
   | .paren _ inner => eval m fuel env inner
   | .array _ elems => (evalList m fuel env elems).map .list
@@ -389,18 +403,27 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
   -- property of `Array.prototype` has its string as a key. `-0` reads the
   -- element `0`, as its string is `"0"`. A number literal is the integer it
   -- names, whatever the model of numbers, so the rule reads that integer.
-  | .index _ obj (.number _ text) => do
-    let .list items ← eval m fuel env obj | none
-    return elementAt items (some (← numberLiteral text))
-  | .index _ obj idx => do
-    let .list items ← eval m fuel env obj | none
-    let .num n ← eval m fuel env idx | none
-    return elementAt items (JSNumber.toSafeInt n)
+  --
+  -- `obj[key]` with a string key (ECMA-262 §13.3.2.1): `ToPropertyKey` of a
+  -- string is the string itself, so this reads the property as `obj.key`
+  -- does. A key of another type leaves the subset.
+  | .index _ obj key => do
+    match ← eval m fuel env obj with
+    | .list items =>
+      match numberText? key with
+      | some text => return elementAt items (some (← numberLiteral text))
+      | none =>
+        let .num n ← eval m fuel env key | none
+        return elementAt items (JSNumber.toSafeInt n)
+    | .obj fields =>
+      let .str k ← eval m fuel env key | none
+      getPropKey fields k
+    | _ => none
   | .unary _ .not arg => do return .bool !(← eval m fuel env arg).truthy
   -- `typeof x` names the type of the value of `x` (ECMA-262 §13.5.3.1). On a
   -- name that is not bound, JS gives `"undefined"`, and the subset has no
   -- such value, so the rule gives none there, as for every unbound name.
-  | .unary _ .typeof arg => do return .str (← eval m fuel env arg).typeOf
+  | .unary _ .typeof arg => do return .str (JSString.ofString (← eval m fuel env arg).typeOf)
   -- The source text `-Infinity` is `negInf`, the model's name for it. A
   -- variable named `Infinity` is negated as any other value is.
   | .unary _ .neg (.ident _ "Infinity") => do
@@ -439,6 +462,23 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     else if test == "isFinite" then some (.bool (JSNumber.isFinite n))
     else if test == "isSafeInteger" then some (.bool (JSNumber.toSafeInt n).isSome)
     else none
+  -- `xs.map(x => e)` and the other methods of an array that take a callback
+  -- (`Array.prototype.map`, `filter`, `some`, `every` and `find`, ECMA-262
+  -- §23.1.3.21, §23.1.3.8, §23.1.3.29, §23.1.3.6 and §23.1.3.9). The callback
+  -- runs on each element in order, with `x` bound to it, until the method has
+  -- its answer. It is an arrow function written at the call, so it sees the
+  -- variables of the call, and nothing changes them while the method runs. The
+  -- method also passes the index and the array, which an arrow with one
+  -- parameter ignores.
+  | .call _ (.member _ recv method) [.arrow _ _ [p] body] => do
+    let .list items ← eval m fuel env recv | none
+    if method == "map" then return .list (← evalMap m fuel env p.name body items)
+    else if method == "filter" then return .list (← evalFilter m fuel env p.name body items)
+    else if method == "some" then return .bool (← evalFind m fuel env p.name body true items).isSome
+    else if method == "every" then
+      return .bool (← evalFind m fuel env p.name body false items).isNone
+    else if method == "find" then return (← evalFind m fuel env p.name body true items).getD .undefined
+    else none
   | .call _ (.ident _ name) args => do
     let vs ← evalList m fuel env args
     match fuel with
@@ -473,6 +513,38 @@ def evalProps (m : Scope) (fuel : Nat) (env : Env N) :
     return (key, ← eval m fuel env v) :: (← evalProps m fuel env ps)
   | _ :: _ => none
 termination_by ps => (fuel, sizeOf ps, 0)
+
+/-- The callback `(name) => body` on each of `items`: the values that
+`Array.prototype.map` puts in its new array. -/
+def evalMap (m : Scope) (fuel : Nat) (env : Env N) (name : String) (body : Expr) :
+    List (Val N) → Option (List (Val N))
+  | [] => some []
+  | x :: xs => do
+    return (← eval m fuel ((name, x) :: env) body) :: (← evalMap m fuel env name body xs)
+termination_by xs => (fuel, sizeOf body, xs.length + 1)
+
+/-- The elements of `items` for which the callback `(name) => body` gives a
+truthy value, in order: what `Array.prototype.filter` keeps. -/
+def evalFilter (m : Scope) (fuel : Nat) (env : Env N) (name : String) (body : Expr) :
+    List (Val N) → Option (List (Val N))
+  | [] => some []
+  | x :: xs => do
+    let keep := (← eval m fuel ((name, x) :: env) body).truthy
+    let rest ← evalFilter m fuel env name body xs
+    return if keep then x :: rest else rest
+termination_by xs => (fuel, sizeOf body, xs.length + 1)
+
+/-- The first of `items` for which `ToBoolean` of the callback
+`(name) => body` is `want`, or none. The callback does not run on the
+elements after it. `find` and `some` stop at the first truthy value, and
+`every` at the first falsy one. -/
+def evalFind (m : Scope) (fuel : Nat) (env : Env N) (name : String) (body : Expr) (want : Bool) :
+    List (Val N) → Option (Option (Val N))
+  | [] => some none
+  | x :: xs => do
+    if (← eval m fuel ((name, x) :: env) body).truthy == want then return some x
+    evalFind m fuel env name body want xs
+termination_by xs => (fuel, sizeOf body, xs.length + 1)
 
 /-- Run one statement. A block, and the branch of an `if`, keep the changes
 they make to outer variables and drop the variables they declare. -/
