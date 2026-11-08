@@ -729,6 +729,25 @@ def clauseStatements : List Stmt → List Stmt
   | [.block _ body] => body
   | body => body
 
+/-- `clauses` is a `default` clause that checks that the cases before it
+cover every member: its first statement is `const x: never = name;`, where
+`name` is the local that the `switch` tests. TypeScript accepts it only
+where no member is left, so it never runs, and the output leaves it out. -/
+def checksNever (name : String) : List (Option Expr × List Stmt) → Bool
+  | [(none, body)] =>
+    match clauseStatements body with
+    | .varDecl _ { kind := .const, type := some (.keyword _ "never"), init := some init, .. } :: _ =>
+      match init.stripParens with
+      | .ident _ n => n == name
+      | _ => false
+    | _ => false
+  | _ => false
+
+/-- Why a `default` that assigns `name` to `never` is wrong where the
+members with the tags `tags` are left. -/
+def neverLeftReason (name : String) (tags : List String) : String :=
+  s!"'{name}' is not never in this default, because no case takes '{tags.headD ""}'"
+
 /-- Why a clause of a `switch` must end in `return`. -/
 def fallthroughReason : String :=
   "every clause of a switch must end in a return, or every clause in a break; Tolean does not translate fallthrough"
@@ -1349,7 +1368,8 @@ def translateClauses (fuel : Nat) (env : Env) (s : Span) (sw : SwitchOn) (tags :
     if tags.isEmpty then reject s "code after a switch whose cases cover every member is unreachable"
     else translateStatements fuel env .ret rest
   | [(none, body)] =>
-    if !rest.isEmpty then reject s "code after a switch with a default is unreachable"
+    if checksNever sw.name [(none, body)] then reject s (neverLeftReason sw.name tags)
+    else if !rest.isEmpty then reject s "code after a switch with a default is unreachable"
     else if !alwaysReturns (clauseStatements body) then reject s fallthroughReason
     else translateStatements fuel env .ret (clauseStatements body)
   | (none, _) :: _ :: _ => reject s "the default must be the last clause of a switch"
@@ -1368,7 +1388,7 @@ def translateClauses (fuel : Nat) (env : Env) (s : Span) (sw : SwitchOn) (tags :
           if others.isEmpty then
             if known != some tag then
               reject test.span "the member of this case must be the one left after the cases before it"
-            else if !more.isEmpty then
+            else if !(more.isEmpty || checksNever sw.name more) then
               reject s "the cases before this clause cover every member, so it never runs"
             else if !rest.isEmpty then
               reject s "code after a switch whose cases cover every member is unreachable"
@@ -1396,7 +1416,9 @@ def translateStateClauses (fuel : Nat) (env : Env) (s : Span) (sw : SwitchOn) (t
   | [] =>
     if tags.isEmpty then reject s "the cases of the switch cover every member, so nothing is left"
     else return .state names
-  | [(none, body)] => translateStateClause fuel env s names true body
+  | [(none, body)] =>
+    if checksNever sw.name [(none, body)] then reject s (neverLeftReason sw.name tags)
+    else translateStateClause fuel env s names true body
   | (none, _) :: _ :: _ => reject s "the default must be the last clause of a switch"
   | (some test, body) :: more =>
     match test.stripParens with
@@ -1412,7 +1434,7 @@ def translateStateClauses (fuel : Nat) (env : Env) (s : Span) (sw : SwitchOn) (t
           if others.isEmpty then
             if known != some tag then
               reject test.span "the member of this case must be the one left after the cases before it"
-            else if !more.isEmpty then
+            else if !(more.isEmpty || checksNever sw.name more) then
               reject s "the cases before this clause cover every member, so it never runs"
             else return whenTag
           else
