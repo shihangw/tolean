@@ -188,12 +188,12 @@ def getProp (fields : List (String × Val N)) (name : String) : Option (Val N) :
   | some v => some v
   | none => if objectPrototypeNames.contains name then none else some .undefined
 
-/-- `getProp` with a string value as the key: the property whose name has the
-code units of `key`. -/
-def getPropKey (fields : List (String × Val N)) (key : JSString) : Option (Val N) :=
-  match fields.find? (fun f => JSString.ofString f.1 == key) with
-  | some (_, v) => some v
-  | none => if objectPrototypeNames.any (fun n => JSString.ofString n == key) then none else some .undefined
+/-- `obj[key]` with a string key: the property whose name is `key`. The keys
+of the subset's objects are identifiers, and `toString` gives a key its own
+name. It turns a lone surrogate into U+FFFD, which no identifier holds, so a
+key with one names no property and reads `undefined`, as in JS. -/
+def getKey (fields : List (String × Val N)) (key : JSString) : Option (Val N) :=
+  getProp fields key.toString
 
 /-- A binary operator on two values, when neither operand short-circuits.
 Bigint `/` and `%` truncate toward zero and throw on a zero divisor
@@ -417,7 +417,7 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
         return elementAt items (JSNumber.toSafeInt n)
     | .obj fields =>
       let .str k ← eval m fuel env key | none
-      getPropKey fields k
+      getKey fields k
     | _ => none
   | .unary _ .not arg => do return .bool !(← eval m fuel env arg).truthy
   -- `typeof x` names the type of the value of `x` (ECMA-262 §13.5.3.1). On a
