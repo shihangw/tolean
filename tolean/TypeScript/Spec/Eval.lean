@@ -188,6 +188,13 @@ def getProp (fields : List (String × Val N)) (name : String) : Option (Val N) :
   | some v => some v
   | none => if objectPrototypeNames.contains name then none else some .undefined
 
+/-- `obj[key]` with a string key: the property whose name is `key`. The keys
+of the subset's objects are identifiers, and `toString` gives a key its own
+name. It turns a lone surrogate into U+FFFD, which no identifier holds, so a
+key with one names no property and reads `undefined`, as in JS. -/
+def getKey (fields : List (String × Val N)) (key : JSString) : Option (Val N) :=
+  getProp fields key.toString
+
 /-- A binary operator on two values, when neither operand short-circuits.
 Bigint `/` and `%` truncate toward zero and throw on a zero divisor
 (`BigInt::divide`, `BigInt::remainder`). On numbers, `a > b` is `b < a` and
@@ -336,7 +343,7 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
   -- does. An array, or a key of another type, leaves the subset.
   | .index _ obj key => do
     match ← eval m fuel env obj, ← eval m fuel env key with
-    | .obj fields, .str name => getProp fields name
+    | .obj fields, .str name => getKey fields name
     | _, _ => none
   | .unary _ .not arg => do return .bool !(← eval m fuel env arg).truthy
   -- `typeof x` names the type of the value of `x` (ECMA-262 §13.5.3.1). On a
