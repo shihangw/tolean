@@ -595,6 +595,22 @@ theorem translateInterface_shape {sp : Span} {ex : Bool} {name : String} {fields
   obtain ⟨rfl, -⟩ := isolated_ok hinfos
   exact ⟨hfresh, _, rfl, rfl⟩
 
+/-- `Record<K, V>` adds one structure with its name, as an interface does. -/
+theorem translateRecord_shape {ex : Bool} {name : String} {key value : TypeExpr} {s s' : Ctx}
+    {o : IR.Decl} (h : translateRecord ex name key value s = .ok o s') :
+    ∃ i : StructInfo, i.name = name ∧ s' = { s with structs := s.structs ++ [i] } := by
+  unfold translateRecord at h
+  simp only [bind_ok, get_ok, orReject_ok] at h
+  obtain ⟨_, s₁, hk, _, _, ⟨rfl, rfl⟩, info, s₂, ⟨-, rfl⟩, ty, s₃, hty, h⟩ := h
+  obtain ⟨rfl, -⟩ := isolated_ok hk
+  obtain ⟨rfl, -⟩ := isolated_ok hty
+  cases hm : info.members.find? leanReserved.contains with
+  | some _ => simp [hm] at h
+  | none =>
+    simp only [hm, pure_bind, bind_ok, modify_ok, pure_ok] at h
+    obtain ⟨_, _, rfl, rfl, rfl⟩ := h
+    exact ⟨_, rfl, rfl⟩
+
 /-- An interface: it declares its name in the structures. -/
 theorem translateInterface_names {P : Eval.Program} {sp : Span} {ex : Bool} {name : String}
     {fields : List Field} {s s' : Ctx} {o : IR.Decl} (h : translateInterface sp ex name fields s = .ok o s') :
@@ -783,7 +799,16 @@ theorem translateAlias_names {P : Eval.Program} {sp : Span} {ex : Bool} {name : 
       exact DeclNames.one rfl hfresh rfl (a := []) (b := []) (c := []) (e := []) (by simp) (by simp) (by simp)
         rfl (by simp) rfl (by simp) (by simp)
     | none =>
-      simp only [hu, hp, bind_ok, modify_ok, pure_ok, pure_bind] at h
+    cases hr : recordArgs type with
+    | some kv =>
+      simp only [hu, hp, hr, bind_ok, pure_ok, pure_bind] at h
+      obtain ⟨d, s₅, hd, rfl, rfl⟩ := h
+      obtain ⟨i, hi, rfl⟩ := translateRecord_shape hd
+      subst_vars
+      exact DeclNames.one rfl hfresh rfl (b := []) (c := []) (dd := []) (e := []) rfl (by simp) (by simp)
+        (by simp) (by simp) rfl (by simp) (by simp)
+    | none =>
+      simp only [hu, hp, hr, bind_ok, modify_ok, pure_ok, pure_bind] at h
       obtain ⟨ty, s₅, hty, _, s₆, rfl, rfl, rfl⟩ := h
       obtain ⟨rfl, -⟩ := isolated_ok hty
       subst_vars

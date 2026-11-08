@@ -262,7 +262,7 @@ def extras : List Group := [
     ``Proof.translateStringEnum_shape, ``Proof.translateStringEnum_names, ``Proof.module_resolvesE,
     ``Proof.enumsOf_lookup]⟩,
   ⟨"TypeScript types, which JS does not have", [``Proof.narrow_has, ``Proof.translateInterface_ok,
-    ``Proof.translateAlias_ok, ``Proof.translateRecord_ok, ``Proof.translateEnum_ok, ``Proof.translateUnion_ok,
+    ``Proof.translateAlias_ok, ``Proof.translateRecord_ok, ``Proof.translateRecord_shape, ``Proof.translateEnum_ok, ``Proof.translateUnion_ok,
     ``Proof.declareUnion_ok, ``Proof.translatePrimitiveUnion_ok, ``Proof.eval_into]⟩,
   ⟨"How Lean reads the output", [``Proof.eval_value, ``Proof.checkName_ok, ``Proof.checkLocalName_ok,
     ``checkLocalName_not_interface]⟩,
