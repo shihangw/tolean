@@ -304,6 +304,17 @@ class Gen {
         () => ['if', '(', ...this.expr(2), ')', ...this.statement(d, inLoop)],
         () => ['while', '(', ...this.expr(2), ')', ...this.block(d, true)],
         () => ['for', '(', this.pick(['const', 'let']), 'v', 'of', ...this.expr(2), ')', ...this.block(d, true)],
+        () => [
+          'for',
+          '(',
+          ...this.forInit(),
+          ';',
+          ...(this.chance(0.7) ? this.expr(2) : []),
+          ';',
+          ...(this.chance(0.7) ? this.expr(2) : []),
+          ')',
+          ...(this.chance(0.8) ? this.block(d, true) : this.statement(d, true)),
+        ],
         () => this.block(d, inLoop),
       );
     }
@@ -311,6 +322,20 @@ class Gen {
       choices.push(() => [this.pick(['break', 'continue']), ...this.end()]);
     }
     return this.pick(choices)();
+  }
+
+  /** The first part of a counted `for`, or something that starts like it: a
+   * second declarator, a declaration without a value, or an expression. */
+  private forInit(): Array<string> {
+    return this.pick([
+      () => [],
+      () => ['let', this.name(), '=', ...this.expr(2)],
+      () => ['let', this.name(), ':', ...this.type(1), '=', ...this.expr(2)],
+      () => ['const', this.name(), '=', ...this.expr(2)],
+      () => [this.pick(['let', 'const']), this.name()],
+      () => ['let', this.name(), '=', ...this.expr(1), ',', this.name()],
+      () => [this.name(), '=', ...this.expr(1)],
+    ])();
   }
 
   private block(depth: number, inLoop: boolean): Array<string> {
