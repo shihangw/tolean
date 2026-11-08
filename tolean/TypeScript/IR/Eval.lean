@@ -79,7 +79,7 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   | .optField _ _, [.null] | .optField _ _, [.undefined] => some .undefined
   | .optField f _, [.obj fields] => Eval.getProp fields f
   -- `r[k]`, as the spec evaluates it: the property that the string `k` names.
-  | .recordGet _ _, [.obj fields, .str k] => Eval.getProp fields k
+  | .recordGet _ _, [.obj fields, .str k] => Eval.getPropKey fields k
   | _, _ => none
 
 /-- The tag of `v`, a value of a tagged union: the string in its tag field
