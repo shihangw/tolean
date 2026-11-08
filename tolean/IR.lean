@@ -74,6 +74,23 @@ inductive Division where
   | tdiv | tmod
 deriving BEq, Repr, Inhabited
 
+/-- A function on lists that takes a function on the elements: `List.map`,
+`List.filter`, `List.any`, `List.all` and `List.find?`. -/
+inductive ListMethod where
+  | map | filter | any | all | find
+deriving BEq, Repr, Inhabited
+
+/-- What a certificate needs to know about a callback, besides its code. The
+printer does not read it. -/
+structure CallbackInfo (T : Type) where
+  /-- The span of the call, such as `xs.map(x => e)`. -/
+  span : Span
+  /-- The type of the callback's value. -/
+  result : Ty T
+  /-- The locals in scope at the call, in the order they were declared. -/
+  scope : List (String × Ty T)
+deriving Repr, Inhabited
+
 /-- A Lean expression in the output. Some are a `Prop`, such as `a < b`; the
 translator knows which, and wraps one in `decide` where Lean needs a `Bool`.
 `T` holds the types that a language adds, and `E` its operations. -/
@@ -152,6 +169,11 @@ inductive Expr (T E : Type) where
   /-- `(e : T)`: `e` with its type written out, where Lean cannot infer it,
   such as a `let` of `none` that nothing else uses. -/
   | ascribe (e : Expr T E) (type : Ty T)
+  /-- `(List.map (fun (x : T) => body) items)`, or another `method` with the
+  function `fun (x : T) => body` on the elements of `items`, where `param` is
+  `x` and `elem` is `T`. -/
+  | listMethod (method : ListMethod) (items : Expr T E) (param : String) (elem : Ty T)
+      (body : Expr T E) (info : CallbackInfo T)
 deriving Repr, Inhabited
 
 /-- What a certificate needs to know about a loop, besides its code. The
@@ -245,6 +267,7 @@ def Expr.refs : Expr T E → List DeclRef
   | .enumCase r _ => [r]
   | .inject r _ e => r :: e.refs
   | .ascribe e t => e.refs ++ t.refs
+  | .listMethod _ items _ t body _ => items.refs ++ t.refs ++ body.refs
   | .tagValue _ => []
   | .int _ | .none | .bool _ | .string _ | .var _ => []
 
@@ -458,6 +481,15 @@ def Expr.print (names : Names) : Expr T E → String
   | .int n => s!"({n} : {leanName names "Int"})"
   | .none => leanName names "none"
   | .ascribe e t => s!"({e.print names} : {t.print names})"
+  | .listMethod method items param elem body _ =>
+    let fn := s!"(fun ({param} : {elem.print names}) => {body.print names})"
+    let xs := argument (items.print names)
+    match method with
+    | .map => s!"({leanName names "List.map"} {fn} {xs})"
+    | .filter => s!"({leanName names "List.filter"} {fn} {xs})"
+    | .any => s!"({leanName names "List.any"} {xs} {fn})"
+    | .all => s!"({leanName names "List.all"} {xs} {fn})"
+    | .find => s!"({leanName names "List.find?"} {fn} {xs})"
   | .bool b => if b then "true" else "false"
   | .string s => Sexp.quote s
   | .var name => name

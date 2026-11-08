@@ -161,6 +161,7 @@ export class Gen {
       });
     }
     options.push(() => `(${this.test(vars, d)} ? ${this.expr(t, vars, d)} : ${this.expr(t, vars, d)})`);
+    options.push(...this.callbacks(t, readable, vars, d));
     switch (t.k) {
       case 'bigint':
       case 'number':
@@ -246,6 +247,48 @@ export class Gen {
         break;
     }
     return this.pick(options)();
+  }
+
+  /** Calls of `map`, `filter`, `some`, `every` and `find` on an array in
+   * scope that give a value of type `t`. The callback's parameter is a fresh
+   * name, which its body may read with the other names in scope. The body is
+   * in parentheses, so that an object literal is not read as a block. */
+  private callbacks(t: Ty, readable: ReadonlyArray<Var>, vars: ReadonlyArray<Var>, depth: number): Array<() => string> {
+    const arrays = readable.flatMap((v) => (v.ty.k === 'array' ? [{ name: v.name, elem: v.ty.of }] : []));
+    if (arrays.length === 0) return [];
+    const call = (method: string, recv: { name: string; elem: Ty }, body: (inner: ReadonlyArray<Var>) => string): string => {
+      const p = this.fresh('c');
+      const inner = [...vars, { name: p, ty: recv.elem, mutable: false, owned: false }];
+      return `${recv.name}.${method}(${p} => (${body(inner)}))`;
+    };
+    const options: Array<() => string> = [];
+    switch (t.k) {
+      case 'boolean':
+        options.push(() => call(this.pick(['some', 'every']), this.pick(arrays), (inner) => this.expr(BOOLEAN, inner, depth)));
+        break;
+      case 'array': {
+        const of = t.of;
+        options.push(() => call('map', this.pick(arrays), (inner) => this.expr(of, inner, depth)));
+        const same_ = arrays.filter((a) => same(a.elem, of));
+        if (same_.length > 0) {
+          options.push(() => call('filter', this.pick(same_), (inner) => this.expr(BOOLEAN, inner, depth)));
+        }
+        break;
+      }
+      case 'bigint':
+      case 'number': {
+        // `find` gives `undefined` when no element passes, and `??` gives the
+        // default then.
+        const same_ = arrays.filter((a) => same(a.elem, t));
+        if (same_.length > 0) {
+          options.push(() => `(${call('find', this.pick(same_), (inner) => this.expr(BOOLEAN, inner, depth))} ?? ${this.expr(t, vars, depth)})`);
+        }
+        break;
+      }
+      default:
+        break;
+    }
+    return options;
   }
 
   /** A condition that is not a literal. With a literal test, such as

@@ -893,6 +893,68 @@ def optFieldType (s : Span) (t : Ty) (name : String) : TM (Bool × Ty) := do
     return (false, .optional v)
   | none => reject s "only fields of interfaces declared in this file, or exported by the files before it, may be read"
 
+/-- The function on lists that the method `name` of an array becomes, for the
+methods that take a callback. -/
+def listMethod? (name : String) : Option IR.ListMethod :=
+  if name == "map" then some .map
+  else if name == "filter" then some .filter
+  else if name == "some" then some .any
+  else if name == "every" then some .all
+  else if name == "find" then some .find
+  else none
+
+/-- The receiver and the method of a call such as `xs.map(…)`, when the
+method takes a callback. -/
+def arrayMethodOf : Expr → Option (Expr × IR.ListMethod)
+  | .member _ recv name => (listMethod? name).map (recv, ·)
+  | _ => none
+
+/-- The parameter and the body of the one argument of an array method: an
+arrow function with one parameter. -/
+def callbackOf : List Expr → Option (Param × Expr)
+  | [.arrow _ _ [p] body] => some (p, body)
+  | _ => none
+
+/-- `e` is the name `Number`. -/
+def _root_.tolean.TypeScript.Syntax.Expr.namesNumber : Expr → Bool
+  | .ident _ "Number" => true
+  | _ => false
+
+/-- The element type of an array. -/
+def Ty.element? : Ty → Option Ty
+  | .array t => some t
+  | _ => none
+
+/-- A callback's parameter may have a type written out: the element type. -/
+def checkParamType (p : Param) (elem : Ty) : TM Unit := do
+  if let some t := p.type then
+    unless (← translateType t) == elem do
+      reject p.span "the parameter must have the element type of the array"
+
+/-- The type that the body of a callback is translated for: for `map`, the
+element type of the array that the context expects, which an object literal
+needs. -/
+def callbackExpected : IR.ListMethod → Option Ty → Option Ty
+  | .map, some (.array t) => some t
+  | _, _ => none
+
+/-- The type of `xs.method(cb)`, where the elements of `xs` have the type
+`elem` and the body of `cb` has the type `body`. -/
+def callbackResult (s bodySpan : Span) (method : IR.ListMethod) (elem body : Ty) : TM Ty := do
+  if method == .map then
+    if body == .null || body matches .optional _ || body matches .literal _ then
+      reject bodySpan "the callback of 'map' must give a value of a type that an array can hold"
+    return .array body
+  unless body == .boolean do reject bodySpan "the callback must give a boolean"
+  match method with
+  | .filter => return .array elem
+  | .find =>
+    -- The output has one `none` for `undefined` and `null`.
+    if elem.isNullable || elem matches .optional _ then
+      reject s "'find' on an array of nullable values could give null or undefined"
+    return .optional elem
+  | _ => return .boolean
+
 /-- `applyOperator`, after a string operand becomes a constructor where the
 other operand is of a literal union. -/
 def translateOperator (s : Span) (op : BinOp) (r : Expr) (a b : Code) : TM Code := do
@@ -1010,7 +1072,10 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
       | _ => "the branches of '?:' have different types"
     let type ← orReject ((a.type.join b.type).filter fun t => !(t matches .literal _)) s message
     return ⟨.ite c.code a.value b.value, false, type⟩
-  | .call s callee args => translateCall fuel env s callee args
+  | .call s callee args =>
+    match arrayMethodOf callee with
+    | some (recv, method) => translateArrayMethod fuel env expected s recv method args
+    | none => translateCall fuel env s callee args
   | .object s props => translateObject fuel env expected s props
   | .array s elems => translateArray fuel env expected s elems
   | _ => reject e.span "unsupported expression"
@@ -1063,6 +1128,29 @@ def translateCall (fuel : Nat) (env : Env) (s : Span) (callee : Expr) (args : Li
       reject arg.span "the argument does not have the parameter's type"
     pure a.value
   return ⟨.call fn.ref values, false, fn.ret⟩
+
+/-- `xs.map(x => e)`, and `filter`, `some`, `every` and `find`: the `List`
+function with `fun (x : T) => e`. The callback is an arrow function written at
+the call, so it sees the locals of the call, and its body is an expression,
+which changes no local. JS also passes the index and the array, which a
+callback with one parameter ignores. -/
+def translateArrayMethod (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (recv : Expr)
+    (method : IR.ListMethod) (args : List Expr) : TM Code := do
+  let fuel + 1 := fuel | tooDeep
+  let (p, body) ← orReject (callbackOf args) s
+    ("an array method here takes one arrow function with one parameter, such as " ++
+      "xs.map(x => x + 1n); the index and array parameters are not supported yet")
+  -- `Number.map` is a property of the global `Number`, not of an array.
+  if recv.namesNumber then reject recv.span "only an array has this method"
+  let xs ← translateExpr fuel env none recv
+  let elem ← orReject xs.type.element? recv.span "only an array has this method"
+  checkParamType p elem
+  let inner ← declare env p.span p.name .param elem
+  let b ← translateExpr fuel inner (callbackExpected method expected) body
+  let type ← callbackResult s body.span method elem b.type
+  let info : IR.CallbackInfo IR.TyExt :=
+    { span := s, result := b.type.lean, scope := env.locals.map fun l => (l.name, l.type.lean) }
+  return ⟨.listMethod method xs.value p.name elem.lean b.value info, false, type⟩
 
 def translateObject (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (props : List Property) :
     TM Code := do
@@ -1743,6 +1831,9 @@ def exprUsesNumber : Expr → Bool
   | .paren _ e | .unary _ _ e | .prefix _ _ e | .postfix _ _ e => exprUsesNumber e
   | .index _ a b | .binary _ _ a b | .assign _ _ a b => exprUsesNumber a || exprUsesNumber b
   | .cond _ a b c => exprUsesNumber a || exprUsesNumber b || exprUsesNumber c
+  | .arrow _ _ ps body =>
+    ps.any (fun p => isNumberName p.name || (p.type.map typeUsesNumber).getD false) ||
+      exprUsesNumber body
   | _ => false
 
 def exprsUseNumber : List Expr → Bool

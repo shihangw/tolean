@@ -119,12 +119,6 @@ theorem Frame.split : ∀ {ρ' a b : Eval.Env N}, Frame c ρ' (a ++ b) →
 
 /-! ### Environments -/
 
-theorem has_add (env : Translate.Env) (l : Local) (x : String) :
-    (env.add l).has x = (env.has x || l.name == x) := by
-  simp only [Env.has, Env.lookup, Env.add, List.find?_append]
-  cases env.locals.find? (·.name == x) <;> simp [List.find?]
-  split <;> simp_all
-
 theorem bindState_lookup {inner : Eval.Env N} :
     ∀ {names : List String} {outer ρ : Eval.Env N}, IR.bindState names inner outer = some ρ →
       ∀ n, ρ.lookup n = if n ∈ names then inner.lookup n else outer.lookup n
@@ -175,43 +169,6 @@ variable {α : Type}
 
 @[simp] theorem throw_ne_ok {e : String} {s s' : Ctx} {a : α} : (throw e : TM α) s ≠ .ok a s' := by
   simp [throw, throwThe, MonadExceptOf.throw, EStateM.throw]
-
-theorem checkName_ok {sp : Span} {name r : String} {s s' : Ctx} :
-    checkName sp name s = .ok r s' → r = name ∧ s' = s := by
-  simp only [checkName, ite_state]
-  split
-  · simp
-  · simp only [pure_bind, pure_ok]; rintro ⟨rfl, rfl⟩; exact ⟨rfl, rfl⟩
-
-theorem checkLocalName_ok {sp : Span} {name r : String} {s s' : Ctx}
-    (h : checkLocalName sp name s = .ok r s') : r = name ∧ s' = s := by
-  simp only [checkLocalName, bind_ok, get_ok, ite_state] at h
-  obtain ⟨c, s₁, ⟨rfl, rfl⟩, h⟩ := h
-  split at h
-  · simp at h
-  · simp only [pure_bind, ite_state] at h
-    split at h
-    · simp at h
-    · exact checkName_ok h
-
-theorem declare_ok {env env' : Translate.Env} {sp : Span} {name : String} {b : Binding} {t : Ty}
-    {s s' : Ctx} (h : declare env sp name b t s = .ok env' s') :
-    env.has name = false ∧ env' = env.add { name, binding := b, type := t } ∧ s' = s := by
-  simp only [declare, ite_state] at h
-  split at h
-  · simp at h
-  · rename_i hn
-    simp only [pure_bind, ite_state] at h
-    split at h
-    · simp at h
-    · simp only [bind_ok] at h
-      obtain ⟨r, s₁, hr, h⟩ := h
-      obtain ⟨-, rfl⟩ := checkLocalName_ok hr
-      simp only [ite_state] at h
-      split at h
-      · simp at h
-      · simp only [pure_ok] at h
-        exact ⟨by simpa using hn, h.1.symm, h.2.symm⟩
 
 end Monad
 
