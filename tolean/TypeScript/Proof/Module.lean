@@ -316,10 +316,27 @@ theorem translatePrimitiveUnion_ok {sp : Span} {ex : Bool} {name : String} {memb
   · simp only [pure_bind] at h
     exact declareUnion_ok h
 
+theorem translateRecord_ok {ex : Bool} {name : String} {key value : TypeExpr} {s s' : Ctx}
+    {o : IR.Decl} (h : translateRecord ex name key value s = .ok o s') :
+    s'.file = s.file ∧ s'.interfaces = s.interfaces ∧ s'.functions = s.functions ∧
+      ∃ n fs, o = .struct n fs := by
+  unfold translateRecord at h
+  simp only [bind_ok, get_ok, orReject_ok] at h
+  obtain ⟨_, s₁, hk, _, _, ⟨rfl, rfl⟩, info, s₂, ⟨-, rfl⟩, ty, s₃, hty, h⟩ := h
+  obtain ⟨rfl, -⟩ := isolated_ok hk
+  obtain ⟨rfl, -⟩ := isolated_ok hty
+  cases hm : info.members.find? leanReserved.contains with
+  | some _ => simp [hm] at h
+  | none =>
+    simp only [hm, pure_bind, bind_ok, modify_ok, pure_ok] at h
+    obtain ⟨_, _, rfl, rfl, rfl⟩ := h
+    exact ⟨rfl, rfl, rfl, _, _, rfl⟩
+
 theorem translateAlias_ok {sp : Span} {ex : Bool} {name : String} {type : TypeExpr}
     {s s' : Ctx} {o : IR.Decl} (h : translateAlias sp ex name type s = .ok o s') :
     s'.file = s.file ∧ s'.interfaces = s.interfaces ∧ s'.functions = s.functions ∧
-      ((∃ n t, o = .alias n t) ∨ (∃ n ms, o = .enum n ms) ∨ ∃ n f ps, o = .tagged n f ps) := by
+      ((∃ n t, o = .alias n t) ∨ (∃ n ms, o = .enum n ms) ∨ (∃ n f ps, o = .tagged n f ps) ∨
+        ∃ n fs, o = .struct n fs) := by
   unfold translateAlias at h
   simp only [bind_ok] at h
   obtain ⟨name', s₁, hname, u, s₂, htop, h⟩ := h
@@ -340,7 +357,7 @@ theorem translateAlias_ok {sp : Span} {ex : Bool} {name : String} {type : TypeEx
       obtain ⟨d, s₅, hd, rfl, rfl⟩ := h
       obtain ⟨h1, h2, h3, f, ps, rfl⟩ := translateUnion_ok hd
       subst_vars
-      exact ⟨h1, h2, h3, .inr (.inr ⟨_, _, _, rfl⟩)⟩
+      exact ⟨h1, h2, h3, .inr (.inr (.inl ⟨_, _, _, rfl⟩))⟩
     | none =>
     cases hp : primitiveMembers type with
     | some ms =>
@@ -348,9 +365,17 @@ theorem translateAlias_ok {sp : Span} {ex : Bool} {name : String} {type : TypeEx
       obtain ⟨d, s₅, hd, rfl, rfl⟩ := h
       obtain ⟨h1, h2, h3, f, ps, rfl⟩ := translatePrimitiveUnion_ok hd
       subst_vars
-      exact ⟨h1, h2, h3, .inr (.inr ⟨_, _, _, rfl⟩)⟩
+      exact ⟨h1, h2, h3, .inr (.inr (.inl ⟨_, _, _, rfl⟩))⟩
     | none =>
-      simp only [hu, hp, bind_ok, modify_ok, pure_ok, pure_bind] at h
+    cases hr : recordArgs type with
+    | some kv =>
+      simp only [hu, hp, hr, bind_ok, pure_ok, pure_bind] at h
+      obtain ⟨d, s₅, hd, rfl, rfl⟩ := h
+      obtain ⟨h1, h2, h3, n, fs, rfl⟩ := translateRecord_ok hd
+      subst_vars
+      exact ⟨h1, h2, h3, .inr (.inr (.inr ⟨_, _, rfl⟩))⟩
+    | none =>
+      simp only [hu, hp, hr, bind_ok, modify_ok, pure_ok, pure_bind] at h
       obtain ⟨ty, s₅, hty, _, s₆, rfl, rfl, rfl⟩ := h
       obtain ⟨rfl, -⟩ := isolated_ok hty
       subst_vars
@@ -511,7 +536,8 @@ theorem decls_ok : ∀ (ds : List Decl) (s s' : Ctx) (os : List (Option IR.Decl)
       | typeAlias sp ex name type =>
         simp only [translateDecl, map_ok] at h₁
         obtain ⟨o', h₁, rfl⟩ := h₁
-        obtain ⟨-, -, -, ⟨n, t, rfl⟩ | ⟨n, ms, rfl⟩ | ⟨n, f, ps, rfl⟩⟩ := translateAlias_ok h₁ <;>
+        obtain ⟨-, -, -, ⟨n, t, rfl⟩ | ⟨n, ms, rfl⟩ | ⟨n, f, ps, rfl⟩ | ⟨n, fs, rfl⟩⟩ :=
+            translateAlias_ok h₁ <;>
           simpa [Eval.functions, IR.functions, List.filterMap_cons] using hrel
       | exportedVar sp decl => simp [translateDecl] at h₁
       | stmt st => simp [translateDecl] at h₁
