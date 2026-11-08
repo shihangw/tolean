@@ -17,8 +17,10 @@ marks which links are proved, tested against a reference, or trusted.
 - **Declarations:** functions, interfaces, type aliases, and `const` and `let`,
   each of them possibly exported.
 - **Statements:** `const` and `let` declarations, expression statements,
-  `return`, `if` and `else`, `for … of`, `while`, `switch`, blocks, `break`,
-  `continue` and the empty statement. A `break` at the top of a `switch`
+  `return`, `if` and `else`, `for … of`, the counted `for`, `while`, `switch`,
+  blocks, `break`, `continue` and the empty statement. A counted `for`, such
+  as `for (let i = 0; i < n; i++)`, starts with a `const` or `let`
+  declaration or with nothing. A `break` at the top of a `switch`
   clause ends the `switch`, so it may stand outside a loop. The parser
   refuses a `case` test that uses `<` or `<<`, because a `:` does not end its
   search for a `>` after one, and a `switch` with two `default` clauses.
@@ -48,6 +50,12 @@ reading. There are three such cases:
 The parser also refuses an arrow function with a return type, and one whose
 body is in braces. The translator accepts an arrow function only as the
 callback of an array method, such as `xs.map(x => x + 1n)`.
+
+In the declaration at the start of a counted `for`, the parser refuses an `in`
+operator unless parentheses, braces, the arguments of a call or an index hold
+it. ECMA-262 reads such an `in` as the start of a `for … in` loop. It allows
+one inside `[ … ]`, but `tsc` does not, so the parser refuses that too. The
+translator refuses every counted `for` for now.
 
 The parser also refuses code that Tolean cannot represent exactly. Examples
 are lone surrogates, legacy octal literals, template literals and non-ASCII

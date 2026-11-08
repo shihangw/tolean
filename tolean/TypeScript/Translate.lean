@@ -535,7 +535,7 @@ def containsJump : Stmt → Bool
   | .returnStmt .. | .breakStmt _ | .continueStmt _ => true
   | .ifStmt _ _ t (some e) => containsJump t || containsJump e
   | .ifStmt _ _ t none => containsJump t
-  | .forOfStmt _ _ _ _ body | .whileStmt _ _ body => containsJump body
+  | .forOfStmt _ _ _ _ body | .forStmt _ _ _ _ body | .whileStmt _ _ body => containsJump body
   | .block _ body => anyContainsJump body
   | .switchStmt _ _ clauses => clausesContainJump clauses
   | _ => false
@@ -604,6 +604,8 @@ def stmtChanges : Stmt → List String
   | .ifStmt _ test t (some e) => exprChanges test ++ stmtChanges t ++ stmtChanges e
   | .ifStmt _ test t none => exprChanges test ++ stmtChanges t
   | .forOfStmt _ _ _ iterable body => exprChanges iterable ++ stmtChanges body
+  | .forStmt _ init test update body =>
+    optionChanges (init.bind (·.init)) ++ optionChanges test ++ optionChanges update ++ stmtChanges body
   | .whileStmt _ test body => exprChanges test ++ stmtChanges body
   | .block _ body => stmtsChanges body
   | .switchStmt _ disc clauses => exprChanges disc ++ clausesChanges clauses
@@ -1861,6 +1863,9 @@ def stmtUsesNumber : Stmt → Bool
   | .ifStmt _ test t none => exprUsesNumber test || stmtUsesNumber t
   | .forOfStmt _ _ name iterable body =>
     isNumberName name || exprUsesNumber iterable || stmtUsesNumber body
+  | .forStmt _ init test update body =>
+    (init.map varUsesNumber).getD false || (test.map exprUsesNumber).getD false ||
+      (update.map exprUsesNumber).getD false || stmtUsesNumber body
   | .whileStmt _ test body => exprUsesNumber test || stmtUsesNumber body
   | .block _ body => stmtsUseNumber body
   | _ => false
