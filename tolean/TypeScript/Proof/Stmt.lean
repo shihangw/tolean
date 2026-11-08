@@ -1371,7 +1371,11 @@ theorem translateStateClauses_sound {F : Nat}
     obtain ⟨rfl, -⟩ := h
     exact state_nil_sim m fs fuel
   · cases more with
-    | nil => exact state_default_sim m fs fuel (ihA _ _ _ _ _ _ _ _ h).2
+    | nil =>
+      simp only [ite_state] at h
+      split at h
+      · simp at h
+      exact state_default_sim m fs fuel (ihA _ _ _ _ _ _ _ _ h).2
     | cons _ _ => simp at h
   · simp only at h
     generalize hst : test.stripParens = st at h
@@ -1649,6 +1653,8 @@ theorem translateClauses_sound {F : Nat}
   · cases more with
     | nil =>
       simp only [ite_state] at h
+      split at h
+      · simp at h
       split at h
       · simp at h
       split at h
