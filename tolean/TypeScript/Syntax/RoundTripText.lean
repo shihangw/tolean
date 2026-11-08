@@ -305,6 +305,20 @@ theorem Stmt.lineOK : ∀ (st : Stmt) (d : Nat), ∀ l ∈ st.lines d, LineOK l.
         (LineOK.cons (by simp [identWord]) (LineOK.cons (by simp [identWord])
           ((Expr.fine it).line.append (LineOK.word (w := punctWord ")") (by simp [punctWord])))))))
     · exact Stmt.lineOK body _ l hl
+  | .forStmt _ init test update body, d, l, hl => by
+    simp only [Stmt.lines, List.mem_cons] at hl
+    rcases hl with rfl | hl
+    · have hi : LineOK (forInitWords init) := by
+        cases init with
+        | none => exact LineOK.word (by simp [punctWord])
+        | some v => exact v.line
+      have ho : ∀ o : Option Expr, LineOK (optWords o) := fun o => by
+        cases o with
+        | none => exact LineOK.nil
+        | some e => exact (Expr.fine e).line
+      exact (((LineOK.cons (by simp [keywordWord]) (LineOK.cons (by simp [punctWord]) hi)).append (ho test)).append
+        (LineOK.cons (by simp [punctWord]) (ho update))).append (LineOK.word (w := punctWord ")") (by simp [punctWord]))
+    · exact Stmt.lineOK body _ l hl
   | .whileStmt _ test body, d, l, hl => by
     simp only [Stmt.lines, List.mem_cons] at hl
     rcases hl with rfl | hl

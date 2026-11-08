@@ -51,20 +51,18 @@ exact. A construct leaves these tables when Tolean translates it, and the
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| A `default` that assigns the value to `never`, to check that the cases of a `switch` cover every member | Nothing: the `match` already covers them | A `default` that runs |
 | `x?: T` parameters, `undefined` as a value, and a test such as `x !== undefined` that narrows an optional value | `Option T` | `'x' in obj`, which can tell a missing key from `undefined` |
 | A chain after `?.`, such as `a?.b.c`, and `a?.[i]` and `f?.()` | `Option.bind` | `==` against anything except `null` and `undefined` |
 | `export { … }` and re-exports | Nothing: the names stay in scope | `export *` |
 | A tuple type such as `readonly [string, bigint]` | A product type | Tuples that a function changes |
 | `as const` and `satisfies` | Nothing: they only check types | `as T` and the non-null assertion `x!`, because TypeScript does not check them |
 | A type guard `x is T` | A `Bool` function | A guard whose body the translator cannot show to be a test of the tag |
-| `Record<K, V>` where `K` is a union of string literals | A structure with one field per key | `Record<string, V>` and index signatures. Code that needs those can use a `Map`. |
 
 ### Functions
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| An arrow function passed as an argument, which reads only `const` values and parameters. The parser reads arrow functions whose body is an expression ([#57](https://github.com/shihangw/tolean/pull/57)), and the translator refuses them for now. | `fun` | A callback that changes a variable outside itself |
+| An arrow function passed to a function of the program, which reads only `const` values and parameters. The translator accepts arrow functions now only as the callback of an array method. | `fun` | A callback that changes a variable outside itself |
 | A local function or arrow function stored in a `const` and called later, which changes `let` variables of the enclosing function | A Lean function that takes those variables and returns their new values. The translator lifts it out and threads the variables through each call. | A local function that escapes: one that is returned, stored in a field or passed on |
 | A function-typed field or parameter, such as a comparator in an options object | A field of a function type | A function value that changes state when it is called |
 | A destructured parameter, such as `{ a, b }: Options` | A pattern on the structure | Defaults inside the pattern |
@@ -108,7 +106,7 @@ value claim already does.
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| `map`, `filter`, `reduce`, `some`, `every`, `find`, `findIndex`, `findLast`, `slice`, `entries` | The `List` functions with the same meaning | The `index` and `array` arguments of a callback, until a later step adds them |
+| `reduce`, `findIndex`, `findLast`, `slice`, `entries` | The `List` functions with the same meaning | The `index` and `array` arguments of a callback, until a later step adds them |
 | `includes` | `List.contains` with SameValueZero, which treats `NaN` as equal to itself | |
 | `[...xs]`, `[...xs, x]`, and array destructuring | `List.append` and patterns | Spread of anything that is not an array |
 | `xs.length`, `xs[i]` and `xs.at(i)` (§23.1.3.1) | `List.length`, and `xs[i]?` of type `Option T`. An index outside the array gives `undefined`. | `xs[i]` in a project without `noUncheckedIndexedAccess`, because there TypeScript types the result as `T` although it can be `undefined` |
@@ -138,53 +136,18 @@ pieces](shared-core.md) adds exceptions to the IR, and this stage uses them.
 
 ### Strings
 
-The string model comes before every other step, because the current mapping
-of `string` stops being exact as soon as any string operation exists.
+Tolean translates `string` to `JSString`, the list of a string's UTF-16 code
+units, and `===` compares the lists. [A decision
+record](../decisions/2026-11-06-jsstring.md) explains why. Each operation
+below becomes a function on that list, written from its algorithm in the
+spec.
 
-#### The string model
-
-A JavaScript string is a sequence of UTF-16 code units (§6.1.4), and it can
-hold a lone surrogate. A Lean `String` is a sequence of Unicode scalar values,
-so it cannot hold a lone surrogate, and it orders and measures text in a
-different way. For example, U+FFFF sorts after U+10000 in JavaScript, because
-U+10000 starts with the code unit 0xD800. In Lean it sorts before it. The
-mapping of `string` to `String` is exact today only because the subset has no
-string operation except `===`.
-
-So `string` becomes a new type, `JSString`, a structure around
-`List UInt16`. That is the definition in the spec, so the model is exact for
-every string, lone surrogates included. Each string operation becomes an
-ordinary function on the list, written from the algorithm in the spec, and
-proofs use the usual `List` lemmas.
-
-A literal such as `"abc"` prints as `JSString.ofString "abc"`, which encodes
-the text as UTF-16. A literal that holds a lone surrogate, such as
-`"\uD800"`, prints its code units, because a Lean `String` cannot hold it.
-A coercion and a lemma that `ofString` is injective let a claim state a
-literal such as `"abc"` directly.
-
-We considered two other models and rejected both:
-
-- **Keep `String` and refuse the operations whose result differs.** Whether
-  `<` or `length` differs depends on whether a value holds a character
-  above U+FFFF. The translator cannot know that when it translates, so it
-  would have to approximate.
-- **An abstract type with laws, as `number` has.** `number` is abstract
-  because an exact model of doubles is hard. An exact model of strings is
-  easy, and a concrete model with proved lemmas needs no laws to test.
-
-The new type has costs. The generated Lean is less readable, because each
-literal carries `JSString.ofString`. A theorem about a string input now
-covers every list of code units, lone surrogates included. That is correct,
-because a JavaScript caller can pass such a string. A certificate that runs
-string code in the kernel is slower on a list of code units than on a
-`String`.
-
-#### Operations
+One part of the model is left. The lexer refuses a literal that holds a lone
+surrogate, such as `"\uD800"`, because the syntax tree keeps the text of a
+literal as a Lean `String`. Such a literal should print its code units.
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| `===` and `!==` on strings | List equality, as SameValueNonNumber compares strings (§7.2.12) | |
 | `<`, `<=`, `>` and `>=` on strings | Lexicographic order on code units, as IsLessThan defines it (§7.2.13) | `localeCompare`, which depends on the locale |
 | `+` on strings, and template literals whose parts are `string`, `boolean`, `bigint` or a safe integer `number` | `List.append`. Numbers and `bigint` values convert to ASCII digits (§6.1.6.1.20 and §6.1.6.2.21). | A part that is a non-integer `number` or an object |
 | `length`, `at` (§22.1.3.1), `slice` (§22.1.3.22), `startsWith`, `endsWith`, `includes`, `indexOf`, `split` with a string separator (§22.1.3.23), `padStart`, `padEnd` and `trim` | Functions on the list of code units. `slice` and `at` follow the spec for negative and out-of-range indexes. | `split` with a regular expression, and every regular expression in the first version |
@@ -257,9 +220,8 @@ be exact:
 ## Steps
 
 Each step ends with all checks green, with both translators in agreement, and
-with no change to the output of code that is already in the subset. Step 1
-is the one planned exception, because it changes the type of every `string`.
-A fix for output that Lean does not accept may change it too: the binders of
+with no change to the output of code that is already in the subset. A fix
+for output that Lean does not accept may change it too: the binders of
 a loop now carry their types ([#59](https://github.com/shihangw/tolean/pull/59)),
 and a `let` of a `T | null` local writes its type where Lean would infer
 another ([#63](https://github.com/shihangw/tolean/pull/63)).
@@ -267,19 +229,14 @@ another ([#63](https://github.com/shihangw/tolean/pull/63)).
 Each step has a priority. The P0 steps come first, then the P1 steps, then
 the P2 steps. Steps with the same priority keep the order of their numbers.
 
-1. **P0.** Switch `string` to `JSString`. Today a string appears only in
-   fields, literals and `===`, so the switch changes the generated types but
-   breaks almost no proof. Every project that writes proofs over Lean's
-   `String` makes the switch more costly later, so it comes first.
 2. **P0.** Types and narrowing: optional parameters and `undefined` as a
    value, the rest of a chain after `?.`, a `default` that assigns to `never`,
    `export { … }` and re-exports, `as const` and `satisfies`, and `Record`
    over a union of string literals.
 3. **P1.** Generic functions and types whose type parameters have no
    constraint, tuples and type guards.
-4. **P0.** Callbacks that read only `const` values, the array methods without
-   `sort`, indexing, and object spread. The parser already reads arrow
-   functions whose body is an expression.
+4. **P0.** The other array methods without `sort`, such as `reduce` and
+   `slice`, indexing, and object spread.
 5. **P0.** Control flow: `return` inside a loop, `break`, `continue`, and the
    counted `for` loop.
 6. **P0.** Errors, after step 3 of the [shared core plan](shared-core.md) adds

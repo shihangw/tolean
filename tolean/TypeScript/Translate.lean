@@ -154,6 +154,9 @@ structure StructInfo where
   name : String
   exported : Bool := false
   fields : List (String × Ty)
+  /-- For `type T = Record<K, V>`, the literal union `K`, whose strings are
+  the fields. An index `r[k]` with a key of type `K` reads one. -/
+  key : Option DeclRef := none
 
 def StructInfo.ref (i : StructInfo) : DeclRef := ⟨i.file, i.name⟩
 
@@ -479,6 +482,8 @@ def translateType (t : TypeExpr) : TM Ty := do
       | t => return .nullable t
     | _, _ => unsupportedType t
   | .array _ elem => return .array (← translateType elem)
+  | .ref _ "Record" [_, _] | .ref _ "Readonly" [.ref _ "Record" [_, _]] =>
+    reject t.span "a Record type needs a name; declare it as a type, such as type T = Record<K, V>"
   | .ref _ name [elem] =>
     unless name == "Array" || name == "ReadonlyArray" do unsupportedType t
     return .array (← translateType elem)
@@ -548,7 +553,7 @@ def containsJump : Stmt → Bool
   | .returnStmt .. | .breakStmt _ | .continueStmt _ => true
   | .ifStmt _ _ t (some e) => containsJump t || containsJump e
   | .ifStmt _ _ t none => containsJump t
-  | .forOfStmt _ _ _ _ body | .whileStmt _ _ body => containsJump body
+  | .forOfStmt _ _ _ _ body | .forStmt _ _ _ _ body | .whileStmt _ _ body => containsJump body
   | .block _ body => anyContainsJump body
   | .switchStmt _ _ clauses => clausesContainJump clauses
   | _ => false
@@ -617,6 +622,8 @@ def stmtChanges : Stmt → List String
   | .ifStmt _ test t (some e) => exprChanges test ++ stmtChanges t ++ stmtChanges e
   | .ifStmt _ test t none => exprChanges test ++ stmtChanges t
   | .forOfStmt _ _ _ iterable body => exprChanges iterable ++ stmtChanges body
+  | .forStmt _ init test update body =>
+    optionChanges (init.bind (·.init)) ++ optionChanges test ++ optionChanges update ++ stmtChanges body
   | .whileStmt _ test body => exprChanges test ++ stmtChanges body
   | .block _ body => stmtsChanges body
   | .switchStmt _ disc clauses => exprChanges disc ++ clausesChanges clauses
@@ -747,6 +754,25 @@ def clauseStatements : List Stmt → List Stmt
   | [.block _ body] => body
   | body => body
 
+/-- `clauses` is a `default` clause that checks that the cases before it
+cover every member: its first statement is `const x: never = name;`, where
+`name` is the local that the `switch` tests. TypeScript accepts it only
+where no member is left, so it never runs, and the output leaves it out. -/
+def checksNever (name : String) : List (Option Expr × List Stmt) → Bool
+  | [(none, body)] =>
+    match clauseStatements body with
+    | .varDecl _ { kind := .const, type := some (.keyword _ "never"), init := some init, .. } :: _ =>
+      match init.stripParens with
+      | .ident _ n => n == name
+      | _ => false
+    | _ => false
+  | _ => false
+
+/-- Why a `default` that assigns `name` to `never` is wrong where the
+members with the tags `tags` are left. -/
+def neverLeftReason (name : String) (tags : List String) : String :=
+  s!"'{name}' is not never in this default, because no case takes '{tags.headD ""}'"
+
 /-- Why a clause of a `switch` must end in `return`. -/
 def fallthroughReason : String :=
   "every clause of a switch must end in a return, or every clause in a break; Tolean does not translate fallthrough"
@@ -772,6 +798,18 @@ def numberTest? : String → Option IR.NumberTest
 def numberConstant? : String → Option IR.NumberConstant
   | "NaN" => some .nan
   | "Infinity" => some .posInf
+  | _ => none
+
+/-- For a value of type `t`, a `Record<K, V>`: the literal union `K`, the
+keys, and `V`. The file must declare or import `K`, so that the output can
+name its constructors. -/
+def recordIndex (c : Ctx) : Ty → Option (DeclRef × List String × Ty)
+  | .struct ref => do
+    let info ← c.knownStructs.find? (·.ref == ref)
+    let key ← info.key
+    let _ ← c.enums.find? (·.ref == key)
+    let (_, type) ← info.fields.head?
+    return (key, info.fields.map (·.1), type)
   | _ => none
 
 /-! ### Expressions -/
@@ -883,6 +921,68 @@ def enumOf? (env : Env) : Expr → Option EnumValue
   | .ident _ n => if env.has n || isGlobalName n then none else env.enums.find? (·.name == n)
   | _ => none
 
+/-- The function on lists that the method `name` of an array becomes, for the
+methods that take a callback. -/
+def listMethod? (name : String) : Option IR.ListMethod :=
+  if name == "map" then some .map
+  else if name == "filter" then some .filter
+  else if name == "some" then some .any
+  else if name == "every" then some .all
+  else if name == "find" then some .find
+  else none
+
+/-- The receiver and the method of a call such as `xs.map(…)`, when the
+method takes a callback. -/
+def arrayMethodOf : Expr → Option (Expr × IR.ListMethod)
+  | .member _ recv name => (listMethod? name).map (recv, ·)
+  | _ => none
+
+/-- The parameter and the body of the one argument of an array method: an
+arrow function with one parameter. -/
+def callbackOf : List Expr → Option (Param × Expr)
+  | [.arrow _ _ [p] body] => some (p, body)
+  | _ => none
+
+/-- `e` is the name `Number`. -/
+def _root_.tolean.TypeScript.Syntax.Expr.namesNumber : Expr → Bool
+  | .ident _ "Number" => true
+  | _ => false
+
+/-- The element type of an array. -/
+def Ty.element? : Ty → Option Ty
+  | .array t => some t
+  | _ => none
+
+/-- A callback's parameter may have a type written out: the element type. -/
+def checkParamType (p : Param) (elem : Ty) : TM Unit := do
+  if let some t := p.type then
+    unless (← translateType t) == elem do
+      reject p.span "the parameter must have the element type of the array"
+
+/-- The type that the body of a callback is translated for: for `map`, the
+element type of the array that the context expects, which an object literal
+needs. -/
+def callbackExpected : IR.ListMethod → Option Ty → Option Ty
+  | .map, some (.array t) => some t
+  | _, _ => none
+
+/-- The type of `xs.method(cb)`, where the elements of `xs` have the type
+`elem` and the body of `cb` has the type `body`. -/
+def callbackResult (s bodySpan : Span) (method : IR.ListMethod) (elem body : Ty) : TM Ty := do
+  if method == .map then
+    if body == .null || body matches .optional _ || body matches .literal _ then
+      reject bodySpan "the callback of 'map' must give a value of a type that an array can hold"
+    return .array body
+  unless body == .boolean do reject bodySpan "the callback must give a boolean"
+  match method with
+  | .filter => return .array elem
+  | .find =>
+    -- The output has one `none` for `undefined` and `null`.
+    if elem.isNullable || elem matches .optional _ then
+      reject s "'find' on an array of nullable values could give null or undefined"
+    return .optional elem
+  | _ => return .boolean
+
 /-- `applyOperator`, after a string operand becomes a constructor where the
 other operand is of a literal union. -/
 def translateOperator (s : Span) (op : BinOp) (r : Expr) (a b : Code) : TM Code := do
@@ -970,6 +1070,13 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
     let o ← translateExpr fuel env none obj
     let (bind, type) ← optFieldType s o.type name
     return ⟨.ext (.optField name bind) [o.code], false, type⟩
+  | .index s obj key =>
+    let o ← translateExpr fuel env none obj
+    let (keyRef, keys, type) ← orReject (recordIndex (← get) o.type) s
+      "only a value of a Record type, such as type T = Record<K, V>, whose key type K this file declares or imports, may be indexed"
+    let k ← translateExpr fuel env (some (.enum keyRef)) key
+    unless k.type == .enum keyRef do reject key.span "the key must have the key type of the Record"
+    return ⟨.ext (.recordGet keyRef keys) [o.code, k.value], false, type⟩
   | .unary s op arg =>
     if op == .neg && arg.isInfinity && !env.has "Infinity" then
       return ⟨.numberConstant .negInf, false, .number⟩
@@ -1002,7 +1109,10 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
       | _ => "the branches of '?:' have different types"
     let type ← orReject ((a.type.join b.type).filter fun t => !(t matches .literal _)) s message
     return ⟨.ite c.code a.value b.value, false, type⟩
-  | .call s callee args => translateCall fuel env s callee args
+  | .call s callee args =>
+    match arrayMethodOf callee with
+    | some (recv, method) => translateArrayMethod fuel env expected s recv method args
+    | none => translateCall fuel env s callee args
   | .object s props => translateObject fuel env expected s props
   | .array s elems => translateArray fuel env expected s elems
   | _ => reject e.span "unsupported expression"
@@ -1055,6 +1165,29 @@ def translateCall (fuel : Nat) (env : Env) (s : Span) (callee : Expr) (args : Li
       reject arg.span "the argument does not have the parameter's type"
     pure a.value
   return ⟨.call fn.ref values, false, fn.ret⟩
+
+/-- `xs.map(x => e)`, and `filter`, `some`, `every` and `find`: the `List`
+function with `fun (x : T) => e`. The callback is an arrow function written at
+the call, so it sees the locals of the call, and its body is an expression,
+which changes no local. JS also passes the index and the array, which a
+callback with one parameter ignores. -/
+def translateArrayMethod (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (recv : Expr)
+    (method : IR.ListMethod) (args : List Expr) : TM Code := do
+  let fuel + 1 := fuel | tooDeep
+  let (p, body) ← orReject (callbackOf args) s
+    ("an array method here takes one arrow function with one parameter, such as " ++
+      "xs.map(x => x + 1n); the index and array parameters are not supported yet")
+  -- `Number.map` is a property of the global `Number`, not of an array.
+  if recv.namesNumber then reject recv.span "only an array has this method"
+  let xs ← translateExpr fuel env none recv
+  let elem ← orReject xs.type.element? recv.span "only an array has this method"
+  checkParamType p elem
+  let inner ← declare env p.span p.name .param elem
+  let b ← translateExpr fuel inner (callbackExpected method expected) body
+  let type ← callbackResult s body.span method elem b.type
+  let info : IR.CallbackInfo IR.TyExt :=
+    { span := s, result := b.type.lean, scope := env.locals.map fun l => (l.name, l.type.lean) }
+  return ⟨.listMethod method xs.value p.name elem.lean b.value info, false, type⟩
 
 def translateObject (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (props : List Property) :
     TM Code := do
@@ -1384,7 +1517,8 @@ def translateClauses (fuel : Nat) (env : Env) (s : Span) (sw : SwitchOn) (tags :
     if tags.isEmpty then reject s "code after a switch whose cases cover every member is unreachable"
     else translateStatements fuel env .ret rest
   | [(none, body)] =>
-    if !rest.isEmpty then reject s "code after a switch with a default is unreachable"
+    if checksNever sw.name [(none, body)] then reject s (neverLeftReason sw.name tags)
+    else if !rest.isEmpty then reject s "code after a switch with a default is unreachable"
     else if !alwaysReturns (clauseStatements body) then reject s fallthroughReason
     else translateStatements fuel env .ret (clauseStatements body)
   | (none, _) :: _ :: _ => reject s "the default must be the last clause of a switch"
@@ -1403,7 +1537,7 @@ def translateClauses (fuel : Nat) (env : Env) (s : Span) (sw : SwitchOn) (tags :
           if others.isEmpty then
             if known != some tag then
               reject test.span "the member of this case must be the one left after the cases before it"
-            else if !more.isEmpty then
+            else if !(more.isEmpty || checksNever sw.name more) then
               reject s "the cases before this clause cover every member, so it never runs"
             else if !rest.isEmpty then
               reject s "code after a switch whose cases cover every member is unreachable"
@@ -1431,7 +1565,9 @@ def translateStateClauses (fuel : Nat) (env : Env) (s : Span) (sw : SwitchOn) (t
   | [] =>
     if tags.isEmpty then reject s "the cases of the switch cover every member, so nothing is left"
     else return .state names
-  | [(none, body)] => translateStateClause fuel env s names true body
+  | [(none, body)] =>
+    if checksNever sw.name [(none, body)] then reject s (neverLeftReason sw.name tags)
+    else translateStateClause fuel env s names true body
   | (none, _) :: _ :: _ => reject s "the default must be the last clause of a switch"
   | (some test, body) :: more =>
     match test.stripParens with
@@ -1447,7 +1583,7 @@ def translateStateClauses (fuel : Nat) (env : Env) (s : Span) (sw : SwitchOn) (t
           if others.isEmpty then
             if known != some tag then
               reject test.span "the member of this case must be the one left after the cases before it"
-            else if !more.isEmpty then
+            else if !(more.isEmpty || checksNever sw.name more) then
               reject s "the cases before this clause cover every member, so it never runs"
             else return whenTag
           else
@@ -1670,6 +1806,33 @@ def translatePrimitiveUnion (s : Span) (exported : Bool) (name : String) (member
   if members.contains "bigint" then requireFeature s .bigint
   declareUnion s exported name none (members.filterMap fun k => (primitiveType? k).map (k, ·))
 
+/-- The key type and the value type of `Record<K, V>`, or of
+`Readonly<Record<K, V>>`. -/
+def recordArgs : TypeExpr → Option (TypeExpr × TypeExpr)
+  | .ref _ "Record" [k, v] | .ref _ "Readonly" [.ref _ "Record" [k, v]] => some (k, v)
+  | _ => none
+
+/-- `type T = Record<K, V>`, where `K` is a literal union of strings that the
+file declares or imports. A value of the type has a property for each string
+of `K`, so the output declares a structure with one field of type `V` for
+each, in the order of `K`. An object literal must set every key in that
+order, as for an interface. `r[k]` reads the field that `k` names. -/
+def translateRecord (exported : Bool) (name : String) (key value : TypeExpr) :
+    TM IR.Decl := do
+  let keyType ← isolated (translateType key)
+  let ctx ← get
+  let info ← orReject (match keyType with
+      | .enum ref => ctx.enums.find? (·.ref == ref)
+      | _ => none) key.span
+    "the keys of a Record must be a literal union of strings that this file declares or imports, such as type K = 'a' | 'b'"
+  let type ← isolated (translateType value)
+  if let some m := info.members.find? leanReserved.contains then
+    reject key.span s!"name '{m}' is reserved in Lean, so it cannot name a field of the Record"
+  let fields := info.members.map fun m => (m, type)
+  modify fun c =>
+    { c with structs := c.structs ++ [{ file := c.file, name, exported, fields, key := some info.ref }] }
+  return .struct name (fields.map fun (field, type) => (field, type.lean))
+
 /-- `type T = U`. The translator writes the type of `U` wherever the source
 names `T`, so a type alias changes no code. The output declares it as an
 `abbrev`, for the claims about the code to use. An alias must come before its
@@ -1684,6 +1847,8 @@ def translateAlias (s : Span) (exported : Bool) (name : String) (type : TypeExpr
     return ← translateUnion s exported name members
   if let some members := primitiveMembers type then
     return ← translatePrimitiveUnion s exported name members
+  if let some (key, value) := recordArgs type then
+    return ← translateRecord exported name key value
   let ty ← isolated (translateType type)
   modify fun c => { c with aliases := c.aliases ++ [{ file := c.file, name, exported, type := ty }] }
   return .alias name ty.lean
@@ -1747,6 +1912,9 @@ def exprUsesNumber : Expr → Bool
   | .paren _ e | .unary _ _ e | .prefix _ _ e | .postfix _ _ e => exprUsesNumber e
   | .index _ a b | .binary _ _ a b | .assign _ _ a b => exprUsesNumber a || exprUsesNumber b
   | .cond _ a b c => exprUsesNumber a || exprUsesNumber b || exprUsesNumber c
+  | .arrow _ _ ps body =>
+    ps.any (fun p => isNumberName p.name || (p.type.map typeUsesNumber).getD false) ||
+      exprUsesNumber body
   | _ => false
 
 def exprsUseNumber : List Expr → Bool
@@ -1774,6 +1942,9 @@ def stmtUsesNumber : Stmt → Bool
   | .ifStmt _ test t none => exprUsesNumber test || stmtUsesNumber t
   | .forOfStmt _ _ name iterable body =>
     isNumberName name || exprUsesNumber iterable || stmtUsesNumber body
+  | .forStmt _ init test update body =>
+    (init.map varUsesNumber).getD false || (test.map exprUsesNumber).getD false ||
+      (update.map exprUsesNumber).getD false || stmtUsesNumber body
   | .whileStmt _ test body => exprUsesNumber test || stmtUsesNumber body
   | .block _ body => stmtsUseNumber body
   | _ => false
@@ -2033,9 +2204,14 @@ def translateWith (file source ns : String) (target : Edition := .default)
       r.file != file && (deps.lookup r.file).isNone then
     throw s!"{file}: the output names '{r.name}' of '{r.file}', a file that it does not see"
   let imports := (importedFiles file m).filterMap fun f => (deps.lookup f).map (s!"import {·.module}")
+  -- A string is a `JSString`, which the output names only in a file that
+  -- uses strings, so only such a file imports it.
+  let usesString := decls.any IR.Decl.usesString
   let header :=
-    (if names.generic then ["import tolean.TypeScript.Spec.Number"] else []) ++ imports ++
-    (if names.generic then ["", "open tolean.TypeScript"] else if imports.isEmpty then [] else [""])
+    (if names.generic then ["import tolean.TypeScript.Spec.Number"] else []) ++
+    (if usesString then ["import tolean.TypeScript.Spec.String"] else []) ++ imports ++
+    (if names.generic || usesString then ["", "open tolean.TypeScript"]
+     else if imports.isEmpty then [] else [""])
   let text := "\n".intercalate
     ([s!"-- Generated by tolean {version} for {target.name} from {file}. Do not edit."] ++
       header ++

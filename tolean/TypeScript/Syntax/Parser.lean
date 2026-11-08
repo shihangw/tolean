@@ -636,8 +636,9 @@ end
 
 /-! ### Statements -/
 
-/-- `const` or `let`, through the end of the statement. -/
-def parseVarDecl : ParseM VarDecl := do
+/-- `const` or `let`, a name, and a type, a value, both or neither. The
+`;` after it is left to the caller. -/
+def parseDeclaration : ParseM VarDecl := do
   let keyword ← advance
   let kind := if keyword.isKeyword "const" then VarKind.const else .«let»
   let t ← peek
@@ -654,8 +655,37 @@ def parseVarDecl : ParseM VarDecl := do
   let t ← peek
   if t.isPunct "," then failAt t "declare one variable per statement"
   if kind == .const && init.isNone then failAt keyword "a 'const' needs a value"
-  endStatement
   return { kind, name, type, init }
+
+/-- `const` or `let`, through the end of the statement. -/
+def parseVarDecl : ParseM VarDecl := do
+  let decl ← parseDeclaration
+  endStatement
+  return decl
+
+/-- The declaration at the start of a counted `for`. An `in` that
+`Expr.inFree` finds in its value would start a `for … in` loop, so the parser
+refuses it. -/
+def parseForDeclaration : ParseM VarDecl := do
+  let t ← peek
+  unless t.isKeyword "const" || t.isIdent "let" do unexpected t "'const', 'let' or ';'"
+  let decl ← parseDeclaration
+  if !decl.inFree then failAt t "an 'in' in the declaration of a 'for' needs parentheses"
+  return decl
+
+/-- `p`, unless the next token is the punctuator `stop`. -/
+def unlessPunct {α : Type} (stop : String) (p : ParseM α) : ParseM (Option α) := do
+  if (← peek).isPunct stop then return none
+  return some (← p)
+
+/-- After `for`, a counted loop comes: the token after the `(` is `;`, or it is
+`const` or `let` and the token after the name is not `of` or `in`.
+`parseForOf` reads every other `for`, and refuses what it does not support. -/
+def countedFor : ParseM Bool := do
+  let first ← peekAt 2
+  let afterName ← peekAt 4
+  return first.isPunct ";" || ((first.isKeyword "const" || first.isIdent "let") &&
+    !afterName.isIdent "of" && !afterName.isKeyword "in")
 
 /-- One step of a loop over the items of a block in `{ … }`: an item that
 `parseItem` reads, unless the `}` comes. The statements of a block and the
@@ -720,7 +750,7 @@ def parseStatement (fuel : Nat) : ParseM Stmt := do
       discard advance
       elseBranch := some (← parseBranch fuel)
     return .ifStmt (← spanFrom start) test thenBranch elseBranch
-  | .keyword "for" => parseForOf fuel
+  | .keyword "for" => if (← countedFor) then parseFor fuel else parseForOf fuel
   | .keyword "while" =>
     discard advance
     let _ ← expectPunct "("
@@ -782,18 +812,34 @@ def parseForOf (fuel : Nat) : ParseM Stmt := do
   let keyword ← peek
   let kind ← if keyword.isKeyword "const" then pure VarKind.const
     else if keyword.isIdent "let" then pure VarKind.«let»
-    else failAt keyword "tolean supports only 'for (const x of …)' and 'for (let x of …)'"
+    else failAt keyword "tolean supports only a 'const' or 'let' declaration, or nothing, after 'for ('"
   discard advance
   let t ← peek
   if t.isPunct "[" || t.isPunct "{" then failAt t "destructuring is not supported"
   let name ← readName
   let t ← peek
-  unless t.isIdent "of" do failAt t "tolean supports only 'for … of' loops"
+  unless t.isIdent "of" do failAt t "'for … in' loops are not supported"
   discard advance
   let iterable ← parseAssign (← budget)
   let _ ← expectPunct ")"
   let body ← withLoop (parseBranch fuel)
   return .forOfStmt (← spanFrom start) kind name iterable body
+
+/-- `for (init; test; update) body`, where `init` is absent or a declaration,
+and `test` and `update` may be absent (ECMA-262 §14.7.4). No `;` is inserted
+in the parentheses. -/
+def parseFor (fuel : Nat) : ParseM Stmt := do
+  let fuel + 1 := fuel | outOfFuel
+  let start := (← advance).span.start
+  let _ ← expectPunct "("
+  let init ← unlessPunct ";" parseForDeclaration
+  let _ ← expectPunct ";"
+  let test ← unlessPunct ";" (do parseExpression (← budget))
+  let _ ← expectPunct ";"
+  let update ← unlessPunct ")" (do parseExpression (← budget))
+  let _ ← expectPunct ")"
+  let body ← withLoop (parseBranch fuel)
+  return .forStmt (← spanFrom start) init test update body
 
 def parseBlock (fuel : Nat) : ParseM Stmt := do
   let fuel + 1 := fuel | outOfFuel
