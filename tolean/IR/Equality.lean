@@ -17,7 +17,7 @@ namespace tolean.IR
 -- Every proof here has the same shape, so some pass a lemma that they do not use.
 set_option linter.unusedSimpArgs false
 
-deriving instance DecidableEq for IntOp, Order, Division
+deriving instance DecidableEq for IntOp, Order, Division, ListMethod
 
 variable {T E : Type} [DecidableEq T] [DecidableEq E]
 
@@ -67,6 +67,8 @@ end
 
 instance : DecidableEq (Ty T) := fun a b => decidable_of_iff _ (Ty.beq_iff a b)
 
+deriving instance DecidableEq for CallbackInfo
+
 mutual
 
 def Expr.beq : Expr T E → Expr T E → Bool
@@ -106,6 +108,9 @@ def Expr.beq : Expr T E → Expr T E → Bool
   | .ext a0 a1, .ext b0 b1 => Decidable.decide (a0 = b0) && Expr.beqList a1 b1
   | .tuple a0, .tuple b0 => Expr.beqList a0 b0
   | .proj a0 a1 a2, .proj b0 b1 b2 => Expr.beq a0 b0 && Decidable.decide (a1 = b1) && Decidable.decide (a2 = b2)
+  | .listMethod a0 a1 a2 a3 a4 a5, .listMethod b0 b1 b2 b3 b4 b5 =>
+    Decidable.decide (a0 = b0) && Expr.beq a1 b1 && Decidable.decide (a2 = b2) &&
+      Decidable.decide (a3 = b3) && Expr.beq a4 b4 && Decidable.decide (a5 = b5)
   | _, _ => false
 
 def Expr.beqList : List (Expr T E) → List (Expr T E) → Bool
@@ -195,6 +200,8 @@ theorem Expr.beq_iff : (a b : Expr T E) → Expr.beq a b = true ↔ a = b
     cases b <;> simp [and_assoc, Expr.beq, Expr.beqList_iff a0]
   | .proj a0 a1 a2, b => by
     cases b <;> simp [and_assoc, Expr.beq, Expr.beq_iff a0]
+  | .listMethod a0 a1 a2 a3 a4 a5, b => by
+    cases b <;> simp [and_assoc, Expr.beq, Expr.beq_iff a1, Expr.beq_iff a4]
 
 theorem Expr.beqList_iff : (xs ys : List (Expr T E)) → Expr.beqList xs ys = true ↔ xs = ys
   | [], ys => by cases ys <;> simp [and_assoc, Expr.beqList]

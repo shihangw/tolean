@@ -119,12 +119,6 @@ theorem Frame.split : ∀ {ρ' a b : Eval.Env N}, Frame c ρ' (a ++ b) →
 
 /-! ### Environments -/
 
-theorem has_add (env : Translate.Env) (l : Local) (x : String) :
-    (env.add l).has x = (env.has x || l.name == x) := by
-  simp only [Env.has, Env.lookup, Env.add, List.find?_append]
-  cases env.locals.find? (·.name == x) <;> simp [List.find?]
-  split <;> simp_all
-
 theorem bindState_lookup {inner : Eval.Env N} :
     ∀ {names : List String} {outer ρ : Eval.Env N}, IR.bindState names inner outer = some ρ →
       ∀ n, ρ.lookup n = if n ∈ names then inner.lookup n else outer.lookup n
@@ -175,47 +169,6 @@ variable {α : Type}
 
 @[simp] theorem throw_ne_ok {e : String} {s s' : Ctx} {a : α} : (throw e : TM α) s ≠ .ok a s' := by
   simp [throw, throwThe, MonadExceptOf.throw, EStateM.throw]
-
-theorem checkName_ok {sp : Span} {name r : String} {s s' : Ctx} :
-    checkName sp name s = .ok r s' → r = name ∧ s' = s := by
-  simp only [checkName, ite_state]
-  split
-  · simp
-  · simp only [pure_bind, pure_ok]; rintro ⟨rfl, rfl⟩; exact ⟨rfl, rfl⟩
-
-theorem checkLocalName_ok {sp : Span} {name r : String} {s s' : Ctx}
-    (h : checkLocalName sp name s = .ok r s') : r = name ∧ s' = s := by
-  simp only [checkLocalName, bind_ok, get_ok, ite_state] at h
-  obtain ⟨c, s₁, ⟨rfl, rfl⟩, h⟩ := h
-  split at h
-  · simp at h
-  · simp only [pure_bind, ite_state] at h
-    split at h
-    · simp at h
-    · split at h
-      · simp at h
-      · exact checkName_ok h
-
-theorem declare_ok {env env' : Translate.Env} {sp : Span} {name : String} {b : Binding} {t : Ty}
-    {s s' : Ctx} (h : declare env sp name b t s = .ok env' s') :
-    env.has name = false ∧ env' = env.add { name, binding := b, type := t } ∧ s' = s := by
-  simp only [declare, ite_state] at h
-  split at h
-  · simp at h
-  · rename_i hn
-    simp only [pure_bind, ite_state] at h
-    split at h
-    · simp at h
-    · split at h
-      · simp at h
-      · simp only [bind_ok] at h
-        obtain ⟨r, s₁, hr, h⟩ := h
-        obtain ⟨-, rfl⟩ := checkLocalName_ok hr
-        simp only [ite_state] at h
-        split at h
-        · simp at h
-        · simp only [pure_ok] at h
-          exact ⟨by simpa using hn, h.1.symm, h.2.symm⟩
 
 end Monad
 
@@ -920,24 +873,25 @@ theorem execFrom_ret {v : Val N} {ρ : Eval.Env N} {t : Option Expr} {body : Lis
 /-- A `case` whose test is a string: the clause runs for that tag, and the
 later clauses decide for every other. -/
 theorem execSwitch_case {ρ : Eval.Env N} {test : Expr} {body : List Stmt}
-    {more : List (Option Expr × List Stmt)} {tsp : Span} {k tag : String}
+    {more : List (Option Expr × List Stmt)} {tsp : Span} {k : JSString} {tag : String}
     (hst : test.stripParens = .string tsp tag) :
     Eval.execSwitch m fuel ρ (.str k) ((some test, body) :: more) =
-      if k = tag then Eval.execFrom m fuel ρ ((some test, body) :: more)
+      if k = .ofString tag then Eval.execFrom m fuel ρ ((some test, body) :: more)
       else Eval.execSwitch m fuel ρ (.str k) more := by
-  have ht : Eval.eval m fuel ρ test = some (.str tag) := by
+  have ht : Eval.eval m fuel ρ test = some (.str (.ofString tag)) := by
     rw [← eval_stripParens, hst]; simp [Eval.eval]
   rw [Eval.execSwitch]
   simp only [ht, Option.bind_eq_bind, Option.bind_some, Eval.strictEq]
-  by_cases hk : k = tag <;> simp [hk]
+  by_cases hk : k = .ofString tag <;> simp [hk]
 
 /-- What `matchTag` runs: the arm of the tag, or the other arm, only for
 the member that it names when it names one. -/
 theorem matchTag_exec {n f tag : String} {r : DeclRef} {other : Option String} {wt wo : IR.Body}
     {ρ : Eval.Env N} {o : Outcome N} (h : IR.Body.exec fs fuel ρ (.matchTag n r (some f) tag other wt wo) = some o) :
     ∃ fields k, ρ.lookup n = some (.obj fields) ∧ fields.lookup f = some (.str k) ∧
-      ((k = tag ∧ IR.Body.exec fs fuel ρ wt = some o) ∨
-        (k ≠ tag ∧ (∀ x, other = some x → k = x) ∧ IR.Body.exec fs fuel ρ wo = some o)) := by
+      ((k = .ofString tag ∧ IR.Body.exec fs fuel ρ wt = some o) ∨
+        (k ≠ .ofString tag ∧ (∀ x, other = some x → k = .ofString x) ∧
+          IR.Body.exec fs fuel ρ wo = some o)) := by
   simp only [IR.Body.exec, IR.tagOf] at h
   cases hl : ρ.lookup n with
   | none => simp [hl] at h
@@ -950,20 +904,20 @@ theorem matchTag_exec {n f tag : String} {r : DeclRef} {other : Option String} {
       cases u <;> simp [hk] at h
       rename_i k
       refine ⟨fields, k, rfl, hk, ?_⟩
-      by_cases hkt : k = tag
+      by_cases hkt : k = .ofString tag
       · simp [hkt] at h; exact .inl ⟨hkt, h⟩
       · simp only [hkt, ↓reduceIte] at h
         split at h
         · rename_i hall
           refine .inr ⟨hkt, fun x hx => ?_, h⟩
           subst hx
-          have : x = k := by simpa using hall
+          have : JSString.ofString x = k := by simpa using hall
           exact this.symm
         · simp at h
 
 /-- `switch (x.kind)` evaluates the tag of `x`. -/
 theorem switchOf_eval {env : Translate.Env} {disc : Expr} {sw : SwitchOn} (h : switchOf env disc = some sw)
-    {ρ : Eval.Env N} {fields : List (String × Val N)} {k : String}
+    {ρ : Eval.Env N} {fields : List (String × Val N)} {k : JSString}
     (hl : ρ.lookup sw.name = some (.obj fields)) (hk : fields.lookup sw.field = some (.str k)) :
     Eval.eval m fuel ρ disc = some (.str k) := by
   unfold switchOf at h
@@ -1375,7 +1329,11 @@ theorem translateStateClauses_sound {F : Nat}
     obtain ⟨rfl, -⟩ := h
     exact state_nil_sim m fs fuel
   · cases more with
-    | nil => exact state_default_sim m fs fuel (ihA _ _ _ _ _ _ _ _ h).2
+    | nil =>
+      simp only [ite_state] at h
+      split at h
+      · simp at h
+      exact state_default_sim m fs fuel (ihA _ _ _ _ _ _ _ _ h).2
     | cons _ _ => simp at h
   · simp only at h
     generalize hst : test.stripParens = st at h
@@ -1653,6 +1611,8 @@ theorem translateClauses_sound {F : Nat}
   · cases more with
     | nil =>
       simp only [ite_state] at h
+      split at h
+      · simp at h
       split at h
       · simp at h
       split at h

@@ -72,9 +72,11 @@ partial def Property.toSexp : Property → Sexp
 
 end
 
+def VarDecl.children (d : VarDecl) : List Sexp :=
+  (d.type.map TypeExpr.toSexp).toList ++ (d.init.map Expr.toSexp).toList
+
 def VarDecl.toSexp (span : Span) (exported : Bool) (d : VarDecl) : Sexp :=
-  node d.kind.keyword span ([d.name] ++ flag exported "export")
-    ((d.type.map TypeExpr.toSexp).toList ++ (d.init.map Expr.toSexp).toList)
+  node d.kind.keyword span ([d.name] ++ flag exported "export") d.children
 
 partial def Stmt.toSexp : Stmt → Sexp
   | .varDecl s d => d.toSexp s false
@@ -84,6 +86,14 @@ partial def Stmt.toSexp : Stmt → Sexp
     node "if" s [] ([test.toSexp, thenBranch.toSexp] ++ (elseBranch.map toSexp).toList)
   | .forOfStmt s kind name iterable body =>
     node "for-of" s [kind.keyword, name] [iterable.toSexp, body.toSexp]
+  -- The three parts keep no span, so their nodes have none. Each holds its
+  -- part, or nothing when the part is absent.
+  | .forStmt s init test update body =>
+    node "for" s [] [
+      .node "init" none [] (init.map fun d => Sexp.node d.kind.keyword none [d.name] d.children).toList,
+      .node "test" none [] (test.map Expr.toSexp).toList,
+      .node "update" none [] (update.map Expr.toSexp).toList,
+      body.toSexp]
   | .whileStmt s test body => node "while" s [] [test.toSexp, body.toSexp]
   | .block s body => node "block" s [] (body.map toSexp)
   | .breakStmt s => node "break" s [] []

@@ -76,6 +76,15 @@ theorem Stmt.depth_lt : ∀ st : Stmt, st.depth < st.tokens.length
     have : 1 ≤ (keywordWord "for" :: punctWord "(" :: k.word :: identWord n :: identWord "of" ::
       it.words ++ [punctWord ")"]).flatten.length := by simp [keywordWord]
     omega
+  | .forStmt sp i t u b => by
+    have := Stmt.depth_lt b
+    rw [Stmt.tokens_length_cons (l := keywordWord "for" :: punctWord "(" :: forInitWords i ++ optWords t ++
+      punctWord ";" :: optWords u ++ [punctWord ")"]) (ls := b.wordLines)
+      (by simp [Stmt.wordLines, Stmt.lines, Stmt.lines_words b 1]), Stmt.tokens_eq]
+    simp only [Stmt.depth]
+    have : 1 ≤ (keywordWord "for" :: punctWord "(" :: forInitWords i ++ optWords t ++
+      punctWord ";" :: optWords u ++ [punctWord ")"]).flatten.length := by simp [keywordWord]
+    omega
   | .whileStmt sp test b => by
     have := Stmt.depth_lt b
     rw [Stmt.tokens_length_cons (l := keywordWord "while" :: punctWord "(" :: test.words ++ [punctWord ")"])

@@ -27,6 +27,43 @@ reason. -/
 theorem looseEq_null_right (a : Val N) (ha : a ≠ .undefined) : looseEq a .null = strictEq a .null := by
   cases a <;> first | rfl | exact absurd rfl ha
 
+omit [JSNumber N] in
+/-- A key with the code units of `name` reads the property `name`, because
+`JSString.ofString` is injective. -/
+@[simp] theorem getPropKey_ofString (fields : List (String × Val N)) (name : String) :
+    getPropKey fields (JSString.ofString name) = getProp fields name := by
+  have hfind : ∀ fs : List (String × Val N),
+      (fs.find? fun f => JSString.ofString f.1 == JSString.ofString name).map (·.2) = fs.lookup name := by
+    intro fs
+    induction fs with
+    | nil => rfl
+    | cons f fs ih =>
+      obtain ⟨k, v⟩ := f
+      by_cases hk : k = name
+      · subst hk; simp [List.lookup]
+      · have : (JSString.ofString k == JSString.ofString name) = false := by simp [hk]
+        have h2 : (name == k) = false := by simp [Ne.symm hk]
+        simp [List.find?, this, List.lookup, h2, ih]
+  have hproto : (objectPrototypeNames.any fun n => JSString.ofString n == JSString.ofString name) =
+      objectPrototypeNames.contains name := by
+    rw [Bool.eq_iff_iff]
+    simp only [List.any_eq_true, beq_iff_eq, JSString.ofString_inj, List.contains_iff_mem]
+    constructor
+    · rintro ⟨n, hn, rfl⟩; exact hn
+    · intro h; exact ⟨name, h, rfl⟩
+  unfold getPropKey getProp
+  rw [hproto, ← hfind fields]
+  cases fields.find? (fun f => JSString.ofString f.1 == JSString.ofString name) <;> rfl
+
+/-- `obj[key]` with a string key reads the property that the string names, as
+`obj.name` does, because `ToPropertyKey` of a string is the string itself
+(ECMA-262 §13.3.2.1). -/
+theorem eval_index_str {m : Scope} {fuel : Nat} {env : Env N} {sp obj key}
+    {fields : List (String × Val N)} {name : String}
+    (ho : eval m fuel env obj = some (.obj fields)) (hk : eval m fuel env key = some (.str name)) :
+    eval m fuel env (.index sp obj key) = getProp fields name := by
+  simp [eval, ho, hk, getPropKey_ofString]
+
 end
 
 /-! ### Environments -/
@@ -204,9 +241,9 @@ def decNum [JSNumber N] : Option (Val N) → N
   | some (.num n) => n
   | _ => JSNumber.ofSafeInt 0
 
-def decStr : Option (Val N) → String
+def decStr : Option (Val N) → JSString
   | some (.str s) => s
-  | _ => ""
+  | _ => JSString.ofString ""
 
 def decList {α : Type} (dec : Option (Val N) → α) : Option (Val N) → List α
   | some (.list vs) => vs.map (fun v => dec (some v))
@@ -260,7 +297,7 @@ def decCons {α β : Type} (dec : Option (Val N) → α) (rest : List (Val N) �
 @[simp] theorem decInt_int (i : Int) : decInt (some (Val.int (N := N) i)) = i := rfl
 @[simp] theorem decBool_bool (b : Bool) : decBool (some (Val.bool (N := N) b)) = b := rfl
 @[simp] theorem decNum_num [JSNumber N] (n : N) : decNum (some (Val.num n)) = n := rfl
-@[simp] theorem decStr_str (s : String) : decStr (some (Val.str (N := N) s)) = s := rfl
+@[simp] theorem decStr_str (s : JSString) : decStr (some (Val.str (N := N) s)) = s := rfl
 
 @[simp] theorem decList_list {α : Type} (dec : Option (Val N) → α) (enc : α → Val N)
     (h : ∀ x, dec (some (enc x)) = x) (xs : List α) :

@@ -131,6 +131,8 @@ def stmt : Stmt → String
     s!"({ns}Stmt.ifStmt {span s} {expr t} {stmt a} {option (optStmt b)})"
   | .forOfStmt s k n i b =>
     s!"({ns}Stmt.forOfStmt {span s} {varKind k} {str n} {expr i} {stmt b})"
+  | .forStmt s i t u b =>
+    s!"({ns}Stmt.forStmt {span s} {option (i.map varDecl)} {option (t.map expr)} {option (u.map expr)} {stmt b})"
   | .whileStmt s t b => s!"({ns}Stmt.whileStmt {span s} {expr t} {stmt b})"
   | .block s body => s!"({ns}Stmt.block {span s} {list (stmts body)})"
   | .breakStmt s => s!"({ns}Stmt.breakStmt {span s})"
