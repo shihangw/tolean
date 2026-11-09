@@ -166,6 +166,8 @@ def importName (n : ImportName) : String :=
 
 def decl : Decl → String
   | .import s names source => s!"({ns}Decl.import {span s} {list (names.map importName)} {str source})"
+  | .exports s names source =>
+    s!"({ns}Decl.exports {span s} {list (names.map importName)} {option (source.map str)})"
   | .function s e n tps ps r b =>
     s!"({ns}Decl.function {span s} {e} {str n} {list (tps.map str)} {list (ps.map param)} " ++
       s!"{option (r.map typeExpr)}\n    {stmt b})"

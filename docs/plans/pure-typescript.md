@@ -53,7 +53,7 @@ exact. A construct leaves these tables when Tolean translates it, and the
 |---|---|---|
 | `x?: T` parameters, `undefined` as a value, and a test such as `x !== undefined` that narrows an optional value | `Option T` | `'x' in obj`, which can tell a missing key from `undefined` |
 | A chain after `?.`, such as `a?.b.c`, and `a?.[i]` and `f?.()` | `Option.bind` | `==` against anything except `null` and `undefined` |
-| `export { … }` and re-exports | Nothing: the names stay in scope | `export *` |
+| A re-export, such as `export { a } from "./x.ts"` | Nothing: the names stay in scope | `export *` |
 | `as const` and `satisfies` | Nothing: they only check types | `as T` and the non-null assertion `x!`, because TypeScript does not check them |
 | A type guard `x is T` | A `Bool` function | A guard whose body the translator cannot show to be a test of the tag |
 
