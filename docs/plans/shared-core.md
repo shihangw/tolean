@@ -1,13 +1,15 @@
 # Plan: a shared Tolean IR and shared monad pieces
 
-**Status:** in progress, see [Progress](#progress) · **Date:** 2026-10-29
+**Status:** in progress · **Date:** 2026-10-29
 
-Today only TypeScript has the parts that let Lean prove a translator. It
-builds the [Tolean IR](../decisions/2026-10-30-tolean-ir.md), which is the Lean
-code that the translator writes as Lean data. It also has an evaluator for
-the IR, an interpreter for the source,
-`program_sound` and certificates. The Go and SQL translators build strings,
-and they use `partial def`, so Lean cannot reason about them. When TypeScript
+TypeScript has the parts that let Lean prove a translator. It builds the
+[Tolean IR](../decisions/2026-10-30-tolean-ir.md), which is the Lean code
+that the translator writes as Lean data, in a shared core with a TypeScript
+extension. It also has an evaluator for the IR, an interpreter for the
+source, `program_sound` and certificates. Go has the same parts for its pure
+functions only, and the [Go proofs plan](go-proofs.md) lists the rest. The
+SQL translator and the rest of the Go translator build strings, and they use
+`partial def`, so Lean cannot reason about them. When TypeScript
 gains effects, its output stops being plain functions and becomes code in a
 monad. This plan says which of these parts the languages share and which stay
 with one language. The goal is that `program_sound` and certificates carry
@@ -18,16 +20,6 @@ The [effects plan](effects.md) decides what a library call may do, through
 tags such as `observe` and `fails`, and how proofs assume it. This plan is
 about the layer underneath: how the IR, its evaluator and the proofs
 represent those effects.
-
-## Progress
-
-Each row is a step of the plan that is built, with the pull request that
-built it.
-
-| Step | What is built | Pull request |
-|---|---|---|
-| 1 | The shared core of the IR, its printer and its equality are in `tolean/IR.lean` and `tolean/IR/`. The core includes inductive types whose constructors take no arguments, which TypeScript uses for literal unions and SQL could use for its enums. TypeScript adds JavaScript numbers and `null` in `tolean/TypeScript/IR.lean`. Every corpus file translates to the same text as before. | [#50](https://github.com/shihangw/tolean/pull/50) |
-| 5, first part | Go's pure functions go through a total translator, `tolean/Go/Translate/Pure.lean`, that builds the IR with a Go extension for `Go.wrap64` and `++` on strings. Go has an interpreter for that subset in `tolean/Go/Spec/Eval.lean` and an evaluator for its IR, and `translate_sound` proves the translation. The [Go proofs plan](go-proofs.md) lists the rest. | [#102](https://github.com/shihangw/tolean/pull/102) |
 
 ## What every language shares
 
@@ -110,12 +102,9 @@ TypeScript store must be a heap, which Aeneas never needs to model.
 ## Steps
 
 Each step ends with all checks green, and with no change to the output of
-code that has no effects.
+code that has no effects. The numbers stay as they were when the plan was
+written, so that other documents can name a step.
 
-1. Split the Tolean IR into a shared core in `tolean/IR/` and a TypeScript
-   extension for JavaScript numbers and `null`. The printer and the
-   evaluator get a hook for each language's constructs. The output of every
-   corpus file stays the same, byte for byte.
 2. Add the typing relation `WellTyped` on the IR, with its two theorems: the
    translator gives well-typed IR, and well-typed IR gives a value of its
    type. Section 3 of the [decision record on the IR](../decisions/2026-10-30-tolean-ir.md)
@@ -126,8 +115,9 @@ code that has no effects.
    first.
 4. Move the `EStateM` lemmas to a shared module, and add the lemmas for the
    state and exception pieces next to them.
-5. Make the Go translator total, and have it build the Tolean IR, with a Go
-   extension for `int64` wrapping. Give Go an interpreter for its subset.
+5. Move the rest of the Go translator onto the Tolean IR and the Go
+   interpreter, as the [Go proofs plan](go-proofs.md) lists, and delete its
+   string translation.
 6. Take the rest of the shared parts out of the TypeScript code, now that Go
    uses them too: the evaluator with the value type as a parameter, and the
    proof plumbing. Taking them out before a second language uses them would
