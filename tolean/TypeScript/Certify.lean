@@ -210,8 +210,8 @@ def functionsOf (m : Module) : List (String × List Param × Option TypeExpr × 
 def certifiable (m : Module) : List String := (functionsOf m).map (·.1)
 
 /-- How deep the calls of `calls`, and the calls in their bodies, nest: the
-fuel that the interpreter needs to run them. The subset has no recursion, so
-the depth is finite. -/
+fuel that the interpreter needs to run them. `certify` refuses a function
+that calls itself, so the depth is finite. -/
 partial def callsDepth (m : Module) (calls : List String) : Nat :=
   let rec go (fuel : Nat) (calls : List String) : Nat :=
     match fuel with
@@ -396,6 +396,11 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
   let names := { names with namespacePrefix := r.full transNs ++ "." }
   let fns := certifiable m
   if fns.isEmpty then throw s!"{file}: there is no function to certify"
+  -- A theorem runs the interpreter with the fuel that the depth of the calls
+  -- needs, and a function that calls itself has no such depth.
+  for d in decls do
+    if let .function name _ _ body := d then
+      if body.calls ⟨"", name⟩ then throw s!"{file}: the recursive function {name} has no certificate yet"
   let nv := names.typeParam
   -- Every theorem is about every number model.
   let generic := s!"\{{nv} : Type} [tolean.TypeScript.JSNumber {nv}]"

@@ -190,7 +190,9 @@ becomes `proved`, and so does the parse.
 Most functions of the subset can get a certificate. A file has none yet when
 it declares a generic function or interface, or an interface that refers to
 itself, because the certifier would need an encoder for a type parameter or a
-recursive encoder. A `number` is a value of
+recursive encoder. A file with a function that calls itself has none either.
+A certificate runs the interpreter with as much fuel as the calls need, and
+the depth of a recursive call depends on its argument. A `number` is a value of
 the abstract model `JSNumber N` in the interpreter, as it is in the
 translation, so each theorem holds for every `N`, real doubles among them,
 and assumes none of the number laws.
@@ -360,6 +362,7 @@ the file, the line and the reason. It never approximates.
 | `type R = Record<K, V>` or `Readonly<Record<K, V>>`, where `K` is a literal union of strings | `structure R` with one field of type `V` for each string of `K`, in the order of `K`. A value has a property for each string, so an object literal must set every key, in that order, as for an interface. `r.a` and `r['a']` read a field. |
 | `r[k]`, where `r` is such a `Record` and `k` has the type `K` | `match k with \| K.a => r.a \| …`, which reads the field that `k` names |
 | `function` with typed parameters and return type | `def` |
+| A function that calls itself, where each call passes a part of one parameter, the same one in every call. A part is a field of it, a value that a test of `null`, `undefined` or a tag narrows it to, an element of an array in it, an element of a tuple in it, or a part of one of these. | The same `def`, followed by `termination_by p` for the parameter `p`, and `decreasing_by all_goals tolean_decreasing`. Each call passes a value that is smaller by `sizeOf`, and the tactic from `tolean.TypeScript.Decreasing` proves it, so Lean checks that the function ends. Each `match` in such a function names the equation of its value `_h'`, which the tactic reads. Lean defines the function by well-founded recursion, so a claim unfolds it with `unfold` or `simp`, not with `rfl` or `decide`. |
 | `const x = e`, `let x = e` | `let x := e` |
 | `x = e`, `x += e`, `x -= e`, `x *= e` on a `let` local | `let x := …` (shadowing) |
 | `x ??= e` on a `let` local of type `T \| null` | `let x := Option.or x e`. JS evaluates `e` only when `x` is `null`. Lean evaluates it either way, but the result is the same, because the subset has no side effects. |
@@ -538,8 +541,11 @@ Tolean rejects these, among others:
   both.
 - A `__proto__: v` key in an object literal. It sets the object's prototype,
   not a field.
-- Recursion, closures and arrow functions, classes, `async`, exceptions, and
-  mutable interface fields.
+- A function that calls itself on anything but a part of one parameter, the
+  same one in every call, and a call of a function that the file declares
+  later. Without such a part, Lean could not see that the function ends.
+- Closures and arrow functions, classes, `async`, exceptions, and mutable
+  interface fields.
 - Imports other than the named imports of [Imports](#imports).
 
 The files in `tests/typescript/corpus/translate/reject/` state in executable

@@ -455,6 +455,15 @@ structure Names where
   file : String := ""
   /-- The files that the file imports from, by path. -/
   imported : List (String × ImportedFile) := []
+  /-- Each `match` names the equation of its value `_h'`, as in
+  `match _h' : x with`. The proof that a recursive function ends needs it, to
+  know that a narrowed value is a part of the value it came from. No source
+  name has a `'`, so `_h'` hides none, and Lean does not warn that the body
+  leaves it unused, because it starts with `_`. -/
+  matchHyp : Bool := false
+
+/-- What the output writes after `match` and before the value. -/
+def Names.matchBinder (names : Names) : String := if names.matchHyp then "_h' : " else ""
 
 /-- How the output writes the declaration `r`, and the name under which it
 binds the type parameter when it is generic over it. -/
@@ -639,6 +648,158 @@ def Body.testsTag (name : String) : Body T E → Bool
   | .fold _ _ body _ rest _ => body.testsTag name || rest.testsTag name
   | .value _ | .state _ | .yield .. | .done .. | .exit .. => false
 
+/-! ### Recursion
+
+A function of the output that calls itself must end, or Lean refuses it.
+Tolean accepts a call of the function in its own body only on a part of one
+of its parameters: a field of it, a value that a `match` narrows it to, an
+element of a list in it, or a part of one of these. Each step makes the
+value smaller by `sizeOf`, so `termination_by` the parameter holds, and the
+tactic `tolean_decreasing` proves each call. These functions find that
+parameter. -/
+
+/-- How an expression relates to a parameter `p`: the names in `whole` hold
+`p` itself, and the names in `parts` hold a part of it. `some true` is a part
+of `p`, `some false` is `p` itself, and `none` is neither. -/
+def Expr.partOf (whole parts : List String) : Expr T E → Option Bool
+  | .var x => if parts.contains x then some true else if whole.contains x then some false else Option.none
+  | .field e _ _ | .proj e _ _ => (e.partOf whole parts).map fun _ => true
+  | .ascribe e _ => e.partOf whole parts
+  | _ => Option.none
+
+/-- The names after `x` is bound to a value with the relation `r` to `p`. -/
+def bindPart (whole parts : List String) (x : String) (r : Option Bool) : List String × List String :=
+  let whole := whole.erase x
+  let parts := parts.erase x
+  match r with
+  | some true => (whole, x :: parts)
+  | some false => (x :: whole, parts)
+  | Option.none => (whole, parts)
+
+/-- The names after a `match` narrows `x`: a part of `p` when `x` held `p`
+or a part of it. -/
+def narrowPart (whole parts : List String) (x : String) : List String × List String :=
+  if whole.contains x || parts.contains x then bindPart whole parts x (some true)
+  else (whole, parts)
+
+mutual
+
+/-- Each call of `self` in the expression passes a part of `p` as its
+argument `i`. -/
+def Expr.callsShrink (self : DeclRef) (i : Nat) (whole parts : List String) : Expr T E → Bool
+  | .call r args =>
+    (r != self || (args[i]?.bind (·.partOf whole parts)) == some true) &&
+      Expr.callsShrinkList self i whole parts args
+  | .listMethod _ items param _ body _ =>
+    let (w, ps) := bindPart whole parts param ((items.partOf whole parts).map fun _ => true)
+    items.callsShrink self i whole parts && body.callsShrink self i w ps
+  | .matchNull name whenNull whenValue =>
+    let (w, ps) := narrowPart whole parts name
+    whenNull.callsShrink self i whole parts && whenValue.callsShrink self i w ps
+  | .field e _ _ | .propNot e | .not e | .neg e | .isNone e | .isSome e | .inject _ _ e
+  | .decide e | .push _ e | .update _ _ e | .ascribe e _ | .proj e _ _ => e.callsShrink self i whole parts
+  | .ite a b c => a.callsShrink self i whole parts && b.callsShrink self i whole parts &&
+      c.callsShrink self i whole parts
+  | .coalesce a b _ | .intOp _ a b | .order _ a b | .division _ a b | .eq a b | .ne a b
+  | .propAnd a b | .propOr a b | .and a b | .or a b =>
+    a.callsShrink self i whole parts && b.callsShrink self i whole parts
+  | .list es _ | .tuple es | .ext _ es => Expr.callsShrinkList self i whole parts es
+  | .struct fields _ _ => Expr.callsShrinkFields self i whole parts fields
+  | .int _ | .none | .bool _ | .string _ | .var _ | .enumCase .. | .tagValue _ => true
+
+def Expr.callsShrinkList (self : DeclRef) (i : Nat) (whole parts : List String) :
+    List (Expr T E) → Bool
+  | [] => true
+  | e :: es => e.callsShrink self i whole parts && Expr.callsShrinkList self i whole parts es
+
+def Expr.callsShrinkFields (self : DeclRef) (i : Nat) (whole parts : List String) :
+    List (String × Expr T E) → Bool
+  | [] => true
+  | (_, e) :: fs => e.callsShrink self i whole parts && Expr.callsShrinkFields self i whole parts fs
+
+end
+
+/-- The names after `names` get new values that are not parts of `p`. -/
+def forgetParts (whole parts names : List String) : List String × List String :=
+  (whole.filter (!names.contains ·), parts.filter (!names.contains ·))
+
+/-- Each call of `self` in the body passes a part of `p` as its argument
+`i`. -/
+def Body.callsShrink (self : DeclRef) (i : Nat) (whole parts : List String) : Body T E → Bool
+  | .value e | .exit e _ => e.callsShrink self i whole parts
+  | .state _ | .yield .. | .done .. => true
+  | .let name e rest =>
+    let (w, ps) := bindPart whole parts name (e.partOf whole parts)
+    e.callsShrink self i whole parts && rest.callsShrink self i w ps
+  | .letArray name _ elems rest =>
+    let (w, ps) := bindPart whole parts name Option.none
+    Expr.callsShrinkList self i whole parts elems && rest.callsShrink self i w ps
+  | .ite c a b => c.callsShrink self i whole parts && a.callsShrink self i whole parts &&
+      b.callsShrink self i whole parts
+  | .matchNull name _ whenNull whenValue =>
+    let (w, ps) := narrowPart whole parts name
+    whenNull.callsShrink self i whole parts && whenValue.callsShrink self i w ps
+  | .matchTag name _ _ _ other whenTag whenOther =>
+    let (w, ps) := narrowPart whole parts name
+    whenTag.callsShrink self i w ps &&
+      if other.isSome then whenOther.callsShrink self i w ps else whenOther.callsShrink self i whole parts
+  | .letState names branch rest =>
+    let (w, ps) := forgetParts whole parts names
+    branch.callsShrink self i whole parts && rest.callsShrink self i w ps
+  | .fold names element body items rest _ =>
+    let (w, ps) := forgetParts whole parts names
+    let (wb, pb) := bindPart w ps element ((items.partOf whole parts).map fun _ => true)
+    items.callsShrink self i whole parts && body.callsShrink self i wb pb && rest.callsShrink self i w ps
+
+mutual
+
+/-- The expression calls `self`. -/
+def Expr.calls (self : DeclRef) : Expr T E → Bool
+  | .call r args => r == self || Expr.callsList self args
+  | .listMethod _ items _ _ body _ => items.calls self || body.calls self
+  | .matchNull _ a b | .coalesce a b _ | .intOp _ a b | .order _ a b | .division _ a b | .eq a b
+  | .ne a b | .propAnd a b | .propOr a b | .and a b | .or a b => a.calls self || b.calls self
+  | .field e _ _ | .propNot e | .not e | .neg e | .isNone e | .isSome e | .inject _ _ e
+  | .decide e | .push _ e | .update _ _ e | .ascribe e _ | .proj e _ _ => e.calls self
+  | .ite a b c => a.calls self || b.calls self || c.calls self
+  | .list es _ | .tuple es | .ext _ es => Expr.callsList self es
+  | .struct fields _ _ => Expr.callsFields self fields
+  | .int _ | .none | .bool _ | .string _ | .var _ | .enumCase .. | .tagValue _ => false
+
+def Expr.callsList (self : DeclRef) : List (Expr T E) → Bool
+  | [] => false
+  | e :: es => e.calls self || Expr.callsList self es
+
+def Expr.callsFields (self : DeclRef) : List (String × Expr T E) → Bool
+  | [] => false
+  | (_, e) :: fs => e.calls self || Expr.callsFields self fs
+
+end
+
+/-- The body calls `self`. -/
+def Body.calls (self : DeclRef) : Body T E → Bool
+  | .value e | .exit e _ => e.calls self
+  | .state _ | .yield .. | .done .. => false
+  | .let _ e rest => e.calls self || rest.calls self
+  | .letArray _ _ elems rest => Expr.callsList self elems || rest.calls self
+  | .ite c a b => c.calls self || a.calls self || b.calls self
+  | .matchNull _ _ a b | .matchTag _ _ _ _ _ a b | .letState _ a b => a.calls self || b.calls self
+  | .fold _ _ body items rest _ => body.calls self || items.calls self || rest.calls self
+
+/-- The parameter that each call of `self` in `body` makes smaller, the first
+one when there are several. `none` when the body does not call `self`, or
+when no parameter gets smaller in every call. -/
+def Body.decreasingParam? (self : DeclRef) (params : List String) (body : Body T E) : Option String :=
+  if body.calls self then (params.zipIdx.find? fun (p, i) => body.callsShrink self i [p] []).map (·.1)
+  else Option.none
+
+/-- The declaration is a function of the file `file` that calls itself, each
+time on a part of one parameter. The output then proves that it ends with
+`tolean.TypeScript.Decreasing`. -/
+def Decl.recursive (file : String) : Decl T E → Bool
+  | .function name params _ body => (body.decreasingParam? ⟨file, name⟩ (params.map (·.1))).isSome
+  | _ => false
+
 section
 variable [PrintTy T] [PrintOp E]
 
@@ -719,7 +880,7 @@ def Expr.print (names : Names) : Expr T E → String
   | .isNone a => s!"{argument (a.print names)}.isNone"
   | .isSome a => s!"{argument (a.print names)}.isSome"
   | .matchNull name whenNull whenValue =>
-    s!"(match {name} with | {leanName names "none"} => {whenNull.print names} | " ++
+    s!"(match {names.matchBinder}{name} with | {leanName names "none"} => {whenNull.print names} | " ++
       s!"{leanName names "some"} {name} => {whenValue.print names})"
   | .coalesce a b nullable =>
     let fn := leanName names (if nullable then "Option.or" else "Option.getD")
@@ -778,7 +939,7 @@ def Body.lines (names : Names) : Body T E → List String
     [s!"if {c.print names} then"] ++ indent (whenTrue.lines names) ++ ["else"] ++
       indent (whenFalse.lines names)
   | .matchNull name _ whenNull whenValue =>
-    [s!"match {name} with", s!"| {leanName names "none"} =>"] ++ indent (whenNull.lines names) ++
+    [s!"match {names.matchBinder}{name} with", s!"| {leanName names "none"} =>"] ++ indent (whenNull.lines names) ++
       [s!"| {leanName names "some"} {name} =>"] ++ indent (whenValue.lines names)
   | .matchTag name ref _ tag other whenTag whenOther =>
     let ctor (t : String) := s!"{(names.ref ref).1}.{memberName t}"
@@ -790,7 +951,7 @@ def Body.lines (names : Names) : Body T E → List String
           if n == name then Body.tagArms names name whenOther
           else s!"| {name} =>" :: indent (whenOther.lines names)
         | _ => s!"| {name} =>" :: indent (whenOther.lines names)
-    s!"match {name} with" :: s!"| {ctor tag} {name} =>" :: indent (whenTag.lines names) ++ rest
+    s!"match {names.matchBinder}{name} with" :: s!"| {ctor tag} {name} =>" :: indent (whenTag.lines names) ++ rest
   | .letState ns branch rest =>
     [s!"let {tuple ns} :="] ++ indent (branch.lines names) ++ rest.lines names
   | .fold ns element body items rest info =>
@@ -858,6 +1019,14 @@ def Decl.print (names : Names) : Decl T E → String
     let generic := generic ++ String.join (typeParams.map (s!" ({·} : Type)"))
     s!"abbrev {name}{generic} := {type.print names}"
   | .function name params ret body =>
+    -- A function that calls itself ends because each call passes a part of
+    -- one parameter. Lean then needs that parameter as the measure, and the
+    -- proof of each call.
+    let decreasing := body.decreasingParam? ⟨names.file, name⟩ (params.map (·.1))
+    let names := if decreasing.isSome then { names with matchHyp := true } else names
+    let termination := match decreasing with
+      | some p => [s!"termination_by {p}", "decreasing_by all_goals tolean_decreasing"]
+      | Option.none => []
     let generic := if names.generic then PrintTy.binders (T := T) names else ""
     -- The type parameters, in the order that the parameters name them. The
     -- translator refuses one that no parameter's type names.
@@ -870,7 +1039,7 @@ def Decl.print (names : Names) : Decl T E → String
       s!"({param} : {type.print names}{default})"
     "\n".intercalate
       (s!"def {name}{generic} {" ".intercalate leanParams} : {ret.print names} :=" ::
-        indent (body.lines names))
+        indent (body.lines names) ++ termination)
 
 end
 

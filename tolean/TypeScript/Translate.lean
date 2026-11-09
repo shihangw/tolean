@@ -1613,7 +1613,7 @@ def translateCall (fuel : Nat) (env : Env) (s : Span) (callee : Expr) (args : Li
         reject arg.span s!"Number.{test} needs a number operand (narrow a nullable value first)"
       return ⟨.numberTest form a.value, false, .boolean⟩
   let noCallMessage :=
-    "calls may name only functions declared earlier in this file, or imported (no recursion)"
+    "calls may name only the function itself, functions declared earlier in this file, or imported ones"
   let noCall {A : Type} : TM A := reject s noCallMessage
   let .ident _ name := callee | noCall
   if (name == "isNaN" || name == "isFinite") && !env.functions.any (·.name == name) then
@@ -2495,9 +2495,16 @@ def translateFunction (s : Span) (exported : Bool) (name : String) (typeParams :
         leanParams ++ [(paramName, ty.lean)], types ++ [ty])
   let ret ← isolated (translateType returnType)
   modify fun c => { c with currentFunction := name, returnType := ret }
-  let out ← isolated (translateStatements (← fuelLimit) env .ret (blockStatements body))
-  modify fun c => { c with
-    typeParams := [], functions := c.functions ++ [{ file := c.file, name, exported, typeParams, params := types, ret }] }
+  -- The body may call the function itself. Lean must see that the calls
+  -- end, so each must pass a part of one parameter, the same one in every
+  -- call.
+  let self : FnInfo := { file := ctx.file, name, exported, typeParams, params := types, ret }
+  let out ← isolated (translateStatements (← fuelLimit) { env with functions := env.functions ++ [self] } .ret
+    (blockStatements body))
+  if out.calls self.ref && (out.decreasingParam? self.ref (leanParams.map (·.1))).isNone then
+    reject s ("a function may call itself only on a part of one of its parameters, the same one in " ++
+      "every call: a field of it, a value that a test narrows it to, or an element of an array in it")
+  modify fun c => { c with typeParams := [], functions := c.functions ++ [self] }
   return .function name leanParams ret.lean out
 
 /-! ### The number model -/
@@ -2910,7 +2917,9 @@ def translateWith (file source ns : String) (target : Edition := .default)
   let usesString := decls.any IR.Decl.usesString
   let header :=
     (if names.generic then ["import tolean.TypeScript.Spec.Number"] else []) ++
-    (if usesString then ["import tolean.TypeScript.Spec.String"] else []) ++ imports ++
+    (if usesString then ["import tolean.TypeScript.Spec.String"] else []) ++
+    (if decls.any (IR.Decl.recursive names.file) then ["import tolean.TypeScript.Decreasing"] else []) ++
+    imports ++
     (if names.generic || usesString then ["", "open tolean.TypeScript"]
      else if imports.isEmpty then [] else [""])
   let text := "\n".intercalate
