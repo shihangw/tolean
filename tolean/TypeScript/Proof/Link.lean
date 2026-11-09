@@ -1,6 +1,9 @@
 import Lean
 import tolean.TypeScript.Proof.Module
 import tolean.TypeScript.IR.Equality
+import Lean.Elab.Tactic.Basic
+import Lean.Meta.AppBuilder
+import Lean.Meta.Tactic.Assert
 
 /-!
 The printer link for one file.
@@ -61,9 +64,9 @@ theorem runFold_foldl {α σ : Type} (fs : List (DeclRef × List String × IR.Bo
         IR.bindState names inner (upd s ρ) = some (upd (step ρ s x) ρ))
     (hdec : ∀ ρ, I ρ → upd (dec ρ) ρ = ρ) (xs : List α) (ρ : Eval.Env N) (hI : I ρ) :
     IR.Body.runFold fs fuel names element body ρ (xs.map encX) =
-      some (upd (xs.foldl (step ρ) (dec ρ)) ρ) := by
+      some (.normal (upd (xs.foldl (step ρ) (dec ρ)) ρ)) := by
   have key : ∀ (xs : List α) (s : σ), IR.Body.runFold fs fuel names element body (upd s ρ) (xs.map encX) =
-      some (upd (xs.foldl (step ρ) s) ρ) := by
+      some (.normal (upd (xs.foldl (step ρ) s) ρ)) := by
     intro xs
     induction xs with
     | nil => intro s; simp [IR.Body.runFold]
@@ -76,6 +79,46 @@ theorem runFold_foldl {α σ : Type} (fs : List (DeclRef × List String × IR.Bo
   have := key xs (dec ρ)
   rwa [hdec ρ hI] at this
 
+/-- How one step of `forIn` ends, as the evaluator gives it: a `done` is a
+`break`. -/
+def stepOutcome {σ : Type} : ForInStep σ → Eval.Env N → Eval.Outcome N
+  | .done _, ρ => .brk ρ
+  | .yield _, ρ => .normal ρ
+
+/-- A fold of the output whose body can `break`, and `forIn`, agree when one
+run of the body and one step of `forIn` agree. A certificate proves a lemma
+for each such loop from this one. -/
+theorem runFold_forIn {α σ : Type} (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
+    (names : List String) (element : String) (body : IR.Body) (encX : α → Val N)
+    (upd : σ → Eval.Env N → Eval.Env N) (dec : Eval.Env N → σ)
+    (step : Eval.Env N → α → σ → ForInStep σ) (I : Eval.Env N → Prop)
+    (hbody : ∀ ρ s x, I ρ → ∃ inner,
+      IR.Body.exec fs fuel ((element, encX x) :: upd s ρ) body = some (stepOutcome (step ρ x s) inner) ∧
+        IR.bindState names inner (upd s ρ) = some (upd (step ρ x s).value ρ))
+    (hdec : ∀ ρ, I ρ → upd (dec ρ) ρ = ρ) (xs : List α) (ρ : Eval.Env N) (hI : I ρ) :
+    IR.Body.runFold fs fuel names element body ρ (xs.map encX) =
+      some (.normal (upd (Id.run (forIn xs (dec ρ) (step ρ))) ρ)) := by
+  have key : ∀ (xs : List α) (s : σ), IR.Body.runFold fs fuel names element body (upd s ρ) (xs.map encX) =
+      some (.normal (upd (Id.run (forIn xs s (step ρ))) ρ)) := by
+    intro xs
+    induction xs with
+    | nil => intro s; simp [IR.Body.runFold]
+    | cons x xs ih =>
+      intro s
+      obtain ⟨inner, hex, hb⟩ := hbody ρ s x hI
+      cases hst : step ρ x s with
+      | done s' =>
+        rw [hst] at hex hb
+        simp only [List.map_cons, IR.Body.runFold, hex, stepOutcome, hb, ForInStep.value,
+          Option.bind_eq_bind, Option.bind_some, List.forIn_cons, hst]
+        rfl
+      | yield s' =>
+        rw [hst] at hex hb
+        simp only [List.map_cons, IR.Body.runFold, hex, stepOutcome, hb, ForInStep.value,
+          Option.bind_eq_bind, Option.bind_some, List.forIn_cons, hst]
+        exact ih s'
+  have := key xs (dec ρ)
+  rwa [hdec ρ hI] at this
 /-- A callback of the output and a Lean function agree on the elements of a
 list when they agree on each element. A certificate proves a lemma for each
 call of `map` from this one. -/
@@ -145,6 +188,79 @@ omit [JSNumber N] in
     (o.map enc).getD .undefined = Eval.encUndef enc o := by
   cases o <;> rfl
 
+/-- How one step of `forIn` ends in a loop that a `return` can end, where
+`getRet` reads the value to return from the state: with one, a `done` is a
+`return`, and without one it is a `break`. -/
+def retOutcome {R τ : Type} (encR : R → Val N) (getRet : τ → Option R) :
+    ForInStep τ → Eval.Env N → Eval.Outcome N
+  | .done t, ρ => match getRet t with
+    | some r => .ret (encR r)
+    | none => .brk ρ
+  | .yield _, ρ => .normal ρ
+
+/-- What a loop that a `return` can end gives for its final state `t`: the
+value to return, or the locals at its end. -/
+def retResult {R σ τ : Type} (encR : R → Val N) (getRet : τ → Option R) (getS : τ → σ)
+    (upd : σ → Eval.Env N → Eval.Env N) (ρ : Eval.Env N) (t : τ) : Eval.Outcome N :=
+  match getRet t with
+  | some r => .ret (encR r)
+  | none => .normal (upd (getS t) ρ)
+
+/-- A fold of the output whose body can `return`, and `forIn`, agree when one
+run of the body and one step of `forIn` agree. The state of `forIn` holds
+the value to return, which `getRet` reads, and the locals, which `getS`
+reads; `init` starts it with no value. A certificate proves a lemma for each
+such loop from this one. -/
+theorem runFold_forInRet {α σ τ R : Type} (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
+    (names : List String) (element : String) (body : IR.Body) (encX : α → Val N) (encR : R → Val N)
+    (getRet : τ → Option R) (getS : τ → σ) (init : σ → τ)
+    (upd : σ → Eval.Env N → Eval.Env N) (dec : Eval.Env N → σ)
+    (step : Eval.Env N → α → τ → ForInStep τ) (I : Eval.Env N → Prop)
+    (hinit : ∀ s, getRet (init s) = none ∧ getS (init s) = s)
+    (hbody : ∀ ρ s x, I ρ → ∃ inner,
+      IR.Body.exec fs fuel ((element, encX x) :: upd s ρ) body =
+        some (retOutcome encR getRet (step ρ x (init s)) inner) ∧
+      (getRet (step ρ x (init s)).value = none →
+        IR.bindState names inner (upd s ρ) = some (upd (getS (step ρ x (init s)).value) ρ)) ∧
+      ∀ t, step ρ x (init s) = .yield t → t = init (getS t) ∧ getRet t = none)
+    (hdec : ∀ ρ, I ρ → upd (dec ρ) ρ = ρ) (xs : List α) (ρ : Eval.Env N) (hI : I ρ) :
+    IR.Body.runFold fs fuel names element body ρ (xs.map encX) =
+      some (retResult encR getRet getS upd ρ (Id.run (forIn xs (init (dec ρ)) (step ρ)))) := by
+  have key : ∀ (xs : List α) (s : σ), IR.Body.runFold fs fuel names element body (upd s ρ) (xs.map encX) =
+      some (retResult encR getRet getS upd ρ (Id.run (forIn xs (init s) (step ρ)))) := by
+    intro xs
+    induction xs with
+    | nil => intro s; simp [IR.Body.runFold, retResult, (hinit s).1, (hinit s).2]
+    | cons x xs ih =>
+      intro s
+      obtain ⟨inner, hex, hb, hy⟩ := hbody ρ s x hI
+      cases hst : step ρ x (init s) with
+      | done t =>
+        rw [hst] at hex hb
+        cases hr : getRet t with
+        | some r =>
+          simp only [List.map_cons, IR.Body.runFold, hex, retOutcome, hr, Option.bind_eq_bind,
+            Option.bind_some, List.forIn_cons, hst]
+          simp [retResult, hr]
+        | none =>
+          simp only [ForInStep.value] at hb
+          simp only [List.map_cons, IR.Body.runFold, hex, retOutcome, hr, hb hr, Option.bind_eq_bind,
+            Option.bind_some, List.forIn_cons, hst]
+          simp [retResult, hr]
+      | yield t =>
+        obtain ⟨ht, hr⟩ := hy t hst
+        rw [hst] at hex hb
+        simp only [ForInStep.value] at hb
+        have hstep : Id.run (forIn (x :: xs) (init s) (step ρ)) = Id.run (forIn xs t (step ρ)) := by
+          simp [List.forIn_cons, hst]
+        rw [hstep]
+        simp only [List.map_cons, IR.Body.runFold, hex, retOutcome, hb hr, Option.bind_eq_bind,
+          Option.bind_some]
+        have := ih (getS t)
+        rwa [← ht] at this
+  have := key xs (dec ρ)
+  rwa [hdec ρ hI] at this
+
 end tolean.TypeScript.Proof
 
 namespace tolean.TypeScript.IR
@@ -186,5 +302,31 @@ macro_rules
       -- Two `match`es that differ only in their auxiliary functions, as a
       -- loop lemma's step and the printed definition can, agree by `rfl`.
       all_goals (try rfl)))
+
+open Lean Meta Elab Tactic in
+/-- For two hypotheses `h₁ : a = b` and `h₂ : a' = b'`, where `a` and `a'`
+apply the same function and agree by unfolding, add `b = b'`. A loop lemma's
+step and the printed definition's step are such a pair when they hold a
+`match`, because each `match` has its own auxiliary function. After a split
+on the result of each loop, this lets `simp_all` see that the two results
+are the same. -/
+elab "link_eqs" : tactic => withMainContext do
+  let hyps ← getLocalHyps
+  let mut facts : Array Lean.Expr := #[]
+  -- One fact for each pair: both directions would make `simp_all` loop.
+  for i in [0:hyps.size] do
+    for j in [i + 1:hyps.size] do
+      let h₁ := hyps[i]!
+      let h₂ := hyps[j]!
+      let some (_, a, _) := (← instantiateMVars (← inferType h₁)).eq? | continue
+      let some (_, a', _) := (← instantiateMVars (← inferType h₂)).eq? | continue
+      if a == a' || !a.getAppFn.isConst || a.getAppFn != a'.getAppFn then continue
+      if ← withNewMCtxDepth (isDefEq a a') then
+        facts := facts.push (← mkEqTrans (← mkEqSymm h₁) h₂)
+  let mut g ← getMainGoal
+  for p in facts do
+    let (_, g') ← (← g.assert `link_eq (← inferType p) p).intro1P
+    g := g'
+  replaceMainGoal [g]
 
 end tolean.TypeScript.IR

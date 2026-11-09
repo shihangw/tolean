@@ -143,7 +143,7 @@ def Expr.eval (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
       if params.length != vs.length then none
       match ← Body.exec fs fuel (params.zip vs).reverse body with
       | .ret v => some v
-      | .normal _ => none
+      | .normal _ | .brk _ | .cont _ => none
   | .list elems _ => do return .list (← Expr.evalList fs fuel ρ elems)
   | .struct fields _ => do return .obj (← Expr.evalFields fs fuel ρ fields)
   -- A value of `T | null` is never `undefined`. JS tells `undefined` from
@@ -264,7 +264,9 @@ branch or a loop body, with the bindings it has made. -/
 def Body.exec (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : Env N) :
     Body → Option (Outcome N)
   | .value e => do return .ret (← Expr.eval fs fuel ρ e)
-  | .state _ => some (.normal ρ)
+  | .state _ | .yield .. => some (.normal ρ)
+  | .done .. => some (.brk ρ)
+  | .exit e _ => do return .ret (← Expr.eval fs fuel ρ e)
   | .let name e rest => do Body.exec fs fuel ((name, ← Expr.eval fs fuel ρ e) :: ρ) rest
   | .letArray name _ elems rest => do
     Body.exec fs fuel ((name, .list (← Expr.evalList fs fuel ρ elems)) :: ρ) rest
@@ -286,21 +288,28 @@ def Body.exec (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
   | .letState names branch rest => do
     match ← Body.exec fs fuel ρ branch with
     | .normal inner => Body.exec fs fuel (← bindState names inner ρ) rest
-    | .ret _ => none
+    | .ret _ | .brk _ | .cont _ => none
   | .fold names element body items rest _ => do
     let .list vs ← Expr.eval fs fuel ρ items | none
-    Body.exec fs fuel (← Body.runFold fs fuel names element body ρ vs) rest
+    match ← Body.runFold fs fuel names element body ρ vs with
+    | .normal ρ' => Body.exec fs fuel ρ' rest
+    | .ret v => some (.ret v)
+    | .brk _ | .cont _ => none
 termination_by b => (fuel, sizeOf b, 0)
 
 /-- `List.foldl` over `items` with the step `fun (names) element => body`: the
-bindings of `names` after each element, on top of `ρ`. -/
+bindings of `names` after each element, on top of `ρ`. A `break` in the body
+ends the loop with the bindings it has then, as `forIn` stops at a
+`ForInStep.done`. A `return` in the body ends it with the value to return. -/
 def Body.runFold (fs : List (DeclRef × List String × Body)) (fuel : Nat) (names : List String)
-    (element : String) (body : Body) (ρ : Env N) : List (Val N) → Option (Env N)
-  | [] => some ρ
+    (element : String) (body : Body) (ρ : Env N) : List (Val N) → Option (Outcome N)
+  | [] => some (.normal ρ)
   | x :: xs => do
     match ← Body.exec fs fuel ((element, x) :: ρ) body with
     | .normal inner => Body.runFold fs fuel names element body (← bindState names inner ρ) xs
-    | .ret _ => none
+    | .brk inner => return .normal (← bindState names inner ρ)
+    | .ret v => some (.ret v)
+    | .cont _ => none
 termination_by xs => (fuel, sizeOf body, xs.length + 1)
 
 end
@@ -312,6 +321,6 @@ def runIn (fs : List (DeclRef × List String × Body)) (key : DeclRef) (args : L
   if params.length != args.length then none
   match ← Body.exec fs fuel (params.zip args).reverse body with
   | Outcome.ret v => some v
-  | Outcome.normal _ => none
+  | Outcome.normal _ | Outcome.brk _ | Outcome.cont _ => none
 
 end tolean.TypeScript.IR
