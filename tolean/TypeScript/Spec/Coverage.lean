@@ -239,6 +239,9 @@ def sections : List Section := [
     [``Proof.evalFilter_sim]⟩,
   ⟨"sec-array.prototype.find", "23.1.3.9", "Array.prototype.find",
     [``Proof.evalFind_sim]⟩,
+  ⟨"sec-array.prototype.findindex", "23.1.3.10", "Array.prototype.findIndex",
+    [``Proof.evalFindIdx_sim]⟩,
+  ⟨"sec-array.prototype.findlast", "23.1.3.11", "Array.prototype.findLast", []⟩,
   ⟨"sec-array.prototype.map", "23.1.3.21", "Array.prototype.map",
     [``Proof.evalMap_sim, ``Proof.eval_mapIdx, ``Proof.evalMapIdx_sim]⟩,
   ⟨"sec-array.prototype.push", "23.1.3.23", "Array.prototype.push",
@@ -573,7 +576,8 @@ def extras : List Group := [
   ⟨"Certificates: callbacks and the List functions", [``Proof.evalMap_map, ``Proof.evalMapIdx_from,
     ``Proof.evalMapIdx_mapIdx, ``Proof.evalFilter_filter,
     ``Proof.evalFind_find, ``Proof.evalFind_true, ``Proof.evalFind_false, ``Proof.find?_isSome,
-    ``Proof.find?_not_isNone, ``Proof.getD_map_undefined]⟩]
+    ``Proof.find?_not_isNone, ``Proof.getD_map_undefined, ``Proof.evalFindIdx_from,
+    ``Proof.evalFindIdx_findIdx]⟩]
 
 open Meta in
 /-- The theorems of the TypeScript modules that the index does not list. A

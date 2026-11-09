@@ -1271,6 +1271,9 @@ def methodVal (method : IR.ListMethod) (ρ : Eval.Env N) (name : String) (body :
   | .all => do return .bool (← Eval.evalFind m fuel ρ name body false items).isNone
   | .find => do return (← Eval.evalFind m fuel ρ name body true items).getD .undefined
   | .mapIdx index => do return .list (← Eval.evalMapIdx m fuel ρ name index body 0 items)
+  | .findIndex => do
+    return .num (JSNumber.ofSafeInt (((← Eval.evalFindIdx m fuel ρ name body 0 items).map Int.ofNat).getD (-1)))
+  | .findLast => do return (← Eval.evalFind m fuel ρ name body true items.reverse).getD .undefined
 
 theorem eval_arrayMethod (sp sp' sa : Span) (par : Bool) (recv : Expr) (name : String) (p : Param)
     (body : Expr) (method : IR.ListMethod) (hm : listMethod? name = some method)
@@ -1285,6 +1288,10 @@ theorem eval_arrayMethod (sp sp' sa : Span) (par : Bool) (recv : Expr) (name : S
       else if name = "some" then (Eval.evalFind m fuel ρ p.name body true items).bind (fun r => some (Val.bool r.isSome))
       else if name = "every" then (Eval.evalFind m fuel ρ p.name body false items).bind (fun r => some (Val.bool r.isNone))
       else if name = "find" then (Eval.evalFind m fuel ρ p.name body true items).bind (fun r => some (r.getD .undefined))
+      else if name = "findIndex" then (Eval.evalFindIdx m fuel ρ p.name body 0 items).bind
+        (fun r => some (Val.num (JSNumber.ofSafeInt ((r.map Int.ofNat).getD (-1)))))
+      else if name = "findLast" then
+        (Eval.evalFind m fuel ρ p.name body true items.reverse).bind (fun r => some (r.getD .undefined))
       else none) = methodVal m fuel method ρ p.name body items := by
     intro items
     unfold listMethod? at hm
@@ -1297,6 +1304,10 @@ theorem eval_arrayMethod (sp sp' sa : Span) (par : Bool) (recv : Expr) (name : S
     by_cases h4 : name = "every" <;> simp [h4] at hm ⊢
     · subst hm; rfl
     by_cases h5 : name = "find" <;> simp [h5] at hm ⊢
+    · subst hm; rfl
+    by_cases h6 : name = "findIndex" <;> simp [h6] at hm ⊢
+    · subst hm; rfl
+    by_cases h7 : name = "findLast" <;> simp [h7] at hm ⊢
     subst hm; rfl
   have hr' : ∀ s, recv ≠ .ident s "Number" := by
     intro s h; subst h; simp [Expr.namesNumber] at hr
@@ -1338,6 +1349,9 @@ def outMethodVal (method : IR.ListMethod) (ρ : Eval.Env N) (name : String) (bod
   | .all => do return .bool (← IR.Expr.evalFind fs fuel ρ name body false items).isNone
   | .find => do return (← IR.Expr.evalFind fs fuel ρ name body true items).getD .undefined
   | .mapIdx index => do return .list (← IR.Expr.evalMapIdx fs fuel ρ name index body 0 items)
+  | .findIndex => do
+    return .num (JSNumber.ofSafeInt (((← IR.Expr.evalFindIdx fs fuel ρ name body 0 items).map Int.ofNat).getD (-1)))
+  | .findLast => do return (← IR.Expr.evalFind fs fuel ρ name body true items.reverse).getD .undefined
 
 theorem out_listMethod {method : IR.ListMethod} {items : IR.Expr} {name : String} {t : IR.Ty}
     {body : IR.Expr} {ρ : Eval.Env N} {v : Val N}
@@ -1412,6 +1426,23 @@ theorem evalFind_sim {ρs ρo : Eval.Env N} {x : String} {body : Expr} {code : I
       · simp [hbw] at h ⊢; exact h
       · simp [hbw] at h ⊢; exact evalFind_sim hb xs r h
 
+theorem evalFindIdx_sim {ρs ρo : Eval.Env N} {x : String} {body : Expr} {code : IR.Expr}
+    (hb : BodySim m fs fuel ρs ρo x body code) :
+    ∀ xs start r, IR.Expr.evalFindIdx fs fuel ρo x code start xs = some r →
+      Eval.evalFindIdx m fuel ρs x body start xs = some r
+  | [], _, r, h => by simp [IR.Expr.evalFindIdx] at h; subst h; simp [Eval.evalFindIdx]
+  | w :: xs, start, r, h => by
+    simp only [IR.Expr.evalFindIdx] at h
+    cases hw : IR.Expr.eval fs fuel ((x, w) :: ρo) code with
+    | none => simp [hw] at h
+    | some u =>
+      cases u <;> simp [hw] at h
+      rename_i b
+      simp only [Eval.evalFindIdx, hb w _ hw, Option.bind_eq_bind, Option.bind_some, Val.truthy]
+      cases b
+      · simp at h ⊢; exact evalFindIdx_sim hb xs (start + 1) r h
+      · simp at h ⊢; exact h
+
 theorem methodVal_sim {ρs ρo : Eval.Env N} {x : String} {body : Expr} {code : IR.Expr}
     (hb : BodySim m fs fuel ρs ρo x body code) (method : IR.ListMethod) (hm : ∀ i, method ≠ .mapIdx i)
     (xs : List (Val N)) (v : Val N)
@@ -1428,6 +1459,10 @@ theorem methodVal_sim {ρs ρo : Eval.Env N} {x : String} {body : Expr} {code : 
        simp [evalFind_sim m fs fuel hb xs _ hr, h])
     | (cases hr : IR.Expr.evalFind fs fuel ρo x code false xs <;> simp [hr] at h
        simp [evalFind_sim m fs fuel hb xs _ hr, h])
+    | (cases hr : IR.Expr.evalFind fs fuel ρo x code true xs.reverse <;> simp [hr] at h
+       simp [evalFind_sim m fs fuel hb xs.reverse _ hr, h])
+    | (cases hr : IR.Expr.evalFindIdx fs fuel ρo x code 0 xs <;> simp [hr] at h
+       simp [evalFindIdx_sim m fs fuel hb xs 0 _ hr, h])
     | exact absurd rfl (hm _)
 
 omit [JSNumber N] in
@@ -1501,14 +1536,14 @@ theorem listMethod?_ne_mapIdx {name : String} {method : IR.ListMethod} (h : list
     (i : String) : method ≠ .mapIdx i := by
   unfold listMethod? at h
   intro hm; subst hm
-  split at h <;> (try split at h) <;> (try split at h) <;> (try split at h) <;> (try split at h) <;> simp at h
+  repeat' split at h
+  all_goals simp at h
 
 omit [JSNumber N] in
 theorem listMethod?_map {name : String} (h : listMethod? name = some .map) : name = "map" := by
   unfold listMethod? at h
-  split at h
-  · rename_i h1; simpa using h1
-  · split at h <;> (try split at h) <;> (try split at h) <;> (try split at h) <;> simp at h
+  repeat' split at h
+  all_goals first | (simp at h; done) | simp_all
 
 omit [JSNumber N] in
 theorem callbackOf_some {args : List Expr} {p : Param} {body : Expr}

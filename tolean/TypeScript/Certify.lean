@@ -659,12 +659,17 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
             s!"evalMapIdx_mapIdx fs {fuel} ρ {str param} {str index} _ {encX} {encY} {fn}")
         | .filter => ("evalFilter", "", s!"List.map {encX} (List.filter {fn} items)",
             s!"evalFilter_filter fs {fuel} ρ {str param} _ {encX} {fn}")
-        | .any | .find => ("evalFind", " true", s!"Option.map {encX} (List.find? {fn} items)",
+        -- `findLast` is `find` on the reversed list, which `link_tac` writes as
+        -- `List.map encX` of the reversed elements, so the same lemma applies.
+        | .any | .find | .findLast => ("evalFind", " true", s!"Option.map {encX} (List.find? {fn} items)",
             s!"evalFind_true fs {fuel} ρ {str param} _ {encX} {fn}")
+        | .findIndex => ("evalFindIdx", "", s!"List.findIdx? {fn} items",
+            s!"evalFindIdx_findIdx fs {fuel} ρ {str param} _ {encX} {fn}")
         | .all => ("evalFind", " false", s!"Option.map {encX} (List.find? (fun x => !({fn} x)) items)",
             s!"evalFind_false fs {fuel} ρ {str param} _ {encX} {fn}")
       let (indexArg, start, intros) := match method with
         | .mapIdx index => (s!" {str index}", " 0", s!"{index} x")
+        | .findIndex => ("", " 0", "x")
         | _ => ("", "", "x")
       let itemsTy := (IR.Ty.list elem).print names
       let vars := ("x", elem) :: scope.zipIdx.map fun ((_, t), i) => (s!"v{i}", t)

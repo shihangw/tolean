@@ -1290,6 +1290,8 @@ def listMethod? (name : String) : Option IR.ListMethod :=
   else if name == "some" then some .any
   else if name == "every" then some .all
   else if name == "find" then some .find
+  else if name == "findIndex" then some .findIndex
+  else if name == "findLast" then some .findLast
   else none
 
 /-- The receiver and the method of a call such as `xs.map(…)`, when the
@@ -1349,11 +1351,13 @@ def callbackResult (s bodySpan : Span) (method : IR.ListMethod) (elem body : Ty)
   unless body == .boolean do reject bodySpan "the callback must give a boolean"
   match method with
   | .filter => return .array elem
-  | .find =>
+  | .find | .findLast =>
+    if method == .findLast then requireFeature s .arrayFindLast
     -- The output has one `none` for `undefined` and `null`.
     if elem.isNullable || elem matches .optional _ then
       reject s "'find' on an array of nullable values could give null or undefined"
     return .optional elem
+  | .findIndex => return .number
   | _ => return .boolean
 
 /-- The type of `x.f1.f2…` after `?.`, where `x` has the interface `ref`:

@@ -327,7 +327,12 @@ export class Gen {
         // default then.
         const same_ = arrays.filter((a) => same(a.elem, t));
         if (same_.length > 0) {
-          options.push(() => `(${call('find', this.pick(same_), (inner) => this.expr(BOOLEAN, inner, depth))} ?? ${this.expr(t, vars, depth)})`);
+          options.push(() => `(${call(this.pick(['find', 'findLast']), this.pick(same_), (inner) => this.expr(BOOLEAN, inner, depth))} ?? ${this.expr(t, vars, depth)})`);
+        }
+        // `findIndex` gives the index of the first element that passes, a
+        // number, or -1.
+        if (t.k === 'number') {
+          options.push(() => call('findIndex', this.pick(arrays), (inner) => this.expr(BOOLEAN, inner, depth)));
         }
         break;
       }

@@ -521,6 +521,14 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     else if method == "every" then
       return .bool (← evalFind m fuel env p.name body false items).isNone
     else if method == "find" then return (← evalFind m fuel env p.name body true items).getD .undefined
+    -- `findIndex` (§23.1.3.10) gives the index of the element that `find`
+    -- finds, or `-1`, and the index is a safe integer. `findLast`
+    -- (§23.1.3.11) calls the callback on the elements from the last to the
+    -- first.
+    else if method == "findIndex" then
+      return .num (JSNumber.ofSafeInt (((← evalFindIdx m fuel env p.name body 0 items).map Int.ofNat).getD (-1)))
+    else if method == "findLast" then
+      return (← evalFind m fuel env p.name body true items.reverse).getD .undefined
     else none
   -- `xs.map((x, i) => e)`: `map` passes the index too, as a number
   -- (ECMA-262 §23.1.3.21, step 6.c.ii). An array has fewer than 2^32
@@ -612,6 +620,17 @@ def evalFilter (m : Scope) (fuel : Nat) (env : Env N) (name : String) (body : Ex
     let keep := (← eval m fuel ((name, x) :: env) body).truthy
     let rest ← evalFilter m fuel env name body xs
     return if keep then x :: rest else rest
+termination_by xs => (fuel, sizeOf body, xs.length + 1)
+
+/-- The position of the first of `items` for which `ToBoolean` of the
+callback `(name) => body` is true, where the first of `items` is at
+`start`, or none. The callback does not run on the elements after it. -/
+def evalFindIdx (m : Scope) (fuel : Nat) (env : Env N) (name : String) (body : Expr) (start : Nat) :
+    List (Val N) → Option (Option Nat)
+  | [] => some none
+  | x :: xs => do
+    if (← eval m fuel ((name, x) :: env) body).truthy then return some start
+    evalFindIdx m fuel env name body (start + 1) xs
 termination_by xs => (fuel, sizeOf body, xs.length + 1)
 
 /-- The first of `items` for which `ToBoolean` of the callback

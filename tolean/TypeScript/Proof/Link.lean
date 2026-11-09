@@ -157,6 +157,32 @@ theorem evalMapIdx_mapIdx {α β : Type} (fs : List (DeclRef × List String × I
     IR.Expr.evalMapIdx fs fuel ρ param index body 0 (xs.map encX) = some ((xs.mapIdx f).map encY) := by
   simpa using evalMapIdx_from fs fuel ρ param index body encX encY f hb xs 0
 
+/-- The position of the first element for which `body` is true, as
+`List.findIdx?` finds it, where the first element is at `start`. -/
+theorem evalFindIdx_from {α : Type} (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
+    (ρ : Eval.Env N) (param : String) (body : IR.Expr) (encX : α → Val N) (p : α → Bool)
+    (hb : ∀ x, IR.Expr.eval fs fuel ((param, encX x) :: ρ) body = some (.bool (p x))) :
+    ∀ (xs : List α) (start : Nat), IR.Expr.evalFindIdx fs fuel ρ param body start (xs.map encX) =
+      some ((xs.findIdx? p).map (· + start))
+  | [], _ => by simp [IR.Expr.evalFindIdx]
+  | x :: xs, start => by
+    simp only [List.map_cons, IR.Expr.evalFindIdx, hb x, Option.bind_eq_bind, Option.bind_some,
+      List.findIdx?_cons]
+    cases p x
+    · simp only [Bool.false_eq_true, if_false, evalFindIdx_from fs fuel ρ param body encX p hb xs (start + 1),
+        Option.map_map]
+      have key : (fun k => k + (start + 1)) = ((fun k => k + start) ∘ fun i => i + 1) := by
+        funext k; simp only [Function.comp_apply]; omega
+      simp [key]
+    · simp
+
+/-- The same from the first element: `findIndex` is `List.findIdx?`. -/
+theorem evalFindIdx_findIdx {α : Type} (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
+    (ρ : Eval.Env N) (param : String) (body : IR.Expr) (encX : α → Val N) (p : α → Bool)
+    (hb : ∀ x, IR.Expr.eval fs fuel ((param, encX x) :: ρ) body = some (.bool (p x))) (xs : List α) :
+    IR.Expr.evalFindIdx fs fuel ρ param body 0 (xs.map encX) = some (xs.findIdx? p) := by
+  simpa using evalFindIdx_from fs fuel ρ param body encX p hb xs 0
+
 /-- The same for `filter`. -/
 theorem evalFilter_filter {α : Type} (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
     (ρ : Eval.Env N) (param : String) (body : IR.Expr) (encX : α → Val N) (p : α → Bool)
@@ -314,13 +340,14 @@ macro_rules
   | `(tactic| link_tac [$defs,*]) =>
     `(tactic| (
       simp [runIn, functionsOf, functions, Body.exec, Body.runFold, Expr.eval, Expr.evalList,
-        Expr.evalFields, Expr.evalMap, Expr.evalMapIdx, Expr.evalFilter, Expr.evalFind, bindState, eqVal,
+        Expr.evalFields, Expr.evalMap, Expr.evalMapIdx, Expr.evalFilter, Expr.evalFind, Expr.evalFindIdx,
+        bindState, eqVal, ← List.map_reverse,
         tolean.IR.IntOp.apply, tolean.IR.Order.apply,
         tolean.IR.Division.apply, ExprExt.apply, NumberOp.apply, NumberConstant.value,
         NumberTest.apply, tagOf, Eval.Val.typeOf, Eval.Env.set, Eval.getProp, Eval.getKey_ofString, Eval.getPath,
         Eval.objectPrototypeNames, List.lookup, DeclRef.beq_def, -List.map_map,
         -Bool.if_true_left, -Bool.if_false_right, -Bool.if_false_left, -Bool.if_true_right, $defs,*]
-      all_goals repeat' (split_find <;> simp [-List.map_map, $defs,*])
+      all_goals repeat' (split_find <;> simp [-List.map_map, ← List.map_reverse, $defs,*])
       all_goals repeat' (split <;> (try simp_all [bindState, eqVal, tolean.IR.IntOp.apply,
         tolean.IR.Order.apply, tolean.IR.Division.apply, ExprExt.apply, NumberOp.apply,
         NumberTest.apply, tagOf, Eval.Val.typeOf, Eval.Env.set, Eval.getProp, Eval.getKey_ofString, Eval.getPath,
