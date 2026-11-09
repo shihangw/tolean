@@ -43,8 +43,8 @@ inductive Ty where
   | optional (value : Ty)
   | array (elem : Ty)
   /-- An interface of the program: one that the file declares, or one that it
-  imports. -/
-  | struct (ref : DeclRef)
+  imports. `args` are the types of a generic interface's type parameters. -/
+  | struct (ref : DeclRef) (args : List Ty)
   /-- A literal union of strings, `type T = 'a' | 'b'`, of the program. -/
   | enum (ref : DeclRef)
   /-- A tagged union of interfaces of the program, `type T = A | B`, narrowed
@@ -52,19 +52,68 @@ inductive Ty where
   | tagged (ref : DeclRef) (tags : List String)
   /-- The type of a tag field, one string literal such as `'circle'`. -/
   | literal (value : String)
-deriving BEq, Repr, Inhabited
+  /-- A tuple `[A, B]` of two elements or more. -/
+  | tuple (elems : List Ty)
+  /-- A type parameter of a generic function, such as `T` in
+  `function first<T>(xs: T[]): T | null`. -/
+  | param (name : String)
+deriving Repr, Inhabited
+
+-- `Ty` holds lists of itself, so Lean's derived `BEq` would not reduce in the
+-- kernel, which runs the translator for a certificate. These recurse on the
+-- type instead.
+mutual
+
+def Ty.beq : Ty → Ty → Bool
+  | .bigint, .bigint | .number, .number | .boolean, .boolean | .string, .string | .null, .null => true
+  | .nullable a, .nullable b | .optional a, .optional b | .array a, .array b => Ty.beq a b
+  | .struct a as, .struct b bs => a == b && Ty.beqList as bs
+  | .enum a, .enum b => a == b
+  | .tagged a ts, .tagged b us => a == b && ts == us
+  | .literal a, .literal b => a == b
+  | .tuple as, .tuple bs => Ty.beqList as bs
+  | .param a, .param b => a == b
+  | _, _ => false
+
+def Ty.beqList : List Ty → List Ty → Bool
+  | [], [] => true
+  | a :: as, b :: bs => Ty.beq a b && Ty.beqList as bs
+  | _, _ => false
+
+end
+
+instance : BEq Ty := ⟨Ty.beq⟩
+
+mutual
+
+/-- A value of type `source` has the Lean type of `target` as it is: the same
+type, `null` where `T | null` is expected, a union narrowed to some of its
+members, or a tuple of such elements. A `T` where `T | null` is expected is
+not one: Lean converts a value to `Option T`, but not each element of a pair.
+-/
+def Ty.sameLean (source target : Ty) : Bool :=
+  source == target ||
+    match target, source with
+    | .nullable _, .null => true
+    | .tagged ref tags, .tagged ref' tags' => ref' == ref && tags'.all tags.contains
+    | .tuple ts, .tuple ss => Ty.sameLeanList ss ts
+    | _, _ => false
+
+def Ty.sameLeanList : List Ty → List Ty → Bool
+  | [], [] => true
+  | s :: ss, t :: ts => s.sameLean t && Ty.sameLeanList ss ts
+  | _, _ => false
+
+end
 
 /-- A value of type `source` can stand where `target` is expected. Arrays and
-structures must match exactly. -/
+structures must match exactly. A tuple can stand where each of its elements
+has the Lean type of its place: `[null, x]` is a `[T | null, T]`, but a tuple
+of type `[T, T]` is not. -/
 def Ty.assignableTo (source target : Ty) : Bool :=
-  source == target ||
+  source.sameLean target ||
     match target with
-    | .nullable value => source == .null || source == value
-    -- A union narrowed to some of its members is a value of the union.
-    | .tagged ref tags =>
-      match source with
-      | .tagged ref' tags' => ref' == ref && tags'.all tags.contains
-      | _ => false
+    | .nullable value => source == value
     | _ => false
 
 /-- The type of `c ? a : b`. -/
@@ -94,10 +143,15 @@ def Ty.isEqPrimitive : Ty → Bool
   | .boolean | .string | .bigint | .enum _ => true
   | _ => false
 
-/-- An object, which `===` compares by identity. -/
+/-- An object, which `===` compares by identity. A tuple is an array. -/
 def Ty.isObject : Ty → Bool
-  | .array _ | .struct _ | .tagged .. => true
+  | .array _ | .struct .. | .tagged .. | .tuple _ => true
   | _ => false
+
+/-- The element types of a tuple type. -/
+def Ty.tupleElems? : Ty → Option (List Ty)
+  | .tuple ts => some ts
+  | _ => none
 
 /-- What `typeof` gives for a value of type `t`, when `t` is a primitive type
 that a union of primitive types may have as a member. -/
@@ -107,6 +161,8 @@ def Ty.typeOf? : Ty → Option String
   | .boolean => some "boolean"
   | .string => some "string"
   | _ => none
+
+mutual
 
 /-- The Lean type that the output gives a value of type `t`. -/
 def Ty.lean : Ty → IR.Ty
@@ -118,10 +174,77 @@ def Ty.lean : Ty → IR.Ty
   | .nullable t => .option t.lean
   | .optional t => .optional t.lean
   | .array t => .list t.lean
-  | .struct ref => .struct ref
+  | .struct ref [] => .struct ref
+  | .struct ref (a :: as) => .app ref (Ty.leanList (a :: as))
   | .enum ref => .enum ref
   | .tagged ref _ => .tagged ref
   | .literal value => .tag value
+  | .tuple ts => .tuple (Ty.leanList ts)
+  | .param name => .param name
+
+def Ty.leanList : List Ty → List IR.Ty
+  | [] => []
+  | t :: ts => t.lean :: Ty.leanList ts
+
+end
+
+/-- `t` names a type parameter. -/
+def Ty.isGeneric (t : Ty) : Bool := !t.lean.typeVars.isEmpty
+
+/-- The type that the context expects of a value where `t` is expected, while
+the type parameters that `t` names are not fixed yet: `t` itself when it names
+none, and a tuple's shape, so that an array literal is still read as a tuple.
+Each element of the tuple is then read on its own terms. -/
+def Ty.callExpected (t : Ty) : Option Ty :=
+  if !t.isGeneric then some t
+  else if t matches .tuple _ then some t
+  else none
+
+/-- A type that a type parameter may stand for. `T | null` stands for one
+Lean type, `Option T`, so `T` may not be nullable itself: `Option (Option U)`
+has two values where JS has one `null`. A tag literal is not a type of its
+own in the output. -/
+def Ty.bindable : Ty → Bool
+  | .null | .nullable _ | .optional _ | .literal _ => false
+  | _ => true
+
+mutual
+
+/-- `t` with each type parameter that `sol` gives a type replaced by it. -/
+def Ty.subst (sol : List (String × Ty)) : Ty → Ty
+  | .param name => (sol.lookup name).getD (.param name)
+  | .nullable t => .nullable (t.subst sol)
+  | .optional t => .optional (t.subst sol)
+  | .array t => .array (t.subst sol)
+  | .tuple ts => .tuple (Ty.substList sol ts)
+  | .struct ref args => .struct ref (Ty.substList sol args)
+  | t => t
+
+def Ty.substList (sol : List (String × Ty)) : List Ty → List Ty
+  | [] => []
+  | t :: ts => t.subst sol :: Ty.substList sol ts
+
+end
+
+mutual
+
+/-- `sol`, the types found so far for the type parameters of a call, with the
+ones that an argument of type `t` gives for a parameter of type `pattern`. A
+parameter of type `T | null` takes `null` without fixing `T`. -/
+def Ty.unify (sol : List (String × Ty)) : Ty → Ty → List (String × Ty)
+  | .param name, t => if (sol.lookup name).isNone && t.bindable then sol ++ [(name, t)] else sol
+  | .nullable p, .nullable t => Ty.unify sol p t
+  | .nullable p, t => Ty.unify sol p t
+  | .optional p, .optional t => Ty.unify sol p t
+  | .array p, .array t => Ty.unify sol p t
+  | .tuple ps, .tuple ts | .struct _ ps, .struct _ ts => Ty.unifyList sol ps ts
+  | _, _ => sol
+
+def Ty.unifyList (sol : List (String × Ty)) : List Ty → List Ty → List (String × Ty)
+  | p :: ps, t :: ts => Ty.unifyList (Ty.unify sol p t) ps ts
+  | _, _ => sol
+
+end
 
 /-- A tagged union of the program, with the file that declares it: a union
 of interfaces, `type T = A | B`, or a union of primitive types,
@@ -153,6 +276,8 @@ structure StructInfo where
   file : String
   name : String
   exported : Bool := false
+  /-- The type parameters of a generic interface, which its field types name. -/
+  typeParams : List String := []
   fields : List (String × Ty)
   /-- For `type T = Record<K, V>`, the literal union `K`, whose strings are
   the fields. An index `r[k]` with a key of type `K` reads one. -/
@@ -160,15 +285,30 @@ structure StructInfo where
 
 def StructInfo.ref (i : StructInfo) : DeclRef := ⟨i.file, i.name⟩
 
+/-- The fields of the interface where its type parameters are `args`. -/
+def StructInfo.fieldsAt (i : StructInfo) (args : List Ty) : List (String × Ty) :=
+  i.fields.map fun (f, t) => (f, t.subst (i.typeParams.zip args))
+
 /-- A function of the program, with the file that declares it. -/
 structure FnInfo where
   file : String
   name : String
   exported : Bool := false
+  /-- The type parameters of a generic function, which its parameter types
+  and its result type name. -/
+  typeParams : List String := []
   params : List Ty
   ret : Ty
 
 def FnInfo.ref (f : FnInfo) : DeclRef := ⟨f.file, f.name⟩
+
+/-- A string enum whose members code may read, such as `Color.Red`: its
+name in the file, its declaration, and the name and the string of each
+member. -/
+structure EnumValue where
+  name : String
+  ref : DeclRef
+  members : List (String × String)
 
 /-- The names in scope, in the order they were declared, and the functions
 that a call may name. -/
@@ -177,6 +317,9 @@ structure Env where
   functions : List FnInfo := []
   /-- The tagged unions whose tags a test may read. -/
   unions : List UnionInfo := []
+  /-- The string enums whose members code may read: the file's own, and the
+  ones it imports without `type`. -/
+  enums : List EnumValue := []
 
 def Env.lookup (env : Env) (name : String) : Option Local := env.locals.find? (·.name == name)
 
@@ -189,12 +332,15 @@ def Env.narrow (env : Env) (name : String) (type : Ty) : Env :=
   { env with locals := env.locals.map fun l => if l.name == name then { l with type } else l }
 
 /-- A literal union of strings of the program, `type T = 'a' | 'b'`, with the
-file that declares it and its strings in the order of the source. -/
+file that declares it and its strings in the order of the source. A string
+enum, `enum T { A = 'a', B = 'b' }`, is one too, with the name and the
+string of each member in `named`. -/
 structure EnumInfo where
   file : String
   name : String
   exported : Bool := false
   members : List String
+  named : Option (List (String × String)) := none
 
 def EnumInfo.ref (i : EnumInfo) : DeclRef := ⟨i.file, i.name⟩
 
@@ -205,6 +351,8 @@ structure AliasInfo where
   file : String
   name : String
   exported : Bool := false
+  /-- The type parameters of a generic alias, which `type` may name. -/
+  typeParams : List String := []
   type : Ty
 
 /-- What a file offers the files that import from it: its exported functions,
@@ -237,9 +385,13 @@ structure Ctx where
   /-- The tagged unions that the file declares or imports. -/
   unions : List UnionInfo := []
   functions : List FnInfo := []
+  /-- The string enums whose members the file's code may read. -/
+  enumValues : List EnumValue := []
   /-- The files that this file may import from, by path. -/
   interfaces : List (String × Interface) := []
   currentFunction : String := ""
+  /-- The type parameters of the function being translated. -/
+  typeParams : List String := []
   returnType : Ty := .boolean
   /-- A bound on how deep the translator's calls nest. Each nesting of the
   program takes at most a few calls, so four per character of the source is
@@ -445,6 +597,8 @@ def checkLocalName (span : Span) (name : String) : TM String := do
   if (ctx.enums.any fun i => i.name == name && i.file == ctx.file) ||
       (ctx.unions.any fun i => i.name == name && i.file == ctx.file) then
     reject span s!"'{name}' would hide the type {name} in Lean; choose another name"
+  if ctx.typeParams.contains name then
+    reject span s!"'{name}' would hide the type parameter {name} in Lean; choose another name"
   checkName span name
 
 def declare (env : Env) (span : Span) (name : String) (binding : Binding) (type : Ty) :
@@ -455,6 +609,8 @@ def declare (env : Env) (span : Span) (name : String) (binding : Binding) (type 
   -- such a use as the function or the global, so it refuses the local.
   if env.functions.any (·.name == name) || isGlobalName name then
     reject span s!"'{name}' would hide the function or global {name} in its whole block; choose another name"
+  if env.enums.any (·.name == name) then
+    reject span s!"'{name}' would hide the enum {name} in its whole block; choose another name"
   let _ ← checkLocalName span name
   -- A local of type `null` is always `null`, and Lean gives it the type
   -- `Option Empty`, which no other value of a nullable type has.
@@ -494,6 +650,14 @@ def primitiveMembers : TypeExpr → Option (List String)
     | _ => none
   | _ => none
 
+/-- The refusal for a type named with the wrong number of type arguments. -/
+def typeArgsMessage (name : String) : Nat → String
+  | 0 => s!"'{name}' takes no type arguments"
+  | 1 => s!"'{name}' takes 1 type argument"
+  | n => s!"'{name}' takes {n} type arguments"
+
+mutual
+
 /-- The type of `t` in the subset. The output writes it as `Ty.lean`. -/
 def translateType (t : TypeExpr) : TM Ty := do
   -- The output needs a name for the inductive type of a literal union, and of
@@ -530,12 +694,24 @@ def translateType (t : TypeExpr) : TM Ty := do
   | .ref _ "Record" [_, _] | .ref _ "Readonly" [.ref _ "Record" [_, _]] =>
     reject t.span "a Record type needs a name; declare it as a type, such as type T = Record<K, V>"
   | .ref _ name [elem] =>
-    unless name == "Array" || name == "ReadonlyArray" do unsupportedType t
-    return .array (← translateType elem)
+    if name == "Array" || name == "ReadonlyArray" then return .array (← translateType elem)
+    let ctx ← get
+    let args ← translateTypes [elem]
+    match ctx.structs.find? (·.name == name), ctx.aliases.find? (·.name == name) with
+    | some info, _ =>
+      unless info.typeParams.length == 1 do reject t.span (typeArgsMessage name info.typeParams.length)
+      return .struct info.ref args
+    | none, some info =>
+      unless info.typeParams.length == 1 do reject t.span (typeArgsMessage name info.typeParams.length)
+      return info.type.subst (info.typeParams.zip args)
+    | none, none => unsupportedType t
   | .ref _ name [] =>
     let ctx ← get
+    if ctx.typeParams.contains name then return .param name
     match ctx.structs.find? (·.name == name) with
-    | some info => return .struct info.ref
+    | some info =>
+      unless info.typeParams.isEmpty do reject t.span (typeArgsMessage name info.typeParams.length)
+      return .struct info.ref []
     | none =>
       match ctx.enums.find? (·.name == name) with
       | some info => return .enum info.ref
@@ -544,9 +720,35 @@ def translateType (t : TypeExpr) : TM Ty := do
         | some info => return .tagged info.ref (info.members.map (·.1))
         | none =>
           match ctx.aliases.find? (·.name == name) with
-          | some info => return info.type
+          | some info =>
+            unless info.typeParams.isEmpty do
+              reject t.span (typeArgsMessage name info.typeParams.length)
+            return info.type
           | none => unsupportedType t
+  | .ref _ name args =>
+    let ctx ← get
+    let tys ← translateTypes args
+    match ctx.structs.find? (·.name == name), ctx.aliases.find? (·.name == name) with
+    | some info, _ =>
+      unless info.typeParams.length == tys.length do
+        reject t.span (typeArgsMessage name info.typeParams.length)
+      return .struct info.ref tys
+    | none, some info =>
+      unless info.typeParams.length == tys.length do
+        reject t.span (typeArgsMessage name info.typeParams.length)
+      return info.type.subst (info.typeParams.zip tys)
+    | none, none => unsupportedType t
+  -- A tuple. Lean has no tuple of one element.
+  | .tuple s _ elems =>
+    if elems.length < 2 then reject s "a tuple needs two elements or more"
+    return .tuple (← translateTypes elems)
   | _ => unsupportedType t
+
+def translateTypes : List TypeExpr → TM (List Ty)
+  | [] => return []
+  | t :: ts => return (← translateType t) :: (← translateTypes ts)
+
+end
 
 /-! ### What statements do -/
 
@@ -883,7 +1085,7 @@ def numberConstant? : String → Option IR.NumberConstant
 keys, and `V`. The file must declare or import `K`, so that the output can
 name its constructors. -/
 def recordIndex (c : Ctx) : Ty → Option (DeclRef × List String × Ty)
-  | .struct ref => do
+  | .struct ref [] => do
     let info ← c.knownStructs.find? (·.ref == ref)
     let key ← info.key
     let _ ← c.enums.find? (·.ref == key)
@@ -910,7 +1112,8 @@ are the same string in JS. -/
 def enumOperand (known : List EnumInfo) (c : Code) (other : Ty) : Code :=
   match c.code, other with
   | .string m, .enum ref =>
-    if (known.find? (·.ref == ref)).any (·.members.contains m) then ⟨.enumCase ref m, false, .enum ref⟩
+    if (known.find? (·.ref == ref)).any fun i => i.named.isNone && i.members.contains m then
+      ⟨.enumCase ref m, false, .enum ref⟩
     else c
   | _, _ => c
 
@@ -974,15 +1177,15 @@ def applyOperator (s : Span) (op : BinOp) (r : Expr) (a b : Code) : TM Code := d
 /-- The field `name` that `obj?.name` reads from a value of type `t`: whether
 the field is optional, and the type of `obj?.name`. -/
 def optFieldType (s : Span) (t : Ty) (name : String) : TM (Bool × Ty) := do
-  let some ref := (match t with
-      | .nullable (.struct ref) | .optional (.struct ref) => some ref
-      | _ => none : Option DeclRef)
-    | reject s (if t matches .struct _ then
+  let some (ref, args) := (match t with
+      | .nullable (.struct ref args) | .optional (.struct ref args) => some (ref, args)
+      | _ => none : Option (DeclRef × List Ty))
+    | reject s (if t matches .struct .. then
         "the left side of '?.' is never null or undefined here, so '?.' does nothing; use '.'"
       else "'?.' needs a value of an interface type, or null or undefined")
   let ctx : Ctx ← get
   let field? := (ctx.knownStructs.find? fun (i : StructInfo) => i.ref == ref).bind
-    fun info => info.fields.lookup name
+    fun info => (info.fieldsAt args).lookup name
   match field? with
   | some (.optional v) => return (true, .optional v)
   | some (.literal _) => reject s "a tag field may be read only in a test of its union, such as x.kind === 'circle'"
@@ -991,6 +1194,13 @@ def optFieldType (s : Span) (t : Ty) (name : String) : TM (Bool × Ty) := do
       reject s "'?.' may not read a nullable field, because the value could be null or undefined"
     return (false, .optional v)
   | none => reject s "only fields of interfaces declared in this file, or exported by the files before it, may be read"
+
+/-- The string enum that `obj` names, as in `T.A`: a name that no local binds.
+The interpreter reads a global such as `NaN` before an enum, so an enum may
+not have such a name, which `declareTopLevel` refuses too. -/
+def enumOf? (env : Env) : Expr → Option EnumValue
+  | .ident _ n => if env.has n || isGlobalName n then none else env.enums.find? (·.name == n)
+  | _ => none
 
 /-- The function on lists that the method `name` of an array becomes, for the
 methods that take a callback. -/
@@ -1112,6 +1322,8 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
     match expected with
     | some (.enum ref) | some (.nullable (.enum ref)) =>
       let info ← orReject ((← get).knownEnums.find? (·.ref == ref)) s "unknown literal union"
+      if info.named.isSome then
+        reject s s!"a value of the enum {info.name} is one of its members, such as {info.name}.A, not a string"
       unless info.members.contains value do
         reject s s!"'{value}' is not one of the strings of {info.name}"
       return ⟨.enumCase ref value, false, .enum ref⟩
@@ -1131,15 +1343,22 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
         reject s "an owned array may be read only in the return value"
       return ⟨.var name, false, l.type⟩
   | .member s obj name =>
+    match enumOf? env obj with
+    -- `T.A`, a member of a string enum: its string, which the output writes
+    -- as the constructor that the string names.
+    | some e =>
+      let value ← orReject (e.members.lookup name) s s!"'{name}' is not a member of the enum {e.name}"
+      return ⟨.enumCase e.ref value, false, .enum e.ref⟩
+    | none =>
     -- JS skips the rest of a chain after a `?.` that meets null, so
     -- `a?.b.c` is not `(a?.b).c`, and the subset leaves the chain out.
     if obj matches .optMember .. then reject s "a chain after '?.', such as a?.b.c, is not supported"
     let o ← translateExpr fuel env none obj
     let ctx : Ctx ← get
     let field? := match o.type with
-      | .struct ref =>
+      | .struct ref args =>
         (ctx.knownStructs.find? fun (i : StructInfo) => i.ref == ref).bind
-          fun info => info.fields.lookup name
+          fun info => (info.fieldsAt args).lookup name
       | _ => none
     let message := match o.type, field? with
       | .tagged .., _ => "a field of a tagged union may be read only after a test of its tag"
@@ -1156,11 +1375,24 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
     return ⟨.ext (.optField name bind) [o.code], false, type⟩
   | .index s obj key =>
     let o ← translateExpr fuel env none obj
-    let (keyRef, keys, type) ← orReject (recordIndex (← get) o.type) s
-      "only a value of a Record type, such as type T = Record<K, V>, whose key type K this file declares or imports, may be indexed"
-    let k ← translateExpr fuel env (some (.enum keyRef)) key
-    unless k.type == .enum keyRef do reject key.span "the key must have the key type of the Record"
-    return ⟨.ext (.recordGet keyRef keys) [o.code, k.value], false, type⟩
+    match o.type.tupleElems? with
+    -- `t[0]`: an element of a tuple, at an index that is a number literal.
+    | some tys =>
+      let .number _ text := key | reject key.span "the index of a tuple must be a number literal, such as t[0]"
+      let i ← orReject (safeIntegerValue? text) key.span "the index of a tuple must be an integer"
+      match tys[i.toNat]? with
+      | some t =>
+        unless 0 ≤ i do reject key.span s!"the tuple has no element {i}"
+        return ⟨.proj o.code i.toNat tys.length, false, t⟩
+      | none => reject key.span s!"the tuple has no element {i}"
+    -- `r[k]` on a `Record<K, V>`.
+    | none =>
+      let (keyRef, keys, type) ← orReject (recordIndex (← get) o.type) s
+        ("only a tuple, or a value of a Record type, such as type T = Record<K, V>, whose key type K " ++
+          "this file declares or imports, may be indexed")
+      let k ← translateExpr fuel env (some (.enum keyRef)) key
+      unless k.type == .enum keyRef do reject key.span "the key must have the key type of the Record"
+      return ⟨.ext (.recordGet keyRef keys) [o.code, k.value], false, type⟩
   | .unary s op arg =>
     if op == .neg && arg.isInfinity && !env.has "Infinity" then
       return ⟨.numberConstant .negInf, false, .number⟩
@@ -1198,7 +1430,29 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
     | some (recv, method) => translateArrayMethod fuel env expected s recv method args
     | none => translateCall fuel env s callee args
   | .object s props => translateObject fuel env expected s props
-  | .array s elems => translateArray fuel env expected s elems
+  | .array s elems =>
+    match expected with
+    | some (.tuple tys) =>
+      -- A tuple: each element where its own type is expected. In JS the
+      -- tuple is an array.
+      unless elems.length == tys.length do reject s s!"the tuple needs {tys.length} elements"
+      -- An element where the type names a type parameter has its own type,
+      -- which the context checks: a call, after it fixes the parameter, or a
+      -- return or a declaration in a generic function. A `null` keeps its
+      -- own type, so that in a `T | null` it leaves `T` to the other
+      -- arguments of a call. Another element that fits takes the type of its
+      -- place, which Lean converts it to in the literal.
+      let codes ← (elems.zip tys).mapM fun (elem, t) => do
+        let a ← translateExpr fuel env (if t.isGeneric then t.callExpected else some t) elem
+        unless t.isGeneric || a.type.assignableTo t do
+          reject elem.span "the element does not have the tuple's element type"
+        pure a
+      let types := (codes.zip tys).map fun (a, t) =>
+        if !t.isGeneric then t
+        else if a.type == .null || !a.type.assignableTo t then a.type
+        else t
+      return ⟨.tuple (codes.map (·.value)), false, .tuple types⟩
+    | _ => translateArray fuel env expected s elems
   | _ => reject e.span "unsupported expression"
 
 /-- An array literal, as a list. In JS a literal makes a new array, and only
@@ -1243,12 +1497,19 @@ def translateCall (fuel : Nat) (env : Env) (s : Span) (callee : Expr) (args : Li
   let fn ← orReject (env.functions.find? (·.name == name)) s noCallMessage
   if env.has name then noCall
   unless fn.params.length == args.length do reject s s!"'{name}' takes {fn.params.length} arguments"
-  let values ← (args.zip fn.params).mapM fun (arg, paramType) => do
-    let a ← translateExpr fuel env (some paramType) arg
-    unless a.type.assignableTo paramType do
+  -- An argument is translated where its parameter's type is expected. When
+  -- that type names a type parameter, the arguments' types fix it, and only
+  -- the shape of a tuple is expected.
+  let codes ← (args.zip fn.params).mapM fun (arg, paramType) =>
+    translateExpr fuel env paramType.callExpected arg
+  let sol := Ty.unifyList [] fn.params (codes.map (·.type))
+  fn.typeParams.forM fun v => do
+    unless (sol.lookup v).isSome do
+      reject s s!"the arguments do not fix the type parameter {v} of '{name}'"
+  (args.zip (codes.zip fn.params)).forM fun (arg, c, paramType) => do
+    unless c.type.assignableTo (paramType.subst sol) do
       reject arg.span "the argument does not have the parameter's type"
-    pure a.value
-  return ⟨.call fn.ref values, false, fn.ret⟩
+  return ⟨.call fn.ref (codes.map (·.value)), false, fn.ret.subst sol⟩
 
 /-- `xs.map(x => e)`, and `filter`, `some`, `every` and `find`: the `List`
 function with `fun (x : T) => e`. The callback is an arrow function written at
@@ -1291,7 +1552,7 @@ def translateObject (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (
     let member ← orReject (union.members.lookup tag) s s!"'{tag}' is not a tag of {union.name}"
     let c ← translateObject fuel env (some member) s props
     return ⟨.inject uref tag c.code, false, .tagged uref tags⟩
-  let some (.struct ref) := expected | reject s notStructMessage
+  let some (.struct ref args) := expected | reject s notStructMessage
   let info ← orReject (ctx.knownStructs.find? (·.ref == ref)) s notStructMessage
   let structName := ref.name
   -- The keys seen so far, and the fields translated so far.
@@ -1303,7 +1564,7 @@ def translateObject (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (
           if key == "__proto__" then reject ps "'__proto__: v' sets the prototype of the object, not a field"
           else pure (key, v, ps)
         | .keyValue ps _ _ => reject ps "object literal fields must be plain name: value pairs"
-      let fieldType ← orReject (info.fields.lookup key) span s!"'{key}' is not a field of {structName}"
+      let fieldType ← orReject ((info.fieldsAt args).lookup key) span s!"'{key}' is not a field of {structName}"
       if seen.contains key then reject span s!"'{key}' is set twice"
       -- An optional field holds a `T` when the literal sets it. A key that
       -- holds `undefined` is not the same JS value as no key, and Lean has
@@ -1311,7 +1572,7 @@ def translateObject (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (
       let v ← translateExpr fuel env (some fieldType.unoptional) value
       unless v.type.assignableTo fieldType.unoptional do reject span s!"'{key}' does not have the field's type"
       pure (seen ++ [key], parts ++ [(key, v.value)])
-  for (field, type) in info.fields do
+  for (field, type) in info.fieldsAt args do
     unless seen.contains field || type matches .optional _ do
       reject s s!"the object lacks the field '{field}'"
   -- A JS object keeps its keys in the order the literal writes them, and the
@@ -1320,7 +1581,7 @@ def translateObject (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (
   let declared := (info.fields.map (·.1)).filter seen.contains
   unless seen == declared do
     reject s s!"write the fields in the order that {structName} declares them: {", ".intercalate declared}"
-  return ⟨.struct parts ref, false, .struct ref⟩
+  return ⟨.struct parts ref (Ty.leanList args), false, .struct ref args⟩
 
 def translateBinary (fuel : Nat) (env : Env) (s : Span) (op : BinOp) (l r : Expr) : TM Code := do
   let fuel + 1 := fuel | tooDeep
@@ -1752,26 +2013,66 @@ def isolated {A : Type} (x : TM A) : TM A := do
   set c
   return r
 
+/-- The file has declared or imported `name`. -/
+def Ctx.taken (ctx : Ctx) (name : String) : Bool :=
+  ctx.structs.any (·.name == name) || ctx.aliases.any (·.name == name) ||
+    ctx.enums.any (·.name == name) || ctx.unions.any (·.name == name) ||
+    ctx.functions.any (·.name == name)
+
 def declareTopLevel (s : Span) (name : String) : TM Unit := do
   let ctx ← get
-  if ctx.structs.any (·.name == name) || ctx.aliases.any (·.name == name) ||
-      ctx.enums.any (·.name == name) || ctx.unions.any (·.name == name) ||
-      ctx.functions.any (·.name == name) then
+  if ctx.taken name then
     reject s s!"'{name}' is declared twice"
   -- A declaration of the module hides the global of the same name, and the
   -- subset reads these names as the globals.
   if isGlobalName name then
     reject s s!"'{name}' would hide the global {name}; choose another name"
 
-def translateInterface (s : Span) (exported : Bool) (name : String) (fields : List Field) :
-    TM IR.Decl := do
+mutual
+
+/-- `t` names the type `name`, as a type parameter does in the types that use
+it. -/
+def typeNames (name : String) : TypeExpr → Bool
+  | .ref _ n args => n == name || typesName name args
+  | .array _ e | .paren _ e => typeNames name e
+  | .union _ members | .tuple _ _ members => typesName name members
+  | _ => false
+
+def typesName (name : String) : List TypeExpr → Bool
+  | [] => false
+  | t :: ts => typeNames name t || typesName name ts
+
+end
+
+/-- The type parameters `vs` of a declaration, after the ones in `seen`: each
+one a fresh name. A function's must each be `named` by a parameter's type, so
+that the arguments of a call fix it. -/
+def checkTypeParams (s : Span) (named : String → Bool) (seen : List String) : List String → TM Unit
+  | [] => return ()
+  | v :: vs => do
+    let _ ← checkName s v
+    if seen.contains v then reject s s!"the type parameter '{v}' is declared twice"
+    if (← get).taken v then
+      reject s s!"the type parameter '{v}' would hide the type or function {v} in Lean; choose another name"
+    unless named v do
+      reject s s!"no parameter's type names the type parameter '{v}', so a call could not fix it"
+    checkTypeParams s named (seen ++ [v]) vs
+
+def translateInterface (s : Span) (exported : Bool) (name : String) (typeParams : List String)
+    (fields : List Field) : TM IR.Decl := do
   let name ← checkName s name
   declareTopLevel s name
+  checkTypeParams s (fun _ => true) [] typeParams
+  modify fun c => { c with typeParams }
   let infos ← isolated <| fields.foldlM (init := ([] : List (String × Ty))) fun infos f => do
     unless f.readonly do
       reject f.span "interface fields must be readonly and typed"
     let field ← checkName f.span f.name
     if infos.any (·.1 == field) then reject f.span s!"'{field}' is declared twice"
+    -- A Lean structure's fields are in scope in the types of the fields after
+    -- them, so a field may not hide a type parameter.
+    if typeParams.contains field then
+      reject f.span s!"'{field}' would hide the type parameter {field} in Lean; choose another name"
     -- A field of one string literal type is a tag, which a union reads.
     let type ← match f.type with
       | .literal _ (.string v) =>
@@ -1786,8 +2087,9 @@ def translateInterface (s : Span) (exported : Bool) (name : String) (fields : Li
         reject f.span s!"an optional field may not be named '{field}', because an object without it has Object.prototype.{field}"
       else pure (Ty.optional type)
     pure (infos ++ [(field, type)])
-  modify fun c => { c with structs := c.structs ++ [{ file := c.file, name, exported, fields := infos }] }
-  return .struct name (infos.map fun (field, type) => (field, type.lean))
+  modify fun c => { c with
+    typeParams := [], structs := c.structs ++ [{ file := c.file, name, exported, typeParams, fields := infos }] }
+  return .struct name typeParams (infos.map fun (field, type) => (field, type.lean))
 
 /-- The names that Lean declares itself for every inductive type, so a
 constructor may not have one. -/
@@ -1822,11 +2124,49 @@ def translateEnum (s : Span) (exported : Bool) (name : String) (members : List S
     modify fun c => { c with enums := c.enums ++ [{ file := c.file, name, exported, members }] }
     return .enum name members
 
+/-- Why the subset refuses the members of a string enum, and where: an enum
+needs a member, two members may not have one name, and a member may not have
+the name of a property of `Object.prototype`. The object of the enum is an
+ordinary object, and setting `__proto__` on it sets its prototype instead of
+a property. Each string must also name a constructor, as for a literal
+union, and two members may not have one string, because the output names a
+constructor by its string. -/
+def enumRefusal (s : Span) (members : List EnumMember) : Option (Span × String) :=
+  if members.isEmpty then some (s, "an enum needs a member")
+  else match members.findSome? fun m =>
+      if (members.filter (·.name == m.name)).length > 1 then some (m.span, s!"'{m.name}' is declared twice")
+      else if Eval.objectPrototypeNames.contains m.name then
+        some (m.span, s!"a member may not be named '{m.name}', the name of a property of Object.prototype")
+      else if !memberOK m.value then
+        some (m.span, s!"'{m.value}' cannot name a Lean constructor; a string enum needs strings such as 'open'")
+      else if (members.filter (·.value == m.value)).length > 1 then
+        some (m.span, s!"two members have the string '{m.value}'")
+      else none with
+    | some r => some r
+    | none => (badMember (members.map (·.value))).map (s, ·)
+
+/-- `enum T { A = 'a', B = 'b' }`. TypeScript compiles it to an object with a
+property for each member, whose value is the member's string, so `T.A` is
+`'a'`. The output declares the inductive type of the literal union
+`'a' | 'b'`, and `T.A` becomes its constructor `T.a`. -/
+def translateStringEnum (s : Span) (exported : Bool) (name : String) (members : List EnumMember) :
+    TM IR.Decl := do
+  let name ← checkName s name
+  declareTopLevel s name
+  match enumRefusal s members with
+  | some (sp, reason) => reject sp reason
+  | none =>
+    let pairs := members.map fun m => (m.name, m.value)
+    modify fun c => { c with
+      enums := c.enums ++ [{ file := c.file, name, exported, members := pairs.map (·.2), named := some pairs }],
+      enumValues := c.enumValues ++ [{ name, ref := ⟨c.file, name⟩, members := pairs }] }
+    return .enum name (pairs.map (·.2))
+
 /-- The interfaces of a union `A | B` of interfaces that the file declares or
 imports, or none when a member is something else. -/
 def unionMembers (structs : List StructInfo) : TypeExpr → Option (List StructInfo)
   | .union _ members => members.mapM fun
-    | .ref _ n [] => structs.find? (·.name == n)
+    | .ref _ n [] => structs.find? fun i => i.name == n && i.typeParams.isEmpty
     | _ => none
   | _ => none
 
@@ -1865,7 +2205,7 @@ def translateUnion (s : Span) (exported : Bool) (name : String) (members : List 
     reject s ("a union of interfaces needs a tag: a field that each of them has, " ++
       "with a different string literal type, such as kind: 'circle'")
   | some (field, tags) =>
-    declareUnion s exported name (some field) (tags.zip (members.map (.struct ·.ref)))
+    declareUnion s exported name (some field) (tags.zip (members.map (.struct ·.ref [])))
 
 /-- `type T = string | bigint`, a union of primitive types. Each constructor
 holds a value of its type, and its tag is what `typeof` gives for that value,
@@ -1875,6 +2215,12 @@ def translatePrimitiveUnion (s : Span) (exported : Bool) (name : String) (member
     TM IR.Decl := do
   if members.contains "bigint" then requireFeature s .bigint
   declareUnion s exported name none (members.filterMap fun k => (primitiveType? k).map (k, ·))
+
+/-- `t` is a union of names only, such as `A | B`, which a type alias declares
+as a union of interfaces. -/
+def isNameUnion : TypeExpr → Bool
+  | .union _ members => members.all (· matches .ref _ _ [])
+  | _ => false
 
 /-- The key type and the value type of `Record<K, V>`, or of
 `Readonly<Record<K, V>>`. -/
@@ -1901,16 +2247,21 @@ def translateRecord (exported : Bool) (name : String) (key value : TypeExpr) :
   let fields := info.members.map fun m => (m, type)
   modify fun c =>
     { c with structs := c.structs ++ [{ file := c.file, name, exported, fields, key := some info.ref }] }
-  return .struct name (fields.map fun (field, type) => (field, type.lean))
+  return .struct name [] (fields.map fun (field, type) => (field, type.lean))
 
 /-- `type T = U`. The translator writes the type of `U` wherever the source
 names `T`, so a type alias changes no code. The output declares it as an
 `abbrev`, for the claims about the code to use. An alias must come before its
 uses, as an interface must. -/
-def translateAlias (s : Span) (exported : Bool) (name : String) (type : TypeExpr) :
+def translateAlias (s : Span) (exported : Bool) (name : String) (typeParams : List String) (type : TypeExpr) :
     TM IR.Decl := do
   let name ← checkName s name
   declareTopLevel s name
+  -- A union, or a Record, becomes a type of its own, which takes no type
+  -- parameters.
+  if !typeParams.isEmpty && ((stringLiterals type).isSome || (primitiveMembers type).isSome ||
+      isNameUnion type || (recordArgs type).isSome) then
+    reject s "a union of string literals, primitive types or interfaces, or a Record, may not have type parameters"
   if let some members := stringLiterals type then
     return ← translateEnum s exported name members
   if let some members := unionMembers (← get).structs type then
@@ -1919,19 +2270,26 @@ def translateAlias (s : Span) (exported : Bool) (name : String) (type : TypeExpr
     return ← translatePrimitiveUnion s exported name members
   if let some (key, value) := recordArgs type then
     return ← translateRecord exported name key value
+  checkTypeParams s (fun _ => true) [] typeParams
+  modify fun c => { c with typeParams }
   let ty ← isolated (translateType type)
-  modify fun c => { c with aliases := c.aliases ++ [{ file := c.file, name, exported, type := ty }] }
-  return .alias name ty.lean
+  modify fun c => { c with
+    typeParams := [], aliases := c.aliases ++ [{ file := c.file, name, exported, typeParams, type := ty }] }
+  return .alias name typeParams ty.lean
 
-def translateFunction (s : Span) (exported : Bool) (name : String) (params : List Param)
-    (returnType : Option TypeExpr) (body : Stmt) : TM IR.Decl := do
+def translateFunction (s : Span) (exported : Bool) (name : String) (typeParams : List String)
+    (params : List Param) (returnType : Option TypeExpr) (body : Stmt) : TM IR.Decl := do
   let some returnType := returnType
-    | reject s "functions must be named, typed, non-generic and synchronous"
+    | reject s "functions must be named, typed and synchronous"
   let name ← checkName s name
   declareTopLevel s name
+  checkTypeParams s (fun v => params.any fun p => (p.type.map (typeNames v)).getD false) [] typeParams
+  modify fun c => { c with typeParams }
   -- The scope of the body, and the parameters in Lean and as types.
+  let ctx ← get
+  let start : Env := { functions := ctx.functions, unions := ctx.knownUnions, enums := ctx.enumValues }
   let (env, leanParams, types) ← isolated <| params.foldlM
-    (init := (({ functions := (← get).functions, unions := (← get).knownUnions } : Env), ([] : List (String × IR.Ty)), ([] : List Ty)))
+    (init := (start, ([] : List (String × IR.Ty)), ([] : List Ty)))
     fun (env, leanParams, types) p => do
       let type ← orReject p.type p.span "parameters must be plain, typed identifiers"
       let paramName ← checkLocalName p.span p.name
@@ -1942,7 +2300,8 @@ def translateFunction (s : Span) (exported : Bool) (name : String) (params : Lis
   let ret ← isolated (translateType returnType)
   modify fun c => { c with currentFunction := name, returnType := ret }
   let out ← isolated (translateStatements (← fuelLimit) env .ret (blockStatements body))
-  modify fun c => { c with functions := c.functions ++ [{ file := c.file, name, exported, params := types, ret }] }
+  modify fun c => { c with
+    typeParams := [], functions := c.functions ++ [{ file := c.file, name, exported, typeParams, params := types, ret }] }
   return .function name leanParams ret.lean out
 
 /-! ### The number model -/
@@ -1954,7 +2313,7 @@ def typeUsesNumber : TypeExpr → Bool
   | .literal _ (.number _) => true
   | .ref _ name args => isNumberName name || typesUseNumber args
   | .array _ e | .paren _ e => typeUsesNumber e
-  | .union _ members => typesUseNumber members
+  | .union _ members | .tuple _ _ members => typesUseNumber members
   | _ => false
 
 def typesUseNumber : List TypeExpr → Bool
@@ -1980,6 +2339,8 @@ def exprUsesNumber : Expr → Bool
   | .paren _ e | .unary _ _ e | .prefix _ _ e | .postfix _ _ e => exprUsesNumber e
   | .asConst _ e => exprUsesNumber e
   | .satisfies _ e t => exprUsesNumber e || typeUsesNumber t
+  -- The index of a tuple, `t[0]`, is a position in the output, not a number.
+  | .index _ a (.number ..) => exprUsesNumber a
   | .index _ a b | .binary _ _ a b | .assign _ _ a b => exprUsesNumber a || exprUsesNumber b
   | .cond _ a b c => exprUsesNumber a || exprUsesNumber b || exprUsesNumber c
   | .arrow _ _ ps body =>
@@ -2032,21 +2393,30 @@ def moduleUsesNumber (m : Module) : Bool :=
   m.decls.any fun
     -- An import of one of these names is refused, so an import adds nothing.
     | .import .. => false
-    | .function _ _ name params ret body =>
+    | .function _ _ name _ params ret body =>
       isNumberName name ||
         params.any (fun p => isNumberName p.name || (p.type.map typeUsesNumber).getD false) ||
         (ret.map typeUsesNumber).getD false || stmtUsesNumber body
-    | .interface _ _ name fields =>
+    | .interface _ _ name _ fields =>
       isNumberName name || fields.any fun f => isNumberName f.name || typeUsesNumber f.type
-    | .typeAlias _ _ name type => isNumberName name || typeUsesNumber type
+    | .typeAlias _ _ name _ type => isNumberName name || typeUsesNumber type
+    | .enum _ _ name _ => isNumberName name
     | .exportedVar _ d => varUsesNumber d
     | .stmt st => stmtUsesNumber st
 
 /-! ### The module -/
 
-/-- `import { a, type B } from "./x.ts"`. Each name becomes a function or an
-interface of the file, as the file it names exports it. That file must be
-translated first. -/
+/-- The string enum named `name` that `iface` exports, with the name and the
+string of each member. -/
+def Interface.stringEnum? (iface : Interface) (name : String) : Option (EnumInfo × List (String × String)) := do
+  let info ← iface.enums.find? fun e => e.name == name && e.exported
+  let pairs ← info.named
+  return (info, pairs)
+
+/-- `import { a, type B } from "./x.ts"`. Each name becomes a function, a
+string enum or a type of the file, as the file it names exports it. That file
+must be translated first. -/
+
 def translateImport (s : Span) (names : List ImportName) (source : String) : TM Unit := do
   let ctx ← get
   let target ← orReject (Eval.resolvePath ctx.file source) s
@@ -2077,6 +2447,13 @@ def translateImport (s : Span) (names : List ImportName) (source : String) : TM 
     else
       if iface.structs.any fun i => i.name == n.name && i.exported then
         reject n.span s!"'{n.name}' is an interface; import it with 'type {n.name}'"
+      match iface.stringEnum? n.name with
+      -- A string enum is a value too: its object, whose members code reads.
+      | some (info, pairs) =>
+        modify fun c => { c with
+          enums := c.enums ++ [{ info with exported := false }],
+          enumValues := c.enumValues ++ [{ name := n.name, ref := info.ref, members := pairs }] }
+      | none =>
       if iface.aliases.any (·.name == n.name) || (iface.enums.any fun e => e.name == n.name && e.exported) ||
           iface.unions.any fun u => u.name == n.name && u.exported then
         reject n.span s!"'{n.name}' is a type; import it with 'type {n.name}'"
@@ -2087,11 +2464,12 @@ def translateImport (s : Span) (names : List ImportName) (source : String) : TM 
 /-- One declaration: an output declaration, or none for an import. -/
 def translateDecl : Decl → TM (Option IR.Decl)
   | .import s names source => do translateImport s names source; return none
-  | .interface s exported name fields => some <$> translateInterface s exported name fields
-  | .typeAlias s exported name type => some <$> translateAlias s exported name type
-  | .function s exported name params ret body =>
-    some <$> translateFunction s exported name params ret body
-  | d => reject d.span "only imports, interfaces, types and functions may appear at top level"
+  | .interface s exported name typeParams fields => some <$> translateInterface s exported name typeParams fields
+  | .typeAlias s exported name typeParams type => some <$> translateAlias s exported name typeParams type
+  | .function s exported name typeParams params ret body =>
+    some <$> translateFunction s exported name typeParams params ret body
+  | .enum s exported name members => some <$> translateStringEnum s exported name members
+  | d => reject d.span "only imports, interfaces, types, enums and functions may appear at top level"
 
 /-- The declarations of `m`, translated. This is the translator as a function
 from one syntax tree to another: `translate` parses the source before it and
@@ -2099,12 +2477,22 @@ prints the result after it. -/
 def translateDecls (m : Module) : TM (List IR.Decl) := do
   return (← m.decls.mapM translateDecl).filterMap id
 
+mutual
+
 /-- The declarations that a type names: interfaces, literal unions and
 tagged unions. -/
 def Ty.declRefs : Ty → List DeclRef
-  | .struct r | .enum r | .tagged r _ => [r]
+  | .struct r args => r :: Ty.declRefsList args
+  | .enum r | .tagged r _ => [r]
   | .nullable t | .optional t | .array t => t.declRefs
+  | .tuple ts => Ty.declRefsList ts
   | _ => []
+
+def Ty.declRefsList : List Ty → List DeclRef
+  | [] => []
+  | t :: ts => t.declRefs ++ Ty.declRefsList ts
+
+end
 
 /-- The file's own types that a file importing from it needs: the exported
 ones, and the private ones that an exported alias, interface, union or

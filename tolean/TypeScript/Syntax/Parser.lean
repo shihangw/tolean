@@ -200,8 +200,16 @@ def parseType (fuel : Nat) : ParseM TypeExpr := do
 
 def parseArrayType (fuel : Nat) : ParseM TypeExpr := do
   let fuel + 1 := fuel | outOfFuel
-  let start := (← peek).span.start
-  iterate (← budget) (← parsePrimaryType fuel) (arrayStep start)
+  let t ← peek
+  let next ← peekAt 1
+  -- `readonly` applies to the whole array type after it, as in `tsc`: so
+  -- `readonly [A, B][]` is a readonly array of tuples. Only a tuple may follow.
+  if t.isIdent "readonly" && next.isPunct "[" && !next.newlineBefore then
+    discard advance
+    let .tuple _ false elems ← parseArrayType fuel
+      | failAt t "'readonly' is supported only before a tuple type, such as readonly [A, B]"
+    return .tuple (← spanFrom t.span.start) true elems
+  iterate (← budget) (← parsePrimaryType fuel) (arrayStep t.span.start)
 
 def parsePrimaryType (fuel : Nat) : ParseM TypeExpr := do
   let fuel + 1 := fuel | outOfFuel
@@ -229,6 +237,11 @@ def parsePrimaryType (fuel : Nat) : ParseM TypeExpr := do
     let inner ← parseType fuel
     let _ ← expectPunct ")"
     return .paren (← spanFrom t.span.start) inner
+  -- `[A, B]`: a tuple type, with at least one element and no `,` after the last.
+  | .punct "[" =>
+    let elems ← iterate (← budget) #[] (typeArgStep (parseType fuel))
+    let _ ← expectPunct "]"
+    return .tuple (← spanFrom t.span.start) false elems.toList
   | _ => unexpected t "a type"
 
 end
@@ -927,13 +940,35 @@ end
 
 /-! ### Declarations -/
 
+/-- One step of the loop over the type parameters of a function: a name, and
+the `,` after it, if one comes. A parameter has no constraint and no default. -/
+def typeParamStep (names : Array String) : ParseM (Array String × Bool) := do
+  let t ← advance
+  let .ident name := t.kind | unexpected t "a type parameter"
+  if keywordTypes.contains name || typeOperatorWords.contains name || refusedNames.contains name then
+    failAt t s!"'{name}' cannot name a type parameter"
+  let next ← peek
+  if next.isKeyword "extends" then failAt next "type parameters with a constraint are not supported"
+  if next.isPunct "=" then failAt next "type parameters with a default are not supported"
+  let names := names.push name
+  if !next.isPunct "," then return (names, false)
+  discard advance
+  return (names, true)
+
+/-- `<A, B>` after the name of a generic function, or nothing. -/
+def parseTypeParams : ParseM (List String) := do
+  unless (← peek).isPunct "<" do return []
+  discard advance
+  let names ← iterate (← budget) #[] typeParamStep
+  let _ ← expectPunct ">"
+  return names.toList
+
 def parseFunction (start : Pos) (exported : Bool) : ParseM Decl := do
   discard advance
   let t ← peek
   if t.isPunct "*" then failAt t "generators are not supported"
   let name ← readName
-  let t ← peek
-  if t.isPunct "<" then failAt t "generic functions are not supported"
+  let typeParams ← parseTypeParams
   let _ ← expectPunct "("
   let params ← iterate (← budget) #[] (listStep ")" (fun _ => pure ()) parseParam)
   let _ ← expectPunct ")"
@@ -946,7 +981,7 @@ def parseFunction (start : Pos) (exported : Bool) : ParseM Decl := do
   modify fun s => { s with inFunction := true }
   let body ← parseBlock (← budget)
   modify fun s => { s with inFunction := false }
-  return .function (← spanFrom start) exported name params.toList returnType body
+  return .function (← spanFrom start) exported name typeParams params.toList returnType body
 
 def parseField : ParseM Field := do
   let t ← peek
@@ -971,23 +1006,52 @@ def parseField : ParseM Field := do
 def parseInterface (start : Pos) (exported : Bool) : ParseM Decl := do
   discard advance
   let name ← readName
+  let typeParams ← parseTypeParams
   let t ← peek
-  if t.isPunct "<" then failAt t "generic interfaces are not supported"
   if t.isKeyword "extends" then failAt t "'extends' is not supported"
   let _ ← expectPunct "{"
   let fields ← iterate (← budget) #[] (blockStep parseField)
   let _ ← expectPunct "}"
-  return .interface (← spanFrom start) exported name fields.toList
+  return .interface (← spanFrom start) exported name typeParams fields.toList
 
 def parseTypeAlias (start : Pos) (exported : Bool) : ParseM Decl := do
   discard advance
   let name ← readName
-  let t ← peek
-  if t.isPunct "<" then failAt t "generic type aliases are not supported"
+  let typeParams ← parseTypeParams
   let _ ← expectPunct "="
   let type ← parseType (← budget)
   endStatement
-  return .typeAlias (← spanFrom start) exported name type
+  return .typeAlias (← spanFrom start) exported name typeParams type
+
+/-- What an enum member must be: a name and a string. -/
+def refuseEnumMember {A : Type} (t : Token) : ParseM A :=
+  failAt t "tolean supports only enum members with a string value, such as 'A = \"a\"'"
+
+/-- A member of a string enum: a name, `=`, a string, and the `,` after it,
+unless the `}` comes. -/
+def parseEnumMember : ParseM EnumMember := do
+  let t ← peek
+  let name ← readPropertyName
+  let eq ← peek
+  unless eq.isPunct "=" do refuseEnumMember eq
+  discard advance
+  let v ← advance
+  let .string value := v.kind | refuseEnumMember v
+  -- The member ends at its value, as in `tsc`; the `,` is not part of it.
+  let span ← spanFrom t.span.start
+  let next ← peek
+  if next.isPunct "," then discard advance
+  else if !next.isPunct "}" then unexpected next "',' or '}'"
+  return { span, name, value }
+
+/-- `enum`, a name and `{`, the members, and `}`. -/
+def parseEnum (start : Pos) (exported : Bool) : ParseM Decl := do
+  discard advance
+  let name ← readName
+  let _ ← expectPunct "{"
+  let members ← iterate (← budget) #[] (blockStep parseEnumMember)
+  let _ ← expectPunct "}"
+  return .enum (← spanFrom start) exported name members.toList
 
 /-- What `parseImport` refuses: every form of `import` outside the subset. -/
 def refuseImport {A : Type} (t : Token) : ParseM A :=
@@ -1046,9 +1110,10 @@ def parseDeclBody (start : Pos) (exported : Bool) : ParseM Decl := do
   if t.isKeyword "function" then parseFunction start exported
   else if t.isIdent "interface" && nameFollows then parseInterface start exported
   else if t.isIdent "type" && nameFollows then parseTypeAlias start exported
+  else if t.isKeyword "enum" then parseEnum start exported
   else if exported then
     unless t.isKeyword "const" || t.isIdent "let" do
-      failAt t "tolean supports 'export' only of a function, an interface, a type or a variable"
+      failAt t "tolean supports 'export' only of a function, an interface, a type, an enum or a variable"
     let decl ← parseVarDecl
     return .exportedVar (← spanFrom start) decl
   else return .stmt (← parseStatement (← budget))

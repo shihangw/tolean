@@ -100,6 +100,8 @@ inductive TypeExpr where
   | array (span : Span) (elem : TypeExpr)
   | union (span : Span) (members : List TypeExpr)
   | paren (span : Span) (inner : TypeExpr)
+  /-- `[A, B]`, or `readonly [A, B]` when `readonly` is true: a tuple type. -/
+  | tuple (span : Span) (readonly : Bool) (elems : List TypeExpr)
 
 /-- A parameter of a function or an arrow function. -/
 structure Param where
@@ -353,6 +355,13 @@ structure Field where
   optional : Bool
   type : TypeExpr
 
+/-- A member of a string enum: `Name = "value"`. -/
+structure EnumMember where
+  span : Span
+  name : String
+  value : String
+deriving DecidableEq
+
 /-- One name of `import { a, type B } from "./x.ts"`. `typeOnly` is true for
 `type B`, and for every name of `import type { … }`. -/
 structure ImportName where
@@ -364,11 +373,16 @@ deriving DecidableEq
 inductive Decl where
   /-- `import { a, b } from "source"`: named imports from another file. -/
   | «import» (span : Span) (names : List ImportName) (source : String)
-  /-- `body` is a `block`. -/
-  | function (span : Span) (exported : Bool) (name : String) (params : List Param)
+  /-- `body` is a `block`. `typeParams` are the names in `<A, B>` after the
+  name of a generic function. -/
+  | function (span : Span) (exported : Bool) (name : String) (typeParams : List String) (params : List Param)
       (returnType : Option TypeExpr) (body : Stmt)
-  | interface (span : Span) (exported : Bool) (name : String) (fields : List Field)
-  | typeAlias (span : Span) (exported : Bool) (name : String) (type : TypeExpr)
+  /-- `typeParams` are the names in `<A, B>` after the name of a generic
+  interface, as for a type alias and a function. -/
+  | interface (span : Span) (exported : Bool) (name : String) (typeParams : List String) (fields : List Field)
+  | typeAlias (span : Span) (exported : Bool) (name : String) (typeParams : List String) (type : TypeExpr)
+  /-- `enum Name { A = "a", B = "b" }`: an enum whose members are strings. -/
+  | enum (span : Span) (exported : Bool) (name : String) (members : List EnumMember)
   | exportedVar (span : Span) (decl : VarDecl)
   | stmt (stmt : Stmt)
 
@@ -392,7 +406,8 @@ namespace tolean.TypeScript.Syntax
 open tolean
 
 def TypeExpr.span : TypeExpr → Span
-  | .keyword s _ | .null s | .literal s _ | .ref s _ _ | .array s _ | .union s _ | .paren s _ => s
+  | .keyword s _ | .null s | .literal s _ | .ref s _ _ | .array s _ | .union s _ | .paren s _
+  | .tuple s _ _ => s
 
 def Expr.span : Expr → Span
   | .ident s _ | .number s _ | .bigint s _ | .string s _ | .bool s _ | .null s | .array s _
@@ -468,7 +483,7 @@ def Stmt.isBreak : Stmt → Bool
   | _ => false
 
 def Decl.span : Decl → Span
-  | .import s .. | .function s .. | .interface s .. | .typeAlias s .. | .exportedVar s _ => s
+  | .import s .. | .function s .. | .interface s .. | .typeAlias s .. | .enum s .. | .exportedVar s _ => s
   | .stmt st => st.span
 
 /-- `e` without the parentheses around it. -/

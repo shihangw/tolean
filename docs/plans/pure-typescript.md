@@ -54,8 +54,6 @@ exact. A construct leaves these tables when Tolean translates it, and the
 | `x?: T` parameters, `undefined` as a value, and a test such as `x !== undefined` that narrows an optional value | `Option T` | `'x' in obj`, which can tell a missing key from `undefined` |
 | A chain after `?.`, such as `a?.b.c`, and `a?.[i]` and `f?.()` | `Option.bind` | `==` against anything except `null` and `undefined` |
 | `export { … }` and re-exports | Nothing: the names stay in scope | `export *` |
-| A tuple type such as `readonly [string, bigint]` | A product type | Tuples that a function changes |
-| A string `enum` | An `inductive` | A numeric `enum`, because it also maps each number back to its name |
 | A type guard `x is T` | A `Bool` function | A guard whose body the translator cannot show to be a test of the tag |
 
 ### Functions
@@ -77,14 +75,12 @@ exact. A construct leaves these tables when Tolean translates it, and the
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| A function with type parameters that have no constraint, such as `function last<T>(xs: ReadonlyArray<T>): T \| null` | `def last {T : Type} …` | `===` on a value of a type parameter, because it compares references when the type is an object |
-| A generic interface or type alias, such as `interface Pair<A, B>` | `structure Pair (A B : Type)` | |
 | A type parameter with a constraint, such as `T extends Named` | Nothing in the first version | All constraints, until the open question below is settled |
 
-The translator already makes each function generic over the number type `N`.
-User type parameters become further implicit arguments next to it. A
-constraint is harder, because TypeScript checks it by the shape of a type and
-Lean has no subtyping by shape.
+A generic function's type parameters are implicit arguments of its `def`, as
+the number type `N` is. A generic interface's become arguments of its
+`structure`. A constraint is harder, because TypeScript checks it by the
+shape of a type and Lean has no subtyping by shape.
 
 ### Recursion
 
@@ -233,8 +229,7 @@ the P2 steps. Steps with the same priority keep the order of their numbers.
    value, the rest of a chain after `?.`, a `default` that assigns to `never`,
    `export { … }` and re-exports, `as const` and `satisfies`, and `Record`
    over a union of string literals.
-3. **P1.** Generic functions and types whose type parameters have no
-   constraint, tuples, string enums and type guards.
+3. **P1.** Type guards.
 4. **P0.** The other array methods without `sort`, such as `reduce` and
    `slice`, indexing, and object spread.
 5. **P0.** Control flow: the counted `for` loop.
@@ -259,6 +254,10 @@ variables and in maps.
 
 ## Open questions
 
+- How should a certificate cover a generic function or interface? The
+  certifier has no encoder for a type parameter, so a file with either gets no
+  certificate. The claim could take an encoder for each type parameter as an
+  argument, since the code never looks inside such a value.
 - How should a type parameter with a constraint translate? One option is a
   type class that the translator writes for each constraint, with one
   method per field that the constraint names. Another is to pass the

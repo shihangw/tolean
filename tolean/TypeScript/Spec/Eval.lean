@@ -223,6 +223,12 @@ def binary : BinOp → Val N → Val N → Option (Val N)
   | .looseNe, a, b => (looseEq a b).map (.bool ∘ not)
   | _, _, _ => none
 
+/-- The element of the array `items` whose index is the safe integer `i`, or
+`undefined` when `i` is none or no index of the array. -/
+def elementAt (items : List (Val N)) : Option Int → Val N
+  | some i => if 0 ≤ i then items[i.toNat]?.getD .undefined else .undefined
+  | none => .undefined
+
 /-- What a statement list does: it runs to its end with the variables it
 leaves, or it returns a value, or a `break` or a `continue` ends it with the
 variables at that point. These are the completion records of ECMA-262
@@ -234,20 +240,27 @@ inductive Outcome (N : Type) where
   | cont (env : Env N)
 deriving Inhabited
 
+/-- The text of a number literal. -/
+def numberText? : Expr → Option String
+  | .number _ text => some text
+  | _ => none
+
 /-- The functions of the module, by name. -/
 def functions (m : Module) : List (String × List String × Stmt) :=
   m.decls.filterMap fun
-    | .function _ _ name params _ body => some (name, params.map (·.name), body)
+    | .function _ _ name _ params _ body => some (name, params.map (·.name), body)
     | _ => none
 
 /-! ### Programs of several files
 
 A program is a list of files, each with its path and its module. In the
-subset a file declares only functions and interfaces, and it runs no code of
-its own, so an import binds a name to a function of another file and does
-nothing else (ECMA-262 §16.2.1.6, `InitializeEnvironment`). A call looks up
-the name in the file that runs: first among its own functions, then among
-the names it imports. -/
+subset a file declares only functions, types and string enums. The only code
+it runs of its own makes the object of each enum, when the file loads and so
+before any function of the program runs. So an import binds a name to a
+function or an enum of another file and does nothing else (ECMA-262
+§16.2.1.6, `InitializeEnvironment`). A call looks up the name in the file
+that runs: first among its own functions, then among the names it imports. A
+name that no variable binds is looked up the same way among the enums. -/
 
 /-- A program: the path of each file, and its module. -/
 abbrev Program := List (String × Module)
@@ -286,7 +299,7 @@ def resolvePath (file source : String) : Option String := do
 /-- `m` declares `name` as an exported function. -/
 def exportsFunction (m : Module) (name : String) : Bool :=
   m.decls.any fun
-    | .function _ exported n _ _ _ => exported && n == name
+    | .function _ exported n _ _ _ _ => exported && n == name
     | _ => false
 
 /-- The function that a call of `name` runs, in the file of `s`: the file's
@@ -302,6 +315,47 @@ def resolve (s : Scope) (name : String) : Option DeclRef := do
   let tm ← s.program.lookup target
   if exportsFunction tm name then return ⟨target, name⟩ else none
 
+/-- The string enums that `m` declares, or only the exported ones when
+`exportedOnly`: each with its name, and the name and the string of each
+member. -/
+def enumsOf (m : Module) (exportedOnly : Bool) : List (String × List (String × String)) :=
+  m.decls.filterMap fun
+    | .enum _ exported name members =>
+      if exported || !exportedOnly then some (name, members.map fun x => (x.name, x.value)) else none
+    | _ => none
+
+/-- What the declaration `d` of the file `file` binds the name `name` to, when
+it is a string enum or an import of `name` without `type`: the members of the
+enum, or none when an import names something that is not an exported string
+enum. -/
+def enumBinding (p : Program) (file name : String) : Decl → Option (Option (List (String × String)))
+  | .enum _ _ n members => if n == name then some (some (members.map fun x => (x.name, x.value))) else none
+  | .import _ names source =>
+    if names.any fun n => !n.typeOnly && n.name == name then
+      some (do
+        let target ← resolvePath file source
+        let tm ← p.lookup target
+        (enumsOf tm true).lookup name)
+    else none
+  | _ => none
+
+/-- The members of the enum that the name `name` reads in the file of `s`. A
+module binds each name once (ECMA-262 §16.2.1.1), so in a program that loads
+the first declaration that binds it is the only one: the file's own enum, or
+an import, which binds the exported enum of the file it names. An import with
+`type` binds no value. -/
+def resolveEnum (s : Scope) (name : String) : Option (List (String × String)) := do
+  let m ← s.program.lookup s.file
+  let members ← m.decls.findSome? (enumBinding s.program s.file name)
+  members
+
+/-- The object of a string enum. TypeScript compiles `enum T { A = "a" }` to
+code that makes an object and sets the property `A` of it to `"a"`, for each
+member in order. A string member has no reverse mapping, so the object has
+no other property. -/
+def enumObject (members : List (String × String)) : Val N :=
+  .obj (members.map fun (k, v) => (k, .str v))
+
 /-- Every function of the program, under the file that declares it. -/
 def functionsOf (p : Program) : List (DeclRef × List String × Stmt) :=
   p.flatMap fun (file, m) => (functions m).map fun (name, params, body) => (⟨file, name⟩, params, body)
@@ -312,7 +366,12 @@ mutual
 interpreter is a total function. -/
 def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
   -- `NaN` and `Infinity` are properties of the global object (ECMA-262
-  -- §19.1), unless a variable of the program hides them.
+  -- §19.1), unless a variable of the program hides them. Any other name
+  -- that no variable binds can be a string enum of the module, or one that
+  -- it imports, which is a binding of the module. In JS such a binding would
+  -- also hide a global of the same name, and this rule reads the global
+  -- instead, so an enum named `NaN` makes it less defined than JS. The
+  -- translator refuses such a name.
   | .ident _ name =>
     match env.lookup name with
     | some v => some v
@@ -320,7 +379,7 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
       if name == "NaN" then some (.num JSNumber.nan)
       else if name == "Infinity" then some (.num JSNumber.posInf)
       else if name == "undefined" then some .undefined
-      else none
+      else (resolveEnum m name).map enumObject
   | .bigint _ text => (bigintLiteral text).map .int
   | .number _ text => (numberLiteral text).map (.num ∘ JSNumber.ofSafeInt)
   | .bool _ b => some (.bool b)
@@ -344,13 +403,28 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     | .null | .undefined => some .undefined
     | .obj fields => getProp fields name
     | _ => none
+  -- `xs[i]` on an array, with a number `i` (`OrdinaryGet` on an array exotic
+  -- object, ECMA-262 §10.4.2): the element when `i` is an index of the
+  -- array. Any other number is `undefined`, because no element and no
+  -- property of `Array.prototype` has its string as a key. `-0` reads the
+  -- element `0`, as its string is `"0"`. A number literal is the integer it
+  -- names, whatever the model of numbers, so the rule reads that integer.
+  --
   -- `obj[key]` with a string key (ECMA-262 §13.3.2.1): `ToPropertyKey` of a
   -- string is the string itself, so this reads the property as `obj.key`
-  -- does. An array, or a key of another type, leaves the subset.
+  -- does. A key of another type leaves the subset.
   | .index _ obj key => do
-    match ← eval m fuel env obj, ← eval m fuel env key with
-    | .obj fields, .str name => getKey fields name
-    | _, _ => none
+    match ← eval m fuel env obj with
+    | .list items =>
+      match numberText? key with
+      | some text => return elementAt items (some (← numberLiteral text))
+      | none =>
+        let .num n ← eval m fuel env key | none
+        return elementAt items (JSNumber.toSafeInt n)
+    | .obj fields =>
+      let .str k ← eval m fuel env key | none
+      getKey fields k
+    | _ => none
   | .unary _ .not arg => do return .bool !(← eval m fuel env arg).truthy
   -- `typeof x` names the type of the value of `x` (ECMA-262 §13.5.3.1). On a
   -- name that is not bound, JS gives `"undefined"`, and the subset has no

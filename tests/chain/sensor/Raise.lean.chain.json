@@ -62,5 +62,5 @@
   ["semantics", "certificate:raise"],
   ["certificate:raise", "translator"]],
  "certificate":
- {"sha256": "0e7e65a847b09e6272496a3d50d55a670e7a7c6fd84f447475ff4d6b7bb090ab",
+ {"sha256": "b3a0383a6fd4875a4e28f2cf8dd224c643da3b5455bfc082e3013e33d84b0c38",
   "path": "sensor/RaiseCert.lean"}}

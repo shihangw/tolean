@@ -14,8 +14,9 @@ marks which links are proved, tested against a reference, or trusted.
 
 `tolean/TypeScript/Syntax/` puts a span on every node. It reads:
 
-- **Declarations:** functions, interfaces, type aliases, and `const` and `let`,
-  each of them possibly exported.
+- **Declarations:** functions, interfaces and type aliases, each of which may
+  have type parameters such as `<A, B>`, enums whose members are strings, and
+  `const` and `let`. Each of them may be exported.
 - **Statements:** `const` and `let` declarations, expression statements,
   `return`, `if` and `else`, `for … of`, the counted `for`, `while`, `switch`,
   blocks, `break`, `continue` and the empty statement. A counted `for`, such
@@ -34,7 +35,8 @@ marks which links are proved, tested against a reference, or trusted.
   `(a: number, b) => a * b`; and `e as const` and `e satisfies T`, which
   bind as `<` does, as they do in `tsc`.
 - **Types:** keyword types such as `number`, `null`, literal types, named types
-  with type arguments, arrays, unions and parentheses.
+  with type arguments, arrays, tuples such as `[A, B]` and `readonly [A, B]`,
+  unions and parentheses.
 
 The translator accepts less than the parser reads; see
 [The TypeScript subset](#the-subset). Sometimes `tsc` and JavaScript read the same tokens in two different
@@ -329,6 +331,7 @@ the file, the line and the reason. It never approximates.
 | `e as const` and `e satisfies T` | `e`. Type stripping removes both, so the value is the value of `e`. Tolean types `e` in the context of `T` and checks that the value has the type `T`, as `tsc` does. The value keeps its own type, which can be wider than the type `tsc` gives it, because the output types a literal by its context, as it does without `as const`. |
 | `type T = U`, declared before its uses | `abbrev T := U`. The output writes `U` itself wherever the source names `T`, so the `abbrev` is only for claims. |
 | `type T = 'a' \| 'b'`, a union of string literals | `inductive T` with the constructors `a` and `b`, which derives `DecidableEq`. A literal becomes `T.a` where the context expects a `T`, and `t === 'a'` becomes `t = T.a`. The output writes every constructor in `«»`, such as `T.«open»`, because Lean reads some strings as keywords or modifiers. A claim can still write `T.a`. |
+| `enum T { A = 'a', B = 'b' }`, an enum whose members are strings | The same `inductive T` as for `'a' \| 'b'`, with the constructors named after the strings, so `T.A` becomes `T.«a»`. TypeScript compiles the enum to an object with one property for each member, and `T.A` reads it. The output has no such object, so only `T.A` reads a member, and a file that imports the enum without `type` may read its members too. |
 | `type T = A \| B`, a union of interfaces with a tag field such as `kind: 'circle'` | `inductive T` with a constructor for each member, which holds the member's structure. The structure leaves the tag field out, because its value never changes. An object literal where a `T` is expected becomes the constructor of its tag. |
 | `if (s.kind === 'circle')`, with `===` or `!==` and the string on either side | `match s with \| T.circle s => … \| …`. TypeScript narrows `s` in each branch, and so does the output. A chain of such tests on the same value becomes one `match`. |
 | `switch (s.kind)` with a `case 'circle':` for each member, or a `default:` last, where every clause returns | The same `match`, with one arm for each case. The `default`, or the code after the `switch` when it has no `default`, becomes the arm for the members that no case names. |
@@ -343,6 +346,9 @@ the file, the line and the reason. It never approximates.
 | `x = e`, `x += e`, `x -= e`, `x *= e` on a `let` local | `let x := …` (shadowing) |
 | `x ??= e` on a `let` local of type `T \| null` | `let x := Option.or x e`. JS evaluates `e` only when `x` is `null`. Lean evaluates it either way, but the result is the same, because the subset has no side effects. |
 | `[a, b]` with the element type from the context or the elements, such as `return [a, b]` or `const xs: ReadonlyArray<T> = []` | `([a, b] : List T)` |
+| `[A, B]` and `readonly [A, B]`, a tuple of two elements or more | `A × B`. In JS a tuple is an array. |
+| `[a, b]` where the context expects a tuple, such as a return value | `(a, b)`, with each element translated where its own type is expected |
+| `t[0]`, an element of a tuple at an index that is a number literal | `t.1`, and `t.2.1` or `t.2.2` for the second or the last of three, as Lean nests the product to the right |
 | `const xs: Array<T> = [...]`, then `xs.push(e)`; `xs` read only in the `return` | `let xs := xs ++ [e]` |
 | `for (const x of xs) { … }` | `List.foldl` over the tuple of locals the body changes |
 | `if (c) continue;` at the top of a loop body, or a branch of that `if` that ends in `continue` on every path | `if c then (x, y) else …`, where the rest of the body is the `else` branch, as after an `if` that returns. A test of `null` or of a tag narrows the local for the rest of the body. |
@@ -356,6 +362,9 @@ the file, the line and the reason. It never approximates.
 | `a / k`, `a % k` on `bigint`, where `k` is a nonzero literal | `Int.tdiv a k`, `Int.tmod a k` (both truncate toward zero, as JS does) |
 | `{ a, b: e }` building a declared interface | structure instance |
 | Call to a function declared earlier in the file | application |
+| `interface Box<T> { readonly value: T }`, where the type parameters have no constraint | `structure Box (T : Type)`. `Box<bigint>` becomes `Box Int`, and a read of a field has the field's type with `bigint` for `T`. An object literal where a `Box<bigint>` is expected becomes `({ value := … } : (Box Int))`. |
+| `type Maybe<T> = T \| null` | `abbrev Maybe (T : Type) := Option T`. As for any alias, the output writes the type itself wherever the source names it, so `Maybe<bigint>` becomes `Option Int`. |
+| `function f<T>(x: T): T`, where the type parameters have no constraint | `def f {T : Type} (x : T) : T`. A call fixes each type parameter from the types of its arguments, and Lean infers the same types. An argument of `T \| null` may be `null`, which leaves `T` to another argument. |
 
 Tolean rejects these, among others:
 
@@ -406,11 +415,41 @@ Tolean rejects these, among others:
   function pushes to must be a `const`; for a value, use `ReadonlyArray<T>`.
   An empty `[]` needs a type from its context, and the elements of a literal
   need one type.
+- A tuple of one element, an empty tuple, named, optional and rest elements,
+  and a `,` after the last element. Tolean also refuses `readonly` before
+  anything but a tuple, such as `readonly bigint[]`, and `readonly [A, B][]`,
+  which `tsc` reads as a readonly array of tuples. An index of a tuple must be
+  a number literal within the tuple, and an index of any other value is
+  refused. `===` on tuples is refused, because in JS it compares the arrays
+  by reference.
+- A type parameter with a constraint, a default or a modifier, and a `,` after
+  the last one. Tolean also refuses a type parameter of a function that no
+  parameter's type names, because a call could not fix it. A generic type
+  named with the wrong number of type arguments is refused, and so is a
+  generic union or `Record`: a union of string literals, primitive types or
+  interfaces, and a `Record`, become a type of their own, which takes no type
+  parameters. A
+  field may not have the name of a type parameter, because Lean would read the
+  name as the field in the types of the fields after it. A type parameter may not have the
+  name of a type or function of the file, or of a local, because Lean would
+  read the name as the other one. `===` on values of a type parameter is
+  refused, because in JS it compares objects by reference.
+- A call to a generic function whose arguments do not fix every type
+  parameter, or fix one to `null`, a nullable type or an optional field's
+  type. The output gives `T | null` the type `Option T`, so `T` may not be
+  nullable itself.
 - A literal union that is not the whole of a type alias, such as `(s: 'a' | 'b')`,
   because the output needs a name for its inductive type. Tolean also refuses
   a union of string literals and other types, a string that is not an ASCII
   name or that Lean declares for every inductive type, such as `'rec'`, and a
   value of a literal union where a `string` is expected.
+- A numeric enum, an enum member without a value, a `const enum`, and an enum
+  inside a function. Tolean also refuses an enum without members, two members
+  with one name or one string, and a member named after a property of
+  `Object.prototype`, such as `__proto__`. In TypeScript a value of a string
+  enum is one of its members, so Tolean refuses a string such as `'a'` where
+  the enum is expected, and a member where a `string` is expected. It also
+  refuses the enum's object as a value, and a local with the enum's name.
 - A field of a tagged union read before a test of its tag, a read of the tag
   field outside such a test, and a union of interfaces without a tag. Tolean
   also refuses a member, such as a `Circle`, where the union is expected,
@@ -620,7 +659,7 @@ path = "node_modules/tolean/lean"
 | 2. Translate | Tolean writes readable Lean definitions (the generated `.lean` files) | **Proved** up to the printer | `program_sound` proves the translation to the Tolean IR for every accepted program: when the IR's evaluator gives a value, the interpreter gives the same value. The printer link is trusted: that the printed Lean computes what the evaluator gives for the IR, and that the evaluator gives a value where the printed Lean does. No theorem can state it for every program, because the printed Lean is text that means something only after Lean compiles it. The golden files of the corpus, compiling random programs and the CI drift check test it, and a [certificate](#certificates) proves the link, and so the whole step, for one file. |
 | 3. Prove the claims | Hand-written proofs show that each claim in `Spec/*.lean` holds for the generated definitions | **Proved** | The Lean kernel, `#audit_claims`, `lake build --wfail`, and no `sorry`, `admit`, `axiom` or `native_decide` |
 | 4. Assume JS number facts | `SafeIntLaws` and `SpecialValueLaws` in `tolean/TypeScript/Spec/Number.lean` | Trusted, tested | `tests/typescript/jsNumberLaws.test.ts` checks each law against real doubles. |
-| 5. Run | Type stripping or a bundler makes the JavaScript that Node runs | Trusted | The subset uses only constructs that type stripping leaves unchanged |
+| 5. Run | Type stripping or a bundler makes the JavaScript that Node runs | Trusted | The subset uses only constructs that type stripping leaves unchanged, except `enum`. Type stripping refuses an enum, so code with one needs `tsc`, a bundler or Node's `--experimental-transform-types`. The interpreter reads an enum as the object that `tsc` makes for it. |
 | 6. Inputs | The code that calls the verified functions passes inputs that meet the theorems' preconditions | Trusted | The callers are responsible for it. A function can check its own inputs instead, so that its claim has no precondition, and [a plan](../plans/input-checks.md) lets `tolean.json` require that. |
 
 So a theorem holds for the code that runs if steps 1, 4 and 5 are correct, the

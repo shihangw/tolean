@@ -145,7 +145,12 @@ def Expr.eval (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
       | .ret v => some v
       | .normal _ | .brk _ | .cont _ => none
   | .list elems _ => do return .list (← Expr.evalList fs fuel ρ elems)
-  | .struct fields _ => do return .obj (← Expr.evalFields fs fuel ρ fields)
+  -- A tuple is an array in JS, so its value is the list of its elements.
+  | .tuple elems => do return .list (← Expr.evalList fs fuel ρ elems)
+  | .proj e index _ => do
+    let .list items ← Expr.eval fs fuel ρ e | none
+    items[index]?
+  | .struct fields _ _ => do return .obj (← Expr.evalFields fs fuel ρ fields)
   -- A value of `T | null` is never `undefined`. JS tells `undefined` from
   -- `null` with `===` but not with `==`, so the tests of `null` give no value
   -- for it.

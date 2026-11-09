@@ -67,6 +67,7 @@ def typeExpr : TypeExpr → String
   | .array s e => s!"({ns}TypeExpr.array {span s} {typeExpr e})"
   | .union s ms => s!"({ns}TypeExpr.union {span s} {list (ms.map typeExpr)})"
   | .paren s e => s!"({ns}TypeExpr.paren {span s} {typeExpr e})"
+  | .tuple s ro es => s!"({ns}TypeExpr.tuple {span s} {ro} {list (es.map typeExpr)})"
 
 def propKey (k : PropKey) : String :=
   match k with
@@ -159,16 +160,21 @@ def field (f : Field) : String :=
   s!"\{ span := {span f.span}, readonly := {f.readonly}, name := {str f.name}, " ++
     s!"optional := {f.optional}, type := {typeExpr f.type} }"
 
+def enumMember (m : EnumMember) : String :=
+  s!"\{ span := {span m.span}, name := {str m.name}, value := {str m.value} }"
+
 def importName (n : ImportName) : String :=
   s!"\{ span := {span n.span}, typeOnly := {n.typeOnly}, name := {str n.name} }"
 
 def decl : Decl → String
   | .import s names source => s!"({ns}Decl.import {span s} {list (names.map importName)} {str source})"
-  | .function s e n ps r b =>
-    s!"({ns}Decl.function {span s} {e} {str n} {list (ps.map param)} " ++
+  | .function s e n tps ps r b =>
+    s!"({ns}Decl.function {span s} {e} {str n} {list (tps.map str)} {list (ps.map param)} " ++
       s!"{option (r.map typeExpr)}\n    {stmt b})"
-  | .interface s e n fs => s!"({ns}Decl.interface {span s} {e} {str n} {list (fs.map field)})"
-  | .typeAlias s e n t => s!"({ns}Decl.typeAlias {span s} {e} {str n} {typeExpr t})"
+  | .interface s e n tps fs =>
+    s!"({ns}Decl.interface {span s} {e} {str n} {list (tps.map str)} {list (fs.map field)})"
+  | .typeAlias s e n tps t => s!"({ns}Decl.typeAlias {span s} {e} {str n} {list (tps.map str)} {typeExpr t})"
+  | .enum s e n ms => s!"({ns}Decl.enum {span s} {e} {str n} {list (ms.map enumMember)})"
   | .exportedVar s d => s!"({ns}Decl.exportedVar {span s} {varDecl d})"
   | .stmt s => s!"({ns}Decl.stmt {stmt s})"
 

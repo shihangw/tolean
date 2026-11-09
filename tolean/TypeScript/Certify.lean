@@ -91,6 +91,8 @@ def sourceIdents (source : String) (target : Edition) : List String :=
     | _ => none
   | .error _ => []
 
+mutual
+
 /-- How a value of a Lean type of the output becomes a `Val`. -/
 def encoderOf (r : Refs) : IR.Ty → Option String
   | .int => some (r.eval "Val.int")
@@ -101,7 +103,20 @@ def encoderOf (r : Refs) : IR.Ty → Option String
   | .list t => do return s!"({r.eval "encList"} {← encoderOf r t})"
   | .struct ref | .enum ref | .tagged ref => some (r.cert s!"encode{ref.name}")
   | .number => some (r.eval "Val.num")
-  | .null | .tag _ => none
+  | .tuple ts => do return s!"({r.eval "encTuple"} {← elementsEncoder r ts})"
+  -- A type parameter has no encoder, so a generic function or interface gets no
+  -- certificate yet.
+  | .null | .tag _ | .param _ | .app .. => none
+
+/-- How the elements of a tuple of the types `ts` become a list of `Val`s. -/
+def elementsEncoder (r : Refs) : List IR.Ty → Option String
+  | [] => none
+  | [t] => do return s!"({r.eval "encLast"} {← encoderOf r t})"
+  | t :: ts => do return s!"({r.eval "encCons"} {← encoderOf r t} {← elementsEncoder r ts})"
+
+end
+
+mutual
 
 /-- How a variable's value becomes a Lean value of type `t` again. -/
 def decoderOf (r : Refs) : IR.Ty → Option String
@@ -113,7 +128,16 @@ def decoderOf (r : Refs) : IR.Ty → Option String
   | .list t => do return s!"({r.eval "decList"} {← decoderOf r t})"
   | .struct ref | .enum ref | .tagged ref => some (r.cert s!"decode{ref.name}")
   | .number => some (r.eval "decNum")
-  | .null | .tag _ => none
+  | .tuple ts => do return s!"({r.eval "decTuple"} {← elementsDecoder r ts})"
+  | .null | .tag _ | .param _ | .app .. => none
+
+/-- How a list of `Val`s becomes the elements of a tuple of the types `ts`. -/
+def elementsDecoder (r : Refs) : List IR.Ty → Option String
+  | [] => none
+  | [t] => do return s!"({r.eval "decLast"} {← decoderOf r t})"
+  | t :: ts => do return s!"({r.eval "decCons"} {← decoderOf r t} {← elementsDecoder r ts})"
+
+end
 
 /-- The constructor of `Val` for a value of the primitive type `t`. -/
 def valPattern : IR.Ty → Option String
@@ -179,7 +203,7 @@ def stmtCalls : Stmt → List String
 
 def functionsOf (m : Module) : List (String × List Param × Option TypeExpr × Stmt) :=
   m.decls.filterMap fun
-    | .function _ _ n ps r b => some (n, ps, r, b)
+    | .function _ _ n _ ps r b => some (n, ps, r, b)
     | _ => none
 
 /-- The functions that get a certificate: all of them. -/
@@ -246,7 +270,9 @@ partial def exprCallbacks : IR.Expr → List Callback
   | .eq a b | .ne a b | .propAnd a b | .propOr a b | .and a b | .or a b =>
     exprCallbacks a ++ exprCallbacks b
   | .call _ args | .list args _ | .ext _ args => args.flatMap exprCallbacks
-  | .struct fields _ => fields.flatMap (exprCallbacks ·.2)
+  | .struct fields _ _ => fields.flatMap (exprCallbacks ·.2)
+  | .tuple es => es.flatMap exprCallbacks
+  | .proj e _ _ => exprCallbacks e
   | .int _ | .none | .bool _ | .string _ | .var _ | .enumCase .. | .tagValue _ => []
 
 /-- The names that `e` reads. -/
@@ -262,7 +288,9 @@ partial def exprNames : IR.Expr → List String
   | .eq a b | .ne a b | .propAnd a b | .propOr a b | .and a b | .or a b =>
     exprNames a ++ exprNames b
   | .call _ args | .list args _ | .ext _ args => args.flatMap exprNames
-  | .struct fields _ => fields.flatMap (exprNames ·.2)
+  | .struct fields _ _ => fields.flatMap (exprNames ·.2)
+  | .tuple es => es.flatMap exprNames
+  | .proj e _ _ => exprNames e
   | .int _ | .none | .bool _ | .string _ | .enumCase .. | .tagValue _ => []
 
 /-- The callbacks in a body, inner ones first, in the order of the source. -/
@@ -298,7 +326,7 @@ def splitSteps (decls : List IR.Decl) : Nat → String → IR.Ty → List String
   | _ + 1, name, .enum _ => [s!"cases {name}"]
   | fuel + 1, name, .struct ref =>
     let fields := decls.findSome? fun
-      | .struct n fields => if n == ref.name then some fields else none
+      | .struct n _ fields => if n == ref.name then some fields else none
       | _ => none
     match fields with
     | some fields =>
@@ -308,6 +336,11 @@ def splitSteps (decls : List IR.Decl) : Nat → String → IR.Ty → List String
       if inner.isEmpty then []
       else s!"rcases {name} with ⟨{", ".intercalate (fields.map fun (f, _) => s!"{name}_{f}")}⟩" :: inner
     | none => []
+  | fuel + 1, name, .tuple ts =>
+    let parts := (List.range ts.length).map (s!"{name}_{·}")
+    let inner := (parts.zip ts).flatMap fun (n, t) => splitSteps decls fuel n t
+    if inner.isEmpty then []
+    else s!"rcases {name} with ⟨{", ".intercalate parts}⟩" :: inner
   | fuel + 1, name, .tagged ref =>
     let members := decls.findSome? fun
       | .tagged n _ members => if n == ref.name then some members else none
@@ -416,7 +449,8 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         encs := encs.push <|
           s!"@[simp] theorem decode{name}_{i} {generic} : decode{name} ({nv} := {nv}) (some (Val.str {r.jsString m})) = {ctor m} := rfl"
     -- An interface.
-    if let .struct name allFields := d then
+    if let .struct name typeParams allFields := d then
+      unless typeParams.isEmpty do throw s!"{file}: the generic interface {name} has no certificate yet"
       -- An optional field is a key only when it holds a value, as in an
       -- object literal that leaves it out.
       let parts ← allFields.mapM fun (f, t) => do
@@ -524,7 +558,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       -- optional field of the member's structure into its two cases.
       let memberFields (ref : DeclRef) : List (String × IR.Ty) :=
         ((decls.findSome? fun
-          | .struct n fs => if n == ref.name then some fs else none
+          | .struct n _ fs => if n == ref.name then some fs else none
           | _ => none).getD []).filter fun (_, t) => !(t matches .tag _)
       let arms := members.map fun (t, m) =>
         let fs := memberFields m
@@ -559,7 +593,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
   let mut loopLemmas : Array String := #[]
   let mut thms : Array String := #[]
   for d in m.decls do
-    let .function _ _ name params _ syntaxBody := d | continue
+    let .function _ _ name _ params _ syntaxBody := d | continue
     unless fns.contains name do continue
     let some (.function _ outParams outRet outBody) := decls.find? fun
         | .function n .. => n == name

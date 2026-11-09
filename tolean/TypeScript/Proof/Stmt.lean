@@ -680,7 +680,7 @@ branch. -/
 theorem if_early_sim {env envT envF : Translate.Env} {sp : Span} {test : Expr} {t : Stmt}
     {e : Option Stmt} {rest : List Stmt} {tail thenTail : Tail} {br wt wf : IR.Body}
     (hT : ∀ x, envT.has x = env.has x) (hF : ∀ x, envF.has x = env.has x)
-    (hTf : envT.functions = env.functions) (hFf : envF.functions = env.functions)
+    (hTf : globals envT = globals env) (hFf : globals envF = globals env)
     (htail : (thenTail.isRet = false → tail.isRet = false) ∧
       ∀ (r : Option (Outcome N)) e, Ends thenTail false r e → r = some (.cont e) ∧ tail.isRet = false ∧
         ∀ e', Ends (N := N) tail false (some (.cont e')) e')
@@ -690,8 +690,8 @@ theorem if_early_sim {env envT envF : Translate.Env} {sp : Span} {test : Expr} {
     (hwf : StmtSim (N := N) m fs fuel envF tail ((e.map blockStatements).getD [] ++ rest) wf) :
     StmtSim (N := N) m fs fuel env tail (.ifStmt sp test t e :: rest) br := by
   intro ρs ρo ha hs
-  have hsT : Scoped m envT ρs := ⟨fun x => (hs.1 x).trans (hT x).symm, fun f hf => hs.2 f (hTf ▸ hf)⟩
-  have hsF : Scoped m envF ρs := ⟨fun x => (hs.1 x).trans (hF x).symm, fun f hf => hs.2 f (hFf ▸ hf)⟩
+  have hsT : Scoped m envT ρs := ⟨fun x => (hs.1 x).trans (hT x).symm, hs.2.congr hTf⟩
+  have hsF : Scoped m envF ρs := ⟨fun x => (hs.1 x).trans (hF x).symm, hs.2.congr hFf⟩
   constructor
   · intro v hv
     obtain ⟨w, hw, hb⟩ := hbr ρs ρo _ ha hs hv
@@ -755,7 +755,7 @@ theorem if_early_sim {env envT envF : Translate.Env} {sp : Span} {test : Expr} {
 theorem if_state_sim {env envT envF : Translate.Env} {sp : Span} {test : Expr} {t : Stmt}
     {e : Option Stmt} {rest : List Stmt} {tail : Tail} {br wt wf rb : IR.Body} {names : List String}
     (hT : ∀ x, envT.has x = env.has x) (hF : ∀ x, envF.has x = env.has x)
-    (hTf : envT.functions = env.functions) (hFf : envF.functions = env.functions)
+    (hTf : globals envT = globals env) (hFf : globals envF = globals env)
     (hnames : names = changedNames (blockStatements t ++ (e.map blockStatements).getD []) env)
     (hbr : BranchSim (N := N) m fs fuel env test br wt wf)
     (hwt : StmtSim (N := N) m fs fuel envT (.state names) (blockStatements t) wt)
@@ -763,8 +763,8 @@ theorem if_state_sim {env envT envF : Translate.Env} {sp : Span} {test : Expr} {
     (hrest : StmtSim (N := N) m fs fuel env tail rest rb) :
     StmtSim (N := N) m fs fuel env tail (.ifStmt sp test t e :: rest) (.letState names br rb) := by
   intro ρs ρo ha hs
-  have hsT : Scoped m envT ρs := ⟨fun x => (hs.1 x).trans (hT x).symm, fun f hf => hs.2 f (hTf ▸ hf)⟩
-  have hsF : Scoped m envF ρs := ⟨fun x => (hs.1 x).trans (hF x).symm, fun f hf => hs.2 f (hFf ▸ hf)⟩
+  have hsT : Scoped m envT ρs := ⟨fun x => (hs.1 x).trans (hT x).symm, hs.2.congr hTf⟩
+  have hsF : Scoped m envF ρs := ⟨fun x => (hs.1 x).trans (hF x).symm, hs.2.congr hFf⟩
   -- The `if` ends in `mod`, which agrees with the output's state after the
   -- `letState`.
   have key : ∀ o, IR.Body.exec fs fuel ρo (.letState names br rb) = some o →
@@ -1192,12 +1192,12 @@ theorem clauses_default_sim {env : Translate.Env} {sw : SwitchOn} {known : Optio
 /-- The case of the one member left, which an outer `match` has tested. -/
 theorem clauses_last_sim {env envT : Translate.Env} {sw : SwitchOn} {test : Expr} {body : List Stmt}
     {more : List (Option Expr × List Stmt)} {rest : List Stmt} {tsp : Span} {tag : String} {b : IR.Body}
-    (hT : ∀ x, envT.has x = env.has x) (hTf : envT.functions = env.functions)
+    (hT : ∀ x, envT.has x = env.has x) (hTf : globals envT = globals env)
     (hst : test.stripParens = .string tsp tag)
     (hb : StmtSim (N := N) m fs fuel envT .ret (clauseStatements body) b) :
     ClauseSim (N := N) m fs fuel env sw (some tag) ((some test, body) :: more) rest b := by
   intro ρs ρo ha hs
-  have hsT : Scoped m envT ρs := ⟨fun x => (hs.1 x).trans (hT x).symm, fun f hf => hs.2 f (hTf ▸ hf)⟩
+  have hsT : Scoped m envT ρs := ⟨fun x => (hs.1 x).trans (hT x).symm, hs.2.congr hTf⟩
   refine ⟨fun brk ρo' hv => absurd ((hb ρs ρo ha hsT).2 brk ρo' hv).1 (by simp [Tail.isRet]), fun v hv => ⟨?_, ?_⟩⟩
   · intro h; cases h
   · intro fields k _ _ hknown
@@ -1209,16 +1209,16 @@ theorem clauses_last_sim {env envT : Translate.Env} {sw : SwitchOn} {test : Expr
 theorem clauses_case_sim {env envT envO : Translate.Env} {sw : SwitchOn} {known other : Option String}
     {test : Expr} {body : List Stmt} {more : List (Option Expr × List Stmt)} {rest : List Stmt} {tsp : Span}
     {tag : String} {wt wo : IR.Body}
-    (hT : ∀ x, envT.has x = env.has x) (hTf : envT.functions = env.functions)
-    (hO : ∀ x, envO.has x = env.has x) (hOf : envO.functions = env.functions)
+    (hT : ∀ x, envT.has x = env.has x) (hTf : globals envT = globals env)
+    (hO : ∀ x, envO.has x = env.has x) (hOf : globals envO = globals env)
     (hst : test.stripParens = .string tsp tag)
     (hwt : StmtSim (N := N) m fs fuel envT .ret (clauseStatements body) wt)
     (hwo : ClauseSim (N := N) m fs fuel envO sw other more rest wo) :
     ClauseSim (N := N) m fs fuel env sw known ((some test, body) :: more) rest
       (.matchTag sw.name sw.ref sw.field tag other wt wo) := by
   intro ρs ρo ha hs
-  have hsT : Scoped m envT ρs := ⟨fun x => (hs.1 x).trans (hT x).symm, fun f hf => hs.2 f (hTf ▸ hf)⟩
-  have hsO : Scoped m envO ρs := ⟨fun x => (hs.1 x).trans (hO x).symm, fun f hf => hs.2 f (hOf ▸ hf)⟩
+  have hsT : Scoped m envT ρs := ⟨fun x => (hs.1 x).trans (hT x).symm, hs.2.congr hTf⟩
+  have hsO : Scoped m envO ρs := ⟨fun x => (hs.1 x).trans (hO x).symm, hs.2.congr hOf⟩
   refine ⟨fun brk ρo' hv => ?_, fun v hv => ?_⟩
   · obtain ⟨_, _, _, _, ⟨_, h⟩ | ⟨_, _, h⟩⟩ := matchTag_exec fs fuel hv
     · exact absurd ((hwt ρs ρo ha hsT).2 brk ρo' h).1 (by simp [Tail.isRet])
@@ -1431,12 +1431,12 @@ theorem state_default_sim {env : Translate.Env} {sw : SwitchOn} {known : Option 
 /-- The case of the one member left, which an outer `match` has tested. -/
 theorem state_last_sim {env envT : Translate.Env} {sw : SwitchOn} {test : Expr} {body : List Stmt}
     {more : List (Option Expr × List Stmt)} {tsp : Span} {tag : String} {b : IR.Body} {names : List String}
-    (hT : ∀ x, envT.has x = env.has x) (hTf : envT.functions = env.functions)
+    (hT : ∀ x, envT.has x = env.has x) (hTf : globals envT = globals env)
     (hst : test.stripParens = .string tsp tag) (hlast : more = [] ∨ endsInBreak body = true)
     (hb : StmtSim (N := N) m fs fuel envT (.state names) (dropBreak body) b) :
     StateClauseSim (N := N) m fs fuel env sw (some tag) ((some test, body) :: more) b := by
   intro ρs ρo inner ha hs hv
-  have hsT : Scoped m envT ρs := ⟨fun x => (hs.1 x).trans (hT x).symm, fun f hf => hs.2 f (hTf ▸ hf)⟩
+  have hsT : Scoped m envT ρs := ⟨fun x => (hs.1 x).trans (hT x).symm, hs.2.congr hTf⟩
   obtain ⟨-, new, out, mod, hex, hag, -, hnew, hfr⟩ := (hb ρs ρo ha hsT).2 false inner hv
   refine ⟨fun h => (by cases h), fun fields k _ _ hknown =>
     ⟨new, out, mod, ?_, hag, fun p hp => by rw [← hT]; exact hnew p hp, hfr.mono fun n hn => ?_⟩⟩
@@ -1449,16 +1449,16 @@ theorem state_last_sim {env envT : Translate.Env} {sw : SwitchOn} {test : Expr} 
 theorem state_case_sim {env envT envO : Translate.Env} {sw : SwitchOn} {known other : Option String}
     {test : Expr} {body : List Stmt} {more : List (Option Expr × List Stmt)} {tsp : Span} {tag : String}
     {wt wo : IR.Body} {names : List String}
-    (hT : ∀ x, envT.has x = env.has x) (hTf : envT.functions = env.functions)
-    (hO : ∀ x, envO.has x = env.has x) (hOf : envO.functions = env.functions)
+    (hT : ∀ x, envT.has x = env.has x) (hTf : globals envT = globals env)
+    (hO : ∀ x, envO.has x = env.has x) (hOf : globals envO = globals env)
     (hst : test.stripParens = .string tsp tag) (hlast : more = [] ∨ endsInBreak body = true)
     (hwt : StmtSim (N := N) m fs fuel envT (.state names) (dropBreak body) wt)
     (hwo : StateClauseSim (N := N) m fs fuel envO sw other more wo) :
     StateClauseSim (N := N) m fs fuel env sw known ((some test, body) :: more)
       (.matchTag sw.name sw.ref sw.field tag other wt wo) := by
   intro ρs ρo inner ha hs hv
-  have hsT : Scoped m envT ρs := ⟨fun x => (hs.1 x).trans (hT x).symm, fun f hf => hs.2 f (hTf ▸ hf)⟩
-  have hsO : Scoped m envO ρs := ⟨fun x => (hs.1 x).trans (hO x).symm, fun f hf => hs.2 f (hOf ▸ hf)⟩
+  have hsT : Scoped m envT ρs := ⟨fun x => (hs.1 x).trans (hT x).symm, hs.2.congr hTf⟩
+  have hsO : Scoped m envO ρs := ⟨fun x => (hs.1 x).trans (hO x).symm, hs.2.congr hOf⟩
   obtain ⟨fields, k, hl, hk, hbr⟩ := matchTag_exec fs fuel hv
   have hl' : ρs.lookup sw.name = some (.obj fields) := by rw [ha]; exact hl
   refine ⟨fun _ _ => ⟨fields, k, hl', hk⟩, fun fields' k' hl2 hk2 _ => ?_⟩

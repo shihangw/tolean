@@ -227,9 +227,7 @@ class Printer {
     }
     if (ts.isInterfaceDeclaration(s)) {
       const exported = this.modifiers(s, [ts.SyntaxKind.ExportKeyword]).size > 0;
-      if (s.typeParameters !== undefined) {
-        refuse(s, 'generic interface');
-      }
+      const typeParams = this.typeParams(s);
       if (s.heritageClauses !== undefined) {
         refuse(s, 'extends');
       }
@@ -237,19 +235,26 @@ class Printer {
         'interface',
         s,
         [this.name(s.name), ...(exported ? ['export'] : [])],
-        s.members.map((m) => this.field(m)),
+        [...typeParams, ...s.members.map((m) => this.field(m))],
       );
     }
     if (ts.isTypeAliasDeclaration(s)) {
       const exported = this.modifiers(s, [ts.SyntaxKind.ExportKeyword]).size > 0;
-      if (s.typeParameters !== undefined) {
-        refuse(s, 'generic type alias');
-      }
+      const typeParams = this.typeParams(s);
       return this.node(
         'type',
         s,
         [this.name(s.name), ...(exported ? ['export'] : [])],
-        [this.type(s.type)],
+        [...typeParams, this.type(s.type)],
+      );
+    }
+    if (ts.isEnumDeclaration(s)) {
+      const exported = this.modifiers(s, [ts.SyntaxKind.ExportKeyword]).size > 0;
+      return this.node(
+        'enum',
+        s,
+        [this.name(s.name), ...(exported ? ['export'] : [])],
+        s.members.map((m) => this.enumMember(m)),
       );
     }
     if (ts.isVariableStatement(s)) {
@@ -257,6 +262,17 @@ class Printer {
       return this.variable(s, exported);
     }
     return this.statement(s);
+  }
+
+  // `Name = "value"`. A name that is a reserved word is an identifier here.
+  private enumMember(m: ts.EnumMember): Sexp {
+    if (!ts.isIdentifier(m.name)) {
+      refuse(m.name, 'enum member name');
+    }
+    if (m.initializer === undefined || !ts.isStringLiteral(m.initializer)) {
+      refuse(m, 'enum member without a string value');
+    }
+    return this.node('member', m, [m.name.text, JSON.stringify(m.initializer.text)], []);
   }
 
   // `import { a, type B } from "./x.ts"` and `import type { B } from "./x.ts"`.
@@ -284,14 +300,34 @@ class Printer {
     return this.node('import', s, [JSON.stringify(source)], names);
   }
 
+  // Type parameters have no constraint, no default and no modifier. Tolean
+  // keeps no span for them.
+  private typeParams(
+    s: ts.FunctionDeclaration | ts.InterfaceDeclaration | ts.TypeAliasDeclaration,
+  ): Array<Sexp> {
+    if (s.typeParameters?.hasTrailingComma) {
+      refuse(s, "',' after the last type parameter");
+    }
+    return (s.typeParameters ?? []).map((tp) => {
+      if (tp.constraint !== undefined) {
+        refuse(tp, 'type parameter with a constraint');
+      }
+      if (tp.default !== undefined) {
+        refuse(tp, 'type parameter with a default');
+      }
+      if ((tp.modifiers ?? []).length > 0) {
+        refuse(tp, 'type parameter with a modifier');
+      }
+      return { head: 'type-param', atoms: [this.name(tp.name)], children: [] };
+    });
+  }
+
   private functionDecl(s: ts.FunctionDeclaration): Sexp {
     const exported = this.modifiers(s, [ts.SyntaxKind.ExportKeyword]).size > 0;
     if (s.asteriskToken !== undefined) {
       refuse(s, 'generator');
     }
-    if (s.typeParameters !== undefined) {
-      refuse(s, 'generic function');
-    }
+    const typeParams = this.typeParams(s);
     if (s.name === undefined || s.body === undefined) {
       refuse(s, 'function without a name or a body');
     }
@@ -304,7 +340,7 @@ class Printer {
       'function',
       s,
       [this.name(s.name), ...(exported ? ['export'] : [])],
-      [...params, ...returnType, body],
+      [...typeParams, ...params, ...returnType, body],
     );
   }
 
@@ -787,7 +823,29 @@ class Printer {
     if (ts.isParenthesizedTypeNode(t)) {
       return this.node('type-paren', t, [], [this.type(t.type)]);
     }
+    if (ts.isTupleTypeNode(t)) {
+      return this.node('type-tuple', t, [], this.tupleElements(t));
+    }
+    // `readonly [A, B]`. `readonly` takes the whole array type after it, so
+    // only a tuple may follow.
+    if (ts.isTypeOperatorNode(t) && t.operator === ts.SyntaxKind.ReadonlyKeyword && ts.isTupleTypeNode(t.type)) {
+      return this.node('type-tuple', t, ['readonly'], this.tupleElements(t.type));
+    }
     refuse(t, 'unsupported type');
+  }
+
+  // The elements of a tuple type: at least one, each a plain type, and no `,`
+  // after the last.
+  private tupleElements(t: ts.TupleTypeNode): Array<Sexp> {
+    if (t.elements.length === 0 || t.elements.hasTrailingComma) {
+      refuse(t, 'empty tuple or trailing comma');
+    }
+    return t.elements.map((e) => {
+      if (ts.isNamedTupleMember(e) || ts.isOptionalTypeNode(e) || ts.isRestTypeNode(e)) {
+        refuse(e, 'named, optional or rest tuple element');
+      }
+      return this.type(e);
+    });
   }
 }
 

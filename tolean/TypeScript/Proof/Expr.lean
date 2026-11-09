@@ -62,7 +62,9 @@ theorem checkLocalName_ok {sp : Span} {name r : String} {s s' : Ctx}
   · simp only [pure_bind, ite_state] at h
     split at h
     · simp at h
-    · exact checkName_ok h
+    · split at h
+      · simp at h
+      · exact checkName_ok h
 
 theorem declare_ok {env env' : Translate.Env} {sp : Span} {name : String} {b : Binding} {t : Ty}
     {s s' : Ctx} (h : declare env sp name b t s = .ok env' s') :
@@ -74,14 +76,16 @@ theorem declare_ok {env env' : Translate.Env} {sp : Span} {name : String} {b : B
     simp only [pure_bind, ite_state] at h
     split at h
     · simp at h
-    · simp only [bind_ok] at h
-      obtain ⟨r, s₁, hr, h⟩ := h
-      obtain ⟨-, rfl⟩ := checkLocalName_ok hr
-      simp only [ite_state] at h
-      split at h
+    · split at h
       · simp at h
-      · simp only [pure_ok] at h
-        exact ⟨by simpa using hn, h.1.symm, h.2.symm⟩
+      · simp only [bind_ok] at h
+        obtain ⟨r, s₁, hr, h⟩ := h
+        obtain ⟨-, rfl⟩ := checkLocalName_ok hr
+        simp only [ite_state] at h
+        split at h
+        · simp at h
+        · simp only [pure_ok] at h
+          exact ⟨by simpa using hn, h.1.symm, h.2.symm⟩
 
 end Monad
 
@@ -98,9 +102,21 @@ theorem has_add (env : Translate.Env) (l : Local) (x : String) :
   split <;> simp_all
 
 /-- Each function that a call may name is the one the interpreter calls: in
-the file of `m`, a call of `f.name` runs `f`. -/
+the file of `m`, a call of `f.name` runs `f`. And each string enum whose
+members code may read is the one the interpreter reads: in the file of `m`,
+the name `e.name` is the enum with the members `e.members`. -/
 def Resolves (m : Eval.Scope) (env : Translate.Env) : Prop :=
-  ∀ f ∈ env.functions, Eval.resolve m f.name = some f.ref
+  (∀ f ∈ env.functions, Eval.resolve m f.name = some f.ref) ∧
+    ∀ e ∈ env.enums, Eval.resolveEnum m e.name = some e.members
+
+/-- The functions and the string enums that code may name. A branch or a
+loop body keeps them, and changes only the locals. -/
+def globals (env : Translate.Env) : List FnInfo × List EnumValue := (env.functions, env.enums)
+
+theorem Resolves.congr {m : Eval.Scope} {env env' : Translate.Env} (h : Resolves m env)
+    (hg : globals env' = globals env) : Resolves m env' := by
+  simp only [globals, Prod.mk.injEq] at hg
+  exact ⟨fun f hf => h.1 f (hg.1 ▸ hf), fun e he => h.2 e (hg.2 ▸ he)⟩
 
 /-- The interpreter's environment binds exactly the names that the translator
 has in scope, so a name out of scope, such as `NaN`, is the global. And the
@@ -171,6 +187,20 @@ def negVal : Val N → Option (Val N)
   | .int i => some (.int (-i))
   | .num n => some (.num (JSNumber.neg n))
   | _ => none
+
+omit [JSNumber N] in
+/-- A member's string, as the field of the enum's object. -/
+theorem lookup_map_str {members : List (String × String)} {k v : String} (h : members.lookup k = some v) :
+    (members.map fun (p : String × String) => (p.1, (Val.str p.2 : Val N))).lookup k = some (.str v) := by
+  induction members with
+  | nil => simp at h
+  | cons p ps ih =>
+    obtain ⟨a, b⟩ := p
+    by_cases hk : k = a
+    · subst hk; simp [List.lookup] at h ⊢; exact h
+    · have hk' : (k == a) = false := by simpa using hk
+      simp only [List.lookup, hk', List.map_cons] at h ⊢
+      exact ih h
 
 /-- The interpreter negates the value of the operand, unless the operand is
 the global `Infinity`, which it reads as `negInf`. -/
@@ -512,6 +542,43 @@ theorem zip_sim {env : Translate.Env} {g : Expr × Ty → TM IR.Expr}
       | none => simp [hx] at hv
       | some w =>
         cases hxs : IR.Expr.evalList fs fuel ρo os with
+        | none => simp [hx, hxs] at hv
+        | some ws =>
+          simp [hx, hxs] at hv
+          subst hv
+          have h1 := hg _ _ _ _ _ ho ρs ρo w ha hs hx
+          have h2 := ih ts _ _ _ (by simpa using hlen) hos ρs ρo ws ha hs hxs
+          simp [Eval.evalList, h1, h2]
+
+/-- `zip_sim` for translations that give a `Code`, whose value the output
+uses. -/
+theorem zip_sim_value {env : Translate.Env} {g : Expr × Ty → TM Code}
+    (hg : ∀ x t ctx o ctx', g (x, t) ctx = .ok o ctx' → Sim (N := N) m fs fuel env x o.value) :
+    ∀ (args : List Expr) (ps : List Ty) (ctx : Ctx) (codes : List Code) (ctx' : Ctx),
+      args.length = ps.length → (args.zip ps).mapM g ctx = .ok codes ctx' →
+      SimList (N := N) m fs fuel env args (codes.map Code.value) := by
+  intro args
+  induction args with
+  | nil =>
+    intro ps ctx codes ctx' _ h
+    simp [List.mapM_nil] at h
+    obtain ⟨rfl, -⟩ := h
+    intro ρs ρo vs _ _ hv
+    simp [IR.Expr.evalList] at hv
+    subst hv; simp [Eval.evalList]
+  | cons x xs ih =>
+    intro ps ctx codes ctx' hlen h
+    cases ps with
+    | nil => simp at hlen
+    | cons t ts =>
+      simp [List.mapM_cons] at h
+      obtain ⟨o, s₁, ho, os, hos, rfl⟩ := h
+      intro ρs ρo vs ha hs hv
+      simp only [List.map_cons, IR.Expr.evalList] at hv
+      cases hx : IR.Expr.eval fs fuel ρo o.value with
+      | none => simp [hx] at hv
+      | some w =>
+        cases hxs : IR.Expr.evalList fs fuel ρo (os.map Code.value) with
         | none => simp [hx, hxs] at hv
         | some ws =>
           simp [hx, hxs] at hv
@@ -1326,6 +1393,9 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
             | (obtain ⟨_, _, ⟨rfl, rfl⟩, _, _, ⟨-, rfl⟩, h⟩ := h
                split at h
                · simp at h
+               simp only [pure_bind] at h
+               split at h
+               · simp at h
                  obtain ⟨rfl, -⟩ := h
                  simp [IR.Expr.eval]
                · simp at h)
@@ -1369,7 +1439,35 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
           rw [← ha name] at hv'
           simp only [Eval.eval, hv']
       | member sp obj name =>
-        simp only [translateExprCore, ite_state] at h
+        simp only [translateExprCore] at h
+        cases he : enumOf? env obj with
+        | some e =>
+          -- `T.A`: the string of the member, which the interpreter reads from
+          -- the object of the enum.
+          simp only [he, bind_ok, orReject_ok, pure_ok] at h
+          obtain ⟨value, s₁, ⟨hval, rfl⟩, rfl, -⟩ := h
+          intro ρs ρo v _ hs hv'
+          simp only [IR.Expr.eval, Option.some.injEq] at hv'
+          subst hv'
+          obtain ⟨sp', n, rfl⟩ : ∃ sp' n, obj = .ident sp' n := by
+            cases obj <;> simp [enumOf?] at he; exact ⟨_, _, rfl⟩
+          simp only [enumOf?, Bool.or_eq_true] at he
+          split at he
+          · simp at he
+          rename_i hng
+          simp only [not_or, Bool.not_eq_true] at hng
+          have hname : e.name = n := by simpa using List.find?_some he
+          have hres := hs.2.2 e (List.mem_of_find?_eq_some he)
+          rw [hname] at hres
+          have hnone : ρs.lookup n = none := hs.none hng.1
+          have hg : n ≠ "NaN" ∧ n ≠ "Infinity" ∧ n ≠ "undefined" := by
+            have := hng.2
+            refine ⟨?_, ?_, ?_⟩ <;> intro h <;> subst h <;> simp [isGlobalName, isNumberName] at this
+          simp only [Eval.eval, hnone, hres, hg.1, hg.2.1, hg.2.2, Option.map_some, Eval.enumObject,
+            Eval.getProp, beq_iff_eq, if_false, Option.bind_eq_bind, Option.bind_some]
+          rw [lookup_map_str hval]
+        | none =>
+        simp only [he] at h
         split at h
         · simp at h
         simp at h
@@ -1397,10 +1495,46 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
           simp only [Eval.eval, this, Option.bind_eq_bind, Option.bind_some]
           cases ov <;> simp only [IR.ExprExt.apply] at hv' <;> first | exact hv' | simp at hv'
       | index sp obj key =>
+        simp only [translateExprCore, bind_ok] at h
+        obtain ⟨o, s₁, ho, h⟩ := h
+        cases hot : o.type.tupleElems? with
+        | some tys =>
+          -- `t[i]`: the element `i` of the tuple, which the array has at `i`.
+          simp only [hot] at h
+          cases key
+          case number sp' text =>
+            simp only [bind_ok, orReject_ok] at h
+            obtain ⟨i, s₂, ⟨hi, rfl⟩, h⟩ := h
+            cases hti : tys[i.toNat]? with
+            | none => simp [hti] at h
+            | some ty =>
+              simp only [hti] at h
+              split at h
+              · next hpos =>
+                simp at h
+                obtain ⟨rfl, -⟩ := h
+                intro ρs ρo v ha hs hv
+                simp only [IR.Expr.eval] at hv
+                cases hx : IR.Expr.eval fs fuel ρo o.code with
+                | none => simp [hx] at hv
+                | some w =>
+                  cases w
+                  case list items =>
+                    simp [hx] at hv
+                    have hobj := ihE _ _ _ _ _ _ ho ρs ρo _ ha hs hx
+                    have hlit : Eval.numberLiteral text = some i := hi
+                    simp only [Eval.eval, hobj, Eval.numberText?, hlit, Option.bind_eq_bind, Option.bind_some,
+                      Eval.elementAt] at hpos ⊢
+                    simp [hpos, hv]
+                  all_goals simp [hx] at hv
+              · simp at h
+          all_goals simp at h
+        | none =>
         -- `r[k]` on a `Record<K, V>`: the evaluator reads the property that
         -- the string names, as the spec does.
-        simp [translateExprCore] at h
-        obtain ⟨o, s₁, ho, _, _, ⟨rfl, rfl⟩, keyRef, keys, ty, _, ⟨-, rfl⟩, k, s₃, hk, h⟩ := h
+        simp only [hot] at h
+        simp at h
+        obtain ⟨_, _, ⟨rfl, rfl⟩, keyRef, keys, ty, _, ⟨-, rfl⟩, k, s₃, hk, h⟩ := h
         split at h
         · simp only [pure_ok] at h
           obtain ⟨rfl, -⟩ := h
@@ -1498,7 +1632,42 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
         exact ihO _ _ _ _ _ _ _ h
       | array sp elems =>
         simp only [translateExprCore] at h
-        exact ihA _ _ _ _ _ _ _ h
+        cases hexp : exp with
+        | none => rw [hexp] at h; exact ihA _ _ _ _ _ _ _ h
+        | some t =>
+          rw [hexp] at h
+          cases t
+          case tuple tys =>
+            -- A tuple: the list of its elements, as the array literal is.
+            simp only at h
+            split at h
+            · next hlen =>
+              simp only [bind_ok, pure_ok] at h
+              obtain ⟨_, _, ⟨-, rfl⟩, codes, s₁, hcodes, hcode, -⟩ := h
+              intro ρs ρo v ha hs hv
+              rw [← hcode] at hv
+              simp only [IR.Expr.eval] at hv
+              cases hx : IR.Expr.evalList fs fuel ρo (codes.map Code.value) with
+              | none => simp [hx] at hv
+              | some vs =>
+                simp [hx] at hv
+                subst hv
+                have hel := zip_sim_value m fs fuel ?hg elems tys _ codes _ (by simpa using hlen) hcodes
+                  ρs ρo vs ha hs hx
+                · simp [Eval.eval, hel]
+                case hg =>
+                  intro x t c₀ o c₁ hgo
+                  simp only [bind_ok] at hgo
+                  obtain ⟨a, s₂, hta, hgo⟩ := hgo
+                  split at hgo
+                  · simp at hgo
+                    obtain ⟨rfl, -⟩ := hgo
+                    intro ρs' ρo' w ha' hs' hw
+                    rw [eval_value] at hw
+                    exact ihE _ _ _ _ _ _ hta ρs' ρo' w ha' hs' hw
+                  · simp at hgo
+            · simp at h
+          all_goals exact ihA _ _ _ _ _ _ _ h
       | cond sp test ifTrue ifFalse =>
         simp only [translateExprCore] at h
         simp at h
@@ -1557,35 +1726,32 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
           · simp at h
           · split at h
             · next hlen =>
-              simp at h
-              obtain ⟨vals, hvals, hcode⟩ := h
+              -- The arguments, then the checks of their types, which do not
+              -- change what the call means.
+              simp only [bind_ok] at h
+              obtain ⟨codes, s₂, hcodes, _, s₃, -, h⟩ := h
+              have hcode : c.code = .call fn.ref (codes.map Code.value) := by
+                obtain ⟨_, -, rfl⟩ := map_ok.mp h
+                rfl
               intro ρs ρo v ha hs hv
-              rw [← hcode] at hv
-              simp only at hv
-              rw [out_call] at hv
-              cases hx : IR.Expr.evalList fs fuel ρo vals with
+              rw [hcode, out_call] at hv
+              cases hx : IR.Expr.evalList fs fuel ρo (codes.map Code.value) with
               | none => simp [hx] at hv
               | some vs =>
                 simp [hx] at hv
-                have hargs := zip_sim m fs fuel ?hg args fn.params _ vals _ hlen.symm hvals
+                have hargs := zip_sim_value m fs fuel ?hg args fn.params _ codes _ (by simpa using hlen.symm) hcodes
                   ρs ρo vs ha hs hx
                 · have hname : fn.name = name := by simpa using List.find?_some hfind
-                  have hres := hs.2 fn (List.mem_of_find?_eq_some hfind)
+                  have hres := hs.2.1 fn (List.mem_of_find?_eq_some hfind)
                   rw [hname] at hres
                   rw [eval_call, hargs]
                   simp only [Option.bind_some, hres]
                   exact hc _ _ _ hv
                 case hg =>
                   intro x t c₀ o c₁ hgo
-                  simp at hgo
-                  obtain ⟨a, s₂, hta, hgo⟩ := hgo
-                  split at hgo
-                  · simp at hgo
-                    obtain ⟨rfl, -⟩ := hgo
-                    intro ρs' ρo' w ha' hs' hw
-                    rw [eval_value] at hw
-                    exact ihE _ _ _ _ _ _ hta ρs' ρo' w ha' hs' hw
-                  · simp at hgo
+                  intro ρs' ρo' w ha' hs' hw
+                  rw [eval_value] at hw
+                  exact ihE _ _ _ _ _ _ hgo ρs' ρo' w ha' hs' hw
             · simp at h
       case member sp' obj test =>
         cases obj
@@ -1640,9 +1806,9 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
             exact ihO _ _ _ _ _ _ _ hinner ρs ρo v ha hs hv
           · simp at h
         all_goals try simp at h
-        rename_i structName
+        rename_i structName structArgs
         obtain ⟨info, _, ⟨-, rfl⟩, seen, parts, s₂, hfold, h⟩ := h
-        have hparts : c.code = .struct parts structName := by
+        have hparts : c.code = .struct parts structName (Ty.leanList structArgs) := by
           obtain ⟨_, _, -, h⟩ := h
           split at h
           · simp at h; rw [← h.1]

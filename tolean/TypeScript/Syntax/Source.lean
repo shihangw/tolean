@@ -112,6 +112,9 @@ def TypeExpr.words : TypeExpr → List Word
   | .union _ [member] => punctWord "|" :: member.words
   | .union _ members => separated "|" (TypeExpr.wordsOf members)
   | .paren _ inner => punctWord "(" :: inner.words ++ [punctWord ")"]
+  | .tuple _ readonly elems =>
+    (if readonly then [identWord "readonly"] else []) ++
+      punctWord "[" :: separated "," (TypeExpr.wordsOf elems) ++ [punctWord "]"]
 
 def TypeExpr.wordsOf : List TypeExpr → List (List Word)
   | [] => []
@@ -246,23 +249,36 @@ def Field.words (f : Field) : List Word :=
   (if f.readonly then [identWord "readonly"] else []) ++ [propertyName f.name] ++
     (if f.optional then [punctWord "?"] else []) ++ punctWord ":" :: f.type.words ++ [punctWord ";"]
 
+/-- `Name = "value",`. A `,` may follow the last member too. -/
+def EnumMember.words (m : EnumMember) : List Word :=
+  [propertyName m.name, punctWord "=", [.string m.value], punctWord ","]
+
 def ImportName.words (n : ImportName) : List Word :=
   if n.typeOnly then [identWord "type", identWord n.name] else [identWord n.name]
 
 def exportWords (exported : Bool) : List Word := if exported then [keywordWord "export"] else []
 
+/-- `<A, B>` after the name of a generic function, or nothing. -/
+def typeParamWords : List String → List Word
+  | [] => []
+  | n :: more => enclose "<" ">" ((n :: more).map fun k => [identWord k])
+
 def Decl.lines : Decl → List Line
   | .import _ names source =>
     [(0, keywordWord "import" :: enclose "{" "}" (names.map ImportName.words) ++
       [identWord "from", [.string source], punctWord ";"])]
-  | .function _ exported name params returnType body =>
-    (0, exportWords exported ++ keywordWord "function" :: identWord name ::
+  | .function _ exported name typeParams params returnType body =>
+    (0, exportWords exported ++ keywordWord "function" :: identWord name :: typeParamWords typeParams ++
       enclose "(" ")" (params.map Param.words) ++ typeAnnotation returnType) :: body.lines 0
-  | .interface _ exported name fields =>
-    (0, exportWords exported ++ [identWord "interface", identWord name, punctWord "{"]) ::
-      fields.map (fun f => (1, f.words)) ++ [(0, [punctWord "}"])]
-  | .typeAlias _ exported name type =>
-    [(0, exportWords exported ++ identWord "type" :: identWord name :: punctWord "=" :: type.words ++ [punctWord ";"])]
+  | .interface _ exported name typeParams fields =>
+    (0, exportWords exported ++ identWord "interface" :: identWord name :: typeParamWords typeParams ++
+      [punctWord "{"]) :: fields.map (fun f => (1, f.words)) ++ [(0, [punctWord "}"])]
+  | .typeAlias _ exported name typeParams type =>
+    [(0, exportWords exported ++ identWord "type" :: identWord name :: typeParamWords typeParams ++
+      punctWord "=" :: type.words ++ [punctWord ";"])]
+  | .enum _ exported name members =>
+    (0, exportWords exported ++ [keywordWord "enum", identWord name, punctWord "{"]) ::
+      members.map (fun m => (1, m.words)) ++ [(0, [punctWord "}"])]
   | .exportedVar _ d => [(0, keywordWord "export" :: d.words)]
   | .stmt s => s.lines 0
 
@@ -312,6 +328,7 @@ def TypeExpr.erase : TypeExpr → TypeExpr
   | .array _ elem => .array noSpan elem.erase
   | .union _ members => .union noSpan (TypeExpr.eraseAll members)
   | .paren _ inner => .paren noSpan inner.erase
+  | .tuple _ readonly elems => .tuple noSpan readonly (TypeExpr.eraseAll elems)
 
 def TypeExpr.eraseAll : List TypeExpr → List TypeExpr
   | [] => []
@@ -399,12 +416,16 @@ def Field.erase (f : Field) : Field := { f with span := noSpan, type := f.type.e
 
 def ImportName.erase (n : ImportName) : ImportName := { n with span := noSpan }
 
+def EnumMember.erase (m : EnumMember) : EnumMember := { m with span := noSpan }
+
 def Decl.erase : Decl → Decl
   | .import _ names source => .import noSpan (names.map ImportName.erase) source
-  | .function _ exported name params returnType body =>
-    .function noSpan exported name (params.map Param.erase) (returnType.map TypeExpr.erase) body.erase
-  | .interface _ exported name fields => .interface noSpan exported name (fields.map Field.erase)
-  | .typeAlias _ exported name type => .typeAlias noSpan exported name type.erase
+  | .function _ exported name typeParams params returnType body =>
+    .function noSpan exported name typeParams (params.map Param.erase) (returnType.map TypeExpr.erase) body.erase
+  | .interface _ exported name typeParams fields =>
+    .interface noSpan exported name typeParams (fields.map Field.erase)
+  | .typeAlias _ exported name typeParams type => .typeAlias noSpan exported name typeParams type.erase
+  | .enum _ exported name members => .enum noSpan exported name (members.map EnumMember.erase)
   | .exportedVar _ d => .exportedVar noSpan d.erase
   | .stmt s => .stmt s.erase
 

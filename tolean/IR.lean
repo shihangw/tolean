@@ -55,9 +55,19 @@ inductive Ty (T : Type) where
   /-- The type of a tag field, such as `kind: 'circle'`. A structure leaves
   the field out, because its value never changes. -/
   | tag (value : String)
+  /-- `A × B × C`: a tuple of two elements or more, such as TypeScript's
+  `[A, B, C]`. Lean nests the product to the right, so `[A, [B, C]]` has the
+  same Lean type, and the list of elements keeps the two apart. -/
+  | tuple (elems : List (Ty T))
+  /-- A type parameter of a generic function, such as `T` in TypeScript's
+  `function first<T>(xs: T[]): T | null`. -/
+  | param (name : String)
+  /-- A generic structure of the program applied to types, such as `Box Int`
+  for TypeScript's `Box<bigint>`. -/
+  | app (ref : DeclRef) (args : List (Ty T))
   /-- A type that the language adds. -/
   | ext (t : T)
-deriving BEq, Repr, Inhabited
+deriving Repr, Inhabited
 
 /-- `+`, `-` and `*` on `Int`. -/
 inductive IntOp where
@@ -118,8 +128,9 @@ inductive Expr (T E : Type) where
   | call (ref : DeclRef) (args : List (Expr T E))
   /-- `([a, b] : List T)`, where `elem` is `T`. -/
   | list (elems : List (Expr T E)) (elem : Ty T)
-  /-- `({ f := a, g := b } : S)`. -/
-  | struct (fields : List (String × Expr T E)) (ref : DeclRef)
+  /-- `({ f := a, g := b } : S)`, or `({ … } : (S A))` for a generic structure,
+  where `args` are its type arguments. -/
+  | struct (fields : List (String × Expr T E)) (ref : DeclRef) (args : List (Ty T))
   /-- `a.isNone`. -/
   | isNone (a : Expr T E)
   /-- `a.isSome`. -/
@@ -169,6 +180,11 @@ inductive Expr (T E : Type) where
   /-- `(e : T)`: `e` with its type written out, where Lean cannot infer it,
   such as a `let` of `none` that nothing else uses. -/
   | ascribe (e : Expr T E) (type : Ty T)
+  /-- `(a, b, c)`: a tuple of two elements or more. -/
+  | tuple (elems : List (Expr T E))
+  /-- `e.2.1`: the element `index` of the tuple `e`, which has `size`
+  elements. -/
+  | proj (e : Expr T E) (index size : Nat)
   /-- `(List.map (fun (x : T) => body) items)`, or another `method` with the
   function `fun (x : T) => body` on the elements of `items`, where `param` is
   `x` and `elem` is `T`. -/
@@ -244,12 +260,13 @@ deriving Repr, Inhabited
 
 /-- A declaration in the output. -/
 inductive Decl (T E : Type) where
-  /-- `structure S where`, with one field per line. -/
-  | struct (name : String) (fields : List (String × Ty T))
+  /-- `structure S (A : Type) where`, with one field per line. `typeParams`
+  are the type parameters of a generic structure, in order. -/
+  | struct (name : String) (typeParams : List String) (fields : List (String × Ty T))
   /-- `abbrev T := U`: a type alias. The translator writes the type `U` itself
   wherever the source names `T`, so the output names `T` only here, for the
   claims about it to use. -/
-  | alias (name : String) (type : Ty T)
+  | alias (name : String) (typeParams : List String) (type : Ty T)
   /-- `inductive T where | a | b`, with decidable equality: a type whose
   constructors take no arguments. -/
   | enum (name : String) (members : List String)
@@ -267,10 +284,20 @@ variable {T E : Type}
 
 /-! ### The declarations that the output names -/
 
+mutual
+
 def Ty.refs : Ty T → List DeclRef
   | .struct r | .enum r | .tagged r => [r]
   | .option t | .optional t | .list t => t.refs
+  | .tuple ts => Ty.refsList ts
+  | .app r args => r :: Ty.refsList args
   | _ => []
+
+def Ty.refsList : List (Ty T) → List DeclRef
+  | [] => []
+  | t :: ts => t.refs ++ Ty.refsList ts
+
+end
 
 mutual
 
@@ -278,7 +305,7 @@ mutual
 def Expr.refs : Expr T E → List DeclRef
   | .call r args => r :: Expr.refsList args
   | .list elems t => Expr.refsList elems ++ t.refs
-  | .struct fields r => r :: Expr.refsFields fields
+  | .struct fields r args => r :: (Expr.refsFields fields ++ Ty.refsList args)
   | .ext _ args => Expr.refsList args
   | .field a _ _ | .propNot a | .not a | .neg a | .isNone a | .isSome a
   | .decide a | .push _ a | .update _ _ a => a.refs
@@ -289,6 +316,8 @@ def Expr.refs : Expr T E → List DeclRef
   | .enumCase r _ => [r]
   | .inject r _ e => r :: e.refs
   | .ascribe e t => e.refs ++ t.refs
+  | .tuple es => Expr.refsList es
+  | .proj e _ _ => e.refs
   | .listMethod _ items _ t body _ => items.refs ++ t.refs ++ body.refs
   | .tagValue _ => []
   | .int _ | .none | .bool _ | .string _ | .var _ => []
@@ -316,20 +345,29 @@ def Body.refs : Body T E → List DeclRef
 
 /-- The functions and structures of the program that `d` names. -/
 def Decl.refs : Decl T E → List DeclRef
-  | .struct _ fields => fields.flatMap (·.2.refs)
-  | .alias _ type => type.refs
+  | .struct _ _ fields => fields.flatMap (·.2.refs)
+  | .alias _ _ type => type.refs
   | .enum .. => []
   | .tagged _ _ members => members.flatMap (·.2.refs)
   | .function _ params ret body => params.flatMap (·.2.refs) ++ ret.refs ++ body.refs
 
 /-! ### The declarations that name the string type -/
 
+mutual
+
 /-- The printed type names the string type. A tag field has a string type,
 but the printer leaves tag fields out. -/
 def Ty.usesString : Ty T → Bool
   | .string => true
   | .option t | .optional t | .list t => t.usesString
+  | .tuple ts | .app _ ts => Ty.usesStringList ts
   | _ => false
+
+def Ty.usesStringList : List (Ty T) → Bool
+  | [] => false
+  | t :: ts => t.usesString || Ty.usesStringList ts
+
+end
 
 mutual
 
@@ -338,7 +376,7 @@ def Expr.usesString : Expr T E → Bool
   | .string _ => true
   | .call _ args | .ext _ args => Expr.usesStringList args
   | .list elems t => Expr.usesStringList elems || t.usesString
-  | .struct fields _ => Expr.usesStringFields fields
+  | .struct fields _ args => Expr.usesStringFields fields || Ty.usesStringList args
   | .field a _ _ | .propNot a | .not a | .neg a | .isNone a | .isSome a
   | .decide a | .push _ a | .update _ _ a | .inject _ _ a => a.usesString
   | .ite a b c => a.usesString || b.usesString || c.usesString
@@ -346,6 +384,8 @@ def Expr.usesString : Expr T E → Bool
   | .eq a b | .ne a b | .propAnd a b | .propOr a b | .and a b | .or a b =>
     a.usesString || b.usesString
   | .ascribe e t => e.usesString || t.usesString
+  | .tuple es => Expr.usesStringList es
+  | .proj e _ _ => e.usesString
   | .listMethod _ items _ t body _ => items.usesString || t.usesString || body.usesString
   -- The printer leaves a tag value out, as it leaves the tag field out.
   | .int _ | .none | .bool _ | .var _ | .enumCase .. | .tagValue _ => false
@@ -375,8 +415,8 @@ def Body.usesString : Body T E → Bool
 /-- The output of `d` names the string type, or holds a string literal. A
 language whose strings are not Lean's `String` imports its model then. -/
 def Decl.usesString : Decl T E → Bool
-  | .struct _ fields => fields.any (·.2.usesString)
-  | .alias _ type => type.usesString
+  | .struct _ _ fields => fields.any (·.2.usesString)
+  | .alias _ _ type => type.usesString
   | .enum .. => false
   | .tagged _ _ members => members.any (·.2.usesString)
   | .function _ params ret body => params.any (·.2.usesString) || ret.usesString || body.usesString
@@ -492,6 +532,8 @@ printed code. -/
 class PrintOp (E : Type) where
   print : Names → E → List String → String
 
+mutual
+
 def Ty.print [PrintTy T] (names : Names) : Ty T → String
   | .int => leanName names "Int"
   | .bool => leanName names "Bool"
@@ -508,15 +550,61 @@ def Ty.print [PrintTy T] (names : Names) : Ty T → String
     | (name, some _) => s!"({name} {names.typeParam})"
     | (name, Option.none) => name
   | .tag _ => PrintTy.string (T := T) names
+  | .tuple ts => "(" ++ " × ".intercalate (Ty.printList names ts) ++ ")"
+  | .param name => name
+  | .app ref args =>
+    let (name, generic) := names.ref ref
+    let number := if generic.isSome then s!" {names.typeParam}" else ""
+    -- Each argument is one term: `List Int` needs its parentheses.
+    let grouped := (Ty.printList names args).map fun a =>
+      if a.contains ' ' && !a.startsWith "(" then s!"({a})" else a
+    s!"({name}{number} {" ".intercalate grouped})"
   | .ext t => PrintTy.print names t
+
+def Ty.printList [PrintTy T] (names : Names) : List (Ty T) → List String
+  | [] => []
+  | t :: ts => t.print names :: Ty.printList names ts
+
+end
+
+mutual
 
 /-- The printed type names the type parameter, so a declaration of it must
 bind it. -/
 def Ty.namesParam [PrintTy T] (names : Names) : Ty T → Bool
   | .struct ref | .tagged ref => (names.ref ref).2.isSome
   | .option t | .optional t | .list t => t.namesParam names
+  | .tuple ts => Ty.namesParamList names ts
+  | .app ref args => (names.ref ref).2.isSome || Ty.namesParamList names args
   | .ext t => PrintTy.namesParam names t
   | _ => false
+
+def Ty.namesParamList [PrintTy T] (names : Names) : List (Ty T) → Bool
+  | [] => false
+  | t :: ts => t.namesParam names || Ty.namesParamList names ts
+
+end
+
+mutual
+
+/-- The type parameters of a generic function that `t` names, in order. -/
+def Ty.typeVars : Ty T → List String
+  | .param name => [name]
+  | .option t | .optional t | .list t => t.typeVars
+  | .tuple ts | .app _ ts => Ty.typeVarsList ts
+  | _ => []
+
+def Ty.typeVarsList : List (Ty T) → List String
+  | [] => []
+  | t :: ts => t.typeVars ++ Ty.typeVarsList ts
+
+end
+
+/-- How the output reads the element `index` of a tuple of `size` elements,
+which Lean nests to the right: `.1`, `.2.1`, …, and `.2.2` for the last of
+three. -/
+def projPath (index size : Nat) : String :=
+  String.join (List.replicate index ".2") ++ (if index + 1 < size then ".1" else "")
 
 def IntOp.symbol : IntOp → String
   | .add => "+" | .sub => "-" | .mul => "*"
@@ -623,9 +711,9 @@ def Expr.print (names : Names) : Expr T E → String
     "(" ++ " ".intercalate (head ++ (Expr.printList names args).map argument) ++ ")"
   | .list elems elem =>
     s!"([{", ".intercalate (Expr.printList names elems)}] : {(Ty.list elem).print names})"
-  | .struct fields ref =>
-    "({ " ++ ", ".intercalate (Expr.printFields names fields) ++ " } : " ++
-      (Ty.struct ref : Ty T).print names ++ ")"
+  | .struct fields ref args =>
+    let type : Ty T := if args.isEmpty then .struct ref else .app ref args
+    "({ " ++ ", ".intercalate (Expr.printFields names fields) ++ " } : " ++ type.print names ++ ")"
   | .isNone a => s!"{argument (a.print names)}.isNone"
   | .isSome a => s!"{argument (a.print names)}.isSome"
   | .matchNull name whenNull whenValue =>
@@ -648,6 +736,8 @@ def Expr.print (names : Names) : Expr T E → String
   | .push name a => s!"{name} ++ [{a.print names}]"
   | .update op name a => s!"{name} {op.symbol} {a.print names}"
   | .ext op args => PrintOp.print names op (Expr.printList names args)
+  | .tuple es => "(" ++ ", ".intercalate (Expr.printList names es) ++ ")"
+  | .proj e index size => argument (e.print names) ++ projPath index size
 
 def Expr.printList (names : Names) : List (Expr T E) → List String
   | [] => []
@@ -744,8 +834,9 @@ def Body.tagArms (names : Names) (name : String) : Body T E → List String
 end
 
 def Decl.print (names : Names) : Decl T E → String
-  | .struct name fields =>
+  | .struct name typeParams fields =>
     let generic := if names.generic then s!" ({names.typeParam} : Type)" else ""
+    let generic := generic ++ String.join (typeParams.map (s!" ({·} : Type)"))
     -- A tag field never changes, so the structure leaves it out.
     let kept := fields.filter fun (_, type) => !(type matches .tag _)
     "\n".intercalate (s!"structure {name}{generic} where" ::
@@ -760,11 +851,16 @@ def Decl.print (names : Names) : Decl T E → String
     "\n".intercalate (s!"inductive {name} where" ::
       members.map (s!"  | {memberName ·}") ++
       [s!"deriving {leanName names "DecidableEq"}, {leanName names "Repr"}"])
-  | .alias name type =>
+  | .alias name typeParams type =>
     let generic := if type.namesParam names then s!" ({names.typeParam} : Type)" else ""
+    let generic := generic ++ String.join (typeParams.map (s!" ({·} : Type)"))
     s!"abbrev {name}{generic} := {type.print names}"
   | .function name params ret body =>
     let generic := if names.generic then PrintTy.binders (T := T) names else ""
+    -- The type parameters, in the order that the parameters name them. The
+    -- translator refuses one that no parameter's type names.
+    let vars := (Ty.typeVarsList (params.map (·.2) ++ [ret])).eraseDups
+    let generic := if vars.isEmpty then generic else generic ++ " {" ++ " ".intercalate vars ++ " : Type}"
     let leanParams := params.map fun (param, type) => s!"({param} : {type.print names})"
     "\n".intercalate
       (s!"def {name}{generic} {" ".intercalate leanParams} : {ret.print names} :=" ::

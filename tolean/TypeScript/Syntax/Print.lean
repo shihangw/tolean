@@ -37,6 +37,7 @@ partial def TypeExpr.toSexp : TypeExpr → Sexp
   | .array s elem => node "type-array" s [] [elem.toSexp]
   | .union s members => node "type-union" s [] (members.map toSexp)
   | .paren s inner => node "type-paren" s [] [inner.toSexp]
+  | .tuple s readonly elems => node "type-tuple" s (flag readonly "readonly") (elems.map toSexp)
 
 def Param.toSexp (p : Param) : Sexp :=
   node "param" p.span [p.name] (p.type.map TypeExpr.toSexp).toList
@@ -114,13 +115,20 @@ def Decl.toSexp : Decl → Sexp
   | .import s names source =>
     node "import" s [Sexp.quote source]
       (names.map fun n => node "name" n.span ([n.name] ++ flag n.typeOnly "type") [])
-  | .function s exported name params returnType body =>
+  | .function s exported name typeParams params returnType body =>
+    -- A type parameter keeps no span, so its node has none.
     node "function" s ([name] ++ flag exported "export")
-      (params.map Param.toSexp ++ (returnType.map TypeExpr.toSexp).toList ++ [body.toSexp])
-  | .interface s exported name fields =>
-    node "interface" s ([name] ++ flag exported "export") (fields.map Field.toSexp)
-  | .typeAlias s exported name type =>
-    node "type" s ([name] ++ flag exported "export") [type.toSexp]
+      (typeParams.map (fun t => .node "type-param" none [t] []) ++ params.map Param.toSexp ++
+        (returnType.map TypeExpr.toSexp).toList ++ [body.toSexp])
+  | .interface s exported name typeParams fields =>
+    node "interface" s ([name] ++ flag exported "export")
+      (typeParams.map (fun t => .node "type-param" none [t] []) ++ fields.map Field.toSexp)
+  | .typeAlias s exported name typeParams type =>
+    node "type" s ([name] ++ flag exported "export")
+      (typeParams.map (fun t => .node "type-param" none [t] []) ++ [type.toSexp])
+  | .enum s exported name members =>
+    node "enum" s ([name] ++ flag exported "export")
+      (members.map fun m => node "member" m.span [m.name, Sexp.quote m.value] [])
   | .exportedVar s d => d.toSexp s true
   | .stmt st => st.toSexp
 
