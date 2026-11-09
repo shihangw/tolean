@@ -116,6 +116,15 @@ def Ty.assignableTo (source target : Ty) : Bool :=
     | .nullable value => source == value
     | _ => false
 
+/-- A value of type `source` can be the argument of a parameter of type
+`param`. An optional parameter takes a `T` too, which Lean coerces to
+`some`. -/
+def Ty.passableTo (source param : Ty) : Bool :=
+  source.assignableTo param ||
+    match param with
+    | .optional t => source.assignableTo t
+    | _ => false
+
 /-- The type of `c ? a : b`. -/
 def Ty.join (a b : Ty) : Option Ty :=
   if a == b then some a
@@ -236,6 +245,9 @@ def Ty.unify (sol : List (String × Ty)) : Ty → Ty → List (String × Ty)
   | .nullable p, .nullable t => Ty.unify sol p t
   | .nullable p, t => Ty.unify sol p t
   | .optional p, .optional t => Ty.unify sol p t
+  -- An optional parameter takes a value of its type too, which fixes the type
+  -- parameters as the type would.
+  | .optional p, t => Ty.unify sol p t
   | .array p, .array t => Ty.unify sol p t
   | .tuple ps, .tuple ts | .struct _ ps, .struct _ ts => Ty.unifyList sol ps ts
   | _, _ => sol
@@ -952,6 +964,37 @@ def nullTestOf (env : Env) (e : Expr) : Option (String × Bool × Ty) :=
       | _ => none
   | _ => none
 
+/-- `x === undefined` or `x !== undefined`, where `x` is a name in scope with
+an optional value, and no local hides `undefined`: `(x, the test is equality,
+the type of x when it is defined)`. -/
+def undefinedTestOf (env : Env) (e : Expr) : Option (String × Bool × Ty) :=
+  if env.has "undefined" then none else
+  match e.stripParens with
+  | .binary _ op l r =>
+    let isEquality? : Option Bool := match op with
+      | .strictEq => some true
+      | .strictNe => some false
+      | _ => none
+    match isEquality? with
+    | none => none
+    | some isEquality =>
+      let other? := if r.isUndefinedName then some l else if l.isUndefinedName then some r else none
+      match other? with
+      | some (.ident _ name) =>
+        match env.lookup name with
+        | some { type := .optional value, .. } => some (name, isEquality, value)
+        | _ => none
+      | _ => none
+  | _ => none
+
+/-- A test that narrows a name of an `Option` type: `x === null` and the like
+on a nullable value, or `x === undefined` and `x !== undefined` on an optional
+one. `(x, the test is equality, the type of x when not none, x is optional)`. -/
+def noneTestOf (env : Env) (e : Expr) : Option (String × Bool × Ty × Bool) :=
+  match nullTestOf env e with
+  | some (name, isEquality, value) => some (name, isEquality, value, false)
+  | none => (undefinedTestOf env e).map fun (name, isEquality, value) => (name, isEquality, value, true)
+
 /-- The tag that an object literal sets: the string of its property `field`. -/
 def tagOfProps (field : String) (props : List Property) : Option String :=
   props.findSome? fun
@@ -1264,6 +1307,37 @@ def callbackResult (s bodySpan : Span) (method : IR.ListMethod) (elem body : Ty)
     return .optional elem
   | _ => return .boolean
 
+/-- The type of `x.f1.f2…` after `?.`, where `x` has the interface `ref`:
+whether the last field is optional, and the type of the chain. Each field
+before the last must be a required field of an interface type, because
+`.` on `null` or `undefined` throws. -/
+def optPathRest (s : Span) (ref : DeclRef) (args : List Ty) : List String → TM (Bool × Ty)
+  | [] => reject s "a chain after '?.' must read a property"
+  | [f] => optFieldType s (.nullable (.struct ref args)) f
+  | f :: rest => do
+    let ctx : Ctx ← get
+    let field? := (ctx.knownStructs.find? fun (i : StructInfo) => i.ref == ref).bind
+      fun info => (info.fieldsAt args).lookup f
+    match field? with
+    | some (.struct ref' args') => optPathRest s ref' args' rest
+    | some (.optional _) | some (.nullable _) =>
+      reject s s!"'{f}' may be null or undefined, so the property after it needs '?.' too"
+    | some _ => reject s s!"a property after '{f}' needs a value of an interface type"
+    | none => reject s "only fields of interfaces declared in this file, or exported by the files before it, may be read"
+
+/-- The type of `x?.f1.f2…` on a value of type `t`: whether the last field is
+optional, and the type of the chain, which is `undefined` when `x` is
+`null` or `undefined`. -/
+def optPathType (s : Span) (t : Ty) : List String → TM (Bool × Ty)
+  | [] => reject s "a chain after '?.' must read a property"
+  | [f] => optFieldType s t f
+  | f :: rest => do
+    let (bind, ft) ← optFieldType s t f
+    if bind then reject s s!"'{f}' may be undefined, so the property after it needs '?.' too"
+    let .optional (.struct ref args) := ft
+      | reject s s!"a property after '{f}' needs a value of an interface type"
+    optPathRest s ref args rest
+
 /-- `applyOperator`, after a string operand becomes a constructor where the
 other operand is of a literal union. -/
 def translateOperator (s : Span) (op : BinOp) (r : Expr) (a b : Code) : TM Code := do
@@ -1335,6 +1409,14 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
   | .ident s name =>
     match env.lookup name with
     | none =>
+      -- `undefined` where an optional value is expected, such as the
+      -- argument of an optional parameter. A field of an object literal
+      -- expects the type of the value that it holds, so it refuses
+      -- `undefined`: JS tells a key that holds it from a missing key.
+      if name == "undefined" then
+        let some (.optional t) := expected
+          | reject s "undefined may stand only where an optional value is expected, such as the argument of an optional parameter"
+        return ⟨.undefined, false, .optional t⟩
       let some constant := numberConstant? name
         | reject s "only parameters and locals may be referenced"
       return ⟨.numberConstant constant, false, .number⟩
@@ -1350,9 +1432,14 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
       let value ← orReject (e.members.lookup name) s s!"'{name}' is not a member of the enum {e.name}"
       return ⟨.enumCase e.ref value, false, .enum e.ref⟩
     | none =>
-    -- JS skips the rest of a chain after a `?.` that meets null, so
-    -- `a?.b.c` is not `(a?.b).c`, and the subset leaves the chain out.
-    if obj matches .optMember .. then reject s "a chain after '?.', such as a?.b.c, is not supported"
+    -- A read after `?.` is a part of the optional chain, so `a?.b.c` is one
+    -- `map` over `a`, not `(a?.b).c`.
+    if obj.optSpine then
+      let some (base, path) := (Expr.member s obj name).optChain?
+        | reject s "a chain after '?.' must read a property"
+      let o ← translateExpr fuel env none base
+      let (bind, type) ← optPathType s o.type path
+      return ⟨.ext (.optField path bind) [o.code], false, type⟩
     let o ← translateExpr fuel env none obj
     let ctx : Ctx ← get
     let field? := match o.type with
@@ -1372,7 +1459,7 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
   | .optMember s obj name =>
     let o ← translateExpr fuel env none obj
     let (bind, type) ← optFieldType s o.type name
-    return ⟨.ext (.optField name bind) [o.code], false, type⟩
+    return ⟨.ext (.optField [name] bind) [o.code], false, type⟩
   | .index s obj key =>
     let o ← translateExpr fuel env none obj
     match o.type.tupleElems? with
@@ -1496,20 +1583,50 @@ def translateCall (fuel : Nat) (env : Env) (s : Span) (callee : Expr) (args : Li
     reject s s!"the global {name} converts its argument to a number; use Number.{name}"
   let fn ← orReject (env.functions.find? (·.name == name)) s noCallMessage
   if env.has name then noCall
-  unless fn.params.length == args.length do reject s s!"'{name}' takes {fn.params.length} arguments"
+  -- A call may leave out optional parameters, which come last. Each is
+  -- `undefined` then, and the output passes `none` for it.
+  let required := (fn.params.filter fun t => !(t matches .optional _)).length
+  unless args.length ≤ fn.params.length && (fn.params.drop args.length).all (· matches .optional _) do
+    reject s (if required == fn.params.length then s!"'{name}' takes {fn.params.length} arguments"
+      else s!"'{name}' takes {required} to {fn.params.length} arguments")
   -- An argument is translated where its parameter's type is expected. When
   -- that type names a type parameter, the arguments' types fix it, and only
-  -- the shape of a tuple is expected.
+  -- the shape of a tuple is expected. `undefined` fixes nothing, so the other
+  -- arguments fix the type parameters first, and `undefined` is then read
+  -- where the optional parameter's type with them is expected, as for a
+  -- call that leaves the argument out.
+  let bareUndefined (arg : Expr) (paramType : Ty) : Bool :=
+    arg.isUndefinedName && !env.has "undefined" && paramType matches .optional _
+  let first ← (args.zip fn.params).mapM fun (arg, paramType) =>
+    if bareUndefined arg paramType then pure Option.none
+    else some <$> translateExpr fuel env paramType.callExpected arg
+  let known := Ty.unifyList [] (fn.params.zip first |>.filterMap fun (p, c) => c.map fun _ => p)
+    (first.filterMap (·.map (·.type)))
   let codes ← (args.zip fn.params).mapM fun (arg, paramType) =>
-    translateExpr fuel env paramType.callExpected arg
+    let given := paramType.subst known
+    translateExpr fuel env
+      (if bareUndefined arg paramType && !given.isGeneric then some given else paramType.callExpected) arg
   let sol := Ty.unifyList [] fn.params (codes.map (·.type))
   fn.typeParams.forM fun v => do
     unless (sol.lookup v).isSome do
       reject s s!"the arguments do not fix the type parameter {v} of '{name}'"
   (args.zip (codes.zip fn.params)).forM fun (arg, c, paramType) => do
-    unless c.type.assignableTo (paramType.subst sol) do
+    unless c.type.passableTo (paramType.subst sol) do
       reject arg.span "the argument does not have the parameter's type"
-  return ⟨.call fn.ref (codes.map (·.value)), false, fn.ret.subst sol⟩
+  let missing := (fn.params.drop args.length).map fun _ => IR.Expr.undefined
+  return ⟨.call fn.ref (optArgs sol codes fn.params ++ missing), false, fn.ret.subst sol⟩
+
+/-- The arguments of a call, with the type of each argument of an optional
+parameter that names a type parameter written out: `(v : Option T)` with the
+types that the call fixes. Lean then makes a plain `v` the `some` of it, and
+knows the type of a `none`, where it could not infer `T` from the rest of
+the call. -/
+def optArgs (sol : List (String × Ty)) : List Code → List Ty → List IR.Expr
+  | c :: cs, p :: ps =>
+    (if p matches .optional _ && p.isGeneric then .ascribe c.value (p.subst sol).lean else c.value) ::
+      optArgs sol cs ps
+  | cs, [] => cs.map (·.value)
+  | [], _ :: _ => []
 
 /-- `xs.map(x => e)`, and `filter`, `some`, `every` and `find`: the `List`
 function with `fun (x : T) => e`. The callback is an arrow function written at
@@ -1783,16 +1900,20 @@ def translateIf (fuel : Nat) (env : Env) (s : Span) (test : Expr) (thenBranch : 
   let fuel + 1 := fuel | tooDeep
   let thenStatements := blockStatements thenBranch
   let elseStatements := (elseBranch.map blockStatements).getD []
-  -- `if (x === null)` and `if (x !== null)`: TypeScript narrows `x` in each
-  -- branch, so Lean matches on `x` and binds it to the value.
-  let nullTest := nullTestOf env test
+  -- `if (x === null)` and `if (x !== null)`, or `x === undefined` and
+  -- `x !== undefined` on an optional value: TypeScript narrows `x` in each
+  -- branch, so Lean matches on `x` and binds it to the value. Where an
+  -- optional `x` is `undefined`, the subset has no type for it alone, so it
+  -- keeps its optional type, and `x ?? d` still reads it.
+  let nullTest := noneTestOf env test
   -- `if (x.kind === 'circle')`: TypeScript narrows `x` to the member in one
   -- branch and to the other members in the other, so Lean matches on the
   -- constructor.
   let tagTest := tagTestOf env test
+  let noneType (value : Ty) (optional : Bool) : Ty := if optional then .optional value else .null
   let (envTrue, envFalse) := match nullTest, tagTest with
-    | some (name, true, value), _ => (env.narrow name .null, env.narrow name value)
-    | some (name, false, value), _ => (env.narrow name value, env.narrow name .null)
+    | some (name, true, value, o), _ => (env.narrow name (noneType value o), env.narrow name value)
+    | some (name, false, value, o), _ => (env.narrow name value, env.narrow name (noneType value o))
     | none, some t =>
       if t.isEq then (env.narrow t.name t.whenTag, env.narrow t.name t.whenOther)
       else (env.narrow t.name t.whenOther, env.narrow t.name t.whenTag)
@@ -1803,9 +1924,9 @@ def translateIf (fuel : Nat) (env : Env) (s : Span) (test : Expr) (thenBranch : 
       let c ← translateExpr (← fuelLimit) env none test
       unless c.type == .boolean do reject test.span "a condition must be a boolean"
       return .ite c.code whenTrue whenFalse
-    | some (name, isNullTest, _), _ =>
-      return if isNullTest then .matchNull name whenTrue whenFalse
-        else .matchNull name whenFalse whenTrue
+    | some (name, isNullTest, _, optional), _ =>
+      return if isNullTest then .matchNull name optional whenTrue whenFalse
+        else .matchNull name optional whenFalse whenTrue
     | none, some t =>
       let (whenTag, whenOther) := if t.isEq then (whenTrue, whenFalse) else (whenFalse, whenTrue)
       -- Where more than one member is left, Lean matches the others with a
@@ -1829,7 +1950,7 @@ def translateIf (fuel : Nat) (env : Env) (s : Span) (test : Expr) (thenBranch : 
   let names := changedNames (thenStatements ++ elseStatements) env
   if names.isEmpty then reject s "an if without a return must change a local"
   let tested := match nullTest, tagTest with
-    | some (name, _, _), _ => some name
+    | some (name, _, _, _), _ => some name
     | none, some t => some t.name
     | none, none => none
   if let some name := tested then
@@ -2277,6 +2398,20 @@ def translateAlias (s : Span) (exported : Bool) (name : String) (typeParams : Li
     typeParams := [], aliases := c.aliases ++ [{ file := c.file, name, exported, typeParams, type := ty }] }
   return .alias name typeParams ty.lean
 
+/-- The type of a parameter of type `type`, after parameters of the types
+`before`: `T`, or the optional `T` of `x?: T`, which is `undefined` when a
+call leaves it out. TypeScript lets no required parameter follow an optional
+one. The output has one `none` for both `undefined` and `null`, so an
+optional parameter may not be nullable too. -/
+def paramType (span : Span) (optional : Bool) (type : TypeExpr) (before : List Ty) : TM Ty := do
+  let ty ← translateType type
+  if !optional then
+    if before.any (· matches .optional _) then
+      reject span "a required parameter may not follow an optional one"
+    return ty
+  if ty.isNullable || ty == .null then reject span "an optional parameter may not also be nullable"
+  return .optional ty
+
 def translateFunction (s : Span) (exported : Bool) (name : String) (typeParams : List String)
     (params : List Param) (returnType : Option TypeExpr) (body : Stmt) : TM IR.Decl := do
   let some returnType := returnType
@@ -2294,7 +2429,7 @@ def translateFunction (s : Span) (exported : Bool) (name : String) (typeParams :
       let type ← orReject p.type p.span "parameters must be plain, typed identifiers"
       let paramName ← checkLocalName p.span p.name
       if env.has paramName then reject p.span s!"'{paramName}' is declared twice"
-      let ty ← translateType type
+      let ty ← paramType p.span p.optional type types
       pure (env.add { name := paramName, binding := .param, type := ty },
         leanParams ++ [(paramName, ty.lean)], types ++ [ty])
   let ret ← isolated (translateType returnType)

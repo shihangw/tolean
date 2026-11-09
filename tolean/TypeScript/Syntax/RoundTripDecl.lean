@@ -330,7 +330,7 @@ theorem parseFunction_reads {T : Edition} (start : Pos) (exported : Bool) (sp : 
       rw [hur]; exact readName_ok (by simp only [s₁]; rw [hur]) hnm hname'
     let s₃ : ParseState := { s₂' with rest := its ++ rp :: (lb :: ba' ++ bb ++ rest), left := s₂'.left - 1, lastStop := lp.span.stop }
     have hl₃ : s₃.left = s₃.rest.length := by simp only [s₃]; rw [hLg.left_eq]; simp
-    obtain ⟨res, s₄, hit, hes, hL₄⟩ := params_reads (T := T) params hps s₃ its (lb :: ba' ++ bb ++ rest) rp
+    obtain ⟨res, s₄, hit, hes, hL₄⟩ := params_reads (T := T) (ok := true) params hps (fun _ _ _ => rfl) s₃ its (lb :: ba' ++ bb ++ rest) rp
       (by simp [s₃, hLg.target_eq, s₂, s₁, hT]) rfl hrp hl₃ hits hn'
     have hs₄ : s₄.rest = rp :: (lb :: ba' ++ bb ++ rest) := hL₄.rest_eq
     let s₅ : ParseState := { s₄ with rest := lb :: ba' ++ bb ++ rest, left := s₄.left - 1, lastStop := rp.span.stop }
@@ -379,7 +379,7 @@ theorem parseFunction_reads {T : Edition} (start : Pos) (exported : Bool) (sp : 
       rw [hur]; exact readName_ok (by simp only [s₁]; rw [hur]) hnm hname'
     let s₃ : ParseState := { s₂' with rest := its ++ rp :: (colon :: (tts ++ (lb :: ba' ++ bb ++ rest))), left := s₂'.left - 1, lastStop := lp.span.stop }
     have hl₃ : s₃.left = s₃.rest.length := by simp only [s₃]; rw [hLg.left_eq]; simp
-    obtain ⟨res, s₄, hit, hes, hL₄⟩ := params_reads (T := T) params hps s₃ its (colon :: (tts ++ (lb :: ba' ++ bb ++ rest)))
+    obtain ⟨res, s₄, hit, hes, hL₄⟩ := params_reads (T := T) (ok := true) params hps (fun _ _ _ => rfl) s₃ its (colon :: (tts ++ (lb :: ba' ++ bb ++ rest)))
       rp (by simp [s₃, hLg.target_eq, s₂, s₁, hT]) rfl hrp hl₃ hits hn'
     have hs₄ : s₄.rest = rp :: (colon :: (tts ++ (lb :: ba' ++ bb ++ rest))) := hL₄.rest_eq
     let s₅ : ParseState := { s₄ with rest := colon :: (tts ++ (lb :: ba' ++ bb ++ rest)), left := s₄.left - 1, lastStop := rp.span.stop }

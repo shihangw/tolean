@@ -73,10 +73,10 @@ theorem TypeExpr.beqOpt_iff : (o p : Option TypeExpr) → TypeExpr.beqOpt o p = 
   | some x, p => by
     cases p <;> simp [and_assoc, TypeExpr.beqOpt, TypeExpr.beq_iff x]
 
-def Param.beq (a b : Param) : Bool := decide (a.span = b.span) && decide (a.name = b.name) && TypeExpr.beqOpt a.type b.type
+def Param.beq (a b : Param) : Bool := decide (a.span = b.span) && decide (a.name = b.name) && decide (a.optional = b.optional) && TypeExpr.beqOpt a.type b.type
 
 theorem Param.beq_iff (a b : Param) : Param.beq a b = true ↔ a = b := by
-  obtain ⟨span, name, type⟩ := a
+  obtain ⟨span, name, optional, type⟩ := a
   cases b
   simp [and_assoc, Param.beq, TypeExpr.beqOpt_iff type]
 

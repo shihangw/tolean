@@ -40,7 +40,7 @@ partial def TypeExpr.toSexp : TypeExpr → Sexp
   | .tuple s readonly elems => node "type-tuple" s (flag readonly "readonly") (elems.map toSexp)
 
 def Param.toSexp (p : Param) : Sexp :=
-  node "param" p.span [p.name] (p.type.map TypeExpr.toSexp).toList
+  node "param" p.span ([p.name] ++ flag p.optional "optional") (p.type.map TypeExpr.toSexp).toList
 
 mutual
 

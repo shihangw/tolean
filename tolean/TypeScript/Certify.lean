@@ -301,7 +301,7 @@ partial def bodyCallbacks : IR.Body → List Callback
   | .let _ e rest => exprCallbacks e ++ bodyCallbacks rest
   | .letArray _ _ elems rest => elems.flatMap exprCallbacks ++ bodyCallbacks rest
   | .ite c a b => exprCallbacks c ++ bodyCallbacks a ++ bodyCallbacks b
-  | .matchNull _ a b | .matchTag _ _ _ _ _ a b | .letState _ a b => bodyCallbacks a ++ bodyCallbacks b
+  | .matchNull _ _ a b | .matchTag _ _ _ _ _ a b | .letState _ a b => bodyCallbacks a ++ bodyCallbacks b
   | .fold _ _ body items rest _ => exprCallbacks items ++ bodyCallbacks body ++ bodyCallbacks rest
 
 end
@@ -363,7 +363,7 @@ def casesOn (decls : List IR.Decl) (vars : List (String × IR.Ty)) : String :=
 partial def loopsOf : IR.Body → List (List String × String × IR.Body × IR.LoopInfo)
   | .value _ | .state _ | .yield .. | .done .. | .exit .. => []
   | .let _ _ rest | .letArray _ _ _ rest => loopsOf rest
-  | .ite _ a b | .matchNull _ a b | .matchTag _ _ _ _ _ a b => loopsOf a ++ loopsOf b
+  | .ite _ a b | .matchNull _ _ a b | .matchTag _ _ _ _ _ a b => loopsOf a ++ loopsOf b
   | .letState _ branch rest => loopsOf branch ++ loopsOf rest
   | .fold names element body _ rest info => loopsOf body ++ [(names, element, body, info)] ++ loopsOf rest
 

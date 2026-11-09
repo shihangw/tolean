@@ -76,7 +76,7 @@ def propKey (k : PropKey) : String :=
   | .number t => s!"({ns}PropKey.number {str t})"
 
 def param (p : Param) : String :=
-  s!"\{ span := {span p.span}, name := {str p.name}, type := {option (p.type.map typeExpr)} }"
+  s!"\{ span := {span p.span}, name := {str p.name}, optional := {p.optional}, type := {option (p.type.map typeExpr)} }"
 
 mutual
 

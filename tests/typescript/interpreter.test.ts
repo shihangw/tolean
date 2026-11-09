@@ -130,6 +130,8 @@ function arbitrary(t: Ty, sig: Signatures): fc.Arbitrary<unknown> {
       return fc.oneof(fc.constantFrom('', 'a', 'ab', 'é', '😀'), fc.string({ unit: 'grapheme', maxLength: 4 }));
     case 'nullable':
       return fc.option(arbitrary(t.of, sig), { nil: null });
+    case 'optional':
+      return fc.option(arbitrary(t.of, sig), { nil: undefined });
     case 'array':
       return fc.array(arbitrary(t.of, sig), { maxLength: 3 });
     case 'struct': {
@@ -245,6 +247,39 @@ test(`the interpreter agrees with Node ${process.version} on random programs`, a
   );
   expect(failures).toEqual([]);
 }, 600_000);
+
+// A parameter that a call leaves out is `undefined`, both for a call inside
+// the program and for the call that runs it, as in Node.
+test('the interpreter binds a parameter that a call leaves out to undefined', async () => {
+  const cases: Array<{ source: string; args: Array<unknown> }> = [
+    { source: 'export function f(a: bigint, b?: bigint): bigint { return a + (b ?? 10n); }', args: [1n] },
+    {
+      source:
+        'function h(a: bigint, b?: bigint): bigint { if (b === undefined) { return a; } return a + b; }\n' +
+        'export function f(a: bigint): bigint { return h(a) + h(a, 2n) + h(a, undefined); }',
+      args: [3n],
+    },
+    { source: 'export function f(a?: boolean): boolean { return a !== undefined; }', args: [] },
+    { source: 'export function f(a?: number): number | null { return a ?? null; }', args: [] },
+  ];
+  const input = {
+    programs: cases.map(({ source, args }) => ({ source, calls: [{ function: 'f', args: args.map(encode) }] })),
+  };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const results = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-optional-'));
+  for (const [i, { source, args }] of cases.entries()) {
+    const lean = results[i];
+    expect(lean?.parsed, source).toBe(true);
+    if (lean === undefined || !lean.parsed) continue;
+    const path = join(dir, `case${i}.mjs`);
+    writeFileSync(path, ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext } }).outputText);
+    const mod = (await import(pathToFileURL(path).href)) as { f: (...a: Array<unknown>) => unknown };
+    const value = lean.results[0]?.value;
+    expect(value === undefined ? 'no value' : canonical(value), source).toBe(canonical(encode(mod.f(...args))));
+  }
+});
 
 // An assignment to a `const` throws a `TypeError` in Node, so the interpreter
 // must give no value for it, whatever the operator.

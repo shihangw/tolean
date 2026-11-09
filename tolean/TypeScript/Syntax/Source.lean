@@ -127,7 +127,12 @@ def typeAnnotation : Option TypeExpr → List Word
   | some t => punctWord ":" :: t.words
   | none => []
 
-def Param.words (p : Param) : List Word := identWord p.name :: typeAnnotation p.type
+/-- The `?` of an optional parameter. -/
+def optionalMark : Bool → List Word
+  | true => [punctWord "?"]
+  | false => []
+
+def Param.words (p : Param) : List Word := identWord p.name :: (optionalMark p.optional ++ typeAnnotation p.type)
 
 /-- The parameters of an arrow function: one name, when the source has no
 parentheses around it, or the list in parentheses. -/
