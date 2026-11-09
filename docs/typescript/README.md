@@ -14,9 +14,10 @@ marks which links are proved, tested against a reference, or trusted.
 
 `tolean/TypeScript/Syntax/` puts a span on every node. It reads:
 
-- **Declarations:** functions, interfaces and type aliases, each of which may
-  have type parameters such as `<A, B>`, enums whose members are strings, and
-  `const` and `let`. Each of them may be exported.
+- **Declarations:** functions, with optional parameters such as `x?: T`,
+  interfaces and type aliases, each of which may have type parameters such as
+  `<A, B>`, enums whose members are strings, and `const` and `let`. Each of
+  them may be exported.
 - **Statements:** `const` and `let` declarations, expression statements,
   `return`, `if` and `else`, `for … of`, the counted `for`, `while`, `switch`,
   blocks, `break`, `continue` and the empty statement. A counted `for`, such
@@ -49,8 +50,9 @@ reading. There are three such cases:
 - `(a)`, then a line break, then `=>`. `tsc` reads an arrow function, but
   ECMA-262 allows no line break before `=>`, so JavaScript refuses the code.
 
-The parser also refuses an arrow function with a return type, and one whose
-body is in braces. The translator accepts an arrow function only as the
+The parser also refuses an arrow function with a return type, one whose body
+is in braces, and one with an optional parameter: `(a?: T) => a` starts like
+the conditional `(a ? …`. The translator accepts an arrow function only as the
 callback of an array method, such as `xs.map(x => x + 1n)`.
 
 In the declaration at the start of a counted `for`, the parser refuses an `in`
@@ -311,6 +313,8 @@ the file, the line and the reason. It never approximates.
 | `ReadonlyArray<T>`, `Array<T>`, `T[]` | `List T` |
 | `interface` with `readonly`, required fields | `structure` |
 | `readonly f?: T`, an optional field | `f : Option T := none`. An object literal may leave the field out, or set it to a `T`. A read of a field that the object lacks gives `undefined`, which is `none`. `s.f ?? d` is `Option.getD s.f d`, and `s.f === undefined` is `s.f.isNone`. |
+| `x?: T`, an optional parameter | `(x : Option T := none)`. A call may leave out the optional parameters, which come last, and then the output passes `none` for each. A call may also pass a `T`, or `undefined`, which is `none` too. `x ?? d`, `x === undefined` and `x?.f` work as they do on an optional field. |
+| `if (x === undefined)` or `if (x !== undefined)`, with `undefined` on either side, where `x` is an optional parameter or a local with an optional value | `match x with \| none => … \| some x => …`, as for a test of `null`. The branch where `x` is defined reads it as a `T`. |
 | `p?.f`, where `p` is a `S \| null` or an optional field of type `S` | `p.map (·.f)`, or `p.bind (·.f)` when `f` is optional. The value is `undefined` when `p` is `null` or `undefined`, so it has the type of an optional field: `p?.f ?? d` and `p?.f === undefined` work as they do on `s.f`. |
 | `p?.f.g`, a chain of reads after `?.` | `p.map (·.f.g)`, or `p.bind (·.f.g)` when `g` is optional. The reads after `?.` are a part of the same optional chain, so the whole chain is `undefined` when `p` is `null` or `undefined`. Each field before the last must be a required field of an interface type. |
 | `type T = U`, declared before its uses | `abbrev T := U`. The output writes `U` itself wherever the source names `T`, so the `abbrev` is only for claims. |
@@ -481,12 +485,17 @@ Tolean rejects these, among others:
 - An optional field that is also nullable, a tag field that is optional, and
   an optional field with the name of a property of `Object.prototype`, such
   as `toString`, because an object without the field has that property.
-  Tolean also refuses `undefined` as a value, so a literal must leave an
-  optional field out rather than set it to `undefined`, or to the value of
-  another optional field. JS tells an object without the key from one whose
-  key holds `undefined`, and Lean has one `none` for both. It also refuses
-  `== null` and `=== null` on an optional value, optional parameters, and a
-  test of an optional value that narrows it.
+  Tolean also refuses `undefined` as a value, except as the argument of an
+  optional parameter. So a literal must leave an optional field out rather
+  than set it to `undefined`, or to the value of another optional field. JS
+  tells an object without the key from one whose key holds `undefined`, and
+  Lean has one `none` for both. It also refuses `== null` and `=== null` on
+  an optional value, and `== undefined`.
+- An optional parameter that is also nullable, and a required parameter after
+  an optional one. Tolean also refuses `T | undefined` as a type, and a test
+  of `undefined` that narrows a value inside an expression, such as
+  `x !== undefined && x > 0n`. Only the test of an `if` narrows an optional
+  value.
 - `?.` where the value cannot be `null` or `undefined`, `?.` on a nullable
   field, and `a?.[i]` and `f?.()`. In a chain such as `a?.b.c`, Tolean
   refuses a field before the last that may be `null` or `undefined`, because

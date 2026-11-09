@@ -72,6 +72,7 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   | .numberOp op, [.num a, .num b] => some (op.apply a b)
   | .numberNe, [.num a, .num b] => some (.bool !(JSNumber.eq a b))
   | .numberTest test, [.num a] => some (.bool (test.apply a))
+  | .undefined, [] => some .undefined
   -- `a === undefined` and `a !== undefined`, as `IsStrictlyEqual` gives them.
   | .isUndefined, [a] => some (.bool (a matches .undefined))
   | .isDefined, [a] => some (.bool !(a matches .undefined))
@@ -278,10 +279,13 @@ def Body.exec (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
   | .ite c whenTrue whenFalse => do
     let .bool t ← Expr.eval fs fuel ρ c | none
     if t then Body.exec fs fuel ρ whenTrue else Body.exec fs fuel ρ whenFalse
-  | .matchNull name whenNull whenValue => do
+  -- A value of `T | null` is never `undefined`, and an optional value is
+  -- never `null`. So each test gives no value for the other, as the tests of
+  -- `null` in expressions do.
+  | .matchNull name optional whenNull whenValue => do
     match ← ρ.lookup name with
-    | .null => Body.exec fs fuel ρ whenNull
-    | .undefined => none
+    | .null => if optional then none else Body.exec fs fuel ρ whenNull
+    | .undefined => if optional then Body.exec fs fuel ρ whenNull else none
     | _ => Body.exec fs fuel ρ whenValue
   -- The tag is a field of the object, or the type of the value, so the
   -- evaluator reads it, as JS does. The arm of the one member left runs only

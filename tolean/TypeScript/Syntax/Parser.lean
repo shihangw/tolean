@@ -430,21 +430,34 @@ def refuseElement (t : Token) : ParseM Unit := do
   if t.isPunct "," then failAt t "array holes are not supported"
   if t.isPunct "..." then failAt t "spread elements are not supported"
 
-def parseParam : ParseM Param := do
+/-- The `?` after the name of an optional parameter, if one comes next. A
+function may have an optional parameter, `x?: T`, but an arrow function may
+not: `(a?: T) => a` starts like `(a ? …`, so the parser would have to look
+further ahead to tell it from a conditional. -/
+def readOptionalMark (optionalOK : Bool) : ParseM Bool := do
+  let mark ← peek
+  if mark.isPunct "?" then
+    if !optionalOK then failAt mark "optional parameters of arrow functions are not supported"
+    discard advance
+    return true
+  return false
+
+/-- A parameter, which may be optional when `optionalOK` is true. -/
+def parseParam (optionalOK : Bool) : ParseM Param := do
   let t ← peek
   if t.isPunct "..." then failAt t "rest parameters are not supported"
   if t.isPunct "[" || t.isPunct "{" then failAt t "destructuring is not supported"
   if t.isKeyword "this" then failAt t "'this' parameters are not supported"
   let name ← readName
+  let optional ← readOptionalMark optionalOK
   let next ← peek
-  if next.isPunct "?" then failAt next "optional parameters are not supported"
   let mut type := none
   if next.isPunct ":" then
     discard advance
     type := some (← parseType (← budget))
   let next ← peek
   if next.isPunct "=" then failAt next "default values are not supported"
-  return { span := ← spanFrom t.span.start, name, type }
+  return { span := ← spanFrom t.span.start, name, optional, type }
 
 /-- The kinds of the first tokens of an arrow function: `a =>`, `()`, `(a,`,
 `(a:` or `(a) =>`. No other expression starts with one of them, because the
@@ -470,7 +483,7 @@ def parseArrowParams : ParseM (List Param) := do
     let name ← readName
     return [{ span := t.span, name, type := none }]
   discard advance
-  let params ← iterate (← budget) #[] (listStep ")" (fun _ => pure ()) parseParam)
+  let params ← iterate (← budget) #[] (listStep ")" (fun _ => pure ()) (parseParam false))
   let _ ← expectPunct ")"
   return params.toList
 
@@ -912,7 +925,7 @@ def parseFunction (start : Pos) (exported : Bool) : ParseM Decl := do
   let name ← readName
   let typeParams ← parseTypeParams
   let _ ← expectPunct "("
-  let params ← iterate (← budget) #[] (listStep ")" (fun _ => pure ()) parseParam)
+  let params ← iterate (← budget) #[] (listStep ")" (fun _ => pure ()) (parseParam true))
   let _ ← expectPunct ")"
   let mut returnType := none
   if (← peek).isPunct ":" then

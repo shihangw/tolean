@@ -1,6 +1,7 @@
 import tolean.TypeScript.EStateM
 import tolean.TypeScript.Translate
 import tolean.TypeScript.IR.Eval
+import tolean.TypeScript.Spec.Lemmas.Eval
 
 /-!
 The translation of an expression means what the expression means.
@@ -140,8 +141,7 @@ def callS (p : Eval.Program) (fuel : Nat) (key : DeclRef) (vs : List (Val N)) : 
   | 0 => none
   | fuel + 1 => do
     let (params, body) ← (Eval.functionsOf p).lookup key
-    if params.length != vs.length then none
-    match ← Eval.execStmt ⟨p, key.file⟩ fuel (params.zip vs).reverse body with
+    match ← Eval.execStmt ⟨p, key.file⟩ fuel (← Eval.bindArgs params vs) body with
     | .ret v => some v
     | .normal _ | .brk _ | .cont _ => none
 
@@ -518,7 +518,7 @@ of their codes means what the list of arguments means. -/
 theorem zip_sim {env : Translate.Env} {g : Expr × Ty → TM IR.Expr}
     (hg : ∀ x t ctx o ctx', g (x, t) ctx = .ok o ctx' → Sim (N := N) m fs fuel env x o) :
     ∀ (args : List Expr) (ps : List Ty) (ctx : Ctx) (vals : List IR.Expr) (ctx' : Ctx),
-      args.length = ps.length → (args.zip ps).mapM g ctx = .ok vals ctx' →
+      args.length ≤ ps.length → (args.zip ps).mapM g ctx = .ok vals ctx' →
       SimList (N := N) m fs fuel env args vals := by
   intro args
   induction args with
@@ -550,12 +550,47 @@ theorem zip_sim {env : Translate.Env} {g : Expr × Ty → TM IR.Expr}
           have h2 := ih ts _ _ _ (by simpa using hlen) hos ρs ρo ws ha hs hxs
           simp [Eval.evalList, h1, h2]
 
+/-- The output's list of codes, then `none` for each optional parameter that
+a call leaves out, evaluates to the values of the codes, then `undefined` for
+each. -/
+theorem evalList_append_undefined {α : Type} (ρ : Eval.Env N) (missing : List α) :
+    ∀ vals : List IR.Expr, IR.Expr.evalList fs fuel ρ (vals ++ missing.map fun _ => IR.Expr.undefined) =
+      (IR.Expr.evalList fs fuel ρ vals).map (· ++ List.replicate missing.length .undefined)
+  | [] => by
+    simp only [List.nil_append]
+    induction missing with
+    | nil => simp [IR.Expr.evalList]
+    | cons _ xs ih =>
+      simp [IR.Expr.evalList, IR.Expr.eval, IR.ExprExt.apply, ih, List.replicate_succ]
+  | v :: vals => by
+    simp only [List.cons_append, IR.Expr.evalList, evalList_append_undefined ρ missing vals]
+    cases IR.Expr.eval fs fuel ρ v <;> cases IR.Expr.evalList fs fuel ρ vals <;> simp
+
+/-- A call that gives a value when it passes `undefined` for its last
+parameters gives the same value when it leaves them out. -/
+theorem callS_append_undefined {p : Eval.Program} {fuel : Nat} {key : DeclRef} {vs : List (Val N)} {k : Nat}
+    {v : Val N} (h : callS p fuel key (vs ++ List.replicate k .undefined) = some v) : callS p fuel key vs = some v := by
+  cases fuel with
+  | zero => simp [callS] at h
+  | succ fuel =>
+    simp only [callS] at h ⊢
+    cases hl : (Eval.functionsOf p).lookup key with
+    | none => simp [hl] at h
+    | some pb =>
+      obtain ⟨params, body⟩ := pb
+      cases hb : Eval.bindArgs params (vs ++ List.replicate k .undefined) with
+      | none => simp [hl, hb] at h
+      | some env =>
+        simp only [hl, hb, Option.bind_eq_bind, Option.bind_some] at h
+        simp only [Eval.bindArgs_append_undefined hb, Option.bind_eq_bind, Option.bind_some]
+        exact h
+
 /-- `zip_sim` for translations that give a `Code`, whose value the output
 uses. -/
 theorem zip_sim_value {env : Translate.Env} {g : Expr × Ty → TM Code}
     (hg : ∀ x t ctx o ctx', g (x, t) ctx = .ok o ctx' → Sim (N := N) m fs fuel env x o.value) :
     ∀ (args : List Expr) (ps : List Ty) (ctx : Ctx) (codes : List Code) (ctx' : Ctx),
-      args.length = ps.length → (args.zip ps).mapM g ctx = .ok codes ctx' →
+      args.length ≤ ps.length → (args.zip ps).mapM g ctx = .ok codes ctx' →
       SimList (N := N) m fs fuel env args (codes.map Code.value) := by
   intro args
   induction args with
@@ -788,6 +823,63 @@ theorem nullTestOf_eval {env : Translate.Env} {l : Expr} {name : String} {isNull
               subst hother
               rw [hid]
               simp [Eval.eval, (hb w hwu).2]
+            · simp at hother
+        · simp at h
+      · simp at h
+  | _ => simp at h
+
+/-- Whether a value is `undefined`. -/
+def isUndefVal : Val N → Bool
+  | .undefined => true
+  | _ => false
+
+/-- What a test that `undefinedTestOf` finds evaluates to: whether the local
+is `undefined`, or the negation. `===` with `undefined` is defined for every
+value, so this holds whatever the local holds. -/
+theorem undefinedTestOf_eval {env : Translate.Env} {l : Expr} {name : String} {isEq : Bool}
+    {value : Ty} (h : undefinedTestOf env l = some (name, isEq, value)) {ρ : Eval.Env N}
+    (hs : Scoped m env ρ) :
+    ∃ w, ρ.lookup name = some w ∧
+      Eval.eval m fuel ρ l = some (.bool (if isEq then isUndefVal w else !isUndefVal w)) := by
+  unfold undefinedTestOf at h
+  split at h
+  · simp at h
+  rename_i hu
+  have hund : ρ.lookup "undefined" = none := hs.none (by simpa using hu)
+  have hund' : ∀ s, Eval.eval m fuel ρ (.ident s "undefined") = some .undefined := by
+    intro s; simp [Eval.eval, hund]
+  rw [← eval_stripParens]
+  generalize l.stripParens = e at h ⊢
+  cases e with
+  | binary sp op a b =>
+    simp only at h
+    cases op <;> simp only at h <;> (try simp at h; done)
+    all_goals
+      rw [eval_binary m fuel sp _ a b ρ rfl]
+      split at h
+      · rename_i s0 n0 hother
+        split at h
+        · rename_i n1 b1 t1 hloc
+          simp only [Option.some.injEq, Prod.mk.injEq] at h
+          obtain ⟨rfl, rfl, rfl⟩ := h
+          have hhas : env.has n0 = true := by simp [Env.has, hloc]
+          obtain ⟨w, hw⟩ := Option.isSome_iff_exists.mp (hs.some hhas)
+          have hid : Eval.eval m fuel ρ (.ident s0 n0) = some w := by simp [Eval.eval, hw]
+          refine ⟨w, hw, ?_⟩
+          split at hother
+          · rename_i hbn
+            obtain ⟨sb, rfl⟩ := isUndefinedName_eq hbn
+            simp only [Option.some.injEq] at hother
+            subst hother
+            rw [hid, hund']
+            cases w <;> simp [Eval.binary, Eval.strictEq, isUndefVal]
+          · split at hother
+            · rename_i _ ha
+              obtain ⟨sa, rfl⟩ := isUndefinedName_eq ha
+              simp only [Option.some.injEq] at hother
+              subst hother
+              rw [hid, hund']
+              cases w <;> simp [Eval.binary, Eval.strictEq, isUndefVal]
             · simp at hother
         · simp at h
       · simp at h
@@ -1373,6 +1465,27 @@ theorem translateArrayMethod_sound {F : Nat}
   rw [eval_arrayMethod m fuel _ _ _ _ _ _ _ _ _ hname (by simpa using hr), hrecv]
   exact methodVal_sim m fs fuel (bodySim_of m fs fuel hbody ha hs) method items v hval
 
+omit [JSNumber N] in
+/-- Fixing the type of an `undefined` argument does not change its value. -/
+theorem fixArgs_value (ps : List Ty) (cs : List Code) :
+    (fixArgs ps cs).map Code.value = cs.map Code.value := by
+  simp only [fixArgs, List.map_map]
+  congr 1
+  funext c
+  simp only [Function.comp]
+  split <;> rfl
+
+/-- The type that `optArgs` writes on an argument does not change its value. -/
+theorem evalList_optArgs (sol : List (String × Ty)) (ρ : Eval.Env N) :
+    ∀ (cs : List Code) (ps : List Ty),
+      IR.Expr.evalList fs fuel ρ (optArgs sol cs ps) = IR.Expr.evalList fs fuel ρ (cs.map Code.value)
+  | [], [] => rfl
+  | [], _ :: _ => rfl
+  | _ :: _, [] => rfl
+  | c :: cs, p :: ps => by
+    simp only [optArgs, List.map_cons, IR.Expr.evalList, evalList_optArgs sol ρ cs ps]
+    split <;> (try split) <;> simp [IR.Expr.eval]
+
 theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
     (∀ env exp e ctx c ctx', translateExpr F env exp e ctx = .ok c ctx' →
       Sim (N := N) m fs fuel env e c.code) ∧
@@ -1469,12 +1582,24 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
         cases hl : env.lookup name with
         | none =>
           simp only [hl] at h
+          have hnone : ρs.lookup name = none := hs.none (by simp [Translate.Env.has, hl])
+          split at h
+          · -- `undefined`, where an optional value is expected.
+            rename_i hu
+            have hu' : name = "undefined" := by simpa using hu
+            subst hu'
+            split at h
+            · simp only [pure_ok] at h
+              obtain ⟨rfl, -⟩ := h
+              simp [IR.Expr.eval, IR.Expr.evalList, IR.ExprExt.apply] at hv'
+              subst hv'
+              simp [Eval.eval, hnone]
+            · simp at h
           cases hk : numberConstant? name with
           | none => simp [hk] at h
           | some k =>
             simp [hk] at h
             obtain ⟨rfl, -⟩ := h
-            have hnone : ρs.lookup name = none := hs.none (by simp [Translate.Env.has, hl])
             simp [IR.Expr.eval, IR.Expr.evalList, IR.ExprExt.apply] at hv'
             subst hv'
             unfold numberConstant? at hk
@@ -1727,7 +1852,7 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
               | some vs =>
                 simp [hx] at hv
                 subst hv
-                have hel := zip_sim_value m fs fuel ?hg elems tys _ codes _ (by simpa using hlen) hcodes
+                have hel := zip_sim_value m fs fuel ?hg elems tys _ codes _ (Nat.le_of_eq (by simpa using hlen)) hcodes
                   ρs ρo vs ha hs hx
                 · simp [Eval.eval, hel]
                 case hg =>
@@ -1801,27 +1926,32 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
           · simp at h
           · split at h
             · next hlen =>
+              have hle : args.length ≤ fn.params.length := by
+                first | exact hlen.1 | (simp at hlen; exact hlen.1)
               -- The arguments, then the checks of their types, which do not
               -- change what the call means.
               simp only [bind_ok] at h
-              obtain ⟨codes, s₂, hcodes, _, s₃, -, h⟩ := h
-              have hcode : c.code = .call fn.ref (codes.map Code.value) := by
+              -- Fixing the type of an `undefined` argument keeps its value.
+              obtain ⟨first, s₂, hcodes, _, s₃, -, _, s₄, -, h⟩ := h
+              obtain ⟨codes, hcodes', hcode⟩ : ∃ codes : List Code, codes.map Code.value = first.map Code.value ∧
+                  c.code = .call fn.ref (optArgs (Ty.unifyList [] fn.params (codes.map (·.type))) codes fn.params ++
+                    List.drop args.length (fn.params.map fun _ => IR.Expr.undefined)) := by
                 obtain ⟨_, -, rfl⟩ := map_ok.mp h
-                rfl
+                exact ⟨_, fixArgs_value _ _, rfl⟩
               intro ρs ρo v ha hs hv
-              rw [hcode, out_call] at hv
-              cases hx : IR.Expr.evalList fs fuel ρo (codes.map Code.value) with
+              rw [hcode, out_call, ← List.map_drop, evalList_append_undefined, evalList_optArgs, hcodes'] at hv
+              cases hx : IR.Expr.evalList fs fuel ρo (first.map Code.value) with
               | none => simp [hx] at hv
               | some vs =>
                 simp [hx] at hv
-                have hargs := zip_sim_value m fs fuel ?hg args fn.params _ codes _ (by simpa using hlen.symm) hcodes
+                have hargs := zip_sim_value m fs fuel ?hg args fn.params _ first _ hle hcodes
                   ρs ρo vs ha hs hx
                 · have hname : fn.name = name := by simpa using List.find?_some hfind
                   have hres := hs.2.1 fn (List.mem_of_find?_eq_some hfind)
                   rw [hname] at hres
                   rw [eval_call, hargs]
                   simp only [Option.bind_some, hres]
-                  exact hc _ _ _ hv
+                  exact callS_append_undefined (hc _ _ _ hv)
                 case hg =>
                   intro x t c₀ o c₁ hgo
                   intro ρs' ρo' w ha' hs' hw

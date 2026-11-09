@@ -103,10 +103,12 @@ inductive TypeExpr where
   /-- `[A, B]`, or `readonly [A, B]` when `readonly` is true: a tuple type. -/
   | tuple (span : Span) (readonly : Bool) (elems : List TypeExpr)
 
-/-- A parameter of a function or an arrow function. -/
+/-- A parameter of a function or an arrow function. An optional parameter,
+`x?: T`, is `undefined` when a call leaves it out. -/
 structure Param where
   span : Span
   name : String
+  optional : Bool := false
   type : Option TypeExpr
 
 /-- The key of an object literal property. -/

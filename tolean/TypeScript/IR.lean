@@ -56,6 +56,9 @@ inductive ExprExt where
   | numberNe
   /-- `(JSNumber.isNaN a)`, or `(JSNumber.toSafeInt a).isSome`. -/
   | numberTest (test : NumberTest)
+  /-- `none`, on no arguments, as an optional value: `undefined`, such as
+  the argument of an optional parameter that a call leaves out. -/
+  | undefined
   /-- `a.isNone`, on an optional value: `a === undefined`. -/
   | isUndefined
   /-- `a.isSome`, on an optional value: `a !== undefined`. -/
@@ -89,6 +92,7 @@ abbrev LoopInfo := tolean.IR.LoopInfo TyExt
 @[match_pattern] abbrev Expr.numberNe (a b : Expr) : Expr := .ext .numberNe [a, b]
 @[match_pattern] abbrev Expr.numberTest (test : NumberTest) (a : Expr) : Expr :=
   .ext (.numberTest test) [a]
+@[match_pattern] abbrev Expr.undefined : Expr := .ext .undefined []
 @[match_pattern] abbrev Expr.isUndefined (a : Expr) : Expr := .ext .isUndefined [a]
 @[match_pattern] abbrev Expr.isDefined (a : Expr) : Expr := .ext .isDefined [a]
 
@@ -140,6 +144,7 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
   | .numberTest .isSafeInteger, [a] => s!"({js}.toSafeInt {argument a}).isSome"
   | .numberTest .isNaN, [a] => s!"({js}.isNaN {argument a})"
   | .numberTest .isFinite, [a] => s!"({js}.isFinite {argument a})"
+  | .undefined, _ => leanName names "none"
   | .isUndefined, [a] => s!"{argument a}.isNone"
   | .isDefined, [a] => s!"{argument a}.isSome"
   | .optField path bind, [a] =>
