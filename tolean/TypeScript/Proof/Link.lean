@@ -290,16 +290,16 @@ macro_rules
         Expr.evalFields, Expr.evalMap, Expr.evalFilter, Expr.evalFind, bindState, eqVal,
         tolean.IR.IntOp.apply, tolean.IR.Order.apply,
         tolean.IR.Division.apply, ExprExt.apply, NumberOp.apply, NumberConstant.value,
-        NumberTest.apply, tagOf, Eval.Val.typeOf, Eval.Env.set, Eval.getProp, Eval.getKey,
+        NumberTest.apply, tagOf, Eval.Val.typeOf, Eval.Env.set, Eval.getProp, Eval.getKey, Eval.getPath,
         Eval.objectPrototypeNames, List.lookup, DeclRef.beq_def, -List.map_map,
         -Bool.if_true_left, -Bool.if_false_right, -Bool.if_false_left, -Bool.if_true_right, $defs,*]
       all_goals repeat' (split_find <;> simp [-List.map_map, $defs,*])
       all_goals repeat' (split <;> (try simp_all [bindState, eqVal, tolean.IR.IntOp.apply,
         tolean.IR.Order.apply, tolean.IR.Division.apply, ExprExt.apply, NumberOp.apply,
-        NumberTest.apply, tagOf, Eval.Val.typeOf, Eval.Env.set, Eval.getProp, Eval.getKey,
+        NumberTest.apply, tagOf, Eval.Val.typeOf, Eval.Env.set, Eval.getProp, Eval.getKey, Eval.getPath,
         Eval.objectPrototypeNames, List.lookup, DeclRef.beq_def, -List.map_map,
         -Bool.if_true_left, -Bool.if_false_right, -Bool.if_false_left, -Bool.if_true_right, $defs,*]))
-      all_goals (try simp_all [bindState, eqVal, Eval.Env.set, Eval.getProp, Eval.getKey, Eval.objectPrototypeNames, List.lookup, DeclRef.beq_def, -List.map_map, $defs,*])
+      all_goals (try simp_all [bindState, eqVal, Eval.Env.set, Eval.getProp, Eval.getKey, Eval.getPath, Eval.objectPrototypeNames, List.lookup, DeclRef.beq_def, -List.map_map, $defs,*])
       -- Two `match`es that differ only in their auxiliary functions, as a
       -- loop lemma's step and the printed definition can, agree by `rfl`.
       all_goals (try rfl)))

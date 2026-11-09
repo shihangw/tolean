@@ -174,6 +174,12 @@ theorem typeAnnotation_line : ∀ a : Option TypeExpr, LineOK (typeAnnotation a)
   | some t => LineOK.cons (by simp [punctWord]) (TypeExpr.line t)
   | none => LineOK.nil
 
+/-- The words of a parameter after its name. -/
+theorem paramRest_line (p : Param) : LineOK (optionalMark p.optional ++ typeAnnotation p.type) := by
+  cases p.optional
+  · exact typeAnnotation_line _
+  · exact LineOK.cons (by simp [punctWord]) (typeAnnotation_line _)
+
 theorem Fine.ofLine {w : Word} {ws : List Word} (hw : w ≠ []) (h : LineOK ws) : Fine (w :: ws) :=
   ⟨LineOK.cons hw h, by simp⟩
 
@@ -184,7 +190,7 @@ theorem arrowParams_fine (parens : Bool) (ps : List Param) : Fine (arrowParams p
     exact fine_enclose (fun x hx => by
       simp only [List.mem_map] at hx
       obtain ⟨p, _, rfl⟩ := hx
-      exact Fine.ofLine (by simp [identWord]) (typeAnnotation_line _))
+      exact Fine.ofLine (by simp [identWord]) (paramRest_line p))
 
 theorem propertyName_ne (n : String) : propertyName n ≠ [] := by
   unfold propertyName; split <;> simp [keywordWord, identWord]
@@ -233,6 +239,12 @@ theorem Expr.fine : ∀ e : Expr, Fine e.words
   | .arrow _ parens ps b => by
     simpa [Expr.words] using (arrowParams_fine parens ps).append
       (Fine.cons (w := punctWord "=>") (by simp [punctWord]) (Expr.fine b))
+  | .asConst _ l => by
+    simpa [Expr.words] using (Expr.fine l).append
+      (Fine.cons (w := identWord "as") (by simp [identWord]) (Fine.word (w := keywordWord "const") (by simp [keywordWord])))
+  | .satisfies _ l t => by
+    simpa [Expr.words] using (Expr.fine l).append (Fine.ofLine (w := identWord "satisfies") (by simp [identWord])
+      (TypeExpr.line t))
 
 theorem Expr.fineAll : ∀ es : List Expr, ∀ x ∈ Expr.wordsOf es, Fine x
   | [], _, hx => by simp [Expr.wordsOf] at hx
@@ -424,7 +436,7 @@ theorem Decl.lineOK : ∀ d : Decl, ∀ l ∈ d.lines, LineOK l.2
         intro x hx
         simp only [List.mem_map] at hx
         obtain ⟨p, _, rfl⟩ := hx
-        exact Fine.ofLine (by simp [identWord]) (typeAnnotation_line _)
+        exact Fine.ofLine (by simp [identWord]) (paramRest_line p)
       have := (exportWords_line exported).append (LineOK.cons (w := keywordWord "function") (by simp [keywordWord])
         (LineOK.cons (w := identWord name) (by simp [identWord])
           ((typeParamWords_line tps).append

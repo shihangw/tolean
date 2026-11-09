@@ -103,10 +103,12 @@ inductive TypeExpr where
   /-- `[A, B]`, or `readonly [A, B]` when `readonly` is true: a tuple type. -/
   | tuple (span : Span) (readonly : Bool) (elems : List TypeExpr)
 
-/-- A parameter of a function or an arrow function. -/
+/-- A parameter of a function or an arrow function. An optional parameter,
+`x?: T`, is `undefined` when a call leaves it out. -/
 structure Param where
   span : Span
   name : String
+  optional : Bool := false
   type : Option TypeExpr
 
 /-- The key of an object literal property. -/
@@ -143,6 +145,12 @@ inductive Expr where
   /-- `(a: T, b) => body`, or `a => body` when `parens` is false. The body is
   an expression. -/
   | arrow (span : Span) (parens : Bool) (params : List Param) (body : Expr)
+  /-- `expr as const`. Type stripping removes `as const`, so it has the value
+  of `expr`. -/
+  | asConst (span : Span) (expr : Expr)
+  /-- `expr satisfies type`. Type stripping removes `satisfies type`, so it has
+  the value of `expr`. -/
+  | satisfies (span : Span) (expr : Expr) (type : TypeExpr)
 
 inductive Property where
   /-- `{ a }`. -/
@@ -258,6 +266,7 @@ def Expr.assigns (n : String) : Expr → Bool
   -- The body runs only when the arrow is called; counting it anyway only
   -- refuses more.
   | .arrow _ _ _ body => body.assigns n
+  | .asConst _ e | .satisfies _ e _ => e.assigns n
 
 def Expr.assignsList (n : String) : List Expr → Bool
   | [] => false
@@ -409,7 +418,7 @@ def Expr.span : Expr → Span
   | .ident s _ | .number s _ | .bigint s _ | .string s _ | .bool s _ | .null s | .array s _
   | .object s _ | .paren s _ | .member s _ _ | .optMember s _ _ | .index s _ _ | .call s _ _ | .unary s _ _
   | .prefix s _ _ | .postfix s _ _ | .binary s _ _ _ | .cond s _ _ _ | .assign s _ _ _
-  | .arrow s _ _ _ => s
+  | .arrow s _ _ _ | .asConst s _ | .satisfies s _ _ => s
 
 def Stmt.span : Stmt → Span
   | .varDecl s _ | .exprStmt s _ | .returnStmt s _ | .ifStmt s _ _ _ | .forOfStmt s _ _ _ _
@@ -429,6 +438,8 @@ def Expr.lessFree : Expr → Bool
   | .cond _ a b c => a.lessFree && b.lessFree && c.lessFree
   -- What the parser checks after an arrow is what it checks after its body.
   | .arrow _ _ _ body => body.lessFree
+  -- A `<` in the type reads type arguments, which the parser checks itself.
+  | .asConst _ e | .satisfies _ e _ => e.lessFree
   | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => true
 
 def Expr.lessFreeList : List Expr → Bool
@@ -456,7 +467,7 @@ def Expr.inFree : Expr → Bool
   | .assign _ _ target value => target.inFree && value.inFree
   | .array _ es => Expr.inFreeList es
   | .member _ e _ | .optMember _ e _ | .index _ e _ | .call _ e _ | .unary _ _ e | .prefix _ _ e
-  | .postfix _ _ e | .arrow _ _ _ e => e.inFree
+  | .postfix _ _ e | .arrow _ _ _ e | .asConst _ e | .satisfies _ e _ => e.inFree
   | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .object .. | .paren .. => true
 
 def Expr.inFreeList : List Expr → Bool
@@ -479,6 +490,22 @@ def Stmt.isBreak : Stmt → Bool
 def Decl.span : Decl → Span
   | .import s .. | .exports s .. | .function s .. | .interface s .. | .typeAlias s .. | .enum s .. | .exportedVar s _ => s
   | .stmt st => st.span
+
+/-- `e` reads a property after a `?.`, through property reads and not
+through parentheses, as `a?.b` and `a?.b.c` do. A property read of such an
+`e` is a part of the same optional chain (ECMA-262 §13.3.9), so it is
+skipped too where the `?.` meets `null` or `undefined`. -/
+def Expr.optSpine : Expr → Bool
+  | .optMember .. => true
+  | .member _ o _ => o.optSpine
+  | _ => false
+
+/-- An optional chain that reads `path` from `base`, the first property after
+a `?.`: `a?.b.c` reads `[b, c]` from `a`. -/
+def Expr.optChain? : Expr → Option (Expr × List String)
+  | .optMember _ base f => some (base, [f])
+  | .member _ o f => (o.optChain?).map fun (b, fs) => (b, fs ++ [f])
+  | _ => none
 
 /-- `e` without the parentheses around it. -/
 def Expr.stripParens : Expr → Expr

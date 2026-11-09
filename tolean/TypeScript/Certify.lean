@@ -160,7 +160,8 @@ partial def stmtsOf : Stmt → List Stmt
 partial def exprCalls : Expr → List String
   | .call _ (.ident _ f) args => f :: args.flatMap exprCalls
   | .call _ c args => exprCalls c ++ args.flatMap exprCalls
-  | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e =>
+  | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e
+  | .asConst _ e | .satisfies _ e _ =>
     exprCalls e
   | .index _ a b | .binary _ _ a b | .assign _ _ a b => exprCalls a ++ exprCalls b
   | .cond _ a b c => exprCalls a ++ exprCalls b ++ exprCalls c
@@ -173,7 +174,8 @@ partial def exprCalls : Expr → List String
 partial def exprNumbers : Expr → List String
   | .number _ t => [t]
   | .call _ c args => exprNumbers c ++ args.flatMap exprNumbers
-  | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e =>
+  | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e
+  | .asConst _ e | .satisfies _ e _ =>
     exprNumbers e
   | .index _ a b | .binary _ _ a b | .assign _ _ a b => exprNumbers a ++ exprNumbers b
   | .cond _ a b c => exprNumbers a ++ exprNumbers b ++ exprNumbers c
@@ -299,7 +301,7 @@ partial def bodyCallbacks : IR.Body → List Callback
   | .let _ e rest => exprCallbacks e ++ bodyCallbacks rest
   | .letArray _ _ elems rest => elems.flatMap exprCallbacks ++ bodyCallbacks rest
   | .ite c a b => exprCallbacks c ++ bodyCallbacks a ++ bodyCallbacks b
-  | .matchNull _ a b | .matchTag _ _ _ _ _ a b | .letState _ a b => bodyCallbacks a ++ bodyCallbacks b
+  | .matchNull _ _ a b | .matchTag _ _ _ _ _ a b | .letState _ a b => bodyCallbacks a ++ bodyCallbacks b
   | .fold _ _ body items rest _ => exprCallbacks items ++ bodyCallbacks body ++ bodyCallbacks rest
 
 end
@@ -361,7 +363,7 @@ def casesOn (decls : List IR.Decl) (vars : List (String × IR.Ty)) : String :=
 partial def loopsOf : IR.Body → List (List String × String × IR.Body × IR.LoopInfo)
   | .value _ | .state _ | .yield .. | .done .. | .exit .. => []
   | .let _ _ rest | .letArray _ _ _ rest => loopsOf rest
-  | .ite _ a b | .matchNull _ a b | .matchTag _ _ _ _ _ a b => loopsOf a ++ loopsOf b
+  | .ite _ a b | .matchNull _ _ a b | .matchTag _ _ _ _ _ a b => loopsOf a ++ loopsOf b
   | .letState _ branch rest => loopsOf branch ++ loopsOf rest
   | .fold names element body _ rest info => loopsOf body ++ [(names, element, body, info)] ++ loopsOf rest
 

@@ -355,7 +355,7 @@ class Printer {
     if (s.name === undefined || s.body === undefined) {
       refuse(s, 'function without a name or a body');
     }
-    const params = s.parameters.map((p) => this.param(p));
+    const params = s.parameters.map((p) => this.param(p, true));
     const returnType = s.type === undefined ? [] : [this.type(s.type)];
     this.inFunction = true;
     const body = this.statement(s.body);
@@ -368,10 +368,16 @@ class Printer {
     );
   }
 
-  private param(p: ts.ParameterDeclaration): Sexp {
+  /** A parameter. A function may have an optional one, `x?: T`, but the Lean
+   * parser refuses one in an arrow function, where `(a?: T) => a` starts like
+   * the conditional `(a ? …`. */
+  private param(p: ts.ParameterDeclaration, optionalOK: boolean): Sexp {
     this.modifiers(p, []);
-    if (p.dotDotDotToken !== undefined || p.questionToken !== undefined) {
-      refuse(p, 'rest or optional parameter');
+    if (p.dotDotDotToken !== undefined) {
+      refuse(p, 'rest parameter');
+    }
+    if (p.questionToken !== undefined && !optionalOK) {
+      refuse(p, 'optional parameter of an arrow function');
     }
     if (p.initializer !== undefined) {
       refuse(p, 'default value');
@@ -379,7 +385,7 @@ class Printer {
     return this.node(
       'param',
       p,
-      [this.name(p.name)],
+      [this.name(p.name), ...(p.questionToken !== undefined ? ['optional'] : [])],
       p.type === undefined ? [] : [this.type(p.type)],
     );
   }
@@ -701,6 +707,17 @@ class Printer {
       }
       return this.node('binary', e, [op], [this.expr(e.left), this.expr(e.right)]);
     }
+    if (ts.isAsExpression(e)) {
+      const t = e.type;
+      if (!ts.isTypeReferenceNode(t) || !ts.isIdentifier(t.typeName) || t.typeName.text !== 'const' ||
+          t.typeArguments !== undefined) {
+        refuse(e, 'type assertion other than as const');
+      }
+      return this.node('asConst', e, [], [this.expr(e.expression)]);
+    }
+    if (ts.isSatisfiesExpression(e)) {
+      return this.node('satisfies', e, [], [this.expr(e.expression), this.type(e.type)]);
+    }
     if (ts.isConditionalExpression(e)) {
       return this.node('cond', e, [], [
         this.expr(e.condition),
@@ -719,7 +736,7 @@ class Printer {
       if (ts.isBlock(e.body)) {
         refuse(e, 'arrow function with a body in braces');
       }
-      return this.node('arrow', e, [], [...e.parameters.map((p) => this.param(p)), this.expr(e.body)]);
+      return this.node('arrow', e, [], [...e.parameters.map((p) => this.param(p, false)), this.expr(e.body)]);
     }
     refuse(e, 'unsupported expression');
   }

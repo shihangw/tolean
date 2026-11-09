@@ -195,6 +195,16 @@ key with one names no property and reads `undefined`, as in JS. -/
 def getKey (fields : List (String × Val N)) (key : JSString) : Option (Val N) :=
   getProp fields key.toString
 
+/-- The property at `path` of an object with the fields `fields`, where each
+property before the last is an object. -/
+def getPath (fields : List (String × Val N)) : List String → Option (Val N)
+  | [] => none
+  | [f] => getProp fields f
+  | f :: rest => do
+    match ← getProp fields f with
+    | .obj inner => getPath inner rest
+    | _ => none
+
 /-- A binary operator on two values, when neither operand short-circuits.
 Bigint `/` and `%` truncate toward zero and throw on a zero divisor
 (`BigInt::divide`, `BigInt::remainder`). On numbers, `a > b` is `b < a` and
@@ -367,6 +377,15 @@ def enumObject (members : List (String × String)) : Val N :=
 def functionsOf (p : Program) : List (DeclRef × List String × Stmt) :=
   p.flatMap fun (file, m) => (functions m).map fun (name, params, body) => (⟨file, name⟩, params, body)
 
+/-- The environment of a call: each parameter bound to its argument
+(`FunctionDeclarationInstantiation`, ECMA-262 §10.2.11). A parameter that
+the call passes no argument for is `undefined`, as an optional parameter is
+when a call leaves it out. JS ignores arguments beyond the parameters, but
+TypeScript refuses them, and the model gives no value for such a call. -/
+def bindArgs (params : List String) (vs : List (Val N)) : Option (Env N) :=
+  if params.length < vs.length then none
+  else some (params.zip (vs ++ List.replicate (params.length - vs.length) .undefined)).reverse
+
 mutual
 
 /-- The value of `e`. `fuel` bounds the depth of nested calls, so that the
@@ -393,16 +412,26 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
   | .string _ s => some (.str (JSString.ofString s))
   | .null _ => some .null
   | .paren _ inner => eval m fuel env inner
+  -- Type stripping removes `as const` and `satisfies T`.
+  | .asConst _ e | .satisfies _ e _ => eval m fuel env e
   | .array _ elems => (evalList m fuel env elems).map .list
   | .object _ props => (evalProps m fuel env props).map .obj
-  | .member _ obj name => do
-    match ← eval m fuel env obj with
-    | .obj fields => getProp fields name
-    | _ => none
+  -- A property read after a `?.` is a part of its optional chain, which is
+  -- `undefined` as a whole where the `?.` meets `null` or `undefined`
+  -- (ECMA-262 §13.3.9.1). So `a?.b.c` is `undefined` when `a` is `null`,
+  -- but `(a?.b).c` reads `.c` of `undefined`, which throws.
+  | .member _ obj name =>
+    if obj.optSpine then do
+      match ← evalChain m fuel env obj with
+      | none => some .undefined
+      | some (.obj fields) => getProp fields name
+      | some _ => none
+    else do
+      match ← eval m fuel env obj with
+      | .obj fields => getProp fields name
+      | _ => none
   -- `obj?.name` is `undefined` when `obj` is `null` or `undefined`
-  -- (ECMA-262 §13.3.9.1). A chain after it, as in `obj?.a.b`, would skip the
-  -- rest of the chain too. This model does not: it reads `.b` of `undefined`,
-  -- which gives no value, so it is only less defined than JS there.
+  -- (ECMA-262 §13.3.9.1).
   | .optMember _ obj name => do
     match ← eval m fuel env obj with
     | .null | .undefined => some .undefined
@@ -497,14 +526,30 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     | fuel + 1 =>
       let key ← resolve m name
       let (params, body) ← (functionsOf m.program).lookup key
-      if params.length != vs.length then none
       -- A `break` or a `continue` outside a loop is an early error
       -- (ECMA-262 §14.8.1 and §14.9.1), so the model gives no value.
-      match ← execStmt { m with file := key.file } fuel (params.zip vs).reverse body with
+      match ← execStmt { m with file := key.file } fuel (← bindArgs params vs) body with
       | .ret v => some v
       | .normal _ | .brk _ | .cont _ => none
   | _ => none
 termination_by e => (fuel, sizeOf e, 0)
+
+/-- An optional chain such as `a?.b.c`: `none` where a `?.` meets `null` or
+`undefined`, which skips the rest of the chain, and the value of the chain
+otherwise. -/
+def evalChain (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Option (Val N))
+  | .optMember _ obj name => do
+    match ← eval m fuel env obj with
+    | .null | .undefined => some none
+    | .obj fields => (getProp fields name).map some
+    | _ => none
+  | .member _ obj name => do
+    match ← evalChain m fuel env obj with
+    | none => some none
+    | some (.obj fields) => (getProp fields name).map some
+    | some _ => none
+  | e => (eval m fuel env e).map some
+termination_by e => (fuel, sizeOf e, 1)
 
 def evalList (m : Scope) (fuel : Nat) (env : Env N) : List Expr → Option (List (Val N))
   | [] => some []
@@ -707,8 +752,7 @@ end
 take the value it returns. -/
 def runIn (p : Program) (key : DeclRef) (args : List (Val N)) (fuel : Nat := 64) : Option (Val N) := do
   let (params, body) ← (functionsOf p).lookup key
-  if params.length != args.length then none
-  match ← execStmt ⟨p, key.file⟩ fuel (params.zip args).reverse body with
+  match ← execStmt ⟨p, key.file⟩ fuel (← bindArgs params args) body with
   | .ret v => some v
   | .normal _ | .brk _ | .cont _ => none
 

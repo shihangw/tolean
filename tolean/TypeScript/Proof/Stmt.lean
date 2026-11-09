@@ -855,20 +855,36 @@ theorem branch_ite {env : Translate.Env} {test : Expr} {c : IR.Expr} {wt wf : IR
     refine ⟨.bool b, hsim ρs ρo _ ha hs hc, ?_⟩
     cases b <;> simpa [Val.truthy] using ho
 
-theorem branch_null {env : Translate.Env} {test : Expr} {name : String} {isNullTest : Bool} {value : Ty}
-    {wt wf : IR.Body} (hn : nullTestOf env test = some (name, isNullTest, value)) :
+/-- A test of `null` on a nullable local, or of `undefined` on an optional
+one, and the `match` that the output writes for it. -/
+theorem branch_none {env : Translate.Env} {test : Expr} {name : String} {isNullTest : Bool} {value : Ty}
+    {optional : Bool} {wt wf : IR.Body} (hn : noneTestOf env test = some (name, isNullTest, value, optional)) :
     BranchSim (N := N) m fs fuel env test
-      (if isNullTest then .matchNull name wt wf else .matchNull name wf wt) wt wf := by
-  intro ρs ρo o ha hs ho
-  obtain ⟨w, hw, hl⟩ := nullTestOf_eval m fuel hn hs
-  have hwo : ρo.lookup name = some w := by rw [← ha]; exact hw
-  by_cases hu : w = .undefined
-  · subst hu
-    cases isNullTest <;> simp [IR.Body.exec, hwo] at ho
-  refine ⟨_, hl hu, ?_⟩
-  cases isNullTest <;> simp only [Bool.false_eq_true, ↓reduceIte, IR.Body.exec, hwo,
-    Option.bind_eq_bind, Option.bind_some] at ho <;> cases w <;>
-    first | exact absurd rfl hu | simpa [isNullVal, Val.truthy] using ho
+      (if isNullTest then .matchNull name optional wt wf else .matchNull name optional wf wt) wt wf := by
+  unfold noneTestOf at hn
+  split at hn
+  · rename_i name' isEq value' hnull
+    simp only [Option.some.injEq, Prod.mk.injEq] at hn
+    obtain ⟨rfl, rfl, rfl, rfl⟩ := hn
+    intro ρs ρo o ha hs ho
+    obtain ⟨w, hw, hl⟩ := nullTestOf_eval m fuel hnull hs
+    have hwo : ρo.lookup name' = some w := by rw [← ha]; exact hw
+    by_cases hu : w = .undefined
+    · subst hu
+      cases isEq <;> simp [IR.Body.exec, hwo] at ho
+    refine ⟨_, hl hu, ?_⟩
+    cases isEq <;> simp only [Bool.false_eq_true, ↓reduceIte, IR.Body.exec, hwo,
+      Option.bind_eq_bind, Option.bind_some] at ho <;> cases w <;>
+      first | exact absurd rfl hu | simpa [isNullVal, Val.truthy] using ho
+  · obtain ⟨⟨name', isEq, value'⟩, hu, heq⟩ := Option.map_eq_some_iff.mp hn
+    simp only [Prod.mk.injEq] at heq
+    obtain ⟨rfl, rfl, rfl, rfl⟩ := heq
+    intro ρs ρo o ha hs ho
+    obtain ⟨w, hw, hl⟩ := undefinedTestOf_eval m fuel hu hs
+    have hwo : ρo.lookup name' = some w := by rw [← ha]; exact hw
+    refine ⟨_, hl, ?_⟩
+    cases isEq <;> simp only [Bool.false_eq_true, ↓reduceIte, IR.Body.exec, hwo,
+      Option.bind_eq_bind, Option.bind_some] at ho <;> cases w <;> simp_all [isUndefVal, Val.truthy]
 
 theorem branch_tag {env : Translate.Env} {test : Expr} {t : TagTest} {wt wf : IR.Body}
     (ht : tagTestOf env test = some t) :
@@ -1143,7 +1159,7 @@ theorem switchOf_eval {env : Translate.Env} {disc : Expr} {sw : SwitchOn} (h : s
         · simp only [Option.pure_def, Option.bind_some, Option.some.injEq] at h
           subst h
           simp only at hl hk
-          simp [Eval.eval, Eval.getProp, hl, hk]
+          simp [Eval.eval, Eval.getProp, hl, hk, Expr.optSpine]
         · simp at h
       · simp at h
     | _ => simp at h
@@ -1588,7 +1604,7 @@ theorem translateIf_sound (hc : CallsAgree (N := N) m.program fs fuel) {F : Nat}
       StmtSim (N := N) m fs fuel env tail (.ifStmt s test t e :: rest) body := by
   intro env s test t e rest tail ctx body ctx' h
   unfold translateIf at h
-  cases hn : nullTestOf env test with
+  cases hn : noneTestOf env test with
   | none =>
     cases ht : tagTestOf env test with
     | some tt =>
@@ -1665,8 +1681,8 @@ theorem translateIf_sound (hc : CallsAgree (N := N) m.program fs fuel) {F : Nat}
                 (ihS _ _ _ _ _ _ hwt) (ihS _ _ _ _ _ _ hwf) (ihS _ _ _ _ _ _ hrb)
             · simp at hbr
   | some nt =>
-    obtain ⟨name, isNullTest, value⟩ := nt
-    have hb := fun wt wf => branch_null (N := N) (wt := wt) (wf := wf) m fs fuel hn
+    obtain ⟨name, isNullTest, value, optional⟩ := nt
+    have hb := fun wt wf => branch_none (N := N) (wt := wt) (wf := wf) m fs fuel hn
     cases isNullTest <;> simp only [hn, Bool.false_eq_true, ↓reduceIte] at h hb
     all_goals
       split at h
