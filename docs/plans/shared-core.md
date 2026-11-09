@@ -27,7 +27,7 @@ built it.
 | Step | What is built | Pull request |
 |---|---|---|
 | 1 | The shared core of the IR, its printer and its equality are in `tolean/IR.lean` and `tolean/IR/`. The core includes inductive types whose constructors take no arguments, which TypeScript uses for literal unions and SQL could use for its enums. TypeScript adds JavaScript numbers and `null` in `tolean/TypeScript/IR.lean`. Every corpus file translates to the same text as before. | [#50](https://github.com/shihangw/tolean/pull/50) |
-| 5, first part | Go's pure functions go through a total translator, `tolean/Go/Translate/Pure.lean`, that builds the IR with a Go extension for `Go.wrap64` and `++` on strings. Go has an interpreter for that subset in `tolean/Go/Spec/Eval.lean` and an evaluator for its IR, and `translate_sound` proves the translation. The [Go proofs plan](go-proofs.md) lists the rest. | PR_LINK |
+| 5, first part | Go's pure functions go through a total translator, `tolean/Go/Translate/Pure.lean`, that builds the IR with a Go extension for `Go.wrap64` and `++` on strings. Go has an interpreter for that subset in `tolean/Go/Spec/Eval.lean` and an evaluator for its IR, and `translate_sound` proves the translation. The [Go proofs plan](go-proofs.md) lists the rest. | [#102](https://github.com/shihangw/tolean/pull/102) |
 
 ## What every language shares
 
