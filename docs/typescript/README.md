@@ -14,9 +14,9 @@ marks which links are proved, tested against a reference, or trusted.
 
 `tolean/TypeScript/Syntax/` puts a span on every node. It reads:
 
-- **Declarations:** functions, which may have type parameters such as
-  `<A, B>`, interfaces, type aliases, enums whose members are strings, and
-  `const` and `let`, each of them possibly exported.
+- **Declarations:** functions, interfaces and type aliases, each of which may
+  have type parameters such as `<A, B>`, enums whose members are strings, and
+  `const` and `let`. Each of them may be exported.
 - **Statements:** `const` and `let` declarations, expression statements,
   `return`, `if` and `else`, `for … of`, the counted `for`, `while`, `switch`,
   blocks, `break`, `continue` and the empty statement. A counted `for`, such
@@ -345,6 +345,8 @@ the file, the line and the reason. It never approximates.
 | `a / k`, `a % k` on `bigint`, where `k` is a nonzero literal | `Int.tdiv a k`, `Int.tmod a k` (both truncate toward zero, as JS does) |
 | `{ a, b: e }` building a declared interface | structure instance |
 | Call to a function declared earlier in the file | application |
+| `interface Box<T> { readonly value: T }`, where the type parameters have no constraint | `structure Box (T : Type)`. `Box<bigint>` becomes `Box Int`, and a read of a field has the field's type with `bigint` for `T`. An object literal where a `Box<bigint>` is expected becomes `({ value := … } : (Box Int))`. |
+| `type Maybe<T> = T \| null` | `abbrev Maybe (T : Type) := Option T`. As for any alias, the output writes the type itself wherever the source names it, so `Maybe<bigint>` becomes `Option Int`. |
 | `function f<T>(x: T): T`, where the type parameters have no constraint | `def f {T : Type} (x : T) : T`. A call fixes each type parameter from the types of its arguments, and Lean infers the same types. An argument of `T \| null` may be `null`, which leaves `T` to another argument. |
 
 Tolean rejects these, among others:
@@ -404,8 +406,14 @@ Tolean rejects these, among others:
   refused. `===` on tuples is refused, because in JS it compares the arrays
   by reference.
 - A type parameter with a constraint, a default or a modifier, and a `,` after
-  the last one. Tolean also refuses a type parameter that no parameter's type
-  names, because a call could not fix it. A type parameter may not have the
+  the last one. Tolean also refuses a type parameter of a function that no
+  parameter's type names, because a call could not fix it. A generic type
+  named with the wrong number of type arguments is refused, and so is a
+  generic union or `Record`: a union of string literals, primitive types or
+  interfaces, and a `Record`, become a type of their own, which takes no type
+  parameters. A
+  field may not have the name of a type parameter, because Lean would read the
+  name as the field in the types of the fields after it. A type parameter may not have the
   name of a type or function of the file, or of a local, because Lean would
   read the name as the other one. `===` on values of a type parameter is
   refused, because in JS it compares objects by reference.

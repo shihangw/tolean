@@ -415,11 +415,13 @@ theorem Decl.lineOK : ∀ d : Decl, ∀ l ∈ d.lines, LineOK l.2
             ((fine_enclose (o := "(") (c := ")") hp).line.append (typeAnnotation_line rt)))))
       simpa [List.append_assoc] using this
     · exact Stmt.lineOK body 0 l hl
-  | .interface _ exported name fields, l, hl => by
+  | .interface _ exported name tps fields, l, hl => by
     simp only [Decl.lines, List.mem_cons, List.mem_append, List.mem_map] at hl
     rcases hl with (rfl | ⟨f, _, rfl⟩) | (rfl | hl)
-    · exact (exportWords_line exported).append (LineOK.cons (by simp [identWord]) (LineOK.cons (by simp [identWord])
-        (LineOK.word (by simp [punctWord]))))
+    · have := (exportWords_line exported).append (LineOK.cons (w := identWord "interface") (by simp [identWord])
+        (LineOK.cons (w := identWord name) (by simp [identWord])
+          ((typeParamWords_line tps).append (LineOK.word (w := punctWord "{") (by simp [punctWord])))))
+      simpa [List.append_assoc] using this
     · have h1 : LineOK (if f.readonly then [identWord "readonly"] else []) := by
         split
         · exact LineOK.word (by simp [identWord])
@@ -443,10 +445,13 @@ theorem Decl.lineOK : ∀ d : Decl, ∀ l ∈ d.lines, LineOK l.2
         (LineOK.word (by simp [punctWord]))))
     · exact LineOK.word (by simp [punctWord])
     · simp at hl
-  | .typeAlias _ exported name ty, l, hl => by
+  | .typeAlias _ exported name tps ty, l, hl => by
     simp [Decl.lines] at hl; subst hl
-    exact (exportWords_line exported).append (LineOK.cons (by simp [identWord]) (LineOK.cons (by simp [identWord])
-      (LineOK.cons (by simp [punctWord]) ((TypeExpr.line ty).append (LineOK.word (by simp [punctWord]))))))
+    have := (exportWords_line exported).append (LineOK.cons (w := identWord "type") (by simp [identWord])
+      (LineOK.cons (w := identWord name) (by simp [identWord]) ((typeParamWords_line tps).append
+        (LineOK.cons (w := punctWord "=") (by simp [punctWord])
+          ((TypeExpr.line ty).append (LineOK.word (w := punctWord ";") (by simp [punctWord])))))))
+    simpa [List.append_assoc] using this
   | .exportedVar _ v, l, hl => by
     simp [Decl.lines] at hl; subst hl
     exact LineOK.cons (by simp [keywordWord]) v.line

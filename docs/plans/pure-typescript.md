@@ -76,13 +76,12 @@ exact. A construct leaves these tables when Tolean translates it, and the
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| A generic interface or type alias, such as `interface Pair<A, B>` | `structure Pair (A B : Type)` | |
 | A type parameter with a constraint, such as `T extends Named` | Nothing in the first version | All constraints, until the open question below is settled |
 
 A generic function's type parameters are implicit arguments of its `def`, as
 the number type `N` is. A generic interface's become arguments of its
-`structure`. A constraint is harder, because TypeScript checks it by the shape of a type and
-Lean has no subtyping by shape.
+`structure`. A constraint is harder, because TypeScript checks it by the
+shape of a type and Lean has no subtyping by shape.
 
 ### Recursion
 
@@ -231,8 +230,7 @@ the P2 steps. Steps with the same priority keep the order of their numbers.
    value, the rest of a chain after `?.`, a `default` that assigns to `never`,
    `export { … }` and re-exports, `as const` and `satisfies`, and `Record`
    over a union of string literals.
-3. **P1.** Generic interfaces and type aliases whose type parameters have no
-   constraint, and type guards.
+3. **P1.** Type guards.
 4. **P0.** The other array methods without `sort`, such as `reduce` and
    `slice`, indexing, and object spread.
 5. **P0.** Control flow: the counted `for` loop.
@@ -257,10 +255,10 @@ variables and in maps.
 
 ## Open questions
 
-- How should a certificate cover a generic function? The certifier has no
-  encoder for a type parameter, so a file with a generic function gets no
+- How should a certificate cover a generic function or interface? The
+  certifier has no encoder for a type parameter, so a file with either gets no
   certificate. The claim could take an encoder for each type parameter as an
-  argument, since the function never looks inside such a value.
+  argument, since the code never looks inside such a value.
 - How should a type parameter with a constraint translate? One option is a
   type class that the translator writes for each constraint, with one
   method per field that the constraint names. Another is to pass the

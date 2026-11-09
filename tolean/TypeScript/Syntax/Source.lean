@@ -268,11 +268,12 @@ def Decl.lines : Decl → List Line
   | .function _ exported name typeParams params returnType body =>
     (0, exportWords exported ++ keywordWord "function" :: identWord name :: typeParamWords typeParams ++
       enclose "(" ")" (params.map Param.words) ++ typeAnnotation returnType) :: body.lines 0
-  | .interface _ exported name fields =>
-    (0, exportWords exported ++ [identWord "interface", identWord name, punctWord "{"]) ::
-      fields.map (fun f => (1, f.words)) ++ [(0, [punctWord "}"])]
-  | .typeAlias _ exported name type =>
-    [(0, exportWords exported ++ identWord "type" :: identWord name :: punctWord "=" :: type.words ++ [punctWord ";"])]
+  | .interface _ exported name typeParams fields =>
+    (0, exportWords exported ++ identWord "interface" :: identWord name :: typeParamWords typeParams ++
+      [punctWord "{"]) :: fields.map (fun f => (1, f.words)) ++ [(0, [punctWord "}"])]
+  | .typeAlias _ exported name typeParams type =>
+    [(0, exportWords exported ++ identWord "type" :: identWord name :: typeParamWords typeParams ++
+      punctWord "=" :: type.words ++ [punctWord ";"])]
   | .enum _ exported name members =>
     (0, exportWords exported ++ [keywordWord "enum", identWord name, punctWord "{"]) ::
       members.map (fun m => (1, m.words)) ++ [(0, [punctWord "}"])]
@@ -417,8 +418,9 @@ def Decl.erase : Decl → Decl
   | .import _ names source => .import noSpan (names.map ImportName.erase) source
   | .function _ exported name typeParams params returnType body =>
     .function noSpan exported name typeParams (params.map Param.erase) (returnType.map TypeExpr.erase) body.erase
-  | .interface _ exported name fields => .interface noSpan exported name (fields.map Field.erase)
-  | .typeAlias _ exported name type => .typeAlias noSpan exported name type.erase
+  | .interface _ exported name typeParams fields =>
+    .interface noSpan exported name typeParams (fields.map Field.erase)
+  | .typeAlias _ exported name typeParams type => .typeAlias noSpan exported name typeParams type.erase
   | .enum _ exported name members => .enum noSpan exported name (members.map EnumMember.erase)
   | .exportedVar _ d => .exportedVar noSpan d.erase
   | .stmt s => .stmt s.erase

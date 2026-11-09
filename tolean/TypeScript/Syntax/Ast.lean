@@ -370,8 +370,10 @@ inductive Decl where
   name of a generic function. -/
   | function (span : Span) (exported : Bool) (name : String) (typeParams : List String) (params : List Param)
       (returnType : Option TypeExpr) (body : Stmt)
-  | interface (span : Span) (exported : Bool) (name : String) (fields : List Field)
-  | typeAlias (span : Span) (exported : Bool) (name : String) (type : TypeExpr)
+  /-- `typeParams` are the names in `<A, B>` after the name of a generic
+  interface, as for a type alias and a function. -/
+  | interface (span : Span) (exported : Bool) (name : String) (typeParams : List String) (fields : List Field)
+  | typeAlias (span : Span) (exported : Bool) (name : String) (typeParams : List String) (type : TypeExpr)
   /-- `enum Name { A = "a", B = "b" }`: an enum whose members are strings. -/
   | enum (span : Span) (exported : Bool) (name : String) (members : List EnumMember)
   | exportedVar (span : Span) (decl : VarDecl)

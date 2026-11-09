@@ -1775,9 +1775,9 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
             exact ihO _ _ _ _ _ _ _ hinner ρs ρo v ha hs hv
           · simp at h
         all_goals try simp at h
-        rename_i structName
+        rename_i structName structArgs
         obtain ⟨info, _, ⟨-, rfl⟩, seen, parts, s₂, hfold, h⟩ := h
-        have hparts : c.code = .struct parts structName := by
+        have hparts : c.code = .struct parts structName (Ty.leanList structArgs) := by
           obtain ⟨_, _, -, h⟩ := h
           split at h
           · simp at h; rw [← h.1]

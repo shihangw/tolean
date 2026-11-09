@@ -118,10 +118,12 @@ def Decl.toSexp : Decl → Sexp
     node "function" s ([name] ++ flag exported "export")
       (typeParams.map (fun t => .node "type-param" none [t] []) ++ params.map Param.toSexp ++
         (returnType.map TypeExpr.toSexp).toList ++ [body.toSexp])
-  | .interface s exported name fields =>
-    node "interface" s ([name] ++ flag exported "export") (fields.map Field.toSexp)
-  | .typeAlias s exported name type =>
-    node "type" s ([name] ++ flag exported "export") [type.toSexp]
+  | .interface s exported name typeParams fields =>
+    node "interface" s ([name] ++ flag exported "export")
+      (typeParams.map (fun t => .node "type-param" none [t] []) ++ fields.map Field.toSexp)
+  | .typeAlias s exported name typeParams type =>
+    node "type" s ([name] ++ flag exported "export")
+      (typeParams.map (fun t => .node "type-param" none [t] []) ++ [type.toSexp])
   | .enum s exported name members =>
     node "enum" s ([name] ++ flag exported "export")
       (members.map fun m => node "member" m.span [m.name, Sexp.quote m.value] [])
