@@ -180,7 +180,9 @@ computes what the evaluator gives for the IR, and `decls_sound` in
 a lemma of its own: the evaluator runs the loop as the printed `List.foldl`,
 for every environment whose variables have values of the right types. The
 lemma follows from `runFold_foldl`, which Tolean proves once: when one run of
-the body and one step of the fold agree, the loop and the fold agree.
+the body and one step of the fold agree, the loop and the fold agree. A loop
+with a `break` runs as the printed `forIn` instead, and its lemma follows from
+`runFold_forIn` in the same way.
 `tests/typescript/checkCertify.sh` certifies each corpus file it can, and
 `tests/chain/check.sh` checks that a wrong translation breaks a certificate.
 Tolean also proves the parser's round trip. `parseChars_reads` in
@@ -326,6 +328,7 @@ the file, the line and the reason. It never approximates.
 | `const xs: Array<T> = [...]`, then `xs.push(e)`; `xs` read only in the `return` | `let xs := xs ++ [e]` |
 | `for (const x of xs) { … }` | `List.foldl` over the tuple of locals the body changes |
 | `if (c) continue;` at the top of a loop body, or a branch of that `if` that ends in `continue` on every path | `if c then (x, y) else …`, where the rest of the body is the `else` branch, as after an `if` that returns. A test of `null` or of a tag narrows the local for the rest of the body. |
+| `break` in a `for (const x of xs)` loop, in the same places as `continue` | `Id.run (forIn xs (x, y) (fun e (x, y) => …))`. A `break` is `ForInStep.done (x, y)`, which ends the loop, and the end of the body or a `continue` is `ForInStep.yield (x, y)`. A loop without a `break` stays a `List.foldl`. |
 | `xs.map(x => e)`, `xs.filter(x => p)` | `List.map (fun (x : T) => e) xs`, `List.filter (fun (x : T) => p) xs` |
 | `xs.some(x => p)`, `xs.every(x => p)` | `List.any xs (fun (x : T) => p)`, `List.all xs (fun (x : T) => p)` |
 | `xs.find(x => p)` | `List.find? (fun (x : T) => p) xs`. The value is `undefined` when no element passes, so it has the type of an optional field: `xs.find(p) ?? d`, `xs.find(p)?.f` and `xs.find(p) === undefined` work as they do on `s.f`. |
@@ -360,10 +363,10 @@ Tolean rejects these, among others:
 - The global `isNaN` and `isFinite`. These convert their argument to a number
   first. Use `Number.isNaN` and `Number.isFinite` instead.
 - Assignment to a parameter, a `const` or a field, and a push onto an array
-  that the function did not create. It also rejects `break` and `return`
-  inside a loop. A `continue` must end the loop body, or a branch of an `if`
-  at the top of the body; code after the `if` must then go in its `else`
-  branch, if it has one. An assignment to a `const` throws a `TypeError`, so
+  that the function did not create. It also rejects `return` inside a loop.
+  A `continue` or a `break` must end the loop body, or a branch of an `if` at
+  the top of the body; code after the `if` must then go in its `else` branch,
+  if it has one. An assignment to a `const` throws a `TypeError`, so
   the interpreter gives no value for a block where a statement after a
   `const` assigns it, and the translator refuses the `const`.
 - A read of an owned array anywhere except in the `return` value. If code

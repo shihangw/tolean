@@ -76,6 +76,46 @@ theorem runFold_foldl {α σ : Type} (fs : List (DeclRef × List String × IR.Bo
   have := key xs (dec ρ)
   rwa [hdec ρ hI] at this
 
+/-- How one step of `forIn` ends, as the evaluator gives it: a `done` is a
+`break`. -/
+def stepOutcome {σ : Type} : ForInStep σ → Eval.Env N → Eval.Outcome N
+  | .done _, ρ => .brk ρ
+  | .yield _, ρ => .normal ρ
+
+/-- A fold of the output whose body can `break`, and `forIn`, agree when one
+run of the body and one step of `forIn` agree. A certificate proves a lemma
+for each such loop from this one. -/
+theorem runFold_forIn {α σ : Type} (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
+    (names : List String) (element : String) (body : IR.Body) (encX : α → Val N)
+    (upd : σ → Eval.Env N → Eval.Env N) (dec : Eval.Env N → σ)
+    (step : Eval.Env N → α → σ → ForInStep σ) (I : Eval.Env N → Prop)
+    (hbody : ∀ ρ s x, I ρ → ∃ inner,
+      IR.Body.exec fs fuel ((element, encX x) :: upd s ρ) body = some (stepOutcome (step ρ x s) inner) ∧
+        IR.bindState names inner (upd s ρ) = some (upd (step ρ x s).value ρ))
+    (hdec : ∀ ρ, I ρ → upd (dec ρ) ρ = ρ) (xs : List α) (ρ : Eval.Env N) (hI : I ρ) :
+    IR.Body.runFold fs fuel names element body ρ (xs.map encX) =
+      some (upd (Id.run (forIn xs (dec ρ) (step ρ))) ρ) := by
+  have key : ∀ (xs : List α) (s : σ), IR.Body.runFold fs fuel names element body (upd s ρ) (xs.map encX) =
+      some (upd (Id.run (forIn xs s (step ρ))) ρ) := by
+    intro xs
+    induction xs with
+    | nil => intro s; simp [IR.Body.runFold]
+    | cons x xs ih =>
+      intro s
+      obtain ⟨inner, hex, hb⟩ := hbody ρ s x hI
+      cases hst : step ρ x s with
+      | done s' =>
+        rw [hst] at hex hb
+        simp only [List.map_cons, IR.Body.runFold, hex, stepOutcome, hb, ForInStep.value,
+          Option.bind_eq_bind, Option.bind_some, List.forIn_cons, hst]
+        rfl
+      | yield s' =>
+        rw [hst] at hex hb
+        simp only [List.map_cons, IR.Body.runFold, hex, stepOutcome, hb, ForInStep.value,
+          Option.bind_eq_bind, Option.bind_some, List.forIn_cons, hst]
+        exact ih s'
+  have := key xs (dec ρ)
+  rwa [hdec ρ hI] at this
 /-- A callback of the output and a Lean function agree on the elements of a
 list when they agree on each element. A certificate proves a lemma for each
 call of `map` from this one. -/
