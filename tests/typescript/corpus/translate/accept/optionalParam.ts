@@ -86,3 +86,13 @@ function same(x: bigint): bigint {
 export function deep(x: bigint): bigint {
   return same(same(same(same(same(same(same(same(same(same(same(same(same(same(same(same(same(same(same(same(x))))))))))))))))))));
 }
+
+// In a generic caller, the other arguments may fix `T` to the caller's own
+// type parameter.
+export function wrapper<U>(value: U): U {
+  return choose(value, undefined);
+}
+
+export function sameName<T>(value: T): T {
+  return choose(value, undefined);
+}
