@@ -628,7 +628,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       -- then as the number that the body reads, as the printer writes it.
       let binders := match method with
         | .mapIdx index =>
-          s!"fun ({index} : Nat) ({param} : {elem.print names}) => " ++
+          s!"fun ({index} : {tolean.IR.leanName names "Nat"}) ({param} : {elem.print names}) => " ++
             s!"let {index} := {tolean.IR.PrintTy.indexValue (T := IR.TyExt) names index}; "
         | _ => s!"fun ({param} : {elem.print names}) => "
       let fn := s!"(({captured}{binders}({cbBody.print names} : {info.result.print names}))" ++
@@ -668,7 +668,9 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         | .all => ("evalFind", " false", s!"Option.map {encX} (List.find? (fun x => !({fn} x)) items)",
             s!"evalFind_false fs {fuel} ρ {str param} _ {encX} {fn}")
       let (indexArg, start, intros) := match method with
-        | .mapIdx index => (s!" {str index}", " 0", s!"{index} x")
+        -- The proof names the index `idx`, not by its name in the source,
+        -- which could hide one of the lemma's hypotheses, such as `hI`.
+        | .mapIdx index => (s!" {str index}", " 0", "idx x")
         | .findIndex => ("", " 0", "x")
         | _ => ("", "", "x")
       let itemsTy := (IR.Ty.list elem).print names
