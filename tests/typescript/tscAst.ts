@@ -78,6 +78,9 @@ const KEYWORD_TYPES = new Map<ts.SyntaxKind, string>([
   [ts.SyntaxKind.VoidKeyword, 'void'],
 ]);
 
+/** The names that the type parser reads as keyword types. */
+const KEYWORD_TYPE_NAMES = new Set([...KEYWORD_TYPES.values()]);
+
 const BINARY_OPS = new Map<ts.SyntaxKind, string>([
   [ts.SyntaxKind.QuestionQuestionToken, '??'],
   [ts.SyntaxKind.BarBarToken, '||'],
@@ -667,6 +670,26 @@ class Printer {
       }
       return this.node('call', e, [], [
         this.expr(e.expression),
+        ...e.arguments.map((a) => {
+          if (ts.isSpreadElement(a)) {
+            refuse(a, 'spread argument');
+          }
+          return this.expr(a);
+        }),
+      ]);
+    }
+    if (ts.isNewExpression(e)) {
+      // `new C<A>(args)`, where `C` is a name that the type parser reads as
+      // the name of a type.
+      if (!ts.isIdentifier(e.expression) || e.arguments === undefined) {
+        refuse(e, "'new' of something other than a name, or without arguments");
+      }
+      const name = e.expression.text;
+      if (TYPE_OPERATOR_WORDS.has(name) || KEYWORD_TYPE_NAMES.has(name)) {
+        refuse(e, `'new ${name}'`);
+      }
+      return this.node('new', e, [this.name(e.expression)], [
+        ...(e.typeArguments ?? []).map((t) => this.type(t)),
         ...e.arguments.map((a) => {
           if (ts.isSpreadElement(a)) {
             refuse(a, 'spread argument');

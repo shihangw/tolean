@@ -210,6 +210,12 @@ class Gen {
       () => ['(', this.name(), this.pick([',', ':', ')']), ...this.expr(d), ')'],
       () => [...this.expr(d), 'as', this.pick(['const', 'const', 'T'])],
       () => [...this.expr(d), 'satisfies', ...this.type(d)],
+      () => [
+        'new',
+        ...this.pick([[this.name()], ['Map'], ['number'], ['a', '.', 'b'], ['.', 'target']]),
+        ...(this.chance(0.4) ? [this.pick(['<', '<', '\n<']), ...this.type(d), '>'] : []),
+        ...(this.chance(0.9) ? ['(', ...this.list(d), ')'] : []),
+      ],
     ])();
   }
 

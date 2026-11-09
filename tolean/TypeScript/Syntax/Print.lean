@@ -67,6 +67,8 @@ partial def Expr.toSexp : Expr → Sexp
   | .arrow s _ params body => node "arrow" s [] (params.map Param.toSexp ++ [body.toSexp])
   | .asConst s e => node "asConst" s [] [e.toSexp]
   | .satisfies s e type => node "satisfies" s [] [e.toSexp, type.toSexp]
+  | .new s callee typeArgs args =>
+    node "new" s [callee] (typeArgs.map TypeExpr.toSexp ++ args.map Expr.toSexp)
 
 partial def Property.toSexp : Property → Sexp
   | .shorthand s name => node "shorthand" s [name] []

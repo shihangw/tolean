@@ -103,6 +103,7 @@ def expr : Expr → String
   | .arrow s p ps b => s!"({ns}Expr.arrow {span s} {p} {list (ps.map param)} {expr b})"
   | .asConst s e => s!"({ns}Expr.asConst {span s} {expr e})"
   | .satisfies s e t => s!"({ns}Expr.satisfies {span s} {expr e} {typeExpr t})"
+  | .new s c ts as => s!"({ns}Expr.new {span s} {str c} {list (ts.map typeExpr)} {list (exprs as)})"
 
 def exprs : List Expr → List String
   | [] => []

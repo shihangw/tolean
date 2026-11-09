@@ -34,8 +34,9 @@ marks which links are proved, tested against a reference, or trusted.
   binary operators, including `??`, `**`, `in` and `instanceof`; the
   conditional operator; assignment, with every compound operator; arrow
   functions whose body is an expression, such as `x => x + 1` and
-  `(a: number, b) => a * b`; and `e as const` and `e satisfies T`, which
-  bind as `<` does, as they do in `tsc`.
+  `(a: number, b) => a * b`; `e as const` and `e satisfies T`, which
+  bind as `<` does, as they do in `tsc`; and `new C<A, B>(args)`, where `C`
+  is a name.
 - **Types:** keyword types such as `number`, `null`, literal types, named types
   with type arguments, arrays, tuples such as `[A, B]` and `readonly [A, B]`,
   unions and parentheses.
@@ -56,6 +57,12 @@ The parser also refuses an arrow function with a return type, one whose body
 is in braces, and one with an optional parameter: `(a?: T) => a` starts like
 the conditional `(a ? …`. The translator accepts an arrow function only as the
 callback of an array method, such as `xs.map(x => x + 1n)`.
+
+The parser reads `new` only before a name and its arguments in parentheses,
+such as `new Map<string, bigint>()`. It refuses `new a.b()`, `new.target`
+and `new C` without arguments. It also refuses type arguments that start on
+the line after the name, because it reads `C<A>` as a type, and a type ends
+at a line break before `<`. The translator refuses every `new` for now.
 
 In the declaration at the start of a counted `for`, the parser refuses an `in`
 operator unless parentheses, braces, the arguments of a call or an index hold
