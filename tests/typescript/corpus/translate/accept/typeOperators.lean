@@ -49,4 +49,13 @@ def name (s : JSString) : JSString :=
 def wrap (s : JSString) : Value :=
   (Value.«string» s)
 
+def nameInParens (s : JSString) : JSString :=
+  s
+
+def nameAsConst (s : JSString) : JSString :=
+  s
+
+def wrapInParens (s : JSString) : Value :=
+  (Value.«string» s)
+
 end Test

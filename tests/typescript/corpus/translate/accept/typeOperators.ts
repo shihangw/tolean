@@ -52,3 +52,16 @@ export function name(s: string): string {
 export function wrap(s: string): Value {
   return s satisfies Value;
 }
+
+// Parentheses and `as const` keep the type of the value too.
+export function nameInParens(s: string): string {
+  return ((s)) satisfies Value;
+}
+
+export function nameAsConst(s: string): string {
+  return s as const satisfies Value;
+}
+
+export function wrapInParens(s: string): Value {
+  return (s satisfies Value);
+}

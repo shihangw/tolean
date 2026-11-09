@@ -1253,12 +1253,12 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
         simp only [translateExprCore] at h
         intro ρs ρo v ha hs hv
         rw [Eval.eval]
-        exact ihE _ _ _ _ _ _ h ρs ρo v ha hs hv
+        exact ihX _ _ _ _ _ _ h ρs ρo v ha hs hv
       | asConst sp inner =>
         simp only [translateExprCore] at h
         intro ρs ρo v ha hs hv
         rw [Eval.eval]
-        exact ihE _ _ _ _ _ _ h ρs ρo v ha hs hv
+        exact ihX _ _ _ _ _ _ h ρs ρo v ha hs hv
       | satisfies sp inner type =>
         simp only [translateExprCore, bind_ok] at h
         obtain ⟨t, s₁, -, c', s₂, hc', h⟩ := h

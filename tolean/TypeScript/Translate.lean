@@ -1051,10 +1051,14 @@ context expects. -/
 def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr) : TM Code := do
   let fuel + 1 := fuel | tooDeep
   match e with
-  | .paren _ inner => translateExpr fuel env expected inner
+  -- Parentheses and `as const` pass the operand on before it becomes a member
+  -- of a union, so that `(s) satisfies U` keeps the type of `s`, as
+  -- `s satisfies U` does. `translateExpr` makes the whole expression a member
+  -- once, where the context expects the union.
+  | .paren _ inner => translateExprCore fuel env expected inner
   -- Type stripping removes `as const`, which only keeps the literal types of
   -- the value. The output types a literal by its context, as without it.
-  | .asConst _ inner => translateExpr fuel env expected inner
+  | .asConst _ inner => translateExprCore fuel env expected inner
   -- `satisfies T` types the value in the context of `T` and checks it
   -- against `T`, and the value keeps its own type. So a member of a union
   -- of primitive types is checked as the union's constructor would be, but
