@@ -2719,6 +2719,8 @@ def exprUsesNumber : Expr → Bool
   | .arrow _ _ ps body =>
     ps.any (fun p => isNumberName p.name || (p.type.map typeUsesNumber).getD false) ||
       exprUsesNumber body
+  -- `new Map<bigint, number>()` names `number` only in its type arguments.
+  | .new _ _ typeArgs args => typesUseNumber typeArgs || exprsUseNumber args
   | _ => false
 
 def exprsUseNumber : List Expr → Bool
