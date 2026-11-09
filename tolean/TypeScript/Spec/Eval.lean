@@ -188,12 +188,15 @@ def getProp (fields : List (String × Val N)) (name : String) : Option (Val N) :
   | some v => some v
   | none => if objectPrototypeNames.contains name then none else some .undefined
 
-/-- `obj[key]` with a string key: the property whose name is `key`. The keys
-of the subset's objects are identifiers, and `toString` gives a key its own
-name. It turns a lone surrogate into U+FFFD, which no identifier holds, so a
-key with one names no property and reads `undefined`, as in JS. -/
+/-- `obj[key]` with a string key: the property whose name is `key`, as
+`getProp` reads it. A property name is a Lean `String`, so `getKey` compares
+its UTF-16 code units with the key's. A key that holds a lone surrogate
+then names no property, as in JS, where decoding the key would turn the
+surrogate into U+FFFD and read a property of that name. -/
 def getKey (fields : List (String × Val N)) (key : JSString) : Option (Val N) :=
-  getProp fields key.toString
+  match (fields.find? fun p => JSString.ofString p.1 == key).map (·.2) with
+  | some v => some v
+  | none => if objectPrototypeNames.any (fun n => JSString.ofString n == key) then none else some .undefined
 
 /-- The property at `path` of an object with the fields `fields`, where each
 property before the last is an object. -/

@@ -50,6 +50,39 @@ reason. -/
 theorem looseEq_null_right (a : Val N) (ha : a ≠ .undefined) : looseEq a .null = strictEq a .null := by
   cases a <;> first | rfl | exact absurd rfl ha
 
+/-- Finding the first entry with a key gives the value that `lookup` gives. -/
+theorem find?_fst_lookup {β : Type} : ∀ (l : List (String × β)) (a : String),
+    (l.find? fun p => p.1 == a).map (·.2) = l.lookup a
+  | [], _ => rfl
+  | (k, b) :: es, a => by
+    by_cases h : k = a
+    · subst h
+      simp [List.find?, List.lookup]
+    · have h₁ : (k == a) = false := by simpa using h
+      have h₂ : (a == k) = false := by simpa using Ne.symm h
+      simp only [List.find?, List.lookup, h₁, h₂]
+      exact find?_fst_lookup es a
+
+omit [JSNumber N] in
+/-- A key that is the code units of a name reads the property of that name. -/
+theorem getKey_ofString (fields : List (String × Val N)) (name : String) :
+    getKey fields (JSString.ofString name) = getProp fields name := by
+  have hf : (fun p : String × Val N => JSString.ofString p.1 == JSString.ofString name) =
+      fun p => p.1 == name := by
+    funext p
+    exact Bool.eq_iff_iff.mpr (by simp)
+  have hn : objectPrototypeNames.any (fun n => JSString.ofString n == JSString.ofString name) =
+      objectPrototypeNames.contains name := by
+    rw [List.contains_eq_any_beq]
+    congr 1
+    funext n
+    refine Bool.eq_iff_iff.mpr ⟨fun h => ?_, fun h => ?_⟩
+    · simp only [beq_iff_eq, JSString.ofString_inj] at h
+      simp [h]
+    · simp only [beq_iff_eq] at h
+      simp [h]
+  simp only [getKey, getProp, hf, hn, find?_fst_lookup]
+
 /-- `obj[key]` with a string key reads the property that the string names, as
 `obj.name` does, because `ToPropertyKey` of a string is the string itself
 (ECMA-262 §13.3.2.1). -/
@@ -57,7 +90,7 @@ theorem eval_index_str {m : Scope} {fuel : Nat} {env : Env N} {sp obj key}
     {fields : List (String × Val N)} {name : String}
     (ho : eval m fuel env obj = some (.obj fields)) (hk : eval m fuel env key = some (.str name)) :
     eval m fuel env (.index sp obj key) = getProp fields name := by
-  simp [eval, ho, hk, getKey]
+  simp [eval, ho, hk, getKey_ofString]
 
 end
 
