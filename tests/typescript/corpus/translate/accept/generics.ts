@@ -59,3 +59,12 @@ export function swapped(): [string, bigint] {
 export function maybeFirst<T>(x: T): [T | null, T] {
   return [null, x];
 }
+
+// `null` where `T | null` is expected leaves `T` to the other element.
+export function choose<T>(p: [T | null, T]): T {
+  return p[0] ?? p[1];
+}
+
+export function chooseDemo(): bigint {
+  return choose([null, 1n]);
+}

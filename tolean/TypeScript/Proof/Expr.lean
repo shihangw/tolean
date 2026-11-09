@@ -143,7 +143,7 @@ def callS (p : Eval.Program) (fuel : Nat) (key : DeclRef) (vs : List (Val N)) : 
     if params.length != vs.length then none
     match ← Eval.execStmt ⟨p, key.file⟩ fuel (params.zip vs).reverse body with
     | .ret v => some v
-    | .normal _ => none
+    | .normal _ | .brk _ | .cont _ => none
 
 /-- A call of the function `key` of the output, as its evaluator runs it. -/
 def callO (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat) (key : DeclRef)
@@ -155,7 +155,7 @@ def callO (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat) (key : De
     if params.length != vs.length then none
     match ← IR.Body.exec fs fuel (params.zip vs).reverse body with
     | .ret v => some v
-    | .normal _ => none
+    | .normal _ | .brk _ | .cont _ => none
 
 /-- Every call that gives a value in the output gives it in the interpreter. -/
 def CallsAgree (p : Eval.Program) (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat) :

@@ -51,4 +51,10 @@ def swapped  : (JSString × Int) :=
 def maybeFirst {T : Type} (x : T) : (Option T × T) :=
   (none, x)
 
+def choose {T : Type} (p : (Option T × T)) : T :=
+  (Option.getD p.1 p.2)
+
+def chooseDemo  : Int :=
+  (choose ((none, (1 : Int))))
+
 end Test
