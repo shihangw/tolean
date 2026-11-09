@@ -2536,7 +2536,9 @@ mutual
 def exprUsesNumber : Expr → Bool
   | .ident _ name => isNumberName name
   | .number .. => true
-  | .member _ obj name | .optMember _ obj name => isNumberName name || exprUsesNumber obj
+  -- `xs.findIndex(…)` gives a number.
+  | .member _ obj name | .optMember _ obj name =>
+    isNumberName name || name == "findIndex" || exprUsesNumber obj
   | .object _ props => propsUseNumber props
   | .array _ es => exprsUseNumber es
   | .call _ f args => exprUsesNumber f || exprsUseNumber args
