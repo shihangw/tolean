@@ -137,6 +137,10 @@ theorem TypeExpr.no_lineBreak : ∀ t : TypeExpr, [] ∉ t.words
     have := TypeExpr.no_lineBreak inner
     simp only [TypeExpr.words, List.mem_cons, List.mem_append, not_or]
     simp [punctWord, this]
+  | .tuple _ ro elems => by
+    have := nil_not_mem_separated "," _ (TypeExpr.no_lineBreakAll elems)
+    cases ro <;> simp only [TypeExpr.words, List.mem_cons, List.mem_append, not_or] <;>
+      simp [identWord, punctWord, this]
 
 theorem TypeExpr.no_lineBreakAll : ∀ ts : List TypeExpr, ∀ x ∈ TypeExpr.wordsOf ts, [] ∉ x
   | [], _, hx => by simp [TypeExpr.wordsOf] at hx
@@ -170,6 +174,12 @@ theorem typeAnnotation_line : ∀ a : Option TypeExpr, LineOK (typeAnnotation a)
   | some t => LineOK.cons (by simp [punctWord]) (TypeExpr.line t)
   | none => LineOK.nil
 
+/-- The words of a parameter after its name. -/
+theorem paramRest_line (p : Param) : LineOK (optionalMark p.optional ++ typeAnnotation p.type) := by
+  cases p.optional
+  · exact typeAnnotation_line _
+  · exact LineOK.cons (by simp [punctWord]) (typeAnnotation_line _)
+
 theorem Fine.ofLine {w : Word} {ws : List Word} (hw : w ≠ []) (h : LineOK ws) : Fine (w :: ws) :=
   ⟨LineOK.cons hw h, by simp⟩
 
@@ -180,7 +190,7 @@ theorem arrowParams_fine (parens : Bool) (ps : List Param) : Fine (arrowParams p
     exact fine_enclose (fun x hx => by
       simp only [List.mem_map] at hx
       obtain ⟨p, _, rfl⟩ := hx
-      exact Fine.ofLine (by simp [identWord]) (typeAnnotation_line _))
+      exact Fine.ofLine (by simp [identWord]) (paramRest_line p))
 
 theorem propertyName_ne (n : String) : propertyName n ≠ [] := by
   unfold propertyName; split <;> simp [keywordWord, identWord]
@@ -229,6 +239,12 @@ theorem Expr.fine : ∀ e : Expr, Fine e.words
   | .arrow _ parens ps b => by
     simpa [Expr.words] using (arrowParams_fine parens ps).append
       (Fine.cons (w := punctWord "=>") (by simp [punctWord]) (Expr.fine b))
+  | .asConst _ l => by
+    simpa [Expr.words] using (Expr.fine l).append
+      (Fine.cons (w := identWord "as") (by simp [identWord]) (Fine.word (w := keywordWord "const") (by simp [keywordWord])))
+  | .satisfies _ l t => by
+    simpa [Expr.words] using (Expr.fine l).append (Fine.ofLine (w := identWord "satisfies") (by simp [identWord])
+      (TypeExpr.line t))
 
 theorem Expr.fineAll : ∀ es : List Expr, ∀ x ∈ Expr.wordsOf es, Fine x
   | [], _, hx => by simp [Expr.wordsOf] at hx
@@ -305,6 +321,20 @@ theorem Stmt.lineOK : ∀ (st : Stmt) (d : Nat), ∀ l ∈ st.lines d, LineOK l.
         (LineOK.cons (by simp [identWord]) (LineOK.cons (by simp [identWord])
           ((Expr.fine it).line.append (LineOK.word (w := punctWord ")") (by simp [punctWord])))))))
     · exact Stmt.lineOK body _ l hl
+  | .forStmt _ init test update body, d, l, hl => by
+    simp only [Stmt.lines, List.mem_cons] at hl
+    rcases hl with rfl | hl
+    · have hi : LineOK (forInitWords init) := by
+        cases init with
+        | none => exact LineOK.word (by simp [punctWord])
+        | some v => exact v.line
+      have ho : ∀ o : Option Expr, LineOK (optWords o) := fun o => by
+        cases o with
+        | none => exact LineOK.nil
+        | some e => exact (Expr.fine e).line
+      exact (((LineOK.cons (by simp [keywordWord]) (LineOK.cons (by simp [punctWord]) hi)).append (ho test)).append
+        (LineOK.cons (by simp [punctWord]) (ho update))).append (LineOK.word (w := punctWord ")") (by simp [punctWord]))
+    · exact Stmt.lineOK body _ l hl
   | .whileStmt _ test body, d, l, hl => by
     simp only [Stmt.lines, List.mem_cons] at hl
     rcases hl with rfl | hl
@@ -361,6 +391,16 @@ theorem exportWords_line (e : Bool) : LineOK (exportWords e) := by
   · exact LineOK.nil
   · exact LineOK.word (by simp [keywordWord])
 
+theorem typeParamWords_line : ∀ names : List String, LineOK (typeParamWords names)
+  | [] => LineOK.nil
+  | n :: more => by
+    have h : ∀ x ∈ (n :: more).map (fun k => [identWord k]), Fine x := by
+      intro x hx
+      simp only [List.mem_map] at hx
+      obtain ⟨k, _, rfl⟩ := hx
+      exact Fine.word (by simp [identWord])
+    exact (fine_enclose (o := "<") (c := ">") h).line
+
 theorem Decl.lineOK : ∀ d : Decl, ∀ l ∈ d.lines, LineOK l.2
   | .import _ names source, l, hl => by
     simp [Decl.lines] at hl; subst hl
@@ -373,24 +413,43 @@ theorem Decl.lineOK : ∀ d : Decl, ∀ l ∈ d.lines, LineOK l.2
       · exact Fine.word (by simp [identWord])
     exact LineOK.cons (by simp [keywordWord]) ((fine_enclose hn).line.append
       (LineOK.cons (by simp [identWord]) (LineOK.cons (by simp) (LineOK.word (by simp [punctWord])))))
-  | .function _ exported name params rt body, l, hl => by
+  | .exports _ names source, l, hl => by
+    simp [Decl.lines] at hl; subst hl
+    have hn : ∀ x ∈ names.map ImportName.words, Fine x := by
+      intro x hx
+      simp only [List.mem_map] at hx
+      obtain ⟨n, _, rfl⟩ := hx
+      unfold ImportName.words; split
+      · exact Fine.ofLine (by simp [identWord]) (LineOK.word (by simp [identWord]))
+      · exact Fine.word (by simp [identWord])
+    cases source with
+    | none =>
+      simpa [fromWords] using LineOK.cons (by simp [keywordWord]) ((fine_enclose hn).line.append
+        (LineOK.word (w := punctWord ";") (by simp [punctWord])))
+    | some src =>
+      simpa [fromWords] using LineOK.cons (by simp [keywordWord]) ((fine_enclose hn).line.append
+        (LineOK.cons (by simp [identWord]) (LineOK.cons (by simp) (LineOK.word (w := punctWord ";") (by simp [punctWord])))))
+  | .function _ exported name tps params rt body, l, hl => by
     simp only [Decl.lines, List.mem_cons] at hl
     rcases hl with rfl | hl
     · have hp : ∀ x ∈ params.map Param.words, Fine x := by
         intro x hx
         simp only [List.mem_map] at hx
         obtain ⟨p, _, rfl⟩ := hx
-        exact Fine.ofLine (by simp [identWord]) (typeAnnotation_line _)
+        exact Fine.ofLine (by simp [identWord]) (paramRest_line p)
       have := (exportWords_line exported).append (LineOK.cons (w := keywordWord "function") (by simp [keywordWord])
         (LineOK.cons (w := identWord name) (by simp [identWord])
-          ((fine_enclose (o := "(") (c := ")") hp).line.append (typeAnnotation_line rt))))
+          ((typeParamWords_line tps).append
+            ((fine_enclose (o := "(") (c := ")") hp).line.append (typeAnnotation_line rt)))))
       simpa [List.append_assoc] using this
     · exact Stmt.lineOK body 0 l hl
-  | .interface _ exported name fields, l, hl => by
+  | .interface _ exported name tps fields, l, hl => by
     simp only [Decl.lines, List.mem_cons, List.mem_append, List.mem_map] at hl
     rcases hl with (rfl | ⟨f, _, rfl⟩) | (rfl | hl)
-    · exact (exportWords_line exported).append (LineOK.cons (by simp [identWord]) (LineOK.cons (by simp [identWord])
-        (LineOK.word (by simp [punctWord]))))
+    · have := (exportWords_line exported).append (LineOK.cons (w := identWord "interface") (by simp [identWord])
+        (LineOK.cons (w := identWord name) (by simp [identWord])
+          ((typeParamWords_line tps).append (LineOK.word (w := punctWord "{") (by simp [punctWord])))))
+      simpa [List.append_assoc] using this
     · have h1 : LineOK (if f.readonly then [identWord "readonly"] else []) := by
         split
         · exact LineOK.word (by simp [identWord])
@@ -405,10 +464,22 @@ theorem Decl.lineOK : ∀ d : Decl, ∀ l ∈ d.lines, LineOK l.2
       simpa [Field.words, List.append_assoc] using this
     · exact LineOK.word (by simp [punctWord])
     · simp at hl
-  | .typeAlias _ exported name ty, l, hl => by
+  | .enum _ exported name members, l, hl => by
+    simp only [Decl.lines, List.mem_cons, List.mem_append, List.mem_map] at hl
+    rcases hl with (rfl | ⟨m, _, rfl⟩) | (rfl | hl)
+    · exact (exportWords_line exported).append (LineOK.cons (by simp [keywordWord]) (LineOK.cons (by simp [identWord])
+        (LineOK.word (by simp [punctWord]))))
+    · exact LineOK.cons (propertyName_ne m.name) (LineOK.cons (by simp [punctWord]) (LineOK.cons (by simp)
+        (LineOK.word (by simp [punctWord]))))
+    · exact LineOK.word (by simp [punctWord])
+    · simp at hl
+  | .typeAlias _ exported name tps ty, l, hl => by
     simp [Decl.lines] at hl; subst hl
-    exact (exportWords_line exported).append (LineOK.cons (by simp [identWord]) (LineOK.cons (by simp [identWord])
-      (LineOK.cons (by simp [punctWord]) ((TypeExpr.line ty).append (LineOK.word (by simp [punctWord]))))))
+    have := (exportWords_line exported).append (LineOK.cons (w := identWord "type") (by simp [identWord])
+      (LineOK.cons (w := identWord name) (by simp [identWord]) ((typeParamWords_line tps).append
+        (LineOK.cons (w := punctWord "=") (by simp [punctWord])
+          ((TypeExpr.line ty).append (LineOK.word (w := punctWord ";") (by simp [punctWord])))))))
+    simpa [List.append_assoc] using this
   | .exportedVar _ v, l, hl => by
     simp [Decl.lines] at hl; subst hl
     exact LineOK.cons (by simp [keywordWord]) v.line

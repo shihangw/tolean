@@ -14,11 +14,16 @@ marks which links are proved, tested against a reference, or trusted.
 
 `tolean/TypeScript/Syntax/` puts a span on every node. It reads:
 
-- **Declarations:** functions, interfaces, type aliases, and `const` and `let`,
-  each of them possibly exported.
+- **Declarations:** functions, with optional parameters such as `x?: T`,
+  interfaces and type aliases, each of which may have type parameters such as
+  `<A, B>`, enums whose members are strings, and `const` and `let`. Each of
+  them may be exported, by `export` before it or by an export list such as
+  `export { a, type B }`.
 - **Statements:** `const` and `let` declarations, expression statements,
-  `return`, `if` and `else`, `for … of`, `while`, `switch`, blocks, `break`,
-  `continue` and the empty statement. A `break` at the top of a `switch`
+  `return`, `if` and `else`, `for … of`, the counted `for`, `while`, `switch`,
+  blocks, `break`, `continue` and the empty statement. A counted `for`, such
+  as `for (let i = 0; i < n; i++)`, starts with a `const` or `let`
+  declaration or with nothing. A `break` at the top of a `switch`
   clause ends the `switch`, so it may stand outside a loop. The parser
   refuses a `case` test that uses `<` or `<<`, because a `:` does not end its
   search for a `>` after one, and a `switch` with two `default` clauses.
@@ -27,11 +32,13 @@ marks which links are proved, tested against a reference, or trusted.
   parentheses, member access, indexing and calls; the unary operators `!`,
   `-`, `+`, `~`, `typeof` and `void`; `++` and `--` before or after; the
   binary operators, including `??`, `**`, `in` and `instanceof`; the
-  conditional operator; assignment, with every compound operator; and arrow
+  conditional operator; assignment, with every compound operator; arrow
   functions whose body is an expression, such as `x => x + 1` and
-  `(a: number, b) => a * b`.
+  `(a: number, b) => a * b`; and `e as const` and `e satisfies T`, which
+  bind as `<` does, as they do in `tsc`.
 - **Types:** keyword types such as `number`, `null`, literal types, named types
-  with type arguments, arrays, unions and parentheses.
+  with type arguments, arrays, tuples such as `[A, B]` and `readonly [A, B]`,
+  unions and parentheses.
 
 The translator accepts less than the parser reads; see
 [The TypeScript subset](#the-subset). Sometimes `tsc` and JavaScript read the same tokens in two different
@@ -45,8 +52,31 @@ reading. There are three such cases:
 - `(a)`, then a line break, then `=>`. `tsc` reads an arrow function, but
   ECMA-262 allows no line break before `=>`, so JavaScript refuses the code.
 
-The parser also refuses an arrow function with a return type, and one whose
-body is in braces. The translator refuses every arrow function for now.
+The parser also refuses an arrow function with a return type, one whose body
+is in braces, and one with an optional parameter: `(a?: T) => a` starts like
+the conditional `(a ? …`. The translator accepts an arrow function only as the
+callback of an array method, such as `xs.map(x => x + 1n)`.
+
+In the declaration at the start of a counted `for`, the parser refuses an `in`
+operator unless parentheses, braces, the arguments of a call or an index hold
+it. ECMA-262 reads such an `in` as the start of a `for … in` loop. It allows
+one inside `[ … ]`, but `tsc` does not, so the parser refuses that too. The
+translator refuses every counted `for` for now.
+
+`as const` and `satisfies T` have two more lookalikes, and the parser refuses
+both:
+
+- `<`, `<<`, `?`, `|`, `&`, `[`, `(` or `.` right after the type. `tsc` may
+  read the token as a part of the type, as it reads `x as const < y` with type
+  arguments. Type stripping leaves blanks in place of the type, so after a
+  line break JavaScript may read the next line as a part of the operand, as
+  in `x as const` and then `[0]` on the next line.
+- `as` or `satisfies` right after a name that starts a declaration in `tsc`,
+  such as `type` or `declare`. At the start of a statement, `tsc` reads
+  `type as const` as a type alias.
+
+The parser refuses every other type assertion, such as `x as T`, `<T>x` and
+the non-null assertion `x!`, because TypeScript does not check them.
 
 The parser also refuses code that Tolean cannot represent exactly. Examples
 are lone surrogates, legacy octal literals, template literals and non-ASCII
@@ -171,7 +201,10 @@ computes what the evaluator gives for the IR, and `decls_sound` in
 a lemma of its own: the evaluator runs the loop as the printed `List.foldl`,
 for every environment whose variables have values of the right types. The
 lemma follows from `runFold_foldl`, which Tolean proves once: when one run of
-the body and one step of the fold agree, the loop and the fold agree.
+the body and one step of the fold agree, the loop and the fold agree. A loop
+with a `break` runs as the printed `forIn` instead, and its lemma follows from
+`runFold_forIn` in the same way, or from `runFold_forInRet` when a `return`
+can end it.
 `tests/typescript/checkCertify.sh` certifies each corpus file it can, and
 `tests/chain/check.sh` checks that a wrong translation breaks a certificate.
 Tolean also proves the parser's round trip. `parseChars_reads` in
@@ -203,7 +236,7 @@ library removes.
 A source name never hides a Lean name that the output uses. Before it
 translates a file, the translator collects every identifier in it. When the
 file declares a name that the output also uses, such as `List`, `Option`,
-`some`, `none`, `decide`, `Int`, `Bool`, `String` or `JSNumber`, the output
+`some`, `none`, `decide`, `Int`, `Bool`, `JSString` or `JSNumber`, the output
 writes the Lean name in full from the root, as `_root_.List` or
 `_root_.Option.none`. The source name stays as it is, so a claim refers to
 it by the name in the source. The number type parameter is `N`, or `N1`,
@@ -234,7 +267,15 @@ import { clamp, type Gauge } from "./lib/util.ts";
   the JavaScript would import a name that does not exist at run time.
 - Only named imports are supported. Tolean refuses `as`, a default or
   namespace import, an import with no names or for its side effects, a
-  re-export, and an import cycle.
+  re-export such as `export { a } from "./x.ts"`, and an import cycle.
+- An export list, such as `export { clamp, type Range }`, exports
+  declarations of the file, as `export` before each of them would. It may
+  name only functions, interfaces and types that the file declares before the
+  list and does not export already, and no name twice. An interface or a type
+  needs `type`, and a function may not have it, because Node's type stripping
+  removes exactly the names that say `type`. The output does not change,
+  because the names stay in scope. Tolean refuses `as` in an export list, and
+  `export *`.
 - A function or an interface may not be named `NaN`, `Infinity` or `Number`,
   because it would hide the global that the subset reads under that name.
 - A local may not have the name of a function that the file declares or
@@ -293,31 +334,51 @@ the file, the line and the reason. It never approximates.
 | `a ?? b` on `T \| null`, where `b` is a `T` | `Option.getD a b` |
 | `a ?? b` on `T \| null`, where `b` may be `null` | `Option.or a b` |
 | `boolean` | `Bool` |
-| `string` | `String` |
+| `string`, `"abc"` | `JSString`, `JSString.ofString "abc"`. A `JSString` holds the UTF-16 code units of the string, as ECMA-262 defines a string, so a value can hold a lone surrogate, which a Lean `String` cannot. `ofString` is injective, so a claim can state a literal as a Lean `String`. |
 | `ReadonlyArray<T>`, `Array<T>`, `T[]` | `List T` |
 | `interface` with `readonly`, required fields | `structure` |
 | `readonly f?: T`, an optional field | `f : Option T := none`. An object literal may leave the field out, or set it to a `T`. A read of a field that the object lacks gives `undefined`, which is `none`. `s.f ?? d` is `Option.getD s.f d`, and `s.f === undefined` is `s.f.isNone`. |
+| `x?: T`, an optional parameter | `(x : Option T := none)`. A call may leave out the optional parameters, which come last, and then the output passes `none` for each. A call may also pass a `T`, or `undefined`, which is `none` too. `x ?? d`, `x === undefined` and `x?.f` work as they do on an optional field. |
+| `if (x === undefined)` or `if (x !== undefined)`, with `undefined` on either side, where `x` is an optional parameter or a local with an optional value | `match x with \| none => … \| some x => …`, as for a test of `null`. The branch where `x` is defined reads it as a `T`. |
 | `p?.f`, where `p` is a `S \| null` or an optional field of type `S` | `p.map (·.f)`, or `p.bind (·.f)` when `f` is optional. The value is `undefined` when `p` is `null` or `undefined`, so it has the type of an optional field: `p?.f ?? d` and `p?.f === undefined` work as they do on `s.f`. |
+| `e as const` and `e satisfies T` | `e`. Type stripping removes both, so the value is the value of `e`. Tolean types `e` in the context of `T` and checks that the value has the type `T`, as `tsc` does. The value keeps its own type, which can be wider than the type `tsc` gives it, because the output types a literal by its context, as it does without `as const`. |
+| `p?.f.g`, a chain of reads after `?.` | `p.map (·.f.g)`, or `p.bind (·.f.g)` when `g` is optional. The reads after `?.` are a part of the same optional chain, so the whole chain is `undefined` when `p` is `null` or `undefined`. Each field before the last must be a required field of an interface type. |
 | `type T = U`, declared before its uses | `abbrev T := U`. The output writes `U` itself wherever the source names `T`, so the `abbrev` is only for claims. |
 | `type T = 'a' \| 'b'`, a union of string literals | `inductive T` with the constructors `a` and `b`, which derives `DecidableEq`. A literal becomes `T.a` where the context expects a `T`, and `t === 'a'` becomes `t = T.a`. The output writes every constructor in `«»`, such as `T.«open»`, because Lean reads some strings as keywords or modifiers. A claim can still write `T.a`. |
+| `enum T { A = 'a', B = 'b' }`, an enum whose members are strings | The same `inductive T` as for `'a' \| 'b'`, with the constructors named after the strings, so `T.A` becomes `T.«a»`. TypeScript compiles the enum to an object with one property for each member, and `T.A` reads it. The output has no such object, so only `T.A` reads a member, and a file that imports the enum without `type` may read its members too. |
 | `type T = A \| B`, a union of interfaces with a tag field such as `kind: 'circle'` | `inductive T` with a constructor for each member, which holds the member's structure. The structure leaves the tag field out, because its value never changes. An object literal where a `T` is expected becomes the constructor of its tag. |
 | `if (s.kind === 'circle')`, with `===` or `!==` and the string on either side | `match s with \| T.circle s => … \| …`. TypeScript narrows `s` in each branch, and so does the output. A chain of such tests on the same value becomes one `match`. |
 | `switch (s.kind)` with a `case 'circle':` for each member, or a `default:` last, where every clause returns | The same `match`, with one arm for each case. The `default`, or the code after the `switch` when it has no `default`, becomes the arm for the members that no case names. |
 | The same `switch`, where every clause changes locals and ends in `break` | `let (x, y) := match s with …`, as for an `if` that changes locals. The last clause may leave out its `break`. Without a `default`, the arm for the members that no case names keeps the locals as they are. In a loop body, the `match` is the step of the `List.foldl`. |
-| `type T = string \| bigint`, a union of two or more of `string`, `number`, `bigint` and `boolean` | `inductive T` with a constructor for each member, which holds a value of its type, such as `T.string (value : String)`. The constructor is named after what `typeof` gives for the value. A value of a member where a `T` is expected becomes that member's constructor. |
+| The same `switch`, where the cases cover every member and a last `default: { const x: never = s; … }` checks it | The same `match`, without the `default`. TypeScript accepts the check only where no member is left, so the clause never runs. The statements after the check are not translated. In a `switch` whose clauses end in `break`, the last case needs its `break`, because without it the case would run into the `default`. |
+| `type T = string \| bigint`, a union of two or more of `string`, `number`, `bigint` and `boolean` | `inductive T` with a constructor for each member, which holds a value of its type, such as `T.string (value : JSString)`. The constructor is named after what `typeof` gives for the value. A value of a member where a `T` is expected becomes that member's constructor. |
 | `if (typeof x === 'string')`, with `===` or `!==` and the string on either side, where `x` is a local of such a union | `match x with \| T.string x => … \| …`, which narrows `x` as a test of a tag does |
+| `type R = Record<K, V>` or `Readonly<Record<K, V>>`, where `K` is a literal union of strings | `structure R` with one field of type `V` for each string of `K`, in the order of `K`. A value has a property for each string, so an object literal must set every key, in that order, as for an interface. `r.a` and `r['a']` read a field. |
+| `r[k]`, where `r` is such a `Record` and `k` has the type `K` | `match k with \| K.a => r.a \| …`, which reads the field that `k` names |
 | `function` with typed parameters and return type | `def` |
 | `const x = e`, `let x = e` | `let x := e` |
 | `x = e`, `x += e`, `x -= e`, `x *= e` on a `let` local | `let x := …` (shadowing) |
 | `x ??= e` on a `let` local of type `T \| null` | `let x := Option.or x e`. JS evaluates `e` only when `x` is `null`. Lean evaluates it either way, but the result is the same, because the subset has no side effects. |
 | `[a, b]` with the element type from the context or the elements, such as `return [a, b]` or `const xs: ReadonlyArray<T> = []` | `([a, b] : List T)` |
+| `[A, B]` and `readonly [A, B]`, a tuple of two elements or more | `A × B`. In JS a tuple is an array. |
+| `[a, b]` where the context expects a tuple, such as a return value | `(a, b)`, with each element translated where its own type is expected |
+| `t[0]`, an element of a tuple at an index that is a number literal | `t.1`, and `t.2.1` or `t.2.2` for the second or the last of three, as Lean nests the product to the right |
 | `const xs: Array<T> = [...]`, then `xs.push(e)`; `xs` read only in the `return` | `let xs := xs ++ [e]` |
 | `for (const x of xs) { … }` | `List.foldl` over the tuple of locals the body changes |
+| `if (c) continue;` at the top of a loop body, or a branch of that `if` that ends in `continue` on every path | `if c then (x, y) else …`, where the rest of the body is the `else` branch, as after an `if` that returns. A test of `null` or of a tag narrows the local for the rest of the body. |
+| `break` in a `for (const x of xs)` loop, in the same places as `continue` | `Id.run (forIn xs (x, y) (fun e (x, y) => …))`. A `break` is `ForInStep.done (x, y)`, which ends the loop, and the end of the body or a `continue` is `ForInStep.yield (x, y)`. A loop without a `break` stays a `List.foldl`. |
+| `return e` in the same places, in a loop where the statements after it end in a `return` | `match Id.run (forIn xs (none, x, y) (fun e (_, x, y) => …)) with`, with the arms `\| (some r, _) => r` and `\| (none, x, y) => …` for the statements after the loop. The state starts with the value to return: a `return e` is `ForInStep.done (some e, x, y)`, and the other step ends hold `none`. |
+| `xs.map(x => e)`, `xs.filter(x => p)` | `List.map (fun (x : T) => e) xs`, `List.filter (fun (x : T) => p) xs` |
+| `xs.some(x => p)`, `xs.every(x => p)` | `List.any xs (fun (x : T) => p)`, `List.all xs (fun (x : T) => p)` |
+| `xs.find(x => p)` | `List.find? (fun (x : T) => p) xs`. The value is `undefined` when no element passes, so it has the type of an optional field: `xs.find(p) ?? d`, `xs.find(p)?.f` and `xs.find(p) === undefined` work as they do on `s.f`. |
 | `if` that returns, `if` that changes locals, `c ? a : b` | `if … then … else …` |
 | `+ - *`, `< <= > >=`, `=== !==`, `&& \|\| !` | the same operators on `Int`, `Bool`, `Prop` |
 | `a / k`, `a % k` on `bigint`, where `k` is a nonzero literal | `Int.tdiv a k`, `Int.tmod a k` (both truncate toward zero, as JS does) |
 | `{ a, b: e }` building a declared interface | structure instance |
 | Call to a function declared earlier in the file | application |
+| `interface Box<T> { readonly value: T }`, where the type parameters have no constraint | `structure Box (T : Type)`. `Box<bigint>` becomes `Box Int`, and a read of a field has the field's type with `bigint` for `T`. An object literal where a `Box<bigint>` is expected becomes `({ value := … } : (Box Int))`. |
+| `type Maybe<T> = T \| null` | `abbrev Maybe (T : Type) := Option T`. As for any alias, the output writes the type itself wherever the source names it, so `Maybe<bigint>` becomes `Option Int`. |
+| `function f<T>(x: T): T`, where the type parameters have no constraint | `def f {T : Type} (x : T) : T`. A call fixes each type parameter from the types of its arguments, and Lean infers the same types. An argument of `T \| null` may be `null`, which leaves `T` to another argument. |
 
 Tolean rejects these, among others:
 
@@ -344,8 +405,12 @@ Tolean rejects these, among others:
 - The global `isNaN` and `isFinite`. These convert their argument to a number
   first. Use `Number.isNaN` and `Number.isFinite` instead.
 - Assignment to a parameter, a `const` or a field, and a push onto an array
-  that the function did not create. It also rejects `break`, `continue`, and
-  `return` inside a loop. An assignment to a `const` throws a `TypeError`, so
+  that the function did not create. A `continue`, a `break` or a `return`
+  must end the loop body, or a branch of an `if` at the top of the body; code
+  after the `if` must then go in its `else` branch, if it has one. A `return`
+  in a loop also needs the statements after the loop to end in a `return`, so
+  Tolean rejects it in a loop inside another loop or in a branch that changes
+  locals. An assignment to a `const` throws a `TypeError`, so
   the interpreter gives no value for a block where a statement after a
   `const` assigns it, and the translator refuses the `const`.
 - A read of an owned array anywhere except in the `return` value. If code
@@ -353,15 +418,52 @@ Tolean rejects these, among others:
   a later push. In Lean a push makes a new list, but in JS it changes the
   shared one. An array literal is safe anywhere else: in JS it makes a new
   array, and nothing may push to an array that the function does not own.
+- An arrow function anywhere except as the callback of `map`, `filter`,
+  `some`, `every` and `find`, a callback with more than one parameter, and a
+  named function as a callback. JS passes the index and the array too, which
+  a later step will translate. The body of a callback must not assign, and
+  for every method but `map` it must give a boolean. Tolean also refuses
+  `find` on an array of nullable values, because Lean's `none` would stand
+  for both `null` and `undefined`.
 - An array declared with `let` and the type `Array<T>`. An array that the
   function pushes to must be a `const`; for a value, use `ReadonlyArray<T>`.
   An empty `[]` needs a type from its context, and the elements of a literal
   need one type.
+- A tuple of one element, an empty tuple, named, optional and rest elements,
+  and a `,` after the last element. Tolean also refuses `readonly` before
+  anything but a tuple, such as `readonly bigint[]`, and `readonly [A, B][]`,
+  which `tsc` reads as a readonly array of tuples. An index of a tuple must be
+  a number literal within the tuple, and an index of any other value is
+  refused. `===` on tuples is refused, because in JS it compares the arrays
+  by reference.
+- A type parameter with a constraint, a default or a modifier, and a `,` after
+  the last one. Tolean also refuses a type parameter of a function that no
+  parameter's type names, because a call could not fix it. A generic type
+  named with the wrong number of type arguments is refused, and so is a
+  generic union or `Record`: a union of string literals, primitive types or
+  interfaces, and a `Record`, become a type of their own, which takes no type
+  parameters. A
+  field may not have the name of a type parameter, because Lean would read the
+  name as the field in the types of the fields after it. A type parameter may not have the
+  name of a type or function of the file, or of a local, because Lean would
+  read the name as the other one. `===` on values of a type parameter is
+  refused, because in JS it compares objects by reference.
+- A call to a generic function whose arguments do not fix every type
+  parameter, or fix one to `null`, a nullable type or an optional field's
+  type. The output gives `T | null` the type `Option T`, so `T` may not be
+  nullable itself.
 - A literal union that is not the whole of a type alias, such as `(s: 'a' | 'b')`,
   because the output needs a name for its inductive type. Tolean also refuses
   a union of string literals and other types, a string that is not an ASCII
   name or that Lean declares for every inductive type, such as `'rec'`, and a
   value of a literal union where a `string` is expected.
+- A numeric enum, an enum member without a value, a `const enum`, and an enum
+  inside a function. Tolean also refuses an enum without members, two members
+  with one name or one string, and a member named after a property of
+  `Object.prototype`, such as `__proto__`. In TypeScript a value of a string
+  enum is one of its members, so Tolean refuses a string such as `'a'` where
+  the enum is expected, and a member where a `string` is expected. It also
+  refuses the enum's object as a value, and a local with the enum's name.
 - A field of a tagged union read before a test of its tag, a read of the tag
   field outside such a test, and a union of interfaces without a tag. Tolean
   also refuses a member, such as a `Circle`, where the union is expected,
@@ -372,8 +474,10 @@ Tolean rejects these, among others:
 - A `switch` that does not test the tag of a tagged union, and fallthrough:
   each clause must end in `return`, or each in `break`. A clause that ends in
   `break` may not return, and may not break or continue before its end.
-  Tolean also refuses a `default` that is not the last clause or that no
-  member can reach, a first clause that is a `default`, a case that an
+  Tolean also refuses a `default` that is not the last clause, and one that
+  no member can reach unless it assigns the local to `never`. It refuses a
+  `default` that assigns the local to `never` while a member is left, a
+  first clause that is a `default`, a case that an
   earlier case already takes, an assignment to the local that the `switch`
   tests, and code after a `switch` whose cases cover every member and
   return.
@@ -389,6 +493,15 @@ Tolean rejects these, among others:
   union, against one of its members. So it refuses `typeof` on a union of
   interfaces, on a value that may be `null`, and as a value, as in
   `return typeof x === 'string'`.
+- A `Record` that is not the whole of a type alias, such as
+  `(r: Record<K, V>)`, because the output needs a name for its structure.
+  Tolean also refuses `Record<string, V>` and other keys that are not a
+  literal union of strings, index signatures, and a key that Lean reserves,
+  such as `'def'`. It refuses an index into anything but such a `Record`, an
+  index whose key does not have the type `K`, and an index in a file that
+  does not declare or import `K`, because the output names the constructors
+  of `K`. Code that needs keys of type `string` can use a `Map` once Tolean
+  translates it.
 - An object literal whose fields are not in the order that the interface
   declares them. A JS object keeps its keys in the order the literal writes
   them, and a caller can see that order through `Object.keys` or
@@ -398,16 +511,23 @@ Tolean rejects these, among others:
 - An optional field that is also nullable, a tag field that is optional, and
   an optional field with the name of a property of `Object.prototype`, such
   as `toString`, because an object without the field has that property.
-  Tolean also refuses `undefined` as a value, so a literal must leave an
-  optional field out rather than set it to `undefined`, or to the value of
-  another optional field. JS tells an object without the key from one whose
-  key holds `undefined`, and Lean has one `none` for both. It also refuses
-  `== null` and `=== null` on an optional value, optional parameters, and a
-  test of an optional value that narrows it.
-- A chain after `?.`, such as `a?.b.c`. When `a` is `null`, JS skips the
-  whole chain and gives `undefined`, so `a?.b.c` is not `(a?.b).c`. Tolean
-  also refuses `?.` where the value cannot be `null` or `undefined`, `?.` on
-  a nullable field, and `a?.[i]` and `f?.()`.
+  Tolean also refuses `undefined` as a value, except as the argument of an
+  optional parameter. So a literal must leave an optional field out rather
+  than set it to `undefined`, or to the value of another optional field. JS
+  tells an object without the key from one whose key holds `undefined`, and
+  Lean has one `none` for both. It also refuses `== null` and `=== null` on
+  an optional value, and `== undefined`.
+- An optional parameter that is also nullable, and a required parameter after
+  an optional one. Tolean also refuses `T | undefined` as a type, and a test
+  of `undefined` that narrows a value inside an expression, such as
+  `x !== undefined && x > 0n`. Only the test of an `if` narrows an optional
+  value.
+- `?.` where the value cannot be `null` or `undefined`, `?.` on a nullable
+  field, and `a?.[i]` and `f?.()`. In a chain such as `a?.b.c`, Tolean
+  refuses a field before the last that may be `null` or `undefined`, because
+  `.` on it throws. `(a?.b).c` is not a chain, because the parentheses end
+  it: it reads `.c` of `undefined` when `a` is `null`, so Tolean refuses
+  it.
 - A local or a function named `undefined`, which would hide the global the
   subset reads. Tolean also refuses a value that may be either `undefined` or
   `null`, such as `b ? s.f : null`, because the output has one `none` for
@@ -560,7 +680,7 @@ path = "node_modules/tolean/lean"
 | 2. Translate | Tolean writes readable Lean definitions (the generated `.lean` files) | **Proved** up to the printer | `program_sound` proves the translation to the Tolean IR for every accepted program: when the IR's evaluator gives a value, the interpreter gives the same value. The printer link is trusted: that the printed Lean computes what the evaluator gives for the IR, and that the evaluator gives a value where the printed Lean does. No theorem can state it for every program, because the printed Lean is text that means something only after Lean compiles it. The golden files of the corpus, compiling random programs and the CI drift check test it, and a [certificate](#certificates) proves the link, and so the whole step, for one file. |
 | 3. Prove the claims | Hand-written proofs show that each claim in `Spec/*.lean` holds for the generated definitions | **Proved** | The Lean kernel, `#audit_claims`, `lake build --wfail`, and no `sorry`, `admit`, `axiom` or `native_decide` |
 | 4. Assume JS number facts | `SafeIntLaws` and `SpecialValueLaws` in `tolean/TypeScript/Spec/Number.lean` | Trusted, tested | `tests/typescript/jsNumberLaws.test.ts` checks each law against real doubles. |
-| 5. Run | Type stripping or a bundler makes the JavaScript that Node runs | Trusted | The subset uses only constructs that type stripping leaves unchanged |
+| 5. Run | Type stripping or a bundler makes the JavaScript that Node runs | Trusted | The subset uses only constructs that type stripping leaves unchanged, except `enum`. Type stripping refuses an enum, so code with one needs `tsc`, a bundler or Node's `--experimental-transform-types`. The interpreter reads an enum as the object that `tsc` makes for it. |
 | 6. Inputs | The code that calls the verified functions passes inputs that meet the theorems' preconditions | Trusted | The callers are responsible for it. A function can check its own inputs instead, so that its claim has no precondition, and [a plan](../plans/input-checks.md) lets `tolean.json` require that. |
 
 So a theorem holds for the code that runs if steps 1, 4 and 5 are correct, the

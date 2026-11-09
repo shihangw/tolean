@@ -3,7 +3,8 @@
  *
  * `checkTranslate.ts` translates them and compiles the output, and
  * `interpreter.test.ts` runs them in the interpreter and in Node. A program has
- * up to three interfaces and up to three exported functions. A function calls
+ * up to three interfaces, some of them declared as a `Record` over a literal
+ * union, and up to three exported functions. A function calls
  * only the functions before it, so no program recurses.
  */
 
@@ -29,6 +30,8 @@ export type Ty =
   | { k: 'boolean' }
   | { k: 'string' }
   | { k: 'nullable'; of: Ty }
+  /** An optional parameter `p?: T`, only ever the last parameter. */
+  | { k: 'optional'; of: Ty }
   | { k: 'array'; of: Ty }
   | { k: 'struct'; name: string };
 
@@ -52,6 +55,8 @@ export function show(t: Ty): string {
       return t.k;
     case 'nullable':
       return `${show(t.of)} | null`;
+    case 'optional':
+      return `${show(t.of)} | undefined`;
     case 'array':
       return `ReadonlyArray<${show(t.of)}>`;
     case 'struct':
@@ -62,6 +67,9 @@ export function show(t: Ty): string {
 export class Gen {
   private readonly next: () => number;
   private structs: Array<{ name: string; fields: Array<[string, Ty]> }> = [];
+  private enums: Array<{ name: string; members: Array<string> }> = [];
+  /** The structures that are declared as `Record<K, T>`. */
+  private records = new Set<string>();
   private functions: Array<{ name: string; params: Array<Ty>; ret: Ty }> = [];
   private counter = 0;
 
@@ -130,6 +138,8 @@ export class Gen {
           return this.pick(["''", "'a'", "'ab'", "'é'", "'😀'"]);
         case 'nullable':
           return this.chance(0.5) ? 'null' : this.expr(t.of, vars, 0);
+        case 'optional':
+          return this.chance(0.5) ? 'undefined' : this.expr(t.of, vars, 0);
         case 'struct':
           return this.object(t.name, vars, 0);
         case 'array': {
@@ -154,10 +164,13 @@ export class Gen {
     if (calls.length > 0) {
       options.push(() => {
         const f = this.pick(calls);
-        return `${f.name}(${f.params.map((p) => this.expr(p, vars, d)).join(', ')})`;
+        // A call may leave out the optional parameter, which is last.
+        const params = f.params.at(-1)?.k === 'optional' && this.chance(0.4) ? f.params.slice(0, -1) : f.params;
+        return `${f.name}(${params.map((p) => this.expr(p, vars, d)).join(', ')})`;
       });
     }
     options.push(() => `(${this.test(vars, d)} ? ${this.expr(t, vars, d)} : ${this.expr(t, vars, d)})`);
+    options.push(...this.callbacks(t, readable, vars, d));
     switch (t.k) {
       case 'bigint':
       case 'number':
@@ -166,17 +179,33 @@ export class Gen {
           () => `-${this.expr(t, vars, d)}`,
           () => `(${this.expr(t, vars, d)})`,
         );
+        // An element of an array, by an index that is a number literal,
+        // which checks the interpreter's rule for `xs[i]` against Node. The
+        // index `2` is past the end, which is `undefined`. The translator
+        // refuses an index of anything but a tuple, so it comes only
+        // sometimes.
+        if (this.chance(0.1)) {
+          options.push(
+            () => `[${this.expr(t, vars, d)}, ${this.expr(t, vars, d)}][${this.pick(['0', '1', '2', '0x1'])}]`,
+          );
+        }
         {
           // `x ?? e`: `x` unless it is `null`.
-          const nullable = readable.filter((v) => v.ty.k === 'nullable' && same(v.ty.of, t));
+          const nullable = readable.filter((v) => (v.ty.k === 'nullable' || v.ty.k === 'optional') && same(v.ty.of, t));
           if (nullable.length > 0) {
             options.push(() => `${this.pick(nullable).name} ?? ${this.expr(t, vars, d)}`);
           }
-          // `p?.f ?? e`, on a nullable structure with a field of type `t`.
+          // `p?.f ?? e` and `p?.f.g ?? e`, on a nullable structure with a
+          // field of type `t`, or a field of a structure whose field has it.
           const chains = readable.flatMap((v) => {
             const of = v.ty.k === 'nullable' ? v.ty.of : undefined;
             const s = of?.k === 'struct' ? this.structs.find((x) => x.name === of.name) : undefined;
-            return (s?.fields ?? []).filter(([, ft]) => same(ft, t)).map(([f]) => `${v.name}?.${f}`);
+            const direct = (s?.fields ?? []).filter(([, ft]) => same(ft, t)).map(([f]) => `${v.name}?.${f}`);
+            const nested = (s?.fields ?? []).flatMap(([f, ft]) => {
+              const inner = ft.k === 'struct' ? this.structs.find((x) => x.name === ft.name) : undefined;
+              return (inner?.fields ?? []).filter(([, gt]) => same(gt, t)).map(([g]) => `${v.name}?.${f}.${g}`);
+            });
+            return [...direct, ...nested];
           });
           if (chains.length > 0) {
             options.push(() => `(${this.pick(chains)} ?? ${this.expr(t, vars, d)})`);
@@ -238,11 +267,62 @@ export class Gen {
         // interpreter runs it anywhere, so this and the comparison of
         // booleans above check its rule against Node.
         options.push(() => `typeof (${this.expr(this.anyType(), vars, d)})`);
+        // A member of a string enum, which is a string. The translator
+        // refuses it where a `string` is expected, but the interpreter reads
+        // it from the enum's object, so this checks that rule against Node.
+        if (this.enums.length > 0) {
+          options.push(() => {
+            const e = this.pick(this.enums);
+            return `${e.name}.${this.pick(e.members)}`;
+          });
+        }
         break;
       default:
         break;
     }
     return this.pick(options)();
+  }
+
+  /** Calls of `map`, `filter`, `some`, `every` and `find` on an array in
+   * scope that give a value of type `t`. The callback's parameter is a fresh
+   * name, which its body may read with the other names in scope. The body is
+   * in parentheses, so that an object literal is not read as a block. */
+  private callbacks(t: Ty, readable: ReadonlyArray<Var>, vars: ReadonlyArray<Var>, depth: number): Array<() => string> {
+    const arrays = readable.flatMap((v) => (v.ty.k === 'array' ? [{ name: v.name, elem: v.ty.of }] : []));
+    if (arrays.length === 0) return [];
+    const call = (method: string, recv: { name: string; elem: Ty }, body: (inner: ReadonlyArray<Var>) => string): string => {
+      const p = this.fresh('c');
+      const inner = [...vars, { name: p, ty: recv.elem, mutable: false, owned: false }];
+      return `${recv.name}.${method}(${p} => (${body(inner)}))`;
+    };
+    const options: Array<() => string> = [];
+    switch (t.k) {
+      case 'boolean':
+        options.push(() => call(this.pick(['some', 'every']), this.pick(arrays), (inner) => this.expr(BOOLEAN, inner, depth)));
+        break;
+      case 'array': {
+        const of = t.of;
+        options.push(() => call('map', this.pick(arrays), (inner) => this.expr(of, inner, depth)));
+        const same_ = arrays.filter((a) => same(a.elem, of));
+        if (same_.length > 0) {
+          options.push(() => call('filter', this.pick(same_), (inner) => this.expr(BOOLEAN, inner, depth)));
+        }
+        break;
+      }
+      case 'bigint':
+      case 'number': {
+        // `find` gives `undefined` when no element passes, and `??` gives the
+        // default then.
+        const same_ = arrays.filter((a) => same(a.elem, t));
+        if (same_.length > 0) {
+          options.push(() => `(${call('find', this.pick(same_), (inner) => this.expr(BOOLEAN, inner, depth))} ?? ${this.expr(t, vars, depth)})`);
+        }
+        break;
+      }
+      default:
+        break;
+    }
+    return options;
   }
 
   /** A condition that is not a literal. With a literal test, such as
@@ -270,7 +350,7 @@ export class Gen {
       const s = this.structs.find((x) => x.name === name);
       for (const [field, ty] of s?.fields ?? []) {
         if (same(ty, t)) {
-          reads.push(`${v.name}.${field}`);
+          reads.push(this.records.has(name) && this.chance(0.5) ? `${v.name}['${field}']` : `${v.name}.${field}`);
         }
       }
     }
@@ -319,7 +399,16 @@ export class Gen {
           if (xs.ty.k === 'array') {
             const element = this.fresh('e');
             const inner = [...vars, { name: element, ty: xs.ty.of, mutable: false, owned: false }];
-            lines.push(`for (const ${element} of ${xs.name}) {`, `  ${target.name} = ${this.expr(target.ty, inner, 1)};`, '}');
+            const assign = `${target.name} = ${this.expr(target.ty, inner, 1)};`;
+            // A `continue` skips the assignment for some elements, a `break`
+            // ends the loop there, and a `return` ends the function.
+            const jump = this.next();
+            const body = jump < 0.2 ? [`  if (${this.test(inner, 1)}) continue;`, `  ${assign}`]
+              : jump < 0.3 ? [`  if (${this.test(inner, 1)}) {`, `    ${assign}`, '    continue;', '  }', `  ${assign}`]
+              : jump < 0.4 ? [`  if (${this.test(inner, 1)}) break;`, `  ${assign}`]
+              : jump < 0.5 ? [`  if (${this.test(inner, 1)}) return ${this.expr(ret, inner, 1)};`, `  ${assign}`]
+              : [`  ${assign}`];
+            lines.push(`for (const ${element} of ${xs.name}) {`, ...body, '}');
           }
         }
       } else if (roll < 0.88 && depth > 0) {
@@ -379,15 +468,36 @@ export class Gen {
 
   program(): string {
     const out: Array<string> = [];
+    if (this.chance(0.3)) {
+      // A string enum. Two members may have one string, which the
+      // translator refuses and the interpreter reads as JS does.
+      const members = ['A', 'B', 'default'].slice(0, 1 + Math.floor(this.next() * 3));
+      const values = members.map(() => this.pick(['a', 'b', 'c']));
+      const exported = this.chance(0.5) ? 'export ' : '';
+      out.push(`${exported}enum E0 {`, ...members.map((m, i) => `  ${m} = '${values[i]}',`), '}');
+      this.enums.push({ name: 'E0', members });
+    }
     const structCount = Math.floor(this.next() * 3);
     for (let i = 0; i < structCount; i++) {
       const name = `S${i}`;
       const fields: Array<[string, Ty]> = [];
       const n = 1 + Math.floor(this.next() * 3);
-      for (let j = 0; j < n; j++) {
-        fields.push([`f${j}`, this.pick([BIGINT, NUMBER, BOOLEAN, STRING, { k: 'nullable', of: NUMBER } as Ty])]);
+      const types: ReadonlyArray<Ty> = [BIGINT, NUMBER, BOOLEAN, STRING, { k: 'nullable', of: NUMBER }];
+      if (this.chance(0.3)) {
+        // A Record over a literal union: a structure whose fields all have
+        // one type, which `r['f0']` reads too.
+        const t = this.pick(types);
+        for (let j = 0; j < n; j++) {
+          fields.push([`f${j}`, t]);
+        }
+        out.push(`type K${i} = ${fields.map(([f]) => `'${f}'`).join(' | ')};`, `type ${name} = Record<K${i}, ${show(t)}>;`);
+        this.records.add(name);
+      } else {
+        for (let j = 0; j < n; j++) {
+          fields.push([`f${j}`, this.pick(types)]);
+        }
+        out.push(`interface ${name} {`, ...fields.map(([f, t]) => `  readonly ${f}: ${show(t)};`), '}');
       }
-      out.push(`interface ${name} {`, ...fields.map(([f, t]) => `  readonly ${f}: ${show(t)};`), '}');
       this.structs.push({ name, fields });
     }
     const fnCount = 1 + Math.floor(this.next() * 3);
@@ -401,13 +511,31 @@ export class Gen {
         params.push(t);
         vars.push({ name: `p${j}`, ty: t, mutable: false, owned: false });
       }
+      // Sometimes an optional parameter last, which `??` reads and a test of
+      // `undefined` narrows.
+      if (this.chance(0.25)) {
+        const t: Ty = { k: 'optional', of: this.pick([BIGINT, NUMBER, BOOLEAN]) };
+        params.push(t);
+        vars.push({ name: `p${pc}`, ty: t, mutable: false, owned: false });
+      }
       // Sometimes nullable, so that a call can return `null`.
       const ret = this.chance(0.3) && this.structs.length > 0
         ? ({ k: 'struct', name: this.pick(this.structs).name } as Ty)
         : this.chance(0.15) ? ({ k: 'nullable', of: this.pick([BIGINT, NUMBER]) } as Ty) : this.scalar();
-      const signature = vars.map((v) => `${v.name}: ${show(v.ty)}`).join(', ');
+      const signature = vars
+        .map((v) => (v.ty.k === 'optional' ? `${v.name}?: ${show(v.ty.of)}` : `${v.name}: ${show(v.ty)}`))
+        .join(', ');
       const nullable = vars.filter((v) => v.ty.k === 'nullable');
       const lines: Array<string> = [];
+      const optional = vars.find((v) => v.ty.k === 'optional');
+      if (optional !== undefined && this.chance(0.5)) {
+        // `if (x === undefined) return …;` narrows `x` in the rest of the body.
+        const test = this.pick([`${optional.name} === undefined`, `undefined === ${optional.name}`]);
+        lines.push(`if (${test}) {`, `  return ${this.expr(ret, vars, 1)};`, '}');
+        if (optional.ty.k === 'optional') {
+          optional.ty = optional.ty.of;
+        }
+      }
       if (nullable.length > 0 && this.chance(0.5)) {
         // `if (x === null) return …;` narrows `x` in the rest of the body.
         const v = this.pick(nullable);

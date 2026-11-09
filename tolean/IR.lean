@@ -55,9 +55,19 @@ inductive Ty (T : Type) where
   /-- The type of a tag field, such as `kind: 'circle'`. A structure leaves
   the field out, because its value never changes. -/
   | tag (value : String)
+  /-- `A × B × C`: a tuple of two elements or more, such as TypeScript's
+  `[A, B, C]`. Lean nests the product to the right, so `[A, [B, C]]` has the
+  same Lean type, and the list of elements keeps the two apart. -/
+  | tuple (elems : List (Ty T))
+  /-- A type parameter of a generic function, such as `T` in TypeScript's
+  `function first<T>(xs: T[]): T | null`. -/
+  | param (name : String)
+  /-- A generic structure of the program applied to types, such as `Box Int`
+  for TypeScript's `Box<bigint>`. -/
+  | app (ref : DeclRef) (args : List (Ty T))
   /-- A type that the language adds. -/
   | ext (t : T)
-deriving BEq, Repr, Inhabited
+deriving Repr, Inhabited
 
 /-- `+`, `-` and `*` on `Int`. -/
 inductive IntOp where
@@ -73,6 +83,23 @@ deriving BEq, Repr, Inhabited
 inductive Division where
   | tdiv | tmod
 deriving BEq, Repr, Inhabited
+
+/-- A function on lists that takes a function on the elements: `List.map`,
+`List.filter`, `List.any`, `List.all` and `List.find?`. -/
+inductive ListMethod where
+  | map | filter | any | all | find
+deriving BEq, Repr, Inhabited
+
+/-- What a certificate needs to know about a callback, besides its code. The
+printer does not read it. -/
+structure CallbackInfo (T : Type) where
+  /-- The span of the call, such as `xs.map(x => e)`. -/
+  span : Span
+  /-- The type of the callback's value. -/
+  result : Ty T
+  /-- The locals in scope at the call, in the order they were declared. -/
+  scope : List (String × Ty T)
+deriving Repr, Inhabited
 
 /-- A Lean expression in the output. Some are a `Prop`, such as `a < b`; the
 translator knows which, and wraps one in `decide` where Lean needs a `Bool`.
@@ -101,8 +128,9 @@ inductive Expr (T E : Type) where
   | call (ref : DeclRef) (args : List (Expr T E))
   /-- `([a, b] : List T)`, where `elem` is `T`. -/
   | list (elems : List (Expr T E)) (elem : Ty T)
-  /-- `({ f := a, g := b } : S)`. -/
-  | struct (fields : List (String × Expr T E)) (ref : DeclRef)
+  /-- `({ f := a, g := b } : S)`, or `({ … } : (S A))` for a generic structure,
+  where `args` are its type arguments. -/
+  | struct (fields : List (String × Expr T E)) (ref : DeclRef) (args : List (Ty T))
   /-- `a.isNone`. -/
   | isNone (a : Expr T E)
   /-- `a.isSome`. -/
@@ -152,10 +180,20 @@ inductive Expr (T E : Type) where
   /-- `(e : T)`: `e` with its type written out, where Lean cannot infer it,
   such as a `let` of `none` that nothing else uses. -/
   | ascribe (e : Expr T E) (type : Ty T)
+  /-- `(a, b, c)`: a tuple of two elements or more. -/
+  | tuple (elems : List (Expr T E))
+  /-- `e.2.1`: the element `index` of the tuple `e`, which has `size`
+  elements. -/
+  | proj (e : Expr T E) (index size : Nat)
+  /-- `(List.map (fun (x : T) => body) items)`, or another `method` with the
+  function `fun (x : T) => body` on the elements of `items`, where `param` is
+  `x` and `elem` is `T`. -/
+  | listMethod (method : ListMethod) (items : Expr T E) (param : String) (elem : Ty T)
+      (body : Expr T E) (info : CallbackInfo T)
 deriving Repr, Inhabited
 
-/-- What a certificate needs to know about a loop, besides its code. The
-printer does not read it. -/
+/-- What the printer and a certificate need to know about a loop, besides its
+code. -/
 structure LoopInfo (T : Type) where
   /-- The span of the `for…of` statement. -/
   span : Span
@@ -165,6 +203,13 @@ structure LoopInfo (T : Type) where
   elem : Ty T
   /-- The other locals in scope at the loop, in the order they were declared. -/
   scope : List (String × Ty T)
+  /-- A `break` or a `return` can end the loop. The output then runs it with
+  `forIn`, and each run of the body gives a `ForInStep`. -/
+  breaks : Bool := false
+  /-- The type of the function's value, when a `return` in the body can end
+  the function. The loop's state then starts with an `Option` of it, which
+  holds the value to return. -/
+  returns : Option (Ty T) := none
 deriving Repr, Inhabited
 
 /-- The body of a function: `let`s that end in a value. -/
@@ -173,14 +218,27 @@ inductive Body (T E : Type) where
   | value (e : Expr T E)
   /-- The locals that a branch or a loop body changes: `x` or `(x, y)`. -/
   | state (names : List String)
+  /-- `ForInStep.yield (x, y)`: the end of one run of the body of a loop that
+  a `break` can end, with the locals that the body changes. In a loop that a
+  `return` can end (`slot`), the state starts with `none`, for no value to
+  return: `ForInStep.yield (none, x, y)`. -/
+  | yield (names : List String) (slot : Bool)
+  /-- `ForInStep.done (x, y)`: a `break`, which ends its loop with the locals
+  that the body changes, after `none` when `slot`. -/
+  | done (names : List String) (slot : Bool)
+  /-- `ForInStep.done (some e, x, y)`: a `return e` in a loop body, which ends
+  the loop, and then the function with the value of `e`. -/
+  | exit (e : Expr T E) (names : List String)
   /-- `let x := e`, then `rest`. -/
   | «let» (name : String) (e : Expr T E) (rest : Body T E)
   /-- `let xs : T := [a, b]`: an owned array, then `rest`. -/
   | letArray (name : String) (type : Ty T) (elems : List (Expr T E)) (rest : Body T E)
   /-- `if c then … else …`. -/
   | ite (c : Expr T E) (whenTrue whenFalse : Body T E)
-  /-- `match x with | none => … | some x => …`. -/
-  | matchNull (name : String) (whenNull whenValue : Body T E)
+  /-- `match x with | none => … | some x => …`. When `optional` is true, `x`
+  is an optional value, whose `none` the source writes as a value left out
+  rather than a null, as `Ty.optional` is. -/
+  | matchNull (name : String) (optional : Bool) (whenNull whenValue : Body T E)
   /-- `match x with | T.a x => … | T.b x => …`: a test of the tag of `x`, a
   value of the tagged union `T`. The tag is the tag field `field` of the
   source's value, or its type, such as TypeScript's `typeof x`, when `field`
@@ -193,19 +251,24 @@ inductive Body (T E : Type) where
   that ends in the state, then `rest`. -/
   | letState (names : List String) (branch : Body T E) (rest : Body T E)
   /-- `let (x, y) := List.foldl (fun (x, y) e => body) (x, y) items`, then
-  `rest`. -/
+  `rest`. When a `break` can end the loop (`info.breaks`), it is
+  `let (x, y) := Id.run (forIn items (x, y) (fun e (x, y) => body))`. When a
+  `return` can end it (`info.returns`), it is
+  `match Id.run (forIn items (none, x, y) (fun e (_, x, y) => body)) with`,
+  with the arms `| (some r, _) => r` and `| (none, x, y) => rest`. -/
   | fold (names : List String) (element : String) (body : Body T E) (items : Expr T E)
       (rest : Body T E) (info : LoopInfo T)
 deriving Repr, Inhabited
 
 /-- A declaration in the output. -/
 inductive Decl (T E : Type) where
-  /-- `structure S where`, with one field per line. -/
-  | struct (name : String) (fields : List (String × Ty T))
+  /-- `structure S (A : Type) where`, with one field per line. `typeParams`
+  are the type parameters of a generic structure, in order. -/
+  | struct (name : String) (typeParams : List String) (fields : List (String × Ty T))
   /-- `abbrev T := U`: a type alias. The translator writes the type `U` itself
   wherever the source names `T`, so the output names `T` only here, for the
   claims about it to use. -/
-  | alias (name : String) (type : Ty T)
+  | alias (name : String) (typeParams : List String) (type : Ty T)
   /-- `inductive T where | a | b`, with decidable equality: a type whose
   constructors take no arguments. -/
   | enum (name : String) (members : List String)
@@ -223,10 +286,20 @@ variable {T E : Type}
 
 /-! ### The declarations that the output names -/
 
+mutual
+
 def Ty.refs : Ty T → List DeclRef
   | .struct r | .enum r | .tagged r => [r]
   | .option t | .optional t | .list t => t.refs
+  | .tuple ts => Ty.refsList ts
+  | .app r args => r :: Ty.refsList args
   | _ => []
+
+def Ty.refsList : List (Ty T) → List DeclRef
+  | [] => []
+  | t :: ts => t.refs ++ Ty.refsList ts
+
+end
 
 mutual
 
@@ -234,7 +307,7 @@ mutual
 def Expr.refs : Expr T E → List DeclRef
   | .call r args => r :: Expr.refsList args
   | .list elems t => Expr.refsList elems ++ t.refs
-  | .struct fields r => r :: Expr.refsFields fields
+  | .struct fields r args => r :: (Expr.refsFields fields ++ Ty.refsList args)
   | .ext _ args => Expr.refsList args
   | .field a _ _ | .propNot a | .not a | .neg a | .isNone a | .isSome a
   | .decide a | .push _ a | .update _ _ a => a.refs
@@ -245,6 +318,9 @@ def Expr.refs : Expr T E → List DeclRef
   | .enumCase r _ => [r]
   | .inject r _ e => r :: e.refs
   | .ascribe e t => e.refs ++ t.refs
+  | .tuple es => Expr.refsList es
+  | .proj e _ _ => e.refs
+  | .listMethod _ items _ t body _ => items.refs ++ t.refs ++ body.refs
   | .tagValue _ => []
   | .int _ | .none | .bool _ | .string _ | .var _ => []
 
@@ -260,21 +336,92 @@ end
 
 def Body.refs : Body T E → List DeclRef
   | .value e => e.refs
-  | .state _ => []
+  | .state _ | .yield .. | .done .. => []
+  | .exit e _ => e.refs
   | .let _ e rest => e.refs ++ rest.refs
   | .letArray _ t elems rest => t.refs ++ Expr.refsList elems ++ rest.refs
   | .ite c a b => c.refs ++ a.refs ++ b.refs
-  | .matchNull _ a b | .letState _ a b => a.refs ++ b.refs
+  | .matchNull _ _ a b | .letState _ a b => a.refs ++ b.refs
   | .matchTag _ r _ _ _ a b => r :: (a.refs ++ b.refs)
   | .fold _ _ body items rest _ => body.refs ++ items.refs ++ rest.refs
 
 /-- The functions and structures of the program that `d` names. -/
 def Decl.refs : Decl T E → List DeclRef
-  | .struct _ fields => fields.flatMap (·.2.refs)
-  | .alias _ type => type.refs
+  | .struct _ _ fields => fields.flatMap (·.2.refs)
+  | .alias _ _ type => type.refs
   | .enum .. => []
   | .tagged _ _ members => members.flatMap (·.2.refs)
   | .function _ params ret body => params.flatMap (·.2.refs) ++ ret.refs ++ body.refs
+
+/-! ### The declarations that name the string type -/
+
+mutual
+
+/-- The printed type names the string type. A tag field has a string type,
+but the printer leaves tag fields out. -/
+def Ty.usesString : Ty T → Bool
+  | .string => true
+  | .option t | .optional t | .list t => t.usesString
+  | .tuple ts | .app _ ts => Ty.usesStringList ts
+  | _ => false
+
+def Ty.usesStringList : List (Ty T) → Bool
+  | [] => false
+  | t :: ts => t.usesString || Ty.usesStringList ts
+
+end
+
+mutual
+
+/-- `e` names the string type or holds a string literal. -/
+def Expr.usesString : Expr T E → Bool
+  | .string _ => true
+  | .call _ args | .ext _ args => Expr.usesStringList args
+  | .list elems t => Expr.usesStringList elems || t.usesString
+  | .struct fields _ args => Expr.usesStringFields fields || Ty.usesStringList args
+  | .field a _ _ | .propNot a | .not a | .neg a | .isNone a | .isSome a
+  | .decide a | .push _ a | .update _ _ a | .inject _ _ a => a.usesString
+  | .ite a b c => a.usesString || b.usesString || c.usesString
+  | .matchNull _ a b | .coalesce a b _ | .intOp _ a b | .order _ a b | .division _ a b
+  | .eq a b | .ne a b | .propAnd a b | .propOr a b | .and a b | .or a b =>
+    a.usesString || b.usesString
+  | .ascribe e t => e.usesString || t.usesString
+  | .tuple es => Expr.usesStringList es
+  | .proj e _ _ => e.usesString
+  | .listMethod _ items _ t body _ => items.usesString || t.usesString || body.usesString
+  -- The printer leaves a tag value out, as it leaves the tag field out.
+  | .int _ | .none | .bool _ | .var _ | .enumCase .. | .tagValue _ => false
+
+def Expr.usesStringList : List (Expr T E) → Bool
+  | [] => false
+  | e :: es => e.usesString || Expr.usesStringList es
+
+def Expr.usesStringFields : List (String × Expr T E) → Bool
+  | [] => false
+  | (_, e) :: fs => e.usesString || Expr.usesStringFields fs
+
+end
+
+def Body.usesString : Body T E → Bool
+  | .value e => e.usesString
+  | .state _ | .yield .. | .done .. => false
+  | .exit e _ => e.usesString
+  | .let _ e rest => e.usesString || rest.usesString
+  | .letArray _ t elems rest => t.usesString || Expr.usesStringList elems || rest.usesString
+  | .ite c a b => c.usesString || a.usesString || b.usesString
+  | .matchNull _ _ a b | .letState _ a b | .matchTag _ _ _ _ _ a b => a.usesString || b.usesString
+  | .fold _ _ body items rest info =>
+    body.usesString || items.usesString || rest.usesString ||
+      info.stateTypes.any (·.usesString) || info.elem.usesString
+
+/-- The output of `d` names the string type, or holds a string literal. A
+language whose strings are not Lean's `String` imports its model then. -/
+def Decl.usesString : Decl T E → Bool
+  | .struct _ _ fields => fields.any (·.2.usesString)
+  | .alias _ _ type => type.usesString
+  | .enum .. => false
+  | .tagged _ _ members => members.any (·.2.usesString)
+  | .function _ params ret body => params.any (·.2.usesString) || ret.usesString || body.usesString
 
 /-! ### Printing -/
 
@@ -374,16 +521,25 @@ class PrintTy (T : Type) where
   /-- What a function that is generic over the type parameter binds after its
   name, such as ` {N : Type} [JSNumber N]`. -/
   binders : Names → String
+  /-- The string type. A language whose strings are not Lean's `String`
+  writes its own, as TypeScript writes `JSString`. -/
+  string : Names → String := fun names => leanName names "String"
+  /-- The string literal `s`, written as a value of the string type. It may
+  be an application, such as `JSString.ofString "a"`, so the printer puts it
+  in parentheses where it is an argument. -/
+  stringLit : Names → String → String := fun _ s => Sexp.quote s
 
 /-- How a language prints the operations it adds, given its arguments as
 printed code. -/
 class PrintOp (E : Type) where
   print : Names → E → List String → String
 
+mutual
+
 def Ty.print [PrintTy T] (names : Names) : Ty T → String
   | .int => leanName names "Int"
   | .bool => leanName names "Bool"
-  | .string => leanName names "String"
+  | .string => PrintTy.string (T := T) names
   | .option t | .optional t => wrapped (leanName names "Option") (t.print names)
   | .list t => wrapped (leanName names "List") (t.print names)
   | .struct ref =>
@@ -395,16 +551,62 @@ def Ty.print [PrintTy T] (names : Names) : Ty T → String
     match names.ref ref with
     | (name, some _) => s!"({name} {names.typeParam})"
     | (name, Option.none) => name
-  | .tag _ => leanName names "String"
+  | .tag _ => PrintTy.string (T := T) names
+  | .tuple ts => "(" ++ " × ".intercalate (Ty.printList names ts) ++ ")"
+  | .param name => name
+  | .app ref args =>
+    let (name, generic) := names.ref ref
+    let number := if generic.isSome then s!" {names.typeParam}" else ""
+    -- Each argument is one term: `List Int` needs its parentheses.
+    let grouped := (Ty.printList names args).map fun a =>
+      if a.contains ' ' && !a.startsWith "(" then s!"({a})" else a
+    s!"({name}{number} {" ".intercalate grouped})"
   | .ext t => PrintTy.print names t
+
+def Ty.printList [PrintTy T] (names : Names) : List (Ty T) → List String
+  | [] => []
+  | t :: ts => t.print names :: Ty.printList names ts
+
+end
+
+mutual
 
 /-- The printed type names the type parameter, so a declaration of it must
 bind it. -/
 def Ty.namesParam [PrintTy T] (names : Names) : Ty T → Bool
   | .struct ref | .tagged ref => (names.ref ref).2.isSome
   | .option t | .optional t | .list t => t.namesParam names
+  | .tuple ts => Ty.namesParamList names ts
+  | .app ref args => (names.ref ref).2.isSome || Ty.namesParamList names args
   | .ext t => PrintTy.namesParam names t
   | _ => false
+
+def Ty.namesParamList [PrintTy T] (names : Names) : List (Ty T) → Bool
+  | [] => false
+  | t :: ts => t.namesParam names || Ty.namesParamList names ts
+
+end
+
+mutual
+
+/-- The type parameters of a generic function that `t` names, in order. -/
+def Ty.typeVars : Ty T → List String
+  | .param name => [name]
+  | .option t | .optional t | .list t => t.typeVars
+  | .tuple ts | .app _ ts => Ty.typeVarsList ts
+  | _ => []
+
+def Ty.typeVarsList : List (Ty T) → List String
+  | [] => []
+  | t :: ts => t.typeVars ++ Ty.typeVarsList ts
+
+end
+
+/-- How the output reads the element `index` of a tuple of `size` elements,
+which Lean nests to the right: `.1`, `.2.1`, …, and `.2.2` for the last of
+three. -/
+def projPath (index size : Nat) : String :=
+  String.join (List.replicate index ".2") ++ (if index + 1 < size then ".1" else "")
 
 def IntOp.symbol : IntOp → String
   | .add => "+" | .sub => "-" | .mul => "*"
@@ -433,9 +635,9 @@ def Division.apply : Division → Int → Int → Int
 def Body.testsTag (name : String) : Body T E → Bool
   | .matchTag n _ _ _ _ a b => n == name || a.testsTag name || b.testsTag name
   | .let _ _ rest | .letArray _ _ _ rest => rest.testsTag name
-  | .ite _ a b | .matchNull _ a b | .letState _ a b => a.testsTag name || b.testsTag name
+  | .ite _ a b | .matchNull _ _ a b | .letState _ a b => a.testsTag name || b.testsTag name
   | .fold _ _ body _ rest _ => body.testsTag name || rest.testsTag name
-  | .value _ | .state _ => false
+  | .value _ | .state _ | .yield .. | .done .. | .exit .. => false
 
 section
 variable [PrintTy T] [PrintOp E]
@@ -444,13 +646,28 @@ variable [PrintTy T] [PrintOp E]
 def foldState (names : Names) (info : LoopInfo T) : String :=
   " × ".intercalate (info.stateTypes.map (·.print names))
 
+/-- The state of one step of a loop: the tuple of `names`, after `slot`, the
+value to return, in a loop that a `return` can end. -/
+def stepTuple (slot : Option String) (names : List String) : String :=
+  match slot with
+  | some s => if names.isEmpty then s else s!"({s}, {", ".intercalate names})"
+  | Option.none => tuple names
+
 /-- The binders of the function that `List.foldl` runs for a loop, with their
 types: `((x, y) : Int × Bool) (e : T)`. Lean elaborates the body before it
 knows the types, so in `{ f := e }` with a field of type `Option N` it would
-take `e` to be an `Option N`, not an `N` to wrap. -/
+take `e` to be an `Option N`, not an `N` to wrap. `forIn` passes the element
+first, so a loop that a `break` can end has the binders the other way round. -/
 def foldBinders (names : Names) (state : List String) (element : String) (info : LoopInfo T) :
     String :=
-  s!"({tuple state} : {foldState names info}) ({element} : {info.elem.print names})"
+  let stateBinder := match info.returns with
+    | some r =>
+      let slotTy := (Ty.option r).print names
+      if state.isEmpty then s!"(_ : {slotTy})"
+      else s!"({stepTuple (some "_") state} : {slotTy} × {foldState names info})"
+    | Option.none => s!"({tuple state} : {foldState names info})"
+  let elementBinder := s!"({element} : {info.elem.print names})"
+  if info.breaks then s!"{elementBinder} {stateBinder}" else s!"{stateBinder} {elementBinder}"
 
 mutual
 
@@ -458,11 +675,20 @@ def Expr.print (names : Names) : Expr T E → String
   | .int n => s!"({n} : {leanName names "Int"})"
   | .none => leanName names "none"
   | .ascribe e t => s!"({e.print names} : {t.print names})"
+  | .listMethod method items param elem body _ =>
+    let fn := s!"(fun ({param} : {elem.print names}) => {body.print names})"
+    let xs := argument (items.print names)
+    match method with
+    | .map => s!"({leanName names "List.map"} {fn} {xs})"
+    | .filter => s!"({leanName names "List.filter"} {fn} {xs})"
+    | .any => s!"({leanName names "List.any"} {xs} {fn})"
+    | .all => s!"({leanName names "List.all"} {xs} {fn})"
+    | .find => s!"({leanName names "List.find?"} {fn} {xs})"
   | .bool b => if b then "true" else "false"
-  | .string s => Sexp.quote s
+  | .string s => PrintTy.stringLit (T := T) names s
   | .var name => name
   | .enumCase ref member => s!"{(names.ref ref).1}.{memberName member}"
-  | .tagValue value => Sexp.quote value
+  | .tagValue value => PrintTy.stringLit (T := T) names value
   | .inject ref tag e =>
     -- The constructor gets the type parameter by name, as a call does. A
     -- value such as `(1 : Int)` does not mention the parameter, so Lean
@@ -487,9 +713,9 @@ def Expr.print (names : Names) : Expr T E → String
     "(" ++ " ".intercalate (head ++ (Expr.printList names args).map argument) ++ ")"
   | .list elems elem =>
     s!"([{", ".intercalate (Expr.printList names elems)}] : {(Ty.list elem).print names})"
-  | .struct fields ref =>
-    "({ " ++ ", ".intercalate (Expr.printFields names fields) ++ " } : " ++
-      (Ty.struct ref : Ty T).print names ++ ")"
+  | .struct fields ref args =>
+    let type : Ty T := if args.isEmpty then .struct ref else .app ref args
+    "({ " ++ ", ".intercalate (Expr.printFields names fields) ++ " } : " ++ type.print names ++ ")"
   | .isNone a => s!"{argument (a.print names)}.isNone"
   | .isSome a => s!"{argument (a.print names)}.isSome"
   | .matchNull name whenNull whenValue =>
@@ -512,6 +738,8 @@ def Expr.print (names : Names) : Expr T E → String
   | .push name a => s!"{name} ++ [{a.print names}]"
   | .update op name a => s!"{name} {op.symbol} {a.print names}"
   | .ext op args => PrintOp.print names op (Expr.printList names args)
+  | .tuple es => "(" ++ ", ".intercalate (Expr.printList names es) ++ ")"
+  | .proj e index size => argument (e.print names) ++ projPath index size
 
 def Expr.printList (names : Names) : List (Expr T E) → List String
   | [] => []
@@ -533,6 +761,15 @@ mutual
 def Body.lines (names : Names) : Body T E → List String
   | .value e => [e.print names]
   | .state ns => [tuple ns]
+  | .yield ns slot =>
+    [wrapped (leanName names "ForInStep.yield")
+      (stepTuple (if slot then some (leanName names "none") else Option.none) ns)]
+  | .done ns slot =>
+    [wrapped (leanName names "ForInStep.done")
+      (stepTuple (if slot then some (leanName names "none") else Option.none) ns)]
+  | .exit e ns =>
+    [wrapped (leanName names "ForInStep.done")
+      (stepTuple (some (wrapped (leanName names "some") (e.print names))) ns)]
   | .let name e rest => s!"let {name} := {e.print names}" :: rest.lines names
   | .letArray name type elems rest =>
     s!"let {name} : {type.print names} := [{", ".intercalate (Expr.printList names elems)}]" ::
@@ -540,7 +777,7 @@ def Body.lines (names : Names) : Body T E → List String
   | .ite c whenTrue whenFalse =>
     [s!"if {c.print names} then"] ++ indent (whenTrue.lines names) ++ ["else"] ++
       indent (whenFalse.lines names)
-  | .matchNull name whenNull whenValue =>
+  | .matchNull name _ whenNull whenValue =>
     [s!"match {name} with", s!"| {leanName names "none"} =>"] ++ indent (whenNull.lines names) ++
       [s!"| {leanName names "some"} {name} =>"] ++ indent (whenValue.lines names)
   | .matchTag name ref _ tag other whenTag whenOther =>
@@ -559,10 +796,23 @@ def Body.lines (names : Names) : Body T E → List String
   | .fold ns element body items rest info =>
     let bodyLines := body.lines names
     let lastLine := bodyLines.getLast?.getD ""
-    [s!"let {tuple ns} :=", s!"  {leanName names "List.foldl"}",
-      s!"    (fun {foldBinders names ns element info} =>"] ++
-      indentBy "      " (bodyLines.dropLast ++ [lastLine ++ ")"]) ++
-      [s!"    {tuple ns} {items.print names}"] ++ rest.lines names
+    if info.returns.isSome then
+      let none_ := leanName names "none"
+      [s!"match {leanName names "Id.run"} ({leanName names "forIn"} {items.print names} {stepTuple (some none_) ns}",
+        s!"    (fun {foldBinders names ns element info} =>"] ++
+        indentBy "      " (bodyLines.dropLast ++ [lastLine ++ ")) with"]) ++
+        [s!"| {stepTuple (some s!"{leanName names "some"} r") (if ns.isEmpty then [] else ["_"])} => r",
+          s!"| {stepTuple (some none_) ns} =>"] ++ indent (rest.lines names)
+    else if info.breaks then
+      [s!"let {tuple ns} :=",
+        s!"  {leanName names "Id.run"} ({leanName names "forIn"} {items.print names} {tuple ns}",
+        s!"    (fun {foldBinders names ns element info} =>"] ++
+        indentBy "      " (bodyLines.dropLast ++ [lastLine ++ "))"]) ++ rest.lines names
+    else
+      [s!"let {tuple ns} :=", s!"  {leanName names "List.foldl"}",
+        s!"    (fun {foldBinders names ns element info} =>"] ++
+        indentBy "      " (bodyLines.dropLast ++ [lastLine ++ ")"]) ++
+        [s!"    {tuple ns} {items.print names}"] ++ rest.lines names
 
 /-- The arms of `match name with` for a test of its tag, nested in the arm
 for the other members of a test of the same local. They join the outer
@@ -586,8 +836,9 @@ def Body.tagArms (names : Names) (name : String) : Body T E → List String
 end
 
 def Decl.print (names : Names) : Decl T E → String
-  | .struct name fields =>
+  | .struct name typeParams fields =>
     let generic := if names.generic then s!" ({names.typeParam} : Type)" else ""
+    let generic := generic ++ String.join (typeParams.map (s!" ({·} : Type)"))
     -- A tag field never changes, so the structure leaves it out.
     let kept := fields.filter fun (_, type) => !(type matches .tag _)
     "\n".intercalate (s!"structure {name}{generic} where" ::
@@ -602,12 +853,21 @@ def Decl.print (names : Names) : Decl T E → String
     "\n".intercalate (s!"inductive {name} where" ::
       members.map (s!"  | {memberName ·}") ++
       [s!"deriving {leanName names "DecidableEq"}, {leanName names "Repr"}"])
-  | .alias name type =>
+  | .alias name typeParams type =>
     let generic := if type.namesParam names then s!" ({names.typeParam} : Type)" else ""
+    let generic := generic ++ String.join (typeParams.map (s!" ({·} : Type)"))
     s!"abbrev {name}{generic} := {type.print names}"
   | .function name params ret body =>
     let generic := if names.generic then PrintTy.binders (T := T) names else ""
-    let leanParams := params.map fun (param, type) => s!"({param} : {type.print names})"
+    -- The type parameters, in the order that the parameters name them. The
+    -- translator refuses one that no parameter's type names.
+    let vars := (Ty.typeVarsList (params.map (·.2) ++ [ret])).eraseDups
+    let generic := if vars.isEmpty then generic else generic ++ " {" ++ " ".intercalate vars ++ " : Type}"
+    -- An optional parameter defaults to `none`, so that a claim may leave
+    -- it out, as a call in the source may.
+    let leanParams := params.map fun (param, type) =>
+      let default := if type matches .optional _ then s!" := {leanName names "none"}" else ""
+      s!"({param} : {type.print names}{default})"
     "\n".intercalate
       (s!"def {name}{generic} {" ".intercalate leanParams} : {ret.print names} :=" ::
         indent (body.lines names))

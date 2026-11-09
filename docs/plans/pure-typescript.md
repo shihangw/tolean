@@ -1,38 +1,19 @@
 # Plan: translate the pure TypeScript that real modules use
 
-**Status:** in progress, see [Progress](#progress) · **Date:** 2026-11-03
+**Status:** in progress · **Date:** 2026-11-03
 
 Pure TypeScript in practice uses much more of the language than the subset
 accepts. A function is pure when it does no input or output and depends only
-on its arguments. But the subset also refuses generics, recursion,
-callbacks, closures, exceptions, `Map`, `switch` and template literals, and
-pure code uses all of them. A survey of one pure module of about 2,000 lines, which folds a list of
-events into a state, found the features below in almost every file. Tolean could
-translate none of its fourteen files. Only two small functions went through,
-after someone rewrote them into the subset.
+on its arguments. A survey of one pure module of about 2,000 lines, which
+folds a list of events into a state, found generics, recursion, callbacks,
+closures, exceptions, `Map`, `switch` and template literals in almost every
+file. When the survey ran, Tolean could translate none of its fourteen files.
+What Tolean translates now is in the [TypeScript
+guide](../typescript/README.md).
 
-This plan lists what to add so that such a module translates without a
-rewrite. It also states the rules that each addition must keep, and the
-behavior that Tolean must still refuse.
-
-## Progress
-
-Each row is a part of the plan that Tolean translates now, with the step it
-belongs to and the pull request that added it. `program_sound` covers every
-row, and the corpus files for each row certify.
-
-| Step | What Tolean translates now | Pull request |
-|---|---|---|
-| 2 | `x ?? y`, and `x == null` and `x != null`, on values of type `T \| null` | [#44](https://github.com/shihangw/tolean/pull/44) |
-| 2 | `type T = U` aliases of the types of the subset, exported and imported | [#45](https://github.com/shihangw/tolean/pull/45) |
-| 2 | Literal unions of strings, `type T = 'a' \| 'b'`, as an `inductive` | [#47](https://github.com/shihangw/tolean/pull/47) |
-| 2 | Tagged unions of interfaces, narrowed by `if (x.kind === 'a')` | [#51](https://github.com/shihangw/tolean/pull/51) |
-| 2 | `switch (x.kind)` on a tagged union, where every clause returns | [#53](https://github.com/shihangw/tolean/pull/53) |
-| 2 | The same `switch`, where every clause changes locals and ends in `break`, also in a loop | [#54](https://github.com/shihangw/tolean/pull/54) |
-| 2 | Optional fields `f?: T` of interfaces, read with `??` and `=== undefined` | [#55](https://github.com/shihangw/tolean/pull/55) |
-| 2 | `x ??= y` on a `let` local of type `T \| null` | [#63](https://github.com/shihangw/tolean/pull/63) |
-| 2 | `p?.f` on a nullable structure, read with `??` and `=== undefined` | [#60](https://github.com/shihangw/tolean/pull/60) |
-| 3 | Unions of primitive types, `type T = string \| bigint`, narrowed by `if (typeof x === 'string')` | [#56](https://github.com/shihangw/tolean/pull/56) |
+This plan lists what is left to add so that such a module translates
+without a rewrite. It also states the rules that each addition must keep,
+and the behavior that Tolean must still refuse.
 
 ## The rules for every addition
 
@@ -63,49 +44,39 @@ stays refused, even when the code that uses it is pure.
 The tables group the constructs by the stage that adds them. Each row says
 what the Lean output is, and what Tolean refuses so that the translation stays
 exact. A construct leaves these tables when Tolean translates it, and the
-[Progress](#progress) table lists it from then on.
+[TypeScript guide](../typescript/README.md) documents it from then on.
 
 ### Types and narrowing
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| A `default` that assigns the value to `never`, to check that the cases of a `switch` cover every member | Nothing: the `match` already covers them | A `default` that runs |
-| `x?: T` parameters, `undefined` as a value, and a test such as `x !== undefined` that narrows an optional value | `Option T` | `'x' in obj`, which can tell a missing key from `undefined` |
-| A chain after `?.`, such as `a?.b.c`, and `a?.[i]` and `f?.()` | `Option.bind` | `==` against anything except `null` and `undefined` |
-| `export { … }` and re-exports | Nothing: the names stay in scope | `export *` |
-| A tuple type such as `readonly [string, bigint]` | A product type | Tuples that a function changes |
-| A string `enum` | An `inductive` | A numeric `enum`, because it also maps each number back to its name |
-| `as const` and `satisfies` | Nothing: they only check types | `as T` and the non-null assertion `x!`, because TypeScript does not check them |
+| `T \| undefined` as the type of a local or of a return value, and a test such as `x !== undefined && x > 0n` that narrows an optional value inside an expression | `Option T` | `'x' in obj`, which can tell a missing key from `undefined` |
+| `a?.[i]` and `f?.()` | `Option.bind` | `==` against anything except `null` and `undefined` |
+| A re-export, such as `export { a } from "./x.ts"` | Nothing: the names stay in scope | `export *` |
 | A type guard `x is T` | A `Bool` function | A guard whose body the translator cannot show to be a test of the tag |
-| `Record<K, V>` where `K` is a union of string literals | A structure with one field per key | `Record<string, V>` and index signatures. Code that needs those can use a `Map`. |
 
 ### Functions
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| An arrow function passed as an argument, which reads only `const` values and parameters | `fun` | A callback that changes a variable outside itself |
+| An arrow function passed to a function of the program, which reads only `const` values and parameters | `fun` | A callback that changes a variable outside itself |
 | A local function or arrow function stored in a `const` and called later, which changes `let` variables of the enclosing function | A Lean function that takes those variables and returns their new values. The translator lifts it out and threads the variables through each call. | A local function that escapes: one that is returned, stored in a field or passed on |
 | A function-typed field or parameter, such as a comparator in an options object | A field of a function type | A function value that changes state when it is called |
 | A destructured parameter, such as `{ a, b }: Options` | A pattern on the structure | Defaults inside the pattern |
 | A default parameter value | `Option` with a default at the call | A default that reads another parameter |
-| `return` inside a loop, `break`, `continue`, and `for (let i = a; i < b; i++)` | A fold whose state records that the loop stopped | A `for` loop of another shape, and labels |
+| `for (let i = a; i < b; i++)` | A fold whose state records that the loop stopped | A `for` loop of another shape, and labels |
 | `while` and `do … while`, with a `@decreases` tag that names a measure | A recursive function with `termination_by`, as for recursion below | A loop without such a measure |
 | A rest parameter `...xs: T[]`, and a spread argument `f(...xs)` | A `List T` argument | A spread argument to a function whose parameters are not a rest parameter |
 | A class with `readonly` fields and methods that do not change `this` | A structure and one function per method | Methods that change `this`, inheritance other than from `Error`, getters, setters and `static` state |
-
 
 ### Generics
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| A function with type parameters that have no constraint, such as `function last<T>(xs: ReadonlyArray<T>): T \| null` | `def last {T : Type} …` | `===` on a value of a type parameter, because it compares references when the type is an object |
-| A generic interface or type alias, such as `interface Pair<A, B>` | `structure Pair (A B : Type)` | |
 | A type parameter with a constraint, such as `T extends Named` | Nothing in the first version | All constraints, until the open question below is settled |
 
-The translator already makes each function generic over the number type `N`.
-User type parameters become further implicit arguments next to it. A
-constraint is harder, because TypeScript checks it by the shape of a type and
-Lean has no subtyping by shape.
+A constraint is hard to translate, because TypeScript checks it by the shape
+of a type and Lean has no subtyping by shape.
 
 ### Recursion
 
@@ -127,7 +98,7 @@ value claim already does.
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| `map`, `filter`, `reduce`, `some`, `every`, `find`, `findIndex`, `findLast`, `slice`, `entries` | The `List` functions with the same meaning | The `index` and `array` arguments of a callback, until a later step adds them |
+| `reduce`, `findIndex`, `findLast`, `slice`, `entries` | The `List` functions with the same meaning | The `index` and `array` arguments of a callback, until a later step adds them |
 | `includes` | `List.contains` with SameValueZero, which treats `NaN` as equal to itself | |
 | `[...xs]`, `[...xs, x]`, and array destructuring | `List.append` and patterns | Spread of anything that is not an array |
 | `xs.length`, `xs[i]` and `xs.at(i)` (§23.1.3.1) | `List.length`, and `xs[i]?` of type `Option T`. An index outside the array gives `undefined`. | `xs[i]` in a project without `noUncheckedIndexedAccess`, because there TypeScript types the result as `T` although it can be `undefined` |
@@ -157,53 +128,17 @@ pieces](shared-core.md) adds exceptions to the IR, and this stage uses them.
 
 ### Strings
 
-The string model comes before every other step, because the current mapping
-of `string` stops being exact as soon as any string operation exists.
+Each operation below becomes a function on `JSString`, the list of UTF-16
+code units that Tolean translates a `string` to, written from its algorithm
+in the spec. [A decision record](../decisions/2026-11-06-jsstring.md)
+explains the model.
 
-#### The string model
-
-A JavaScript string is a sequence of UTF-16 code units (§6.1.4), and it can
-hold a lone surrogate. A Lean `String` is a sequence of Unicode scalar values,
-so it cannot hold a lone surrogate, and it orders and measures text in a
-different way. For example, U+FFFF sorts after U+10000 in JavaScript, because
-U+10000 starts with the code unit 0xD800. In Lean it sorts before it. The
-mapping of `string` to `String` is exact today only because the subset has no
-string operation except `===`.
-
-So `string` becomes a new type, `JSString`, a structure around
-`List UInt16`. That is the definition in the spec, so the model is exact for
-every string, lone surrogates included. Each string operation becomes an
-ordinary function on the list, written from the algorithm in the spec, and
-proofs use the usual `List` lemmas.
-
-A literal such as `"abc"` prints as `JSString.ofString "abc"`, which encodes
-the text as UTF-16. A literal that holds a lone surrogate, such as
-`"\uD800"`, prints its code units, because a Lean `String` cannot hold it.
-A coercion and a lemma that `ofString` is injective let a claim state a
-literal such as `"abc"` directly.
-
-We considered two other models and rejected both:
-
-- **Keep `String` and refuse the operations whose result differs.** Whether
-  `<` or `length` differs depends on whether a value holds a character
-  above U+FFFF. The translator cannot know that when it translates, so it
-  would have to approximate.
-- **An abstract type with laws, as `number` has.** `number` is abstract
-  because an exact model of doubles is hard. An exact model of strings is
-  easy, and a concrete model with proved lemmas needs no laws to test.
-
-The new type has costs. The generated Lean is less readable, because each
-literal carries `JSString.ofString`. A theorem about a string input now
-covers every list of code units, lone surrogates included. That is correct,
-because a JavaScript caller can pass such a string. A certificate that runs
-string code in the kernel is slower on a list of code units than on a
-`String`.
-
-#### Operations
+A literal that holds a lone surrogate, such as `"\uD800"`, should print its
+code units. The lexer refuses it now, because the syntax tree keeps the text
+of a literal as a Lean `String`.
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| `===` and `!==` on strings | List equality, as SameValueNonNumber compares strings (§7.2.12) | |
 | `<`, `<=`, `>` and `>=` on strings | Lexicographic order on code units, as IsLessThan defines it (§7.2.13) | `localeCompare`, which depends on the locale |
 | `+` on strings, and template literals whose parts are `string`, `boolean`, `bigint` or a safe integer `number` | `List.append`. Numbers and `bigint` values convert to ASCII digits (§6.1.6.1.20 and §6.1.6.2.21). | A part that is a non-integer `number` or an object |
 | `length`, `at` (§22.1.3.1), `slice` (§22.1.3.22), `startsWith`, `endsWith`, `includes`, `indexOf`, `split` with a string separator (§22.1.3.23), `padStart`, `padEnd` and `trim` | Functions on the list of code units. `slice` and `at` follow the spec for negative and out-of-range indexes. | `split` with a regular expression, and every regular expression in the first version |
@@ -276,34 +211,35 @@ be exact:
 ## Steps
 
 Each step ends with all checks green, with both translators in agreement, and
-with no change to the output of code that is already in the subset. Step 1
-is the one exception, because it changes the type of every `string`.
+with no change to the output of code that is already in the subset. A fix
+for output that Lean does not accept may change that output too.
 
-1. Switch `string` to `JSString`. Today a string appears only in fields,
-   literals and `===`, so the switch changes the generated types but breaks
-   almost no proof. Every project that writes proofs over Lean's `String`
-   makes the switch more costly later, so it comes first.
-2. Types and narrowing: optional parameters, and the rest of a chain after
-   `?.`.
-3. Generic functions and types whose type parameters have no constraint,
-   tuples, string enums and type guards.
-4. Callbacks that read only `const` values, the array methods without
-   `sort`, indexing, and object spread.
-5. Control flow: `return` inside a loop, `break`, `continue`, and the counted
-   `for` loop.
-6. Errors, after step 3 of the [shared core plan](shared-core.md) adds
+Each step has a priority. The P0 steps come first, then the P1 steps, then
+the P2 steps. Steps with the same priority keep the order of their numbers.
+The steps keep the numbers that pull requests refer to, so a finished step
+leaves a gap.
+
+2. **P0.** Types and narrowing: `T | undefined` as a type, a test of
+   `undefined` that narrows inside an expression, `a?.[i]` and `f?.()`, and
+   re-exports.
+3. **P1.** Type guards.
+4. **P0.** The array methods without `sort`, such as `reduce` and `slice`,
+   indexing, and object spread.
+5. **P0.** Control flow: the counted `for` loop.
+6. **P0.** Errors, after step 3 of the [shared core plan](shared-core.md) adds
    exceptions to the IR.
-7. Local functions that change variables of the enclosing function, by lifting
-   them out and threading the variables through each call.
-8. `Map` and `Set`, with owned values and the borrow for a map that a caller
-   passes in.
-9. Strings: template literals, string order, the string methods, iteration
-   by code point, and the opaque `JSON.stringify`.
-10. Sorting with consistent comparators.
-11. Recursion: structural recursion and types that refer to themselves first,
-    then `@decreases`, mutual recursion, and `while` loops.
-12. The new number and `bigint` operations, and the `Date` methods.
-13. Classes with `readonly` fields and methods that do not change `this`.
+7. **P0.** Local functions that change variables of the enclosing function, by
+   lifting them out and threading the variables through each call.
+8. **P0.** `Map` and `Set`, with owned values and the borrow for a map that a
+   caller passes in.
+9. **P1.** Strings: template literals, string order, the string methods,
+   iteration by code point, and the opaque `JSON.stringify`.
+10. **P1.** Sorting with consistent comparators.
+11. **P2.** Recursion: structural recursion and types that refer to themselves
+    first, then `@decreases`, mutual recursion, and `while` loops.
+12. **P1.** The new number and `bigint` operations, and the `Date` methods.
+13. **P2.** Classes with `readonly` fields and methods that do not change
+    `this`.
 
 Steps 2 and 4 cover most of the code in the survey. Steps 7 and 8 matter
 most for proofs, because a fold over events keeps its state in local
@@ -311,6 +247,10 @@ variables and in maps.
 
 ## Open questions
 
+- How should a certificate cover a generic function or interface? The
+  certifier has no encoder for a type parameter, so a file with either gets no
+  certificate. The claim could take an encoder for each type parameter as an
+  argument, since the code never looks inside such a value.
 - How should a type parameter with a constraint translate? One option is a
   type class that the translator writes for each constraint, with one
   method per field that the constraint names. Another is to pass the
@@ -325,8 +265,12 @@ variables and in maps.
   reads an import as a URL.
 - Should a comparator that is not one of the two shapes be accepted when the
   project supplies a proof that it is consistent?
-- How should the spec model `const`? Its environment holds values only, so
-  `x = e`, `x += e` and `x ??= e` on a `const` write the new value where Node
-  throws a `TypeError`. The translator refuses each of them, so no certified
-  program meets the gap. Closing it means a binding kind in `Eval.Env`, and
-  `Agree` and every statement proof would then compare kinds too.
+- How should the spec model `const` in full? Its environment holds values
+  only. The spec gives no value for a block where a statement after a `const`
+  declaration assigns it, which covers `=`, `+=`, `??=` and `++`. A
+  `for (const x of xs)` loop is left: an assignment to `x` in the body writes the new value, where Node
+  throws a `TypeError`. The translator refuses it, so no certified program
+  meets the gap, but `interpreter.test.ts` asks the interpreter to agree with
+  Node on every program that it parses. The same check on the loop's body
+  would close it. A binding kind in `Eval.Env` would cover every case, but
+  then `Agree` and every statement proof would compare kinds too.

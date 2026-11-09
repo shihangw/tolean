@@ -37,9 +37,10 @@ partial def TypeExpr.toSexp : TypeExpr → Sexp
   | .array s elem => node "type-array" s [] [elem.toSexp]
   | .union s members => node "type-union" s [] (members.map toSexp)
   | .paren s inner => node "type-paren" s [] [inner.toSexp]
+  | .tuple s readonly elems => node "type-tuple" s (flag readonly "readonly") (elems.map toSexp)
 
 def Param.toSexp (p : Param) : Sexp :=
-  node "param" p.span [p.name] (p.type.map TypeExpr.toSexp).toList
+  node "param" p.span ([p.name] ++ flag p.optional "optional") (p.type.map TypeExpr.toSexp).toList
 
 mutual
 
@@ -64,6 +65,8 @@ partial def Expr.toSexp : Expr → Sexp
   | .cond s test ifTrue ifFalse => node "cond" s [] [test.toSexp, ifTrue.toSexp, ifFalse.toSexp]
   | .assign s op target value => node "assign" s [op.symbol] [target.toSexp, value.toSexp]
   | .arrow s _ params body => node "arrow" s [] (params.map Param.toSexp ++ [body.toSexp])
+  | .asConst s e => node "asConst" s [] [e.toSexp]
+  | .satisfies s e type => node "satisfies" s [] [e.toSexp, type.toSexp]
 
 partial def Property.toSexp : Property → Sexp
   | .shorthand s name => node "shorthand" s [name] []
@@ -71,9 +74,11 @@ partial def Property.toSexp : Property → Sexp
 
 end
 
+def VarDecl.children (d : VarDecl) : List Sexp :=
+  (d.type.map TypeExpr.toSexp).toList ++ (d.init.map Expr.toSexp).toList
+
 def VarDecl.toSexp (span : Span) (exported : Bool) (d : VarDecl) : Sexp :=
-  node d.kind.keyword span ([d.name] ++ flag exported "export")
-    ((d.type.map TypeExpr.toSexp).toList ++ (d.init.map Expr.toSexp).toList)
+  node d.kind.keyword span ([d.name] ++ flag exported "export") d.children
 
 partial def Stmt.toSexp : Stmt → Sexp
   | .varDecl s d => d.toSexp s false
@@ -83,6 +88,14 @@ partial def Stmt.toSexp : Stmt → Sexp
     node "if" s [] ([test.toSexp, thenBranch.toSexp] ++ (elseBranch.map toSexp).toList)
   | .forOfStmt s kind name iterable body =>
     node "for-of" s [kind.keyword, name] [iterable.toSexp, body.toSexp]
+  -- The three parts keep no span, so their nodes have none. Each holds its
+  -- part, or nothing when the part is absent.
+  | .forStmt s init test update body =>
+    node "for" s [] [
+      .node "init" none [] (init.map fun d => Sexp.node d.kind.keyword none [d.name] d.children).toList,
+      .node "test" none [] (test.map Expr.toSexp).toList,
+      .node "update" none [] (update.map Expr.toSexp).toList,
+      body.toSexp]
   | .whileStmt s test body => node "while" s [] [test.toSexp, body.toSexp]
   | .block s body => node "block" s [] (body.map toSexp)
   | .breakStmt s => node "break" s [] []
@@ -102,13 +115,23 @@ def Decl.toSexp : Decl → Sexp
   | .import s names source =>
     node "import" s [Sexp.quote source]
       (names.map fun n => node "name" n.span ([n.name] ++ flag n.typeOnly "type") [])
-  | .function s exported name params returnType body =>
+  | .function s exported name typeParams params returnType body =>
+    -- A type parameter keeps no span, so its node has none.
     node "function" s ([name] ++ flag exported "export")
-      (params.map Param.toSexp ++ (returnType.map TypeExpr.toSexp).toList ++ [body.toSexp])
-  | .interface s exported name fields =>
-    node "interface" s ([name] ++ flag exported "export") (fields.map Field.toSexp)
-  | .typeAlias s exported name type =>
-    node "type" s ([name] ++ flag exported "export") [type.toSexp]
+      (typeParams.map (fun t => .node "type-param" none [t] []) ++ params.map Param.toSexp ++
+        (returnType.map TypeExpr.toSexp).toList ++ [body.toSexp])
+  | .interface s exported name typeParams fields =>
+    node "interface" s ([name] ++ flag exported "export")
+      (typeParams.map (fun t => .node "type-param" none [t] []) ++ fields.map Field.toSexp)
+  | .typeAlias s exported name typeParams type =>
+    node "type" s ([name] ++ flag exported "export")
+      (typeParams.map (fun t => .node "type-param" none [t] []) ++ [type.toSexp])
+  | .enum s exported name members =>
+    node "enum" s ([name] ++ flag exported "export")
+      (members.map fun m => node "member" m.span [m.name, Sexp.quote m.value] [])
+  | .exports s names source =>
+    node "export" s (source.map Sexp.quote).toList
+      (names.map fun n => node "name" n.span ([n.name] ++ flag n.typeOnly "type") [])
   | .exportedVar s d => d.toSexp s true
   | .stmt st => st.toSexp
 

@@ -3,9 +3,10 @@ import tolean.IR
 /-!
 Equality on the Tolean IR, as a function that the kernel can run.
 
-Lean cannot derive `DecidableEq` for `Expr T E`, which holds lists of itself.
-So `Expr.beq` compares two trees field by field, and `Expr.beq_iff` proves
-that it is true exactly when the trees are equal. The other types of the IR
+Lean cannot derive `DecidableEq` for `Expr T E` and `Ty T`, which hold lists
+of themselves. So `Expr.beq` and `Ty.beq` compare two trees field by field,
+and `Expr.beq_iff` and `Ty.beq_iff` prove that each is true exactly when the
+trees are equal. The other types of the IR
 then derive `DecidableEq`, for every language whose added types and
 operations have it. A certificate uses this equality to check that the
 translator gives the IR that its theorems are about: the kernel runs the
@@ -16,9 +17,57 @@ namespace tolean.IR
 -- Every proof here has the same shape, so some pass a lemma that they do not use.
 set_option linter.unusedSimpArgs false
 
-deriving instance DecidableEq for IntOp, Order, Division, Ty
+deriving instance DecidableEq for IntOp, Order, Division, ListMethod
 
 variable {T E : Type} [DecidableEq T] [DecidableEq E]
+
+mutual
+
+def Ty.beq : Ty T → Ty T → Bool
+  | .int, .int | .bool, .bool | .string, .string => true
+  | .option a, .option b => Ty.beq a b
+  | .optional a, .optional b => Ty.beq a b
+  | .list a, .list b => Ty.beq a b
+  | .struct a, .struct b => Decidable.decide (a = b)
+  | .enum a, .enum b => Decidable.decide (a = b)
+  | .tagged a, .tagged b => Decidable.decide (a = b)
+  | .tag a, .tag b => Decidable.decide (a = b)
+  | .tuple a, .tuple b => Ty.beqList a b
+  | .param a, .param b => Decidable.decide (a = b)
+  | .app a as, .app b bs => Decidable.decide (a = b) && Ty.beqList as bs
+  | .ext a, .ext b => Decidable.decide (a = b)
+  | _, _ => false
+
+def Ty.beqList : List (Ty T) → List (Ty T) → Bool
+  | [], [] => true
+  | x :: xs, y :: ys => Ty.beq x y && Ty.beqList xs ys
+  | _, _ => false
+
+end
+
+mutual
+
+theorem Ty.beq_iff : (a b : Ty T) → Ty.beq a b = true ↔ a = b
+  | .int, b | .bool, b | .string, b | .struct _, b | .enum _, b | .tagged _, b | .tag _, b | .param _, b
+  | .ext _, b => by
+    cases b <;> simp [Ty.beq]
+  | .option a, b | .optional a, b | .list a, b => by
+    cases b <;> simp [Ty.beq, Ty.beq_iff a]
+  | .tuple a, b => by
+    cases b <;> simp [Ty.beq, Ty.beqList_iff a]
+  | .app r a, b => by
+    cases b <;> simp [Ty.beq, Ty.beqList_iff a]
+
+theorem Ty.beqList_iff : (xs ys : List (Ty T)) → Ty.beqList xs ys = true ↔ xs = ys
+  | [], ys => by cases ys <;> simp [Ty.beqList]
+  | x :: xs, ys => by
+    cases ys <;> simp [and_assoc, Ty.beqList, Ty.beq_iff x, Ty.beqList_iff xs]
+
+end
+
+instance : DecidableEq (Ty T) := fun a b => decidable_of_iff _ (Ty.beq_iff a b)
+
+deriving instance DecidableEq for CallbackInfo
 
 mutual
 
@@ -39,7 +88,7 @@ def Expr.beq : Expr T E → Expr T E → Bool
   | .ite a0 a1 a2, .ite b0 b1 b2 => Expr.beq a0 b0 && Expr.beq a1 b1 && Expr.beq a2 b2
   | .call a0 a1, .call b0 b1 => Decidable.decide (a0 = b0) && Expr.beqList a1 b1
   | .list a0 a1, .list b0 b1 => Expr.beqList a0 b0 && Decidable.decide (a1 = b1)
-  | .struct a0 a1, .struct b0 b1 => Expr.beqFields a0 b0 && Decidable.decide (a1 = b1)
+  | .struct a0 a1 a2, .struct b0 b1 b2 => Expr.beqFields a0 b0 && Decidable.decide (a1 = b1) && Decidable.decide (a2 = b2)
   | .isNone a0, .isNone b0 => Expr.beq a0 b0
   | .isSome a0, .isSome b0 => Expr.beq a0 b0
   | .matchNull a0 a1 a2, .matchNull b0 b1 b2 => Decidable.decide (a0 = b0) && Expr.beq a1 b1 && Expr.beq a2 b2
@@ -57,6 +106,11 @@ def Expr.beq : Expr T E → Expr T E → Bool
   | .push a0 a1, .push b0 b1 => Decidable.decide (a0 = b0) && Expr.beq a1 b1
   | .update a0 a1 a2, .update b0 b1 b2 => Decidable.decide (a0 = b0) && Decidable.decide (a1 = b1) && Expr.beq a2 b2
   | .ext a0 a1, .ext b0 b1 => Decidable.decide (a0 = b0) && Expr.beqList a1 b1
+  | .tuple a0, .tuple b0 => Expr.beqList a0 b0
+  | .proj a0 a1 a2, .proj b0 b1 b2 => Expr.beq a0 b0 && Decidable.decide (a1 = b1) && Decidable.decide (a2 = b2)
+  | .listMethod a0 a1 a2 a3 a4 a5, .listMethod b0 b1 b2 b3 b4 b5 =>
+    Decidable.decide (a0 = b0) && Expr.beq a1 b1 && Decidable.decide (a2 = b2) &&
+      Decidable.decide (a3 = b3) && Expr.beq a4 b4 && Decidable.decide (a5 = b5)
   | _, _ => false
 
 def Expr.beqList : List (Expr T E) → List (Expr T E) → Bool
@@ -106,7 +160,7 @@ theorem Expr.beq_iff : (a b : Expr T E) → Expr.beq a b = true ↔ a = b
     cases b <;> simp [and_assoc, Expr.beq, Expr.beqList_iff a1]
   | .list a0 a1, b => by
     cases b <;> simp [and_assoc, Expr.beq, Expr.beqList_iff a0]
-  | .struct a0 a1, b => by
+  | .struct a0 a1 a2, b => by
     cases b <;> simp [and_assoc, Expr.beq, Expr.beqFields_iff a0]
   | .isNone a0, b => by
     cases b <;> simp [and_assoc, Expr.beq, Expr.beq_iff a0]
@@ -142,6 +196,12 @@ theorem Expr.beq_iff : (a b : Expr T E) → Expr.beq a b = true ↔ a = b
     cases b <;> simp [and_assoc, Expr.beq, Expr.beq_iff a2]
   | .ext a0 a1, b => by
     cases b <;> simp [and_assoc, Expr.beq, Expr.beqList_iff a1]
+  | .tuple a0, b => by
+    cases b <;> simp [and_assoc, Expr.beq, Expr.beqList_iff a0]
+  | .proj a0 a1 a2, b => by
+    cases b <;> simp [and_assoc, Expr.beq, Expr.beq_iff a0]
+  | .listMethod a0 a1 a2 a3 a4 a5, b => by
+    cases b <;> simp [and_assoc, Expr.beq, Expr.beq_iff a1, Expr.beq_iff a4]
 
 theorem Expr.beqList_iff : (xs ys : List (Expr T E)) → Expr.beqList xs ys = true ↔ xs = ys
   | [], ys => by cases ys <;> simp [and_assoc, Expr.beqList]

@@ -100,11 +100,15 @@ inductive TypeExpr where
   | array (span : Span) (elem : TypeExpr)
   | union (span : Span) (members : List TypeExpr)
   | paren (span : Span) (inner : TypeExpr)
+  /-- `[A, B]`, or `readonly [A, B]` when `readonly` is true: a tuple type. -/
+  | tuple (span : Span) (readonly : Bool) (elems : List TypeExpr)
 
-/-- A parameter of a function or an arrow function. -/
+/-- A parameter of a function or an arrow function. An optional parameter,
+`x?: T`, is `undefined` when a call leaves it out. -/
 structure Param where
   span : Span
   name : String
+  optional : Bool := false
   type : Option TypeExpr
 
 /-- The key of an object literal property. -/
@@ -141,6 +145,12 @@ inductive Expr where
   /-- `(a: T, b) => body`, or `a => body` when `parens` is false. The body is
   an expression. -/
   | arrow (span : Span) (parens : Bool) (params : List Param) (body : Expr)
+  /-- `expr as const`. Type stripping removes `as const`, so it has the value
+  of `expr`. -/
+  | asConst (span : Span) (expr : Expr)
+  /-- `expr satisfies type`. Type stripping removes `satisfies type`, so it has
+  the value of `expr`. -/
+  | satisfies (span : Span) (expr : Expr) (type : TypeExpr)
 
 inductive Property where
   /-- `{ a }`. -/
@@ -218,6 +228,9 @@ inductive Stmt where
   | returnStmt (span : Span) (value : Option Expr)
   | ifStmt (span : Span) (test : Expr) (thenBranch : Stmt) (elseBranch : Option Stmt)
   | forOfStmt (span : Span) (kind : VarKind) (name : String) (iterable : Expr) (body : Stmt)
+  /-- `for (init; test; update) body`, the counted loop. Each of the three
+  parts may be absent. -/
+  | forStmt (span : Span) (init : Option VarDecl) (test : Option Expr) (update : Option Expr) (body : Stmt)
   | whileStmt (span : Span) (test : Expr) (body : Stmt)
   | block (span : Span) (body : List Stmt)
   | breakStmt (span : Span)
@@ -253,6 +266,7 @@ def Expr.assigns (n : String) : Expr → Bool
   -- The body runs only when the arrow is called; counting it anyway only
   -- refuses more.
   | .arrow _ _ _ body => body.assigns n
+  | .asConst _ e | .satisfies _ e _ => e.assigns n
 
 def Expr.assignsList (n : String) : List Expr → Bool
   | [] => false
@@ -280,6 +294,13 @@ def Stmt.assigns (n : String) : Stmt → Bool
     | some b => b.assigns n
     | none => false)
   | .forOfStmt _ _ _ it b => it.assigns n || b.assigns n
+  | .forStmt _ init t u b => (match init with
+    | some { init := some e, .. } => e.assigns n
+    | _ => false) || (match t with
+    | some t => t.assigns n
+    | none => false) || (match u with
+    | some u => u.assigns n
+    | none => false) || b.assigns n
   | .whileStmt _ t b => t.assigns n || b.assigns n
   | .block _ ss => Stmt.assignsList n ss
   | .breakStmt _ | .continueStmt _ | .empty _ => false
@@ -310,6 +331,7 @@ def Stmt.constAssignedIn (s : Stmt) (rest : List Stmt) : Bool :=
 @[simp] theorem Stmt.constAssignedIn_returnStmt : (Stmt.returnStmt sp e).constAssignedIn rest = false := rfl
 @[simp] theorem Stmt.constAssignedIn_ifStmt : (Stmt.ifStmt sp t a b).constAssignedIn rest = false := rfl
 @[simp] theorem Stmt.constAssignedIn_forOfStmt : (Stmt.forOfStmt sp k x it b).constAssignedIn rest = false := rfl
+@[simp] theorem Stmt.constAssignedIn_forStmt : (Stmt.forStmt sp i t u b).constAssignedIn rest = false := rfl
 @[simp] theorem Stmt.constAssignedIn_whileStmt : (Stmt.whileStmt sp t b).constAssignedIn rest = false := rfl
 @[simp] theorem Stmt.constAssignedIn_block : (Stmt.block sp ss).constAssignedIn rest = false := rfl
 @[simp] theorem Stmt.constAssignedIn_breakStmt : (Stmt.breakStmt sp).constAssignedIn rest = false := rfl
@@ -335,6 +357,13 @@ structure Field where
   optional : Bool
   type : TypeExpr
 
+/-- A member of a string enum: `Name = "value"`. -/
+structure EnumMember where
+  span : Span
+  name : String
+  value : String
+deriving DecidableEq
+
 /-- One name of `import { a, type B } from "./x.ts"`. `typeOnly` is true for
 `type B`, and for every name of `import type { … }`. -/
 structure ImportName where
@@ -346,11 +375,19 @@ deriving DecidableEq
 inductive Decl where
   /-- `import { a, b } from "source"`: named imports from another file. -/
   | «import» (span : Span) (names : List ImportName) (source : String)
-  /-- `body` is a `block`. -/
-  | function (span : Span) (exported : Bool) (name : String) (params : List Param)
+  /-- `export { a, type B }`, which exports declarations of the file, or
+  `export { a } from "source"`, which exports names of another file. -/
+  | exports (span : Span) (names : List ImportName) (source : Option String)
+  /-- `body` is a `block`. `typeParams` are the names in `<A, B>` after the
+  name of a generic function. -/
+  | function (span : Span) (exported : Bool) (name : String) (typeParams : List String) (params : List Param)
       (returnType : Option TypeExpr) (body : Stmt)
-  | interface (span : Span) (exported : Bool) (name : String) (fields : List Field)
-  | typeAlias (span : Span) (exported : Bool) (name : String) (type : TypeExpr)
+  /-- `typeParams` are the names in `<A, B>` after the name of a generic
+  interface, as for a type alias and a function. -/
+  | interface (span : Span) (exported : Bool) (name : String) (typeParams : List String) (fields : List Field)
+  | typeAlias (span : Span) (exported : Bool) (name : String) (typeParams : List String) (type : TypeExpr)
+  /-- `enum Name { A = "a", B = "b" }`: an enum whose members are strings. -/
+  | enum (span : Span) (exported : Bool) (name : String) (members : List EnumMember)
   | exportedVar (span : Span) (decl : VarDecl)
   | stmt (stmt : Stmt)
 
@@ -374,17 +411,18 @@ namespace tolean.TypeScript.Syntax
 open tolean
 
 def TypeExpr.span : TypeExpr → Span
-  | .keyword s _ | .null s | .literal s _ | .ref s _ _ | .array s _ | .union s _ | .paren s _ => s
+  | .keyword s _ | .null s | .literal s _ | .ref s _ _ | .array s _ | .union s _ | .paren s _
+  | .tuple s _ _ => s
 
 def Expr.span : Expr → Span
   | .ident s _ | .number s _ | .bigint s _ | .string s _ | .bool s _ | .null s | .array s _
   | .object s _ | .paren s _ | .member s _ _ | .optMember s _ _ | .index s _ _ | .call s _ _ | .unary s _ _
   | .prefix s _ _ | .postfix s _ _ | .binary s _ _ _ | .cond s _ _ _ | .assign s _ _ _
-  | .arrow s _ _ _ => s
+  | .arrow s _ _ _ | .asConst s _ | .satisfies s _ _ => s
 
 def Stmt.span : Stmt → Span
   | .varDecl s _ | .exprStmt s _ | .returnStmt s _ | .ifStmt s _ _ _ | .forOfStmt s _ _ _ _
-  | .whileStmt s _ _ | .block s _ | .breakStmt s | .continueStmt s | .empty s | .switchStmt s _ _ => s
+  | .forStmt s _ _ _ _ | .whileStmt s _ _ | .block s _ | .breakStmt s | .continueStmt s | .empty s | .switchStmt s _ _ => s
 
 mutual
 
@@ -400,6 +438,8 @@ def Expr.lessFree : Expr → Bool
   | .cond _ a b c => a.lessFree && b.lessFree && c.lessFree
   -- What the parser checks after an arrow is what it checks after its body.
   | .arrow _ _ _ body => body.lessFree
+  -- A `<` in the type reads type arguments, which the parser checks itself.
+  | .asConst _ e | .satisfies _ e _ => e.lessFree
   | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => true
 
 def Expr.lessFreeList : List Expr → Bool
@@ -413,14 +453,59 @@ def Property.lessFreeList : List Property → Bool
 
 end
 
+mutual
+
+/-- `e` has no `in` operator outside parentheses, `{ … }`, the arguments of a
+call, an index and the middle of a conditional. ECMA-262 reads the
+declaration at the start of a counted `for` this way (§14.7.4, the `[~In]`
+parameter), so that an `in` after the declaration starts a `for … in` loop.
+ECMA-262 also allows an `in` inside `[ … ]` there, but `tsc` does not, so
+`e` has none there either. -/
+def Expr.inFree : Expr → Bool
+  | .binary _ op l r => op != .«in» && l.inFree && r.inFree
+  | .cond _ test _ ifFalse => test.inFree && ifFalse.inFree
+  | .assign _ _ target value => target.inFree && value.inFree
+  | .array _ es => Expr.inFreeList es
+  | .member _ e _ | .optMember _ e _ | .index _ e _ | .call _ e _ | .unary _ _ e | .prefix _ _ e
+  | .postfix _ _ e | .arrow _ _ _ e | .asConst _ e | .satisfies _ e _ => e.inFree
+  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .object .. | .paren .. => true
+
+def Expr.inFreeList : List Expr → Bool
+  | [] => true
+  | e :: es => e.inFree && Expr.inFreeList es
+
+end
+
+/-- The value of `d` has no `in` where `Expr.inFree` finds one. -/
+def VarDecl.inFree (d : VarDecl) : Bool :=
+  match d.init with
+  | some e => e.inFree
+  | none => true
+
 /-- A `break`. -/
 def Stmt.isBreak : Stmt → Bool
   | .breakStmt _ => true
   | _ => false
 
 def Decl.span : Decl → Span
-  | .import s .. | .function s .. | .interface s .. | .typeAlias s .. | .exportedVar s _ => s
+  | .import s .. | .exports s .. | .function s .. | .interface s .. | .typeAlias s .. | .enum s .. | .exportedVar s _ => s
   | .stmt st => st.span
+
+/-- `e` reads a property after a `?.`, through property reads and not
+through parentheses, as `a?.b` and `a?.b.c` do. A property read of such an
+`e` is a part of the same optional chain (ECMA-262 §13.3.9), so it is
+skipped too where the `?.` meets `null` or `undefined`. -/
+def Expr.optSpine : Expr → Bool
+  | .optMember .. => true
+  | .member _ o _ => o.optSpine
+  | _ => false
+
+/-- An optional chain that reads `path` from `base`, the first property after
+a `?.`: `a?.b.c` reads `[b, c]` from `a`. -/
+def Expr.optChain? : Expr → Option (Expr × List String)
+  | .optMember _ base f => some (base, [f])
+  | .member _ o f => (o.optChain?).map fun (b, fs) => (b, fs ++ [f])
+  | _ => none
 
 /-- `e` without the parentheses around it. -/
 def Expr.stripParens : Expr → Expr

@@ -1,5 +1,6 @@
 import tolean.TypeScript.Syntax.Ast
 import tolean.TypeScript.Spec.Number
+import tolean.TypeScript.Spec.String
 
 /-!
 The meaning of the translated TypeScript subset, as an interpreter in Lean.
@@ -28,13 +29,14 @@ variable {N : Type} [JSNumber N]
 /-- A span, written short in certificates. -/
 abbrev sp (a b c d : Nat) : tolean.Span := ⟨⟨a, b⟩, ⟨c, d⟩⟩
 
-/-- A JavaScript value of the subset. An object is a list of fields, in the
-order the program wrote them. -/
+/-- A JavaScript value of the subset. A string is a `JSString`, its UTF-16
+code units (`Spec/String.lean`). An object is a list of fields, in the order
+the program wrote them. -/
 inductive Val (N : Type) where
   | int (i : Int)
   | num (n : N)
   | bool (b : Bool)
-  | str (s : String)
+  | str (s : JSString)
   | null
   /-- `undefined`, the value of a property that an object does not have. -/
   | undefined
@@ -186,6 +188,26 @@ def getProp (fields : List (String × Val N)) (name : String) : Option (Val N) :
   | some v => some v
   | none => if objectPrototypeNames.contains name then none else some .undefined
 
+/-- `obj[key]` with a string key: the property whose name is `key`, as
+`getProp` reads it. A property name is a Lean `String`, so `getKey` compares
+its UTF-16 code units with the key's. A key that holds a lone surrogate
+then names no property, as in JS, where decoding the key would turn the
+surrogate into U+FFFD and read a property of that name. -/
+def getKey (fields : List (String × Val N)) (key : JSString) : Option (Val N) :=
+  match (fields.find? fun p => JSString.ofString p.1 == key).map (·.2) with
+  | some v => some v
+  | none => if objectPrototypeNames.any (fun n => JSString.ofString n == key) then none else some .undefined
+
+/-- The property at `path` of an object with the fields `fields`, where each
+property before the last is an object. -/
+def getPath (fields : List (String × Val N)) : List String → Option (Val N)
+  | [] => none
+  | [f] => getProp fields f
+  | f :: rest => do
+    match ← getProp fields f with
+    | .obj inner => getPath inner rest
+    | _ => none
+
 /-- A binary operator on two values, when neither operand short-circuits.
 Bigint `/` and `%` truncate toward zero and throw on a zero divisor
 (`BigInt::divide`, `BigInt::remainder`). On numbers, `a > b` is `b < a` and
@@ -214,27 +236,44 @@ def binary : BinOp → Val N → Val N → Option (Val N)
   | .looseNe, a, b => (looseEq a b).map (.bool ∘ not)
   | _, _, _ => none
 
+/-- The element of the array `items` whose index is the safe integer `i`, or
+`undefined` when `i` is none or no index of the array. -/
+def elementAt (items : List (Val N)) : Option Int → Val N
+  | some i => if 0 ≤ i then items[i.toNat]?.getD .undefined else .undefined
+  | none => .undefined
+
 /-- What a statement list does: it runs to its end with the variables it
-leaves, or it returns a value. -/
+leaves, or it returns a value, or a `break` or a `continue` ends it with the
+variables at that point. These are the completion records of ECMA-262
+(§6.2.4) that the subset can make. -/
 inductive Outcome (N : Type) where
   | normal (env : Env N)
   | ret (v : Val N)
+  | brk (env : Env N)
+  | cont (env : Env N)
 deriving Inhabited
+
+/-- The text of a number literal. -/
+def numberText? : Expr → Option String
+  | .number _ text => some text
+  | _ => none
 
 /-- The functions of the module, by name. -/
 def functions (m : Module) : List (String × List String × Stmt) :=
   m.decls.filterMap fun
-    | .function _ _ name params _ body => some (name, params.map (·.name), body)
+    | .function _ _ name _ params _ body => some (name, params.map (·.name), body)
     | _ => none
 
 /-! ### Programs of several files
 
 A program is a list of files, each with its path and its module. In the
-subset a file declares only functions and interfaces, and it runs no code of
-its own, so an import binds a name to a function of another file and does
-nothing else (ECMA-262 §16.2.1.6, `InitializeEnvironment`). A call looks up
-the name in the file that runs: first among its own functions, then among
-the names it imports. -/
+subset a file declares only functions, types and string enums. The only code
+it runs of its own makes the object of each enum, when the file loads and so
+before any function of the program runs. So an import binds a name to a
+function or an enum of another file and does nothing else (ECMA-262
+§16.2.1.6, `InitializeEnvironment`). A call looks up the name in the file
+that runs: first among its own functions, then among the names it imports. A
+name that no variable binds is looked up the same way among the enums. -/
 
 /-- A program: the path of each file, and its module. -/
 abbrev Program := List (String × Module)
@@ -270,10 +309,17 @@ def resolvePath (file source : String) : Option String := do
   let path ← normalizeSegments dir segments
   return "/".intercalate path
 
-/-- `m` declares `name` as an exported function. -/
+/-- An export list of `m`, `export { name }`, names `name` without `type`. -/
+def listsExport (m : Module) (name : String) : Bool :=
+  m.decls.any fun
+    | .exports _ names none => names.any fun n => !n.typeOnly && n.name == name
+    | _ => false
+
+/-- `m` declares `name` as a function that it exports, with `export` before
+it or in an export list. -/
 def exportsFunction (m : Module) (name : String) : Bool :=
   m.decls.any fun
-    | .function _ exported n _ _ _ => exported && n == name
+    | .function _ exported n _ _ _ _ => (exported || listsExport m name) && n == name
     | _ => false
 
 /-- The function that a call of `name` runs, in the file of `s`: the file's
@@ -289,9 +335,59 @@ def resolve (s : Scope) (name : String) : Option DeclRef := do
   let tm ← s.program.lookup target
   if exportsFunction tm name then return ⟨target, name⟩ else none
 
+/-- The string enums that `m` declares, or only the exported ones when
+`exportedOnly`: each with its name, and the name and the string of each
+member. -/
+def enumsOf (m : Module) (exportedOnly : Bool) : List (String × List (String × String)) :=
+  m.decls.filterMap fun
+    | .enum _ exported name members =>
+      if exported || !exportedOnly then some (name, members.map fun x => (x.name, x.value)) else none
+    | _ => none
+
+/-- What the declaration `d` of the file `file` binds the name `name` to, when
+it is a string enum or an import of `name` without `type`: the members of the
+enum, or none when an import names something that is not an exported string
+enum. -/
+def enumBinding (p : Program) (file name : String) : Decl → Option (Option (List (String × String)))
+  | .enum _ _ n members => if n == name then some (some (members.map fun x => (x.name, x.value))) else none
+  | .import _ names source =>
+    if names.any fun n => !n.typeOnly && n.name == name then
+      some (do
+        let target ← resolvePath file source
+        let tm ← p.lookup target
+        (enumsOf tm true).lookup name)
+    else none
+  | _ => none
+
+/-- The members of the enum that the name `name` reads in the file of `s`. A
+module binds each name once (ECMA-262 §16.2.1.1), so in a program that loads
+the first declaration that binds it is the only one: the file's own enum, or
+an import, which binds the exported enum of the file it names. An import with
+`type` binds no value. -/
+def resolveEnum (s : Scope) (name : String) : Option (List (String × String)) := do
+  let m ← s.program.lookup s.file
+  let members ← m.decls.findSome? (enumBinding s.program s.file name)
+  members
+
+/-- The object of a string enum. TypeScript compiles `enum T { A = "a" }` to
+code that makes an object and sets the property `A` of it to `"a"`, for each
+member in order. A string member has no reverse mapping, so the object has
+no other property. -/
+def enumObject (members : List (String × String)) : Val N :=
+  .obj (members.map fun (k, v) => (k, .str v))
+
 /-- Every function of the program, under the file that declares it. -/
 def functionsOf (p : Program) : List (DeclRef × List String × Stmt) :=
   p.flatMap fun (file, m) => (functions m).map fun (name, params, body) => (⟨file, name⟩, params, body)
+
+/-- The environment of a call: each parameter bound to its argument
+(`FunctionDeclarationInstantiation`, ECMA-262 §10.2.11). A parameter that
+the call passes no argument for is `undefined`, as an optional parameter is
+when a call leaves it out. JS ignores arguments beyond the parameters, but
+TypeScript refuses them, and the model gives no value for such a call. -/
+def bindArgs (params : List String) (vs : List (Val N)) : Option (Env N) :=
+  if params.length < vs.length then none
+  else some (params.zip (vs ++ List.replicate (params.length - vs.length) .undefined)).reverse
 
 mutual
 
@@ -299,7 +395,12 @@ mutual
 interpreter is a total function. -/
 def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
   -- `NaN` and `Infinity` are properties of the global object (ECMA-262
-  -- §19.1), unless a variable of the program hides them.
+  -- §19.1), unless a variable of the program hides them. Any other name
+  -- that no variable binds can be a string enum of the module, or one that
+  -- it imports, which is a binding of the module. In JS such a binding would
+  -- also hide a global of the same name, and this rule reads the global
+  -- instead, so an enum named `NaN` makes it less defined than JS. The
+  -- translator refuses such a name.
   | .ident _ name =>
     match env.lookup name with
     | some v => some v
@@ -307,33 +408,65 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
       if name == "NaN" then some (.num JSNumber.nan)
       else if name == "Infinity" then some (.num JSNumber.posInf)
       else if name == "undefined" then some .undefined
-      else none
+      else (resolveEnum m name).map enumObject
   | .bigint _ text => (bigintLiteral text).map .int
   | .number _ text => (numberLiteral text).map (.num ∘ JSNumber.ofSafeInt)
   | .bool _ b => some (.bool b)
-  | .string _ s => some (.str s)
+  | .string _ s => some (.str (JSString.ofString s))
   | .null _ => some .null
   | .paren _ inner => eval m fuel env inner
+  -- Type stripping removes `as const` and `satisfies T`.
+  | .asConst _ e | .satisfies _ e _ => eval m fuel env e
   | .array _ elems => (evalList m fuel env elems).map .list
   | .object _ props => (evalProps m fuel env props).map .obj
-  | .member _ obj name => do
-    match ← eval m fuel env obj with
-    | .obj fields => getProp fields name
-    | _ => none
+  -- A property read after a `?.` is a part of its optional chain, which is
+  -- `undefined` as a whole where the `?.` meets `null` or `undefined`
+  -- (ECMA-262 §13.3.9.1). So `a?.b.c` is `undefined` when `a` is `null`,
+  -- but `(a?.b).c` reads `.c` of `undefined`, which throws.
+  | .member _ obj name =>
+    if obj.optSpine then do
+      match ← evalChain m fuel env obj with
+      | none => some .undefined
+      | some (.obj fields) => getProp fields name
+      | some _ => none
+    else do
+      match ← eval m fuel env obj with
+      | .obj fields => getProp fields name
+      | _ => none
   -- `obj?.name` is `undefined` when `obj` is `null` or `undefined`
-  -- (ECMA-262 §13.3.9.1). A chain after it, as in `obj?.a.b`, would skip the
-  -- rest of the chain too. This model does not: it reads `.b` of `undefined`,
-  -- which gives no value, so it is only less defined than JS there.
+  -- (ECMA-262 §13.3.9.1).
   | .optMember _ obj name => do
     match ← eval m fuel env obj with
     | .null | .undefined => some .undefined
     | .obj fields => getProp fields name
     | _ => none
+  -- `xs[i]` on an array, with a number `i` (`OrdinaryGet` on an array exotic
+  -- object, ECMA-262 §10.4.2): the element when `i` is an index of the
+  -- array. Any other number is `undefined`, because no element and no
+  -- property of `Array.prototype` has its string as a key. `-0` reads the
+  -- element `0`, as its string is `"0"`. A number literal is the integer it
+  -- names, whatever the model of numbers, so the rule reads that integer.
+  --
+  -- `obj[key]` with a string key (ECMA-262 §13.3.2.1): `ToPropertyKey` of a
+  -- string is the string itself, so this reads the property as `obj.key`
+  -- does. A key of another type leaves the subset.
+  | .index _ obj key => do
+    match ← eval m fuel env obj with
+    | .list items =>
+      match numberText? key with
+      | some text => return elementAt items (some (← numberLiteral text))
+      | none =>
+        let .num n ← eval m fuel env key | none
+        return elementAt items (JSNumber.toSafeInt n)
+    | .obj fields =>
+      let .str k ← eval m fuel env key | none
+      getKey fields k
+    | _ => none
   | .unary _ .not arg => do return .bool !(← eval m fuel env arg).truthy
   -- `typeof x` names the type of the value of `x` (ECMA-262 §13.5.3.1). On a
   -- name that is not bound, JS gives `"undefined"`, and the subset has no
   -- such value, so the rule gives none there, as for every unbound name.
-  | .unary _ .typeof arg => do return .str (← eval m fuel env arg).typeOf
+  | .unary _ .typeof arg => do return .str (JSString.ofString (← eval m fuel env arg).typeOf)
   -- The source text `-Infinity` is `negInf`, the model's name for it. A
   -- variable named `Infinity` is negated as any other value is.
   | .unary _ .neg (.ident _ "Infinity") => do
@@ -372,6 +505,23 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     else if test == "isFinite" then some (.bool (JSNumber.isFinite n))
     else if test == "isSafeInteger" then some (.bool (JSNumber.toSafeInt n).isSome)
     else none
+  -- `xs.map(x => e)` and the other methods of an array that take a callback
+  -- (`Array.prototype.map`, `filter`, `some`, `every` and `find`, ECMA-262
+  -- §23.1.3.21, §23.1.3.8, §23.1.3.29, §23.1.3.6 and §23.1.3.9). The callback
+  -- runs on each element in order, with `x` bound to it, until the method has
+  -- its answer. It is an arrow function written at the call, so it sees the
+  -- variables of the call, and nothing changes them while the method runs. The
+  -- method also passes the index and the array, which an arrow with one
+  -- parameter ignores.
+  | .call _ (.member _ recv method) [.arrow _ _ [p] body] => do
+    let .list items ← eval m fuel env recv | none
+    if method == "map" then return .list (← evalMap m fuel env p.name body items)
+    else if method == "filter" then return .list (← evalFilter m fuel env p.name body items)
+    else if method == "some" then return .bool (← evalFind m fuel env p.name body true items).isSome
+    else if method == "every" then
+      return .bool (← evalFind m fuel env p.name body false items).isNone
+    else if method == "find" then return (← evalFind m fuel env p.name body true items).getD .undefined
+    else none
   | .call _ (.ident _ name) args => do
     let vs ← evalList m fuel env args
     match fuel with
@@ -379,12 +529,30 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     | fuel + 1 =>
       let key ← resolve m name
       let (params, body) ← (functionsOf m.program).lookup key
-      if params.length != vs.length then none
-      match ← execStmt { m with file := key.file } fuel (params.zip vs).reverse body with
+      -- A `break` or a `continue` outside a loop is an early error
+      -- (ECMA-262 §14.8.1 and §14.9.1), so the model gives no value.
+      match ← execStmt { m with file := key.file } fuel (← bindArgs params vs) body with
       | .ret v => some v
-      | .normal _ => none
+      | .normal _ | .brk _ | .cont _ => none
   | _ => none
 termination_by e => (fuel, sizeOf e, 0)
+
+/-- An optional chain such as `a?.b.c`: `none` where a `?.` meets `null` or
+`undefined`, which skips the rest of the chain, and the value of the chain
+otherwise. -/
+def evalChain (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Option (Val N))
+  | .optMember _ obj name => do
+    match ← eval m fuel env obj with
+    | .null | .undefined => some none
+    | .obj fields => (getProp fields name).map some
+    | _ => none
+  | .member _ obj name => do
+    match ← evalChain m fuel env obj with
+    | none => some none
+    | some (.obj fields) => (getProp fields name).map some
+    | some _ => none
+  | e => (eval m fuel env e).map some
+termination_by e => (fuel, sizeOf e, 1)
 
 def evalList (m : Scope) (fuel : Nat) (env : Env N) : List Expr → Option (List (Val N))
   | [] => some []
@@ -406,6 +574,38 @@ def evalProps (m : Scope) (fuel : Nat) (env : Env N) :
     return (key, ← eval m fuel env v) :: (← evalProps m fuel env ps)
   | _ :: _ => none
 termination_by ps => (fuel, sizeOf ps, 0)
+
+/-- The callback `(name) => body` on each of `items`: the values that
+`Array.prototype.map` puts in its new array. -/
+def evalMap (m : Scope) (fuel : Nat) (env : Env N) (name : String) (body : Expr) :
+    List (Val N) → Option (List (Val N))
+  | [] => some []
+  | x :: xs => do
+    return (← eval m fuel ((name, x) :: env) body) :: (← evalMap m fuel env name body xs)
+termination_by xs => (fuel, sizeOf body, xs.length + 1)
+
+/-- The elements of `items` for which the callback `(name) => body` gives a
+truthy value, in order: what `Array.prototype.filter` keeps. -/
+def evalFilter (m : Scope) (fuel : Nat) (env : Env N) (name : String) (body : Expr) :
+    List (Val N) → Option (List (Val N))
+  | [] => some []
+  | x :: xs => do
+    let keep := (← eval m fuel ((name, x) :: env) body).truthy
+    let rest ← evalFilter m fuel env name body xs
+    return if keep then x :: rest else rest
+termination_by xs => (fuel, sizeOf body, xs.length + 1)
+
+/-- The first of `items` for which `ToBoolean` of the callback
+`(name) => body` is `want`, or none. The callback does not run on the
+elements after it. `find` and `some` stop at the first truthy value, and
+`every` at the first falsy one. -/
+def evalFind (m : Scope) (fuel : Nat) (env : Env N) (name : String) (body : Expr) (want : Bool) :
+    List (Val N) → Option (Option (Val N))
+  | [] => some none
+  | x :: xs => do
+    if (← eval m fuel ((name, x) :: env) body).truthy == want then return some x
+    evalFind m fuel env name body want xs
+termination_by xs => (fuel, sizeOf body, xs.length + 1)
 
 /-- Run one statement. A block, and the branch of an `if`, keep the changes
 they make to outer variables and drop the variables they declare. -/
@@ -439,11 +639,18 @@ def execStmt (m : Scope) (fuel : Nat) (env : Env N) : Stmt → Option (Outcome N
     match out with
     | .ret v => some (.ret v)
     | .normal env' => some (.normal (env'.drop (env'.length - env.length)))
+    | .brk env' => some (.brk (env'.drop (env'.length - env.length)))
+    | .cont env' => some (.cont (env'.drop (env'.length - env.length)))
   | .block _ body => do
     match ← exec m fuel env body with
     | .ret v => some (.ret v)
     | .normal env' => some (.normal (env'.drop (env'.length - env.length)))
+    | .brk env' => some (.brk (env'.drop (env'.length - env.length)))
+    | .cont env' => some (.cont (env'.drop (env'.length - env.length)))
   | .empty _ => some (.normal env)
+  -- `break` and `continue` without a label (ECMA-262 §14.8.2 and §14.9.2).
+  | .breakStmt _ => some (.brk env)
+  | .continueStmt _ => some (.cont env)
   -- `for (const x of xs)` on an array: the body runs once for each element,
   -- in order, with `x` bound to it in a new scope (`ForIn/OfBodyEvaluation`,
   -- ECMA-262 §14.7.5.7, with the array iterator of §23.1.5.1).
@@ -460,6 +667,8 @@ def execStmt (m : Scope) (fuel : Nat) (env : Env N) : Stmt → Option (Outcome N
     match ← execSwitch m fuel env v clauses with
     | .ret r => some (.ret r)
     | .normal env' => some (.normal (env'.drop (env'.length - env.length)))
+    | .brk env' => some (.brk (env'.drop (env'.length - env.length)))
+    | .cont env' => some (.cont (env'.drop (env'.length - env.length)))
   | _ => none
 termination_by s => (fuel, sizeOf s, 0)
 
@@ -489,10 +698,14 @@ def execFrom (m : Scope) (fuel : Nat) (env : Env N) :
     | (.ret r, _) => some (.ret r)
     | (.normal env', true) => some (.normal env')
     | (.normal env', false) => execFrom m fuel env' rest
+    | (.brk env', _) => some (.brk env')
+    | (.cont env', _) => some (.cont env')
 termination_by cs => (fuel, sizeOf cs, 0)
 
-/-- Run the statements of one clause, up to a `break` at its top or a
-`return`. The flag says whether a `break` ended it. -/
+/-- Run the statements of one clause, up to a `break`, a `continue` or a
+`return`. The flag says whether a `break` ended it: a `break` leaves the
+`switch` (ECMA-262 §14.12.4), and a `continue` leaves it for the loop around
+it. -/
 def execCase (m : Scope) (fuel : Nat) (env : Env N) : List Stmt → Option (Outcome N × Bool)
   | [] => some (.normal env, false)
   | s :: rest =>
@@ -502,11 +715,14 @@ def execCase (m : Scope) (fuel : Nat) (env : Env N) : List Stmt → Option (Outc
       match ← execStmt m fuel env s with
       | .ret r => some (.ret r, false)
       | .normal env' => execCase m fuel env' rest
+      | .brk env' => some (.normal env', true)
+      | .cont env' => some (.cont env', false)
 termination_by ss => (fuel, sizeOf ss, 0)
 
 /-- Run the body of `for (const name of …)` once for each of `items`. Each
 run keeps the changes to outer variables, and drops `name` and the variables
-the body declares. -/
+the body declares. A `continue` ends one run, and a `break` ends the loop
+(`LoopContinues`, ECMA-262 §14.7.1.2). -/
 def execLoop (m : Scope) (fuel : Nat) (env : Env N) (name : String) (body : Stmt) :
     List (Val N) → Option (Outcome N)
   | [] => some (.normal env)
@@ -514,9 +730,12 @@ def execLoop (m : Scope) (fuel : Nat) (env : Env N) (name : String) (body : Stmt
     match ← execStmt m fuel ((name, x) :: env) body with
     | .ret v => some (.ret v)
     | .normal env' => execLoop m fuel (env'.drop (env'.length - env.length)) name body xs
+    | .cont env' => execLoop m fuel (env'.drop (env'.length - env.length)) name body xs
+    | .brk env' => some (.normal (env'.drop (env'.length - env.length)))
 termination_by xs => (fuel, sizeOf body, xs.length + 1)
 
-/-- Run a statement list, up to its end or its first `return`. -/
+/-- Run a statement list, up to its end or its first `return`, `break` or
+`continue`. -/
 def exec (m : Scope) (fuel : Nat) (env : Env N) : List Stmt → Option (Outcome N)
   | [] => some (.normal env)
   | s :: rest => do
@@ -525,6 +744,8 @@ def exec (m : Scope) (fuel : Nat) (env : Env N) : List Stmt → Option (Outcome 
     match ← execStmt m fuel env s with
     | .ret v => some (.ret v)
     | .normal env' => exec m fuel env' rest
+    | .brk env' => some (.brk env')
+    | .cont env' => some (.cont env')
 termination_by ss => (fuel, sizeOf ss, 0)
 
 end
@@ -534,10 +755,9 @@ end
 take the value it returns. -/
 def runIn (p : Program) (key : DeclRef) (args : List (Val N)) (fuel : Nat := 64) : Option (Val N) := do
   let (params, body) ← (functionsOf p).lookup key
-  if params.length != args.length then none
-  match ← execStmt ⟨p, key.file⟩ fuel (params.zip args).reverse body with
+  match ← execStmt ⟨p, key.file⟩ fuel (← bindArgs params args) body with
   | .ret v => some v
-  | .normal _ => none
+  | .normal _ | .brk _ | .cont _ => none
 
 /-- Call the function `name` of the one-file program `m`. -/
 def run (m : Module) (name : String) (args : List (Val N)) (fuel : Nat := 64) : Option (Val N) :=

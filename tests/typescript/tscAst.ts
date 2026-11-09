@@ -219,6 +219,9 @@ class Printer {
   }
 
   private topLevel(s: ts.Statement): Sexp {
+    if (ts.isExportDeclaration(s)) {
+      return this.exportDecl(s);
+    }
     if (ts.isImportDeclaration(s)) {
       return this.importDecl(s);
     }
@@ -227,9 +230,7 @@ class Printer {
     }
     if (ts.isInterfaceDeclaration(s)) {
       const exported = this.modifiers(s, [ts.SyntaxKind.ExportKeyword]).size > 0;
-      if (s.typeParameters !== undefined) {
-        refuse(s, 'generic interface');
-      }
+      const typeParams = this.typeParams(s);
       if (s.heritageClauses !== undefined) {
         refuse(s, 'extends');
       }
@@ -237,19 +238,26 @@ class Printer {
         'interface',
         s,
         [this.name(s.name), ...(exported ? ['export'] : [])],
-        s.members.map((m) => this.field(m)),
+        [...typeParams, ...s.members.map((m) => this.field(m))],
       );
     }
     if (ts.isTypeAliasDeclaration(s)) {
       const exported = this.modifiers(s, [ts.SyntaxKind.ExportKeyword]).size > 0;
-      if (s.typeParameters !== undefined) {
-        refuse(s, 'generic type alias');
-      }
+      const typeParams = this.typeParams(s);
       return this.node(
         'type',
         s,
         [this.name(s.name), ...(exported ? ['export'] : [])],
-        [this.type(s.type)],
+        [...typeParams, this.type(s.type)],
+      );
+    }
+    if (ts.isEnumDeclaration(s)) {
+      const exported = this.modifiers(s, [ts.SyntaxKind.ExportKeyword]).size > 0;
+      return this.node(
+        'enum',
+        s,
+        [this.name(s.name), ...(exported ? ['export'] : [])],
+        s.members.map((m) => this.enumMember(m)),
       );
     }
     if (ts.isVariableStatement(s)) {
@@ -257,6 +265,17 @@ class Printer {
       return this.variable(s, exported);
     }
     return this.statement(s);
+  }
+
+  // `Name = "value"`. A name that is a reserved word is an identifier here.
+  private enumMember(m: ts.EnumMember): Sexp {
+    if (!ts.isIdentifier(m.name)) {
+      refuse(m.name, 'enum member name');
+    }
+    if (m.initializer === undefined || !ts.isStringLiteral(m.initializer)) {
+      refuse(m, 'enum member without a string value');
+    }
+    return this.node('member', m, [m.name.text, JSON.stringify(m.initializer.text)], []);
   }
 
   // `import { a, type B } from "./x.ts"` and `import type { B } from "./x.ts"`.
@@ -284,18 +303,59 @@ class Printer {
     return this.node('import', s, [JSON.stringify(source)], names);
   }
 
+  // `export { a, type B }`, `export type { B }` and `export { a } from "./x.ts"`.
+  private exportDecl(s: ts.ExportDeclaration): Sexp {
+    const clause = s.exportClause;
+    if (clause === undefined || !ts.isNamedExports(clause) || s.attributes !== undefined ||
+        (s.modifiers !== undefined && s.modifiers.length > 0)) {
+      refuse(s, 'export form');
+    }
+    if (clause.elements.length === 0) {
+      refuse(s, 'empty export list');
+    }
+    const names = clause.elements.map((el) => {
+      if (el.propertyName !== undefined || !ts.isIdentifier(el.name)) {
+        refuse(el, 'export alias');
+      }
+      const typeOnly = s.isTypeOnly || el.isTypeOnly;
+      return this.node('name', el.name, [this.name(el.name), ...(typeOnly ? ['type'] : [])], []);
+    });
+    const atoms = s.moduleSpecifier === undefined ? [] : [JSON.stringify((s.moduleSpecifier as ts.StringLiteral).text)];
+    return this.node('export', s, atoms, names);
+  }
+
+  // Type parameters have no constraint, no default and no modifier. Tolean
+  // keeps no span for them.
+  private typeParams(
+    s: ts.FunctionDeclaration | ts.InterfaceDeclaration | ts.TypeAliasDeclaration,
+  ): Array<Sexp> {
+    if (s.typeParameters?.hasTrailingComma) {
+      refuse(s, "',' after the last type parameter");
+    }
+    return (s.typeParameters ?? []).map((tp) => {
+      if (tp.constraint !== undefined) {
+        refuse(tp, 'type parameter with a constraint');
+      }
+      if (tp.default !== undefined) {
+        refuse(tp, 'type parameter with a default');
+      }
+      if ((tp.modifiers ?? []).length > 0) {
+        refuse(tp, 'type parameter with a modifier');
+      }
+      return { head: 'type-param', atoms: [this.name(tp.name)], children: [] };
+    });
+  }
+
   private functionDecl(s: ts.FunctionDeclaration): Sexp {
     const exported = this.modifiers(s, [ts.SyntaxKind.ExportKeyword]).size > 0;
     if (s.asteriskToken !== undefined) {
       refuse(s, 'generator');
     }
-    if (s.typeParameters !== undefined) {
-      refuse(s, 'generic function');
-    }
+    const typeParams = this.typeParams(s);
     if (s.name === undefined || s.body === undefined) {
       refuse(s, 'function without a name or a body');
     }
-    const params = s.parameters.map((p) => this.param(p));
+    const params = s.parameters.map((p) => this.param(p, true));
     const returnType = s.type === undefined ? [] : [this.type(s.type)];
     this.inFunction = true;
     const body = this.statement(s.body);
@@ -304,14 +364,20 @@ class Printer {
       'function',
       s,
       [this.name(s.name), ...(exported ? ['export'] : [])],
-      [...params, ...returnType, body],
+      [...typeParams, ...params, ...returnType, body],
     );
   }
 
-  private param(p: ts.ParameterDeclaration): Sexp {
+  /** A parameter. A function may have an optional one, `x?: T`, but the Lean
+   * parser refuses one in an arrow function, where `(a?: T) => a` starts like
+   * the conditional `(a ? …`. */
+  private param(p: ts.ParameterDeclaration, optionalOK: boolean): Sexp {
     this.modifiers(p, []);
-    if (p.dotDotDotToken !== undefined || p.questionToken !== undefined) {
-      refuse(p, 'rest or optional parameter');
+    if (p.dotDotDotToken !== undefined) {
+      refuse(p, 'rest parameter');
+    }
+    if (p.questionToken !== undefined && !optionalOK) {
+      refuse(p, 'optional parameter of an arrow function');
     }
     if (p.initializer !== undefined) {
       refuse(p, 'default value');
@@ -319,7 +385,7 @@ class Printer {
     return this.node(
       'param',
       p,
-      [this.name(p.name)],
+      [this.name(p.name), ...(p.questionToken !== undefined ? ['optional'] : [])],
       p.type === undefined ? [] : [this.type(p.type)],
     );
   }
@@ -372,6 +438,29 @@ class Printer {
         ...(decl.initializer === undefined ? [] : [this.expr(decl.initializer)]),
       ],
     );
+  }
+
+  /** The declaration at the start of a counted `for`. */
+  private forDeclaration(list: ts.VariableDeclarationList): Sexp {
+    const kind = this.declarationKind(list);
+    const [decl, ...more] = list.declarations;
+    if (decl === undefined || more.length > 0) {
+      refuse(list, 'not exactly one declarator');
+    }
+    if (decl.exclamationToken !== undefined) {
+      refuse(decl, 'definite assignment');
+    }
+    if (kind === 'const' && decl.initializer === undefined) {
+      refuse(decl, 'const without a value');
+    }
+    return {
+      head: kind,
+      atoms: [this.name(decl.name)],
+      children: [
+        ...(decl.type === undefined ? [] : [this.type(decl.type)]),
+        ...(decl.initializer === undefined ? [] : [this.expr(decl.initializer)]),
+      ],
+    };
   }
 
   private declarationKind(list: ts.VariableDeclarationList): 'const' | 'let' {
@@ -452,6 +541,22 @@ class Printer {
         [kind, this.name(decl.name)],
         [this.expr(s.expression), this.loopBody(s.statement)],
       );
+    }
+    if (ts.isForStatement(s)) {
+      // The three parts keep no span in the Lean tree, so their nodes have none.
+      const init: Array<Sexp> = [];
+      if (s.initializer !== undefined) {
+        if (!ts.isVariableDeclarationList(s.initializer)) {
+          refuse(s.initializer, 'for without a declaration');
+        }
+        init.push(this.forDeclaration(s.initializer));
+      }
+      return this.node('for', s, [], [
+        { head: 'init', atoms: [], children: init },
+        { head: 'test', atoms: [], children: s.condition === undefined ? [] : [this.expr(s.condition)] },
+        { head: 'update', atoms: [], children: s.incrementor === undefined ? [] : [this.expr(s.incrementor)] },
+        this.loopBody(s.statement),
+      ]);
     }
     if (ts.isWhileStatement(s)) {
       return this.node('while', s, [], [this.expr(s.expression), this.loopBody(s.statement)]);
@@ -602,6 +707,17 @@ class Printer {
       }
       return this.node('binary', e, [op], [this.expr(e.left), this.expr(e.right)]);
     }
+    if (ts.isAsExpression(e)) {
+      const t = e.type;
+      if (!ts.isTypeReferenceNode(t) || !ts.isIdentifier(t.typeName) || t.typeName.text !== 'const' ||
+          t.typeArguments !== undefined) {
+        refuse(e, 'type assertion other than as const');
+      }
+      return this.node('asConst', e, [], [this.expr(e.expression)]);
+    }
+    if (ts.isSatisfiesExpression(e)) {
+      return this.node('satisfies', e, [], [this.expr(e.expression), this.type(e.type)]);
+    }
     if (ts.isConditionalExpression(e)) {
       return this.node('cond', e, [], [
         this.expr(e.condition),
@@ -620,7 +736,7 @@ class Printer {
       if (ts.isBlock(e.body)) {
         refuse(e, 'arrow function with a body in braces');
       }
-      return this.node('arrow', e, [], [...e.parameters.map((p) => this.param(p)), this.expr(e.body)]);
+      return this.node('arrow', e, [], [...e.parameters.map((p) => this.param(p, false)), this.expr(e.body)]);
     }
     refuse(e, 'unsupported expression');
   }
@@ -737,7 +853,29 @@ class Printer {
     if (ts.isParenthesizedTypeNode(t)) {
       return this.node('type-paren', t, [], [this.type(t.type)]);
     }
+    if (ts.isTupleTypeNode(t)) {
+      return this.node('type-tuple', t, [], this.tupleElements(t));
+    }
+    // `readonly [A, B]`. `readonly` takes the whole array type after it, so
+    // only a tuple may follow.
+    if (ts.isTypeOperatorNode(t) && t.operator === ts.SyntaxKind.ReadonlyKeyword && ts.isTupleTypeNode(t.type)) {
+      return this.node('type-tuple', t, ['readonly'], this.tupleElements(t.type));
+    }
     refuse(t, 'unsupported type');
+  }
+
+  // The elements of a tuple type: at least one, each a plain type, and no `,`
+  // after the last.
+  private tupleElements(t: ts.TupleTypeNode): Array<Sexp> {
+    if (t.elements.length === 0 || t.elements.hasTrailingComma) {
+      refuse(t, 'empty tuple or trailing comma');
+    }
+    return t.elements.map((e) => {
+      if (ts.isNamedTupleMember(e) || ts.isOptionalTypeNode(e) || ts.isRestTypeNode(e)) {
+        refuse(e, 'named, optional or rest tuple element');
+      }
+      return this.type(e);
+    });
   }
 }
 

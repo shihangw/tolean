@@ -36,6 +36,7 @@ theorem Stmt.lines_words : ∀ (st : Stmt) (d : Nat), (st.lines d).map Prod.snd 
     simp [Stmt.lines, Stmt.lines_words t (d + 1), Stmt.lines_words t 1, Stmt.lines_words e (d + 1),
       Stmt.lines_words e 1]
   | .forOfStmt _ _ _ _ body, d => by simp [Stmt.lines, Stmt.lines_words body (d + 1), Stmt.lines_words body 1]
+  | .forStmt _ _ _ _ body, d => by simp [Stmt.lines, Stmt.lines_words body (d + 1), Stmt.lines_words body 1]
   | .whileStmt _ _ body, d => by simp [Stmt.lines, Stmt.lines_words body (d + 1), Stmt.lines_words body 1]
   | .block _ body, d => by simp [Stmt.lines, Stmt.linesOf_words body (d + 1), Stmt.linesOf_words body 1]
   | .switchStmt _ _ cs, d => by
@@ -97,7 +98,7 @@ join that `if`. -/
 def Stmt.openIf : Stmt → Bool
   | .ifStmt _ _ _ none => true
   | .ifStmt _ _ _ (some e) => e.openIf
-  | .whileStmt _ _ b | .forOfStmt _ _ _ _ b => b.openIf
+  | .whileStmt _ _ b | .forOfStmt _ _ _ _ b | .forStmt _ _ _ _ b => b.openIf
   | _ => false
 
 /-- A declaration, which JavaScript does not allow as the body of `if`, `for`
@@ -112,6 +113,18 @@ def VarDecl.wf (T : Edition) (d : VarDecl) : Bool :=
 
 /-- An expression in `( … )` after `if`, `while`, `for … of` or `switch`. -/
 def Expr.wfParen (T : Edition) (e : Expr) : Bool := e.wfAt T .assign && e.afterOK [.punct ")"]
+
+/-- The declaration at the start of a counted `for`, or none. Its value has no
+`in` outside brackets, as the parser requires. -/
+def VarDecl.forWF (T : Edition) : Option VarDecl → Bool
+  | some d => d.wf T && d.inFree
+  | none => true
+
+/-- The test of a counted `for`, which a `;` follows, or its update, which a
+`)` follows, or none. -/
+def Expr.optWF (T : Edition) (stop : String) : Option Expr → Bool
+  | some e => e.wfAt T .assign && e.afterOK [.punct stop]
+  | none => true
 
 /-- The test of a `case` clause, which a `:` follows, or none for `default`.
 It has no `<` or `<<`, as the parser requires. -/
@@ -132,6 +145,8 @@ def Stmt.wf (T : Edition) (fn loop : Bool) : Stmt → Bool
   | .ifStmt _ test t (some e) =>
     test.wfParen T && !t.isDecl && t.wf T fn loop && !t.openIf && !e.isDecl && e.wf T fn loop
   | .forOfStmt _ _ name it body => exprName name && it.wfParen T && !body.isDecl && body.wf T fn true
+  | .forStmt _ init test update body =>
+    VarDecl.forWF T init && Expr.optWF T ";" test && Expr.optWF T ")" update && !body.isDecl && body.wf T fn true
   | .whileStmt _ test body => test.wfParen T && !body.isDecl && body.wf T fn true
   | .block _ body => Stmt.allWF T fn loop body
   | .breakStmt _ | .continueStmt _ => loop
@@ -161,7 +176,7 @@ mutual
 def Stmt.depth : Stmt → Nat
   | .ifStmt _ _ t none => t.depth + 1
   | .ifStmt _ _ t (some e) => max t.depth e.depth + 1
-  | .forOfStmt _ _ _ _ b | .whileStmt _ _ b => b.depth + 1
+  | .forOfStmt _ _ _ _ b | .forStmt _ _ _ _ b | .whileStmt _ _ b => b.depth + 1
   | .block _ body => Stmt.depthOf body + 1
   | .switchStmt _ _ cs => Stmt.depthClauses cs + 1
   | .varDecl .. | .exprStmt .. | .returnStmt .. | .breakStmt _ | .continueStmt _ | .empty _ => 0
@@ -203,9 +218,9 @@ theorem varDecl_ss {T : Edition} (kind : VarKind) (name : String) (t : TypeExpr)
     (hd : VarDecl.wf T ⟨kind, name, some t, some e⟩ = true)
     (s : ParseState) (ts rest : List Token) (hT : s.target = T) (hs : s.rest = ts ++ rest)
     (hl : s.left = s.rest.length) (ht : Touching ts (VarDecl.words ⟨kind, name, some t, some e⟩))
-    (hn : ∀ y ∈ ts.tail, NoBreak y) (hr : rest ≠ []) :
-    ∃ d' s', Parse.parseVarDecl s = .ok d' s' ∧ d'.erase = VarDecl.erase ⟨kind, name, some t, some e⟩ ∧
-      Leaves s s' rest := by
+    (hn : ∀ y ∈ ts.tail, NoBreak y) :
+    ∃ d' s' ts' semi, ts = ts' ++ [semi] ∧ semi.kind = .punct ";" ∧ Parse.parseDeclaration s = .ok d' s' ∧
+      d'.erase = VarDecl.erase ⟨kind, name, some t, some e⟩ ∧ Leaves s s' (semi :: rest) := by
   simp only [VarDecl.wf, Bool.and_eq_true] at hd
   obtain ⟨⟨hname, hwt⟩, hwe, hae⟩ := hd
   have hname' : name ∉ Parse.refusedNames := by simpa [exprName] using hname
@@ -235,9 +250,9 @@ theorem varDecl_ss {T : Edition} (kind : VarKind) (name : String) (t : TypeExpr)
     (endsAssign_separator hsemi (by simp [separators])) (by simpa [hsemi] using afterOK_semicolon hae _)
   have hs₆ : s₆.rest = semi :: rest := hL₆.rest_eq
   have hnot : nm.kind ≠ .punct "[" ∧ nm.kind ≠ .punct "{" := by rw [hnm]; simp
-  refine ⟨⟨kind, name, some t', some e'⟩, { s₆ with rest := rest, left := s₆.left - 1, lastStop := semi.span.stop },
-    ?_, by simp [VarDecl.erase, het', he'], ?_⟩
-  · simp only [Parse.parseVarDecl]
+  refine ⟨⟨kind, name, some t', some e'⟩, s₆, kw :: nm :: colon :: (tts ++ eq :: ets), semi, by simp, hsemi, ?_,
+    by simp [VarDecl.erase, het', he'], ?_⟩
+  · simp only [Parse.parseDeclaration]
     rw [Parse.bind_eq (Parse.advance_eq hs'), Parse.bind_eq (Parse.peek_eq (s := s₁) rfl)]
     rw [Parse.ite_guard (fun h => by simp [Token.isPunct, hnot] at h)]
     rw [Parse.bind_eq (readName_ok (s := s₁) rfl hnm hname'), Parse.bind_eq (Parse.peek_eq (s := s₂) rfl)]
@@ -253,20 +268,19 @@ theorem varDecl_ss {T : Edition} (kind : VarKind) (name : String) (t : TypeExpr)
     simp (config := { decide := true }) only [↓reduceIte, beq_iff_eq,
       TokenKind.punct.injEq, Parse.pure_bind,
       hsemi]
-    rw [Parse.bind_eq (endStatement_semi hs₆ hr hsemi)]
     cases kind <;> simp [hkw, VarKind.token, pure, EStateM.pure]
   · exact leaves_trans (leaves_advance hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))
       (leaves_trans (leaves_advance (s := s₂) rfl (by simp [s₂, s₁, hl, hs'])) (leaves_trans hL₄
-        (leaves_trans (leaves_advance hs₄ hl₄) (leaves_trans hL₆ (leaves_advance hs₆ (by rw [hL₆.left_eq, hs₆])))))))
+        (leaves_trans (leaves_advance hs₄ hl₄) hL₆))))
 
 /-- `const x = e;` or `let x = e;`. -/
 theorem varDecl_ns {T : Edition} (kind : VarKind) (name : String) (e : Expr)
     (hd : VarDecl.wf T ⟨kind, name, none, some e⟩ = true)
     (s : ParseState) (ts rest : List Token) (hT : s.target = T) (hs : s.rest = ts ++ rest)
     (hl : s.left = s.rest.length) (ht : Touching ts (VarDecl.words ⟨kind, name, none, some e⟩))
-    (hn : ∀ y ∈ ts.tail, NoBreak y) (hr : rest ≠ []) :
-    ∃ d' s', Parse.parseVarDecl s = .ok d' s' ∧ d'.erase = VarDecl.erase ⟨kind, name, none, some e⟩ ∧
-      Leaves s s' rest := by
+    (hn : ∀ y ∈ ts.tail, NoBreak y) :
+    ∃ d' s' ts' semi, ts = ts' ++ [semi] ∧ semi.kind = .punct ";" ∧ Parse.parseDeclaration s = .ok d' s' ∧
+      d'.erase = VarDecl.erase ⟨kind, name, none, some e⟩ ∧ Leaves s s' (semi :: rest) := by
   simp only [VarDecl.wf, Bool.and_eq_true] at hd
   obtain ⟨⟨hname, -⟩, hwe, hae⟩ := hd
   have hname' : name ∉ Parse.refusedNames := by simpa [exprName] using hname
@@ -287,9 +301,9 @@ theorem varDecl_ns {T : Edition} (kind : VarKind) (name : String) (e : Expr)
     (endsAssign_separator hsemi (by simp [separators])) (by simpa [hsemi] using afterOK_semicolon hae _)
   have hs₆ : s₆.rest = semi :: rest := hL₆.rest_eq
   have hnot : nm.kind ≠ .punct "[" ∧ nm.kind ≠ .punct "{" := by rw [hnm]; simp
-  refine ⟨⟨kind, name, none, some e'⟩, { s₆ with rest := rest, left := s₆.left - 1, lastStop := semi.span.stop },
-    ?_, by simp [VarDecl.erase, he'], ?_⟩
-  · simp only [Parse.parseVarDecl]
+  refine ⟨⟨kind, name, none, some e'⟩, s₆, kw :: nm :: eq :: ets, semi, by simp, hsemi, ?_,
+    by simp [VarDecl.erase, he'], ?_⟩
+  · simp only [Parse.parseDeclaration]
     rw [Parse.bind_eq (Parse.advance_eq hs'), Parse.bind_eq (Parse.peek_eq (s := s₁) rfl)]
     rw [Parse.ite_guard (fun h => by simp [Token.isPunct, hnot] at h)]
     rw [Parse.bind_eq (readName_ok (s := s₁) rfl hnm hname'), Parse.bind_eq (Parse.peek_eq (s := s₂) rfl)]
@@ -304,20 +318,18 @@ theorem varDecl_ns {T : Edition} (kind : VarKind) (name : String) (e : Expr)
     simp (config := { decide := true }) only [↓reduceIte, beq_iff_eq,
       TokenKind.punct.injEq, Parse.pure_bind,
       hsemi]
-    rw [Parse.bind_eq (endStatement_semi hs₆ hr hsemi)]
     cases kind <;> simp [hkw, VarKind.token, pure, EStateM.pure]
   · exact leaves_trans (leaves_advance hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))
-      (leaves_trans (leaves_advance (s := s₂) rfl (by simp [s₂, s₁, hl, hs'])) (leaves_trans hL₆
-        (leaves_advance hs₆ (by rw [hL₆.left_eq, hs₆])))))
+      (leaves_trans (leaves_advance (s := s₂) rfl (by simp [s₂, s₁, hl, hs'])) hL₆))
 
 /-- `let x: T;`. -/
 theorem varDecl_sn {T : Edition} (kind : VarKind) (name : String) (t : TypeExpr)
     (hd : VarDecl.wf T ⟨kind, name, some t, none⟩ = true)
     (s : ParseState) (ts rest : List Token) (hs : s.rest = ts ++ rest)
     (hl : s.left = s.rest.length) (ht : Touching ts (VarDecl.words ⟨kind, name, some t, none⟩))
-    (hn : ∀ y ∈ ts.tail, NoBreak y) (hr : rest ≠ []) :
-    ∃ d' s', Parse.parseVarDecl s = .ok d' s' ∧ d'.erase = VarDecl.erase ⟨kind, name, some t, none⟩ ∧
-      Leaves s s' rest := by
+    (hn : ∀ y ∈ ts.tail, NoBreak y) :
+    ∃ d' s' ts' semi, ts = ts' ++ [semi] ∧ semi.kind = .punct ";" ∧ Parse.parseDeclaration s = .ok d' s' ∧
+      d'.erase = VarDecl.erase ⟨kind, name, some t, none⟩ ∧ Leaves s s' (semi :: rest) := by
   simp only [VarDecl.wf, Bool.and_eq_true] at hd
   obtain ⟨⟨hname, hwt⟩, hlet⟩ := hd
   cases kind
@@ -340,9 +352,9 @@ theorem varDecl_sn {T : Edition} (kind : VarKind) (name : String) (t : TypeExpr)
     htt.kinds (fun y hy => hn y (by simp [hy])) (by simp) (followsType_eq_semi (.inr hsemi))
   have hs₄ : s₄.rest = semi :: rest := hL₄.rest_eq
   have hnot : nm.kind ≠ .punct "[" ∧ nm.kind ≠ .punct "{" := by rw [hnm]; simp
-  refine ⟨⟨.«let», name, some t', none⟩, { s₄ with rest := rest, left := s₄.left - 1, lastStop := semi.span.stop },
-    ?_, by simp [VarDecl.erase, het'], ?_⟩
-  · simp only [Parse.parseVarDecl]
+  refine ⟨⟨.«let», name, some t', none⟩, s₄, kw :: nm :: colon :: tts, semi, by simp, hsemi, ?_,
+    by simp [VarDecl.erase, het'], ?_⟩
+  · simp only [Parse.parseDeclaration]
     rw [Parse.bind_eq (Parse.advance_eq hs'), Parse.bind_eq (Parse.peek_eq (s := s₁) rfl)]
     rw [Parse.ite_guard (fun h => by simp [Token.isPunct, hnot] at h)]
     rw [Parse.bind_eq (readName_ok (s := s₁) rfl hnm hname'), Parse.bind_eq (Parse.peek_eq (s := s₂) rfl)]
@@ -358,20 +370,17 @@ theorem varDecl_sn {T : Edition} (kind : VarKind) (name : String) (t : TypeExpr)
     simp (config := { decide := true }) only [↓reduceIte, beq_iff_eq,
       TokenKind.punct.injEq, Parse.pure_bind,
       reduceCtorEq, hsemi, hkw]
-    rw [Parse.bind_eq (endStatement_semi hs₄ hr hsemi)]
     simp [pure, EStateM.pure]
   · exact leaves_trans (leaves_advance hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))
-      (leaves_trans (leaves_advance (s := s₂) rfl (by simp [s₂, s₁, hl, hs'])) (leaves_trans hL₄
-        (leaves_advance hs₄ (by rw [hL₄.left_eq, hs₄])))))
+      (leaves_trans (leaves_advance (s := s₂) rfl (by simp [s₂, s₁, hl, hs'])) hL₄))
 
 /-- `let x;`. -/
 theorem varDecl_nn {T : Edition} (kind : VarKind) (name : String)
     (hd : VarDecl.wf T ⟨kind, name, none, none⟩ = true)
     (s : ParseState) (ts rest : List Token) (hs : s.rest = ts ++ rest)
-    (hl : s.left = s.rest.length) (ht : Touching ts (VarDecl.words ⟨kind, name, none, none⟩))
-    (hr : rest ≠ []) :
-    ∃ d' s', Parse.parseVarDecl s = .ok d' s' ∧ d'.erase = VarDecl.erase ⟨kind, name, none, none⟩ ∧
-      Leaves s s' rest := by
+    (hl : s.left = s.rest.length) (ht : Touching ts (VarDecl.words ⟨kind, name, none, none⟩)) :
+    ∃ d' s' ts' semi, ts = ts' ++ [semi] ∧ semi.kind = .punct ";" ∧ Parse.parseDeclaration s = .ok d' s' ∧
+      d'.erase = VarDecl.erase ⟨kind, name, none, none⟩ ∧ Leaves s s' (semi :: rest) := by
   simp only [VarDecl.wf, Bool.and_eq_true] at hd
   obtain ⟨⟨hname, -⟩, hlet⟩ := hd
   cases kind
@@ -386,11 +395,9 @@ theorem varDecl_nn {T : Edition} (kind : VarKind) (name : String)
   have hs' : s.rest = kw :: nm :: semi :: rest := by simpa using hs
   let s₁ := past s kw (nm :: (semi :: rest))
   let s₂ := past s₁ nm (semi :: rest)
-  obtain ⟨u, r, rfl⟩ := List.exists_cons_of_ne_nil hr
   have hnot : nm.kind ≠ .punct "[" ∧ nm.kind ≠ .punct "{" := by rw [hnm]; simp
-  refine ⟨⟨.«let», name, none, none⟩, { s₂ with rest := u :: r, left := s₂.left - 1, lastStop := semi.span.stop },
-    ?_, rfl, ?_⟩
-  · simp only [Parse.parseVarDecl]
+  refine ⟨⟨.«let», name, none, none⟩, s₂, [kw, nm], semi, by simp, hsemi, ?_, rfl, ?_⟩
+  · simp only [Parse.parseDeclaration]
     rw [Parse.bind_eq (Parse.advance_eq hs'), Parse.bind_eq (Parse.peek_eq (s := s₁) rfl)]
     rw [Parse.ite_guard (fun h => by simp [Token.isPunct, hnot] at h)]
     rw [Parse.bind_eq (readName_ok (s := s₁) rfl hnm hname'), Parse.bind_eq (Parse.peek_eq (s := s₂) rfl)]
@@ -405,23 +412,36 @@ theorem varDecl_nn {T : Edition} (kind : VarKind) (name : String)
     simp (config := { decide := true }) only [↓reduceIte, beq_iff_eq,
       TokenKind.punct.injEq, Parse.pure_bind,
       reduceCtorEq, hsemi, hkw]
-    rw [Parse.bind_eq (endStatement_semi (s := s₂) rfl (by simp) hsemi)]
     simp [pure, EStateM.pure]
-  · exact leaves_trans (leaves_advance hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))
-      (leaves_advance (s := s₂) rfl (by simp [s₂, s₁, hl, hs'])))
+  · exact leaves_trans (leaves_advance hs' hl) (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))
 
-/-- `const` or `let`, a name, and a type, a value, both or neither. -/
+/-- `const` or `let`, a name, and a type, a value, both or neither, up to the
+`;` that the printer puts after it. -/
+theorem parseDeclaration_reads {T : Edition} (d : VarDecl) (hd : d.wf T = true) :
+    ∀ (s : ParseState) (ts rest : List Token), s.target = T → s.rest = ts ++ rest → s.left = s.rest.length →
+      Touching ts d.words → (∀ y ∈ ts.tail, NoBreak y) →
+      ∃ d' s' ts' semi, ts = ts' ++ [semi] ∧ semi.kind = .punct ";" ∧ Parse.parseDeclaration s = .ok d' s' ∧
+        d'.erase = d.erase ∧ Leaves s s' (semi :: rest) := by
+  intro s ts rest hT hs hl ht hn
+  obtain ⟨kind, name, type, init⟩ := d
+  rcases type with _ | t <;> rcases init with _ | e
+  · exact varDecl_nn kind name hd s ts rest hs hl ht
+  · exact varDecl_ns kind name e hd s ts rest hT hs hl ht hn
+  · exact varDecl_sn kind name t hd s ts rest hs hl ht hn
+  · exact varDecl_ss kind name t e hd s ts rest hT hs hl ht hn
+
+/-- A declaration and its `;`. -/
 theorem parseVarDecl_reads {T : Edition} (d : VarDecl) (hd : d.wf T = true) :
     ∀ (s : ParseState) (ts rest : List Token), s.target = T → s.rest = ts ++ rest → s.left = s.rest.length →
       Touching ts d.words → (∀ y ∈ ts.tail, NoBreak y) → rest ≠ [] →
       ∃ d' s', Parse.parseVarDecl s = .ok d' s' ∧ d'.erase = d.erase ∧ Leaves s s' rest := by
   intro s ts rest hT hs hl ht hn hr
-  obtain ⟨kind, name, type, init⟩ := d
-  rcases type with _ | t <;> rcases init with _ | e
-  · exact varDecl_nn kind name hd s ts rest hs hl ht hr
-  · exact varDecl_ns kind name e hd s ts rest hT hs hl ht hn hr
-  · exact varDecl_sn kind name t hd s ts rest hs hl ht hn hr
-  · exact varDecl_ss kind name t e hd s ts rest hT hs hl ht hn hr
+  obtain ⟨d', s', ts', semi, -, hsemi, hp, hd', hL⟩ := parseDeclaration_reads d hd s ts rest hT hs hl ht hn
+  refine ⟨d', { s' with rest := rest, left := s'.left - 1, lastStop := semi.span.stop }, ?_, hd',
+    leaves_trans hL (leaves_advance hL.rest_eq (by rw [hL.left_eq, hL.rest_eq]))⟩
+  simp only [Parse.parseVarDecl]
+  rw [Parse.bind_eq hp, Parse.bind_eq (endStatement_semi hL.rest_eq hr hsemi)]
+  rfl
 
 /-! ### Reading a statement -/
 
@@ -543,6 +563,12 @@ theorem Expr.firstWord : ∀ e : Expr, ∃ w ws, e.words = w :: ws ∧ w ≠ []
     exact ⟨w, _, by simp only [Expr.words, h, List.cons_append]; exact rfl, hw⟩
   | .assign _ _ t _ => by
     obtain ⟨w, ws, h, hw⟩ := Expr.firstWord t
+    exact ⟨w, _, by simp only [Expr.words, h, List.cons_append]; exact rfl, hw⟩
+  | .asConst _ l => by
+    obtain ⟨w, ws, h, hw⟩ := Expr.firstWord l
+    exact ⟨w, _, by simp only [Expr.words, h, List.cons_append]; exact rfl, hw⟩
+  | .satisfies _ l _ => by
+    obtain ⟨w, ws, h, hw⟩ := Expr.firstWord l
     exact ⟨w, _, by simp only [Expr.words, h, List.cons_append]; exact rfl, hw⟩
 
 /-- No line break comes before the token after a word of one token, when a
@@ -713,6 +739,7 @@ theorem Stmt.first {T : Edition} {fn loop : Bool} (st : Stmt) (hw : st.wf T fn l
     refine ⟨.keyword "if", ?_, by simp [StartsStmt]⟩
     cases e <;> simp [Stmt.wordLines, Stmt.lines, keywordWord]
   | forOfStmt _ _ _ _ _ => exact ⟨.keyword "for", by simp [Stmt.wordLines, Stmt.lines, keywordWord], by simp [StartsStmt]⟩
+  | forStmt _ _ _ _ _ => exact ⟨.keyword "for", by simp [Stmt.wordLines, Stmt.lines, keywordWord], by simp [StartsStmt]⟩
   | whileStmt _ _ _ => exact ⟨.keyword "while", by simp [Stmt.wordLines, Stmt.lines, keywordWord], by simp [StartsStmt]⟩
   | block _ _ => exact ⟨.punct "{", by simp [Stmt.wordLines, Stmt.lines, punctWord], by simp [StartsStmt]⟩
   | breakStmt _ => exact ⟨.keyword "break", by simp [Stmt.wordLines, Stmt.lines, keywordWord], by simp [StartsStmt]⟩
@@ -1139,21 +1166,274 @@ theorem parseForOf_reads {T : Edition} {fn loop : Bool} (h : Nat) (sp : Span) (k
           (leaves_trans (leaves_advance (s := s₄) rfl (by simp [s₄, s₃, s₂, s₁, hl, hs']))
             (leaves_trans hL₆ (leaves_trans (leaves_advance hs₆ (by rw [hL₆.left_eq, hs₆])) (leaves_withLoop hL₈)))))))
 
+/-- `countedFor` looks at the third and fifth tokens and reads nothing. -/
+theorem Parse.countedFor_eq (s : ParseState) :
+    Parse.countedFor s = .ok ((s.rest[2]?.getD s.eof).isPunct ";" ||
+      (((s.rest[2]?.getD s.eof).isKeyword "const" || (s.rest[2]?.getD s.eof).isIdent "let") &&
+        !(s.rest[4]?.getD s.eof).isIdent "of" && !(s.rest[4]?.getD s.eof).isKeyword "in")) s := by
+  simp only [Parse.countedFor]
+  rw [Parse.bind_eq (Parse.peekAt_rest s 2), Parse.bind_eq (Parse.peekAt_rest s 4)]
+  rfl
+
 /-- `parseStatement` reads `for … of` with `parseForOf`. -/
-theorem stmt_for {T : Edition} {fn loop : Bool} (f : Nat) (st : Stmt)
-    (hst : ∃ sp kind name it body, st = .forOfStmt sp kind name it body)
-    (h : ReadsS T fn loop (Parse.parseForOf f) st) :
-    ReadsS T fn loop (Parse.parseStatement (f + 1)) st := by
+theorem stmt_for {T : Edition} {fn loop : Bool} (f : Nat) (sp : Span) (kind : VarKind) (name : String)
+    (it : Expr) (body : Stmt) (h : ReadsS T fn loop (Parse.parseForOf f) (.forOfStmt sp kind name it body)) :
+    ReadsS T fn loop (Parse.parseStatement (f + 1)) (.forOfStmt sp kind name it body) := by
   intro s ts rest hT hF hL hs hl ht hr he
-  obtain ⟨sp, kind, name, it, body, rfl⟩ := hst
   obtain ⟨st', s', hp, hst', hL'⟩ := h s ts rest hT hF hL hs hl ht hr he
   refine ⟨st', s', ?_, hst', hL'⟩
   simp only [Stmt.wordLines, Stmt.lines, List.map_cons] at ht
   obtain ⟨a, b, rfl, ha, _⟩ := Laid.cons ht
-  obtain ⟨fk, a', rfl, hfk, _⟩ := Touching.cons_one (by simpa [keywordWord] using ha)
+  simp only [VarKind.word_eq] at ha
+  obtain ⟨fk, a₁, rfl, hfk, h₁⟩ := Touching.cons_one (by simpa [keywordWord] using ha)
+  obtain ⟨lp, a₂, rfl, -, h₂⟩ := Touching.cons_one (by simpa [punctWord] using h₁)
+  obtain ⟨kk, a₃, rfl, hkk, h₃⟩ := Touching.cons_one h₂
+  obtain ⟨nm, a₄, rfl, -, h₄⟩ := Touching.cons_one (by simpa [identWord] using h₃)
+  obtain ⟨ofk, a₅, rfl, hofk, -⟩ := Touching.cons_one (by simpa [identWord] using h₄)
+  have hs' : s.rest = fk :: lp :: kk :: nm :: ofk :: (a₅ ++ (b ++ rest)) := by simpa using hs
   simp only [Parse.parseStatement]
-  rw [Parse.bind_eq (Parse.peek_eq (by simpa using hs))]
+  rw [Parse.bind_eq (Parse.peek_eq hs')]
   simp only [hfk]
+  rw [Parse.bind_eq (Parse.countedFor_eq s)]
+  simp only [hs', List.getElem?_cons_succ, List.getElem?_cons_zero, Option.getD_some]
+  cases kind <;> simp only [VarKind.token] at hkk <;>
+    simp (config := { decide := true }) only [Token.isPunct, Token.isKeyword, Token.isIdent, hkk, hofk,
+      ↓reduceIte] <;> exact hp
+
+/-- `p`, when the next token is not `stop`. -/
+theorem Parse.unlessPunct_some {α : Type} {stop : String} {p : ParseM α} {s s' : ParseState} {x : Token}
+    {r : List Token} {a : α} (hs : s.rest = x :: r) (hx : x.kind ≠ .punct stop) (hp : p s = .ok a s') :
+    Parse.unlessPunct stop p s = .ok (some a) s' := by
+  simp only [Parse.unlessPunct]
+  rw [Parse.bind_eq (Parse.peek_eq hs)]
+  have hb : x.isPunct stop = false := by simp [Token.isPunct, hx]
+  simp only [hb, Bool.false_eq_true, ↓reduceIte, Parse.pure_bind]
+  rw [Parse.bind_eq hp]
+  rfl
+
+/-- Nothing, when the next token is `stop`. -/
+theorem Parse.unlessPunct_none {α : Type} {stop : String} {p : ParseM α} {s : ParseState} {x : Token}
+    {r : List Token} (hs : s.rest = x :: r) (hx : x.kind = .punct stop) :
+    Parse.unlessPunct stop p s = .ok none s := by
+  simp only [Parse.unlessPunct]
+  rw [Parse.bind_eq (Parse.peek_eq hs)]
+  simp only [Token.isPunct, hx, beq_self_eq_true, ↓reduceIte]
+  rfl
+
+mutual
+
+theorem Expr.inFree_erase : ∀ e : Expr, e.erase.inFree = e.inFree
+  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .object .. | .paren .. => rfl
+  | .array _ es => by simp only [Expr.erase, Expr.inFree]; exact Expr.inFreeList_eraseAll es
+  | .member _ e _ => by simp only [Expr.erase, Expr.inFree]; exact Expr.inFree_erase e
+  | .optMember _ e _ => by simp only [Expr.erase, Expr.inFree]; exact Expr.inFree_erase e
+  | .index _ e _ => by simp only [Expr.erase, Expr.inFree]; exact Expr.inFree_erase e
+  | .call _ e _ => by simp only [Expr.erase, Expr.inFree]; exact Expr.inFree_erase e
+  | .unary _ _ e => by simp only [Expr.erase, Expr.inFree]; exact Expr.inFree_erase e
+  | .prefix _ _ e => by simp only [Expr.erase, Expr.inFree]; exact Expr.inFree_erase e
+  | .postfix _ _ e => by simp only [Expr.erase, Expr.inFree]; exact Expr.inFree_erase e
+  | .arrow _ _ _ e => by simp only [Expr.erase, Expr.inFree]; exact Expr.inFree_erase e
+  | .cond _ a _ c => by simp only [Expr.erase, Expr.inFree, Expr.inFree_erase a, Expr.inFree_erase c]
+  | .assign _ _ a b => by simp only [Expr.erase, Expr.inFree, Expr.inFree_erase a, Expr.inFree_erase b]
+  | .binary _ _ l r => by simp only [Expr.erase, Expr.inFree, Expr.inFree_erase l, Expr.inFree_erase r]
+  | .asConst _ e => by simp only [Expr.erase, Expr.inFree]; exact Expr.inFree_erase e
+  | .satisfies _ e _ => by simp only [Expr.erase, Expr.inFree]; exact Expr.inFree_erase e
+
+theorem Expr.inFreeList_eraseAll : ∀ es : List Expr, Expr.inFreeList (Expr.eraseAll es) = Expr.inFreeList es
+  | [] => rfl
+  | e :: es => by simp only [Expr.eraseAll, Expr.inFreeList, Expr.inFree_erase e, Expr.inFreeList_eraseAll es]
+
+end
+
+theorem VarDecl.inFree_erase (d : VarDecl) : d.erase.inFree = d.inFree := by
+  obtain ⟨kind, name, type, init⟩ := d
+  cases init <;> simp [VarDecl.erase, VarDecl.inFree, Expr.inFree_erase]
+
+/-- The tokens of a declaration: `const` or `let`, the name, and then `:`, `=` or `;`. -/
+theorem VarDecl.three_tokens {ts : List Token} (d : VarDecl) (h : Touching ts d.words) :
+    ∃ kw nm x ts', ts = kw :: nm :: x :: ts' ∧ kw.kind = d.kind.token ∧
+      (x.kind = .punct ":" ∨ x.kind = .punct "=" ∨ x.kind = .punct ";") := by
+  have hk := h.kinds
+  obtain ⟨kind, name, type, init⟩ := d
+  have hw : ∃ x ws, (VarDecl.words ⟨kind, name, type, init⟩).flatten = kind.token :: .ident name :: x :: ws ∧
+      (x = .punct ":" ∨ x = .punct "=" ∨ x = .punct ";") := by
+    rcases type with _ | t <;> rcases init with _ | e <;>
+      simp [VarDecl.words, VarKind.word_eq, typeAnnotation, identWord, punctWord]
+  obtain ⟨x, ws, hx, hxk⟩ := hw
+  rw [hx] at hk
+  match ts, hk with
+  | [_], hk | [_, _], hk => simp at hk
+  | a :: b :: c :: ts', hk =>
+    simp only [List.map_cons, List.cons.injEq] at hk
+    exact ⟨a, b, c, ts', rfl, hk.1, hk.2.2.1 ▸ hxk⟩
+
+/-- The declaration at the start of a counted `for`, up to its `;`. -/
+theorem parseForDeclaration_reads {T : Edition} (d : VarDecl) (hd : d.wf T = true) (hi : d.inFree = true)
+    (s : ParseState) (ts rest : List Token) (hT : s.target = T) (hs : s.rest = ts ++ rest)
+    (hl : s.left = s.rest.length) (ht : Touching ts d.words) (hn : ∀ y ∈ ts.tail, NoBreak y) :
+    ∃ d' s' ts' semi, ts = ts' ++ [semi] ∧ semi.kind = .punct ";" ∧ Parse.parseForDeclaration s = .ok d' s' ∧
+      d'.erase = d.erase ∧ Leaves s s' (semi :: rest) := by
+  obtain ⟨d', s', ts', semi, hts, hsemi, hp, hd', hL⟩ := parseDeclaration_reads d hd s ts rest hT hs hl ht hn
+  refine ⟨d', s', ts', semi, hts, hsemi, ?_, hd', hL⟩
+  have hi' : d'.inFree = true := by rw [← VarDecl.inFree_erase, hd', VarDecl.inFree_erase]; exact hi
+  obtain ⟨kw, nm, x, ts'', hts', hkw, -⟩ := VarDecl.three_tokens d ht
+  have hs' : s.rest = kw :: (nm :: x :: ts'' ++ rest) := by rw [hs, hts']; simp
+  have hk : (kw.isKeyword "const" || kw.isIdent "let") = true := by
+    simp only [Token.isKeyword, Token.isIdent, hkw]; cases d.kind <;> simp [VarKind.token]
+  simp only [Parse.parseForDeclaration]
+  rw [Parse.bind_eq (Parse.peek_eq hs'), if_pos hk, Parse.pure_bind, Parse.bind_eq hp,
+    Parse.ite_guard (fun h => absurd h (by simp [hi']))]
+  rfl
+
+/-- The first part of a counted `for` and its `;`: nothing, or a declaration. -/
+theorem forInit_reads {T : Edition} (init : Option VarDecl) (hw : VarDecl.forWF T init = true)
+    (s : ParseState) (ts rest : List Token) (hT : s.target = T) (hs : s.rest = ts ++ rest)
+    (hl : s.left = s.rest.length) (ht : Touching ts (forInitWords init)) (hn : ∀ y ∈ ts.tail, NoBreak y)
+    (hr : rest ≠ []) :
+    ∃ i' s₁ semi s₂, Parse.unlessPunct ";" Parse.parseForDeclaration s = .ok i' s₁ ∧
+      Parse.expectPunct ";" s₁ = .ok semi s₂ ∧ i'.map VarDecl.erase = init.map VarDecl.erase ∧
+      Leaves s s₂ rest := by
+  cases init with
+  | none =>
+    obtain ⟨semi, ts', rfl, hsemi, h'⟩ := Touching.cons_one (by simpa [forInitWords, punctWord] using ht)
+    simp [Touching] at h'; subst h'
+    have hs' : s.rest = semi :: rest := by simpa using hs
+    exact ⟨none, s, semi, _, Parse.unlessPunct_none hs' hsemi, Parse.expectPunct_ok hs' hr hsemi, rfl,
+      leaves_advance hs' hl⟩
+  | some d =>
+    simp only [VarDecl.forWF, Bool.and_eq_true] at hw
+    simp only [forInitWords] at ht
+    obtain ⟨d', s', ts', semi, rfl, hsemi, hp, hd', hL⟩ :=
+      parseForDeclaration_reads d hw.1 hw.2 s ts rest hT hs hl ht hn
+    obtain ⟨kw, nm, x, ts'', hts, hkw, -⟩ := VarDecl.three_tokens d ht
+    have hkw' : kw.kind ≠ .punct ";" := by rw [hkw]; cases d.kind <;> simp [VarKind.token]
+    have hs' : s.rest = kw :: (nm :: x :: ts'' ++ rest) := by rw [hs, hts]; simp
+    exact ⟨some d', s', semi, _, Parse.unlessPunct_some hs' hkw' hp, Parse.expectPunct_ok hL.rest_eq hr hsemi,
+      by simp [hd'], leaves_trans hL (leaves_advance hL.rest_eq (by rw [hL.left_eq, hL.rest_eq]))⟩
+
+/-- The test or the update of a counted `for`, or nothing, before the `;` or
+`)` that `stop` names. -/
+theorem forPart_reads {T : Edition} {stop : String} (hstop : stop = ";" ∨ stop = ")") (o : Option Expr)
+    (hw : Expr.optWF T stop o = true) (s : ParseState) (ts : List Token) (c : Token) (rest : List Token)
+    (hT : s.target = T) (hs : s.rest = ts ++ c :: rest) (hl : s.left = s.rest.length)
+    (ht : Touching ts (optWords o)) (hn : ∀ y ∈ ts.tail, NoBreak y) (hc : c.kind = .punct stop) :
+    ∃ o' s', Parse.unlessPunct stop (do Parse.parseExpression (← Parse.budget)) s = .ok o' s' ∧
+      o'.map Expr.erase = o.map Expr.erase ∧ Leaves s s' (c :: rest) := by
+  cases o with
+  | none =>
+    simp [optWords, Touching] at ht; subst ht
+    have hs' : s.rest = c :: rest := by simpa using hs
+    exact ⟨none, s, Parse.unlessPunct_none hs' hc, rfl, Leaves.refl hs' (by rw [hl, hs'])⟩
+  | some e =>
+    simp only [Expr.optWF, Bool.and_eq_true] at hw
+    simp only [optWords] at ht
+    obtain ⟨x, ts', rfl, hx⟩ := Touching.head ht
+    have hxs : x.kind ≠ .punct stop := fun h => by
+      rw [h] at hx; rcases hstop with rfl | rfl <;> simp [startsExpr] at hx
+    have hE : EndsExpr (c :: rest) := ⟨endsAssign_separator hc (by rcases hstop with rfl | rfl <;> simp [separators]),
+      fun u hu => by simp at hu; subst hu; rw [hc]; rcases hstop with rfl | rfl <;> exact punct_ne (by decide)⟩
+    have ha : e.afterOK ((c :: rest).map (·.kind)) = true := by
+      rcases hstop with rfl | rfl
+      · simpa [hc] using afterOK_semicolon hw.2 _
+      · simpa [hc] using afterOK_closer hw.2 _
+    have hs' : s.rest = x :: (ts' ++ c :: rest) := by simpa using hs
+    obtain ⟨e', s', hp, he', hL⟩ := parseExpression_budget e hw.1 s (x :: ts') (c :: rest) hT hs hl ht hn
+      (by simp) hE ha
+    refine ⟨some e', s', Parse.unlessPunct_some hs' hxs ?_, by simp [he'], hL⟩
+    rw [Parse.bind_eq (Parse.budget_eq _)]
+    exact hp
+
+/-- `for ( init ; test ; update )` and a body, which `parseBranch` reads in a loop. -/
+theorem parseFor_reads {T : Edition} {fn loop : Bool} (h : Nat) (sp : Span) (init : Option VarDecl)
+    (test update : Option Expr) (body : Stmt) (hw : (Stmt.forStmt sp init test update body).wf T fn loop = true)
+    (hb : ReadsS T fn true (Parse.parseBranch h) body) :
+    ReadsS T fn loop (Parse.parseFor (h + 1)) (.forStmt sp init test update body) := by
+  intro s ts rest hT hF _ hs hl hlaid hr hopen
+  simp only [Stmt.wf, Bool.and_eq_true] at hw
+  obtain ⟨⟨⟨⟨hwi, hwt⟩, hwu⟩, -⟩, -⟩ := hw
+  simp only [Stmt.wordLines, Stmt.lines, List.map_cons] at hlaid
+  rw [Stmt.lines_words body 1] at hlaid
+  obtain ⟨a, b, rfl, ha, hna, _, hbl⟩ := Laid.cons hlaid
+  simp only [List.append_assoc, List.cons_append] at ha
+  obtain ⟨fk, a₁, rfl, hfk, h₁⟩ := Touching.cons_one (by simpa [keywordWord] using ha)
+  obtain ⟨lp, a₂, rfl, hlp, h₂⟩ := Touching.cons_one (by simpa [punctWord] using h₁)
+  obtain ⟨its, a₃, rfl, hit, h₃⟩ := Touching.append_split h₂
+  obtain ⟨tts, a₄, rfl, htt, h₄⟩ := Touching.append_split h₃
+  obtain ⟨semi, a₅, rfl, hsemi, h₅⟩ := Touching.cons_one (by simpa [punctWord] using h₄)
+  obtain ⟨uts, a₆, rfl, hut, h₆⟩ := Touching.append_split h₅
+  obtain ⟨rp, a₇, rfl, hrp, h₇⟩ := Touching.cons_one (by simpa [punctWord] using h₆)
+  simp [Touching] at h₇; subst h₇
+  have hs' : s.rest = fk :: lp :: (its ++ (tts ++ semi :: (uts ++ rp :: (b ++ rest)))) := by simpa using hs
+  have hn : ∀ y, y ∈ its ∨ y ∈ tts ∨ y ∈ uts → NoBreak y := fun y hy => hna y (by rcases hy with h | h | h <;> simp [h])
+  let s₁ := past s fk (lp :: (its ++ (tts ++ semi :: (uts ++ rp :: (b ++ rest)))))
+  let s₂ := past s₁ lp (its ++ (tts ++ semi :: (uts ++ rp :: (b ++ rest))))
+  have hl₂ : s₂.left = s₂.rest.length := by simp [s₂, s₁, hl, hs']
+  obtain ⟨i', s₃, semi₁, s₄, hpi, hps₁, hei, hL₄⟩ := forInit_reads init hwi s₂ its
+    (tts ++ semi :: (uts ++ rp :: (b ++ rest))) hT rfl hl₂ hit (fun y hy => hn y (.inl (List.mem_of_mem_tail hy)))
+    (by simp)
+  have hl₄ : s₄.left = s₄.rest.length := by rw [hL₄.left_eq, hL₄.rest_eq]
+  obtain ⟨t', s₅, hpt, het, hL₅⟩ := forPart_reads (.inl rfl) test hwt s₄ tts semi (uts ++ rp :: (b ++ rest))
+    (hL₄.target_eq.trans hT) hL₄.rest_eq hl₄ htt (fun y hy => hn y (.inr (.inl (List.mem_of_mem_tail hy)))) hsemi
+  have hs₅ : s₅.rest = semi :: (uts ++ rp :: (b ++ rest)) := hL₅.rest_eq
+  let s₆ : ParseState := { s₅ with rest := uts ++ rp :: (b ++ rest), left := s₅.left - 1, lastStop := semi.span.stop }
+  have hl₆ : s₆.left = s₆.rest.length := by simp [s₆, hL₅.left_eq]
+  obtain ⟨u', s₇, hpu, heu, hL₇⟩ := forPart_reads (.inr rfl) update hwu s₆ uts rp (b ++ rest)
+    (hL₅.target_eq.trans (hL₄.target_eq.trans hT)) rfl hl₆ hut
+    (fun y hy => hn y (.inr (.inr (List.mem_of_mem_tail hy)))) hrp
+  have hs₇ : s₇.rest = rp :: (b ++ rest) := hL₇.rest_eq
+  let s₈ : ParseState := { s₇ with rest := b ++ rest, left := s₇.left - 1, lastStop := rp.span.stop }
+  let s₈' : ParseState := { s₈ with loopDepth := s₈.loopDepth + 1 }
+  have hl₈ : s₈'.left = s₈'.rest.length := by simp [s₈', s₈, hL₇.left_eq]
+  have hK₇ : Kept s₂ s₇ := ((hL₄.toKept.trans hL₅.toKept).trans (Kept.past _ _ _)).trans hL₇.toKept
+  obtain ⟨body', s₉, hpb, heb, hL₉⟩ := hb s₈' b rest (hK₇.target_eq.trans hT) (hK₇.inFunction_eq.trans hF)
+    (fun _ => by simp [s₈']) rfl hl₈ hbl hr (fun h => hopen h)
+  refine ⟨.forStmt ⟨fk.span.start, s₉.lastStop⟩ i' t' u' body', { s₉ with loopDepth := s₉.loopDepth - 1 }, ?_,
+    by simp [Stmt.erase, hei, het, heu, heb], ?_⟩
+  · simp only [Parse.parseFor]
+    rw [Parse.bind_eq (Parse.advance_eq hs'), Parse.bind_eq (Parse.expectPunct_ok (s := s₁) rfl (by simp) hlp),
+      Parse.bind_eq hpi, Parse.bind_eq hps₁, Parse.bind_eq hpt,
+      Parse.bind_eq (Parse.expectPunct_ok hs₅ (by simp) hsemi), Parse.bind_eq hpu,
+      Parse.bind_eq (Parse.expectPunct_ok hs₇ (by simp [hr]) hrp), Parse.bind_eq (Parse.withLoop_ok hpb),
+      Parse.bind_eq (Parse.spanFrom_eq _ _)]
+    rfl
+  · exact leaves_trans (leaves_advance hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))
+      (leaves_trans hL₄ (leaves_trans hL₅ (leaves_trans (leaves_advance hs₅ (by rw [hL₅.left_eq, hs₅]))
+        (leaves_trans hL₇ (leaves_trans (leaves_advance hs₇ (by rw [hL₇.left_eq, hs₇])) (leaves_withLoop hL₉)))))))
+
+/-- `parseStatement` reads a counted `for` with `parseFor`. -/
+theorem stmt_counted {T : Edition} {fn loop : Bool} (f : Nat) (sp : Span) (init : Option VarDecl)
+    (test update : Option Expr) (body : Stmt)
+    (h : ReadsS T fn loop (Parse.parseFor f) (.forStmt sp init test update body)) :
+    ReadsS T fn loop (Parse.parseStatement (f + 1)) (.forStmt sp init test update body) := by
+  intro s ts rest hT hF hL hs hl ht hr he
+  obtain ⟨st', s', hp, hst', hL'⟩ := h s ts rest hT hF hL hs hl ht hr he
+  refine ⟨st', s', ?_, hst', hL'⟩
+  simp only [Stmt.wordLines, Stmt.lines, List.map_cons] at ht
+  obtain ⟨a, b, rfl, ha, _⟩ := Laid.cons ht
+  simp only [List.append_assoc, List.cons_append] at ha
+  obtain ⟨fk, a₁, rfl, hfk, h₁⟩ := Touching.cons_one (by simpa [keywordWord] using ha)
+  obtain ⟨lp, a₂, rfl, -, h₂⟩ := Touching.cons_one (by simpa [punctWord] using h₁)
+  obtain ⟨its, a₃, rfl, hit, -⟩ := Touching.append_split h₂
+  have hc : Parse.countedFor s = .ok true s := by
+    rw [Parse.countedFor_eq s]
+    cases init with
+    | none =>
+      obtain ⟨semi, ts', rfl, hsemi, h'⟩ := Touching.cons_one (by simpa [forInitWords, punctWord] using hit)
+      simp [Touching] at h'; subst h'
+      have hs' : s.rest = fk :: lp :: semi :: (a₃ ++ (b ++ rest)) := by simpa using hs
+      simp [hs', Token.isPunct, hsemi]
+    | some d =>
+      obtain ⟨kw, nm, x, ts', rfl, hkw, hx⟩ := VarDecl.three_tokens d (by simpa [forInitWords] using hit)
+      have hs' : s.rest = fk :: lp :: kw :: nm :: x :: (ts' ++ (a₃ ++ (b ++ rest))) := by simpa using hs
+      simp only [hs', List.getElem?_cons_succ, List.getElem?_cons_zero, Option.getD_some]
+      simp only [Token.isPunct, Token.isKeyword, Token.isIdent, hkw]
+      rcases hx with hx | hx | hx <;> cases d.kind <;> simp [VarKind.token, hx]
+  have hs' : s.rest = fk :: (lp :: (its ++ a₃) ++ (b ++ rest)) := by simpa using hs
+  simp only [Parse.parseStatement]
+  rw [Parse.bind_eq (Parse.peek_eq hs')]
+  simp only [hfk]
+  rw [Parse.bind_eq hc]
+  simp only [↓reduceIte]
   exact hp
 
 
@@ -1179,6 +1459,8 @@ theorem Expr.lessFree_erase : ∀ e : Expr, e.erase.lessFree = e.lessFree
   | .cond _ a b c => by
     simp only [Expr.erase, Expr.lessFree, Expr.lessFree_erase a, Expr.lessFree_erase b, Expr.lessFree_erase c]
   | .binary _ _ l r => by simp only [Expr.erase, Expr.lessFree, Expr.lessFree_erase l, Expr.lessFree_erase r]
+  | .asConst _ e => by simp only [Expr.erase, Expr.lessFree]; exact Expr.lessFree_erase e
+  | .satisfies _ e _ => by simp only [Expr.erase, Expr.lessFree]; exact Expr.lessFree_erase e
 
 theorem Expr.lessFreeList_eraseAll : ∀ es : List Expr, Expr.lessFreeList (Expr.eraseAll es) = Expr.lessFreeList es
   | [] => rfl
@@ -1240,6 +1522,14 @@ theorem Expr.afterOK_head : ∀ (e : Expr) {a b : List TokenKind}, e.lessFree = 
     simp only [Expr.lessFree] at hf; simp only [Expr.afterOK]; exact Expr.afterOK_head x hf h
   | .postfix _ _ x, _, _, hf, _ => by
     simp only [Expr.lessFree] at hf; simp only [Expr.afterOK]; exact Expr.afterOK_head x hf rfl
+  | .asConst _ x, a, b, hf, h => by
+    simp only [Expr.lessFree] at hf; simp only [Expr.afterOK]
+    rw [Expr.afterOK_head x (a := .ident "as" :: .keyword "const" :: a)
+      (b := .ident "as" :: .keyword "const" :: b) hf rfl]
+  | .satisfies _ x t, a, b, hf, h => by
+    simp only [Expr.lessFree] at hf; simp only [Expr.afterOK]
+    rw [Expr.afterOK_head x (a := (.ident "satisfies" :: t.tokens) ++ a)
+      (b := (.ident "satisfies" :: t.tokens) ++ b) hf rfl]
   | .cond _ t x y, _, _, hf, h => by
     simp only [Expr.lessFree, Bool.and_eq_true] at hf
     obtain ⟨⟨ht, hx⟩, hy⟩ := hf
@@ -1381,6 +1671,7 @@ theorem Stmt.first_break {T : Edition} {fn loop : Bool} (st : Stmt) (hw : st.wf 
   | ifStmt sp t a e => cases e <;> simp [Stmt.wordLines, Stmt.lines, keywordWord] at h
   | breakStmt _ => rfl
   | forOfStmt _ _ _ _ _ => simp [Stmt.wordLines, Stmt.lines, keywordWord] at h
+  | forStmt _ _ _ _ _ => simp [Stmt.wordLines, Stmt.lines, keywordWord] at h
   | whileStmt _ _ _ => simp [Stmt.wordLines, Stmt.lines, keywordWord] at h
   | continueStmt _ => simp [Stmt.wordLines, Stmt.lines, keywordWord] at h
   | switchStmt _ _ _ => simp [Stmt.wordLines, Stmt.lines, keywordWord] at h
@@ -1787,8 +2078,17 @@ theorem allStmts_succ {T : Edition} (f : Nat) (IH : ∀ g ≤ f, AllStmts T g) :
     have hw' := hw
     simp only [Stmt.wf, Bool.and_eq_true, Bool.not_eq_true'] at hw'
     obtain ⟨⟨_, hd⟩, hbw⟩ := hw'
-    exact stmt_for (h + 1 + 1) _ ⟨sp, kind, name, it, body, rfl⟩
+    exact stmt_for (h + 1 + 1) sp kind name it body
       (parseForOf_reads (h + 1) sp kind name it body hw
+        (parseBranch_reads h body hd hbw (IH h (by omega) fn true body hbw (by simp [Stmt.need]; omega))))
+  | forStmt sp init test update body =>
+    simp only [Stmt.depth] at hn
+    obtain ⟨h, rfl⟩ : ∃ h, f = h + 1 + 1 := ⟨f - 2, by omega⟩
+    have hw' := hw
+    simp only [Stmt.wf, Bool.and_eq_true, Bool.not_eq_true'] at hw'
+    obtain ⟨⟨_, hd⟩, hbw⟩ := hw'
+    exact stmt_counted (h + 1 + 1) sp init test update body
+      (parseFor_reads (h + 1) sp init test update body hw
         (parseBranch_reads h body hd hbw (IH h (by omega) fn true body hbw (by simp [Stmt.need]; omega))))
   | whileStmt sp test body =>
     simp only [Stmt.depth] at hn

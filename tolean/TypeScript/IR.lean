@@ -56,13 +56,20 @@ inductive ExprExt where
   | numberNe
   /-- `(JSNumber.isNaN a)`, or `(JSNumber.toSafeInt a).isSome`. -/
   | numberTest (test : NumberTest)
+  /-- `none`, on no arguments, as an optional value: `undefined`, such as
+  the argument of an optional parameter that a call leaves out. -/
+  | undefined
   /-- `a.isNone`, on an optional value: `a === undefined`. -/
   | isUndefined
   /-- `a.isSome`, on an optional value: `a !== undefined`. -/
   | isDefined
-  /-- `a.map (·.f)`, or `a.bind (·.f)` when the field `f` is optional:
-  `a?.f`, which is `undefined` when `a` is `null` or `undefined`. -/
-  | optField (name : String) (bind : Bool)
+  /-- `a.map (·.f.g)`, or `a.bind (·.f.g)` when the last field is optional:
+  `a?.f.g`, which is `undefined` when `a` is `null` or `undefined`. The
+  fields before the last are required. -/
+  | optField (path : List String) (bind : Bool)
+  /-- `match k with | K.a => r.a | …`, on `r` and `k`: `r[k]`, where `r` is a
+  `Record<K, V>` with the keys `keys`, and `K` is the literal union `key`. -/
+  | recordGet (key : DeclRef) (keys : List String)
 deriving BEq, Repr, Inhabited, DecidableEq
 
 abbrev Ty := tolean.IR.Ty TyExt
@@ -85,6 +92,7 @@ abbrev LoopInfo := tolean.IR.LoopInfo TyExt
 @[match_pattern] abbrev Expr.numberNe (a b : Expr) : Expr := .ext .numberNe [a, b]
 @[match_pattern] abbrev Expr.numberTest (test : NumberTest) (a : Expr) : Expr :=
   .ext (.numberTest test) [a]
+@[match_pattern] abbrev Expr.undefined : Expr := .ext .undefined []
 @[match_pattern] abbrev Expr.isUndefined (a : Expr) : Expr := .ext .isUndefined [a]
 @[match_pattern] abbrev Expr.isDefined (a : Expr) : Expr := .ext .isDefined [a]
 
@@ -92,7 +100,8 @@ abbrev LoopInfo := tolean.IR.LoopInfo TyExt
 
 /-- The Lean names the output uses, with their full names from the root. -/
 def leanNames : List (String × String) :=
-  tolean.IR.leanNames ++ [("JSNumber", "tolean.TypeScript.JSNumber")]
+  tolean.IR.leanNames ++
+    [("JSNumber", "tolean.TypeScript.JSNumber"), ("JSString", "tolean.TypeScript.JSString")]
 
 /-- Write the Lean name `name` (or `name.rest`), from the root when the source
 declares the same name. -/
@@ -115,6 +124,10 @@ instance : tolean.IR.PrintTy TyExt where
   binders names :=
     let n := names.typeParam
     s!" \{{n} : Type} [{leanName names "JSNumber"} {n}]"
+  -- A JS string is a list of UTF-16 code units, not a Lean `String`
+  -- (`Spec/String.lean`), and a literal encodes its text.
+  string names := leanName names "JSString"
+  stringLit names s := s!"{leanName names "JSString.ofString"} {tolean.Sexp.quote s}"
 
 open tolean.IR (argument) in
 /-- An operation on its printed arguments. The translator gives each one the
@@ -131,9 +144,18 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
   | .numberTest .isSafeInteger, [a] => s!"({js}.toSafeInt {argument a}).isSome"
   | .numberTest .isNaN, [a] => s!"({js}.isNaN {argument a})"
   | .numberTest .isFinite, [a] => s!"({js}.isFinite {argument a})"
+  | .undefined, _ => leanName names "none"
   | .isUndefined, [a] => s!"{argument a}.isNone"
   | .isDefined, [a] => s!"{argument a}.isSome"
-  | .optField f bind, [a] => s!"({argument a}.{if bind then "bind" else "map"} (·.{f}))"
+  | .optField path bind, [a] =>
+    s!"({argument a}.{if bind then "bind" else "map"} (·.{".".intercalate path}))"
+  | .recordGet key keys, [r, k] =>
+    let case (f : String) := s!"{(names.ref key).1}.{memberName f}"
+    -- A key that is one constructor, as `r['a']` gives, reads its field.
+    match keys.find? (case · == k) with
+    | some f => s!"{argument r}.{f}"
+    | Option.none =>
+      s!"(match {k} with{String.join (keys.map fun f => s!" | {case f} => {argument r}.{f}")})"
   | _, _ => ""
 
 instance : tolean.IR.PrintOp ExprExt := ⟨ExprExt.print⟩

@@ -112,6 +112,9 @@ def TypeExpr.words : TypeExpr → List Word
   | .union _ [member] => punctWord "|" :: member.words
   | .union _ members => separated "|" (TypeExpr.wordsOf members)
   | .paren _ inner => punctWord "(" :: inner.words ++ [punctWord ")"]
+  | .tuple _ readonly elems =>
+    (if readonly then [identWord "readonly"] else []) ++
+      punctWord "[" :: separated "," (TypeExpr.wordsOf elems) ++ [punctWord "]"]
 
 def TypeExpr.wordsOf : List TypeExpr → List (List Word)
   | [] => []
@@ -124,7 +127,12 @@ def typeAnnotation : Option TypeExpr → List Word
   | some t => punctWord ":" :: t.words
   | none => []
 
-def Param.words (p : Param) : List Word := identWord p.name :: typeAnnotation p.type
+/-- The `?` of an optional parameter. -/
+def optionalMark : Bool → List Word
+  | true => [punctWord "?"]
+  | false => []
+
+def Param.words (p : Param) : List Word := identWord p.name :: (optionalMark p.optional ++ typeAnnotation p.type)
 
 /-- The parameters of an arrow function: one name, when the source has no
 parentheses around it, or the list in parentheses. -/
@@ -160,6 +168,8 @@ def Expr.words : Expr → List Word
   | .cond _ test a b => test.words ++ punctWord "?" :: a.words ++ punctWord ":" :: b.words
   | .assign _ op target value => target.words ++ symbol op.symbol :: value.words
   | .arrow _ parens params body => arrowParams parens params ++ punctWord "=>" :: body.words
+  | .asConst _ e => e.words ++ [identWord "as", keywordWord "const"]
+  | .satisfies _ e type => e.words ++ identWord "satisfies" :: type.words
 
 def Expr.wordsOf : List Expr → List (List Word)
   | [] => []
@@ -184,6 +194,16 @@ def VarDecl.words (d : VarDecl) : List Word :=
   [d.kind.word, identWord d.name] ++ typeAnnotation d.type ++
     (match d.init with | some e => punctWord "=" :: e.words | none => []) ++ [punctWord ";"]
 
+/-- The words of `e`, or none when it is absent. -/
+def optWords : Option Expr → List Word
+  | some e => e.words
+  | none => []
+
+/-- The first part of a counted `for`, with the `;` after it. -/
+def forInitWords : Option VarDecl → List Word
+  | some d => d.words
+  | none => [punctWord ";"]
+
 /-- `case test :`, or `default :`. -/
 def clauseHead : Option Expr → List Word
   | some e => keywordWord "case" :: e.words ++ [punctWord ":"]
@@ -205,6 +225,9 @@ def Stmt.lines (depth : Nat) : Stmt → List Line
   | .forOfStmt _ kind name iterable body =>
     (depth, keywordWord "for" :: punctWord "(" :: kind.word :: identWord name :: identWord "of" :: iterable.words ++
       [punctWord ")"]) :: body.lines (depth + 1)
+  | .forStmt _ init test update body =>
+    (depth, keywordWord "for" :: punctWord "(" :: forInitWords init ++ optWords test ++ punctWord ";" ::
+      optWords update ++ [punctWord ")"]) :: body.lines (depth + 1)
   | .whileStmt _ test body =>
     (depth, keywordWord "while" :: punctWord "(" :: test.words ++ [punctWord ")"]) :: body.lines (depth + 1)
   | .block _ body => (depth, [punctWord "{"]) :: Stmt.linesOf (depth + 1) body ++ [(depth, [punctWord "}"])]
@@ -231,23 +254,44 @@ def Field.words (f : Field) : List Word :=
   (if f.readonly then [identWord "readonly"] else []) ++ [propertyName f.name] ++
     (if f.optional then [punctWord "?"] else []) ++ punctWord ":" :: f.type.words ++ [punctWord ";"]
 
+/-- `Name = "value",`. A `,` may follow the last member too. -/
+def EnumMember.words (m : EnumMember) : List Word :=
+  [propertyName m.name, punctWord "=", [.string m.value], punctWord ","]
+
 def ImportName.words (n : ImportName) : List Word :=
   if n.typeOnly then [identWord "type", identWord n.name] else [identWord n.name]
 
 def exportWords (exported : Bool) : List Word := if exported then [keywordWord "export"] else []
 
+/-- `from "source"` after the names of an export list, when it has a source. -/
+def fromWords : Option String → List Word
+  | some source => [identWord "from", [.string source]]
+  | none => []
+
+/-- `<A, B>` after the name of a generic function, or nothing. -/
+def typeParamWords : List String → List Word
+  | [] => []
+  | n :: more => enclose "<" ">" ((n :: more).map fun k => [identWord k])
+
 def Decl.lines : Decl → List Line
   | .import _ names source =>
     [(0, keywordWord "import" :: enclose "{" "}" (names.map ImportName.words) ++
       [identWord "from", [.string source], punctWord ";"])]
-  | .function _ exported name params returnType body =>
-    (0, exportWords exported ++ keywordWord "function" :: identWord name ::
+  | .exports _ names source =>
+    [(0, keywordWord "export" :: enclose "{" "}" (names.map ImportName.words) ++
+      fromWords source ++ [punctWord ";"])]
+  | .function _ exported name typeParams params returnType body =>
+    (0, exportWords exported ++ keywordWord "function" :: identWord name :: typeParamWords typeParams ++
       enclose "(" ")" (params.map Param.words) ++ typeAnnotation returnType) :: body.lines 0
-  | .interface _ exported name fields =>
-    (0, exportWords exported ++ [identWord "interface", identWord name, punctWord "{"]) ::
-      fields.map (fun f => (1, f.words)) ++ [(0, [punctWord "}"])]
-  | .typeAlias _ exported name type =>
-    [(0, exportWords exported ++ identWord "type" :: identWord name :: punctWord "=" :: type.words ++ [punctWord ";"])]
+  | .interface _ exported name typeParams fields =>
+    (0, exportWords exported ++ identWord "interface" :: identWord name :: typeParamWords typeParams ++
+      [punctWord "{"]) :: fields.map (fun f => (1, f.words)) ++ [(0, [punctWord "}"])]
+  | .typeAlias _ exported name typeParams type =>
+    [(0, exportWords exported ++ identWord "type" :: identWord name :: typeParamWords typeParams ++
+      punctWord "=" :: type.words ++ [punctWord ";"])]
+  | .enum _ exported name members =>
+    (0, exportWords exported ++ [keywordWord "enum", identWord name, punctWord "{"]) ::
+      members.map (fun m => (1, m.words)) ++ [(0, [punctWord "}"])]
   | .exportedVar _ d => [(0, keywordWord "export" :: d.words)]
   | .stmt s => s.lines 0
 
@@ -297,6 +341,7 @@ def TypeExpr.erase : TypeExpr → TypeExpr
   | .array _ elem => .array noSpan elem.erase
   | .union _ members => .union noSpan (TypeExpr.eraseAll members)
   | .paren _ inner => .paren noSpan inner.erase
+  | .tuple _ readonly elems => .tuple noSpan readonly (TypeExpr.eraseAll elems)
 
 def TypeExpr.eraseAll : List TypeExpr → List TypeExpr
   | [] => []
@@ -329,6 +374,8 @@ def Expr.erase : Expr → Expr
   | .cond _ test a b => .cond noSpan test.erase a.erase b.erase
   | .assign _ op target value => .assign noSpan op target.erase value.erase
   | .arrow _ parens params body => .arrow noSpan parens (params.map Param.erase) body.erase
+  | .asConst _ e => .asConst noSpan e.erase
+  | .satisfies _ e type => .satisfies noSpan e.erase type.erase
 
 def Expr.eraseAll : List Expr → List Expr
   | [] => []
@@ -355,6 +402,8 @@ def Stmt.erase : Stmt → Stmt
   | .returnStmt _ v => .returnStmt noSpan (v.map Expr.erase)
   | .ifStmt _ test t e => .ifStmt noSpan test.erase t.erase (Stmt.eraseOpt e)
   | .forOfStmt _ kind name iterable body => .forOfStmt noSpan kind name iterable.erase body.erase
+  | .forStmt _ init test update body =>
+    .forStmt noSpan (init.map VarDecl.erase) (test.map Expr.erase) (update.map Expr.erase) body.erase
   | .whileStmt _ test body => .whileStmt noSpan test.erase body.erase
   | .block _ body => .block noSpan (Stmt.eraseAll body)
   | .breakStmt _ => .breakStmt noSpan
@@ -380,12 +429,17 @@ def Field.erase (f : Field) : Field := { f with span := noSpan, type := f.type.e
 
 def ImportName.erase (n : ImportName) : ImportName := { n with span := noSpan }
 
+def EnumMember.erase (m : EnumMember) : EnumMember := { m with span := noSpan }
+
 def Decl.erase : Decl → Decl
   | .import _ names source => .import noSpan (names.map ImportName.erase) source
-  | .function _ exported name params returnType body =>
-    .function noSpan exported name (params.map Param.erase) (returnType.map TypeExpr.erase) body.erase
-  | .interface _ exported name fields => .interface noSpan exported name (fields.map Field.erase)
-  | .typeAlias _ exported name type => .typeAlias noSpan exported name type.erase
+  | .exports _ names source => .exports noSpan (names.map ImportName.erase) source
+  | .function _ exported name typeParams params returnType body =>
+    .function noSpan exported name typeParams (params.map Param.erase) (returnType.map TypeExpr.erase) body.erase
+  | .interface _ exported name typeParams fields =>
+    .interface noSpan exported name typeParams (fields.map Field.erase)
+  | .typeAlias _ exported name typeParams type => .typeAlias noSpan exported name typeParams type.erase
+  | .enum _ exported name members => .enum noSpan exported name (members.map EnumMember.erase)
   | .exportedVar _ d => .exportedVar noSpan d.erase
   | .stmt s => .stmt s.erase
 

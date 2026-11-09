@@ -200,8 +200,16 @@ def parseType (fuel : Nat) : ParseM TypeExpr := do
 
 def parseArrayType (fuel : Nat) : ParseM TypeExpr := do
   let fuel + 1 := fuel | outOfFuel
-  let start := (← peek).span.start
-  iterate (← budget) (← parsePrimaryType fuel) (arrayStep start)
+  let t ← peek
+  let next ← peekAt 1
+  -- `readonly` applies to the whole array type after it, as in `tsc`: so
+  -- `readonly [A, B][]` is a readonly array of tuples. Only a tuple may follow.
+  if t.isIdent "readonly" && next.isPunct "[" && !next.newlineBefore then
+    discard advance
+    let .tuple _ false elems ← parseArrayType fuel
+      | failAt t "'readonly' is supported only before a tuple type, such as readonly [A, B]"
+    return .tuple (← spanFrom t.span.start) true elems
+  iterate (← budget) (← parsePrimaryType fuel) (arrayStep t.span.start)
 
 def parsePrimaryType (fuel : Nat) : ParseM TypeExpr := do
   let fuel + 1 := fuel | outOfFuel
@@ -229,6 +237,11 @@ def parsePrimaryType (fuel : Nat) : ParseM TypeExpr := do
     let inner ← parseType fuel
     let _ ← expectPunct ")"
     return .paren (← spanFrom t.span.start) inner
+  -- `[A, B]`: a tuple type, with at least one element and no `,` after the last.
+  | .punct "[" =>
+    let elems ← iterate (← budget) #[] (typeArgStep (parseType fuel))
+    let _ ← expectPunct "]"
+    return .tuple (← spanFrom t.span.start) false elems.toList
   | _ => unexpected t "a type"
 
 end
@@ -343,12 +356,70 @@ def updateOp? (t : Token) : Option UpdateOp :=
   else if t.isPunct "--" then some .decrement
   else none
 
+/-- `as` or `satisfies` with no line break before it. `tsc` reads it after an
+operand as a binary operator with the precedence of `<`, whose right side is
+a type. After a line break, it starts the next statement. -/
+def isTypeOperator (t : Token) : Bool :=
+  (t.isIdent "as" || t.isIdent "satisfies") && !t.newlineBefore
+
+/-- The punctuators that may not follow `as const` or `satisfies T`. `tsc`
+reads a `<` as type arguments, and so a `<<` too, which it reads again as
+`<`. It reads a `|` or `&` as a part of the type, and a `?`
+can make the type nullable, so each of them could change the tree. `.`, `[`
+and `(` do not continue the expression in `tsc`, but type stripping leaves
+blanks in place of the type, so after a line break JavaScript could read the
+next line as a part of the operand, as in `x as const` followed by `[0]` on
+the next line. -/
+def typeEnders : List String := ["<", "<<", "?", "|", "&", "[", "(", "."]
+
+/-- Words that start a declaration in `tsc` when a name follows them on the
+same line, as in `type T = …` or `declare const x: T`. -/
+def declarationWords : List String :=
+  ["type", "interface", "declare", "abstract", "namespace", "module", "global", "async", "using",
+   "accessor", "readonly", "override", "let"]
+
+/-- An operand that `as` or `satisfies` may not follow: one of
+`declarationWords`, which a name would then follow. At the start of a
+statement, `tsc` would read `type as const` as a declaration. -/
+def refusedBeforeType : Expr → Bool
+  | .ident _ w => declarationWords.contains w
+  | _ => false
+
+/-- Refuse a punctuator of `typeEnders` after `word`. -/
+def refuseAfterType (word : String) : ParseM Unit := do
+  let n ← peek
+  if typeEnders.any n.isPunct then
+    failAt n s!"tsc may read this token after '{word}' as a part of the type, or JavaScript as a part of the operand; put parentheses around the expression"
+
+/-- The step of the loop of `parseBinary` where no binary operator comes: `as
+const` or `satisfies T` after `lhs`, when `minPrec` allows an operator with
+the precedence of `<`. `parseTy` reads the type. Other type assertions stay
+refused, because `tsc` does not check them. -/
+def typeOperatorStep (parseTy : ParseM TypeExpr) (start : Pos) (minPrec : Nat) (lhs : Expr) :
+    ParseM (Expr × Bool) := do
+  let t ← peek
+  if !isTypeOperator t || BinOp.lt.precedence < minPrec then return (lhs, false)
+  if refusedBeforeType lhs then
+    failAt t "tsc may read this word and the name before it as the start of a declaration; put parentheses around the name"
+  discard advance
+  if t.isIdent "as" then
+    let c ← peek
+    unless c.isKeyword "const" do
+      failAt t "'as' is supported only in 'as const', because TypeScript does not check other type assertions"
+    discard advance
+    refuseAfterType "as const"
+    return (.asConst (← spanFrom start) lhs, true)
+  let type ← parseTy
+  refuseAfterType "satisfies"
+  return (.satisfies (← spanFrom start) lhs type, true)
+
 /-- One step of the loop of `parseBinary`, from `start` at `minPrec`: an
 operator of at least that precedence, and its right operand, which
-`parseRhs` reads at the precedence it is given. -/
-def binaryStep (parseRhs : Nat → ParseM Expr) (start : Pos) (minPrec : Nat) (lhs : Expr) :
-    ParseM (Expr × Bool) := do
-  let some (op, width) ← peekBinaryOp | return (lhs, false)
+`parseRhs` reads at the precedence it is given, or `as const` or `satisfies
+T`, whose type `parseTy` reads. -/
+def binaryStep (parseRhs : Nat → ParseM Expr) (parseTy : ParseM TypeExpr) (start : Pos) (minPrec : Nat)
+    (lhs : Expr) : ParseM (Expr × Bool) := do
+  let some (op, width) ← peekBinaryOp | typeOperatorStep parseTy start minPrec lhs
   if op.precedence < minPrec then return (lhs, false)
   let opToken ← peek
   if op == .exp && (lhs matches .unary ..) then
@@ -417,21 +488,34 @@ def refuseElement (t : Token) : ParseM Unit := do
   if t.isPunct "," then failAt t "array holes are not supported"
   if t.isPunct "..." then failAt t "spread elements are not supported"
 
-def parseParam : ParseM Param := do
+/-- The `?` after the name of an optional parameter, if one comes next. A
+function may have an optional parameter, `x?: T`, but an arrow function may
+not: `(a?: T) => a` starts like `(a ? …`, so the parser would have to look
+further ahead to tell it from a conditional. -/
+def readOptionalMark (optionalOK : Bool) : ParseM Bool := do
+  let mark ← peek
+  if mark.isPunct "?" then
+    if !optionalOK then failAt mark "optional parameters of arrow functions are not supported"
+    discard advance
+    return true
+  return false
+
+/-- A parameter, which may be optional when `optionalOK` is true. -/
+def parseParam (optionalOK : Bool) : ParseM Param := do
   let t ← peek
   if t.isPunct "..." then failAt t "rest parameters are not supported"
   if t.isPunct "[" || t.isPunct "{" then failAt t "destructuring is not supported"
   if t.isKeyword "this" then failAt t "'this' parameters are not supported"
   let name ← readName
+  let optional ← readOptionalMark optionalOK
   let next ← peek
-  if next.isPunct "?" then failAt next "optional parameters are not supported"
   let mut type := none
   if next.isPunct ":" then
     discard advance
     type := some (← parseType (← budget))
   let next ← peek
   if next.isPunct "=" then failAt next "default values are not supported"
-  return { span := ← spanFrom t.span.start, name, type }
+  return { span := ← spanFrom t.span.start, name, optional, type }
 
 /-- The kinds of the first tokens of an arrow function: `a =>`, `()`, `(a,`,
 `(a:` or `(a) =>`. No other expression starts with one of them, because the
@@ -457,7 +541,7 @@ def parseArrowParams : ParseM (List Param) := do
     let name ← readName
     return [{ span := t.span, name, type := none }]
   discard advance
-  let params ← iterate (← budget) #[] (listStep ")" (fun _ => pure ()) parseParam)
+  let params ← iterate (← budget) #[] (listStep ")" (fun _ => pure ()) (parseParam false))
   let _ ← expectPunct ")"
   return params.toList
 
@@ -520,7 +604,7 @@ def parseConditional (fuel : Nat) : ParseM Expr := do
 def parseBinary (fuel : Nat) (minPrec : Nat) : ParseM Expr := do
   let fuel + 1 := fuel | outOfFuel
   let start := (← peek).span.start
-  iterate (← budget) (← parseUnary fuel) (binaryStep (parseBinary fuel) start minPrec)
+  iterate (← budget) (← parseUnary fuel) (binaryStep (parseBinary fuel) (parseType (← budget)) start minPrec)
 
 def parseUnary (fuel : Nat) : ParseM Expr := do
   let fuel + 1 := fuel | outOfFuel
@@ -636,8 +720,9 @@ end
 
 /-! ### Statements -/
 
-/-- `const` or `let`, through the end of the statement. -/
-def parseVarDecl : ParseM VarDecl := do
+/-- `const` or `let`, a name, and a type, a value, both or neither. The
+`;` after it is left to the caller. -/
+def parseDeclaration : ParseM VarDecl := do
   let keyword ← advance
   let kind := if keyword.isKeyword "const" then VarKind.const else .«let»
   let t ← peek
@@ -654,8 +739,37 @@ def parseVarDecl : ParseM VarDecl := do
   let t ← peek
   if t.isPunct "," then failAt t "declare one variable per statement"
   if kind == .const && init.isNone then failAt keyword "a 'const' needs a value"
-  endStatement
   return { kind, name, type, init }
+
+/-- `const` or `let`, through the end of the statement. -/
+def parseVarDecl : ParseM VarDecl := do
+  let decl ← parseDeclaration
+  endStatement
+  return decl
+
+/-- The declaration at the start of a counted `for`. An `in` that
+`Expr.inFree` finds in its value would start a `for … in` loop, so the parser
+refuses it. -/
+def parseForDeclaration : ParseM VarDecl := do
+  let t ← peek
+  unless t.isKeyword "const" || t.isIdent "let" do unexpected t "'const', 'let' or ';'"
+  let decl ← parseDeclaration
+  if !decl.inFree then failAt t "an 'in' in the declaration of a 'for' needs parentheses"
+  return decl
+
+/-- `p`, unless the next token is the punctuator `stop`. -/
+def unlessPunct {α : Type} (stop : String) (p : ParseM α) : ParseM (Option α) := do
+  if (← peek).isPunct stop then return none
+  return some (← p)
+
+/-- After `for`, a counted loop comes: the token after the `(` is `;`, or it is
+`const` or `let` and the token after the name is not `of` or `in`.
+`parseForOf` reads every other `for`, and refuses what it does not support. -/
+def countedFor : ParseM Bool := do
+  let first ← peekAt 2
+  let afterName ← peekAt 4
+  return first.isPunct ";" || ((first.isKeyword "const" || first.isIdent "let") &&
+    !afterName.isIdent "of" && !afterName.isKeyword "in")
 
 /-- One step of a loop over the items of a block in `{ … }`: an item that
 `parseItem` reads, unless the `}` comes. The statements of a block and the
@@ -720,7 +834,7 @@ def parseStatement (fuel : Nat) : ParseM Stmt := do
       discard advance
       elseBranch := some (← parseBranch fuel)
     return .ifStmt (← spanFrom start) test thenBranch elseBranch
-  | .keyword "for" => parseForOf fuel
+  | .keyword "for" => if (← countedFor) then parseFor fuel else parseForOf fuel
   | .keyword "while" =>
     discard advance
     let _ ← expectPunct "("
@@ -782,18 +896,34 @@ def parseForOf (fuel : Nat) : ParseM Stmt := do
   let keyword ← peek
   let kind ← if keyword.isKeyword "const" then pure VarKind.const
     else if keyword.isIdent "let" then pure VarKind.«let»
-    else failAt keyword "tolean supports only 'for (const x of …)' and 'for (let x of …)'"
+    else failAt keyword "tolean supports only a 'const' or 'let' declaration, or nothing, after 'for ('"
   discard advance
   let t ← peek
   if t.isPunct "[" || t.isPunct "{" then failAt t "destructuring is not supported"
   let name ← readName
   let t ← peek
-  unless t.isIdent "of" do failAt t "tolean supports only 'for … of' loops"
+  unless t.isIdent "of" do failAt t "'for … in' loops are not supported"
   discard advance
   let iterable ← parseAssign (← budget)
   let _ ← expectPunct ")"
   let body ← withLoop (parseBranch fuel)
   return .forOfStmt (← spanFrom start) kind name iterable body
+
+/-- `for (init; test; update) body`, where `init` is absent or a declaration,
+and `test` and `update` may be absent (ECMA-262 §14.7.4). No `;` is inserted
+in the parentheses. -/
+def parseFor (fuel : Nat) : ParseM Stmt := do
+  let fuel + 1 := fuel | outOfFuel
+  let start := (← advance).span.start
+  let _ ← expectPunct "("
+  let init ← unlessPunct ";" parseForDeclaration
+  let _ ← expectPunct ";"
+  let test ← unlessPunct ";" (do parseExpression (← budget))
+  let _ ← expectPunct ";"
+  let update ← unlessPunct ")" (do parseExpression (← budget))
+  let _ ← expectPunct ")"
+  let body ← withLoop (parseBranch fuel)
+  return .forStmt (← spanFrom start) init test update body
 
 def parseBlock (fuel : Nat) : ParseM Stmt := do
   let fuel + 1 := fuel | outOfFuel
@@ -823,15 +953,37 @@ end
 
 /-! ### Declarations -/
 
+/-- One step of the loop over the type parameters of a function: a name, and
+the `,` after it, if one comes. A parameter has no constraint and no default. -/
+def typeParamStep (names : Array String) : ParseM (Array String × Bool) := do
+  let t ← advance
+  let .ident name := t.kind | unexpected t "a type parameter"
+  if keywordTypes.contains name || typeOperatorWords.contains name || refusedNames.contains name then
+    failAt t s!"'{name}' cannot name a type parameter"
+  let next ← peek
+  if next.isKeyword "extends" then failAt next "type parameters with a constraint are not supported"
+  if next.isPunct "=" then failAt next "type parameters with a default are not supported"
+  let names := names.push name
+  if !next.isPunct "," then return (names, false)
+  discard advance
+  return (names, true)
+
+/-- `<A, B>` after the name of a generic function, or nothing. -/
+def parseTypeParams : ParseM (List String) := do
+  unless (← peek).isPunct "<" do return []
+  discard advance
+  let names ← iterate (← budget) #[] typeParamStep
+  let _ ← expectPunct ">"
+  return names.toList
+
 def parseFunction (start : Pos) (exported : Bool) : ParseM Decl := do
   discard advance
   let t ← peek
   if t.isPunct "*" then failAt t "generators are not supported"
   let name ← readName
-  let t ← peek
-  if t.isPunct "<" then failAt t "generic functions are not supported"
+  let typeParams ← parseTypeParams
   let _ ← expectPunct "("
-  let params ← iterate (← budget) #[] (listStep ")" (fun _ => pure ()) parseParam)
+  let params ← iterate (← budget) #[] (listStep ")" (fun _ => pure ()) (parseParam true))
   let _ ← expectPunct ")"
   let mut returnType := none
   if (← peek).isPunct ":" then
@@ -842,7 +994,7 @@ def parseFunction (start : Pos) (exported : Bool) : ParseM Decl := do
   modify fun s => { s with inFunction := true }
   let body ← parseBlock (← budget)
   modify fun s => { s with inFunction := false }
-  return .function (← spanFrom start) exported name params.toList returnType body
+  return .function (← spanFrom start) exported name typeParams params.toList returnType body
 
 def parseField : ParseM Field := do
   let t ← peek
@@ -867,23 +1019,52 @@ def parseField : ParseM Field := do
 def parseInterface (start : Pos) (exported : Bool) : ParseM Decl := do
   discard advance
   let name ← readName
+  let typeParams ← parseTypeParams
   let t ← peek
-  if t.isPunct "<" then failAt t "generic interfaces are not supported"
   if t.isKeyword "extends" then failAt t "'extends' is not supported"
   let _ ← expectPunct "{"
   let fields ← iterate (← budget) #[] (blockStep parseField)
   let _ ← expectPunct "}"
-  return .interface (← spanFrom start) exported name fields.toList
+  return .interface (← spanFrom start) exported name typeParams fields.toList
 
 def parseTypeAlias (start : Pos) (exported : Bool) : ParseM Decl := do
   discard advance
   let name ← readName
-  let t ← peek
-  if t.isPunct "<" then failAt t "generic type aliases are not supported"
+  let typeParams ← parseTypeParams
   let _ ← expectPunct "="
   let type ← parseType (← budget)
   endStatement
-  return .typeAlias (← spanFrom start) exported name type
+  return .typeAlias (← spanFrom start) exported name typeParams type
+
+/-- What an enum member must be: a name and a string. -/
+def refuseEnumMember {A : Type} (t : Token) : ParseM A :=
+  failAt t "tolean supports only enum members with a string value, such as 'A = \"a\"'"
+
+/-- A member of a string enum: a name, `=`, a string, and the `,` after it,
+unless the `}` comes. -/
+def parseEnumMember : ParseM EnumMember := do
+  let t ← peek
+  let name ← readPropertyName
+  let eq ← peek
+  unless eq.isPunct "=" do refuseEnumMember eq
+  discard advance
+  let v ← advance
+  let .string value := v.kind | refuseEnumMember v
+  -- The member ends at its value, as in `tsc`; the `,` is not part of it.
+  let span ← spanFrom t.span.start
+  let next ← peek
+  if next.isPunct "," then discard advance
+  else if !next.isPunct "}" then unexpected next "',' or '}'"
+  return { span, name, value }
+
+/-- `enum`, a name and `{`, the members, and `}`. -/
+def parseEnum (start : Pos) (exported : Bool) : ParseM Decl := do
+  discard advance
+  let name ← readName
+  let _ ← expectPunct "{"
+  let members ← iterate (← budget) #[] (blockStep parseEnumMember)
+  let _ ← expectPunct "}"
+  return .enum (← spanFrom start) exported name members.toList
 
 /-- What `parseImport` refuses: every form of `import` outside the subset. -/
 def refuseImport {A : Type} (t : Token) : ParseM A :=
@@ -931,6 +1112,32 @@ def parseImport (start : Pos) : ParseM Decl := do
   endStatement
   return .import (← spanFrom start) names.toList source
 
+/-- `export { a, type B };` and `export { a } from "./x.ts";`, after the
+`export`. `export type { … }` marks every name. Other forms of `export` leave
+the subset. -/
+def parseExportList (start : Pos) : ParseM Decl := do
+  let mut clauseType := false
+  if (← peek).isIdent "type" then
+    discard advance
+    clauseType := true
+  discard advance
+  let names ← iterate (← budget) #[] (importStep clauseType)
+  let close ← expectPunct "}"
+  if names.isEmpty then failAt close "an export list must name a function or a type"
+  if !(← peek).isIdent "from" then
+    endStatement
+    return .exports (← spanFrom start) names.toList none
+  discard advance
+  let t ← advance
+  let .string source := t.kind | unexpected t "a string"
+  endStatement
+  return .exports (← spanFrom start) names.toList (some source)
+
+/-- An export list starts here: `{`, or `type {`. -/
+def startsExportList : ParseM Bool := do
+  let t ← peek
+  return t.isPunct "{" || (t.isIdent "type" && (← peekAt 1).isPunct "{")
+
 /-- A declaration after `export`, when `exported`, or a declaration or a
 statement without it. `start` is where it starts, before any `export`. -/
 def parseDeclBody (start : Pos) (exported : Bool) : ParseM Decl := do
@@ -942,9 +1149,10 @@ def parseDeclBody (start : Pos) (exported : Bool) : ParseM Decl := do
   if t.isKeyword "function" then parseFunction start exported
   else if t.isIdent "interface" && nameFollows then parseInterface start exported
   else if t.isIdent "type" && nameFollows then parseTypeAlias start exported
+  else if t.isKeyword "enum" then parseEnum start exported
   else if exported then
     unless t.isKeyword "const" || t.isIdent "let" do
-      failAt t "tolean supports 'export' only of a function, an interface, a type or a variable"
+      failAt t "tolean supports 'export' only of a function, an interface, a type, an enum or a variable"
     let decl ← parseVarDecl
     return .exportedVar (← spanFrom start) decl
   else return .stmt (← parseStatement (← budget))
@@ -955,6 +1163,7 @@ def parseDecl : ParseM Decl := do
   if first.isKeyword "import" then return ← parseImport start
   let exported := first.isKeyword "export"
   if exported then discard advance
+  if exported && (← startsExportList) then return ← parseExportList start
   parseDeclBody start exported
 
 /-- One step of the loop over the declarations of a module, unless the end of

@@ -26,6 +26,7 @@ def TypeExpr.beq : TypeExpr → TypeExpr → Bool
   | .array a0 a1, .array b0 b1 => decide (a0 = b0) && TypeExpr.beq a1 b1
   | .union a0 a1, .union b0 b1 => decide (a0 = b0) && TypeExpr.beqList a1 b1
   | .paren a0 a1, .paren b0 b1 => decide (a0 = b0) && TypeExpr.beq a1 b1
+  | .tuple a0 a1 a2, .tuple b0 b1 b2 => decide (a0 = b0) && decide (a1 = b1) && TypeExpr.beqList a2 b2
   | _, _ => false
 
 def TypeExpr.beqList : List TypeExpr → List TypeExpr → Bool
@@ -57,6 +58,8 @@ theorem TypeExpr.beq_iff : (a b : TypeExpr) → TypeExpr.beq a b = true ↔ a = 
     cases b <;> simp [and_assoc, TypeExpr.beq, TypeExpr.beqList_iff a1]
   | .paren a0 a1, b => by
     cases b <;> simp [and_assoc, TypeExpr.beq, TypeExpr.beq_iff a1]
+  | .tuple a0 a1 a2, b => by
+    cases b <;> simp [and_assoc, TypeExpr.beq, TypeExpr.beqList_iff a2]
 
 theorem TypeExpr.beqList_iff : (xs ys : List TypeExpr) → TypeExpr.beqList xs ys = true ↔ xs = ys
   | [], ys => by cases ys <;> simp [and_assoc, TypeExpr.beqList]
@@ -70,10 +73,10 @@ theorem TypeExpr.beqOpt_iff : (o p : Option TypeExpr) → TypeExpr.beqOpt o p = 
   | some x, p => by
     cases p <;> simp [and_assoc, TypeExpr.beqOpt, TypeExpr.beq_iff x]
 
-def Param.beq (a b : Param) : Bool := decide (a.span = b.span) && decide (a.name = b.name) && TypeExpr.beqOpt a.type b.type
+def Param.beq (a b : Param) : Bool := decide (a.span = b.span) && decide (a.name = b.name) && decide (a.optional = b.optional) && TypeExpr.beqOpt a.type b.type
 
 theorem Param.beq_iff (a b : Param) : Param.beq a b = true ↔ a = b := by
-  obtain ⟨span, name, type⟩ := a
+  obtain ⟨span, name, optional, type⟩ := a
   cases b
   simp [and_assoc, Param.beq, TypeExpr.beqOpt_iff type]
 
@@ -111,6 +114,8 @@ def Expr.beq : Expr → Expr → Bool
   | .assign a0 a1 a2 a3, .assign b0 b1 b2 b3 => decide (a0 = b0) && decide (a1 = b1) && Expr.beq a2 b2 && Expr.beq a3 b3
   | .arrow a0 a1 a2 a3, .arrow b0 b1 b2 b3 =>
     decide (a0 = b0) && decide (a1 = b1) && Param.beqList a2 b2 && Expr.beq a3 b3
+  | .asConst a0 a1, .asConst b0 b1 => decide (a0 = b0) && Expr.beq a1 b1
+  | .satisfies a0 a1 a2, .satisfies b0 b1 b2 => decide (a0 = b0) && Expr.beq a1 b1 && TypeExpr.beq a2 b2
   | _, _ => false
 
 def Expr.beqList : List Expr → List Expr → Bool
@@ -178,6 +183,10 @@ theorem Expr.beq_iff : (a b : Expr) → Expr.beq a b = true ↔ a = b
     cases b <;> simp [and_assoc, Expr.beq, Expr.beq_iff a2, Expr.beq_iff a3]
   | .arrow a0 a1 a2 a3, b => by
     cases b <;> simp [and_assoc, Expr.beq, Param.beqList_iff a2, Expr.beq_iff a3]
+  | .asConst a0 a1, b => by
+    cases b <;> simp [and_assoc, Expr.beq, Expr.beq_iff a1]
+  | .satisfies a0 a1 a2, b => by
+    cases b <;> simp [and_assoc, Expr.beq, Expr.beq_iff a1, TypeExpr.beq_iff a2]
 
 theorem Expr.beqList_iff : (xs ys : List Expr) → Expr.beqList xs ys = true ↔ xs = ys
   | [], ys => by cases ys <;> simp [and_assoc, Expr.beqList]
@@ -209,6 +218,16 @@ theorem VarDecl.beq_iff (a b : VarDecl) : VarDecl.beq a b = true ↔ a = b := by
   cases b
   simp [and_assoc, VarDecl.beq, TypeExpr.beqOpt_iff type, Expr.beqOpt_iff init]
 
+def VarDecl.beqOpt : Option VarDecl → Option VarDecl → Bool
+  | none, none => true
+  | some x, some y => VarDecl.beq x y
+  | _, _ => false
+
+theorem VarDecl.beqOpt_iff : (o p : Option VarDecl) → VarDecl.beqOpt o p = true ↔ o = p
+  | none, p => by cases p <;> simp [VarDecl.beqOpt]
+  | some x, p => by
+    cases p <;> simp [VarDecl.beqOpt, VarDecl.beq_iff x]
+
 mutual
 
 def Stmt.beq : Stmt → Stmt → Bool
@@ -217,6 +236,7 @@ def Stmt.beq : Stmt → Stmt → Bool
   | .returnStmt a0 a1, .returnStmt b0 b1 => decide (a0 = b0) && Expr.beqOpt a1 b1
   | .ifStmt a0 a1 a2 a3, .ifStmt b0 b1 b2 b3 => decide (a0 = b0) && Expr.beq a1 b1 && Stmt.beq a2 b2 && Stmt.beqOpt a3 b3
   | .forOfStmt a0 a1 a2 a3 a4, .forOfStmt b0 b1 b2 b3 b4 => decide (a0 = b0) && decide (a1 = b1) && decide (a2 = b2) && Expr.beq a3 b3 && Stmt.beq a4 b4
+  | .forStmt a0 a1 a2 a3 a4, .forStmt b0 b1 b2 b3 b4 => decide (a0 = b0) && VarDecl.beqOpt a1 b1 && Expr.beqOpt a2 b2 && Expr.beqOpt a3 b3 && Stmt.beq a4 b4
   | .whileStmt a0 a1 a2, .whileStmt b0 b1 b2 => decide (a0 = b0) && Expr.beq a1 b1 && Stmt.beq a2 b2
   | .block a0 a1, .block b0 b1 => decide (a0 = b0) && Stmt.beqList a1 b1
   | .breakStmt a0, .breakStmt b0 => decide (a0 = b0)
@@ -255,6 +275,9 @@ theorem Stmt.beq_iff : (a b : Stmt) → Stmt.beq a b = true ↔ a = b
     cases b <;> simp [and_assoc, Stmt.beq, Expr.beq_iff a1, Stmt.beq_iff a2, Stmt.beqOpt_iff a3]
   | .forOfStmt a0 a1 a2 a3 a4, b => by
     cases b <;> simp [and_assoc, Stmt.beq, Expr.beq_iff a3, Stmt.beq_iff a4]
+  | .forStmt a0 a1 a2 a3 a4, b => by
+    cases b <;> simp [and_assoc, Stmt.beq, VarDecl.beqOpt_iff a1, Expr.beqOpt_iff a2, Expr.beqOpt_iff a3,
+      Stmt.beq_iff a4]
   | .whileStmt a0 a1 a2, b => by
     cases b <;> simp [and_assoc, Stmt.beq, Expr.beq_iff a1, Stmt.beq_iff a2]
   | .block a0 a1, b => by
@@ -308,9 +331,11 @@ theorem Field.beqList_iff : (xs ys : List Field) → Field.beqList xs ys = true 
 
 def Decl.beq : Decl → Decl → Bool
   | .import a0 a1 a2, .import b0 b1 b2 => decide (a0 = b0) && decide (a1 = b1) && decide (a2 = b2)
-  | .function a0 a1 a2 a3 a4 a5, .function b0 b1 b2 b3 b4 b5 => decide (a0 = b0) && decide (a1 = b1) && decide (a2 = b2) && Param.beqList a3 b3 && TypeExpr.beqOpt a4 b4 && Stmt.beq a5 b5
-  | .interface a0 a1 a2 a3, .interface b0 b1 b2 b3 => decide (a0 = b0) && decide (a1 = b1) && decide (a2 = b2) && Field.beqList a3 b3
-  | .typeAlias a0 a1 a2 a3, .typeAlias b0 b1 b2 b3 => decide (a0 = b0) && decide (a1 = b1) && decide (a2 = b2) && TypeExpr.beq a3 b3
+  | .exports a0 a1 a2, .exports b0 b1 b2 => decide (a0 = b0) && decide (a1 = b1) && decide (a2 = b2)
+  | .function a0 a1 a2 a6 a3 a4 a5, .function b0 b1 b2 b6 b3 b4 b5 => decide (a0 = b0) && decide (a1 = b1) && decide (a2 = b2) && decide (a6 = b6) && Param.beqList a3 b3 && TypeExpr.beqOpt a4 b4 && Stmt.beq a5 b5
+  | .interface a0 a1 a2 a4 a3, .interface b0 b1 b2 b4 b3 => decide (a0 = b0) && decide (a1 = b1) && decide (a2 = b2) && decide (a4 = b4) && Field.beqList a3 b3
+  | .typeAlias a0 a1 a2 a4 a3, .typeAlias b0 b1 b2 b4 b3 => decide (a0 = b0) && decide (a1 = b1) && decide (a2 = b2) && decide (a4 = b4) && TypeExpr.beq a3 b3
+  | .enum a0 a1 a2 a3, .enum b0 b1 b2 b3 => decide (a0 = b0) && decide (a1 = b1) && decide (a2 = b2) && decide (a3 = b3)
   | .exportedVar a0 a1, .exportedVar b0 b1 => decide (a0 = b0) && VarDecl.beq a1 b1
   | .stmt a0, .stmt b0 => Stmt.beq a0 b0
   | _, _ => false
@@ -318,12 +343,16 @@ def Decl.beq : Decl → Decl → Bool
 theorem Decl.beq_iff : (a b : Decl) → Decl.beq a b = true ↔ a = b
   | .import a0 a1 a2, b => by
     cases b <;> simp [and_assoc, Decl.beq]
-  | .function a0 a1 a2 a3 a4 a5, b => by
+  | .exports a0 a1 a2, b => by
+    cases b <;> simp [and_assoc, Decl.beq]
+  | .function a0 a1 a2 a6 a3 a4 a5, b => by
     cases b <;> simp [and_assoc, Decl.beq, Param.beqList_iff a3, TypeExpr.beqOpt_iff a4, Stmt.beq_iff a5]
-  | .interface a0 a1 a2 a3, b => by
+  | .interface a0 a1 a2 a4 a3, b => by
     cases b <;> simp [and_assoc, Decl.beq, Field.beqList_iff a3]
-  | .typeAlias a0 a1 a2 a3, b => by
+  | .typeAlias a0 a1 a2 a4 a3, b => by
     cases b <;> simp [and_assoc, Decl.beq, TypeExpr.beq_iff a3]
+  | .enum a0 a1 a2 a3, b => by
+    cases b <;> simp [and_assoc, Decl.beq]
   | .exportedVar a0 a1, b => by
     cases b <;> simp [and_assoc, Decl.beq, VarDecl.beq_iff a1]
   | .stmt a0, b => by
