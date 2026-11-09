@@ -27,6 +27,7 @@ built it.
 | Step | What is built | Pull request |
 |---|---|---|
 | 1 | The shared core of the IR, its printer and its equality are in `tolean/IR.lean` and `tolean/IR/`. The core includes inductive types whose constructors take no arguments, which TypeScript uses for literal unions and SQL could use for its enums. TypeScript adds JavaScript numbers and `null` in `tolean/TypeScript/IR.lean`. Every corpus file translates to the same text as before. | [#50](https://github.com/shihangw/tolean/pull/50) |
+| 5, first part | Go's pure functions go through a total translator, `tolean/Go/Translate/Pure.lean`, that builds the IR with a Go extension for `Go.wrap64` and `++` on strings. Go has an interpreter for that subset in `tolean/Go/Spec/Eval.lean` and an evaluator for its IR, and `translate_sound` proves the translation. The [Go proofs plan](go-proofs.md) lists the rest. | PR_LINK |
 
 ## What every language shares
 
@@ -37,7 +38,7 @@ that describe Lean code do not depend on the source language.
 |---|---|---|
 | Pure core of the IR | Integers, booleans, strings, `Option`, `if`, `let`, structures, lists and `List.foldl`. Each language adds its own constructs at one extension point per layer, such as JavaScript numbers for TypeScript. | `tolean/IR.lean`, with the TypeScript extension in `tolean/TypeScript/IR.lean` |
 | Its printer | One IR, printed in one way, so there is one printer to trust or certify. The [printing plan](printing.md) hands its layout to Lean. | Part of `tolean/IR.lean`, which asks each language how to print what it adds |
-| Its evaluator | The meaning of the IR. It becomes generic over the value type, so that Go can use `int64` and SQL can use its own values and three-valued logic. | `tolean/TypeScript/IR/Eval.lean`, over the TypeScript interpreter's `Val N` |
+| Its evaluator | The meaning of the IR. It becomes generic over the value type, so that Go can use `int64` and SQL can use its own values and three-valued logic. | `tolean/TypeScript/IR/Eval.lean`, over the TypeScript interpreter's `Val N`, and `tolean/Go/IR/Eval.lean`, over Go's values |
 | Proof plumbing | `Env` and its lemmas, fuel, the encode and decode pattern, `link_tac`, `runFold_foldl`, a lemma of the shape of `decls_sound`, and kernel-decidable equality on the IR | `Env` is in `tolean/TypeScript/Spec/Eval.lean`, and the rest is under `tolean/TypeScript/Proof/` |
 | Certificate generator | The layout of a certificate, and `chars!` | `tolean/TypeScript/Certify.lean` and `Certify/`, with `chars!` in `Syntax/Parser.lean` |
 | Lexer side of the round trip | `lexChars_render`, `Laid` and `NoBreak` are about tokens and lines, not about TypeScript | `tolean/TypeScript/Syntax/` |

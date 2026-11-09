@@ -1,4 +1,5 @@
 import tolean.Go.Syntax.Parser
+import tolean.Go.Translate.Pure
 
 /-!
 The Go translator. It reads the files of one Go package, keeps the root
@@ -1114,7 +1115,7 @@ def topoOrder (names : List String) (deps : String → List String) : List Strin
   return done ++ names.filter (!done.contains ·)
 
 def translatePkg (pkg : Pkg) (cfg : Config) (ns : String) (sources : List String)
-    (idents : List String := []) : Except String String := do
+    (idents : List String := []) (decls : List Decl := []) : Except String String := do
   let reached := closure pkg cfg.roots
   for r in cfg.roots do
     if !(pkg.funcs.any (·.name == r)) then throw s!"no function '{r}' in the package"
@@ -1131,12 +1132,19 @@ def translatePkg (pkg : Pkg) (cfg : Config) (ns : String) (sources : List String
     deps n ++ (match n.splitOn "." with
       | [_, m] => funcs.filter (fun f => (f.name.splitOn ".").getLast? == some m) |>.map (·.name)
       | _ => [])
+  -- The pure functions that `Pure` accepts, which a proof covers. It
+  -- translates them in the order of `funcOrder`, so that each comes after the
+  -- functions it calls.
+  let pure := Pure.translateFuncs decls (funcOrder.filter (!effectful.contains ·))
+  let names : tolean.IR.Names := { clashes := (Eval.program decls).names }
   let run : TM String := do
     -- Functions first, so the interface methods they call are known.
     let mut funcTexts := #[]
     for n in funcOrder do
       let some f := funcs.find? (·.name == n) | continue
-      funcTexts := funcTexts.push (← transFunc f)
+      match pure.find? (·.2.name == n) with
+      | some (d, _) => funcTexts := funcTexts.push (tolean.IR.Decl.print names d)
+      | none => funcTexts := funcTexts.push (← transFunc f)
     let mut typeTexts := #[]
     for n in typeOrder do
       let some td := types.find? (·.name == n) | continue
@@ -1167,7 +1175,7 @@ def translate (files : List (String × String)) (cfg : Config) (ns : String) : E
       | .ident name => some name
       | _ => none
     | .error _ => []
-  translatePkg pkg cfg ns (files.map (·.1)) idents
+  translatePkg pkg cfg ns (files.map (·.1)) idents (parsed.flatMap (·.2.decls))
 
 /-- The exported top-level functions of a package: the default roots. -/
 def exportedFunctions (files : List (String × String)) : Except String (List String) := do

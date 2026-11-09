@@ -88,8 +88,8 @@
   <text x="448" y="425" class="item">return; if, switch, multiple results, methods</text>
   <text x="448" y="439" class="item">erased tracing and timing code</text>
   <text x="448" y="453" class="item">corpus output fixed and compiled in CI</text>
-  <text x="448" y="467" class="item">translation correctness: not proved (needs</text>
-  <text x="448" y="481" class="item">a Go semantics; none is complete yet)</text>
+  <text x="448" y="467" class="item">translation correctness: proved for pure</text>
+  <text x="448" y="481" class="item">functions only (translate_sound)</text>
 
   <rect x="446" y="560" width="308" height="164" rx="8" class="proved"/>
   <text x="460" y="580" class="ring">Proved</text>
