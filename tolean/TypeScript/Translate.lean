@@ -1314,6 +1314,48 @@ def Ty.element? : Ty → Option Ty
   | .array t => some t
   | _ => none
 
+/-- The receiver and the method of a call such as `xs.includes(v)`, for a
+method that takes no callback. `Number.isNaN(x)` and the like are calls of the
+global `Number`, not of an array. -/
+def arrayCallOf : Expr → Option (Expr × String)
+  | .member _ recv name => if recv.namesNumber then none else some (recv, name)
+  | _ => none
+
+/-- `e` is an arrow function. -/
+def _root_.tolean.TypeScript.Syntax.Expr.isArrow : Expr → Bool
+  | .arrow .. => true
+  | _ => false
+
+/-- The type that the context gives the arguments of the array method
+`method` on elements of type `elem`: for `includes`, the element type, so that
+a string can be a constructor of a literal union. -/
+def arrayArgExpected (method : String) (elem : Ty) : Option Ty :=
+  if method == "includes" then some elem else none
+
+/-- The operation that `xs.includes(x)` becomes on elements of type `elem`.
+SameValueZero is `=` on integers, booleans, strings and the constructors of a
+literal union. On numbers it is `JSNumber.eq`, except that `NaN` is the same
+as `NaN`. On objects it compares identities, which the output cannot. -/
+def includesOp? (elem : Ty) : Option IR.ExprExt :=
+  if elem == .number then some .includesNumber
+  else if elem.isEqPrimitive then some .includes
+  else none
+
+/-- The code for `xs.method(args)`, a method of an array that takes no
+callback, where the elements of `xs` have the type `elem` and `args` are the
+codes of the arguments. -/
+def arrayCall (s : Span) (method : String) (elem : Ty) (xs : Code) (args : List Code) : TM Code := do
+  if method == "includes" then
+    let [x] := args
+      | reject s "'includes' takes one argument here; the index to start at is not supported"
+    unless x.type == elem do reject s "the argument of 'includes' must have the element type of the array"
+    requireFeature s .arrayIncludes
+    let op ← orReject (includesOp? elem) s
+      "'includes' needs an array of numbers, bigints, booleans, strings or a literal union"
+    -- `x ∈ xs` is a `Prop`.
+    return ⟨.ext op [xs.value, x.value], op == .includes, .boolean⟩
+  reject s s!"the array method '{method}' is not supported here"
+
 /-- A callback's parameter may have a type written out: the element type. -/
 def checkParamType (p : Param) (elem : Ty) : TM Unit := do
   if let some t := p.type then
@@ -1552,7 +1594,10 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
   | .call s callee args =>
     match arrayMethodOf callee with
     | some (recv, method) => translateArrayMethod fuel env expected s recv method args
-    | none => translateCall fuel env s callee args
+    | none =>
+      match arrayCallOf callee with
+      | some (recv, method) => translateArrayCall fuel env s recv method args
+      | none => translateCall fuel env s callee args
   | .object s props => translateObject fuel env expected s props
   | .array s elems =>
     match expected with
@@ -1687,6 +1732,18 @@ def translateArrayMethod (fuel : Nat) (env : Env) (expected : Option Ty) (s : Sp
   let info : IR.CallbackInfo IR.TyExt :=
     { span := s, result := b.type.lean, scope := env.locals.map fun l => (l.name, l.type.lean) }
   return ⟨.listMethod method xs.value p.name elem.lean b.value info, false, type⟩
+
+/-- `xs.includes(v)`, a method of an array that takes no callback: the array,
+then each argument, then `arrayCall` on their codes. An arrow function is a
+callback, which no such method takes. -/
+def translateArrayCall (fuel : Nat) (env : Env) (s : Span) (recv : Expr) (method : String)
+    (args : List Expr) : TM Code := do
+  let fuel + 1 := fuel | tooDeep
+  if args.any (·.isArrow) then reject s s!"'{method}' does not take a callback here"
+  let xs ← translateExpr fuel env none recv
+  let elem ← orReject xs.type.element? recv.span "only an array has this method"
+  let codes ← args.mapM (translateExpr fuel env (arrayArgExpected method elem))
+  arrayCall s method elem xs codes
 
 def translateObject (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (props : List Property) :
     TM Code := do

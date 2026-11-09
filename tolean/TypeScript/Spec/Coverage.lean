@@ -237,6 +237,9 @@ def sections : List Section := [
     [``Proof.evalFilter_sim]⟩,
   ⟨"sec-array.prototype.find", "23.1.3.9", "Array.prototype.find",
     [``Proof.evalFind_sim]⟩,
+  ⟨"sec-array.prototype.includes", "23.1.3.16", "Array.prototype.includes",
+    [``Proof.eval_arrayCall, ``Proof.includesOp_some, ``Proof.arrayCall_sound,
+    ``Proof.translateArrayCall_sound]⟩,
   ⟨"sec-array.prototype.map", "23.1.3.21", "Array.prototype.map",
     [``Proof.evalMap_sim]⟩,
   ⟨"sec-array.prototype.push", "23.1.3.23", "Array.prototype.push",
@@ -570,7 +573,10 @@ def extras : List Group := [
     ``Eval.decTuple_list, ``Eval.decLast_cons, ``Eval.decCons_cons]⟩,
   ⟨"Certificates: callbacks and the List functions", [``Proof.evalMap_map, ``Proof.evalFilter_filter,
     ``Proof.evalFind_find, ``Proof.evalFind_true, ``Proof.evalFind_false, ``Proof.find?_isSome,
-    ``Proof.find?_not_isNone, ``Proof.getD_map_undefined]⟩]
+    ``Proof.find?_not_isNone, ``Proof.getD_map_undefined]⟩,
+  ⟨"Certificates: includes and membership", [``Proof.includesVal_map, ``Proof.includesVal_enc,
+    ``Proof.includesVal_int, ``Proof.includesVal_bool, ``Proof.includesVal_str,
+    ``Proof.includesVal_num]⟩]
 
 open Meta in
 /-- The theorems of the TypeScript modules that the index does not list. A

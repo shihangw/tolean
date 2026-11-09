@@ -371,6 +371,8 @@ the file, the line and the reason. It never approximates.
 | `xs.map(x => e)`, `xs.filter(x => p)` | `List.map (fun (x : T) => e) xs`, `List.filter (fun (x : T) => p) xs` |
 | `xs.some(x => p)`, `xs.every(x => p)` | `List.any xs (fun (x : T) => p)`, `List.all xs (fun (x : T) => p)` |
 | `xs.find(x => p)` | `List.find? (fun (x : T) => p) xs`. The value is `undefined` when no element passes, so it has the type of an optional field: `xs.find(p) ?? d`, `xs.find(p)?.f` and `xs.find(p) === undefined` work as they do on `s.f`. |
+| `xs.includes(x)` on `bigint`, `boolean`, `string` or a literal union of strings | `x ∈ xs`. `includes` compares by SameValueZero, which is `===` on these types. It is in ES2016. |
+| `xs.includes(x)` on `number` | `List.any xs (JSNumber.sameValueZero x)`. SameValueZero is `===`, except that `NaN` is the same as `NaN`, so `[NaN].includes(NaN)` is `true`. |
 | `if` that returns, `if` that changes locals, `c ? a : b` | `if … then … else …` |
 | `+ - *`, `< <= > >=`, `=== !==`, `&& \|\| !` | the same operators on `Int`, `Bool`, `Prop` |
 | `a / k`, `a % k` on `bigint`, where `k` is a nonzero literal | `Int.tdiv a k`, `Int.tmod a k` (both truncate toward zero, as JS does) |
@@ -425,6 +427,10 @@ Tolean rejects these, among others:
   for every method but `map` it must give a boolean. Tolean also refuses
   `find` on an array of nullable values, because Lean's `none` would stand
   for both `null` and `undefined`.
+- `includes` on an array of objects or of nullable values, and its second
+  argument, the index to start at. On objects `includes` compares
+  references. Tolean also refuses a call of any other array method that takes
+  no callback, such as `indexOf`.
 - An array declared with `let` and the type `Array<T>`. An array that the
   function pushes to must be a `const`; for a value, use `ReadonlyArray<T>`.
   An empty `[]` needs a type from its context, and the elements of a literal
