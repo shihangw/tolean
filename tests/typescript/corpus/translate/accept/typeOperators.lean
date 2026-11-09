@@ -58,4 +58,13 @@ def nameAsConst (s : JSString) : JSString :=
 def wrapInParens (s : JSString) : Value :=
   (Value.«string» s)
 
+def pick (flag : Bool) (s : JSString) (t : JSString) : JSString :=
+  (if flag then s else t)
+
+def names (s : JSString) (t : JSString) : List JSString :=
+  ([s, t] : List JSString)
+
+def maybeName (s : Option JSString) : Option JSString :=
+  s
+
 end Test

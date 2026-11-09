@@ -1219,6 +1219,20 @@ theorem translateArrayMethod_sound {F : Nat}
   rw [eval_arrayMethod m fuel _ _ _ _ _ _ _ _ _ hname (by simpa using hr), hrecv]
   exact methodVal_sim m fs fuel (bodySim_of m fs fuel hbody ha hs) method items v hval
 
+omit [JSNumber N] in
+/-- `firstFitting` gives a result of one of its two parsers, from the state it
+starts from. -/
+theorem firstFitting_ok {A : Type} {x y : TM A} {fits : A → Bool} {s s' : Ctx} {a : A}
+    (h : firstFitting x y fits s = .ok a s') : x s = .ok a s' ∨ y s = .ok a s' := by
+  simp only [firstFitting] at h
+  split at h
+  · rename_i b s₁ hx
+    split at h
+    · obtain ⟨rfl, rfl⟩ : b = a ∧ s₁ = s' := by simpa using h
+      exact .inl hx
+    · exact .inr h
+  · exact .inr h
+
 theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
     (∀ env exp e ctx c ctx', translateExpr F env exp e ctx = .ok c ctx' →
       Sim (N := N) m fs fuel env e c.code) ∧
@@ -1267,7 +1281,9 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
         · obtain ⟨rfl, -⟩ := h
           intro ρs ρo v ha hs hv
           rw [Eval.eval]
-          exact ihX _ _ _ _ _ _ hc' ρs ρo v ha hs hv
+          rcases firstFitting_ok hc' with hx | hy
+          · exact ihX _ _ _ _ _ _ hx ρs ρo v ha hs hv
+          · exact ihX _ _ _ _ _ _ hy ρs ρo v ha hs hv
         · simp at h
       | bigint sp text =>
         simp only [translateExprCore] at h

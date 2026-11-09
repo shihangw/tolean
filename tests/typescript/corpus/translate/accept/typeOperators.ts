@@ -65,3 +65,18 @@ export function nameAsConst(s: string): string {
 export function wrapInParens(s: string): Value {
   return (s satisfies Value);
 }
+
+// The value keeps its own type wherever the union would reach inside it:
+// in the branches of a conditional, the elements of an array and a
+// nullable value.
+export function pick(flag: boolean, s: string, t: string): string {
+  return (flag ? s : t) satisfies Value;
+}
+
+export function names(s: string, t: string): ReadonlyArray<string> {
+  return [s, t] satisfies ReadonlyArray<Value>;
+}
+
+export function maybeName(s: string | null): string | null {
+  return s satisfies Value | null;
+}

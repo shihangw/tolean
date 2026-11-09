@@ -298,6 +298,23 @@ def Code.into (unions : List UnionInfo) (c : Code) (expected : Option Ty) : Code
     | none => c
   | _ => c
 
+/-- A value of type `a` has the type `t`, where a value of a member of a union
+of primitive types counts as a value of the union, inside arrays and
+nullable types too. This is how TypeScript checks `satisfies`; the value
+keeps the type `a`. -/
+def Ty.fits (unions : List UnionInfo) : Ty → Ty → Bool
+  | a, .tagged ref tags => a.assignableTo (.tagged ref tags) ||
+    a.typeOf?.any fun k => (unions.any fun u => u.ref == ref && u.field.isNone) && tags.contains k
+  | a, .nullable t => a.assignableTo (.nullable t) || a == .null ||
+    match a with
+    | .nullable a' => Ty.fits unions a' t
+    | _ => Ty.fits unions a t
+  | a, .array t => a.assignableTo (.array t) ||
+    match a with
+    | .array a' => Ty.fits unions a' t
+    | _ => false
+  | a, t => a.assignableTo t
+
 /-- What a statement list ends in: a `return`, or the tuple of changed locals. -/
 inductive Tail where
   | ret
@@ -391,6 +408,13 @@ def orReject {A : Type} (o : Option A) (span : Span) (reason : String) : TM A :=
   match o with
   | some a => pure a
   | none => reject span reason
+
+/-- The result of `x`, when `x` gives one that `fits` accepts, or else the
+result of `y`, which runs from the state that `x` started from. -/
+def firstFitting {A : Type} (x y : TM A) (fits : A → Bool) : TM A := fun s =>
+  match x s with
+  | .ok a s' => if fits a then .ok a s' else y s
+  | .error _ _ => y s
 
 /-- Refuse the node at `span` unless the target edition has `f`. -/
 def requireFeature (span : Span) (f : Feature) : TM Unit := do
@@ -1059,14 +1083,19 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
   -- Type stripping removes `as const`, which only keeps the literal types of
   -- the value. The output types a literal by its context, as without it.
   | .asConst _ inner => translateExprCore fuel env expected inner
-  -- `satisfies T` types the value in the context of `T` and checks it
-  -- against `T`, and the value keeps its own type. So a member of a union
-  -- of primitive types is checked as the union's constructor would be, but
-  -- it does not become one: `s satisfies U` is still a `string`.
+  -- `satisfies T` checks the value against `T`, and the value keeps its own
+  -- type. A member of a union of primitive types is checked as the union's
+  -- constructor would be, but it does not become one, so `s satisfies U` and
+  -- `(b ? s : t) satisfies U` are still a `string`. The value is typed in the
+  -- context of `T` only when it needs a context to be typed at all, as an
+  -- object literal does, or when its own type does not fit `T`, as a string
+  -- literal of a literal union does not.
   | .satisfies s inner type =>
     let t ← translateType type
-    let code ← translateExprCore fuel env (some t) inner
-    unless (code.into env.unions (some t)).type.assignableTo t do
+    let fits (c : Code) : Bool := c.type.fits env.unions t
+    let code ← firstFitting (translateExprCore fuel env none inner)
+      (translateExprCore fuel env (some t) inner) fits
+    unless fits code do
       reject s "the value does not have the type that 'satisfies' names"
     return code
   | .bigint _ text =>

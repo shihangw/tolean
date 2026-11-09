@@ -245,7 +245,7 @@ def numberLaws : List Name := [``SafeIntLaws.add,
 /-- The theorems that are about no section of ECMA-262. -/
 def extras : List Group := [
   ⟨"The translator's monad", [``Proof.bind_ok, ``Proof.map_ok, ``Proof.ite_state, ``Proof.pure_ok,
-    ``Proof.get_ok, ``Proof.reject_ne_ok, ``Proof.orReject_ok, ``Proof.tooDeep_ne_ok,
+    ``Proof.get_ok, ``Proof.reject_ne_ok, ``Proof.orReject_ok, ``Proof.firstFitting_ok, ``Proof.tooDeep_ne_ok,
     ``Proof.requireFeature_ok, ``Proof.modify_ok, ``Proof.fuelLimit_ok, ``Proof.throw_ne_ok,
     ``Proof.set_ok, ``Proof.isolated_ok]⟩,
   ⟨"Lists and lookups", [``Proof.Forall₂.mono, ``Proof.Forall₂.append, ``Proof.Forall₂.map,
