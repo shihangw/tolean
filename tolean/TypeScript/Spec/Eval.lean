@@ -281,6 +281,20 @@ def numberText? : Expr → Option String
   | .number _ text => some text
   | _ => none
 
+/-- The integer that a number literal names, or a number literal after `-`,
+such as `-1`. A literal is that integer whatever the model of numbers, as it
+is for `xs[0]`. -/
+def intLiteral? : Expr → Option Int
+  | .number _ text => numberLiteral text
+  | .unary _ .neg (.number _ text) => (numberLiteral text).map (- ·)
+  | _ => none
+
+/-- `items.at(k)` (`Array.prototype.at`, ECMA-262 §23.1.3.1), where `k` is
+the integer of the argument: a negative `k` counts from the end. An index
+outside the array gives `undefined`. -/
+def atVal (items : List (Val N)) (k : Int) : Val N :=
+  elementAt items (some (if 0 ≤ k then k else items.length + k))
+
 /-- The functions of the module, by name. -/
 def functions (m : Module) : List (String × List String × Stmt) :=
   m.decls.filterMap fun
@@ -455,6 +469,10 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     else do
       match ← eval m fuel env obj with
       | .obj fields => getProp fields name
+      -- `xs.length`, the number of elements of an array (ECMA-262 §10.4.2).
+      -- An array of the subset has fewer than 2^53 elements, so its length
+      -- is a safe integer.
+      | .list items => if name == "length" then some (.num (JSNumber.ofSafeInt items.length)) else none
       | _ => none
   -- `obj?.name` is `undefined` when `obj` is `null` or `undefined`
   -- (ECMA-262 §13.3.9.1).
@@ -545,6 +563,17 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
       return .bool (← evalFind m fuel env p.name body false items).isNone
     else if method == "find" then return (← evalFind m fuel env p.name body true items).getD .undefined
     else none
+  -- `xs.at(k)` (`Array.prototype.at`, ECMA-262 §23.1.3.1). Its argument
+  -- becomes an integer by `ToIntegerOrInfinity`. A literal is the integer it
+  -- names, whatever the model of numbers. Any other number is its integer
+  -- when it is a safe integer; truncating other numbers leaves the subset.
+  | .call _ (.member _ recv "at") [arg] => do
+    let .list items ← eval m fuel env recv | none
+    match intLiteral? arg with
+    | some k => return atVal items k
+    | none =>
+      let .num n ← eval m fuel env arg | none
+      return atVal items (← JSNumber.toSafeInt n)
   -- Any other call of a method of an array, such as `xs.includes(v)`. The
   -- array comes first, then the arguments, as `EvaluateCall` takes them
   -- (ECMA-262 §13.3.6.2). Reading the method of an array has no effect, so

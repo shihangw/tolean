@@ -301,6 +301,43 @@ theorem includesVal_enc {α : Type} [DecidableEq α] (enc : α → Val N) (v : V
     Eval.includesVal (.num x) (xs.map .num) = some (xs.any (JSNumber.sameValueZero x)) :=
   includesVal_map _ _ _ (fun _ => rfl) xs
 
+omit [JSNumber N] in
+/-- The element of an encoded list at an integer index. -/
+@[simp] theorem elementAt_map_some {α : Type} (enc : α → Val N) (xs : List α) (k : Int) :
+    Eval.elementAt (xs.map enc) (some k) = Eval.encUndef enc (if 0 ≤ k then xs[k.toNat]? else none) := by
+  by_cases hk : 0 ≤ k
+  · simp only [Eval.elementAt, hk, if_true, List.getElem?_map]
+    cases xs[k.toNat]? <;> rfl
+  · simp [Eval.elementAt, hk]
+
+/-- `xs[i]` with a number `i`, on an encoded list. -/
+@[simp] theorem elementAt_map_toSafeInt {α : Type} (enc : α → Val N) (xs : List α) (i : N) :
+    Eval.elementAt (xs.map enc) (JSNumber.toSafeInt i) = Eval.encUndef enc (JSNumber.elementAt? xs i) := by
+  unfold JSNumber.elementAt?
+  cases JSNumber.toSafeInt i with
+  | none => rfl
+  | some k => exact elementAt_map_some enc xs k
+
+omit [JSNumber N] in
+/-- `xs.at(k)` on an encoded list: a negative `k` counts from the end, which
+is an index of the reversed list. -/
+@[simp] theorem atVal_map {α : Type} (enc : α → Val N) (xs : List α) (k : Int) :
+    Eval.atVal (xs.map enc) k =
+      Eval.encUndef enc (if 0 ≤ k then xs[k.toNat]? else xs.reverse[(-k - 1).toNat]?) := by
+  unfold Eval.atVal
+  by_cases hk : 0 ≤ k
+  · simp only [hk, if_true, elementAt_map_some]
+  · simp only [hk, if_false, elementAt_map_some, List.length_map]
+    congr 1
+    by_cases hl : 0 ≤ (xs.length : Int) + k
+    · have hlt : (-k - 1).toNat < xs.length := by omega
+      rw [if_pos hl, List.getElem?_reverse hlt]
+      congr 1
+      omega
+    · rw [if_neg hl, eq_comm, List.getElem?_eq_none]
+      simp only [List.length_reverse]
+      omega
+
 end tolean.TypeScript.Proof
 
 namespace tolean.TypeScript.IR
@@ -314,6 +351,21 @@ elab "split_find" : tactic => withMainContext do
   let some e := target.find? fun e => e.isAppOfArity ``List.find? 3 && !e.hasLooseBVars
     | throwError "split_find: no List.find? in the goal"
   let stx ← Term.exprToSyntax e
+  evalTactic (← `(tactic| cases _ : $stx))
+
+open Lean Elab Tactic Meta in
+/-- Split on an element that the goal reads from a list, such as `xs[0]?` or
+`JSNumber.elementAt? xs i`, where the evaluator encodes it with `encUndef`.
+The value is `undefined` when there is no element, so the evaluator and the
+printed definition read it only through a `match`, as for `find`. -/
+elab "split_undef" : tactic => withMainContext do
+  let target ← instantiateMVars (← getMainTarget)
+  let some e := target.find? fun e =>
+      e.isAppOf ``tolean.TypeScript.Eval.encUndef && e.getAppNumArgs > 0 &&
+        (e.appArg!.isAppOf ``GetElem?.getElem? || e.appArg!.isAppOf ``tolean.TypeScript.JSNumber.elementAt?) &&
+        !e.hasLooseBVars
+    | throwError "split_undef: no element of a list in the goal"
+  let stx ← Term.exprToSyntax e.appArg!
   evalTactic (← `(tactic| cases _ : $stx))
 
 /-- The proof of a link theorem: unfold the IR's evaluator on the IR and the
@@ -334,6 +386,7 @@ macro_rules
         Eval.objectPrototypeNames, List.lookup, DeclRef.beq_def, -List.map_map,
         -Bool.if_true_left, -Bool.if_false_right, -Bool.if_false_left, -Bool.if_true_right, $defs,*]
       all_goals repeat' (split_find <;> simp [-List.map_map, $defs,*])
+      all_goals repeat' (split_undef <;> simp [-List.map_map, $defs,*])
       all_goals repeat' (split <;> (try simp_all [bindState, eqVal, tolean.IR.IntOp.apply,
         tolean.IR.Order.apply, tolean.IR.Division.apply, ExprExt.apply, NumberOp.apply,
         NumberTest.apply, tagOf, Eval.Val.typeOf, Eval.Env.set, Eval.getProp, Eval.getKey_ofString, Eval.getPath,

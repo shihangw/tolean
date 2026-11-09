@@ -1465,17 +1465,141 @@ theorem translateArrayMethod_sound {F : Nat}
   rw [eval_arrayMethod m fuel _ _ _ _ _ _ _ _ _ hname (by simpa using hr), hrecv]
   exact methodVal_sim m fs fuel (bodySim_of m fs fuel hbody ha hs) method items v hval
 
+/-! ### Arrays: length and indexes -/
+
+omit [JSNumber N] in
+theorem indexLiteral_ok {sp : Span} {text : String} {xs c : Code} {elem : Ty} {ctx ctx' : Ctx}
+    (h : indexLiteral sp text xs elem ctx = .ok c ctx') :
+    ∃ k, Eval.numberLiteral text = some k ∧ 0 ≤ k ∧
+      c.code = .ascribe (.ext (.indexLit k.toNat) [xs.value]) (Ty.optional elem).lean := by
+  simp only [indexLiteral, bind_ok, orReject_ok, ite_state] at h
+  obtain ⟨k, s₁, ⟨hk, rfl⟩, h⟩ := h
+  split at h
+  · rename_i hpos
+    simp only [pure_bind, pure_ok] at h
+    exact ⟨k, hk, by simpa using hpos, by rw [← h.1]⟩
+  · simp at h
+
+omit [JSNumber N] in
+theorem indexNumber_ok {sp : Span} {xs i c : Code} {elem : Ty} {ctx ctx' : Ctx}
+    (h : indexNumber sp xs i elem ctx = .ok c ctx') :
+    c.code = .ext .indexNumber [xs.value, i.value] := by
+  simp only [indexNumber, ite_state] at h
+  split at h
+  · simp only [pure_bind, pure_ok] at h; rw [← h.1]
+  · simp at h
+
+/-- `xs[i]` on an array: a number literal is the integer it names, and any
+other number is its integer when it is a safe integer. -/
+theorem eval_index_list {ρ : Eval.Env N} {sp : Span} {obj key : Expr} {items : List (Val N)}
+    (h : Eval.eval m fuel ρ obj = some (.list items)) :
+    Eval.eval m fuel ρ (.index sp obj key) =
+      match Eval.numberText? key with
+      | some text => (Eval.numberLiteral text).map fun k => Eval.elementAt items (some k)
+      | none => (Eval.eval m fuel ρ key).bind fun
+        | .num n => some (Eval.elementAt items (JSNumber.toSafeInt n))
+        | _ => none := by
+  simp only [Eval.eval, h, Option.bind_eq_bind, Option.bind_some]
+  cases hk : Eval.numberText? key with
+  | some text =>
+    simp only
+    generalize Eval.numberLiteral text = o
+    cases o <;> rfl
+  | none =>
+    simp only
+    cases Eval.eval m fuel ρ key with
+    | none => simp
+    | some w => cases w <;> simp
+
+/-- `xs.length` on an array. -/
+theorem eval_length {ρ : Eval.Env N} {sp : Span} {obj : Expr} {items : List (Val N)}
+    (hsp : obj.optSpine = false) (h : Eval.eval m fuel ρ obj = some (.list items)) :
+    Eval.eval m fuel ρ (.member sp obj "length") = some (.num (JSNumber.ofSafeInt items.length)) := by
+  simp [Eval.eval, hsp, h]
+
+theorem length_sound {env : Translate.Env} {sp : Span} {obj : Expr} {o : IR.Expr}
+    (hsp : obj.optSpine = false) (hobj : Sim (N := N) m fs fuel env obj o) :
+    Sim (N := N) m fs fuel env (.member sp obj "length") (.ext .length [o]) := by
+  intro ρs ρo v ha hs hv
+  simp only [IR.Expr.eval, IR.Expr.evalList] at hv
+  cases hx : IR.Expr.eval fs fuel ρo o with
+  | none => simp [hx] at hv
+  | some w =>
+    simp only [hx, Option.bind_eq_bind, Option.bind_some, pure_bind] at hv
+    cases w
+    case list items =>
+      simp only [IR.ExprExt.apply, Option.some.injEq] at hv
+      rw [eval_length m fuel hsp (hobj ρs ρo _ ha hs hx), hv]
+    all_goals simp [IR.ExprExt.apply] at hv
+
+theorem translateArrayIndex_sound {F : Nat}
+    (ihE : ∀ env exp e ctx c ctx', translateExpr F env exp e ctx = .ok c ctx' →
+      Sim (N := N) m fs fuel env e c.code)
+    {env : Translate.Env} {s : Span} {o : Code} {elem : Ty} {key : Expr} {ctx ctx' : Ctx} {c : Code}
+    (h : translateArrayIndex (F + 1) env s o elem key ctx = .ok c ctx')
+    {sp : Span} {obj : Expr} (hobj : Sim (N := N) m fs fuel env obj o.value) :
+    Sim (N := N) m fs fuel env (.index sp obj key) c.code := by
+  simp only [translateArrayIndex, ite_state] at h
+  split at h
+  · simp at h
+  simp only [pure_bind] at h
+  split at h
+  · -- A number literal, which is the integer it names.
+    rename_i sp' text
+    obtain ⟨k, hk, hpos, hc⟩ := indexLiteral_ok h
+    intro ρs ρo v ha hs hv
+    rw [hc] at hv
+    simp only [IR.Expr.eval, IR.Expr.evalList] at hv
+    cases hx : IR.Expr.eval fs fuel ρo o.value with
+    | none => simp [hx] at hv
+    | some w =>
+      cases w
+      case list items =>
+        simp only [hx, Option.bind_eq_bind, Option.bind_some, pure_bind, IR.ExprExt.apply,
+          Option.some.injEq, Int.toNat_of_nonneg hpos] at hv
+        rw [eval_index_list m fuel (hobj ρs ρo _ ha hs hx)]
+        simp [Eval.numberText?, hk, hv]
+      all_goals simp [hx, IR.ExprExt.apply] at hv
+  · -- Any other number: its integer, when it is a safe integer.
+    rename_i hnot
+    simp only [bind_ok] at h
+    obtain ⟨i, s₂, hi, h⟩ := h
+    have hc := indexNumber_ok h
+    have hnt : Eval.numberText? key = none := by
+      cases key <;> simp [Eval.numberText?] at hnot ⊢
+    intro ρs ρo v ha hs hv
+    rw [hc] at hv
+    simp only [IR.Expr.eval, IR.Expr.evalList, eval_value] at hv
+    cases hx : IR.Expr.eval fs fuel ρo o.code with
+    | none => simp [hx] at hv
+    | some w =>
+      cases hkey : IR.Expr.eval fs fuel ρo i.code with
+      | none => simp [hx, hkey] at hv
+      | some kv =>
+        simp only [hx, hkey, Option.bind_eq_bind, Option.bind_some, pure_bind] at hv
+        cases w
+        case list items =>
+          cases kv
+          case num n =>
+            simp only [IR.ExprExt.apply, Option.some.injEq] at hv
+            rw [eval_index_list m fuel (hobj ρs ρo _ ha hs (by rw [eval_value]; exact hx)), hnt,
+              ihE _ _ _ _ _ _ hi ρs ρo _ ha hs hkey]
+            simp [hv]
+          all_goals simp [IR.ExprExt.apply] at hv
+        all_goals simp [IR.ExprExt.apply] at hv
+
 /-! ### Array methods without a callback -/
 
 /-- A method of an array that takes no callback: the interpreter evaluates the
 array, then the arguments, and `arrayMethod` gives the value. -/
 theorem eval_arrayCall (sp sp' : Span) (recv : Expr) (method : String) (args : List Expr)
-    (hr : recv.namesNumber = false) (harg : args.any (·.isArrow) = false) (ρ : Eval.Env N) :
+    (hr : recv.namesNumber = false) (harg : args.any (·.isArrow) = false) (hat : method ≠ "at")
+    (ρ : Eval.Env N) :
     Eval.eval m fuel ρ (.call sp (.member sp' recv method) args) =
       (Eval.eval m fuel ρ recv).bind fun
         | .list items => (Eval.evalList m fuel ρ args).bind (Eval.arrayMethod method items)
         | _ => none := by
-  rw [Eval.eval.eq_26]
+  rw [Eval.eval.eq_27]
   · generalize Eval.eval m fuel ρ recv = r
     cases r with
     | none => rfl
@@ -1484,6 +1608,22 @@ theorem eval_arrayCall (sp sp' : Span) (recv : Expr) (method : String) (args : L
     subst hrecv; simp [Expr.namesNumber] at hr
   · intro sa par p body hargs
     subst hargs; simp [Expr.isArrow] at harg
+  · intro _ _ hm; exact hat hm
+
+/-- `xs.at(k)` with an integer literal: the interpreter evaluates the array,
+and `atVal` gives the element. -/
+theorem eval_at (sp sp' : Span) (recv arg : Expr) (k : Int) (hk : Eval.intLiteral? arg = some k)
+    (hr : recv.namesNumber = false) (ρ : Eval.Env N) :
+    Eval.eval m fuel ρ (.call sp (.member sp' recv "at") [arg]) =
+      (Eval.eval m fuel ρ recv).bind fun
+        | .list items => some (Eval.atVal items k)
+        | _ => none := by
+  rw [Eval.eval.eq_26]
+  · generalize Eval.eval m fuel ρ recv = r
+    cases r with
+    | none => rfl
+    | some w => cases w <;> simp [Option.bind_eq_bind, hk]
+  all_goals intros; simp_all [Expr.namesNumber, Eval.intLiteral?]
 
 omit [JSNumber N] in
 /-- `includes` becomes one of its two operations. -/
@@ -1547,14 +1687,46 @@ theorem translateArrayCall_sound {F : Nat}
   · simp at h
   rename_i harg
   simp only [pure_bind, bind_ok, orReject_ok] at h
-  obtain ⟨xs, s₁, hxs, elem, s₂, ⟨-, rfl⟩, codes, s₃, hcodes, h⟩ := h
+  obtain ⟨xs, s₁, hxs, elem, s₂, ⟨-, rfl⟩, h⟩ := h
+  simp only [ite_state] at h
+  split at h
+  · -- `xs.at(k)`: the element that `atVal` gives.
+    rename_i hat
+    have hat' : method = "at" := by simpa using hat
+    subst hat'
+    rcases args with _ | ⟨arg, _ | ⟨_, _⟩⟩
+    · simp at h
+    · simp only [bind_ok, orReject_ok, requireFeature_ok, ite_state] at h
+      obtain ⟨k, s₃, ⟨hk, rfl⟩, -, s₄, ⟨-, rfl⟩, h⟩ := h
+      by_cases hm : elem.isMaybe = true
+      · simp [hm] at h
+      simp only [hm, Bool.false_eq_true, if_false, pure_ok] at h
+      obtain ⟨rfl, -⟩ := h
+      intro ρs ρo v ha hs hv
+      simp only [IR.Expr.eval, IR.Expr.evalList] at hv
+      cases hx : IR.Expr.eval fs fuel ρo xs.value with
+      | none => simp [hx] at hv
+      | some w =>
+        simp only [hx, Option.bind_eq_bind, Option.bind_some] at hv
+        cases w with
+        | list items =>
+          simp [IR.ExprExt.apply] at hv
+          rw [eval_value] at hx
+          have hrecv := ihE _ _ _ _ _ _ hxs ρs ρo _ ha hs hx
+          rw [eval_at m fuel _ _ _ _ _ hk hr, hrecv]
+          simp [hv]
+        | _ => simp [IR.ExprExt.apply] at hv
+    · simp at h
+  rename_i hat
+  simp only [bind_ok] at h
+  obtain ⟨codes, s₃, hcodes, h⟩ := h
   intro ρs ρo v ha hs hv
   obtain ⟨items, vs, hitems, hvs, hval⟩ := arrayCall_sound fs fuel h hv
   rw [eval_value] at hitems
   have hrecv := ihE _ _ _ _ _ _ hxs ρs ρo _ ha hs hitems
   have hargs := mapM_sim m fs fuel (fun e ctx c ctx' he => ihE _ _ _ _ _ _ he) args _ codes _ hcodes
     ρs ρo vs ha hs hvs
-  rw [eval_arrayCall m fuel _ _ _ _ _ hr (by simpa using harg), hrecv]
+  rw [eval_arrayCall m fuel _ _ _ _ _ hr (by simpa using harg) (by simpa using hat), hrecv]
   simp [hargs, hval]
 
 omit [JSNumber N] in
@@ -1611,16 +1783,19 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
     (∀ env s recv method args ctx c ctx', translateArrayCall F env s recv method args ctx = .ok c ctx' →
       ∀ sp, recv.namesNumber = false →
         Sim (N := N) m fs fuel env (.call s (.member sp recv method) args) c.code) ∧
+    (∀ env s o elem key ctx c ctx', translateArrayIndex F env s o elem key ctx = .ok c ctx' →
+      ∀ sp obj, Sim (N := N) m fs fuel env obj o.value →
+        Sim (N := N) m fs fuel env (.index sp obj key) c.code) ∧
     (∀ env exp e ctx c ctx', translateExprCore F env exp e ctx = .ok c ctx' →
       Sim (N := N) m fs fuel env e c.code) := by
   induction F with
   | zero =>
-    refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩ <;> intros <;>
+    refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩ <;> intros <;>
       simp_all [translateExpr, translateElements, translateArray, translateCall, translateObject,
-        translateBinary, translateArrayMethod, translateArrayCall, translateExprCore]
+        translateBinary, translateArrayMethod, translateArrayCall, translateArrayIndex, translateExprCore]
   | succ F ih =>
-    obtain ⟨ihE, ihL, ihA, ihC, ihO, ihB, ihM, ihK, ihX⟩ := ih
-    refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+    obtain ⟨ihE, ihL, ihA, ihC, ihO, ihB, ihM, ihK, ihI, ihX⟩ := ih
+    refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
     -- The core first, then the step that makes a value a member of a union.
     rotate_right
     · intro env exp e ctx c ctx' h
@@ -1796,8 +1971,20 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
               rw [eval_member_chain m fuel hsp hc this]
               cases ov <;> simp only [IR.ExprExt.apply] at hv' <;> first | exact hv' | simp at hv'
         rename_i hsp
+        simp only [bind_ok, pure_bind] at h
+        obtain ⟨o, s₁, ho, h⟩ := h
+        simp only [ite_state] at h
+        split at h
+        · -- `xs.length`: the spec gives the length of the array.
+          rename_i hlen
+          simp at h
+          obtain ⟨rfl, -⟩ := h
+          have hn : name = "length" := by simp at hlen; exact hlen.2
+          subst hn
+          exact length_sound m fs fuel (by simpa using hsp) fun ρs ρo w ha hs hw =>
+            ihE _ _ _ _ _ _ ho ρs ρo w ha hs (by rwa [eval_value] at hw)
         simp at h
-        obtain ⟨o, s₁, ho, _, _, ⟨rfl, rfl⟩, ty, ⟨-, rfl⟩, rfl⟩ := h
+        obtain ⟨_, _, ⟨rfl, rfl⟩, ty, ⟨-, rfl⟩, rfl⟩ := h
         intro ρs ρo v ha hs hv'
         simp only [IR.Expr.eval] at hv'
         cases hobj : IR.Expr.eval fs fuel ρo o.code with
@@ -1805,7 +1992,7 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
         | some ov =>
           have := ihE _ _ _ _ _ _ ho ρs ρo ov ha hs hobj
           simp only [Eval.eval, hsp, Bool.false_eq_true, ↓reduceIte, this]
-          simpa [hobj] using hv'
+          cases ov <;> simp [hobj] at hv' ⊢ <;> exact hv'
       | optMember sp obj name =>
         simp only [translateExprCore, bind_ok] at h
         obtain ⟨o, s₁, ho, ⟨bind, ty⟩, s₂, -, h⟩ := h
@@ -1856,9 +2043,17 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
               · simp at h
           all_goals simp at h
         | none =>
+        simp only [hot] at h
+        cases hel : o.type.element? with
+        | some elem =>
+          -- `xs[i]` on an array: the element at the index, as the spec reads it.
+          simp only [hel] at h
+          exact ihI _ _ _ _ _ _ _ _ h sp obj fun ρs ρo w ha hs hw =>
+            ihE _ _ _ _ _ _ ho ρs ρo w ha hs (by rwa [eval_value] at hw)
+        | none =>
         -- `r[k]` on a `Record<K, V>`: the evaluator reads the property that
         -- the string names, as the spec does.
-        simp only [hot] at h
+        simp only [hel] at h
         simp at h
         obtain ⟨_, _, ⟨rfl, rfl⟩, keyRef, keys, ty, _, ⟨-, rfl⟩, k, s₃, hk, h⟩ := h
         split at h
@@ -2220,5 +2415,7 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
       exact translateArrayMethod_sound m fs fuel ihE h hname
     · intro env s recv method args ctx c ctx' h sp hr
       exact translateArrayCall_sound m fs fuel ihE h hr
+    · intro env s o elem key ctx c ctx' h sp obj hobj
+      exact translateArrayIndex_sound m fs fuel ihE h hobj
 
 end tolean.TypeScript.Proof

@@ -62,12 +62,16 @@ inductive Feature where
   /-- `xs.includes(v)`, which compares by SameValueZero:
   `Array.prototype.includes`. -/
   | arrayIncludes
+  /-- `xs.at(k)`, which counts a negative `k` from the end:
+  `Array.prototype.at`. -/
+  | arrayAt
 deriving BEq, Repr, Inhabited
 
 def Feature.since : Feature → Edition
   | .exponent | .arrayIncludes => .es2016
   | .bigint | .bigintDivision | .nullishCoalescing | .optionalChaining => .es2020
   | .logicalAssignment | .numericSeparators => .es2021
+  | .arrayAt => .es2022
 
 def Feature.describe : Feature → String
   | .exponent => "'**'"
@@ -78,6 +82,7 @@ def Feature.describe : Feature → String
   | .logicalAssignment => "'&&=', '||=' and '??='"
   | .numericSeparators => "numeric separators"
   | .arrayIncludes => "Array.prototype.includes"
+  | .arrayAt => "Array.prototype.at"
 
 def Edition.supports (target : Edition) (f : Feature) : Bool := f.since.year ≤ target.year
 

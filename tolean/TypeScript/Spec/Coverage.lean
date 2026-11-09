@@ -115,6 +115,9 @@ def sections : List Section := [
     [``Proof.scoped_params]⟩,
   ⟨"sec-functiondeclarationinstantiation", "10.2.11", "FunctionDeclarationInstantiation",
     [``Eval.bindArgs_of_length, ``Eval.bindArgs_append_undefined]⟩,
+  ⟨"sec-array-exotic-objects", "10.4.2", "Array Exotic Objects",
+    [``Proof.eval_length, ``Proof.length_sound, ``Proof.eval_index_list, ``Proof.indexLiteral_ok,
+    ``Proof.indexNumber_ok, ``Proof.translateArrayIndex_sound]⟩,
   -- §12 ECMAScript Language: Lexical Grammar {#sec-ecmascript-language-lexical-grammar}
   ⟨"sec-literals-numeric-literals", "12.9.3", "Numeric Literals", []⟩,
   -- §13 ECMAScript Language: Expressions {#sec-ecmascript-language-expressions}
@@ -232,6 +235,7 @@ def sections : List Section := [
   ⟨"sec-properties-of-the-number-constructor", "21.1.2", "Properties of the Number Constructor",
     [``Proof.out_numberTest]⟩,
   -- §23 Indexed Collections {#sec-indexed-collections}
+  ⟨"sec-array.prototype.at", "23.1.3.1", "Array.prototype.at", [``Proof.eval_at]⟩,
   ⟨"sec-array.prototype.every", "23.1.3.6", "Array.prototype.every", []⟩,
   ⟨"sec-array.prototype.filter", "23.1.3.8", "Array.prototype.filter",
     [``Proof.evalFilter_sim]⟩,
@@ -576,7 +580,9 @@ def extras : List Group := [
     ``Proof.find?_not_isNone, ``Proof.getD_map_undefined]⟩,
   ⟨"Certificates: includes and membership", [``Proof.includesVal_map, ``Proof.includesVal_enc,
     ``Proof.includesVal_int, ``Proof.includesVal_bool, ``Proof.includesVal_str,
-    ``Proof.includesVal_num]⟩]
+    ``Proof.includesVal_num]⟩,
+  ⟨"Certificates: elements of a list", [``Proof.elementAt_map_some, ``Proof.elementAt_map_toSafeInt,
+    ``Proof.atVal_map]⟩]
 
 open Meta in
 /-- The theorems of the TypeScript modules that the index does not list. A

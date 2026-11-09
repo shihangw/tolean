@@ -373,6 +373,10 @@ the file, the line and the reason. It never approximates.
 | `xs.find(x => p)` | `List.find? (fun (x : T) => p) xs`. The value is `undefined` when no element passes, so it has the type of an optional field: `xs.find(p) ?? d`, `xs.find(p)?.f` and `xs.find(p) === undefined` work as they do on `s.f`. |
 | `xs.includes(x)` on `bigint`, `boolean`, `string` or a literal union of strings | `x ∈ xs`. `includes` compares by SameValueZero, which is `===` on these types. It is in ES2016. |
 | `xs.includes(x)` on `number` | `List.any xs (JSNumber.sameValueZero x)`. SameValueZero is `===`, except that `NaN` is the same as `NaN`, so `[NaN].includes(NaN)` is `true`. |
+| `xs.length` | `JSNumber.ofSafeInt (N := N) ((List.length xs : Nat) : Int)`, a `number` |
+| `xs[k]`, where `k` is a number literal | `(xs[k]? : Option T)`. The value is `undefined` when `k` is not an index of the array, so it has the type of an optional field: `xs[0] ?? d`, `xs[0]?.f` and `xs[0] === undefined` work as they do on `s.f`. Tolean gives `xs[k]` this type whatever `noUncheckedIndexedAccess` says, so code that uses it as a `T` is refused. |
+| `xs[i]`, where `i` is any other number | `JSNumber.elementAt? xs i`: the element when `i` is a safe integer within the array, and `none` otherwise. `xs[-1]` and `xs[0.5]` are `undefined`, as in JS. |
+| `xs.at(k)`, where `k` is an integer literal | `(xs[k]? : Option T)`, or `((List.reverse xs)[-k - 1]? : Option T)` when `k` is negative, which counts from the end. It is in ES2022. |
 | `if` that returns, `if` that changes locals, `c ? a : b` | `if … then … else …` |
 | `+ - *`, `< <= > >=`, `=== !==`, `&& \|\| !` | the same operators on `Int`, `Bool`, `Prop` |
 | `a / k`, `a % k` on `bigint`, where `k` is a nonzero literal | `Int.tdiv a k`, `Int.tmod a k` (both truncate toward zero, as JS does) |
@@ -431,6 +435,11 @@ Tolean rejects these, among others:
   argument, the index to start at. On objects `includes` compares
   references. Tolean also refuses a call of any other array method that takes
   no callback, such as `indexOf`.
+- An index of an array of nullable values, and `at` on one, because Lean's
+  `none` would stand for both `null` and `undefined`. Tolean also refuses an
+  index that is not a number, such as `xs[0n]`, and an argument of `at` that is
+  not an integer literal. `at` truncates a fraction toward zero, and the number
+  model cannot truncate yet.
 - An array declared with `let` and the type `Array<T>`. An array that the
   function pushes to must be a `const`; for a value, use `ReadonlyArray<T>`.
   An empty `[]` needs a type from its context, and the elements of a literal
@@ -439,8 +448,8 @@ Tolean rejects these, among others:
   and a `,` after the last element. Tolean also refuses `readonly` before
   anything but a tuple, such as `readonly bigint[]`, and `readonly [A, B][]`,
   which `tsc` reads as a readonly array of tuples. An index of a tuple must be
-  a number literal within the tuple, and an index of any other value is
-  refused. `===` on tuples is refused, because in JS it compares the arrays
+  a number literal within the tuple. Tolean refuses an index of any value but
+  an array, a tuple or a `Record`. `===` on tuples is refused, because in JS it compares the arrays
   by reference.
 - A type parameter with a constraint, a default or a modifier, and a `,` after
   the last one. Tolean also refuses a type parameter of a function that no
