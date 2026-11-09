@@ -1519,8 +1519,9 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
           have hg : n ≠ "NaN" ∧ n ≠ "Infinity" ∧ n ≠ "undefined" := by
             have := hng.2
             refine ⟨?_, ?_, ?_⟩ <;> intro h <;> subst h <;> simp [isGlobalName, isNumberName] at this
-          simp only [Eval.eval, hnone, hres, hg.1, hg.2.1, hg.2.2, Option.map_some, Eval.enumObject,
-            Eval.getProp, beq_iff_eq, if_false, Option.bind_eq_bind, Option.bind_some]
+          simp only [Eval.eval, Expr.optSpine, Bool.false_eq_true, ↓reduceIte, hnone, hres, hg.1, hg.2.1,
+            hg.2.2, Option.map_some, Eval.enumObject, Eval.getProp, beq_iff_eq, Option.bind_eq_bind,
+            Option.bind_some]
           rw [lookup_map_str hval]
         | none =>
         simp only [he] at h
