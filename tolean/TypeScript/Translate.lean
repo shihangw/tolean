@@ -85,25 +85,35 @@ instance : BEq Ty := ⟨Ty.beq⟩
 
 mutual
 
-/-- A value of type `source` can stand where `target` is expected. Arrays and
-structures must match exactly. A tuple can stand where each of its elements
-can: `[null, x]` is a `[T | null, T]`. -/
-def Ty.assignableTo (source target : Ty) : Bool :=
+/-- A value of type `source` has the Lean type of `target` as it is: the same
+type, `null` where `T | null` is expected, a union narrowed to some of its
+members, or a tuple of such elements. A `T` where `T | null` is expected is
+not one: Lean converts a value to `Option T`, but not each element of a pair.
+-/
+def Ty.sameLean (source target : Ty) : Bool :=
   source == target ||
     match target, source with
-    | .nullable value, _ => source == .null || source == value
-    -- A union narrowed to some of its members is a value of the union.
+    | .nullable _, .null => true
     | .tagged ref tags, .tagged ref' tags' => ref' == ref && tags'.all tags.contains
-    | .tuple ts, .tuple ss => Ty.assignableList ss ts
+    | .tuple ts, .tuple ss => Ty.sameLeanList ss ts
     | _, _ => false
 
-/-- Each of `sources` can stand where the target in its place is expected. -/
-def Ty.assignableList : List Ty → List Ty → Bool
+def Ty.sameLeanList : List Ty → List Ty → Bool
   | [], [] => true
-  | s :: ss, t :: ts => s.assignableTo t && Ty.assignableList ss ts
+  | s :: ss, t :: ts => s.sameLean t && Ty.sameLeanList ss ts
   | _, _ => false
 
 end
+
+/-- A value of type `source` can stand where `target` is expected. Arrays and
+structures must match exactly. A tuple can stand where each of its elements
+has the Lean type of its place: `[null, x]` is a `[T | null, T]`, but a tuple
+of type `[T, T]` is not. -/
+def Ty.assignableTo (source target : Ty) : Bool :=
+  source.sameLean target ||
+    match target with
+    | .nullable value => source == value
+    | _ => false
 
 /-- The type of `c ? a : b`. -/
 def Ty.join (a b : Ty) : Option Ty :=
@@ -1337,15 +1347,19 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
       unless elems.length == tys.length do reject s s!"the tuple needs {tys.length} elements"
       -- An element where the type names a type parameter has its own type,
       -- which the context checks: a call, after it fixes the parameter, or a
-      -- return or a declaration in a generic function. It keeps its own type
-      -- even where it fits, so that `null` in a `T | null` leaves `T` to the
-      -- other arguments of a call.
+      -- return or a declaration in a generic function. A `null` keeps its
+      -- own type, so that in a `T | null` it leaves `T` to the other
+      -- arguments of a call. Another element that fits takes the type of its
+      -- place, which Lean converts it to in the literal.
       let codes ← (elems.zip tys).mapM fun (elem, t) => do
         let a ← translateExpr fuel env (if t.isGeneric then t.callExpected else some t) elem
         unless t.isGeneric || a.type.assignableTo t do
           reject elem.span "the element does not have the tuple's element type"
         pure a
-      let types := (codes.zip tys).map fun (a, t) => if t.isGeneric then a.type else t
+      let types := (codes.zip tys).map fun (a, t) =>
+        if !t.isGeneric then t
+        else if a.type == .null || !a.type.assignableTo t then a.type
+        else t
       return ⟨.tuple (codes.map (·.value)), false, .tuple types⟩
     | _ => translateArray fuel env expected s elems
   | _ => reject e.span "unsupported expression"
