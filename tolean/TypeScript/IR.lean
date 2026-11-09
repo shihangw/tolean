@@ -89,6 +89,10 @@ inductive ExprExt where
   /-- `xs[k]?`, or `(List.reverse xs)[-k - 1]?` when `k` is negative, on
   `xs`: `xs.at(k)` with an integer literal `k`. -/
   | at (k : Int)
+  /-- `List.take` and `List.drop` on `xs`, with `List.reverse` for a negative
+  bound: `xs.slice(start, stop)` with integer literals. A negative `start`
+  with a `stop` that is not negative is not one of them. -/
+  | slice (start : Int) (stop : Option Int)
 deriving BEq, Repr, Inhabited, DecidableEq
 
 abbrev Ty := tolean.IR.Ty TyExt
@@ -186,6 +190,22 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
   | .at k, [xs] =>
     if 0 ≤ k then s!"{argument xs}[{k.toNat}]?"
     else s!"({leanName names "List.reverse"} {argument xs})[{(-k - 1).toNat}]?"
+  | .slice start stop, [xs] =>
+    -- Each step takes its list as an argument already, and leaves out a drop
+    -- of nothing.
+    let rev (x : String) := s!"({leanName names "List.reverse"} {x})"
+    let take (n : Int) (x : String) := s!"({leanName names "List.take"} {n.toNat} {x})"
+    let drop (n : Int) (x : String) := if n == 0 then x else s!"({leanName names "List.drop"} {n.toNat} {x})"
+    let xs := argument xs
+    -- A negative bound counts from the end, which is the start of the
+    -- reversed list.
+    match stop with
+    | Option.none => if 0 ≤ start then drop start xs else rev (take (-start) (rev xs))
+    | some e =>
+      if 0 ≤ start && 0 ≤ e then drop start (take e xs)
+      else if 0 ≤ start then drop start (rev (drop (-e) (rev xs)))
+      else if e < 0 then rev (drop (-e) (take (-start) (rev xs)))
+      else ""
   | _, _ => ""
 
 instance : tolean.IR.PrintOp ExprExt := ⟨ExprExt.print⟩

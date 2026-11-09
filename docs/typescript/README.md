@@ -377,6 +377,7 @@ the file, the line and the reason. It never approximates.
 | `xs[k]`, where `k` is a number literal | `(xs[k]? : Option T)`. The value is `undefined` when `k` is not an index of the array, so it has the type of an optional field: `xs[0] ?? d`, `xs[0]?.f` and `xs[0] === undefined` work as they do on `s.f`. Tolean gives `xs[k]` this type whatever `noUncheckedIndexedAccess` says, so code that uses it as a `T` is refused. |
 | `xs[i]`, where `i` is any other number | `JSNumber.elementAt? xs i`: the element when `i` is a safe integer within the array, and `none` otherwise. `xs[-1]` and `xs[0.5]` are `undefined`, as in JS. |
 | `xs.at(k)`, where `k` is an integer literal | `(xs[k]? : Option T)`, or `((List.reverse xs)[-k - 1]? : Option T)` when `k` is negative, which counts from the end. It is in ES2022. |
+| `xs.slice(a, b)`, where `a` and `b` are integer literals or left out | `List.drop` and `List.take`, such as `(List.drop 1 (List.take 3 xs))` for `xs.slice(1, 3)`. A negative bound counts from the end, which the output reads on the reversed list: `xs.slice(-2)` is `(List.reverse (List.take 2 (List.reverse xs)))`. |
 | `if` that returns, `if` that changes locals, `c ? a : b` | `if … then … else …` |
 | `+ - *`, `< <= > >=`, `=== !==`, `&& \|\| !` | the same operators on `Int`, `Bool`, `Prop` |
 | `a / k`, `a % k` on `bigint`, where `k` is a nonzero literal | `Int.tdiv a k`, `Int.tmod a k` (both truncate toward zero, as JS does) |
@@ -439,7 +440,9 @@ Tolean rejects these, among others:
   `none` would stand for both `null` and `undefined`. Tolean also refuses an
   index that is not a number, such as `xs[0n]`, and an argument of `at` that is
   not an integer literal. `at` truncates a fraction toward zero, and the number
-  model cannot truncate yet.
+  model cannot truncate yet. The bounds of `slice` must be integer literals
+  for the same reason, and Tolean refuses a negative start with an end that
+  is not negative, such as `xs.slice(-2, 3)`.
 - An array declared with `let` and the type `Array<T>`. An array that the
   function pushes to must be a `const`; for a value, use `ReadonlyArray<T>`.
   An empty `[]` needs a type from its context, and the elements of a literal

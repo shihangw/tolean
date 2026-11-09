@@ -1594,21 +1594,68 @@ theorem translateArrayIndex_sound {F : Nat}
 array, then the arguments, and `arrayMethod` gives the value. -/
 theorem eval_arrayCall (sp sp' : Span) (recv : Expr) (method : String) (args : List Expr)
     (hr : recv.namesNumber = false) (harg : args.any (·.isArrow) = false) (hat : method ≠ "at")
-    (ρ : Eval.Env N) :
+    (hsl : method ≠ "slice") (ρ : Eval.Env N) :
     Eval.eval m fuel ρ (.call sp (.member sp' recv method) args) =
       (Eval.eval m fuel ρ recv).bind fun
         | .list items => (Eval.evalList m fuel ρ args).bind (Eval.arrayMethod method items)
         | _ => none := by
-  rw [Eval.eval.eq_27]
+  rw [Eval.eval.eq_28]
   · generalize Eval.eval m fuel ρ recv = r
     cases r with
     | none => rfl
     | some w => cases w <;> simp [Option.bind_eq_bind]
-  · intro s _ _ hrecv
-    subst hrecv; simp [Expr.namesNumber] at hr
-  · intro sa par p body hargs
-    subst hargs; simp [Expr.isArrow] at harg
-  · intro _ _ hm; exact hat hm
+  all_goals intros; simp_all [Expr.namesNumber, Expr.isArrow]
+
+omit [JSNumber N] in
+/-- The integers of the arguments of `slice`, when each is a literal. -/
+theorem sliceArgs_eq {args : List Expr} {bounds : List Int} {start : Int} {stop : Option Int}
+    (hk : args.mapM Eval.intLiteral? = some bounds) (hb : sliceBounds bounds = some (start, stop)) :
+    (args = [] ∧ start = 0 ∧ stop = none) ∨
+      (∃ a, args = [a] ∧ Eval.intLiteral? a = some start ∧ stop = none) ∨
+      (∃ a b e, args = [a, b] ∧ Eval.intLiteral? a = some start ∧ Eval.intLiteral? b = some e ∧
+        stop = some e) := by
+  rcases args with _ | ⟨a, _ | ⟨b, _ | ⟨c, rest⟩⟩⟩
+  · simp at hk; subst hk; simp [sliceBounds] at hb; exact Or.inl ⟨rfl, hb.1.symm, hb.2.symm⟩
+  · cases ha : Eval.intLiteral? a <;> simp [ha] at hk
+    subst hk; simp [sliceBounds] at hb
+    exact Or.inr (Or.inl ⟨a, rfl, by rw [ha, hb.1], hb.2.symm⟩)
+  · cases ha : Eval.intLiteral? a <;> cases hb' : Eval.intLiteral? b <;> simp [ha, hb'] at hk
+    subst hk; simp [sliceBounds] at hb
+    exact Or.inr (Or.inr ⟨a, b, _, rfl, by rw [ha, hb.1], hb', hb.2.symm⟩)
+  · cases ha : Eval.intLiteral? a <;> cases hb' : Eval.intLiteral? b <;>
+      cases hc : Eval.intLiteral? c <;> simp [ha, hb', hc] at hk
+    cases hr : rest.mapM Eval.intLiteral? <;> simp [hr] at hk
+    subst hk; simp [sliceBounds] at hb
+
+/-- A literal argument is the integer it names. -/
+theorem evalInt_lit {ρ : Eval.Env N} {e : Expr} {k : Int} (h : Eval.intLiteral? e = some k) :
+    Eval.evalInt m fuel ρ e = some k := by
+  unfold Eval.evalInt; simp [h]
+
+/-- `xs.slice(start, end)` with integer literals: the interpreter evaluates
+the array, and `sliceList` gives the elements. -/
+theorem eval_slice (sp sp' : Span) (recv : Expr) (args : List Expr) {bounds : List Int} {start : Int}
+    {stop : Option Int} (hk : args.mapM Eval.intLiteral? = some bounds)
+    (hb : sliceBounds bounds = some (start, stop)) (hr : recv.namesNumber = false) (ρ : Eval.Env N) :
+    Eval.eval m fuel ρ (.call sp (.member sp' recv "slice") args) =
+      (Eval.eval m fuel ρ recv).bind fun
+        | .list items => some (.list (Eval.sliceList items start stop))
+        | _ => none := by
+  have hcases := sliceArgs_eq hk hb
+  rw [Eval.eval.eq_27]
+  · generalize Eval.eval m fuel ρ recv = r
+    cases r with
+    | none => rfl
+    | some w =>
+      cases w <;> simp only [Option.bind_eq_bind, Option.bind_some]
+      case list items =>
+        rcases hcases with ⟨rfl, rfl, rfl⟩ | ⟨a, rfl, ha, rfl⟩ | ⟨a, b, e, rfl, ha, hb', rfl⟩
+        · rfl
+        · simp [evalInt_lit m fuel ha]
+        · simp [evalInt_lit m fuel ha, evalInt_lit m fuel hb']
+  all_goals intros; simp_all [Expr.namesNumber]
+  all_goals rcases hcases with ⟨h, -⟩ | ⟨a, h, ha, -⟩ | ⟨a, b, e, h, ha, -⟩ <;> simp_all [Eval.intLiteral?]
+
 
 /-- `xs.at(k)` with an integer literal: the interpreter evaluates the array,
 and `atVal` gives the element. -/
@@ -1684,7 +1731,7 @@ theorem translateArrayCall_sound {F : Nat}
     Sim (N := N) m fs fuel env (.call s (.member sp recv method) args) c.code := by
   simp only [translateArrayCall, ite_state] at h
   split at h
-  · simp at h
+  · simp only [bind_ok, reject_ne_ok, false_and, exists_false] at h
   rename_i harg
   simp only [pure_bind, bind_ok, orReject_ok] at h
   obtain ⟨xs, s₁, hxs, elem, s₂, ⟨-, rfl⟩, h⟩ := h
@@ -1718,6 +1765,32 @@ theorem translateArrayCall_sound {F : Nat}
         | _ => simp [IR.ExprExt.apply] at hv
     · simp at h
   rename_i hat
+  split at h
+  · -- `xs.slice(start, end)`: the elements that `sliceList` gives.
+    rename_i hsl
+    have hsl' : method = "slice" := by simpa using hsl
+    subst hsl'
+    simp only [bind_ok, orReject_ok, ite_state] at h
+    obtain ⟨bounds, s₃, ⟨hk, rfl⟩, ⟨start, stop⟩, s₄, ⟨hb, rfl⟩, h⟩ := h
+    split at h
+    · simp at h
+    simp only [pure_ok] at h
+    obtain ⟨rfl, -⟩ := h
+    intro ρs ρo v ha hs hv
+    simp only [IR.Expr.eval, IR.Expr.evalList] at hv
+    cases hx : IR.Expr.eval fs fuel ρo xs.value with
+    | none => simp [hx] at hv
+    | some w =>
+      simp only [hx, Option.bind_eq_bind, Option.bind_some] at hv
+      cases w with
+      | list items =>
+        simp [IR.ExprExt.apply] at hv
+        rw [eval_value] at hx
+        have hrecv := ihE _ _ _ _ _ _ hxs ρs ρo _ ha hs hx
+        rw [eval_slice m fuel _ _ _ _ hk hb hr, hrecv]
+        simp [hv]
+      | _ => simp [IR.ExprExt.apply] at hv
+  rename_i hsl
   simp only [bind_ok] at h
   obtain ⟨codes, s₃, hcodes, h⟩ := h
   intro ρs ρo v ha hs hv
@@ -1726,7 +1799,7 @@ theorem translateArrayCall_sound {F : Nat}
   have hrecv := ihE _ _ _ _ _ _ hxs ρs ρo _ ha hs hitems
   have hargs := mapM_sim m fs fuel (fun e ctx c ctx' he => ihE _ _ _ _ _ _ he) args _ codes _ hcodes
     ρs ρo vs ha hs hvs
-  rw [eval_arrayCall m fuel _ _ _ _ _ hr (by simpa using harg) (by simpa using hat), hrecv]
+  rw [eval_arrayCall m fuel _ _ _ _ _ hr (by simpa using harg) (by simpa using hat) (by simpa using hsl), hrecv]
   simp [hargs, hval]
 
 omit [JSNumber N] in

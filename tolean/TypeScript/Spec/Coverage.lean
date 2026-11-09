@@ -248,6 +248,8 @@ def sections : List Section := [
     [``Proof.evalMap_sim]⟩,
   ⟨"sec-array.prototype.push", "23.1.3.23", "Array.prototype.push",
     [``Proof.out_push]⟩,
+  ⟨"sec-array.prototype.slice", "23.1.3.28", "Array.prototype.slice",
+    [``Proof.sliceArgs_eq, ``Proof.evalInt_lit, ``Proof.eval_slice]⟩,
   ⟨"sec-array.prototype.some", "23.1.3.29", "Array.prototype.some", []⟩,
   ⟨"sec-createarrayiterator", "23.1.5.1", "CreateArrayIterator", []⟩]
 
@@ -582,7 +584,10 @@ def extras : List Group := [
     ``Proof.includesVal_int, ``Proof.includesVal_bool, ``Proof.includesVal_str,
     ``Proof.includesVal_num]⟩,
   ⟨"Certificates: elements of a list", [``Proof.elementAt_map_some, ``Proof.elementAt_map_toSafeInt,
-    ``Proof.atVal_map]⟩]
+    ``Proof.atVal_map]⟩,
+  ⟨"Certificates: slices of a list", [``Proof.sliceList_map, ``Proof.getElem?_rev,
+    ``Proof.sliceList_nonneg, ``Proof.sliceList_from, ``Proof.sliceList_last,
+    ``Proof.sliceList_dropLast, ``Proof.sliceList_neg]⟩]
 
 open Meta in
 /-- The theorems of the TypeScript modules that the index does not list. A

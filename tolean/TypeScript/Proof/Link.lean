@@ -338,6 +338,60 @@ is an index of the reversed list. -/
       simp only [List.length_reverse]
       omega
 
+/-- `slice` on an encoded list is `slice` on the list, encoded. It comes before
+the lemmas for each kind of bound, so that the list keeps the shape
+`List.map enc xs` that the lemmas of callbacks match. -/
+@[simp high] theorem sliceList_map {α β : Type} (f : α → β) (xs : List α) (start : Int) (stop : Option Int) :
+    Eval.sliceList (xs.map f) start stop = (Eval.sliceList xs start stop).map f := by
+  simp [Eval.sliceList, List.map_take, List.map_drop]
+
+/-- An element of a reversed list, with no side condition. -/
+theorem getElem?_rev {α : Type} (l : List α) (i : Nat) :
+    l.reverse[i]? = if i < l.length then l[l.length - 1 - i]? else none := by
+  split
+  · exact List.getElem?_reverse ‹_›
+  · rw [List.getElem?_eq_none]; simp; omega
+
+/-- The elements of two slices agree at every index. -/
+macro "slice_tac" : tactic => `(tactic| (
+  apply List.ext_getElem?
+  intro i
+  simp only [Eval.sliceList, Eval.relIndex, List.getElem?_take, List.getElem?_drop, getElem?_rev,
+    List.length_take, List.length_drop, List.length_reverse]
+  repeat' split
+  all_goals first
+    | rfl
+    | omega
+    | (congr 1; omega)
+    | (rw [List.getElem?_eq_none (by omega)])
+    | (rw [eq_comm, List.getElem?_eq_none (by omega)])
+    | (rw [List.getElem?_eq_none (by omega), List.getElem?_eq_none (by omega)])))
+
+/-- `slice` with bounds that are not negative. -/
+@[simp] theorem sliceList_nonneg {α : Type} (xs : List α) (k e : Int) (hk : 0 ≤ k) (he : 0 ≤ e) :
+    Eval.sliceList xs k (some e) = (xs.take e.toNat).drop k.toNat := by
+  slice_tac
+
+/-- `slice` with a start that is not negative and no end. -/
+@[simp] theorem sliceList_from {α : Type} (xs : List α) (k : Int) (hk : 0 ≤ k) :
+    Eval.sliceList xs k none = xs.drop k.toNat := by
+  slice_tac
+
+/-- `slice` with a negative start and no end: the last elements. -/
+@[simp] theorem sliceList_last {α : Type} (xs : List α) (k : Int) (hk : k < 0) :
+    Eval.sliceList xs k none = (xs.reverse.take (-k).toNat).reverse := by
+  slice_tac
+
+/-- `slice` with a start that is not negative and a negative end. -/
+@[simp] theorem sliceList_dropLast {α : Type} (xs : List α) (k e : Int) (hk : 0 ≤ k) (he : e < 0) :
+    Eval.sliceList xs k (some e) = ((xs.reverse.drop (-e).toNat).reverse).drop k.toNat := by
+  slice_tac
+
+/-- `slice` with two negative bounds. -/
+@[simp] theorem sliceList_neg {α : Type} (xs : List α) (k e : Int) (hk : k < 0) (he : e < 0) :
+    Eval.sliceList xs k (some e) = ((xs.reverse.take (-k).toNat).drop (-e).toNat).reverse := by
+  slice_tac
+
 end tolean.TypeScript.Proof
 
 namespace tolean.TypeScript.IR
@@ -383,16 +437,16 @@ macro_rules
         tolean.IR.IntOp.apply, tolean.IR.Order.apply,
         tolean.IR.Division.apply, ExprExt.apply, NumberOp.apply, NumberConstant.value,
         NumberTest.apply, tagOf, Eval.Val.typeOf, Eval.Env.set, Eval.getProp, Eval.getKey_ofString, Eval.getPath,
-        Eval.objectPrototypeNames, List.lookup, DeclRef.beq_def, -List.map_map,
+        Eval.objectPrototypeNames, List.lookup, DeclRef.beq_def, -List.map_map, -List.map_tail,
         -Bool.if_true_left, -Bool.if_false_right, -Bool.if_false_left, -Bool.if_true_right, $defs,*]
-      all_goals repeat' (split_find <;> simp [-List.map_map, $defs,*])
-      all_goals repeat' (split_undef <;> simp [-List.map_map, $defs,*])
+      all_goals repeat' (split_find <;> simp [-List.map_map, -List.map_tail, $defs,*])
+      all_goals repeat' (split_undef <;> simp [-List.map_map, -List.map_tail, $defs,*])
       all_goals repeat' (split <;> (try simp_all [bindState, eqVal, tolean.IR.IntOp.apply,
         tolean.IR.Order.apply, tolean.IR.Division.apply, ExprExt.apply, NumberOp.apply,
         NumberTest.apply, tagOf, Eval.Val.typeOf, Eval.Env.set, Eval.getProp, Eval.getKey_ofString, Eval.getPath,
-        Eval.objectPrototypeNames, List.lookup, DeclRef.beq_def, -List.map_map,
+        Eval.objectPrototypeNames, List.lookup, DeclRef.beq_def, -List.map_map, -List.map_tail,
         -Bool.if_true_left, -Bool.if_false_right, -Bool.if_false_left, -Bool.if_true_right, $defs,*]))
-      all_goals (try simp_all [bindState, eqVal, Eval.Env.set, Eval.getProp, Eval.getKey_ofString, Eval.getPath, Eval.objectPrototypeNames, List.lookup, DeclRef.beq_def, -List.map_map, $defs,*])
+      all_goals (try simp_all [bindState, eqVal, Eval.Env.set, Eval.getProp, Eval.getKey_ofString, Eval.getPath, Eval.objectPrototypeNames, List.lookup, DeclRef.beq_def, -List.map_map, -List.map_tail, $defs,*])
       -- Two `match`es that differ only in their auxiliary functions, as a
       -- loop lemma's step and the printed definition can, agree by `rfl`.
       all_goals (try rfl)))

@@ -90,6 +90,7 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   | .indexLit k, [.list xs] => some (Eval.elementAt xs (some k))
   | .indexNumber, [.list xs, .num i] => some (Eval.elementAt xs (JSNumber.toSafeInt i))
   | .at k, [.list xs] => some (Eval.atVal xs k)
+  | .slice start stop, [.list xs] => some (.list (Eval.sliceList xs start stop))
   | _, _ => none
 
 /-- The tag of `v`, a value of a tagged union: the string in its tag field
