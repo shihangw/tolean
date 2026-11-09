@@ -2231,6 +2231,23 @@ def Ty.namesSelfWithList (self : DeclRef) (args : List Ty) : List Ty → Bool
 
 end
 
+mutual
+
+/-- The type names a declaration `name` of the file `file`, which the output
+writes by that name alone. -/
+def Ty.namesDecl (file name : String) : Ty → Bool
+  | .struct r rs => (r.file == file && r.name == name) || Ty.namesDeclList file name rs
+  | .enum r | .tagged r _ => r.file == file && r.name == name
+  | .nullable t | .optional t | .array t => t.namesDecl file name
+  | .tuple ts => Ty.namesDeclList file name ts
+  | _ => false
+
+def Ty.namesDeclList (file name : String) : List Ty → Bool
+  | [] => false
+  | t :: ts => t.namesDecl file name || Ty.namesDeclList file name ts
+
+end
+
 def translateInterface (s : Span) (exported : Bool) (name : String) (typeParams : List String)
     (fields : List Field) : TM IR.Decl := do
   let name ← checkName s name
@@ -2260,6 +2277,11 @@ def translateInterface (s : Span) (exported : Bool) (name : String) (typeParams 
       -- its own type parameters, in order.
       unless type.namesSelfWith ⟨(← get).file, name⟩ (typeParams.map .param) do
         reject f.span s!"'{name}' may refer to itself only with its own type parameters, in order"
+      -- The same holds for a field that has the name of a type, such as the
+      -- interface itself, which the type of a later field names.
+      let file := (← get).file
+      if let some (hidden, _) := infos.find? fun (g, _) => type.namesDecl file g then
+        reject f.span s!"the field '{hidden}' before this one would hide the type {hidden} in Lean; rename the field"
       -- `f?: T`: an object may leave the field out, and a read of it then gives
       -- `undefined`. An object without the field would inherit a property of
       -- `Object.prototype` of the same name.

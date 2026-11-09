@@ -448,7 +448,9 @@ Tolean rejects these, among others:
   interfaces, and a `Record`, become a type of their own, which takes no type
   parameters. A
   field may not have the name of a type parameter, because Lean would read the
-  name as the field in the types of the fields after it. A type parameter may not have the
+  name as the field in the types of the fields after it. For the same reason,
+  a field may not have the name of a type of the file, such as the interface
+  itself, that the type of a later field names. A type parameter may not have the
   name of a type or function of the file, or of a local, because Lean would
   read the name as the other one. `===` on values of a type parameter is
   refused, because in JS it compares objects by reference.
