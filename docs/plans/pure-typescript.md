@@ -272,3 +272,13 @@ variables and in maps.
   Node on every program that it parses. The same check on the loop's body
   would close it. A binding kind in `Eval.Env` would cover every case, but
   then `Agree` and every statement proof would compare kinds too.
+- How should the spec model an array, a map or a set that two names hold?
+  The spec treats each as a value, and a `push`, `set`, `add` or `delete`
+  changes only the variable that it names. That is the JS meaning only when
+  nothing else holds the object. The translator checks this, but the spec
+  does not, so for `const n = m; m.set(k, v)` the spec gives `n` the old map,
+  where Node shares one map. No certified program meets the gap, but
+  `interpreter.test.ts` asks the interpreter to agree with Node on every
+  program that it parses. A check of the ownership rule in the spec's call
+  rule would close it, with a proof that every body that the translator
+  accepts passes the check.
