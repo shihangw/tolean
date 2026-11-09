@@ -1855,31 +1855,6 @@ theorem loopItems_ok {iterable : Expr} {names : List String} {items : Code} {r :
     simp only [pure_bind, orReject_ok] at h
     exact ⟨h.1, h.2.symm⟩
 
-/-- What the output's loop runs over is what the interpreter's loop visits. -/
-theorem loopOver_sim {env : Translate.Env} {iterable : Expr} {items : Code} {elem : Ty}
-    {li : IR.Expr} (hsim : Sim (N := N) m fs fuel env iterable items.code)
-    (hlo : loopOver items = some (elem, li)) {ρs ρo : Eval.Env N} {vs : List (Val N)}
-    (ha : Agree ρs ρo) (hs : Scoped m env ρs) (hi : IR.Expr.eval fs fuel ρo li = some (.list vs)) :
-    ∃ v, Eval.eval m fuel ρs iterable = some v ∧ Eval.iterValues v = some vs := by
-  unfold loopOver at hlo
-  split at hlo <;> simp only [Option.some.injEq, Prod.mk.injEq, reduceCtorEq] at hlo
-  · obtain ⟨-, rfl⟩ := hlo
-    exact ⟨_, hsim ρs ρo _ ha hs hi, rfl⟩
-  all_goals
-    obtain ⟨-, rfl⟩ := hlo
-    obtain ⟨ws, hws, happ⟩ := out_ext fs fuel hi
-    simp only [IR.Expr.evalList] at hws
-    cases hx : IR.Expr.eval fs fuel ρo items.value with
-    | none => simp [hx] at hws
-    | some w =>
-      simp [hx] at hws
-      subst hws
-      rw [eval_value] at hx
-      refine ⟨w, hsim ρs ρo _ ha hs hx, ?_⟩
-      cases w <;> simp [IR.ExprExt.apply] at happ
-      subst happ
-      rfl
-
 /-- `translateForOf` is sound, when `translateStatements` is with one unit of fuel less. -/
 theorem translateForOf_sound (hc : CallsAgree (N := N) m.program fs fuel) {F : Nat}
     (ihS : ∀ env tail ss ctx body ctx', translateStatements F env tail ss ctx = .ok body ctx' →

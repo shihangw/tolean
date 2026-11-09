@@ -98,6 +98,8 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   -- the array `[key, value]`, as a Lean pair is.
   | .setElems, [.set elems] => some (.list elems)
   | .mapEntries, [.map entries] => some (.list (entries.map fun (k, v) => .list [k, v]))
+  | .mapOfList, [.list items] => (Eval.mapOfItems items).map .map
+  | .setOfList, [.list items] => (Eval.setOfItems items).map .set
   | _, _ => none
 
 /-- The tag of `v`, a value of a tagged union: the string in its tag field

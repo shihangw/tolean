@@ -100,12 +100,18 @@ inductive ExprExt where
   /-- `m.entries`: the entries of a map, which `for (const e of m)` visits,
   each as a pair. -/
   | mapEntries
+  /-- `(JSMap.ofList xs)`: `new Map(items)`, where the output's `xs` is the
+  list of pairs that `items` visits. The translator writes the type after it. -/
+  | mapOfList
+  /-- `(JSSet.ofList xs)`: `new Set(items)`, in the same way. -/
+  | setOfList
 deriving BEq, Repr, Inhabited, DecidableEq
 
 /-- An operation on maps or sets, whose output names `JSMap` or `JSSet`. -/
 def ExprExt.onMap : ExprExt → Bool
   | .mapEmpty | .mapGet | .mapHas | .mapSize | .mapSet | .mapDelete => true
   | .setEmpty | .setHas | .setSize | .setAdd | .setDelete | .setElems | .mapEntries => true
+  | .mapOfList | .setOfList => true
   | _ => false
 
 abbrev Ty := tolean.IR.Ty TyExt
@@ -204,6 +210,8 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
   | .setDelete, [s, x] => s!"({leanName names "JSSet"}.delete {argument s} {argument x})"
   | .setElems, [s] => s!"({leanName names "JSSet"}.elems {argument s})"
   | .mapEntries, [m] => s!"({leanName names "JSMap"}.entries {argument m})"
+  | .mapOfList, [xs] => s!"({leanName names "JSMap"}.ofList {argument xs})"
+  | .setOfList, [xs] => s!"({leanName names "JSSet"}.ofList {argument xs})"
   | .recordGet key keys, [r, k] =>
     let case (f : String) := s!"{(names.ref key).1}.{memberName f}"
     -- A key that is one constructor, as `r['a']` gives, reads its field.

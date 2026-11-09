@@ -377,6 +377,7 @@ the file, the line and the reason. It never approximates.
 | `m.get(k)`, `m.has(k)` and `m.size` | `JSMap.get? m k`, `JSMap.has m k` and `JSNumber.ofSafeInt (JSMap.size m)`. `get` gives `undefined` for a key that the map does not have, so its value has the type of an optional field: `m.get(k) ?? d` is `Option.getD (JSMap.get? m k) d`. |
 | `Set<T>` and `ReadonlySet<T>`, where `T` is a type that a map key may have | `JSSet T` (`tolean/TypeScript/Map.lean`): the list of elements, in the order that each was first added (§24.2) |
 | `const s = new Set<T>()`, then `s.add(x)` and `s.delete(x)`; `s.has(x)` and `s.size` | `JSSet.empty`, `JSSet.add`, `JSSet.delete`, `JSSet.has` and `JSNumber.ofSafeInt (JSSet.size s)`, as for a map |
+| `new Map(items)` and `new Set(items)`, where `items` is an array, such as `[['a', 1n]]` or `['a']`, a map or a set | `JSMap.ofList` and `JSSet.ofList` of the list that a loop over `items` visits. The constructor sets each `[key, value]`, or adds each value, in order (§24.1.1.2), so a later entry for a key replaces an earlier one, and `new Map(m)` copies `m`. |
 | `for (const x of s)` over a set, and `for (const e of m)` over a map | `List.foldl` over `JSSet.elems s`, or over `JSMap.entries m`, as over an array. A map gives each entry as the tuple `[key, value]`, as JS does, so the body reads `e[0]` and `e[1]`. The loop may run over an owned map or set, if its body does not change it. |
 | `for (const x of xs) { … }` | `List.foldl` over the tuple of locals the body changes |
 | `if (c) continue;` at the top of a loop body, or a branch of that `if` that ends in `continue` on every path | `if c then (x, y) else …`, where the rest of the body is the `else` branch, as after an `if` that returns. A test of `null` or of a tag narrows the local for the rest of the body. |
@@ -444,9 +445,9 @@ Tolean rejects these, among others:
   Tolean also refuses `set`, `add` and `delete` on a map or a set that the
   function did not make with `const m = new Map()` or `const s = new Set()`,
   and a read of such an owned map or set anywhere except through `get`, `has`
-  and `size` or in the return value. It refuses `new Map(entries)` and
-  `new Set(elements)`, a `new Map()` or `new Set()` without its types, `get`
-  on a map of nullable values, and every other `new`. A declaration named
+  and `size` or in the return value. It refuses a `new Map()` or `new Set()`
+  without its types, `get` on a map of nullable values, and every other
+  `new`. A declaration named
   `Map` or `Set` would hide the global, so Tolean refuses it too. It refuses a
   loop whose body changes the map or set that it runs over, because the JS
   loop would also visit the entries that the body adds. A file that uses a

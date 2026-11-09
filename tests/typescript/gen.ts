@@ -422,7 +422,9 @@ export class Gen {
         // A set that the function owns, with adds and deletes, read as a map is.
         const elem = this.pick([BIGINT, STRING, BOOLEAN]);
         const name = this.fresh('s');
-        lines.push(`const ${name} = new Set<${show(elem)}>();`);
+        // Sometimes with values to start with, which may repeat.
+        const start = this.chance(0.3) ? `[${this.expr(elem, vars, 1)}, ${this.expr(elem, vars, 1)}]` : '';
+        lines.push(`const ${name} = new Set<${show(elem)}>(${start});`);
         const changes = 1 + Math.floor(this.next() * 4);
         for (let j = 0; j < changes; j++) {
           lines.push(`${name}.${this.chance(0.75) ? 'add' : 'delete'}(${this.expr(elem, vars, 1)});`);
@@ -447,7 +449,10 @@ export class Gen {
         const key = this.pick([BIGINT, STRING, BOOLEAN]);
         const value = this.pick([BIGINT, NUMBER, STRING]);
         const name = this.fresh('m');
-        lines.push(`const ${name} = new Map<${show(key)}, ${show(value)}>();`);
+        const start = this.chance(0.3)
+          ? `[[${this.expr(key, vars, 1)}, ${this.expr(value, vars, 1)}], [${this.expr(key, vars, 1)}, ${this.expr(value, vars, 1)}]]`
+          : '';
+        lines.push(`const ${name} = new Map<${show(key)}, ${show(value)}>(${start});`);
         const changes = 1 + Math.floor(this.next() * 4);
         for (let j = 0; j < changes; j++) {
           lines.push(this.chance(0.75)

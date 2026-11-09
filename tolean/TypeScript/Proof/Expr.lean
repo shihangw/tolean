@@ -1843,40 +1843,108 @@ theorem translateMember_sound {F : Nat}
       simp only [hobj, Option.bind_eq_bind, Option.bind_some] at hv'
       cases ov <;> simp_all
 
-/-- `new Map()`, a map without entries, and `new Set()`, a set without
-elements. -/
-theorem translateNew_sound {F : Nat} {env : Translate.Env} {exp : Option Ty} {sp : Span}
-    {callee : String} {typeArgs : List TypeExpr} {args : List Expr} {ctx ctx' : Ctx} {c : Code}
-    (h : translateExprCore (F + 1) env exp (.new sp callee typeArgs args) ctx = .ok c ctx') :
+/-- What the output's loop runs over is what the interpreter's loop visits. -/
+theorem loopOver_sim {env : Translate.Env} {iterable : Expr} {items : Code} {elem : Ty}
+    {li : IR.Expr} (hsim : Sim (N := N) m fs fuel env iterable items.code)
+    (hlo : loopOver items = some (elem, li)) {ρs ρo : Eval.Env N} {vs : List (Val N)}
+    (ha : Agree ρs ρo) (hs : Scoped m env ρs) (hi : IR.Expr.eval fs fuel ρo li = some (.list vs)) :
+    ∃ v, Eval.eval m fuel ρs iterable = some v ∧ Eval.iterValues v = some vs := by
+  unfold loopOver at hlo
+  split at hlo <;> simp only [Option.some.injEq, Prod.mk.injEq, reduceCtorEq] at hlo
+  · obtain ⟨-, rfl⟩ := hlo
+    exact ⟨_, hsim ρs ρo _ ha hs hi, rfl⟩
+  all_goals
+    obtain ⟨-, rfl⟩ := hlo
+    obtain ⟨ws, hws, happ⟩ := out_ext fs fuel hi
+    simp only [IR.Expr.evalList] at hws
+    cases hx : IR.Expr.eval fs fuel ρo items.value with
+    | none => simp [hx] at hws
+    | some w =>
+      simp [hx] at hws
+      subst hws
+      rw [eval_value] at hx
+      refine ⟨w, hsim ρs ρo _ ha hs hx, ?_⟩
+      cases w <;> simp [IR.ExprExt.apply] at happ
+      subst happ
+      rfl
+
+/-- `new Map()` and `new Set()`, and `new Map(items)` and `new Set(items)`,
+which set or add each value that `items` visits. -/
+theorem translateNew_sound {tr : Option Ty → Expr → TM Code} {env : Translate.Env}
+    (htr : ∀ exp e ctx c ctx', tr exp e ctx = .ok c ctx' → Sim (N := N) m fs fuel env e c.code)
+    {exp : Option Ty} {sp : Span} {callee : String} {typeArgs : List TypeExpr} {args : List Expr}
+    {ctx ctx' : Ctx} {c : Code}
+    (h : translateNew tr env exp sp callee typeArgs args ctx = .ok c ctx') :
     Sim (N := N) m fs fuel env (.new sp callee typeArgs args) c.code := by
-  simp only [translateExprCore] at h
-  by_cases hmap : callee = "Map"
-  · subst hmap
-    by_cases hhas : env.has "Map" = true
-    · simp [hhas] at h
-    by_cases hargs : args = []
-    · subst hargs
-      simp [hhas] at h
-      obtain ⟨type, s₁, -, rfl, -⟩ := h
+  unfold translateNew at h
+  simp only [ite_state] at h
+  split at h
+  rotate_left
+  · simp at h
+  rename_i hcallee
+  simp only [pure_bind, ite_state] at h
+  split at h
+  · simp at h
+  rename_i hhas
+  try simp only [pure_bind] at h
+  have hnone : ∀ ρs : Eval.Env N, Scoped m env ρs → ρs.lookup callee = none :=
+    fun ρs hs => hs.none (by simpa using hhas)
+  have hc : callee = "Map" ∨ callee = "Set" := by simpa using hcallee
+  rcases hc with rfl | rfl
+  · simp only [show ("Map" == "Map") = true from rfl, ↓reduceIte] at h
+    rcases args with _ | ⟨arg, _ | ⟨_, _⟩⟩
+    · simp only [bind_ok] at h
+      obtain ⟨type, s₁, -, h⟩ := h
+      simp only [pure_ok] at h
+      obtain ⟨rfl, -⟩ := h
       intro ρs ρo v _ hs hv
       simp [IR.Expr.eval, IR.Expr.evalList, IR.ExprExt.apply] at hv
       subst hv
-      simp [Eval.eval, hs.none (by simpa using hhas)]
-    · simp [hhas, hargs] at h
-  by_cases hset : callee = "Set"
-  · subst hset
-    by_cases hhas : env.has "Set" = true
-    · simp [hhas] at h
-    by_cases hargs : args = []
-    · subst hargs
-      simp [hhas] at h
-      obtain ⟨type, s₁, -, rfl, -⟩ := h
+      simp [Eval.eval, hnone ρs hs]
+    · simp only [bind_ok, orReject_ok] at h
+      obtain ⟨declared, s₁, -, items, s₂, hitems, ⟨elem, li⟩, s₃, ⟨hlo, rfl⟩, type, s₄, -, h⟩ := h
+      simp only [pure_ok] at h
+      obtain ⟨rfl, -⟩ := h
+      have hsim := translateRecv_sim m fs fuel (fun _ _ _ hx => htr _ _ _ _ _ hx) hitems
+      intro ρs ρo v ha hs hv
+      simp only [IR.Expr.eval] at hv
+      cases hli : IR.Expr.eval fs fuel ρo li with
+      | none => simp [IR.Expr.evalList, hli] at hv
+      | some u =>
+        simp [IR.Expr.evalList, hli] at hv
+        cases u <;> simp [IR.ExprExt.apply] at hv
+        rename_i vs
+        obtain ⟨es, hes, rfl⟩ := hv
+        obtain ⟨va, hva, hit⟩ := loopOver_sim m fs fuel hsim hlo ha hs hli
+        simp [Eval.eval, hnone ρs hs, hva, hit, hes]
+    · simp at h
+  · simp only [show ("Set" == "Map") = false from rfl, ↓reduceIte, Bool.false_eq_true] at h
+    rcases args with _ | ⟨arg, _ | ⟨_, _⟩⟩
+    · simp only [bind_ok] at h
+      obtain ⟨type, s₁, -, h⟩ := h
+      simp only [pure_ok] at h
+      obtain ⟨rfl, -⟩ := h
       intro ρs ρo v _ hs hv
       simp [IR.Expr.eval, IR.Expr.evalList, IR.ExprExt.apply] at hv
       subst hv
-      simp [Eval.eval, hs.none (by simpa using hhas)]
-    · simp [hhas, hargs] at h
-  · simp [hmap, hset] at h
+      simp [Eval.eval, hnone ρs hs]
+    · simp only [bind_ok, orReject_ok] at h
+      obtain ⟨declared, s₁, -, items, s₂, hitems, ⟨elem, li⟩, s₃, ⟨hlo, rfl⟩, type, s₄, -, h⟩ := h
+      simp only [pure_ok] at h
+      obtain ⟨rfl, -⟩ := h
+      have hsim := translateRecv_sim m fs fuel (fun _ _ _ hx => htr _ _ _ _ _ hx) hitems
+      intro ρs ρo v ha hs hv
+      simp only [IR.Expr.eval] at hv
+      cases hli : IR.Expr.eval fs fuel ρo li with
+      | none => simp [IR.Expr.evalList, hli] at hv
+      | some u =>
+        simp [IR.Expr.evalList, hli] at hv
+        cases u <;> simp [IR.ExprExt.apply] at hv
+        rename_i vs
+        obtain ⟨es, hes, rfl⟩ := hv
+        obtain ⟨va, hva, hit⟩ := loopOver_sim m fs fuel hsim hlo ha hs hli
+        simp [Eval.eval, hnone ρs hs, hva, hit, hes]
+    · simp at h
 
 /-- A call of a function of the program, or of `Number.isNaN` and the like. -/
 theorem translateCall_sound (hc : CallsAgree (N := N) m.program fs fuel) {F : Nat}
@@ -2336,7 +2404,9 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
           · simp only [if_true, eval_value] at hbr ⊢
             exact ihE _ _ _ _ _ _ hta ρs ρo _ ha hs hbr
         · simp at h
-      | new sp callee typeArgs args => exact translateNew_sound m fs fuel h
+      | new sp callee typeArgs args =>
+        simp only [translateExprCore] at h
+        exact translateNew_sound m fs fuel (fun _ _ _ _ _ hx => ihE _ _ _ _ _ _ hx) h
       | _ => simp [translateExprCore] at h
     · intro env exp e ctx c ctx' h
       simp only [translateExpr, bind_ok, pure_ok] at h

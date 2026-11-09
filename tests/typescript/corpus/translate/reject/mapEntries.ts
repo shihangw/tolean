@@ -1,4 +1,4 @@
-// expect: 3:10 new Map takes no entries here
+// expect: 3:18 the entries do not have the key and value types of the map
 export function f(): Map<string, bigint> {
-  return new Map<string, bigint>([['a', 1n]]);
+  return new Map(new Set<string>());
 }
