@@ -32,7 +32,8 @@ A loop gets a lemma of its own before the theorem of its function. The lemma
 states that the evaluator runs the loop's fold as the printed `List.foldl`,
 for every environment whose variables have values of the right types. It
 follows from `runFold_foldl`, or from `runFold_forIn` for a loop that a
-`break` can end, and the theorem of the function uses it as a rewrite rule. To be usable that way, the lemma reads the loop's starting
+`break` can end, or from `runFold_forInRet` for one that a `return` can end,
+and the theorem of the function uses it as a rewrite rule. To be usable that way, the lemma reads the loop's starting
 state, and the other variables that the body reads, back out of the
 environment with decoders.
 
@@ -265,7 +266,8 @@ partial def exprNames : IR.Expr → List String
 /-- The callbacks in a body, inner ones first, in the order of the source. -/
 partial def bodyCallbacks : IR.Body → List Callback
   | .value e => exprCallbacks e
-  | .state _ | .yield _ | .done _ => []
+  | .state _ | .yield .. | .done .. => []
+  | .exit e _ => exprCallbacks e
   | .let _ e rest => exprCallbacks e ++ bodyCallbacks rest
   | .letArray _ _ elems rest => elems.flatMap exprCallbacks ++ bodyCallbacks rest
   | .ite c a b => exprCallbacks c ++ bodyCallbacks a ++ bodyCallbacks b
@@ -324,7 +326,7 @@ def casesOn (decls : List IR.Decl) (vars : List (String × IR.Ty)) : String :=
 
 /-- The loops of a body, inner ones first, in the order of the source. -/
 partial def loopsOf : IR.Body → List (List String × String × IR.Body × IR.LoopInfo)
-  | .value _ | .state _ | .yield _ | .done _ => []
+  | .value _ | .state _ | .yield .. | .done .. | .exit .. => []
   | .let _ _ rest | .letArray _ _ _ rest => loopsOf rest
   | .ite _ a b | .matchNull _ a b | .matchTag _ _ _ _ _ a b => loopsOf a ++ loopsOf b
   | .letState _ branch rest => loopsOf branch ++ loopsOf rest
@@ -629,6 +631,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         s!"  intro x\n" ++ substHfs ++ unpack ++
         s!"  {casesOn decls vars}link_tac [{simpSet}]"
     let mut index := 0
+    let mut returnsLoop := false
     for (stateNames, element, body, info) in loopsOf outBody do
       index := index + 1
       let lemmaName := s!"{name}_loop{index}"
@@ -666,8 +669,22 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       -- `ForInStep` of the state. The type says `Id`, as `forIn` expects in the
       -- printed definition, so that the two `if`s have the same type and the
       -- link theorem can rewrite one with the other.
-      let stepTy := if info.breaks then s!"Id (ForInStep ({IR.foldState names info}))"
-        else IR.foldState names info
+      -- In a loop that a `return` can end, the state starts with the value to
+      -- return, which the lemma reads with `getRet`; `getS` reads the locals,
+      -- and `init` starts the state with no value.
+      let stateTy := match info.returns with
+        | some ty =>
+          let slotTy := (tolean.IR.Ty.option ty).print names
+          if count == 0 then slotTy else s!"{slotTy} × {IR.foldState names info}"
+        | none => IR.foldState names info
+      let stepTy := if info.breaks then s!"Id (ForInStep ({stateTy}))" else stateTy
+      let (getRet, getS, init) := if count == 0
+        then (r.write "id" "id", "(fun _ => ())", s!"(fun _ => {r.write "none" "Option.none"})")
+        else (r.write "Prod.fst" "Prod.fst", r.write "Prod.snd" "Prod.snd",
+          s!"(fun s => ({r.write "none" "Option.none"}, s))")
+      let encR := match info.returns with
+        | some ty => (encoderOf r ty).getD "default"
+        | none => "default"
       let stepFn (ρ : String) : String :=
         -- The result has its type too: alone, Lean would not coerce a `T` in
         -- the body to the state's `Option T`.
@@ -675,10 +692,23 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           s!" : {stepTy}))" ++
           String.join (scopeNames.map fun n => s!" {decode ρ n}") ++ "))"
       let runLoop (ρ : String) : String :=
-        if info.breaks then s!"(Id.run (forIn items {decState ρ} {stepFn ρ}))"
+        if info.returns.isSome then s!"(Id.run (forIn items ({init} {decState ρ}) {stepFn ρ}))"
+        else if info.breaks then s!"(Id.run (forIn items {decState ρ} {stepFn ρ}))"
         else s!"(List.foldl {stepFn ρ} {decState ρ} items)"
-      let loopLemma := if info.breaks then "runFold_forIn" else "runFold_foldl"
-      let stepNames := if info.breaks then ["tolean.TypeScript.Proof.stepOutcome", "ForInStep.value"] else []
+      -- What the evaluator's fold gives: the locals at the end of the loop,
+      -- or the value to return.
+      let result (ρ : String) : String :=
+        if info.returns.isSome then
+          s!"(tolean.TypeScript.Proof.retResult {encR} {getRet} {getS} (fun s ρ => {upd "s" "ρ"}) {ρ} {runLoop ρ})"
+        else s!"(.normal {upd (runLoop ρ) ρ})"
+      let loopLemma := if info.returns.isSome then "runFold_forInRet"
+        else if info.breaks then "runFold_forIn" else "runFold_foldl"
+      let loopArgs := if info.returns.isSome then s!"{encX} {encR} {getRet} {getS} {init}" else encX
+      let initProof := if info.returns.isSome then " (fun _ => ⟨rfl, rfl⟩)" else ""
+      let stepNames := if info.returns.isSome then
+          ["tolean.TypeScript.Proof.retOutcome", "ForInStep.value"]
+        else if info.breaks then ["tolean.TypeScript.Proof.stepOutcome", "ForInStep.value"] else []
+      if info.returns.isSome then returnsLoop := true
       let depth := callDepth m bodyStmt
       let fuel := if depth == 0 then "fuel" else s!"(fuel + {depth})"
       -- A body with calls looks the functions up in the output, so the lemma
@@ -689,7 +719,9 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       -- `List (Option Int)`, with the parentheses that an element type needs.
       let itemsTy := (tolean.IR.Ty.list info.elem).print names
       let hypNames := (List.range coded.length).map (s!"h{·}")
-      let hyps := if hypNames.length == 1 then "h0" else "⟨" ++ ", ".intercalate hypNames ++ "⟩"
+      -- `obtain h0 := hI` would lose the name, so one hypothesis gets a `have`.
+      let bindHyps := if hypNames.length == 1 then "have h0 := hI"
+        else "obtain ⟨" ++ ", ".intercalate hypNames ++ "⟩ := hI"
       let generalize (ρ : String) (which : List (String × String × String)) : String :=
         String.join (which.zipIdx.map fun ((n, _, dec), i) =>
           s!"    generalize {dec} ({ρ}.lookup {str n}) = v{i} at h{i} ⊢\n")
@@ -709,18 +741,20 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         s!"    (fuel : Nat) (items : {itemsTy}) (ρ : Env {nv}) (hI : {inv "ρ"}) :\n" ++
         s!"    tolean.TypeScript.IR.Body.runFold fs {fuel} {list (stateNames.map str)} {str element}\n" ++
         s!"      ({term body}) ρ (List.map {encX} items) =\n" ++
-        s!"      some {upd (runLoop "ρ") "ρ"} := by\n" ++
-        s!"  refine tolean.TypeScript.Proof.{loopLemma} fs {fuel} _ {str element} _ {encX} (fun s ρ => {upd "s" "ρ"})\n" ++
-        s!"    (fun ρ => {decState "ρ"}) (fun ρ => {stepFn "ρ"}) (fun ρ => {inv "ρ"}) ?_ ?_ items ρ hI\n" ++
+        s!"      some {result "ρ"} := by\n" ++
+        s!"  refine tolean.TypeScript.Proof.{loopLemma} fs {fuel} _ {str element} _ {loopArgs} (fun s ρ => {upd "s" "ρ"})\n" ++
+        s!"    (fun ρ => {decState "ρ"}) (fun ρ => {stepFn "ρ"}) (fun ρ => {inv "ρ"}){initProof} ?_ ?_ items ρ hI\n" ++
         s!"  · intro ρ s x hI\n" ++
         substHfs ++
-        s!"    obtain {hyps} := hI\n    try simp only []\n" ++
+        s!"    {bindHyps}\n    try simp only []\n" ++
         generalize "ρ" coded ++ destruct ++
         s!"    {casesOn decls loopVars}link_tac [{simpSet}, {", ".intercalate hypNames}]\n" ++
         s!"  · intro ρ hI\n" ++
-        s!"    obtain {hyps} := hI\n    try simp only []\n" ++
+        s!"    {bindHyps}\n    try simp only []\n" ++
         generalize "ρ" stateCoded ++
-        s!"    simp [{", ".intercalate ((List.range count).map fun i => s!"Env.set_of_lookup _ _ _ h{i}")}]"
+        -- With no locals in the state, the goal is `ρ = ρ`, which the step
+        -- before may already close.
+        s!"    all_goals simp [{", ".intercalate ((List.range count).map fun i => s!"Env.set_of_lookup _ _ _ h{i}")}]"
     -- The encoders follow the types of the output, which the translator has
     -- already worked out from the source's types.
     let some retEnc := encoderOf r outRet | throw s!"{file}: cannot encode the result of {name}"
@@ -729,14 +763,24 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       return s!"({e} {p})"
     let binders := " ".intercalate (params.map fun p => s!"({p.name} : _)")
     let call := " ".intercalate ((r.full s!"{transNs}.{name}" ++ callN) :: params.map (·.name))
-    let simpSet := ", ".intercalate ([r.cert "decls"] ++ envLemmas ++ lemmaNames.toList ++ loopLemmas.toList ++ defs)
+    let retNames := if returnsLoop then ["tolean.TypeScript.Proof.retResult"] else []
+    let simpSet := ", ".intercalate ([r.cert "decls"] ++ retNames ++ envLemmas ++ lemmaNames.toList ++
+      loopLemmas.toList ++ defs)
     let some_ := r.write "some" "Option.some"
     let rfl := r.full "rfl"
     thms := thms.push <|
       s!"theorem {name}_link {generic} {binders} :\n" ++
       s!"    {r.full "tolean.TypeScript.IR.runIn"} (N := {nv}) {outputFs} ⟨\"\", {str name}⟩ {list args} =\n" ++
       s!"      {some_} ({retEnc} ({call})) := by\n" ++
-      s!"  {casesOn decls outParams}link_tac [{simpSet}]"
+      s!"  {casesOn decls outParams}link_tac [{simpSet}]" ++
+      -- After a loop that a `return` can end, the evaluator matches on the
+      -- loop's outcome, which is itself a match on the value to return. Once
+      -- that match is split, the arms for a `break` or a `continue` close, and
+      -- the arm for the end of the loop reads the locals from its state.
+      -- `link_eqs` relates the loop's result to the printed loop's, whose
+      -- `match`es have other auxiliary functions.
+      (if returnsLoop then
+        "\n  all_goals (try split at *)\n  all_goals (subst_vars; link_eqs; simp_all [List.lookup])" else "")
     thms := thms.push <|
       s!"theorem {name}_cert {generic} {binders} :\n" ++
       s!"    {r.eval "run"} (N := {nv}) {r.cert "program"} {str name} {list args} = {some_} ({retEnc} ({call})) :=\n" ++
