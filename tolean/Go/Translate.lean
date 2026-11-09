@@ -121,14 +121,7 @@ def fail {A : Type} (span : Span) (message : String) : TM A := do
 
 /-! ## Names -/
 
-def leanKeywords : List String :=
-  ["at", "by", "do", "then", "else", "if", "match", "with", "let", "have", "show", "from",
-   "in", "fun", "end", "open", "namespace", "section", "return", "mut", "for", "unless",
-   "where", "instance", "structure", "class", "theorem", "def", "axiom", "variable",
-   "universe", "Type", "Prop", "Sort", "import", "deriving", "extends", "calc", "try",
-   "catch", "finally", "break", "continue", "nomatch", "nofun", "macro", "syntax", "local",
-   "private", "protected", "partial", "unsafe", "noncomputable", "example", "abbrev",
-   "opaque", "inductive", "export", "attribute", "notation", "this", "rest", "pure"]
+def leanKeywords : List String := Pure.leanKeywords
 
 def leanName (n : String) : String := if leanKeywords.contains n then s!"«{n}»" else n
 

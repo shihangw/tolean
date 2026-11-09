@@ -29,7 +29,8 @@ theorem paramList_names {ctx : Ctx} :
     simp only [paramList, Option.some.injEq] at h
     subst h
     simp [Eval.paramNames]
-  | .mk sp names te tag :: rest, ps, h => by
+  | .mk sp [] te tag :: rest, ps, h => by simp [paramList] at h
+  | .mk sp (n :: names) te tag :: rest, ps, h => by
     simp only [paramList] at h
     cases ht : resolveType ctx te with
     | none => simp [ht] at h

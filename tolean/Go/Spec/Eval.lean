@@ -190,9 +190,13 @@ structure Program where
   `int` or `true` is predeclared only when the package does not declare it. -/
   names : List String
 
-/-- The names of the parameters, in order. -/
+/-- The names of the parameters, in order. A parameter without a name, as in
+`func f(int) int`, still takes an argument, and its name is `_`, which no
+code can read. -/
 def paramNames (fields : List Field) : List String :=
-  fields.flatMap fun | .mk _ names _ _ => names
+  fields.flatMap fun
+    | .mk _ [] _ _ => ["_"]
+    | .mk _ names _ _ => names
 
 /-- The names that one top-level declaration binds. `init` and `_` bind
 nothing, and a method binds no package name. An import binds its name, or the

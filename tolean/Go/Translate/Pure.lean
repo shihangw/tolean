@@ -99,10 +99,25 @@ def exprFuel : Nat := 256
 /-- The bound on the depth of the statements of a function. -/
 def stmtFuel : Nat := 4096
 
-/-- Names that the output may not bind: Lean keywords, the Lean names that the
-output uses, and Go's predeclared names, whose meaning a local would change. -/
+/-- Words that Lean reads as keywords or that the output of the older string
+translation uses, so that a Go name must be quoted as `«name»` to be one.
+Both paths of the translator read this list. -/
+def leanKeywords : List String :=
+  ["at", "by", "do", "then", "else", "if", "match", "with", "let", "have", "show", "from",
+   "in", "fun", "end", "open", "namespace", "section", "return", "mut", "for", "unless",
+   "where", "instance", "structure", "class", "theorem", "def", "axiom", "variable",
+   "universe", "Type", "Prop", "Sort", "import", "deriving", "extends", "calc", "try",
+   "catch", "finally", "break", "continue", "nomatch", "nofun", "macro", "syntax", "local",
+   "private", "protected", "partial", "unsafe", "noncomputable", "example", "abbrev",
+   "opaque", "inductive", "export", "attribute", "notation", "this", "rest", "pure",
+   "mutual", "termination_by", "decreasing_by", "suffices", "nonrec", "omit", "include"]
+
+/-- Names that the output of this part may not bind. They are the names that
+would need quotes, the Lean names that the output uses, and Go's predeclared
+names, whose meaning a local would change. This part never quotes a name. It
+refuses the function instead, and the older string translation writes it. -/
 def takenNames : List String :=
-  tolean.IR.leanReserved ++ IR.leanNames.map (·.1) ++
+  leanKeywords ++ tolean.IR.leanReserved ++ IR.leanNames.map (·.1) ++
     ["tolean", "true", "false", "int", "int64", "bool", "string", "nil", "_", "init"]
 
 def nameOK (name : String) : Bool := !takenNames.contains name
@@ -372,9 +387,12 @@ end
 
 /-! ### Functions -/
 
-/-- The parameters and their types. -/
+/-- The parameters and their types. A parameter without a name, as in
+`func f(int) int`, still takes an argument, so this part refuses it and the
+older string translation writes the function. -/
 def paramList (ctx : Ctx) : List Field → Option (List (String × Ty))
   | [] => some []
+  | .mk _ [] _ _ :: _ => none
   | .mk _ names te _ :: rest => do
     let t ← resolveType ctx te
     return names.map (·, t) ++ (← paramList ctx rest)
