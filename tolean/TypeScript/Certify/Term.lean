@@ -166,8 +166,8 @@ def importName (n : ImportName) : String :=
 
 def decl : Decl → String
   | .import s names source => s!"({ns}Decl.import {span s} {list (names.map importName)} {str source})"
-  | .function s e n ps r b =>
-    s!"({ns}Decl.function {span s} {e} {str n} {list (ps.map param)} " ++
+  | .function s e n tps ps r b =>
+    s!"({ns}Decl.function {span s} {e} {str n} {list (tps.map str)} {list (ps.map param)} " ++
       s!"{option (r.map typeExpr)}\n    {stmt b})"
   | .interface s e n fs => s!"({ns}Decl.interface {span s} {e} {str n} {list (fs.map field)})"
   | .typeAlias s e n t => s!"({ns}Decl.typeAlias {span s} {e} {str n} {typeExpr t})"

@@ -33,6 +33,7 @@ def Ty.beq : Ty T → Ty T → Bool
   | .tagged a, .tagged b => Decidable.decide (a = b)
   | .tag a, .tag b => Decidable.decide (a = b)
   | .tuple a, .tuple b => Ty.beqList a b
+  | .param a, .param b => Decidable.decide (a = b)
   | .ext a, .ext b => Decidable.decide (a = b)
   | _, _ => false
 
@@ -46,7 +47,8 @@ end
 mutual
 
 theorem Ty.beq_iff : (a b : Ty T) → Ty.beq a b = true ↔ a = b
-  | .int, b | .bool, b | .string, b | .struct _, b | .enum _, b | .tagged _, b | .tag _, b | .ext _, b => by
+  | .int, b | .bool, b | .string, b | .struct _, b | .enum _, b | .tagged _, b | .tag _, b | .param _, b
+  | .ext _, b => by
     cases b <;> simp [Ty.beq]
   | .option a, b | .optional a, b | .list a, b => by
     cases b <;> simp [Ty.beq, Ty.beq_iff a]

@@ -366,8 +366,9 @@ deriving DecidableEq
 inductive Decl where
   /-- `import { a, b } from "source"`: named imports from another file. -/
   | «import» (span : Span) (names : List ImportName) (source : String)
-  /-- `body` is a `block`. -/
-  | function (span : Span) (exported : Bool) (name : String) (params : List Param)
+  /-- `body` is a `block`. `typeParams` are the names in `<A, B>` after the
+  name of a generic function. -/
+  | function (span : Span) (exported : Bool) (name : String) (typeParams : List String) (params : List Param)
       (returnType : Option TypeExpr) (body : Stmt)
   | interface (span : Span) (exported : Bool) (name : String) (fields : List Field)
   | typeAlias (span : Span) (exported : Bool) (name : String) (type : TypeExpr)

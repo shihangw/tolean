@@ -62,7 +62,9 @@ theorem checkLocalName_ok {sp : Span} {name r : String} {s s' : Ctx}
   · simp only [pure_bind, ite_state] at h
     split at h
     · simp at h
-    · exact checkName_ok h
+    · split at h
+      · simp at h
+      · exact checkName_ok h
 
 theorem declare_ok {env env' : Translate.Env} {sp : Span} {name : String} {b : Binding} {t : Ty}
     {s s' : Ctx} (h : declare env sp name b t s = .ok env' s') :
@@ -540,6 +542,43 @@ theorem zip_sim {env : Translate.Env} {g : Expr × Ty → TM IR.Expr}
       | none => simp [hx] at hv
       | some w =>
         cases hxs : IR.Expr.evalList fs fuel ρo os with
+        | none => simp [hx, hxs] at hv
+        | some ws =>
+          simp [hx, hxs] at hv
+          subst hv
+          have h1 := hg _ _ _ _ _ ho ρs ρo w ha hs hx
+          have h2 := ih ts _ _ _ (by simpa using hlen) hos ρs ρo ws ha hs hxs
+          simp [Eval.evalList, h1, h2]
+
+/-- `zip_sim` for translations that give a `Code`, whose value the output
+uses. -/
+theorem zip_sim_value {env : Translate.Env} {g : Expr × Ty → TM Code}
+    (hg : ∀ x t ctx o ctx', g (x, t) ctx = .ok o ctx' → Sim (N := N) m fs fuel env x o.value) :
+    ∀ (args : List Expr) (ps : List Ty) (ctx : Ctx) (codes : List Code) (ctx' : Ctx),
+      args.length = ps.length → (args.zip ps).mapM g ctx = .ok codes ctx' →
+      SimList (N := N) m fs fuel env args (codes.map Code.value) := by
+  intro args
+  induction args with
+  | nil =>
+    intro ps ctx codes ctx' _ h
+    simp [List.mapM_nil] at h
+    obtain ⟨rfl, -⟩ := h
+    intro ρs ρo vs _ _ hv
+    simp [IR.Expr.evalList] at hv
+    subst hv; simp [Eval.evalList]
+  | cons x xs ih =>
+    intro ps ctx codes ctx' hlen h
+    cases ps with
+    | nil => simp at hlen
+    | cons t ts =>
+      simp [List.mapM_cons] at h
+      obtain ⟨o, s₁, ho, os, hos, rfl⟩ := h
+      intro ρs ρo vs ha hs hv
+      simp only [List.map_cons, IR.Expr.evalList] at hv
+      cases hx : IR.Expr.eval fs fuel ρo o.value with
+      | none => simp [hx] at hv
+      | some w =>
+        cases hxs : IR.Expr.evalList fs fuel ρo (os.map Code.value) with
         | none => simp [hx, hxs] at hv
         | some ws =>
           simp [hx, hxs] at hv
@@ -1572,21 +1611,22 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
             simp only at h
             split at h
             · next hlen =>
-              simp at h
-              obtain ⟨vals, hvals, hcode⟩ := h
+              simp only [bind_ok, pure_ok] at h
+              obtain ⟨_, _, ⟨-, rfl⟩, codes, s₁, hcodes, hcode, -⟩ := h
               intro ρs ρo v ha hs hv
               rw [← hcode] at hv
               simp only [IR.Expr.eval] at hv
-              cases hx : IR.Expr.evalList fs fuel ρo vals with
+              cases hx : IR.Expr.evalList fs fuel ρo (codes.map Code.value) with
               | none => simp [hx] at hv
               | some vs =>
                 simp [hx] at hv
                 subst hv
-                have hel := zip_sim m fs fuel ?hg elems tys _ vals _ (by simpa using hlen) hvals ρs ρo vs ha hs hx
+                have hel := zip_sim_value m fs fuel ?hg elems tys _ codes _ (by simpa using hlen) hcodes
+                  ρs ρo vs ha hs hx
                 · simp [Eval.eval, hel]
                 case hg =>
                   intro x t c₀ o c₁ hgo
-                  simp at hgo
+                  simp only [bind_ok] at hgo
                   obtain ⟨a, s₂, hta, hgo⟩ := hgo
                   split at hgo
                   · simp at hgo
@@ -1655,17 +1695,20 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
           · simp at h
           · split at h
             · next hlen =>
-              simp at h
-              obtain ⟨vals, hvals, hcode⟩ := h
+              -- The arguments, then the checks of their types, which do not
+              -- change what the call means.
+              simp only [bind_ok] at h
+              obtain ⟨codes, s₂, hcodes, _, s₃, -, h⟩ := h
+              have hcode : c.code = .call fn.ref (codes.map Code.value) := by
+                obtain ⟨_, -, rfl⟩ := map_ok.mp h
+                rfl
               intro ρs ρo v ha hs hv
-              rw [← hcode] at hv
-              simp only at hv
-              rw [out_call] at hv
-              cases hx : IR.Expr.evalList fs fuel ρo vals with
+              rw [hcode, out_call] at hv
+              cases hx : IR.Expr.evalList fs fuel ρo (codes.map Code.value) with
               | none => simp [hx] at hv
               | some vs =>
                 simp [hx] at hv
-                have hargs := zip_sim m fs fuel ?hg args fn.params _ vals _ hlen.symm hvals
+                have hargs := zip_sim_value m fs fuel ?hg args fn.params _ codes _ (by simpa using hlen.symm) hcodes
                   ρs ρo vs ha hs hx
                 · have hname : fn.name = name := by simpa using List.find?_some hfind
                   have hres := hs.2.1 fn (List.mem_of_find?_eq_some hfind)
@@ -1675,15 +1718,9 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
                   exact hc _ _ _ hv
                 case hg =>
                   intro x t c₀ o c₁ hgo
-                  simp at hgo
-                  obtain ⟨a, s₂, hta, hgo⟩ := hgo
-                  split at hgo
-                  · simp at hgo
-                    obtain ⟨rfl, -⟩ := hgo
-                    intro ρs' ρo' w ha' hs' hw
-                    rw [eval_value] at hw
-                    exact ihE _ _ _ _ _ _ hta ρs' ρo' w ha' hs' hw
-                  · simp at hgo
+                  intro ρs' ρo' w ha' hs' hw
+                  rw [eval_value] at hw
+                  exact ihE _ _ _ _ _ _ hgo ρs' ρo' w ha' hs' hw
             · simp at h
       case member sp' obj test =>
         cases obj

@@ -113,9 +113,11 @@ def Decl.toSexp : Decl → Sexp
   | .import s names source =>
     node "import" s [Sexp.quote source]
       (names.map fun n => node "name" n.span ([n.name] ++ flag n.typeOnly "type") [])
-  | .function s exported name params returnType body =>
+  | .function s exported name typeParams params returnType body =>
+    -- A type parameter keeps no span, so its node has none.
     node "function" s ([name] ++ flag exported "export")
-      (params.map Param.toSexp ++ (returnType.map TypeExpr.toSexp).toList ++ [body.toSexp])
+      (typeParams.map (fun t => .node "type-param" none [t] []) ++ params.map Param.toSexp ++
+        (returnType.map TypeExpr.toSexp).toList ++ [body.toSexp])
   | .interface s exported name fields =>
     node "interface" s ([name] ++ flag exported "export") (fields.map Field.toSexp)
   | .typeAlias s exported name type =>

@@ -59,6 +59,9 @@ inductive Ty (T : Type) where
   `[A, B, C]`. Lean nests the product to the right, so `[A, [B, C]]` has the
   same Lean type, and the list of elements keeps the two apart. -/
   | tuple (elems : List (Ty T))
+  /-- A type parameter of a generic function, such as `T` in TypeScript's
+  `function first<T>(xs: T[]): T | null`. -/
+  | param (name : String)
   /-- A type that the language adds. -/
   | ext (t : T)
 deriving Repr, Inhabited
@@ -542,6 +545,7 @@ def Ty.print [PrintTy T] (names : Names) : Ty T → String
     | (name, Option.none) => name
   | .tag _ => PrintTy.string (T := T) names
   | .tuple ts => "(" ++ " × ".intercalate (Ty.printList names ts) ++ ")"
+  | .param name => name
   | .ext t => PrintTy.print names t
 
 def Ty.printList [PrintTy T] (names : Names) : List (Ty T) → List String
@@ -564,6 +568,21 @@ def Ty.namesParam [PrintTy T] (names : Names) : Ty T → Bool
 def Ty.namesParamList [PrintTy T] (names : Names) : List (Ty T) → Bool
   | [] => false
   | t :: ts => t.namesParam names || Ty.namesParamList names ts
+
+end
+
+mutual
+
+/-- The type parameters of a generic function that `t` names, in order. -/
+def Ty.typeVars : Ty T → List String
+  | .param name => [name]
+  | .option t | .optional t | .list t => t.typeVars
+  | .tuple ts => Ty.typeVarsList ts
+  | _ => []
+
+def Ty.typeVarsList : List (Ty T) → List String
+  | [] => []
+  | t :: ts => t.typeVars ++ Ty.typeVarsList ts
 
 end
 
@@ -822,6 +841,10 @@ def Decl.print (names : Names) : Decl T E → String
     s!"abbrev {name}{generic} := {type.print names}"
   | .function name params ret body =>
     let generic := if names.generic then PrintTy.binders (T := T) names else ""
+    -- The type parameters, in the order that the parameters name them. The
+    -- translator refuses one that no parameter's type names.
+    let vars := (Ty.typeVarsList (params.map (·.2) ++ [ret])).eraseDups
+    let generic := if vars.isEmpty then generic else generic ++ " {" ++ " ".intercalate vars ++ " : Type}"
     let leanParams := params.map fun (param, type) => s!"({param} : {type.print names})"
     "\n".intercalate
       (s!"def {name}{generic} {" ".intercalate leanParams} : {ret.print names} :=" ::

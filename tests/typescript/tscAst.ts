@@ -309,8 +309,22 @@ class Printer {
     if (s.asteriskToken !== undefined) {
       refuse(s, 'generator');
     }
-    if (s.typeParameters !== undefined) {
-      refuse(s, 'generic function');
+    // Type parameters have no constraint, no default and no modifier. Tolean
+    // keeps no span for them.
+    const typeParams: Array<Sexp> = (s.typeParameters ?? []).map((tp) => {
+      if (tp.constraint !== undefined) {
+        refuse(tp, 'type parameter with a constraint');
+      }
+      if (tp.default !== undefined) {
+        refuse(tp, 'type parameter with a default');
+      }
+      if ((tp.modifiers ?? []).length > 0) {
+        refuse(tp, 'type parameter with a modifier');
+      }
+      return { head: 'type-param', atoms: [this.name(tp.name)], children: [] };
+    });
+    if (s.typeParameters?.hasTrailingComma) {
+      refuse(s, "',' after the last type parameter");
     }
     if (s.name === undefined || s.body === undefined) {
       refuse(s, 'function without a name or a body');
@@ -324,7 +338,7 @@ class Printer {
       'function',
       s,
       [this.name(s.name), ...(exported ? ['export'] : [])],
-      [...params, ...returnType, body],
+      [...typeParams, ...params, ...returnType, body],
     );
   }
 

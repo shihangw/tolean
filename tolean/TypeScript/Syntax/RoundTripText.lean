@@ -379,6 +379,16 @@ theorem exportWords_line (e : Bool) : LineOK (exportWords e) := by
   · exact LineOK.nil
   · exact LineOK.word (by simp [keywordWord])
 
+theorem typeParamWords_line : ∀ names : List String, LineOK (typeParamWords names)
+  | [] => LineOK.nil
+  | n :: more => by
+    have h : ∀ x ∈ (n :: more).map (fun k => [identWord k]), Fine x := by
+      intro x hx
+      simp only [List.mem_map] at hx
+      obtain ⟨k, _, rfl⟩ := hx
+      exact Fine.word (by simp [identWord])
+    exact (fine_enclose (o := "<") (c := ">") h).line
+
 theorem Decl.lineOK : ∀ d : Decl, ∀ l ∈ d.lines, LineOK l.2
   | .import _ names source, l, hl => by
     simp [Decl.lines] at hl; subst hl
@@ -391,7 +401,7 @@ theorem Decl.lineOK : ∀ d : Decl, ∀ l ∈ d.lines, LineOK l.2
       · exact Fine.word (by simp [identWord])
     exact LineOK.cons (by simp [keywordWord]) ((fine_enclose hn).line.append
       (LineOK.cons (by simp [identWord]) (LineOK.cons (by simp) (LineOK.word (by simp [punctWord])))))
-  | .function _ exported name params rt body, l, hl => by
+  | .function _ exported name tps params rt body, l, hl => by
     simp only [Decl.lines, List.mem_cons] at hl
     rcases hl with rfl | hl
     · have hp : ∀ x ∈ params.map Param.words, Fine x := by
@@ -401,7 +411,8 @@ theorem Decl.lineOK : ∀ d : Decl, ∀ l ∈ d.lines, LineOK l.2
         exact Fine.ofLine (by simp [identWord]) (typeAnnotation_line _)
       have := (exportWords_line exported).append (LineOK.cons (w := keywordWord "function") (by simp [keywordWord])
         (LineOK.cons (w := identWord name) (by simp [identWord])
-          ((fine_enclose (o := "(") (c := ")") hp).line.append (typeAnnotation_line rt))))
+          ((typeParamWords_line tps).append
+            ((fine_enclose (o := "(") (c := ")") hp).line.append (typeAnnotation_line rt)))))
       simpa [List.append_assoc] using this
     · exact Stmt.lineOK body 0 l hl
   | .interface _ exported name fields, l, hl => by

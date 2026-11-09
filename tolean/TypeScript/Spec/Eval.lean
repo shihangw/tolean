@@ -248,7 +248,7 @@ def numberText? : Expr → Option String
 /-- The functions of the module, by name. -/
 def functions (m : Module) : List (String × List String × Stmt) :=
   m.decls.filterMap fun
-    | .function _ _ name params _ body => some (name, params.map (·.name), body)
+    | .function _ _ name _ params _ body => some (name, params.map (·.name), body)
     | _ => none
 
 /-! ### Programs of several files
@@ -299,7 +299,7 @@ def resolvePath (file source : String) : Option String := do
 /-- `m` declares `name` as an exported function. -/
 def exportsFunction (m : Module) (name : String) : Bool :=
   m.decls.any fun
-    | .function _ exported n _ _ _ => exported && n == name
+    | .function _ exported n _ _ _ _ => exported && n == name
     | _ => false
 
 /-- The function that a call of `name` runs, in the file of `s`: the file's

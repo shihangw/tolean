@@ -104,7 +104,8 @@ def encoderOf (r : Refs) : IR.Ty → Option String
   | .struct ref | .enum ref | .tagged ref => some (r.cert s!"encode{ref.name}")
   | .number => some (r.eval "Val.num")
   | .tuple ts => do return s!"({r.eval "encTuple"} {← elementsEncoder r ts})"
-  | .null | .tag _ => none
+  -- A type parameter has no encoder, so a generic function gets no certificate yet.
+  | .null | .tag _ | .param _ => none
 
 /-- How the elements of a tuple of the types `ts` become a list of `Val`s. -/
 def elementsEncoder (r : Refs) : List IR.Ty → Option String
@@ -127,7 +128,7 @@ def decoderOf (r : Refs) : IR.Ty → Option String
   | .struct ref | .enum ref | .tagged ref => some (r.cert s!"decode{ref.name}")
   | .number => some (r.eval "decNum")
   | .tuple ts => do return s!"({r.eval "decTuple"} {← elementsDecoder r ts})"
-  | .null | .tag _ => none
+  | .null | .tag _ | .param _ => none
 
 /-- How a list of `Val`s becomes the elements of a tuple of the types `ts`. -/
 def elementsDecoder (r : Refs) : List IR.Ty → Option String
@@ -199,7 +200,7 @@ def stmtCalls : Stmt → List String
 
 def functionsOf (m : Module) : List (String × List Param × Option TypeExpr × Stmt) :=
   m.decls.filterMap fun
-    | .function _ _ n ps r b => some (n, ps, r, b)
+    | .function _ _ n _ ps r b => some (n, ps, r, b)
     | _ => none
 
 /-- The functions that get a certificate: all of them. -/
@@ -588,7 +589,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
   let mut loopLemmas : Array String := #[]
   let mut thms : Array String := #[]
   for d in m.decls do
-    let .function _ _ name params _ syntaxBody := d | continue
+    let .function _ _ name _ params _ syntaxBody := d | continue
     unless fns.contains name do continue
     let some (.function _ outParams outRet outBody) := decls.find? fun
         | .function n .. => n == name

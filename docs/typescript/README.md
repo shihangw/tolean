@@ -14,8 +14,9 @@ marks which links are proved, tested against a reference, or trusted.
 
 `tolean/TypeScript/Syntax/` puts a span on every node. It reads:
 
-- **Declarations:** functions, interfaces, type aliases, enums whose members
-  are strings, and `const` and `let`, each of them possibly exported.
+- **Declarations:** functions, which may have type parameters such as
+  `<A, B>`, interfaces, type aliases, enums whose members are strings, and
+  `const` and `let`, each of them possibly exported.
 - **Statements:** `const` and `let` declarations, expression statements,
   `return`, `if` and `else`, `for … of`, the counted `for`, `while`, `switch`,
   blocks, `break`, `continue` and the empty statement. A counted `for`, such
@@ -344,6 +345,7 @@ the file, the line and the reason. It never approximates.
 | `a / k`, `a % k` on `bigint`, where `k` is a nonzero literal | `Int.tdiv a k`, `Int.tmod a k` (both truncate toward zero, as JS does) |
 | `{ a, b: e }` building a declared interface | structure instance |
 | Call to a function declared earlier in the file | application |
+| `function f<T>(x: T): T`, where the type parameters have no constraint | `def f {T : Type} (x : T) : T`. A call fixes each type parameter from the types of its arguments, and Lean infers the same types. An argument of `T \| null` may be `null`, which leaves `T` to another argument. |
 
 Tolean rejects these, among others:
 
@@ -401,6 +403,16 @@ Tolean rejects these, among others:
   a number literal within the tuple, and an index of any other value is
   refused. `===` on tuples is refused, because in JS it compares the arrays
   by reference.
+- A type parameter with a constraint, a default or a modifier, and a `,` after
+  the last one. Tolean also refuses a type parameter that no parameter's type
+  names, because a call could not fix it. A type parameter may not have the
+  name of a type or function of the file, or of a local, because Lean would
+  read the name as the other one. `===` on values of a type parameter is
+  refused, because in JS it compares objects by reference.
+- A call to a generic function whose arguments do not fix every type
+  parameter, or fix one to `null`, a nullable type or an optional field's
+  type. The output gives `T | null` the type `Option T`, so `T` may not be
+  nullable itself.
 - A literal union that is not the whole of a type alias, such as `(s: 'a' | 'b')`,
   because the output needs a name for its inductive type. Tolean also refuses
   a union of string literals and other types, a string that is not an ASCII
