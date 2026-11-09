@@ -48,3 +48,14 @@ export function orZero(n: bigint | null): bigint {
 export function countNames(names: string[]): bigint {
   return count(names) + count([true, false]);
 }
+
+// A tuple literal keeps its shape where a generic tuple is expected, and its
+// elements fix the type parameters.
+export function swapped(): [string, bigint] {
+  return swap([1n, 'x']);
+}
+
+// An element that the context's type parameter allows keeps that type.
+export function maybeFirst<T>(x: T): [T | null, T] {
+  return [null, x];
+}

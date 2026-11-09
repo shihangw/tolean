@@ -45,4 +45,10 @@ def orZero (n : Option Int) : Int :=
 def countNames (names : List JSString) : Int :=
   ((count names) + (count (([true, false] : List Bool))))
 
+def swapped  : (JSString × Int) :=
+  (swap (((1 : Int), JSString.ofString "x")))
+
+def maybeFirst {T : Type} (x : T) : (Option T × T) :=
+  (none, x)
+
 end Test
