@@ -78,17 +78,19 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   -- `a?.f`, as the spec evaluates it.
   | .optField _ _, [.null] | .optField _ _, [.undefined] => some .undefined
   | .optField f _, [.obj fields] => Eval.getProp fields f
+  -- `r[k]`, as the spec evaluates it: the property that the string `k` names.
+  | .recordGet _ _, [.obj fields, .str k] => Eval.getKey fields k
   | _, _ => none
 
 /-- The tag of `v`, a value of a tagged union: the string in its tag field
 `field`, or the result of `typeof v` when the union has no tag field. -/
-def tagOf : Option String → Val N → Option String
+def tagOf : Option String → Val N → Option JSString
   | some field, .obj fields =>
     match fields.lookup field with
     | some (.str k) => some k
     | _ => none
   | some _, _ => none
-  | none, v => some v.typeOf
+  | none, v => some (JSString.ofString v.typeOf)
 
 /-- The bindings that `let (x, y) := …` makes: each of `names`, with its value
 in `inner`. A name that is bound already gets the new value in its place,
@@ -109,12 +111,12 @@ def Expr.eval (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
   | .none => some .null
   | .ascribe e _ => Expr.eval fs fuel ρ e
   | .bool b => some (.bool b)
-  | .string s => some (.str s)
+  | .string s => some (.str (JSString.ofString s))
   | .var name => ρ.lookup name
   -- A constructor of a literal union is its string, as in JS.
-  | .enumCase _ member => some (.str member)
+  | .enumCase _ member => some (.str (JSString.ofString member))
   -- A tag field is its string in the object.
-  | .tagValue value => some (.str value)
+  | .tagValue value => some (.str (JSString.ofString value))
   -- A member of a tagged union is the value of the member: the object of
   -- its structure, or the primitive value itself.
   | .inject _ _ e => Expr.eval fs fuel ρ e
@@ -202,7 +204,47 @@ def Expr.eval (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
     let .int y ← Expr.eval fs fuel ρ a | none
     return .int (op.apply x y)
   | .ext op args => do op.apply (← Expr.evalList fs fuel ρ args)
+  -- `fun x => body` runs on each element in order, as the callback of the
+  -- source's method does, and `List.any`, `List.all` and `List.find?` stop
+  -- where it does. `List.find?` gives `none` when no element passes, which is
+  -- `undefined`, as in JS.
+  | .listMethod method items param _ body _ => do
+    let .list xs ← Expr.eval fs fuel ρ items | none
+    match method with
+    | .map => return .list (← Expr.evalMap fs fuel ρ param body xs)
+    | .filter => return .list (← Expr.evalFilter fs fuel ρ param body xs)
+    | .any => return .bool (← Expr.evalFind fs fuel ρ param body true xs).isSome
+    | .all => return .bool (← Expr.evalFind fs fuel ρ param body false xs).isNone
+    | .find => return (← Expr.evalFind fs fuel ρ param body true xs).getD .undefined
 termination_by e => (fuel, sizeOf e, 0)
+
+/-- `List.map (fun param => body)` on `xs`. -/
+def Expr.evalMap (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : Env N)
+    (param : String) (body : Expr) : List (Val N) → Option (List (Val N))
+  | [] => some []
+  | x :: xs => do
+    return (← Expr.eval fs fuel ((param, x) :: ρ) body) :: (← Expr.evalMap fs fuel ρ param body xs)
+termination_by xs => (fuel, sizeOf body, xs.length + 1)
+
+/-- `List.filter (fun param => body)` on `xs`, where `body` is a `Bool`. -/
+def Expr.evalFilter (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : Env N)
+    (param : String) (body : Expr) : List (Val N) → Option (List (Val N))
+  | [] => some []
+  | x :: xs => do
+    let .bool keep ← Expr.eval fs fuel ((param, x) :: ρ) body | none
+    let rest ← Expr.evalFilter fs fuel ρ param body xs
+    return if keep then x :: rest else rest
+termination_by xs => (fuel, sizeOf body, xs.length + 1)
+
+/-- The first of `xs` for which the `Bool` `body` is `want`, or none. -/
+def Expr.evalFind (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : Env N)
+    (param : String) (body : Expr) (want : Bool) : List (Val N) → Option (Option (Val N))
+  | [] => some none
+  | x :: xs => do
+    let .bool b ← Expr.eval fs fuel ((param, x) :: ρ) body | none
+    if b == want then return some x
+    Expr.evalFind fs fuel ρ param body want xs
+termination_by xs => (fuel, sizeOf body, xs.length + 1)
 
 def Expr.evalList (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : Env N) :
     List Expr → Option (List (Val N))
@@ -239,8 +281,8 @@ def Body.exec (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
   -- for its tag, as the printed `match` on its constructor does.
   | .matchTag name _ field tag other whenTag whenOther => do
     let k ← tagOf field (← ρ.lookup name)
-    if k == tag then Body.exec fs fuel ρ whenTag
-    else if other.all (· == k) then Body.exec fs fuel ρ whenOther else none
+    if k == JSString.ofString tag then Body.exec fs fuel ρ whenTag
+    else if other.all (JSString.ofString · == k) then Body.exec fs fuel ρ whenOther else none
   | .letState names branch rest => do
     match ← Body.exec fs fuel ρ branch with
     | .normal inner => Body.exec fs fuel (← bindState names inner ρ) rest

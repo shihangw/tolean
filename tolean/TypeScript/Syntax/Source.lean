@@ -186,6 +186,16 @@ def VarDecl.words (d : VarDecl) : List Word :=
   [d.kind.word, identWord d.name] ++ typeAnnotation d.type ++
     (match d.init with | some e => punctWord "=" :: e.words | none => []) ++ [punctWord ";"]
 
+/-- The words of `e`, or none when it is absent. -/
+def optWords : Option Expr → List Word
+  | some e => e.words
+  | none => []
+
+/-- The first part of a counted `for`, with the `;` after it. -/
+def forInitWords : Option VarDecl → List Word
+  | some d => d.words
+  | none => [punctWord ";"]
+
 /-- `case test :`, or `default :`. -/
 def clauseHead : Option Expr → List Word
   | some e => keywordWord "case" :: e.words ++ [punctWord ":"]
@@ -207,6 +217,9 @@ def Stmt.lines (depth : Nat) : Stmt → List Line
   | .forOfStmt _ kind name iterable body =>
     (depth, keywordWord "for" :: punctWord "(" :: kind.word :: identWord name :: identWord "of" :: iterable.words ++
       [punctWord ")"]) :: body.lines (depth + 1)
+  | .forStmt _ init test update body =>
+    (depth, keywordWord "for" :: punctWord "(" :: forInitWords init ++ optWords test ++ punctWord ";" ::
+      optWords update ++ [punctWord ")"]) :: body.lines (depth + 1)
   | .whileStmt _ test body =>
     (depth, keywordWord "while" :: punctWord "(" :: test.words ++ [punctWord ")"]) :: body.lines (depth + 1)
   | .block _ body => (depth, [punctWord "{"]) :: Stmt.linesOf (depth + 1) body ++ [(depth, [punctWord "}"])]
@@ -359,6 +372,8 @@ def Stmt.erase : Stmt → Stmt
   | .returnStmt _ v => .returnStmt noSpan (v.map Expr.erase)
   | .ifStmt _ test t e => .ifStmt noSpan test.erase t.erase (Stmt.eraseOpt e)
   | .forOfStmt _ kind name iterable body => .forOfStmt noSpan kind name iterable.erase body.erase
+  | .forStmt _ init test update body =>
+    .forStmt noSpan (init.map VarDecl.erase) (test.map Expr.erase) (update.map Expr.erase) body.erase
   | .whileStmt _ test body => .whileStmt noSpan test.erase body.erase
   | .block _ body => .block noSpan (Stmt.eraseAll body)
   | .breakStmt _ => .breakStmt noSpan

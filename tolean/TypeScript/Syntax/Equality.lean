@@ -215,6 +215,16 @@ theorem VarDecl.beq_iff (a b : VarDecl) : VarDecl.beq a b = true ↔ a = b := by
   cases b
   simp [and_assoc, VarDecl.beq, TypeExpr.beqOpt_iff type, Expr.beqOpt_iff init]
 
+def VarDecl.beqOpt : Option VarDecl → Option VarDecl → Bool
+  | none, none => true
+  | some x, some y => VarDecl.beq x y
+  | _, _ => false
+
+theorem VarDecl.beqOpt_iff : (o p : Option VarDecl) → VarDecl.beqOpt o p = true ↔ o = p
+  | none, p => by cases p <;> simp [VarDecl.beqOpt]
+  | some x, p => by
+    cases p <;> simp [VarDecl.beqOpt, VarDecl.beq_iff x]
+
 mutual
 
 def Stmt.beq : Stmt → Stmt → Bool
@@ -223,6 +233,7 @@ def Stmt.beq : Stmt → Stmt → Bool
   | .returnStmt a0 a1, .returnStmt b0 b1 => decide (a0 = b0) && Expr.beqOpt a1 b1
   | .ifStmt a0 a1 a2 a3, .ifStmt b0 b1 b2 b3 => decide (a0 = b0) && Expr.beq a1 b1 && Stmt.beq a2 b2 && Stmt.beqOpt a3 b3
   | .forOfStmt a0 a1 a2 a3 a4, .forOfStmt b0 b1 b2 b3 b4 => decide (a0 = b0) && decide (a1 = b1) && decide (a2 = b2) && Expr.beq a3 b3 && Stmt.beq a4 b4
+  | .forStmt a0 a1 a2 a3 a4, .forStmt b0 b1 b2 b3 b4 => decide (a0 = b0) && VarDecl.beqOpt a1 b1 && Expr.beqOpt a2 b2 && Expr.beqOpt a3 b3 && Stmt.beq a4 b4
   | .whileStmt a0 a1 a2, .whileStmt b0 b1 b2 => decide (a0 = b0) && Expr.beq a1 b1 && Stmt.beq a2 b2
   | .block a0 a1, .block b0 b1 => decide (a0 = b0) && Stmt.beqList a1 b1
   | .breakStmt a0, .breakStmt b0 => decide (a0 = b0)
@@ -261,6 +272,9 @@ theorem Stmt.beq_iff : (a b : Stmt) → Stmt.beq a b = true ↔ a = b
     cases b <;> simp [and_assoc, Stmt.beq, Expr.beq_iff a1, Stmt.beq_iff a2, Stmt.beqOpt_iff a3]
   | .forOfStmt a0 a1 a2 a3 a4, b => by
     cases b <;> simp [and_assoc, Stmt.beq, Expr.beq_iff a3, Stmt.beq_iff a4]
+  | .forStmt a0 a1 a2 a3 a4, b => by
+    cases b <;> simp [and_assoc, Stmt.beq, VarDecl.beqOpt_iff a1, Expr.beqOpt_iff a2, Expr.beqOpt_iff a3,
+      Stmt.beq_iff a4]
   | .whileStmt a0 a1 a2, b => by
     cases b <;> simp [and_assoc, Stmt.beq, Expr.beq_iff a1, Stmt.beq_iff a2]
   | .block a0 a1, b => by

@@ -3,7 +3,8 @@
  *
  * `checkTranslate.ts` translates them and compiles the output, and
  * `interpreter.test.ts` runs them in the interpreter and in Node. A program has
- * up to three interfaces and up to three exported functions. A function calls
+ * up to three interfaces, some of them declared as a `Record` over a literal
+ * union, and up to three exported functions. A function calls
  * only the functions before it, so no program recurses.
  */
 
@@ -62,6 +63,8 @@ export function show(t: Ty): string {
 export class Gen {
   private readonly next: () => number;
   private structs: Array<{ name: string; fields: Array<[string, Ty]> }> = [];
+  /** The structures that are declared as `Record<K, T>`. */
+  private records = new Set<string>();
   private functions: Array<{ name: string; params: Array<Ty>; ret: Ty }> = [];
   private counter = 0;
 
@@ -158,6 +161,7 @@ export class Gen {
       });
     }
     options.push(() => `(${this.test(vars, d)} ? ${this.expr(t, vars, d)} : ${this.expr(t, vars, d)})`);
+    options.push(...this.callbacks(t, readable, vars, d));
     switch (t.k) {
       case 'bigint':
       case 'number':
@@ -245,6 +249,48 @@ export class Gen {
     return this.pick(options)();
   }
 
+  /** Calls of `map`, `filter`, `some`, `every` and `find` on an array in
+   * scope that give a value of type `t`. The callback's parameter is a fresh
+   * name, which its body may read with the other names in scope. The body is
+   * in parentheses, so that an object literal is not read as a block. */
+  private callbacks(t: Ty, readable: ReadonlyArray<Var>, vars: ReadonlyArray<Var>, depth: number): Array<() => string> {
+    const arrays = readable.flatMap((v) => (v.ty.k === 'array' ? [{ name: v.name, elem: v.ty.of }] : []));
+    if (arrays.length === 0) return [];
+    const call = (method: string, recv: { name: string; elem: Ty }, body: (inner: ReadonlyArray<Var>) => string): string => {
+      const p = this.fresh('c');
+      const inner = [...vars, { name: p, ty: recv.elem, mutable: false, owned: false }];
+      return `${recv.name}.${method}(${p} => (${body(inner)}))`;
+    };
+    const options: Array<() => string> = [];
+    switch (t.k) {
+      case 'boolean':
+        options.push(() => call(this.pick(['some', 'every']), this.pick(arrays), (inner) => this.expr(BOOLEAN, inner, depth)));
+        break;
+      case 'array': {
+        const of = t.of;
+        options.push(() => call('map', this.pick(arrays), (inner) => this.expr(of, inner, depth)));
+        const same_ = arrays.filter((a) => same(a.elem, of));
+        if (same_.length > 0) {
+          options.push(() => call('filter', this.pick(same_), (inner) => this.expr(BOOLEAN, inner, depth)));
+        }
+        break;
+      }
+      case 'bigint':
+      case 'number': {
+        // `find` gives `undefined` when no element passes, and `??` gives the
+        // default then.
+        const same_ = arrays.filter((a) => same(a.elem, t));
+        if (same_.length > 0) {
+          options.push(() => `(${call('find', this.pick(same_), (inner) => this.expr(BOOLEAN, inner, depth))} ?? ${this.expr(t, vars, depth)})`);
+        }
+        break;
+      }
+      default:
+        break;
+    }
+    return options;
+  }
+
   /** A condition that is not a literal. With a literal test, such as
    * `true ? a : b`, tsc drops its null narrowing in the impossible branch and
    * reports an error there; that is a quirk of tsc on dead code, not a type
@@ -270,7 +316,7 @@ export class Gen {
       const s = this.structs.find((x) => x.name === name);
       for (const [field, ty] of s?.fields ?? []) {
         if (same(ty, t)) {
-          reads.push(`${v.name}.${field}`);
+          reads.push(this.records.has(name) && this.chance(0.5) ? `${v.name}['${field}']` : `${v.name}.${field}`);
         }
       }
     }
@@ -384,10 +430,22 @@ export class Gen {
       const name = `S${i}`;
       const fields: Array<[string, Ty]> = [];
       const n = 1 + Math.floor(this.next() * 3);
-      for (let j = 0; j < n; j++) {
-        fields.push([`f${j}`, this.pick([BIGINT, NUMBER, BOOLEAN, STRING, { k: 'nullable', of: NUMBER } as Ty])]);
+      const types: ReadonlyArray<Ty> = [BIGINT, NUMBER, BOOLEAN, STRING, { k: 'nullable', of: NUMBER }];
+      if (this.chance(0.3)) {
+        // A Record over a literal union: a structure whose fields all have
+        // one type, which `r['f0']` reads too.
+        const t = this.pick(types);
+        for (let j = 0; j < n; j++) {
+          fields.push([`f${j}`, t]);
+        }
+        out.push(`type K${i} = ${fields.map(([f]) => `'${f}'`).join(' | ')};`, `type ${name} = Record<K${i}, ${show(t)}>;`);
+        this.records.add(name);
+      } else {
+        for (let j = 0; j < n; j++) {
+          fields.push([`f${j}`, this.pick(types)]);
+        }
+        out.push(`interface ${name} {`, ...fields.map(([f, t]) => `  readonly ${f}: ${show(t)};`), '}');
       }
-      out.push(`interface ${name} {`, ...fields.map(([f, t]) => `  readonly ${f}: ${show(t)};`), '}');
       this.structs.push({ name, fields });
     }
     const fnCount = 1 + Math.floor(this.next() * 3);
