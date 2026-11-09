@@ -16,6 +16,15 @@ theorem shorthand_reads_global {N : Type} [JSNumber N] (m : Eval.Scope) (fuel : 
       some (.obj [("NaN", .num JSNumber.nan)]) := by
   simp [Eval.eval, Eval.evalProps, List.lookup]
 
+/-! ### §13.3.2 Property Accessors {#sec-property-accessors} -/
+
+/-- `o["\uD800"]` names no property of `{ "\uFFFD": 9n }`, so it reads
+`undefined`, as in Node. The interpreter once decoded the key, which turned
+the lone surrogate into U+FFFD, and read `9n`. -/
+theorem index_lone_surrogate {N : Type} [JSNumber N] :
+    Eval.getKey (N := N) [(String.ofList ['\uFFFD'], .int 9)] ⟨[0xD800]⟩ = some .undefined := by
+  simp (config := { decide := true }) [Eval.getKey, JSString.ofString, JSString.utf16]
+
 /-! ### §13.5.5 Unary - Operator {#sec-unary-minus-operator} -/
 
 /-- `-Infinity` negates a local named `Infinity` as it negates any value, a
