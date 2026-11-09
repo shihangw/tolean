@@ -298,6 +298,18 @@ def setDelete : List (Val N) → Val N → Option (List (Val N))
   | y :: rest, x => do
     if ← sameKey y x then return rest else return y :: (← setDelete rest x)
 
+/-- The values that `for … of` visits in `v`: the elements of an array, in
+order (`CreateArrayIterator`, ECMA-262 §23.1.5.1), the elements of a set, in
+the order of insertion (`CreateSetIterator`, §24.2.6.1), and the entries of a
+map, in the same order, each as the array `[key, value]` (`CreateMapIterator`,
+§24.1.5.1). The subset does not change a map or a set while a loop runs over
+it, so the loop sees the values that it had when it started. -/
+def iterValues : Val N → Option (List (Val N))
+  | .list items => some items
+  | .set elems => some elems
+  | .map entries => some (entries.map fun (k, v) => .list [k, v])
+  | _ => none
+
 /-- What a statement list does: it runs to its end with the variables it
 leaves, or it returns a value, or a `break` or a `continue` ends it with the
 variables at that point. These are the completion records of ECMA-262
@@ -752,12 +764,11 @@ def execStmt (m : Scope) (fuel : Nat) (env : Env N) : Stmt → Option (Outcome N
   -- `break` and `continue` without a label (ECMA-262 §14.8.2 and §14.9.2).
   | .breakStmt _ => some (.brk env)
   | .continueStmt _ => some (.cont env)
-  -- `for (const x of xs)` on an array: the body runs once for each element,
-  -- in order, with `x` bound to it in a new scope (`ForIn/OfBodyEvaluation`,
-  -- ECMA-262 §14.7.5.7, with the array iterator of §23.1.5.1).
+  -- `for (const x of xs)` on an array, a set or a map: the body runs once for
+  -- each value that `iterValues` gives, in order, with `x` bound to it in a
+  -- new scope (`ForIn/OfBodyEvaluation`, ECMA-262 §14.7.5.7).
   | .forOfStmt _ .const name iterable body => do
-    let .list items ← eval m fuel env iterable | none
-    execLoop m fuel env name body items
+    execLoop m fuel env name body (← iterValues (← eval m fuel env iterable))
   -- `switch (d) { … }` (`SwitchStatement` Evaluation, ECMA-262 §14.12.4): the
   -- clauses run in a new scope, and a `break` at the top of a clause ends the
   -- statement. The model leaves out a local declared at the top of a clause,

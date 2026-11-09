@@ -94,6 +94,10 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   | .setSize, [.set elems] => some (.num (JSNumber.ofSafeInt elems.length))
   | .setAdd, [.set elems, x] => (Eval.setAdd elems x).map .set
   | .setDelete, [.set elems, x] => (Eval.setDelete elems x).map .set
+  -- What a loop visits, as the spec's `iterValues` gives it: a JS entry is
+  -- the array `[key, value]`, as a Lean pair is.
+  | .setElems, [.set elems] => some (.list elems)
+  | .mapEntries, [.map entries] => some (.list (entries.map fun (k, v) => .list [k, v]))
   | _, _ => none
 
 /-- The tag of `v`, a value of a tagged union: the string in its tag field

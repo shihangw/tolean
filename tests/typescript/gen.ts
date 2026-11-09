@@ -432,6 +432,15 @@ export class Gen {
         lines.push(`const ${has} = ${name}.has(${this.expr(elem, vars, 1)});`, `const ${size} = ${name}.size;`);
         vars.push({ name: has, ty: BOOLEAN, mutable: false, owned: false },
           { name: size, ty: NUMBER, mutable: false, owned: false });
+        if (this.chance(0.5)) {
+          // A loop over the set, in the order of insertion.
+          const acc = this.fresh('a');
+          const x = this.fresh('e');
+          const inner = [...vars, { name: x, ty: elem, mutable: false, owned: false }];
+          lines.push(`let ${acc} = ${this.expr(elem, vars, 1)};`, `for (const ${x} of ${name}) {`,
+            `  ${acc} = ${this.expr(elem, inner, 1)};`, '}');
+          vars.push({ name: acc, ty: elem, mutable: true, owned: false });
+        }
       } else if (roll < 0.9 && depth > 0) {
         // A map that the function owns, with sets and deletes. Code may read
         // it only through get, has and size, so the reads go into locals.
@@ -456,6 +465,15 @@ export class Gen {
         vars.push({ name: got, ty: value, mutable: false, owned: false },
           { name: has, ty: BOOLEAN, mutable: false, owned: false },
           { name: size, ty: NUMBER, mutable: false, owned: false });
+        if (this.chance(0.5)) {
+          // A loop over the entries, each a [key, value] pair.
+          const [t, index] = this.chance(0.5) ? [key, 0] : [value, 1];
+          const acc = this.fresh('a');
+          const e = this.fresh('e');
+          lines.push(`let ${acc} = ${this.expr(t, vars, 1)};`, `for (const ${e} of ${name}) {`,
+            `  ${acc} = ${e}[${index}];`, '}');
+          vars.push({ name: acc, ty: t, mutable: true, owned: false });
+        }
       } else if (roll < 0.95 && depth > 0 && !inLoop) {
         lines.push(...this.switchStatement(vars, ret, lets));
       } else if (!inLoop && this.chance(0.3)) {
