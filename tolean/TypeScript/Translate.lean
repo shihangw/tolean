@@ -2416,26 +2416,30 @@ def translateImport (s : Span) (names : List ImportName) (source : String) : TM 
 /-- Why the export list `names` is wrong in `c`, if it is. Each name must be
 a function, or with `type` an interface or a type, that the file declares
 before the list and does not export already. Node's type stripping removes a
-name with `type`, so a function may not have it, and a type must. -/
+name with `type`, so a function may not have it, and a type must. A string
+enum is also a value, so only `export enum` exports it. -/
 def exportsError? (c : Ctx) (names : List ImportName) : Option (Span × String) :=
   names.findSome? fun n =>
-    let ownFn := c.functions.find? fun f => f.file == c.file && f.name == n.name
-    let ownType : Option Bool :=
-      ((c.structs.find? fun i => i.file == c.file && i.name == n.name).map (·.exported)).orElse fun _ =>
-      ((c.aliases.find? fun a => a.file == c.file && a.name == n.name).map (·.exported)).orElse fun _ =>
-      ((c.enums.find? fun e => e.file == c.file && e.name == n.name).map (·.exported)).orElse fun _ =>
-      (c.unions.find? fun u => u.file == c.file && u.name == n.name).map (·.exported)
-    if n.typeOnly then
-      match ownType with
-      | some true => some (n.span, s!"'{n.name}' is exported already")
-      | some false => none
-      | none => some (n.span, s!"this file declares no interface or type named '{n.name}' before this export list")
+    if c.enums.any fun e => e.file == c.file && e.name == n.name && e.named.isSome then
+      some (n.span, s!"'{n.name}' is a string enum; export it with 'export enum {n.name}'")
     else
-      match ownFn, ownType with
-      | some f, _ => if f.exported then some (n.span, s!"'{n.name}' is exported already") else none
-      | none, some _ => some (n.span, s!"'{n.name}' is a type; export it with 'type {n.name}'")
-      | none, none =>
-        some (n.span, s!"this file declares no function named '{n.name}' before this export list")
+      let ownFn := c.functions.find? fun f => f.file == c.file && f.name == n.name
+      let ownType : Option Bool :=
+        ((c.structs.find? fun i => i.file == c.file && i.name == n.name).map (·.exported)).orElse fun _ =>
+        ((c.aliases.find? fun a => a.file == c.file && a.name == n.name).map (·.exported)).orElse fun _ =>
+        ((c.enums.find? fun e => e.file == c.file && e.name == n.name).map (·.exported)).orElse fun _ =>
+        (c.unions.find? fun u => u.file == c.file && u.name == n.name).map (·.exported)
+      if n.typeOnly then
+        match ownType with
+        | some true => some (n.span, s!"'{n.name}' is exported already")
+        | some false => none
+        | none => some (n.span, s!"this file declares no interface or type named '{n.name}' before this export list")
+      else
+        match ownFn, ownType with
+        | some f, _ => if f.exported then some (n.span, s!"'{n.name}' is exported already") else none
+        | none, some _ => some (n.span, s!"'{n.name}' is a type; export it with 'type {n.name}'")
+        | none, none =>
+          some (n.span, s!"this file declares no function named '{n.name}' before this export list")
 
 /-- One declaration: an output declaration, or none for an import or an
 export list. -/
@@ -2539,7 +2543,8 @@ def Ctx.withExports (c : Ctx) (listed : List ImportName) : Ctx :=
     functions := c.functions.map fun f => if mark f.file f.name fns then { f with exported := true } else f
     structs := c.structs.map fun i => if mark i.file i.name tys then { i with exported := true } else i
     aliases := c.aliases.map fun a => if mark a.file a.name tys then { a with exported := true } else a
-    enums := c.enums.map fun e => if mark e.file e.name tys then { e with exported := true } else e
+    enums := c.enums.map fun e =>
+      if e.named.isNone && mark e.file e.name tys then { e with exported := true } else e
     unions := c.unions.map fun u => if mark u.file u.name tys then { u with exported := true } else u }
 
 /-- What the file exports: its own exported functions, interfaces and type

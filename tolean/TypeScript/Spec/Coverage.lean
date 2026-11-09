@@ -204,7 +204,7 @@ def sections : List Section := [
   ⟨"sec-source-text-module-record-initialize-environment", "16.2.1.6.4", "InitializeEnvironment",
     [``Proof.module_resolves, ``Proof.declareTopLevel_ok, ``Proof.translateDecl_ok,
     ``Proof.decls_ok, ``Proof.translateExports_ok, ``Proof.translateDecls_ok,
-    ``Proof.mem_withExports_functions, ``Proof.listsExport_of, ``declareTopLevel_not_global, ``Proof.declareTopLevel_fresh, ``Proof.declRefs_bound,
+    ``Proof.mem_withExports_functions, ``Proof.mem_withExports_enums, ``Proof.listsExport_of, ``declareTopLevel_not_global, ``Proof.declareTopLevel_fresh, ``Proof.declRefs_bound,
     ``Proof.bound_unique, ``Proof.taken_of_lists, ``Proof.taken_grow, ``Proof.DeclNames.file,
     ``Proof.DeclNames.mono, ``Proof.DeclNames.bound, ``Proof.DeclNames.nodup, ``Proof.DeclNames.fresh,
     ``Proof.DeclNames.values, ``Proof.DeclNames.exports, ``Proof.DeclsNames.file, ``Proof.DeclsNames.mono,

@@ -1063,6 +1063,17 @@ theorem mem_withExports_functions {c : Ctx} {L : List ImportName} {g : FnInfo}
     exact ⟨rfl, rfl, fun _ => .inr hm.2⟩
   · exact ⟨rfl, rfl, .inl⟩
 
+/-- A string enum of `c.withExports L` is one of `c`: an export list does not
+export a string enum. -/
+theorem mem_withExports_enums {c : Ctx} {L : List ImportName} {e : EnumInfo}
+    (h : e ∈ (c.withExports L).enums) (hn : e.named.isSome = true) : e ∈ c.enums := by
+  simp only [Ctx.withExports, List.mem_map] at h
+  obtain ⟨f, hf, rfl⟩ := h
+  by_cases hm : f.named.isNone = true
+  · have hnone : f.named = none := Option.isNone_iff_eq_none.mp hm
+    split at hn <;> simp [hnone] at hn
+  · simp [hm, hf]
+
 /-- A name that an export list of `m` names without `type`. -/
 theorem listsExport_of {m : Module} {name : String}
     (h : name ∈ ((exportListed m).filter (!·.typeOnly)).map (·.name)) : Eval.listsExport m name = true := by
@@ -1677,7 +1688,7 @@ theorem programTranslation_rel {p : Eval.Program} {outs : List (String × List I
           obtain ⟨hmem, hn, hex', hnamed⟩ := stringEnum_some hse
           simp only [Ctx.interface, Ctx.reachableEnums, List.mem_filter] at hmem
           obtain ⟨moreI, hmoreI, hx⟩ := hnames.exports
-          have hmem' := hmem.1
+          have hmem' := mem_withExports_enums hmem.1 (by simp [hnamed])
           rw [hmoreI, hen0, List.nil_append] at hmem'
           obtain ⟨sp, ms, hd, hms⟩ := hx info hmem' hex' pairs hnamed
           refine ⟨m, hPm, ?_⟩
