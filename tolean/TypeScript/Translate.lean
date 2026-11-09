@@ -2216,35 +2216,59 @@ def checkTypeParams (s : Span) (named : String → Bool) (seen : List String) : 
       reject s s!"no parameter's type names the type parameter '{v}', so a call could not fix it"
     checkTypeParams s named (seen ++ [v]) vs
 
+mutual
+
+/-- Every use of the interface `self` in the type passes it `args`. -/
+def Ty.namesSelfWith (self : DeclRef) (args : List Ty) : Ty → Bool
+  | .struct r rs => (r != self || rs == args) && Ty.namesSelfWithList self args rs
+  | .nullable t | .optional t | .array t => t.namesSelfWith self args
+  | .tuple ts => Ty.namesSelfWithList self args ts
+  | _ => true
+
+def Ty.namesSelfWithList (self : DeclRef) (args : List Ty) : List Ty → Bool
+  | [] => true
+  | t :: ts => t.namesSelfWith self args && Ty.namesSelfWithList self args ts
+
+end
+
 def translateInterface (s : Span) (exported : Bool) (name : String) (typeParams : List String)
     (fields : List Field) : TM IR.Decl := do
   let name ← checkName s name
   declareTopLevel s name
   checkTypeParams s (fun _ => true) [] typeParams
   modify fun c => { c with typeParams }
-  let infos ← isolated <| fields.foldlM (init := ([] : List (String × Ty))) fun infos f => do
-    unless f.readonly do
-      reject f.span "interface fields must be readonly and typed"
-    let field ← checkName f.span f.name
-    if infos.any (·.1 == field) then reject f.span s!"'{field}' is declared twice"
-    -- A Lean structure's fields are in scope in the types of the fields after
-    -- them, so a field may not hide a type parameter.
-    if typeParams.contains field then
-      reject f.span s!"'{field}' would hide the type parameter {field} in Lean; choose another name"
-    -- A field of one string literal type is a tag, which a union reads.
-    let type ← match f.type with
-      | .literal _ (.string v) =>
-        if f.optional then reject f.span "a tag field may not be optional" else pure (Ty.literal v)
-      | t => translateType t
-    -- `f?: T`: an object may leave the field out, and a read of it then gives
-    -- `undefined`. An object without the field would inherit a property of
-    -- `Object.prototype` of the same name.
-    let type ← if !f.optional then pure type
-      else if type.isNullable then reject f.span "an optional field may not also be nullable"
-      else if Eval.objectPrototypeNames.contains field then
-        reject f.span s!"an optional field may not be named '{field}', because an object without it has Object.prototype.{field}"
-      else pure (Ty.optional type)
-    pure (infos ++ [(field, type)])
+  -- A field may name the interface itself, as a tree node names its
+  -- children, so the interface is in scope while its fields translate. Lean
+  -- reads such a structure as a nested inductive type.
+  let infos ← isolated do
+    modify fun c => { c with structs := c.structs ++ [{ file := c.file, name, exported, typeParams, fields := [] }] }
+    fields.foldlM (init := ([] : List (String × Ty))) fun infos f => do
+      unless f.readonly do
+        reject f.span "interface fields must be readonly and typed"
+      let field ← checkName f.span f.name
+      if infos.any (·.1 == field) then reject f.span s!"'{field}' is declared twice"
+      -- A Lean structure's fields are in scope in the types of the fields after
+      -- them, so a field may not hide a type parameter.
+      if typeParams.contains field then
+        reject f.span s!"'{field}' would hide the type parameter {field} in Lean; choose another name"
+      -- A field of one string literal type is a tag, which a union reads.
+      let type ← match f.type with
+        | .literal _ (.string v) =>
+          if f.optional then reject f.span "a tag field may not be optional" else pure (Ty.literal v)
+        | t => translateType t
+      -- Lean's kernel accepts a structure that refers to itself only with
+      -- its own type parameters, in order.
+      unless type.namesSelfWith ⟨(← get).file, name⟩ (typeParams.map .param) do
+        reject f.span s!"'{name}' may refer to itself only with its own type parameters, in order"
+      -- `f?: T`: an object may leave the field out, and a read of it then gives
+      -- `undefined`. An object without the field would inherit a property of
+      -- `Object.prototype` of the same name.
+      let type ← if !f.optional then pure type
+        else if type.isNullable then reject f.span "an optional field may not also be nullable"
+        else if Eval.objectPrototypeNames.contains field then
+          reject f.span s!"an optional field may not be named '{field}', because an object without it has Object.prototype.{field}"
+        else pure (Ty.optional type)
+      pure (infos ++ [(field, type)])
   modify fun c => { c with
     typeParams := [], structs := c.structs ++ [{ file := c.file, name, exported, typeParams, fields := infos }] }
   return .struct name typeParams (infos.map fun (field, type) => (field, type.lean))
