@@ -224,10 +224,14 @@ def binary : BinOp → Val N → Val N → Option (Val N)
   | _, _, _ => none
 
 /-- What a statement list does: it runs to its end with the variables it
-leaves, or it returns a value. -/
+leaves, or it returns a value, or a `break` or a `continue` ends it with the
+variables at that point. These are the completion records of ECMA-262
+(§6.2.4) that the subset can make. -/
 inductive Outcome (N : Type) where
   | normal (env : Env N)
   | ret (v : Val N)
+  | brk (env : Env N)
+  | cont (env : Env N)
 deriving Inhabited
 
 /-- The functions of the module, by name. -/
@@ -461,9 +465,11 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
       let key ← resolve m name
       let (params, body) ← (functionsOf m.program).lookup key
       if params.length != vs.length then none
+      -- A `break` or a `continue` outside a loop is an early error
+      -- (ECMA-262 §14.8.1 and §14.9.1), so the model gives no value.
       match ← execStmt { m with file := key.file } fuel (params.zip vs).reverse body with
       | .ret v => some v
-      | .normal _ => none
+      | .normal _ | .brk _ | .cont _ => none
   | _ => none
 termination_by e => (fuel, sizeOf e, 0)
 
@@ -552,11 +558,18 @@ def execStmt (m : Scope) (fuel : Nat) (env : Env N) : Stmt → Option (Outcome N
     match out with
     | .ret v => some (.ret v)
     | .normal env' => some (.normal (env'.drop (env'.length - env.length)))
+    | .brk env' => some (.brk (env'.drop (env'.length - env.length)))
+    | .cont env' => some (.cont (env'.drop (env'.length - env.length)))
   | .block _ body => do
     match ← exec m fuel env body with
     | .ret v => some (.ret v)
     | .normal env' => some (.normal (env'.drop (env'.length - env.length)))
+    | .brk env' => some (.brk (env'.drop (env'.length - env.length)))
+    | .cont env' => some (.cont (env'.drop (env'.length - env.length)))
   | .empty _ => some (.normal env)
+  -- `break` and `continue` without a label (ECMA-262 §14.8.2 and §14.9.2).
+  | .breakStmt _ => some (.brk env)
+  | .continueStmt _ => some (.cont env)
   -- `for (const x of xs)` on an array: the body runs once for each element,
   -- in order, with `x` bound to it in a new scope (`ForIn/OfBodyEvaluation`,
   -- ECMA-262 §14.7.5.7, with the array iterator of §23.1.5.1).
@@ -573,6 +586,8 @@ def execStmt (m : Scope) (fuel : Nat) (env : Env N) : Stmt → Option (Outcome N
     match ← execSwitch m fuel env v clauses with
     | .ret r => some (.ret r)
     | .normal env' => some (.normal (env'.drop (env'.length - env.length)))
+    | .brk env' => some (.brk (env'.drop (env'.length - env.length)))
+    | .cont env' => some (.cont (env'.drop (env'.length - env.length)))
   | _ => none
 termination_by s => (fuel, sizeOf s, 0)
 
@@ -602,10 +617,14 @@ def execFrom (m : Scope) (fuel : Nat) (env : Env N) :
     | (.ret r, _) => some (.ret r)
     | (.normal env', true) => some (.normal env')
     | (.normal env', false) => execFrom m fuel env' rest
+    | (.brk env', _) => some (.brk env')
+    | (.cont env', _) => some (.cont env')
 termination_by cs => (fuel, sizeOf cs, 0)
 
-/-- Run the statements of one clause, up to a `break` at its top or a
-`return`. The flag says whether a `break` ended it. -/
+/-- Run the statements of one clause, up to a `break`, a `continue` or a
+`return`. The flag says whether a `break` ended it: a `break` leaves the
+`switch` (ECMA-262 §14.12.4), and a `continue` leaves it for the loop around
+it. -/
 def execCase (m : Scope) (fuel : Nat) (env : Env N) : List Stmt → Option (Outcome N × Bool)
   | [] => some (.normal env, false)
   | s :: rest =>
@@ -615,11 +634,14 @@ def execCase (m : Scope) (fuel : Nat) (env : Env N) : List Stmt → Option (Outc
       match ← execStmt m fuel env s with
       | .ret r => some (.ret r, false)
       | .normal env' => execCase m fuel env' rest
+      | .brk env' => some (.normal env', true)
+      | .cont env' => some (.cont env', false)
 termination_by ss => (fuel, sizeOf ss, 0)
 
 /-- Run the body of `for (const name of …)` once for each of `items`. Each
 run keeps the changes to outer variables, and drops `name` and the variables
-the body declares. -/
+the body declares. A `continue` ends one run, and a `break` ends the loop
+(`LoopContinues`, ECMA-262 §14.7.1.2). -/
 def execLoop (m : Scope) (fuel : Nat) (env : Env N) (name : String) (body : Stmt) :
     List (Val N) → Option (Outcome N)
   | [] => some (.normal env)
@@ -627,9 +649,12 @@ def execLoop (m : Scope) (fuel : Nat) (env : Env N) (name : String) (body : Stmt
     match ← execStmt m fuel ((name, x) :: env) body with
     | .ret v => some (.ret v)
     | .normal env' => execLoop m fuel (env'.drop (env'.length - env.length)) name body xs
+    | .cont env' => execLoop m fuel (env'.drop (env'.length - env.length)) name body xs
+    | .brk env' => some (.normal (env'.drop (env'.length - env.length)))
 termination_by xs => (fuel, sizeOf body, xs.length + 1)
 
-/-- Run a statement list, up to its end or its first `return`. -/
+/-- Run a statement list, up to its end or its first `return`, `break` or
+`continue`. -/
 def exec (m : Scope) (fuel : Nat) (env : Env N) : List Stmt → Option (Outcome N)
   | [] => some (.normal env)
   | s :: rest => do
@@ -638,6 +663,8 @@ def exec (m : Scope) (fuel : Nat) (env : Env N) : List Stmt → Option (Outcome 
     match ← execStmt m fuel env s with
     | .ret v => some (.ret v)
     | .normal env' => exec m fuel env' rest
+    | .brk env' => some (.brk env')
+    | .cont env' => some (.cont env')
 termination_by ss => (fuel, sizeOf ss, 0)
 
 end
@@ -650,7 +677,7 @@ def runIn (p : Program) (key : DeclRef) (args : List (Val N)) (fuel : Nat := 64)
   if params.length != args.length then none
   match ← execStmt ⟨p, key.file⟩ fuel (params.zip args).reverse body with
   | .ret v => some v
-  | .normal _ => none
+  | .normal _ | .brk _ | .cont _ => none
 
 /-- Call the function `name` of the one-file program `m`. -/
 def run (m : Module) (name : String) (args : List (Val N)) (fuel : Nat := 64) : Option (Val N) :=
