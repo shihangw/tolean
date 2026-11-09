@@ -130,6 +130,33 @@ theorem evalMap_map {α β : Type} (fs : List (DeclRef × List String × IR.Body
   | [] => by simp [IR.Expr.evalMap]
   | x :: xs => by simp [IR.Expr.evalMap, hb x, evalMap_map fs fuel ρ param body encX encY f hb xs]
 
+/-- The same for `List.mapIdx`, whose function also takes the index, where the
+first element is at `start`. -/
+theorem evalMapIdx_from {α β : Type} (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
+    (ρ : Eval.Env N) (param index : String) (body : IR.Expr) (encX : α → Val N) (encY : β → Val N)
+    (f : Nat → α → β)
+    (hb : ∀ (n : Nat) x, IR.Expr.eval fs fuel ((param, encX x) :: (index, .num (JSNumber.ofSafeInt n)) :: ρ) body =
+      some (encY (f n x))) :
+    ∀ (xs : List α) (start : Nat), IR.Expr.evalMapIdx fs fuel ρ param index body start (xs.map encX) =
+      some ((xs.mapIdx fun k => f (start + k)).map encY)
+  | [], _ => by simp [IR.Expr.evalMapIdx]
+  | x :: xs, start => by
+    have key : (fun k => f (start + 1 + k)) = fun k => f (start + (k + 1)) := by
+      funext k; congr 1; omega
+    simp [IR.Expr.evalMapIdx, hb start x, evalMapIdx_from fs fuel ρ param index body encX encY f hb xs,
+      List.mapIdx_cons, key]
+
+/-- A callback of `map` that reads the index and a Lean function agree on the
+elements of a list when they agree on each element at each index. -/
+theorem evalMapIdx_mapIdx {α β : Type} (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
+    (ρ : Eval.Env N) (param index : String) (body : IR.Expr) (encX : α → Val N) (encY : β → Val N)
+    (f : Nat → α → β)
+    (hb : ∀ (n : Nat) x, IR.Expr.eval fs fuel ((param, encX x) :: (index, .num (JSNumber.ofSafeInt n)) :: ρ) body =
+      some (encY (f n x)))
+    (xs : List α) :
+    IR.Expr.evalMapIdx fs fuel ρ param index body 0 (xs.map encX) = some ((xs.mapIdx f).map encY) := by
+  simpa using evalMapIdx_from fs fuel ρ param index body encX encY f hb xs 0
+
 /-- The same for `filter`. -/
 theorem evalFilter_filter {α : Type} (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
     (ρ : Eval.Env N) (param : String) (body : IR.Expr) (encX : α → Val N) (p : α → Bool)
@@ -287,7 +314,7 @@ macro_rules
   | `(tactic| link_tac [$defs,*]) =>
     `(tactic| (
       simp [runIn, functionsOf, functions, Body.exec, Body.runFold, Expr.eval, Expr.evalList,
-        Expr.evalFields, Expr.evalMap, Expr.evalFilter, Expr.evalFind, bindState, eqVal,
+        Expr.evalFields, Expr.evalMap, Expr.evalMapIdx, Expr.evalFilter, Expr.evalFind, bindState, eqVal,
         tolean.IR.IntOp.apply, tolean.IR.Order.apply,
         tolean.IR.Division.apply, ExprExt.apply, NumberOp.apply, NumberConstant.value,
         NumberTest.apply, tagOf, Eval.Val.typeOf, Eval.Env.set, Eval.getProp, Eval.getKey_ofString, Eval.getPath,

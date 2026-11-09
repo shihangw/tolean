@@ -1270,6 +1270,7 @@ def methodVal (method : IR.ListMethod) (ρ : Eval.Env N) (name : String) (body :
   | .any => do return .bool (← Eval.evalFind m fuel ρ name body true items).isSome
   | .all => do return .bool (← Eval.evalFind m fuel ρ name body false items).isNone
   | .find => do return (← Eval.evalFind m fuel ρ name body true items).getD .undefined
+  | .mapIdx index => do return .list (← Eval.evalMapIdx m fuel ρ name index body 0 items)
 
 theorem eval_arrayMethod (sp sp' sa : Span) (par : Bool) (recv : Expr) (name : String) (p : Param)
     (body : Expr) (method : IR.ListMethod) (hm : listMethod? name = some method)
@@ -1309,6 +1310,23 @@ theorem eval_arrayMethod (sp sp' sa : Span) (par : Bool) (recv : Expr) (name : S
       all_goals first | rfl | (rw [← key]; simp)
   · exact hr'
 
+/-- `xs.map((x, i) => e)`, from the value of the array. -/
+theorem eval_mapIdx (sp sp' sa : Span) (par : Bool) (recv : Expr) (p q : Param) (body : Expr)
+    (hr : recv.namesNumber = false) (hpq : p.name ≠ q.name) (ρ : Eval.Env N) :
+    Eval.eval m fuel ρ (.call sp (.member sp' recv "map") [.arrow sa par [p, q] body]) =
+      (Eval.eval m fuel ρ recv).bind fun
+        | .list items => methodVal m fuel (.mapIdx q.name) ρ p.name body items
+        | _ => none := by
+  have hr' : ∀ s, recv ≠ .ident s "Number" := by
+    intro s h; subst h; simp [Expr.namesNumber] at hr
+  generalize hR : Eval.eval m fuel ρ recv = r
+  rw [Eval.eval]
+  · simp only [bne_self_eq_false, Bool.false_or, beq_iff_eq, hpq, ↓reduceIte, hR]
+    cases r with
+    | none => rfl
+    | some v => cases v <;> simp [methodVal]
+  · exact hr'
+
 /-- The value of a `List` function with a callback in the output, from the
 value of the list. -/
 def outMethodVal (method : IR.ListMethod) (ρ : Eval.Env N) (name : String) (body : IR.Expr)
@@ -1319,6 +1337,7 @@ def outMethodVal (method : IR.ListMethod) (ρ : Eval.Env N) (name : String) (bod
   | .any => do return .bool (← IR.Expr.evalFind fs fuel ρ name body true items).isSome
   | .all => do return .bool (← IR.Expr.evalFind fs fuel ρ name body false items).isNone
   | .find => do return (← IR.Expr.evalFind fs fuel ρ name body true items).getD .undefined
+  | .mapIdx index => do return .list (← IR.Expr.evalMapIdx fs fuel ρ name index body 0 items)
 
 theorem out_listMethod {method : IR.ListMethod} {items : IR.Expr} {name : String} {t : IR.Ty}
     {body : IR.Expr} {ρ : Eval.Env N} {v : Val N}
@@ -1394,7 +1413,8 @@ theorem evalFind_sim {ρs ρo : Eval.Env N} {x : String} {body : Expr} {code : I
       · simp [hbw] at h ⊢; exact evalFind_sim hb xs r h
 
 theorem methodVal_sim {ρs ρo : Eval.Env N} {x : String} {body : Expr} {code : IR.Expr}
-    (hb : BodySim m fs fuel ρs ρo x body code) (method : IR.ListMethod) (xs : List (Val N)) (v : Val N)
+    (hb : BodySim m fs fuel ρs ρo x body code) (method : IR.ListMethod) (hm : ∀ i, method ≠ .mapIdx i)
+    (xs : List (Val N)) (v : Val N)
     (h : outMethodVal fs fuel method ρo x code xs = some v) :
     methodVal m fuel method ρs x body xs = some v := by
   cases method <;> simp only [outMethodVal, methodVal] at h ⊢
@@ -1408,25 +1428,87 @@ theorem methodVal_sim {ρs ρo : Eval.Env N} {x : String} {body : Expr} {code : 
        simp [evalFind_sim m fs fuel hb xs _ hr, h])
     | (cases hr : IR.Expr.evalFind fs fuel ρo x code false xs <;> simp [hr] at h
        simp [evalFind_sim m fs fuel hb xs _ hr, h])
+    | exact absurd rfl (hm _)
+
+omit [JSNumber N] in
+theorem agree_cons {ρs ρo : Eval.Env N} (ha : Agree ρs ρo) (x : String) (w : Val N) :
+    Agree ((x, w) :: ρs) ((x, w) :: ρo) := fun n => by
+  simp only [List.lookup]; split
+  · rfl
+  · exact ha n
+
+omit [JSNumber N] in
+theorem scoped_cons {env : Translate.Env} {ρs : Eval.Env N} (hs : Scoped m env ρs) (x : String)
+    (b : Binding) (t : Ty) (w : Val N) :
+    Scoped m (env.add { name := x, binding := b, type := t }) ((x, w) :: ρs) :=
+  ⟨fun n => by
+    rw [has_add, ← hs.1 n]
+    simp only [List.lookup]
+    by_cases hn : n = x
+    · subst hn; simp
+    · have h1 : (n == x) = false := by simpa using hn
+      have h2 : (x == n) = false := by simpa using Ne.symm hn
+      simp [h1, h2], hs.2⟩
 
 theorem bodySim_of {env : Translate.Env} {ρs ρo : Eval.Env N} {x : String} {b : Binding} {t : Ty}
     {body : Expr} {code : IR.Expr} (hsim : Sim (N := N) m fs fuel (env.add { name := x, binding := b, type := t }) body code)
-    (ha : Agree ρs ρo) (hs : Scoped m env ρs) : BodySim m fs fuel ρs ρo x body code := by
-  intro w v hv
-  have ha' : Agree ((x, w) :: ρs) ((x, w) :: ρo) := fun n => by
-    simp only [List.lookup]; split
-    · rfl
-    · exact ha n
-  have hs' : Scoped m (env.add { name := x, binding := b, type := t }) ((x, w) :: ρs) :=
-    ⟨fun n => by
-      rw [has_add, ← hs.1 n]
-      simp only [List.lookup]
-      by_cases hn : n = x
-      · subst hn; simp
-      · have h1 : (n == x) = false := by simpa using hn
-        have h2 : (x == n) = false := by simpa using Ne.symm hn
-        simp [h1, h2], hs.2⟩
-  exact hsim _ _ v ha' hs' hv
+    (ha : Agree ρs ρo) (hs : Scoped m env ρs) : BodySim m fs fuel ρs ρo x body code :=
+  fun w v hv => hsim _ _ v (agree_cons ha x w) (scoped_cons m hs x b t w) hv
+
+/-- The body of a callback of `map` that reads the index means what the
+interpreter gives it, for every value of the element `x` and the index `i`. -/
+def BodySimIdx (ρs ρo : Eval.Env N) (x i : String) (body : Expr) (code : IR.Expr) : Prop :=
+  ∀ w k v, IR.Expr.eval fs fuel ((x, w) :: (i, .num k) :: ρo) code = some v →
+    Eval.eval m fuel ((x, w) :: (i, .num k) :: ρs) body = some v
+
+theorem bodySimIdx_of {env : Translate.Env} {ρs ρo : Eval.Env N} {x i : String} {elem : Ty}
+    {body : Expr} {code : IR.Expr}
+    (hsim : Sim (N := N) m fs fuel ((env.add { name := i, binding := .param, type := .number }).add
+      { name := x, binding := .param, type := elem }) body code)
+    (ha : Agree ρs ρo) (hs : Scoped m env ρs) : BodySimIdx m fs fuel ρs ρo x i body code := by
+  intro w k v hv
+  exact hsim _ _ v (agree_cons (agree_cons ha i _) x w)
+    (scoped_cons m (scoped_cons m hs i .param .number _) x .param elem w) hv
+
+theorem evalMapIdx_sim {ρs ρo : Eval.Env N} {x i : String} {body : Expr} {code : IR.Expr}
+    (hb : BodySimIdx m fs fuel ρs ρo x i body code) :
+    ∀ xs start vs, IR.Expr.evalMapIdx fs fuel ρo x i code start xs = some vs →
+      Eval.evalMapIdx m fuel ρs x i body start xs = some vs
+  | [], _, vs, h => by simp [IR.Expr.evalMapIdx] at h; subst h; simp [Eval.evalMapIdx]
+  | w :: xs, start, vs, h => by
+    simp only [IR.Expr.evalMapIdx] at h
+    cases hw : IR.Expr.eval fs fuel ((x, w) :: (i, .num (JSNumber.ofSafeInt start)) :: ρo) code with
+    | none => simp [hw] at h
+    | some u =>
+      cases hr : IR.Expr.evalMapIdx fs fuel ρo x i code (start + 1) xs with
+      | none => simp [hw, hr] at h
+      | some us =>
+        simp [hw, hr] at h
+        subst h
+        simp [Eval.evalMapIdx, hb w _ u hw, evalMapIdx_sim hb xs (start + 1) us hr]
+
+omit [JSNumber N] in
+theorem indexedCallbackOf_some {method : IR.ListMethod} {args : List Expr} {p q : Param} {body : Expr}
+    (h : indexedCallbackOf method args = some (p, q, body)) :
+    method = .map ∧ ∃ sa par, args = [.arrow sa par [p, q] body] := by
+  unfold indexedCallbackOf at h
+  split at h
+  · cases h; exact ⟨rfl, _, _, rfl⟩
+  · cases h
+
+omit [JSNumber N] in
+theorem listMethod?_ne_mapIdx {name : String} {method : IR.ListMethod} (h : listMethod? name = some method)
+    (i : String) : method ≠ .mapIdx i := by
+  unfold listMethod? at h
+  intro hm; subst hm
+  split at h <;> (try split at h) <;> (try split at h) <;> (try split at h) <;> (try split at h) <;> simp at h
+
+omit [JSNumber N] in
+theorem listMethod?_map {name : String} (h : listMethod? name = some .map) : name = "map" := by
+  unfold listMethod? at h
+  split at h
+  · rename_i h1; simpa using h1
+  · split at h <;> (try split at h) <;> (try split at h) <;> (try split at h) <;> simp at h
 
 omit [JSNumber N] in
 theorem callbackOf_some {args : List Expr} {p : Param} {body : Expr}
@@ -1444,26 +1526,58 @@ theorem translateArrayMethod_sound {F : Nat}
     (h : translateArrayMethod (F + 1) env exp s recv method args ctx = .ok c ctx')
     {sp : Span} {name : String} (hname : listMethod? name = some method) :
     Sim (N := N) m fs fuel env (.call s (.member sp recv name) args) c.code := by
-  simp only [translateArrayMethod, bind_ok, orReject_ok] at h
-  obtain ⟨⟨p, body⟩, s₁, ⟨hcb, rfl⟩, h⟩ := h
-  obtain ⟨sa, par, rfl⟩ := callbackOf_some hcb
-  simp only [ite_state] at h
-  split at h
-  · simp at h
-  rename_i hr
-  simp only [pure_bind, bind_ok, orReject_ok] at h
-  obtain ⟨xs, s₂, hxs, elem, s₃, ⟨helem, rfl⟩, -, s₄, -, inner, s₅, hdecl, b, s₆, hb, type, s₇, -, h⟩ := h
-  simp only [pure_ok] at h
-  obtain ⟨rfl, -⟩ := h
-  obtain ⟨-, rfl, -⟩ := declare_ok hdecl
-  intro ρs ρo v ha hs hv
-  obtain ⟨items, hitems, hval⟩ := out_listMethod fs fuel hv
-  rw [eval_value] at hitems
-  have hrecv := ihE _ _ _ _ _ _ hxs ρs ρo _ ha hs hitems
-  have hbody : Sim (N := N) m fs fuel _ body b.value := fun ρs ρo w ha hs hw =>
-    ihE _ _ _ _ _ _ hb ρs ρo w ha hs (by rwa [eval_value] at hw)
-  rw [eval_arrayMethod m fuel _ _ _ _ _ _ _ _ _ hname (by simpa using hr), hrecv]
-  exact methodVal_sim m fs fuel (bodySim_of m fs fuel hbody ha hs) method items v hval
+  cases hidx : indexedCallbackOf method args with
+  | some t =>
+    obtain ⟨p, q, body⟩ := t
+    obtain ⟨rfl, sa, par, rfl⟩ := indexedCallbackOf_some hidx
+    have hn : name = "map" := listMethod?_map hname
+    subst hn
+    simp only [translateArrayMethod, hidx, ite_state] at h
+    split at h
+    · simp at h
+    rename_i hr
+    simp only [pure_bind, bind_ok, orReject_ok] at h
+    obtain ⟨xs, s₂, hxs, elem, s₃, ⟨helem, rfl⟩, -, s₄, -, -, s₅, -, withIndex, s₆, hd1, inner, s₇, hd2,
+      b, s₈, hb, type, s₉, -, h⟩ := h
+    simp only [pure_ok] at h
+    obtain ⟨rfl, -⟩ := h
+    obtain ⟨-, rfl, -⟩ := declare_ok hd1
+    obtain ⟨hpn, rfl, -⟩ := declare_ok hd2
+    have hpq : p.name ≠ q.name := by
+      intro he; rw [has_add] at hpn; simp [he] at hpn
+    intro ρs ρo v ha hs hv
+    obtain ⟨items, hitems, hval⟩ := out_listMethod fs fuel hv
+    rw [eval_value] at hitems
+    have hrecv := ihE _ _ _ _ _ _ hxs ρs ρo _ ha hs hitems
+    have hbody : Sim (N := N) m fs fuel _ body b.value := fun ρs ρo w ha hs hw =>
+      ihE _ _ _ _ _ _ hb ρs ρo w ha hs (by rwa [eval_value] at hw)
+    rw [eval_mapIdx m fuel _ _ _ _ _ _ _ _ (by simpa using hr) hpq, hrecv]
+    simp only [outMethodVal] at hval
+    simp only [Option.bind_some, methodVal]
+    cases hr2 : IR.Expr.evalMapIdx fs fuel ρo p.name q.name b.value 0 items <;> simp [hr2] at hval
+    simp [evalMapIdx_sim m fs fuel (bodySimIdx_of m fs fuel hbody ha hs) items 0 _ hr2, hval]
+  | none =>
+    simp only [translateArrayMethod, hidx, pure_bind, bind_ok, orReject_ok] at h
+    obtain ⟨⟨p, body⟩, s₁, ⟨hcb, rfl⟩, h⟩ := h
+    obtain ⟨sa, par, rfl⟩ := callbackOf_some hcb
+    simp only [ite_state] at h
+    split at h
+    · simp at h
+    rename_i hr
+    simp only [bind_ok, orReject_ok] at h
+    obtain ⟨xs, s₂, hxs, elem, s₃, ⟨helem, rfl⟩, -, s₄, -, inner, s₅, hdecl, b, s₆, hb, type, s₇, -, h⟩ := h
+    simp only [pure_ok] at h
+    obtain ⟨rfl, -⟩ := h
+    obtain ⟨-, rfl, -⟩ := declare_ok hdecl
+    intro ρs ρo v ha hs hv
+    obtain ⟨items, hitems, hval⟩ := out_listMethod fs fuel hv
+    rw [eval_value] at hitems
+    have hrecv := ihE _ _ _ _ _ _ hxs ρs ρo _ ha hs hitems
+    have hbody : Sim (N := N) m fs fuel _ body b.value := fun ρs ρo w ha hs hw =>
+      ihE _ _ _ _ _ _ hb ρs ρo w ha hs (by rwa [eval_value] at hw)
+    rw [eval_arrayMethod m fuel _ _ _ _ _ _ _ _ _ hname (by simpa using hr), hrecv]
+    exact methodVal_sim m fs fuel (bodySim_of m fs fuel hbody ha hs) method (listMethod?_ne_mapIdx hname)
+      items v hval
 
 omit [JSNumber N] in
 /-- `firstFitting` gives a result of one of its two parsers, from the state it
