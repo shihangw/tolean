@@ -46,3 +46,16 @@ export function flip(p: Pair<string, bigint>): Pair<bigint, string> {
 export function count(m: Maybe<bigint>): bigint {
   return orDefault(m, 0n) + twice(m ?? 1n)[0];
 }
+
+// A type argument that is itself an application is one argument in Lean.
+export function unboxList(box: Box<ReadonlyArray<bigint>>): ReadonlyArray<bigint> {
+  return box.value;
+}
+
+export function unboxMaybe(box: Box<bigint | null>): bigint {
+  return box.value ?? 0n;
+}
+
+export function unboxTwice(box: Box<Box<bigint>>): bigint {
+  return box.value.value;
+}

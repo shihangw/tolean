@@ -531,7 +531,10 @@ def Ty.print [PrintTy T] (names : Names) : Ty T → String
   | .app ref args =>
     let (name, generic) := names.ref ref
     let number := if generic.isSome then s!" {names.typeParam}" else ""
-    s!"({name}{number} {" ".intercalate (Ty.printList names args)})"
+    -- Each argument is one term: `List Int` needs its parentheses.
+    let grouped := (Ty.printList names args).map fun a =>
+      if a.contains ' ' && !a.startsWith "(" then s!"({a})" else a
+    s!"({name}{number} {" ".intercalate grouped})"
   | .ext t => PrintTy.print names t
 
 def Ty.printList [PrintTy T] (names : Names) : List (Ty T) → List String

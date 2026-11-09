@@ -42,4 +42,13 @@ def flip (p : (Pair JSString Int)) : (Pair Int JSString) :=
 def count (m : Option Int) : Int :=
   ((orDefault m ((0 : Int))) + ((twice ((Option.getD m ((1 : Int)))))).1)
 
+def unboxList (box : (Box (List Int))) : List Int :=
+  box.value
+
+def unboxMaybe (box : (Box (Option Int))) : Int :=
+  (Option.getD box.value ((0 : Int)))
+
+def unboxTwice (box : (Box (Box Int))) : Int :=
+  (box.value).value
+
 end Test
