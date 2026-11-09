@@ -2,6 +2,7 @@ import Lean
 import tolean.TypeScript.Certify
 import tolean.TypeScript.EStateM
 import tolean.TypeScript.Interpret
+import tolean.TypeScript.Map
 import tolean.TypeScript.Proof.Guard
 import tolean.TypeScript.Proof.Link
 import tolean.TypeScript.Syntax.Equality
@@ -100,6 +101,7 @@ def sections : List Section := [
   ⟨"sec-ecmascript-language-types-bigint-type", "6.1.6.2", "The BigInt Type", []⟩,
   -- §7 Abstract Operations {#sec-abstract-operations}
   ⟨"sec-toboolean", "7.1.2", "ToBoolean", []⟩,
+  ⟨"sec-samevaluezero", "7.2.11", "SameValueZero", []⟩,
   ⟨"sec-islooselyequal", "7.2.14", "IsLooselyEqual",
     [``Eval.looseEq_null_left, ``Eval.looseEq_null_right]⟩,
   ⟨"sec-isstrictlyequal", "7.2.15", "IsStrictlyEqual", []⟩,
@@ -128,7 +130,7 @@ def sections : List Section := [
     [``Proof.fold_sim, ``shorthand_reads_global]⟩,
   ⟨"sec-grouping-operator", "13.2.9", "The Grouping Operator",
     [``Proof.eval_stripParens]⟩,
-  ⟨"sec-property-accessors", "13.3.2", "Property Accessors", [``Eval.eval_index_str, ``Eval.getKey_ofString, ``Eval.find?_fst_lookup,
+  ⟨"sec-property-accessors", "13.3.2", "Property Accessors", [``Proof.translateMember_sound, ``Eval.eval_index_str, ``Eval.getKey_ofString, ``Eval.find?_fst_lookup,
     ``Coverage.index_lone_surrogate]⟩,
   ⟨"sec-function-calls", "13.3.6", "Function Calls",
     [``Proof.eval_call, ``Proof.out_call, ``Proof.zip_sim, ``Proof.zip_sim_value, ``Proof.calls_agree,
@@ -242,7 +244,16 @@ def sections : List Section := [
   ⟨"sec-array.prototype.push", "23.1.3.23", "Array.prototype.push",
     [``Proof.out_push]⟩,
   ⟨"sec-array.prototype.some", "23.1.3.29", "Array.prototype.some", []⟩,
-  ⟨"sec-createarrayiterator", "23.1.5.1", "CreateArrayIterator", []⟩]
+  ⟨"sec-createarrayiterator", "23.1.5.1", "CreateArrayIterator", []⟩,
+  -- §24 Keyed Collections {#sec-keyed-collections}
+  ⟨"sec-map-iterable", "24.1.1.1", "Map ( [ iterable ] )", [``Proof.translateNew_sound]⟩,
+  ⟨"sec-map.prototype.delete", "24.1.3.3", "Map.prototype.delete", []⟩,
+  ⟨"sec-map.prototype.get", "24.1.3.6", "Map.prototype.get",
+    [``Proof.eval_mapMethod, ``Proof.mapMethodOf_some, ``Proof.out_ext, ``Proof.translateMapMethod_sound]⟩,
+  ⟨"sec-map.prototype.has", "24.1.3.7", "Map.prototype.has", []⟩,
+  ⟨"sec-map.prototype.set", "24.1.3.9", "Map.prototype.set", []⟩,
+  ⟨"sec-get-map.prototype.size", "24.1.3.10", "get Map.prototype.size",
+    [``Proof.ownedMap_sim, ``Proof.translateRecv_sim]⟩]
 
 /-- The laws of the number model, from §6.1.6.1 The Number Type. The proofs
 assume them instead of proving them, and `tests/typescript/jsNumberLaws.test.ts`

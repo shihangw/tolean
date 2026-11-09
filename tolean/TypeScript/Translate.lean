@@ -57,6 +57,9 @@ inductive Ty where
   /-- A type parameter of a generic function, such as `T` in
   `function first<T>(xs: T[]): T | null`. -/
   | param (name : String)
+  /-- `Map<K, V>` or `ReadonlyMap<K, V>`, where `K` is a bigint, a string, a
+  boolean or a literal union of strings. -/
+  | map (key value : Ty)
 deriving Repr, Inhabited
 
 -- `Ty` holds lists of itself, so Lean's derived `BEq` would not reduce in the
@@ -73,6 +76,7 @@ def Ty.beq : Ty → Ty → Bool
   | .literal a, .literal b => a == b
   | .tuple as, .tuple bs => Ty.beqList as bs
   | .param a, .param b => a == b
+  | .map a a', .map b b' => Ty.beq a b && Ty.beq a' b'
   | _, _ => false
 
 def Ty.beqList : List Ty → List Ty → Bool
@@ -147,6 +151,11 @@ def Ty.isNullable : Ty → Bool
   | .nullable _ => true
   | _ => false
 
+/-- The value of an optional field `f?: T`. -/
+def Ty.isOptional : Ty → Bool
+  | .optional _ => true
+  | _ => false
+
 /-- A primitive that `===` compares by value and the output compares with `=`. -/
 def Ty.isEqPrimitive : Ty → Bool
   | .boolean | .string | .bigint | .enum _ => true
@@ -154,7 +163,7 @@ def Ty.isEqPrimitive : Ty → Bool
 
 /-- An object, which `===` compares by identity. A tuple is an array. -/
 def Ty.isObject : Ty → Bool
-  | .array _ | .struct .. | .tagged .. | .tuple _ => true
+  | .array _ | .struct .. | .tagged .. | .tuple _ | .map .. => true
   | _ => false
 
 /-- The element types of a tuple type. -/
@@ -190,6 +199,7 @@ def Ty.lean : Ty → IR.Ty
   | .literal value => .tag value
   | .tuple ts => .tuple (Ty.leanList ts)
   | .param name => .param name
+  | .map k v => .map k.lean v.lean
 
 def Ty.leanList : List Ty → List IR.Ty
   | [] => []
@@ -227,6 +237,7 @@ def Ty.subst (sol : List (String × Ty)) : Ty → Ty
   | .array t => .array (t.subst sol)
   | .tuple ts => .tuple (Ty.substList sol ts)
   | .struct ref args => .struct ref (Ty.substList sol args)
+  | .map k v => .map (k.subst sol) (v.subst sol)
   | t => t
 
 def Ty.substList (sol : List (String × Ty)) : List Ty → List Ty
@@ -250,6 +261,7 @@ def Ty.unify (sol : List (String × Ty)) : Ty → Ty → List (String × Ty)
   | .optional p, t => Ty.unify sol p t
   | .array p, .array t => Ty.unify sol p t
   | .tuple ps, .tuple ts | .struct _ ps, .struct _ ts => Ty.unifyList sol ps ts
+  | .map pk pv, .map tk tv => Ty.unify (Ty.unify sol pk tk) pv tv
   | _, _ => sol
 
 def Ty.unifyList (sol : List (String × Ty)) : List Ty → List Ty → List (String × Ty)
@@ -273,9 +285,11 @@ structure UnionInfo where
 
 def UnionInfo.ref (i : UnionInfo) : DeclRef := ⟨i.file, i.name⟩
 
-/-- How a name in scope may be used. Only `let` and `array` locals change. -/
+/-- How a name in scope may be used. Only `let`, `array` and `map` locals
+change. An `array` or a `map` local is owned: the function made it, and
+nothing else holds it. -/
 inductive Binding where
-  | param | const | «let» | array
+  | param | const | «let» | array | map
 deriving BEq, Repr, Inhabited
 
 structure Local where
@@ -630,7 +644,7 @@ def isNumberName (name : String) : Bool :=
 /-- The globals that the subset reads by name, so that no declaration may
 hide them. -/
 def isGlobalName (name : String) : Bool :=
-  isNumberName name || name == "undefined"
+  isNumberName name || name == "undefined" || name == "Map"
 
 def checkName (span : Span) (name : String) : TM String := do
   if leanReserved.contains name then reject span s!"name '{name}' is reserved in Lean"
@@ -705,6 +719,15 @@ def typeArgsMessage (name : String) : Nat → String
   | 1 => s!"'{name}' takes 1 type argument"
   | n => s!"'{name}' takes {n} type arguments"
 
+/-- The key type of a map. SameValueZero, which a `Map` compares keys with,
+is Lean's equality on bigints, booleans and strings. A `number` key can be
+`NaN` or `-0`, which SameValueZero treats apart from `=`, and an object key
+compares by identity. -/
+def mapKey (s : Span) (k : Ty) : TM Ty := do
+  match k with
+  | .bigint | .string | .boolean | .enum _ => return k
+  | _ => reject s "a map key must be a bigint, a string, a boolean or a literal union of strings"
+
 mutual
 
 /-- The type of `t` in the subset. The output writes it as `Ty.lean`. -/
@@ -774,9 +797,15 @@ def translateType (t : TypeExpr) : TM Ty := do
               reject t.span (typeArgsMessage name info.typeParams.length)
             return info.type
           | none => unsupportedType t
-  | .ref _ name args =>
+  | .ref s name args =>
     let ctx ← get
     let tys ← translateTypes args
+    -- `Map<K, V>` and `ReadonlyMap<K, V>`, unless the program declares a
+    -- type of that name.
+    if let [k, v] := tys then
+      if (name == "Map" || name == "ReadonlyMap") && (ctx.structs.find? (·.name == name)).isNone &&
+          (ctx.aliases.find? (·.name == name)).isNone then
+        return .map (← mapKey s k) v
     match ctx.structs.find? (·.name == name), ctx.aliases.find? (·.name == name) with
     | some info, _ =>
       unless info.typeParams.length == tys.length do
@@ -914,6 +943,9 @@ def exprChanges : Expr → List String
       | _ => []
     own ++ exprChanges target ++ exprChanges value
   | .prefix _ _ (.ident _ name) | .postfix _ _ (.ident _ name) => [name]
+  -- `m.set(k, v)` and `m.delete(k)` change the map `m`.
+  | .call _ (.member _ (.ident _ name) "set") args | .call _ (.member _ (.ident _ name) "delete") args =>
+    name :: exprsChanges args
   | .prefix _ _ e | .postfix _ _ e | .paren _ e | .unary _ _ e | .member _ e _ | .optMember _ e _
   | .asConst _ e | .satisfies _ e _ =>
     exprChanges e
@@ -1309,6 +1341,47 @@ def _root_.tolean.TypeScript.Syntax.Expr.namesNumber : Expr → Bool
   | .ident _ "Number" => true
   | _ => false
 
+/-- `m.get(k)` and `m.has(k)`, as the method and the operation of the output. -/
+def mapMethodOf : Expr → Option (Expr × IR.ExprExt)
+  | .member _ recv "get" => some (recv, .mapGet)
+  | .member _ recv "has" => some (recv, .mapHas)
+  | _ => none
+
+/-- An owned map, which the function may read through `get`, `has` and
+`size`: the read does not keep the map, so a later `set` cannot change what
+it gives. -/
+def ownedMap? (env : Env) : Expr → Option Code
+  | .ident _ name =>
+    match env.lookup name with
+    | some { binding := .map, type, .. } => some ⟨.var name, false, type⟩
+    | _ => none
+  | _ => none
+
+/-- How a local that `kind` declares with the value `init` may be used.
+`const m = new Map()` is an owned map, which the function may change with
+`set` and `delete`. A map in a `let` is a value: the `let` could later name
+another map, which the function does not own. -/
+def varBinding (kind : VarKind) (init : Expr) : Binding :=
+  match kind, init with
+  | .const, .new _ "Map" _ _ => .map
+  | .const, _ => .const
+  | .«let», _ => .«let»
+
+/-- The type of `new Map<K, V>()`: the type arguments, or the map type that
+the context expects. -/
+def newMapType (s : Span) (typeArgs : List TypeExpr) (expected : Option Ty) : TM Ty := do
+  match typeArgs, expected with
+  | [k, v], _ => return .map (← mapKey s (← translateType k)) (← translateType v)
+  | [], some (.map k v) => return .map k v
+  | _, _ => reject s "new Map needs the types of its keys and values, such as new Map<string, bigint>()"
+
+/-- The receiver of `size`, `get` or `has`: an owned map as its local, as
+`ownedMap?` reads it, and any other expression as `tr` translates it. -/
+def translateRecv (tr : Expr → TM Code) (env : Env) (e : Expr) : TM Code :=
+  match ownedMap? env e with
+  | some c => pure c
+  | none => tr e
+
 /-- The element type of an array. -/
 def Ty.element? : Ty → Option Ty
   | .array t => some t
@@ -1460,6 +1533,8 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
     | some l =>
       if l.binding == .array && !(← get).returning then
         reject s "an owned array may be read only in the return value"
+      if l.binding == .map && !(← get).returning then
+        reject s "an owned map may be read only through get, has and size, or in the return value"
       return ⟨.var name, false, l.type⟩
   | .member s obj name =>
     match enumOf? env obj with
@@ -1477,7 +1552,11 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
       let o ← translateExpr fuel env none base
       let (bind, type) ← optPathType s o.type path
       return ⟨.ext (.optField path bind) [o.code], false, type⟩
-    let o ← translateExpr fuel env none obj
+    let o ← translateRecv (translateExpr fuel env none) env obj
+    -- `m.size`, the number of entries of a map.
+    if let .map _ _ := o.type then
+      unless name == "size" do reject s "a map has no fields here; use get, has and size"
+      return ⟨.ext .mapSize [o.value], false, .number⟩
     let ctx : Ctx ← get
     let field? := match o.type with
       | .struct ref args =>
@@ -1552,7 +1631,18 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
   | .call s callee args =>
     match arrayMethodOf callee with
     | some (recv, method) => translateArrayMethod fuel env expected s recv method args
-    | none => translateCall fuel env s callee args
+    | none =>
+      match mapMethodOf callee with
+      | some (recv, op) => translateMapMethod fuel env s recv op args
+      | none => translateCall fuel env s callee args
+  -- `new Map()`, a map without entries. Its type comes from the type
+  -- arguments, or from the context, as in `const m: Map<K, V> = new Map()`.
+  | .new s callee typeArgs args =>
+    unless callee == "Map" do reject s "only new Map() is supported"
+    if env.has "Map" then reject s "a local named Map hides the global Map"
+    unless args.isEmpty do reject s "new Map takes no entries here; add them with set"
+    let type ← newMapType s typeArgs expected
+    return ⟨.ascribe (.ext .mapEmpty []) type.lean, false, type⟩
   | .object s props => translateObject fuel env expected s props
   | .array s elems =>
     match expected with
@@ -1688,6 +1778,25 @@ def translateArrayMethod (fuel : Nat) (env : Env) (expected : Option Ty) (s : Sp
     { span := s, result := b.type.lean, scope := env.locals.map fun l => (l.name, l.type.lean) }
   return ⟨.listMethod method xs.value p.name elem.lean b.value info, false, type⟩
 
+/-- `m.get(k)` and `m.has(k)` on a map. An owned map may be read here, as
+`ownedMap?` says. `get` gives `undefined` for a key that the map does not
+have, so its value has the type of an optional field. -/
+def translateMapMethod (fuel : Nat) (env : Env) (s : Span) (recv : Expr) (op : IR.ExprExt)
+    (args : List Expr) : TM Code := do
+  let fuel + 1 := fuel | tooDeep
+  -- `Number.get` would be a property of the global `Number`, not of a map.
+  if recv.namesNumber then reject recv.span "only a map has get and has"
+  let [key] := args | reject s "get and has take one key"
+  if key matches .arrow .. then reject key.span "a key cannot be an arrow function"
+  let o ← translateRecv (translateExpr fuel env none) env recv
+  let .map k v := o.type | reject recv.span "only a map has get and has"
+  let kc ← translateExpr fuel env (some k) key
+  unless kc.type == k do reject key.span "the key does not have the map's key type"
+  if op == .mapHas then return ⟨.ext .mapHas [o.value, kc.value], false, .boolean⟩
+  if v.isNullable || v.isOptional then
+    reject s "get on a map of nullable values is not supported: the output's none would stand for both null and undefined"
+  return ⟨.ext .mapGet [o.value, kc.value], false, .optional v⟩
+
 def translateObject (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (props : List Property) :
     TM Code := do
   let fuel + 1 := fuel | tooDeep
@@ -1808,8 +1917,25 @@ def withType (e : IR.Expr) (t source : Ty) : IR.Expr :=
 /-- One mutation statement, as the local it changes and its new value. -/
 def translateUpdate (env : Env) (s : Span) (e : Expr) : TM (String × IR.Expr) := do
   let refuse {A : Type} : TM A :=
-    reject s "an expression statement must assign a let local or push to an owned array"
+    reject s "an expression statement must assign a let local, push to an owned array or change an owned map"
+  let refuseMap {A : Type} : TM A :=
+    reject s "set and delete are allowed only on an owned map: a const that the function made with new Map()"
   match e with
+  -- `m.set(k, v)` and `m.delete(k)` on an owned map: the new map.
+  | .call _ (.member _ (.ident _ target) "set") args =>
+    let some { binding := .map, type := .map k v, .. } := env.lookup target | refuseMap
+    let [key, value] := args | reject s "set takes a key and a value"
+    let kc ← translateExpr (← fuelLimit) env (some k) key
+    unless kc.type == k do reject key.span "the key does not have the map's key type"
+    let vc ← translateExpr (← fuelLimit) env (some v) value
+    unless vc.type.assignableTo v do reject value.span "the value does not have the map's value type"
+    return (target, .ext .mapSet [.var target, kc.value, vc.value])
+  | .call _ (.member _ (.ident _ target) "delete") args =>
+    let some { binding := .map, type := .map k _, .. } := env.lookup target | refuseMap
+    let [key] := args | reject s "delete takes a key"
+    let kc ← translateExpr (← fuelLimit) env (some k) key
+    unless kc.type == k do reject key.span "the key does not have the map's key type"
+    return (target, .ext .mapDelete [.var target, kc.value])
   | .call _ (.member _ (.ident _ target) "push") args =>
     let refusePush {A : Type} : TM A :=
       reject s "push is allowed only onto an owned array, one element at a time"
@@ -1928,8 +2054,7 @@ def translateVariable (fuel : Nat) (env : Env) (s : Span) (d : VarDecl) (rest : 
       if code.type.assignableTo t then pure t
       else reject s "the value does not have the declared type"
     | none => pure code.type
-  let binding := if d.kind == .const then Binding.const else .«let»
-  let env' ← declare env s d.name binding type
+  let env' ← declare env s d.name (varBinding d.kind init) type
   return .let d.name (withType code.value type code.type) (← translateStatements fuel env' tail rest)
 
 def translateIf (fuel : Nat) (env : Env) (s : Span) (test : Expr) (thenBranch : Stmt)
@@ -2504,7 +2629,9 @@ mutual
 def exprUsesNumber : Expr → Bool
   | .ident _ name => isNumberName name
   | .number .. => true
-  | .member _ obj name | .optMember _ obj name => isNumberName name || exprUsesNumber obj
+  -- `m.size` is a number, and the source does not say whether `m` is a map.
+  | .member _ obj name | .optMember _ obj name =>
+    isNumberName name || name == "size" || exprUsesNumber obj
   | .object _ props => propsUseNumber props
   | .array _ es => exprsUseNumber es
   | .call _ f args => exprUsesNumber f || exprsUseNumber args
@@ -2707,6 +2834,7 @@ def Ty.declRefs : Ty → List DeclRef
   | .enum r | .tagged r _ => [r]
   | .nullable t | .optional t | .array t => t.declRefs
   | .tuple ts => Ty.declRefsList ts
+  | .map k v => k.declRefs ++ v.declRefs
   | _ => []
 
 def Ty.declRefsList : List Ty → List DeclRef
@@ -2884,10 +3012,13 @@ def translateWith (file source ns : String) (target : Edition := .default)
   -- A string is a `JSString`, which the output names only in a file that
   -- uses strings, so only such a file imports it.
   let usesString := decls.any IR.Decl.usesString
+  -- The same for a map, which is a `JSMap`.
+  let usesMap := decls.any (IR.Decl.usesMap IR.ExprExt.onMap)
   let header :=
     (if names.generic then ["import tolean.TypeScript.Spec.Number"] else []) ++
-    (if usesString then ["import tolean.TypeScript.Spec.String"] else []) ++ imports ++
-    (if names.generic || usesString then ["", "open tolean.TypeScript"]
+    (if usesString then ["import tolean.TypeScript.Spec.String"] else []) ++
+    (if usesMap then ["import tolean.TypeScript.Map"] else []) ++ imports ++
+    (if names.generic || usesString || usesMap then ["", "open tolean.TypeScript"]
      else if imports.isEmpty then [] else [""])
   let text := "\n".intercalate
     ([s!"-- Generated by tolean {version} for {target.name} from {file}. Do not edit."] ++

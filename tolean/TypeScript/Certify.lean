@@ -105,8 +105,8 @@ def encoderOf (r : Refs) : IR.Ty → Option String
   | .number => some (r.eval "Val.num")
   | .tuple ts => do return s!"({r.eval "encTuple"} {← elementsEncoder r ts})"
   -- A type parameter has no encoder, so a generic function or interface gets no
-  -- certificate yet.
-  | .null | .tag _ | .param _ | .app .. => none
+  -- certificate yet. Neither has a map.
+  | .null | .tag _ | .param _ | .app .. | .map .. => none
 
 /-- How the elements of a tuple of the types `ts` become a list of `Val`s. -/
 def elementsEncoder (r : Refs) : List IR.Ty → Option String
@@ -129,7 +129,7 @@ def decoderOf (r : Refs) : IR.Ty → Option String
   | .struct ref | .enum ref | .tagged ref => some (r.cert s!"decode{ref.name}")
   | .number => some (r.eval "decNum")
   | .tuple ts => do return s!"({r.eval "decTuple"} {← elementsDecoder r ts})"
-  | .null | .tag _ | .param _ | .app .. => none
+  | .null | .tag _ | .param _ | .app .. | .map .. => none
 
 /-- How a list of `Val`s becomes the elements of a tuple of the types `ts`. -/
 def elementsDecoder (r : Refs) : List IR.Ty → Option String
