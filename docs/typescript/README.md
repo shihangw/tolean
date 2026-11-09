@@ -31,9 +31,10 @@ marks which links are proved, tested against a reference, or trusted.
   parentheses, member access, indexing and calls; the unary operators `!`,
   `-`, `+`, `~`, `typeof` and `void`; `++` and `--` before or after; the
   binary operators, including `??`, `**`, `in` and `instanceof`; the
-  conditional operator; assignment, with every compound operator; and arrow
+  conditional operator; assignment, with every compound operator; arrow
   functions whose body is an expression, such as `x => x + 1` and
-  `(a: number, b) => a * b`.
+  `(a: number, b) => a * b`; and `e as const` and `e satisfies T`, which
+  bind as `<` does, as they do in `tsc`.
 - **Types:** keyword types such as `number`, `null`, literal types, named types
   with type arguments, arrays, tuples such as `[A, B]` and `readonly [A, B]`,
   unions and parentheses.
@@ -60,6 +61,21 @@ operator unless parentheses, braces, the arguments of a call or an index hold
 it. ECMA-262 reads such an `in` as the start of a `for … in` loop. It allows
 one inside `[ … ]`, but `tsc` does not, so the parser refuses that too. The
 translator refuses every counted `for` for now.
+
+`as const` and `satisfies T` have two more lookalikes, and the parser refuses
+both:
+
+- `<`, `<<`, `?`, `|`, `&`, `[`, `(` or `.` right after the type. `tsc` may
+  read the token as a part of the type, as it reads `x as const < y` with type
+  arguments. Type stripping leaves blanks in place of the type, so after a
+  line break JavaScript may read the next line as a part of the operand, as
+  in `x as const` and then `[0]` on the next line.
+- `as` or `satisfies` right after a name that starts a declaration in `tsc`,
+  such as `type` or `declare`. At the start of a statement, `tsc` reads
+  `type as const` as a type alias.
+
+The parser refuses every other type assertion, such as `x as T`, `<T>x` and
+the non-null assertion `x!`, because TypeScript does not check them.
 
 The parser also refuses code that Tolean cannot represent exactly. Examples
 are lone surrogates, legacy octal literals, template literals and non-ASCII
@@ -316,6 +332,7 @@ the file, the line and the reason. It never approximates.
 | `x?: T`, an optional parameter | `(x : Option T := none)`. A call may leave out the optional parameters, which come last, and then the output passes `none` for each. A call may also pass a `T`, or `undefined`, which is `none` too. `x ?? d`, `x === undefined` and `x?.f` work as they do on an optional field. |
 | `if (x === undefined)` or `if (x !== undefined)`, with `undefined` on either side, where `x` is an optional parameter or a local with an optional value | `match x with \| none => … \| some x => …`, as for a test of `null`. The branch where `x` is defined reads it as a `T`. |
 | `p?.f`, where `p` is a `S \| null` or an optional field of type `S` | `p.map (·.f)`, or `p.bind (·.f)` when `f` is optional. The value is `undefined` when `p` is `null` or `undefined`, so it has the type of an optional field: `p?.f ?? d` and `p?.f === undefined` work as they do on `s.f`. |
+| `e as const` and `e satisfies T` | `e`. Type stripping removes both, so the value is the value of `e`. Tolean types `e` in the context of `T` and checks that the value has the type `T`, as `tsc` does. The value keeps its own type, which can be wider than the type `tsc` gives it, because the output types a literal by its context, as it does without `as const`. |
 | `p?.f.g`, a chain of reads after `?.` | `p.map (·.f.g)`, or `p.bind (·.f.g)` when `g` is optional. The reads after `?.` are a part of the same optional chain, so the whole chain is `undefined` when `p` is `null` or `undefined`. Each field before the last must be a required field of an interface type. |
 | `type T = U`, declared before its uses | `abbrev T := U`. The output writes `U` itself wherever the source names `T`, so the `abbrev` is only for claims. |
 | `type T = 'a' \| 'b'`, a union of string literals | `inductive T` with the constructors `a` and `b`, which derives `DecidableEq`. A literal becomes `T.a` where the context expects a `T`, and `t === 'a'` becomes `t = T.a`. The output writes every constructor in `«»`, such as `T.«open»`, because Lean reads some strings as keywords or modifiers. A claim can still write `T.a`. |

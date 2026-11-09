@@ -239,6 +239,12 @@ theorem Expr.fine : ∀ e : Expr, Fine e.words
   | .arrow _ parens ps b => by
     simpa [Expr.words] using (arrowParams_fine parens ps).append
       (Fine.cons (w := punctWord "=>") (by simp [punctWord]) (Expr.fine b))
+  | .asConst _ l => by
+    simpa [Expr.words] using (Expr.fine l).append
+      (Fine.cons (w := identWord "as") (by simp [identWord]) (Fine.word (w := keywordWord "const") (by simp [keywordWord])))
+  | .satisfies _ l t => by
+    simpa [Expr.words] using (Expr.fine l).append (Fine.ofLine (w := identWord "satisfies") (by simp [identWord])
+      (TypeExpr.line t))
 
 theorem Expr.fineAll : ∀ es : List Expr, ∀ x ∈ Expr.wordsOf es, Fine x
   | [], _, hx => by simp [Expr.wordsOf] at hx

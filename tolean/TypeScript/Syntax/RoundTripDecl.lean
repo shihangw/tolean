@@ -470,11 +470,11 @@ theorem parseTypeAlias_reads (start : Pos) (exported : Bool) (sp : Span) (name :
 def NotIdent (k : TokenKind) : Prop := ∀ m, k ≠ .ident m
 
 /-- The second token of `a ++ b` is the second of `a`, or the first of `b`. -/
-theorem second_append {a b : List TokenKind} {k₀ : TokenKind} {bs : List TokenKind} (hb : b = k₀ :: bs)
-    (hk₀ : NotIdent k₀) (ha : a ≠ [])
-    (IH : ∀ {n k r}, a = .ident n :: k :: r → NotIdent k) :
-    ∀ {n k r}, a ++ b = .ident n :: k :: r → NotIdent k := by
-  intro n k r h
+theorem second_append {a b : List TokenKind} {k₀ : TokenKind} {bs : List TokenKind} {n : String}
+    (hb : b = k₀ :: bs) (hk₀ : NotIdent k₀) (ha : a ≠ [])
+    (IH : ∀ {k r}, a = .ident n :: k :: r → NotIdent k) :
+    ∀ {k r}, a ++ b = .ident n :: k :: r → NotIdent k := by
+  intro k r h
   subst hb
   cases a with
   | nil => exact absurd rfl ha
@@ -492,52 +492,196 @@ theorem notIdent_binOp (op : BinOp) : ∃ k ks, symbol op.symbol = k :: ks ∧ N
 theorem notIdent_assignOp (op : AssignOp) : ∃ k ks, symbol op.symbol = k :: ks ∧ NotIdent k := by
   cases op <;> simp [AssignOp.symbol, symbol, Lex.reservedWords, punctWord, NotIdent]
 
-/-- An expression that starts with a name has no name as its second token: an
-operator, a `.`, a `(` or a `[` follows the name, if anything does. -/
+/-- No `as` or `satisfies` follows one of `Parse.declarationWords` at the left
+edge of `e`, where it would make a name the second token of `e`. -/
+def Expr.spineOK : Expr → Bool
+  | .member _ o _ | .optMember _ o _ | .index _ o _ | .call _ o _ | .postfix _ _ o | .binary _ _ o _
+  | .cond _ o _ _ | .assign _ _ o _ => o.spineOK
+  | .asConst _ o | .satisfies _ o _ => !Parse.refusedBeforeType o && o.spineOK
+  | _ => true
+
+/-- An expression whose only token is a name is that name. -/
+theorem Expr.eq_ident_of_tokens : ∀ (e : Expr) {n : String}, e.tokens = [.ident n] → ∃ sp, e = .ident sp n
+  | .ident sp m, _, h => ⟨sp, by simp [Expr.tokens, Expr.words, identWord] at h; rw [h]⟩
+  | .number .., _, h | .bigint .., _, h | .string .., _, h | .null _, _, h => by
+    simp [Expr.tokens, Expr.words, keywordWord] at h
+  | .bool _ b, _, h => by cases b <;> simp [Expr.tokens, Expr.words, keywordWord] at h
+  | .array .., _, h => by simp [Expr.tokens_array] at h
+  | .object .., _, h => by simp [Expr.tokens_object] at h
+  | .paren .., _, h => by simp [Expr.tokens_paren] at h
+  | .prefix _ op _, _, h => by cases op <;> simp [Expr.tokens_prefix, UpdateOp.symbol] at h
+  | .unary _ op a, _, h => by
+    have := congrArg List.length h
+    have ha := List.length_pos_iff.mpr (Expr.tokens_ne_nil a)
+    rw [Expr.tokens_unary] at this
+    cases op <;> simp [UnaryOp.symbol, symbol, Lex.reservedWords, punctWord, keywordWord] at this <;>
+      first | omega | exact absurd this (Expr.tokens_ne_nil a)
+  | .member _ o _, _, h | .optMember _ o _, _, h | .postfix _ _ o, _, h => by
+    have := congrArg List.length h
+    have ho := List.length_pos_iff.mpr (Expr.tokens_ne_nil o)
+    first
+      | (rw [Expr.tokens_member] at this; simp at this <;> first | omega | exact absurd this (Expr.tokens_ne_nil o))
+      | (rw [Expr.tokens_optMember] at this; simp at this <;> first | omega | exact absurd this (Expr.tokens_ne_nil o))
+      | (rw [Expr.tokens_postfix] at this; simp at this <;> first | omega | exact absurd this (Expr.tokens_ne_nil o))
+  | .index _ o _, _, h | .call _ o _, _, h | .asConst _ o, _, h | .satisfies _ o _, _, h => by
+    have := congrArg List.length h
+    have ho := List.length_pos_iff.mpr (Expr.tokens_ne_nil o)
+    first
+      | (rw [Expr.tokens_index] at this; simp at this <;> first | omega | exact absurd this (Expr.tokens_ne_nil o))
+      | (rw [Expr.tokens_call] at this; simp at this <;> first | omega | exact absurd this (Expr.tokens_ne_nil o))
+      | (rw [Expr.tokens_asConst] at this; simp at this <;> first | omega | exact absurd this (Expr.tokens_ne_nil o))
+      | (rw [Expr.tokens_satisfies] at this; simp at this <;> first | omega | exact absurd this (Expr.tokens_ne_nil o))
+  | .binary _ op o _, _, h | .assign _ op o _, _, h => by
+    have := congrArg List.length h
+    have ho := List.length_pos_iff.mpr (Expr.tokens_ne_nil o)
+    first
+      | (rw [Expr.tokens_binary] at this; obtain ⟨k, ks, hk, _⟩ := binOp_head op; simp [hk] at this
+         first | omega | exact absurd this.1 (Expr.tokens_ne_nil o) | exact absurd this (Expr.tokens_ne_nil o))
+      | (rw [Expr.tokens_assign] at this; obtain ⟨k, ks, hk, _⟩ := assignOp_head op; simp [hk] at this
+         first | omega | exact absurd this.1 (Expr.tokens_ne_nil o) | exact absurd this (Expr.tokens_ne_nil o))
+  | .cond _ o _ _, _, h => by
+    have := congrArg List.length h
+    have ho := List.length_pos_iff.mpr (Expr.tokens_ne_nil o)
+    rw [Expr.tokens_cond] at this; simp at this
+    first | omega | exact absurd this.1 (Expr.tokens_ne_nil o) | exact absurd this (Expr.tokens_ne_nil o)
+  | .arrow _ parens ps _, _, h => by
+    rw [Expr.tokens_arrow] at h
+    rcases arrowParams_cases parens ps with ⟨p, _, _, hp⟩ | hp
+    · simp [hp, identWord] at h
+    · simp [hp, enclose, punctWord] at h
+
+/-- The second token of `l ++ x :: b`, where `x` is `as` or `satisfies`, when
+`l` is no name that the parser refuses before them. -/
+theorem second_typeOp (l : Expr) {x : TokenKind} {b : List TokenKind} {n : String}
+    (hl : Parse.refusedBeforeType l = false) (ih : ∀ {k r}, l.tokens = .ident n :: k :: r → NotIdent k)
+    {k : TokenKind} {r : List TokenKind}
+    (hn : n ∈ Parse.declarationWords) (h : l.tokens ++ x :: b = .ident n :: k :: r) : NotIdent k := by
+  cases hlt : l.tokens with
+  | nil => exact absurd hlt (Expr.tokens_ne_nil l)
+  | cons y ys =>
+    rw [hlt] at h
+    cases ys with
+    | nil =>
+      simp only [List.cons_append, List.nil_append, List.cons.injEq] at h
+      obtain ⟨rfl, -, -⟩ := h
+      obtain ⟨sp, rfl⟩ := Expr.eq_ident_of_tokens l hlt
+      simp [Parse.refusedBeforeType, hn] at hl
+    | cons z zs =>
+      simp only [List.cons_append, List.cons.injEq] at h
+      obtain ⟨rfl, rfl, -⟩ := h
+      exact ih hlt
+
+/-- An expression that starts with one of `Parse.declarationWords` has no
+name as its second token: an operator, a `.`, a `(` or a `[` follows the
+name, if anything does. The parser refuses `as` and `satisfies` after such a
+name, and `spineOK` states it. -/
 theorem Expr.second : ∀ (e : Expr) {n : String} {k : TokenKind} {r : List TokenKind},
-    e.tokens = .ident n :: k :: r → NotIdent k
-  | .member sp o p, _, _, _, h => by
+    e.spineOK = true → n ∈ Parse.declarationWords → e.tokens = .ident n :: k :: r → NotIdent k
+  | .member sp o p, _, _, _, hs, hn, h => by
     rw [Expr.tokens_member] at h
-    exact second_append rfl (by simp [NotIdent]) (Expr.tokens_ne_nil o) (fun h' => Expr.second o h') h
-  | .optMember sp o p, _, _, _, h => by
+    exact second_append rfl (by simp [NotIdent]) (Expr.tokens_ne_nil o) (fun h' => Expr.second o (by simpa [Expr.spineOK] using hs) hn h') h
+  | .optMember sp o p, _, _, _, hs, hn, h => by
     rw [Expr.tokens_optMember] at h
-    exact second_append rfl (by simp [NotIdent]) (Expr.tokens_ne_nil o) (fun h' => Expr.second o h') h
-  | .index sp o i, _, _, _, h => by
+    exact second_append rfl (by simp [NotIdent]) (Expr.tokens_ne_nil o) (fun h' => Expr.second o (by simpa [Expr.spineOK] using hs) hn h') h
+  | .index sp o i, _, _, _, hs, hn, h => by
     rw [Expr.tokens_index, List.append_assoc] at h
-    exact second_append rfl (by simp [NotIdent]) (Expr.tokens_ne_nil o) (fun h' => Expr.second o h') h
-  | .call sp c as, _, _, _, h => by
+    exact second_append rfl (by simp [NotIdent]) (Expr.tokens_ne_nil o) (fun h' => Expr.second o (by simpa [Expr.spineOK] using hs) hn h') h
+  | .call sp c as, _, _, _, hs, hn, h => by
     rw [Expr.tokens_call, List.append_assoc] at h
-    exact second_append rfl (by simp [NotIdent]) (Expr.tokens_ne_nil c) (fun h' => Expr.second c h') h
-  | .postfix sp op a, _, _, _, h => by
+    exact second_append rfl (by simp [NotIdent]) (Expr.tokens_ne_nil c) (fun h' => Expr.second c (by simpa [Expr.spineOK] using hs) hn h') h
+  | .postfix sp op a, _, _, _, hs, hn, h => by
     rw [Expr.tokens_postfix] at h
-    exact second_append rfl (by simp [NotIdent]) (Expr.tokens_ne_nil a) (fun h' => Expr.second a h') h
-  | .binary sp op l r', _, _, _, h => by
+    exact second_append rfl (by simp [NotIdent]) (Expr.tokens_ne_nil a) (fun h' => Expr.second a (by simpa [Expr.spineOK] using hs) hn h') h
+  | .binary sp op l r', _, _, _, hs, hn, h => by
     rw [Expr.tokens_binary, List.append_assoc] at h
-    obtain ⟨k₀, ks, hk, hn⟩ := notIdent_binOp op
-    exact second_append (by rw [hk]; rfl) hn (Expr.tokens_ne_nil l) (fun h' => Expr.second l h') h
-  | .cond sp t a b, _, _, _, h => by
+    obtain ⟨k₀, ks, hk, hn₀⟩ := notIdent_binOp op
+    exact second_append (by rw [hk]; rfl) hn₀ (Expr.tokens_ne_nil l) (fun h' => Expr.second l (by simpa [Expr.spineOK] using hs) hn h') h
+  | .cond sp t a b, _, _, _, hs, hn, h => by
     rw [Expr.tokens_cond, List.append_assoc] at h
-    exact second_append rfl (by simp [NotIdent]) (Expr.tokens_ne_nil t) (fun h' => Expr.second t h') h
-  | .assign sp op t v, _, _, _, h => by
+    exact second_append rfl (by simp [NotIdent]) (Expr.tokens_ne_nil t) (fun h' => Expr.second t (by simpa [Expr.spineOK] using hs) hn h') h
+  | .assign sp op t v, _, _, _, hs, hn, h => by
     rw [Expr.tokens_assign, List.append_assoc] at h
-    obtain ⟨k₀, ks, hk, hn⟩ := notIdent_assignOp op
-    exact second_append (by rw [hk]; rfl) hn (Expr.tokens_ne_nil t) (fun h' => Expr.second t h') h
-  | .ident .., _, _, _, h | .number .., _, _, _, h | .bigint .., _, _, _, h | .string .., _, _, _, h
-  | .null _, _, _, _, h => by simp [Expr.tokens, Expr.words, identWord, keywordWord] at h
-  | .bool _ b, _, _, _, h => by cases b <;> simp [Expr.tokens, Expr.words, keywordWord] at h
-  | .array .., _, _, _, h => by simp [Expr.tokens_array] at h
-  | .object .., _, _, _, h => by simp [Expr.tokens_object] at h
-  | .paren .., _, _, _, h => by simp [Expr.tokens_paren] at h
-  | .unary _ op _, _, _, _, h => by
+    obtain ⟨k₀, ks, hk, hn₀⟩ := notIdent_assignOp op
+    exact second_append (by rw [hk]; rfl) hn₀ (Expr.tokens_ne_nil t) (fun h' => Expr.second t (by simpa [Expr.spineOK] using hs) hn h') h
+  | .asConst sp l, n, k, r, hs, hn, h => by
+    simp only [Expr.spineOK, Bool.and_eq_true, Bool.not_eq_true'] at hs
+    rw [Expr.tokens_asConst] at h
+    exact second_typeOp l hs.1 (fun h' => Expr.second l hs.2 hn h') hn h
+  | .satisfies sp l t, n, k, r, hs, hn, h => by
+    simp only [Expr.spineOK, Bool.and_eq_true, Bool.not_eq_true'] at hs
+    rw [Expr.tokens_satisfies] at h
+    exact second_typeOp l hs.1 (fun h' => Expr.second l hs.2 hn h') hn h
+  | .ident .., _, _, _, _, _, h | .number .., _, _, _, _, _, h | .bigint .., _, _, _, _, _, h | .string .., _, _, _, _, _, h
+  | .null _, _, _, _, _, _, h => by simp [Expr.tokens, Expr.words, identWord, keywordWord] at h
+  | .bool _ b, _, _, _, _, _, h => by cases b <;> simp [Expr.tokens, Expr.words, keywordWord] at h
+  | .array .., _, _, _, _, _, h => by simp [Expr.tokens_array] at h
+  | .object .., _, _, _, _, _, h => by simp [Expr.tokens_object] at h
+  | .paren .., _, _, _, _, _, h => by simp [Expr.tokens_paren] at h
+  | .unary _ op _, _, _, _, _, _, h => by
     rw [Expr.tokens_unary] at h
     cases op <;> simp [UnaryOp.symbol, symbol, Lex.reservedWords, punctWord, keywordWord] at h
-  | .prefix .., _, _, _, h => by simp [Expr.tokens_prefix] at h
-  | .arrow _ parens ps _, _, _, _, h => by
+  | .prefix .., _, _, _, _, _, h => by simp [Expr.tokens_prefix] at h
+  | .arrow _ parens ps _, _, _, _, _, _, h => by
     rw [Expr.tokens_arrow] at h
     rcases arrowParams_cases parens ps with ⟨p, _, _, hp⟩ | hp
     · simp [hp, identWord] at h; rw [← h.2.1]; simp [NotIdent]
     · simp [hp, enclose, punctWord] at h
 
+
+/-- Every well-formed expression is `spineOK`. -/
+theorem Expr.spineOK_wf {T : Edition} : ∀ (e : Expr) (level : Level), e.wfAt T level = true → e.spineOK = true
+  | .member _ o _, level, h | .index _ o _, level, h | .call _ o _, level, h => by
+    have : o.wfAt T .lhs = true := by cases level <;> simp_all [Expr.wfAt]
+    simpa [Expr.spineOK] using Expr.spineOK_wf o .lhs this
+  | .optMember _ o _, level, h => by
+    have : o.wfAt T .lhs = true := by cases level <;> simp_all [Expr.wfAt]
+    simpa [Expr.spineOK] using Expr.spineOK_wf o .lhs this
+  | .postfix _ _ o, level, h => by
+    have : o.wfAt T .lhs = true := by cases level <;> simp_all [Expr.wfAt]
+    simpa [Expr.spineOK] using Expr.spineOK_wf o .lhs this
+  | .binary _ _ o _, level, h => by
+    have : ∃ m, o.wfAt T (.bin m) = true := by
+      cases level with
+      | assign => simp only [Expr.wfAt, Bool.and_eq_true] at h; exact ⟨0, h.1.1.1.1.2⟩
+      | cond => simp only [Expr.wfAt, Bool.and_eq_true] at h; exact ⟨0, h.1.1.1.1.2⟩
+      | bin m => simp only [Expr.wfAt, Bool.and_eq_true] at h; exact ⟨m, h.1.1.1.1.2⟩
+      | _ => simp [Expr.wfAt] at h
+    obtain ⟨m, hm⟩ := this
+    simpa [Expr.spineOK] using Expr.spineOK_wf o (.bin m) hm
+  | .asConst _ o, level, h => by
+    have : ∃ m, o.wfAt T (.bin m) = true ∧ leftOKType o = true := by
+      cases level with
+      | assign => simp only [Expr.wfAt, Bool.and_eq_true] at h; exact ⟨0, h.1.2, h.2⟩
+      | cond => simp only [Expr.wfAt, Bool.and_eq_true] at h; exact ⟨0, h.1.2, h.2⟩
+      | bin m => simp only [Expr.wfAt, Bool.and_eq_true] at h; exact ⟨m, h.1.2, h.2⟩
+      | _ => simp [Expr.wfAt] at h
+    obtain ⟨m, hm, hlo⟩ := this
+    simp [Expr.spineOK, leftOKType_refused hlo, Expr.spineOK_wf o (.bin m) hm]
+  | .satisfies _ o _, level, h => by
+    have : ∃ m, o.wfAt T (.bin m) = true ∧ leftOKType o = true := by
+      cases level with
+      | assign => simp only [Expr.wfAt, Bool.and_eq_true] at h; exact ⟨0, h.1.1.2, h.1.2⟩
+      | cond => simp only [Expr.wfAt, Bool.and_eq_true] at h; exact ⟨0, h.1.1.2, h.1.2⟩
+      | bin m => simp only [Expr.wfAt, Bool.and_eq_true] at h; exact ⟨m, h.1.1.2, h.1.2⟩
+      | _ => simp [Expr.wfAt] at h
+    obtain ⟨m, hm, hlo⟩ := this
+    simp [Expr.spineOK, leftOKType_refused hlo, Expr.spineOK_wf o (.bin m) hm]
+  | .cond _ o _ _, level, h => by
+    have : o.wfAt T (.bin 0) = true := by
+      cases level with
+      | assign => simp [Expr.wfAt] at h; exact h.1.1.1
+      | cond => simp [Expr.wfAt] at h; exact h.1.1.1
+      | _ => simp [Expr.wfAt] at h
+    simpa [Expr.spineOK] using Expr.spineOK_wf o (.bin 0) this
+  | .assign _ _ o _, level, h => by
+    have : o.wfAt T .cond = true := by
+      cases level with
+      | assign => simp [Expr.wfAt] at h; exact h.1.1.1
+      | _ => simp [Expr.wfAt] at h
+    simpa [Expr.spineOK] using Expr.spineOK_wf o .cond this
+  | .ident .., _, _ | .number .., _, _ | .bigint .., _, _ | .string .., _, _ | .bool .., _, _ | .null _, _, _
+  | .array .., _, _ | .object .., _, _ | .paren .., _, _ | .unary .., _, _ | .prefix .., _, _
+  | .arrow .., _, _ => by simp [Expr.spineOK]
 
 /-! ### Fields of an interface -/
 
@@ -1217,7 +1361,8 @@ theorem Stmt.declStart {T : Edition} (st : Stmt) (hw : st.wf T false false = tru
   cases st with
   | exprStmt sp e =>
     simp only [Stmt.wf, Bool.and_eq_true] at hw
-    obtain ⟨⟨_, _⟩, hk⟩ := hw
+    obtain ⟨⟨hwe, _⟩, hk⟩ := hw
+    have hsp := Expr.spineOK_wf e .assign hwe
     simp only [Stmt.wordLines, Stmt.lines, List.map_cons, List.map_nil] at ht
     obtain ⟨h1, _⟩ := Laid.one ht
     obtain ⟨ets, ts₁, rfl, het, h'⟩ := Touching.append_split h1
@@ -1239,9 +1384,9 @@ theorem Stmt.declStart {T : Edition} (st : Stmt) (hw : st.wf T false false = tru
         refine ⟨y, ets'' ++ [semi], by simp, ?_⟩
         have hn : NotIdent y.kind := by
           rcases h with h | h
-          · exact Expr.second e (n := "interface") (k := y.kind) (r := ets''.map (·.kind))
+          · exact Expr.second e (n := "interface") (k := y.kind) (r := ets''.map (·.kind)) hsp (by decide)
               (by simp only [Expr.tokens, ← hke, List.map_cons, h])
-          · exact Expr.second e (n := "type") (k := y.kind) (r := ets''.map (·.kind))
+          · exact Expr.second e (n := "type") (k := y.kind) (r := ets''.map (·.kind)) hsp (by decide)
               (by simp only [Expr.tokens, ← hke, List.map_cons, h])
         cases hy : y.kind <;> simp [Token.isAnyIdent, hy, NotIdent] at hn ⊢
   | varDecl sp d =>

@@ -405,6 +405,8 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
   | .string _ s => some (.str (JSString.ofString s))
   | .null _ => some .null
   | .paren _ inner => eval m fuel env inner
+  -- Type stripping removes `as const` and `satisfies T`.
+  | .asConst _ e | .satisfies _ e _ => eval m fuel env e
   | .array _ elems => (evalList m fuel env elems).map .list
   | .object _ props => (evalProps m fuel env props).map .obj
   -- A property read after a `?.` is a part of its optional chain, which is

@@ -168,6 +168,8 @@ def Expr.words : Expr → List Word
   | .cond _ test a b => test.words ++ punctWord "?" :: a.words ++ punctWord ":" :: b.words
   | .assign _ op target value => target.words ++ symbol op.symbol :: value.words
   | .arrow _ parens params body => arrowParams parens params ++ punctWord "=>" :: body.words
+  | .asConst _ e => e.words ++ [identWord "as", keywordWord "const"]
+  | .satisfies _ e type => e.words ++ identWord "satisfies" :: type.words
 
 def Expr.wordsOf : List Expr → List (List Word)
   | [] => []
@@ -364,6 +366,8 @@ def Expr.erase : Expr → Expr
   | .cond _ test a b => .cond noSpan test.erase a.erase b.erase
   | .assign _ op target value => .assign noSpan op target.erase value.erase
   | .arrow _ parens params body => .arrow noSpan parens (params.map Param.erase) body.erase
+  | .asConst _ e => .asConst noSpan e.erase
+  | .satisfies _ e type => .satisfies noSpan e.erase type.erase
 
 def Expr.eraseAll : List Expr → List Expr
   | [] => []

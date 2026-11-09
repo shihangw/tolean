@@ -54,7 +54,6 @@ exact. A construct leaves these tables when Tolean translates it, and the
 | `T \| undefined` as the type of a local or of a return value, and a test such as `x !== undefined && x > 0n` that narrows an optional value inside an expression | `Option T` | `'x' in obj`, which can tell a missing key from `undefined` |
 | `a?.[i]` and `f?.()` | `Option.bind` | `==` against anything except `null` and `undefined` |
 | `export { … }` and re-exports | Nothing: the names stay in scope | `export *` |
-| `as const` and `satisfies` | Nothing: they only check types | `as T` and the non-null assertion `x!`, because TypeScript does not check them |
 | A type guard `x is T` | A `Bool` function | A guard whose body the translator cannot show to be a test of the tag |
 
 ### Functions

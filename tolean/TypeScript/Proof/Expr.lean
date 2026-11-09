@@ -1466,6 +1466,20 @@ theorem translateArrayMethod_sound {F : Nat}
   exact methodVal_sim m fs fuel (bodySim_of m fs fuel hbody ha hs) method items v hval
 
 omit [JSNumber N] in
+/-- `firstFitting` gives a result of one of its two parsers, from the state it
+starts from. -/
+theorem firstFitting_ok {A : Type} {x y : TM A} {fits : A → Bool} {s s' : Ctx} {a : A}
+    (h : firstFitting x y fits s = .ok a s') : x s = .ok a s' ∨ y s = .ok a s' := by
+  simp only [firstFitting] at h
+  split at h
+  · rename_i b s₁ hx
+    split at h
+    · obtain ⟨rfl, rfl⟩ : b = a ∧ s₁ = s' := by simpa using h
+      exact .inl hx
+    · exact .inr h
+  · exact .inr h
+
+omit [JSNumber N] in
 /-- Fixing the type of an `undefined` argument does not change its value. -/
 theorem fixArgs_value (ps : List Ty) (cs : List Code) :
     (fixArgs ps cs).map Code.value = cs.map Code.value := by
@@ -1520,7 +1534,24 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
         simp only [translateExprCore] at h
         intro ρs ρo v ha hs hv
         rw [Eval.eval]
-        exact ihE _ _ _ _ _ _ h ρs ρo v ha hs hv
+        exact ihX _ _ _ _ _ _ h ρs ρo v ha hs hv
+      | asConst sp inner =>
+        simp only [translateExprCore] at h
+        intro ρs ρo v ha hs hv
+        rw [Eval.eval]
+        exact ihX _ _ _ _ _ _ h ρs ρo v ha hs hv
+      | satisfies sp inner type =>
+        simp only [translateExprCore, bind_ok] at h
+        obtain ⟨t, s₁, -, c', s₂, hc', h⟩ := h
+        simp only [ite_state] at h
+        split at h
+        · obtain ⟨rfl, -⟩ := h
+          intro ρs ρo v ha hs hv
+          rw [Eval.eval]
+          rcases firstFitting_ok hc' with hx | hy
+          · exact ihX _ _ _ _ _ _ hx ρs ρo v ha hs hv
+          · exact ihX _ _ _ _ _ _ hy ρs ρo v ha hs hv
+        · simp at h
       | bigint sp text =>
         simp only [translateExprCore] at h
         simp at h

@@ -683,6 +683,17 @@ class Printer {
       }
       return this.node('binary', e, [op], [this.expr(e.left), this.expr(e.right)]);
     }
+    if (ts.isAsExpression(e)) {
+      const t = e.type;
+      if (!ts.isTypeReferenceNode(t) || !ts.isIdentifier(t.typeName) || t.typeName.text !== 'const' ||
+          t.typeArguments !== undefined) {
+        refuse(e, 'type assertion other than as const');
+      }
+      return this.node('asConst', e, [], [this.expr(e.expression)]);
+    }
+    if (ts.isSatisfiesExpression(e)) {
+      return this.node('satisfies', e, [], [this.expr(e.expression), this.type(e.type)]);
+    }
     if (ts.isConditionalExpression(e)) {
       return this.node('cond', e, [], [
         this.expr(e.condition),
