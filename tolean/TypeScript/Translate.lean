@@ -245,6 +245,9 @@ def Ty.unify (sol : List (String × Ty)) : Ty → Ty → List (String × Ty)
   | .nullable p, .nullable t => Ty.unify sol p t
   | .nullable p, t => Ty.unify sol p t
   | .optional p, .optional t => Ty.unify sol p t
+  -- An optional parameter takes a value of its type too, which fixes the type
+  -- parameters as the type would.
+  | .optional p, t => Ty.unify sol p t
   | .array p, .array t => Ty.unify sol p t
   | .tuple ps, .tuple ts | .struct _ ps, .struct _ ts => Ty.unifyList sol ps ts
   | _, _ => sol
@@ -1541,9 +1544,21 @@ def translateCall (fuel : Nat) (env : Env) (s : Span) (callee : Expr) (args : Li
       else s!"'{name}' takes {required} to {fn.params.length} arguments")
   -- An argument is translated where its parameter's type is expected. When
   -- that type names a type parameter, the arguments' types fix it, and only
-  -- the shape of a tuple is expected.
+  -- the shape of a tuple is expected. `undefined` fixes nothing, so the other
+  -- arguments fix the type parameters first, and `undefined` is then read
+  -- where the optional parameter's type with them is expected, as for a
+  -- call that leaves the argument out.
+  let bareUndefined (arg : Expr) (paramType : Ty) : Bool :=
+    arg.isUndefinedName && !env.has "undefined" && paramType matches .optional _
+  let first ← (args.zip fn.params).mapM fun (arg, paramType) =>
+    if bareUndefined arg paramType then pure Option.none
+    else some <$> translateExpr fuel env paramType.callExpected arg
+  let known := Ty.unifyList [] (fn.params.zip first |>.filterMap fun (p, c) => c.map fun _ => p)
+    (first.filterMap (·.map (·.type)))
   let codes ← (args.zip fn.params).mapM fun (arg, paramType) =>
-    translateExpr fuel env paramType.callExpected arg
+    let given := paramType.subst known
+    translateExpr fuel env
+      (if bareUndefined arg paramType && !given.isGeneric then some given else paramType.callExpected) arg
   let sol := Ty.unifyList [] fn.params (codes.map (·.type))
   fn.typeParams.forM fun v => do
     unless (sol.lookup v).isSome do
@@ -1552,7 +1567,19 @@ def translateCall (fuel : Nat) (env : Env) (s : Span) (callee : Expr) (args : Li
     unless c.type.passableTo (paramType.subst sol) do
       reject arg.span "the argument does not have the parameter's type"
   let missing := (fn.params.drop args.length).map fun _ => IR.Expr.undefined
-  return ⟨.call fn.ref (codes.map (·.value) ++ missing), false, fn.ret.subst sol⟩
+  return ⟨.call fn.ref (optArgs sol codes fn.params ++ missing), false, fn.ret.subst sol⟩
+
+/-- The arguments of a call, with the type of each argument of an optional
+parameter that names a type parameter written out: `(v : Option T)` with the
+types that the call fixes. Lean then makes a plain `v` the `some` of it, and
+knows the type of a `none`, where it could not infer `T` from the rest of
+the call. -/
+def optArgs (sol : List (String × Ty)) : List Code → List Ty → List IR.Expr
+  | c :: cs, p :: ps =>
+    (if p matches .optional _ && p.isGeneric then .ascribe c.value (p.subst sol).lean else c.value) ::
+      optArgs sol cs ps
+  | cs, [] => cs.map (·.value)
+  | [], _ :: _ => []
 
 /-- `xs.map(x => e)`, and `filter`, `some`, `every` and `find`: the `List`
 function with `fun (x : T) => e`. The callback is an arrow function written at

@@ -45,4 +45,26 @@ def xOr {N : Type} [JSNumber N] (p : Option (Point N) := none) : Int :=
 def isSet {N : Type} [JSNumber N] (flag : Option Bool := none) : Bool :=
   flag.isSome
 
+def take {N : Type} [JSNumber N] {T : Type} (x : Option T := none) : Option T :=
+  match x with
+  | none =>
+    none
+  | some x =>
+    x
+
+def takeOne {N : Type} [JSNumber N]  : Option Int :=
+  (take (N := N) (((1 : Int) : Option Int)))
+
+def choose {N : Type} [JSNumber N] {T : Type} (fallback : T) (x : Option T := none) : T :=
+  (Option.getD x fallback)
+
+def chooseFallback {N : Type} [JSNumber N]  : Int :=
+  (choose (N := N) ((1 : Int)) ((none : Option Int)))
+
+def pick {N : Type} [JSNumber N] {T : Type} (a : Int) (x : Option T := none) (y : Option T := none) : Int :=
+  a
+
+def pickFirst {N : Type} [JSNumber N]  : Int :=
+  (pick (N := N) ((1 : Int)) ((none : Option Int)) (((2 : Int) : Option Int)))
+
 end Test

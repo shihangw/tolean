@@ -1465,6 +1465,17 @@ theorem translateArrayMethod_sound {F : Nat}
   rw [eval_arrayMethod m fuel _ _ _ _ _ _ _ _ _ hname (by simpa using hr), hrecv]
   exact methodVal_sim m fs fuel (bodySim_of m fs fuel hbody ha hs) method items v hval
 
+/-- The type that `optArgs` writes on an argument does not change its value. -/
+theorem evalList_optArgs (sol : List (String × Ty)) (ρ : Eval.Env N) :
+    ∀ (cs : List Code) (ps : List Ty),
+      IR.Expr.evalList fs fuel ρ (optArgs sol cs ps) = IR.Expr.evalList fs fuel ρ (cs.map Code.value)
+  | [], [] => rfl
+  | [], _ :: _ => rfl
+  | _ :: _, [] => rfl
+  | c :: cs, p :: ps => by
+    simp only [optArgs, List.map_cons, IR.Expr.evalList, evalList_optArgs sol ρ cs ps]
+    split <;> (try split) <;> simp [IR.Expr.eval]
+
 theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
     (∀ env exp e ctx c ctx', translateExpr F env exp e ctx = .ok c ctx' →
       Sim (N := N) m fs fuel env e c.code) ∧
@@ -1910,13 +1921,15 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
               -- The arguments, then the checks of their types, which do not
               -- change what the call means.
               simp only [bind_ok] at h
+              -- The first pass only fixes the type parameters for `undefined`.
+              obtain ⟨_first, _s₁, _hfirst, h⟩ := h
               obtain ⟨codes, s₂, hcodes, _, s₃, -, h⟩ := h
-              have hcode : c.code = .call fn.ref (codes.map Code.value ++
+              have hcode : c.code = .call fn.ref (optArgs (Ty.unifyList [] fn.params (codes.map (·.type))) codes fn.params ++
                   List.drop args.length (fn.params.map fun _ => IR.Expr.undefined)) := by
                 obtain ⟨_, -, rfl⟩ := map_ok.mp h
                 rfl
               intro ρs ρo v ha hs hv
-              rw [hcode, out_call, ← List.map_drop, evalList_append_undefined] at hv
+              rw [hcode, out_call, ← List.map_drop, evalList_append_undefined, evalList_optArgs] at hv
               cases hx : IR.Expr.evalList fs fuel ρo (codes.map Code.value) with
               | none => simp [hx] at hv
               | some vs =>

@@ -44,3 +44,31 @@ export function xOr(p?: Point): bigint {
 export function isSet(flag?: boolean): boolean {
   return flag !== undefined;
 }
+
+// A value passed for a generic optional parameter fixes its type parameter.
+function take<T>(x?: T): T | null {
+  if (x === undefined) return null;
+  return x;
+}
+
+export function takeOne(): bigint | null {
+  return take(1n);
+}
+
+// `undefined` fixes nothing, so the other arguments fix the type parameter,
+// before or after it.
+function choose<T>(fallback: T, x?: T): T {
+  return x ?? fallback;
+}
+
+export function chooseFallback(): bigint {
+  return choose(1n, undefined);
+}
+
+function pick<T>(a: bigint, x?: T, y?: T): bigint {
+  return a;
+}
+
+export function pickFirst(): bigint {
+  return pick(1n, undefined, 2n);
+}
