@@ -223,6 +223,12 @@ def binary : BinOp → Val N → Val N → Option (Val N)
   | .looseNe, a, b => (looseEq a b).map (.bool ∘ not)
   | _, _, _ => none
 
+/-- The element of the array `items` whose index is the safe integer `i`, or
+`undefined` when `i` is none or no index of the array. -/
+def elementAt (items : List (Val N)) : Option Int → Val N
+  | some i => if 0 ≤ i then items[i.toNat]?.getD .undefined else .undefined
+  | none => .undefined
+
 /-- What a statement list does: it runs to its end with the variables it
 leaves, or it returns a value, or a `break` or a `continue` ends it with the
 variables at that point. These are the completion records of ECMA-262
@@ -233,6 +239,11 @@ inductive Outcome (N : Type) where
   | brk (env : Env N)
   | cont (env : Env N)
 deriving Inhabited
+
+/-- The text of a number literal. -/
+def numberText? : Expr → Option String
+  | .number _ text => some text
+  | _ => none
 
 /-- The functions of the module, by name. -/
 def functions (m : Module) : List (String × List String × Stmt) :=
@@ -390,13 +401,28 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     | .null | .undefined => some .undefined
     | .obj fields => getProp fields name
     | _ => none
+  -- `xs[i]` on an array, with a number `i` (`OrdinaryGet` on an array exotic
+  -- object, ECMA-262 §10.4.2): the element when `i` is an index of the
+  -- array. Any other number is `undefined`, because no element and no
+  -- property of `Array.prototype` has its string as a key. `-0` reads the
+  -- element `0`, as its string is `"0"`. A number literal is the integer it
+  -- names, whatever the model of numbers, so the rule reads that integer.
+  --
   -- `obj[key]` with a string key (ECMA-262 §13.3.2.1): `ToPropertyKey` of a
   -- string is the string itself, so this reads the property as `obj.key`
-  -- does. An array, or a key of another type, leaves the subset.
+  -- does. A key of another type leaves the subset.
   | .index _ obj key => do
-    match ← eval m fuel env obj, ← eval m fuel env key with
-    | .obj fields, .str name => getKey fields name
-    | _, _ => none
+    match ← eval m fuel env obj with
+    | .list items =>
+      match numberText? key with
+      | some text => return elementAt items (some (← numberLiteral text))
+      | none =>
+        let .num n ← eval m fuel env key | none
+        return elementAt items (JSNumber.toSafeInt n)
+    | .obj fields =>
+      let .str k ← eval m fuel env key | none
+      getKey fields k
+    | _ => none
   | .unary _ .not arg => do return .bool !(← eval m fuel env arg).truthy
   -- `typeof x` names the type of the value of `x` (ECMA-262 §13.5.3.1). On a
   -- name that is not bound, JS gives `"undefined"`, and the subset has no

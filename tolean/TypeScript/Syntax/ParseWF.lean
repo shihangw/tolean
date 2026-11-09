@@ -287,10 +287,16 @@ theorem advance_inv {s s' : ParseState} {x t : Token} {r : List Token} (h : Read
 theorem primaryWF_arrayWF : ∀ t : TypeExpr, t.primaryWF = true → t.arrayWF = true
   | .keyword .., h | .null _, h | .literal .., h | .ref .., h | .paren .., h => by
     revert h; simp [TypeExpr.primaryWF, TypeExpr.arrayWF]
+  | .tuple _ ro _, h => by cases ro <;> revert h <;> simp [TypeExpr.primaryWF, TypeExpr.arrayWF]
   | .array .., h | .union .., h => by simp [TypeExpr.primaryWF] at h
 
+/-- A primary type is not `readonly [A, B]`. -/
+theorem primaryWF_notReadonly : ∀ t : TypeExpr, t.primaryWF = true → t.isReadonlyTuple = false
+  | .tuple _ ro _, h => by cases ro <;> simp_all [TypeExpr.primaryWF, TypeExpr.isReadonlyTuple]
+  | .keyword .., _ | .null _, _ | .literal .., _ | .ref .., _ | .paren .., _ | .array .., _ | .union .., _ => rfl
+
 theorem arrayWF_wf : ∀ t : TypeExpr, t.arrayWF = true → t.wf = true
-  | .array _ _, h | .keyword .., h | .null _, h | .literal .., h | .ref .., h | .paren .., h => by
+  | .array _ _, h | .keyword .., h | .null _, h | .literal .., h | .ref .., h | .paren .., h | .tuple .., h => by
     revert h; simp [TypeExpr.arrayWF, TypeExpr.wf]
   | .union .., h => by simp [TypeExpr.arrayWF] at h
 
@@ -337,7 +343,8 @@ theorem skip_two {s : ParseState} {x y : Token} {r : List Token} (hs : s.rest = 
 
 theorem arrayStep_inv {T : Edition} {start : Pos} {a a' : TypeExpr} {b : Bool} {s s' : ParseState}
     (hR : Ready s) (h : Parse.arrayStep start a s = .ok (a', b) s') :
-    a'.arrayWF = a.arrayWF ∧ (WordsOK T a.words → WordsOK T a'.words) ∧ Ready s' ∧ Kept s s' := by
+    (a.arrayWF = true → a.isReadonlyTuple = false → a'.arrayWF = true ∧ a'.isReadonlyTuple = false) ∧
+      (WordsOK T a.words → WordsOK T a'.words) ∧ Ready s' ∧ Kept s s' := by
   obtain ⟨x, r, hs⟩ := hR.cons
   simp only [Parse.arrayStep] at h
   rw [Parse.bind_eq (Parse.peek_eq hs)] at h
@@ -345,7 +352,7 @@ theorem arrayStep_inv {T : Edition} {start : Pos} {a a' : TypeExpr} {b : Bool} {
   · rw [if_pos hc] at h
     simp only [Parse.pure_ok, Prod.mk.injEq] at h
     obtain ⟨⟨rfl, _⟩, rfl⟩ := h
-    exact ⟨rfl, id, hR, Kept.refl s⟩
+    exact ⟨fun ha hro => ⟨ha, hro⟩, id, hR, Kept.refl s⟩
   · rw [if_neg hc] at h
     have hx : x.kind = .punct "[" := by simp [Token.isPunct] at hc; exact hc.1
     have hr := hR.more hs (by rw [hx]; simp)
@@ -360,7 +367,7 @@ theorem arrayStep_inv {T : Edition} {start : Pos} {a a' : TypeExpr} {b : Bool} {
         Parse.bind_eq (Parse.spanFrom_eq _ _)] at h
       simp only [Parse.pure_ok, Prod.mk.injEq] at h
       obtain ⟨⟨rfl, _⟩, rfl⟩ := h
-      exact ⟨by simp [TypeExpr.arrayWF], fun ha => by
+      exact ⟨fun ha hro => ⟨by simp only [TypeExpr.arrayWF, ha, hro, Bool.not_false, Bool.and_self], rfl⟩, fun ha => by
         simpa [TypeExpr.words] using ha.append (WordsOK.cons (ok_punct (by decide)) (WordsOK.word (ok_punct (by decide)))),
         hR₂, ⟨rfl, rfl, rfl, rfl⟩⟩
     · simp only [hy, Bool.false_eq_true, ↓reduceIte] at h
@@ -423,6 +430,23 @@ theorem typeArgStep_inv {T : Edition} {ok : TypeExpr → Bool} {p : ParseM TypeE
     simp only [Parse.pure_ok, Prod.mk.injEq] at h
     obtain ⟨⟨rfl, _⟩, rfl⟩ := h
     exact ⟨push_ok ha hmo, hR₁, hK₁⟩
+
+/-- A step of the loop over type arguments, or over the elements of a tuple,
+adds one. -/
+theorem typeArgStep_push {p : ParseM TypeExpr} {a a' : Array TypeExpr} {b : Bool} {s s' : ParseState}
+    (h : Parse.typeArgStep p a s = .ok (a', b) s') : ∃ m, a' = a.push m := by
+  simp only [Parse.typeArgStep] at h
+  rw [Parse.bind_ok] at h
+  obtain ⟨m, s₁, -, h⟩ := h
+  rw [Parse.bind_eq (show Parse.peek s₁ = .ok (s₁.rest[0]?.getD s₁.eof) s₁ from Parse.peekAt_rest s₁ 0)] at h
+  by_cases hx : (s₁.rest[0]?.getD s₁.eof).isPunct "," = true
+  · rw [if_neg (by simp [hx]), Parse.pure_bind, Parse.bind_ok] at h
+    obtain ⟨_, _, _, h⟩ := h
+    simp only [Parse.pure_ok, Prod.mk.injEq] at h
+    exact ⟨m, h.1.1.symm⟩
+  · rw [if_pos (by simp [hx])] at h
+    simp only [Parse.pure_ok, Prod.mk.injEq] at h
+    exact ⟨m, h.1.1.symm⟩
 
 @[simp] theorem failAt_bind_ne_ok {α β : Type} (t : Token) (m : String) (f : α → ParseM β) (s s' : ParseState)
     (b : β) : (Parse.failAt (A := α) t m >>= f) s ≠ .ok b s' := by
@@ -527,14 +551,42 @@ theorem types_give (T : Edition) : ∀ f : Nat,
     · intro s t s' hR hT h
       obtain ⟨x, r, hs⟩ := hR.cons
       simp only [Parse.parseArrayType] at h
-      rw [Parse.bind_eq (Parse.peek_eq hs), Parse.bind_eq (Parse.budget_eq _), Parse.bind_ok] at h
+      rw [Parse.bind_eq (Parse.peek_eq hs), Parse.bind_eq (Parse.peekAt_rest _ _)] at h
+      by_cases hro : (x.isIdent "readonly" && (s.rest[1]?.getD s.eof).isPunct "[" &&
+          !(s.rest[1]?.getD s.eof).newlineBefore) = true
+      · -- `readonly`, then a tuple.
+        rw [if_pos hro] at h
+        have hx : x.kind = .ident "readonly" := by simp [Token.isIdent] at hro; exact hro.1.1
+        have hne : x.kind ≠ .eof := by rw [hx]; simp
+        rw [Parse.bind_eq (Parse.discard_eq (advance_past hR hs hne)), Parse.bind_ok] at h
+        obtain ⟨inner, s₁, hi, h⟩ := h
+        obtain ⟨hiw, hR₂, hK₂⟩ := ihA _ _ _ (hR.past hs (hR.more hs hne)) hT hi
+        have hw : Word.ok T [x.kind] = true := hT ▸ hR.tok (by simp [hs]) hne
+        cases inner with
+        | tuple sp ro elems =>
+          cases ro
+          · simp only at h
+            rw [Parse.bind_eq (Parse.spanFrom_eq _ _)] at h
+            simp only [Parse.pure_ok] at h
+            obtain ⟨rfl, rfl⟩ := h
+            refine ⟨both (by simpa [TypeExpr.arrayWF] using both_left hiw) ?_, hR₂, (Kept.past _ _ _).trans hK₂⟩
+            have := WordsOK.cons (T := T) (w := identWord "readonly") (by simpa [identWord, hx] using hw)
+              (both_right hiw)
+            simpa [TypeExpr.words] using this
+          · simp only at h; exact absurd h (Parse.failAt_ne_ok _ _ _ _ _)
+        | _ => simp only at h; exact absurd h (Parse.failAt_ne_ok _ _ _ _ _)
+      rw [if_neg hro, Parse.pure_bind, Parse.bind_eq (Parse.budget_eq _), Parse.bind_ok] at h
       obtain ⟨p, s₁, hp, h⟩ := h
       obtain ⟨hpw, hR₁, hK₁⟩ := ihP _ _ _ hR hT hp
-      exact (iterate_inv (I := fun a st => (a.arrayWF && a.words.all (Word.ok T)) = true ∧ Ready st ∧ Kept s st)
+      obtain ⟨h1, -, h2, h3⟩ := (iterate_inv (I := fun a st => (a.arrayWF && a.words.all (Word.ok T)) = true ∧
+          a.isReadonlyTuple = false ∧ Ready st ∧ Kept s st)
         (fun a st a' b st' hI hst => by
-          obtain ⟨h1, h1w, h2, h3⟩ := arrayStep_inv (T := T) hI.2.1 hst
-          exact ⟨both (h1 ▸ both_left hI.1) (h1w (both_right hI.1)), h2, hI.2.2.trans h3⟩) _ p s₁ t s'
-        ⟨both (primaryWF_arrayWF p (both_left hpw)) (both_right hpw), hR₁, hK₁⟩ h).1
+          obtain ⟨h1, h1w, h2, h3⟩ := arrayStep_inv (T := T) hI.2.2.1 hst
+          obtain ⟨h1a, h1r⟩ := h1 (both_left hI.1) hI.2.1
+          exact ⟨both h1a (h1w (both_right hI.1)), h1r, h2, hI.2.2.2.trans h3⟩) _ p s₁ t s'
+        ⟨both (primaryWF_arrayWF p (both_left hpw)) (both_right hpw), primaryWF_notReadonly p (both_left hpw),
+          hR₁, hK₁⟩ h).1
+      exact ⟨h1, h2, h3⟩
     · intro s t s' hR hT h
       obtain ⟨x, r, hs⟩ := hR.cons
       simp only [Parse.parsePrimaryType] at h
@@ -649,7 +701,35 @@ theorem types_give (T : Edition) : ∀ f : Nat,
             simpa [TypeExpr.words] using WordsOK.cons (ok_punct (by decide))
               ((both_right hiw).append (WordsOK.word (ok_punct (by decide))))), hR₃,
             (Kept.past _ _ _).trans (hK₂.trans (Kept.past _ _ _))⟩
-        · simp [hp] at h
+        by_cases hb : p = "["
+        · -- A tuple: its elements, and `]`.
+          subst hb
+          simp only at h
+          rw [Parse.bind_eq (Parse.budget_eq _), Parse.bind_ok] at h
+          obtain ⟨elems, s₂, helems, h⟩ := h
+          obtain ⟨⟨hall, hR₃, hK₃⟩, a₁, s₃', -, hlast⟩ := iterate_inv
+            (I := fun a st => (∀ m ∈ a.toList, (m.wf && m.words.all (Word.ok T)) = true) ∧ Ready st ∧
+              Kept (past s t0 r) st)
+            (fun a st a' b st' hI hst => by
+              obtain ⟨h1, h2, h3⟩ := typeArgStep_inv ihT hI.2.1 (hI.2.2.target_eq.trans hT) hI.1 hst
+              exact ⟨h1, h2, hI.2.2.trans h3⟩) _ #[] _ elems s₂ ⟨by simp, hR₁, Kept.refl _⟩ helems
+          have hne' : elems ≠ #[] := by
+            obtain ⟨m, hm⟩ := typeArgStep_push hlast
+            rw [hm]; simp
+          rw [Parse.bind_ok] at h
+          obtain ⟨c, s₄, hc, h⟩ := h
+          obtain ⟨_, r₄, _, rfl, hR₄⟩ := expectPunct_inv hR₃ hc
+          rw [Parse.bind_eq (Parse.spanFrom_eq _ _)] at h
+          simp only [Parse.pure_ok] at h
+          obtain ⟨rfl, rfl⟩ := h
+          have hw : ∀ m ∈ elems.toList, WordsOK T m.words := fun m hm => both_right (hall m hm)
+          refine ⟨both ?_ ?_, hR₄, (Kept.past _ _ _).trans (hK₃.trans (Kept.past _ _ _))⟩
+          · simp [TypeExpr.primaryWF, hne', (allWF_iff _).mpr fun m hm => both_left (hall m hm)]
+          · simp only [TypeExpr.words, Bool.false_eq_true, ↓reduceIte, List.nil_append]
+            exact WordsOK.cons (ok_punct (by decide))
+              ((WordsOK.separated (sep := ",") (by decide) _ (WordsOK.wordsOf _ hw)).append
+                (WordsOK.word (ok_punct (by decide))))
+        · simp [hp, hb] at h
       | eof => simp at h
 
 /-! ### The skeleton of a type -/
@@ -706,6 +786,14 @@ theorem skel_ref (sp : Span) (n : String) (args : List TypeExpr) (h : args ≠ [
     skel_nonSkel (k := .punct "<") rfl, skel_joined (sep := ",") rfl]
   simp only [skelsOf, List.map_map, Function.comp_def]
   rfl
+
+theorem skel_tuple (sp : Span) (es : List TypeExpr) :
+    skel (TypeExpr.tuple sp false es).tokens = .punct "[" :: skelsOf es ++ [.punct "]"] := by
+  have hj : skel (joined "," (es.map TypeExpr.tokens)) = skelsOf es := by
+    rw [skel_joined (sep := ",") rfl]; simp [skelsOf, List.map_map, Function.comp_def]
+  rw [tokens_tuple]
+  simp only [skel] at hj ⊢
+  simp [List.filter_append, skelKind, hj]
 
 theorem skelsOf_push (a : Array TypeExpr) (m : TypeExpr) :
     skelsOf (a.push m).toList = skelsOf a.toList ++ skel m.tokens := by
@@ -873,7 +961,29 @@ theorem types_skel : ∀ f : Nat,
     · intro s t s' hR h
       simp only [Parse.parseArrayType] at h
       obtain ⟨x, r, hs⟩ := hR.cons
-      rw [Parse.bind_eq (Parse.peek_eq hs), Parse.bind_eq (Parse.budget_eq _), Parse.bind_ok] at h
+      rw [Parse.bind_eq (Parse.peek_eq hs), Parse.bind_eq (Parse.peekAt_rest _ _)] at h
+      by_cases hro : (x.isIdent "readonly" && (s.rest[1]?.getD s.eof).isPunct "[" &&
+          !(s.rest[1]?.getD s.eof).newlineBefore) = true
+      · rw [if_pos hro] at h
+        have hx : x.kind = .ident "readonly" := by simp [Token.isIdent] at hro; exact hro.1.1
+        have hne : x.kind ≠ .eof := by rw [hx]; simp
+        rw [Parse.bind_eq (Parse.discard_eq (advance_past hR hs hne)), Parse.bind_ok] at h
+        obtain ⟨inner, s₁, hi, h⟩ := h
+        obtain ⟨hR₁, hP₁⟩ := ihA _ _ _ (hR.past hs (hR.more hs hne)) hi
+        cases inner with
+        | tuple sp ro elems =>
+          cases ro
+          · simp only at h
+            rw [Parse.bind_eq (Parse.spanFrom_eq _ _)] at h
+            simp only [Parse.pure_ok] at h
+            obtain ⟨rfl, rfl⟩ := h
+            refine ⟨hR₁, ((PastSkel.tok hs).trans hP₁).of_eq ?_⟩
+            rw [tokens_readonly, hx]
+            simp [skel, skelKind]
+            rfl
+          · simp only at h; exact absurd h (Parse.failAt_ne_ok _ _ _ _ _)
+        | _ => simp only at h; exact absurd h (Parse.failAt_ne_ok _ _ _ _ _)
+      rw [if_neg hro, Parse.pure_bind, Parse.bind_eq (Parse.budget_eq _), Parse.bind_ok] at h
       obtain ⟨p, s₁, hp, h⟩ := h
       obtain ⟨hR₁, hP₁⟩ := ihP _ _ _ hR hp
       exact (iterate_inv (I := fun a st => Ready st ∧ PastSkel s st (skel a.tokens))
@@ -973,7 +1083,26 @@ theorem types_skel : ∀ f : Nat,
           obtain ⟨rfl, rfl⟩ := h
           exact ⟨hR₃, (((PastSkel.tok hs).trans hP₂).trans (PastSkel.tok hs₃)).of_eq (by
             rw [TypeExpr.tokens_paren, hk, hck]; simp [skel, skelKind])⟩
-        · simp [hp] at h
+        by_cases hb : p = "["
+        · subst hb
+          simp only at h
+          rw [Parse.bind_eq (Parse.budget_eq _), Parse.bind_ok] at h
+          obtain ⟨elems, s₂, helems, h⟩ := h
+          have hP₁ : PastSkel s (past s t0 r) [.punct "["] := (PastSkel.tok hs).of_eq (by rw [hk]; rfl)
+          obtain ⟨⟨hR₃, hP₃⟩, -⟩ := iterate_inv (σ := Array TypeExpr)
+            (I := fun a st => Ready st ∧ PastSkel s st (.punct "[" :: skelsOf a.toList))
+            (fun a st a' b st' hI hst => by
+              obtain ⟨h1, _, k, h2, h3⟩ := typeArgStep_skel ihT hI.1 hst
+              exact ⟨h1, (hI.2.trans h2).of_eq (by rw [h3]; simp)⟩) _ #[] _ elems s₂
+            ⟨hR₁, hP₁.of_eq (by simp [skelsOf])⟩ helems
+          rw [Parse.bind_ok] at h
+          obtain ⟨c, s₄, hc, h⟩ := h
+          obtain ⟨hck, r₄, hs₄, rfl, hR₄⟩ := expectPunct_inv hR₃ hc
+          rw [Parse.bind_eq (Parse.spanFrom_eq _ _)] at h
+          simp only [Parse.pure_ok] at h
+          obtain ⟨rfl, rfl⟩ := h
+          exact ⟨hR₄, (hP₃.trans (PastSkel.tok hs₄)).of_eq (by rw [skel_tuple, hck]; simp [skel, skelKind])⟩
+        · simp [hp, hb] at h
       | eof => simp at h
 
 /-! ### Operators -/

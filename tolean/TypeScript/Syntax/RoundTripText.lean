@@ -137,6 +137,10 @@ theorem TypeExpr.no_lineBreak : ∀ t : TypeExpr, [] ∉ t.words
     have := TypeExpr.no_lineBreak inner
     simp only [TypeExpr.words, List.mem_cons, List.mem_append, not_or]
     simp [punctWord, this]
+  | .tuple _ ro elems => by
+    have := nil_not_mem_separated "," _ (TypeExpr.no_lineBreakAll elems)
+    cases ro <;> simp only [TypeExpr.words, List.mem_cons, List.mem_append, not_or] <;>
+      simp [identWord, punctWord, this]
 
 theorem TypeExpr.no_lineBreakAll : ∀ ts : List TypeExpr, ∀ x ∈ TypeExpr.wordsOf ts, [] ∉ x
   | [], _, hx => by simp [TypeExpr.wordsOf] at hx

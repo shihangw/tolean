@@ -52,7 +52,32 @@ inductive Ty where
   | tagged (ref : DeclRef) (tags : List String)
   /-- The type of a tag field, one string literal such as `'circle'`. -/
   | literal (value : String)
-deriving BEq, Repr, Inhabited
+  /-- A tuple `[A, B]` of two elements or more. -/
+  | tuple (elems : List Ty)
+deriving Repr, Inhabited
+
+-- `Ty` holds lists of itself, so Lean's derived `BEq` would not reduce in the
+-- kernel, which runs the translator for a certificate. These recurse on the
+-- type instead.
+mutual
+
+def Ty.beq : Ty → Ty → Bool
+  | .bigint, .bigint | .number, .number | .boolean, .boolean | .string, .string | .null, .null => true
+  | .nullable a, .nullable b | .optional a, .optional b | .array a, .array b => Ty.beq a b
+  | .struct a, .struct b | .enum a, .enum b => a == b
+  | .tagged a ts, .tagged b us => a == b && ts == us
+  | .literal a, .literal b => a == b
+  | .tuple as, .tuple bs => Ty.beqList as bs
+  | _, _ => false
+
+def Ty.beqList : List Ty → List Ty → Bool
+  | [], [] => true
+  | a :: as, b :: bs => Ty.beq a b && Ty.beqList as bs
+  | _, _ => false
+
+end
+
+instance : BEq Ty := ⟨Ty.beq⟩
 
 /-- A value of type `source` can stand where `target` is expected. Arrays and
 structures must match exactly. -/
@@ -94,10 +119,15 @@ def Ty.isEqPrimitive : Ty → Bool
   | .boolean | .string | .bigint | .enum _ => true
   | _ => false
 
-/-- An object, which `===` compares by identity. -/
+/-- An object, which `===` compares by identity. A tuple is an array. -/
 def Ty.isObject : Ty → Bool
-  | .array _ | .struct _ | .tagged .. => true
+  | .array _ | .struct _ | .tagged .. | .tuple _ => true
   | _ => false
+
+/-- The element types of a tuple type. -/
+def Ty.tupleElems? : Ty → Option (List Ty)
+  | .tuple ts => some ts
+  | _ => none
 
 /-- What `typeof` gives for a value of type `t`, when `t` is a primitive type
 that a union of primitive types may have as a member. -/
@@ -107,6 +137,8 @@ def Ty.typeOf? : Ty → Option String
   | .boolean => some "boolean"
   | .string => some "string"
   | _ => none
+
+mutual
 
 /-- The Lean type that the output gives a value of type `t`. -/
 def Ty.lean : Ty → IR.Ty
@@ -122,6 +154,13 @@ def Ty.lean : Ty → IR.Ty
   | .enum ref => .enum ref
   | .tagged ref _ => .tagged ref
   | .literal value => .tag value
+  | .tuple ts => .tuple (Ty.leanList ts)
+
+def Ty.leanList : List Ty → List IR.Ty
+  | [] => []
+  | t :: ts => t.lean :: Ty.leanList ts
+
+end
 
 /-- A tagged union of the program, with the file that declares it: a union
 of interfaces, `type T = A | B`, or a union of primitive types,
@@ -488,6 +527,8 @@ def primitiveMembers : TypeExpr → Option (List String)
     | _ => none
   | _ => none
 
+mutual
+
 /-- The type of `t` in the subset. The output writes it as `Ty.lean`. -/
 def translateType (t : TypeExpr) : TM Ty := do
   -- The output needs a name for the inductive type of a literal union, and of
@@ -540,7 +581,17 @@ def translateType (t : TypeExpr) : TM Ty := do
           match ctx.aliases.find? (·.name == name) with
           | some info => return info.type
           | none => unsupportedType t
+  -- A tuple. Lean has no tuple of one element.
+  | .tuple s _ elems =>
+    if elems.length < 2 then reject s "a tuple needs two elements or more"
+    return .tuple (← translateTypes elems)
   | _ => unsupportedType t
+
+def translateTypes : List TypeExpr → TM (List Ty)
+  | [] => return []
+  | t :: ts => return (← translateType t) :: (← translateTypes ts)
+
+end
 
 /-! ### What statements do -/
 
@@ -1144,11 +1195,24 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
     return ⟨.ext (.optField name bind) [o.code], false, type⟩
   | .index s obj key =>
     let o ← translateExpr fuel env none obj
-    let (keyRef, keys, type) ← orReject (recordIndex (← get) o.type) s
-      "only a value of a Record type, such as type T = Record<K, V>, whose key type K this file declares or imports, may be indexed"
-    let k ← translateExpr fuel env (some (.enum keyRef)) key
-    unless k.type == .enum keyRef do reject key.span "the key must have the key type of the Record"
-    return ⟨.ext (.recordGet keyRef keys) [o.code, k.value], false, type⟩
+    match o.type.tupleElems? with
+    -- `t[0]`: an element of a tuple, at an index that is a number literal.
+    | some tys =>
+      let .number _ text := key | reject key.span "the index of a tuple must be a number literal, such as t[0]"
+      let i ← orReject (safeIntegerValue? text) key.span "the index of a tuple must be an integer"
+      match tys[i.toNat]? with
+      | some t =>
+        unless 0 ≤ i do reject key.span s!"the tuple has no element {i}"
+        return ⟨.proj o.code i.toNat tys.length, false, t⟩
+      | none => reject key.span s!"the tuple has no element {i}"
+    -- `r[k]` on a `Record<K, V>`.
+    | none =>
+      let (keyRef, keys, type) ← orReject (recordIndex (← get) o.type) s
+        ("only a tuple, or a value of a Record type, such as type T = Record<K, V>, whose key type K " ++
+          "this file declares or imports, may be indexed")
+      let k ← translateExpr fuel env (some (.enum keyRef)) key
+      unless k.type == .enum keyRef do reject key.span "the key must have the key type of the Record"
+      return ⟨.ext (.recordGet keyRef keys) [o.code, k.value], false, type⟩
   | .unary s op arg =>
     if op == .neg && arg.isInfinity && !env.has "Infinity" then
       return ⟨.numberConstant .negInf, false, .number⟩
@@ -1186,7 +1250,19 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
     | some (recv, method) => translateArrayMethod fuel env expected s recv method args
     | none => translateCall fuel env s callee args
   | .object s props => translateObject fuel env expected s props
-  | .array s elems => translateArray fuel env expected s elems
+  | .array s elems =>
+    match expected with
+    | some (.tuple tys) =>
+      -- A tuple: each element where its own type is expected. In JS the
+      -- tuple is an array.
+      unless elems.length == tys.length do reject s s!"the tuple needs {tys.length} elements"
+      let values ← (elems.zip tys).mapM fun (elem, t) => do
+        let a ← translateExpr fuel env (some t) elem
+        unless a.type.assignableTo t do
+          reject elem.span "the element does not have the tuple's element type"
+        pure a.value
+      return ⟨.tuple values, false, .tuple tys⟩
+    | _ => translateArray fuel env expected s elems
   | _ => reject e.span "unsupported expression"
 
 /-- An array literal, as a list. In JS a literal makes a new array, and only
@@ -1986,7 +2062,7 @@ def typeUsesNumber : TypeExpr → Bool
   | .literal _ (.number _) => true
   | .ref _ name args => isNumberName name || typesUseNumber args
   | .array _ e | .paren _ e => typeUsesNumber e
-  | .union _ members => typesUseNumber members
+  | .union _ members | .tuple _ _ members => typesUseNumber members
   | _ => false
 
 def typesUseNumber : List TypeExpr → Bool
@@ -2010,6 +2086,8 @@ def exprUsesNumber : Expr → Bool
   | .array _ es => exprsUseNumber es
   | .call _ f args => exprUsesNumber f || exprsUseNumber args
   | .paren _ e | .unary _ _ e | .prefix _ _ e | .postfix _ _ e => exprUsesNumber e
+  -- The index of a tuple, `t[0]`, is a position in the output, not a number.
+  | .index _ a (.number ..) => exprUsesNumber a
   | .index _ a b | .binary _ _ a b | .assign _ _ a b => exprUsesNumber a || exprUsesNumber b
   | .cond _ a b c => exprUsesNumber a || exprUsesNumber b || exprUsesNumber c
   | .arrow _ _ ps body =>
@@ -2146,12 +2224,21 @@ prints the result after it. -/
 def translateDecls (m : Module) : TM (List IR.Decl) := do
   return (← m.decls.mapM translateDecl).filterMap id
 
+mutual
+
 /-- The declarations that a type names: interfaces, literal unions and
 tagged unions. -/
 def Ty.declRefs : Ty → List DeclRef
   | .struct r | .enum r | .tagged r _ => [r]
   | .nullable t | .optional t | .array t => t.declRefs
+  | .tuple ts => Ty.declRefsList ts
   | _ => []
+
+def Ty.declRefsList : List Ty → List DeclRef
+  | [] => []
+  | t :: ts => t.declRefs ++ Ty.declRefsList ts
+
+end
 
 /-- The file's own types that a file importing from it needs: the exported
 ones, and the private ones that an exported alias, interface, union or

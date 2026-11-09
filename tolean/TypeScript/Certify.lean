@@ -91,6 +91,8 @@ def sourceIdents (source : String) (target : Edition) : List String :=
     | _ => none
   | .error _ => []
 
+mutual
+
 /-- How a value of a Lean type of the output becomes a `Val`. -/
 def encoderOf (r : Refs) : IR.Ty → Option String
   | .int => some (r.eval "Val.int")
@@ -101,7 +103,18 @@ def encoderOf (r : Refs) : IR.Ty → Option String
   | .list t => do return s!"({r.eval "encList"} {← encoderOf r t})"
   | .struct ref | .enum ref | .tagged ref => some (r.cert s!"encode{ref.name}")
   | .number => some (r.eval "Val.num")
+  | .tuple ts => do return s!"({r.eval "encTuple"} {← elementsEncoder r ts})"
   | .null | .tag _ => none
+
+/-- How the elements of a tuple of the types `ts` become a list of `Val`s. -/
+def elementsEncoder (r : Refs) : List IR.Ty → Option String
+  | [] => none
+  | [t] => do return s!"({r.eval "encLast"} {← encoderOf r t})"
+  | t :: ts => do return s!"({r.eval "encCons"} {← encoderOf r t} {← elementsEncoder r ts})"
+
+end
+
+mutual
 
 /-- How a variable's value becomes a Lean value of type `t` again. -/
 def decoderOf (r : Refs) : IR.Ty → Option String
@@ -113,7 +126,16 @@ def decoderOf (r : Refs) : IR.Ty → Option String
   | .list t => do return s!"({r.eval "decList"} {← decoderOf r t})"
   | .struct ref | .enum ref | .tagged ref => some (r.cert s!"decode{ref.name}")
   | .number => some (r.eval "decNum")
+  | .tuple ts => do return s!"({r.eval "decTuple"} {← elementsDecoder r ts})"
   | .null | .tag _ => none
+
+/-- How a list of `Val`s becomes the elements of a tuple of the types `ts`. -/
+def elementsDecoder (r : Refs) : List IR.Ty → Option String
+  | [] => none
+  | [t] => do return s!"({r.eval "decLast"} {← decoderOf r t})"
+  | t :: ts => do return s!"({r.eval "decCons"} {← decoderOf r t} {← elementsDecoder r ts})"
+
+end
 
 /-- The constructor of `Val` for a value of the primitive type `t`. -/
 def valPattern : IR.Ty → Option String
@@ -245,6 +267,8 @@ partial def exprCallbacks : IR.Expr → List Callback
     exprCallbacks a ++ exprCallbacks b
   | .call _ args | .list args _ | .ext _ args => args.flatMap exprCallbacks
   | .struct fields _ => fields.flatMap (exprCallbacks ·.2)
+  | .tuple es => es.flatMap exprCallbacks
+  | .proj e _ _ => exprCallbacks e
   | .int _ | .none | .bool _ | .string _ | .var _ | .enumCase .. | .tagValue _ => []
 
 /-- The names that `e` reads. -/
@@ -261,6 +285,8 @@ partial def exprNames : IR.Expr → List String
     exprNames a ++ exprNames b
   | .call _ args | .list args _ | .ext _ args => args.flatMap exprNames
   | .struct fields _ => fields.flatMap (exprNames ·.2)
+  | .tuple es => es.flatMap exprNames
+  | .proj e _ _ => exprNames e
   | .int _ | .none | .bool _ | .string _ | .enumCase .. | .tagValue _ => []
 
 /-- The callbacks in a body, inner ones first, in the order of the source. -/
@@ -306,6 +332,11 @@ def splitSteps (decls : List IR.Decl) : Nat → String → IR.Ty → List String
       if inner.isEmpty then []
       else s!"rcases {name} with ⟨{", ".intercalate (fields.map fun (f, _) => s!"{name}_{f}")}⟩" :: inner
     | none => []
+  | fuel + 1, name, .tuple ts =>
+    let parts := (List.range ts.length).map (s!"{name}_{·}")
+    let inner := (parts.zip ts).flatMap fun (n, t) => splitSteps decls fuel n t
+    if inner.isEmpty then []
+    else s!"rcases {name} with ⟨{", ".intercalate parts}⟩" :: inner
   | fuel + 1, name, .tagged ref =>
     let members := decls.findSome? fun
       | .tagged n _ members => if n == ref.name then some members else none

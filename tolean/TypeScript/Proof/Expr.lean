@@ -1425,10 +1425,46 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
           simp only [Eval.eval, this, Option.bind_eq_bind, Option.bind_some]
           cases ov <;> simp only [IR.ExprExt.apply] at hv' <;> first | exact hv' | simp at hv'
       | index sp obj key =>
+        simp only [translateExprCore, bind_ok] at h
+        obtain ⟨o, s₁, ho, h⟩ := h
+        cases hot : o.type.tupleElems? with
+        | some tys =>
+          -- `t[i]`: the element `i` of the tuple, which the array has at `i`.
+          simp only [hot] at h
+          cases key
+          case number sp' text =>
+            simp only [bind_ok, orReject_ok] at h
+            obtain ⟨i, s₂, ⟨hi, rfl⟩, h⟩ := h
+            cases hti : tys[i.toNat]? with
+            | none => simp [hti] at h
+            | some ty =>
+              simp only [hti] at h
+              split at h
+              · next hpos =>
+                simp at h
+                obtain ⟨rfl, -⟩ := h
+                intro ρs ρo v ha hs hv
+                simp only [IR.Expr.eval] at hv
+                cases hx : IR.Expr.eval fs fuel ρo o.code with
+                | none => simp [hx] at hv
+                | some w =>
+                  cases w
+                  case list items =>
+                    simp [hx] at hv
+                    have hobj := ihE _ _ _ _ _ _ ho ρs ρo _ ha hs hx
+                    have hlit : Eval.numberLiteral text = some i := hi
+                    simp only [Eval.eval, hobj, Eval.numberText?, hlit, Option.bind_eq_bind, Option.bind_some,
+                      Eval.elementAt] at hpos ⊢
+                    simp [hpos, hv]
+                  all_goals simp [hx] at hv
+              · simp at h
+          all_goals simp at h
+        | none =>
         -- `r[k]` on a `Record<K, V>`: the evaluator reads the property that
         -- the string names, as the spec does.
-        simp [translateExprCore] at h
-        obtain ⟨o, s₁, ho, _, _, ⟨rfl, rfl⟩, keyRef, keys, ty, _, ⟨-, rfl⟩, k, s₃, hk, h⟩ := h
+        simp only [hot] at h
+        simp at h
+        obtain ⟨_, _, ⟨rfl, rfl⟩, keyRef, keys, ty, _, ⟨-, rfl⟩, k, s₃, hk, h⟩ := h
         split at h
         · simp only [pure_ok] at h
           obtain ⟨rfl, -⟩ := h
@@ -1526,7 +1562,41 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
         exact ihO _ _ _ _ _ _ _ h
       | array sp elems =>
         simp only [translateExprCore] at h
-        exact ihA _ _ _ _ _ _ _ h
+        cases hexp : exp with
+        | none => rw [hexp] at h; exact ihA _ _ _ _ _ _ _ h
+        | some t =>
+          rw [hexp] at h
+          cases t
+          case tuple tys =>
+            -- A tuple: the list of its elements, as the array literal is.
+            simp only at h
+            split at h
+            · next hlen =>
+              simp at h
+              obtain ⟨vals, hvals, hcode⟩ := h
+              intro ρs ρo v ha hs hv
+              rw [← hcode] at hv
+              simp only [IR.Expr.eval] at hv
+              cases hx : IR.Expr.evalList fs fuel ρo vals with
+              | none => simp [hx] at hv
+              | some vs =>
+                simp [hx] at hv
+                subst hv
+                have hel := zip_sim m fs fuel ?hg elems tys _ vals _ (by simpa using hlen) hvals ρs ρo vs ha hs hx
+                · simp [Eval.eval, hel]
+                case hg =>
+                  intro x t c₀ o c₁ hgo
+                  simp at hgo
+                  obtain ⟨a, s₂, hta, hgo⟩ := hgo
+                  split at hgo
+                  · simp at hgo
+                    obtain ⟨rfl, -⟩ := hgo
+                    intro ρs' ρo' w ha' hs' hw
+                    rw [eval_value] at hw
+                    exact ihE _ _ _ _ _ _ hta ρs' ρo' w ha' hs' hw
+                  · simp at hgo
+            · simp at h
+          all_goals exact ihA _ _ _ _ _ _ _ h
       | cond sp test ifTrue ifFalse =>
         simp only [translateExprCore] at h
         simp at h

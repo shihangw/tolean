@@ -55,9 +55,13 @@ inductive Ty (T : Type) where
   /-- The type of a tag field, such as `kind: 'circle'`. A structure leaves
   the field out, because its value never changes. -/
   | tag (value : String)
+  /-- `A × B × C`: a tuple of two elements or more, such as TypeScript's
+  `[A, B, C]`. Lean nests the product to the right, so `[A, [B, C]]` has the
+  same Lean type, and the list of elements keeps the two apart. -/
+  | tuple (elems : List (Ty T))
   /-- A type that the language adds. -/
   | ext (t : T)
-deriving BEq, Repr, Inhabited
+deriving Repr, Inhabited
 
 /-- `+`, `-` and `*` on `Int`. -/
 inductive IntOp where
@@ -169,6 +173,11 @@ inductive Expr (T E : Type) where
   /-- `(e : T)`: `e` with its type written out, where Lean cannot infer it,
   such as a `let` of `none` that nothing else uses. -/
   | ascribe (e : Expr T E) (type : Ty T)
+  /-- `(a, b, c)`: a tuple of two elements or more. -/
+  | tuple (elems : List (Expr T E))
+  /-- `e.2.1`: the element `index` of the tuple `e`, which has `size`
+  elements. -/
+  | proj (e : Expr T E) (index size : Nat)
   /-- `(List.map (fun (x : T) => body) items)`, or another `method` with the
   function `fun (x : T) => body` on the elements of `items`, where `param` is
   `x` and `elem` is `T`. -/
@@ -267,10 +276,19 @@ variable {T E : Type}
 
 /-! ### The declarations that the output names -/
 
+mutual
+
 def Ty.refs : Ty T → List DeclRef
   | .struct r | .enum r | .tagged r => [r]
   | .option t | .optional t | .list t => t.refs
+  | .tuple ts => Ty.refsList ts
   | _ => []
+
+def Ty.refsList : List (Ty T) → List DeclRef
+  | [] => []
+  | t :: ts => t.refs ++ Ty.refsList ts
+
+end
 
 mutual
 
@@ -289,6 +307,8 @@ def Expr.refs : Expr T E → List DeclRef
   | .enumCase r _ => [r]
   | .inject r _ e => r :: e.refs
   | .ascribe e t => e.refs ++ t.refs
+  | .tuple es => Expr.refsList es
+  | .proj e _ _ => e.refs
   | .listMethod _ items _ t body _ => items.refs ++ t.refs ++ body.refs
   | .tagValue _ => []
   | .int _ | .none | .bool _ | .string _ | .var _ => []
@@ -324,12 +344,21 @@ def Decl.refs : Decl T E → List DeclRef
 
 /-! ### The declarations that name the string type -/
 
+mutual
+
 /-- The printed type names the string type. A tag field has a string type,
 but the printer leaves tag fields out. -/
 def Ty.usesString : Ty T → Bool
   | .string => true
   | .option t | .optional t | .list t => t.usesString
+  | .tuple ts => Ty.usesStringList ts
   | _ => false
+
+def Ty.usesStringList : List (Ty T) → Bool
+  | [] => false
+  | t :: ts => t.usesString || Ty.usesStringList ts
+
+end
 
 mutual
 
@@ -346,6 +375,8 @@ def Expr.usesString : Expr T E → Bool
   | .eq a b | .ne a b | .propAnd a b | .propOr a b | .and a b | .or a b =>
     a.usesString || b.usesString
   | .ascribe e t => e.usesString || t.usesString
+  | .tuple es => Expr.usesStringList es
+  | .proj e _ _ => e.usesString
   | .listMethod _ items _ t body _ => items.usesString || t.usesString || body.usesString
   -- The printer leaves a tag value out, as it leaves the tag field out.
   | .int _ | .none | .bool _ | .var _ | .enumCase .. | .tagValue _ => false
@@ -492,6 +523,8 @@ printed code. -/
 class PrintOp (E : Type) where
   print : Names → E → List String → String
 
+mutual
+
 def Ty.print [PrintTy T] (names : Names) : Ty T → String
   | .int => leanName names "Int"
   | .bool => leanName names "Bool"
@@ -508,15 +541,37 @@ def Ty.print [PrintTy T] (names : Names) : Ty T → String
     | (name, some _) => s!"({name} {names.typeParam})"
     | (name, Option.none) => name
   | .tag _ => PrintTy.string (T := T) names
+  | .tuple ts => "(" ++ " × ".intercalate (Ty.printList names ts) ++ ")"
   | .ext t => PrintTy.print names t
+
+def Ty.printList [PrintTy T] (names : Names) : List (Ty T) → List String
+  | [] => []
+  | t :: ts => t.print names :: Ty.printList names ts
+
+end
+
+mutual
 
 /-- The printed type names the type parameter, so a declaration of it must
 bind it. -/
 def Ty.namesParam [PrintTy T] (names : Names) : Ty T → Bool
   | .struct ref | .tagged ref => (names.ref ref).2.isSome
   | .option t | .optional t | .list t => t.namesParam names
+  | .tuple ts => Ty.namesParamList names ts
   | .ext t => PrintTy.namesParam names t
   | _ => false
+
+def Ty.namesParamList [PrintTy T] (names : Names) : List (Ty T) → Bool
+  | [] => false
+  | t :: ts => t.namesParam names || Ty.namesParamList names ts
+
+end
+
+/-- How the output reads the element `index` of a tuple of `size` elements,
+which Lean nests to the right: `.1`, `.2.1`, …, and `.2.2` for the last of
+three. -/
+def projPath (index size : Nat) : String :=
+  String.join (List.replicate index ".2") ++ (if index + 1 < size then ".1" else "")
 
 def IntOp.symbol : IntOp → String
   | .add => "+" | .sub => "-" | .mul => "*"
@@ -648,6 +703,8 @@ def Expr.print (names : Names) : Expr T E → String
   | .push name a => s!"{name} ++ [{a.print names}]"
   | .update op name a => s!"{name} {op.symbol} {a.print names}"
   | .ext op args => PrintOp.print names op (Expr.printList names args)
+  | .tuple es => "(" ++ ", ".intercalate (Expr.printList names es) ++ ")"
+  | .proj e index size => argument (e.print names) ++ projPath index size
 
 def Expr.printList (names : Names) : List (Expr T E) → List String
   | [] => []
