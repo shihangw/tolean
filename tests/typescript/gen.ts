@@ -30,6 +30,8 @@ export type Ty =
   | { k: 'boolean' }
   | { k: 'string' }
   | { k: 'nullable'; of: Ty }
+  /** An optional parameter `p?: T`, only ever the last parameter. */
+  | { k: 'optional'; of: Ty }
   | { k: 'array'; of: Ty }
   | { k: 'struct'; name: string };
 
@@ -53,6 +55,8 @@ export function show(t: Ty): string {
       return t.k;
     case 'nullable':
       return `${show(t.of)} | null`;
+    case 'optional':
+      return `${show(t.of)} | undefined`;
     case 'array':
       return `ReadonlyArray<${show(t.of)}>`;
     case 'struct':
@@ -134,6 +138,8 @@ export class Gen {
           return this.pick(["''", "'a'", "'ab'", "'é'", "'😀'"]);
         case 'nullable':
           return this.chance(0.5) ? 'null' : this.expr(t.of, vars, 0);
+        case 'optional':
+          return this.chance(0.5) ? 'undefined' : this.expr(t.of, vars, 0);
         case 'struct':
           return this.object(t.name, vars, 0);
         case 'array': {
@@ -158,7 +164,9 @@ export class Gen {
     if (calls.length > 0) {
       options.push(() => {
         const f = this.pick(calls);
-        return `${f.name}(${f.params.map((p) => this.expr(p, vars, d)).join(', ')})`;
+        // A call may leave out the optional parameter, which is last.
+        const params = f.params.at(-1)?.k === 'optional' && this.chance(0.4) ? f.params.slice(0, -1) : f.params;
+        return `${f.name}(${params.map((p) => this.expr(p, vars, d)).join(', ')})`;
       });
     }
     options.push(() => `(${this.test(vars, d)} ? ${this.expr(t, vars, d)} : ${this.expr(t, vars, d)})`);
@@ -183,7 +191,7 @@ export class Gen {
         }
         {
           // `x ?? e`: `x` unless it is `null`.
-          const nullable = readable.filter((v) => v.ty.k === 'nullable' && same(v.ty.of, t));
+          const nullable = readable.filter((v) => (v.ty.k === 'nullable' || v.ty.k === 'optional') && same(v.ty.of, t));
           if (nullable.length > 0) {
             options.push(() => `${this.pick(nullable).name} ?? ${this.expr(t, vars, d)}`);
           }
@@ -497,13 +505,31 @@ export class Gen {
         params.push(t);
         vars.push({ name: `p${j}`, ty: t, mutable: false, owned: false });
       }
+      // Sometimes an optional parameter last, which `??` reads and a test of
+      // `undefined` narrows.
+      if (this.chance(0.25)) {
+        const t: Ty = { k: 'optional', of: this.pick([BIGINT, NUMBER, BOOLEAN]) };
+        params.push(t);
+        vars.push({ name: `p${pc}`, ty: t, mutable: false, owned: false });
+      }
       // Sometimes nullable, so that a call can return `null`.
       const ret = this.chance(0.3) && this.structs.length > 0
         ? ({ k: 'struct', name: this.pick(this.structs).name } as Ty)
         : this.chance(0.15) ? ({ k: 'nullable', of: this.pick([BIGINT, NUMBER]) } as Ty) : this.scalar();
-      const signature = vars.map((v) => `${v.name}: ${show(v.ty)}`).join(', ');
+      const signature = vars
+        .map((v) => (v.ty.k === 'optional' ? `${v.name}?: ${show(v.ty.of)}` : `${v.name}: ${show(v.ty)}`))
+        .join(', ');
       const nullable = vars.filter((v) => v.ty.k === 'nullable');
       const lines: Array<string> = [];
+      const optional = vars.find((v) => v.ty.k === 'optional');
+      if (optional !== undefined && this.chance(0.5)) {
+        // `if (x === undefined) return …;` narrows `x` in the rest of the body.
+        const test = this.pick([`${optional.name} === undefined`, `undefined === ${optional.name}`]);
+        lines.push(`if (${test}) {`, `  return ${this.expr(ret, vars, 1)};`, '}');
+        if (optional.ty.k === 'optional') {
+          optional.ty = optional.ty.of;
+        }
+      }
       if (nullable.length > 0 && this.chance(0.5)) {
         // `if (x === null) return …;` narrows `x` in the rest of the body.
         const v = this.pick(nullable);

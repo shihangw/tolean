@@ -360,6 +360,15 @@ def enumObject (members : List (String × String)) : Val N :=
 def functionsOf (p : Program) : List (DeclRef × List String × Stmt) :=
   p.flatMap fun (file, m) => (functions m).map fun (name, params, body) => (⟨file, name⟩, params, body)
 
+/-- The environment of a call: each parameter bound to its argument
+(`FunctionDeclarationInstantiation`, ECMA-262 §10.2.11). A parameter that
+the call passes no argument for is `undefined`, as an optional parameter is
+when a call leaves it out. JS ignores arguments beyond the parameters, but
+TypeScript refuses them, and the model gives no value for such a call. -/
+def bindArgs (params : List String) (vs : List (Val N)) : Option (Env N) :=
+  if params.length < vs.length then none
+  else some (params.zip (vs ++ List.replicate (params.length - vs.length) .undefined)).reverse
+
 mutual
 
 /-- The value of `e`. `fuel` bounds the depth of nested calls, so that the
@@ -490,10 +499,9 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     | fuel + 1 =>
       let key ← resolve m name
       let (params, body) ← (functionsOf m.program).lookup key
-      if params.length != vs.length then none
       -- A `break` or a `continue` outside a loop is an early error
       -- (ECMA-262 §14.8.1 and §14.9.1), so the model gives no value.
-      match ← execStmt { m with file := key.file } fuel (params.zip vs).reverse body with
+      match ← execStmt { m with file := key.file } fuel (← bindArgs params vs) body with
       | .ret v => some v
       | .normal _ | .brk _ | .cont _ => none
   | _ => none
@@ -700,8 +708,7 @@ end
 take the value it returns. -/
 def runIn (p : Program) (key : DeclRef) (args : List (Val N)) (fuel : Nat := 64) : Option (Val N) := do
   let (params, body) ← (functionsOf p).lookup key
-  if params.length != args.length then none
-  match ← execStmt ⟨p, key.file⟩ fuel (params.zip args).reverse body with
+  match ← execStmt ⟨p, key.file⟩ fuel (← bindArgs params args) body with
   | .ret v => some v
   | .normal _ | .brk _ | .cont _ => none
 
