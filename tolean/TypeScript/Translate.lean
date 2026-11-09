@@ -984,11 +984,13 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
   -- the value. The output types a literal by its context, as without it.
   | .asConst _ inner => translateExpr fuel env expected inner
   -- `satisfies T` types the value in the context of `T` and checks it
-  -- against `T`, and the value keeps its own type.
+  -- against `T`, and the value keeps its own type. So a member of a union
+  -- of primitive types is checked as the union's constructor would be, but
+  -- it does not become one: `s satisfies U` is still a `string`.
   | .satisfies s inner type =>
     let t ← translateType type
-    let code ← translateExpr fuel env (some t) inner
-    unless code.type.assignableTo t do
+    let code ← translateExprCore fuel env (some t) inner
+    unless (code.into env.unions (some t)).type.assignableTo t do
       reject s "the value does not have the type that 'satisfies' names"
     return code
   | .bigint _ text =>

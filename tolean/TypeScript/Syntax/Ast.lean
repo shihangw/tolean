@@ -447,7 +447,7 @@ def Expr.inFree : Expr → Bool
   | .assign _ _ target value => target.inFree && value.inFree
   | .array _ es => Expr.inFreeList es
   | .member _ e _ | .optMember _ e _ | .index _ e _ | .call _ e _ | .unary _ _ e | .prefix _ _ e
-  | .postfix _ _ e | .arrow _ _ _ e => e.inFree
+  | .postfix _ _ e | .arrow _ _ _ e | .asConst _ e | .satisfies _ e _ => e.inFree
   | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .object .. | .paren .. => true
 
 def Expr.inFreeList : List Expr → Bool

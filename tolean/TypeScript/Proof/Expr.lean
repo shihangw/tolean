@@ -1267,7 +1267,7 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
         · obtain ⟨rfl, -⟩ := h
           intro ρs ρo v ha hs hv
           rw [Eval.eval]
-          exact ihE _ _ _ _ _ _ hc' ρs ρo v ha hs hv
+          exact ihX _ _ _ _ _ _ hc' ρs ρo v ha hs hv
         · simp at h
       | bigint sp text =>
         simp only [translateExprCore] at h

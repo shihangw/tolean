@@ -1236,6 +1236,8 @@ theorem Expr.inFree_erase : ∀ e : Expr, e.erase.inFree = e.inFree
   | .cond _ a _ c => by simp only [Expr.erase, Expr.inFree, Expr.inFree_erase a, Expr.inFree_erase c]
   | .assign _ _ a b => by simp only [Expr.erase, Expr.inFree, Expr.inFree_erase a, Expr.inFree_erase b]
   | .binary _ _ l r => by simp only [Expr.erase, Expr.inFree, Expr.inFree_erase l, Expr.inFree_erase r]
+  | .asConst _ e => by simp only [Expr.erase, Expr.inFree]; exact Expr.inFree_erase e
+  | .satisfies _ e _ => by simp only [Expr.erase, Expr.inFree]; exact Expr.inFree_erase e
 
 theorem Expr.inFreeList_eraseAll : ∀ es : List Expr, Expr.inFreeList (Expr.eraseAll es) = Expr.inFreeList es
   | [] => rfl

@@ -39,3 +39,16 @@ export function total(a: bigint, b: bigint): bigint {
 export function bigger(a: bigint, b: bigint): boolean {
   return a as const > b;
 }
+
+export type Value = string | bigint;
+
+// A value keeps its own type after `satisfies`, even where the type that it
+// names is a union that holds it.
+export function name(s: string): string {
+  return s satisfies Value;
+}
+
+// Where the context expects the union, the value becomes its member there.
+export function wrap(s: string): Value {
+  return s satisfies Value;
+}
