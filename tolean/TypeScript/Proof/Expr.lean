@@ -1611,21 +1611,22 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
             simp only at h
             split at h
             · next hlen =>
-              simp at h
-              obtain ⟨vals, hvals, hcode⟩ := h
+              simp only [bind_ok, pure_ok] at h
+              obtain ⟨_, _, ⟨-, rfl⟩, codes, s₁, hcodes, hcode, -⟩ := h
               intro ρs ρo v ha hs hv
               rw [← hcode] at hv
               simp only [IR.Expr.eval] at hv
-              cases hx : IR.Expr.evalList fs fuel ρo vals with
+              cases hx : IR.Expr.evalList fs fuel ρo (codes.map Code.value) with
               | none => simp [hx] at hv
               | some vs =>
                 simp [hx] at hv
                 subst hv
-                have hel := zip_sim m fs fuel ?hg elems tys _ vals _ (by simpa using hlen) hvals ρs ρo vs ha hs hx
+                have hel := zip_sim_value m fs fuel ?hg elems tys _ codes _ (by simpa using hlen) hcodes
+                  ρs ρo vs ha hs hx
                 · simp [Eval.eval, hel]
                 case hg =>
                   intro x t c₀ o c₁ hgo
-                  simp at hgo
+                  simp only [bind_ok] at hgo
                   obtain ⟨a, s₂, hta, hgo⟩ := hgo
                   split at hgo
                   · simp at hgo

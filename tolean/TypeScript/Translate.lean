@@ -170,6 +170,15 @@ end
 /-- `t` names a type parameter. -/
 def Ty.isGeneric (t : Ty) : Bool := !t.lean.typeVars.isEmpty
 
+/-- The type that the context expects of a value where `t` is expected, while
+the type parameters that `t` names are not fixed yet: `t` itself when it names
+none, and a tuple's shape, so that an array literal is still read as a tuple.
+Each element of the tuple is then read on its own terms. -/
+def Ty.callExpected (t : Ty) : Option Ty :=
+  if !t.isGeneric then some t
+  else if t matches .tuple _ then some t
+  else none
+
 /-- A type that a type parameter may stand for. `T | null` stands for one
 Lean type, `Option T`, so `T` may not be nullable itself: `Option (Option U)`
 has two values where JS has one `null`. A tag literal is not a type of its
@@ -1245,12 +1254,16 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
       -- A tuple: each element where its own type is expected. In JS the
       -- tuple is an array.
       unless elems.length == tys.length do reject s s!"the tuple needs {tys.length} elements"
-      let values ← (elems.zip tys).mapM fun (elem, t) => do
-        let a ← translateExpr fuel env (some t) elem
-        unless a.type.assignableTo t do
+      -- An element where the type names a type parameter has its own type,
+      -- which the context checks: a call, after it fixes the parameter, or a
+      -- return or a declaration in a generic function.
+      let codes ← (elems.zip tys).mapM fun (elem, t) => do
+        let a ← translateExpr fuel env (if t.isGeneric then t.callExpected else some t) elem
+        unless t.isGeneric || a.type.assignableTo t do
           reject elem.span "the element does not have the tuple's element type"
-        pure a.value
-      return ⟨.tuple values, false, .tuple tys⟩
+        pure a
+      let types := (codes.zip tys).map fun (a, t) => if a.type.assignableTo t then t else a.type
+      return ⟨.tuple (codes.map (·.value)), false, .tuple types⟩
     | _ => translateArray fuel env expected s elems
   | _ => reject e.span "unsupported expression"
 
@@ -1296,10 +1309,11 @@ def translateCall (fuel : Nat) (env : Env) (s : Span) (callee : Expr) (args : Li
   let fn ← orReject (env.functions.find? (·.name == name)) s noCallMessage
   if env.has name then noCall
   unless fn.params.length == args.length do reject s s!"'{name}' takes {fn.params.length} arguments"
-  -- An argument is translated where its parameter's type is expected, unless
-  -- that type names a type parameter: then the arguments' types fix it.
+  -- An argument is translated where its parameter's type is expected. When
+  -- that type names a type parameter, the arguments' types fix it, and only
+  -- the shape of a tuple is expected.
   let codes ← (args.zip fn.params).mapM fun (arg, paramType) =>
-    translateExpr fuel env (if paramType.isGeneric then none else some paramType) arg
+    translateExpr fuel env paramType.callExpected arg
   let sol := Ty.unifyList [] fn.params (codes.map (·.type))
   fn.typeParams.forM fun v => do
     unless (sol.lookup v).isSome do
