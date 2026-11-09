@@ -375,6 +375,9 @@ deriving DecidableEq
 inductive Decl where
   /-- `import { a, b } from "source"`: named imports from another file. -/
   | «import» (span : Span) (names : List ImportName) (source : String)
+  /-- `export { a, type B }`, which exports declarations of the file, or
+  `export { a } from "source"`, which exports names of another file. -/
+  | exports (span : Span) (names : List ImportName) (source : Option String)
   /-- `body` is a `block`. `typeParams` are the names in `<A, B>` after the
   name of a generic function. -/
   | function (span : Span) (exported : Bool) (name : String) (typeParams : List String) (params : List Param)
@@ -485,7 +488,7 @@ def Stmt.isBreak : Stmt → Bool
   | _ => false
 
 def Decl.span : Decl → Span
-  | .import s .. | .function s .. | .interface s .. | .typeAlias s .. | .enum s .. | .exportedVar s _ => s
+  | .import s .. | .exports s .. | .function s .. | .interface s .. | .typeAlias s .. | .enum s .. | .exportedVar s _ => s
   | .stmt st => st.span
 
 /-- `e` reads a property after a `?.`, through property reads and not

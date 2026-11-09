@@ -306,10 +306,17 @@ def resolvePath (file source : String) : Option String := do
   let path ← normalizeSegments dir segments
   return "/".intercalate path
 
-/-- `m` declares `name` as an exported function. -/
+/-- An export list of `m`, `export { name }`, names `name` without `type`. -/
+def listsExport (m : Module) (name : String) : Bool :=
+  m.decls.any fun
+    | .exports _ names none => names.any fun n => !n.typeOnly && n.name == name
+    | _ => false
+
+/-- `m` declares `name` as a function that it exports, with `export` before
+it or in an export list. -/
 def exportsFunction (m : Module) (name : String) : Bool :=
   m.decls.any fun
-    | .function _ exported n _ _ _ _ => exported && n == name
+    | .function _ exported n _ _ _ _ => (exported || listsExport m name) && n == name
     | _ => false
 
 /-- The function that a call of `name` runs, in the file of `s`: the file's

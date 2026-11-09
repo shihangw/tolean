@@ -1416,6 +1416,7 @@ def Stmt.isBlock : Stmt → Bool
 /-- `d` is a declaration that `parseDecl` reads when the target edition is `T`. -/
 def Decl.wf (T : Edition) : Decl → Bool
   | .«import» _ names _ => !names.isEmpty && names.all (fun n => exprName n.name)
+  | .exports _ names _ => !names.isEmpty && names.all (fun n => exprName n.name)
   | .function _ _ name tps params rt body => exprName name && tps.all typeName && params.all Param.wf &&
       (match rt with | some t => t.wf | none => true) && body.isBlock && body.wf T true false
   | .interface _ _ name tps fields => exprName name && tps.all typeName && fields.all (fun f => f.type.wf)
@@ -1439,17 +1440,43 @@ def ReadsD (T : Edition) (p : ParseM Decl) (d : Decl) : Prop :=
     (d.openIf = true → ∀ u ∈ rest.head?, u.kind ≠ .keyword "else") →
     ∃ d' s', p s = .ok d' s' ∧ d'.erase = d.erase ∧ Leaves s s' rest
 
-/-- `parseDecl` reads `export`, when it comes, and goes on with `parseDeclBody`. -/
+/-- `startsExportList` only looks at the next two tokens. -/
+theorem startsExportList_eq (s : ParseState) :
+    Parse.startsExportList s = .ok ((s.rest[0]?.getD s.eof).isPunct "{" ||
+      ((s.rest[0]?.getD s.eof).isIdent "type" && (s.rest[1]?.getD s.eof).isPunct "{")) s := by
+  simp [Parse.startsExportList, Parse.peek, Parse.peekAt, get, getThe, MonadStateOf.get, EStateM.get, bind,
+    EStateM.bind, pure, EStateM.pure]
+
+/-- No export list starts at a token that is not `{`, unless it is `type` and
+a `{` follows it. -/
+theorem startsExportList_no {s : ParseState} {y z : Token} {r : List Token} (hs : s.rest = y :: z :: r)
+    (hy : y.kind ≠ .punct "{") (hz : y.kind = .ident "type" → z.kind ≠ .punct "{") :
+    Parse.startsExportList s = .ok false s := by
+  rw [startsExportList_eq, hs]
+  by_cases ht : y.kind = .ident "type"
+  · simp [Token.isPunct, Token.isIdent, hy, hz ht]
+  · simp [Token.isPunct, Token.isIdent, hy, ht]
+
+/-- No export list starts at a token that is neither `{` nor `type`. -/
+theorem startsExportList_head {s : ParseState} {y : Token} {r : List Token} (hs : s.rest = y :: r)
+    (hy : y.kind ≠ .punct "{") (ht : y.kind ≠ .ident "type") : Parse.startsExportList s = .ok false s := by
+  rw [startsExportList_eq, hs]; simp [Token.isPunct, Token.isIdent, hy, ht]
+
+/-- `parseDecl` reads `export`, when it comes, and goes on with
+`parseDeclBody` when no export list follows. -/
 theorem parseDecl_body {s : ParseState} {x : Token} {r : List Token} (hs : s.rest = x :: r) (hr : r ≠ [])
-    (hx : x.kind ≠ .keyword "import") :
+    (hx : x.kind ≠ .keyword "import")
+    (hb : x.isKeyword "export" = true → Parse.startsExportList (past s x r) = .ok false (past s x r)) :
     Parse.parseDecl s = Parse.parseDeclBody x.span.start (x.isKeyword "export")
       (if x.isKeyword "export" then past s x r else s) := by
   simp only [Parse.parseDecl]
   rw [Parse.bind_eq (Parse.peek_eq hs)]
   rw [if_neg (show ¬ (x.isKeyword "import" = true) by simp [Token.isKeyword, hx]), Parse.pure_bind]
   by_cases he : x.isKeyword "export" = true
-  · rw [if_pos he, Parse.bind_eq (Parse.discard_eq (Parse.advance_cons hs hr)), if_pos he]
-  · rw [if_neg he, Parse.pure_bind, if_neg he]
+  · rw [if_pos he, Parse.bind_eq (Parse.discard_eq (Parse.advance_cons hs hr)), Parse.bind_eq (hb he)]
+    simp only [he, Bool.and_false, Bool.false_eq_true, ↓reduceIte, Parse.pure_bind]
+  · rw [if_neg he, Parse.pure_bind, Parse.bind_eq (startsExportList_eq s)]
+    simp only [he, Bool.false_and, Bool.false_eq_true, ↓reduceIte, Parse.pure_bind]
 
 theorem parseDeclBody_function {s : ParseState} {t : Token} {r : List Token} (start : Pos) (e : Bool)
     (hs : s.rest = t :: r) (ht : t.kind = .keyword "function") :
@@ -1500,7 +1527,7 @@ theorem parseDecl_stmt {T : Edition} (st : Stmt) (hw : st.wf T false false = tru
       simp [hs', hy]
     · simp [Token.isIdent, hx]
   have hne : ¬ (x.isKeyword "export" = true) := by simp [Token.isKeyword, h2]
-  rw [parseDecl_body hs' (by simp [hr]) h1, if_neg hne]
+  rw [parseDecl_body hs' (by simp [hr]) h1 (fun h => absurd h hne), if_neg hne]
   simp only [Parse.parseDeclBody]
   rw [Parse.bind_eq (Parse.peek_eq hs'), Parse.bind_eq (Parse.peekAt_rest _ _)]
   rw [if_neg (show ¬ (x.isKeyword "function" = true) by simp [Token.isKeyword, h3])]
@@ -1513,6 +1540,111 @@ theorem parseDecl_stmt {T : Edition} (st : Stmt) (hw : st.wf T false false = tru
   rw [Parse.bind_eq (Parse.budget_eq _), Parse.bind_eq hp]
   rfl
 
+
+/-- `{ names } from "source";` or `{ names };`, after `export`. -/
+theorem parseExportList_reads (start : Pos) (sp : Span) (names : List ImportName) (source : Option String)
+    (hne : names ≠ []) (hnames : ∀ n ∈ names, n.name ∉ Parse.refusedNames) :
+    ∀ (s : ParseState) (ts rest : List Token), s.rest = ts ++ rest → s.left = s.rest.length →
+      Touching ts (enclose "{" "}" (names.map ImportName.words) ++ fromWords source ++ [punctWord ";"]) →
+      (∀ y ∈ ts.tail, NoBreak y) → rest ≠ [] →
+      ∃ d' s', Parse.parseExportList start s = .ok d' s' ∧ d'.erase = (Decl.exports sp names source).erase ∧
+        Leaves s s' rest := by
+  intro s ts rest hs hl ht hn hr
+  obtain ⟨its, ts₂, rfl, hits, h₂⟩ := Touching.append_split (by simpa [List.append_assoc] using ht)
+  obtain ⟨lb, nts, rb, rfl, hlb, hnts, hrb⟩ := Touching.enclosed (by simpa [enclose] using hits)
+  have hs' : s.rest = lb :: (nts ++ rb :: (ts₂ ++ rest)) := by simpa using hs
+  let s₂ : ParseState := { s with rest := nts ++ rb :: (ts₂ ++ rest), left := s.left - 1, lastStop := lb.span.stop }
+  have hl₂ : s₂.left = s₂.rest.length := by simp [s₂, hl, hs']
+  have hlen := length_items hnts
+  obtain ⟨res, s₃, hit, he, hL₃⟩ := import_loop names (10 * (s₂.left + 1)) #[] s₂ nts (ts₂ ++ rest) rb
+    hnames (by have h4 : s₂.left = nts.length + ts₂.length + rest.length + 1 := (by simp [s₂, hl, hs']; omega); omega)
+    rfl hrb hl₂ hnts
+  have hs₃ : s₃.rest = rb :: (ts₂ ++ rest) := hL₃.rest_eq
+  let s₄ : ParseState := { s₃ with rest := ts₂ ++ rest, left := s₃.left - 1, lastStop := rb.span.stop }
+  have hl₄ : s₄.left = s₄.rest.length := by simp [s₄, hL₃.left_eq]
+  have hres : res.isEmpty = false := by
+    cases hres : res.toList with
+    | nil => rw [hres] at he; cases names with
+      | nil => exact absurd rfl hne
+      | cons _ _ => simp at he
+    | cons _ _ => simp [← Array.toList_eq_nil_iff, hres]
+  have hdone : Leaves s s₄ (ts₂ ++ rest) :=
+    leaves_trans (leaves_advance hs' hl) (leaves_trans hL₃ (leaves_advance hs₃ (by rw [hL₃.left_eq, hs₃])))
+  cases source with
+  | none =>
+    obtain ⟨semi, ts₅, rfl, hsemi, h₅⟩ := Touching.cons_one (by simpa [fromWords, punctWord] using h₂)
+    simp [Touching] at h₅; subst h₅
+    refine ⟨.exports ⟨start, semi.span.stop⟩ res.toList none,
+      { s₄ with rest := rest, left := s₄.left - 1, lastStop := semi.span.stop }, ?_, ?_, ?_⟩
+    · simp only [Parse.parseExportList]
+      rw [Parse.bind_eq (Parse.peek_eq hs')]
+      rw [if_neg (show ¬ (lb.isIdent "type" = true) by simp [Token.isIdent, hlb]), Parse.pure_bind]
+      rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_cons hs' (by simp))), Parse.bind_eq (Parse.budget_eq _),
+        Parse.bind_eq hit, Parse.bind_eq (Parse.expectPunct_ok hs₃ (by simp) hrb)]
+      rw [if_neg (show ¬ (res.isEmpty = true) by simp [hres]), Parse.pure_bind]
+      rw [Parse.bind_eq (Parse.peek_eq (s := s₄) rfl)]
+      rw [if_pos (show (!semi.isIdent "from") = true by simp [Token.isIdent, hsemi])]
+      rw [Parse.bind_eq (endStatement_semi (s := s₄) rfl hr hsemi), Parse.bind_eq (Parse.spanFrom_eq _ _)]
+      rfl
+    · simp [Decl.erase] at he ⊢
+      exact he
+    · exact leaves_trans hdone (leaves_advance (s := s₄) rfl hl₄)
+  | some src =>
+    obtain ⟨fr, ts₃, rfl, hfr, h₃⟩ := Touching.cons_one (by simpa [fromWords, identWord] using h₂)
+    obtain ⟨st, ts₄, rfl, hst, h₄⟩ := Touching.cons_one h₃
+    obtain ⟨semi, ts₅, rfl, hsemi, h₅⟩ := Touching.cons_one (by simpa [punctWord] using h₄)
+    simp [Touching] at h₅; subst h₅
+    let s₅ := past s₄ fr (st :: (semi :: rest))
+    let s₆ := past s₅ st (semi :: rest)
+    refine ⟨.exports ⟨start, semi.span.stop⟩ res.toList (some src),
+      { s₆ with rest := rest, left := s₆.left - 1, lastStop := semi.span.stop }, ?_, ?_, ?_⟩
+    · simp only [Parse.parseExportList]
+      rw [Parse.bind_eq (Parse.peek_eq hs')]
+      rw [if_neg (show ¬ (lb.isIdent "type" = true) by simp [Token.isIdent, hlb]), Parse.pure_bind]
+      rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_cons hs' (by simp))), Parse.bind_eq (Parse.budget_eq _),
+        Parse.bind_eq hit, Parse.bind_eq (Parse.expectPunct_ok hs₃ (by simp) hrb)]
+      rw [if_neg (show ¬ (res.isEmpty = true) by simp [hres]), Parse.pure_bind]
+      rw [Parse.bind_eq (Parse.peek_eq (s := s₄) rfl)]
+      rw [if_neg (show ¬ ((!fr.isIdent "from") = true) by simp [Token.isIdent, hfr]), Parse.pure_bind,
+        Parse.bind_eq (Parse.discard_eq (Parse.advance_eq (s := s₄) (t := fr) (u := st) (r := semi :: rest) rfl)),
+        Parse.bind_eq (Parse.advance_eq (s := s₅) (t := st) (u := semi) (r := rest) rfl)]
+      simp only [hst]
+      rw [Parse.bind_eq (endStatement_semi (s := s₆) rfl hr hsemi), Parse.bind_eq (Parse.spanFrom_eq _ _)]
+      rfl
+    · simp [Decl.erase] at he ⊢
+      exact he
+    · exact leaves_trans hdone (leaves_trans (leaves_advance (s := s₄) rfl hl₄)
+        (leaves_trans (leaves_advance (s := s₅) rfl (by simp [s₅, s₄, hL₃.left_eq]))
+          (leaves_advance (s := s₆) rfl (by simp [s₆, s₅, s₄, hL₃.left_eq]))))
+
+theorem parseDecl_exports {T : Edition} (sp : Span) (names : List ImportName) (source : Option String)
+    (hw : (Decl.exports sp names source).wf T = true) :
+    ReadsD T Parse.parseDecl (.exports sp names source) := by
+  intro s ts rest _ _ hs hl ht hr _
+  simp only [Decl.wf, Bool.and_eq_true, Bool.not_eq_true', List.all_eq_true] at hw
+  obtain ⟨hne, hn⟩ := hw
+  simp only [Decl.wordLines, Decl.lines, List.map_cons, List.map_nil] at ht
+  obtain ⟨h1, hnl⟩ := Laid.one ht
+  obtain ⟨ek, ts', rfl, hek, h₁⟩ := Touching.cons_one (by simpa [keywordWord] using h1)
+  have hs' : s.rest = ek :: (ts' ++ rest) := by simpa using hs
+  obtain ⟨d', s', hp, he, hL⟩ := parseExportList_reads ek.span.start sp names source
+    (by simpa using hne) (fun n hn' => by simpa [exprName] using hn n hn') (past s ek (ts' ++ rest)) ts' rest rfl
+    (by simp [hl, hs']) (by simpa [List.append_assoc] using h₁) (fun y hy => hnl y (by simp [List.mem_of_mem_tail hy]))
+    hr
+  refine ⟨d', s', ?_, he, leaves_trans (leaves_advance hs' hl) hL⟩
+  obtain ⟨lb, ts'', hts, hlb⟩ : ∃ lb ts'', ts' = lb :: ts'' ∧ lb.kind = .punct "{" := by
+    obtain ⟨its, _, rfl, hits, _⟩ := Touching.append_split (by simpa [List.append_assoc] using h₁)
+    obtain ⟨lb, nts, rb, rfl, hlb, _, _⟩ := Touching.enclosed (by simpa [enclose] using hits)
+    exact ⟨lb, _, rfl, hlb⟩
+  subst hts
+  simp only [Parse.parseDecl]
+  rw [Parse.bind_eq (Parse.peek_eq hs')]
+  rw [if_neg (show ¬ (ek.isKeyword "import" = true) by simp [Token.isKeyword, hek]), Parse.pure_bind]
+  rw [if_pos (show ek.isKeyword "export" = true by simp [Token.isKeyword, hek]),
+    Parse.bind_eq (Parse.discard_eq (Parse.advance_cons hs' (by simp))), Parse.bind_eq (startsExportList_eq _)]
+  simp only [List.cons_append, List.getElem?_cons_zero, Option.getD_some, Token.isPunct, hlb, beq_self_eq_true,
+    Bool.true_or, Token.isKeyword, hek, Bool.and_self, ↓reduceIte]
+  exact (Parse.bind_eq hp).trans rfl
 
 theorem parseDecl_import {T : Edition} (sp : Span) (names : List ImportName) (source : String)
     (hw : (Decl.«import» sp names source).wf T = true) :
@@ -1551,7 +1683,7 @@ theorem parseDecl_typeAlias {T : Edition} (sp : Span) (exported : Bool) (name : 
       s _ rest hs hl (by simpa using h1) hnl hr
     have hnmn : nm.newlineBefore = false := hnl nm (by simp) (by rw [hnm]; simp)
     refine ⟨d', s', ?_, by rw [he]; simp [Decl.erase, Token.isKeyword, htk], hL⟩
-    rw [parseDecl_body hs' (by simp) (by rw [htk]; simp),
+    rw [parseDecl_body hs' (by simp) (by rw [htk]; simp) (fun h => by simp [Token.isKeyword, htk] at h),
       if_neg (show ¬ (tk.isKeyword "export" = true) by simp [Token.isKeyword, htk]),
       parseDeclBody_typeAlias _ _ hs' htk hnm hnmn]
     exact hp
@@ -1566,7 +1698,7 @@ theorem parseDecl_typeAlias {T : Edition} (sp : Span) (exported : Bool) (name : 
       hname htps hty s₁ (tk :: nm :: ts₂) rest rfl (by simp [s₁, hl, hs']) (by simpa using h₀) (fun y hy => hnl y (by simp at hy ⊢; simp [hy])) hr
     have hnmn : nm.newlineBefore = false := hnl nm (by simp) (by rw [hnm]; simp)
     refine ⟨d', s', ?_, by rw [he]; simp [Decl.erase, Token.isKeyword, hex], leaves_trans (leaves_advance hs' hl) hL⟩
-    rw [parseDecl_body hs' (by simp) (by rw [hex]; simp),
+    rw [parseDecl_body hs' (by simp) (by rw [hex]; simp) (fun _ => startsExportList_no rfl (by rw [htk]; simp) (fun _ => by rw [hnm]; simp)),
       if_pos (show ex.isKeyword "export" = true by simp [Token.isKeyword, hex]),
       parseDeclBody_typeAlias (s := s₁) _ _ rfl htk hnm hnmn]
     exact hp
@@ -1594,7 +1726,7 @@ theorem parseDecl_interface {T : Edition} (sp : Span) (exported : Bool) (name : 
       htps hfs s (it :: nm :: a₂) fts rest rb (by simpa using hs) hl (by simpa using ha) hfts hrbk hr
     have hnmn : nm.newlineBefore = false := hna nm (by simp) (by rw [hnm]; simp)
     refine ⟨d', s', ?_, by rw [he]; simp [Decl.erase, Token.isKeyword, hit], hL⟩
-    rw [parseDecl_body hs' (by simp) (by rw [hit]; simp),
+    rw [parseDecl_body hs' (by simp) (by rw [hit]; simp) (fun h => by simp [Token.isKeyword, hit] at h),
       if_neg (show ¬ (it.isKeyword "export" = true) by simp [Token.isKeyword, hit]),
       parseDeclBody_interface _ _ hs' hit hnm hnmn]
     exact hp
@@ -1610,7 +1742,7 @@ theorem parseDecl_interface {T : Edition} (sp : Span) (exported : Bool) (name : 
       hrbk hr
     have hnmn : nm.newlineBefore = false := hna nm (by simp) (by rw [hnm]; simp)
     refine ⟨d', s', ?_, by rw [he]; simp [Decl.erase, Token.isKeyword, hex], leaves_trans (leaves_advance hs' hl) hL⟩
-    rw [parseDecl_body hs' (by simp) (by rw [hex]; simp),
+    rw [parseDecl_body hs' (by simp) (by rw [hex]; simp) (fun _ => startsExportList_head rfl (by rw [hit]; simp) (by rw [hit]; simp)),
       if_pos (show ex.isKeyword "export" = true by simp [Token.isKeyword, hex]),
       parseDeclBody_interface (s := s₁) _ _ rfl hit hnm hnmn]
     exact hp
@@ -1647,7 +1779,7 @@ theorem parseDecl_enum {T : Edition} (sp : Span) (exported : Bool) (name : Strin
     obtain ⟨d', s', hp, he, hL⟩ := parseEnum_reads ek.span.start (ek.isKeyword "export") sp name members hw
       s (ek :: nm :: a₂) mts rest rb (by simpa using hs) hl ha hmts hrbk hr
     refine ⟨d', s', ?_, by rw [he]; simp [Decl.erase, Token.isKeyword, hek], hL⟩
-    rw [parseDecl_body hs' (by simp) (by rw [hek]; simp),
+    rw [parseDecl_body hs' (by simp) (by rw [hek]; simp) (fun h => by simp [Token.isKeyword, hek] at h),
       if_neg (show ¬ (ek.isKeyword "export" = true) by simp [Token.isKeyword, hek]),
       parseDeclBody_enum _ _ hs' hek]
     exact hp
@@ -1661,7 +1793,7 @@ theorem parseDecl_enum {T : Edition} (sp : Span) (exported : Bool) (name : Strin
     obtain ⟨d', s', hp, he, hL⟩ := parseEnum_reads ex.span.start (ex.isKeyword "export") sp name members hw
       s₁ (ek :: nm :: a₂) mts rest rb (by simp [s₁]) (by simp [s₁, hl, hs']) h₀ hmts hrbk hr
     refine ⟨d', s', ?_, by rw [he]; simp [Decl.erase, Token.isKeyword, hex], leaves_trans (leaves_advance hs' hl) hL⟩
-    rw [parseDecl_body hs' (by simp) (by rw [hex]; simp),
+    rw [parseDecl_body hs' (by simp) (by rw [hex]; simp) (fun _ => startsExportList_head rfl (by rw [hek]; simp) (by rw [hek]; simp)),
       if_pos (show ex.isKeyword "export" = true by simp [Token.isKeyword, hex]),
       parseDeclBody_enum (s := s₁) _ _ rfl hek]
     exact hp
@@ -1690,7 +1822,7 @@ theorem parseDecl_function {T : Edition} (sp : Span) (exported : Bool) (name : S
     obtain ⟨d', s', hp, he, hL⟩ := parseFunction_reads fk.span.start (fk.isKeyword "export") sp name tps params rt bsp bs
       hname htps hps hrt' hbw s (fk :: a₁) b rest hT hF (by simpa using hs) hl ha hna hb hr
     refine ⟨d', s', ?_, by rw [he]; simp [Decl.erase, Token.isKeyword, hfk], hL⟩
-    rw [parseDecl_body hs' (by simp [hr]) (by rw [hfk]; simp),
+    rw [parseDecl_body hs' (by simp [hr]) (by rw [hfk]; simp) (fun h => by simp [Token.isKeyword, hfk] at h),
       if_neg (show ¬ (fk.isKeyword "export" = true) by simp [Token.isKeyword, hfk]),
       parseDeclBody_function _ _ hs' hfk]
     exact hp
@@ -1705,7 +1837,7 @@ theorem parseDecl_function {T : Edition} (sp : Span) (exported : Bool) (name : S
       (by simpa [keywordWord] using h₀)
       (fun y hy => hna y (by simp at hy ⊢; simp [hy])) hb hr
     refine ⟨d', s', ?_, by rw [he]; simp [Decl.erase, Token.isKeyword, hex], leaves_trans (leaves_advance hs' hl) hL⟩
-    rw [parseDecl_body hs' (by simp) (by rw [hex]; simp),
+    rw [parseDecl_body hs' (by simp) (by rw [hex]; simp) (fun _ => startsExportList_head rfl (by rw [hfk]; simp) (by rw [hfk]; simp)),
       if_pos (show ex.isKeyword "export" = true by simp [Token.isKeyword, hex]),
       parseDeclBody_function (s := s₁) _ _ rfl hfk]
     exact hp
@@ -1728,7 +1860,8 @@ theorem parseDecl_exportedVar {T : Edition} (sp : Span) (d : VarDecl)
     (by simp [s₁, hl, hs']) h₀ (fun y hy => hnl y (by simp at hy ⊢; simp [hy])) hr
   refine ⟨.exportedVar ⟨ex.span.start, s'.lastStop⟩ d', s', ?_, by simp [Decl.erase, he],
     leaves_trans (leaves_advance hs' hl) hL⟩
-  rw [parseDecl_body hs' (by simp) (by rw [hex]; simp),
+  rw [parseDecl_body hs' (by simp) (by rw [hex]; simp) (fun _ => startsExportList_head rfl (by cases hk : d.kind <;> rw [hk] at hkw <;> simp [VarKind.token] at hkw <;> rw [hkw] <;> simp)
+      (by cases hk : d.kind <;> rw [hk] at hkw <;> simp [VarKind.token] at hkw <;> rw [hkw] <;> simp)),
     if_pos (show ex.isKeyword "export" = true by simp [Token.isKeyword, hex])]
   simp only [Parse.parseDeclBody]
   rw [Parse.bind_eq (Parse.peek_eq (s := s₁) rfl), Parse.bind_eq (Parse.peekAt_rest _ _)]
@@ -1748,6 +1881,7 @@ theorem parseDecl_exportedVar {T : Edition} (sp : Span) (d : VarDecl)
 theorem parseDecl_reads {T : Edition} (d : Decl) (hw : d.wf T = true) : ReadsD T Parse.parseDecl d := by
   cases d with
   | «import» sp names source => exact parseDecl_import sp names source hw
+  | exports sp names source => exact parseDecl_exports sp names source hw
   | function sp e n tps ps rt b => exact parseDecl_function sp e n tps ps rt b hw
   | interface sp e n tps fs => exact parseDecl_interface sp e n tps fs hw
   | typeAlias sp e n tps t => exact parseDecl_typeAlias sp e n tps t hw
@@ -1771,6 +1905,11 @@ theorem Decl.first {T : Edition} (d : Decl) (hw : d.wf T = true) {ts : List Toke
     cases ts with
     | nil => simp [Decl.wordLines, Decl.lines, keywordWord, identWord] at hk
     | cons x ts' => refine ⟨x, ts', rfl, ?_⟩; simp [Decl.wordLines, Decl.lines, keywordWord, identWord] at hk; rw [hk.1]; simp
+  | exports sp names source =>
+    have hk := h.kinds
+    cases ts with
+    | nil => simp [Decl.wordLines, Decl.lines, keywordWord] at hk
+    | cons x ts' => refine ⟨x, ts', rfl, ?_⟩; simp [Decl.wordLines, Decl.lines, keywordWord] at hk; rw [hk.1]; simp
   | function sp e n tps ps rt b =>
     have hk := h.kinds
     cases ts with

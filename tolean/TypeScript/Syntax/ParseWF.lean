@@ -4204,6 +4204,13 @@ theorem DeclOK.import {names : List ImportName} {source : String} (h : ∀ n ∈
   intro l hl; simp only [Decl.lines, List.mem_singleton] at hl; subst hl
   words_ok
 
+theorem DeclOK.exports {names : List ImportName} {source : Option String} (h : ∀ n ∈ names, WordsOK T n.words) :
+    DeclOK T (.exports sp names source) := by
+  have := wordsOK_enclose (T := T) (o := "{") (c := "}") (items := names.map ImportName.words) (by decide)
+    (by decide) (by intro x hx; obtain ⟨n, hn, rfl⟩ := List.mem_map.mp hx; exact h n hn)
+  intro l hl; simp only [Decl.lines, List.mem_singleton] at hl; subst hl
+  cases source <;> simp only [fromWords] <;> words_ok
+
 theorem DeclOK.function {exported : Bool} {name : String} {tps : List String} {params : List Param}
     {rt : Option TypeExpr} {body : Stmt} (hn : Word.ok T (identWord name) = true)
     (htp : WordsOK T (typeParamWords tps)) (hp : ∀ p ∈ params, WordsOK T p.words)
@@ -4898,6 +4905,110 @@ theorem parseImport_wf {T : Edition} (start : Pos) : GivesD T (Parse.parseImport
       exact ⟨by simpa using hne, fun n hn => (hnw n (by simpa using hn)).1⟩
     | _ => simp at h
 
+theorem parseExportList_wf {T : Edition} (start : Pos) : GivesD T (Parse.parseExportList start) := by
+  intro s d s' hR hT hF hL h
+  simp only [Parse.parseExportList] at h
+  obtain ⟨x, r, hs⟩ := hR.cons
+  rw [Parse.bind_eq (Parse.peek_eq hs)] at h
+  by_cases hct : x.isIdent "type" = true
+  · have hxne : x.kind ≠ .eof := by simp only [Token.isIdent, beq_iff_eq] at hct; rw [hct]; simp
+    have HR := hR.past hs (hR.more hs hxne)
+    have HK : Kept s (past s x r) := Kept.past _ _ _
+    rw [if_pos hct, Parse.bind_eq (Parse.discard_eq (advance_past hR hs hxne)), Parse.pure_bind] at h
+    rw [Parse.bind_ok] at h; obtain ⟨_, s₂, hadv, h⟩ := h
+    obtain ⟨hR₂, hK₂⟩ := discard_advance_ready HR hadv
+    rw [Parse.bind_eq (Parse.budget_eq _), Parse.bind_ok] at h
+    obtain ⟨names, s₃, hns, h⟩ := h
+    obtain ⟨hR₃, hK₃, hnw⟩ := (iterate_inv
+      (I := fun a st => Ready st ∧ Kept s₂ st ∧ ∀ n ∈ a.toList, exprName n.name = true ∧ WordsOK T n.words)
+      (fun _ _ _ _ _ hI hst => importStep_wf (s₀ := s₂) (hK₂.target_eq.trans (HK.target_eq.trans hT)) hI hst) _ #[]
+      _ names s₃ ⟨hR₂, Kept.refl _, by simp⟩ hns).1
+    rw [Parse.bind_ok] at h; obtain ⟨close, s₄, hcl, h⟩ := h
+    obtain ⟨_, r₄, _, rfl, hR₄⟩ := expectPunct_inv hR₃ hcl
+    obtain ⟨hne, h⟩ := fail_inv h
+    have hwf : ∀ sp src, (Decl.exports sp names.toList src).wf T = true := by
+      intro _ _
+      simp only [Decl.wf, Bool.and_eq_true, List.all_eq_true, Bool.not_eq_true']
+      exact ⟨by simpa using hne, fun n hn => (hnw n (by simpa using hn)).1⟩
+    have hok : ∀ sp' src', DeclOK T (.exports sp' names.toList src') :=
+      fun _ _ => DeclOK.exports (fun n hn => (hnw n (by simpa using hn)).2)
+    have hKK : Kept s (past s₃ close r₄) := HK.trans (hK₂.trans (hK₃.trans (Kept.past _ _ _)))
+    obtain ⟨z, r₅, hs₅⟩ := hR₄.cons
+    rw [Parse.bind_eq (Parse.peek_eq hs₅)] at h
+    by_cases hfr : (!z.isIdent "from") = true
+    · rw [if_pos hfr, Parse.bind_ok] at h; obtain ⟨_, s₇, hend, h⟩ := h
+      obtain ⟨hR₇, hK₇⟩ := endStatement_inv hR₄ hend
+      rw [Parse.bind_eq (Parse.spanFrom_eq _ _)] at h
+      simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h
+      exact ⟨hR₇, hKK.trans hK₇, hwf _ _, hok _ _⟩
+    · rw [if_neg hfr, Parse.pure_bind] at h
+      have hzne : z.kind ≠ .eof := by simp [Token.isIdent] at hfr; rw [hfr]; simp
+      have hR₅ := hR₄.past hs₅ (hR₄.more hs₅ hzne)
+      rw [Parse.bind_eq (Parse.discard_eq (advance_past hR₄ hs₅ hzne)), Parse.bind_ok] at h
+      obtain ⟨t, s₆, hadv2, h⟩ := h
+      obtain ⟨w, r₆, hs₆⟩ := hR₅.cons
+      obtain ⟨rfl, hpast⟩ := advance_inv hR₅ hs₆ hadv2
+      generalize hk : t.kind = k at h hpast
+      cases k with
+      | string source =>
+        obtain ⟨rfl, hR₆⟩ := hpast (by simp)
+        simp only at h
+        rw [Parse.bind_ok] at h; obtain ⟨_, s₇, hend, h⟩ := h
+        obtain ⟨hR₇, hK₇⟩ := endStatement_inv hR₆ hend
+        rw [Parse.bind_eq (Parse.spanFrom_eq _ _)] at h
+        simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h
+        exact ⟨hR₇, hKK.trans ((Kept.past _ _ _).trans ((Kept.past _ _ _).trans hK₇)),
+          hwf _ _, hok _ _⟩
+      | _ => simp at h
+  · rw [if_neg hct, Parse.pure_bind] at h
+    have HR := hR
+    have HK : Kept s s := Kept.refl _
+    rw [Parse.bind_ok] at h; obtain ⟨_, s₂, hadv, h⟩ := h
+    obtain ⟨hR₂, hK₂⟩ := discard_advance_ready HR hadv
+    rw [Parse.bind_eq (Parse.budget_eq _), Parse.bind_ok] at h
+    obtain ⟨names, s₃, hns, h⟩ := h
+    obtain ⟨hR₃, hK₃, hnw⟩ := (iterate_inv
+      (I := fun a st => Ready st ∧ Kept s₂ st ∧ ∀ n ∈ a.toList, exprName n.name = true ∧ WordsOK T n.words)
+      (fun _ _ _ _ _ hI hst => importStep_wf (s₀ := s₂) (hK₂.target_eq.trans (HK.target_eq.trans hT)) hI hst) _ #[]
+      _ names s₃ ⟨hR₂, Kept.refl _, by simp⟩ hns).1
+    rw [Parse.bind_ok] at h; obtain ⟨close, s₄, hcl, h⟩ := h
+    obtain ⟨_, r₄, _, rfl, hR₄⟩ := expectPunct_inv hR₃ hcl
+    obtain ⟨hne, h⟩ := fail_inv h
+    have hwf : ∀ sp src, (Decl.exports sp names.toList src).wf T = true := by
+      intro _ _
+      simp only [Decl.wf, Bool.and_eq_true, List.all_eq_true, Bool.not_eq_true']
+      exact ⟨by simpa using hne, fun n hn => (hnw n (by simpa using hn)).1⟩
+    have hok : ∀ sp' src', DeclOK T (.exports sp' names.toList src') :=
+      fun _ _ => DeclOK.exports (fun n hn => (hnw n (by simpa using hn)).2)
+    have hKK : Kept s (past s₃ close r₄) := HK.trans (hK₂.trans (hK₃.trans (Kept.past _ _ _)))
+    obtain ⟨z, r₅, hs₅⟩ := hR₄.cons
+    rw [Parse.bind_eq (Parse.peek_eq hs₅)] at h
+    by_cases hfr : (!z.isIdent "from") = true
+    · rw [if_pos hfr, Parse.bind_ok] at h; obtain ⟨_, s₇, hend, h⟩ := h
+      obtain ⟨hR₇, hK₇⟩ := endStatement_inv hR₄ hend
+      rw [Parse.bind_eq (Parse.spanFrom_eq _ _)] at h
+      simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h
+      exact ⟨hR₇, hKK.trans hK₇, hwf _ _, hok _ _⟩
+    · rw [if_neg hfr, Parse.pure_bind] at h
+      have hzne : z.kind ≠ .eof := by simp [Token.isIdent] at hfr; rw [hfr]; simp
+      have hR₅ := hR₄.past hs₅ (hR₄.more hs₅ hzne)
+      rw [Parse.bind_eq (Parse.discard_eq (advance_past hR₄ hs₅ hzne)), Parse.bind_ok] at h
+      obtain ⟨t, s₆, hadv2, h⟩ := h
+      obtain ⟨w, r₆, hs₆⟩ := hR₅.cons
+      obtain ⟨rfl, hpast⟩ := advance_inv hR₅ hs₆ hadv2
+      generalize hk : t.kind = k at h hpast
+      cases k with
+      | string source =>
+        obtain ⟨rfl, hR₆⟩ := hpast (by simp)
+        simp only at h
+        rw [Parse.bind_ok] at h; obtain ⟨_, s₇, hend, h⟩ := h
+        obtain ⟨hR₇, hK₇⟩ := endStatement_inv hR₆ hend
+        rw [Parse.bind_eq (Parse.spanFrom_eq _ _)] at h
+        simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h
+        exact ⟨hR₇, hKK.trans ((Kept.past _ _ _).trans ((Kept.past _ _ _).trans hK₇)),
+          hwf _ _, hok _ _⟩
+      | _ => simp at h
+
 theorem parseDecl_wf {T : Edition} : GivesD T Parse.parseDecl := by
   intro s d s' hR hT hF hL h
   obtain ⟨x, r, hs⟩ := hR.cons
@@ -4912,6 +5023,13 @@ theorem parseDecl_wf {T : Edition} : GivesD T Parse.parseDecl := by
   have hT₁ : s₁.target = T := hK₁.target_eq.trans hT
   have hF₁ : s₁.inFunction = false := hK₁.inFunction_eq.trans hF
   have hL₁ : s₁.loopDepth = 0 := hK₁.loopDepth_eq.trans hL
+  rw [Parse.bind_eq (startsExportList_eq s₁)] at h
+  split at h
+  · rw [Parse.bind_ok] at h; obtain ⟨d', s₂, hd, h⟩ := h
+    simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h
+    obtain ⟨hR₂, hK₂, hw, hok⟩ := parseExportList_wf _ _ _ _ hR₁ hT₁ hF₁ hL₁ hd
+    exact ⟨hR₂, hK₁.trans hK₂, hw, hok⟩
+  rw [Parse.pure_bind] at h
   obtain ⟨y, r₁, hs₁⟩ := hR₁.cons
   simp only [Parse.parseDeclBody] at h
   rw [Parse.bind_eq (Parse.peek_eq hs₁), Parse.bind_eq (Parse.peekAt_rest s₁ 1)] at h
