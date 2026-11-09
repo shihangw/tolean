@@ -4,17 +4,16 @@
 
 Pure TypeScript in practice uses much more of the language than the subset
 accepts. A function is pure when it does no input or output and depends only
-on its arguments. But the subset refused generics, recursion, callbacks,
-closures, exceptions, `Map`, `switch` and template literals, and pure code
-uses all of them. A survey of one pure module of about 2,000 lines, which
-folds a list of events into a state, found the features below in almost
-every file. Tolean could translate none of its fourteen files. Only two small
-functions went through, after someone rewrote them into the subset. What
-Tolean translates now is in the [TypeScript guide](../typescript/README.md).
+on its arguments. A survey of one pure module of about 2,000 lines, which
+folds a list of events into a state, found generics, recursion, callbacks,
+closures, exceptions, `Map`, `switch` and template literals in almost every
+file. When the survey ran, Tolean could translate none of its fourteen files.
+What Tolean translates now is in the [TypeScript
+guide](../typescript/README.md).
 
-This plan lists what to add so that such a module translates without a
-rewrite. It also states the rules that each addition must keep, and the
-behavior that Tolean must still refuse.
+This plan lists what is left to add so that such a module translates
+without a rewrite. It also states the rules that each addition must keep,
+and the behavior that Tolean must still refuse.
 
 ## The rules for every addition
 
@@ -60,7 +59,7 @@ exact. A construct leaves these tables when Tolean translates it, and the
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| An arrow function passed to a function of the program, which reads only `const` values and parameters. The translator accepts arrow functions now only as the callback of an array method. | `fun` | A callback that changes a variable outside itself |
+| An arrow function passed to a function of the program, which reads only `const` values and parameters | `fun` | A callback that changes a variable outside itself |
 | A local function or arrow function stored in a `const` and called later, which changes `let` variables of the enclosing function | A Lean function that takes those variables and returns their new values. The translator lifts it out and threads the variables through each call. | A local function that escapes: one that is returned, stored in a field or passed on |
 | A function-typed field or parameter, such as a comparator in an options object | A field of a function type | A function value that changes state when it is called |
 | A destructured parameter, such as `{ a, b }: Options` | A pattern on the structure | Defaults inside the pattern |
@@ -70,17 +69,14 @@ exact. A construct leaves these tables when Tolean translates it, and the
 | A rest parameter `...xs: T[]`, and a spread argument `f(...xs)` | A `List T` argument | A spread argument to a function whose parameters are not a rest parameter |
 | A class with `readonly` fields and methods that do not change `this` | A structure and one function per method | Methods that change `this`, inheritance other than from `Error`, getters, setters and `static` state |
 
-
 ### Generics
 
 | TypeScript | Lean | Refused |
 |---|---|---|
 | A type parameter with a constraint, such as `T extends Named` | Nothing in the first version | All constraints, until the open question below is settled |
 
-A generic function's type parameters are implicit arguments of its `def`, as
-the number type `N` is. A generic interface's become arguments of its
-`structure`. A constraint is harder, because TypeScript checks it by the
-shape of a type and Lean has no subtyping by shape.
+A constraint is hard to translate, because TypeScript checks it by the shape
+of a type and Lean has no subtyping by shape.
 
 ### Recursion
 
@@ -132,15 +128,14 @@ pieces](shared-core.md) adds exceptions to the IR, and this stage uses them.
 
 ### Strings
 
-Tolean translates `string` to `JSString`, the list of a string's UTF-16 code
-units, and `===` compares the lists. [A decision
-record](../decisions/2026-11-06-jsstring.md) explains why. Each operation
-below becomes a function on that list, written from its algorithm in the
-spec.
+Each operation below becomes a function on `JSString`, the list of UTF-16
+code units that Tolean translates a `string` to, written from its algorithm
+in the spec. [A decision record](../decisions/2026-11-06-jsstring.md)
+explains the model.
 
-One part of the model is left. The lexer refuses a literal that holds a lone
-surrogate, such as `"\uD800"`, because the syntax tree keeps the text of a
-literal as a Lean `String`. Such a literal should print its code units.
+A literal that holds a lone surrogate, such as `"\uD800"`, should print its
+code units. The lexer refuses it now, because the syntax tree keeps the text
+of a literal as a Lean `String`.
 
 | TypeScript | Lean | Refused |
 |---|---|---|
@@ -217,21 +212,19 @@ be exact:
 
 Each step ends with all checks green, with both translators in agreement, and
 with no change to the output of code that is already in the subset. A fix
-for output that Lean does not accept may change it too: the binders of
-a loop now carry their types ([#59](https://github.com/shihangw/tolean/pull/59)),
-and a `let` of a `T | null` local writes its type where Lean would infer
-another ([#63](https://github.com/shihangw/tolean/pull/63)).
+for output that Lean does not accept may change that output too.
 
 Each step has a priority. The P0 steps come first, then the P1 steps, then
 the P2 steps. Steps with the same priority keep the order of their numbers.
+The steps keep the numbers that pull requests refer to, so a finished step
+leaves a gap.
 
-2. **P0.** Types and narrowing: optional parameters and `undefined` as a
-   value, the rest of a chain after `?.`, a `default` that assigns to `never`,
-   `export { … }` and re-exports, `as const` and `satisfies`, and `Record`
-   over a union of string literals.
+2. **P0.** Types and narrowing: `T | undefined` as a type, a test of
+   `undefined` that narrows inside an expression, `a?.[i]` and `f?.()`, and
+   re-exports.
 3. **P1.** Type guards.
-4. **P0.** The other array methods without `sort`, such as `reduce` and
-   `slice`, indexing, and object spread.
+4. **P0.** The array methods without `sort`, such as `reduce` and `slice`,
+   indexing, and object spread.
 5. **P0.** Control flow: the counted `for` loop.
 6. **P0.** Errors, after step 3 of the [shared core plan](shared-core.md) adds
    exceptions to the IR.
@@ -273,10 +266,9 @@ variables and in maps.
 - Should a comparator that is not one of the two shapes be accepted when the
   project supplies a proof that it is consistent?
 - How should the spec model `const` in full? Its environment holds values
-  only. Since [#63](https://github.com/shihangw/tolean/pull/63), the spec gives
-  no value for a block where a statement after a `const` declaration assigns
-  it, which covers `=`, `+=`, `??=` and `++`. A `for (const x of xs)` loop is
-  left: an assignment to `x` in the body writes the new value, where Node
+  only. The spec gives no value for a block where a statement after a `const`
+  declaration assigns it, which covers `=`, `+=`, `??=` and `++`. A
+  `for (const x of xs)` loop is left: an assignment to `x` in the body writes the new value, where Node
   throws a `TypeError`. The translator refuses it, so no certified program
   meets the gap, but `interpreter.test.ts` asks the interpreter to agree with
   Node on every program that it parses. The same check on the loop's body
