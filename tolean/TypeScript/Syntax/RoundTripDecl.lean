@@ -721,6 +721,134 @@ theorem parseInterface_reads (start : Pos) (exported : Bool) (sp : Span) (name :
     exact he
 
 
+/-! ### Enums -/
+
+/-- `Name = "value",`: a member of an enum, and the `,` after it. -/
+theorem parseEnumMember_reads (m : EnumMember) (s : ParseState) (ts rest : List Token)
+    (hs : s.rest = ts ++ rest) (hl : s.left = s.rest.length) (ht : Touching ts m.words)
+    (hr : rest ≠ []) :
+    ∃ m' s', Parse.parseEnumMember s = .ok m' s' ∧ m'.erase = m.erase ∧ Leaves s s' rest := by
+  obtain ⟨sp, name, value⟩ := m
+  simp only [EnumMember.words] at ht
+  obtain ⟨nm, ts₁, rfl, hnm, h₁⟩ : ∃ nm ts₁, ts = nm :: ts₁ ∧ [nm.kind] = propertyName name ∧
+      Touching ts₁ [punctWord "=", [.string value], punctWord ","] := by
+    obtain ⟨a, b, rfl, ha, _, hb⟩ := ht
+    have hlen := congrArg List.length ha
+    rw [List.length_map, length_propertyName] at hlen
+    match a, ha with
+    | [nm], ha => exact ⟨nm, b, rfl, by simpa using ha, hb⟩
+  obtain ⟨eq, ts₂, rfl, heq, h₂⟩ := Touching.cons_one (by simpa [punctWord] using h₁)
+  obtain ⟨str, ts₃, rfl, hstr, h₃⟩ := Touching.cons_one h₂
+  obtain ⟨comma, ts₄, rfl, hcomma, h₄⟩ := Touching.cons_one (by simpa [punctWord] using h₃)
+  simp [Touching] at h₄; subst h₄
+  have hs' : s.rest = nm :: eq :: str :: comma :: rest := by simpa using hs
+  let s₁ := past s nm (eq :: str :: comma :: rest)
+  let s₂ := past s₁ eq (str :: comma :: rest)
+  let s₃ := past s₂ str (comma :: rest)
+  refine ⟨⟨⟨nm.span.start, str.span.stop⟩, name, value⟩,
+    { s₃ with rest := rest, left := s₃.left - 1, lastStop := comma.span.stop }, ?_, by simp [EnumMember.erase],
+    leaves_trans (leaves_advance hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))
+      (leaves_trans (leaves_advance (s := s₂) rfl (by simp [s₂, s₁, hl, hs']))
+        (leaves_advance (s := s₃) rfl (by simp [s₃, s₂, s₁, hl, hs']))))⟩
+  simp only [Parse.parseEnumMember]
+  rw [Parse.bind_eq (Parse.peek_eq hs'), Parse.bind_eq (readPropertyName_ok hs' hnm),
+    Parse.bind_eq (Parse.peek_eq (s := s₁) rfl)]
+  rw [if_pos (show eq.isPunct "=" = true by simp [Token.isPunct, heq]), Parse.pure_bind]
+  rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_eq (s := s₁) rfl)),
+    Parse.bind_eq (Parse.advance_eq (s := s₂) rfl)]
+  simp only [hstr]
+  rw [Parse.bind_eq (Parse.spanFrom_eq _ _), Parse.bind_eq (Parse.peek_eq (s := s₃) rfl)]
+  rw [if_pos (show comma.isPunct "," = true by simp [Token.isPunct, hcomma])]
+  rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_cons (s := s₃) rfl hr))]
+  rfl
+
+/-- A member starts with its name, so not with `}` and not at the end of the file. -/
+theorem EnumMember.first (m : EnumMember) :
+    ∃ k, m.words.flatten.head? = some k ∧ k ≠ .punct "}" ∧ k ≠ .eof := by
+  by_cases h : m.name ∈ Lex.reservedWords
+  · exact ⟨.keyword m.name, by simp [EnumMember.words, propertyName, h, keywordWord], by simp, by simp⟩
+  · exact ⟨.ident m.name, by simp [EnumMember.words, propertyName, h, identWord], by simp, by simp⟩
+
+/-- The loop of `parseEnum` reads the members of an enum, one on each line, which a `}` follows. -/
+theorem enumMember_loop :
+    ∀ (members : List EnumMember) (fuel : Nat) (acc : Array EnumMember) (s : ParseState)
+      (ts rest : List Token) (c : Token),
+      members.length < fuel → s.rest = ts ++ c :: rest → c.kind = .punct "}" → s.left = s.rest.length →
+      Laid ts (members.map EnumMember.words) →
+      ∃ res s', Parse.iterate fuel acc (Parse.blockStep Parse.parseEnumMember) s = .ok res s' ∧
+        res.toList.map EnumMember.erase = (acc.toList ++ members).map EnumMember.erase ∧
+        Leaves s s' (c :: rest) := by
+  intro members fuel acc s ts rest c hlen hs hc hl ht
+  have hflat : ∀ l : List EnumMember, (l.map fun m => [m.words]).flatten = l.map EnumMember.words := by
+    intro l; induction l with
+    | nil => rfl
+    | cons m l ih => simp [ih]
+  refine blockStep_loop (lines := fun m => [m.words]) (Inv := fun _ => True) (fun _ _ => trivial) ?_ hc members
+    (fun y hy => hy) fuel acc s ts hlen trivial hs hl (by rw [hflat]; exact ht)
+  intro m _ _ _ s a b _ hs hl ha _
+  obtain ⟨ha', _⟩ := Laid.one ha
+  obtain ⟨k, hk, hk1, hk2⟩ := EnumMember.first m
+  obtain ⟨x, a', rfl, hx⟩ : ∃ x a', a = x :: a' ∧ x.kind = k := by
+    have hk' : (a.map (·.kind)).head? = some k := by rw [ha'.kinds]; exact hk
+    cases a with
+    | nil => simp at hk'
+    | cons x a' => simp at hk'; exact ⟨x, a', rfl, hk'⟩
+  obtain ⟨m₁, s₁, hp, he, hL₁⟩ := parseEnumMember_reads m s (x :: a') (b ++ c :: rest) hs hl ha' (by simp)
+  exact ⟨m₁, s₁, x, a', rfl, by rw [hx]; exact hk1, by rw [hx]; exact hk2, hp, he, hL₁⟩
+
+theorem Laid.length_members : ∀ {members : List EnumMember} {ts : List Token},
+    Laid ts (members.map EnumMember.words) → members.length ≤ ts.length
+  | [], _, _ => by simp
+  | m :: members, ts, h => by
+    obtain ⟨a, b, rfl, ha, _, _, hb⟩ := Laid.cons (by simpa using h)
+    obtain ⟨k, hk, _, _⟩ := EnumMember.first m
+    have : a ≠ [] := by
+      intro e; subst e
+      have h0 : m.words.flatten = [] := by have := ha.kinds; simpa using this.symm
+      rw [h0] at hk; simp at hk
+    have := Laid.length_members hb
+    cases a with
+    | nil => exact absurd rfl ‹_›
+    | cons _ _ => simp; omega
+
+/-- `enum`, a name and `{`, the members on their own lines, and `}`. -/
+theorem parseEnum_reads (start : Pos) (exported : Bool) (sp : Span) (name : String)
+    (members : List EnumMember) (hname : exprName name = true) :
+    ∀ (s : ParseState) (ts mts rest : List Token) (rb : Token), s.rest = ts ++ mts ++ rb :: rest →
+      s.left = s.rest.length → Touching ts [keywordWord "enum", identWord name, punctWord "{"] →
+      Laid mts (members.map EnumMember.words) → rb.kind = .punct "}" → rest ≠ [] →
+      ∃ d' s', Parse.parseEnum start exported s = .ok d' s' ∧
+        d'.erase = (Decl.enum sp exported name members).erase ∧ Leaves s s' rest := by
+  intro s ts mts rest rb hs hl ht hm hrb hr
+  have hname' : name ∉ Parse.refusedNames := by simpa [exprName] using hname
+  obtain ⟨ek, ts₁, rfl, _, h₁⟩ := Touching.cons_one (by simpa [keywordWord] using ht)
+  obtain ⟨nm, ts₂, rfl, hnm, h₂⟩ := Touching.cons_one (by simpa [identWord] using h₁)
+  obtain ⟨lb, ts₃, rfl, hlb, h₃⟩ := Touching.cons_one (by simpa [punctWord] using h₂)
+  simp [Touching] at h₃; subst h₃
+  have hs' : s.rest = ek :: nm :: lb :: (mts ++ rb :: rest) := by simpa using hs
+  let s₁ := past s ek (nm :: (lb :: (mts ++ rb :: rest)))
+  let s₂ := past s₁ nm (lb :: (mts ++ rb :: rest))
+  let s₃ : ParseState := { s₂ with rest := mts ++ rb :: rest, left := s₂.left - 1, lastStop := lb.span.stop }
+  have hl₃ : s₃.left = s₃.rest.length := by simp [s₃, s₂, s₁, hl, hs']
+  have hlen := Laid.length_members hm
+  obtain ⟨res, s₄, hit, he, hL₄⟩ := enumMember_loop members (10 * (s₃.left + 1)) #[] s₃ mts rest rb
+    (by have : s₃.left = mts.length + rest.length + 1 := by simp [s₃, s₂, s₁, hl, hs']; omega
+        omega) rfl hrb hl₃ hm
+  have hs₄ : s₄.rest = rb :: rest := hL₄.rest_eq
+  refine ⟨.enum ⟨start, rb.span.stop⟩ exported name res.toList,
+    { s₄ with rest := rest, left := s₄.left - 1, lastStop := rb.span.stop }, ?_, ?_,
+    leaves_trans (leaves_advance hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))
+      (leaves_trans (leaves_advance (s := s₂) rfl (by simp [s₂, s₁, hl, hs'])) (leaves_trans hL₄
+        (leaves_advance hs₄ (by rw [hL₄.left_eq, hs₄])))))⟩
+  · simp only [Parse.parseEnum]
+    rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_eq hs')), Parse.bind_eq (readName_ok (s := s₁) rfl hnm hname')]
+    rw [Parse.bind_eq (Parse.expectPunct_ok (s := s₂) rfl (by simp) hlb), Parse.bind_eq (Parse.budget_eq _),
+      Parse.bind_eq hit, Parse.bind_eq (Parse.expectPunct_ok hs₄ hr hrb), Parse.bind_eq (Parse.spanFrom_eq _ _)]
+    rfl
+  · simp [Decl.erase] at he ⊢
+    exact he
+
+
 /-! ### Imports -/
 
 /-- The tokens of an imported name: `type` and the name, or the name. -/
@@ -952,7 +1080,7 @@ same line, so `parseDecl` hands it to `parseStatement`. -/
 theorem Stmt.declStart {T : Edition} (st : Stmt) (hw : st.wf T false false = true) {ts : List Token}
     (ht : Laid ts st.wordLines) :
     ∃ x ts', ts = x :: ts' ∧ x.kind ≠ .keyword "import" ∧ x.kind ≠ .keyword "export" ∧
-      x.kind ≠ .keyword "function" ∧
+      x.kind ≠ .keyword "function" ∧ x.kind ≠ .keyword "enum" ∧
       ((x.kind = .ident "interface" ∨ x.kind = .ident "type") → ∃ y ts'', ts' = y :: ts'' ∧ y.isAnyIdent = false) := by
   cases st with
   | exprStmt sp e =>
@@ -968,7 +1096,8 @@ theorem Stmt.declStart {T : Edition} (st : Stmt) (hw : st.wf T false false = tru
     have hxk : startsExprStmt (some x.kind) = true := by
       have : e.tokens.head? = some x.kind := by simp only [Expr.tokens, ← hke]; simp
       rw [← this]; exact hk
-    refine ⟨x, ets' ++ [semi], by simp, ?_, ?_, ?_, fun h => ?_⟩
+    refine ⟨x, ets' ++ [semi], by simp, ?_, ?_, ?_, ?_, fun h => ?_⟩
+    · intro h; rw [h] at hxk; simp [startsExprStmt] at hxk
     · intro h; rw [h] at hxk; simp [startsExprStmt] at hxk
     · intro h; rw [h] at hxk; simp [startsExprStmt] at hxk
     · intro h; rw [h] at hxk; simp [startsExprStmt] at hxk
@@ -988,7 +1117,8 @@ theorem Stmt.declStart {T : Edition} (st : Stmt) (hw : st.wf T false false = tru
     obtain ⟨h1, _⟩ := Laid.one ht
     simp only [VarDecl.words, VarKind.word_eq] at h1
     obtain ⟨x, ts', rfl, hx, _⟩ := Touching.cons_one (by simpa using h1)
-    refine ⟨x, ts', rfl, ?_, ?_, ?_, fun h => ?_⟩
+    refine ⟨x, ts', rfl, ?_, ?_, ?_, ?_, fun h => ?_⟩
+    · rw [hx]; cases d.kind <;> simp [VarKind.token]
     · rw [hx]; cases d.kind <;> simp [VarKind.token]
     · rw [hx]; cases d.kind <;> simp [VarKind.token]
     · rw [hx]; cases d.kind <;> simp [VarKind.token]
@@ -1013,6 +1143,7 @@ def Decl.wf (T : Edition) : Decl → Bool
       (match rt with | some t => t.wf | none => true) && body.isBlock && body.wf T true false
   | .interface _ _ name fields => exprName name && fields.all (fun f => f.type.wf)
   | .typeAlias _ _ name ty => exprName name && ty.wf
+  | .enum _ _ name _ => exprName name
   | .exportedVar _ d => d.wf T
   | .stmt s => s.wf T false false
 
@@ -1079,7 +1210,7 @@ theorem parseDecl_stmt {T : Edition} (st : Stmt) (hw : st.wf T false false = tru
     ReadsD T Parse.parseDecl (.stmt st) := by
   intro s ts rest hT hF hs hl ht hr hopen
   have ht' : Laid ts st.wordLines := by simpa [Decl.wordLines, Decl.lines, Stmt.wordLines] using ht
-  obtain ⟨x, ts', rfl, h1, h2, h3, h4⟩ := Stmt.declStart st hw ht'
+  obtain ⟨x, ts', rfl, h1, h2, h3, h5, h4⟩ := Stmt.declStart st hw ht'
   obtain ⟨st', s', hp, he, hL⟩ := parseStatement_budget (loop := false) st hw s _ rest hT hF (fun h => by cases h)
     hs hl ht' hr hopen
   refine ⟨.stmt st', s', ?_, by simp [Decl.erase, he], hL⟩
@@ -1100,6 +1231,7 @@ theorem parseDecl_stmt {T : Edition} (st : Stmt) (hw : st.wf T false false = tru
       !(s.rest[1]?.getD s.eof).newlineBefore)) = true) by simp [hc "interface" (.inl rfl)])]
   rw [if_neg (show ¬ ((x.isIdent "type" && ((s.rest[1]?.getD s.eof).isAnyIdent &&
       !(s.rest[1]?.getD s.eof).newlineBefore)) = true) by simp [hc "type" (.inr rfl)])]
+  rw [if_neg (show ¬ (x.isKeyword "enum" = true) by simp [Token.isKeyword, h5])]
   rw [if_neg hne]
   rw [Parse.bind_eq (Parse.budget_eq _), Parse.bind_eq hp]
   rfl
@@ -1206,6 +1338,57 @@ theorem parseDecl_interface {T : Edition} (sp : Span) (exported : Bool) (name : 
     exact hp
 
 
+theorem parseDeclBody_enum {s : ParseState} {t nm : Token} {r : List Token} (start : Pos)
+    (e : Bool) (hs : s.rest = t :: nm :: r) (ht : t.kind = .keyword "enum") :
+    Parse.parseDeclBody start e s = Parse.parseEnum start e s := by
+  simp only [Parse.parseDeclBody]
+  rw [Parse.bind_eq (Parse.peek_eq hs), Parse.bind_eq (Parse.peekAt_rest _ _)]
+  rw [if_neg (show ¬ (t.isKeyword "function" = true) by simp [Token.isKeyword, ht])]
+  rw [if_neg (show ¬ ((t.isIdent "interface" && _) = true) by simp [Token.isIdent, ht])]
+  rw [if_neg (show ¬ ((t.isIdent "type" && _) = true) by simp [Token.isIdent, ht])]
+  rw [if_pos (show t.isKeyword "enum" = true by simp [Token.isKeyword, ht])]
+
+theorem parseDecl_enum {T : Edition} (sp : Span) (exported : Bool) (name : String) (members : List EnumMember)
+    (hw : (Decl.enum sp exported name members).wf T = true) :
+    ReadsD T Parse.parseDecl (.enum sp exported name members) := by
+  intro s ts rest _ _ hs hl ht hr _
+  simp only [Decl.wf] at hw
+  simp only [Decl.wordLines, Decl.lines, List.map_cons, List.map_append, List.map_map, List.map_nil] at ht
+  obtain ⟨a, b, rfl, ha, _, _, hb⟩ := Laid.cons ht
+  obtain ⟨mts, b₂, rfl, hmts, hb₂, _⟩ :=
+    Laid.append (l₁ := members.map EnumMember.words) (by simpa [Function.comp_def] using hb)
+  obtain ⟨hrb, _⟩ := Laid.one hb₂
+  obtain ⟨rb, b₂', rfl, hrbk, h'⟩ := Touching.cons_one (by simpa [punctWord] using hrb)
+  simp [Touching] at h'; subst h'
+  cases exported with
+  | false =>
+    simp only [exportWords, Bool.false_eq_true, ↓reduceIte, List.nil_append] at ha
+    obtain ⟨ek, a₁, rfl, hek, h₁⟩ := Touching.cons_one (by simpa [keywordWord] using ha)
+    obtain ⟨nm, a₂, rfl, _, _⟩ := Touching.cons_one (by simpa [identWord] using h₁)
+    have hs' : s.rest = ek :: nm :: (a₂ ++ (mts ++ rb :: rest)) := by simpa using hs
+    obtain ⟨d', s', hp, he, hL⟩ := parseEnum_reads ek.span.start (ek.isKeyword "export") sp name members hw
+      s (ek :: nm :: a₂) mts rest rb (by simpa using hs) hl ha hmts hrbk hr
+    refine ⟨d', s', ?_, by rw [he]; simp [Decl.erase, Token.isKeyword, hek], hL⟩
+    rw [parseDecl_body hs' (by simp) (by rw [hek]; simp),
+      if_neg (show ¬ (ek.isKeyword "export" = true) by simp [Token.isKeyword, hek]),
+      parseDeclBody_enum _ _ hs' hek]
+    exact hp
+  | true =>
+    simp only [exportWords, ↓reduceIte, List.singleton_append] at ha
+    obtain ⟨ex, a₀, rfl, hex, h₀⟩ := Touching.cons_one (by simpa [keywordWord] using ha)
+    obtain ⟨ek, a₁, rfl, hek, h₁⟩ := Touching.cons_one (by simpa [keywordWord] using h₀)
+    obtain ⟨nm, a₂, rfl, _, _⟩ := Touching.cons_one (by simpa [identWord] using h₁)
+    have hs' : s.rest = ex :: ek :: nm :: (a₂ ++ (mts ++ rb :: rest)) := by simpa using hs
+    let s₁ := past s ex (ek :: (nm :: (a₂ ++ (mts ++ rb :: rest))))
+    obtain ⟨d', s', hp, he, hL⟩ := parseEnum_reads ex.span.start (ex.isKeyword "export") sp name members hw
+      s₁ (ek :: nm :: a₂) mts rest rb (by simp [s₁]) (by simp [s₁, hl, hs']) h₀ hmts hrbk hr
+    refine ⟨d', s', ?_, by rw [he]; simp [Decl.erase, Token.isKeyword, hex], leaves_trans (leaves_advance hs' hl) hL⟩
+    rw [parseDecl_body hs' (by simp) (by rw [hex]; simp),
+      if_pos (show ex.isKeyword "export" = true by simp [Token.isKeyword, hex]),
+      parseDeclBody_enum (s := s₁) _ _ rfl hek]
+    exact hp
+
+
 theorem parseDecl_function {T : Edition} (sp : Span) (exported : Bool) (name : String) (params : List Param)
     (rt : Option TypeExpr) (body : Stmt) (hw : (Decl.function sp exported name params rt body).wf T = true) :
     ReadsD T Parse.parseDecl (.function sp exported name params rt body) := by
@@ -1274,6 +1457,7 @@ theorem parseDecl_exportedVar {T : Edition} (sp : Span) (d : VarDecl)
     rw [if_neg (show ¬ (kw.isKeyword "function" = true) by simp [Token.isKeyword, hkw])]
     rw [if_neg (show ¬ ((kw.isIdent "interface" && _) = true) by simp [Token.isIdent, hkw])]
     rw [if_neg (show ¬ ((kw.isIdent "type" && _) = true) by simp [Token.isIdent, hkw])]
+    rw [if_neg (show ¬ (kw.isKeyword "enum" = true) by simp [Token.isKeyword, hkw])]
     rw [if_pos (show ex.isKeyword "export" = true by simp [Token.isKeyword, hex])]
     rw [if_pos (show (kw.isKeyword "const" || kw.isIdent "let") = true by simp [Token.isKeyword, Token.isIdent, hkw]),
       Parse.pure_bind, Parse.bind_eq hp, Parse.bind_eq (Parse.spanFrom_eq _ _)]
@@ -1287,6 +1471,7 @@ theorem parseDecl_reads {T : Edition} (d : Decl) (hw : d.wf T = true) : ReadsD T
   | function sp e n ps rt b => exact parseDecl_function sp e n ps rt b hw
   | interface sp e n fs => exact parseDecl_interface sp e n fs hw
   | typeAlias sp e n t => exact parseDecl_typeAlias sp e n t hw
+  | enum sp e n ms => exact parseDecl_enum sp e n ms hw
   | exportedVar sp d => exact parseDecl_exportedVar sp d hw
   | stmt st => exact parseDecl_stmt st hw
 
@@ -1317,6 +1502,11 @@ theorem Decl.first {T : Edition} (d : Decl) (hw : d.wf T = true) {ts : List Toke
     | nil => cases e <;> simp [Decl.wordLines, Decl.lines, exportWords, keywordWord, identWord] at hk
     | cons x ts' => refine ⟨x, ts', rfl, ?_⟩; cases e <;> simp [Decl.wordLines, Decl.lines, exportWords, keywordWord, identWord] at hk <;> rw [hk.1] <;> simp
   | typeAlias sp e n t =>
+    have hk := h.kinds
+    cases ts with
+    | nil => cases e <;> simp [Decl.wordLines, Decl.lines, exportWords, keywordWord, identWord] at hk
+    | cons x ts' => refine ⟨x, ts', rfl, ?_⟩; cases e <;> simp [Decl.wordLines, Decl.lines, exportWords, keywordWord, identWord] at hk <;> rw [hk.1] <;> simp
+  | enum sp e n ms =>
     have hk := h.kinds
     cases ts with
     | nil => cases e <;> simp [Decl.wordLines, Decl.lines, exportWords, keywordWord, identWord] at hk

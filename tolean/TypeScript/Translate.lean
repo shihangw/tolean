@@ -170,6 +170,14 @@ structure FnInfo where
 
 def FnInfo.ref (f : FnInfo) : DeclRef := ⟨f.file, f.name⟩
 
+/-- A string enum whose members code may read, such as `Color.Red`: its
+name in the file, its declaration, and the name and the string of each
+member. -/
+structure EnumValue where
+  name : String
+  ref : DeclRef
+  members : List (String × String)
+
 /-- The names in scope, in the order they were declared, and the functions
 that a call may name. -/
 structure Env where
@@ -177,6 +185,9 @@ structure Env where
   functions : List FnInfo := []
   /-- The tagged unions whose tags a test may read. -/
   unions : List UnionInfo := []
+  /-- The string enums whose members code may read: the file's own, and the
+  ones it imports without `type`. -/
+  enums : List EnumValue := []
 
 def Env.lookup (env : Env) (name : String) : Option Local := env.locals.find? (·.name == name)
 
@@ -189,12 +200,15 @@ def Env.narrow (env : Env) (name : String) (type : Ty) : Env :=
   { env with locals := env.locals.map fun l => if l.name == name then { l with type } else l }
 
 /-- A literal union of strings of the program, `type T = 'a' | 'b'`, with the
-file that declares it and its strings in the order of the source. -/
+file that declares it and its strings in the order of the source. A string
+enum, `enum T { A = 'a', B = 'b' }`, is one too, with the name and the
+string of each member in `named`. -/
 structure EnumInfo where
   file : String
   name : String
   exported : Bool := false
   members : List String
+  named : Option (List (String × String)) := none
 
 def EnumInfo.ref (i : EnumInfo) : DeclRef := ⟨i.file, i.name⟩
 
@@ -237,6 +251,8 @@ structure Ctx where
   /-- The tagged unions that the file declares or imports. -/
   unions : List UnionInfo := []
   functions : List FnInfo := []
+  /-- The string enums whose members the file's code may read. -/
+  enumValues : List EnumValue := []
   /-- The files that this file may import from, by path. -/
   interfaces : List (String × Interface) := []
   currentFunction : String := ""
@@ -431,6 +447,8 @@ def declare (env : Env) (span : Span) (name : String) (binding : Binding) (type 
   -- such a use as the function or the global, so it refuses the local.
   if env.functions.any (·.name == name) || isGlobalName name then
     reject span s!"'{name}' would hide the function or global {name} in its whole block; choose another name"
+  if env.enums.any (·.name == name) then
+    reject span s!"'{name}' would hide the enum {name} in its whole block; choose another name"
   let _ ← checkLocalName span name
   -- A local of type `null` is always `null`, and Lean gives it the type
   -- `Option Empty`, which no other value of a nullable type has.
@@ -885,7 +903,8 @@ are the same string in JS. -/
 def enumOperand (known : List EnumInfo) (c : Code) (other : Ty) : Code :=
   match c.code, other with
   | .string m, .enum ref =>
-    if (known.find? (·.ref == ref)).any (·.members.contains m) then ⟨.enumCase ref m, false, .enum ref⟩
+    if (known.find? (·.ref == ref)).any fun i => i.named.isNone && i.members.contains m then
+      ⟨.enumCase ref m, false, .enum ref⟩
     else c
   | _, _ => c
 
@@ -966,6 +985,13 @@ def optFieldType (s : Span) (t : Ty) (name : String) : TM (Bool × Ty) := do
       reject s "'?.' may not read a nullable field, because the value could be null or undefined"
     return (false, .optional v)
   | none => reject s "only fields of interfaces declared in this file, or exported by the files before it, may be read"
+
+/-- The string enum that `obj` names, as in `T.A`: a name that no local binds.
+The interpreter reads a global such as `NaN` before an enum, so an enum may
+not have such a name, which `declareTopLevel` refuses too. -/
+def enumOf? (env : Env) : Expr → Option EnumValue
+  | .ident _ n => if env.has n || isGlobalName n then none else env.enums.find? (·.name == n)
+  | _ => none
 
 /-- The function on lists that the method `name` of an array becomes, for the
 methods that take a callback. -/
@@ -1065,6 +1091,8 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
     match expected with
     | some (.enum ref) | some (.nullable (.enum ref)) =>
       let info ← orReject ((← get).knownEnums.find? (·.ref == ref)) s "unknown literal union"
+      if info.named.isSome then
+        reject s s!"a value of the enum {info.name} is one of its members, such as {info.name}.A, not a string"
       unless info.members.contains value do
         reject s s!"'{value}' is not one of the strings of {info.name}"
       return ⟨.enumCase ref value, false, .enum ref⟩
@@ -1084,6 +1112,13 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
         reject s "an owned array may be read only in the return value"
       return ⟨.var name, false, l.type⟩
   | .member s obj name =>
+    match enumOf? env obj with
+    -- `T.A`, a member of a string enum: its string, which the output writes
+    -- as the constructor that the string names.
+    | some e =>
+      let value ← orReject (e.members.lookup name) s s!"'{name}' is not a member of the enum {e.name}"
+      return ⟨.enumCase e.ref value, false, .enum e.ref⟩
+    | none =>
     -- JS skips the rest of a chain after a `?.` that meets null, so
     -- `a?.b.c` is not `(a?.b).c`, and the subset leaves the chain out.
     if obj matches .optMember .. then reject s "a chain after '?.', such as a?.b.c, is not supported"
@@ -1705,11 +1740,15 @@ def isolated {A : Type} (x : TM A) : TM A := do
   set c
   return r
 
+/-- The file has declared or imported `name`. -/
+def Ctx.taken (ctx : Ctx) (name : String) : Bool :=
+  ctx.structs.any (·.name == name) || ctx.aliases.any (·.name == name) ||
+    ctx.enums.any (·.name == name) || ctx.unions.any (·.name == name) ||
+    ctx.functions.any (·.name == name)
+
 def declareTopLevel (s : Span) (name : String) : TM Unit := do
   let ctx ← get
-  if ctx.structs.any (·.name == name) || ctx.aliases.any (·.name == name) ||
-      ctx.enums.any (·.name == name) || ctx.unions.any (·.name == name) ||
-      ctx.functions.any (·.name == name) then
+  if ctx.taken name then
     reject s s!"'{name}' is declared twice"
   -- A declaration of the module hides the global of the same name, and the
   -- subset reads these names as the globals.
@@ -1774,6 +1813,44 @@ def translateEnum (s : Span) (exported : Bool) (name : String) (members : List S
   | none =>
     modify fun c => { c with enums := c.enums ++ [{ file := c.file, name, exported, members }] }
     return .enum name members
+
+/-- Why the subset refuses the members of a string enum, and where: an enum
+needs a member, two members may not have one name, and a member may not have
+the name of a property of `Object.prototype`. The object of the enum is an
+ordinary object, and setting `__proto__` on it sets its prototype instead of
+a property. Each string must also name a constructor, as for a literal
+union, and two members may not have one string, because the output names a
+constructor by its string. -/
+def enumRefusal (s : Span) (members : List EnumMember) : Option (Span × String) :=
+  if members.isEmpty then some (s, "an enum needs a member")
+  else match members.findSome? fun m =>
+      if (members.filter (·.name == m.name)).length > 1 then some (m.span, s!"'{m.name}' is declared twice")
+      else if Eval.objectPrototypeNames.contains m.name then
+        some (m.span, s!"a member may not be named '{m.name}', the name of a property of Object.prototype")
+      else if !memberOK m.value then
+        some (m.span, s!"'{m.value}' cannot name a Lean constructor; a string enum needs strings such as 'open'")
+      else if (members.filter (·.value == m.value)).length > 1 then
+        some (m.span, s!"two members have the string '{m.value}'")
+      else none with
+    | some r => some r
+    | none => (badMember (members.map (·.value))).map (s, ·)
+
+/-- `enum T { A = 'a', B = 'b' }`. TypeScript compiles it to an object with a
+property for each member, whose value is the member's string, so `T.A` is
+`'a'`. The output declares the inductive type of the literal union
+`'a' | 'b'`, and `T.A` becomes its constructor `T.a`. -/
+def translateStringEnum (s : Span) (exported : Bool) (name : String) (members : List EnumMember) :
+    TM IR.Decl := do
+  let name ← checkName s name
+  declareTopLevel s name
+  match enumRefusal s members with
+  | some (sp, reason) => reject sp reason
+  | none =>
+    let pairs := members.map fun m => (m.name, m.value)
+    modify fun c => { c with
+      enums := c.enums ++ [{ file := c.file, name, exported, members := pairs.map (·.2), named := some pairs }],
+      enumValues := c.enumValues ++ [{ name, ref := ⟨c.file, name⟩, members := pairs }] }
+    return .enum name (pairs.map (·.2))
 
 /-- The interfaces of a union `A | B` of interfaces that the file declares or
 imports, or none when a member is something else. -/
@@ -1883,8 +1960,10 @@ def translateFunction (s : Span) (exported : Bool) (name : String) (params : Lis
   let name ← checkName s name
   declareTopLevel s name
   -- The scope of the body, and the parameters in Lean and as types.
+  let ctx ← get
+  let start : Env := { functions := ctx.functions, unions := ctx.knownUnions, enums := ctx.enumValues }
   let (env, leanParams, types) ← isolated <| params.foldlM
-    (init := (({ functions := (← get).functions, unions := (← get).knownUnions } : Env), ([] : List (String × IR.Ty)), ([] : List Ty)))
+    (init := (start, ([] : List (String × IR.Ty)), ([] : List Ty)))
     fun (env, leanParams, types) p => do
       let type ← orReject p.type p.span "parameters must be plain, typed identifiers"
       let paramName ← checkLocalName p.span p.name
@@ -1990,14 +2069,23 @@ def moduleUsesNumber (m : Module) : Bool :=
     | .interface _ _ name fields =>
       isNumberName name || fields.any fun f => isNumberName f.name || typeUsesNumber f.type
     | .typeAlias _ _ name type => isNumberName name || typeUsesNumber type
+    | .enum _ _ name _ => isNumberName name
     | .exportedVar _ d => varUsesNumber d
     | .stmt st => stmtUsesNumber st
 
 /-! ### The module -/
 
-/-- `import { a, type B } from "./x.ts"`. Each name becomes a function or an
-interface of the file, as the file it names exports it. That file must be
-translated first. -/
+/-- The string enum named `name` that `iface` exports, with the name and the
+string of each member. -/
+def Interface.stringEnum? (iface : Interface) (name : String) : Option (EnumInfo × List (String × String)) := do
+  let info ← iface.enums.find? fun e => e.name == name && e.exported
+  let pairs ← info.named
+  return (info, pairs)
+
+/-- `import { a, type B } from "./x.ts"`. Each name becomes a function, a
+string enum or a type of the file, as the file it names exports it. That file
+must be translated first. -/
+
 def translateImport (s : Span) (names : List ImportName) (source : String) : TM Unit := do
   let ctx ← get
   let target ← orReject (Eval.resolvePath ctx.file source) s
@@ -2028,6 +2116,13 @@ def translateImport (s : Span) (names : List ImportName) (source : String) : TM 
     else
       if iface.structs.any fun i => i.name == n.name && i.exported then
         reject n.span s!"'{n.name}' is an interface; import it with 'type {n.name}'"
+      match iface.stringEnum? n.name with
+      -- A string enum is a value too: its object, whose members code reads.
+      | some (info, pairs) =>
+        modify fun c => { c with
+          enums := c.enums ++ [{ info with exported := false }],
+          enumValues := c.enumValues ++ [{ name := n.name, ref := info.ref, members := pairs }] }
+      | none =>
       if iface.aliases.any (·.name == n.name) || (iface.enums.any fun e => e.name == n.name && e.exported) ||
           iface.unions.any fun u => u.name == n.name && u.exported then
         reject n.span s!"'{n.name}' is a type; import it with 'type {n.name}'"
@@ -2042,7 +2137,8 @@ def translateDecl : Decl → TM (Option IR.Decl)
   | .typeAlias s exported name type => some <$> translateAlias s exported name type
   | .function s exported name params ret body =>
     some <$> translateFunction s exported name params ret body
-  | d => reject d.span "only imports, interfaces, types and functions may appear at top level"
+  | .enum s exported name members => some <$> translateStringEnum s exported name members
+  | d => reject d.span "only imports, interfaces, types, enums and functions may appear at top level"
 
 /-- The declarations of `m`, translated. This is the translator as a function
 from one syntax tree to another: `translate` parses the source before it and

@@ -346,6 +346,13 @@ structure Field where
   optional : Bool
   type : TypeExpr
 
+/-- A member of a string enum: `Name = "value"`. -/
+structure EnumMember where
+  span : Span
+  name : String
+  value : String
+deriving DecidableEq
+
 /-- One name of `import { a, type B } from "./x.ts"`. `typeOnly` is true for
 `type B`, and for every name of `import type { … }`. -/
 structure ImportName where
@@ -362,6 +369,8 @@ inductive Decl where
       (returnType : Option TypeExpr) (body : Stmt)
   | interface (span : Span) (exported : Bool) (name : String) (fields : List Field)
   | typeAlias (span : Span) (exported : Bool) (name : String) (type : TypeExpr)
+  /-- `enum Name { A = "a", B = "b" }`: an enum whose members are strings. -/
+  | enum (span : Span) (exported : Bool) (name : String) (members : List EnumMember)
   | exportedVar (span : Span) (decl : VarDecl)
   | stmt (stmt : Stmt)
 
@@ -459,7 +468,7 @@ def Stmt.isBreak : Stmt → Bool
   | _ => false
 
 def Decl.span : Decl → Span
-  | .import s .. | .function s .. | .interface s .. | .typeAlias s .. | .exportedVar s _ => s
+  | .import s .. | .function s .. | .interface s .. | .typeAlias s .. | .enum s .. | .exportedVar s _ => s
   | .stmt st => st.span
 
 /-- `e` without the parentheses around it. -/

@@ -252,11 +252,31 @@ class Printer {
         [this.type(s.type)],
       );
     }
+    if (ts.isEnumDeclaration(s)) {
+      const exported = this.modifiers(s, [ts.SyntaxKind.ExportKeyword]).size > 0;
+      return this.node(
+        'enum',
+        s,
+        [this.name(s.name), ...(exported ? ['export'] : [])],
+        s.members.map((m) => this.enumMember(m)),
+      );
+    }
     if (ts.isVariableStatement(s)) {
       const exported = this.modifiers(s, [ts.SyntaxKind.ExportKeyword]).size > 0;
       return this.variable(s, exported);
     }
     return this.statement(s);
+  }
+
+  // `Name = "value"`. A name that is a reserved word is an identifier here.
+  private enumMember(m: ts.EnumMember): Sexp {
+    if (!ts.isIdentifier(m.name)) {
+      refuse(m.name, 'enum member name');
+    }
+    if (m.initializer === undefined || !ts.isStringLiteral(m.initializer)) {
+      refuse(m, 'enum member without a string value');
+    }
+    return this.node('member', m, [m.name.text, JSON.stringify(m.initializer.text)], []);
   }
 
   // `import { a, type B } from "./x.ts"` and `import type { B } from "./x.ts"`.

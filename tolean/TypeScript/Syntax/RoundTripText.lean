@@ -419,6 +419,15 @@ theorem Decl.lineOK : ∀ d : Decl, ∀ l ∈ d.lines, LineOK l.2
       simpa [Field.words, List.append_assoc] using this
     · exact LineOK.word (by simp [punctWord])
     · simp at hl
+  | .enum _ exported name members, l, hl => by
+    simp only [Decl.lines, List.mem_cons, List.mem_append, List.mem_map] at hl
+    rcases hl with (rfl | ⟨m, _, rfl⟩) | (rfl | hl)
+    · exact (exportWords_line exported).append (LineOK.cons (by simp [keywordWord]) (LineOK.cons (by simp [identWord])
+        (LineOK.word (by simp [punctWord]))))
+    · exact LineOK.cons (propertyName_ne m.name) (LineOK.cons (by simp [punctWord]) (LineOK.cons (by simp)
+        (LineOK.word (by simp [punctWord]))))
+    · exact LineOK.word (by simp [punctWord])
+    · simp at hl
   | .typeAlias _ exported name ty, l, hl => by
     simp [Decl.lines] at hl; subst hl
     exact (exportWords_line exported).append (LineOK.cons (by simp [identWord]) (LineOK.cons (by simp [identWord])

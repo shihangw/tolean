@@ -157,6 +157,9 @@ def field (f : Field) : String :=
   s!"\{ span := {span f.span}, readonly := {f.readonly}, name := {str f.name}, " ++
     s!"optional := {f.optional}, type := {typeExpr f.type} }"
 
+def enumMember (m : EnumMember) : String :=
+  s!"\{ span := {span m.span}, name := {str m.name}, value := {str m.value} }"
+
 def importName (n : ImportName) : String :=
   s!"\{ span := {span n.span}, typeOnly := {n.typeOnly}, name := {str n.name} }"
 
@@ -167,6 +170,7 @@ def decl : Decl → String
       s!"{option (r.map typeExpr)}\n    {stmt b})"
   | .interface s e n fs => s!"({ns}Decl.interface {span s} {e} {str n} {list (fs.map field)})"
   | .typeAlias s e n t => s!"({ns}Decl.typeAlias {span s} {e} {str n} {typeExpr t})"
+  | .enum s e n ms => s!"({ns}Decl.enum {span s} {e} {str n} {list (ms.map enumMember)})"
   | .exportedVar s d => s!"({ns}Decl.exportedVar {span s} {varDecl d})"
   | .stmt s => s!"({ns}Decl.stmt {stmt s})"
 

@@ -41,11 +41,12 @@ theorem translatesTo_ok {m : Module} {start : Ctx} {decls : List IR.Decl}
   · simp at h
 
 /-- The translator is sound for one file that imports nothing. When it gives
-`decls` for `m`, from a state with the file's name and no functions, a call
+`decls` for `m`, from a state with the file's name, no functions and no enums, a call
 of the output gives a value only when the interpreter gives the same value
 for the same call of `m`. -/
 theorem decls_sound {file : String} {m : Module} {decls : List IR.Decl} {start : Ctx}
-    (hfile : start.file = file) (hfns : start.functions = []) (hifaces : start.interfaces = [])
+    (hfile : start.file = file) (hfns : (start.functions, start.enums, start.enumValues) = ([], [], []))
+    (hifaces : start.interfaces = [])
     (h : translatesTo m start decls = true) (name : String) (args : List (Val N)) (fuel : Nat) (v : Val N)
     (hv : IR.runIn (IR.functionsOf [(file, decls)]) ⟨file, name⟩ args fuel = some v) :
     Eval.runIn [(file, m)] ⟨file, name⟩ args fuel = some v := by
