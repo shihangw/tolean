@@ -72,3 +72,17 @@ function pick<T>(a: bigint, x?: T, y?: T): bigint {
 export function pickFirst(): bigint {
   return pick(1n, undefined, 2n);
 }
+
+// `undefined` in parentheses is still `undefined`.
+export function chooseParen(): bigint {
+  return choose(1n, (undefined));
+}
+
+// Each argument is translated once, so a deep chain of calls stays cheap.
+function same(x: bigint): bigint {
+  return x;
+}
+
+export function deep(x: bigint): bigint {
+  return same(same(same(same(same(same(same(same(same(same(same(same(same(same(same(same(same(same(same(same(x))))))))))))))))))));
+}
