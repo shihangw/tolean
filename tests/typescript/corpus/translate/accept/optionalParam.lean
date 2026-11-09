@@ -76,4 +76,10 @@ def same {N : Type} [JSNumber N] (x : Int) : Int :=
 def deep {N : Type} [JSNumber N] (x : Int) : Int :=
   (same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) x)))))))))))))))))))))))))))))))))))))))
 
+def wrapper {N : Type} [JSNumber N] {U : Type} (value : U) : U :=
+  (choose (N := N) value ((none : Option U)))
+
+def sameName {N : Type} [JSNumber N] {T : Type} (value : T) : T :=
+  (choose (N := N) value ((none : Option T)))
+
 end Test

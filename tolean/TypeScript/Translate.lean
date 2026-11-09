@@ -451,12 +451,23 @@ def Code.value (c : Code) : IR.Expr :=
 that it is passed to, which the other arguments have to fix. -/
 def Code.unfixed (c : Code) : Bool := c.value matches .undefined && c.type.isGeneric
 
+/-- The type parameters of a function that the arguments of a call other than
+its `undefined` ones fix. A type parameter may be fixed to a type that names
+the caller's own type parameters. -/
+def fixedParams (params : List Ty) (first : List Code) : List (String × Ty) :=
+  let fixing := params.zip first |>.filter fun (_, c) => !c.unfixed
+  Ty.unifyList [] (fixing.map (·.1)) (fixing.map (·.2.type))
+
+/-- An `undefined` argument whose type names a type parameter that the other
+arguments do not fix. -/
+def Code.unfixedBy (known : List (String × Ty)) (c : Code) : Bool :=
+  c.unfixed && !(c.type.lean.typeVars.all fun v => (known.lookup v).isSome)
+
 /-- The arguments of a call, where each `undefined` argument for a generic
 optional parameter gets that parameter's type with the type parameters that
 the other arguments fix. -/
 def fixArgs (params : List Ty) (first : List Code) : List Code :=
-  let fixing := params.zip first |>.filter fun (_, c) => !c.unfixed
-  let known := Ty.unifyList [] (fixing.map (·.1)) (fixing.map (·.2.type))
+  let known := fixedParams params first
   first.map fun c => if c.unfixed then { c with type := c.type.subst known } else c
 
 /-- `c` where the context expects a value of type `expected`. A value of a
@@ -1627,10 +1638,11 @@ def translateCall (fuel : Nat) (env : Env) (s : Span) (callee : Expr) (args : Li
     arg.stripParens.isUndefinedName && !env.has "undefined" && paramType matches .optional _
   let first ← (args.zip fn.params).mapM fun (arg, paramType) =>
     translateExpr fuel env (if undefinedArg arg paramType then some paramType else paramType.callExpected) arg
-  let codes := fixArgs fn.params first
-  (args.zip codes).forM fun (arg, c) => do
-    if c.unfixed then
+  let known := fixedParams fn.params first
+  (args.zip first).forM fun (arg, c) => do
+    if c.unfixedBy known then
       reject arg.span "undefined may stand only where an optional value is expected, such as the argument of an optional parameter, and the other arguments must fix its type"
+  let codes := fixArgs fn.params first
   let sol := Ty.unifyList [] fn.params (codes.map (·.type))
   fn.typeParams.forM fun v => do
     unless (sol.lookup v).isSome do
