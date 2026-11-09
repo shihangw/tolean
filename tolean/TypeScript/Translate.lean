@@ -301,11 +301,23 @@ def Code.into (unions : List UnionInfo) (c : Code) (expected : Option Ty) : Code
 /-- What a statement list ends in: a `return`, or the tuple of changed locals. -/
 inductive Tail where
   | ret
+  /-- The end of a branch, or of a clause of a `switch`. -/
   | state (names : List String)
+  /-- The end of a loop body, which a `continue` also reaches. -/
+  | loop (names : List String)
+  /-- A `continue`, which every path must reach: the statements are a
+  branch that ends one run of a loop body. -/
+  | cont (names : List String)
 
 def Tail.isRet : Tail → Bool
   | .ret => true
-  | .state _ => false
+  | _ => false
+
+/-- The locals of the state that a `continue` ends in, where one may end
+the statements. -/
+def Tail.continues : Tail → Option (List String)
+  | .loop names | .cont names => some names
+  | _ => none
 
 def leanReserved : List String := IR.leanReserved
 
@@ -508,52 +520,79 @@ mutual
 -- Each call is on a part of its argument, so the recursion is structural and
 -- the kernel can run it, as a certificate's check of the translation needs.
 
-/-- Every path through `statements` ends in a `return`. -/
-def alwaysReturns : List Stmt → Bool
+/-- Every path through `statements` ends in a jump, a statement that
+`isJump` accepts. -/
+def alwaysEnds (isJump : Stmt → Bool) : List Stmt → Bool
   | [] => false
-  | s :: rest => if rest.isEmpty then endsInReturn s else alwaysReturns rest
+  | s :: rest => if rest.isEmpty then endsIn isJump s else alwaysEnds isJump rest
 
-/-- `s`, the last statement of a list, ends every path in a `return`. -/
-def endsInReturn : Stmt → Bool
-  | .returnStmt .. => true
-  | .ifStmt _ _ thenBranch (some elseBranch) => branchReturns thenBranch && branchReturns elseBranch
-  | _ => false
+/-- `s`, the last statement of a list, ends every path in a jump. -/
+def endsIn (isJump : Stmt → Bool) : Stmt → Bool
+  | .ifStmt _ _ thenBranch (some elseBranch) =>
+    branchEnds isJump thenBranch && branchEnds isJump elseBranch
+  | s => isJump s
 
-/-- `alwaysReturns (blockStatements s)`. -/
-def branchReturns : Stmt → Bool
-  | .block _ body => alwaysReturns body
-  | .returnStmt .. => true
-  | .ifStmt _ _ thenBranch (some elseBranch) => branchReturns thenBranch && branchReturns elseBranch
-  | _ => false
+/-- `alwaysEnds isJump (blockStatements s)`. -/
+def branchEnds (isJump : Stmt → Bool) : Stmt → Bool
+  | .block _ body => alwaysEnds isJump body
+  | .ifStmt _ _ thenBranch (some elseBranch) =>
+    branchEnds isJump thenBranch && branchEnds isJump elseBranch
+  | s => isJump s
 
 end
 
+/-- Every path through `statements` ends in a `return`. -/
+def alwaysReturns : List Stmt → Bool := alwaysEnds (· matches .returnStmt ..)
+
+/-- Every path through `statements` ends in a `continue`. -/
+def alwaysContinues : List Stmt → Bool := alwaysEnds (· matches .continueStmt _)
+
+/-- Why an `if` whose first branch ends in `tail` may not have both an `else`
+and statements after it. -/
+def Tail.afterEarlyReason : Tail → String
+  | .ret => "code after an if whose branches both return is unreachable"
+  | _ => "after an if whose first branch ends in continue, put the code that follows in its else branch"
+
+/-- The tail of the first branch of an `if`, when every path through it,
+`thenStatements`, ends the statements that end in `tail`: a `return` in a
+function body, or a `continue` in a loop body. -/
+def earlyTail (tail : Tail) (thenStatements : List Stmt) : Option Tail :=
+  match tail with
+  | .ret => if alwaysReturns thenStatements then some .ret else none
+  | .loop names | .cont names => if alwaysContinues thenStatements then some (.cont names) else none
+  | .state _ => none
+
 mutual
 
-/-- `s` contains a `return`, `break` or `continue`. -/
-def containsJump : Stmt → Bool
-  | .returnStmt .. | .breakStmt _ | .continueStmt _ => true
-  | .ifStmt _ _ t (some e) => containsJump t || containsJump e
-  | .ifStmt _ _ t none => containsJump t
-  | .forOfStmt _ _ _ _ body | .forStmt _ _ _ _ body | .whileStmt _ _ body => containsJump body
-  | .block _ body => anyContainsJump body
-  | .switchStmt _ _ clauses => clausesContainJump clauses
+/-- `s` contains a `return`, or a `break` or `continue` that leaves `s`. The
+flags say whether a `break` and a `continue` count. Inside a loop that `s`
+contains, neither counts, because they leave only that loop. -/
+def containsJump (brk cont : Bool) : Stmt → Bool
+  | .returnStmt .. => true
+  | .breakStmt _ => brk
+  | .continueStmt _ => cont
+  | .ifStmt _ _ t (some e) => containsJump brk cont t || containsJump brk cont e
+  | .ifStmt _ _ t none => containsJump brk cont t
+  | .forOfStmt _ _ _ _ body | .forStmt _ _ _ _ body | .whileStmt _ _ body =>
+    containsJump false false body
+  | .block _ body => anyContainsJump brk cont body
+  | .switchStmt _ _ clauses => clausesContainJump brk cont clauses
   | _ => false
 
-def anyContainsJump : List Stmt → Bool
+def anyContainsJump (brk cont : Bool) : List Stmt → Bool
   | [] => false
-  | s :: rest => containsJump s || anyContainsJump rest
+  | s :: rest => containsJump brk cont s || anyContainsJump brk cont rest
 
 /-- The statements of a clause contain a jump, apart from the `break` they
 end in, which leaves only the `switch`. -/
-def clauseContainsJump : List Stmt → Bool
+def clauseContainsJump (brk cont : Bool) : List Stmt → Bool
   | [] => false
-  | [s] => !s.isBreak && containsJump s
-  | s :: rest => containsJump s || clauseContainsJump rest
+  | [s] => !s.isBreak && containsJump brk cont s
+  | s :: rest => containsJump brk cont s || clauseContainsJump brk cont rest
 
-def clausesContainJump : List (Option Expr × List Stmt) → Bool
+def clausesContainJump (brk cont : Bool) : List (Option Expr × List Stmt) → Bool
   | [] => false
-  | (_, body) :: rest => clauseContainsJump body || clausesContainJump rest
+  | (_, body) :: rest => clauseContainsJump brk cont body || clausesContainJump brk cont rest
 
 end
 
@@ -1322,7 +1361,10 @@ def translateStatements (fuel : Nat) (env : Env) (tail : Tail) (statements : Lis
     | .ret =>
       let ctx ← get
       throw s!"{ctx.file}: '{ctx.currentFunction}' can end without a return"
-    | .state names => return .state names
+    | .state names | .loop names => return .state names
+    | .cont _ =>
+      let ctx ← get
+      throw s!"{ctx.file}: a branch of '{ctx.currentFunction}' that must end in continue can end without one"
   | stmt :: rest =>
     match stmt with
     | .returnStmt s value =>
@@ -1344,6 +1386,12 @@ def translateStatements (fuel : Nat) (env : Env) (tail : Tail) (statements : Lis
     | .forOfStmt s kind name iterable body =>
       translateForOf fuel env s kind name iterable body rest tail
     | .switchStmt s disc clauses => translateSwitch fuel env s disc clauses rest tail
+    -- `continue` ends one run of the loop body with the state as it is.
+    | .continueStmt s =>
+      let some names := tail.continues
+        | reject s "continue may only end a loop body, or a branch of an if at the top of one"
+      unless rest.isEmpty do reject s "code after continue is unreachable"
+      return .state names
     | _ => reject stmt.span "unsupported statement"
 
 def translateVariable (fuel : Nat) (env : Env) (s : Span) (d : VarDecl) (rest : List Stmt)
@@ -1418,13 +1466,16 @@ def translateIf (fuel : Nat) (env : Env) (s : Span) (test : Expr) (thenBranch : 
         reject s ("where more than one member of the union is left, a further test of its tag " ++
           "must come right after, as in a chain of 'if (x.kind === 'a') return …'")
       return .matchTag t.name t.ref t.field t.tag t.other whenTag whenOther
-  if tail.isRet && alwaysReturns thenStatements then
+  -- `if (c) return …;` in a function body, or `if (c) continue;` in a loop
+  -- body: the statements after the `if` run only when `c` does not hold, so
+  -- they join its other branch.
+  if let some thenTail := earlyTail tail thenStatements then
     if elseBranch.isSome && !rest.isEmpty then
-      reject s "code after an if whose branches both return is unreachable"
-    let whenTrue ← translateStatements fuel envTrue tail thenStatements
+      reject s thenTail.afterEarlyReason
+    let whenTrue ← translateStatements fuel envTrue thenTail thenStatements
     let whenFalse ← translateStatements fuel envFalse tail (elseStatements ++ rest)
     return (← branch whenTrue whenFalse)
-  if (thenStatements ++ elseStatements).any containsJump then
+  if (thenStatements ++ elseStatements).any (containsJump true true) then
     reject s "a branch that does not always return may not return, break or continue"
   let names := changedNames (thenStatements ++ elseStatements) env
   if names.isEmpty then reject s "an if without a return must change a local"
@@ -1568,7 +1619,7 @@ def translateStateClause (fuel : Nat) (env : Env) (s : Span) (names : List Strin
     (body : List Stmt) : TM IR.Body := do
   let fuel + 1 := fuel | tooDeep
   if !(last || endsInBreak body) then reject s fallthroughReason
-  else if anyContainsJump (dropBreak body) then
+  else if anyContainsJump true true (dropBreak body) then
     reject s "a clause of a switch that ends in break may not return, break or continue before its end"
   else translateStatements fuel env (.state names) (dropBreak body)
 
@@ -1577,13 +1628,13 @@ def translateForOf (fuel : Nat) (env : Env) (s : Span) (kind : VarKind) (element
   let fuel + 1 := fuel | tooDeep
   unless kind == .const do reject s "a loop must be 'for (const x of xs)'"
   let bodyStatements := blockStatements body
-  if bodyStatements.any containsJump then reject s "a loop body may not return, break or continue"
+  if bodyStatements.any (containsJump true false) then reject s "a loop body may not return or break"
   let names := changedNames bodyStatements env
   if names.isEmpty then reject s "a loop must change a local"
   let items ← translateExpr (← fuelLimit) env none iterable
   let .array elemType := items.type | reject iterable.span "a loop must run over an array"
   let bodyEnv ← declare env s element .const elemType
-  let bodyOut ← translateStatements fuel bodyEnv (.state names) bodyStatements
+  let bodyOut ← translateStatements fuel bodyEnv (.loop names) bodyStatements
   let info : IR.LoopInfo :=
     { span := s, elem := elemType.lean,
       stateTypes := names.filterMap fun n => (env.lookup n).map (·.type.lean),

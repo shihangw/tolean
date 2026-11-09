@@ -325,6 +325,7 @@ the file, the line and the reason. It never approximates.
 | `[a, b]` with the element type from the context or the elements, such as `return [a, b]` or `const xs: ReadonlyArray<T> = []` | `([a, b] : List T)` |
 | `const xs: Array<T> = [...]`, then `xs.push(e)`; `xs` read only in the `return` | `let xs := xs ++ [e]` |
 | `for (const x of xs) { … }` | `List.foldl` over the tuple of locals the body changes |
+| `if (c) continue;` at the top of a loop body, or a branch of that `if` that ends in `continue` on every path | `if c then (x, y) else …`, where the rest of the body is the `else` branch, as after an `if` that returns. A test of `null` or of a tag narrows the local for the rest of the body. |
 | `xs.map(x => e)`, `xs.filter(x => p)` | `List.map (fun (x : T) => e) xs`, `List.filter (fun (x : T) => p) xs` |
 | `xs.some(x => p)`, `xs.every(x => p)` | `List.any xs (fun (x : T) => p)`, `List.all xs (fun (x : T) => p)` |
 | `xs.find(x => p)` | `List.find? (fun (x : T) => p) xs`. The value is `undefined` when no element passes, so it has the type of an optional field: `xs.find(p) ?? d`, `xs.find(p)?.f` and `xs.find(p) === undefined` work as they do on `s.f`. |
@@ -359,8 +360,10 @@ Tolean rejects these, among others:
 - The global `isNaN` and `isFinite`. These convert their argument to a number
   first. Use `Number.isNaN` and `Number.isFinite` instead.
 - Assignment to a parameter, a `const` or a field, and a push onto an array
-  that the function did not create. It also rejects `break`, `continue`, and
-  `return` inside a loop. An assignment to a `const` throws a `TypeError`, so
+  that the function did not create. It also rejects `break` and `return`
+  inside a loop. A `continue` must end the loop body, or a branch of an `if`
+  at the top of the body; code after the `if` must then go in its `else`
+  branch, if it has one. An assignment to a `const` throws a `TypeError`, so
   the interpreter gives no value for a block where a statement after a
   `const` assigns it, and the translator refuses the `const`.
 - A read of an owned array anywhere except in the `return` value. If code

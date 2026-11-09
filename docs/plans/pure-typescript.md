@@ -68,7 +68,7 @@ exact. A construct leaves these tables when Tolean translates it, and the
 | A function-typed field or parameter, such as a comparator in an options object | A field of a function type | A function value that changes state when it is called |
 | A destructured parameter, such as `{ a, b }: Options` | A pattern on the structure | Defaults inside the pattern |
 | A default parameter value | `Option` with a default at the call | A default that reads another parameter |
-| `return` inside a loop, `break`, `continue`, and `for (let i = a; i < b; i++)` | A fold whose state records that the loop stopped | A `for` loop of another shape, and labels |
+| `return` inside a loop, `break`, and `for (let i = a; i < b; i++)` | A fold whose state records that the loop stopped | A `for` loop of another shape, and labels |
 | `while` and `do … while`, with a `@decreases` tag that names a measure | A recursive function with `termination_by`, as for recursion below | A loop without such a measure |
 | A rest parameter `...xs: T[]`, and a spread argument `f(...xs)` | A `List T` argument | A spread argument to a function whose parameters are not a rest parameter |
 | A class with `readonly` fields and methods that do not change `this` | A structure and one function per method | Methods that change `this`, inheritance other than from `Error`, getters, setters and `static` state |
@@ -238,8 +238,8 @@ the P2 steps. Steps with the same priority keep the order of their numbers.
    constraint, tuples, string enums and type guards.
 4. **P0.** The other array methods without `sort`, such as `reduce` and
    `slice`, indexing, and object spread.
-5. **P0.** Control flow: `return` inside a loop, `break`, `continue`, and the
-   counted `for` loop.
+5. **P0.** Control flow: `return` inside a loop, `break`, and the counted
+   `for` loop.
 6. **P0.** Errors, after step 3 of the [shared core plan](shared-core.md) adds
    exceptions to the IR.
 7. **P0.** Local functions that change variables of the enclosing function, by

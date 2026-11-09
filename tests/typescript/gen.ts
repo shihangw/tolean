@@ -365,7 +365,16 @@ export class Gen {
           if (xs.ty.k === 'array') {
             const element = this.fresh('e');
             const inner = [...vars, { name: element, ty: xs.ty.of, mutable: false, owned: false }];
-            lines.push(`for (const ${element} of ${xs.name}) {`, `  ${target.name} = ${this.expr(target.ty, inner, 1)};`, '}');
+            const assign = `${target.name} = ${this.expr(target.ty, inner, 1)};`;
+            // A `continue` skips the assignment for some elements, and a
+            // `break` ends the loop there. The translator refuses `break` in a
+            // loop for now, but the interpreter runs it.
+            const jump = this.next();
+            const body = jump < 0.2 ? [`  if (${this.test(inner, 1)}) continue;`, `  ${assign}`]
+              : jump < 0.3 ? [`  if (${this.test(inner, 1)}) {`, `    ${assign}`, '    continue;', '  }', `  ${assign}`]
+              : jump < 0.4 ? [`  if (${this.test(inner, 1)}) break;`, `  ${assign}`]
+              : [`  ${assign}`];
+            lines.push(`for (const ${element} of ${xs.name}) {`, ...body, '}');
           }
         }
       } else if (roll < 0.88 && depth > 0) {
