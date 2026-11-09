@@ -83,18 +83,27 @@ end
 
 instance : BEq Ty := ⟨Ty.beq⟩
 
+mutual
+
 /-- A value of type `source` can stand where `target` is expected. Arrays and
-structures must match exactly. -/
+structures must match exactly. A tuple can stand where each of its elements
+can: `[null, x]` is a `[T | null, T]`. -/
 def Ty.assignableTo (source target : Ty) : Bool :=
   source == target ||
-    match target with
-    | .nullable value => source == .null || source == value
+    match target, source with
+    | .nullable value, _ => source == .null || source == value
     -- A union narrowed to some of its members is a value of the union.
-    | .tagged ref tags =>
-      match source with
-      | .tagged ref' tags' => ref' == ref && tags'.all tags.contains
-      | _ => false
-    | _ => false
+    | .tagged ref tags, .tagged ref' tags' => ref' == ref && tags'.all tags.contains
+    | .tuple ts, .tuple ss => Ty.assignableList ss ts
+    | _, _ => false
+
+/-- Each of `sources` can stand where the target in its place is expected. -/
+def Ty.assignableList : List Ty → List Ty → Bool
+  | [], [] => true
+  | s :: ss, t :: ts => s.assignableTo t && Ty.assignableList ss ts
+  | _, _ => false
+
+end
 
 /-- The type of `c ? a : b`. -/
 def Ty.join (a b : Ty) : Option Ty :=
@@ -1256,13 +1265,15 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
       unless elems.length == tys.length do reject s s!"the tuple needs {tys.length} elements"
       -- An element where the type names a type parameter has its own type,
       -- which the context checks: a call, after it fixes the parameter, or a
-      -- return or a declaration in a generic function.
+      -- return or a declaration in a generic function. It keeps its own type
+      -- even where it fits, so that `null` in a `T | null` leaves `T` to the
+      -- other arguments of a call.
       let codes ← (elems.zip tys).mapM fun (elem, t) => do
         let a ← translateExpr fuel env (if t.isGeneric then t.callExpected else some t) elem
         unless t.isGeneric || a.type.assignableTo t do
           reject elem.span "the element does not have the tuple's element type"
         pure a
-      let types := (codes.zip tys).map fun (a, t) => if a.type.assignableTo t then t else a.type
+      let types := (codes.zip tys).map fun (a, t) => if t.isGeneric then a.type else t
       return ⟨.tuple (codes.map (·.value)), false, .tuple types⟩
     | _ => translateArray fuel env expected s elems
   | _ => reject e.span "unsupported expression"
