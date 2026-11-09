@@ -176,8 +176,8 @@ inductive Expr (T E : Type) where
       (body : Expr T E) (info : CallbackInfo T)
 deriving Repr, Inhabited
 
-/-- What a certificate needs to know about a loop, besides its code. The
-printer does not read it. -/
+/-- What the printer and a certificate need to know about a loop, besides its
+code. -/
 structure LoopInfo (T : Type) where
   /-- The span of the `for…of` statement. -/
   span : Span
@@ -187,6 +187,13 @@ structure LoopInfo (T : Type) where
   elem : Ty T
   /-- The other locals in scope at the loop, in the order they were declared. -/
   scope : List (String × Ty T)
+  /-- A `break` or a `return` can end the loop. The output then runs it with
+  `forIn`, and each run of the body gives a `ForInStep`. -/
+  breaks : Bool := false
+  /-- The type of the function's value, when a `return` in the body can end
+  the function. The loop's state then starts with an `Option` of it, which
+  holds the value to return. -/
+  returns : Option (Ty T) := none
 deriving Repr, Inhabited
 
 /-- The body of a function: `let`s that end in a value. -/
@@ -195,6 +202,17 @@ inductive Body (T E : Type) where
   | value (e : Expr T E)
   /-- The locals that a branch or a loop body changes: `x` or `(x, y)`. -/
   | state (names : List String)
+  /-- `ForInStep.yield (x, y)`: the end of one run of the body of a loop that
+  a `break` can end, with the locals that the body changes. In a loop that a
+  `return` can end (`slot`), the state starts with `none`, for no value to
+  return: `ForInStep.yield (none, x, y)`. -/
+  | yield (names : List String) (slot : Bool)
+  /-- `ForInStep.done (x, y)`: a `break`, which ends its loop with the locals
+  that the body changes, after `none` when `slot`. -/
+  | done (names : List String) (slot : Bool)
+  /-- `ForInStep.done (some e, x, y)`: a `return e` in a loop body, which ends
+  the loop, and then the function with the value of `e`. -/
+  | exit (e : Expr T E) (names : List String)
   /-- `let x := e`, then `rest`. -/
   | «let» (name : String) (e : Expr T E) (rest : Body T E)
   /-- `let xs : T := [a, b]`: an owned array, then `rest`. -/
@@ -215,7 +233,11 @@ inductive Body (T E : Type) where
   that ends in the state, then `rest`. -/
   | letState (names : List String) (branch : Body T E) (rest : Body T E)
   /-- `let (x, y) := List.foldl (fun (x, y) e => body) (x, y) items`, then
-  `rest`. -/
+  `rest`. When a `break` can end the loop (`info.breaks`), it is
+  `let (x, y) := Id.run (forIn items (x, y) (fun e (x, y) => body))`. When a
+  `return` can end it (`info.returns`), it is
+  `match Id.run (forIn items (none, x, y) (fun e (_, x, y) => body)) with`,
+  with the arms `| (some r, _) => r` and `| (none, x, y) => rest`. -/
   | fold (names : List String) (element : String) (body : Body T E) (items : Expr T E)
       (rest : Body T E) (info : LoopInfo T)
 deriving Repr, Inhabited
@@ -283,7 +305,8 @@ end
 
 def Body.refs : Body T E → List DeclRef
   | .value e => e.refs
-  | .state _ => []
+  | .state _ | .yield .. | .done .. => []
+  | .exit e _ => e.refs
   | .let _ e rest => e.refs ++ rest.refs
   | .letArray _ t elems rest => t.refs ++ Expr.refsList elems ++ rest.refs
   | .ite c a b => c.refs ++ a.refs ++ b.refs
@@ -323,8 +346,7 @@ def Expr.usesString : Expr T E → Bool
   | .eq a b | .ne a b | .propAnd a b | .propOr a b | .and a b | .or a b =>
     a.usesString || b.usesString
   | .ascribe e t => e.usesString || t.usesString
-  | .listMethod _ items _ elem body info =>
-    items.usesString || elem.usesString || body.usesString || info.result.usesString
+  | .listMethod _ items _ t body _ => items.usesString || t.usesString || body.usesString
   -- The printer leaves a tag value out, as it leaves the tag field out.
   | .int _ | .none | .bool _ | .var _ | .enumCase .. | .tagValue _ => false
 
@@ -340,7 +362,8 @@ end
 
 def Body.usesString : Body T E → Bool
   | .value e => e.usesString
-  | .state _ => false
+  | .state _ | .yield .. | .done .. => false
+  | .exit e _ => e.usesString
   | .let _ e rest => e.usesString || rest.usesString
   | .letArray _ t elems rest => t.usesString || Expr.usesStringList elems || rest.usesString
   | .ite c a b => c.usesString || a.usesString || b.usesString
@@ -524,7 +547,7 @@ def Body.testsTag (name : String) : Body T E → Bool
   | .let _ _ rest | .letArray _ _ _ rest => rest.testsTag name
   | .ite _ a b | .matchNull _ a b | .letState _ a b => a.testsTag name || b.testsTag name
   | .fold _ _ body _ rest _ => body.testsTag name || rest.testsTag name
-  | .value _ | .state _ => false
+  | .value _ | .state _ | .yield .. | .done .. | .exit .. => false
 
 section
 variable [PrintTy T] [PrintOp E]
@@ -533,13 +556,28 @@ variable [PrintTy T] [PrintOp E]
 def foldState (names : Names) (info : LoopInfo T) : String :=
   " × ".intercalate (info.stateTypes.map (·.print names))
 
+/-- The state of one step of a loop: the tuple of `names`, after `slot`, the
+value to return, in a loop that a `return` can end. -/
+def stepTuple (slot : Option String) (names : List String) : String :=
+  match slot with
+  | some s => if names.isEmpty then s else s!"({s}, {", ".intercalate names})"
+  | Option.none => tuple names
+
 /-- The binders of the function that `List.foldl` runs for a loop, with their
 types: `((x, y) : Int × Bool) (e : T)`. Lean elaborates the body before it
 knows the types, so in `{ f := e }` with a field of type `Option N` it would
-take `e` to be an `Option N`, not an `N` to wrap. -/
+take `e` to be an `Option N`, not an `N` to wrap. `forIn` passes the element
+first, so a loop that a `break` can end has the binders the other way round. -/
 def foldBinders (names : Names) (state : List String) (element : String) (info : LoopInfo T) :
     String :=
-  s!"({tuple state} : {foldState names info}) ({element} : {info.elem.print names})"
+  let stateBinder := match info.returns with
+    | some r =>
+      let slotTy := (Ty.option r).print names
+      if state.isEmpty then s!"(_ : {slotTy})"
+      else s!"({stepTuple (some "_") state} : {slotTy} × {foldState names info})"
+    | Option.none => s!"({tuple state} : {foldState names info})"
+  let elementBinder := s!"({element} : {info.elem.print names})"
+  if info.breaks then s!"{elementBinder} {stateBinder}" else s!"{stateBinder} {elementBinder}"
 
 mutual
 
@@ -631,6 +669,15 @@ mutual
 def Body.lines (names : Names) : Body T E → List String
   | .value e => [e.print names]
   | .state ns => [tuple ns]
+  | .yield ns slot =>
+    [wrapped (leanName names "ForInStep.yield")
+      (stepTuple (if slot then some (leanName names "none") else Option.none) ns)]
+  | .done ns slot =>
+    [wrapped (leanName names "ForInStep.done")
+      (stepTuple (if slot then some (leanName names "none") else Option.none) ns)]
+  | .exit e ns =>
+    [wrapped (leanName names "ForInStep.done")
+      (stepTuple (some (wrapped (leanName names "some") (e.print names))) ns)]
   | .let name e rest => s!"let {name} := {e.print names}" :: rest.lines names
   | .letArray name type elems rest =>
     s!"let {name} : {type.print names} := [{", ".intercalate (Expr.printList names elems)}]" ::
@@ -657,10 +704,23 @@ def Body.lines (names : Names) : Body T E → List String
   | .fold ns element body items rest info =>
     let bodyLines := body.lines names
     let lastLine := bodyLines.getLast?.getD ""
-    [s!"let {tuple ns} :=", s!"  {leanName names "List.foldl"}",
-      s!"    (fun {foldBinders names ns element info} =>"] ++
-      indentBy "      " (bodyLines.dropLast ++ [lastLine ++ ")"]) ++
-      [s!"    {tuple ns} {items.print names}"] ++ rest.lines names
+    if info.returns.isSome then
+      let none_ := leanName names "none"
+      [s!"match {leanName names "Id.run"} ({leanName names "forIn"} {items.print names} {stepTuple (some none_) ns}",
+        s!"    (fun {foldBinders names ns element info} =>"] ++
+        indentBy "      " (bodyLines.dropLast ++ [lastLine ++ ")) with"]) ++
+        [s!"| {stepTuple (some s!"{leanName names "some"} r") (if ns.isEmpty then [] else ["_"])} => r",
+          s!"| {stepTuple (some none_) ns} =>"] ++ indent (rest.lines names)
+    else if info.breaks then
+      [s!"let {tuple ns} :=",
+        s!"  {leanName names "Id.run"} ({leanName names "forIn"} {items.print names} {tuple ns}",
+        s!"    (fun {foldBinders names ns element info} =>"] ++
+        indentBy "      " (bodyLines.dropLast ++ [lastLine ++ "))"]) ++ rest.lines names
+    else
+      [s!"let {tuple ns} :=", s!"  {leanName names "List.foldl"}",
+        s!"    (fun {foldBinders names ns element info} =>"] ++
+        indentBy "      " (bodyLines.dropLast ++ [lastLine ++ ")"]) ++
+        [s!"    {tuple ns} {items.print names}"] ++ rest.lines names
 
 /-- The arms of `match name with` for a test of its tag, nested in the arm
 for the other members of a test of the same local. They join the outer
