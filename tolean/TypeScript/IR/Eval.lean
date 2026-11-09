@@ -75,9 +75,9 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   -- `a === undefined` and `a !== undefined`, as `IsStrictlyEqual` gives them.
   | .isUndefined, [a] => some (.bool (a matches .undefined))
   | .isDefined, [a] => some (.bool !(a matches .undefined))
-  -- `a?.f`, as the spec evaluates it.
+  -- `a?.f.g`, as the spec evaluates it.
   | .optField _ _, [.null] | .optField _ _, [.undefined] => some .undefined
-  | .optField f _, [.obj fields] => Eval.getProp fields f
+  | .optField path _, [.obj fields] => Eval.getPath fields path
   -- `r[k]`, as the spec evaluates it: the property that the string `k` names.
   | .recordGet _ _, [.obj fields, .str k] => Eval.getKey fields k
   | _, _ => none
