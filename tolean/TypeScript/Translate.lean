@@ -462,8 +462,10 @@ def Code.into (unions : List UnionInfo) (c : Code) (expected : Option Ty) : Code
     | none => c
   | _ => c
 
+mutual
+
 /-- A value of type `a` has the type `t`, where a value of a member of a union
-of primitive types counts as a value of the union, inside arrays and
+of primitive types counts as a value of the union, inside arrays, tuples and
 nullable types too. This is how TypeScript checks `satisfies`; the value
 keeps the type `a`. -/
 def Ty.fits (unions : List UnionInfo) : Ty → Ty → Bool
@@ -477,7 +479,19 @@ def Ty.fits (unions : List UnionInfo) : Ty → Ty → Bool
     match a with
     | .array a' => Ty.fits unions a' t
     | _ => false
+  | a, .tuple ts => a.assignableTo (.tuple ts) ||
+    match a with
+    | .tuple as => Ty.fitsList unions as ts
+    | _ => false
   | a, t => a.assignableTo t
+
+/-- Each type of `as` fits the type of `ts` at its place. -/
+def Ty.fitsList (unions : List UnionInfo) : List Ty → List Ty → Bool
+  | [], [] => true
+  | a :: as, t :: ts => Ty.fits unions a t && Ty.fitsList unions as ts
+  | _, _ => false
+
+end
 
 /-- What a statement list ends in: a `return`, or the tuple of changed locals. -/
 inductive Tail where
