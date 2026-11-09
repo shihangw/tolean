@@ -671,7 +671,9 @@ def execStmt (m : Scope) (fuel : Nat) (env : Env N) : Stmt → Option (Outcome N
     return .normal (env.set name (.list (items ++ [← eval m fuel env arg])))
   -- `m.set(k, v)` and `m.delete(k)` (ECMA-262 §24.1.3.9 and §24.1.3.3) on a
   -- map that the function owns, as for `push`: nothing else can see the
-  -- map, so the change shows only in the variable.
+  -- map, so the change shows only in the variable. The translator checks
+  -- that the function owns the map, and this rule does not: a second name for
+  -- the map would keep the old value, where JS shares one map.
   | .exprStmt _ (.call _ (.member _ (.ident _ name) "set") [key, value]) => do
     let .map entries ← env.lookup name | none
     let k ← eval m fuel env key
