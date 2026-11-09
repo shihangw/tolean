@@ -1465,6 +1465,16 @@ theorem translateArrayMethod_sound {F : Nat}
   rw [eval_arrayMethod m fuel _ _ _ _ _ _ _ _ _ hname (by simpa using hr), hrecv]
   exact methodVal_sim m fs fuel (bodySim_of m fs fuel hbody ha hs) method items v hval
 
+omit [JSNumber N] in
+/-- Fixing the type of an `undefined` argument does not change its value. -/
+theorem fixArgs_value (ps : List Ty) (cs : List Code) :
+    (fixArgs ps cs).map Code.value = cs.map Code.value := by
+  simp only [fixArgs, List.map_map]
+  congr 1
+  funext c
+  simp only [Function.comp]
+  split <;> rfl
+
 /-- The type that `optArgs` writes on an argument does not change its value. -/
 theorem evalList_optArgs (sol : List (String × Ty)) (ρ : Eval.Env N) :
     ∀ (cs : List Code) (ps : List Ty),
@@ -1921,20 +1931,20 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
               -- The arguments, then the checks of their types, which do not
               -- change what the call means.
               simp only [bind_ok] at h
-              -- The first pass only fixes the type parameters for `undefined`.
-              obtain ⟨_first, _s₁, _hfirst, h⟩ := h
-              obtain ⟨codes, s₂, hcodes, _, s₃, -, h⟩ := h
-              have hcode : c.code = .call fn.ref (optArgs (Ty.unifyList [] fn.params (codes.map (·.type))) codes fn.params ++
-                  List.drop args.length (fn.params.map fun _ => IR.Expr.undefined)) := by
+              -- Fixing the type of an `undefined` argument keeps its value.
+              obtain ⟨first, s₂, hcodes, _, s₃, -, _, s₄, -, h⟩ := h
+              obtain ⟨codes, hcodes', hcode⟩ : ∃ codes : List Code, codes.map Code.value = first.map Code.value ∧
+                  c.code = .call fn.ref (optArgs (Ty.unifyList [] fn.params (codes.map (·.type))) codes fn.params ++
+                    List.drop args.length (fn.params.map fun _ => IR.Expr.undefined)) := by
                 obtain ⟨_, -, rfl⟩ := map_ok.mp h
-                rfl
+                exact ⟨_, fixArgs_value _ _, rfl⟩
               intro ρs ρo v ha hs hv
-              rw [hcode, out_call, ← List.map_drop, evalList_append_undefined, evalList_optArgs] at hv
-              cases hx : IR.Expr.evalList fs fuel ρo (codes.map Code.value) with
+              rw [hcode, out_call, ← List.map_drop, evalList_append_undefined, evalList_optArgs, hcodes'] at hv
+              cases hx : IR.Expr.evalList fs fuel ρo (first.map Code.value) with
               | none => simp [hx] at hv
               | some vs =>
                 simp [hx] at hv
-                have hargs := zip_sim_value m fs fuel ?hg args fn.params _ codes _ hle hcodes
+                have hargs := zip_sim_value m fs fuel ?hg args fn.params _ first _ hle hcodes
                   ρs ρo vs ha hs hx
                 · have hname : fn.name = name := by simpa using List.find?_some hfind
                   have hres := hs.2.1 fn (List.mem_of_find?_eq_some hfind)

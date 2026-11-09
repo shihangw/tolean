@@ -67,4 +67,13 @@ def pick {N : Type} [JSNumber N] {T : Type} (a : Int) (x : Option T := none) (y 
 def pickFirst {N : Type} [JSNumber N]  : Int :=
   (pick (N := N) ((1 : Int)) ((none : Option Int)) (((2 : Int) : Option Int)))
 
+def chooseParen {N : Type} [JSNumber N]  : Int :=
+  (choose (N := N) ((1 : Int)) ((none : Option Int)))
+
+def same {N : Type} [JSNumber N] (x : Int) : Int :=
+  x
+
+def deep {N : Type} [JSNumber N] (x : Int) : Int :=
+  (same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) x)))))))))))))))))))))))))))))))))))))))
+
 end Test

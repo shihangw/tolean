@@ -131,7 +131,7 @@ def sections : List Section := [
   ⟨"sec-property-accessors", "13.3.2", "Property Accessors", [``Eval.eval_index_str]⟩,
   ⟨"sec-function-calls", "13.3.6", "Function Calls",
     [``Proof.eval_call, ``Proof.out_call, ``Proof.zip_sim, ``Proof.zip_sim_value, ``Proof.calls_agree,
-    ``Proof.evalList_append_undefined, ``Proof.callS_append_undefined, ``Proof.evalList_optArgs]⟩,
+    ``Proof.evalList_append_undefined, ``Proof.callS_append_undefined, ``Proof.evalList_optArgs, ``Proof.fixArgs_value]⟩,
   ⟨"sec-optional-chains", "13.3.9", "Optional Chains",
     [``Proof.getPath_append, ``Proof.evalChain_optChain, ``Proof.eval_member_chain]⟩,
   ⟨"sec-typeof-operator", "13.5.3", "The typeof Operator",

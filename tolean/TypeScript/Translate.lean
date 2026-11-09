@@ -447,6 +447,18 @@ structure Code where
 def Code.value (c : Code) : IR.Expr :=
   if c.prop then .decide c.code else c.code
 
+/-- An `undefined` argument whose type names type parameters of the function
+that it is passed to, which the other arguments have to fix. -/
+def Code.unfixed (c : Code) : Bool := c.value matches .undefined && c.type.isGeneric
+
+/-- The arguments of a call, where each `undefined` argument for a generic
+optional parameter gets that parameter's type with the type parameters that
+the other arguments fix. -/
+def fixArgs (params : List Ty) (first : List Code) : List Code :=
+  let fixing := params.zip first |>.filter fun (_, c) => !c.unfixed
+  let known := Ty.unifyList [] (fixing.map (·.1)) (fixing.map (·.2.type))
+  first.map fun c => if c.unfixed then { c with type := c.type.subst known } else c
+
 /-- `c` where the context expects a value of type `expected`. A value of a
 member of a union of primitive types, such as a `string` where
 `string | bigint` is expected, becomes the member's constructor. In JS the
@@ -1544,21 +1556,20 @@ def translateCall (fuel : Nat) (env : Env) (s : Span) (callee : Expr) (args : Li
       else s!"'{name}' takes {required} to {fn.params.length} arguments")
   -- An argument is translated where its parameter's type is expected. When
   -- that type names a type parameter, the arguments' types fix it, and only
-  -- the shape of a tuple is expected. `undefined` fixes nothing, so the other
-  -- arguments fix the type parameters first, and `undefined` is then read
-  -- where the optional parameter's type with them is expected, as for a
-  -- call that leaves the argument out.
-  let bareUndefined (arg : Expr) (paramType : Ty) : Bool :=
-    arg.isUndefinedName && !env.has "undefined" && paramType matches .optional _
+  -- the shape of a tuple is expected. `undefined`, with or without
+  -- parentheses, is read where the optional parameter's type is expected, as
+  -- for a call that leaves the argument out. Its type then names the type
+  -- parameters, which the other arguments fix. Each argument is translated
+  -- once, because a second translation would double the work of each nested
+  -- call.
+  let undefinedArg (arg : Expr) (paramType : Ty) : Bool :=
+    arg.stripParens.isUndefinedName && !env.has "undefined" && paramType matches .optional _
   let first ← (args.zip fn.params).mapM fun (arg, paramType) =>
-    if bareUndefined arg paramType then pure Option.none
-    else some <$> translateExpr fuel env paramType.callExpected arg
-  let known := Ty.unifyList [] (fn.params.zip first |>.filterMap fun (p, c) => c.map fun _ => p)
-    (first.filterMap (·.map (·.type)))
-  let codes ← (args.zip fn.params).mapM fun (arg, paramType) =>
-    let given := paramType.subst known
-    translateExpr fuel env
-      (if bareUndefined arg paramType && !given.isGeneric then some given else paramType.callExpected) arg
+    translateExpr fuel env (if undefinedArg arg paramType then some paramType else paramType.callExpected) arg
+  let codes := fixArgs fn.params first
+  (args.zip codes).forM fun (arg, c) => do
+    if c.unfixed then
+      reject arg.span "undefined may stand only where an optional value is expected, such as the argument of an optional parameter, and the other arguments must fix its type"
   let sol := Ty.unifyList [] fn.params (codes.map (·.type))
   fn.typeParams.forM fun v => do
     unless (sol.lookup v).isSome do
