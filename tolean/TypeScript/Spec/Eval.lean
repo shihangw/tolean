@@ -45,6 +45,9 @@ inductive Val (N : Type) where
   /-- A `Map`: its entries, in the order that `set` first added each key
   (ECMA-262 §24.1). -/
   | map (entries : List (Val N × Val N))
+  /-- A `Set`: its elements, in the order that `add` first added each one
+  (ECMA-262 §24.2). -/
+  | set (elems : List (Val N))
 deriving Inhabited
 
 /-- `ToBoolean` (ECMA-262 §7.1.2), on the values of the subset. A number is
@@ -55,7 +58,7 @@ def Val.truthy : Val N → Bool
   | .bool b => b
   | .str s => !s.isEmpty
   | .null | .undefined => false
-  | .list _ | .obj _ | .map _ => true
+  | .list _ | .obj _ | .map _ | .set _ => true
 
 /-- The result of `typeof` (ECMA-262 §13.5.3.1) on the values of the
 subset. `null` is `"object"`, and so are an array and an object, which are
@@ -66,7 +69,7 @@ def Val.typeOf : Val N → String
   | .bool _ => "boolean"
   | .str _ => "string"
   | .undefined => "undefined"
-  | .null | .list _ | .obj _ | .map _ => "object"
+  | .null | .list _ | .obj _ | .map _ | .set _ => "object"
 
 /-- The variables in scope, innermost first. -/
 abbrev Env (N : Type) := List (String × Val N)
@@ -152,13 +155,15 @@ def strictEq : Val N → Val N → Option Bool
   | .null, .null => some true
   | .undefined, .undefined => some true
   | .undefined, .int _ | .undefined, .num _ | .undefined, .bool _ | .undefined, .str _
-  | .undefined, .null | .undefined, .list _ | .undefined, .obj _ | .undefined, .map _ => some false
+  | .undefined, .null | .undefined, .list _ | .undefined, .obj _ | .undefined, .map _
+  | .undefined, .set _ => some false
   | .int _, .undefined | .num _, .undefined | .bool _, .undefined | .str _, .undefined
-  | .null, .undefined | .list _, .undefined | .obj _, .undefined | .map _, .undefined => some false
+  | .null, .undefined | .list _, .undefined | .obj _, .undefined | .map _, .undefined
+  | .set _, .undefined => some false
   | .null, .int _ | .null, .num _ | .null, .bool _ | .null, .str _ | .null, .list _
-  | .null, .obj _ | .null, .map _ => some false
+  | .null, .obj _ | .null, .map _ | .null, .set _ => some false
   | .int _, .null | .num _, .null | .bool _, .null | .str _, .null | .list _, .null
-  | .obj _, .null | .map _, .null => some false
+  | .obj _, .null | .map _, .null | .set _, .null => some false
   | _, _ => none
 
 /-- `IsLooselyEqual` (ECMA-262 §7.2.14) when one operand is `null` or
@@ -274,6 +279,24 @@ def mapDelete : List (Val N × Val N) → Val N → Option (List (Val N × Val N
   | [], _ => some []
   | (k', v') :: rest, k => do
     if ← sameKey k' k then return rest else return (k', v') :: (← mapDelete rest k)
+
+/-- Whether a set with the elements `elems` has `x` (`Set.prototype.has`,
+ECMA-262 §24.2.4.8). -/
+def setHas : List (Val N) → Val N → Option Bool
+  | [], _ => some false
+  | y :: rest, x => do if ← sameKey y x then return true else setHas rest x
+
+/-- The elements after `Set.prototype.add` (ECMA-262 §24.2.4.1): `x` goes last
+when the set does not have it, and the set stays as it is when it does. -/
+def setAdd (elems : List (Val N)) (x : Val N) : Option (List (Val N)) := do
+  if ← setHas elems x then return elems else return elems ++ [x]
+
+/-- The elements after `Set.prototype.delete` (ECMA-262 §24.2.4.4), which
+removes `x`. The other elements keep their order. -/
+def setDelete : List (Val N) → Val N → Option (List (Val N))
+  | [], _ => some []
+  | y :: rest, x => do
+    if ← sameKey y x then return rest else return y :: (← setDelete rest x)
 
 /-- What a statement list does: it runs to its end with the variables it
 leaves, or it returns a value, or a `break` or a `continue` ends it with the
@@ -469,6 +492,8 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
       -- fewer than 2^53 entries, so the number is a safe integer.
       | .map entries =>
         if name == "size" then some (.num (JSNumber.ofSafeInt entries.length)) else none
+      -- `s.size` (ECMA-262 §24.2.4.14), the number of elements.
+      | .set elems => if name == "size" then some (.num (JSNumber.ofSafeInt elems.length)) else none
       | _ => none
   -- `obj?.name` is `undefined` when `obj` is `null` or `undefined`
   -- (ECMA-262 §13.3.9.1).
@@ -561,12 +586,18 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     else none
   -- `m.get(k)` and `m.has(k)` on a map (ECMA-262 §24.1.3.6 and §24.1.3.7).
   -- `get` gives `undefined` for a key that the map does not have.
+  -- `s.has(x)` on a set (ECMA-262 §24.2.4.8).
   | .call _ (.member _ recv method) [arg] => do
-    let .map entries ← eval m fuel env recv | none
-    let found ← mapFind entries (← eval m fuel env arg)
-    if method == "get" then return found.getD .undefined
-    else if method == "has" then return .bool found.isSome
-    else none
+    match ← eval m fuel env recv with
+    | .map entries =>
+      let found ← mapFind entries (← eval m fuel env arg)
+      if method == "get" then return found.getD .undefined
+      else if method == "has" then return .bool found.isSome
+      else none
+    | .set elems =>
+      let found ← setHas elems (← eval m fuel env arg)
+      if method == "has" then return .bool found else none
+    | _ => none
   | .call _ (.ident _ name) args => do
     let vs ← evalList m fuel env args
     match fuel with
@@ -584,6 +615,8 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
   -- would hide it too, as one named `Number` would hide `Number`, and the
   -- translator refuses both.
   | .new _ "Map" _ [] => if (env.lookup "Map").isSome then none else some (.map [])
+  -- `new Set()` (ECMA-262 §24.2.2.1), in the same way.
+  | .new _ "Set" _ [] => if (env.lookup "Set").isSome then none else some (.set [])
   | _ => none
 termination_by e => (fuel, sizeOf e, 0)
 
@@ -677,9 +710,16 @@ def execStmt (m : Scope) (fuel : Nat) (env : Env N) : Stmt → Option (Outcome N
     let k ← eval m fuel env key
     let v ← eval m fuel env value
     return .normal (env.set name (.map (← mapSet entries k v)))
+  -- `s.add(x)` and `s.delete(x)` on a set (ECMA-262 §24.2.4.1 and
+  -- §24.2.4.4), in the same way.
   | .exprStmt _ (.call _ (.member _ (.ident _ name) "delete") [key]) => do
-    let .map entries ← env.lookup name | none
-    return .normal (env.set name (.map (← mapDelete entries (← eval m fuel env key))))
+    match ← env.lookup name with
+    | .map entries => return .normal (env.set name (.map (← mapDelete entries (← eval m fuel env key))))
+    | .set elems => return .normal (env.set name (.set (← setDelete elems (← eval m fuel env key))))
+    | _ => none
+  | .exprStmt _ (.call _ (.member _ (.ident _ name) "add") [elem]) => do
+    let .set elems ← env.lookup name | none
+    return .normal (env.set name (.set (← setAdd elems (← eval m fuel env elem))))
   | .exprStmt _ (.assign _ .assign (.ident _ name) value) => do
     return .normal (env.set name (← eval m fuel env value))
   -- `x ??= e` (`LogicalAssignment`, ECMA-262 §13.15.2): `e` runs, and its

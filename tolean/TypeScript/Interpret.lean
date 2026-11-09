@@ -58,6 +58,7 @@ partial def toJson : Val Float → Json
   | .list xs => Json.arr (xs.map toJson).toArray
   | .obj fs => Json.mkObj [("object", Json.arr (fs.map fun (k, v) => Json.arr #[Json.str k, toJson v]).toArray)]
   | .map es => Json.mkObj [("map", Json.arr (es.map fun (k, v) => Json.arr #[toJson k, toJson v]).toArray)]
+  | .set xs => Json.mkObj [("set", Json.arr (xs.map toJson).toArray)]
 
 partial def ofJson (j : Json) : Except String (Val Float) :=
   match j with
@@ -78,6 +79,8 @@ partial def ofJson (j : Json) : Except String (Val Float) :=
         let #[k, v] := (← e.getArr?) | throw "a map entry is not a [key, value] pair"
         return (← ofJson k, ← ofJson v)
       return .map entries.toList
+    if let .ok (elems : Array Json) := j.getObjValAs? (Array Json) "set" then
+      return .set (← elems.mapM ofJson).toList
     let fields ← j.getObjValAs? (Array Json) "object"
     let fields ← fields.mapM fun f => do
       let #[k, v] := (← f.getArr?) | throw "an object field is not a [key, value] pair"

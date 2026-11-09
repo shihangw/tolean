@@ -418,6 +418,20 @@ export class Gen {
         const start = this.chance(0.5) ? this.expr(t, vars, 0) : '';
         lines.push(`const ${name}: Array<${show(t)}> = [${start}];`, `${name}.push(${this.expr(t, vars, 1)});`);
         vars.push({ name, ty: { k: 'array', of: t }, mutable: false, owned: false });
+      } else if (roll < 0.9 && depth > 0 && this.chance(0.5)) {
+        // A set that the function owns, with adds and deletes, read as a map is.
+        const elem = this.pick([BIGINT, STRING, BOOLEAN]);
+        const name = this.fresh('s');
+        lines.push(`const ${name} = new Set<${show(elem)}>();`);
+        const changes = 1 + Math.floor(this.next() * 4);
+        for (let j = 0; j < changes; j++) {
+          lines.push(`${name}.${this.chance(0.75) ? 'add' : 'delete'}(${this.expr(elem, vars, 1)});`);
+        }
+        const has = this.fresh('h');
+        const size = this.fresh('n');
+        lines.push(`const ${has} = ${name}.has(${this.expr(elem, vars, 1)});`, `const ${size} = ${name}.size;`);
+        vars.push({ name: has, ty: BOOLEAN, mutable: false, owned: false },
+          { name: size, ty: NUMBER, mutable: false, owned: false });
       } else if (roll < 0.9 && depth > 0) {
         // A map that the function owns, with sets and deletes. Code may read
         // it only through get, has and size, so the reads go into locals.
