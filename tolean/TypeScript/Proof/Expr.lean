@@ -685,6 +685,93 @@ theorem eval_stripParens (e : Expr) (ρ : Eval.Env N) :
   | case1 sp inner ih => simp only [Expr.stripParens, ih]; simp only [Eval.eval]
   | case2 e he => cases e <;> simp_all [Expr.stripParens]
 
+omit [JSNumber N] in
+/-- A read of one more property at the end of a path. -/
+theorem getPath_append (f : String) : ∀ (fields : List (String × Val N)) (fs : List String), fs ≠ [] →
+    Eval.getPath fields (fs ++ [f]) =
+      (Eval.getPath fields fs).bind fun v => match v with
+        | .obj inner => Eval.getProp inner f
+        | _ => none
+  | _, [], h => absurd rfl h
+  | fields, [g], _ => by
+    simp only [List.cons_append, List.nil_append, Eval.getPath]
+    cases Eval.getProp fields g with
+    | none => simp
+    | some w => cases w <;> simp
+  | fields, g :: h :: t, _ => by
+    simp only [List.cons_append, Eval.getPath]
+    cases Eval.getProp fields g with
+    | none => simp
+    | some w =>
+      cases w with
+      | obj inner =>
+        have := getPath_append f inner (h :: t) (by simp)
+        simp only [List.cons_append] at this
+        simp [this]
+      | _ => simp
+
+/-- An optional chain that reads `path` from `base`: a `?.` that meets `null`
+or `undefined` skips the rest, and otherwise the chain reads the path. -/
+theorem evalChain_optChain {ρ : Eval.Env N} : ∀ {e base : Expr} {path : List String},
+    e.optChain? = some (base, path) → ∀ {v : Val N}, Eval.eval m fuel ρ base = some v →
+    Eval.evalChain m fuel ρ e = (match v with
+      | .null | .undefined => some none
+      | .obj fields => (Eval.getPath fields path).map some
+      | _ => none)
+  | .optMember sp obj f, base, path, h, v, hb => by
+    simp only [Expr.optChain?, Option.some.injEq, Prod.mk.injEq] at h
+    obtain ⟨rfl, rfl⟩ := h
+    rw [Eval.evalChain]
+    cases v <;> simp [hb, Eval.getPath]
+  | .member sp o f, base, path, h, v, hb => by
+    simp only [Expr.optChain?, Option.map_eq_some_iff] at h
+    obtain ⟨⟨b, fs⟩, ho, heq⟩ := h
+    simp only [Prod.mk.injEq] at heq
+    obtain ⟨rfl, rfl⟩ := heq
+    have hne : fs ≠ [] := by
+      intro hfs; subst hfs
+      cases o <;> simp [Expr.optChain?] at ho
+    have ih := evalChain_optChain (e := o) ho hb
+    rw [Eval.evalChain, ih]
+    cases v with
+    | obj fields =>
+      simp only [getPath_append f fields fs hne]
+      cases Eval.getPath fields fs with
+      | none => simp
+      | some w => cases w <;> simp
+    | _ => simp
+  | .ident .., _, _, h, _, _ | .number .., _, _, h, _, _ | .bigint .., _, _, h, _, _
+  | .string .., _, _, h, _, _ | .bool .., _, _, h, _, _ | .null _, _, _, h, _, _ | .array .., _, _, h, _, _
+  | .object .., _, _, h, _, _ | .paren .., _, _, h, _, _ | .index .., _, _, h, _, _ | .call .., _, _, h, _, _
+  | .unary .., _, _, h, _, _ | .prefix .., _, _, h, _, _ | .postfix .., _, _, h, _, _
+  | .binary .., _, _, h, _, _ | .cond .., _, _, h, _, _ | .assign .., _, _, h, _, _
+  | .arrow .., _, _, h, _, _ => by simp [Expr.optChain?] at h
+
+/-- A property read after an optional chain reads the chain's path, or gives
+`undefined` where the `?.` meets `null` or `undefined`. -/
+theorem eval_member_chain {ρ : Eval.Env N} {sp : Span} {obj base : Expr} {name : String} {path : List String}
+    (hsp : obj.optSpine = true) (h : (Expr.member sp obj name).optChain? = some (base, path)) {v : Val N}
+    (hb : Eval.eval m fuel ρ base = some v) :
+    Eval.eval m fuel ρ (.member sp obj name) = (match v with
+      | .null | .undefined => some .undefined
+      | .obj fields => Eval.getPath fields path
+      | _ => none) := by
+  simp only [Expr.optChain?, Option.map_eq_some_iff] at h
+  obtain ⟨⟨b, fs⟩, ho, heq⟩ := h
+  simp only [Prod.mk.injEq] at heq
+  obtain ⟨rfl, rfl⟩ := heq
+  have hne : fs ≠ [] := by
+    intro hfs; subst hfs
+    cases obj <;> simp [Expr.optChain?] at ho
+  rw [Eval.eval, if_pos hsp, evalChain_optChain m fuel ho hb]
+  cases v with
+  | obj fields =>
+    simp only [getPath_append name fields fs hne]
+    cases Eval.getPath fields fs with
+    | none => simp
+    | some w => cases w <;> simp
+  | _ => simp
+
 /-- Narrowing changes a type, not the names in scope. -/
 theorem narrow_has (env : Translate.Env) (n : String) (t : Ty) (x : String) :
     (env.narrow n t).has x = env.has x := by
@@ -816,7 +903,7 @@ theorem tagSide_eval {l r : Expr} {n : String} {f : Option String} {t : String}
       · rename_i k' hk'
         simp only [Option.some.injEq] at hk
         subst hk
-        simp [Eval.eval, hw, Eval.getProp, hk']
+        simp [Eval.eval, hw, Eval.getProp, hk', Expr.optSpine]
       · simp at hk
     | _ => simp [IR.tagOf] at hk
   have htype : ∀ sp sp', f = none →
@@ -1536,13 +1623,32 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
           have hg : n ≠ "NaN" ∧ n ≠ "Infinity" ∧ n ≠ "undefined" := by
             have := hng.2
             refine ⟨?_, ?_, ?_⟩ <;> intro h <;> subst h <;> simp [isGlobalName, isNumberName] at this
-          simp only [Eval.eval, hnone, hres, hg.1, hg.2.1, hg.2.2, Option.map_some, Eval.enumObject,
-            Eval.getProp, beq_iff_eq, if_false, Option.bind_eq_bind, Option.bind_some]
+          simp only [Eval.eval, Expr.optSpine, Bool.false_eq_true, ↓reduceIte, hnone, hres, hg.1, hg.2.1,
+            hg.2.2, Option.map_some, Eval.enumObject, Eval.getProp, beq_iff_eq, Option.bind_eq_bind,
+            Option.bind_some]
           rw [lookup_map_str hval]
         | none =>
         simp only [he] at h
         split at h
-        · simp at h
+        · rename_i hsp
+          cases hc : (Expr.member sp obj name).optChain? with
+          | none => simp [hc] at h
+          | some bp =>
+            obtain ⟨base, path⟩ := bp
+            simp only [hc, bind_ok] at h
+            obtain ⟨o, s₁, ho, ⟨bind, ty⟩, s₂, -, h⟩ := h
+            simp only [pure_ok] at h
+            obtain ⟨rfl, -⟩ := h
+            intro ρs ρo v ha hs hv'
+            simp only [IR.Expr.eval, IR.Expr.evalList] at hv'
+            cases hobj : IR.Expr.eval fs fuel ρo o.code with
+            | none => simp [hobj] at hv'
+            | some ov =>
+              have := ihE _ _ _ _ _ _ ho ρs ρo ov ha hs hobj
+              simp only [hobj] at hv'
+              rw [eval_member_chain m fuel hsp hc this]
+              cases ov <;> simp only [IR.ExprExt.apply] at hv' <;> first | exact hv' | simp at hv'
+        rename_i hsp
         simp at h
         obtain ⟨o, s₁, ho, _, _, ⟨rfl, rfl⟩, ty, ⟨-, rfl⟩, rfl⟩ := h
         intro ρs ρo v ha hs hv'
@@ -1551,7 +1657,7 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
         | none => simp [hobj] at hv'
         | some ov =>
           have := ihE _ _ _ _ _ _ ho ρs ρo ov ha hs hobj
-          simp only [Eval.eval, this]
+          simp only [Eval.eval, hsp, Bool.false_eq_true, ↓reduceIte, this]
           simpa [hobj] using hv'
       | optMember sp obj name =>
         simp only [translateExprCore, bind_ok] at h

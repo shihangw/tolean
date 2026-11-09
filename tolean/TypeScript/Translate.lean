@@ -1279,6 +1279,37 @@ def callbackResult (s bodySpan : Span) (method : IR.ListMethod) (elem body : Ty)
     return .optional elem
   | _ => return .boolean
 
+/-- The type of `x.f1.f2…` after `?.`, where `x` has the interface `ref`:
+whether the last field is optional, and the type of the chain. Each field
+before the last must be a required field of an interface type, because
+`.` on `null` or `undefined` throws. -/
+def optPathRest (s : Span) (ref : DeclRef) (args : List Ty) : List String → TM (Bool × Ty)
+  | [] => reject s "a chain after '?.' must read a property"
+  | [f] => optFieldType s (.nullable (.struct ref args)) f
+  | f :: rest => do
+    let ctx : Ctx ← get
+    let field? := (ctx.knownStructs.find? fun (i : StructInfo) => i.ref == ref).bind
+      fun info => (info.fieldsAt args).lookup f
+    match field? with
+    | some (.struct ref' args') => optPathRest s ref' args' rest
+    | some (.optional _) | some (.nullable _) =>
+      reject s s!"'{f}' may be null or undefined, so the property after it needs '?.' too"
+    | some _ => reject s s!"a property after '{f}' needs a value of an interface type"
+    | none => reject s "only fields of interfaces declared in this file, or exported by the files before it, may be read"
+
+/-- The type of `x?.f1.f2…` on a value of type `t`: whether the last field is
+optional, and the type of the chain, which is `undefined` when `x` is
+`null` or `undefined`. -/
+def optPathType (s : Span) (t : Ty) : List String → TM (Bool × Ty)
+  | [] => reject s "a chain after '?.' must read a property"
+  | [f] => optFieldType s t f
+  | f :: rest => do
+    let (bind, ft) ← optFieldType s t f
+    if bind then reject s s!"'{f}' may be undefined, so the property after it needs '?.' too"
+    let .optional (.struct ref args) := ft
+      | reject s s!"a property after '{f}' needs a value of an interface type"
+    optPathRest s ref args rest
+
 /-- `applyOperator`, after a string operand becomes a constructor where the
 other operand is of a literal union. -/
 def translateOperator (s : Span) (op : BinOp) (r : Expr) (a b : Code) : TM Code := do
@@ -1351,9 +1382,14 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
       let value ← orReject (e.members.lookup name) s s!"'{name}' is not a member of the enum {e.name}"
       return ⟨.enumCase e.ref value, false, .enum e.ref⟩
     | none =>
-    -- JS skips the rest of a chain after a `?.` that meets null, so
-    -- `a?.b.c` is not `(a?.b).c`, and the subset leaves the chain out.
-    if obj matches .optMember .. then reject s "a chain after '?.', such as a?.b.c, is not supported"
+    -- A read after `?.` is a part of the optional chain, so `a?.b.c` is one
+    -- `map` over `a`, not `(a?.b).c`.
+    if obj.optSpine then
+      let some (base, path) := (Expr.member s obj name).optChain?
+        | reject s "a chain after '?.' must read a property"
+      let o ← translateExpr fuel env none base
+      let (bind, type) ← optPathType s o.type path
+      return ⟨.ext (.optField path bind) [o.code], false, type⟩
     let o ← translateExpr fuel env none obj
     let ctx : Ctx ← get
     let field? := match o.type with
@@ -1373,7 +1409,7 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
   | .optMember s obj name =>
     let o ← translateExpr fuel env none obj
     let (bind, type) ← optFieldType s o.type name
-    return ⟨.ext (.optField name bind) [o.code], false, type⟩
+    return ⟨.ext (.optField [name] bind) [o.code], false, type⟩
   | .index s obj key =>
     let o ← translateExpr fuel env none obj
     match o.type.tupleElems? with

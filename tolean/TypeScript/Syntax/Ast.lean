@@ -479,6 +479,22 @@ def Decl.span : Decl → Span
   | .import s .. | .function s .. | .interface s .. | .typeAlias s .. | .enum s .. | .exportedVar s _ => s
   | .stmt st => st.span
 
+/-- `e` reads a property after a `?.`, through property reads and not
+through parentheses, as `a?.b` and `a?.b.c` do. A property read of such an
+`e` is a part of the same optional chain (ECMA-262 §13.3.9), so it is
+skipped too where the `?.` meets `null` or `undefined`. -/
+def Expr.optSpine : Expr → Bool
+  | .optMember .. => true
+  | .member _ o _ => o.optSpine
+  | _ => false
+
+/-- An optional chain that reads `path` from `base`, the first property after
+a `?.`: `a?.b.c` reads `[b, c]` from `a`. -/
+def Expr.optChain? : Expr → Option (Expr × List String)
+  | .optMember _ base f => some (base, [f])
+  | .member _ o f => (o.optChain?).map fun (b, fs) => (b, fs ++ [f])
+  | _ => none
+
 /-- `e` without the parentheses around it. -/
 def Expr.stripParens : Expr → Expr
   | .paren _ inner => inner.stripParens

@@ -316,6 +316,7 @@ the file, the line and the reason. It never approximates.
 | `x?: T`, an optional parameter | `(x : Option T := none)`. A call may leave out the optional parameters, which come last, and then the output passes `none` for each. A call may also pass a `T`, or `undefined`, which is `none` too. `x ?? d`, `x === undefined` and `x?.f` work as they do on an optional field. |
 | `if (x === undefined)` or `if (x !== undefined)`, with `undefined` on either side, where `x` is an optional parameter or a local with an optional value | `match x with \| none => … \| some x => …`, as for a test of `null`. The branch where `x` is defined reads it as a `T`. |
 | `p?.f`, where `p` is a `S \| null` or an optional field of type `S` | `p.map (·.f)`, or `p.bind (·.f)` when `f` is optional. The value is `undefined` when `p` is `null` or `undefined`, so it has the type of an optional field: `p?.f ?? d` and `p?.f === undefined` work as they do on `s.f`. |
+| `p?.f.g`, a chain of reads after `?.` | `p.map (·.f.g)`, or `p.bind (·.f.g)` when `g` is optional. The reads after `?.` are a part of the same optional chain, so the whole chain is `undefined` when `p` is `null` or `undefined`. Each field before the last must be a required field of an interface type. |
 | `type T = U`, declared before its uses | `abbrev T := U`. The output writes `U` itself wherever the source names `T`, so the `abbrev` is only for claims. |
 | `type T = 'a' \| 'b'`, a union of string literals | `inductive T` with the constructors `a` and `b`, which derives `DecidableEq`. A literal becomes `T.a` where the context expects a `T`, and `t === 'a'` becomes `t = T.a`. The output writes every constructor in `«»`, such as `T.«open»`, because Lean reads some strings as keywords or modifiers. A claim can still write `T.a`. |
 | `enum T { A = 'a', B = 'b' }`, an enum whose members are strings | The same `inductive T` as for `'a' \| 'b'`, with the constructors named after the strings, so `T.A` becomes `T.«a»`. TypeScript compiles the enum to an object with one property for each member, and `T.A` reads it. The output has no such object, so only `T.A` reads a member, and a file that imports the enum without `type` may read its members too. |
@@ -495,10 +496,12 @@ Tolean rejects these, among others:
   of `undefined` that narrows a value inside an expression, such as
   `x !== undefined && x > 0n`. Only the test of an `if` narrows an optional
   value.
-- A chain after `?.`, such as `a?.b.c`. When `a` is `null`, JS skips the
-  whole chain and gives `undefined`, so `a?.b.c` is not `(a?.b).c`. Tolean
-  also refuses `?.` where the value cannot be `null` or `undefined`, `?.` on
-  a nullable field, and `a?.[i]` and `f?.()`.
+- `?.` where the value cannot be `null` or `undefined`, `?.` on a nullable
+  field, and `a?.[i]` and `f?.()`. In a chain such as `a?.b.c`, Tolean
+  refuses a field before the last that may be `null` or `undefined`, because
+  `.` on it throws. `(a?.b).c` is not a chain, because the parentheses end
+  it: it reads `.c` of `undefined` when `a` is `null`, so Tolean refuses
+  it.
 - A local or a function named `undefined`, which would hide the global the
   subset reads. Tolean also refuses a value that may be either `undefined` or
   `null`, such as `b ? s.f : null`, because the output has one `none` for

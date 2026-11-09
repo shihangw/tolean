@@ -132,6 +132,8 @@ def sections : List Section := [
   ⟨"sec-function-calls", "13.3.6", "Function Calls",
     [``Proof.eval_call, ``Proof.out_call, ``Proof.zip_sim, ``Proof.zip_sim_value, ``Proof.calls_agree,
     ``Proof.evalList_append_undefined, ``Proof.callS_append_undefined]⟩,
+  ⟨"sec-optional-chains", "13.3.9", "Optional Chains",
+    [``Proof.getPath_append, ``Proof.evalChain_optChain, ``Proof.eval_member_chain]⟩,
   ⟨"sec-typeof-operator", "13.5.3", "The typeof Operator",
     [``Proof.tagSide_eval, ``Proof.tagTestOf_eval, ``Proof.branch_tag]⟩,
   ⟨"sec-unary-minus-operator", "13.5.5", "Unary - Operator",

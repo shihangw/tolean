@@ -195,6 +195,16 @@ key with one names no property and reads `undefined`, as in JS. -/
 def getKey (fields : List (String × Val N)) (key : JSString) : Option (Val N) :=
   getProp fields key.toString
 
+/-- The property at `path` of an object with the fields `fields`, where each
+property before the last is an object. -/
+def getPath (fields : List (String × Val N)) : List String → Option (Val N)
+  | [] => none
+  | [f] => getProp fields f
+  | f :: rest => do
+    match ← getProp fields f with
+    | .obj inner => getPath inner rest
+    | _ => none
+
 /-- A binary operator on two values, when neither operand short-circuits.
 Bigint `/` and `%` truncate toward zero and throw on a zero divisor
 (`BigInt::divide`, `BigInt::remainder`). On numbers, `a > b` is `b < a` and
@@ -397,14 +407,22 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
   | .paren _ inner => eval m fuel env inner
   | .array _ elems => (evalList m fuel env elems).map .list
   | .object _ props => (evalProps m fuel env props).map .obj
-  | .member _ obj name => do
-    match ← eval m fuel env obj with
-    | .obj fields => getProp fields name
-    | _ => none
+  -- A property read after a `?.` is a part of its optional chain, which is
+  -- `undefined` as a whole where the `?.` meets `null` or `undefined`
+  -- (ECMA-262 §13.3.9.1). So `a?.b.c` is `undefined` when `a` is `null`,
+  -- but `(a?.b).c` reads `.c` of `undefined`, which throws.
+  | .member _ obj name =>
+    if obj.optSpine then do
+      match ← evalChain m fuel env obj with
+      | none => some .undefined
+      | some (.obj fields) => getProp fields name
+      | some _ => none
+    else do
+      match ← eval m fuel env obj with
+      | .obj fields => getProp fields name
+      | _ => none
   -- `obj?.name` is `undefined` when `obj` is `null` or `undefined`
-  -- (ECMA-262 §13.3.9.1). A chain after it, as in `obj?.a.b`, would skip the
-  -- rest of the chain too. This model does not: it reads `.b` of `undefined`,
-  -- which gives no value, so it is only less defined than JS there.
+  -- (ECMA-262 §13.3.9.1).
   | .optMember _ obj name => do
     match ← eval m fuel env obj with
     | .null | .undefined => some .undefined
@@ -506,6 +524,23 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
       | .normal _ | .brk _ | .cont _ => none
   | _ => none
 termination_by e => (fuel, sizeOf e, 0)
+
+/-- An optional chain such as `a?.b.c`: `none` where a `?.` meets `null` or
+`undefined`, which skips the rest of the chain, and the value of the chain
+otherwise. -/
+def evalChain (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Option (Val N))
+  | .optMember _ obj name => do
+    match ← eval m fuel env obj with
+    | .null | .undefined => some none
+    | .obj fields => (getProp fields name).map some
+    | _ => none
+  | .member _ obj name => do
+    match ← evalChain m fuel env obj with
+    | none => some none
+    | some (.obj fields) => (getProp fields name).map some
+    | some _ => none
+  | e => (eval m fuel env e).map some
+termination_by e => (fuel, sizeOf e, 1)
 
 def evalList (m : Scope) (fuel : Nat) (env : Env N) : List Expr → Option (List (Val N))
   | [] => some []

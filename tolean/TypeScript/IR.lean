@@ -63,9 +63,10 @@ inductive ExprExt where
   | isUndefined
   /-- `a.isSome`, on an optional value: `a !== undefined`. -/
   | isDefined
-  /-- `a.map (·.f)`, or `a.bind (·.f)` when the field `f` is optional:
-  `a?.f`, which is `undefined` when `a` is `null` or `undefined`. -/
-  | optField (name : String) (bind : Bool)
+  /-- `a.map (·.f.g)`, or `a.bind (·.f.g)` when the last field is optional:
+  `a?.f.g`, which is `undefined` when `a` is `null` or `undefined`. The
+  fields before the last are required. -/
+  | optField (path : List String) (bind : Bool)
   /-- `match k with | K.a => r.a | …`, on `r` and `k`: `r[k]`, where `r` is a
   `Record<K, V>` with the keys `keys`, and `K` is the literal union `key`. -/
   | recordGet (key : DeclRef) (keys : List String)
@@ -146,7 +147,8 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
   | .undefined, _ => leanName names "none"
   | .isUndefined, [a] => s!"{argument a}.isNone"
   | .isDefined, [a] => s!"{argument a}.isSome"
-  | .optField f bind, [a] => s!"({argument a}.{if bind then "bind" else "map"} (·.{f}))"
+  | .optField path bind, [a] =>
+    s!"({argument a}.{if bind then "bind" else "map"} (·.{".".intercalate path}))"
   | .recordGet key keys, [r, k] =>
     let case (f : String) := s!"{(names.ref key).1}.{memberName f}"
     -- A key that is one constructor, as `r['a']` gives, reads its field.
