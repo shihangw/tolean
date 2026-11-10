@@ -118,6 +118,7 @@ def Expr.beq : Expr → Expr → Bool
   | .satisfies a0 a1 a2, .satisfies b0 b1 b2 => decide (a0 = b0) && Expr.beq a1 b1 && TypeExpr.beq a2 b2
   | .new a0 a1 a2 a3, .new b0 b1 b2 b3 =>
     decide (a0 = b0) && decide (a1 = b1) && TypeExpr.beqList a2 b2 && Expr.beqList a3 b3
+  | .spread a0 a1, .spread b0 b1 => decide (a0 = b0) && Expr.beq a1 b1
   | _, _ => false
 
 def Expr.beqList : List Expr → List Expr → Bool
@@ -191,6 +192,8 @@ theorem Expr.beq_iff : (a b : Expr) → Expr.beq a b = true ↔ a = b
     cases b <;> simp [and_assoc, Expr.beq, Expr.beq_iff a1, TypeExpr.beq_iff a2]
   | .new a0 a1 a2 a3, b => by
     cases b <;> simp [and_assoc, Expr.beq, TypeExpr.beqList_iff a2, Expr.beqList_iff a3]
+  | .spread a0 a1, b => by
+    cases b <;> simp [and_assoc, Expr.beq, Expr.beq_iff a1]
 
 theorem Expr.beqList_iff : (xs ys : List Expr) → Expr.beqList xs ys = true ↔ xs = ys
   | [], ys => by cases ys <;> simp [and_assoc, Expr.beqList]

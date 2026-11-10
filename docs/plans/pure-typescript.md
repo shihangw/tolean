@@ -157,10 +157,9 @@ full model, which a later step can add.
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| `new Map()`, `new Set()`, `get`, `has`, `set`, `add`, `delete`, `size`, and `for … of` over them | A list of entries in insertion order. ECMA-262 fixes that order (§24.1 and §24.2). | Keys that are objects, and `number` keys that can be `NaN` or `-0` |
 | A function that changes a map that its caller passes in | A function that returns the new map. The caller takes the result in place of the old map. | A call where the caller keeps another name for the same map |
 
-The second row is the borrow that Aeneas uses for Rust. It is sound here only
+This is the borrow that Aeneas uses for Rust. It is sound here only
 because the translator checks that the caller owns the map and holds no other
 name for it during the call. Key equality is SameValueZero. For `string` and
 `bigint` keys that is Lean's equality. For `number` keys it is Lean's
@@ -231,8 +230,7 @@ leaves a gap.
    classes. `throw new Error(message)` is done.
 7. **P0.** Local functions that change variables of the enclosing function, by
    lifting them out and threading the variables through each call.
-8. **P0.** `Map` and `Set`, with owned values and the borrow for a map that a
-   caller passes in.
+8. **P0.** The borrow for a map that a caller passes in.
 9. **P1.** Strings: template literals, string order, the string methods,
    iteration by code point, and the opaque `JSON.stringify`.
 10. **P1.** Sorting with consistent comparators.
@@ -286,3 +284,13 @@ variables and in maps.
   Node on every program that it parses. The same check on the loop's body
   would close it. A binding kind in `Eval.Env` would cover every case, but
   then `Agree` and every statement proof would compare kinds too.
+- How should the spec model an array, a map or a set that two names hold?
+  The spec treats each as a value, and a `push`, `set`, `add` or `delete`
+  changes only the variable that it names. That is the JS meaning only when
+  nothing else holds the object. The translator checks this, but the spec
+  does not, so for `const n = m; m.set(k, v)` the spec gives `n` the old map,
+  where Node shares one map. No certified program meets the gap, but
+  `interpreter.test.ts` asks the interpreter to agree with Node on every
+  program that it parses. A check of the ownership rule in the spec's call
+  rule would close it, with a proof that every body that the translator
+  accepts passes the check.

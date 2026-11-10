@@ -479,14 +479,19 @@ def listStep {α : Type} (close : String) (refuse : Token → ParseM Unit) (pars
   else if !t.isPunct close then unexpected t s!"',' or '{close}'"
   return (items, true)
 
-/-- What `parseArguments` refuses before an argument. -/
-def refuseArgument (t : Token) : ParseM Unit := do
-  if t.isPunct "..." then failAt t "spread arguments are not supported"
-
 /-- What `parseArrayLiteral` refuses before an element. -/
 def refuseElement (t : Token) : ParseM Unit := do
   if t.isPunct "," then failAt t "array holes are not supported"
-  if t.isPunct "..." then failAt t "spread elements are not supported"
+
+/-- An element of an array literal, or an argument of a call or a `new`:
+`...e`, which spreads the values of `e`, or what `item` reads. -/
+def parseElement (item : ParseM Expr) : ParseM Expr := do
+  let t ← peek
+  if t.isPunct "..." then
+    discard advance
+    let e ← item
+    return .spread (← spanFrom t.span.start) e
+  item
 
 /-- The `?` after the name of an optional parameter, if one comes next. A
 function may have an optional parameter, `x?: T`, but an arrow function may
@@ -641,14 +646,14 @@ def parseLeftHandSide (fuel : Nat) : ParseM Expr := do
 def parseArguments (fuel : Nat) : ParseM (List Expr) := do
   let fuel + 1 := fuel | outOfFuel
   let _ ← expectPunct "("
-  let args ← iterate (← budget) #[] (listStep ")" refuseArgument (parseAssign fuel))
+  let args ← iterate (← budget) #[] (listStep ")" (fun _ => pure ()) (parseElement (parseAssign fuel)))
   let _ ← expectPunct ")"
   return args.toList
 
 def parseArrayLiteral (fuel : Nat) : ParseM Expr := do
   let fuel + 1 := fuel | outOfFuel
   let start := (← expectPunct "[").span.start
-  let elems ← iterate (← budget) #[] (listStep "]" refuseElement (parseAssign fuel))
+  let elems ← iterate (← budget) #[] (listStep "]" refuseElement (parseElement (parseAssign fuel)))
   let _ ← expectPunct "]"
   return .array (← spanFrom start) elems.toList
 

@@ -35,6 +35,8 @@ def Ty.beq : Ty T → Ty T → Bool
   | .tuple a, .tuple b => Ty.beqList a b
   | .param a, .param b => Decidable.decide (a = b)
   | .app a as, .app b bs => Decidable.decide (a = b) && Ty.beqList as bs
+  | .map a a', .map b b' => Ty.beq a b && Ty.beq a' b'
+  | .set a, .set b => Ty.beq a b
   | .except a a', .except b b' => Ty.beq a b && Ty.beq a' b'
   | .ext a, .ext b => Decidable.decide (a = b)
   | _, _ => false
@@ -52,12 +54,14 @@ theorem Ty.beq_iff : (a b : Ty T) → Ty.beq a b = true ↔ a = b
   | .int, b | .bool, b | .string, b | .struct _, b | .enum _, b | .tagged _, b | .tag _, b | .param _, b
   | .ext _, b => by
     cases b <;> simp [Ty.beq]
-  | .option a, b | .optional a, b | .list a, b => by
+  | .option a, b | .optional a, b | .list a, b | .set a, b => by
     cases b <;> simp [Ty.beq, Ty.beq_iff a]
   | .tuple a, b => by
     cases b <;> simp [Ty.beq, Ty.beqList_iff a]
   | .app r a, b => by
     cases b <;> simp [Ty.beq, Ty.beqList_iff a]
+  | .map a a', b => by
+    cases b <;> simp [Ty.beq, Ty.beq_iff a, Ty.beq_iff a']
   | .except a a', b => by
     cases b <;> simp [Ty.beq, Ty.beq_iff a, Ty.beq_iff a']
 

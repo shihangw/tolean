@@ -276,7 +276,138 @@ theorem update_sound (hc : CallsAgree (N := N) m.program fs fuel) {env : Transla
           refine ⟨by simp [Env.has, hl], by simp [exprChanges], ?_⟩
           simp [Eval.execStmt, hx, hsim ρs ρo va ha hs hva]
         · simp at h
-    · simp [hf] at h
+    by_cases hset : field = "set"
+    · -- `m.set(k, v)` on an owned map: the map with the entry.
+      subst hset
+      simp only at h
+      cases hl : env.lookup target with
+      | none => simp [hl] at h
+      | some loc =>
+        obtain ⟨lname, lb, lt⟩ := loc
+        cases lb <;> cases lt <;> simp [hl] at h
+        rename_i k v
+        rcases args with _ | ⟨key, _ | ⟨value, _ | ⟨a3, more⟩⟩⟩ <;> simp at h
+        obtain ⟨_, _, ⟨rfl, rfl⟩, kc, s₃, hkc, h⟩ := h
+        split at h
+        · simp at h
+          obtain ⟨_, _, ⟨rfl, rfl⟩, vc, s₄, hvc, h⟩ := h
+          split at h
+          · simp at h
+            obtain ⟨⟨rfl, rfl⟩, -⟩ := h
+            have hk := (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hkc
+            have hv := (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hvc
+            obtain ⟨vs, hvs, happ⟩ := out_ext fs fuel hw
+            simp only [IR.Expr.evalList, IR.Expr.eval] at hvs
+            cases hx : ρo.lookup target with
+            | none => simp [hx] at hvs
+            | some vm =>
+              cases hy : IR.Expr.eval fs fuel ρo kc.value with
+              | none => simp [hx, hy] at hvs
+              | some vk =>
+                cases hz : IR.Expr.eval fs fuel ρo vc.value with
+                | none => simp [hx, hy, hz] at hvs
+                | some vv =>
+                  simp [hx, hy, hz] at hvs
+                  subst hvs
+                  rw [eval_value] at hy hz
+                  cases vm <;> simp [IR.ExprExt.apply] at happ
+                  obtain ⟨es', hes, rfl⟩ := happ
+                  rw [← ha target] at hx
+                  refine ⟨by simp [Env.has, hl], by simp [exprChanges], ?_⟩
+                  simp [Eval.execStmt, hx, hk ρs ρo vk ha hs hy, hv ρs ρo vv ha hs hz, hes]
+          · simp at h
+        · simp at h
+    by_cases hdel : field = "delete"
+    · -- `m.delete(k)` on an owned map, or `s.delete(x)` on an owned set.
+      subst hdel
+      simp only at h
+      cases hl : env.lookup target with
+      | none => simp [hl] at h
+      | some loc =>
+        obtain ⟨lname, lb, lt⟩ := loc
+        cases lb <;> cases lt <;> simp [hl] at h
+        next k v =>
+          rcases args with _ | ⟨key, _ | ⟨a2, more⟩⟩ <;> simp at h
+          obtain ⟨_, _, ⟨rfl, rfl⟩, kc, s₃, hkc, h⟩ := h
+          split at h
+          · simp at h
+            obtain ⟨⟨rfl, rfl⟩, -⟩ := h
+            have hk := (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hkc
+            obtain ⟨vs, hvs, happ⟩ := out_ext fs fuel hw
+            simp only [IR.Expr.evalList, IR.Expr.eval] at hvs
+            cases hx : ρo.lookup target with
+            | none => simp [hx] at hvs
+            | some vm =>
+              cases hy : IR.Expr.eval fs fuel ρo kc.value with
+              | none => simp [hx, hy] at hvs
+              | some vk =>
+                simp [hx, hy] at hvs
+                subst hvs
+                rw [eval_value] at hy
+                cases vm <;> simp [IR.ExprExt.apply] at happ
+                obtain ⟨es', hes, rfl⟩ := happ
+                rw [← ha target] at hx
+                refine ⟨by simp [Env.has, hl], by simp [exprChanges], ?_⟩
+                simp [Eval.execStmt, hx, hk ρs ρo vk ha hs hy, hes]
+          · simp at h
+        next t =>
+          rcases args with _ | ⟨key, _ | ⟨a2, more⟩⟩ <;> simp at h
+          obtain ⟨_, _, ⟨rfl, rfl⟩, kc, s₃, hkc, h⟩ := h
+          split at h
+          · simp at h
+            obtain ⟨⟨rfl, rfl⟩, -⟩ := h
+            have hk := (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hkc
+            obtain ⟨vs, hvs, happ⟩ := out_ext fs fuel hw
+            simp only [IR.Expr.evalList, IR.Expr.eval] at hvs
+            cases hx : ρo.lookup target with
+            | none => simp [hx] at hvs
+            | some vm =>
+              cases hy : IR.Expr.eval fs fuel ρo kc.value with
+              | none => simp [hx, hy] at hvs
+              | some vk =>
+                simp [hx, hy] at hvs
+                subst hvs
+                rw [eval_value] at hy
+                cases vm <;> simp [IR.ExprExt.apply] at happ
+                obtain ⟨es', hes, rfl⟩ := happ
+                rw [← ha target] at hx
+                refine ⟨by simp [Env.has, hl], by simp [exprChanges], ?_⟩
+                simp [Eval.execStmt, hx, hk ρs ρo vk ha hs hy, hes]
+          · simp at h
+    by_cases hadd : field = "add"
+    · -- `s.add(x)` on an owned set: the set with `x`.
+      subst hadd
+      simp only at h
+      cases hl : env.lookup target with
+      | none => simp [hl] at h
+      | some loc =>
+        obtain ⟨lname, lb, lt⟩ := loc
+        cases lb <;> cases lt <;> simp [hl] at h
+        rename_i t
+        rcases args with _ | ⟨key, _ | ⟨a2, more⟩⟩ <;> simp at h
+        obtain ⟨_, _, ⟨rfl, rfl⟩, kc, s₃, hkc, h⟩ := h
+        split at h
+        · simp at h
+          obtain ⟨⟨rfl, rfl⟩, -⟩ := h
+          have hk := (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hkc
+          obtain ⟨vs, hvs, happ⟩ := out_ext fs fuel hw
+          simp only [IR.Expr.evalList, IR.Expr.eval] at hvs
+          cases hx : ρo.lookup target with
+          | none => simp [hx] at hvs
+          | some vm =>
+            cases hy : IR.Expr.eval fs fuel ρo kc.value with
+            | none => simp [hx, hy] at hvs
+            | some vk =>
+              simp [hx, hy] at hvs
+              subst hvs
+              rw [eval_value] at hy
+              cases vm <;> simp [IR.ExprExt.apply] at happ
+              obtain ⟨es', hes, rfl⟩ := happ
+              rw [← ha target] at hx
+              refine ⟨by simp [Env.has, hl], by simp [exprChanges], ?_⟩
+              simp [Eval.execStmt, hx, hk ρs ρo vk ha hs hy, hes]
+        · simp at h
+    · simp [hf, hset, hdel, hadd] at h
   case assign sp' op target right =>
     cases target <;> (try simp only at h) <;> try (simp at h; done)
     rename_i sp1 x
@@ -1709,6 +1840,18 @@ theorem translateIf_sound (hc : CallsAgree (N := N) m.program fs fuel) {F : Nat}
               exact if_state_sim m fs fuel (narrow_has _ _ _) (narrow_has _ _ _) rfl rfl rfl (hb wt wf)
                 (ihS _ _ _ _ _ _ hwt) (ihS _ _ _ _ _ _ hwf) (ihS _ _ _ _ _ _ hrb)
 
+/-- `loopItems` reads no state, and gives what `loopOver` gives. -/
+theorem loopItems_ok {iterable : Expr} {body : Stmt} {items : Code} {r : Ty × IR.Expr}
+    {ctx ctx' : Ctx} (h : loopItems iterable body items ctx = .ok r ctx') :
+    Stmt.mutatesIterable iterable body = false ∧ loopOver items = some r ∧ ctx' = ctx := by
+  unfold loopItems at h
+  simp only [ite_state] at h
+  split at h
+  · simp at h
+  · rename_i hm
+    simp only [pure_bind, orReject_ok] at h
+    exact ⟨by simpa using hm, h.1, h.2.symm⟩
+
 /-- `translateForOf` is sound, when `translateStatements` is with one unit of fuel less. -/
 theorem translateForOf_sound (hc : CallsAgree (N := N) m.program fs fuel) {F : Nat}
     (ihS : ∀ env tail ss ctx body ctx', translateStatements F env tail ss ctx = .ok body ctx' →
@@ -1731,11 +1874,13 @@ theorem translateForOf_sound (hc : CallsAgree (N := N) m.program fs fuel) {F : N
       · simp at h
       · simp only [bind_ok, fuelLimit_ok] at h
         obtain ⟨_, _, ⟨rfl, rfl⟩, items, s₁, hitems, h⟩ := h
-        cases hty : items.type <;> simp [hty] at h
-        rename_i elemType
+        obtain ⟨⟨elemType, li⟩, s₁', hli, h⟩ := h
+        obtain ⟨hmut, hlo, rfl⟩ := loopItems_ok hli
+        simp at h
         obtain ⟨bodyEnv, s₂, hdecl, bodyOut, s₃, hbody, _, _, ⟨rfl, rfl⟩, _, _, ⟨rfl, rfl⟩, rb, hrb, hbodyEq⟩ := h
         obtain ⟨hfresh, rfl, -⟩ := declare_ok hdecl
-        have hsimI := (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hitems
+        have hsimI := translateRecv_sim m fs fuel
+          (fun _ _ _ hx => (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hx) hitems
         have hloop := loop_sim m fs fuel (ihS _ _ _ _ _ _ hbody) rfl hfresh rfl
         have hrest := ihS _ _ _ _ _ _ hrb
         intro ρs ρo ha hs
@@ -1749,11 +1894,12 @@ theorem translateForOf_sound (hc : CallsAgree (N := N) m.program fs fuel) {F : N
           intro o ho
           rw [← hbodyEq] at ho
           simp only [IR.Body.exec] at ho
-          cases hi : IR.Expr.eval fs fuel ρo items.code with
+          cases hi : IR.Expr.eval fs fuel ρo li with
           | none => simp [hi] at ho
           | some u =>
             cases u <;> simp [hi] at ho
             rename_i vs
+            obtain ⟨vi, hvi, hiter⟩ := loopOver_sim m fs fuel hsimI hlo ha hs hi
             cases hf : IR.Body.runFold fs fuel (changedNames (blockStatements b) env) x bodyOut ρo vs with
             | none => simp [hf] at ho
             | some ro =>
@@ -1763,11 +1909,11 @@ theorem translateForOf_sound (hc : CallsAgree (N := N) m.program fs fuel) {F : N
                 simp [hf] at ho
                 obtain ⟨mod, hl, hag, hfr⟩ := hnorm ρo₂ rfl
                 refine .inr ⟨mod, ρo₂, ?_, hag, hfr.mono fun n hn => by simp [stmtChanges, hn], ho⟩
-                simp [Eval.execStmt, hsimI ρs ρo _ ha hs hi, hl]
+                simp [Eval.execStmt, hmut, hvi, hiter, hl]
               | ret w =>
                 simp [hf] at ho
                 subst ho
-                exact .inl ⟨w, rfl, by simp [Eval.execStmt, hsimI ρs ρo _ ha hs hi, hret w rfl]⟩
+                exact .inl ⟨w, rfl, by simp [Eval.execStmt, hmut, hvi, hiter, hret w rfl]⟩
               | brk _ | cont _ => simp [hf] at ho
         constructor
         · intro v hv
