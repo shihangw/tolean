@@ -122,6 +122,10 @@ for (const file of accept) {
   if (update) {
     writeFileSync(golden, result.text);
   } else if (result.text !== readFileSync(golden, 'utf8')) {
+    const a = result.text.split('\n');
+    const b = readFileSync(golden, 'utf8').split('\n');
+    const i = a.findIndex((l, j) => l !== b[j]);
+    console.log(`DEBUG ${path} line ${i + 1}\n  out:    ${JSON.stringify(a[i])}\n  golden: ${JSON.stringify(b[i])}`);
     failures.push(`${path}: the output differs from ${golden}; run with --update if the change is meant`);
     continue;
   }
