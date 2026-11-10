@@ -769,7 +769,12 @@ def execStmt (m : Scope) (fuel : Nat) (env : Env N) : Stmt → Option (Outcome N
   -- `for (const x of xs)` on an array, a set or a map: the body runs once for
   -- each value that `iterValues` gives, in order, with `x` bound to it in a
   -- new scope (`ForIn/OfBodyEvaluation`, ECMA-262 §14.7.5.7).
+  -- A JS loop sees a change to what it runs over while it runs: it visits an
+  -- element that the body pushes or adds, and skips one that the body
+  -- deletes before the loop reaches it. The model takes the values when the
+  -- loop starts, so it gives no value for a body that changes them.
   | .forOfStmt _ .const name iterable body => do
+    if Stmt.mutatesIterable iterable body then none
     execLoop m fuel env name body (← iterValues (← eval m fuel env iterable))
   -- `switch (d) { … }` (`SwitchStatement` Evaluation, ECMA-262 §14.12.4): the
   -- clauses run in a new scope, and a `break` at the top of a clause ends the

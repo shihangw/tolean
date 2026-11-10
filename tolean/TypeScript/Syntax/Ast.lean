@@ -322,6 +322,86 @@ def Stmt.assignsClauses (n : String) : List (Option Expr × List Stmt) → Bool
 
 end
 
+/-- The methods that change the array, map or set that they are called on. -/
+def changingMethods : List String := ["push", "set", "add", "delete"]
+
+mutual
+
+/-- `e` calls a method that changes the array, map or set that the name `n`
+holds, such as `n.push(x)` or `n.delete(k)`, somewhere inside it. -/
+def Expr.mutates (n : String) : Expr → Bool
+  | .call _ (.member _ (.ident _ m) method) args =>
+    (m == n && changingMethods.contains method) || Expr.mutatesList n args
+  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => false
+  | .array _ es => Expr.mutatesList n es
+  | .object _ ps => Property.mutatesList n ps
+  | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e =>
+    e.mutates n
+  | .index _ a b | .binary _ _ a b | .assign _ _ a b => a.mutates n || b.mutates n
+  | .call _ c args => c.mutates n || Expr.mutatesList n args
+  | .cond _ a b c => a.mutates n || b.mutates n || c.mutates n
+  | .arrow _ _ _ body => body.mutates n
+  | .asConst _ e | .satisfies _ e _ => e.mutates n
+  | .new _ _ _ args => Expr.mutatesList n args
+
+def Expr.mutatesList (n : String) : List Expr → Bool
+  | [] => false
+  | e :: es => e.mutates n || Expr.mutatesList n es
+
+def Property.mutatesList (n : String) : List Property → Bool
+  | [] => false
+  | .shorthand .. :: ps => Property.mutatesList n ps
+  | .keyValue _ _ v :: ps => v.mutates n || Property.mutatesList n ps
+
+end
+
+mutual
+
+/-- `s` changes the array, map or set that the name `n` holds somewhere
+inside it, as `Expr.mutates` says. -/
+def Stmt.mutates (n : String) : Stmt → Bool
+  | .varDecl _ d => match d.init with
+    | some e => e.mutates n
+    | none => false
+  | .exprStmt _ e => e.mutates n
+  | .returnStmt _ e => match e with
+    | some e => e.mutates n
+    | none => false
+  | .ifStmt _ t a b => t.mutates n || a.mutates n || (match b with
+    | some b => b.mutates n
+    | none => false)
+  | .forOfStmt _ _ _ it b => it.mutates n || b.mutates n
+  | .forStmt _ init t u b => (match init with
+    | some { init := some e, .. } => e.mutates n
+    | _ => false) || (match t with
+    | some t => t.mutates n
+    | none => false) || (match u with
+    | some u => u.mutates n
+    | none => false) || b.mutates n
+  | .whileStmt _ t b => t.mutates n || b.mutates n
+  | .block _ ss => Stmt.mutatesList n ss
+  | .breakStmt _ | .continueStmt _ | .empty _ => false
+  | .switchStmt _ d cs => d.mutates n || Stmt.mutatesClauses n cs
+
+def Stmt.mutatesList (n : String) : List Stmt → Bool
+  | [] => false
+  | s :: ss => s.mutates n || Stmt.mutatesList n ss
+
+def Stmt.mutatesClauses (n : String) : List (Option Expr × List Stmt) → Bool
+  | [] => false
+  | (t, body) :: cs => (match t with
+    | some t => t.mutates n
+    | none => false) || Stmt.mutatesList n body || Stmt.mutatesClauses n cs
+
+end
+
+/-- The body of `for (… of iterable)` changes what the loop runs over: the
+array, map or set of a name. A JS loop sees such a change while it runs. -/
+def Stmt.mutatesIterable (iterable : Expr) (body : Stmt) : Bool :=
+  match iterable with
+  | .ident _ n => body.mutates n
+  | _ => false
+
 /-- `s` declares a `const` that a statement of `rest` assigns. In JS that
 assignment throws a `TypeError` (ECMA-262 §9.1.1.1.5), so the spec gives no
 value for such a block, and the translator refuses it. -/

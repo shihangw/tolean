@@ -1408,10 +1408,10 @@ def loopOver (items : Code) : Option (Ty × IR.Expr) :=
   | _ => none
 
 /-- What a loop over `iterable`, which `items` translates, visits, when the
-loop changes the locals `names`. -/
-def loopItems (iterable : Expr) (names : List String) (items : Code) : TM (Ty × IR.Expr) := do
-  if let .ident _ n := iterable then
-    if names.contains n then reject iterable.span "a loop may not change the map or set that it runs over"
+loop body is `body`. -/
+def loopItems (iterable : Expr) (body : Stmt) (items : Code) : TM (Ty × IR.Expr) := do
+  if Stmt.mutatesIterable iterable body then
+    reject iterable.span "a loop may not change the map or set that it runs over"
   orReject (loopOver items) iterable.span "a loop must run over an array, a set or a map"
 
 /-- The receiver of `size`, `get` or `has`: an owned map as its local, as
@@ -2344,7 +2344,7 @@ def translateForOf (fuel : Nat) (env : Env) (s : Span) (kind : VarKind) (element
   -- An owned map or set may be the iterable, as long as the body does not
   -- change it: a JS loop would visit the values that the body adds.
   let items ← translateRecv (translateExpr (← fuelLimit) env none) env iterable
-  let (elemType, loopItems) ← loopItems iterable names items
+  let (elemType, loopItems) ← loopItems iterable body items
   let bodyEnv ← declare env s element .const elemType
   let bodyOut ← translateStatements fuel bodyEnv (.loop names breaks returns) bodyStatements
   let returnType := (← get).returnType
