@@ -62,12 +62,16 @@ inductive Feature where
   /-- `xs.includes(v)`, which compares by SameValueZero:
   `Array.prototype.includes`. -/
   | arrayIncludes
+  /-- `xs.findLast(x => p)`, which looks from the end:
+  `Array.prototype.findLast`. -/
+  | arrayFindLast
 deriving BEq, Repr, Inhabited
 
 def Feature.since : Feature → Edition
   | .exponent | .arrayIncludes => .es2016
   | .bigint | .bigintDivision | .nullishCoalescing | .optionalChaining => .es2020
   | .logicalAssignment | .numericSeparators => .es2021
+  | .arrayFindLast => .es2023
 
 def Feature.describe : Feature → String
   | .exponent => "'**'"
@@ -78,6 +82,7 @@ def Feature.describe : Feature → String
   | .logicalAssignment => "'&&=', '||=' and '??='"
   | .numericSeparators => "numeric separators"
   | .arrayIncludes => "Array.prototype.includes"
+  | .arrayFindLast => "Array.prototype.findLast"
 
 def Edition.supports (target : Edition) (f : Feature) : Bool := f.since.year ≤ target.year
 

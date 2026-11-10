@@ -285,8 +285,9 @@ export class Gen {
 
   /** Calls of `map`, `filter`, `some`, `every` and `find` on an array in
    * scope that give a value of type `t`. The callback's parameter is a fresh
-   * name, which its body may read with the other names in scope. The body is
-   * in parentheses, so that an object literal is not read as a block. */
+   * name, which its body may read with the other names in scope; a callback
+   * of `map` may also take the index, a number. The body is in parentheses,
+   * so that an object literal is not read as a block. */
   private callbacks(t: Ty, readable: ReadonlyArray<Var>, vars: ReadonlyArray<Var>, depth: number): Array<() => string> {
     const arrays = readable.flatMap((v) => (v.ty.k === 'array' ? [{ name: v.name, elem: v.ty.of }] : []));
     if (arrays.length === 0) return [];
@@ -294,6 +295,16 @@ export class Gen {
       const p = this.fresh('c');
       const inner = [...vars, { name: p, ty: recv.elem, mutable: false, owned: false }];
       return `${recv.name}.${method}(${p} => (${body(inner)}))`;
+    };
+    const mapIdx = (recv: { name: string; elem: Ty }, body: (inner: ReadonlyArray<Var>) => string): string => {
+      const p = this.fresh('c');
+      const i = this.fresh('i');
+      const inner = [
+        ...vars,
+        { name: i, ty: NUMBER, mutable: false, owned: false },
+        { name: p, ty: recv.elem, mutable: false, owned: false },
+      ];
+      return `${recv.name}.map((${p}, ${i}) => (${body(inner)}))`;
     };
     const options: Array<() => string> = [];
     switch (t.k) {
@@ -313,6 +324,7 @@ export class Gen {
       case 'array': {
         const of = t.of;
         options.push(() => call('map', this.pick(arrays), (inner) => this.expr(of, inner, depth)));
+        options.push(() => mapIdx(this.pick(arrays), (inner) => this.expr(of, inner, depth)));
         const same_ = arrays.filter((a) => same(a.elem, of));
         if (same_.length > 0) {
           options.push(() => call('filter', this.pick(same_), (inner) => this.expr(BOOLEAN, inner, depth)));
@@ -325,8 +337,23 @@ export class Gen {
         // default then.
         const same_ = arrays.filter((a) => same(a.elem, t));
         if (same_.length > 0) {
-          options.push(() => `(${call('find', this.pick(same_), (inner) => this.expr(BOOLEAN, inner, depth))} ?? ${this.expr(t, vars, depth)})`);
+          options.push(() => `(${call(this.pick(['find', 'findLast']), this.pick(same_), (inner) => this.expr(BOOLEAN, inner, depth))} ?? ${this.expr(t, vars, depth)})`);
         }
+        // `findIndex` gives the index of the first element that passes, a
+        // number, or -1.
+        if (t.k === 'number') {
+          options.push(() => call('findIndex', this.pick(arrays), (inner) => this.expr(BOOLEAN, inner, depth)));
+        }
+        // `reduce` with an initial value of type `t`: the body reads the value
+        // so far, the element and the names in scope.
+        options.push(() => {
+          const recv = this.pick(arrays);
+          const acc = this.fresh('a');
+          const p = this.fresh('c');
+          const inner = [...vars, { name: acc, ty: t, mutable: false, owned: false },
+            { name: p, ty: recv.elem, mutable: false, owned: false }];
+          return `${recv.name}.reduce((${acc}, ${p}) => (${this.expr(t, inner, depth)}), ${this.expr(t, vars, depth)})`;
+        });
         break;
       }
       default:
@@ -421,15 +448,79 @@ export class Gen {
             lines.push(`for (const ${element} of ${xs.name}) {`, ...body, '}');
           }
         }
-      } else if (roll < 0.88 && depth > 0) {
+      } else if (roll < 0.85 && depth > 0) {
         // An array that the function owns, with a push; a later loop can read it.
         const t = this.pick([BIGINT, NUMBER]);
         const name = this.fresh('o');
         const start = this.chance(0.5) ? this.expr(t, vars, 0) : '';
         lines.push(`const ${name}: Array<${show(t)}> = [${start}];`, `${name}.push(${this.expr(t, vars, 1)});`);
         vars.push({ name, ty: { k: 'array', of: t }, mutable: false, owned: false });
-      } else if (roll < 0.94 && depth > 0 && !inLoop) {
+      } else if (roll < 0.89 && depth > 0 && this.chance(0.5)) {
+        // A set that the function owns, with adds and deletes, read as a map is.
+        const elem = this.pick([BIGINT, STRING, BOOLEAN]);
+        const name = this.fresh('s');
+        // Sometimes with values to start with, which may repeat.
+        const start = this.chance(0.3) ? `[${this.expr(elem, vars, 1)}, ${this.expr(elem, vars, 1)}]` : '';
+        lines.push(`const ${name} = new Set<${show(elem)}>(${start});`);
+        const changes = 1 + Math.floor(this.next() * 4);
+        for (let j = 0; j < changes; j++) {
+          lines.push(`${name}.${this.chance(0.75) ? 'add' : 'delete'}(${this.expr(elem, vars, 1)});`);
+        }
+        const has = this.fresh('h');
+        const size = this.fresh('n');
+        lines.push(`const ${has} = ${name}.has(${this.expr(elem, vars, 1)});`, `const ${size} = ${name}.size;`);
+        vars.push({ name: has, ty: BOOLEAN, mutable: false, owned: false },
+          { name: size, ty: NUMBER, mutable: false, owned: false });
+        if (this.chance(0.5)) {
+          // A loop over the set, in the order of insertion.
+          const acc = this.fresh('a');
+          const x = this.fresh('e');
+          const inner = [...vars, { name: x, ty: elem, mutable: false, owned: false }];
+          lines.push(`let ${acc} = ${this.expr(elem, vars, 1)};`, `for (const ${x} of ${name}) {`,
+            `  ${acc} = ${this.expr(elem, inner, 1)};`, '}');
+          vars.push({ name: acc, ty: elem, mutable: true, owned: false });
+        }
+      } else if (roll < 0.89 && depth > 0) {
+        // A map that the function owns, with sets and deletes. Code may read
+        // it only through get, has and size, so the reads go into locals.
+        const key = this.pick([BIGINT, STRING, BOOLEAN]);
+        const value = this.pick([BIGINT, NUMBER, STRING]);
+        const name = this.fresh('m');
+        const start = this.chance(0.3)
+          ? `[[${this.expr(key, vars, 1)}, ${this.expr(value, vars, 1)}], [${this.expr(key, vars, 1)}, ${this.expr(value, vars, 1)}]]`
+          : '';
+        lines.push(`const ${name} = new Map<${show(key)}, ${show(value)}>(${start});`);
+        const changes = 1 + Math.floor(this.next() * 4);
+        for (let j = 0; j < changes; j++) {
+          lines.push(this.chance(0.75)
+            ? `${name}.set(${this.expr(key, vars, 1)}, ${this.expr(value, vars, 1)});`
+            : `${name}.delete(${this.expr(key, vars, 1)});`);
+        }
+        const got = this.fresh('g');
+        const has = this.fresh('h');
+        const size = this.fresh('n');
+        lines.push(
+          `const ${got} = ${name}.get(${this.expr(key, vars, 1)}) ?? ${this.expr(value, vars, 1)};`,
+          `const ${has} = ${name}.has(${this.expr(key, vars, 1)});`,
+          `const ${size} = ${name}.size;`,
+        );
+        vars.push({ name: got, ty: value, mutable: false, owned: false },
+          { name: has, ty: BOOLEAN, mutable: false, owned: false },
+          { name: size, ty: NUMBER, mutable: false, owned: false });
+        if (this.chance(0.5)) {
+          // A loop over the entries, each a [key, value] pair.
+          const [t, index] = this.chance(0.5) ? [key, 0] : [value, 1];
+          const acc = this.fresh('a');
+          const e = this.fresh('e');
+          lines.push(`let ${acc} = ${this.expr(t, vars, 1)};`, `for (const ${e} of ${name}) {`,
+            `  ${acc} = ${e}[${index}];`, '}');
+          vars.push({ name: acc, ty: t, mutable: true, owned: false });
+        }
+      } else if (roll < 0.93 && depth > 0 && !inLoop) {
         lines.push(...this.switchStatement(vars, ret, lets));
+      } else if (roll < 0.97 && !inLoop) {
+        // An early exit with an error, which a caller passes on.
+        lines.push(`if (${this.test(vars, 2)}) throw new Error(${this.pick(["'too big'", "''", "'é'"])});`);
       } else if (!inLoop && this.chance(0.3)) {
         // Rarely, something outside the subset or ill-typed, to check that both refuse.
         lines.push(this.pick([
