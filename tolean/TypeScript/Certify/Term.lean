@@ -141,6 +141,7 @@ def stmt : Stmt → String
   | .continueStmt s => s!"({ns}Stmt.continueStmt {span s})"
   | .empty s => s!"({ns}Stmt.empty {span s})"
   | .switchStmt s d cs => s!"({ns}Stmt.switchStmt {span s} {expr d} {list (clauses cs)})"
+  | .throwStmt s e => s!"({ns}Stmt.throwStmt {span s} {expr e})"
 
 def optStmt : Option Stmt → Option String
   | some s => some (stmt s)

@@ -20,10 +20,12 @@ marks which links are proved, tested against a reference, or trusted.
   them may be exported, by `export` before it or by an export list such as
   `export { a, type B }`.
 - **Statements:** `const` and `let` declarations, expression statements,
-  `return`, `if` and `else`, `for … of`, the counted `for`, `while`, `switch`,
-  blocks, `break`, `continue` and the empty statement. A counted `for`, such
-  as `for (let i = 0; i < n; i++)`, starts with a `const` or `let`
-  declaration or with nothing. A `break` at the top of a `switch`
+  `return`, `throw`, `if` and `else`, `for … of`, the counted `for`, `while`,
+  `switch`, blocks, `break`, `continue` and the empty statement. A counted
+  `for`, such as `for (let i = 0; i < n; i++)`, starts with a `const` or `let`
+  declaration or with nothing. The value of a `throw` must start on the same
+  line, because ECMA-262 allows no line break after `throw`. The translator
+  refuses every `throw` for now. A `break` at the top of a `switch`
   clause ends the `switch`, so it may stand outside a loop. The parser
   refuses a `case` test that uses `<` or `<<`, because a `:` does not end its
   search for a `>` after one, and a `switch` with two `default` clauses.

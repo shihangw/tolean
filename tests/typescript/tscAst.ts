@@ -515,6 +515,14 @@ class Printer {
       }
       return this.node('return', s, [], s.expression === undefined ? [] : [this.expr(s.expression)]);
     }
+    if (ts.isThrowStatement(s)) {
+      // `tsc` reads `throw` and a line break as a `throw` of a missing name,
+      // and leaves the error to the checker.
+      if (ts.isIdentifier(s.expression) && s.expression.text === '') {
+        refuse(s, 'line break after throw');
+      }
+      return this.node('throw', s, [], [this.expr(s.expression)]);
+    }
     if (ts.isIfStatement(s)) {
       const children = [this.expr(s.expression), this.branch(s.thenStatement)];
       if (s.elseStatement !== undefined) {

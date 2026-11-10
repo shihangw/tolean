@@ -237,6 +237,7 @@ def Stmt.lines (depth : Nat) : Stmt → List Line
   | .switchStmt _ disc clauses =>
     (depth, keywordWord "switch" :: punctWord "(" :: disc.words ++ [punctWord ")", punctWord "{"]) ::
       Stmt.clauseLines (depth + 1) clauses ++ [(depth, [punctWord "}"])]
+  | .throwStmt _ e => [(depth, keywordWord "throw" :: e.words ++ [punctWord ";"])]
 
 def Stmt.linesOf (depth : Nat) : List Stmt → List Line
   | [] => []
@@ -410,6 +411,7 @@ def Stmt.erase : Stmt → Stmt
   | .continueStmt _ => .continueStmt noSpan
   | .empty _ => .empty noSpan
   | .switchStmt _ disc clauses => .switchStmt noSpan disc.erase (Stmt.eraseClauses clauses)
+  | .throwStmt _ e => .throwStmt noSpan e.erase
 
 def Stmt.eraseOpt : Option Stmt → Option Stmt
   | none => none

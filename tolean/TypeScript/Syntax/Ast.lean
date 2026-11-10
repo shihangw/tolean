@@ -239,6 +239,8 @@ inductive Stmt where
   /-- `switch (disc) { … }`, with its clauses in source order. A clause is
   `case test:` or, when `test` is `none`, `default:`, with its statements. -/
   | switchStmt (span : Span) (disc : Expr) (clauses : List (Option Expr × List Stmt))
+  /-- `throw value;`. -/
+  | throwStmt (span : Span) (value : Expr)
 
 instance : Inhabited Stmt := ⟨.empty default⟩
 
@@ -305,6 +307,7 @@ def Stmt.assigns (n : String) : Stmt → Bool
   | .block _ ss => Stmt.assignsList n ss
   | .breakStmt _ | .continueStmt _ | .empty _ => false
   | .switchStmt _ d cs => d.assigns n || Stmt.assignsClauses n cs
+  | .throwStmt _ e => e.assigns n
 
 def Stmt.assignsList (n : String) : List Stmt → Bool
   | [] => false
@@ -338,6 +341,7 @@ def Stmt.constAssignedIn (s : Stmt) (rest : List Stmt) : Bool :=
 @[simp] theorem Stmt.constAssignedIn_continueStmt : (Stmt.continueStmt sp).constAssignedIn rest = false := rfl
 @[simp] theorem Stmt.constAssignedIn_empty : (Stmt.empty sp).constAssignedIn rest = false := rfl
 @[simp] theorem Stmt.constAssignedIn_switchStmt : (Stmt.switchStmt sp d cs).constAssignedIn rest = false := rfl
+@[simp] theorem Stmt.constAssignedIn_throwStmt : (Stmt.throwStmt sp e).constAssignedIn rest = false := rfl
 
 @[simp] theorem Stmt.constAssignedIn_nil (s : Stmt) : s.constAssignedIn [] = false := by
   cases s <;> simp [Stmt.constAssignedIn, Stmt.assignsList]
@@ -422,7 +426,8 @@ def Expr.span : Expr → Span
 
 def Stmt.span : Stmt → Span
   | .varDecl s _ | .exprStmt s _ | .returnStmt s _ | .ifStmt s _ _ _ | .forOfStmt s _ _ _ _
-  | .forStmt s _ _ _ _ | .whileStmt s _ _ | .block s _ | .breakStmt s | .continueStmt s | .empty s | .switchStmt s _ _ => s
+  | .forStmt s _ _ _ _ | .whileStmt s _ _ | .block s _ | .breakStmt s | .continueStmt s | .empty s | .switchStmt s _ _
+  | .throwStmt s _ => s
 
 mutual
 
