@@ -111,10 +111,11 @@ written, so that other documents can name a step.
    translator gives well-typed IR, and well-typed IR gives a value of its
    type. Section 3 of the [decision record on the IR](../decisions/2026-10-30-tolean-ir.md)
    explains why.
-3. Give TypeScript state and exceptions. Add them to the IR, to its
-   evaluator and to the interpreter, and extend `program_sound` and
-   certificates to cover them. These two pieces are what most code needs
-   first.
+3. Give TypeScript state. Add it to the IR, to its evaluator and to the
+   interpreter, and extend `program_sound` and certificates to cover it.
+   Exceptions are done: `Outcome.ret` holds an `Except`, the IR has
+   `Body.throw` and `Body.bind`, and `program_sound_call` covers a call that
+   throws. Certificates do not cover a function that can throw yet.
 4. Move the `EStateM` lemmas to a shared module, and add the lemmas for the
    state and exception pieces next to them.
 5. Move the rest of the Go translator onto the Tolean IR and the Go

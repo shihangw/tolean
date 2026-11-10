@@ -50,6 +50,6 @@ for result in "$work"/results/*; do
       ;;
   esac
 done
-echo "certify: $proved files proved, $skipped files without a certificate (not translated)"
+echo "certify: $proved files proved, $skipped files without a certificate (not translated, or not certifiable yet)"
 [ "$failed" -eq 0 ] || exit 1
 [ "$proved" -gt 0 ] || { echo "FAIL: no file was certified"; exit 1; }

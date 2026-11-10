@@ -103,6 +103,8 @@ def expr : Expr → String
   | .arrow s p ps b => s!"({ns}Expr.arrow {span s} {p} {list (ps.map param)} {expr b})"
   | .asConst s e => s!"({ns}Expr.asConst {span s} {expr e})"
   | .satisfies s e t => s!"({ns}Expr.satisfies {span s} {expr e} {typeExpr t})"
+  | .new s c ts as => s!"({ns}Expr.new {span s} {str c} {list (ts.map typeExpr)} {list (exprs as)})"
+  | .spread s e => s!"({ns}Expr.spread {span s} {expr e})"
 
 def exprs : List Expr → List String
   | [] => []
@@ -141,6 +143,7 @@ def stmt : Stmt → String
   | .continueStmt s => s!"({ns}Stmt.continueStmt {span s})"
   | .empty s => s!"({ns}Stmt.empty {span s})"
   | .switchStmt s d cs => s!"({ns}Stmt.switchStmt {span s} {expr d} {list (clauses cs)})"
+  | .throwStmt s e => s!"({ns}Stmt.throwStmt {span s} {expr e})"
 
 def optStmt : Option Stmt → Option String
   | some s => some (stmt s)

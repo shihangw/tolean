@@ -210,6 +210,12 @@ class Gen {
       () => ['(', this.name(), this.pick([',', ':', ')']), ...this.expr(d), ')'],
       () => [...this.expr(d), 'as', this.pick(['const', 'const', 'T'])],
       () => [...this.expr(d), 'satisfies', ...this.type(d)],
+      () => [
+        'new',
+        ...this.pick([[this.name()], ['Map'], ['number'], ['a', '.', 'b'], ['.', 'target']]),
+        ...(this.chance(0.4) ? [this.pick(['<', '<', '\n<']), ...this.type(d), '>'] : []),
+        ...(this.chance(0.9) ? ['(', ...this.list(d), ')'] : []),
+      ],
     ])();
   }
 
@@ -246,6 +252,10 @@ class Gen {
     for (let i = 0; i < count; i++) {
       if (i > 0) {
         items.push(',');
+      }
+      // An element or an argument may be a spread, `...e`.
+      if (this.chance(0.2)) {
+        items.push('...');
       }
       items.push(...this.expr(depth));
     }
@@ -298,6 +308,7 @@ class Gen {
       () => ['let', this.name(), ...(this.chance(0.5) ? [':', ...this.type(2)] : []), '=', ...this.expr(2), ...this.end()],
       () => ['const', this.name(), '=', ...this.expr(2), ...this.end()],
       () => ['return', ...(this.chance(0.7) ? this.expr(2) : []), ...this.end()],
+      () => ['throw', ...this.expr(2), ...this.end()],
       () => [';'],
     ];
     if (depth > 0) {

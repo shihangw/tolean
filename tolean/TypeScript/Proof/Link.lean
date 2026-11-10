@@ -130,6 +130,87 @@ theorem evalMap_map {α β : Type} (fs : List (DeclRef × List String × IR.Body
   | [] => by simp [IR.Expr.evalMap]
   | x :: xs => by simp [IR.Expr.evalMap, hb x, evalMap_map fs fuel ρ param body encX encY f hb xs]
 
+/-- The same for `List.mapIdx`, whose function also takes the index, where the
+first element is at `start`. -/
+theorem evalMapIdx_from {α β : Type} (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
+    (ρ : Eval.Env N) (param index : String) (body : IR.Expr) (encX : α → Val N) (encY : β → Val N)
+    (f : Nat → α → β)
+    (hb : ∀ (n : Nat) x, IR.Expr.eval fs fuel ((param, encX x) :: (index, .num (JSNumber.ofSafeInt n)) :: ρ) body =
+      some (encY (f n x))) :
+    ∀ (xs : List α) (start : Nat), IR.Expr.evalMapIdx fs fuel ρ param index body start (xs.map encX) =
+      some ((xs.mapIdx fun k => f (start + k)).map encY)
+  | [], _ => by simp [IR.Expr.evalMapIdx]
+  | x :: xs, start => by
+    have key : (fun k => f (start + 1 + k)) = fun k => f (start + (k + 1)) := by
+      funext k; congr 1; omega
+    simp [IR.Expr.evalMapIdx, hb start x, evalMapIdx_from fs fuel ρ param index body encX encY f hb xs,
+      List.mapIdx_cons, key]
+
+/-- A callback of `map` that reads the index and a Lean function agree on the
+elements of a list when they agree on each element at each index. -/
+theorem evalMapIdx_mapIdx {α β : Type} (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
+    (ρ : Eval.Env N) (param index : String) (body : IR.Expr) (encX : α → Val N) (encY : β → Val N)
+    (f : Nat → α → β)
+    (hb : ∀ (n : Nat) x, IR.Expr.eval fs fuel ((param, encX x) :: (index, .num (JSNumber.ofSafeInt n)) :: ρ) body =
+      some (encY (f n x)))
+    (xs : List α) :
+    IR.Expr.evalMapIdx fs fuel ρ param index body 0 (xs.map encX) = some ((xs.mapIdx f).map encY) := by
+  simpa using evalMapIdx_from fs fuel ρ param index body encX encY f hb xs 0
+
+/-- The position of the first element for which `body` is true, as
+`List.findIdx?` finds it, where the first element is at `start`. -/
+theorem evalFindIdx_from {α : Type} (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
+    (ρ : Eval.Env N) (param : String) (body : IR.Expr) (encX : α → Val N) (p : α → Bool)
+    (hb : ∀ x, IR.Expr.eval fs fuel ((param, encX x) :: ρ) body = some (.bool (p x))) :
+    ∀ (xs : List α) (start : Nat), IR.Expr.evalFindIdx fs fuel ρ param body start (xs.map encX) =
+      some ((xs.findIdx? p).map (· + start))
+  | [], _ => by simp [IR.Expr.evalFindIdx]
+  | x :: xs, start => by
+    simp only [List.map_cons, IR.Expr.evalFindIdx, hb x, Option.bind_eq_bind, Option.bind_some,
+      List.findIdx?_cons]
+    cases p x
+    · simp only [Bool.false_eq_true, if_false, evalFindIdx_from fs fuel ρ param body encX p hb xs (start + 1),
+        Option.map_map]
+      have key : (fun k => k + (start + 1)) = ((fun k => k + start) ∘ fun i => i + 1) := by
+        funext k; simp only [Function.comp_apply]; omega
+      simp [key]
+    · simp
+
+/-- The same from the first element: `findIndex` is `List.findIdx?`. -/
+theorem evalFindIdx_findIdx {α : Type} (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
+    (ρ : Eval.Env N) (param : String) (body : IR.Expr) (encX : α → Val N) (p : α → Bool)
+    (hb : ∀ x, IR.Expr.eval fs fuel ((param, encX x) :: ρ) body = some (.bool (p x))) (xs : List α) :
+    IR.Expr.evalFindIdx fs fuel ρ param body 0 (xs.map encX) = some (xs.findIdx? p) := by
+  simpa using evalFindIdx_from fs fuel ρ param body encX p hb xs 0
+
+/-- A callback of `reduce` and a Lean function agree on a list when they agree
+on each value so far and each element. A certificate proves a lemma for each
+call of `reduce` from this one. -/
+theorem evalReduce_foldl {α β : Type} (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
+    (ρ : Eval.Env N) (acc param : String) (body : IR.Expr) (encA : β → Val N) (encX : α → Val N)
+    (f : β → α → β)
+    (hb : ∀ a x, IR.Expr.eval fs fuel ((param, encX x) :: (acc, encA a) :: ρ) body = some (encA (f a x))) :
+    ∀ (xs : List α) (a : β), IR.Expr.evalReduce fs fuel ρ acc param body (encA a) (xs.map encX) =
+      some (encA (xs.foldl f a))
+  | [], _ => by simp [IR.Expr.evalReduce]
+  | x :: xs, a => by
+    simp [IR.Expr.evalReduce, hb a x, evalReduce_foldl fs fuel ρ acc param body encA encX f hb xs]
+
+/-- The same, for any initial value `v` that encodes what `dec` reads back from
+it. A certificate states its lemma for a callback of `reduce` this way: the
+proof that links a function unfolds the encoding of the initial value, such
+as `encList Val.int init` to `Val.list (List.map Val.int init)`, so the lemma
+must match the unfolded value too. -/
+theorem evalReduce_foldl_val {α β : Type} (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
+    (ρ : Eval.Env N) (acc param : String) (body : IR.Expr) (encA : β → Val N) (encX : α → Val N)
+    (f : β → α → β) (dec : Option (Val N) → β)
+    (hb : ∀ a x, IR.Expr.eval fs fuel ((param, encX x) :: (acc, encA a) :: ρ) body = some (encA (f a x)))
+    (xs : List α) (v : Val N) (hv : encA (dec (some v)) = v) :
+    IR.Expr.evalReduce fs fuel ρ acc param body v (xs.map encX) =
+      some (encA (xs.foldl f (dec (some v)))) := by
+  have := evalReduce_foldl fs fuel ρ acc param body encA encX f hb xs (dec (some v))
+  rwa [hv] at this
+
 /-- The same for `filter`. -/
 theorem evalFilter_filter {α : Type} (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
     (ρ : Eval.Env N) (param : String) (body : IR.Expr) (encX : α → Val N) (p : α → Bool)
@@ -195,7 +276,7 @@ omit [JSNumber N] in
 def retOutcome {R τ : Type} (encR : R → Val N) (getRet : τ → Option R) :
     ForInStep τ → Eval.Env N → Eval.Outcome N
   | .done t, ρ => match getRet t with
-    | some r => .ret (encR r)
+    | some r => .ret (.ok (encR r))
     | none => .brk ρ
   | .yield _, ρ => .normal ρ
 
@@ -204,7 +285,7 @@ value to return, or the locals at its end. -/
 def retResult {R σ τ : Type} (encR : R → Val N) (getRet : τ → Option R) (getS : τ → σ)
     (upd : σ → Eval.Env N → Eval.Env N) (ρ : Eval.Env N) (t : τ) : Eval.Outcome N :=
   match getRet t with
-  | some r => .ret (encR r)
+  | some r => .ret (.ok (encR r))
   | none => .normal (upd (getS t) ρ)
 
 /-- A fold of the output whose body can `return`, and `forIn`, agree when one
@@ -286,14 +367,16 @@ syntax "link_tac" "[" Lean.Parser.Tactic.simpLemma,* "]" : tactic
 macro_rules
   | `(tactic| link_tac [$defs,*]) =>
     `(tactic| (
-      simp [runIn, functionsOf, functions, Body.exec, Body.runFold, Expr.eval, Expr.evalList,
-        Expr.evalFields, Expr.evalMap, Expr.evalFilter, Expr.evalFind, bindState, eqVal,
+      simp [runIn, callIn, Except.toOption, functionsOf, functions, Body.exec, Body.runFold, Expr.eval,
+        Expr.evalCall, Expr.evalList,
+        Expr.evalFields, Expr.evalMap, Expr.evalMapIdx, Expr.evalFilter, Expr.evalFind, Expr.evalFindIdx, Expr.evalReduce,
+        bindState, eqVal, ← List.map_reverse,
         tolean.IR.IntOp.apply, tolean.IR.Order.apply,
         tolean.IR.Division.apply, ExprExt.apply, NumberOp.apply, NumberConstant.value,
         NumberTest.apply, tagOf, Eval.Val.typeOf, Eval.Env.set, Eval.getProp, Eval.getKey_ofString, Eval.getPath,
         Eval.objectPrototypeNames, List.lookup, DeclRef.beq_def, -List.map_map,
         -Bool.if_true_left, -Bool.if_false_right, -Bool.if_false_left, -Bool.if_true_right, $defs,*]
-      all_goals repeat' (split_find <;> simp [-List.map_map, $defs,*])
+      all_goals repeat' (split_find <;> simp [-List.map_map, ← List.map_reverse, $defs,*])
       all_goals repeat' (split <;> (try simp_all [bindState, eqVal, tolean.IR.IntOp.apply,
         tolean.IR.Order.apply, tolean.IR.Division.apply, ExprExt.apply, NumberOp.apply,
         NumberTest.apply, tagOf, Eval.Val.typeOf, Eval.Env.set, Eval.getProp, Eval.getKey_ofString, Eval.getPath,
