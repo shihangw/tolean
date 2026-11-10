@@ -59,12 +59,16 @@ inductive Feature where
   | logicalAssignment
   /-- `1_000`: `NumericLiteralSeparator`. -/
   | numericSeparators
+  /-- `xs.findLast(x => p)`, which looks from the end:
+  `Array.prototype.findLast`. -/
+  | arrayFindLast
 deriving BEq, Repr, Inhabited
 
 def Feature.since : Feature → Edition
   | .exponent => .es2016
   | .bigint | .bigintDivision | .nullishCoalescing | .optionalChaining => .es2020
   | .logicalAssignment | .numericSeparators => .es2021
+  | .arrayFindLast => .es2023
 
 def Feature.describe : Feature → String
   | .exponent => "'**'"
@@ -74,6 +78,7 @@ def Feature.describe : Feature → String
   | .optionalChaining => "'?.'"
   | .logicalAssignment => "'&&=', '||=' and '??='"
   | .numericSeparators => "numeric separators"
+  | .arrayFindLast => "Array.prototype.findLast"
 
 def Edition.supports (target : Edition) (f : Feature) : Bool := f.since.year ≤ target.year
 

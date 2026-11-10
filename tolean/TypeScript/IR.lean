@@ -185,6 +185,11 @@ instance : tolean.IR.PrintTy TyExt where
   map names := leanName names "JSMap"
   set names := leanName names "JSSet"
   stringLit names s := s!"{leanName names "JSString.ofString"} {tolean.Sexp.quote s}"
+  -- The index that `Array.prototype.map` passes is a number (ECMA-262
+  -- §23.1.3.21), and an array has fewer than 2^32 elements, so the index is a
+  -- safe integer.
+  indexValue names i :=
+    s!"({leanName names "JSNumber"}.ofSafeInt (N := {names.typeParam}) ({i} : {leanName names "Int"}))"
 
 open tolean.IR (argument) in
 /-- An operation on its printed arguments. The translator gives each one the
