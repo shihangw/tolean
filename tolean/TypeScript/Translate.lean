@@ -1375,9 +1375,10 @@ def StringMethod.result : IR.StringMethod → Ty
   | .trim | .trimStart | .trimEnd => .string
   | .split => .array .string
 
-/-- The edition that added a method of a string, when it is newer than
-ES2015. -/
+/-- The edition from which a method of a string means what the model says,
+when that is later than ES2015. -/
 def StringMethod.feature : IR.StringMethod → Option Feature
+  | .trim => some .trimWhiteSpace
   | .trimStart | .trimEnd => some .trimStartEnd
   | _ => none
 

@@ -171,9 +171,11 @@ def includes (s p : JSString) : Bool := (indexOf? s p).isSome
 /-- The code points that `trim` removes: WhiteSpace and LineTerminator
 (ECMA-262 §12.2 and §12.3). WhiteSpace is TAB, VT, FF, ZWNBSP (U+FEFF) and
 every code point of the Unicode category Zs. Zs has had these members since
-Unicode 6.3, and every engine that Tolean supports has a later version. Each
-of them is one code unit that is not a surrogate, so a code unit is one of
-them exactly when the code point that it starts is. -/
+Unicode 6.3. ES2016 and later name Unicode 8.0 or later, so they agree on
+them. ES2015 names Unicode 5.1, where U+180E is in Zs too, so the translator
+refuses `trim` for that target. Each of them is one code unit that is not a
+surrogate, so a code unit is one of them exactly when the code point that it
+starts is. -/
 def whiteSpace : List Nat :=
   [0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x20, 0xA0, 0x1680, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004,
    0x2005, 0x2006, 0x2007, 0x2008, 0x2009, 0x200A, 0x2028, 0x2029, 0x202F, 0x205F, 0x3000, 0xFEFF]
