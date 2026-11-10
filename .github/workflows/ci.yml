@@ -42,6 +42,8 @@ jobs:
           extra_nix_config: |
             accept-flake-config = true
 
+      # wasm.yml restores this cache under the same key and paths. Change
+      # both lists together, or the WebAssembly job stops finding it.
       - name: Cache Lean build output
         uses: actions/cache@v5
         with:
