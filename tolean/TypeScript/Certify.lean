@@ -105,8 +105,8 @@ def encoderOf (r : Refs) : IR.Ty → Option String
   | .number => some (r.eval "Val.num")
   | .tuple ts => do return s!"({r.eval "encTuple"} {← elementsEncoder r ts})"
   -- A type parameter has no encoder, so a generic function or interface gets no
-  -- certificate yet. Neither has a map.
-  | .null | .tag _ | .param _ | .app .. | .map .. | .set _ => none
+  -- certificate yet. Neither has a map or a set, nor a function that can throw.
+  | .null | .tag _ | .param _ | .app .. | .map .. | .set _ | .except .. | .error => none
 
 /-- How the elements of a tuple of the types `ts` become a list of `Val`s. -/
 def elementsEncoder (r : Refs) : List IR.Ty → Option String
@@ -129,7 +129,7 @@ def decoderOf (r : Refs) : IR.Ty → Option String
   | .struct ref | .enum ref | .tagged ref => some (r.cert s!"decode{ref.name}")
   | .number => some (r.eval "decNum")
   | .tuple ts => do return s!"({r.eval "decTuple"} {← elementsDecoder r ts})"
-  | .null | .tag _ | .param _ | .app .. | .map .. | .set _ => none
+  | .null | .tag _ | .param _ | .app .. | .map .. | .set _ | .except .. | .error => none
 
 /-- How a list of `Val`s becomes the elements of a tuple of the types `ts`. -/
 def elementsDecoder (r : Refs) : List IR.Ty → Option String
@@ -210,8 +210,8 @@ def functionsOf (m : Module) : List (String × List Param × Option TypeExpr × 
 def certifiable (m : Module) : List String := (functionsOf m).map (·.1)
 
 /-- How deep the calls of `calls`, and the calls in their bodies, nest: the
-fuel that the interpreter needs to run them. The subset has no recursion, so
-the depth is finite. -/
+fuel that the interpreter needs to run them. `certify` refuses a function
+that calls itself, so the depth is finite. -/
 partial def callsDepth (m : Module) (calls : List String) : Nat :=
   let rec go (fuel : Nat) (calls : List String) : Nat :=
     match fuel with
@@ -303,6 +303,8 @@ partial def bodyCallbacks : IR.Body → List Callback
   | .ite c a b => exprCallbacks c ++ bodyCallbacks a ++ bodyCallbacks b
   | .matchNull _ _ a b | .matchTag _ _ _ _ _ a b | .letState _ a b => bodyCallbacks a ++ bodyCallbacks b
   | .fold _ _ body items rest _ => exprCallbacks items ++ bodyCallbacks body ++ bodyCallbacks rest
+  | .throw e => exprCallbacks e
+  | .bind _ _ args rest => args.flatMap exprCallbacks ++ bodyCallbacks rest
 
 end
 
@@ -366,6 +368,8 @@ partial def loopsOf : IR.Body → List (List String × String × IR.Body × IR.L
   | .ite _ a b | .matchNull _ _ a b | .matchTag _ _ _ _ _ a b => loopsOf a ++ loopsOf b
   | .letState _ branch rest => loopsOf branch ++ loopsOf rest
   | .fold names element body _ rest info => loopsOf body ++ [(names, element, body, info)] ++ loopsOf rest
+  | .throw _ => []
+  | .bind _ _ _ rest => loopsOf rest
 
 /-- `s`, the state of a loop with the locals `names`, as the path to one of
 them: `s`, `s.1`, `s.2.1`, and so on. -/
@@ -396,6 +400,11 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
   let names := { names with namespacePrefix := r.full transNs ++ "." }
   let fns := certifiable m
   if fns.isEmpty then throw s!"{file}: there is no function to certify"
+  -- A theorem runs the interpreter with the fuel that the depth of the calls
+  -- needs, and a function that calls itself has no such depth.
+  for d in decls do
+    if let .function name _ _ body := d then
+      if body.calls ⟨"", name⟩ then throw s!"{file}: the recursive function {name} has no certificate yet"
   let nv := names.typeParam
   -- Every theorem is about every number model.
   let generic := s!"\{{nv} : Type} [tolean.TypeScript.JSNumber {nv}]"
@@ -451,6 +460,9 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     -- An interface.
     if let .struct name typeParams allFields := d then
       unless typeParams.isEmpty do throw s!"{file}: the generic interface {name} has no certificate yet"
+      -- The encoder of an interface that refers to itself would be recursive.
+      if allFields.any (fun (_, t) => t.refs.any (·.name == name)) then
+        throw s!"{file}: the recursive interface {name} has no certificate yet"
       -- An optional field is a key only when it holds a value, as in an
       -- object literal that leaves it out.
       let parts ← allFields.mapM fun (f, t) => do

@@ -308,6 +308,7 @@ class Gen {
       () => ['let', this.name(), ...(this.chance(0.5) ? [':', ...this.type(2)] : []), '=', ...this.expr(2), ...this.end()],
       () => ['const', this.name(), '=', ...this.expr(2), ...this.end()],
       () => ['return', ...(this.chance(0.7) ? this.expr(2) : []), ...this.end()],
+      () => ['throw', ...this.expr(2), ...this.end()],
       () => [';'],
     ];
     if (depth > 0) {

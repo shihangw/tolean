@@ -3361,6 +3361,9 @@ theorem StmtOK.retNone : StmtOK T (.returnStmt sp none) := StmtOK.one (fun _ => 
 theorem StmtOK.retSome {e : Expr} (he : WordsOK T e.words) : StmtOK T (.returnStmt sp (some e)) :=
   StmtOK.one (fun _ => rfl) (by words_ok)
 
+theorem StmtOK.throw {e : Expr} (he : WordsOK T e.words) : StmtOK T (.throwStmt sp e) :=
+  StmtOK.one (fun _ => rfl) (by words_ok)
+
 theorem StmtOK.brk : StmtOK T (.breakStmt sp) := StmtOK.one (fun _ => rfl) (by words_ok)
 
 theorem StmtOK.cont : StmtOK T (.continueStmt sp) := StmtOK.one (fun _ => rfl) (by words_ok)
@@ -4243,6 +4246,25 @@ theorem parseStatement_gives {T : Edition} {f : Nat} (hBlk : GivesS T (Parse.par
       simp only [Stmt.wf, Bool.and_eq_true, decide_eq_true_eq]
       refine ⟨⟨hdw, by omega⟩, Stmt.clausesWF_iff.mpr fun c hc => ⟨(hall c hc).1, Stmt.allClauseWF_iff.mpr
         fun x hx => by rw [← hK.inFunction_eq, ← hK.loopDepth_eq]; exact (hall c hc).2.1 x hx⟩⟩
+    by_cases hth : w = "throw"
+    · subst hth; simp only at h
+      have hx := hne hk (by simp)
+      have hR₁ := hR.past hs (hR.more hs hx)
+      rw [Parse.bind_eq (Parse.discard_eq (advance_past hR hs hx))] at h
+      obtain ⟨y, r₁, hs₁⟩ := hR₁.cons
+      rw [Parse.bind_eq (Parse.peek_eq hs₁)] at h
+      obtain ⟨_, h⟩ := fail_inv h
+      rw [Parse.bind_eq (Parse.budget_eq _), Parse.bind_ok] at h
+      obtain ⟨e, s₂, he, h⟩ := h
+      have ge := (exprs_give T _).1 _ _ _ hR₁ hT he
+      rw [Parse.bind_ok] at h; obtain ⟨_, s₃, hend, h⟩ := h
+      obtain ⟨hR₃, hK₃⟩ := endStatement_inv ge.ready hend
+      rw [Parse.bind_eq (Parse.spanFrom_eq _ _)] at h
+      simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h
+      refine ⟨hR₃, (Kept.past _ _ _).trans (ge.kept.trans hK₃), ?_, by simp [Stmt.openIf], by simp [Stmt.isDecl],
+        StmtOK.throw ge.ok⟩
+      simp only [Stmt.wf, Bool.and_eq_true]
+      exact ⟨ge.wf, ge.after _ (follows_end (.inl rfl))⟩
     by_cases he : w = "true" ∨ w = "false" ∨ w = "null" ∨ w = "typeof" ∨ w = "void" ∨ w = "new"
     · rcases he with rfl | rfl | rfl | rfl | rfl | rfl <;> simp only at h <;>
         exact exprStmt_gives hR hT hs (by rw [hk]; simp [startsExprStmt]) h

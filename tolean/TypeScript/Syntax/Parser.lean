@@ -879,6 +879,15 @@ def parseStatement (fuel : Nat) : ParseM Stmt := do
       value := some (← parseExpression (← budget))
     endStatement
     return .returnStmt (← spanFrom start) value
+  -- No line break may come between `throw` and its value (ECMA-262
+  -- §14.14), and no `;` is inserted there.
+  | .keyword "throw" =>
+    discard advance
+    let next ← peek
+    if next.newlineBefore then failAt next "a line break after 'throw'"
+    let value ← parseExpression (← budget)
+    endStatement
+    return .throwStmt (← spanFrom start) value
   | .keyword "break" | .keyword "continue" =>
     discard advance
     if (← get).loopDepth == 0 then failAt t s!"{t.kind.describe} outside a loop"

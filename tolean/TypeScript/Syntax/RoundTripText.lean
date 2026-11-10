@@ -308,6 +308,10 @@ theorem Stmt.lineOK : ∀ (st : Stmt) (d : Nat), ∀ l ∈ st.lines d, LineOK l.
     simp [Stmt.lines] at hl; subst hl
     exact LineOK.cons (by simp [keywordWord])
       ((Expr.fine e).line.append (LineOK.word (w := punctWord ";") (by simp [punctWord])))
+  | .throwStmt _ e, d, l, hl => by
+    simp [Stmt.lines] at hl; subst hl
+    exact LineOK.cons (by simp [keywordWord])
+      ((Expr.fine e).line.append (LineOK.word (w := punctWord ";") (by simp [punctWord])))
   | .ifStmt _ test t none, d, l, hl => by
     simp only [Stmt.lines, List.mem_cons] at hl
     rcases hl with rfl | hl
