@@ -198,6 +198,14 @@ def paramNames (fields : List Field) : List String :=
     | .mk _ [] _ _ => ["_"]
     | .mk _ names _ _ => names
 
+/-- The last part of an import path, without the quotes of its literal. The
+quotes are dropped character by character rather than with `String.replace`.
+In Lean 4.30, `replace` with a string pattern compiles to a call of a
+standard library helper that the WebAssembly build of the library does not
+have, so the playground's translator would not link. -/
+def importName (raw : String) : String :=
+  String.ofList (((raw.splitOn "/").getLast?.getD raw).toList.filter (· != '"'))
+
 /-- The names that one top-level declaration binds. `init` and `_` bind
 nothing, and a method binds no package name. An import binds its name, or the
 last part of its path, which is all a file can use to name it. -/
@@ -207,8 +215,7 @@ def declNames : Decl → List String
   | .gen (.mk _ _ specs) => specs.flatMap fun
     | .type _ name _ _ => [name]
     | .value _ names _ _ => names
-    | .import _ raw alias =>
-      alias.toList ++ [((raw.splitOn "/").getLast?.getD raw).replace "\"" ""]
+    | .import _ raw alias => alias.toList ++ [importName raw]
 
 /-- The function `f` of the declarations, as a call of `f` finds it. -/
 def funcOf : Decl → Option (String × List String × Stmt)

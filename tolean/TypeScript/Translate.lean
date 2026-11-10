@@ -325,6 +325,8 @@ structure FnInfo where
   typeParams : List String := []
   params : List Ty
   ret : Ty
+  /-- The function can throw, so its output returns `Except JSError R`. -/
+  throws : Bool := false
 
 def FnInfo.ref (f : FnInfo) : DeclRef := ⟨f.file, f.name⟩
 
@@ -419,6 +421,9 @@ structure Ctx where
   /-- The type parameters of the function being translated. -/
   typeParams : List String := []
   returnType : Ty := .boolean
+  /-- The function being translated can throw, so its output returns
+  `Except JSError R`, and each value it returns is `pure` of the value. -/
+  throws : Bool := false
   /-- A bound on how deep the translator's calls nest. Each nesting of the
   program takes at most a few calls, so four per character of the source is
   more than enough, and running out is a refusal. With the bound, every
@@ -580,6 +585,45 @@ def Tail.returnBody (tail : Tail) (code : IR.Expr) : IR.Body :=
 
 def leanReserved : List String := IR.leanReserved
 
+/-- The type of the output of a function whose result has the type `ret`:
+`Except JSError R` when it can throw. -/
+def leanResult (throws : Bool) (ret : Ty) : IR.Ty :=
+  if throws then .except IR.Ty.error ret.lean else ret.lean
+
+/-- The parts of `e` when it is a call of a function of `fns` that can
+throw: the spans of the call and of the name, the name, and the arguments. -/
+def throwingCall? (fns : List FnInfo) : Expr → Option (Span × Span × String × List Expr)
+  | .call cs (.ident sp name) args =>
+    if (fns.find? (·.name == name)).any (·.throws) then some (cs, sp, name, args) else none
+  | _ => none
+
+/-- `e` is a call of a function of `fns` that can throw. -/
+def callsThrowing (fns : List FnInfo) (e : Expr) : Bool := (throwingCall? fns e).isSome
+
+mutual
+
+/-- `s` can throw: it holds a `throw`, or a declaration or a `return` whose
+value is a call of a function of `fns` that can throw. -/
+def stmtThrows (fns : List FnInfo) : Stmt → Bool
+  | .throwStmt .. => true
+  | .varDecl _ { init := some e, .. } | .returnStmt _ (some e) => callsThrowing fns e
+  | .ifStmt _ _ t (some e) => stmtThrows fns t || stmtThrows fns e
+  | .ifStmt _ _ t none => stmtThrows fns t
+  | .forOfStmt _ _ _ _ body | .forStmt _ _ _ _ body | .whileStmt _ _ body => stmtThrows fns body
+  | .block _ body => stmtsThrow fns body
+  | .switchStmt _ _ clauses => clausesThrow fns clauses
+  | _ => false
+
+def stmtsThrow (fns : List FnInfo) : List Stmt → Bool
+  | [] => false
+  | s :: rest => stmtThrows fns s || stmtsThrow fns rest
+
+def clausesThrow (fns : List FnInfo) : List (Option Expr × List Stmt) → Bool
+  | [] => false
+  | (_, body) :: rest => stmtsThrow fns body || clausesThrow fns rest
+
+end
+
 /-! ### Literal values
 
 The translator reads a literal with the interpreter's own functions,
@@ -608,6 +652,14 @@ def spanText (ctx : Ctx) (span : Span) : String :=
 def reject {A : Type} (span : Span) (reason : String) : TM A := do
   let ctx ← get
   throw s!"{ctx.file}:{span.start.line}:{span.start.col}: {reason}: {spanText ctx span}"
+
+/-- Refuse a call of `fn` that can throw, unless the call is the whole value
+of a declaration or a `return` (`top`). The output passes the error of such
+a call on with `>>=`, which only a statement can do. -/
+def checkThrowingCall (s : Span) (name : String) (fn : FnInfo) (top : Bool) : TM Unit :=
+  if fn.throws && !top then
+    reject s s!"'{name}' can throw, so a call of it must be the whole value of a const, a let or a return"
+  else pure ()
 
 /-- The program nests deeper than `Ctx.fuel` allows. -/
 def tooDeep {A : Type} : TM A := do
@@ -644,7 +696,7 @@ def isNumberName (name : String) : Bool :=
 /-- The globals that the subset reads by name, so that no declaration may
 hide them. -/
 def isGlobalName (name : String) : Bool :=
-  isNumberName name || name == "undefined" || name == "Map"
+  isNumberName name || name == "undefined" || name == "Map" || name == "Error"
 
 def checkName (span : Span) (name : String) : TM String := do
   if leanReserved.contains name then reject span s!"name '{name}' is reserved in Lean"
@@ -872,8 +924,10 @@ def branchEnds (isJump : Stmt → Bool) : Stmt → Bool
 
 end
 
-/-- Every path through `statements` ends in a `return`. -/
-def alwaysReturns : List Stmt → Bool := alwaysEnds (· matches .returnStmt ..)
+/-- Every path through `statements` ends in a `return` or a `throw`, which
+both end the function. -/
+def alwaysReturns : List Stmt → Bool :=
+  alwaysEnds fun s => s matches .returnStmt .. || s matches .throwStmt ..
 
 /-- `s` ends one run of a loop body: a `continue`, or a `break` or a `return`
 in a loop that one can end. -/
@@ -886,7 +940,7 @@ def isLoopJump (breaks returns : Bool) : Stmt → Bool
 /-- Why an `if` whose first branch ends in `tail` may not have both an `else`
 and statements after it. -/
 def Tail.afterEarlyReason : Tail → String
-  | .ret => "code after an if whose branches both return is unreachable"
+  | .ret => "code after an if whose branches both return or throw is unreachable"
   | _ => "after an if whose first branch ends in continue, break or return, put the code that follows in its else branch"
 
 /-- The tail of the first branch of an `if`, when every path through it,
@@ -905,7 +959,7 @@ mutual
 flags say whether a `break` and a `continue` count. Inside a loop that `s`
 contains, neither counts, because they leave only that loop. -/
 def containsJump (brk cont : Bool) : Stmt → Bool
-  | .returnStmt .. => true
+  | .returnStmt .. | .throwStmt .. => true
   | .breakStmt _ => brk
   | .continueStmt _ => cont
   | .ifStmt _ _ t (some e) => containsJump brk cont t || containsJump brk cont e
@@ -1634,7 +1688,7 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
     | none =>
       match mapMethodOf callee with
       | some (recv, op) => translateMapMethod fuel env s recv op args
-      | none => translateCall fuel env s callee args
+      | none => translateCall fuel env s callee args false
   -- `new Map()`, a map without entries. Its type comes from the type
   -- arguments, or from the context, as in `const m: Map<K, V> = new Map()`.
   | .new s callee typeArgs args =>
@@ -1692,7 +1746,8 @@ def translateElements (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span)
     unless c.type.assignableTo elem do reject e.span "the element does not have the array's element type"
   return (codes.map (·.value), elem)
 
-def translateCall (fuel : Nat) (env : Env) (s : Span) (callee : Expr) (args : List Expr) : TM Code := do
+def translateCall (fuel : Nat) (env : Env) (s : Span) (callee : Expr) (args : List Expr) (top : Bool) :
+    TM Code := do
   let fuel + 1 := fuel | tooDeep
   -- `Number.isNaN(x)` and the like. TypeScript lets them take any value; the
   -- model has them on numbers only.
@@ -1703,13 +1758,14 @@ def translateCall (fuel : Nat) (env : Env) (s : Span) (callee : Expr) (args : Li
         reject arg.span s!"Number.{test} needs a number operand (narrow a nullable value first)"
       return ⟨.numberTest form a.value, false, .boolean⟩
   let noCallMessage :=
-    "calls may name only functions declared earlier in this file, or imported (no recursion)"
+    "calls may name only the function itself, functions declared earlier in this file, or imported ones"
   let noCall {A : Type} : TM A := reject s noCallMessage
   let .ident _ name := callee | noCall
   if (name == "isNaN" || name == "isFinite") && !env.functions.any (·.name == name) then
     reject s s!"the global {name} converts its argument to a number; use Number.{name}"
   let fn ← orReject (env.functions.find? (·.name == name)) s noCallMessage
   if env.has name then noCall
+  checkThrowingCall s name fn top
   -- A call may leave out optional parameters, which come last. Each is
   -- `undefined` then, and the output passes `none` for it.
   let required := (fn.params.filter fun t => !(t matches .optional _)).length
@@ -1971,6 +2027,37 @@ def translateUpdate (env : Env) (s : Span) (e : Expr) : TM (String × IR.Expr) :
       return (name, .update bigintOp name v.value)
   | _ => refuse
 
+/-- The type that an annotation such as `: T` names, if there is one. -/
+def translateAnnotation : Option TypeExpr → TM (Option Ty)
+  | some annotation => some <$> translateType annotation
+  | none => pure none
+
+/-- `const x = f(a)` or `let x = f(a)`, where `f` can throw: the call of the
+output, and the scope after the declaration. The output passes the error of
+the call on, so the declaration must be in the statements that end the
+function. -/
+def translateBindHead (env : Env) (s : Span) (d : VarDecl) (tail : Tail) (cs sp : Span) (name : String)
+    (args : List Expr) : TM (DeclRef × List IR.Expr × Env) := do
+  unless tail.isRet do
+    reject s "a call of a function that can throw may stand only in the statements that end the function"
+  let code ← translateCall (← fuelLimit) env cs (.ident sp name) args true
+  let declared ← translateAnnotation d.type
+  unless declared.all (· == code.type) do reject s "the call must have the declared type"
+  let .call ref outs := code.code | reject s "unsupported call"
+  let env' ← declare env s d.name (if d.kind == .const then .const else .«let») code.type
+  return (ref, outs, env')
+
+/-- `return f(a)`, where `f` can throw: the call of the output. The output
+passes the error of the call on, so the `return` must end the function. -/
+def translateReturnCall (env : Env) (s : Span) (tail : Tail) (cs sp : Span) (name : String)
+    (args : List Expr) : TM (DeclRef × List IR.Expr) := do
+  unless tail.isRet do reject s "a loop body may not return a call of a function that can throw"
+  let returnType := (← get).returnType
+  let code ← translateCall (← fuelLimit) env cs (.ident sp name) args true
+  unless code.type == returnType do reject s "the call must have the function's return type"
+  let .call ref outs := code.code | reject s "unsupported call"
+  return (ref, outs)
+
 mutual
 
 def translateStatements (fuel : Nat) (env : Env) (tail : Tail) (statements : List Stmt) :
@@ -1992,13 +2079,19 @@ def translateStatements (fuel : Nat) (env : Env) (tail : Tail) (statements : Lis
     | .returnStmt s value =>
       let ([], some v, true) := (rest, value, tail.canReturn)
         | reject s "return must be the last statement of a function or a loop body and carry a value"
-      modify fun c => { c with returning := true }
-      let returnType := (← get).returnType
-      let code ← translateExpr (← fuelLimit) env (some returnType) v
-      unless code.type.assignableTo returnType do
-        reject v.span "the value does not have the function's return type"
-      modify fun c => { c with returning := false }
-      return tail.returnBody code.value
+      match throwingCall? env.functions v with
+      -- `return f(x)`, where `f` can throw: the output passes its error on.
+      | some (cs, sp, name, args) =>
+        let (ref, outs) ← translateReturnCall env s tail cs sp name args
+        return .bind "r" ref outs (.value (IR.Expr.pure (.var "r")))
+      | none =>
+        modify fun c => { c with returning := true }
+        let returnType := (← get).returnType
+        let code ← translateExpr (← fuelLimit) env (some returnType) v
+        unless code.type.assignableTo returnType do
+          reject v.span "the value does not have the function's return type"
+        modify fun c => { c with returning := false }
+        return tail.returnBody (if (← get).throws then IR.Expr.pure code.value else code.value)
     | .varDecl s d => translateVariable fuel env s d rest tail
     | .exprStmt s e =>
       let (name, update) ← translateUpdate env s e
@@ -2008,6 +2101,16 @@ def translateStatements (fuel : Nat) (env : Env) (tail : Tail) (statements : Lis
     | .forOfStmt s kind name iterable body =>
       translateForOf fuel env s kind name iterable body rest tail
     | .switchStmt s disc clauses => translateSwitch fuel env s disc clauses rest tail
+    -- `throw new Error(m)` ends the function with the error.
+    | .throwStmt s value =>
+      unless rest.isEmpty && tail.isRet do
+        reject s "throw must be the last statement of a function body, or of a branch of an if that ends it"
+      let .new _ "Error" [] [msg] := value
+        | reject value.span "tolean supports only 'throw new Error(message)'"
+      if env.has "Error" then reject value.span "a local named Error hides the global"
+      let code ← translateExpr (← fuelLimit) env (some .string) msg
+      unless code.type == .string do reject msg.span "the message of an Error must be a string"
+      return .throw (IR.Expr.error code.value)
     -- `continue` ends one run of the loop body with the state as it is.
     | .continueStmt s =>
       let some next := tail.continues
@@ -2029,33 +2132,40 @@ def translateVariable (fuel : Nat) (env : Env) (s : Span) (d : VarDecl) (rest : 
   if (Stmt.varDecl s d).constAssignedIn rest then
     reject s s!"'{d.name}' is a const, and a later statement assigns it; declare it with let"
   let init ← orReject d.init s "declare one const or let identifier with an initializer"
-  -- `const xs: Array<T> = [...]` (or `T[]`) is an owned array, which the
-  -- function may push to. Any other array literal is a value.
-  let mutableAnnotation := match d.type with
-    | some (.ref _ "Array" [_]) | some (.array _ _) => true
-    | _ => false
-  if init.isArrayLiteral then
-    if mutableAnnotation then
-      unless d.kind == .const do
-        reject s "an array that the function pushes to must be 'const xs: Array<T> = [...]'; use ReadonlyArray<T> for a value"
-      let some annotation := d.type | unreachable!
-      let type ← translateType annotation
-      let .array _ elems := init | unreachable!
-      -- The `let` states the type, so the list needs no ascription.
-      let (values, _) ← translateElements (← fuelLimit) env (some type) s elems
-      let env' ← declare env s d.name .array type
-      return .letArray d.name type.lean values (← translateStatements fuel env' tail rest)
-  let declared ← match d.type with
-    | some annotation => some <$> translateType annotation
-    | none => pure none
-  let code ← translateExpr (← fuelLimit) env declared init
-  let type ← match declared with
-    | some t =>
-      if code.type.assignableTo t then pure t
-      else reject s "the value does not have the declared type"
-    | none => pure code.type
-  let env' ← declare env s d.name (varBinding d.kind init) type
-  return .let d.name (withType code.value type code.type) (← translateStatements fuel env' tail rest)
+  match throwingCall? env.functions init with
+  -- `const x = f(a)`, where `f` can throw: the output passes its error on, and
+  -- binds `x` to the value otherwise.
+  | some (cs, sp, name, args) =>
+    let (ref, outs, env') ← translateBindHead env s d tail cs sp name args
+    return .bind d.name ref outs (← translateStatements fuel env' tail rest)
+  | none =>
+    -- `const xs: Array<T> = [...]` (or `T[]`) is an owned array, which the
+    -- function may push to. Any other array literal is a value.
+    let mutableAnnotation := match d.type with
+      | some (.ref _ "Array" [_]) | some (.array _ _) => true
+      | _ => false
+    if init.isArrayLiteral then
+      if mutableAnnotation then
+        unless d.kind == .const do
+          reject s "an array that the function pushes to must be 'const xs: Array<T> = [...]'; use ReadonlyArray<T> for a value"
+        let some annotation := d.type | unreachable!
+        let type ← translateType annotation
+        let .array _ elems := init | unreachable!
+        -- The `let` states the type, so the list needs no ascription.
+        let (values, _) ← translateElements (← fuelLimit) env (some type) s elems
+        let env' ← declare env s d.name .array type
+        return .letArray d.name type.lean values (← translateStatements fuel env' tail rest)
+    let declared ← match d.type with
+      | some annotation => some <$> translateType annotation
+      | none => pure none
+    let code ← translateExpr (← fuelLimit) env declared init
+    let type ← match declared with
+      | some t =>
+        if code.type.assignableTo t then pure t
+        else reject s "the value does not have the declared type"
+      | none => pure code.type
+    let env' ← declare env s d.name (varBinding d.kind init) type
+    return .let d.name (withType code.value type code.type) (← translateStatements fuel env' tail rest)
 
 def translateIf (fuel : Nat) (env : Env) (s : Span) (test : Expr) (thenBranch : Stmt)
     (elseBranch : Option Stmt) (rest : List Stmt) (tail : Tail) : TM IR.Body := do
@@ -2108,7 +2218,7 @@ def translateIf (fuel : Nat) (env : Env) (s : Span) (test : Expr) (thenBranch : 
     let whenFalse ← translateStatements fuel envFalse tail (elseStatements ++ rest)
     return (← branch whenTrue whenFalse)
   if (thenStatements ++ elseStatements).any (containsJump true true) then
-    reject s "a branch that does not always return may not return, break or continue"
+    reject s "a branch that does not always return may not return, throw, break or continue"
   let names := changedNames (thenStatements ++ elseStatements) env
   if names.isEmpty then reject s "an if without a return must change a local"
   let tested := match nullTest, tagTest with
@@ -2252,7 +2362,7 @@ def translateStateClause (fuel : Nat) (env : Env) (s : Span) (names : List Strin
   let fuel + 1 := fuel | tooDeep
   if !(last || endsInBreak body) then reject s fallthroughReason
   else if anyContainsJump true true (dropBreak body) then
-    reject s "a clause of a switch that ends in break may not return, break or continue before its end"
+    reject s "a clause of a switch that ends in break may not return, throw, break or continue before its end"
   else translateStatements fuel env (.state names) (dropBreak body)
 
 def translateForOf (fuel : Nat) (env : Env) (s : Span) (kind : VarKind) (element : String)
@@ -2274,11 +2384,12 @@ def translateForOf (fuel : Nat) (env : Env) (s : Span) (kind : VarKind) (element
   let bodyEnv ← declare env s element .const elemType
   let bodyOut ← translateStatements fuel bodyEnv (.loop names breaks returns) bodyStatements
   let returnType := (← get).returnType
+  let throws := (← get).throws
   let info : IR.LoopInfo :=
     { span := s, elem := elemType.lean,
       stateTypes := names.filterMap fun n => (env.lookup n).map (·.type.lean),
       scope := (env.locals.filter fun l => !names.contains l.name).map fun l => (l.name, l.type.lean),
-      breaks, returns := if returns then some returnType.lean else none }
+      breaks, returns := if returns then some (leanResult throws returnType) else none }
   return .fold names element bodyOut items.code (← translateStatements fuel env tail rest) info
 
 end
@@ -2341,35 +2452,81 @@ def checkTypeParams (s : Span) (named : String → Bool) (seen : List String) : 
       reject s s!"no parameter's type names the type parameter '{v}', so a call could not fix it"
     checkTypeParams s named (seen ++ [v]) vs
 
+mutual
+
+/-- Every use of the interface `self` in the type passes it `args`. -/
+def Ty.namesSelfWith (self : DeclRef) (args : List Ty) : Ty → Bool
+  | .struct r rs => (r != self || rs == args) && Ty.namesSelfWithList self args rs
+  | .nullable t | .optional t | .array t => t.namesSelfWith self args
+  | .tuple ts => Ty.namesSelfWithList self args ts
+  | _ => true
+
+def Ty.namesSelfWithList (self : DeclRef) (args : List Ty) : List Ty → Bool
+  | [] => true
+  | t :: ts => t.namesSelfWith self args && Ty.namesSelfWithList self args ts
+
+end
+
+mutual
+
+/-- The type names a declaration `name` of the file `file`, which the output
+writes by that name alone. -/
+def Ty.namesDecl (file name : String) : Ty → Bool
+  | .struct r rs => (r.file == file && r.name == name) || Ty.namesDeclList file name rs
+  | .enum r | .tagged r _ => r.file == file && r.name == name
+  | .nullable t | .optional t | .array t => t.namesDecl file name
+  | .tuple ts => Ty.namesDeclList file name ts
+  | _ => false
+
+def Ty.namesDeclList (file name : String) : List Ty → Bool
+  | [] => false
+  | t :: ts => t.namesDecl file name || Ty.namesDeclList file name ts
+
+end
+
 def translateInterface (s : Span) (exported : Bool) (name : String) (typeParams : List String)
     (fields : List Field) : TM IR.Decl := do
   let name ← checkName s name
   declareTopLevel s name
   checkTypeParams s (fun _ => true) [] typeParams
   modify fun c => { c with typeParams }
-  let infos ← isolated <| fields.foldlM (init := ([] : List (String × Ty))) fun infos f => do
-    unless f.readonly do
-      reject f.span "interface fields must be readonly and typed"
-    let field ← checkName f.span f.name
-    if infos.any (·.1 == field) then reject f.span s!"'{field}' is declared twice"
-    -- A Lean structure's fields are in scope in the types of the fields after
-    -- them, so a field may not hide a type parameter.
-    if typeParams.contains field then
-      reject f.span s!"'{field}' would hide the type parameter {field} in Lean; choose another name"
-    -- A field of one string literal type is a tag, which a union reads.
-    let type ← match f.type with
-      | .literal _ (.string v) =>
-        if f.optional then reject f.span "a tag field may not be optional" else pure (Ty.literal v)
-      | t => translateType t
-    -- `f?: T`: an object may leave the field out, and a read of it then gives
-    -- `undefined`. An object without the field would inherit a property of
-    -- `Object.prototype` of the same name.
-    let type ← if !f.optional then pure type
-      else if type.isNullable then reject f.span "an optional field may not also be nullable"
-      else if Eval.objectPrototypeNames.contains field then
-        reject f.span s!"an optional field may not be named '{field}', because an object without it has Object.prototype.{field}"
-      else pure (Ty.optional type)
-    pure (infos ++ [(field, type)])
+  -- A field may name the interface itself, as a tree node names its
+  -- children, so the interface is in scope while its fields translate. Lean
+  -- reads such a structure as a nested inductive type.
+  let infos ← isolated do
+    modify fun c => { c with structs := c.structs ++ [{ file := c.file, name, exported, typeParams, fields := [] }] }
+    fields.foldlM (init := ([] : List (String × Ty))) fun infos f => do
+      unless f.readonly do
+        reject f.span "interface fields must be readonly and typed"
+      let field ← checkName f.span f.name
+      if infos.any (·.1 == field) then reject f.span s!"'{field}' is declared twice"
+      -- A Lean structure's fields are in scope in the types of the fields after
+      -- them, so a field may not hide a type parameter.
+      if typeParams.contains field then
+        reject f.span s!"'{field}' would hide the type parameter {field} in Lean; choose another name"
+      -- A field of one string literal type is a tag, which a union reads.
+      let type ← match f.type with
+        | .literal _ (.string v) =>
+          if f.optional then reject f.span "a tag field may not be optional" else pure (Ty.literal v)
+        | t => translateType t
+      -- Lean's kernel accepts a structure that refers to itself only with
+      -- its own type parameters, in order.
+      unless type.namesSelfWith ⟨(← get).file, name⟩ (typeParams.map .param) do
+        reject f.span s!"'{name}' may refer to itself only with its own type parameters, in order"
+      -- The same holds for a field that has the name of a type, such as the
+      -- interface itself, which the type of a later field names.
+      let file := (← get).file
+      if let some (hidden, _) := infos.find? fun (g, _) => type.namesDecl file g then
+        reject f.span s!"the field '{hidden}' before this one would hide the type {hidden} in Lean; rename the field"
+      -- `f?: T`: an object may leave the field out, and a read of it then gives
+      -- `undefined`. An object without the field would inherit a property of
+      -- `Object.prototype` of the same name.
+      let type ← if !f.optional then pure type
+        else if type.isNullable then reject f.span "an optional field may not also be nullable"
+        else if Eval.objectPrototypeNames.contains field then
+          reject f.span s!"an optional field may not be named '{field}', because an object without it has Object.prototype.{field}"
+        else pure (Ty.optional type)
+      pure (infos ++ [(field, type)])
   modify fun c => { c with
     typeParams := [], structs := c.structs ++ [{ file := c.file, name, exported, typeParams, fields := infos }] }
   return .struct name typeParams (infos.map fun (field, type) => (field, type.lean))
@@ -2595,11 +2752,19 @@ def translateFunction (s : Span) (exported : Bool) (name : String) (typeParams :
       pure (env.add { name := paramName, binding := .param, type := ty },
         leanParams ++ [(paramName, ty.lean)], types ++ [ty])
   let ret ← isolated (translateType returnType)
-  modify fun c => { c with currentFunction := name, returnType := ret }
-  let out ← isolated (translateStatements (← fuelLimit) env .ret (blockStatements body))
-  modify fun c => { c with
-    typeParams := [], functions := c.functions ++ [{ file := c.file, name, exported, typeParams, params := types, ret }] }
-  return .function name leanParams ret.lean out
+  let throws := stmtsThrow ctx.functions (blockStatements body)
+  modify fun c => { c with currentFunction := name, returnType := ret, throws }
+  -- The body may call the function itself. Lean must see that the calls
+  -- end, so each must pass a part of one parameter, the same one in every
+  -- call.
+  let self : FnInfo := { file := ctx.file, name, exported, typeParams, params := types, ret, throws }
+  let out ← isolated (translateStatements (← fuelLimit) { env with functions := env.functions ++ [self] } .ret
+    (blockStatements body))
+  if out.calls self.ref && (out.decreasingParam? self.ref leanParams).isNone then
+    reject s ("a function may call itself only on a part of one of its parameters, the same one in " ++
+      "every call: a field of it, a value that a test narrows it to, or an element of an array in it")
+  modify fun c => { c with typeParams := [], throws := false, functions := c.functions ++ [self] }
+  return .function name leanParams (leanResult throws ret) out
 
 /-! ### The number model -/
 
@@ -2642,11 +2807,11 @@ def exprUsesNumber : Expr → Bool
   | .index _ a (.number ..) => exprUsesNumber a
   | .index _ a b | .binary _ _ a b | .assign _ _ a b => exprUsesNumber a || exprUsesNumber b
   | .cond _ a b c => exprUsesNumber a || exprUsesNumber b || exprUsesNumber c
+  -- `new Map<bigint, number>()` names `number` only in its type arguments.
+  | .new _ callee typeArgs args => isNumberName callee || typesUseNumber typeArgs || exprsUseNumber args
   | .arrow _ _ ps body =>
     ps.any (fun p => isNumberName p.name || (p.type.map typeUsesNumber).getD false) ||
       exprUsesNumber body
-  -- `new Map<bigint, number>()` names `number` only in its type arguments.
-  | .new _ _ typeArgs args => typesUseNumber typeArgs || exprsUseNumber args
   | _ => false
 
 def exprsUseNumber : List Expr → Bool
@@ -2670,6 +2835,7 @@ def stmtUsesNumber : Stmt → Bool
   | .varDecl _ d => varUsesNumber d
   | .exprStmt _ e => exprUsesNumber e
   | .returnStmt _ v => (v.map exprUsesNumber).getD false
+  | .throwStmt _ e => exprUsesNumber e
   | .ifStmt _ test t (some e) => exprUsesNumber test || stmtUsesNumber t || stmtUsesNumber e
   | .ifStmt _ test t none => exprUsesNumber test || stmtUsesNumber t
   | .forOfStmt _ _ name iterable body =>
@@ -3016,11 +3182,19 @@ def translateWith (file source ns : String) (target : Edition := .default)
   let usesString := decls.any IR.Decl.usesString
   -- The same for a map, which is a `JSMap`.
   let usesMap := decls.any (IR.Decl.usesMap IR.ExprExt.onMap)
+  -- A function that can throw returns `Except JSError R`, and `JSError`
+  -- holds a string.
+  let throws := decls.any fun
+    | .function _ _ (.except ..) _ => true
+    | _ => false
   let header :=
     (if names.generic then ["import tolean.TypeScript.Spec.Number"] else []) ++
-    (if usesString then ["import tolean.TypeScript.Spec.String"] else []) ++
-    (if usesMap then ["import tolean.TypeScript.Map"] else []) ++ imports ++
-    (if names.generic || usesString || usesMap then ["", "open tolean.TypeScript"]
+    (if throws then ["import tolean.TypeScript.Spec.Error"]
+     else if usesString then ["import tolean.TypeScript.Spec.String"] else []) ++
+    (if usesMap then ["import tolean.TypeScript.Map"] else []) ++
+    (if decls.any (IR.Decl.recursive names.file) then ["import tolean.TypeScript.Decreasing"] else []) ++
+    imports ++
+    (if names.generic || usesString || throws || usesMap then ["", "open tolean.TypeScript"]
      else if imports.isEmpty then [] else [""])
   let text := "\n".intercalate
     ([s!"-- Generated by tolean {version} for {target.name} from {file}. Do not edit."] ++

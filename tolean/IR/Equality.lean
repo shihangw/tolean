@@ -36,6 +36,7 @@ def Ty.beq : Ty T → Ty T → Bool
   | .param a, .param b => Decidable.decide (a = b)
   | .app a as, .app b bs => Decidable.decide (a = b) && Ty.beqList as bs
   | .map a a', .map b b' => Ty.beq a b && Ty.beq a' b'
+  | .except a a', .except b b' => Ty.beq a b && Ty.beq a' b'
   | .ext a, .ext b => Decidable.decide (a = b)
   | _, _ => false
 
@@ -59,6 +60,8 @@ theorem Ty.beq_iff : (a b : Ty T) → Ty.beq a b = true ↔ a = b
   | .app r a, b => by
     cases b <;> simp [Ty.beq, Ty.beqList_iff a]
   | .map a a', b => by
+    cases b <;> simp [Ty.beq, Ty.beq_iff a, Ty.beq_iff a']
+  | .except a a', b => by
     cases b <;> simp [Ty.beq, Ty.beq_iff a, Ty.beq_iff a']
 
 theorem Ty.beqList_iff : (xs ys : List (Ty T)) → Ty.beqList xs ys = true ↔ xs = ys
