@@ -196,6 +196,21 @@ theorem evalReduce_foldl {α β : Type} (fs : List (DeclRef × List String × IR
   | x :: xs, a => by
     simp [IR.Expr.evalReduce, hb a x, evalReduce_foldl fs fuel ρ acc param body encA encX f hb xs]
 
+/-- The same, for any initial value `v` that encodes what `dec` reads back from
+it. A certificate states its lemma for a callback of `reduce` this way: the
+proof that links a function unfolds the encoding of the initial value, such
+as `encList Val.int init` to `Val.list (List.map Val.int init)`, so the lemma
+must match the unfolded value too. -/
+theorem evalReduce_foldl_val {α β : Type} (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
+    (ρ : Eval.Env N) (acc param : String) (body : IR.Expr) (encA : β → Val N) (encX : α → Val N)
+    (f : β → α → β) (dec : Option (Val N) → β)
+    (hb : ∀ a x, IR.Expr.eval fs fuel ((param, encX x) :: (acc, encA a) :: ρ) body = some (encA (f a x)))
+    (xs : List α) (v : Val N) (hv : encA (dec (some v)) = v) :
+    IR.Expr.evalReduce fs fuel ρ acc param body v (xs.map encX) =
+      some (encA (xs.foldl f (dec (some v)))) := by
+  have := evalReduce_foldl fs fuel ρ acc param body encA encX f hb xs (dec (some v))
+  rwa [hv] at this
+
 /-- The same for `filter`. -/
 theorem evalFilter_filter {α : Type} (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
     (ρ : Eval.Env N) (param : String) (body : IR.Expr) (encX : α → Val N) (p : α → Bool)

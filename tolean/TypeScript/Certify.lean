@@ -665,17 +665,22 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       let simpSet := ", ".intercalate (hfsName ++ envLemmas ++ lemmaNames.toList ++ loopLemmas.toList ++ defs ++ hypNames)
       let itemsTy := (IR.Ty.list elem).print names
       -- A callback of `reduce`: the lemma holds for every value so far `a`,
-      -- which the body reads under the name of the first parameter.
+      -- which the body reads under the name of the first parameter. It holds
+      -- for every initial value `v` that decodes and encodes back to itself,
+      -- because the proof of the function sees the initial value with its
+      -- encoding unfolded, such as `Val.list (List.map Val.int init)`.
       if let .fold acc := method then
-        let accTy := info.result.print names
+        let some decY := decoderOf r info.result
+          | throw s!"{file}: cannot decode the value of a callback in {name}"
         let vars := ("a", info.result) :: ("x", elem) :: scope.zipIdx.map fun ((_, t), i) => (s!"v{i}", t)
         loopLemmas := loopLemmas.push (r.cert lemmaName)
         thms := thms.push <|
           s!"theorem {lemmaName} {generic} (fs : List (tolean.DeclRef × List String × tolean.TypeScript.IR.Body)){hfs}\n" ++
-          s!"    (fuel : Nat) (ρ : Env {nv}){hI} (items : {itemsTy}) (a : {accTy}) :\n" ++
+          s!"    (fuel : Nat) (ρ : Env {nv}){hI} (items : {itemsTy}) (v : Val {nv})\n" ++
+          s!"    (hv : {encY} ({decY} (some v)) = v) :\n" ++
           s!"    tolean.TypeScript.IR.Expr.evalReduce fs {fuel} ρ {str acc} {str param} ({term cbBody})\n" ++
-          s!"      ({encY} a) (List.map {encX} items) = some ({encY} (List.foldl {fn} a items)) := by\n" ++
-          s!"  refine tolean.TypeScript.Proof.evalReduce_foldl fs {fuel} ρ {str acc} {str param} _ {encY} {encX} {fn} ?_ items a\n" ++
+          s!"      v (List.map {encX} items) = some ({encY} (List.foldl {fn} ({decY} (some v)) items)) := by\n" ++
+          s!"  refine tolean.TypeScript.Proof.evalReduce_foldl_val fs {fuel} ρ {str acc} {str param} _ {encY} {encX} {fn} {decY} ?_ items v hv\n" ++
           s!"  intro a x\n" ++ substHfs ++ unpack ++
           s!"  {casesOn decls vars}link_tac [{simpSet}]"
         continue

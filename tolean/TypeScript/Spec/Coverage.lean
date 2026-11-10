@@ -580,7 +580,7 @@ def extras : List Group := [
     ``Proof.evalMapIdx_mapIdx, ``Proof.evalFilter_filter,
     ``Proof.evalFind_find, ``Proof.evalFind_true, ``Proof.evalFind_false, ``Proof.find?_isSome,
     ``Proof.find?_not_isNone, ``Proof.getD_map_undefined, ``Proof.evalFindIdx_from,
-    ``Proof.evalFindIdx_findIdx, ``Proof.evalReduce_foldl]⟩]
+    ``Proof.evalFindIdx_findIdx, ``Proof.evalReduce_foldl, ``Proof.evalReduce_foldl_val]⟩]
 
 open Meta in
 /-- The theorems of the TypeScript modules that the index does not list. A
