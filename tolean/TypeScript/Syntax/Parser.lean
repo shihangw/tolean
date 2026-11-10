@@ -682,6 +682,28 @@ def parseObjectLiteral (fuel : Nat) : ParseM Expr := do
   let _ ← expectPunct "}"
   return .object (← spanFrom start) props.toList
 
+/-- `new C<A, B>(args)`, where `new` comes next. `C<A, B>` is read as a type
+reference, as `tsc` reads the type arguments of a `new` when a `(` follows
+their `>`. Type stripping keeps that reading, and the parser needs the `(`.
+So `C` must be a name, and the arguments must be in parentheses:
+`new a.b()`, `new.target` and `new C` without arguments are refused. -/
+def parseNew (fuel : Nat) : ParseM Expr := do
+  let fuel + 1 := fuel | outOfFuel
+  let t ← advance
+  let name ← peek
+  if !(name.kind matches .ident _) then failAt name "'new' is supported only before a name, such as new Map()"
+  if (← peekAt 1).isPunct "." then failAt name "'new' of a property, such as new a.b(), is not supported"
+  let .ref _ callee typeArgs ← parsePrimaryType (← budget)
+    | failAt t "'new' is supported only before a name, such as new Map()"
+  let next ← peek
+  if !next.isPunct "(" then
+    -- `tsc` reads type arguments after `new C` across a line break too.
+    failAt next (if next.isPunct "<" then
+        "tsc may read this '<' as the start of type arguments; put it on the line of the name"
+      else "'new' needs its arguments in parentheses, such as new Map()")
+  let args ← parseArguments fuel
+  return .new (← spanFrom t.span.start) callee typeArgs args
+
 def parsePrimary (fuel : Nat) : ParseM Expr := do
   let fuel + 1 := fuel | outOfFuel
   let t ← peek
@@ -713,6 +735,7 @@ def parsePrimary (fuel : Nat) : ParseM Expr := do
     return .paren (← spanFrom t.span.start) inner
   | .punct "[" => parseArrayLiteral fuel
   | .punct "{" => parseObjectLiteral fuel
+  | .keyword "new" => parseNew fuel
   | .keyword word => failAt t s!"'{word}' is not supported in an expression"
   | _ => unexpected t "an expression"
 
@@ -879,7 +902,7 @@ def parseStatement (fuel : Nat) : ParseM Stmt := do
     if 1 < defaultCount clauses.toList then failAt t "a switch may have only one default"
     return .switchStmt (← spanFrom start) disc clauses.toList
   | .keyword "true" | .keyword "false" | .keyword "null" | .keyword "typeof"
-  | .keyword "void" => parseExpressionStatement fuel
+  | .keyword "void" | .keyword "new" => parseExpressionStatement fuel
   | .keyword word => failAt t s!"'{word}' is not supported here"
   | _ => parseExpressionStatement fuel
 

@@ -122,6 +122,11 @@ def TypeExpr.wordsOf : List TypeExpr → List (List Word)
 
 end
 
+/-- The type arguments of a `new`: none, or `<A, B>`. -/
+def typeArgWords : List TypeExpr → List Word
+  | [] => []
+  | args => punctWord "<" :: separated "," (TypeExpr.wordsOf args) ++ [punctWord ">"]
+
 /-- `: T` after a name or a parameter list, when the type is there. -/
 def typeAnnotation : Option TypeExpr → List Word
   | some t => punctWord ":" :: t.words
@@ -170,6 +175,8 @@ def Expr.words : Expr → List Word
   | .arrow _ parens params body => arrowParams parens params ++ punctWord "=>" :: body.words
   | .asConst _ e => e.words ++ [identWord "as", keywordWord "const"]
   | .satisfies _ e type => e.words ++ identWord "satisfies" :: type.words
+  | .new _ callee typeArgs args =>
+    keywordWord "new" :: identWord callee :: typeArgWords typeArgs ++ enclose "(" ")" (Expr.wordsOf args)
 
 def Expr.wordsOf : List Expr → List (List Word)
   | [] => []
@@ -377,6 +384,7 @@ def Expr.erase : Expr → Expr
   | .arrow _ parens params body => .arrow noSpan parens (params.map Param.erase) body.erase
   | .asConst _ e => .asConst noSpan e.erase
   | .satisfies _ e type => .satisfies noSpan e.erase type.erase
+  | .new _ callee typeArgs args => .new noSpan callee (TypeExpr.eraseAll typeArgs) (Expr.eraseAll args)
 
 def Expr.eraseAll : List Expr → List Expr
   | [] => []
