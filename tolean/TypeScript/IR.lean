@@ -45,6 +45,8 @@ inductive TyExt where
   | number
   /-- `Option Empty`, the type of `null` alone. -/
   | null
+  /-- `JSError`, what `throw new Error(message)` throws. -/
+  | error
 deriving BEq, Repr, Inhabited, DecidableEq
 
 /-- The operations that TypeScript adds to the IR, each with the number of
@@ -84,7 +86,53 @@ inductive ExprExt where
   /-- `match k with | K.a => r.a | …`, on `r` and `k`: `r[k]`, where `r` is a
   `Record<K, V>` with the keys `keys`, and `K` is the literal union `key`. -/
   | recordGet (key : DeclRef) (keys : List String)
+  /-- `JSMap.empty`, on no arguments: `new Map()`. The translator writes the
+  type of the map after it. -/
+  | mapEmpty
+  /-- `(JSMap.get? m k)`: `m.get(k)`, which is `undefined` when `m` has no
+  key `k`. -/
+  | mapGet
+  /-- `(JSMap.has m k)`: `m.has(k)`. -/
+  | mapHas
+  /-- `(JSNumber.ofSafeInt (JSMap.size m : Int))`: `m.size`, a number. -/
+  | mapSize
+  /-- `(JSMap.set m k v)`: the map after `m.set(k, v)`. -/
+  | mapSet
+  /-- `(JSMap.delete m k)`: the map after `m.delete(k)`. -/
+  | mapDelete
+  /-- `JSSet.empty`, on no arguments: `new Set()`. The translator writes the
+  type of the set after it. -/
+  | setEmpty
+  /-- `(JSSet.has s x)`: `s.has(x)`. -/
+  | setHas
+  /-- `(JSNumber.ofSafeInt (JSSet.size s : Int))`: `s.size`, a number. -/
+  | setSize
+  /-- `(JSSet.add s x)`: the set after `s.add(x)`. -/
+  | setAdd
+  /-- `(JSSet.delete s x)`: the set after `s.delete(x)`. -/
+  | setDelete
+  /-- `s.elems`: the elements of a set, which `for (const x of s)` visits. -/
+  | setElems
+  /-- `m.entries`: the entries of a map, which `for (const e of m)` visits,
+  each as a pair. -/
+  | mapEntries
+  /-- `(JSMap.ofList xs)`: `new Map(items)`, where the output's `xs` is the
+  list of pairs that `items` visits. The translator writes the type after it. -/
+  | mapOfList
+  /-- `(JSSet.ofList xs)`: `new Set(items)`, in the same way. -/
+  | setOfList
+  /-- `(pure a)`: the value `a` as the result of a function that can throw. -/
+  | pure
+  /-- `(JSError.mk m)`: the error that `new Error(m)` makes, from its message. -/
+  | error
 deriving BEq, Repr, Inhabited, DecidableEq
+
+/-- An operation on maps or sets, whose output names `JSMap` or `JSSet`. -/
+def ExprExt.onMap : ExprExt → Bool
+  | .mapEmpty | .mapGet | .mapHas | .mapSize | .mapSet | .mapDelete => true
+  | .setEmpty | .setHas | .setSize | .setAdd | .setDelete | .setElems | .mapEntries => true
+  | .mapOfList | .setOfList => true
+  | _ => false
 
 abbrev Ty := tolean.IR.Ty TyExt
 abbrev Expr := tolean.IR.Expr TyExt ExprExt
@@ -109,13 +157,18 @@ abbrev LoopInfo := tolean.IR.LoopInfo TyExt
 @[match_pattern] abbrev Expr.undefined : Expr := .ext .undefined []
 @[match_pattern] abbrev Expr.isUndefined (a : Expr) : Expr := .ext .isUndefined [a]
 @[match_pattern] abbrev Expr.isDefined (a : Expr) : Expr := .ext .isDefined [a]
+@[match_pattern] abbrev Ty.error : Ty := .ext .error
+@[match_pattern] abbrev Expr.pure (a : Expr) : Expr := .ext .pure [a]
+@[match_pattern] abbrev Expr.error (message : Expr) : Expr := .ext .error [message]
 
 /-! ### Printing -/
 
 /-- The Lean names the output uses, with their full names from the root. -/
 def leanNames : List (String × String) :=
   tolean.IR.leanNames ++
-    [("JSNumber", "tolean.TypeScript.JSNumber"), ("JSString", "tolean.TypeScript.JSString")]
+    [("JSNumber", "tolean.TypeScript.JSNumber"), ("JSString", "tolean.TypeScript.JSString"),
+     ("JSMap", "tolean.TypeScript.JSMap"), ("JSSet", "tolean.TypeScript.JSSet"),
+     ("JSError", "tolean.TypeScript.JSError"), ("pure", "Pure.pure")]
 
 /-- Write the Lean name `name` (or `name.rest`), from the root when the source
 declares the same name. -/
@@ -132,16 +185,25 @@ instance : tolean.IR.PrintTy TyExt where
   print names
     | .number => names.typeParam
     | .null => s!"({leanName names "Option"} Empty)"
+    | .error => leanName names "JSError"
   namesParam _
     | .number => true
-    | .null => false
+    | .null | .error => false
   binders names :=
     let n := names.typeParam
     s!" \{{n} : Type} [{leanName names "JSNumber"} {n}]"
   -- A JS string is a list of UTF-16 code units, not a Lean `String`
   -- (`Spec/String.lean`), and a literal encodes its text.
   string names := leanName names "JSString"
+  -- A JS `Map` keeps its entries in insertion order (`tolean/TypeScript/Map.lean`).
+  map names := leanName names "JSMap"
+  set names := leanName names "JSSet"
   stringLit names s := s!"{leanName names "JSString.ofString"} {tolean.Sexp.quote s}"
+  -- The index that `Array.prototype.map` passes is a number (ECMA-262
+  -- §23.1.3.21), and an array has fewer than 2^32 elements, so the index is a
+  -- safe integer.
+  indexValue names i :=
+    s!"({leanName names "JSNumber"}.ofSafeInt (N := {names.typeParam}) ({i} : {leanName names "Int"}))"
 
 open tolean.IR (argument) in
 /-- An operation on its printed arguments. The translator gives each one the
@@ -174,6 +236,23 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
   | .isDefined, [a] => s!"{argument a}.isSome"
   | .optField path bind, [a] =>
     s!"({argument a}.{if bind then "bind" else "map"} (·.{".".intercalate path}))"
+  | .mapEmpty, _ => s!"{leanName names "JSMap"}.empty"
+  | .mapGet, [m, k] => s!"({leanName names "JSMap"}.get? {argument m} {argument k})"
+  | .mapHas, [m, k] => s!"({leanName names "JSMap"}.has {argument m} {argument k})"
+  | .mapSize, [m] =>
+    s!"({js}.ofSafeInt (N := {names.typeParam}) ({leanName names "JSMap"}.size {argument m} : {leanName names "Int"}))"
+  | .mapSet, [m, k, v] => s!"({leanName names "JSMap"}.set {argument m} {argument k} {argument v})"
+  | .mapDelete, [m, k] => s!"({leanName names "JSMap"}.delete {argument m} {argument k})"
+  | .setEmpty, _ => s!"{leanName names "JSSet"}.empty"
+  | .setHas, [s, x] => s!"({leanName names "JSSet"}.has {argument s} {argument x})"
+  | .setSize, [s] =>
+    s!"({js}.ofSafeInt (N := {names.typeParam}) ({leanName names "JSSet"}.size {argument s} : {leanName names "Int"}))"
+  | .setAdd, [s, x] => s!"({leanName names "JSSet"}.add {argument s} {argument x})"
+  | .setDelete, [s, x] => s!"({leanName names "JSSet"}.delete {argument s} {argument x})"
+  | .setElems, [s] => s!"({leanName names "JSSet"}.elems {argument s})"
+  | .mapEntries, [m] => s!"({leanName names "JSMap"}.entries {argument m})"
+  | .mapOfList, [xs] => s!"({leanName names "JSMap"}.ofList {argument xs})"
+  | .setOfList, [xs] => s!"({leanName names "JSSet"}.ofList {argument xs})"
   | .recordGet key keys, [r, k] =>
     let case (f : String) := s!"{(names.ref key).1}.{memberName f}"
     -- A key that is one constructor, as `r['a']` gives, reads its field.
@@ -181,6 +260,8 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
     | some f => s!"{argument r}.{f}"
     | Option.none =>
       s!"(match {k} with{String.join (keys.map fun f => s!" | {case f} => {argument r}.{f}")})"
+  | .pure, [a] => s!"({tolean.IR.wrapped (leanName names "pure") a})"
+  | .error, [m] => s!"({tolean.IR.wrapped (leanName names "JSError.mk") m})"
   | _, _ => ""
 
 instance : tolean.IR.PrintOp ExprExt := ⟨ExprExt.print⟩
