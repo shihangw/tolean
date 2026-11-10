@@ -27,18 +27,30 @@ shell, from `.github/workflows/ci.yml`. It also runs the number laws on
 every maintained Node release line (`nix run .#test-engines`), and it fails
 if a check leaves a committed file changed.
 
-CI runs in stages, so a failure stops the expensive work early. The `check`
-job runs `lake build --wfail` and the checks above, on each pull request.
-The `docs` job builds the docs site on each pull request too, and it needs
-no Lean, so it finishes first.
-On `main`, when `check` passes, `.github/workflows/wasm.yml` builds the
-playground's WebAssembly translator and requires that it gives the native
-result. Then `pages` publishes the playground, with the docs site under
-`/docs/`. Only the published page needs WebAssembly, so a pull request runs
-the build only when it changes something that only the build uses:
-`wasm/`, the playground site, `wasm.yml`, the flake or the Lean toolchain.
+CI runs in stages. The `build` job runs `lake build --wfail` and saves
+Lake's build output in the Actions cache. Then the checks above run in
+three jobs at once, `typescript`, `certify` and `other`, which restore that
+cache instead of building again. The certificate check is the slowest, so
+`certify` splits the corpus over two machines with `SHARD=1/2` and
+`SHARD=2/2`. The `check` job passes when all of them pass, and branch
+protection requires it. The `docs` job builds the docs site on each pull
+request too, and it needs no Lean, so it finishes first.
+On `main`, `.github/workflows/wasm.yml` builds the playground's WebAssembly
+translator next to the checks, after `build`, and requires that it gives
+the native result. Then `pages` publishes the playground, with the docs site
+under `/docs/`. Only the published page needs WebAssembly, so a pull request
+runs the build only when it changes something that only the build uses:
+`wasm/`, the playground site, `wasm.yml`, the `lean-build` action, the flake
+or the Lean toolchain.
 To run it for any branch, start `ci` by hand from the Actions tab, or run
 `gh workflow run ci.yml --ref <branch>`.
+
+GitHub keeps at most 10 GB of Actions caches for the repository, and above
+that it evicts caches on its own. So at the end of each run, `prune-caches`
+deletes the caches on that branch or pull request that no run will restore
+again, and `cache-cleanup.yml` deletes a pull request's caches when it
+closes. Only main saves the translator's WebAssembly build, which takes
+about 300 MB.
 
 The npm release is `.github/workflows/release.yml`. To release, raise the
 version in `npm/package.json` and `tolean/Version.lean`, and merge that to

@@ -479,14 +479,19 @@ def listStep {α : Type} (close : String) (refuse : Token → ParseM Unit) (pars
   else if !t.isPunct close then unexpected t s!"',' or '{close}'"
   return (items, true)
 
-/-- What `parseArguments` refuses before an argument. -/
-def refuseArgument (t : Token) : ParseM Unit := do
-  if t.isPunct "..." then failAt t "spread arguments are not supported"
-
 /-- What `parseArrayLiteral` refuses before an element. -/
 def refuseElement (t : Token) : ParseM Unit := do
   if t.isPunct "," then failAt t "array holes are not supported"
-  if t.isPunct "..." then failAt t "spread elements are not supported"
+
+/-- An element of an array literal, or an argument of a call or a `new`:
+`...e`, which spreads the values of `e`, or what `item` reads. -/
+def parseElement (item : ParseM Expr) : ParseM Expr := do
+  let t ← peek
+  if t.isPunct "..." then
+    discard advance
+    let e ← item
+    return .spread (← spanFrom t.span.start) e
+  item
 
 /-- The `?` after the name of an optional parameter, if one comes next. A
 function may have an optional parameter, `x?: T`, but an arrow function may
@@ -641,14 +646,14 @@ def parseLeftHandSide (fuel : Nat) : ParseM Expr := do
 def parseArguments (fuel : Nat) : ParseM (List Expr) := do
   let fuel + 1 := fuel | outOfFuel
   let _ ← expectPunct "("
-  let args ← iterate (← budget) #[] (listStep ")" refuseArgument (parseAssign fuel))
+  let args ← iterate (← budget) #[] (listStep ")" (fun _ => pure ()) (parseElement (parseAssign fuel)))
   let _ ← expectPunct ")"
   return args.toList
 
 def parseArrayLiteral (fuel : Nat) : ParseM Expr := do
   let fuel + 1 := fuel | outOfFuel
   let start := (← expectPunct "[").span.start
-  let elems ← iterate (← budget) #[] (listStep "]" refuseElement (parseAssign fuel))
+  let elems ← iterate (← budget) #[] (listStep "]" refuseElement (parseElement (parseAssign fuel)))
   let _ ← expectPunct "]"
   return .array (← spanFrom start) elems.toList
 
@@ -682,6 +687,28 @@ def parseObjectLiteral (fuel : Nat) : ParseM Expr := do
   let _ ← expectPunct "}"
   return .object (← spanFrom start) props.toList
 
+/-- `new C<A, B>(args)`, where `new` comes next. `C<A, B>` is read as a type
+reference, as `tsc` reads the type arguments of a `new` when a `(` follows
+their `>`. Type stripping keeps that reading, and the parser needs the `(`.
+So `C` must be a name, and the arguments must be in parentheses:
+`new a.b()`, `new.target` and `new C` without arguments are refused. -/
+def parseNew (fuel : Nat) : ParseM Expr := do
+  let fuel + 1 := fuel | outOfFuel
+  let t ← advance
+  let name ← peek
+  if !(name.kind matches .ident _) then failAt name "'new' is supported only before a name, such as new Map()"
+  if (← peekAt 1).isPunct "." then failAt name "'new' of a property, such as new a.b(), is not supported"
+  let .ref _ callee typeArgs ← parsePrimaryType (← budget)
+    | failAt t "'new' is supported only before a name, such as new Map()"
+  let next ← peek
+  if !next.isPunct "(" then
+    -- `tsc` reads type arguments after `new C` across a line break too.
+    failAt next (if next.isPunct "<" then
+        "tsc may read this '<' as the start of type arguments; put it on the line of the name"
+      else "'new' needs its arguments in parentheses, such as new Map()")
+  let args ← parseArguments fuel
+  return .new (← spanFrom t.span.start) callee typeArgs args
+
 def parsePrimary (fuel : Nat) : ParseM Expr := do
   let fuel + 1 := fuel | outOfFuel
   let t ← peek
@@ -713,6 +740,7 @@ def parsePrimary (fuel : Nat) : ParseM Expr := do
     return .paren (← spanFrom t.span.start) inner
   | .punct "[" => parseArrayLiteral fuel
   | .punct "{" => parseObjectLiteral fuel
+  | .keyword "new" => parseNew fuel
   | .keyword word => failAt t s!"'{word}' is not supported in an expression"
   | _ => unexpected t "an expression"
 
@@ -851,6 +879,15 @@ def parseStatement (fuel : Nat) : ParseM Stmt := do
       value := some (← parseExpression (← budget))
     endStatement
     return .returnStmt (← spanFrom start) value
+  -- No line break may come between `throw` and its value (ECMA-262
+  -- §14.14), and no `;` is inserted there.
+  | .keyword "throw" =>
+    discard advance
+    let next ← peek
+    if next.newlineBefore then failAt next "a line break after 'throw'"
+    let value ← parseExpression (← budget)
+    endStatement
+    return .throwStmt (← spanFrom start) value
   | .keyword "break" | .keyword "continue" =>
     discard advance
     if (← get).loopDepth == 0 then failAt t s!"{t.kind.describe} outside a loop"
@@ -870,7 +907,7 @@ def parseStatement (fuel : Nat) : ParseM Stmt := do
     if 1 < defaultCount clauses.toList then failAt t "a switch may have only one default"
     return .switchStmt (← spanFrom start) disc clauses.toList
   | .keyword "true" | .keyword "false" | .keyword "null" | .keyword "typeof"
-  | .keyword "void" => parseExpressionStatement fuel
+  | .keyword "void" | .keyword "new" => parseExpressionStatement fuel
   | .keyword word => failAt t s!"'{word}' is not supported here"
   | _ => parseExpressionStatement fuel
 

@@ -105,8 +105,8 @@ def encoderOf (r : Refs) : IR.Ty → Option String
   | .number => some (r.eval "Val.num")
   | .tuple ts => do return s!"({r.eval "encTuple"} {← elementsEncoder r ts})"
   -- A type parameter has no encoder, so a generic function or interface gets no
-  -- certificate yet.
-  | .null | .tag _ | .param _ | .app .. => none
+  -- certificate yet. Neither has a map or a set, nor a function that can throw.
+  | .null | .tag _ | .param _ | .app .. | .map .. | .set _ | .except .. | .error => none
 
 /-- How the elements of a tuple of the types `ts` become a list of `Val`s. -/
 def elementsEncoder (r : Refs) : List IR.Ty → Option String
@@ -129,7 +129,7 @@ def decoderOf (r : Refs) : IR.Ty → Option String
   | .struct ref | .enum ref | .tagged ref => some (r.cert s!"decode{ref.name}")
   | .number => some (r.eval "decNum")
   | .tuple ts => do return s!"({r.eval "decTuple"} {← elementsDecoder r ts})"
-  | .null | .tag _ | .param _ | .app .. => none
+  | .null | .tag _ | .param _ | .app .. | .map .. | .set _ | .except .. | .error => none
 
 /-- How a list of `Val`s becomes the elements of a tuple of the types `ts`. -/
 def elementsDecoder (r : Refs) : List IR.Ty → Option String
@@ -210,8 +210,8 @@ def functionsOf (m : Module) : List (String × List Param × Option TypeExpr × 
 def certifiable (m : Module) : List String := (functionsOf m).map (·.1)
 
 /-- How deep the calls of `calls`, and the calls in their bodies, nest: the
-fuel that the interpreter needs to run them. The subset has no recursion, so
-the depth is finite. -/
+fuel that the interpreter needs to run them. `certify` refuses a function
+that calls itself, so the depth is finite. -/
 partial def callsDepth (m : Module) (calls : List String) : Nat :=
   let rec go (fuel : Nat) (calls : List String) : Nat :=
     match fuel with
@@ -253,16 +253,24 @@ def callAt (s : Stmt) (span : Span) : Option Expr :=
       | .call sp _ _ => sp == span
       | _ => false
 
-/-- A call of a `List` function with a callback: the method, the parameter,
+/-- What a callback is for: a `List` function such as `List.map`, or
+`List.foldl`, whose function also binds the value so far to `acc`. -/
+inductive CallbackKind where
+  | list (method : IR.ListMethod)
+  | fold (acc : String)
+
+/-- A call of a `List` function with a callback: what it is for, the parameter,
 its type, the body and what a certificate needs to know about it. -/
-abbrev Callback := IR.ListMethod × String × IR.Ty × IR.Expr × IR.CallbackInfo IR.TyExt
+abbrev Callback := CallbackKind × String × IR.Ty × IR.Expr × IR.CallbackInfo IR.TyExt
 
 mutual
 
 /-- The callbacks in `e`, inner ones first, in the order of the source. -/
 partial def exprCallbacks : IR.Expr → List Callback
   | .listMethod method items param elem body info =>
-    exprCallbacks items ++ exprCallbacks body ++ [(method, param, elem, body, info)]
+    exprCallbacks items ++ exprCallbacks body ++ [(.list method, param, elem, body, info)]
+  | .listFold items init acc param elem body info =>
+    exprCallbacks items ++ exprCallbacks init ++ exprCallbacks body ++ [(.fold acc, param, elem, body, info)]
   | .field a _ _ | .propNot a | .not a | .neg a | .isNone a | .isSome a | .decide a | .push _ a
   | .update _ _ a | .inject _ _ a | .ascribe a _ => exprCallbacks a
   | .ite a b c => exprCallbacks a ++ exprCallbacks b ++ exprCallbacks c
@@ -279,6 +287,7 @@ partial def exprCallbacks : IR.Expr → List Callback
 partial def exprNames : IR.Expr → List String
   | .var n => [n]
   | .listMethod _ items _ _ body _ => exprNames items ++ exprNames body
+  | .listFold items init _ _ _ body _ => exprNames items ++ exprNames init ++ exprNames body
   | .push n a | .update _ n a => n :: exprNames a
   | .matchNull n a b => n :: exprNames a ++ exprNames b
   | .field a _ _ | .propNot a | .not a | .neg a | .isNone a | .isSome a | .decide a
@@ -303,6 +312,8 @@ partial def bodyCallbacks : IR.Body → List Callback
   | .ite c a b => exprCallbacks c ++ bodyCallbacks a ++ bodyCallbacks b
   | .matchNull _ _ a b | .matchTag _ _ _ _ _ a b | .letState _ a b => bodyCallbacks a ++ bodyCallbacks b
   | .fold _ _ body items rest _ => exprCallbacks items ++ bodyCallbacks body ++ bodyCallbacks rest
+  | .throw e => exprCallbacks e
+  | .bind _ _ args rest => args.flatMap exprCallbacks ++ bodyCallbacks rest
 
 end
 
@@ -366,6 +377,8 @@ partial def loopsOf : IR.Body → List (List String × String × IR.Body × IR.L
   | .ite _ a b | .matchNull _ _ a b | .matchTag _ _ _ _ _ a b => loopsOf a ++ loopsOf b
   | .letState _ branch rest => loopsOf branch ++ loopsOf rest
   | .fold names element body _ rest info => loopsOf body ++ [(names, element, body, info)] ++ loopsOf rest
+  | .throw _ => []
+  | .bind _ _ _ rest => loopsOf rest
 
 /-- `s`, the state of a loop with the locals `names`, as the path to one of
 them: `s`, `s.1`, `s.2.1`, and so on. -/
@@ -396,6 +409,11 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
   let names := { names with namespacePrefix := r.full transNs ++ "." }
   let fns := certifiable m
   if fns.isEmpty then throw s!"{file}: there is no function to certify"
+  -- A theorem runs the interpreter with the fuel that the depth of the calls
+  -- needs, and a function that calls itself has no such depth.
+  for d in decls do
+    if let .function name _ _ body := d then
+      if body.calls ⟨"", name⟩ then throw s!"{file}: the recursive function {name} has no certificate yet"
   let nv := names.typeParam
   -- Every theorem is about every number model.
   let generic := s!"\{{nv} : Type} [tolean.TypeScript.JSNumber {nv}]"
@@ -460,6 +478,9 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     -- An interface.
     if let .struct name typeParams allFields := d then
       unless typeParams.isEmpty do throw s!"{file}: the generic interface {name} has no certificate yet"
+      -- The encoder of an interface that refers to itself would be recursive.
+      if allFields.any (fun (_, t) => t.refs.any (·.name == name)) then
+        throw s!"{file}: the recursive interface {name} has no certificate yet"
       -- An optional field is a key only when it holds a value, as in an
       -- object literal that leaves it out.
       let parts ← allFields.mapM fun (f, t) => do
@@ -633,11 +654,19 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       -- loop's step does, and the lemma reads them back out of `ρ`.
       let captured := if scope.isEmpty then "" else
         s!"fun {" ".intercalate (scope.map fun (n, t) => s!"({n} : {t.print names})")} => "
-      let fn := s!"(({captured}fun ({param} : {elem.print names}) => ({cbBody.print names} : {info.result.print names}))" ++
+      -- The function of `List.mapIdx` binds the index first, as a `Nat`, and
+      -- then as the number that the body reads, as the printer writes it.
+      let binders := match method with
+        | .fold acc => s!"fun ({acc} : {info.result.print names}) ({param} : {elem.print names}) => "
+        | .list (.mapIdx index) =>
+          s!"fun ({index} : {tolean.IR.leanName names "Nat"}) ({param} : {elem.print names}) => " ++
+            s!"let {index} := {tolean.IR.PrintTy.indexValue (T := IR.TyExt) names index}; "
+        | _ => s!"fun ({param} : {elem.print names}) => "
+      let fn := s!"(({captured}{binders}({cbBody.print names} : {info.result.print names}))" ++
         String.join (scope.map fun (n, _) => s!" {decode n}") ++ ")"
       -- A body with calls needs the fuel of their depth, as a loop's does.
       let depth := match callAt syntaxBody info.span with
-        | some (.call _ _ [.arrow _ _ _ arrowBody]) => callsDepth m (exprCalls arrowBody)
+        | some (.call _ _ (.arrow _ _ _ arrowBody :: _)) => callsDepth m (exprCalls arrowBody)
         | _ => 0
       let fuel := if depth == 0 then "fuel" else s!"(fuel + {depth})"
       let hfs := if depth == 0 then "" else s!" (hfs : fs = {outputFs})"
@@ -654,26 +683,59 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           "  try simp only []\n" ++
           String.join (coded.zipIdx.map fun ((n, _, dec), i) =>
             s!"  generalize {dec} (ρ.lookup {str n}) = v{i} at h{i} ⊢\n")
+      let simpSet := ", ".intercalate (hfsName ++ envLemmas ++ lemmaNames.toList ++ loopLemmas.toList ++ defs ++ hypNames)
+      let itemsTy := (IR.Ty.list elem).print names
+      -- A callback of `reduce`: the lemma holds for every value so far `a`,
+      -- which the body reads under the name of the first parameter. It holds
+      -- for every initial value `v` that decodes and encodes back to itself,
+      -- because the proof of the function sees the initial value with its
+      -- encoding unfolded, such as `Val.list (List.map Val.int init)`.
+      if let .fold acc := method then
+        let some decY := decoderOf r info.result
+          | throw s!"{file}: cannot decode the value of a callback in {name}"
+        let vars := ("a", info.result) :: ("x", elem) :: scope.zipIdx.map fun ((_, t), i) => (s!"v{i}", t)
+        loopLemmas := loopLemmas.push (r.cert lemmaName)
+        thms := thms.push <|
+          s!"theorem {lemmaName} {generic} (fs : List (tolean.DeclRef × List String × tolean.TypeScript.IR.Body)){hfs}\n" ++
+          s!"    (fuel : Nat) (ρ : Env {nv}){hI} (items : {itemsTy}) (v : Val {nv})\n" ++
+          s!"    (hv : {encY} ({decY} (some v)) = v) :\n" ++
+          s!"    tolean.TypeScript.IR.Expr.evalReduce fs {fuel} ρ {str acc} {str param} ({term cbBody})\n" ++
+          s!"      v (List.map {encX} items) = some ({encY} (List.foldl {fn} ({decY} (some v)) items)) := by\n" ++
+          s!"  refine tolean.TypeScript.Proof.evalReduce_foldl_val fs {fuel} ρ {str acc} {str param} _ {encY} {encX} {fn} {decY} ?_ items v hv\n" ++
+          s!"  intro a x\n" ++ substHfs ++ unpack ++
+          s!"  {casesOn decls vars}link_tac [{simpSet}]"
+        continue
+      let .list method := method | continue
       let (evalFn, want, result, fromLemma) := match method with
         | .map => ("evalMap", "", s!"List.map {encY} (List.map {fn} items)",
             s!"evalMap_map fs {fuel} ρ {str param} _ {encX} {encY} {fn}")
+        | .mapIdx index => ("evalMapIdx", "", s!"List.map {encY} (List.mapIdx {fn} items)",
+            s!"evalMapIdx_mapIdx fs {fuel} ρ {str param} {str index} _ {encX} {encY} {fn}")
         | .filter => ("evalFilter", "", s!"List.map {encX} (List.filter {fn} items)",
             s!"evalFilter_filter fs {fuel} ρ {str param} _ {encX} {fn}")
-        | .any | .find => ("evalFind", " true", s!"Option.map {encX} (List.find? {fn} items)",
+        -- `findLast` is `find` on the reversed list, which `link_tac` writes as
+        -- `List.map encX` of the reversed elements, so the same lemma applies.
+        | .any | .find | .findLast => ("evalFind", " true", s!"Option.map {encX} (List.find? {fn} items)",
             s!"evalFind_true fs {fuel} ρ {str param} _ {encX} {fn}")
+        | .findIndex => ("evalFindIdx", "", s!"List.findIdx? {fn} items",
+            s!"evalFindIdx_findIdx fs {fuel} ρ {str param} _ {encX} {fn}")
         | .all => ("evalFind", " false", s!"Option.map {encX} (List.find? (fun x => !({fn} x)) items)",
             s!"evalFind_false fs {fuel} ρ {str param} _ {encX} {fn}")
-      let itemsTy := (IR.Ty.list elem).print names
+      let (indexArg, start, intros) := match method with
+        -- The proof names the index `idx`, not by its name in the source,
+        -- which could hide one of the lemma's hypotheses, such as `hI`.
+        | .mapIdx index => (s!" {str index}", " 0", "idx x")
+        | .findIndex => ("", " 0", "x")
+        | _ => ("", "", "x")
       let vars := ("x", elem) :: scope.zipIdx.map fun ((_, t), i) => (s!"v{i}", t)
-      let simpSet := ", ".intercalate (hfsName ++ envLemmas ++ lemmaNames.toList ++ loopLemmas.toList ++ defs ++ hypNames)
       loopLemmas := loopLemmas.push (r.cert lemmaName)
       thms := thms.push <|
         s!"theorem {lemmaName} {generic} (fs : List (tolean.DeclRef × List String × tolean.TypeScript.IR.Body)){hfs}\n" ++
         s!"    (fuel : Nat) (ρ : Env {nv}){hI} (items : {itemsTy}) :\n" ++
-        s!"    tolean.TypeScript.IR.Expr.{evalFn} fs {fuel} ρ {str param} ({term cbBody}){want}\n" ++
+        s!"    tolean.TypeScript.IR.Expr.{evalFn} fs {fuel} ρ {str param}{indexArg} ({term cbBody}){want}{start}\n" ++
         s!"      (List.map {encX} items) = some ({result}) := by\n" ++
         s!"  refine tolean.TypeScript.Proof.{fromLemma} ?_ items\n" ++
-        s!"  intro x\n" ++ substHfs ++ unpack ++
+        s!"  intro {intros}\n" ++ substHfs ++ unpack ++
         s!"  {casesOn decls vars}link_tac [{simpSet}]"
     let mut index := 0
     let mut returnsLoop := false
