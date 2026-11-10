@@ -2599,7 +2599,11 @@ mutual
 def exprUsesNumber : Expr → Bool
   | .ident _ name => isNumberName name
   | .number .. => true
-  | .member _ obj name | .optMember _ obj name => isNumberName name || exprUsesNumber obj
+  -- `s.length` and `s.indexOf(p)` give a number, though no number is
+  -- written. A field named `length` makes the file generic too, which costs
+  -- nothing.
+  | .member _ obj name | .optMember _ obj name =>
+    isNumberName name || name == "length" || name == "indexOf" || exprUsesNumber obj
   | .object _ props => propsUseNumber props
   | .array _ es => exprsUseNumber es
   | .call _ f args => exprUsesNumber f || exprsUseNumber args
@@ -2653,9 +2657,10 @@ def stmtsUseNumber : List Stmt → Bool
 
 end
 
-/-- The file uses the number model: a `number` type, a number literal, or the
-name `Number`, `NaN` or `Infinity` anywhere. A file can use
-`Number.isNaN(NaN)` with no `number` keyword, and it still needs `N`. -/
+/-- The file uses the number model: a `number` type, a number literal, the
+name `Number`, `NaN` or `Infinity`, or a read of `length` or `indexOf`
+anywhere. A file can use `Number.isNaN(NaN)` or `a.length === b.length` with
+no `number` keyword, and it still needs `N`. -/
 def moduleUsesNumber (m : Module) : Bool :=
   m.decls.any fun
     -- An import of one of these names is refused, so an import adds nothing.
