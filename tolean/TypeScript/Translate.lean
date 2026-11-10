@@ -2628,6 +2628,7 @@ def exprUsesNumber : Expr → Bool
   | .index _ a (.number ..) => exprUsesNumber a
   | .index _ a b | .binary _ _ a b | .assign _ _ a b => exprUsesNumber a || exprUsesNumber b
   | .cond _ a b c => exprUsesNumber a || exprUsesNumber b || exprUsesNumber c
+  | .new _ callee typeArgs args => isNumberName callee || typesUseNumber typeArgs || exprsUseNumber args
   | .arrow _ _ ps body =>
     ps.any (fun p => isNumberName p.name || (p.type.map typeUsesNumber).getD false) ||
       exprUsesNumber body
@@ -2654,6 +2655,7 @@ def stmtUsesNumber : Stmt → Bool
   | .varDecl _ d => varUsesNumber d
   | .exprStmt _ e => exprUsesNumber e
   | .returnStmt _ v => (v.map exprUsesNumber).getD false
+  | .throwStmt _ e => exprUsesNumber e
   | .ifStmt _ test t (some e) => exprUsesNumber test || stmtUsesNumber t || stmtUsesNumber e
   | .ifStmt _ test t none => exprUsesNumber test || stmtUsesNumber t
   | .forOfStmt _ _ name iterable body =>
