@@ -328,6 +328,8 @@ test('the interpreter gives no value for a loop that changes what it runs over',
     loop('((s))'),
     loop('s satisfies ReadonlySet<bigint>'),
     loop('b ? s : new Set<bigint>()'),
+    // A new map holds `s` as a value, and `get` gives it back.
+    loop('new Map<bigint, Set<bigint>>([[0n, s]]).get(0n) ?? new Set<bigint>()'),
     'export function f(b: boolean): bigint { const m = new Map<bigint, bigint>(); m.set(1n, 1n); m.set(2n, 2n); ' +
       'let n = 0n; for (const e of (m)) { m.delete(2n); n += e[1]; } return n; }',
   ];

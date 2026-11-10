@@ -403,13 +403,14 @@ end
 
 mutual
 
-/-- `e` mentions a name that `p` holds for, outside the arguments of a `new`.
-A `new Map(m)` or `new Set(xs)` copies its argument, so its value is a new
-collection that no name holds. Any other expression may give the collection
-of a name it mentions, such as `(s)`, `s satisfies T`, `c ? s : t` or `f(s)`. -/
+/-- `e` mentions a name that `p` holds for. Such an expression may give the
+collection of that name, such as `(s)`, `s satisfies T`, `c ? s : t` or
+`f(s)`. So may the arguments of a `new`: `new Map([[k, s]])` holds `s` as a
+value, and `.get(k)` gives it back. -/
 def Expr.mayHold (p : String → Bool) : Expr → Bool
   | .ident _ n => p n
-  | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .new .. => false
+  | .number .. | .bigint .. | .string .. | .bool .. | .null _ => false
+  | .new _ _ _ args => Expr.mayHoldList p args
   | .array _ es => Expr.mayHoldList p es
   | .object _ ps => Property.mayHoldList p ps
   | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e =>
@@ -431,12 +432,21 @@ def Property.mayHoldList (p : String → Bool) : List Property → Bool
 
 end
 
+/-- `e` is a new collection: a `new`, perhaps in parentheses or with `as const`
+or `satisfies T`. No name holds it, so a loop over it sees no change that the
+body makes to a name. A `new Set(s)` copies the values of `s` when it runs. -/
+def Expr.isFresh : Expr → Bool
+  | .new .. => true
+  | .paren _ e | .asConst _ e | .satisfies _ e _ => e.isFresh
+  | _ => false
+
 /-- The body of `for (… of iterable)` may change what the loop runs over: it
 changes the array, map or set of a name that `iterable` may give. A JS loop
 sees such a change while it runs. The test is conservative: it does not need
-to know which name, if any, the iterable gives at run time. -/
+to know which name, if any, the iterable gives at run time. Only a new
+collection is safe whatever names it mentions. -/
 def Stmt.mutatesIterable (iterable : Expr) (body : Stmt) : Bool :=
-  iterable.mayHold body.mutates
+  !iterable.isFresh && iterable.mayHold body.mutates
 
 /-- `s` declares a `const` that a statement of `rest` assigns. In JS that
 assignment throws a `TypeError` (ECMA-262 §9.1.1.1.5), so the spec gives no
