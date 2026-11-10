@@ -420,7 +420,7 @@ theorem execStmt_block (sp : Span) (body : List Stmt) (ρ : Eval.Env N) :
       | .cont ρ' => some (.cont (ρ'.drop (ρ'.length - ρ.length)))) := by
   rw [Eval.execStmt]; rfl
 
-theorem block_ret (t : Stmt) {ρ : Eval.Env N} {v : Val N}
+theorem block_ret (t : Stmt) {ρ : Eval.Env N} {v : Except (Val N) (Val N)}
     (h : Eval.exec m fuel ρ (blockStatements t) = some (.ret v)) :
     Eval.execStmt m fuel ρ t = some (.ret v) := by
   rcases blockStatements_eq t with h1 | ⟨sp, body, rfl, h1⟩
@@ -460,7 +460,8 @@ theorem execStmt_if (sp : Span) (test : Expr) (t : Stmt) (e : Option Stmt) (ρ :
 def branchStatements (w : Val N) (t : Stmt) (e : Option Stmt) : List Stmt :=
   if w.truthy then blockStatements t else (e.map blockStatements).getD []
 
-theorem if_ret {sp : Span} {test : Expr} {t : Stmt} {e : Option Stmt} {ρ : Eval.Env N} {w v : Val N}
+theorem if_ret {sp : Span} {test : Expr} {t : Stmt} {e : Option Stmt} {ρ : Eval.Env N} {w : Val N}
+    {v : Except (Val N) (Val N)}
     (hw : Eval.eval m fuel ρ test = some w)
     (hex : Eval.exec m fuel ρ (branchStatements w t e) = some (.ret v)) :
     Eval.execStmt m fuel ρ (.ifStmt sp test t e) = some (.ret v) := by
@@ -610,7 +611,7 @@ theorem decl_sim {env env' : Translate.Env} {s : Span} {d : VarDecl} {init : Exp
       Eval.exec m fuel ρs (.varDecl s { kind, name, type, init := some init } :: rest) =
         Eval.exec m fuel ((name, w) :: ρs) rest := by
     intro w hw
-    simp [Eval.exec, Eval.execStmt, hw, hconst]
+    simp [Eval.exec, Eval.execStmt, evalTop_ok m fuel hw, hconst]
   constructor
   · intro v hv
     obtain ⟨w, hw, hb⟩ := hbody ρo _ hv
@@ -1055,7 +1056,7 @@ theorem constAssignedIn_dropBreak (s : Stmt) (l : List Stmt) :
 
 /-- A clause that returns, with no `break` before its `return`, returns from
 the case block. -/
-theorem execCase_ret {v : Val N} : ∀ {ss : List Stmt} {ρ : Eval.Env N},
+theorem execCase_ret {v : Except (Val N) (Val N)} : ∀ {ss : List Stmt} {ρ : Eval.Env N},
     Eval.exec m fuel ρ ss = some (.ret v) → Eval.execCase m fuel ρ ss = some (.ret v, false)
   | [], ρ, h => by simp [Eval.exec] at h
   | s :: rest, ρ, h => by
@@ -1077,7 +1078,7 @@ theorem execCase_ret {v : Val N} : ∀ {ss : List Stmt} {ρ : Eval.Env N},
         simp only [hs, Option.bind_eq_bind, Option.bind_some, pure_bind] at h ⊢
         exact execCase_ret h
 
-theorem exec_clauseStatements {v : Val N} {ρ : Eval.Env N} {body : List Stmt}
+theorem exec_clauseStatements {v : Except (Val N) (Val N)} {ρ : Eval.Env N} {body : List Stmt}
     (h : Eval.exec m fuel ρ (clauseStatements body) = some (.ret v)) : Eval.exec m fuel ρ body = some (.ret v) := by
   unfold clauseStatements at h
   split at h
@@ -1086,7 +1087,7 @@ theorem exec_clauseStatements {v : Val N} {ρ : Eval.Env N} {body : List Stmt}
   · exact h
 
 /-- A clause that returns, from the clause the test selected. -/
-theorem execFrom_ret {v : Val N} {ρ : Eval.Env N} {t : Option Expr} {body : List Stmt}
+theorem execFrom_ret {v : Except (Val N) (Val N)} {ρ : Eval.Env N} {t : Option Expr} {body : List Stmt}
     {more : List (Option Expr × List Stmt)} (h : Eval.exec m fuel ρ (clauseStatements body) = some (.ret v)) :
     Eval.execFrom m fuel ρ ((t, body) :: more) = some (.ret v) := by
   rw [Eval.execFrom, execCase_ret m fuel (exec_clauseStatements m fuel h)]
@@ -2046,7 +2047,7 @@ theorem stmts_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
           -- The output returns the value of the code, from the function or
           -- from its loop.
           have hret : ∀ (ρ : Eval.Env N) (c : IR.Expr), IR.Body.exec fs fuel ρ (tail.returnBody c) =
-              (do return .ret (← IR.Expr.eval fs fuel ρ c)) := by
+              (do return .ret (.ok (← IR.Expr.eval fs fuel ρ c))) := by
             intro ρ c
             cases tail <;> simp [Tail.returnBody, IR.Body.exec]
           simp only [bind_ok, modify_ok, get_ok, fuelLimit_ok, ite_state] at h
@@ -2065,7 +2066,7 @@ theorem stmts_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
               | some u =>
                 simp [hv] at hw
                 subst hw
-                simp [Eval.exec, Eval.execStmt, hsim ρs ρo u ha hs hv]
+                simp [Eval.exec, Eval.execStmt, evalTop_ok m fuel (hsim ρs ρo u ha hs hv)]
             · intro brk ρo' hv
               simp only [hret] at hv
               cases hv' : IR.Expr.eval fs fuel ρo code.value <;> cases brk <;> simp [hv', endOf] at hv

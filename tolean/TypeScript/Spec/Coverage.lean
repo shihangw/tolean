@@ -12,6 +12,7 @@ import tolean.TypeScript.Syntax.RoundTripDecl
 import tolean.TypeScript.Syntax.RoundTripLex
 import tolean.TypeScript.Syntax.ParseWF
 import tolean.TypeScript.Syntax.RoundTripText
+import tolean.TypeScript.Spec.Error
 import tolean.TypeScript.Spec.Lemmas.Number
 import tolean.TypeScript.Spec.Coverage.LexicalGrammar
 import tolean.TypeScript.Spec.Coverage.Expressions
@@ -86,6 +87,7 @@ structure Group where
 /-- The theorems that cover every section of the subset at once. -/
 def everySection : Group :=
   ⟨"Every section of the subset", [``Proof.program_sound, ``Proof.translate_sound,
+    ``Proof.program_sound_call, ``Proof.translate_sound_call,
     ``Proof.programTranslation_rel, ``Proof.expr_sound, ``Proof.stmts_sound, ``Proof.decls_sound]⟩
 
 /-- The sections of ECMA-262 that the interpreter follows, in the order of
@@ -131,7 +133,8 @@ def sections : List Section := [
   ⟨"sec-property-accessors", "13.3.2", "Property Accessors", [``Eval.eval_index_str, ``Eval.getKey_ofString, ``Eval.find?_fst_lookup,
     ``Coverage.index_lone_surrogate]⟩,
   ⟨"sec-function-calls", "13.3.6", "Function Calls",
-    [``Proof.eval_call, ``Proof.out_call, ``Proof.zip_sim, ``Proof.zip_sim_value, ``Proof.calls_agree,
+    [``Proof.eval_call, ``Proof.out_call, ``Proof.evalCall_eq, ``Proof.out_evalCall, ``Proof.bind_toOption,
+    ``Proof.zip_sim, ``Proof.zip_sim_value, ``Proof.calls_agree,
     ``Proof.evalList_append_undefined, ``Proof.callS_append_undefined, ``Proof.evalList_optArgs, ``Proof.fixArgs_value]⟩,
   ⟨"sec-optional-chains", "13.3.9", "Optional Chains",
     [``Proof.getPath_append, ``Proof.evalChain_optChain, ``Proof.eval_member_chain]⟩,
@@ -191,7 +194,7 @@ def sections : List Section := [
     [``Proof.Ends.brk, ``Proof.Ends.of_brk, ``Proof.endOf_normal]⟩,
   ⟨"sec-continue-statement", "14.9", "The continue Statement",
     [``Proof.if_jump, ``Proof.earlyTail_ends, ``Proof.exec_stepEnd]⟩,
-  ⟨"sec-return-statement", "14.10", "The return Statement", []⟩,
+  ⟨"sec-return-statement", "14.10", "The return Statement", [``Proof.evalTop_ok]⟩,
   ⟨"sec-switch-statement", "14.12", "The switch Statement",
     [``Proof.execCase_ret, ``Proof.exec_clauseStatements, ``Proof.execFrom_ret, ``Proof.execSwitch_case,
     ``Proof.matchTag_exec, ``Proof.switchOf_eval, ``Proof.clauses_nil_sim, ``Proof.clauses_default_sim,
