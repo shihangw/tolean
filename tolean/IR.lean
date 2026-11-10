@@ -373,55 +373,62 @@ end
 
 mutual
 
-/-- `e` names the string type or holds a string literal. -/
-def Expr.usesString : Expr T E → Bool
+/-- `e` names the string type or holds a string literal. `opUses` tells
+whether an operation that the language adds names the string type, as an
+operation on strings does. -/
+def Expr.usesString (opUses : E → Bool) : Expr T E → Bool
   | .string _ => true
-  | .call _ args | .ext _ args => Expr.usesStringList args
-  | .list elems t => Expr.usesStringList elems || t.usesString
-  | .struct fields _ args => Expr.usesStringFields fields || Ty.usesStringList args
+  | .call _ args => Expr.usesStringList opUses args
+  | .ext op args => opUses op || Expr.usesStringList opUses args
+  | .list elems t => Expr.usesStringList opUses elems || t.usesString
+  | .struct fields _ args => Expr.usesStringFields opUses fields || Ty.usesStringList args
   | .field a _ _ | .propNot a | .not a | .neg a | .isNone a | .isSome a
-  | .decide a | .push _ a | .update _ _ a | .inject _ _ a => a.usesString
-  | .ite a b c => a.usesString || b.usesString || c.usesString
+  | .decide a | .push _ a | .update _ _ a | .inject _ _ a => Expr.usesString opUses a
+  | .ite a b c => Expr.usesString opUses a || Expr.usesString opUses b || Expr.usesString opUses c
   | .matchNull _ a b | .coalesce a b _ | .intOp _ a b | .order _ a b | .division _ a b
   | .eq a b | .ne a b | .propAnd a b | .propOr a b | .and a b | .or a b =>
-    a.usesString || b.usesString
-  | .ascribe e t => e.usesString || t.usesString
-  | .tuple es => Expr.usesStringList es
-  | .proj e _ _ => e.usesString
-  | .listMethod _ items _ t body _ => items.usesString || t.usesString || body.usesString
+    Expr.usesString opUses a || Expr.usesString opUses b
+  | .ascribe e t => Expr.usesString opUses e || t.usesString
+  | .tuple es => Expr.usesStringList opUses es
+  | .proj e _ _ => Expr.usesString opUses e
+  | .listMethod _ items _ t body _ =>
+    Expr.usesString opUses items || t.usesString || Expr.usesString opUses body
   -- The printer leaves a tag value out, as it leaves the tag field out.
   | .int _ | .none | .bool _ | .var _ | .enumCase .. | .tagValue _ => false
 
-def Expr.usesStringList : List (Expr T E) → Bool
+def Expr.usesStringList (opUses : E → Bool) : List (Expr T E) → Bool
   | [] => false
-  | e :: es => e.usesString || Expr.usesStringList es
+  | e :: es => Expr.usesString opUses e || Expr.usesStringList opUses es
 
-def Expr.usesStringFields : List (String × Expr T E) → Bool
+def Expr.usesStringFields (opUses : E → Bool) : List (String × Expr T E) → Bool
   | [] => false
-  | (_, e) :: fs => e.usesString || Expr.usesStringFields fs
+  | (_, e) :: fs => Expr.usesString opUses e || Expr.usesStringFields opUses fs
 
 end
 
-def Body.usesString : Body T E → Bool
-  | .value e => e.usesString
+def Body.usesString (opUses : E → Bool) : Body T E → Bool
+  | .value e => Expr.usesString opUses e
   | .state _ | .yield .. | .done .. => false
-  | .exit e _ => e.usesString
-  | .let _ e rest => e.usesString || rest.usesString
-  | .letArray _ t elems rest => t.usesString || Expr.usesStringList elems || rest.usesString
-  | .ite c a b => c.usesString || a.usesString || b.usesString
-  | .matchNull _ _ a b | .letState _ a b | .matchTag _ _ _ _ _ a b => a.usesString || b.usesString
+  | .exit e _ => Expr.usesString opUses e
+  | .let _ e rest => Expr.usesString opUses e || Body.usesString opUses rest
+  | .letArray _ t elems rest =>
+    t.usesString || Expr.usesStringList opUses elems || Body.usesString opUses rest
+  | .ite c a b => Expr.usesString opUses c || Body.usesString opUses a || Body.usesString opUses b
+  | .matchNull _ _ a b | .letState _ a b | .matchTag _ _ _ _ _ a b =>
+    Body.usesString opUses a || Body.usesString opUses b
   | .fold _ _ body items rest info =>
-    body.usesString || items.usesString || rest.usesString ||
+    Body.usesString opUses body || Expr.usesString opUses items || Body.usesString opUses rest ||
       info.stateTypes.any (·.usesString) || info.elem.usesString
 
 /-- The output of `d` names the string type, or holds a string literal. A
 language whose strings are not Lean's `String` imports its model then. -/
-def Decl.usesString : Decl T E → Bool
+def Decl.usesString (opUses : E → Bool) : Decl T E → Bool
   | .struct _ _ fields => fields.any (·.2.usesString)
   | .alias _ _ type => type.usesString
   | .enum .. => false
   | .tagged _ _ members => members.any (·.2.usesString)
-  | .function _ params ret body => params.any (·.2.usesString) || ret.usesString || body.usesString
+  | .function _ params ret body =>
+    params.any (·.2.usesString) || ret.usesString || Body.usesString opUses body
 
 /-! ### Printing -/
 

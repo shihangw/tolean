@@ -2888,7 +2888,7 @@ def translateWith (file source ns : String) (target : Edition := .default)
   let imports := (importedFiles file m).filterMap fun f => (deps.lookup f).map (s!"import {·.module}")
   -- A string is a `JSString`, which the output names only in a file that
   -- uses strings, so only such a file imports it.
-  let usesString := decls.any IR.Decl.usesString
+  let usesString := decls.any (IR.Decl.usesString IR.ExprExt.usesString)
   let header :=
     (if names.generic then ["import tolean.TypeScript.Spec.Number"] else []) ++
     (if usesString then ["import tolean.TypeScript.Spec.String"] else []) ++ imports ++

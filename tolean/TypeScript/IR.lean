@@ -166,4 +166,11 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
 
 instance : tolean.IR.PrintOp ExprExt := ⟨ExprExt.print⟩
 
+/-- The operation names the string type, so the output imports its model.
+An operation on strings may stand where no string type or literal is in
+sight, such as `a.key < b.key` on an interface of another file. -/
+def ExprExt.usesString : ExprExt → Bool
+  | .stringOrder _ => true
+  | _ => false
+
 end tolean.TypeScript.IR
