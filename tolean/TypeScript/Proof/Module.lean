@@ -202,7 +202,7 @@ theorem translateFunction_ok {sp : Span} {ex : Bool} {name : String} {tps : List
       ∃ f, s'.functions = s.functions ++ [f] ∧ f.file = s.file ∧ f.name = name ∧ f.exported = ex ∧
       ∃ lp r out, o = .function name lp r out ∧ lp.map (·.1) = params.map (·.name) ∧
         ∃ F env c c', translateStatements F env .ret (blockStatements body) c = .ok out c' ∧
-          env.functions = s.functions ∧ env.enums = s.enumValues ∧
+          env.functions = s.functions ++ [f] ∧ env.enums = s.enumValues ∧
           ∀ x, env.has x = decide (x ∈ params.map (·.name)) := by
   unfold translateFunction at h
   cases ret with
@@ -235,16 +235,24 @@ theorem translateFunction_ok {sp : Span} {ex : Bool} {name : String} {tps : List
           · have h1 : (p.name == x) = false := by simpa using Ne.symm hx
             have h2 : (x == p.name) = false := by simpa using hx
             simp [h1, h2]) params _ _ _ _ _ _ hfold
-    simp only [modify_ok, fuelLimit_ok, pure_ok] at h
-    obtain ⟨r, s₆, hr, _, s₇, rfl, _, _, ⟨rfl, rfl⟩, out, s₈, hbody, _, s₉, rfl, rfl, rfl⟩ := h
+    simp only [modify_ok, fuelLimit_ok] at h
+    obtain ⟨r, s₆, hr, _, s₇, rfl, _, _, ⟨rfl, rfl⟩, out, s₈, hbody, h⟩ := h
+    -- The check that a call of the function itself passes a part of a
+    -- parameter only refuses.
+    split at h
+    · simp at h
+    simp only [pure_bind, bind_ok, modify_ok, pure_ok] at h
+    obtain ⟨_, s₉, rfl, rfl, rfl⟩ := h
     obtain ⟨rfl, -⟩ := isolated_ok hr
     obtain ⟨rfl, s₁₀, hbody⟩ := isolated_ok hbody
     have hg := hps.2.1
     simp only [globals, Prod.mk.injEq] at hg
-    refine ⟨rfl, htaken, rfl, rfl, hfresh, _, rfl, rfl, rfl, rfl, lp, _, out, rfl, ?_, _, env, _, _, hbody,
-      hg.1, hg.2, fun x => ?_⟩
+    refine ⟨rfl, htaken, rfl, rfl, hfresh, _, rfl, rfl, rfl, rfl, lp, _, out, rfl, ?_, _, _, _, _, hbody,
+      by simp [hg.1], hg.2, fun x => ?_⟩
     · simpa using hps.2.2
-    · rw [hps.1 x]; simp [Env.has, Env.lookup]
+    · have hx := hps.1 x
+      simp only [Env.has, Env.lookup] at hx ⊢
+      rw [hx]; simp
 
 /-- A reference of an import's name stays one when the import names one more. -/
 theorem import_refs_cons {target : String} {n : ImportName} {ns : List ImportName} {r : DeclRef}
@@ -1259,7 +1267,7 @@ theorem decls_ok (P : Eval.Program) : ∀ (ds : List Decl) (s s' : Ctx) (os : Li
         simp only [Eval.functions, IR.functions, List.filterMap_cons] at hrel ⊢
         refine ⟨⟨rfl, hlp.symm, Fu, env, c, c', ht, fun g hg => ?_, fun e he => ?_, hhas⟩, hrel⟩
         · rw [henv] at hg
-          exact hsub g (by rw [hfns]; exact List.mem_append_left _ hg)
+          exact hsub g (by rw [hfns]; exact hg)
         · rw [henvE] at he
           exact hsubE e he
       | «import» sp names source =>

@@ -485,6 +485,15 @@ structure Names where
   file : String := ""
   /-- The files that the file imports from, by path. -/
   imported : List (String × ImportedFile) := []
+  /-- Each `match` names the equation of its value `_h'`, as in
+  `match _h' : x with`. The proof that a recursive function ends needs it, to
+  know that a narrowed value is a part of the value it came from. No source
+  name has a `'`, so `_h'` hides none, and Lean does not warn that the body
+  leaves it unused, because it starts with `_`. -/
+  matchHyp : Bool := false
+
+/-- What the output writes after `match` and before the value. -/
+def Names.matchBinder (names : Names) : String := if names.matchHyp then "_h' : " else ""
 
 /-- How the output writes the declaration `r`, and the name under which it
 binds the type parameter when it is generic over it. -/
@@ -678,6 +687,186 @@ def Body.testsTag (name : String) : Body T E → Bool
   | .bind _ _ _ rest => rest.testsTag name
   | .value _ | .state _ | .yield .. | .done .. | .exit .. | .throw _ => false
 
+/-! ### Recursion
+
+A function of the output that calls itself must end, or Lean refuses it.
+Tolean accepts a call of the function in its own body only on a part of one
+of its parameters: a field of it, a value that a `match` narrows it to, an
+element of a list in it, or a part of one of these. Each step makes the
+value smaller by `sizeOf`, so `termination_by` the parameter holds, and the
+tactic `tolean_decreasing` proves each call. These functions find that
+parameter. -/
+
+/-- How many steps below a parameter `p` an expression is, when `depths`
+gives that number for each name that holds `p` or a part of it: `0` for `p`
+itself, and `none` for a value that is not a part of `p`. Each step down
+makes `sizeOf` smaller by one at least. A value that Lean wraps in `some` is
+one step up, so a wrap of `p` itself is at `-1`. -/
+def Expr.partOf (depths : List (String × Int)) : Expr T E → Option Int
+  | .var x => depths.lookup x
+  | .field e _ _ | .proj e _ _ => (e.partOf depths).map (· + 1)
+  -- `(n : Option T)` may wrap a narrowed `n` in `some` again, which is one
+  -- step up. The analysis does not know the type of `n`, so it counts the
+  -- step even where `n` is an `Option` already, which only refuses more.
+  | .ascribe e ty => (e.partOf depths).map fun d => if ty matches .option _ | .optional _ then d - 1 else d
+  | _ => Option.none
+
+/-- The depths after `x` is bound to a value at depth `d` below `p`. -/
+def bindPart (depths : List (String × Int)) (x : String) (d : Option Int) : List (String × Int) :=
+  let depths := depths.filter (·.1 != x)
+  match d with
+  | some d => (x, d) :: depths
+  | Option.none => depths
+
+/-- The depths after a `match` narrows `x`, which is one step down. -/
+def narrowPart (depths : List (String × Int)) (x : String) : List (String × Int) :=
+  match depths.lookup x with
+  | some d => bindPart depths x (some (d + 1))
+  | Option.none => depths
+
+/-- An argument without its ascription to an `Option` type, such as the
+`(v : Option T)` that the translator writes for an optional parameter of a
+generic function. A parameter of an `Option` type already needs a part two
+steps below it, for the `some` that Lean may add, and the ascription adds
+that `some` in its place, not as well. -/
+def Expr.unascribed : Expr T E → Expr T E
+  | .ascribe e ty => if ty matches .option _ | .optional _ then e else .ascribe e ty
+  | e => e
+
+mutual
+
+/-- Each call of `self` in the expression passes as its argument `i` a part
+of `p` at least `need` steps below it. -/
+def Expr.callsShrink (self : DeclRef) (i : Nat) (need : Int) (depths : List (String × Int)) : Expr T E → Bool
+  | .call r args =>
+    (r != self || (args[i]?.bind fun a => a.unascribed.partOf depths).any (need ≤ ·)) &&
+      Expr.callsShrinkList self i need depths args
+  | .listMethod _ items param _ body _ =>
+    items.callsShrink self i need depths &&
+      body.callsShrink self i need (bindPart depths param ((items.partOf depths).map (· + 1)))
+  -- The accumulator is not a part of `p`, and the element is one step below
+  -- `items`, as in a `listMethod`.
+  | .listFold items init acc param _ body _ =>
+    items.callsShrink self i need depths && init.callsShrink self i need depths &&
+      body.callsShrink self i need
+        (bindPart (bindPart depths acc Option.none) param ((items.partOf depths).map (· + 1)))
+  | .matchNull name whenNull whenValue =>
+    whenNull.callsShrink self i need depths && whenValue.callsShrink self i need (narrowPart depths name)
+  | .field e _ _ | .propNot e | .not e | .neg e | .isNone e | .isSome e | .inject _ _ e
+  | .decide e | .push _ e | .update _ _ e | .ascribe e _ | .proj e _ _ => e.callsShrink self i need depths
+  | .ite a b c => a.callsShrink self i need depths && b.callsShrink self i need depths &&
+      c.callsShrink self i need depths
+  | .coalesce a b _ | .intOp _ a b | .order _ a b | .division _ a b | .eq a b | .ne a b
+  | .propAnd a b | .propOr a b | .and a b | .or a b =>
+    a.callsShrink self i need depths && b.callsShrink self i need depths
+  | .list es _ | .tuple es | .ext _ es => Expr.callsShrinkList self i need depths es
+  | .struct fields _ _ => Expr.callsShrinkFields self i need depths fields
+  | .int _ | .none | .bool _ | .string _ | .var _ | .enumCase .. | .tagValue _ => true
+
+def Expr.callsShrinkList (self : DeclRef) (i : Nat) (need : Int) (depths : List (String × Int)) :
+    List (Expr T E) → Bool
+  | [] => true
+  | e :: es => e.callsShrink self i need depths && Expr.callsShrinkList self i need depths es
+
+def Expr.callsShrinkFields (self : DeclRef) (i : Nat) (need : Int) (depths : List (String × Int)) :
+    List (String × Expr T E) → Bool
+  | [] => true
+  | (_, e) :: fs => e.callsShrink self i need depths && Expr.callsShrinkFields self i need depths fs
+
+end
+
+/-- The depths after `names` get new values that are not parts of `p`. -/
+def forgetParts (depths : List (String × Int)) (names : List String) : List (String × Int) :=
+  depths.filter (!names.contains ·.1)
+
+/-- Each call of `self` in the body passes as its argument `i` a part of `p`
+at least `need` steps below it. -/
+def Body.callsShrink (self : DeclRef) (i : Nat) (need : Int) (depths : List (String × Int)) : Body T E → Bool
+  | .value e | .exit e _ => e.callsShrink self i need depths
+  | .state _ | .yield .. | .done .. => true
+  | .let name e rest =>
+    e.callsShrink self i need depths && rest.callsShrink self i need (bindPart depths name (e.partOf depths))
+  | .letArray name _ elems rest =>
+    Expr.callsShrinkList self i need depths elems &&
+      rest.callsShrink self i need (bindPart depths name Option.none)
+  | .ite c a b => c.callsShrink self i need depths && a.callsShrink self i need depths &&
+      b.callsShrink self i need depths
+  | .matchNull name _ whenNull whenValue =>
+    whenNull.callsShrink self i need depths && whenValue.callsShrink self i need (narrowPart depths name)
+  | .matchTag name _ _ _ other whenTag whenOther =>
+    whenTag.callsShrink self i need (narrowPart depths name) &&
+      whenOther.callsShrink self i need (if other.isSome then narrowPart depths name else depths)
+  | .letState names branch rest =>
+    branch.callsShrink self i need depths && rest.callsShrink self i need (forgetParts depths names)
+  | .fold names element body items rest _ =>
+    let outer := forgetParts depths names
+    items.callsShrink self i need depths &&
+      body.callsShrink self i need (bindPart outer element ((items.partOf depths).map (· + 1))) &&
+      rest.callsShrink self i need outer
+  | .throw e => e.callsShrink self i need depths
+  -- The value of a call is not a part of `p`.
+  | .bind name r args rest =>
+    (Expr.call r args).callsShrink self i need depths &&
+      rest.callsShrink self i need (bindPart depths name Option.none)
+
+mutual
+
+/-- The expression calls `self`. -/
+def Expr.calls (self : DeclRef) : Expr T E → Bool
+  | .call r args => r == self || Expr.callsList self args
+  | .listMethod _ items _ _ body _ => items.calls self || body.calls self
+  | .listFold items init _ _ _ body _ => items.calls self || init.calls self || body.calls self
+  | .matchNull _ a b | .coalesce a b _ | .intOp _ a b | .order _ a b | .division _ a b | .eq a b
+  | .ne a b | .propAnd a b | .propOr a b | .and a b | .or a b => a.calls self || b.calls self
+  | .field e _ _ | .propNot e | .not e | .neg e | .isNone e | .isSome e | .inject _ _ e
+  | .decide e | .push _ e | .update _ _ e | .ascribe e _ | .proj e _ _ => e.calls self
+  | .ite a b c => a.calls self || b.calls self || c.calls self
+  | .list es _ | .tuple es | .ext _ es => Expr.callsList self es
+  | .struct fields _ _ => Expr.callsFields self fields
+  | .int _ | .none | .bool _ | .string _ | .var _ | .enumCase .. | .tagValue _ => false
+
+def Expr.callsList (self : DeclRef) : List (Expr T E) → Bool
+  | [] => false
+  | e :: es => e.calls self || Expr.callsList self es
+
+def Expr.callsFields (self : DeclRef) : List (String × Expr T E) → Bool
+  | [] => false
+  | (_, e) :: fs => e.calls self || Expr.callsFields self fs
+
+end
+
+/-- The body calls `self`. -/
+def Body.calls (self : DeclRef) : Body T E → Bool
+  | .value e | .exit e _ => e.calls self
+  | .state _ | .yield .. | .done .. => false
+  | .let _ e rest => e.calls self || rest.calls self
+  | .letArray _ _ elems rest => Expr.callsList self elems || rest.calls self
+  | .ite c a b => c.calls self || a.calls self || b.calls self
+  | .matchNull _ _ a b | .matchTag _ _ _ _ _ a b | .letState _ a b => a.calls self || b.calls self
+  | .fold _ _ body items rest _ => body.calls self || items.calls self || rest.calls self
+  | .throw e => e.calls self
+  | .bind _ r args rest => r == self || Expr.callsList self args || rest.calls self
+
+/-- The parameter that each call of `self` in `body` makes smaller, the first
+one when there are several. `none` when the body does not call `self`, or
+when no parameter gets smaller in every call. A parameter of an `Option` type
+needs a part two steps below it. Where such a parameter expects a value that
+a `match` narrowed, Lean wraps the value in `some` again, which is one step
+up, so a part one step below would be the parameter itself. -/
+def Body.decreasingParam? (self : DeclRef) (params : List (String × Ty T)) (body : Body T E) :
+    Option String :=
+  if body.calls self then
+    (params.zipIdx.find? fun ((p, ty), i) =>
+      body.callsShrink self i (if ty matches .option _ | .optional _ then 2 else 1) [(p, 0)]).map (·.1.1)
+  else Option.none
+
+/-- The declaration is a function of the file `file` that calls itself, each
+time on a part of one parameter. The output then proves that it ends with
+`tolean.TypeScript.Decreasing`. -/
+def Decl.recursive (file : String) : Decl T E → Bool
+  | .function name params _ body => (body.decreasingParam? ⟨file, name⟩ params).isSome
+  | _ => false
+
 section
 variable [PrintTy T] [PrintOp E]
 
@@ -774,7 +963,7 @@ def Expr.print (names : Names) : Expr T E → String
   | .isNone a => s!"{argument (a.print names)}.isNone"
   | .isSome a => s!"{argument (a.print names)}.isSome"
   | .matchNull name whenNull whenValue =>
-    s!"(match {name} with | {leanName names "none"} => {whenNull.print names} | " ++
+    s!"(match {names.matchBinder}{name} with | {leanName names "none"} => {whenNull.print names} | " ++
       s!"{leanName names "some"} {name} => {whenValue.print names})"
   | .coalesce a b nullable =>
     let fn := leanName names (if nullable then "Option.or" else "Option.getD")
@@ -833,7 +1022,7 @@ def Body.lines (names : Names) : Body T E → List String
     [s!"if {c.print names} then"] ++ indent (whenTrue.lines names) ++ ["else"] ++
       indent (whenFalse.lines names)
   | .matchNull name _ whenNull whenValue =>
-    [s!"match {name} with", s!"| {leanName names "none"} =>"] ++ indent (whenNull.lines names) ++
+    [s!"match {names.matchBinder}{name} with", s!"| {leanName names "none"} =>"] ++ indent (whenNull.lines names) ++
       [s!"| {leanName names "some"} {name} =>"] ++ indent (whenValue.lines names)
   | .matchTag name ref _ tag other whenTag whenOther =>
     let ctor (t : String) := s!"{(names.ref ref).1}.{memberName t}"
@@ -845,7 +1034,7 @@ def Body.lines (names : Names) : Body T E → List String
           if n == name then Body.tagArms names name whenOther
           else s!"| {name} =>" :: indent (whenOther.lines names)
         | _ => s!"| {name} =>" :: indent (whenOther.lines names)
-    s!"match {name} with" :: s!"| {ctor tag} {name} =>" :: indent (whenTag.lines names) ++ rest
+    s!"match {names.matchBinder}{name} with" :: s!"| {ctor tag} {name} =>" :: indent (whenTag.lines names) ++ rest
   | .letState ns branch rest =>
     [s!"let {tuple ns} :="] ++ indent (branch.lines names) ++ rest.lines names
   | .fold ns element body items rest info =>
@@ -916,6 +1105,14 @@ def Decl.print (names : Names) : Decl T E → String
     let generic := generic ++ String.join (typeParams.map (s!" ({·} : Type)"))
     s!"abbrev {name}{generic} := {type.print names}"
   | .function name params ret body =>
+    -- A function that calls itself ends because each call passes a part of
+    -- one parameter. Lean then needs that parameter as the measure, and the
+    -- proof of each call.
+    let decreasing := body.decreasingParam? ⟨names.file, name⟩ params
+    let names := if decreasing.isSome then { names with matchHyp := true } else names
+    let termination := match decreasing with
+      | some p => [s!"termination_by {p}", "decreasing_by all_goals tolean_decreasing"]
+      | Option.none => []
     let generic := if names.generic then PrintTy.binders (T := T) names else ""
     -- The type parameters, in the order that the parameters name them. The
     -- translator refuses one that no parameter's type names.
@@ -928,7 +1125,7 @@ def Decl.print (names : Names) : Decl T E → String
       s!"({param} : {type.print names}{default})"
     "\n".intercalate
       (s!"def {name}{generic} {" ".intercalate leanParams} : {ret.print names} :=" ::
-        indent (body.lines names))
+        indent (body.lines names) ++ termination)
 
 end
 
