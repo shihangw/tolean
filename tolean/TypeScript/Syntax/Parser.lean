@@ -658,6 +658,7 @@ def parseProperty (fuel : Nat) : ParseM Property := do
   let start := t.span.start
   -- `...e` copies the properties of `e`.
   if t.isPunct "..." then
+    requireFeature t .objectSpread
     let value ← parseAssign fuel
     return .spread (← spanFrom start) value
   let key : PropKey ← match t.kind with

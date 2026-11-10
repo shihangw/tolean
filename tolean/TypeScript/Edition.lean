@@ -45,6 +45,8 @@ def Edition.default : Edition := .es2024
 inductive Feature where
   /-- `**` and `**=`: `ExponentiationExpression`. -/
   | exponent
+  /-- `{ ...e }`: `PropertyDefinition : ... AssignmentExpression`. -/
+  | objectSpread
   /-- bigint literals, the `bigint` type, and its `+ - *` and comparisons:
   the `BigInt` type. -/
   | bigint
@@ -69,12 +71,14 @@ deriving BEq, Repr, Inhabited
 
 def Feature.since : Feature → Edition
   | .exponent | .arrayIncludes => .es2016
+  | .objectSpread => .es2018
   | .bigint | .bigintDivision | .nullishCoalescing | .optionalChaining => .es2020
   | .logicalAssignment | .numericSeparators => .es2021
   | .arrayAt => .es2022
 
 def Feature.describe : Feature → String
   | .exponent => "'**'"
+  | .objectSpread => "object spread '...'"
   | .bigint => "bigint"
   | .bigintDivision => "bigint '/' and '%'"
   | .nullishCoalescing => "'??'"

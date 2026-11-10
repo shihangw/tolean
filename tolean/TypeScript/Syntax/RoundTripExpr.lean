@@ -222,7 +222,8 @@ termination_by es => (sizeOf es, 7)
 
 def Property.wf (T : Edition) : Property → Bool
   | .shorthand _ name => exprName name
-  | .keyValue _ _ value | .spread _ value => value.wfAt T .assign
+  | .keyValue _ _ value => value.wfAt T .assign
+  | .spread _ value => T.supports .objectSpread && value.wfAt T .assign
 termination_by p => (sizeOf p, 7)
 
 def Property.allWF (T : Edition) : List Property → Bool
@@ -1349,6 +1350,8 @@ theorem parseProperty_reads {T : Edition} (g : Nat) (q : Property) (hq : q.wf T 
       leaves_trans (leaves_advance hs' hl) hL⟩
     simp only [Parse.parseProperty]
     rw [Parse.bind_eq (Parse.advance_cons hs' (by simp [hr])), if_pos (by simp [Token.isPunct, hx])]
+    have hf : T.supports .objectSpread = true := by simp only [Property.wf, Bool.and_eq_true] at hq; exact hq.1
+    rw [Parse.bind_eq (Parse.requireFeature_ok (by simpa [hT] using hf))]
     rw [Parse.bind_eq hp, Parse.bind_eq (Parse.spanFrom_eq _ _)]
     rfl
 
@@ -3293,9 +3296,9 @@ theorem primary_reads {T : Edition} (f : Nat) (IH : ∀ g ≤ f, AllRead T g) (e
       subst hqv
       have hw := Property.allWF_iff.mp he _ hq
       have hh := Property.height_le_heightOf hq
-      simp only [Property.wf] at hw
+      simp only [Property.wf, Bool.and_eq_true] at hw
       simp only [Property.height] at hh
-      exact IH h (by omega) .assign v hw (by simp only [need, Level.cost]; omega)
+      exact IH h (by omega) .assign v (by first | exact hw | exact hw.2) (by simp only [need, Level.cost]; omega)
   | _ => simp [Expr.wfAt] at he
 
 /-- The step of the induction on fuel. -/

@@ -2573,6 +2573,9 @@ theorem parseProperty_gives {T : Edition} {f : Nat} (hA : GivesE T .assign (Pars
       subst h2
       obtain ⟨rfl, hR₁⟩ := hpast (by simp)
       rw [if_pos (by simp [Token.isPunct, hk])] at h
+      rw [Parse.bind_ok] at h; obtain ⟨u, s₁', hreq, h⟩ := h
+      obtain ⟨rfl, hsup⟩ := requireFeature_inv hreq
+      have hf : T.supports .objectSpread = true := by rw [← hT]; simpa [past] using hsup
       rw [Parse.bind_ok] at h; obtain ⟨value, s₂, hv, h⟩ := h
       have gv := hA _ _ _ hR₁ hT hv
       rw [Parse.bind_eq (Parse.spanFrom_eq _ _)] at h
@@ -2584,7 +2587,7 @@ theorem parseProperty_gives {T : Edition} {f : Nat} (hA : GivesE T .assign (Pars
         rw [show t.kind :: vsrc.map (·.kind) = [t.kind] ++ vsrc.map (·.kind) from rfl, skel_append,
           skel_append, hk, hv2]
         rfl
-      · exact both (by simpa [Property.wf] using gv.wf) (by
+      · exact both (by simpa [Property.wf, hf] using gv.wf) (by
           simpa [Property.words, punctWord] using WordsOK.cons (ok_punct (p := "...") (by decide)) gv.ok)
       · intro after hf; simpa [Property.afterOK] using gv.after after hf
     simp [h1, h2, Token.isPunct, hk] at h

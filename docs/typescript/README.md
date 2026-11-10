@@ -649,6 +649,7 @@ tolean translate --target ES2022 input.ts Output.lean My.Namespace
   | Feature | Since |
   |---|---|
   | `**`, `**=` | ES2016 |
+  | object spread (`{ ...p }`) | ES2018 |
   | bigint (literals, type, `+ - *`, comparisons) | ES2020 |
   | bigint `/` and `%` (`BigInt::divide`, `BigInt::remainder`) | ES2020 |
   | `??` | ES2020 |
