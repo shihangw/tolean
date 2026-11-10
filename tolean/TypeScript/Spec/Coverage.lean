@@ -1,5 +1,6 @@
 import Lean
 import tolean.TypeScript.Certify
+import tolean.TypeScript.Decreasing
 import tolean.TypeScript.EStateM
 import tolean.TypeScript.Interpret
 import tolean.TypeScript.Proof.Guard
@@ -583,7 +584,10 @@ def extras : List Group := [
     ``Eval.decTuple_list, ``Eval.decLast_cons, ``Eval.decCons_cons]⟩,
   ⟨"Certificates: callbacks and the List functions", [``Proof.evalMap_map, ``Proof.evalFilter_filter,
     ``Proof.evalFind_find, ``Proof.evalFind_true, ``Proof.evalFind_false, ``Proof.find?_isSome,
-    ``Proof.find?_not_isNone, ``Proof.getD_map_undefined]⟩]
+    ``Proof.find?_not_isNone, ``Proof.getD_map_undefined]⟩,
+  ⟨"Recursion: the facts that Lean adds to the goal of a call in a callback, for the proof that a recursive function ends",
+    [``List.any_wfParam_tolean, ``List.any_unattach_tolean, ``List.all_wfParam_tolean,
+      ``List.all_unattach_tolean, ``List.find?_wfParam_tolean, ``List.find?_unattach_tolean]⟩]
 
 open Meta in
 /-- The theorems of the TypeScript modules that the index does not list. A
