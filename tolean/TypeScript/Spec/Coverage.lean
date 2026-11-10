@@ -1,7 +1,9 @@
 import Lean
 import tolean.TypeScript.Certify
+import tolean.TypeScript.Decreasing
 import tolean.TypeScript.EStateM
 import tolean.TypeScript.Interpret
+import tolean.TypeScript.Map
 import tolean.TypeScript.Proof.Guard
 import tolean.TypeScript.Proof.Link
 import tolean.TypeScript.Syntax.Equality
@@ -12,6 +14,7 @@ import tolean.TypeScript.Syntax.RoundTripDecl
 import tolean.TypeScript.Syntax.RoundTripLex
 import tolean.TypeScript.Syntax.ParseWF
 import tolean.TypeScript.Syntax.RoundTripText
+import tolean.TypeScript.Spec.Error
 import tolean.TypeScript.Spec.Lemmas.Number
 import tolean.TypeScript.Spec.Coverage.LexicalGrammar
 import tolean.TypeScript.Spec.Coverage.Expressions
@@ -86,7 +89,8 @@ structure Group where
 /-- The theorems that cover every section of the subset at once. -/
 def everySection : Group :=
   ⟨"Every section of the subset", [``Proof.program_sound, ``Proof.translate_sound,
-    ``Proof.programTranslation_rel, ``Proof.expr_sound, ``Proof.stmts_sound, ``Proof.decls_sound]⟩
+    ``Proof.program_sound_call, ``Proof.translate_sound_call,
+    ``Proof.programTranslation_rel, ``Proof.apply_recordGet, ``Proof.expr_sound, ``Proof.stmts_sound, ``Proof.decls_sound]⟩
 
 /-- The sections of ECMA-262 that the interpreter follows, in the order of
 the spec, with the theorems about each. -/
@@ -100,6 +104,7 @@ def sections : List Section := [
   ⟨"sec-ecmascript-language-types-bigint-type", "6.1.6.2", "The BigInt Type", []⟩,
   -- §7 Abstract Operations {#sec-abstract-operations}
   ⟨"sec-toboolean", "7.1.2", "ToBoolean", []⟩,
+  ⟨"sec-samevaluezero", "7.2.11", "SameValueZero", []⟩,
   ⟨"sec-islessthan", "7.2.13", "IsLessThan",
     [``JSString.unitsLt_iff, ``JSString.lt_iff, ``JSString.le_iff]⟩,
   ⟨"sec-islooselyequal", "7.2.14", "IsLooselyEqual",
@@ -127,13 +132,16 @@ def sections : List Section := [
     [``Proof.mapM_sim]⟩,
   ⟨"sec-runtime-semantics-propertydefinitionevaluation", "13.2.5.5",
     "Runtime Semantics: PropertyDefinitionEvaluation",
-    [``Proof.fold_sim, ``shorthand_reads_global]⟩,
+    [``Proof.fold_sim, ``shorthand_reads_global, ``Proof.translateObject_sound]⟩,
   ⟨"sec-grouping-operator", "13.2.9", "The Grouping Operator",
     [``Proof.eval_stripParens]⟩,
-  ⟨"sec-property-accessors", "13.3.2", "Property Accessors", [``Eval.eval_index_str, ``Eval.getKey_ofString, ``Eval.find?_fst_lookup,
-    ``Coverage.index_lone_surrogate, ``Proof.readMember_sound]⟩,
+  ⟨"sec-property-accessors", "13.3.2", "Property Accessors", [``Proof.translateMember_sound, ``Eval.eval_index_str, ``Eval.getKey_ofString, ``Eval.find?_fst_lookup,
+    ``Coverage.index_lone_surrogate]⟩,
   ⟨"sec-function-calls", "13.3.6", "Function Calls",
-    [``Proof.eval_call, ``Proof.eval_methodCall, ``Proof.out_call, ``Proof.zip_sim, ``Proof.zip_sim_value, ``Proof.calls_agree,
+    [``Proof.eval_call, ``Proof.eval_methodCall, ``Proof.out_call, ``Proof.evalCall_eq, ``Proof.out_evalCall, ``Proof.bind_toOption,
+    ``Proof.eval_call_toOption, ``Proof.out_call_toOption, ``Proof.translateCall_sound,
+    ``Proof.translateCall_callSim, ``Proof.checkThrowingCall_ok, ``Proof.throwingCall?_some,
+    ``Proof.zip_sim, ``Proof.zip_sim_value, ``Proof.calls_agree,
     ``Proof.evalList_append_undefined, ``Proof.callS_append_undefined, ``Proof.evalList_optArgs, ``Proof.fixArgs_value]⟩,
   ⟨"sec-optional-chains", "13.3.9", "Optional Chains",
     [``Proof.getPath_append, ``Proof.evalChain_optChain, ``Proof.eval_member_chain]⟩,
@@ -153,10 +161,11 @@ def sections : List Section := [
     ``Proof.concat_sound, ``JSString.units_append, ``JSString.ofString_append]⟩,
   ⟨"sec-relational-operators", "13.10", "Relational Operators",
     [``Proof.operator_sound, ``Proof.eval_binary, ``Proof.out_order, ``Proof.out_numberOp,
-    ``Proof.out_stringOrder]⟩,
+    ``Proof.out_stringOrder, ``Proof.apply_stringOrder]⟩,
   ⟨"sec-equality-operators", "13.11", "Equality Operators",
     [``Proof.operator_sound, ``Proof.eval_binary, ``Proof.out_eq, ``Proof.out_ne,
-    ``Proof.out_numberOp, ``Proof.out_numberNe, ``Proof.out_isNone, ``Proof.out_isSome,
+    ``Proof.out_numberOp, ``Proof.out_numberNe, ``Proof.apply_numberOp, ``Proof.apply_numberNe,
+    ``Proof.out_isNone, ``Proof.out_isSome,
     ``Proof.isNull_eq_true, ``Proof.nullTestOf_eval, ``Proof.undefinedTestOf_eval, ``Proof.nullOp_strict,
     ``Proof.nullOp_binary, ``Proof.applyOperator_sound, ``Proof.enumOperand_code,
     ``Proof.isUndefinedName_eq, ``Proof.eval_undefined, ``Proof.strictEq_undefined,
@@ -178,24 +187,29 @@ def sections : List Section := [
     ``Proof.Frame.append, ``Proof.Frame.mem, ``Proof.Frame.split]⟩,
   ⟨"sec-let-and-const-declarations", "14.3.1", "Let and Const Declarations",
     [``Proof.decl_sim, ``Proof.declare_ok, ``Proof.has_add, ``declare_not_callable, ``Proof.eval_withType,
-    ``Proof.translateVariable_sound, ``Syntax.Stmt.constAssignedIn_nil, ``Syntax.Stmt.constAssignedIn_exprStmt,
+    ``Proof.translateVariable_sound, ``Proof.translateBindHead_ok, ``Proof.bind_sim,
+    ``Syntax.Stmt.constAssignedIn_nil, ``Syntax.Stmt.constAssignedIn_exprStmt,
     ``Syntax.Stmt.constAssignedIn_returnStmt, ``Syntax.Stmt.constAssignedIn_ifStmt,
     ``Syntax.Stmt.constAssignedIn_forOfStmt, ``Syntax.Stmt.constAssignedIn_forStmt,
     ``Syntax.Stmt.constAssignedIn_whileStmt, ``Syntax.Stmt.constAssignedIn_block, ``Syntax.Stmt.constAssignedIn_breakStmt,
     ``Syntax.Stmt.constAssignedIn_continueStmt, ``Syntax.Stmt.constAssignedIn_empty,
-    ``Syntax.Stmt.constAssignedIn_switchStmt]⟩,
+    ``Syntax.Stmt.constAssignedIn_switchStmt,
+    ``Syntax.Stmt.constAssignedIn_throwStmt]⟩,
   ⟨"sec-if-statement", "14.6", "The if Statement",
     [``Proof.execStmt_if, ``Proof.if_ret, ``Proof.if_normal, ``Proof.if_ends, ``Proof.if_early_sim,
     ``Proof.if_state_sim, ``Proof.branch_ite, ``Proof.branch_none, ``Proof.branch_tag,
     ``Proof.letState_sim, ``Proof.translateIf_sound]⟩,
   ⟨"sec-for-in-and-for-of-statements", "14.7.5",
     "The for-in, for-of, and for-await-of Statements",
-    [``Proof.loop_sim, ``Proof.runFold_foldl, ``Proof.runFold_forIn, ``Proof.runFold_forInRet, ``Proof.translateForOf_sound]⟩,
+    [``Proof.loop_sim, ``Proof.runFold_foldl, ``Proof.runFold_forIn, ``Proof.runFold_forInRet, ``Proof.translateForOf_sound,
+    ``Proof.loopItems_ok]⟩,
   ⟨"sec-break-statement", "14.8", "The break Statement",
     [``Proof.Ends.brk, ``Proof.Ends.of_brk, ``Proof.endOf_normal]⟩,
   ⟨"sec-continue-statement", "14.9", "The continue Statement",
     [``Proof.if_jump, ``Proof.earlyTail_ends, ``Proof.exec_stepEnd]⟩,
-  ⟨"sec-return-statement", "14.10", "The return Statement", []⟩,
+  ⟨"sec-return-statement", "14.10", "The return Statement",
+    [``Proof.evalTop_ok, ``Proof.evalTop_call, ``Proof.eval_pureIf, ``Proof.translateReturnCall_ok,
+    ``Proof.returnCall_sim]⟩,
   ⟨"sec-switch-statement", "14.12", "The switch Statement",
     [``Proof.execCase_ret, ``Proof.exec_clauseStatements, ``Proof.execFrom_ret, ``Proof.execSwitch_case,
     ``Proof.matchTag_exec, ``Proof.switchOf_eval, ``Proof.clauses_nil_sim, ``Proof.clauses_default_sim,
@@ -205,12 +219,15 @@ def sections : List Section := [
     ``Proof.stmtsChanges_dropBreak, ``Proof.stmtsChanges_flatMap, ``Proof.state_nil_sim,
     ``Proof.state_default_sim, ``Proof.state_last_sim, ``Proof.state_case_sim, ``Proof.switch_state_sim,
     ``Proof.translateStateClause_sound, ``Proof.translateStateClauses_sound]⟩,
+  ⟨"sec-throw-statement", "14.14", "The throw Statement", [``Proof.throw_sim]⟩,
   -- §15 ECMAScript Language: Functions and Classes {#sec-ecmascript-language-functions-and-classes}
   ⟨"sec-function-definitions", "15.2", "Function Definitions",
     [``Proof.translateFunction_ok, ``Proof.checkTypeParams_ok, ``Proof.params_fold]⟩,
   ⟨"sec-arrow-function-definitions", "15.3", "Arrow Function Definitions",
     [``Proof.callbackOf_some, ``Proof.bodySim_of, ``Proof.eval_arrayMethod, ``Proof.out_listMethod,
-    ``Proof.methodVal_sim, ``Proof.translateArrayMethod_sound]⟩,
+    ``Proof.methodVal_sim, ``Proof.translateArrayMethod_sound, ``Proof.agree_cons, ``Proof.scoped_cons,
+    ``Proof.bodySimIdx_of, ``Proof.indexedCallbackOf_some, ``Proof.listMethod?_map,
+    ``Proof.listMethod?_ne_mapIdx]⟩,
   -- §16 ECMAScript Language: Scripts and Modules {#sec-ecmascript-language-scripts-and-modules}
   ⟨"sec-source-text-module-record-initialize-environment", "16.2.1.6.4", "InitializeEnvironment",
     [``Proof.module_resolves, ``Proof.declareTopLevel_ok, ``Proof.translateDecl_ok,
@@ -252,12 +269,34 @@ def sections : List Section := [
     [``Proof.evalFilter_sim]⟩,
   ⟨"sec-array.prototype.find", "23.1.3.9", "Array.prototype.find",
     [``Proof.evalFind_sim]⟩,
+  ⟨"sec-array.prototype.findindex", "23.1.3.10", "Array.prototype.findIndex",
+    [``Proof.evalFindIdx_sim]⟩,
+  ⟨"sec-array.prototype.findlast", "23.1.3.11", "Array.prototype.findLast", []⟩,
   ⟨"sec-array.prototype.map", "23.1.3.21", "Array.prototype.map",
-    [``Proof.evalMap_sim]⟩,
+    [``Proof.evalMap_sim, ``Proof.eval_mapIdx, ``Proof.evalMapIdx_sim]⟩,
   ⟨"sec-array.prototype.push", "23.1.3.23", "Array.prototype.push",
     [``Proof.out_push]⟩,
+  ⟨"sec-array.prototype.reduce", "23.1.3.24", "Array.prototype.reduce",
+    [``Proof.reducerOf_some, ``Proof.bodySim2_of, ``Proof.evalReduce_sim, ``Proof.eval_reduce,
+    ``Proof.translateReduce_sound]⟩,
   ⟨"sec-array.prototype.some", "23.1.3.29", "Array.prototype.some", []⟩,
-  ⟨"sec-createarrayiterator", "23.1.5.1", "CreateArrayIterator", []⟩]
+  ⟨"sec-createarrayiterator", "23.1.5.1", "CreateArrayIterator", []⟩,
+  -- §24 Keyed Collections {#sec-keyed-collections}
+  ⟨"sec-map-iterable", "24.1.1.1", "Map ( [ iterable ] )", [``Proof.translateNew_sound]⟩,
+  ⟨"sec-map.prototype.delete", "24.1.3.3", "Map.prototype.delete", []⟩,
+  ⟨"sec-map.prototype.get", "24.1.3.6", "Map.prototype.get",
+    [``Proof.eval_mapMethod, ``Proof.mapMethodOf_some, ``Proof.out_ext, ``Proof.translateMapMethod_sound]⟩,
+  ⟨"sec-map.prototype.has", "24.1.3.7", "Map.prototype.has", []⟩,
+  ⟨"sec-map.prototype.set", "24.1.3.9", "Map.prototype.set", []⟩,
+  ⟨"sec-get-map.prototype.size", "24.1.3.10", "get Map.prototype.size",
+    [``Proof.ownedMap_sim, ``Proof.translateRecv_sim]⟩,
+  ⟨"sec-createmapiterator", "24.1.5.1", "CreateMapIterator", [``Proof.loopOver_sim]⟩,
+  ⟨"sec-set-iterable", "24.2.2.1", "Set ( [ iterable ] )", []⟩,
+  ⟨"sec-set.prototype.add", "24.2.4.1", "Set.prototype.add", []⟩,
+  ⟨"sec-set.prototype.delete", "24.2.4.4", "Set.prototype.delete", []⟩,
+  ⟨"sec-set.prototype.has", "24.2.4.8", "Set.prototype.has", [``Proof.collection_call_sim]⟩,
+  ⟨"sec-get-set.prototype.size", "24.2.4.14", "get Set.prototype.size", []⟩,
+  ⟨"sec-createsetiterator", "24.2.6.1", "CreateSetIterator", []⟩]
 
 /-- The laws of the number model, from §6.1.6.1 The Number Type. The proofs
 assume them instead of proving them, and `tests/typescript/jsNumberLaws.test.ts`
@@ -330,7 +369,9 @@ def extras : List Group := [
     ``Syntax.Touching.nil, ``Syntax.iterate_list,
     ``Syntax.Expr.wordsOf_eq, ``Syntax.Property.wordsOf_eq, ``Syntax.Expr.eraseAll_eq,
     ``Syntax.Property.eraseAll_eq, ``Syntax.Expr.listAfter, ``Syntax.Property.listAfter,
-    ``Syntax.length_items, ``Syntax.Expr.start, ``Syntax.refuseArgument_ok, ``Syntax.refuseElement_ok,
+    ``Syntax.length_items, ``Syntax.Expr.start, ``Syntax.refuseElement_ok,
+    ``Syntax.head_of_first, ``Syntax.Expr.head_wf, ``Syntax.parseElement_reads, ``Syntax.Expr.elemWF_eq,
+    ``Syntax.parseElement_of,
     ``Syntax.endsItem_assign, ``Syntax.Touching.enclosed, ``Syntax.parseArguments_reads,
     ``Syntax.Parse.bind_eq, ``Syntax.Parse.pure_eq, ``Syntax.Parse.discard_eq,
     ``Syntax.parseArrayLiteral_reads, ``Syntax.Property.start, ``Syntax.parseProperty_reads,
@@ -358,6 +399,8 @@ def extras : List Group := [
     ``Syntax.parseConditional_reads, ``Syntax.isSimpleTarget_cond, ``Syntax.parseAssign_reads,
     ``Syntax.Expr.height_le_heightOf, ``Syntax.Property.height_le_heightOf, ``Syntax.Expr.allWF_iff,
     ``Syntax.Property.allWF_iff, ``Syntax.readsE_one, ``Syntax.parsePrimary_array,
+    ``Syntax.parsePrimary_new, ``Syntax.parseNew_reads, ``Syntax.typeArgWords_ref,
+    ``Syntax.Expr.tokens_new, ``Syntax.parsePrimaryType_budget,
     ``Syntax.parsePrimary_object, ``Syntax.primary_reads, ``Syntax.allRead_succ, ``Syntax.exprs_read_le,
     ``Syntax.exprs_read, ``Syntax.instLawfulBEqPos, ``Syntax.instReflBEqPos, ``Syntax.instLawfulBEqBinOp,
     ``Syntax.Neutral.nil, ``Syntax.Neutral.append, ``Syntax.Neutral.one, ``Syntax.Neutral.enclosed,
@@ -395,7 +438,7 @@ def extras : List Group := [
     ``Syntax.Laid.cons, ``Syntax.endStatement_semi, ``Syntax.VarKind.word_eq,
     ``Syntax.followsType_eq_semi, ``Syntax.varDecl_ss, ``Syntax.varDecl_ns, ``Syntax.varDecl_sn,
     ``Syntax.varDecl_nn, ``Syntax.parseDeclaration_reads, ``Syntax.parseVarDecl_reads,
-    ``Syntax.stmt_empty, ``Syntax.stmt_jump, ``Syntax.stmt_return_none, ``Syntax.stmt_return_some,
+    ``Syntax.stmt_empty, ``Syntax.stmt_jump, ``Syntax.stmt_return_none, ``Syntax.stmt_return_some, ``Syntax.stmt_throw,
     ``Syntax.parseStatement_expr, ``Syntax.stmt_expr, ``Syntax.stmt_varDecl, ``Syntax.Laid.kinds,
     ``Syntax.Stmt.first, ``Syntax.Laid.first, ``Syntax.parseBranch_reads, ``Syntax.Stmt.linesOf_wordLines,
     ``Syntax.next_not_else, ``Syntax.Laid.length_le, ``Syntax.blockStep_loop, ``Syntax.block_loop, ``Syntax.Stmt.eraseAll_eq,
@@ -525,20 +568,21 @@ def extras : List Group := [
     ``Syntax.BinOp.precedence_le, ``Syntax.BinOp.precedence_twelve, ``Syntax.leftOK_of, ``Syntax.mixing_of,
     ``Syntax.isTypeOperator_binOp, ``Syntax.followsType_of_op, ``Syntax.refuseAfterType_inv,
     ``Syntax.typeOperatorStep_inv, ``Syntax.binaryStep_inv, ``Syntax.parseBinary_gives, ``Syntax.parseUnary_gives, ``Syntax.parsePostfix_gives,
-    ``Syntax.list_inv, ``Syntax.GivesE.item, ``Syntax.refuseArgument_inv, ``Syntax.refuseElement_inv,
+    ``Syntax.list_inv, ``Syntax.refuseElement_inv, ``Syntax.parseElement_gives,
     ``Syntax.tokens_args, ``Syntax.bracketed, ``Syntax.parseArguments_gives, ``Syntax.parseArrayLiteral_gives,
     ``Syntax.skel_propertyName, ``Syntax.keyValue_tail, ``Syntax.parseProperty_gives,
     ``Syntax.PastSkel.refl, ``Syntax.PastSkel.trans, ``Syntax.PastSkel.tok, ``Syntax.PastSkel.of_eq,
     ``Syntax.skel_nonSkel, ``Syntax.skel_joined, ``Syntax.skel_bars, ``Syntax.skel_union, ``Syntax.skel_ref,
     ``Syntax.skelsOf_push, ``Syntax.arrayStep_skel, ``Syntax.unionStep_skel, ``Syntax.typeArgStep_skel,
     ``Syntax.keywordType_skel, ``Syntax.types_skel, ``Syntax.parseParam_skel, ``Syntax.parseParam_item,
-    ``Syntax.parseArrowParams_gives, ``Syntax.parseArrow_gives,
+    ``Syntax.parseArrowParams_gives, ``Syntax.parseArrow_gives, ``Syntax.tokens_ref_span,
+    ``Syntax.parseNew_gives,
     ``Syntax.parseObjectLiteral_gives, ``Syntax.leaf_gives, ``Syntax.parsePrimary_gives, ``Syntax.seq_same,
     ``Syntax.skel_one, ``Syntax.lhsStep_inv, ``Syntax.parseLeftHandSide_gives, ``Syntax.exprs_give,
     ``Syntax.wordsOK_append_iff, ``Syntax.wordsOK_cons_iff, ``Syntax.wordsOK_nil_iff, ``Syntax.readName_words,
     ``Syntax.VarKind.word_ok, ``Syntax.exportWords_ok, ``Syntax.typeAnnotation_ok, ``Syntax.VarDecl.wordsOK, ``Syntax.Param.wordsOK, ``Syntax.optionalMark_ok,
     ``Syntax.Field.wordsOK, ``Syntax.EnumMember.wordsOK, ``Syntax.ImportName.wordsOK, ``Syntax.StmtOK.one, ``Syntax.StmtOK.head,
-    ``Syntax.StmtOK.varDecl, ``Syntax.StmtOK.exprStmt, ``Syntax.StmtOK.retNone, ``Syntax.StmtOK.retSome,
+    ``Syntax.StmtOK.varDecl, ``Syntax.StmtOK.exprStmt, ``Syntax.StmtOK.retNone, ``Syntax.StmtOK.retSome, ``Syntax.StmtOK.throw,
     ``Syntax.StmtOK.brk, ``Syntax.StmtOK.cont, ``Syntax.StmtOK.empty, ``Syntax.StmtOK.ifThen, ``Syntax.StmtOK.ifElse,
     ``Syntax.StmtOK.forOf, ``Syntax.StmtOK.counted, ``Syntax.StmtOK.while, ``Syntax.linesOf_ok, ``Syntax.StmtOK.block,
     ``Syntax.endStatement_inv, ``Syntax.varDecl_tail, ``Syntax.parseDeclaration_inv, ``Syntax.parseVarDecl_inv, ``Syntax.blockStep_inv,
@@ -583,9 +627,14 @@ def extras : List Group := [
     ``Eval.encField_some, ``Eval.encField_none, ``Eval.decUndef_none, ``Eval.decUndef_undefined,
     ``Eval.decUndef_some, ``Eval.decUndef_encUndef, ``Eval.encTuple_def, ``Eval.encLast_def, ``Eval.encCons_def,
     ``Eval.decTuple_list, ``Eval.decLast_cons, ``Eval.decCons_cons]⟩,
-  ⟨"Certificates: callbacks and the List functions", [``Proof.evalMap_map, ``Proof.evalFilter_filter,
+  ⟨"Certificates: callbacks and the List functions", [``Proof.evalMap_map, ``Proof.evalMapIdx_from,
+    ``Proof.evalMapIdx_mapIdx, ``Proof.evalFilter_filter,
     ``Proof.evalFind_find, ``Proof.evalFind_true, ``Proof.evalFind_false, ``Proof.find?_isSome,
-    ``Proof.find?_not_isNone, ``Proof.getD_map_undefined]⟩]
+    ``Proof.find?_not_isNone, ``Proof.getD_map_undefined, ``Proof.evalFindIdx_from,
+    ``Proof.evalFindIdx_findIdx, ``Proof.evalReduce_foldl, ``Proof.evalReduce_foldl_val]⟩,
+  ⟨"Recursion: the facts that Lean adds to the goal of a call in a callback, for the proof that a recursive function ends",
+    [``List.any_wfParam_tolean, ``List.any_unattach_tolean, ``List.all_wfParam_tolean,
+      ``List.all_unattach_tolean, ``List.find?_wfParam_tolean, ``List.find?_unattach_tolean]⟩]
 
 open Meta in
 /-- The theorems of the TypeScript modules that the index does not list. A

@@ -9,7 +9,13 @@
  * things:
  *
  * - When the interpreter gives a value, Node returns the same value. This
- *   holds for every program that the parser accepts, in the subset or not.
+ *   holds for every program that the parser accepts, in the subset or not,
+ *   except for two gaps that the plan for pure TypeScript lists and the
+ *   random programs do not reach: an assignment to the variable of a
+ *   `for (const x of xs)` loop, and a change to an array, a map or a set
+ *   that another name holds.
+ * - When the interpreter says that a call throws a value, Node throws the
+ *   same value. An `Error` compares by its class and its message.
  * - When the translator accepts the program and the interpreter gives no
  *   value, Node throws.
  *
@@ -51,7 +57,8 @@ type Value =
   | null
   | { undefined: true }
   | Array<Value>
-  | { object: Array<[string, Value]> };
+  | { object: Array<[string, Value]> }
+  | { error: [string, Array<[string, Value]>] };
 
 const bitsOf = (x: number): string => {
   const view = new DataView(new ArrayBuffer(8));
@@ -91,6 +98,7 @@ function decode(v: Value): unknown {
   if ('undefined' in v) return undefined;
   if ('bigint' in v) return BigInt(v.bigint);
   if ('number' in v) return ofBits(v.number);
+  if ('error' in v) throw new Error('an error object is never an argument');
   return Object.fromEntries(v.object.map(([k, x]) => [k, decode(x)]));
 }
 
@@ -101,6 +109,7 @@ function canonical(v: Value): string {
     if (Array.isArray(w)) return w.map(strip);
     if ('number' in w) return { number: Number.isNaN(ofBits(w.number)) ? 'NaN' : w.number };
     if ('bigint' in w || 'undefined' in w) return w;
+    if ('error' in w) return { error: [w.error[0], w.error[1].map(([k, x]) => [k, strip(x)])] };
     return { object: w.object.map(([k, x]) => [k, strip(x)]) };
   };
   return JSON.stringify(strip(v));
@@ -147,8 +156,17 @@ function arbitrary(t: Ty, sig: Signatures): fc.Arbitrary<unknown> {
 type Call = { function: string; args: Array<Value> };
 type Program = { seed: number; source: string; calls: Array<Call> };
 /** A result is `null` when the interpreter gives no value. */
-type Interpreted = { parsed: false } | { parsed: true; accepted: boolean; results: Array<{ value: Value } | null> };
-type NodeResult = { returns: unknown } | { throws: string };
+type Interpreted =
+  | { parsed: false }
+  | { parsed: true; accepted: boolean; results: Array<{ value: Value } | { throws: Value } | null> };
+type NodeResult = { returns: unknown } | { throws: string; thrown: unknown };
+
+/** What Node threw, as `tolean interpret` writes it: an `Error` as its class
+ * and its message, and any other value as itself. */
+function shownThrow(x: unknown): string {
+  if (x instanceof Error) return JSON.stringify({ error: [x.name, [['message', x.message]]] });
+  return shown(x);
+}
 
 /** `x` as text, or why it is no value of the subset. */
 function shown(x: unknown): string {
@@ -224,9 +242,16 @@ test(`the interpreter agrees with Node ${process.version} on random programs`, a
       try {
         actual = { returns: fn(...call.args.map(decode)) };
       } catch (e) {
-        actual = { throws: e instanceof Error ? e.name : String(e) };
+        actual = { throws: e instanceof Error ? e.name : String(e), thrown: e };
       }
-      if (expected !== null) {
+      if (expected !== null && 'throws' in expected) {
+        tally.throws++;
+        if ('returns' in actual) {
+          failures.push(`${where}: the interpreter throws ${canonical(expected.throws)}, Node ${shown(actual.returns)}`);
+        } else if (shownThrow(actual.thrown) !== canonical(expected.throws)) {
+          failures.push(`${where}: the interpreter throws ${canonical(expected.throws)}, Node throws ${shownThrow(actual.thrown)}`);
+        }
+      } else if (expected !== null) {
         tally.values++;
         if (!('returns' in actual)) {
           failures.push(`${where}: the interpreter gives ${canonical(expected.value)}, Node throws ${actual.throws}`);
@@ -305,5 +330,49 @@ test('the interpreter gives no value where an assignment to a const throws', asy
     writeFileSync(path, ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext } }).outputText);
     const mod = (await import(pathToFileURL(path).href)) as { f: (b: boolean) => unknown };
     expect(() => mod.f(true), source).toThrow(TypeError);
+  }
+});
+
+// A JS loop over a set, a map or an array sees a change that its body makes
+// to what it runs over, and the interpreter takes the values when the loop
+// starts. So it must give no value for such a loop, however the iterable
+// reaches the collection. A loop over a copy, `new Set(s)`, runs over a new
+// set, so a change to `s` does not reach it, and there the interpreter must
+// agree with Node.
+test('the interpreter gives no value for a loop that changes what it runs over', async () => {
+  const start = 'const s = new Set<bigint>(); s.add(1n); s.add(2n); let n = 0n;';
+  const loop = (iterable: string) =>
+    `export function f(b: boolean): bigint { ${start} for (const x of ${iterable}) { s.delete(2n); n += x; } return n; }`;
+  const changing = [
+    loop('s'),
+    loop('(s)'),
+    loop('((s))'),
+    loop('s satisfies ReadonlySet<bigint>'),
+    loop('b ? s : new Set<bigint>()'),
+    // A new map holds `s` as a value, and `get` gives it back.
+    loop('new Map<bigint, Set<bigint>>([[0n, s]]).get(0n) ?? new Set<bigint>()'),
+    'export function f(b: boolean): bigint { const m = new Map<bigint, bigint>(); m.set(1n, 1n); m.set(2n, 2n); ' +
+      'let n = 0n; for (const e of (m)) { m.delete(2n); n += e[1]; } return n; }',
+  ];
+  const copying = [loop('new Set<bigint>(s)'), loop('(new Set<bigint>(s))')];
+  const sources = [...changing, ...copying];
+  const input = { programs: sources.map((source) => ({ source, calls: [{ function: 'f', args: [true] }] })) };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const results = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-iterable-'));
+  for (const [i, source] of sources.entries()) {
+    const lean = results[i];
+    expect(lean?.parsed, source).toBe(true);
+    if (lean === undefined || !lean.parsed) continue;
+    if (i < changing.length) {
+      expect(lean.results[0] ?? null, source).toBeNull();
+      continue;
+    }
+    const path = join(dir, `case${i}.mjs`);
+    writeFileSync(path, ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext } }).outputText);
+    const mod = (await import(pathToFileURL(path).href)) as { f: (b: boolean) => unknown };
+    const value = lean.results[0]?.value;
+    expect(value === undefined ? 'no value' : canonical(value), source).toBe(canonical(encode(mod.f(true))));
   }
 });

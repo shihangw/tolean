@@ -104,6 +104,7 @@ theorem Stmt.depth_lt : ∀ st : Stmt, st.depth < st.tokens.length
     simp [Stmt.depth, Stmt.tokens, Stmt.wordLines, Stmt.lines, VarDecl.words, VarKind.word_eq]
   | .exprStmt _ e => by simp [Stmt.depth, Stmt.tokens, Stmt.wordLines, Stmt.lines, punctWord]
   | .returnStmt _ v => by cases v <;> simp [Stmt.depth, Stmt.tokens, Stmt.wordLines, Stmt.lines, keywordWord]
+  | .throwStmt _ e => by simp [Stmt.depth, Stmt.tokens, Stmt.wordLines, Stmt.lines, keywordWord]
   | .breakStmt _ | .continueStmt _ => by simp [Stmt.depth, Stmt.tokens, Stmt.wordLines, Stmt.lines, keywordWord]
   | .empty _ => by simp [Stmt.depth, Stmt.tokens, Stmt.wordLines, Stmt.lines, punctWord]
   | .switchStmt sp d cs => by
@@ -630,6 +631,7 @@ theorem Expr.second : ∀ (e : Expr) {n : String} {k : TokenKind} {r : List Toke
 
 /-- Every well-formed expression is `spineOK`. -/
 theorem Expr.spineOK_wf {T : Edition} : ∀ (e : Expr) (level : Level), e.wfAt T level = true → e.spineOK = true
+  | .spread .., level, h => by cases level <;> simp [Expr.wfAt] at h
   | .member _ o _, level, h | .index _ o _, level, h | .call _ o _, level, h => by
     have : o.wfAt T .lhs = true := by cases level <;> simp_all [Expr.wfAt]
     simpa [Expr.spineOK] using Expr.spineOK_wf o .lhs this
@@ -681,7 +683,7 @@ theorem Expr.spineOK_wf {T : Edition} : ∀ (e : Expr) (level : Level), e.wfAt T
     simpa [Expr.spineOK] using Expr.spineOK_wf o .cond this
   | .ident .., _, _ | .number .., _, _ | .bigint .., _, _ | .string .., _, _ | .bool .., _, _ | .null _, _, _
   | .array .., _, _ | .object .., _, _ | .paren .., _, _ | .unary .., _, _ | .prefix .., _, _
-  | .arrow .., _, _ => by simp [Expr.spineOK]
+  | .arrow .., _, _ | .new .., _, _ => by simp [Expr.spineOK]
 
 /-! ### Fields of an interface -/
 
