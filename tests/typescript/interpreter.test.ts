@@ -50,6 +50,9 @@ type Value =
   | string
   | null
   | { undefined: true }
+  /** A string that holds a lone surrogate, as its UTF-16 code units. A JSON
+   * string cannot hold one exactly, so the interpreter writes it this way. */
+  | { utf16: Array<number> }
   | Array<Value>
   | { object: Array<[string, Value]> };
 
@@ -72,8 +75,9 @@ function encode(x: unknown): Value {
     case 'number':
       return { number: bitsOf(x) };
     case 'boolean':
-    case 'string':
       return x;
+    case 'string':
+      return x.isWellFormed() ? x : { utf16: Array.from({ length: x.length }, (_, i) => x.charCodeAt(i)) };
     case 'undefined':
       return { undefined: true };
     case 'object':
@@ -89,6 +93,7 @@ function decode(v: Value): unknown {
   if (v === null || typeof v === 'boolean' || typeof v === 'string') return v;
   if (Array.isArray(v)) return v.map(decode);
   if ('undefined' in v) return undefined;
+  if ('utf16' in v) return String.fromCharCode(...v.utf16);
   if ('bigint' in v) return BigInt(v.bigint);
   if ('number' in v) return ofBits(v.number);
   return Object.fromEntries(v.object.map(([k, x]) => [k, decode(x)]));
@@ -100,7 +105,7 @@ function canonical(v: Value): string {
     if (w === null || typeof w === 'boolean' || typeof w === 'string') return w;
     if (Array.isArray(w)) return w.map(strip);
     if ('number' in w) return { number: Number.isNaN(ofBits(w.number)) ? 'NaN' : w.number };
-    if ('bigint' in w || 'undefined' in w) return w;
+    if ('bigint' in w || 'undefined' in w || 'utf16' in w) return w;
     return { object: w.object.map(([k, x]) => [k, strip(x)]) };
   };
   return JSON.stringify(strip(v));
@@ -306,4 +311,19 @@ test('the interpreter gives no value where an assignment to a const throws', asy
     const mod = (await import(pathToFileURL(path).href)) as { f: (b: boolean) => unknown };
     expect(() => mod.f(true), source).toThrow(TypeError);
   }
+});
+
+// `split("")` gives each code unit, so a surrogate pair becomes two lone
+// surrogates. The interpreter writes each as its code units, which a JSON
+// string could not hold, so Node and the interpreter agree on them.
+test('the interpreter keeps the lone surrogates that split gives', async () => {
+  const source = 'export function units(s: string): ReadonlyArray<string> { return s.split(""); }';
+  const input = { programs: [{ source, calls: [{ function: 'units', args: [encode('😀')] }] }] };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const [lean] = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  expect(lean?.accepted).toBe(true);
+  const value = lean?.results[0]?.value;
+  expect(value).toEqual([{ utf16: [0xd83d] }, { utf16: [0xde00] }]);
+  expect(canonical(value as Value)).toBe(canonical(encode('😀'.split(''))));
 });

@@ -51,8 +51,12 @@ partial def toJson : Val Float → Json
   | .int i => Json.mkObj [("bigint", toString i)]
   | .num n => Json.mkObj [("number", toString n.toBits)]
   | .bool b => Json.bool b
-  -- No string of the subset holds a lone surrogate yet, so the text is exact.
-  | .str s => Json.str s.toString
+  -- A string that a JSON string can hold is that text. One that holds a lone
+  -- surrogate, as `split("")` can give, is its list of code units, because
+  -- the text would turn the surrogate into U+FFFD.
+  | .str s =>
+    if JSString.ofString s.toString = s then Json.str s.toString
+    else Json.mkObj [("utf16", Json.arr (s.units.map fun u => Json.num u.toNat).toArray)]
   | .null => Json.null
   | .undefined => Json.mkObj [("undefined", Json.bool true)]
   | .list xs => Json.arr (xs.map toJson).toArray
@@ -66,6 +70,8 @@ partial def ofJson (j : Json) : Except String (Val Float) :=
   | .arr xs => (.list ∘ Array.toList) <$> xs.mapM ofJson
   | j => do
     if let .ok true := j.getObjValAs? Bool "undefined" then return .undefined
+    if let .ok (units : Array Nat) := j.getObjValAs? (Array Nat) "utf16" then
+      return .str ⟨units.toList.map Nat.toUInt16⟩
     if let .ok (s : String) := j.getObjValAs? String "bigint" then
       let some i := s.toInt? | throw s!"not a bigint: {s}"
       return .int i
