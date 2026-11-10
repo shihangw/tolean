@@ -59,6 +59,9 @@ inductive Feature where
   | logicalAssignment
   /-- `1_000`: `NumericLiteralSeparator`. -/
   | numericSeparators
+  /-- `xs.findLast(x => p)`, which looks from the end:
+  `Array.prototype.findLast`. -/
+  | arrayFindLast
   /-- `s.trim()` with the white space of Unicode 8.0 or later, which ES2016
   names. ES2015 names Unicode 5.1, where U+180E is white space too. -/
   | trimWhiteSpace
@@ -72,6 +75,7 @@ def Feature.since : Feature → Edition
   | .trimStartEnd => .es2019
   | .bigint | .bigintDivision | .nullishCoalescing | .optionalChaining => .es2020
   | .logicalAssignment | .numericSeparators => .es2021
+  | .arrayFindLast => .es2023
 
 def Feature.describe : Feature → String
   | .exponent => "'**'"
@@ -81,6 +85,7 @@ def Feature.describe : Feature → String
   | .optionalChaining => "'?.'"
   | .logicalAssignment => "'&&=', '||=' and '??='"
   | .numericSeparators => "numeric separators"
+  | .arrayFindLast => "Array.prototype.findLast"
   | .trimWhiteSpace => "the white space of String.prototype.trim without U+180E"
   | .trimStartEnd => "String.prototype.trimStart and trimEnd"
 
