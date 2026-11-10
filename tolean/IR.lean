@@ -665,7 +665,9 @@ itself, and `none` for a value that is not a part of `p`. Each step makes
 def Expr.partOf (depths : List (String × Nat)) : Expr T E → Option Nat
   | .var x => depths.lookup x
   | .field e _ _ | .proj e _ _ => (e.partOf depths).map (· + 1)
-  | .ascribe e _ => e.partOf depths
+  -- `(n : Option T)` may wrap a narrowed `n` in `some` again, which is one
+  -- step up.
+  | .ascribe e ty => (e.partOf depths).map fun d => if ty matches .option _ | .optional _ then d - 1 else d
   | _ => Option.none
 
 /-- The depths after `x` is bound to a value at depth `d` below `p`. -/
