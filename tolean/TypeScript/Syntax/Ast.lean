@@ -395,12 +395,42 @@ def Stmt.mutatesClauses (n : String) : List (Option Expr × List Stmt) → Bool
 
 end
 
-/-- The body of `for (… of iterable)` changes what the loop runs over: the
-array, map or set of a name. A JS loop sees such a change while it runs. -/
+mutual
+
+/-- `e` mentions a name that `p` holds for, outside the arguments of a `new`.
+A `new Map(m)` or `new Set(xs)` copies its argument, so its value is a new
+collection that no name holds. Any other expression may give the collection
+of a name it mentions, such as `(s)`, `s satisfies T`, `c ? s : t` or `f(s)`. -/
+def Expr.mayHold (p : String → Bool) : Expr → Bool
+  | .ident _ n => p n
+  | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .new .. => false
+  | .array _ es => Expr.mayHoldList p es
+  | .object _ ps => Property.mayHoldList p ps
+  | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e =>
+    e.mayHold p
+  | .index _ a b | .binary _ _ a b | .assign _ _ a b => a.mayHold p || b.mayHold p
+  | .call _ c args => c.mayHold p || Expr.mayHoldList p args
+  | .cond _ a b c => a.mayHold p || b.mayHold p || c.mayHold p
+  | .arrow _ _ _ body => body.mayHold p
+  | .asConst _ e | .satisfies _ e _ => e.mayHold p
+
+def Expr.mayHoldList (p : String → Bool) : List Expr → Bool
+  | [] => false
+  | e :: es => e.mayHold p || Expr.mayHoldList p es
+
+def Property.mayHoldList (p : String → Bool) : List Property → Bool
+  | [] => false
+  | .shorthand _ n :: ps => p n || Property.mayHoldList p ps
+  | .keyValue _ _ v :: ps => v.mayHold p || Property.mayHoldList p ps
+
+end
+
+/-- The body of `for (… of iterable)` may change what the loop runs over: it
+changes the array, map or set of a name that `iterable` may give. A JS loop
+sees such a change while it runs. The test is conservative: it does not need
+to know which name, if any, the iterable gives at run time. -/
 def Stmt.mutatesIterable (iterable : Expr) (body : Stmt) : Bool :=
-  match iterable with
-  | .ident _ n => body.mutates n
-  | _ => false
+  iterable.mayHold body.mutates
 
 /-- `s` declares a `const` that a statement of `rest` assigns. In JS that
 assignment throws a `TypeError` (ECMA-262 §9.1.1.1.5), so the spec gives no
