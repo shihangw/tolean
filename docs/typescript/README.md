@@ -20,10 +20,12 @@ marks which links are proved, tested against a reference, or trusted.
   them may be exported, by `export` before it or by an export list such as
   `export { a, type B }`.
 - **Statements:** `const` and `let` declarations, expression statements,
-  `return`, `if` and `else`, `for … of`, the counted `for`, `while`, `switch`,
-  blocks, `break`, `continue` and the empty statement. A counted `for`, such
-  as `for (let i = 0; i < n; i++)`, starts with a `const` or `let`
-  declaration or with nothing. A `break` at the top of a `switch`
+  `return`, `throw`, `if` and `else`, `for … of`, the counted `for`, `while`,
+  `switch`, blocks, `break`, `continue` and the empty statement. A counted
+  `for`, such as `for (let i = 0; i < n; i++)`, starts with a `const` or `let`
+  declaration or with nothing. The value of a `throw` must start on the same
+  line, because ECMA-262 allows no line break after `throw`. The translator
+  accepts only `throw new Error(message)`. A `break` at the top of a `switch`
   clause ends the `switch`, so it may stand outside a loop. The parser
   refuses a `case` test that uses `<` or `<<`, because a `:` does not end its
   search for a `>` after one, and a `switch` with two `default` clauses.
@@ -34,8 +36,9 @@ marks which links are proved, tested against a reference, or trusted.
   binary operators, including `??`, `**`, `in` and `instanceof`; the
   conditional operator; assignment, with every compound operator; arrow
   functions whose body is an expression, such as `x => x + 1` and
-  `(a: number, b) => a * b`; and `e as const` and `e satisfies T`, which
-  bind as `<` does, as they do in `tsc`.
+  `(a: number, b) => a * b`; `e as const` and `e satisfies T`, which
+  bind as `<` does, as they do in `tsc`; and `new C<A, B>(args)`, where `C`
+  is a name.
 - **Types:** keyword types such as `number`, `null`, literal types, named types
   with type arguments, arrays, tuples such as `[A, B]` and `readonly [A, B]`,
   unions and parentheses.
@@ -56,6 +59,12 @@ The parser also refuses an arrow function with a return type, one whose body
 is in braces, and one with an optional parameter: `(a?: T) => a` starts like
 the conditional `(a ? …`. The translator accepts an arrow function only as the
 callback of an array method, such as `xs.map(x => x + 1n)`.
+
+The parser reads `new` only before a name and its arguments in parentheses,
+such as `new Map<string, bigint>()`. It refuses `new a.b()`, `new.target`
+and `new C` without arguments. It also refuses type arguments that start on
+the line after the name, because it reads `C<A>` as a type, and a type ends
+at a line break before `<`. The translator refuses every `new` for now.
 
 In the declaration at the start of a counted `for`, the parser refuses an `in`
 operator unless parentheses, braces, the arguments of a call or an index hold
@@ -118,6 +127,8 @@ evaluates the IR over the interpreter's values. The theorem `program_sound`
 in `Proof/Module.lean` states that when the translator accepts every file of
 a program, a function of the IR gives a value only when the interpreter
 gives the same value for the same call.
+`program_sound_call` states the same for a call that throws: a function of
+the IR throws a value only when the interpreter throws the same value.
 `translate_sound` is the case of one file. It holds for every input,
 every model of numbers and every amount of fuel. The theorem does not assume
 that the types the translator gives are right. It is about the IR, so a
@@ -187,7 +198,9 @@ a certified file trusts the parser and the interpreter, instead of the
 translator. With `--manifest`, the chain records this: the translator link
 becomes `proved`, and so does the parse.
 
-Every function of the subset can get a certificate. A `number` is a value of
+Every function of the subset that cannot throw can get a certificate. A
+certificate has no encoder for `Except` yet, so a file with a function that
+can throw gets none. A `number` is a value of
 the abstract model `JSNumber N` in the interpreter, as it is in the
 translation, so each theorem holds for every `N`, real doubles among them,
 and assumes none of the number laws.
@@ -356,6 +369,8 @@ the file, the line and the reason. It never approximates.
 | `type R = Record<K, V>` or `Readonly<Record<K, V>>`, where `K` is a literal union of strings | `structure R` with one field of type `V` for each string of `K`, in the order of `K`. A value has a property for each string, so an object literal must set every key, in that order, as for an interface. `r.a` and `r['a']` read a field. |
 | `r[k]`, where `r` is such a `Record` and `k` has the type `K` | `match k with \| K.a => r.a \| …`, which reads the field that `k` names |
 | `function` with typed parameters and return type | `def` |
+| `throw new Error(m)`, where `m` is a `string`, as the last statement of a function or of a branch that ends it | `throw (JSError.mk m)`. A function that can throw returns `Except JSError R`, and each value that it returns is `pure` of the value. `JSError`, in `tolean/TypeScript/Spec/Error.lean`, holds the message. |
+| `const x = f(a)`, `let x = f(a)` or `return f(a)`, where `f` can throw, in the statements that end the function | `f a >>= fun x => …`, which passes the error of the call on. So the function that holds the call can throw too. |
 | `const x = e`, `let x = e` | `let x := e` |
 | `x = e`, `x += e`, `x -= e`, `x *= e` on a `let` local | `let x := …` (shadowing) |
 | `x ??= e` on a `let` local of type `T \| null` | `let x := Option.or x e`. JS evaluates `e` only when `x` is `null`. Lean evaluates it either way, but the result is the same, because the subset has no side effects. |
@@ -385,6 +400,12 @@ the file, the line and the reason. It never approximates.
 | `function f<T>(x: T): T`, where the type parameters have no constraint | `def f {T : Type} (x : T) : T`. A call fixes each type parameter from the types of its arguments, and Lean infers the same types. An argument of `T \| null` may be `null`, which leaves `T` to another argument. |
 
 Tolean rejects these, among others:
+
+- `try` and `catch`, and a `throw` of anything but `new Error(message)`. It
+  also rejects a `throw` in a loop body, or in a branch that changes locals,
+  and a call of a function that can throw anywhere but as the whole value of
+  a declaration or a `return`. The output would need `forIn` and `let` in the
+  `Except` monad there.
 
 - Fractional or unsafe `number` literals, such as `0.5` and `2 ** 53`. It also
   rejects `/`, `%` and `Math.*` on `number`, because no law covers them yet.

@@ -105,8 +105,8 @@ def encoderOf (r : Refs) : IR.Ty → Option String
   | .number => some (r.eval "Val.num")
   | .tuple ts => do return s!"({r.eval "encTuple"} {← elementsEncoder r ts})"
   -- A type parameter has no encoder, so a generic function or interface gets no
-  -- certificate yet.
-  | .null | .tag _ | .param _ | .app .. => none
+  -- certificate yet. Neither does a function that can throw.
+  | .null | .tag _ | .param _ | .app .. | .except .. | .error => none
 
 /-- How the elements of a tuple of the types `ts` become a list of `Val`s. -/
 def elementsEncoder (r : Refs) : List IR.Ty → Option String
@@ -129,7 +129,7 @@ def decoderOf (r : Refs) : IR.Ty → Option String
   | .struct ref | .enum ref | .tagged ref => some (r.cert s!"decode{ref.name}")
   | .number => some (r.eval "decNum")
   | .tuple ts => do return s!"({r.eval "decTuple"} {← elementsDecoder r ts})"
-  | .null | .tag _ | .param _ | .app .. => none
+  | .null | .tag _ | .param _ | .app .. | .except .. | .error => none
 
 /-- How a list of `Val`s becomes the elements of a tuple of the types `ts`. -/
 def elementsDecoder (r : Refs) : List IR.Ty → Option String
@@ -312,6 +312,8 @@ partial def bodyCallbacks : IR.Body → List Callback
   | .ite c a b => exprCallbacks c ++ bodyCallbacks a ++ bodyCallbacks b
   | .matchNull _ _ a b | .matchTag _ _ _ _ _ a b | .letState _ a b => bodyCallbacks a ++ bodyCallbacks b
   | .fold _ _ body items rest _ => exprCallbacks items ++ bodyCallbacks body ++ bodyCallbacks rest
+  | .throw e => exprCallbacks e
+  | .bind _ _ args rest => args.flatMap exprCallbacks ++ bodyCallbacks rest
 
 end
 
@@ -375,6 +377,8 @@ partial def loopsOf : IR.Body → List (List String × String × IR.Body × IR.L
   | .ite _ a b | .matchNull _ _ a b | .matchTag _ _ _ _ _ a b => loopsOf a ++ loopsOf b
   | .letState _ branch rest => loopsOf branch ++ loopsOf rest
   | .fold names element body _ rest info => loopsOf body ++ [(names, element, body, info)] ++ loopsOf rest
+  | .throw _ => []
+  | .bind _ _ _ rest => loopsOf rest
 
 /-- `s`, the state of a loop with the locals `names`, as the path to one of
 them: `s`, `s.1`, `s.2.1`, and so on. -/

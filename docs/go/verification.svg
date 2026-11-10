@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="980" height="800" viewBox="0 0 980 800" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-labelledby="title desc">
   <title id="title">Go: what is proved and what is trusted</title>
-  <desc id="desc">Go source goes through Tolean's Lean parser, tested against go/parser, and the Go translator, tested on a corpus, to generated Lean in a state monad. The theorem about the generated code holds for every store that keeps a contract. The store is either a hand-written model, which is trusted, or the store built on translated SQL, whose contract is proved. What runs is the Go binary with a hand-written implementation of the interface.</desc>
+  <desc id="desc">Go source goes through Tolean's Lean parser, tested against go/parser, and the Go translator to generated Lean. For a pure function, a theorem proves that the translator's IR computes only what an interpreter of Go in Lean computes; the rest of the translator is tested on a corpus. Code with effects becomes Lean in a state monad. The theorem about the generated code holds for every store that keeps a contract. The store is either a hand-written model, which is trusted, or the store built on translated SQL, whose contract is proved. What runs is the Go binary with a hand-written implementation of the interface.</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M0,0 L10,5 L0,10 z" fill="#3c4043"/>
@@ -47,9 +47,9 @@
   <path d="M170,231 V261" class="line" marker-end="url(#arrow)"/>
   <rect x="40" y="263" width="260" height="76" rx="8" class="tested"/>
   <text x="170" y="286" text-anchor="middle" class="name">Go translator</text>
-  <text x="170" y="304" text-anchor="middle" class="sub">corpus output fixed and compiled in CI;</text>
-  <text x="170" y="318" text-anchor="middle" class="sub">erases observability code only when it</text>
-  <text x="170" y="332" text-anchor="middle" class="sub">writes nothing else (a syntactic rule)</text>
+  <text x="170" y="304" text-anchor="middle" class="sub">translate_sound: the IR of a pure function</text>
+  <text x="170" y="318" text-anchor="middle" class="sub">computes only what the interpreter does;</text>
+  <text x="170" y="332" text-anchor="middle" class="sub">the rest: corpus output fixed in CI</text>
 
   <!-- go/parser reference -->
   <rect x="40" y="379" width="260" height="46" rx="8" class="ref"/>
@@ -103,11 +103,11 @@
   <text x="580" y="662" text-anchor="middle" class="sub">contract proved;</text>
   <text x="580" y="676" text-anchor="middle" class="sub">see the SQL graph</text>
 
-  <!-- Certificate (planned) -->
-  <rect x="40" y="485" width="260" height="62" rx="8" class="planned"/>
-  <text x="170" y="508" text-anchor="middle" class="name">Go semantics (planned)</text>
-  <text x="170" y="526" text-anchor="middle" class="sub">an executable model of Go, tested on</text>
-  <text x="170" y="540" text-anchor="middle" class="sub">Go's test suite, to prove the translation</text>
+  <!-- Interpreter -->
+  <rect x="40" y="485" width="260" height="62" rx="8" class="untested"/>
+  <text x="170" y="508" text-anchor="middle" class="name">Go interpreter in Lean</text>
+  <text x="170" y="526" text-anchor="middle" class="sub">Spec/Eval.lean: what pure functions mean;</text>
+  <text x="170" y="540" text-anchor="middle" class="sub">not yet tested against the Go runtime</text>
   <path d="M300,516 H358" class="dash" marker-end="url(#arrow)"/>
 
   <!-- What runs -->

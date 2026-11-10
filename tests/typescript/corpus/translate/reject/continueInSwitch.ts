@@ -1,4 +1,4 @@
-// expect: 9:12 a clause of a switch that ends in break may not return, break or continue before its end
+// expect: 9:12 a clause of a switch that ends in break may not return, throw, break or continue before its end
 interface Circle { readonly kind: 'circle'; readonly r: bigint }
 interface Square { readonly kind: 'square'; readonly side: bigint }
 type Shape = Circle | Square;
