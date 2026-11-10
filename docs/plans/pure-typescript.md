@@ -102,7 +102,6 @@ value claim already does.
 | `[...xs]`, `[...xs, x]`, and array destructuring | `List.append` and patterns | Spread of anything that is not an array |
 | `xs.at(i)` and `xs.slice(i, j)` where an argument is not an integer literal (§23.1.3.1, §23.1.3.28) | `ToIntegerOrInfinity` on each argument, then the element or the slice as for literals. It needs `Math.trunc` from the numbers stage. | |
 | `xs.slice(-a, b)` with a negative start and an end that is not negative | `List.drop` and `List.take` with the length of the array | |
-| `{ ...a, f: e }`, where `a` has the declared interface of the result | `{ a with f := e }`. The spread keeps the keys of `a` in their order, so the result keeps the declared order. | Spread of an object of another type, which can change the order of the keys |
 | `[...xs].sort(cmp)` and `xs.toSorted(cmp)` | A stable merge sort. ECMA-262 has required a stable sort since ES2019 (§23.1.3.30). | `sort` on an array that the function does not own, and a comparator that is not consistent |
 
 A comparator is consistent when it orders values as a total preorder. The

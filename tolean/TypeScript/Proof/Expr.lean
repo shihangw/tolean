@@ -1599,7 +1599,7 @@ theorem eval_arrayCall (sp sp' : Span) (recv : Expr) (method : String) (args : L
       (Eval.eval m fuel ρ recv).bind fun
         | .list items => (Eval.evalList m fuel ρ args).bind (Eval.arrayMethod method items)
         | _ => none := by
-  rw [Eval.eval.eq_28]
+  rw [Eval.eval.eq_29]
   · generalize Eval.eval m fuel ρ recv = r
     cases r with
     | none => rfl
@@ -1642,7 +1642,7 @@ theorem eval_slice (sp sp' : Span) (recv : Expr) (args : List Expr) {bounds : Li
         | .list items => some (.list (Eval.sliceList items start stop))
         | _ => none := by
   have hcases := sliceArgs_eq hk hb
-  rw [Eval.eval.eq_27]
+  rw [Eval.eval.eq_28]
   · generalize Eval.eval m fuel ρ recv = r
     cases r with
     | none => rfl
@@ -1665,7 +1665,7 @@ theorem eval_at (sp sp' : Span) (recv arg : Expr) (k : Int) (hk : Eval.intLitera
       (Eval.eval m fuel ρ recv).bind fun
         | .list items => some (Eval.atVal items k)
         | _ => none := by
-  rw [Eval.eval.eq_26]
+  rw [Eval.eval.eq_27]
   · generalize Eval.eval m fuel ρ recv = r
     cases r with
     | none => rfl
@@ -1802,6 +1802,120 @@ theorem translateArrayCall_sound {F : Nat}
   rw [eval_arrayCall m fuel _ _ _ _ _ hr (by simpa using harg) (by simpa using hat) (by simpa using hsl), hrecv]
   simp [hargs, hval]
 
+/-! ### Object spread -/
+
+/-- `{ ...e, props }`: the interpreter evaluates `e`, then the properties after
+it, and sets each of them in the object of `e`. -/
+theorem eval_spread (s sp : Span) (e : Expr) (ps : List Property) (ρ : Eval.Env N) :
+    Eval.eval m fuel ρ (.object s (.spread sp e :: ps)) =
+      (Eval.eval m fuel ρ e).bind fun
+        | .obj obj => (Eval.evalProps m fuel ρ ps).bind fun rest =>
+            some (.obj (rest.foldl (fun acc (k, v) => Eval.setProp acc k v) obj))
+        | _ => none := by
+  rw [Eval.eval]
+  generalize Eval.eval m fuel ρ e = r
+  cases r with
+  | none => rfl
+  | some w => cases w <;> simp [Option.bind_eq_bind]
+
+omit [JSNumber N] in
+theorem spreadOf_some {props : List Property} {base : Expr} {rest : List Property}
+    (h : spreadOf props = some (base, rest)) : ∃ sp, props = .spread sp base :: rest := by
+  unfold spreadOf at h
+  split at h
+  · cases h; exact ⟨_, rfl⟩
+  · cases h
+
+omit [JSNumber N] in
+theorem spreadFieldType_ok {name : String} {fields : List (String × Ty)} {seen : List String} {sp : Span}
+    {key : String} {t : Ty} {ctx ctx' : Ctx} (h : spreadFieldType name fields seen sp key ctx = .ok t ctx') :
+    ctx' = ctx := by
+  simp only [spreadFieldType, bind_ok, orReject_ok, ite_state] at h
+  obtain ⟨t', s₁, ⟨-, rfl⟩, h⟩ := h
+  split at h
+  · simp at h
+  simp only [pure_bind, ite_state] at h
+  split at h
+  · simp at h
+  simp only [pure_ok] at h
+  exact h.2.symm
+
+theorem translateSpread_sound {F : Nat}
+    (ihE : ∀ env exp e ctx c ctx', translateExpr F env exp e ctx = .ok c ctx' →
+      Sim (N := N) m fs fuel env e c.code)
+    {env : Translate.Env} {s : Span} {base : Expr} {rest : List Property} {ctx ctx' : Ctx} {c : Code}
+    (h : translateSpread (F + 1) env s base rest ctx = .ok c ctx') {sp : Span} :
+    Sim (N := N) m fs fuel env (.object s (.spread sp base :: rest)) c.code := by
+  simp only [translateSpread, bind_ok] at h
+  obtain ⟨b, s₁, hb, h⟩ := h
+  cases hst : b.type.structRef? with
+  | none => simp [hst] at h
+  | some ra =>
+    obtain ⟨ref, args⟩ := ra
+    simp only [hst, bind_ok, get_ok, orReject_ok] at h
+    obtain ⟨_, _, ⟨rfl, rfl⟩, info, s₂, ⟨-, rfl⟩, ⟨seen, parts⟩, s₃, hfold, h⟩ := h
+    simp only [pure_ok] at h
+    obtain ⟨rfl, -⟩ := h
+    have key := fold_sim (N := N) (env := env) m fs fuel ?hstep rest [] [] _ _ _ hfold
+    · obtain ⟨new, hnew, hsim⟩ := key
+      simp only [List.nil_append] at hnew
+      subst hnew
+      intro ρs ρo v ha hs hv
+      simp only [IR.Expr.eval] at hv
+      cases hx : IR.Expr.eval fs fuel ρo b.value with
+      | none => simp [hx] at hv
+      | some w =>
+        cases w with
+        | obj obj =>
+          cases hfs : IR.Expr.evalFields fs fuel ρo parts with
+          | none => simp [hx, hfs] at hv
+          | some us =>
+            simp only [hx, hfs, Option.bind_eq_bind, Option.bind_some] at hv
+            rw [eval_value] at hx
+            rw [eval_spread, ihE _ _ _ _ _ _ hb ρs ρo _ ha hs hx]
+            simp only [hsim ρs ρo us ha hs hfs, Option.bind_some]
+            simpa using hv
+        | _ => simp [hx] at hv
+    case hstep =>
+      intro a acc p c₀ r c₁ hg
+      cases p with
+      | shorthand ps name =>
+        simp only [bind_ok, pure_bind] at hg
+        obtain ⟨fieldType, _, hft, v, _, hv, hg⟩ := hg
+        obtain rfl := spreadFieldType_ok hft
+        simp only [ite_state] at hg
+        split at hg
+        · simp only [pure_ok] at hg
+          obtain ⟨rfl, -⟩ := hg
+          refine ⟨name, v.value, rfl, ?_⟩
+          intro ρs ρo w ha hs hw rest
+          rw [eval_value] at hw
+          have := ihE _ _ _ _ _ _ hv ρs ρo w ha hs hw
+          simp [Eval.evalProps, this]
+          cases Eval.evalProps m fuel ρs rest <;> rfl
+        · simp at hg
+      | spread ps v => simp at hg
+      | keyValue ps key val =>
+        cases key with
+        | ident key =>
+          by_cases hk : key = "__proto__"
+          · subst hk; simp at hg
+          simp only [hk, beq_iff_eq, if_false, bind_ok, pure_bind] at hg
+          obtain ⟨fieldType, _, hft, v, _, hv, hg⟩ := hg
+          obtain rfl := spreadFieldType_ok hft
+          simp only [ite_state] at hg
+          split at hg
+          · simp only [pure_ok] at hg
+            obtain ⟨rfl, -⟩ := hg
+            refine ⟨key, v.value, rfl, ?_⟩
+            intro ρs ρo w ha hs hw rest
+            rw [eval_value] at hw
+            have := ihE _ _ _ _ _ _ hv ρs ρo w ha hs hw
+            simp [Eval.evalProps, this, hk]
+            cases Eval.evalProps m fuel ρs rest <;> rfl
+          · simp at hg
+        | _ => simp at hg
+
 omit [JSNumber N] in
 /-- `firstFitting` gives a result of one of its two parsers, from the state it
 starts from. -/
@@ -1837,6 +1951,108 @@ theorem evalList_optArgs (sol : List (String × Ty)) (ρ : Eval.Env N) :
     simp only [optArgs, List.map_cons, IR.Expr.evalList, evalList_optArgs sol ρ cs ps]
     split <;> (try split) <;> simp [IR.Expr.eval]
 
+/-- An object literal of an interface, or of a member of a tagged union. -/
+theorem translateObject_sound {F : Nat}
+    (ihE : ∀ env exp e ctx c ctx', translateExpr F env exp e ctx = .ok c ctx' →
+      Sim (N := N) m fs fuel env e c.code)
+    (ihO : ∀ env exp s ps ctx c ctx', translateObject F env exp s ps ctx = .ok c ctx' →
+      Sim (N := N) m fs fuel env (.object s ps) c.code)
+    {env : Translate.Env} {exp : Option Ty} {sp : Span} {props : List Property} {ctx ctx' : Ctx}
+    {c : Code} (h : translateObject (F + 1) env exp sp props ctx = .ok c ctx') :
+    Sim (N := N) m fs fuel env (.object sp props) c.code := by
+  simp only [translateObject] at h
+  simp at h
+  obtain ⟨_, _, ⟨rfl, rfl⟩, h⟩ := h
+  cases exp with
+  | none => simp at h
+  | some t =>
+    cases t
+    case tagged uref tags =>
+      -- A member of a tagged union: the structure of the member, which the
+      -- evaluator gives as it is.
+      simp only [bind_ok, orReject_ok, ite_state] at h
+      obtain ⟨union, _, ⟨-, rfl⟩, field, _, ⟨-, rfl⟩, tag, _, ⟨-, rfl⟩, h⟩ := h
+      split at h
+      · simp only [bind_ok, orReject_ok] at h
+        obtain ⟨member, _, ⟨-, rfl⟩, h⟩ := h
+        simp only [map_ok] at h
+        obtain ⟨inner, hinner, rfl⟩ := h
+        intro ρs ρo v ha hs hv
+        simp only [IR.Expr.eval] at hv
+        exact ihO _ _ _ _ _ _ _ hinner ρs ρo v ha hs hv
+      · simp at h
+    all_goals try simp at h
+    rename_i structName structArgs
+    obtain ⟨info, _, ⟨-, rfl⟩, seen, parts, s₂, hfold, h⟩ := h
+    have hparts : c.code = .struct parts structName (Ty.leanList structArgs) := by
+      obtain ⟨_, _, -, h⟩ := h
+      split at h
+      · simp at h; rw [← h.1]
+      · simp at h
+    have key := fold_sim (N := N) (env := env) m fs fuel ?hstep props [] [] _ _ _ hfold
+    · obtain ⟨new, hnew, hsim⟩ := key
+      intro ρs ρo v ha hs hv
+      rw [hparts] at hv
+      simp only at hnew
+      rw [hnew] at hv
+      simp only [IR.Expr.eval, List.nil_append] at hv
+      cases hx : IR.Expr.evalFields fs fuel ρo new with
+      | none => simp [hx] at hv
+      | some fvs =>
+        simp [hx] at hv
+        subst hv
+        -- The properties have values, so the first is not a spread, which
+        -- `evalProps` does not read.
+        have hev := hsim ρs ρo fvs ha hs hx
+        rcases props with _ | ⟨p, ps⟩
+        · simp [Eval.eval, hev]
+        · cases p with
+          | spread _ _ => simp [Eval.evalProps] at hev
+          | _ => simp [Eval.eval, hev]
+    case hstep =>
+      intro a acc p c₀ r c₁ hg
+      cases p with
+      | shorthand ps name =>
+        simp at hg
+        obtain ⟨fieldType, _, ⟨-, rfl⟩, hg⟩ := hg
+        split at hg
+        · simp at hg
+        · simp at hg
+          obtain ⟨v, _, hv, hg⟩ := hg
+          split at hg
+          · simp at hg
+            obtain ⟨rfl, -⟩ := hg
+            refine ⟨name, v.value, rfl, ?_⟩
+            intro ρs ρo w ha hs hw rest
+            rw [eval_value] at hw
+            have := ihE _ _ _ _ _ _ hv ρs ρo w ha hs hw
+            simp [Eval.evalProps, this]
+            cases Eval.evalProps m fuel ρs rest <;> rfl
+          · simp at hg
+      | spread ps v => simp at hg
+      | keyValue ps key val =>
+        cases key with
+        | ident key =>
+          by_cases hk : key = "__proto__"
+          · subst hk; simp at hg
+          simp [hk] at hg
+          obtain ⟨fieldType, _, ⟨-, rfl⟩, hg⟩ := hg
+          split at hg
+          · simp at hg
+          · simp at hg
+            obtain ⟨v, _, hv, hg⟩ := hg
+            split at hg
+            · simp at hg
+              obtain ⟨rfl, -⟩ := hg
+              refine ⟨key, v.value, rfl, ?_⟩
+              intro ρs ρo w ha hs hw rest
+              rw [eval_value] at hw
+              have := ihE _ _ _ _ _ _ hv ρs ρo w ha hs hw
+              simp [Eval.evalProps, this, hk]
+              cases Eval.evalProps m fuel ρs rest <;> rfl
+            · simp at hg
+        | _ => simp at hg
+
 theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
     (∀ env exp e ctx c ctx', translateExpr F env exp e ctx = .ok c ctx' →
       Sim (N := N) m fs fuel env e c.code) ∧
@@ -1859,16 +2075,19 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
     (∀ env s o elem key ctx c ctx', translateArrayIndex F env s o elem key ctx = .ok c ctx' →
       ∀ sp obj, Sim (N := N) m fs fuel env obj o.value →
         Sim (N := N) m fs fuel env (.index sp obj key) c.code) ∧
+    (∀ env s base rest ctx c ctx', translateSpread F env s base rest ctx = .ok c ctx' →
+      ∀ sp, Sim (N := N) m fs fuel env (.object s (.spread sp base :: rest)) c.code) ∧
     (∀ env exp e ctx c ctx', translateExprCore F env exp e ctx = .ok c ctx' →
       Sim (N := N) m fs fuel env e c.code) := by
   induction F with
   | zero =>
-    refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩ <;> intros <;>
+    refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩ <;> intros <;>
       simp_all [translateExpr, translateElements, translateArray, translateCall, translateObject,
-        translateBinary, translateArrayMethod, translateArrayCall, translateArrayIndex, translateExprCore]
+        translateBinary, translateArrayMethod, translateArrayCall, translateArrayIndex, translateSpread,
+        translateExprCore]
   | succ F ih =>
-    obtain ⟨ihE, ihL, ihA, ihC, ihO, ihB, ihM, ihK, ihI, ihX⟩ := ih
-    refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+    obtain ⟨ihE, ihL, ihA, ihC, ihO, ihB, ihM, ihK, ihI, ihS, ihX⟩ := ih
+    refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
     -- The core first, then the step that makes a value a member of a union.
     rotate_right
     · intro env exp e ctx c ctx' h
@@ -2239,7 +2458,15 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
             exact ihC _ _ _ _ _ _ _ h
       | object sp props =>
         simp only [translateExprCore] at h
-        exact ihO _ _ _ _ _ _ _ h
+        cases hsp : spreadOf props with
+        | some br =>
+          obtain ⟨base, rest⟩ := br
+          simp only [hsp] at h
+          obtain ⟨sp', rfl⟩ := spreadOf_some hsp
+          exact ihS _ _ _ _ _ _ _ h sp'
+        | none =>
+          simp only [hsp] at h
+          exact ihO _ _ _ _ _ _ _ h
       | array sp elems =>
         simp only [translateExprCore] at h
         cases hexp : exp with
@@ -2399,90 +2626,7 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
           · simp [hn] at h
         all_goals simp at h
     · intro env exp sp props ctx c ctx' h
-      simp only [translateObject] at h
-      simp at h
-      obtain ⟨_, _, ⟨rfl, rfl⟩, h⟩ := h
-      cases exp with
-      | none => simp at h
-      | some t =>
-        cases t
-        case tagged uref tags =>
-          -- A member of a tagged union: the structure of the member, which the
-          -- evaluator gives as it is.
-          simp only [bind_ok, orReject_ok, ite_state] at h
-          obtain ⟨union, _, ⟨-, rfl⟩, field, _, ⟨-, rfl⟩, tag, _, ⟨-, rfl⟩, h⟩ := h
-          split at h
-          · simp only [bind_ok, orReject_ok] at h
-            obtain ⟨member, _, ⟨-, rfl⟩, h⟩ := h
-            simp only [map_ok] at h
-            obtain ⟨inner, hinner, rfl⟩ := h
-            intro ρs ρo v ha hs hv
-            simp only [IR.Expr.eval] at hv
-            exact ihO _ _ _ _ _ _ _ hinner ρs ρo v ha hs hv
-          · simp at h
-        all_goals try simp at h
-        rename_i structName structArgs
-        obtain ⟨info, _, ⟨-, rfl⟩, seen, parts, s₂, hfold, h⟩ := h
-        have hparts : c.code = .struct parts structName (Ty.leanList structArgs) := by
-          obtain ⟨_, _, -, h⟩ := h
-          split at h
-          · simp at h; rw [← h.1]
-          · simp at h
-        have key := fold_sim (N := N) (env := env) m fs fuel ?hstep props [] [] _ _ _ hfold
-        · obtain ⟨new, hnew, hsim⟩ := key
-          intro ρs ρo v ha hs hv
-          rw [hparts] at hv
-          simp only at hnew
-          rw [hnew] at hv
-          simp only [IR.Expr.eval, List.nil_append] at hv
-          cases hx : IR.Expr.evalFields fs fuel ρo new with
-          | none => simp [hx] at hv
-          | some fvs =>
-            simp [hx] at hv
-            subst hv
-            simp [Eval.eval, hsim ρs ρo fvs ha hs hx]
-        case hstep =>
-          intro a acc p c₀ r c₁ hg
-          cases p with
-          | shorthand ps name =>
-            simp at hg
-            obtain ⟨fieldType, _, ⟨-, rfl⟩, hg⟩ := hg
-            split at hg
-            · simp at hg
-            · simp at hg
-              obtain ⟨v, _, hv, hg⟩ := hg
-              split at hg
-              · simp at hg
-                obtain ⟨rfl, -⟩ := hg
-                refine ⟨name, v.value, rfl, ?_⟩
-                intro ρs ρo w ha hs hw rest
-                rw [eval_value] at hw
-                have := ihE _ _ _ _ _ _ hv ρs ρo w ha hs hw
-                simp [Eval.evalProps, this]
-                cases Eval.evalProps m fuel ρs rest <;> rfl
-              · simp at hg
-          | keyValue ps key val =>
-            cases key with
-            | ident key =>
-              by_cases hk : key = "__proto__"
-              · subst hk; simp at hg
-              simp [hk] at hg
-              obtain ⟨fieldType, _, ⟨-, rfl⟩, hg⟩ := hg
-              split at hg
-              · simp at hg
-              · simp at hg
-                obtain ⟨v, _, hv, hg⟩ := hg
-                split at hg
-                · simp at hg
-                  obtain ⟨rfl, -⟩ := hg
-                  refine ⟨key, v.value, rfl, ?_⟩
-                  intro ρs ρo w ha hs hw rest
-                  rw [eval_value] at hw
-                  have := ihE _ _ _ _ _ _ hv ρs ρo w ha hs hw
-                  simp [Eval.evalProps, this, hk]
-                  cases Eval.evalProps m fuel ρs rest <;> rfl
-                · simp at hg
-            | _ => simp at hg
+      exact translateObject_sound m fs fuel ihE ihO h
     · exact translateBinary_sound m fs fuel ihE
     · intro env exp s recv method args ctx c ctx' h sp name hname
       exact translateArrayMethod_sound m fs fuel ihE h hname
@@ -2490,5 +2634,7 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
       exact translateArrayCall_sound m fs fuel ihE h hr
     · intro env s o elem key ctx c ctx' h sp obj hobj
       exact translateArrayIndex_sound m fs fuel ihE h hobj
+    · intro env s base rest ctx c ctx' h sp
+      exact translateSpread_sound m fs fuel ihE h
 
 end tolean.TypeScript.Proof

@@ -198,6 +198,13 @@ def getKey (fields : List (String × Val N)) (key : JSString) : Option (Val N) :
   | some v => some v
   | none => if objectPrototypeNames.any (fun n => JSString.ofString n == key) then none else some .undefined
 
+/-- Set the property `key` of an object with the fields `fields` to `v`
+(`CreateDataProperty` on an ordinary object, ECMA-262 §7.3.5 and §10.1.6.3):
+in its place when the object has it, and at the end when it does not. -/
+def setProp (fields : List (String × Val N)) (key : String) (v : Val N) : List (String × Val N) :=
+  if fields.any (·.1 == key) then fields.map fun (k, w) => (k, if k == key then v else w)
+  else fields ++ [(key, v)]
+
 /-- The property at `path` of an object with the fields `fields`, where each
 property before the last is an object. -/
 def getPath (fields : List (String × Val N)) : List String → Option (Val N)
@@ -471,6 +478,14 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
   -- Type stripping removes `as const` and `satisfies T`.
   | .asConst _ e | .satisfies _ e _ => eval m fuel env e
   | .array _ elems => (evalList m fuel env elems).map .list
+  -- `{ ...e, a: v }`: the properties of the object `e`, in its order
+  -- (`CopyDataProperties`, ECMA-262 §7.3.26), then each later property, set in
+  -- its place when the object has it. A spread of anything but an object
+  -- leaves the subset.
+  | .object _ (.spread _ e :: ps) => do
+    let .obj fs ← eval m fuel env e | none
+    let rest ← evalProps m fuel env ps
+    return .obj (rest.foldl (fun acc (k, v) => setProp acc k v) fs)
   | .object _ props => (evalProps m fuel env props).map .obj
   -- A property read after a `?.` is a part of its optional chain, which is
   -- `undefined` as a whole where the `?.` meets `null` or `undefined`

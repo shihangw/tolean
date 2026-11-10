@@ -387,6 +387,14 @@ export class Gen {
 
   private object(name: string, vars: ReadonlyArray<Var>, depth: number): string {
     const s = this.structs.find((x) => x.name === name);
+    // A spread of a value of the same interface, which then sets some of its
+    // required fields in their places.
+    const bases = vars.filter((x) => !x.owned && x.ty.k === 'struct' && x.ty.name === name);
+    if (bases.length > 0 && this.chance(0.4)) {
+      const set = (s?.fields ?? []).filter(([, ty]) => ty.k !== 'optional' && this.chance(0.5));
+      const parts = set.map(([field, ty]) => `${field}: ${this.expr(ty, vars, depth)}`);
+      return `{ ${[`...${this.pick(bases).name}`, ...parts].join(', ')} }`;
+    }
     const parts = (s?.fields ?? []).map(([field, ty]) => {
       const v = vars.find((x) => x.name === field && same(x.ty, ty) && !x.owned);
       return v !== undefined && this.chance(0.5) ? field : `${field}: ${this.expr(ty, vars, depth)}`;

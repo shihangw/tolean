@@ -142,6 +142,23 @@ def Ty.unoptional : Ty → Ty
   | .optional t => t
   | t => t
 
+/-- The spread that an object literal starts with, and the properties after
+it. -/
+def spreadOf : List Property → Option (Expr × List Property)
+  | .spread _ base :: rest => some (base, rest)
+  | _ => none
+
+/-- The interface of a value of an interface type, with its type arguments. -/
+def Ty.structRef? : Ty → Option (DeclRef × List Ty)
+  | .struct ref args => some (ref, args)
+  | _ => none
+
+/-- An optional field, or a tag field, which a property after a spread may
+not set. -/
+def Ty.isMaybeField : Ty → Bool
+  | .optional _ | .literal _ => true
+  | _ => false
+
 /-- `T | null`. -/
 def Ty.isNullable : Ty → Bool
   | .nullable _ => true
@@ -940,7 +957,7 @@ def exprsChanges : List Expr → List String
 
 def propsChanges : List Property → List String
   | [] => []
-  | .keyValue _ _ v :: ps => exprChanges v ++ propsChanges ps
+  | .keyValue _ _ v :: ps | .spread _ v :: ps => exprChanges v ++ propsChanges ps
   | .shorthand .. :: ps => propsChanges ps
 
 end
@@ -1310,6 +1327,18 @@ def callbackOf : List Expr → Option (Param × Expr)
   | [.arrow _ _ [p] body] => some (p, body)
   | _ => none
 
+/-- The type of the field `key` that a property after a spread sets, where
+`seen` are the keys set before it. JS appends a key that the spread did not
+copy, and Lean keeps the declared order, so the field may not be optional. A
+tag field holds its one string already. -/
+def spreadFieldType (structName : String) (fields : List (String × Ty)) (seen : List String) (span : Span)
+    (key : String) : TM Ty := do
+  let t ← orReject (fields.lookup key) span s!"'{key}' is not a field of {structName}"
+  if seen.contains key then reject span s!"'{key}' is set twice"
+  if t.isMaybeField then
+    reject span s!"'{key}' is optional or a tag; after a spread only a required field may be set"
+  return t
+
 /-- `e` is the name `Number`. -/
 def _root_.tolean.TypeScript.Syntax.Expr.namesNumber : Expr → Bool
   | .ident _ "Number" => true
@@ -1636,7 +1665,10 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
       match arrayCallOf callee with
       | some (recv, method) => translateArrayCall fuel env s recv method args
       | none => translateCall fuel env s callee args
-  | .object s props => translateObject fuel env expected s props
+  | .object s props =>
+    match spreadOf props with
+    | some (base, rest) => translateSpread fuel env s base rest
+    | none => translateObject fuel env expected s props
   | .array s elems =>
     match expected with
     | some (.tuple tys) =>
@@ -1841,6 +1873,7 @@ def translateObject (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (
     fun (seen, parts) p => do
       let (key, value, span) ← match p with
         | .shorthand ps name => pure (name, Expr.ident ps name, ps)
+        | .spread ps _ => reject ps "a spread '...' may only come first in an object literal"
         | .keyValue ps (.ident key) v =>
           if key == "__proto__" then reject ps "'__proto__: v' sets the prototype of the object, not a field"
           else pure (key, v, ps)
@@ -1863,6 +1896,32 @@ def translateObject (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (
   unless seen == declared do
     reject s s!"write the fields in the order that {structName} declares them: {", ".intercalate declared}"
   return ⟨.struct parts ref (Ty.leanList args), false, .struct ref args⟩
+
+/-- `{ ...a, f: e }`, where `a` has an interface: `{ a with f := e }`. The
+spread keeps the keys of `a` in their order, and each property after it sets
+a field of `a` in its place, so the object keeps the declared order. -/
+def translateSpread (fuel : Nat) (env : Env) (s : Span) (base : Expr) (rest : List Property) :
+    TM Code := do
+  let fuel + 1 := fuel | tooDeep
+  let b ← translateExpr fuel env none base
+  let some (ref, args) := b.type.structRef?
+    | reject s "a spread '...' needs a value of an interface declared in this file, or exported by the files before it"
+  let info ← orReject ((← get).knownStructs.find? (·.ref == ref)) base.span
+    "a spread '...' needs a value of an interface declared in this file, or exported by the files before it"
+  let (_, parts) ← rest.foldlM (init := (([] : List String), ([] : List (String × IR.Expr))))
+    fun (seen, parts) p => do
+      let (key, value, span) ← match p with
+        | .shorthand ps name => pure (name, Expr.ident ps name, ps)
+        | .spread ps _ => reject ps "a spread '...' may only come first in an object literal"
+        | .keyValue ps (.ident key) v =>
+          if key == "__proto__" then reject ps "'__proto__: v' sets the prototype of the object, not a field"
+          else pure (key, v, ps)
+        | .keyValue ps _ _ => reject ps "object literal fields must be plain name: value pairs"
+      let fieldType ← spreadFieldType info.name (info.fieldsAt args) seen span key
+      let v ← translateExpr fuel env (some fieldType) value
+      unless v.type.assignableTo fieldType do reject span s!"'{key}' does not have the field's type"
+      pure (seen ++ [key], parts ++ [(key, v.value)])
+  return ⟨.structUpdate b.value parts, false, b.type⟩
 
 def translateBinary (fuel : Nat) (env : Env) (s : Span) (op : BinOp) (l r : Expr) : TM Code := do
   let fuel + 1 := fuel | tooDeep
@@ -2657,6 +2716,7 @@ def propsUseNumber : List Property → Bool
   | [] => false
   | .shorthand _ name :: ps => isNumberName name || propsUseNumber ps
   | .keyValue _ key value :: ps => (keyUsesNumber key || exprUsesNumber value) || propsUseNumber ps
+  | .spread _ value :: ps => exprUsesNumber value || propsUseNumber ps
 
 end
 

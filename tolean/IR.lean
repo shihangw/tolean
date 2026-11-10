@@ -190,6 +190,9 @@ inductive Expr (T E : Type) where
   `x` and `elem` is `T`. -/
   | listMethod (method : ListMethod) (items : Expr T E) (param : String) (elem : Ty T)
       (body : Expr T E) (info : CallbackInfo T)
+  /-- `{ base with f := e, … }`: the structure `base` with the fields `fields`
+  set. -/
+  | structUpdate (base : Expr T E) (fields : List (String × Expr T E))
 deriving Repr, Inhabited
 
 /-- What the printer and a certificate need to know about a loop, besides its
@@ -321,6 +324,7 @@ def Expr.refs : Expr T E → List DeclRef
   | .tuple es => Expr.refsList es
   | .proj e _ _ => e.refs
   | .listMethod _ items _ t body _ => items.refs ++ t.refs ++ body.refs
+  | .structUpdate base fields => base.refs ++ Expr.refsFields fields
   | .tagValue _ => []
   | .int _ | .none | .bool _ | .string _ | .var _ => []
 
@@ -389,6 +393,7 @@ def Expr.usesString : Expr T E → Bool
   | .tuple es => Expr.usesStringList es
   | .proj e _ _ => e.usesString
   | .listMethod _ items _ t body _ => items.usesString || t.usesString || body.usesString
+  | .structUpdate base fields => base.usesString || Expr.usesStringFields fields
   -- The printer leaves a tag value out, as it leaves the tag field out.
   | .int _ | .none | .bool _ | .var _ | .enumCase .. | .tagValue _ => false
 
@@ -684,6 +689,11 @@ def Expr.print (names : Names) : Expr T E → String
     | .any => s!"({leanName names "List.any"} {xs} {fn})"
     | .all => s!"({leanName names "List.all"} {xs} {fn})"
     | .find => s!"({leanName names "List.find?"} {fn} {xs})"
+  | .structUpdate base fields =>
+    if fields.isEmpty then base.print names
+    else
+      let sets := ", ".intercalate (Expr.printFields names fields)
+      s!"\{ {argument (base.print names)} with {sets} }"
   | .bool b => if b then "true" else "false"
   | .string s => PrintTy.stringLit (T := T) names s
   | .var name => name

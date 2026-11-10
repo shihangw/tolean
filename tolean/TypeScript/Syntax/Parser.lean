@@ -656,12 +656,15 @@ def parseProperty (fuel : Nat) : ParseM Property := do
   let fuel + 1 := fuel | outOfFuel
   let t ← advance
   let start := t.span.start
+  -- `...e` copies the properties of `e`.
+  if t.isPunct "..." then
+    let value ← parseAssign fuel
+    return .spread (← spanFrom start) value
   let key : PropKey ← match t.kind with
     | .ident name | .keyword name => pure (.ident name)
     | .string value => pure (.string value)
     | .number text => pure (.number text)
     | .punct "[" => failAt t "computed property names are not supported"
-    | .punct "..." => failAt t "spread properties are not supported"
     | _ => unexpected t "a property"
   let next ← peek
   if next.isPunct ":" then

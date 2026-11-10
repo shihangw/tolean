@@ -126,6 +126,7 @@ def Expr.beqList : List Expr → List Expr → Bool
 def Property.beq : Property → Property → Bool
   | .shorthand a0 a1, .shorthand b0 b1 => decide (a0 = b0) && decide (a1 = b1)
   | .keyValue a0 a1 a2, .keyValue b0 b1 b2 => decide (a0 = b0) && decide (a1 = b1) && Expr.beq a2 b2
+  | .spread a0 a1, .spread b0 b1 => decide (a0 = b0) && Expr.beq a1 b1
   | _, _ => false
 
 def Property.beqList : List Property → List Property → Bool
@@ -198,6 +199,8 @@ theorem Property.beq_iff : (a b : Property) → Property.beq a b = true ↔ a = 
     cases b <;> simp [and_assoc, Property.beq]
   | .keyValue a0 a1 a2, b => by
     cases b <;> simp [and_assoc, Property.beq, Expr.beq_iff a2]
+  | .spread a0 a1, b => by
+    cases b <;> simp [and_assoc, Property.beq, Expr.beq_iff a1]
 
 theorem Property.beqList_iff : (xs ys : List Property) → Property.beqList xs ys = true ↔ xs = ys
   | [], ys => by cases ys <;> simp [and_assoc, Property.beqList]

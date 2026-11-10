@@ -178,6 +178,7 @@ def Expr.wordsOf : List Expr → List (List Word)
 def Property.words : Property → List Word
   | .shorthand _ name => [identWord name]
   | .keyValue _ key value => key.words ++ punctWord ":" :: value.words
+  | .spread _ value => punctWord "..." :: value.words
 
 def Property.wordsOf : List Property → List (List Word)
   | [] => []
@@ -384,6 +385,7 @@ def Expr.eraseAll : List Expr → List Expr
 def Property.erase : Property → Property
   | .shorthand _ name => .shorthand noSpan name
   | .keyValue _ key value => .keyValue noSpan key value.erase
+  | .spread _ value => .spread noSpan value.erase
 
 def Property.eraseAll : List Property → List Property
   | [] => []

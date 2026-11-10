@@ -71,6 +71,7 @@ partial def Expr.toSexp : Expr → Sexp
 partial def Property.toSexp : Property → Sexp
   | .shorthand s name => node "shorthand" s [name] []
   | .keyValue s key value => node "property" s [key.atom] [value.toSexp]
+  | .spread s value => node "spread" s [] [value.toSexp]
 
 end
 

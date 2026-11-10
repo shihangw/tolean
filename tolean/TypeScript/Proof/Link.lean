@@ -433,7 +433,7 @@ macro_rules
     `(tactic| (
       simp [runIn, functionsOf, functions, Body.exec, Body.runFold, Expr.eval, Expr.evalList,
         Expr.evalFields, Expr.evalMap, Expr.evalFilter, Expr.evalFind, bindState, eqVal,
-        Eval.includesVal, Eval.sameValueZero,
+        Eval.includesVal, Eval.sameValueZero, Eval.setProp,
         tolean.IR.IntOp.apply, tolean.IR.Order.apply,
         tolean.IR.Division.apply, ExprExt.apply, NumberOp.apply, NumberConstant.value,
         NumberTest.apply, tagOf, Eval.Val.typeOf, Eval.Env.set, Eval.getProp, Eval.getKey_ofString, Eval.getPath,

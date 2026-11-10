@@ -382,6 +382,7 @@ the file, the line and the reason. It never approximates.
 | `+ - *`, `< <= > >=`, `=== !==`, `&& \|\| !` | the same operators on `Int`, `Bool`, `Prop` |
 | `a / k`, `a % k` on `bigint`, where `k` is a nonzero literal | `Int.tdiv a k`, `Int.tmod a k` (both truncate toward zero, as JS does) |
 | `{ a, b: e }` building a declared interface | structure instance |
+| `{ ...a, f: e }`, where `a` has an interface | `{ a with f := e }`. The spread keeps the keys of `a` in their order, and each property after it sets a required field in its place, so the object keeps the declared order. `{ ...a }` is `a`. |
 | Call to a function declared earlier in the file | application |
 | `interface Box<T> { readonly value: T }`, where the type parameters have no constraint | `structure Box (T : Type)`. `Box<bigint>` becomes `Box Int`, and a read of a field has the field's type with `bigint` for `T`. An object literal where a `Box<bigint>` is expected becomes `({ value := … } : (Box Int))`. |
 | `type Maybe<T> = T \| null` | `abbrev Maybe (T : Type) := Option T`. As for any alias, the output writes the type itself wherever the source names it, so `Maybe<bigint>` becomes `Option Int`. |
@@ -432,6 +433,10 @@ Tolean rejects these, among others:
   for every method but `map` it must give a boolean. Tolean also refuses
   `find` on an array of nullable values, because Lean's `none` would stand
   for both `null` and `undefined`.
+- A spread anywhere but first in an object literal, a spread of a value that
+  is not of an interface, and a property after a spread that sets an
+  optional field or a tag field. JS appends a key that the spread did not
+  copy, so the order of the keys would differ from the declared one.
 - `includes` on an array of objects or of nullable values, and its second
   argument, the index to start at. On objects `includes` compares
   references. Tolean also refuses a call of any other array method that takes

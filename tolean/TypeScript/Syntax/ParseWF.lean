@@ -2509,6 +2509,7 @@ theorem parseProperty_gives {T : Edition} {f : Nat} (hA : GivesE T .assign (Pars
   | ident name =>
     obtain ⟨rfl, hR₁⟩ := hpast (by simp)
     simp only at h
+    rw [if_neg (by simp [Token.isPunct, hk]), Parse.pure_bind] at h
     obtain ⟨n, r₁, hs₁⟩ := hR₁.cons
     rw [Parse.pure_bind, Parse.bind_eq (Parse.peek_eq hs₁)] at h
     by_cases hc : n.isPunct ":" = true
@@ -2533,6 +2534,7 @@ theorem parseProperty_gives {T : Edition} {f : Nat} (hA : GivesE T .assign (Pars
   | keyword name =>
     obtain ⟨rfl, hR₁⟩ := hpast (by simp)
     simp only at h
+    rw [if_neg (by simp [Token.isPunct, hk]), Parse.pure_bind] at h
     obtain ⟨n, r₁, hs₁⟩ := hR₁.cons
     rw [Parse.pure_bind, Parse.bind_eq (Parse.peek_eq hs₁)] at h
     by_cases hc : n.isPunct ":" = true
@@ -2549,6 +2551,7 @@ theorem parseProperty_gives {T : Edition} {f : Nat} (hA : GivesE T .assign (Pars
   | string v | number v =>
     obtain ⟨rfl, hR₁⟩ := hpast (by simp)
     simp only at h
+    rw [if_neg (by simp [Token.isPunct, hk]), Parse.pure_bind] at h
     obtain ⟨n, r₁, hs₁⟩ := hR₁.cons
     rw [Parse.pure_bind, Parse.bind_eq (Parse.peek_eq hs₁)] at h
     by_cases hc : n.isPunct ":" = true
@@ -2564,11 +2567,28 @@ theorem parseProperty_gives {T : Edition} {f : Nat} (hA : GivesE T .assign (Pars
     exact absurd h (Parse.unexpected_ne_ok _ _ _ _ _)
   | punct p =>
     by_cases h1 : p = "["
-    · subst h1; simp at h
+    · subst h1; simp [Token.isPunct, hk] at h
     by_cases h2 : p = "..."
-    · subst h2; simp at h
-    simp [h1, h2] at h
-  | _ => simp at h
+    · -- `...e`: the value, as the value of a key and value.
+      subst h2
+      obtain ⟨rfl, hR₁⟩ := hpast (by simp)
+      rw [if_pos (by simp [Token.isPunct, hk])] at h
+      rw [Parse.bind_ok] at h; obtain ⟨value, s₂, hv, h⟩ := h
+      have gv := hA _ _ _ hR₁ hT hv
+      rw [Parse.bind_eq (Parse.spanFrom_eq _ _)] at h
+      simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h
+      obtain ⟨vsrc, hv1, hv2, _⟩ := gv.tokens
+      refine ⟨gv.ready, (Kept.past _ _ _).trans gv.kept, ⟨t :: vsrc, ?_, ?_⟩, ?_, ?_⟩
+      · rw [hs, show r = vsrc ++ s₂.rest from hv1]; rfl
+      · simp only [Property.tokens, Property.words, punctWord, List.flatten_cons, List.map_cons]
+        rw [show t.kind :: vsrc.map (·.kind) = [t.kind] ++ vsrc.map (·.kind) from rfl, skel_append,
+          skel_append, hk, hv2]
+        rfl
+      · exact both (by simpa [Property.wf] using gv.wf) (by
+          simpa [Property.words, punctWord] using WordsOK.cons (ok_punct (p := "...") (by decide)) gv.ok)
+      · intro after hf; simpa [Property.afterOK] using gv.after after hf
+    simp [h1, h2, Token.isPunct, hk] at h
+  | _ => simp [Token.isPunct, hk] at h
 
 theorem parseObjectLiteral_gives {T : Edition} {f : Nat}
     (hP : GivesItem T (fun q => Property.wf T q && q.words.all (Word.ok T)) Property.tokens
