@@ -96,9 +96,11 @@ inductive Division where
 deriving BEq, Repr, Inhabited
 
 /-- A function on lists that takes a function on the elements: `List.map`,
-`List.filter`, `List.any`, `List.all` and `List.find?`. -/
+`List.filter`, `List.any`, `List.all` and `List.find?`, or `List.mapIdx`,
+whose function also takes the position of the element, bound to `index`. -/
 inductive ListMethod where
   | map | filter | any | all | find
+  | mapIdx (index : String)
 deriving BEq, Repr, Inhabited
 
 /-- What a certificate needs to know about a callback, besides its code. The
@@ -198,7 +200,8 @@ inductive Expr (T E : Type) where
   | proj (e : Expr T E) (index size : Nat)
   /-- `(List.map (fun (x : T) => body) items)`, or another `method` with the
   function `fun (x : T) => body` on the elements of `items`, where `param` is
-  `x` and `elem` is `T`. -/
+  `x` and `elem` is `T`. For `List.mapIdx`, the function also binds the
+  position of the element, written as the language writes an index. -/
   | listMethod (method : ListMethod) (items : Expr T E) (param : String) (elem : Ty T)
       (body : Expr T E) (info : CallbackInfo T)
 deriving Repr, Inhabited
@@ -580,7 +583,7 @@ def Names.ref (names : Names) (r : DeclRef) : String × Option String :=
 names from the root. -/
 def leanNames : List (String × String) :=
   [("decide", "Decidable.decide"), ("List", "List"), ("Option", "Option"),
-   ("some", "Option.some"), ("none", "Option.none"), ("Int", "Int"), ("Bool", "Bool"),
+   ("some", "Option.some"), ("none", "Option.none"), ("Int", "Int"), ("Nat", "Nat"), ("Bool", "Bool"),
    ("String", "String"), ("DecidableEq", "DecidableEq"), ("Repr", "Repr"), ("Except", "Except")]
 
 /-- Write the Lean name `name` (or `name.rest`), from the root when the source
@@ -637,6 +640,9 @@ class PrintTy (T : Type) where
   be an application, such as `JSString.ofString "a"`, so the printer puts it
   in parentheses where it is an argument. -/
   stringLit : Names → String → String := fun _ s => Sexp.quote s
+  /-- The position `index`, a `Nat`, as a value of the type that the
+  language gives the index of an array, such as `JSNumber.ofSafeInt` of it. -/
+  indexValue : Names → String → String := fun names i => s!"({leanName names "Int"}.ofNat {i})"
   /-- The name of the type of a map that keeps its entries in insertion
   order, which takes the key type and the value type, such as `JSMap`. -/
   map : Names → String
@@ -986,6 +992,13 @@ def Expr.print (names : Names) : Expr T E → String
     | .any => s!"({leanName names "List.any"} {xs} {fn})"
     | .all => s!"({leanName names "List.all"} {xs} {fn})"
     | .find => s!"({leanName names "List.find?"} {fn} {xs})"
+    | .mapIdx index =>
+      -- The function takes the position as a `Nat` and binds it again under
+      -- the same name, as a value of the type the language gives an index.
+      let value := PrintTy.indexValue (T := T) names index
+      let fn := s!"(fun ({index} : {leanName names "Nat"}) ({param} : {elem.print names}) => " ++
+        s!"let {index} := {value}; {body.print names})"
+      s!"({leanName names "List.mapIdx"} {fn} {xs})"
   | .bool b => if b then "true" else "false"
   | .string s => PrintTy.stringLit (T := T) names s
   | .var name => name

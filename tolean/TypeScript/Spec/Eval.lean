@@ -616,6 +616,14 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
       return .bool (← evalFind m fuel env p.name body false items).isNone
     else if method == "find" then return (← evalFind m fuel env p.name body true items).getD .undefined
     else none
+  -- `xs.map((x, i) => e)`: `map` passes the index too, as a number
+  -- (ECMA-262 §23.1.3.21, step 6.c.ii). An array has fewer than 2^32
+  -- elements, so the index is a safe integer. Two parameters of one arrow
+  -- function may not have the same name (§15.3.1).
+  | .call _ (.member _ recv method) [.arrow _ _ [p, q] body] => do
+    if method != "map" || p.name == q.name then none
+    let .list items ← eval m fuel env recv | none
+    return .list (← evalMapIdx m fuel env p.name q.name body 0 items)
   -- `m.get(k)` and `m.has(k)` on a map (ECMA-262 §24.1.3.6 and §24.1.3.7).
   -- `get` gives `undefined` for a key that the map does not have.
   -- `s.has(x)` on a set (ECMA-262 §24.2.4.8).
@@ -732,6 +740,17 @@ def evalMap (m : Scope) (fuel : Nat) (env : Env N) (name : String) (body : Expr)
   | [] => some []
   | x :: xs => do
     return (← eval m fuel ((name, x) :: env) body) :: (← evalMap m fuel env name body xs)
+termination_by xs => (fuel, sizeOf body, xs.length + 1)
+
+/-- The callback `(name, index) => body` on each of `items`, where the first
+of them is at position `start`: the values that `Array.prototype.map` puts
+in its new array, when the callback reads the index. -/
+def evalMapIdx (m : Scope) (fuel : Nat) (env : Env N) (name index : String) (body : Expr)
+    (start : Nat) : List (Val N) → Option (List (Val N))
+  | [] => some []
+  | x :: xs => do
+    let v ← eval m fuel ((name, x) :: (index, .num (JSNumber.ofSafeInt start)) :: env) body
+    return v :: (← evalMapIdx m fuel env name index body (start + 1) xs)
 termination_by xs => (fuel, sizeOf body, xs.length + 1)
 
 /-- The elements of `items` for which the callback `(name) => body` gives a

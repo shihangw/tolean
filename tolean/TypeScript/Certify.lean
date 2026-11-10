@@ -636,7 +636,14 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       -- loop's step does, and the lemma reads them back out of `ρ`.
       let captured := if scope.isEmpty then "" else
         s!"fun {" ".intercalate (scope.map fun (n, t) => s!"({n} : {t.print names})")} => "
-      let fn := s!"(({captured}fun ({param} : {elem.print names}) => ({cbBody.print names} : {info.result.print names}))" ++
+      -- The function of `List.mapIdx` binds the index first, as a `Nat`, and
+      -- then as the number that the body reads, as the printer writes it.
+      let binders := match method with
+        | .mapIdx index =>
+          s!"fun ({index} : {tolean.IR.leanName names "Nat"}) ({param} : {elem.print names}) => " ++
+            s!"let {index} := {tolean.IR.PrintTy.indexValue (T := IR.TyExt) names index}; "
+        | _ => s!"fun ({param} : {elem.print names}) => "
+      let fn := s!"(({captured}{binders}({cbBody.print names} : {info.result.print names}))" ++
         String.join (scope.map fun (n, _) => s!" {decode n}") ++ ")"
       -- A body with calls needs the fuel of their depth, as a loop's does.
       let depth := match callAt syntaxBody info.span with
@@ -660,12 +667,19 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       let (evalFn, want, result, fromLemma) := match method with
         | .map => ("evalMap", "", s!"List.map {encY} (List.map {fn} items)",
             s!"evalMap_map fs {fuel} ρ {str param} _ {encX} {encY} {fn}")
+        | .mapIdx index => ("evalMapIdx", "", s!"List.map {encY} (List.mapIdx {fn} items)",
+            s!"evalMapIdx_mapIdx fs {fuel} ρ {str param} {str index} _ {encX} {encY} {fn}")
         | .filter => ("evalFilter", "", s!"List.map {encX} (List.filter {fn} items)",
             s!"evalFilter_filter fs {fuel} ρ {str param} _ {encX} {fn}")
         | .any | .find => ("evalFind", " true", s!"Option.map {encX} (List.find? {fn} items)",
             s!"evalFind_true fs {fuel} ρ {str param} _ {encX} {fn}")
         | .all => ("evalFind", " false", s!"Option.map {encX} (List.find? (fun x => !({fn} x)) items)",
             s!"evalFind_false fs {fuel} ρ {str param} _ {encX} {fn}")
+      let (indexArg, start, intros) := match method with
+        -- The proof names the index `idx`, not by its name in the source,
+        -- which could hide one of the lemma's hypotheses, such as `hI`.
+        | .mapIdx index => (s!" {str index}", " 0", "idx x")
+        | _ => ("", "", "x")
       let itemsTy := (IR.Ty.list elem).print names
       let vars := ("x", elem) :: scope.zipIdx.map fun ((_, t), i) => (s!"v{i}", t)
       let simpSet := ", ".intercalate (hfsName ++ envLemmas ++ lemmaNames.toList ++ loopLemmas.toList ++ defs ++ hypNames)
@@ -673,10 +687,10 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       thms := thms.push <|
         s!"theorem {lemmaName} {generic} (fs : List (tolean.DeclRef × List String × tolean.TypeScript.IR.Body)){hfs}\n" ++
         s!"    (fuel : Nat) (ρ : Env {nv}){hI} (items : {itemsTy}) :\n" ++
-        s!"    tolean.TypeScript.IR.Expr.{evalFn} fs {fuel} ρ {str param} ({term cbBody}){want}\n" ++
+        s!"    tolean.TypeScript.IR.Expr.{evalFn} fs {fuel} ρ {str param}{indexArg} ({term cbBody}){want}{start}\n" ++
         s!"      (List.map {encX} items) = some ({result}) := by\n" ++
         s!"  refine tolean.TypeScript.Proof.{fromLemma} ?_ items\n" ++
-        s!"  intro x\n" ++ substHfs ++ unpack ++
+        s!"  intro {intros}\n" ++ substHfs ++ unpack ++
         s!"  {casesOn decls vars}link_tac [{simpSet}]"
     let mut index := 0
     let mut returnsLoop := false

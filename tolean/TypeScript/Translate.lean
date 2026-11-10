@@ -1403,6 +1403,12 @@ def callbackOf : List Expr → Option (Param × Expr)
   | [.arrow _ _ [p] body] => some (p, body)
   | _ => none
 
+/-- The element parameter, the index parameter and the body of the one
+argument of `map`, when it is an arrow function with two parameters. -/
+def indexedCallbackOf : IR.ListMethod → List Expr → Option (Param × Param × Expr)
+  | .map, [.arrow _ _ [p, q] body] => some (p, q, body)
+  | _, _ => none
+
 /-- `e` is the name `Number`. -/
 def _root_.tolean.TypeScript.Syntax.Expr.namesNumber : Expr → Bool
   | .ident _ "Number" => true
@@ -1554,6 +1560,12 @@ def checkParamType (p : Param) (elem : Ty) : TM Unit := do
   if let some t := p.type then
     unless (← translateType t) == elem do
       reject p.span "the parameter must have the element type of the array"
+
+/-- The index parameter of a callback of `map`, if it has a type, has the type
+`number`. -/
+def checkIndexType (q : Param) : TM Unit := do
+  if let some t := q.type then
+    unless (← translateType t) == .number do reject q.span "the index of an array is a number"
 
 /-- The type that the body of a callback is translated for: for `map`, the
 element type of the array that the context expects, which an object literal
@@ -1926,9 +1938,25 @@ callback with one parameter ignores. -/
 def translateArrayMethod (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (recv : Expr)
     (method : IR.ListMethod) (args : List Expr) : TM Code := do
   let fuel + 1 := fuel | tooDeep
+  -- `xs.map((x, i) => e)` becomes `List.mapIdx`, whose function binds the
+  -- index as a number.
+  if let some (p, q, body) := indexedCallbackOf method args then
+    if recv.namesNumber then reject recv.span "only an array has this method"
+    let xs ← translateExpr fuel env none recv
+    let elem ← orReject xs.type.element? recv.span "only an array has this method"
+    checkParamType p elem
+    checkIndexType q
+    let withIndex ← declare env q.span q.name .param .number
+    let inner ← declare withIndex p.span p.name .param elem
+    let b ← translateExpr fuel inner (callbackExpected .map expected) body
+    let type ← callbackResult s body.span .map elem b.type
+    let info : IR.CallbackInfo IR.TyExt :=
+      { span := s, result := b.type.lean, scope := env.locals.map fun l => (l.name, l.type.lean) }
+    return ⟨.listMethod (.mapIdx q.name) xs.value p.name elem.lean b.value info, false, type⟩
   let (p, body) ← orReject (callbackOf args) s
     ("an array method here takes one arrow function with one parameter, such as " ++
-      "xs.map(x => x + 1n); the index and array parameters are not supported yet")
+      "xs.map(x => x + 1n). Only the callback of map may also take the index, " ++
+      "and no callback may take the array yet")
   -- `Number.map` is a property of the global `Number`, not of an array.
   if recv.namesNumber then reject recv.span "only an array has this method"
   let xs ← translateExpr fuel env none recv
@@ -2941,7 +2969,9 @@ def exprUsesNumber : Expr → Bool
   | .cond _ a b c => exprUsesNumber a || exprUsesNumber b || exprUsesNumber c
   -- `new Map<bigint, number>()` names `number` only in its type arguments.
   | .new _ callee typeArgs args => isNumberName callee || typesUseNumber typeArgs || exprsUseNumber args
+  -- The index that `map` passes to a second parameter is a number.
   | .arrow _ _ ps body =>
+    ps.length ≥ 2 ||
     ps.any (fun p => isNumberName p.name || (p.type.map typeUsesNumber).getD false) ||
       exprUsesNumber body
   | _ => false

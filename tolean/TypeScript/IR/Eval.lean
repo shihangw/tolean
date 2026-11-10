@@ -239,6 +239,7 @@ def Expr.eval (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
     | .any => return .bool (← Expr.evalFind fs fuel ρ param body true xs).isSome
     | .all => return .bool (← Expr.evalFind fs fuel ρ param body false xs).isNone
     | .find => return (← Expr.evalFind fs fuel ρ param body true xs).getD .undefined
+    | .mapIdx index => return .list (← Expr.evalMapIdx fs fuel ρ param index body 0 xs)
 termination_by e => (fuel, sizeOf e, 0)
 
 /-- A call of the function `ref` of the output with `args`: `.ok` of the
@@ -262,6 +263,16 @@ def Expr.evalMap (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ :
   | [] => some []
   | x :: xs => do
     return (← Expr.eval fs fuel ((param, x) :: ρ) body) :: (← Expr.evalMap fs fuel ρ param body xs)
+termination_by xs => (fuel, sizeOf body, xs.length + 1)
+
+/-- `List.mapIdx (fun index param => body)` on `xs`, whose first element is at
+position `start`. The body sees the position as a number. -/
+def Expr.evalMapIdx (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : Env N)
+    (param index : String) (body : Expr) (start : Nat) : List (Val N) → Option (List (Val N))
+  | [] => some []
+  | x :: xs => do
+    let v ← Expr.eval fs fuel ((param, x) :: (index, .num (JSNumber.ofSafeInt start)) :: ρ) body
+    return v :: (← Expr.evalMapIdx fs fuel ρ param index body (start + 1) xs)
 termination_by xs => (fuel, sizeOf body, xs.length + 1)
 
 /-- `List.filter (fun param => body)` on `xs`, where `body` is a `Bool`. -/
