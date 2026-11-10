@@ -1,2 +1,2 @@
-// expect: 2:47 calls may name only functions declared earlier in this file, or imported (no recursion)
+// expect: 2:1 a function may call itself only on a part of one of its parameters, the same one in every call
 export function f(x: bigint): bigint { return f(x); }
