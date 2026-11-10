@@ -1,5 +1,6 @@
 import Lean
 import tolean.TypeScript.Certify
+import tolean.TypeScript.Decreasing
 import tolean.TypeScript.EStateM
 import tolean.TypeScript.Interpret
 import tolean.TypeScript.Map
@@ -13,6 +14,7 @@ import tolean.TypeScript.Syntax.RoundTripDecl
 import tolean.TypeScript.Syntax.RoundTripLex
 import tolean.TypeScript.Syntax.ParseWF
 import tolean.TypeScript.Syntax.RoundTripText
+import tolean.TypeScript.Spec.Error
 import tolean.TypeScript.Spec.Lemmas.Number
 import tolean.TypeScript.Spec.Coverage.LexicalGrammar
 import tolean.TypeScript.Spec.Coverage.Expressions
@@ -87,7 +89,8 @@ structure Group where
 /-- The theorems that cover every section of the subset at once. -/
 def everySection : Group :=
   ⟨"Every section of the subset", [``Proof.program_sound, ``Proof.translate_sound,
-    ``Proof.programTranslation_rel, ``Proof.expr_sound, ``Proof.stmts_sound, ``Proof.decls_sound]⟩
+    ``Proof.program_sound_call, ``Proof.translate_sound_call,
+    ``Proof.programTranslation_rel, ``Proof.apply_recordGet, ``Proof.expr_sound, ``Proof.stmts_sound, ``Proof.decls_sound]⟩
 
 /-- The sections of ECMA-262 that the interpreter follows, in the order of
 the spec, with the theorems about each. -/
@@ -133,7 +136,10 @@ def sections : List Section := [
   ⟨"sec-property-accessors", "13.3.2", "Property Accessors", [``Proof.translateMember_sound, ``Eval.eval_index_str, ``Eval.getKey_ofString, ``Eval.find?_fst_lookup,
     ``Coverage.index_lone_surrogate]⟩,
   ⟨"sec-function-calls", "13.3.6", "Function Calls",
-    [``Proof.translateCall_sound, ``Proof.eval_call, ``Proof.out_call, ``Proof.zip_sim, ``Proof.zip_sim_value, ``Proof.calls_agree,
+    [``Proof.eval_call, ``Proof.out_call, ``Proof.evalCall_eq, ``Proof.out_evalCall, ``Proof.bind_toOption,
+    ``Proof.eval_call_toOption, ``Proof.out_call_toOption, ``Proof.translateCall_sound,
+    ``Proof.translateCall_callSim, ``Proof.checkThrowingCall_ok, ``Proof.throwingCall?_some,
+    ``Proof.zip_sim, ``Proof.zip_sim_value, ``Proof.calls_agree,
     ``Proof.evalList_append_undefined, ``Proof.callS_append_undefined, ``Proof.evalList_optArgs, ``Proof.fixArgs_value]⟩,
   ⟨"sec-optional-chains", "13.3.9", "Optional Chains",
     [``Proof.getPath_append, ``Proof.evalChain_optChain, ``Proof.eval_member_chain]⟩,
@@ -176,12 +182,14 @@ def sections : List Section := [
     ``Proof.Frame.append, ``Proof.Frame.mem, ``Proof.Frame.split]⟩,
   ⟨"sec-let-and-const-declarations", "14.3.1", "Let and Const Declarations",
     [``Proof.decl_sim, ``Proof.declare_ok, ``Proof.has_add, ``declare_not_callable, ``Proof.eval_withType,
-    ``Proof.translateVariable_sound, ``Syntax.Stmt.constAssignedIn_nil, ``Syntax.Stmt.constAssignedIn_exprStmt,
+    ``Proof.translateVariable_sound, ``Proof.translateBindHead_ok, ``Proof.bind_sim,
+    ``Syntax.Stmt.constAssignedIn_nil, ``Syntax.Stmt.constAssignedIn_exprStmt,
     ``Syntax.Stmt.constAssignedIn_returnStmt, ``Syntax.Stmt.constAssignedIn_ifStmt,
     ``Syntax.Stmt.constAssignedIn_forOfStmt, ``Syntax.Stmt.constAssignedIn_forStmt,
     ``Syntax.Stmt.constAssignedIn_whileStmt, ``Syntax.Stmt.constAssignedIn_block, ``Syntax.Stmt.constAssignedIn_breakStmt,
     ``Syntax.Stmt.constAssignedIn_continueStmt, ``Syntax.Stmt.constAssignedIn_empty,
-    ``Syntax.Stmt.constAssignedIn_switchStmt]⟩,
+    ``Syntax.Stmt.constAssignedIn_switchStmt,
+    ``Syntax.Stmt.constAssignedIn_throwStmt]⟩,
   ⟨"sec-if-statement", "14.6", "The if Statement",
     [``Proof.execStmt_if, ``Proof.if_ret, ``Proof.if_normal, ``Proof.if_ends, ``Proof.if_early_sim,
     ``Proof.if_state_sim, ``Proof.branch_ite, ``Proof.branch_none, ``Proof.branch_tag,
@@ -193,7 +201,9 @@ def sections : List Section := [
     [``Proof.Ends.brk, ``Proof.Ends.of_brk, ``Proof.endOf_normal]⟩,
   ⟨"sec-continue-statement", "14.9", "The continue Statement",
     [``Proof.if_jump, ``Proof.earlyTail_ends, ``Proof.exec_stepEnd]⟩,
-  ⟨"sec-return-statement", "14.10", "The return Statement", []⟩,
+  ⟨"sec-return-statement", "14.10", "The return Statement",
+    [``Proof.evalTop_ok, ``Proof.evalTop_call, ``Proof.eval_pureIf, ``Proof.translateReturnCall_ok,
+    ``Proof.returnCall_sim]⟩,
   ⟨"sec-switch-statement", "14.12", "The switch Statement",
     [``Proof.execCase_ret, ``Proof.exec_clauseStatements, ``Proof.execFrom_ret, ``Proof.execSwitch_case,
     ``Proof.matchTag_exec, ``Proof.switchOf_eval, ``Proof.clauses_nil_sim, ``Proof.clauses_default_sim,
@@ -203,6 +213,7 @@ def sections : List Section := [
     ``Proof.stmtsChanges_dropBreak, ``Proof.stmtsChanges_flatMap, ``Proof.state_nil_sim,
     ``Proof.state_default_sim, ``Proof.state_last_sim, ``Proof.state_case_sim, ``Proof.switch_state_sim,
     ``Proof.translateStateClause_sound, ``Proof.translateStateClauses_sound]⟩,
+  ⟨"sec-throw-statement", "14.14", "The throw Statement", [``Proof.throw_sim]⟩,
   -- §15 ECMAScript Language: Functions and Classes {#sec-ecmascript-language-functions-and-classes}
   ⟨"sec-function-definitions", "15.2", "Function Definitions",
     [``Proof.translateFunction_ok, ``Proof.checkTypeParams_ok, ``Proof.params_fold]⟩,
@@ -399,7 +410,7 @@ def extras : List Group := [
     ``Syntax.Laid.cons, ``Syntax.endStatement_semi, ``Syntax.VarKind.word_eq,
     ``Syntax.followsType_eq_semi, ``Syntax.varDecl_ss, ``Syntax.varDecl_ns, ``Syntax.varDecl_sn,
     ``Syntax.varDecl_nn, ``Syntax.parseDeclaration_reads, ``Syntax.parseVarDecl_reads,
-    ``Syntax.stmt_empty, ``Syntax.stmt_jump, ``Syntax.stmt_return_none, ``Syntax.stmt_return_some,
+    ``Syntax.stmt_empty, ``Syntax.stmt_jump, ``Syntax.stmt_return_none, ``Syntax.stmt_return_some, ``Syntax.stmt_throw,
     ``Syntax.parseStatement_expr, ``Syntax.stmt_expr, ``Syntax.stmt_varDecl, ``Syntax.Laid.kinds,
     ``Syntax.Stmt.first, ``Syntax.Laid.first, ``Syntax.parseBranch_reads, ``Syntax.Stmt.linesOf_wordLines,
     ``Syntax.next_not_else, ``Syntax.Laid.length_le, ``Syntax.blockStep_loop, ``Syntax.block_loop, ``Syntax.Stmt.eraseAll_eq,
@@ -543,7 +554,7 @@ def extras : List Group := [
     ``Syntax.wordsOK_append_iff, ``Syntax.wordsOK_cons_iff, ``Syntax.wordsOK_nil_iff, ``Syntax.readName_words,
     ``Syntax.VarKind.word_ok, ``Syntax.exportWords_ok, ``Syntax.typeAnnotation_ok, ``Syntax.VarDecl.wordsOK, ``Syntax.Param.wordsOK, ``Syntax.optionalMark_ok,
     ``Syntax.Field.wordsOK, ``Syntax.EnumMember.wordsOK, ``Syntax.ImportName.wordsOK, ``Syntax.StmtOK.one, ``Syntax.StmtOK.head,
-    ``Syntax.StmtOK.varDecl, ``Syntax.StmtOK.exprStmt, ``Syntax.StmtOK.retNone, ``Syntax.StmtOK.retSome,
+    ``Syntax.StmtOK.varDecl, ``Syntax.StmtOK.exprStmt, ``Syntax.StmtOK.retNone, ``Syntax.StmtOK.retSome, ``Syntax.StmtOK.throw,
     ``Syntax.StmtOK.brk, ``Syntax.StmtOK.cont, ``Syntax.StmtOK.empty, ``Syntax.StmtOK.ifThen, ``Syntax.StmtOK.ifElse,
     ``Syntax.StmtOK.forOf, ``Syntax.StmtOK.counted, ``Syntax.StmtOK.while, ``Syntax.linesOf_ok, ``Syntax.StmtOK.block,
     ``Syntax.endStatement_inv, ``Syntax.varDecl_tail, ``Syntax.parseDeclaration_inv, ``Syntax.parseVarDecl_inv, ``Syntax.blockStep_inv,
@@ -590,7 +601,10 @@ def extras : List Group := [
     ``Eval.decTuple_list, ``Eval.decLast_cons, ``Eval.decCons_cons]⟩,
   ⟨"Certificates: callbacks and the List functions", [``Proof.evalMap_map, ``Proof.evalFilter_filter,
     ``Proof.evalFind_find, ``Proof.evalFind_true, ``Proof.evalFind_false, ``Proof.find?_isSome,
-    ``Proof.find?_not_isNone, ``Proof.getD_map_undefined]⟩]
+    ``Proof.find?_not_isNone, ``Proof.getD_map_undefined]⟩,
+  ⟨"Recursion: the facts that Lean adds to the goal of a call in a callback, for the proof that a recursive function ends",
+    [``List.any_wfParam_tolean, ``List.any_unattach_tolean, ``List.all_wfParam_tolean,
+      ``List.all_unattach_tolean, ``List.find?_wfParam_tolean, ``List.find?_unattach_tolean]⟩]
 
 open Meta in
 /-- The theorems of the TypeScript modules that the index does not list. A

@@ -202,7 +202,7 @@ theorem translateFunction_ok {sp : Span} {ex : Bool} {name : String} {tps : List
       ∃ f, s'.functions = s.functions ++ [f] ∧ f.file = s.file ∧ f.name = name ∧ f.exported = ex ∧
       ∃ lp r out, o = .function name lp r out ∧ lp.map (·.1) = params.map (·.name) ∧
         ∃ F env c c', translateStatements F env .ret (blockStatements body) c = .ok out c' ∧
-          env.functions = s.functions ∧ env.enums = s.enumValues ∧
+          env.functions = s.functions ++ [f] ∧ env.enums = s.enumValues ∧
           ∀ x, env.has x = decide (x ∈ params.map (·.name)) := by
   unfold translateFunction at h
   cases ret with
@@ -235,16 +235,24 @@ theorem translateFunction_ok {sp : Span} {ex : Bool} {name : String} {tps : List
           · have h1 : (p.name == x) = false := by simpa using Ne.symm hx
             have h2 : (x == p.name) = false := by simpa using hx
             simp [h1, h2]) params _ _ _ _ _ _ hfold
-    simp only [modify_ok, fuelLimit_ok, pure_ok] at h
-    obtain ⟨r, s₆, hr, _, s₇, rfl, _, _, ⟨rfl, rfl⟩, out, s₈, hbody, _, s₉, rfl, rfl, rfl⟩ := h
+    simp only [modify_ok, fuelLimit_ok] at h
+    obtain ⟨r, s₆, hr, _, s₇, rfl, _, _, ⟨rfl, rfl⟩, out, s₈, hbody, h⟩ := h
+    -- The check that a call of the function itself passes a part of a
+    -- parameter only refuses.
+    split at h
+    · simp at h
+    simp only [pure_bind, bind_ok, modify_ok, pure_ok] at h
+    obtain ⟨_, s₉, rfl, rfl, rfl⟩ := h
     obtain ⟨rfl, -⟩ := isolated_ok hr
     obtain ⟨rfl, s₁₀, hbody⟩ := isolated_ok hbody
     have hg := hps.2.1
     simp only [globals, Prod.mk.injEq] at hg
-    refine ⟨rfl, htaken, rfl, rfl, hfresh, _, rfl, rfl, rfl, rfl, lp, r.lean, out, rfl, ?_, _, env, _, _, hbody,
-      hg.1, hg.2, fun x => ?_⟩
+    refine ⟨rfl, htaken, rfl, rfl, hfresh, _, rfl, rfl, rfl, rfl, lp, _, out, rfl, ?_, _, _, _, _, hbody,
+      by simp [hg.1], hg.2, fun x => ?_⟩
     · simpa using hps.2.2
-    · rw [hps.1 x]; simp [Env.has, Env.lookup]
+    · have hx := hps.1 x
+      simp only [Env.has, Env.lookup] at hx ⊢
+      rw [hx]; simp
 
 /-- A reference of an import's name stays one when the import names one more. -/
 theorem import_refs_cons {target : String} {n : ImportName} {ns : List ImportName} {r : DeclRef}
@@ -1259,7 +1267,7 @@ theorem decls_ok (P : Eval.Program) : ∀ (ds : List Decl) (s s' : Ctx) (os : Li
         simp only [Eval.functions, IR.functions, List.filterMap_cons] at hrel ⊢
         refine ⟨⟨rfl, hlp.symm, Fu, env, c, c', ht, fun g hg => ?_, fun e he => ?_, hhas⟩, hrel⟩
         · rw [henv] at hg
-          exact hsub g (by rw [hfns]; exact List.mem_append_left _ hg)
+          exact hsub g (by rw [hfns]; exact hg)
         · rw [henvE] at he
           exact hsubE e he
       | «import» sp names source =>
@@ -1706,26 +1714,37 @@ theorem programTranslation_rel {p : Eval.Program} {outs : List (String × List I
 variable {N : Type} [JSNumber N]
 
 /-- The translator is sound for a program. When it translates every file of a
-program, a call of a function of the output gives a value only when the
-interpreter gives the same value for the same call of the program, for all
-arguments and all fuel. -/
+program, a call of a function of the output returns or throws a value only
+when the same call of the program returns or throws the same value in the
+interpreter, for all arguments and all fuel. -/
+theorem program_sound_call {p : Eval.Program} {outs : List (String × List IR.Decl)}
+    {ifaces : List (String × Interface)} (h : ProgramTranslation p outs ifaces)
+    (hnd : (p.map (·.1)).Nodup) (key : DeclRef) (args : List (Val N)) (fuel : Nat)
+    (r : Except (Val N) (Val N)) (hr : IR.callIn (IR.functionsOf outs) key args fuel = some r) :
+    Eval.callIn p key args fuel = some r :=
+  calls_agree p (IR.functionsOf outs) (programTranslation_rel h p hnd fun _ _ h => h).2.2.2.2.2
+    (fuel + 1) key args r hr
+
+/-- The same, for a call that returns: a call of a function of the output
+gives a value only when the interpreter gives the same value for the same
+call of the program. -/
 theorem program_sound {p : Eval.Program} {outs : List (String × List IR.Decl)}
     {ifaces : List (String × Interface)} (h : ProgramTranslation p outs ifaces)
     (hnd : (p.map (·.1)).Nodup) (key : DeclRef) (args : List (Val N)) (fuel : Nat) (v : Val N)
     (hv : IR.runIn (IR.functionsOf outs) key args fuel = some v) :
-    Eval.runIn p key args fuel = some v :=
-  calls_agree p (IR.functionsOf outs) (programTranslation_rel h p hnd fun _ _ h => h).2.2.2.2.2
-    (fuel + 1) key args v hv
+    Eval.runIn p key args fuel = some v := by
+  simp only [IR.runIn, Eval.runIn, bind_toOption] at hv ⊢
+  exact program_sound_call h hnd key args fuel _ hv
 
 /-- The same, for one file: when `translateTree` parses the file to the module
-`m` and translates it to `decls`, a call of a function of `decls` gives a
-value only when the interpreter gives the same value for the same call of
-`m`. -/
-theorem translate_sound {file source : String} {target : Edition} {m : Module} {names : IR.Names}
+`m` and translates it to `decls`, a call of a function of `decls` returns or
+throws a value only when the same call of `m` returns or throws the same value
+in the interpreter. -/
+theorem translate_sound_call {file source : String} {target : Edition} {m : Module} {names : IR.Names}
     {decls : List IR.Decl} (h : translateTree file source target = .ok (m, names, decls))
-    (name : String) (args : List (Val N)) (fuel : Nat) (v : Val N)
-    (hv : IR.runIn (IR.functionsOf [(file, decls)]) ⟨file, name⟩ args fuel = some v) :
-    Eval.runIn [(file, m)] ⟨file, name⟩ args fuel = some v := by
+    (name : String) (args : List (Val N)) (fuel : Nat) (v : Except (Val N) (Val N))
+    (hv : IR.callIn (IR.functionsOf [(file, decls)]) ⟨file, name⟩ args fuel = some v) :
+    Eval.callIn [(file, m)] ⟨file, name⟩ args fuel = some v := by
   unfold translateTree translateFile at h
   cases hp : parse source target with
   | error e => simp [hp, Except.mapError] at h; cases h
@@ -1741,6 +1760,17 @@ theorem translate_sound {file source : String} {target : Edition} {m : Module} {
         subst heq
         simp only [pure, Except.pure, Except.ok.injEq, Prod.mk.injEq] at h
         obtain ⟨rfl, -, rfl⟩ := h
-        exact program_sound (.snoc false "N" .nil rfl rfl rfl hrun) (by simp) _ args fuel v hv
+        exact program_sound_call (.snoc false "N" .nil rfl rfl rfl hrun) (by simp) _ args fuel v hv
+
+/-- The same, for one file and a call that returns: a call of a function of
+`decls` gives a value only when the interpreter gives the same value for the
+same call of `m`. -/
+theorem translate_sound {file source : String} {target : Edition} {m : Module} {names : IR.Names}
+    {decls : List IR.Decl} (h : translateTree file source target = .ok (m, names, decls))
+    (name : String) (args : List (Val N)) (fuel : Nat) (v : Val N)
+    (hv : IR.runIn (IR.functionsOf [(file, decls)]) ⟨file, name⟩ args fuel = some v) :
+    Eval.runIn [(file, m)] ⟨file, name⟩ args fuel = some v := by
+  simp only [IR.runIn, Eval.runIn, bind_toOption] at hv ⊢
+  exact translate_sound_call h name args fuel _ hv
 
 end tolean.TypeScript.Proof

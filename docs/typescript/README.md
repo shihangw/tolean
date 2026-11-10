@@ -20,10 +20,12 @@ marks which links are proved, tested against a reference, or trusted.
   them may be exported, by `export` before it or by an export list such as
   `export { a, type B }`.
 - **Statements:** `const` and `let` declarations, expression statements,
-  `return`, `if` and `else`, `for … of`, the counted `for`, `while`, `switch`,
-  blocks, `break`, `continue` and the empty statement. A counted `for`, such
-  as `for (let i = 0; i < n; i++)`, starts with a `const` or `let`
-  declaration or with nothing. A `break` at the top of a `switch`
+  `return`, `throw`, `if` and `else`, `for … of`, the counted `for`, `while`,
+  `switch`, blocks, `break`, `continue` and the empty statement. A counted
+  `for`, such as `for (let i = 0; i < n; i++)`, starts with a `const` or `let`
+  declaration or with nothing. The value of a `throw` must start on the same
+  line, because ECMA-262 allows no line break after `throw`. The translator
+  accepts only `throw new Error(message)`. A `break` at the top of a `switch`
   clause ends the `switch`, so it may stand outside a loop. The parser
   refuses a `case` test that uses `<` or `<<`, because a `:` does not end its
   search for a `>` after one, and a `switch` with two `default` clauses.
@@ -126,6 +128,8 @@ evaluates the IR over the interpreter's values. The theorem `program_sound`
 in `Proof/Module.lean` states that when the translator accepts every file of
 a program, a function of the IR gives a value only when the interpreter
 gives the same value for the same call.
+`program_sound_call` states the same for a call that throws: a function of
+the IR throws a value only when the interpreter throws the same value.
 `translate_sound` is the case of one file. It holds for every input,
 every model of numbers and every amount of fuel. The theorem does not assume
 that the types the translator gives are right. It is about the IR, so a
@@ -195,7 +199,14 @@ a certified file trusts the parser and the interpreter, instead of the
 translator. With `--manifest`, the chain records this: the translator link
 becomes `proved`, and so does the parse.
 
-Every function of the subset can get a certificate. A `number` is a value of
+Most functions of the subset can get a certificate. A file has none yet when
+it declares a generic function or interface, or an interface that refers to
+itself, because the certifier would need an encoder for a type parameter or a
+recursive encoder. A file with a function that calls itself has none either.
+A certificate runs the interpreter with as much fuel as the calls need, and
+the depth of a recursive call depends on its argument. Nor does a file with a
+function that can throw, because a certificate has no encoder for `Except` yet.
+A `number` is a value of
 the abstract model `JSNumber N` in the interpreter, as it is in the
 translation, so each theorem holds for every `N`, real doubles among them,
 and assumes none of the number laws.
@@ -345,6 +356,7 @@ the file, the line and the reason. It never approximates.
 | `string`, `"abc"` | `JSString`, `JSString.ofString "abc"`. A `JSString` holds the UTF-16 code units of the string, as ECMA-262 defines a string, so a value can hold a lone surrogate, which a Lean `String` cannot. `ofString` is injective, so a claim can state a literal as a Lean `String`. |
 | `ReadonlyArray<T>`, `Array<T>`, `T[]` | `List T` |
 | `interface` with `readonly`, required fields | `structure` |
+| An interface whose fields name the interface itself, such as `readonly next: Node \| null` or `readonly children: ReadonlyArray<Tree<T>>` | The same `structure`. Lean reads it as a nested inductive type, so a value is a finite tree, as every value that the subset can build is. |
 | `readonly f?: T`, an optional field | `f : Option T := none`. An object literal may leave the field out, or set it to a `T`. A read of a field that the object lacks gives `undefined`, which is `none`. `s.f ?? d` is `Option.getD s.f d`, and `s.f === undefined` is `s.f.isNone`. |
 | `x?: T`, an optional parameter | `(x : Option T := none)`. A call may leave out the optional parameters, which come last, and then the output passes `none` for each. A call may also pass a `T`, or `undefined`, which is `none` too. `x ?? d`, `x === undefined` and `x?.f` work as they do on an optional field. |
 | `if (x === undefined)` or `if (x !== undefined)`, with `undefined` on either side, where `x` is an optional parameter or a local with an optional value | `match x with \| none => … \| some x => …`, as for a test of `null`. The branch where `x` is defined reads it as a `T`. |
@@ -364,6 +376,9 @@ the file, the line and the reason. It never approximates.
 | `type R = Record<K, V>` or `Readonly<Record<K, V>>`, where `K` is a literal union of strings | `structure R` with one field of type `V` for each string of `K`, in the order of `K`. A value has a property for each string, so an object literal must set every key, in that order, as for an interface. `r.a` and `r['a']` read a field. |
 | `r[k]`, where `r` is such a `Record` and `k` has the type `K` | `match k with \| K.a => r.a \| …`, which reads the field that `k` names |
 | `function` with typed parameters and return type | `def` |
+| A function that calls itself, where each call passes a part of one parameter, the same one in every call. A part is a field of it, a value that a test of `null`, `undefined` or a tag narrows it to, an element of an array in it, an element of a tuple in it, or a part of one of these. | The same `def`, followed by `termination_by p` for the parameter `p`, and `decreasing_by all_goals tolean_decreasing`. Each call passes a value that is smaller by `sizeOf`, and the tactic from `tolean.TypeScript.Decreasing` proves it, so Lean checks that the function ends. Each `match` in such a function names the equation of its value `_h'`, which the tactic reads. Lean defines the function by well-founded recursion, so a claim unfolds it with `unfold` or `simp`, not with `rfl` or `decide`. |
+| `throw new Error(m)`, where `m` is a `string`, as the last statement of a function or of a branch that ends it | `throw (JSError.mk m)`. A function that can throw returns `Except JSError R`, and each value that it returns is `pure` of the value. `JSError`, in `tolean/TypeScript/Spec/Error.lean`, holds the message. |
+| `const x = f(a)`, `let x = f(a)` or `return f(a)`, where `f` can throw, in the statements that end the function | `f a >>= fun x => …`, which passes the error of the call on. So the function that holds the call can throw too. |
 | `const x = e`, `let x = e` | `let x := e` |
 | `x = e`, `x += e`, `x -= e`, `x *= e` on a `let` local | `let x := …` (shadowing) |
 | `x ??= e` on a `let` local of type `T \| null` | `let x := Option.or x e`. JS evaluates `e` only when `x` is `null`. Lean evaluates it either way, but the result is the same, because the subset has no side effects. |
@@ -394,6 +409,12 @@ the file, the line and the reason. It never approximates.
 | `function f<T>(x: T): T`, where the type parameters have no constraint | `def f {T : Type} (x : T) : T`. A call fixes each type parameter from the types of its arguments, and Lean infers the same types. An argument of `T \| null` may be `null`, which leaves `T` to another argument. |
 
 Tolean rejects these, among others:
+
+- `try` and `catch`, and a `throw` of anything but `new Error(message)`. It
+  also rejects a `throw` in a loop body, or in a branch that changes locals,
+  and a call of a function that can throw anywhere but as the whole value of
+  a declaration or a `return`. The output would need `forIn` and `let` in the
+  `Except` monad there.
 
 - Fractional or unsafe `number` literals, such as `0.5` and `2 ** 53`. It also
   rejects `/`, `%` and `Math.*` on `number`, because no law covers them yet.
@@ -469,7 +490,9 @@ Tolean rejects these, among others:
   interfaces, and a `Record`, become a type of their own, which takes no type
   parameters. A
   field may not have the name of a type parameter, because Lean would read the
-  name as the field in the types of the fields after it. A type parameter may not have the
+  name as the field in the types of the fields after it. For the same reason,
+  a field may not have the name of a type of the file, such as the interface
+  itself, that the type of a later field names. A type parameter may not have the
   name of a type or function of the file, or of a local, because Lean would
   read the name as the other one. `===` on values of a type parameter is
   refused, because in JS it compares objects by reference.
@@ -559,8 +582,11 @@ Tolean rejects these, among others:
   both.
 - A `__proto__: v` key in an object literal. It sets the object's prototype,
   not a field.
-- Recursion, closures and arrow functions, classes, `async`, exceptions, and
-  mutable interface fields.
+- A function that calls itself on anything but a part of one parameter, the
+  same one in every call, and a call of a function that the file declares
+  later. Without such a part, Lean could not see that the function ends.
+- Closures and arrow functions, classes, `async`, exceptions, and mutable
+  interface fields.
 - Imports other than the named imports of [Imports](#imports).
 
 The files in `tests/typescript/corpus/translate/reject/` state in executable
