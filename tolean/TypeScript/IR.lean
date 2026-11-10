@@ -39,6 +39,8 @@ inductive TyExt where
   | number
   /-- `Option Empty`, the type of `null` alone. -/
   | null
+  /-- `JSError`, what `throw new Error(message)` throws. -/
+  | error
 deriving BEq, Repr, Inhabited, DecidableEq
 
 /-- The operations that TypeScript adds to the IR, each with the number of
@@ -70,6 +72,10 @@ inductive ExprExt where
   /-- `match k with | K.a => r.a | …`, on `r` and `k`: `r[k]`, where `r` is a
   `Record<K, V>` with the keys `keys`, and `K` is the literal union `key`. -/
   | recordGet (key : DeclRef) (keys : List String)
+  /-- `(pure a)`: the value `a` as the result of a function that can throw. -/
+  | pure
+  /-- `(JSError.mk m)`: the error that `new Error(m)` makes, from its message. -/
+  | error
 deriving BEq, Repr, Inhabited, DecidableEq
 
 abbrev Ty := tolean.IR.Ty TyExt
@@ -95,13 +101,17 @@ abbrev LoopInfo := tolean.IR.LoopInfo TyExt
 @[match_pattern] abbrev Expr.undefined : Expr := .ext .undefined []
 @[match_pattern] abbrev Expr.isUndefined (a : Expr) : Expr := .ext .isUndefined [a]
 @[match_pattern] abbrev Expr.isDefined (a : Expr) : Expr := .ext .isDefined [a]
+@[match_pattern] abbrev Ty.error : Ty := .ext .error
+@[match_pattern] abbrev Expr.pure (a : Expr) : Expr := .ext .pure [a]
+@[match_pattern] abbrev Expr.error (message : Expr) : Expr := .ext .error [message]
 
 /-! ### Printing -/
 
 /-- The Lean names the output uses, with their full names from the root. -/
 def leanNames : List (String × String) :=
   tolean.IR.leanNames ++
-    [("JSNumber", "tolean.TypeScript.JSNumber"), ("JSString", "tolean.TypeScript.JSString")]
+    [("JSNumber", "tolean.TypeScript.JSNumber"), ("JSString", "tolean.TypeScript.JSString"),
+     ("JSError", "tolean.TypeScript.JSError"), ("pure", "Pure.pure")]
 
 /-- Write the Lean name `name` (or `name.rest`), from the root when the source
 declares the same name. -/
@@ -118,9 +128,10 @@ instance : tolean.IR.PrintTy TyExt where
   print names
     | .number => names.typeParam
     | .null => s!"({leanName names "Option"} Empty)"
+    | .error => leanName names "JSError"
   namesParam _
     | .number => true
-    | .null => false
+    | .null | .error => false
   binders names :=
     let n := names.typeParam
     s!" \{{n} : Type} [{leanName names "JSNumber"} {n}]"
@@ -156,6 +167,8 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
     | some f => s!"{argument r}.{f}"
     | Option.none =>
       s!"(match {k} with{String.join (keys.map fun f => s!" | {case f} => {argument r}.{f}")})"
+  | .pure, [a] => s!"({tolean.IR.wrapped (leanName names "pure") a})"
+  | .error, [m] => s!"({tolean.IR.wrapped (leanName names "JSError.mk") m})"
   | _, _ => ""
 
 instance : tolean.IR.PrintOp ExprExt := ⟨ExprExt.print⟩

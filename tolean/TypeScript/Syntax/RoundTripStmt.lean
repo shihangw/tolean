@@ -90,7 +90,8 @@ not a `{`, which starts a block, not `let`, which starts a declaration, and no
 keyword but those that start an expression. -/
 def startsExprStmt : Option TokenKind → Bool
   | some (.punct "{") | some (.ident "let") => false
-  | some (.keyword w) => w == "true" || w == "false" || w == "null" || w == "typeof" || w == "void"
+  | some (.keyword w) =>
+    w == "true" || w == "false" || w == "null" || w == "typeof" || w == "void" || w == "new"
   | _ => true
 
 /-- A statement that ends with an `if` without `else`. An `else` after it would
@@ -533,6 +534,7 @@ theorem Expr.firstWord : ∀ e : Expr, ∃ w ws, e.words = w :: ws ∧ w ≠ []
   | .array _ es => ⟨_, _, by simp only [Expr.words, enclose]; exact rfl, by simp [punctWord]⟩
   | .object _ ps => ⟨_, _, by simp only [Expr.words, enclose]; exact rfl, by simp [punctWord]⟩
   | .paren _ i => ⟨_, _, by simp only [Expr.words]; exact rfl, by simp [punctWord]⟩
+  | .new .. => ⟨_, _, by simp only [Expr.words]; exact rfl, by simp [keywordWord]⟩
   | .arrow _ parens ps _ => by
     rcases arrowParams_cases parens ps with ⟨p, _, _, h⟩ | h
     · exact ⟨_, _, by simp only [Expr.words, h]; exact rfl, by simp [identWord]⟩
@@ -684,7 +686,7 @@ theorem parseStatement_expr {f : Nat} {s : ParseState} {x : Token} {r : List Tok
     simp [hn]
   | keyword w =>
     simp [startsExprStmt] at hk
-    rcases hk with (((rfl | rfl) | rfl) | rfl) | rfl <;> rfl
+    rcases hk with ((((rfl | rfl) | rfl) | rfl) | rfl) | rfl <;> rfl
   | punct p =>
     have h1 : p ≠ "{" := by rintro rfl; simp [startsExprStmt] at hk
     have h2 : p ≠ ";" := by rintro rfl; simp [startsExpr] at hx
@@ -1265,7 +1267,8 @@ theorem Parse.unlessPunct_none {α : Type} {stop : String} {p : ParseM α} {s : 
 mutual
 
 theorem Expr.inFree_erase : ∀ e : Expr, e.erase.inFree = e.inFree
-  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .object .. | .paren .. => rfl
+  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .object .. | .paren ..
+  | .new .. => rfl
   | .array _ es => by simp only [Expr.erase, Expr.inFree]; exact Expr.inFreeList_eraseAll es
   | .member _ e _ => by simp only [Expr.erase, Expr.inFree]; exact Expr.inFree_erase e
   | .optMember _ e _ => by simp only [Expr.erase, Expr.inFree]; exact Expr.inFree_erase e
@@ -1498,6 +1501,7 @@ theorem Expr.lessFree_erase : ∀ e : Expr, e.erase.lessFree = e.lessFree
   | .assign _ _ a b => by simp only [Expr.erase, Expr.lessFree, Expr.lessFree_erase a, Expr.lessFree_erase b]
   | .call _ c as => by
     simp only [Expr.erase, Expr.lessFree, Expr.lessFree_erase c, Expr.lessFreeList_eraseAll as]
+  | .new _ _ _ as => by simp only [Expr.erase, Expr.lessFree]; exact Expr.lessFreeList_eraseAll as
   | .cond _ a b c => by
     simp only [Expr.erase, Expr.lessFree, Expr.lessFree_erase a, Expr.lessFree_erase b, Expr.lessFree_erase c]
   | .binary _ _ l r => by simp only [Expr.erase, Expr.lessFree, Expr.lessFree_erase l, Expr.lessFree_erase r]
@@ -1558,6 +1562,8 @@ theorem Expr.afterOK_head : ∀ (e : Expr) {a b : List TokenKind}, e.lessFree = 
     congr 1
     · exact Expr.afterOK_head c hf.1 (by simp [enclose, punctWord])
     · exact Expr.afterOKList_head as hf.2 rfl
+  | .new _ _ _ as, _, _, hf, _ => by
+    simp only [Expr.lessFree] at hf; simp only [Expr.afterOK]; exact Expr.afterOKList_head as hf rfl
   | .unary _ _ x, _, _, hf, h => by
     simp only [Expr.lessFree] at hf; simp only [Expr.afterOK]; exact Expr.afterOK_head x hf h
   | .prefix _ _ x, _, _, hf, h => by

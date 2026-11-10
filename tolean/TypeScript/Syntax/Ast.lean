@@ -151,6 +151,9 @@ inductive Expr where
   /-- `expr satisfies type`. Type stripping removes `satisfies type`, so it has
   the value of `expr`. -/
   | satisfies (span : Span) (expr : Expr) (type : TypeExpr)
+  /-- `new C<A, B>(args)`, where `C` is a name. The type arguments may be
+  absent, and the arguments are always in parentheses. -/
+  | new (span : Span) (callee : String) (typeArgs : List TypeExpr) (args : List Expr)
 
 inductive Property where
   /-- `{ a }`. -/
@@ -269,6 +272,7 @@ def Expr.assigns (n : String) : Expr → Bool
   -- refuses more.
   | .arrow _ _ _ body => body.assigns n
   | .asConst _ e | .satisfies _ e _ => e.assigns n
+  | .new _ _ _ args => Expr.assignsList n args
 
 def Expr.assignsList (n : String) : List Expr → Bool
   | [] => false
@@ -422,7 +426,7 @@ def Expr.span : Expr → Span
   | .ident s _ | .number s _ | .bigint s _ | .string s _ | .bool s _ | .null s | .array s _
   | .object s _ | .paren s _ | .member s _ _ | .optMember s _ _ | .index s _ _ | .call s _ _ | .unary s _ _
   | .prefix s _ _ | .postfix s _ _ | .binary s _ _ _ | .cond s _ _ _ | .assign s _ _ _
-  | .arrow s _ _ _ | .asConst s _ | .satisfies s _ _ => s
+  | .arrow s _ _ _ | .asConst s _ | .satisfies s _ _ | .new s _ _ _ => s
 
 def Stmt.span : Stmt → Span
   | .varDecl s _ | .exprStmt s _ | .returnStmt s _ | .ifStmt s _ _ _ | .forOfStmt s _ _ _ _
@@ -445,6 +449,8 @@ def Expr.lessFree : Expr → Bool
   | .arrow _ _ _ body => body.lessFree
   -- A `<` in the type reads type arguments, which the parser checks itself.
   | .asConst _ e | .satisfies _ e _ => e.lessFree
+  -- The type arguments are a group that the parser reads itself.
+  | .new _ _ _ args => Expr.lessFreeList args
   | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => true
 
 def Expr.lessFreeList : List Expr → Bool
@@ -473,7 +479,8 @@ def Expr.inFree : Expr → Bool
   | .array _ es => Expr.inFreeList es
   | .member _ e _ | .optMember _ e _ | .index _ e _ | .call _ e _ | .unary _ _ e | .prefix _ _ e
   | .postfix _ _ e | .arrow _ _ _ e | .asConst _ e | .satisfies _ e _ => e.inFree
-  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .object .. | .paren .. => true
+  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .object .. | .paren ..
+  | .new .. => true
 
 def Expr.inFreeList : List Expr → Bool
   | [] => true
