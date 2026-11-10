@@ -40,6 +40,7 @@ PostgreSQL guide documents it from then on.
 | `UPDATE … FROM` | Joins the target with the other tables, as a `SELECT` does | Nothing new beyond the two rows above |
 | `WITH` whose parts are `SELECT` or `UPDATE` | Runs every part on the snapshot from before the statement, then writes the updates in order | The snapshot, and the rule that refuses stale reads, which stays a check of the translator |
 | Enum labels in a `SET` and a `COALESCE` | Gives a string literal the type of its column or of the other argument | The type of a string literal in the interpreter |
+| `COALESCE` of integers of two widths, such as `COALESCE(x, 0)` on a `bigint` | Converts the value it picks to the widest type of all the arguments, even when that argument is NULL | The static type of an expression in the interpreter, because a NULL value shows no width |
 
 ## Gaps that the string translation has
 

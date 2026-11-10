@@ -32,7 +32,7 @@ form of a syntax tree, the project file and the chain manifests.
 | `tolean/Go/Translate.lean` | The Go translator: one package at a time, from root functions, with interface calls as steps in a state monad |
 | `tolean/Sql/` | The PostgreSQL front end, the schema translator that replays migrations, the query translator, and the READ COMMITTED model in `Spec/ReadCommitted.lean` |
 | `tolean/Sql/IR.lean`, `tolean/Sql/IR/`, `tolean/Sql/Translate/Plan.lean` | The plan of a `SELECT` as Lean data, its printer and its evaluator, and the total translator that builds it |
-| `tolean/Sql/Spec/Eval.lean`, `tolean/Sql/Proof/` | An interpreter for the SQL subset that scans every table, and `translate_sound`, which proves that each plan computes what the interpreter computes |
+| `tolean/Sql/Spec/Eval.lean`, `tolean/Sql/Proof/` | An interpreter for the SQL subset that scans every table, and `translate_sound`, which proves that each plan computes what the interpreter computes. `tolean/Sql/Checks.lean` checks both on single queries. |
 | `Main.lean` | The `tolean` command |
 | `wasm/` | The translator compiled to WebAssembly for the playground. `build.sh` builds it. |
 | `npm/` | The npm package: the `tolean` command and `translateSource`, which run the native binary for the platform (built by `.github/workflows/release.yml`), and the Lean runtime that generated code imports |

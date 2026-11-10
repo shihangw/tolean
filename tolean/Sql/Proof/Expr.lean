@@ -363,27 +363,38 @@ theorem expr_sound (hΓ : env.map Binding.shape = Γ.map Entry.shape) :
             exact cmpM_mono (iha.refines (by intro n; rw [hta]; simp))
               (ihb.refines (by intro n; rw [htb]; simp))
   | .unary sp op a, hint, st, st', ie, t, h => by
-    simp only [trExpr] at h
-    by_cases hn : op = "not"
-    · rw [if_pos hn] at h
+    rw [trExpr.eq_def] at h
+    simp only at h
+    cases hc : constInt? (.unary sp op a) with
+    | some n =>
+      simp only [hc] at h
       tm_simp at h
-      obtain ⟨⟨ia, ta⟩, _, ha, _, _, ⟨hc, rfl⟩, ⟨rfl, rfl⟩, rfl⟩ := h
-      simp only [decide_eq_true_eq] at hc
-      have iha := (expr_sound hΓ a _ _ _ _ _ ha).refines (by intro n; rw [hc]; simp)
-      refine .inr ⟨rfl, ?_⟩
-      simp only [IR.Expr.eval, Eval.eval, Eval.unary, if_pos hn]
-      exact notM_mono iha
-    · by_cases hm : op = "-"
-      · rw [if_neg hn, if_pos hm] at h
+      obtain ⟨_, _, _, ⟨rfl, rfl⟩, rfl⟩ := h
+      refine .inr ⟨rfl, fun v hv => ?_⟩
+      simp only [Eval.eval, hc]
+      simpa [IR.Expr.eval] using hv
+    | none =>
+      simp only [hc] at h
+      by_cases hn : op = "not"
+      · rw [if_pos hn] at h
         tm_simp at h
-        obtain ⟨⟨ia, ta⟩, _, ha, _, _, ⟨hc, rfl⟩, ⟨rfl, rfl⟩, rfl⟩ := h
-        simp only [decide_eq_true_eq] at hc
-        have iha := (expr_sound hΓ a _ _ _ _ _ ha).refines (by intro n; rw [hc.1]; simp)
+        obtain ⟨⟨ia, ta⟩, _, ha, _, _, ⟨hc', rfl⟩, ⟨rfl, rfl⟩, rfl⟩ := h
+        simp only [decide_eq_true_eq] at hc'
+        have iha := (expr_sound hΓ a _ _ _ _ _ ha).refines (by intro n; rw [hc']; simp)
         refine .inr ⟨rfl, ?_⟩
-        simp only [IR.Expr.eval, Eval.eval, Eval.unary, if_neg hn, if_pos hm]
-        exact negM_mono iha
-      · rw [if_neg hn, if_neg hm] at h
-        exact absurd h tm_reject_ne
+        simp only [IR.Expr.eval, Eval.eval, hc, Eval.unary, if_pos hn]
+        exact notM_mono iha
+      · by_cases hm : op = "-"
+        · rw [if_neg hn, if_pos hm] at h
+          tm_simp at h
+          obtain ⟨⟨ia, ta⟩, _, ha, _, _, ⟨hc', rfl⟩, ⟨rfl, rfl⟩, rfl⟩ := h
+          simp only [decide_eq_true_eq] at hc'
+          have iha := (expr_sound hΓ a _ _ _ _ _ ha).refines (by intro n; rw [hc'.1]; simp)
+          refine .inr ⟨rfl, ?_⟩
+          simp only [IR.Expr.eval, Eval.eval, hc, Eval.unary, if_neg hn, if_pos hm]
+          exact negM_mono iha
+        · rw [if_neg hn, if_neg hm] at h
+          exact absurd h tm_reject_ne
   | .isNull sp inner negated, hint, st, st', ie, t, h => by
     simp only [trExpr] at h
     tm_simp at h
@@ -428,7 +439,8 @@ theorem expr_sound (hΓ : env.map Binding.shape = Γ.map Entry.shape) :
       | coalesce =>
         simp only [hf] at h
         tm_simp at h
-        obtain ⟨⟨ia, ta⟩, _, ha, ⟨ib, tb⟩, _, hb, _, _, ⟨hl, rfl⟩, _, _, ⟨_, rfl⟩, ⟨rfl, rfl⟩, rfl⟩ := h
+        obtain ⟨⟨ia, ta⟩, _, ha, ⟨ib, tb⟩, _, hb, _, _, ⟨hl, rfl⟩, _, _, ⟨_, rfl⟩, _, _, ⟨_, rfl⟩,
+          ⟨rfl, rfl⟩, rfl⟩ := h
         simp only [Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true] at hl
         have iha := (expr_sound hΓ a _ _ _ _ _ ha).refines' hl.1
         have ihb := (expr_sound hΓ b _ _ _ _ _ hb).refines' hl.2

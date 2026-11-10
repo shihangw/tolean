@@ -25,14 +25,19 @@ the translator:
 - Integers carry the width of their type, `smallint`, `integer` or `bigint`.
   Arithmetic gives the wider of the two widths and raises `outOfRange` when
   the result leaves it, as PostgreSQL does.
+- A minus sign before an integer literal is part of the literal, as in
+  PostgreSQL's grammar. So `-2147483648` is an `integer`, although
+  `2147483648` is a `bigint`.
 
 The interpreter is untyped: it follows the values. It gives no meaning to a
 query outside the subset, such as a type error or an unsupported construct,
 and reports `Fault.stuck` there. Where PostgreSQL picks a meaning from static
-types that values do not show, the interpreter can be more permissive than
-PostgreSQL. It compares a string with an enum value by the label, which
-PostgreSQL does only for a string literal. The translator refuses the queries
-where that matters.
+types that values do not show, the interpreter can differ from PostgreSQL,
+and the translator refuses the queries where that matters. The interpreter
+compares a string with an enum value by the label, which PostgreSQL does
+only for a string literal. `COALESCE` gives the value it picks, with its own
+width, but PostgreSQL converts that value to the widest type of all the
+arguments.
 -/
 namespace tolean.Sql.Eval
 
@@ -355,6 +360,13 @@ def binary : Option BinOp → M Val → M Val → M Val
   | some (.cmp op), a, b => cmpM op a b
   | none, _, _ => stuck
 
+/-- The value of an integer literal with minus signs before it. PostgreSQL's
+grammar folds such a minus into the literal. -/
+def constInt? : Expr → Option Int
+  | .int _ n => some n
+  | .unary _ op a => if op = "-" then (constInt? a).map (- ·) else none
+  | _ => none
+
 def unary (op : String) (a : M Val) : M Val :=
   if op = "not" then notM a
   else if op = "-" then negM a
@@ -397,7 +409,10 @@ def eval (env : List Binding) : Expr → M Val
     | none => stuck
   | .typedLit .. => stuck
   | .binary _ op a b => binary (BinOp.ofString op) (eval env a) (eval env b)
-  | .unary _ op a => unary op (eval env a)
+  | .unary sp op a =>
+    match constInt? (.unary sp op a) with
+    | some n => intLit n
+    | none => unary op (eval env a)
   | .isNull _ a negated => isNullM negated (eval env a)
   | .call _ f args => evalCall env (Fn.ofString f) args
   | .exists .. => stuck

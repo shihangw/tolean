@@ -88,7 +88,10 @@ parser's syntax tree and follows PostgreSQL. A table is a list of rows, and
 a `SELECT` scans every row of every table in `FROM`. It never looks a row
 up by its key. Names, three-valued logic and errors follow PostgreSQL too.
 An integer carries the width of its type, so `integer + integer` raises
-`outOfRange` at the range of an `integer`.
+`outOfRange` at the range of an `integer`. A minus sign before an integer
+literal is part of the literal, as in PostgreSQL's grammar, so
+`-2147483648` is an `integer`. `tolean/Sql/Checks.lean` holds checks of
+single queries that the build runs.
 
 The theorem `translate_sound` in `tolean/Sql/Proof/Query.lean` states that
 when the plan of a query gives a result for a database, the interpreter
@@ -102,7 +105,9 @@ proof uses only `propext`, `Classical.choice` and `Quot.sound`.
 because their printed code would compute something else than PostgreSQL on
 some database. Arithmetic must be on `bigint`, because the printed code
 checks the range of a `bigint`. A cast may not narrow an integer. `jsonb`
-values are not compared. The [SQL proofs plan](../plans/sql-proofs.md) lists
+values are not compared. `COALESCE` of integers needs operands of one width,
+because the interpreter does not yet convert its value to their common
+type. The [SQL proofs plan](../plans/sql-proofs.md) lists
 these gaps and the constructs that are still to be proved.
 
 Three links of the chain are still trusted for a proved query. The parser

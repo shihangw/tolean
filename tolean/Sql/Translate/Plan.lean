@@ -33,6 +33,8 @@ on some database:
 - `IS NULL` on a value that cannot be NULL prints as a constant, so it must
   read a column, which cannot fail.
 - A string literal takes an enum type only as an operand of `=` or `<>`.
+- `COALESCE` of integers must have operands of one width, because the
+  interpreter does not model the conversion to their common type.
 -/
 namespace tolean.Sql.Plan
 
@@ -259,7 +261,12 @@ def trExpr (Γ : Scope) : Option Ty → Expr → TM (IR.Expr × T)
       check (!(ta.nullable || tb.nullable)) "operators on nullable values are not supported yet"
       binCode bop ia ta ib tb
     | none => reject s!"the operator '{op}' is not supported"
-  | _, .unary _ op a =>
+  | _, .unary sp op a =>
+    match Eval.constInt? (.unary sp op a) with
+    | some n => do
+      check (Width.w64.fits n) "the literal does not fit in bigint"
+      pure (.int n, { ty := .int, width := if Width.w32.fits n then .w32 else .w64 })
+    | none =>
     if op = "not" then do
       let (ia, ta) ← trExpr Γ (some .bool) a
       check (ta.ty = .bool) "NOT needs a boolean"
@@ -286,6 +293,7 @@ def trExpr (Γ : Scope) : Option Ty → Expr → TM (IR.Expr × T)
       let (ib, tb) ← trExpr Γ (some ta.ty) b
       check (!ia.isEnumLit && !ib.isEnumLit) "COALESCE of an enum label is not supported"
       check (ta.ty = tb.ty ∧ ta.ty ≠ .bool) "COALESCE needs one type that is not boolean"
+      check (ta.ty ≠ .int ∨ ta.width = tb.width) "COALESCE of integers of two widths is not supported yet"
       pure (.coalesce ta.nullable ia ib, if ta.nullable then tb else ta)
     | _, _ => reject s!"the function {f} is not supported"
   | _, .typedLit .. => reject "typed literals are not supported"
