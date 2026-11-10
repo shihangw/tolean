@@ -35,8 +35,14 @@ certifyOne() {
 }
 export -f certifyOne
 
+# SHARD=k/n certifies only the k-th of n equal parts of the corpus, so that
+# CI can spread the files over several machines. Without SHARD, the script
+# certifies every file.
+shard=${SHARD:-1/1}
+k=${shard%/*} n=${shard#*/}
 jobs=$(nproc 2>/dev/null || sysctl -n hw.ncpu)
-ls corpus/translate/accept/*.ts | xargs -P "$jobs" -I {} bash -c 'certifyOne "$1"' _ {}
+ls corpus/translate/accept/*.ts | awk -v k="$k" -v n="$n" '(NR - 1) % n == k - 1' |
+  xargs -P "$jobs" -I {} bash -c 'certifyOne "$1"' _ {}
 
 proved=0 skipped=0 failed=0
 for result in "$work"/results/*; do
