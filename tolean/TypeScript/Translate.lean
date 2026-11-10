@@ -2895,6 +2895,11 @@ def translateFunction (s : Span) (exported : Bool) (name : String) (typeParams :
   if out.calls self.ref && (out.decreasingParam? self.ref leanParams).isNone then
     reject s ("a function may call itself only on a part of one of its parameters, the same one in " ++
       "every call: a field of it, a value that a test narrows it to, or an element of an array in it")
+  -- The spec gives no value for a function that fails this test, because its
+  -- model of a collection as a value would not be the JS meaning.
+  if !Stmt.ownsChanges (params.map (·.name)) body then
+    reject s ("a function may change only an array, a map or a set that it makes in a const, under a " ++
+      "name that no other variable of it has, and may hand it on only in its return value")
   modify fun c => { c with typeParams := [], throws := false, functions := c.functions ++ [self] }
   return .function name leanParams (leanResult throws ret) out
 
