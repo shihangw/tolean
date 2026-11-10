@@ -82,10 +82,9 @@ of a type and Lean has no subtyping by shape.
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| A function that calls itself on a part of its argument, such as the rest of a list or a child of a tree node | A `def` with structural recursion. Lean checks that it ends without help. | |
-| Other recursion, with a `@decreases` JSDoc tag that names a measure | A `def` with `termination_by` that measure. Lean must prove that each call makes the measure smaller, and the translator refuses the file when Lean cannot. | Recursion without such a proof |
+| Recursion where a call does not pass a part of one parameter, with a `@decreases` JSDoc tag that names a measure | A `def` with `termination_by` that measure. Lean must prove that each call makes the measure smaller, and the translator refuses the file when Lean cannot. | Recursion without such a proof |
 | Functions in one file that call each other | A `mutual` block | Recursion across files |
-| An interface that refers to itself, such as a tree node with `children: ReadonlyArray<Node>` | A nested `inductive` | |
+| A tagged union whose members refer to the union, such as `interface Add { readonly kind: 'add'; readonly left: Expr }` with `type Expr = Num \| Add` | A `mutual` block of the structures and the inductive type, which Lean accepts | |
 
 Lean also accepts `partial def` without a proof that the function ends. But
 Lean cannot prove anything about a partial function, so Tolean never writes
@@ -117,14 +116,15 @@ precondition of each claim.
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| `throw new Error(message)` and `throw` of a declared error class | `Except E`. A function that can throw returns `Except`, and its callers pass the error on. | `try` and `catch` in the first version |
+| `throw` of a declared error class, a `throw` in a loop body or in a branch that changes locals, and a call that can throw inside a larger expression | `Except E`, with `forIn` and `let` in the `Except` monad | `try` and `catch` in the first version |
 | A class that extends `Error` and only sets `readonly` fields in its constructor | A structure | Methods, `static` members, and reads of `stack` |
 
 ECMA-262 does not define `Error.prototype.stack`, so a read of `stack` stays
 refused. A claim about a function that can throw says what holds when the
 function returns normally. A separate claim can show that it does not throw
-when its inputs meet a precondition. The plan for [shared monad
-pieces](shared-core.md) adds exceptions to the IR, and this stage uses them.
+when its inputs meet a precondition. Tolean translates `throw new Error(m)`
+where it ends the function, and a call that can throw as the whole value of a
+declaration or a `return`. The IR passes such an error on with `Body.bind`.
 
 ### Strings
 
@@ -226,8 +226,9 @@ leaves a gap.
 4. **P0.** The array methods without `sort`, such as `reduce` and `slice`,
    indexing, and object spread.
 5. **P0.** Control flow: the counted `for` loop.
-6. **P0.** Errors, after step 3 of the [shared core plan](shared-core.md) adds
-   exceptions to the IR.
+6. **P0.** Errors: `throw` in loop bodies and in branches that change
+   locals, calls that can throw inside larger expressions, and declared error
+   classes. `throw new Error(message)` is done.
 7. **P0.** Local functions that change variables of the enclosing function, by
    lifting them out and threading the variables through each call.
 8. **P0.** `Map` and `Set`, with owned values and the borrow for a map that a
@@ -235,8 +236,8 @@ leaves a gap.
 9. **P1.** Strings: template literals, string order, the string methods,
    iteration by code point, and the opaque `JSON.stringify`.
 10. **P1.** Sorting with consistent comparators.
-11. **P2.** Recursion: structural recursion and types that refer to themselves
-    first, then `@decreases`, mutual recursion, and `while` loops.
+11. **P2.** Recursion: tagged unions that refer to themselves first, then
+    `@decreases`, mutual recursion, and `while` loops.
 12. **P1.** The new number and `bigint` operations, and the `Date` methods.
 13. **P2.** Classes with `readonly` fields and methods that do not change
     `this`.
@@ -251,10 +252,21 @@ variables and in maps.
   certifier has no encoder for a type parameter, so a file with either gets no
   certificate. The claim could take an encoder for each type parameter as an
   argument, since the code never looks inside such a value.
+- How should a certificate cover an interface that refers to itself, and a
+  function that calls itself? The encoder of such an interface would be a
+  recursive function, and a certificate runs the interpreter with as much
+  fuel as the calls need, which a recursive call does not bound. So a file
+  with either gets no certificate yet. The encoder could recurse through
+  `List.map` with a proof that it ends, as a translated function does. The
+  claim about a recursive function could take the fuel as an argument, and
+  follow by induction on the parameter that gets smaller.
 - How should a type parameter with a constraint translate? One option is a
   type class that the translator writes for each constraint, with one
   method per field that the constraint names. Another is to pass the
   fields that the function reads as explicit arguments.
+- Which type should a function throw once the program declares error
+  classes? `JSError` holds only a message. A class with fields needs a sum of
+  the program's error classes, and a call can reach a class of another file.
 - Should `try` and `catch` come in a later step? The survey had none, but much
   other pure code catches its own errors.
 - Should a map that a caller passes in become a borrow, as above, or should the
