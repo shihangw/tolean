@@ -1197,6 +1197,23 @@ def enumOperand (known : List EnumInfo) (c : Code) (other : Ty) : Code :=
     else c
   | _, _ => c
 
+/-- How the operands of `a + b`, of the types `s` and `t`, become strings,
+when one of them is a string. ToString of a number is not modelled yet. -/
+def concatParts? : Ty → Ty → Option (IR.StringPart × IR.StringPart)
+  | .string, .string => some (.string, .string)
+  | .string, .bigint => some (.string, .bigint)
+  | .bigint, .string => some (.bigint, .string)
+  | .string, .boolean => some (.string, .boolean)
+  | .boolean, .string => some (.boolean, .string)
+  | _, _ => none
+
+/-- `a + b` where one operand is a string: ToString converts the other
+operand, and the code units join. -/
+def concatOperands (s : Span) (a b : Code) : TM Code := do
+  let some (left, right) := concatParts? a.type b.type
+    | reject s "'+' on a string needs a string, a bigint or a boolean on the other side"
+  return ⟨.ext (.stringAppend left right) [a.value, b.value], false, .string⟩
+
 /-- The code for `op` on the operands `a` and `b`, which the translator has
 already translated. `r` is the right operand, which `/` and `%` read. -/
 def applyOperator (s : Span) (op : BinOp) (r : Expr) (a b : Code) : TM Code := do
@@ -1244,7 +1261,8 @@ def applyOperator (s : Span) (op : BinOp) (r : Expr) (a b : Code) : TM Code := d
       return ⟨if isAnd then .propAnd a.code b.code else .propOr a.code b.code, true, .boolean⟩
     return ⟨if isAnd then .and a.value b.value else .or a.value b.value, false, .boolean⟩
   match op with
-  | .add => arithmetic .add .add
+  -- `+` with a string on either side joins strings.
+  | .add => if a.type == .string || b.type == .string then concatOperands s a b else arithmetic .add .add
   | .sub => arithmetic .sub .sub
   | .mul => arithmetic .mul .mul
   | .div => divide .tdiv
@@ -1845,6 +1863,10 @@ def translateUpdate (env : Env) (s : Span) (e : Expr) : TM (String × IR.Expr) :
       -- On `number` the operation goes through the abstract number model.
       if type == .number && v.type == .number then
         return (name, .numberOp numberOp (.var name) v.value)
+      -- `s += e` on a string joins strings, as `s = s + e` does.
+      if type == .string && bigintOp == .add then
+        let c ← concatOperands s ⟨.var name, false, .string⟩ v
+        return (name, c.value)
       unless type == .bigint && v.type == .bigint do
         reject s "arithmetic needs two bigints or two numbers"
       return (name, .update bigintOp name v.value)

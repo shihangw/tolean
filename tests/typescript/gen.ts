@@ -265,6 +265,14 @@ export class Gen {
         break;
       }
       case 'string':
+        // `+` with a string on either side, which converts the other operand
+        // with ToString. The operands are in parentheses, so that a
+        // conditional inside one does not take the `+` into its test.
+        options.push(() => {
+          const other = this.expr(this.pick([STRING, BIGINT, BOOLEAN]), vars, d);
+          const s = this.expr(STRING, vars, d);
+          return this.chance(0.5) ? `(${s}) + (${other})` : `(${other}) + (${s})`;
+        });
         // `typeof` on a value of any type. The translator accepts it only in
         // the test of an `if` on a union of primitive types, but the
         // interpreter runs it anywhere, so this and the comparison of
@@ -391,9 +399,12 @@ export class Gen {
       } else if (roll < 0.5 && lets.length > 0) {
         const v = this.pick(lets);
         // `x ??= e` assigns only when `x` is null.
+        // `s += e` on a string joins `e` after ToString.
         const op = v.ty.k === 'bigint' || v.ty.k === 'number' ? this.pick(['=', '+=', '-=', '*='])
-          : v.ty.k === 'nullable' ? this.pick(['=', '??=']) : '=';
-        lines.push(`${v.name} ${op} ${this.expr(v.ty, vars, 2)};`);
+          : v.ty.k === 'nullable' ? this.pick(['=', '??='])
+          : v.ty.k === 'string' ? this.pick(['=', '+=']) : '=';
+        const valueTy = op === '+=' && v.ty.k === 'string' ? this.pick([STRING, BIGINT, BOOLEAN]) : v.ty;
+        lines.push(`${v.name} ${op} ${this.expr(valueTy, vars, 2)};`);
       } else if (roll < 0.65 && depth > 0 && lets.length > 0) {
         const v = this.pick(lets);
         lines.push(`if (${this.test(vars, 2)}) {`, `  ${v.name} = ${this.expr(v.ty, vars, 1)};`, '}');

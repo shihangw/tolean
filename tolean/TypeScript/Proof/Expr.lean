@@ -336,6 +336,19 @@ theorem out_stringOrder {le : Bool} {a b : IR.Expr}
     | none => cases w <;> simp_all [IR.ExprExt.apply]
     | some u => cases w <;> cases u <;> simp_all [IR.ExprExt.apply]
 
+theorem out_stringAppend {left right : IR.StringPart} {a b : IR.Expr}
+    (h : IR.Expr.eval fs fuel ρ (.ext (.stringAppend left right) [a, b]) = some v) :
+    ∃ x y sx sy, IR.Expr.eval fs fuel ρ a = some x ∧ IR.Expr.eval fs fuel ρ b = some y ∧
+      left.toStr x = some sx ∧ right.toStr y = some sy ∧ v = .str (sx ++ sy) := by
+  simp only [IR.Expr.eval, IR.Expr.evalList] at h
+  cases hx : IR.Expr.eval fs fuel ρ a with
+  | none => simp [hx, IR.ExprExt.apply] at h
+  | some w =>
+    cases hy : IR.Expr.eval fs fuel ρ b with
+    | none => simp_all [IR.ExprExt.apply]
+    | some u =>
+      cases h1 : left.toStr w <;> cases h2 : right.toStr u <;> simp_all [IR.ExprExt.apply]
+
 theorem out_numberNe {a b : IR.Expr}
     (h : IR.Expr.eval fs fuel ρ (.numberNe a b) = some v) :
     ∃ x y, IR.Expr.eval fs fuel ρ a = some (.num x) ∧ IR.Expr.eval fs fuel ρ b = some (.num y) ∧
@@ -1028,6 +1041,47 @@ theorem nonzero_literal (e : Expr) (h : isNonzeroBigintLiteral e = true) :
     · rintro rfl
       exact ⟨s', s', ⟨rfl, rfl⟩, by simp [ht]⟩
 
+/-- The parts that `concatParts?` picks convert the operands as the
+interpreter's rule for `+` does. -/
+theorem concatParts?_binary {s t : Ty} {left right : IR.StringPart}
+    (hp : concatParts? s t = some (left, right)) {x y : Val N} {sx sy : JSString}
+    (hx : left.toStr x = some sx) (hy : right.toStr y = some sy) :
+    Eval.binary .add x y = some (.str (sx ++ sy)) := by
+  unfold concatParts? at hp
+  split at hp <;> simp only [Option.some.injEq, Prod.mk.injEq, reduceCtorEq] at hp <;>
+    obtain ⟨rfl, rfl⟩ := hp <;>
+    cases x <;> cases y <;> simp_all [IR.StringPart.toStr, Eval.binary]
+
+omit [JSNumber N] in
+/-- `concatOperands` joins the operands with the parts that `concatParts?`
+picks. -/
+theorem concatOperands_ok {s : Span} {a b c : Code} {ctx ctx' : Ctx}
+    (h : concatOperands s a b ctx = .ok c ctx') :
+    ∃ left right, concatParts? a.type b.type = some (left, right) ∧
+      c = ⟨.ext (.stringAppend left right) [a.value, b.value], false, .string⟩ := by
+  unfold concatOperands at h
+  cases hp : concatParts? a.type b.type with
+  | none => simp [hp] at h
+  | some p =>
+    obtain ⟨left, right⟩ := p
+    simp only [hp, pure_ok] at h
+    exact ⟨left, right, rfl, h.1.symm⟩
+
+/-- `a + b` with a string operand means what the interpreter's rule for `+`
+means, when each operand's code means what the operand means. -/
+theorem concat_sound {sp s : Span} {l r : Expr} {a b c : Code} {ctx ctx' : Ctx}
+    {ρs ρo : Eval.Env N} {v : Val N}
+    (h : concatOperands s a b ctx = .ok c ctx')
+    (hl : ∀ w, IR.Expr.eval fs fuel ρo a.code = some w → Eval.eval m fuel ρs l = some w)
+    (hr : ∀ w, IR.Expr.eval fs fuel ρo b.code = some w → Eval.eval m fuel ρs r = some w)
+    (hv : IR.Expr.eval fs fuel ρo c.code = some v) :
+    Eval.eval m fuel ρs (.binary sp .add l r) = some v := by
+  obtain ⟨left, right, hp, rfl⟩ := concatOperands_ok h
+  obtain ⟨x, y, sx, sy, hx, hy, hsx, hsy, rfl⟩ := out_stringAppend fs fuel hv
+  rw [eval_value] at hx hy
+  rw [eval_binary m fuel sp _ l r ρs rfl, hl _ hx, hr _ hy]
+  exact concatParts?_binary hp hsx hsy
+
 /-- The operator step means what the interpreter's rule for the operator
 means, when each operand's code means what the operand means. -/
 theorem applyOperator_sound {sp s : Span} {op : BinOp} {l r : Expr} {a b c : Code} {ctx ctx' : Ctx}
@@ -1041,6 +1095,8 @@ theorem applyOperator_sound {sp s : Span} {op : BinOp} {l r : Expr} {a b c : Cod
   cases op
   all_goals simp only [ite_state] at h
   all_goals (repeat' split at h)
+  -- `+` with a string operand.
+  case add.isTrue => exact concat_sound m fs fuel h hl hr hv
   all_goals (simp at h)
   all_goals first | obtain ⟨rfl, -⟩ := h | obtain ⟨⟨-, -⟩, rfl⟩ := h
   all_goals try (exfalso; contradiction)

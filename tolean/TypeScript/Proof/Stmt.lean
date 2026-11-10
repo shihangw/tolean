@@ -322,6 +322,21 @@ theorem update_sound (hc : CallsAgree (N := N) m.program fs fuel) {env : Transla
           have hhas : env.has x = true := by simp [Env.has, hl]
           cases op <;> simp [AssignOp.isSimple] at hsimple <;> simp only [assignOps?, ite_state] at h
           all_goals (repeat' split at h) <;> simp at h
+          -- Only `+=` joins strings.
+          all_goals try (obtain ⟨-, hop⟩ := ‹((_ : Ty) == _) = true ∧ ((_ : IR.IntOp) == _) = true›
+                         exact absurd hop (by decide))
+          -- `s += e` on a string.
+          case ident.isFalse.isTrue.some.let.add.isFalse.isTrue =>
+              (obtain ⟨c, hcat, rfl, rfl⟩ := h
+               obtain ⟨left, right, hp, rfl⟩ := concatOperands_ok hcat
+               have hw' : IR.Expr.eval fs fuel ρo
+                   (.ext (.stringAppend left right) [.var x, a.value]) = some w := hw
+               refine ⟨hhas, by simp [exprChanges, AssignOp.isSimple], ?_⟩
+               obtain ⟨p, q, sp, sq, hp', hq, hsp, hsq, rfl⟩ := out_stringAppend fs fuel hw'
+               simp only [IR.Expr.eval] at hp'
+               rw [eval_value] at hq
+               rw [← ha x] at hp'
+               simp [Eval.execStmt, hp', hsim ρs ρo _ ha hs hq, concatParts?_binary hp hsp hsq])
           all_goals obtain ⟨⟨rfl, rfl⟩, -⟩ := h
           all_goals refine ⟨hhas, by simp [exprChanges, AssignOp.isSimple], ?_⟩
           · rw [eval_withType, eval_value] at hw

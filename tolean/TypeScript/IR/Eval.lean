@@ -64,6 +64,13 @@ def NumberTest.apply : NumberTest → N → Bool
   | .isNaN, a => JSNumber.isNaN a
   | .isFinite, a => JSNumber.isFinite a
 
+/-- The string that ToString gives for one operand of `a + b` on strings. -/
+def StringPart.toStr : StringPart → Val N → Option JSString
+  | .string, .str s => some s
+  | .bigint, .int i => some (JSString.ofInt i)
+  | .boolean, .bool b => some (JSString.ofBool b)
+  | _, _ => none
+
 /-- An operation that TypeScript adds, on the values of its arguments. -/
 def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   | .number n, [] => some (.num (JSNumber.ofSafeInt n))
@@ -73,6 +80,8 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   | .numberNe, [.num a, .num b] => some (.bool !(JSNumber.eq a b))
   | .numberTest test, [.num a] => some (.bool (test.apply a))
   | .stringOrder le, [.str a, .str b] => some (.bool (if le then a.le b else a.lt b))
+  | .stringAppend left right, [a, b] => do
+    return .str ((← left.toStr a) ++ (← right.toStr b))
   | .undefined, [] => some .undefined
   -- `a === undefined` and `a !== undefined`, as `IsStrictlyEqual` gives them.
   | .isUndefined, [a] => some (.bool (a matches .undefined))

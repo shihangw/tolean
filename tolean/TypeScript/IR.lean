@@ -33,6 +33,12 @@ inductive NumberTest where
   | isSafeInteger | isNaN | isFinite
 deriving BEq, Repr, Inhabited, DecidableEq
 
+/-- How one operand of `a + b` on strings becomes a string, by ToString: a
+string stays itself, and a bigint or a boolean becomes its text. -/
+inductive StringPart where
+  | string | bigint | boolean
+deriving BEq, Repr, Inhabited, DecidableEq
+
 /-- The types that TypeScript adds to the IR. -/
 inductive TyExt where
   /-- The number type parameter, `N`. -/
@@ -71,6 +77,10 @@ inductive ExprExt where
   or `a <= b` on strings. The translator swaps the operands for `>` and
   `>=`. -/
   | stringOrder (le : Bool)
+  /-- `(a ++ b)`, where `left` and `right` say how each operand becomes a
+  string, such as `(a ++ JSString.ofInt b)`: `a + b` where one operand is a
+  string. -/
+  | stringAppend (left right : StringPart)
   /-- `match k with | K.a => r.a | …`, on `r` and `k`: `r[k]`, where `r` is a
   `Record<K, V>` with the keys `keys`, and `K` is the literal union `key`. -/
   | recordGet (key : DeclRef) (keys : List String)
@@ -150,6 +160,15 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
   | .numberTest .isFinite, [a] => s!"({js}.isFinite {argument a})"
   | .stringOrder le, [a, b] =>
     s!"({leanName names "JSString"}.{if le then "le" else "lt"} {argument a} {argument b})"
+  | .stringAppend left right, [a, b] =>
+    -- The printer writes a string as an atom, an application or code in
+    -- parentheses, and an application binds tighter than `++`, so a string
+    -- operand needs no parentheses of its own.
+    let part (p : StringPart) (x : String) : String := match p with
+      | .string => x
+      | .bigint => s!"({leanName names "JSString"}.ofInt {argument x})"
+      | .boolean => s!"({leanName names "JSString"}.ofBool {argument x})"
+    s!"({part left a} ++ {part right b})"
   | .undefined, _ => leanName names "none"
   | .isUndefined, [a] => s!"{argument a}.isNone"
   | .isDefined, [a] => s!"{argument a}.isSome"
@@ -170,7 +189,7 @@ instance : tolean.IR.PrintOp ExprExt := ⟨ExprExt.print⟩
 An operation on strings may stand where no string type or literal is in
 sight, such as `a.key < b.key` on an interface of another file. -/
 def ExprExt.usesString : ExprExt → Bool
-  | .stringOrder _ => true
+  | .stringOrder _ | .stringAppend .. => true
   | _ => false
 
 end tolean.TypeScript.IR
