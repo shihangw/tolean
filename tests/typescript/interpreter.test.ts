@@ -315,7 +315,9 @@ test('the interpreter gives no value where an assignment to a const throws', asy
 // A JS loop over a set, a map or an array sees a change that its body makes
 // to what it runs over, and the interpreter takes the values when the loop
 // starts. So it must give no value for such a loop, however the iterable
-// reaches the collection.
+// reaches the collection. A loop over a copy, `new Set(s)`, runs over a new
+// set, so a change to `s` does not reach it, and there the interpreter must
+// agree with Node.
 test('the interpreter gives no value for a loop that changes what it runs over', async () => {
   const start = 'const s = new Set<bigint>(); s.add(1n); s.add(2n); let n = 0n;';
   const loop = (iterable: string) =>
@@ -329,7 +331,8 @@ test('the interpreter gives no value for a loop that changes what it runs over',
     'export function f(b: boolean): bigint { const m = new Map<bigint, bigint>(); m.set(1n, 1n); m.set(2n, 2n); ' +
       'let n = 0n; for (const e of (m)) { m.delete(2n); n += e[1]; } return n; }',
   ];
-  const sources = changing;
+  const copying = [loop('new Set<bigint>(s)'), loop('(new Set<bigint>(s))')];
+  const sources = [...changing, ...copying];
   const input = { programs: sources.map((source) => ({ source, calls: [{ function: 'f', args: [true] }] })) };
   const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
   expect(run.status, run.stderr).toBe(0);
