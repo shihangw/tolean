@@ -90,6 +90,30 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   | .indexLit k, [.list xs] => some (Eval.elementAt xs (some k))
   | .indexNumber, [.list xs, .num i] => some (Eval.elementAt xs (JSNumber.toSafeInt i))
   | .at k, [.list xs] => some (Eval.atVal xs k)
+  -- The operations of a `Map`, as the spec gives them.
+  | .mapEmpty, [] => some (.map [])
+  | .mapGet, [.map entries, k] => (Eval.mapFind entries k).map (·.getD .undefined)
+  | .mapHas, [.map entries, k] => (Eval.mapFind entries k).map (.bool ·.isSome)
+  | .mapSize, [.map entries] => some (.num (JSNumber.ofSafeInt entries.length))
+  | .mapSet, [.map entries, k, v] => (Eval.mapSet entries k v).map .map
+  | .mapDelete, [.map entries, k] => (Eval.mapDelete entries k).map .map
+  -- The operations of a `Set`, as the spec gives them.
+  | .setEmpty, [] => some (.set [])
+  | .setHas, [.set elems, x] => (Eval.setHas elems x).map .bool
+  | .setSize, [.set elems] => some (.num (JSNumber.ofSafeInt elems.length))
+  | .setAdd, [.set elems, x] => (Eval.setAdd elems x).map .set
+  | .setDelete, [.set elems, x] => (Eval.setDelete elems x).map .set
+  -- What a loop visits, as the spec's `iterValues` gives it: a JS entry is
+  -- the array `[key, value]`, as a Lean pair is.
+  | .setElems, [.set elems] => some (.list elems)
+  | .mapEntries, [.map entries] => some (.list (entries.map fun (k, v) => .list [k, v]))
+  | .mapOfList, [.list items] => (Eval.mapOfItems items).map .map
+  | .setOfList, [.list items] => (Eval.setOfItems items).map .set
+  -- `pure a` is the value of `a`, as the result of a function that does not
+  -- throw this time.
+  | .pure, [a] => some a
+  -- `JSError.mk m` is the object that `new Error(m)` makes.
+  | .error, [.str m] => some (.error "Error" [("message", .str m)])
   | _, _ => none
 
 /-- The tag of `v`, a value of a tagged union: the string in its tag field
@@ -144,16 +168,9 @@ def Expr.eval (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
   | .ite c a b => do
     let .bool t ← Expr.eval fs fuel ρ c | none
     if t then Expr.eval fs fuel ρ a else Expr.eval fs fuel ρ b
-  | .call ref args => do
-    let vs ← Expr.evalList fs fuel ρ args
-    match fuel with
-    | 0 => none
-    | fuel + 1 =>
-      let (params, body) ← fs.lookup ref
-      if params.length != vs.length then none
-      match ← Body.exec fs fuel (params.zip vs).reverse body with
-      | .ret v => some v
-      | .normal _ | .brk _ | .cont _ => none
+  -- A call that throws gives no value here. `Body.bind` runs a call that can
+  -- throw.
+  | .call ref args => do (← Expr.evalCall fs fuel ρ ref args).toOption
   | .list elems _ => do return .list (← Expr.evalList fs fuel ρ elems)
   -- A tuple is an array in JS, so its value is the list of its elements.
   | .tuple elems => do return .list (← Expr.evalList fs fuel ρ elems)
@@ -231,7 +248,33 @@ def Expr.eval (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
     | .any => return .bool (← Expr.evalFind fs fuel ρ param body true xs).isSome
     | .all => return .bool (← Expr.evalFind fs fuel ρ param body false xs).isNone
     | .find => return (← Expr.evalFind fs fuel ρ param body true xs).getD .undefined
+    | .mapIdx index => return .list (← Expr.evalMapIdx fs fuel ρ param index body 0 xs)
+    -- `findIndex` is the position of the first element that passes, as a
+    -- number, or `-1`. `findLast` looks from the end.
+    | .findIndex =>
+      return .num (JSNumber.ofSafeInt (((← Expr.evalFindIdx fs fuel ρ param body 0 xs).map Int.ofNat).getD (-1)))
+    | .findLast => return (← Expr.evalFind fs fuel ρ param body true xs.reverse).getD .undefined
+  -- `List.foldl` runs the function on each element in order, with the value
+  -- so far bound to `acc`, as the callback of `reduce` does.
+  | .listFold items init acc param _ body _ => do
+    let .list xs ← Expr.eval fs fuel ρ items | none
+    Expr.evalReduce fs fuel ρ acc param body (← Expr.eval fs fuel ρ init) xs
 termination_by e => (fuel, sizeOf e, 0)
+
+/-- A call of the function `ref` of the output with `args`: `.ok` of the
+value it returns, or `.error` of the error it throws. -/
+def Expr.evalCall (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : Env N) (ref : DeclRef)
+    (args : List Expr) : Option (Except (Val N) (Val N)) := do
+  let vs ← Expr.evalList fs fuel ρ args
+  match fuel with
+  | 0 => none
+  | fuel + 1 =>
+    let (params, body) ← fs.lookup ref
+    if params.length != vs.length then none
+    match ← Body.exec fs fuel (params.zip vs).reverse body with
+    | .ret r => some r
+    | .normal _ | .brk _ | .cont _ => none
+termination_by (fuel, sizeOf args, 1)
 
 /-- `List.map (fun param => body)` on `xs`. -/
 def Expr.evalMap (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : Env N)
@@ -239,6 +282,35 @@ def Expr.evalMap (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ :
   | [] => some []
   | x :: xs => do
     return (← Expr.eval fs fuel ((param, x) :: ρ) body) :: (← Expr.evalMap fs fuel ρ param body xs)
+termination_by xs => (fuel, sizeOf body, xs.length + 1)
+
+/-- `List.mapIdx (fun index param => body)` on `xs`, whose first element is at
+position `start`. The body sees the position as a number. -/
+def Expr.evalMapIdx (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : Env N)
+    (param index : String) (body : Expr) (start : Nat) : List (Val N) → Option (List (Val N))
+  | [] => some []
+  | x :: xs => do
+    let v ← Expr.eval fs fuel ((param, x) :: (index, .num (JSNumber.ofSafeInt start)) :: ρ) body
+    return v :: (← Expr.evalMapIdx fs fuel ρ param index body (start + 1) xs)
+termination_by xs => (fuel, sizeOf body, xs.length + 1)
+
+/-- `List.foldl (fun acc param => body) v` on `xs`. -/
+def Expr.evalReduce (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : Env N)
+    (acc param : String) (body : Expr) (v : Val N) : List (Val N) → Option (Val N)
+  | [] => some v
+  | x :: xs => do
+    Expr.evalReduce fs fuel ρ acc param body (← Expr.eval fs fuel ((param, x) :: (acc, v) :: ρ) body) xs
+termination_by xs => (fuel, sizeOf body, xs.length + 1)
+
+/-- `List.findIdx? (fun param => body)` on `xs`, whose first element is at
+position `start`. -/
+def Expr.evalFindIdx (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : Env N)
+    (param : String) (body : Expr) (start : Nat) : List (Val N) → Option (Option Nat)
+  | [] => some none
+  | x :: xs => do
+    let .bool b ← Expr.eval fs fuel ((param, x) :: ρ) body | none
+    if b then return some start
+    Expr.evalFindIdx fs fuel ρ param body (start + 1) xs
 termination_by xs => (fuel, sizeOf body, xs.length + 1)
 
 /-- `List.filter (fun param => body)` on `xs`, where `body` is a `Bool`. -/
@@ -278,10 +350,16 @@ termination_by fields => (fuel, sizeOf fields, 0)
 branch or a loop body, with the bindings it has made. -/
 def Body.exec (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : Env N) :
     Body → Option (Outcome N)
-  | .value e => do return .ret (← Expr.eval fs fuel ρ e)
+  | .value e => do return .ret (.ok (← Expr.eval fs fuel ρ e))
   | .state _ | .yield .. => some (.normal ρ)
   | .done .. => some (.brk ρ)
-  | .exit e _ => do return .ret (← Expr.eval fs fuel ρ e)
+  | .exit e _ => do return .ret (.ok (← Expr.eval fs fuel ρ e))
+  | .throw e => do return .ret (.error (← Expr.eval fs fuel ρ e))
+  -- `>>=` passes the error of the call on, and runs `rest` on its value.
+  | .bind name ref args rest => do
+    match ← Expr.evalCall fs fuel ρ ref args with
+    | .ok v => Body.exec fs fuel ((name, v) :: ρ) rest
+    | .error t => some (.ret (.error t))
   | .let name e rest => do Body.exec fs fuel ((name, ← Expr.eval fs fuel ρ e) :: ρ) rest
   | .letArray name _ elems rest => do
     Body.exec fs fuel ((name, .list (← Expr.evalList fs fuel ρ elems)) :: ρ) rest
@@ -332,13 +410,20 @@ termination_by xs => (fuel, sizeOf body, xs.length + 1)
 
 end
 
-/-- Call the function `key` of the output with `args`. -/
-def runIn (fs : List (DeclRef × List String × Body)) (key : DeclRef) (args : List (Val N))
-    (fuel : Nat := 64) : Option (Val N) := do
+/-- Call the function `key` of the output with `args`: `.ok` of the value it
+returns, or `.error` of the error it throws. -/
+def callIn (fs : List (DeclRef × List String × Body)) (key : DeclRef) (args : List (Val N))
+    (fuel : Nat := 64) : Option (Except (Val N) (Val N)) := do
   let (params, body) ← fs.lookup key
   if params.length != args.length then none
   match ← Body.exec fs fuel (params.zip args).reverse body with
-  | Outcome.ret v => some v
+  | Outcome.ret r => some r
   | Outcome.normal _ | Outcome.brk _ | Outcome.cont _ => none
+
+/-- The value that the call of the function `key` of the output returns, or
+none when it throws. -/
+def runIn (fs : List (DeclRef × List String × Body)) (key : DeclRef) (args : List (Val N))
+    (fuel : Nat := 64) : Option (Val N) :=
+  (callIn fs key args fuel).bind Except.toOption
 
 end tolean.TypeScript.IR

@@ -151,6 +151,14 @@ inductive Expr where
   /-- `expr satisfies type`. Type stripping removes `satisfies type`, so it has
   the value of `expr`. -/
   | satisfies (span : Span) (expr : Expr) (type : TypeExpr)
+  /-- `new C<A, B>(args)`, where `C` is a name. The type arguments may be
+  absent, and the arguments are always in parentheses. -/
+  | new (span : Span) (callee : String) (typeArgs : List TypeExpr) (args : List Expr)
+  /-- `...expr`, an element of an array literal or an argument of a call or a
+  `new`, and nothing else. It is not an expression on its own: as in `tsc`'s
+  tree, it is a node of its own kind that only a list of elements or
+  arguments may hold. -/
+  | spread (span : Span) (expr : Expr)
 
 inductive Property where
   /-- `{ a }`. -/
@@ -239,6 +247,8 @@ inductive Stmt where
   /-- `switch (disc) { … }`, with its clauses in source order. A clause is
   `case test:` or, when `test` is `none`, `default:`, with its statements. -/
   | switchStmt (span : Span) (disc : Expr) (clauses : List (Option Expr × List Stmt))
+  /-- `throw value;`. -/
+  | throwStmt (span : Span) (value : Expr)
 
 instance : Inhabited Stmt := ⟨.empty default⟩
 
@@ -261,12 +271,14 @@ def Expr.assigns (n : String) : Expr → Bool
   | .prefix _ _ e | .postfix _ _ e => e.namesTarget n || e.assigns n
   | .index _ a b | .binary _ _ a b => a.assigns n || b.assigns n
   | .call _ c args => c.assigns n || Expr.assignsList n args
+  | .spread _ e => e.assigns n
   | .cond _ a b c => a.assigns n || b.assigns n || c.assigns n
   | .assign _ _ target value => target.namesTarget n || target.assigns n || value.assigns n
   -- The body runs only when the arrow is called; counting it anyway only
   -- refuses more.
   | .arrow _ _ _ body => body.assigns n
   | .asConst _ e | .satisfies _ e _ => e.assigns n
+  | .new _ _ _ args => Expr.assignsList n args
 
 def Expr.assignsList (n : String) : List Expr → Bool
   | [] => false
@@ -305,6 +317,7 @@ def Stmt.assigns (n : String) : Stmt → Bool
   | .block _ ss => Stmt.assignsList n ss
   | .breakStmt _ | .continueStmt _ | .empty _ => false
   | .switchStmt _ d cs => d.assigns n || Stmt.assignsClauses n cs
+  | .throwStmt _ e => e.assigns n
 
 def Stmt.assignsList (n : String) : List Stmt → Bool
   | [] => false
@@ -317,6 +330,326 @@ def Stmt.assignsClauses (n : String) : List (Option Expr × List Stmt) → Bool
     | none => false) || Stmt.assignsList n body || Stmt.assignsClauses n cs
 
 end
+
+/-- The methods that change the array, map or set that they are called on. -/
+def changingMethods : List String := ["push", "set", "add", "delete"]
+
+mutual
+
+/-- `e` calls a method that changes the array, map or set that the name `n`
+holds, such as `n.push(x)` or `n.delete(k)`, somewhere inside it. -/
+def Expr.mutates (n : String) : Expr → Bool
+  | .call _ (.member _ (.ident _ m) method) args =>
+    (m == n && changingMethods.contains method) || Expr.mutatesList n args
+  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => false
+  | .array _ es => Expr.mutatesList n es
+  | .object _ ps => Property.mutatesList n ps
+  | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e =>
+    e.mutates n
+  | .index _ a b | .binary _ _ a b | .assign _ _ a b => a.mutates n || b.mutates n
+  | .call _ c args => c.mutates n || Expr.mutatesList n args
+  | .cond _ a b c => a.mutates n || b.mutates n || c.mutates n
+  | .arrow _ _ _ body => body.mutates n
+  | .asConst _ e | .satisfies _ e _ | .spread _ e => e.mutates n
+  | .new _ _ _ args => Expr.mutatesList n args
+
+def Expr.mutatesList (n : String) : List Expr → Bool
+  | [] => false
+  | e :: es => e.mutates n || Expr.mutatesList n es
+
+def Property.mutatesList (n : String) : List Property → Bool
+  | [] => false
+  | .shorthand .. :: ps => Property.mutatesList n ps
+  | .keyValue _ _ v :: ps => v.mutates n || Property.mutatesList n ps
+
+end
+
+mutual
+
+/-- `s` changes the array, map or set that the name `n` holds somewhere
+inside it, as `Expr.mutates` says. -/
+def Stmt.mutates (n : String) : Stmt → Bool
+  | .varDecl _ d => match d.init with
+    | some e => e.mutates n
+    | none => false
+  | .exprStmt _ e | .throwStmt _ e => e.mutates n
+  | .returnStmt _ e => match e with
+    | some e => e.mutates n
+    | none => false
+  | .ifStmt _ t a b => t.mutates n || a.mutates n || (match b with
+    | some b => b.mutates n
+    | none => false)
+  | .forOfStmt _ _ _ it b => it.mutates n || b.mutates n
+  | .forStmt _ init t u b => (match init with
+    | some { init := some e, .. } => e.mutates n
+    | _ => false) || (match t with
+    | some t => t.mutates n
+    | none => false) || (match u with
+    | some u => u.mutates n
+    | none => false) || b.mutates n
+  | .whileStmt _ t b => t.mutates n || b.mutates n
+  | .block _ ss => Stmt.mutatesList n ss
+  | .breakStmt _ | .continueStmt _ | .empty _ => false
+  | .switchStmt _ d cs => d.mutates n || Stmt.mutatesClauses n cs
+
+def Stmt.mutatesList (n : String) : List Stmt → Bool
+  | [] => false
+  | s :: ss => s.mutates n || Stmt.mutatesList n ss
+
+def Stmt.mutatesClauses (n : String) : List (Option Expr × List Stmt) → Bool
+  | [] => false
+  | (t, body) :: cs => (match t with
+    | some t => t.mutates n
+    | none => false) || Stmt.mutatesList n body || Stmt.mutatesClauses n cs
+
+end
+
+mutual
+
+/-- `e` mentions a name that `p` holds for. Such an expression may give the
+collection of that name, such as `(s)`, `s satisfies T`, `c ? s : t` or
+`f(s)`. So may the arguments of a `new`: `new Map([[k, s]])` holds `s` as a
+value, and `.get(k)` gives it back. -/
+def Expr.mayHold (p : String → Bool) : Expr → Bool
+  | .ident _ n => p n
+  | .number .. | .bigint .. | .string .. | .bool .. | .null _ => false
+  | .new _ _ _ args => Expr.mayHoldList p args
+  | .array _ es => Expr.mayHoldList p es
+  | .object _ ps => Property.mayHoldList p ps
+  | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e =>
+    e.mayHold p
+  | .index _ a b | .binary _ _ a b | .assign _ _ a b => a.mayHold p || b.mayHold p
+  | .call _ c args => c.mayHold p || Expr.mayHoldList p args
+  | .cond _ a b c => a.mayHold p || b.mayHold p || c.mayHold p
+  | .arrow _ _ _ body => body.mayHold p
+  | .asConst _ e | .satisfies _ e _ | .spread _ e => e.mayHold p
+
+def Expr.mayHoldList (p : String → Bool) : List Expr → Bool
+  | [] => false
+  | e :: es => e.mayHold p || Expr.mayHoldList p es
+
+def Property.mayHoldList (p : String → Bool) : List Property → Bool
+  | [] => false
+  | .shorthand _ n :: ps => p n || Property.mayHoldList p ps
+  | .keyValue _ _ v :: ps => v.mayHold p || Property.mayHoldList p ps
+
+end
+
+/-- `e` is a new collection: a `new`, perhaps in parentheses or with `as const`
+or `satisfies T`. No name holds it, so a loop over it sees no change that the
+body makes to a name. A `new Set(s)` copies the values of `s` when it runs. -/
+def Expr.isFresh : Expr → Bool
+  | .new .. => true
+  | .paren _ e | .asConst _ e | .satisfies _ e _ => e.isFresh
+  | _ => false
+
+/-- The body of `for (… of iterable)` may change what the loop runs over: it
+changes the array, map or set of a name that `iterable` may give. A JS loop
+sees such a change while it runs. The test is conservative: it does not need
+to know which name, if any, the iterable gives at run time. Only a new
+collection is safe whatever names it mentions. -/
+def Stmt.mutatesIterable (iterable : Expr) (body : Stmt) : Bool :=
+  !iterable.isFresh && iterable.mayHold body.mutates
+
+/-! ### Which collections a function may change
+
+The spec models an array, a map or a set as a value, so a `push`, `set`, `add`
+or `delete` changes only the variable that it names. JS changes the one object
+that every name of it shares. The two agree when nothing else holds the object
+while it changes, which `Stmt.ownsChanges` checks. -/
+
+mutual
+
+/-- The names whose array, map or set `e` changes: the receiver of each
+`push`, `set`, `add` or `delete` in it. -/
+def Expr.changed : Expr → List String
+  | .call _ (.member _ (.ident _ m) method) args =>
+    (if changingMethods.contains method then [m] else []) ++ Expr.changedList args
+  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => []
+  | .array _ es | .new _ _ _ es => Expr.changedList es
+  | .object _ ps => Property.changedList ps
+  | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e
+  | .arrow _ _ _ e | .asConst _ e | .satisfies _ e _ | .spread _ e => e.changed
+  | .index _ a b | .binary _ _ a b | .assign _ _ a b => a.changed ++ b.changed
+  | .call _ c args => c.changed ++ Expr.changedList args
+  | .cond _ a b c => a.changed ++ b.changed ++ c.changed
+
+def Expr.changedList : List Expr → List String
+  | [] => []
+  | e :: es => e.changed ++ Expr.changedList es
+
+def Property.changedList : List Property → List String
+  | [] => []
+  | .shorthand .. :: ps => Property.changedList ps
+  | .keyValue _ _ v :: ps => v.changed ++ Property.changedList ps
+
+end
+
+mutual
+
+/-- `e` hands on the object that the name `n` holds, so that something else
+may hold it: `n` stands on its own anywhere but as the receiver of a member,
+a call or an index, or as what a `new` or a spread copies. A receiver gives a new value, such as `n.size` or
+`n.get(k)`; the spec has no rule for a method that gives `n` itself back,
+such as `n.set(k, v)` used as a value. -/
+def Expr.leaks (n : String) : Expr → Bool
+  | .ident _ m => m == n
+  | .number .. | .bigint .. | .string .. | .bool .. | .null _ => false
+  | .member _ (.ident ..) _ | .optMember _ (.ident ..) _ => false
+  | .index _ (.ident ..) i => i.leaks n
+  | .call _ (.member _ (.ident ..) _) args => Expr.leaksList n args
+  -- `new Map(m)`, `new Set(s)` and `...s` copy the values of the collection,
+  -- not the collection itself. `new Map([[k, s]])` holds `s`, so it leaks.
+  | .new _ _ _ [.ident ..] | .spread _ (.ident ..) => false
+  | .array _ es | .new _ _ _ es => Expr.leaksList n es
+  | .object _ ps => Property.leaksList n ps
+  | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e
+  | .arrow _ _ _ e | .asConst _ e | .satisfies _ e _ | .spread _ e => e.leaks n
+  | .index _ a b | .binary _ _ a b | .assign _ _ a b => a.leaks n || b.leaks n
+  | .call _ c args => c.leaks n || Expr.leaksList n args
+  | .cond _ a b c => a.leaks n || b.leaks n || c.leaks n
+
+def Expr.leaksList (n : String) : List Expr → Bool
+  | [] => false
+  | e :: es => e.leaks n || Expr.leaksList n es
+
+def Property.leaksList (n : String) : List Property → Bool
+  | [] => false
+  | .shorthand _ m :: ps => m == n || Property.leaksList n ps
+  | .keyValue _ _ v :: ps => v.leaks n || Property.leaksList n ps
+
+end
+
+/-- `d` makes a new collection that only its name holds: `const m = new Map()`,
+`const s = new Set(xs)`, or `const xs: Array<T> = [...]`. -/
+def VarDecl.owns (d : VarDecl) : Bool :=
+  d.kind == .const &&
+    match d.init, d.type with
+    | some (.new _ "Map" _ _), _ | some (.new _ "Set" _ _), _ => true
+    | some (.array _ _), some (.ref _ "Array" [_]) | some (.array _ _), some (.array _ _) => true
+    | _, _ => false
+
+mutual
+
+/-- The statements of `s` that bind the name `n`, each as whether it makes a
+new collection that only `n` holds (`VarDecl.owns`). A loop variable never
+does: it holds an element of something else. -/
+def Stmt.binds (n : String) : Stmt → List Bool
+  | .varDecl _ d => if d.name == n then [d.owns] else []
+  | .forOfStmt _ _ x _ b => (if x == n then [false] else []) ++ b.binds n
+  | .forStmt _ init _ _ b =>
+    (match init with
+     | some d => if d.name == n then [d.owns] else []
+     | none => []) ++ b.binds n
+  | .ifStmt _ _ a b => a.binds n ++ (match b with
+    | some b => b.binds n
+    | none => [])
+  | .whileStmt _ _ b => b.binds n
+  | .block _ ss => Stmt.bindsList n ss
+  | .switchStmt _ _ cs => Stmt.bindsClauses n cs
+  | .exprStmt .. | .returnStmt .. | .breakStmt _ | .continueStmt _ | .empty _ | .throwStmt .. => []
+
+def Stmt.bindsList (n : String) : List Stmt → List Bool
+  | [] => []
+  | s :: ss => s.binds n ++ Stmt.bindsList n ss
+
+def Stmt.bindsClauses (n : String) : List (Option Expr × List Stmt) → List Bool
+  | [] => []
+  | (_, body) :: cs => Stmt.bindsList n body ++ Stmt.bindsClauses n cs
+
+end
+
+mutual
+
+/-- The names whose array, map or set `s` changes, as `Expr.changed` says. -/
+def Stmt.changed : Stmt → List String
+  | .varDecl _ d => match d.init with
+    | some e => e.changed
+    | none => []
+  | .exprStmt _ e | .throwStmt _ e => e.changed
+  | .returnStmt _ e => match e with
+    | some e => e.changed
+    | none => []
+  | .ifStmt _ t a b => t.changed ++ a.changed ++ (match b with
+    | some b => b.changed
+    | none => [])
+  | .forOfStmt _ _ _ it b => it.changed ++ b.changed
+  | .forStmt _ init t u b => (match init with
+    | some { init := some e, .. } => e.changed
+    | _ => []) ++ (match t with
+    | some t => t.changed
+    | none => []) ++ (match u with
+    | some u => u.changed
+    | none => []) ++ b.changed
+  | .whileStmt _ t b => t.changed ++ b.changed
+  | .block _ ss => Stmt.changedList ss
+  | .breakStmt _ | .continueStmt _ | .empty _ => []
+  | .switchStmt _ d cs => d.changed ++ Stmt.changedClauses cs
+
+def Stmt.changedList : List Stmt → List String
+  | [] => []
+  | s :: ss => s.changed ++ Stmt.changedList ss
+
+def Stmt.changedClauses : List (Option Expr × List Stmt) → List String
+  | [] => []
+  | (t, body) :: cs => (match t with
+    | some t => t.changed
+    | none => []) ++ Stmt.changedList body ++ Stmt.changedClauses cs
+
+end
+
+mutual
+
+/-- `s` hands on the object that `n` holds (`Expr.leaks`), outside a
+`return` and outside the place of the collection that a `for … of` runs
+over. A `return` ends the function, so nothing changes the object after
+that. A loop reads the collection without keeping it. -/
+def Stmt.leaks (n : String) : Stmt → Bool
+  | .varDecl _ d => match d.init with
+    | some e => e.leaks n
+    | none => false
+  | .exprStmt _ e | .throwStmt _ e => e.leaks n
+  | .returnStmt .. => false
+  | .ifStmt _ t a b => t.leaks n || a.leaks n || (match b with
+    | some b => b.leaks n
+    | none => false)
+  | .forOfStmt _ _ _ it b => (match it with
+    | .ident .. => false
+    | it => it.leaks n) || b.leaks n
+  | .forStmt _ init t u b => (match init with
+    | some { init := some e, .. } => e.leaks n
+    | _ => false) || (match t with
+    | some t => t.leaks n
+    | none => false) || (match u with
+    | some u => u.leaks n
+    | none => false) || b.leaks n
+  | .whileStmt _ t b => t.leaks n || b.leaks n
+  | .block _ ss => Stmt.leaksList n ss
+  | .breakStmt _ | .continueStmt _ | .empty _ => false
+  | .switchStmt _ d cs => d.leaks n || Stmt.leaksClauses n cs
+
+def Stmt.leaksList (n : String) : List Stmt → Bool
+  | [] => false
+  | s :: ss => s.leaks n || Stmt.leaksList n ss
+
+def Stmt.leaksClauses (n : String) : List (Option Expr × List Stmt) → Bool
+  | [] => false
+  | (t, body) :: cs => (match t with
+    | some t => t.leaks n
+    | none => false) || Stmt.leaksList n body || Stmt.leaksClauses n cs
+
+end
+
+/-- A function with the parameters `params` and the body `body` changes only
+collections that nothing else holds: each name whose array, map or set the
+body changes is not a parameter, every binding of it in the body makes a new
+collection, and the body hands the collection on only in a `return`. Then the
+spec's model of a collection as a value is exact. The test is on names, so it
+also refuses a second, unrelated variable of the same name in another block
+when that one is not such a collection. -/
+def Stmt.ownsChanges (params : List String) (body : Stmt) : Bool :=
+  body.changed.all fun n =>
+    !params.contains n && !(body.binds n).isEmpty && (body.binds n).all id && !body.leaks n
 
 /-- `s` declares a `const` that a statement of `rest` assigns. In JS that
 assignment throws a `TypeError` (ECMA-262 §9.1.1.1.5), so the spec gives no
@@ -338,6 +671,7 @@ def Stmt.constAssignedIn (s : Stmt) (rest : List Stmt) : Bool :=
 @[simp] theorem Stmt.constAssignedIn_continueStmt : (Stmt.continueStmt sp).constAssignedIn rest = false := rfl
 @[simp] theorem Stmt.constAssignedIn_empty : (Stmt.empty sp).constAssignedIn rest = false := rfl
 @[simp] theorem Stmt.constAssignedIn_switchStmt : (Stmt.switchStmt sp d cs).constAssignedIn rest = false := rfl
+@[simp] theorem Stmt.constAssignedIn_throwStmt : (Stmt.throwStmt sp e).constAssignedIn rest = false := rfl
 
 @[simp] theorem Stmt.constAssignedIn_nil (s : Stmt) : s.constAssignedIn [] = false := by
   cases s <;> simp [Stmt.constAssignedIn, Stmt.assignsList]
@@ -418,11 +752,12 @@ def Expr.span : Expr → Span
   | .ident s _ | .number s _ | .bigint s _ | .string s _ | .bool s _ | .null s | .array s _
   | .object s _ | .paren s _ | .member s _ _ | .optMember s _ _ | .index s _ _ | .call s _ _ | .unary s _ _
   | .prefix s _ _ | .postfix s _ _ | .binary s _ _ _ | .cond s _ _ _ | .assign s _ _ _
-  | .arrow s _ _ _ | .asConst s _ | .satisfies s _ _ => s
+  | .arrow s _ _ _ | .asConst s _ | .satisfies s _ _ | .new s _ _ _ | .spread s _ => s
 
 def Stmt.span : Stmt → Span
   | .varDecl s _ | .exprStmt s _ | .returnStmt s _ | .ifStmt s _ _ _ | .forOfStmt s _ _ _ _
-  | .forStmt s _ _ _ _ | .whileStmt s _ _ | .block s _ | .breakStmt s | .continueStmt s | .empty s | .switchStmt s _ _ => s
+  | .forStmt s _ _ _ _ | .whileStmt s _ _ | .block s _ | .breakStmt s | .continueStmt s | .empty s | .switchStmt s _ _
+  | .throwStmt s _ => s
 
 mutual
 
@@ -440,6 +775,9 @@ def Expr.lessFree : Expr → Bool
   | .arrow _ _ _ body => body.lessFree
   -- A `<` in the type reads type arguments, which the parser checks itself.
   | .asConst _ e | .satisfies _ e _ => e.lessFree
+  | .spread _ e => e.lessFree
+  -- The type arguments are a group that the parser reads itself.
+  | .new _ _ _ args => Expr.lessFreeList args
   | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => true
 
 def Expr.lessFreeList : List Expr → Bool
@@ -467,8 +805,9 @@ def Expr.inFree : Expr → Bool
   | .assign _ _ target value => target.inFree && value.inFree
   | .array _ es => Expr.inFreeList es
   | .member _ e _ | .optMember _ e _ | .index _ e _ | .call _ e _ | .unary _ _ e | .prefix _ _ e
-  | .postfix _ _ e | .arrow _ _ _ e | .asConst _ e | .satisfies _ e _ => e.inFree
-  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .object .. | .paren .. => true
+  | .postfix _ _ e | .arrow _ _ _ e | .asConst _ e | .satisfies _ e _ | .spread _ e => e.inFree
+  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .object .. | .paren ..
+  | .new .. => true
 
 def Expr.inFreeList : List Expr → Bool
   | [] => true
