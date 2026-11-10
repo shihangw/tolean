@@ -31,11 +31,21 @@ cutoff=$(date -u -d '30 minutes ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null ||
 
 # One line per cache on the ref, most recently used first. A ref holds far
 # fewer than 100 caches once this script runs after each CI run.
-gh api "repos/$GITHUB_REPOSITORY/actions/caches?ref=$ref&per_page=100&sort=last_accessed_at&direction=desc" \
-  -q '.actions_caches[] | "\(.id) \(.last_accessed_at) \(.size_in_bytes) \(.key)"' |
+#
+# A branch name may contain & and =, so gh encodes the query with -f.
+# Pasted into the URL as it is, refs/heads/a&ref=refs/heads/main would add
+# a second ref parameter and select main's caches. For the same reason, the
+# loop skips any cache whose ref is not exactly <ref>.
+gh api --method GET "repos/$GITHUB_REPOSITORY/actions/caches" \
+  -f ref="$ref" -f per_page=100 -f sort=last_accessed_at -f direction=desc \
+  -q '.actions_caches[] | "\(.id) \(.ref) \(.last_accessed_at) \(.size_in_bytes) \(.key)"' |
   {
     seen=" "
-    while read -r id accessed size key; do
+    while read -r id cache_ref accessed size key; do
+      if [ "$cache_ref" != "$ref" ]; then
+        echo "skip $key, which belongs to $cache_ref"
+        continue
+      fi
       kind=$(sed -E 's/-[0-9a-f]{32,}//g' <<<"$key")
       if ! $all; then
         if [[ $seen != *" $kind "* ]]; then
