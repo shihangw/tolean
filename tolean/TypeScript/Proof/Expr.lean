@@ -151,6 +151,7 @@ def callS (p : Eval.Program) (fuel : Nat) (key : DeclRef) (vs : List (Val N)) :
   | 0 => none
   | fuel + 1 => do
     let (params, body) ← (Eval.functionsOf p).lookup key
+    if !Stmt.ownsChanges params body then none
     match ← Eval.execStmt ⟨p, key.file⟩ fuel (← Eval.bindArgs params vs) body with
     | .ret r => some r
     | .normal _ | .brk _ | .cont _ => none

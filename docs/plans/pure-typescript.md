@@ -161,7 +161,9 @@ full model, which a later step can add.
 
 This is the borrow that Aeneas uses for Rust. It is sound here only
 because the translator checks that the caller owns the map and holds no other
-name for it during the call. Key equality is SameValueZero. For `string` and
+name for it during the call. The spec's call rule now gives no value for a
+function that changes a parameter (`Stmt.ownsChanges`), so the borrow must
+also give the spec this meaning: the call copies the map in and back out. Key equality is SameValueZero. For `string` and
 `bigint` keys that is Lean's equality. For `number` keys it is Lean's
 equality only when no key is `NaN` or `-0`.
 
@@ -284,13 +286,3 @@ variables and in maps.
   Node on every program that it parses. The same check on the loop's body
   would close it. A binding kind in `Eval.Env` would cover every case, but
   then `Agree` and every statement proof would compare kinds too.
-- How should the spec model an array, a map or a set that two names hold?
-  The spec treats each as a value, and a `push`, `set`, `add` or `delete`
-  changes only the variable that it names. That is the JS meaning only when
-  nothing else holds the object. The translator checks this, but the spec
-  does not, so for `const n = m; m.set(k, v)` the spec gives `n` the old map,
-  where Node shares one map. No certified program meets the gap, but
-  `interpreter.test.ts` asks the interpreter to agree with Node on every
-  program that it parses. A check of the ownership rule in the spec's call
-  rule would close it, with a proof that every body that the translator
-  accepts passes the check.

@@ -463,6 +463,10 @@ Tolean rejects these, among others:
   a later push. In Lean a push makes a new list, but in JS it changes the
   shared one. An array literal is safe anywhere else: in JS it makes a new
   array, and nothing may push to an array that the function does not own.
+  The interpreter checks the same rule for arrays, maps and sets, and gives
+  no value for a function that breaks it. Its check is on names, so Tolean
+  also refuses a function that changes such a collection and has another
+  variable of the same name in a different block. Rename one of them.
 - An arrow function anywhere except as the callback of `map`, `filter`,
   `some`, `every` and `find`, and a named function as a callback. A callback
   of `map` may take the index as its second parameter. The other callbacks

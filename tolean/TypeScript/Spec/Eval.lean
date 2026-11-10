@@ -703,6 +703,9 @@ def evalCall (m : Scope) (fuel : Nat) (env : Env N) (name : String) (args : List
   | fuel + 1 =>
     let key ← resolve m name
     let (params, body) ← (functionsOf m.program).lookup key
+    -- The model holds a collection as a value, which is exact only when
+    -- nothing else holds the object while the function changes it.
+    if !Stmt.ownsChanges params body then none
     -- A `break` or a `continue` outside a loop is an early error
     -- (ECMA-262 §14.8.1 and §14.9.1), so the model gives no value.
     match ← execStmt { m with file := key.file } fuel (← bindArgs params vs) body with
@@ -831,14 +834,14 @@ def execStmt (m : Scope) (fuel : Nat) (env : Env N) : Stmt → Option (Outcome N
   -- `xs.push(v)` adds `v` at the end (`Array.prototype.push`, ECMA-262
   -- §23.1.3.23). The subset pushes only onto an array that the function owns,
   -- which nothing else can see, so the push changes only the variable.
+  -- `evalCall` checks that the function owns it (`Stmt.ownsChanges`).
   | .exprStmt _ (.call _ (.member _ (.ident _ name) "push") [arg]) => do
     let .list items ← env.lookup name | none
     return .normal (env.set name (.list (items ++ [← eval m fuel env arg])))
   -- `m.set(k, v)` and `m.delete(k)` (ECMA-262 §24.1.3.9 and §24.1.3.3) on a
   -- map that the function owns, as for `push`: nothing else can see the
-  -- map, so the change shows only in the variable. The translator checks
-  -- that the function owns the map, and this rule does not: a second name for
-  -- the map would keep the old value, where JS shares one map.
+  -- map, so the change shows only in the variable. `evalCall` checks that
+  -- the function owns the map, as for `push`.
   | .exprStmt _ (.call _ (.member _ (.ident _ name) "set") [key, value]) => do
     let .map entries ← env.lookup name | none
     let k ← eval m fuel env key
@@ -996,6 +999,8 @@ value that it throws. -/
 def callIn (p : Program) (key : DeclRef) (args : List (Val N)) (fuel : Nat := 64) :
     Option (Except (Val N) (Val N)) := do
   let (params, body) ← (functionsOf p).lookup key
+  -- As in `evalCall`: the function changes only collections that it owns.
+  if !Stmt.ownsChanges params body then none
   match ← execStmt ⟨p, key.file⟩ fuel (← bindArgs params args) body with
   | .ret r => some r
   | .normal _ | .brk _ | .cont _ => none
