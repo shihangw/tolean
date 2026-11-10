@@ -660,36 +660,47 @@ parameter. -/
 
 /-- How many steps below a parameter `p` an expression is, when `depths`
 gives that number for each name that holds `p` or a part of it: `0` for `p`
-itself, and `none` for a value that is not a part of `p`. Each step makes
-`sizeOf` smaller by one at least. -/
-def Expr.partOf (depths : List (String × Nat)) : Expr T E → Option Nat
+itself, and `none` for a value that is not a part of `p`. Each step down
+makes `sizeOf` smaller by one at least. A value that Lean wraps in `some` is
+one step up, so a wrap of `p` itself is at `-1`. -/
+def Expr.partOf (depths : List (String × Int)) : Expr T E → Option Int
   | .var x => depths.lookup x
   | .field e _ _ | .proj e _ _ => (e.partOf depths).map (· + 1)
   -- `(n : Option T)` may wrap a narrowed `n` in `some` again, which is one
-  -- step up.
+  -- step up. The analysis does not know the type of `n`, so it counts the
+  -- step even where `n` is an `Option` already, which only refuses more.
   | .ascribe e ty => (e.partOf depths).map fun d => if ty matches .option _ | .optional _ then d - 1 else d
   | _ => Option.none
 
 /-- The depths after `x` is bound to a value at depth `d` below `p`. -/
-def bindPart (depths : List (String × Nat)) (x : String) (d : Option Nat) : List (String × Nat) :=
+def bindPart (depths : List (String × Int)) (x : String) (d : Option Int) : List (String × Int) :=
   let depths := depths.filter (·.1 != x)
   match d with
   | some d => (x, d) :: depths
   | Option.none => depths
 
 /-- The depths after a `match` narrows `x`, which is one step down. -/
-def narrowPart (depths : List (String × Nat)) (x : String) : List (String × Nat) :=
+def narrowPart (depths : List (String × Int)) (x : String) : List (String × Int) :=
   match depths.lookup x with
   | some d => bindPart depths x (some (d + 1))
   | Option.none => depths
+
+/-- An argument without its ascription to an `Option` type, such as the
+`(v : Option T)` that the translator writes for an optional parameter of a
+generic function. A parameter of an `Option` type already needs a part two
+steps below it, for the `some` that Lean may add, and the ascription adds
+that `some` in its place, not as well. -/
+def Expr.unascribed : Expr T E → Expr T E
+  | .ascribe e ty => if ty matches .option _ | .optional _ then e else .ascribe e ty
+  | e => e
 
 mutual
 
 /-- Each call of `self` in the expression passes as its argument `i` a part
 of `p` at least `need` steps below it. -/
-def Expr.callsShrink (self : DeclRef) (i need : Nat) (depths : List (String × Nat)) : Expr T E → Bool
+def Expr.callsShrink (self : DeclRef) (i : Nat) (need : Int) (depths : List (String × Int)) : Expr T E → Bool
   | .call r args =>
-    (r != self || (args[i]?.bind (·.partOf depths)).any (need ≤ ·)) &&
+    (r != self || (args[i]?.bind fun a => a.unascribed.partOf depths).any (need ≤ ·)) &&
       Expr.callsShrinkList self i need depths args
   | .listMethod _ items param _ body _ =>
     items.callsShrink self i need depths &&
@@ -707,12 +718,12 @@ def Expr.callsShrink (self : DeclRef) (i need : Nat) (depths : List (String × N
   | .struct fields _ _ => Expr.callsShrinkFields self i need depths fields
   | .int _ | .none | .bool _ | .string _ | .var _ | .enumCase .. | .tagValue _ => true
 
-def Expr.callsShrinkList (self : DeclRef) (i need : Nat) (depths : List (String × Nat)) :
+def Expr.callsShrinkList (self : DeclRef) (i : Nat) (need : Int) (depths : List (String × Int)) :
     List (Expr T E) → Bool
   | [] => true
   | e :: es => e.callsShrink self i need depths && Expr.callsShrinkList self i need depths es
 
-def Expr.callsShrinkFields (self : DeclRef) (i need : Nat) (depths : List (String × Nat)) :
+def Expr.callsShrinkFields (self : DeclRef) (i : Nat) (need : Int) (depths : List (String × Int)) :
     List (String × Expr T E) → Bool
   | [] => true
   | (_, e) :: fs => e.callsShrink self i need depths && Expr.callsShrinkFields self i need depths fs
@@ -720,12 +731,12 @@ def Expr.callsShrinkFields (self : DeclRef) (i need : Nat) (depths : List (Strin
 end
 
 /-- The depths after `names` get new values that are not parts of `p`. -/
-def forgetParts (depths : List (String × Nat)) (names : List String) : List (String × Nat) :=
+def forgetParts (depths : List (String × Int)) (names : List String) : List (String × Int) :=
   depths.filter (!names.contains ·.1)
 
 /-- Each call of `self` in the body passes as its argument `i` a part of `p`
 at least `need` steps below it. -/
-def Body.callsShrink (self : DeclRef) (i need : Nat) (depths : List (String × Nat)) : Body T E → Bool
+def Body.callsShrink (self : DeclRef) (i : Nat) (need : Int) (depths : List (String × Int)) : Body T E → Bool
   | .value e | .exit e _ => e.callsShrink self i need depths
   | .state _ | .yield .. | .done .. => true
   | .let name e rest =>
