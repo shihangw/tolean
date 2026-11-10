@@ -40,15 +40,24 @@ After every completed independent review, always publish a top-level summary com
 
 Keep one summary comment per PR per reviewer. Create it after the first completed review. Whenever a later independent review round completes, edit that same comment in place rather than posting another summary. Read the checkpoint and the current PR comments before creating one. If the checkpoint lacks its ID, find this reviewer's existing summary first. Do not edit another reviewer's summary.
 
-Use the heading `Independent review summary`. Include:
+Use the heading `Independent review summary` and include only:
 
-- The review date and the exact reviewed head and base SHAs. Name the merge base too when it differs from the base tip.
-- What was independently checked, which earlier evidence was reused, and the material validation limits.
-- Findings with links to their threads, or an explicit statement that no new actionable issues were found.
-- Resolutions that were independently verified, with links, or a statement that there were none.
-- The CI state as observed for the reviewed revision. Distinguish passing checks from pending, missing, failed or skipped checks.
+- `Head:` the exact reviewed head SHA.
+- `Result:` a concise statement of new actionable findings and resolutions verified or performed. Link the relevant threads when there are findings or resolutions. If the review is blocked or incomplete, say so rather than claiming a clean result.
 
-After each completed round, update the date, revisions and results. Keep a short history of earlier rounds when it helps explain a change in the result. Record the summary comment ID and URL in the checkpoint after creating or editing it. Inline findings and useful thread replies supplement this summary; they do not replace it.
+For a completed review with no findings or resolutions:
+
+```markdown
+## Independent review summary
+
+Head: `<reviewed-head-sha>`
+
+Result: No new actionable issues were found. No resolutions were verified or performed.
+```
+
+Do not include review dates, base or merge-base SHAs, branch ancestry, review reasoning, validation inventories, CI summaries, or earlier-round history. Keep revision details, validation evidence and limits in the checkpoint; put evidence for findings in their threads.
+
+After each completed round, update the head and result in place. Record the summary comment ID and URL in the checkpoint after creating or editing it. Inline findings and useful thread replies supplement this summary; they do not replace it.
 
 A status-only poll is not a new independent review round. Do not create duplicate summaries or edit the summary merely to report an unchanged poll.
 
