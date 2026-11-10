@@ -88,6 +88,12 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   | .mapSize, [.map entries] => some (.num (JSNumber.ofSafeInt entries.length))
   | .mapSet, [.map entries, k, v] => (Eval.mapSet entries k v).map .map
   | .mapDelete, [.map entries, k] => (Eval.mapDelete entries k).map .map
+  -- The operations of a `Set`, as the spec gives them.
+  | .setEmpty, [] => some (.set [])
+  | .setHas, [.set elems, x] => (Eval.setHas elems x).map .bool
+  | .setSize, [.set elems] => some (.num (JSNumber.ofSafeInt elems.length))
+  | .setAdd, [.set elems, x] => (Eval.setAdd elems x).map .set
+  | .setDelete, [.set elems, x] => (Eval.setDelete elems x).map .set
   -- `pure a` is the value of `a`, as the result of a function that does not
   -- throw this time.
   | .pure, [a] => some a

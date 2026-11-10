@@ -333,17 +333,37 @@ theorem out_division {op : IR.Division} {a b : IR.Expr}
     | none => cases w <;> simp_all
     | some u => cases w <;> cases u <;> simp_all
 
+/-- `ExprExt.apply` on an operation of the number model, without the other
+operations, so that a proof need not unfold them all. -/
+theorem apply_numberOp (op : IR.NumberOp) (w u : Val N) :
+    IR.ExprExt.apply (.numberOp op) [w, u] =
+      match w, u with
+      | .num a, .num b => some (op.apply a b)
+      | _, _ => none := by
+  cases w <;> cases u <;> rfl
+
+theorem apply_numberNe (w u : Val N) :
+    IR.ExprExt.apply .numberNe [w, u] =
+      match w, u with
+      | .num a, .num b => some (.bool !(JSNumber.eq a b))
+      | _, _ => none := by
+  cases w <;> cases u <;> rfl
+
 theorem out_numberOp {op : IR.NumberOp} {a b : IR.Expr}
     (h : IR.Expr.eval fs fuel ρ (.numberOp op a b) = some v) :
     ∃ x y, IR.Expr.eval fs fuel ρ a = some (.num x) ∧ IR.Expr.eval fs fuel ρ b = some (.num y) ∧
       v = op.apply x y := by
   simp only [IR.Expr.eval, IR.Expr.evalList] at h
   cases hx : IR.Expr.eval fs fuel ρ a with
-  | none => simp [hx, IR.ExprExt.apply] at h
+  | none => simp [hx] at h
   | some w =>
     cases hy : IR.Expr.eval fs fuel ρ b with
-    | none => cases w <;> simp_all [IR.ExprExt.apply]
-    | some u => cases w <;> cases u <;> simp_all [IR.ExprExt.apply]
+    | none => simp [hx, hy] at h
+    | some u =>
+      simp only [hx, hy, Option.bind_eq_bind, Option.bind_some, Option.pure_def] at h
+      rw [apply_numberOp] at h
+      cases w <;> cases u <;> simp at h
+      exact ⟨_, _, rfl, rfl, h.symm⟩
 
 theorem out_numberNe {a b : IR.Expr}
     (h : IR.Expr.eval fs fuel ρ (.numberNe a b) = some v) :
@@ -351,11 +371,15 @@ theorem out_numberNe {a b : IR.Expr}
       v = .bool !(JSNumber.eq x y) := by
   simp only [IR.Expr.eval, IR.Expr.evalList] at h
   cases hx : IR.Expr.eval fs fuel ρ a with
-  | none => simp [hx, IR.ExprExt.apply] at h
+  | none => simp [hx] at h
   | some w =>
     cases hy : IR.Expr.eval fs fuel ρ b with
-    | none => cases w <;> simp_all [IR.ExprExt.apply]
-    | some u => cases w <;> cases u <;> simp_all [IR.ExprExt.apply]
+    | none => simp [hx, hy] at h
+    | some u =>
+      simp only [hx, hy, Option.bind_eq_bind, Option.bind_some, Option.pure_def] at h
+      rw [apply_numberNe] at h
+      cases w <;> cases u <;> simp at h
+      exact ⟨_, _, rfl, rfl, h.symm⟩
 
 theorem out_eq {a b : IR.Expr} (h : IR.Expr.eval fs fuel ρ (.eq a b) = some v) :
     ∃ x y t, IR.Expr.eval fs fuel ρ a = some x ∧ IR.Expr.eval fs fuel ρ b = some y ∧
@@ -1606,16 +1630,20 @@ theorem translateRecv_sim {env : Translate.Env} {e : Expr} {tr : Expr → TM Cod
 
 /-- The value of `m.get(k)` or `m.has(k)`, from the entries of the map and the
 key. -/
-def mapMethodVal (name : String) (entries : List (Val N × Val N)) (k : Val N) : Option (Val N) :=
-  (Eval.mapFind entries k).bind fun found =>
-    if name = "get" then some (found.getD .undefined)
-    else if name = "has" then some (.bool found.isSome) else none
+def mapMethodVal (name : String) : Val N → Val N → Option (Val N)
+  | .map entries, k =>
+    (Eval.mapFind entries k).bind fun found =>
+      if name = "get" then some (found.getD .undefined)
+      else if name = "has" then some (.bool found.isSome) else none
+  | .set elems, x => (Eval.setHas elems x).bind fun found => if name = "has" then some (.bool found) else none
+  | _, _ => none
 
 theorem eval_mapMethod (sp sp' : Span) (recv key : Expr) (name : String) (hr : recv.namesNumber = false)
     (hk : ∀ sa par ps b, key ≠ .arrow sa par ps b) (ρ : Eval.Env N) :
     Eval.eval m fuel ρ (.call sp (.member sp' recv name) [key]) =
-      (Eval.eval m fuel ρ recv).bind fun
-        | .map entries => (Eval.eval m fuel ρ key).bind (mapMethodVal name entries)
+      (Eval.eval m fuel ρ recv).bind fun r =>
+        match r with
+        | .map _ | .set _ => (Eval.eval m fuel ρ key).bind (mapMethodVal name r)
         | _ => none := by
   have hr' : ∀ s, recv ≠ .ident s "Number" := by
     intro s h; subst h; simp [Expr.namesNumber] at hr
@@ -1644,6 +1672,32 @@ theorem out_ext {op : IR.ExprExt} {args : List IR.Expr} {ρ : Eval.Env N} {v : V
   | none => simp [hl] at h
   | some vs => simp [hl] at h; exact ⟨vs, rfl, h⟩
 
+/-- `.ext op [r, k]` means `recv.name(key)`, when `r` means `recv`, `k` means
+`key`, and `op` gives what the interpreter's method gives. -/
+theorem collection_call_sim {env : Translate.Env} {s sp : Span} {recv key : Expr} {name : String}
+    {op : IR.ExprExt} {r k : IR.Expr} (hr : recv.namesNumber = false)
+    (hk : ∀ sa par ps b, key ≠ .arrow sa par ps b)
+    (hrecv : Sim (N := N) m fs fuel env recv r) (hkey : Sim (N := N) m fs fuel env key k)
+    (happly : ∀ vr vk w : Val N, IR.ExprExt.apply op [vr, vk] = some w → mapMethodVal name vr vk = some w) :
+    Sim (N := N) m fs fuel env (.call s (.member sp recv name) [key]) (.ext op [r, k]) := by
+  intro ρs ρo w ha hs hw
+  obtain ⟨vs, hvs, happ⟩ := out_ext fs fuel hw
+  simp only [IR.Expr.evalList] at hvs
+  cases hx : IR.Expr.eval fs fuel ρo r with
+  | none => simp [hx] at hvs
+  | some vr =>
+    cases hy : IR.Expr.eval fs fuel ρo k with
+    | none => simp [hx, hy] at hvs
+    | some vk =>
+      simp [hx, hy] at hvs
+      subst hvs
+      have hv := happly _ _ _ happ
+      rw [eval_mapMethod m fuel _ _ _ _ _ hr hk, hrecv ρs ρo _ ha hs hx]
+      cases vr <;> simp only [Option.bind_some] <;>
+        first
+        | (rw [hkey ρs ρo _ ha hs hy]; exact hv)
+        | (simp [mapMethodVal] at hv)
+
 theorem mapMethodOf_some {sp : Span} {recv recv' : Expr} {name : String} {op : IR.ExprExt}
     (h : mapMethodOf (.member sp recv name) = some (recv', op)) :
     recv' = recv ∧ ((name = "get" ∧ op = .mapGet) ∨ (name = "has" ∧ op = .mapHas)) := by
@@ -1671,59 +1725,72 @@ theorem translateMapMethod_sound {F : Nat}
   simp only [Bool.false_eq_true, ↓reduceIte, bind_ok] at h
   obtain ⟨o, s₁, ho, h⟩ := h
   have hrecv := translateRecv_sim m fs fuel (fun _ _ _ hx => ihE _ _ _ _ _ _ hx) ho
+  have hrv : Sim (N := N) m fs fuel env recv o.value := fun ρs ρo w ha hs hw =>
+    hrecv ρs ρo w ha hs (by rwa [eval_value] at hw)
+  have hr' : recv.namesNumber = false := by simpa using hr
+  have hk : ∀ sa par ps b, key ≠ .arrow sa par ps b := fun sa par ps b he => hka _ _ _ _ he
+  -- `has` is the method when `op` is `.mapHas`, and `get` otherwise.
+  have hasName : (op == .mapHas) = true → name = "has" := fun hhas => by
+    rcases hop with ⟨-, rfl⟩ | ⟨h1, -⟩
+    · exact absurd hhas (by decide)
+    · exact h1
+  have getName : ¬(op == .mapHas) = true → name = "get" := fun hhas => by
+    rcases hop with ⟨h1, -⟩ | ⟨-, rfl⟩
+    · exact h1
+    · exact absurd (by decide) hhas
   cases hot : o.type
   all_goals try (simp [hot] at h; done)
-  rename_i k v
-  simp only [hot, bind_ok] at h
-  obtain ⟨kc, s₂, hkc, h⟩ := h
-  have hkey := ihE _ _ _ _ _ _ hkc
-  try simp only [ite_state] at h
-  split at h
-  rotate_left
-  · simp at h
-  try simp only [pure_bind, ite_state] at h
-  have hk : ∀ sa par ps b, key ≠ .arrow sa par ps b := fun sa par ps b he => hka _ _ _ _ he
-  have finish : ∀ (o' : IR.ExprExt), (o' = .mapGet ∨ o' = .mapHas) →
-      c.code = .ext o' [o.value, kc.value] →
-      (o' = .mapGet → name = "get") → (o' = .mapHas → name = "has") →
-      Sim (N := N) m fs fuel env (.call s (.member sp recv name) [key]) c.code := by
-    intro o' ho' hcode hg hh ρs ρo w ha hs hw
-    rw [hcode] at hw
-    obtain ⟨vs, hvs, happ⟩ := out_ext fs fuel hw
-    simp only [IR.Expr.evalList] at hvs
-    cases hx : IR.Expr.eval fs fuel ρo o.value with
-    | none => simp [hx] at hvs
-    | some vo =>
-      cases hy : IR.Expr.eval fs fuel ρo kc.value with
-      | none => simp [hx, hy] at hvs
-      | some vk =>
-        simp [hx, hy] at hvs
-        subst hvs
-        rw [eval_value] at hx hy
-        rw [eval_mapMethod m fuel _ _ _ _ _ (by simpa using hr) hk, hrecv ρs ρo _ ha hs hx]
-        cases vo <;> rcases ho' with rfl | rfl <;> simp [IR.ExprExt.apply] at happ
-        all_goals
-          rename_i entries
-          simp only [Option.bind_some, hkey ρs ρo _ ha hs hy, mapMethodVal]
-          obtain ⟨found, hf, rfl⟩ := happ
-          simp [hf, hg, hh]
-  split at h
-  · rename_i hhas
-    simp at h
-    obtain ⟨rfl, -⟩ := h
-    exact finish .mapHas (.inr rfl) rfl (by simp) (fun _ => by
-      rcases hop with ⟨-, rfl⟩ | ⟨h1, -⟩
-      · exact absurd hhas (by decide)
-      · exact h1)
-  · rename_i hhas
+  next k v =>
+    simp only [hot, bind_ok] at h
+    obtain ⟨kc, s₂, hkc, h⟩ := h
+    have hkv : Sim (N := N) m fs fuel env key kc.value := fun ρs ρo w ha hs hw =>
+      ihE _ _ _ _ _ _ hkc ρs ρo w ha hs (by rwa [eval_value] at hw)
+    try simp only [ite_state] at h
     split at h
+    rotate_left
+    · simp at h
+    try simp only [pure_bind, ite_state] at h
+    split at h
+    · rename_i hhas
+      simp at h
+      obtain ⟨rfl, -⟩ := h
+      obtain rfl := hasName hhas
+      refine collection_call_sim m fs fuel hr' hk hrv hkv fun vr vk w happ => ?_
+      cases vr <;> simp [IR.ExprExt.apply] at happ
+      obtain ⟨found, hf, rfl⟩ := happ
+      simp [mapMethodVal, hf]
+    · rename_i hhas
+      split at h
+      · simp at h
+      simp at h
+      obtain ⟨rfl, -⟩ := h
+      obtain rfl := getName hhas
+      refine collection_call_sim m fs fuel hr' hk hrv hkv fun vr vk w happ => ?_
+      cases vr <;> simp [IR.ExprExt.apply] at happ
+      obtain ⟨found, hf, rfl⟩ := happ
+      simp [mapMethodVal, hf]
+  next t =>
+    simp only [hot, ite_state] at h
+    split at h
+    rotate_left
+    · simp at h
+    rename_i hhas
+    simp only [bind_ok] at h
+    obtain ⟨xc, s₂, hxc, h⟩ := h
+    have hxv : Sim (N := N) m fs fuel env key xc.value := fun ρs ρo w ha hs hw =>
+      ihE _ _ _ _ _ _ hxc ρs ρo w ha hs (by rwa [eval_value] at hw)
+    try simp only [ite_state] at h
+    split at h
+    rotate_left
     · simp at h
     simp at h
     obtain ⟨rfl, -⟩ := h
-    exact finish .mapGet (.inl rfl) rfl (fun _ => by
-      rcases hop with ⟨h1, -⟩ | ⟨-, rfl⟩
-      · exact h1
-      · exact absurd (by decide) hhas) (by simp)
+    obtain rfl := hasName hhas
+    refine collection_call_sim m fs fuel hr' hk hrv hxv fun vr vk w happ => ?_
+    cases vr <;> (try simp only [IR.ExprExt.apply] at happ) <;> try (simp at happ; done)
+    rename_i elems
+    simp only [mapMethodVal]
+    cases hf : Eval.setHas elems vk <;> simp [hf] at happ ⊢ <;> exact happ
 
 /-- A read of a field, of a member of a string enum, or of the `size` of a map. -/
 theorem translateMember_sound {F : Nat}
@@ -1810,6 +1877,30 @@ theorem translateMember_sound {F : Nat}
         subst happ
         simp [Eval.eval, hsp, hobj]
     · simp at h
+  case set t =>
+    -- `s.size`, the number of elements.
+    simp only [hot, ite_state] at h
+    split at h
+    · rename_i hsize
+      obtain rfl : name = "size" := by simpa using hsize
+      simp only [pure_ok] at h
+      obtain ⟨rfl, -⟩ := h
+      intro ρs ρo w ha hs hw
+      obtain ⟨vs, hvs, happ⟩ := out_ext fs fuel hw
+      simp only [IR.Expr.evalList] at hvs
+      cases hx : IR.Expr.eval fs fuel ρo o.value with
+      | none => simp [hx] at hvs
+      | some vo =>
+        simp [hx] at hvs
+        subst hvs
+        rw [eval_value] at hx
+        have hobj := hrecv ρs ρo _ ha hs hx
+        cases vo <;> (try simp only [IR.ExprExt.apply] at happ) <;> try (simp at happ; done)
+        rename_i elems
+        simp only [Option.some.injEq] at happ
+        subst happ
+        simp [Eval.eval, hsp, hobj]
+    · simp at h
   all_goals try (simp [hot] at h; done)
   all_goals
     simp only [hot] at h
@@ -1825,7 +1916,8 @@ theorem translateMember_sound {F : Nat}
       simp only [hobj, Option.bind_eq_bind, Option.bind_some] at hv'
       cases ov <;> simp_all
 
-/-- `new Map()`, a map without entries. -/
+/-- `new Map()`, a map without entries, and `new Set()`, a set without
+elements. -/
 theorem translateNew_sound {F : Nat} {env : Translate.Env} {exp : Option Ty} {sp : Span}
     {callee : String} {typeArgs : List TypeExpr} {args : List Expr} {ctx ctx' : Ctx} {c : Code}
     (h : translateExprCore (F + 1) env exp (.new sp callee typeArgs args) ctx = .ok c ctx') :
@@ -1844,7 +1936,21 @@ theorem translateNew_sound {F : Nat} {env : Translate.Env} {exp : Option Ty} {sp
       subst hv
       simp [Eval.eval, hs.none (by simpa using hhas)]
     · simp [hhas, hargs] at h
-  · simp [hmap] at h
+  by_cases hset : callee = "Set"
+  · subst hset
+    by_cases hhas : env.has "Set" = true
+    · simp [hhas] at h
+    by_cases hargs : args = []
+    · subst hargs
+      simp [hhas] at h
+      obtain ⟨type, s₁, -, rfl, -⟩ := h
+      intro ρs ρo v _ hs hv
+      simp [IR.Expr.eval, IR.Expr.evalList, IR.ExprExt.apply] at hv
+      subst hv
+      simp [Eval.eval, hs.none (by simpa using hhas)]
+    · simp [hhas, hargs] at h
+  · simp [hmap, hset] at h
+
 /-- A call of a function of the program: the output's call means what the
 source's call means, and it returns or throws what the source's call returns
 or throws (`CallSim`). -/

@@ -159,7 +159,8 @@ def sections : List Section := [
     [``Proof.operator_sound, ``Proof.eval_binary, ``Proof.out_order, ``Proof.out_numberOp]⟩,
   ⟨"sec-equality-operators", "13.11", "Equality Operators",
     [``Proof.operator_sound, ``Proof.eval_binary, ``Proof.out_eq, ``Proof.out_ne,
-    ``Proof.out_numberOp, ``Proof.out_numberNe, ``Proof.out_isNone, ``Proof.out_isSome,
+    ``Proof.out_numberOp, ``Proof.out_numberNe, ``Proof.apply_numberOp, ``Proof.apply_numberNe,
+    ``Proof.out_isNone, ``Proof.out_isSome,
     ``Proof.isNull_eq_true, ``Proof.nullTestOf_eval, ``Proof.undefinedTestOf_eval, ``Proof.nullOp_strict,
     ``Proof.nullOp_binary, ``Proof.applyOperator_sound, ``Proof.enumOperand_code,
     ``Proof.isUndefinedName_eq, ``Proof.eval_undefined, ``Proof.strictEq_undefined,
@@ -264,7 +265,12 @@ def sections : List Section := [
   ⟨"sec-map.prototype.has", "24.1.3.7", "Map.prototype.has", []⟩,
   ⟨"sec-map.prototype.set", "24.1.3.9", "Map.prototype.set", []⟩,
   ⟨"sec-get-map.prototype.size", "24.1.3.10", "get Map.prototype.size",
-    [``Proof.ownedMap_sim, ``Proof.translateRecv_sim]⟩]
+    [``Proof.ownedMap_sim, ``Proof.translateRecv_sim]⟩,
+  ⟨"sec-set-iterable", "24.2.2.1", "Set ( [ iterable ] )", []⟩,
+  ⟨"sec-set.prototype.add", "24.2.4.1", "Set.prototype.add", []⟩,
+  ⟨"sec-set.prototype.delete", "24.2.4.4", "Set.prototype.delete", []⟩,
+  ⟨"sec-set.prototype.has", "24.2.4.8", "Set.prototype.has", [``Proof.collection_call_sim]⟩,
+  ⟨"sec-get-set.prototype.size", "24.2.4.14", "get Set.prototype.size", []⟩]
 
 /-- The laws of the number model, from §6.1.6.1 The Number Type. The proofs
 assume them instead of proving them, and `tests/typescript/jsNumberLaws.test.ts`

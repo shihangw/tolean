@@ -86,15 +86,27 @@ inductive ExprExt where
   | mapSet
   /-- `(JSMap.delete m k)`: the map after `m.delete(k)`. -/
   | mapDelete
+  /-- `JSSet.empty`, on no arguments: `new Set()`. The translator writes the
+  type of the set after it. -/
+  | setEmpty
+  /-- `(JSSet.has s x)`: `s.has(x)`. -/
+  | setHas
+  /-- `(JSNumber.ofSafeInt (JSSet.size s : Int))`: `s.size`, a number. -/
+  | setSize
+  /-- `(JSSet.add s x)`: the set after `s.add(x)`. -/
+  | setAdd
+  /-- `(JSSet.delete s x)`: the set after `s.delete(x)`. -/
+  | setDelete
   /-- `(pure a)`: the value `a` as the result of a function that can throw. -/
   | pure
   /-- `(JSError.mk m)`: the error that `new Error(m)` makes, from its message. -/
   | error
 deriving BEq, Repr, Inhabited, DecidableEq
 
-/-- An operation on maps, whose output names `JSMap`. -/
+/-- An operation on maps or sets, whose output names `JSMap` or `JSSet`. -/
 def ExprExt.onMap : ExprExt → Bool
   | .mapEmpty | .mapGet | .mapHas | .mapSize | .mapSet | .mapDelete => true
+  | .setEmpty | .setHas | .setSize | .setAdd | .setDelete => true
   | _ => false
 
 abbrev Ty := tolean.IR.Ty TyExt
@@ -130,8 +142,7 @@ abbrev LoopInfo := tolean.IR.LoopInfo TyExt
 def leanNames : List (String × String) :=
   tolean.IR.leanNames ++
     [("JSNumber", "tolean.TypeScript.JSNumber"), ("JSString", "tolean.TypeScript.JSString"),
-     ("JSMap", "tolean.TypeScript.JSMap"),
-
+     ("JSMap", "tolean.TypeScript.JSMap"), ("JSSet", "tolean.TypeScript.JSSet"),
      ("JSError", "tolean.TypeScript.JSError"), ("pure", "Pure.pure")]
 
 /-- Write the Lean name `name` (or `name.rest`), from the root when the source
@@ -161,6 +172,7 @@ instance : tolean.IR.PrintTy TyExt where
   string names := leanName names "JSString"
   -- A JS `Map` keeps its entries in insertion order (`tolean/TypeScript/Map.lean`).
   map names := leanName names "JSMap"
+  set names := leanName names "JSSet"
   stringLit names s := s!"{leanName names "JSString.ofString"} {tolean.Sexp.quote s}"
 
 open tolean.IR (argument) in
@@ -190,6 +202,12 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
     s!"({js}.ofSafeInt (N := {names.typeParam}) ({leanName names "JSMap"}.size {argument m} : {leanName names "Int"}))"
   | .mapSet, [m, k, v] => s!"({leanName names "JSMap"}.set {argument m} {argument k} {argument v})"
   | .mapDelete, [m, k] => s!"({leanName names "JSMap"}.delete {argument m} {argument k})"
+  | .setEmpty, _ => s!"{leanName names "JSSet"}.empty"
+  | .setHas, [s, x] => s!"({leanName names "JSSet"}.has {argument s} {argument x})"
+  | .setSize, [s] =>
+    s!"({js}.ofSafeInt (N := {names.typeParam}) ({leanName names "JSSet"}.size {argument s} : {leanName names "Int"}))"
+  | .setAdd, [s, x] => s!"({leanName names "JSSet"}.add {argument s} {argument x})"
+  | .setDelete, [s, x] => s!"({leanName names "JSSet"}.delete {argument s} {argument x})"
   | .recordGet key keys, [r, k] =>
     let case (f : String) := s!"{(names.ref key).1}.{memberName f}"
     -- A key that is one constructor, as `r['a']` gives, reads its field.

@@ -157,8 +157,7 @@ full model, which a later step can add.
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| `new Set()`, and `add`, `has`, `delete` and `size` on a set | A list of elements in insertion order. ECMA-262 fixes that order (§24.2). | Elements that are objects, and `number` elements that can be `NaN` or `-0` |
-| `for … of` over a map or a set, and `new Map(entries)` | A fold over the list of entries or elements, in order | A loop that changes the map or the set that it runs over |
+| `for … of` over a map or a set, `new Map(entries)` and `new Set(elements)` | A fold over the list of entries or elements, in order | A loop that changes the map or the set that it runs over |
 | A function that changes a map that its caller passes in | A function that returns the new map. The caller takes the result in place of the old map. | A call where the caller keeps another name for the same map |
 
 The second row is the borrow that Aeneas uses for Rust. It is sound here only
@@ -232,8 +231,8 @@ leaves a gap.
    classes. `throw new Error(message)` is done.
 7. **P0.** Local functions that change variables of the enclosing function, by
    lifting them out and threading the variables through each call.
-8. **P0.** `Set`, loops over maps and sets, and the borrow for a map that a
-   caller passes in.
+8. **P0.** Loops over maps and sets, and the borrow for a map that a caller
+   passes in.
 9. **P1.** Strings: template literals, string order, the string methods,
    iteration by code point, and the opaque `JSON.stringify`.
 10. **P1.** Sorting with consistent comparators.
