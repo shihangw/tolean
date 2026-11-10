@@ -471,7 +471,7 @@ def Names.ref (names : Names) (r : DeclRef) : String × Option String :=
 names from the root. -/
 def leanNames : List (String × String) :=
   [("decide", "Decidable.decide"), ("List", "List"), ("Option", "Option"),
-   ("some", "Option.some"), ("none", "Option.none"), ("Int", "Int"), ("Bool", "Bool"),
+   ("some", "Option.some"), ("none", "Option.none"), ("Int", "Int"), ("Nat", "Nat"), ("Bool", "Bool"),
    ("String", "String"), ("DecidableEq", "DecidableEq"), ("Repr", "Repr")]
 
 /-- Write the Lean name `name` (or `name.rest`), from the root when the source
