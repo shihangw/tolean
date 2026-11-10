@@ -1,0 +1,36 @@
+{"tolean": "0.3.0",
+ "sources":
+ [{"sha256": "5919f4d05647c9dd16b50ff59f90f4c3348fa8aaa0c4a0a50ab530a20f01b4d5",
+   "path": "corpus/translate/fees/fees.go"}],
+ "output":
+ {"sha256": "7baf186583c58998a3b3f677f314868c2ab4347efd106ffe446a4c6c193a33fe",
+  "path": "corpus/translate/fees/Fees.lean"},
+ "nodes":
+ [{"status": "tested",
+   "label": "Go parser",
+   "kind": "parser",
+   "id": "parser",
+   "evidence": {"reference": "go/parser", "check": "go-check", "by": "tolean"}},
+  {"status": "tested",
+   "label": "Go translator",
+   "kind": "translator",
+   "id": "translator",
+   "evidence":
+   {"reference": "fixed corpus output", "check": "go-check", "by": "tolean"}},
+  {"status": "trusted",
+   "module": "tolean.Go.Spec.Basic",
+   "label": "Go Spec",
+   "kind": "spec",
+   "id": "spec"},
+  {"status": "trusted",
+   "label": "Go compiler",
+   "kind": "runtime",
+   "id": "runtime"}],
+ "module": "Fees",
+ "language": "go",
+ "edges":
+ [["source", "parser"],
+  ["parser", "translator"],
+  ["translator", "output"],
+  ["spec", "output"],
+  ["runtime", "output"]]}

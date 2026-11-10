@@ -222,7 +222,7 @@ omit [JSNumber N] in
 def retOutcome {R τ : Type} (encR : R → Val N) (getRet : τ → Option R) :
     ForInStep τ → Eval.Env N → Eval.Outcome N
   | .done t, ρ => match getRet t with
-    | some r => .ret (encR r)
+    | some r => .ret (.ok (encR r))
     | none => .brk ρ
   | .yield _, ρ => .normal ρ
 
@@ -231,7 +231,7 @@ value to return, or the locals at its end. -/
 def retResult {R σ τ : Type} (encR : R → Val N) (getRet : τ → Option R) (getS : τ → σ)
     (upd : σ → Eval.Env N → Eval.Env N) (ρ : Eval.Env N) (t : τ) : Eval.Outcome N :=
   match getRet t with
-  | some r => .ret (encR r)
+  | some r => .ret (.ok (encR r))
   | none => .normal (upd (getS t) ρ)
 
 /-- A fold of the output whose body can `return`, and `forIn`, agree when one
@@ -313,7 +313,8 @@ syntax "link_tac" "[" Lean.Parser.Tactic.simpLemma,* "]" : tactic
 macro_rules
   | `(tactic| link_tac [$defs,*]) =>
     `(tactic| (
-      simp [runIn, functionsOf, functions, Body.exec, Body.runFold, Expr.eval, Expr.evalList,
+      simp [runIn, callIn, Except.toOption, functionsOf, functions, Body.exec, Body.runFold, Expr.eval,
+        Expr.evalCall, Expr.evalList,
         Expr.evalFields, Expr.evalMap, Expr.evalMapIdx, Expr.evalFilter, Expr.evalFind, bindState, eqVal,
         tolean.IR.IntOp.apply, tolean.IR.Order.apply,
         tolean.IR.Division.apply, ExprExt.apply, NumberOp.apply, NumberConstant.value,

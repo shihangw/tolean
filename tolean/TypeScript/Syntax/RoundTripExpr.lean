@@ -212,6 +212,8 @@ def Expr.wfAt (T : Edition) : Level → Expr → Bool
   | .primary, .paren _ inner => inner.wfAt T .assign
   | .primary, .array _ elems => Expr.allWF T elems
   | .primary, .object _ props => Property.allWF T props
+  | .primary, .new _ callee typeArgs args =>
+    typeName callee && TypeExpr.allWF typeArgs && Expr.allWF T args
   | .primary, _ => false
 termination_by level e => (sizeOf e, level.rank)
 
@@ -263,6 +265,7 @@ def Expr.afterOK (after : List TokenKind) : Expr → Bool
   | .satisfies _ e t => e.afterOK (.ident "satisfies" :: t.tokens ++ after)
   | .array _ elems => Expr.afterOKList (.punct "]" :: after) elems
   | .object _ props => Property.afterOKList (.punct "}" :: after) props
+  | .new _ _ _ args => Expr.afterOKList (.punct ")" :: after) args
   | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => true
 
 /-- `afterOK` for each of `items`, with a `,` between two of them, which
@@ -472,6 +475,7 @@ theorem Expr.first : ∀ e : Expr, ∃ k, e.tokens.head? = some k ∧ startsExpr
   | .array _ es => ⟨.punct "[", by simp [Expr.tokens, Expr.words, enclose, punctWord], by decide⟩
   | .object _ ps => ⟨.punct "{", by simp [Expr.tokens, Expr.words, enclose, punctWord], by decide⟩
   | .paren _ i => ⟨.punct "(", by simp [Expr.tokens, Expr.words, punctWord], by decide⟩
+  | .new .. => ⟨.keyword "new", by simp [Expr.tokens, Expr.words, keywordWord], rfl⟩
   | .arrow _ parens ps _ => by
     rcases arrowParams_cases parens ps with ⟨p, _, _, h⟩ | h
     · exact ⟨.ident p.name, by simp [Expr.tokens, Expr.words, h, identWord], rfl⟩
@@ -691,6 +695,7 @@ def Expr.height : Expr → Nat
     i.height + 1
   | .index _ o i | .binary _ _ o i | .assign _ _ o i => max o.height i.height + 1
   | .call _ c as => max c.height (Expr.heightOf as) + 1
+  | .new _ _ _ as => Expr.heightOf as + 1
   | .cond _ t a b => max t.height (max a.height b.height) + 1
   | .arrow _ _ _ b | .asConst _ b | .satisfies _ b _ => b.height + 1
   | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => 0
@@ -1051,6 +1056,18 @@ theorem parseType_budget (t : TypeExpr) (ht : t.wf = true) :
   have h3 : ts.length ≤ s.left := by rw [hl, hs, List.length_append]; omega
   exact (types_reads _).1 t ht (by omega) s ts rest hs hl hk hn hr hf
 
+/-- `parsePrimaryType` reads a primary type with the fuel that `budget` gives. -/
+theorem parsePrimaryType_budget (t : TypeExpr) (ht : t.primaryWF = true) :
+    ∀ (s : ParseState) (ts rest : List Token), s.rest = ts ++ rest → s.left = s.rest.length →
+      ts.map (·.kind) = t.tokens → (∀ y ∈ ts, NoBreak y) → rest ≠ [] → FollowsPrimary rest →
+      ∃ t' s', Parse.parsePrimaryType (10 * (s.left + 1)) s = .ok t' s' ∧ t'.erase = t.erase ∧
+        Leaves s s' rest := by
+  intro s ts rest hs hl hk hn hr hf
+  have h1 := TypeExpr.height_le t
+  have h2 : ts.length = t.tokens.length := by rw [← hk, List.length_map]
+  have h3 : ts.length ≤ s.left := by rw [hl, hs, List.length_append]; omega
+  exact (types_reads _).2.2 t ht (by omega) s ts rest hs hl hk hn hr hf
+
 
 /-! ### Parameters -/
 
@@ -1254,6 +1271,85 @@ theorem parseArrayLiteral_reads {T : Edition} (g : Nat) (sp : Span) (elems : Lis
       Parse.bind_eq (Parse.spanFrom_eq _ _)]
     rfl
   · simpa [Expr.erase, Expr.eraseAll_eq] using he
+
+/-- The name and the type arguments of a `new` are the words of a type
+reference. -/
+theorem typeArgWords_ref (sp : Span) (c : String) (ts : List TypeExpr) :
+    identWord c :: typeArgWords ts = (TypeExpr.ref sp c ts).words := by
+  cases ts <;> rfl
+
+/-- `new C<A>(args)`, when `parseAssign` reads each argument. `C<A>` is read
+as a type reference. -/
+theorem parseNew_reads {T : Edition} (g : Nat) (sp : Span) (c : String) (targs : List TypeExpr)
+    (args : List Expr) (hc : typeName c = true) (hts : TypeExpr.allWF targs = true)
+    (hargs : ∀ x ∈ args, ReadsE T (Parse.parseAssign g) x EndsAssign) :
+    ReadsE T (Parse.parseNew (g + 1 + 1)) (.new sp c targs args) (fun _ => True) := by
+  intro s ts rest hT hs hl ht hn hr _ ha
+  have hw : (Expr.new sp c targs args).words =
+      [.keyword "new"] :: ((TypeExpr.ref sp c targs).words ++ enclose "(" ")" (Expr.wordsOf args)) := by
+    rw [← typeArgWords_ref sp c targs]; rfl
+  rw [hw] at ht
+  obtain ⟨nw, ts₁, rfl, hnw, h₁⟩ := Touching.cons_one ht
+  obtain ⟨tts, ats, rfl, htt, hat⟩ := Touching.append_split h₁
+  obtain ⟨lp, its, rp, rfl, hlp, hits, hrp⟩ := Touching.enclosed (by simpa [enclose] using hat)
+  -- The name, which the checks before the type read: no `.` follows it.
+  obtain ⟨x₁, tts', htts, hx₁⟩ : ∃ x₁ tts', tts = x₁ :: tts' ∧ x₁.kind = .ident c := by
+    have hk : tts.map (·.kind) = (TypeExpr.ref sp c targs).tokens := htt.kinds
+    cases tts with
+    | nil => cases targs <;> simp [TypeExpr.tokens, TypeExpr.words, identWord] at hk
+    | cons x₁ tts' =>
+      refine ⟨x₁, tts', rfl, ?_⟩
+      cases targs with
+      | nil => simp [TypeExpr.tokens, TypeExpr.words, identWord] at hk; exact hk.1
+      | cons a as => rw [tokens_ref sp c (a :: as) (by simp)] at hk; simp at hk; exact hk.1
+  obtain ⟨y, hy, hyk⟩ : ∃ y, (tts ++ lp :: (its ++ rp :: rest))[1]? = some y ∧ y.kind ≠ .punct "." := by
+    have hk : tts.map (·.kind) = (TypeExpr.ref sp c targs).tokens := htt.kinds
+    rw [htts] at hk ⊢
+    cases tts' with
+    | nil => exact ⟨lp, by simp, by rw [hlp]; exact punct_ne (by decide)⟩
+    | cons x₂ _ =>
+      refine ⟨x₂, by simp, ?_⟩
+      cases targs with
+      | nil => simp [TypeExpr.tokens, TypeExpr.words, identWord] at hk
+      | cons a as =>
+        rw [tokens_ref sp c (a :: as) (by simp)] at hk
+        simp at hk; rw [hk.2.1]; exact punct_ne (by decide)
+  have hs₀ : s.rest = nw :: (tts ++ lp :: (its ++ rp :: rest)) := by simpa using hs
+  let s₁ := past s nw (tts ++ lp :: (its ++ rp :: rest))
+  have hl₁ : s₁.left = s₁.rest.length := by simp [s₁, hl, hs₀]
+  have hwf : (TypeExpr.ref sp c targs).primaryWF = true := by simp [TypeExpr.primaryWF, hc, hts]
+  have hfp : FollowsPrimary (lp :: (its ++ rp :: rest)) := fun u hu => by
+    simp at hu; subst hu; rw [hlp]; exact ⟨punct_ne (by decide), punct_ne (by decide)⟩
+  obtain ⟨t', s₂, hpt, het, hL₂⟩ := parsePrimaryType_budget _ hwf s₁ tts (lp :: (its ++ rp :: rest)) rfl hl₁
+    htt.kinds (fun y hy => hn y (by simp [hy])) (by simp) hfp
+  obtain ⟨sp', targs', rfl, htargs⟩ : ∃ sp' targs', t' = .ref sp' c targs' ∧
+      TypeExpr.eraseAll targs' = TypeExpr.eraseAll targs := by
+    cases t' <;> simp [TypeExpr.erase] at het
+    obtain ⟨rfl, h⟩ := het
+    exact ⟨_, _, rfl, h⟩
+  have hs₂ : s₂.rest = lp :: (its ++ rp :: rest) := hL₂.rest_eq
+  have hl₂ : s₂.left = s₂.rest.length := by rw [hL₂.left_eq, hs₂]
+  obtain ⟨args', s₃, hpa, hea, hL₃⟩ := parseArguments_reads g args hargs s₂ (lp :: (its ++ [rp])) rest
+    (hL₂.target_eq.trans (by simpa [s₁] using hT)) (by simpa using hs₂) hl₂ (by simpa [enclose] using hat)
+    (fun y hy => hn y (by simp at hy ⊢; rcases hy with h | h | h <;> simp [h])) hr
+    (by simpa [Expr.afterOK] using ha)
+  refine ⟨.new ⟨nw.span.start, s₃.lastStop⟩ c targs' args', s₃, ?_, ?_,
+    leaves_trans (leaves_advance hs₀ hl) (leaves_trans hL₂ hL₃)⟩
+  · simp only [Parse.parseNew]
+    rw [Parse.bind_eq (Parse.advance_cons hs₀ (by simp))]
+    rw [Parse.bind_eq (Parse.peek_eq (s := past s nw (tts ++ lp :: (its ++ rp :: rest)))
+      (t := x₁) (r := tts' ++ lp :: (its ++ rp :: rest)) (by simp [htts]))]
+    rw [Parse.ite_guard (fun h => by simp [hx₁] at h)]
+    rw [Parse.bind_eq (Parse.peekAt_eq (s := past s nw (tts ++ lp :: (its ++ rp :: rest))) (k := 1) hy)]
+    rw [Parse.ite_guard (fun h => by simp [Token.isPunct, hyk] at h)]
+    rw [Parse.bind_eq (Parse.budget_eq _)]
+    rw [Parse.bind_eq (s' := s₂) (a := TypeExpr.ref sp' c targs') hpt]
+    simp only []
+    rw [Parse.bind_eq (Parse.peek_eq hs₂)]
+    rw [Parse.ite_guard (fun h => by simp [Token.isPunct, hlp] at h)]
+    rw [Parse.bind_eq hpa, Parse.bind_eq (Parse.spanFrom_eq _ _)]
+    rfl
+  · simp [Expr.erase, htargs, hea]
 
 /-- A property starts with a token other than `}`. -/
 theorem Property.start (q : Property) :
@@ -1771,7 +1867,7 @@ theorem Expr.isSimpleTarget_erase : ∀ e : Expr, e.erase.isSimpleTarget = e.isS
   | .ident .. | .member .. | .index .. => by simp [Expr.erase, Expr.isSimpleTarget]
   | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .array .. | .object .. | .call .. | .optMember ..
   | .unary .. | .prefix .. | .postfix .. | .binary .. | .cond .. | .assign .. | .arrow .. | .asConst ..
-  | .satisfies .. => by
+  | .satisfies .. | .new .. => by
     simp [Expr.erase, Expr.isSimpleTarget]
 
 theorem isSimpleTarget_of_erase {e e' : Expr} (h : e'.erase = e.erase) : e'.isSimpleTarget = e.isSimpleTarget := by
@@ -1784,7 +1880,7 @@ theorem updateOp_symbol {t : Token} {op : UpdateOp} (h : t.kind = .punct op.symb
 /-- A token that can start a primary expression. -/
 def startsPrimary : TokenKind → Bool
   | .ident _ | .number _ | .bigint _ | .string _ => true
-  | .keyword w => w == "true" || w == "false" || w == "null"
+  | .keyword w => w == "true" || w == "false" || w == "null" || w == "new"
   | .punct p => p == "(" || p == "[" || p == "{"
   | .eof => false
 
@@ -2071,7 +2167,7 @@ theorem binSuffix_first : ∀ e : Expr, (binSuffix e).flatten = [] ∨
     · exact .inr ⟨k, ks ++ (.ident "satisfies" :: t.words.flatten), by simp [binSuffix, h, identWord], hk⟩
   | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .array .. | .object ..
   | .paren .. | .member .. | .optMember .. | .index .. | .call .. | .unary .. | .prefix .. | .postfix ..
-  | .cond .. | .assign .. | .arrow .. => .inl (by simp [binSuffix])
+  | .cond .. | .assign .. | .arrow .. | .new .. => .inl (by simp [binSuffix])
 
 theorem Expr.isLogical_erase (e : Expr) : e.erase.isLogical = e.isLogical := by
   cases e with
@@ -2597,6 +2693,18 @@ theorem Expr.tokens_call (c : Expr) (as : List Expr) :
   simp [Expr.tokens, Expr.words, enclose, punctWord, separated_flatten, Expr.wordsOf_eq, List.map_map,
     Function.comp_def]; rfl
 
+theorem Expr.tokens_new (c : String) (ts : List TypeExpr) (as : List Expr) :
+    (Expr.new sp c ts as).tokens =
+      .keyword "new" :: ((TypeExpr.ref sp c ts).tokens ++
+        .punct "(" :: (joined "," (as.map Expr.tokens) ++ [.punct ")"])) := by
+  have h : (Expr.new sp c ts as).words =
+      keywordWord "new" :: (TypeExpr.ref sp c ts).words ++ enclose "(" ")" (Expr.wordsOf as) := by
+    rw [← typeArgWords_ref sp c ts]; rfl
+  rw [Expr.tokens, h]
+  simp [TypeExpr.tokens, enclose, punctWord, keywordWord, separated_flatten, Expr.wordsOf_eq, List.map_map,
+    Function.comp_def]
+  rfl
+
 theorem Expr.tokens_unary (op : UnaryOp) (a : Expr) :
     (Expr.unary sp op a).tokens = symbol op.symbol ++ a.tokens := by
   simp [Expr.tokens, Expr.words]
@@ -2681,6 +2789,7 @@ theorem Expr.second_ok : ∀ e : Expr, ∀ n k r, e.tokens = .ident n :: k :: r 
   | .array .., _, _, _, h => by simp [Expr.tokens_array] at h
   | .object .., _, _, _, h => by simp [Expr.tokens_object] at h
   | .paren .., _, _, _, h => by simp [Expr.tokens_paren] at h
+  | .new .., _, _, _, h => by simp [Expr.tokens_new] at h
   | .arrow _ parens ps _, n, k, r, h => by
     rw [Expr.tokens_arrow] at h
     rcases arrowParams_cases parens ps with ⟨p, _, _, hp⟩ | hp
@@ -2768,6 +2877,8 @@ theorem Expr.arrowStart_false : ∀ e : Expr, e.leftArrow = false → ∀ after 
   | .bool _ b, _, after, _ => by cases b <;> exact arrowStart_cons (by simp) (by simp) _
   | .array .., _, after, _ => by rw [Expr.tokens_array]; exact arrowStart_cons (by simp) (by simp) _
   | .object .., _, after, _ => by rw [Expr.tokens_object]; exact arrowStart_cons (by simp) (by simp) _
+  | .new .., _, after, _ => by
+    rw [Expr.tokens_new, List.cons_append]; exact arrowStart_cons (by simp) (by simp) _
   | .unary _ op a, _, after, _ => by
     obtain ⟨k, ks, hk, hn, hp⟩ := unary_notIdent op
     rw [Expr.tokens_unary, hk]; exact arrowStart_cons hn hp _
@@ -2884,7 +2995,7 @@ theorem Expr.leftArrow_wf {T : Edition} : ∀ (e : Expr) (level : Level), e.wfAt
   | .assign .., level, h, hl => by cases level <;> simp_all [Expr.wfAt]
   | .ident .., _, _, _ | .number .., _, _, _ | .bigint .., _, _, _ | .string .., _, _, _ | .bool .., _, _, _
   | .null _, _, _, _ | .array .., _, _, _ | .object .., _, _, _ | .paren .., _, _, _ | .unary .., _, _, _
-  | .prefix .., _, _, _ => by simp [Expr.leftArrow]
+  | .prefix .., _, _, _ | .new .., _, _, _ => by simp [Expr.leftArrow]
 
 /-- An expression at the level of assignments that is not an arrow function
 starts with none. -/
@@ -3207,6 +3318,21 @@ theorem parsePrimary_array {T : Edition} (f : Nat) (sp : Span) (es : List Expr)
   simp only [hlp]
   exact hp
 
+/-- `parsePrimary` reads `new …` with `parseNew`. -/
+theorem parsePrimary_new {T : Edition} (f : Nat) (sp : Span) (c : String) (targs : List TypeExpr)
+    (args : List Expr) (h : ReadsE T (Parse.parseNew f) (.new sp c targs args) (fun _ => True)) :
+    ReadsE T (Parse.parsePrimary (f + 1)) (.new sp c targs args) (fun _ => True) := by
+  intro s ts rest hT hs hl ht hn hr he ha
+  have ht' := ht
+  rw [show (Expr.new sp c targs args).words = [.keyword "new"] :: _ from rfl] at ht'
+  obtain ⟨nw, ts₁, rfl, hnw, _⟩ := Touching.cons_one ht'
+  obtain ⟨e', s', hp, hee, hL⟩ := h s _ rest hT hs hl ht hn hr he ha
+  refine ⟨e', s', ?_, hee, hL⟩
+  simp only [Parse.parsePrimary]
+  rw [Parse.bind_eq (Parse.peek_eq (by simpa using hs))]
+  simp only [hnw]
+  exact hp
+
 /-- `parsePrimary` reads `{`…`}` with `parseObjectLiteral`. -/
 theorem parsePrimary_object {T : Edition} (f : Nat) (sp : Span) (ps : List Property)
     (h : ReadsE T (Parse.parseObjectLiteral f) (.object sp ps) (fun _ => True)) :
@@ -3273,6 +3399,13 @@ theorem primary_reads {T : Edition} (f : Nat) (IH : ∀ g ≤ f, AllRead T g) (e
     simp only [Property.wf] at hw
     simp only [Property.height] at hh
     exact IH h (by omega) .assign v hw (by simp only [need, Level.cost]; omega)
+  | new sp c ts as =>
+    simp only [Expr.wfAt, Bool.and_eq_true] at he
+    simp only [need, Level.cost, Expr.height] at hn
+    obtain ⟨g, rfl⟩ : ∃ g, f = g + 1 + 1 := ⟨f - 2, by omega⟩
+    exact parsePrimary_new (g + 1 + 1) sp c ts as (parseNew_reads g sp c ts as he.1.1 he.1.2 fun x hx =>
+      IH g (by omega) .assign x (Expr.allWF_iff.mp he.2 x hx)
+        (by have := Expr.height_le_heightOf hx; simp only [need, Level.cost]; omega))
   | _ => simp [Expr.wfAt] at he
 
 /-- The step of the induction on fuel. -/
@@ -3519,6 +3652,10 @@ theorem Expr.neutral : ∀ e : Expr, Neutral e.tokens
   | .paren _ i => by
     have h := Neutral.enclosed (o := "(") (c := ")") (by simp) (by simp) (Expr.neutral i)
     simpa [Expr.tokens, Expr.words, punctWord] using h
+  | .new sp c ts as => by
+    rw [Expr.tokens_new]
+    exact Neutral.cons (by simp) (Neutral.append (TypeExpr.neutral (.ref sp c ts))
+      (Neutral.enclosed (o := "(") (c := ")") (by simp) (by simp) (Neutral.join (Expr.neutralAll as))))
   | .member _ o n => by
     have h := Neutral.append (Expr.neutral o) (Neutral.cons (k := .punct ".") (by simp) (neutral_propertyName n))
     simpa [Expr.tokens, Expr.words, punctWord] using h
@@ -3678,6 +3815,9 @@ theorem Expr.afterOK_congr : ∀ (e : Expr) {a b : List TokenKind}, AfterEquiv a
   | .object _ ps, a, b, h => by
     simp only [Expr.afterOK]
     exact Property.afterOKList_congr ps (AfterEquiv.closer (c := "}") (by simp) a b)
+  | .new _ _ _ as, a, b, h => by
+    simp only [Expr.afterOK]
+    exact Expr.afterOKList_congr as (AfterEquiv.closer (c := ")") (by simp) a b)
   | .ident .., _, _, _ | .number .., _, _, _ | .bigint .., _, _, _ | .string .., _, _, _
   | .bool .., _, _, _ | .null _, _, _, _ => rfl
 
@@ -3758,6 +3898,10 @@ theorem Expr.height_le : ∀ e : Expr, e.height ≤ e.tokens.length
   | .call _ c as => by
     have := Expr.height_le c; have := Expr.heightOf_le as
     rw [Expr.tokens_call]; simp only [Expr.height, List.length_cons, List.length_append, List.length_nil]
+    omega
+  | .new _ c ts as => by
+    have := Expr.heightOf_le as
+    rw [Expr.tokens_new]; simp only [Expr.height, List.length_cons, List.length_append, List.length_nil]
     omega
   | .asConst _ l => by
     have := Expr.height_le l

@@ -42,6 +42,9 @@ inductive Val (N : Type) where
   | undefined
   | list (items : List (Val N))
   | obj (fields : List (String × Val N))
+  /-- An error object: the name of the class that made it, such as
+  `"Error"`, and its own properties. `new Error(m)` has one, `message`. -/
+  | error (cls : String) (fields : List (String × Val N))
 deriving Inhabited
 
 /-- `ToBoolean` (ECMA-262 §7.1.2), on the values of the subset. A number is
@@ -52,7 +55,7 @@ def Val.truthy : Val N → Bool
   | .bool b => b
   | .str s => !s.isEmpty
   | .null | .undefined => false
-  | .list _ | .obj _ => true
+  | .list _ | .obj _ | .error _ _ => true
 
 /-- The result of `typeof` (ECMA-262 §13.5.3.1) on the values of the
 subset. `null` is `"object"`, and so are an array and an object, which are
@@ -63,7 +66,7 @@ def Val.typeOf : Val N → String
   | .bool _ => "boolean"
   | .str _ => "string"
   | .undefined => "undefined"
-  | .null | .list _ | .obj _ => "object"
+  | .null | .list _ | .obj _ | .error _ _ => "object"
 
 /-- The variables in scope, innermost first. -/
 abbrev Env (N : Type) := List (String × Val N)
@@ -149,13 +152,13 @@ def strictEq : Val N → Val N → Option Bool
   | .null, .null => some true
   | .undefined, .undefined => some true
   | .undefined, .int _ | .undefined, .num _ | .undefined, .bool _ | .undefined, .str _
-  | .undefined, .null | .undefined, .list _ | .undefined, .obj _ => some false
+  | .undefined, .null | .undefined, .list _ | .undefined, .obj _ | .undefined, .error _ _ => some false
   | .int _, .undefined | .num _, .undefined | .bool _, .undefined | .str _, .undefined
-  | .null, .undefined | .list _, .undefined | .obj _, .undefined => some false
+  | .null, .undefined | .list _, .undefined | .obj _, .undefined | .error _ _, .undefined => some false
   | .null, .int _ | .null, .num _ | .null, .bool _ | .null, .str _ | .null, .list _
-  | .null, .obj _ => some false
+  | .null, .obj _ | .null, .error _ _ => some false
   | .int _, .null | .num _, .null | .bool _, .null | .str _, .null | .list _, .null
-  | .obj _, .null => some false
+  | .obj _, .null | .error _ _, .null => some false
   | _, _ => none
 
 /-- `IsLooselyEqual` (ECMA-262 §7.2.14) when one operand is `null` or
@@ -243,12 +246,16 @@ def elementAt (items : List (Val N)) : Option Int → Val N
   | none => .undefined
 
 /-- What a statement list does: it runs to its end with the variables it
-leaves, or it returns a value, or a `break` or a `continue` ends it with the
+leaves, or it ends the function, or a `break` or a `continue` ends it with the
 variables at that point. These are the completion records of ECMA-262
 (§6.2.4) that the subset can make. -/
 inductive Outcome (N : Type) where
   | normal (env : Env N)
-  | ret (v : Val N)
+  /-- The function ends: it returns `v` when `r` is `.ok v`, and it throws `v`
+  when `r` is `.error v`. A return and a throw pass through every statement
+  of the subset in the same way, because the subset has no `try`, so one
+  outcome holds both. -/
+  | ret (r : Except (Val N) (Val N))
   | brk (env : Env N)
   | cont (env : Env N)
 deriving Inhabited
@@ -530,20 +537,46 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     if method != "map" || p.name == q.name then none
     let .list items ← eval m fuel env recv | none
     return .list (← evalMapIdx m fuel env p.name q.name body 0 items)
-  | .call _ (.ident _ name) args => do
-    let vs ← evalList m fuel env args
-    match fuel with
-    | 0 => none
-    | fuel + 1 =>
-      let key ← resolve m name
-      let (params, body) ← (functionsOf m.program).lookup key
-      -- A `break` or a `continue` outside a loop is an early error
-      -- (ECMA-262 §14.8.1 and §14.9.1), so the model gives no value.
-      match ← execStmt { m with file := key.file } fuel (← bindArgs params vs) body with
-      | .ret v => some v
-      | .normal _ | .brk _ | .cont _ => none
+  -- A call that throws inside an expression gives no value. Only a call that
+  -- is the whole value of a declaration or a `return` passes its throw on
+  -- (`evalTop`).
+  | .call _ (.ident _ name) args => do (← evalCall m fuel env name args).toOption
+  -- `new Error(message)` with a string message (`Error`, ECMA-262
+  -- §20.5.1.1): an error object whose own property `message` is the string,
+  -- unless a variable hides `Error`. As for `NaN`, a function or an enum of
+  -- the program named `Error` would hide the global in JS, and this rule
+  -- reads the global; the translator refuses such a name.
+  | .new _ "Error" [] [msg] => do
+    if (env.lookup "Error").isSome then none
+    let .str s ← eval m fuel env msg | none
+    return .error "Error" [("message", .str s)]
   | _ => none
 termination_by e => (fuel, sizeOf e, 0)
+
+/-- A call of the function `name` of the program with `args`
+(`EvaluateCall`, ECMA-262 §13.3.6.2): `.ok` of the value it returns, or
+`.error` of the value it throws. -/
+def evalCall (m : Scope) (fuel : Nat) (env : Env N) (name : String) (args : List Expr) :
+    Option (Except (Val N) (Val N)) := do
+  let vs ← evalList m fuel env args
+  match fuel with
+  | 0 => none
+  | fuel + 1 =>
+    let key ← resolve m name
+    let (params, body) ← (functionsOf m.program).lookup key
+    -- A `break` or a `continue` outside a loop is an early error
+    -- (ECMA-262 §14.8.1 and §14.9.1), so the model gives no value.
+    match ← execStmt { m with file := key.file } fuel (← bindArgs params vs) body with
+    | .ret r => some r
+    | .normal _ | .brk _ | .cont _ => none
+termination_by (fuel, sizeOf args, 1)
+
+/-- The value of `e` as the whole value of a declaration or a `return`: `.ok`
+of its value, or `.error` of what it throws when it is a call that throws. -/
+def evalTop (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Except (Val N) (Val N))
+  | .call _ (.ident _ name) args => evalCall m fuel env name args
+  | e => (eval m fuel env e).map .ok
+termination_by e => (fuel, sizeOf e, 1)
 
 /-- An optional chain such as `a?.b.c`: `none` where a `?.` meets `null` or
 `undefined`, which skips the rest of the chain, and the value of the chain
@@ -630,8 +663,12 @@ termination_by xs => (fuel, sizeOf body, xs.length + 1)
 they make to outer variables and drop the variables they declare. -/
 def execStmt (m : Scope) (fuel : Nat) (env : Env N) : Stmt → Option (Outcome N)
   | .varDecl _ { name, init := some init, .. } => do
-    return .normal ((name, ← eval m fuel env init) :: env)
-  | .returnStmt _ (some e) => do return .ret (← eval m fuel env e)
+    match ← evalTop m fuel env init with
+    | .ok v => return .normal ((name, v) :: env)
+    | .error t => return .ret (.error t)
+  | .returnStmt _ (some e) => do return .ret (← evalTop m fuel env e)
+  -- `throw e` ends the function with what it throws (ECMA-262 §14.14.1).
+  | .throwStmt _ e => do return .ret (.error (← eval m fuel env e))
   -- `xs.push(v)` adds `v` at the end (`Array.prototype.push`, ECMA-262
   -- §23.1.3.23). The subset pushes only onto an array that the function owns,
   -- which nothing else can see, so the push changes only the variable.
@@ -770,13 +807,19 @@ termination_by ss => (fuel, sizeOf ss, 0)
 end
 
 /-- Call the function `key` of `p` with `args`, as a call expression would
-(ECMA-262 §10.2.1): bind each parameter to its argument, run the body, and
-take the value it returns. -/
-def runIn (p : Program) (key : DeclRef) (args : List (Val N)) (fuel : Nat := 64) : Option (Val N) := do
+(ECMA-262 §10.2.1): bind each parameter to its argument and run the body.
+The result is `.ok` of the value that the body returns, or `.error` of the
+value that it throws. -/
+def callIn (p : Program) (key : DeclRef) (args : List (Val N)) (fuel : Nat := 64) :
+    Option (Except (Val N) (Val N)) := do
   let (params, body) ← (functionsOf p).lookup key
   match ← execStmt ⟨p, key.file⟩ fuel (← bindArgs params args) body with
-  | .ret v => some v
+  | .ret r => some r
   | .normal _ | .brk _ | .cont _ => none
+
+/-- The value that the call of `key` returns, or none when it throws. -/
+def runIn (p : Program) (key : DeclRef) (args : List (Val N)) (fuel : Nat := 64) : Option (Val N) :=
+  (callIn p key args fuel).bind Except.toOption
 
 /-- Call the function `name` of the one-file program `m`. -/
 def run (m : Module) (name : String) (args : List (Val N)) (fuel : Nat := 64) : Option (Val N) :=

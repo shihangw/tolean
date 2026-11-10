@@ -10,6 +10,8 @@
  *
  * - When the interpreter gives a value, Node returns the same value. This
  *   holds for every program that the parser accepts, in the subset or not.
+ * - When the interpreter says that a call throws a value, Node throws the
+ *   same value. An `Error` compares by its class and its message.
  * - When the translator accepts the program and the interpreter gives no
  *   value, Node throws.
  *
@@ -51,7 +53,8 @@ type Value =
   | null
   | { undefined: true }
   | Array<Value>
-  | { object: Array<[string, Value]> };
+  | { object: Array<[string, Value]> }
+  | { error: [string, Array<[string, Value]>] };
 
 const bitsOf = (x: number): string => {
   const view = new DataView(new ArrayBuffer(8));
@@ -91,6 +94,7 @@ function decode(v: Value): unknown {
   if ('undefined' in v) return undefined;
   if ('bigint' in v) return BigInt(v.bigint);
   if ('number' in v) return ofBits(v.number);
+  if ('error' in v) throw new Error('an error object is never an argument');
   return Object.fromEntries(v.object.map(([k, x]) => [k, decode(x)]));
 }
 
@@ -101,6 +105,7 @@ function canonical(v: Value): string {
     if (Array.isArray(w)) return w.map(strip);
     if ('number' in w) return { number: Number.isNaN(ofBits(w.number)) ? 'NaN' : w.number };
     if ('bigint' in w || 'undefined' in w) return w;
+    if ('error' in w) return { error: [w.error[0], w.error[1].map(([k, x]) => [k, strip(x)])] };
     return { object: w.object.map(([k, x]) => [k, strip(x)]) };
   };
   return JSON.stringify(strip(v));
@@ -147,8 +152,17 @@ function arbitrary(t: Ty, sig: Signatures): fc.Arbitrary<unknown> {
 type Call = { function: string; args: Array<Value> };
 type Program = { seed: number; source: string; calls: Array<Call> };
 /** A result is `null` when the interpreter gives no value. */
-type Interpreted = { parsed: false } | { parsed: true; accepted: boolean; results: Array<{ value: Value } | null> };
-type NodeResult = { returns: unknown } | { throws: string };
+type Interpreted =
+  | { parsed: false }
+  | { parsed: true; accepted: boolean; results: Array<{ value: Value } | { throws: Value } | null> };
+type NodeResult = { returns: unknown } | { throws: string; thrown: unknown };
+
+/** What Node threw, as `tolean interpret` writes it: an `Error` as its class
+ * and its message, and any other value as itself. */
+function shownThrow(x: unknown): string {
+  if (x instanceof Error) return JSON.stringify({ error: [x.name, [['message', x.message]]] });
+  return shown(x);
+}
 
 /** `x` as text, or why it is no value of the subset. */
 function shown(x: unknown): string {
@@ -224,9 +238,16 @@ test(`the interpreter agrees with Node ${process.version} on random programs`, a
       try {
         actual = { returns: fn(...call.args.map(decode)) };
       } catch (e) {
-        actual = { throws: e instanceof Error ? e.name : String(e) };
+        actual = { throws: e instanceof Error ? e.name : String(e), thrown: e };
       }
-      if (expected !== null) {
+      if (expected !== null && 'throws' in expected) {
+        tally.throws++;
+        if ('returns' in actual) {
+          failures.push(`${where}: the interpreter throws ${canonical(expected.throws)}, Node ${shown(actual.returns)}`);
+        } else if (shownThrow(actual.thrown) !== canonical(expected.throws)) {
+          failures.push(`${where}: the interpreter throws ${canonical(expected.throws)}, Node throws ${shownThrow(actual.thrown)}`);
+        }
+      } else if (expected !== null) {
         tally.values++;
         if (!('returns' in actual)) {
           failures.push(`${where}: the interpreter gives ${canonical(expected.value)}, Node throws ${actual.throws}`);
