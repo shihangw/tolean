@@ -285,8 +285,9 @@ export class Gen {
 
   /** Calls of `map`, `filter`, `some`, `every` and `find` on an array in
    * scope that give a value of type `t`. The callback's parameter is a fresh
-   * name, which its body may read with the other names in scope. The body is
-   * in parentheses, so that an object literal is not read as a block. */
+   * name, which its body may read with the other names in scope; a callback
+   * of `map` may also take the index, a number. The body is in parentheses,
+   * so that an object literal is not read as a block. */
   private callbacks(t: Ty, readable: ReadonlyArray<Var>, vars: ReadonlyArray<Var>, depth: number): Array<() => string> {
     const arrays = readable.flatMap((v) => (v.ty.k === 'array' ? [{ name: v.name, elem: v.ty.of }] : []));
     if (arrays.length === 0) return [];
@@ -294,6 +295,16 @@ export class Gen {
       const p = this.fresh('c');
       const inner = [...vars, { name: p, ty: recv.elem, mutable: false, owned: false }];
       return `${recv.name}.${method}(${p} => (${body(inner)}))`;
+    };
+    const mapIdx = (recv: { name: string; elem: Ty }, body: (inner: ReadonlyArray<Var>) => string): string => {
+      const p = this.fresh('c');
+      const i = this.fresh('i');
+      const inner = [
+        ...vars,
+        { name: i, ty: NUMBER, mutable: false, owned: false },
+        { name: p, ty: recv.elem, mutable: false, owned: false },
+      ];
+      return `${recv.name}.map((${p}, ${i}) => (${body(inner)}))`;
     };
     const options: Array<() => string> = [];
     switch (t.k) {
@@ -303,6 +314,7 @@ export class Gen {
       case 'array': {
         const of = t.of;
         options.push(() => call('map', this.pick(arrays), (inner) => this.expr(of, inner, depth)));
+        options.push(() => mapIdx(this.pick(arrays), (inner) => this.expr(of, inner, depth)));
         const same_ = arrays.filter((a) => same(a.elem, of));
         if (same_.length > 0) {
           options.push(() => call('filter', this.pick(same_), (inner) => this.expr(BOOLEAN, inner, depth)));
@@ -315,8 +327,23 @@ export class Gen {
         // default then.
         const same_ = arrays.filter((a) => same(a.elem, t));
         if (same_.length > 0) {
-          options.push(() => `(${call('find', this.pick(same_), (inner) => this.expr(BOOLEAN, inner, depth))} ?? ${this.expr(t, vars, depth)})`);
+          options.push(() => `(${call(this.pick(['find', 'findLast']), this.pick(same_), (inner) => this.expr(BOOLEAN, inner, depth))} ?? ${this.expr(t, vars, depth)})`);
         }
+        // `findIndex` gives the index of the first element that passes, a
+        // number, or -1.
+        if (t.k === 'number') {
+          options.push(() => call('findIndex', this.pick(arrays), (inner) => this.expr(BOOLEAN, inner, depth)));
+        }
+        // `reduce` with an initial value of type `t`: the body reads the value
+        // so far, the element and the names in scope.
+        options.push(() => {
+          const recv = this.pick(arrays);
+          const acc = this.fresh('a');
+          const p = this.fresh('c');
+          const inner = [...vars, { name: acc, ty: t, mutable: false, owned: false },
+            { name: p, ty: recv.elem, mutable: false, owned: false }];
+          return `${recv.name}.reduce((${acc}, ${p}) => (${this.expr(t, inner, depth)}), ${this.expr(t, vars, depth)})`;
+        });
         break;
       }
       default:

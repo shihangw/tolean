@@ -404,8 +404,12 @@ the file, the line and the reason. It never approximates.
 | `break` in a `for (const x of xs)` loop, in the same places as `continue` | `Id.run (forIn xs (x, y) (fun e (x, y) => …))`. A `break` is `ForInStep.done (x, y)`, which ends the loop, and the end of the body or a `continue` is `ForInStep.yield (x, y)`. A loop without a `break` stays a `List.foldl`. |
 | `return e` in the same places, in a loop where the statements after it end in a `return` | `match Id.run (forIn xs (none, x, y) (fun e (_, x, y) => …)) with`, with the arms `\| (some r, _) => r` and `\| (none, x, y) => …` for the statements after the loop. The state starts with the value to return: a `return e` is `ForInStep.done (some e, x, y)`, and the other step ends hold `none`. |
 | `xs.map(x => e)`, `xs.filter(x => p)` | `List.map (fun (x : T) => e) xs`, `List.filter (fun (x : T) => p) xs` |
+| `xs.map((x, i) => e)` | `List.mapIdx (fun (i : Nat) (x : T) => let i := JSNumber.ofSafeInt i; e) xs`. JS passes the index as a number, so the body reads `i` as a `number`. An array has fewer than 2^32 elements, so the index is always a safe integer. |
 | `xs.some(x => p)`, `xs.every(x => p)` | `List.any xs (fun (x : T) => p)`, `List.all xs (fun (x : T) => p)` |
 | `xs.find(x => p)` | `List.find? (fun (x : T) => p) xs`. The value is `undefined` when no element passes, so it has the type of an optional field: `xs.find(p) ?? d`, `xs.find(p)?.f` and `xs.find(p) === undefined` work as they do on `s.f`. |
+| `xs.findLast(x => p)` | `List.find? (fun (x : T) => p) (List.reverse xs)`, which the callback reads from the last element to the first, as in JS. It has the type of `find`, and it is in ES2023. |
+| `xs.findIndex(x => p)` | `JSNumber.ofSafeInt (((List.findIdx? (fun (x : T) => p) xs).map Int.ofNat).getD (-1))`: the index of the first element that passes, as a `number`, or `-1` |
+| `xs.reduce((acc, x) => e, init)` | `List.foldl (fun (acc : A) (x : T) => e) init xs`, where `A` is the type of `init`. The body must give a value of that type. |
 | `if` that returns, `if` that changes locals, `c ? a : b` | `if … then … else …` |
 | `+ - *`, `< <= > >=`, `=== !==`, `&& \|\| !` | the same operators on `Int`, `Bool`, `Prop` |
 | `a / k`, `a % k` on `bigint`, where `k` is a nonzero literal | `Int.tdiv a k`, `Int.tmod a k` (both truncate toward zero, as JS does) |
@@ -464,12 +468,15 @@ Tolean rejects these, among others:
   also refuses a function that changes such a collection and has another
   variable of the same name in a different block. Rename one of them.
 - An arrow function anywhere except as the callback of `map`, `filter`,
-  `some`, `every` and `find`, a callback with more than one parameter, and a
-  named function as a callback. JS passes the index and the array too, which
-  a later step will translate. The body of a callback must not assign, and
+  `some`, `every` and `find`, and a named function as a callback. A callback
+  of `map` may take the index as its second parameter. The other callbacks
+  take one parameter, and no callback may take the array, which JS passes
+  too. A later step will translate those. The body of a callback must not assign, and
   for every method but `map` it must give a boolean. Tolean also refuses
   `find` on an array of nullable values, because Lean's `none` would stand
   for both `null` and `undefined`.
+- `reduce` without an initial value, which throws on an empty array, and a
+  callback of `reduce` whose value has another type than the initial value.
 - A map key or a set element of type `number`, which can be `NaN` or `-0`,
   and one of an interface type, which a map or a set compares by identity.
   Tolean also refuses `set`, `add` and `delete` on a map or a set that the

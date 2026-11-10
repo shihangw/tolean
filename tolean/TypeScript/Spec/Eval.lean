@@ -477,6 +477,10 @@ def bindArgs (params : List String) (vs : List (Val N)) : Option (Env N) :=
   if params.length < vs.length then none
   else some (params.zip (vs ++ List.replicate (params.length - vs.length) .undefined)).reverse
 
+-- With the array callbacks and the map and set methods both in `eval`, this
+-- block takes a little more than the default 200000 heartbeats to elaborate,
+-- most of it in the proofs that each recursive call is smaller.
+set_option maxHeartbeats 400000 in
 mutual
 
 /-- The value of `e`. `fuel` bounds the depth of nested calls, so that the
@@ -615,7 +619,33 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     else if method == "every" then
       return .bool (← evalFind m fuel env p.name body false items).isNone
     else if method == "find" then return (← evalFind m fuel env p.name body true items).getD .undefined
+    -- `findIndex` (§23.1.3.10) gives the index of the element that `find`
+    -- finds, or `-1`, and the index is a safe integer. `findLast`
+    -- (§23.1.3.11) calls the callback on the elements from the last to the
+    -- first.
+    else if method == "findIndex" then
+      return .num (JSNumber.ofSafeInt (((← evalFindIdx m fuel env p.name body 0 items).map Int.ofNat).getD (-1)))
+    else if method == "findLast" then
+      return (← evalFind m fuel env p.name body true items.reverse).getD .undefined
     else none
+  -- `xs.map((x, i) => e)`: `map` passes the index too, as a number
+  -- (ECMA-262 §23.1.3.21, step 6.c.ii). An array has fewer than 2^32
+  -- elements, so the index is a safe integer. Two parameters of one arrow
+  -- function may not have the same name (§15.3.1).
+  | .call _ (.member _ recv method) [.arrow _ _ [p, q] body] => do
+    if method != "map" || p.name == q.name then none
+    let .list items ← eval m fuel env recv | none
+    return .list (← evalMapIdx m fuel env p.name q.name body 0 items)
+  -- `xs.reduce((acc, x) => e, init)` (`Array.prototype.reduce`, ECMA-262
+  -- §23.1.3.24) with an initial value: the callback runs on each element in
+  -- order, with `acc` bound to the value so far, which starts at `init`.
+  -- `reduce` also passes the index and the array, which an arrow with two
+  -- parameters ignores. Two parameters of one arrow function may not have the
+  -- same name (§15.3.1).
+  | .call _ (.member _ recv "reduce") [.arrow _ _ [a, p] body, init] => do
+    if a.name == p.name then none
+    let .list items ← eval m fuel env recv | none
+    evalReduce m fuel env a.name p.name body (← eval m fuel env init) items
   -- `m.get(k)` and `m.has(k)` on a map (ECMA-262 §24.1.3.6 and §24.1.3.7).
   -- `get` gives `undefined` for a key that the map does not have.
   -- `s.has(x)` on a set (ECMA-262 §24.2.4.8).
@@ -737,6 +767,17 @@ def evalMap (m : Scope) (fuel : Nat) (env : Env N) (name : String) (body : Expr)
     return (← eval m fuel ((name, x) :: env) body) :: (← evalMap m fuel env name body xs)
 termination_by xs => (fuel, sizeOf body, xs.length + 1)
 
+/-- The callback `(name, index) => body` on each of `items`, where the first
+of them is at position `start`: the values that `Array.prototype.map` puts
+in its new array, when the callback reads the index. -/
+def evalMapIdx (m : Scope) (fuel : Nat) (env : Env N) (name index : String) (body : Expr)
+    (start : Nat) : List (Val N) → Option (List (Val N))
+  | [] => some []
+  | x :: xs => do
+    let v ← eval m fuel ((name, x) :: (index, .num (JSNumber.ofSafeInt start)) :: env) body
+    return v :: (← evalMapIdx m fuel env name index body (start + 1) xs)
+termination_by xs => (fuel, sizeOf body, xs.length + 1)
+
 /-- The elements of `items` for which the callback `(name) => body` gives a
 truthy value, in order: what `Array.prototype.filter` keeps. -/
 def evalFilter (m : Scope) (fuel : Nat) (env : Env N) (name : String) (body : Expr) :
@@ -746,6 +787,26 @@ def evalFilter (m : Scope) (fuel : Nat) (env : Env N) (name : String) (body : Ex
     let keep := (← eval m fuel ((name, x) :: env) body).truthy
     let rest ← evalFilter m fuel env name body xs
     return if keep then x :: rest else rest
+termination_by xs => (fuel, sizeOf body, xs.length + 1)
+
+/-- The callback `(acc, name) => body` on each of `items` in order, where
+`acc` is the value so far, which starts at `v`: the value of
+`Array.prototype.reduce` with an initial value. -/
+def evalReduce (m : Scope) (fuel : Nat) (env : Env N) (acc name : String) (body : Expr) (v : Val N) :
+    List (Val N) → Option (Val N)
+  | [] => some v
+  | x :: xs => do evalReduce m fuel env acc name body (← eval m fuel ((name, x) :: (acc, v) :: env) body) xs
+termination_by xs => (fuel, sizeOf body, xs.length + 1)
+
+/-- The position of the first of `items` for which `ToBoolean` of the
+callback `(name) => body` is true, where the first of `items` is at
+`start`, or none. The callback does not run on the elements after it. -/
+def evalFindIdx (m : Scope) (fuel : Nat) (env : Env N) (name : String) (body : Expr) (start : Nat) :
+    List (Val N) → Option (Option Nat)
+  | [] => some none
+  | x :: xs => do
+    if (← eval m fuel ((name, x) :: env) body).truthy then return some start
+    evalFindIdx m fuel env name body (start + 1) xs
 termination_by xs => (fuel, sizeOf body, xs.length + 1)
 
 /-- The first of `items` for which `ToBoolean` of the callback

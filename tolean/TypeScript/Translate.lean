@@ -150,6 +150,11 @@ def Ty.unoptional : Ty → Ty
   | .optional t => t
   | t => t
 
+/-- The type of a tag field, one string literal. -/
+def Ty.isLiteral : Ty → Bool
+  | .literal _ => true
+  | _ => false
+
 /-- `T | null`. -/
 def Ty.isNullable : Ty → Bool
   | .nullable _ => true
@@ -1389,6 +1394,8 @@ def listMethod? (name : String) : Option IR.ListMethod :=
   else if name == "some" then some .any
   else if name == "every" then some .all
   else if name == "find" then some .find
+  else if name == "findIndex" then some .findIndex
+  else if name == "findLast" then some .findLast
   else none
 
 /-- The receiver and the method of a call such as `xs.map(…)`, when the
@@ -1401,6 +1408,23 @@ def arrayMethodOf : Expr → Option (Expr × IR.ListMethod)
 arrow function with one parameter. -/
 def callbackOf : List Expr → Option (Param × Expr)
   | [.arrow _ _ [p] body] => some (p, body)
+  | _ => none
+
+/-- The element parameter, the index parameter and the body of the one
+argument of `map`, when it is an arrow function with two parameters. -/
+def indexedCallbackOf : IR.ListMethod → List Expr → Option (Param × Param × Expr)
+  | .map, [.arrow _ _ [p, q] body] => some (p, q, body)
+  | _, _ => none
+
+/-- The receiver of a call of `reduce`. -/
+def reduceOf : Expr → Option Expr
+  | .member _ recv "reduce" => some recv
+  | _ => none
+
+/-- The two parameters, the body and the initial value of a call of `reduce`:
+an arrow function with two parameters, then a value. -/
+def reducerOf : List Expr → Option (Param × Param × Expr × Expr)
+  | [.arrow _ _ [a, p] body, init] => some (a, p, body, init)
   | _ => none
 
 /-- `e` is the name `Number`. -/
@@ -1555,6 +1579,19 @@ def checkParamType (p : Param) (elem : Ty) : TM Unit := do
     unless (← translateType t) == elem do
       reject p.span "the parameter must have the element type of the array"
 
+/-- The first parameter of the callback of `reduce`, if it has a type, has the
+type of the initial value. -/
+def checkAccType (a : Param) (accType : Ty) : TM Unit := do
+  if let some t := a.type then
+    unless (← translateType t) == accType do
+      reject a.span "the first parameter of 'reduce' must have the type of the initial value"
+
+/-- The index parameter of a callback of `map`, if it has a type, has the type
+`number`. -/
+def checkIndexType (q : Param) : TM Unit := do
+  if let some t := q.type then
+    unless (← translateType t) == .number do reject q.span "the index of an array is a number"
+
 /-- The type that the body of a callback is translated for: for `map`, the
 element type of the array that the context expects, which an object literal
 needs. -/
@@ -1572,11 +1609,13 @@ def callbackResult (s bodySpan : Span) (method : IR.ListMethod) (elem body : Ty)
   unless body == .boolean do reject bodySpan "the callback must give a boolean"
   match method with
   | .filter => return .array elem
-  | .find =>
+  | .find | .findLast =>
+    if method == .findLast then requireFeature s .arrayFindLast
     -- The output has one `none` for `undefined` and `null`.
     if elem.isNullable || elem matches .optional _ then
       reject s "'find' on an array of nullable values could give null or undefined"
     return .optional elem
+  | .findIndex => return .number
   | _ => return .boolean
 
 /-- The type of `x.f1.f2…` after `?.`, where `x` has the interface `ref`:
@@ -1795,6 +1834,9 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
     let type ← orReject ((a.type.join b.type).filter fun t => !(t matches .literal _)) s message
     return ⟨.ite c.code a.value b.value, false, type⟩
   | .call s callee args =>
+    match reduceOf callee with
+    | some recv => translateReduce fuel env expected s recv args
+    | none =>
     match arrayMethodOf callee with
     | some (recv, method) => translateArrayMethod fuel env expected s recv method args
     | none =>
@@ -1926,9 +1968,25 @@ callback with one parameter ignores. -/
 def translateArrayMethod (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (recv : Expr)
     (method : IR.ListMethod) (args : List Expr) : TM Code := do
   let fuel + 1 := fuel | tooDeep
+  -- `xs.map((x, i) => e)` becomes `List.mapIdx`, whose function binds the
+  -- index as a number.
+  if let some (p, q, body) := indexedCallbackOf method args then
+    if recv.namesNumber then reject recv.span "only an array has this method"
+    let xs ← translateExpr fuel env none recv
+    let elem ← orReject xs.type.element? recv.span "only an array has this method"
+    checkParamType p elem
+    checkIndexType q
+    let withIndex ← declare env q.span q.name .param .number
+    let inner ← declare withIndex p.span p.name .param elem
+    let b ← translateExpr fuel inner (callbackExpected .map expected) body
+    let type ← callbackResult s body.span .map elem b.type
+    let info : IR.CallbackInfo IR.TyExt :=
+      { span := s, result := b.type.lean, scope := env.locals.map fun l => (l.name, l.type.lean) }
+    return ⟨.listMethod (.mapIdx q.name) xs.value p.name elem.lean b.value info, false, type⟩
   let (p, body) ← orReject (callbackOf args) s
     ("an array method here takes one arrow function with one parameter, such as " ++
-      "xs.map(x => x + 1n); the index and array parameters are not supported yet")
+      "xs.map(x => x + 1n). Only the callback of map may also take the index, " ++
+      "and no callback may take the array yet")
   -- `Number.map` is a property of the global `Number`, not of an array.
   if recv.namesNumber then reject recv.span "only an array has this method"
   let xs ← translateExpr fuel env none recv
@@ -1940,6 +1998,34 @@ def translateArrayMethod (fuel : Nat) (env : Env) (expected : Option Ty) (s : Sp
   let info : IR.CallbackInfo IR.TyExt :=
     { span := s, result := b.type.lean, scope := env.locals.map fun l => (l.name, l.type.lean) }
   return ⟨.listMethod method xs.value p.name elem.lean b.value info, false, type⟩
+
+/-- `xs.reduce((acc, x) => e, init)`: `List.foldl (fun acc x => e) init xs`.
+The value so far has the type of `init`, and the body must give that type.
+JS also passes the index and the array, which a callback with two parameters
+ignores. -/
+def translateReduce (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (recv : Expr)
+    (args : List Expr) : TM Code := do
+  let fuel + 1 := fuel | tooDeep
+  let (a, p, body, init) ← orReject (reducerOf args) s
+    ("'reduce' takes an arrow function with two parameters and an initial value, " ++
+      "such as xs.reduce((sum, x) => sum + x, 0n)")
+  if recv.namesNumber then reject recv.span "only an array has this method"
+  let xs ← translateExpr fuel env none recv
+  let elem ← orReject xs.type.element? recv.span "only an array has this method"
+  let i ← translateExpr fuel env expected init
+  let accType := i.type
+  if accType == .null || accType.isLiteral then
+    reject init.span "the initial value of 'reduce' needs a type that a local can have"
+  checkAccType a accType
+  checkParamType p elem
+  let withAcc ← declare env a.span a.name .param accType
+  let inner ← declare withAcc p.span p.name .param elem
+  let b ← translateExpr fuel inner (some accType) body
+  unless b.type == accType do
+    reject body.span "the callback of 'reduce' must give a value of the type of the initial value"
+  let info : IR.CallbackInfo IR.TyExt :=
+    { span := s, result := accType.lean, scope := env.locals.map fun l => (l.name, l.type.lean) }
+  return ⟨.listFold xs.value i.value a.name p.name elem.lean b.value info, false, accType⟩
 
 /-- `m.get(k)` and `m.has(k)` on a map. An owned map may be read here, as
 `ownedMap?` says. `get` gives `undefined` for a key that the map does not
@@ -2931,9 +3017,10 @@ mutual
 def exprUsesNumber : Expr → Bool
   | .ident _ name => isNumberName name
   | .number .. => true
-  -- `m.size` is a number, and the source does not say whether `m` is a map.
+  -- `xs.findIndex(…)` gives a number, and so does `m.size`. The source does
+  -- not say whether `m` is a map.
   | .member _ obj name | .optMember _ obj name =>
-    isNumberName name || name == "size" || exprUsesNumber obj
+    isNumberName name || name == "findIndex" || name == "size" || exprUsesNumber obj
   | .object _ props => propsUseNumber props
   | .array _ es => exprsUseNumber es
   | .call _ f args => exprUsesNumber f || exprsUseNumber args
@@ -2946,7 +3033,9 @@ def exprUsesNumber : Expr → Bool
   | .cond _ a b c => exprUsesNumber a || exprUsesNumber b || exprUsesNumber c
   -- `new Map<bigint, number>()` names `number` only in its type arguments.
   | .new _ callee typeArgs args => isNumberName callee || typesUseNumber typeArgs || exprsUseNumber args
+  -- The index that `map` passes to a second parameter is a number.
   | .arrow _ _ ps body =>
+    ps.length ≥ 2 ||
     ps.any (fun p => isNumberName p.name || (p.type.map typeUsesNumber).getD false) ||
       exprUsesNumber body
   | _ => false

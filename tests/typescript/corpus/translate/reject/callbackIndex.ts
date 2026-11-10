@@ -1,4 +1,4 @@
-// expect: 3:10 the index and array parameters are not supported yet
+// expect: 3:10 Only the callback of map may also take the index
 export function f(xs: ReadonlyArray<bigint>): ReadonlyArray<bigint> {
-  return xs.map((x, i) => x);
+  return xs.filter((x, i) => x > 0n);
 }
