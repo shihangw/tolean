@@ -245,6 +245,11 @@ def Expr.eval (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
     | .findIndex =>
       return .num (JSNumber.ofSafeInt (((← Expr.evalFindIdx fs fuel ρ param body 0 xs).map Int.ofNat).getD (-1)))
     | .findLast => return (← Expr.evalFind fs fuel ρ param body true xs.reverse).getD .undefined
+  -- `List.foldl` runs the function on each element in order, with the value
+  -- so far bound to `acc`, as the callback of `reduce` does.
+  | .listFold items init acc param _ body _ => do
+    let .list xs ← Expr.eval fs fuel ρ items | none
+    Expr.evalReduce fs fuel ρ acc param body (← Expr.eval fs fuel ρ init) xs
 termination_by e => (fuel, sizeOf e, 0)
 
 /-- A call of the function `ref` of the output with `args`: `.ok` of the
@@ -278,6 +283,14 @@ def Expr.evalMapIdx (fs : List (DeclRef × List String × Body)) (fuel : Nat) (�
   | x :: xs => do
     let v ← Expr.eval fs fuel ((param, x) :: (index, .num (JSNumber.ofSafeInt start)) :: ρ) body
     return v :: (← Expr.evalMapIdx fs fuel ρ param index body (start + 1) xs)
+termination_by xs => (fuel, sizeOf body, xs.length + 1)
+
+/-- `List.foldl (fun acc param => body) v` on `xs`. -/
+def Expr.evalReduce (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : Env N)
+    (acc param : String) (body : Expr) (v : Val N) : List (Val N) → Option (Val N)
+  | [] => some v
+  | x :: xs => do
+    Expr.evalReduce fs fuel ρ acc param body (← Expr.eval fs fuel ((param, x) :: (acc, v) :: ρ) body) xs
 termination_by xs => (fuel, sizeOf body, xs.length + 1)
 
 /-- `List.findIdx? (fun param => body)` on `xs`, whose first element is at

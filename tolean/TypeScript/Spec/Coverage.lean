@@ -130,7 +130,7 @@ def sections : List Section := [
     [``Proof.mapM_sim]⟩,
   ⟨"sec-runtime-semantics-propertydefinitionevaluation", "13.2.5.5",
     "Runtime Semantics: PropertyDefinitionEvaluation",
-    [``Proof.fold_sim, ``shorthand_reads_global]⟩,
+    [``Proof.fold_sim, ``shorthand_reads_global, ``Proof.translateObject_sound]⟩,
   ⟨"sec-grouping-operator", "13.2.9", "The Grouping Operator",
     [``Proof.eval_stripParens]⟩,
   ⟨"sec-property-accessors", "13.3.2", "Property Accessors", [``Proof.translateMember_sound, ``Eval.eval_index_str, ``Eval.getKey_ofString, ``Eval.find?_fst_lookup,
@@ -261,6 +261,9 @@ def sections : List Section := [
     [``Proof.evalMap_sim, ``Proof.eval_mapIdx, ``Proof.evalMapIdx_sim]⟩,
   ⟨"sec-array.prototype.push", "23.1.3.23", "Array.prototype.push",
     [``Proof.out_push]⟩,
+  ⟨"sec-array.prototype.reduce", "23.1.3.24", "Array.prototype.reduce",
+    [``Proof.reducerOf_some, ``Proof.bodySim2_of, ``Proof.evalReduce_sim, ``Proof.eval_reduce,
+    ``Proof.translateReduce_sound]⟩,
   ⟨"sec-array.prototype.some", "23.1.3.29", "Array.prototype.some", []⟩,
   ⟨"sec-createarrayiterator", "23.1.5.1", "CreateArrayIterator", []⟩,
   -- §24 Keyed Collections {#sec-keyed-collections}
@@ -613,7 +616,7 @@ def extras : List Group := [
     ``Proof.evalMapIdx_mapIdx, ``Proof.evalFilter_filter,
     ``Proof.evalFind_find, ``Proof.evalFind_true, ``Proof.evalFind_false, ``Proof.find?_isSome,
     ``Proof.find?_not_isNone, ``Proof.getD_map_undefined, ``Proof.evalFindIdx_from,
-    ``Proof.evalFindIdx_findIdx]⟩,
+    ``Proof.evalFindIdx_findIdx, ``Proof.evalReduce_foldl, ``Proof.evalReduce_foldl_val]⟩,
   ⟨"Recursion: the facts that Lean adds to the goal of a call in a callback, for the proof that a recursive function ends",
     [``List.any_wfParam_tolean, ``List.any_unattach_tolean, ``List.all_wfParam_tolean,
       ``List.all_unattach_tolean, ``List.find?_wfParam_tolean, ``List.find?_unattach_tolean]⟩]

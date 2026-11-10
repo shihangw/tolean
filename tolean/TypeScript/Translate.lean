@@ -150,6 +150,11 @@ def Ty.unoptional : Ty → Ty
   | .optional t => t
   | t => t
 
+/-- The type of a tag field, one string literal. -/
+def Ty.isLiteral : Ty → Bool
+  | .literal _ => true
+  | _ => false
+
 /-- `T | null`. -/
 def Ty.isNullable : Ty → Bool
   | .nullable _ => true
@@ -1411,6 +1416,17 @@ def indexedCallbackOf : IR.ListMethod → List Expr → Option (Param × Param �
   | .map, [.arrow _ _ [p, q] body] => some (p, q, body)
   | _, _ => none
 
+/-- The receiver of a call of `reduce`. -/
+def reduceOf : Expr → Option Expr
+  | .member _ recv "reduce" => some recv
+  | _ => none
+
+/-- The two parameters, the body and the initial value of a call of `reduce`:
+an arrow function with two parameters, then a value. -/
+def reducerOf : List Expr → Option (Param × Param × Expr × Expr)
+  | [.arrow _ _ [a, p] body, init] => some (a, p, body, init)
+  | _ => none
+
 /-- `e` is the name `Number`. -/
 def _root_.tolean.TypeScript.Syntax.Expr.namesNumber : Expr → Bool
   | .ident _ "Number" => true
@@ -1562,6 +1578,13 @@ def checkParamType (p : Param) (elem : Ty) : TM Unit := do
   if let some t := p.type then
     unless (← translateType t) == elem do
       reject p.span "the parameter must have the element type of the array"
+
+/-- The first parameter of the callback of `reduce`, if it has a type, has the
+type of the initial value. -/
+def checkAccType (a : Param) (accType : Ty) : TM Unit := do
+  if let some t := a.type then
+    unless (← translateType t) == accType do
+      reject a.span "the first parameter of 'reduce' must have the type of the initial value"
 
 /-- The index parameter of a callback of `map`, if it has a type, has the type
 `number`. -/
@@ -1811,6 +1834,9 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
     let type ← orReject ((a.type.join b.type).filter fun t => !(t matches .literal _)) s message
     return ⟨.ite c.code a.value b.value, false, type⟩
   | .call s callee args =>
+    match reduceOf callee with
+    | some recv => translateReduce fuel env expected s recv args
+    | none =>
     match arrayMethodOf callee with
     | some (recv, method) => translateArrayMethod fuel env expected s recv method args
     | none =>
@@ -1972,6 +1998,34 @@ def translateArrayMethod (fuel : Nat) (env : Env) (expected : Option Ty) (s : Sp
   let info : IR.CallbackInfo IR.TyExt :=
     { span := s, result := b.type.lean, scope := env.locals.map fun l => (l.name, l.type.lean) }
   return ⟨.listMethod method xs.value p.name elem.lean b.value info, false, type⟩
+
+/-- `xs.reduce((acc, x) => e, init)`: `List.foldl (fun acc x => e) init xs`.
+The value so far has the type of `init`, and the body must give that type.
+JS also passes the index and the array, which a callback with two parameters
+ignores. -/
+def translateReduce (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (recv : Expr)
+    (args : List Expr) : TM Code := do
+  let fuel + 1 := fuel | tooDeep
+  let (a, p, body, init) ← orReject (reducerOf args) s
+    ("'reduce' takes an arrow function with two parameters and an initial value, " ++
+      "such as xs.reduce((sum, x) => sum + x, 0n)")
+  if recv.namesNumber then reject recv.span "only an array has this method"
+  let xs ← translateExpr fuel env none recv
+  let elem ← orReject xs.type.element? recv.span "only an array has this method"
+  let i ← translateExpr fuel env expected init
+  let accType := i.type
+  if accType == .null || accType.isLiteral then
+    reject init.span "the initial value of 'reduce' needs a type that a local can have"
+  checkAccType a accType
+  checkParamType p elem
+  let withAcc ← declare env a.span a.name .param accType
+  let inner ← declare withAcc p.span p.name .param elem
+  let b ← translateExpr fuel inner (some accType) body
+  unless b.type == accType do
+    reject body.span "the callback of 'reduce' must give a value of the type of the initial value"
+  let info : IR.CallbackInfo IR.TyExt :=
+    { span := s, result := accType.lean, scope := env.locals.map fun l => (l.name, l.type.lean) }
+  return ⟨.listFold xs.value i.value a.name p.name elem.lean b.value info, false, accType⟩
 
 /-- `m.get(k)` and `m.has(k)` on a map. An owned map may be read here, as
 `ownedMap?` says. `get` gives `undefined` for a key that the map does not

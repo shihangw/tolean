@@ -208,6 +208,10 @@ inductive Expr (T E : Type) where
   position of the element, written as the language writes an index. -/
   | listMethod (method : ListMethod) (items : Expr T E) (param : String) (elem : Ty T)
       (body : Expr T E) (info : CallbackInfo T)
+  /-- `(List.foldl (fun (acc : A) (x : T) => body) init items)`, where `A` is
+  `info.result`, the type of `init` and of `body`, and `elem` is `T`. -/
+  | listFold (items init : Expr T E) (acc param : String) (elem : Ty T) (body : Expr T E)
+      (info : CallbackInfo T)
 deriving Repr, Inhabited
 
 /-- What the printer and a certificate need to know about a loop, besides its
@@ -349,6 +353,7 @@ def Expr.refs : Expr T E → List DeclRef
   | .tuple es => Expr.refsList es
   | .proj e _ _ => e.refs
   | .listMethod _ items _ t body _ => items.refs ++ t.refs ++ body.refs
+  | .listFold items init _ _ t body info => items.refs ++ init.refs ++ t.refs ++ body.refs ++ info.result.refs
   | .tagValue _ => []
   | .int _ | .none | .bool _ | .string _ | .var _ => []
 
@@ -422,6 +427,8 @@ def Expr.usesString : Expr T E → Bool
   | .tuple es => Expr.usesStringList es
   | .proj e _ _ => e.usesString
   | .listMethod _ items _ t body _ => items.usesString || t.usesString || body.usesString
+  | .listFold items init _ _ t body info =>
+    items.usesString || init.usesString || t.usesString || body.usesString || info.result.usesString
   -- The printer leaves a tag value out, as it leaves the tag field out.
   | .int _ | .none | .bool _ | .var _ | .enumCase .. | .tagValue _ => false
 
@@ -486,6 +493,8 @@ def Expr.usesMap : Expr T E → Bool
   | .eq a b | .ne a b | .propAnd a b | .propOr a b | .and a b | .or a b => a.usesMap || b.usesMap
   | .ascribe e t => e.usesMap || t.usesMap
   | .listMethod _ items _ t body _ => items.usesMap || t.usesMap || body.usesMap
+  | .listFold items init _ _ t body info =>
+    items.usesMap || init.usesMap || t.usesMap || body.usesMap || info.result.usesMap
   | .int _ | .none | .bool _ | .string _ | .var _ | .enumCase .. | .tagValue _ => false
 
 def Expr.usesMapList : List (Expr T E) → Bool
@@ -835,6 +844,12 @@ def Expr.callsShrink (self : DeclRef) (i : Nat) (need : Int) (depths : List (Str
   | .listMethod _ items param _ body _ =>
     items.callsShrink self i need depths &&
       body.callsShrink self i need (bindPart depths param ((items.partOf depths).map (· + 1)))
+  -- The accumulator is not a part of `p`, and the element is one step below
+  -- `items`, as in a `listMethod`.
+  | .listFold items init acc param _ body _ =>
+    items.callsShrink self i need depths && init.callsShrink self i need depths &&
+      body.callsShrink self i need
+        (bindPart (bindPart depths acc Option.none) param ((items.partOf depths).map (· + 1)))
   | .matchNull name whenNull whenValue =>
     whenNull.callsShrink self i need depths && whenValue.callsShrink self i need (narrowPart depths name)
   | .field e _ _ | .propNot e | .not e | .neg e | .isNone e | .isSome e | .inject _ _ e
@@ -900,6 +915,7 @@ mutual
 def Expr.calls (self : DeclRef) : Expr T E → Bool
   | .call r args => r == self || Expr.callsList self args
   | .listMethod _ items _ _ body _ => items.calls self || body.calls self
+  | .listFold items init _ _ _ body _ => items.calls self || init.calls self || body.calls self
   | .matchNull _ a b | .coalesce a b _ | .intOp _ a b | .order _ a b | .division _ a b | .eq a b
   | .ne a b | .propAnd a b | .propOr a b | .and a b | .or a b => a.calls self || b.calls self
   | .field e _ _ | .propNot e | .not e | .neg e | .isNone e | .isSome e | .inject _ _ e
@@ -1009,6 +1025,9 @@ def Expr.print (names : Names) : Expr T E → String
       PrintTy.indexValue (T := T) names
         s!"((({leanName names "List.findIdx?"} {fn} {xs}).map {int}.ofNat).getD (-1))"
     | .findLast => s!"({leanName names "List.find?"} {fn} ({leanName names "List.reverse"} {xs}))"
+  | .listFold items init acc param elem body info =>
+    let fn := s!"(fun ({acc} : {info.result.print names}) ({param} : {elem.print names}) => {body.print names})"
+    s!"({leanName names "List.foldl"} {fn} {argument (init.print names)} {argument (items.print names)})"
   | .bool b => if b then "true" else "false"
   | .string s => PrintTy.stringLit (T := T) names s
   | .var name => name

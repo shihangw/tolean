@@ -334,6 +334,16 @@ export class Gen {
         if (t.k === 'number') {
           options.push(() => call('findIndex', this.pick(arrays), (inner) => this.expr(BOOLEAN, inner, depth)));
         }
+        // `reduce` with an initial value of type `t`: the body reads the value
+        // so far, the element and the names in scope.
+        options.push(() => {
+          const recv = this.pick(arrays);
+          const acc = this.fresh('a');
+          const p = this.fresh('c');
+          const inner = [...vars, { name: acc, ty: t, mutable: false, owned: false },
+            { name: p, ty: recv.elem, mutable: false, owned: false }];
+          return `${recv.name}.reduce((${acc}, ${p}) => (${this.expr(t, inner, depth)}), ${this.expr(t, vars, depth)})`;
+        });
         break;
       }
       default:
