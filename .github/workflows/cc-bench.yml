@@ -30,7 +30,7 @@ jobs:
 
       - name: Cold lake build with ${{ matrix.cc }}
         run: |
-          out=$(nix build --inputs-from . nixpkgs#${{ matrix.cc }} --no-link --print-out-paths)
+          out=$(nix build --inputs-from . 'nixpkgs#${{ matrix.cc }}^out' --no-link --print-out-paths)
           export LEAN_CC=$out/bin/${{ matrix.cc }}
           "$LEAN_CC" --version | head -1
           start=$(date +%s)
@@ -44,4 +44,4 @@ jobs:
             awk '{ t = ($3 == "ms") ? $2 / 1000 : $2; if ($1 ~ /:c\.o/) c += t; else if ($1 ~ /:/) o += t; else l += t }
                  END { printf "C compile: %d s\nLean elaboration: %d s\nother: %d s\n", c, l, o }'
           echo "slowest C files:"
-          grep -E 'Built .*:c\.o' build.log | sed -E 's/.*Built ([^ ]+) .*\(([0-9.]+)s\).*/\2 \1/' | sort -rn | head -8
+          grep -E 'Built .*:c\.o .*\([0-9.]+s\)' build.log | sed -E 's/.*Built ([^ ]+) .*\(([0-9.]+)s\).*/\2 \1/' | sort -rn | head -8
