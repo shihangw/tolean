@@ -40,3 +40,21 @@ export function headCount(xs: ReadonlyArray<bigint>): number {
 export function tailSums(rows: ReadonlyArray<bigint>): ReadonlyArray<boolean> {
   return rows.slice(1).map((x) => x > 0n);
 }
+
+// A callback on a slice reads the elements of the slice: from the start,
+// between two bounds, and from the end.
+export function laterPlusOne(xs: ReadonlyArray<bigint>): ReadonlyArray<bigint> {
+  return xs.slice(2).map((x) => x + 1n);
+}
+
+export function middleBig(xs: ReadonlyArray<bigint>): ReadonlyArray<bigint> {
+  return xs.slice(1, 3).filter((x) => x > 0n);
+}
+
+export function lastPlusOne(xs: ReadonlyArray<bigint>): ReadonlyArray<bigint> {
+  return xs.slice(-2).map((x) => x + 1n);
+}
+
+export function innerAny(xs: ReadonlyArray<bigint>): boolean {
+  return xs.slice(1, -1).some((x) => x < 0n);
+}

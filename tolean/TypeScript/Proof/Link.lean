@@ -437,16 +437,16 @@ macro_rules
         tolean.IR.IntOp.apply, tolean.IR.Order.apply,
         tolean.IR.Division.apply, ExprExt.apply, NumberOp.apply, NumberConstant.value,
         NumberTest.apply, tagOf, Eval.Val.typeOf, Eval.Env.set, Eval.getProp, Eval.getKey_ofString, Eval.getPath,
-        Eval.objectPrototypeNames, List.lookup, DeclRef.beq_def, -List.map_map, -List.map_tail,
+        Eval.objectPrototypeNames, List.lookup, DeclRef.beq_def, -List.map_map, -List.map_tail, ← List.map_drop, ← List.map_take, ← List.map_reverse,
         -Bool.if_true_left, -Bool.if_false_right, -Bool.if_false_left, -Bool.if_true_right, $defs,*]
-      all_goals repeat' (split_find <;> simp [-List.map_map, -List.map_tail, $defs,*])
-      all_goals repeat' (split_undef <;> simp [-List.map_map, -List.map_tail, $defs,*])
+      all_goals repeat' (split_find <;> simp [-List.map_map, -List.map_tail, ← List.map_drop, ← List.map_take, ← List.map_reverse, $defs,*])
+      all_goals repeat' (split_undef <;> simp [-List.map_map, -List.map_tail, ← List.map_drop, ← List.map_take, ← List.map_reverse, $defs,*])
       all_goals repeat' (split <;> (try simp_all [bindState, eqVal, tolean.IR.IntOp.apply,
         tolean.IR.Order.apply, tolean.IR.Division.apply, ExprExt.apply, NumberOp.apply,
         NumberTest.apply, tagOf, Eval.Val.typeOf, Eval.Env.set, Eval.getProp, Eval.getKey_ofString, Eval.getPath,
-        Eval.objectPrototypeNames, List.lookup, DeclRef.beq_def, -List.map_map, -List.map_tail,
+        Eval.objectPrototypeNames, List.lookup, DeclRef.beq_def, -List.map_map, -List.map_tail, ← List.map_drop, ← List.map_take, ← List.map_reverse,
         -Bool.if_true_left, -Bool.if_false_right, -Bool.if_false_left, -Bool.if_true_right, $defs,*]))
-      all_goals (try simp_all [bindState, eqVal, Eval.Env.set, Eval.getProp, Eval.getKey_ofString, Eval.getPath, Eval.objectPrototypeNames, List.lookup, DeclRef.beq_def, -List.map_map, -List.map_tail, $defs,*])
+      all_goals (try simp_all [bindState, eqVal, Eval.Env.set, Eval.getProp, Eval.getKey_ofString, Eval.getPath, Eval.objectPrototypeNames, List.lookup, DeclRef.beq_def, -List.map_map, -List.map_tail, ← List.map_drop, ← List.map_take, ← List.map_reverse, $defs,*])
       -- Two `match`es that differ only in their auxiliary functions, as a
       -- loop lemma's step and the printed definition can, agree by `rfl`.
       all_goals (try rfl)))

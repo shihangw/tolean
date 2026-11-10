@@ -35,4 +35,16 @@ def headCount {N : Type} [JSNumber N] (xs : List Int) : N :=
 def tailSums {N : Type} [JSNumber N] (rows : List Int) : List Bool :=
   (List.map (fun (x : Int) => decide (x > (0 : Int))) ((List.drop 1 rows)))
 
+def laterPlusOne {N : Type} [JSNumber N] (xs : List Int) : List Int :=
+  (List.map (fun (x : Int) => (x + (1 : Int))) ((List.drop 2 xs)))
+
+def middleBig {N : Type} [JSNumber N] (xs : List Int) : List Int :=
+  (List.filter (fun (x : Int) => decide (x > (0 : Int))) ((List.drop 1 (List.take 3 xs))))
+
+def lastPlusOne {N : Type} [JSNumber N] (xs : List Int) : List Int :=
+  (List.map (fun (x : Int) => (x + (1 : Int))) ((List.reverse (List.take 2 (List.reverse xs)))))
+
+def innerAny {N : Type} [JSNumber N] (xs : List Int) : Bool :=
+  (List.any ((List.drop 1 (List.reverse (List.drop 1 (List.reverse xs))))) (fun (x : Int) => decide (x < (0 : Int))))
+
 end Test
