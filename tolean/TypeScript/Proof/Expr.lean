@@ -1240,8 +1240,8 @@ theorem stringCall_sound {s : Span} {method : String} {str : Code} {args : List 
       simp only [hm] at h
       split at h
       · split at h
-        · simp only [pure_ok] at h
-          obtain ⟨rfl, -⟩ := h
+        · simp only [bind_ok, pure_ok] at h
+          obtain ⟨_, _, -, rfl, -⟩ := h
           simp only [IR.Expr.eval, IR.Expr.evalList] at hv
           cases hx : IR.Expr.eval fs fuel ρ str.value with
           | none => simp [hx] at hv

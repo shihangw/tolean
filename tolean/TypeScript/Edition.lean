@@ -59,10 +59,14 @@ inductive Feature where
   | logicalAssignment
   /-- `1_000`: `NumericLiteralSeparator`. -/
   | numericSeparators
+  /-- `s.trimStart()` and `s.trimEnd()`: `String.prototype.trimStart` and
+  `trimEnd`. -/
+  | trimStartEnd
 deriving BEq, Repr, Inhabited
 
 def Feature.since : Feature → Edition
   | .exponent => .es2016
+  | .trimStartEnd => .es2019
   | .bigint | .bigintDivision | .nullishCoalescing | .optionalChaining => .es2020
   | .logicalAssignment | .numericSeparators => .es2021
 
@@ -74,6 +78,7 @@ def Feature.describe : Feature → String
   | .optionalChaining => "'?.'"
   | .logicalAssignment => "'&&=', '||=' and '??='"
   | .numericSeparators => "numeric separators"
+  | .trimStartEnd => "String.prototype.trimStart and trimEnd"
 
 def Edition.supports (target : Edition) (f : Feature) : Bool := f.since.year ≤ target.year
 

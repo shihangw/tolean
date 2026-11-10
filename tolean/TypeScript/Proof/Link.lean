@@ -289,13 +289,13 @@ macro_rules
       simp [runIn, functionsOf, functions, Body.exec, Body.runFold, Expr.eval, Expr.evalList,
         Expr.evalFields, Expr.evalMap, Expr.evalFilter, Expr.evalFind, bindState, eqVal,
         tolean.IR.IntOp.apply, tolean.IR.Order.apply,
-        tolean.IR.Division.apply, ExprExt.apply, StringPart.toStr, StringMethod.apply, Eval.oneString, NumberOp.apply, NumberConstant.value,
+        tolean.IR.Division.apply, ExprExt.apply, StringPart.toStr, StringMethod.apply, Eval.oneString, Eval.noArgs, NumberOp.apply, NumberConstant.value,
         NumberTest.apply, tagOf, Eval.Val.typeOf, Eval.Env.set, Eval.getProp, Eval.getKey_ofString, Eval.getPath,
         Eval.objectPrototypeNames, List.lookup, DeclRef.beq_def, -List.map_map,
         -Bool.if_true_left, -Bool.if_false_right, -Bool.if_false_left, -Bool.if_true_right, $defs,*]
       all_goals repeat' (split_find <;> simp [-List.map_map, $defs,*])
       all_goals repeat' (split <;> (try simp_all [bindState, eqVal, tolean.IR.IntOp.apply,
-        tolean.IR.Order.apply, tolean.IR.Division.apply, ExprExt.apply, StringPart.toStr, StringMethod.apply, Eval.oneString, NumberOp.apply,
+        tolean.IR.Order.apply, tolean.IR.Division.apply, ExprExt.apply, StringPart.toStr, StringMethod.apply, Eval.oneString, Eval.noArgs, NumberOp.apply,
         NumberTest.apply, tagOf, Eval.Val.typeOf, Eval.Env.set, Eval.getProp, Eval.getKey_ofString, Eval.getPath,
         Eval.objectPrototypeNames, List.lookup, DeclRef.beq_def, -List.map_map,
         -Bool.if_true_left, -Bool.if_false_right, -Bool.if_false_left, -Bool.if_true_right, $defs,*]))
