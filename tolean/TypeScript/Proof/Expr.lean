@@ -1155,6 +1155,131 @@ theorem applyOperator_sound {sp s : Span} {op : BinOp} {l r : Expr} {a b c : Cod
        rw [hl _ hx, hr _ hy]
        cases x <;> cases y <;> simp_all [IR.eqVal, Eval.binary, Eval.strictEq])
 
+/-- `obj.name` after the code of `obj`: the `length` of a string, or a field of
+an interface, means what the interpreter's rule for a property read means,
+when the code of `obj` means what `obj` means. -/
+theorem readMember_sound {s sp : Span} {obj : Expr} {name : String} {o c : Code} {ctx ctx' : Ctx}
+    (h : readMember s obj name o ctx = .ok c ctx') (hsp : obj.optSpine = false)
+    {ρs ρo : Eval.Env N} {v : Val N}
+    (ho : ∀ w, IR.Expr.eval fs fuel ρo o.code = some w → Eval.eval m fuel ρs obj = some w)
+    (hv : IR.Expr.eval fs fuel ρo c.code = some v) :
+    Eval.eval m fuel ρs (.member sp obj name) = some v := by
+  unfold readMember at h
+  split at h
+  · split at h
+    · rename_i hn
+      simp only [pure_ok] at h
+      obtain ⟨rfl, -⟩ := h
+      simp only [IR.Expr.eval, IR.Expr.evalList] at hv
+      cases hobj : IR.Expr.eval fs fuel ρo o.value with
+      | none => simp [hobj] at hv
+      | some ov =>
+        have := ho _ (by rwa [eval_value] at hobj)
+        simp only [Eval.eval, hsp, Bool.false_eq_true, ↓reduceIte, this, Option.bind_eq_bind,
+          Option.bind_some]
+        cases ov <;> simp_all [IR.ExprExt.apply]
+    · simp at h
+  · simp at h
+    obtain ⟨_, _, ⟨rfl, rfl⟩, ty, ⟨-, rfl⟩, rfl⟩ := h
+    simp only [IR.Expr.eval] at hv
+    cases hobj : IR.Expr.eval fs fuel ρo o.code with
+    | none => simp [hobj] at hv
+    | some ov =>
+      have := ho _ hobj
+      simp only [Eval.eval, hsp, Bool.false_eq_true, ↓reduceIte, this, Option.bind_eq_bind,
+        Option.bind_some]
+      cases ov <;> simp_all
+
+/-! ### Methods of a string -/
+
+/-- A method that takes no callback: the interpreter evaluates the receiver,
+then the arguments, and `stringMethod` gives the value on a string. -/
+theorem eval_methodCall (sp sp' : Span) (recv : Expr) (method : String) (args : List Expr)
+    (hr : recv.namesNumber = false) (harg : args.any (·.isArrow) = false) (ρ : Eval.Env N) :
+    Eval.eval m fuel ρ (.call sp (.member sp' recv method) args) =
+      (Eval.eval m fuel ρ recv).bind fun
+        | .str s => (Eval.evalList m fuel ρ args).bind (Eval.stringMethod method s)
+        | _ => none := by
+  rw [Eval.eval.eq_26]
+  · generalize Eval.eval m fuel ρ recv = r
+    cases r with
+    | none => rfl
+    | some w => cases w <;> simp [Option.bind_eq_bind]
+  · intro s _ _ hrecv
+    subst hrecv; simp [Expr.namesNumber] at hr
+  · intro sa par p body hargs
+    subst hargs; simp [Expr.isArrow] at harg
+
+/-- The method that `stringMethod?` picks gives the value that the
+interpreter's `stringMethod` gives. -/
+theorem stringMethod_of {method : String} {sm : IR.StringMethod} (hm : stringMethod? method = some sm)
+    (t : JSString) (vs : List (Val N)) : Eval.stringMethod method t vs = sm.apply t vs := by
+  unfold stringMethod? at hm
+  repeat' split at hm
+  all_goals first
+    | (cases hm
+       rename_i hmm
+       simp only [beq_iff_eq] at hmm
+       subst hmm
+       simp [Eval.stringMethod, IR.StringMethod.apply])
+    | simp at hm
+
+/-- The code of `stringCall` evaluates the receiver to a string and the
+arguments, and its value is the one that `stringMethod` gives them. -/
+theorem stringCall_sound {s : Span} {method : String} {str : Code} {args : List Code}
+    {ctx ctx' : Ctx} {c : Code} (h : stringCall s method str args ctx = .ok c ctx')
+    {ρ : Eval.Env N} {v : Val N} (hv : IR.Expr.eval fs fuel ρ c.code = some v) :
+    ∃ t vs, IR.Expr.eval fs fuel ρ str.value = some (.str t) ∧
+      IR.Expr.evalList fs fuel ρ (args.map Code.value) = some vs ∧
+      Eval.stringMethod method t vs = some v := by
+  unfold stringCall at h
+  split at h
+  · cases hm : stringMethod? method with
+    | none => simp [hm] at h
+    | some sm =>
+      simp only [hm] at h
+      split at h
+      · split at h
+        · simp only [pure_ok] at h
+          obtain ⟨rfl, -⟩ := h
+          simp only [IR.Expr.eval, IR.Expr.evalList] at hv
+          cases hx : IR.Expr.eval fs fuel ρ str.value with
+          | none => simp [hx] at hv
+          | some w =>
+            cases hy : IR.Expr.evalList fs fuel ρ (args.map Code.value) with
+            | none => simp [hx, hy] at hv
+            | some vs =>
+              simp only [hx, hy, Option.bind_eq_bind, Option.bind_some] at hv
+              cases w <;> simp [IR.ExprExt.apply] at hv
+              rename_i t
+              exact ⟨t, vs, rfl, rfl, by rw [stringMethod_of hm]; exact hv⟩
+        · simp at h
+      · simp at h
+  · simp at h
+
+theorem translateMethodCall_sound {F : Nat}
+    (ihE : ∀ env exp e ctx c ctx', translateExpr F env exp e ctx = .ok c ctx' →
+      Sim (N := N) m fs fuel env e c.code)
+    {env : Translate.Env} {s : Span} {recv : Expr} {method : String}
+    {args : List Expr} {ctx ctx' : Ctx} {c : Code}
+    (h : translateMethodCall (F + 1) env s recv method args ctx = .ok c ctx')
+    {sp : Span} (hr : recv.namesNumber = false) :
+    Sim (N := N) m fs fuel env (.call s (.member sp recv method) args) c.code := by
+  simp only [translateMethodCall, ite_state] at h
+  split at h
+  · simp at h
+  rename_i harg
+  simp only [pure_bind, bind_ok] at h
+  obtain ⟨r, s₁, hrecv, codes, s₂, hcodes, h⟩ := h
+  intro ρs ρo v ha hs hv
+  obtain ⟨t, vs, ht, hvs, hval⟩ := stringCall_sound fs fuel h hv
+  rw [eval_value] at ht
+  have hrecv' := ihE _ _ _ _ _ _ hrecv ρs ρo _ ha hs ht
+  have hargs := mapM_sim m fs fuel (fun e ctx c ctx' he => ihE _ _ _ _ _ _ he) args _ codes _ hcodes
+    ρs ρo vs ha hs hvs
+  rw [eval_methodCall m fuel _ _ _ _ _ hr (by simpa using harg), hrecv']
+  simp [hargs, hval]
+
 /-- A string that becomes the constructor of a literal union has the same
 value: the evaluator gives a constructor its string. -/
 theorem enumOperand_code (known : List EnumInfo) (c : Code) (t : Ty) (ρ : Eval.Env N) :
@@ -1589,16 +1714,19 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
     (∀ env exp s recv method args ctx c ctx', translateArrayMethod F env exp s recv method args ctx = .ok c ctx' →
       ∀ sp name, listMethod? name = some method →
         Sim (N := N) m fs fuel env (.call s (.member sp recv name) args) c.code) ∧
+    (∀ env s recv method args ctx c ctx', translateMethodCall F env s recv method args ctx = .ok c ctx' →
+      ∀ sp, recv.namesNumber = false →
+        Sim (N := N) m fs fuel env (.call s (.member sp recv method) args) c.code) ∧
     (∀ env exp e ctx c ctx', translateExprCore F env exp e ctx = .ok c ctx' →
       Sim (N := N) m fs fuel env e c.code) := by
   induction F with
   | zero =>
-    refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩ <;> intros <;>
+    refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩ <;> intros <;>
       simp_all [translateExpr, translateElements, translateArray, translateCall, translateObject,
-        translateBinary, translateArrayMethod, translateExprCore]
+        translateBinary, translateArrayMethod, translateMethodCall, translateExprCore]
   | succ F ih =>
-    obtain ⟨ihE, ihL, ihA, ihC, ihO, ihB, ihM, ihX⟩ := ih
-    refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+    obtain ⟨ihE, ihL, ihA, ihC, ihO, ihB, ihM, ihK, ihX⟩ := ih
+    refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
     -- The core first, then the step that makes a value a member of a union.
     rotate_right
     · intro env exp e ctx c ctx' h
@@ -1774,16 +1902,11 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
               rw [eval_member_chain m fuel hsp hc this]
               cases ov <;> simp only [IR.ExprExt.apply] at hv' <;> first | exact hv' | simp at hv'
         rename_i hsp
-        simp at h
-        obtain ⟨o, s₁, ho, _, _, ⟨rfl, rfl⟩, ty, ⟨-, rfl⟩, rfl⟩ := h
+        simp only [bind_ok] at h
+        obtain ⟨_, s₁, -, o, s₂, ho, h⟩ := h
         intro ρs ρo v ha hs hv'
-        simp only [IR.Expr.eval] at hv'
-        cases hobj : IR.Expr.eval fs fuel ρo o.code with
-        | none => simp [hobj] at hv'
-        | some ov =>
-          have := ihE _ _ _ _ _ _ ho ρs ρo ov ha hs hobj
-          simp only [Eval.eval, hsp, Bool.false_eq_true, ↓reduceIte, this]
-          simpa [hobj] using hv'
+        exact readMember_sound m fs fuel h (by simpa using hsp)
+          (fun w hw => ihE _ _ _ _ _ _ ho ρs ρo w ha hs hw) hv'
       | optMember sp obj name =>
         simp only [translateExprCore, bind_ok] at h
         obtain ⟨o, s₁, ho, ⟨bind, ty⟩, s₂, -, h⟩ := h
@@ -1930,7 +2053,23 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
           · simp at hm
         | none =>
           simp only [hm] at h
-          exact ihC _ _ _ _ _ _ _ h
+          cases hk : methodCallOf callee with
+          | some rk =>
+            obtain ⟨recv, method⟩ := rk
+            simp only [hk] at h
+            unfold methodCallOf at hk
+            split at hk
+            · rename_i sp' recv' name
+              split at hk
+              · simp at hk
+              · rename_i hn
+                simp only [Option.some.injEq, Prod.mk.injEq] at hk
+                obtain ⟨rfl, rfl⟩ := hk
+                exact ihK _ _ _ _ _ _ _ _ h sp' (by simpa using hn)
+            · simp at hk
+          | none =>
+            simp only [hk] at h
+            exact ihC _ _ _ _ _ _ _ h
       | object sp props =>
         simp only [translateExprCore] at h
         exact ihO _ _ _ _ _ _ _ h
@@ -2180,5 +2319,7 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
     · exact translateBinary_sound m fs fuel ihE
     · intro env exp s recv method args ctx c ctx' h sp name hname
       exact translateArrayMethod_sound m fs fuel ihE h hname
+    · intro env s recv method args ctx c ctx' h sp hr
+      exact translateMethodCall_sound m fs fuel ihE h hr
 
 end tolean.TypeScript.Proof

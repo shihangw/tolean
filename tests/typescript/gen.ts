@@ -181,6 +181,14 @@ export class Gen {
           () => `-${this.expr(t, vars, d)}`,
           () => `(${this.expr(t, vars, d)})`,
         );
+        // The length of a string and the index of a string in it, which count
+        // UTF-16 code units.
+        if (t.k === 'number') {
+          options.push(
+            () => `(${this.expr(STRING, vars, d)}).length`,
+            () => `(${this.expr(STRING, vars, d)}).indexOf(${this.expr(STRING, vars, d)})`,
+          );
+        }
         // An element of an array, by an index that is a number literal,
         // which checks the interpreter's rule for `xs[i]` against Node. The
         // index `2` is past the end, which is `undefined`. The translator
@@ -234,6 +242,8 @@ export class Gen {
             return flags.length > 0 ? `${this.pick(flags).name} === ${this.expr(BOOLEAN, vars, d)}` : 'true';
           },
           () => `Number.${this.pick(['isNaN', 'isFinite', 'isSafeInteger'])}(${this.expr(NUMBER, vars, d)})`,
+          // A test of one string in another, by code units.
+          () => `(${this.expr(STRING, vars, d)}).${this.pick(['startsWith', 'endsWith', 'includes'])}(${this.expr(STRING, vars, d)})`,
         );
         // `typeof` on a value of any type, which checks the interpreter's rule
         // against Node. The translator refuses it here, so it comes only

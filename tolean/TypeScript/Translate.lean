@@ -1337,6 +1337,74 @@ def Ty.element? : Ty → Option Ty
   | .array t => some t
   | _ => none
 
+/-- The receiver and the method of a call such as `s.startsWith(p)`, for a
+method that takes no callback. `Number.isNaN(x)` and the like are calls of the
+global `Number`. -/
+def methodCallOf : Expr → Option (Expr × String)
+  | .member _ recv name => if recv.namesNumber then none else some (recv, name)
+  | _ => none
+
+/-- `e` is an arrow function. -/
+def _root_.tolean.TypeScript.Syntax.Expr.isArrow : Expr → Bool
+  | .arrow .. => true
+  | _ => false
+
+/-- The method of a string that `name` names, among those the subset has. -/
+def stringMethod? (name : String) : Option IR.StringMethod :=
+  if name == "startsWith" then some .startsWith
+  else if name == "endsWith" then some .endsWith
+  else if name == "includes" then some .includes
+  else if name == "indexOf" then some .indexOf
+  else none
+
+/-- The types of the arguments that a method of a string takes here. JS converts
+another argument with ToString, which the subset has only on strings, and a
+position argument is not supported. -/
+def StringMethod.params : IR.StringMethod → List Ty
+  | .startsWith | .endsWith | .includes | .indexOf => [.string]
+
+/-- The type of the value of a method of a string. -/
+def StringMethod.result : IR.StringMethod → Ty
+  | .startsWith | .endsWith | .includes => .boolean
+  | .indexOf => .number
+
+/-- The code for `str.method(args)`, a method of a string, where `str` is the
+code of the receiver and `args` are the codes of the arguments. -/
+def stringCall (s : Span) (method : String) (str : Code) (args : List Code) : TM Code :=
+  if str.type == .string then
+    match stringMethod? method with
+    | some m =>
+      if args.length == (StringMethod.params m).length then
+        if args.map (·.type) == StringMethod.params m then
+          return ⟨.ext (.stringMethod m) (str.value :: args.map (·.value)), false, StringMethod.result m⟩
+        else reject s s!"the argument of '{method}' must be a string"
+      else reject s s!"'{method}' takes one string here; a position argument is not supported"
+    | none => reject s s!"the string method '{method}' is not supported here"
+  else reject s s!"only a string has the method '{method}' here"
+
+/-- `obj.name`, where `o` is the code of `obj` and no `?.` comes before it: the
+`length` of a string, or a field of an interface. -/
+def readMember (s : Span) (obj : Expr) (name : String) (o : Code) : TM Code := do
+  -- `s.length`: the number of code units (ECMA-262 §22.1.4.1).
+  if o.type == .string then
+    if name == "length" then return ⟨.ext .stringLength [o.value], false, .number⟩
+    else reject s s!"a string has no property '{name}' here, only 'length'"
+  let ctx : Ctx ← get
+  let field? := match o.type with
+    | .struct ref args =>
+      (ctx.knownStructs.find? fun (i : StructInfo) => i.ref == ref).bind
+        fun info => (info.fieldsAt args).lookup name
+    | _ => none
+  let message := match o.type, field? with
+    | .tagged .., _ => "a field of a tagged union may be read only after a test of its tag"
+    | _, some (.literal _) =>
+      "a tag field may be read only in a test of its union, such as x.kind === 'circle'"
+    | _, _ =>
+      "only fields of interfaces declared in this file, or exported by the files before it, may be read"
+  -- The structure has no tag field, so the output cannot read one.
+  let type ← orReject (field?.filter fun t => !(t matches .literal _)) s message
+  return ⟨.field o.code (!obj.isIdent) name, false, type⟩
+
 /-- A callback's parameter may have a type written out: the element type. -/
 def checkParamType (p : Param) (elem : Ty) : TM Unit := do
   if let some t := p.type then
@@ -1501,21 +1569,7 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
       let (bind, type) ← optPathType s o.type path
       return ⟨.ext (.optField path bind) [o.code], false, type⟩
     let o ← translateExpr fuel env none obj
-    let ctx : Ctx ← get
-    let field? := match o.type with
-      | .struct ref args =>
-        (ctx.knownStructs.find? fun (i : StructInfo) => i.ref == ref).bind
-          fun info => (info.fieldsAt args).lookup name
-      | _ => none
-    let message := match o.type, field? with
-      | .tagged .., _ => "a field of a tagged union may be read only after a test of its tag"
-      | _, some (.literal _) =>
-        "a tag field may be read only in a test of its union, such as x.kind === 'circle'"
-      | _, _ =>
-        "only fields of interfaces declared in this file, or exported by the files before it, may be read"
-    -- The structure has no tag field, so the output cannot read one.
-    let type ← orReject (field?.filter fun t => !(t matches .literal _)) s message
-    return ⟨.field o.code (!obj.isIdent) name, false, type⟩
+    readMember s obj name o
   | .optMember s obj name =>
     let o ← translateExpr fuel env none obj
     let (bind, type) ← optFieldType s o.type name
@@ -1575,7 +1629,10 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
   | .call s callee args =>
     match arrayMethodOf callee with
     | some (recv, method) => translateArrayMethod fuel env expected s recv method args
-    | none => translateCall fuel env s callee args
+    | none =>
+      match methodCallOf callee with
+      | some (recv, method) => translateMethodCall fuel env s recv method args
+      | none => translateCall fuel env s callee args
   | .object s props => translateObject fuel env expected s props
   | .array s elems =>
     match expected with
@@ -1710,6 +1767,17 @@ def translateArrayMethod (fuel : Nat) (env : Env) (expected : Option Ty) (s : Sp
   let info : IR.CallbackInfo IR.TyExt :=
     { span := s, result := b.type.lean, scope := env.locals.map fun l => (l.name, l.type.lean) }
   return ⟨.listMethod method xs.value p.name elem.lean b.value info, false, type⟩
+
+/-- `s.startsWith(p)`, a method that takes no callback: the receiver, then each
+argument, then `stringCall` on their codes. An arrow function is a callback,
+which no such method takes. -/
+def translateMethodCall (fuel : Nat) (env : Env) (s : Span) (recv : Expr) (method : String)
+    (args : List Expr) : TM Code := do
+  let fuel + 1 := fuel | tooDeep
+  if args.any (·.isArrow) then reject s s!"'{method}' does not take a callback here"
+  let r ← translateExpr fuel env none recv
+  let codes ← args.mapM (translateExpr fuel env none)
+  stringCall s method r codes
 
 def translateObject (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (props : List Property) :
     TM Code := do

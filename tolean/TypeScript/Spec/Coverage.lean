@@ -131,9 +131,9 @@ def sections : List Section := [
   ⟨"sec-grouping-operator", "13.2.9", "The Grouping Operator",
     [``Proof.eval_stripParens]⟩,
   ⟨"sec-property-accessors", "13.3.2", "Property Accessors", [``Eval.eval_index_str, ``Eval.getKey_ofString, ``Eval.find?_fst_lookup,
-    ``Coverage.index_lone_surrogate]⟩,
+    ``Coverage.index_lone_surrogate, ``Proof.readMember_sound]⟩,
   ⟨"sec-function-calls", "13.3.6", "Function Calls",
-    [``Proof.eval_call, ``Proof.out_call, ``Proof.zip_sim, ``Proof.zip_sim_value, ``Proof.calls_agree,
+    [``Proof.eval_call, ``Proof.eval_methodCall, ``Proof.out_call, ``Proof.zip_sim, ``Proof.zip_sim_value, ``Proof.calls_agree,
     ``Proof.evalList_append_undefined, ``Proof.callS_append_undefined, ``Proof.evalList_optArgs, ``Proof.fixArgs_value]⟩,
   ⟨"sec-optional-chains", "13.3.9", "Optional Chains",
     [``Proof.getPath_append, ``Proof.evalChain_optChain, ``Proof.eval_member_chain]⟩,
@@ -236,6 +236,16 @@ def sections : List Section := [
   -- §21 Numbers and Dates {#sec-numbers-and-dates}
   ⟨"sec-properties-of-the-number-constructor", "21.1.2", "Properties of the Number Constructor",
     [``Proof.out_numberTest]⟩,
+  -- §22 Text Processing {#sec-text-processing}
+  ⟨"sec-string.prototype.endswith", "22.1.3.7", "String.prototype.endsWith",
+    [``JSString.endsWith_iff]⟩,
+  ⟨"sec-string.prototype.includes", "22.1.3.8", "String.prototype.includes",
+    [``JSString.includes_iff]⟩,
+  ⟨"sec-string.prototype.indexof", "22.1.3.9", "String.prototype.indexOf", []⟩,
+  ⟨"sec-string.prototype.startswith", "22.1.3.25", "String.prototype.startsWith",
+    [``JSString.startsWith_iff, ``Proof.stringMethod_of, ``Proof.stringCall_sound,
+    ``Proof.translateMethodCall_sound]⟩,
+  ⟨"sec-properties-of-string-instances-length", "22.1.4.1", "length", []⟩,
   -- §23 Indexed Collections {#sec-indexed-collections}
   ⟨"sec-array.prototype.every", "23.1.3.6", "Array.prototype.every", []⟩,
   ⟨"sec-array.prototype.filter", "23.1.3.8", "Array.prototype.filter",

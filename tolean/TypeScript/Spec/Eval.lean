@@ -249,6 +249,24 @@ def binary : BinOp → Val N → Val N → Option (Val N)
   | .looseNe, a, b => (looseEq a b).map (.bool ∘ not)
   | _, _, _ => none
 
+/-- The value `f p` of a method whose arguments are one string `p`. Other
+arguments leave the subset. -/
+def oneString (f : JSString → Val N) : List (Val N) → Option (Val N)
+  | [.str p] => some (f p)
+  | _ => none
+
+/-- A method of the string `s` that takes no callback, on the values of its
+arguments: `startsWith`, `endsWith`, `includes` and `indexOf` with one string
+(ECMA-262 §22.1.3.25, §22.1.3.7, §22.1.3.8 and §22.1.3.9). Each converts its
+argument with ToString, which the subset has on strings only. A position
+argument leaves the subset. -/
+def stringMethod (method : String) (s : JSString) (args : List (Val N)) : Option (Val N) :=
+  if method == "startsWith" then oneString (fun p => .bool (s.startsWith p)) args
+  else if method == "endsWith" then oneString (fun p => .bool (s.endsWith p)) args
+  else if method == "includes" then oneString (fun p => .bool (s.includes p)) args
+  else if method == "indexOf" then oneString (fun p => .num (JSNumber.ofSafeInt (s.indexOf p))) args
+  else none
+
 /-- The element of the array `items` whose index is the safe integer `i`, or
 `undefined` when `i` is none or no index of the array. -/
 def elementAt (items : List (Val N)) : Option Int → Val N
@@ -445,6 +463,9 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     else do
       match ← eval m fuel env obj with
       | .obj fields => getProp fields name
+      -- `s.length`: the number of code units (ECMA-262 §22.1.4.1). The
+      -- subset reads no other property of a string.
+      | .str s => if name == "length" then some (.num (JSNumber.ofSafeInt s.length)) else none
       | _ => none
   -- `obj?.name` is `undefined` when `obj` is `null` or `undefined`
   -- (ECMA-262 §13.3.9.1).
@@ -535,6 +556,14 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
       return .bool (← evalFind m fuel env p.name body false items).isNone
     else if method == "find" then return (← evalFind m fuel env p.name body true items).getD .undefined
     else none
+  -- Any other call of a method, such as `s.startsWith(p)`. The receiver
+  -- comes first, then the arguments, as `EvaluateCall` takes them (ECMA-262
+  -- §13.3.6.2). Reading a method of a string has no effect, so the rule reads
+  -- it after the arguments.
+  | .call _ (.member _ recv method) args => do
+    match ← eval m fuel env recv with
+    | .str s => stringMethod method s (← evalList m fuel env args)
+    | _ => none
   | .call _ (.ident _ name) args => do
     let vs ← evalList m fuel env args
     match fuel with
