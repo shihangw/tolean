@@ -313,6 +313,19 @@ def iterValues : Val N → Option (List (Val N))
   | .map entries => some (entries.map fun (k, v) => .list [k, v])
   | _ => none
 
+/-- The entries of a map that `new Map(items)` makes: each item, an array
+`[key, value]`, is set in order, as `Map.prototype.set` sets it. An item of
+another shape leaves the subset. -/
+def mapOfItems (items : List (Val N)) : Option (List (Val N × Val N)) :=
+  items.foldlM (fun entries item =>
+    match item with
+    | .list [k, v] => mapSet entries k v
+    | _ => none) []
+
+/-- The elements of a set that `new Set(items)` makes: each item is added in
+order, as `Set.prototype.add` adds it. -/
+def setOfItems (items : List (Val N)) : Option (List (Val N)) := items.foldlM setAdd []
+
 /-- What a statement list does: it runs to its end with the variables it
 leaves, or it ends the function, or a `break` or a `continue` ends it with the
 variables at that point. These are the completion records of ECMA-262
@@ -628,6 +641,15 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
   | .new _ "Map" _ [] => if (env.lookup "Map").isSome then none else some (.map [])
   -- `new Set()` (ECMA-262 §24.2.2.1), in the same way.
   | .new _ "Set" _ [] => if (env.lookup "Set").isSome then none else some (.set [])
+  -- `new Map(items)` and `new Set(items)` (`AddEntriesFromIterable`, ECMA-262
+  -- §24.1.1.2, and §24.2.2.1): the constructor visits `items` as a loop
+  -- would, and sets each `[key, value]`, or adds each value, in order.
+  | .new _ "Map" _ [arg] => do
+    if (env.lookup "Map").isSome then none
+    return .map (← mapOfItems (← iterValues (← eval m fuel env arg)))
+  | .new _ "Set" _ [arg] => do
+    if (env.lookup "Set").isSome then none
+    return .set (← setOfItems (← iterValues (← eval m fuel env arg)))
   -- `new Error(message)` with a string message (`Error`, ECMA-262
   -- §20.5.1.1): an error object whose own property `message` is the string,
   -- unless a variable hides `Error`. As for `NaN`, a function or an enum of

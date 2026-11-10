@@ -157,10 +157,9 @@ full model, which a later step can add.
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| `new Map(entries)` and `new Set(elements)` | The map or the set after a `set` or an `add` of each item, in order | An iterable that is not an array literal |
 | A function that changes a map that its caller passes in | A function that returns the new map. The caller takes the result in place of the old map. | A call where the caller keeps another name for the same map |
 
-The second row is the borrow that Aeneas uses for Rust. It is sound here only
+This is the borrow that Aeneas uses for Rust. It is sound here only
 because the translator checks that the caller owns the map and holds no other
 name for it during the call. Key equality is SameValueZero. For `string` and
 `bigint` keys that is Lean's equality. For `number` keys it is Lean's
@@ -231,8 +230,7 @@ leaves a gap.
    classes. `throw new Error(message)` is done.
 7. **P0.** Local functions that change variables of the enclosing function, by
    lifting them out and threading the variables through each call.
-8. **P0.** `new Map(entries)` and `new Set(elements)`, and the borrow for a
-   map that a caller passes in.
+8. **P0.** The borrow for a map that a caller passes in.
 9. **P1.** Strings: template literals, string order, the string methods,
    iteration by code point, and the opaque `JSON.stringify`.
 10. **P1.** Sorting with consistent comparators.

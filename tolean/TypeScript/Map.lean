@@ -50,6 +50,9 @@ def delete (m : JSMap K V) (k : K) : JSMap K V := ⟨m.entries.filter fun e => !
 /-- `m.size`: the number of entries. -/
 def size (m : JSMap K V) : Nat := m.entries.length
 
+/-- `new Map(items)`: the map after setting each pair of `items`, in order. -/
+def ofList (items : List (K × V)) : JSMap K V := items.foldl (fun m e => m.set e.1 e.2) empty
+
 end JSMap
 
 /-- A JS `Set`: its elements, in the order that `add` first added each one
@@ -76,6 +79,9 @@ def delete (s : JSSet T) (x : T) : JSSet T := ⟨s.elems.filter fun y => !(y == 
 
 /-- `s.size`: the number of elements. -/
 def size (s : JSSet T) : Nat := s.elems.length
+
+/-- `new Set(items)`: the set after adding each of `items`, in order. -/
+def ofList (items : List T) : JSSet T := items.foldl add empty
 
 end JSSet
 

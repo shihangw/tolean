@@ -1443,6 +1443,51 @@ def newMapType (s : Span) (typeArgs : List TypeExpr) (expected : Option Ty) : TM
   | [], some (.map k v) => return .map k v
   | _, _ => reject s "new Map needs the types of its keys and values, such as new Map<string, bigint>()"
 
+/-- The map type of `new Map<K, V>(items)` that the type arguments or the
+context give, if they give one. -/
+def declaredMapType (s : Span) (typeArgs : List TypeExpr) (expected : Option Ty) : TM (Option Ty) := do
+  match typeArgs, expected with
+  | [k, v], _ => return some (.map (← mapKey s (← translateType k)) (← translateType v))
+  | [], some (.map k v) => return some (.map k v)
+  | [], _ => return none
+  | _, _ => reject s "Map takes two type arguments"
+
+/-- The set type of `new Set<T>(items)` that the type argument or the context
+give, if they give one. -/
+def declaredSetType (s : Span) (typeArgs : List TypeExpr) (expected : Option Ty) : TM (Option Ty) := do
+  match typeArgs, expected with
+  | [t], _ => return some (.set (← mapKey s (← translateType t) "a set element"))
+  | [], some (.set t) => return some (.set t)
+  | [], _ => return none
+  | _, _ => reject s "Set takes one type argument"
+
+/-- What the argument of `new Map` is translated for: an array of entries. -/
+def Ty.entriesOf : Ty → Ty
+  | .map k v => .array (.tuple [k, v])
+  | t => t
+
+/-- What the argument of `new Set` is translated for: an array of elements. -/
+def Ty.elemsOf : Ty → Ty
+  | .set t => .array t
+  | t => t
+
+/-- The type of `new Map(items)`, where `items` visits values of type `elem`. -/
+def mapOfEntriesType (s : Span) (declared : Option Ty) (elem : Ty) : TM Ty := do
+  match declared, elem with
+  | some (.map k v), _ =>
+    unless elem == .tuple [k, v] do reject s "the entries do not have the key and value types of the map"
+    return .map k v
+  | none, .tuple [k, v] => return .map (← mapKey s k) v
+  | _, _ => reject s "new Map takes an array of [key, value] entries, or a map"
+
+/-- The type of `new Set(items)`, where `items` visits values of type `elem`. -/
+def setOfElemsType (s : Span) (declared : Option Ty) (elem : Ty) : TM Ty := do
+  match declared with
+  | some (.set t) =>
+    unless elem == t do reject s "the elements do not have the element type of the set"
+    return .set t
+  | _ => return .set (← mapKey s elem "a set element")
+
 /-- The type of `new Set<T>()`: the type argument, or the set type that the
 context expects. -/
 def newSetType (s : Span) (typeArgs : List TypeExpr) (expected : Option Ty) : TM Ty := do
@@ -1474,6 +1519,30 @@ def translateRecv (tr : Expr → TM Code) (env : Env) (e : Expr) : TM Code :=
   match ownedMap? env e with
   | some c => pure c
   | none => tr e
+
+/-- `new Map()` or `new Set()`, a map or a set without entries, or
+`new Map(items)` or `new Set(items)`, which sets each `[key, value]` or adds
+each value that `items` visits. `tr` translates an expression where a type is
+expected. The type comes from the type arguments, or from the context, as in
+`const m: Map<K, V> = new Map()`, or else from `items`. -/
+def translateNew (tr : Option Ty → Expr → TM Code) (env : Env) (expected : Option Ty) (s : Span)
+    (callee : String) (typeArgs : List TypeExpr) (args : List Expr) : TM Code := do
+  let isMap := callee == "Map"
+  unless isMap || callee == "Set" do reject s "only new Map() and new Set() are supported"
+  if env.has callee then reject s s!"a local named {callee} hides the global {callee}"
+  match args with
+  | [] =>
+    let type ← if isMap then newMapType s typeArgs expected else newSetType s typeArgs expected
+    return ⟨.ascribe (.ext (if isMap then .mapEmpty else .setEmpty) []) type.lean, false, type⟩
+  | [arg] =>
+    let declared ← if isMap then declaredMapType s typeArgs expected else declaredSetType s typeArgs expected
+    let items ← translateRecv (tr (declared.map fun t => if isMap then t.entriesOf else t.elemsOf)) env arg
+    let (elem, li) ← orReject (loopOver items) arg.span
+      (if isMap then "new Map takes an array of [key, value] entries, or a map"
+       else "new Set takes an array or a set")
+    let type ← if isMap then mapOfEntriesType arg.span declared elem else setOfElemsType arg.span declared elem
+    return ⟨.ascribe (.ext (if isMap then .mapOfList else .setOfList) [li]) type.lean, false, type⟩
+  | _ => reject s s!"new {callee} takes at most one argument"
 
 /-- The element type of an array. -/
 def Ty.element? : Ty → Option Ty
@@ -1732,20 +1801,9 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
       match mapMethodOf callee with
       | some (recv, op) => translateMapMethod fuel env s recv op args
       | none => translateCall fuel env s callee args false
-  -- `new Map()`, a map without entries, and `new Set()`, a set without
-  -- elements. The type comes from the type arguments, or from the context,
-  -- as in `const m: Map<K, V> = new Map()`.
+  -- `new Map()` and `new Set()`, with or without the values to start with.
   | .new s callee typeArgs args =>
-    if callee == "Map" then
-      if env.has "Map" then reject s "a local named Map hides the global Map"
-      unless args.isEmpty do reject s "new Map takes no entries here; add them with set"
-      let type ← newMapType s typeArgs expected
-      return ⟨.ascribe (.ext .mapEmpty []) type.lean, false, type⟩
-    unless callee == "Set" do reject s "only new Map() and new Set() are supported"
-    if env.has "Set" then reject s "a local named Set hides the global Set"
-    unless args.isEmpty do reject s "new Set takes no elements here; add them with add"
-    let type ← newSetType s typeArgs expected
-    return ⟨.ascribe (.ext .setEmpty []) type.lean, false, type⟩
+    translateNew (fun exp e => translateExpr fuel env exp e) env expected s callee typeArgs args
   | .object s props => translateObject fuel env expected s props
   | .array s elems =>
     match expected with
