@@ -245,6 +245,12 @@ theorem Expr.fine : ∀ e : Expr, Fine e.words
   | .satisfies _ l t => by
     simpa [Expr.words] using (Expr.fine l).append (Fine.ofLine (w := identWord "satisfies") (by simp [identWord])
       (TypeExpr.line t))
+  | .new sp c ts as => by
+    rw [show (Expr.new sp c ts as).words =
+        keywordWord "new" :: ((TypeExpr.ref sp c ts).words ++ enclose "(" ")" (Expr.wordsOf as)) by
+      rw [← typeArgWords_ref sp c ts]; rfl]
+    exact Fine.ofLine (by simp [keywordWord])
+      ((TypeExpr.line (.ref sp c ts)).append (fine_enclose (Expr.fineAll as)).1)
 
 theorem Expr.fineAll : ∀ es : List Expr, ∀ x ∈ Expr.wordsOf es, Fine x
   | [], _, hx => by simp [Expr.wordsOf] at hx
@@ -297,6 +303,10 @@ theorem Stmt.lineOK : ∀ (st : Stmt) (d : Nat), ∀ l ∈ st.lines d, LineOK l.
     simp [Stmt.lines] at hl; subst hl
     exact LineOK.cons (by simp [keywordWord]) (LineOK.word (w := punctWord ";") (by simp [punctWord]))
   | .returnStmt _ (some e), d, l, hl => by
+    simp [Stmt.lines] at hl; subst hl
+    exact LineOK.cons (by simp [keywordWord])
+      ((Expr.fine e).line.append (LineOK.word (w := punctWord ";") (by simp [punctWord])))
+  | .throwStmt _ e, d, l, hl => by
     simp [Stmt.lines] at hl; subst hl
     exact LineOK.cons (by simp [keywordWord])
       ((Expr.fine e).line.append (LineOK.word (w := punctWord ";") (by simp [punctWord])))

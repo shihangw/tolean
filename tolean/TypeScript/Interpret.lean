@@ -22,7 +22,9 @@ Node can read it back exactly:
 - a boolean, a string and `null` as themselves;
 - an array as a JSON array;
 - an object as `{"object": [["<key>", <value>], …]}`, in the order of its
-  keys.
+  keys;
+- an error object as `{"error": ["<class>", [["<key>", <value>], …]]}`, with
+  its own properties, such as `message`.
 -/
 namespace tolean.TypeScript.Interpret
 
@@ -57,6 +59,9 @@ partial def toJson : Val Float → Json
   | .undefined => Json.mkObj [("undefined", Json.bool true)]
   | .list xs => Json.arr (xs.map toJson).toArray
   | .obj fs => Json.mkObj [("object", Json.arr (fs.map fun (k, v) => Json.arr #[Json.str k, toJson v]).toArray)]
+  | .error cls fs =>
+    Json.mkObj [("error", Json.arr #[Json.str cls,
+      Json.arr (fs.map fun (k, v) => Json.arr #[Json.str k, toJson v]).toArray])]
 
 partial def ofJson (j : Json) : Except String (Val Float) :=
   match j with
@@ -82,9 +87,9 @@ partial def ofJson (j : Json) : Except String (Val Float) :=
 def file : String := "main.ts"
 
 /-- Run one program: whether the parser and the translator accept it, and the
-result of each call. A result is `{"value": <value>}`, or `null` when the
-interpreter gives no value, so a call that returns `null` gives
-`{"value": null}`. -/
+result of each call. A result is `{"value": <value>}`, or
+`{"throws": <value>}` when the call throws, or `null` when the interpreter
+gives no value, so a call that returns `null` gives `{"value": null}`. -/
 def runProgram (p : Json) : Except String Json := do
   let source ← p.getObjValAs? String "source"
   let target := match p.getObjValAs? String "target" with
@@ -98,8 +103,9 @@ def runProgram (p : Json) : Except String Json := do
     let results ← calls.mapM fun c => do
       let name ← c.getObjValAs? String "function"
       let args ← (← c.getObjValAs? (Array Json) "args").mapM ofJson
-      return match Eval.runIn [(file, m)] ⟨file, name⟩ args.toList with
-        | some v => Json.mkObj [("value", toJson v)]
+      return match Eval.callIn [(file, m)] ⟨file, name⟩ args.toList with
+        | some (.ok v) => Json.mkObj [("value", toJson v)]
+        | some (.error t) => Json.mkObj [("throws", toJson t)]
         | none => Json.null
     return Json.mkObj [("parsed", true), ("accepted", accepted), ("results", Json.arr results)]
 

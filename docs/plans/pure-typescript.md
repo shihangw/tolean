@@ -117,14 +117,15 @@ precondition of each claim.
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| `throw new Error(message)` and `throw` of a declared error class | `Except E`. A function that can throw returns `Except`, and its callers pass the error on. | `try` and `catch` in the first version |
+| `throw` of a declared error class, a `throw` in a loop body or in a branch that changes locals, and a call that can throw inside a larger expression | `Except E`, with `forIn` and `let` in the `Except` monad | `try` and `catch` in the first version |
 | A class that extends `Error` and only sets `readonly` fields in its constructor | A structure | Methods, `static` members, and reads of `stack` |
 
 ECMA-262 does not define `Error.prototype.stack`, so a read of `stack` stays
 refused. A claim about a function that can throw says what holds when the
 function returns normally. A separate claim can show that it does not throw
-when its inputs meet a precondition. The plan for [shared monad
-pieces](shared-core.md) adds exceptions to the IR, and this stage uses them.
+when its inputs meet a precondition. Tolean translates `throw new Error(m)`
+where it ends the function, and a call that can throw as the whole value of a
+declaration or a `return`. The IR passes such an error on with `Body.bind`.
 
 ### Strings
 
@@ -226,8 +227,9 @@ leaves a gap.
 4. **P0.** The array methods without `sort`, such as `reduce` and `slice`,
    indexing, and object spread.
 5. **P0.** Control flow: the counted `for` loop.
-6. **P0.** Errors, after step 3 of the [shared core plan](shared-core.md) adds
-   exceptions to the IR.
+6. **P0.** Errors: `throw` in loop bodies and in branches that change
+   locals, calls that can throw inside larger expressions, and declared error
+   classes. `throw new Error(message)` is done.
 7. **P0.** Local functions that change variables of the enclosing function, by
    lifting them out and threading the variables through each call.
 8. **P0.** `Map` and `Set`, with owned values and the borrow for a map that a
@@ -259,6 +261,9 @@ variables and in maps.
   type class that the translator writes for each constraint, with one
   method per field that the constraint names. Another is to pass the
   fields that the function reads as explicit arguments.
+- Which type should a function throw once the program declares error
+  classes? `JSError` holds only a message. A class with fields needs a sum of
+  the program's error classes, and a call can reach a class of another file.
 - Should `try` and `catch` come in a later step? The survey had none, but much
   other pure code catches its own errors.
 - Should a map that a caller passes in become a borrow, as above, or should the
