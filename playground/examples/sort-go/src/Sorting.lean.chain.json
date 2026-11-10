@@ -1,4 +1,4 @@
-{"tolean": "0.2.0",
+{"tolean": "0.3.0",
  "sources":
  [{"sha256": "7519f25e378b348d1cecc0c8724caefa588d0c53cacb3ce770c11c0d6249f9d3",
    "path": "src/sort.go"}],
