@@ -116,7 +116,8 @@ export class Gen {
     if (roll < 0.8 && this.structs.length > 0) {
       return { k: 'struct', name: this.pick(this.structs).name };
     }
-    return { k: 'array', of: this.pick([BIGINT, NUMBER, ...this.structs.map((s): Ty => ({ k: 'struct', name: s.name }))]) };
+    // An array of strings, which `split` gives.
+    return { k: 'array', of: this.pick([BIGINT, NUMBER, STRING, ...this.structs.map((s): Ty => ({ k: 'struct', name: s.name }))]) };
   }
 
   /** An expression of type `t`, reading only `vars`. */
@@ -245,6 +246,11 @@ export class Gen {
           () => `Number.${this.pick(['isNaN', 'isFinite', 'isSafeInteger'])}(${this.expr(NUMBER, vars, d)})`,
           // A test of one string in another, by code units.
           () => `(${this.expr(STRING, vars, d)}).${this.pick(['startsWith', 'endsWith', 'includes'])}(${this.expr(STRING, vars, d)})`,
+          // A test of the pieces that `split` gives.
+          () => {
+            const p = this.fresh('c');
+            return `(${this.expr(STRING, vars, d)}).split(${this.expr(STRING, vars, d)}).some((${p}) => ${p} === ${this.expr(STRING, vars, 0)})`;
+          },
         );
         // `typeof` on a value of any type, which checks the interpreter's rule
         // against Node. The translator refuses it here, so it comes only
