@@ -85,7 +85,7 @@ of a type and Lean has no subtyping by shape.
 | A function that calls itself on a part of its argument, such as the rest of a list or a child of a tree node | A `def` with structural recursion. Lean checks that it ends without help. | |
 | Other recursion, with a `@decreases` JSDoc tag that names a measure | A `def` with `termination_by` that measure. Lean must prove that each call makes the measure smaller, and the translator refuses the file when Lean cannot. | Recursion without such a proof |
 | Functions in one file that call each other | A `mutual` block | Recursion across files |
-| An interface that refers to itself, such as a tree node with `children: ReadonlyArray<Node>` | A nested `inductive` | |
+| A tagged union whose members refer to the union, such as `interface Add { readonly kind: 'add'; readonly left: Expr }` with `type Expr = Num \| Add` | A `mutual` block of the structures and the inductive type, which Lean accepts | |
 
 Lean also accepts `partial def` without a proof that the function ends. But
 Lean cannot prove anything about a partial function, so Tolean never writes
@@ -237,8 +237,8 @@ leaves a gap.
 9. **P1.** Strings: template literals, string order, the string methods,
    iteration by code point, and the opaque `JSON.stringify`.
 10. **P1.** Sorting with consistent comparators.
-11. **P2.** Recursion: structural recursion and types that refer to themselves
-    first, then `@decreases`, mutual recursion, and `while` loops.
+11. **P2.** Recursion: structural recursion and tagged unions that refer to
+    themselves first, then `@decreases`, mutual recursion, and `while` loops.
 12. **P1.** The new number and `bigint` operations, and the `Date` methods.
 13. **P2.** Classes with `readonly` fields and methods that do not change
     `this`.
@@ -253,6 +253,10 @@ variables and in maps.
   certifier has no encoder for a type parameter, so a file with either gets no
   certificate. The claim could take an encoder for each type parameter as an
   argument, since the code never looks inside such a value.
+- How should a certificate cover an interface that refers to itself? Its
+  encoder would be a recursive function, so a file with one gets no
+  certificate yet. The encoder could recurse through `List.map` with a proof
+  that it ends, as a translated recursive function will.
 - How should a type parameter with a constraint translate? One option is a
   type class that the translator writes for each constraint, with one
   method per field that the constraint names. Another is to pass the

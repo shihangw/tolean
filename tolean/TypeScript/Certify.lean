@@ -455,6 +455,9 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     -- An interface.
     if let .struct name typeParams allFields := d then
       unless typeParams.isEmpty do throw s!"{file}: the generic interface {name} has no certificate yet"
+      -- The encoder of an interface that refers to itself would be recursive.
+      if allFields.any (fun (_, t) => t.refs.any (·.name == name)) then
+        throw s!"{file}: the recursive interface {name} has no certificate yet"
       -- An optional field is a key only when it holds a value, as in an
       -- object literal that leaves it out.
       let parts ← allFields.mapM fun (f, t) => do
