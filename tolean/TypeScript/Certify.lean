@@ -253,16 +253,24 @@ def callAt (s : Stmt) (span : Span) : Option Expr :=
       | .call sp _ _ => sp == span
       | _ => false
 
-/-- A call of a `List` function with a callback: the method, the parameter,
+/-- What a callback is for: a `List` function such as `List.map`, or
+`List.foldl`, whose function also binds the value so far to `acc`. -/
+inductive CallbackKind where
+  | list (method : IR.ListMethod)
+  | fold (acc : String)
+
+/-- A call of a `List` function with a callback: what it is for, the parameter,
 its type, the body and what a certificate needs to know about it. -/
-abbrev Callback := IR.ListMethod × String × IR.Ty × IR.Expr × IR.CallbackInfo IR.TyExt
+abbrev Callback := CallbackKind × String × IR.Ty × IR.Expr × IR.CallbackInfo IR.TyExt
 
 mutual
 
 /-- The callbacks in `e`, inner ones first, in the order of the source. -/
 partial def exprCallbacks : IR.Expr → List Callback
   | .listMethod method items param elem body info =>
-    exprCallbacks items ++ exprCallbacks body ++ [(method, param, elem, body, info)]
+    exprCallbacks items ++ exprCallbacks body ++ [(.list method, param, elem, body, info)]
+  | .listFold items init acc param elem body info =>
+    exprCallbacks items ++ exprCallbacks init ++ exprCallbacks body ++ [(.fold acc, param, elem, body, info)]
   | .field a _ _ | .propNot a | .not a | .neg a | .isNone a | .isSome a | .decide a | .push _ a
   | .update _ _ a | .inject _ _ a | .ascribe a _ => exprCallbacks a
   | .ite a b c => exprCallbacks a ++ exprCallbacks b ++ exprCallbacks c
@@ -279,6 +287,7 @@ partial def exprCallbacks : IR.Expr → List Callback
 partial def exprNames : IR.Expr → List String
   | .var n => [n]
   | .listMethod _ items _ _ body _ => exprNames items ++ exprNames body
+  | .listFold items init _ _ _ body _ => exprNames items ++ exprNames init ++ exprNames body
   | .push n a | .update _ n a => n :: exprNames a
   | .matchNull n a b => n :: exprNames a ++ exprNames b
   | .field a _ _ | .propNot a | .not a | .neg a | .isNone a | .isSome a | .decide a
@@ -627,7 +636,8 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       -- The function of `List.mapIdx` binds the index first, as a `Nat`, and
       -- then as the number that the body reads, as the printer writes it.
       let binders := match method with
-        | .mapIdx index =>
+        | .fold acc => s!"fun ({acc} : {info.result.print names}) ({param} : {elem.print names}) => "
+        | .list (.mapIdx index) =>
           s!"fun ({index} : {tolean.IR.leanName names "Nat"}) ({param} : {elem.print names}) => " ++
             s!"let {index} := {tolean.IR.PrintTy.indexValue (T := IR.TyExt) names index}; "
         | _ => s!"fun ({param} : {elem.print names}) => "
@@ -635,7 +645,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         String.join (scope.map fun (n, _) => s!" {decode n}") ++ ")"
       -- A body with calls needs the fuel of their depth, as a loop's does.
       let depth := match callAt syntaxBody info.span with
-        | some (.call _ _ [.arrow _ _ _ arrowBody]) => callsDepth m (exprCalls arrowBody)
+        | some (.call _ _ (.arrow _ _ _ arrowBody :: _)) => callsDepth m (exprCalls arrowBody)
         | _ => 0
       let fuel := if depth == 0 then "fuel" else s!"(fuel + {depth})"
       let hfs := if depth == 0 then "" else s!" (hfs : fs = {outputFs})"
@@ -652,6 +662,24 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           "  try simp only []\n" ++
           String.join (coded.zipIdx.map fun ((n, _, dec), i) =>
             s!"  generalize {dec} (ρ.lookup {str n}) = v{i} at h{i} ⊢\n")
+      let simpSet := ", ".intercalate (hfsName ++ envLemmas ++ lemmaNames.toList ++ loopLemmas.toList ++ defs ++ hypNames)
+      let itemsTy := (IR.Ty.list elem).print names
+      -- A callback of `reduce`: the lemma holds for every value so far `a`,
+      -- which the body reads under the name of the first parameter.
+      if let .fold acc := method then
+        let accTy := info.result.print names
+        let vars := ("a", info.result) :: ("x", elem) :: scope.zipIdx.map fun ((_, t), i) => (s!"v{i}", t)
+        loopLemmas := loopLemmas.push (r.cert lemmaName)
+        thms := thms.push <|
+          s!"theorem {lemmaName} {generic} (fs : List (tolean.DeclRef × List String × tolean.TypeScript.IR.Body)){hfs}\n" ++
+          s!"    (fuel : Nat) (ρ : Env {nv}){hI} (items : {itemsTy}) (a : {accTy}) :\n" ++
+          s!"    tolean.TypeScript.IR.Expr.evalReduce fs {fuel} ρ {str acc} {str param} ({term cbBody})\n" ++
+          s!"      ({encY} a) (List.map {encX} items) = some ({encY} (List.foldl {fn} a items)) := by\n" ++
+          s!"  refine tolean.TypeScript.Proof.evalReduce_foldl fs {fuel} ρ {str acc} {str param} _ {encY} {encX} {fn} ?_ items a\n" ++
+          s!"  intro a x\n" ++ substHfs ++ unpack ++
+          s!"  {casesOn decls vars}link_tac [{simpSet}]"
+        continue
+      let .list method := method | continue
       let (evalFn, want, result, fromLemma) := match method with
         | .map => ("evalMap", "", s!"List.map {encY} (List.map {fn} items)",
             s!"evalMap_map fs {fuel} ρ {str param} _ {encX} {encY} {fn}")
@@ -673,9 +701,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         | .mapIdx index => (s!" {str index}", " 0", "idx x")
         | .findIndex => ("", " 0", "x")
         | _ => ("", "", "x")
-      let itemsTy := (IR.Ty.list elem).print names
       let vars := ("x", elem) :: scope.zipIdx.map fun ((_, t), i) => (s!"v{i}", t)
-      let simpSet := ", ".intercalate (hfsName ++ envLemmas ++ lemmaNames.toList ++ loopLemmas.toList ++ defs ++ hypNames)
       loopLemmas := loopLemmas.push (r.cert lemmaName)
       thms := thms.push <|
         s!"theorem {lemmaName} {generic} (fs : List (tolean.DeclRef × List String × tolean.TypeScript.IR.Body)){hfs}\n" ++

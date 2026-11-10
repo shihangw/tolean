@@ -197,6 +197,10 @@ inductive Expr (T E : Type) where
   position of the element, written as the language writes an index. -/
   | listMethod (method : ListMethod) (items : Expr T E) (param : String) (elem : Ty T)
       (body : Expr T E) (info : CallbackInfo T)
+  /-- `(List.foldl (fun (acc : A) (x : T) => body) init items)`, where `A` is
+  `info.result`, the type of `init` and of `body`, and `elem` is `T`. -/
+  | listFold (items init : Expr T E) (acc param : String) (elem : Ty T) (body : Expr T E)
+      (info : CallbackInfo T)
 deriving Repr, Inhabited
 
 /-- What the printer and a certificate need to know about a loop, besides its
@@ -328,6 +332,7 @@ def Expr.refs : Expr T E → List DeclRef
   | .tuple es => Expr.refsList es
   | .proj e _ _ => e.refs
   | .listMethod _ items _ t body _ => items.refs ++ t.refs ++ body.refs
+  | .listFold items init _ _ t body info => items.refs ++ init.refs ++ t.refs ++ body.refs ++ info.result.refs
   | .tagValue _ => []
   | .int _ | .none | .bool _ | .string _ | .var _ => []
 
@@ -396,6 +401,8 @@ def Expr.usesString : Expr T E → Bool
   | .tuple es => Expr.usesStringList es
   | .proj e _ _ => e.usesString
   | .listMethod _ items _ t body _ => items.usesString || t.usesString || body.usesString
+  | .listFold items init _ _ t body info =>
+    items.usesString || init.usesString || t.usesString || body.usesString || info.result.usesString
   -- The printer leaves a tag value out, as it leaves the tag field out.
   | .int _ | .none | .bool _ | .var _ | .enumCase .. | .tagValue _ => false
 
@@ -707,6 +714,9 @@ def Expr.print (names : Names) : Expr T E → String
       PrintTy.indexValue (T := T) names
         s!"((({leanName names "List.findIdx?"} {fn} {xs}).map {int}.ofNat).getD (-1))"
     | .findLast => s!"({leanName names "List.find?"} {fn} ({leanName names "List.reverse"} {xs}))"
+  | .listFold items init acc param elem body info =>
+    let fn := s!"(fun ({acc} : {info.result.print names}) ({param} : {elem.print names}) => {body.print names})"
+    s!"({leanName names "List.foldl"} {fn} {argument (init.print names)} {argument (items.print names)})"
   | .bool b => if b then "true" else "false"
   | .string s => PrintTy.stringLit (T := T) names s
   | .var name => name

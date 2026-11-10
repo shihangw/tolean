@@ -183,6 +183,19 @@ theorem evalFindIdx_findIdx {α : Type} (fs : List (DeclRef × List String × IR
     IR.Expr.evalFindIdx fs fuel ρ param body 0 (xs.map encX) = some (xs.findIdx? p) := by
   simpa using evalFindIdx_from fs fuel ρ param body encX p hb xs 0
 
+/-- A callback of `reduce` and a Lean function agree on a list when they agree
+on each value so far and each element. A certificate proves a lemma for each
+call of `reduce` from this one. -/
+theorem evalReduce_foldl {α β : Type} (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
+    (ρ : Eval.Env N) (acc param : String) (body : IR.Expr) (encA : β → Val N) (encX : α → Val N)
+    (f : β → α → β)
+    (hb : ∀ a x, IR.Expr.eval fs fuel ((param, encX x) :: (acc, encA a) :: ρ) body = some (encA (f a x))) :
+    ∀ (xs : List α) (a : β), IR.Expr.evalReduce fs fuel ρ acc param body (encA a) (xs.map encX) =
+      some (encA (xs.foldl f a))
+  | [], _ => by simp [IR.Expr.evalReduce]
+  | x :: xs, a => by
+    simp [IR.Expr.evalReduce, hb a x, evalReduce_foldl fs fuel ρ acc param body encA encX f hb xs]
+
 /-- The same for `filter`. -/
 theorem evalFilter_filter {α : Type} (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
     (ρ : Eval.Env N) (param : String) (body : IR.Expr) (encX : α → Val N) (p : α → Bool)
@@ -340,7 +353,7 @@ macro_rules
   | `(tactic| link_tac [$defs,*]) =>
     `(tactic| (
       simp [runIn, functionsOf, functions, Body.exec, Body.runFold, Expr.eval, Expr.evalList,
-        Expr.evalFields, Expr.evalMap, Expr.evalMapIdx, Expr.evalFilter, Expr.evalFind, Expr.evalFindIdx,
+        Expr.evalFields, Expr.evalMap, Expr.evalMapIdx, Expr.evalFilter, Expr.evalFind, Expr.evalFindIdx, Expr.evalReduce,
         bindState, eqVal, ← List.map_reverse,
         tolean.IR.IntOp.apply, tolean.IR.Order.apply,
         tolean.IR.Division.apply, ExprExt.apply, NumberOp.apply, NumberConstant.value,

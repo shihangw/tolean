@@ -1614,6 +1614,112 @@ theorem translateArrayMethod_sound {F : Nat}
     exact methodVal_sim m fs fuel (bodySim_of m fs fuel hbody ha hs) method (listMethod?_ne_mapIdx hname)
       items v hval
 
+/-! ### `reduce` -/
+
+/-- The body of the callback of `reduce` means what the interpreter gives it,
+for every value so far `a` and every element `x`. -/
+def BodySim2 (ρs ρo : Eval.Env N) (a x : String) (body : Expr) (code : IR.Expr) : Prop :=
+  ∀ u w v, IR.Expr.eval fs fuel ((x, w) :: (a, u) :: ρo) code = some v →
+    Eval.eval m fuel ((x, w) :: (a, u) :: ρs) body = some v
+
+theorem bodySim2_of {env : Translate.Env} {ρs ρo : Eval.Env N} {a x : String} {ta tx : Ty}
+    {body : Expr} {code : IR.Expr}
+    (hsim : Sim (N := N) m fs fuel ((env.add { name := a, binding := .param, type := ta }).add
+      { name := x, binding := .param, type := tx }) body code)
+    (ha : Agree ρs ρo) (hs : Scoped m env ρs) : BodySim2 m fs fuel ρs ρo a x body code := by
+  intro u w v hv
+  exact hsim _ _ v (agree_cons (agree_cons ha a _) x w)
+    (scoped_cons m (scoped_cons m hs a .param ta _) x .param tx w) hv
+
+theorem evalReduce_sim {ρs ρo : Eval.Env N} {a x : String} {body : Expr} {code : IR.Expr}
+    (hb : BodySim2 m fs fuel ρs ρo a x body code) :
+    ∀ xs u r, IR.Expr.evalReduce fs fuel ρo a x code u xs = some r →
+      Eval.evalReduce m fuel ρs a x body u xs = some r
+  | [], u, r, h => by simp [IR.Expr.evalReduce] at h; subst h; simp [Eval.evalReduce]
+  | w :: xs, u, r, h => by
+    simp only [IR.Expr.evalReduce] at h
+    cases hw : IR.Expr.eval fs fuel ((x, w) :: (a, u) :: ρo) code with
+    | none => simp [hw] at h
+    | some u' =>
+      simp only [hw, Option.bind_eq_bind, Option.bind_some] at h
+      simp only [Eval.evalReduce, hb u w u' hw, Option.bind_eq_bind, Option.bind_some]
+      exact evalReduce_sim hb xs u' r h
+
+omit [JSNumber N] in
+theorem reducerOf_some {args : List Expr} {a p : Param} {body init : Expr}
+    (h : reducerOf args = some (a, p, body, init)) : ∃ sa par, args = [.arrow sa par [a, p] body, init] := by
+  unfold reducerOf at h
+  split at h
+  · cases h; exact ⟨_, _, rfl⟩
+  · cases h
+
+/-- `xs.reduce((a, x) => e, init)`: the interpreter evaluates the array, then
+the initial value, then the callback on each element. -/
+theorem eval_reduce (sp sp' sa : Span) (par : Bool) (recv : Expr) (a p : Param) (body init : Expr)
+    (hap : a.name ≠ p.name) (ρ : Eval.Env N) :
+    Eval.eval m fuel ρ (.call sp (.member sp' recv "reduce") [.arrow sa par [a, p] body, init]) =
+      (Eval.eval m fuel ρ recv).bind fun
+        | .list items => (Eval.eval m fuel ρ init).bind fun v =>
+            Eval.evalReduce m fuel ρ a.name p.name body v items
+        | _ => none := by
+  rw [Eval.eval]
+  simp only [beq_iff_eq, hap, if_false]
+  generalize Eval.eval m fuel ρ recv = r
+  cases r with
+  | none => rfl
+  | some w => cases w <;> simp [Option.bind_eq_bind]
+
+theorem translateReduce_sound {F : Nat}
+    (ihE : ∀ env exp e ctx c ctx', translateExpr F env exp e ctx = .ok c ctx' →
+      Sim (N := N) m fs fuel env e c.code)
+    {env : Translate.Env} {exp : Option Ty} {s : Span} {recv : Expr} {args : List Expr}
+    {ctx ctx' : Ctx} {c : Code}
+    (h : translateReduce (F + 1) env exp s recv args ctx = .ok c ctx') {sp : Span} :
+    Sim (N := N) m fs fuel env (.call s (.member sp recv "reduce") args) c.code := by
+  simp only [translateReduce, bind_ok, orReject_ok] at h
+  obtain ⟨⟨a, p, body, init⟩, s₁, ⟨hcb, rfl⟩, h⟩ := h
+  obtain ⟨sa, par, rfl⟩ := reducerOf_some hcb
+  simp only [ite_state] at h
+  split at h
+  · simp only [bind_ok, reject_ne_ok, false_and, exists_false] at h
+  simp only [pure_bind, bind_ok, orReject_ok] at h
+  obtain ⟨xs, s₂, hxs, elem, s₃, ⟨-, rfl⟩, i, s₄, hi, h⟩ := h
+  simp only [ite_state] at h
+  split at h
+  · simp only [bind_ok, reject_ne_ok, false_and, exists_false] at h
+  simp only [bind_ok] at h
+  obtain ⟨-, s₅, -, -, s₆, -, withAcc, s₇, hdA, inner, s₈, hdP, b, s₉, hb, h⟩ := h
+  simp only [ite_state] at h
+  split at h
+  · simp only [pure_ok] at h
+    obtain ⟨rfl, -⟩ := h
+    obtain ⟨-, rfl, -⟩ := declare_ok hdA
+    obtain ⟨hnp, rfl, -⟩ := declare_ok hdP
+    -- The two parameters have different names, as the spec needs.
+    have hap : a.name ≠ p.name := by
+      intro he; rw [has_add] at hnp; simp [he] at hnp
+    intro ρs ρo v ha hs hv
+    simp only [IR.Expr.eval] at hv
+    cases hx : IR.Expr.eval fs fuel ρo xs.value with
+    | none => simp [hx] at hv
+    | some w =>
+      cases w with
+      | list items =>
+        cases hinit : IR.Expr.eval fs fuel ρo i.value with
+        | none => simp [hx, hinit] at hv
+        | some u =>
+          simp only [hx, hinit, Option.bind_eq_bind, Option.bind_some] at hv
+          rw [eval_value] at hx hinit
+          have hrecv := ihE _ _ _ _ _ _ hxs ρs ρo _ ha hs hx
+          have hini := ihE _ _ _ _ _ _ hi ρs ρo _ ha hs hinit
+          have hbody : Sim (N := N) m fs fuel _ body b.value := fun ρs ρo w ha hs hw =>
+            ihE _ _ _ _ _ _ hb ρs ρo w ha hs (by rwa [eval_value] at hw)
+          rw [eval_reduce m fuel _ _ _ _ _ _ _ _ _ hap, hrecv]
+          simp only [Option.bind_some, hini]
+          exact evalReduce_sim m fs fuel (bodySim2_of m fs fuel hbody ha hs) items u v hv
+      | _ => simp [hx] at hv
+  · simp only [bind_ok, reject_ne_ok, false_and, exists_false] at h
+
 omit [JSNumber N] in
 /-- `firstFitting` gives a result of one of its two parsers, from the state it
 starts from. -/
@@ -1665,16 +1771,18 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
     (∀ env exp s recv method args ctx c ctx', translateArrayMethod F env exp s recv method args ctx = .ok c ctx' →
       ∀ sp name, listMethod? name = some method →
         Sim (N := N) m fs fuel env (.call s (.member sp recv name) args) c.code) ∧
+    (∀ env exp s recv args ctx c ctx', translateReduce F env exp s recv args ctx = .ok c ctx' →
+      ∀ sp, Sim (N := N) m fs fuel env (.call s (.member sp recv "reduce") args) c.code) ∧
     (∀ env exp e ctx c ctx', translateExprCore F env exp e ctx = .ok c ctx' →
       Sim (N := N) m fs fuel env e c.code) := by
   induction F with
   | zero =>
-    refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩ <;> intros <;>
+    refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩ <;> intros <;>
       simp_all [translateExpr, translateElements, translateArray, translateCall, translateObject,
-        translateBinary, translateArrayMethod, translateExprCore]
+        translateBinary, translateArrayMethod, translateReduce, translateExprCore]
   | succ F ih =>
-    obtain ⟨ihE, ihL, ihA, ihC, ihO, ihB, ihM, ihX⟩ := ih
-    refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+    obtain ⟨ihE, ihL, ihA, ihC, ihO, ihB, ihM, ihR, ihX⟩ := ih
+    refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
     -- The core first, then the step that makes a value a member of a union.
     rotate_right
     · intro env exp e ctx c ctx' h
@@ -1990,6 +2098,17 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
         exact ihB _ _ _ _ _ _ _ _ h
       | call sp callee args =>
         simp only [translateExprCore] at h
+        cases hred : reduceOf callee with
+        | some recv =>
+          simp only [hred] at h
+          unfold reduceOf at hred
+          split at hred
+          · rename_i sp' recv'
+            cases hred
+            exact ihR _ _ _ _ _ _ _ _ h sp'
+          · simp at hred
+        | none =>
+        simp only [hred] at h
         cases hm : arrayMethodOf callee with
         | some rm =>
           obtain ⟨recv, method⟩ := rm
@@ -2256,5 +2375,7 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
     · exact translateBinary_sound m fs fuel ihE
     · intro env exp s recv method args ctx c ctx' h sp name hname
       exact translateArrayMethod_sound m fs fuel ihE h hname
+    · intro env exp s recv args ctx c ctx' h sp
+      exact translateReduce_sound m fs fuel ihE h
 
 end tolean.TypeScript.Proof

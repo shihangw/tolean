@@ -246,6 +246,9 @@ def sections : List Section := [
     [``Proof.evalMap_sim, ``Proof.eval_mapIdx, ``Proof.evalMapIdx_sim]⟩,
   ⟨"sec-array.prototype.push", "23.1.3.23", "Array.prototype.push",
     [``Proof.out_push]⟩,
+  ⟨"sec-array.prototype.reduce", "23.1.3.24", "Array.prototype.reduce",
+    [``Proof.reducerOf_some, ``Proof.bodySim2_of, ``Proof.evalReduce_sim, ``Proof.eval_reduce,
+    ``Proof.translateReduce_sound]⟩,
   ⟨"sec-array.prototype.some", "23.1.3.29", "Array.prototype.some", []⟩,
   ⟨"sec-createarrayiterator", "23.1.5.1", "CreateArrayIterator", []⟩]
 
@@ -577,7 +580,7 @@ def extras : List Group := [
     ``Proof.evalMapIdx_mapIdx, ``Proof.evalFilter_filter,
     ``Proof.evalFind_find, ``Proof.evalFind_true, ``Proof.evalFind_false, ``Proof.find?_isSome,
     ``Proof.find?_not_isNone, ``Proof.getD_map_undefined, ``Proof.evalFindIdx_from,
-    ``Proof.evalFindIdx_findIdx]⟩]
+    ``Proof.evalFindIdx_findIdx, ``Proof.evalReduce_foldl]⟩]
 
 open Meta in
 /-- The theorems of the TypeScript modules that the index does not list. A

@@ -538,6 +538,16 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     if method != "map" || p.name == q.name then none
     let .list items ← eval m fuel env recv | none
     return .list (← evalMapIdx m fuel env p.name q.name body 0 items)
+  -- `xs.reduce((acc, x) => e, init)` (`Array.prototype.reduce`, ECMA-262
+  -- §23.1.3.24) with an initial value: the callback runs on each element in
+  -- order, with `acc` bound to the value so far, which starts at `init`.
+  -- `reduce` also passes the index and the array, which an arrow with two
+  -- parameters ignores. Two parameters of one arrow function may not have the
+  -- same name (§15.3.1).
+  | .call _ (.member _ recv "reduce") [.arrow _ _ [a, p] body, init] => do
+    if a.name == p.name then none
+    let .list items ← eval m fuel env recv | none
+    evalReduce m fuel env a.name p.name body (← eval m fuel env init) items
   | .call _ (.ident _ name) args => do
     let vs ← evalList m fuel env args
     match fuel with
@@ -620,6 +630,15 @@ def evalFilter (m : Scope) (fuel : Nat) (env : Env N) (name : String) (body : Ex
     let keep := (← eval m fuel ((name, x) :: env) body).truthy
     let rest ← evalFilter m fuel env name body xs
     return if keep then x :: rest else rest
+termination_by xs => (fuel, sizeOf body, xs.length + 1)
+
+/-- The callback `(acc, name) => body` on each of `items` in order, where
+`acc` is the value so far, which starts at `v`: the value of
+`Array.prototype.reduce` with an initial value. -/
+def evalReduce (m : Scope) (fuel : Nat) (env : Env N) (acc name : String) (body : Expr) (v : Val N) :
+    List (Val N) → Option (Val N)
+  | [] => some v
+  | x :: xs => do evalReduce m fuel env acc name body (← eval m fuel ((name, x) :: (acc, v) :: env) body) xs
 termination_by xs => (fuel, sizeOf body, xs.length + 1)
 
 /-- The position of the first of `items` for which `ToBoolean` of the
