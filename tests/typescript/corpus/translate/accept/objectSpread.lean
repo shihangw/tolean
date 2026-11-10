@@ -10,22 +10,22 @@ structure Point where
   label : JSString
 
 def moveRight (p : Point) (by_ : Int) : Point :=
-  { p with x := (p.x + by_) }
+  ({ p with x := (p.x + by_) } : Point)
 
 def rename (p : Point) (label : JSString) : Point :=
-  { p with label := label }
+  ({ p with label := label } : Point)
 
 def swap (p : Point) : Point :=
-  { p with y := p.x, x := p.y }
+  ({ p with y := p.x, x := p.y } : Point)
 
 def copy (p : Point) : Point :=
-  p
+  (p : Point)
 
 def reset (ps : List Point) : List Point :=
-  (List.map (fun (p : Point) => { p with x := (0 : Int), y := (0 : Int) }) ps)
+  (List.map (fun (p : Point) => ({ p with x := (0 : Int), y := (0 : Int) } : Point)) ps)
 
 def shifted (p : Point) : Int :=
-  let q := { p with y := (p.y + (1 : Int)) }
+  let q := ({ p with y := (p.y + (1 : Int)) } : Point)
   q.y
 
 end Test

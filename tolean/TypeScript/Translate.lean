@@ -1921,7 +1921,9 @@ def translateSpread (fuel : Nat) (env : Env) (s : Span) (base : Expr) (rest : Li
       let v ← translateExpr fuel env (some fieldType) value
       unless v.type.assignableTo fieldType do reject span s!"'{key}' does not have the field's type"
       pure (seen ++ [key], parts ++ [(key, v.value)])
-  return ⟨.structUpdate b.value parts, false, b.type⟩
+  -- Lean does not infer the parameters of the structure, such as the number
+  -- model `N`, from `a`, so the update writes its type out, as a literal does.
+  return ⟨.ascribe (.structUpdate b.value parts) b.type.lean, false, b.type⟩
 
 def translateBinary (fuel : Nat) (env : Env) (s : Span) (op : BinOp) (l r : Expr) : TM Code := do
   let fuel + 1 := fuel | tooDeep
