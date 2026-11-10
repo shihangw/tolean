@@ -30,7 +30,15 @@ def leanReserved : List String :=
    "deriving", "do", "else", "end", "example", "extends", "for", "from", "fun", "have", "if",
    "import", "in", "inductive", "instance", "let", "match", "mut", "namespace", "open",
    "private", "protected", "return", "section", "show", "structure", "then", "theorem",
-   "universe", "unless", "variable", "where", "with", "Type", "Prop", "Sort"]
+   "universe", "unless", "variable", "where", "with", "Type", "Prop", "Sort",
+   -- Lean's parser reads these as keywords too, so a parameter or local with
+   -- such a name would not parse.
+   "attribute", "binder_predicate", "builtin_initialize", "calc", "coinductive",
+   "declare_syntax_cat", "decreasing_by", "elab", "elab_rules", "hiding", "include", "infix",
+   "infixl", "infixr", "initialize", "local", "macro", "macro_rules", "meta", "mutual",
+   "nofun", "nomatch", "noncomputable", "nonrec", "notation", "omit", "opaque", "partial",
+   "postfix", "prefix", "public", "renaming", "scoped", "set_option", "show_term", "sorry",
+   "suffices", "syntax", "termination_by", "unif_hint", "unsafe", "using"]
 
 /-- A Lean type in the output. `T` holds the types that a language adds. -/
 inductive Ty (T : Type) where
