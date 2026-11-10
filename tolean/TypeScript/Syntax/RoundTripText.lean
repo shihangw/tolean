@@ -224,6 +224,8 @@ theorem Expr.fine : ∀ e : Expr, Fine e.words
     simpa [Expr.words] using Fine.cons (symbol_ne _ (by cases op <;> simp [UnaryOp.symbol])) (Expr.fine a)
   | .prefix _ op a => by
     simpa [Expr.words] using Fine.cons (w := punctWord op.symbol) (by simp [punctWord]) (Expr.fine a)
+  | .spread _ a => by
+    simpa [Expr.words] using Fine.cons (w := punctWord "...") (by simp [punctWord]) (Expr.fine a)
   | .postfix _ op a => by
     simpa [Expr.words] using (Expr.fine a).append (Fine.word (w := punctWord op.symbol) (by simp [punctWord]))
   | .binary _ op l r => by

@@ -423,14 +423,75 @@ export class Gen {
             lines.push(`for (const ${element} of ${xs.name}) {`, ...body, '}');
           }
         }
-      } else if (roll < 0.88 && depth > 0) {
+      } else if (roll < 0.85 && depth > 0) {
         // An array that the function owns, with a push; a later loop can read it.
         const t = this.pick([BIGINT, NUMBER]);
         const name = this.fresh('o');
         const start = this.chance(0.5) ? this.expr(t, vars, 0) : '';
         lines.push(`const ${name}: Array<${show(t)}> = [${start}];`, `${name}.push(${this.expr(t, vars, 1)});`);
         vars.push({ name, ty: { k: 'array', of: t }, mutable: false, owned: false });
-      } else if (roll < 0.92 && depth > 0 && !inLoop) {
+      } else if (roll < 0.89 && depth > 0 && this.chance(0.5)) {
+        // A set that the function owns, with adds and deletes, read as a map is.
+        const elem = this.pick([BIGINT, STRING, BOOLEAN]);
+        const name = this.fresh('s');
+        // Sometimes with values to start with, which may repeat.
+        const start = this.chance(0.3) ? `[${this.expr(elem, vars, 1)}, ${this.expr(elem, vars, 1)}]` : '';
+        lines.push(`const ${name} = new Set<${show(elem)}>(${start});`);
+        const changes = 1 + Math.floor(this.next() * 4);
+        for (let j = 0; j < changes; j++) {
+          lines.push(`${name}.${this.chance(0.75) ? 'add' : 'delete'}(${this.expr(elem, vars, 1)});`);
+        }
+        const has = this.fresh('h');
+        const size = this.fresh('n');
+        lines.push(`const ${has} = ${name}.has(${this.expr(elem, vars, 1)});`, `const ${size} = ${name}.size;`);
+        vars.push({ name: has, ty: BOOLEAN, mutable: false, owned: false },
+          { name: size, ty: NUMBER, mutable: false, owned: false });
+        if (this.chance(0.5)) {
+          // A loop over the set, in the order of insertion.
+          const acc = this.fresh('a');
+          const x = this.fresh('e');
+          const inner = [...vars, { name: x, ty: elem, mutable: false, owned: false }];
+          lines.push(`let ${acc} = ${this.expr(elem, vars, 1)};`, `for (const ${x} of ${name}) {`,
+            `  ${acc} = ${this.expr(elem, inner, 1)};`, '}');
+          vars.push({ name: acc, ty: elem, mutable: true, owned: false });
+        }
+      } else if (roll < 0.89 && depth > 0) {
+        // A map that the function owns, with sets and deletes. Code may read
+        // it only through get, has and size, so the reads go into locals.
+        const key = this.pick([BIGINT, STRING, BOOLEAN]);
+        const value = this.pick([BIGINT, NUMBER, STRING]);
+        const name = this.fresh('m');
+        const start = this.chance(0.3)
+          ? `[[${this.expr(key, vars, 1)}, ${this.expr(value, vars, 1)}], [${this.expr(key, vars, 1)}, ${this.expr(value, vars, 1)}]]`
+          : '';
+        lines.push(`const ${name} = new Map<${show(key)}, ${show(value)}>(${start});`);
+        const changes = 1 + Math.floor(this.next() * 4);
+        for (let j = 0; j < changes; j++) {
+          lines.push(this.chance(0.75)
+            ? `${name}.set(${this.expr(key, vars, 1)}, ${this.expr(value, vars, 1)});`
+            : `${name}.delete(${this.expr(key, vars, 1)});`);
+        }
+        const got = this.fresh('g');
+        const has = this.fresh('h');
+        const size = this.fresh('n');
+        lines.push(
+          `const ${got} = ${name}.get(${this.expr(key, vars, 1)}) ?? ${this.expr(value, vars, 1)};`,
+          `const ${has} = ${name}.has(${this.expr(key, vars, 1)});`,
+          `const ${size} = ${name}.size;`,
+        );
+        vars.push({ name: got, ty: value, mutable: false, owned: false },
+          { name: has, ty: BOOLEAN, mutable: false, owned: false },
+          { name: size, ty: NUMBER, mutable: false, owned: false });
+        if (this.chance(0.5)) {
+          // A loop over the entries, each a [key, value] pair.
+          const [t, index] = this.chance(0.5) ? [key, 0] : [value, 1];
+          const acc = this.fresh('a');
+          const e = this.fresh('e');
+          lines.push(`let ${acc} = ${this.expr(t, vars, 1)};`, `for (const ${e} of ${name}) {`,
+            `  ${acc} = ${e}[${index}];`, '}');
+          vars.push({ name: acc, ty: t, mutable: true, owned: false });
+        }
+      } else if (roll < 0.93 && depth > 0 && !inLoop) {
         lines.push(...this.switchStatement(vars, ret, lets));
       } else if (roll < 0.97 && !inLoop) {
         // An early exit with an error, which a caller passes on.

@@ -9,7 +9,11 @@
  * things:
  *
  * - When the interpreter gives a value, Node returns the same value. This
- *   holds for every program that the parser accepts, in the subset or not.
+ *   holds for every program that the parser accepts, in the subset or not,
+ *   except for two gaps that the plan for pure TypeScript lists and the
+ *   random programs do not reach: an assignment to the variable of a
+ *   `for (const x of xs)` loop, and a change to an array, a map or a set
+ *   that another name holds.
  * - When the interpreter says that a call throws a value, Node throws the
  *   same value. An `Error` compares by its class and its message.
  * - When the translator accepts the program and the interpreter gives no
@@ -326,5 +330,49 @@ test('the interpreter gives no value where an assignment to a const throws', asy
     writeFileSync(path, ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext } }).outputText);
     const mod = (await import(pathToFileURL(path).href)) as { f: (b: boolean) => unknown };
     expect(() => mod.f(true), source).toThrow(TypeError);
+  }
+});
+
+// A JS loop over a set, a map or an array sees a change that its body makes
+// to what it runs over, and the interpreter takes the values when the loop
+// starts. So it must give no value for such a loop, however the iterable
+// reaches the collection. A loop over a copy, `new Set(s)`, runs over a new
+// set, so a change to `s` does not reach it, and there the interpreter must
+// agree with Node.
+test('the interpreter gives no value for a loop that changes what it runs over', async () => {
+  const start = 'const s = new Set<bigint>(); s.add(1n); s.add(2n); let n = 0n;';
+  const loop = (iterable: string) =>
+    `export function f(b: boolean): bigint { ${start} for (const x of ${iterable}) { s.delete(2n); n += x; } return n; }`;
+  const changing = [
+    loop('s'),
+    loop('(s)'),
+    loop('((s))'),
+    loop('s satisfies ReadonlySet<bigint>'),
+    loop('b ? s : new Set<bigint>()'),
+    // A new map holds `s` as a value, and `get` gives it back.
+    loop('new Map<bigint, Set<bigint>>([[0n, s]]).get(0n) ?? new Set<bigint>()'),
+    'export function f(b: boolean): bigint { const m = new Map<bigint, bigint>(); m.set(1n, 1n); m.set(2n, 2n); ' +
+      'let n = 0n; for (const e of (m)) { m.delete(2n); n += e[1]; } return n; }',
+  ];
+  const copying = [loop('new Set<bigint>(s)'), loop('(new Set<bigint>(s))')];
+  const sources = [...changing, ...copying];
+  const input = { programs: sources.map((source) => ({ source, calls: [{ function: 'f', args: [true] }] })) };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const results = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-iterable-'));
+  for (const [i, source] of sources.entries()) {
+    const lean = results[i];
+    expect(lean?.parsed, source).toBe(true);
+    if (lean === undefined || !lean.parsed) continue;
+    if (i < changing.length) {
+      expect(lean.results[0] ?? null, source).toBeNull();
+      continue;
+    }
+    const path = join(dir, `case${i}.mjs`);
+    writeFileSync(path, ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext } }).outputText);
+    const mod = (await import(pathToFileURL(path).href)) as { f: (b: boolean) => unknown };
+    const value = lean.results[0]?.value;
+    expect(value === undefined ? 'no value' : canonical(value), source).toBe(canonical(encode(mod.f(true))));
   }
 });

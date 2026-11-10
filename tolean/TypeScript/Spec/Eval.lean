@@ -42,6 +42,12 @@ inductive Val (N : Type) where
   | undefined
   | list (items : List (Val N))
   | obj (fields : List (String × Val N))
+  /-- A `Map`: its entries, in the order that `set` first added each key
+  (ECMA-262 §24.1). -/
+  | map (entries : List (Val N × Val N))
+  /-- A `Set`: its elements, in the order that `add` first added each one
+  (ECMA-262 §24.2). -/
+  | set (elems : List (Val N))
   /-- An error object: the name of the class that made it, such as
   `"Error"`, and its own properties. `new Error(m)` has one, `message`. -/
   | error (cls : String) (fields : List (String × Val N))
@@ -55,7 +61,7 @@ def Val.truthy : Val N → Bool
   | .bool b => b
   | .str s => !s.isEmpty
   | .null | .undefined => false
-  | .list _ | .obj _ | .error _ _ => true
+  | .list _ | .obj _ | .map _ | .set _ | .error _ _ => true
 
 /-- The result of `typeof` (ECMA-262 §13.5.3.1) on the values of the
 subset. `null` is `"object"`, and so are an array and an object, which are
@@ -66,7 +72,7 @@ def Val.typeOf : Val N → String
   | .bool _ => "boolean"
   | .str _ => "string"
   | .undefined => "undefined"
-  | .null | .list _ | .obj _ | .error _ _ => "object"
+  | .null | .list _ | .obj _ | .map _ | .set _ | .error _ _ => "object"
 
 /-- The variables in scope, innermost first. -/
 abbrev Env (N : Type) := List (String × Val N)
@@ -152,13 +158,15 @@ def strictEq : Val N → Val N → Option Bool
   | .null, .null => some true
   | .undefined, .undefined => some true
   | .undefined, .int _ | .undefined, .num _ | .undefined, .bool _ | .undefined, .str _
-  | .undefined, .null | .undefined, .list _ | .undefined, .obj _ | .undefined, .error _ _ => some false
+  | .undefined, .null | .undefined, .list _ | .undefined, .obj _ | .undefined, .map _
+  | .undefined, .set _ | .undefined, .error _ _ => some false
   | .int _, .undefined | .num _, .undefined | .bool _, .undefined | .str _, .undefined
-  | .null, .undefined | .list _, .undefined | .obj _, .undefined | .error _ _, .undefined => some false
+  | .null, .undefined | .list _, .undefined | .obj _, .undefined | .map _, .undefined
+  | .set _, .undefined | .error _ _, .undefined => some false
   | .null, .int _ | .null, .num _ | .null, .bool _ | .null, .str _ | .null, .list _
-  | .null, .obj _ | .null, .error _ _ => some false
+  | .null, .obj _ | .null, .map _ | .null, .set _ | .null, .error _ _ => some false
   | .int _, .null | .num _, .null | .bool _, .null | .str _, .null | .list _, .null
-  | .obj _, .null | .error _ _, .null => some false
+  | .obj _, .null | .map _, .null | .set _, .null | .error _ _, .null => some false
   | _, _ => none
 
 /-- `IsLooselyEqual` (ECMA-262 §7.2.14) when one operand is `null` or
@@ -244,6 +252,79 @@ def binary : BinOp → Val N → Val N → Option (Val N)
 def elementAt (items : List (Val N)) : Option Int → Val N
   | some i => if 0 ≤ i then items[i.toNat]?.getD .undefined else .undefined
   | none => .undefined
+
+/-- SameValueZero (ECMA-262 §7.2.11), which a `Map` uses to compare keys, on
+the keys of the subset: bigints, booleans and strings. On these it is
+`IsStrictlyEqual`. A key of another type leaves the subset. -/
+def sameKey : Val N → Val N → Option Bool
+  | .int a, .int b => some (decide (a = b))
+  | .bool a, .bool b => some (decide (a = b))
+  | .str a, .str b => some (decide (a = b))
+  | _, _ => none
+
+/-- The value of the key `k` in the entries of a map, or `none` when no entry
+has the key (`Map.prototype.get`, ECMA-262 §24.1.3.6). -/
+def mapFind : List (Val N × Val N) → Val N → Option (Option (Val N))
+  | [], _ => some none
+  | (k', v) :: rest, k => do if ← sameKey k' k then return some v else mapFind rest k
+
+/-- The entries after `Map.prototype.set` (ECMA-262 §24.1.3.9): the entry of
+`k` gets the value `v` in its place, or a new entry goes last when no entry
+has the key. -/
+def mapSet : List (Val N × Val N) → Val N → Val N → Option (List (Val N × Val N))
+  | [], k, v => some [(k, v)]
+  | (k', v') :: rest, k, v => do
+    if ← sameKey k' k then return (k', v) :: rest else return (k', v') :: (← mapSet rest k v)
+
+/-- The entries after `Map.prototype.delete` (ECMA-262 §24.1.3.3), which
+removes the entry of `k`. The other entries keep their order. -/
+def mapDelete : List (Val N × Val N) → Val N → Option (List (Val N × Val N))
+  | [], _ => some []
+  | (k', v') :: rest, k => do
+    if ← sameKey k' k then return rest else return (k', v') :: (← mapDelete rest k)
+
+/-- Whether a set with the elements `elems` has `x` (`Set.prototype.has`,
+ECMA-262 §24.2.4.8). -/
+def setHas : List (Val N) → Val N → Option Bool
+  | [], _ => some false
+  | y :: rest, x => do if ← sameKey y x then return true else setHas rest x
+
+/-- The elements after `Set.prototype.add` (ECMA-262 §24.2.4.1): `x` goes last
+when the set does not have it, and the set stays as it is when it does. -/
+def setAdd (elems : List (Val N)) (x : Val N) : Option (List (Val N)) := do
+  if ← setHas elems x then return elems else return elems ++ [x]
+
+/-- The elements after `Set.prototype.delete` (ECMA-262 §24.2.4.4), which
+removes `x`. The other elements keep their order. -/
+def setDelete : List (Val N) → Val N → Option (List (Val N))
+  | [], _ => some []
+  | y :: rest, x => do
+    if ← sameKey y x then return rest else return y :: (← setDelete rest x)
+
+/-- The values that `for … of` visits in `v`: the elements of an array, in
+order (`CreateArrayIterator`, ECMA-262 §23.1.5.1), the elements of a set, in
+the order of insertion (`CreateSetIterator`, §24.2.6.1), and the entries of a
+map, in the same order, each as the array `[key, value]` (`CreateMapIterator`,
+§24.1.5.1). The subset does not change a map or a set while a loop runs over
+it, so the loop sees the values that it had when it started. -/
+def iterValues : Val N → Option (List (Val N))
+  | .list items => some items
+  | .set elems => some elems
+  | .map entries => some (entries.map fun (k, v) => .list [k, v])
+  | _ => none
+
+/-- The entries of a map that `new Map(items)` makes: each item, an array
+`[key, value]`, is set in order, as `Map.prototype.set` sets it. An item of
+another shape leaves the subset. -/
+def mapOfItems (items : List (Val N)) : Option (List (Val N × Val N)) :=
+  items.foldlM (fun entries item =>
+    match item with
+    | .list [k, v] => mapSet entries k v
+    | _ => none) []
+
+/-- The elements of a set that `new Set(items)` makes: each item is added in
+order, as `Set.prototype.add` adds it. -/
+def setOfItems (items : List (Val N)) : Option (List (Val N)) := items.foldlM setAdd []
 
 /-- What a statement list does: it runs to its end with the variables it
 leaves, or it ends the function, or a `break` or a `continue` ends it with the
@@ -439,6 +520,12 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     else do
       match ← eval m fuel env obj with
       | .obj fields => getProp fields name
+      -- `m.size` (ECMA-262 §24.1.3.10): the number of entries. A map has
+      -- fewer than 2^53 entries, so the number is a safe integer.
+      | .map entries =>
+        if name == "size" then some (.num (JSNumber.ofSafeInt entries.length)) else none
+      -- `s.size` (ECMA-262 §24.2.4.14), the number of elements.
+      | .set elems => if name == "size" then some (.num (JSNumber.ofSafeInt elems.length)) else none
       | _ => none
   -- `obj?.name` is `undefined` when `obj` is `null` or `undefined`
   -- (ECMA-262 §13.3.9.1).
@@ -537,10 +624,40 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     if method != "map" || p.name == q.name then none
     let .list items ← eval m fuel env recv | none
     return .list (← evalMapIdx m fuel env p.name q.name body 0 items)
+  -- `m.get(k)` and `m.has(k)` on a map (ECMA-262 §24.1.3.6 and §24.1.3.7).
+  -- `get` gives `undefined` for a key that the map does not have.
+  -- `s.has(x)` on a set (ECMA-262 §24.2.4.8).
+  | .call _ (.member _ recv method) [arg] => do
+    match ← eval m fuel env recv with
+    | .map entries =>
+      let found ← mapFind entries (← eval m fuel env arg)
+      if method == "get" then return found.getD .undefined
+      else if method == "has" then return .bool found.isSome
+      else none
+    | .set elems =>
+      let found ← setHas elems (← eval m fuel env arg)
+      if method == "has" then return .bool found else none
+    | _ => none
   -- A call that throws inside an expression gives no value. Only a call that
   -- is the whole value of a declaration or a `return` passes its throw on
   -- (`evalTop`).
   | .call _ (.ident _ name) args => do (← evalCall m fuel env name args).toOption
+  -- `new Map()` (ECMA-262 §24.1.1.1): a map without entries, unless a
+  -- variable hides the global `Map`. A declaration of the module named `Map`
+  -- would hide it too, as one named `Number` would hide `Number`, and the
+  -- translator refuses both.
+  | .new _ "Map" _ [] => if (env.lookup "Map").isSome then none else some (.map [])
+  -- `new Set()` (ECMA-262 §24.2.2.1), in the same way.
+  | .new _ "Set" _ [] => if (env.lookup "Set").isSome then none else some (.set [])
+  -- `new Map(items)` and `new Set(items)` (`AddEntriesFromIterable`, ECMA-262
+  -- §24.1.1.2, and §24.2.2.1): the constructor visits `items` as a loop
+  -- would, and sets each `[key, value]`, or adds each value, in order.
+  | .new _ "Map" _ [arg] => do
+    if (env.lookup "Map").isSome then none
+    return .map (← mapOfItems (← iterValues (← eval m fuel env arg)))
+  | .new _ "Set" _ [arg] => do
+    if (env.lookup "Set").isSome then none
+    return .set (← setOfItems (← iterValues (← eval m fuel env arg)))
   -- `new Error(message)` with a string message (`Error`, ECMA-262
   -- §20.5.1.1): an error object whose own property `message` is the string,
   -- unless a variable hides `Error`. As for `NaN`, a function or an enum of
@@ -675,6 +792,26 @@ def execStmt (m : Scope) (fuel : Nat) (env : Env N) : Stmt → Option (Outcome N
   | .exprStmt _ (.call _ (.member _ (.ident _ name) "push") [arg]) => do
     let .list items ← env.lookup name | none
     return .normal (env.set name (.list (items ++ [← eval m fuel env arg])))
+  -- `m.set(k, v)` and `m.delete(k)` (ECMA-262 §24.1.3.9 and §24.1.3.3) on a
+  -- map that the function owns, as for `push`: nothing else can see the
+  -- map, so the change shows only in the variable. The translator checks
+  -- that the function owns the map, and this rule does not: a second name for
+  -- the map would keep the old value, where JS shares one map.
+  | .exprStmt _ (.call _ (.member _ (.ident _ name) "set") [key, value]) => do
+    let .map entries ← env.lookup name | none
+    let k ← eval m fuel env key
+    let v ← eval m fuel env value
+    return .normal (env.set name (.map (← mapSet entries k v)))
+  -- `s.add(x)` and `s.delete(x)` on a set (ECMA-262 §24.2.4.1 and
+  -- §24.2.4.4), in the same way.
+  | .exprStmt _ (.call _ (.member _ (.ident _ name) "delete") [key]) => do
+    match ← env.lookup name with
+    | .map entries => return .normal (env.set name (.map (← mapDelete entries (← eval m fuel env key))))
+    | .set elems => return .normal (env.set name (.set (← setDelete elems (← eval m fuel env key))))
+    | _ => none
+  | .exprStmt _ (.call _ (.member _ (.ident _ name) "add") [elem]) => do
+    let .set elems ← env.lookup name | none
+    return .normal (env.set name (.set (← setAdd elems (← eval m fuel env elem))))
   | .exprStmt _ (.assign _ .assign (.ident _ name) value) => do
     return .normal (env.set name (← eval m fuel env value))
   -- `x ??= e` (`LogicalAssignment`, ECMA-262 §13.15.2): `e` runs, and its
@@ -707,12 +844,16 @@ def execStmt (m : Scope) (fuel : Nat) (env : Env N) : Stmt → Option (Outcome N
   -- `break` and `continue` without a label (ECMA-262 §14.8.2 and §14.9.2).
   | .breakStmt _ => some (.brk env)
   | .continueStmt _ => some (.cont env)
-  -- `for (const x of xs)` on an array: the body runs once for each element,
-  -- in order, with `x` bound to it in a new scope (`ForIn/OfBodyEvaluation`,
-  -- ECMA-262 §14.7.5.7, with the array iterator of §23.1.5.1).
+  -- `for (const x of xs)` on an array, a set or a map: the body runs once for
+  -- each value that `iterValues` gives, in order, with `x` bound to it in a
+  -- new scope (`ForIn/OfBodyEvaluation`, ECMA-262 §14.7.5.7).
+  -- A JS loop sees a change to what it runs over while it runs: it visits an
+  -- element that the body pushes or adds, and skips one that the body
+  -- deletes before the loop reaches it. The model takes the values when the
+  -- loop starts, so it gives no value for a body that changes them.
   | .forOfStmt _ .const name iterable body => do
-    let .list items ← eval m fuel env iterable | none
-    execLoop m fuel env name body items
+    if Stmt.mutatesIterable iterable body then none
+    execLoop m fuel env name body (← iterValues (← eval m fuel env iterable))
   -- `switch (d) { … }` (`SwitchStatement` Evaluation, ECMA-262 §14.12.4): the
   -- clauses run in a new scope, and a `break` at the top of a clause ends the
   -- statement. The model leaves out a local declared at the top of a clause,

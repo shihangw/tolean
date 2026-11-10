@@ -177,6 +177,7 @@ def Expr.words : Expr → List Word
   | .satisfies _ e type => e.words ++ identWord "satisfies" :: type.words
   | .new _ callee typeArgs args =>
     keywordWord "new" :: identWord callee :: typeArgWords typeArgs ++ enclose "(" ")" (Expr.wordsOf args)
+  | .spread _ e => punctWord "..." :: e.words
 
 def Expr.wordsOf : List Expr → List (List Word)
   | [] => []
@@ -385,6 +386,7 @@ def Expr.erase : Expr → Expr
   | .asConst _ e => .asConst noSpan e.erase
   | .satisfies _ e type => .satisfies noSpan e.erase type.erase
   | .new _ callee typeArgs args => .new noSpan callee (TypeExpr.eraseAll typeArgs) (Expr.eraseAll args)
+  | .spread _ e => .spread noSpan e.erase
 
 def Expr.eraseAll : List Expr → List Expr
   | [] => []

@@ -81,6 +81,25 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   | .optField path _, [.obj fields] => Eval.getPath fields path
   -- `r[k]`, as the spec evaluates it: the property that the string `k` names.
   | .recordGet _ _, [.obj fields, .str k] => Eval.getKey fields k
+  -- The operations of a `Map`, as the spec gives them.
+  | .mapEmpty, [] => some (.map [])
+  | .mapGet, [.map entries, k] => (Eval.mapFind entries k).map (·.getD .undefined)
+  | .mapHas, [.map entries, k] => (Eval.mapFind entries k).map (.bool ·.isSome)
+  | .mapSize, [.map entries] => some (.num (JSNumber.ofSafeInt entries.length))
+  | .mapSet, [.map entries, k, v] => (Eval.mapSet entries k v).map .map
+  | .mapDelete, [.map entries, k] => (Eval.mapDelete entries k).map .map
+  -- The operations of a `Set`, as the spec gives them.
+  | .setEmpty, [] => some (.set [])
+  | .setHas, [.set elems, x] => (Eval.setHas elems x).map .bool
+  | .setSize, [.set elems] => some (.num (JSNumber.ofSafeInt elems.length))
+  | .setAdd, [.set elems, x] => (Eval.setAdd elems x).map .set
+  | .setDelete, [.set elems, x] => (Eval.setDelete elems x).map .set
+  -- What a loop visits, as the spec's `iterValues` gives it: a JS entry is
+  -- the array `[key, value]`, as a Lean pair is.
+  | .setElems, [.set elems] => some (.list elems)
+  | .mapEntries, [.map entries] => some (.list (entries.map fun (k, v) => .list [k, v]))
+  | .mapOfList, [.list items] => (Eval.mapOfItems items).map .map
+  | .setOfList, [.list items] => (Eval.setOfItems items).map .set
   -- `pure a` is the value of `a`, as the result of a function that does not
   -- throw this time.
   | .pure, [a] => some a
