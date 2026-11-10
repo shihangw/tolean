@@ -24,8 +24,13 @@
     {
       # `nix develop`, then `lake build --wfail`. The shell's C compiler can
       # link the `tolean` executable on macOS, which Lean alone cannot.
+      #
+      # nixpkgs' Lean has no C compiler of its own, so Lake compiles Lean's C
+      # output with the shell's $CC. The shell uses clang, as Lean's own
+      # releases do. On Linux the default would be GCC, which compiles this
+      # C much more slowly at -O3.
       devShells = forEachSystem (pkgs: {
-        default = pkgs.mkShell {
+        default = pkgs.mkShell.override { stdenv = pkgs.clangStdenv; } {
           packages = [
             pkgs.lean4
             pkgs.nodejs_24
