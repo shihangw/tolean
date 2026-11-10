@@ -45,6 +45,13 @@ or the Lean toolchain.
 To run it for any branch, start `ci` by hand from the Actions tab, or run
 `gh workflow run ci.yml --ref <branch>`.
 
+GitHub keeps at most 10 GB of Actions caches for the repository, and above
+that it evicts caches on its own. So at the end of each run, `prune-caches`
+deletes the caches on that branch or pull request that no run will restore
+again, and `cache-cleanup.yml` deletes a pull request's caches when it
+closes. Only main saves the translator's WebAssembly build, which takes
+about 300 MB.
+
 The npm release is `.github/workflows/release.yml`. To release, raise the
 version in `npm/package.json` and `tolean/Version.lean`, and merge that to
 main. When CI passes on main and that version has no GitHub release yet,
