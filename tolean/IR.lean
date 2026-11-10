@@ -97,10 +97,14 @@ deriving BEq, Repr, Inhabited
 
 /-- A function on lists that takes a function on the elements: `List.map`,
 `List.filter`, `List.any`, `List.all` and `List.find?`, or `List.mapIdx`,
-whose function also takes the position of the element, bound to `index`. -/
+whose function also takes the position of the element, bound to `index`.
+`findIndex` is the position of the first element that passes, as the
+language writes an index, and `findLast` is `List.find?` on the reversed
+list. -/
 inductive ListMethod where
   | map | filter | any | all | find
   | mapIdx (index : String)
+  | findIndex | findLast
 deriving BEq, Repr, Inhabited
 
 /-- What a certificate needs to know about a callback, besides its code. The
@@ -999,6 +1003,12 @@ def Expr.print (names : Names) : Expr T E → String
       let fn := s!"(fun ({index} : {leanName names "Nat"}) ({param} : {elem.print names}) => " ++
         s!"let {index} := {value}; {body.print names})"
       s!"({leanName names "List.mapIdx"} {fn} {xs})"
+    | .findIndex =>
+      -- The position of the first element that passes, or `-1`.
+      let int := leanName names "Int"
+      PrintTy.indexValue (T := T) names
+        s!"((({leanName names "List.findIdx?"} {fn} {xs}).map {int}.ofNat).getD (-1))"
+    | .findLast => s!"({leanName names "List.find?"} {fn} ({leanName names "List.reverse"} {xs}))"
   | .bool b => if b then "true" else "false"
   | .string s => PrintTy.stringLit (T := T) names s
   | .var name => name

@@ -240,6 +240,11 @@ def Expr.eval (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
     | .all => return .bool (← Expr.evalFind fs fuel ρ param body false xs).isNone
     | .find => return (← Expr.evalFind fs fuel ρ param body true xs).getD .undefined
     | .mapIdx index => return .list (← Expr.evalMapIdx fs fuel ρ param index body 0 xs)
+    -- `findIndex` is the position of the first element that passes, as a
+    -- number, or `-1`. `findLast` looks from the end.
+    | .findIndex =>
+      return .num (JSNumber.ofSafeInt (((← Expr.evalFindIdx fs fuel ρ param body 0 xs).map Int.ofNat).getD (-1)))
+    | .findLast => return (← Expr.evalFind fs fuel ρ param body true xs.reverse).getD .undefined
 termination_by e => (fuel, sizeOf e, 0)
 
 /-- A call of the function `ref` of the output with `args`: `.ok` of the
@@ -273,6 +278,17 @@ def Expr.evalMapIdx (fs : List (DeclRef × List String × Body)) (fuel : Nat) (�
   | x :: xs => do
     let v ← Expr.eval fs fuel ((param, x) :: (index, .num (JSNumber.ofSafeInt start)) :: ρ) body
     return v :: (← Expr.evalMapIdx fs fuel ρ param index body (start + 1) xs)
+termination_by xs => (fuel, sizeOf body, xs.length + 1)
+
+/-- `List.findIdx? (fun param => body)` on `xs`, whose first element is at
+position `start`. -/
+def Expr.evalFindIdx (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : Env N)
+    (param : String) (body : Expr) (start : Nat) : List (Val N) → Option (Option Nat)
+  | [] => some none
+  | x :: xs => do
+    let .bool b ← Expr.eval fs fuel ((param, x) :: ρ) body | none
+    if b then return some start
+    Expr.evalFindIdx fs fuel ρ param body (start + 1) xs
 termination_by xs => (fuel, sizeOf body, xs.length + 1)
 
 /-- `List.filter (fun param => body)` on `xs`, where `body` is a `Bool`. -/
