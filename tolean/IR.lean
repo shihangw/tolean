@@ -658,98 +658,93 @@ value smaller by `sizeOf`, so `termination_by` the parameter holds, and the
 tactic `tolean_decreasing` proves each call. These functions find that
 parameter. -/
 
-/-- How an expression relates to a parameter `p`: the names in `whole` hold
-`p` itself, and the names in `parts` hold a part of it. `some true` is a part
-of `p`, `some false` is `p` itself, and `none` is neither. -/
-def Expr.partOf (whole parts : List String) : Expr T E → Option Bool
-  | .var x => if parts.contains x then some true else if whole.contains x then some false else Option.none
-  | .field e _ _ | .proj e _ _ => (e.partOf whole parts).map fun _ => true
-  | .ascribe e _ => e.partOf whole parts
+/-- How many steps below a parameter `p` an expression is, when `depths`
+gives that number for each name that holds `p` or a part of it: `0` for `p`
+itself, and `none` for a value that is not a part of `p`. Each step makes
+`sizeOf` smaller by one at least. -/
+def Expr.partOf (depths : List (String × Nat)) : Expr T E → Option Nat
+  | .var x => depths.lookup x
+  | .field e _ _ | .proj e _ _ => (e.partOf depths).map (· + 1)
+  | .ascribe e _ => e.partOf depths
   | _ => Option.none
 
-/-- The names after `x` is bound to a value with the relation `r` to `p`. -/
-def bindPart (whole parts : List String) (x : String) (r : Option Bool) : List String × List String :=
-  let whole := whole.erase x
-  let parts := parts.erase x
-  match r with
-  | some true => (whole, x :: parts)
-  | some false => (x :: whole, parts)
-  | Option.none => (whole, parts)
+/-- The depths after `x` is bound to a value at depth `d` below `p`. -/
+def bindPart (depths : List (String × Nat)) (x : String) (d : Option Nat) : List (String × Nat) :=
+  let depths := depths.filter (·.1 != x)
+  match d with
+  | some d => (x, d) :: depths
+  | Option.none => depths
 
-/-- The names after a `match` narrows `x`: a part of `p` when `x` held `p`
-or a part of it. -/
-def narrowPart (whole parts : List String) (x : String) : List String × List String :=
-  if whole.contains x || parts.contains x then bindPart whole parts x (some true)
-  else (whole, parts)
+/-- The depths after a `match` narrows `x`, which is one step down. -/
+def narrowPart (depths : List (String × Nat)) (x : String) : List (String × Nat) :=
+  match depths.lookup x with
+  | some d => bindPart depths x (some (d + 1))
+  | Option.none => depths
 
 mutual
 
-/-- Each call of `self` in the expression passes a part of `p` as its
-argument `i`. -/
-def Expr.callsShrink (self : DeclRef) (i : Nat) (whole parts : List String) : Expr T E → Bool
+/-- Each call of `self` in the expression passes as its argument `i` a part
+of `p` at least `need` steps below it. -/
+def Expr.callsShrink (self : DeclRef) (i need : Nat) (depths : List (String × Nat)) : Expr T E → Bool
   | .call r args =>
-    (r != self || (args[i]?.bind (·.partOf whole parts)) == some true) &&
-      Expr.callsShrinkList self i whole parts args
+    (r != self || (args[i]?.bind (·.partOf depths)).any (need ≤ ·)) &&
+      Expr.callsShrinkList self i need depths args
   | .listMethod _ items param _ body _ =>
-    let (w, ps) := bindPart whole parts param ((items.partOf whole parts).map fun _ => true)
-    items.callsShrink self i whole parts && body.callsShrink self i w ps
+    items.callsShrink self i need depths &&
+      body.callsShrink self i need (bindPart depths param ((items.partOf depths).map (· + 1)))
   | .matchNull name whenNull whenValue =>
-    let (w, ps) := narrowPart whole parts name
-    whenNull.callsShrink self i whole parts && whenValue.callsShrink self i w ps
+    whenNull.callsShrink self i need depths && whenValue.callsShrink self i need (narrowPart depths name)
   | .field e _ _ | .propNot e | .not e | .neg e | .isNone e | .isSome e | .inject _ _ e
-  | .decide e | .push _ e | .update _ _ e | .ascribe e _ | .proj e _ _ => e.callsShrink self i whole parts
-  | .ite a b c => a.callsShrink self i whole parts && b.callsShrink self i whole parts &&
-      c.callsShrink self i whole parts
+  | .decide e | .push _ e | .update _ _ e | .ascribe e _ | .proj e _ _ => e.callsShrink self i need depths
+  | .ite a b c => a.callsShrink self i need depths && b.callsShrink self i need depths &&
+      c.callsShrink self i need depths
   | .coalesce a b _ | .intOp _ a b | .order _ a b | .division _ a b | .eq a b | .ne a b
   | .propAnd a b | .propOr a b | .and a b | .or a b =>
-    a.callsShrink self i whole parts && b.callsShrink self i whole parts
-  | .list es _ | .tuple es | .ext _ es => Expr.callsShrinkList self i whole parts es
-  | .struct fields _ _ => Expr.callsShrinkFields self i whole parts fields
+    a.callsShrink self i need depths && b.callsShrink self i need depths
+  | .list es _ | .tuple es | .ext _ es => Expr.callsShrinkList self i need depths es
+  | .struct fields _ _ => Expr.callsShrinkFields self i need depths fields
   | .int _ | .none | .bool _ | .string _ | .var _ | .enumCase .. | .tagValue _ => true
 
-def Expr.callsShrinkList (self : DeclRef) (i : Nat) (whole parts : List String) :
+def Expr.callsShrinkList (self : DeclRef) (i need : Nat) (depths : List (String × Nat)) :
     List (Expr T E) → Bool
   | [] => true
-  | e :: es => e.callsShrink self i whole parts && Expr.callsShrinkList self i whole parts es
+  | e :: es => e.callsShrink self i need depths && Expr.callsShrinkList self i need depths es
 
-def Expr.callsShrinkFields (self : DeclRef) (i : Nat) (whole parts : List String) :
+def Expr.callsShrinkFields (self : DeclRef) (i need : Nat) (depths : List (String × Nat)) :
     List (String × Expr T E) → Bool
   | [] => true
-  | (_, e) :: fs => e.callsShrink self i whole parts && Expr.callsShrinkFields self i whole parts fs
+  | (_, e) :: fs => e.callsShrink self i need depths && Expr.callsShrinkFields self i need depths fs
 
 end
 
-/-- The names after `names` get new values that are not parts of `p`. -/
-def forgetParts (whole parts names : List String) : List String × List String :=
-  (whole.filter (!names.contains ·), parts.filter (!names.contains ·))
+/-- The depths after `names` get new values that are not parts of `p`. -/
+def forgetParts (depths : List (String × Nat)) (names : List String) : List (String × Nat) :=
+  depths.filter (!names.contains ·.1)
 
-/-- Each call of `self` in the body passes a part of `p` as its argument
-`i`. -/
-def Body.callsShrink (self : DeclRef) (i : Nat) (whole parts : List String) : Body T E → Bool
-  | .value e | .exit e _ => e.callsShrink self i whole parts
+/-- Each call of `self` in the body passes as its argument `i` a part of `p`
+at least `need` steps below it. -/
+def Body.callsShrink (self : DeclRef) (i need : Nat) (depths : List (String × Nat)) : Body T E → Bool
+  | .value e | .exit e _ => e.callsShrink self i need depths
   | .state _ | .yield .. | .done .. => true
   | .let name e rest =>
-    let (w, ps) := bindPart whole parts name (e.partOf whole parts)
-    e.callsShrink self i whole parts && rest.callsShrink self i w ps
+    e.callsShrink self i need depths && rest.callsShrink self i need (bindPart depths name (e.partOf depths))
   | .letArray name _ elems rest =>
-    let (w, ps) := bindPart whole parts name Option.none
-    Expr.callsShrinkList self i whole parts elems && rest.callsShrink self i w ps
-  | .ite c a b => c.callsShrink self i whole parts && a.callsShrink self i whole parts &&
-      b.callsShrink self i whole parts
+    Expr.callsShrinkList self i need depths elems &&
+      rest.callsShrink self i need (bindPart depths name Option.none)
+  | .ite c a b => c.callsShrink self i need depths && a.callsShrink self i need depths &&
+      b.callsShrink self i need depths
   | .matchNull name _ whenNull whenValue =>
-    let (w, ps) := narrowPart whole parts name
-    whenNull.callsShrink self i whole parts && whenValue.callsShrink self i w ps
+    whenNull.callsShrink self i need depths && whenValue.callsShrink self i need (narrowPart depths name)
   | .matchTag name _ _ _ other whenTag whenOther =>
-    let (w, ps) := narrowPart whole parts name
-    whenTag.callsShrink self i w ps &&
-      if other.isSome then whenOther.callsShrink self i w ps else whenOther.callsShrink self i whole parts
+    whenTag.callsShrink self i need (narrowPart depths name) &&
+      whenOther.callsShrink self i need (if other.isSome then narrowPart depths name else depths)
   | .letState names branch rest =>
-    let (w, ps) := forgetParts whole parts names
-    branch.callsShrink self i whole parts && rest.callsShrink self i w ps
+    branch.callsShrink self i need depths && rest.callsShrink self i need (forgetParts depths names)
   | .fold names element body items rest _ =>
-    let (w, ps) := forgetParts whole parts names
-    let (wb, pb) := bindPart w ps element ((items.partOf whole parts).map fun _ => true)
-    items.callsShrink self i whole parts && body.callsShrink self i wb pb && rest.callsShrink self i w ps
+    let outer := forgetParts depths names
+    items.callsShrink self i need depths &&
+      body.callsShrink self i need (bindPart outer element ((items.partOf depths).map (· + 1))) &&
+      rest.callsShrink self i need outer
 
 mutual
 
@@ -788,16 +783,22 @@ def Body.calls (self : DeclRef) : Body T E → Bool
 
 /-- The parameter that each call of `self` in `body` makes smaller, the first
 one when there are several. `none` when the body does not call `self`, or
-when no parameter gets smaller in every call. -/
-def Body.decreasingParam? (self : DeclRef) (params : List String) (body : Body T E) : Option String :=
-  if body.calls self then (params.zipIdx.find? fun (p, i) => body.callsShrink self i [p] []).map (·.1)
+when no parameter gets smaller in every call. A parameter of an `Option` type
+needs a part two steps below it. Where such a parameter expects a value that
+a `match` narrowed, Lean wraps the value in `some` again, which is one step
+up, so a part one step below would be the parameter itself. -/
+def Body.decreasingParam? (self : DeclRef) (params : List (String × Ty T)) (body : Body T E) :
+    Option String :=
+  if body.calls self then
+    (params.zipIdx.find? fun ((p, ty), i) =>
+      body.callsShrink self i (if ty matches .option _ | .optional _ then 2 else 1) [(p, 0)]).map (·.1.1)
   else Option.none
 
 /-- The declaration is a function of the file `file` that calls itself, each
 time on a part of one parameter. The output then proves that it ends with
 `tolean.TypeScript.Decreasing`. -/
 def Decl.recursive (file : String) : Decl T E → Bool
-  | .function name params _ body => (body.decreasingParam? ⟨file, name⟩ (params.map (·.1))).isSome
+  | .function name params _ body => (body.decreasingParam? ⟨file, name⟩ params).isSome
   | _ => false
 
 section
@@ -1022,7 +1023,7 @@ def Decl.print (names : Names) : Decl T E → String
     -- A function that calls itself ends because each call passes a part of
     -- one parameter. Lean then needs that parameter as the measure, and the
     -- proof of each call.
-    let decreasing := body.decreasingParam? ⟨names.file, name⟩ (params.map (·.1))
+    let decreasing := body.decreasingParam? ⟨names.file, name⟩ params
     let names := if decreasing.isSome then { names with matchHyp := true } else names
     let termination := match decreasing with
       | some p => [s!"termination_by {p}", "decreasing_by all_goals tolean_decreasing"]

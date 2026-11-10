@@ -2523,7 +2523,7 @@ def translateFunction (s : Span) (exported : Bool) (name : String) (typeParams :
   let self : FnInfo := { file := ctx.file, name, exported, typeParams, params := types, ret }
   let out ← isolated (translateStatements (← fuelLimit) { env with functions := env.functions ++ [self] } .ret
     (blockStatements body))
-  if out.calls self.ref && (out.decreasingParam? self.ref (leanParams.map (·.1))).isNone then
+  if out.calls self.ref && (out.decreasingParam? self.ref leanParams).isNone then
     reject s ("a function may call itself only on a part of one of its parameters, the same one in " ++
       "every call: a field of it, a value that a test narrows it to, or an element of an array in it")
   modify fun c => { c with typeParams := [], functions := c.functions ++ [self] }
