@@ -1451,6 +1451,23 @@ def newSetType (s : Span) (typeArgs : List TypeExpr) (expected : Option Ty) : TM
   | [], some (.set t) => return .set t
   | _, _ => reject s "new Set needs the type of its elements, such as new Set<string>()"
 
+/-- What `for (const x of items)` visits, with its type: the elements of an
+array or a set, or the entries of a map, which a loop sees as tuples
+`[key, value]`. -/
+def loopOver (items : Code) : Option (Ty × IR.Expr) :=
+  match items.type with
+  | .array t => some (t, items.code)
+  | .set t => some (t, .ext .setElems [items.value])
+  | .map k v => some (.tuple [k, v], .ext .mapEntries [items.value])
+  | _ => none
+
+/-- What a loop over `iterable`, which `items` translates, visits, when the
+loop body is `body`. -/
+def loopItems (iterable : Expr) (body : Stmt) (items : Code) : TM (Ty × IR.Expr) := do
+  if Stmt.mutatesIterable iterable body then
+    reject iterable.span "a loop may not change the map or set that it runs over"
+  orReject (loopOver items) iterable.span "a loop must run over an array, a set or a map"
+
 /-- The receiver of `size`, `get` or `has`: an owned map as its local, as
 `ownedMap?` reads it, and any other expression as `tr` translates it. -/
 def translateRecv (tr : Expr → TM Code) (env : Env) (e : Expr) : TM Code :=
@@ -2434,8 +2451,10 @@ def translateForOf (fuel : Nat) (env : Env) (s : Span) (kind : VarKind) (element
   let breaks := bodyStatements.any (containsJump true false)
   let names := changedNames bodyStatements env
   if names.isEmpty && !returns then reject s "a loop must change a local or return"
-  let items ← translateExpr (← fuelLimit) env none iterable
-  let .array elemType := items.type | reject iterable.span "a loop must run over an array"
+  -- An owned map or set may be the iterable, as long as the body does not
+  -- change it: a JS loop would visit the values that the body adds.
+  let items ← translateRecv (translateExpr (← fuelLimit) env none) env iterable
+  let (elemType, loopItems) ← loopItems iterable body items
   let bodyEnv ← declare env s element .const elemType
   let bodyOut ← translateStatements fuel bodyEnv (.loop names breaks returns) bodyStatements
   let returnType := (← get).returnType
@@ -2445,7 +2464,7 @@ def translateForOf (fuel : Nat) (env : Env) (s : Span) (kind : VarKind) (element
       stateTypes := names.filterMap fun n => (env.lookup n).map (·.type.lean),
       scope := (env.locals.filter fun l => !names.contains l.name).map fun l => (l.name, l.type.lean),
       breaks, returns := if returns then some (leanResult throws returnType) else none }
-  return .fold names element bodyOut items.code (← translateStatements fuel env tail rest) info
+  return .fold names element bodyOut loopItems (← translateStatements fuel env tail rest) info
 
 end
 

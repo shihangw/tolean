@@ -97,6 +97,11 @@ inductive ExprExt where
   | setAdd
   /-- `(JSSet.delete s x)`: the set after `s.delete(x)`. -/
   | setDelete
+  /-- `s.elems`: the elements of a set, which `for (const x of s)` visits. -/
+  | setElems
+  /-- `m.entries`: the entries of a map, which `for (const e of m)` visits,
+  each as a pair. -/
+  | mapEntries
   /-- `(pure a)`: the value `a` as the result of a function that can throw. -/
   | pure
   /-- `(JSError.mk m)`: the error that `new Error(m)` makes, from its message. -/
@@ -106,7 +111,7 @@ deriving BEq, Repr, Inhabited, DecidableEq
 /-- An operation on maps or sets, whose output names `JSMap` or `JSSet`. -/
 def ExprExt.onMap : ExprExt → Bool
   | .mapEmpty | .mapGet | .mapHas | .mapSize | .mapSet | .mapDelete => true
-  | .setEmpty | .setHas | .setSize | .setAdd | .setDelete => true
+  | .setEmpty | .setHas | .setSize | .setAdd | .setDelete | .setElems | .mapEntries => true
   | _ => false
 
 abbrev Ty := tolean.IR.Ty TyExt
@@ -208,6 +213,8 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
     s!"({js}.ofSafeInt (N := {names.typeParam}) ({leanName names "JSSet"}.size {argument s} : {leanName names "Int"}))"
   | .setAdd, [s, x] => s!"({leanName names "JSSet"}.add {argument s} {argument x})"
   | .setDelete, [s, x] => s!"({leanName names "JSSet"}.delete {argument s} {argument x})"
+  | .setElems, [s] => s!"({leanName names "JSSet"}.elems {argument s})"
+  | .mapEntries, [m] => s!"({leanName names "JSMap"}.entries {argument m})"
   | .recordGet key keys, [r, k] =>
     let case (f : String) := s!"{(names.ref key).1}.{memberName f}"
     -- A key that is one constructor, as `r['a']` gives, reads its field.

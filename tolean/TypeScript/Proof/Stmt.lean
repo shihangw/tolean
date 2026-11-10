@@ -1840,6 +1840,43 @@ theorem translateIf_sound (hc : CallsAgree (N := N) m.program fs fuel) {F : Nat}
               exact if_state_sim m fs fuel (narrow_has _ _ _) (narrow_has _ _ _) rfl rfl rfl (hb wt wf)
                 (ihS _ _ _ _ _ _ hwt) (ihS _ _ _ _ _ _ hwf) (ihS _ _ _ _ _ _ hrb)
 
+/-- `loopItems` reads no state, and gives what `loopOver` gives. -/
+theorem loopItems_ok {iterable : Expr} {body : Stmt} {items : Code} {r : Ty × IR.Expr}
+    {ctx ctx' : Ctx} (h : loopItems iterable body items ctx = .ok r ctx') :
+    Stmt.mutatesIterable iterable body = false ∧ loopOver items = some r ∧ ctx' = ctx := by
+  unfold loopItems at h
+  simp only [ite_state] at h
+  split at h
+  · simp at h
+  · rename_i hm
+    simp only [pure_bind, orReject_ok] at h
+    exact ⟨by simpa using hm, h.1, h.2.symm⟩
+
+/-- What the output's loop runs over is what the interpreter's loop visits. -/
+theorem loopOver_sim {env : Translate.Env} {iterable : Expr} {items : Code} {elem : Ty}
+    {li : IR.Expr} (hsim : Sim (N := N) m fs fuel env iterable items.code)
+    (hlo : loopOver items = some (elem, li)) {ρs ρo : Eval.Env N} {vs : List (Val N)}
+    (ha : Agree ρs ρo) (hs : Scoped m env ρs) (hi : IR.Expr.eval fs fuel ρo li = some (.list vs)) :
+    ∃ v, Eval.eval m fuel ρs iterable = some v ∧ Eval.iterValues v = some vs := by
+  unfold loopOver at hlo
+  split at hlo <;> simp only [Option.some.injEq, Prod.mk.injEq, reduceCtorEq] at hlo
+  · obtain ⟨-, rfl⟩ := hlo
+    exact ⟨_, hsim ρs ρo _ ha hs hi, rfl⟩
+  all_goals
+    obtain ⟨-, rfl⟩ := hlo
+    obtain ⟨ws, hws, happ⟩ := out_ext fs fuel hi
+    simp only [IR.Expr.evalList] at hws
+    cases hx : IR.Expr.eval fs fuel ρo items.value with
+    | none => simp [hx] at hws
+    | some w =>
+      simp [hx] at hws
+      subst hws
+      rw [eval_value] at hx
+      refine ⟨w, hsim ρs ρo _ ha hs hx, ?_⟩
+      cases w <;> simp [IR.ExprExt.apply] at happ
+      subst happ
+      rfl
+
 /-- `translateForOf` is sound, when `translateStatements` is with one unit of fuel less. -/
 theorem translateForOf_sound (hc : CallsAgree (N := N) m.program fs fuel) {F : Nat}
     (ihS : ∀ env tail ss ctx body ctx', translateStatements F env tail ss ctx = .ok body ctx' →
@@ -1862,11 +1899,13 @@ theorem translateForOf_sound (hc : CallsAgree (N := N) m.program fs fuel) {F : N
       · simp at h
       · simp only [bind_ok, fuelLimit_ok] at h
         obtain ⟨_, _, ⟨rfl, rfl⟩, items, s₁, hitems, h⟩ := h
-        cases hty : items.type <;> simp [hty] at h
-        rename_i elemType
+        obtain ⟨⟨elemType, li⟩, s₁', hli, h⟩ := h
+        obtain ⟨hmut, hlo, rfl⟩ := loopItems_ok hli
+        simp at h
         obtain ⟨bodyEnv, s₂, hdecl, bodyOut, s₃, hbody, _, _, ⟨rfl, rfl⟩, _, _, ⟨rfl, rfl⟩, rb, hrb, hbodyEq⟩ := h
         obtain ⟨hfresh, rfl, -⟩ := declare_ok hdecl
-        have hsimI := (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hitems
+        have hsimI := translateRecv_sim m fs fuel
+          (fun _ _ _ hx => (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hx) hitems
         have hloop := loop_sim m fs fuel (ihS _ _ _ _ _ _ hbody) rfl hfresh rfl
         have hrest := ihS _ _ _ _ _ _ hrb
         intro ρs ρo ha hs
@@ -1880,11 +1919,12 @@ theorem translateForOf_sound (hc : CallsAgree (N := N) m.program fs fuel) {F : N
           intro o ho
           rw [← hbodyEq] at ho
           simp only [IR.Body.exec] at ho
-          cases hi : IR.Expr.eval fs fuel ρo items.code with
+          cases hi : IR.Expr.eval fs fuel ρo li with
           | none => simp [hi] at ho
           | some u =>
             cases u <;> simp [hi] at ho
             rename_i vs
+            obtain ⟨vi, hvi, hiter⟩ := loopOver_sim m fs fuel hsimI hlo ha hs hi
             cases hf : IR.Body.runFold fs fuel (changedNames (blockStatements b) env) x bodyOut ρo vs with
             | none => simp [hf] at ho
             | some ro =>
@@ -1894,11 +1934,11 @@ theorem translateForOf_sound (hc : CallsAgree (N := N) m.program fs fuel) {F : N
                 simp [hf] at ho
                 obtain ⟨mod, hl, hag, hfr⟩ := hnorm ρo₂ rfl
                 refine .inr ⟨mod, ρo₂, ?_, hag, hfr.mono fun n hn => by simp [stmtChanges, hn], ho⟩
-                simp [Eval.execStmt, hsimI ρs ρo _ ha hs hi, hl]
+                simp [Eval.execStmt, hmut, hvi, hiter, hl]
               | ret w =>
                 simp [hf] at ho
                 subst ho
-                exact .inl ⟨w, rfl, by simp [Eval.execStmt, hsimI ρs ρo _ ha hs hi, hret w rfl]⟩
+                exact .inl ⟨w, rfl, by simp [Eval.execStmt, hmut, hvi, hiter, hret w rfl]⟩
               | brk _ | cont _ => simp [hf] at ho
         constructor
         · intro v hv

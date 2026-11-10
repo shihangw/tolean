@@ -94,6 +94,10 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   | .setSize, [.set elems] => some (.num (JSNumber.ofSafeInt elems.length))
   | .setAdd, [.set elems, x] => (Eval.setAdd elems x).map .set
   | .setDelete, [.set elems, x] => (Eval.setDelete elems x).map .set
+  -- What a loop visits, as the spec's `iterValues` gives it: a JS entry is
+  -- the array `[key, value]`, as a Lean pair is.
+  | .setElems, [.set elems] => some (.list elems)
+  | .mapEntries, [.map entries] => some (.list (entries.map fun (k, v) => .list [k, v]))
   -- `pure a` is the value of `a`, as the result of a function that does not
   -- throw this time.
   | .pure, [a] => some a

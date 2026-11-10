@@ -196,7 +196,8 @@ def sections : List Section := [
     ``Proof.letState_sim, ``Proof.translateIf_sound]⟩,
   ⟨"sec-for-in-and-for-of-statements", "14.7.5",
     "The for-in, for-of, and for-await-of Statements",
-    [``Proof.loop_sim, ``Proof.runFold_foldl, ``Proof.runFold_forIn, ``Proof.runFold_forInRet, ``Proof.translateForOf_sound]⟩,
+    [``Proof.loop_sim, ``Proof.runFold_foldl, ``Proof.runFold_forIn, ``Proof.runFold_forInRet, ``Proof.translateForOf_sound,
+    ``Proof.loopItems_ok]⟩,
   ⟨"sec-break-statement", "14.8", "The break Statement",
     [``Proof.Ends.brk, ``Proof.Ends.of_brk, ``Proof.endOf_normal]⟩,
   ⟨"sec-continue-statement", "14.9", "The continue Statement",
@@ -266,11 +267,13 @@ def sections : List Section := [
   ⟨"sec-map.prototype.set", "24.1.3.9", "Map.prototype.set", []⟩,
   ⟨"sec-get-map.prototype.size", "24.1.3.10", "get Map.prototype.size",
     [``Proof.ownedMap_sim, ``Proof.translateRecv_sim]⟩,
+  ⟨"sec-createmapiterator", "24.1.5.1", "CreateMapIterator", [``Proof.loopOver_sim]⟩,
   ⟨"sec-set-iterable", "24.2.2.1", "Set ( [ iterable ] )", []⟩,
   ⟨"sec-set.prototype.add", "24.2.4.1", "Set.prototype.add", []⟩,
   ⟨"sec-set.prototype.delete", "24.2.4.4", "Set.prototype.delete", []⟩,
   ⟨"sec-set.prototype.has", "24.2.4.8", "Set.prototype.has", [``Proof.collection_call_sim]⟩,
-  ⟨"sec-get-set.prototype.size", "24.2.4.14", "get Set.prototype.size", []⟩]
+  ⟨"sec-get-set.prototype.size", "24.2.4.14", "get Set.prototype.size", []⟩,
+  ⟨"sec-createsetiterator", "24.2.6.1", "CreateSetIterator", []⟩]
 
 /-- The laws of the number model, from §6.1.6.1 The Number Type. The proofs
 assume them instead of proving them, and `tests/typescript/jsNumberLaws.test.ts`
