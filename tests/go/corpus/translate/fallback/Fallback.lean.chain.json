@@ -1,0 +1,36 @@
+{"tolean": "0.3.0",
+ "sources":
+ [{"sha256": "71f195ee71c21903416ad3f91bbd32eea07559711e74943299689dedaf1dfdb4",
+   "path": "corpus/translate/fallback/fallback.go"}],
+ "output":
+ {"sha256": "867100a4e53a1a1770f06ebbec7a0b1bc0b4997596fec5c4971bd1c1920f6b0c",
+  "path": "corpus/translate/fallback/Fallback.lean"},
+ "nodes":
+ [{"status": "tested",
+   "label": "Go parser",
+   "kind": "parser",
+   "id": "parser",
+   "evidence": {"reference": "go/parser", "check": "go-check", "by": "tolean"}},
+  {"status": "tested",
+   "label": "Go translator",
+   "kind": "translator",
+   "id": "translator",
+   "evidence":
+   {"reference": "fixed corpus output", "check": "go-check", "by": "tolean"}},
+  {"status": "trusted",
+   "module": "tolean.Go.Spec.Basic",
+   "label": "Go Spec",
+   "kind": "spec",
+   "id": "spec"},
+  {"status": "trusted",
+   "label": "Go compiler",
+   "kind": "runtime",
+   "id": "runtime"}],
+ "module": "Fallback",
+ "language": "go",
+ "edges":
+ [["source", "parser"],
+  ["parser", "translator"],
+  ["translator", "output"],
+  ["spec", "output"],
+  ["runtime", "output"]]}

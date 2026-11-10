@@ -67,6 +67,9 @@ inductive Feature where
   /-- `xs.at(k)`, which counts a negative `k` from the end:
   `Array.prototype.at`. -/
   | arrayAt
+  /-- `xs.findLast(x => p)`, which looks from the end:
+  `Array.prototype.findLast`. -/
+  | arrayFindLast
 deriving BEq, Repr, Inhabited
 
 def Feature.since : Feature → Edition
@@ -75,6 +78,7 @@ def Feature.since : Feature → Edition
   | .bigint | .bigintDivision | .nullishCoalescing | .optionalChaining => .es2020
   | .logicalAssignment | .numericSeparators => .es2021
   | .arrayAt => .es2022
+  | .arrayFindLast => .es2023
 
 def Feature.describe : Feature → String
   | .exponent => "'**'"
@@ -87,6 +91,7 @@ def Feature.describe : Feature → String
   | .numericSeparators => "numeric separators"
   | .arrayIncludes => "Array.prototype.includes"
   | .arrayAt => "Array.prototype.at"
+  | .arrayFindLast => "Array.prototype.findLast"
 
 def Edition.supports (target : Edition) (f : Feature) : Bool := f.since.year ≤ target.year
 

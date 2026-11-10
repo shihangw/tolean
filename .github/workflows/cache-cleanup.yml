@@ -1,0 +1,30 @@
+# Deletes a pull request's caches when it closes or merges. GitHub scopes a
+# cache to the ref that saved it, so only later runs of the same pull
+# request can restore a cache that its runs saved under refs/pull/<n>/merge.
+# Once the pull request closes, nothing restores those caches again, but
+# they count toward the 10 GB limit until GitHub drops them after a week
+# without use. Runs started by hand on the branch save under
+# refs/heads/<branch>, so those caches go too.
+name: cache-cleanup
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  delete:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          .github/scripts/prune-caches.sh --all "refs/pull/$PR/merge"
+          .github/scripts/prune-caches.sh --all "refs/heads/$BRANCH"

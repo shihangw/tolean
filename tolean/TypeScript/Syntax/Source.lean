@@ -122,6 +122,11 @@ def TypeExpr.wordsOf : List TypeExpr → List (List Word)
 
 end
 
+/-- The type arguments of a `new`: none, or `<A, B>`. -/
+def typeArgWords : List TypeExpr → List Word
+  | [] => []
+  | args => punctWord "<" :: separated "," (TypeExpr.wordsOf args) ++ [punctWord ">"]
+
 /-- `: T` after a name or a parameter list, when the type is there. -/
 def typeAnnotation : Option TypeExpr → List Word
   | some t => punctWord ":" :: t.words
@@ -170,6 +175,9 @@ def Expr.words : Expr → List Word
   | .arrow _ parens params body => arrowParams parens params ++ punctWord "=>" :: body.words
   | .asConst _ e => e.words ++ [identWord "as", keywordWord "const"]
   | .satisfies _ e type => e.words ++ identWord "satisfies" :: type.words
+  | .new _ callee typeArgs args =>
+    keywordWord "new" :: identWord callee :: typeArgWords typeArgs ++ enclose "(" ")" (Expr.wordsOf args)
+  | .spread _ e => punctWord "..." :: e.words
 
 def Expr.wordsOf : List Expr → List (List Word)
   | [] => []
@@ -238,6 +246,7 @@ def Stmt.lines (depth : Nat) : Stmt → List Line
   | .switchStmt _ disc clauses =>
     (depth, keywordWord "switch" :: punctWord "(" :: disc.words ++ [punctWord ")", punctWord "{"]) ::
       Stmt.clauseLines (depth + 1) clauses ++ [(depth, [punctWord "}"])]
+  | .throwStmt _ e => [(depth, keywordWord "throw" :: e.words ++ [punctWord ";"])]
 
 def Stmt.linesOf (depth : Nat) : List Stmt → List Line
   | [] => []
@@ -377,6 +386,8 @@ def Expr.erase : Expr → Expr
   | .arrow _ parens params body => .arrow noSpan parens (params.map Param.erase) body.erase
   | .asConst _ e => .asConst noSpan e.erase
   | .satisfies _ e type => .satisfies noSpan e.erase type.erase
+  | .new _ callee typeArgs args => .new noSpan callee (TypeExpr.eraseAll typeArgs) (Expr.eraseAll args)
+  | .spread _ e => .spread noSpan e.erase
 
 def Expr.eraseAll : List Expr → List Expr
   | [] => []
@@ -412,6 +423,7 @@ def Stmt.erase : Stmt → Stmt
   | .continueStmt _ => .continueStmt noSpan
   | .empty _ => .empty noSpan
   | .switchStmt _ disc clauses => .switchStmt noSpan disc.erase (Stmt.eraseClauses clauses)
+  | .throwStmt _ e => .throwStmt noSpan e.erase
 
 def Stmt.eraseOpt : Option Stmt → Option Stmt
   | none => none

@@ -35,6 +35,9 @@ def Ty.beq : Ty T → Ty T → Bool
   | .tuple a, .tuple b => Ty.beqList a b
   | .param a, .param b => Decidable.decide (a = b)
   | .app a as, .app b bs => Decidable.decide (a = b) && Ty.beqList as bs
+  | .map a a', .map b b' => Ty.beq a b && Ty.beq a' b'
+  | .set a, .set b => Ty.beq a b
+  | .except a a', .except b b' => Ty.beq a b && Ty.beq a' b'
   | .ext a, .ext b => Decidable.decide (a = b)
   | _, _ => false
 
@@ -51,12 +54,16 @@ theorem Ty.beq_iff : (a b : Ty T) → Ty.beq a b = true ↔ a = b
   | .int, b | .bool, b | .string, b | .struct _, b | .enum _, b | .tagged _, b | .tag _, b | .param _, b
   | .ext _, b => by
     cases b <;> simp [Ty.beq]
-  | .option a, b | .optional a, b | .list a, b => by
+  | .option a, b | .optional a, b | .list a, b | .set a, b => by
     cases b <;> simp [Ty.beq, Ty.beq_iff a]
   | .tuple a, b => by
     cases b <;> simp [Ty.beq, Ty.beqList_iff a]
   | .app r a, b => by
     cases b <;> simp [Ty.beq, Ty.beqList_iff a]
+  | .map a a', b => by
+    cases b <;> simp [Ty.beq, Ty.beq_iff a, Ty.beq_iff a']
+  | .except a a', b => by
+    cases b <;> simp [Ty.beq, Ty.beq_iff a, Ty.beq_iff a']
 
 theorem Ty.beqList_iff : (xs ys : List (Ty T)) → Ty.beqList xs ys = true ↔ xs = ys
   | [], ys => by cases ys <;> simp [Ty.beqList]
@@ -112,6 +119,9 @@ def Expr.beq : Expr T E → Expr T E → Bool
   | .listMethod a0 a1 a2 a3 a4 a5, .listMethod b0 b1 b2 b3 b4 b5 =>
     Decidable.decide (a0 = b0) && Expr.beq a1 b1 && Decidable.decide (a2 = b2) &&
       Decidable.decide (a3 = b3) && Expr.beq a4 b4 && Decidable.decide (a5 = b5)
+  | .listFold a0 a1 a2 a3 a4 a5 a6, .listFold b0 b1 b2 b3 b4 b5 b6 =>
+    Expr.beq a0 b0 && Expr.beq a1 b1 && Decidable.decide (a2 = b2) && Decidable.decide (a3 = b3) &&
+      Decidable.decide (a4 = b4) && Expr.beq a5 b5 && Decidable.decide (a6 = b6)
   | _, _ => false
 
 def Expr.beqList : List (Expr T E) → List (Expr T E) → Bool
@@ -205,6 +215,8 @@ theorem Expr.beq_iff : (a b : Expr T E) → Expr.beq a b = true ↔ a = b
     cases b <;> simp [and_assoc, Expr.beq, Expr.beq_iff a0, Expr.beqFields_iff a1]
   | .listMethod a0 a1 a2 a3 a4 a5, b => by
     cases b <;> simp [and_assoc, Expr.beq, Expr.beq_iff a1, Expr.beq_iff a4]
+  | .listFold a0 a1 a2 a3 a4 a5 a6, b => by
+    cases b <;> simp [and_assoc, Expr.beq, Expr.beq_iff a0, Expr.beq_iff a1, Expr.beq_iff a5]
 
 theorem Expr.beqList_iff : (xs ys : List (Expr T E)) → Expr.beqList xs ys = true ↔ xs = ys
   | [], ys => by cases ys <;> simp [and_assoc, Expr.beqList]

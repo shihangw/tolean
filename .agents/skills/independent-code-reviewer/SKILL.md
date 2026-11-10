@@ -14,7 +14,7 @@ Use the repository and PR scope the user specifies. Honor existing authorization
 - Read applicable repository instructions and relevant skills.
 - Fetch the current head and base SHAs, diff, PR description, checks, and complete discussion. Include resolved threads and author replies.
 - Identify findings already raised on this PR and related PRs. For a stacked PR, compare against its declared base and distinguish inherited defects from new ones.
-- Preserve a checkpoint with PR numbers, last reviewed head and base SHAs, finding summaries, thread IDs, root comment IDs, resolution state, and relevant reply IDs. Keep credentials out of it.
+- Preserve a checkpoint with PR numbers, last reviewed head and base SHAs, finding summaries, thread IDs, root comment IDs, resolution state, relevant reply IDs, and the review summary comment ID and URL. Keep credentials out of it.
 
 ## Review independently
 
@@ -32,7 +32,34 @@ A finding should identify a concrete trigger, explain the incorrect result and i
 
 Deduplicate by root cause and behavior, not wording or line number. Do not post an inherited finding again on a stacked PR. Refer to its existing thread when needed. Never reopen a resolved thread or re-post an already discussed issue merely because it remains present. Distinguish an independently demonstrated new regression from the old issue before reporting it.
 
-Post only actionable findings supported by the review. If none remain, say that no new actionable issues were found and identify the reviewed revision, relevant checks, and material limits. Do not invent findings to fill a review. Avoid repeated comments on unchanged code.
+Post only actionable findings supported by the review. If none remain, state that explicitly in the required review summary below. Do not invent findings to fill a review. Avoid repeated finding comments on unchanged code.
+
+## Keep one review summary per PR
+
+After every completed independent review, always publish a top-level summary comment on the PR, even when no issues were found. This must be a PR-level comment, not an inline comment or a review body.
+
+Keep one summary comment per PR per reviewer. Create it after the first completed review. Whenever a later independent review round completes, edit that same comment in place rather than posting another summary. Read the checkpoint and the current PR comments before creating one. If the checkpoint lacks its ID, find this reviewer's existing summary first. Do not edit another reviewer's summary.
+
+Use the heading `Independent review summary` and include only:
+
+- `Head:` the exact reviewed head SHA.
+- `Result:` a concise statement of new actionable findings and resolutions verified or performed. Link the relevant threads when there are findings or resolutions. If the review is blocked or incomplete, say so rather than claiming a clean result.
+
+For a completed review with no findings or resolutions:
+
+```markdown
+## Independent review summary
+
+Head: `<reviewed-head-sha>`
+
+Result: No new actionable issues were found. No resolutions were verified or performed.
+```
+
+Do not include review dates, base or merge-base SHAs, branch ancestry, review reasoning, validation inventories, CI summaries, or earlier-round history. Keep revision details, validation evidence and limits in the checkpoint; put evidence for findings in their threads.
+
+After each completed round, update the head and result in place. Record the summary comment ID and URL in the checkpoint after creating or editing it. Inline findings and useful thread replies supplement this summary; they do not replace it.
+
+A status-only poll is not a new independent review round. Do not create duplicate summaries or edit the summary merely to report an unchanged poll.
 
 ## Follow existing threads
 
@@ -58,7 +85,7 @@ At each poll:
 1. Rediscover open PRs if the scope is all open PRs. Fetch changed heads, bases, PR content, and discussions, including tracked threads on recently closed or merged PRs when follow-up is still relevant.
 2. Review new PRs and changed code. Read new replies and apply the thread rules above.
 3. Reset the unchanged count when relevant code, PR state, or discussion changes. Otherwise increment it after a successful complete check. Failed or incomplete checks do not count. Do not count missed intervals as checks.
-4. Save the updated baseline after posting or resolving, so the reviewer's own already-processed actions do not appear as new author activity on the next poll.
+4. After a completed review round, create or edit its required summary. Then save the baseline after all comments, summary edits and resolutions, including the summary comment ID. This keeps the reviewer's own already-processed actions from appearing as new author activity on the next poll.
 5. At ten unchanged checks, record the paused state and stop. Honor an earlier user pause or stop immediately.
 
 Wait between polls without busy polling. Stay interruptible and follow the environment's wait limits. Do not claim that monitoring will continue after the turn unless an actual scheduling mechanism has been configured and confirmed.

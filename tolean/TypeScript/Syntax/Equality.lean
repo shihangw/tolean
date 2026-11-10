@@ -116,6 +116,9 @@ def Expr.beq : Expr → Expr → Bool
     decide (a0 = b0) && decide (a1 = b1) && Param.beqList a2 b2 && Expr.beq a3 b3
   | .asConst a0 a1, .asConst b0 b1 => decide (a0 = b0) && Expr.beq a1 b1
   | .satisfies a0 a1 a2, .satisfies b0 b1 b2 => decide (a0 = b0) && Expr.beq a1 b1 && TypeExpr.beq a2 b2
+  | .new a0 a1 a2 a3, .new b0 b1 b2 b3 =>
+    decide (a0 = b0) && decide (a1 = b1) && TypeExpr.beqList a2 b2 && Expr.beqList a3 b3
+  | .spread a0 a1, .spread b0 b1 => decide (a0 = b0) && Expr.beq a1 b1
   | _, _ => false
 
 def Expr.beqList : List Expr → List Expr → Bool
@@ -188,6 +191,10 @@ theorem Expr.beq_iff : (a b : Expr) → Expr.beq a b = true ↔ a = b
     cases b <;> simp [and_assoc, Expr.beq, Expr.beq_iff a1]
   | .satisfies a0 a1 a2, b => by
     cases b <;> simp [and_assoc, Expr.beq, Expr.beq_iff a1, TypeExpr.beq_iff a2]
+  | .new a0 a1 a2 a3, b => by
+    cases b <;> simp [and_assoc, Expr.beq, TypeExpr.beqList_iff a2, Expr.beqList_iff a3]
+  | .spread a0 a1, b => by
+    cases b <;> simp [and_assoc, Expr.beq, Expr.beq_iff a1]
 
 theorem Expr.beqList_iff : (xs ys : List Expr) → Expr.beqList xs ys = true ↔ xs = ys
   | [], ys => by cases ys <;> simp [and_assoc, Expr.beqList]
@@ -246,6 +253,7 @@ def Stmt.beq : Stmt → Stmt → Bool
   | .continueStmt a0, .continueStmt b0 => decide (a0 = b0)
   | .empty a0, .empty b0 => decide (a0 = b0)
   | .switchStmt a0 a1 a2, .switchStmt b0 b1 b2 => decide (a0 = b0) && Expr.beq a1 b1 && Stmt.beqClauses a2 b2
+  | .throwStmt a0 a1, .throwStmt b0 b1 => decide (a0 = b0) && Expr.beq a1 b1
   | _, _ => false
 
 def Stmt.beqList : List Stmt → List Stmt → Bool
@@ -293,6 +301,8 @@ theorem Stmt.beq_iff : (a b : Stmt) → Stmt.beq a b = true ↔ a = b
     cases b <;> simp [and_assoc, Stmt.beq]
   | .switchStmt a0 a1 a2, b => by
     cases b <;> simp [and_assoc, Stmt.beq, Expr.beq_iff a1, Stmt.beqClauses_iff a2]
+  | .throwStmt a0 a1, b => by
+    cases b <;> simp [and_assoc, Stmt.beq, Expr.beq_iff a1]
 
 theorem Stmt.beqList_iff : (xs ys : List Stmt) → Stmt.beqList xs ys = true ↔ xs = ys
   | [], ys => by cases ys <;> simp [and_assoc, Stmt.beqList]
