@@ -88,6 +88,14 @@ theorem declare_ok {env env' : Translate.Env} {sp : Span} {name : String} {b : B
         · simp only [pure_ok] at h
           exact ⟨by simpa using hn, h.1.symm, h.2.symm⟩
 
+/-- The check of a call of a function that can throw changes nothing. -/
+theorem checkThrowingCall_ok {sp : Span} {name : String} {fn : FnInfo} {top : Bool} {s s' : Ctx} {u : Unit}
+    (h : checkThrowingCall sp name fn top s = .ok u s') : s' = s := by
+  simp only [checkThrowingCall, ite_state] at h
+  split at h
+  · simp at h
+  · simp only [pure_ok] at h; exact h.2.symm
+
 end Monad
 
 /-! ### Environments and calls -/
@@ -174,6 +182,15 @@ variable (m : Eval.Scope) (fs : List (DeclRef × List String × IR.Body)) (fuel 
 def Sim (env : Translate.Env) (e : Expr) (out : IR.Expr) : Prop :=
   ∀ (ρs ρo : Eval.Env N) v, Agree ρs ρo → Scoped m env ρs →
     IR.Expr.eval fs fuel ρo out = some v → Eval.eval m fuel ρs e = some v
+
+/-- When the output code `out` of a call of `callee` on `args` is a call of a
+function of the output, `callee` is a name, and the output's call returns or
+throws what the source's call returns or throws. A statement that passes on
+the error of a call needs this, because `Sim` is only about the value. -/
+def CallSim (env : Translate.Env) (callee : Expr) (args : List Expr) (out : IR.Expr) : Prop :=
+  ∀ ref outs, out = .call ref outs → ∃ sp name, callee = .ident sp name ∧
+    ∀ (ρs ρo : Eval.Env N) r, Agree ρs ρo → Scoped m env ρs →
+      IR.Expr.evalCall fs fuel ρo ref outs = some r → Eval.evalCall m fuel ρs name args = some r
 
 /-- The output codes `outs` mean what the expressions `es` mean. -/
 def SimList (env : Translate.Env) (es : List Expr) (outs : List IR.Expr) : Prop :=
@@ -657,6 +674,29 @@ theorem evalTop_ok {e : Expr} {ρ : Eval.Env N} {w : Val N} (h : Eval.eval m fue
   · rw [Eval.eval] at h
     simpa only [Option.bind_eq_bind, bind_toOption] using h
   · simp [h]
+
+/-- A call at the top of a declaration or a `return` gives what the call
+returns or throws. -/
+theorem evalTop_call (cs sp : Span) (name : String) (args : List Expr) (ρ : Eval.Env N) :
+    Eval.evalTop m fuel ρ (.call cs (.ident sp name) args) = Eval.evalCall m fuel ρ name args := by
+  rw [Eval.evalTop]
+
+/-- `pure e`, which a function that can throw returns, has the value of `e`. -/
+theorem eval_pureIf {p : Prop} [Decidable p] (e : IR.Expr) (ρ : Eval.Env N) :
+    IR.Expr.eval fs fuel ρ (if p then IR.Expr.pure e else e) = IR.Expr.eval fs fuel ρ e := by
+  split
+  · simp only [IR.Expr.eval, IR.Expr.evalList]
+    cases IR.Expr.eval fs fuel ρ e <;> rfl
+  · rfl
+
+theorem eval_call_toOption (sp sp' : Span) (name : String) (args : List Expr) (ρ : Eval.Env N) :
+    Eval.eval m fuel ρ (.call sp (.ident sp' name) args) =
+      (Eval.evalCall m fuel ρ name args).bind Except.toOption := by
+  rw [Eval.eval]; rfl
+
+theorem out_call_toOption (key : DeclRef) (args : List IR.Expr) (ρ : Eval.Env N) :
+    IR.Expr.eval fs fuel ρ (.call key args) = (IR.Expr.evalCall fs fuel ρ key args).bind Except.toOption := by
+  rw [IR.Expr.eval]; rfl
 
 theorem out_evalCall (key : DeclRef) (args : List IR.Expr) (ρ : Eval.Env N) :
     IR.Expr.evalCall fs fuel ρ key args = (IR.Expr.evalList fs fuel ρ args).bind (callO fs fuel key) := by
@@ -1533,6 +1573,105 @@ theorem evalList_optArgs (sol : List (String × Ty)) (ρ : Eval.Env N) :
     simp only [optArgs, List.map_cons, IR.Expr.evalList, evalList_optArgs sol ρ cs ps]
     split <;> (try split) <;> simp [IR.Expr.eval]
 
+/-- A call of a function of the program: the output's call means what the
+source's call means, and it returns or throws what the source's call returns
+or throws (`CallSim`). -/
+theorem translateCall_sound {F : Nat} (hc : CallsAgree (N := N) m.program fs fuel)
+    (ihE : ∀ env exp e ctx c ctx', translateExpr F env exp e ctx = .ok c ctx' →
+      Sim (N := N) m fs fuel env e c.code) :
+    ∀ env sp callee args top ctx c ctx', translateCall (F + 1) env sp callee args top ctx = .ok c ctx' →
+      Sim (N := N) m fs fuel env (.call sp callee args) c.code ∧
+        CallSim (N := N) m fs fuel env callee args c.code := by
+  intro env sp callee args top ctx c ctx' h
+  simp only [translateCall] at h
+  cases callee <;> simp at h
+  case ident sp' name =>
+    split at h
+    · simp at h
+    · simp at h
+      obtain ⟨fn, s₁, ⟨hfind, rfl⟩, h⟩ := h
+      split at h
+      · simp at h
+      · try simp only [bind_ok] at h
+        obtain ⟨_, s₂, hck, h⟩ := h
+        obtain rfl := checkThrowingCall_ok hck
+        split at h
+        · next hlen =>
+          have hle : args.length ≤ fn.params.length := by
+            first | exact hlen.1 | (simp at hlen; exact hlen.1)
+          -- The arguments, then the checks of their types, which do not
+          -- change what the call means.
+          simp only [bind_ok] at h
+          -- Fixing the type of an `undefined` argument keeps its value.
+          obtain ⟨first, s₂, hcodes, _, s₃, -, _, s₄, -, h⟩ := h
+          obtain ⟨codes, hcodes', hcode⟩ : ∃ codes : List Code, codes.map Code.value = first.map Code.value ∧
+              c.code = .call fn.ref (optArgs (Ty.unifyList [] fn.params (codes.map (·.type))) codes fn.params ++
+                List.drop args.length (fn.params.map fun _ => IR.Expr.undefined)) := by
+            obtain ⟨_, -, rfl⟩ := map_ok.mp h
+            exact ⟨_, fixArgs_value _ _, rfl⟩
+          -- What the call returns or throws, from which its value follows.
+          have hcall : ∀ (ρs ρo : Eval.Env N) r, Agree ρs ρo → Scoped m env ρs →
+              IR.Expr.evalCall fs fuel ρo fn.ref (optArgs (Ty.unifyList [] fn.params (codes.map (·.type)))
+                codes fn.params ++ List.drop args.length (fn.params.map fun _ => IR.Expr.undefined)) = some r →
+              Eval.evalCall m fuel ρs name args = some r := by
+            intro ρs ρo r ha hs hr
+            rw [out_evalCall, ← List.map_drop, evalList_append_undefined, evalList_optArgs, hcodes'] at hr
+            cases hx : IR.Expr.evalList fs fuel ρo (first.map Code.value) with
+            | none => simp [hx] at hr
+            | some vs =>
+              simp only [hx] at hr
+              have hargs := zip_sim_value m fs fuel ?hg args fn.params _ first _ hle hcodes
+                ρs ρo vs ha hs hx
+              · have hname : fn.name = name := by simpa using List.find?_some hfind
+                have hres := hs.2.1 fn (List.mem_of_find?_eq_some hfind)
+                rw [hname] at hres
+                rw [evalCall_eq, hargs]
+                simp only [Option.bind_some, hres, callS_append_undefined (hc _ _ _ hr)]
+              case hg =>
+                intro x t c₀ o c₁ hgo
+                intro ρs' ρo' w ha' hs' hw
+                rw [eval_value] at hw
+                exact ihE _ _ _ _ _ _ hgo ρs' ρo' w ha' hs' hw
+          refine ⟨fun ρs ρo v ha hs hv => ?_, fun ref outs hout => ⟨sp', name, rfl, ?_⟩⟩
+          · rw [hcode, out_call_toOption, bind_toOption] at hv
+            rw [eval_call_toOption, hcall ρs ρo _ ha hs hv]
+            rfl
+          · rw [hcode] at hout
+            injection hout with h1 h2
+            subst h1 h2
+            exact hcall
+        · simp at h
+  case member sp' obj test =>
+    cases obj
+    case ident sp'' oname =>
+      by_cases hn : oname = "Number"
+      · subst hn
+        simp at h
+        cases hN : env.has "Number" <;> simp [hN] at h
+        cases hT : numberTest? test <;> simp [hT] at h
+        rename_i form
+        match args, h with
+        | [arg], h =>
+          simp at h
+          obtain ⟨a, s₁, hta, h⟩ := h
+          split at h
+          · simp at h
+            obtain ⟨hcode, -⟩ := h
+            refine ⟨fun ρs ρo v ha hs hv => ?_, fun ref outs hout => by rw [← hcode] at hout; cases hout⟩
+            rw [← hcode] at hv
+            obtain ⟨n, hn, rfl⟩ := out_numberTest fs fuel hv
+            rw [eval_value] at hn
+            have harg := ihE _ _ _ _ _ _ hta ρs ρo _ ha hs hn
+            have hnone := hs.none hN
+            unfold numberTest? at hT
+            split at hT <;> cases hT <;>
+              simp [Eval.eval, hnone, harg, IR.NumberTest.apply]
+          · simp at h
+        | [], h => simp at h
+        | _ :: _ :: _, h => simp at h
+      · simp [hn] at h
+    all_goals simp at h
+
 theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
     (∀ env exp e ctx c ctx', translateExpr F env exp e ctx = .ok c ctx' →
       Sim (N := N) m fs fuel env e c.code) ∧
@@ -1540,8 +1679,9 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
       SimList (N := N) m fs fuel env es r.1) ∧
     (∀ env exp s es ctx c ctx', translateArray F env exp s es ctx = .ok c ctx' →
       Sim (N := N) m fs fuel env (.array s es) c.code) ∧
-    (∀ env s callee args ctx c ctx', translateCall F env s callee args ctx = .ok c ctx' →
-      Sim (N := N) m fs fuel env (.call s callee args) c.code) ∧
+    (∀ env s callee args top ctx c ctx', translateCall F env s callee args top ctx = .ok c ctx' →
+      Sim (N := N) m fs fuel env (.call s callee args) c.code ∧
+        CallSim (N := N) m fs fuel env callee args c.code) ∧
     (∀ env exp s ps ctx c ctx', translateObject F env exp s ps ctx = .ok c ctx' →
       Sim (N := N) m fs fuel env (.object s ps) c.code) ∧
     (∀ env s op l r ctx c ctx', translateBinary F env s op l r ctx = .ok c ctx' →
@@ -1890,7 +2030,7 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
           · simp at hm
         | none =>
           simp only [hm] at h
-          exact ihC _ _ _ _ _ _ _ h
+          exact (ihC _ _ _ _ _ _ _ _ h).1
       | object sp props =>
         simp only [translateExprCore] at h
         exact ihO _ _ _ _ _ _ _ h
@@ -1978,80 +2118,7 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
         subst hv
         have := ihL _ _ _ _ _ _ _ hel ρs ρo xs ha hs hx
         simp [Eval.eval, this]
-    · intro env sp callee args ctx c ctx' h
-      simp only [translateCall] at h
-      cases callee <;> simp at h
-      case ident sp' name =>
-        split at h
-        · simp at h
-        · simp at h
-          obtain ⟨fn, s₁, ⟨hfind, rfl⟩, h⟩ := h
-          split at h
-          · simp at h
-          · split at h
-            · next hlen =>
-              have hle : args.length ≤ fn.params.length := by
-                first | exact hlen.1 | (simp at hlen; exact hlen.1)
-              -- The arguments, then the checks of their types, which do not
-              -- change what the call means.
-              simp only [bind_ok] at h
-              -- Fixing the type of an `undefined` argument keeps its value.
-              obtain ⟨first, s₂, hcodes, _, s₃, -, _, s₄, -, h⟩ := h
-              obtain ⟨codes, hcodes', hcode⟩ : ∃ codes : List Code, codes.map Code.value = first.map Code.value ∧
-                  c.code = .call fn.ref (optArgs (Ty.unifyList [] fn.params (codes.map (·.type))) codes fn.params ++
-                    List.drop args.length (fn.params.map fun _ => IR.Expr.undefined)) := by
-                obtain ⟨_, -, rfl⟩ := map_ok.mp h
-                exact ⟨_, fixArgs_value _ _, rfl⟩
-              intro ρs ρo v ha hs hv
-              rw [hcode, out_call, ← List.map_drop, evalList_append_undefined, evalList_optArgs, hcodes'] at hv
-              cases hx : IR.Expr.evalList fs fuel ρo (first.map Code.value) with
-              | none => simp [hx] at hv
-              | some vs =>
-                simp only [hx, bind_toOption] at hv
-                have hargs := zip_sim_value m fs fuel ?hg args fn.params _ first _ hle hcodes
-                  ρs ρo vs ha hs hx
-                · have hname : fn.name = name := by simpa using List.find?_some hfind
-                  have hres := hs.2.1 fn (List.mem_of_find?_eq_some hfind)
-                  rw [hname] at hres
-                  rw [eval_call, hargs]
-                  simp only [Option.bind_some, hres, callS_append_undefined (hc _ _ _ hv)]
-                  rfl
-                case hg =>
-                  intro x t c₀ o c₁ hgo
-                  intro ρs' ρo' w ha' hs' hw
-                  rw [eval_value] at hw
-                  exact ihE _ _ _ _ _ _ hgo ρs' ρo' w ha' hs' hw
-            · simp at h
-      case member sp' obj test =>
-        cases obj
-        case ident sp'' oname =>
-          by_cases hn : oname = "Number"
-          · subst hn
-            simp at h
-            cases hN : env.has "Number" <;> simp [hN] at h
-            cases hT : numberTest? test <;> simp [hT] at h
-            rename_i form
-            match args, h with
-            | [arg], h =>
-              simp at h
-              obtain ⟨a, s₁, hta, h⟩ := h
-              split at h
-              · simp at h
-                obtain ⟨hcode, -⟩ := h
-                intro ρs ρo v ha hs hv
-                rw [← hcode] at hv
-                obtain ⟨n, hn, rfl⟩ := out_numberTest fs fuel hv
-                rw [eval_value] at hn
-                have harg := ihE _ _ _ _ _ _ hta ρs ρo _ ha hs hn
-                have hnone := hs.none hN
-                unfold numberTest? at hT
-                split at hT <;> cases hT <;>
-                  simp [Eval.eval, hnone, harg, IR.NumberTest.apply]
-              · simp at h
-            | [], h => simp at h
-            | _ :: _ :: _, h => simp at h
-          · simp [hn] at h
-        all_goals simp at h
+    · exact translateCall_sound m fs fuel hc ihE
     · intro env exp sp props ctx c ctx' h
       simp only [translateObject] at h
       simp at h

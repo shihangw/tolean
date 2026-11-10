@@ -241,7 +241,7 @@ theorem translateFunction_ok {sp : Span} {ex : Bool} {name : String} {tps : List
     obtain ⟨rfl, s₁₀, hbody⟩ := isolated_ok hbody
     have hg := hps.2.1
     simp only [globals, Prod.mk.injEq] at hg
-    refine ⟨rfl, htaken, rfl, rfl, hfresh, _, rfl, rfl, rfl, rfl, lp, r.lean, out, rfl, ?_, _, env, _, _, hbody,
+    refine ⟨rfl, htaken, rfl, rfl, hfresh, _, rfl, rfl, rfl, rfl, lp, _, out, rfl, ?_, _, env, _, _, hbody,
       hg.1, hg.2, fun x => ?_⟩
     · simpa using hps.2.2
     · rw [hps.1 x]; simp [Env.has, Env.lookup]

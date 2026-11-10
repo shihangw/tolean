@@ -534,11 +534,12 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
   -- (`evalTop`).
   | .call _ (.ident _ name) args => do (← evalCall m fuel env name args).toOption
   -- `new Error(message)` with a string message (`Error`, ECMA-262
-  -- §20.5.1.1): an error object whose own property `message` is the string.
-  -- A variable, a function or an enum of the program named `Error` would
-  -- hide the global, so the model gives no value then.
+  -- §20.5.1.1): an error object whose own property `message` is the string,
+  -- unless a variable hides `Error`. As for `NaN`, a function or an enum of
+  -- the program named `Error` would hide the global in JS, and this rule
+  -- reads the global; the translator refuses such a name.
   | .new _ "Error" [] [msg] => do
-    if (env.lookup "Error").isSome || (resolve m "Error").isSome || (resolveEnum m "Error").isSome then none
+    if (env.lookup "Error").isSome then none
     let .str s ← eval m fuel env msg | none
     return .error "Error" [("message", .str s)]
   | _ => none

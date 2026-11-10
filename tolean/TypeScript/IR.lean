@@ -167,8 +167,8 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
     | some f => s!"{argument r}.{f}"
     | Option.none =>
       s!"(match {k} with{String.join (keys.map fun f => s!" | {case f} => {argument r}.{f}")})"
-  | .pure, [a] => s!"({leanName names "pure"} {argument a})"
-  | .error, [m] => s!"({leanName names "JSError.mk"} {argument m})"
+  | .pure, [a] => s!"({tolean.IR.wrapped (leanName names "pure") a})"
+  | .error, [m] => s!"({tolean.IR.wrapped (leanName names "JSError.mk") m})"
   | _, _ => ""
 
 instance : tolean.IR.PrintOp ExprExt := ⟨ExprExt.print⟩

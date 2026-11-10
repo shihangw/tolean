@@ -835,7 +835,7 @@ def Body.lines (names : Names) : Body T E → List String
         s!"    (fun {foldBinders names ns element info} =>"] ++
         indentBy "      " (bodyLines.dropLast ++ [lastLine ++ ")"]) ++
         [s!"    {tuple ns} {items.print names}"] ++ rest.lines names
-  | .throw e => [s!"throw {argument (e.print names)}"]
+  | .throw e => [wrapped "throw" (e.print names)]
   | .bind name ref args rest =>
     s!"{(Expr.call ref args).print names} >>= fun {name} =>" :: rest.lines names
 
