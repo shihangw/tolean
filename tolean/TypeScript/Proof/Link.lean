@@ -377,7 +377,10 @@ macro_rules
         Eval.objectPrototypeNames, List.lookup, DeclRef.beq_def, -List.map_map,
         -- A map or set read, such as the initial value of a `reduce`, must
         -- reach a value before a fold lemma can rewrite the call that uses it.
-        Eval.mapFind, Eval.setHas,
+        -- So must the map or set that the read looks in, when `new Map(items)`
+        -- or `new Set(items)` makes it.
+        Eval.mapFind, Eval.setHas, Eval.mapOfItems, Eval.setOfItems, Eval.mapSet, Eval.setAdd,
+        Eval.sameKey,
         -Bool.if_true_left, -Bool.if_false_right, -Bool.if_false_left, -Bool.if_true_right, $defs,*]
       all_goals repeat' (split_find <;> simp [-List.map_map, ← List.map_reverse, $defs,*])
       all_goals repeat' (split <;> (try simp_all [bindState, eqVal, tolean.IR.IntOp.apply,

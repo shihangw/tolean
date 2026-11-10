@@ -11,4 +11,13 @@ def firstOf {N : Type} [JSNumber N] (xs : List Bool) : Bool :=
 def anyOf {N : Type} [JSNumber N] (xs : List Bool) : Bool :=
   (List.foldl (fun (a : Bool) (x : Bool) => (a || x)) ((JSSet.has ((JSSet.empty : JSSet Int)) ((0 : Int)))) xs)
 
+def anyOfOne {N : Type} [JSNumber N] (xs : List Bool) : Bool :=
+  (List.foldl (fun (a : Bool) (x : Bool) => (a || x)) ((JSSet.has (((JSSet.ofList (([(0 : Int)] : List Int))) : JSSet Int)) ((0 : Int)))) xs)
+
+def firstOfEmptyItems {N : Type} [JSNumber N] (xs : List Bool) : Bool :=
+  (List.foldl (fun (a : Bool) (x : Bool) => a) ((JSSet.has (((JSSet.ofList (([] : List Int))) : JSSet Int)) ((0 : Int)))) xs)
+
+def anyOfEntry {N : Type} [JSNumber N] (xs : List Bool) : Bool :=
+  (List.foldl (fun (a : Bool) (x : Bool) => (a || x)) ((JSMap.has (((JSMap.ofList (([((0 : Int), true)] : List (Int × Bool)))) : (JSMap Int Bool))) ((0 : Int)))) xs)
+
 end Test
