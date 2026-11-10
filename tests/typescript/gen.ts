@@ -135,7 +135,9 @@ export class Gen {
         case 'boolean':
           return this.pick(['true', 'false']);
         case 'string':
-          return this.pick(["''", "'a'", "'ab'", "'é'", "'😀'"]);
+          // U+FFFF is above the code unit D83D that starts '😀', so the two
+          // order one way by code unit, as JS does, and the other by code point.
+          return this.pick(["''", "'a'", "'ab'", "'é'", "'😀'", "'\\uFFFF'"]);
         case 'nullable':
           return this.chance(0.5) ? 'null' : this.expr(t.of, vars, 0);
         case 'optional':
@@ -243,10 +245,11 @@ export class Gen {
               `'${this.pick(['bigint', 'number', 'boolean', 'string', 'object'])}'`,
           );
         }
-        // Not two literals: tsc refuses `'a' === 'b'` (TS2367).
+        // Not two literals: tsc refuses `'a' === 'b'` (TS2367). Strings
+        // order by their code units.
         const strings = [...readable.filter((v) => v.ty.k === 'string').map((v) => v.name), ...this.fieldReads(STRING, readable)];
         if (strings.length > 0) {
-          options.push(() => `${this.pick(strings)} ${this.pick(['===', '!=='])} ${this.expr(STRING, vars, d)}`);
+          options.push(() => `${this.pick(strings)} ${this.pick(['===', '!==', '<', '<=', '>', '>='])} ${this.expr(STRING, vars, d)}`);
         }
         if (nullable.length > 0) {
           options.push(() => {
@@ -334,9 +337,12 @@ export class Gen {
     if (flags.length > 0 && this.chance(0.5)) {
       return this.pick(flags).name;
     }
-    const u = this.pick([BIGINT, NUMBER]);
-    const numeric = vars.filter((v) => !v.owned && same(v.ty, u));
-    const left = numeric.length > 0 ? this.pick(numeric).name : this.expr(u, vars, depth);
+    // Strings order by their code units, so a test may compare a string
+    // local with a string.
+    const strings = vars.filter((v) => !v.owned && v.ty.k === 'string');
+    const u = strings.length > 0 && this.chance(0.3) ? STRING : this.pick([BIGINT, NUMBER]);
+    const ordered = vars.filter((v) => !v.owned && same(v.ty, u));
+    const left = ordered.length > 0 ? this.pick(ordered).name : this.expr(u, vars, depth);
     return `${left} ${this.pick(['<', '<=', '>', '>='])} ${this.expr(u, vars, depth)}`;
   }
 

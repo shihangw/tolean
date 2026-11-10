@@ -113,6 +113,51 @@ theorem decode_flatMap_utf16 (cs : List Char) : decode (cs.flatMap utf16) = cs :
     simpa using this
   · intro h; rw [h]
 
+/-- IsLessThan on two lists of code units (ECMA-262 §7.2.13, step 3): the
+first code unit where the lists differ decides, and when one list is a prefix
+of the other, the shorter one is less. -/
+def unitsLt : List UInt16 → List UInt16 → Bool
+  | cx :: px, cy :: py => if cx < cy then true else if cy < cx then false else unitsLt px py
+  | [], _ :: _ => true
+  | _, [] => false
+
+/-- `a < b` on two strings, by IsLessThan (ECMA-262 §7.2.13). It compares
+code units, not code points, so U+FFFF is greater than U+10000, which starts
+with the code unit D800. -/
+def lt (a b : JSString) : Bool := unitsLt a.units b.units
+
+/-- `a <= b` on two strings: `b < a` is false (ECMA-262 §13.10.1). IsLessThan
+never gives `undefined` on two strings, so this is all of the rule. -/
+def le (a b : JSString) : Bool := !lt b a
+
+/-- `unitsLt` is Lean's lexicographic order on lists of code units. -/
+theorem unitsLt_iff (a b : List UInt16) : unitsLt a b = true ↔ a < b := by
+  induction a generalizing b with
+  | nil => cases b <;> simp [unitsLt, List.nil_lt_cons, List.not_lt_nil]
+  | cons x xs ih =>
+    cases b with
+    | nil => simp [unitsLt, List.not_lt_nil]
+    | cons y ys =>
+      rw [List.cons_lt_cons_iff, unitsLt, ← ih]
+      by_cases hxy : x < y
+      · simp [hxy]
+      · by_cases hyx : y < x
+        · have hne : x ≠ y := by rintro rfl; exact hxy hyx
+          simp [hxy, hyx, hne]
+        · have heq : x = y := by
+            simp only [UInt16.lt_iff_toNat_lt] at hxy hyx
+            exact UInt16.toNat_inj.mp (by omega)
+          simp [heq]
+
+/-- `a < b` on strings is Lean's lexicographic order on their code units. A
+claim can use the lemmas about `List.lt` with it. -/
+theorem lt_iff (a b : JSString) : a.lt b = true ↔ a.units < b.units := unitsLt_iff _ _
+
+/-- `a <= b` on strings is Lean's `≤` on their code units. -/
+theorem le_iff (a b : JSString) : a.le b = true ↔ a.units ≤ b.units := by
+  rw [← List.not_lt, ← lt_iff]
+  simp [le]
+
 end JSString
 
 end tolean.TypeScript

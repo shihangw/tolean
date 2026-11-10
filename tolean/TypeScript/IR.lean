@@ -67,6 +67,10 @@ inductive ExprExt where
   `a?.f.g`, which is `undefined` when `a` is `null` or `undefined`. The
   fields before the last are required. -/
   | optField (path : List String) (bind : Bool)
+  /-- `(JSString.lt a b)`, or `(JSString.le a b)` when `le` is true: `a < b`
+  or `a <= b` on strings. The translator swaps the operands for `>` and
+  `>=`. -/
+  | stringOrder (le : Bool)
   /-- `match k with | K.a => r.a | …`, on `r` and `k`: `r[k]`, where `r` is a
   `Record<K, V>` with the keys `keys`, and `K` is the literal union `key`. -/
   | recordGet (key : DeclRef) (keys : List String)
@@ -144,6 +148,8 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
   | .numberTest .isSafeInteger, [a] => s!"({js}.toSafeInt {argument a}).isSome"
   | .numberTest .isNaN, [a] => s!"({js}.isNaN {argument a})"
   | .numberTest .isFinite, [a] => s!"({js}.isFinite {argument a})"
+  | .stringOrder le, [a, b] =>
+    s!"({leanName names "JSString"}.{if le then "le" else "lt"} {argument a} {argument b})"
   | .undefined, _ => leanName names "none"
   | .isUndefined, [a] => s!"{argument a}.isNone"
   | .isDefined, [a] => s!"{argument a}.isSome"

@@ -210,9 +210,10 @@ def getPath (fields : List (String × Val N)) : List String → Option (Val N)
 
 /-- A binary operator on two values, when neither operand short-circuits.
 Bigint `/` and `%` truncate toward zero and throw on a zero divisor
-(`BigInt::divide`, `BigInt::remainder`). On numbers, `a > b` is `b < a` and
-`a >= b` is `b <= a`, as `IsLessThan` evaluates them (ECMA-262 §13.10.1).
-The subset has no `/` or `%` on numbers. -/
+(`BigInt::divide`, `BigInt::remainder`). On numbers and on strings, `a > b`
+is `b < a` and `a >= b` is `b <= a`, as `IsLessThan` evaluates them
+(ECMA-262 §13.10.1). Strings compare by their code units (§7.2.13). The
+subset has no `/` or `%` on numbers. -/
 def binary : BinOp → Val N → Val N → Option (Val N)
   | .add, .int a, .int b => some (.int (a + b))
   | .sub, .int a, .int b => some (.int (a - b))
@@ -230,6 +231,10 @@ def binary : BinOp → Val N → Val N → Option (Val N)
   | .gt, .num a, .num b => some (.bool (JSNumber.lt b a))
   | .le, .num a, .num b => some (.bool (JSNumber.le a b))
   | .ge, .num a, .num b => some (.bool (JSNumber.le b a))
+  | .lt, .str a, .str b => some (.bool (a.lt b))
+  | .gt, .str a, .str b => some (.bool (b.lt a))
+  | .le, .str a, .str b => some (.bool (a.le b))
+  | .ge, .str a, .str b => some (.bool (b.le a))
   | .strictEq, a, b => (strictEq a b).map .bool
   | .strictNe, a, b => (strictEq a b).map (.bool ∘ not)
   | .looseEq, a, b => (looseEq a b).map .bool
