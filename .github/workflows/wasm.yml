@@ -31,10 +31,17 @@ jobs:
           extra_nix_config: |
             accept-flake-config = true
 
+      # The same cache as `check` in ci.yml, which saves it just before this
+      # job starts. The path list must match ci.yml's exactly: GitHub derives
+      # a cache's version from its paths, so with a different list the key
+      # below names another cache, and this job rebuilds Lean from an old one.
       - name: Cache Lean build output
         uses: actions/cache@v5
         with:
-          path: .lake
+          path: |
+            .lake
+            tests/chain/.lake
+            playground/examples/*/.lake
           key: lake-${{ runner.os }}-${{ hashFiles('lean-toolchain', 'lake-manifest.json', 'lakefile.toml', '**/*.lean') }}
           restore-keys: lake-${{ runner.os }}-
 
