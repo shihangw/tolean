@@ -64,7 +64,7 @@ The parser reads `new` only before a name and its arguments in parentheses,
 such as `new Map<string, bigint>()`. It refuses `new a.b()`, `new.target`
 and `new C` without arguments. It also refuses type arguments that start on
 the line after the name, because it reads `C<A>` as a type, and a type ends
-at a line break before `<`. The translator refuses every `new` for now.
+at a line break before `<`. The translator accepts only `new Map()`.
 
 In the declaration at the start of a counted `for`, the parser refuses an `in`
 operator unless parentheses, braces, the arguments of a call or an index hold
@@ -386,6 +386,9 @@ the file, the line and the reason. It never approximates.
 | `[a, b]` where the context expects a tuple, such as a return value | `(a, b)`, with each element translated where its own type is expected |
 | `t[0]`, an element of a tuple at an index that is a number literal | `t.1`, and `t.2.1` or `t.2.2` for the second or the last of three, as Lean nests the product to the right |
 | `const xs: Array<T> = [...]`, then `xs.push(e)`; `xs` read only in the `return` | `let xs := xs ++ [e]` |
+| `Map<K, V>` and `ReadonlyMap<K, V>`, where `K` is `bigint`, `string`, `boolean` or a literal union of strings | `JSMap K V` (`tolean/TypeScript/Map.lean`): the list of entries, in the order that each key was first set, as ECMA-262 keeps them (§24.1). A key is found with `=`, which is SameValueZero on these key types. |
+| `const m = new Map<K, V>()`, or `const m: Map<K, V> = new Map()`, then `m.set(k, v)` and `m.delete(k)` | `let m := (JSMap.empty : JSMap K V)`, then `let m := JSMap.set m k v` and `let m := JSMap.delete m k`. The function owns the map, as it owns an array that it pushes to. |
+| `m.get(k)`, `m.has(k)` and `m.size` | `JSMap.get? m k`, `JSMap.has m k` and `JSNumber.ofSafeInt (JSMap.size m)`. `get` gives `undefined` for a key that the map does not have, so its value has the type of an optional field: `m.get(k) ?? d` is `Option.getD (JSMap.get? m k) d`. |
 | `for (const x of xs) { … }` | `List.foldl` over the tuple of locals the body changes |
 | `if (c) continue;` at the top of a loop body, or a branch of that `if` that ends in `continue` on every path | `if c then (x, y) else …`, where the rest of the body is the `else` branch, as after an `if` that returns. A test of `null` or of a tag narrows the local for the rest of the body. |
 | `break` in a `for (const x of xs)` loop, in the same places as `continue` | `Id.run (forIn xs (x, y) (fun e (x, y) => …))`. A `break` is `ForInStep.done (x, y)`, which ends the loop, and the end of the body or a `continue` is `ForInStep.yield (x, y)`. A loop without a `break` stays a `List.foldl`. |
@@ -453,6 +456,17 @@ Tolean rejects these, among others:
   for every method but `map` it must give a boolean. Tolean also refuses
   `find` on an array of nullable values, because Lean's `none` would stand
   for both `null` and `undefined`.
+- A map key of type `number`, which can be `NaN` or `-0`, and a key of an
+  interface type, which a map compares by identity. Tolean also refuses
+  `m.set(k, v)` and `m.delete(k)` on a map that the function did not make with
+  `const m = new Map()`, and a read of such an owned map anywhere except
+  through `get`, `has` and `size` or in the return value. It refuses
+  `new Map(entries)`, `new Map()` without the types of its keys and values,
+  `get` on a map of nullable values, and every other `new`. A declaration
+  named `Map` would hide the global, so Tolean refuses it too. Iteration over
+  a map is not translated yet. A file that uses a map gets no certificate
+  yet, because the certifier has no encoder for a map; `program_sound`
+  covers it.
 - An array declared with `let` and the type `Array<T>`. An array that the
   function pushes to must be a `const`; for a value, use `ReadonlyArray<T>`.
   An empty `[]` needs a type from its context, and the elements of a literal

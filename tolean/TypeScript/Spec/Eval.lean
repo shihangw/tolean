@@ -42,6 +42,9 @@ inductive Val (N : Type) where
   | undefined
   | list (items : List (Val N))
   | obj (fields : List (String × Val N))
+  /-- A `Map`: its entries, in the order that `set` first added each key
+  (ECMA-262 §24.1). -/
+  | map (entries : List (Val N × Val N))
   /-- An error object: the name of the class that made it, such as
   `"Error"`, and its own properties. `new Error(m)` has one, `message`. -/
   | error (cls : String) (fields : List (String × Val N))
@@ -55,7 +58,7 @@ def Val.truthy : Val N → Bool
   | .bool b => b
   | .str s => !s.isEmpty
   | .null | .undefined => false
-  | .list _ | .obj _ | .error _ _ => true
+  | .list _ | .obj _ | .map _ | .error _ _ => true
 
 /-- The result of `typeof` (ECMA-262 §13.5.3.1) on the values of the
 subset. `null` is `"object"`, and so are an array and an object, which are
@@ -66,7 +69,7 @@ def Val.typeOf : Val N → String
   | .bool _ => "boolean"
   | .str _ => "string"
   | .undefined => "undefined"
-  | .null | .list _ | .obj _ | .error _ _ => "object"
+  | .null | .list _ | .obj _ | .map _ | .error _ _ => "object"
 
 /-- The variables in scope, innermost first. -/
 abbrev Env (N : Type) := List (String × Val N)
@@ -152,13 +155,13 @@ def strictEq : Val N → Val N → Option Bool
   | .null, .null => some true
   | .undefined, .undefined => some true
   | .undefined, .int _ | .undefined, .num _ | .undefined, .bool _ | .undefined, .str _
-  | .undefined, .null | .undefined, .list _ | .undefined, .obj _ | .undefined, .error _ _ => some false
+  | .undefined, .null | .undefined, .list _ | .undefined, .obj _ | .undefined, .map _ | .undefined, .error _ _ => some false
   | .int _, .undefined | .num _, .undefined | .bool _, .undefined | .str _, .undefined
-  | .null, .undefined | .list _, .undefined | .obj _, .undefined | .error _ _, .undefined => some false
+  | .null, .undefined | .list _, .undefined | .obj _, .undefined | .map _, .undefined | .error _ _, .undefined => some false
   | .null, .int _ | .null, .num _ | .null, .bool _ | .null, .str _ | .null, .list _
-  | .null, .obj _ | .null, .error _ _ => some false
+  | .null, .obj _ | .null, .map _ | .null, .error _ _ => some false
   | .int _, .null | .num _, .null | .bool _, .null | .str _, .null | .list _, .null
-  | .obj _, .null | .error _ _, .null => some false
+  | .obj _, .null | .map _, .null | .error _ _, .null => some false
   | _, _ => none
 
 /-- `IsLooselyEqual` (ECMA-262 §7.2.14) when one operand is `null` or
@@ -244,6 +247,36 @@ def binary : BinOp → Val N → Val N → Option (Val N)
 def elementAt (items : List (Val N)) : Option Int → Val N
   | some i => if 0 ≤ i then items[i.toNat]?.getD .undefined else .undefined
   | none => .undefined
+
+/-- SameValueZero (ECMA-262 §7.2.11), which a `Map` uses to compare keys, on
+the keys of the subset: bigints, booleans and strings. On these it is
+`IsStrictlyEqual`. A key of another type leaves the subset. -/
+def sameKey : Val N → Val N → Option Bool
+  | .int a, .int b => some (decide (a = b))
+  | .bool a, .bool b => some (decide (a = b))
+  | .str a, .str b => some (decide (a = b))
+  | _, _ => none
+
+/-- The value of the key `k` in the entries of a map, or `none` when no entry
+has the key (`Map.prototype.get`, ECMA-262 §24.1.3.6). -/
+def mapFind : List (Val N × Val N) → Val N → Option (Option (Val N))
+  | [], _ => some none
+  | (k', v) :: rest, k => do if ← sameKey k' k then return some v else mapFind rest k
+
+/-- The entries after `Map.prototype.set` (ECMA-262 §24.1.3.9): the entry of
+`k` gets the value `v` in its place, or a new entry goes last when no entry
+has the key. -/
+def mapSet : List (Val N × Val N) → Val N → Val N → Option (List (Val N × Val N))
+  | [], k, v => some [(k, v)]
+  | (k', v') :: rest, k, v => do
+    if ← sameKey k' k then return (k', v) :: rest else return (k', v') :: (← mapSet rest k v)
+
+/-- The entries after `Map.prototype.delete` (ECMA-262 §24.1.3.3), which
+removes the entry of `k`. The other entries keep their order. -/
+def mapDelete : List (Val N × Val N) → Val N → Option (List (Val N × Val N))
+  | [], _ => some []
+  | (k', v') :: rest, k => do
+    if ← sameKey k' k then return rest else return (k', v') :: (← mapDelete rest k)
 
 /-- What a statement list does: it runs to its end with the variables it
 leaves, or it ends the function, or a `break` or a `continue` ends it with the
@@ -439,6 +472,10 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     else do
       match ← eval m fuel env obj with
       | .obj fields => getProp fields name
+      -- `m.size` (ECMA-262 §24.1.3.10): the number of entries. A map has
+      -- fewer than 2^53 entries, so the number is a safe integer.
+      | .map entries =>
+        if name == "size" then some (.num (JSNumber.ofSafeInt entries.length)) else none
       | _ => none
   -- `obj?.name` is `undefined` when `obj` is `null` or `undefined`
   -- (ECMA-262 §13.3.9.1).
@@ -529,10 +566,23 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
       return .bool (← evalFind m fuel env p.name body false items).isNone
     else if method == "find" then return (← evalFind m fuel env p.name body true items).getD .undefined
     else none
+  -- `m.get(k)` and `m.has(k)` on a map (ECMA-262 §24.1.3.6 and §24.1.3.7).
+  -- `get` gives `undefined` for a key that the map does not have.
+  | .call _ (.member _ recv method) [arg] => do
+    let .map entries ← eval m fuel env recv | none
+    let found ← mapFind entries (← eval m fuel env arg)
+    if method == "get" then return found.getD .undefined
+    else if method == "has" then return .bool found.isSome
+    else none
   -- A call that throws inside an expression gives no value. Only a call that
   -- is the whole value of a declaration or a `return` passes its throw on
   -- (`evalTop`).
   | .call _ (.ident _ name) args => do (← evalCall m fuel env name args).toOption
+  -- `new Map()` (ECMA-262 §24.1.1.1): a map without entries, unless a
+  -- variable hides the global `Map`. A declaration of the module named `Map`
+  -- would hide it too, as one named `Number` would hide `Number`, and the
+  -- translator refuses both.
+  | .new _ "Map" _ [] => if (env.lookup "Map").isSome then none else some (.map [])
   -- `new Error(message)` with a string message (`Error`, ECMA-262
   -- §20.5.1.1): an error object whose own property `message` is the string,
   -- unless a variable hides `Error`. As for `NaN`, a function or an enum of
@@ -656,6 +706,19 @@ def execStmt (m : Scope) (fuel : Nat) (env : Env N) : Stmt → Option (Outcome N
   | .exprStmt _ (.call _ (.member _ (.ident _ name) "push") [arg]) => do
     let .list items ← env.lookup name | none
     return .normal (env.set name (.list (items ++ [← eval m fuel env arg])))
+  -- `m.set(k, v)` and `m.delete(k)` (ECMA-262 §24.1.3.9 and §24.1.3.3) on a
+  -- map that the function owns, as for `push`: nothing else can see the
+  -- map, so the change shows only in the variable. The translator checks
+  -- that the function owns the map, and this rule does not: a second name for
+  -- the map would keep the old value, where JS shares one map.
+  | .exprStmt _ (.call _ (.member _ (.ident _ name) "set") [key, value]) => do
+    let .map entries ← env.lookup name | none
+    let k ← eval m fuel env key
+    let v ← eval m fuel env value
+    return .normal (env.set name (.map (← mapSet entries k v)))
+  | .exprStmt _ (.call _ (.member _ (.ident _ name) "delete") [key]) => do
+    let .map entries ← env.lookup name | none
+    return .normal (env.set name (.map (← mapDelete entries (← eval m fuel env key))))
   | .exprStmt _ (.assign _ .assign (.ident _ name) value) => do
     return .normal (env.set name (← eval m fuel env value))
   -- `x ??= e` (`LogicalAssignment`, ECMA-262 §13.15.2): `e` runs, and its

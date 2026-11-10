@@ -59,6 +59,7 @@ partial def toJson : Val Float → Json
   | .undefined => Json.mkObj [("undefined", Json.bool true)]
   | .list xs => Json.arr (xs.map toJson).toArray
   | .obj fs => Json.mkObj [("object", Json.arr (fs.map fun (k, v) => Json.arr #[Json.str k, toJson v]).toArray)]
+  | .map es => Json.mkObj [("map", Json.arr (es.map fun (k, v) => Json.arr #[toJson k, toJson v]).toArray)]
   | .error cls fs =>
     Json.mkObj [("error", Json.arr #[Json.str cls,
       Json.arr (fs.map fun (k, v) => Json.arr #[Json.str k, toJson v]).toArray])]
@@ -77,6 +78,11 @@ partial def ofJson (j : Json) : Except String (Val Float) :=
     if let .ok (s : String) := j.getObjValAs? String "number" then
       let some bits := s.toNat? | throw s!"not the bits of a double: {s}"
       return .num (Float.ofBits (UInt64.ofNat bits))
+    if let .ok (entries : Array Json) := j.getObjValAs? (Array Json) "map" then
+      let entries ← entries.mapM fun e => do
+        let #[k, v] := (← e.getArr?) | throw "a map entry is not a [key, value] pair"
+        return (← ofJson k, ← ofJson v)
+      return .map entries.toList
     let fields ← j.getObjValAs? (Array Json) "object"
     let fields ← fields.mapM fun f => do
       let #[k, v] := (← f.getArr?) | throw "an object field is not a [key, value] pair"

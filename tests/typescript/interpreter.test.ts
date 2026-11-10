@@ -9,7 +9,11 @@
  * things:
  *
  * - When the interpreter gives a value, Node returns the same value. This
- *   holds for every program that the parser accepts, in the subset or not.
+ *   holds for every program that the parser accepts, in the subset or not,
+ *   except for two gaps that the plan for pure TypeScript lists and the
+ *   random programs do not reach: an assignment to the variable of a
+ *   `for (const x of xs)` loop, and a change to an array, a map or a set
+ *   that another name holds.
  * - When the interpreter says that a call throws a value, Node throws the
  *   same value. An `Error` compares by its class and its message.
  * - When the translator accepts the program and the interpreter gives no

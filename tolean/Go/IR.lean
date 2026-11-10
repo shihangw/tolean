@@ -49,6 +49,9 @@ instance : tolean.IR.PrintTy TyExt where
   print _ t := nomatch t
   namesParam _ t := nomatch t
   binders _ := ""
+  -- The Go translator writes no map type yet. A Go map has no order, unlike
+  -- the shared IR's map, so it will need a model of its own.
+  map names := leanName names "Std.HashMap"
 
 /-- An operation on its printed arguments. The translator gives each one the
 number of arguments it takes, and the printer writes nothing for others. -/
