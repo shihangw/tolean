@@ -217,10 +217,17 @@ def Expr.wfAt (T : Edition) : Level → Expr → Bool
   | .primary, _ => false
 termination_by level e => (sizeOf e, level.rank)
 
+/-- `e` is an element of an array literal, or an argument, that
+`parseElement` reads: `...v` or `v`, where `parseAssign` reads `v`. -/
+def Expr.elemWF (T : Edition) : Expr → Bool
+  | .spread _ v => v.wfAt T .assign
+  | e => e.wfAt T .assign
+termination_by e => (sizeOf e, 7)
+
 def Expr.allWF (T : Edition) : List Expr → Bool
   | [] => true
-  | e :: es => e.wfAt T .assign && Expr.allWF T es
-termination_by es => (sizeOf es, 7)
+  | e :: es => e.elemWF T && Expr.allWF T es
+termination_by es => (sizeOf es, 8)
 
 def Property.wf (T : Edition) : Property → Bool
   | .shorthand _ name => exprName name
@@ -266,6 +273,7 @@ def Expr.afterOK (after : List TokenKind) : Expr → Bool
   | .array _ elems => Expr.afterOKList (.punct "]" :: after) elems
   | .object _ props => Property.afterOKList (.punct "}" :: after) props
   | .new _ _ _ args => Expr.afterOKList (.punct ")" :: after) args
+  | .spread _ e => e.afterOK after
   | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => true
 
 /-- `afterOK` for each of `items`, with a `,` between two of them, which
@@ -461,7 +469,7 @@ theorem Touching.cons_one {ts : List Token} {k : TokenKind} {ws : List Word} (h 
 /-- A token that can start an expression. -/
 def startsExpr : TokenKind → Bool
   | .ident _ | .number _ | .bigint _ | .string _ | .keyword _ => true
-  | .punct p => p ∈ ["(", "[", "{", "!", "-", "+", "~", "++", "--"]
+  | .punct p => p ∈ ["(", "[", "{", "!", "-", "+", "~", "++", "--", "..."]
   | .eof => false
 
 /-- An expression has tokens, and the first can start an expression. -/
@@ -476,6 +484,7 @@ theorem Expr.first : ∀ e : Expr, ∃ k, e.tokens.head? = some k ∧ startsExpr
   | .object _ ps => ⟨.punct "{", by simp [Expr.tokens, Expr.words, enclose, punctWord], by decide⟩
   | .paren _ i => ⟨.punct "(", by simp [Expr.tokens, Expr.words, punctWord], by decide⟩
   | .new .. => ⟨.keyword "new", by simp [Expr.tokens, Expr.words, keywordWord], rfl⟩
+  | .spread .. => ⟨.punct "...", by simp [Expr.tokens, Expr.words, punctWord], by decide⟩
   | .arrow _ parens ps _ => by
     rcases arrowParams_cases parens ps with ⟨p, _, _, h⟩ | h
     · exact ⟨.ident p.name, by simp [Expr.tokens, Expr.words, h, identWord], rfl⟩
@@ -698,6 +707,8 @@ def Expr.height : Expr → Nat
   | .new _ _ _ as => Expr.heightOf as + 1
   | .cond _ t a b => max t.height (max a.height b.height) + 1
   | .arrow _ _ _ b | .asConst _ b | .satisfies _ b _ => b.height + 1
+  -- `parseElement` reads the value of a spread with the fuel it gets.
+  | .spread _ e => e.height
   | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => 0
 
 def Expr.heightOf : List Expr → Nat
@@ -933,16 +944,10 @@ theorem Expr.start {close : String} {refuse : Token → ParseM Unit} (hclose : c
   simp at hclose
   rcases hclose with rfl | rfl | rfl <;> simp [startsExpr] at hs
 
-theorem refuseArgument_ok (t : Token) (s : ParseState) (h : startsExpr t.kind = true) :
-    Parse.refuseArgument t s = .ok () s := by
-  have : t.kind ≠ .punct "..." := by intro e; rw [e] at h; simp [startsExpr] at h
-  simp [Parse.refuseArgument, Token.isPunct, this, pure, EStateM.pure]
-
 theorem refuseElement_ok (t : Token) (s : ParseState) (h : startsExpr t.kind = true) :
     Parse.refuseElement t s = .ok () s := by
-  have h1 : t.kind ≠ .punct "..." := by intro e; rw [e] at h; simp [startsExpr] at h
   have h2 : t.kind ≠ .punct "," := by intro e; rw [e] at h; simp [startsExpr] at h
-  simp [Parse.refuseElement, Token.isPunct, h1, h2, bind, EStateM.bind, pure, EStateM.pure]
+  simp [Parse.refuseElement, Token.isPunct, h2, pure, EStateM.pure]
 
 /-- A `,` or a `close` ends an assignment expression. -/
 theorem endsItem_assign {close : String} (hclose : close ∈ [")", "]", "}"]) {rest : List Token}
@@ -979,6 +984,110 @@ theorem Parse.ite_guard {β : Type} {c : Bool} {A : ParseM PUnit} {k : PUnit →
   split
   · rename_i h; exact Parse.bind_eq (hA h)
   · rfl
+
+/-! ### Elements and arguments -/
+
+/-- `e` starts with the token that `o` starts with. -/
+theorem head_of_first {e o : Expr} (he : ∀ k, o.tokens.head? = some k → e.tokens.head? = some k)
+    (ih : o.tokens.head? ≠ some (.punct "...")) : e.tokens.head? ≠ some (.punct "...") := by
+  obtain ⟨k, hk, -⟩ := Expr.first o
+  rw [he k hk]
+  rwa [hk] at ih
+
+/-- No well-formed expression starts with `...`. `wfAt` refuses a spread at
+every level, and only `parseElement` reads one. -/
+theorem Expr.head_wf {T : Edition} : ∀ (e : Expr) (level : Level), e.wfAt T level = true →
+    e.tokens.head? ≠ some (.punct "...")
+  | .spread .., level, h => by cases level <;> simp [Expr.wfAt] at h
+  | .member _ o _, level, h | .index _ o _, level, h | .call _ o _, level, h
+  | .optMember _ o _, level, h | .postfix _ _ o, level, h => by
+    have ho : o.wfAt T .lhs = true := by cases level <;> simp_all [Expr.wfAt]
+    exact head_of_first (fun k hk => by simp [Expr.tokens, Expr.words] at hk ⊢; simp [hk])
+      (Expr.head_wf o .lhs ho)
+  | .binary _ _ o _, level, h | .asConst _ o, level, h | .satisfies _ o _, level, h => by
+    have : ∃ level', o.wfAt T level' = true := by
+      cases level <;> simp only [Expr.wfAt, Bool.and_eq_true] at h <;>
+        first | exact ⟨_, h.1.1.1.1.2⟩ | exact ⟨_, h.1.2⟩ | exact ⟨_, h.1.1.2⟩ | simp_all
+    obtain ⟨level', ho⟩ := this
+    exact head_of_first (fun k hk => by simp [Expr.tokens, Expr.words] at hk ⊢; simp [hk])
+      (Expr.head_wf o level' ho)
+  | .cond _ o _ _, level, h => by
+    have : o.wfAt T (.bin 0) = true := by
+      cases level <;> simp [Expr.wfAt] at h <;> first | exact h.1.1.1 | simp_all [Expr.wfAt]
+    exact head_of_first (fun k hk => by simp [Expr.tokens, Expr.words] at hk ⊢; simp [hk])
+      (Expr.head_wf o (.bin 0) this)
+  | .assign _ _ o _, level, h => by
+    have : o.wfAt T .cond = true := by
+      cases level <;> simp [Expr.wfAt] at h <;> first | exact h.1.1.1 | simp_all [Expr.wfAt]
+    exact head_of_first (fun k hk => by simp [Expr.tokens, Expr.words] at hk ⊢; simp [hk])
+      (Expr.head_wf o .cond this)
+  | .arrow _ parens ps _, _, _ => by
+    rcases arrowParams_cases parens ps with ⟨p, _, _, hp⟩ | hp <;>
+      simp [Expr.tokens, Expr.words, hp, identWord, enclose, punctWord]
+  | .unary _ op _, _, _ => by
+    cases op <;> simp [Expr.tokens, Expr.words, UnaryOp.symbol, symbol, Lex.reservedWords, punctWord, keywordWord]
+  | .prefix _ op _, _, _ => by cases op <;> simp [Expr.tokens, Expr.words, UpdateOp.symbol, punctWord]
+  | .ident .., _, _ | .number .., _, _ | .bigint .., _, _ | .string .., _, _ | .bool .., _, _
+  | .null _, _, _ | .array .., _, _ | .object .., _, _ | .paren .., _, _ | .new .., _, _ => by
+    simp [Expr.tokens, Expr.words, identWord, keywordWord, enclose, punctWord]
+
+/-- An element, when `item` reads the value of a spread, and reads any other
+element itself. -/
+theorem parseElement_reads {T : Edition} {item : ParseM Expr} {ends : List Token → Prop} (x : Expr)
+    (hx : x.elemWF T = true)
+    (hv : ∀ sp v, x = .spread sp v → ReadsE T item v ends)
+    (hi : (∀ sp v, x ≠ .spread sp v) → ReadsE T item x ends) :
+    ReadsE T (Parse.parseElement item) x ends := by
+  intro s ts rest hT hs hl ht hn hr hE ha
+  by_cases hsp : ∃ sp v, x = .spread sp v
+  · obtain ⟨sp, v, rfl⟩ := hsp
+    obtain ⟨x, vts, rfl, hx, hv'⟩ := Touching.cons_one (by simpa [Expr.words, punctWord] using ht)
+    have hs' : s.rest = x :: (vts ++ rest) := by simpa using hs
+    let s₁ := past s x (vts ++ rest)
+    have hl₁ : s₁.left = s₁.rest.length := by simp [s₁, hl, hs']
+    obtain ⟨v', s₂, hp, he, hL⟩ := hv sp v rfl s₁ vts rest hT rfl hl₁ hv'
+      (fun y hy => hn y (by simp [List.mem_of_mem_tail hy])) hr hE (by simpa [Expr.afterOK] using ha)
+    refine ⟨.spread ⟨x.span.start, s₂.lastStop⟩ v', s₂, ?_, by simp [Expr.erase, he],
+      leaves_trans (leaves_advance hs' hl) hL⟩
+    simp only [Parse.parseElement]
+    rw [Parse.bind_eq (Parse.peek_eq hs'), if_pos (by simp [Token.isPunct, hx]),
+      Parse.bind_eq (Parse.discard_eq (Parse.advance_cons hs' (by simp [hr]))), Parse.bind_eq hp,
+      Parse.bind_eq (Parse.spanFrom_eq _ _)]
+    rfl
+  · have hne : ∀ sp v, x ≠ .spread sp v := fun sp v h => hsp ⟨sp, v, h⟩
+    have hw : x.wfAt T .assign = true := by
+      cases x <;> first | exact absurd rfl (hne _ _) | simpa [Expr.elemWF] using hx
+    obtain ⟨k, hk, -⟩ := Expr.first x
+    have hkinds : (ts.map (·.kind)).head? = some k := by rw [ht.kinds]; exact hk
+    obtain ⟨y, ts', rfl⟩ : ∃ y ts', ts = y :: ts' := by
+      cases ts with
+      | nil => simp at hkinds
+      | cons y ts' => exact ⟨y, ts', rfl⟩
+    have hy : y.kind ≠ .punct "..." := by
+      have h1 := Expr.head_wf x .assign hw
+      simp only [List.map_cons, List.head?_cons, Option.some.injEq] at hkinds
+      rw [hk, ← hkinds] at h1
+      intro e; exact h1 (by rw [e])
+    obtain ⟨x', s', hp, he, hL⟩ := hi hne s (y :: ts') rest hT hs hl ht hn hr hE ha
+    refine ⟨x', s', ?_, he, hL⟩
+    simp only [Parse.parseElement]
+    rw [Parse.bind_eq (Parse.peek_eq (show s.rest = y :: (ts' ++ rest) by simpa using hs)),
+      if_neg (by simp [Token.isPunct, hy])]
+    exact hp
+
+/-- An element that is not a spread is an assignment expression. -/
+theorem Expr.elemWF_eq {T : Edition} {x : Expr} (hne : ∀ sp v, x ≠ .spread sp v) :
+    x.elemWF T = x.wfAt T .assign := by
+  cases x <;> first | exact absurd rfl (hne _ _) | simp [Expr.elemWF]
+
+/-- An element, when `parseAssign` reads each well-formed expression no
+higher than it. -/
+theorem parseElement_of {T : Edition} {g : Nat} {x : Expr} (hx : x.elemWF T = true)
+    (IH : ∀ v, v.wfAt T .assign = true → v.height ≤ x.height → ReadsE T (Parse.parseAssign g) v EndsAssign) :
+    ReadsE T (Parse.parseElement (Parse.parseAssign g)) x EndsAssign :=
+  parseElement_reads x hx
+    (fun sp v h => by subst h; exact IH v (by simpa [Expr.elemWF] using hx) (by simp [Expr.height]))
+    (fun hne => IH x (by rw [← Expr.elemWF_eq hne]; exact hx) (Nat.le_refl _))
 
 /-! ### Fuel for a type -/
 
@@ -1211,9 +1320,9 @@ theorem params_reads {T : Edition} {ok : Bool} (params : List Param) (hps : ∀ 
   exact ⟨res, s', hit, by simpa using he, hL⟩
 
 
-/-- `( args )`, when `parseAssign` reads each argument. -/
+/-- `( args )`, when `parseElement` reads each argument. -/
 theorem parseArguments_reads {T : Edition} (g : Nat) (args : List Expr)
-    (hargs : ∀ x ∈ args, ReadsE T (Parse.parseAssign g) x EndsAssign) :
+    (hargs : ∀ x ∈ args, ReadsE T (Parse.parseElement (Parse.parseAssign g)) x EndsAssign) :
     ∀ (s : ParseState) (ts rest : List Token), s.target = T → s.rest = ts ++ rest →
       s.left = s.rest.length → Touching ts (enclose "(" ")" (Expr.wordsOf args)) →
       (∀ y ∈ ts, NoBreak y) → rest ≠ [] →
@@ -1226,10 +1335,10 @@ theorem parseArguments_reads {T : Edition} (g : Nat) (args : List Expr)
   let s₁ : ParseState := { s with rest := its ++ rp :: rest, left := s.left - 1, lastStop := lp.span.stop }
   have hl₁ : s₁.left = s₁.rest.length := by simp [s₁, hl, hs₁]
   rw [Expr.wordsOf_eq] at hits
-  obtain ⟨res, s₂, hit, he, hL⟩ := iterate_list (close := ")") (refuse := Parse.refuseArgument) (by decide)
+  obtain ⟨res, s₂, hit, he, hL⟩ := iterate_list (close := ")") (refuse := fun _ => pure ()) (by decide)
     args (10 * (s₁.left + 1)) #[] s₁ its rest rp
     (fun x hx => (hargs x hx).weaken fun r h => endsItem_assign (by simp) h)
-    (fun x _ => Expr.start (by simp) refuseArgument_ok x)
+    (fun x _ => Expr.start (by simp) (fun _ _ _ => rfl) x)
     (by have := length_items hits; have : s₁.left = its.length + rest.length + 1 := by simp [s₁, hl, hs₁]; omega
         omega) hT rfl hrp hl₁ hits
     (fun y hy => hn y (by simp [hy])) (Expr.listAfter args ha)
@@ -1244,9 +1353,9 @@ theorem parseArguments_reads {T : Edition} (g : Nat) (args : List Expr)
   · simpa [Expr.eraseAll_eq] using he
 
 
-/-- `[ elems ]`, when `parseAssign` reads each element. -/
+/-- `[ elems ]`, when `parseElement` reads each element. -/
 theorem parseArrayLiteral_reads {T : Edition} (g : Nat) (sp : Span) (elems : List Expr)
-    (helems : ∀ x ∈ elems, ReadsE T (Parse.parseAssign g) x EndsAssign) :
+    (helems : ∀ x ∈ elems, ReadsE T (Parse.parseElement (Parse.parseAssign g)) x EndsAssign) :
     ReadsE T (Parse.parseArrayLiteral (g + 1)) (.array sp elems) (fun _ => True) := by
   intro s ts rest hT hs hl ht hn hr _ ha
   obtain ⟨lp, its, rp, rfl, hlp, hits, hrp⟩ := Touching.enclosed (by simpa [Expr.words, enclose] using ht)
@@ -1282,7 +1391,7 @@ theorem typeArgWords_ref (sp : Span) (c : String) (ts : List TypeExpr) :
 as a type reference. -/
 theorem parseNew_reads {T : Edition} (g : Nat) (sp : Span) (c : String) (targs : List TypeExpr)
     (args : List Expr) (hc : typeName c = true) (hts : TypeExpr.allWF targs = true)
-    (hargs : ∀ x ∈ args, ReadsE T (Parse.parseAssign g) x EndsAssign) :
+    (hargs : ∀ x ∈ args, ReadsE T (Parse.parseElement (Parse.parseAssign g)) x EndsAssign) :
     ReadsE T (Parse.parseNew (g + 1 + 1)) (.new sp c targs args) (fun _ => True) := by
   intro s ts rest hT hs hl ht hn hr _ ha
   have hw : (Expr.new sp c targs args).words =
@@ -1867,7 +1976,7 @@ theorem Expr.isSimpleTarget_erase : ∀ e : Expr, e.erase.isSimpleTarget = e.isS
   | .ident .. | .member .. | .index .. => by simp [Expr.erase, Expr.isSimpleTarget]
   | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .array .. | .object .. | .call .. | .optMember ..
   | .unary .. | .prefix .. | .postfix .. | .binary .. | .cond .. | .assign .. | .arrow .. | .asConst ..
-  | .satisfies .. | .new .. => by
+  | .satisfies .. | .new .. | .spread .. => by
     simp [Expr.erase, Expr.isSimpleTarget]
 
 theorem isSimpleTarget_of_erase {e e' : Expr} (h : e'.erase = e.erase) : e'.isSimpleTarget = e.isSimpleTarget := by
@@ -2167,7 +2276,7 @@ theorem binSuffix_first : ∀ e : Expr, (binSuffix e).flatten = [] ∨
     · exact .inr ⟨k, ks ++ (.ident "satisfies" :: t.words.flatten), by simp [binSuffix, h, identWord], hk⟩
   | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .array .. | .object ..
   | .paren .. | .member .. | .optMember .. | .index .. | .call .. | .unary .. | .prefix .. | .postfix ..
-  | .cond .. | .assign .. | .arrow .. | .new .. => .inl (by simp [binSuffix])
+  | .cond .. | .assign .. | .arrow .. | .new .. | .spread .. => .inl (by simp [binSuffix])
 
 theorem Expr.isLogical_erase (e : Expr) : e.erase.isLogical = e.isLogical := by
   cases e with
@@ -2879,6 +2988,9 @@ theorem Expr.arrowStart_false : ∀ e : Expr, e.leftArrow = false → ∀ after 
   | .object .., _, after, _ => by rw [Expr.tokens_object]; exact arrowStart_cons (by simp) (by simp) _
   | .new .., _, after, _ => by
     rw [Expr.tokens_new, List.cons_append]; exact arrowStart_cons (by simp) (by simp) _
+  | .spread _ e, _, after, _ => by
+    simp only [Expr.tokens, Expr.words, punctWord, List.flatten_cons, List.cons_append, List.nil_append]
+    exact arrowStart_cons (by simp) (by simp) _
   | .unary _ op a, _, after, _ => by
     obtain ⟨k, ks, hk, hn, hp⟩ := unary_notIdent op
     rw [Expr.tokens_unary, hk]; exact arrowStart_cons hn hp _
@@ -2995,7 +3107,7 @@ theorem Expr.leftArrow_wf {T : Edition} : ∀ (e : Expr) (level : Level), e.wfAt
   | .assign .., level, h, hl => by cases level <;> simp_all [Expr.wfAt]
   | .ident .., _, _, _ | .number .., _, _, _ | .bigint .., _, _, _ | .string .., _, _, _ | .bool .., _, _, _
   | .null _, _, _, _ | .array .., _, _, _ | .object .., _, _, _ | .paren .., _, _, _ | .unary .., _, _, _
-  | .prefix .., _, _, _ | .new .., _, _, _ => by simp [Expr.leftArrow]
+  | .prefix .., _, _, _ | .new .., _, _, _ | .spread .., _, _, _ => by simp [Expr.leftArrow]
 
 /-- An expression at the level of assignments that is not an arrow function
 starts with none. -/
@@ -3280,7 +3392,7 @@ theorem Property.height_le_heightOf {q : Property} : ∀ {ps : List Property}, q
     · simp [Property.heightOf]; omega
     · have := Property.height_le_heightOf h; simp [Property.heightOf]; omega
 
-theorem Expr.allWF_iff {T : Edition} : ∀ {es : List Expr}, Expr.allWF T es = true ↔ ∀ x ∈ es, x.wfAt T .assign = true
+theorem Expr.allWF_iff {T : Edition} : ∀ {es : List Expr}, Expr.allWF T es = true ↔ ∀ x ∈ es, x.elemWF T = true
   | [] => by simp [Expr.allWF]
   | e :: es => by simp [Expr.allWF, Expr.allWF_iff]
 
@@ -3385,8 +3497,9 @@ theorem primary_reads {T : Edition} (f : Nat) (IH : ∀ g ≤ f, AllRead T g) (e
     simp only [need, Level.cost, Expr.height] at hn
     obtain ⟨g, rfl⟩ : ∃ g, f = g + 1 := ⟨f - 1, by omega⟩
     exact parsePrimary_array (g + 1) sp es (parseArrayLiteral_reads g sp es fun x hx =>
-      IH g (by omega) .assign x (Expr.allWF_iff.mp he x hx)
-        (by have := Expr.height_le_heightOf hx; simp only [need, Level.cost]; omega))
+      parseElement_of (Expr.allWF_iff.mp he x hx) fun v hv hh =>
+        IH g (by omega) .assign v hv
+          (by have := Expr.height_le_heightOf hx; simp only [need, Level.cost]; omega))
   | object sp ps =>
     simp only [Expr.wfAt] at he
     simp only [need, Level.cost, Expr.height] at hn
@@ -3404,8 +3517,9 @@ theorem primary_reads {T : Edition} (f : Nat) (IH : ∀ g ≤ f, AllRead T g) (e
     simp only [need, Level.cost, Expr.height] at hn
     obtain ⟨g, rfl⟩ : ∃ g, f = g + 1 + 1 := ⟨f - 2, by omega⟩
     exact parsePrimary_new (g + 1 + 1) sp c ts as (parseNew_reads g sp c ts as he.1.1 he.1.2 fun x hx =>
-      IH g (by omega) .assign x (Expr.allWF_iff.mp he.2 x hx)
-        (by have := Expr.height_le_heightOf hx; simp only [need, Level.cost]; omega))
+      parseElement_of (Expr.allWF_iff.mp he.2 x hx) fun v hv hh =>
+        IH g (by omega) .assign v hv
+          (by have := Expr.height_le_heightOf hx; simp only [need, Level.cost]; omega))
   | _ => simp [Expr.wfAt] at he
 
 /-- The step of the induction on fuel. -/
@@ -3422,8 +3536,9 @@ theorem allRead_succ {T : Edition} (f : Nat) (IH : ∀ g ≤ f, AllRead T g) : A
         (by have := height_lhsHead e; simp only [need, Level.cost]; omega))
       (fun x hx hw => expression_reads g x (IH g (by omega) .assign x hw (by simp only [need, Level.cost]; omega)))
       (fun args ha hw => parseArguments_reads g args fun x hx =>
-        IH g (by omega) .assign x (Expr.allWF_iff.mp hw x hx)
-          (by have := Expr.height_le_heightOf hx; simp only [need, Level.cost]; omega))
+        parseElement_of (Expr.allWF_iff.mp hw x hx) fun v hv hh =>
+          IH g (by omega) .assign v hv
+            (by have := Expr.height_le_heightOf hx; simp only [need, Level.cost]; omega))
   | «postfix» =>
     simp only [Level.cost] at hn
     exact parsePostfix_reads f e he fun x hx hw =>
@@ -3689,6 +3804,9 @@ theorem Expr.neutral : ∀ e : Expr, Neutral e.tokens
   | .satisfies _ l t => by
     have h := Neutral.append (Expr.neutral l) (Neutral.cons (k := .ident "satisfies") (by simp) (TypeExpr.neutral t))
     rw [Expr.tokens_satisfies]; exact h
+  | .spread _ v => by
+    have h := Neutral.cons (k := .punct "...") (by simp) (Expr.neutral v)
+    simpa [Expr.tokens, Expr.words, punctWord] using h
   | .cond _ t a b => by
     have h := Neutral.append (Expr.neutral t) (Neutral.cons (k := .punct "?") (by simp)
       (Neutral.append (Expr.neutral a) (Neutral.cons (k := .punct ":") (by simp) (Expr.neutral b))))
@@ -3796,6 +3914,7 @@ theorem Expr.afterOK_congr : ∀ (e : Expr) {a b : List TokenKind}, AfterEquiv a
   | .satisfies _ x t, a, b, h => by
     simp only [Expr.afterOK]
     exact Expr.afterOK_congr x (AfterEquiv.prepend (Neutral.cons (by simp) (TypeExpr.neutral t)) (by simp) h)
+  | .spread _ x, a, b, h => by simp only [Expr.afterOK]; exact Expr.afterOK_congr x h
   | .cond _ t x y, a, b, h => by
     simp only [Expr.afterOK]
     have hy := AfterEquiv.prepend (x := .punct ":" :: y.tokens) (Neutral.cons (by simp) (Expr.neutral y))
@@ -3911,6 +4030,11 @@ theorem Expr.height_le : ∀ e : Expr, e.height ≤ e.tokens.length
     have := Expr.height_le l
     rw [Expr.tokens_satisfies]; simp only [Expr.height, List.length_cons, List.length_append]
     omega
+  | .spread _ v => by
+    have := Expr.height_le v
+    simp only [Expr.height, Expr.tokens, Expr.words, punctWord, List.flatten_cons, List.length_append,
+      List.length_cons]
+    simp only [Expr.tokens] at this; omega
   | .unary _ op a => by
     have := Expr.height_le a; have := length_symbol_unaryOp op
     rw [Expr.tokens_unary]; simp only [Expr.height, List.length_append]

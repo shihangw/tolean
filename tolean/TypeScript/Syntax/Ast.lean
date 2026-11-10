@@ -154,6 +154,11 @@ inductive Expr where
   /-- `new C<A, B>(args)`, where `C` is a name. The type arguments may be
   absent, and the arguments are always in parentheses. -/
   | new (span : Span) (callee : String) (typeArgs : List TypeExpr) (args : List Expr)
+  /-- `...expr`, an element of an array literal or an argument of a call or a
+  `new`, and nothing else. It is not an expression on its own: as in `tsc`'s
+  tree, it is a node of its own kind that only a list of elements or
+  arguments may hold. -/
+  | spread (span : Span) (expr : Expr)
 
 inductive Property where
   /-- `{ a }`. -/
@@ -266,6 +271,7 @@ def Expr.assigns (n : String) : Expr → Bool
   | .prefix _ _ e | .postfix _ _ e => e.namesTarget n || e.assigns n
   | .index _ a b | .binary _ _ a b => a.assigns n || b.assigns n
   | .call _ c args => c.assigns n || Expr.assignsList n args
+  | .spread _ e => e.assigns n
   | .cond _ a b c => a.assigns n || b.assigns n || c.assigns n
   | .assign _ _ target value => target.namesTarget n || target.assigns n || value.assigns n
   -- The body runs only when the arrow is called; counting it anyway only
@@ -344,7 +350,7 @@ def Expr.mutates (n : String) : Expr → Bool
   | .call _ c args => c.mutates n || Expr.mutatesList n args
   | .cond _ a b c => a.mutates n || b.mutates n || c.mutates n
   | .arrow _ _ _ body => body.mutates n
-  | .asConst _ e | .satisfies _ e _ => e.mutates n
+  | .asConst _ e | .satisfies _ e _ | .spread _ e => e.mutates n
   | .new _ _ _ args => Expr.mutatesList n args
 
 def Expr.mutatesList (n : String) : List Expr → Bool
@@ -416,7 +422,7 @@ def Expr.mayHold (p : String → Bool) : Expr → Bool
   | .call _ c args => c.mayHold p || Expr.mayHoldList p args
   | .cond _ a b c => a.mayHold p || b.mayHold p || c.mayHold p
   | .arrow _ _ _ body => body.mayHold p
-  | .asConst _ e | .satisfies _ e _ => e.mayHold p
+  | .asConst _ e | .satisfies _ e _ | .spread _ e => e.mayHold p
 
 def Expr.mayHoldList (p : String → Bool) : List Expr → Bool
   | [] => false
@@ -546,7 +552,7 @@ def Expr.span : Expr → Span
   | .ident s _ | .number s _ | .bigint s _ | .string s _ | .bool s _ | .null s | .array s _
   | .object s _ | .paren s _ | .member s _ _ | .optMember s _ _ | .index s _ _ | .call s _ _ | .unary s _ _
   | .prefix s _ _ | .postfix s _ _ | .binary s _ _ _ | .cond s _ _ _ | .assign s _ _ _
-  | .arrow s _ _ _ | .asConst s _ | .satisfies s _ _ | .new s _ _ _ => s
+  | .arrow s _ _ _ | .asConst s _ | .satisfies s _ _ | .new s _ _ _ | .spread s _ => s
 
 def Stmt.span : Stmt → Span
   | .varDecl s _ | .exprStmt s _ | .returnStmt s _ | .ifStmt s _ _ _ | .forOfStmt s _ _ _ _
@@ -569,6 +575,7 @@ def Expr.lessFree : Expr → Bool
   | .arrow _ _ _ body => body.lessFree
   -- A `<` in the type reads type arguments, which the parser checks itself.
   | .asConst _ e | .satisfies _ e _ => e.lessFree
+  | .spread _ e => e.lessFree
   -- The type arguments are a group that the parser reads itself.
   | .new _ _ _ args => Expr.lessFreeList args
   | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => true
@@ -598,7 +605,7 @@ def Expr.inFree : Expr → Bool
   | .assign _ _ target value => target.inFree && value.inFree
   | .array _ es => Expr.inFreeList es
   | .member _ e _ | .optMember _ e _ | .index _ e _ | .call _ e _ | .unary _ _ e | .prefix _ _ e
-  | .postfix _ _ e | .arrow _ _ _ e | .asConst _ e | .satisfies _ e _ => e.inFree
+  | .postfix _ _ e | .arrow _ _ _ e | .asConst _ e | .satisfies _ e _ | .spread _ e => e.inFree
   | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .object .. | .paren ..
   | .new .. => true
 
