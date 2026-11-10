@@ -64,6 +64,52 @@ and `COALESCE`.
   when every order must. Whenever PostgreSQL succeeds, the model succeeds with
   the same result.
 
+### What is proved
+
+The translator proves what it writes for `SELECT` queries, as the
+TypeScript translator does for every program. A proved query is one
+`SELECT`, `:one` or `:many`, without `WITH` and without subqueries. Every
+other query goes through the string translation, query by query, so every
+query that translated before still translates, and `ledger` gives the same
+text.
+
+`tolean/Sql/Translate/Plan.lean` is a total function, so Lean can reason
+about it. It does not write text. It builds a plan, the Lean code of the
+query as data, in `tolean/Sql/IR.lean`. In a plan, each table of `FROM` is
+read through its key, inside the reads of the tables before it. Then the
+innermost level tests the conditions and builds the row. SQL has an IR of
+its own because the shared [Tolean IR](../decisions/2026-10-30-tolean-ir.md)
+is pure, and every SQL expression can raise an error. Once the shared IR
+has errors, this IR can become its SQL extension.
+`tolean/Sql/IR/Eval.lean` gives a plan its meaning.
+
+`tolean/Sql/Spec/Eval.lean` is an interpreter for the subset. It reads the
+parser's syntax tree and follows PostgreSQL. A table is a list of rows, and
+a `SELECT` scans every row of every table in `FROM`. It never looks a row
+up by its key. Names, three-valued logic and errors follow PostgreSQL too.
+An integer carries the width of its type, so `integer + integer` raises
+`outOfRange` at the range of an `integer`.
+
+The theorem `translate_sound` in `tolean/Sql/Proof/Query.lean` states that
+when the plan of a query gives a result for a database, the interpreter
+gives the same result for the same database and arguments. It holds for
+every query that `Plan.lean` accepts and for every database. So it proves
+the claim above, that a lookup by key gives the rows a scan gives. The key
+condition `alias.key = e` is false on every other row of the table. The
+proof uses only `propext`, `Classical.choice` and `Quot.sound`.
+
+`Plan.lean` refuses some queries that the string translation accepts,
+because their printed code would compute something else than PostgreSQL on
+some database. Arithmetic must be on `bigint`, because the printed code
+checks the range of a `bigint`. A cast may not narrow an integer. `jsonb`
+values are not compared. The [SQL proofs plan](../plans/sql-proofs.md) lists
+these gaps and the constructs that are still to be proved.
+
+Three links of the chain are still trusted for a proved query. The parser
+is tested only through the translators' checks. The printer writes the plan
+as Lean text, and the corpus tests it. The interpreter states what
+PostgreSQL means, and no test compares it with the server yet.
+
 ### Concurrency
 
 The query functions describe one statement at a time. What concurrent

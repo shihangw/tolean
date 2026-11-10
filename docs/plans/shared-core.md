@@ -132,7 +132,10 @@ code that has no effects.
    proof plumbing. Taking them out before a second language uses them would
    fit them to TypeScript alone.
 7. Add the piece for external calls, and move Go's interface calls onto it.
-8. Do the same for SQL.
+8. Do the same for SQL. Its `SELECT` queries already build an IR of their
+   own, with an interpreter and a proof, and the
+   [SQL proofs plan](sql-proofs.md) lists the rest. That IR becomes the SQL
+   extension of the shared IR once the shared IR has errors.
 
 ## Open questions
 
