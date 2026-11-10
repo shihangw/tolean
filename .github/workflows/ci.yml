@@ -1,12 +1,14 @@
-# CI, in stages. `check` builds Tolean with `lake build --wfail` in the Nix
-# shell and runs every check that needs only the native build. It runs on
+# CI, in stages. `build` builds Tolean with `lake build --wfail` in the Nix
+# shell and saves the Lean build cache. Then `typescript`, `certify` and
+# `other` restore that cache and run, in parallel, every check that needs
+# only the native build. `check` passes when all of them pass. They run on
 # each pull request. `docs` builds the docs site from the Markdown files, on
-# each pull request too. On main, `wasm-build` then runs wasm.yml, which
-# builds the playground's WebAssembly translator, and `pages` publishes the
-# playground with the docs under docs/. Only the published page needs
-# WebAssembly, so pull requests skip it unless they change how it builds.
-# The native binaries for the npm package build only in release.yml. On
-# main, `release` starts that workflow when the push raised the version.
+# each pull request too. On main, `wasm-build` runs wasm.yml next to the
+# checks. It builds the playground's WebAssembly translator, and `pages`
+# publishes the playground with the docs under docs/. Only the published
+# page needs WebAssembly, so pull requests skip it unless they change how it
+# builds. The native binaries for the npm package build only in release.yml.
+# On main, `release` starts that workflow when the push raised the version.
 name: ci
 
 on:
@@ -26,56 +28,39 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  check:
+  # Builds the library and the tolean command, and saves the Lean build
+  # cache for the jobs below. A runner has 4 CPUs, so the checks run in
+  # several jobs at once instead of one after another in this one.
+  build:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/lean-build
+        with:
+          save: true
+
+  # In each check job, every step runs in the flake's dev shell: Lean, Node,
+  # pnpm, Go, PostgreSQL and Graphviz at the pinned versions. Each job
+  # restores the cache that `build` saved, so its own build only finds every
+  # module current. Each job ends by requiring that its checks left no
+  # change to a committed file.
+  typescript:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
     defaults:
       run:
-        # Every step runs in the flake's dev shell: Lean, Node, pnpm, Go,
-        # PostgreSQL and Graphviz at the pinned versions.
         shell: nix develop --command bash -euo pipefail {0}
     steps:
       - uses: actions/checkout@v5
-
-      - uses: cachix/install-nix-action@v31
-        with:
-          extra_nix_config: |
-            accept-flake-config = true
-
-      # wasm.yml restores this cache under the same key and paths. Change
-      # both lists together, or the WebAssembly job stops finding it.
-      - name: Cache Lean build output
-        uses: actions/cache@v5
-        with:
-          path: |
-            .lake
-            tests/chain/.lake
-            playground/examples/*/.lake
-          key: lake-${{ runner.os }}-${{ hashFiles('lean-toolchain', 'lake-manifest.json', 'lakefile.toml', '**/*.lean') }}
-          restore-keys: lake-${{ runner.os }}-
-
-      # The cache can be from an older commit, and Lake never deletes the build
-      # output of a module whose source was deleted since. Nothing imports such
-      # a module, so the build does not notice, but leanchecker below checks
-      # every .olean file of the library, and a stale one can name constants
-      # that no longer exist.
-      - name: Remove the build output of deleted modules
-        run: |
-          if [ -d .lake/build/lib/lean/tolean ]; then
-            find .lake/build/lib/lean/tolean -type f | while read -r f; do
-              rel=${f#.lake/build/lib/lean/}
-              [ -f "${rel%%.*}.lean" ] || rm "$f"
-            done
-          fi
-
-      - name: Build the library and the tolean command
-        run: lake build --wfail
+      - uses: ./.github/actions/lean-build
 
       # A declaration can reach an .olean file without the kernel checking it:
       # `set_option debug.skipKernelTC true`, or a command that adds it with the
       # check off. The build still passes, and the theorem lists no axioms.
       # leanchecker sends every declaration of the library's .olean files to
-      # the kernel again, the ones the cache above restores included.
+      # the kernel again, the ones the cache restores included.
       - name: The kernel accepts the built library again
         run: lake env leanchecker tolean
 
@@ -96,12 +81,46 @@ jobs:
         working-directory: tests/typescript
         run: node checkTranslate.ts
 
-      - name: Per-file certificates for the translation corpus
-        working-directory: tests/typescript
-        run: ./checkCertify.sh
-
+      # Needs the vitest that `pnpm install` above put in tests/typescript.
       - name: JS number laws and the interpreter, on every maintained Node release line
         run: nix run .#test-engines
+
+      - name: Generated files are committed and current
+        run: git diff --exit-code
+
+  # The certificate check takes the longest, and it keeps every CPU busy, so
+  # it runs in two jobs. Each one certifies half of the corpus files.
+  certify:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      matrix:
+        shard: [1, 2]
+    defaults:
+      run:
+        shell: nix develop --command bash -euo pipefail {0}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/lean-build
+
+      - name: Per-file certificates for the translation corpus
+        working-directory: tests/typescript
+        run: SHARD=${{ matrix.shard }}/2 ./checkCertify.sh
+
+      - name: Generated files are committed and current
+        run: git diff --exit-code
+
+  other:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: nix develop --command bash -euo pipefail {0}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/lean-build
 
       - name: Go parser and translator against go/parser
         working-directory: tests/go
@@ -124,10 +143,27 @@ jobs:
       - name: Generated files are committed and current
         run: git diff --exit-code
 
+  # Branch protection requires a check named `check`. It used to be the one
+  # job that ran every check above. Now this job reports under that name: it
+  # passes when every check job passed, and it fails when one failed or was
+  # skipped. A cancelled run skips it.
+  check:
+    needs: [build, typescript, certify, other]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          for r in $RESULTS; do
+            [ "$r" = success ] || { echo "a check job ended with $r" >&2; exit 1; }
+          done
+
   # The docs site: VitePress builds README.md and docs/ into the pages under
   # /tolean/docs/. The build fails on a dead link or anchor, on two files
   # that would be the same page, and on a plan without a status. It needs
-  # no Lean, so it does not wait for `check`.
+  # no Lean, so it does not wait for `build`.
   docs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -158,10 +194,11 @@ jobs:
 
   # Decides whether the WebAssembly build runs. It always runs on main and by
   # hand. A pull request runs it only when it changes something that only the
-  # build uses: wasm/, the playground site, or wasm.yml. The Lean toolchain
-  # and the flake count too, because build.sh patches the Lean runtime at the
-  # toolchain's tag and the flake pins emscripten. `check` already builds and
-  # tests the translator, so a change to tolean/ alone does not run it.
+  # build uses: wasm/, the playground site, wasm.yml, or the lean-build action
+  # that wasm.yml shares with `build`. The Lean toolchain and the flake count
+  # too, because build.sh patches the Lean runtime at the toolchain's tag and
+  # the flake pins emscripten. The check jobs already build and test the
+  # translator, so a change to tolean/ alone does not run it.
   #
   # An edit to this file does not run the build, so a pull request that
   # changes `wasm-build`, `wasm` or the pattern below should start ci by hand
@@ -182,14 +219,15 @@ jobs:
         run: |
           if [ "$GITHUB_EVENT_NAME" != pull_request ] ||
             git diff --name-only HEAD^1 HEAD |
-              grep -E '^(wasm/|playground/site/|flake\.(nix|lock)$|lean-toolchain$|\.github/workflows/wasm\.yml$)' >/dev/null; then
+              grep -E '^(wasm/|playground/site/|flake\.(nix|lock)$|lean-toolchain$|\.github/workflows/wasm\.yml$|\.github/actions/)' >/dev/null; then
             echo wasm=true >> "$GITHUB_OUTPUT"
           fi
 
-  # The WebAssembly build, in wasm.yml. It waits for `check` and `docs`, so
-  # it starts only when the cheaper checks pass.
+  # The WebAssembly build, in wasm.yml. It restores the Lean cache that
+  # `build` saved, so it waits for `build` and runs next to the check jobs.
+  # It also waits for `docs`, whose site it publishes.
   wasm-build:
-    needs: [changes, check, docs]
+    needs: [changes, build, docs]
     if: needs.changes.outputs.wasm == 'true'
     uses: ./.github/workflows/wasm.yml
 
@@ -214,8 +252,10 @@ jobs:
             esac
           done
 
+  # The WebAssembly build no longer waits for the checks, so `pages` waits
+  # for `check` itself: main publishes only a commit that passed every check.
   pages:
-    needs: wasm-build
+    needs: [check, wasm-build]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     # One deploy at a time. A deploy that is running always finishes.

@@ -1,0 +1,64 @@
+# Installs Nix, restores the Lean build cache and runs `lake build --wfail`
+# in the flake's dev shell. Every job that needs the tolean library or
+# command starts with this action, after actions/checkout.
+#
+# The `build` job in ci.yml passes `save: true` and saves the cache when it
+# ends. The jobs that wait for it restore that cache under the same key, so
+# their build only checks that every module is current. The cache paths and
+# key appear twice below, once for saving and once for restoring. GitHub
+# derives a cache's version from its paths, so the two lists must match, or
+# the restoring jobs stop finding the cache and rebuild Lean.
+name: Lean build
+description: Install Nix, restore the Lean build cache and build tolean.
+
+inputs:
+  save:
+    description: Save the cache when the job ends. Only the `build` job in ci.yml does.
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - uses: cachix/install-nix-action@v31
+      with:
+        extra_nix_config: |
+          accept-flake-config = true
+
+    - if: inputs.save == 'true'
+      uses: actions/cache@v5
+      with:
+        path: |
+          .lake
+          tests/chain/.lake
+          playground/examples/*/.lake
+        key: lake-${{ runner.os }}-${{ hashFiles('lean-toolchain', 'lake-manifest.json', 'lakefile.toml', '**/*.lean') }}
+        restore-keys: lake-${{ runner.os }}-
+
+    - if: inputs.save != 'true'
+      uses: actions/cache/restore@v5
+      with:
+        path: |
+          .lake
+          tests/chain/.lake
+          playground/examples/*/.lake
+        key: lake-${{ runner.os }}-${{ hashFiles('lean-toolchain', 'lake-manifest.json', 'lakefile.toml', '**/*.lean') }}
+        restore-keys: lake-${{ runner.os }}-
+
+    # The cache can be from an older commit, and Lake never deletes the build
+    # output of a module whose source was deleted since. Nothing imports such
+    # a module, so the build does not notice, but leanchecker checks every
+    # .olean file of the library, and a stale one can name constants that no
+    # longer exist.
+    - name: Remove the build output of deleted modules
+      shell: bash
+      run: |
+        if [ -d .lake/build/lib/lean/tolean ]; then
+          find .lake/build/lib/lean/tolean -type f | while read -r f; do
+            rel=${f#.lake/build/lib/lean/}
+            [ -f "${rel%%.*}.lean" ] || rm "$f"
+          done
+        fi
+
+    - name: Build the library and the tolean command
+      shell: bash
+      run: nix develop --command lake build --wfail
