@@ -604,6 +604,14 @@ class Printer {
     refuse(s, 'unsupported statement');
   }
 
+  /** An element of an array literal, or an argument: `...e` or `e`. */
+  private element(e: ts.Expression): Sexp {
+    if (ts.isSpreadElement(e)) {
+      return this.node('spread', e, [], [this.expr(e.expression)]);
+    }
+    return this.expr(e);
+  }
+
   private expr(e: ts.Expression): Sexp {
     if (ts.isIdentifier(e)) {
       return this.node('ident', e, [this.name(e)], []);
@@ -633,10 +641,10 @@ class Printer {
         e,
         [],
         e.elements.map((el) => {
-          if (ts.isOmittedExpression(el) || ts.isSpreadElement(el)) {
-            refuse(el, 'hole or spread');
+          if (ts.isOmittedExpression(el)) {
+            refuse(el, 'hole');
           }
-          return this.expr(el);
+          return this.element(el);
         }),
       );
     }
@@ -670,12 +678,7 @@ class Printer {
       }
       return this.node('call', e, [], [
         this.expr(e.expression),
-        ...e.arguments.map((a) => {
-          if (ts.isSpreadElement(a)) {
-            refuse(a, 'spread argument');
-          }
-          return this.expr(a);
-        }),
+        ...e.arguments.map((a) => this.element(a)),
       ]);
     }
     if (ts.isNewExpression(e)) {
@@ -690,12 +693,7 @@ class Printer {
       }
       return this.node('new', e, [this.name(e.expression)], [
         ...(e.typeArguments ?? []).map((t) => this.type(t)),
-        ...e.arguments.map((a) => {
-          if (ts.isSpreadElement(a)) {
-            refuse(a, 'spread argument');
-          }
-          return this.expr(a);
-        }),
+        ...e.arguments.map((a) => this.element(a)),
       ]);
     }
     if (ts.isPrefixUnaryExpression(e)) {

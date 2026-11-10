@@ -35,8 +35,9 @@ marks which links are proved, tested against a reference, or trusted.
   conditional operator; assignment, with every compound operator; arrow
   functions whose body is an expression, such as `x => x + 1` and
   `(a: number, b) => a * b`; `e as const` and `e satisfies T`, which
-  bind as `<` does, as they do in `tsc`; and `new C<A, B>(args)`, where `C`
-  is a name.
+  bind as `<` does, as they do in `tsc`; `new C<A, B>(args)`, where `C`
+  is a name; and a spread, `...e`, as an element of an array literal or an
+  argument of a call or a `new`, such as `[...xs, x]` and `f(...xs)`.
 - **Types:** keyword types such as `number`, `null`, literal types, named types
   with type arguments, arrays, tuples such as `[A, B]` and `readonly [A, B]`,
   unions and parentheses.
@@ -64,6 +65,10 @@ and `new C` without arguments. It also refuses type arguments that start on
 the line after the name, because it reads `C<A>` as a type, and a type ends
 at a line break before `<`. The translator accepts only `new Map()` and
 `new Set()`.
+
+A spread is not an expression on its own, so the parser refuses one anywhere
+else, such as `(...xs)`. It also refuses a hole in an array literal, such as
+`[a, , b]`. The translator refuses every spread for now.
 
 In the declaration at the start of a counted `for`, the parser refuses an `in`
 operator unless parentheses, braces, the arguments of a call or an index hold

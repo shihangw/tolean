@@ -630,6 +630,7 @@ theorem Expr.second : ∀ (e : Expr) {n : String} {k : TokenKind} {r : List Toke
 
 /-- Every well-formed expression is `spineOK`. -/
 theorem Expr.spineOK_wf {T : Edition} : ∀ (e : Expr) (level : Level), e.wfAt T level = true → e.spineOK = true
+  | .spread .., level, h => by cases level <;> simp [Expr.wfAt] at h
   | .member _ o _, level, h | .index _ o _, level, h | .call _ o _, level, h => by
     have : o.wfAt T .lhs = true := by cases level <;> simp_all [Expr.wfAt]
     simpa [Expr.spineOK] using Expr.spineOK_wf o .lhs this
