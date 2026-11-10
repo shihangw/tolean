@@ -67,6 +67,8 @@ partial def Expr.toSexp : Expr → Sexp
   | .arrow s _ params body => node "arrow" s [] (params.map Param.toSexp ++ [body.toSexp])
   | .asConst s e => node "asConst" s [] [e.toSexp]
   | .satisfies s e type => node "satisfies" s [] [e.toSexp, type.toSexp]
+  | .new s callee typeArgs args =>
+    node "new" s [callee] (typeArgs.map TypeExpr.toSexp ++ args.map Expr.toSexp)
 
 partial def Property.toSexp : Property → Sexp
   | .shorthand s name => node "shorthand" s [name] []
@@ -84,6 +86,7 @@ partial def Stmt.toSexp : Stmt → Sexp
   | .varDecl s d => d.toSexp s false
   | .exprStmt s e => node "expr" s [] [e.toSexp]
   | .returnStmt s value => node "return" s [] (value.map Expr.toSexp).toList
+  | .throwStmt s value => node "throw" s [] [value.toSexp]
   | .ifStmt s test thenBranch elseBranch =>
     node "if" s [] ([test.toSexp, thenBranch.toSexp] ++ (elseBranch.map toSexp).toList)
   | .forOfStmt s kind name iterable body =>

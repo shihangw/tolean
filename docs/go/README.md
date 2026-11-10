@@ -84,5 +84,41 @@ Go values. Review it with care.
 
 `tests/go/check` also translates each package in `corpus/translate/*/` with
 the options in its `args` file. The result must equal the committed `.lean`
-file in the same directory, and Lean must compile it. The corpus package,
-`ledger`, posts a double-entry journal entry.
+file in the same directory, and Lean must compile it. The corpus package
+`ledger` posts a double-entry journal entry, and `fees` computes the fee on
+a transfer with pure functions.
+
+### What is proved
+
+A pure function takes and returns `int`, `int64`, `bool` and `string`
+values and calls only other pure functions. Its body may declare locals with
+`:=` or `var`, assign them with `=`, `+=`, `-=`, `*=`, `++` and `--`, test
+with `if` and `else`, and return. The translator writes each pure function
+through `tolean/Go/Translate/Pure.lean`, which proves that translation, and
+it writes everything else as before.
+
+`Pure.lean` is a total function, so Lean can reason about it. It does not
+write text. It builds the [Tolean IR](../decisions/2026-10-30-tolean-ir.md),
+the Lean code it writes as Lean data. `tolean/Go/IR.lean` adds what only Go
+needs to the shared IR: `Go.wrap64` and `++` on strings.
+`tolean/Go/IR/Eval.lean` gives the IR a meaning.
+
+`tolean/Go/Spec/Eval.lean` is an interpreter for the pure subset. It runs
+the syntax tree that the parser returns and follows the Go specification.
+The theorem `translate_sound` in `tolean/Go/Proof/Package.lean` states that
+when a function of the IR gives a value for a call, the interpreter gives
+the same value for the same call of the source's function. It holds for
+every package, every input and every amount of fuel. The proof follows the
+one for TypeScript, in three files: `Proof/Expr.lean` for expressions,
+`Proof/Stmt.lean` for statements and `Proof/Package.lean` for calls.
+
+The translator types each expression as Go does. An integer literal is an
+untyped constant that takes the type of the other operand. The translator
+refuses an operator on two constants, because Go computes such an operator
+exactly at compile time. In Go, `9223372036854775807 + 1 > 0` is true, but
+the wrapping arithmetic of the output would make it false.
+
+Three links of the chain are still trusted for a pure function. The parser
+is tested against `go/parser`. The printer writes the IR as Lean text, and
+the corpus tests it. The interpreter states what Go means, and no test
+compares it with the Go runtime yet.
