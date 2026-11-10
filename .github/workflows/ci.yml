@@ -286,6 +286,25 @@ jobs:
   # has the version but GitHub has no release, the last step failed. Then the
   # job warns and starts nothing, because a full release run would rebuild
   # everything just to make the tag. Run release.yml by hand to finish it.
+  # Deletes the caches on this run's ref that no run will restore again:
+  # each kind keeps only its newest cache. Without this, every push to a
+  # pull request leaves another Lean cache of about 125 MB, and the
+  # repository goes over GitHub's 10 GB limit. cache-cleanup.yml deletes the
+  # rest when the pull request closes.
+  prune-caches:
+    needs: [check, wasm]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: .github/scripts/prune-caches.sh "$GITHUB_REF"
+
   release:
     needs: [check, docs, wasm]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
