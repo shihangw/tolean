@@ -81,6 +81,10 @@ jobs:
         working-directory: tests/typescript
         run: node checkTranslate.ts
 
+      # Needs the vitest that `pnpm install` above put in tests/typescript.
+      - name: JS number laws and the interpreter, on every maintained Node release line
+        run: nix run .#test-engines
+
       - name: Generated files are committed and current
         run: git diff --exit-code
 
@@ -117,9 +121,6 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: ./.github/actions/lean-build
-
-      - name: JS number laws and the interpreter, on every maintained Node release line
-        run: nix run .#test-engines
 
       - name: Go parser and translator against go/parser
         working-directory: tests/go
