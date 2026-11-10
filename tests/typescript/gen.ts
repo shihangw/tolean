@@ -435,8 +435,11 @@ export class Gen {
         const start = this.chance(0.5) ? this.expr(t, vars, 0) : '';
         lines.push(`const ${name}: Array<${show(t)}> = [${start}];`, `${name}.push(${this.expr(t, vars, 1)});`);
         vars.push({ name, ty: { k: 'array', of: t }, mutable: false, owned: false });
-      } else if (roll < 0.94 && depth > 0 && !inLoop) {
+      } else if (roll < 0.92 && depth > 0 && !inLoop) {
         lines.push(...this.switchStatement(vars, ret, lets));
+      } else if (roll < 0.97 && !inLoop) {
+        // An early exit with an error, which a caller passes on.
+        lines.push(`if (${this.test(vars, 2)}) throw new Error(${this.pick(["'too big'", "''", "'é'"])});`);
       } else if (!inLoop && this.chance(0.3)) {
         // Rarely, something outside the subset or ill-typed, to check that both refuse.
         lines.push(this.pick([

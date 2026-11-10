@@ -65,6 +65,9 @@ inductive Ty (T : Type) where
   /-- A generic structure of the program applied to types, such as `Box Int`
   for TypeScript's `Box<bigint>`. -/
   | app (ref : DeclRef) (args : List (Ty T))
+  /-- `Except E V`: the result of a function that can throw an `E`, and that
+  returns a `V` when it does not. -/
+  | except (error value : Ty T)
   /-- A type that the language adds. -/
   | ext (t : T)
 deriving Repr, Inhabited
@@ -265,6 +268,13 @@ inductive Body (T E : Type) where
   with the arms `| (some r, _) => r` and `| (none, x, y) => rest`. -/
   | fold (names : List String) (element : String) (body : Body T E) (items : Expr T E)
       (rest : Body T E) (info : LoopInfo T)
+  /-- `throw e`: the function ends with the error `e`. Its type is an
+  `Except`. -/
+  | throw (e : Expr T E)
+  /-- `(f a b) >>= fun x =>`, then `rest`: a call of a function of the program
+  that can throw. The function ends with the error when the call throws, and
+  `rest` runs with `x` bound to its value otherwise. -/
+  | bind (name : String) (ref : DeclRef) (args : List (Expr T E)) (rest : Body T E)
 deriving Repr, Inhabited
 
 /-- A declaration in the output. -/
@@ -300,6 +310,7 @@ def Ty.refs : Ty T → List DeclRef
   | .option t | .optional t | .list t => t.refs
   | .tuple ts => Ty.refsList ts
   | .app r args => r :: Ty.refsList args
+  | .except e v => e.refs ++ v.refs
   | _ => []
 
 def Ty.refsList : List (Ty T) → List DeclRef
@@ -351,6 +362,8 @@ def Body.refs : Body T E → List DeclRef
   | .matchNull _ _ a b | .letState _ a b => a.refs ++ b.refs
   | .matchTag _ r _ _ _ a b => r :: (a.refs ++ b.refs)
   | .fold _ _ body items rest _ => body.refs ++ items.refs ++ rest.refs
+  | .throw e => e.refs
+  | .bind _ r args rest => r :: (Expr.refsList args ++ rest.refs)
 
 /-- The functions and structures of the program that `d` names. -/
 def Decl.refs : Decl T E → List DeclRef
@@ -370,6 +383,7 @@ def Ty.usesString : Ty T → Bool
   | .string => true
   | .option t | .optional t | .list t => t.usesString
   | .tuple ts | .app _ ts => Ty.usesStringList ts
+  | .except e v => e.usesString || v.usesString
   | _ => false
 
 def Ty.usesStringList : List (Ty T) → Bool
@@ -420,6 +434,8 @@ def Body.usesString : Body T E → Bool
   | .fold _ _ body items rest info =>
     body.usesString || items.usesString || rest.usesString ||
       info.stateTypes.any (·.usesString) || info.elem.usesString
+  | .throw e => e.usesString
+  | .bind _ _ args rest => Expr.usesStringList args || rest.usesString
 
 /-- The output of `d` names the string type, or holds a string literal. A
 language whose strings are not Lean's `String` imports its model then. -/
@@ -479,7 +495,7 @@ names from the root. -/
 def leanNames : List (String × String) :=
   [("decide", "Decidable.decide"), ("List", "List"), ("Option", "Option"),
    ("some", "Option.some"), ("none", "Option.none"), ("Int", "Int"), ("Nat", "Nat"), ("Bool", "Bool"),
-   ("String", "String"), ("DecidableEq", "DecidableEq"), ("Repr", "Repr")]
+   ("String", "String"), ("DecidableEq", "DecidableEq"), ("Repr", "Repr"), ("Except", "Except")]
 
 /-- Write the Lean name `name` (or `name.rest`), from the root when the source
 declares the same name. `table` gives the full names. -/
@@ -571,6 +587,9 @@ def Ty.print [PrintTy T] (names : Names) : Ty T → String
     let grouped := (Ty.printList names args).map fun a =>
       if a.contains ' ' && !a.startsWith "(" then s!"({a})" else a
     s!"({name}{number} {" ".intercalate grouped})"
+  | .except e v =>
+    let group (a : String) := if a.contains ' ' && !a.startsWith "(" then s!"({a})" else a
+    s!"({leanName names "Except"} {group (e.print names)} {group (v.print names)})"
   | .ext t => PrintTy.print names t
 
 def Ty.printList [PrintTy T] (names : Names) : List (Ty T) → List String
@@ -588,6 +607,7 @@ def Ty.namesParam [PrintTy T] (names : Names) : Ty T → Bool
   | .option t | .optional t | .list t => t.namesParam names
   | .tuple ts => Ty.namesParamList names ts
   | .app ref args => (names.ref ref).2.isSome || Ty.namesParamList names args
+  | .except e v => e.namesParam names || v.namesParam names
   | .ext t => PrintTy.namesParam names t
   | _ => false
 
@@ -604,6 +624,7 @@ def Ty.typeVars : Ty T → List String
   | .param name => [name]
   | .option t | .optional t | .list t => t.typeVars
   | .tuple ts | .app _ ts => Ty.typeVarsList ts
+  | .except e v => e.typeVars ++ v.typeVars
   | _ => []
 
 def Ty.typeVarsList : List (Ty T) → List String
@@ -647,7 +668,8 @@ def Body.testsTag (name : String) : Body T E → Bool
   | .let _ _ rest | .letArray _ _ _ rest => rest.testsTag name
   | .ite _ a b | .matchNull _ _ a b | .letState _ a b => a.testsTag name || b.testsTag name
   | .fold _ _ body _ rest _ => body.testsTag name || rest.testsTag name
-  | .value _ | .state _ | .yield .. | .done .. | .exit .. => false
+  | .bind _ _ _ rest => rest.testsTag name
+  | .value _ | .state _ | .yield .. | .done .. | .exit .. | .throw _ => false
 
 section
 variable [PrintTy T] [PrintOp E]
@@ -836,6 +858,9 @@ def Body.lines (names : Names) : Body T E → List String
         s!"    (fun {foldBinders names ns element info} =>"] ++
         indentBy "      " (bodyLines.dropLast ++ [lastLine ++ ")"]) ++
         [s!"    {tuple ns} {items.print names}"] ++ rest.lines names
+  | .throw e => [wrapped "throw" (e.print names)]
+  | .bind name ref args rest =>
+    s!"{(Expr.call ref args).print names} >>= fun {name} =>" :: rest.lines names
 
 /-- The arms of `match name with` for a test of its tag, nested in the arm
 for the other members of a test of the same local. They join the outer

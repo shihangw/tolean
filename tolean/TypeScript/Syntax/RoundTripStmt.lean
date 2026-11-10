@@ -42,7 +42,7 @@ theorem Stmt.lines_words : ∀ (st : Stmt) (d : Nat), (st.lines d).map Prod.snd 
   | .switchStmt _ _ cs, d => by
     simp [Stmt.lines, Stmt.clauseLines_words cs (d + 1), Stmt.clauseLines_words cs 1]
   | .varDecl .., _ | .exprStmt .., _ | .returnStmt _ none, _ | .returnStmt _ (some _), _ | .breakStmt _, _
-  | .continueStmt _, _ | .empty _, _ => by simp [Stmt.lines]
+  | .continueStmt _, _ | .empty _, _ | .throwStmt .., _ => by simp [Stmt.lines]
 
 theorem Stmt.linesOf_words : ∀ (ss : List Stmt) (d : Nat),
     (Stmt.linesOf d ss).map Prod.snd = (Stmt.linesOf 0 ss).map Prod.snd
@@ -90,7 +90,8 @@ not a `{`, which starts a block, not `let`, which starts a declaration, and no
 keyword but those that start an expression. -/
 def startsExprStmt : Option TokenKind → Bool
   | some (.punct "{") | some (.ident "let") => false
-  | some (.keyword w) => w == "true" || w == "false" || w == "null" || w == "typeof" || w == "void"
+  | some (.keyword w) =>
+    w == "true" || w == "false" || w == "null" || w == "typeof" || w == "void" || w == "new"
   | _ => true
 
 /-- A statement that ends with an `if` without `else`. An `else` after it would
@@ -141,6 +142,7 @@ def Stmt.wf (T : Edition) (fn loop : Bool) : Stmt → Bool
   | .exprStmt _ e => e.wfAt T .assign && e.afterOK [.punct ";"] && startsExprStmt e.tokens.head?
   | .returnStmt _ none => fn
   | .returnStmt _ (some e) => fn && e.wfAt T .assign && e.afterOK [.punct ";"]
+  | .throwStmt _ e => e.wfAt T .assign && e.afterOK [.punct ";"]
   | .ifStmt _ test t none => test.wfParen T && !t.isDecl && t.wf T fn loop
   | .ifStmt _ test t (some e) =>
     test.wfParen T && !t.isDecl && t.wf T fn loop && !t.openIf && !e.isDecl && e.wf T fn loop
@@ -179,7 +181,7 @@ def Stmt.depth : Stmt → Nat
   | .forOfStmt _ _ _ _ b | .forStmt _ _ _ _ b | .whileStmt _ _ b => b.depth + 1
   | .block _ body => Stmt.depthOf body + 1
   | .switchStmt _ _ cs => Stmt.depthClauses cs + 1
-  | .varDecl .. | .exprStmt .. | .returnStmt .. | .breakStmt _ | .continueStmt _ | .empty _ => 0
+  | .varDecl .. | .exprStmt .. | .returnStmt .. | .breakStmt _ | .continueStmt _ | .empty _ | .throwStmt .. => 0
 
 def Stmt.depthOf : List Stmt → Nat
   | [] => 0
@@ -532,6 +534,7 @@ theorem Expr.firstWord : ∀ e : Expr, ∃ w ws, e.words = w :: ws ∧ w ≠ []
   | .array _ es => ⟨_, _, by simp only [Expr.words, enclose]; exact rfl, by simp [punctWord]⟩
   | .object _ ps => ⟨_, _, by simp only [Expr.words, enclose]; exact rfl, by simp [punctWord]⟩
   | .paren _ i => ⟨_, _, by simp only [Expr.words]; exact rfl, by simp [punctWord]⟩
+  | .new .. => ⟨_, _, by simp only [Expr.words]; exact rfl, by simp [keywordWord]⟩
   | .arrow _ parens ps _ => by
     rcases arrowParams_cases parens ps with ⟨p, _, _, h⟩ | h
     · exact ⟨_, _, by simp only [Expr.words, h]; exact rfl, by simp [identWord]⟩
@@ -630,6 +633,45 @@ theorem stmt_return_some {T : Edition} {loop : Bool} (f : Nat) (sp : Span) (e : 
     Parse.bind_eq (Parse.spanFrom_eq _ _)]
   rfl
 
+/-- `throw e;`. No line break may come after `throw`, so the parser reads the
+value on the same line. -/
+theorem stmt_throw {T : Edition} {fn loop : Bool} (f : Nat) (sp : Span) (e : Expr)
+    (he : e.wfAt T .assign = true) (ha : e.afterOK [.punct ";"] = true) :
+    ReadsS T fn loop (Parse.parseStatement (f + 1)) (.throwStmt sp e) := by
+  intro s ts rest hT _ _ hs hl ht hr _
+  simp only [Stmt.wordLines, Stmt.lines, List.map_cons, List.map_nil] at ht
+  obtain ⟨h1, hn⟩ := Laid.one ht
+  obtain ⟨kw, ts', rfl, hkw, h'⟩ := Touching.cons_one (by simpa [keywordWord] using h1)
+  obtain ⟨ets, ts'', rfl, het, h''⟩ := Touching.append_split h'
+  obtain ⟨semi, ts₃, rfl, hsemi, h₃⟩ := Touching.cons_one (by simpa [punctWord] using h'')
+  simp [Touching] at h₃; subst h₃
+  obtain ⟨x, ets', rfl, hx⟩ := Touching.head het
+  have hs' : s.rest = kw :: x :: (ets' ++ semi :: rest) := by simpa using hs
+  let s₁ := past s kw (x :: (ets' ++ semi :: rest))
+  have hl₁ : s₁.left = s₁.rest.length := by simp [s₁, hl, hs']
+  obtain ⟨w₀, ws₀, hw₀, hne₀⟩ := Expr.firstWord e
+  have h1' : Touching (kw :: x :: (ets' ++ [semi])) ([.keyword "throw"] :: w₀ :: (ws₀ ++ [punctWord ";"])) := by
+    simpa [keywordWord, hw₀] using h1
+  have hxn : x.newlineBefore = false := Touching.after_one h1' hne₀
+  obtain ⟨e', s₂, hp, he', hL₂⟩ := parseExpression_budget e he s₁ (x :: ets') (semi :: rest) hT (by simp [s₁])
+    hl₁ het (fun y hy => hn y (by simp at hy ⊢; simp [hy])) (by simp)
+    ⟨endsAssign_separator hsemi (by simp [separators]), fun u hu => by
+      simp at hu; subst hu; rw [hsemi]; exact punct_ne (by decide)⟩
+    (by simpa [hsemi] using afterOK_semicolon ha _)
+  have hs₂ : s₂.rest = semi :: rest := hL₂.rest_eq
+  refine ⟨.throwStmt ⟨kw.span.start, semi.span.stop⟩ e',
+    { s₂ with rest := rest, left := s₂.left - 1, lastStop := semi.span.stop }, ?_, by simp [Stmt.erase, he'],
+    leaves_trans (leaves_advance hs' hl) (leaves_trans hL₂ (leaves_advance hs₂ (by rw [hL₂.left_eq, hs₂])))⟩
+  simp only [Parse.parseStatement]
+  rw [Parse.bind_eq (Parse.peek_eq hs')]
+  simp only [hkw]
+  rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_eq hs'))]
+  rw [Parse.bind_eq (Parse.peek_eq (s := s₁) rfl)]
+  simp only [hxn, Bool.false_eq_true, ↓reduceIte, Parse.pure_bind]
+  rw [Parse.bind_eq (Parse.budget_eq _), Parse.bind_eq hp, Parse.bind_eq (endStatement_semi hs₂ hr hsemi),
+    Parse.bind_eq (Parse.spanFrom_eq _ _)]
+  rfl
+
 
 /-- `parseStatement` hands an expression statement to `parseExpressionStatement`. -/
 theorem parseStatement_expr {f : Nat} {s : ParseState} {x : Token} {r : List Token} (hs : s.rest = x :: r)
@@ -644,7 +686,7 @@ theorem parseStatement_expr {f : Nat} {s : ParseState} {x : Token} {r : List Tok
     simp [hn]
   | keyword w =>
     simp [startsExprStmt] at hk
-    rcases hk with (((rfl | rfl) | rfl) | rfl) | rfl <;> rfl
+    rcases hk with ((((rfl | rfl) | rfl) | rfl) | rfl) | rfl <;> rfl
   | punct p =>
     have h1 : p ≠ "{" := by rintro rfl; simp [startsExprStmt] at hk
     have h2 : p ≠ ";" := by rintro rfl; simp [startsExpr] at hx
@@ -748,6 +790,8 @@ theorem Stmt.first {T : Edition} {fn loop : Bool} (st : Stmt) (hw : st.wf T fn l
   | empty _ => exact ⟨.punct ";", by simp [Stmt.wordLines, Stmt.lines, punctWord], by simp [StartsStmt]⟩
   | switchStmt _ _ _ =>
     exact ⟨.keyword "switch", by simp [Stmt.wordLines, Stmt.lines, keywordWord], by simp [StartsStmt]⟩
+  | throwStmt _ _ =>
+    exact ⟨.keyword "throw", by simp [Stmt.wordLines, Stmt.lines, keywordWord], by simp [StartsStmt]⟩
 
 /-- The first token of a statement's tokens. -/
 theorem Laid.first {T : Edition} {fn loop : Bool} {st : Stmt} {ts : List Token} (hw : st.wf T fn loop = true)
@@ -1223,7 +1267,8 @@ theorem Parse.unlessPunct_none {α : Type} {stop : String} {p : ParseM α} {s : 
 mutual
 
 theorem Expr.inFree_erase : ∀ e : Expr, e.erase.inFree = e.inFree
-  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .object .. | .paren .. => rfl
+  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .object .. | .paren ..
+  | .new .. => rfl
   | .array _ es => by simp only [Expr.erase, Expr.inFree]; exact Expr.inFreeList_eraseAll es
   | .member _ e _ => by simp only [Expr.erase, Expr.inFree]; exact Expr.inFree_erase e
   | .optMember _ e _ => by simp only [Expr.erase, Expr.inFree]; exact Expr.inFree_erase e
@@ -1456,6 +1501,7 @@ theorem Expr.lessFree_erase : ∀ e : Expr, e.erase.lessFree = e.lessFree
   | .assign _ _ a b => by simp only [Expr.erase, Expr.lessFree, Expr.lessFree_erase a, Expr.lessFree_erase b]
   | .call _ c as => by
     simp only [Expr.erase, Expr.lessFree, Expr.lessFree_erase c, Expr.lessFreeList_eraseAll as]
+  | .new _ _ _ as => by simp only [Expr.erase, Expr.lessFree]; exact Expr.lessFreeList_eraseAll as
   | .cond _ a b c => by
     simp only [Expr.erase, Expr.lessFree, Expr.lessFree_erase a, Expr.lessFree_erase b, Expr.lessFree_erase c]
   | .binary _ _ l r => by simp only [Expr.erase, Expr.lessFree, Expr.lessFree_erase l, Expr.lessFree_erase r]
@@ -1516,6 +1562,8 @@ theorem Expr.afterOK_head : ∀ (e : Expr) {a b : List TokenKind}, e.lessFree = 
     congr 1
     · exact Expr.afterOK_head c hf.1 (by simp [enclose, punctWord])
     · exact Expr.afterOKList_head as hf.2 rfl
+  | .new _ _ _ as, _, _, hf, _ => by
+    simp only [Expr.lessFree] at hf; simp only [Expr.afterOK]; exact Expr.afterOKList_head as hf rfl
   | .unary _ _ x, _, _, hf, h => by
     simp only [Expr.lessFree] at hf; simp only [Expr.afterOK]; exact Expr.afterOK_head x hf h
   | .prefix _ _ x, _, _, hf, h => by
@@ -1675,6 +1723,7 @@ theorem Stmt.first_break {T : Edition} {fn loop : Bool} (st : Stmt) (hw : st.wf 
   | whileStmt _ _ _ => simp [Stmt.wordLines, Stmt.lines, keywordWord] at h
   | continueStmt _ => simp [Stmt.wordLines, Stmt.lines, keywordWord] at h
   | switchStmt _ _ _ => simp [Stmt.wordLines, Stmt.lines, keywordWord] at h
+  | throwStmt _ _ => simp [Stmt.wordLines, Stmt.lines, keywordWord] at h
   | block _ _ => simp [Stmt.wordLines, Stmt.lines, punctWord] at h
   | empty _ => simp [Stmt.wordLines, Stmt.lines, punctWord] at h
 
@@ -2053,6 +2102,9 @@ theorem allStmts_succ {T : Edition} (f : Nat) (IH : ∀ g ≤ f, AllStmts T g) :
       simp only [Stmt.wf, Bool.and_eq_true] at hw
       obtain ⟨⟨hfn, he⟩, ha⟩ := hw
       subst hfn; exact stmt_return_some f sp e he ha
+  | throwStmt sp e =>
+    simp only [Stmt.wf, Bool.and_eq_true] at hw
+    exact stmt_throw f sp e hw.1 hw.2
   | ifStmt sp test t e =>
     cases e with
     | none =>
