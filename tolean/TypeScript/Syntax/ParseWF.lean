@@ -1609,7 +1609,7 @@ theorem wfAt_bin_mono {T : Edition} {m m' : Nat} (hm : m' ≤ m) :
   | .ident .., h | .number .., h | .bigint .., h | .string .., h | .bool .., h | .null _, h | .array .., h
   | .object .., h | .paren .., h | .member .., h | .optMember .., h | .index .., h | .call .., h
   | .unary .., h | .prefix .., h | .postfix .., h | .cond .., h | .assign .., h | .arrow .., h
-  | .new .., h => by simp_all [Expr.wfAt]
+  | .new .., h | .spread .., h => by simp_all [Expr.wfAt]
 
 theorem wfAt_cond_of_bin {T : Edition} {m : Nat} : ∀ {e : Expr}, e.wfAt T (.bin m) = true → e.wfAt T .cond = true := by
   intro e h
@@ -2372,20 +2372,42 @@ theorem list_inv {α : Type} {T : Edition} {wf : α → Bool} {tokens : α → L
     ⟨hR, Kept.refl _, ⟨[], by simp, by simp [joined, skel]⟩, by simp, fun _ _ => trivial⟩ h).1
 
 /-- `parseAssign` reads items of a list. -/
-theorem GivesE.item {T : Edition} {p : ParseM Expr} (h : GivesE T .assign p) :
-    GivesItem T (fun e => e.wfAt T .assign && e.words.all (Word.ok T)) Expr.tokens (fun after e => e.afterOK after) p := by
-  intro s x s' hR hT hx
-  have g := h _ _ _ hR hT hx
-  obtain ⟨src, h1, h2, _⟩ := g.tokens
-  exact ⟨g.ready, g.kept, ⟨src, h1, h2⟩, both g.wf g.ok, g.after⟩
-
-theorem refuseArgument_inv (t : Token) (s s' : ParseState) (h : Parse.refuseArgument t s = .ok () s') : s' = s := by
-  simp only [Parse.refuseArgument] at h; exact check_inv h
-
 theorem refuseElement_inv (t : Token) (s s' : ParseState) (h : Parse.refuseElement t s = .ok () s') : s' = s := by
-  simp only [Parse.refuseElement] at h
-  obtain ⟨_, h⟩ := fail_inv h
-  exact check_inv h
+  simp only [Parse.refuseElement] at h; exact check_inv h
+
+/-- An element that `parseElement` reads: `...` and then what `p` reads, or
+what `p` reads. -/
+theorem parseElement_gives {T : Edition} {p : ParseM Expr} (hA : GivesE T .assign p) :
+    GivesItem T (fun e => e.elemWF T && e.words.all (Word.ok T)) Expr.tokens (fun after e => e.afterOK after)
+      (Parse.parseElement p) := by
+  intro s e s' hR hT h
+  obtain ⟨x, r, hs⟩ := hR.cons
+  simp only [Parse.parseElement] at h
+  rw [Parse.bind_eq (Parse.peek_eq hs)] at h
+  by_cases hd : x.isPunct "..." = true
+  · rw [if_pos hd] at h
+    have hxk : x.kind = .punct "..." := by simpa [Token.isPunct] using hd
+    have hr : r ≠ [] := hR.more hs (by rw [hxk]; simp)
+    rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_cons hs hr))] at h
+    rw [Parse.bind_ok] at h; obtain ⟨v, s₂, hv, h⟩ := h
+    have gv := hA _ _ _ (hR.past hs hr) hT hv
+    rw [Parse.bind_eq (Parse.spanFrom_eq _ _)] at h
+    simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h
+    obtain ⟨vsrc, hv1, hv2, _⟩ := gv.tokens
+    refine ⟨gv.ready, (Kept.past _ _ _).trans gv.kept, ⟨x :: vsrc, ?_, ?_⟩, ?_, ?_⟩
+    · rw [hs, show r = vsrc ++ s₂.rest from hv1]; rfl
+    · simp only [Expr.tokens, Expr.words, punctWord, List.flatten_cons, List.map_cons] at hv2 ⊢
+      rw [show x.kind :: vsrc.map (·.kind) = [x.kind] ++ vsrc.map (·.kind) from rfl, skel_append,
+        skel_append, hxk, hv2]
+    · exact both (by simpa [Expr.elemWF] using gv.wf) (by
+        simpa [Expr.words, punctWord] using WordsOK.cons (ok_punct (p := "...") (by decide)) gv.ok)
+    · intro after hf; simpa [Expr.afterOK] using gv.after after hf
+  · rw [if_neg hd] at h
+    have g := hA _ _ _ hR hT h
+    obtain ⟨src, h1, h2, _⟩ := g.tokens
+    have hne : ∀ sp v, e ≠ .spread sp v := by
+      rintro sp v rfl; have := g.wf; simp [Expr.wfAt] at this
+    exact ⟨g.ready, g.kept, ⟨src, h1, h2⟩, both (by rw [Expr.elemWF_eq hne]; exact g.wf) g.ok, g.after⟩
 
 theorem tokens_args (args : List Expr) :
     (enclose "(" ")" (Expr.wordsOf args)).flatten = .punct "(" :: joined "," (args.map Expr.tokens) ++ [.punct ")"] := by
@@ -2434,7 +2456,8 @@ theorem parseArguments_gives {T : Edition} {f : Nat} (hA : GivesE T .assign (Par
   rw [Parse.bind_ok] at h; obtain ⟨lp, s₁, hl, h⟩ := h
   obtain ⟨hlk, r, hs, rfl, hR₁⟩ := expectPunct_inv hR hl
   rw [Parse.bind_eq (Parse.budget_eq _), Parse.bind_ok] at h; obtain ⟨items, st, hit, h⟩ := h
-  have hL := list_inv hA.item refuseArgument_inv hR₁ hT hit
+  have hL := list_inv (parseElement_gives hA) (fun _ _ _ h' => by simp only [Parse.pure_ok] at h'; exact h'.2.symm)
+    hR₁ hT hit
   rw [Parse.bind_ok] at h; obtain ⟨rp, s₂, hrp, h⟩ := h
   simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h
   obtain ⟨hR₂, hK₂, ⟨src, h1, h2, _⟩, hwf, hafter⟩ := bracketed hs hlk (.inl rfl) hL hrp
@@ -2449,7 +2472,7 @@ theorem parseArrayLiteral_gives {T : Edition} {f : Nat} (hA : GivesE T .assign (
   rw [Parse.bind_ok] at h; obtain ⟨lp, s₁, hl, h⟩ := h
   obtain ⟨hlk, r, hs, rfl, hR₁⟩ := expectPunct_inv hR hl
   rw [Parse.bind_eq (Parse.budget_eq _), Parse.bind_ok] at h; obtain ⟨items, st, hit, h⟩ := h
-  have hL := list_inv hA.item refuseElement_inv hR₁ hT hit
+  have hL := list_inv (parseElement_gives hA) refuseElement_inv hR₁ hT hit
   rw [Parse.bind_ok] at h; obtain ⟨rp, s₂, hrp, h⟩ := h
   rw [Parse.bind_eq (Parse.spanFrom_eq _ _)] at h
   simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h

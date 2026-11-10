@@ -253,6 +253,10 @@ class Gen {
       if (i > 0) {
         items.push(',');
       }
+      // An element or an argument may be a spread, `...e`.
+      if (this.chance(0.2)) {
+        items.push('...');
+      }
       items.push(...this.expr(depth));
     }
     if (count > 0 && this.chance(0.2)) {

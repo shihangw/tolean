@@ -65,6 +65,14 @@ inductive Ty (T : Type) where
   /-- A generic structure of the program applied to types, such as `Box Int`
   for TypeScript's `Box<bigint>`. -/
   | app (ref : DeclRef) (args : List (Ty T))
+  /-- A map from `key` to `value` that keeps its entries in the order that
+  each key was first added, such as TypeScript's `Map<K, V>`. The language
+  names the Lean type of such a map. -/
+  | map (key value : Ty T)
+  /-- A set of `elem` that keeps its elements in the order that each was
+  first added, such as TypeScript's `Set<T>`. The language names its Lean
+  type. -/
+  | set (elem : Ty T)
   /-- `Except E V`: the result of a function that can throw an `E`, and that
   returns a `V` when it does not. -/
   | except (error value : Ty T)
@@ -310,6 +318,8 @@ def Ty.refs : Ty T → List DeclRef
   | .option t | .optional t | .list t => t.refs
   | .tuple ts => Ty.refsList ts
   | .app r args => r :: Ty.refsList args
+  | .map k v => k.refs ++ v.refs
+  | .set t => t.refs
   | .except e v => e.refs ++ v.refs
   | _ => []
 
@@ -383,6 +393,8 @@ def Ty.usesString : Ty T → Bool
   | .string => true
   | .option t | .optional t | .list t => t.usesString
   | .tuple ts | .app _ ts => Ty.usesStringList ts
+  | .map k v => k.usesString || v.usesString
+  | .set t => t.usesString
   | .except e v => e.usesString || v.usesString
   | _ => false
 
@@ -436,6 +448,78 @@ def Body.usesString : Body T E → Bool
       info.stateTypes.any (·.usesString) || info.elem.usesString
   | .throw e => e.usesString
   | .bind _ _ args rest => Expr.usesStringList args || rest.usesString
+
+/-! ### The declarations that name a map -/
+
+mutual
+
+/-- The printed type names a map type or a set type. -/
+def Ty.usesMap : Ty T → Bool
+  | .map .. | .set _ => true
+  | .option t | .optional t | .list t => t.usesMap
+  | .tuple ts | .app _ ts => Ty.usesMapList ts
+  | .except e v => e.usesMap || v.usesMap
+  | _ => false
+
+def Ty.usesMapList : List (Ty T) → Bool
+  | [] => false
+  | t :: ts => t.usesMap || Ty.usesMapList ts
+
+end
+
+section
+variable (onMap : E → Bool)
+
+mutual
+
+/-- `e` names a map or set type, or runs an operation that `onMap` says is on
+maps or sets. -/
+def Expr.usesMap : Expr T E → Bool
+  | .ext op args => onMap op || Expr.usesMapList args
+  | .call _ args | .tuple args => Expr.usesMapList args
+  | .list elems t => Expr.usesMapList elems || t.usesMap
+  | .struct fields _ args => Expr.usesMapFields fields || Ty.usesMapList args
+  | .field a _ _ | .propNot a | .not a | .neg a | .isNone a | .isSome a
+  | .decide a | .push _ a | .update _ _ a | .inject _ _ a | .proj a _ _ => a.usesMap
+  | .ite a b c => a.usesMap || b.usesMap || c.usesMap
+  | .matchNull _ a b | .coalesce a b _ | .intOp _ a b | .order _ a b | .division _ a b
+  | .eq a b | .ne a b | .propAnd a b | .propOr a b | .and a b | .or a b => a.usesMap || b.usesMap
+  | .ascribe e t => e.usesMap || t.usesMap
+  | .listMethod _ items _ t body _ => items.usesMap || t.usesMap || body.usesMap
+  | .int _ | .none | .bool _ | .string _ | .var _ | .enumCase .. | .tagValue _ => false
+
+def Expr.usesMapList : List (Expr T E) → Bool
+  | [] => false
+  | e :: es => e.usesMap || Expr.usesMapList es
+
+def Expr.usesMapFields : List (String × Expr T E) → Bool
+  | [] => false
+  | (_, e) :: fs => e.usesMap || Expr.usesMapFields fs
+
+end
+
+def Body.usesMap : Body T E → Bool
+  | .value e | .exit e _ => e.usesMap onMap
+  | .state _ | .yield .. | .done .. => false
+  | .let _ e rest => e.usesMap onMap || rest.usesMap
+  | .letArray _ t elems rest => t.usesMap || Expr.usesMapList onMap elems || rest.usesMap
+  | .ite c a b => c.usesMap onMap || a.usesMap || b.usesMap
+  | .matchNull _ _ a b | .letState _ a b | .matchTag _ _ _ _ _ a b => a.usesMap || b.usesMap
+  | .fold _ _ body items rest info =>
+    body.usesMap || items.usesMap onMap || rest.usesMap ||
+      info.stateTypes.any (·.usesMap) || info.elem.usesMap
+  | .throw e => e.usesMap onMap
+  | .bind _ _ args rest => Expr.usesMapList onMap args || rest.usesMap
+
+/-- The output of `d` names a map or set type, or runs an operation on maps
+or sets. A language imports its model of them then. -/
+def Decl.usesMap : Decl T E → Bool
+  | .struct _ _ fields | .tagged _ _ fields => fields.any (·.2.usesMap)
+  | .alias _ _ type => type.usesMap
+  | .enum .. => false
+  | .function _ params ret body => params.any (·.2.usesMap) || ret.usesMap || body.usesMap onMap
+
+end
 
 /-- The output of `d` names the string type, or holds a string literal. A
 language whose strings are not Lean's `String` imports its model then. -/
@@ -563,6 +647,12 @@ class PrintTy (T : Type) where
   /-- The position `index`, a `Nat`, as a value of the type that the
   language gives the index of an array, such as `JSNumber.ofSafeInt` of it. -/
   indexValue : Names → String → String := fun names i => s!"({leanName names "Int"}.ofNat {i})"
+  /-- The name of the type of a map that keeps its entries in insertion
+  order, which takes the key type and the value type, such as `JSMap`. -/
+  map : Names → String
+  /-- The name of the type of a set that keeps its elements in insertion
+  order, which takes the element type, such as `JSSet`. -/
+  set : Names → String
 
 /-- How a language prints the operations it adds, given its arguments as
 printed code. -/
@@ -596,6 +686,10 @@ def Ty.print [PrintTy T] (names : Names) : Ty T → String
     let grouped := (Ty.printList names args).map fun a =>
       if a.contains ' ' && !a.startsWith "(" then s!"({a})" else a
     s!"({name}{number} {" ".intercalate grouped})"
+  | .map k v =>
+    let group (a : String) : String := if a.contains ' ' && !a.startsWith "(" then s!"({a})" else a
+    s!"({PrintTy.map (T := T) names} {group (k.print names)} {group (v.print names)})"
+  | .set t => wrapped (PrintTy.set (T := T) names) (t.print names)
   | .except e v =>
     let group (a : String) := if a.contains ' ' && !a.startsWith "(" then s!"({a})" else a
     s!"({leanName names "Except"} {group (e.print names)} {group (v.print names)})"
@@ -616,6 +710,8 @@ def Ty.namesParam [PrintTy T] (names : Names) : Ty T → Bool
   | .option t | .optional t | .list t => t.namesParam names
   | .tuple ts => Ty.namesParamList names ts
   | .app ref args => (names.ref ref).2.isSome || Ty.namesParamList names args
+  | .map k v => k.namesParam names || v.namesParam names
+  | .set t => t.namesParam names
   | .except e v => e.namesParam names || v.namesParam names
   | .ext t => PrintTy.namesParam names t
   | _ => false
@@ -633,6 +729,8 @@ def Ty.typeVars : Ty T → List String
   | .param name => [name]
   | .option t | .optional t | .list t => t.typeVars
   | .tuple ts | .app _ ts => Ty.typeVarsList ts
+  | .map k v => k.typeVars ++ v.typeVars
+  | .set t => t.typeVars
   | .except e v => e.typeVars ++ v.typeVars
   | _ => []
 

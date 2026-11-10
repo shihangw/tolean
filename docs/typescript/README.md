@@ -37,8 +37,9 @@ marks which links are proved, tested against a reference, or trusted.
   conditional operator; assignment, with every compound operator; arrow
   functions whose body is an expression, such as `x => x + 1` and
   `(a: number, b) => a * b`; `e as const` and `e satisfies T`, which
-  bind as `<` does, as they do in `tsc`; and `new C<A, B>(args)`, where `C`
-  is a name.
+  bind as `<` does, as they do in `tsc`; `new C<A, B>(args)`, where `C`
+  is a name; and a spread, `...e`, as an element of an array literal or an
+  argument of a call or a `new`, such as `[...xs, x]` and `f(...xs)`.
 - **Types:** keyword types such as `number`, `null`, literal types, named types
   with type arguments, arrays, tuples such as `[A, B]` and `readonly [A, B]`,
   unions and parentheses.
@@ -64,7 +65,12 @@ The parser reads `new` only before a name and its arguments in parentheses,
 such as `new Map<string, bigint>()`. It refuses `new a.b()`, `new.target`
 and `new C` without arguments. It also refuses type arguments that start on
 the line after the name, because it reads `C<A>` as a type, and a type ends
-at a line break before `<`. The translator refuses every `new` for now.
+at a line break before `<`. The translator accepts only `new Map()` and
+`new Set()`.
+
+A spread is not an expression on its own, so the parser refuses one anywhere
+else, such as `(...xs)`. It also refuses a hole in an array literal, such as
+`[a, , b]`. The translator refuses every spread for now.
 
 In the declaration at the start of a counted `for`, the parser refuses an `in`
 operator unless parentheses, braces, the arguments of a call or an index hold
@@ -386,6 +392,13 @@ the file, the line and the reason. It never approximates.
 | `[a, b]` where the context expects a tuple, such as a return value | `(a, b)`, with each element translated where its own type is expected |
 | `t[0]`, an element of a tuple at an index that is a number literal | `t.1`, and `t.2.1` or `t.2.2` for the second or the last of three, as Lean nests the product to the right |
 | `const xs: Array<T> = [...]`, then `xs.push(e)`; `xs` read only in the `return` | `let xs := xs ++ [e]` |
+| `Map<K, V>` and `ReadonlyMap<K, V>`, where `K` is `bigint`, `string`, `boolean` or a literal union of strings | `JSMap K V` (`tolean/TypeScript/Map.lean`): the list of entries, in the order that each key was first set, as ECMA-262 keeps them (§24.1). A key is found with `=`, which is SameValueZero on these key types. |
+| `const m = new Map<K, V>()`, or `const m: Map<K, V> = new Map()`, then `m.set(k, v)` and `m.delete(k)` | `let m := (JSMap.empty : JSMap K V)`, then `let m := JSMap.set m k v` and `let m := JSMap.delete m k`. The function owns the map, as it owns an array that it pushes to. |
+| `m.get(k)`, `m.has(k)` and `m.size` | `JSMap.get? m k`, `JSMap.has m k` and `JSNumber.ofSafeInt (JSMap.size m)`. `get` gives `undefined` for a key that the map does not have, so its value has the type of an optional field: `m.get(k) ?? d` is `Option.getD (JSMap.get? m k) d`. |
+| `Set<T>` and `ReadonlySet<T>`, where `T` is a type that a map key may have | `JSSet T` (`tolean/TypeScript/Map.lean`): the list of elements, in the order that each was first added (§24.2) |
+| `const s = new Set<T>()`, then `s.add(x)` and `s.delete(x)`; `s.has(x)` and `s.size` | `JSSet.empty`, `JSSet.add`, `JSSet.delete`, `JSSet.has` and `JSNumber.ofSafeInt (JSSet.size s)`, as for a map |
+| `new Map(items)` and `new Set(items)`, where `items` is an array, such as `[['a', 1n]]` or `['a']`, a map or a set | `JSMap.ofList` and `JSSet.ofList` of the list that a loop over `items` visits. The constructor sets each `[key, value]`, or adds each value, in order (§24.1.1.2), so a later entry for a key replaces an earlier one, and `new Map(m)` copies `m`. |
+| `for (const x of s)` over a set, and `for (const e of m)` over a map | `List.foldl` over `JSSet.elems s`, or over `JSMap.entries m`, as over an array. A map gives each entry as the tuple `[key, value]`, as JS does, so the body reads `e[0]` and `e[1]`. The loop may run over an owned map or set, if its body does not change it. |
 | `for (const x of xs) { … }` | `List.foldl` over the tuple of locals the body changes |
 | `if (c) continue;` at the top of a loop body, or a branch of that `if` that ends in `continue` on every path | `if c then (x, y) else …`, where the rest of the body is the `else` branch, as after an `if` that returns. A test of `null` or of a tag narrows the local for the rest of the body. |
 | `break` in a `for (const x of xs)` loop, in the same places as `continue` | `Id.run (forIn xs (x, y) (fun e (x, y) => …))`. A `break` is `ForInStep.done (x, y)`, which ends the loop, and the end of the body or a `continue` is `ForInStep.yield (x, y)`. A loop without a `break` stays a `List.foldl`. |
@@ -457,6 +470,19 @@ Tolean rejects these, among others:
   for every method but `map` it must give a boolean. Tolean also refuses
   `find` on an array of nullable values, because Lean's `none` would stand
   for both `null` and `undefined`.
+- A map key or a set element of type `number`, which can be `NaN` or `-0`,
+  and one of an interface type, which a map or a set compares by identity.
+  Tolean also refuses `set`, `add` and `delete` on a map or a set that the
+  function did not make with `const m = new Map()` or `const s = new Set()`,
+  and a read of such an owned map or set anywhere except through `get`, `has`
+  and `size` or in the return value. It refuses a `new Map()` or `new Set()`
+  without its types, `get` on a map of nullable values, and every other
+  `new`. A declaration named
+  `Map` or `Set` would hide the global, so Tolean refuses it too. It refuses a
+  loop whose body changes the map or set that it runs over, because the JS
+  loop would also visit the entries that the body adds. A file that uses a
+  map or a set gets no certificate yet, because the certifier has no encoder
+  for one; `program_sound` covers it.
 - An array declared with `let` and the type `Array<T>`. An array that the
   function pushes to must be a `const`; for a value, use `ReadonlyArray<T>`.
   An empty `[]` needs a type from its context, and the elements of a literal
