@@ -7,9 +7,11 @@ TypeScript has the parts that let Lean prove a translator. It builds the
 that the translator writes as Lean data, in a shared core with a TypeScript
 extension. It also has an evaluator for the IR, an interpreter for the
 source, `program_sound` and certificates. Go has the same parts for its pure
-functions only, and the [Go proofs plan](go-proofs.md) lists the rest. The
-SQL translator and the rest of the Go translator build strings, and they use
-`partial def`, so Lean cannot reason about them. When TypeScript
+functions only, and the [Go proofs plan](go-proofs.md) lists the rest. SQL
+has them for its `SELECT` queries, with an IR of its own, and the
+[SQL proofs plan](sql-proofs.md) lists the rest. The rest of both
+translators builds strings with `partial def`, so Lean cannot reason about
+it. When TypeScript
 gains effects, its output stops being plain functions and becomes code in a
 monad. This plan says which of these parts the languages share and which stay
 with one language. The goal is that `program_sound` and certificates carry
@@ -123,7 +125,10 @@ written, so that other documents can name a step.
    proof plumbing. Taking them out before a second language uses them would
    fit them to TypeScript alone.
 7. Add the piece for external calls, and move Go's interface calls onto it.
-8. Do the same for SQL.
+8. Do the same for SQL. Its `SELECT` queries already build an IR of their
+   own, with an interpreter and a proof, and the
+   [SQL proofs plan](sql-proofs.md) lists the rest. That IR becomes the SQL
+   extension of the shared IR once the shared IR has errors.
 
 ## Open questions
 
