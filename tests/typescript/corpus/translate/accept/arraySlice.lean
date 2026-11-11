@@ -47,4 +47,10 @@ def lastPlusOne {N : Type} [JSNumber N] (xs : List Int) : List Int :=
 def innerAny {N : Type} [JSNumber N] (xs : List Int) : Bool :=
   (List.any ((List.drop 1 (List.reverse (List.drop 1 (List.reverse xs))))) (fun (x : Int) => decide (x < (0 : Int))))
 
+def window {N : Type} [JSNumber N] (xs : List Int) : List Int :=
+  (List.drop (List.length xs - 2) (List.take 3 xs))
+
+def windowSum {N : Type} [JSNumber N] (xs : List Int) : Int :=
+  (List.foldl (fun (sum : Int) (x : Int) => (sum + x)) ((0 : Int)) ((List.drop (List.length xs - 3) (List.take 2 xs))))
+
 end Test

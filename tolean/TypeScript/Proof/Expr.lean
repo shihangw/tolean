@@ -2801,10 +2801,8 @@ theorem translateArrayCall_sound {F : Nat}
     rename_i hsl
     have hsl' : method = "slice" := by simpa using hsl
     subst hsl'
-    simp only [bind_ok, orReject_ok, ite_state] at h
+    simp only [bind_ok, orReject_ok] at h
     obtain ⟨bounds, s₃, ⟨hk, rfl⟩, ⟨start, stop⟩, s₄, ⟨hb, rfl⟩, h⟩ := h
-    split at h
-    · simp at h
     simp only [pure_ok] at h
     obtain ⟨rfl, -⟩ := h
     intro ρs ρo v ha hs hv
