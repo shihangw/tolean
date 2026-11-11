@@ -135,7 +135,7 @@ function arbitrary(t: Ty, sig: Signatures): fc.Arbitrary<unknown> {
     case 'boolean':
       return fc.boolean();
     case 'string':
-      return fc.oneof(fc.constantFrom('', 'a', 'ab', 'é', '😀'), fc.string({ unit: 'grapheme', maxLength: 4 }));
+      return fc.oneof(fc.constantFrom('', 'a', 'ab', 'é', '😀', '\uFFFF'), fc.string({ unit: 'grapheme', maxLength: 4 }));
     case 'nullable':
       return fc.option(arbitrary(t.of, sig), { nil: null });
     case 'optional':

@@ -366,6 +366,30 @@ theorem out_numberOp {op : IR.NumberOp} {a b : IR.Expr}
       cases w <;> cases u <;> simp at h
       exact ⟨_, _, rfl, rfl, h.symm⟩
 
+/-- `ExprExt.apply` on an order of strings, without the other operations. -/
+theorem apply_stringOrder (le : Bool) (w u : Val N) :
+    IR.ExprExt.apply (.stringOrder le) [w, u] =
+      match w, u with
+      | .str a, .str b => some (.bool (if le then a.le b else a.lt b))
+      | _, _ => none := by
+  cases w <;> cases u <;> rfl
+
+theorem out_stringOrder {le : Bool} {a b : IR.Expr}
+    (h : IR.Expr.eval fs fuel ρ (.ext (.stringOrder le) [a, b]) = some v) :
+    ∃ x y, IR.Expr.eval fs fuel ρ a = some (.str x) ∧ IR.Expr.eval fs fuel ρ b = some (.str y) ∧
+      v = .bool (if le then x.le y else x.lt y) := by
+  simp only [IR.Expr.eval, IR.Expr.evalList] at h
+  cases hx : IR.Expr.eval fs fuel ρ a with
+  | none => simp [hx] at h
+  | some w =>
+    cases hy : IR.Expr.eval fs fuel ρ b with
+    | none => simp [hx, hy] at h
+    | some u =>
+      simp only [hx, hy, Option.bind_eq_bind, Option.bind_some, Option.pure_def] at h
+      rw [apply_stringOrder] at h
+      cases w <;> cases u <;> simp at h
+      exact ⟨_, _, rfl, rfl, h.symm⟩
+
 theorem out_numberNe {a b : IR.Expr}
     (h : IR.Expr.eval fs fuel ρ (.numberNe a b) = some v) :
     ∃ x y, IR.Expr.eval fs fuel ρ a = some (.num x) ∧ IR.Expr.eval fs fuel ρ b = some (.num y) ∧
@@ -1156,6 +1180,11 @@ theorem applyOperator_sound {sp s : Span} {op : BinOp} {l r : Expr} {a b c : Cod
     | (obtain ⟨x, y, hx, hy, rfl⟩ := out_numberNe fs fuel hv
        rw [eval_value] at hx hy
        rw [hl _ hx, hr _ hy]; rfl)
+    | (obtain ⟨x, y, hx, hy, rfl⟩ := out_stringOrder fs fuel hv
+       rw [eval_value] at hx hy
+       first
+         | (rw [hl _ hx, hr _ hy]; rfl)
+         | (rw [hl _ hy, hr _ hx]; rfl))
     | (obtain ⟨x, y, hx, hy, rfl⟩ := out_intOp fs fuel hv
        rw [eval_value] at hx hy
        rw [hl _ hx, hr _ hy]; rfl)

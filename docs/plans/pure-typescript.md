@@ -138,7 +138,6 @@ of a literal as a Lean `String`.
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| `<`, `<=`, `>` and `>=` on strings | Lexicographic order on code units, as IsLessThan defines it (§7.2.13) | `localeCompare`, which depends on the locale |
 | `+` on strings, and template literals whose parts are `string`, `boolean`, `bigint` or a safe integer `number` | `List.append`. Numbers and `bigint` values convert to ASCII digits (§6.1.6.1.20 and §6.1.6.2.21). | A part that is a non-integer `number` or an object |
 | `length`, `at` (§22.1.3.1), `slice` (§22.1.3.22), `startsWith`, `endsWith`, `includes`, `indexOf`, `split` with a string separator (§22.1.3.23), `padStart`, `padEnd` and `trim` | Functions on the list of code units. `slice` and `at` follow the spec for negative and out-of-range indexes. | `split` with a regular expression, and every regular expression in the first version |
 | `for (const c of s)` and `[...s]` | Iteration by code point, which joins each surrogate pair (§22.1.3.36 and §22.1.5) | |
@@ -232,8 +231,8 @@ leaves a gap.
 7. **P0.** Local functions that change variables of the enclosing function, by
    lifting them out and threading the variables through each call.
 8. **P0.** The borrow for a map that a caller passes in.
-9. **P1.** Strings: template literals, string order, the string methods,
-   iteration by code point, and the opaque `JSON.stringify`.
+9. **P1.** Strings: template literals, the string methods, iteration by code
+   point, and the opaque `JSON.stringify`.
 10. **P1.** Sorting with consistent comparators.
 11. **P2.** Recursion: tagged unions that refer to themselves first, then
     `@decreases`, mutual recursion, and `while` loops.

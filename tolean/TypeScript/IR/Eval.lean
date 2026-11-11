@@ -72,6 +72,7 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   | .numberOp op, [.num a, .num b] => some (op.apply a b)
   | .numberNe, [.num a, .num b] => some (.bool !(JSNumber.eq a b))
   | .numberTest test, [.num a] => some (.bool (test.apply a))
+  | .stringOrder le, [.str a, .str b] => some (.bool (if le then a.le b else a.lt b))
   | .undefined, [] => some .undefined
   -- `a === undefined` and `a !== undefined`, as `IsStrictlyEqual` gives them.
   | .isUndefined, [a] => some (.bool (a matches .undefined))

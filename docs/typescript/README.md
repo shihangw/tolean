@@ -419,6 +419,7 @@ the file, the line and the reason. It never approximates.
 | `xs.reduce((acc, x) => e, init)` | `List.foldl (fun (acc : A) (x : T) => e) init xs`, where `A` is the type of `init`. The body must give a value of that type. |
 | `if` that returns, `if` that changes locals, `c ? a : b` | `if … then … else …` |
 | `+ - *`, `< <= > >=`, `=== !==`, `&& \|\| !` | the same operators on `Int`, `Bool`, `Prop` |
+| `a < b`, `a <= b`, `a > b` and `a >= b` on strings | `JSString.lt a b` and `JSString.le a b`, with the operands swapped for `>` and `>=`. JS compares strings by their UTF-16 code units (IsLessThan, ECMA-262 §7.2.13), not by their code points, so `"😀" < "\uFFFF"` is `true`. `JSString.lt_iff` states that `lt` is Lean's order on the lists of code units. |
 | `a / k`, `a % k` on `bigint`, where `k` is a nonzero literal | `Int.tdiv a k`, `Int.tmod a k` (both truncate toward zero, as JS does) |
 | `{ a, b: e }` building a declared interface | structure instance |
 | `{ ...a, f: e }`, where `a` has an interface | `{ a with f := e }`. The spread keeps the keys of `a` in their order, and each property after it sets a required field in its place, so the object keeps the declared order. `{ ...a }` is `a`. |

@@ -105,6 +105,8 @@ def sections : List Section := [
   -- §7 Abstract Operations {#sec-abstract-operations}
   ⟨"sec-toboolean", "7.1.2", "ToBoolean", []⟩,
   ⟨"sec-samevaluezero", "7.2.11", "SameValueZero", []⟩,
+  ⟨"sec-islessthan", "7.2.13", "IsLessThan",
+    [``JSString.unitsLt_iff, ``JSString.lt_iff, ``JSString.le_iff]⟩,
   ⟨"sec-islooselyequal", "7.2.14", "IsLooselyEqual",
     [``Eval.looseEq_null_left, ``Eval.looseEq_null_right]⟩,
   ⟨"sec-isstrictlyequal", "7.2.15", "IsStrictlyEqual", []⟩,
@@ -160,7 +162,8 @@ def sections : List Section := [
   ⟨"sec-additive-operators", "13.8", "Additive Operators",
     [``Proof.operator_sound, ``Proof.eval_binary, ``Proof.out_intOp, ``Proof.out_numberOp]⟩,
   ⟨"sec-relational-operators", "13.10", "Relational Operators",
-    [``Proof.operator_sound, ``Proof.eval_binary, ``Proof.out_order, ``Proof.out_numberOp]⟩,
+    [``Proof.operator_sound, ``Proof.eval_binary, ``Proof.out_order, ``Proof.out_numberOp,
+    ``Proof.out_stringOrder, ``Proof.apply_stringOrder]⟩,
   ⟨"sec-equality-operators", "13.11", "Equality Operators",
     [``Proof.operator_sound, ``Proof.eval_binary, ``Proof.out_eq, ``Proof.out_ne,
     ``Proof.out_numberOp, ``Proof.out_numberNe, ``Proof.apply_numberOp, ``Proof.apply_numberNe,

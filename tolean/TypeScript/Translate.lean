@@ -1339,7 +1339,12 @@ def applyOperator (s : Span) (op : BinOp) (r : Expr) (a b : Code) : TM Code := d
   let compare (bigintOp : IR.Order) (numberOp : IR.NumberOp) (swap : Bool) : TM Code := do
     if bothNumber then
       return if swap then call numberOp b a .boolean else call numberOp a b .boolean
-    unless bothBigInt do reject s "ordering needs two bigints or two numbers"
+    -- Strings compare by their code units, as IsLessThan does.
+    if a.type == .string && b.type == .string then
+      let le := numberOp == .le
+      return if swap then ⟨.ext (.stringOrder le) [b.value, a.value], false, .boolean⟩
+        else ⟨.ext (.stringOrder le) [a.value, b.value], false, .boolean⟩
+    unless bothBigInt do reject s "ordering needs two bigints, two numbers or two strings"
     return ⟨.order bigintOp a.value b.value, true, .boolean⟩
   let equal (negated : Bool) : TM Code := do
     if bothNumber then
@@ -3594,7 +3599,7 @@ def translateWith (file source ns : String) (target : Edition := .default)
   let imports := (importedFiles file m).filterMap fun f => (deps.lookup f).map (s!"import {·.module}")
   -- A string is a `JSString`, which the output names only in a file that
   -- uses strings, so only such a file imports it.
-  let usesString := decls.any IR.Decl.usesString
+  let usesString := decls.any (IR.Decl.usesString IR.ExprExt.usesString)
   -- The same for a map, which is a `JSMap`.
   let usesMap := decls.any (IR.Decl.usesMap IR.ExprExt.onMap)
   -- A function that can throw returns `Except JSError R`, and `JSError`
