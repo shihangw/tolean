@@ -121,6 +121,11 @@ partial def Stmt.toSexp : Stmt → Sexp
     node "switch" s [] (disc.toSexp :: clauses.map fun (test, body) =>
       .node (if test.isSome then "case" else "default") none []
         ((test.map Expr.toSexp).toList ++ body.map toSexp))
+  -- As a function at the top level prints, without `export`.
+  | .funDecl s name typeParams params returnType body =>
+    node "function" s [name]
+      (typeParams.map (fun t => .node "type-param" none [t] []) ++ params.map Param.toSexp ++
+        (returnType.map TypeExpr.toSexp).toList ++ [body.toSexp])
 
 def Field.toSexp (f : Field) : Sexp :=
   node "field" f.span ([f.name] ++ flag f.readonly "readonly" ++ flag f.optional "optional")

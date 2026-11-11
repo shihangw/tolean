@@ -268,6 +268,11 @@ inductive Stmt where
   | switchStmt (span : Span) (disc : Expr) (clauses : List (Option Expr × List Stmt))
   /-- `throw value;`. -/
   | throwStmt (span : Span) (value : Expr)
+  /-- `function name<A>(params): T { … }` in a block: a function declaration
+  (ECMA-262 §15.2) inside another function, which the block binds to
+  `name`. -/
+  | funDecl (span : Span) (name : String) (typeParams : List String) (params : List Param)
+      (returnType : Option TypeExpr) (body : Stmt)
 
 instance : Inhabited Stmt := ⟨.empty default⟩
 
@@ -338,6 +343,9 @@ def Stmt.assigns (n : String) : Stmt → Bool
   | .breakStmt _ | .continueStmt _ | .empty _ => false
   | .switchStmt _ d cs => d.assigns n || Stmt.assignsClauses n cs
   | .throwStmt _ e => e.assigns n
+  -- The body runs only when the function is called; counting it anyway only
+  -- refuses more.
+  | .funDecl _ _ _ _ _ b => b.assigns n
 
 def Stmt.assignsList (n : String) : List Stmt → Bool
   | [] => false
@@ -412,6 +420,7 @@ def Stmt.mutates (n : String) : Stmt → Bool
   | .block _ ss => Stmt.mutatesList n ss
   | .breakStmt _ | .continueStmt _ | .empty _ => false
   | .switchStmt _ d cs => d.mutates n || Stmt.mutatesClauses n cs
+  | .funDecl _ _ _ _ _ b => b.mutates n
 
 def Stmt.mutatesList (n : String) : List Stmt → Bool
   | [] => false
@@ -588,6 +597,9 @@ def Stmt.binds (n : String) : Stmt → List Bool
   | .block _ ss => Stmt.bindsList n ss
   | .switchStmt _ _ cs => Stmt.bindsClauses n cs
   | .exprStmt .. | .returnStmt .. | .breakStmt _ | .continueStmt _ | .empty _ | .throwStmt .. => []
+  -- The function's name and its parameters hold no new collection.
+  | .funDecl _ name _ params _ b =>
+    (if name == n then [false] else []) ++ (params.filter (·.name == n)).map (fun _ => false) ++ b.binds n
 
 def Stmt.bindsList (n : String) : List Stmt → List Bool
   | [] => []
@@ -626,6 +638,7 @@ def Stmt.changed : Stmt → List String
   | .block _ ss => Stmt.changedList ss
   | .breakStmt _ | .continueStmt _ | .empty _ => []
   | .switchStmt _ d cs => d.changed ++ Stmt.changedClauses cs
+  | .funDecl _ _ _ _ _ b => b.changed
 
 def Stmt.changedList : List Stmt → List String
   | [] => []
@@ -669,6 +682,9 @@ def Stmt.leaks (n : String) : Stmt → Bool
   | .block _ ss => Stmt.leaksList n ss
   | .breakStmt _ | .continueStmt _ | .empty _ => false
   | .switchStmt _ d cs => d.leaks n || Stmt.leaksClauses n cs
+  -- A local function may hold any name of its block and return it, so the
+  -- test counts it as handing on every one.
+  | .funDecl .. => true
 
 def Stmt.leaksList (n : String) : List Stmt → Bool
   | [] => false
@@ -716,6 +732,7 @@ def Stmt.constAssignedIn (s : Stmt) (rest : List Stmt) : Bool :=
 @[simp] theorem Stmt.constAssignedIn_empty : (Stmt.empty sp).constAssignedIn rest = false := rfl
 @[simp] theorem Stmt.constAssignedIn_switchStmt : (Stmt.switchStmt sp d cs).constAssignedIn rest = false := rfl
 @[simp] theorem Stmt.constAssignedIn_throwStmt : (Stmt.throwStmt sp e).constAssignedIn rest = false := rfl
+@[simp] theorem Stmt.constAssignedIn_funDecl : (Stmt.funDecl sp n tps ps rt b).constAssignedIn rest = false := rfl
 
 @[simp] theorem Stmt.constAssignedIn_nil (s : Stmt) : s.constAssignedIn [] = false := by
   cases s <;> simp [Stmt.constAssignedIn, Stmt.assignsList]
@@ -802,7 +819,7 @@ def Stmt.span : Stmt → Span
   | .varDecl s _ | .destructure s _ _ _ _ | .exprStmt s _ | .returnStmt s _ | .ifStmt s _ _ _ | .forOfStmt s _ _ _ _
   | .forOfPattern s _ _ _ _
   | .forStmt s _ _ _ _ | .whileStmt s _ _ | .block s _ | .breakStmt s | .continueStmt s | .empty s | .switchStmt s _ _
-  | .throwStmt s _ => s
+  | .throwStmt s _ | .funDecl s _ _ _ _ _ => s
 
 mutual
 
