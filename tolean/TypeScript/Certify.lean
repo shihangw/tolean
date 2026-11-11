@@ -279,6 +279,7 @@ partial def exprCallbacks : IR.Expr → List Callback
     exprCallbacks a ++ exprCallbacks b
   | .call _ args | .list args _ | .ext _ args => args.flatMap exprCallbacks
   | .struct fields _ _ => fields.flatMap (exprCallbacks ·.2)
+  | .structUpdate base fields => exprCallbacks base ++ fields.flatMap (exprCallbacks ·.2)
   | .tuple es => es.flatMap exprCallbacks
   | .proj e _ _ => exprCallbacks e
   | .int _ | .none | .bool _ | .string _ | .var _ | .enumCase .. | .tagValue _ => []
@@ -298,6 +299,7 @@ partial def exprNames : IR.Expr → List String
     exprNames a ++ exprNames b
   | .call _ args | .list args _ | .ext _ args => args.flatMap exprNames
   | .struct fields _ _ => fields.flatMap (exprNames ·.2)
+  | .structUpdate base fields => exprNames base ++ fields.flatMap (exprNames ·.2)
   | .tuple es => es.flatMap exprNames
   | .proj e _ _ => exprNames e
   | .int _ | .none | .bool _ | .string _ | .enumCase .. | .tagValue _ => []
@@ -466,6 +468,15 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           s!"@[simp] theorem encode{name}_{i} {generic} : encode{name} ({nv} := {nv}) {ctor m} = Val.str {r.jsString m} := rfl"
         encs := encs.push <|
           s!"@[simp] theorem decode{name}_{i} {generic} : decode{name} ({nv} := {nv}) (some (Val.str {r.jsString m})) = {ctor m} := rfl"
+        -- `xs.includes(x)` on the union: the value of `x` is the string of
+        -- the constructor, which is the same as an element's encoding only
+        -- when the element is that constructor.
+        encs := encs.push <|
+          s!"@[simp] theorem includes{name}_{i} {generic} (xs : List {ty}) : " ++
+          s!"{r.eval "includesVal"} ({nv} := {nv}) (Val.str {r.jsString m}) (List.map encode{name} xs) = " ++
+          s!"some (decide ({ctor m} ∈ xs)) :=\n" ++
+          s!"  tolean.TypeScript.Proof.includesVal_enc _ _ _ (fun y => by cases y <;> " ++
+          s!"simp [encode{name}, {r.eval "sameValueZero"}, {r.eval "strictEq"}]) xs"
     -- An interface.
     if let .struct name typeParams allFields := d then
       unless typeParams.isEmpty do throw s!"{file}: the generic interface {name} has no certificate yet"

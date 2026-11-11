@@ -114,6 +114,7 @@ def props : List Property → List String
   | [] => []
   | .shorthand s n :: ps => s!"({ns}Property.shorthand {span s} {str n})" :: props ps
   | .keyValue s k v :: ps => s!"({ns}Property.keyValue {span s} {propKey k} {expr v})" :: props ps
+  | .spread s v :: ps => s!"({ns}Property.spread {span s} {expr v})" :: props ps
 
 end
 

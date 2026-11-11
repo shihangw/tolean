@@ -343,6 +343,136 @@ theorem runFold_forInRet {α σ τ R : Type} (fs : List (DeclRef × List String 
   have := key xs (dec ρ)
   rwa [hdec ρ hI] at this
 
+/-- `includes` on the encoded elements of a list, when SameValueZero of `v`
+and each element is a test `p` of the element. -/
+theorem includesVal_map {α : Type} (enc : α → Val N) (v : Val N) (p : α → Bool)
+    (h : ∀ y, Eval.sameValueZero v (enc y) = some (p y)) :
+    ∀ xs : List α, Eval.includesVal v (xs.map enc) = some (xs.any p)
+  | [] => by simp [Eval.includesVal]
+  | y :: ys => by
+    simp only [List.map_cons, Eval.includesVal, h y, Option.bind_eq_bind, Option.bind_some, List.any_cons]
+    cases p y
+    · simp [includesVal_map enc v p h ys]
+    · simp
+
+/-- `includes` of `v` is membership of `x`, when `v` is the same as the
+encoding of an element exactly when the element is `x`. A certificate states
+it for each constructor of a literal union. -/
+theorem includesVal_enc {α : Type} [DecidableEq α] (enc : α → Val N) (v : Val N) (x : α)
+    (h : ∀ y, Eval.sameValueZero v (enc y) = some (decide (y = x))) (xs : List α) :
+    Eval.includesVal v (xs.map enc) = some (decide (x ∈ xs)) := by
+  rw [includesVal_map enc v _ h]
+  induction xs with
+  | nil => simp
+  | cons y ys ih => by_cases hy : y = x <;> simp_all [eq_comm]
+
+@[simp] theorem includesVal_int (x : Int) (xs : List Int) :
+    Eval.includesVal (N := N) (.int x) (xs.map .int) = some (decide (x ∈ xs)) :=
+  includesVal_enc _ _ _ (fun y => by simp [Eval.sameValueZero, Eval.strictEq, eq_comm]) xs
+
+@[simp] theorem includesVal_bool (x : Bool) (xs : List Bool) :
+    Eval.includesVal (N := N) (.bool x) (xs.map .bool) = some (decide (x ∈ xs)) :=
+  includesVal_enc _ _ _ (fun y => by simp [Eval.sameValueZero, Eval.strictEq, eq_comm]) xs
+
+@[simp] theorem includesVal_str (x : JSString) (xs : List JSString) :
+    Eval.includesVal (N := N) (.str x) (xs.map .str) = some (decide (x ∈ xs)) :=
+  includesVal_enc _ _ _ (fun y => by simp [Eval.sameValueZero, Eval.strictEq, eq_comm]) xs
+
+@[simp] theorem includesVal_num (x : N) (xs : List N) :
+    Eval.includesVal (.num x) (xs.map .num) = some (xs.any (JSNumber.sameValueZero x)) :=
+  includesVal_map _ _ _ (fun _ => rfl) xs
+
+omit [JSNumber N] in
+/-- The element of an encoded list at an integer index. -/
+@[simp] theorem elementAt_map_some {α : Type} (enc : α → Val N) (xs : List α) (k : Int) :
+    Eval.elementAt (xs.map enc) (some k) = Eval.encUndef enc (if 0 ≤ k then xs[k.toNat]? else none) := by
+  by_cases hk : 0 ≤ k
+  · simp only [Eval.elementAt, hk, if_true, List.getElem?_map]
+    cases xs[k.toNat]? <;> rfl
+  · simp [Eval.elementAt, hk]
+
+/-- `xs[i]` with a number `i`, on an encoded list. -/
+@[simp] theorem elementAt_map_toSafeInt {α : Type} (enc : α → Val N) (xs : List α) (i : N) :
+    Eval.elementAt (xs.map enc) (JSNumber.toSafeInt i) = Eval.encUndef enc (JSNumber.elementAt? xs i) := by
+  unfold JSNumber.elementAt?
+  cases JSNumber.toSafeInt i with
+  | none => rfl
+  | some k => exact elementAt_map_some enc xs k
+
+omit [JSNumber N] in
+/-- `xs.at(k)` on an encoded list: a negative `k` counts from the end, which
+is an index of the reversed list. -/
+@[simp] theorem atVal_map {α : Type} (enc : α → Val N) (xs : List α) (k : Int) :
+    Eval.atVal (xs.map enc) k =
+      Eval.encUndef enc (if 0 ≤ k then xs[k.toNat]? else xs.reverse[(-k - 1).toNat]?) := by
+  unfold Eval.atVal
+  by_cases hk : 0 ≤ k
+  · simp only [hk, if_true, elementAt_map_some]
+  · simp only [hk, if_false, elementAt_map_some, List.length_map]
+    congr 1
+    by_cases hl : 0 ≤ (xs.length : Int) + k
+    · have hlt : (-k - 1).toNat < xs.length := by omega
+      rw [if_pos hl, List.getElem?_reverse hlt]
+      congr 1
+      omega
+    · rw [if_neg hl, eq_comm, List.getElem?_eq_none]
+      simp only [List.length_reverse]
+      omega
+
+/-- `slice` on an encoded list is `slice` on the list, encoded. It comes before
+the lemmas for each kind of bound, so that the list keeps the shape
+`List.map enc xs` that the lemmas of callbacks match. -/
+@[simp high] theorem sliceList_map {α β : Type} (f : α → β) (xs : List α) (start : Int) (stop : Option Int) :
+    Eval.sliceList (xs.map f) start stop = (Eval.sliceList xs start stop).map f := by
+  simp [Eval.sliceList, List.map_take, List.map_drop]
+
+/-- An element of a reversed list, with no side condition. -/
+theorem getElem?_rev {α : Type} (l : List α) (i : Nat) :
+    l.reverse[i]? = if i < l.length then l[l.length - 1 - i]? else none := by
+  split
+  · exact List.getElem?_reverse ‹_›
+  · rw [List.getElem?_eq_none]; simp; omega
+
+/-- The elements of two slices agree at every index. -/
+macro "slice_tac" : tactic => `(tactic| (
+  apply List.ext_getElem?
+  intro i
+  simp only [Eval.sliceList, Eval.relIndex, List.getElem?_take, List.getElem?_drop, getElem?_rev,
+    List.length_take, List.length_drop, List.length_reverse]
+  repeat' split
+  all_goals first
+    | rfl
+    | omega
+    | (congr 1; omega)
+    | (rw [List.getElem?_eq_none (by omega)])
+    | (rw [eq_comm, List.getElem?_eq_none (by omega)])
+    | (rw [List.getElem?_eq_none (by omega), List.getElem?_eq_none (by omega)])))
+
+/-- `slice` with bounds that are not negative. -/
+@[simp] theorem sliceList_nonneg {α : Type} (xs : List α) (k e : Int) (hk : 0 ≤ k) (he : 0 ≤ e) :
+    Eval.sliceList xs k (some e) = (xs.take e.toNat).drop k.toNat := by
+  slice_tac
+
+/-- `slice` with a start that is not negative and no end. -/
+@[simp] theorem sliceList_from {α : Type} (xs : List α) (k : Int) (hk : 0 ≤ k) :
+    Eval.sliceList xs k none = xs.drop k.toNat := by
+  slice_tac
+
+/-- `slice` with a negative start and no end: the last elements. -/
+@[simp] theorem sliceList_last {α : Type} (xs : List α) (k : Int) (hk : k < 0) :
+    Eval.sliceList xs k none = (xs.reverse.take (-k).toNat).reverse := by
+  slice_tac
+
+/-- `slice` with a start that is not negative and a negative end. -/
+@[simp] theorem sliceList_dropLast {α : Type} (xs : List α) (k e : Int) (hk : 0 ≤ k) (he : e < 0) :
+    Eval.sliceList xs k (some e) = ((xs.reverse.drop (-e).toNat).reverse).drop k.toNat := by
+  slice_tac
+
+/-- `slice` with two negative bounds. -/
+@[simp] theorem sliceList_neg {α : Type} (xs : List α) (k e : Int) (hk : k < 0) (he : e < 0) :
+    Eval.sliceList xs k (some e) = ((xs.reverse.take (-k).toNat).drop (-e).toNat).reverse := by
+  slice_tac
+
 end tolean.TypeScript.Proof
 
 namespace tolean.TypeScript.IR
@@ -358,6 +488,21 @@ elab "split_find" : tactic => withMainContext do
   let stx ← Term.exprToSyntax e
   evalTactic (← `(tactic| cases _ : $stx))
 
+open Lean Elab Tactic Meta in
+/-- Split on an element that the goal reads from a list, such as `xs[0]?` or
+`JSNumber.elementAt? xs i`, where the evaluator encodes it with `encUndef`.
+The value is `undefined` when there is no element, so the evaluator and the
+printed definition read it only through a `match`, as for `find`. -/
+elab "split_undef" : tactic => withMainContext do
+  let target ← instantiateMVars (← getMainTarget)
+  let some e := target.find? fun e =>
+      e.isAppOf ``tolean.TypeScript.Eval.encUndef && e.getAppNumArgs > 0 &&
+        (e.appArg!.isAppOf ``GetElem?.getElem? || e.appArg!.isAppOf ``tolean.TypeScript.JSNumber.elementAt?) &&
+        !e.hasLooseBVars
+    | throwError "split_undef: no element of a list in the goal"
+  let stx ← Term.exprToSyntax e.appArg!
+  evalTactic (← `(tactic| cases _ : $stx))
+
 /-- The proof of a link theorem: unfold the IR's evaluator on the IR and the
 printed definitions, then split on each branch. `defs` names the IR, the
 encoders, the printed definitions and the loop lemmas. -/
@@ -371,18 +516,22 @@ macro_rules
         Expr.evalCall, Expr.evalList,
         Expr.evalFields, Expr.evalMap, Expr.evalMapIdx, Expr.evalFilter, Expr.evalFind, Expr.evalFindIdx, Expr.evalReduce,
         bindState, eqVal, ← List.map_reverse,
+        -- `includes` on an array literal compares with `===` once the list
+        -- has reduced, so strict equality on primitives must reduce too.
+        Eval.includesVal, Eval.sameValueZero, Eval.strictEq, Eval.setProp,
         tolean.IR.IntOp.apply, tolean.IR.Order.apply,
         tolean.IR.Division.apply, ExprExt.apply, StringPart.toStr, StringMethod.apply, Eval.oneString, Eval.noArgs, NumberOp.apply, NumberConstant.value,
         NumberTest.apply, tagOf, Eval.Val.typeOf, Eval.Env.set, Eval.getProp, Eval.getKey_ofString, Eval.getPath,
-        Eval.objectPrototypeNames, List.lookup, DeclRef.beq_def, -List.map_map,
+        Eval.objectPrototypeNames, List.lookup, DeclRef.beq_def, -List.map_map, -List.map_tail, ← List.map_drop, ← List.map_take, ← List.map_reverse,
         -Bool.if_true_left, -Bool.if_false_right, -Bool.if_false_left, -Bool.if_true_right, $defs,*]
-      all_goals repeat' (split_find <;> simp [-List.map_map, ← List.map_reverse, $defs,*])
+      all_goals repeat' (split_find <;> simp [-List.map_map, -List.map_tail, ← List.map_drop, ← List.map_take, ← List.map_reverse, $defs,*])
+      all_goals repeat' (split_undef <;> simp [-List.map_map, -List.map_tail, ← List.map_drop, ← List.map_take, ← List.map_reverse, $defs,*])
       all_goals repeat' (split <;> (try simp_all [bindState, eqVal, tolean.IR.IntOp.apply,
         tolean.IR.Order.apply, tolean.IR.Division.apply, ExprExt.apply, StringPart.toStr, StringMethod.apply, Eval.oneString, Eval.noArgs, NumberOp.apply,
         NumberTest.apply, tagOf, Eval.Val.typeOf, Eval.Env.set, Eval.getProp, Eval.getKey_ofString, Eval.getPath,
-        Eval.objectPrototypeNames, List.lookup, DeclRef.beq_def, -List.map_map,
+        Eval.objectPrototypeNames, List.lookup, DeclRef.beq_def, -List.map_map, -List.map_tail, ← List.map_drop, ← List.map_take, ← List.map_reverse,
         -Bool.if_true_left, -Bool.if_false_right, -Bool.if_false_left, -Bool.if_true_right, $defs,*]))
-      all_goals (try simp_all [bindState, eqVal, Eval.Env.set, Eval.getProp, Eval.getKey_ofString, Eval.getPath, Eval.objectPrototypeNames, List.lookup, DeclRef.beq_def, -List.map_map, $defs,*])
+      all_goals (try simp_all [bindState, eqVal, Eval.Env.set, Eval.getProp, Eval.getKey_ofString, Eval.getPath, Eval.objectPrototypeNames, List.lookup, DeclRef.beq_def, -List.map_map, -List.map_tail, ← List.map_drop, ← List.map_take, ← List.map_reverse, $defs,*])
       -- Two `match`es that differ only in their auxiliary functions, as a
       -- loop lemma's step and the printed definition can, agree by `rfl`.
       all_goals (try rfl)))

@@ -216,6 +216,9 @@ inductive Expr (T E : Type) where
   position of the element, written as the language writes an index. -/
   | listMethod (method : ListMethod) (items : Expr T E) (param : String) (elem : Ty T)
       (body : Expr T E) (info : CallbackInfo T)
+  /-- `{ base with f := e, … }`: the structure `base` with the fields `fields`
+  set. -/
+  | structUpdate (base : Expr T E) (fields : List (String × Expr T E))
   /-- `(List.foldl (fun (acc : A) (x : T) => body) init items)`, where `A` is
   `info.result`, the type of `init` and of `body`, and `elem` is `T`. -/
   | listFold (items init : Expr T E) (acc param : String) (elem : Ty T) (body : Expr T E)
@@ -361,6 +364,7 @@ def Expr.refs : Expr T E → List DeclRef
   | .tuple es => Expr.refsList es
   | .proj e _ _ => e.refs
   | .listMethod _ items _ t body _ => items.refs ++ t.refs ++ body.refs
+  | .structUpdate base fields => base.refs ++ Expr.refsFields fields
   | .listFold items init _ _ t body info => items.refs ++ init.refs ++ t.refs ++ body.refs ++ info.result.refs
   | .tagValue _ => []
   | .int _ | .none | .bool _ | .string _ | .var _ => []
@@ -439,6 +443,8 @@ def Expr.usesString (opUses : E → Bool) : Expr T E → Bool
   | .proj e _ _ => Expr.usesString opUses e
   | .listMethod _ items _ t body _ =>
     Expr.usesString opUses items || t.usesString || Expr.usesString opUses body
+  | .structUpdate base fields =>
+    Expr.usesString opUses base || Expr.usesStringFields opUses fields
   | .listFold items init _ _ t body info =>
     Expr.usesString opUses items || Expr.usesString opUses init || t.usesString ||
       Expr.usesString opUses body || info.result.usesString
@@ -501,6 +507,7 @@ def Expr.usesMap : Expr T E → Bool
   | .call _ args | .tuple args => Expr.usesMapList args
   | .list elems t => Expr.usesMapList elems || t.usesMap
   | .struct fields _ args => Expr.usesMapFields fields || Ty.usesMapList args
+  | .structUpdate base fields => base.usesMap || Expr.usesMapFields fields
   | .field a _ _ | .propNot a | .not a | .neg a | .isNone a | .isSome a
   | .decide a | .push _ a | .update _ _ a | .inject _ _ a | .proj a _ _ => a.usesMap
   | .ite a b c => a.usesMap || b.usesMap || c.usesMap
@@ -877,6 +884,8 @@ def Expr.callsShrink (self : DeclRef) (i : Nat) (need : Int) (depths : List (Str
     a.callsShrink self i need depths && b.callsShrink self i need depths
   | .list es _ | .tuple es | .ext _ es => Expr.callsShrinkList self i need depths es
   | .struct fields _ _ => Expr.callsShrinkFields self i need depths fields
+  | .structUpdate base fields =>
+    base.callsShrink self i need depths && Expr.callsShrinkFields self i need depths fields
   | .int _ | .none | .bool _ | .string _ | .var _ | .enumCase .. | .tagValue _ => true
 
 def Expr.callsShrinkList (self : DeclRef) (i : Nat) (need : Int) (depths : List (String × Int)) :
@@ -939,6 +948,7 @@ def Expr.calls (self : DeclRef) : Expr T E → Bool
   | .ite a b c => a.calls self || b.calls self || c.calls self
   | .list es _ | .tuple es | .ext _ es => Expr.callsList self es
   | .struct fields _ _ => Expr.callsFields self fields
+  | .structUpdate base fields => base.calls self || Expr.callsFields self fields
   | .int _ | .none | .bool _ | .string _ | .var _ | .enumCase .. | .tagValue _ => false
 
 def Expr.callsList (self : DeclRef) : List (Expr T E) → Bool
@@ -1044,6 +1054,11 @@ def Expr.print (names : Names) : Expr T E → String
   | .listFold items init acc param elem body info =>
     let fn := s!"(fun ({acc} : {info.result.print names}) ({param} : {elem.print names}) => {body.print names})"
     s!"({leanName names "List.foldl"} {fn} {argument (init.print names)} {argument (items.print names)})"
+  | .structUpdate base fields =>
+    if fields.isEmpty then base.print names
+    else
+      let sets := ", ".intercalate (Expr.printFields names fields)
+      s!"\{ {argument (base.print names)} with {sets} }"
   | .bool b => if b then "true" else "false"
   | .string s => PrintTy.stringLit (T := T) names s
   | .var name => name

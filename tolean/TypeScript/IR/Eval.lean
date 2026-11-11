@@ -104,6 +104,16 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   | .optField path _, [.obj fields] => Eval.getPath fields path
   -- `r[k]`, as the spec evaluates it: the property that the string `k` names.
   | .recordGet _ _, [.obj fields, .str k] => Eval.getKey fields k
+  -- `x ∈ xs` and `List.any xs (JSNumber.sameValueZero x)`: whether an
+  -- element is `x`, as `includes` compares them.
+  | .includes, [.list xs, x] | .includesNumber, [.list xs, x] => (Eval.includesVal x xs).map .bool
+  -- `xs.length`, `xs[k]?`, `JSNumber.elementAt? xs i` and `xs.at(k)`, as the
+  -- spec reads them: `none` is `undefined`.
+  | .length, [.list xs] => some (.num (JSNumber.ofSafeInt xs.length))
+  | .indexLit k, [.list xs] => some (Eval.elementAt xs (some k))
+  | .indexNumber, [.list xs, .num i] => some (Eval.elementAt xs (JSNumber.toSafeInt i))
+  | .at k, [.list xs] => some (Eval.atVal xs k)
+  | .slice start stop, [.list xs] => some (.list (Eval.sliceList xs start stop))
   -- The operations of a `Map`, as the spec gives them.
   | .mapEmpty, [] => some (.map [])
   | .mapGet, [.map entries, k] => (Eval.mapFind entries k).map (·.getD .undefined)
@@ -192,6 +202,12 @@ def Expr.eval (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
     let .list items ← Expr.eval fs fuel ρ e | none
     items[index]?
   | .struct fields _ _ => do return .obj (← Expr.evalFields fs fuel ρ fields)
+  -- `{ base with f := e }` sets each field of the object `base` in its place,
+  -- as the spread of `base` and then the properties do.
+  | .structUpdate base fields => do
+    let .obj obj ← Expr.eval fs fuel ρ base | none
+    let us ← Expr.evalFields fs fuel ρ fields
+    return .obj (us.foldl (fun acc (k, v) => Eval.setProp acc k v) obj)
   -- A value of `T | null` is never `undefined`. JS tells `undefined` from
   -- `null` with `===` but not with `==`, so the tests of `null` give no value
   -- for it.
