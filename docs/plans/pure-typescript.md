@@ -97,7 +97,6 @@ value claim already does.
 | TypeScript | Lean | Refused |
 |---|---|---|
 | `entries` | The `List` functions with the same meaning | The `index` argument of a callback other than one of `map`, and the `array` argument of any callback, until a later step adds them |
-| Array destructuring in the head of a loop, such as `for (const [k, v] of m)` | A pattern on the element of the fold | |
 | `xs.at(i)` and `xs.slice(i, j)` where an argument is not an integer literal (§23.1.3.1, §23.1.3.28) | `ToIntegerOrInfinity` on each argument, then the element or the slice as for literals. It needs `Math.trunc` from the numbers stage. | |
 | `xs.slice(-a, b)` with a negative start and an end that is not negative | `List.drop` and `List.take` with the length of the array | |
 | `[...xs].sort(cmp)` and `xs.toSorted(cmp)` | A stable merge sort. ECMA-262 has required a stable sort since ES2019 (§23.1.3.30). | `sort` on an array that the function does not own, and a comparator that is not consistent |
@@ -228,10 +227,9 @@ leaves a gap.
    `undefined` that narrows inside an expression, `a?.[i]` and `f?.()`, and
    re-exports.
 3. **P1.** Type guards.
-4. **P0.** The rest of the arrays without `sort`: `entries`, array
-   destructuring, `at` and `slice` with arguments that are not integer
-   literals, and `slice` with a negative start and an end that is not
-   negative.
+4. **P0.** The rest of the arrays without `sort`: `entries`, `at` and
+   `slice` with arguments that are not integer literals, and `slice` with a
+   negative start and an end that is not negative.
 6. **P0.** Errors: `throw` in loop bodies and in branches that change
    locals, calls that can throw inside larger expressions, and declared error
    classes.

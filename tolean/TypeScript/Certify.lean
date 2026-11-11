@@ -323,7 +323,7 @@ end
 /-- The body of the `for…of` statement at `span`. -/
 def loopBody (s : Stmt) (span : Span) : Option Stmt :=
   (stmtsOf s).findSome? fun
-    | .forOfStmt sp _ _ _ body => if sp == span then some body else none
+    | .forOfStmt sp _ _ _ body | .forOfPattern sp _ _ _ body => if sp == span then some body else none
     | _ => none
 
 /-- The tactics that split the variable `name` of type `t`, so that each case
@@ -754,6 +754,10 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       let lemmaName := s!"{name}_loop{index}"
       let some bodyStmt := loopBody syntaxBody info.span
         | throw s!"{file}: no loop at {info.span.start.line}:{info.span.start.col} in {name}"
+      -- The loop lemma's rewrite does not reach a list of encoded lists yet,
+      -- so a loop over arrays gets no certificate instead of one that fails.
+      if info.elem matches .list .. then
+        throw s!"{file}: cannot certify a loop over arrays of arrays in {name} yet"
       let some encX := encoderOf r info.elem | throw s!"{file}: cannot encode the elements of a loop in {name}"
       let state := stateNames.zip info.stateTypes
       let vars := state ++ info.scope
