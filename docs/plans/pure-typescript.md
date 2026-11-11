@@ -28,10 +28,10 @@ stays refused, even when the code that uses it is pure.
    that the spec leaves to the engine, the locale or the time zone stays
    refused.
 2. **The translation sees every change to state.** The translation is a
-   shallow embedding, so a Lean value cannot change behind a name. A `Map`, a
-   `Set`, a `Date` and a class instance are references in JavaScript, so two
-   names can point to one object. Each of them gets the ownership rule that
-   arrays have now: only the function that created the object may change it,
+   shallow embedding, so a Lean value cannot change behind a name. A `Date`
+   and a class instance are references in JavaScript, so two names can point
+   to one object. Each of them gets the ownership rule that arrays, maps and
+   sets have now: only the function that created the object may change it,
    and nothing else may hold it while it changes.
 3. **The proof of the translator still covers it.** Each construct extends
    the Tolean IR, its evaluator and the interpreter, so `program_sound` holds
@@ -64,7 +64,6 @@ exact. A construct leaves these tables when Tolean translates it, and the
 | A function-typed field or parameter, such as a comparator in an options object | A field of a function type | A function value that changes state when it is called |
 | A destructured parameter, such as `{ a, b }: Options` | A pattern on the structure | Defaults inside the pattern |
 | A default parameter value | `Option` with a default at the call | A default that reads another parameter |
-| `for (let i = a; i < b; i++)` | A fold whose state records that the loop stopped | A `for` loop of another shape, and labels |
 | `while` and `do … while`, with a `@decreases` tag that names a measure | A recursive function with `termination_by`, as for recursion below | A loop without such a measure |
 | A rest parameter `...xs: T[]`, and a spread argument `f(...xs)` | A `List T` argument | A spread argument to a function whose parameters are not a rest parameter |
 | A class with `readonly` fields and methods that do not change `this` | A structure and one function per method | Methods that change `this`, inheritance other than from `Error`, getters, setters and `static` state |
@@ -121,9 +120,7 @@ precondition of each claim.
 ECMA-262 does not define `Error.prototype.stack`, so a read of `stack` stays
 refused. A claim about a function that can throw says what holds when the
 function returns normally. A separate claim can show that it does not throw
-when its inputs meet a precondition. Tolean translates `throw new Error(m)`
-where it ends the function, and a call that can throw as the whole value of a
-declaration or a `return`. The IR passes such an error on with `Body.bind`.
+when its inputs meet a precondition.
 
 ### Strings
 
@@ -164,6 +161,15 @@ function that changes a parameter (`Stmt.ownsChanges`), so the borrow must
 also give the spec this meaning: the call copies the map in and back out. Key equality is SameValueZero. For `string` and
 `bigint` keys that is Lean's equality. For `number` keys it is Lean's
 equality only when no key is `NaN` or `-0`.
+
+One certificate gap is left. The initial value of a `reduce` can read a map
+or a set that `new Map(items)` or `new Set(items)` makes from a parameter,
+such as `xs.reduce((a, x) => a || x, new Set<bigint>(ys).has(0n))`. The
+certifier writes a certificate for it, and Lean refuses that certificate.
+The link proof unfolds the constructor only on a list that it can see, so
+the set stays `Eval.setOfItems` of an unknown list. A lemma about
+`setOfItems` and `mapOfItems` would close the gap. Until then, the certifier
+should refuse such an initial value.
 
 ### Numbers and dates
 
@@ -222,17 +228,18 @@ leaves a gap.
    `undefined` that narrows inside an expression, `a?.[i]` and `f?.()`, and
    re-exports.
 3. **P1.** Type guards.
-4. **P0.** The array methods without `sort`, such as `reduce` and `slice`,
-   indexing, and object spread.
-5. **P0.** Control flow: the counted `for` loop.
+4. **P0.** The rest of the arrays without `sort`: `entries`, array spread
+   and destructuring, `at` and `slice` with arguments that are not integer
+   literals, and `slice` with a negative start and an end that is not
+   negative.
 6. **P0.** Errors: `throw` in loop bodies and in branches that change
    locals, calls that can throw inside larger expressions, and declared error
-   classes. `throw new Error(message)` is done.
+   classes.
 7. **P0.** Local functions that change variables of the enclosing function, by
    lifting them out and threading the variables through each call.
 8. **P0.** The borrow for a map that a caller passes in.
-9. **P1.** Strings: template literals, the string methods, iteration by code
-   point, and the opaque `JSON.stringify`.
+9. **P1.** Strings: template literals, the string methods and arguments in
+   the table above, iteration by code point, and the opaque `JSON.stringify`.
 10. **P1.** Sorting with consistent comparators.
 11. **P2.** Recursion: tagged unions that refer to themselves first, then
     `@decreases`, mutual recursion, and `while` loops.
@@ -258,6 +265,12 @@ variables and in maps.
   `List.map` with a proof that it ends, as a translated function does. The
   claim about a recursive function could take the fuel as an argument, and
   follow by induction on the parameter that gets smaller.
+- How should a certificate cover a counted `for` loop? The interpreter gives
+  no value when the counter would pass `Number.MAX_SAFE_INTEGER`, as it would
+  for a bound of `Infinity`, so the claim that it gives a value for every
+  input does not hold. The claim could take the hypothesis that the
+  interpreter gives a value, or that the bound is at most
+  `Number.MAX_SAFE_INTEGER`.
 - How should a type parameter with a constraint translate? One option is a
   type class that the translator writes for each constraint, with one
   method per field that the constraint names. Another is to pass the

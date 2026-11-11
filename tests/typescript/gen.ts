@@ -507,7 +507,23 @@ export class Gen {
       } else if (roll < 0.8 && depth > 0) {
         const arrays = vars.filter((v) => v.ty.k === 'array' && !v.owned);
         const target = lets.length > 0 ? this.pick(lets) : undefined;
-        if (arrays.length > 0 && target !== undefined) {
+        if (target !== undefined && (arrays.length === 0 || this.chance(0.4))) {
+          // A counted loop, up to the length of an array that the body does
+          // not assign, or up to a small number.
+          const i = this.fresh('i');
+          const bounds = arrays.filter((v) => v.name !== target.name);
+          const bound = bounds.length > 0 && this.chance(0.6) ? `${this.pick(bounds).name}.length`
+            : String(this.pick([0, 1, 2, 3, 5]));
+          const update = this.pick([`${i}++`, `++${i}`, `${i} += 1`]);
+          const inner = [...vars, { name: i, ty: NUMBER, mutable: false, owned: false }];
+          const assign = `${target.name} = ${this.expr(target.ty, inner, 1)};`;
+          const jump = this.next();
+          const body = jump < 0.2 ? [`  if (${this.test(inner, 1)}) continue;`, `  ${assign}`]
+            : jump < 0.3 ? [`  if (${this.test(inner, 1)}) break;`, `  ${assign}`]
+            : jump < 0.4 ? [`  if (${this.test(inner, 1)}) return ${this.expr(ret, inner, 1)};`, `  ${assign}`]
+            : [`  ${assign}`];
+          lines.push(`for (let ${i} = ${this.pick([0, 0, 1, -1, 2])}; ${i} < ${bound}; ${update}) {`, ...body, '}');
+        } else if (arrays.length > 0 && target !== undefined) {
           const xs = this.pick(arrays);
           if (xs.ty.k === 'array') {
             const element = this.fresh('e');
