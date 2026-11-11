@@ -16,6 +16,9 @@ refuses the code instead of choosing one:
 - `(a)` or `async(a)`, then `{`: `tsc` reads an arrow function that lacks its
   `=>`, JavaScript reads `(a); {`. The parser refuses the `{` there, and a
   `:` after `async(a)`, which `tsc` reads as a return type.
+- `async(...x)`: `tsc` reads an async arrow function whose rest parameter is
+  `x`, JavaScript reads a call with a spread argument. The parser refuses a
+  spread among the arguments of `async(`.
 - `a.` with a name on the next line that another word follows on that line,
   such as `default instanceof b`: `tsc` reads a member access that lacks its
   name, JavaScript reads `a.default instanceof b`. The parser refuses it.
@@ -322,8 +325,15 @@ def refuseArrowLookalike : ParseM Unit := do
 
 /-- `tsc` also reads `async()` or `async(a)` followed by `:`, as in
 `c ? async() : d`, as an arrow function with a return type. JavaScript reads
-a call of a function named `async`. Call after the `)`. -/
-def refuseAsyncArrowLookalike : ParseM Unit := do
+a call of a function named `async`. And `tsc` reads `async(...x)` as the
+start of an async arrow function whose rest parameter is `x`, so it refuses
+`async(...f())`, which JavaScript reads as a call with a spread argument. The
+parser refuses every spread among the arguments `args` of `async(`, which
+start at `paren`. Call after the `)`. -/
+def refuseAsyncArrowLookalike (paren : Token) (args : List Expr) : ParseM Unit := do
+  if args.any (· matches .spread ..) then
+    failAt paren ("tsc may read this 'async(…)' with a spread as an arrow function's parameters; " ++
+      "put the callee in parentheses")
   refuseArrowLookalike
   let t ← peek
   if t.isPunct ":" then
@@ -453,7 +463,7 @@ def leftHandSideStep (parseIndex : ParseM Expr) (parseArgs : ParseM (List Expr))
   else if t.isPunct "(" then
     let isAsync := (expr matches .ident _ "async") && !t.newlineBefore
     let args ← parseArgs
-    if isAsync then refuseAsyncArrowLookalike
+    if isAsync then refuseAsyncArrowLookalike t args
     return (.call (← spanFrom start) expr args, true)
   else if t.isPunct "?." then
     requireFeature t .optionalChaining
