@@ -230,10 +230,18 @@ def getPath (fields : List (String × Val N)) : List String → Option (Val N)
 Bigint `/` and `%` truncate toward zero and throw on a zero divisor
 (`BigInt::divide`, `BigInt::remainder`). On numbers and on strings, `a > b`
 is `b < a` and `a >= b` is `b <= a`, as `IsLessThan` evaluates them
-(ECMA-262 §13.10.1). Strings compare by their code units (§7.2.13). The
-subset has no `/` or `%` on numbers. -/
+(ECMA-262 §13.10.1). Strings compare by their code units (§7.2.13). When
+one operand of `+` is a string, `+` converts the other with ToString and
+joins the code units (ApplyStringOrNumericBinaryOperator, §13.15.3). The
+subset converts strings, bigints and booleans; ToString of a number is not
+modelled yet. The subset has no `/` or `%` on numbers. -/
 def binary : BinOp → Val N → Val N → Option (Val N)
   | .add, .int a, .int b => some (.int (a + b))
+  | .add, .str a, .str b => some (.str (a ++ b))
+  | .add, .str a, .int b => some (.str (a ++ JSString.ofInt b))
+  | .add, .int a, .str b => some (.str (JSString.ofInt a ++ b))
+  | .add, .str a, .bool b => some (.str (a ++ JSString.ofBool b))
+  | .add, .bool a, .str b => some (.str (JSString.ofBool a ++ b))
   | .sub, .int a, .int b => some (.int (a - b))
   | .mul, .int a, .int b => some (.int (a * b))
   | .div, .int a, .int b => if b == 0 then none else some (.int (a.tdiv b))

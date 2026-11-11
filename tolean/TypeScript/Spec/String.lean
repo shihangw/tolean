@@ -113,6 +113,26 @@ theorem decode_flatMap_utf16 (cs : List Char) : decode (cs.flatMap utf16) = cs :
     simpa using this
   · intro h; rw [h]
 
+/-- `a + b` on two strings: the code units of `a`, then those of `b`
+(ApplyStringOrNumericBinaryOperator, ECMA-262 §13.15.3). -/
+instance : Append JSString := ⟨fun a b => ⟨a.units ++ b.units⟩⟩
+
+@[simp] theorem units_append (a b : JSString) : (a ++ b).units = a.units ++ b.units := rfl
+
+/-- Two literals joined are the literal of the joined text, so `simp` can
+join the literals of a claim. -/
+@[simp] theorem ofString_append (a b : String) : ofString a ++ ofString b = ofString (a ++ b) := by
+  simp only [ofString, String.toList_append, List.flatMap_append]
+  rfl
+
+/-- ToString of a bigint (ECMA-262 §7.1.17): `BigInt::toString` with radix
+10 (§6.1.6.2.21). It writes the decimal digits of the value, after `-` when
+the value is negative, as Lean's `toString` does on an `Int`. -/
+def ofInt (i : Int) : JSString := ofString (ToString.toString i)
+
+/-- ToString of a boolean (ECMA-262 §7.1.17): `"true"` or `"false"`. -/
+def ofBool (b : Bool) : JSString := ofString (if b then "true" else "false")
+
 /-- IsLessThan on two lists of code units (ECMA-262 §7.2.13, step 3): the
 first code unit where the lists differ decides, and when one list is a prefix
 of the other, the shorter one is less. -/
