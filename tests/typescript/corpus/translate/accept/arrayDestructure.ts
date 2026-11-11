@@ -40,3 +40,13 @@ export function split(xs: ReadonlyArray<string>): number {
   const [head, ...tail]: ReadonlyArray<string> = xs;
   return (head ?? '').length + tail.length;
 }
+
+function halves(a: bigint): readonly [bigint, bigint] {
+  const [q, r] = divmod(a);
+  return [q, r];
+}
+
+export function nested(a: bigint): bigint {
+  const [x, y] = halves(a);
+  return x + y;
+}

@@ -186,7 +186,7 @@ partial def exprNumbers : Expr → List String
 
 def stmtNumbers : Stmt → List String
   | .varDecl _ d => (d.init.map exprNumbers).getD []
-  | .exprStmt _ e | .ifStmt _ e _ _ | .whileStmt _ e _ | .forOfStmt _ _ _ e _ => exprNumbers e
+  | .exprStmt _ e | .ifStmt _ e _ _ | .whileStmt _ e _ | .forOfStmt _ _ _ e _ | .destructure _ _ _ _ e => exprNumbers e
   | .returnStmt _ e => (e.map exprNumbers).getD []
   | .forStmt _ i t u _ =>
     (((i.bind (·.init)).map exprNumbers).getD []) ++ ((t.map exprNumbers).getD []) ++ ((u.map exprNumbers).getD [])
@@ -194,7 +194,7 @@ def stmtNumbers : Stmt → List String
 
 def stmtCalls : Stmt → List String
   | .varDecl _ d => (d.init.map exprCalls).getD []
-  | .exprStmt _ e | .ifStmt _ e _ _ | .whileStmt _ e _ | .forOfStmt _ _ _ e _ => exprCalls e
+  | .exprStmt _ e | .ifStmt _ e _ _ | .whileStmt _ e _ | .forOfStmt _ _ _ e _ | .destructure _ _ _ _ e => exprCalls e
   | .returnStmt _ e => (e.map exprCalls).getD []
   | .forStmt _ i t u _ =>
     (((i.bind (·.init)).map exprCalls).getD []) ++ ((t.map exprCalls).getD []) ++ ((u.map exprCalls).getD [])
@@ -241,7 +241,7 @@ partial def subExprs (e : Expr) : List Expr :=
 /-- The expressions that a statement holds, outside its nested statements. -/
 def stmtExprs : Stmt → List Expr
   | .varDecl _ d => d.init.toList
-  | .exprStmt _ e | .ifStmt _ e _ _ | .whileStmt _ e _ | .forOfStmt _ _ _ e _ => [e]
+  | .exprStmt _ e | .ifStmt _ e _ _ | .whileStmt _ e _ | .forOfStmt _ _ _ e _ | .destructure _ _ _ _ e => [e]
   | .returnStmt _ e => e.toList
   | .switchStmt _ d cs => d :: cs.filterMap (·.1)
   | _ => []

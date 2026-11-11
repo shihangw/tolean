@@ -36,4 +36,12 @@ def split {N : Type} [JSNumber N] (xs : List JSString) : N :=
   let (head, tail) := ((xs[0]? : Option JSString), (List.drop 1 xs))
   (JSNumber.add ((JSNumber.ofSafeInt (N := N) ((JSString.length ((Option.getD head (JSString.ofString ""))) : Nat) : Int))) ((JSNumber.ofSafeInt (N := N) ((List.length tail : Nat) : Int))))
 
+def halves {N : Type} [JSNumber N] (a : Int) : (Int × Int) :=
+  let (q, r) := (divmod (N := N) a)
+  (q, r)
+
+def nested {N : Type} [JSNumber N] (a : Int) : Int :=
+  let (x, y) := (halves (N := N) a)
+  (x + y)
+
 end Test
