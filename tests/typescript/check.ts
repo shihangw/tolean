@@ -296,6 +296,37 @@ class Gen {
     ])();
   }
 
+  /** An array pattern, or something that starts like one: names and holes,
+   * a rest element, and sometimes what the Lean parser refuses, such as a
+   * `,` before the `]`, a default or a nested pattern. */
+  private pattern(): Array<string> {
+    const items: Array<string> = ['['];
+    const count = Math.floor(this.next() * 4);
+    for (let i = 0; i < count; i++) {
+      if (i > 0) {
+        items.push(',');
+      }
+      if (this.chance(0.25)) {
+        continue;
+      }
+      if (this.chance(0.03)) {
+        items.push('[', this.name(), ']');
+      } else {
+        items.push(this.name());
+      }
+      if (this.chance(0.03)) {
+        items.push('=', ...this.atom());
+      }
+    }
+    if (this.chance(0.3)) {
+      items.push(...(count > 0 ? [','] : []), '...', this.name());
+    } else if (count > 0 && this.chance(0.1)) {
+      items.push(',');
+    }
+    items.push(']');
+    return items;
+  }
+
   private end(): Array<string> {
     return this.chance(0.6) ? [';'] : [];
   }
@@ -307,6 +338,13 @@ class Gen {
       () => [...this.expr(3), ...this.end()],
       () => ['let', this.name(), ...(this.chance(0.5) ? [':', ...this.type(2)] : []), '=', ...this.expr(2), ...this.end()],
       () => ['const', this.name(), '=', ...this.expr(2), ...this.end()],
+      () => [
+        this.pick(['let', 'const']),
+        ...this.pattern(),
+        ...(this.chance(0.3) ? [':', ...this.type(2)] : []),
+        ...(this.chance(0.95) ? ['=', ...this.expr(2)] : []),
+        ...this.end(),
+      ],
       () => ['return', ...(this.chance(0.7) ? this.expr(2) : []), ...this.end()],
       () => ['throw', ...this.expr(2), ...this.end()],
       () => [';'],

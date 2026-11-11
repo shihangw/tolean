@@ -19,7 +19,8 @@ marks which links are proved, tested against a reference, or trusted.
   `<A, B>`, enums whose members are strings, and `const` and `let`. Each of
   them may be exported, by `export` before it or by an export list such as
   `export { a, type B }`.
-- **Statements:** `const` and `let` declarations, expression statements,
+- **Statements:** `const` and `let` declarations, array destructuring such as
+  `const [a, , b, ...rest] = xs`, expression statements,
   `return`, `throw`, `if` and `else`, `for … of`, the counted `for`, `while`,
   `switch`, blocks, `break`, `continue` and the empty statement. A counted
   `for`, such as `for (let i = 0; i < n; i++)`, starts with a `const` or `let`
@@ -72,6 +73,17 @@ A spread is not an expression on its own, so the parser refuses one anywhere
 else, such as `(...xs)`. It also refuses a hole in an array literal, such as
 `[a, , b]`. The translator accepts a spread in an array literal and at the
 start of an object literal, and refuses one in a call for now.
+
+The parser reads array destructuring in a `const` or `let` statement, such as
+`const [a, , b, ...rest]: T = xs`. Each place of the pattern is a name or an
+empty place, which is a hole, and a rest element may come last. A pattern
+needs a value after `=`, and a statement declares one pattern. The parser
+refuses destructuring after `export` and in the first part of a `for` loop,
+and it refuses object patterns, nested patterns and default values. It also
+refuses a pattern that is empty or that ends with a `,`, such as `[a, ]` or
+`[a, , ]`, although JavaScript allows both. So the last place is always a name
+or the rest element, and the printed pattern reads back as the same one. The
+translator refuses destructuring for now.
 
 In the declaration at the start of a counted `for`, the parser refuses an `in`
 operator unless parentheses, braces, the arguments of a call or an index hold
