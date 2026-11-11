@@ -667,7 +667,7 @@ def extras : List Group := [
   ⟨"Certificates: includes and membership", [``Proof.includesVal_map, ``Proof.includesVal_enc,
     ``Proof.includesVal_int, ``Proof.includesVal_bool, ``Proof.includesVal_str,
     ``Proof.includesVal_num]⟩,
-  ⟨"Certificates: elements of a list", [``Proof.elementAt_map_some, ``Proof.elementAt_map_toSafeInt,
+  ⟨"Certificates: elements of a list", [``Proof.elementAt_map_some, ``Proof.elementAt_cons, ``Proof.elementAt_map_toSafeInt,
     ``Proof.atVal_map]⟩,
   ⟨"Certificates: slices of a list", [``Proof.sliceList_map, ``Proof.getElem?_rev,
     ``Proof.sliceList_nonneg, ``Proof.sliceList_from, ``Proof.sliceList_last,

@@ -391,6 +391,22 @@ omit [JSNumber N] in
     cases xs[k.toNat]? <;> rfl
   · simp [Eval.elementAt, hk]
 
+omit [JSNumber N] in
+/-- The element of a list literal at an integer index, one step at a time, as
+a pattern on a literal reads it. -/
+@[simp] theorem elementAt_cons (x : Val N) (xs : List (Val N)) (k : Int) :
+    Eval.elementAt (x :: xs) (some k) =
+      if k = 0 then x else if 0 < k then Eval.elementAt xs (some (k - 1)) else .undefined := by
+  simp only [Eval.elementAt]
+  by_cases h0 : k = 0
+  · subst h0; simp
+  · by_cases hp : 0 < k
+    · have h1 : 0 ≤ k - 1 := by omega
+      have h2 : k.toNat = (k - 1).toNat + 1 := by omega
+      rw [if_pos (Int.le_of_lt hp), if_neg h0, if_pos hp, if_pos h1, h2, List.getElem?_cons_succ]
+    · have h3 : ¬ 0 ≤ k := by omega
+      simp [h0, hp, h3]
+
 /-- `xs[i]` with a number `i`, on an encoded list. -/
 @[simp] theorem elementAt_map_toSafeInt {α : Type} (enc : α → Val N) (xs : List α) (i : N) :
     Eval.elementAt (xs.map enc) (JSNumber.toSafeInt i) = Eval.encUndef enc (JSNumber.elementAt? xs i) := by

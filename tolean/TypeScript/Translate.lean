@@ -3513,6 +3513,8 @@ mutual
 
 def stmtUsesNumber : Stmt → Bool
   | .varDecl _ d => varUsesNumber d
+  | .destructure _ _ p type init =>
+    p.names.any isNumberName || (type.map typeUsesNumber).getD false || exprUsesNumber init
   | .exprStmt _ e => exprUsesNumber e
   | .returnStmt _ v => (v.map exprUsesNumber).getD false
   | .throwStmt _ e => exprUsesNumber e
