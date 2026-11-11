@@ -482,7 +482,26 @@ export class Gen {
     for (let i = 0; i < count; i++) {
       const roll = this.next();
       const lets = vars.filter((v) => v.mutable);
-      if (roll < 0.3) {
+      const patternArrays = vars.filter((v) =>
+        v.ty.k === 'array' && !v.owned && v.ty.of.k !== 'nullable' && v.ty.of.k !== 'optional');
+      if (roll < 0.08 && patternArrays.length > 0) {
+        // An array pattern: each place is optional, `undefined` past the end,
+        // and the rest is an array of the values after the places.
+        const xs = this.pick(patternArrays);
+        if (xs.ty.k === 'array') {
+          const of = xs.ty.of;
+          const places = Array.from({ length: 1 + Math.floor(this.next() * 3) }, () =>
+            this.chance(0.75) ? this.fresh('d') : '');
+          // A hole may not end the pattern.
+          if (places[places.length - 1] === '') places[places.length - 1] = this.fresh('d');
+          const rest = this.chance(0.4) ? this.fresh('r') : undefined;
+          lines.push(`const [${places.join(', ')}${rest !== undefined ? `, ...${rest}` : ''}] = ${xs.name};`);
+          for (const p of places) {
+            if (p !== '') vars.push({ name: p, ty: { k: 'optional', of }, mutable: false, owned: false });
+          }
+          if (rest !== undefined) vars.push({ name: rest, ty: { k: 'array', of }, mutable: false, owned: false });
+        }
+      } else if (roll < 0.3) {
         const t = this.pick([BIGINT, NUMBER, BOOLEAN, STRING, { k: 'nullable', of: BIGINT } as Ty,
           ...(this.structs.length > 0 ? [{ k: 'struct', name: this.pick(this.structs).name } as Ty] : [])]);
         const name = this.fresh('v');

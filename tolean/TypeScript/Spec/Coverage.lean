@@ -110,6 +110,11 @@ def sections : List Section := [
   ⟨"sec-islooselyequal", "7.2.14", "IsLooselyEqual",
     [``Eval.looseEq_null_left, ``Eval.looseEq_null_right]⟩,
   ⟨"sec-isstrictlyequal", "7.2.15", "IsStrictlyEqual", []⟩,
+  -- §8 Syntax-Directed Operations {#sec-syntax-directed-operations}
+  ⟨"sec-runtime-semantics-iteratorbindinginitialization", "8.6.3",
+    "Runtime Semantics: IteratorBindingInitialization",
+    [``Proof.listPlaces_sim, ``Proof.listPlaces_items, ``Proof.tuplePlaces_sim, ``Proof.tuplePlaces_items,
+    ``Proof.tuplePlaces_length, ``Proof.tuplePlaces_all, ``Proof.sliceList_drop]⟩,
   -- §9 Executable Code and Execution Contexts {#sec-executable-code-and-execution-contexts}
   ⟨"sec-declarative-environment-records", "9.1.1.1", "Declarative Environment Records",
     [``Eval.Env.set_cons, ``Eval.Env.lookup_cons, ``Eval.Env.length_set, ``Eval.Env.set_set,
@@ -202,6 +207,11 @@ def sections : List Section := [
     ``Syntax.Stmt.constAssignedIn_continueStmt, ``Syntax.Stmt.constAssignedIn_empty,
     ``Syntax.Stmt.constAssignedIn_switchStmt,
     ``Syntax.Stmt.constAssignedIn_throwStmt]⟩,
+  ⟨"sec-destructuring-binding-patterns", "14.3.3", "Destructuring Binding Patterns",
+    [``Proof.translateDestructure_sound, ``Proof.binds_sim, ``Proof.declarePlaces_ok,
+    ``Proof.patternReads_sim, ``Proof.exactTuple_true, ``Proof.letTuple_exec, ``Proof.Agree.append,
+    ``Proof.lookup_isSome_zip, ``Proof.lookup_isSome_append, ``Proof.lookup_isSome_reverse,
+    ``Proof.evalList_append_inv]⟩,
   ⟨"sec-if-statement", "14.6", "The if Statement",
     [``Proof.execStmt_if, ``Proof.if_ret, ``Proof.if_normal, ``Proof.if_ends, ``Proof.if_early_sim,
     ``Proof.if_state_sim, ``Proof.branch_ite, ``Proof.branch_none, ``Proof.branch_tag,
