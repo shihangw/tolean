@@ -82,8 +82,7 @@ refuses destructuring after `export` and in the first part of a `for` loop,
 and it refuses object patterns, nested patterns and default values. It also
 refuses a pattern that is empty or that ends with a `,`, such as `[a, ]` or
 `[a, , ]`, although JavaScript allows both. So the last place is always a name
-or the rest element, and the printed pattern reads back as the same one. The
-translator refuses destructuring for now.
+or the rest element, and the printed pattern reads back as the same one.
 
 In the declaration at the start of a counted `for`, the parser refuses an `in`
 operator unless parentheses, braces, the arguments of a call or an index hold
