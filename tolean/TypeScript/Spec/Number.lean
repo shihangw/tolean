@@ -63,6 +63,11 @@ class JSNumber (N : Type) where
 
 open JSNumber
 
+/-- SameValueZero (ECMA-262 §7.2.11) on numbers: `===`, except that `NaN` is
+the same as `NaN`. `Array.prototype.includes` compares with it. -/
+def JSNumber.sameValueZero {N : Type} [JSNumber N] (a b : N) : Bool :=
+  eq a b || (isNaN a && isNaN b)
+
 /-- On safe integers, JS `number` operations agree with `Int`. -/
 class SafeIntLaws (N : Type) [JSNumber N] : Prop where
   toSafeInt_inRange : ∀ {x : N} {i : Int}, toSafeInt x = some i → InRange i

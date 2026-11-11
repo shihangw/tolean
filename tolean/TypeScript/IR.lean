@@ -72,6 +72,13 @@ inductive ExprExt where
   /-- `match k with | K.a => r.a | …`, on `r` and `k`: `r[k]`, where `r` is a
   `Record<K, V>` with the keys `keys`, and `K` is the literal union `key`. -/
   | recordGet (key : DeclRef) (keys : List String)
+  /-- `x ∈ xs`, a `Prop`, on `xs` and `x`: `xs.includes(x)`, where the
+  elements are integers, booleans, strings or constructors of a literal
+  union, which SameValueZero compares as `=` does. -/
+  | includes
+  /-- `(List.any xs (JSNumber.sameValueZero x))`, on `xs` and `x`:
+  `xs.includes(x)` on numbers, where `NaN` is the same as `NaN`. -/
+  | includesNumber
   /-- `JSMap.empty`, on no arguments: `new Map()`. The translator writes the
   type of the map after it. -/
   | mapEmpty
@@ -235,6 +242,9 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
     | some f => s!"{argument r}.{f}"
     | Option.none =>
       s!"(match {k} with{String.join (keys.map fun f => s!" | {case f} => {argument r}.{f}")})"
+  | .includes, [xs, x] => s!"{argument x} ∈ {argument xs}"
+  | .includesNumber, [xs, x] =>
+    s!"({leanName names "List.any"} {argument xs} ({js}.sameValueZero {argument x}))"
   | .pure, [a] => s!"({tolean.IR.wrapped (leanName names "pure") a})"
   | .error, [m] => s!"({tolean.IR.wrapped (leanName names "JSError.mk") m})"
   | _, _ => ""

@@ -247,6 +247,29 @@ def binary : BinOp → Val N → Val N → Option (Val N)
   | .looseNe, a, b => (looseEq a b).map (.bool ∘ not)
   | _, _, _ => none
 
+/-- SameValueZero (ECMA-262 §7.2.11) on the values of the subset. Two numbers
+are the same when they are `===` or both `NaN`, and `+0` is the same as `-0`.
+Any other two values are the same when they are `===` (SameValueNonNumber,
+§7.2.12), so two objects leave the subset, as they do for `===`. -/
+def sameValueZero : Val N → Val N → Option Bool
+  | .num a, .num b => some (JSNumber.sameValueZero a b)
+  | a, b => strictEq a b
+
+/-- Whether an element of `items` is the same as `v` by SameValueZero. This
+is the loop of `Array.prototype.includes` (ECMA-262 §23.1.3.16), which
+compares the elements in order and stops at the first that is. -/
+def includesVal (v : Val N) : List (Val N) → Option Bool
+  | [] => some false
+  | x :: xs => do if ← sameValueZero v x then return true else includesVal v xs
+
+/-- A method of an array that takes no callback, on the elements of the
+array and the values of the arguments: `includes` with one argument
+(`Array.prototype.includes`, ECMA-262 §23.1.3.16). Its second argument, the
+index to start at, leaves the subset, and so does every other method. -/
+def arrayMethod (method : String) (items : List (Val N)) : List (Val N) → Option (Val N)
+  | [v] => if method == "includes" then (includesVal v items).map .bool else none
+  | _ => none
+
 /-- The element of the array `items` whose index is the safe integer `i`, or
 `undefined` when `i` is none or no index of the array. -/
 def elementAt (items : List (Val N)) : Option Int → Val N
@@ -659,7 +682,16 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     | .set elems =>
       let found ← setHas elems (← eval m fuel env arg)
       if method == "has" then return .bool found else none
+    -- An array, as the next rule takes it.
+    | .list items => arrayMethod method items [← eval m fuel env arg]
     | _ => none
+  -- Any other call of a method of an array, such as `xs.includes(v)`. The
+  -- array comes first, then the arguments, as `EvaluateCall` takes them
+  -- (ECMA-262 §13.3.6.2). Reading the method of an array has no effect, so
+  -- the rule reads it after the arguments.
+  | .call _ (.member _ recv method) args => do
+    let .list items ← eval m fuel env recv | none
+    arrayMethod method items (← evalList m fuel env args)
   -- A call that throws inside an expression gives no value. Only a call that
   -- is the whole value of a declaration or a `return` passes its throw on
   -- (`evalTop`).

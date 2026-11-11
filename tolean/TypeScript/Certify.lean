@@ -466,6 +466,15 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           s!"@[simp] theorem encode{name}_{i} {generic} : encode{name} ({nv} := {nv}) {ctor m} = Val.str {r.jsString m} := rfl"
         encs := encs.push <|
           s!"@[simp] theorem decode{name}_{i} {generic} : decode{name} ({nv} := {nv}) (some (Val.str {r.jsString m})) = {ctor m} := rfl"
+        -- `xs.includes(x)` on the union: the value of `x` is the string of
+        -- the constructor, which is the same as an element's encoding only
+        -- when the element is that constructor.
+        encs := encs.push <|
+          s!"@[simp] theorem includes{name}_{i} {generic} (xs : List {ty}) : " ++
+          s!"{r.eval "includesVal"} ({nv} := {nv}) (Val.str {r.jsString m}) (List.map encode{name} xs) = " ++
+          s!"some (decide ({ctor m} ∈ xs)) :=\n" ++
+          s!"  tolean.TypeScript.Proof.includesVal_enc _ _ _ (fun y => by cases y <;> " ++
+          s!"simp [encode{name}, {r.eval "sameValueZero"}, {r.eval "strictEq"}]) xs"
     -- An interface.
     if let .struct name typeParams allFields := d then
       unless typeParams.isEmpty do throw s!"{file}: the generic interface {name} has no certificate yet"

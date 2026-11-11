@@ -407,6 +407,8 @@ the file, the line and the reason. It never approximates.
 | `xs.map((x, i) => e)` | `List.mapIdx (fun (i : Nat) (x : T) => let i := JSNumber.ofSafeInt i; e) xs`. JS passes the index as a number, so the body reads `i` as a `number`. An array has fewer than 2^32 elements, so the index is always a safe integer. |
 | `xs.some(x => p)`, `xs.every(x => p)` | `List.any xs (fun (x : T) => p)`, `List.all xs (fun (x : T) => p)` |
 | `xs.find(x => p)` | `List.find? (fun (x : T) => p) xs`. The value is `undefined` when no element passes, so it has the type of an optional field: `xs.find(p) ?? d`, `xs.find(p)?.f` and `xs.find(p) === undefined` work as they do on `s.f`. |
+| `xs.includes(x)` on `bigint`, `boolean`, `string` or a literal union of strings | `x ∈ xs`. `includes` compares by SameValueZero, which is `===` on these types. It is in ES2016. |
+| `xs.includes(x)` on `number` | `List.any xs (JSNumber.sameValueZero x)`. SameValueZero is `===`, except that `NaN` is the same as `NaN`, so `[NaN].includes(NaN)` is `true`. |
 | `xs.findLast(x => p)` | `List.find? (fun (x : T) => p) (List.reverse xs)`, which the callback reads from the last element to the first, as in JS. It has the type of `find`, and it is in ES2023. |
 | `xs.findIndex(x => p)` | `JSNumber.ofSafeInt (((List.findIdx? (fun (x : T) => p) xs).map Int.ofNat).getD (-1))`: the index of the first element that passes, as a `number`, or `-1` |
 | `xs.reduce((acc, x) => e, init)` | `List.foldl (fun (acc : A) (x : T) => e) init xs`, where `A` is the type of `init`. The body must give a value of that type. |
@@ -475,6 +477,10 @@ Tolean rejects these, among others:
   for every method but `map` it must give a boolean. Tolean also refuses
   `find` on an array of nullable values, because Lean's `none` would stand
   for both `null` and `undefined`.
+- `includes` on an array of objects or of nullable values, and its second
+  argument, the index to start at. On objects `includes` compares
+  references. Tolean also refuses a call of any other array method that takes
+  no callback, such as `indexOf`.
 - `reduce` without an initial value, which throws on an empty array, and a
   callback of `reduce` whose value has another type than the initial value.
 - A map key or a set element of type `number`, which can be `NaN` or `-0`,

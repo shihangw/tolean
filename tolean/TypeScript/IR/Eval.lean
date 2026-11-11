@@ -81,6 +81,9 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   | .optField path _, [.obj fields] => Eval.getPath fields path
   -- `r[k]`, as the spec evaluates it: the property that the string `k` names.
   | .recordGet _ _, [.obj fields, .str k] => Eval.getKey fields k
+  -- `x ∈ xs` and `List.any xs (JSNumber.sameValueZero x)`: whether an
+  -- element is `x`, as `includes` compares them.
+  | .includes, [.list xs, x] | .includesNumber, [.list xs, x] => (Eval.includesVal x xs).map .bool
   -- The operations of a `Map`, as the spec gives them.
   | .mapEmpty, [] => some (.map [])
   | .mapGet, [.map entries, k] => (Eval.mapFind entries k).map (·.getD .undefined)

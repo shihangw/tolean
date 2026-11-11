@@ -308,9 +308,19 @@ export class Gen {
     };
     const options: Array<() => string> = [];
     switch (t.k) {
-      case 'boolean':
+      case 'boolean': {
         options.push(() => call(this.pick(['some', 'every']), this.pick(arrays), (inner) => this.expr(BOOLEAN, inner, depth)));
+        // `includes` on primitives, which SameValueZero compares by value.
+        // A number array may hold `NaN`, which `includes` finds.
+        const primitive = arrays.filter((a) => ['bigint', 'number', 'boolean', 'string'].includes(a.elem.k));
+        if (primitive.length > 0) {
+          options.push(() => {
+            const recv = this.pick(primitive);
+            return `${recv.name}.includes(${this.expr(recv.elem, vars, depth)})`;
+          });
+        }
         break;
+      }
       case 'array': {
         const of = t.of;
         options.push(() => call('map', this.pick(arrays), (inner) => this.expr(of, inner, depth)));

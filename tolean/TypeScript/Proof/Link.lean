@@ -343,6 +343,45 @@ theorem runFold_forInRet {α σ τ R : Type} (fs : List (DeclRef × List String 
   have := key xs (dec ρ)
   rwa [hdec ρ hI] at this
 
+/-- `includes` on the encoded elements of a list, when SameValueZero of `v`
+and each element is a test `p` of the element. -/
+theorem includesVal_map {α : Type} (enc : α → Val N) (v : Val N) (p : α → Bool)
+    (h : ∀ y, Eval.sameValueZero v (enc y) = some (p y)) :
+    ∀ xs : List α, Eval.includesVal v (xs.map enc) = some (xs.any p)
+  | [] => by simp [Eval.includesVal]
+  | y :: ys => by
+    simp only [List.map_cons, Eval.includesVal, h y, Option.bind_eq_bind, Option.bind_some, List.any_cons]
+    cases p y
+    · simp [includesVal_map enc v p h ys]
+    · simp
+
+/-- `includes` of `v` is membership of `x`, when `v` is the same as the
+encoding of an element exactly when the element is `x`. A certificate states
+it for each constructor of a literal union. -/
+theorem includesVal_enc {α : Type} [DecidableEq α] (enc : α → Val N) (v : Val N) (x : α)
+    (h : ∀ y, Eval.sameValueZero v (enc y) = some (decide (y = x))) (xs : List α) :
+    Eval.includesVal v (xs.map enc) = some (decide (x ∈ xs)) := by
+  rw [includesVal_map enc v _ h]
+  induction xs with
+  | nil => simp
+  | cons y ys ih => by_cases hy : y = x <;> simp_all [eq_comm]
+
+@[simp] theorem includesVal_int (x : Int) (xs : List Int) :
+    Eval.includesVal (N := N) (.int x) (xs.map .int) = some (decide (x ∈ xs)) :=
+  includesVal_enc _ _ _ (fun y => by simp [Eval.sameValueZero, Eval.strictEq, eq_comm]) xs
+
+@[simp] theorem includesVal_bool (x : Bool) (xs : List Bool) :
+    Eval.includesVal (N := N) (.bool x) (xs.map .bool) = some (decide (x ∈ xs)) :=
+  includesVal_enc _ _ _ (fun y => by simp [Eval.sameValueZero, Eval.strictEq, eq_comm]) xs
+
+@[simp] theorem includesVal_str (x : JSString) (xs : List JSString) :
+    Eval.includesVal (N := N) (.str x) (xs.map .str) = some (decide (x ∈ xs)) :=
+  includesVal_enc _ _ _ (fun y => by simp [Eval.sameValueZero, Eval.strictEq, eq_comm]) xs
+
+@[simp] theorem includesVal_num (x : N) (xs : List N) :
+    Eval.includesVal (.num x) (xs.map .num) = some (xs.any (JSNumber.sameValueZero x)) :=
+  includesVal_map _ _ _ (fun _ => rfl) xs
+
 end tolean.TypeScript.Proof
 
 namespace tolean.TypeScript.IR
@@ -371,6 +410,9 @@ macro_rules
         Expr.evalCall, Expr.evalList,
         Expr.evalFields, Expr.evalMap, Expr.evalMapIdx, Expr.evalFilter, Expr.evalFind, Expr.evalFindIdx, Expr.evalReduce,
         bindState, eqVal, ← List.map_reverse,
+        -- `includes` on an array literal compares with `===` once the list
+        -- has reduced, so strict equality on primitives must reduce too.
+        Eval.includesVal, Eval.sameValueZero, Eval.strictEq,
         tolean.IR.IntOp.apply, tolean.IR.Order.apply,
         tolean.IR.Division.apply, ExprExt.apply, NumberOp.apply, NumberConstant.value,
         NumberTest.apply, tagOf, Eval.Val.typeOf, Eval.Env.set, Eval.getProp, Eval.getKey_ofString, Eval.getPath,

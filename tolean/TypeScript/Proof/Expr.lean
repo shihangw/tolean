@@ -1818,6 +1818,103 @@ theorem translateReduce_sound {F : Nat}
       | _ => simp [hx] at hv
   · simp only [bind_ok, reject_ne_ok, false_and, exists_false] at h
 
+/-! ### Array methods without a callback -/
+
+/-- A method of an array that takes no callback: the interpreter evaluates the
+array, then the arguments, and `arrayMethod` gives the value. -/
+theorem eval_arrayCall (sp sp' : Span) (recv : Expr) (method : String) (args : List Expr)
+    (hr : recv.namesNumber = false) (harg : args.any (·.isArrow) = false) (ρ : Eval.Env N)
+    {items : List (Val N)} (hrecv : Eval.eval m fuel ρ recv = some (.list items)) :
+    Eval.eval m fuel ρ (.call sp (.member sp' recv method) args) =
+      (Eval.evalList m fuel ρ args).bind (Eval.arrayMethod method items) := by
+  have hr' : ∀ s, recv ≠ .ident s "Number" := by
+    intro s h; subst h; simp [Expr.namesNumber] at hr
+  -- One argument goes to the rule of `get` and `has`, which passes an array
+  -- on to `arrayMethod`; any other number to the rule of #94.
+  rcases args with _ | ⟨a, _ | ⟨b, rest⟩⟩
+  all_goals rw [Eval.eval]
+  all_goals first
+    | (rw [hrecv]
+       first
+         | rfl
+         | (cases ha : Eval.eval m fuel ρ a <;> simp [Eval.evalList, ha]))
+    | exact hr'
+    | (intros; contradiction)
+    | (intros; subst_vars; exact absurd rfl (hr' _))
+    | (clear hrecv; intros; simp_all [Expr.isArrow]; done)
+
+omit [JSNumber N] in
+/-- `includes` becomes one of its two operations. -/
+theorem includesOp_some {elem : Ty} {op : IR.ExprExt} (h : includesOp? elem = some op) :
+    op = .includes ∨ op = .includesNumber := by
+  unfold includesOp? at h
+  split at h
+  · cases h; exact Or.inr rfl
+  · split at h
+    · cases h; exact Or.inl rfl
+    · cases h
+
+/-- The code of `arrayCall` evaluates the array and the arguments, and its
+value is the one that `arrayMethod` gives them. -/
+theorem arrayCall_sound {s : Span} {method : String} {elem : Ty} {xs : Code} {args : List Code}
+    {ctx ctx' : Ctx} {c : Code} (h : arrayCall s method elem xs args ctx = .ok c ctx')
+    {ρ : Eval.Env N} {v : Val N} (hv : IR.Expr.eval fs fuel ρ c.code = some v) :
+    ∃ items vs, IR.Expr.eval fs fuel ρ xs.value = some (.list items) ∧
+      IR.Expr.evalList fs fuel ρ (args.map Code.value) = some vs ∧
+      Eval.arrayMethod method items vs = some v := by
+  simp only [arrayCall, ite_state] at h
+  split at h
+  · rename_i hm
+    have hm' : method = "includes" := by simpa using hm
+    subst hm'
+    match args, h with
+    | [x], h =>
+      simp only [ite_state] at h
+      split at h
+      · simp only [pure_bind, bind_ok, requireFeature_ok, orReject_ok, pure_ok] at h
+        obtain ⟨-, s₁, ⟨-, rfl⟩, op, s₂, ⟨hop, rfl⟩, rfl, -⟩ := h
+        simp only [IR.Expr.eval, IR.Expr.evalList] at hv
+        cases hx : IR.Expr.eval fs fuel ρ xs.value with
+        | none => simp [hx] at hv
+        | some w =>
+          cases hy : IR.Expr.eval fs fuel ρ x.value with
+          | none => simp [hx, hy] at hv
+          | some u =>
+            simp only [hx, hy, Option.bind_eq_bind, Option.bind_some] at hv
+            cases w
+            case list items =>
+              refine ⟨items, [u], rfl, by simp [IR.Expr.evalList, hy], ?_⟩
+              rcases includesOp_some hop with rfl | rfl <;>
+                simpa [IR.ExprExt.apply, Eval.arrayMethod] using hv
+            all_goals rcases includesOp_some hop with rfl | rfl <;> simp [IR.ExprExt.apply] at hv
+      · simp at h
+    | [], h => simp at h
+    | _ :: _ :: _, h => simp at h
+  · simp at h
+
+theorem translateArrayCall_sound {F : Nat}
+    (ihE : ∀ env exp e ctx c ctx', translateExpr F env exp e ctx = .ok c ctx' →
+      Sim (N := N) m fs fuel env e c.code)
+    {env : Translate.Env} {s : Span} {recv : Expr} {method : String}
+    {args : List Expr} {ctx ctx' : Ctx} {c : Code}
+    (h : translateArrayCall (F + 1) env s recv method args ctx = .ok c ctx')
+    {sp : Span} (hr : recv.namesNumber = false) :
+    Sim (N := N) m fs fuel env (.call s (.member sp recv method) args) c.code := by
+  simp only [translateArrayCall, ite_state] at h
+  split at h
+  · simp at h
+  rename_i harg
+  simp only [pure_bind, bind_ok, orReject_ok] at h
+  obtain ⟨xs, s₁, hxs, elem, s₂, ⟨-, rfl⟩, codes, s₃, hcodes, h⟩ := h
+  intro ρs ρo v ha hs hv
+  obtain ⟨items, vs, hitems, hvs, hval⟩ := arrayCall_sound fs fuel h hv
+  rw [eval_value] at hitems
+  have hrecv := ihE _ _ _ _ _ _ hxs ρs ρo _ ha hs hitems
+  have hargs := mapM_sim m fs fuel (fun e ctx c ctx' he => ihE _ _ _ _ _ _ he) args _ codes _ hcodes
+    ρs ρo vs ha hs hvs
+  rw [eval_arrayCall m fuel _ _ _ _ _ hr (by simpa using harg) _ hrecv]
+  simp [hargs, hval]
+
 omit [JSNumber N] in
 /-- `firstFitting` gives a result of one of its two parsers, from the state it
 starts from. -/
@@ -1900,6 +1997,7 @@ theorem eval_mapMethod (sp sp' : Span) (recv key : Expr) (name : String) (hr : r
       (Eval.eval m fuel ρ recv).bind fun r =>
         match r with
         | .map _ | .set _ => (Eval.eval m fuel ρ key).bind (mapMethodVal name r)
+        | .list items => (Eval.eval m fuel ρ key).bind fun k => Eval.arrayMethod name items [k]
         | _ => none := by
   have hr' : ∀ s, recv ≠ .ident s "Number" := by
     intro s h; subst h; simp [Expr.namesNumber] at hr
@@ -2500,16 +2598,19 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
     (∀ env s recv op args ctx c ctx', translateMapMethod F env s recv op args ctx = .ok c ctx' →
       ∀ sp name, mapMethodOf (.member sp recv name) = some (recv, op) →
         Sim (N := N) m fs fuel env (.call s (.member sp recv name) args) c.code) ∧
+    (∀ env s recv method args ctx c ctx', translateArrayCall F env s recv method args ctx = .ok c ctx' →
+      ∀ sp, recv.namesNumber = false →
+        Sim (N := N) m fs fuel env (.call s (.member sp recv method) args) c.code) ∧
     (∀ env exp e ctx c ctx', translateExprCore F env exp e ctx = .ok c ctx' →
       Sim (N := N) m fs fuel env e c.code) := by
   induction F with
   | zero =>
-    refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩ <;> intros <;>
+    refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩ <;> intros <;>
       simp_all [translateExpr, translateElements, translateArray, translateCall, translateObject,
-        translateBinary, translateArrayMethod, translateReduce, translateMapMethod, translateExprCore]
+        translateBinary, translateArrayMethod, translateReduce, translateMapMethod, translateArrayCall, translateExprCore]
   | succ F ih =>
-    obtain ⟨ihE, ihL, ihA, ihC, ihO, ihB, ihM, ihR, ihMM, ihX⟩ := ih
-    refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+    obtain ⟨ihE, ihL, ihA, ihC, ihO, ihB, ihM, ihR, ihMM, ihK, ihX⟩ := ih
+    refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
     -- The core first, then the step that makes a value a member of a union.
     rotate_right
     · intro env exp e ctx c ctx' h
@@ -2809,7 +2910,23 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
             exact ihMM _ _ _ _ _ _ _ _ h sp' name hmm
           | none =>
             simp only [hmm] at h
-            exact (ihC _ _ _ _ _ _ _ _ h).1
+            cases hk : arrayCallOf callee with
+            | some rk =>
+              obtain ⟨recv, method⟩ := rk
+              simp only [hk] at h
+              unfold arrayCallOf at hk
+              split at hk
+              · rename_i sp' recv' name
+                split at hk
+                · simp at hk
+                · rename_i hn
+                  simp only [Option.some.injEq, Prod.mk.injEq] at hk
+                  obtain ⟨rfl, rfl⟩ := hk
+                  exact ihK _ _ _ _ _ _ _ _ h sp' (by simpa using hn)
+              · simp at hk
+            | none =>
+              simp only [hk] at h
+              exact (ihC _ _ _ _ _ _ _ _ h).1
       | object sp props =>
         simp only [translateExprCore] at h
         exact ihO _ _ _ _ _ _ _ h
@@ -2910,5 +3027,7 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
       exact translateReduce_sound m fs fuel ihE h
     · intro env s recv op args ctx c ctx' h sp name hname
       exact translateMapMethod_sound m fs fuel ihE h hname
+    · intro env s recv method args ctx c ctx' h sp hr
+      exact translateArrayCall_sound m fs fuel ihE h hr
 
 end tolean.TypeScript.Proof
