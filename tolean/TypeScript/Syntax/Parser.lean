@@ -18,7 +18,7 @@ refuses the code instead of choosing one:
   `:` after `async(a)`, which `tsc` reads as a return type.
 - `async(...x)`: `tsc` reads an async arrow function whose rest parameter is
   `x`, JavaScript reads a call with a spread argument. The parser refuses a
-  spread among the arguments of `async(`.
+  spread as the first argument of `async(`.
 - `a.` with a name on the next line that another word follows on that line,
   such as `default instanceof b`: `tsc` reads a member access that lacks its
   name, JavaScript reads `a.default instanceof b`. The parser refuses it.
@@ -325,14 +325,16 @@ def refuseArrowLookalike : ParseM Unit := do
 
 /-- `tsc` also reads `async()` or `async(a)` followed by `:`, as in
 `c ? async() : d`, as an arrow function with a return type. JavaScript reads
-a call of a function named `async`. And `tsc` reads `async(...x)` as the
-start of an async arrow function whose rest parameter is `x`, so it refuses
-`async(...f())`, which JavaScript reads as a call with a spread argument. The
-parser refuses every spread among the arguments `args` of `async(`, which
-start at `paren`. Call after the `)`. -/
+a call of a function named `async`. And `tsc` reads `async(...` as the start
+of an async arrow function whose first parameter is a rest parameter, so it
+refuses `async(...f())`, which JavaScript reads as a call with a spread
+argument. A spread after the first argument does not do that: `tsc` reads
+`async(1, ...xs)` as a call. So the parser refuses a spread as the first of
+the arguments `args` of `async(`, which start at `paren`. Call after the
+`)`. -/
 def refuseAsyncArrowLookalike (paren : Token) (args : List Expr) : ParseM Unit := do
-  if args.any (· matches .spread ..) then
-    failAt paren ("tsc may read this 'async(…)' with a spread as an arrow function's parameters; " ++
+  if args.head?.any (· matches .spread ..) then
+    failAt paren ("tsc may read this 'async(…)' with a spread first as an arrow function's parameters; " ++
       "put the callee in parentheses")
   refuseArrowLookalike
   let t ← peek
