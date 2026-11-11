@@ -253,47 +253,195 @@ variables and in maps.
 
 ## Open questions
 
+Each question ends with a recommendation. A recommendation is not a decision:
+the step that takes the question up turns it into a decision record, or finds
+a reason to choose otherwise.
+
 - How should a certificate cover a generic function or interface? The
-  certifier has no encoder for a type parameter, so a file with either gets no
-  certificate. The claim could take an encoder for each type parameter as an
-  argument, since the code never looks inside such a value.
+  certifier has no encoder for a type parameter, so a file with either gets
+  no certificate. The claim could take an encoder for each type parameter as
+  an argument, since the code never looks inside such a value.
+
+  Recommendation: take a codec for each type parameter, not only an encoder.
+  The loop lemmas decode the environment back into Lean values, so they need
+  a decoder and the round trip `dec (some (enc x)) = x`. A test such as
+  `x === null` on a `T | null` needs `enc x ≠ Val.null`, and `??` needs
+  `enc x ≠ Val.undefined`. Those are the lemmas that the certifier writes for
+  every enum and struct today. One structure `Codec N T` bundles them. The
+  theorem of a generic function takes `(c : Codec N T)`, the certifier writes
+  `codecGauge : Codec N Gauge` for each concrete type from the same pieces,
+  and a generic interface gets a codec constructor such as
+  `codecPair (cA : Codec N A) (cB : Codec N B) : Codec N (Pair A B)`. The
+  claim holds because the translator refuses every construct that looks
+  inside a value of type `T`. If a later construct breaks that, Lean refuses
+  the certificate rather than accepting a false one.
+
 - How should a certificate cover an interface that refers to itself, and a
   function that calls itself? The encoder of such an interface would be a
   recursive function, and a certificate runs the interpreter with as much
   fuel as the calls need, which a recursive call does not bound. So a file
-  with either gets no certificate yet. The encoder could recurse through
-  `List.map` with a proof that it ends, as a translated function does. The
-  claim about a recursive function could take the fuel as an argument, and
-  follow by induction on the parameter that gets smaller.
+  with either gets no certificate yet.
+
+  Recommendation: write the encoder with well-founded recursion, as the
+  translated function is written. It recurses through `List.map` over the
+  children with `sizeOf` as the measure and the same decreasing tactic. The
+  decoder recurses on the `Val`, which is a nested inductive too. The
+  round-trip proof is the new work, and the certifier should get it from one
+  lemma about a structure whose list field holds the structure, not from a
+  tactic script per file. For a recursive function, quantify the fuel
+  existentially for each input:
+
+  ```lean
+  theorem f_cert (x : Tree) : ∃ n, ∀ fuel, n ≤ fuel →
+      run program "f" [encTree x] fuel = some (encTree (f x))
+  ```
+
+  The proof follows the function's own `termination_by`: induction on
+  `sizeOf x`, where the step takes the largest of the children's fuels. That
+  step needs one lemma the library lacks, that more fuel never changes a
+  `some` result of the interpreter or of the IR evaluator. The existential
+  form composes: a caller of a recursive function gets a claim of the same
+  shape. An explicit bound such as `sizeOf x + depth ≤ fuel` would leak into
+  every caller's statement.
+
 - How should a certificate cover a counted `for` loop? The interpreter gives
-  no value when the counter would pass `Number.MAX_SAFE_INTEGER`, as it would
-  for a bound of `Infinity`, so the claim that it gives a value for every
-  input does not hold. The claim could take the hypothesis that the
+  no value when the counter would pass `Number.MAX_SAFE_INTEGER`, as it
+  would for a bound of `Infinity`, so the claim that it gives a value for
+  every input does not hold. The claim could take the hypothesis that the
   interpreter gives a value, or that the bound is at most
   `Number.MAX_SAFE_INTEGER`.
+
+  Recommendation: take a hypothesis on the bound, stated over the parameters.
+  The translation of a counted loop is the `for … of` fold over
+  `JSNumber.countUp k b`, the IR evaluator gives `countUp? k b` and has no
+  value when that is `none`, and `countUp` is `countUp?` with `[]` for
+  `none`. So the link theorem fails only where `countUp? k b = none`, and
+  each counted loop adds one binder to the function's two theorems:
+
+  ```lean
+  theorem sum_cert {N : Type} [JSNumber N] (xs : List Int) (n : N)
+      (h0 : (JSNumber.countUp? 0 n).isSome) :
+      run program "sum" [encList Val.int xs, Val.num n] = some (Val.int (sum xs n))
+  ```
+
+  The bound inside `countUp?` is the loop's bound, printed over the
+  parameters as the translation prints it. For `i < xs.length` it is
+  `JSNumber.ofSafeInt xs.length`, so the hypothesis says that the list has at
+  most `Number.MAX_SAFE_INTEGER` elements. One library lemma,
+  `countUp?_eq_of_isSome`, rewrites the evaluator's value into
+  `some (.list (List.map Val.num (countUp k b)))`, which is the shape the loop
+  lemma already proves, so the loop lemma needs no new code. The certifier
+  checks that the bound reads only parameters and refuses the other loops. A
+  literal bound such as `i < 10` keeps the hypothesis, because the theorems
+  hold for an abstract number model and `countUp?` on a literal reduces only
+  under the safe-integer laws. A follow-up can cover a bound that is a
+  `const` local by inlining the chain of definitions back to the parameters.
+  The other hypothesis, that the interpreter gives a value, would need the
+  converse of soundness, that a value of the interpreter implies a value of
+  the IR evaluator. That is a second proof of the translator and not worth
+  its cost.
+
 - How should a type parameter with a constraint translate? One option is a
   type class that the translator writes for each constraint, with one
   method per field that the constraint names. Another is to pass the
   fields that the function reads as explicit arguments.
+
+  Recommendation: the type class. `T extends Named` becomes `[Named T]`, with
+  `class Named (T : Type) where name : T → JSString`, and the translator
+  writes `instance : Named Person := ⟨Person.name⟩` wherever it checks the
+  constraint at a call. The signature then mirrors the TypeScript one, call
+  sites stay as they are, `A & B` becomes two instance arguments, and a
+  constraint on a generic interface's parameter works, which explicit fields
+  cannot do. Explicit fields are dictionary passing by hand, and they change
+  every caller. For a certificate, the codec of `T` gains one law per method:
+  the object's field holds the encoding of the method's result. The first
+  version accepts constraints that are interfaces or object types with
+  readonly fields, and refuses primitive bounds. Every instance gets a name,
+  so that instance search never has two candidates.
+
 - Which type should a function throw once the program declares error
   classes? `JSError` holds only a message. A class with fields needs a sum of
   the program's error classes, and a call can reach a class of another file.
+
+  Recommendation: one inductive for the whole program, generated into the
+  project as `Errors.lean`, with a constructor per error class in any file
+  and one for `JSError`. Every function that can throw returns
+  `Except Thrown α`, so a callee's error passes through `←` without an
+  injection, a class of another file is one more constructor, and a later
+  `catch` with `instanceof` is a `match`. A precise union per function would
+  say exactly what each function throws, but every call would need a
+  coercion, and a new `throw` in a callee would change every caller's
+  signature. The cost of one type is that a new error class recompiles every
+  function that throws. A program with no error classes keeps `JSError`, so
+  the output of today's subset does not change.
+
 - Should `try` and `catch` come in a later step? The survey had none, but much
   other pure code catches its own errors.
+
+  Recommendation: yes, after step 7. Once the IR has `Except`, the interpreter
+  change is small. The first version takes `try { … } catch (e) { … }` where
+  the catch tests `e` with `instanceof` or ignores it, and refuses `finally`,
+  a rethrow of a changed value, and a `throw` of anything but an error. The
+  locals that the `try` body assigns become its result tuple, as a loop
+  body's do, which is why it comes after the threading of step 7.
+
 - Should a map that a caller passes in become a borrow, as above, or should the
   callee run in a state monad? A borrow keeps the output plain, but it only
   covers a call that changes one map.
+
+  Recommendation: the borrow, with a tuple when a callee changes several
+  maps. A callee that changes two maps returns a pair, and one with a result
+  returns a triple, as a loop already returns the tuple of the locals it
+  changes, and as Aeneas does for Rust. A state monad would hide which maps a
+  function touches and bring `StateT` lemmas into every proof about pure
+  code. The [effects plan](effects.md) keeps the monad for state that is
+  global. The parameter's type is the signal: a `Map` parameter with a `set`
+  in the body is a borrow, and a `ReadonlyMap` is plain. A call statement
+  `f(m, x);` becomes `let m := f m x`.
+
 - Should `tolean.json` accept imports without the `.ts` extension, for
   projects that use bundler resolution? Tolean refuses them now because Node
   reads an import as a URL.
+
+  Recommendation: accept them, and follow the project's `tsconfig.json`.
+  Import resolution happens outside the parsed program, so no proof sees it.
+  Tolean reads `moduleResolution` from the tsconfig when there is one, and a
+  field of `tolean.json` otherwise. Under bundler resolution, `./x` resolves
+  to `x.ts`, then to `x/index.ts`. Under node16 resolution, `./x.js` resolves
+  to `x.ts`, which is the common setup today. The manifest records the
+  resolved paths, so the chain stays unambiguous. `.tsx` and anything else
+  stay refused.
+
 - Should a comparator that is not one of the two shapes be accepted when the
   project supplies a proof that it is consistent?
+
+  Recommendation: yes, as one case of a general mechanism for obligations.
+  Tolean states the obligation, `Consistent cmp`, as a theorem in the output.
+  Its tactic proves the two known shapes. When the tactic fails, the project
+  may supply the proof in a file beside the output, which the manifest
+  records and the build checks for `sorry` and for axioms. The same
+  mechanism serves a `@decreases` measure, the counted-loop bound above, and
+  keys that must not be `NaN`. The statement always comes from Tolean and the
+  project supplies only the proof, so a wrong proof fails the build and a
+  wrong statement cannot get in. The obligation may restrict itself to the
+  inputs, because a comparator on `number` keys is consistent only without
+  `NaN`.
+
 - How should the spec model `const` in full? Its environment holds values
-  only. The spec gives no value for a block where a statement after a `const`
-  declaration assigns it, which covers `=`, `+=`, `??=` and `++`. A
-  `for (const x of xs)` loop is left: an assignment to `x` in the body writes the new value, where Node
+  only. Since [#63](https://github.com/shihangw/tolean/pull/63), the spec gives
+  no value for a block where a statement after a `const` declaration assigns
+  it, which covers `=`, `+=`, `??=` and `++`. A `for (const x of xs)` loop is
+  left: an assignment to `x` in the body writes the new value, where Node
   throws a `TypeError`. The translator refuses it, so no certified program
   meets the gap, but `interpreter.test.ts` asks the interpreter to agree with
   Node on every program that it parses. The same check on the loop's body
   would close it. A binding kind in `Eval.Env` would cover every case, but
   then `Agree` and every statement proof would compare kinds too.
+
+  Recommendation: the check on the loop's body, through one predicate that
+  the translator and the interpreter share. A binding kind is the faithful
+  model, but its cost grows with the whole proof, because `Agree` compares
+  kinds and every statement lemma carries them. The check from #63 closes the
+  gap in a few lines. One predicate, such as `constRespected`, used both for
+  the translator's refusal and for the interpreter's `none`, makes the two
+  agree by construction instead of by two parallel checks.
