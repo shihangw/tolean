@@ -26,23 +26,16 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: cachix/install-nix-action@v31
-        with:
-          extra_nix_config: |
-            accept-flake-config = true
+      # Restores the Lean cache that `build` in ci.yml saved just before this
+      # job started, so the native build only finds every module current.
+      - uses: ./.github/actions/lean-build
 
-      - name: Cache Lean build output
-        uses: actions/cache@v5
-        with:
-          path: .lake
-          key: lake-${{ runner.os }}-${{ hashFiles('lean-toolchain', 'lake-manifest.json', 'lakefile.toml', '**/*.lean') }}
-          restore-keys: lake-${{ runner.os }}-
-
-      - name: Build the tolean command
-        run: lake build --wfail
-
-      - name: Cache the translator's WebAssembly build
-        uses: actions/cache@v5
+      # Each copy of this cache takes about 300 MB, so only main saves it.
+      # A run on another branch restores main's newest copy and builds from
+      # there, which takes about two minutes.
+      - name: Restore the translator's WebAssembly build
+        id: translator-cache
+        uses: actions/cache/restore@v5
         with:
           path: wasm/.build
           key: translator-wasm-${{ hashFiles('lean-toolchain', 'flake.lock', 'wasm/build.sh') }}-${{ hashFiles('tolean/**/*.lean', 'wasm/*.lean', 'wasm/glue.c') }}
@@ -51,6 +44,14 @@ jobs:
       - name: Build the translator as WebAssembly
         shell: nix develop .#wasm --command bash -euo pipefail {0}
         run: wasm/build.sh
+
+      - if: >-
+          github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+          steps.translator-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: wasm/.build
+          key: ${{ steps.translator-cache.outputs.cache-primary-key }}
 
       - name: The WebAssembly translator gives the native result
         working-directory: tests/typescript

@@ -10,10 +10,9 @@
  *
  * - When the interpreter gives a value, Node returns the same value. This
  *   holds for every program that the parser accepts, in the subset or not,
- *   except for two gaps that the plan for pure TypeScript lists and the
+ *   except for one gap that the plan for pure TypeScript lists and the
  *   random programs do not reach: an assignment to the variable of a
- *   `for (const x of xs)` loop, and a change to an array, a map or a set
- *   that another name holds.
+ *   `for (const x of xs)` loop.
  * - When the interpreter says that a call throws a value, Node throws the
  *   same value. An `Error` compares by its class and its message.
  * - When the translator accepts the program and the interpreter gives no
@@ -366,6 +365,55 @@ test('the interpreter gives no value for a loop that changes what it runs over',
     expect(lean?.parsed, source).toBe(true);
     if (lean === undefined || !lean.parsed) continue;
     if (i < changing.length) {
+      expect(lean.results[0] ?? null, source).toBeNull();
+      continue;
+    }
+    const path = join(dir, `case${i}.mjs`);
+    writeFileSync(path, ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext } }).outputText);
+    const mod = (await import(pathToFileURL(path).href)) as { f: (b: boolean) => unknown };
+    const value = lean.results[0]?.value;
+    expect(value === undefined ? 'no value' : canonical(value), source).toBe(canonical(encode(mod.f(true))));
+  }
+});
+
+// The spec holds an array, a map or a set as a value, which is the JS meaning
+// only when nothing else holds the object while it changes. So it must give
+// no value for a function that changes a collection that another name, a
+// parameter, a loop variable or an object may hold, and agree with Node for
+// one that it owns.
+test('the interpreter gives no value where a changed collection has another holder', async () => {
+  // Each result is read through a loop, `has` or an index, which the
+  // interpreter has rules for, so the only reason for no value is the check.
+  const sum = 'function sum(a: ReadonlyArray<bigint>): bigint { let t = 0n; for (const v of a) { t += v; } return t; }\n';
+  const shared = [
+    'export function f(b: boolean): boolean { const m = new Map<bigint, bigint>(); const n = m; ' +
+      'm.set(1n, 2n); return n.has(1n); }',
+    sum + 'export function f(b: boolean): bigint { const xs: Array<bigint> = [0n]; const ys = xs; xs.push(1n); return sum(ys); }',
+    'function g(s: Set<bigint>): boolean { s.add(1n); return true; }\n' +
+      'export function f(b: boolean): boolean { const s = new Set<bigint>(); const z = g(s); return s.has(1n); }',
+    sum + 'export function f(b: boolean): bigint { const xs: Array<Array<bigint>> = [[]]; ' +
+      'for (const x of xs) { x.push(1n); } return sum(xs[0]); }',
+    'export function f(b: boolean): boolean { const m = new Map<bigint, bigint>(); const o = { m }; ' +
+      'm.set(1n, 1n); return o.m.has(1n); }',
+  ];
+  const owned = [
+    sum + 'export function f(b: boolean): bigint { const xs: Array<bigint> = [1n]; xs.push(2n); return sum(xs); }',
+    'export function f(b: boolean): boolean { const m = new Map<bigint, bigint>(); m.set(1n, 2n); m.delete(3n); ' +
+      'return m.has(1n); }',
+    'export function f(b: boolean): boolean { const s = new Set<bigint>(); s.add(1n); const t = new Set<bigint>(s); ' +
+      's.add(2n); return t.has(2n); }',
+  ];
+  const sources = [...shared, ...owned];
+  const input = { programs: sources.map((source) => ({ source, calls: [{ function: 'f', args: [true] }] })) };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const results = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-owned-'));
+  for (const [i, source] of sources.entries()) {
+    const lean = results[i];
+    expect(lean?.parsed, source).toBe(true);
+    if (lean === undefined || !lean.parsed) continue;
+    if (i < shared.length) {
       expect(lean.results[0] ?? null, source).toBeNull();
       continue;
     }
