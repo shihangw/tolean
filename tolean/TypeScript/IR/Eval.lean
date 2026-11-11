@@ -84,6 +84,12 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   -- `x ∈ xs` and `List.any xs (JSNumber.sameValueZero x)`: whether an
   -- element is `x`, as `includes` compares them.
   | .includes, [.list xs, x] | .includesNumber, [.list xs, x] => (Eval.includesVal x xs).map .bool
+  -- `xs.length`, `xs[k]?`, `JSNumber.elementAt? xs i` and `xs.at(k)`, as the
+  -- spec reads them: `none` is `undefined`.
+  | .length, [.list xs] => some (.num (JSNumber.ofSafeInt xs.length))
+  | .indexLit k, [.list xs] => some (Eval.elementAt xs (some k))
+  | .indexNumber, [.list xs, .num i] => some (Eval.elementAt xs (JSNumber.toSafeInt i))
+  | .at k, [.list xs] => some (Eval.atVal xs k)
   -- The operations of a `Map`, as the spec gives them.
   | .mapEmpty, [] => some (.map [])
   | .mapGet, [.map entries, k] => (Eval.mapFind entries k).map (·.getD .undefined)

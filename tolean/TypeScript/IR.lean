@@ -79,6 +79,18 @@ inductive ExprExt where
   /-- `(List.any xs (JSNumber.sameValueZero x))`, on `xs` and `x`:
   `xs.includes(x)` on numbers, where `NaN` is the same as `NaN`. -/
   | includesNumber
+  /-- `(JSNumber.ofSafeInt (N := N) (List.length xs : Int))`, on `xs`:
+  `xs.length`. -/
+  | length
+  /-- `xs[k]?`, on `xs`: `xs[k]` with a number literal `k`, which is the
+  element at `k` or `undefined`. -/
+  | indexLit (k : Nat)
+  /-- `(JSNumber.elementAt? xs i)`, on `xs` and `i`: `xs[i]` with a number
+  `i`. -/
+  | indexNumber
+  /-- `xs[k]?`, or `(List.reverse xs)[-k - 1]?` when `k` is negative, on
+  `xs`: `xs.at(k)` with an integer literal `k`. -/
+  | at (k : Int)
   /-- `JSMap.empty`, on no arguments: `new Map()`. The translator writes the
   type of the map after it. -/
   | mapEmpty
@@ -245,6 +257,14 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
   | .includes, [xs, x] => s!"{argument x} ∈ {argument xs}"
   | .includesNumber, [xs, x] =>
     s!"({leanName names "List.any"} {argument xs} ({js}.sameValueZero {argument x}))"
+  | .length, [xs] =>
+    let int := leanName names "Int"
+    s!"({js}.ofSafeInt (N := {names.typeParam}) (({leanName names "List.length"} {argument xs} : {leanName names "Nat"}) : {int}))"
+  | .indexLit k, [xs] => s!"{argument xs}[{k}]?"
+  | .indexNumber, [xs, i] => s!"({js}.elementAt? {argument xs} {argument i})"
+  | .at k, [xs] =>
+    if 0 ≤ k then s!"{argument xs}[{k.toNat}]?"
+    else s!"({leanName names "List.reverse"} {argument xs})[{(-k - 1).toNat}]?"
   | .pure, [a] => s!"({tolean.IR.wrapped (leanName names "pure") a})"
   | .error, [m] => s!"({tolean.IR.wrapped (leanName names "JSError.mk") m})"
   | _, _ => ""

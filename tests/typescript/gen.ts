@@ -338,7 +338,20 @@ export class Gen {
         const same_ = arrays.filter((a) => same(a.elem, t));
         if (same_.length > 0) {
           options.push(() => `(${call(this.pick(['find', 'findLast']), this.pick(same_), (inner) => this.expr(BOOLEAN, inner, depth))} ?? ${this.expr(t, vars, depth)})`);
+          // An element at an index, which is `undefined` outside the array:
+          // a literal, any number, or a literal counted from the end.
+          options.push(() => {
+            const recv = this.pick(same_).name;
+            const index = this.pick([
+              () => `${recv}[${this.pick([0, 1, 2])}]`,
+              () => `${recv}[${this.expr(NUMBER, vars, depth)}]`,
+              () => `${recv}.at(${this.pick([0, 1, -1, -2])})`,
+            ])();
+            return `(${index} ?? ${this.expr(t, vars, depth)})`;
+          });
         }
+        // The length of an array is a number.
+        if (t.k === 'number') options.push(() => `${this.pick(arrays).name}.length`);
         // `findIndex` gives the index of the first element that passes, a
         // number, or -1.
         if (t.k === 'number') {

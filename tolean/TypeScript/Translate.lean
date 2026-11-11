@@ -160,6 +160,12 @@ def Ty.isNullable : Ty → Bool
   | .nullable _ => true
   | _ => false
 
+/-- `null`, `T | null` or an optional value: a type whose values the output
+writes with `none`. -/
+def Ty.isMaybe : Ty → Bool
+  | .null | .nullable _ | .optional _ => true
+  | _ => false
+
 /-- The value of an optional field `f?: T`. -/
 def Ty.isOptional : Ty → Bool
   | .optional _ => true
@@ -1573,6 +1579,21 @@ def Ty.element? : Ty → Option Ty
   | .array t => some t
   | _ => none
 
+/-- `xs[k]` with a number literal `k`, on the array `xs` of elements of type
+`elem`. A number literal is the integer it names, whatever the model of
+numbers. -/
+def indexLiteral (s : Span) (text : String) (xs : Code) (elem : Ty) : TM Code := do
+  let k ← orReject (safeIntegerValue? text) s "a number literal must be a safe integer"
+  unless 0 ≤ k do reject s "an index must not be negative"
+  -- `xs[k]?` needs its type written out: Lean picks the element type from
+  -- the context first, which can be wrong, as in `let v := xs[1]?`.
+  return ⟨.ascribe (.ext (.indexLit k.toNat) [xs.value]) (Ty.optional elem).lean, false, .optional elem⟩
+
+/-- `xs[i]` with the code `i` of a number. -/
+def indexNumber (s : Span) (xs i : Code) (elem : Ty) : TM Code := do
+  unless i.type == .number do reject s "the index of an array must be a number"
+  return ⟨.ext .indexNumber [xs.value, i.value], false, .optional elem⟩
+
 /-- The receiver and the method of a call such as `xs.includes(v)`, for a
 method that takes no callback. `Number.isNaN(x)` and the like are calls of the
 global `Number`, not of an array. -/
@@ -1796,6 +1817,9 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
       let (bind, type) ← optPathType s o.type path
       return ⟨.ext (.optField path bind) [o.code], false, type⟩
     let o ← translateRecv (translateExpr fuel env none) env obj
+    -- `xs.length`, the number of elements of an array.
+    if o.type.element?.isSome && name == "length" then
+      return ⟨.ext .length [o.value], false, .number⟩
     -- `m.size`, the number of entries of a map.
     if let .map _ _ := o.type then
       unless name == "size" do reject s "a map has no fields here; use get, has and size"
@@ -1835,10 +1859,16 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
         unless 0 ≤ i do reject key.span s!"the tuple has no element {i}"
         return ⟨.proj o.code i.toNat tys.length, false, t⟩
       | none => reject key.span s!"the tuple has no element {i}"
+    | none =>
+    match o.type.element? with
+    -- `xs[i]` on an array: the element, or `undefined` when `i` is not an
+    -- index of the array. So its type is that of an optional field, which
+    -- `??`, `?.` and `=== undefined` read.
+    | some elem => translateArrayIndex fuel env s o elem key
     -- `r[k]` on a `Record<K, V>`.
     | none =>
       let (keyRef, keys, type) ← orReject (recordIndex (← get) o.type) s
-        ("only a tuple, or a value of a Record type, such as type T = Record<K, V>, whose key type K " ++
+        ("only an array, a tuple, or a value of a Record type, such as type T = Record<K, V>, whose key type K " ++
           "this file declares or imports, may be indexed")
       let k ← translateExpr fuel env (some (.enum keyRef)) key
       unless k.type == .enum keyRef do reject key.span "the key must have the key type of the Record"
@@ -2044,6 +2074,17 @@ def translateArrayMethod (fuel : Nat) (env : Env) (expected : Option Ty) (s : Sp
     { span := s, result := b.type.lean, scope := env.locals.map fun l => (l.name, l.type.lean) }
   return ⟨.listMethod method xs.value p.name elem.lean b.value info, false, type⟩
 
+/-- `xs[i]` on an array whose code is `o` and whose elements have the type
+`elem`: the element, or `undefined` when `i` is not an index of the array. -/
+def translateArrayIndex (fuel : Nat) (env : Env) (s : Span) (o : Code) (elem : Ty) (key : Expr) :
+    TM Code := do
+  let fuel + 1 := fuel | tooDeep
+  -- The output has one `none` for `undefined` and `null`.
+  if elem.isMaybe then reject s "an index of an array of nullable values could give null or undefined"
+  match key with
+  | .number _ text => indexLiteral key.span text o elem
+  | _ => indexNumber key.span o (← translateExpr fuel env none key) elem
+
 /-- `xs.includes(v)`, a method of an array that takes no callback: the array,
 then each argument, then `arrayCall` on their codes. An arrow function is a
 callback, which no such method takes. -/
@@ -2053,6 +2094,16 @@ def translateArrayCall (fuel : Nat) (env : Env) (s : Span) (recv : Expr) (method
   if args.any (·.isArrow) then reject s s!"'{method}' does not take a callback here"
   let xs ← translateExpr fuel env none recv
   let elem ← orReject xs.type.element? recv.span "only an array has this method"
+  -- `xs.at(k)`: the element at `k`, counted from the end when `k` is
+  -- negative, or `undefined`. The model of numbers cannot truncate yet, so
+  -- the argument must be an integer literal, which is the integer it names.
+  if method == "at" then
+    let [arg] := args | reject s "'at' takes one argument"
+    let k ← orReject (Eval.intLiteral? arg) arg.span
+      "the argument of 'at' must be an integer literal, such as xs.at(-1)"
+    requireFeature s .arrayAt
+    if elem.isMaybe then reject s "'at' on an array of nullable values could give null or undefined"
+    return ⟨.ascribe (.ext (.at k) [xs.value]) (Ty.optional elem).lean, false, .optional elem⟩
   let codes ← args.mapM (translateExpr fuel env (arrayArgExpected method elem))
   arrayCall s method elem xs codes
 
@@ -3074,10 +3125,10 @@ mutual
 def exprUsesNumber : Expr → Bool
   | .ident _ name => isNumberName name
   | .number .. => true
-  -- `xs.findIndex(…)` gives a number, and so does `m.size`. The source does
+  -- `xs.length` and `xs.findIndex(…)` give a number, and so does `m.size`. The source does
   -- not say whether `m` is a map.
   | .member _ obj name | .optMember _ obj name =>
-    isNumberName name || name == "findIndex" || name == "size" || exprUsesNumber obj
+    isNumberName name || name == "length" || name == "findIndex" || name == "size" || exprUsesNumber obj
   | .object _ props => propsUseNumber props
   | .array _ es => exprsUseNumber es
   | .call _ f args => exprUsesNumber f || exprsUseNumber args
