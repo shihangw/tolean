@@ -163,6 +163,15 @@ also give the spec this meaning: the call copies the map in and back out. Key eq
 `bigint` keys that is Lean's equality. For `number` keys it is Lean's
 equality only when no key is `NaN` or `-0`.
 
+One certificate gap is left. The initial value of a `reduce` can read a map
+or a set that `new Map(items)` or `new Set(items)` makes from a parameter,
+such as `xs.reduce((a, x) => a || x, new Set<bigint>(ys).has(0n))`. The
+certifier writes a certificate for it, and Lean refuses that certificate.
+The link proof unfolds the constructor only on a list that it can see, so
+the set stays `Eval.setOfItems` of an unknown list. A lemma about
+`setOfItems` and `mapOfItems` would close the gap. Until then, the certifier
+should refuse such an initial value.
+
 ### Numbers and dates
 
 | TypeScript | Lean | Refused |
