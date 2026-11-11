@@ -2713,6 +2713,55 @@ def translateDestructure (tr : Option Ty → Expr → TM Code) (k : Env → TM I
   let rest ← k env'
   orReject (destructureBody p t (withType code.value t code.type) reads rest) s "a pattern must declare a name"
 
+/-- The head of a loop that the output runs as a fold: `for (kind x of xs)`,
+or a counted `for` with its declaration, its test and its update. -/
+inductive LoopHead where
+  | forOf (kind : VarKind) (element : String) (iterable : Expr)
+  | counted (init : Option VarDecl) (test update : Option Expr)
+
+/-- The loop with the head `h` and the body `body`. -/
+def LoopHead.stmt (s : Span) (body : Stmt) : LoopHead → Stmt
+  | .forOf kind element iterable => .forOfStmt s kind element iterable body
+  | .counted init test update => .forStmt s init test update body
+
+/-- Why the translator refuses a counted loop of another shape. -/
+def countedReason : String :=
+  "a counted loop must be 'for (let i = a; i < b; i++)', with '++i' or 'i += 1' as the update"
+
+/-- What `for (let i = k; i < b; i++)` visits: the name `i`, the type of its
+values and the list of them in the output, `JSNumber.countUp k b`. That list
+is `k`, then each integer after it that is less than `b`. The start `k` must
+be an integer literal, which the interpreter reads as the translation does. -/
+def countedHead (env : Env) (s : Span) (body : Stmt) (init : Option VarDecl) (test update : Option Expr) :
+    TM (String × Ty × IR.Expr) :=
+  match init, test, update with
+  | some ⟨.let, name, type, some start⟩, some (.binary _ .lt (.ident _ n) bound), some update => do
+    unless n == name && update.incrementsName name do reject s countedReason
+    unless type.all (· matches .keyword _ "number") do reject s "the variable of a counted loop must be a number"
+    -- JS reads the bound again before each run of the body, and the output
+    -- reads it once.
+    if Stmt.countedChanges name bound body then
+      reject s "the body of a counted loop may not assign its variable or change what its bound reads"
+    let some k := Eval.countStart? start
+      | reject start.span "the start of a counted loop must be an integer literal, such as 0"
+    let b ← translateExpr (← fuelLimit) env (some .number) bound
+    unless b.type == .number do reject bound.span "the bound of a counted loop must be a number"
+    return (name, .number, .ext (.countUp k) [b.value])
+  | _, _, _ => reject s countedReason
+
+/-- What the loop with the head `h` visits: the name of its variable, the type
+of the values and the list of them in the output. `for (const x of xs)`
+visits the values of `xs`. -/
+def loopHead (env : Env) (s : Span) (body : Stmt) : LoopHead → TM (String × Ty × IR.Expr)
+  | .forOf kind element iterable => do
+    unless kind == .const do reject s "a loop must be 'for (const x of xs)'"
+    -- An owned map or set may be the iterable, as long as the body does not
+    -- change it: a JS loop would visit the values that the body adds.
+    let items ← translateRecv (translateExpr (← fuelLimit) env none) env iterable
+    let (elemType, items) ← loopItems iterable body items
+    return (element, elemType, items)
+  | .counted init test update => countedHead env s body init test update
+
 mutual
 
 def translateStatements (fuel : Nat) (env : Env) (tail : Tail) (statements : List Stmt) :
@@ -2761,7 +2810,9 @@ def translateStatements (fuel : Nat) (env : Env) (tail : Tail) (statements : Lis
     | .ifStmt s test thenBranch elseBranch =>
       translateIf fuel env s test thenBranch elseBranch rest tail
     | .forOfStmt s kind name iterable body =>
-      translateForOf fuel env s kind name iterable body rest tail
+      translateLoop fuel env s (.forOf kind name iterable) body rest tail
+    | .forStmt s init test update body =>
+      translateLoop fuel env s (.counted init test update) body rest tail
     | .switchStmt s disc clauses => translateSwitch fuel env s disc clauses rest tail
     -- `throw new Error(m)` ends the function with the error.
     | .throwStmt s value =>
@@ -3033,10 +3084,9 @@ def translateStateClause (fuel : Nat) (env : Env) (s : Span) (names : List Strin
     reject s "a clause of a switch that ends in break may not return, throw, break or continue before its end"
   else translateStatements fuel env (.state names) (dropBreak body)
 
-def translateForOf (fuel : Nat) (env : Env) (s : Span) (kind : VarKind) (element : String)
-    (iterable : Expr) (body : Stmt) (rest : List Stmt) (tail : Tail) : TM IR.Body := do
+def translateLoop (fuel : Nat) (env : Env) (s : Span) (head : LoopHead) (body : Stmt)
+    (rest : List Stmt) (tail : Tail) : TM IR.Body := do
   let fuel + 1 := fuel | tooDeep
-  unless kind == .const do reject s "a loop must be 'for (const x of xs)'"
   let bodyStatements := blockStatements body
   -- A `return` ends the function, so the statements after the loop must end
   -- it too. A `break` of this loop, and not of a loop inside it, or a
@@ -3047,10 +3097,7 @@ def translateForOf (fuel : Nat) (env : Env) (s : Span) (kind : VarKind) (element
   let breaks := bodyStatements.any (containsJump true false)
   let names := changedNames bodyStatements env
   if names.isEmpty && !returns then reject s "a loop must change a local or return"
-  -- An owned map or set may be the iterable, as long as the body does not
-  -- change it: a JS loop would visit the values that the body adds.
-  let items ← translateRecv (translateExpr (← fuelLimit) env none) env iterable
-  let (elemType, loopItems) ← loopItems iterable body items
+  let (element, elemType, loopItems) ← loopHead env s body head
   let bodyEnv ← declare env s element .const elemType
   let bodyOut ← translateStatements fuel bodyEnv (.loop names breaks returns) bodyStatements
   let returnType := (← get).returnType
