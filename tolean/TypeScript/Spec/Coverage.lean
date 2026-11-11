@@ -16,6 +16,7 @@ import tolean.TypeScript.Syntax.ParseWF
 import tolean.TypeScript.Syntax.RoundTripText
 import tolean.TypeScript.Spec.Error
 import tolean.TypeScript.Spec.Lemmas.Number
+import tolean.TypeScript.Spec.Lemmas.Sort
 import tolean.TypeScript.Spec.Coverage.LexicalGrammar
 import tolean.TypeScript.Spec.Coverage.Expressions
 import tolean.TypeScript.Spec.Coverage.Statements
@@ -308,6 +309,12 @@ def sections : List Section := [
     [``Proof.reducerOf_some, ``Proof.bodySim2_of, ``Proof.evalReduce_sim, ``Proof.eval_reduce,
     ``Proof.translateReduce_sound]⟩,
   ⟨"sec-array.prototype.some", "23.1.3.29", "Array.prototype.some", []⟩,
+  ⟨"sec-array.prototype.sort", "23.1.3.30", "Array.prototype.sort", []⟩,
+  ⟨"sec-sortindexedproperties", "23.1.3.30.1", "SortIndexedProperties",
+    [``Eval.consistentOn_preorder, ``Eval.sortValues_perm, ``Eval.sortValues_sorted,
+    ``Eval.sortValues_stable, ``Eval.pairwise_mergeSort_of_mem, ``Eval.pair_sublist_mergeSort_of_mem]⟩,
+  ⟨"sec-comparearrayelements", "23.1.3.30.2", "CompareArrayElements", []⟩,
+  ⟨"sec-array.prototype.tosorted", "23.1.3.34", "Array.prototype.toSorted", []⟩,
   ⟨"sec-createarrayiterator", "23.1.5.1", "CreateArrayIterator", []⟩,
   -- §24 Keyed Collections {#sec-keyed-collections}
   ⟨"sec-map-iterable", "24.1.1.1", "Map ( [ iterable ] )", [``Proof.translateNew_sound]⟩,

@@ -1635,7 +1635,7 @@ theorem eval_mapIdx (sp sp' sa : Span) (par : Bool) (recv : Expr) (p q : Param) 
     intro s h; subst h; simp [Expr.namesNumber] at hr
   generalize hR : Eval.eval m fuel ρ recv = r
   rw [Eval.eval]
-  · simp only [bne_self_eq_false, Bool.false_or, beq_iff_eq, hpq, ↓reduceIte, hR]
+  · simp only [beq_iff_eq, hpq, ↓reduceIte, hR]
     cases r with
     | none => rfl
     | some v => cases v <;> simp [methodVal]

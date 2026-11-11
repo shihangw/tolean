@@ -319,6 +319,20 @@ export class Gen {
     return this.pick(options)();
   }
 
+  /** A comparator of elements of type `elem`, bound to `a` and `b`, that
+   * compares a key of each: `ka < kb ? -1 : ka > kb ? 1 : 0`, with a later
+   * comparison in place of the `0` or the order reversed, or `ka - kb` on a
+   * number. `kb` is `ka` with `b` for `a`. */
+  private comparator(elem: Ty, a: string, b: string, vars: ReadonlyArray<Var>, depth: number): string {
+    const key = this.pick([BIGINT, STRING, NUMBER]);
+    const ka = this.expr(key, [...vars, { name: a, ty: elem, mutable: false, owned: false }], depth);
+    const kb = ka.replace(new RegExp(`\\b${a}\\b`, 'g'), b);
+    const [x, y] = this.chance(0.7) ? [ka, kb] : [kb, ka];
+    if (key.k === 'number' && this.chance(0.5)) return `(${x}) - (${y})`;
+    const rest = this.chance(0.3) ? this.comparator(elem, a, b, vars, depth) : '0';
+    return `(${x}) < (${y}) ? -1 : (${x}) > (${y}) ? 1 : ${rest}`;
+  }
+
   /** Calls of `map`, `filter`, `some`, `every` and `find` on an array in
    * scope that give a value of type `t`. The callback's parameter is a fresh
    * name, which its body may read with the other names in scope; a callback
@@ -368,6 +382,22 @@ export class Gen {
           options.push(() => {
             const bounds = this.pick(['', '1', '-2', '0, 2', '1, -1', '-3, -1', '2, 1']);
             return `${this.pick(same_).name}.slice(${bounds})`;
+          });
+          // `toSorted`, or `sort` on a copy, with a comparator. A comparator
+          // that compares keys is consistent unless a key is `NaN`, and any
+          // other one is rarely consistent, so then the interpreter gives no
+          // value and Node is not compared.
+          options.push(() => {
+            const recv = this.pick(same_).name;
+            const a = this.fresh('a');
+            const b = this.fresh('b');
+            const cmp = this.chance(0.8) ? this.comparator(of, a, b, vars, depth) : this.expr(NUMBER, [
+              ...vars,
+              { name: a, ty: of, mutable: false, owned: false },
+              { name: b, ty: of, mutable: false, owned: false },
+            ], depth);
+            const fn = `(${a}, ${b}) => (${cmp})`;
+            return this.chance(0.5) ? `${recv}.toSorted(${fn})` : `[...${recv}].sort(${fn})`;
           });
           // A spread of one array or two, with elements around them.
           options.push(() => {
