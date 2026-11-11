@@ -2713,6 +2713,38 @@ def translateDestructure (tr : Option Ty → Expr → TM Code) (k : Env → TM I
   let rest ← k env'
   orReject (destructureBody p t (withType code.value t code.type) reads rest) s "a pattern must declare a name"
 
+/-- `for (const [k, v] of xs) body`, then the statements after it, as
+`translateForOf` translates a loop. The fold binds each element to the first
+name of the pattern, and the body starts by binding the names of the pattern
+as `const [k, v] = element` does, which hides that first binding. `items`
+translates the iterable, `kBody` the body in its scope and `kRest` the
+statements after the loop. -/
+def translateForOfPattern (items : TM Code) (kBody : Env → Tail → List Stmt → TM IR.Body)
+    (kRest : TM IR.Body) (env : Env) (s : Span) (kind : VarKind) (p : ArrayPattern) (iterable : Expr)
+    (body : Stmt) (tail : Tail) : TM IR.Body := do
+  unless kind == .const do reject s "a loop must be 'for (const [a, b] of xs)'"
+  let bodyStatements := blockStatements body
+  let returns := bodyStatements.any (containsJump false false)
+  if returns && !tail.isRet then
+    reject s "a loop body may return only where the statements after the loop end in a return"
+  let breaks := bodyStatements.any (containsJump true false)
+  let names := changedNames bodyStatements env
+  if names.isEmpty && !returns then reject s "a loop must change a local or return"
+  let (elemType, loopItems) ← loopItems iterable body (← items)
+  let x ← orReject p.names.head? s "a pattern must declare a name"
+  let reads ← patternReads s p ⟨.var x, false, elemType⟩
+  let bodyEnv ← declarePlaces s .const env reads
+  let bodyOut ← kBody bodyEnv (.loop names breaks returns) bodyStatements
+  let step ← orReject (destructureBody p elemType (.var x) reads bodyOut) s "a pattern must declare a name"
+  let returnType := (← get).returnType
+  let throws := (← get).throws
+  let info : IR.LoopInfo :=
+    { span := s, elem := elemType.lean,
+      stateTypes := names.filterMap fun n => (env.lookup n).map (·.type.lean),
+      scope := (env.locals.filter fun l => !names.contains l.name).map fun l => (l.name, l.type.lean),
+      breaks, returns := if returns then some (leanResult throws returnType) else none }
+  return .fold names x step loopItems (← kRest) info
+
 mutual
 
 def translateStatements (fuel : Nat) (env : Env) (tail : Tail) (statements : List Stmt) :
@@ -2762,6 +2794,10 @@ def translateStatements (fuel : Nat) (env : Env) (tail : Tail) (statements : Lis
       translateIf fuel env s test thenBranch elseBranch rest tail
     | .forOfStmt s kind name iterable body =>
       translateForOf fuel env s kind name iterable body rest tail
+    | .forOfPattern s kind p iterable body =>
+      translateForOfPattern (do translateRecv (translateExpr (← fuelLimit) env none) env iterable)
+        (fun env' t ss => translateStatements fuel env' t ss) (translateStatements fuel env tail rest)
+        env s kind p iterable body tail
     | .switchStmt s disc clauses => translateSwitch fuel env s disc clauses rest tail
     -- `throw new Error(m)` ends the function with the error.
     | .throwStmt s value =>

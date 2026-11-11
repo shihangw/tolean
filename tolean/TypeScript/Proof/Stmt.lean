@@ -2665,15 +2665,38 @@ theorem evalList_append_inv {a b : List IR.Expr} {ρo : Eval.Env N} {ws : List (
         obtain ⟨w₁, w₂, rfl, h₁, h₂, hl⟩ := ih hr
         exact ⟨w :: w₁, w₂, rfl, by simp [IR.Expr.evalList, he, h₁], h₂, by simp [hl]⟩
 
-/-- What the reads of a pattern give is what the interpreter binds: the value
-of the initializer, iterated, gives the same names the same values. -/
-theorem patternReads_sim {env : Translate.Env} {s : Span} {p : ArrayPattern} {c : Code}
-    {reads : List (String × Ty × IR.Expr)} {ctx ctx' : Ctx} {init : Expr}
-    (h : patternReads s p c ctx = .ok reads ctx')
-    (hsim : Sim (N := N) m fs fuel env init c.code) (hne : reads ≠ [])
-    {ρs ρo : Eval.Env N} (ha : Agree ρs ρo) (hs : Scoped m env ρs) {ws : List (Val N)}
+/-- The list that a loop over `items` visits is what the interpreter iterates
+in the value of `items`. -/
+theorem loopOver_vals {items : Code} {elem : Ty} {li : IR.Expr} (hlo : loopOver items = some (elem, li))
+    {ρo : Eval.Env N} {vs : List (Val N)} (hi : IR.Expr.eval fs fuel ρo li = some (.list vs)) :
+    ∃ v, IR.Expr.eval fs fuel ρo items.code = some v ∧ Eval.iterValues v = some vs := by
+  unfold loopOver at hlo
+  split at hlo <;> simp only [Option.some.injEq, Prod.mk.injEq, reduceCtorEq] at hlo
+  · obtain ⟨-, rfl⟩ := hlo
+    exact ⟨_, hi, rfl⟩
+  all_goals
+    obtain ⟨-, rfl⟩ := hlo
+    obtain ⟨ws, hws, happ⟩ := out_ext fs fuel hi
+    simp only [IR.Expr.evalList] at hws
+    cases hx : IR.Expr.eval fs fuel ρo items.value with
+    | none => simp [hx] at hws
+    | some w =>
+      simp [hx] at hws
+      subst hws
+      rw [eval_value] at hx
+      refine ⟨w, hx, ?_⟩
+      cases w <;> simp [IR.ExprExt.apply] at happ
+      subst happ
+      rfl
+
+/-- What the reads of a pattern give is what iterating the value of `c`
+binds: the same names, with the same values. -/
+theorem patternReads_vals {s : Span} {p : ArrayPattern} {c : Code}
+    {reads : List (String × Ty × IR.Expr)} {ctx ctx' : Ctx}
+    (h : patternReads s p c ctx = .ok reads ctx') (hne : reads ≠ [])
+    {ρo : Eval.Env N} {ws : List (Val N)}
     (hws : IR.Expr.evalList fs fuel ρo (reads.map (·.2.2)) = some ws) :
-    ∃ v vs, Eval.eval m fuel ρs init = some v ∧ Eval.iterValues v = some vs ∧
+    ∃ v vs, IR.Expr.eval fs fuel ρo c.code = some v ∧ Eval.iterValues v = some vs ∧
       Eval.patternBindings p vs = (reads.map (·.1)).zip ws := by
   cases hct : c.type.tupleElems? with
   | some tys =>
@@ -2687,8 +2710,7 @@ theorem patternReads_sim {env : Translate.Env} {s : Span} {p : ArrayPattern} {c 
       simp only [pure_ok] at h
       obtain ⟨rfl, -⟩ := h
       obtain ⟨items, hv⟩ := tuplePlaces_items fs fuel p.elems tys 0 ws hne hws
-      have hinit := hsim ρs ρo _ ha hs (by rwa [eval_value] at hv)
-      refine ⟨_, items, hinit, rfl, ?_⟩
+      refine ⟨_, items, by rwa [eval_value] at hv, rfl, ?_⟩
       have hp := tuplePlaces_sim fs fuel hv p.elems tys 0 ws (by simpa using hlen) hws
       simp only [List.drop_zero] at hp
       cases hr : p.rest with
@@ -2727,7 +2749,7 @@ theorem patternReads_sim {env : Translate.Env} {s : Span} {p : ArrayPattern} {c 
               exact ⟨_, rfl⟩
       · exact listPlaces_items fs fuel p.elems 0 w₁ hn h₁
     obtain ⟨items, hli⟩ := hitems
-    obtain ⟨v, hv, hiter⟩ := loopOver_sim m fs fuel hsim hlo ha hs hli
+    obtain ⟨v, hv, hiter⟩ := loopOver_vals fs fuel hlo hli
     refine ⟨v, items, hv, hiter, ?_⟩
     have hp := listPlaces_sim fs fuel hli p.elems 0 w₁ h₁
     simp only [List.drop_zero] at hp
@@ -2751,6 +2773,19 @@ theorem patternReads_sim {env : Translate.Env} {s : Span} {p : ArrayPattern} {c 
         simp [IR.Expr.eval, IR.Expr.evalList, hli, IR.ExprExt.apply, sliceList_drop] at hw
         subst hw
         rw [List.zip_append (by simpa using hlen)]; rfl
+
+/-- What the reads of a pattern give is what the interpreter binds: the value
+of the initializer, iterated, gives the same names the same values. -/
+theorem patternReads_sim {env : Translate.Env} {s : Span} {p : ArrayPattern} {c : Code}
+    {reads : List (String × Ty × IR.Expr)} {ctx ctx' : Ctx} {init : Expr}
+    (h : patternReads s p c ctx = .ok reads ctx')
+    (hsim : Sim (N := N) m fs fuel env init c.code) (hne : reads ≠ [])
+    {ρs ρo : Eval.Env N} (ha : Agree ρs ρo) (hs : Scoped m env ρs) {ws : List (Val N)}
+    (hws : IR.Expr.evalList fs fuel ρo (reads.map (·.2.2)) = some ws) :
+    ∃ v vs, Eval.eval m fuel ρs init = some v ∧ Eval.iterValues v = some vs ∧
+      Eval.patternBindings p vs = (reads.map (·.1)).zip ws := by
+  obtain ⟨v, vs, hv, hit, hp⟩ := patternReads_vals fs fuel h hne hws
+  exact ⟨v, vs, hsim ρs ρo v ha hs hv, hit, hp⟩
 
 omit [JSNumber N] in
 theorem exactTuple_true {p : ArrayPattern} {t : Ty} (h : exactTuple p t = true) :
@@ -2782,6 +2817,51 @@ theorem letTuple_exec {names : List String} {e : IR.Expr} {rb : IR.Body} {ρo : 
         exact ⟨vs, rfl, by simpa using hl, ho⟩
     | _ => simp [hw] at ho
 
+/-- The output of a pattern binds its names to what its reads give, all at
+once, and then runs `rest`. -/
+theorem destructureBody_exec {s : Span} {p : ArrayPattern} {t : Ty} {value : IR.Expr}
+    {reads : List (String × Ty × IR.Expr)} {rest body : IR.Body} {ctx ctx' : Ctx}
+    (hreads : patternReads s p ⟨value, false, t⟩ ctx = .ok reads ctx')
+    (hbody : destructureBody p t value reads rest = some body)
+    {ρo : Eval.Env N} {o : Outcome N} (ho : IR.Body.exec fs fuel ρo body = some o) :
+    reads ≠ [] ∧ ∃ ws, ws.length = reads.length ∧ IR.Expr.evalList fs fuel ρo (reads.map (·.2.2)) = some ws ∧
+      IR.Body.exec fs fuel (((reads.map (·.1)).zip ws).reverse ++ ρo) rest = some o := by
+  unfold destructureBody at hbody
+  split at hbody
+  · simp at hbody
+  · rename_i n ty e
+    simp only [Option.some.injEq] at hbody
+    subst hbody
+    simp only [IR.Body.exec] at ho
+    cases hw : IR.Expr.eval fs fuel ρo e with
+    | none => simp [hw] at ho
+    | some w =>
+      simp only [hw, Option.bind_eq_bind, Option.bind_some] at ho
+      exact ⟨by simp, [w], rfl, by simp [IR.Expr.evalList, hw], by simpa using ho⟩
+  · rename_i hn1 _
+    have hne : reads ≠ [] := hn1
+    simp only [Option.some.injEq] at hbody
+    subst hbody
+    obtain ⟨vs, hv, hl, hb⟩ := letTuple_exec fs fuel ho
+    refine ⟨hne, vs, by simpa using hl.symm, ?_, hb⟩
+    split at hv
+    · rename_i hex
+      obtain ⟨tys, rfl, hnr, hsome, hlen⟩ := exactTuple_true hex
+      -- The reads are the elements, in order.
+      simp [patternReads, Ty.tupleElems?, hnr, hlen, Code.value] at hreads
+      obtain ⟨rfl, -⟩ := hreads
+      rw [List.length_map, tuplePlaces_length p.elems tys 0 hsome (by omega)] at hl
+      obtain ⟨hev, -⟩ := tuplePlaces_all fs fuel hv p.elems tys 0 hsome (by omega) (by omega)
+      simpa using hev
+    · simp only [IR.Expr.eval] at hv
+      cases he : IR.Expr.evalList fs fuel ρo (reads.map (·.2.2)) with
+      | none => simp [he] at hv
+      | some ws =>
+        simp only [he, Option.bind_eq_bind, Option.bind_some, Option.pure_def, Option.some.injEq,
+          Val.list.injEq] at hv
+        subst hv
+        rfl
+
 /-- `const [a, b] = e` means what the source means, when the statements
 after it do. -/
 theorem translateDestructure_sound {tr : Option Ty → Expr → TM Code} {k : Translate.Env → TM IR.Body}
@@ -2803,52 +2883,333 @@ theorem translateDestructure_sound {tr : Option Ty → Expr → TM Code} {k : Tr
     exact hsim ρs ρo w ha hs hw
   obtain ⟨hfresh, hhas, hglob⟩ := declarePlaces_ok hdecl
   have hrest := hk _ _ _ _ hrb
-  -- The output binds the names to what the reads give.
-  have hexec : ∀ (ρo : Eval.Env N) (o : Outcome N), IR.Body.exec fs fuel ρo body = some o → reads ≠ [] ∧ ∃ ws,
-      ws.length = reads.length ∧ IR.Expr.evalList fs fuel ρo (reads.map (·.2.2)) = some ws ∧
-        IR.Body.exec fs fuel (((reads.map (·.1)).zip ws).reverse ++ ρo) rb = some o := by
-    intro ρo o ho
-    unfold destructureBody at hbody
-    split at hbody
-    · simp at hbody
-    · rename_i n ty e
-      simp only [Option.some.injEq] at hbody
-      subst hbody
-      simp only [IR.Body.exec] at ho
-      cases hw : IR.Expr.eval fs fuel ρo e with
-      | none => simp [hw] at ho
-      | some w =>
-        simp only [hw, Option.bind_eq_bind, Option.bind_some] at ho
-        exact ⟨by simp, [w], rfl, by simp [IR.Expr.evalList, hw], by simpa using ho⟩
-    · rename_i hn1 _
-      have hne : reads ≠ [] := hn1
-      simp only [Option.some.injEq] at hbody
-      subst hbody
-      obtain ⟨vs, hv, hl, hb⟩ := letTuple_exec fs fuel ho
-      refine ⟨hne, vs, by simpa using hl.symm, ?_, hb⟩
-      split at hv
-      · rename_i hex
-        obtain ⟨tys, rfl, hnr, hsome, hlen⟩ := exactTuple_true hex
-        -- The reads are the elements, in order.
-        simp [patternReads, Ty.tupleElems?, hnr, hlen, Code.value] at hreads
-        obtain ⟨rfl, -⟩ := hreads
-        rw [List.length_map, tuplePlaces_length p.elems tys 0 hsome (by omega)] at hl
-        obtain ⟨hev, -⟩ := tuplePlaces_all fs fuel hv p.elems tys 0 hsome (by omega) (by omega)
-        simpa using hev
-      · simp only [IR.Expr.eval] at hv
-        cases he : IR.Expr.evalList fs fuel ρo (reads.map (·.2.2)) with
-        | none => simp [he] at hv
-        | some ws =>
-          simp only [he, Option.bind_eq_bind, Option.bind_some, Option.pure_def, Option.some.injEq,
-            Val.list.injEq] at hv
-          subst hv
-          rfl
   refine binds_sim m fs fuel (reads.map (·.1)) hfresh hhas hglob (fun n hn => by simp [stmtsChanges, hn]) ?_ hrest
   intro ρo o ho
-  obtain ⟨hne, ws, hlen, hws, hb⟩ := hexec ρo o ho
+  obtain ⟨hne, ws, hlen, hws, hb⟩ := destructureBody_exec fs fuel hreads hbody ho
   refine ⟨ws, by simpa using hlen, fun ρs ha hs => ?_, hb⟩
   obtain ⟨v, vs, hv, hit, hpb⟩ := patternReads_sim m fs fuel hreads hsim' hne ha hs hws
   simp [Eval.exec, Eval.execStmt, evalTop_ok m fuel hv, hit, hpb, hconst]
+
+/-! ### Array destructuring in the head of a loop -/
+
+omit [JSNumber N] in
+theorem tuplePlaces_names {v : IR.Expr} {size : Nat} :
+    ∀ (xs : List (Option String)) (tys : List Ty) (i : Nat), xs.length ≤ tys.length →
+      (tuplePlaces v size xs tys i).map (·.1) = xs.filterMap id
+  | [], _, _, _ => by simp [tuplePlaces]
+  | _ :: _, [], _, hl => by simp at hl
+  | none :: xs, _ :: ts, i, hl => by
+    simp only [tuplePlaces, Option.map_none, Option.toList_none, List.nil_append]
+    simpa using tuplePlaces_names (v := v) (size := size) xs ts (i + 1) (by simpa using hl)
+  | some n :: xs, _ :: ts, i, hl => by
+    simp [tuplePlaces, tuplePlaces_names (v := v) (size := size) xs ts (i + 1) (by simpa using hl)]
+
+omit [JSNumber N] in
+theorem listPlaces_names {elem : Ty} {li : IR.Expr} :
+    ∀ (xs : List (Option String)) (i : Nat), (listPlaces elem li xs i).map (·.1) = xs.filterMap id
+  | [], _ => rfl
+  | none :: xs, i => by
+    simp only [listPlaces, Option.map_none, Option.toList_none, List.nil_append]
+    simpa using listPlaces_names (elem := elem) (li := li) xs (i + 1)
+  | some n :: xs, i => by simp [listPlaces, listPlaces_names (elem := elem) (li := li) xs (i + 1)]
+
+omit [JSNumber N] in
+/-- The reads of a pattern bind its names, in order. -/
+theorem patternReads_names {s : Span} {p : ArrayPattern} {c : Code}
+    {reads : List (String × Ty × IR.Expr)} {ctx ctx' : Ctx}
+    (h : patternReads s p c ctx = .ok reads ctx') : reads.map (·.1) = p.names := by
+  unfold ArrayPattern.names
+  cases hct : c.type.tupleElems? with
+  | some tys =>
+    simp only [patternReads, hct, ite_state] at h
+    split at h
+    · simp at h
+    rename_i hrest
+    simp only [pure_bind] at h
+    split at h
+    · rename_i hlen
+      simp only [pure_ok] at h
+      obtain ⟨rfl, -⟩ := h
+      cases hr : p.rest with
+      | some r => simp [hr] at hrest
+      | none => simp [tuplePlaces_names _ _ _ (by simpa using hlen)]
+    · simp at h
+  | none =>
+    simp only [patternReads, hct, bind_ok, orReject_ok] at h
+    obtain ⟨⟨elem, li⟩, s₁, ⟨-, -⟩, h⟩ := h
+    simp only [ite_state] at h
+    split at h
+    · simp at h
+    simp only [pure_bind, pure_ok] at h
+    obtain ⟨rfl, -⟩ := h
+    cases p.rest <;> simp [listPlaces_names]
+
+omit [JSNumber N] in
+theorem lookup_append_or {n : String} : ∀ (a b : Eval.Env N), (a ++ b).lookup n = (a.lookup n).or (b.lookup n)
+  | [], b => by simp
+  | (k, v) :: a, b => by
+    by_cases h : n = k
+    · subst h; simp [List.lookup]
+    · have h' : (n == k) = false := by simpa using h
+      simp [List.lookup, h', lookup_append_or a b]
+
+omit [JSNumber N] in
+/-- The names of a pattern hide the loop element's own binding, which is one
+of them. -/
+theorem Agree.shadow {ρs ρo : Eval.Env N} (ha : Agree ρs ρo) {names : List String} {ws : List (Val N)}
+    (hl : ws.length = names.length) {x : String} (hx : x ∈ names) (v : Val N) :
+    Agree ((names.zip ws).reverse ++ ρs) ((names.zip ws).reverse ++ (x, v) :: ρo) := fun n => by
+  rw [lookup_append_or, lookup_append_or]
+  cases hb : ((names.zip ws).reverse).lookup n with
+  | some w => rfl
+  | none =>
+    have hin : names.contains n = false := by
+      have := lookup_isSome_reverse (x := n) (names.zip ws)
+      rw [hb, lookup_isSome_zip hl] at this
+      simpa using this.symm
+    have hnx : (n == x) = false := by
+      have : n ≠ x := fun h => by subst h; simp [hx] at hin
+      simpa using this
+    simp [List.lookup, hnx, ha n]
+
+/-- One run of the body of a loop with a pattern: the output binds the names
+of the pattern to what iterating the element gives, and then runs `inner`. -/
+theorem patternStep_exec {s : Span} {p : ArrayPattern} {x : String} {elemType : Ty}
+    {reads : List (String × Ty × IR.Expr)} {inner step : IR.Body} {ctx ctx' : Ctx}
+    (hreads : patternReads s p ⟨.var x, false, elemType⟩ ctx = .ok reads ctx')
+    (hstep : destructureBody p elemType (.var x) reads inner = some step)
+    {v : Val N} {ρo : Eval.Env N} {ob : Outcome N}
+    (h : IR.Body.exec fs fuel ((x, v) :: ρo) step = some ob) :
+    ∃ ws vs, ws.length = reads.length ∧ Eval.iterValues v = some vs ∧
+      Eval.patternBindings p vs = (reads.map (·.1)).zip ws ∧
+      IR.Body.exec fs fuel (((reads.map (·.1)).zip ws).reverse ++ (x, v) :: ρo) inner = some ob := by
+  obtain ⟨hne, ws, hlen, hws, hb⟩ := destructureBody_exec fs fuel hreads hstep h
+  obtain ⟨w, vs, hw, hit, hpb⟩ := patternReads_vals fs fuel hreads hne hws
+  simp [IR.Expr.eval, List.lookup] at hw
+  subst hw
+  exact ⟨ws, vs, hlen, hit, hpb, hb⟩
+
+/-- The loop `for (const [k, v] of …)` over `vs` means what the output's fold
+means, when the body does. The fold binds each element to the first name of
+the pattern, and the body starts by binding all the names. -/
+theorem loopPattern_sim {env bodyEnv : Translate.Env} {x : String} {p : ArrayPattern} {elemType : Ty}
+    {reads : List (String × Ty × IR.Expr)} {names : List String} {b r : Bool} {bodyS : Stmt}
+    {inner step : IR.Body} {s : Span} {ctx ctx' : Ctx}
+    (hbody : StmtSim (N := N) m fs fuel bodyEnv (.loop names b r) (blockStatements bodyS) inner)
+    (hreads : patternReads s p ⟨.var x, false, elemType⟩ ctx = .ok reads ctx')
+    (hstep : destructureBody p elemType (.var x) reads inner = some step)
+    (hx : x ∈ reads.map (·.1))
+    (hfresh : ∀ n ∈ reads.map (·.1), env.has n = false)
+    (hhas : ∀ n, bodyEnv.has n = (env.has n || (reads.map (·.1)).contains n))
+    (hglob : globals bodyEnv = globals env)
+    (hnames : names = changedNames (blockStatements bodyS) env) :
+    ∀ (vs : List (Val N)) (ρs ρo : Eval.Env N) (o : Outcome N), Agree ρs ρo → Scoped m env ρs →
+      IR.Body.runFold fs fuel names x step ρo vs = some o →
+      (∀ w, o = .ret w → Eval.execLoop m fuel ρs
+          (fun v => do return (Eval.patternBindings p (← Eval.iterValues v)).reverse) bodyS vs =
+            some (.ret w)) ∧
+      ∀ ρo', o = .normal ρo' → ∃ mod, Eval.execLoop m fuel ρs
+          (fun v => do return (Eval.patternBindings p (← Eval.iterValues v)).reverse) bodyS vs =
+            some (.normal mod) ∧
+        Agree mod ρo' ∧ Frame (stmtChanges bodyS) mod ρs := by
+  intro vs
+  induction vs with
+  | nil =>
+    intro ρs ρo o ha hs h
+    simp only [IR.Body.runFold, Option.some.injEq] at h
+    subst h
+    refine ⟨fun w hw => (by cases hw), fun ρo' hρ => ?_⟩
+    cases hρ
+    exact ⟨ρs, by simp [Eval.execLoop], ha, Frame.refl _ _⟩
+  | cons v vs ih =>
+    intro ρs ρo o ha hs h
+    simp only [IR.Body.runFold] at h
+    cases hb0 : IR.Body.exec fs fuel ((x, v) :: ρo) step with
+    | none => simp [hb0] at h
+    | some ob =>
+      obtain ⟨ws, ivs, hl, hit, hpb, hb⟩ := patternStep_exec fs fuel hreads hstep hb0
+      have hl' : ws.length = (reads.map (·.1)).length := by simpa using hl
+      have ha' := Agree.shadow ha hl' hx v
+      have hs' : Scoped m bodyEnv (((reads.map (·.1)).zip ws).reverse ++ ρs) :=
+        ⟨fun n => by
+          rw [lookup_isSome_append, lookup_isSome_reverse, lookup_isSome_zip hl', hhas n, hs.1 n,
+            Bool.or_comm],
+         Resolves.congr hs.2 hglob⟩
+      have hkeys : ∀ q ∈ ((reads.map (·.1)).zip ws).reverse, env.has q.1 = false := by
+        intro q hq
+        rw [List.mem_reverse] at hq
+        exact hfresh _ (List.of_mem_zip hq).1
+      -- A `return` in the body ends the loop, and the function.
+      by_cases hr : ∃ w, ob = .ret w
+      · obtain ⟨w, rfl⟩ := hr
+        simp [hb0] at h
+        subst h
+        refine ⟨fun w' hw => ?_, fun ρo' hρ => by cases hρ⟩
+        cases hw
+        simp [Eval.execLoop, hit, hpb, block_ret m fuel bodyS ((hbody _ _ ha' hs').1 w hb)]
+      -- Otherwise the body ends in its state, or in a `break`.
+      obtain ⟨brk, inner', rfl⟩ : ∃ brk inner', ob = endOf brk inner' := by
+        cases ob with
+        | ret w => exact absurd ⟨w, rfl⟩ hr
+        | cont _ => simp [hb0] at h
+        | normal inner' => exact ⟨false, inner', rfl⟩
+        | brk inner' => exact ⟨true, inner', rfl⟩
+      · cases hbs : IR.bindState names inner' ρo with
+        | none => cases brk <;> simp [endOf, hb0, hbs] at h
+        | some ρo₁ =>
+          obtain ⟨-, new, out, mod, hex, hag, -, hnew, hfr⟩ := (hbody _ _ ha' hs').2 brk inner' hb
+          -- The body runs to its end or to a `continue`, and the loop goes on,
+          -- or it runs to a `break`, and the loop ends.
+          obtain ⟨e, he, hdrop, hlen⟩ : ∃ e,
+              ((Eval.execStmt m fuel (((reads.map (·.1)).zip ws).reverse ++ ρs) bodyS = some (.normal e) ∨
+                Eval.execStmt m fuel (((reads.map (·.1)).zip ws).reverse ++ ρs) bodyS = some (.cont e)) ∧
+                  brk = false ∨
+                Eval.execStmt m fuel (((reads.map (·.1)).zip ws).reverse ++ ρs) bodyS = some (.brk e) ∧
+                  brk = true) ∧
+              e.drop (e.length - (((reads.map (·.1)).zip ws).reverse ++ ρs).length) = mod ∧
+              (((reads.map (·.1)).zip ws).reverse ++ ρs).length ≤ e.length := by
+            cases brk
+            · rcases hex with hex | hex
+              · obtain ⟨e, h1, h2, h3⟩ := block_normal m fuel bodyS hex hfr
+                exact ⟨e, .inl ⟨.inl h1, rfl⟩, h2, h3⟩
+              · obtain ⟨e, h1, h2, h3⟩ := block_jump m fuel bodyS (.inl rfl) hex hfr
+                exact ⟨e, .inl ⟨.inr h1, rfl⟩, h2, h3⟩
+            · obtain ⟨e, h1, h2, h3⟩ := block_jump m fuel bodyS (.inr rfl) hex hfr
+              exact ⟨e, .inr ⟨h1, rfl⟩, h2, h3⟩
+          -- `mod` is the names of the pattern in front of the outer names.
+          obtain ⟨ρ₁, ρ₂, rfl, h₁, h₂⟩ := Frame.split (a := ((reads.map (·.1)).zip ws).reverse) (b := ρs) hfr
+          have hnext : e.drop (e.length - ρs.length) = ρ₂ := by
+            have hl₁ := h₁.length
+            have : e.length - ρs.length =
+                (e.length - (((reads.map (·.1)).zip ws).reverse ++ ρs).length) + ρ₁.length := by
+              simp only [List.length_append] at hlen ⊢; omega
+            rw [this, ← List.drop_drop, hdrop, List.drop_left]
+          have hag' : Agree ρ₂ ρo₁ := by
+            intro n
+            rw [bindState_lookup hbs n]
+            split
+            · rename_i hn
+              rw [hnames, mem_changedNames] at hn
+              rw [← hag n, lookup_append_fresh _ fun q hq hqn => by
+                have := hnew q hq
+                rw [hhas, hqn, hn.1] at this
+                exact absurd this (by simp)]
+              rw [lookup_append_fresh _ fun q hq hqn => by
+                obtain ⟨q', hq', hk⟩ := Frame.mem h₁ hq
+                have := hkeys q' hq'
+                rw [← hk, hqn, hn.1] at this
+                exact absurd this (by simp)]
+            · rename_i hn
+              rw [← ha n]
+              by_cases hhas' : env.has n = true
+              · have hnc : n ∉ stmtsChanges (blockStatements bodyS) := fun hc =>
+                  hn (by rw [hnames, mem_changedNames]; exact ⟨hhas', hc⟩)
+                exact h₂.lookup hnc
+              · have h1 := hs.none (by simpa using hhas')
+                have h2 := h₂.isSome n
+                rw [h1] at h2 ⊢
+                simpa using h2
+          rw [stmtsChanges_block] at h₂
+          rcases he with ⟨he, rfl⟩ | ⟨he, rfl⟩
+          · simp only [endOf, hb0, hbs, Option.bind_eq_bind, Option.bind_some] at h
+            obtain ⟨hret, hnorm⟩ := ih ρ₂ ρo₁ o hag' (scoped_frame hs h₂) h
+            refine ⟨fun w hw => ?_, fun ρo' hρ => ?_⟩
+            · rcases he with he | he <;> simp [Eval.execLoop, hit, hpb, he, hnext] <;> exact hret w hw
+            · obtain ⟨mod₂, hloop, hag₂, hfr₂⟩ := hnorm ρo' hρ
+              refine ⟨mod₂, ?_, hag₂, (hfr₂.trans h₂).mono fun n hn => by simp at hn; exact hn⟩
+              rcases he with he | he <;> simp [Eval.execLoop, hit, hpb, he, hnext] <;> exact hloop
+          · simp [endOf, hb0, hbs] at h
+            subst h
+            refine ⟨fun w hw => (by cases hw), fun ρo' hρ => ?_⟩
+            cases hρ
+            exact ⟨ρ₂, by simp [Eval.execLoop, hit, hpb, he, hnext], hag', h₂⟩
+
+/-- `translateForOfPattern` is sound, when what it calls is. -/
+theorem translateForOfPattern_sound
+    {items : TM Code} {kBody : Translate.Env → Tail → List Stmt → TM IR.Body} {kRest : TM IR.Body}
+    {env : Translate.Env} {s : Span} {kind : VarKind} {p : ArrayPattern} {iterable : Expr} {b : Stmt}
+    {rest : List Stmt} {tail : Tail} {ctx ctx' : Ctx} {body : IR.Body}
+    (hitems : ∀ ctx c ctx', items ctx = .ok c ctx' → Sim (N := N) m fs fuel env iterable c.code)
+    (hkBody : ∀ env' t ss ctx b ctx', kBody env' t ss ctx = .ok b ctx' →
+      StmtSim (N := N) m fs fuel env' t ss b)
+    (hkRest : ∀ ctx b ctx', kRest ctx = .ok b ctx' → StmtSim (N := N) m fs fuel env tail rest b)
+    (h : translateForOfPattern items kBody kRest env s kind p iterable b tail ctx = .ok body ctx') :
+    StmtSim (N := N) m fs fuel env tail (.forOfPattern s kind p iterable b :: rest) body := by
+  unfold translateForOfPattern at h
+  simp only [ite_state] at h
+  split at h
+  · rename_i hkind
+    obtain rfl : kind = .const := by
+      cases kind <;> first | rfl | simp +decide at hkind
+    simp only [pure_bind, ite_state] at h
+    split at h
+    · simp at h
+    · try simp only [pure_bind, ite_state] at h
+      split at h
+      · simp at h
+      · simp only [bind_ok] at h
+        obtain ⟨c, s₁, hc, h⟩ := h
+        obtain ⟨⟨elemType, li⟩, s₁', hli, h⟩ := h
+        obtain ⟨hmut, hlo, rfl⟩ := loopItems_ok hli
+        simp only [orReject_ok] at h
+        obtain ⟨x, s₂, ⟨hxh, rfl⟩, reads, s₃, hreads, bodyEnv, s₄, hdecl, bodyOut, s₅, hbody, step, s₆,
+          ⟨hstep, rfl⟩, h⟩ := h
+        simp at h
+        obtain ⟨_, _, ⟨rfl, rfl⟩, _, _, ⟨rfl, rfl⟩, rb, hrb, hbodyEq⟩ := h
+        obtain ⟨hfresh, hhas, hglob⟩ := declarePlaces_ok hdecl
+        have hx : x ∈ reads.map (·.1) := by
+          rw [patternReads_names hreads]
+          exact List.mem_of_mem_head? hxh
+        have hsimI := hitems _ _ _ hc
+        have hloop := loopPattern_sim m fs fuel (hkBody _ _ _ _ _ _ hbody) hreads hstep hx hfresh hhas hglob rfl
+        have hrest := hkRest _ _ _ hrb
+        intro ρs ρo ha hs
+        -- The loop returns from the function, or it ends and the statements
+        -- after it run.
+        have key : ∀ o, IR.Body.exec fs fuel ρo body = some o →
+            (∃ w, o = .ret w ∧ Eval.execStmt m fuel ρs (.forOfPattern s .const p iterable b) = some (.ret w)) ∨
+            ∃ mod ρo₂, Eval.execStmt m fuel ρs (.forOfPattern s .const p iterable b) = some (.normal mod) ∧
+              Agree mod ρo₂ ∧ Frame (stmtChanges (.forOfPattern s .const p iterable b)) mod ρs ∧
+              IR.Body.exec fs fuel ρo₂ rb = some o := by
+          intro o ho
+          rw [← hbodyEq] at ho
+          simp only [IR.Body.exec] at ho
+          cases hi : IR.Expr.eval fs fuel ρo li with
+          | none => simp [hi] at ho
+          | some u =>
+            cases u <;> simp [hi] at ho
+            rename_i vs
+            obtain ⟨vi, hvi, hiter⟩ := loopOver_sim m fs fuel hsimI hlo ha hs hi
+            cases hf : IR.Body.runFold fs fuel (changedNames (blockStatements b) env) x step ρo vs with
+            | none => simp [hf] at ho
+            | some ro =>
+              obtain ⟨hret, hnorm⟩ := hloop vs ρs ρo ro ha hs hf
+              cases ro with
+              | normal ρo₂ =>
+                simp [hf] at ho
+                obtain ⟨mod, hl, hag, hfr⟩ := hnorm ρo₂ rfl
+                refine .inr ⟨mod, ρo₂, ?_, hag, hfr.mono fun n hn => by simp [stmtChanges, hn], ho⟩
+                simp [Eval.execStmt, hmut, hvi, hiter]; exact hl
+              | ret w =>
+                simp [hf] at ho
+                subst ho
+                exact .inl ⟨w, rfl, by simp [Eval.execStmt, hmut, hvi, hiter]; exact hret w rfl⟩
+              | brk _ | cont _ => simp [hf] at ho
+        constructor
+        · intro v hv
+          rcases key _ hv with ⟨w, hw, hst⟩ | ⟨mod, ρo₂, hst, hag, hfr, hb⟩
+          · cases hw
+            simp [Eval.exec, hst]
+          have := (hrest mod ρo₂ hag (scoped_frame hs hfr)).1 v hb
+          simp [Eval.exec, hst, this]
+        · intro brk ρo' hv
+          rcases key _ hv with ⟨w, hw, -⟩ | ⟨mod, ρo₂, hst, hag, hfr, hb⟩
+          · cases brk <;> cases hw
+          obtain ⟨htail, new, out, mod₂, hex, hag₂, hnew, hout, hfr₂⟩ :=
+            (hrest mod ρo₂ hag (scoped_frame hs hfr)).2 brk ρo' hb
+          refine ⟨htail, new, out, mod₂, Ends.congr (by simp [Eval.exec, hst]) hex, hag₂, hnew, hout, ?_⟩
+          simpa [stmtsChanges] using hfr₂.trans hfr
+  · simp at h
 
 theorem stmts_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
     (∀ env tail ss ctx body ctx', translateStatements F env tail ss ctx = .ok body ctx' →
@@ -2918,6 +3279,14 @@ theorem stmts_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
             (fun _ _ _ _ hb => ihS _ _ _ _ _ _ hb) (by simpa using hconst) h
         | ifStmt sp test t e => exact ihI _ _ _ _ _ _ _ _ _ _ h
         | forOfStmt sp kind x iterable b => exact ihF _ _ _ _ _ _ _ _ _ _ _ h
+        | forOfPattern sp kind p iterable b =>
+          exact translateForOfPattern_sound m fs fuel
+            (fun _ _ _ hx => by
+              simp only [bind_ok, fuelLimit_ok] at hx
+              obtain ⟨_, _, ⟨rfl, rfl⟩, hx⟩ := hx
+              exact translateRecv_sim m fs fuel
+                (fun _ _ _ hx => (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hx) hx)
+            (fun _ _ _ _ _ _ hb => ihS _ _ _ _ _ _ hb) (fun _ _ _ hb => ihS _ _ _ _ _ _ hb) h
         | returnStmt sp value =>
           cases rest <;> cases value <;> simp only at h <;> try (simp at h; done)
           cases hcr : tail.canReturn <;> simp only [hcr] at h <;> try (simp at h; done)
