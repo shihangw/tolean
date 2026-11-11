@@ -632,7 +632,8 @@ names from the root. -/
 def leanNames : List (String × String) :=
   [("decide", "Decidable.decide"), ("List", "List"), ("Option", "Option"),
    ("some", "Option.some"), ("none", "Option.none"), ("Int", "Int"), ("Nat", "Nat"), ("Bool", "Bool"),
-   ("String", "String"), ("DecidableEq", "DecidableEq"), ("Repr", "Repr"), ("Except", "Except")]
+   ("String", "String"), ("DecidableEq", "DecidableEq"), ("Repr", "Repr"), ("Except", "Except"),
+   ("pure", "Pure.pure")]
 
 /-- Write the Lean name `name` (or `name.rest`), from the root when the source
 declares the same name. `table` gives the full names. -/
@@ -646,6 +647,7 @@ def leanNameIn (table : List (String × String)) (names : Names) (name : String)
 /-- Write a Lean name of the shared part of the output. -/
 def leanName (names : Names) (name : String) : String := leanNameIn leanNames names name
 
+
 /-- Lean code as an argument: parenthesized unless it is one atom. A prefix
 `!` or `¬` takes the rest of the line in Lean, so code that starts with one is
 not an atom even without a space: `f !(a) b` reads as `f !((a) b)`. -/
@@ -656,9 +658,10 @@ def wrapped (constructor argument : String) : String :=
   constructor ++ " " ++
     (if argument.contains ' ' && !argument.startsWith "(" then s!"({argument})" else argument)
 
+
 /-- `code`, or `pure code` in the `Except` monad. -/
-def inMonad (monadic : Bool) (code : String) : String :=
-  if monadic then wrapped "pure" code else code
+def inMonad (names : Names) (monadic : Bool) (code : String) : String :=
+  if monadic then wrapped (leanName names "pure") code else code
 
 def tuple (names : List String) : String :=
   match names with
@@ -1156,15 +1159,15 @@ loop body is `pure` of its state, and the body of a loop that can throw runs
 in the monad with `>>=`. -/
 def Body.lines (names : Names) (monadic : Bool := false) : Body T E → List String
   | .value e => [e.print names]
-  | .state ns => [inMonad monadic (tuple ns)]
+  | .state ns => [inMonad names monadic (tuple ns)]
   | .yield ns slot =>
-    [inMonad monadic (wrapped (leanName names "ForInStep.yield")
+    [inMonad names monadic (wrapped (leanName names "ForInStep.yield")
       (stepTuple (if slot then some (leanName names "none") else Option.none) ns))]
   | .done ns slot =>
-    [inMonad monadic (wrapped (leanName names "ForInStep.done")
+    [inMonad names monadic (wrapped (leanName names "ForInStep.done")
       (stepTuple (if slot then some (leanName names "none") else Option.none) ns))]
   | .exit e ns =>
-    [inMonad monadic (wrapped (leanName names "ForInStep.done")
+    [inMonad names monadic (wrapped (leanName names "ForInStep.done")
       (stepTuple (some (wrapped (leanName names "some") (e.print names))) ns))]
   | .let name e rest => s!"let {name} := {e.print names}" :: rest.lines names monadic
   | .letTuple ns e rest => s!"let {tuple ns} := {e.print names}" :: rest.lines names monadic
