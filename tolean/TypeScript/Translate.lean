@@ -1079,6 +1079,7 @@ mutual
 
 def stmtChanges : Stmt → List String
   | .varDecl _ d => optionChanges d.init
+  | .destructure _ _ _ _ init => exprChanges init
   | .exprStmt _ e => exprChanges e
   | .returnStmt _ v => optionChanges v
   | .ifStmt _ test t (some e) => exprChanges test ++ stmtChanges t ++ stmtChanges e
@@ -2627,6 +2628,89 @@ def translateReturnCall (env : Env) (s : Span) (tail : Tail) (cs sp : Span) (nam
   let .call ref outs := code.code | reject s "unsupported call"
   return (ref, outs)
 
+/-- The places of a pattern on a tuple `v` of `size` elements, from the
+element `i` on: each name with the type of its element and the code that
+reads it. -/
+def tuplePlaces (v : IR.Expr) (size : Nat) : List (Option String) → List Ty → Nat →
+    List (String × Ty × IR.Expr)
+  | x :: xs, t :: ts, i => (x.map fun n => (n, t, .proj v i size)).toList ++ tuplePlaces v size xs ts (i + 1)
+  | _, _, _ => []
+
+/-- The places of a pattern on the list `li` of the values that iterating
+gives, from the position `i` on: each name, as the optional value at its
+position, which is `undefined` past the end, as `xs[i]` is. -/
+def listPlaces (elem : Ty) (li : IR.Expr) : List (Option String) → Nat → List (String × Ty × IR.Expr)
+  | [], _ => []
+  | x :: xs, i =>
+    (x.map fun n => (n, .optional elem, .ascribe (.ext (.indexLit i) [li]) (Ty.optional elem).lean)).toList ++
+      listPlaces elem li xs (i + 1)
+
+/-- What `const [a, , b, ...r] = e` binds, where `c` is the code of `e`: each
+name, with its type and the code that reads its value. A tuple gives its
+elements. An array, a set or a map gives the values that a loop over it
+visits, each optional, and the rest is the list of the values after the
+places. -/
+def patternReads (s : Span) (p : ArrayPattern) (c : Code) : TM (List (String × Ty × IR.Expr)) := do
+  match c.type.tupleElems? with
+  | some tys =>
+    if p.rest.isSome then reject s "a rest element on a tuple is not supported; destructure an array"
+    unless p.elems.length ≤ tys.length do reject s s!"the tuple has only {tys.length} elements"
+    return tuplePlaces c.value tys.length p.elems tys 0
+  | none =>
+    let (elem, li) ← orReject (loopOver c) s "destructuring needs a tuple, an array, a set or a map"
+    -- The output has one `none` for `undefined` and `null`.
+    if elem.isMaybe then reject s "destructuring an array of nullable values could give null or undefined"
+    return listPlaces elem li p.elems 0 ++
+      (p.rest.map fun r => (r, .array elem, .ext (.slice p.elems.length none) [li])).toList
+
+/-- The type that an annotation declares, if any. -/
+def declaredType : Option TypeExpr → TM (Option Ty)
+  | some annotation => some <$> translateType annotation
+  | none => pure none
+
+/-- The type of a value: the declared one, which the value's type must fit,
+or else the value's own. -/
+def fitDeclared (s : Span) (declared : Option Ty) (code : Code) : TM Ty :=
+  match declared with
+  | some t => if code.type.assignableTo t then pure t else reject s "the value does not have the declared type"
+  | none => pure code.type
+
+/-- The pattern names every element of the tuple type `t`, in order. -/
+def exactTuple (p : ArrayPattern) : Ty → Bool
+  | .tuple tys => p.rest.isNone && p.elems.all Option.isSome && p.elems.length == tys.length
+  | _ => false
+
+/-- The output of a pattern whose names `reads` read the value `value` of type
+`t`, then `rest`: one `let` for one name, and one `let (a, b) := …` for more,
+which binds the tuple itself when the pattern names each of its elements. -/
+def destructureBody (p : ArrayPattern) (t : Ty) (value : IR.Expr) (reads : List (String × Ty × IR.Expr))
+    (rest : IR.Body) : Option IR.Body :=
+  match reads with
+  | [] => none
+  | [(n, _, e)] => some (.let n e rest)
+  | _ => some (.letTuple (reads.map (·.1))
+      (if exactTuple p t then value else .tuple (reads.map (·.2.2))) rest)
+
+/-- Declare each name of a pattern, in order. -/
+def declarePlaces (s : Span) (binding : Binding) : Env → List (String × Ty × IR.Expr) → TM Env
+  | env, [] => pure env
+  | env, (n, t, _) :: ps => do declarePlaces s binding (← declare env s n binding t) ps
+
+/-- `const [a, b] = e`, then the statements after it, which `k` translates in
+the scope with the names. The output reads `e` once: a tuple with as many
+names as elements binds them all with `let (a, b) := e`, and any other
+pattern binds `let (a, b) := (e.1, e.2.1)` or `(xs[0]?, xs[1]?)`. `tr`
+translates an expression in the scope before the names. -/
+def translateDestructure (tr : Option Ty → Expr → TM Code) (k : Env → TM IR.Body) (env : Env)
+    (s : Span) (kind : VarKind) (p : ArrayPattern) (type : Option TypeExpr) (init : Expr) : TM IR.Body := do
+  let declared ← declaredType type
+  let code ← tr declared init
+  let t ← fitDeclared s declared code
+  let reads ← patternReads s p ⟨withType code.value t code.type, false, t⟩
+  let env' ← declarePlaces s (if kind == .const then .const else .«let») env reads
+  let rest ← k env'
+  orReject (destructureBody p t (withType code.value t code.type) reads rest) s "a pattern must declare a name"
+
 /-- The head of a loop that the output runs as a fold: `for (kind x of xs)`,
 or a counted `for` with its declaration, its test and its update. -/
 inductive LoopHead where
@@ -2711,6 +2795,13 @@ def translateStatements (fuel : Nat) (env : Env) (tail : Tail) (statements : Lis
         modify fun c => { c with returning := false }
         return tail.returnBody (if (← get).throws then IR.Expr.pure code.value else code.value)
     | .varDecl s d => translateVariable fuel env s d rest tail
+    | .destructure s kind p type init =>
+      if stmt.constAssignedIn rest then
+        reject s "a name of the pattern is a const, and a later statement assigns it; declare it with let"
+      if (throwingCall? env.functions init).isSome then
+        reject init.span "a pattern may not take the value of a call that can throw; declare a const for the call first"
+      translateDestructure (fun exp e => do translateExpr (← fuelLimit) env exp e)
+        (fun env' => translateStatements fuel env' tail rest) env s kind p type init
     | .exprStmt s e =>
       let (name, update) ← translateUpdate env s e
       return .let name update (← translateStatements fuel env tail rest)
@@ -3469,6 +3560,8 @@ mutual
 
 def stmtUsesNumber : Stmt → Bool
   | .varDecl _ d => varUsesNumber d
+  | .destructure _ _ p type init =>
+    p.names.any isNumberName || (type.map typeUsesNumber).getD false || exprUsesNumber init
   | .exprStmt _ e => exprUsesNumber e
   | .returnStmt _ v => (v.map exprUsesNumber).getD false
   | .throwStmt _ e => exprUsesNumber e

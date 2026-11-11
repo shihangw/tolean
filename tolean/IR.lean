@@ -283,6 +283,9 @@ inductive Body (T E : Type) where
   /-- `let (x, y) := branch`, where `branch` is an `ite` or a `matchNull`
   that ends in the state, then `rest`. -/
   | letState (names : List String) (branch : Body T E) (rest : Body T E)
+  /-- `let (x, y) := e`, then `rest`: one name for each element of the tuple
+  `e`, which has two elements or more. -/
+  | letTuple (names : List String) (e : Expr T E) (rest : Body T E)
   /-- `let (x, y) := List.foldl (fun (x, y) e => body) (x, y) items`, then
   `rest`. When a `break` can end the loop (`info.breaks`), it is
   `let (x, y) := Id.run (forIn items (x, y) (fun e (x, y) => body))`. When a
@@ -383,7 +386,7 @@ def Body.refs : Body T E → List DeclRef
   | .value e => e.refs
   | .state _ | .yield .. | .done .. => []
   | .exit e _ => e.refs
-  | .let _ e rest => e.refs ++ rest.refs
+  | .let _ e rest | .letTuple _ e rest => e.refs ++ rest.refs
   | .letArray _ t elems rest => t.refs ++ Expr.refsList elems ++ rest.refs
   | .ite c a b => c.refs ++ a.refs ++ b.refs
   | .matchNull _ _ a b | .letState _ a b => a.refs ++ b.refs
@@ -465,7 +468,7 @@ def Body.usesString (opUses : E → Bool) : Body T E → Bool
   | .value e => Expr.usesString opUses e
   | .state _ | .yield .. | .done .. => false
   | .exit e _ => Expr.usesString opUses e
-  | .let _ e rest => Expr.usesString opUses e || Body.usesString opUses rest
+  | .let _ e rest | .letTuple _ e rest => Expr.usesString opUses e || Body.usesString opUses rest
   | .letArray _ t elems rest =>
     t.usesString || Expr.usesStringList opUses elems || Body.usesString opUses rest
   | .ite c a b => Expr.usesString opUses c || Body.usesString opUses a || Body.usesString opUses b
@@ -532,7 +535,7 @@ end
 def Body.usesMap : Body T E → Bool
   | .value e | .exit e _ => e.usesMap onMap
   | .state _ | .yield .. | .done .. => false
-  | .let _ e rest => e.usesMap onMap || rest.usesMap
+  | .let _ e rest | .letTuple _ e rest => e.usesMap onMap || rest.usesMap
   | .letArray _ t elems rest => t.usesMap || Expr.usesMapList onMap elems || rest.usesMap
   | .ite c a b => c.usesMap onMap || a.usesMap || b.usesMap
   | .matchNull _ _ a b | .letState _ a b | .matchTag _ _ _ _ _ a b => a.usesMap || b.usesMap
@@ -804,7 +807,7 @@ def Division.apply : Division → Int → Int → Int
 /-- The body tests the tag of the local `name` somewhere. -/
 def Body.testsTag (name : String) : Body T E → Bool
   | .matchTag n _ _ _ _ a b => n == name || a.testsTag name || b.testsTag name
-  | .let _ _ rest | .letArray _ _ _ rest => rest.testsTag name
+  | .let _ _ rest | .letArray _ _ _ rest | .letTuple _ _ rest => rest.testsTag name
   | .ite _ a b | .matchNull _ _ a b | .letState _ a b => a.testsTag name || b.testsTag name
   | .fold _ _ body _ rest _ => body.testsTag name || rest.testsTag name
   | .bind _ _ _ rest => rest.testsTag name
@@ -923,6 +926,8 @@ def Body.callsShrink (self : DeclRef) (i : Nat) (need : Int) (depths : List (Str
       whenOther.callsShrink self i need (if other.isSome then narrowPart depths name else depths)
   | .letState names branch rest =>
     branch.callsShrink self i need depths && rest.callsShrink self i need (forgetParts depths names)
+  | .letTuple names e rest =>
+    e.callsShrink self i need depths && rest.callsShrink self i need (forgetParts depths names)
   | .fold names element body items rest _ =>
     let outer := forgetParts depths names
     items.callsShrink self i need depths &&
@@ -965,7 +970,7 @@ end
 def Body.calls (self : DeclRef) : Body T E → Bool
   | .value e | .exit e _ => e.calls self
   | .state _ | .yield .. | .done .. => false
-  | .let _ e rest => e.calls self || rest.calls self
+  | .let _ e rest | .letTuple _ e rest => e.calls self || rest.calls self
   | .letArray _ _ elems rest => Expr.callsList self elems || rest.calls self
   | .ite c a b => c.calls self || a.calls self || b.calls self
   | .matchNull _ _ a b | .matchTag _ _ _ _ _ a b | .letState _ a b => a.calls self || b.calls self
@@ -1146,6 +1151,7 @@ def Body.lines (names : Names) : Body T E → List String
     [wrapped (leanName names "ForInStep.done")
       (stepTuple (some (wrapped (leanName names "some") (e.print names))) ns)]
   | .let name e rest => s!"let {name} := {e.print names}" :: rest.lines names
+  | .letTuple ns e rest => s!"let {tuple ns} := {e.print names}" :: rest.lines names
   | .letArray name type elems rest =>
     s!"let {name} : {type.print names} := [{", ".intercalate (Expr.printList names elems)}]" ::
       rest.lines names

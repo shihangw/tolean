@@ -413,6 +413,19 @@ inductive Outcome (N : Type) where
   | cont (env : Env N)
 deriving Inhabited
 
+/-- The names that the places of an array pattern bind, from the values that
+iterating the value gives (`IteratorBindingInitialization`, ECMA-262
+§8.6.3): each place takes the next value, or `undefined` when none is left,
+and a hole skips one. -/
+def placeBindings : List (Option String) → List (Val N) → List (String × Val N)
+  | [], _ => []
+  | x :: xs, vs => (x.map (·, vs.headD .undefined)).toList ++ placeBindings xs vs.tail
+
+/-- The names that an array pattern binds from the values `vs`, in order. The
+rest takes a new array of the values that the places leave. -/
+def patternBindings (p : ArrayPattern) (vs : List (Val N)) : List (String × Val N) :=
+  placeBindings p.elems vs ++ (p.rest.map (·, .list (vs.drop p.elems.length))).toList
+
 /-- The text of a number literal. -/
 def numberText? : Expr → Option String
   | .number _ text => some text
@@ -1009,6 +1022,13 @@ def execStmt (m : Scope) (fuel : Nat) (env : Env N) : Stmt → Option (Outcome N
   | .varDecl _ { name, init := some init, .. } => do
     match ← evalTop m fuel env init with
     | .ok v => return .normal ((name, v) :: env)
+    | .error t => return .ret (.error t)
+  -- `const [a, , b, ...r] = e` (ECMA-262 §14.3.3.1): the pattern iterates the
+  -- value of `e`, as `for … of` does, and binds each name in order. A value
+  -- that the subset cannot iterate leaves it.
+  | .destructure _ _ p _ init => do
+    match ← evalTop m fuel env init with
+    | .ok v => return .normal ((patternBindings p (← iterValues v)).reverse ++ env)
     | .error t => return .ret (.error t)
   | .returnStmt _ (some e) => do return .ret (← evalTop m fuel env e)
   -- `throw e` ends the function with what it throws (ECMA-262 §14.14.1).

@@ -82,8 +82,7 @@ refuses destructuring after `export` and in the first part of a `for` loop,
 and it refuses object patterns, nested patterns and default values. It also
 refuses a pattern that is empty or that ends with a `,`, such as `[a, ]` or
 `[a, , ]`, although JavaScript allows both. So the last place is always a name
-or the rest element, and the printed pattern reads back as the same one. The
-translator refuses destructuring for now.
+or the rest element, and the printed pattern reads back as the same one.
 
 In the declaration at the start of a counted `for`, the parser refuses an `in`
 operator unless parentheses, braces, the arguments of a call or an index hold
@@ -411,6 +410,8 @@ the file, the line and the reason. It never approximates.
 | `x ??= e` on a `let` local of type `T \| null` | `let x := Option.or x e`. JS evaluates `e` only when `x` is `null`. Lean evaluates it either way, but the result is the same, because the subset has no side effects. |
 | `[a, b]` with the element type from the context or the elements, such as `return [a, b]` or `const xs: ReadonlyArray<T> = []` | `([a, b] : List T)` |
 | `[...xs, a, b, ...ys]`, where each spread is an array, a set or a map | `(xs ++ ([a, b] : List T) ++ ys)`, and `[...xs]` is `xs`. A spread iterates its value, as `for … of` does (§13.2.4.1). So a set gives `JSSet.elems s` and a map gives `JSMap.entries m`, each in the order of insertion. |
+| `const [a, b] = t`, where `t` is a tuple | `let (a, b) := t` when the pattern names each element, and `let (a, b) := (t.1, t.2.1)` for a pattern with holes or with fewer names. The value is read once. |
+| `const [a, , c, ...rest] = xs`, where `xs` is an array, a set or a map | `let (a, c, rest) := ((xs[0]? : Option T), (xs[2]? : Option T), (List.drop 3 xs))`. The pattern iterates `xs`, as `for … of` does (§8.6.3), so each name is optional, `undefined` past the end, as `xs[k]` is. The rest is a new array of the values after the places. A set gives `JSSet.elems s` and a map `JSMap.entries m`. |
 | `[A, B]` and `readonly [A, B]`, a tuple of two elements or more | `A × B`. In JS a tuple is an array. |
 | `[a, b]` where the context expects a tuple, such as a return value | `(a, b)`, with each element translated where its own type is expected |
 | `t[0]`, an element of a tuple at an index that is a number literal | `t.1`, and `t.2.1` or `t.2.2` for the second or the last of three, as Lean nests the product to the right |
@@ -523,6 +524,10 @@ Tolean rejects these, among others:
   spread must also have the array's element type itself, so `[...xs, null]`
   with `xs` of `bigint` is refused. Lean converts an element to the type of
   its place, but it does not convert the elements of a list.
+- A rest element on a tuple, a pattern with more places than its tuple has
+  elements, a pattern on an array of nullable values, and a pattern on the
+  value of a call that can throw. Lean's `none` would stand for both `null`
+  and `undefined`, and a call that can throw needs a `const` of its own first.
 - `includes` on an array of objects or of nullable values, and its second
   argument, the index to start at. On objects `includes` compares
   references. Tolean also refuses a call of any other array method that takes

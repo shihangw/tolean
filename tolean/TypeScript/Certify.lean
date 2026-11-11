@@ -186,7 +186,7 @@ partial def exprNumbers : Expr → List String
 
 def stmtNumbers : Stmt → List String
   | .varDecl _ d => (d.init.map exprNumbers).getD []
-  | .exprStmt _ e | .ifStmt _ e _ _ | .whileStmt _ e _ | .forOfStmt _ _ _ e _ => exprNumbers e
+  | .exprStmt _ e | .ifStmt _ e _ _ | .whileStmt _ e _ | .forOfStmt _ _ _ e _ | .destructure _ _ _ _ e => exprNumbers e
   | .returnStmt _ e => (e.map exprNumbers).getD []
   | .forStmt _ i t u _ =>
     (((i.bind (·.init)).map exprNumbers).getD []) ++ ((t.map exprNumbers).getD []) ++ ((u.map exprNumbers).getD [])
@@ -194,7 +194,7 @@ def stmtNumbers : Stmt → List String
 
 def stmtCalls : Stmt → List String
   | .varDecl _ d => (d.init.map exprCalls).getD []
-  | .exprStmt _ e | .ifStmt _ e _ _ | .whileStmt _ e _ | .forOfStmt _ _ _ e _ => exprCalls e
+  | .exprStmt _ e | .ifStmt _ e _ _ | .whileStmt _ e _ | .forOfStmt _ _ _ e _ | .destructure _ _ _ _ e => exprCalls e
   | .returnStmt _ e => (e.map exprCalls).getD []
   | .forStmt _ i t u _ =>
     (((i.bind (·.init)).map exprCalls).getD []) ++ ((t.map exprCalls).getD []) ++ ((u.map exprCalls).getD [])
@@ -241,7 +241,7 @@ partial def subExprs (e : Expr) : List Expr :=
 /-- The expressions that a statement holds, outside its nested statements. -/
 def stmtExprs : Stmt → List Expr
   | .varDecl _ d => d.init.toList
-  | .exprStmt _ e | .ifStmt _ e _ _ | .whileStmt _ e _ | .forOfStmt _ _ _ e _ => [e]
+  | .exprStmt _ e | .ifStmt _ e _ _ | .whileStmt _ e _ | .forOfStmt _ _ _ e _ | .destructure _ _ _ _ e => [e]
   | .returnStmt _ e => e.toList
   | .switchStmt _ d cs => d :: cs.filterMap (·.1)
   | _ => []
@@ -309,7 +309,7 @@ partial def bodyCallbacks : IR.Body → List Callback
   | .value e => exprCallbacks e
   | .state _ | .yield .. | .done .. => []
   | .exit e _ => exprCallbacks e
-  | .let _ e rest => exprCallbacks e ++ bodyCallbacks rest
+  | .let _ e rest | .letTuple _ e rest => exprCallbacks e ++ bodyCallbacks rest
   | .letArray _ _ elems rest => elems.flatMap exprCallbacks ++ bodyCallbacks rest
   | .ite c a b => exprCallbacks c ++ bodyCallbacks a ++ bodyCallbacks b
   | .matchNull _ _ a b | .matchTag _ _ _ _ _ a b | .letState _ a b => bodyCallbacks a ++ bodyCallbacks b
@@ -375,7 +375,7 @@ def casesOn (decls : List IR.Decl) (vars : List (String × IR.Ty)) : String :=
 /-- The loops of a body, inner ones first, in the order of the source. -/
 partial def loopsOf : IR.Body → List (List String × String × IR.Body × IR.LoopInfo)
   | .value _ | .state _ | .yield .. | .done .. | .exit .. => []
-  | .let _ _ rest | .letArray _ _ _ rest => loopsOf rest
+  | .let _ _ rest | .letArray _ _ _ rest | .letTuple _ _ rest => loopsOf rest
   | .ite _ a b | .matchNull _ _ a b | .matchTag _ _ _ _ _ a b => loopsOf a ++ loopsOf b
   | .letState _ branch rest => loopsOf branch ++ loopsOf rest
   | .fold names element body _ rest info => loopsOf body ++ [(names, element, body, info)] ++ loopsOf rest
