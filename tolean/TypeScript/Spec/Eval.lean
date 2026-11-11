@@ -426,6 +426,13 @@ def intLiteral? : Expr → Option Int
   | .unary _ .neg (.number _ text) => (numberLiteral text).map (- ·)
   | _ => none
 
+/-- The start of a counted loop: an integer literal, perhaps after `-`, as
+its integer. `-0` is not one, because its value is `-0` and not `0`. -/
+def countStart? : Expr → Option Int
+  | .number _ text => numberLiteral text
+  | .unary _ .neg (.number _ text) => (numberLiteral text).bind fun k => if k == 0 then none else some (-k)
+  | _ => none
+
 /-- `items.at(k)` (`Array.prototype.at`, ECMA-262 §23.1.3.1), where `k` is
 the integer of the argument: a negative `k` counts from the end. An index
 outside the array gives `undefined`. -/
@@ -1062,6 +1069,19 @@ def execStmt (m : Scope) (fuel : Nat) (env : Env N) : Stmt → Option (Outcome N
   | .forOfStmt _ .const name iterable body => do
     if Stmt.mutatesIterable iterable body then none
     execLoop m fuel env name body (← iterValues (← eval m fuel env iterable))
+  -- `for (let i = k; i < b; i++)` (`ForStatement`, ECMA-262 §14.7.4.2), where
+  -- the start `k` is an integer literal: `execCounted` runs the body once for
+  -- each value of `i`, in order, with `i` bound to it in a new scope, as in
+  -- `CreatePerIterationEnvironment`. JS reads `b` before each run, and the
+  -- model reads it once. `countedChanges` checks that the body changes
+  -- nothing that `b` reads, so each read gives the same value.
+  | .forStmt _ (some ⟨.let, name, _, some start⟩) (some (.binary _ .lt (.ident _ n) bound)) (some update)
+      body => do
+    if !(n == name && update.incrementsName name) then none
+    if Stmt.countedChanges name bound body then none
+    let k ← countStart? start
+    let .num b ← eval m fuel env bound | none
+    execCounted m fuel env name body b k (maxSafe - k + 1).toNat
   -- `switch (d) { … }` (`SwitchStatement` Evaluation, ECMA-262 §14.12.4): the
   -- clauses run in a new scope, and a `break` at the top of a clause ends the
   -- statement. The model leaves out a local declared at the top of a clause,
@@ -1138,6 +1158,25 @@ def execLoop (m : Scope) (fuel : Nat) (env : Env N) (name : String) (body : Stmt
     | .cont env' => execLoop m fuel (env'.drop (env'.length - env.length)) name body xs
     | .brk env' => some (.normal (env'.drop (env'.length - env.length)))
 termination_by xs => (fuel, sizeOf body, xs.length + 1)
+
+/-- Run the body of `for (let name = k; name < b; name++)`, from the value `k`
+of `name` on, while `name < b` holds. Each run keeps the changes to outer
+variables, and drops `name` and the variables the body declares. A `continue`
+ends one run, the update then adds one to `name`, and a `break` ends the
+loop. At most `left` runs may come. The model gives no value for a loop that
+would go on past them, as one past `Number.MAX_SAFE_INTEGER` would. -/
+def execCounted (m : Scope) (fuel : Nat) (env : Env N) (name : String) (body : Stmt) (b : N) (k : Int) :
+    Nat → Option (Outcome N)
+  | 0 => none
+  | left + 1 =>
+    if JSNumber.lt (JSNumber.ofSafeInt k) b then do
+      match ← execStmt m fuel ((name, .num (JSNumber.ofSafeInt k)) :: env) body with
+      | .ret v => some (.ret v)
+      | .normal env' => execCounted m fuel (env'.drop (env'.length - env.length)) name body b (k + 1) left
+      | .cont env' => execCounted m fuel (env'.drop (env'.length - env.length)) name body b (k + 1) left
+      | .brk env' => some (.normal (env'.drop (env'.length - env.length)))
+    else some (.normal env)
+termination_by left => (fuel, sizeOf body, left + 1)
 
 /-- Run a statement list, up to its end or its first `return`, `break` or
 `continue`. -/
