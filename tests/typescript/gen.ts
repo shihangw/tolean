@@ -529,8 +529,18 @@ export class Gen {
         if (arrays.length > 0 && target !== undefined) {
           const xs = this.pick(arrays);
           if (xs.ty.k === 'array') {
+            // Sometimes a loop over a literal of arrays, whose head is an
+            // array pattern: the first value, which is optional, and the rest.
+            const of = xs.ty.of;
+            const pattern = of.k !== 'nullable' && of.k !== 'optional' && this.chance(0.6);
             const element = this.fresh('e');
-            const inner = [...vars, { name: element, ty: xs.ty.of, mutable: false, owned: false }];
+            const restName = this.fresh('q');
+            const inner = pattern
+              ? [...vars, { name: element, ty: { k: 'optional', of } as Ty, mutable: false, owned: false },
+                { name: restName, ty: { k: 'array', of } as Ty, mutable: false, owned: false }]
+              : [...vars, { name: element, ty: xs.ty.of, mutable: false, owned: false }];
+            const head = pattern ? `[${element}, ...${restName}]` : element;
+            const iterable = pattern ? `[${xs.name}, ${this.pick(arrays.filter((a) => same(a.ty, xs.ty))).name}]` : xs.name;
             const assign = `${target.name} = ${this.expr(target.ty, inner, 1)};`;
             // A `continue` skips the assignment for some elements, a `break`
             // ends the loop there, and a `return` ends the function.
@@ -540,7 +550,7 @@ export class Gen {
               : jump < 0.4 ? [`  if (${this.test(inner, 1)}) break;`, `  ${assign}`]
               : jump < 0.5 ? [`  if (${this.test(inner, 1)}) return ${this.expr(ret, inner, 1)};`, `  ${assign}`]
               : [`  ${assign}`];
-            lines.push(`for (const ${element} of ${xs.name}) {`, ...body, '}');
+            lines.push(`for (const ${head} of ${iterable}) {`, ...body, '}');
           }
         }
       } else if (roll < 0.85 && depth > 0) {
