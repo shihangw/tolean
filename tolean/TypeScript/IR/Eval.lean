@@ -64,6 +64,24 @@ def NumberTest.apply : NumberTest → N → Bool
   | .isNaN, a => JSNumber.isNaN a
   | .isFinite, a => JSNumber.isFinite a
 
+/-- The string that ToString gives for one operand of `a + b` on strings. -/
+def StringPart.toStr : StringPart → Val N → Option JSString
+  | .string, .str s => some s
+  | .bigint, .int i => some (JSString.ofInt i)
+  | .boolean, .bool b => some (JSString.ofBool b)
+  | _, _ => none
+
+/-- A method of a string, on the string and the values of its arguments. -/
+def StringMethod.apply : StringMethod → JSString → List (Val N) → Option (Val N)
+  | .startsWith, s, args => Eval.oneString (fun p => .bool (s.startsWith p)) args
+  | .endsWith, s, args => Eval.oneString (fun p => .bool (s.endsWith p)) args
+  | .includes, s, args => Eval.oneString (fun p => .bool (s.includes p)) args
+  | .indexOf, s, args => Eval.oneString (fun p => .num (JSNumber.ofSafeInt (s.indexOf p))) args
+  | .trim, s, args => Eval.noArgs (.str s.trim) args
+  | .trimStart, s, args => Eval.noArgs (.str s.trimStart) args
+  | .trimEnd, s, args => Eval.noArgs (.str s.trimEnd) args
+  | .split, s, args => Eval.oneString (fun sep => .list ((s.split sep).map .str)) args
+
 /-- An operation that TypeScript adds, on the values of its arguments. -/
 def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   | .number n, [] => some (.num (JSNumber.ofSafeInt n))
@@ -72,6 +90,11 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   | .numberOp op, [.num a, .num b] => some (op.apply a b)
   | .numberNe, [.num a, .num b] => some (.bool !(JSNumber.eq a b))
   | .numberTest test, [.num a] => some (.bool (test.apply a))
+  | .stringOrder le, [.str a, .str b] => some (.bool (if le then a.le b else a.lt b))
+  | .stringLength, [.str s] => some (.num (JSNumber.ofSafeInt s.length))
+  | .stringMethod method, .str s :: args => method.apply s args
+  | .stringAppend left right, [a, b] => do
+    return .str ((← left.toStr a) ++ (← right.toStr b))
   | .undefined, [] => some .undefined
   -- `a === undefined` and `a !== undefined`, as `IsStrictlyEqual` gives them.
   | .isUndefined, [a] => some (.bool (a matches .undefined))
@@ -81,6 +104,16 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   | .optField path _, [.obj fields] => Eval.getPath fields path
   -- `r[k]`, as the spec evaluates it: the property that the string `k` names.
   | .recordGet _ _, [.obj fields, .str k] => Eval.getKey fields k
+  -- `x ∈ xs` and `List.any xs (JSNumber.sameValueZero x)`: whether an
+  -- element is `x`, as `includes` compares them.
+  | .includes, [.list xs, x] | .includesNumber, [.list xs, x] => (Eval.includesVal x xs).map .bool
+  -- `xs.length`, `xs[k]?`, `JSNumber.elementAt? xs i` and `xs.at(k)`, as the
+  -- spec reads them: `none` is `undefined`.
+  | .length, [.list xs] => some (.num (JSNumber.ofSafeInt xs.length))
+  | .indexLit k, [.list xs] => some (Eval.elementAt xs (some k))
+  | .indexNumber, [.list xs, .num i] => some (Eval.elementAt xs (JSNumber.toSafeInt i))
+  | .at k, [.list xs] => some (Eval.atVal xs k)
+  | .slice start stop, [.list xs] => some (.list (Eval.sliceList xs start stop))
   -- The operations of a `Map`, as the spec gives them.
   | .mapEmpty, [] => some (.map [])
   | .mapGet, [.map entries, k] => (Eval.mapFind entries k).map (·.getD .undefined)
@@ -169,6 +202,12 @@ def Expr.eval (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
     let .list items ← Expr.eval fs fuel ρ e | none
     items[index]?
   | .struct fields _ _ => do return .obj (← Expr.evalFields fs fuel ρ fields)
+  -- `{ base with f := e }` sets each field of the object `base` in its place,
+  -- as the spread of `base` and then the properties do.
+  | .structUpdate base fields => do
+    let .obj obj ← Expr.eval fs fuel ρ base | none
+    let us ← Expr.evalFields fs fuel ρ fields
+    return .obj (us.foldl (fun acc (k, v) => Eval.setProp acc k v) obj)
   -- A value of `T | null` is never `undefined`. JS tells `undefined` from
   -- `null` with `===` but not with `==`, so the tests of `null` give no value
   -- for it.

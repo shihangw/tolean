@@ -33,6 +33,22 @@ inductive NumberTest where
   | isSafeInteger | isNaN | isFinite
 deriving BEq, Repr, Inhabited, DecidableEq
 
+/-- How one operand of `a + b` on strings becomes a string, by ToString: a
+string stays itself, and a bigint or a boolean becomes its text. -/
+inductive StringPart where
+  | string | bigint | boolean
+deriving BEq, Repr, Inhabited, DecidableEq
+
+/-- A method of a string that the subset has. -/
+inductive StringMethod where
+  | startsWith | endsWith | includes | indexOf | trim | trimStart | trimEnd | split
+deriving BEq, Repr, Inhabited, DecidableEq
+
+def StringMethod.name : StringMethod → String
+  | .startsWith => "startsWith" | .endsWith => "endsWith" | .includes => "includes"
+  | .indexOf => "indexOf" | .trim => "trim" | .trimStart => "trimStart" | .trimEnd => "trimEnd"
+  | .split => "split"
+
 /-- The types that TypeScript adds to the IR. -/
 inductive TyExt where
   /-- The number type parameter, `N`. -/
@@ -69,9 +85,47 @@ inductive ExprExt where
   `a?.f.g`, which is `undefined` when `a` is `null` or `undefined`. The
   fields before the last are required. -/
   | optField (path : List String) (bind : Bool)
+  /-- `(JSString.lt a b)`, or `(JSString.le a b)` when `le` is true: `a < b`
+  or `a <= b` on strings. The translator swaps the operands for `>` and
+  `>=`. -/
+  | stringOrder (le : Bool)
+  /-- `(a ++ b)`, where `left` and `right` say how each operand becomes a
+  string, such as `(a ++ JSString.ofInt b)`: `a + b` where one operand is a
+  string. -/
+  | stringAppend (left right : StringPart)
+  /-- `(JSNumber.ofSafeInt (N := N) ((JSString.length s : Nat) : Int))`, on
+  `s`: `s.length`, the number of code units. -/
+  | stringLength
+  /-- `(JSString.startsWith s p)`, or the other method, on `s` and the
+  arguments: `s.startsWith(p)`. `indexOf` gives an index, which the output
+  makes a number: `(JSNumber.ofSafeInt (N := N) (JSString.indexOf s p))`. -/
+  | stringMethod (method : StringMethod)
   /-- `match k with | K.a => r.a | …`, on `r` and `k`: `r[k]`, where `r` is a
   `Record<K, V>` with the keys `keys`, and `K` is the literal union `key`. -/
   | recordGet (key : DeclRef) (keys : List String)
+  /-- `x ∈ xs`, a `Prop`, on `xs` and `x`: `xs.includes(x)`, where the
+  elements are integers, booleans, strings or constructors of a literal
+  union, which SameValueZero compares as `=` does. -/
+  | includes
+  /-- `(List.any xs (JSNumber.sameValueZero x))`, on `xs` and `x`:
+  `xs.includes(x)` on numbers, where `NaN` is the same as `NaN`. -/
+  | includesNumber
+  /-- `(JSNumber.ofSafeInt (N := N) (List.length xs : Int))`, on `xs`:
+  `xs.length`. -/
+  | length
+  /-- `xs[k]?`, on `xs`: `xs[k]` with a number literal `k`, which is the
+  element at `k` or `undefined`. -/
+  | indexLit (k : Nat)
+  /-- `(JSNumber.elementAt? xs i)`, on `xs` and `i`: `xs[i]` with a number
+  `i`. -/
+  | indexNumber
+  /-- `xs[k]?`, or `(List.reverse xs)[-k - 1]?` when `k` is negative, on
+  `xs`: `xs.at(k)` with an integer literal `k`. -/
+  | at (k : Int)
+  /-- `List.take` and `List.drop` on `xs`, with `List.reverse` for a negative
+  bound: `xs.slice(start, stop)` with integer literals. A negative `start`
+  with a `stop` that is not negative is not one of them. -/
+  | slice (start : Int) (stop : Option Int)
   /-- `JSMap.empty`, on no arguments: `new Map()`. The translator writes the
   type of the map after it. -/
   | mapEmpty
@@ -154,7 +208,8 @@ def leanNames : List (String × String) :=
   tolean.IR.leanNames ++
     [("JSNumber", "tolean.TypeScript.JSNumber"), ("JSString", "tolean.TypeScript.JSString"),
      ("JSMap", "tolean.TypeScript.JSMap"), ("JSSet", "tolean.TypeScript.JSSet"),
-     ("JSError", "tolean.TypeScript.JSError"), ("pure", "Pure.pure")]
+     ("JSError", "tolean.TypeScript.JSError"), ("pure", "Pure.pure"),
+     ("Nat", "Nat")]
 
 /-- Write the Lean name `name` (or `name.rest`), from the root when the source
 declares the same name. -/
@@ -206,6 +261,25 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
   | .numberTest .isSafeInteger, [a] => s!"({js}.toSafeInt {argument a}).isSome"
   | .numberTest .isNaN, [a] => s!"({js}.isNaN {argument a})"
   | .numberTest .isFinite, [a] => s!"({js}.isFinite {argument a})"
+  | .stringOrder le, [a, b] =>
+    s!"({leanName names "JSString"}.{if le then "le" else "lt"} {argument a} {argument b})"
+  | .stringAppend left right, [a, b] =>
+    -- The printer writes a string as an atom, an application or code in
+    -- parentheses, and an application binds tighter than `++`, so a string
+    -- operand needs no parentheses of its own.
+    let part (p : StringPart) (x : String) : String := match p with
+      | .string => x
+      | .bigint => s!"({leanName names "JSString"}.ofInt {argument x})"
+      | .boolean => s!"({leanName names "JSString"}.ofBool {argument x})"
+    s!"({part left a} ++ {part right b})"
+  | .stringLength, [a] =>
+    s!"({js}.ofSafeInt (N := {names.typeParam}) (({leanName names "JSString"}.length {argument a} : " ++
+      s!"{leanName names "Nat"}) : {leanName names "Int"}))"
+  | .stringMethod .indexOf, args =>
+    s!"({js}.ofSafeInt (N := {names.typeParam}) ({leanName names "JSString"}.indexOf " ++
+      s!"{" ".intercalate (args.map argument)}))"
+  | .stringMethod method, args =>
+    s!"({leanName names "JSString"}.{method.name} {" ".intercalate (args.map argument)})"
   | .undefined, _ => leanName names "none"
   | .isUndefined, [a] => s!"{argument a}.isNone"
   | .isDefined, [a] => s!"{argument a}.isSome"
@@ -235,10 +309,44 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
     | some f => s!"{argument r}.{f}"
     | Option.none =>
       s!"(match {k} with{String.join (keys.map fun f => s!" | {case f} => {argument r}.{f}")})"
+  | .includes, [xs, x] => s!"{argument x} ∈ {argument xs}"
+  | .includesNumber, [xs, x] =>
+    s!"({leanName names "List.any"} {argument xs} ({js}.sameValueZero {argument x}))"
+  | .length, [xs] =>
+    let int := leanName names "Int"
+    s!"({js}.ofSafeInt (N := {names.typeParam}) (({leanName names "List.length"} {argument xs} : {leanName names "Nat"}) : {int}))"
+  | .indexLit k, [xs] => s!"{argument xs}[{k}]?"
+  | .indexNumber, [xs, i] => s!"({js}.elementAt? {argument xs} {argument i})"
+  | .at k, [xs] =>
+    if 0 ≤ k then s!"{argument xs}[{k.toNat}]?"
+    else s!"({leanName names "List.reverse"} {argument xs})[{(-k - 1).toNat}]?"
+  | .slice start stop, [xs] =>
+    -- Each step takes its list as an argument already, and leaves out a drop
+    -- of nothing.
+    let rev (x : String) := s!"({leanName names "List.reverse"} {x})"
+    let take (n : Int) (x : String) := s!"({leanName names "List.take"} {n.toNat} {x})"
+    let drop (n : Int) (x : String) := if n == 0 then x else s!"({leanName names "List.drop"} {n.toNat} {x})"
+    let xs := argument xs
+    -- A negative bound counts from the end, which is the start of the
+    -- reversed list.
+    match stop with
+    | Option.none => if 0 ≤ start then drop start xs else rev (take (-start) (rev xs))
+    | some e =>
+      if 0 ≤ start && 0 ≤ e then drop start (take e xs)
+      else if 0 ≤ start then drop start (rev (drop (-e) (rev xs)))
+      else if e < 0 then rev (drop (-e) (take (-start) (rev xs)))
+      else ""
   | .pure, [a] => s!"({tolean.IR.wrapped (leanName names "pure") a})"
   | .error, [m] => s!"({tolean.IR.wrapped (leanName names "JSError.mk") m})"
   | _, _ => ""
 
 instance : tolean.IR.PrintOp ExprExt := ⟨ExprExt.print⟩
+
+/-- The operation names the string type, so the output imports its model.
+An operation on strings may stand where no string type or literal is in
+sight, such as `a.key < b.key` on an interface of another file. -/
+def ExprExt.usesString : ExprExt → Bool
+  | .stringOrder _ | .stringAppend .. | .stringLength | .stringMethod _ => true
+  | _ => false
 
 end tolean.TypeScript.IR

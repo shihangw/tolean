@@ -165,6 +165,8 @@ inductive Property where
   | shorthand (span : Span) (name : String)
   /-- `{ a: e }`. -/
   | keyValue (span : Span) (key : PropKey) (value : Expr)
+  /-- `{ ...e }`, which copies the properties of `e`. -/
+  | spread (span : Span) (value : Expr)
 
 end
 
@@ -287,7 +289,7 @@ def Expr.assignsList (n : String) : List Expr → Bool
 def Property.assignsList (n : String) : List Property → Bool
   | [] => false
   | .shorthand .. :: ps => Property.assignsList n ps
-  | .keyValue _ _ v :: ps => v.assigns n || Property.assignsList n ps
+  | .keyValue _ _ v :: ps | .spread _ v :: ps => v.assigns n || Property.assignsList n ps
 
 end
 
@@ -360,7 +362,7 @@ def Expr.mutatesList (n : String) : List Expr → Bool
 def Property.mutatesList (n : String) : List Property → Bool
   | [] => false
   | .shorthand .. :: ps => Property.mutatesList n ps
-  | .keyValue _ _ v :: ps => v.mutates n || Property.mutatesList n ps
+  | .keyValue _ _ v :: ps | .spread _ v :: ps => v.mutates n || Property.mutatesList n ps
 
 end
 
@@ -431,7 +433,7 @@ def Expr.mayHoldList (p : String → Bool) : List Expr → Bool
 def Property.mayHoldList (p : String → Bool) : List Property → Bool
   | [] => false
   | .shorthand _ n :: ps => p n || Property.mayHoldList p ps
-  | .keyValue _ _ v :: ps => v.mayHold p || Property.mayHoldList p ps
+  | .keyValue _ _ v :: ps | .spread _ v :: ps => v.mayHold p || Property.mayHoldList p ps
 
 end
 
@@ -481,7 +483,7 @@ def Expr.changedList : List Expr → List String
 def Property.changedList : List Property → List String
   | [] => []
   | .shorthand .. :: ps => Property.changedList ps
-  | .keyValue _ _ v :: ps => v.changed ++ Property.changedList ps
+  | .keyValue _ _ v :: ps | .spread _ v :: ps => v.changed ++ Property.changedList ps
 
 end
 
@@ -516,7 +518,7 @@ def Expr.leaksList (n : String) : List Expr → Bool
 def Property.leaksList (n : String) : List Property → Bool
   | [] => false
   | .shorthand _ m :: ps => m == n || Property.leaksList n ps
-  | .keyValue _ _ v :: ps => v.leaks n || Property.leaksList n ps
+  | .keyValue _ _ v :: ps | .spread _ v :: ps => v.leaks n || Property.leaksList n ps
 
 end
 
@@ -787,7 +789,7 @@ def Expr.lessFreeList : List Expr → Bool
 def Property.lessFreeList : List Property → Bool
   | [] => true
   | .shorthand .. :: ps => Property.lessFreeList ps
-  | .keyValue _ _ v :: ps => v.lessFree && Property.lessFreeList ps
+  | .keyValue _ _ v :: ps | .spread _ v :: ps => v.lessFree && Property.lessFreeList ps
 
 end
 

@@ -232,6 +232,7 @@ termination_by es => (sizeOf es, 8)
 def Property.wf (T : Edition) : Property → Bool
   | .shorthand _ name => exprName name
   | .keyValue _ _ value => value.wfAt T .assign
+  | .spread _ value => T.supports .objectSpread && value.wfAt T .assign
 termination_by p => (sizeOf p, 7)
 
 def Property.allWF (T : Edition) : List Property → Bool
@@ -286,7 +287,7 @@ def Expr.afterOKList (close : List TokenKind) : List Expr → Bool
 
 def Property.afterOK (after : List TokenKind) : Property → Bool
   | .shorthand .. => true
-  | .keyValue _ _ value => value.afterOK after
+  | .keyValue _ _ value | .spread _ value => value.afterOK after
 
 def Property.afterOKList (close : List TokenKind) : List Property → Bool
   | [] => true
@@ -717,7 +718,7 @@ def Expr.heightOf : List Expr → Nat
 
 def Property.height : Property → Nat
   | .shorthand .. => 0
-  | .keyValue _ _ v => v.height
+  | .keyValue _ _ v | .spread _ v => v.height
 
 def Property.heightOf : List Property → Nat
   | [] => 0
@@ -1476,6 +1477,7 @@ theorem Property.start (q : Property) :
           fun _ _ _ => rfl⟩
     | string v => exact ⟨.string v, by simp [Property.words, PropKey.words], by simp, fun _ _ _ => rfl⟩
     | number t => exact ⟨.number t, by simp [Property.words, PropKey.words], by simp, fun _ _ _ => rfl⟩
+  | spread sp value => exact ⟨.punct "...", by simp [Property.words, punctWord], by simp, fun _ _ _ => rfl⟩
 
 
 /-- The steps of `parseProperty` after the key of a key and value, in the
@@ -1490,7 +1492,8 @@ macro "property_tail " s₁:ident hcolon:ident hne:ident hp:ident : tactic => `(
 
 /-- A property, when `parseAssign` reads the value of a key and value. -/
 theorem parseProperty_reads {T : Edition} (g : Nat) (q : Property) (hq : q.wf T = true)
-    (hv : ∀ sp key v, q = .keyValue sp key v → ReadsE T (Parse.parseAssign g) v EndsAssign) :
+    (hv : ∀ sp key v, q = .keyValue sp key v → ReadsE T (Parse.parseAssign g) v EndsAssign)
+    (hsv : ∀ sp v, q = .spread sp v → ReadsE T (Parse.parseAssign g) v EndsAssign) :
     ReadsP T (Parse.parseProperty (g + 1)) q (EndsItem "}") := by
   intro s ts rest hT hs hl ht hn hr hE ha
   cases q with
@@ -1528,12 +1531,34 @@ theorem parseProperty_reads {T : Edition} (g : Nat) (q : Property) (hq : q.wf T 
       cases key with
       | ident name =>
         simp [PropKey.words, propertyName, keywordWord, identWord] at hkw
-        by_cases h : name ∈ Lex.reservedWords <;> simp [h] at hkw <;> subst hkw <;> simp only [hx] <;>
+        by_cases h : name ∈ Lex.reservedWords <;> simp [h] at hkw <;> subst hkw <;>
+          rw [if_neg (by simp [Token.isPunct, hx]), Parse.bind_eq (Parse.pure_eq _ _)] <;> simp only [hx] <;>
           property_tail s₁ hcolon hne hp
-      | string v => simp [PropKey.words] at hkw; subst hkw; simp only [hx]; property_tail s₁ hcolon hne hp
-      | number t => simp [PropKey.words] at hkw; subst hkw; simp only [hx]; property_tail s₁ hcolon hne hp
+      | string v =>
+        simp [PropKey.words] at hkw; subst hkw
+        rw [if_neg (by simp [Token.isPunct, hx]), Parse.bind_eq (Parse.pure_eq _ _)]; simp only [hx]; property_tail s₁ hcolon hne hp
+      | number t =>
+        simp [PropKey.words] at hkw; subst hkw
+        rw [if_neg (by simp [Token.isPunct, hx]), Parse.bind_eq (Parse.pure_eq _ _)]; simp only [hx]; property_tail s₁ hcolon hne hp
     · exact leaves_trans (leaves_advance hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl
         (by simp [s₁, hl, hs'])) hL)
+  | spread sp value =>
+    -- `...` and then the value, as the value of a key and value.
+    have hvr := hsv sp value rfl
+    obtain ⟨x, vts, rfl, hx, hv'⟩ := Touching.cons_one (by simpa [Property.words, punctWord] using ht)
+    have hs' : s.rest = x :: (vts ++ rest) := by simpa using hs
+    let s₁ := past s x (vts ++ rest)
+    have hl₁ : s₁.left = s₁.rest.length := by simp [s₁, hl, hs']
+    obtain ⟨v', s₂, hp, he, hL⟩ := hvr s₁ vts rest hT rfl hl₁ hv' (fun y hy => hn y (by simp [List.mem_of_mem_tail hy])) hr
+      (endsItem_assign (by simp) hE) (by simpa [Property.afterOK] using ha)
+    refine ⟨.spread ⟨x.span.start, s₂.lastStop⟩ v', s₂, ?_, by simp [Property.erase, he],
+      leaves_trans (leaves_advance hs' hl) hL⟩
+    simp only [Parse.parseProperty]
+    rw [Parse.bind_eq (Parse.advance_cons hs' (by simp [hr])), if_pos (by simp [Token.isPunct, hx])]
+    have hf : T.supports .objectSpread = true := by simp only [Property.wf, Bool.and_eq_true] at hq; exact hq.1
+    rw [Parse.bind_eq (Parse.requireFeature_ok (by simpa [hT] using hf))]
+    rw [Parse.bind_eq hp, Parse.bind_eq (Parse.spanFrom_eq _ _)]
+    rfl
 
 
 /-- `{ props }`, when `parseProperty` reads each property. -/
@@ -3505,13 +3530,14 @@ theorem primary_reads {T : Edition} (f : Nat) (IH : ∀ g ≤ f, AllRead T g) (e
     simp only [need, Level.cost, Expr.height] at hn
     obtain ⟨h, rfl⟩ : ∃ h, f = h + 1 + 1 := ⟨f - 2, by omega⟩
     refine parsePrimary_object (h + 1 + 1) sp ps (parseObjectLiteral_reads (h + 1) sp ps fun q hq =>
-      parseProperty_reads h q (Property.allWF_iff.mp he q hq) fun sp' key v hqv => ?_)
-    subst hqv
-    have hw := Property.allWF_iff.mp he _ hq
-    have hh := Property.height_le_heightOf hq
-    simp only [Property.wf] at hw
-    simp only [Property.height] at hh
-    exact IH h (by omega) .assign v hw (by simp only [need, Level.cost]; omega)
+      parseProperty_reads h q (Property.allWF_iff.mp he q hq) (fun sp' key v hqv => ?_) (fun sp' v hqv => ?_))
+    all_goals
+      subst hqv
+      have hw := Property.allWF_iff.mp he _ hq
+      have hh := Property.height_le_heightOf hq
+      simp only [Property.wf, Bool.and_eq_true] at hw
+      simp only [Property.height] at hh
+      exact IH h (by omega) .assign v (by first | exact hw | exact hw.2) (by simp only [need, Level.cost]; omega)
   | new sp c ts as =>
     simp only [Expr.wfAt, Bool.and_eq_true] at he
     simp only [need, Level.cost, Expr.height] at hn
@@ -3838,6 +3864,9 @@ theorem Property.neutral : ∀ q : Property, Neutral q.tokens
   | .keyValue _ k v => by
     have h := Neutral.append (neutral_key k) (Neutral.cons (k := .punct ":") (by simp) (Expr.neutral v))
     simpa [Property.tokens, Property.words, punctWord] using h
+  | .spread _ v => by
+    have h := Neutral.cons (k := .punct "...") (by simp) (Expr.neutral v)
+    simpa [Property.tokens, Property.words, punctWord] using h
 
 theorem Property.neutralAll : ∀ ps : List Property, ∀ x ∈ ps.map Property.tokens, Neutral x
   | [], _, h => by simp at h
@@ -3953,7 +3982,8 @@ theorem Expr.afterOKList_congr : ∀ (es : List Expr) {c c' : List TokenKind}, A
 theorem Property.afterOK_congr : ∀ (q : Property) {a b : List TokenKind}, AfterEquiv a b →
     q.afterOK a = q.afterOK b
   | .shorthand .., _, _, _ => rfl
-  | .keyValue _ _ v, _, _, h => by simp only [Property.afterOK]; exact Expr.afterOK_congr v h
+  | .keyValue _ _ v, _, _, h | .spread _ v, _, _, h => by
+    simp only [Property.afterOK]; exact Expr.afterOK_congr v h
 
 theorem Property.afterOKList_congr : ∀ (ps : List Property) {c c' : List TokenKind}, AfterEquiv c c' →
     Property.afterOKList c ps = Property.afterOKList c' ps
@@ -4079,6 +4109,11 @@ theorem Property.height_le : ∀ q : Property, q.height ≤ q.tokens.length
     have := Expr.height_le v
     rw [Property.tokens_keyValue]; simp only [Property.height, List.length_append, List.length_cons]
     omega
+  | .spread _ v => by
+    have := Expr.height_le v
+    simp only [Property.height, Property.tokens, Property.words, punctWord, List.flatten_cons,
+      List.length_append, List.length_cons]
+    simp only [Expr.tokens] at this; omega
 
 theorem Property.heightOf_le : ∀ ps : List Property,
     Property.heightOf ps ≤ (joined "," (ps.map Property.tokens)).length

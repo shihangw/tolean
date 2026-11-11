@@ -116,7 +116,8 @@ export class Gen {
     if (roll < 0.8 && this.structs.length > 0) {
       return { k: 'struct', name: this.pick(this.structs).name };
     }
-    return { k: 'array', of: this.pick([BIGINT, NUMBER, ...this.structs.map((s): Ty => ({ k: 'struct', name: s.name }))]) };
+    // An array of strings, which `split` gives.
+    return { k: 'array', of: this.pick([BIGINT, NUMBER, STRING, ...this.structs.map((s): Ty => ({ k: 'struct', name: s.name }))]) };
   }
 
   /** An expression of type `t`, reading only `vars`. */
@@ -135,7 +136,10 @@ export class Gen {
         case 'boolean':
           return this.pick(['true', 'false']);
         case 'string':
-          return this.pick(["''", "'a'", "'ab'", "'é'", "'😀'"]);
+          // U+FFFF is above the code unit D83D that starts '😀', so the two
+          // order one way by code unit, as JS does, and the other by code point.
+          // White space and commas, which `trim` and `split` read.
+          return this.pick(["''", "'a'", "'ab'", "'é'", "'😀'", "'\\uFFFF'", "' a,b '", "'\\u00A0x\\u2028'", "','"]);
         case 'nullable':
           return this.chance(0.5) ? 'null' : this.expr(t.of, vars, 0);
         case 'optional':
@@ -179,6 +183,14 @@ export class Gen {
           () => `-${this.expr(t, vars, d)}`,
           () => `(${this.expr(t, vars, d)})`,
         );
+        // The length of a string and the index of a string in it, which count
+        // UTF-16 code units.
+        if (t.k === 'number') {
+          options.push(
+            () => `(${this.expr(STRING, vars, d)}).length`,
+            () => `(${this.expr(STRING, vars, d)}).indexOf(${this.expr(STRING, vars, d)})`,
+          );
+        }
         // An element of an array, by an index that is a number literal,
         // which checks the interpreter's rule for `xs[i]` against Node. The
         // index `2` is past the end, which is `undefined`. The translator
@@ -232,6 +244,13 @@ export class Gen {
             return flags.length > 0 ? `${this.pick(flags).name} === ${this.expr(BOOLEAN, vars, d)}` : 'true';
           },
           () => `Number.${this.pick(['isNaN', 'isFinite', 'isSafeInteger'])}(${this.expr(NUMBER, vars, d)})`,
+          // A test of one string in another, by code units.
+          () => `(${this.expr(STRING, vars, d)}).${this.pick(['startsWith', 'endsWith', 'includes'])}(${this.expr(STRING, vars, d)})`,
+          // A test of the pieces that `split` gives.
+          () => {
+            const p = this.fresh('c');
+            return `(${this.expr(STRING, vars, d)}).split(${this.expr(STRING, vars, d)}).some((${p}) => ${p} === ${this.expr(STRING, vars, 0)})`;
+          },
         );
         // `typeof` on a value of any type, which checks the interpreter's rule
         // against Node. The translator refuses it here, so it comes only
@@ -243,10 +262,11 @@ export class Gen {
               `'${this.pick(['bigint', 'number', 'boolean', 'string', 'object'])}'`,
           );
         }
-        // Not two literals: tsc refuses `'a' === 'b'` (TS2367).
+        // Not two literals: tsc refuses `'a' === 'b'` (TS2367). Strings
+        // order by their code units.
         const strings = [...readable.filter((v) => v.ty.k === 'string').map((v) => v.name), ...this.fieldReads(STRING, readable)];
         if (strings.length > 0) {
-          options.push(() => `${this.pick(strings)} ${this.pick(['===', '!=='])} ${this.expr(STRING, vars, d)}`);
+          options.push(() => `${this.pick(strings)} ${this.pick(['===', '!==', '<', '<=', '>', '>='])} ${this.expr(STRING, vars, d)}`);
         }
         if (nullable.length > 0) {
           options.push(() => {
@@ -262,6 +282,16 @@ export class Gen {
         break;
       }
       case 'string':
+        // `+` with a string on either side, which converts the other operand
+        // with ToString. The operands are in parentheses, so that a
+        // conditional inside one does not take the `+` into its test.
+        options.push(() => {
+          const other = this.expr(this.pick([STRING, BIGINT, BOOLEAN]), vars, d);
+          const s = this.expr(STRING, vars, d);
+          return this.chance(0.5) ? `(${s}) + (${other})` : `(${other}) + (${s})`;
+        });
+        // `trim`, `trimStart` and `trimEnd`, which remove white space.
+        options.push(() => `(${this.expr(STRING, vars, d)}).${this.pick(['trim', 'trimStart', 'trimEnd'])}()`);
         // `typeof` on a value of any type. The translator accepts it only in
         // the test of an `if` on a union of primitive types, but the
         // interpreter runs it anywhere, so this and the comparison of
@@ -275,6 +305,12 @@ export class Gen {
             const e = this.pick(this.enums);
             return `${e.name}.${this.pick(e.members)}`;
           });
+        }
+        break;
+      case 'array':
+        // `split` with a string separator gives an array of strings.
+        if (t.of.k === 'string') {
+          options.push(() => `(${this.expr(STRING, vars, d)}).split(${this.expr(STRING, vars, d)})`);
         }
         break;
       default:
@@ -308,9 +344,19 @@ export class Gen {
     };
     const options: Array<() => string> = [];
     switch (t.k) {
-      case 'boolean':
+      case 'boolean': {
         options.push(() => call(this.pick(['some', 'every']), this.pick(arrays), (inner) => this.expr(BOOLEAN, inner, depth)));
+        // `includes` on primitives, which SameValueZero compares by value.
+        // A number array may hold `NaN`, which `includes` finds.
+        const primitive = arrays.filter((a) => ['bigint', 'number', 'boolean', 'string'].includes(a.elem.k));
+        if (primitive.length > 0) {
+          options.push(() => {
+            const recv = this.pick(primitive);
+            return `${recv.name}.includes(${this.expr(recv.elem, vars, depth)})`;
+          });
+        }
         break;
+      }
       case 'array': {
         const of = t.of;
         options.push(() => call('map', this.pick(arrays), (inner) => this.expr(of, inner, depth)));
@@ -318,6 +364,11 @@ export class Gen {
         const same_ = arrays.filter((a) => same(a.elem, of));
         if (same_.length > 0) {
           options.push(() => call('filter', this.pick(same_), (inner) => this.expr(BOOLEAN, inner, depth)));
+          // A slice with integer literals, from the start or from the end.
+          options.push(() => {
+            const bounds = this.pick(['', '1', '-2', '0, 2', '1, -1', '-3, -1', '2, 1']);
+            return `${this.pick(same_).name}.slice(${bounds})`;
+          });
         }
         break;
       }
@@ -328,7 +379,20 @@ export class Gen {
         const same_ = arrays.filter((a) => same(a.elem, t));
         if (same_.length > 0) {
           options.push(() => `(${call(this.pick(['find', 'findLast']), this.pick(same_), (inner) => this.expr(BOOLEAN, inner, depth))} ?? ${this.expr(t, vars, depth)})`);
+          // An element at an index, which is `undefined` outside the array:
+          // a literal, any number, or a literal counted from the end.
+          options.push(() => {
+            const recv = this.pick(same_).name;
+            const index = this.pick([
+              () => `${recv}[${this.pick([0, 1, 2])}]`,
+              () => `${recv}[${this.expr(NUMBER, vars, depth)}]`,
+              () => `${recv}.at(${this.pick([0, 1, -1, -2])})`,
+            ])();
+            return `(${index} ?? ${this.expr(t, vars, depth)})`;
+          });
         }
+        // The length of an array is a number.
+        if (t.k === 'number') options.push(() => `${this.pick(arrays).name}.length`);
         // `findIndex` gives the index of the first element that passes, a
         // number, or -1.
         if (t.k === 'number') {
@@ -361,9 +425,12 @@ export class Gen {
     if (flags.length > 0 && this.chance(0.5)) {
       return this.pick(flags).name;
     }
-    const u = this.pick([BIGINT, NUMBER]);
-    const numeric = vars.filter((v) => !v.owned && same(v.ty, u));
-    const left = numeric.length > 0 ? this.pick(numeric).name : this.expr(u, vars, depth);
+    // Strings order by their code units, so a test may compare a string
+    // local with a string.
+    const strings = vars.filter((v) => !v.owned && v.ty.k === 'string');
+    const u = strings.length > 0 && this.chance(0.3) ? STRING : this.pick([BIGINT, NUMBER]);
+    const ordered = vars.filter((v) => !v.owned && same(v.ty, u));
+    const left = ordered.length > 0 ? this.pick(ordered).name : this.expr(u, vars, depth);
     return `${left} ${this.pick(['<', '<=', '>', '>='])} ${this.expr(u, vars, depth)}`;
   }
 
@@ -386,6 +453,14 @@ export class Gen {
 
   private object(name: string, vars: ReadonlyArray<Var>, depth: number): string {
     const s = this.structs.find((x) => x.name === name);
+    // A spread of a value of the same interface, which then sets some of its
+    // required fields in their places.
+    const bases = vars.filter((x) => !x.owned && x.ty.k === 'struct' && x.ty.name === name);
+    if (bases.length > 0 && this.chance(0.4)) {
+      const set = (s?.fields ?? []).filter(([, ty]) => ty.k !== 'optional' && this.chance(0.5));
+      const parts = set.map(([field, ty]) => `${field}: ${this.expr(ty, vars, depth)}`);
+      return `{ ${[`...${this.pick(bases).name}`, ...parts].join(', ')} }`;
+    }
     const parts = (s?.fields ?? []).map(([field, ty]) => {
       const v = vars.find((x) => x.name === field && same(x.ty, ty) && !x.owned);
       return v !== undefined && this.chance(0.5) ? field : `${field}: ${this.expr(ty, vars, depth)}`;
@@ -412,9 +487,12 @@ export class Gen {
       } else if (roll < 0.5 && lets.length > 0) {
         const v = this.pick(lets);
         // `x ??= e` assigns only when `x` is null.
+        // `s += e` on a string joins `e` after ToString.
         const op = v.ty.k === 'bigint' || v.ty.k === 'number' ? this.pick(['=', '+=', '-=', '*='])
-          : v.ty.k === 'nullable' ? this.pick(['=', '??=']) : '=';
-        lines.push(`${v.name} ${op} ${this.expr(v.ty, vars, 2)};`);
+          : v.ty.k === 'nullable' ? this.pick(['=', '??='])
+          : v.ty.k === 'string' ? this.pick(['=', '+=']) : '=';
+        const valueTy = op === '+=' && v.ty.k === 'string' ? this.pick([STRING, BIGINT, BOOLEAN]) : v.ty;
+        lines.push(`${v.name} ${op} ${this.expr(valueTy, vars, 2)};`);
       } else if (roll < 0.65 && depth > 0 && lets.length > 0) {
         const v = this.pick(lets);
         lines.push(`if (${this.test(vars, 2)}) {`, `  ${v.name} = ${this.expr(v.ty, vars, 1)};`, '}');
