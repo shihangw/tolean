@@ -1054,8 +1054,8 @@ theorem loop_sim {env bodyEnv : Translate.Env} {x : String} {elemType : Ty} {nam
     (hnames : names = changedNames (blockStatements bodyS) env) :
     ∀ (vs : List (Val N)) (ρs ρo : Eval.Env N) (o : Outcome N), Agree ρs ρo → Scoped m env ρs →
       IR.Body.runFold fs fuel names x bodyOut ρo vs = some o →
-      (∀ w, o = .ret w → Eval.execLoop m fuel ρs x bodyS vs = some (.ret w)) ∧
-      ∀ ρo', o = .normal ρo' → ∃ mod, Eval.execLoop m fuel ρs x bodyS vs = some (.normal mod) ∧
+      (∀ w, o = .ret w → Eval.execLoop m fuel ρs (fun v => some [(x, v)]) bodyS vs = some (.ret w)) ∧
+      ∀ ρo', o = .normal ρo' → ∃ mod, Eval.execLoop m fuel ρs (fun v => some [(x, v)]) bodyS vs = some (.normal mod) ∧
         Agree mod ρo' ∧ Frame (stmtChanges bodyS) mod ρs := by
   subst henv
   intro vs

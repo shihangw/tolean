@@ -46,7 +46,7 @@ of the list that the output's `items` gives. -/
 def HeadSim (env : Translate.Env) (stmt : Stmt) (x : String) (b : Stmt) (items : IR.Expr) : Prop :=
   ∀ (ρs ρo : Eval.Env N) (vs : List (Val N)), Agree ρs ρo → Scoped m env ρs →
     IR.Expr.eval fs fuel ρo items = some (.list vs) →
-    Eval.execStmt m fuel ρs stmt = Eval.execLoop m fuel ρs x b vs
+    Eval.execStmt m fuel ρs stmt = Eval.execLoop m fuel ρs (fun v => some [(x, v)]) b vs
 
 /-- `countFrom` puts the values that it finds after those in `acc`. -/
 theorem countFrom_acc {b : N} :
@@ -64,7 +64,7 @@ theorem countFrom_acc {b : N} :
 is the same as running it over the list of the values that `countFrom` gives. -/
 theorem execCounted_eq {name : String} {body : Stmt} {b : N} :
     ∀ {left : Nat} {k : Int} (env : Eval.Env N) (l : List N), JSNumber.countFrom b [] k left = some l →
-      Eval.execCounted m fuel env name body b k left = Eval.execLoop m fuel env name body (l.map .num)
+      Eval.execCounted m fuel env name body b k left = Eval.execLoop m fuel env (fun v => some [(name, v)]) body (l.map .num)
   | 0, _, _, _, h => by simp [JSNumber.countFrom] at h
   | left + 1, k, env, l, h => by
     simp only [JSNumber.countFrom] at h
@@ -79,9 +79,9 @@ theorem execCounted_eq {name : String} {body : Stmt} {b : N} :
         subst h
         rw [Eval.execCounted, if_pos hlt, List.map_cons, Eval.execLoop]
         cases hb : Eval.execStmt m fuel ((name, .num (JSNumber.ofSafeInt k)) :: env) body with
-        | none => simp
+        | none => simp [hb]
         | some o =>
-          cases o <;> simp [execCounted_eq _ r hr]
+          cases o <;> simp [hb, execCounted_eq _ r hr]
     · rename_i hlt
       simp only [Option.some.injEq] at h
       subst h

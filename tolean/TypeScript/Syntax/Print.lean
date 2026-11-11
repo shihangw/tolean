@@ -101,6 +101,8 @@ partial def Stmt.toSexp : Stmt → Sexp
     node "if" s [] ([test.toSexp, thenBranch.toSexp] ++ (elseBranch.map toSexp).toList)
   | .forOfStmt s kind name iterable body =>
     node "for-of" s [kind.keyword, name] [iterable.toSexp, body.toSexp]
+  | .forOfPattern s kind p iterable body =>
+    node "for-of" s [kind.keyword] [p.toSexp, iterable.toSexp, body.toSexp]
   -- The three parts keep no span, so their nodes have none. Each holds its
   -- part, or nothing when the part is absent.
   | .forStmt s init test update body =>

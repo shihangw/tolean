@@ -1100,7 +1100,14 @@ def execStmt (m : Scope) (fuel : Nat) (env : Env N) : Stmt → Option (Outcome N
   -- loop starts, so it gives no value for a body that changes them.
   | .forOfStmt _ .const name iterable body => do
     if Stmt.mutatesIterable iterable body then none
-    execLoop m fuel env name body (← iterValues (← eval m fuel env iterable))
+    execLoop m fuel env (fun v => some [(name, v)]) body (← iterValues (← eval m fuel env iterable))
+  -- `for (const [k, v] of xs)`: each run binds the names of the pattern to
+  -- the values that iterating the item gives, as `const [k, v] = item` does
+  -- (`ForDeclarationBindingInitialization`, ECMA-262 §14.7.5.3).
+  | .forOfPattern _ .const p iterable body => do
+    if Stmt.mutatesIterable iterable body then none
+    execLoop m fuel env (fun v => do return (patternBindings p (← iterValues v)).reverse) body
+      (← iterValues (← eval m fuel env iterable))
   -- `for (let i = k; i < b; i++)` (`ForStatement`, ECMA-262 §14.7.4.2), where
   -- the start `k` is an integer literal: `execCounted` runs the body once for
   -- each value of `i`, in order, with `i` bound to it in a new scope, as in
@@ -1176,18 +1183,19 @@ def execCase (m : Scope) (fuel : Nat) (env : Env N) : List Stmt → Option (Outc
       | .cont env' => some (.cont env', false)
 termination_by ss => (fuel, sizeOf ss, 0)
 
-/-- Run the body of `for (const name of …)` once for each of `items`. Each
-run keeps the changes to outer variables, and drops `name` and the variables
-the body declares. A `continue` ends one run, and a `break` ends the loop
-(`LoopContinues`, ECMA-262 §14.7.1.2). -/
-def execLoop (m : Scope) (fuel : Nat) (env : Env N) (name : String) (body : Stmt) :
+/-- Run the body of a `for … of` loop once for each of `items`, in a new scope
+with the names that `bind` gives the item: `[(x, v)]` for `for (const x of …)`,
+or the names of a pattern. Each run keeps the changes to outer variables, and
+drops those names and the variables the body declares. A `continue` ends one
+run, and a `break` ends the loop (`LoopContinues`, ECMA-262 §14.7.1.2). -/
+def execLoop (m : Scope) (fuel : Nat) (env : Env N) (bind : Val N → Option (Env N)) (body : Stmt) :
     List (Val N) → Option (Outcome N)
   | [] => some (.normal env)
   | x :: xs => do
-    match ← execStmt m fuel ((name, x) :: env) body with
+    match ← execStmt m fuel ((← bind x) ++ env) body with
     | .ret v => some (.ret v)
-    | .normal env' => execLoop m fuel (env'.drop (env'.length - env.length)) name body xs
-    | .cont env' => execLoop m fuel (env'.drop (env'.length - env.length)) name body xs
+    | .normal env' => execLoop m fuel (env'.drop (env'.length - env.length)) bind body xs
+    | .cont env' => execLoop m fuel (env'.drop (env'.length - env.length)) bind body xs
     | .brk env' => some (.normal (env'.drop (env'.length - env.length)))
 termination_by xs => (fuel, sizeOf body, xs.length + 1)
 

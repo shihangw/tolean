@@ -252,6 +252,9 @@ inductive Stmt where
   | returnStmt (span : Span) (value : Option Expr)
   | ifStmt (span : Span) (test : Expr) (thenBranch : Stmt) (elseBranch : Option Stmt)
   | forOfStmt (span : Span) (kind : VarKind) (name : String) (iterable : Expr) (body : Stmt)
+  /-- `for (const [k, v] of iterable) body`: a loop whose head destructures
+  each value (ECMA-262 §14.7.5.7). -/
+  | forOfPattern (span : Span) (kind : VarKind) (pattern : ArrayPattern) (iterable : Expr) (body : Stmt)
   /-- `for (init; test; update) body`, the counted loop. Each of the three
   parts may be absent. -/
   | forStmt (span : Span) (init : Option VarDecl) (test : Option Expr) (update : Option Expr) (body : Stmt)
@@ -322,7 +325,7 @@ def Stmt.assigns (n : String) : Stmt → Bool
   | .ifStmt _ t a b => t.assigns n || a.assigns n || (match b with
     | some b => b.assigns n
     | none => false)
-  | .forOfStmt _ _ _ it b => it.assigns n || b.assigns n
+  | .forOfStmt _ _ _ it b | .forOfPattern _ _ _ it b => it.assigns n || b.assigns n
   | .forStmt _ init t u b => (match init with
     | some { init := some e, .. } => e.assigns n
     | _ => false) || (match t with
@@ -397,7 +400,7 @@ def Stmt.mutates (n : String) : Stmt → Bool
   | .ifStmt _ t a b => t.mutates n || a.mutates n || (match b with
     | some b => b.mutates n
     | none => false)
-  | .forOfStmt _ _ _ it b => it.mutates n || b.mutates n
+  | .forOfStmt _ _ _ it b | .forOfPattern _ _ _ it b => it.mutates n || b.mutates n
   | .forStmt _ init t u b => (match init with
     | some { init := some e, .. } => e.mutates n
     | _ => false) || (match t with
@@ -573,6 +576,7 @@ def Stmt.binds (n : String) : Stmt → List Bool
   -- the rest that nothing owns.
   | .destructure _ _ p _ _ => if p.names.contains n then [false] else []
   | .forOfStmt _ _ x _ b => (if x == n then [false] else []) ++ b.binds n
+  | .forOfPattern _ _ p _ b => (if p.names.contains n then [false] else []) ++ b.binds n
   | .forStmt _ init _ _ b =>
     (match init with
      | some d => if d.name == n then [d.owns] else []
@@ -610,7 +614,7 @@ def Stmt.changed : Stmt → List String
   | .ifStmt _ t a b => t.changed ++ a.changed ++ (match b with
     | some b => b.changed
     | none => [])
-  | .forOfStmt _ _ _ it b => it.changed ++ b.changed
+  | .forOfStmt _ _ _ it b | .forOfPattern _ _ _ it b => it.changed ++ b.changed
   | .forStmt _ init t u b => (match init with
     | some { init := some e, .. } => e.changed
     | _ => []) ++ (match t with
@@ -651,7 +655,7 @@ def Stmt.leaks (n : String) : Stmt → Bool
   | .ifStmt _ t a b => t.leaks n || a.leaks n || (match b with
     | some b => b.leaks n
     | none => false)
-  | .forOfStmt _ _ _ it b => (match it with
+  | .forOfStmt _ _ _ it b | .forOfPattern _ _ _ it b => (match it with
     | .ident .. => false
     | it => it.leaks n) || b.leaks n
   | .forStmt _ init t u b => (match init with
@@ -703,6 +707,7 @@ def Stmt.constAssignedIn (s : Stmt) (rest : List Stmt) : Bool :=
 @[simp] theorem Stmt.constAssignedIn_returnStmt : (Stmt.returnStmt sp e).constAssignedIn rest = false := rfl
 @[simp] theorem Stmt.constAssignedIn_ifStmt : (Stmt.ifStmt sp t a b).constAssignedIn rest = false := rfl
 @[simp] theorem Stmt.constAssignedIn_forOfStmt : (Stmt.forOfStmt sp k x it b).constAssignedIn rest = false := rfl
+@[simp] theorem Stmt.constAssignedIn_forOfPattern : (Stmt.forOfPattern sp k p it b).constAssignedIn rest = false := rfl
 @[simp] theorem Stmt.constAssignedIn_forStmt : (Stmt.forStmt sp i t u b).constAssignedIn rest = false := rfl
 @[simp] theorem Stmt.constAssignedIn_whileStmt : (Stmt.whileStmt sp t b).constAssignedIn rest = false := rfl
 @[simp] theorem Stmt.constAssignedIn_block : (Stmt.block sp ss).constAssignedIn rest = false := rfl
@@ -795,6 +800,7 @@ def Expr.span : Expr → Span
 
 def Stmt.span : Stmt → Span
   | .varDecl s _ | .destructure s _ _ _ _ | .exprStmt s _ | .returnStmt s _ | .ifStmt s _ _ _ | .forOfStmt s _ _ _ _
+  | .forOfPattern s _ _ _ _
   | .forStmt s _ _ _ _ | .whileStmt s _ _ | .block s _ | .breakStmt s | .continueStmt s | .empty s | .switchStmt s _ _
   | .throwStmt s _ => s
 
