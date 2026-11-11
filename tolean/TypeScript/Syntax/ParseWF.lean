@@ -1396,10 +1396,12 @@ theorem refuseArrowLookalike_inv {s s' : ParseState} (h : Parse.refuseArrowLooka
   · exact absurd h (Parse.failAt_ne_ok _ _ _ _ _)
   · simp only [Parse.pure_ok] at h; exact h.2.symm
 
-theorem refuseAsyncArrowLookalike_inv {s s' : ParseState} (h : Parse.refuseAsyncArrowLookalike s = .ok () s') :
-    s' = s := by
+theorem refuseAsyncArrowLookalike_inv {s s' : ParseState} {paren : Token} {args : List Expr}
+    (h : Parse.refuseAsyncArrowLookalike paren args s = .ok () s') : s' = s := by
   simp only [Parse.refuseAsyncArrowLookalike] at h
-  rw [Parse.bind_ok] at h
+  split at h
+  · exact absurd h (failAt_bind_ne_ok _ _ _ _ _ _)
+  rw [Parse.pure_bind, Parse.bind_ok] at h
   obtain ⟨_, s₁, h₁, h⟩ := h
   obtain rfl := refuseArrowLookalike_inv h₁
   rw [Parse.bind_eq (peek_eq' _)] at h
