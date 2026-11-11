@@ -279,6 +279,7 @@ partial def exprCallbacks : IR.Expr → List Callback
     exprCallbacks a ++ exprCallbacks b
   | .call _ args | .list args _ | .ext _ args => args.flatMap exprCallbacks
   | .struct fields _ _ => fields.flatMap (exprCallbacks ·.2)
+  | .structUpdate base fields => exprCallbacks base ++ fields.flatMap (exprCallbacks ·.2)
   | .tuple es => es.flatMap exprCallbacks
   | .proj e _ _ => exprCallbacks e
   | .int _ | .none | .bool _ | .string _ | .var _ | .enumCase .. | .tagValue _ => []
@@ -298,6 +299,7 @@ partial def exprNames : IR.Expr → List String
     exprNames a ++ exprNames b
   | .call _ args | .list args _ | .ext _ args => args.flatMap exprNames
   | .struct fields _ _ => fields.flatMap (exprNames ·.2)
+  | .structUpdate base fields => exprNames base ++ fields.flatMap (exprNames ·.2)
   | .tuple es => es.flatMap exprNames
   | .proj e _ _ => exprNames e
   | .int _ | .none | .bool _ | .string _ | .enumCase .. | .tagValue _ => []

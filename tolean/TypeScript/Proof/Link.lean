@@ -518,7 +518,7 @@ macro_rules
         bindState, eqVal, ← List.map_reverse,
         -- `includes` on an array literal compares with `===` once the list
         -- has reduced, so strict equality on primitives must reduce too.
-        Eval.includesVal, Eval.sameValueZero, Eval.strictEq,
+        Eval.includesVal, Eval.sameValueZero, Eval.strictEq, Eval.setProp,
         tolean.IR.IntOp.apply, tolean.IR.Order.apply,
         tolean.IR.Division.apply, ExprExt.apply, NumberOp.apply, NumberConstant.value,
         NumberTest.apply, tagOf, Eval.Val.typeOf, Eval.Env.set, Eval.getProp, Eval.getKey_ofString, Eval.getPath,

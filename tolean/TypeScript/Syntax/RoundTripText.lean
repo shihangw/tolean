@@ -271,6 +271,8 @@ theorem Property.fine : ∀ q : Property, Fine q.words
       | string v => simpa [PropKey.words] using Fine.word (w := [.string v]) (by simp)
       | number t => simpa [PropKey.words] using Fine.word (w := [.number t]) (by simp)
     simpa [Property.words] using hk.append (Fine.cons (w := punctWord ":") (by simp [punctWord]) (Expr.fine v))
+  | .spread _ v => by
+    simpa [Property.words] using Fine.cons (w := punctWord "...") (by simp [punctWord]) (Expr.fine v)
 
 theorem Property.fineAll : ∀ ps : List Property, ∀ x ∈ Property.wordsOf ps, Fine x
   | [], _, hx => by simp [Property.wordsOf] at hx
