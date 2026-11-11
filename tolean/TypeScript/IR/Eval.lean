@@ -82,6 +82,11 @@ def StringMethod.apply : StringMethod → JSString → List (Val N) → Option (
   | .trimEnd, s, args => Eval.noArgs (.str s.trimEnd) args
   | .split, s, args => Eval.oneString (fun sep => .list ((s.split sep).map .str)) args
 
+/-- The elements of a list. -/
+def listItems? : Val N → Option (List (Val N))
+  | .list items => some items
+  | _ => none
+
 /-- An operation that TypeScript adds, on the values of its arguments. -/
 def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   | .number n, [] => some (.num (JSNumber.ofSafeInt n))
@@ -136,6 +141,8 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   | .mapEntries, [.map entries] => some (.list (entries.map fun (k, v) => .list [k, v]))
   | .mapOfList, [.list items] => (Eval.mapOfItems items).map .map
   | .setOfList, [.list items] => (Eval.setOfItems items).map .set
+  -- The elements of an array literal with a spread, in order.
+  | .append, lists => (lists.mapM listItems?).map fun items => .list items.flatten
   -- `pure a` is the value of `a`, as the result of a function that does not
   -- throw this time.
   | .pure, [a] => some a
