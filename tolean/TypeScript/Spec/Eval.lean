@@ -611,7 +611,7 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
   | .paren _ inner => eval m fuel env inner
   -- Type stripping removes `as const` and `satisfies T`.
   | .asConst _ e | .satisfies _ e _ => eval m fuel env e
-  | .array _ elems => (evalList m fuel env elems).map .list
+  | .array _ elems => (evalElems m fuel env elems).map .list
   -- `{ ...e, a: v }`: the properties of the object `e`, in its order
   -- (`CopyDataProperties`, ECMA-262 §7.3.26), then each later property, set in
   -- its place when the object has it. A spread of anything but an object
@@ -903,6 +903,18 @@ termination_by (fuel, sizeOf e, 1)
 def evalList (m : Scope) (fuel : Nat) (env : Env N) : List Expr → Option (List (Val N))
   | [] => some []
   | e :: es => do return (← eval m fuel env e) :: (← evalList m fuel env es)
+termination_by es => (fuel, sizeOf es, 0)
+
+/-- The values that an array literal holds (`ArrayAccumulation`, ECMA-262
+§13.2.4.1): the value of each element, and in place of a spread `...e` each
+value that iterating `e` gives, in order. The subset iterates an array, a set
+and a map as `for … of` does (`iterValues`), and a spread of anything else
+leaves the subset. -/
+def evalElems (m : Scope) (fuel : Nat) (env : Env N) : List Expr → Option (List (Val N))
+  | [] => some []
+  | .spread _ e :: es => do
+    return (← iterValues (← eval m fuel env e)) ++ (← evalElems m fuel env es)
+  | e :: es => do return (← eval m fuel env e) :: (← evalElems m fuel env es)
 termination_by es => (fuel, sizeOf es, 0)
 
 def evalProps (m : Scope) (fuel : Nat) (env : Env N) :

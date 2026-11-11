@@ -2333,6 +2333,20 @@ theorem translateVariable_sound (hc : CallsAgree (N := N) m.program fs fuel) {F 
          · simp at h)
       | (exfalso; cases init <;> simp_all [Expr.isArrayLiteral])
       | (simp only [bind_ok, fuelLimit_ok, pure_ok] at h
+         obtain ⟨ty, s₂, hty, _, _, ⟨rfl, rfl⟩, code, s₃, hcode, env', s₄, hdecl, rb, s₅, hrb,
+           rfl, -⟩ := h
+         obtain ⟨hfresh, rfl, -⟩ := declare_ok hdecl
+         have hsim := (expr_sound m fs fuel hc _).2.2.1 _ _ _ _ _ _ _ hcode
+         exact decl_sim m fs fuel (d := ⟨kind, name, some annotation, some _⟩) rfl (by simpa using hconst) hfresh rfl
+           (fun ρo o ho => by
+             simp only [IR.Body.exec] at ho
+             cases hw : IR.Expr.eval fs fuel ρo code.value with
+             | none => simp [hw] at ho
+             | some w =>
+               exact ⟨w, fun ρs ha hs => hsim ρs ρo w ha hs (by rwa [eval_value] at hw),
+                 by simpa [hw] using ho⟩)
+           (ihS _ _ _ _ _ _ hrb))
+      | (simp only [bind_ok, fuelLimit_ok, pure_ok] at h
          obtain ⟨ty, s₂, hty, _, _, ⟨rfl, rfl⟩, r, s₃, hel, env', s₄, hdecl, rb, s₅, hrb,
            rfl, -⟩ := h
          obtain ⟨hfresh, rfl, -⟩ := declare_ok hdecl
@@ -2344,7 +2358,7 @@ theorem translateVariable_sound (hc : CallsAgree (N := N) m.program fs fuel) {F 
              | none => simp [hw] at ho
              | some ws =>
                exact ⟨.list ws, fun ρs ha hs => by
-                 rw [Eval.eval]; simp [hsim ρs ρo ws ha hs hw], by simpa [hw] using ho⟩)
+                 rw [Eval.eval]; simp [evalElems_of_evalList m fuel (hsim ρs ρo ws ha hs hw)], by simpa [hw] using ho⟩)
            (ihS _ _ _ _ _ _ hrb))
 
 theorem stmts_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :

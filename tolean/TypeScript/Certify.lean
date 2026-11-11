@@ -161,7 +161,7 @@ partial def exprCalls : Expr → List String
   | .call _ (.ident _ f) args => f :: args.flatMap exprCalls
   | .call _ c args => exprCalls c ++ args.flatMap exprCalls
   | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e
-  | .asConst _ e | .satisfies _ e _ =>
+  | .asConst _ e | .satisfies _ e _ | .spread _ e =>
     exprCalls e
   | .index _ a b | .binary _ _ a b | .assign _ _ a b => exprCalls a ++ exprCalls b
   | .cond _ a b c => exprCalls a ++ exprCalls b ++ exprCalls c
@@ -175,7 +175,7 @@ partial def exprNumbers : Expr → List String
   | .number _ t => [t]
   | .call _ c args => exprNumbers c ++ args.flatMap exprNumbers
   | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e
-  | .asConst _ e | .satisfies _ e _ =>
+  | .asConst _ e | .satisfies _ e _ | .spread _ e =>
     exprNumbers e
   | .index _ a b | .binary _ _ a b | .assign _ _ a b => exprNumbers a ++ exprNumbers b
   | .cond _ a b c => exprNumbers a ++ exprNumbers b ++ exprNumbers c
@@ -231,7 +231,7 @@ partial def subExprs (e : Expr) : List Expr :=
   e :: match e with
     | .call _ c args => subExprs c ++ args.flatMap subExprs
     | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e
-    | .arrow _ _ _ e => subExprs e
+    | .arrow _ _ _ e | .spread _ e => subExprs e
     | .index _ a b | .binary _ _ a b | .assign _ _ a b => subExprs a ++ subExprs b
     | .cond _ a b c => subExprs a ++ subExprs b ++ subExprs c
     | .array _ es => es.flatMap subExprs

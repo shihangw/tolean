@@ -156,6 +156,11 @@ def spreadOf : List Property → Option (Expr × List Property)
   | .spread _ base :: rest => some (base, rest)
   | _ => none
 
+/-- The operand of a spread `...e`. -/
+def _root_.tolean.TypeScript.Syntax.Expr.spreadArg? : Expr → Option (Span × Expr)
+  | .spread sp e => some (sp, e)
+  | _ => none
+
 /-- The interface of a value of an interface type, with its type arguments. -/
 def Ty.structRef? : Ty → Option (DeclRef × List Ty)
   | .struct ref args => some (ref, args)
@@ -1042,7 +1047,7 @@ def exprChanges : Expr → List String
   | .call _ (.member _ (.ident _ name) "add") args =>
     name :: exprsChanges args
   | .prefix _ _ e | .postfix _ _ e | .paren _ e | .unary _ _ e | .member _ e _ | .optMember _ e _
-  | .asConst _ e | .satisfies _ e _ =>
+  | .asConst _ e | .satisfies _ e _ | .spread _ e =>
     exprChanges e
   | .call _ callee args =>
     let own := match callee with
@@ -1594,6 +1599,69 @@ def loopItems (iterable : Expr) (body : Stmt) (items : Code) : TM (Ty × IR.Expr
     reject iterable.span "a loop may not change the map or set that it runs over"
   orReject (loopOver items) iterable.span "a loop must run over an array, a set or a map"
 
+/-- A piece of an array literal: an element, or the list of values that a
+spread `...e` gives, with their type. -/
+inductive ElemPart where
+  | one (c : Code)
+  | many (elem : Ty) (items : IR.Expr)
+
+/-- The piece as a `Code`, for `elementType`, which reads only its type. -/
+def ElemPart.asCode : ElemPart → Code
+  | .one c => c
+  | .many t items => ⟨items, false, t⟩
+
+/-- An element of an array literal, where `expected` is the type of the array
+when the context gives one, and `tr` translates an expression. A spread
+`...e` iterates `e` (ECMA-262 §13.2.4.1), so it gives the values that a loop
+over `e` visits: the elements of an array or a set, or the entries of a map. -/
+def translateElem (tr : Option Ty → Expr → TM Code) (expected : Option Ty) (e : Expr) :
+    TM ElemPart :=
+  match e.spreadArg? with
+  | some (sp, x) => do
+    let items ← tr expected x
+    let (t, li) ← orReject (loopOver items) sp "a spread '...' in an array needs an array, a set or a map"
+    pure (.many t li)
+  | none => do
+    let elem := match expected with
+      | some (.array t) => some t
+      | _ => none
+    pure (.one (← tr elem e))
+
+/-- The lists that the output joins with `++`: each spread's list, and one
+literal for each run of elements between them. -/
+def partLists (t : IR.Ty) : List ElemPart → List IR.Expr
+  | [] => []
+  | .many _ items :: ps => items :: partLists t ps
+  | .one c :: ps =>
+    match partLists t ps with
+    | .list xs _ :: rest => .list (c.value :: xs) t :: rest
+    | rest => .list [c.value] t :: rest
+
+/-- Each piece has the array's element type `elem`. An element may have a
+type that fits `elem`, which Lean converts it to in the literal, but Lean does
+not convert the elements of a list, so a spread must have `elem` itself. -/
+def checkParts (elem : Ty) : List (ElemPart × Expr) → TM Unit
+  | [] => pure ()
+  | (.one c, e) :: ps => do
+    unless c.type.assignableTo elem do reject e.span "the element does not have the array's element type"
+    checkParts elem ps
+  | (.many t _, e) :: ps => do
+    unless t == elem do reject e.span "the spread's elements do not have the array's element type"
+    checkParts elem ps
+
+/-- An array literal with a spread, such as `[...xs, x]`: `xs ++ [x]`. The
+element type comes from the context, or else from the elements and the
+spreads. -/
+def translateSpreadArray (tr : Option Ty → Expr → TM Code) (expected : Option Ty) (s : Span)
+    (elems : List Expr) : TM Code := do
+  let parts ← elems.mapM (translateElem tr expected)
+  let expectedElem := match expected with
+    | some (.array t) => some t
+    | _ => none
+  let elem ← elementType s expectedElem (parts.map ElemPart.asCode)
+  checkParts elem (parts.zip elems)
+  return ⟨.ext .append (partLists elem.lean parts), false, .array elem⟩
+
 /-- The receiver of `size`, `get` or `has`: an owned map as its local, as
 `ownedMap?` reads it, and any other expression as `tr` translates it. -/
 def translateRecv (tr : Expr → TM Code) (env : Env) (e : Expr) : TM Code :=
@@ -2066,17 +2134,24 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
         else t
       return ⟨.tuple (codes.map (·.value)), false, .tuple types⟩
     | _ => translateArray fuel env expected s elems
+  -- An array literal translates its own spreads; a tuple literal and the
+  -- arguments of a call do not take one yet.
+  | .spread sp _ => reject sp "a spread '...' may only be an element of an array literal"
   | _ => reject e.span "unsupported expression"
 
 /-- An array literal, as a list. In JS a literal makes a new array, and only
 an owned array may be pushed to, so nothing changes the array after it is
 made, and a Lean list has its meaning. The element type comes from the
-context, or else from the elements. -/
+context, or else from the elements. A literal with a spread, such as
+`[...xs, x]`, joins lists with `++` (`translateSpreadArray`). -/
 def translateArray (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (elems : List Expr) :
     TM Code := do
   let fuel + 1 := fuel | tooDeep
-  let (values, elem) ← translateElements fuel env expected s elems
-  return ⟨.list values elem.lean, false, .array elem⟩
+  if elems.any (·.spreadArg?.isSome) then
+    translateSpreadArray (translateExpr fuel env) expected s elems
+  else
+    let (values, elem) ← translateElements fuel env expected s elems
+    return ⟨.list values elem.lean, false, .array elem⟩
 
 /-- The elements of an array literal, and their type. -/
 def translateElements (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (elems : List Expr) :
@@ -2644,7 +2719,13 @@ def translateVariable (fuel : Nat) (env : Env) (s : Span) (d : VarDecl) (rest : 
           reject s "an array that the function pushes to must be 'const xs: Array<T> = [...]'; use ReadonlyArray<T> for a value"
         let some annotation := d.type | unreachable!
         let type ← translateType annotation
-        let .array _ elems := init | unreachable!
+        let .array sa elems := init | unreachable!
+        if elems.any (·.spreadArg?.isSome) then
+          -- `const xs: Array<T> = [...ys, y]` copies `ys`, so the function
+          -- owns the new array as it owns any other literal.
+          let code ← translateArray (← fuelLimit) env (some type) sa elems
+          let env' ← declare env s d.name .array type
+          return .let d.name code.value (← translateStatements fuel env' tail rest)
         -- The `let` states the type, so the list needs no ascription.
         let (values, _) ← translateElements (← fuelLimit) env (some type) s elems
         let env' ← declare env s d.name .array type
@@ -3306,7 +3387,7 @@ def exprUsesNumber : Expr → Bool
   | .array _ es => exprsUseNumber es
   | .call _ f args => exprUsesNumber f || exprsUseNumber args
   | .paren _ e | .unary _ _ e | .prefix _ _ e | .postfix _ _ e => exprUsesNumber e
-  | .asConst _ e => exprUsesNumber e
+  | .asConst _ e | .spread _ e => exprUsesNumber e
   | .satisfies _ e t => exprUsesNumber e || typeUsesNumber t
   -- The index of a tuple, `t[0]`, is a position in the output, not a number.
   | .index _ a (.number ..) => exprUsesNumber a

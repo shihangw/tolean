@@ -161,6 +161,9 @@ inductive ExprExt where
   | mapOfList
   /-- `(JSSet.ofList xs)`: `new Set(items)`, in the same way. -/
   | setOfList
+  /-- `(a ++ b ++ c)`, on one list or more, and `a` alone on one: an array
+  literal with a spread, such as `[...xs, x]`, which is `xs ++ [x]`. -/
+  | append
   /-- `(pure a)`: the value `a` as the result of a function that can throw. -/
   | pure
   /-- `(JSError.mk m)`: the error that `new Error(m)` makes, from its message. -/
@@ -246,6 +249,20 @@ instance : tolean.IR.PrintTy TyExt where
   indexValue names i :=
     s!"({leanName names "JSNumber"}.ofSafeInt (N := {names.typeParam}) ({i} : {leanName names "Int"}))"
 
+/-- Whether one pair of parentheses holds all of `code`, as in `(f x)` but not
+in `(a) ++ (b)`. A parenthesis in a string literal does not count. -/
+def wholeParens (code : String) : Bool :=
+  go code.toList 0 false
+where
+  go : List Char → Nat → Bool → Bool
+    | [], _, _ => false
+    | '\\' :: _ :: cs, d, true => go cs d true
+    | '"' :: cs, d, str => go cs d !str
+    | _ :: cs, d, true => go cs d true
+    | '(' :: cs, d, false => go cs (d + 1) false
+    | ')' :: cs, d, false => if d == 1 then cs.isEmpty else go cs (d - 1) false
+    | _ :: cs, d, false => d != 0 && go cs d false
+
 open tolean.IR (argument) in
 /-- An operation on its printed arguments. The translator gives each one the
 number of arguments it takes, and the printer writes nothing more for others. -/
@@ -302,6 +319,9 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
   | .mapEntries, [m] => s!"({leanName names "JSMap"}.entries {argument m})"
   | .mapOfList, [xs] => s!"({leanName names "JSMap"}.ofList {argument xs})"
   | .setOfList, [xs] => s!"({leanName names "JSSet"}.ofList {argument xs})"
+  | .append, [a] => a
+  | .append, lists =>
+    s!"({" ++ ".intercalate (lists.map fun a => if wholeParens a then a else argument a)})"
   | .recordGet key keys, [r, k] =>
     let case (f : String) := s!"{(names.ref key).1}.{memberName f}"
     -- A key that is one constructor, as `r['a']` gives, reads its field.

@@ -369,6 +369,14 @@ export class Gen {
             const bounds = this.pick(['', '1', '-2', '0, 2', '1, -1', '-3, -1', '2, 1']);
             return `${this.pick(same_).name}.slice(${bounds})`;
           });
+          // A spread of one array or two, with elements around them.
+          options.push(() => {
+            const parts = [`...${this.pick(same_).name}`];
+            if (this.chance(0.5)) parts.push(this.expr(of, vars, 0));
+            if (this.chance(0.5)) parts.unshift(this.expr(of, vars, 0));
+            if (this.chance(0.5)) parts.push(`...${this.pick(same_).name}`);
+            return `[${parts.join(', ')}]`;
+          });
         }
         break;
       }

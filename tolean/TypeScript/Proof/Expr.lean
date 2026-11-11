@@ -562,6 +562,45 @@ theorem eval_value (c : Code) (ρ : Eval.Env N) :
   unfold Code.value
   split <;> simp [IR.Expr.eval]
 
+/-- An element that is not a spread holds its own value in an array literal. -/
+theorem evalElems_cons {ρ : Eval.Env N} {e : Expr} {es : List Expr} (he : e.spreadArg? = none) :
+    Eval.evalElems m fuel ρ (e :: es) =
+      (do return (← Eval.eval m fuel ρ e) :: (← Eval.evalElems m fuel ρ es)) := by
+  cases e <;> simp_all [Expr.spreadArg?, Eval.evalElems]
+
+/-- A spread is not a value on its own. -/
+theorem eval_spreadElem {ρ : Eval.Env N} {sp : Span} {e : Expr} :
+    Eval.eval m fuel ρ (.spread sp e) = none := by
+  rw [Eval.eval] <;> simp
+
+/-- When each element of an array literal has a value, none is a spread, and
+the literal holds those values. -/
+theorem evalElems_of_evalList {ρ : Eval.Env N} :
+    ∀ {es : List Expr} {vs : List (Val N)}, Eval.evalList m fuel ρ es = some vs →
+      Eval.evalElems m fuel ρ es = some vs
+  | [], vs, h => by simpa [Eval.evalList, Eval.evalElems] using h
+  | e :: es, vs, h => by
+    simp only [Eval.evalList] at h
+    cases hx : Eval.eval m fuel ρ e with
+    | none => simp [hx] at h
+    | some x =>
+      cases hxs : Eval.evalList m fuel ρ es with
+      | none => simp [hx, hxs] at h
+      | some xs =>
+        simp only [hx, hxs, Option.bind_eq_bind, Option.bind_some, Option.pure_def,
+          Option.some.injEq] at h
+        subst h
+        cases hs : e.spreadArg? with
+        | some p =>
+          obtain ⟨sp, a⟩ := p
+          cases e <;> simp [Expr.spreadArg?] at hs
+          obtain ⟨rfl, rfl⟩ := hs
+          rw [eval_spreadElem] at hx
+          cases hx
+        | none =>
+          rw [evalElems_cons m fuel hs, hx, evalElems_of_evalList hxs]
+          rfl
+
 /-- When each element's translation means what the element means, the list of
 their values means what the list of elements means. -/
 theorem mapM_sim {env : Translate.Env} {f : Expr → TM Code}
@@ -2879,6 +2918,157 @@ theorem loopOver_sim {env : Translate.Env} {iterable : Expr} {items : Code} {ele
       subst happ
       rfl
 
+/-! ### Array spread -/
+
+/-- What a piece of an array literal stands for: an element that is not a
+spread, which its code means, or a spread `...x`, whose list is what a loop
+over `x` visits. -/
+def PartSim (env : Translate.Env) (e : Expr) : ElemPart → Prop
+  | .one c => e.spreadArg? = none ∧ Sim (N := N) m fs fuel env e c.code
+  | .many t li => ∃ sp x items, e = .spread sp x ∧ Sim (N := N) m fs fuel env x items.code ∧
+      loopOver items = some (t, li)
+
+theorem spreadArg?_some {e x : Expr} {sp : Span} (h : e.spreadArg? = some (sp, x)) :
+    e = .spread sp x := by
+  cases e <;> simp [Expr.spreadArg?] at h
+  obtain ⟨rfl, rfl⟩ := h
+  rfl
+
+theorem translateElem_sim {env : Translate.Env} {tr : Option Ty → Expr → TM Code}
+    (htr : ∀ exp e ctx c ctx', tr exp e ctx = .ok c ctx' → Sim (N := N) m fs fuel env e c.code)
+    {exp : Option Ty} {e : Expr} {ctx ctx' : Ctx} {p : ElemPart}
+    (h : translateElem tr exp e ctx = .ok p ctx') : PartSim (N := N) m fs fuel env e p := by
+  unfold translateElem at h
+  cases hs : e.spreadArg? with
+  | some q =>
+    obtain ⟨sp, x⟩ := q
+    rw [hs] at h
+    simp only [bind_ok, orReject_ok, pure_ok] at h
+    obtain ⟨items, s₁, hi, ⟨t, li⟩, s₂, ⟨hlo, -⟩, rfl, -⟩ := h
+    exact ⟨sp, x, items, spreadArg?_some hs, htr _ _ _ _ _ hi, hlo⟩
+  | none =>
+    rw [hs] at h
+    simp only [bind_ok, pure_ok] at h
+    obtain ⟨c, s₁, hc, rfl, -⟩ := h
+    exact ⟨hs, htr _ _ _ _ _ hc⟩
+
+/-- The lists that the output joins hold, one after another, what the array
+literal holds. -/
+theorem mapM_parts_sim {env : Translate.Env} {f : Expr → TM ElemPart}
+    (hf : ∀ e ctx p ctx', f e ctx = .ok p ctx' → PartSim (N := N) m fs fuel env e p) (t : IR.Ty) :
+    ∀ (es : List Expr) (ctx : Ctx) (ps : List ElemPart) (ctx' : Ctx),
+      es.mapM f ctx = .ok ps ctx' →
+      ∀ (ρs ρo : Eval.Env N) ws lss, Agree ρs ρo → Scoped m env ρs →
+        IR.Expr.evalList fs fuel ρo (partLists t ps) = some ws → ws.mapM IR.listItems? = some lss →
+        Eval.evalElems m fuel ρs es = some lss.flatten := by
+  intro es
+  induction es with
+  | nil =>
+    intro ctx ps ctx' h ρs ρo ws lss _ _ hws hl
+    simp [List.mapM_nil] at h
+    obtain ⟨rfl, -⟩ := h
+    simp [partLists, IR.Expr.evalList] at hws
+    subst hws
+    simp at hl
+    subst hl
+    simp [Eval.evalElems]
+  | cons e es ih =>
+    intro ctx ps ctx' h ρs ρo ws lss ha hs hws hl
+    simp [List.mapM_cons] at h
+    obtain ⟨p, s₁, hp, ps', hps, rfl⟩ := h
+    have hpart := hf _ _ _ _ hp
+    cases p with
+    | many t' li =>
+      obtain ⟨sp, x, items, rfl, hsim, hlo⟩ := hpart
+      simp only [partLists, IR.Expr.evalList] at hws
+      cases hw : IR.Expr.eval fs fuel ρo li with
+      | none => simp [hw] at hws
+      | some w =>
+        cases hws' : IR.Expr.evalList fs fuel ρo (partLists t ps') with
+        | none => simp [hw, hws'] at hws
+        | some ws' =>
+          simp [hw, hws'] at hws
+          subst hws
+          cases w with
+          | list l =>
+            cases hl' : ws'.mapM IR.listItems? with
+            | none => simp [List.mapM_cons, IR.listItems?, hl'] at hl
+            | some lss' =>
+              simp [List.mapM_cons, IR.listItems?, hl'] at hl
+              subst hl
+              obtain ⟨v, hv, hiter⟩ := loopOver_sim m fs fuel hsim hlo ha hs hw
+              have := ih _ _ _ hps ρs ρo ws' lss' ha hs hws' hl'
+              simp [Eval.evalElems, hv, hiter, this]
+          | _ => simp [List.mapM_cons, IR.listItems?] at hl
+    | one c =>
+      obtain ⟨hsp, hsim⟩ := hpart
+      simp only [partLists] at hws
+      split at hws
+      · next xs ty rest heq =>
+        simp only [IR.Expr.evalList, IR.Expr.eval] at hws
+        cases hv0 : IR.Expr.eval fs fuel ρo c.value with
+        | none => simp [hv0] at hws
+        | some v0 =>
+          cases hxs : IR.Expr.evalList fs fuel ρo xs with
+          | none => simp [hv0, hxs] at hws
+          | some vxs =>
+            cases hrest : IR.Expr.evalList fs fuel ρo rest with
+            | none => simp [hv0, hxs, hrest] at hws
+            | some ws' =>
+              simp [hv0, hxs, hrest] at hws
+              subst hws
+              cases hl' : ws'.mapM IR.listItems? with
+              | none => simp [List.mapM_cons, IR.listItems?, hl'] at hl
+              | some lss' =>
+                simp [List.mapM_cons, IR.listItems?, hl'] at hl
+                subst hl
+                have hev : IR.Expr.evalList fs fuel ρo (partLists t ps') = some (.list vxs :: ws') := by
+                  simp [heq, IR.Expr.evalList, IR.Expr.eval, hxs, hrest]
+                have hm : (Val.list vxs :: ws').mapM IR.listItems? = some (vxs :: lss') := by
+                  simp [List.mapM_cons, IR.listItems?, hl']
+                have := ih _ _ _ hps ρs ρo _ _ ha hs hev hm
+                rw [eval_value] at hv0
+                rw [evalElems_cons m fuel hsp, hsim ρs ρo _ ha hs hv0, this]
+                simp
+      · simp only [IR.Expr.evalList, IR.Expr.eval] at hws
+        cases hv0 : IR.Expr.eval fs fuel ρo c.value with
+        | none => simp [hv0] at hws
+        | some v0 =>
+          cases hws' : IR.Expr.evalList fs fuel ρo (partLists t ps') with
+          | none => simp [hv0, hws'] at hws
+          | some ws' =>
+            simp [hv0, hws'] at hws
+            subst hws
+            cases hl' : ws'.mapM IR.listItems? with
+            | none => simp [List.mapM_cons, IR.listItems?, hl'] at hl
+            | some lss' =>
+              simp [List.mapM_cons, IR.listItems?, hl'] at hl
+              subst hl
+              have := ih _ _ _ hps ρs ρo _ _ ha hs hws' hl'
+              rw [eval_value] at hv0
+              rw [evalElems_cons m fuel hsp, hsim ρs ρo _ ha hs hv0, this]
+              simp
+
+/-- An array literal with a spread means the lists that the output joins. -/
+theorem translateSpreadArray_sound {env : Translate.Env} {tr : Option Ty → Expr → TM Code}
+    (htr : ∀ exp e ctx c ctx', tr exp e ctx = .ok c ctx' → Sim (N := N) m fs fuel env e c.code)
+    {exp : Option Ty} {s : Span} {elems : List Expr} {ctx ctx' : Ctx} {c : Code}
+    (h : translateSpreadArray tr exp s elems ctx = .ok c ctx') :
+    Sim (N := N) m fs fuel env (.array s elems) c.code := by
+  simp only [translateSpreadArray, bind_ok, pure_ok] at h
+  obtain ⟨parts, s₁, hparts, elem, s₂, -, u, s₃, -, rfl, -⟩ := h
+  intro ρs ρo v ha hs hv
+  obtain ⟨ws, hws, happ⟩ := out_ext fs fuel hv
+  simp only [IR.ExprExt.apply] at happ
+  cases hm : ws.mapM IR.listItems? with
+  | none => simp [hm] at happ
+  | some lss =>
+    simp [hm] at happ
+    subst happ
+    have := mapM_parts_sim m fs fuel (fun _ _ _ _ hp => translateElem_sim m fs fuel htr hp) elem.lean
+      elems ctx parts s₁ hparts ρs ρo ws lss ha hs hws hm
+    simp [Eval.eval, this]
+
 /-- `new Map()` and `new Set()`, and `new Map(items)` and `new Set(items)`,
 which set or add each value that `items` visits. -/
 theorem translateNew_sound {tr : Option Ty → Expr → TM Code} {env : Translate.Env}
@@ -3568,7 +3758,7 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
                 subst hv
                 have hel := zip_sim_value m fs fuel ?hg elems tys _ codes _ (Nat.le_of_eq (by simpa using hlen)) hcodes
                   ρs ρo vs ha hs hx
-                · simp [Eval.eval, hel]
+                · simp [Eval.eval, evalElems_of_evalList m fuel hel]
                 case hg =>
                   intro x t c₀ o c₁ hgo
                   simp only [bind_ok] at hgo
@@ -3618,7 +3808,9 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
       rw [← hr]
       exact mapM_sim m fs fuel (fun e ctx c ctx' h => ihE _ _ _ _ _ _ h) es ctx codes s₁ hcodes
     · intro env exp sp es ctx c ctx' h
-      simp only [translateArray] at h
+      simp only [translateArray, ite_state] at h
+      split at h
+      · exact translateSpreadArray_sound m fs fuel (fun _ _ _ _ _ hx => ihE _ _ _ _ _ _ hx) h
       simp at h
       obtain ⟨values, elem, hel, hcode⟩ := h
       intro ρs ρo v ha hs hv
@@ -3630,7 +3822,7 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
         simp [hx] at hv
         subst hv
         have := ihL _ _ _ _ _ _ _ hel ρs ρo xs ha hs hx
-        simp [Eval.eval, this]
+        simp [Eval.eval, evalElems_of_evalList m fuel this]
     · exact translateCall_sound m fs fuel hc ihE
     · intro env exp sp props ctx c ctx' h
       exact translateObject_sound m fs fuel ihE ihO h
