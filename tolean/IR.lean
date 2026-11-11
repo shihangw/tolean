@@ -555,6 +555,54 @@ def Decl.usesMap : Decl T E → Bool
 
 end
 
+section
+variable (p : E → Bool)
+
+mutual
+
+/-- `e` runs an operation for which `p` holds. -/
+def Expr.anyOp : Expr T E → Bool
+  | .ext op args => p op || Expr.anyOpList args
+  | .call _ args | .tuple args | .list args _ => Expr.anyOpList args
+  | .struct fields _ _ => Expr.anyOpFields fields
+  | .structUpdate base fields => base.anyOp || Expr.anyOpFields fields
+  | .field a _ _ | .propNot a | .not a | .neg a | .isNone a | .isSome a
+  | .decide a | .push _ a | .update _ _ a | .inject _ _ a | .proj a _ _ | .ascribe a _ => a.anyOp
+  | .ite a b c => a.anyOp || b.anyOp || c.anyOp
+  | .matchNull _ a b | .coalesce a b _ | .intOp _ a b | .order _ a b | .division _ a b
+  | .eq a b | .ne a b | .propAnd a b | .propOr a b | .and a b | .or a b => a.anyOp || b.anyOp
+  | .listMethod _ items _ _ body _ => items.anyOp || body.anyOp
+  | .listFold items init _ _ _ body _ => items.anyOp || init.anyOp || body.anyOp
+  | .int _ | .none | .bool _ | .string _ | .var _ | .enumCase .. | .tagValue _ => false
+
+def Expr.anyOpList : List (Expr T E) → Bool
+  | [] => false
+  | e :: es => e.anyOp || Expr.anyOpList es
+
+def Expr.anyOpFields : List (String × Expr T E) → Bool
+  | [] => false
+  | (_, e) :: fs => e.anyOp || Expr.anyOpFields fs
+
+end
+
+def Body.anyOp : Body T E → Bool
+  | .value e | .exit e _ | .throw e => e.anyOp p
+  | .state _ | .yield .. | .done .. => false
+  | .let _ e rest | .letTuple _ e rest => e.anyOp p || rest.anyOp
+  | .letArray _ _ elems rest => Expr.anyOpList p elems || rest.anyOp
+  | .ite c a b => c.anyOp p || a.anyOp || b.anyOp
+  | .matchNull _ _ a b | .letState _ a b | .matchTag _ _ _ _ _ a b => a.anyOp || b.anyOp
+  | .fold _ _ body items rest _ => body.anyOp || items.anyOp p || rest.anyOp
+  | .bind _ _ args rest => Expr.anyOpList p args || rest.anyOp
+
+/-- The output of `d` runs an operation for which `p` holds. A language
+imports the model that defines such operations then. -/
+def Decl.anyOp : Decl T E → Bool
+  | .function _ _ _ body => body.anyOp p
+  | .struct .. | .tagged .. | .alias .. | .enum .. => false
+
+end
+
 /-- The output of `d` names the string type, or holds a string literal. A
 language whose strings are not Lean's `String` imports its model then. -/
 def Decl.usesString (opUses : E → Bool) : Decl T E → Bool

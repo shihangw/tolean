@@ -504,6 +504,46 @@ theorem out_coalesce {a b : IR.Expr} {nullable : Bool}
     refine ⟨w, rfl, ?_⟩
     cases w <;> simp [hx] at h <;> first | (subst h; simp [isNullVal]) | simp [isNullVal, h]
 
+/-- `ExprExt.apply` on an operation of `JSBigInt` on two bigints, without the
+other operations. -/
+theorem apply_bigintOp (op : IR.BigintOp) (w u : Val N) :
+    IR.ExprExt.apply (.bigintOp op) [w, u] =
+      match w, u with
+      | .int a, .int b => some (.int (op.apply a b))
+      | _, _ => none := by
+  cases w <;> cases u <;> rfl
+
+theorem out_bigintOp {op : IR.BigintOp} {a b : IR.Expr}
+    (h : IR.Expr.eval fs fuel ρ (.ext (.bigintOp op) [a, b]) = some v) :
+    ∃ x y, IR.Expr.eval fs fuel ρ a = some (.int x) ∧ IR.Expr.eval fs fuel ρ b = some (.int y) ∧
+      v = .int (op.apply x y) := by
+  simp only [IR.Expr.eval, IR.Expr.evalList] at h
+  cases hx : IR.Expr.eval fs fuel ρ a with
+  | none => simp [hx] at h
+  | some w =>
+    cases hy : IR.Expr.eval fs fuel ρ b with
+    | none => simp [hx, hy] at h
+    | some u =>
+      simp only [hx, hy, Option.bind_eq_bind, Option.bind_some, Option.pure_def] at h
+      rw [apply_bigintOp] at h
+      cases w <;> cases u <;> simp at h
+      exact ⟨_, _, rfl, rfl, h.symm⟩
+
+theorem out_bigintNot {a : IR.Expr} (h : IR.Expr.eval fs fuel ρ (.ext .bigintNot [a]) = some v) :
+    ∃ i, IR.Expr.eval fs fuel ρ a = some (.int i) ∧ v = .int (JSBigInt.bitNot i) := by
+  simp only [IR.Expr.eval, IR.Expr.evalList] at h
+  cases hx : IR.Expr.eval fs fuel ρ a with
+  | none => simp [hx, IR.ExprExt.apply] at h
+  | some w => cases w <;> simp_all [IR.ExprExt.apply]
+
+theorem out_bigintPow {k : Nat} {a : IR.Expr}
+    (h : IR.Expr.eval fs fuel ρ (.ext (.bigintPow k) [a]) = some v) :
+    ∃ i, IR.Expr.eval fs fuel ρ a = some (.int i) ∧ v = .int (i ^ k) := by
+  simp only [IR.Expr.eval, IR.Expr.evalList] at h
+  cases hx : IR.Expr.eval fs fuel ρ a with
+  | none => simp [hx, IR.ExprExt.apply] at h
+  | some w => cases w <;> simp_all [IR.ExprExt.apply]
+
 end Inversion
 
 /-- The output fields `outs` mean what the properties `ps` mean. -/
@@ -1177,6 +1217,44 @@ theorem nonzero_literal (e : Expr) (h : isNonzeroBigintLiteral e = true) :
       exact ⟨n, h, fun ρ => by simp [Eval.eval, hb]⟩
   | case4 e h1 h2 h3 => simp [isNonzeroBigintLiteral] at h
 
+/-- A bigint literal is never negative. -/
+theorem bigintLiteral_nonneg {text : String} {n : Int} (h : Eval.bigintLiteral text = some n) :
+    0 ≤ n := by
+  unfold Eval.bigintLiteral at h
+  simp only [Option.map_eq_some_iff] at h
+  obtain ⟨k, -, rfl⟩ := h
+  exact Int.ofNat_le.mpr (Nat.zero_le k)
+
+/-- A bigint literal that `bigintLiteralNat?` reads, in any parentheses,
+evaluates to its value. -/
+theorem bigintLiteralNat_eval (e : Expr) {k : Nat} (h : bigintLiteralNat? e = some k) :
+    ∀ ρ : Eval.Env N, Eval.eval m fuel ρ e = some (.int k) := by
+  induction e using bigintLiteralNat?.induct with
+  | case1 sp inner ih =>
+    simp only [bigintLiteralNat?] at h
+    exact fun ρ => by rw [Eval.eval]; exact ih h ρ
+  | case2 sp text =>
+    simp only [bigintLiteralNat?, bigintValue?] at h
+    cases hb : Eval.bigintLiteral text with
+    | none => simp [hb] at h
+    | some n =>
+      simp only [hb, Option.map_some, Option.some.injEq] at h
+      have := bigintLiteral_nonneg hb
+      subst h
+      intro ρ
+      simp [Eval.eval, hb, Int.toNat_of_nonneg this]
+  | case3 e h1 h2 => simp [bigintLiteralNat?] at h
+
+/-- `a ** k` on bigints, with a literal `k`: the interpreter raises the value
+of `a` to the power `k`, which is not negative. -/
+theorem binary_exp_literal {l r : Expr} {ρ : Eval.Env N} {k : Nat} {x : Int}
+    (hk : bigintLiteralNat? r = some k) (hl : Eval.eval m fuel ρ l = some (.int x)) :
+    (do Eval.binary .exp (← Eval.eval m fuel ρ l) (← Eval.eval m fuel ρ r)) =
+      some (Val.int (x ^ k)) := by
+  rw [hl, bigintLiteralNat_eval m fuel r hk ρ]
+  have hk0 : ¬ ((k : Int) < 0) := by omega
+  simp [Eval.binary, hk0]
+
 @[simp] theorem requireFeature_ok (sp : Span) (f : Feature) (s s' : Ctx) (u : Unit) :
     (requireFeature sp f) s = .ok u s' ↔ s.target.supports f = true ∧ s' = s := by
   simp only [requireFeature, bind_ok, get_ok]
@@ -1295,6 +1373,12 @@ theorem applyOperator_sound {sp s : Span} {op : BinOp} {l r : Expr} {a b c : Cod
        obtain rfl : y0 = y := by simpa using hyr
        rw [hl _ hx, hr _ hy]
        simp [Eval.binary, hy0, IR.Division.apply])
+    | (obtain ⟨x, y, hx, hy, rfl⟩ := out_bigintOp fs fuel hv
+       rw [eval_value] at hx hy
+       rw [hl _ hx, hr _ hy]; rfl)
+    | (obtain ⟨x, hx, rfl⟩ := out_bigintPow fs fuel hv
+       rw [eval_value] at hx
+       exact binary_exp_literal m fuel (by assumption) (hl _ hx))
     | (obtain ⟨x, y, t, hx, hy, ht, rfl⟩ := out_eq fs fuel hv
        rw [eval_value] at hx hy
        rw [hl _ hx, hr _ hy]
@@ -3661,6 +3745,17 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
               rw [eval_value] at hn
               have := ihE _ _ _ _ _ _ hta ρs ρo _ ha hs hn
               rw [eval_neg m fuel sp arg ρs _ this hInf]; rfl
+        | bitNot =>
+          simp +decide at h
+          obtain ⟨a, s₁, hta, h⟩ := h
+          split at h
+          · simp at h
+            obtain ⟨⟨-, -⟩, rfl⟩ := h
+            obtain ⟨i, hi, rfl⟩ := out_bigintNot fs fuel hv'
+            rw [eval_value] at hi
+            have := ihE _ _ _ _ _ _ hta ρs ρo _ ha hs hi
+            simp [Eval.eval, this]
+          · simp at h
         | _ => simp +decide at h
       | binary sp op l r =>
         simp only [translateExprCore] at h

@@ -33,6 +33,15 @@ inductive NumberTest where
   | isSafeInteger | isNaN | isFinite
 deriving BEq, Repr, Inhabited, DecidableEq
 
+/-- An operation of `JSBigInt` on two bigints: `&`, `|`, `^`, `<<` and `>>`. -/
+inductive BigintOp where
+  | bitAnd | bitOr | bitXor | shiftLeft | shiftRight
+deriving BEq, Repr, Inhabited, DecidableEq
+
+def BigintOp.name : BigintOp → String
+  | .bitAnd => "bitAnd" | .bitOr => "bitOr" | .bitXor => "bitXor"
+  | .shiftLeft => "shiftLeft" | .shiftRight => "shiftRight"
+
 /-- How one operand of `a + b` on strings becomes a string, by ToString: a
 string stays itself, and a bigint or a boolean becomes its text. -/
 inductive StringPart where
@@ -74,6 +83,14 @@ inductive ExprExt where
   | numberNe
   /-- `(JSNumber.isNaN a)`, or `(JSNumber.toSafeInt a).isSome`. -/
   | numberTest (test : NumberTest)
+  /-- `(JSBigInt.bitAnd a b)`, or another operation of `JSBigInt` on two
+  bigints. -/
+  | bigintOp (op : BigintOp)
+  /-- `(JSBigInt.bitNot a)`: `~a` on a bigint. -/
+  | bigintNot
+  /-- `(a ^ (k : Nat))`, on `a`: `a ** k` on bigints, where `k` is a bigint
+  literal, which is never negative. -/
+  | bigintPow (k : Nat)
   /-- `none`, on no arguments, as an optional value: `undefined`, such as
   the argument of an optional parameter that a call leaves out. -/
   | undefined
@@ -214,7 +231,8 @@ def leanNames : List (String × String) :=
   tolean.IR.leanNames ++
     [("JSNumber", "tolean.TypeScript.JSNumber"), ("JSString", "tolean.TypeScript.JSString"),
      ("JSMap", "tolean.TypeScript.JSMap"), ("JSSet", "tolean.TypeScript.JSSet"),
-     ("JSError", "tolean.TypeScript.JSError"), ("pure", "Pure.pure"),
+     ("JSError", "tolean.TypeScript.JSError"), ("JSBigInt", "tolean.TypeScript.JSBigInt"),
+     ("pure", "Pure.pure"),
      ("Nat", "Nat")]
 
 /-- Write the Lean name `name` (or `name.rest`), from the root when the source
@@ -281,6 +299,9 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
   | .numberTest .isSafeInteger, [a] => s!"({js}.toSafeInt {argument a}).isSome"
   | .numberTest .isNaN, [a] => s!"({js}.isNaN {argument a})"
   | .numberTest .isFinite, [a] => s!"({js}.isFinite {argument a})"
+  | .bigintOp op, [a, b] => s!"({leanName names "JSBigInt"}.{op.name} {argument a} {argument b})"
+  | .bigintNot, [a] => s!"({leanName names "JSBigInt"}.bitNot {argument a})"
+  | .bigintPow k, [a] => s!"({argument a} ^ ({k} : {leanName names "Nat"}))"
   | .stringOrder le, [a, b] =>
     s!"({leanName names "JSString"}.{if le then "le" else "lt"} {argument a} {argument b})"
   | .stringAppend left right, [a, b] =>
@@ -371,6 +392,11 @@ An operation on strings may stand where no string type or literal is in
 sight, such as `a.key < b.key` on an interface of another file. -/
 def ExprExt.usesString : ExprExt → Bool
   | .stringOrder _ | .stringAppend .. | .stringLength | .stringMethod _ => true
+  | _ => false
+
+/-- The operation names `JSBigInt`, so the output imports its model. -/
+def ExprExt.onBigInt : ExprExt → Bool
+  | .bigintOp _ | .bigintNot => true
   | _ => false
 
 end tolean.TypeScript.IR
