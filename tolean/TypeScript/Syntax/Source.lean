@@ -13,7 +13,7 @@ trip follows the tree:
   `async` and the `(` of a call of it. ECMA-262 reads `async (1)` on one line
   as a call. But on one line, `tsc` can read `async (` as the start of an
   async arrow function, such as `async () : T => …`, and so the parser
-  refuses `async (…)` before a `:` or with a spread among its arguments
+  refuses `async (…)` before a `:` or with a spread as its first argument
   (`refuseAsyncArrowLookalike`). ECMA-262
   §15.9 lets no line break come between `async` and the parameters of an
   async arrow function, and `tsc` reads none after one either. So `async`,
