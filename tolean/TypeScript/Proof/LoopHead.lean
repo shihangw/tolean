@@ -48,6 +48,45 @@ def HeadSim (env : Translate.Env) (stmt : Stmt) (x : String) (b : Stmt) (items :
     IR.Expr.eval fs fuel ρo items = some (.list vs) →
     Eval.execStmt m fuel ρs stmt = Eval.execLoop m fuel ρs x b vs
 
+/-- `countFrom` puts the values that it finds after those in `acc`. -/
+theorem countFrom_acc {b : N} :
+    ∀ (left : Nat) (k : Int) (acc : List N),
+      JSNumber.countFrom b acc k left = (JSNumber.countFrom b [] k left).map (acc.reverse ++ ·)
+  | 0, _, _ => rfl
+  | left + 1, k, acc => by
+    simp only [JSNumber.countFrom]
+    split
+    · rw [countFrom_acc left (k + 1) (_ :: acc), countFrom_acc left (k + 1) [_]]
+      simp [Option.map_map, Function.comp_def]
+    · simp
+
+/-- The interpreter runs a counted loop's body as each value comes, and that
+is the same as running it over the list of the values that `countFrom` gives. -/
+theorem execCounted_eq {name : String} {body : Stmt} {b : N} :
+    ∀ {left : Nat} {k : Int} (env : Eval.Env N) (l : List N), JSNumber.countFrom b [] k left = some l →
+      Eval.execCounted m fuel env name body b k left = Eval.execLoop m fuel env name body (l.map .num)
+  | 0, _, _, _, h => by simp [JSNumber.countFrom] at h
+  | left + 1, k, env, l, h => by
+    simp only [JSNumber.countFrom] at h
+    split at h
+    · rename_i hlt
+      rw [countFrom_acc] at h
+      cases hr : JSNumber.countFrom b [] (k + 1) left with
+      | none => simp [hr] at h
+      | some r =>
+        simp only [hr, Option.map_some, List.reverse_cons, List.reverse_nil, List.nil_append,
+          List.singleton_append, Option.some.injEq] at h
+        subst h
+        rw [Eval.execCounted, if_pos hlt, List.map_cons, Eval.execLoop]
+        cases hb : Eval.execStmt m fuel ((name, .num (JSNumber.ofSafeInt k)) :: env) body with
+        | none => simp
+        | some o =>
+          cases o <;> simp [execCounted_eq _ r hr]
+    · rename_i hlt
+      simp only [Option.some.injEq] at h
+      subst h
+      simp [Eval.execCounted, hlt, Eval.execLoop]
+
 /-- The head that `loopHead` translates runs the body over the items that it
 gives. -/
 theorem loopHead_sim (hc : CallsAgree (N := N) m.program fs fuel) {env : Translate.Env} {s : Span}
@@ -87,39 +126,35 @@ theorem loopHead_sim (hc : CallsAgree (N := N) m.program fs fuel) {env : Transla
         split at h
         · simp at h
         · rename_i hch
-          simp only [bind_ok, fuelLimit_ok] at h
-          obtain ⟨_, _, ⟨rfl, rfl⟩, ca, s₁, hca, h⟩ := h
-          split at h
-          · rename_i hta
-            simp only [bind_ok, fuelLimit_ok] at h
+          cases hk : Eval.countStart? start with
+          | none => simp [hk] at h
+          | some k =>
+            simp only [hk, bind_ok, fuelLimit_ok] at h
             obtain ⟨_, _, ⟨rfl, rfl⟩, cb, s₂, hcb, h⟩ := h
             split at h
             · simp only [pure_ok, Prod.mk.injEq] at h
               obtain ⟨⟨rfl, rfl, rfl⟩, -⟩ := h
-              have hsa := (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hca
               have hsb := (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hcb
               intro ρs ρo vs ha hs hi
               obtain ⟨ws, hws, happ⟩ := out_ext fs fuel hi
               simp only [IR.Expr.evalList] at hws
-              cases hxa : IR.Expr.eval fs fuel ρo ca.value with
-              | none => simp [hxa] at hws
-              | some wa =>
-                cases hxb : IR.Expr.eval fs fuel ρo cb.value with
-                | none => simp [hxa, hxb] at hws
-                | some wb =>
-                  simp only [hxa, hxb, Option.bind_eq_bind, Option.bind_some, Option.pure_def,
-                    Option.some.injEq] at hws
-                  subst hws
-                  rw [eval_value] at hxa hxb
-                  have hva := hsa ρs ρo _ ha hs hxa
-                  have hvb := hsb ρs ρo _ ha hs hxb
-                  have hn : n = name ∧ update.incrementsName name = true := by simpa using hshape
-                  obtain ⟨rfl, hinc⟩ := hn
-                  cases wa <;> cases wb <;> simp [IR.ExprExt.apply] at happ
-                  obtain ⟨l, hl, rfl⟩ := happ
-                  simp [LoopHead.stmt, Eval.execStmt, hinc, hva, hvb, hl, hch]
+              cases hxb : IR.Expr.eval fs fuel ρo cb.value with
+              | none => simp [hxb] at hws
+              | some wb =>
+                simp only [hxb, Option.bind_eq_bind, Option.bind_some, Option.pure_def,
+                  Option.some.injEq] at hws
+                subst hws
+                rw [eval_value] at hxb
+                have hvb := hsb ρs ρo _ ha hs hxb
+                have hn : n = name ∧ update.incrementsName name = true := by simpa using hshape
+                obtain ⟨rfl, hinc⟩ := hn
+                cases wb <;> simp [IR.ExprExt.apply] at happ
+                obtain ⟨l, hl, rfl⟩ := happ
+                simp only [LoopHead.stmt, Eval.execStmt, hinc, hk, hvb, hch, beq_self_eq_true,
+                  Bool.and_self, Bool.not_true, Bool.false_eq_true, ↓reduceIte, Option.bind_eq_bind,
+                  Option.bind_some]
+                exact execCounted_eq m fuel _ _ hl
             · simp at h
-          · simp at h
       · simp at h
     · simp at h
 

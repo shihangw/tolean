@@ -76,30 +76,29 @@ def JSNumber.elementAt? {N α : Type} [JSNumber N] (xs : List α) (i : N) : Opti
   | some k => if 0 ≤ k then xs[k.toNat]? else none
   | none => none
 
-/-- The values of `i` from `x`, whose value is the safe integer `k`, while
-`i < b` holds: `x`, then `k + 1`, `k + 2` and so on. At most `left` values
-may follow `x`, and `none` means that the loop would go on past them. -/
-def JSNumber.countFrom {N : Type} [JSNumber N] (b x : N) (k : Int) : Nat → Option (List N)
-  | 0 => if lt x b then none else some []
-  | left + 1 => if lt x b then (x :: ·) <$> countFrom b (ofSafeInt (k + 1)) (k + 1) left else some []
+/-- The values of `i` from the safe integer `k` on, for as long as `i < b`
+holds, after the values in `acc`, which are in reverse order. At most `left`
+values may come, and `none` means that the loop would go on past them. The
+list grows in `acc`, so the recursion is a loop. -/
+def JSNumber.countFrom {N : Type} [JSNumber N] (b : N) (acc : List N) (k : Int) : Nat → Option (List N)
+  | 0 => none
+  | left + 1 =>
+    if lt (ofSafeInt k) b then countFrom b (ofSafeInt k :: acc) (k + 1) left else some acc.reverse
 
-/-- The values that `i` takes in `for (let i = a; i < b; i++)`: `a`, then each
-integer after it, for as long as it is less than `b`. It is `none` when `a`
-is not a safe integer, or when `i` would pass `Number.MAX_SAFE_INTEGER`, as it
-would for a bound of `Infinity`.
+/-- The values that `i` takes in `for (let i = k; i < b; i++)`, where the start
+`k` is an integer literal: `k`, then each integer after it, for as long as it
+is less than `b`. It is `none` when `i` would pass `Number.MAX_SAFE_INTEGER`,
+as it would for a bound of `Infinity`.
 
-On safe integers, `i++` adds one exactly (`SafeIntLaws.add`), so these are the
-values that JS gives. The first value is `a` itself and not `ofSafeInt i`, so
-that a start of `-0` stays `-0`. -/
-def JSNumber.countUp? {N : Type} [JSNumber N] (a b : N) : Option (List N) :=
-  match toSafeInt a with
-  | some i => countFrom b a i (maxSafe - i).toNat
-  | none => none
+The literal `k` is the number `ofSafeInt k`, and on safe integers `i++` adds
+one exactly (`SafeIntLaws.add`), so these are the values that JS gives. -/
+def JSNumber.countUp? {N : Type} [JSNumber N] (k : Int) (b : N) : Option (List N) :=
+  countFrom b [] k (maxSafe - k + 1).toNat
 
 /-- `countUp?`, empty when it is `none`. The translation of a counted loop runs
 over this list. -/
-def JSNumber.countUp {N : Type} [JSNumber N] (a b : N) : List N :=
-  (countUp? a b).getD []
+def JSNumber.countUp {N : Type} [JSNumber N] (k : Int) (b : N) : List N :=
+  (countUp? k b).getD []
 
 /-- On safe integers, JS `number` operations agree with `Int`. -/
 class SafeIntLaws (N : Type) [JSNumber N] : Prop where

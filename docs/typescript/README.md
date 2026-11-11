@@ -77,13 +77,15 @@ operator unless parentheses, braces, the arguments of a call or an index hold
 it. ECMA-262 reads such an `in` as the start of a `for … in` loop. It allows
 one inside `[ … ]`, but `tsc` does not, so the parser refuses that too.
 
-The interpreter runs a counted `for` of one shape: `for (let i = a; i < b; i++)`,
-where the update may also be `++i` or `i += 1`. The start `a` must be a safe
-integer. The body must not assign `i`, and it must not change anything that
-`b` reads, because JS reads `b` again before each run of the body. The
-interpreter gives no value for any other counted `for`, and none for a loop
-where `i` would pass `Number.MAX_SAFE_INTEGER`. The translator accepts the
-same shape, as the table of statements below shows.
+The interpreter runs a counted `for` of one shape: `for (let i = k; i < b; i++)`,
+where the update may also be `++i` or `i += 1`. The start `k` must be an
+integer literal, which may follow a `-`, but not `-0`. The body must not
+assign `i`, and it must not change anything that `b` reads, because JS reads
+`b` again before each run of the body. The interpreter runs the body as each
+value of `i` comes, so a body that returns early ends the loop at once. It
+gives no value for any other counted `for`, and none for a loop where `i`
+would pass `Number.MAX_SAFE_INTEGER`. The translator accepts the same shape,
+as the table of statements below shows.
 
 `as const` and `satisfies T` have two more lookalikes, and the parser refuses
 both:
@@ -410,7 +412,7 @@ the file, the line and the reason. It never approximates.
 | `if (c) continue;` at the top of a loop body, or a branch of that `if` that ends in `continue` on every path | `if c then (x, y) else …`, where the rest of the body is the `else` branch, as after an `if` that returns. A test of `null` or of a tag narrows the local for the rest of the body. |
 | `break` in a `for (const x of xs)` loop, in the same places as `continue` | `Id.run (forIn xs (x, y) (fun e (x, y) => …))`. A `break` is `ForInStep.done (x, y)`, which ends the loop, and the end of the body or a `continue` is `ForInStep.yield (x, y)`. A loop without a `break` stays a `List.foldl`. |
 | `return e` in the same places, in a loop where the statements after it end in a `return` | `match Id.run (forIn xs (none, x, y) (fun e (_, x, y) => …)) with`, with the arms `\| (some r, _) => r` and `\| (none, x, y) => …` for the statements after the loop. The state starts with the value to return: a `return e` is `ForInStep.done (some e, x, y)`, and the other step ends hold `none`. |
-| `for (let i = a; i < b; i++)`, where the update may also be `++i` or `i += 1`, and `a` and `b` are numbers | The fold of `for (const i of …)` over `JSNumber.countUp a b`, with `continue`, `break` and `return` in the same places. `countUp` gives `a`, then each integer after it that is less than `b`. It is empty when `a` is not a safe integer, or when `i` would pass `Number.MAX_SAFE_INTEGER`. The interpreter gives no value for such a loop. |
+| `for (let i = k; i < b; i++)`, where the update may also be `++i` or `i += 1`, the start `k` is an integer literal and `b` is a number | The fold of `for (const i of …)` over `JSNumber.countUp k b`, with `continue`, `break` and `return` in the same places. `countUp` gives `k`, then each integer after it that is less than `b`. It is empty when `i` would pass `Number.MAX_SAFE_INTEGER`, and the interpreter gives no value for such a loop. From a start such as `0`, JS needs about 2⁵³ runs of the body to get there. |
 | `xs.map(x => e)`, `xs.filter(x => p)` | `List.map (fun (x : T) => e) xs`, `List.filter (fun (x : T) => p) xs` |
 | `xs.map((x, i) => e)` | `List.mapIdx (fun (i : Nat) (x : T) => let i := JSNumber.ofSafeInt i; e) xs`. JS passes the index as a number, so the body reads `i` as a `number`. An array has fewer than 2^32 elements, so the index is always a safe integer. |
 | `xs.some(x => p)`, `xs.every(x => p)` | `List.any xs (fun (x : T) => p)`, `List.all xs (fun (x : T) => p)` |
@@ -528,13 +530,14 @@ Tolean rejects these, among others:
   loop would also visit the entries that the body adds. A file that uses a
   map or a set gets no certificate yet, because the certifier has no encoder
   for one; `program_sound` covers it.
-- A counted `for` of any other shape, such as `i <= n`, `i--` or `i += 2`, or
-  with a type other than `number` on `i`. Tolean also refuses one whose body
+- A counted `for` of any other shape, such as `i <= n`, `i--` or `i += 2`,
+  with a start that is not an integer literal, such as `a` or `0.5`, or with
+  a type other than `number` on `i`. Tolean also refuses one whose body
   assigns `i` or changes something that the bound reads, because JS reads
   the bound again before each run of the body and the output reads it once.
   A file with a counted `for` gets no certificate yet. A certificate states
   that the interpreter gives a value for every input, and it gives none when
-  the start is not a safe integer. `program_sound` covers the loop.
+  `i` would pass `Number.MAX_SAFE_INTEGER`. `program_sound` covers the loop.
 - An array declared with `let` and the type `Array<T>`. An array that the
   function pushes to must be a `const`; for a value, use `ReadonlyArray<T>`.
   An empty `[]` needs a type from its context, and the elements of a literal

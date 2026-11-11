@@ -257,11 +257,11 @@ variables and in maps.
   claim about a recursive function could take the fuel as an argument, and
   follow by induction on the parameter that gets smaller.
 - How should a certificate cover a counted `for` loop? The interpreter gives
-  no value when the start is not a safe integer, or when the counter would
-  pass `Number.MAX_SAFE_INTEGER`, so the claim that it gives a value for
-  every input does not hold. The claim could take the hypothesis that the
-  interpreter gives a value, or the certifier could add one for each loop
-  whose bounds the parameters give.
+  no value when the counter would pass `Number.MAX_SAFE_INTEGER`, as it would
+  for a bound of `Infinity`, so the claim that it gives a value for every
+  input does not hold. The claim could take the hypothesis that the
+  interpreter gives a value, or that the bound is at most
+  `Number.MAX_SAFE_INTEGER`.
 - How should a type parameter with a constraint translate? One option is a
   type class that the translator writes for each constraint, with one
   method per field that the constraint names. Another is to pass the

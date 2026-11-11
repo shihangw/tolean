@@ -11,7 +11,7 @@ def sumBelow {N : Type} [JSNumber N] (n : N) : N :=
       (fun (total : N) (i : N) =>
         let total := (JSNumber.add total i)
         total)
-      total (JSNumber.countUp ((JSNumber.ofSafeInt (N := N) (0 : Int))) n)
+      total (JSNumber.countUp (0 : Int) n)
   total
 
 def sumAt {N : Type} [JSNumber N] (xs : List Int) : Int :=
@@ -21,10 +21,10 @@ def sumAt {N : Type} [JSNumber N] (xs : List Int) : Int :=
       (fun (total : Int) (i : N) =>
         let total := (total + (Option.getD ((JSNumber.elementAt? xs i)) ((0 : Int))))
         total)
-      total (JSNumber.countUp ((JSNumber.ofSafeInt (N := N) (0 : Int))) ((JSNumber.ofSafeInt (N := N) ((List.length xs : Nat) : Int))))
+      total (JSNumber.countUp (0 : Int) ((JSNumber.ofSafeInt (N := N) ((List.length xs : Nat) : Int))))
   total
 
-def sumExcept {N : Type} [JSNumber N] (lo : N) (hi : N) (skip : N) : N :=
+def sumExcept {N : Type} [JSNumber N] (hi : N) (skip : N) : N :=
   let total := (JSNumber.ofSafeInt (N := N) (0 : Int))
   let total :=
     List.foldl
@@ -34,11 +34,11 @@ def sumExcept {N : Type} [JSNumber N] (lo : N) (hi : N) (skip : N) : N :=
         else
           let total := (JSNumber.add total i)
           total)
-      total (JSNumber.countUp lo hi)
+      total (JSNumber.countUp (-2 : Int) hi)
   total
 
 def firstNegative {N : Type} [JSNumber N] (xs : List N) : N :=
-  match Id.run (forIn (JSNumber.countUp ((JSNumber.ofSafeInt (N := N) (0 : Int))) ((JSNumber.ofSafeInt (N := N) ((List.length xs : Nat) : Int)))) none
+  match Id.run (forIn (JSNumber.countUp (0 : Int) ((JSNumber.ofSafeInt (N := N) ((List.length xs : Nat) : Int)))) none
       (fun (i : N) (_ : Option N) =>
         if (JSNumber.lt ((Option.getD ((JSNumber.elementAt? xs i)) ((JSNumber.ofSafeInt (N := N) (0 : Int))))) ((JSNumber.ofSafeInt (N := N) (0 : Int)))) then
           ForInStep.done (some i)
@@ -51,7 +51,7 @@ def firstNegative {N : Type} [JSNumber N] (xs : List N) : N :=
 def prefixSum {N : Type} [JSNumber N] (xs : List Int) (limit : Int) : Int :=
   let total := (0 : Int)
   let total :=
-    Id.run (forIn (JSNumber.countUp ((JSNumber.ofSafeInt (N := N) (0 : Int))) ((JSNumber.ofSafeInt (N := N) ((List.length xs : Nat) : Int)))) total
+    Id.run (forIn (JSNumber.countUp (0 : Int) ((JSNumber.ofSafeInt (N := N) ((List.length xs : Nat) : Int)))) total
       (fun (i : N) (total : Int) =>
         let x := (Option.getD ((JSNumber.elementAt? xs i)) ((0 : Int)))
         if (total + x) > limit then

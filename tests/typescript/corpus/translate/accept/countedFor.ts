@@ -1,5 +1,6 @@
-// `for (let i = a; i < b; i++)` runs over `JSNumber.countUp a b`: `a`, then
-// each integer after it that is less than `b`. The update may also be `++i`
+// `for (let i = k; i < b; i++)`, where `k` is an integer literal, runs over
+// `JSNumber.countUp k b`: `k`, then each integer after it that is less than
+// `b`. The update may also be `++i`
 // or `i += 1`, and the body may `continue`, `break` or `return`, as in a
 // `for … of` loop.
 export function sumBelow(n: number): number {
@@ -18,9 +19,9 @@ export function sumAt(xs: ReadonlyArray<bigint>): bigint {
   return total;
 }
 
-export function sumExcept(lo: number, hi: number, skip: number): number {
+export function sumExcept(hi: number, skip: number): number {
   let total = 0;
-  for (let i = lo; i < hi; i += 1) {
+  for (let i = -2; i < hi; i += 1) {
     if (i === skip) continue;
     total = total + i;
   }

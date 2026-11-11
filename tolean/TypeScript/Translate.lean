@@ -2567,9 +2567,10 @@ def LoopHead.stmt (s : Span) (body : Stmt) : LoopHead → Stmt
 def countedReason : String :=
   "a counted loop must be 'for (let i = a; i < b; i++)', with '++i' or 'i += 1' as the update"
 
-/-- What `for (let i = a; i < b; i++)` visits: the name `i`, the type of its
-values and the list of them in the output, `JSNumber.countUp a b`. That list
-is `a`, then each integer after it that is less than `b`. -/
+/-- What `for (let i = k; i < b; i++)` visits: the name `i`, the type of its
+values and the list of them in the output, `JSNumber.countUp k b`. That list
+is `k`, then each integer after it that is less than `b`. The start `k` must
+be an integer literal, which the interpreter reads as the translation does. -/
 def countedHead (env : Env) (s : Span) (body : Stmt) (init : Option VarDecl) (test update : Option Expr) :
     TM (String × Ty × IR.Expr) :=
   match init, test, update with
@@ -2578,13 +2579,13 @@ def countedHead (env : Env) (s : Span) (body : Stmt) (init : Option VarDecl) (te
     unless type.all (· matches .keyword _ "number") do reject s "the variable of a counted loop must be a number"
     -- JS reads the bound again before each run of the body, and the output
     -- reads it once.
-    if Stmt.countedChanges name start bound body then
+    if Stmt.countedChanges name bound body then
       reject s "the body of a counted loop may not assign its variable or change what its bound reads"
-    let a ← translateExpr (← fuelLimit) env (some .number) start
-    unless a.type == .number do reject start.span "the start of a counted loop must be a number"
+    let some k := Eval.countStart? start
+      | reject start.span "the start of a counted loop must be an integer literal, such as 0"
     let b ← translateExpr (← fuelLimit) env (some .number) bound
     unless b.type == .number do reject bound.span "the bound of a counted loop must be a number"
-    return (name, .number, .ext .countUp [a.value, b.value])
+    return (name, .number, .ext (.countUp k) [b.value])
   | _, _, _ => reject s countedReason
 
 /-- What the loop with the head `h` visits: the name of its variable, the type
