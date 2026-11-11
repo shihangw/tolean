@@ -28,10 +28,10 @@ stays refused, even when the code that uses it is pure.
    that the spec leaves to the engine, the locale or the time zone stays
    refused.
 2. **The translation sees every change to state.** The translation is a
-   shallow embedding, so a Lean value cannot change behind a name. A `Map`, a
-   `Set`, a `Date` and a class instance are references in JavaScript, so two
-   names can point to one object. Each of them gets the ownership rule that
-   arrays have now: only the function that created the object may change it,
+   shallow embedding, so a Lean value cannot change behind a name. A `Date`
+   and a class instance are references in JavaScript, so two names can point
+   to one object. Each of them gets the ownership rule that arrays, maps and
+   sets have now: only the function that created the object may change it,
    and nothing else may hold it while it changes.
 3. **The proof of the translator still covers it.** Each construct extends
    the Tolean IR, its evaluator and the interpreter, so `program_sound` holds
@@ -121,9 +121,7 @@ precondition of each claim.
 ECMA-262 does not define `Error.prototype.stack`, so a read of `stack` stays
 refused. A claim about a function that can throw says what holds when the
 function returns normally. A separate claim can show that it does not throw
-when its inputs meet a precondition. Tolean translates `throw new Error(m)`
-where it ends the function, and a call that can throw as the whole value of a
-declaration or a `return`. The IR passes such an error on with `Body.bind`.
+when its inputs meet a precondition.
 
 ### Strings
 
@@ -222,17 +220,19 @@ leaves a gap.
    `undefined` that narrows inside an expression, `a?.[i]` and `f?.()`, and
    re-exports.
 3. **P1.** Type guards.
-4. **P0.** The array methods without `sort`, such as `reduce` and `slice`,
-   indexing, and object spread.
+4. **P0.** The rest of the arrays without `sort`: `entries`, array spread
+   and destructuring, `at` and `slice` with arguments that are not integer
+   literals, and `slice` with a negative start and an end that is not
+   negative.
 5. **P0.** Control flow: the counted `for` loop.
 6. **P0.** Errors: `throw` in loop bodies and in branches that change
    locals, calls that can throw inside larger expressions, and declared error
-   classes. `throw new Error(message)` is done.
+   classes.
 7. **P0.** Local functions that change variables of the enclosing function, by
    lifting them out and threading the variables through each call.
 8. **P0.** The borrow for a map that a caller passes in.
-9. **P1.** Strings: template literals, the string methods, iteration by code
-   point, and the opaque `JSON.stringify`.
+9. **P1.** Strings: template literals, the string methods and arguments in
+   the table above, iteration by code point, and the opaque `JSON.stringify`.
 10. **P1.** Sorting with consistent comparators.
 11. **P2.** Recursion: tagged unions that refer to themselves first, then
     `@decreases`, mutual recursion, and `while` loops.
