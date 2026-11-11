@@ -84,8 +84,16 @@ def VarDecl.children (d : VarDecl) : List Sexp :=
 def VarDecl.toSexp (span : Span) (exported : Bool) (d : VarDecl) : Sexp :=
   node d.kind.keyword span ([d.name] ++ flag exported "export") d.children
 
+/-- `[a, , ...r]` as `(array-pattern (name a) (hole) (rest r))`. -/
+def ArrayPattern.toSexp (p : ArrayPattern) : Sexp :=
+  .node "array-pattern" none [] (p.elems.map (fun
+    | some n => .node "name" none [n] []
+    | none => .node "hole" none [] []) ++ p.rest.toList.map fun n => .node "rest" none [n] [])
+
 partial def Stmt.toSexp : Stmt → Sexp
   | .varDecl s d => d.toSexp s false
+  | .destructure s kind p type init =>
+    node kind.keyword s [] ([p.toSexp] ++ (type.map TypeExpr.toSexp).toList ++ [init.toSexp])
   | .exprStmt s e => node "expr" s [] [e.toSexp]
   | .returnStmt s value => node "return" s [] (value.map Expr.toSexp).toList
   | .throwStmt s value => node "throw" s [] [value.toSexp]

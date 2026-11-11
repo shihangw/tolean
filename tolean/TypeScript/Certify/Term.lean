@@ -130,6 +130,9 @@ mutual
 
 def stmt : Stmt → String
   | .varDecl s d => s!"({ns}Stmt.varDecl {span s} {varDecl d})"
+  | .destructure s k p t e =>
+    let pattern := s!"\{ elems := {list (p.elems.map fun n => option (n.map str))}, rest := {option (p.rest.map str)} }"
+    s!"({ns}Stmt.destructure {span s} {varKind k} {pattern} {option (t.map typeExpr)} {expr e})"
   | .exprStmt s e => s!"({ns}Stmt.exprStmt {span s} {expr e})"
   | .returnStmt s v => s!"({ns}Stmt.returnStmt {span s} {option (v.map expr)})"
   | .ifStmt s t a b =>

@@ -203,6 +203,25 @@ def VarDecl.words (d : VarDecl) : List Word :=
   [d.kind.word, identWord d.name] ++ typeAnnotation d.type ++
     (match d.init with | some e => punctWord "=" :: e.words | none => []) ++ [punctWord ";"]
 
+/-- The words of the places of an array pattern, with a `,` between two. A
+hole is no word, so `[a, , b]` is `a`, `,`, `,`, `b`. -/
+def patternElemWords : List (Option String) → List Word
+  | [] => []
+  | [x] => (x.map identWord).toList
+  | x :: xs => (x.map identWord).toList ++ punctWord "," :: patternElemWords xs
+
+/-- `[a, , b, ...rest]`. -/
+def ArrayPattern.words (p : ArrayPattern) : List Word :=
+  punctWord "[" :: patternElemWords p.elems ++
+    (match p.rest with
+     | some r => (if p.elems.isEmpty then [] else [punctWord ","]) ++ [punctWord "...", identWord r]
+     | none => []) ++ [punctWord "]"]
+
+/-- `const [a, b]: T = init;`. -/
+def destructureWords (kind : VarKind) (p : ArrayPattern) (type : Option TypeExpr) (init : Expr) :
+    List Word :=
+  [kind.word] ++ p.words ++ typeAnnotation type ++ punctWord "=" :: init.words ++ [punctWord ";"]
+
 /-- The words of `e`, or none when it is absent. -/
 def optWords : Option Expr → List Word
   | some e => e.words
@@ -223,6 +242,7 @@ mutual
 /-- The lines of a statement, `depth` steps in. -/
 def Stmt.lines (depth : Nat) : Stmt → List Line
   | .varDecl _ d => [(depth, d.words)]
+  | .destructure _ kind p type init => [(depth, destructureWords kind p type init)]
   | .exprStmt _ e => [(depth, e.words ++ [punctWord ";"])]
   | .returnStmt _ none => [(depth, [keywordWord "return", punctWord ";"])]
   | .returnStmt _ (some e) => [(depth, keywordWord "return" :: e.words ++ [punctWord ";"])]
@@ -411,6 +431,7 @@ mutual
 
 def Stmt.erase : Stmt → Stmt
   | .varDecl _ d => .varDecl noSpan d.erase
+  | .destructure _ kind p type init => .destructure noSpan kind p (type.map TypeExpr.erase) init.erase
   | .exprStmt _ e => .exprStmt noSpan e.erase
   | .returnStmt _ v => .returnStmt noSpan (v.map Expr.erase)
   | .ifStmt _ test t e => .ifStmt noSpan test.erase t.erase (Stmt.eraseOpt e)
