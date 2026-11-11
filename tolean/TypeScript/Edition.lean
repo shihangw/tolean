@@ -45,6 +45,8 @@ def Edition.default : Edition := .es2024
 inductive Feature where
   /-- `**` and `**=`: `ExponentiationExpression`. -/
   | exponent
+  /-- `{ ...e }`: `PropertyDefinition : ... AssignmentExpression`. -/
+  | objectSpread
   /-- bigint literals, the `bigint` type, and its `+ - *` and comparisons:
   the `BigInt` type. -/
   | bigint
@@ -59,25 +61,36 @@ inductive Feature where
   | logicalAssignment
   /-- `1_000`: `NumericLiteralSeparator`. -/
   | numericSeparators
+  /-- `xs.includes(v)`, which compares by SameValueZero:
+  `Array.prototype.includes`. -/
+  | arrayIncludes
+  /-- `xs.at(k)`, which counts a negative `k` from the end:
+  `Array.prototype.at`. -/
+  | arrayAt
   /-- `xs.findLast(x => p)`, which looks from the end:
   `Array.prototype.findLast`. -/
   | arrayFindLast
 deriving BEq, Repr, Inhabited
 
 def Feature.since : Feature → Edition
-  | .exponent => .es2016
+  | .exponent | .arrayIncludes => .es2016
+  | .objectSpread => .es2018
   | .bigint | .bigintDivision | .nullishCoalescing | .optionalChaining => .es2020
   | .logicalAssignment | .numericSeparators => .es2021
+  | .arrayAt => .es2022
   | .arrayFindLast => .es2023
 
 def Feature.describe : Feature → String
   | .exponent => "'**'"
+  | .objectSpread => "object spread '...'"
   | .bigint => "bigint"
   | .bigintDivision => "bigint '/' and '%'"
   | .nullishCoalescing => "'??'"
   | .optionalChaining => "'?.'"
   | .logicalAssignment => "'&&=', '||=' and '??='"
   | .numericSeparators => "numeric separators"
+  | .arrayIncludes => "Array.prototype.includes"
+  | .arrayAt => "Array.prototype.at"
   | .arrayFindLast => "Array.prototype.findLast"
 
 def Edition.supports (target : Edition) (f : Feature) : Bool := f.since.year ≤ target.year

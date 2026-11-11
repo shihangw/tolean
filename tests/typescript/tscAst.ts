@@ -818,6 +818,9 @@ class Printer {
       }
       return this.node('shorthand', p, [this.name(p.name)], []);
     }
+    if (ts.isSpreadAssignment(p)) {
+      return this.node('spread', p, [], [this.expr(p.expression)]);
+    }
     if (!ts.isPropertyAssignment(p)) {
       refuse(p, 'unsupported property');
     }
