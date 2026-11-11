@@ -242,6 +242,8 @@ mutual
 
 def Stmt.beq : Stmt → Stmt → Bool
   | .varDecl a0 a1, .varDecl b0 b1 => decide (a0 = b0) && VarDecl.beq a1 b1
+  | .destructure a0 a1 a2 a3 a4, .destructure b0 b1 b2 b3 b4 =>
+    decide (a0 = b0) && decide (a1 = b1) && decide (a2 = b2) && TypeExpr.beqOpt a3 b3 && Expr.beq a4 b4
   | .exprStmt a0 a1, .exprStmt b0 b1 => decide (a0 = b0) && Expr.beq a1 b1
   | .returnStmt a0 a1, .returnStmt b0 b1 => decide (a0 = b0) && Expr.beqOpt a1 b1
   | .ifStmt a0 a1 a2 a3, .ifStmt b0 b1 b2 b3 => decide (a0 = b0) && Expr.beq a1 b1 && Stmt.beq a2 b2 && Stmt.beqOpt a3 b3
@@ -278,6 +280,8 @@ mutual
 theorem Stmt.beq_iff : (a b : Stmt) → Stmt.beq a b = true ↔ a = b
   | .varDecl a0 a1, b => by
     cases b <;> simp [and_assoc, Stmt.beq, VarDecl.beq_iff a1]
+  | .destructure a0 a1 a2 a3 a4, b => by
+    cases b <;> simp [and_assoc, Stmt.beq, TypeExpr.beqOpt_iff a3, Expr.beq_iff a4]
   | .exprStmt a0 a1, b => by
     cases b <;> simp [and_assoc, Stmt.beq, Expr.beq_iff a1]
   | .returnStmt a0 a1, b => by

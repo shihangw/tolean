@@ -296,10 +296,50 @@ theorem VarDecl.line (d : VarDecl) : LineOK d.words := by
   · exact LineOK.cons (by simp [punctWord]) (Expr.fine _).line
   · exact LineOK.nil
 
+/-- Words that are none of them empty make a line. -/
+theorem LineOK.ofWords : ∀ ws : List Word, (∀ w ∈ ws, w ≠ []) → LineOK ws
+  | [], _ => LineOK.nil
+  | w :: ws, h => LineOK.cons (h w (by simp)) (LineOK.ofWords ws (fun x hx => h x (by simp [hx])))
+
+theorem patternElemWords_ne : ∀ xs : List (Option String), ∀ w ∈ patternElemWords xs, w ≠ []
+  | [], _, hw => by simp [patternElemWords] at hw
+  | [x], w, hw => by cases x <;> simp_all [patternElemWords, identWord]
+  | x :: y :: ys, w, hw => by
+    simp only [patternElemWords, List.mem_append, List.mem_cons] at hw
+    rcases hw with hw | rfl | hw
+    · cases x <;> simp_all [identWord]
+    · simp [punctWord]
+    · exact patternElemWords_ne (y :: ys) w hw
+
+theorem ArrayPattern.line (p : ArrayPattern) : LineOK p.words := by
+  have hm : ∀ w ∈ (match p.rest with
+      | some r => (if p.elems.isEmpty then [] else [punctWord ","]) ++ [punctWord "...", identWord r]
+      | none => []), w ≠ [] := by
+    split
+    · intro w hw
+      simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false] at hw
+      rcases hw with hw | rfl | rfl
+      · split at hw <;> simp_all [punctWord]
+      · simp [punctWord]
+      · simp [identWord]
+    · simp
+  refine LineOK.ofWords _ fun w hw => ?_
+  simp only [ArrayPattern.words, List.mem_cons, List.mem_append, List.not_mem_nil, or_false] at hw
+  rcases hw with ((rfl | hw) | hw) | rfl
+  · simp [punctWord]
+  · exact patternElemWords_ne _ w hw
+  · exact hm w hw
+  · simp [punctWord]
+
 mutual
 
 theorem Stmt.lineOK : ∀ (st : Stmt) (d : Nat), ∀ l ∈ st.lines d, LineOK l.2
   | .varDecl _ v, d, l, hl => by simp [Stmt.lines] at hl; subst hl; exact v.line
+  | .destructure _ k p ty e, d, l, hl => by
+    simp [Stmt.lines] at hl; subst hl
+    simp only [destructureWords]
+    exact ((((LineOK.word k.word_ne).append p.line).append (typeAnnotation_line ty)).append
+      (LineOK.cons (by simp [punctWord]) (Expr.fine e).line)).append (LineOK.word (by simp [punctWord]))
   | .exprStmt _ e, d, l, hl => by
     simp [Stmt.lines] at hl; subst hl
     exact (Expr.fine e).line.append (LineOK.word (w := punctWord ";") (by simp [punctWord]))

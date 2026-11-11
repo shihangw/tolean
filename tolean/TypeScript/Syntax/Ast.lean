@@ -232,8 +232,22 @@ structure VarDecl where
   type : Option TypeExpr
   init : Option Expr
 
+/-- The names of an array destructuring, `[a, , b, ...rest]`: one entry for
+each place, none for a hole, and the name that takes the rest. -/
+structure ArrayPattern where
+  elems : List (Option String)
+  rest : Option String
+deriving DecidableEq
+
+/-- The names that the pattern declares, in order. -/
+def ArrayPattern.names (p : ArrayPattern) : List String :=
+  p.elems.filterMap id ++ p.rest.toList
+
 inductive Stmt where
   | varDecl (span : Span) (decl : VarDecl)
+  /-- `const [a, , b, ...rest]: T = init;`, an array destructuring
+  (ECMA-262 §14.3.3), with an optional type. -/
+  | destructure (span : Span) (kind : VarKind) (pattern : ArrayPattern) (type : Option TypeExpr) (init : Expr)
   | exprStmt (span : Span) (expr : Expr)
   | returnStmt (span : Span) (value : Option Expr)
   | ifStmt (span : Span) (test : Expr) (thenBranch : Stmt) (elseBranch : Option Stmt)
@@ -297,6 +311,7 @@ mutual
 
 /-- `s` assigns the name `n` somewhere inside it. -/
 def Stmt.assigns (n : String) : Stmt → Bool
+  | .destructure _ _ _ _ e => e.assigns n
   | .varDecl _ d => match d.init with
     | some e => e.assigns n
     | none => false
@@ -371,6 +386,7 @@ mutual
 /-- `s` changes the array, map or set that the name `n` holds somewhere
 inside it, as `Expr.mutates` says. -/
 def Stmt.mutates (n : String) : Stmt → Bool
+  | .destructure _ _ _ _ e => e.mutates n
   | .varDecl _ d => match d.init with
     | some e => e.mutates n
     | none => false
@@ -553,6 +569,9 @@ new collection that only `n` holds (`VarDecl.owns`). A loop variable never
 does: it holds an element of something else. -/
 def Stmt.binds (n : String) : Stmt → List Bool
   | .varDecl _ d => if d.name == n then [d.owns] else []
+  -- A destructured name holds an element of something else, or a copy of
+  -- the rest that nothing owns.
+  | .destructure _ _ p _ _ => if p.names.contains n then [false] else []
   | .forOfStmt _ _ x _ b => (if x == n then [false] else []) ++ b.binds n
   | .forStmt _ init _ _ b =>
     (match init with
@@ -580,6 +599,7 @@ mutual
 
 /-- The names whose array, map or set `s` changes, as `Expr.changed` says. -/
 def Stmt.changed : Stmt → List String
+  | .destructure _ _ _ _ e => e.changed
   | .varDecl _ d => match d.init with
     | some e => e.changed
     | none => []
@@ -622,6 +642,7 @@ mutual
 over. A `return` ends the function, so nothing changes the object after
 that. A loop reads the collection without keeping it. -/
 def Stmt.leaks (n : String) : Stmt → Bool
+  | .destructure _ _ _ _ e => e.leaks n
   | .varDecl _ d => match d.init with
     | some e => e.leaks n
     | none => false
@@ -674,6 +695,7 @@ value for such a block, and the translator refuses it. -/
 def Stmt.constAssignedIn (s : Stmt) (rest : List Stmt) : Bool :=
   match s with
   | .varDecl _ d => d.kind == .const && Stmt.assignsList d.name rest
+  | .destructure _ kind p _ _ => kind == .const && p.names.any (Stmt.assignsList · rest)
   | _ => false
 
 /-- Only a declaration can be a `const` that a later statement assigns. -/
@@ -772,7 +794,7 @@ def Expr.span : Expr → Span
   | .arrow s _ _ _ | .asConst s _ | .satisfies s _ _ | .new s _ _ _ | .spread s _ => s
 
 def Stmt.span : Stmt → Span
-  | .varDecl s _ | .exprStmt s _ | .returnStmt s _ | .ifStmt s _ _ _ | .forOfStmt s _ _ _ _
+  | .varDecl s _ | .destructure s _ _ _ _ | .exprStmt s _ | .returnStmt s _ | .ifStmt s _ _ _ | .forOfStmt s _ _ _ _
   | .forStmt s _ _ _ _ | .whileStmt s _ _ | .block s _ | .breakStmt s | .continueStmt s | .empty s | .switchStmt s _ _
   | .throwStmt s _ => s
 
