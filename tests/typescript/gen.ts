@@ -578,7 +578,7 @@ export class Gen {
         vars.push({ name, ty: { k: 'array', of: t }, mutable: false, owned: false });
       } else if (roll < 0.89 && depth > 0 && this.chance(0.5)) {
         // A set that the function owns, with adds and deletes, read as a map is.
-        const elem = this.pick([BIGINT, STRING, BOOLEAN]);
+        const elem = this.pick([NUMBER, BIGINT, STRING, BOOLEAN]);
         const name = this.fresh('s');
         // Sometimes with values to start with, which may repeat.
         const start = this.chance(0.3) ? `[${this.expr(elem, vars, 1)}, ${this.expr(elem, vars, 1)}]` : '';
@@ -604,7 +604,7 @@ export class Gen {
       } else if (roll < 0.89 && depth > 0) {
         // A map that the function owns, with sets and deletes. Code may read
         // it only through get, has and size, so the reads go into locals.
-        const key = this.pick([BIGINT, STRING, BOOLEAN]);
+        const key = this.pick([NUMBER, BIGINT, STRING, BOOLEAN]);
         const value = this.pick([BIGINT, NUMBER, STRING]);
         const name = this.fresh('m');
         const start = this.chance(0.3)

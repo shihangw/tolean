@@ -419,10 +419,10 @@ the file, the line and the reason. It never approximates.
 | `[a, b]` where the context expects a tuple, such as a return value | `(a, b)`, with each element translated where its own type is expected |
 | `t[0]`, an element of a tuple at an index that is a number literal | `t.1`, and `t.2.1` or `t.2.2` for the second or the last of three, as Lean nests the product to the right |
 | `const xs: Array<T> = [...]`, then `xs.push(e)`; `xs` read only in the `return` | `let xs := xs ++ [e]` |
-| `Map<K, V>` and `ReadonlyMap<K, V>`, where `K` is `bigint`, `string`, `boolean` or a literal union of strings | `JSMap K V` (`tolean/TypeScript/Map.lean`): the list of entries, in the order that each key was first set, as ECMA-262 keeps them (§24.1). A key is found with `=`, which is SameValueZero on these key types. |
+| `Map<K, V>` and `ReadonlyMap<K, V>`, where `K` is `number`, `bigint`, `string`, `boolean` or a literal union of strings | `JSMap K V` (`tolean/TypeScript/Map.lean`): the list of entries, in the order that each key was first set, as ECMA-262 keeps them (§24.1). A key is found with SameValueZero, which `JSKey.same` gives. On every key type but `number` it is `=`. On `number` it is `JSNumber.sameValueZero`, so a map has at most one `NaN` key, and `0` and `-0` are the same key. A new key `-0` is stored as `0` (§24.1.3.9), so a loop over the keys never sees `-0`. |
 | `const m = new Map<K, V>()`, or `const m: Map<K, V> = new Map()`, then `m.set(k, v)` and `m.delete(k)` | `let m := (JSMap.empty : JSMap K V)`, then `let m := JSMap.set m k v` and `let m := JSMap.delete m k`. The function owns the map, as it owns an array that it pushes to. |
 | `m.get(k)`, `m.has(k)` and `m.size` | `JSMap.get? m k`, `JSMap.has m k` and `JSNumber.ofSafeInt (JSMap.size m)`. `get` gives `undefined` for a key that the map does not have, so its value has the type of an optional field: `m.get(k) ?? d` is `Option.getD (JSMap.get? m k) d`. |
-| `Set<T>` and `ReadonlySet<T>`, where `T` is a type that a map key may have | `JSSet T` (`tolean/TypeScript/Map.lean`): the list of elements, in the order that each was first added (§24.2) |
+| `Set<T>` and `ReadonlySet<T>`, where `T` is a type that a map key may have | `JSSet T` (`tolean/TypeScript/Map.lean`): the list of elements, in the order that each was first added (§24.2). Elements compare as map keys do, and `add(-0)` stores `0` (§24.2.4.1). |
 | `const s = new Set<T>()`, then `s.add(x)` and `s.delete(x)`; `s.has(x)` and `s.size` | `JSSet.empty`, `JSSet.add`, `JSSet.delete`, `JSSet.has` and `JSNumber.ofSafeInt (JSSet.size s)`, as for a map |
 | `new Map(items)` and `new Set(items)`, where `items` is an array, such as `[['a', 1n]]` or `['a']`, a map or a set | `JSMap.ofList` and `JSSet.ofList` of the list that a loop over `items` visits. The constructor sets each `[key, value]`, or adds each value, in order (§24.1.1.2), so a later entry for a key replaces an earlier one, and `new Map(m)` copies `m`. |
 | `for (const x of s)` over a set, and `for (const e of m)` over a map | `List.foldl` over `JSSet.elems s`, or over `JSMap.entries m`, as over an array. A map gives each entry as the tuple `[key, value]`, as JS does, so the body reads `e[0]` and `e[1]`. The loop may run over an owned map or set, if its body does not change it. |
@@ -544,8 +544,8 @@ Tolean rejects these, among others:
   is not negative, such as `xs.slice(-2, 3)`.
 - `reduce` without an initial value, which throws on an empty array, and a
   callback of `reduce` whose value has another type than the initial value.
-- A map key or a set element of type `number`, which can be `NaN` or `-0`,
-  and one of an interface type, which a map or a set compares by identity.
+- A map key or a set element of an interface type, which a map or a set
+  compares by identity.
   Tolean also refuses `set`, `add` and `delete` on a map or a set that the
   function did not make with `const m = new Map()` or `const s = new Set()`,
   and a read of such an owned map or set anywhere except through `get`, `has`

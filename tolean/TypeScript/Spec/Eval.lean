@@ -326,13 +326,24 @@ def elementAt (items : List (Val N)) : Option Int → Val N
   | none => .undefined
 
 /-- SameValueZero (ECMA-262 §7.2.11), which a `Map` uses to compare keys, on
-the keys of the subset: bigints, booleans and strings. On these it is
+the keys of the subset: numbers, bigints, booleans and strings. Two numbers
+are the same when they are `===` or both `NaN`, so a map has at most one `NaN`
+key, and `+0` is the same key as `-0`. On the other keys SameValueZero is
 `IsStrictlyEqual`. A key of another type leaves the subset. -/
 def sameKey : Val N → Val N → Option Bool
+  | .num a, .num b => some (JSNumber.sameValueZero a b)
   | .int a, .int b => some (decide (a = b))
   | .bool a, .bool b => some (decide (a = b))
   | .str a, .str b => some (decide (a = b))
   | _, _ => none
+
+/-- The key that a map or a set stores when it adds `k`: `+0` when `k` is
+`-0`, and `k` otherwise (`Map.prototype.set` and `Set.prototype.add`, ECMA-262
+§24.1.3.9 and §24.2.4.1). A loop over the keys therefore never sees `-0`.
+A number is `+0` or `-0` exactly when it is `=== 0`. -/
+def storedKey : Val N → Val N
+  | .num a => .num (if JSNumber.eq a (JSNumber.ofSafeInt 0) then JSNumber.ofSafeInt 0 else a)
+  | k => k
 
 /-- The value of the key `k` in the entries of a map, or `none` when no entry
 has the key (`Map.prototype.get`, ECMA-262 §24.1.3.6). -/
@@ -342,9 +353,10 @@ def mapFind : List (Val N × Val N) → Val N → Option (Option (Val N))
 
 /-- The entries after `Map.prototype.set` (ECMA-262 §24.1.3.9): the entry of
 `k` gets the value `v` in its place, or a new entry goes last when no entry
-has the key. -/
+has the key. The entry keeps the key that it has, and a new entry stores
+`storedKey k`. -/
 def mapSet : List (Val N × Val N) → Val N → Val N → Option (List (Val N × Val N))
-  | [], k, v => some [(k, v)]
+  | [], k, v => some [(storedKey k, v)]
   | (k', v') :: rest, k, v => do
     if ← sameKey k' k then return (k', v) :: rest else return (k', v') :: (← mapSet rest k v)
 
@@ -361,10 +373,11 @@ def setHas : List (Val N) → Val N → Option Bool
   | [], _ => some false
   | y :: rest, x => do if ← sameKey y x then return true else setHas rest x
 
-/-- The elements after `Set.prototype.add` (ECMA-262 §24.2.4.1): `x` goes last
-when the set does not have it, and the set stays as it is when it does. -/
+/-- The elements after `Set.prototype.add` (ECMA-262 §24.2.4.1): `storedKey x`
+goes last when the set does not have `x`, and the set stays as it is when it
+does. -/
 def setAdd (elems : List (Val N)) (x : Val N) : Option (List (Val N)) := do
-  if ← setHas elems x then return elems else return elems ++ [x]
+  if ← setHas elems x then return elems else return elems ++ [storedKey x]
 
 /-- The elements after `Set.prototype.delete` (ECMA-262 §24.2.4.4), which
 removes `x`. The other elements keep their order. -/

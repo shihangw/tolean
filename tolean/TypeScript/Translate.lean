@@ -57,7 +57,7 @@ inductive Ty where
   /-- A type parameter of a generic function, such as `T` in
   `function first<T>(xs: T[]): T | null`. -/
   | param (name : String)
-  /-- `Map<K, V>` or `ReadonlyMap<K, V>`, where `K` is a bigint, a string, a
+  /-- `Map<K, V>` or `ReadonlyMap<K, V>`, where `K` is a number, a bigint, a string, a
   boolean or a literal union of strings. -/
   | map (key value : Ty)
   /-- `Set<T>` or `ReadonlySet<T>`, where `T` is a type that a map key may
@@ -812,14 +812,14 @@ def typeArgsMessage (name : String) : Nat → String
   | 1 => s!"'{name}' takes 1 type argument"
   | n => s!"'{name}' takes {n} type arguments"
 
-/-- The key type of a map. SameValueZero, which a `Map` compares keys with,
-is Lean's equality on bigints, booleans and strings. A `number` key can be
-`NaN` or `-0`, which SameValueZero treats apart from `=`, and an object key
-compares by identity. -/
+/-- The key type of a map. A `Map` compares keys with SameValueZero, which the
+output's `JSKey` gives: Lean's equality on bigints, booleans and strings, and
+`JSNumber.sameValueZero` on numbers. An object key compares by identity, which
+the output cannot. -/
 def mapKey (s : Span) (k : Ty) (what : String := "a map key") : TM Ty := do
   match k with
-  | .bigint | .string | .boolean | .enum _ => return k
-  | _ => reject s s!"{what} must be a bigint, a string, a boolean or a literal union of strings"
+  | .number | .bigint | .string | .boolean | .enum _ => return k
+  | _ => reject s s!"{what} must be a number, a bigint, a string, a boolean or a literal union of strings"
 
 mutual
 

@@ -669,6 +669,8 @@ def extras : List Group := [
     ``Proof.evalFind_find, ``Proof.evalFind_true, ``Proof.evalFind_false, ``Proof.find?_isSome,
     ``Proof.find?_not_isNone, ``Proof.getD_map_undefined, ``Proof.evalFindIdx_from,
     ``Proof.evalFindIdx_findIdx, ``Proof.evalReduce_foldl, ``Proof.evalReduce_foldl_val]⟩,
+  ⟨"Certificates: the keys of a map or a set in the output", [``JSKey.same_ofDecidableEq,
+    ``JSKey.stored_ofDecidableEq, ``JSKey.same_ofJSNumber, ``JSKey.stored_ofJSNumber]⟩,
   ⟨"Certificates: includes and membership", [``Proof.includesVal_map, ``Proof.includesVal_enc,
     ``Proof.includesVal_int, ``Proof.includesVal_bool, ``Proof.includesVal_str,
     ``Proof.includesVal_num]⟩,

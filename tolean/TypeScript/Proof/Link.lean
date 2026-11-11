@@ -1,6 +1,7 @@
 import Lean
 import tolean.TypeScript.Proof.Module
 import tolean.TypeScript.IR.Equality
+import tolean.TypeScript.Map
 import Lean.Elab.Tactic.Basic
 import Lean.Meta.AppBuilder
 import Lean.Meta.Tactic.Assert
@@ -544,7 +545,13 @@ macro_rules
         -- So must the map or set that the read looks in, when `new Map(items)`
         -- or `new Set(items)` makes it.
         Eval.mapFind, Eval.setHas, Eval.mapOfItems, Eval.setOfItems, Eval.mapSet, Eval.setAdd,
-        Eval.sameKey,
+        Eval.sameKey, Eval.storedKey,
+        -- The output's side of such a read, in the model of `Map.lean`. On a
+        -- key with decidable equality it reduces without these, but not on a
+        -- `number` key, which stays abstract.
+        JSMap.has, JSMap.get?, JSMap.ofList, JSMap.set, JSMap.empty,
+        JSSet.has, JSSet.ofList, JSSet.add, JSSet.empty,
+        JSKey.same_ofDecidableEq, JSKey.stored_ofDecidableEq, JSKey.same_ofJSNumber, JSKey.stored_ofJSNumber,
         -Bool.if_true_left, -Bool.if_false_right, -Bool.if_false_left, -Bool.if_true_right, $defs,*]
       all_goals repeat' (split_find <;> simp [-List.map_map, -List.map_tail, ← List.map_drop, ← List.map_take, ← List.map_reverse, ← List.map_append, $defs,*])
       all_goals repeat' (split_undef <;> simp [-List.map_map, -List.map_tail, ← List.map_drop, ← List.map_take, ← List.map_reverse, ← List.map_append, $defs,*])
