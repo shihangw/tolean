@@ -119,6 +119,9 @@ inductive ExprExt where
   /-- `(JSNumber.elementAt? xs i)`, on `xs` and `i`: `xs[i]` with a number
   `i`. -/
   | indexNumber
+  /-- `(JSNumber.countUp a b)`, on `a` and `b`: the values of `i` in
+  `for (let i = a; i < b; i++)`. -/
+  | countUp
   /-- `xs[k]?`, or `(List.reverse xs)[-k - 1]?` when `k` is negative, on
   `xs`: `xs.at(k)` with an integer literal `k`. -/
   | at (k : Int)
@@ -317,6 +320,7 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
     s!"({js}.ofSafeInt (N := {names.typeParam}) (({leanName names "List.length"} {argument xs} : {leanName names "Nat"}) : {int}))"
   | .indexLit k, [xs] => s!"{argument xs}[{k}]?"
   | .indexNumber, [xs, i] => s!"({js}.elementAt? {argument xs} {argument i})"
+  | .countUp, [a, b] => s!"({js}.countUp {argument a} {argument b})"
   | .at k, [xs] =>
     if 0 ≤ k then s!"{argument xs}[{k.toNat}]?"
     else s!"({leanName names "List.reverse"} {argument xs})[{(-k - 1).toNat}]?"

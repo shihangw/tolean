@@ -416,6 +416,12 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
   for d in decls do
     if let .function name _ _ body := d then
       if body.calls ⟨"", name⟩ then throw s!"{file}: the recursive function {name} has no certificate yet"
+  -- A theorem states that the interpreter gives a value for every input, but
+  -- it gives none for a counted loop whose start is not a safe integer.
+  if m.decls.any fun d => match d with
+      | .function _ _ _ _ _ _ body => (stmtsOf body).any (· matches .forStmt ..)
+      | _ => false then
+    throw s!"{file}: a counted loop has no certificate yet"
   let nv := names.typeParam
   -- Every theorem is about every number model.
   let generic := s!"\{{nv} : Type} [tolean.TypeScript.JSNumber {nv}]"
