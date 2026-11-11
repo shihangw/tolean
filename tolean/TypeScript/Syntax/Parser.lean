@@ -758,7 +758,11 @@ def parseDeclaration : ParseM VarDecl := do
   let keyword ← advance
   let kind := if keyword.isKeyword "const" then VarKind.const else .«let»
   let t ← peek
-  if t.isPunct "[" || t.isPunct "{" then failAt t "destructuring is not supported"
+  -- `parseStatement` reads `const [` itself, so a `[` here comes after
+  -- `export` or in the first part of a `for`.
+  if t.isPunct "[" || t.isPunct "{" then
+    failAt t (if t.isPunct "{" then "object destructuring is not supported"
+      else "array destructuring is supported only in a 'const' or 'let' statement")
   let name ← readName
   let mut type := none
   if (← peek).isPunct ":" then
@@ -778,6 +782,70 @@ def parseVarDecl : ParseM VarDecl := do
   let decl ← parseDeclaration
   endStatement
   return decl
+
+/-- One step of the loop over the places of an array pattern, after the `[`
+or after a `,`: a `,` alone is a hole, and a name takes the `,` after it. The
+loop stops before a `...`, and after a name that the `]` follows. A `]` where
+a place starts would leave the pattern empty or end it with a hole or a `,`.
+JavaScript allows such patterns, but the parser refuses them, so that the
+last place is always a name or the rest element. -/
+def placeStep (places : Array (Option String)) : ParseM (Array (Option String) × Bool) := do
+  let t ← peek
+  if t.isPunct "..." then return (places, false)
+  if t.isPunct "," then
+    discard advance
+    return (places.push none, true)
+  if t.isPunct "]" then
+    failAt t (if places.isEmpty then "an empty array pattern is not supported"
+      else "a ',' before the ']' of an array pattern is not supported")
+  if t.isPunct "[" || t.isPunct "{" then failAt t "nested destructuring is not supported"
+  let name ← readName
+  let next ← peek
+  if next.isPunct "=" then failAt next "default values are not supported"
+  if next.isPunct "]" then return (places.push (some name), false)
+  unless next.isPunct "," do unexpected next "',' or ']'"
+  discard advance
+  return (places.push (some name), true)
+
+/-- The rest element of an array pattern, `...name`, if one comes. Only the
+`]` may follow it. -/
+def readRest : ParseM (Option String) := do
+  if !(← peek).isPunct "..." then return none
+  discard advance
+  let t ← peek
+  if t.isPunct "[" || t.isPunct "{" then failAt t "nested destructuring is not supported"
+  let name ← readName
+  let next ← peek
+  if next.isPunct "=" then failAt next "default values are not supported"
+  if next.isPunct "," then failAt next "nothing may follow the rest element of an array pattern"
+  return some name
+
+/-- `: T`, if a `:` comes. -/
+def readAnnotation : ParseM (Option TypeExpr) := do
+  if !(← peek).isPunct ":" then return none
+  discard advance
+  return some (← parseType (← budget))
+
+/-- `const [a, , b, ...rest]: T = init;` from `start`, an array destructuring
+(ECMA-262 §14.3.3). Each place is a name or a hole, and the rest element
+comes last. A destructuring needs a value, and a statement declares only one
+pattern. -/
+def parseDestructure (start : Pos) : ParseM Stmt := do
+  let keyword ← advance
+  let kind := if keyword.isKeyword "const" then VarKind.const else .«let»
+  discard advance
+  let elems ← iterate (← budget) #[] placeStep
+  let rest ← readRest
+  let _ ← expectPunct "]"
+  let type ← readAnnotation
+  let t ← peek
+  unless t.isPunct "=" do failAt t "a destructuring declaration needs a value"
+  discard advance
+  let init ← parseAssign (← budget)
+  let t ← peek
+  if t.isPunct "," then failAt t "declare one variable per statement"
+  endStatement
+  return .destructure (← spanFrom start) kind { elems := elems.toList, rest } type init
 
 /-- The declaration at the start of a counted `for`. An `in` that
 `Expr.inFree` finds in its value would start a `for … in` loop, so the parser
@@ -852,9 +920,13 @@ def parseStatement (fuel : Nat) : ParseM Stmt := do
   | .punct ";" =>
     discard advance
     return .empty t.span
+  -- `let [` always starts a declaration: no expression statement starts
+  -- with it (ECMA-262 §14.5).
   | .keyword "const" | .ident "let" =>
-    let decl ← parseVarDecl
-    return .varDecl (← spanFrom start) decl
+    if (← peekAt 1).isPunct "[" then parseDestructure start
+    else
+      let decl ← parseVarDecl
+      return .varDecl (← spanFrom start) decl
   | .keyword "if" =>
     discard advance
     let _ ← expectPunct "("

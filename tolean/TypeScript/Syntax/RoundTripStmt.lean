@@ -41,8 +41,8 @@ theorem Stmt.lines_words : ∀ (st : Stmt) (d : Nat), (st.lines d).map Prod.snd 
   | .block _ body, d => by simp [Stmt.lines, Stmt.linesOf_words body (d + 1), Stmt.linesOf_words body 1]
   | .switchStmt _ _ cs, d => by
     simp [Stmt.lines, Stmt.clauseLines_words cs (d + 1), Stmt.clauseLines_words cs 1]
-  | .varDecl .., _ | .exprStmt .., _ | .returnStmt _ none, _ | .returnStmt _ (some _), _ | .breakStmt _, _
-  | .continueStmt _, _ | .empty _, _ | .throwStmt .., _ => by simp [Stmt.lines]
+  | .varDecl .., _ | .destructure .., _ | .exprStmt .., _ | .returnStmt _ none, _ | .returnStmt _ (some _), _
+  | .breakStmt _, _ | .continueStmt _, _ | .empty _, _ | .throwStmt .., _ => by simp [Stmt.lines]
 
 theorem Stmt.linesOf_words : ∀ (ss : List Stmt) (d : Nat),
     (Stmt.linesOf d ss).map Prod.snd = (Stmt.linesOf 0 ss).map Prod.snd
@@ -105,12 +105,28 @@ def Stmt.openIf : Stmt → Bool
 /-- A declaration, which JavaScript does not allow as the body of `if`, `for`
 or `while`. -/
 def Stmt.isDecl : Stmt → Bool
-  | .varDecl .. => true
+  | .varDecl .. | .destructure .. => true
   | _ => false
 
 def VarDecl.wf (T : Edition) (d : VarDecl) : Bool :=
   exprName d.name && (match d.type with | some t => t.wf | none => true) &&
     (match d.init with | some e => e.wfAt T .assign && e.afterOK [.punct ";"] | none => d.kind == .«let»)
+
+/-- The last place of the pattern is a name or the rest element, never a
+hole: the printer writes no word for a hole, so a hole at the end would print
+as a `,` before the `]`, which the parser refuses. An empty pattern has no
+last place. -/
+def ArrayPattern.endsWell (p : ArrayPattern) : Bool :=
+  match p.rest, p.elems.getLast? with
+  | some _, _ => true
+  | none, some (some _) => true
+  | none, _ => false
+
+/-- A pattern that `parseDestructure` reads: each name is one that the parser
+allows as a name, as `VarDecl.wf` requires of a declared name, and the last
+place is a name or the rest element. -/
+def ArrayPattern.wf (p : ArrayPattern) : Bool :=
+  p.elems.all (fun x => x.all exprName) && p.rest.all exprName && p.endsWell
 
 /-- An expression in `( … )` after `if`, `while`, `for … of` or `switch`. -/
 def Expr.wfParen (T : Edition) (e : Expr) : Bool := e.wfAt T .assign && e.afterOK [.punct ")"]
@@ -139,6 +155,8 @@ mutual
 `T`, in a function if `fn` holds and in a loop if `loop` holds. -/
 def Stmt.wf (T : Edition) (fn loop : Bool) : Stmt → Bool
   | .varDecl _ d => d.wf T
+  | .destructure _ _ p type init =>
+    p.wf && (match type with | some t => t.wf | none => true) && init.wfAt T .assign && init.afterOK [.punct ";"]
   | .exprStmt _ e => e.wfAt T .assign && e.afterOK [.punct ";"] && startsExprStmt e.tokens.head?
   | .returnStmt _ none => fn
   | .returnStmt _ (some e) => fn && e.wfAt T .assign && e.afterOK [.punct ";"]
@@ -181,7 +199,8 @@ def Stmt.depth : Stmt → Nat
   | .forOfStmt _ _ _ _ b | .forStmt _ _ _ _ b | .whileStmt _ _ b => b.depth + 1
   | .block _ body => Stmt.depthOf body + 1
   | .switchStmt _ _ cs => Stmt.depthClauses cs + 1
-  | .varDecl .. | .exprStmt .. | .returnStmt .. | .breakStmt _ | .continueStmt _ | .empty _ | .throwStmt .. => 0
+  | .varDecl .. | .destructure .. | .exprStmt .. | .returnStmt .. | .breakStmt _ | .continueStmt _ | .empty _
+  | .throwStmt .. => 0
 
 def Stmt.depthOf : List Stmt → Nat
   | [] => 0
@@ -739,13 +758,371 @@ theorem stmt_varDecl {T : Edition} {fn loop : Bool} (f : Nat) (sp : Span) (d : V
   obtain ⟨d', s', hp, hd', hL⟩ := parseVarDecl_reads d hw s ts rest hT hs hl h1 hn hr
   have h1' := h1
   simp only [VarDecl.words, VarKind.word_eq] at h1'
-  obtain ⟨kw, ts', rfl, hkw, _⟩ := Touching.cons_one (by simpa using h1')
-  have hs' : s.rest = kw :: (ts' ++ rest) := by simpa using hs
+  obtain ⟨kw, ts', rfl, hkw, h2⟩ := Touching.cons_one (by simpa using h1')
+  obtain ⟨nm, ts'', rfl, hnm, _⟩ := Touching.cons_one (by simpa [identWord] using h2)
+  have hs' : s.rest = kw :: nm :: (ts'' ++ rest) := by simpa using hs
+  -- A name follows the keyword, so the statement is not a destructuring.
+  have hnb : ¬ ((s.rest[1]?.getD s.eof).isPunct "[" = true) := by simp [hs', Token.isPunct, hnm]
   refine ⟨.varDecl ⟨kw.span.start, s'.lastStop⟩ d', s', ?_, by simp [Stmt.erase, hd'], hL⟩
   simp only [Parse.parseStatement]
   rw [Parse.bind_eq (Parse.peek_eq hs')]
   rcases hk : d.kind <;> rw [hk] at hkw <;> simp only [VarKind.token] at hkw <;> simp only [hkw] <;>
-    rw [Parse.bind_eq hp, Parse.bind_eq (Parse.spanFrom_eq _ _)] <;> rfl
+    rw [Parse.bind_eq (Parse.peekAt_rest _ _), if_neg hnb, Parse.bind_eq hp, Parse.bind_eq (Parse.spanFrom_eq _ _)] <;>
+    rfl
+
+/-! ### Array destructuring -/
+
+/-- A place of an array pattern and the `,` after it. A hole is no word. -/
+def placeWords (x : Option String) : List Word := (x.map identWord).toList ++ [punctWord ","]
+
+theorem patternElemWords_name (n : String) : ∀ xs : List (Option String),
+    patternElemWords (xs ++ [some n]) = (xs.map placeWords).flatten ++ [identWord n]
+  | [] => rfl
+  | [x] => by cases x <;> simp [patternElemWords, placeWords]
+  | x :: y :: ys => by
+    have ih := patternElemWords_name n (y :: ys)
+    simp only [List.cons_append] at ih ⊢
+    simp only [patternElemWords, ih, List.map_cons, List.flatten_cons, placeWords, List.append_assoc,
+      List.cons_append, List.nil_append]
+
+theorem patternElemWords_comma : ∀ xs : List (Option String), xs ≠ [] →
+    patternElemWords xs ++ [punctWord ","] = (xs.map placeWords).flatten
+  | [], h => absurd rfl h
+  | [x], _ => by simp [patternElemWords, placeWords]
+  | x :: y :: ys, _ => by
+    have ih := patternElemWords_comma (y :: ys) (by simp)
+    simp only [patternElemWords, List.map_cons, List.flatten_cons, placeWords, List.append_assoc,
+      List.cons_append, List.nil_append] at ih ⊢
+    rw [ih]
+
+
+theorem ArrayPattern.words_rest (xs : List (Option String)) (r : String) :
+    (ArrayPattern.words ⟨xs, some r⟩).tail =
+      (xs.map placeWords).flatten ++ [punctWord "...", identWord r, punctWord "]"] := by
+  cases xs with
+  | nil => simp [ArrayPattern.words, patternElemWords]
+  | cons x xs =>
+    have := patternElemWords_comma (x :: xs) (by simp)
+    simp only [ArrayPattern.words, List.isEmpty_cons, Bool.false_eq_true, ↓reduceIte] at this ⊢
+    rw [← this]; simp
+
+theorem ArrayPattern.words_name (xs : List (Option String)) (n : String) :
+    (ArrayPattern.words ⟨xs ++ [some n], none⟩).tail =
+      (xs.map placeWords).flatten ++ [identWord n, punctWord "]"] := by
+  simp [ArrayPattern.words, patternElemWords_name]
+
+theorem ArrayPattern.words_open (p : ArrayPattern) : p.words = punctWord "[" :: p.words.tail := rfl
+
+theorem ArrayPattern.shape {p : ArrayPattern} (h : p.endsWell = true) :
+    (∃ r, p.rest = some r) ∨ (p.rest = none ∧ ∃ xs n, p.elems = xs ++ [some n]) := by
+  obtain ⟨elems, rest⟩ := p
+  cases rest with
+  | some r => exact .inl ⟨r, rfl⟩
+  | none =>
+    refine .inr ⟨rfl, ?_⟩
+    cases hl : elems.getLast? with
+    | none => simp [ArrayPattern.endsWell, hl] at h
+    | some x =>
+      cases x with
+      | none => simp [ArrayPattern.endsWell, hl] at h
+      | some n =>
+        obtain ⟨xs, hxs⟩ := List.getLast?_eq_some_iff.mp hl
+        exact ⟨xs, n, hxs⟩
+
+theorem placeWords_length : ∀ xs : List (Option String), xs.length ≤ ((xs.map placeWords).flatten).flatten.length
+  | [] => by simp
+  | x :: xs => by
+    have := placeWords_length xs
+    have h1 : 1 ≤ (placeWords x).flatten.length := by cases x <;> simp [placeWords, punctWord, identWord]
+    rw [List.map_cons, List.flatten_cons, List.flatten_append, List.length_append, List.length_cons]
+    omega
+
+theorem placeStep_dots {acc : Array (Option String)} {s : ParseState} {d : Token} {r : List Token}
+    (hs : s.rest = d :: r) (hd : d.kind = .punct "...") : Parse.placeStep acc s = .ok (acc, false) s := by
+  simp only [Parse.placeStep]
+  rw [Parse.bind_eq (Parse.peek_eq hs)]
+  rw [if_pos (show d.isPunct "..." = true by simp [Token.isPunct, hd])]
+  rfl
+
+theorem placeStep_hole {acc : Array (Option String)} {s : ParseState} {c : Token} {r : List Token}
+    (hs : s.rest = c :: r) (hr : r ≠ []) (hc : c.kind = .punct ",") :
+    Parse.placeStep acc s = .ok (acc.push none, true) (past s c r) := by
+  simp only [Parse.placeStep]
+  rw [Parse.bind_eq (Parse.peek_eq hs)]
+  rw [if_neg (show ¬ (c.isPunct "..." = true) by simp [Token.isPunct, hc]), Parse.pure_bind]
+  rw [if_pos (show c.isPunct "," = true by simp [Token.isPunct, hc])]
+  rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_cons hs hr))]
+  rfl
+
+/-- The steps of `placeStep` up to the token after a name. -/
+theorem placeStep_name {acc : Array (Option String)} {s : ParseState} {x c : Token} {r : List Token} {n : String}
+    (hs : s.rest = x :: c :: r) (hx : x.kind = .ident n) (hn : n ∉ Parse.refusedNames)
+    (hc : c.kind ≠ .punct "=") :
+    Parse.placeStep acc s = (do
+      if c.isPunct "]" = true then return (acc.push (some n), false)
+      unless c.isPunct "," do Parse.unexpected c "',' or ']'"
+      discard Parse.advance
+      return (acc.push (some n), true)) (past s x (c :: r)) := by
+  simp only [Parse.placeStep]
+  rw [Parse.bind_eq (Parse.peek_eq hs)]
+  rw [if_neg (show ¬ (x.isPunct "..." = true) by simp [Token.isPunct, hx]), Parse.pure_bind]
+  rw [if_neg (show ¬ (x.isPunct "," = true) by simp [Token.isPunct, hx]), Parse.pure_bind]
+  rw [if_neg (show ¬ (x.isPunct "]" = true) by simp [Token.isPunct, hx]), Parse.pure_bind]
+  rw [Parse.ite_guard (fun h => by simp [Token.isPunct, hx] at h)]
+  rw [Parse.bind_eq (readName_ok hs hx hn), Parse.bind_eq (Parse.peek_eq (s := past s x (c :: r)) rfl)]
+  rw [Parse.ite_guard (fun h => by simp [Token.isPunct, hc] at h)]
+
+theorem placeStep_comma {acc : Array (Option String)} {s : ParseState} {x c : Token} {r : List Token} {n : String}
+    (hs : s.rest = x :: c :: r) (hx : x.kind = .ident n) (hn : n ∉ Parse.refusedNames)
+    (hc : c.kind = .punct ",") (hr : r ≠ []) :
+    Parse.placeStep acc s = .ok (acc.push (some n), true) (past (past s x (c :: r)) c r) := by
+  rw [placeStep_name hs hx hn (by rw [hc]; exact punct_ne (by decide))]
+  rw [if_neg (show ¬ (c.isPunct "]" = true) by simp [Token.isPunct, hc]), Parse.pure_bind,
+    if_pos (show c.isPunct "," = true by simp [Token.isPunct, hc])]
+  simp only [Parse.pure_bind]
+  rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_cons (s := past s x (c :: r)) rfl hr))]
+  rfl
+
+theorem placeStep_close {acc : Array (Option String)} {s : ParseState} {x c : Token} {r : List Token} {n : String}
+    (hs : s.rest = x :: c :: r) (hx : x.kind = .ident n) (hn : n ∉ Parse.refusedNames)
+    (hc : c.kind = .punct "]") :
+    Parse.placeStep acc s = .ok (acc.push (some n), false) (past s x (c :: r)) := by
+  rw [placeStep_name hs hx hn (by rw [hc]; exact punct_ne (by decide))]
+  rw [if_pos (show c.isPunct "]" = true by simp [Token.isPunct, hc])]
+  rfl
+
+/-- The loop of `parseDestructure` reads the places `xs`, each with the `,`
+after it, one step for each place. -/
+theorem place_loop : ∀ (xs : List (Option String)) (fuel : Nat) (acc : Array (Option String)) (s : ParseState)
+    (ts tail : List Token), (∀ x ∈ xs, x.all exprName = true) → s.rest = ts ++ tail → s.left = s.rest.length →
+    tail ≠ [] → Touching ts (xs.map placeWords).flatten →
+    ∃ acc' s', Parse.iterate (fuel + xs.length) acc Parse.placeStep s = Parse.iterate fuel acc' Parse.placeStep s' ∧
+      acc'.toList = acc.toList ++ xs ∧ Leaves s s' tail
+  | [], fuel, acc, s, ts, tail, _, hs, hl, _, ht => by
+    have : ts = [] := Touching.nil.mp (by simpa using ht)
+    subst this
+    exact ⟨acc, s, rfl, by simp, Leaves.refl (by simpa using hs) (by simp [hl, hs])⟩
+  | x :: xs, fuel, acc, s, ts, tail, hx, hs, hl, htl, ht => by
+    simp only [List.map_cons, List.flatten_cons] at ht
+    obtain ⟨a, b, rfl, ha, hb⟩ := Touching.append_split ht
+    have hbt : b ++ tail ≠ [] := by simp [htl]
+    obtain ⟨s₁, hstep, hL₁⟩ : ∃ s₁, Parse.placeStep acc s = .ok (acc.push x, true) s₁ ∧ Leaves s s₁ (b ++ tail) := by
+      cases x with
+      | none =>
+        obtain ⟨c, a', rfl, hc, ha'⟩ := Touching.cons_one (by simpa [placeWords, punctWord] using ha)
+        simp [Touching] at ha'; subst ha'
+        have hs' : s.rest = c :: (b ++ tail) := by simpa using hs
+        exact ⟨_, placeStep_hole hs' hbt hc, leaves_advance hs' hl⟩
+      | some n =>
+        obtain ⟨y, a', rfl, hy, ha'⟩ := Touching.cons_one (by simpa [placeWords, identWord, punctWord] using ha)
+        obtain ⟨c, a'', rfl, hc, ha''⟩ := Touching.cons_one ha'
+        simp [Touching] at ha''; subst ha''
+        have hs' : s.rest = y :: c :: (b ++ tail) := by simpa using hs
+        have hn : n ∉ Parse.refusedNames := by simpa [exprName] using hx (some n) (by simp)
+        exact ⟨_, placeStep_comma hs' hy hn hc hbt, leaves_trans (leaves_advance hs' hl)
+          (leaves_advance (s := past s y (c :: (b ++ tail))) rfl (by simp [hl, hs']))⟩
+    have hl₁ : s₁.left = s₁.rest.length := by rw [hL₁.left_eq, hL₁.rest_eq]
+    obtain ⟨acc', s', hit, hacc, hL'⟩ := place_loop xs fuel (acc.push x) s₁ b tail
+      (fun y hy => hx y (by simp [hy])) hL₁.rest_eq hl₁ htl hb
+    refine ⟨acc', s', ?_, by simp [hacc], leaves_trans hL₁ hL'⟩
+    rw [show fuel + (x :: xs).length = (fuel + xs.length) + 1 by simp; omega, Parse.iterate_true hstep]
+    exact hit
+
+theorem readRest_none {s : ParseState} {c : Token} {r : List Token} (hs : s.rest = c :: r)
+    (hc : c.kind = .punct "]") : Parse.readRest s = .ok none s := by
+  simp only [Parse.readRest]
+  rw [Parse.bind_eq (Parse.peek_eq hs)]
+  rw [if_pos (show (!c.isPunct "...") = true by simp [Token.isPunct, hc])]
+  rfl
+
+theorem readRest_some {s : ParseState} {d x c : Token} {r : List Token} {n : String}
+    (hs : s.rest = d :: x :: c :: r) (hd : d.kind = .punct "...") (hx : x.kind = .ident n)
+    (hn : n ∉ Parse.refusedNames) (hc : c.kind = .punct "]") :
+    Parse.readRest s = .ok (some n) (past (past s d (x :: c :: r)) x (c :: r)) := by
+  simp only [Parse.readRest]
+  rw [Parse.bind_eq (Parse.peek_eq hs)]
+  rw [if_neg (show ¬ ((!d.isPunct "...") = true) by simp [Token.isPunct, hd]), Parse.pure_bind]
+  rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_eq hs)),
+    Parse.bind_eq (Parse.peek_eq (s := past s d (x :: c :: r)) rfl)]
+  rw [Parse.ite_guard (fun h => by simp [Token.isPunct, hx] at h)]
+  rw [Parse.bind_eq (readName_ok (s := past s d (x :: c :: r)) rfl hx hn),
+    Parse.bind_eq (Parse.peek_eq (s := past (past s d (x :: c :: r)) x (c :: r)) rfl)]
+  rw [Parse.ite_guard (fun h => by simp [Token.isPunct, hc] at h),
+    Parse.ite_guard (fun h => by simp [Token.isPunct, hc] at h)]
+  rfl
+
+/-- From the token after the `[` through the `]`: the loop over the places,
+the rest element and the `]`. -/
+theorem patternBody_reads (p : ArrayPattern) (hp : p.wf = true) (fuel : Nat) (s : ParseState)
+    (ts rest : List Token) (hs : s.rest = ts ++ rest) (hl : s.left = s.rest.length) (hr : rest ≠ [])
+    (ht : Touching ts p.words.tail) (hf : ts.length ≤ fuel) :
+    ∃ elems s₁ s₂ c s₃, Parse.iterate fuel #[] Parse.placeStep s = .ok elems s₁ ∧ elems.toList = p.elems ∧
+      Parse.readRest s₁ = .ok p.rest s₂ ∧ Parse.expectPunct "]" s₂ = .ok c s₃ ∧ Leaves s s₃ rest := by
+  simp only [ArrayPattern.wf, Bool.and_eq_true, List.all_eq_true] at hp
+  obtain ⟨⟨helems, hrest⟩, hends⟩ := hp
+  obtain ⟨elems, prest⟩ := p
+  rcases ArrayPattern.shape hends with ⟨r, hr'⟩ | ⟨hr', xs, n, hxs⟩
+  · simp only at hr'; subst hr'
+    rw [ArrayPattern.words_rest] at ht
+    obtain ⟨a, b, rfl, ha, hb⟩ := Touching.append_split ht
+    obtain ⟨d, b₁, rfl, hd, hb₁⟩ := Touching.cons_one (by simpa [punctWord] using hb)
+    obtain ⟨x, b₂, rfl, hx, hb₂⟩ := Touching.cons_one (by simpa [identWord] using hb₁)
+    obtain ⟨c, b₃, rfl, hc, hb₃⟩ := Touching.cons_one (by simpa [punctWord] using hb₂)
+    simp [Touching] at hb₃; subst hb₃
+    have hlen := placeWords_length elems
+    have hka := congrArg List.length ha.kinds
+    simp only [List.length_map] at hka
+    have hfuel : fuel = (fuel - elems.length - 1) + 1 + elems.length := by
+      simp only [List.length_append, List.length_cons, List.length_nil] at hf; omega
+    obtain ⟨acc', s', hit, hacc, hL'⟩ := place_loop elems (fuel - elems.length - 1 + 1) #[] s a
+      (d :: x :: c :: rest) helems (by simpa using hs) hl (by simp) ha
+    have hs' : s'.rest = d :: x :: c :: rest := hL'.rest_eq
+    have hn : r ∉ Parse.refusedNames := by simpa [exprName] using hrest
+    have hl' : s'.left = s'.rest.length := by rw [hL'.left_eq, hL'.rest_eq]
+    let s₂ := past (past s' d (x :: c :: rest)) x (c :: rest)
+    refine ⟨acc', s', s₂, c, { s₂ with rest := rest, left := s₂.left - 1, lastStop := c.span.stop }, ?_,
+      by simpa using hacc, readRest_some hs' hd hx hn hc, Parse.expectPunct_ok (s := s₂) rfl hr hc, ?_⟩
+    · rw [hfuel, hit]; exact Parse.iterate_false (placeStep_dots hs' hd)
+    · exact leaves_trans hL' (leaves_trans (leaves_advance hs' hl') (leaves_trans
+        (leaves_advance (s := past s' d (x :: c :: rest)) rfl (by simp [hl', hs']))
+        (leaves_advance (s := s₂) rfl (by simp [s₂, hl', hs']))))
+  · simp only at hr' hxs; subst hr'; subst hxs
+    rw [ArrayPattern.words_name] at ht
+    obtain ⟨a, b, rfl, ha, hb⟩ := Touching.append_split ht
+    obtain ⟨x, b₁, rfl, hx, hb₁⟩ := Touching.cons_one (by simpa [identWord] using hb)
+    obtain ⟨c, b₂, rfl, hc, hb₂⟩ := Touching.cons_one (by simpa [punctWord] using hb₁)
+    simp [Touching] at hb₂; subst hb₂
+    have hlen := placeWords_length xs
+    have hka := congrArg List.length ha.kinds
+    simp only [List.length_map] at hka
+    have hfuel : fuel = (fuel - xs.length - 1) + 1 + xs.length := by
+      simp only [List.length_append, List.length_cons, List.length_nil] at hf; omega
+    obtain ⟨acc', s', hit, hacc, hL'⟩ := place_loop xs (fuel - xs.length - 1 + 1) #[] s a
+      (x :: c :: rest) (fun y hy => helems y (by simp [hy])) (by simpa using hs) hl (by simp) ha
+    have hs' : s'.rest = x :: c :: rest := hL'.rest_eq
+    have hn : n ∉ Parse.refusedNames := by simpa [exprName] using helems (some n) (by simp)
+    have hl' : s'.left = s'.rest.length := by rw [hL'.left_eq, hL'.rest_eq]
+    let s₂ := past s' x (c :: rest)
+    refine ⟨acc'.push (some n), s₂, s₂, c, { s₂ with rest := rest, left := s₂.left - 1, lastStop := c.span.stop },
+      ?_, by simp [hacc], readRest_none (s := s₂) rfl hc, Parse.expectPunct_ok (s := s₂) rfl hr hc, ?_⟩
+    · rw [hfuel, hit]; exact Parse.iterate_false (placeStep_close hs' hx hn hc)
+    · exact leaves_trans hL' (leaves_trans (leaves_advance hs' hl')
+        (leaves_advance (s := s₂) rfl (by simp [s₂, hl', hs'])))
+
+/-- The type of a destructuring, if it has one, which the `=` follows. -/
+theorem readAnnotation_reads (type : Option TypeExpr) (hw : (match type with | some t => t.wf | none => true) = true)
+    (s : ParseState) (ts : List Token) (u : Token) (rest : List Token) (hs : s.rest = ts ++ u :: rest)
+    (hl : s.left = s.rest.length) (ht : Touching ts (typeAnnotation type)) (hn : ∀ y ∈ ts, NoBreak y)
+    (hu : u.kind = .punct "=") :
+    ∃ type' s', Parse.readAnnotation s = .ok type' s' ∧ type'.map TypeExpr.erase = type.map TypeExpr.erase ∧
+      Leaves s s' (u :: rest) := by
+  cases type with
+  | none =>
+    simp [typeAnnotation, Touching] at ht; subst ht
+    have hs' : s.rest = u :: rest := by simpa using hs
+    refine ⟨none, s, ?_, rfl, Leaves.refl hs' (by simp [hl, hs'])⟩
+    simp only [Parse.readAnnotation]
+    rw [Parse.bind_eq (Parse.peek_eq hs')]
+    rw [if_pos (show (!u.isPunct ":") = true by simp [Token.isPunct, hu])]
+    rfl
+  | some t =>
+    simp only at hw
+    simp only [typeAnnotation] at ht
+    obtain ⟨colon, tts, rfl, hcolon, htt⟩ := Touching.cons_one (by simpa [punctWord] using ht)
+    have hs' : s.rest = colon :: (tts ++ u :: rest) := by simpa using hs
+    let s₁ := past s colon (tts ++ u :: rest)
+    have hl₁ : s₁.left = s₁.rest.length := by simp [s₁, hl, hs']
+    obtain ⟨t', s₂, hpt, het, hL₂⟩ := parseType_budget t hw s₁ tts (u :: rest) rfl hl₁ htt.kinds
+      (fun y hy => hn y (by simp [hy])) (by simp) (followsType_eq_semi (.inl hu))
+    refine ⟨some t', s₂, ?_, by simp [het], leaves_trans (leaves_advance hs' hl) hL₂⟩
+    simp only [Parse.readAnnotation]
+    rw [Parse.bind_eq (Parse.peek_eq hs')]
+    rw [if_neg (show ¬ ((!colon.isPunct ":") = true) by simp [Token.isPunct, hcolon]), Parse.pure_bind]
+    rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_cons hs' (by simp))), Parse.bind_eq (Parse.budget_eq _),
+      Parse.bind_eq hpt]
+    rfl
+
+/-- `const [a, , ...r]: T = e;`, which `parseStatement` hands to
+`parseDestructure`. -/
+theorem parseDestructure_reads {T : Edition} (start : Pos) (kind : VarKind) (p : ArrayPattern)
+    (type : Option TypeExpr) (init : Expr) (hp : p.wf = true)
+    (htw : (match type with | some t => t.wf | none => true) = true) (he : init.wfAt T .assign = true)
+    (ha : init.afterOK [.punct ";"] = true) (s : ParseState) (ts rest : List Token) (hT : s.target = T)
+    (hs : s.rest = ts ++ rest) (hl : s.left = s.rest.length) (ht : Touching ts (destructureWords kind p type init))
+    (hn : ∀ y ∈ ts.tail, NoBreak y) (hr : rest ≠ []) :
+    ∃ type' init' s', Parse.parseDestructure start s = .ok (.destructure ⟨start, s'.lastStop⟩ kind p type' init') s' ∧
+      type'.map TypeExpr.erase = type.map TypeExpr.erase ∧ init'.erase = init.erase ∧ Leaves s s' rest := by
+  simp only [destructureWords, VarKind.word_eq] at ht
+  obtain ⟨kw, ts₁, rfl, hkw, h₁⟩ := Touching.cons_one (by simpa using ht)
+  obtain ⟨pts, ts₂, rfl, hpt, h₂⟩ := Touching.append_split h₁
+  rw [ArrayPattern.words_open] at hpt
+  obtain ⟨lb, pts', rfl, hlb, hpt'⟩ := Touching.cons_one hpt
+  obtain ⟨tts, ts₃, rfl, htt, h₃⟩ := Touching.append_split h₂
+  obtain ⟨eq, ts₄, rfl, heq, h₄⟩ := Touching.cons_one (by simpa [punctWord] using h₃)
+  obtain ⟨ets, ts₅, rfl, het, h₅⟩ := Touching.append_split h₄
+  obtain ⟨semi, ts₆, rfl, hsemi, h₆⟩ := Touching.cons_one (by simpa [punctWord] using h₅)
+  simp [Touching] at h₆; subst h₆
+  have hs' : s.rest = kw :: lb :: (pts' ++ (tts ++ eq :: (ets ++ semi :: rest))) := by simpa using hs
+  let s₁ := past s kw (lb :: (pts' ++ (tts ++ eq :: (ets ++ semi :: rest))))
+  let s₂ := past s₁ lb (pts' ++ (tts ++ eq :: (ets ++ semi :: rest)))
+  have hl₂ : s₂.left = s₂.rest.length := by simp [s₂, s₁, hl, hs']
+  obtain ⟨elems, s₃, s₄, c, s₅, hit, hel, hrr, hrb, hL₅⟩ := patternBody_reads p hp (10 * (s₂.left + 1)) s₂ pts'
+    (tts ++ eq :: (ets ++ semi :: rest)) rfl hl₂ (by simp) hpt' (by rw [hl₂]; simp [s₂]; omega)
+  have hl₅ : s₅.left = s₅.rest.length := by rw [hL₅.left_eq, hL₅.rest_eq]
+  obtain ⟨type', s₆, hty, hte, hL₆⟩ := readAnnotation_reads type htw s₅ tts eq (ets ++ semi :: rest)
+    hL₅.rest_eq hl₅ htt (fun y hy => hn y (by simp [hy])) heq
+  have hs₆ : s₆.rest = eq :: (ets ++ semi :: rest) := hL₆.rest_eq
+  have hl₆ : s₆.left = s₆.rest.length := by rw [hL₆.left_eq, hL₆.rest_eq]
+  let s₇ := past s₆ eq (ets ++ semi :: rest)
+  have hl₇ : s₇.left = s₇.rest.length := by simp [s₇, hl₆, hs₆]
+  have hT₇ : s₇.target = T := by simp [s₇, hL₆.target_eq, hL₅.target_eq, s₂, s₁, hT]
+  obtain ⟨init', s₈, hpe, hie, hL₈⟩ := parseAssign_budget init he s₇ ets (semi :: rest) hT₇ rfl hl₇ het
+    (fun y hy => hn y (by simp [List.mem_of_mem_tail hy])) (by simp)
+    (endsAssign_separator hsemi (by simp [separators])) (by simpa [hsemi] using afterOK_semicolon ha _)
+  have hs₈ : s₈.rest = semi :: rest := hL₈.rest_eq
+  let s₉ : ParseState := { s₈ with rest := rest, left := s₈.left - 1, lastStop := semi.span.stop }
+  refine ⟨type', init', s₉, ?_, hte, hie, ?_⟩
+  · simp only [Parse.parseDestructure]
+    rw [Parse.bind_eq (Parse.advance_eq hs'),
+      Parse.bind_eq (Parse.discard_eq (Parse.advance_cons (s := s₁) rfl (by simp))),
+      Parse.bind_eq (Parse.budget_eq _), Parse.bind_eq hit, Parse.bind_eq hrr, Parse.bind_eq hrb,
+      Parse.bind_eq hty, Parse.bind_eq (Parse.peek_eq hs₆),
+      if_pos (show eq.isPunct "=" = true by simp [Token.isPunct, heq]), Parse.pure_bind,
+      Parse.bind_eq (Parse.discard_eq (Parse.advance_cons hs₆ (by simp))), Parse.bind_eq (Parse.budget_eq _),
+      Parse.bind_eq hpe, Parse.bind_eq (Parse.peek_eq hs₈),
+      Parse.ite_guard (fun h => by simp [Token.isPunct, hsemi] at h),
+      Parse.bind_eq (endStatement_semi hs₈ hr hsemi), Parse.bind_eq (Parse.spanFrom_eq _ _)]
+    cases kind <;> simp [s₉, hkw, VarKind.token, Token.isKeyword, hel, pure, EStateM.pure]
+  · exact leaves_trans (leaves_advance hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))
+      (leaves_trans hL₅ (leaves_trans hL₆ (leaves_trans (leaves_advance hs₆ hl₆)
+        (leaves_trans hL₈ (leaves_advance hs₈ (by rw [hL₈.left_eq, hs₈])))))))
+
+/-- An array destructuring. -/
+theorem stmt_destructure {T : Edition} {fn loop : Bool} (f : Nat) (sp : Span) (kind : VarKind) (p : ArrayPattern)
+    (type : Option TypeExpr) (init : Expr) (hw : (Stmt.destructure sp kind p type init).wf T fn loop = true) :
+    ReadsS T fn loop (Parse.parseStatement (f + 1)) (.destructure sp kind p type init) := by
+  intro s ts rest hT _ _ hs hl ht hr _
+  simp only [Stmt.wf, Bool.and_eq_true] at hw
+  obtain ⟨⟨⟨hp, htw⟩, he⟩, ha⟩ := hw
+  simp only [Stmt.wordLines, Stmt.lines, List.map_cons, List.map_nil] at ht
+  obtain ⟨h1, hn⟩ := Laid.one ht
+  have h1' := h1
+  simp only [destructureWords, VarKind.word_eq] at h1'
+  obtain ⟨kw, ts', rfl, hkw, h2⟩ := Touching.cons_one (by simpa using h1')
+  obtain ⟨pts, ts'', rfl, hpt, _⟩ := Touching.append_split h2
+  rw [ArrayPattern.words_open] at hpt
+  obtain ⟨lb, pts', rfl, hlb, _⟩ := Touching.cons_one hpt
+  have hs' : s.rest = kw :: lb :: (pts' ++ (ts'' ++ rest)) := by simpa using hs
+  -- A `[` after the keyword starts a destructuring.
+  have hb : (s.rest[1]?.getD s.eof).isPunct "[" = true := by simp [hs', Token.isPunct, hlb]
+  obtain ⟨type', init', s', hp', hte, hie, hL⟩ := parseDestructure_reads kw.span.start kind p type init hp htw he ha
+    s _ rest hT hs hl h1 hn hr
+  refine ⟨.destructure ⟨kw.span.start, s'.lastStop⟩ kind p type' init', s', ?_, by simp [Stmt.erase, hte, hie], hL⟩
+  simp only [Parse.parseStatement]
+  rw [Parse.bind_eq (Parse.peek_eq hs')]
+  cases kind <;> simp only [VarKind.token] at hkw <;> simp only [hkw] <;>
+    rw [Parse.bind_eq (Parse.peekAt_rest _ _), if_pos hb] <;> exact hp'
+
 
 
 theorem Laid.kinds : ∀ {ts : List Token} {ls : List (List Word)}, Laid ts ls → ts.map (·.kind) = ls.flatten.flatten
@@ -765,6 +1142,10 @@ theorem Stmt.first {T : Edition} {fn loop : Bool} (st : Stmt) (hw : st.wf T fn l
     refine ⟨d.kind.token, ?_, ?_⟩
     · simp [Stmt.wordLines, Stmt.lines, VarDecl.words, VarKind.word_eq]
     · cases d.kind <;> simp [StartsStmt, VarKind.token, Stmt.isDecl]
+  | destructure sp kind p type init =>
+    refine ⟨kind.token, ?_, ?_⟩
+    · simp [Stmt.wordLines, Stmt.lines, destructureWords, VarKind.word_eq]
+    · cases kind <;> simp [StartsStmt, VarKind.token, Stmt.isDecl]
   | exprStmt sp e =>
     simp only [Stmt.wf, Bool.and_eq_true] at hw
     obtain ⟨k, hk, hs⟩ := Expr.first e
@@ -1732,6 +2113,8 @@ theorem Stmt.first_break {T : Edition} {fn loop : Bool} (st : Stmt) (hw : st.wf 
   | varDecl sp d =>
     cases hk : d.kind <;> simp [Stmt.wordLines, Stmt.lines, VarDecl.words, hk, VarKind.word, keywordWord,
       identWord] at h
+  | destructure sp kind p type init =>
+    cases kind <;> simp [Stmt.wordLines, Stmt.lines, destructureWords, VarKind.word, keywordWord, identWord] at h
   | returnStmt sp v => cases v <;> simp [Stmt.wordLines, Stmt.lines, keywordWord] at h
   | ifStmt sp t a e => cases e <;> simp [Stmt.wordLines, Stmt.lines, keywordWord] at h
   | breakStmt _ => rfl
@@ -2108,6 +2491,7 @@ theorem allStmts_succ {T : Edition} (f : Nat) (IH : ∀ g ≤ f, AllStmts T g) :
   simp only [Stmt.need] at hn
   cases st with
   | varDecl sp d => exact stmt_varDecl f sp d hw
+  | destructure sp kind p type init => exact stmt_destructure f sp kind p type init hw
   | exprStmt sp e =>
     obtain ⟨g, rfl⟩ : ∃ g, f = g + 1 := ⟨f - 1, by simp [Stmt.depth] at hn; omega⟩
     exact stmt_expr g sp e hw

@@ -432,6 +432,19 @@ class Printer {
     if (kind === 'const' && decl.initializer === undefined) {
       refuse(decl, 'const without a value');
     }
+    if (ts.isArrayBindingPattern(decl.name)) {
+      if (exported) {
+        refuse(decl.name, 'exported destructuring');
+      }
+      if (decl.initializer === undefined) {
+        refuse(decl, 'destructuring without a value');
+      }
+      return this.node(kind, s, [], [
+        this.arrayPattern(decl.name),
+        ...(decl.type === undefined ? [] : [this.type(decl.type)]),
+        this.expr(decl.initializer),
+      ]);
+    }
     return this.node(
       kind,
       s,
@@ -441,6 +454,37 @@ class Printer {
         ...(decl.initializer === undefined ? [] : [this.expr(decl.initializer)]),
       ],
     );
+  }
+
+  /** `[a, , ...r]`: a name, a hole (an omitted expression) or the rest
+   * element for each place. The Lean parser refuses a pattern that is empty
+   * or ends with a hole or a `,`, so that its last place is a name or the
+   * rest element. */
+  private arrayPattern(p: ts.ArrayBindingPattern): Sexp {
+    const elems = p.elements;
+    const last = elems[elems.length - 1];
+    if (last === undefined) {
+      refuse(p, 'empty array pattern');
+    }
+    if (elems.hasTrailingComma || ts.isOmittedExpression(last)) {
+      refuse(p, "',' before the ']' of an array pattern");
+    }
+    const places = elems.map((el, i): Sexp => {
+      if (ts.isOmittedExpression(el)) {
+        return { head: 'hole', atoms: [], children: [] };
+      }
+      if (el.initializer !== undefined) {
+        refuse(el, 'default value');
+      }
+      if (el.dotDotDotToken !== undefined) {
+        if (i !== elems.length - 1) {
+          refuse(el, 'element after the rest element');
+        }
+        return { head: 'rest', atoms: [this.name(el.name)], children: [] };
+      }
+      return { head: 'name', atoms: [this.name(el.name)], children: [] };
+    });
+    return { head: 'array-pattern', atoms: [], children: places };
   }
 
   /** The declaration at the start of a counted `for`. */
