@@ -113,7 +113,7 @@ precondition of each claim.
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| `throw` of a declared error class, a `throw` in a loop body or in a branch that changes locals, and a call that can throw inside a larger expression | `Except E`, with `forIn` and `let` in the `Except` monad | `try` and `catch` in the first version |
+| `throw` of a declared error class, and a call that can throw inside a larger expression | `Except E`, with `forIn` and `let` in the `Except` monad | `try` and `catch` in the first version |
 | A class that extends `Error` and only sets `readonly` fields in its constructor | A structure | Methods, `static` members, and reads of `stack` |
 
 ECMA-262 does not define `Error.prototype.stack`, so a read of `stack` stays
@@ -230,9 +230,8 @@ leaves a gap.
 4. **P0.** The rest of the arrays without `sort`: `entries`, `at` and
    `slice` with arguments that are not integer literals, and `slice` with a
    negative start and an end that is not negative.
-6. **P0.** Errors: `throw` in loop bodies and in branches that change
-   locals, calls that can throw inside larger expressions, and declared error
-   classes.
+6. **P0.** Errors: calls that can throw inside larger expressions, and
+   declared error classes.
 7. **P0.** Local functions that change variables of the enclosing function, by
    lifting them out and threading the variables through each call.
 8. **P0.** The borrow for a map that a caller passes in.

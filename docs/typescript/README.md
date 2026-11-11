@@ -405,8 +405,10 @@ the file, the line and the reason. It never approximates.
 | `r[k]`, where `r` is such a `Record` and `k` has the type `K` | `match k with \| K.a => r.a \| …`, which reads the field that `k` names |
 | `function` with typed parameters and return type | `def` |
 | A function that calls itself, where each call passes a part of one parameter, the same one in every call. A part is a field of it, a value that a test of `null`, `undefined` or a tag narrows it to, an element of an array in it, an element of a tuple in it, or a part of one of these. | The same `def`, followed by `termination_by p` for the parameter `p`, and `decreasing_by all_goals tolean_decreasing`. Each call passes a value that is smaller by `sizeOf`, and the tactic from `tolean.TypeScript.Decreasing` proves it, so Lean checks that the function ends. Each `match` in such a function names the equation of its value `_h'`, which the tactic reads. Lean defines the function by well-founded recursion, so a claim unfolds it with `unfold` or `simp`, not with `rfl` or `decide`. |
-| `throw new Error(m)`, where `m` is a `string`, as the last statement of a function or of a branch that ends it | `throw (JSError.mk m)`. A function that can throw returns `Except JSError R`, and each value that it returns is `pure` of the value. `JSError`, in `tolean/TypeScript/Spec/Error.lean`, holds the message. |
-| `const x = f(a)`, `let x = f(a)` or `return f(a)`, where `f` can throw, in the statements that end the function | `f a >>= fun x => …`, which passes the error of the call on. So the function that holds the call can throw too. |
+| `throw new Error(m)`, where `m` is a `string`, as the last statement of a function, of a loop body, or of a branch | `throw (JSError.mk m)`. A function that can throw returns `Except JSError R`, and each value that it returns is `pure` of the value. `JSError`, in `tolean/TypeScript/Spec/Error.lean`, holds the message. |
+| `const x = f(a)`, `let x = f(a)` or `return f(a)`, where `f` can throw | `f a >>= fun x => …`, which passes the error of the call on. So the function that holds the call can throw too. |
+| A loop whose body can throw, by a `throw` or a call of a function that can | The same fold in the `Except` monad: `List.foldlM`, or `forIn` without `Id.run`, followed by `>>= fun (x, y) =>` for the statements after the loop. Each run of the body ends in `pure` of its state, or throws. |
+| An `if` or a `switch` that changes locals, where a branch can throw | `(if c then throw e else pure (x, y)) >>= fun (x, y) =>`, so that the statements after it take the state from the branch that did not throw |
 | `const x = e`, `let x = e` | `let x := e` |
 | `x = e`, `x += e`, `x -= e`, `x *= e` on a `let` local | `let x := …` (shadowing) |
 | `x ??= e` on a `let` local of type `T \| null` | `let x := Option.or x e`. JS evaluates `e` only when `x` is `null`. Lean evaluates it either way, but the result is the same, because the subset has no side effects. |
@@ -465,10 +467,8 @@ the file, the line and the reason. It never approximates.
 Tolean rejects these, among others:
 
 - `try` and `catch`, and a `throw` of anything but `new Error(message)`. It
-  also rejects a `throw` in a loop body, or in a branch that changes locals,
-  and a call of a function that can throw anywhere but as the whole value of
-  a declaration or a `return`. The output would need `forIn` and `let` in the
-  `Except` monad there.
+  also rejects a call of a function that can throw anywhere but as the whole
+  value of a declaration or a `return`.
 
 - Fractional or unsafe `number` literals, such as `0.5` and `2 ** 53`. It also
   rejects `/`, `%` and `Math.*` on `number`, because no law covers them yet.
