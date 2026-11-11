@@ -254,6 +254,9 @@ def Stmt.lines (depth : Nat) : Stmt → List Line
   | .forOfStmt _ kind name iterable body =>
     (depth, keywordWord "for" :: punctWord "(" :: kind.word :: identWord name :: identWord "of" :: iterable.words ++
       [punctWord ")"]) :: body.lines (depth + 1)
+  | .forOfPattern _ kind p iterable body =>
+    (depth, keywordWord "for" :: punctWord "(" :: kind.word :: p.words ++ identWord "of" :: iterable.words ++
+      [punctWord ")"]) :: body.lines (depth + 1)
   | .forStmt _ init test update body =>
     (depth, keywordWord "for" :: punctWord "(" :: forInitWords init ++ optWords test ++ punctWord ";" ::
       optWords update ++ [punctWord ")"]) :: body.lines (depth + 1)
@@ -436,6 +439,7 @@ def Stmt.erase : Stmt → Stmt
   | .returnStmt _ v => .returnStmt noSpan (v.map Expr.erase)
   | .ifStmt _ test t e => .ifStmt noSpan test.erase t.erase (Stmt.eraseOpt e)
   | .forOfStmt _ kind name iterable body => .forOfStmt noSpan kind name iterable.erase body.erase
+  | .forOfPattern _ kind p iterable body => .forOfPattern noSpan kind p iterable.erase body.erase
   | .forStmt _ init test update body =>
     .forStmt noSpan (init.map VarDecl.erase) (test.map Expr.erase) (update.map Expr.erase) body.erase
   | .whileStmt _ test body => .whileStmt noSpan test.erase body.erase

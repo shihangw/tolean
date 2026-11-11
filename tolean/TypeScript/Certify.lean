@@ -152,6 +152,7 @@ partial def stmtsOf : Stmt → List Stmt
   | .block _ body => .block default body :: body.flatMap stmtsOf
   | .ifStmt s t a b => .ifStmt s t a b :: stmtsOf a ++ ((b.map stmtsOf).getD [])
   | .forOfStmt s k n i b => .forOfStmt s k n i b :: stmtsOf b
+  | .forOfPattern s k p i b => .forOfPattern s k p i b :: stmtsOf b
   | .forStmt s i t u b => .forStmt s i t u b :: stmtsOf b
   | .whileStmt s t b => .whileStmt s t b :: stmtsOf b
   | .switchStmt s d cs => .switchStmt s d cs :: cs.flatMap fun (_, body) => body.flatMap stmtsOf
@@ -186,7 +187,7 @@ partial def exprNumbers : Expr → List String
 
 def stmtNumbers : Stmt → List String
   | .varDecl _ d => (d.init.map exprNumbers).getD []
-  | .exprStmt _ e | .ifStmt _ e _ _ | .whileStmt _ e _ | .forOfStmt _ _ _ e _ | .destructure _ _ _ _ e => exprNumbers e
+  | .exprStmt _ e | .ifStmt _ e _ _ | .whileStmt _ e _ | .forOfStmt _ _ _ e _ | .forOfPattern _ _ _ e _ | .destructure _ _ _ _ e => exprNumbers e
   | .returnStmt _ e => (e.map exprNumbers).getD []
   | .forStmt _ i t u _ =>
     (((i.bind (·.init)).map exprNumbers).getD []) ++ ((t.map exprNumbers).getD []) ++ ((u.map exprNumbers).getD [])
@@ -194,7 +195,7 @@ def stmtNumbers : Stmt → List String
 
 def stmtCalls : Stmt → List String
   | .varDecl _ d => (d.init.map exprCalls).getD []
-  | .exprStmt _ e | .ifStmt _ e _ _ | .whileStmt _ e _ | .forOfStmt _ _ _ e _ | .destructure _ _ _ _ e => exprCalls e
+  | .exprStmt _ e | .ifStmt _ e _ _ | .whileStmt _ e _ | .forOfStmt _ _ _ e _ | .forOfPattern _ _ _ e _ | .destructure _ _ _ _ e => exprCalls e
   | .returnStmt _ e => (e.map exprCalls).getD []
   | .forStmt _ i t u _ =>
     (((i.bind (·.init)).map exprCalls).getD []) ++ ((t.map exprCalls).getD []) ++ ((u.map exprCalls).getD [])
@@ -241,7 +242,7 @@ partial def subExprs (e : Expr) : List Expr :=
 /-- The expressions that a statement holds, outside its nested statements. -/
 def stmtExprs : Stmt → List Expr
   | .varDecl _ d => d.init.toList
-  | .exprStmt _ e | .ifStmt _ e _ _ | .whileStmt _ e _ | .forOfStmt _ _ _ e _ | .destructure _ _ _ _ e => [e]
+  | .exprStmt _ e | .ifStmt _ e _ _ | .whileStmt _ e _ | .forOfStmt _ _ _ e _ | .forOfPattern _ _ _ e _ | .destructure _ _ _ _ e => [e]
   | .returnStmt _ e => e.toList
   | .switchStmt _ d cs => d :: cs.filterMap (·.1)
   | _ => []

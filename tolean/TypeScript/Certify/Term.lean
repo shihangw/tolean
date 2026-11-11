@@ -122,6 +122,9 @@ def varKind : VarKind → String
   | .const => s!"{ns}VarKind.const"
   | .«let» => s!"{ns}VarKind.«let»"
 
+def pattern (p : ArrayPattern) : String :=
+  s!"\{ elems := {list (p.elems.map fun n => option (n.map str))}, rest := {option (p.rest.map str)} }"
+
 def varDecl (d : VarDecl) : String :=
   s!"\{ kind := {varKind d.kind}, name := {str d.name}, type := {option (d.type.map typeExpr)}, " ++
     s!"init := {option (d.init.map expr)} }"
@@ -131,14 +134,15 @@ mutual
 def stmt : Stmt → String
   | .varDecl s d => s!"({ns}Stmt.varDecl {span s} {varDecl d})"
   | .destructure s k p t e =>
-    let pattern := s!"\{ elems := {list (p.elems.map fun n => option (n.map str))}, rest := {option (p.rest.map str)} }"
-    s!"({ns}Stmt.destructure {span s} {varKind k} {pattern} {option (t.map typeExpr)} {expr e})"
+    s!"({ns}Stmt.destructure {span s} {varKind k} {pattern p} {option (t.map typeExpr)} {expr e})"
   | .exprStmt s e => s!"({ns}Stmt.exprStmt {span s} {expr e})"
   | .returnStmt s v => s!"({ns}Stmt.returnStmt {span s} {option (v.map expr)})"
   | .ifStmt s t a b =>
     s!"({ns}Stmt.ifStmt {span s} {expr t} {stmt a} {option (optStmt b)})"
   | .forOfStmt s k n i b =>
     s!"({ns}Stmt.forOfStmt {span s} {varKind k} {str n} {expr i} {stmt b})"
+  | .forOfPattern s k p i b =>
+    s!"({ns}Stmt.forOfPattern {span s} {varKind k} {pattern p} {expr i} {stmt b})"
   | .forStmt s i t u b =>
     s!"({ns}Stmt.forStmt {span s} {option (i.map varDecl)} {option (t.map expr)} {option (u.map expr)} {stmt b})"
   | .whileStmt s t b => s!"({ns}Stmt.whileStmt {span s} {expr t} {stmt b})"

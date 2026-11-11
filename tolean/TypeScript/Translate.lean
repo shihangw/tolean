@@ -649,7 +649,8 @@ def stmtThrows (fns : List FnInfo) : Stmt → Bool
   | .varDecl _ { init := some e, .. } | .returnStmt _ (some e) => callsThrowing fns e
   | .ifStmt _ _ t (some e) => stmtThrows fns t || stmtThrows fns e
   | .ifStmt _ _ t none => stmtThrows fns t
-  | .forOfStmt _ _ _ _ body | .forStmt _ _ _ _ body | .whileStmt _ _ body => stmtThrows fns body
+  | .forOfStmt _ _ _ _ body | .forOfPattern _ _ _ _ body | .forStmt _ _ _ _ body | .whileStmt _ _ body =>
+    stmtThrows fns body
   | .block _ body => stmtsThrow fns body
   | .switchStmt _ _ clauses => clausesThrow fns clauses
   | _ => false
@@ -1009,7 +1010,7 @@ def containsJump (brk cont : Bool) : Stmt → Bool
   | .continueStmt _ => cont
   | .ifStmt _ _ t (some e) => containsJump brk cont t || containsJump brk cont e
   | .ifStmt _ _ t none => containsJump brk cont t
-  | .forOfStmt _ _ _ _ body | .forStmt _ _ _ _ body | .whileStmt _ _ body =>
+  | .forOfStmt _ _ _ _ body | .forOfPattern _ _ _ _ body | .forStmt _ _ _ _ body | .whileStmt _ _ body =>
     containsJump false false body
   | .block _ body => anyContainsJump brk cont body
   | .switchStmt _ _ clauses => clausesContainJump brk cont clauses
@@ -1084,7 +1085,8 @@ def stmtChanges : Stmt → List String
   | .returnStmt _ v => optionChanges v
   | .ifStmt _ test t (some e) => exprChanges test ++ stmtChanges t ++ stmtChanges e
   | .ifStmt _ test t none => exprChanges test ++ stmtChanges t
-  | .forOfStmt _ _ _ iterable body => exprChanges iterable ++ stmtChanges body
+  | .forOfStmt _ _ _ iterable body | .forOfPattern _ _ _ iterable body =>
+    exprChanges iterable ++ stmtChanges body
   | .forStmt _ init test update body =>
     optionChanges (init.bind (·.init)) ++ optionChanges test ++ optionChanges update ++ stmtChanges body
   | .whileStmt _ test body => exprChanges test ++ stmtChanges body
@@ -3522,6 +3524,8 @@ def stmtUsesNumber : Stmt → Bool
   | .ifStmt _ test t none => exprUsesNumber test || stmtUsesNumber t
   | .forOfStmt _ _ name iterable body =>
     isNumberName name || exprUsesNumber iterable || stmtUsesNumber body
+  | .forOfPattern _ _ p iterable body =>
+    p.names.any isNumberName || exprUsesNumber iterable || stmtUsesNumber body
   | .forStmt _ init test update body =>
     (init.map varUsesNumber).getD false || (test.map exprUsesNumber).getD false ||
       (update.map exprUsesNumber).getD false || stmtUsesNumber body
