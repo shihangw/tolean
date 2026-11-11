@@ -227,10 +227,9 @@ leaves a gap.
    `undefined` that narrows inside an expression, `a?.[i]` and `f?.()`, and
    re-exports.
 3. **P1.** Type guards.
-4. **P0.** The rest of the arrays without `sort`: `entries`, array
-   destructuring, `at` and `slice` with arguments that are not integer
-   literals, and `slice` with a negative start and an end that is not
-   negative.
+4. **P0.** The rest of the arrays without `sort`: `entries`, `at` and
+   `slice` with arguments that are not integer literals, and `slice` with a
+   negative start and an end that is not negative.
 6. **P0.** Errors: `throw` in loop bodies and in branches that change
    locals, calls that can throw inside larger expressions, and declared error
    classes.
