@@ -355,6 +355,18 @@ class Gen {
         () => ['if', '(', ...this.expr(2), ')', ...this.statement(d, inLoop)],
         () => ['while', '(', ...this.expr(2), ')', ...this.block(d, true)],
         () => ['for', '(', this.pick(['const', 'let']), 'v', 'of', ...this.expr(2), ')', ...this.block(d, true)],
+        // A pattern in the head of a loop, sometimes before `in` or `=`,
+        // which the Lean parser refuses.
+        () => [
+          'for',
+          '(',
+          this.pick(['const', 'let']),
+          ...this.pattern(),
+          ...this.pick([['of'], ['of'], ['of'], ['in'], ['=', '0', ';', ';']]),
+          ...this.expr(2),
+          ')',
+          ...(this.chance(0.8) ? this.block(d, true) : this.statement(d, true)),
+        ],
         () => [
           'for',
           '(',

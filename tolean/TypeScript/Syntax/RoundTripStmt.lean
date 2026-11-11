@@ -36,6 +36,7 @@ theorem Stmt.lines_words : ∀ (st : Stmt) (d : Nat), (st.lines d).map Prod.snd 
     simp [Stmt.lines, Stmt.lines_words t (d + 1), Stmt.lines_words t 1, Stmt.lines_words e (d + 1),
       Stmt.lines_words e 1]
   | .forOfStmt _ _ _ _ body, d => by simp [Stmt.lines, Stmt.lines_words body (d + 1), Stmt.lines_words body 1]
+  | .forOfPattern _ _ _ _ body, d => by simp [Stmt.lines, Stmt.lines_words body (d + 1), Stmt.lines_words body 1]
   | .forStmt _ _ _ _ body, d => by simp [Stmt.lines, Stmt.lines_words body (d + 1), Stmt.lines_words body 1]
   | .whileStmt _ _ body, d => by simp [Stmt.lines, Stmt.lines_words body (d + 1), Stmt.lines_words body 1]
   | .block _ body, d => by simp [Stmt.lines, Stmt.linesOf_words body (d + 1), Stmt.linesOf_words body 1]
@@ -99,7 +100,7 @@ join that `if`. -/
 def Stmt.openIf : Stmt → Bool
   | .ifStmt _ _ _ none => true
   | .ifStmt _ _ _ (some e) => e.openIf
-  | .whileStmt _ _ b | .forOfStmt _ _ _ _ b | .forStmt _ _ _ _ b => b.openIf
+  | .whileStmt _ _ b | .forOfStmt _ _ _ _ b | .forOfPattern _ _ _ _ b | .forStmt _ _ _ _ b => b.openIf
   | _ => false
 
 /-- A declaration, which JavaScript does not allow as the body of `if`, `for`
@@ -165,6 +166,7 @@ def Stmt.wf (T : Edition) (fn loop : Bool) : Stmt → Bool
   | .ifStmt _ test t (some e) =>
     test.wfParen T && !t.isDecl && t.wf T fn loop && !t.openIf && !e.isDecl && e.wf T fn loop
   | .forOfStmt _ _ name it body => exprName name && it.wfParen T && !body.isDecl && body.wf T fn true
+  | .forOfPattern _ _ p it body => p.wf && it.wfParen T && !body.isDecl && body.wf T fn true
   | .forStmt _ init test update body =>
     VarDecl.forWF T init && Expr.optWF T ";" test && Expr.optWF T ")" update && !body.isDecl && body.wf T fn true
   | .whileStmt _ test body => test.wfParen T && !body.isDecl && body.wf T fn true
@@ -196,7 +198,7 @@ mutual
 def Stmt.depth : Stmt → Nat
   | .ifStmt _ _ t none => t.depth + 1
   | .ifStmt _ _ t (some e) => max t.depth e.depth + 1
-  | .forOfStmt _ _ _ _ b | .forStmt _ _ _ _ b | .whileStmt _ _ b => b.depth + 1
+  | .forOfStmt _ _ _ _ b | .forOfPattern _ _ _ _ b | .forStmt _ _ _ _ b | .whileStmt _ _ b => b.depth + 1
   | .block _ body => Stmt.depthOf body + 1
   | .switchStmt _ _ cs => Stmt.depthClauses cs + 1
   | .varDecl .. | .destructure .. | .exprStmt .. | .returnStmt .. | .breakStmt _ | .continueStmt _ | .empty _
@@ -1042,6 +1044,21 @@ theorem readAnnotation_reads (type : Option TypeExpr) (hw : (match type with | s
       Parse.bind_eq hpt]
     rfl
 
+/-- An array pattern from its `[` through its `]`, which `rest` follows. -/
+theorem readPattern_reads (p : ArrayPattern) (hp : p.wf = true) (s : ParseState) (lb : Token)
+    (ts rest : List Token) (hs : s.rest = lb :: (ts ++ rest)) (hl : s.left = s.rest.length) (hr : rest ≠ [])
+    (ht : Touching ts p.words.tail) :
+    ∃ s', Parse.readPattern s = .ok p s' ∧ Leaves s s' rest := by
+  let s₁ := past s lb (ts ++ rest)
+  have hl₁ : s₁.left = s₁.rest.length := by simp [s₁, hl, hs]
+  obtain ⟨elems, s₂, s₃, c, s₄, hit, hel, hrr, hrb, hL₄⟩ := patternBody_reads p hp (10 * (s₁.left + 1)) s₁ ts
+    rest rfl hl₁ hr ht (by rw [hl₁]; simp [s₁]; omega)
+  refine ⟨s₄, ?_, leaves_trans (leaves_advance hs hl) hL₄⟩
+  simp only [Parse.readPattern]
+  rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_cons hs (by simp [hr]))), Parse.bind_eq (Parse.budget_eq _),
+    Parse.bind_eq hit, Parse.bind_eq hrr, Parse.bind_eq hrb]
+  simp [hel, pure, EStateM.pure]
+
 /-- `const [a, , ...r]: T = e;`, which `parseStatement` hands to
 `parseDestructure`. -/
 theorem parseDestructure_reads {T : Edition} (start : Pos) (kind : VarKind) (p : ArrayPattern)
@@ -1056,7 +1073,7 @@ theorem parseDestructure_reads {T : Edition} (start : Pos) (kind : VarKind) (p :
   obtain ⟨kw, ts₁, rfl, hkw, h₁⟩ := Touching.cons_one (by simpa using ht)
   obtain ⟨pts, ts₂, rfl, hpt, h₂⟩ := Touching.append_split h₁
   rw [ArrayPattern.words_open] at hpt
-  obtain ⟨lb, pts', rfl, hlb, hpt'⟩ := Touching.cons_one hpt
+  obtain ⟨lb, pts', rfl, -, hpt'⟩ := Touching.cons_one hpt
   obtain ⟨tts, ts₃, rfl, htt, h₃⟩ := Touching.append_split h₂
   obtain ⟨eq, ts₄, rfl, heq, h₄⟩ := Touching.cons_one (by simpa [punctWord] using h₃)
   obtain ⟨ets, ts₅, rfl, het, h₅⟩ := Touching.append_split h₄
@@ -1064,10 +1081,9 @@ theorem parseDestructure_reads {T : Edition} (start : Pos) (kind : VarKind) (p :
   simp [Touching] at h₆; subst h₆
   have hs' : s.rest = kw :: lb :: (pts' ++ (tts ++ eq :: (ets ++ semi :: rest))) := by simpa using hs
   let s₁ := past s kw (lb :: (pts' ++ (tts ++ eq :: (ets ++ semi :: rest))))
-  let s₂ := past s₁ lb (pts' ++ (tts ++ eq :: (ets ++ semi :: rest)))
-  have hl₂ : s₂.left = s₂.rest.length := by simp [s₂, s₁, hl, hs']
-  obtain ⟨elems, s₃, s₄, c, s₅, hit, hel, hrr, hrb, hL₅⟩ := patternBody_reads p hp (10 * (s₂.left + 1)) s₂ pts'
-    (tts ++ eq :: (ets ++ semi :: rest)) rfl hl₂ (by simp) hpt' (by rw [hl₂]; simp [s₂]; omega)
+  have hl₁ : s₁.left = s₁.rest.length := by simp [s₁, hl, hs']
+  obtain ⟨s₅, hrp, hL₅⟩ := readPattern_reads p hp s₁ lb pts' (tts ++ eq :: (ets ++ semi :: rest)) rfl hl₁
+    (by simp) hpt'
   have hl₅ : s₅.left = s₅.rest.length := by rw [hL₅.left_eq, hL₅.rest_eq]
   obtain ⟨type', s₆, hty, hte, hL₆⟩ := readAnnotation_reads type htw s₅ tts eq (ets ++ semi :: rest)
     hL₅.rest_eq hl₅ htt (fun y hy => hn y (by simp [hy])) heq
@@ -1075,7 +1091,7 @@ theorem parseDestructure_reads {T : Edition} (start : Pos) (kind : VarKind) (p :
   have hl₆ : s₆.left = s₆.rest.length := by rw [hL₆.left_eq, hL₆.rest_eq]
   let s₇ := past s₆ eq (ets ++ semi :: rest)
   have hl₇ : s₇.left = s₇.rest.length := by simp [s₇, hl₆, hs₆]
-  have hT₇ : s₇.target = T := by simp [s₇, hL₆.target_eq, hL₅.target_eq, s₂, s₁, hT]
+  have hT₇ : s₇.target = T := by simp [s₇, hL₆.target_eq, hL₅.target_eq, s₁, hT]
   obtain ⟨init', s₈, hpe, hie, hL₈⟩ := parseAssign_budget init he s₇ ets (semi :: rest) hT₇ rfl hl₇ het
     (fun y hy => hn y (by simp [List.mem_of_mem_tail hy])) (by simp)
     (endsAssign_separator hsemi (by simp [separators])) (by simpa [hsemi] using afterOK_semicolon ha _)
@@ -1083,19 +1099,16 @@ theorem parseDestructure_reads {T : Edition} (start : Pos) (kind : VarKind) (p :
   let s₉ : ParseState := { s₈ with rest := rest, left := s₈.left - 1, lastStop := semi.span.stop }
   refine ⟨type', init', s₉, ?_, hte, hie, ?_⟩
   · simp only [Parse.parseDestructure]
-    rw [Parse.bind_eq (Parse.advance_eq hs'),
-      Parse.bind_eq (Parse.discard_eq (Parse.advance_cons (s := s₁) rfl (by simp))),
-      Parse.bind_eq (Parse.budget_eq _), Parse.bind_eq hit, Parse.bind_eq hrr, Parse.bind_eq hrb,
+    rw [Parse.bind_eq (Parse.advance_eq hs'), Parse.bind_eq hrp,
       Parse.bind_eq hty, Parse.bind_eq (Parse.peek_eq hs₆),
       if_pos (show eq.isPunct "=" = true by simp [Token.isPunct, heq]), Parse.pure_bind,
       Parse.bind_eq (Parse.discard_eq (Parse.advance_cons hs₆ (by simp))), Parse.bind_eq (Parse.budget_eq _),
       Parse.bind_eq hpe, Parse.bind_eq (Parse.peek_eq hs₈),
       Parse.ite_guard (fun h => by simp [Token.isPunct, hsemi] at h),
       Parse.bind_eq (endStatement_semi hs₈ hr hsemi), Parse.bind_eq (Parse.spanFrom_eq _ _)]
-    cases kind <;> simp [s₉, hkw, VarKind.token, Token.isKeyword, hel, pure, EStateM.pure]
-  · exact leaves_trans (leaves_advance hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))
-      (leaves_trans hL₅ (leaves_trans hL₆ (leaves_trans (leaves_advance hs₆ hl₆)
-        (leaves_trans hL₈ (leaves_advance hs₈ (by rw [hL₈.left_eq, hs₈])))))))
+    cases kind <;> simp [s₉, hkw, VarKind.token, Token.isKeyword, pure, EStateM.pure]
+  · exact leaves_trans (leaves_advance hs' hl) (leaves_trans hL₅ (leaves_trans hL₆
+      (leaves_trans (leaves_advance hs₆ hl₆) (leaves_trans hL₈ (leaves_advance hs₈ (by rw [hL₈.left_eq, hs₈]))))))
 
 /-- An array destructuring. -/
 theorem stmt_destructure {T : Edition} {fn loop : Bool} (f : Nat) (sp : Span) (kind : VarKind) (p : ArrayPattern)
@@ -1163,6 +1176,8 @@ theorem Stmt.first {T : Edition} {fn loop : Bool} (st : Stmt) (hw : st.wf T fn l
     refine ⟨.keyword "if", ?_, by simp [StartsStmt]⟩
     cases e <;> simp [Stmt.wordLines, Stmt.lines, keywordWord]
   | forOfStmt _ _ _ _ _ => exact ⟨.keyword "for", by simp [Stmt.wordLines, Stmt.lines, keywordWord], by simp [StartsStmt]⟩
+  | forOfPattern _ _ _ _ _ =>
+    exact ⟨.keyword "for", by simp [Stmt.wordLines, Stmt.lines, keywordWord], by simp [StartsStmt]⟩
   | forStmt _ _ _ _ _ => exact ⟨.keyword "for", by simp [Stmt.wordLines, Stmt.lines, keywordWord], by simp [StartsStmt]⟩
   | whileStmt _ _ _ => exact ⟨.keyword "while", by simp [Stmt.wordLines, Stmt.lines, keywordWord], by simp [StartsStmt]⟩
   | block _ _ => exact ⟨.punct "{", by simp [Stmt.wordLines, Stmt.lines, punctWord], by simp [StartsStmt]⟩
@@ -1567,7 +1582,6 @@ theorem parseForOf_reads {T : Edition} {fn loop : Bool} (h : Nat) (sp : Span) (k
   have hl₇ : s₇'.left = s₇'.rest.length := by simp [s₇', s₇, hL₆.left_eq]
   obtain ⟨body', s₈, hpb, heb, hL₈⟩ := hb s₇' b rest (hL₆.target_eq.trans hT) (hL₆.inFunction_eq.trans hF)
     (fun _ => by simp [s₇']) rfl hl₇ hbl hr (fun h => hopen h)
-  have hnot : nm.kind ≠ .punct "[" ∧ nm.kind ≠ .punct "{" := by rw [hnm]; simp
   have hlp' : lp.kind ≠ .ident "await" := by rw [hlp]; simp
   refine ⟨.forOfStmt ⟨fk.span.start, s₈.lastStop⟩ kind name it' body', { s₈ with loopDepth := s₈.loopDepth - 1 },
     ?_, by simp [Stmt.erase, hei, heb], ?_⟩
@@ -1579,7 +1593,8 @@ theorem parseForOf_reads {T : Edition} {fn loop : Bool} (h : Nat) (sp : Span) (k
     simp (config := { decide := true }) only [Token.isPunct, Token.isKeyword, Token.isIdent, beq_self_eq_true, ↓reduceIte, beq_iff_eq,
       Parse.pure_bind, reduceCtorEq, hkk] <;>
     rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_eq (s := s₂) rfl)), Parse.bind_eq (Parse.peek_eq (s := s₃) rfl)] <;>
-    rw [Parse.ite_guard (fun h => by simp [hnot] at h)] <;>
+    simp (config := { decide := true }) only [hnm, reduceCtorEq, beq_iff_eq, ↓reduceIte] <;>
+    rw [Parse.pure_bind] <;>
     rw [Parse.bind_eq (readName_ok (s := s₃) rfl hnm hname'), Parse.bind_eq (Parse.peek_eq (s := s₄) rfl)] <;>
     simp (config := { decide := true }) only [beq_self_eq_true, ↓reduceIte,
       Parse.pure_bind, hofk] <;>
@@ -1592,13 +1607,15 @@ theorem parseForOf_reads {T : Edition} {fn loop : Bool} (h : Nat) (sp : Span) (k
           (leaves_trans (leaves_advance (s := s₄) rfl (by simp [s₄, s₃, s₂, s₁, hl, hs']))
             (leaves_trans hL₆ (leaves_trans (leaves_advance hs₆ (by rw [hL₆.left_eq, hs₆])) (leaves_withLoop hL₈)))))))
 
-/-- `countedFor` looks at the third and fifth tokens and reads nothing. -/
+/-- `countedFor` looks at the third, fourth and fifth tokens and reads nothing. -/
 theorem Parse.countedFor_eq (s : ParseState) :
     Parse.countedFor s = .ok ((s.rest[2]?.getD s.eof).isPunct ";" ||
       (((s.rest[2]?.getD s.eof).isKeyword "const" || (s.rest[2]?.getD s.eof).isIdent "let") &&
+        !(s.rest[3]?.getD s.eof).isPunct "[" &&
         !(s.rest[4]?.getD s.eof).isIdent "of" && !(s.rest[4]?.getD s.eof).isKeyword "in")) s := by
   simp only [Parse.countedFor]
-  rw [Parse.bind_eq (Parse.peekAt_rest s 2), Parse.bind_eq (Parse.peekAt_rest s 4)]
+  rw [Parse.bind_eq (Parse.peekAt_rest s 2), Parse.bind_eq (Parse.peekAt_rest s 3),
+    Parse.bind_eq (Parse.peekAt_rest s 4)]
   rfl
 
 /-- `parseStatement` reads `for … of` with `parseForOf`. -/
@@ -1614,7 +1631,7 @@ theorem stmt_for {T : Edition} {fn loop : Bool} (f : Nat) (sp : Span) (kind : Va
   obtain ⟨fk, a₁, rfl, hfk, h₁⟩ := Touching.cons_one (by simpa [keywordWord] using ha)
   obtain ⟨lp, a₂, rfl, -, h₂⟩ := Touching.cons_one (by simpa [punctWord] using h₁)
   obtain ⟨kk, a₃, rfl, hkk, h₃⟩ := Touching.cons_one h₂
-  obtain ⟨nm, a₄, rfl, -, h₄⟩ := Touching.cons_one (by simpa [identWord] using h₃)
+  obtain ⟨nm, a₄, rfl, hnm, h₄⟩ := Touching.cons_one (by simpa [identWord] using h₃)
   obtain ⟨ofk, a₅, rfl, hofk, -⟩ := Touching.cons_one (by simpa [identWord] using h₄)
   have hs' : s.rest = fk :: lp :: kk :: nm :: ofk :: (a₅ ++ (b ++ rest)) := by simpa using hs
   simp only [Parse.parseStatement]
@@ -1623,8 +1640,118 @@ theorem stmt_for {T : Edition} {fn loop : Bool} (f : Nat) (sp : Span) (kind : Va
   rw [Parse.bind_eq (Parse.countedFor_eq s)]
   simp only [hs', List.getElem?_cons_succ, List.getElem?_cons_zero, Option.getD_some]
   cases kind <;> simp only [VarKind.token] at hkk <;>
-    simp (config := { decide := true }) only [Token.isPunct, Token.isKeyword, Token.isIdent, hkk, hofk,
-      ↓reduceIte] <;> exact hp
+    simp (config := { decide := true }) only [Token.isPunct, Token.isKeyword, Token.isIdent, hkk, hnm, hofk] <;>
+      exact hp
+
+/-- The rest of `for ( const [a, , ...r] of e ) body` from the `[`, which
+`parseForOfPattern` reads, with `parseBody` reading the body in the loop. -/
+theorem parseForOfPattern_reads {T : Edition} {fn : Bool} {parseBody : ParseM Stmt} (start : Pos)
+    (kind : VarKind) (p : ArrayPattern) (it : Expr) (body : Stmt) (hp : p.wf = true)
+    (hwe : it.wfAt T .assign = true) (hae : it.afterOK [.punct ")"] = true) (hb : ReadsS T fn true parseBody body)
+    (s : ParseState) (lb ofk rp : Token) (pts its b rest : List Token) (hT : s.target = T) (hF : s.inFunction = fn)
+    (hs : s.rest = lb :: (pts ++ ofk :: (its ++ rp :: (b ++ rest)))) (hl : s.left = s.rest.length)
+    (hpt : Touching pts p.words.tail) (hofk : ofk.kind = .ident "of") (hit : Touching its it.words)
+    (hn : ∀ y ∈ its, NoBreak y) (hrp : rp.kind = .punct ")") (hbl : Laid b body.wordLines) (hr : rest ≠ [])
+    (hopen : body.openIf = true → ∀ u ∈ rest.head?, u.kind ≠ .keyword "else") :
+    ∃ it' body' s', Parse.parseForOfPattern parseBody start kind s =
+        .ok (.forOfPattern ⟨start, s'.lastStop⟩ kind p it' body') s' ∧
+      it'.erase = it.erase ∧ body'.erase = body.erase ∧ Leaves s s' rest := by
+  obtain ⟨s₁, hrd, hL₁⟩ := readPattern_reads p hp s lb pts (ofk :: (its ++ rp :: (b ++ rest))) hs hl (by simp) hpt
+  have hs₁ : s₁.rest = ofk :: (its ++ rp :: (b ++ rest)) := hL₁.rest_eq
+  have hl₁ : s₁.left = s₁.rest.length := by rw [hL₁.left_eq, hL₁.rest_eq]
+  let s₂ := past s₁ ofk (its ++ rp :: (b ++ rest))
+  have hl₂ : s₂.left = s₂.rest.length := by simp [s₂, hl₁, hs₁]
+  have hT₂ : s₂.target = T := by simp [s₂, hL₁.target_eq, hT]
+  obtain ⟨it', s₃, hpi, hei, hL₃⟩ := parseAssign_budget it hwe s₂ its (rp :: (b ++ rest)) hT₂ rfl hl₂ hit
+    (fun y hy => hn y (List.mem_of_mem_tail hy)) (by simp)
+    (endsAssign_separator hrp (by simp [separators])) (by simpa [hrp] using afterOK_closer hae _)
+  have hs₃ : s₃.rest = rp :: (b ++ rest) := hL₃.rest_eq
+  let s₄ : ParseState := { s₃ with rest := b ++ rest, left := s₃.left - 1, lastStop := rp.span.stop }
+  let s₄' : ParseState := { s₄ with loopDepth := s₄.loopDepth + 1 }
+  have hl₄ : s₄'.left = s₄'.rest.length := by simp [s₄', s₄, hL₃.left_eq]
+  obtain ⟨body', s₅, hpb, heb, hL₅⟩ := hb s₄' b rest (hL₃.target_eq.trans hT₂)
+    (hL₃.inFunction_eq.trans (by simp [s₂, hL₁.inFunction_eq, hF])) (fun _ => by simp [s₄']) rfl hl₄ hbl hr hopen
+  refine ⟨it', body', { s₅ with loopDepth := s₅.loopDepth - 1 }, ?_, hei, heb, ?_⟩
+  · simp only [Parse.parseForOfPattern]
+    rw [Parse.bind_eq hrd, Parse.bind_eq (Parse.peek_eq hs₁),
+      if_pos (show ofk.isIdent "of" = true by simp [Token.isIdent, hofk]), Parse.pure_bind,
+      Parse.bind_eq (Parse.discard_eq (Parse.advance_cons hs₁ (by simp))), Parse.bind_eq (Parse.budget_eq _),
+      Parse.bind_eq hpi, Parse.bind_eq (Parse.expectPunct_ok hs₃ (by simp [hr]) hrp),
+      Parse.bind_eq (Parse.withLoop_ok hpb), Parse.bind_eq (Parse.spanFrom_eq _ _)]
+    rfl
+  · exact leaves_trans hL₁ (leaves_trans (leaves_advance hs₁ hl₁) (leaves_trans hL₃
+      (leaves_trans (leaves_advance hs₃ (by rw [hL₃.left_eq, hs₃])) (leaves_withLoop hL₅))))
+
+/-- `for ( const [a, , ...r] of e )` or the same with `let`, and a body, which
+`parseBranch` reads in a loop. -/
+theorem parseForOf_pattern_reads {T : Edition} {fn loop : Bool} (h : Nat) (sp : Span) (kind : VarKind)
+    (p : ArrayPattern) (it : Expr) (body : Stmt) (hw : (Stmt.forOfPattern sp kind p it body).wf T fn loop = true)
+    (hb : ReadsS T fn true (Parse.parseBranch h) body) :
+    ReadsS T fn loop (Parse.parseForOf (h + 1)) (.forOfPattern sp kind p it body) := by
+  intro s ts rest hT hF _ hs hl hlaid hr hopen
+  simp only [Stmt.wf, Bool.and_eq_true, Expr.wfParen] at hw
+  obtain ⟨⟨⟨hp, hwe, hae⟩, -⟩, -⟩ := hw
+  simp only [Stmt.wordLines, Stmt.lines, List.map_cons] at hlaid
+  rw [Stmt.lines_words body 1] at hlaid
+  obtain ⟨a, b, rfl, ha, hna, _, hbl⟩ := Laid.cons hlaid
+  simp only [VarKind.word_eq] at ha
+  obtain ⟨fk, a₁, rfl, hfk, h₁⟩ := Touching.cons_one (by simpa [keywordWord] using ha)
+  obtain ⟨lp, a₂, rfl, hlp, h₂⟩ := Touching.cons_one (by simpa [punctWord] using h₁)
+  obtain ⟨kk, a₃, rfl, hkk, h₃⟩ := Touching.cons_one h₂
+  obtain ⟨pts, a₄, rfl, hpt, h₄⟩ := Touching.append_split h₃
+  rw [ArrayPattern.words_open] at hpt
+  obtain ⟨lb, pts', rfl, hlb, hpt'⟩ := Touching.cons_one hpt
+  obtain ⟨ofk, a₅, rfl, hofk, h₅⟩ := Touching.cons_one (by simpa [identWord] using h₄)
+  obtain ⟨its, a₆, rfl, hit, h₆⟩ := Touching.append_split h₅
+  obtain ⟨rp, a₇, rfl, hrp, h₇⟩ := Touching.cons_one (by simpa [punctWord] using h₆)
+  simp [Touching] at h₇; subst h₇
+  have hs' : s.rest = fk :: lp :: kk :: lb :: (pts' ++ ofk :: (its ++ rp :: (b ++ rest))) := by simpa using hs
+  let s₁ := past s fk (lp :: kk :: lb :: (pts' ++ ofk :: (its ++ rp :: (b ++ rest))))
+  let s₂ := past s₁ lp (kk :: lb :: (pts' ++ ofk :: (its ++ rp :: (b ++ rest))))
+  let s₃ := past s₂ kk (lb :: (pts' ++ ofk :: (its ++ rp :: (b ++ rest))))
+  have hl₃ : s₃.left = s₃.rest.length := by simp [s₃, s₂, s₁, hl, hs']
+  obtain ⟨it', body', s', hpp, hei, heb, hL'⟩ := parseForOfPattern_reads fk.span.start kind p it body hp hwe hae hb
+    s₃ lb ofk rp pts' its b rest hT hF rfl hl₃ hpt' hofk hit (fun y hy => hna y (by simp [hy])) hrp hbl hr hopen
+  have hlp' : lp.kind ≠ .ident "await" := by rw [hlp]; simp
+  refine ⟨.forOfPattern ⟨fk.span.start, s'.lastStop⟩ kind p it' body', s', ?_, by simp [Stmt.erase, hei, heb], leaves_trans (leaves_advance hs' hl)
+    (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))
+      (leaves_trans (leaves_advance (s := s₂) rfl (by simp [s₂, s₁, hl, hs'])) hL'))⟩
+  simp only [Parse.parseForOf]
+  rw [Parse.bind_eq (Parse.advance_eq hs'), Parse.bind_eq (Parse.peek_eq (s := s₁) rfl)]
+  rw [Parse.ite_guard (fun h => by simp [Token.isIdent, hlp'] at h)]
+  rw [Parse.bind_eq (Parse.expectPunct_ok (s := s₁) rfl (by simp) hlp), Parse.bind_eq (Parse.peek_eq (s := s₂) rfl)]
+  cases kind <;> simp only [VarKind.token] at hkk <;>
+    simp (config := { decide := true }) only [Token.isPunct, Token.isKeyword, Token.isIdent, beq_self_eq_true,
+      ↓reduceIte, beq_iff_eq, Parse.pure_bind, reduceCtorEq, hkk] <;>
+    rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_eq (s := s₂) rfl)), Parse.bind_eq (Parse.peek_eq (s := s₃) rfl)] <;>
+    simp only [hlb] <;> exact hpp
+
+/-- `parseStatement` reads `for` and a pattern before `of` with `parseForOf`:
+`countedFor` sees the `[` after `const` or `let`. -/
+theorem stmt_forPattern {T : Edition} {fn loop : Bool} (f : Nat) (sp : Span) (kind : VarKind) (p : ArrayPattern)
+    (it : Expr) (body : Stmt) (h : ReadsS T fn loop (Parse.parseForOf f) (.forOfPattern sp kind p it body)) :
+    ReadsS T fn loop (Parse.parseStatement (f + 1)) (.forOfPattern sp kind p it body) := by
+  intro s ts rest hT hF hL hs hl ht hr he
+  obtain ⟨st', s', hp, hst', hL'⟩ := h s ts rest hT hF hL hs hl ht hr he
+  refine ⟨st', s', ?_, hst', hL'⟩
+  simp only [Stmt.wordLines, Stmt.lines, List.map_cons] at ht
+  obtain ⟨a, b, rfl, ha, _⟩ := Laid.cons ht
+  simp only [VarKind.word_eq] at ha
+  obtain ⟨fk, a₁, rfl, hfk, h₁⟩ := Touching.cons_one (by simpa [keywordWord] using ha)
+  obtain ⟨lp, a₂, rfl, -, h₂⟩ := Touching.cons_one (by simpa [punctWord] using h₁)
+  obtain ⟨kk, a₃, rfl, hkk, h₃⟩ := Touching.cons_one h₂
+  obtain ⟨pts, a₄, rfl, hpt, -⟩ := Touching.append_split h₃
+  rw [ArrayPattern.words_open] at hpt
+  obtain ⟨lb, pts', rfl, hlb, -⟩ := Touching.cons_one hpt
+  have hs' : s.rest = fk :: lp :: kk :: lb :: (pts' ++ (a₄ ++ (b ++ rest))) := by simpa using hs
+  simp only [Parse.parseStatement]
+  rw [Parse.bind_eq (Parse.peek_eq hs')]
+  simp only [hfk]
+  rw [Parse.bind_eq (Parse.countedFor_eq s)]
+  simp only [hs', List.getElem?_cons_succ, List.getElem?_cons_zero, Option.getD_some]
+  cases kind <;> simp only [VarKind.token] at hkk <;>
+    simp (config := { decide := true }) only [Token.isPunct, Token.isKeyword, Token.isIdent, hkk, hlb] <;>
+      exact hp
 
 /-- `p`, when the next token is not `stop`. -/
 theorem Parse.unlessPunct_some {α : Type} {stop : String} {p : ParseM α} {s s' : ParseState} {x : Token}
@@ -1679,7 +1806,7 @@ theorem VarDecl.inFree_erase (d : VarDecl) : d.erase.inFree = d.inFree := by
 
 /-- The tokens of a declaration: `const` or `let`, the name, and then `:`, `=` or `;`. -/
 theorem VarDecl.three_tokens {ts : List Token} (d : VarDecl) (h : Touching ts d.words) :
-    ∃ kw nm x ts', ts = kw :: nm :: x :: ts' ∧ kw.kind = d.kind.token ∧
+    ∃ kw nm x ts', ts = kw :: nm :: x :: ts' ∧ kw.kind = d.kind.token ∧ nm.kind = .ident d.name ∧
       (x.kind = .punct ":" ∨ x.kind = .punct "=" ∨ x.kind = .punct ";") := by
   have hk := h.kinds
   obtain ⟨kind, name, type, init⟩ := d
@@ -1693,7 +1820,7 @@ theorem VarDecl.three_tokens {ts : List Token} (d : VarDecl) (h : Touching ts d.
   | [_], hk | [_, _], hk => simp at hk
   | a :: b :: c :: ts', hk =>
     simp only [List.map_cons, List.cons.injEq] at hk
-    exact ⟨a, b, c, ts', rfl, hk.1, hk.2.2.1 ▸ hxk⟩
+    exact ⟨a, b, c, ts', rfl, hk.1, hk.2.1, hk.2.2.1 ▸ hxk⟩
 
 /-- The declaration at the start of a counted `for`, up to its `;`. -/
 theorem parseForDeclaration_reads {T : Edition} (d : VarDecl) (hd : d.wf T = true) (hi : d.inFree = true)
@@ -1704,7 +1831,7 @@ theorem parseForDeclaration_reads {T : Edition} (d : VarDecl) (hd : d.wf T = tru
   obtain ⟨d', s', ts', semi, hts, hsemi, hp, hd', hL⟩ := parseDeclaration_reads d hd s ts rest hT hs hl ht hn
   refine ⟨d', s', ts', semi, hts, hsemi, ?_, hd', hL⟩
   have hi' : d'.inFree = true := by rw [← VarDecl.inFree_erase, hd', VarDecl.inFree_erase]; exact hi
-  obtain ⟨kw, nm, x, ts'', hts', hkw, -⟩ := VarDecl.three_tokens d ht
+  obtain ⟨kw, nm, x, ts'', hts', hkw, -, -⟩ := VarDecl.three_tokens d ht
   have hs' : s.rest = kw :: (nm :: x :: ts'' ++ rest) := by rw [hs, hts']; simp
   have hk : (kw.isKeyword "const" || kw.isIdent "let") = true := by
     simp only [Token.isKeyword, Token.isIdent, hkw]; cases d.kind <;> simp [VarKind.token]
@@ -1733,7 +1860,7 @@ theorem forInit_reads {T : Edition} (init : Option VarDecl) (hw : VarDecl.forWF 
     simp only [forInitWords] at ht
     obtain ⟨d', s', ts', semi, rfl, hsemi, hp, hd', hL⟩ :=
       parseForDeclaration_reads d hw.1 hw.2 s ts rest hT hs hl ht hn
-    obtain ⟨kw, nm, x, ts'', hts, hkw, -⟩ := VarDecl.three_tokens d ht
+    obtain ⟨kw, nm, x, ts'', hts, hkw, -, -⟩ := VarDecl.three_tokens d ht
     have hkw' : kw.kind ≠ .punct ";" := by rw [hkw]; cases d.kind <;> simp [VarKind.token]
     have hs' : s.rest = kw :: (nm :: x :: ts'' ++ rest) := by rw [hs, hts]; simp
     exact ⟨some d', s', semi, _, Parse.unlessPunct_some hs' hkw' hp, Parse.expectPunct_ok hL.rest_eq hr hsemi,
@@ -1851,10 +1978,10 @@ theorem stmt_counted {T : Edition} {fn loop : Bool} (f : Nat) (sp : Span) (init 
       have hs' : s.rest = fk :: lp :: semi :: (a₃ ++ (b ++ rest)) := by simpa using hs
       simp [hs', Token.isPunct, hsemi]
     | some d =>
-      obtain ⟨kw, nm, x, ts', rfl, hkw, hx⟩ := VarDecl.three_tokens d (by simpa [forInitWords] using hit)
+      obtain ⟨kw, nm, x, ts', rfl, hkw, hnm, hx⟩ := VarDecl.three_tokens d (by simpa [forInitWords] using hit)
       have hs' : s.rest = fk :: lp :: kw :: nm :: x :: (ts' ++ (a₃ ++ (b ++ rest))) := by simpa using hs
       simp only [hs', List.getElem?_cons_succ, List.getElem?_cons_zero, Option.getD_some]
-      simp only [Token.isPunct, Token.isKeyword, Token.isIdent, hkw]
+      simp only [Token.isPunct, Token.isKeyword, Token.isIdent, hkw, hnm]
       rcases hx with hx | hx | hx <;> cases d.kind <;> simp [VarKind.token, hx]
   have hs' : s.rest = fk :: (lp :: (its ++ a₃) ++ (b ++ rest)) := by simpa using hs
   simp only [Parse.parseStatement]
@@ -2119,6 +2246,7 @@ theorem Stmt.first_break {T : Edition} {fn loop : Bool} (st : Stmt) (hw : st.wf 
   | ifStmt sp t a e => cases e <;> simp [Stmt.wordLines, Stmt.lines, keywordWord] at h
   | breakStmt _ => rfl
   | forOfStmt _ _ _ _ _ => simp [Stmt.wordLines, Stmt.lines, keywordWord] at h
+  | forOfPattern _ _ _ _ _ => simp [Stmt.wordLines, Stmt.lines, keywordWord] at h
   | forStmt _ _ _ _ _ => simp [Stmt.wordLines, Stmt.lines, keywordWord] at h
   | whileStmt _ _ _ => simp [Stmt.wordLines, Stmt.lines, keywordWord] at h
   | continueStmt _ => simp [Stmt.wordLines, Stmt.lines, keywordWord] at h
@@ -2533,6 +2661,15 @@ theorem allStmts_succ {T : Edition} (f : Nat) (IH : ∀ g ≤ f, AllStmts T g) :
     obtain ⟨⟨_, hd⟩, hbw⟩ := hw'
     exact stmt_for (h + 1 + 1) sp kind name it body
       (parseForOf_reads (h + 1) sp kind name it body hw
+        (parseBranch_reads h body hd hbw (IH h (by omega) fn true body hbw (by simp [Stmt.need]; omega))))
+  | forOfPattern sp kind p it body =>
+    simp only [Stmt.depth] at hn
+    obtain ⟨h, rfl⟩ : ∃ h, f = h + 1 + 1 := ⟨f - 2, by omega⟩
+    have hw' := hw
+    simp only [Stmt.wf, Bool.and_eq_true, Bool.not_eq_true'] at hw'
+    obtain ⟨⟨_, hd⟩, hbw⟩ := hw'
+    exact stmt_forPattern (h + 1 + 1) sp kind p it body
+      (parseForOf_pattern_reads (h + 1) sp kind p it body hw
         (parseBranch_reads h body hd hbw (IH h (by omega) fn true body hbw (by simp [Stmt.need]; omega))))
   | forStmt sp init test update body =>
     simp only [Stmt.depth] at hn
