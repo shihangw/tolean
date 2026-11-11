@@ -217,6 +217,59 @@ def split (s sep : JSString) : List JSString :=
   | [] => (s.units.take (2 ^ 32 - 1)).map fun u => ⟨[u]⟩
   | c :: cs => ((splitUnits c cs s.units []).take (2 ^ 32 - 1)).map JSString.mk
 
+/-- The code unit is a leading surrogate, from D800 to DBFF (ECMA-262 §11.1.3). -/
+def isLeading (u : UInt16) : Bool := 0xD800 ≤ u.toNat && u.toNat < 0xDC00
+
+/-- The code unit is a trailing surrogate, from DC00 to DFFF (ECMA-262 §11.1.3). -/
+def isTrailing (u : UInt16) : Bool := 0xDC00 ≤ u.toNat && u.toNat < 0xE000
+
+/-- The code units of each code point of `l`, in order, as CodePointAt reads
+them (ECMA-262 §11.1.4): a leading surrogate and then a trailing one make one
+code point of two code units. Every other code unit is a code point by
+itself, a lone surrogate too. -/
+def codePointUnits : List UInt16 → List (List UInt16)
+  | [] => []
+  | [u] => [[u]]
+  | u :: l :: rest =>
+    if isLeading u && isTrailing l then [u, l] :: codePointUnits rest
+    else [u] :: codePointUnits (l :: rest)
+
+/-- The strings that `for (const c of s)` and `[...s]` visit
+(`String.prototype[@@iterator]`, ECMA-262 §22.1.3.36, and the
+%StringIteratorPrototype%, §22.1.5): each code point of `s`, as a string of
+one or two code units. A lone surrogate is a string of its own code unit, not
+U+FFFD. -/
+def codePoints (s : JSString) : List JSString := (codePointUnits s.units).map JSString.mk
+
+theorem codePointUnits_flatten (l : List UInt16) : (codePointUnits l).flatten = l := by
+  induction l using codePointUnits.induct with
+  | case1 => rfl
+  | case2 u => rfl
+  | case3 u l rest h ih => simp [codePointUnits, h, ih]
+  | case4 u l rest h ih => simp [codePointUnits, h, ih]
+
+/-- The code points of a string hold its code units, in order, so iteration
+loses and adds nothing. -/
+theorem codePoints_units (s : JSString) : (s.codePoints.map (·.units)).flatten = s.units := by
+  simp [codePoints, List.map_map, Function.comp_def, codePointUnits_flatten]
+
+/-- Each code point is one or two code units. -/
+theorem codePointUnits_length {l : List UInt16} {c : List UInt16} (h : c ∈ codePointUnits l) :
+    c.length = 1 ∨ c.length = 2 := by
+  induction l using codePointUnits.induct with
+  | case1 => simp [codePointUnits] at h
+  | case2 u => simp [codePointUnits] at h; simp [h]
+  | case3 u l rest hc ih =>
+    simp only [codePointUnits, hc, if_true, List.mem_cons] at h
+    rcases h with rfl | h
+    · simp
+    · exact ih h
+  | case4 u l rest hc ih =>
+    simp only [codePointUnits, hc, Bool.false_eq_true, if_false, List.mem_cons] at h
+    rcases h with rfl | h
+    · simp
+    · exact ih h
+
 /-- `startsWith` is Lean's prefix order on the code units. -/
 theorem startsWith_iff (s p : JSString) : s.startsWith p = true ↔ p.units <+: s.units :=
   List.isPrefixOf_iff_prefix

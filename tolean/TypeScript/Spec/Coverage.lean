@@ -284,6 +284,9 @@ def sections : List Section := [
   ⟨"sec-string.prototype.startswith", "22.1.3.25", "String.prototype.startsWith",
     [``JSString.startsWith_iff, ``Proof.stringMethod_of, ``Proof.stringCall_sound,
     ``Proof.stringMethod_not_at]⟩,
+  ⟨"sec-string.prototype-@@iterator", "22.1.3.36", "String.prototype [ @@iterator ] ( )",
+    [``JSString.codePoints_units, ``JSString.codePointUnits_flatten,
+    ``JSString.codePointUnits_length]⟩,
   ⟨"sec-properties-of-string-instances-length", "22.1.4.1", "length", []⟩,
   -- §23 Indexed Collections {#sec-indexed-collections}
   ⟨"sec-array.prototype.at", "23.1.3.1", "Array.prototype.at", [``Proof.eval_at]⟩,

@@ -1586,13 +1586,14 @@ def newSetType (s : Span) (typeArgs : List TypeExpr) (expected : Option Ty) : TM
   | _, _ => reject s "new Set needs the type of its elements, such as new Set<string>()"
 
 /-- What `for (const x of items)` visits, with its type: the elements of an
-array or a set, or the entries of a map, which a loop sees as tuples
-`[key, value]`. -/
+array or a set, the entries of a map, which a loop sees as tuples
+`[key, value]`, or the code points of a string, each as a string. -/
 def loopOver (items : Code) : Option (Ty × IR.Expr) :=
   match items.type with
   | .array t => some (t, items.code)
   | .set t => some (t, .ext .setElems [items.value])
   | .map k v => some (.tuple [k, v], .ext .mapEntries [items.value])
+  | .string => some (.string, .ext .stringCodePoints [items.value])
   | _ => none
 
 /-- What a loop over `iterable`, which `items` translates, visits, when the
@@ -1600,7 +1601,7 @@ loop body is `body`. -/
 def loopItems (iterable : Expr) (body : Stmt) (items : Code) : TM (Ty × IR.Expr) := do
   if Stmt.mutatesIterable iterable body then
     reject iterable.span "a loop may not change the map or set that it runs over"
-  orReject (loopOver items) iterable.span "a loop must run over an array, a set or a map"
+  orReject (loopOver items) iterable.span "a loop must run over an array, a set, a map or a string"
 
 /-- A piece of an array literal: an element, or the list of values that a
 spread `...e` gives, with their type. -/
@@ -1622,7 +1623,7 @@ def translateElem (tr : Option Ty → Expr → TM Code) (expected : Option Ty) (
   match e.spreadArg? with
   | some (sp, x) => do
     let items ← tr expected x
-    let (t, li) ← orReject (loopOver items) sp "a spread '...' in an array needs an array, a set or a map"
+    let (t, li) ← orReject (loopOver items) sp "a spread '...' in an array needs an array, a set, a map or a string"
     pure (.many t li)
   | none => do
     let elem := match expected with
@@ -1691,7 +1692,7 @@ def translateNew (tr : Option Ty → Expr → TM Code) (env : Env) (expected : O
     let items ← translateRecv (tr (declared.map fun t => if isMap then t.entriesOf else t.elemsOf)) env arg
     let (elem, li) ← orReject (loopOver items) arg.span
       (if isMap then "new Map takes an array of [key, value] entries, or a map"
-       else "new Set takes an array or a set")
+       else "new Set takes an array, a set, a map or a string")
     let type ← if isMap then mapOfEntriesType arg.span declared elem else setOfElemsType arg.span declared elem
     return ⟨.ascribe (.ext (if isMap then .mapOfList else .setOfList) [li]) type.lean, false, type⟩
   | _ => reject s s!"new {callee} takes at most one argument"
@@ -2649,7 +2650,7 @@ def listPlaces (elem : Ty) (li : IR.Expr) : List (Option String) → Nat → Lis
 
 /-- What `const [a, , b, ...r] = e` binds, where `c` is the code of `e`: each
 name, with its type and the code that reads its value. A tuple gives its
-elements. An array, a set or a map gives the values that a loop over it
+elements. An array, a set, a map or a string gives the values that a loop over it
 visits, each optional, and the rest is the list of the values after the
 places. -/
 def patternReads (s : Span) (p : ArrayPattern) (c : Code) : TM (List (String × Ty × IR.Expr)) := do
@@ -2659,7 +2660,7 @@ def patternReads (s : Span) (p : ArrayPattern) (c : Code) : TM (List (String × 
     unless p.elems.length ≤ tys.length do reject s s!"the tuple has only {tys.length} elements"
     return tuplePlaces c.value tys.length p.elems tys 0
   | none =>
-    let (elem, li) ← orReject (loopOver c) s "destructuring needs a tuple, an array, a set or a map"
+    let (elem, li) ← orReject (loopOver c) s "destructuring needs a tuple, an array, a set, a map or a string"
     -- The output has one `none` for `undefined` and `null`.
     if elem.isMaybe then reject s "destructuring an array of nullable values could give null or undefined"
     return listPlaces elem li p.elems 0 ++

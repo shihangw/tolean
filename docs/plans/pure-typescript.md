@@ -136,7 +136,6 @@ of a literal as a Lean `String`.
 |---|---|---|
 | Template literals whose parts are `string`, `boolean`, `bigint` or a safe integer `number`, and `+` on a string and a safe integer `number` | `++` on `JSString`, as `+` on strings is now. A number converts to ASCII digits (§6.1.6.1.20). | A part that is a non-integer `number` or an object |
 | `at` (§22.1.3.1), `slice` (§22.1.3.22), `padStart` and `padEnd`, the position argument of `startsWith`, `endsWith`, `includes` and `indexOf`, and the limit of `split` | Functions on the list of code units. `slice` and `at` follow the spec for negative and out-of-range indexes. | `split` with a regular expression, and every regular expression in the first version |
-| `for (const c of s)` and `[...s]` | Iteration by code point, which joins each surrogate pair (§22.1.3.36 and §22.1.5) | |
 | `toUpperCase` and `toLowerCase` (§22.1.3.30 and §22.1.3.28) | Only for strings that the translator can show are ASCII | `normalize` (§22.1.3.15), and case changes of other strings, because their results follow the Unicode version of the engine, and that version changes between Node releases |
 | `JSON.stringify(x)` | An opaque function | |
 
@@ -237,7 +236,7 @@ leaves a gap.
    lifting them out and threading the variables through each call.
 8. **P0.** The borrow for a map that a caller passes in.
 9. **P1.** Strings: template literals, the string methods and arguments in
-   the table above, iteration by code point, and the opaque `JSON.stringify`.
+   the table above, and the opaque `JSON.stringify`.
 10. **P1.** Sorting with consistent comparators.
 11. **P2.** Recursion: tagged unions that refer to themselves first, then
     `@decreases`, mutual recursion, and `while` loops.
