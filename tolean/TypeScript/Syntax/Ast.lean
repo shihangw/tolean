@@ -725,7 +725,7 @@ clauses share one scope (ECMA-262 §14.12.2, §14.12.4): such a local is in
 its temporal dead zone from the start of the case block, and two clauses
 may not declare the same name. -/
 def clausesDeclare (clauses : List (Option Expr × List Stmt)) : Bool :=
-  clauses.any fun (_, body) => body.any fun s => s matches .varDecl ..
+  clauses.any fun (_, body) => body.any fun s => s matches .varDecl .. || s matches .destructure ..
 
 /-- A property of an interface. -/
 structure Field where
