@@ -590,6 +590,10 @@ class Printer {
       if (decl === undefined || more.length > 0 || decl.type !== undefined) {
         refuse(init, 'for-of declaration');
       }
+      if (ts.isArrayBindingPattern(decl.name)) {
+        const pattern = this.arrayPattern(decl.name);
+        return this.node('for-of', s, [kind], [pattern, this.expr(s.expression), this.loopBody(s.statement)]);
+      }
       return this.node(
         'for-of',
         s,

@@ -758,11 +758,11 @@ def parseDeclaration : ParseM VarDecl := do
   let keyword ← advance
   let kind := if keyword.isKeyword "const" then VarKind.const else .«let»
   let t ← peek
-  -- `parseStatement` reads `const [` itself, so a `[` here comes after
-  -- `export` or in the first part of a `for`.
+  -- `parseStatement` reads `const [` itself, and `countedFor` hands
+  -- `for (const [` to `parseForOf`. So a `[` here comes after `export`.
   if t.isPunct "[" || t.isPunct "{" then
     failAt t (if t.isPunct "{" then "object destructuring is not supported"
-      else "array destructuring is supported only in a 'const' or 'let' statement")
+      else "array destructuring is not supported after 'export'")
   let name ← readName
   let mut type := none
   if (← peek).isPunct ":" then
@@ -820,6 +820,14 @@ def readRest : ParseM (Option String) := do
   if next.isPunct "," then failAt next "nothing may follow the rest element of an array pattern"
   return some name
 
+/-- An array pattern, from its `[` through its `]`. -/
+def readPattern : ParseM ArrayPattern := do
+  discard advance
+  let elems ← iterate (← budget) #[] placeStep
+  let rest ← readRest
+  let _ ← expectPunct "]"
+  return { elems := elems.toList, rest }
+
 /-- `: T`, if a `:` comes. -/
 def readAnnotation : ParseM (Option TypeExpr) := do
   if !(← peek).isPunct ":" then return none
@@ -833,10 +841,7 @@ pattern. -/
 def parseDestructure (start : Pos) : ParseM Stmt := do
   let keyword ← advance
   let kind := if keyword.isKeyword "const" then VarKind.const else .«let»
-  discard advance
-  let elems ← iterate (← budget) #[] placeStep
-  let rest ← readRest
-  let _ ← expectPunct "]"
+  let pattern ← readPattern
   let type ← readAnnotation
   let t ← peek
   unless t.isPunct "=" do failAt t "a destructuring declaration needs a value"
@@ -845,7 +850,23 @@ def parseDestructure (start : Pos) : ParseM Stmt := do
   let t ← peek
   if t.isPunct "," then failAt t "declare one variable per statement"
   endStatement
-  return .destructure (← spanFrom start) kind { elems := elems.toList, rest } type init
+  return .destructure (← spanFrom start) kind pattern type init
+
+/-- The rest of `for (const [a, , ...r] of iterable) body` from the `[`, which
+the keyword `const` or `let` of `kind` comes before. `parseBody` reads the
+body in the loop. A pattern in the first part of a counted `for`, or before
+`in`, leaves the subset. -/
+def parseForOfPattern (parseBody : ParseM Stmt) (start : Pos) (kind : VarKind) : ParseM Stmt := do
+  let pattern ← readPattern
+  let t ← peek
+  unless t.isIdent "of" do
+    failAt t (if t.isKeyword "in" then "'for … in' loops are not supported"
+      else "array destructuring is not supported in a counted 'for'")
+  discard advance
+  let iterable ← parseAssign (← budget)
+  let _ ← expectPunct ")"
+  let body ← withLoop parseBody
+  return .forOfPattern (← spanFrom start) kind pattern iterable body
 
 /-- The declaration at the start of a counted `for`. An `in` that
 `Expr.inFree` finds in its value would start a `for … in` loop, so the parser
@@ -863,12 +884,14 @@ def unlessPunct {α : Type} (stop : String) (p : ParseM α) : ParseM (Option α)
   return some (← p)
 
 /-- After `for`, a counted loop comes: the token after the `(` is `;`, or it is
-`const` or `let` and the token after the name is not `of` or `in`.
-`parseForOf` reads every other `for`, and refuses what it does not support. -/
+`const` or `let`, no `[` of a pattern follows it, and the token after the
+name is not `of` or `in`. `parseForOf` reads every other `for`, and refuses
+what it does not support, such as a pattern before `=`. -/
 def countedFor : ParseM Bool := do
   let first ← peekAt 2
+  let second ← peekAt 3
   let afterName ← peekAt 4
-  return first.isPunct ";" || ((first.isKeyword "const" || first.isIdent "let") &&
+  return first.isPunct ";" || ((first.isKeyword "const" || first.isIdent "let") && !second.isPunct "[" &&
     !afterName.isIdent "of" && !afterName.isKeyword "in")
 
 /-- One step of a loop over the items of a block in `{ … }`: an item that
@@ -1012,15 +1035,17 @@ def parseForOf (fuel : Nat) : ParseM Stmt := do
     else failAt keyword "tolean supports only a 'const' or 'let' declaration, or nothing, after 'for ('"
   discard advance
   let t ← peek
-  if t.isPunct "[" || t.isPunct "{" then failAt t "destructuring is not supported"
-  let name ← readName
-  let t ← peek
-  unless t.isIdent "of" do failAt t "'for … in' loops are not supported"
-  discard advance
-  let iterable ← parseAssign (← budget)
-  let _ ← expectPunct ")"
-  let body ← withLoop (parseBranch fuel)
-  return .forOfStmt (← spanFrom start) kind name iterable body
+  if t.isPunct "[" then parseForOfPattern (parseBranch fuel) start kind
+  else
+    if t.isPunct "{" then failAt t "object destructuring is not supported"
+    let name ← readName
+    let t ← peek
+    unless t.isIdent "of" do failAt t "'for … in' loops are not supported"
+    discard advance
+    let iterable ← parseAssign (← budget)
+    let _ ← expectPunct ")"
+    let body ← withLoop (parseBranch fuel)
+    return .forOfStmt (← spanFrom start) kind name iterable body
 
 /-- `for (init; test; update) body`, where `init` is absent or a declaration,
 and `test` and `update` may be absent (ECMA-262 §14.7.4). No `;` is inserted

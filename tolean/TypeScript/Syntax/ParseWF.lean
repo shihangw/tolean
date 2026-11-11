@@ -3407,6 +3407,12 @@ theorem StmtOK.ifElse {test : Expr} {t e : Stmt} (h1 : WordsOK T test.words) (ht
   · words_ok
   · exact he _ l hl
 
+theorem StmtOK.forOfPattern {kind : VarKind} {p : ArrayPattern} {it : Expr} {body : Stmt}
+    (h1 : WordsOK T it.words) (hp : WordsOK T p.words) (hb : StmtOK T body) :
+    StmtOK T (.forOfPattern sp kind p it body) := by
+  have hk := VarKind.word_ok T kind
+  exact StmtOK.head (fun _ => rfl) (by words_ok) hb
+
 theorem StmtOK.forOf {kind : VarKind} {name : String} {it : Expr} {body : Stmt} (h1 : WordsOK T it.words)
     (hn : Word.ok T (identWord name) = true) (hb : StmtOK T body) : StmtOK T (.forOfStmt sp kind name it body) := by
   have hk := VarKind.word_ok T kind
@@ -3769,21 +3775,15 @@ theorem ArrayPattern.wordsOK {T : Edition} (p : ArrayPattern) (he : PlacesOK T p
   unfold ArrayPattern.words
   words_ok
 
-/-- What `parseDestructure` gives: a well-formed destructuring whose words
-lex back. -/
-theorem parseDestructure_gives {T : Edition} {s s' : ParseState} {st : Stmt} {start : Pos} {x : Token}
-    {r : List Token} (hR : Ready s) (hT : s.target = T) (hs : s.rest = x :: r) (hx : x.kind ≠ .eof)
-    (h : Parse.parseDestructure start s = .ok st s') :
-    Ready s' ∧ Kept s s' ∧ st.wf T s.inFunction (s.loopDepth != 0) = true ∧ st.openIf = false ∧ StmtOK T st := by
-  simp only [Parse.parseDestructure] at h
-  rw [Parse.bind_eq (advance_past hR hs hx)] at h
-  have hR₁ := hR.past hs (hR.more hs hx)
+/-- What `readPattern` gives: a well-formed pattern whose words lex back. -/
+theorem readPattern_inv {T : Edition} {s s' : ParseState} {p : ArrayPattern} (hR : Ready s) (hT : s.target = T)
+    (h : Parse.readPattern s = .ok p s') : Ready s' ∧ Kept s s' ∧ p.wf = true ∧ WordsOK T p.words := by
+  simp only [Parse.readPattern] at h
   rw [Parse.bind_ok] at h; obtain ⟨_, s₂, hadv, h⟩ := h
-  obtain ⟨hR₂, hK₂⟩ := discard_advance_ready hR₁ hadv
+  obtain ⟨hR₂, hK₂⟩ := discard_advance_ready hR hadv
   rw [Parse.bind_eq (Parse.budget_eq _), Parse.bind_ok] at h
   obtain ⟨elems, s₃, hit, h⟩ := h
-  have hK₁₂ : Kept s s₂ := (Kept.past _ _ _).trans hK₂
-  have hT₂ : s₂.target = T := hK₁₂.target_eq.trans hT
+  have hT₂ : s₂.target = T := hK₂.target_eq.trans hT
   obtain ⟨⟨hR₃, hK₃, hel⟩, a₁, s₁', hI₁, hlast⟩ := iterate_inv
     (I := fun a st => Ready st ∧ Kept s₂ st ∧ PlacesOK T a.toList)
     (fun _ _ _ _ _ hI hst => (placeStep_inv hT₂ hI hst).1) _ #[] _ elems s₃
@@ -3794,8 +3794,37 @@ theorem parseDestructure_gives {T : Edition} {s s' : ParseState} {st : Stmt} {st
   obtain ⟨hR₄, hK₄, hrok, hrnone⟩ := readRest_inv hR₃ hT₃ hrr
   rw [Parse.bind_ok] at h; obtain ⟨cb, s₅, hcl, h⟩ := h
   obtain ⟨_, r₅, _, rfl, hR₅⟩ := expectPunct_inv hR₄ hcl
+  simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h
+  refine ⟨hR₅, hK₂.trans (hK₃.trans (hK₄.trans (Kept.past _ _ _))), ?_,
+    ArrayPattern.wordsOK _ hel fun n hn => (hrok n hn).2⟩
+  simp only [ArrayPattern.wf, Bool.and_eq_true, List.all_eq_true]
+  refine ⟨⟨fun y hy => ?_, ?_⟩, ?_⟩
+  · cases y with
+    | none => rfl
+    | some n => simpa using (hel (some n) hy n (by simp)).1
+  · cases rest with
+    | none => rfl
+    | some n => simpa using (hrok n (by simp)).1
+  · cases rest with
+    | some _ => rfl
+    | none =>
+      rcases hend with ⟨y, r', hy, hk⟩ | ⟨n, hn⟩
+      · exact absurd hk (hrnone rfl y (by simp [hy]))
+      · simp [ArrayPattern.endsWell, hn]
+
+/-- What `parseDestructure` gives: a well-formed destructuring whose words
+lex back. -/
+theorem parseDestructure_gives {T : Edition} {s s' : ParseState} {st : Stmt} {start : Pos} {x : Token}
+    {r : List Token} (hR : Ready s) (hT : s.target = T) (hs : s.rest = x :: r) (hx : x.kind ≠ .eof)
+    (h : Parse.parseDestructure start s = .ok st s') :
+    Ready s' ∧ Kept s s' ∧ st.wf T s.inFunction (s.loopDepth != 0) = true ∧ st.openIf = false ∧ StmtOK T st := by
+  simp only [Parse.parseDestructure] at h
+  rw [Parse.bind_eq (advance_past hR hs hx)] at h
+  have hR₁ := hR.past hs (hR.more hs hx)
+  rw [Parse.bind_ok] at h; obtain ⟨p, s₅, hrp, h⟩ := h
+  obtain ⟨hR₅, hK₅, hpw, hpok⟩ := readPattern_inv hR₁ hT hrp
   rw [Parse.bind_ok] at h; obtain ⟨ty, s₆, hty, h⟩ := h
-  have hKa : Kept s (past s₄ cb r₅) := hK₁₂.trans (hK₃.trans (hK₄.trans (Kept.past _ _ _)))
+  have hKa : Kept s s₅ := (Kept.past _ _ _).trans hK₅
   obtain ⟨hR₆, hK₆, htw, htok⟩ := readAnnotation_inv hR₅ (hKa.target_eq.trans hT) hty
   obtain ⟨w, r₆, hs₆⟩ := hR₆.cons
   rw [Parse.bind_eq (Parse.peek_eq hs₆)] at h
@@ -3816,27 +3845,10 @@ theorem parseDestructure_gives {T : Edition} {s s' : ParseState} {st : Stmt} {st
   obtain ⟨hR₉, hK₉⟩ := endStatement_inv gv.ready hend'
   rw [Parse.bind_eq (Parse.spanFrom_eq _ _)] at h
   simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h
-  have hrok' : ∀ n ∈ rest, Word.ok T (identWord n) = true := fun n hn => (hrok n hn).2
   refine ⟨hR₉, hKb.trans (gv.kept.trans hK₉), ?_, rfl, StmtOK.one (fun _ => rfl) ?_⟩
-  · have hp : ArrayPattern.wf { elems := elems.toList, rest } = true := by
-      simp only [ArrayPattern.wf, Bool.and_eq_true, List.all_eq_true]
-      refine ⟨⟨fun y hy => ?_, ?_⟩, ?_⟩
-      · cases y with
-        | none => rfl
-        | some n => simpa using (hel (some n) hy n (by simp)).1
-      · cases rest with
-        | none => rfl
-        | some n => simpa using (hrok n (by simp)).1
-      · cases rest with
-        | some _ => rfl
-        | none =>
-          rcases hend with ⟨y, r', hy, hk⟩ | ⟨n, hn⟩
-          · exact absurd hk (hrnone rfl y (by simp [hy]))
-          · simp [ArrayPattern.endsWell, hn]
-    simp only [Stmt.wf, Bool.and_eq_true]
-    exact ⟨⟨⟨hp, htw⟩, gv.wf⟩, gv.after _ (follows_end (.inl rfl))⟩
+  · simp only [Stmt.wf, Bool.and_eq_true]
+    exact ⟨⟨⟨hpw, htw⟩, gv.wf⟩, gv.after _ (follows_end (.inl rfl))⟩
   · have hk := VarKind.word_ok T (if x.isKeyword "const" = true then VarKind.const else .«let»)
-    have hp := ArrayPattern.wordsOK (T := T) { elems := elems.toList, rest } hel hrok'
     have h1 := typeAnnotation_ok htok
     have h2 := gv.ok
     unfold destructureWords
@@ -3981,6 +3993,39 @@ theorem choose_inv {α β : Type} {c1 c2 : Prop} [Decidable c1] [Decidable c2] {
     · rw [if_pos h2, Parse.pure_bind] at h; exact ⟨.inr h2, b, h⟩
     · rw [if_neg h2] at h; exact absurd h (failAt_bind_ne_ok _ _ _ _ _ _)
 
+/-- What `parseForOfPattern` gives, when `parseBody` gives a body that may
+stand in a loop. -/
+theorem parseForOfPattern_inv {T : Edition} {parseBody : ParseM Stmt} (hB : GivesB T parseBody) {start : Pos}
+    {kind : VarKind} {s s' : ParseState} {st : Stmt} (hR : Ready s) (hT : s.target = T)
+    (h : Parse.parseForOfPattern parseBody start kind s = .ok st s') :
+    Ready s' ∧ Kept s s' ∧ st.wf T s.inFunction (s.loopDepth != 0) = true ∧
+      (st.openIf = true → ∀ u ∈ s'.rest.head?, u.kind ≠ .keyword "else") ∧ st.isDecl = false ∧ StmtOK T st := by
+  simp only [Parse.parseForOfPattern] at h
+  rw [Parse.bind_ok] at h; obtain ⟨p, s₁, hrp, h⟩ := h
+  obtain ⟨hR₁, hK₁, hpw, hpok⟩ := readPattern_inv hR hT hrp
+  obtain ⟨o, r₆, hs₆⟩ := hR₁.cons
+  rw [Parse.bind_eq (Parse.peek_eq hs₆)] at h
+  obtain ⟨hof, h⟩ := pass_inv h
+  have hone : o.kind ≠ .eof := by simp [Token.isIdent] at hof; rw [hof]; simp
+  have hR₅ := hR₁.past hs₆ (hR₁.more hs₆ hone)
+  have hT₅ : (past s₁ o r₆).target = T := hK₁.target_eq.trans hT
+  rw [Parse.bind_eq (Parse.discard_eq (advance_past hR₁ hs₆ hone)), Parse.bind_eq (Parse.budget_eq _),
+    Parse.bind_ok] at h
+  obtain ⟨it, s₅, hit, h⟩ := h
+  have git := (exprs_give T _).2.1 _ _ _ hR₅ hT₅ hit
+  rw [Parse.bind_ok] at h; obtain ⟨rp, s₆, hrp', h⟩ := h
+  obtain ⟨_, r₇, _, rfl, hR₆⟩ := expectPunct_inv git.ready hrp'
+  rw [Parse.bind_ok] at h; obtain ⟨body, s₇, hbody, h⟩ := h
+  have hK : Kept s (past s₅ rp r₇) := hK₁.trans ((Kept.past _ _ _).trans (git.kept.trans (Kept.past _ _ _)))
+  obtain ⟨hR₇, hK₇, hbw, hbo, hbd, hbok⟩ := withLoop_inv hB hR₆ (hK.target_eq.trans hT) hbody
+  rw [Parse.bind_eq (Parse.spanFrom_eq _ _)] at h
+  simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h
+  refine ⟨hR₇, hK.trans hK₇, ?_, by simpa [Stmt.openIf] using hbo, by simp [Stmt.isDecl],
+    StmtOK.forOfPattern git.ok hpok hbok⟩
+  simp only [Stmt.wf, Bool.and_eq_true, Bool.not_eq_true', Expr.wfParen]
+  refine ⟨⟨⟨hpw, git.wf, git.after _ (follows_end (.inr rfl))⟩, hbd⟩, ?_⟩
+  rw [← hK.inFunction_eq]; exact hbw
+
 theorem parseForOf_inv {T : Edition} {f : Nat} (hB : GivesB T (Parse.parseBranch f)) {s s' : ParseState} {st : Stmt}
     {x : Token} {r : List Token} (hR : Ready s) (hT : s.target = T) (hs : s.rest = x :: r) (hx : x.kind ≠ .eof)
     (h : Parse.parseForOf (f + 1) s = .ok st s') :
@@ -4005,6 +4050,12 @@ theorem parseForOf_inv {T : Edition} {f : Nat} (hB : GivesB T (Parse.parseBranch
   rw [Parse.bind_eq (Parse.discard_eq (advance_past hR₂ hs₃ hkne))] at h
   obtain ⟨z, r₄, hs₄⟩ := hR₃.cons
   rw [Parse.bind_eq (Parse.peek_eq hs₄)] at h
+  -- A `[` starts a pattern, which `parseForOfPattern` reads.
+  by_cases hlb : z.isPunct "[" = true
+  · rw [if_pos hlb] at h
+    obtain ⟨hR', hK', hw, ho, hd, hok⟩ := parseForOfPattern_inv hB hR₃ hT h
+    exact ⟨hR', (Kept.past _ _ _).trans ((Kept.past _ _ _).trans ((Kept.past _ _ _).trans hK')), hw, ho, hd, hok⟩
+  rw [if_neg hlb] at h
   obtain ⟨_, h⟩ := fail_inv h
   rw [Parse.bind_ok] at h; obtain ⟨name, s₄, hn, h⟩ := h
   have hnok := readName_words hR₃ hT hn

@@ -375,6 +375,13 @@ theorem Stmt.lineOK : ∀ (st : Stmt) (d : Nat), ∀ l ∈ st.lines d, LineOK l.
         (LineOK.cons (by simp [identWord]) (LineOK.cons (by simp [identWord])
           ((Expr.fine it).line.append (LineOK.word (w := punctWord ")") (by simp [punctWord])))))))
     · exact Stmt.lineOK body _ l hl
+  | .forOfPattern _ kind p it body, d, l, hl => by
+    simp only [Stmt.lines, List.mem_cons] at hl
+    rcases hl with rfl | hl
+    · exact ((LineOK.cons (by simp [keywordWord]) (LineOK.cons (by simp [punctWord]) (LineOK.cons kind.word_ne
+        p.line))).append (LineOK.cons (by simp [identWord]) (Expr.fine it).line)).append
+        (LineOK.word (w := punctWord ")") (by simp [punctWord]))
+    · exact Stmt.lineOK body _ l hl
   | .forStmt _ init test update body, d, l, hl => by
     simp only [Stmt.lines, List.mem_cons] at hl
     rcases hl with rfl | hl

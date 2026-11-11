@@ -21,7 +21,8 @@ marks which links are proved, tested against a reference, or trusted.
   `export { a, type B }`.
 - **Statements:** `const` and `let` declarations, array destructuring such as
   `const [a, , b, ...rest] = xs`, expression statements,
-  `return`, `throw`, `if` and `else`, `for … of`, the counted `for`, `while`,
+  `return`, `throw`, `if` and `else`, `for … of` with a name or an array
+  pattern before `of`, the counted `for`, `while`,
   `switch`, blocks, `break`, `continue` and the empty statement. A counted
   `for`, such as `for (let i = 0; i < n; i++)`, starts with a `const` or `let`
   declaration or with nothing. The value of a `throw` must start on the same
@@ -75,14 +76,15 @@ else, such as `(...xs)`. It also refuses a hole in an array literal, such as
 start of an object literal, and refuses one in a call for now.
 
 The parser reads array destructuring in a `const` or `let` statement, such as
-`const [a, , b, ...rest]: T = xs`. Each place of the pattern is a name or an
-empty place, which is a hole, and a rest element may come last. A pattern
-needs a value after `=`, and a statement declares one pattern. The parser
-refuses destructuring after `export` and in the first part of a `for` loop,
-and it refuses object patterns, nested patterns and default values. It also
-refuses a pattern that is empty or that ends with a `,`, such as `[a, ]` or
-`[a, , ]`, although JavaScript allows both. So the last place is always a name
-or the rest element, and the printed pattern reads back as the same one.
+`const [a, , b, ...rest]: T = xs`, and in the head of a `for … of` loop, such
+as `for (const [k, v] of m)`. Each place of the pattern is a name or an empty
+place, which is a hole, and a rest element may come last. A statement needs a
+value after `=`, and it declares one pattern. The parser refuses destructuring
+after `export`, in the first part of a counted `for` and before the `in` of a
+`for … in`. It also refuses object patterns, nested patterns and default
+values, and a pattern that is empty or that ends with a `,`, such as `[a, ]`
+or `[a, , ]`, although JavaScript allows both. So the last place is always a
+name or the rest element, and the printed pattern reads back as the same one.
 
 In the declaration at the start of a counted `for`, the parser refuses an `in`
 operator unless parentheses, braces, the arguments of a call or an index hold
