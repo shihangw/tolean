@@ -268,6 +268,8 @@ def sections : List Section := [
     [``Proof.evalMap_sim, ``Proof.eval_mapIdx, ``Proof.evalMapIdx_sim]⟩,
   ⟨"sec-array.prototype.push", "23.1.3.23", "Array.prototype.push",
     [``Proof.out_push]⟩,
+  ⟨"sec-array.prototype.slice", "23.1.3.28", "Array.prototype.slice",
+    [``Proof.sliceArgs_eq, ``Proof.evalInt_lit, ``Proof.eval_slice]⟩,
   ⟨"sec-array.prototype.reduce", "23.1.3.24", "Array.prototype.reduce",
     [``Proof.reducerOf_some, ``Proof.bodySim2_of, ``Proof.evalReduce_sim, ``Proof.eval_reduce,
     ``Proof.translateReduce_sound]⟩,
@@ -629,6 +631,9 @@ def extras : List Group := [
     ``Proof.includesVal_num]⟩,
   ⟨"Certificates: elements of a list", [``Proof.elementAt_map_some, ``Proof.elementAt_map_toSafeInt,
     ``Proof.atVal_map]⟩,
+  ⟨"Certificates: slices of a list", [``Proof.sliceList_map, ``Proof.getElem?_rev,
+    ``Proof.sliceList_nonneg, ``Proof.sliceList_from, ``Proof.sliceList_last,
+    ``Proof.sliceList_dropLast, ``Proof.sliceList_neg]⟩,
   ⟨"Recursion: the facts that Lean adds to the goal of a call in a callback, for the proof that a recursive function ends",
     [``List.any_wfParam_tolean, ``List.any_unattach_tolean, ``List.all_wfParam_tolean,
       ``List.all_unattach_tolean, ``List.find?_wfParam_tolean, ``List.find?_unattach_tolean]⟩]

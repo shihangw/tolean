@@ -1601,6 +1601,14 @@ def arrayCallOf : Expr → Option (Expr × String)
   | .member _ recv name => if recv.namesNumber then none else some (recv, name)
   | _ => none
 
+/-- The start and the end of `slice`, from the integers of its arguments: a
+missing start is `0`, and a missing end is none, the length. -/
+def sliceBounds : List Int → Option (Int × Option Int)
+  | [] => some (0, none)
+  | [k] => some (k, none)
+  | [k, e] => some (k, some e)
+  | _ => none
+
 /-- `e` is an arrow function. -/
 def _root_.tolean.TypeScript.Syntax.Expr.isArrow : Expr → Bool
   | .arrow .. => true
@@ -2104,6 +2112,17 @@ def translateArrayCall (fuel : Nat) (env : Env) (s : Span) (recv : Expr) (method
     requireFeature s .arrayAt
     if elem.isMaybe then reject s "'at' on an array of nullable values could give null or undefined"
     return ⟨.ascribe (.ext (.at k) [xs.value]) (Ty.optional elem).lean, false, .optional elem⟩
+  -- `xs.slice(start, end)`: a new array of the elements from `start` up to
+  -- `end`, where a negative bound counts from the end. The bounds must be
+  -- integer literals, as the argument of `at` must.
+  if method == "slice" then
+    let bounds ← orReject (args.mapM Eval.intLiteral?) s
+      "the arguments of 'slice' must be integer literals, such as xs.slice(1) or xs.slice(-2)"
+    let (start, stop) ← orReject (sliceBounds bounds) s "'slice' takes at most two arguments"
+    if start < 0 && stop.any (0 ≤ ·) then
+      reject s ("'slice' with a negative start and an end that is not negative is not supported; " ++
+        "write both bounds from the start or both from the end")
+    return ⟨.ext (.slice start stop) [xs.value], false, xs.type⟩
   let codes ← args.mapM (translateExpr fuel env (arrayArgExpected method elem))
   arrayCall s method elem xs codes
 

@@ -383,6 +383,22 @@ outside the array gives `undefined`. -/
 def atVal (items : List (Val N)) (k : Int) : Val N :=
   elementAt items (some (if 0 ≤ k then k else items.length + k))
 
+/-- A relative index into an array of `len` elements, as `slice` reads its
+arguments: a negative `k` counts from the end, and the result is clamped to
+`0` and `len`. -/
+def relIndex (len : Nat) (k : Int) : Nat :=
+  if k < 0 then (len + k).toNat else min k.toNat len
+
+/-- `items.slice(start, stop)` (`Array.prototype.slice`, ECMA-262
+§23.1.3.28), where `start` and `stop` are the integers of the arguments: the
+elements from `start` up to `stop`, or to the end when `stop` is none. -/
+def sliceList {α : Type} (items : List α) (start : Int) (stop : Option Int) : List α :=
+  let k := relIndex items.length start
+  let final := match stop with
+    | some e => relIndex items.length e
+    | none => items.length
+  (items.drop k).take (final - k)
+
 /-- The functions of the module, by name. -/
 def functions (m : Module) : List (String × List String × Stmt) :=
   m.decls.filterMap fun
@@ -680,6 +696,16 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     | none =>
       let .num n ← eval m fuel env arg | none
       return atVal items (← JSNumber.toSafeInt n)
+  -- `xs.slice(start, end)` (`Array.prototype.slice`, ECMA-262 §23.1.3.28).
+  -- Each argument becomes an integer as the argument of `at` does. A missing
+  -- start is `0`, and a missing end is the length.
+  | .call _ (.member _ recv "slice") args => do
+    let .list items ← eval m fuel env recv | none
+    match args with
+    | [] => return .list (sliceList items 0 none)
+    | [a] => return .list (sliceList items (← evalInt m fuel env a) none)
+    | [a, b] => return .list (sliceList items (← evalInt m fuel env a) (some (← evalInt m fuel env b)))
+    | _ => none
   -- `xs.map((x, i) => e)`: `map` passes the index too, as a number
   -- (ECMA-262 §23.1.3.21, step 6.c.ii). An array has fewer than 2^32
   -- elements, so the index is a safe integer. Two parameters of one arrow
@@ -797,6 +823,18 @@ def evalChain (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Option (
     | some _ => none
   | e => (eval m fuel env e).map some
 termination_by e => (fuel, sizeOf e, 1)
+
+/-- The integer of an argument such as the start of `slice`, by
+`ToIntegerOrInfinity` (ECMA-262 §7.1.5): a literal is the integer it names,
+whatever the model of numbers, and any other number is its integer when it
+is a safe integer. Truncating any other number leaves the subset. -/
+def evalInt (m : Scope) (fuel : Nat) (env : Env N) (e : Expr) : Option Int :=
+  match intLiteral? e with
+  | some k => some k
+  | none => do
+    let .num n ← eval m fuel env e | none
+    JSNumber.toSafeInt n
+termination_by (fuel, sizeOf e, 1)
 
 def evalList (m : Scope) (fuel : Nat) (env : Env N) : List Expr → Option (List (Val N))
   | [] => some []

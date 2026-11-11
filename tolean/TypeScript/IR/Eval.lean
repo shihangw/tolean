@@ -90,6 +90,7 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   | .indexLit k, [.list xs] => some (Eval.elementAt xs (some k))
   | .indexNumber, [.list xs, .num i] => some (Eval.elementAt xs (JSNumber.toSafeInt i))
   | .at k, [.list xs] => some (Eval.atVal xs k)
+  | .slice start stop, [.list xs] => some (.list (Eval.sliceList xs start stop))
   -- The operations of a `Map`, as the spec gives them.
   | .mapEmpty, [] => some (.map [])
   | .mapGet, [.map entries, k] => (Eval.mapFind entries k).map (·.getD .undefined)

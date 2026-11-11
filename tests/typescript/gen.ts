@@ -328,6 +328,11 @@ export class Gen {
         const same_ = arrays.filter((a) => same(a.elem, of));
         if (same_.length > 0) {
           options.push(() => call('filter', this.pick(same_), (inner) => this.expr(BOOLEAN, inner, depth)));
+          // A slice with integer literals, from the start or from the end.
+          options.push(() => {
+            const bounds = this.pick(['', '1', '-2', '0, 2', '1, -1', '-3, -1', '2, 1']);
+            return `${this.pick(same_).name}.slice(${bounds})`;
+          });
         }
         break;
       }
