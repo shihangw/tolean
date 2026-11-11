@@ -1062,6 +1062,20 @@ def execStmt (m : Scope) (fuel : Nat) (env : Env N) : Stmt → Option (Outcome N
   | .forOfStmt _ .const name iterable body => do
     if Stmt.mutatesIterable iterable body then none
     execLoop m fuel env name body (← iterValues (← eval m fuel env iterable))
+  -- `for (let i = a; i < b; i++)` (`ForStatement`, ECMA-262 §14.7.4.2): the
+  -- body runs once for each value of `i`, in order, with `i` bound to it in a
+  -- new scope, as in `CreatePerIterationEnvironment`. A `continue` ends one
+  -- run, and the update then gives the next value. `countUp?` gives the values
+  -- when `a` and `b` are safe integers. JS reads `b` before each run, and the
+  -- model reads it once; `countedChanges` checks that the body changes
+  -- nothing that `b` reads, so each read gives the same value.
+  | .forStmt _ (some ⟨.let, name, _, some start⟩) (some (.binary _ .lt (.ident _ n) bound)) (some update)
+      body => do
+    if !(n == name && update.incrementsName name) then none
+    if Stmt.countedChanges name start bound body then none
+    let .num a ← eval m fuel env start | none
+    let .num b ← eval m fuel env bound | none
+    execLoop m fuel env name body ((← JSNumber.countUp? a b).map .num)
   -- `switch (d) { … }` (`SwitchStatement` Evaluation, ECMA-262 §14.12.4): the
   -- clauses run in a new scope, and a `break` at the top of a clause ends the
   -- statement. The model leaves out a local declared at the top of a clause,

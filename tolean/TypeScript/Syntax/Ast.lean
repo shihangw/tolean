@@ -453,6 +453,24 @@ collection is safe whatever names it mentions. -/
 def Stmt.mutatesIterable (iterable : Expr) (body : Stmt) : Bool :=
   !iterable.isFresh && iterable.mayHold body.mutates
 
+/-- `e` adds one to the name `n`: `n++`, `++n` or `n += 1`. -/
+def Expr.incrementsName (n : String) : Expr → Bool
+  | .postfix _ .increment (.ident _ m) | .prefix _ .increment (.ident _ m) => m == n
+  | .assign _ .add (.ident _ m) (.number _ "1") => m == n
+  | _ => false
+
+/-- The counted loop `for (let name = start; name < bound; name++) body` may
+not run as the subset models it. The model takes the values of `name` when the
+loop starts, from the values of `start` and `bound`. JS reads `bound` again
+before each run of the body and adds one to `name` after it, so the two agree
+when the body leaves `name` alone and changes nothing that `bound` reads. And
+`start` must not read `name`, which is not yet initialized then (ECMA-262
+§14.7.4.2), where the model would read a variable of the same name outside the
+loop. -/
+def Stmt.countedChanges (name : String) (start bound : Expr) (body : Stmt) : Bool :=
+  body.assigns name || start.mayHold (· == name) || bound.mayHold (· == name) ||
+    bound.mayHold body.assigns || bound.mayHold body.mutates
+
 /-! ### Which collections a function may change
 
 The spec models an array, a map or a set as a value, so a `push`, `set`, `add`

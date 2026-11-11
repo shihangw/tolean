@@ -75,8 +75,15 @@ else, such as `(...xs)`. It also refuses a hole in an array literal, such as
 In the declaration at the start of a counted `for`, the parser refuses an `in`
 operator unless parentheses, braces, the arguments of a call or an index hold
 it. ECMA-262 reads such an `in` as the start of a `for … in` loop. It allows
-one inside `[ … ]`, but `tsc` does not, so the parser refuses that too. The
-translator refuses every counted `for` for now.
+one inside `[ … ]`, but `tsc` does not, so the parser refuses that too.
+
+The interpreter runs a counted `for` of one shape: `for (let i = a; i < b; i++)`,
+where the update may also be `++i` or `i += 1`. The start `a` must be a safe
+integer. The body must not assign `i`, and it must not change anything that
+`b` reads, because JS reads `b` again before each run of the body. The
+interpreter gives no value for any other counted `for`, and none for a loop
+where `i` would pass `Number.MAX_SAFE_INTEGER`. The translator refuses every
+counted `for` for now.
 
 `as const` and `satisfies T` have two more lookalikes, and the parser refuses
 both:
