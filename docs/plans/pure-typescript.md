@@ -99,15 +99,18 @@ value claim already does.
 | `entries` | The `List` functions with the same meaning | The `index` argument of a callback other than one of `map`, and the `array` argument of any callback, until a later step adds them |
 | `xs.at(i)` and `xs.slice(i, j)` where an argument is not an integer literal (§23.1.3.1, §23.1.3.28) | `ToIntegerOrInfinity` on each argument, then the element or the slice as for literals. It needs `Math.trunc` from the numbers stage. | |
 | `xs.slice(-a, b)` with a negative start and an end that is not negative | `List.drop` and `List.take` with the length of the array | |
-| `[...xs].sort(cmp)` and `xs.toSorted(cmp)` | A stable merge sort. ECMA-262 has required a stable sort since ES2019 (§23.1.3.30). | `sort` on an array that the function does not own, and a comparator that is not consistent |
+| `xs.toSorted((a, b) => a.t - b.t)`, and a comparison of `number` keys such as `(a.t < b.t) ? -1 : (a.t > b.t) ? 1 : 0` | `JSNumber.sortWith`, as for `bigint` and `string` keys | |
 
-A comparator is consistent when it orders values as a total preorder. The
-spec leaves the result undefined for any other comparator, so the translator
-must refuse it or prove it consistent. The first version accepts two shapes
-whose consistency Tolean proves once: a comparison of integer keys, and a
-chain of such comparisons. A comparator such as `(a, b) => a.t - b.t` on
-`number` keys is consistent only when no key is `NaN`, so it becomes a
-precondition of each claim.
+A comparator on `number` keys is consistent only when no key is `NaN`, and
+`a.t - b.t` also needs no two keys to be the same infinity. So the condition
+becomes a precondition of each claim. The interpreter test must then skip
+its check that an accepted program gives a value wherever Node returns one,
+for a call whose keys break the precondition.
+
+A file that sorts gets no certificate yet. The certificate must prove that
+the comparator is consistent for every input. For keys of the shapes above,
+that follows from the signs of `-1` and `1` under `SafeIntLaws`, so the
+claim takes the laws of the number model as hypotheses.
 
 ### Errors
 
@@ -238,7 +241,8 @@ leaves a gap.
 8. **P0.** The borrow for a map that a caller passes in.
 9. **P1.** Strings: template literals, the string methods and arguments in
    the table above, iteration by code point, and the opaque `JSON.stringify`.
-10. **P1.** Sorting with consistent comparators.
+10. **P1.** Sorting: `number` keys with their precondition, and certificates
+    for a file that sorts.
 11. **P2.** Recursion: tagged unions that refer to themselves first, then
     `@decreases`, mutual recursion, and `while` loops.
 12. **P1.** The new number and `bigint` operations, and the `Date` methods.

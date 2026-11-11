@@ -716,6 +716,10 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           s!"  {casesOn decls vars}link_tac [{simpSet}]"
         continue
       let .list method := method | continue
+      -- A sort needs a proof that its comparator is consistent, which the
+      -- certificate does not write yet.
+      if method matches .sortWith _ then
+        throw s!"{file}: cannot certify a sort in {name} yet"
       let (evalFn, want, result, fromLemma) := match method with
         | .map => ("evalMap", "", s!"List.map {encY} (List.map {fn} items)",
             s!"evalMap_map fs {fuel} ρ {str param} _ {encX} {encY} {fn}")
@@ -731,6 +735,8 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
             s!"evalFindIdx_findIdx fs {fuel} ρ {str param} _ {encX} {fn}")
         | .all => ("evalFind", " false", s!"Option.map {encX} (List.find? (fun x => !({fn} x)) items)",
             s!"evalFind_false fs {fuel} ρ {str param} _ {encX} {fn}")
+        -- Refused above.
+        | .sortWith _ => ("", "", "", "")
       let (indexArg, start, intros) := match method with
         -- The proof names the index `idx`, not by its name in the source,
         -- which could hide one of the lemma's hypotheses, such as `hI`.

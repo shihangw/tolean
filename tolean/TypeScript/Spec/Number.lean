@@ -87,6 +87,13 @@ def JSNumber.compareSign {N : Type} [JSNumber N] (v : N) : Option Ordering :=
   else if eq v (ofSafeInt 0) then some .eq
   else none
 
+/-- `xs.toSorted(cmp)` and `[...xs].sort(cmp)` when `cmp` is consistent for
+the elements of `xs`: the stable merge sort, where `a` comes after `b` only
+when `cmp a b` is greater than `0`. The interpreter gives this order
+(`Eval.sortValues`). -/
+def JSNumber.sortWith {N α : Type} [JSNumber N] (cmp : α → α → N) (xs : List α) : List α :=
+  xs.mergeSort fun a b => compareSign (cmp a b) != some .gt
+
 /-- The values of `i` from the safe integer `k` on, for as long as `i < b`
 holds, after the values in `acc`, which are in reverse order. At most `left`
 values may come, and `none` means that the loop would go on past them. The

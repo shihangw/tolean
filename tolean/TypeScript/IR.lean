@@ -251,6 +251,9 @@ instance : tolean.IR.PrintTy TyExt where
   -- safe integer.
   indexValue names i :=
     s!"({leanName names "JSNumber"}.ofSafeInt (N := {names.typeParam}) ({i} : {leanName names "Int"}))"
+  -- A comparator gives a number, whose sign says the order
+  -- (`JSNumber.sortWith`, `Spec/Number.lean`).
+  sortCall names fn xs := s!"({leanName names "JSNumber.sortWith"} {fn} {xs})"
 
 /-- Whether one pair of parentheses holds all of `code`, as in `(f x)` but not
 in `(a) ++ (b)`. A parenthesis in a string literal does not count. -/
