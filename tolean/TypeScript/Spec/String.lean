@@ -168,6 +168,55 @@ def indexOf (s p : JSString) : Int :=
 finds `p` in `s`. -/
 def includes (s p : JSString) : Bool := (indexOf? s p).isSome
 
+/-- The code points that `trim` removes: WhiteSpace and LineTerminator
+(ECMA-262 §12.2 and §12.3). WhiteSpace is TAB, VT, FF, ZWNBSP (U+FEFF) and
+every code point of the Unicode category Zs. Zs has had these members since
+Unicode 6.3. ES2016 and later name Unicode 8.0 or later, so they agree on
+them. ES2015 names Unicode 5.1, where U+180E is in Zs too, so the translator
+refuses `trim` for that target. Each of them is one code unit that is not a
+surrogate, so a code unit is one of them exactly when the code point that it
+starts is. -/
+def whiteSpace : List Nat :=
+  [0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x20, 0xA0, 0x1680, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004,
+   0x2005, 0x2006, 0x2007, 0x2008, 0x2009, 0x200A, 0x2028, 0x2029, 0x202F, 0x205F, 0x3000, 0xFEFF]
+
+/-- The code unit `u` is white space or a line terminator. -/
+def isWhite (u : UInt16) : Bool := whiteSpace.contains u.toNat
+
+/-- `s.trimStart()` (ECMA-262 §22.1.3.34): the string without the white space
+at its start, as TrimString removes it. -/
+def trimStart (s : JSString) : JSString := ⟨s.units.dropWhile isWhite⟩
+
+/-- `s.trimEnd()` (ECMA-262 §22.1.3.33): the string without the white space at
+its end. -/
+def trimEnd (s : JSString) : JSString := ⟨(s.units.reverse.dropWhile isWhite).reverse⟩
+
+/-- `s.trim()` (ECMA-262 §22.1.3.32): the string without the white space at
+either end. -/
+def trim (s : JSString) : JSString := s.trimStart.trimEnd
+
+/-- The pieces of `l` between the occurrences of the separator `c :: cs`, by
+the loop of String.prototype.split (ECMA-262 §22.1.3.23, steps 14 to 19).
+`piece` holds the code units of the current piece, last first. Each match
+skips the separator, so the next search starts after it. -/
+def splitUnits (c : UInt16) (cs : List UInt16) : List UInt16 → List UInt16 → List (List UInt16)
+  | [], piece => [piece.reverse]
+  | u :: rest, piece =>
+    if (c :: cs).isPrefixOf (u :: rest) then
+      piece.reverse :: splitUnits c cs ((u :: rest).drop (cs.length + 1)) []
+    else splitUnits c cs rest (u :: piece)
+termination_by l => l.length
+decreasing_by all_goals simp only [List.length_drop, List.length_cons]; omega
+
+/-- `s.split(sep)` with a string separator and no limit (ECMA-262 §22.1.3.23).
+An empty separator splits `s` into its code units. Otherwise the pieces are the
+parts of `s` between the occurrences of `sep`, so the empty string gives one
+empty piece. The spec stops at 2^32 - 1 pieces. -/
+def split (s sep : JSString) : List JSString :=
+  match sep.units with
+  | [] => (s.units.take (2 ^ 32 - 1)).map fun u => ⟨[u]⟩
+  | c :: cs => ((splitUnits c cs s.units []).take (2 ^ 32 - 1)).map JSString.mk
+
 /-- `startsWith` is Lean's prefix order on the code units. -/
 theorem startsWith_iff (s p : JSString) : s.startsWith p = true ↔ p.units <+: s.units :=
   List.isPrefixOf_iff_prefix

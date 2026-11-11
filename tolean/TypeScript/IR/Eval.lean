@@ -77,6 +77,10 @@ def StringMethod.apply : StringMethod → JSString → List (Val N) → Option (
   | .endsWith, s, args => Eval.oneString (fun p => .bool (s.endsWith p)) args
   | .includes, s, args => Eval.oneString (fun p => .bool (s.includes p)) args
   | .indexOf, s, args => Eval.oneString (fun p => .num (JSNumber.ofSafeInt (s.indexOf p))) args
+  | .trim, s, args => Eval.noArgs (.str s.trim) args
+  | .trimStart, s, args => Eval.noArgs (.str s.trimStart) args
+  | .trimEnd, s, args => Eval.noArgs (.str s.trimEnd) args
+  | .split, s, args => Eval.oneString (fun sep => .list ((s.split sep).map .str)) args
 
 /-- An operation that TypeScript adds, on the values of its arguments. -/
 def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)

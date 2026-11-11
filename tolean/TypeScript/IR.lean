@@ -39,15 +39,15 @@ inductive StringPart where
   | string | bigint | boolean
 deriving BEq, Repr, Inhabited, DecidableEq
 
-/-- A method of a string that takes one string and gives a boolean or an
-index. -/
+/-- A method of a string that the subset has. -/
 inductive StringMethod where
-  | startsWith | endsWith | includes | indexOf
+  | startsWith | endsWith | includes | indexOf | trim | trimStart | trimEnd | split
 deriving BEq, Repr, Inhabited, DecidableEq
 
 def StringMethod.name : StringMethod → String
   | .startsWith => "startsWith" | .endsWith => "endsWith" | .includes => "includes"
-  | .indexOf => "indexOf"
+  | .indexOf => "indexOf" | .trim => "trim" | .trimStart => "trimStart" | .trimEnd => "trimEnd"
+  | .split => "split"
 
 /-- The types that TypeScript adds to the IR. -/
 inductive TyExt where

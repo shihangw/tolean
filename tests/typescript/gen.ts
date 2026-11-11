@@ -116,7 +116,8 @@ export class Gen {
     if (roll < 0.8 && this.structs.length > 0) {
       return { k: 'struct', name: this.pick(this.structs).name };
     }
-    return { k: 'array', of: this.pick([BIGINT, NUMBER, ...this.structs.map((s): Ty => ({ k: 'struct', name: s.name }))]) };
+    // An array of strings, which `split` gives.
+    return { k: 'array', of: this.pick([BIGINT, NUMBER, STRING, ...this.structs.map((s): Ty => ({ k: 'struct', name: s.name }))]) };
   }
 
   /** An expression of type `t`, reading only `vars`. */
@@ -137,7 +138,8 @@ export class Gen {
         case 'string':
           // U+FFFF is above the code unit D83D that starts '😀', so the two
           // order one way by code unit, as JS does, and the other by code point.
-          return this.pick(["''", "'a'", "'ab'", "'é'", "'😀'", "'\\uFFFF'"]);
+          // White space and commas, which `trim` and `split` read.
+          return this.pick(["''", "'a'", "'ab'", "'é'", "'😀'", "'\\uFFFF'", "' a,b '", "'\\u00A0x\\u2028'", "','"]);
         case 'nullable':
           return this.chance(0.5) ? 'null' : this.expr(t.of, vars, 0);
         case 'optional':
@@ -244,6 +246,11 @@ export class Gen {
           () => `Number.${this.pick(['isNaN', 'isFinite', 'isSafeInteger'])}(${this.expr(NUMBER, vars, d)})`,
           // A test of one string in another, by code units.
           () => `(${this.expr(STRING, vars, d)}).${this.pick(['startsWith', 'endsWith', 'includes'])}(${this.expr(STRING, vars, d)})`,
+          // A test of the pieces that `split` gives.
+          () => {
+            const p = this.fresh('c');
+            return `(${this.expr(STRING, vars, d)}).split(${this.expr(STRING, vars, d)}).some((${p}) => ${p} === ${this.expr(STRING, vars, 0)})`;
+          },
         );
         // `typeof` on a value of any type, which checks the interpreter's rule
         // against Node. The translator refuses it here, so it comes only
@@ -283,6 +290,8 @@ export class Gen {
           const s = this.expr(STRING, vars, d);
           return this.chance(0.5) ? `(${s}) + (${other})` : `(${other}) + (${s})`;
         });
+        // `trim`, `trimStart` and `trimEnd`, which remove white space.
+        options.push(() => `(${this.expr(STRING, vars, d)}).${this.pick(['trim', 'trimStart', 'trimEnd'])}()`);
         // `typeof` on a value of any type. The translator accepts it only in
         // the test of an `if` on a union of primitive types, but the
         // interpreter runs it anywhere, so this and the comparison of
@@ -296,6 +305,12 @@ export class Gen {
             const e = this.pick(this.enums);
             return `${e.name}.${this.pick(e.members)}`;
           });
+        }
+        break;
+      case 'array':
+        // `split` with a string separator gives an array of strings.
+        if (t.of.k === 'string') {
+          options.push(() => `(${this.expr(STRING, vars, d)}).split(${this.expr(STRING, vars, d)})`);
         }
         break;
       default:

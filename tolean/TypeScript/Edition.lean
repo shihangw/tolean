@@ -70,11 +70,18 @@ inductive Feature where
   /-- `xs.findLast(x => p)`, which looks from the end:
   `Array.prototype.findLast`. -/
   | arrayFindLast
+  /-- `s.trim()` with the white space of Unicode 8.0 or later, which ES2016
+  names. ES2015 names Unicode 5.1, where U+180E is white space too. -/
+  | trimWhiteSpace
+  /-- `s.trimStart()` and `s.trimEnd()`: `String.prototype.trimStart` and
+  `trimEnd`. -/
+  | trimStartEnd
 deriving BEq, Repr, Inhabited
 
 def Feature.since : Feature → Edition
-  | .exponent | .arrayIncludes => .es2016
+  | .exponent | .arrayIncludes | .trimWhiteSpace => .es2016
   | .objectSpread => .es2018
+  | .trimStartEnd => .es2019
   | .bigint | .bigintDivision | .nullishCoalescing | .optionalChaining => .es2020
   | .logicalAssignment | .numericSeparators => .es2021
   | .arrayAt => .es2022
@@ -92,6 +99,8 @@ def Feature.describe : Feature → String
   | .arrayIncludes => "Array.prototype.includes"
   | .arrayAt => "Array.prototype.at"
   | .arrayFindLast => "Array.prototype.findLast"
+  | .trimWhiteSpace => "the white space of String.prototype.trim without U+180E"
+  | .trimStartEnd => "String.prototype.trimStart and trimEnd"
 
 def Edition.supports (target : Edition) (f : Feature) : Bool := f.since.year ≤ target.year
 

@@ -296,16 +296,27 @@ def oneString (f : JSString → Val N) : List (Val N) → Option (Val N)
   | [.str p] => some (f p)
   | _ => none
 
+/-- The value `v` of a method that takes no arguments here. -/
+def noArgs (v : Val N) : List (Val N) → Option (Val N)
+  | [] => some v
+  | _ => none
+
 /-- A method of the string `s` that takes no callback, on the values of its
 arguments: `startsWith`, `endsWith`, `includes` and `indexOf` with one string
-(ECMA-262 §22.1.3.25, §22.1.3.7, §22.1.3.8 and §22.1.3.9). Each converts its
-argument with ToString, which the subset has on strings only. A position
-argument leaves the subset. -/
+(ECMA-262 §22.1.3.25, §22.1.3.7, §22.1.3.8 and §22.1.3.9), `trim`,
+`trimStart` and `trimEnd` (§22.1.3.32 to §22.1.3.34), and `split` with a
+string separator (§22.1.3.23). Each converts its argument with ToString, which
+the subset has on strings only. A position argument and the limit of `split`
+leave the subset. -/
 def stringMethod (method : String) (s : JSString) (args : List (Val N)) : Option (Val N) :=
   if method == "startsWith" then oneString (fun p => .bool (s.startsWith p)) args
   else if method == "endsWith" then oneString (fun p => .bool (s.endsWith p)) args
   else if method == "includes" then oneString (fun p => .bool (s.includes p)) args
   else if method == "indexOf" then oneString (fun p => .num (JSNumber.ofSafeInt (s.indexOf p))) args
+  else if method == "trim" then noArgs (.str s.trim) args
+  else if method == "trimStart" then noArgs (.str s.trimStart) args
+  else if method == "trimEnd" then noArgs (.str s.trimEnd) args
+  else if method == "split" then oneString (fun sep => .list ((s.split sep).map .str)) args
   else none
 
 /-- The element of the array `items` whose index is the safe integer `i`, or

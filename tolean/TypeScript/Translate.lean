@@ -1671,18 +1671,37 @@ def stringMethod? (name : String) : Option IR.StringMethod :=
   else if name == "endsWith" then some .endsWith
   else if name == "includes" then some .includes
   else if name == "indexOf" then some .indexOf
+  else if name == "trim" then some .trim
+  else if name == "trimStart" then some .trimStart
+  else if name == "trimEnd" then some .trimEnd
+  else if name == "split" then some .split
   else none
 
 /-- The types of the arguments that a method of a string takes here. JS converts
 another argument with ToString, which the subset has only on strings, and a
 position argument is not supported. -/
 def StringMethod.params : IR.StringMethod → List Ty
-  | .startsWith | .endsWith | .includes | .indexOf => [.string]
+  | .startsWith | .endsWith | .includes | .indexOf | .split => [.string]
+  | .trim | .trimStart | .trimEnd => []
 
 /-- The type of the value of a method of a string. -/
 def StringMethod.result : IR.StringMethod → Ty
   | .startsWith | .endsWith | .includes => .boolean
   | .indexOf => .number
+  | .trim | .trimStart | .trimEnd => .string
+  | .split => .array .string
+
+/-- The edition from which a method of a string means what the model says,
+when that is later than ES2015. -/
+def StringMethod.feature : IR.StringMethod → Option Feature
+  | .trim => some .trimWhiteSpace
+  | .trimStart | .trimEnd => some .trimStartEnd
+  | _ => none
+
+/-- Refuse the code when the target does not have `f`. -/
+def requireFeature? (s : Span) : Option Feature → TM Unit
+  | some f => requireFeature s f
+  | none => pure ()
 
 /-- The code for `str.method(args)`, a method of a string, where `str` is the
 code of the receiver and `args` are the codes of the arguments. -/
@@ -1691,10 +1710,13 @@ def stringCall (s : Span) (method : String) (str : Code) (args : List Code) : TM
     match stringMethod? method with
     | some m =>
       if args.length == (StringMethod.params m).length then
-        if args.map (·.type) == StringMethod.params m then
+        if args.map (·.type) == StringMethod.params m then do
+          requireFeature? s (StringMethod.feature m)
           return ⟨.ext (.stringMethod m) (str.value :: args.map (·.value)), false, StringMethod.result m⟩
         else reject s s!"the argument of '{method}' must be a string"
-      else reject s s!"'{method}' takes one string here; a position argument is not supported"
+      else reject s (if (StringMethod.params m).isEmpty then s!"'{method}' takes no arguments"
+        else if m == .split then s!"'{method}' takes one string here; a limit is not supported"
+        else s!"'{method}' takes one string here; a position argument is not supported")
     | none => reject s s!"the string method '{method}' is not supported here"
   else reject s s!"only a string has the method '{method}' here"
 
