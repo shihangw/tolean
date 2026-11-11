@@ -398,6 +398,12 @@ def Body.exec (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
     | .ok v => Body.exec fs fuel ((name, v) :: ρ) rest
     | .error t => some (.ret (.error t))
   | .let name e rest => do Body.exec fs fuel ((name, ← Expr.eval fs fuel ρ e) :: ρ) rest
+  -- A tuple is the list of its elements, and each name takes one, in order,
+  -- as a `let` would.
+  | .letTuple names e rest => do
+    let .list vs ← Expr.eval fs fuel ρ e | none
+    if names.length != vs.length then none
+    Body.exec fs fuel ((names.zip vs).reverse ++ ρ) rest
   | .letArray name _ elems rest => do
     Body.exec fs fuel ((name, .list (← Expr.evalList fs fuel ρ elems)) :: ρ) rest
   | .ite c whenTrue whenFalse => do
