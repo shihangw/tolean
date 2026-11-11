@@ -25,13 +25,3 @@ export function firstPositive(pairs: ReadonlyArray<readonly [string, bigint]>): 
   }
   return '';
 }
-
-export function heads(rows: ReadonlyArray<ReadonlyArray<bigint>>): bigint {
-  let sum = 0n;
-  for (const [first, ...rest] of rows) {
-    if (rest.length > 0) {
-      sum += first ?? 0n;
-    }
-  }
-  return sum;
-}
