@@ -165,6 +165,8 @@ inductive Property where
   | shorthand (span : Span) (name : String)
   /-- `{ a: e }`. -/
   | keyValue (span : Span) (key : PropKey) (value : Expr)
+  /-- `{ ...e }`, which copies the properties of `e`. -/
+  | spread (span : Span) (value : Expr)
 
 end
 
@@ -287,7 +289,7 @@ def Expr.assignsList (n : String) : List Expr → Bool
 def Property.assignsList (n : String) : List Property → Bool
   | [] => false
   | .shorthand .. :: ps => Property.assignsList n ps
-  | .keyValue _ _ v :: ps => v.assigns n || Property.assignsList n ps
+  | .keyValue _ _ v :: ps | .spread _ v :: ps => v.assigns n || Property.assignsList n ps
 
 end
 
@@ -360,7 +362,7 @@ def Expr.mutatesList (n : String) : List Expr → Bool
 def Property.mutatesList (n : String) : List Property → Bool
   | [] => false
   | .shorthand .. :: ps => Property.mutatesList n ps
-  | .keyValue _ _ v :: ps => v.mutates n || Property.mutatesList n ps
+  | .keyValue _ _ v :: ps | .spread _ v :: ps => v.mutates n || Property.mutatesList n ps
 
 end
 
@@ -431,7 +433,7 @@ def Expr.mayHoldList (p : String → Bool) : List Expr → Bool
 def Property.mayHoldList (p : String → Bool) : List Property → Bool
   | [] => false
   | .shorthand _ n :: ps => p n || Property.mayHoldList p ps
-  | .keyValue _ _ v :: ps => v.mayHold p || Property.mayHoldList p ps
+  | .keyValue _ _ v :: ps | .spread _ v :: ps => v.mayHold p || Property.mayHoldList p ps
 
 end
 
@@ -450,6 +452,206 @@ to know which name, if any, the iterable gives at run time. Only a new
 collection is safe whatever names it mentions. -/
 def Stmt.mutatesIterable (iterable : Expr) (body : Stmt) : Bool :=
   !iterable.isFresh && iterable.mayHold body.mutates
+
+/-! ### Which collections a function may change
+
+The spec models an array, a map or a set as a value, so a `push`, `set`, `add`
+or `delete` changes only the variable that it names. JS changes the one object
+that every name of it shares. The two agree when nothing else holds the object
+while it changes, which `Stmt.ownsChanges` checks. -/
+
+mutual
+
+/-- The names whose array, map or set `e` changes: the receiver of each
+`push`, `set`, `add` or `delete` in it. -/
+def Expr.changed : Expr → List String
+  | .call _ (.member _ (.ident _ m) method) args =>
+    (if changingMethods.contains method then [m] else []) ++ Expr.changedList args
+  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => []
+  | .array _ es | .new _ _ _ es => Expr.changedList es
+  | .object _ ps => Property.changedList ps
+  | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e
+  | .arrow _ _ _ e | .asConst _ e | .satisfies _ e _ | .spread _ e => e.changed
+  | .index _ a b | .binary _ _ a b | .assign _ _ a b => a.changed ++ b.changed
+  | .call _ c args => c.changed ++ Expr.changedList args
+  | .cond _ a b c => a.changed ++ b.changed ++ c.changed
+
+def Expr.changedList : List Expr → List String
+  | [] => []
+  | e :: es => e.changed ++ Expr.changedList es
+
+def Property.changedList : List Property → List String
+  | [] => []
+  | .shorthand .. :: ps => Property.changedList ps
+  | .keyValue _ _ v :: ps | .spread _ v :: ps => v.changed ++ Property.changedList ps
+
+end
+
+mutual
+
+/-- `e` hands on the object that the name `n` holds, so that something else
+may hold it: `n` stands on its own anywhere but as the receiver of a member,
+a call or an index, or as what a `new` or a spread copies. A receiver gives a new value, such as `n.size` or
+`n.get(k)`; the spec has no rule for a method that gives `n` itself back,
+such as `n.set(k, v)` used as a value. -/
+def Expr.leaks (n : String) : Expr → Bool
+  | .ident _ m => m == n
+  | .number .. | .bigint .. | .string .. | .bool .. | .null _ => false
+  | .member _ (.ident ..) _ | .optMember _ (.ident ..) _ => false
+  | .index _ (.ident ..) i => i.leaks n
+  | .call _ (.member _ (.ident ..) _) args => Expr.leaksList n args
+  -- `new Map(m)`, `new Set(s)` and `...s` copy the values of the collection,
+  -- not the collection itself. `new Map([[k, s]])` holds `s`, so it leaks.
+  | .new _ _ _ [.ident ..] | .spread _ (.ident ..) => false
+  | .array _ es | .new _ _ _ es => Expr.leaksList n es
+  | .object _ ps => Property.leaksList n ps
+  | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e
+  | .arrow _ _ _ e | .asConst _ e | .satisfies _ e _ | .spread _ e => e.leaks n
+  | .index _ a b | .binary _ _ a b | .assign _ _ a b => a.leaks n || b.leaks n
+  | .call _ c args => c.leaks n || Expr.leaksList n args
+  | .cond _ a b c => a.leaks n || b.leaks n || c.leaks n
+
+def Expr.leaksList (n : String) : List Expr → Bool
+  | [] => false
+  | e :: es => e.leaks n || Expr.leaksList n es
+
+def Property.leaksList (n : String) : List Property → Bool
+  | [] => false
+  | .shorthand _ m :: ps => m == n || Property.leaksList n ps
+  | .keyValue _ _ v :: ps | .spread _ v :: ps => v.leaks n || Property.leaksList n ps
+
+end
+
+/-- `d` makes a new collection that only its name holds: `const m = new Map()`,
+`const s = new Set(xs)`, or `const xs: Array<T> = [...]`. -/
+def VarDecl.owns (d : VarDecl) : Bool :=
+  d.kind == .const &&
+    match d.init, d.type with
+    | some (.new _ "Map" _ _), _ | some (.new _ "Set" _ _), _ => true
+    | some (.array _ _), some (.ref _ "Array" [_]) | some (.array _ _), some (.array _ _) => true
+    | _, _ => false
+
+mutual
+
+/-- The statements of `s` that bind the name `n`, each as whether it makes a
+new collection that only `n` holds (`VarDecl.owns`). A loop variable never
+does: it holds an element of something else. -/
+def Stmt.binds (n : String) : Stmt → List Bool
+  | .varDecl _ d => if d.name == n then [d.owns] else []
+  | .forOfStmt _ _ x _ b => (if x == n then [false] else []) ++ b.binds n
+  | .forStmt _ init _ _ b =>
+    (match init with
+     | some d => if d.name == n then [d.owns] else []
+     | none => []) ++ b.binds n
+  | .ifStmt _ _ a b => a.binds n ++ (match b with
+    | some b => b.binds n
+    | none => [])
+  | .whileStmt _ _ b => b.binds n
+  | .block _ ss => Stmt.bindsList n ss
+  | .switchStmt _ _ cs => Stmt.bindsClauses n cs
+  | .exprStmt .. | .returnStmt .. | .breakStmt _ | .continueStmt _ | .empty _ | .throwStmt .. => []
+
+def Stmt.bindsList (n : String) : List Stmt → List Bool
+  | [] => []
+  | s :: ss => s.binds n ++ Stmt.bindsList n ss
+
+def Stmt.bindsClauses (n : String) : List (Option Expr × List Stmt) → List Bool
+  | [] => []
+  | (_, body) :: cs => Stmt.bindsList n body ++ Stmt.bindsClauses n cs
+
+end
+
+mutual
+
+/-- The names whose array, map or set `s` changes, as `Expr.changed` says. -/
+def Stmt.changed : Stmt → List String
+  | .varDecl _ d => match d.init with
+    | some e => e.changed
+    | none => []
+  | .exprStmt _ e | .throwStmt _ e => e.changed
+  | .returnStmt _ e => match e with
+    | some e => e.changed
+    | none => []
+  | .ifStmt _ t a b => t.changed ++ a.changed ++ (match b with
+    | some b => b.changed
+    | none => [])
+  | .forOfStmt _ _ _ it b => it.changed ++ b.changed
+  | .forStmt _ init t u b => (match init with
+    | some { init := some e, .. } => e.changed
+    | _ => []) ++ (match t with
+    | some t => t.changed
+    | none => []) ++ (match u with
+    | some u => u.changed
+    | none => []) ++ b.changed
+  | .whileStmt _ t b => t.changed ++ b.changed
+  | .block _ ss => Stmt.changedList ss
+  | .breakStmt _ | .continueStmt _ | .empty _ => []
+  | .switchStmt _ d cs => d.changed ++ Stmt.changedClauses cs
+
+def Stmt.changedList : List Stmt → List String
+  | [] => []
+  | s :: ss => s.changed ++ Stmt.changedList ss
+
+def Stmt.changedClauses : List (Option Expr × List Stmt) → List String
+  | [] => []
+  | (t, body) :: cs => (match t with
+    | some t => t.changed
+    | none => []) ++ Stmt.changedList body ++ Stmt.changedClauses cs
+
+end
+
+mutual
+
+/-- `s` hands on the object that `n` holds (`Expr.leaks`), outside a
+`return` and outside the place of the collection that a `for … of` runs
+over. A `return` ends the function, so nothing changes the object after
+that. A loop reads the collection without keeping it. -/
+def Stmt.leaks (n : String) : Stmt → Bool
+  | .varDecl _ d => match d.init with
+    | some e => e.leaks n
+    | none => false
+  | .exprStmt _ e | .throwStmt _ e => e.leaks n
+  | .returnStmt .. => false
+  | .ifStmt _ t a b => t.leaks n || a.leaks n || (match b with
+    | some b => b.leaks n
+    | none => false)
+  | .forOfStmt _ _ _ it b => (match it with
+    | .ident .. => false
+    | it => it.leaks n) || b.leaks n
+  | .forStmt _ init t u b => (match init with
+    | some { init := some e, .. } => e.leaks n
+    | _ => false) || (match t with
+    | some t => t.leaks n
+    | none => false) || (match u with
+    | some u => u.leaks n
+    | none => false) || b.leaks n
+  | .whileStmt _ t b => t.leaks n || b.leaks n
+  | .block _ ss => Stmt.leaksList n ss
+  | .breakStmt _ | .continueStmt _ | .empty _ => false
+  | .switchStmt _ d cs => d.leaks n || Stmt.leaksClauses n cs
+
+def Stmt.leaksList (n : String) : List Stmt → Bool
+  | [] => false
+  | s :: ss => s.leaks n || Stmt.leaksList n ss
+
+def Stmt.leaksClauses (n : String) : List (Option Expr × List Stmt) → Bool
+  | [] => false
+  | (t, body) :: cs => (match t with
+    | some t => t.leaks n
+    | none => false) || Stmt.leaksList n body || Stmt.leaksClauses n cs
+
+end
+
+/-- A function with the parameters `params` and the body `body` changes only
+collections that nothing else holds: each name whose array, map or set the
+body changes is not a parameter, every binding of it in the body makes a new
+collection, and the body hands the collection on only in a `return`. Then the
+spec's model of a collection as a value is exact. The test is on names, so it
+also refuses a second, unrelated variable of the same name in another block
+when that one is not such a collection. -/
+def Stmt.ownsChanges (params : List String) (body : Stmt) : Bool :=
+  body.changed.all fun n =>
+    !params.contains n && !(body.binds n).isEmpty && (body.binds n).all id && !body.leaks n
 
 /-- `s` declares a `const` that a statement of `rest` assigns. In JS that
 assignment throws a `TypeError` (ECMA-262 §9.1.1.1.5), so the spec gives no
@@ -587,7 +789,7 @@ def Expr.lessFreeList : List Expr → Bool
 def Property.lessFreeList : List Property → Bool
   | [] => true
   | .shorthand .. :: ps => Property.lessFreeList ps
-  | .keyValue _ _ v :: ps => v.lessFree && Property.lessFreeList ps
+  | .keyValue _ _ v :: ps | .spread _ v :: ps => v.lessFree && Property.lessFreeList ps
 
 end
 

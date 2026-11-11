@@ -209,6 +209,13 @@ def getKey (fields : List (String × Val N)) (key : JSString) : Option (Val N) :
   | some v => some v
   | none => if objectPrototypeNames.any (fun n => JSString.ofString n == key) then none else some .undefined
 
+/-- Set the property `key` of an object with the fields `fields` to `v`
+(`CreateDataProperty` on an ordinary object, ECMA-262 §7.3.5 and §10.1.6.3):
+in its place when the object has it, and at the end when it does not. -/
+def setProp (fields : List (String × Val N)) (key : String) (v : Val N) : List (String × Val N) :=
+  if fields.any (·.1 == key) then fields.map fun (k, w) => (k, if k == key then v else w)
+  else fields ++ [(key, v)]
+
 /-- The property at `path` of an object with the fields `fields`, where each
 property before the last is an object. -/
 def getPath (fields : List (String × Val N)) : List String → Option (Val N)
@@ -259,6 +266,29 @@ def binary : BinOp → Val N → Val N → Option (Val N)
   | .looseEq, a, b => (looseEq a b).map .bool
   | .looseNe, a, b => (looseEq a b).map (.bool ∘ not)
   | _, _, _ => none
+
+/-- SameValueZero (ECMA-262 §7.2.11) on the values of the subset. Two numbers
+are the same when they are `===` or both `NaN`, and `+0` is the same as `-0`.
+Any other two values are the same when they are `===` (SameValueNonNumber,
+§7.2.12), so two objects leave the subset, as they do for `===`. -/
+def sameValueZero : Val N → Val N → Option Bool
+  | .num a, .num b => some (JSNumber.sameValueZero a b)
+  | a, b => strictEq a b
+
+/-- Whether an element of `items` is the same as `v` by SameValueZero. This
+is the loop of `Array.prototype.includes` (ECMA-262 §23.1.3.16), which
+compares the elements in order and stops at the first that is. -/
+def includesVal (v : Val N) : List (Val N) → Option Bool
+  | [] => some false
+  | x :: xs => do if ← sameValueZero v x then return true else includesVal v xs
+
+/-- A method of an array that takes no callback, on the elements of the
+array and the values of the arguments: `includes` with one argument
+(`Array.prototype.includes`, ECMA-262 §23.1.3.16). Its second argument, the
+index to start at, leaves the subset, and so does every other method. -/
+def arrayMethod (method : String) (items : List (Val N)) : List (Val N) → Option (Val N)
+  | [v] => if method == "includes" then (includesVal v items).map .bool else none
+  | _ => none
 
 /-- The element of the array `items` whose index is the safe integer `i`, or
 `undefined` when `i` is none or no index of the array. -/
@@ -358,6 +388,36 @@ deriving Inhabited
 def numberText? : Expr → Option String
   | .number _ text => some text
   | _ => none
+
+/-- The integer that a number literal names, or a number literal after `-`,
+such as `-1`. A literal is that integer whatever the model of numbers, as it
+is for `xs[0]`. -/
+def intLiteral? : Expr → Option Int
+  | .number _ text => numberLiteral text
+  | .unary _ .neg (.number _ text) => (numberLiteral text).map (- ·)
+  | _ => none
+
+/-- `items.at(k)` (`Array.prototype.at`, ECMA-262 §23.1.3.1), where `k` is
+the integer of the argument: a negative `k` counts from the end. An index
+outside the array gives `undefined`. -/
+def atVal (items : List (Val N)) (k : Int) : Val N :=
+  elementAt items (some (if 0 ≤ k then k else items.length + k))
+
+/-- A relative index into an array of `len` elements, as `slice` reads its
+arguments: a negative `k` counts from the end, and the result is clamped to
+`0` and `len`. -/
+def relIndex (len : Nat) (k : Int) : Nat :=
+  if k < 0 then (len + k).toNat else min k.toNat len
+
+/-- `items.slice(start, stop)` (`Array.prototype.slice`, ECMA-262
+§23.1.3.28), where `start` and `stop` are the integers of the arguments: the
+elements from `start` up to `stop`, or to the end when `stop` is none. -/
+def sliceList {α : Type} (items : List α) (start : Int) (stop : Option Int) : List α :=
+  let k := relIndex items.length start
+  let final := match stop with
+    | some e => relIndex items.length e
+    | none => items.length
+  (items.drop k).take (final - k)
 
 /-- The functions of the module, by name. -/
 def functions (m : Module) : List (String × List String × Stmt) :=
@@ -523,6 +583,14 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
   -- Type stripping removes `as const` and `satisfies T`.
   | .asConst _ e | .satisfies _ e _ => eval m fuel env e
   | .array _ elems => (evalList m fuel env elems).map .list
+  -- `{ ...e, a: v }`: the properties of the object `e`, in its order
+  -- (`CopyDataProperties`, ECMA-262 §7.3.26), then each later property, set in
+  -- its place when the object has it. A spread of anything but an object
+  -- leaves the subset.
+  | .object _ (.spread _ e :: ps) => do
+    let .obj fs ← eval m fuel env e | none
+    let rest ← evalProps m fuel env ps
+    return .obj (rest.foldl (fun acc (k, v) => setProp acc k v) fs)
   | .object _ props => (evalProps m fuel env props).map .obj
   -- A property read after a `?.` is a part of its optional chain, which is
   -- `undefined` as a whole where the `?.` meets `null` or `undefined`
@@ -537,6 +605,10 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     else do
       match ← eval m fuel env obj with
       | .obj fields => getProp fields name
+      -- `xs.length`, the number of elements of an array (ECMA-262 §10.4.2).
+      -- An array of the subset has fewer than 2^53 elements, so its length
+      -- is a safe integer.
+      | .list items => if name == "length" then some (.num (JSNumber.ofSafeInt items.length)) else none
       -- `m.size` (ECMA-262 §24.1.3.10): the number of entries. A map has
       -- fewer than 2^53 entries, so the number is a safe integer.
       | .map entries =>
@@ -641,6 +713,27 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     else if method == "findLast" then
       return (← evalFind m fuel env p.name body true items.reverse).getD .undefined
     else none
+  -- `xs.at(k)` (`Array.prototype.at`, ECMA-262 §23.1.3.1). Its argument
+  -- becomes an integer by `ToIntegerOrInfinity`. A literal is the integer it
+  -- names, whatever the model of numbers. Any other number is its integer
+  -- when it is a safe integer; truncating other numbers leaves the subset.
+  | .call _ (.member _ recv "at") [arg] => do
+    let .list items ← eval m fuel env recv | none
+    match intLiteral? arg with
+    | some k => return atVal items k
+    | none =>
+      let .num n ← eval m fuel env arg | none
+      return atVal items (← JSNumber.toSafeInt n)
+  -- `xs.slice(start, end)` (`Array.prototype.slice`, ECMA-262 §23.1.3.28).
+  -- Each argument becomes an integer as the argument of `at` does. A missing
+  -- start is `0`, and a missing end is the length.
+  | .call _ (.member _ recv "slice") args => do
+    let .list items ← eval m fuel env recv | none
+    match args with
+    | [] => return .list (sliceList items 0 none)
+    | [a] => return .list (sliceList items (← evalInt m fuel env a) none)
+    | [a, b] => return .list (sliceList items (← evalInt m fuel env a) (some (← evalInt m fuel env b)))
+    | _ => none
   -- `xs.map((x, i) => e)`: `map` passes the index too, as a number
   -- (ECMA-262 §23.1.3.21, step 6.c.ii). An array has fewer than 2^32
   -- elements, so the index is a safe integer. Two parameters of one arrow
@@ -672,7 +765,16 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     | .set elems =>
       let found ← setHas elems (← eval m fuel env arg)
       if method == "has" then return .bool found else none
+    -- An array, as the next rule takes it.
+    | .list items => arrayMethod method items [← eval m fuel env arg]
     | _ => none
+  -- Any other call of a method of an array, such as `xs.includes(v)`. The
+  -- array comes first, then the arguments, as `EvaluateCall` takes them
+  -- (ECMA-262 §13.3.6.2). Reading the method of an array has no effect, so
+  -- the rule reads it after the arguments.
+  | .call _ (.member _ recv method) args => do
+    let .list items ← eval m fuel env recv | none
+    arrayMethod method items (← evalList m fuel env args)
   -- A call that throws inside an expression gives no value. Only a call that
   -- is the whole value of a declaration or a `return` passes its throw on
   -- (`evalTop`).
@@ -716,6 +818,9 @@ def evalCall (m : Scope) (fuel : Nat) (env : Env N) (name : String) (args : List
   | fuel + 1 =>
     let key ← resolve m name
     let (params, body) ← (functionsOf m.program).lookup key
+    -- The model holds a collection as a value, which is exact only when
+    -- nothing else holds the object while the function changes it.
+    if !Stmt.ownsChanges params body then none
     -- A `break` or a `continue` outside a loop is an early error
     -- (ECMA-262 §14.8.1 and §14.9.1), so the model gives no value.
     match ← execStmt { m with file := key.file } fuel (← bindArgs params vs) body with
@@ -746,6 +851,18 @@ def evalChain (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Option (
     | some _ => none
   | e => (eval m fuel env e).map some
 termination_by e => (fuel, sizeOf e, 1)
+
+/-- The integer of an argument such as the start of `slice`, by
+`ToIntegerOrInfinity` (ECMA-262 §7.1.5): a literal is the integer it names,
+whatever the model of numbers, and any other number is its integer when it
+is a safe integer. Truncating any other number leaves the subset. -/
+def evalInt (m : Scope) (fuel : Nat) (env : Env N) (e : Expr) : Option Int :=
+  match intLiteral? e with
+  | some k => some k
+  | none => do
+    let .num n ← eval m fuel env e | none
+    JSNumber.toSafeInt n
+termination_by (fuel, sizeOf e, 1)
 
 def evalList (m : Scope) (fuel : Nat) (env : Env N) : List Expr → Option (List (Val N))
   | [] => some []
@@ -844,14 +961,14 @@ def execStmt (m : Scope) (fuel : Nat) (env : Env N) : Stmt → Option (Outcome N
   -- `xs.push(v)` adds `v` at the end (`Array.prototype.push`, ECMA-262
   -- §23.1.3.23). The subset pushes only onto an array that the function owns,
   -- which nothing else can see, so the push changes only the variable.
+  -- `evalCall` checks that the function owns it (`Stmt.ownsChanges`).
   | .exprStmt _ (.call _ (.member _ (.ident _ name) "push") [arg]) => do
     let .list items ← env.lookup name | none
     return .normal (env.set name (.list (items ++ [← eval m fuel env arg])))
   -- `m.set(k, v)` and `m.delete(k)` (ECMA-262 §24.1.3.9 and §24.1.3.3) on a
   -- map that the function owns, as for `push`: nothing else can see the
-  -- map, so the change shows only in the variable. The translator checks
-  -- that the function owns the map, and this rule does not: a second name for
-  -- the map would keep the old value, where JS shares one map.
+  -- map, so the change shows only in the variable. `evalCall` checks that
+  -- the function owns the map, as for `push`.
   | .exprStmt _ (.call _ (.member _ (.ident _ name) "set") [key, value]) => do
     let .map entries ← env.lookup name | none
     let k ← eval m fuel env key
@@ -1009,6 +1126,8 @@ value that it throws. -/
 def callIn (p : Program) (key : DeclRef) (args : List (Val N)) (fuel : Nat := 64) :
     Option (Except (Val N) (Val N)) := do
   let (params, body) ← (functionsOf p).lookup key
+  -- As in `evalCall`: the function changes only collections that it owns.
+  if !Stmt.ownsChanges params body then none
   match ← execStmt ⟨p, key.file⟩ fuel (← bindArgs params args) body with
   | .ret r => some r
   | .normal _ | .brk _ | .cont _ => none

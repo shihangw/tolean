@@ -319,9 +319,19 @@ export class Gen {
     };
     const options: Array<() => string> = [];
     switch (t.k) {
-      case 'boolean':
+      case 'boolean': {
         options.push(() => call(this.pick(['some', 'every']), this.pick(arrays), (inner) => this.expr(BOOLEAN, inner, depth)));
+        // `includes` on primitives, which SameValueZero compares by value.
+        // A number array may hold `NaN`, which `includes` finds.
+        const primitive = arrays.filter((a) => ['bigint', 'number', 'boolean', 'string'].includes(a.elem.k));
+        if (primitive.length > 0) {
+          options.push(() => {
+            const recv = this.pick(primitive);
+            return `${recv.name}.includes(${this.expr(recv.elem, vars, depth)})`;
+          });
+        }
         break;
+      }
       case 'array': {
         const of = t.of;
         options.push(() => call('map', this.pick(arrays), (inner) => this.expr(of, inner, depth)));
@@ -329,6 +339,11 @@ export class Gen {
         const same_ = arrays.filter((a) => same(a.elem, of));
         if (same_.length > 0) {
           options.push(() => call('filter', this.pick(same_), (inner) => this.expr(BOOLEAN, inner, depth)));
+          // A slice with integer literals, from the start or from the end.
+          options.push(() => {
+            const bounds = this.pick(['', '1', '-2', '0, 2', '1, -1', '-3, -1', '2, 1']);
+            return `${this.pick(same_).name}.slice(${bounds})`;
+          });
         }
         break;
       }
@@ -339,7 +354,20 @@ export class Gen {
         const same_ = arrays.filter((a) => same(a.elem, t));
         if (same_.length > 0) {
           options.push(() => `(${call(this.pick(['find', 'findLast']), this.pick(same_), (inner) => this.expr(BOOLEAN, inner, depth))} ?? ${this.expr(t, vars, depth)})`);
+          // An element at an index, which is `undefined` outside the array:
+          // a literal, any number, or a literal counted from the end.
+          options.push(() => {
+            const recv = this.pick(same_).name;
+            const index = this.pick([
+              () => `${recv}[${this.pick([0, 1, 2])}]`,
+              () => `${recv}[${this.expr(NUMBER, vars, depth)}]`,
+              () => `${recv}.at(${this.pick([0, 1, -1, -2])})`,
+            ])();
+            return `(${index} ?? ${this.expr(t, vars, depth)})`;
+          });
         }
+        // The length of an array is a number.
+        if (t.k === 'number') options.push(() => `${this.pick(arrays).name}.length`);
         // `findIndex` gives the index of the first element that passes, a
         // number, or -1.
         if (t.k === 'number') {
@@ -400,6 +428,14 @@ export class Gen {
 
   private object(name: string, vars: ReadonlyArray<Var>, depth: number): string {
     const s = this.structs.find((x) => x.name === name);
+    // A spread of a value of the same interface, which then sets some of its
+    // required fields in their places.
+    const bases = vars.filter((x) => !x.owned && x.ty.k === 'struct' && x.ty.name === name);
+    if (bases.length > 0 && this.chance(0.4)) {
+      const set = (s?.fields ?? []).filter(([, ty]) => ty.k !== 'optional' && this.chance(0.5));
+      const parts = set.map(([field, ty]) => `${field}: ${this.expr(ty, vars, depth)}`);
+      return `{ ${[`...${this.pick(bases).name}`, ...parts].join(', ')} }`;
+    }
     const parts = (s?.fields ?? []).map(([field, ty]) => {
       const v = vars.find((x) => x.name === field && same(x.ty, ty) && !x.owned);
       return v !== undefined && this.chance(0.5) ? field : `${field}: ${this.expr(ty, vars, depth)}`;

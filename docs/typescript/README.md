@@ -407,6 +407,13 @@ the file, the line and the reason. It never approximates.
 | `xs.map((x, i) => e)` | `List.mapIdx (fun (i : Nat) (x : T) => let i := JSNumber.ofSafeInt i; e) xs`. JS passes the index as a number, so the body reads `i` as a `number`. An array has fewer than 2^32 elements, so the index is always a safe integer. |
 | `xs.some(x => p)`, `xs.every(x => p)` | `List.any xs (fun (x : T) => p)`, `List.all xs (fun (x : T) => p)` |
 | `xs.find(x => p)` | `List.find? (fun (x : T) => p) xs`. The value is `undefined` when no element passes, so it has the type of an optional field: `xs.find(p) ?? d`, `xs.find(p)?.f` and `xs.find(p) === undefined` work as they do on `s.f`. |
+| `xs.includes(x)` on `bigint`, `boolean`, `string` or a literal union of strings | `x ∈ xs`. `includes` compares by SameValueZero, which is `===` on these types. It is in ES2016. |
+| `xs.includes(x)` on `number` | `List.any xs (JSNumber.sameValueZero x)`. SameValueZero is `===`, except that `NaN` is the same as `NaN`, so `[NaN].includes(NaN)` is `true`. |
+| `xs.length` | `JSNumber.ofSafeInt (N := N) ((List.length xs : Nat) : Int)`, a `number` |
+| `xs[k]`, where `k` is a number literal | `(xs[k]? : Option T)`. The value is `undefined` when `k` is not an index of the array, so it has the type of an optional field: `xs[0] ?? d`, `xs[0]?.f` and `xs[0] === undefined` work as they do on `s.f`. Tolean gives `xs[k]` this type whatever `noUncheckedIndexedAccess` says, so code that uses it as a `T` is refused. |
+| `xs[i]`, where `i` is any other number | `JSNumber.elementAt? xs i`: the element when `i` is a safe integer within the array, and `none` otherwise. `xs[-1]` and `xs[0.5]` are `undefined`, as in JS. |
+| `xs.at(k)`, where `k` is an integer literal | `(xs[k]? : Option T)`, or `((List.reverse xs)[-k - 1]? : Option T)` when `k` is negative, which counts from the end. It is in ES2022. |
+| `xs.slice(a, b)`, where `a` and `b` are integer literals or left out | `List.drop` and `List.take`, such as `(List.drop 1 (List.take 3 xs))` for `xs.slice(1, 3)`. A negative bound counts from the end, which the output reads on the reversed list: `xs.slice(-2)` is `(List.reverse (List.take 2 (List.reverse xs)))`. |
 | `xs.findLast(x => p)` | `List.find? (fun (x : T) => p) (List.reverse xs)`, which the callback reads from the last element to the first, as in JS. It has the type of `find`, and it is in ES2023. |
 | `xs.findIndex(x => p)` | `JSNumber.ofSafeInt (((List.findIdx? (fun (x : T) => p) xs).map Int.ofNat).getD (-1))`: the index of the first element that passes, as a `number`, or `-1` |
 | `xs.reduce((acc, x) => e, init)` | `List.foldl (fun (acc : A) (x : T) => e) init xs`, where `A` is the type of `init`. The body must give a value of that type. |
@@ -416,6 +423,7 @@ the file, the line and the reason. It never approximates.
 | `a < b`, `a <= b`, `a > b` and `a >= b` on strings | `JSString.lt a b` and `JSString.le a b`, with the operands swapped for `>` and `>=`. JS compares strings by their UTF-16 code units (IsLessThan, ECMA-262 §7.2.13), not by their code points, so `"😀" < "\uFFFF"` is `true`. `JSString.lt_iff` states that `lt` is Lean's order on the lists of code units. |
 | `a / k`, `a % k` on `bigint`, where `k` is a nonzero literal | `Int.tdiv a k`, `Int.tmod a k` (both truncate toward zero, as JS does) |
 | `{ a, b: e }` building a declared interface | structure instance |
+| `{ ...a, f: e }`, where `a` has an interface | `{ a with f := e }`. The spread keeps the keys of `a` in their order, and each property after it sets a required field in its place, so the object keeps the declared order. `{ ...a }` is `a`. |
 | Call to a function declared earlier in the file | application |
 | `interface Box<T> { readonly value: T }`, where the type parameters have no constraint | `structure Box (T : Type)`. `Box<bigint>` becomes `Box Int`, and a read of a field has the field's type with `bigint` for `T`. An object literal where a `Box<bigint>` is expected becomes `({ value := … } : (Box Int))`. |
 | `type Maybe<T> = T \| null` | `abbrev Maybe (T : Type) := Option T`. As for any alias, the output writes the type itself wherever the source names it, so `Maybe<bigint>` becomes `Option Int`. |
@@ -465,6 +473,10 @@ Tolean rejects these, among others:
   a later push. In Lean a push makes a new list, but in JS it changes the
   shared one. An array literal is safe anywhere else: in JS it makes a new
   array, and nothing may push to an array that the function does not own.
+  The interpreter checks the same rule for arrays, maps and sets, and gives
+  no value for a function that breaks it. Its check is on names, so Tolean
+  also refuses a function that changes such a collection and has another
+  variable of the same name in a different block. Rename one of them.
 - An arrow function anywhere except as the callback of `map`, `filter`,
   `some`, `every` and `find`, and a named function as a callback. A callback
   of `map` may take the index as its second parameter. The other callbacks
@@ -473,6 +485,21 @@ Tolean rejects these, among others:
   for every method but `map` it must give a boolean. Tolean also refuses
   `find` on an array of nullable values, because Lean's `none` would stand
   for both `null` and `undefined`.
+- A spread anywhere but first in an object literal, a spread of a value that
+  is not of an interface, and a property after a spread that sets an
+  optional field or a tag field. JS appends a key that the spread did not
+  copy, so the order of the keys would differ from the declared one.
+- `includes` on an array of objects or of nullable values, and its second
+  argument, the index to start at. On objects `includes` compares
+  references. Tolean also refuses a call of any other array method that takes
+  no callback, such as `indexOf`.
+- An index of an array of nullable values, and `at` on one, because Lean's
+  `none` would stand for both `null` and `undefined`. Tolean also refuses an
+  index that is not a number, such as `xs[0n]`, and an argument of `at` that is
+  not an integer literal. `at` truncates a fraction toward zero, and the number
+  model cannot truncate yet. The bounds of `slice` must be integer literals
+  for the same reason, and Tolean refuses a negative start with an end that
+  is not negative, such as `xs.slice(-2, 3)`.
 - `reduce` without an initial value, which throws on an empty array, and a
   callback of `reduce` whose value has another type than the initial value.
 - A map key or a set element of type `number`, which can be `NaN` or `-0`,
@@ -496,8 +523,8 @@ Tolean rejects these, among others:
   and a `,` after the last element. Tolean also refuses `readonly` before
   anything but a tuple, such as `readonly bigint[]`, and `readonly [A, B][]`,
   which `tsc` reads as a readonly array of tuples. An index of a tuple must be
-  a number literal within the tuple, and an index of any other value is
-  refused. `===` on tuples is refused, because in JS it compares the arrays
+  a number literal within the tuple. Tolean refuses an index of any value but
+  an array, a tuple or a `Record`. `===` on tuples is refused, because in JS it compares the arrays
   by reference.
 - A type parameter with a constraint, a default or a modifier, and a `,` after
   the last one. Tolean also refuses a type parameter of a function that no
@@ -694,6 +721,7 @@ tolean translate --target ES2022 input.ts Output.lean My.Namespace
   | Feature | Since |
   |---|---|
   | `**`, `**=` | ES2016 |
+  | object spread (`{ ...p }`) | ES2018 |
   | bigint (literals, type, `+ - *`, comparisons) | ES2020 |
   | bigint `/` and `%` (`BigInt::divide`, `BigInt::remainder`) | ES2020 |
   | `??` | ES2020 |

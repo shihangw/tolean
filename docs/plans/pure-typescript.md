@@ -97,11 +97,10 @@ value claim already does.
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| `slice`, `entries` | The `List` functions with the same meaning | The `index` argument of a callback other than one of `map`, and the `array` argument of any callback, until a later step adds them |
-| `includes` | `List.contains` with SameValueZero, which treats `NaN` as equal to itself | |
+| `entries` | The `List` functions with the same meaning | The `index` argument of a callback other than one of `map`, and the `array` argument of any callback, until a later step adds them |
 | `[...xs]`, `[...xs, x]`, and array destructuring | `List.append` and patterns | Spread of anything that is not an array |
-| `xs.length`, `xs[i]` and `xs.at(i)` (§23.1.3.1) | `List.length`, and `xs[i]?` of type `Option T`. An index outside the array gives `undefined`. | `xs[i]` in a project without `noUncheckedIndexedAccess`, because there TypeScript types the result as `T` although it can be `undefined` |
-| `{ ...a, f: e }`, where `a` has the declared interface of the result | `{ a with f := e }`. The spread keeps the keys of `a` in their order, so the result keeps the declared order. | Spread of an object of another type, which can change the order of the keys |
+| `xs.at(i)` and `xs.slice(i, j)` where an argument is not an integer literal (§23.1.3.1, §23.1.3.28) | `ToIntegerOrInfinity` on each argument, then the element or the slice as for literals. It needs `Math.trunc` from the numbers stage. | |
+| `xs.slice(-a, b)` with a negative start and an end that is not negative | `List.drop` and `List.take` with the length of the array | |
 | `[...xs].sort(cmp)` and `xs.toSorted(cmp)` | A stable merge sort. ECMA-262 has required a stable sort since ES2019 (§23.1.3.30). | `sort` on an array that the function does not own, and a comparator that is not consistent |
 
 A comparator is consistent when it orders values as a total preorder. The
@@ -160,7 +159,9 @@ full model, which a later step can add.
 
 This is the borrow that Aeneas uses for Rust. It is sound here only
 because the translator checks that the caller owns the map and holds no other
-name for it during the call. Key equality is SameValueZero. For `string` and
+name for it during the call. The spec's call rule now gives no value for a
+function that changes a parameter (`Stmt.ownsChanges`), so the borrow must
+also give the spec this meaning: the call copies the map in and back out. Key equality is SameValueZero. For `string` and
 `bigint` keys that is Lean's equality. For `number` keys it is Lean's
 equality only when no key is `NaN` or `-0`.
 
@@ -283,13 +284,3 @@ variables and in maps.
   Node on every program that it parses. The same check on the loop's body
   would close it. A binding kind in `Eval.Env` would cover every case, but
   then `Agree` and every statement proof would compare kinds too.
-- How should the spec model an array, a map or a set that two names hold?
-  The spec treats each as a value, and a `push`, `set`, `add` or `delete`
-  changes only the variable that it names. That is the JS meaning only when
-  nothing else holds the object. The translator checks this, but the spec
-  does not, so for `const n = m; m.set(k, v)` the spec gives `n` the old map,
-  where Node shares one map. No certified program meets the gap, but
-  `interpreter.test.ts` asks the interpreter to agree with Node on every
-  program that it parses. A check of the ownership rule in the spec's call
-  rule would close it, with a proof that every body that the translator
-  accepts passes the check.

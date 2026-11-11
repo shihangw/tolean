@@ -203,7 +203,8 @@ theorem translateFunction_ok {sp : Span} {ex : Bool} {name : String} {tps : List
       ∃ lp r out, o = .function name lp r out ∧ lp.map (·.1) = params.map (·.name) ∧
         ∃ F env c c', translateStatements F env .ret (blockStatements body) c = .ok out c' ∧
           env.functions = s.functions ++ [f] ∧ env.enums = s.enumValues ∧
-          ∀ x, env.has x = decide (x ∈ params.map (·.name)) := by
+          (∀ x, env.has x = decide (x ∈ params.map (·.name))) ∧
+          Stmt.ownsChanges (params.map (·.name)) body = true := by
   unfold translateFunction at h
   cases ret with
   | none => simp at h
@@ -240,15 +241,20 @@ theorem translateFunction_ok {sp : Span} {ex : Bool} {name : String} {tps : List
     -- The check that a call of the function itself passes a part of a
     -- parameter only refuses.
     split at h
-    · simp at h
-    simp only [pure_bind, bind_ok, modify_ok, pure_ok] at h
+    · rw [bind_ok] at h; obtain ⟨_, _, h, -⟩ := h; exact absurd h (reject_ne_ok _ _ _ _ _)
+    simp only [pure_bind] at h
+    -- So does the check that the function changes only collections it owns.
+    split at h
+    · rw [bind_ok] at h; obtain ⟨_, _, h, -⟩ := h; exact absurd h (reject_ne_ok _ _ _ _ _)
+    rename_i hown
+    simp only [bind_ok, modify_ok, pure_ok] at h
     obtain ⟨_, s₉, rfl, rfl, rfl⟩ := h
     obtain ⟨rfl, -⟩ := isolated_ok hr
     obtain ⟨rfl, s₁₀, hbody⟩ := isolated_ok hbody
     have hg := hps.2.1
     simp only [globals, Prod.mk.injEq] at hg
     refine ⟨rfl, htaken, rfl, rfl, hfresh, _, rfl, rfl, rfl, rfl, lp, _, out, rfl, ?_, _, _, _, _, hbody,
-      by simp [hg.1], hg.2, fun x => ?_⟩
+      by simp [hg.1], hg.2, fun x => ?_, by simpa using hown⟩
     · simpa using hps.2.2
     · have hx := hps.1 x
       simp only [Env.has, Env.lookup] at hx ⊢
@@ -1197,8 +1203,9 @@ from the source body, in a scope of exactly the parameters, of functions of
 def FnRelIn (F : List FnInfo) (E : List EnumValue) (src : String × List String × Stmt)
     (out : String × List String × IR.Body) : Prop :=
   src.1 = out.1 ∧ src.2.1 = out.2.1 ∧
-    ∃ Fu env c c', translateStatements Fu env .ret (blockStatements src.2.2) c = .ok out.2.2 c' ∧
-      (∀ g ∈ env.functions, g ∈ F) ∧ (∀ e ∈ env.enums, e ∈ E) ∧ ∀ x, env.has x = decide (x ∈ src.2.1)
+    (∃ Fu env c c', translateStatements Fu env .ret (blockStatements src.2.2) c = .ok out.2.2 c' ∧
+      (∀ g ∈ env.functions, g ∈ F) ∧ (∀ e ∈ env.enums, e ∈ E) ∧ ∀ x, env.has x = decide (x ∈ src.2.1)) ∧
+    Stmt.ownsChanges src.2.1 src.2.2 = true
 
 theorem Forall₂.mono {α β : Type} {R S : α → β → Prop} (h : ∀ a b, R a b → S a b) :
     ∀ {l₁ : List α} {l₂ : List β}, Forall₂ R l₁ l₂ → Forall₂ S l₁ l₂
@@ -1262,10 +1269,10 @@ theorem decls_ok (P : Eval.Program) : ∀ (ds : List Decl) (s s' : Ctx) (os : Li
       | function sp ex name tps params ret body =>
         simp only [translateDecl, map_ok] at h₁
         obtain ⟨o', h₁, rfl⟩ := h₁
-        obtain ⟨-, -, -, -, -, f, hfns, -, -, -, lp, r, out, rfl, hlp, Fu, env, c, c', ht, henv, henvE, hhas⟩ :=
-          translateFunction_ok h₁
+        obtain ⟨-, -, -, -, -, f, hfns, -, -, -, lp, r, out, rfl, hlp, Fu, env, c, c', ht, henv, henvE, hhas,
+          hown⟩ := translateFunction_ok h₁
         simp only [Eval.functions, IR.functions, List.filterMap_cons] at hrel ⊢
-        refine ⟨⟨rfl, hlp.symm, Fu, env, c, c', ht, fun g hg => ?_, fun e he => ?_, hhas⟩, hrel⟩
+        refine ⟨⟨rfl, hlp.symm, ⟨Fu, env, c, c', ht, fun g hg => ?_, fun e he => ?_, hhas⟩, hown⟩, hrel⟩
         · rw [henv] at hg
           exact hsub g (by rw [hfns]; exact hg)
         · rw [henvE] at he
@@ -1470,8 +1477,9 @@ file. -/
 def FnRelP (p : Eval.Program) (src : DeclRef × List String × Stmt)
     (out : DeclRef × List String × IR.Body) : Prop :=
   src.1 = out.1 ∧ src.2.1 = out.2.1 ∧
-    ∃ Fu env c c', translateStatements Fu env .ret (blockStatements src.2.2) c = .ok out.2.2 c' ∧
-      Resolves ⟨p, src.1.file⟩ env ∧ ∀ x, env.has x = decide (x ∈ src.2.1)
+    (∃ Fu env c c', translateStatements Fu env .ret (blockStatements src.2.2) c = .ok out.2.2 c' ∧
+      Resolves ⟨p, src.1.file⟩ env ∧ ∀ x, env.has x = decide (x ∈ src.2.1)) ∧
+    Stmt.ownsChanges src.2.1 src.2.2 = true
 
 theorem Forall₂.append {α β : Type} {R : α → β → Prop} :
     ∀ {a : List α} {b : List β} {c : List α} {d : List β},
@@ -1550,12 +1558,12 @@ theorem calls_agree (hrel : Forall₂ (FnRelP p) (Eval.functionsOf p) fs) :
           | ret w =>
             simp [hb] at h
             subst h
-            obtain ⟨bS, hlS, -, -, F, env, ctx, ctx', htr, hres, henv⟩ := lookup_rel hrel hl
+            obtain ⟨bS, hlS, -, -, ⟨F, env, ctx, ctx', htr, hres, henv⟩, hown⟩ := lookup_rel hrel hl
             have hlen' : ps.length = vs.length := by simpa using hlen
             have hsim := (stmts_sound ⟨p, key.file⟩ fs fuel hc F).1 _ _ _ _ _ _ htr
             have hex := (hsim _ _ (fun _ => rfl) (scoped_params henv hres hlen')).1 w hb
             have hst := block_ret ⟨p, key.file⟩ fuel bS hex
-            simp [callS, hlS, hlen', hst]
+            simp [callS, hlS, hlen', hst, hown]
 
 end Calls
 
@@ -1707,9 +1715,9 @@ theorem programTranslation_rel {p : Eval.Program} {outs : List (String × List I
         List.flatMap_nil, List.append_nil]
       refine hrel.append (Forall₂.map ?_ hrelm)
       intro x y hxy
-      obtain ⟨hn, hps, Fu, env, c, c', ht, hsub, hsubE, hhas⟩ := hxy
-      exact ⟨by simp [hn], hps, Fu, env, c, c', ht,
-        ⟨fun g hg => hres g (hsub g hg), fun e he => hresE e (hsubE e he)⟩, hhas⟩
+      obtain ⟨hn, hps, ⟨Fu, env, c, c', ht, hsub, hsubE, hhas⟩, hown⟩ := hxy
+      exact ⟨by simp [hn], hps, ⟨Fu, env, c, c', ht,
+        ⟨fun g hg => hres g (hsub g hg), fun e he => hresE e (hsubE e he)⟩, hhas⟩, hown⟩
 
 variable {N : Type} [JSNumber N]
 

@@ -63,6 +63,19 @@ class JSNumber (N : Type) where
 
 open JSNumber
 
+/-- SameValueZero (ECMA-262 §7.2.11) on numbers: `===`, except that `NaN` is
+the same as `NaN`. `Array.prototype.includes` compares with it. -/
+def JSNumber.sameValueZero {N : Type} [JSNumber N] (a b : N) : Bool :=
+  eq a b || (isNaN a && isNaN b)
+
+/-- `xs[i]` with a number `i`: the element whose index is `i`, when `i` is a
+safe integer within the array, and `none` otherwise. An index is a property
+key, and no other number is the key of an element (ECMA-262 §10.4.2). -/
+def JSNumber.elementAt? {N α : Type} [JSNumber N] (xs : List α) (i : N) : Option α :=
+  match toSafeInt i with
+  | some k => if 0 ≤ k then xs[k.toNat]? else none
+  | none => none
+
 /-- On safe integers, JS `number` operations agree with `Int`. -/
 class SafeIntLaws (N : Type) [JSNumber N] : Prop where
   toSafeInt_inRange : ∀ {x : N} {i : Int}, toSafeInt x = some i → InRange i

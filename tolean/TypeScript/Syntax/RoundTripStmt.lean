@@ -1524,6 +1524,9 @@ theorem Property.lessFreeList_eraseAll : ∀ ps : List Property,
   | .keyValue _ _ v :: ps => by
     simp only [Property.eraseAll, Property.erase, Property.lessFreeList, Expr.lessFree_erase v,
       Property.lessFreeList_eraseAll ps]
+  | .spread _ v :: ps => by
+    simp only [Property.eraseAll, Property.erase, Property.lessFreeList, Expr.lessFree_erase v,
+      Property.lessFreeList_eraseAll ps]
 
 end
 
@@ -1632,11 +1635,20 @@ theorem Property.afterOKList_head : ∀ (ps : List Property) {c c' : List TokenK
   | [.keyValue _ _ v], _, _, hf, h => by
     simp only [Property.lessFreeList, Bool.and_true] at hf
     simp only [Property.afterOKList, Property.afterOK]; exact Expr.afterOK_head v hf h
+  | [.spread _ v], _, _, hf, h => by
+    simp only [Property.lessFreeList, Bool.and_true] at hf
+    simp only [Property.afterOKList, Property.afterOK]; exact Expr.afterOK_head v hf h
   | .shorthand sp n :: r :: ps, c, c', hf, h => by
     simp only [Property.lessFreeList] at hf
     simp only [Property.afterOKList, Property.afterOK, Bool.true_and]
     exact Property.afterOKList_head (r :: ps) hf h
   | .keyValue sp k v :: r :: ps, c, c', hf, h => by
+    simp only [Property.lessFreeList, Bool.and_eq_true] at hf
+    simp only [Property.afterOKList, Property.afterOK]
+    congr 1
+    · exact Expr.afterOK_head v hf.1 (by simp)
+    · exact Property.afterOKList_head (r :: ps) hf.2 h
+  | .spread sp v :: r :: ps, c, c', hf, h => by
     simp only [Property.lessFreeList, Bool.and_eq_true] at hf
     simp only [Property.afterOKList, Property.afterOK]
     congr 1

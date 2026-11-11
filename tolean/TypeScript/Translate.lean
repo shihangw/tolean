@@ -150,6 +150,23 @@ def Ty.unoptional : Ty → Ty
   | .optional t => t
   | t => t
 
+/-- The spread that an object literal starts with, and the properties after
+it. -/
+def spreadOf : List Property → Option (Expr × List Property)
+  | .spread _ base :: rest => some (base, rest)
+  | _ => none
+
+/-- The interface of a value of an interface type, with its type arguments. -/
+def Ty.structRef? : Ty → Option (DeclRef × List Ty)
+  | .struct ref args => some (ref, args)
+  | _ => none
+
+/-- An optional field, or a tag field, which a property after a spread may
+not set. -/
+def Ty.isMaybeField : Ty → Bool
+  | .optional _ | .literal _ => true
+  | _ => false
+
 /-- The type of a tag field, one string literal. -/
 def Ty.isLiteral : Ty → Bool
   | .literal _ => true
@@ -158,6 +175,12 @@ def Ty.isLiteral : Ty → Bool
 /-- `T | null`. -/
 def Ty.isNullable : Ty → Bool
   | .nullable _ => true
+  | _ => false
+
+/-- `null`, `T | null` or an optional value: a type whose values the output
+writes with `none`. -/
+def Ty.isMaybe : Ty → Bool
+  | .null | .nullable _ | .optional _ => true
   | _ => false
 
 /-- The value of an optional field `f?: T`. -/
@@ -1038,7 +1061,7 @@ def exprsChanges : List Expr → List String
 
 def propsChanges : List Property → List String
   | [] => []
-  | .keyValue _ _ v :: ps => exprChanges v ++ propsChanges ps
+  | .keyValue _ _ v :: ps | .spread _ v :: ps => exprChanges v ++ propsChanges ps
   | .shorthand .. :: ps => propsChanges ps
 
 end
@@ -1433,6 +1456,17 @@ def callbackOf : List Expr → Option (Param × Expr)
   | [.arrow _ _ [p] body] => some (p, body)
   | _ => none
 
+/-- The type of the field `key` that a property after a spread sets, where
+`seen` are the keys set before it. JS appends a key that the spread did not
+copy, and Lean keeps the declared order, so the field may not be optional. A
+tag field holds its one string already. -/
+def spreadFieldType (structName : String) (fields : List (String × Ty)) (seen : List String) (span : Span)
+    (key : String) : TM Ty := do
+  let t ← orReject (fields.lookup key) span s!"'{key}' is not a field of {structName}"
+  if seen.contains key then reject span s!"'{key}' is set twice"
+  if t.isMaybeField then
+    reject span s!"'{key}' is optional or a tag; after a spread only a required field may be set"
+  return t
 /-- The element parameter, the index parameter and the body of the one
 argument of `map`, when it is an arrow function with two parameters. -/
 def indexedCallbackOf : IR.ListMethod → List Expr → Option (Param × Param × Expr)
@@ -1595,6 +1629,71 @@ def translateNew (tr : Option Ty → Expr → TM Code) (env : Env) (expected : O
 def Ty.element? : Ty → Option Ty
   | .array t => some t
   | _ => none
+
+/-- `xs[k]` with a number literal `k`, on the array `xs` of elements of type
+`elem`. A number literal is the integer it names, whatever the model of
+numbers. -/
+def indexLiteral (s : Span) (text : String) (xs : Code) (elem : Ty) : TM Code := do
+  let k ← orReject (safeIntegerValue? text) s "a number literal must be a safe integer"
+  unless 0 ≤ k do reject s "an index must not be negative"
+  -- `xs[k]?` needs its type written out: Lean picks the element type from
+  -- the context first, which can be wrong, as in `let v := xs[1]?`.
+  return ⟨.ascribe (.ext (.indexLit k.toNat) [xs.value]) (Ty.optional elem).lean, false, .optional elem⟩
+
+/-- `xs[i]` with the code `i` of a number. -/
+def indexNumber (s : Span) (xs i : Code) (elem : Ty) : TM Code := do
+  unless i.type == .number do reject s "the index of an array must be a number"
+  return ⟨.ext .indexNumber [xs.value, i.value], false, .optional elem⟩
+
+/-- The receiver and the method of a call such as `xs.includes(v)`, for a
+method that takes no callback. `Number.isNaN(x)` and the like are calls of the
+global `Number`, not of an array. -/
+def arrayCallOf : Expr → Option (Expr × String)
+  | .member _ recv name => if recv.namesNumber then none else some (recv, name)
+  | _ => none
+
+/-- The start and the end of `slice`, from the integers of its arguments: a
+missing start is `0`, and a missing end is none, the length. -/
+def sliceBounds : List Int → Option (Int × Option Int)
+  | [] => some (0, none)
+  | [k] => some (k, none)
+  | [k, e] => some (k, some e)
+  | _ => none
+
+/-- `e` is an arrow function. -/
+def _root_.tolean.TypeScript.Syntax.Expr.isArrow : Expr → Bool
+  | .arrow .. => true
+  | _ => false
+
+/-- The type that the context gives the arguments of the array method
+`method` on elements of type `elem`: for `includes`, the element type, so that
+a string can be a constructor of a literal union. -/
+def arrayArgExpected (method : String) (elem : Ty) : Option Ty :=
+  if method == "includes" then some elem else none
+
+/-- The operation that `xs.includes(x)` becomes on elements of type `elem`.
+SameValueZero is `=` on integers, booleans, strings and the constructors of a
+literal union. On numbers it is `JSNumber.eq`, except that `NaN` is the same
+as `NaN`. On objects it compares identities, which the output cannot. -/
+def includesOp? (elem : Ty) : Option IR.ExprExt :=
+  if elem == .number then some .includesNumber
+  else if elem.isEqPrimitive then some .includes
+  else none
+
+/-- The code for `xs.method(args)`, a method of an array that takes no
+callback, where the elements of `xs` have the type `elem` and `args` are the
+codes of the arguments. -/
+def arrayCall (s : Span) (method : String) (elem : Ty) (xs : Code) (args : List Code) : TM Code := do
+  if method == "includes" then
+    let [x] := args
+      | reject s "'includes' takes one argument here; the index to start at is not supported"
+    unless x.type == elem do reject s "the argument of 'includes' must have the element type of the array"
+    requireFeature s .arrayIncludes
+    let op ← orReject (includesOp? elem) s
+      "'includes' needs an array of numbers, bigints, booleans, strings or a literal union"
+    -- `x ∈ xs` is a `Prop`.
+    return ⟨.ext op [xs.value, x.value], op == .includes, .boolean⟩
+  reject s s!"the array method '{method}' is not supported here"
 
 /-- A callback's parameter may have a type written out: the element type. -/
 def checkParamType (p : Param) (elem : Ty) : TM Unit := do
@@ -1777,6 +1876,9 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
       let (bind, type) ← optPathType s o.type path
       return ⟨.ext (.optField path bind) [o.code], false, type⟩
     let o ← translateRecv (translateExpr fuel env none) env obj
+    -- `xs.length`, the number of elements of an array.
+    if o.type.element?.isSome && name == "length" then
+      return ⟨.ext .length [o.value], false, .number⟩
     -- `m.size`, the number of entries of a map.
     if let .map _ _ := o.type then
       unless name == "size" do reject s "a map has no fields here; use get, has and size"
@@ -1816,10 +1918,16 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
         unless 0 ≤ i do reject key.span s!"the tuple has no element {i}"
         return ⟨.proj o.code i.toNat tys.length, false, t⟩
       | none => reject key.span s!"the tuple has no element {i}"
+    | none =>
+    match o.type.element? with
+    -- `xs[i]` on an array: the element, or `undefined` when `i` is not an
+    -- index of the array. So its type is that of an optional field, which
+    -- `??`, `?.` and `=== undefined` read.
+    | some elem => translateArrayIndex fuel env s o elem key
     -- `r[k]` on a `Record<K, V>`.
     | none =>
       let (keyRef, keys, type) ← orReject (recordIndex (← get) o.type) s
-        ("only a tuple, or a value of a Record type, such as type T = Record<K, V>, whose key type K " ++
+        ("only an array, a tuple, or a value of a Record type, such as type T = Record<K, V>, whose key type K " ++
           "this file declares or imports, may be indexed")
       let k ← translateExpr fuel env (some (.enum keyRef)) key
       unless k.type == .enum keyRef do reject key.span "the key must have the key type of the Record"
@@ -1865,11 +1973,17 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
     | none =>
       match mapMethodOf callee with
       | some (recv, op) => translateMapMethod fuel env s recv op args
-      | none => translateCall fuel env s callee args false
+      | none =>
+        match arrayCallOf callee with
+        | some (recv, method) => translateArrayCall fuel env s recv method args
+        | none => translateCall fuel env s callee args false
   -- `new Map()` and `new Set()`, with or without the values to start with.
   | .new s callee typeArgs args =>
     translateNew (fun exp e => translateExpr fuel env exp e) env expected s callee typeArgs args
-  | .object s props => translateObject fuel env expected s props
+  | .object s props =>
+    match spreadOf props with
+    | some (base, rest) => translateSpread fuel env s base rest
+    | none => translateObject fuel env expected s props
   | .array s elems =>
     match expected with
     | some (.tuple tys) =>
@@ -2022,6 +2136,50 @@ def translateArrayMethod (fuel : Nat) (env : Env) (expected : Option Ty) (s : Sp
     { span := s, result := b.type.lean, scope := env.locals.map fun l => (l.name, l.type.lean) }
   return ⟨.listMethod method xs.value p.name elem.lean b.value info, false, type⟩
 
+/-- `xs[i]` on an array whose code is `o` and whose elements have the type
+`elem`: the element, or `undefined` when `i` is not an index of the array. -/
+def translateArrayIndex (fuel : Nat) (env : Env) (s : Span) (o : Code) (elem : Ty) (key : Expr) :
+    TM Code := do
+  let fuel + 1 := fuel | tooDeep
+  -- The output has one `none` for `undefined` and `null`.
+  if elem.isMaybe then reject s "an index of an array of nullable values could give null or undefined"
+  match key with
+  | .number _ text => indexLiteral key.span text o elem
+  | _ => indexNumber key.span o (← translateExpr fuel env none key) elem
+
+/-- `xs.includes(v)`, a method of an array that takes no callback: the array,
+then each argument, then `arrayCall` on their codes. An arrow function is a
+callback, which no such method takes. -/
+def translateArrayCall (fuel : Nat) (env : Env) (s : Span) (recv : Expr) (method : String)
+    (args : List Expr) : TM Code := do
+  let fuel + 1 := fuel | tooDeep
+  if args.any (·.isArrow) then reject s s!"'{method}' does not take a callback here"
+  let xs ← translateExpr fuel env none recv
+  let elem ← orReject xs.type.element? recv.span "only an array has this method"
+  -- `xs.at(k)`: the element at `k`, counted from the end when `k` is
+  -- negative, or `undefined`. The model of numbers cannot truncate yet, so
+  -- the argument must be an integer literal, which is the integer it names.
+  if method == "at" then
+    let [arg] := args | reject s "'at' takes one argument"
+    let k ← orReject (Eval.intLiteral? arg) arg.span
+      "the argument of 'at' must be an integer literal, such as xs.at(-1)"
+    requireFeature s .arrayAt
+    if elem.isMaybe then reject s "'at' on an array of nullable values could give null or undefined"
+    return ⟨.ascribe (.ext (.at k) [xs.value]) (Ty.optional elem).lean, false, .optional elem⟩
+  -- `xs.slice(start, end)`: a new array of the elements from `start` up to
+  -- `end`, where a negative bound counts from the end. The bounds must be
+  -- integer literals, as the argument of `at` must.
+  if method == "slice" then
+    let bounds ← orReject (args.mapM Eval.intLiteral?) s
+      "the arguments of 'slice' must be integer literals, such as xs.slice(1) or xs.slice(-2)"
+    let (start, stop) ← orReject (sliceBounds bounds) s "'slice' takes at most two arguments"
+    if start < 0 && stop.any (0 ≤ ·) then
+      reject s ("'slice' with a negative start and an end that is not negative is not supported; " ++
+        "write both bounds from the start or both from the end")
+    return ⟨.ext (.slice start stop) [xs.value], false, xs.type⟩
+  let codes ← args.mapM (translateExpr fuel env (arrayArgExpected method elem))
+  arrayCall s method elem xs codes
+
 /-- `xs.reduce((acc, x) => e, init)`: `List.foldl (fun acc x => e) init xs`.
 The value so far has the type of `init`, and the body must give that type.
 JS also passes the index and the array, which a callback with two parameters
@@ -2103,6 +2261,7 @@ def translateObject (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (
     fun (seen, parts) p => do
       let (key, value, span) ← match p with
         | .shorthand ps name => pure (name, Expr.ident ps name, ps)
+        | .spread ps _ => reject ps "a spread '...' may only come first in an object literal"
         | .keyValue ps (.ident key) v =>
           if key == "__proto__" then reject ps "'__proto__: v' sets the prototype of the object, not a field"
           else pure (key, v, ps)
@@ -2125,6 +2284,34 @@ def translateObject (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (
   unless seen == declared do
     reject s s!"write the fields in the order that {structName} declares them: {", ".intercalate declared}"
   return ⟨.struct parts ref (Ty.leanList args), false, .struct ref args⟩
+
+/-- `{ ...a, f: e }`, where `a` has an interface: `{ a with f := e }`. The
+spread keeps the keys of `a` in their order, and each property after it sets
+a field of `a` in its place, so the object keeps the declared order. -/
+def translateSpread (fuel : Nat) (env : Env) (s : Span) (base : Expr) (rest : List Property) :
+    TM Code := do
+  let fuel + 1 := fuel | tooDeep
+  let b ← translateExpr fuel env none base
+  let some (ref, args) := b.type.structRef?
+    | reject s "a spread '...' needs a value of an interface declared in this file, or exported by the files before it"
+  let info ← orReject ((← get).knownStructs.find? (·.ref == ref)) base.span
+    "a spread '...' needs a value of an interface declared in this file, or exported by the files before it"
+  let (_, parts) ← rest.foldlM (init := (([] : List String), ([] : List (String × IR.Expr))))
+    fun (seen, parts) p => do
+      let (key, value, span) ← match p with
+        | .shorthand ps name => pure (name, Expr.ident ps name, ps)
+        | .spread ps _ => reject ps "a spread '...' may only come first in an object literal"
+        | .keyValue ps (.ident key) v =>
+          if key == "__proto__" then reject ps "'__proto__: v' sets the prototype of the object, not a field"
+          else pure (key, v, ps)
+        | .keyValue ps _ _ => reject ps "object literal fields must be plain name: value pairs"
+      let fieldType ← spreadFieldType info.name (info.fieldsAt args) seen span key
+      let v ← translateExpr fuel env (some fieldType) value
+      unless v.type.assignableTo fieldType do reject span s!"'{key}' does not have the field's type"
+      pure (seen ++ [key], parts ++ [(key, v.value)])
+  -- Lean does not infer the parameters of the structure, such as the number
+  -- model `N`, from `a`, so the update writes its type out, as a literal does.
+  return ⟨.ascribe (.structUpdate b.value parts) b.type.lean, false, b.type⟩
 
 def translateBinary (fuel : Nat) (env : Env) (s : Span) (op : BinOp) (l r : Expr) : TM Code := do
   let fuel + 1 := fuel | tooDeep
@@ -3008,6 +3195,11 @@ def translateFunction (s : Span) (exported : Bool) (name : String) (typeParams :
   if out.calls self.ref && (out.decreasingParam? self.ref leanParams).isNone then
     reject s ("a function may call itself only on a part of one of its parameters, the same one in " ++
       "every call: a field of it, a value that a test narrows it to, or an element of an array in it")
+  -- The spec gives no value for a function that fails this test, because its
+  -- model of a collection as a value would not be the JS meaning.
+  if !Stmt.ownsChanges (params.map (·.name)) body then
+    reject s ("a function may change only an array, a map or a set that it makes in a const, under a " ++
+      "name that no other variable of it has, and may hand it on only in its return value")
   modify fun c => { c with typeParams := [], throws := false, functions := c.functions ++ [self] }
   return .function name leanParams (leanResult throws ret) out
 
@@ -3039,10 +3231,10 @@ mutual
 def exprUsesNumber : Expr → Bool
   | .ident _ name => isNumberName name
   | .number .. => true
-  -- `xs.findIndex(…)` gives a number, and so does `m.size`. The source does
+  -- `xs.length` and `xs.findIndex(…)` give a number, and so does `m.size`. The source does
   -- not say whether `m` is a map.
   | .member _ obj name | .optMember _ obj name =>
-    isNumberName name || name == "findIndex" || name == "size" || exprUsesNumber obj
+    isNumberName name || name == "length" || name == "findIndex" || name == "size" || exprUsesNumber obj
   | .object _ props => propsUseNumber props
   | .array _ es => exprsUseNumber es
   | .call _ f args => exprUsesNumber f || exprsUseNumber args
@@ -3070,6 +3262,7 @@ def propsUseNumber : List Property → Bool
   | [] => false
   | .shorthand _ name :: ps => isNumberName name || propsUseNumber ps
   | .keyValue _ key value :: ps => (keyUsesNumber key || exprUsesNumber value) || propsUseNumber ps
+  | .spread _ value :: ps => exprUsesNumber value || propsUseNumber ps
 
 end
 
