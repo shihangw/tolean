@@ -71,6 +71,13 @@ def StringPart.toStr : StringPart → Val N → Option JSString
   | .boolean, .bool b => some (JSString.ofBool b)
   | _, _ => none
 
+/-- A method of a string, on the string and the values of its arguments. -/
+def StringMethod.apply : StringMethod → JSString → List (Val N) → Option (Val N)
+  | .startsWith, s, args => Eval.oneString (fun p => .bool (s.startsWith p)) args
+  | .endsWith, s, args => Eval.oneString (fun p => .bool (s.endsWith p)) args
+  | .includes, s, args => Eval.oneString (fun p => .bool (s.includes p)) args
+  | .indexOf, s, args => Eval.oneString (fun p => .num (JSNumber.ofSafeInt (s.indexOf p))) args
+
 /-- An operation that TypeScript adds, on the values of its arguments. -/
 def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   | .number n, [] => some (.num (JSNumber.ofSafeInt n))
@@ -80,6 +87,8 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   | .numberNe, [.num a, .num b] => some (.bool !(JSNumber.eq a b))
   | .numberTest test, [.num a] => some (.bool (test.apply a))
   | .stringOrder le, [.str a, .str b] => some (.bool (if le then a.le b else a.lt b))
+  | .stringLength, [.str s] => some (.num (JSNumber.ofSafeInt s.length))
+  | .stringMethod method, .str s :: args => method.apply s args
   | .stringAppend left right, [a, b] => do
     return .str ((← left.toStr a) ++ (← right.toStr b))
   | .undefined, [] => some .undefined

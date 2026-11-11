@@ -133,6 +133,77 @@ def ofInt (i : Int) : JSString := ofString (ToString.toString i)
 /-- ToString of a boolean (ECMA-262 §7.1.17): `"true"` or `"false"`. -/
 def ofBool (b : Bool) : JSString := ofString (if b then "true" else "false")
 
+/-- The `length` of a string: the number of its code units (ECMA-262
+§22.1.4.1), so a character above U+FFFF counts twice. -/
+def length (s : JSString) : Nat := s.units.length
+
+/-- `s.startsWith(p)`, with no position (ECMA-262 §22.1.3.25): the code units
+of `p` begin those of `s`. -/
+def startsWith (s p : JSString) : Bool := p.units.isPrefixOf s.units
+
+/-- `s.endsWith(p)`, with no end position (ECMA-262 §22.1.3.7): the code units
+of `p` end those of `s`. -/
+def endsWith (s p : JSString) : Bool := p.units.isSuffixOf s.units
+
+/-- StringIndexOf(s, p, 0) (ECMA-262 §6.1.4.1): the first index at which the
+code units of `p` occur in `s`. The empty string occurs at index 0. -/
+def indexOf? (s p : JSString) : Option Nat := go s.units 0
+where
+  /-- The first index, from `i` on, at which `p` occurs in the rest `l`. -/
+  go : List UInt16 → Nat → Option Nat
+    | l, i =>
+      if p.units.isPrefixOf l then some i
+      else match l with
+        | [] => none
+        | _ :: rest => go rest (i + 1)
+
+/-- `s.indexOf(p)`, with no position (ECMA-262 §22.1.3.9): the first index at
+which `p` occurs, or -1. -/
+def indexOf (s p : JSString) : Int :=
+  match indexOf? s p with
+  | some i => i
+  | none => -1
+
+/-- `s.includes(p)`, with no position (ECMA-262 §22.1.3.8): StringIndexOf
+finds `p` in `s`. -/
+def includes (s p : JSString) : Bool := (indexOf? s p).isSome
+
+/-- `startsWith` is Lean's prefix order on the code units. -/
+theorem startsWith_iff (s p : JSString) : s.startsWith p = true ↔ p.units <+: s.units :=
+  List.isPrefixOf_iff_prefix
+
+/-- `endsWith` is Lean's suffix order on the code units. -/
+theorem endsWith_iff (s p : JSString) : s.endsWith p = true ↔ p.units <:+ s.units :=
+  List.isSuffixOf_iff_suffix
+
+private theorem indexOf?_go_isSome (p : JSString) (l : List UInt16) (i : Nat) :
+    (indexOf?.go p l i).isSome = true ↔ p.units <:+: l := by
+  induction l generalizing i with
+  | nil =>
+    unfold indexOf?.go
+    by_cases h : p.units.isPrefixOf [] = true
+    · simp only [h, if_true, Option.isSome_some, true_iff]
+      exact (List.isPrefixOf_iff_prefix.mp h).isInfix
+    · simp only [h, Bool.false_eq_true, if_false, Option.isSome_none, false_iff]
+      intro hin
+      exact h (List.isPrefixOf_iff_prefix.mpr (List.infix_nil.mp hin ▸ List.nil_prefix))
+  | cons x xs ih =>
+    unfold indexOf?.go
+    by_cases h : p.units.isPrefixOf (x :: xs) = true
+    · simp only [h, if_true, Option.isSome_some, true_iff]
+      exact (List.isPrefixOf_iff_prefix.mp h).isInfix
+    · simp only [h, Bool.false_eq_true, if_false, ih]
+      constructor
+      · exact fun hin => hin.trans (List.suffix_cons x xs).isInfix
+      · intro hin
+        rcases List.infix_cons_iff.mp hin with hp | hin
+        · exact absurd (List.isPrefixOf_iff_prefix.mpr hp) h
+        · exact hin
+
+/-- `includes` is Lean's infix order on the code units. -/
+theorem includes_iff (s p : JSString) : s.includes p = true ↔ p.units <:+: s.units :=
+  indexOf?_go_isSome p s.units 0
+
 /-- IsLessThan on two lists of code units (ECMA-262 §7.2.13, step 3): the
 first code unit where the lists differ decides, and when one list is a prefix
 of the other, the shorter one is less. -/

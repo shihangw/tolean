@@ -142,7 +142,7 @@ def sections : List Section := [
   ⟨"sec-property-accessors", "13.3.2", "Property Accessors", [``Proof.translateMember_sound, ``Eval.eval_index_str, ``Eval.getKey_ofString, ``Eval.find?_fst_lookup,
     ``Coverage.index_lone_surrogate]⟩,
   ⟨"sec-function-calls", "13.3.6", "Function Calls",
-    [``Proof.eval_call, ``Proof.out_call, ``Proof.evalCall_eq, ``Proof.out_evalCall, ``Proof.bind_toOption,
+    [``Proof.eval_call, ``Proof.eval_stringCall, ``Proof.out_call, ``Proof.evalCall_eq, ``Proof.out_evalCall, ``Proof.bind_toOption,
     ``Proof.eval_call_toOption, ``Proof.out_call_toOption, ``Proof.translateCall_sound,
     ``Proof.translateCall_callSim, ``Proof.checkThrowingCall_ok, ``Proof.throwingCall?_some,
     ``Proof.zip_sim, ``Proof.zip_sim_value, ``Proof.calls_agree,
@@ -257,6 +257,16 @@ def sections : List Section := [
   -- §21 Numbers and Dates {#sec-numbers-and-dates}
   ⟨"sec-properties-of-the-number-constructor", "21.1.2", "Properties of the Number Constructor",
     [``Proof.out_numberTest]⟩,
+  -- §22 Text Processing {#sec-text-processing}
+  ⟨"sec-string.prototype.endswith", "22.1.3.7", "String.prototype.endsWith",
+    [``JSString.endsWith_iff]⟩,
+  ⟨"sec-string.prototype.includes", "22.1.3.8", "String.prototype.includes",
+    [``JSString.includes_iff]⟩,
+  ⟨"sec-string.prototype.indexof", "22.1.3.9", "String.prototype.indexOf", []⟩,
+  ⟨"sec-string.prototype.startswith", "22.1.3.25", "String.prototype.startsWith",
+    [``JSString.startsWith_iff, ``Proof.stringMethod_of, ``Proof.stringCall_sound,
+    ``Proof.stringMethod_not_at]⟩,
+  ⟨"sec-properties-of-string-instances-length", "22.1.4.1", "length", []⟩,
   -- §23 Indexed Collections {#sec-indexed-collections}
   ⟨"sec-array.prototype.at", "23.1.3.1", "Array.prototype.at", [``Proof.eval_at]⟩,
   ⟨"sec-array.prototype.every", "23.1.3.6", "Array.prototype.every", []⟩,

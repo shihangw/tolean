@@ -39,6 +39,16 @@ inductive StringPart where
   | string | bigint | boolean
 deriving BEq, Repr, Inhabited, DecidableEq
 
+/-- A method of a string that takes one string and gives a boolean or an
+index. -/
+inductive StringMethod where
+  | startsWith | endsWith | includes | indexOf
+deriving BEq, Repr, Inhabited, DecidableEq
+
+def StringMethod.name : StringMethod → String
+  | .startsWith => "startsWith" | .endsWith => "endsWith" | .includes => "includes"
+  | .indexOf => "indexOf"
+
 /-- The types that TypeScript adds to the IR. -/
 inductive TyExt where
   /-- The number type parameter, `N`. -/
@@ -83,6 +93,13 @@ inductive ExprExt where
   string, such as `(a ++ JSString.ofInt b)`: `a + b` where one operand is a
   string. -/
   | stringAppend (left right : StringPart)
+  /-- `(JSNumber.ofSafeInt (N := N) ((JSString.length s : Nat) : Int))`, on
+  `s`: `s.length`, the number of code units. -/
+  | stringLength
+  /-- `(JSString.startsWith s p)`, or the other method, on `s` and the
+  arguments: `s.startsWith(p)`. `indexOf` gives an index, which the output
+  makes a number: `(JSNumber.ofSafeInt (N := N) (JSString.indexOf s p))`. -/
+  | stringMethod (method : StringMethod)
   /-- `match k with | K.a => r.a | …`, on `r` and `k`: `r[k]`, where `r` is a
   `Record<K, V>` with the keys `keys`, and `K` is the literal union `key`. -/
   | recordGet (key : DeclRef) (keys : List String)
@@ -191,7 +208,8 @@ def leanNames : List (String × String) :=
   tolean.IR.leanNames ++
     [("JSNumber", "tolean.TypeScript.JSNumber"), ("JSString", "tolean.TypeScript.JSString"),
      ("JSMap", "tolean.TypeScript.JSMap"), ("JSSet", "tolean.TypeScript.JSSet"),
-     ("JSError", "tolean.TypeScript.JSError"), ("pure", "Pure.pure")]
+     ("JSError", "tolean.TypeScript.JSError"), ("pure", "Pure.pure"),
+     ("Nat", "Nat")]
 
 /-- Write the Lean name `name` (or `name.rest`), from the root when the source
 declares the same name. -/
@@ -254,6 +272,14 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
       | .bigint => s!"({leanName names "JSString"}.ofInt {argument x})"
       | .boolean => s!"({leanName names "JSString"}.ofBool {argument x})"
     s!"({part left a} ++ {part right b})"
+  | .stringLength, [a] =>
+    s!"({js}.ofSafeInt (N := {names.typeParam}) (({leanName names "JSString"}.length {argument a} : " ++
+      s!"{leanName names "Nat"}) : {leanName names "Int"}))"
+  | .stringMethod .indexOf, args =>
+    s!"({js}.ofSafeInt (N := {names.typeParam}) ({leanName names "JSString"}.indexOf " ++
+      s!"{" ".intercalate (args.map argument)}))"
+  | .stringMethod method, args =>
+    s!"({leanName names "JSString"}.{method.name} {" ".intercalate (args.map argument)})"
   | .undefined, _ => leanName names "none"
   | .isUndefined, [a] => s!"{argument a}.isNone"
   | .isDefined, [a] => s!"{argument a}.isSome"
@@ -320,7 +346,7 @@ instance : tolean.IR.PrintOp ExprExt := ⟨ExprExt.print⟩
 An operation on strings may stand where no string type or literal is in
 sight, such as `a.key < b.key` on an interface of another file. -/
 def ExprExt.usesString : ExprExt → Bool
-  | .stringOrder _ | .stringAppend .. => true
+  | .stringOrder _ | .stringAppend .. | .stringLength | .stringMethod _ => true
   | _ => false
 
 end tolean.TypeScript.IR

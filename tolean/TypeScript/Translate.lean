@@ -1665,6 +1665,39 @@ def _root_.tolean.TypeScript.Syntax.Expr.isArrow : Expr → Bool
   | .arrow .. => true
   | _ => false
 
+/-- The method of a string that `name` names, among those the subset has. -/
+def stringMethod? (name : String) : Option IR.StringMethod :=
+  if name == "startsWith" then some .startsWith
+  else if name == "endsWith" then some .endsWith
+  else if name == "includes" then some .includes
+  else if name == "indexOf" then some .indexOf
+  else none
+
+/-- The types of the arguments that a method of a string takes here. JS converts
+another argument with ToString, which the subset has only on strings, and a
+position argument is not supported. -/
+def StringMethod.params : IR.StringMethod → List Ty
+  | .startsWith | .endsWith | .includes | .indexOf => [.string]
+
+/-- The type of the value of a method of a string. -/
+def StringMethod.result : IR.StringMethod → Ty
+  | .startsWith | .endsWith | .includes => .boolean
+  | .indexOf => .number
+
+/-- The code for `str.method(args)`, a method of a string, where `str` is the
+code of the receiver and `args` are the codes of the arguments. -/
+def stringCall (s : Span) (method : String) (str : Code) (args : List Code) : TM Code :=
+  if str.type == .string then
+    match stringMethod? method with
+    | some m =>
+      if args.length == (StringMethod.params m).length then
+        if args.map (·.type) == StringMethod.params m then
+          return ⟨.ext (.stringMethod m) (str.value :: args.map (·.value)), false, StringMethod.result m⟩
+        else reject s s!"the argument of '{method}' must be a string"
+      else reject s s!"'{method}' takes one string here; a position argument is not supported"
+    | none => reject s s!"the string method '{method}' is not supported here"
+  else reject s s!"only a string has the method '{method}' here"
+
 /-- The type that the context gives the arguments of the array method
 `method` on elements of type `elem`: for `includes`, the element type, so that
 a string can be a constructor of a literal union. -/
@@ -1883,6 +1916,10 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
     if let .map _ _ := o.type then
       unless name == "size" do reject s "a map has no fields here; use get, has and size"
       return ⟨.ext .mapSize [o.value], false, .number⟩
+    -- `s.length`: the number of code units of a string (ECMA-262 §22.1.4.1).
+    if let .string := o.type then
+      unless name == "length" do reject s s!"a string has no property '{name}' here, only 'length'"
+      return ⟨.ext .stringLength [o.value], false, .number⟩
     -- `s.size`, the number of elements of a set.
     if let .set _ := o.type then
       unless name == "size" do reject s "a set has no fields here; use has and size"
@@ -2147,15 +2184,20 @@ def translateArrayIndex (fuel : Nat) (env : Env) (s : Span) (o : Code) (elem : T
   | .number _ text => indexLiteral key.span text o elem
   | _ => indexNumber key.span o (← translateExpr fuel env none key) elem
 
-/-- `xs.includes(v)`, a method of an array that takes no callback: the array,
-then each argument, then `arrayCall` on their codes. An arrow function is a
-callback, which no such method takes. -/
+/-- `xs.includes(v)` or `s.startsWith(p)`, a method of an array or a string that
+takes no callback: the receiver, then each argument, then `arrayCall` or
+`stringCall` on their codes. An arrow function is a callback, which no such
+method takes. -/
 def translateArrayCall (fuel : Nat) (env : Env) (s : Span) (recv : Expr) (method : String)
     (args : List Expr) : TM Code := do
   let fuel + 1 := fuel | tooDeep
   if args.any (·.isArrow) then reject s s!"'{method}' does not take a callback here"
   let xs ← translateExpr fuel env none recv
-  let elem ← orReject xs.type.element? recv.span "only an array has this method"
+  if xs.type == .string then
+    let codes ← args.mapM (translateExpr fuel env none)
+    stringCall s method xs codes
+  else
+  let elem ← orReject xs.type.element? recv.span "only an array or a string has this method"
   -- `xs.at(k)`: the element at `k`, counted from the end when `k` is
   -- negative, or `undefined`. The model of numbers cannot truncate yet, so
   -- the argument must be an integer literal, which is the integer it names.
@@ -3231,10 +3273,13 @@ mutual
 def exprUsesNumber : Expr → Bool
   | .ident _ name => isNumberName name
   | .number .. => true
-  -- `xs.length` and `xs.findIndex(…)` give a number, and so does `m.size`. The source does
-  -- not say whether `m` is a map.
+  -- `xs.length`, `s.length`, `s.indexOf(p)` and `xs.findIndex(…)` give a
+  -- number, and so does `m.size`. The source does not say whether `xs` is an
+  -- array, `s` a string or `m` a map, so a field with one of these names
+  -- makes the file generic too, which costs nothing.
   | .member _ obj name | .optMember _ obj name =>
-    isNumberName name || name == "length" || name == "findIndex" || name == "size" || exprUsesNumber obj
+    isNumberName name || name == "length" || name == "indexOf" || name == "findIndex" ||
+      name == "size" || exprUsesNumber obj
   | .object _ props => propsUseNumber props
   | .array _ es => exprsUseNumber es
   | .call _ f args => exprUsesNumber f || exprsUseNumber args
@@ -3294,9 +3339,10 @@ def stmtsUseNumber : List Stmt → Bool
 
 end
 
-/-- The file uses the number model: a `number` type, a number literal, or the
-name `Number`, `NaN` or `Infinity` anywhere. A file can use
-`Number.isNaN(NaN)` with no `number` keyword, and it still needs `N`. -/
+/-- The file uses the number model: a `number` type, a number literal, the
+name `Number`, `NaN` or `Infinity`, or a read of `length` or `indexOf`
+anywhere. A file can use `Number.isNaN(NaN)` or `a.length === b.length` with
+no `number` keyword, and it still needs `N`. -/
 def moduleUsesNumber (m : Module) : Bool :=
   m.decls.any fun
     -- An import of one of these names is refused, so an import adds nothing.

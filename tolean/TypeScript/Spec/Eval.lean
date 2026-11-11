@@ -290,6 +290,24 @@ def arrayMethod (method : String) (items : List (Val N)) : List (Val N) → Opti
   | [v] => if method == "includes" then (includesVal v items).map .bool else none
   | _ => none
 
+/-- The value `f p` of a method whose arguments are one string `p`. Other
+arguments leave the subset. -/
+def oneString (f : JSString → Val N) : List (Val N) → Option (Val N)
+  | [.str p] => some (f p)
+  | _ => none
+
+/-- A method of the string `s` that takes no callback, on the values of its
+arguments: `startsWith`, `endsWith`, `includes` and `indexOf` with one string
+(ECMA-262 §22.1.3.25, §22.1.3.7, §22.1.3.8 and §22.1.3.9). Each converts its
+argument with ToString, which the subset has on strings only. A position
+argument leaves the subset. -/
+def stringMethod (method : String) (s : JSString) (args : List (Val N)) : Option (Val N) :=
+  if method == "startsWith" then oneString (fun p => .bool (s.startsWith p)) args
+  else if method == "endsWith" then oneString (fun p => .bool (s.endsWith p)) args
+  else if method == "includes" then oneString (fun p => .bool (s.includes p)) args
+  else if method == "indexOf" then oneString (fun p => .num (JSNumber.ofSafeInt (s.indexOf p))) args
+  else none
+
 /-- The element of the array `items` whose index is the safe integer `i`, or
 `undefined` when `i` is none or no index of the array. -/
 def elementAt (items : List (Val N)) : Option Int → Val N
@@ -609,6 +627,9 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
       -- An array of the subset has fewer than 2^53 elements, so its length
       -- is a safe integer.
       | .list items => if name == "length" then some (.num (JSNumber.ofSafeInt items.length)) else none
+      -- `s.length`: the number of code units (ECMA-262 §22.1.4.1). The
+      -- subset reads no other property of a string.
+      | .str s => if name == "length" then some (.num (JSNumber.ofSafeInt s.length)) else none
       -- `m.size` (ECMA-262 §24.1.3.10): the number of entries. A map has
       -- fewer than 2^53 entries, so the number is a safe integer.
       | .map entries =>
@@ -765,16 +786,20 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     | .set elems =>
       let found ← setHas elems (← eval m fuel env arg)
       if method == "has" then return .bool found else none
-    -- An array, as the next rule takes it.
+    -- An array or a string, as the next rule takes it.
     | .list items => arrayMethod method items [← eval m fuel env arg]
+    | .str s => stringMethod method s [← eval m fuel env arg]
     | _ => none
-  -- Any other call of a method of an array, such as `xs.includes(v)`. The
-  -- array comes first, then the arguments, as `EvaluateCall` takes them
-  -- (ECMA-262 §13.3.6.2). Reading the method of an array has no effect, so
-  -- the rule reads it after the arguments.
+  -- Any other call of a method of an array or a string, such as
+  -- `xs.includes(v)` or `s.trim()`. The receiver comes first, then the
+  -- arguments, as `EvaluateCall` takes them (ECMA-262 §13.3.6.2). Reading the
+  -- method of an array or a string has no effect, so the rule reads it after
+  -- the arguments.
   | .call _ (.member _ recv method) args => do
-    let .list items ← eval m fuel env recv | none
-    arrayMethod method items (← evalList m fuel env args)
+    match ← eval m fuel env recv with
+    | .list items => arrayMethod method items (← evalList m fuel env args)
+    | .str s => stringMethod method s (← evalList m fuel env args)
+    | _ => none
   -- A call that throws inside an expression gives no value. Only a call that
   -- is the whole value of a declaration or a `return` passes its throw on
   -- (`evalTop`).

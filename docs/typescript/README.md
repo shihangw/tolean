@@ -420,6 +420,9 @@ the file, the line and the reason. It never approximates.
 | `if` that returns, `if` that changes locals, `c ? a : b` | `if … then … else …` |
 | `+ - *`, `< <= > >=`, `=== !==`, `&& \|\| !` | the same operators on `Int`, `Bool`, `Prop` |
 | `a + b` where one operand is a string and the other is a string, a `bigint` or a `boolean`, and `s += e` on a string local | `a ++ b` on `JSString`. ToString converts the other operand first: `JSString.ofInt n` writes the decimal digits of a bigint, and `JSString.ofBool b` writes `"true"` or `"false"`. `+` is left-associative, so `1n + 2n + "!"` is `"3!"`. Tolean refuses a `number` operand, because the model has no ToString for numbers yet. |
+| `s.length` | `JSNumber.ofSafeInt (N := N) ((JSString.length s : Nat) : Int)`: the number of UTF-16 code units, so `"😀".length` is 2 |
+| `s.startsWith(p)`, `s.endsWith(p)` and `s.includes(p)`, where `p` is a string | `JSString.startsWith s p`, `JSString.endsWith s p` and `JSString.includes s p`, which compare code units. `startsWith_iff`, `endsWith_iff` and `includes_iff` state them as Lean's prefix, suffix and infix orders on the lists of code units. Tolean refuses the position argument. |
+| `s.indexOf(p)`, where `p` is a string | `JSNumber.ofSafeInt (N := N) (JSString.indexOf s p)`: the first index of `p` in code units, or -1. The empty string is at index 0. |
 | `a < b`, `a <= b`, `a > b` and `a >= b` on strings | `JSString.lt a b` and `JSString.le a b`, with the operands swapped for `>` and `>=`. JS compares strings by their UTF-16 code units (IsLessThan, ECMA-262 §7.2.13), not by their code points, so `"😀" < "\uFFFF"` is `true`. `JSString.lt_iff` states that `lt` is Lean's order on the lists of code units. |
 | `a / k`, `a % k` on `bigint`, where `k` is a nonzero literal | `Int.tdiv a k`, `Int.tmod a k` (both truncate toward zero, as JS does) |
 | `{ a, b: e }` building a declared interface | structure instance |

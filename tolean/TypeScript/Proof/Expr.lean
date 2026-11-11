@@ -1265,6 +1265,87 @@ theorem applyOperator_sound {sp s : Span} {op : BinOp} {l r : Expr} {a b c : Cod
        rw [hl _ hx, hr _ hy]
        cases x <;> cases y <;> simp_all [IR.eqVal, Eval.binary, Eval.strictEq])
 
+/-! ### Methods of a string -/
+
+/-- A method of a string that takes no callback, other than `at` and `slice`,
+which have rules of their own: the interpreter evaluates the receiver, then
+the arguments, and `stringMethod` gives the value. A call with one argument
+reaches the rule of `get` and `has`, which passes a string on to
+`stringMethod` too. -/
+theorem eval_stringCall (sp sp' : Span) (recv : Expr) (method : String) (args : List Expr)
+    (hr : recv.namesNumber = false) (harg : args.any (·.isArrow) = false) (hat : method ≠ "at")
+    (hsl : method ≠ "slice") (ρ : Eval.Env N) {t : JSString}
+    (hrecv : Eval.eval m fuel ρ recv = some (.str t)) :
+    Eval.eval m fuel ρ (.call sp (.member sp' recv method) args) =
+      (Eval.evalList m fuel ρ args).bind (Eval.stringMethod method t) := by
+  have hr' : ∀ s, recv ≠ .ident s "Number" := by
+    intro s h; subst h; simp [Expr.namesNumber] at hr
+  rcases args with _ | ⟨a, _ | ⟨b, rest⟩⟩
+  all_goals rw [Eval.eval]
+  all_goals first
+    | (rw [hrecv]
+       first
+         | rfl
+         | (cases ha : Eval.eval m fuel ρ a <;> simp [Eval.evalList, ha]))
+    | exact hr'
+    | (intros; contradiction)
+    | (intros; subst_vars; exact absurd rfl (hr' _))
+    | (clear hrecv; intros; simp_all [Expr.isArrow]; done)
+    | (intros; subst_vars; exact absurd rfl hat)
+    | (intros; subst_vars; exact absurd rfl hsl)
+
+/-- A method that `stringMethod` gives a value for is not `at` or `slice`. -/
+theorem stringMethod_not_at {method : String} {t : JSString} {vs : List (Val N)} {v : Val N}
+    (h : Eval.stringMethod method t vs = some v) : method ≠ "at" ∧ method ≠ "slice" := by
+  constructor <;> (intro he; subst he; simp [Eval.stringMethod] at h)
+
+/-- The method that `stringMethod?` picks gives the value that the
+interpreter's `stringMethod` gives. -/
+theorem stringMethod_of {method : String} {sm : IR.StringMethod} (hm : stringMethod? method = some sm)
+    (t : JSString) (vs : List (Val N)) : Eval.stringMethod method t vs = sm.apply t vs := by
+  unfold stringMethod? at hm
+  repeat' split at hm
+  all_goals first
+    | (cases hm
+       rename_i hmm
+       simp only [beq_iff_eq] at hmm
+       subst hmm
+       simp [Eval.stringMethod, IR.StringMethod.apply])
+    | simp at hm
+
+/-- The code of `stringCall` evaluates the receiver to a string and the
+arguments, and its value is the one that `stringMethod` gives them. -/
+theorem stringCall_sound {s : Span} {method : String} {str : Code} {args : List Code}
+    {ctx ctx' : Ctx} {c : Code} (h : stringCall s method str args ctx = .ok c ctx')
+    {ρ : Eval.Env N} {v : Val N} (hv : IR.Expr.eval fs fuel ρ c.code = some v) :
+    ∃ t vs, IR.Expr.eval fs fuel ρ str.value = some (.str t) ∧
+      IR.Expr.evalList fs fuel ρ (args.map Code.value) = some vs ∧
+      Eval.stringMethod method t vs = some v := by
+  unfold stringCall at h
+  split at h
+  · cases hm : stringMethod? method with
+    | none => simp [hm] at h
+    | some sm =>
+      simp only [hm] at h
+      split at h
+      · split at h
+        · simp only [pure_ok] at h
+          obtain ⟨rfl, -⟩ := h
+          simp only [IR.Expr.eval, IR.Expr.evalList] at hv
+          cases hx : IR.Expr.eval fs fuel ρ str.value with
+          | none => simp [hx] at hv
+          | some w =>
+            cases hy : IR.Expr.evalList fs fuel ρ (args.map Code.value) with
+            | none => simp [hx, hy] at hv
+            | some vs =>
+              simp only [hx, hy, Option.bind_eq_bind, Option.bind_some] at hv
+              cases w <;> simp [IR.ExprExt.apply] at hv
+              rename_i t
+              exact ⟨t, vs, rfl, rfl, by rw [stringMethod_of hm]; exact hv⟩
+        · simp at h
+      · simp at h
+  · simp at h
+
 /-- A string that becomes the constructor of a literal union has the same
 value: the evaluator gives a constructor its string. -/
 theorem enumOperand_code (known : List EnumInfo) (c : Code) (t : Ty) (ρ : Eval.Env N) :
@@ -2181,8 +2262,24 @@ theorem translateArrayCall_sound {F : Nat}
   split at h
   · simp only [bind_ok, reject_ne_ok, false_and, exists_false] at h
   rename_i harg
-  simp only [pure_bind, bind_ok, orReject_ok] at h
-  obtain ⟨xs, s₁, hxs, elem, s₂, ⟨-, rfl⟩, h⟩ := h
+  simp only [pure_bind, bind_ok] at h
+  obtain ⟨xs, s₁, hxs, h⟩ := h
+  simp only [ite_state] at h
+  split at h
+  · -- A method of a string: the value that `stringMethod` gives.
+    simp only [bind_ok] at h
+    obtain ⟨codes, s₂, hcodes, h⟩ := h
+    intro ρs ρo v ha hs hv
+    obtain ⟨t, vs, ht, hvs, hval⟩ := stringCall_sound fs fuel h hv
+    rw [eval_value] at ht
+    have hrecv := ihE _ _ _ _ _ _ hxs ρs ρo _ ha hs ht
+    have hargs := mapM_sim m fs fuel (fun e ctx c ctx' he => ihE _ _ _ _ _ _ he) args _ codes _ hcodes
+      ρs ρo vs ha hs hvs
+    obtain ⟨hat, hsl⟩ := stringMethod_not_at hval
+    rw [eval_stringCall m fuel _ _ _ _ _ hr (by simpa using harg) hat hsl _ hrecv]
+    simp [hargs, hval]
+  simp only [bind_ok, orReject_ok] at h
+  obtain ⟨elem, s₂, ⟨-, rfl⟩, h⟩ := h
   simp only [ite_state] at h
   split at h
   · -- `xs.at(k)`: the element that `atVal` gives.
@@ -2448,6 +2545,7 @@ theorem eval_mapMethod (sp sp' : Span) (recv key : Expr) (name : String) (hr : r
         match r with
         | .map _ | .set _ => (Eval.eval m fuel ρ key).bind (mapMethodVal name r)
         | .list items => (Eval.eval m fuel ρ key).bind fun k => Eval.arrayMethod name items [k]
+        | .str s => (Eval.eval m fuel ρ key).bind fun k => Eval.stringMethod name s [k]
         | _ => none := by
   have hr' : ∀ s, recv ≠ .ident s "Number" := by
     intro s h; subst h; simp [Expr.namesNumber] at hr
@@ -2689,6 +2787,30 @@ theorem translateMember_sound {F : Nat}
         have hobj := hrecv ρs ρo _ ha hs hx
         cases vo <;> (try simp only [IR.ExprExt.apply] at happ) <;> try (simp at happ; done)
         rename_i entries
+        simp only [Option.some.injEq] at happ
+        subst happ
+        simp [Eval.eval, hsp, hobj]
+    · simp at h
+  case string =>
+    -- `s.length`, the number of code units.
+    simp only [hot, ite_state] at h
+    split at h
+    · rename_i hlen
+      obtain rfl : name = "length" := by simpa using hlen
+      simp only [pure_ok] at h
+      obtain ⟨rfl, -⟩ := h
+      intro ρs ρo w ha hs hw
+      obtain ⟨vs, hvs, happ⟩ := out_ext fs fuel hw
+      simp only [IR.Expr.evalList] at hvs
+      cases hx : IR.Expr.eval fs fuel ρo o.value with
+      | none => simp [hx] at hvs
+      | some vo =>
+        simp [hx] at hvs
+        subst hvs
+        rw [eval_value] at hx
+        have hobj := hrecv ρs ρo _ ha hs hx
+        cases vo <;> (try simp only [IR.ExprExt.apply] at happ) <;> try (simp at happ; done)
+        rename_i str
         simp only [Option.some.injEq] at happ
         subst happ
         simp [Eval.eval, hsp, hobj]
