@@ -26,6 +26,11 @@ export function level(l: Level): string {
   return JSON.stringify(l);
 }
 
+/** The output writes the type of the argument, here `Option Empty`. */
+export function nothing(): string {
+  return JSON.stringify(null);
+}
+
 export function sameText(a: ReadonlyArray<string>, b: ReadonlyArray<string>): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }

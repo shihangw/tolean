@@ -1407,9 +1407,9 @@ theorem stringCall_sound {s : Span} {method : String} {str : Code} {args : List 
 
 omit [JSNumber N] in
 /-- The code of `JSON.stringify(x)` applies the opaque function to the code
-of `x`. -/
+of `x`, with its type written out. -/
 theorem jsonCall_code {span : Span} {a c : Code} {ctx ctx' : Ctx} (h : jsonCall span a ctx = .ok c ctx') :
-    c.code = .ext .jsonStringify [a.value] := by
+    c.code = .ext .jsonStringify [.ascribe a.value a.type.lean] := by
   unfold jsonCall at h
   split at h
   all_goals first
