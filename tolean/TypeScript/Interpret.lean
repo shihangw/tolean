@@ -24,19 +24,97 @@ Node can read it back exactly:
 - an object as `{"object": [["<key>", <value>], …]}`, in the order of its
   keys;
 - an error object as `{"error": ["<class>", [["<key>", <value>], …]]}`, with
-  its own properties, such as `message`.
+  its own properties, such as `message`;
+- a date as `{"date": "<time value in decimal>"}`, or `{"date": null}` when
+  it is invalid.
 -/
 namespace tolean.TypeScript.Interpret
 
 open Lean (Json)
 open tolean.TypeScript.Eval (Val)
 
+/-- `-0` is the one double that is `0` and whose reciprocal is negative. -/
+def isNegZero (x : Float) : Bool := x == 0 && 1 / x < 0
+
+/-- `Math.trunc(x)`: the integer part, toward zero. `ceil` keeps the sign of a
+negative `x` that rounds to zero, as JS does. -/
+def jsTrunc (x : Float) : Float := if x < 0 then x.ceil else x.floor
+
+/-- `Math.round(x)` (ECMA-262 §21.3.2.28): the nearest integer, and the larger
+one at a half. `x - floor(x)` is exact, so the test of the half is too. A
+negative `x` that rounds to zero gives `-0`. -/
+def jsRound (x : Float) : Float :=
+  if !x.isFinite then x
+  else
+    let r := x.floor
+    let y := if x - r ≥ 0.5 then r + 1 else r
+    if y == 0 && (x < 0 || isNegZero x) then -0.0 else y
+
+/-- `Math.min(a, b)` (§21.3.2.25): `NaN` when either is `NaN`, and `-0` is less
+than `+0`. -/
+def jsMin (a b : Float) : Float :=
+  if a.isNaN || b.isNaN then 0.0 / 0.0
+  else if a == 0 && b == 0 then (if isNegZero a then a else b)
+  else if a < b then a else b
+
+/-- `Math.max(a, b)` (§21.3.2.24): `NaN` when either is `NaN`, and `+0` is
+greater than `-0`. -/
+def jsMax (a b : Float) : Float :=
+  if a.isNaN || b.isNaN then 0.0 / 0.0
+  else if a == 0 && b == 0 then (if isNegZero a then b else a)
+  else if a > b then a else b
+
+/-- The integer that a finite double is after its fraction is dropped, read
+exactly from its bits: the significand times a power of two, toward zero.
+`Float.toInt64` would saturate past 2^63, where JS keeps every bit. -/
+def jsToInt (x : Float) : Option Int :=
+  if !x.isFinite then none
+  else
+    let bits := x.toBits
+    let exp := ((bits >>> 52) &&& 0x7FF).toNat
+    let frac := (bits &&& 0xFFFFFFFFFFFFF).toNat
+    -- A subnormal double is less than 1, so its integer part is 0.
+    if exp == 0 then some 0
+    else
+      let m := frac + 2 ^ 52
+      let magnitude : Nat :=
+        if exp ≥ 1075 then m * 2 ^ (exp - 1075) else m / 2 ^ (1075 - exp)
+      some (if bits >>> 63 == 1 then -(magnitude : Int) else magnitude)
+
+/-- The double nearest to `n`, with ties to the one whose last bit is zero:
+the Number value for `n` (ECMA-262 §6.1.6.1). A natural below 2^53 is a
+double already. Above it, the 53 highest bits round by the bits below them.
+`Float.ofNat` keeps only 64 bits before it rounds, which can round a value
+just past a halfway point down. -/
+def natToDouble (n : Nat) : Float :=
+  if n < 2 ^ 53 then Float.ofNat n
+  else
+    let shift := Nat.log2 n - 52
+    let q := n >>> shift
+    let r := n - (q <<< shift)
+    let half := 2 ^ (shift - 1)
+    let q := if r > half || (r == half && q % 2 == 1) then q + 1 else q
+    -- `q` has at most 54 bits, so it is a double, and `scaleB` is exact up
+    -- to the largest double, past which it gives `Infinity`.
+    (Float.ofNat q).scaleB shift
+
 /-- JS numbers as Lean's IEEE 754 doubles. -/
 instance : JSNumber Float where
+  toInt := jsToInt
+  isNegZero := isNegZero
+  ofInt i := if i < 0 then -(natToDouble i.natAbs) else natToDouble i.natAbs
   add := Float.add
   sub := Float.sub
   mul := Float.mul
+  div := Float.div
   neg := Float.neg
+  floor := Float.floor
+  ceil := Float.ceil
+  trunc := jsTrunc
+  round := jsRound
+  abs := Float.abs
+  min := jsMin
+  max := jsMax
   lt a b := decide (a < b)
   le a b := decide (a ≤ b)
   eq a b := a == b
@@ -68,6 +146,7 @@ partial def toJson : Val Float → Json
   | .error cls fs =>
     Json.mkObj [("error", Json.arr #[Json.str cls,
       Json.arr (fs.map fun (k, v) => Json.arr #[Json.str k, toJson v]).toArray])]
+  | .date t => Json.mkObj [("date", match t with | some i => Json.str (toString i) | none => Json.null)]
 
 partial def ofJson (j : Json) : Except String (Val Float) :=
   match j with
@@ -92,6 +171,11 @@ partial def ofJson (j : Json) : Except String (Val Float) :=
       return .map entries.toList
     if let .ok (elems : Array Json) := j.getObjValAs? (Array Json) "set" then
       return .set (← elems.mapM ofJson).toList
+    if let .ok (d : Json) := j.getObjVal? "date" then
+      if d matches .null then return .date none
+      let .ok (s : String) := d.getStr? | throw "a date is not a time value"
+      let some i := s.toInt? | throw s!"not a time value: {s}"
+      return .date (some i)
     let fields ← j.getObjValAs? (Array Json) "object"
     let fields ← fields.mapM fun f => do
       let #[k, v] := (← f.getArr?) | throw "an object field is not a [key, value] pair"

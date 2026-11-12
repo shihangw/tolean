@@ -52,6 +52,13 @@ def NumberOp.apply : NumberOp → N → N → Val N
   | .add, a, b => .num (JSNumber.add a b)
   | .sub, a, b => .num (JSNumber.sub a b)
   | .mul, a, b => .num (JSNumber.mul a b)
+  | .div, a, b => .num (JSNumber.div a b)
+  | .bitAnd, a, b => .num (JSNumber.bitAnd a b)
+  | .bitOr, a, b => .num (JSNumber.bitOr a b)
+  | .bitXor, a, b => .num (JSNumber.bitXor a b)
+  | .shiftLeft, a, b => .num (JSNumber.shiftLeft a b)
+  | .shiftRight, a, b => .num (JSNumber.shiftRight a b)
+  | .unsignedShiftRight, a, b => .num (JSNumber.unsignedShiftRight a b)
   | .lt, a, b => .bool (JSNumber.lt a b)
   | .le, a, b => .bool (JSNumber.le a b)
   | .eq, a, b => .bool (JSNumber.eq a b)
@@ -63,6 +70,15 @@ def NumberTest.apply : NumberTest → N → Bool
   | .isSafeInteger, a => (JSNumber.toSafeInt a).isSome
   | .isNaN, a => JSNumber.isNaN a
   | .isFinite, a => JSNumber.isFinite a
+  | .isInteger, a => JSNumber.isInteger a
+
+def NumberFn.apply : NumberFn → N → N
+  | .floor => JSNumber.floor | .ceil => JSNumber.ceil | .trunc => JSNumber.trunc
+  | .round => JSNumber.round | .abs => JSNumber.abs | .bitNot => JSNumber.bitNot
+
+def BigintOp.apply : BigintOp → Int → Int → Int
+  | .bitAnd => JSBigInt.bitAnd | .bitOr => JSBigInt.bitOr | .bitXor => JSBigInt.bitXor
+  | .shiftLeft => JSBigInt.shiftLeft | .shiftRight => JSBigInt.shiftRight
 
 /-- The string that ToString gives for one operand of `a + b` on strings. -/
 def StringPart.toStr : StringPart → Val N → Option JSString
@@ -95,6 +111,17 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   | .numberOp op, [.num a, .num b] => some (op.apply a b)
   | .numberNe, [.num a, .num b] => some (.bool !(JSNumber.eq a b))
   | .numberTest test, [.num a] => some (.bool (test.apply a))
+  | .numberFn f, [.num a] => some (.num (f.apply a))
+  | .dateOfNumber, [.num t] => some (.date (JSDate.timeClip t))
+  | .dateMethod name, [.date t] => Eval.dateMethod name t []
+  | .dateUtc, vs => (Eval.numbers? vs).map fun xs => .num (JSDate.utc xs)
+  | .numberSameValue, [.num a, .num b] => some (.bool (JSNumber.sameValue a b))
+  | .numberOfInt, [.int i] => some (.num (JSNumber.ofInt i))
+  | .numberFold isMax, vs =>
+    (Eval.numbers? vs).map fun xs => .num (if isMax then JSNumber.maximum xs else JSNumber.minimum xs)
+  | .bigintOp op, [.int a, .int b] => some (.int (op.apply a b))
+  | .bigintNot, [.int a] => some (.int (JSBigInt.bitNot a))
+  | .bigintPow k, [.int a] => some (.int (a ^ k))
   | .stringOrder le, [.str a, .str b] => some (.bool (if le then a.le b else a.lt b))
   | .stringLength, [.str s] => some (.num (JSNumber.ofSafeInt s.length))
   | .stringMethod method, .str s :: args => method.apply s args
@@ -300,6 +327,9 @@ def Expr.eval (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
     | .findIndex =>
       return .num (JSNumber.ofSafeInt (((← Expr.evalFindIdx fs fuel ρ param body 0 xs).map Int.ofNat).getD (-1)))
     | .findLast => return (← Expr.evalFind fs fuel ρ param body true xs.reverse).getD .undefined
+    -- A sort calls the comparator on every pair of elements and gives the
+    -- order of `Eval.sortValues`, as the interpreter does.
+    | .sortWith other => return .list (← Eval.sortValues (Expr.evalCompare fs fuel ρ param other body) xs)
   -- `List.foldl` runs the function on each element in order, with the value
   -- so far bound to `acc`, as the callback of `reduce` does.
   | .listFold items init acc param _ body _ => do
@@ -329,6 +359,20 @@ def Expr.evalMap (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ :
   | x :: xs => do
     return (← Expr.eval fs fuel ((param, x) :: ρ) body) :: (← Expr.evalMap fs fuel ρ param body xs)
 termination_by xs => (fuel, sizeOf body, xs.length + 1)
+
+/-- The sign of the comparator `fun param other => body` on `x` and `y`, as
+`Eval.evalCompare` reads it: `undefined` comes after every other value, and
+the comparator must give a number. -/
+def Expr.evalCompare (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : Env N)
+    (param other : String) (body : Expr) (x y : Val N) : Option Ordering :=
+  match x, y with
+  | .undefined, .undefined => some .eq
+  | .undefined, _ => some .gt
+  | _, .undefined => some .lt
+  | _, _ => do
+    let .num v ← Expr.eval fs fuel ((param, x) :: (other, y) :: ρ) body | none
+    JSNumber.compareSign v
+termination_by (fuel, sizeOf body, 1)
 
 /-- `List.mapIdx (fun index param => body)` on `xs`, whose first element is at
 position `start`. The body sees the position as a number. -/

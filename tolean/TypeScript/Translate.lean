@@ -57,12 +57,14 @@ inductive Ty where
   /-- A type parameter of a generic function, such as `T` in
   `function first<T>(xs: T[]): T | null`. -/
   | param (name : String)
-  /-- `Map<K, V>` or `ReadonlyMap<K, V>`, where `K` is a bigint, a string, a
+  /-- `Map<K, V>` or `ReadonlyMap<K, V>`, where `K` is a number, a bigint, a string, a
   boolean or a literal union of strings. -/
   | map (key value : Ty)
   /-- `Set<T>` or `ReadonlySet<T>`, where `T` is a type that a map key may
   have. -/
   | set (elem : Ty)
+  /-- `Date`, which the subset never changes, so a value stands for it. -/
+  | date
 deriving Repr, Inhabited
 
 -- `Ty` holds lists of itself, so Lean's derived `BEq` would not reduce in the
@@ -72,6 +74,7 @@ mutual
 
 def Ty.beq : Ty → Ty → Bool
   | .bigint, .bigint | .number, .number | .boolean, .boolean | .string, .string | .null, .null => true
+  | .date, .date => true
   | .nullable a, .nullable b | .optional a, .optional b | .array a, .array b => Ty.beq a b
   | .struct a as, .struct b bs => a == b && Ty.beqList as bs
   | .enum a, .enum b => a == b
@@ -200,7 +203,7 @@ def Ty.isEqPrimitive : Ty → Bool
 
 /-- An object, which `===` compares by identity. A tuple is an array. -/
 def Ty.isObject : Ty → Bool
-  | .array _ | .struct .. | .tagged .. | .tuple _ | .map .. | .set _ => true
+  | .array _ | .struct .. | .tagged .. | .tuple _ | .map .. | .set _ | .date => true
   | _ => false
 
 /-- The element types of a tuple type. -/
@@ -238,6 +241,7 @@ def Ty.lean : Ty → IR.Ty
   | .param name => .param name
   | .map k v => .map k.lean v.lean
   | .set t => .set t.lean
+  | .date => .date
 
 def Ty.leanList : List Ty → List IR.Ty
   | [] => []
@@ -798,12 +802,13 @@ def requireFeature (span : Span) (f : Feature) : TM Unit := do
 /-- The globals that the subset reads by name. A file that names one of them
 needs the number type. -/
 def isNumberName (name : String) : Bool :=
-  name == "Number" || name == "NaN" || name == "Infinity"
+  name == "Number" || name == "NaN" || name == "Infinity" || name == "Math" || name == "Date"
 
 /-- The globals that the subset reads by name, so that no declaration may
 hide them. -/
 def isGlobalName (name : String) : Bool :=
-  isNumberName name || name == "undefined" || name == "Map" || name == "Set" || name == "Error"
+  isNumberName name || name == "undefined" || name == "Map" || name == "Set" || name == "Error" ||
+    name == "Object"
 
 def checkName (span : Span) (name : String) : TM String := do
   if leanReserved.contains name then reject span s!"name '{name}' is reserved in Lean"
@@ -880,14 +885,14 @@ def typeArgsMessage (name : String) : Nat → String
   | 1 => s!"'{name}' takes 1 type argument"
   | n => s!"'{name}' takes {n} type arguments"
 
-/-- The key type of a map. SameValueZero, which a `Map` compares keys with,
-is Lean's equality on bigints, booleans and strings. A `number` key can be
-`NaN` or `-0`, which SameValueZero treats apart from `=`, and an object key
-compares by identity. -/
+/-- The key type of a map. A `Map` compares keys with SameValueZero, which the
+output's `JSKey` gives: Lean's equality on bigints, booleans and strings, and
+`JSNumber.sameValueZero` on numbers. An object key compares by identity, which
+the output cannot. -/
 def mapKey (s : Span) (k : Ty) (what : String := "a map key") : TM Ty := do
   match k with
-  | .bigint | .string | .boolean | .enum _ => return k
-  | _ => reject s s!"{what} must be a bigint, a string, a boolean or a literal union of strings"
+  | .number | .bigint | .string | .boolean | .enum _ => return k
+  | _ => reject s s!"{what} must be a number, a bigint, a string, a boolean or a literal union of strings"
 
 mutual
 
@@ -946,6 +951,8 @@ def translateType (t : TypeExpr) : TM Ty := do
   | .ref _ name [] =>
     let ctx ← get
     if ctx.typeParams.contains name then return .param name
+    -- `Date`, which no declaration may hide.
+    if name == "Date" then return .date
     match ctx.structs.find? (·.name == name) with
     | some info =>
       unless info.typeParams.isEmpty do reject t.span (typeArgsMessage name info.typeParams.length)
@@ -1377,11 +1384,89 @@ def isNonzeroBigintLiteral : Expr → Bool
   | .bigint _ text => (bigintValue? text).any (· != 0)
   | _ => false
 
+/-- The value of a bigint literal, perhaps in parentheses, such as `3n`.
+Its value is never negative. -/
+def bigintLiteralNat? : Expr → Option Nat
+  | .paren _ inner => bigintLiteralNat? inner
+  | .bigint _ text => (bigintValue? text).map Int.toNat
+  | _ => none
+
 def numberTest? : String → Option IR.NumberTest
   | "isSafeInteger" => some .isSafeInteger
   | "isNaN" => some .isNaN
   | "isFinite" => some .isFinite
+  | "isInteger" => some .isInteger
   | _ => none
+
+/-- The function of the number model that `Math.f` of one number becomes. -/
+def numberFn? : String → Option IR.NumberFn
+  | "floor" => some .floor
+  | "ceil" => some .ceil
+  | "trunc" => some .trunc
+  | "round" => some .round
+  | "abs" => some .abs
+  | _ => none
+
+/-- `Math.floor(x)`, `Math.min(a, b)` and the other functions of `Math` that
+the number model has, where `tr` translates an argument. Each takes numbers
+only: on a value of another type, JS converts it with ToNumber, or throws on
+a bigint. -/
+def translateMathCall (tr : Expr → TM Code) (s : Span) (f : String) (args : List Expr) : TM Code := do
+  if let some fn := numberFn? f then
+    let [arg] := args | reject s s!"Math.{f} takes one number"
+    let a ← tr arg
+    unless a.type == .number do
+      reject arg.span s!"Math.{f} needs a number operand (narrow a nullable value first)"
+    return ⟨.ext (.numberFn fn) [a.value], false, .number⟩
+  unless f == "min" || f == "max" do
+    reject s (s!"Math.{f} is not in the subset; it has Math.floor, ceil, trunc, round, abs, min " ++
+      "and max, whose results ECMA-262 defines exactly")
+  let codes ← args.mapM tr
+  for (c, e) in codes.zip args do
+    unless c.type == .number do reject e.span s!"Math.{f} needs number operands"
+  return ⟨.ext (.numberFold (f == "max")) (codes.map (·.value)), false, .number⟩
+
+/-- `Object.is(a, b)`, where `tr` translates an argument. On two numbers it
+is SameValue, which tells `NaN` and `-0` apart from `===`. On two values of
+another primitive type it is `===`. -/
+def translateObjectIs (tr : Expr → TM Code) (s : Span) (args : List Expr) : TM Code := do
+  let [x, y] := args | reject s "Object.is takes two values"
+  let a ← tr x
+  let b ← tr y
+  if a.type == .number && b.type == .number then
+    return ⟨.ext .numberSameValue [a.value, b.value], false, .boolean⟩
+  unless a.type == b.type && a.type.isEqPrimitive do
+    reject s "Object.is needs two numbers, or two values of one primitive type"
+  return ⟨.eq a.value b.value, true, .boolean⟩
+
+/-- `Number(b)` on a bigint, where `tr` translates the argument: the Number
+value for `b`, the double nearest to it. -/
+def translateNumberCall (tr : Expr → TM Code) (s : Span) (args : List Expr) : TM Code := do
+  let [x] := args | reject s "Number takes one bigint here"
+  let a ← tr x
+  unless a.type == .bigint do
+    reject x.span "Number(v) needs a bigint; ToNumber of other values is not modelled"
+  return ⟨.ext .numberOfInt [a.value], false, .number⟩
+
+/-- `Date.UTC(year, month, …)`, where `tr` translates an argument: the time
+value of the date, as a number. Before ES2017, a call with one argument is
+up to the engine, so it needs two arguments or more. -/
+def translateDateUtc (tr : Expr → TM Code) (s : Span) (args : List Expr) : TM Code := do
+  unless 2 ≤ args.length && args.length ≤ 7 do
+    reject s "Date.UTC takes from two to seven numbers: the year, the month, and then the date and the time"
+  let codes ← args.mapM tr
+  for (c, e) in codes.zip args do
+    unless c.type == .number do reject e.span "Date.UTC needs number operands"
+  return ⟨.ext .dateUtc (codes.map (·.value)), false, .number⟩
+
+/-- `d.getTime()` and the UTC getters of the date `d`. The getters of local
+time depend on the time zone of the host, so they stay refused. -/
+def translateDateCall (s : Span) (method : String) (d : Code) (args : List Expr) : TM Code := do
+  unless (JSDate.methodName? method).isSome do
+    reject s (s!"a Date has no method '{method}' in the subset; it has getTime, valueOf and the " ++
+        "UTC getters, such as getUTCFullYear, whose results do not depend on the time zone")
+  unless args.isEmpty do reject s s!"'{method}' takes no arguments"
+  return ⟨.ext (.dateMethod method) [d.value], false, .number⟩
 
 def numberConstant? : String → Option IR.NumberConstant
   | "NaN" => some .nan
@@ -1481,6 +1566,23 @@ def applyOperator (s : Span) (op : BinOp) (r : Expr) (a b : Code) : TM Code := d
       reject s "'/' and '%' need two bigints and a nonzero bigint literal divisor (JS throws on 0n)"
     requireFeature s .bigintDivision
     return ⟨.division operation a.value b.value, false, .bigint⟩
+  -- `a ** k` on bigints throws when `k` is negative, so the exponent must be
+  -- a literal: a bigint literal is never negative. ECMA-262 lets `**` on
+  -- numbers differ between engines (Number::exponentiate, §6.1.6.1.3).
+  let power : TM Code := do
+    let message := "'**' needs two bigints and a bigint literal exponent, such as x ** 2n " ++
+      "(JS throws on a negative one)"
+    unless bothBigInt do reject s message
+    let some k := bigintLiteralNat? r | reject s message
+    requireFeature s .bigintBitwise
+    return ⟨.ext (.bigintPow k) [a.value], false, .bigint⟩
+  -- On numbers, the operators work on ToInt32 of each operand (§7.1.6).
+  let bitwise (operation : IR.BigintOp) (numberOp : IR.NumberOp) : TM Code := do
+    if bothNumber then return call numberOp a b .number
+    unless bothBigInt do
+      reject s s!"'{op.symbol}' needs two bigints or two numbers"
+    requireFeature s .bigintBitwise
+    return ⟨.ext (.bigintOp operation) [a.value, b.value], false, .bigint⟩
   let logical (isAnd : Bool) : TM Code := do
     unless a.type == .boolean && b.type == .boolean do
       reject s s!"'{op.symbol}' needs two booleans"
@@ -1492,8 +1594,17 @@ def applyOperator (s : Span) (op : BinOp) (r : Expr) (a b : Code) : TM Code := d
   | .add => if a.type == .string || b.type == .string then concatOperands s a b else arithmetic .add .add
   | .sub => arithmetic .sub .sub
   | .mul => arithmetic .mul .mul
-  | .div => divide .tdiv
+  | .div => if bothNumber then return call .div a b .number else divide .tdiv
   | .mod => divide .tmod
+  | .exp => power
+  | .bitAnd => bitwise .bitAnd .bitAnd
+  | .bitOr => bitwise .bitOr .bitOr
+  | .bitXor => bitwise .bitXor .bitXor
+  | .shl => bitwise .shiftLeft .shiftLeft
+  | .shr => bitwise .shiftRight .shiftRight
+  | .ushr =>
+    if bothNumber then return call .unsignedShiftRight a b .number
+    else reject s "'>>>' needs two numbers, and JS throws a TypeError for it on bigints"
   | .lt => compare .lt .lt false
   | .le => compare .le .le false
   | .gt => compare .gt .lt true
@@ -1584,9 +1695,10 @@ def reducerOf : List Expr → Option (Param × Param × Expr × Expr)
   | [.arrow _ _ [a, p] body, init] => some (a, p, body, init)
   | _ => none
 
-/-- `e` is the name `Number`. -/
+/-- `e` is the name `Number` or `Math`, whose calls the interpreter reads
+before the methods of a value. -/
 def _root_.tolean.TypeScript.Syntax.Expr.namesNumber : Expr → Bool
-  | .ident _ "Number" => true
+  | .ident _ "Number" | .ident _ "Math" | .ident _ "Object" | .ident _ "Date" => true
   | _ => false
 
 /-- `m.get(k)` and `m.has(k)`, as the method and the operation of the output. -/
@@ -1764,6 +1876,20 @@ def translateRecv (tr : Expr → TM Code) (env : Env) (e : Expr) : TM Code :=
   | some c => pure c
   | none => tr e
 
+/-- `new Date(t)` on a number. `new Date()` reads the clock, and a date from
+its parts or from a string reads the time zone or parses, so they stay
+refused. -/
+def translateNewDate (tr : Option Ty → Expr → TM Code) (env : Env) (s : Span) (args : List Expr) :
+    TM Code := do
+  if env.has "Date" then reject s "a local named Date hides the global Date"
+  let [arg] := args
+    | reject s ("new Date takes one number here: new Date() reads the clock, and new Date(y, m, …) " ++
+        "reads the time zone of the host")
+  let t ← tr none arg
+  unless t.type == .number do
+    reject arg.span "new Date(v) needs a number; a string would be parsed, which is up to the engine"
+  return ⟨.ext .dateOfNumber [t.value], false, .date⟩
+
 /-- `new Map()` or `new Set()`, a map or a set without entries, or
 `new Map(items)` or `new Set(items)`, which sets each `[key, value]` or adds
 each value that `items` visits. `tr` translates an expression where a type is
@@ -1771,8 +1897,13 @@ expected. The type comes from the type arguments, or from the context, as in
 `const m: Map<K, V> = new Map()`, or else from `items`. -/
 def translateNew (tr : Option Ty → Expr → TM Code) (env : Env) (expected : Option Ty) (s : Span)
     (callee : String) (typeArgs : List TypeExpr) (args : List Expr) : TM Code := do
+  -- `Date` is not generic, so tsc refuses type arguments for it (TS2558).
+  if callee == "Date" then
+    if typeArgs.isEmpty then translateNewDate tr env s args
+    else reject s "new Date takes no type arguments"
+  else
   let isMap := callee == "Map"
-  unless isMap || callee == "Set" do reject s "only new Map() and new Set() are supported"
+  unless isMap || callee == "Set" do reject s "only new Date(t), new Map() and new Set() are supported"
   if env.has callee then reject s s!"a local named {callee} hides the global {callee}"
   match args with
   | [] =>
@@ -1989,6 +2120,88 @@ def optPathType (s : Span) (t : Ty) : List String → TM (Bool × Ty)
       | reject s s!"a property after '{f}' needs a value of an interface type"
     optPathRest s ref args rest
 
+/-- The receiver and the method of `xs.toSorted(…)` or `xs.sort(…)`. -/
+def sortOf : Expr → Option (Expr × String)
+  | .member _ recv "toSorted" => some (recv, "toSorted")
+  | .member _ recv "sort" => some (recv, "sort")
+  | _ => none
+
+/-- The fields that `e` reads from the parameter `name`: `[]` for `name`,
+`["k"]` for `name.k`, and so on. -/
+def keyPath? (name : String) : Expr → Option (List String)
+  | .ident _ n => if n == name then some [] else none
+  | .member _ obj f => (keyPath? name obj).map (· ++ [f])
+  | .paren _ e => keyPath? name e
+  | _ => none
+
+/-- `x < y` or `x > y`, where one side reads a key of `a` and the other the
+same key of `b`: the fields of the key, and whether the test holds when the
+key of `a` is the smaller one. -/
+def keyTest? (a b : String) : Expr → Option (List String × Bool)
+  | .paren _ e => keyTest? a b e
+  | .binary _ op x y =>
+    let less := if op == .lt then some true else if op == .gt then some false else none
+    match less, keyPath? a x, keyPath? b y, keyPath? b x, keyPath? a y with
+    | some l, some p, some q, _, _ => if p == q then some (p, l) else none
+    | some l, _, _, some p, some q => if p == q then some (p, !l) else none
+    | _, _, _, _, _ => none
+  | _ => none
+
+/-- `x - y`, where one side reads a key of `a` and the other the same key of
+`b`: the fields of the key, and whether `x` is the key of `a`, which sorts
+from the least. -/
+def keyDifference? (a b : String) : Expr → Option (List String × Bool)
+  | .paren _ e => keyDifference? a b e
+  | .binary _ .sub x y =>
+    match keyPath? a x, keyPath? b y, keyPath? b x, keyPath? a y with
+    | some p, some q, _, _ => if p == q then some (p, true) else none
+    | _, _, some p, some q => if p == q then some (p, false) else none
+    | _, _, _, _ => none
+  | _ => none
+
+mutual
+
+/-- The keys that a comparator of `a` and `b` compares, in order, when it
+has the shape `(a.k < b.k) ? -1 : (a.k > b.k) ? 1 : rest`. The tests may
+come in the other order, the signs may be reversed to sort from the
+greatest, and `rest` is `0` or a comparison of the next key. The last
+comparison may also be a difference, `a.k - b.k` or `b.k - a.k`. Each key
+comes with whether it is a difference, and whether it sorts from the least.
+Such a comparator is consistent when each key is totally ordered on the
+elements. -/
+def keyComparator? (a b : String) : Expr → Option (List (List String × Bool × Bool))
+  | .paren _ e => keyComparator? a b e
+  | .cond _ t r e => keySecond? a b t r e
+  | e => (keyDifference? a b e).map fun (p, up) => [(p, true, up)]
+
+/-- The rest of `keyComparator?` after `t ? r : `, on the expression after
+the `:`. -/
+def keySecond? (a b : String) (t r : Expr) : Expr → Option (List (List String × Bool × Bool))
+  | .paren _ e => keySecond? a b t r e
+  | .cond _ t' r' rest => do
+    let (p, less) ← keyTest? a b t
+    let (p', less') ← keyTest? a b t'
+    let s ← Eval.intLiteral? r
+    let s' ← Eval.intLiteral? r'
+    unless p == p' && less != less' && (s == 1 || s == -1) && s' == -s do none
+    let tail ← if Eval.intLiteral? rest == some 0 then some [] else keyComparator? a b rest
+    -- `-1` where the key of `a` is the smaller one sorts from the least.
+    return (p, false, less == (s == -1)) :: tail
+  | _ => none
+
+end
+
+/-- The type of the key at `path` in a value of type `t`: the type of a field,
+of a field of it, and so on. -/
+def keyType (s : Span) : Ty → List String → TM Ty
+  | t, [] => pure t
+  | .struct ref args, f :: rest => do
+    let info ← orReject ((← get).knownStructs.find? (·.ref == ref)) s
+      "only fields of interfaces declared in this file, or exported by the files before it, may be read"
+    let t ← orReject ((info.fieldsAt args).lookup f) s s!"'{f}' is not a field"
+    keyType s t rest
+  | _, _ :: _ => reject s "a key of a comparator must be a field of an interface"
+
 /-- `applyOperator`, after a string operand becomes a constructor where the
 other operand is of a literal union. -/
 def translateOperator (s : Span) (op : BinOp) (r : Expr) (a b : Code) : TM Code := do
@@ -2168,6 +2381,11 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
       | .bigint => return ⟨.neg a.value, false, .bigint⟩
       | .number => return ⟨.numberNeg a.value, false, .number⟩
       | _ => reject s "unsupported unary operator"
+    | .bitNot =>
+      if a.type == .number then return ⟨.ext (.numberFn .bitNot) [a.value], false, .number⟩
+      unless a.type == .bigint do reject s "'~' needs a bigint or a number"
+      requireFeature s .bigintBitwise
+      return ⟨.ext .bigintNot [a.value], false, .bigint⟩
     | .typeof =>
       reject s ("typeof may only test, in an if, a local of a union of primitive types " ++
         "against one of its members, as in if (typeof x === 'string') where x has a type " ++
@@ -2189,6 +2407,9 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
   | .call s callee args =>
     match reduceOf callee with
     | some recv => translateReduce fuel env expected s recv args
+    | none =>
+    match sortOf callee with
+    | some (recv, method) => translateSort fuel env s recv method args
     | none =>
     match arrayMethodOf callee with
     | some (recv, method) => translateArrayMethod fuel env expected s recv method args
@@ -2272,10 +2493,24 @@ def translateCall (fuel : Nat) (env : Env) (s : Span) (callee : Expr) (args : Li
       unless a.type == .number do
         reject arg.span s!"Number.{test} needs a number operand (narrow a nullable value first)"
       return ⟨.numberTest form a.value, false, .boolean⟩
+  if let .member _ (.ident _ "Math") f := callee then
+    if !env.has "Math" then
+      return ← translateMathCall (translateExpr fuel env none) s f args
+  if let .member _ (.ident _ "Object") "is" := callee then
+    if !env.has "Object" then
+      return ← translateObjectIs (translateExpr fuel env none) s args
+  if let .member _ (.ident _ "Date") "UTC" := callee then
+    if !env.has "Date" then
+      return ← translateDateUtc (translateExpr fuel env none) s args
   let noCallMessage :=
     "calls may name only the function itself, functions declared earlier in this file, or imported ones"
   let noCall {A : Type} : TM A := reject s noCallMessage
   let .ident _ name := callee | noCall
+  -- `Number(b)`. No declaration may be named `Number`, so a call of that
+  -- name that a local does not hide is the conversion.
+  if name == "Number" then
+    if env.has "Number" then noCall
+    return ← translateNumberCall (translateExpr fuel env none) s args
   if (name == "isNaN" || name == "isFinite") && !env.functions.any (·.name == name) then
     reject s s!"the global {name} converts its argument to a number; use Number.{name}"
   let fn ← orReject (env.functions.find? (·.name == name)) s noCallMessage
@@ -2390,6 +2625,8 @@ def translateArrayCall (fuel : Nat) (env : Env) (s : Span) (recv : Expr) (method
     let codes ← args.mapM (translateExpr fuel env none)
     stringCall s method xs codes
   else
+  if xs.type == .date then translateDateCall s method xs args
+  else
   let elem ← orReject xs.type.element? recv.span "only an array or a string has this method"
   -- `xs.at(k)`: the element at `k`, counted from the end when `k` is
   -- negative, or `undefined`. The model of numbers cannot truncate yet, so
@@ -2442,6 +2679,51 @@ def translateReduce (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (
   let info : IR.CallbackInfo IR.TyExt :=
     { span := s, result := accType.lean, scope := env.locals.map fun l => (l.name, l.type.lean) }
   return ⟨.listFold xs.value i.value a.name p.name elem.lean b.value info, false, accType⟩
+
+/-- `xs.toSorted((a, b) => e)` and `[...xs].sort((a, b) => e)`:
+`JSNumber.sortWith (fun a b => e) xs`. `sort` changes the array it sorts, so
+it may sort only an array literal, which nothing else holds. The comparator
+must compare keys (`keyComparator?`) that are bigints, strings or numbers.
+Then it is consistent for every array whose number keys are not `NaN`, and
+whose keys of a difference are finite. The spec also compares each element
+with itself, and `Infinity - Infinity` is `NaN`, so one infinite key of a
+difference is enough to make it inconsistent. Elsewhere the interpreter
+gives no value, and the translation makes no claim. -/
+def translateSort (fuel : Nat) (env : Env) (s : Span) (recv : Expr) (method : String)
+    (args : List Expr) : TM Code := do
+  let fuel + 1 := fuel | tooDeep
+  let [.arrow _ _ [p, q] body] := args
+    | reject s (s!"'{method}' takes a comparator here, an arrow function with two parameters, such as " ++
+        s!"xs.{method}((a, b) => (a.k < b.k) ? -1 : (a.k > b.k) ? 1 : 0)")
+  if method == "sort" && !recv.isArrayLiteral then
+    reject s ("'sort' changes the array that it sorts, so it may sort only a new array, " ++
+      "such as [...xs].sort(cmp); use xs.toSorted(cmp)")
+  requireFeature s (if method == "sort" then .stableSort else .arrayToSorted)
+  if recv.namesNumber then reject recv.span "only an array has this method"
+  let xs ← translateExpr fuel env none recv
+  let elem ← orReject xs.type.element? recv.span "only an array has this method"
+  -- The spec puts `undefined` last without calling the comparator.
+  if elem.isMaybe then reject s s!"'{method}' on an array of nullable values is not supported"
+  checkParamType p elem
+  checkParamType q elem
+  let withQ ← declare env q.span q.name .param elem
+  let inner ← declare withQ p.span p.name .param elem
+  let b ← translateExpr fuel inner (some .number) body
+  unless b.type == .number do reject body.span "a comparator must give a number"
+  let keys ← orReject (keyComparator? p.name q.name body) body.span
+    ("a comparator here must compare keys, such as (a, b) => (a.k < b.k) ? -1 : (a.k > b.k) ? 1 : 0 " ++
+      "or (a, b) => a.t - b.t, with the tests in either order, the signs reversed, or a comparison " ++
+      "of the next key in place of the 0")
+  for (key, difference, _) in keys do
+    let t ← keyType body.span elem key
+    if difference then
+      unless t == .number do reject body.span "the keys of a difference in a comparator must be numbers"
+    else
+      unless t == .bigint || t == .string || t == .number do
+        reject body.span "a key of a comparator must be a bigint, a string or a number"
+  let info : IR.CallbackInfo IR.TyExt :=
+    { span := s, result := Ty.number.lean, scope := env.locals.map fun l => (l.name, l.type.lean) }
+  return ⟨.listMethod (.sortWith q.name) xs.value p.name elem.lean b.value info, false, xs.type⟩
 
 /-- `m.get(k)` and `m.has(k)` on a map. An owned map may be read here, as
 `ownedMap?` says. `get` gives `undefined` for a key that the map does not
@@ -4166,19 +4448,26 @@ def translateWith (file source ns : String) (target : Edition := .default)
   let usesString := decls.any (IR.Decl.usesString IR.ExprExt.usesString)
   -- The same for a map, which is a `JSMap`.
   let usesMap := decls.any (IR.Decl.usesMap IR.ExprExt.onMap)
+  -- And for the bitwise operators on bigints, which `JSBigInt` defines.
+  let usesBigInt := decls.any (IR.Decl.anyOp IR.ExprExt.onBigInt)
+  -- And for dates, which `JSDate` models.
+  let usesDate := decls.any (IR.Decl.mentions (· == .date) IR.ExprExt.onDate)
   -- A function that can throw returns `Except JSError R`, and `JSError`
   -- holds a string.
   let throws := decls.any fun
     | .function _ _ (.except ..) _ | .errors .. => true
     | _ => false
   let header :=
-    (if names.generic then ["import tolean.TypeScript.Spec.Number"] else []) ++
+    (if usesDate then ["import tolean.TypeScript.Spec.Date"]
+     else if names.generic then ["import tolean.TypeScript.Spec.Number"] else []) ++
     (if throws then ["import tolean.TypeScript.Spec.Error"]
      else if usesString then ["import tolean.TypeScript.Spec.String"] else []) ++
+    (if usesBigInt then ["import tolean.TypeScript.Spec.BigInt"] else []) ++
     (if usesMap then ["import tolean.TypeScript.Map"] else []) ++
     (if decls.any (IR.Decl.recursive names.file) then ["import tolean.TypeScript.Decreasing"] else []) ++
     imports ++
-    (if names.generic || usesString || throws || usesMap then ["", "open tolean.TypeScript"]
+    (if names.generic || usesString || throws || usesMap || usesBigInt || usesDate then
+      ["", "open tolean.TypeScript"]
      else if imports.isEmpty then [] else [""])
   let text := "\n".intercalate
     ([s!"-- Generated by tolean {version} for {target.name} from {file}. Do not edit."] ++
