@@ -82,17 +82,22 @@ inductive Feature where
   /-- `s.at(k)`, which counts a negative `k` from the end:
   `String.prototype.at`. -/
   | stringAt
+  /-- `xs.sort(cmp)` keeps the order of elements that `cmp` calls equal:
+  `SortIndexedProperties`, which is stable since ES2019. -/
+  | stableSort
+  /-- `xs.toSorted(cmp)`: `Array.prototype.toSorted`. -/
+  | arrayToSorted
 deriving BEq, Repr, Inhabited
 
 def Feature.since : Feature → Edition
   | .exponent | .arrayIncludes | .trimWhiteSpace => .es2016
   | .stringPad => .es2017
   | .objectSpread => .es2018
-  | .trimStartEnd => .es2019
+  | .trimStartEnd | .stableSort => .es2019
   | .bigint | .bigintDivision | .nullishCoalescing | .optionalChaining => .es2020
   | .logicalAssignment | .numericSeparators => .es2021
   | .arrayAt | .stringAt => .es2022
-  | .arrayFindLast => .es2023
+  | .arrayFindLast | .arrayToSorted => .es2023
 
 def Feature.describe : Feature → String
   | .exponent => "'**'"
@@ -110,6 +115,8 @@ def Feature.describe : Feature → String
   | .trimStartEnd => "String.prototype.trimStart and trimEnd"
   | .stringPad => "String.prototype.padStart and padEnd"
   | .stringAt => "String.prototype.at"
+  | .stableSort => "a stable Array.prototype.sort"
+  | .arrayToSorted => "Array.prototype.toSorted"
 
 def Edition.supports (target : Edition) (f : Feature) : Bool := f.since.year ≤ target.year
 
