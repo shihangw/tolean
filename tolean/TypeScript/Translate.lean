@@ -1805,7 +1805,11 @@ expected. The type comes from the type arguments, or from the context, as in
 `const m: Map<K, V> = new Map()`, or else from `items`. -/
 def translateNew (tr : Option Ty → Expr → TM Code) (env : Env) (expected : Option Ty) (s : Span)
     (callee : String) (typeArgs : List TypeExpr) (args : List Expr) : TM Code := do
-  if callee == "Date" then translateNewDate tr env s args else
+  -- `Date` is not generic, so tsc refuses type arguments for it (TS2558).
+  if callee == "Date" then
+    if typeArgs.isEmpty then translateNewDate tr env s args
+    else reject s "new Date takes no type arguments"
+  else
   let isMap := callee == "Map"
   unless isMap || callee == "Set" do reject s "only new Date(t), new Map() and new Set() are supported"
   if env.has callee then reject s s!"a local named {callee} hides the global {callee}"

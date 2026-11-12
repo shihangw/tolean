@@ -3384,7 +3384,9 @@ theorem translateNew_sound {tr : Option Ty → Expr → TM Code} {env : Translat
   split at h
   · rename_i hc
     obtain rfl : callee = "Date" := by simpa using hc
-    exact translateNewDate_sound m fs fuel htr h
+    split at h
+    · exact translateNewDate_sound m fs fuel htr h
+    · simp at h
   simp only [ite_state] at h
   split at h
   rotate_left
