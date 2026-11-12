@@ -32,4 +32,10 @@ def ascending {N : Type} [JSNumber N] (xs : List Int) : List Int :=
 def names {N : Type} [JSNumber N] (xs : List JSString) : List JSString :=
   (JSNumber.sortWith (fun (a : JSString) (b : JSString) => (if (JSString.lt a b) then (JSNumber.neg ((JSNumber.ofSafeInt (N := N) (1 : Int)))) else (if (JSString.lt b a) then (JSNumber.ofSafeInt (N := N) (1 : Int)) else (JSNumber.ofSafeInt (N := N) (0 : Int))))) xs)
 
+def minusZero {N : Type} [JSNumber N] (xs : List Int) : List Int :=
+  (JSNumber.sortWith (fun (a : Int) (b : Int) => (if a < b then (JSNumber.neg ((JSNumber.ofSafeInt (N := N) (1 : Int)))) else (if a > b then (JSNumber.ofSafeInt (N := N) (1 : Int)) else (JSNumber.neg ((JSNumber.ofSafeInt (N := N) (0 : Int))))))) xs)
+
+def minusZeroChain {N : Type} [JSNumber N] (tasks : List (Task N)) : List (Task N) :=
+  (JSNumber.sortWith (fun (a : (Task N)) (b : (Task N)) => (if a.priority < b.priority then (JSNumber.neg ((JSNumber.ofSafeInt (N := N) (1 : Int)))) else (if a.priority > b.priority then (JSNumber.ofSafeInt (N := N) (1 : Int)) else (if (JSString.lt a.name b.name) then (JSNumber.neg ((JSNumber.ofSafeInt (N := N) (1 : Int)))) else (if (JSString.lt b.name a.name) then (JSNumber.ofSafeInt (N := N) (1 : Int)) else (JSNumber.neg ((JSNumber.ofSafeInt (N := N) (0 : Int))))))))) tasks)
+
 end Test

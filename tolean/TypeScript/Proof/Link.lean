@@ -561,7 +561,7 @@ macro_rules
       try simp only []
       repeat' split
       all_goals simp_all [tolean.TypeScript.compareSign_one, tolean.TypeScript.compareSign_zero,
-        tolean.TypeScript.compareSign_neg_one, compareLex, compareOn, Ordering.then,
+        tolean.TypeScript.compareSign_neg_one, tolean.TypeScript.compareSign_neg_zero, compareLex, compareOn, Ordering.then,
         tolean.TypeScript.JSString.compare_of_lt, tolean.TypeScript.JSString.compare_of_gt,
         tolean.TypeScript.JSString.compare_of_eq, tolean.TypeScript.Proof.int_compare_of_lt,
         tolean.TypeScript.Proof.int_compare_of_gt, tolean.TypeScript.Proof.int_compare_of_eq]))

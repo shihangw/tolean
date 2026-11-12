@@ -38,3 +38,13 @@ export function ascending(xs: ReadonlyArray<bigint>): bigint[] {
 export function names(xs: ReadonlyArray<string>): string[] {
   return xs.toSorted((a: string, b: string) => (a < b) ? -1 : (a > b) ? 1 : 0);
 }
+
+// `-0` in place of the last `0`, which JS reads as an equal pair too.
+export function minusZero(xs: ReadonlyArray<bigint>): bigint[] {
+  return xs.toSorted((a, b) => (a < b) ? -1 : (a > b) ? 1 : -0);
+}
+
+export function minusZeroChain(tasks: ReadonlyArray<Task>): Task[] {
+  return tasks.toSorted((a, b) =>
+    (a.priority < b.priority) ? -1 : (a.priority > b.priority) ? 1 : (a.name < b.name) ? -1 : (a.name > b.name) ? 1 : -0);
+}

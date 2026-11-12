@@ -688,7 +688,7 @@ def extras : List Group := [
     ``Proof.sliceList_dropLast, ``Proof.sliceList_neg]⟩,
   ⟨"Certificates: sorts", [``Proof.consistentOn_of_transCmp, ``Proof.sortValues_sortWith,
     ``Proof.int_compare_of_lt, ``Proof.int_compare_of_gt, ``Proof.int_compare_of_eq,
-    ``compareSign_one, ``compareSign_zero, ``compareSign_neg_one, ``JSString.instTransOrd,
+    ``compareSign_one, ``compareSign_zero, ``compareSign_neg_zero, ``compareSign_neg_one, ``JSString.instTransOrd,
     ``JSString.unitsLt_compare, ``JSString.compare_of_lt, ``JSString.compare_of_gt,
     ``JSString.compare_of_eq]⟩,
   ⟨"Recursion: the facts that Lean adds to the goal of a call in a callback, for the proof that a recursive function ends",

@@ -40,6 +40,13 @@ theorem compareSign_zero : compareSign (ofSafeInt (N := N) 0) = some .eq := by
   have h0 := SafeIntLaws.ofSafeInt (N := N) (i := 0) (by unfold InRange maxSafe; omega)
   simp [compareSign, SafeIntLaws.lt h0 h0, SafeIntLaws.eq h0 h0]
 
+/-- The sign of `-0`, which a comparator may give in place of `0`. -/
+theorem compareSign_neg_zero : compareSign (neg (ofSafeInt (N := N) 0)) = some .eq := by
+  have h0 := SafeIntLaws.ofSafeInt (N := N) (i := 0) (by unfold InRange maxSafe; omega)
+  have hn := SafeIntLaws.neg h0
+  simp only [Int.neg_zero] at hn
+  simp [compareSign, SafeIntLaws.lt hn h0, SafeIntLaws.lt h0 hn, SafeIntLaws.eq hn h0]
+
 /-- The sign of `-1`, which the translation writes as the negation of `1`. -/
 theorem compareSign_neg_one : compareSign (neg (ofSafeInt (N := N) 1)) = some .lt := by
   have h := SafeIntLaws.ofSafeInt (N := N) (i := 1) (by unfold InRange maxSafe; omega)
