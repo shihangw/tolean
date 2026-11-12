@@ -64,6 +64,10 @@ def NumberTest.apply : NumberTest → N → Bool
   | .isNaN, a => JSNumber.isNaN a
   | .isFinite, a => JSNumber.isFinite a
 
+def BigintOp.apply : BigintOp → Int → Int → Int
+  | .bitAnd => JSBigInt.bitAnd | .bitOr => JSBigInt.bitOr | .bitXor => JSBigInt.bitXor
+  | .shiftLeft => JSBigInt.shiftLeft | .shiftRight => JSBigInt.shiftRight
+
 /-- The string that ToString gives for one operand of `a + b` on strings. -/
 def StringPart.toStr : StringPart → Val N → Option JSString
   | .string, .str s => some s
@@ -95,6 +99,9 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   | .numberOp op, [.num a, .num b] => some (op.apply a b)
   | .numberNe, [.num a, .num b] => some (.bool !(JSNumber.eq a b))
   | .numberTest test, [.num a] => some (.bool (test.apply a))
+  | .bigintOp op, [.int a, .int b] => some (.int (op.apply a b))
+  | .bigintNot, [.int a] => some (.int (JSBigInt.bitNot a))
+  | .bigintPow k, [.int a] => some (.int (a ^ k))
   | .stringOrder le, [.str a, .str b] => some (.bool (if le then a.le b else a.lt b))
   | .stringLength, [.str s] => some (.num (JSNumber.ofSafeInt s.length))
   | .stringMethod method, .str s :: args => method.apply s args

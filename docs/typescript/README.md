@@ -459,6 +459,9 @@ the file, the line and the reason. It never approximates.
 | `s.indexOf(p)`, where `p` is a string | `JSNumber.ofSafeInt (N := N) (JSString.indexOf s p)`: the first index of `p` in code units, or -1. The empty string is at index 0. |
 | `a < b`, `a <= b`, `a > b` and `a >= b` on strings | `JSString.lt a b` and `JSString.le a b`, with the operands swapped for `>` and `>=`. JS compares strings by their UTF-16 code units (IsLessThan, ECMA-262 §7.2.13), not by their code points, so `"😀" < "\uFFFF"` is `true`. `JSString.lt_iff` states that `lt` is Lean's order on the lists of code units. |
 | `a / k`, `a % k` on `bigint`, where `k` is a nonzero literal | `Int.tdiv a k`, `Int.tmod a k` (both truncate toward zero, as JS does) |
+| `a ** k` on `bigint`, where `k` is a bigint literal | `a ^ (k : Nat)`. JS throws a `RangeError` when the exponent is negative, so the exponent must be a literal, which never is. |
+| `a & b`, `a \| b`, `a ^ b` and `~a` on `bigint` | `JSBigInt.bitAnd a b`, `JSBigInt.bitOr a b`, `JSBigInt.bitXor a b` and `JSBigInt.bitNot a` (`tolean/TypeScript/Spec/BigInt.lean`). JS applies them to the two's complement of each operand, with as many copies of the sign bit as it needs, so `-6n & 3n` is `2n`. Lean has no such operations on `Int`, so the model defines them from the ones on `Nat`. |
+| `a << n` and `a >> n` on `bigint` | `JSBigInt.shiftLeft a n` and `JSBigInt.shiftRight a n`. `a << n` is `a × 2^n`. A negative `n` shifts the other way, and a right shift rounds down, so `-5n >> 1n` is `-3n`. Tolean refuses `>>>`, because JS throws a `TypeError` for it on bigints. An engine throws a `RangeError` when a bigint gets too large for it, as `1n << (2n ** 40n)` does, and the model has no such limit, as for `*`. |
 | `{ a, b: e }` building a declared interface | structure instance |
 | `{ ...a, f: e }`, where `a` has an interface | `{ a with f := e }`. The spread keeps the keys of `a` in their order, and each property after it sets a required field in its place, so the object keeps the declared order. `{ ...a }` is `a`. |
 | Call to a function declared earlier in the file | application |
@@ -479,7 +482,10 @@ Tolean rejects these, among others:
 - `/` and `%` on `bigint`, unless the divisor is a nonzero literal. JS throws
   an error when the divisor is `0n`, but `Int.tdiv` returns 0.
   `tests/typescript/bigintDivision.test.ts` checks on random pairs that JS
-  `/` and `%` agree with `Int.tdiv` and `Int.tmod`.
+  `/` and `%` agree with `Int.tdiv` and `Int.tmod`, and
+  `tests/typescript/bigintBitwise.test.ts` checks the bitwise operators and
+  `**` in the same way.
+- `**` on `number`, because ECMA-262 lets the result differ between engines.
 - `===` on objects, because in JS it compares references. It also rejects
   `===` between nullable values.
 - `==` and `!=` anywhere except in a test against `null`. Between two other
@@ -783,6 +789,7 @@ tolean translate --target ES2022 input.ts Output.lean My.Namespace
   | object spread (`{ ...p }`) | ES2018 |
   | bigint (literals, type, `+ - *`, comparisons) | ES2020 |
   | bigint `/` and `%` (`BigInt::divide`, `BigInt::remainder`) | ES2020 |
+  | bigint `**` and the bitwise operators (`BigInt::exponentiate`, `BigInt::bitwiseAND` and the others) | ES2020 |
   | `??` | ES2020 |
   | `?.` | ES2020 |
   | `&&=`, `\|\|=`, `??=` | ES2021 |

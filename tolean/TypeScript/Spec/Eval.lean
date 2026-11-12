@@ -1,4 +1,5 @@
 import tolean.TypeScript.Syntax.Ast
+import tolean.TypeScript.Spec.BigInt
 import tolean.TypeScript.Spec.Number
 import tolean.TypeScript.Spec.String
 
@@ -234,7 +235,12 @@ is `b < a` and `a >= b` is `b <= a`, as `IsLessThan` evaluates them
 one operand of `+` is a string, `+` converts the other with ToString and
 joins the code units (ApplyStringOrNumericBinaryOperator, §13.15.3). The
 subset converts strings, bigints and booleans; ToString of a number is not
-modelled yet. The subset has no `/` or `%` on numbers. -/
+modelled yet. The subset has no `/` or `%` on numbers.
+
+On bigints, `a ** b` throws a `RangeError` when `b` is negative
+(BigInt::exponentiate, §6.1.6.2.3), and `&`, `|`, `^`, `<<` and `>>` are the
+operations of `JSBigInt` (`Spec/BigInt.lean`). `>>>` throws a `TypeError` on
+bigints, so it has no rule. -/
 def binary : BinOp → Val N → Val N → Option (Val N)
   | .add, .int a, .int b => some (.int (a + b))
   | .add, .str a, .str b => some (.str (a ++ b))
@@ -246,6 +252,12 @@ def binary : BinOp → Val N → Val N → Option (Val N)
   | .mul, .int a, .int b => some (.int (a * b))
   | .div, .int a, .int b => if b == 0 then none else some (.int (a.tdiv b))
   | .mod, .int a, .int b => if b == 0 then none else some (.int (a.tmod b))
+  | .exp, .int a, .int b => if b < 0 then none else some (.int (a ^ b.toNat))
+  | .bitAnd, .int a, .int b => some (.int (JSBigInt.bitAnd a b))
+  | .bitOr, .int a, .int b => some (.int (JSBigInt.bitOr a b))
+  | .bitXor, .int a, .int b => some (.int (JSBigInt.bitXor a b))
+  | .shl, .int a, .int b => some (.int (JSBigInt.shiftLeft a b))
+  | .shr, .int a, .int b => some (.int (JSBigInt.shiftRight a b))
   | .lt, .int a, .int b => some (.bool (decide (a < b)))
   | .gt, .int a, .int b => some (.bool (decide (a > b)))
   | .le, .int a, .int b => some (.bool (decide (a ≤ b)))
@@ -748,6 +760,11 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     match ← eval m fuel env arg with
     | .int i => some (.int (-i))
     | .num n => some (.num (JSNumber.neg n))
+    | _ => none
+  -- `~a` on a bigint is `-a - 1` (BigInt::bitwiseNOT, §6.1.6.2.2).
+  | .unary _ .bitNot arg => do
+    match ← eval m fuel env arg with
+    | .int i => some (.int (JSBigInt.bitNot i))
     | _ => none
   -- `&&`, `||` and `??` evaluate their right side only when they need it
   -- (ECMA-262 §13.13.1), and return an operand, not a boolean.

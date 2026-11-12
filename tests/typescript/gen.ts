@@ -231,6 +231,18 @@ export class Gen {
         if (t.k === 'bigint') {
           // Both translators accept a nonzero literal divisor only.
           options.push(() => `${this.expr(t, vars, d)} ${this.pick(['/', '%'])} ${this.pick(['2n', '-3n', '(7n)', '-(5n)', '0n', this.expr(t, vars, 0)])}`);
+          // The bitwise operators, and `**` with a literal exponent, which
+          // both translators require. The base is in parentheses, because
+          // `-a ** 2n` is a syntax error. A shift count and an exponent stay
+          // small, so that the values do too: JS throws a RangeError when a
+          // bigint gets too large, and Lean panics. So the shift is in
+          // parentheses too, or `a >> -2n - b` would shift by `-2n - b`.
+          options.push(
+            () => `${this.expr(t, vars, d)} ${this.pick(['&', '|', '^'])} ${this.expr(t, vars, d)}`,
+            () => `~${this.expr(t, vars, d)}`,
+            () => `((${this.expr(t, vars, d)}) ** ${this.pick(['0n', '2n', '(3n)', '-1n'])})`,
+            () => `(${this.expr(t, vars, d)} ${this.pick(['<<', '>>'])} ${this.pick(['1n', '-2n', '(5n)', '70n', `(${this.expr(t, vars, 0)} & 7n)`])})`,
+          );
         }
         break;
       case 'boolean': {
