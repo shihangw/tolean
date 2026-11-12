@@ -152,9 +152,7 @@ This is the borrow that Aeneas uses for Rust. It is sound here only
 because the translator checks that the caller owns the map and holds no other
 name for it during the call. The spec's call rule now gives no value for a
 function that changes a parameter (`Stmt.ownsChanges`), so the borrow must
-also give the spec this meaning: the call copies the map in and back out. Key equality is SameValueZero. For `string` and
-`bigint` keys that is Lean's equality. For `number` keys it is Lean's
-equality only when no key is `NaN` or `-0`.
+also give the spec this meaning: the call copies the map in and back out.
 
 One certificate gap is left. The initial value of a `reduce` can read a map
 or a set that `new Map(items)` or `new Set(items)` makes from a parameter,
