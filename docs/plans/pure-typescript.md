@@ -129,7 +129,7 @@ of a literal as a Lean `String`.
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| Template literals whose parts are `string`, `boolean`, `bigint` or a safe integer `number`, and `+` on a string and a safe integer `number` | `++` on `JSString`, as `+` on strings is now. A number converts to ASCII digits (§6.1.6.1.20). | A part that is a non-integer `number` or an object |
+| Template literals whose parts are `string`, `number`, `bigint` or `boolean` | `++` on `JSString`, with the conversions that `+` on a string uses now | A part that is an object, which JS converts with its `toString` method |
 | A number argument of `at`, `slice`, `padStart`, `padEnd`, `startsWith`, `endsWith`, `includes`, `indexOf` or `split` that is not an integer literal | `ToIntegerOrInfinity` on the argument, then the function on code units that a literal gets now. It needs `Math.trunc` from the numbers stage, as `xs.at(i)` does. | `split` with a regular expression, and every regular expression in the first version |
 
 ### Maps and sets
@@ -224,7 +224,7 @@ leaves a gap.
 7. **P0.** Local functions that change variables of the enclosing function, by
    lifting them out and threading the variables through each call.
 8. **P0.** The borrow for a map that a caller passes in.
-9. **P1.** Strings: template literals, and `+` on a string and a number.
+9. **P1.** Strings: template literals.
 10. **P1.** Sorting: certificates for a sort by a `number` key.
 11. **P2.** Recursion: tagged unions that refer to themselves first, then
     `@decreases`, mutual recursion, and `while` loops.

@@ -69,6 +69,7 @@ def StringPart.toStr : StringPart → Val N → Option JSString
   | .string, .str s => some s
   | .bigint, .int i => some (JSString.ofInt i)
   | .boolean, .bool b => some (JSString.ofBool b)
+  | .number, .num n => some (JSNumber.toStr n)
   | _, _ => none
 
 /-- A method of a string, on the string, the values of its arguments, and the

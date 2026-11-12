@@ -304,7 +304,7 @@ export class Gen {
         // with ToString. The operands are in parentheses, so that a
         // conditional inside one does not take the `+` into its test.
         options.push(() => {
-          const other = this.expr(this.pick([STRING, BIGINT, BOOLEAN]), vars, d);
+          const other = this.expr(this.pick([STRING, NUMBER, BIGINT, BOOLEAN]), vars, d);
           const s = this.expr(STRING, vars, d);
           return this.chance(0.5) ? `(${s}) + (${other})` : `(${other}) + (${s})`;
         });
