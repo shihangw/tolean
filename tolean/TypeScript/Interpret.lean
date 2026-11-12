@@ -62,8 +62,26 @@ def jsMax (a b : Float) : Float :=
   else if a == 0 && b == 0 then (if isNegZero a then b else a)
   else if a > b then a else b
 
+/-- The integer that a finite double is after its fraction is dropped, read
+exactly from its bits: the significand times a power of two, toward zero.
+`Float.toInt64` would saturate past 2^63, where JS keeps every bit. -/
+def jsToInt (x : Float) : Option Int :=
+  if !x.isFinite then none
+  else
+    let bits := x.toBits
+    let exp := ((bits >>> 52) &&& 0x7FF).toNat
+    let frac := (bits &&& 0xFFFFFFFFFFFFF).toNat
+    -- A subnormal double is less than 1, so its integer part is 0.
+    if exp == 0 then some 0
+    else
+      let m := frac + 2 ^ 52
+      let magnitude : Nat :=
+        if exp ≥ 1075 then m * 2 ^ (exp - 1075) else m / 2 ^ (1075 - exp)
+      some (if bits >>> 63 == 1 then -(magnitude : Int) else magnitude)
+
 /-- JS numbers as Lean's IEEE 754 doubles. -/
 instance : JSNumber Float where
+  toInt := jsToInt
   add := Float.add
   sub := Float.sub
   mul := Float.mul

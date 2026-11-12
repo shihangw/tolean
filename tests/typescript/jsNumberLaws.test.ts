@@ -199,6 +199,19 @@ const CHECKS: Record<string, { statement: string; check: () => void }> = {
     statement: `${BINARY} toSafeInt (max a b) = some (Max.max i j)`,
     check: exactBinary(Math.max, (i, j) => (i > j ? i : j)),
   },
+  toInt: {
+    statement: `${UNARY} toInt a = some i`,
+    // The integer part of a safe integer is itself, and ToInt32 sees it:
+    // `x | 0` is the integer modulo 2^32, as a signed 32-bit integer.
+    check: () =>
+      fc.assert(
+        fc.property(safeInteger, (a) => {
+          expect(BigInt(Math.trunc(a))).toBe(BigInt(a));
+          expect(BigInt(a | 0)).toBe(BigInt.asIntN(32, BigInt(a)));
+        }),
+        RUNS,
+      ),
+  },
   lt: {
     statement: `${BINARY} lt a b = decide (i < j)`,
     check: agrees(
@@ -349,6 +362,11 @@ const SPECIAL_VALUE_CHECKS: Record<
     statement:
       '∀ {a b : N}, isNaN a = true → isNaN (max a b) = true ∧ isNaN (max b a) = true',
     check: withNaN((nan, b) => Number.isNaN(Math.max(nan, b)) && Number.isNaN(Math.max(b, nan))),
+  },
+  toInt_not_finite: {
+    statement: '∀ {a : N}, isFinite a = false → toInt a = none',
+    // ToInt32 reads `NaN` and `±Infinity` as 0, as it reads `none`.
+    check: always((a) => Number.isFinite(a) || (a | 0) === 0),
   },
   isNaN_nan: {
     statement: 'isNaN (nan (N := N)) = true',

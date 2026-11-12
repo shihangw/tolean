@@ -167,9 +167,8 @@ should refuse such an initial value.
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| `**` on `bigint` (§6.1.6.2.3) whose exponent is not a literal | `a ^ b.toNat`, after a check that `b` is not negative, which needs the `Except` from the errors stage because JS throws a `RangeError` there | `>>>`, because it throws on a `bigint` |
+| `**` on `bigint` (§6.1.6.2.3) whose exponent is not a literal | `a ^ b.toNat`, after a check that `b` is not negative, which needs the `Except` from the errors stage because JS throws a `RangeError` there | `>>>` on a `bigint`, because it throws |
 | `BigInt(n)` (§21.2.1.1) and `Number(b)` (§21.1.1.1) | Conversions. `BigInt(n)` throws a `RangeError` when `n` is not an integer, so it uses the `Except` from the errors stage. | `Number(b)` on a `bigint` that is not a safe integer, until the model rounds to the nearest double |
-| The bitwise operators on `number` | `ToInt32` (§7.1.6) and the operation on 32-bit integers | |
 | `Object.is` (§20.1.2.15) | SameValue (§7.2.10), which tells `NaN` and `-0` apart | |
 | `new Date(t).toISOString()`, `Date.UTC`, `getTime`, and the UTC getters | A model of the time value (§21.4.1) | Local-time getters, setters, and `Date.now()` |
 | `Date.parse(s)` | Only when the translator can show that `s` is in the Date Time String Format (§21.4.1.32) | Any other string, because the spec leaves its result to the engine |

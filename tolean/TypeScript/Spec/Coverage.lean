@@ -101,7 +101,7 @@ def sections : List Section := [
     [``JSString.ofString_inj, ``JSString.toString_ofString, ``JSString.decode_flatMap_utf16]⟩,
   ⟨"sec-ecmascript-language-types-number-type", "6.1.6.1", "The Number Type",
     [``eq_refl_of_safe, ``le_refl_of_safe, ``lt_irrefl_of_safe, ``eq_self_eq_not_isNaN,
-    ``eq_posInf_posInf, ``eq_negInf_negInf, ``isNaN_eq_false_of_safe]⟩,
+    ``eq_posInf_posInf, ``eq_negInf_negInf, ``isNaN_eq_false_of_safe, ``toInt32_of_safe]⟩,
   ⟨"sec-ecmascript-language-types-bigint-type", "6.1.6.2", "The BigInt Type", []⟩,
   -- §7 Abstract Operations {#sec-abstract-operations}
   ⟨"sec-toboolean", "7.1.2", "ToBoolean", []⟩,
@@ -364,7 +364,7 @@ def numberLaws : List Name := [``SafeIntLaws.add,
     ``SafeIntLaws.min, ``SafeIntLaws.max, ``SpecialValueLaws.nan_div,
     ``SpecialValueLaws.nan_floor, ``SpecialValueLaws.nan_ceil, ``SpecialValueLaws.nan_trunc,
     ``SpecialValueLaws.nan_round, ``SpecialValueLaws.nan_abs, ``SpecialValueLaws.nan_min,
-    ``SpecialValueLaws.nan_max]
+    ``SpecialValueLaws.nan_max, ``SafeIntLaws.toInt, ``SpecialValueLaws.toInt_not_finite]
 
 /-- The theorems that are about no section of ECMA-262. -/
 def extras : List Group := [

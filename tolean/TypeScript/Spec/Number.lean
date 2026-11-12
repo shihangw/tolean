@@ -30,6 +30,8 @@ results it leaves to the engine.
 Engines: the laws pass on each engine in `engines` in `flake.nix`
 (`nix run .#test-engines`).
 -/
+import tolean.TypeScript.Spec.BigInt
+
 namespace tolean.TypeScript
 
 /-- `Number.MAX_SAFE_INTEGER`, 2⁵³ − 1. -/
@@ -63,6 +65,11 @@ class JSNumber (N : Type) where
   min : N → N → N
   /-- `Math.max(a, b)` (§21.3.2.24) -/
   max : N → N → N
+  /-- The integer that `x` is after its fraction is dropped, when `x` is
+  finite, and `none` for `NaN` and `±Infinity`: truncate(ℝ(x)), which
+  ToInt32 (§7.1.6) starts from. A double is a fraction with a power of two
+  below it, so this integer is exact, however large `x` is. -/
+  toInt : N → Option Int
   /-- `a < b` -/
   lt : N → N → Bool
   /-- `a <= b` -/
@@ -98,6 +105,51 @@ def JSNumber.maximum {N : Type} [JSNumber N] (xs : List N) : N := xs.foldl max n
 /-- `Number.isInteger(x)` (§21.1.2.3): IsIntegralNumber (§7.2.6), which holds
 when `x` is finite and its truncation is `x`. -/
 def JSNumber.isInteger {N : Type} [JSNumber N] (x : N) : Bool := isFinite x && eq (trunc x) x
+
+/-- The integer in `[-2^31, 2^31)` that is `i` modulo 2^32. -/
+def wrapInt32 (i : Int) : Int :=
+  let b := i % 4294967296
+  if b ≥ 2147483648 then b - 4294967296 else b
+
+/-- ToInt32 (§7.1.6): `NaN`, `±Infinity` and `±0` are `0`, and any other
+number is its integer part modulo 2^32, as a signed 32-bit integer. -/
+def JSNumber.toInt32 {N : Type} [JSNumber N] (x : N) : Int := wrapInt32 ((toInt x).getD 0)
+
+/-- ToUint32 (§7.1.7): the same, as an unsigned 32-bit integer. -/
+def JSNumber.toUint32 {N : Type} [JSNumber N] (x : N) : Int := ((toInt x).getD 0) % 4294967296
+
+/-- `a & b` on numbers (Number::bitwiseAND, §6.1.6.1.17): the operation on
+the two's complement of ToInt32 of each, which `JSBigInt.bitAnd` is for
+integers of that range. The result is a 32-bit integer, so it is safe. -/
+def JSNumber.bitAnd {N : Type} [JSNumber N] (a b : N) : N :=
+  ofSafeInt (JSBigInt.bitAnd (toInt32 a) (toInt32 b))
+
+/-- `a | b` on numbers (Number::bitwiseOR, §6.1.6.1.19). -/
+def JSNumber.bitOr {N : Type} [JSNumber N] (a b : N) : N :=
+  ofSafeInt (JSBigInt.bitOr (toInt32 a) (toInt32 b))
+
+/-- `a ^ b` on numbers (Number::bitwiseXOR, §6.1.6.1.18). -/
+def JSNumber.bitXor {N : Type} [JSNumber N] (a b : N) : N :=
+  ofSafeInt (JSBigInt.bitXor (toInt32 a) (toInt32 b))
+
+/-- `~a` on a number (Number::bitwiseNOT, §6.1.6.1.2): `-x - 1` for `x` the
+ToInt32 of `a`, which stays a 32-bit integer. -/
+def JSNumber.bitNot {N : Type} [JSNumber N] (a : N) : N := ofSafeInt (JSBigInt.bitNot (toInt32 a))
+
+/-- `a << b` on numbers (Number::leftShift, §6.1.6.1.9): ToInt32 of `a`,
+shifted left by ToUint32 of `b` modulo 32, as a signed 32-bit integer. -/
+def JSNumber.shiftLeft {N : Type} [JSNumber N] (a b : N) : N :=
+  ofSafeInt (wrapInt32 (toInt32 a * 2 ^ (toUint32 b % 32).toNat))
+
+/-- `a >> b` on numbers (Number::signedRightShift, §6.1.6.1.10): ToInt32 of
+`a`, shifted right with copies of its sign bit, which rounds down. -/
+def JSNumber.shiftRight {N : Type} [JSNumber N] (a b : N) : N :=
+  ofSafeInt (toInt32 a >>> (toUint32 b % 32).toNat)
+
+/-- `a >>> b` on numbers (Number::unsignedRightShift, §6.1.6.1.11): ToUint32
+of `a`, shifted right with zeros. -/
+def JSNumber.unsignedShiftRight {N : Type} [JSNumber N] (a b : N) : N :=
+  ofSafeInt (toUint32 a >>> (toUint32 b % 32).toNat)
 
 /-- SameValueZero (ECMA-262 §7.2.11) on numbers: `===`, except that `NaN` is
 the same as `NaN`. `Array.prototype.includes` compares with it. -/
@@ -176,6 +228,7 @@ class SafeIntLaws (N : Type) [JSNumber N] : Prop where
     toSafeInt (min a b) = some (Min.min i j)
   max : ∀ {a b : N} {i j : Int}, toSafeInt a = some i → toSafeInt b = some j →
     toSafeInt (max a b) = some (Max.max i j)
+  toInt : ∀ {a : N} {i : Int}, toSafeInt a = some i → toInt a = some i
   lt : ∀ {a b : N} {i j : Int}, toSafeInt a = some i → toSafeInt b = some j →
     lt a b = decide (i < j)
   le : ∀ {a b : N} {i j : Int}, toSafeInt a = some i → toSafeInt b = some j →
@@ -201,6 +254,7 @@ class SpecialValueLaws (N : Type) [JSNumber N] : Prop where
   nan_abs : ∀ {a : N}, isNaN a = true → isNaN (abs a) = true
   nan_min : ∀ {a b : N}, isNaN a = true → isNaN (min a b) = true ∧ isNaN (min b a) = true
   nan_max : ∀ {a b : N}, isNaN a = true → isNaN (max a b) = true ∧ isNaN (max b a) = true
+  toInt_not_finite : ∀ {a : N}, isFinite a = false → toInt a = none
   isNaN_nan : isNaN (nan (N := N)) = true
   isNaN_posInf : isNaN (posInf (N := N)) = false
   isNaN_negInf : isNaN (negInf (N := N)) = false

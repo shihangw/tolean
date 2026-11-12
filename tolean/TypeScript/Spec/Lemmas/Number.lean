@@ -29,6 +29,13 @@ variable [SafeIntLaws N]
     lt a a = false := by
   simp [SafeIntLaws.lt h h]
 
+/-- ToInt32 of a safe integer that a signed 32-bit integer can hold is that
+integer, so `x | 0` leaves it as it is. -/
+theorem toInt32_of_safe {a : N} {i : Int} (h : toSafeInt a = some i)
+    (hlo : -2147483648 ≤ i) (hhi : i < 2147483648) : JSNumber.toInt32 a = i := by
+  simp only [JSNumber.toInt32, SafeIntLaws.toInt h, Option.getD_some, wrapInt32]
+  split <;> omega
+
 /-- The sign of `1`, as a sort reads the value of a comparator. -/
 theorem compareSign_one : compareSign (ofSafeInt (N := N) 1) = some .gt := by
   have h := SafeIntLaws.ofSafeInt (N := N) (i := 1) (by unfold InRange maxSafe; omega)

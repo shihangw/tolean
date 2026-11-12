@@ -196,6 +196,9 @@ export class Gen {
           options.push(
             () => `${this.expr(t, vars, d)} / ${this.expr(t, vars, d)}`,
             () => `Math.${this.pick(['floor', 'ceil', 'trunc', 'round', 'abs'])}(${this.expr(t, vars, d)})`,
+            // The bitwise operators, on ToInt32 and ToUint32 of each operand.
+            () => `(${this.expr(t, vars, d)} ${this.pick(['&', '|', '^', '<<', '>>', '>>>'])} ${this.expr(t, vars, d)})`,
+            () => `~${this.expr(t, vars, d)}`,
             () => {
               const count = this.pick([0, 1, 2, 3]);
               const args = Array.from({ length: count }, () => this.expr(t, vars, d));
