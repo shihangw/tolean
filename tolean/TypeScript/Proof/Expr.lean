@@ -93,7 +93,9 @@ theorem checkThrowingCall_ok {sp : Span} {name : String} {fn : FnInfo} {top : Bo
     (h : checkThrowingCall sp name fn top s = .ok u s') : s' = s := by
   simp only [checkThrowingCall, ite_state] at h
   split at h
-  · simp at h
+  · simp only [bind_ok, get_ok] at h
+    obtain ⟨_, _, ⟨rfl, rfl⟩, h⟩ := h
+    split at h <;> exact absurd h (reject_ne_ok _ _ _ _ _)
   · simp only [pure_ok] at h; exact h.2.symm
 
 end Monad

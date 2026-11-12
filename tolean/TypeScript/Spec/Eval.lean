@@ -468,11 +468,374 @@ def sliceList {α : Type} (items : List α) (start : Int) (stop : Option Int) : 
     | none => items.length
   (items.drop k).take (final - k)
 
-/-- The functions of the module, by name. -/
-def functions (m : Module) : List (String × List String × Stmt) :=
-  m.decls.filterMap fun
-    | .function _ _ name _ params _ body => some (name, params.map (·.name), body)
+/-! ### Calls that can throw inside larger expressions
+
+JS evaluates the operands of an expression in order, and a call that throws
+ends the statement at once (ECMA-262 §13.15.2 and §13.3.6.1, and the
+completion records of §6.2.4). The model rewrites each statement so that such
+a call stands on its own: `const r0' = f(x)` before the statement, which then
+reads `r0'` in its place. Every operand that JS evaluates before the call
+moves out the same way, so the rewritten statements run the same operations
+in the same order as the source. A statement whose whole value is a call
+keeps it, because the statement already passes what the call throws on.
+
+The translator rewrites a function body with the same function before it
+translates it, so the body it translates is the body the model runs. Which
+calls move depends on which functions can throw, and the model decides that
+from the module alone (`mayThrow`): a function whose body has a `throw`, or
+calls a function of the module that can throw, can throw. A name that the
+module does not declare as a function, such as an imported function, does
+not count, so a call of it stays where it is. The translator then refuses
+such a call inside a larger expression when the function can throw.
+
+JS has no `'` in a name, so no hoisted name hides a name of the source. -/
+
+/-- The name of the `k`-th value that a function body hoists: `r0'`, `r1'`, … -/
+def hoistName (k : Nat) : String := s!"r{k}'"
+
+mutual
+
+/-- The names of the functions that `e` calls, anywhere in it. -/
+def Expr.callNames : Expr → List String
+  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => []
+  | .array _ es => Expr.callNamesList es
+  | .object _ ps => Property.callNamesList ps
+  | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e
+  | .spread _ e | .asConst _ e | .satisfies _ e _ => Expr.callNames e
+  | .index _ a b | .binary _ _ a b | .assign _ _ a b => Expr.callNames a ++ Expr.callNames b
+  | .call _ (.ident _ name) args => name :: Expr.callNamesList args
+  | .call _ c args => Expr.callNames c ++ Expr.callNamesList args
+  | .cond _ a b c => Expr.callNames a ++ Expr.callNames b ++ Expr.callNames c
+  | .arrow _ _ _ body => Expr.callNames body
+  | .new _ _ _ args => Expr.callNamesList args
+
+def Expr.callNamesList : List Expr → List String
+  | [] => []
+  | e :: es => Expr.callNames e ++ Expr.callNamesList es
+
+def Property.callNamesList : List Property → List String
+  | [] => []
+  | .shorthand .. :: ps => Property.callNamesList ps
+  | .keyValue _ _ v :: ps | .spread _ v :: ps => Expr.callNames v ++ Property.callNamesList ps
+
+end
+
+mutual
+
+/-- The names of the functions that `s` calls, anywhere in it. -/
+def Stmt.callNames : Stmt → List String
+  | .varDecl _ { init := some e, .. } | .destructure _ _ _ _ e | .exprStmt _ e | .returnStmt _ (some e)
+  | .throwStmt _ e => Expr.callNames e
+  | .varDecl _ { init := none, .. } | .returnStmt _ none | .breakStmt _ | .continueStmt _ | .empty _ => []
+  | .ifStmt _ t a (some b) => Expr.callNames t ++ Stmt.callNames a ++ Stmt.callNames b
+  | .ifStmt _ t a none => Expr.callNames t ++ Stmt.callNames a
+  | .forOfStmt _ _ _ e body | .forOfPattern _ _ _ e body | .whileStmt _ e body => Expr.callNames e ++ Stmt.callNames body
+  | .forStmt _ init test update body =>
+    (init.bind (·.init)).elim [] Expr.callNames ++ test.elim [] Expr.callNames ++
+      update.elim [] Expr.callNames ++ Stmt.callNames body
+  | .block _ ss => Stmt.callNamesList ss
+  | .switchStmt _ d cs => Expr.callNames d ++ Stmt.callNamesClauses cs
+
+def Stmt.callNamesList : List Stmt → List String
+  | [] => []
+  | s :: ss => Stmt.callNames s ++ Stmt.callNamesList ss
+
+def Stmt.callNamesClauses : List (Option Expr × List Stmt) → List String
+  | [] => []
+  | (t, ss) :: cs => t.elim [] Expr.callNames ++ Stmt.callNamesList ss ++ Stmt.callNamesClauses cs
+
+end
+
+mutual
+
+/-- `s` holds a `throw` statement. -/
+def Stmt.hasThrow : Stmt → Bool
+  | .throwStmt .. => true
+  | .ifStmt _ _ a (some b) => Stmt.hasThrow a || Stmt.hasThrow b
+  | .ifStmt _ _ a none => Stmt.hasThrow a
+  | .forOfStmt _ _ _ _ body | .forOfPattern _ _ _ _ body | .forStmt _ _ _ _ body | .whileStmt _ _ body =>
+    Stmt.hasThrow body
+  | .block _ ss => Stmt.hasThrowList ss
+  | .switchStmt _ _ cs => Stmt.hasThrowClauses cs
+  | .varDecl .. | .destructure .. | .exprStmt .. | .returnStmt .. | .breakStmt _ | .continueStmt _
+  | .empty _ => false
+
+def Stmt.hasThrowList : List Stmt → Bool
+  | [] => false
+  | s :: ss => Stmt.hasThrow s || Stmt.hasThrowList ss
+
+def Stmt.hasThrowClauses : List (Option Expr × List Stmt) → Bool
+  | [] => false
+  | (_, ss) :: cs => Stmt.hasThrowList ss || Stmt.hasThrowClauses cs
+
+end
+
+/-- The body of the function `name` of `m`, if `m` declares one. -/
+def functionBody (m : Module) (name : String) : Option Stmt :=
+  m.decls.findSome? fun
+    | .function _ _ n _ _ _ body => if n == name then some body else none
     | _ => none
+
+/-- `name` is a function of `m` that can throw, as far as `fuel` calls deep:
+its body has a `throw`, or calls a function of `m` that can throw. -/
+def mayThrowIn (m : Module) : Nat → String → Bool
+  | 0, _ => false
+  | fuel + 1, name =>
+    match functionBody m name with
+    | none => false
+    | some body => Stmt.hasThrow body || (Stmt.callNames body).any (mayThrowIn m fuel)
+
+/-- `name`, called from `m`, is a function that can throw. A chain of calls
+through the functions of `m` is at most as long as the module, so that many
+steps decide it. -/
+def mayThrow (m : Module) (name : String) : Bool := mayThrowIn m (m.decls.length + 1) name
+
+/-- `e` is a name or a literal, which hoisting would only rename. -/
+def Expr.isAtom : Expr → Bool
+  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => true
+  | _ => false
+
+mutual
+
+/-- `e` holds a call of a function that `thr` says can throw, in a place that
+JS evaluates whenever it evaluates `e`. A call in a branch of `?:`, after
+`&&`, `||` or `??`, or in an arrow function may not run, so it stays where
+it is. -/
+def Expr.hoists (thr : String → Bool) : Expr → Bool
+  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .arrow .. => false
+  | .array _ es => Expr.hoistsList thr es
+  | .object _ ps => Property.hoistsList thr ps
+  | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e
+  | .spread _ e | .asConst _ e | .satisfies _ e _ => Expr.hoists thr e
+  | .index _ a b | .assign _ _ a b => Expr.hoists thr a || Expr.hoists thr b
+  | .binary _ .and a _ | .binary _ .or a _ | .binary _ .coalesce a _ => Expr.hoists thr a
+  | .binary _ _ a b => Expr.hoists thr a || Expr.hoists thr b
+  | .call _ (.ident _ name) args => thr name || Expr.hoistsList thr args
+  | .call _ c args => Expr.hoists thr c || Expr.hoistsList thr args
+  | .cond _ t _ _ => Expr.hoists thr t
+  | .new _ _ _ args => Expr.hoistsList thr args
+
+def Expr.hoistsList (thr : String → Bool) : List Expr → Bool
+  | [] => false
+  | e :: es => Expr.hoists thr e || Expr.hoistsList thr es
+
+def Property.hoistsList (thr : String → Bool) : List Property → Bool
+  | [] => false
+  | .shorthand .. :: ps => Property.hoistsList thr ps
+  | .keyValue _ _ v :: ps | .spread _ v :: ps => Expr.hoists thr v || Property.hoistsList thr ps
+
+end
+
+/-- What hoisting has produced so far: the declarations to put before the
+statement, in order, and the number of the next name. -/
+structure Hoisted where
+  decls : List Stmt
+  next : Nat
+
+/-- Bind `e` to a fresh name before the statement, and read the name in its
+place. An atom stays as it is. -/
+def Hoisted.bind (h : Hoisted) (e : Expr) : Expr × Hoisted :=
+  if Expr.isAtom e then (e, h) else
+    let name := hoistName h.next
+    (.ident (Expr.span e) name,
+      { decls := h.decls ++ [.varDecl (Expr.span e) { kind := .const, name, type := none, init := some e }],
+        next := h.next + 1 })
+
+/-- An operand that JS evaluates before a call that can throw, after its own
+calls have moved out: it moves out whole, so that it still runs before them.
+An arrow function stays, and a spread moves its value. -/
+def Hoisted.bindOperand (h : Hoisted) : Expr → Expr × Hoisted
+  | .arrow s p ps body => (.arrow s p ps body, h)
+  | .spread s e => let (e', h) := h.bind e; (.spread s e', h)
+  | e => h.bind e
+
+mutual
+
+/-- Hoist the calls out of `e` that `thr` says can throw: each moves to a
+declaration before the statement, with every operand that JS evaluates
+before it, and `e` reads the names in their place. -/
+def Expr.hoist (thr : String → Bool) (h : Hoisted) : Expr → Expr × Hoisted
+  | .call s (.ident sn name) args =>
+    let (args', h) := Expr.hoistOperands thr h args
+    if thr name then h.bind (.call s (.ident sn name) args') else (.call s (.ident sn name) args', h)
+  | .call s (.member ms recv mname) args =>
+    -- The receiver of a method is evaluated before the arguments.
+    let (recv', h) := Expr.hoist thr h recv
+    let (recv', h) := if Expr.hoistsList thr args then h.bindOperand recv' else (recv', h)
+    let (args', h) := Expr.hoistOperands thr h args
+    (.call s (.member ms recv' mname) args', h)
+  | .call s c args =>
+    let (c', h) := Expr.hoist thr h c
+    let (args', h) := Expr.hoistOperands thr h args
+    (.call s c' args', h)
+  | .array s es => let (es', h) := Expr.hoistOperands thr h es; (.array s es', h)
+  | .object s ps => let (ps', h) := Property.hoistOperands thr h ps; (.object s ps', h)
+  | .paren s e => let (e', h) := Expr.hoist thr h e; (.paren s e', h)
+  | .member s e n => let (e', h) := Expr.hoist thr h e; (.member s e' n, h)
+  | .optMember s e n => let (e', h) := Expr.hoist thr h e; (.optMember s e' n, h)
+  | .unary s op e => let (e', h) := Expr.hoist thr h e; (.unary s op e', h)
+  | .spread s e => let (e', h) := Expr.hoist thr h e; (.spread s e', h)
+  | .asConst s e => let (e', h) := Expr.hoist thr h e; (.asConst s e', h)
+  | .satisfies s e t => let (e', h) := Expr.hoist thr h e; (.satisfies s e' t, h)
+  | .index s a b =>
+    let (a', h) := Expr.hoist thr h a
+    let (a', h) := if Expr.hoists thr b then h.bindOperand a' else (a', h)
+    let (b', h) := Expr.hoist thr h b
+    (.index s a' b', h)
+  | .binary s .and a b => let (a', h) := Expr.hoist thr h a; (.binary s .and a' b, h)
+  | .binary s .or a b => let (a', h) := Expr.hoist thr h a; (.binary s .or a' b, h)
+  | .binary s .coalesce a b => let (a', h) := Expr.hoist thr h a; (.binary s .coalesce a' b, h)
+  | .binary s op a b =>
+    let (a', h) := Expr.hoist thr h a
+    let (a', h) := if Expr.hoists thr b then h.bindOperand a' else (a', h)
+    let (b', h) := Expr.hoist thr h b
+    (.binary s op a' b', h)
+  | .assign s op target value => let (v', h) := Expr.hoist thr h value; (.assign s op target v', h)
+  | .cond s t a b => let (t', h) := Expr.hoist thr h t; (.cond s t' a b, h)
+  | .new s c ts args => let (args', h) := Expr.hoistOperands thr h args; (.new s c ts args', h)
+  | e => (e, h)
+termination_by structural e => e
+
+/-- Hoist the calls out of operands that JS evaluates in order. An operand
+before the last one that holds such a call moves out whole, after its own
+calls, so that it still runs before them. -/
+def Expr.hoistOperands (thr : String → Bool) (h : Hoisted) : List Expr → List Expr × Hoisted
+  | [] => ([], h)
+  | e :: es =>
+    let (e', h) := Expr.hoist thr h e
+    let (e', h) := if Expr.hoistsList thr es then h.bindOperand e' else (e', h)
+    let (es', h) := Expr.hoistOperands thr h es
+    (e' :: es', h)
+termination_by structural es => es
+
+/-- The values of the properties of an object literal, in order. -/
+def Property.hoistOperands (thr : String → Bool) (h : Hoisted) : List Property → List Property × Hoisted
+  | [] => ([], h)
+  | p :: ps =>
+    let later := Property.hoistsList thr ps
+    let (p', h) := match p with
+      | .shorthand s n => (Property.shorthand s n, h)
+      | .keyValue s k v =>
+        let (v', h) := Expr.hoist thr h v
+        let (v', h) := if later then h.bindOperand v' else (v', h)
+        (Property.keyValue s k v', h)
+      | .spread s v =>
+        let (v', h) := Expr.hoist thr h v
+        let (v', h) := if later then h.bindOperand v' else (v', h)
+        (Property.spread s v', h)
+    let (ps', h) := Property.hoistOperands thr h ps
+    (p' :: ps', h)
+termination_by structural ps => ps
+
+end
+
+/-- Hoist the calls out of the value of a statement. A value that is itself
+a call keeps it, after the calls in its arguments, because the statement
+passes what the call throws on. -/
+def Expr.hoistValue (thr : String → Bool) (h : Hoisted) : Expr → Expr × Hoisted
+  | .call s (.ident sn name) args =>
+    let (args', h) := Expr.hoistOperands thr h args
+    (.call s (.ident sn name) args', h)
+  | e => Expr.hoist thr h e
+
+/-- The body of a loop or a branch, from the statements that replace its
+one statement `s`. When hoisting adds declarations before it, a block holds
+them, as the body of a loop does. -/
+def asBody (s : Stmt) : List Stmt → Stmt
+  | [s'] => s'
+  | ss => .block (Stmt.span s) ss
+
+mutual
+
+/-- The statements of a body with the calls that can throw hoisted out of
+their statements, numbering the fresh names from `k` on. -/
+def Stmt.hoistList (thr : String → Bool) (k : Nat) : List Stmt → List Stmt × Nat
+  | [] => ([], k)
+  | s :: ss =>
+    let (ds, k) := Stmt.hoistOne thr k s
+    let (ss', k) := Stmt.hoistList thr k ss
+    (ds ++ ss', k)
+termination_by structural ss => ss
+
+/-- One statement, as the statements that replace it: the hoisted
+declarations, then the statement with the names in place of the calls. -/
+def Stmt.hoistOne (thr : String → Bool) (k : Nat) : Stmt → List Stmt × Nat
+  | .varDecl s ⟨kind, name, type, some e⟩ =>
+    let (e', h) := Expr.hoistValue thr ⟨[], k⟩ e
+    (h.decls ++ [.varDecl s ⟨kind, name, type, some e'⟩], h.next)
+  | .destructure s kind p t e =>
+    let (e', h) := Expr.hoistValue thr ⟨[], k⟩ e
+    (h.decls ++ [.destructure s kind p t e'], h.next)
+  | .returnStmt s (some e) =>
+    let (e', h) := Expr.hoistValue thr ⟨[], k⟩ e
+    (h.decls ++ [.returnStmt s (some e')], h.next)
+  | .exprStmt s e =>
+    let (e', h) := Expr.hoist thr ⟨[], k⟩ e
+    (h.decls ++ [.exprStmt s e'], h.next)
+  | .throwStmt s e =>
+    let (e', h) := Expr.hoist thr ⟨[], k⟩ e
+    (h.decls ++ [.throwStmt s e'], h.next)
+  | .ifStmt s t a b =>
+    let (t', h) := Expr.hoist thr ⟨[], k⟩ t
+    let (as, k) := Stmt.hoistOne thr h.next a
+    match b with
+    | some b =>
+      let (bs, k) := Stmt.hoistOne thr k b
+      (h.decls ++ [.ifStmt s t' (asBody a as) (some (asBody b bs))], k)
+    | none => (h.decls ++ [.ifStmt s t' (asBody a as) none], k)
+  | .forOfStmt s kind x e body =>
+    let (e', h) := Expr.hoist thr ⟨[], k⟩ e
+    let (bs, k) := Stmt.hoistOne thr h.next body
+    (h.decls ++ [.forOfStmt s kind x e' (asBody body bs)], k)
+  | .forOfPattern s kind p e body =>
+    let (e', h) := Expr.hoist thr ⟨[], k⟩ e
+    let (bs, k) := Stmt.hoistOne thr h.next body
+    (h.decls ++ [.forOfPattern s kind p e' (asBody body bs)], k)
+  -- JS evaluates the test and the update of a counted loop before each run,
+  -- so a call in them stays where it is.
+  | .forStmt s init test update body =>
+    let (bs, k) := Stmt.hoistOne thr k body
+    ([.forStmt s init test update (asBody body bs)], k)
+  | .whileStmt s t body =>
+    let (bs, k) := Stmt.hoistOne thr k body
+    ([.whileStmt s t (asBody body bs)], k)
+  | .block s ss =>
+    let (ss', k) := Stmt.hoistList thr k ss
+    ([.block s ss'], k)
+  | .switchStmt s d cs =>
+    let (d', h) := Expr.hoist thr ⟨[], k⟩ d
+    let (cs', k) := Stmt.hoistClauses thr h.next cs
+    (h.decls ++ [.switchStmt s d' cs'], k)
+  | s => ([s], k)
+termination_by structural s => s
+
+def Stmt.hoistClauses (thr : String → Bool) (k : Nat) :
+    List (Option Expr × List Stmt) → List (Option Expr × List Stmt) × Nat
+  | [] => ([], k)
+  | (t, ss) :: cs =>
+    let (ss', k) := Stmt.hoistList thr k ss
+    let (cs', k) := Stmt.hoistClauses thr k cs
+    ((t, ss') :: cs', k)
+termination_by structural cs => cs
+
+end
+
+/-- A function body with the calls that can throw hoisted out of its
+statements. The model runs this body, and the translator translates it. -/
+def Stmt.hoisted (thr : String → Bool) : Stmt → Stmt
+  | .block s ss => .block s (Stmt.hoistList thr 0 ss).1
+  | s => s
+
+/-- The functions of the declarations `ds`, by name, where `thr` says which
+functions can throw: their parameters and their body, with the calls that
+can throw hoisted out of its statements. -/
+def functionsIn (thr : String → Bool) (ds : List Decl) : List (String × List String × Stmt) :=
+  ds.filterMap fun
+    | .function _ _ name _ params _ body => some (name, params.map (·.name), Stmt.hoisted thr body)
+    | _ => none
+
+/-- The functions of the module, by name. -/
+def functions (m : Module) : List (String × List String × Stmt) := functionsIn (mayThrow m) m.decls
 
 /-! ### Programs of several files
 

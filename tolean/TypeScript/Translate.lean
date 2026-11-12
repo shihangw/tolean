@@ -696,10 +696,17 @@ def reject {A : Type} (span : Span) (reason : String) : TM A := do
 
 /-- Refuse a call of `fn` that can throw, unless the call is the whole value
 of a declaration or a `return` (`top`). The output passes the error of such
-a call on with `>>=`, which only a statement can do. -/
-def checkThrowingCall (s : Span) (name : String) (fn : FnInfo) (top : Bool) : TM Unit :=
+a call on with `>>=`, which only a statement can do. `Eval.Stmt.hoisted` has
+moved every such call of a function of the file that JS always evaluates into
+a declaration of its own, so one that is left stands where JS may not
+evaluate it, or calls an imported function, which the hoisting does not
+follow yet. -/
+def checkThrowingCall (s : Span) (name : String) (fn : FnInfo) (top : Bool) : TM Unit := do
   if fn.throws && !top then
-    reject s s!"'{name}' can throw, so a call of it must be the whole value of a const, a let or a return"
+    if fn.file != (← get).file then
+      reject s s!"'{name}' is imported and can throw, so a call of it must be the whole value of a const, a let or a return"
+    else
+      reject s s!"'{name}' can throw, so a call of it may not stand in a branch of ?:, after &&, || or ??, or in an arrow function"
   else pure ()
 
 /-- The program nests deeper than `Ctx.fuel` allows. -/
@@ -3491,10 +3498,17 @@ def paramType (span : Span) (optional : Bool) (type : TypeExpr) (before : List T
   if ty.isNullable || ty == .null then reject span "an optional parameter may not also be nullable"
   return .optional ty
 
-def translateFunction (s : Span) (exported : Bool) (name : String) (typeParams : List String)
-    (params : List Param) (returnType : Option TypeExpr) (body : Stmt) : TM IR.Decl := do
+def translateFunction (thr : String → Bool) (s : Span) (exported : Bool) (name : String)
+    (typeParams : List String) (params : List Param) (returnType : Option TypeExpr) (body : Stmt) :
+    TM IR.Decl := do
   let some returnType := returnType
     | reject s "functions must be named, typed and synchronous"
+  -- Each call that can throw moves out of its statement into a `const` of
+  -- its own, as the model runs the body (`Eval.Stmt.hoisted`). So the body
+  -- translated here is the body the model runs, and a call of a function
+  -- that can throw meets the translator only as the whole value of a
+  -- declaration or a `return`, or in a place that JS may not evaluate.
+  let body := Eval.Stmt.hoisted thr body
   let name ← checkName s name
   declareTopLevel s name
   checkTypeParams s (fun v => params.any fun p => (p.type.map (typeNames v)).getD false) [] typeParams
@@ -3736,7 +3750,7 @@ def exportsError? (c : Ctx) (names : List ImportName) : Option (Span × String) 
 
 /-- One declaration: an output declaration, or none for an import or an
 export list. -/
-def translateDecl : Decl → TM (Option IR.Decl)
+def translateDecl (thr : String → Bool) : Decl → TM (Option IR.Decl)
   | .import s names source => do translateImport s names source; return none
   | .exports s names source => do
     if source.isSome then
@@ -3746,7 +3760,7 @@ def translateDecl : Decl → TM (Option IR.Decl)
   | .interface s exported name typeParams fields => some <$> translateInterface s exported name typeParams fields
   | .typeAlias s exported name typeParams type => some <$> translateAlias s exported name typeParams type
   | .function s exported name typeParams params ret body =>
-    some <$> translateFunction s exported name typeParams params ret body
+    some <$> translateFunction thr s exported name typeParams params ret body
   | .enum s exported name members => some <$> translateStringEnum s exported name members
   | d => reject d.span "only imports, interfaces, types, enums and functions may appear at top level"
 
@@ -3768,7 +3782,7 @@ from one syntax tree to another: `translate` parses the source before it and
 prints the result after it. -/
 def translateDecls (m : Module) : TM (List IR.Decl) := do
   if let some n := duplicateExport? m then reject n.span s!"'{n.name}' is in two export lists"
-  return (← m.decls.mapM translateDecl).filterMap id
+  return (← m.decls.mapM (translateDecl (Eval.mayThrow m))).filterMap id
 
 mutual
 

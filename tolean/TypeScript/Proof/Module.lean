@@ -192,19 +192,19 @@ theorem checkTypeParams_ok {sp : Span} {named : String → Bool} :
 /-- What a function declaration does: it adds itself to the functions, and its
 body is the translation of the source body, in a scope of its parameters and
 of the functions declared before it. -/
-theorem translateFunction_ok {sp : Span} {ex : Bool} {name : String} {tps : List String}
+theorem translateFunction_ok {thr : String → Bool} {sp : Span} {ex : Bool} {name : String} {tps : List String}
     {params : List Param} {ret : Option TypeExpr} {body : Stmt} {s s' : Ctx} {o : IR.Decl}
-    (h : translateFunction sp ex name tps params ret body s = .ok o s') :
+    (h : translateFunction thr sp ex name tps params ret body s = .ok o s') :
     (s'.structs, s'.aliases, s'.enums, s'.unions, s'.enumValues) =
       (s.structs, s.aliases, s.enums, s.unions, s.enumValues) ∧ s.taken name = false ∧
     s'.file = s.file ∧ s'.interfaces = s.interfaces ∧
       (∀ g ∈ s.functions, g.name ≠ name) ∧
       ∃ f, s'.functions = s.functions ++ [f] ∧ f.file = s.file ∧ f.name = name ∧ f.exported = ex ∧
       ∃ lp r out, o = .function name lp r out ∧ lp.map (·.1) = params.map (·.name) ∧
-        ∃ F env c c', translateStatements F env .ret (blockStatements body) c = .ok out c' ∧
+        ∃ F env c c', translateStatements F env .ret (blockStatements (Eval.Stmt.hoisted thr body)) c = .ok out c' ∧
           env.functions = s.functions ++ [f] ∧ env.enums = s.enumValues ∧
           (∀ x, env.has x = decide (x ∈ params.map (·.name))) ∧
-          Stmt.ownsChanges (params.map (·.name)) body = true := by
+          Stmt.ownsChanges (params.map (·.name)) (Eval.Stmt.hoisted thr body) = true := by
   unfold translateFunction at h
   cases ret with
   | none => simp at h
@@ -673,9 +673,9 @@ theorem translateInterface_names {P : Eval.Program} {sp : Span} {ex : Bool} {nam
   · simp only [boundNames, List.mem_singleton] at hx; subst hx; exact hfresh
 
 /-- A function: it declares its name in the functions. -/
-theorem translateFunction_names {P : Eval.Program} {sp : Span} {ex : Bool} {name : String}
+theorem translateFunction_names {P : Eval.Program} {thr : String → Bool} {sp : Span} {ex : Bool} {name : String}
     {tps : List String} {params : List Param} {ret : Option TypeExpr} {body : Stmt} {s s' : Ctx}
-    {o : IR.Decl} (h : translateFunction sp ex name tps params ret body s = .ok o s') :
+    {o : IR.Decl} (h : translateFunction thr sp ex name tps params ret body s = .ok o s') :
     DeclNames P (.function sp ex name tps params ret body) s s' := by
   obtain ⟨hl, hfresh, hf, -, -, f, hfns, -, hname, -⟩ := translateFunction_ok h
   simp only [Prod.mk.injEq] at hl
@@ -1035,7 +1035,7 @@ theorem translateImport_names {P : Eval.Program} {sp : Span} {names : List Impor
 /-- An export list only checks the state: it adds no declaration and keeps the
 state. -/
 theorem translateExports_ok {sp : Span} {names : List ImportName} {source : Option String} {s s' : Ctx}
-    {o : Option IR.Decl} (h : translateDecl (.exports sp names source) s = .ok o s') : o = none ∧ s' = s := by
+    {o : Option IR.Decl} (h : translateDecl thr (.exports sp names source) s = .ok o s') : o = none ∧ s' = s := by
   simp only [translateDecl] at h
   by_cases hs : source.isSome = true
   · rw [if_pos hs] at h; simp at h
@@ -1053,7 +1053,7 @@ theorem translateExports_ok {sp : Span} {names : List ImportName} {source : Opti
 name is in two export lists. -/
 theorem translateDecls_ok {m : Module} {s s' : Ctx} {ds : List IR.Decl}
     (h : translateDecls m s = .ok ds s') :
-    ∃ os, m.decls.mapM translateDecl s = .ok os s' ∧ ds = os.filterMap id := by
+    ∃ os, m.decls.mapM (translateDecl (Eval.mayThrow m)) s = .ok os s' ∧ ds = os.filterMap id := by
   simp only [translateDecls] at h
   cases hd : duplicateExport? m with
   | some n => simp [hd] at h
@@ -1101,8 +1101,8 @@ theorem listsExport_of {m : Module} {name : String}
 /-- What one declaration does to the state: it keeps the file and the
 interfaces, adds its functions at the end, and keeps their names distinct. A
 function that it adds as exported is one that it declares as exported. -/
-theorem translateDecl_ok {d : Decl} {s s' : Ctx} {o : Option IR.Decl}
-    (hself : IfacesSelf s.interfaces) (h : translateDecl d s = .ok o s') :
+theorem translateDecl_ok {thr : String → Bool} {d : Decl} {s s' : Ctx} {o : Option IR.Decl}
+    (hself : IfacesSelf s.interfaces) (h : translateDecl thr d s = .ok o s') :
     s'.file = s.file ∧ s'.interfaces = s.interfaces ∧
       ∃ more, s'.functions = s.functions ++ more ∧ (∀ f ∈ more, f.ref ∈ declRefs s.file d) ∧
         ((s.functions.map (·.name)).Nodup → (s'.functions.map (·.name)).Nodup) ∧
@@ -1160,8 +1160,8 @@ theorem translateDecl_ok {d : Decl} {s s' : Ctx} {o : Option IR.Decl}
   | stmt st => simp [translateDecl] at h
 
 /-- What one declaration does to the names and the string enums of the file. -/
-theorem translateDecl_names {P : Eval.Program} {d : Decl} {s s' : Ctx} {o : Option IR.Decl}
-    (hfe : FaithfulE P s.interfaces) (h : translateDecl d s = .ok o s') : DeclNames P d s s' := by
+theorem translateDecl_names {P : Eval.Program} {thr : String → Bool} {d : Decl} {s s' : Ctx} {o : Option IR.Decl}
+    (hfe : FaithfulE P s.interfaces) (h : translateDecl thr d s = .ok o s') : DeclNames P d s s' := by
   cases d with
   | «import» sp names source =>
     simp only [translateDecl, bind_ok, pure_ok] at h
@@ -1215,8 +1215,9 @@ theorem Forall₂.mono {α β : Type} {R S : α → β → Prop} (h : ∀ a b, R
 
 /-- What a list of declarations does to the state, and how its functions
 translate. -/
-theorem decls_ok (P : Eval.Program) : ∀ (ds : List Decl) (s s' : Ctx) (os : List (Option IR.Decl)),
-    IfacesSelf s.interfaces → FaithfulE P s.interfaces → ds.mapM translateDecl s = .ok os s' →
+theorem decls_ok (P : Eval.Program) (thr : String → Bool) :
+    ∀ (ds : List Decl) (s s' : Ctx) (os : List (Option IR.Decl)),
+    IfacesSelf s.interfaces → FaithfulE P s.interfaces → ds.mapM (translateDecl thr) s = .ok os s' →
     s'.file = s.file ∧ s'.interfaces = s.interfaces ∧
       (∃ more, s'.functions = s.functions ++ more ∧ (∀ f ∈ more, f.ref ∈ ds.flatMap (declRefs s.file)) ∧
         (∀ f ∈ more, f.exported = true → ∃ sp tps ps r b, Decl.function sp true f.name tps ps r b ∈ ds) ∧
@@ -1224,19 +1225,19 @@ theorem decls_ok (P : Eval.Program) : ∀ (ds : List Decl) (s s' : Ctx) (os : Li
           ∃ i, s.interfaces.lookup f.file = some i ∧ ∃ g ∈ i.functions, g.name = f.name) ∧
       ((s.functions.map (·.name)).Nodup → (s'.functions.map (·.name)).Nodup) ∧
       DeclsNames P ds s s' ∧
-      Forall₂ (FnRelIn s'.functions s'.enumValues) (Eval.functions ⟨ds⟩) (IR.functions (os.filterMap id))
+      Forall₂ (FnRelIn s'.functions s'.enumValues) (Eval.functionsIn thr ds) (IR.functions (os.filterMap id))
   | [], s, s', os, _, _, h => by
     simp only [List.mapM_nil, pure_ok] at h
     obtain ⟨rfl, rfl⟩ := h
     exact ⟨rfl, rfl, ⟨[], by simp, by simp, by simp, by simp⟩, id, DeclsNames.nil P s,
-      by simp [Eval.functions, IR.functions]; trivial⟩
+      by simp [Eval.functionsIn, IR.functions]; trivial⟩
   | d :: ds, s, s', os, hself, hfe, h => by
     simp only [List.mapM_cons, bind_ok, pure_ok] at h
     obtain ⟨o, s₁, h₁, os', s₂, h₂, rfl, rfl⟩ := h
     obtain ⟨hf₁, hi₁, more₁, hfns₁, hrefs₁, hnd₁, hex₁, hor₁⟩ := translateDecl_ok hself h₁
     have hn₁ := translateDecl_names hfe h₁
     obtain ⟨hf₂, hi₂, ⟨more₂, hfns₂, hrefs₂, hex₂, hor₂⟩, hnd₂, hn₂, hrel⟩ :=
-      decls_ok P ds s₁ s₂ os' (by rw [hi₁]; exact hself) (by rw [hi₁]; exact hfe) h₂
+      decls_ok P thr ds s₁ s₂ os' (by rw [hi₁]; exact hself) (by rw [hi₁]; exact hfe) h₂
     refine ⟨hf₂.trans hf₁, hi₂.trans hi₁, ⟨more₁ ++ more₂, by rw [hfns₂, hfns₁, List.append_assoc],
       ?_, ?_, ?_⟩, fun h => hnd₂ (hnd₁ h), DeclsNames.cons hn₁ hn₂, ?_⟩
     · intro f hf
@@ -1271,7 +1272,7 @@ theorem decls_ok (P : Eval.Program) : ∀ (ds : List Decl) (s s' : Ctx) (os : Li
         obtain ⟨o', h₁, rfl⟩ := h₁
         obtain ⟨-, -, -, -, -, f, hfns, -, -, -, lp, r, out, rfl, hlp, Fu, env, c, c', ht, henv, henvE, hhas,
           hown⟩ := translateFunction_ok h₁
-        simp only [Eval.functions, IR.functions, List.filterMap_cons] at hrel ⊢
+        simp only [Eval.functionsIn, IR.functions, List.filterMap_cons] at hrel ⊢
         refine ⟨⟨rfl, hlp.symm, ⟨Fu, env, c, c', ht, fun g hg => ?_, fun e he => ?_, hhas⟩, hown⟩, hrel⟩
         · rw [henv] at hg
           exact hsub g (by rw [hfns]; exact hg)
@@ -1280,26 +1281,26 @@ theorem decls_ok (P : Eval.Program) : ∀ (ds : List Decl) (s s' : Ctx) (os : Li
       | «import» sp names source =>
         simp only [translateDecl, bind_ok, pure_ok] at h₁
         obtain ⟨u, s₃, -, rfl, -⟩ := h₁
-        simpa [Eval.functions, IR.functions, List.filterMap_cons] using hrel
+        simpa [Eval.functionsIn, IR.functions, List.filterMap_cons] using hrel
       | interface sp ex name tps fields =>
         simp only [translateDecl, map_ok] at h₁
         obtain ⟨o', h₁, rfl⟩ := h₁
         obtain ⟨-, -, -, n, tps', fs, rfl⟩ := translateInterface_ok h₁
-        simpa [Eval.functions, IR.functions, List.filterMap_cons] using hrel
+        simpa [Eval.functionsIn, IR.functions, List.filterMap_cons] using hrel
       | typeAlias sp ex name tps type =>
         simp only [translateDecl, map_ok] at h₁
         obtain ⟨o', h₁, rfl⟩ := h₁
         obtain ⟨-, -, -, ⟨n, tps', t, rfl⟩ | ⟨n, ms, rfl⟩ | ⟨n, f, ps, rfl⟩ | ⟨n, tps', fs, rfl⟩⟩ :=
             translateAlias_ok h₁ <;>
-          simpa [Eval.functions, IR.functions, List.filterMap_cons] using hrel
+          simpa [Eval.functionsIn, IR.functions, List.filterMap_cons] using hrel
       | exports sp names source =>
         obtain ⟨rfl, rfl⟩ := translateExports_ok h₁
-        simpa [Eval.functions, IR.functions, List.filterMap_cons] using hrel
+        simpa [Eval.functionsIn, IR.functions, List.filterMap_cons] using hrel
       | enum sp ex name members =>
         simp only [translateDecl, map_ok] at h₁
         obtain ⟨o', h₁, rfl⟩ := h₁
         obtain ⟨-, rfl, -⟩ := translateStringEnum_shape h₁
-        simpa [Eval.functions, IR.functions, List.filterMap_cons] using hrel
+        simpa [Eval.functionsIn, IR.functions, List.filterMap_cons] using hrel
       | exportedVar sp decl => simp [translateDecl] at h₁
       | stmt st => simp [translateDecl] at h₁
 
@@ -1355,14 +1356,14 @@ theorem module_resolves {p : Eval.Program} {file : String} {m : Module} (hp : p.
   have hbf : f.name ∈ boundNames df := declRefs_bound hrdf
   have hown_iff : ((Eval.functions m).any fun x => x.fst == f.name) = true ↔
       ∃ sp ex tps ps r b, Decl.function sp ex f.name tps ps r b ∈ m.decls := by
-    simp only [List.any_eq_true, beq_iff_eq, Eval.functions, List.mem_filterMap]
+    simp only [List.any_eq_true, beq_iff_eq, Eval.functions, Eval.functionsIn, List.mem_filterMap]
     constructor
     · rintro ⟨⟨n, ps, b⟩, ⟨d, hd, hsel⟩, rfl⟩
       cases d <;> simp at hsel
       obtain ⟨rfl, -, rfl⟩ := hsel
       exact ⟨_, _, _, _, _, _, hd⟩
     · rintro ⟨sp, ex, tps, ps, r, b, hd⟩
-      exact ⟨(f.name, ps.map (·.name), b), ⟨_, hd, rfl⟩, rfl⟩
+      exact ⟨(f.name, ps.map (·.name), Eval.Stmt.hoisted (Eval.mayThrow m) b), ⟨_, hd, rfl⟩, rfl⟩
   unfold Eval.resolve
   simp only [hp, Option.bind_eq_bind, Option.bind_some]
   by_cases hown : ((Eval.functions m).any fun x => x.fst == f.name) = true
@@ -1629,7 +1630,7 @@ theorem programTranslation_rel {p : Eval.Program} {outs : List (String × List I
     -- The file's own translation.
     obtain ⟨os, hos, rfl⟩ := translateDecls_ok htr
     obtain ⟨hf, hi, ⟨more, hfns', hrefs, hex, horig⟩, -, hnames, hrelm⟩ :=
-      decls_ok P m.decls start finish os (by rw [hifaces]; exact hself) (by rw [hifaces]; exact hfaithE) hos
+      decls_ok P (Eval.mayThrow m) m.decls start finish os (by rw [hifaces]; exact hself) (by rw [hifaces]; exact hfaithE) hos
     rw [hfns, List.nil_append] at hfns'
     have hbn := hnames.nodup
     have hres : ∀ f ∈ finish.functions, Eval.resolve ⟨P, file⟩ f.name = some f.ref := by
