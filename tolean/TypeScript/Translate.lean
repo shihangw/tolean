@@ -4136,6 +4136,11 @@ def stmtUsesNumber : Stmt → Bool
       (update.map exprUsesNumber).getD false || stmtUsesNumber body
   | .whileStmt _ test body => exprUsesNumber test || stmtUsesNumber body
   | .block _ body => stmtsUseNumber body
+  -- The output lifts a local function out, and it needs `N` as the
+  -- function around it does.
+  | .funDecl _ name _ params ret body =>
+    isNumberName name || params.any (fun p => isNumberName p.name || (p.type.map typeUsesNumber).getD false) ||
+      (ret.map typeUsesNumber).getD false || stmtUsesNumber body
   | _ => false
 
 def stmtsUseNumber : List Stmt → Bool
