@@ -124,17 +124,17 @@ def JSNumber.toInt32 {N : Type} [JSNumber N] (x : N) : Int := wrapInt32 ((toInt 
 /-- ToUint32 (§7.1.7): the same, as an unsigned 32-bit integer. -/
 def JSNumber.toUint32 {N : Type} [JSNumber N] (x : N) : Int := ((toInt x).getD 0) % 4294967296
 
-/-- `a & b` on numbers (Number::bitwiseAND, §6.1.6.1.18): the operation on
+/-- `a & b` on numbers (Number::bitwiseAND, §6.1.6.1.17): the operation on
 the two's complement of ToInt32 of each, which `JSBigInt.bitAnd` is for
 integers of that range. The result is a 32-bit integer, so it is safe. -/
 def JSNumber.bitAnd {N : Type} [JSNumber N] (a b : N) : N :=
   ofSafeInt (JSBigInt.bitAnd (toInt32 a) (toInt32 b))
 
-/-- `a | b` on numbers (Number::bitwiseOR, §6.1.6.1.20). -/
+/-- `a | b` on numbers (Number::bitwiseOR, §6.1.6.1.19). -/
 def JSNumber.bitOr {N : Type} [JSNumber N] (a b : N) : N :=
   ofSafeInt (JSBigInt.bitOr (toInt32 a) (toInt32 b))
 
-/-- `a ^ b` on numbers (Number::bitwiseXOR, §6.1.6.1.19). -/
+/-- `a ^ b` on numbers (Number::bitwiseXOR, §6.1.6.1.18). -/
 def JSNumber.bitXor {N : Type} [JSNumber N] (a b : N) : N :=
   ofSafeInt (JSBigInt.bitXor (toInt32 a) (toInt32 b))
 
