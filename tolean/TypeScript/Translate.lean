@@ -1737,37 +1737,72 @@ def _root_.tolean.TypeScript.Syntax.Expr.isArrow : Expr → Bool
   | .arrow .. => true
   | _ => false
 
+/-- The methods of a string that the subset has. -/
+def stringMethods : List IR.StringMethod :=
+  [.startsWith, .endsWith, .includes, .indexOf, .trim, .trimStart, .trimEnd, .split, .at, .slice,
+   .padStart, .padEnd]
+
 /-- The method of a string that `name` names, among those the subset has. -/
 def stringMethod? (name : String) : Option IR.StringMethod :=
-  if name == "startsWith" then some .startsWith
-  else if name == "endsWith" then some .endsWith
-  else if name == "includes" then some .includes
-  else if name == "indexOf" then some .indexOf
-  else if name == "trim" then some .trim
-  else if name == "trimStart" then some .trimStart
-  else if name == "trimEnd" then some .trimEnd
-  else if name == "split" then some .split
-  else none
+  stringMethods.find? (·.name == name)
 
-/-- The types of the arguments that a method of a string takes here. JS converts
-another argument with ToString, which the subset has only on strings, and a
-position argument is not supported. -/
-def StringMethod.params : IR.StringMethod → List Ty
-  | .startsWith | .endsWith | .includes | .indexOf | .split => [.string]
-  | .trim | .trimStart | .trimEnd => []
+/-- The types of the arguments that a method of a string takes here: those
+that a call must pass, then those that it may leave out. JS converts a string
+argument with ToString, which the subset has only on strings, and a number
+argument with ToIntegerOrInfinity, which the translator has only on integer
+literals. -/
+def StringMethod.params : IR.StringMethod → List Ty × List Ty
+  | .startsWith | .endsWith | .includes | .indexOf | .split => ([.string], [.number])
+  | .trim | .trimStart | .trimEnd => ([], [])
+  | .at => ([.number], [])
+  | .slice => ([], [.number, .number])
+  | .padStart | .padEnd => ([.number], [.string])
+
+/-- The arguments of a call fit the method: there are at least as many as it
+must take and no more than it can, each has the type of its parameter, and
+each number is an integer literal. `types` are the types of the arguments, and
+`lits` are the integer literals that they are. -/
+def StringMethod.fits (m : IR.StringMethod) (types : List Ty) (lits : List (Option Int)) : Bool :=
+  let all := (StringMethod.params m).1 ++ (StringMethod.params m).2
+  (StringMethod.params m).1.length ≤ types.length && types.length ≤ all.length &&
+    types == all.take types.length && (types.zip lits).all fun (t, k) => t != .number || k.isSome
+
+/-- What a call of the method must pass, for the message that refuses another
+call. -/
+def StringMethod.usage (method : String) : IR.StringMethod → String
+  | .startsWith | .endsWith | .includes | .indexOf =>
+    s!"'{method}' takes a string and perhaps a position, an integer literal"
+  | .split => "'split' takes a string separator and perhaps a limit, an integer literal"
+  | .trim | .trimStart | .trimEnd => s!"'{method}' takes no arguments"
+  | .at => "'at' on a string takes one integer literal, such as s.at(-1)"
+  | .slice => "'slice' on a string takes at most two integer literals, such as s.slice(1) or s.slice(-2)"
+  | .padStart | .padEnd => s!"'{method}' takes a length, an integer literal, and perhaps a string to fill with"
+
+/-- The longest string that every engine can make. V8 has the smallest limit,
+2^28 - 16 code units on 32-bit systems. JS throws a `RangeError` for a longer
+one, which the model does not. -/
+def maxStringLength : Int := 2 ^ 28 - 16
+
+/-- The call pads to a length that an engine may refuse to make. -/
+def StringMethod.padsTooFar : IR.StringMethod → List (Option Int) → Bool
+  | .padStart, some n :: _ | .padEnd, some n :: _ => maxStringLength < n
+  | _, _ => false
 
 /-- The type of the value of a method of a string. -/
 def StringMethod.result : IR.StringMethod → Ty
   | .startsWith | .endsWith | .includes => .boolean
   | .indexOf => .number
-  | .trim | .trimStart | .trimEnd => .string
+  | .trim | .trimStart | .trimEnd | .slice | .padStart | .padEnd => .string
   | .split => .array .string
+  | .at => .optional .string
 
 /-- The edition from which a method of a string means what the model says,
 when that is later than ES2015. -/
 def StringMethod.feature : IR.StringMethod → Option Feature
   | .trim => some .trimWhiteSpace
   | .trimStart | .trimEnd => some .trimStartEnd
+  | .padStart | .padEnd => some .stringPad
+  | .at => some .stringAt
   | _ => none
 
 /-- Refuse the code when the target does not have `f`. -/
@@ -1776,19 +1811,20 @@ def requireFeature? (s : Span) : Option Feature → TM Unit
   | none => pure ()
 
 /-- The code for `str.method(args)`, a method of a string, where `str` is the
-code of the receiver and `args` are the codes of the arguments. -/
-def stringCall (s : Span) (method : String) (str : Code) (args : List Code) : TM Code :=
+code of the receiver, `args` are the codes of the arguments, and `lits` are
+the integer literals that the arguments are. -/
+def stringCall (s : Span) (method : String) (str : Code) (args : List Code) (lits : List (Option Int)) :
+    TM Code :=
   if str.type == .string then
     match stringMethod? method with
     | some m =>
-      if args.length == (StringMethod.params m).length then
-        if args.map (·.type) == StringMethod.params m then do
+      if StringMethod.fits m (args.map (·.type)) lits then
+        if StringMethod.padsTooFar m lits then
+          reject s s!"'{method}' to more than {maxStringLength} code units could make a string that an engine refuses"
+        else do
           requireFeature? s (StringMethod.feature m)
-          return ⟨.ext (.stringMethod m) (str.value :: args.map (·.value)), false, StringMethod.result m⟩
-        else reject s s!"the argument of '{method}' must be a string"
-      else reject s (if (StringMethod.params m).isEmpty then s!"'{method}' takes no arguments"
-        else if m == .split then s!"'{method}' takes one string here; a limit is not supported"
-        else s!"'{method}' takes one string here; a position argument is not supported")
+          return ⟨.ext (.stringMethod m lits) (str.value :: args.map (·.value)), false, StringMethod.result m⟩
+      else reject s (StringMethod.usage method m)
     | none => reject s s!"the string method '{method}' is not supported here"
   else reject s s!"only a string has the method '{method}' here"
 
@@ -2296,7 +2332,7 @@ def translateArrayCall (fuel : Nat) (env : Env) (s : Span) (recv : Expr) (method
   let xs ← translateExpr fuel env none recv
   if xs.type == .string then
     let codes ← args.mapM (translateExpr fuel env none)
-    stringCall s method xs codes
+    stringCall s method xs codes (args.map Eval.intLiteral?)
   else
   let elem ← orReject xs.type.element? recv.span "only an array or a string has this method"
   -- `xs.at(k)`: the element at `k`, counted from the end when `k` is

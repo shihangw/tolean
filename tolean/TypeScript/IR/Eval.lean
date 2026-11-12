@@ -71,16 +71,29 @@ def StringPart.toStr : StringPart → Val N → Option JSString
   | .boolean, .bool b => some (JSString.ofBool b)
   | _, _ => none
 
-/-- A method of a string, on the string and the values of its arguments. -/
-def StringMethod.apply : StringMethod → JSString → List (Val N) → Option (Val N)
-  | .startsWith, s, args => Eval.oneString (fun p => .bool (s.startsWith p)) args
-  | .endsWith, s, args => Eval.oneString (fun p => .bool (s.endsWith p)) args
-  | .includes, s, args => Eval.oneString (fun p => .bool (s.includes p)) args
-  | .indexOf, s, args => Eval.oneString (fun p => .num (JSNumber.ofSafeInt (s.indexOf p))) args
-  | .trim, s, args => Eval.noArgs (.str s.trim) args
-  | .trimStart, s, args => Eval.noArgs (.str s.trimStart) args
-  | .trimEnd, s, args => Eval.noArgs (.str s.trimEnd) args
-  | .split, s, args => Eval.oneString (fun sep => .list ((s.split sep).map .str)) args
+/-- A method of a string, on the string, the values of its arguments, and the
+integer literal that each argument is, if it is one, as the spec's
+`stringMethod` takes them. -/
+def StringMethod.apply : StringMethod → JSString → List (Val N) → List (Option Int) → Option (Val N)
+  | .startsWith, s, args, lits =>
+    Eval.stringAndInt (fun p => .bool (s.startsWith p)) (fun p k => .bool (s.startsWithFrom p k)) args lits
+  | .endsWith, s, args, lits =>
+    Eval.stringAndInt (fun p => .bool (s.endsWith p)) (fun p k => .bool (s.endsWithAt p k)) args lits
+  | .includes, s, args, lits =>
+    Eval.stringAndInt (fun p => .bool (s.includes p)) (fun p k => .bool (s.includesFrom p k)) args lits
+  | .indexOf, s, args, lits =>
+    Eval.stringAndInt (fun p => .num (JSNumber.ofSafeInt (s.indexOf p)))
+      (fun p k => .num (JSNumber.ofSafeInt (s.indexOfFrom p k))) args lits
+  | .trim, s, args, _ => Eval.noArgs (.str s.trim) args
+  | .trimStart, s, args, _ => Eval.noArgs (.str s.trimStart) args
+  | .trimEnd, s, args, _ => Eval.noArgs (.str s.trimEnd) args
+  | .split, s, args, lits =>
+    Eval.stringAndInt (fun sep => .list ((s.split sep).map .str))
+      (fun sep k => .list ((s.splitLimit sep k).map .str)) args lits
+  | .at, s, args, lits => Eval.oneInt (Eval.stringAt s) args lits
+  | .slice, s, args, lits => Eval.sliceArgs s args lits
+  | .padStart, s, args, lits => Eval.padArgs s.padStart args lits
+  | .padEnd, s, args, lits => Eval.padArgs s.padEnd args lits
 
 /-- The elements of a list. -/
 def listItems? : Val N → Option (List (Val N))
@@ -97,7 +110,7 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   | .numberTest test, [.num a] => some (.bool (test.apply a))
   | .stringOrder le, [.str a, .str b] => some (.bool (if le then a.le b else a.lt b))
   | .stringLength, [.str s] => some (.num (JSNumber.ofSafeInt s.length))
-  | .stringMethod method, .str s :: args => method.apply s args
+  | .stringMethod method lits, .str s :: args => method.apply s args lits
   | .stringAppend left right, [a, b] => do
     return .str ((← left.toStr a) ++ (← right.toStr b))
   | .undefined, [] => some .undefined

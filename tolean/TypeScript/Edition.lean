@@ -76,15 +76,22 @@ inductive Feature where
   /-- `s.trimStart()` and `s.trimEnd()`: `String.prototype.trimStart` and
   `trimEnd`. -/
   | trimStartEnd
+  /-- `s.padStart(n)` and `s.padEnd(n)`: `String.prototype.padStart` and
+  `padEnd`. -/
+  | stringPad
+  /-- `s.at(k)`, which counts a negative `k` from the end:
+  `String.prototype.at`. -/
+  | stringAt
 deriving BEq, Repr, Inhabited
 
 def Feature.since : Feature → Edition
   | .exponent | .arrayIncludes | .trimWhiteSpace => .es2016
+  | .stringPad => .es2017
   | .objectSpread => .es2018
   | .trimStartEnd => .es2019
   | .bigint | .bigintDivision | .nullishCoalescing | .optionalChaining => .es2020
   | .logicalAssignment | .numericSeparators => .es2021
-  | .arrayAt => .es2022
+  | .arrayAt | .stringAt => .es2022
   | .arrayFindLast => .es2023
 
 def Feature.describe : Feature → String
@@ -101,6 +108,8 @@ def Feature.describe : Feature → String
   | .arrayFindLast => "Array.prototype.findLast"
   | .trimWhiteSpace => "the white space of String.prototype.trim without U+180E"
   | .trimStartEnd => "String.prototype.trimStart and trimEnd"
+  | .stringPad => "String.prototype.padStart and padEnd"
+  | .stringAt => "String.prototype.at"
 
 def Edition.supports (target : Edition) (f : Feature) : Bool := f.since.year ≤ target.year
 

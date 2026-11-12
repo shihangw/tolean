@@ -217,6 +217,141 @@ def split (s sep : JSString) : List JSString :=
   | [] => (s.units.take (2 ^ 32 - 1)).map fun u => ⟨[u]⟩
   | c :: cs => ((splitUnits c cs s.units []).take (2 ^ 32 - 1)).map JSString.mk
 
+/-- A position argument clamped to the string, as `startsWith`, `endsWith`,
+`includes` and `indexOf` clamp it (ECMA-262 §22.1.3.25, step 6): a negative
+position is `0`, and one past the end is the length. -/
+def clampPos (len : Nat) (k : Int) : Nat := min k.toNat len
+
+/-- `s.at(k)` (ECMA-262 §22.1.3.1): the code unit at `k`, as a string, where a
+negative `k` counts from the end. An index outside the string gives
+`undefined`, which is `none`. -/
+def at? (s : JSString) (k : Int) : Option JSString :=
+  let i := if 0 ≤ k then k else s.length + k
+  if 0 ≤ i then (s.units[i.toNat]?).map fun u => ⟨[u]⟩ else none
+
+/-- A relative index into a string of `len` code units, as `slice` reads its
+arguments (ECMA-262 §22.1.3.22, steps 4 to 9): a negative `k` counts from the
+end, and the result is clamped to `0` and `len`. -/
+def relIndex (len : Nat) (k : Int) : Nat :=
+  if k < 0 then (len + k).toNat else min k.toNat len
+
+/-- `s.slice(start, stop)` (ECMA-262 §22.1.3.22): the code units from `start`
+up to `stop`, or to the end when `stop` is none. A start at or after the stop
+gives the empty string. -/
+def slice (s : JSString) (start : Int) (stop : Option Int) : JSString :=
+  let lo := relIndex s.length start
+  let hi := match stop with
+    | some e => relIndex s.length e
+    | none => s.length
+  ⟨(s.units.drop lo).take (hi - lo)⟩
+
+/-- The code units that StringPad puts before or after a string of `len`
+code units (ECMA-262 §22.1.3.17.2), where `maxLength` is the integer of the
+argument. ToLength clamps it to `0` and 2^53 - 1. When it is at most `len`, or
+the filler is empty, there is no padding. Otherwise the padding is the filler
+repeated and then cut to `maxLength - len` code units. -/
+def padding (len : Nat) (maxLength : Int) (fill : JSString) : List UInt16 :=
+  let target := min maxLength.toNat (2 ^ 53 - 1)
+  if target ≤ len ∨ fill.units = [] then []
+  else
+    let n := target - len
+    ((List.replicate (n / fill.units.length + 1) fill.units).flatten).take n
+
+/-- `s.padStart(maxLength, fill)` (ECMA-262 §22.1.3.17): the padding, then `s`.
+`fill` is `" "` when the call leaves it out. -/
+def padStart (s : JSString) (maxLength : Int) (fill : JSString) : JSString :=
+  ⟨padding s.length maxLength fill ++ s.units⟩
+
+/-- `s.padEnd(maxLength, fill)` (ECMA-262 §22.1.3.16): `s`, then the padding. -/
+def padEnd (s : JSString) (maxLength : Int) (fill : JSString) : JSString :=
+  ⟨s.units ++ padding s.length maxLength fill⟩
+
+/-- `s.startsWith(p, pos)` (ECMA-262 §22.1.3.25): the code units of `p` begin
+those of `s` from the clamped position on. -/
+def startsWithFrom (s p : JSString) (pos : Int) : Bool :=
+  p.units.isPrefixOf (s.units.drop (clampPos s.length pos))
+
+/-- `s.endsWith(p, endPosition)` (ECMA-262 §22.1.3.7): the code units of `p`
+end those of `s` before the clamped end position. -/
+def endsWithAt (s p : JSString) (endPosition : Int) : Bool :=
+  p.units.isSuffixOf (s.units.take (clampPos s.length endPosition))
+
+/-- StringIndexOf(s, p, k) (ECMA-262 §6.1.4.1), where `k` is the clamped
+position: the first index from `k` on at which `p` occurs. The empty string
+occurs at `k`. -/
+def indexOfFrom? (s p : JSString) (pos : Int) : Option Nat :=
+  let k := clampPos s.length pos
+  indexOf?.go p (s.units.drop k) k
+
+/-- `s.indexOf(p, pos)` (ECMA-262 §22.1.3.9): the first index from the
+clamped position on at which `p` occurs, or -1. -/
+def indexOfFrom (s p : JSString) (pos : Int) : Int :=
+  match indexOfFrom? s p pos with
+  | some i => i
+  | none => -1
+
+/-- `s.includes(p, pos)` (ECMA-262 §22.1.3.8): `p` occurs in `s` from the
+clamped position on. -/
+def includesFrom (s p : JSString) (pos : Int) : Bool := (indexOfFrom? s p pos).isSome
+
+/-- `s.split(sep, limit)` with a string separator (ECMA-262 §22.1.3.23), where
+`limit` is the integer of the argument. ToUint32 takes it modulo 2^32, so -1 is
+2^32 - 1. The result has at most that many pieces, and none when it is `0`. -/
+def splitLimit (s sep : JSString) (limit : Int) : List JSString :=
+  let lim := (limit % 2 ^ 32).toNat
+  match sep.units with
+  | [] => (s.units.take lim).map fun u => ⟨[u]⟩
+  | c :: cs => ((splitUnits c cs s.units []).take lim).map JSString.mk
+
+/-- A position of `0` is no position. -/
+theorem startsWithFrom_zero (s p : JSString) : s.startsWithFrom p 0 = s.startsWith p := by
+  simp [startsWithFrom, startsWith, clampPos]
+
+/-- An end position at the length is no end position. -/
+theorem endsWithAt_length (s p : JSString) : s.endsWithAt p s.length = s.endsWith p := by
+  simp [endsWithAt, endsWith, clampPos, length]
+
+/-- A position of `0` is no position. -/
+theorem indexOfFrom_zero (s p : JSString) : s.indexOfFrom p 0 = s.indexOf p := by
+  simp [indexOfFrom, indexOf, indexOfFrom?, indexOf?, clampPos]
+
+/-- A position of `0` is no position. -/
+theorem includesFrom_zero (s p : JSString) : s.includesFrom p 0 = s.includes p := by
+  simp [includesFrom, includes, indexOfFrom?, indexOf?, clampPos]
+
+/-- `split` with no limit is `split` with the limit 2^32 - 1, which ToUint32
+gives for `undefined` (ECMA-262 §22.1.3.23, step 6). -/
+theorem split_eq_splitLimit (s sep : JSString) : s.split sep = s.splitLimit sep (2 ^ 32 - 1) := by
+  simp only [split, splitLimit]
+  rfl
+
+/-- `s.slice(0)` is `s`. -/
+theorem slice_zero (s : JSString) : s.slice 0 none = s := by
+  simp [slice, relIndex, length]
+
+private theorem sum_replicate (k a : Nat) : (List.replicate k a).sum = k * a := by
+  induction k with
+  | zero => simp
+  | succ k ih => simp [List.replicate_succ, ih, Nat.succ_mul, Nat.add_comm]
+
+/-- `padStart` makes a string of at least `maxLength` code units, when the
+filler is not empty and `maxLength` is at most 2^53 - 1. -/
+theorem padStart_length {s fill : JSString} {n : Nat} (hf : fill.units ≠ []) (hn : n ≤ 2 ^ 53 - 1) :
+    n ≤ (s.padStart n fill).length := by
+  have hmin : min (n : Int).toNat (2 ^ 53 - 1) = n := by simp; omega
+  simp only [padStart, length, padding, List.length_append, hmin]
+  split
+  · rename_i h
+    rcases h with h | h
+    · omega
+    · exact absurd h hf
+  · have hlen : 0 < fill.units.length := List.length_pos_iff.mpr hf
+    rw [List.length_take, List.length_flatten]
+    simp only [List.map_replicate, sum_replicate, Nat.succ_mul]
+    have := Nat.lt_div_mul_add (a := n - s.units.length) hlen
+    generalize (n - s.units.length) / fill.units.length * fill.units.length = q at *
+    omega
+
 /-- The code unit is a leading surrogate, from D800 to DBFF (ECMA-262 §11.1.3). -/
 def isLeading (u : UInt16) : Bool := 0xD800 ≤ u.toNat && u.toNat < 0xDC00
 

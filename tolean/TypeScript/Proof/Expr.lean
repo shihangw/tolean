@@ -1306,19 +1306,41 @@ theorem applyOperator_sound {sp s : Span} {op : BinOp} {l r : Expr} {a b c : Cod
 
 /-! ### Methods of a string -/
 
-/-- A method of a string that takes no callback, other than `at` and `slice`,
-which have rules of their own: the interpreter evaluates the receiver, then
-the arguments, and `stringMethod` gives the value. A call with one argument
-reaches the rule of `get` and `has`, which passes a string on to
-`stringMethod` too. -/
+/-- A method of a string that takes no callback: the interpreter evaluates
+the receiver, then the arguments, and `stringMethod` gives the value from them
+and from the integer literals that they are. `at` and `slice` reach the rules
+that they share with arrays, and a call with one argument reaches the rule of
+`get` and `has`. Each passes a string on to `stringMethod`. -/
 theorem eval_stringCall (sp sp' : Span) (recv : Expr) (method : String) (args : List Expr)
-    (hr : recv.namesNumber = false) (harg : args.any (·.isArrow) = false) (hat : method ≠ "at")
-    (hsl : method ≠ "slice") (ρ : Eval.Env N) {t : JSString}
+    (hr : recv.namesNumber = false) (harg : args.any (·.isArrow) = false) (ρ : Eval.Env N) {t : JSString}
     (hrecv : Eval.eval m fuel ρ recv = some (.str t)) :
     Eval.eval m fuel ρ (.call sp (.member sp' recv method) args) =
-      (Eval.evalList m fuel ρ args).bind (Eval.stringMethod method t) := by
+      (Eval.evalList m fuel ρ args).bind fun vs => Eval.stringMethod method t vs (args.map Eval.intLiteral?) := by
   have hr' : ∀ s, recv ≠ .ident s "Number" := by
     intro s h; subst h; simp [Expr.namesNumber] at hr
+  by_cases hat : method = "at"
+  · subst hat
+    rcases args with _ | ⟨a, _ | ⟨b, rest⟩⟩
+    all_goals rw [Eval.eval]
+    all_goals first
+      | (rw [hrecv]
+         first
+           | rfl
+           | (cases ha : Eval.eval m fuel ρ a <;> simp [Eval.evalList, ha]))
+      | exact hr'
+      | (intros; contradiction)
+      | (intros; subst_vars; exact absurd rfl (hr' _))
+      | (clear hrecv; intros; simp_all [Expr.isArrow]; done)
+  by_cases hsl : method = "slice"
+  · subst hsl
+    rcases args with _ | ⟨a, _ | ⟨b, rest⟩⟩
+    all_goals rw [Eval.eval]
+    all_goals first
+      | (rw [hrecv]; rfl)
+      | exact hr'
+      | (intros; contradiction)
+      | (intros; subst_vars; exact absurd rfl (hr' _))
+      | (clear hrecv; intros; simp_all [Expr.isArrow]; done)
   rcases args with _ | ⟨a, _ | ⟨b, rest⟩⟩
   all_goals rw [Eval.eval]
   all_goals first
@@ -1333,33 +1355,24 @@ theorem eval_stringCall (sp sp' : Span) (recv : Expr) (method : String) (args : 
     | (intros; subst_vars; exact absurd rfl hat)
     | (intros; subst_vars; exact absurd rfl hsl)
 
-/-- A method that `stringMethod` gives a value for is not `at` or `slice`. -/
-theorem stringMethod_not_at {method : String} {t : JSString} {vs : List (Val N)} {v : Val N}
-    (h : Eval.stringMethod method t vs = some v) : method ≠ "at" ∧ method ≠ "slice" := by
-  constructor <;> (intro he; subst he; simp [Eval.stringMethod] at h)
-
 /-- The method that `stringMethod?` picks gives the value that the
 interpreter's `stringMethod` gives. -/
 theorem stringMethod_of {method : String} {sm : IR.StringMethod} (hm : stringMethod? method = some sm)
-    (t : JSString) (vs : List (Val N)) : Eval.stringMethod method t vs = sm.apply t vs := by
-  unfold stringMethod? at hm
-  repeat' split at hm
-  all_goals first
-    | (cases hm
-       rename_i hmm
-       simp only [beq_iff_eq] at hmm
-       subst hmm
-       simp [Eval.stringMethod, IR.StringMethod.apply])
-    | simp at hm
+    (t : JSString) (vs : List (Val N)) (lits : List (Option Int)) :
+    Eval.stringMethod method t vs lits = sm.apply t vs lits := by
+  have hname : sm.name = method := by
+    simpa using List.find?_some hm
+  subst hname
+  cases sm <;> simp [Eval.stringMethod, IR.StringMethod.apply, IR.StringMethod.name]
 
 /-- The code of `stringCall` evaluates the receiver to a string and the
 arguments, and its value is the one that `stringMethod` gives them. -/
 theorem stringCall_sound {s : Span} {method : String} {str : Code} {args : List Code}
-    {ctx ctx' : Ctx} {c : Code} (h : stringCall s method str args ctx = .ok c ctx')
+    {lits : List (Option Int)} {ctx ctx' : Ctx} {c : Code} (h : stringCall s method str args lits ctx = .ok c ctx')
     {ρ : Eval.Env N} {v : Val N} (hv : IR.Expr.eval fs fuel ρ c.code = some v) :
     ∃ t vs, IR.Expr.eval fs fuel ρ str.value = some (.str t) ∧
       IR.Expr.evalList fs fuel ρ (args.map Code.value) = some vs ∧
-      Eval.stringMethod method t vs = some v := by
+      Eval.stringMethod method t vs lits = some v := by
   unfold stringCall at h
   split at h
   · cases hm : stringMethod? method with
@@ -1368,6 +1381,7 @@ theorem stringCall_sound {s : Span} {method : String} {str : Code} {args : List 
       simp only [hm] at h
       split at h
       · split at h
+        · simp at h
         · simp only [bind_ok, pure_ok] at h
           obtain ⟨_, _, -, rfl, -⟩ := h
           simp only [IR.Expr.eval, IR.Expr.evalList] at hv
@@ -1381,7 +1395,6 @@ theorem stringCall_sound {s : Span} {method : String} {str : Code} {args : List 
               cases w <;> simp [IR.ExprExt.apply] at hv
               rename_i t
               exact ⟨t, vs, rfl, rfl, by rw [stringMethod_of hm]; exact hv⟩
-        · simp at h
       · simp at h
   · simp at h
 
@@ -2207,6 +2220,8 @@ theorem eval_slice (sp sp' : Span) (recv : Expr) (args : List Expr) {bounds : Li
     Eval.eval m fuel ρ (.call sp (.member sp' recv "slice") args) =
       (Eval.eval m fuel ρ recv).bind fun
         | .list items => some (.list (Eval.sliceList items start stop))
+        | .str s => (Eval.evalList m fuel ρ args).bind fun vs =>
+          Eval.stringMethod "slice" s vs (args.map Eval.intLiteral?)
         | _ => none := by
   have hcases := sliceArgs_eq hk hb
   rw [Eval.eval]
@@ -2215,6 +2230,7 @@ theorem eval_slice (sp sp' : Span) (recv : Expr) (args : List Expr) {bounds : Li
     | none => rfl
     | some w =>
       cases w <;> simp only [Option.bind_eq_bind, Option.bind_some]
+      all_goals try rfl
       case list items =>
         rcases hcases with ⟨rfl, rfl, rfl⟩ | ⟨a, rfl, ha, rfl⟩ | ⟨a, b, e, rfl, ha, hb', rfl⟩
         · rfl
@@ -2231,6 +2247,7 @@ theorem eval_at (sp sp' : Span) (recv arg : Expr) (k : Int) (hk : Eval.intLitera
     Eval.eval m fuel ρ (.call sp (.member sp' recv "at") [arg]) =
       (Eval.eval m fuel ρ recv).bind fun
         | .list items => some (Eval.atVal items k)
+        | .str s => (Eval.eval m fuel ρ arg).bind fun v => Eval.stringMethod "at" s [v] [some k]
         | _ => none := by
   rw [Eval.eval]
   all_goals first
@@ -2314,8 +2331,7 @@ theorem translateArrayCall_sound {F : Nat}
     have hrecv := ihE _ _ _ _ _ _ hxs ρs ρo _ ha hs ht
     have hargs := mapM_sim m fs fuel (fun e ctx c ctx' he => ihE _ _ _ _ _ _ he) args _ codes _ hcodes
       ρs ρo vs ha hs hvs
-    obtain ⟨hat, hsl⟩ := stringMethod_not_at hval
-    rw [eval_stringCall m fuel _ _ _ _ _ hr (by simpa using harg) hat hsl _ hrecv]
+    rw [eval_stringCall m fuel _ _ _ _ _ hr (by simpa using harg) _ hrecv]
     simp [hargs, hval]
   simp only [bind_ok, orReject_ok] at h
   obtain ⟨elem, s₂, ⟨-, rfl⟩, h⟩ := h
@@ -2584,7 +2600,7 @@ theorem eval_mapMethod (sp sp' : Span) (recv key : Expr) (name : String) (hr : r
         match r with
         | .map _ | .set _ => (Eval.eval m fuel ρ key).bind (mapMethodVal name r)
         | .list items => (Eval.eval m fuel ρ key).bind fun k => Eval.arrayMethod name items [k]
-        | .str s => (Eval.eval m fuel ρ key).bind fun k => Eval.stringMethod name s [k]
+        | .str s => (Eval.eval m fuel ρ key).bind fun k => Eval.stringMethod name s [k] [Eval.intLiteral? key]
         | _ => none := by
   have hr' : ∀ s, recv ≠ .ident s "Number" := by
     intro s h; subst h; simp [Expr.namesNumber] at hr
