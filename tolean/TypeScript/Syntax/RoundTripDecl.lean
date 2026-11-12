@@ -1369,7 +1369,7 @@ same line, so `parseDecl` hands it to `parseStatement`. -/
 theorem Stmt.declStart {T : Edition} (st : Stmt) (hw : st.wf T false false = true) {ts : List Token}
     (ht : Laid ts st.wordLines) :
     ∃ x ts', ts = x :: ts' ∧ x.kind ≠ .keyword "import" ∧ x.kind ≠ .keyword "export" ∧
-      x.kind ≠ .keyword "function" ∧ x.kind ≠ .keyword "enum" ∧
+      x.kind ≠ .keyword "function" ∧ x.kind ≠ .keyword "enum" ∧ x.kind ≠ .keyword "class" ∧
       ((x.kind = .ident "interface" ∨ x.kind = .ident "type") → ∃ y ts'', ts' = y :: ts'' ∧ y.isAnyIdent = false) := by
   cases st with
   | exprStmt sp e =>
@@ -1386,7 +1386,8 @@ theorem Stmt.declStart {T : Edition} (st : Stmt) (hw : st.wf T false false = tru
     have hxk : startsExprStmt (some x.kind) = true := by
       have : e.tokens.head? = some x.kind := by simp only [Expr.tokens, ← hke]; simp
       rw [← this]; exact hk
-    refine ⟨x, ets' ++ [semi], by simp, ?_, ?_, ?_, ?_, fun h => ?_⟩
+    refine ⟨x, ets' ++ [semi], by simp, ?_, ?_, ?_, ?_, ?_, fun h => ?_⟩
+    · intro h; rw [h] at hxk; simp [startsExprStmt] at hxk
     · intro h; rw [h] at hxk; simp [startsExprStmt] at hxk
     · intro h; rw [h] at hxk; simp [startsExprStmt] at hxk
     · intro h; rw [h] at hxk; simp [startsExprStmt] at hxk
@@ -1407,7 +1408,8 @@ theorem Stmt.declStart {T : Edition} (st : Stmt) (hw : st.wf T false false = tru
     obtain ⟨h1, _⟩ := Laid.one ht
     simp only [VarDecl.words, VarKind.word_eq] at h1
     obtain ⟨x, ts', rfl, hx, _⟩ := Touching.cons_one (by simpa using h1)
-    refine ⟨x, ts', rfl, ?_, ?_, ?_, ?_, fun h => ?_⟩
+    refine ⟨x, ts', rfl, ?_, ?_, ?_, ?_, ?_, fun h => ?_⟩
+    · rw [hx]; cases d.kind <;> simp [VarKind.token]
     · rw [hx]; cases d.kind <;> simp [VarKind.token]
     · rw [hx]; cases d.kind <;> simp [VarKind.token]
     · rw [hx]; cases d.kind <;> simp [VarKind.token]
@@ -1418,7 +1420,8 @@ theorem Stmt.declStart {T : Edition} (st : Stmt) (hw : st.wf T false false = tru
     obtain ⟨h1, _⟩ := Laid.one ht
     simp only [destructureWords, VarKind.word_eq] at h1
     obtain ⟨x, ts', rfl, hx, _⟩ := Touching.cons_one (by simpa using h1)
-    refine ⟨x, ts', rfl, ?_, ?_, ?_, ?_, fun h => ?_⟩
+    refine ⟨x, ts', rfl, ?_, ?_, ?_, ?_, ?_, fun h => ?_⟩
+    · rw [hx]; cases kind <;> simp [VarKind.token]
     · rw [hx]; cases kind <;> simp [VarKind.token]
     · rw [hx]; cases kind <;> simp [VarKind.token]
     · rw [hx]; cases kind <;> simp [VarKind.token]
@@ -1437,6 +1440,12 @@ def Stmt.isBlock : Stmt → Bool
   | .block .. => true
   | _ => false
 
+/-- The constructor of an error class that `parseClass` reads: parameters
+that `parseParam` reads without `?`, and a message that ends at `)`. -/
+def ctorWF (T : Edition) : Option (List CtorParam × Expr) → Bool
+  | none => true
+  | some (ps, m) => ps.all (fun p => p.param.wf) && m.wfParen T
+
 /-- `d` is a declaration that `parseDecl` reads when the target edition is `T`. -/
 def Decl.wf (T : Edition) : Decl → Bool
   | .«import» _ names _ => !names.isEmpty && names.all (fun n => exprName n.name)
@@ -1446,6 +1455,7 @@ def Decl.wf (T : Edition) : Decl → Bool
   | .interface _ _ name tps fields => exprName name && tps.all typeName && fields.all (fun f => f.type.wf)
   | .typeAlias _ _ name tps ty => exprName name && tps.all typeName && ty.wf
   | .enum _ _ name _ => exprName name
+  | .errorClass _ _ name ctor => exprName name && ctorWF T ctor
   | .exportedVar _ d => d.wf T
   | .stmt s => s.wf T false false
 
@@ -1538,7 +1548,7 @@ theorem parseDecl_stmt {T : Edition} (st : Stmt) (hw : st.wf T false false = tru
     ReadsD T Parse.parseDecl (.stmt st) := by
   intro s ts rest hT hF hs hl ht hr hopen
   have ht' : Laid ts st.wordLines := by simpa [Decl.wordLines, Decl.lines, Stmt.wordLines] using ht
-  obtain ⟨x, ts', rfl, h1, h2, h3, h5, h4⟩ := Stmt.declStart st hw ht'
+  obtain ⟨x, ts', rfl, h1, h2, h3, h5, h6, h4⟩ := Stmt.declStart st hw ht'
   obtain ⟨st', s', hp, he, hL⟩ := parseStatement_budget (loop := false) st hw s _ rest hT hF (fun h => by cases h)
     hs hl ht' hr hopen
   refine ⟨.stmt st', s', ?_, by simp [Decl.erase, he], hL⟩
@@ -1560,6 +1570,7 @@ theorem parseDecl_stmt {T : Edition} (st : Stmt) (hw : st.wf T false false = tru
   rw [if_neg (show ¬ ((x.isIdent "type" && ((s.rest[1]?.getD s.eof).isAnyIdent &&
       !(s.rest[1]?.getD s.eof).newlineBefore)) = true) by simp [hc "type" (.inr rfl)])]
   rw [if_neg (show ¬ (x.isKeyword "enum" = true) by simp [Token.isKeyword, h5])]
+  rw [if_neg (show ¬ (x.isKeyword "class" = true) by simp [Token.isKeyword, h6])]
   rw [if_neg hne]
   rw [Parse.bind_eq (Parse.budget_eq _), Parse.bind_eq hp]
   rfl
@@ -1782,6 +1793,281 @@ theorem parseDeclBody_enum {s : ParseState} {t nm : Token} {r : List Token} (sta
   rw [if_neg (show ¬ ((t.isIdent "type" && _) = true) by simp [Token.isIdent, ht])]
   rw [if_pos (show t.isKeyword "enum" = true by simp [Token.isKeyword, ht])]
 
+theorem parseDeclBody_class {s : ParseState} {t nm : Token} {r : List Token} (start : Pos)
+    (e : Bool) (hs : s.rest = t :: nm :: r) (ht : t.kind = .keyword "class") :
+    Parse.parseDeclBody start e s = Parse.parseClass start e s := by
+  simp only [Parse.parseDeclBody]
+  rw [Parse.bind_eq (Parse.peek_eq hs), Parse.bind_eq (Parse.peekAt_rest _ _)]
+  rw [if_neg (show ¬ (t.isKeyword "function" = true) by simp [Token.isKeyword, ht])]
+  rw [if_neg (show ¬ ((t.isIdent "interface" && _) = true) by simp [Token.isIdent, ht])]
+  rw [if_neg (show ¬ ((t.isIdent "type" && _) = true) by simp [Token.isIdent, ht])]
+  rw [if_neg (show ¬ (t.isKeyword "enum" = true) by simp [Token.isKeyword, ht])]
+  rw [if_pos (show t.isKeyword "class" = true by simp [Token.isKeyword, ht])]
+
+/-- A parameter of a constructor, with `readonly` before it or not. The name
+is not followed by a name, so `readonly` before a name is the modifier, and a
+parameter named `readonly` is a name. -/
+theorem parseCtorParam_reads {T : Edition} (p : CtorParam) (hp : p.param.wf = true) :
+    ReadsW T CtorParam.erase CtorParam.words (fun _ _ => true) Parse.parseCtorParam p (EndsItem ")") := by
+  intro s ts rest hT hs hl ht hn hr hE _
+  obtain ⟨ro, q⟩ := p
+  have hread := parseParam_reads (T := T) (ok := true) q hp (fun _ => rfl)
+  -- The token after the name is a punctuator: `?`, `:`, `,` or `)`.
+  have hafter : ∀ (ts' : List Token), Touching ts' (optionalMark q.optional ++ typeAnnotation q.type) →
+      ∀ y, (ts' ++ rest).head? = some y → y.isAnyIdent = false := by
+    intro ts' h' y hy
+    obtain ⟨u, r, rfl, hu⟩ := hE
+    cases ho : q.optional with
+    | true =>
+      rw [ho] at h'
+      obtain ⟨qm, _, rfl, hqm, _⟩ := Touching.cons_one (by simpa [optionalMark, punctWord] using h')
+      simp at hy; subst hy; simp [Token.isAnyIdent, hqm]
+    | false =>
+      rw [ho] at h'
+      cases hty : q.type with
+      | none =>
+        rw [hty] at h'
+        simp [Touching, optionalMark, typeAnnotation] at h'; subst h'
+        simp at hy; subst hy
+        rcases hu with h | h <;> simp [Token.isAnyIdent, h]
+      | some t =>
+        rw [hty] at h'
+        obtain ⟨colon, _, rfl, hcolon, _⟩ :=
+          Touching.cons_one (by simpa [punctWord, typeAnnotation, optionalMark] using h')
+        simp at hy; subst hy; simp [Token.isAnyIdent, hcolon]
+  cases ro with
+  | false =>
+    simp only [CtorParam.words, Bool.false_eq_true, ↓reduceIte, List.nil_append] at ht
+    obtain ⟨q', s', hq, he, hL⟩ := hread s ts rest hT hs hl ht hn hr hE rfl
+    have ht' := ht
+    simp only [Param.words] at ht'
+    obtain ⟨nm, ts', rfl, hnm, h'⟩ := Touching.cons_one (by simpa [identWord] using ht')
+    have hs' : s.rest = nm :: (ts' ++ rest) := by simpa using hs
+    obtain ⟨y, r', hyr⟩ : ∃ y r', ts' ++ rest = y :: r' := List.exists_cons_of_ne_nil (by simp [hr])
+    have hy := hafter ts' h' y (by simp [hyr])
+    refine ⟨⟨false, { q' with span := ⟨nm.span.start, s'.lastStop⟩ }⟩, s', ?_, ?_, hL⟩
+    · simp only [Parse.parseCtorParam]
+      rw [Parse.bind_eq (Parse.peek_eq hs'), Parse.bind_eq (Parse.peekAt_rest _ _)]
+      have hidx : s.rest[1]?.getD s.eof = y := by simp [hs', hyr]
+      rw [hidx, if_neg (by simp [hy]), Parse.pure_bind, Parse.bind_eq hq, Parse.bind_eq (Parse.spanFrom_eq _ _)]
+      simp [pure, EStateM.pure, hy]
+    · simp only [CtorParam.erase, Param.erase] at he ⊢
+      simpa [Param.erase] using he
+  | true =>
+    simp only [CtorParam.words, ↓reduceIte, List.singleton_append] at ht
+    obtain ⟨ro, ts', rfl, hro, h'⟩ := Touching.cons_one (by simpa [identWord] using ht)
+    have ht' := h'
+    simp only [Param.words] at ht'
+    obtain ⟨nm, ts'', rfl, hnm, h''⟩ := Touching.cons_one (by simpa [identWord] using ht')
+    have hs' : s.rest = ro :: nm :: (ts'' ++ rest) := by simpa using hs
+    have hnb : nm.newlineBefore = false := hn nm (by simp) (by rw [hnm]; simp)
+    let s₁ := past s ro (nm :: (ts'' ++ rest))
+    have hl₁ : s₁.left = s₁.rest.length := by simp [s₁, hl, hs']
+    obtain ⟨q', s', hq, he, hL⟩ := hread s₁ (nm :: ts'') rest (by simp [s₁, hT]) (by simp [s₁]) hl₁ h'
+      (fun y hy => hn y (by simp at hy ⊢; simp [hy])) hr hE rfl
+    refine ⟨⟨true, { q' with span := ⟨ro.span.start, s'.lastStop⟩ }⟩, s', ?_, ?_,
+      leaves_trans (leaves_advance hs' hl) hL⟩
+    · simp only [Parse.parseCtorParam]
+      rw [Parse.bind_eq (Parse.peek_eq hs'), Parse.bind_eq (Parse.peekAt_rest _ _)]
+      have hidx : s.rest[1]?.getD s.eof = nm := by simp [hs']
+      rw [hidx, if_pos (by simp [Token.isIdent, Token.isAnyIdent, hro, hnm, hnb]),
+        Parse.bind_eq (Parse.discard_eq (Parse.advance_eq hs')), Parse.bind_eq hq,
+        Parse.bind_eq (Parse.spanFrom_eq _ _)]
+      simp [pure, EStateM.pure, Token.isIdent, Token.isAnyIdent, hro, hnm, hnb]
+    · simp only [CtorParam.erase, Param.erase] at he ⊢
+      simpa [Param.erase] using he
+
+/-- `( params )` of a constructor, which `listStep` and `parseCtorParam` read. -/
+theorem ctorParams_reads {T : Edition} (params : List CtorParam) (hps : ∀ p ∈ params, p.param.wf = true)
+    (s : ParseState) (its rest : List Token) (rp : Token) (hT : s.target = T) (hs : s.rest = its ++ rp :: rest)
+    (hrp : rp.kind = .punct ")") (hl : s.left = s.rest.length)
+    (ht : Touching its (separated "," (params.map CtorParam.words))) (hn : ∀ y ∈ its, NoBreak y) :
+    ∃ res s', Parse.iterate (10 * (s.left + 1)) #[] (Parse.listStep ")" (fun _ => pure ()) Parse.parseCtorParam) s =
+      .ok res s' ∧ res.toList.map CtorParam.erase = params.map CtorParam.erase ∧ Leaves s s' (rp :: rest) := by
+  obtain ⟨res, s', hit, he, hL⟩ := iterate_list (close := ")") (refuse := fun _ => pure ()) (by decide)
+    params (10 * (s.left + 1)) #[] s its rest rp (fun p hp => parseCtorParam_reads p (hps p hp))
+    (fun p _ => ⟨if p.readonly then .ident "readonly" else .ident p.param.name,
+      by cases h : p.readonly <;> simp [CtorParam.words, Param.words, identWord, h],
+      by split <;> simp, fun _ _ _ => rfl⟩)
+    (by have := length_items ht; have : s.left = its.length + rest.length + 1 := by simp [hl, hs]; omega
+        omega) hT hs hrp hl ht hn (listAfter_true params)
+  exact ⟨res, s', hit, by simpa using he, hL⟩
+
+/-- `class`, a name, `extends Error`, `{`, at most a constructor on its own
+lines, and `}`. -/
+theorem parseClass_reads {T : Edition} (start : Pos) (exported : Bool) (sp : Span) (name : String)
+    (ctor : Option (List CtorParam × Expr)) (hname : exprName name = true) (hc : ctorWF T ctor = true) :
+    ∀ (s : ParseState) (ts cts rest : List Token) (rb : Token), s.rest = ts ++ cts ++ rb :: rest →
+      s.target = T → s.left = s.rest.length →
+      Touching ts [keywordWord "class", identWord name, keywordWord "extends", identWord "Error", punctWord "{"] →
+      Laid cts ((ctorLines ctor).map Prod.snd) → rb.kind = .punct "}" → rest ≠ [] →
+      ∃ d' s', Parse.parseClass start exported s = .ok d' s' ∧
+        d'.erase = (Decl.errorClass sp exported name ctor).erase ∧ Leaves s s' rest := by
+  intro s ts cts rest rb hs hT hl ht hcts hrb hr
+  have hname' : name ∉ Parse.refusedNames := by simpa [exprName] using hname
+  obtain ⟨ck, ts₁, rfl, hck, h₁⟩ := Touching.cons_one (by simpa [keywordWord] using ht)
+  obtain ⟨nm, ts₂, rfl, hnm, h₂⟩ := Touching.cons_one (by simpa [identWord] using h₁)
+  obtain ⟨ek, ts₃, rfl, hek, h₃⟩ := Touching.cons_one (by simpa [keywordWord] using h₂)
+  obtain ⟨er, ts₄, rfl, her, h₄⟩ := Touching.cons_one (by simpa [identWord] using h₃)
+  obtain ⟨lb, ts₅, rfl, hlb, h₅⟩ := Touching.cons_one (by simpa [punctWord] using h₄)
+  simp [Touching] at h₅; subst h₅
+  have hs' : s.rest = ck :: nm :: ek :: er :: lb :: (cts ++ rb :: rest) := by simpa using hs
+  let s₁ := past s ck (nm :: ek :: er :: lb :: (cts ++ rb :: rest))
+  let s₂ := past s₁ nm (ek :: er :: lb :: (cts ++ rb :: rest))
+  let s₃ := past s₂ ek (er :: lb :: (cts ++ rb :: rest))
+  let s₄ := past s₃ er (lb :: (cts ++ rb :: rest))
+  let s₅ : ParseState := { s₄ with rest := cts ++ rb :: rest, left := s₄.left - 1, lastStop := lb.span.stop }
+  have hl₅ : s₅.left = s₅.rest.length := by simp [s₅, s₄, s₃, s₂, s₁, hl, hs']
+  have hT₅ : s₅.target = T := by simp [s₅, s₄, s₃, s₂, s₁, hT]
+  have hL₅ : Leaves s s₅ (cts ++ rb :: rest) :=
+    leaves_trans (leaves_advance hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))
+      (leaves_trans (leaves_advance (s := s₂) rfl (by simp [s₂, s₁, hl, hs']))
+        (leaves_trans (leaves_advance (s := s₃) rfl (by simp [s₃, s₂, s₁, hl, hs']))
+          (leaves_advance (s := s₄) rfl (by simp [s₄, s₃, s₂, s₁, hl, hs'])))))
+  cases ctor with
+  | none =>
+    simp only [ctorLines, List.map_nil, Laid] at hcts
+    subst hcts
+    refine ⟨.errorClass ⟨start, rb.span.stop⟩ exported name none,
+      { s₅ with rest := rest, left := s₅.left - 1, lastStop := rb.span.stop }, ?_, by simp [Decl.erase],
+      leaves_trans hL₅ (leaves_advance (s := s₅) rfl hl₅)⟩
+    simp only [Parse.parseClass]
+    rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_eq hs')), Parse.bind_eq (readName_ok (s := s₁) rfl hnm hname')]
+    rw [Parse.bind_eq (Parse.peek_eq (s := s₂) rfl), if_pos (show ek.isKeyword "extends" = true by simp [Token.isKeyword, hek]),
+      Parse.pure_bind, Parse.bind_eq (Parse.discard_eq (Parse.advance_eq (s := s₂) rfl)),
+      Parse.bind_eq (Parse.peek_eq (s := s₃) rfl), if_pos (show er.isIdent "Error" = true by simp [Token.isIdent, her]),
+      Parse.pure_bind, Parse.bind_eq (Parse.discard_eq (Parse.advance_eq (s := s₃) rfl)),
+      Parse.bind_eq (Parse.expectPunct_ok (s := s₄) rfl (by simp) hlb)]
+    rw [Parse.bind_eq (Parse.peek_eq (s := s₅) rfl), if_pos (show rb.isPunct "}" = true by simp [Token.isPunct, hrb]),
+      Parse.bind_eq (Parse.discard_eq (Parse.advance_cons (s := s₅) rfl hr)), Parse.bind_eq (Parse.spanFrom_eq _ _)]
+    rfl
+  | some c =>
+    obtain ⟨params, message⟩ := c
+    simp only [ctorWF, Bool.and_eq_true, List.all_eq_true, Expr.wfParen] at hc
+    obtain ⟨hps, hwe, hae⟩ := hc
+    simp only [ctorLines, List.map_cons, List.map_nil] at hcts
+    obtain ⟨a, b, rfl, ha, hna, _, hb⟩ := Laid.cons hcts
+    obtain ⟨b₁, b₂, rfl, hb₁, hnb₁, _, hb₂⟩ := Laid.cons hb
+    obtain ⟨hb₂t, _⟩ := Laid.one hb₂
+    -- `constructor ( params ) {`
+    obtain ⟨ct, a₁, rfl, hct, ha₁⟩ := Touching.cons_one (by simpa [identWord] using ha)
+    obtain ⟨pts, a₂, rfl, hpts, ha₂⟩ := Touching.append_split ha₁
+    obtain ⟨lp, its, rp, rfl, hlp, hits, hrp⟩ := Touching.enclosed (by simpa [enclose] using hpts)
+    obtain ⟨cb, a₃, rfl, hcb, ha₃⟩ := Touching.cons_one (by simpa [punctWord] using ha₂)
+    simp [Touching] at ha₃; subst ha₃
+    -- `super ( message ) ;`
+    obtain ⟨sk, b₁', rfl, hsk, hb₁'⟩ := Touching.cons_one (by simpa [keywordWord] using hb₁)
+    obtain ⟨lpm, b₁'', rfl, hlpm, hb₁''⟩ := Touching.cons_one (by simpa [punctWord] using hb₁')
+    obtain ⟨mts, b₁''', rfl, hmts, hb₁'''⟩ := Touching.append_split hb₁''
+    obtain ⟨rpm, b₁'''', rfl, hrpm, hb₁''''⟩ := Touching.cons_one (by simpa [punctWord] using hb₁''')
+    obtain ⟨semi, b₁''''', rfl, hsemi, hb₁'''''⟩ := Touching.cons_one (by simpa [punctWord] using hb₁'''')
+    simp [Touching] at hb₁'''''; subst hb₁'''''
+    -- `}` of the constructor
+    obtain ⟨cr, b₂', rfl, hcr, hb₂'⟩ := Touching.cons_one (by simpa [punctWord] using hb₂t)
+    simp [Touching] at hb₂'; subst hb₂'
+    have hs₅ : s₅.rest = ct :: lp :: (its ++ rp :: cb :: sk :: lpm :: (mts ++ rpm :: semi :: cr :: rb :: rest)) := by
+      simp [s₅]
+    let s₆ := past s₅ ct (lp :: (its ++ rp :: cb :: sk :: lpm :: (mts ++ rpm :: semi :: cr :: rb :: rest)))
+    let s₇ : ParseState := { s₆ with rest := its ++ rp :: cb :: sk :: lpm :: (mts ++ rpm :: semi :: cr :: rb :: rest), left := s₆.left - 1, lastStop := lp.span.stop }
+    have hl₇ : s₇.left = s₇.rest.length := by simp [s₇, s₆, hl₅, hs₅]
+    have hT₇ : s₇.target = T := by simp [s₇, s₆, hT₅]
+    obtain ⟨res, s₈, hit, hes, hL₈⟩ := ctorParams_reads params hps s₇ its
+      (cb :: sk :: lpm :: (mts ++ rpm :: semi :: cr :: rb :: rest)) rp hT₇ rfl hrp hl₇ hits
+      (fun y hy => hna y (by simp [hy]))
+    have hs₈ : s₈.rest = rp :: cb :: sk :: lpm :: (mts ++ rpm :: semi :: cr :: rb :: rest) := hL₈.rest_eq
+    let s₉ : ParseState := { s₈ with rest := cb :: sk :: lpm :: (mts ++ rpm :: semi :: cr :: rb :: rest), left := s₈.left - 1, lastStop := rp.span.stop }
+    let s₁₀ : ParseState := { s₉ with rest := sk :: lpm :: (mts ++ rpm :: semi :: cr :: rb :: rest), left := s₉.left - 1, lastStop := cb.span.stop }
+    let s₁₁ := past s₁₀ sk (lpm :: (mts ++ rpm :: semi :: cr :: rb :: rest))
+    let s₁₂ : ParseState := { s₁₁ with rest := mts ++ rpm :: semi :: cr :: rb :: rest, left := s₁₁.left - 1, lastStop := lpm.span.stop }
+    have hl₁₂ : s₁₂.left = s₁₂.rest.length := by simp [s₁₂, s₁₁, s₁₀, s₉, hL₈.left_eq]
+    have hT₁₂ : s₁₂.target = T := by simp [s₁₂, s₁₁, s₁₀, s₉, hL₈.target_eq, hT₇]
+    obtain ⟨m', s₁₃, hpm, hem, hL₁₃⟩ := parseExpression_budget message hwe s₁₂ mts (rpm :: semi :: cr :: rb :: rest)
+      hT₁₂ (by simp [s₁₂]) hl₁₂ hmts (fun y hy => hnb₁ y (by
+        simp only [List.tail_cons]; exact List.mem_cons_of_mem _ (List.mem_append_left _ (List.mem_of_mem_tail hy)))) (by simp)
+      (EndsExpr.closer hrpm) (by simpa [hrpm] using afterOK_closer hae _)
+    have hs₁₃ : s₁₃.rest = rpm :: semi :: cr :: rb :: rest := hL₁₃.rest_eq
+    let s₁₄ : ParseState := { s₁₃ with rest := semi :: cr :: rb :: rest, left := s₁₃.left - 1, lastStop := rpm.span.stop }
+    let s₁₅ : ParseState := { s₁₄ with rest := cr :: rb :: rest, left := s₁₄.left - 1, lastStop := semi.span.stop }
+    let s₁₆ := past s₁₅ cr (rb :: rest)
+    refine ⟨.errorClass ⟨start, rb.span.stop⟩ exported name (some (res.toList, m')),
+      { s₁₆ with rest := rest, left := s₁₆.left - 1, lastStop := rb.span.stop }, ?_, ?_, ?_⟩
+    · simp only [Parse.parseClass]
+      rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_eq hs')), Parse.bind_eq (readName_ok (s := s₁) rfl hnm hname')]
+      rw [Parse.bind_eq (Parse.peek_eq (s := s₂) rfl), if_pos (show ek.isKeyword "extends" = true by simp [Token.isKeyword, hek]),
+        Parse.pure_bind, Parse.bind_eq (Parse.discard_eq (Parse.advance_eq (s := s₂) rfl)),
+        Parse.bind_eq (Parse.peek_eq (s := s₃) rfl), if_pos (show er.isIdent "Error" = true by simp [Token.isIdent, her]),
+        Parse.pure_bind, Parse.bind_eq (Parse.discard_eq (Parse.advance_eq (s := s₃) rfl)),
+        Parse.bind_eq (Parse.expectPunct_ok (s := s₄) rfl (by simp) hlb)]
+      rw [Parse.bind_eq (Parse.peek_eq hs₅), if_neg (show ¬ (ct.isPunct "}" = true) by simp [Token.isPunct, hct]),
+        Parse.pure_bind, if_pos (show ct.isIdent "constructor" = true by simp [Token.isIdent, hct]), Parse.pure_bind,
+        Parse.bind_eq (Parse.discard_eq (Parse.advance_eq hs₅)),
+        Parse.bind_eq (Parse.expectPunct_ok (s := s₆) rfl (by simp) hlp), Parse.bind_eq (Parse.budget_eq _),
+        Parse.bind_eq hit, Parse.bind_eq (Parse.expectPunct_ok hs₈ (by simp) hrp),
+        Parse.bind_eq (Parse.expectPunct_ok (s := s₉) rfl (by simp) hcb),
+        Parse.bind_eq (Parse.peek_eq (s := s₁₀) rfl), if_pos (show sk.isKeyword "super" = true by simp [Token.isKeyword, hsk]),
+        Parse.pure_bind, Parse.bind_eq (Parse.discard_eq (Parse.advance_eq (s := s₁₀) rfl)),
+        Parse.bind_eq (Parse.expectPunct_ok (s := s₁₁) rfl (by simp) hlpm), Parse.bind_eq (Parse.budget_eq _),
+        Parse.bind_eq hpm, Parse.bind_eq (Parse.expectPunct_ok hs₁₃ (by simp) hrpm),
+        Parse.bind_eq (endStatement_semi (s := s₁₄) rfl (by simp) hsemi),
+        Parse.bind_eq (Parse.peek_eq (s := s₁₅) rfl), if_pos (show cr.isPunct "}" = true by simp [Token.isPunct, hcr]),
+        Parse.pure_bind, Parse.bind_eq (Parse.discard_eq (Parse.advance_eq (s := s₁₅) rfl)),
+        Parse.bind_eq (Parse.expectPunct_ok (s := s₁₆) rfl hr hrb), Parse.bind_eq (Parse.spanFrom_eq _ _)]
+      rfl
+    · simp [Decl.erase, hes, hem]
+    · have L1 := leaves_trans hL₅ (leaves_advance hs₅ hl₅)
+      have L2 := leaves_trans L1 (leaves_advance (s := s₆) rfl (by simp [s₆, hl₅, hs₅]))
+      have L3 := leaves_trans L2 hL₈
+      have L4 := leaves_trans L3 (leaves_advance hs₈ (by rw [hL₈.left_eq, hs₈]))
+      have L5 := leaves_trans L4 (leaves_advance (s := s₉) rfl (by simp [s₉, hL₈.left_eq]))
+      have L6 := leaves_trans L5 (leaves_advance (s := s₁₀) rfl (by simp [s₁₀, s₉, hL₈.left_eq]))
+      have L7 := leaves_trans L6 (leaves_advance (s := s₁₁) rfl (by simp [s₁₁, s₁₀, s₉, hL₈.left_eq]))
+      have L8 := leaves_trans L7 hL₁₃
+      have L9 := leaves_trans L8 (leaves_advance hs₁₃ (by rw [hL₁₃.left_eq, hs₁₃]))
+      have L10 := leaves_trans L9 (leaves_advance (s := s₁₄) rfl (by simp [s₁₄, hL₁₃.left_eq]))
+      have L11 := leaves_trans L10 (leaves_advance (s := s₁₅) rfl (by simp [s₁₅, s₁₄, hL₁₃.left_eq]))
+      exact leaves_trans L11 (leaves_advance (s := s₁₆) rfl (by simp [s₁₆, s₁₅, s₁₄, hL₁₃.left_eq]))
+
+/-- `class Name extends Error { … }`, with at most a constructor. -/
+theorem parseDecl_class {T : Edition} (sp : Span) (exported : Bool) (name : String)
+    (ctor : Option (List CtorParam × Expr)) (hw : (Decl.errorClass sp exported name ctor).wf T = true) :
+    ReadsD T Parse.parseDecl (.errorClass sp exported name ctor) := by
+  intro s ts rest _ _ hs hl ht hr _
+  simp only [Decl.wf, Bool.and_eq_true] at hw
+  obtain ⟨hname, hc⟩ := hw
+  simp only [Decl.wordLines, Decl.lines, List.map_cons, List.map_append, List.map_nil] at ht
+  obtain ⟨a, b, rfl, ha, _, _, hb⟩ := Laid.cons ht
+  obtain ⟨cts, b₂, rfl, hcts, hb₂, _⟩ := Laid.append (l₁ := (ctorLines ctor).map Prod.snd) hb
+  obtain ⟨hrb, _⟩ := Laid.one hb₂
+  obtain ⟨rb, b₂', rfl, hrbk, h'⟩ := Touching.cons_one (by simpa [punctWord] using hrb)
+  simp [Touching] at h'; subst h'
+  cases exported with
+  | false =>
+    simp only [exportWords, Bool.false_eq_true, ↓reduceIte, List.nil_append] at ha
+    obtain ⟨ck, a₁, rfl, hck, h₁⟩ := Touching.cons_one (by simpa [keywordWord] using ha)
+    obtain ⟨nm, a₂, rfl, _, _⟩ := Touching.cons_one (by simpa [identWord] using h₁)
+    have hs' : s.rest = ck :: nm :: (a₂ ++ (cts ++ rb :: rest)) := by simpa using hs
+    obtain ⟨d', s', hp, he, hL⟩ := parseClass_reads ck.span.start (ck.isKeyword "export") sp name ctor hname hc
+      s (ck :: nm :: a₂) cts rest rb (by simpa using hs) (by assumption) hl ha hcts hrbk hr
+    refine ⟨d', s', ?_, by rw [he]; simp [Decl.erase, Token.isKeyword, hck], hL⟩
+    rw [parseDecl_body hs' (by simp) (by rw [hck]; simp) (fun h => by simp [Token.isKeyword, hck] at h),
+      if_neg (show ¬ (ck.isKeyword "export" = true) by simp [Token.isKeyword, hck]),
+      parseDeclBody_class _ _ hs' hck]
+    exact hp
+  | true =>
+    simp only [exportWords, ↓reduceIte, List.singleton_append] at ha
+    obtain ⟨ex, a₀, rfl, hex, h₀⟩ := Touching.cons_one (by simpa [keywordWord] using ha)
+    obtain ⟨ck, a₁, rfl, hck, h₁⟩ := Touching.cons_one (by simpa [keywordWord] using h₀)
+    obtain ⟨nm, a₂, rfl, _, _⟩ := Touching.cons_one (by simpa [identWord] using h₁)
+    have hs' : s.rest = ex :: ck :: nm :: (a₂ ++ (cts ++ rb :: rest)) := by simpa using hs
+    let s₁ := past s ex (ck :: (nm :: (a₂ ++ (cts ++ rb :: rest))))
+    obtain ⟨d', s', hp, he, hL⟩ := parseClass_reads ex.span.start (ex.isKeyword "export") sp name ctor hname hc
+      s₁ (ck :: nm :: a₂) cts rest rb (by simp [s₁]) (by simp [s₁]; assumption) (by simp [s₁, hl, hs']) h₀ hcts hrbk hr
+    refine ⟨d', s', ?_, by rw [he]; simp [Decl.erase, Token.isKeyword, hex], leaves_trans (leaves_advance hs' hl) hL⟩
+    rw [parseDecl_body hs' (by simp) (by rw [hex]; simp) (fun _ => startsExportList_head rfl (by rw [hck]; simp) (by rw [hck]; simp)),
+      if_pos (show ex.isKeyword "export" = true by simp [Token.isKeyword, hex]),
+      parseDeclBody_class (s := s₁) _ _ rfl hck]
+    exact hp
+
 theorem parseDecl_enum {T : Edition} (sp : Span) (exported : Bool) (name : String) (members : List EnumMember)
     (hw : (Decl.enum sp exported name members).wf T = true) :
     ReadsD T Parse.parseDecl (.enum sp exported name members) := by
@@ -1895,6 +2181,7 @@ theorem parseDecl_exportedVar {T : Edition} (sp : Span) (d : VarDecl)
     rw [if_neg (show ¬ ((kw.isIdent "interface" && _) = true) by simp [Token.isIdent, hkw])]
     rw [if_neg (show ¬ ((kw.isIdent "type" && _) = true) by simp [Token.isIdent, hkw])]
     rw [if_neg (show ¬ (kw.isKeyword "enum" = true) by simp [Token.isKeyword, hkw])]
+    rw [if_neg (show ¬ (kw.isKeyword "class" = true) by simp [Token.isKeyword, hkw])]
     rw [if_pos (show ex.isKeyword "export" = true by simp [Token.isKeyword, hex])]
     rw [if_pos (show (kw.isKeyword "const" || kw.isIdent "let") = true by simp [Token.isKeyword, Token.isIdent, hkw]),
       Parse.pure_bind, Parse.bind_eq hp, Parse.bind_eq (Parse.spanFrom_eq _ _)]
@@ -1910,6 +2197,7 @@ theorem parseDecl_reads {T : Edition} (d : Decl) (hw : d.wf T = true) : ReadsD T
   | interface sp e n tps fs => exact parseDecl_interface sp e n tps fs hw
   | typeAlias sp e n tps t => exact parseDecl_typeAlias sp e n tps t hw
   | enum sp e n ms => exact parseDecl_enum sp e n ms hw
+  | errorClass sp e n ctor => exact parseDecl_class sp e n ctor hw
   | exportedVar sp d => exact parseDecl_exportedVar sp d hw
   | stmt st => exact parseDecl_stmt st hw
 
@@ -1950,6 +2238,11 @@ theorem Decl.first {T : Edition} (d : Decl) (hw : d.wf T = true) {ts : List Toke
     | nil => cases e <;> simp [Decl.wordLines, Decl.lines, exportWords, keywordWord, identWord] at hk
     | cons x ts' => refine ⟨x, ts', rfl, ?_⟩; cases e <;> simp [Decl.wordLines, Decl.lines, exportWords, keywordWord, identWord] at hk <;> rw [hk.1] <;> simp
   | enum sp e n ms =>
+    have hk := h.kinds
+    cases ts with
+    | nil => cases e <;> simp [Decl.wordLines, Decl.lines, exportWords, keywordWord, identWord] at hk
+    | cons x ts' => refine ⟨x, ts', rfl, ?_⟩; cases e <;> simp [Decl.wordLines, Decl.lines, exportWords, keywordWord, identWord] at hk <;> rw [hk.1] <;> simp
+  | errorClass sp e n ctor =>
     have hk := h.kinds
     cases ts with
     | nil => cases e <;> simp [Decl.wordLines, Decl.lines, exportWords, keywordWord, identWord] at hk

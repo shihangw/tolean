@@ -111,6 +111,13 @@ structure Param where
   optional : Bool := false
   type : Option TypeExpr
 
+/-- A parameter of the constructor of an error class. With `readonly` before
+it, TypeScript declares a field of the class with the parameter's name and
+type, which the constructor sets to the argument. -/
+structure CtorParam where
+  readonly : Bool
+  param : Param
+
 /-- The key of an object literal property. -/
 inductive PropKey where
   | ident (name : String)
@@ -766,6 +773,12 @@ inductive Decl where
   | typeAlias (span : Span) (exported : Bool) (name : String) (typeParams : List String) (type : TypeExpr)
   /-- `enum Name { A = "a", B = "b" }`: an enum whose members are strings. -/
   | enum (span : Span) (exported : Bool) (name : String) (members : List EnumMember)
+  /-- `class Name extends Error { constructor(params) { super(message); } }`,
+  an error class (ECMA-262 §15.7, and §20.5.1 for `Error`). Its fields are
+  the `readonly` parameters of its constructor. Without a constructor (`ctor`
+  is none), `new Name(m)` makes an error with the message `m`, as
+  `new Error(m)` does. -/
+  | errorClass (span : Span) (exported : Bool) (name : String) (ctor : Option (List CtorParam × Expr))
   | exportedVar (span : Span) (decl : VarDecl)
   | stmt (stmt : Stmt)
 
@@ -872,7 +885,7 @@ def Stmt.isBreak : Stmt → Bool
   | _ => false
 
 def Decl.span : Decl → Span
-  | .import s .. | .exports s .. | .function s .. | .interface s .. | .typeAlias s .. | .enum s .. | .exportedVar s _ => s
+  | .import s .. | .exports s .. | .function s .. | .interface s .. | .typeAlias s .. | .enum s .. | .errorClass s .. | .exportedVar s _ => s
   | .stmt st => st.span
 
 /-- `e` reads a property after a `?.`, through property reads and not

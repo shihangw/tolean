@@ -3660,6 +3660,10 @@ def moduleUsesNumber (m : Module) : Bool :=
       isNumberName name || fields.any fun f => isNumberName f.name || typeUsesNumber f.type
     | .typeAlias _ _ name _ type => isNumberName name || typeUsesNumber type
     | .enum _ _ name _ => isNumberName name
+    | .errorClass _ _ name ctor =>
+      isNumberName name || ctor.any fun (ps, m) =>
+        ps.any (fun p => isNumberName p.param.name || (p.param.type.map typeUsesNumber).getD false) ||
+          exprUsesNumber m
     | .exportedVar _ d => varUsesNumber d
     | .stmt st => stmtUsesNumber st
 
@@ -3762,6 +3766,7 @@ def translateDecl (thr : String → Bool) : Decl → TM (Option IR.Decl)
   | .function s exported name typeParams params ret body =>
     some <$> translateFunction thr s exported name typeParams params ret body
   | .enum s exported name members => some <$> translateStringEnum s exported name members
+  | .errorClass s .. => reject s "tolean does not translate error classes yet"
   | d => reject d.span "only imports, interfaces, types, enums and functions may appear at top level"
 
 /-- The names of the export lists of `m` that name declarations of the file:

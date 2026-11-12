@@ -1157,6 +1157,7 @@ theorem translateDecl_ok {thr : String → Bool} {d : Decl} {s s' : Ctx} {o : Op
     obtain ⟨rfl, rfl⟩ := translateExports_ok h
     exact ⟨rfl, rfl, [], by simp, by simp [declRefs], id, by simp, by simp⟩
   | exportedVar sp decl => simp [translateDecl] at h
+  | errorClass _ _ _ _ => simp [translateDecl] at h
   | stmt st => simp [translateDecl] at h
 
 /-- What one declaration does to the names and the string enums of the file. -/
@@ -1188,6 +1189,7 @@ theorem translateDecl_names {P : Eval.Program} {thr : String → Bool} {d : Decl
     obtain ⟨o', h₁, rfl⟩ := h
     exact translateFunction_names h₁
   | exportedVar sp decl => simp [translateDecl] at h
+  | errorClass _ _ _ _ => simp [translateDecl] at h
   | stmt st => simp [translateDecl] at h
 
 /-- `R` holds for each pair of elements in the same place. -/
@@ -1302,6 +1304,7 @@ theorem decls_ok (P : Eval.Program) (thr : String → Bool) :
         obtain ⟨-, rfl, -⟩ := translateStringEnum_shape h₁
         simpa [Eval.functionsIn, IR.functions, List.filterMap_cons] using hrel
       | exportedVar sp decl => simp [translateDecl] at h₁
+      | errorClass _ _ _ _ => simp [translateDecl] at h₁
       | stmt st => simp [translateDecl] at h₁
 
 theorem findSome_eq {α β : Type} {f : α → Option β} {x : β} :
