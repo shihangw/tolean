@@ -52,6 +52,7 @@ def NumberOp.apply : NumberOp → N → N → Val N
   | .add, a, b => .num (JSNumber.add a b)
   | .sub, a, b => .num (JSNumber.sub a b)
   | .mul, a, b => .num (JSNumber.mul a b)
+  | .div, a, b => .num (JSNumber.div a b)
   | .lt, a, b => .bool (JSNumber.lt a b)
   | .le, a, b => .bool (JSNumber.le a b)
   | .eq, a, b => .bool (JSNumber.eq a b)
@@ -63,6 +64,11 @@ def NumberTest.apply : NumberTest → N → Bool
   | .isSafeInteger, a => (JSNumber.toSafeInt a).isSome
   | .isNaN, a => JSNumber.isNaN a
   | .isFinite, a => JSNumber.isFinite a
+  | .isInteger, a => JSNumber.isInteger a
+
+def NumberFn.apply : NumberFn → N → N
+  | .floor => JSNumber.floor | .ceil => JSNumber.ceil | .trunc => JSNumber.trunc
+  | .round => JSNumber.round | .abs => JSNumber.abs
 
 def BigintOp.apply : BigintOp → Int → Int → Int
   | .bitAnd => JSBigInt.bitAnd | .bitOr => JSBigInt.bitOr | .bitXor => JSBigInt.bitXor
@@ -99,6 +105,9 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   | .numberOp op, [.num a, .num b] => some (op.apply a b)
   | .numberNe, [.num a, .num b] => some (.bool !(JSNumber.eq a b))
   | .numberTest test, [.num a] => some (.bool (test.apply a))
+  | .numberFn f, [.num a] => some (.num (f.apply a))
+  | .numberFold isMax, vs =>
+    (Eval.numbers? vs).map fun xs => .num (if isMax then JSNumber.maximum xs else JSNumber.minimum xs)
   | .bigintOp op, [.int a, .int b] => some (.int (op.apply a b))
   | .bigintNot, [.int a] => some (.int (JSBigInt.bitNot a))
   | .bigintPow k, [.int a] => some (.int (a ^ k))

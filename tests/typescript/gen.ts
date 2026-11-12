@@ -191,6 +191,17 @@ export class Gen {
         // The length of a string and the index of a string in it, which count
         // UTF-16 code units.
         if (t.k === 'number') {
+          // `/` and the functions of `Math` that the model has. A division
+          // by zero gives an infinity or `NaN`, which the values check too.
+          options.push(
+            () => `${this.expr(t, vars, d)} / ${this.expr(t, vars, d)}`,
+            () => `Math.${this.pick(['floor', 'ceil', 'trunc', 'round', 'abs'])}(${this.expr(t, vars, d)})`,
+            () => {
+              const count = this.pick([0, 1, 2, 3]);
+              const args = Array.from({ length: count }, () => this.expr(t, vars, d));
+              return `Math.${this.pick(['min', 'max'])}(${args.join(', ')})`;
+            },
+          );
           options.push(
             () => `(${this.expr(STRING, vars, d)}).length`,
             () => `(${this.expr(STRING, vars, d)}).indexOf(${this.expr(STRING, vars, d)})`,
@@ -260,7 +271,7 @@ export class Gen {
             const flags = readable.filter((v) => v.ty.k === 'boolean');
             return flags.length > 0 ? `${this.pick(flags).name} === ${this.expr(BOOLEAN, vars, d)}` : 'true';
           },
-          () => `Number.${this.pick(['isNaN', 'isFinite', 'isSafeInteger'])}(${this.expr(NUMBER, vars, d)})`,
+          () => `Number.${this.pick(['isNaN', 'isFinite', 'isSafeInteger', 'isInteger'])}(${this.expr(NUMBER, vars, d)})`,
           // A test of one string in another, by code units.
           () => `(${this.expr(STRING, vars, d)}).${this.pick(['startsWith', 'endsWith', 'includes'])}(${this.expr(STRING, vars, d)})`,
           // A test of the pieces that `split` gives.

@@ -373,9 +373,11 @@ the file, the line and the reason. It never approximates.
 |---|---|
 | `bigint` | `Int` (exact; literals are typed `(n : Int)`) |
 | `number` | an abstract `N` with `[JSNumber N]` (see [Numbers](#numbers)) |
-| integer `number` literal, `-x`, `+ - *`, `< <= > >=`, `=== !==` on `number` | `JSNumber.ofSafeInt`, `neg`, `add`, `sub`, `mul`, `lt`, `le`, `eq` |
+| integer `number` literal, `-x`, `+ - * /`, `< <= > >=`, `=== !==` on `number` | `JSNumber.ofSafeInt`, `neg`, `add`, `sub`, `mul`, `div`, `lt`, `le`, `eq` |
 | `Number.isSafeInteger(x)` | `(JSNumber.toSafeInt x).isSome` |
-| `Number.isNaN(x)`, `Number.isFinite(x)` | `JSNumber.isNaN x`, `JSNumber.isFinite x` |
+| `Number.isNaN(x)`, `Number.isFinite(x)`, `Number.isInteger(x)` | `JSNumber.isNaN x`, `JSNumber.isFinite x`, `JSNumber.isInteger x`. `isInteger` holds when `x` is finite and `Math.trunc(x)` is `x`, as ECMA-262 defines it. |
+| `Math.floor(x)`, `Math.ceil(x)`, `Math.trunc(x)`, `Math.round(x)`, `Math.abs(x)` on a `number` | `JSNumber.floor x`, `ceil`, `trunc`, `round`, `abs` |
+| `Math.min(a, b, …)`, `Math.max(a, b, …)` on numbers | `JSNumber.minimum (N := N) [a, b, …]` and `JSNumber.maximum`. They fold `Math.min` of two numbers over the list, from `Infinity`, as ECMA-262 does, so `Math.min()` is `Infinity`. Tolean refuses a spread argument. |
 | `NaN`, `Infinity`, `-Infinity` | `JSNumber.nan`, `posInf`, `negInf` |
 | `T \| null`, `null` | `Option T`, `none` |
 | `x === null`, `x !== null` | `x.isNone`, `x.isSome` |
@@ -478,7 +480,8 @@ Tolean rejects these, among others:
   `Except` monad there.
 
 - Fractional or unsafe `number` literals, such as `0.5` and `2 ** 53`. It also
-  rejects `/`, `%` and `Math.*` on `number`, because no law covers them yet.
+  rejects `%` on `number`, because no law covers it yet, and the functions of
+  `Math` whose results ECMA-262 leaves to the engine, such as `Math.sin`.
 - `/` and `%` on `bigint`, unless the divisor is a nonzero literal. JS throws
   an error when the divisor is `0n`, but `Int.tdiv` returns 0.
   `tests/typescript/bigintDivision.test.ts` checks on random pairs that JS
@@ -734,14 +737,18 @@ at three levels:
 - **Safe integers.** `toSafeInt : N → Option Int` returns the integer that a
   value is, when `Number.isSafeInteger` holds for it. `SafeIntLaws` states
   two facts about safe integers. JS arithmetic on them is exact as long as
-  the result stays in range, and comparison on them agrees with `Int`. A
+  the result stays in range, and comparison on them agrees with `Int`.
+  Division is exact when the divisor divides the dividend. `Math.floor` and
+  its relatives leave a safe integer as it is, and `Math.min` and `Math.max`
+  agree with `min` and `max` on `Int`. A
   theorem that needs this takes `[SafeIntLaws N]` and hypotheses such as
   `toSafeInt x = some i`. Then it reasons over `Int`.
 - **`NaN` and `±Infinity`.** `isNaN`, `isFinite`, `nan`, `posInf` and `negInf`
   model `Number.isNaN`, `Number.isFinite`, `NaN` and `±Infinity`.
   `SpecialValueLaws` states how they behave. `===` is symmetric, and it is
   reflexive for every value except `NaN`, so `x !== x` tests for `NaN`.
-  `NaN` fails every comparison and spreads through `+`, `-` and `*`.
+  `NaN` fails every comparison and spreads through arithmetic and the
+  functions of `Math`.
   `±Infinity` bound every finite number, and `Infinity - Infinity` is `NaN`.
   A theorem that needs these facts takes `[SpecialValueLaws N]`.
 

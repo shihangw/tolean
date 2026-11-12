@@ -732,7 +732,7 @@ def requireFeature (span : Span) (f : Feature) : TM Unit := do
 /-- The globals that the subset reads by name. A file that names one of them
 needs the number type. -/
 def isNumberName (name : String) : Bool :=
-  name == "Number" || name == "NaN" || name == "Infinity"
+  name == "Number" || name == "NaN" || name == "Infinity" || name == "Math"
 
 /-- The globals that the subset reads by name, so that no declaration may
 hide them. -/
@@ -1296,7 +1296,36 @@ def numberTest? : String → Option IR.NumberTest
   | "isSafeInteger" => some .isSafeInteger
   | "isNaN" => some .isNaN
   | "isFinite" => some .isFinite
+  | "isInteger" => some .isInteger
   | _ => none
+
+/-- The function of the number model that `Math.f` of one number becomes. -/
+def numberFn? : String → Option IR.NumberFn
+  | "floor" => some .floor
+  | "ceil" => some .ceil
+  | "trunc" => some .trunc
+  | "round" => some .round
+  | "abs" => some .abs
+  | _ => none
+
+/-- `Math.floor(x)`, `Math.min(a, b)` and the other functions of `Math` that
+the number model has, where `tr` translates an argument. Each takes numbers
+only: on a value of another type, JS converts it with ToNumber, or throws on
+a bigint. -/
+def translateMathCall (tr : Expr → TM Code) (s : Span) (f : String) (args : List Expr) : TM Code := do
+  if let some fn := numberFn? f then
+    let [arg] := args | reject s s!"Math.{f} takes one number"
+    let a ← tr arg
+    unless a.type == .number do
+      reject arg.span s!"Math.{f} needs a number operand (narrow a nullable value first)"
+    return ⟨.ext (.numberFn fn) [a.value], false, .number⟩
+  unless f == "min" || f == "max" do
+    reject s (s!"Math.{f} is not in the subset; it has Math.floor, ceil, trunc, round, abs, min " ++
+      "and max, whose results ECMA-262 defines exactly")
+  let codes ← args.mapM tr
+  for (c, e) in codes.zip args do
+    unless c.type == .number do reject e.span s!"Math.{f} needs number operands"
+  return ⟨.ext (.numberFold (f == "max")) (codes.map (·.value)), false, .number⟩
 
 def numberConstant? : String → Option IR.NumberConstant
   | "NaN" => some .nan
@@ -1422,7 +1451,7 @@ def applyOperator (s : Span) (op : BinOp) (r : Expr) (a b : Code) : TM Code := d
   | .add => if a.type == .string || b.type == .string then concatOperands s a b else arithmetic .add .add
   | .sub => arithmetic .sub .sub
   | .mul => arithmetic .mul .mul
-  | .div => divide .tdiv
+  | .div => if bothNumber then return call .div a b .number else divide .tdiv
   | .mod => divide .tmod
   | .exp => power
   | .bitAnd => bitwise .bitAnd
@@ -1521,9 +1550,10 @@ def reducerOf : List Expr → Option (Param × Param × Expr × Expr)
   | [.arrow _ _ [a, p] body, init] => some (a, p, body, init)
   | _ => none
 
-/-- `e` is the name `Number`. -/
+/-- `e` is the name `Number` or `Math`, whose calls the interpreter reads
+before the methods of a value. -/
 def _root_.tolean.TypeScript.Syntax.Expr.namesNumber : Expr → Bool
-  | .ident _ "Number" => true
+  | .ident _ "Number" | .ident _ "Math" => true
   | _ => false
 
 /-- `m.get(k)` and `m.has(k)`, as the method and the operation of the output. -/
@@ -2298,6 +2328,9 @@ def translateCall (fuel : Nat) (env : Env) (s : Span) (callee : Expr) (args : Li
       unless a.type == .number do
         reject arg.span s!"Number.{test} needs a number operand (narrow a nullable value first)"
       return ⟨.numberTest form a.value, false, .boolean⟩
+  if let .member _ (.ident _ "Math") f := callee then
+    if !env.has "Math" then
+      return ← translateMathCall (translateExpr fuel env none) s f args
   let noCallMessage :=
     "calls may name only the function itself, functions declared earlier in this file, or imported ones"
   let noCall {A : Type} : TM A := reject s noCallMessage

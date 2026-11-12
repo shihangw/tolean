@@ -67,6 +67,30 @@ const agrees =
 const BINARY =
   '∀ {a b : N} {i j : Int}, toSafeInt a = some i → toSafeInt b = some j →';
 
+const UNARY = '∀ {a : N} {i : Int}, toSafeInt a = some i →';
+
+/** A function of one number gives `exactOperation` of a safe integer. */
+const exactUnary =
+  (operation: (a: number) => number, exactOperation: (i: bigint) => bigint) =>
+  (): void =>
+    fc.assert(
+      fc.property(safeInteger, (a) => {
+        expect(toSafeInt(operation(a))).toBe(exactOperation(BigInt(a)));
+      }),
+      RUNS,
+    );
+
+/** `Math.min` or `Math.max` of two safe integers is the exact one. */
+const exactBinary =
+  (operation: (a: number, b: number) => number, exactOperation: (i: bigint, j: bigint) => bigint) =>
+  (): void =>
+    fc.assert(
+      fc.property(safeInteger, safeInteger, (a, b) => {
+        expect(toSafeInt(operation(a, b))).toBe(exactOperation(BigInt(a), BigInt(b)));
+      }),
+      RUNS,
+    );
+
 /**
  * One check per field of `SafeIntLaws`, under the same name. `statement` is
  * the Lean statement the check was written for, as one line. When a law
@@ -128,6 +152,52 @@ const CHECKS: Record<string, { statement: string; check: () => void }> = {
         }),
         RUNS,
       ),
+  },
+  div: {
+    statement: `${BINARY} j ≠ 0 → i.tmod j = 0 → toSafeInt (div a b) = some (i.tdiv j)`,
+    // A quotient that is exact: the divisor times a quotient in range.
+    check: () =>
+      fc.assert(
+        fc.property(
+          fc.oneof(fc.integer({ min: -1000, max: 1000 }), fc.maxSafeInteger()).filter((b) => b !== 0),
+          safeInteger,
+          (b, q) => {
+            const a = BigInt(b) * BigInt(q);
+            if (inRange(a)) {
+              expect(toSafeInt(Number(a) / b)).toBe(BigInt(q));
+            }
+          },
+        ),
+        RUNS,
+      ),
+  },
+  floor: {
+    statement: `${UNARY} toSafeInt (floor a) = some i`,
+    check: exactUnary(Math.floor, (i) => i),
+  },
+  ceil: {
+    statement: `${UNARY} toSafeInt (ceil a) = some i`,
+    check: exactUnary(Math.ceil, (i) => i),
+  },
+  trunc: {
+    statement: `${UNARY} toSafeInt (trunc a) = some i`,
+    check: exactUnary(Math.trunc, (i) => i),
+  },
+  round: {
+    statement: `${UNARY} toSafeInt (round a) = some i`,
+    check: exactUnary(Math.round, (i) => i),
+  },
+  abs: {
+    statement: `${UNARY} toSafeInt (abs a) = some (i.natAbs : Int)`,
+    check: exactUnary(Math.abs, (i) => (i < 0n ? -i : i)),
+  },
+  min: {
+    statement: `${BINARY} toSafeInt (min a b) = some (Min.min i j)`,
+    check: exactBinary(Math.min, (i, j) => (i < j ? i : j)),
+  },
+  max: {
+    statement: `${BINARY} toSafeInt (max a b) = some (Max.max i j)`,
+    check: exactBinary(Math.max, (i, j) => (i > j ? i : j)),
   },
   lt: {
     statement: `${BINARY} lt a b = decide (i < j)`,
@@ -244,6 +314,41 @@ const SPECIAL_VALUE_CHECKS: Record<
     statement:
       '∀ {a b : N}, isNaN a = true → isNaN (mul a b) = true ∧ isNaN (mul b a) = true',
     check: withNaN((nan, b) => Number.isNaN(nan * b) && Number.isNaN(b * nan)),
+  },
+  nan_div: {
+    statement:
+      '∀ {a b : N}, isNaN a = true → isNaN (div a b) = true ∧ isNaN (div b a) = true',
+    check: withNaN((nan, b) => Number.isNaN(nan / b) && Number.isNaN(b / nan)),
+  },
+  nan_floor: {
+    statement: '∀ {a : N}, isNaN a = true → isNaN (floor a) = true',
+    check: withNaN((nan) => Number.isNaN(Math.floor(nan))),
+  },
+  nan_ceil: {
+    statement: '∀ {a : N}, isNaN a = true → isNaN (ceil a) = true',
+    check: withNaN((nan) => Number.isNaN(Math.ceil(nan))),
+  },
+  nan_trunc: {
+    statement: '∀ {a : N}, isNaN a = true → isNaN (trunc a) = true',
+    check: withNaN((nan) => Number.isNaN(Math.trunc(nan))),
+  },
+  nan_round: {
+    statement: '∀ {a : N}, isNaN a = true → isNaN (round a) = true',
+    check: withNaN((nan) => Number.isNaN(Math.round(nan))),
+  },
+  nan_abs: {
+    statement: '∀ {a : N}, isNaN a = true → isNaN (abs a) = true',
+    check: withNaN((nan) => Number.isNaN(Math.abs(nan))),
+  },
+  nan_min: {
+    statement:
+      '∀ {a b : N}, isNaN a = true → isNaN (min a b) = true ∧ isNaN (min b a) = true',
+    check: withNaN((nan, b) => Number.isNaN(Math.min(nan, b)) && Number.isNaN(Math.min(b, nan))),
+  },
+  nan_max: {
+    statement:
+      '∀ {a b : N}, isNaN a = true → isNaN (max a b) = true ∧ isNaN (max b a) = true',
+    check: withNaN((nan, b) => Number.isNaN(Math.max(nan, b)) && Number.isNaN(Math.max(b, nan))),
   },
   isNaN_nan: {
     statement: 'isNaN (nan (N := N)) = true',

@@ -235,7 +235,8 @@ is `b < a` and `a >= b` is `b <= a`, as `IsLessThan` evaluates them
 one operand of `+` is a string, `+` converts the other with ToString and
 joins the code units (ApplyStringOrNumericBinaryOperator, §13.15.3). The
 subset converts strings, bigints and booleans; ToString of a number is not
-modelled yet. The subset has no `/` or `%` on numbers.
+modelled yet. `/` on numbers is Number::divide (§6.1.6.1.5), and the subset
+has no `%` on numbers.
 
 On bigints, `a ** b` throws a `RangeError` when `b` is negative
 (BigInt::exponentiate, §6.1.6.2.3), and `&`, `|`, `^`, `<<` and `>>` are the
@@ -265,6 +266,7 @@ def binary : BinOp → Val N → Val N → Option (Val N)
   | .add, .num a, .num b => some (.num (JSNumber.add a b))
   | .sub, .num a, .num b => some (.num (JSNumber.sub a b))
   | .mul, .num a, .num b => some (.num (JSNumber.mul a b))
+  | .div, .num a, .num b => some (.num (JSNumber.div a b))
   | .lt, .num a, .num b => some (.bool (JSNumber.lt a b))
   | .gt, .num a, .num b => some (.bool (JSNumber.lt b a))
   | .le, .num a, .num b => some (.bool (JSNumber.le a b))
@@ -645,6 +647,31 @@ def bindArgs (params : List String) (vs : List (Val N)) : Option (Env N) :=
   if params.length < vs.length then none
   else some (params.zip (vs ++ List.replicate (params.length - vs.length) .undefined)).reverse
 
+/-- The numbers among `vs`, when every value is a number. -/
+def numbers? : List (Val N) → Option (List N)
+  | [] => some []
+  | .num x :: vs => (numbers? vs).map (x :: ·)
+  | _ :: _ => none
+
+/-- A function of `Math` that the subset has, on the values of its arguments:
+`Math.floor`, `ceil`, `trunc`, `round` and `abs` on one number, and
+`Math.min` and `Math.max` on any count of numbers (ECMA-262 §21.3.2). These
+convert a value of another type with ToNumber, or throw on a bigint, so the
+subset has them on numbers only. -/
+def mathCall (f : String) (args : List (Val N)) : Option (Val N) :=
+  if f == "min" then (numbers? args).map (.num ∘ JSNumber.minimum)
+  else if f == "max" then (numbers? args).map (.num ∘ JSNumber.maximum)
+  else
+    match args with
+    | [.num x] =>
+      if f == "floor" then some (.num (JSNumber.floor x))
+      else if f == "ceil" then some (.num (JSNumber.ceil x))
+      else if f == "trunc" then some (.num (JSNumber.trunc x))
+      else if f == "round" then some (.num (JSNumber.round x))
+      else if f == "abs" then some (.num (JSNumber.abs x))
+      else none
+    | _ => none
+
 -- With the array callbacks and the map and set methods both in `eval`, this
 -- block takes a little more than the default 200000 heartbeats to elaborate,
 -- most of it in the proofs that each recursive call is smaller.
@@ -782,15 +809,22 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
   | .binary _ op l r => do binary op (← eval m fuel env l) (← eval m fuel env r)
   | .cond _ test t f => do
     if (← eval m fuel env test).truthy then eval m fuel env t else eval m fuel env f
-  -- `Number.isNaN(x)`, `Number.isFinite(x)` and `Number.isSafeInteger(x)` on a
-  -- number (ECMA-262 §21.1.2), unless a variable hides `Number`.
+  -- `Number.isNaN(x)`, `Number.isFinite(x)`, `Number.isSafeInteger(x)` and
+  -- `Number.isInteger(x)` on a number (ECMA-262 §21.1.2), unless a variable
+  -- hides `Number`.
   | .call _ (.member _ (.ident _ "Number") test) [arg] => do
     if (env.lookup "Number").isSome then none
     let .num n ← eval m fuel env arg | none
     if test == "isNaN" then some (.bool (JSNumber.isNaN n))
     else if test == "isFinite" then some (.bool (JSNumber.isFinite n))
     else if test == "isSafeInteger" then some (.bool (JSNumber.toSafeInt n).isSome)
+    else if test == "isInteger" then some (.bool (JSNumber.isInteger n))
     else none
+  -- `Math.floor(x)` and the other functions of `Math` that `mathCall` has,
+  -- unless a variable hides `Math`.
+  | .call _ (.member _ (.ident _ "Math") f) args => do
+    if (env.lookup "Math").isSome then none
+    mathCall f (← evalList m fuel env args)
   -- `xs.map(x => e)` and the other methods of an array that take a callback
   -- (`Array.prototype.map`, `filter`, `some`, `every` and `find`, ECMA-262
   -- §23.1.3.21, §23.1.3.8, §23.1.3.29, §23.1.3.6 and §23.1.3.9). The callback

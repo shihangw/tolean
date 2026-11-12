@@ -20,7 +20,7 @@ export tolean.IR (IntOp Order Division Names ImportedFile leanReserved memberNam
 
 /-- An operation of the abstract number model `JSNumber` on two numbers. -/
 inductive NumberOp where
-  | add | sub | mul | lt | le | eq
+  | add | sub | mul | div | lt | le | eq
 deriving BEq, Repr, Inhabited, DecidableEq
 
 /-- A constant of the number model. -/
@@ -30,8 +30,17 @@ deriving BEq, Repr, Inhabited, DecidableEq
 
 /-- A test of the number model on one number. -/
 inductive NumberTest where
-  | isSafeInteger | isNaN | isFinite
+  | isSafeInteger | isNaN | isFinite | isInteger
 deriving BEq, Repr, Inhabited, DecidableEq
+
+/-- A function of the number model on one number: `Math.floor` and its
+relatives. -/
+inductive NumberFn where
+  | floor | ceil | trunc | round | abs
+deriving BEq, Repr, Inhabited, DecidableEq
+
+def NumberFn.name : NumberFn → String
+  | .floor => "floor" | .ceil => "ceil" | .trunc => "trunc" | .round => "round" | .abs => "abs"
 
 /-- An operation of `JSBigInt` on two bigints: `&`, `|`, `^`, `<<` and `>>`. -/
 inductive BigintOp where
@@ -83,6 +92,11 @@ inductive ExprExt where
   | numberNe
   /-- `(JSNumber.isNaN a)`, or `(JSNumber.toSafeInt a).isSome`. -/
   | numberTest (test : NumberTest)
+  /-- `(JSNumber.floor a)`, or another function on one number: `Math.floor(a)`. -/
+  | numberFn (f : NumberFn)
+  /-- `(JSNumber.minimum (N := N) [a, b])`, or `JSNumber.maximum` when `isMax`,
+  on any count of numbers: `Math.min(a, b)` or `Math.max(a, b)`. -/
+  | numberFold (isMax : Bool)
   /-- `(JSBigInt.bitAnd a b)`, or another operation of `JSBigInt` on two
   bigints. -/
   | bigintOp (op : BigintOp)
@@ -241,7 +255,8 @@ def leanName (names : Names) (name : String) : String :=
   tolean.IR.leanNameIn leanNames names name
 
 def NumberOp.name : NumberOp → String
-  | .add => "add" | .sub => "sub" | .mul => "mul" | .lt => "lt" | .le => "le" | .eq => "eq"
+  | .add => "add" | .sub => "sub" | .mul => "mul" | .div => "div" | .lt => "lt" | .le => "le"
+  | .eq => "eq"
 
 def NumberConstant.name : NumberConstant → String
   | .nan => "nan" | .posInf => "posInf" | .negInf => "negInf"
@@ -302,6 +317,10 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
   | .numberTest .isSafeInteger, [a] => s!"({js}.toSafeInt {argument a}).isSome"
   | .numberTest .isNaN, [a] => s!"({js}.isNaN {argument a})"
   | .numberTest .isFinite, [a] => s!"({js}.isFinite {argument a})"
+  | .numberTest .isInteger, [a] => s!"({js}.isInteger {argument a})"
+  | .numberFn f, [a] => s!"({js}.{f.name} {argument a})"
+  | .numberFold isMax, args =>
+    s!"({js}.{if isMax then "maximum" else "minimum"} (N := {names.typeParam}) [{", ".intercalate args}])"
   | .bigintOp op, [a, b] => s!"({leanName names "JSBigInt"}.{op.name} {argument a} {argument b})"
   | .bigintNot, [a] => s!"({leanName names "JSBigInt"}.bitNot {argument a})"
   | .bigintPow k, [a] => s!"({argument a} ^ ({k} : {leanName names "Nat"}))"

@@ -284,7 +284,10 @@ def sections : List Section := [
   ⟨"sec-value-properties-of-the-global-object-nan", "19.1.3", "NaN", []⟩,
   -- §21 Numbers and Dates {#sec-numbers-and-dates}
   ⟨"sec-properties-of-the-number-constructor", "21.1.2", "Properties of the Number Constructor",
-    [``Proof.out_numberTest]⟩,
+    [``Proof.out_numberTest, ``isInteger_of_safe]⟩,
+  ⟨"sec-function-properties-of-the-math-object", "21.3.2", "Function Properties of the Math Object",
+    [``Proof.eval_math, ``Proof.translateMathCall_sound, ``Proof.out_numberFn,
+    ``Proof.out_numberFold]⟩,
   -- §22 Text Processing {#sec-text-processing}
   ⟨"sec-string.prototype.endswith", "22.1.3.7", "String.prototype.endsWith",
     [``JSString.endsWith_iff]⟩,
@@ -356,7 +359,12 @@ def numberLaws : List Name := [``SafeIntLaws.add,
     ``SpecialValueLaws.eq_symm, ``SpecialValueLaws.nan_eq, ``SpecialValueLaws.nan_lt,
     ``SpecialValueLaws.nan_le, ``SpecialValueLaws.lt_posInf, ``SpecialValueLaws.negInf_lt,
     ``SpecialValueLaws.nan_add, ``SpecialValueLaws.nan_sub, ``SpecialValueLaws.nan_mul,
-    ``SpecialValueLaws.sub_posInf_posInf]
+    ``SpecialValueLaws.sub_posInf_posInf, ``SafeIntLaws.div, ``SafeIntLaws.floor,
+    ``SafeIntLaws.ceil, ``SafeIntLaws.trunc, ``SafeIntLaws.round, ``SafeIntLaws.abs,
+    ``SafeIntLaws.min, ``SafeIntLaws.max, ``SpecialValueLaws.nan_div,
+    ``SpecialValueLaws.nan_floor, ``SpecialValueLaws.nan_ceil, ``SpecialValueLaws.nan_trunc,
+    ``SpecialValueLaws.nan_round, ``SpecialValueLaws.nan_abs, ``SpecialValueLaws.nan_min,
+    ``SpecialValueLaws.nan_max]
 
 /-- The theorems that are about no section of ECMA-262. -/
 def extras : List Group := [
