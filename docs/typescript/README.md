@@ -469,10 +469,13 @@ Tolean rejects these, among others:
 
 - `try` and `catch`, and a `throw` of anything but `new Error(message)`. It
   also rejects a call of a function that can throw where JS may not evaluate
-  it: in a branch of `?:`, after `&&`, `||` or `??`, or in an arrow
+  it, or evaluates it more than once: in a branch of `?:`, after `&&`, `||`
+  or `??`, in the test or the update of a counted `for` loop, or in an arrow
   function. A call of an imported function that can throw must be the whole
   value of a declaration or a `return`, because the hoisting decides which
   functions can throw from the file alone and does not follow imports yet.
+  The same holds for a function of the file that can throw only through an
+  imported function.
 
 - Fractional or unsafe `number` literals, such as `0.5` and `2 ** 53`. It also
   rejects `/`, `%` and `Math.*` on `number`, because no law covers them yet.

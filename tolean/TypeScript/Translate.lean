@@ -367,6 +367,10 @@ structure FnInfo where
   ret : Ty
   /-- The function can throw, so its output returns `Except JSError R`. -/
   throws : Bool := false
+  /-- The hoisting (`Eval.mayThrow`) knows that the function can throw, so a
+  call of it may stand inside a larger expression. It does not know a
+  function that throws only through an imported function. -/
+  hoists : Bool := false
 
 def FnInfo.ref (f : FnInfo) : DeclRef := ⟨f.file, f.name⟩
 
@@ -705,8 +709,11 @@ def checkThrowingCall (s : Span) (name : String) (fn : FnInfo) (top : Bool) : TM
   if fn.throws && !top then
     if fn.file != (← get).file then
       reject s s!"'{name}' is imported and can throw, so a call of it must be the whole value of a const, a let or a return"
+    else if !fn.hoists then
+      reject s s!"'{name}' can throw only through an imported function, so a call of it must be the whole value of a const, a let or a return"
     else
-      reject s s!"'{name}' can throw, so a call of it may not stand in a branch of ?:, after &&, || or ??, or in an arrow function"
+      reject s (s!"'{name}' can throw, so a call of it may not stand in a branch of ?:, after &&, || or ??, " ++
+        "in the test or the update of a for loop, or in an arrow function")
   else pure ()
 
 /-- The program nests deeper than `Ctx.fuel` allows. -/
@@ -3544,7 +3551,8 @@ def translateFunction (thr : String → Bool) (s : Span) (exported : Bool) (name
   -- The body may call the function itself. Lean must see that the calls
   -- end, so each must pass a part of one parameter, the same one in every
   -- call.
-  let self : FnInfo := { file := ctx.file, name, exported, typeParams, params := types, ret, throws }
+  let self : FnInfo :=
+    { file := ctx.file, name, exported, typeParams, params := types, ret, throws, hoists := thr name }
   let out ← isolated (translateStatements (← fuelLimit) { env with functions := env.functions ++ [self] } .ret
     (blockStatements body))
   if out.calls self.ref && (out.decreasingParam? self.ref leanParams).isNone then
