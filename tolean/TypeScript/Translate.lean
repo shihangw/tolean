@@ -1818,14 +1818,18 @@ pass `{ y: 1, x: 2 }` for an interface that declares `x` first, or an object
 with more properties, and `JSON.stringify` writes them in their own order. A
 map or a set could carry properties of its own too. A bigint makes
 `JSON.stringify` throw (ECMA-262 §25.5.2.2), `undefined` gives `undefined`,
-and a type parameter could be either. `fuel` bounds the depth of the type. -/
+and a type parameter could be either. Two types that Lean writes alike break
+it too. Lean writes `[A, [B, C]]` and `[A, B, C]` both as `A × B × C`, so a
+tuple whose last element is a tuple is refused. A type of one string literal,
+such as `'circle'`, is a tag, which another literal could share. `fuel`
+bounds the depth of the type. -/
 def Ty.jsonSafe : Nat → Ty → Bool
   | 0, _ => false
   | fuel + 1, t =>
     match t with
-    | .number | .boolean | .string | .null | .enum _ | .literal _ => true
+    | .number | .boolean | .string | .null | .enum _ => true
     | .nullable v | .array v => Ty.jsonSafe fuel v
-    | .tuple ts => ts.all (Ty.jsonSafe fuel)
+    | .tuple ts => !(ts.getLast?.any (· matches .tuple _)) && ts.all (Ty.jsonSafe fuel)
     | _ => false
 
 /-- How deep `JSON.stringify` may look into the type of its argument. -/
@@ -1836,7 +1840,7 @@ def jsonCall (span : Span) (a : Code) : TM Code := do
   unless Ty.jsonSafe jsonDepth a.type do
     reject span ("JSON.stringify needs a string, a number, a boolean or null, or an array, a tuple or a " ++
       "nullable value of them; an object's text depends on the order of its keys, which a caller chooses")
-  return ⟨.ext .jsonStringify [a.value], false, .string⟩
+  return ⟨.ext .jsonStringify [.ascribe a.value a.type.lean], false, .string⟩
 
 /-- The method changes case, which the model has only on ASCII strings. -/
 def StringMethod.changesCase : IR.StringMethod → Bool

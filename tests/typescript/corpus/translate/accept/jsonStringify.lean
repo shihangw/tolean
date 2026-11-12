@@ -11,21 +11,24 @@ inductive Level where
 deriving DecidableEq, Repr
 
 def quote {N : Type} [JSNumber N] (s : JSString) : JSString :=
-  (JSString.json s)
+  (JSString.json ((s : JSString)))
 
 def flags {N : Type} [JSNumber N] (xs : List Bool) : JSString :=
-  (JSString.ofString "flags " ++ (JSString.json xs))
+  (JSString.ofString "flags " ++ (JSString.json ((xs : List Bool))))
 
 def pair {N : Type} [JSNumber N] (p : (JSString × N)) : JSString :=
-  (JSString.json p)
+  (JSString.json ((p : (JSString × N))))
 
 def maybe {N : Type} [JSNumber N] (s : Option JSString) : JSString :=
-  (JSString.json s)
+  (JSString.json ((s : Option JSString)))
 
 def level {N : Type} [JSNumber N] (l : Level) : JSString :=
-  (JSString.json l)
+  (JSString.json ((l : Level)))
+
+def nothing {N : Type} [JSNumber N]  : JSString :=
+  (JSString.json ((none : (Option Empty))))
 
 def sameText {N : Type} [JSNumber N] (a : List JSString) (b : List JSString) : Bool :=
-  decide ((JSString.json a) = (JSString.json b))
+  decide ((JSString.json ((a : List JSString))) = (JSString.json ((b : List JSString))))
 
 end Test

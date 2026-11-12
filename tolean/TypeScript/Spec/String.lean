@@ -351,9 +351,11 @@ value of a JS value. The model declares this function but does not define it,
 so a proof cannot depend on the text. A proof can only use that equal values
 give equal texts. That holds for the real `JSON.stringify` on every type that
 the translator lets it take: strings, numbers, booleans, `null`, literal
-unions, and arrays, tuples and nullable values of them. On these types each
-Lean value fixes the text. It does not hold for an object, whose text follows
-the order of its keys, which a caller chooses. So every theorem about the
+unions, and arrays, tuples and nullable values of them, where no tuple ends
+with a tuple. On these types each Lean value fixes the text. It does not hold
+for an object, whose text follows the order of its keys, which a caller
+chooses. Nor does it hold for a tuple that ends with a tuple: Lean writes
+`[A, [B, C]]` and `[A, B, C]` both as `A × B × C`. So every theorem about the
 output holds for the real function, if no code gives a value or a prototype a
 `toJSON` method, as Tolean assumes that no code changes the built-in
 prototypes. -/
