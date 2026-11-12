@@ -16,6 +16,7 @@ import tolean.TypeScript.Syntax.ParseWF
 import tolean.TypeScript.Syntax.RoundTripText
 import tolean.TypeScript.Spec.Error
 import tolean.TypeScript.Spec.Lemmas.Number
+import tolean.TypeScript.Spec.Lemmas.Sort
 import tolean.TypeScript.Spec.Coverage.LexicalGrammar
 import tolean.TypeScript.Spec.Coverage.Expressions
 import tolean.TypeScript.Spec.Coverage.Statements
@@ -249,7 +250,7 @@ def sections : List Section := [
     [``Proof.callbackOf_some, ``Proof.bodySim_of, ``Proof.eval_arrayMethod, ``Proof.out_listMethod,
     ``Proof.methodVal_sim, ``Proof.translateArrayMethod_sound, ``Proof.agree_cons, ``Proof.scoped_cons,
     ``Proof.bodySimIdx_of, ``Proof.indexedCallbackOf_some, ``Proof.listMethod?_map,
-    ``Proof.listMethod?_ne_mapIdx]⟩,
+    ``Proof.listMethod?_ne_mapIdx, ``Proof.listMethod?_ne_sortWith]⟩,
   -- §16 ECMAScript Language: Scripts and Modules {#sec-ecmascript-language-scripts-and-modules}
   ⟨"sec-source-text-module-record-initialize-environment", "16.2.1.6.4", "InitializeEnvironment",
     [``Proof.module_resolves, ``Proof.declareTopLevel_ok, ``Proof.translateDecl_ok,
@@ -308,6 +309,14 @@ def sections : List Section := [
     [``Proof.reducerOf_some, ``Proof.bodySim2_of, ``Proof.evalReduce_sim, ``Proof.eval_reduce,
     ``Proof.translateReduce_sound]⟩,
   ⟨"sec-array.prototype.some", "23.1.3.29", "Array.prototype.some", []⟩,
+  ⟨"sec-array.prototype.sort", "23.1.3.30", "Array.prototype.sort",
+    [``Proof.sortOf_some, ``Proof.eval_sort, ``Proof.translateSort_sound]⟩,
+  ⟨"sec-sortindexedproperties", "23.1.3.30.1", "SortIndexedProperties",
+    [``Eval.consistentOn_preorder, ``Eval.sortValues_perm, ``Eval.sortValues_sorted,
+    ``Eval.sortValues_stable, ``Eval.pairwise_mergeSort_of_mem, ``Eval.pair_sublist_mergeSort_of_mem,
+    ``Proof.all_congr_mem, ``Proof.consistentOn_congr, ``Proof.sortValues_sim]⟩,
+  ⟨"sec-comparearrayelements", "23.1.3.30.2", "CompareArrayElements", [``Proof.evalCompare_sim]⟩,
+  ⟨"sec-array.prototype.tosorted", "23.1.3.34", "Array.prototype.toSorted", []⟩,
   ⟨"sec-createarrayiterator", "23.1.5.1", "CreateArrayIterator", []⟩,
   -- §24 Keyed Collections {#sec-keyed-collections}
   ⟨"sec-map-iterable", "24.1.1.1", "Map ( [ iterable ] )", [``Proof.translateNew_sound]⟩,
@@ -679,6 +688,11 @@ def extras : List Group := [
   ⟨"Certificates: slices of a list", [``Proof.sliceList_map, ``Proof.getElem?_rev,
     ``Proof.sliceList_nonneg, ``Proof.sliceList_from, ``Proof.sliceList_last,
     ``Proof.sliceList_dropLast, ``Proof.sliceList_neg]⟩,
+  ⟨"Certificates: sorts", [``Proof.consistentOn_of_transCmp, ``Proof.sortValues_sortWith,
+    ``Proof.int_compare_of_lt, ``Proof.int_compare_of_gt, ``Proof.int_compare_of_eq,
+    ``compareSign_one, ``compareSign_zero, ``compareSign_neg_zero, ``compareSign_neg_one, ``JSString.instTransOrd,
+    ``JSString.unitsLt_compare, ``JSString.compare_of_lt, ``JSString.compare_of_gt,
+    ``JSString.compare_of_eq]⟩,
   ⟨"Recursion: the facts that Lean adds to the goal of a call in a callback, for the proof that a recursive function ends",
     [``List.any_wfParam_tolean, ``List.any_unattach_tolean, ``List.all_wfParam_tolean,
       ``List.all_unattach_tolean, ``List.find?_wfParam_tolean, ``List.find?_unattach_tolean]⟩]
