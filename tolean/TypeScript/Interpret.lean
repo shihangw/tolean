@@ -24,7 +24,9 @@ Node can read it back exactly:
 - an object as `{"object": [["<key>", <value>], …]}`, in the order of its
   keys;
 - an error object as `{"error": ["<class>", [["<key>", <value>], …]]}`, with
-  its own properties, such as `message`.
+  its own properties, such as `message`;
+- a date as `{"date": "<time value in decimal>"}`, or `{"date": null}` when
+  it is invalid.
 -/
 namespace tolean.TypeScript.Interpret
 
@@ -144,6 +146,7 @@ partial def toJson : Val Float → Json
   | .error cls fs =>
     Json.mkObj [("error", Json.arr #[Json.str cls,
       Json.arr (fs.map fun (k, v) => Json.arr #[Json.str k, toJson v]).toArray])]
+  | .date t => Json.mkObj [("date", match t with | some i => Json.str (toString i) | none => Json.null)]
 
 partial def ofJson (j : Json) : Except String (Val Float) :=
   match j with
@@ -168,6 +171,11 @@ partial def ofJson (j : Json) : Except String (Val Float) :=
       return .map entries.toList
     if let .ok (elems : Array Json) := j.getObjValAs? (Array Json) "set" then
       return .set (← elems.mapM ofJson).toList
+    if let .ok (d : Json) := j.getObjVal? "date" then
+      if d matches .null then return .date none
+      let .ok (s : String) := d.getStr? | throw "a date is not a time value"
+      let some i := s.toInt? | throw s!"not a time value: {s}"
+      return .date (some i)
     let fields ← j.getObjValAs? (Array Json) "object"
     let fields ← fields.mapM fun f => do
       let #[k, v] := (← f.getArr?) | throw "an object field is not a [key, value] pair"

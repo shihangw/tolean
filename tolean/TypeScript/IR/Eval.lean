@@ -112,6 +112,9 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   | .numberNe, [.num a, .num b] => some (.bool !(JSNumber.eq a b))
   | .numberTest test, [.num a] => some (.bool (test.apply a))
   | .numberFn f, [.num a] => some (.num (f.apply a))
+  | .dateOfNumber, [.num t] => some (.date (JSDate.timeClip t))
+  | .dateMethod name, [.date t] => Eval.dateMethod name t []
+  | .dateUtc, vs => (Eval.numbers? vs).map fun xs => .num (JSDate.utc xs)
   | .numberSameValue, [.num a, .num b] => some (.bool (JSNumber.sameValue a b))
   | .numberOfInt, [.int i] => some (.num (JSNumber.ofInt i))
   | .numberFold isMax, vs =>

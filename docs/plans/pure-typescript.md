@@ -169,7 +169,7 @@ should refuse such an initial value.
 |---|---|---|
 | `**` on `bigint` (§6.1.6.2.3) whose exponent is not a literal | `a ^ b.toNat`, after a check that `b` is not negative, which needs the `Except` from the errors stage because JS throws a `RangeError` there | `>>>` on a `bigint`, because it throws |
 | `BigInt(n)` (§21.2.1.1) | A conversion that throws a `RangeError` when `n` is not an integer. The message of that error is up to the engine, so it needs the error classes of the errors stage, and a model of an error whose message the program cannot read. | |
-| `new Date(t).toISOString()`, `Date.UTC`, `getTime`, and the UTC getters | A model of the time value (§21.4.1) | Local-time getters, setters, and `Date.now()` |
+| `d.toISOString()` | The Date Time String Format of `JSDate`. It throws a `RangeError` for an invalid date, and the message is up to the engine, so it needs the error classes of the errors stage. | Local-time getters, setters, and `Date.now()` |
 | `Date.parse(s)` | Only when the translator can show that `s` is in the Date Time String Format (§21.4.1.32) | Any other string, because the spec leaves its result to the engine |
 
 `toISOString` throws a `RangeError` for an invalid date, so it uses the

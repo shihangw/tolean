@@ -198,6 +198,15 @@ export class Gen {
             () => `Math.${this.pick(['floor', 'ceil', 'trunc', 'round', 'abs'])}(${this.expr(t, vars, d)})`,
             // The Number value for a bigint, the double nearest to it.
             () => `Number(${this.expr(BIGINT, vars, d)})`,
+            // A date from a time value, read back with a UTC getter, and
+            // `Date.UTC`, which takes two to seven numbers.
+            () => `new Date(${this.expr(t, vars, d)}).${this.pick(['getTime', 'valueOf', 'getUTCFullYear', 'getUTCMonth',
+              'getUTCDate', 'getUTCDay', 'getUTCHours', 'getUTCMinutes', 'getUTCSeconds', 'getUTCMilliseconds'])}()`,
+            () => {
+              const count = this.pick([2, 3, 7]);
+              const args = Array.from({ length: count }, () => this.expr(t, vars, d));
+              return `Date.UTC(${args.join(', ')})`;
+            },
             // The bitwise operators, on ToInt32 and ToUint32 of each operand.
             () => `(${this.expr(t, vars, d)} ${this.pick(['&', '|', '^', '<<', '>>', '>>>'])} ${this.expr(t, vars, d)})`,
             () => `~${this.expr(t, vars, d)}`,
