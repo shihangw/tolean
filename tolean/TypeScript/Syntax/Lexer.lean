@@ -32,6 +32,10 @@ structure LexState where
   /-- A line break comes after the last token. -/
   newline : Bool := false
   tokens : Array Token := #[]
+  /-- One entry for each substitution `${…}` of a template literal that the
+  lexer is inside, innermost first: the number of `{` open in it. A `}` when
+  none is open ends the substitution. -/
+  templates : List Nat := []
 
 abbrev LexM := EStateM ParseError LexState
 
@@ -386,6 +390,100 @@ def lexKind (start : Pos) (c : Char) : LexM TokenKind := do
     failFrom start s!"unsupported character U+{(hexDigits c.toNat 4).map Char.toUpper}"
   else lexPunct start
 
+/-- The text of a template literal from here to its closing backtick or to
+the `${` of a substitution, both of which it reads. It decodes escapes as a
+string does, and a line break in the text reads as `\n` (the TV of a
+LineTerminatorSequence, ECMA-262 §12.9.6). The result is the text and whether
+a substitution follows. -/
+def readTemplateBody (fuel : Nat) (start : Pos) (acc : String) : LexM (String × Bool) := do
+  let fuel + 1 := fuel | outOfFuel
+  match ← peekChar, ← peekChar 1 with
+  | none, _ => failFrom start "unterminated template literal"
+  | some '`', _ =>
+    skipChar
+    return (acc, false)
+  | some '$', some '{' =>
+    skipChar
+    skipChar
+    return (acc, true)
+  | some '\\', _ =>
+    skipChar
+    readTemplateBody fuel start (← readEscape start acc)
+  | some c, _ =>
+    if isLineBreak c then
+      skipLineBreak
+      readTemplateBody fuel start (acc.push (if c == '\r' then '\n' else c))
+    else readTemplateBody fuel start (← takeAs acc c)
+
+/-- Add a token that the lexer makes up for a template literal. -/
+def pushToken (kind : TokenKind) (start stop : Pos) (newlineBefore : Bool) : LexM Unit :=
+  modify fun s =>
+    { s with tokens := s.tokens.push { kind, span := ⟨start, stop⟩, newlineBefore }, newline := false }
+
+/-- A template literal right after `prev` would be a tagged template, such as
+``f`a` ``, which calls `f` with the pieces. The lexer reads a template literal
+as `+` on strings, which would read a tag as a call of `f`, so it refuses a
+template literal after any token that could end an expression. -/
+def tagsTemplate : Option Token → Bool
+  | none => false
+  | some t =>
+    match t.kind with
+    | .ident _ | .number _ | .bigint _ | .string _ => true
+    | .keyword w => ["this", "super", "null", "true", "false"].contains w
+    | .punct p => [")", "]", "}", ">", "!", "?.", "++", "--"].contains p
+    | .eof => false
+
+/-- The tokens of the text of a template literal after a substitution, from
+the text `text` on: `+ "text"`, then `+ (` when another substitution follows,
+or `)` when the template ends. The text before it is a string already, so an
+empty `text` adds nothing. -/
+def lexTemplateRest (start stop : Pos) (text : String) (more : Bool) : LexM Unit := do
+  unless text.isEmpty do
+    pushToken (.punct "+") start start false
+    pushToken (.string text) start stop false
+  if more then
+    pushToken (.punct "+") stop stop false
+    pushToken (.punct "(") stop stop false
+    modify fun s => { s with templates := 0 :: s.templates }
+  else pushToken (.punct ")") stop stop false
+
+/-- A template literal, from its backtick at `start` to its end or to its
+first substitution. ``` `a` ``` is the string `"a"`, and ``` `a${e}b` ``` is
+`("a" + (e) + "b")`. When one operand of `+` is a string, `+` converts the
+other with ToString, as a template literal converts each substitution
+(ECMA-262 §13.2.8.6 and §13.15.3), and the subset has `+` only on values whose
+ToPrimitive is themselves. So the two mean the same. -/
+def lexTemplate (start : Pos) (newlineBefore : Bool) : LexM Unit := do
+  if tagsTemplate (← get).tokens.back? then
+    failFrom start "a template literal right after an expression would be a tagged template, which is not supported"
+  skipChar
+  let (text, more) ← readTemplateBody (← budget) start ""
+  let stop ← here
+  if more then
+    pushToken (.punct "(") start start newlineBefore
+    pushToken (.string text) start stop false
+    pushToken (.punct "+") stop stop false
+    pushToken (.punct "(") stop stop false
+    modify fun s => { s with templates := 0 :: s.templates }
+  else pushToken (.string text) start stop newlineBefore
+
+/-- The `}` at `start` that ends a substitution of a template literal, and the
+text after it. `outer` are the substitutions that stay open. -/
+def lexTemplateMiddle (start : Pos) (newlineBefore : Bool) (outer : List Nat) : LexM Unit := do
+  skipChar
+  modify fun s => { s with templates := outer }
+  pushToken (.punct ")") start start newlineBefore
+  let (text, more) ← readTemplateBody (← budget) start ""
+  lexTemplateRest start (← here) text more
+
+/-- The open substitutions after the token `kind`: a `{` opens a brace in the
+innermost one, and a `}` closes one. -/
+def countBraces : TokenKind → List Nat → List Nat
+  | _, [] => []
+  | .punct "{", k :: outer => (k + 1) :: outer
+  | .punct "}", k :: outer => (k - 1) :: outer
+  | _, ks => ks
+
 def lexAll (fuel : Nat) : LexM Unit := do
   let fuel + 1 := fuel | outOfFuel
   skipTrivia (← budget)
@@ -396,12 +494,20 @@ def lexAll (fuel : Nat) : LexM Unit := do
     modify fun s =>
       { s with tokens := s.tokens.push { kind := .eof, span := ⟨start, start⟩, newlineBefore } }
   | some c =>
+    if c == '`' then
+      lexTemplate start newlineBefore
+      lexAll fuel
+    else if c == '}' && (← get).templates.head? == some 0 then
+      lexTemplateMiddle start newlineBefore (← get).templates.tail
+      lexAll fuel
+    else
     let kind ← lexKind start c
     let stop ← here
     modify fun s =>
       { s with
         tokens := s.tokens.push { kind, span := ⟨start, stop⟩, newlineBefore }
-        newline := false }
+        newline := false
+        templates := countBraces kind s.templates }
     lexAll fuel
 
 end Lex

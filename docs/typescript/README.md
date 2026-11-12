@@ -117,8 +117,22 @@ The parser refuses every other type assertion, such as `x as T`, `<T>x` and
 the non-null assertion `x!`, because TypeScript does not check them.
 
 The parser also refuses code that Tolean cannot represent exactly. Examples
-are lone surrogates, legacy octal literals, template literals and non-ASCII
+are lone surrogates, legacy octal literals, tagged templates and non-ASCII
 names.
+
+The lexer reads a template literal as `+` on strings: `` `a${e}b` `` gives
+the tokens of `("a" + (e) + "b")`, and `` `a` `` gives the string `"a"`.
+When one operand of `+` is a string, `+` converts the other with ToString,
+as a template literal converts each substitution (ECMA-262 §13.2.8.6 and
+§13.15.3). The two can differ only on an object, whose ToPrimitive calls
+`valueOf` first, and the subset has `+` only on primitives. A line break in
+the text reads as `\n`, as the spec gives it. A template literal right after
+a name, `)`, `]`, `}`, `>` or `!` could be a tagged template, such as
+``f`a` ``, which calls `f` with the pieces. The lexer would read that as a
+call of `f`, so it refuses a template literal in those places. The printer
+never writes a template literal, so the parser's round trip covers the tokens
+that the lexer makes, and the lexer's proofs show that its template branches
+never run on printed text.
 
 `tests/typescript/check.ts` checks the parser against `tsc`. To do this,
 `tests/typescript/tscAst.ts` prints the tree from `tsc` in the same
@@ -452,6 +466,7 @@ the file, the line and the reason. It never approximates.
 | `if` that returns, `if` that changes locals, `c ? a : b` | `if … then … else …` |
 | `+ - *`, `< <= > >=`, `=== !==`, `&& \|\| !` | the same operators on `Int`, `Bool`, `Prop` |
 | `a + b` where one operand is a string and the other is a string, a `number`, a `bigint` or a `boolean`, and `s += e` on a string local | `a ++ b` on `JSString`. ToString converts the other operand first: `JSString.ofInt n` writes the decimal digits of a bigint, and `JSString.ofBool b` writes `"true"` or `"false"`. A number becomes `JSNumber.toStr x`, an operation of the number model, as `JSNumber.add` is. The model leaves it abstract, and the law `SafeIntLaws.toStr` states that a safe integer gives its decimal digits, so `"n=" + 3` is `"n=3"` in a proof. `+` is left-associative, so `1n + 2n + "!"` is `"3!"`. |
+| `` `Hello, ${name}! ${n}` ``, a template literal | The `+` chain that the lexer reads it as, such as `((JSString.ofString "Hello, " ++ name) ++ JSString.ofString "! ") ++ JSNumber.toStr n`, with the conversions of `+`. A part that `+` refuses, such as an object or `null`, is refused here too. |
 | `s.length` | `JSNumber.ofSafeInt (N := N) ((JSString.length s : Nat) : Int)`: the number of UTF-16 code units, so `"😀".length` is 2 |
 | `s.startsWith(p)`, `s.endsWith(p)` and `s.includes(p)`, where `p` is a string | `JSString.startsWith s p`, `JSString.endsWith s p` and `JSString.includes s p`, which compare code units. `startsWith_iff`, `endsWith_iff` and `includes_iff` state them as Lean's prefix, suffix and infix orders on the lists of code units. |
 | `s.startsWith(p, k)`, `s.endsWith(p, k)`, `s.includes(p, k)` and `s.indexOf(p, k)`, where `k` is an integer literal | `JSString.startsWithFrom s p k`, `JSString.endsWithAt s p k`, `JSString.includesFrom s p k` and `JSString.indexOfFrom s p k`. Each clamps the position to the string, so a negative `k` is `0`. For `endsWith`, `k` is the end of the part that must end with `p`. A position of `0` gives the method without one, as `startsWithFrom_zero` states. |

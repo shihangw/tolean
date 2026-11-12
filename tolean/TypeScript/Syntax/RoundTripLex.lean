@@ -292,6 +292,86 @@ theorem keeps_readStringBody (f : Nat) (start : Pos) (q : Char) (acc : String) :
   | zero => rw [readStringBody]; keeps
   | succ n ih => rw [readStringBody]; keeps
 
+theorem keeps_readTemplateBody (f : Nat) (start : Pos) (acc : String) :
+    Keeps (readTemplateBody f start acc) := by
+  induction f generalizing acc with
+  | zero => rw [readTemplateBody]; keeps
+  | succ n ih => rw [readTemplateBody]; keeps
+
+macro_rules | `(tactic| keeps_one) => `(tactic| apply keeps_readTemplateBody)
+
+/-! ### Template literals
+
+The lexer makes up tokens for a template literal: `(`, `+`, `)` and the strings of its text. A run that
+adds them keeps what `Kept` states, except the tokens, which grow by tokens that `TokenKind.ok` accepts. -/
+
+/-- Every run of `p` that succeeds adds tokens that `TokenKind.ok` accepts, and keeps the size and the
+target. If the characters left fit in the size before the run, they also fit after it. -/
+structure Pushes (p : LexM α) : Prop where
+  run : ∀ s a s', p s = .ok a s' → ∃ new, s'.tokens.toList = s.tokens.toList ++ new ∧
+    (∀ y ∈ new, y.kind.ok s.target = true) ∧ s'.size = s.size ∧ s'.target = s.target ∧ (Fits s → Fits s')
+
+theorem Keeps.pushes {p : LexM α} (h : Keeps p) : Pushes p :=
+  ⟨fun s a s' hp =>
+    have k := h.kept s a s' hp
+    ⟨[], by simp [k.tokens], by simp, k.size, k.target, k.fits⟩⟩
+
+theorem pushes_bind {x : LexM α} {f : α → LexM β} (hx : Pushes x) (hf : ∀ a, Pushes (f a)) :
+    Pushes (x >>= f) := by
+  constructor; intro s b s' h
+  obtain ⟨a, s₁, h₁, h₂⟩ := bind_ok.mp h
+  obtain ⟨n₁, t₁, o₁, z₁, g₁, f₁⟩ := hx.run _ _ _ h₁
+  obtain ⟨n₂, t₂, o₂, z₂, g₂, f₂⟩ := (hf a).run _ _ _ h₂
+  refine ⟨n₁ ++ n₂, by simp [t₂, t₁], ?_, z₂.trans z₁, g₂.trans g₁, f₂ ∘ f₁⟩
+  intro y hy
+  rcases List.mem_append.mp hy with hy | hy
+  · exact o₁ y hy
+  · rw [← g₁]; exact o₂ y hy
+
+theorem pushes_ite {c : Prop} [Decidable c] {x y : LexM α} (hx : Pushes x) (hy : Pushes y) :
+    Pushes (if c then x else y) := by
+  split <;> assumption
+
+theorem pushes_pushToken {kind : TokenKind} (hk : ∀ T, kind.ok T = true) (start stop : Pos) (nl : Bool) :
+    Pushes (pushToken kind start stop nl) := by
+  constructor; intro s a s' h
+  simp only [pushToken, modify, modifyGet, MonadStateOf.modifyGet, EStateM.modifyGet,
+    EStateM.Result.ok.injEq] at h
+  obtain ⟨_, rfl⟩ := h
+  exact ⟨[{ kind, span := ⟨start, stop⟩, newlineBefore := nl }], by simp, by simp [hk], rfl, rfl, id⟩
+
+/-- A change of the open substitutions alone. -/
+theorem pushes_modify {f : LexState → LexState}
+    (hf : ∀ s, (f s).tokens = s.tokens ∧ (f s).size = s.size ∧ (f s).target = s.target ∧
+      (f s).rest = s.rest ∧ (f s).i = s.i) :
+    Pushes (modify f) := by
+  constructor; intro s a s' h
+  simp only [modify, modifyGet, MonadStateOf.modifyGet, EStateM.modifyGet, EStateM.Result.ok.injEq] at h
+  obtain ⟨_, rfl⟩ := h
+  obtain ⟨h1, h2, h3, h4, h5⟩ := hf s
+  refine ⟨[], by simp [h1], by simp, h2, h3, fun hs => ?_⟩
+  simp only [Fits, h2, h4, h5] at hs ⊢
+  exact hs
+
+/-- Proves `Pushes p` by stepping through the code of `p`. -/
+macro "pushes" : tactic => `(tactic| repeat' (first
+  | intro _ | apply pushes_bind | apply pushes_ite
+  | (apply pushes_pushToken; intro; first | rfl | decide)
+  | (apply pushes_modify; intro; exact ⟨rfl, rfl, rfl, rfl, rfl⟩)
+  | (apply Keeps.pushes; keeps; done)
+  | split))
+
+theorem pushes_lexTemplateRest (start stop : Pos) (text : String) (more : Bool) :
+    Pushes (lexTemplateRest start stop text more) := by
+  unfold lexTemplateRest; pushes
+
+theorem pushes_lexTemplate (start : Pos) (nl : Bool) : Pushes (lexTemplate start nl) := by
+  unfold lexTemplate; pushes
+
+theorem pushes_lexTemplateMiddle (start : Pos) (nl : Bool) (outer : List Nat) :
+    Pushes (lexTemplateMiddle start nl outer) := by
+  unfold lexTemplateMiddle; pushes
+
 /-! ### Digits -/
 
 /-- How many characters `readMoreDigits` reads from `cs`, or `none` where it fails. -/
@@ -1403,24 +1483,25 @@ theorem skipTrivia_stop (f : Nat) (s : LexState) (h : NoTrivia s.rest) :
 theorem skipTrivia_gap : ∀ (g : List Char) (f : Nat) (s : LexState) (r : List Char),
     (∀ c ∈ g, c = ' ' ∨ c = '\n') → s.rest = g ++ r → NoTrivia r → g.length < f →
     ∃ s', skipTrivia f s = .ok () s' ∧ s'.rest = r ∧ s'.newline = (s.newline || g.contains '\n') ∧
-      (g = [] → s' = s)
+      (g = [] → s' = s) ∧ s'.templates = s.templates
   | [], f + 1, s, r, _, hs, hn, _ => ⟨s, skipTrivia_stop f s (by simpa [hs] using hn), by simpa using hs,
-      by simp, fun _ => rfl⟩
+      by simp, fun _ => rfl, rfl⟩
   | c :: g, f + 1, s, r, hg, hs, hn, hf => by
     rcases hg c (by simp) with rfl | rfl
-    · obtain ⟨s', h1, h2, h3, _⟩ := skipTrivia_gap g f (skipped s 1) r (fun c hc => hg c (by simp [hc]))
+    · obtain ⟨s', h1, h2, h3, _, h5⟩ := skipTrivia_gap g f (skipped s 1) r (fun c hc => hg c (by simp [hc]))
         (by simp [hs]) hn (by simp at hf; omega)
-      refine ⟨s', ?_, h2, by simp [h3], fun h => by cases h⟩
+      refine ⟨s', ?_, h2, by simp [h3], (fun h => nomatch h), by simp [h5, skipped]⟩
       rw [skipTrivia, bind_eq (peekChar_eq 0 s)]
       simp only [hs, List.cons_append, List.getElem?_cons_zero]
       rw [if_pos (by decide), bind_eq (skipChar_eq s)]
       exact h1
     · obtain ⟨s₁, hlb, hr₁, hn₁⟩ :
-          ∃ s₁, skipLineBreak s = .ok () s₁ ∧ s₁.rest = g ++ r ∧ s₁.newline = true :=
-        ⟨_, rfl, by simp [hs], rfl⟩
-      obtain ⟨s', h1, h2, h3, _⟩ := skipTrivia_gap g f s₁ r (fun c hc => hg c (by simp [hc])) hr₁ hn
+          ∃ s₁, skipLineBreak s = .ok () s₁ ∧ s₁.rest = g ++ r ∧ s₁.newline = true ∧
+            s₁.templates = s.templates :=
+        ⟨_, rfl, by simp [hs], rfl, rfl⟩
+      obtain ⟨s', h1, h2, h3, _, h5⟩ := skipTrivia_gap g f s₁ r (fun c hc => hg c (by simp [hc])) hr₁ hn
         (by simp at hf; omega)
-      refine ⟨s', ?_, h2, by simp [h3, hn₁], fun h => by cases h⟩
+      refine ⟨s', ?_, h2, by simp [h3, hn₁], (fun h => nomatch h), h5.trans hn₁.2⟩
       rw [skipTrivia, bind_eq (peekChar_eq 0 s)]
       simp only [hs, List.cons_append, List.getElem?_cons_zero]
       rw [if_neg (by decide), if_pos (by decide), bind_eq hlb]
@@ -1435,26 +1516,33 @@ theorem lexAll_token {T : Edition} {k : TokenKind} {g text r : List Char} {s : L
     (hg : ∀ c ∈ g, c = ' ' ∨ c = '\n') (hs : s.rest = g ++ (text ++ r)) (hn : NoTrivia (text ++ r))
     (hk : ∀ (start : Pos) (s₁ : LexState), s₁.rest = text ++ r → Fits s₁ → s₁.target = T →
       ∃ c, text.head? = some c ∧ lexKind start c s₁ = .ok k (skipped s₁ text.length))
-    (hf : Fits s) (hT : s.target = T) :
+    (hf : Fits s) (hT : s.target = T) (ht : s.templates = []) :
     ∃ s' y, (∀ f, lexAll (f + 1) s = lexAll f s') ∧ s'.rest = r ∧ s'.tokens = s.tokens.push y ∧ y.kind = k ∧
       y.newlineBefore = (s.newline || g.contains '\n') ∧ s'.newline = false ∧ Fits s' ∧ s'.target = T ∧
-      s'.rest.length < s.rest.length ∧ y.span.stop = ⟨s'.line, s'.col⟩ ∧ (g = [] → y.span.start = ⟨s.line, s.col⟩) := by
-  obtain ⟨s₁, hskip, hr₁, hnl, hg₀⟩ := skipTrivia_gap g _ s _ hg hs hn (blank_length hs hf)
+      s'.rest.length < s.rest.length ∧ y.span.stop = ⟨s'.line, s'.col⟩ ∧ (g = [] → y.span.start = ⟨s.line, s.col⟩) ∧
+      s'.templates = [] := by
+  obtain ⟨s₁, hskip, hr₁, hnl, hg₀, ht₁⟩ := skipTrivia_gap g _ s _ hg hs hn (blank_length hs hf)
   have hkept := (keeps_skipTrivia _).kept _ _ _ hskip
   obtain ⟨c, hc, hlex⟩ := hk ⟨s₁.line, s₁.col⟩ s₁ hr₁ (hkept.fits hf) (hkept.target.trans hT)
   have hpeek : s₁.rest[0]? = some c := by
     rw [hr₁]; cases text with
     | nil => simp at hc
     | cons d _ => simpa using hc
+  have hcb : c ≠ '`' := by
+    rintro rfl
+    exact absurd (okOf_eq_some.mpr hlex) (by
+      rw [lexKind]; simp [okOf_bind, okOf_failFrom, isIdentStart, okOf_peekChar])
   let s₂ := skipped s₁ text.length
   let y : Token := { kind := k, span := ⟨⟨s₁.line, s₁.col⟩, ⟨s₂.line, s₂.col⟩⟩, newlineBefore := s₁.newline }
-  refine ⟨{ s₂ with tokens := s₂.tokens.push y, newline := false }, y, fun f => ?_, by simp [s₂, hr₁],
+  refine ⟨{ s₂ with tokens := s₂.tokens.push y, newline := false, templates := countBraces k s₂.templates },
+    y, fun f => ?_, by simp [s₂, hr₁],
     by simp [s₂, hkept.tokens], rfl, hnl, rfl, ?_, by simp [s₂, hkept.target, hT], ?_, rfl,
-    fun h => by simp [y, hg₀ h]⟩
+    fun h => by simp [y, hg₀ h], by simp [s₂, skipped, ht₁, ht, countBraces]⟩
   · rw [lexAll, bind_eq (budget_eq s), bind_eq hskip, bind_eq (here_eq s₁), bind_eq (get_eq s₁),
       bind_eq (peekChar_eq 0 s₁)]
     simp only [hpeek]
-    rw [bind_eq hlex, bind_eq (here_eq _), bind_eq (modify_eq _ _)]
+    rw [if_neg (by simpa using hcb), bind_eq (get_eq s₁),
+      if_neg (by simp [ht₁, ht]), bind_eq hlex, bind_eq (here_eq _), bind_eq (modify_eq _ _)]
   · have := fits_skipped (hkept.fits hf) text.length
     exact this
   · have : 0 < text.length := by cases text with | nil => simp at hc | cons _ _ => simp
@@ -1485,33 +1573,35 @@ tokens. -/
 theorem lexAll_word {T : Edition} : ∀ {w : Word}, Word.ok T w = true → w ≠ [] →
     ∀ {g r : List Char} {b : Char} {s : LexState}, (∀ c ∈ g, c = ' ' ∨ c = '\n') →
       (b = ' ' ∨ b = '\n') → s.rest = g ++ ((w.flatMap fun k => k.text.toList) ++ b :: r) → Fits s →
-      s.target = T →
+      s.target = T → s.templates = [] →
       ∃ s' a, (∀ f, lexAll (f + a.length) s = lexAll f s') ∧ s'.rest = b :: r ∧
         s'.tokens.toList = s.tokens.toList ++ a ∧ a.map (·.kind) = w ∧ Chained a ∧
         (∀ y ∈ a.head?, y.newlineBefore = (s.newline || g.contains '\n')) ∧
         (∀ y ∈ a.tail, y.newlineBefore = false) ∧
         (g = [] → ∀ y ∈ a.head?, y.span.start = ⟨s.line, s.col⟩) ∧
-        s'.newline = false ∧ Fits s' ∧ s'.target = T ∧ s'.rest.length + a.length ≤ s.rest.length
-  | [k], hw, _, g, r, b, s, hg, hb, hs, hf, hT => by
+        s'.newline = false ∧ Fits s' ∧ s'.target = T ∧ s'.rest.length + a.length ≤ s.rest.length ∧
+        s'.templates = []
+  | [k], hw, _, g, r, b, s, hg, hb, hs, hf, hT, ht => by
     simp only [Word.ok] at hw
     simp only [List.flatMap_cons, List.flatMap_nil, List.append_nil] at hs
-    obtain ⟨s', y, h1, h2, h3, h4, h5, h6, h7, h8, h9, _, h11⟩ := lexAll_token hg hs (noTrivia_text hw hb r)
-      (fun start s₁ hs₁ hf₁ hT₁ => lexKind_text start hw hb hs₁ hf₁ hT₁) hf hT
+    obtain ⟨s', y, h1, h2, h3, h4, h5, h6, h7, h8, h9, _, h11, h12⟩ := lexAll_token hg hs (noTrivia_text hw hb r)
+      (fun start s₁ hs₁ hf₁ hT₁ => lexKind_text start hw hb hs₁ hf₁ hT₁) hf hT ht
     refine ⟨s', [y], h1, h2, by simp [h3], by simp [h4], trivial, by simp [h5], by simp,
-      fun h => by simp [h11 h], h6, h7, h8, by simp only [List.length_singleton]; omega⟩
-  | k :: v :: w, hw, _, g, r, b, s, hg, hb, hs, hf, hT => by
+      fun h => by simp [h11 h], h6, h7, h8, by simp only [List.length_singleton]; omega, h12⟩
+  | k :: v :: w, hw, _, g, r, b, s, hg, hb, hs, hf, hT, ht => by
     simp only [Word.ok, Bool.and_eq_true, beq_iff_eq] at hw
     obtain ⟨rfl, hw⟩ := hw
     have hgt : (TokenKind.punct ">").text.toList = ['>'] := rfl
     simp only [List.flatMap_cons, hgt, List.append_assoc] at hs
-    obtain ⟨s₁, y, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11⟩ := lexAll_token (text := ['>'])
+    obtain ⟨s₁, y, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12⟩ := lexAll_token (text := ['>'])
       (r := v.text.toList ++ ((w.flatMap fun k => k.text.toList) ++ b :: r)) hg hs
       (by intro c hc; simp at hc; subst hc; exact ⟨rfl, rfl, fun h => absurd h (by decide)⟩)
-      (fun start s₁ hs₁ _ _ => ⟨'>', rfl, lexKind_gt start hs₁⟩) hf hT
-    obtain ⟨s', a, k1, k2, k3, k4, k5, k6, k7, k8, k9, k10, k11, k12⟩ :=
-      lexAll_word hw (by simp) (g := []) (r := r) (by simp) hb (by simp [h2, List.flatMap_cons]) h7 h8
+      (fun start s₁ hs₁ _ _ => ⟨'>', rfl, lexKind_gt start hs₁⟩) hf hT ht
+    obtain ⟨s', a, k1, k2, k3, k4, k5, k6, k7, k8, k9, k10, k11, k12, k13⟩ :=
+      lexAll_word hw (by simp) (g := []) (r := r) (by simp) hb (by simp [h2, List.flatMap_cons]) h7 h8 h12
     refine ⟨s', y :: a, fun f => by rw [List.length_cons, ← Nat.add_assoc, h1, k1], k2,
-      by simp [k3, h3], by simp [h4, k4], ?_, by simp [h5], ?_, fun h => by simp [h11 h], k9, k10, k11, ?_⟩
+      by simp [k3, h3], by simp [h4, k4], ?_, by simp [h5], ?_, fun h => by simp [h11 h], k9, k10, k11, ?_,
+      k13⟩
     · cases a with
       | nil => trivial
       | cons z a =>
@@ -1559,48 +1649,48 @@ tokens that `Touching` describes. -/
 theorem lexAll_words {T : Edition} (ind : String) (hind : ∀ c ∈ ind.toList, c = ' ') :
     ∀ {ws : List Word}, (∀ w ∈ ws, Word.ok T w = true) → breaksOK ws = true →
     ∀ {g r : List Char} {s : LexState}, (∀ c ∈ g, c = ' ' ∨ c = '\n') →
-      s.rest = g ++ ((wordsText ind ws).toList ++ '\n' :: r) → Fits s → s.target = T →
+      s.rest = g ++ ((wordsText ind ws).toList ++ '\n' :: r) → Fits s → s.target = T → s.templates = [] →
       ∃ s' a g', (∀ f, lexAll (f + a.length) s = lexAll f s') ∧ s'.rest = g' ++ '\n' :: r ∧
         (∀ c ∈ g', c = ' ' ∨ c = '\n') ∧ s'.tokens.toList = s.tokens.toList ++ a ∧ Touching a ws ∧
         (∀ y ∈ a.tail, NoBreak y) ∧
         (∀ y ∈ a.head?, y.newlineBefore = (s.newline || g.contains '\n' || ws.head? == some [])) ∧
-        Fits s' ∧ s'.target = T ∧ s'.rest.length + a.length ≤ s.rest.length
-  | [], _, _, g, r, s, hg, hs, hf, hT => by
+        Fits s' ∧ s'.target = T ∧ s'.rest.length + a.length ≤ s.rest.length ∧ s'.templates = []
+  | [], _, _, g, r, s, hg, hs, hf, hT, ht => by
     refine ⟨s, [], g, fun _ => rfl, by simpa [wordsText] using hs, hg, by simp, rfl, by simp, by simp, hf,
-      hT, by simp⟩
-  | [] :: ws, hw, hb, g, r, s, hg, hs, hf, hT => by
+      hT, by simp, ht⟩
+  | [] :: ws, hw, hb, g, r, s, hg, hs, hf, hT, ht => by
     simp only [breaksOK, Bool.and_eq_true] at hb
     rw [wordsText_break] at hs
-    obtain ⟨s', a, g', h1, h2, h3, h4, h5, h6, h7, h8, h9, h10⟩ :=
+    obtain ⟨s', a, g', h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11⟩ :=
       lexAll_words ind hind (fun w hw' => hw w (by simp [hw'])) hb.2 (g := g ++ '\n' :: ind.toList)
         (r := r)
         (by intro c hc; simp at hc; rcases hc with hc | rfl | hc
             · exact hg c hc
             · exact Or.inr rfl
             · exact Or.inl (hind c hc))
-        (by simp [hs]) hf hT
+        (by simp [hs]) hf hT ht
     refine ⟨s', a, g', h1, h2, h3, h4, ⟨[], a, rfl, rfl, fun y hy => by rw [h7 y hy]; simp, h5⟩, h6,
-      fun y hy => by rw [h7 y hy]; simp, h8, h9, h10⟩
-  | [k :: w], hw, _, g, r, s, hg, hs, hf, hT => by
+      fun y hy => by rw [h7 y hy]; simp, h8, h9, h10, h11⟩
+  | [k :: w], hw, _, g, r, s, hg, hs, hf, hT, ht => by
     rw [wordsText_one ind (List.cons_ne_nil _ _)] at hs
-    obtain ⟨s', a, k1, k2, k3, k4, k5, k6, k7, _, _, k10, k11, k12⟩ :=
-      lexAll_word (hw _ (by simp)) (List.cons_ne_nil _ _) (r := r) hg (Or.inr rfl) hs hf hT
+    obtain ⟨s', a, k1, k2, k3, k4, k5, k6, k7, _, _, k10, k11, k12, k13⟩ :=
+      lexAll_word (hw _ (by simp)) (List.cons_ne_nil _ _) (r := r) hg (Or.inr rfl) hs hf hT ht
     refine ⟨s', a, [], k1, by simp [k2], by simp, k3, ⟨a, [], by simp, k4, ⟨k5, by simp⟩, rfl⟩,
-      fun y hy _ => k7 y hy, fun y hy => by simp [k6 y hy], k10, k11, k12⟩
-  | (k :: w) :: [] :: ws, hw, hb, g, r, s, hg, hs, hf, hT => by
+      fun y hy _ => k7 y hy, fun y hy => by simp [k6 y hy], k10, k11, k12, k13⟩
+  | (k :: w) :: [] :: ws, hw, hb, g, r, s, hg, hs, hf, hT, ht => by
     rw [wordsText_cons_break ind (List.cons_ne_nil _ _), wordsText_break] at hs
-    obtain ⟨s₁, a₁, k1, k2, k3, k4, k5, k6, k7, _, _, k10, k11, k12⟩ :=
+    obtain ⟨s₁, a₁, k1, k2, k3, k4, k5, k6, k7, _, _, k10, k11, k12, k13⟩ :=
       lexAll_word (hw (k :: w) (by simp)) (List.cons_ne_nil _ _) (b := '\n')
-        (r := ind.toList ++ (wordsText ind ws).toList ++ '\n' :: r) hg (Or.inr rfl) (by simp [hs]) hf hT
-    obtain ⟨s', a₂, g', h1, h2, h3, h4, h5, h6, h7, h8, h9, h10⟩ :=
+        (r := ind.toList ++ (wordsText ind ws).toList ++ '\n' :: r) hg (Or.inr rfl) (by simp [hs]) hf hT ht
+    obtain ⟨s', a₂, g', h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11⟩ :=
       lexAll_words ind hind (ws := [] :: ws)
         (fun w hw' => hw w (by simp at hw' ⊢; rcases hw' with h | h <;> simp [h])) hb (g := []) (r := r)
-        (by simp) (by rw [k2, wordsText_break]; simp) k10 k11
+        (by simp) (by rw [k2, wordsText_break]; simp) k10 k11 k13
     have hbr : ws.head? = some [.punct "("] := by
       simp only [breaksOK, Bool.and_eq_true] at hb; simpa using hb.1
     refine ⟨s', a₁ ++ a₂, g',
       fun f => by rw [List.length_append, Nat.add_comm a₁.length, ← Nat.add_assoc, k1, h1],
-      h2, h3, by simp [h4, k3], ⟨a₁, a₂, rfl, k4, ⟨k5, by simp⟩, h5⟩, ?_, ?_, h8, h9, ?_⟩
+      h2, h3, by simp [h4, k3], ⟨a₁, a₂, rfl, k4, ⟨k5, by simp⟩, h5⟩, ?_, ?_, h8, h9, ?_, h11⟩
     · cases a₁ with
       | nil => simp at k4
       | cons z a₁ =>
@@ -1627,20 +1717,20 @@ theorem lexAll_words {T : Edition} (ind : String) (hind : ∀ c ∈ ind.toList, 
         have hy' : y ∈ (z :: a₁).head? := by simpa using hy
         rw [k6 y hy']; simp
     · simp only [List.length_append, k2] at h10 k12 ⊢; omega
-  | (k :: w) :: (j :: v) :: ws, hw, hb, g, r, s, hg, hs, hf, hT => by
+  | (k :: w) :: (j :: v) :: ws, hw, hb, g, r, s, hg, hs, hf, hT, ht => by
     rw [wordsText_cons ind (List.cons_ne_nil _ _) (List.cons_ne_nil _ _)] at hs
-    obtain ⟨s₁, a₁, k1, k2, k3, k4, k5, k6, k7, _, k9, k10, k11, k12⟩ :=
+    obtain ⟨s₁, a₁, k1, k2, k3, k4, k5, k6, k7, _, k9, k10, k11, k12, k13⟩ :=
       lexAll_word (hw (k :: w) (by simp)) (List.cons_ne_nil _ _) (b := ' ')
-        (r := (wordsText ind ((j :: v) :: ws)).toList ++ '\n' :: r) hg (Or.inl rfl) (by simp [hs]) hf hT
-    obtain ⟨s', a₂, g', h1, h2, h3, h4, h5, h6, h7, h8, h9, h10⟩ :=
+        (r := (wordsText ind ((j :: v) :: ws)).toList ++ '\n' :: r) hg (Or.inl rfl) (by simp [hs]) hf hT ht
+    obtain ⟨s', a₂, g', h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11⟩ :=
       lexAll_words ind hind (ws := (j :: v) :: ws)
         (fun w hw' => hw w (by simp at hw' ⊢; rcases hw' with h | h <;> simp [h])) hb (g := [' '])
-        (r := r) (by simp) (by rw [k2]; simp) k10 k11
+        (r := r) (by simp) (by rw [k2]; simp) k10 k11 k13
     have hflag : ∀ y ∈ a₂.head?, y.newlineBefore = false := fun y hy => by rw [h7 y hy, k9]; rfl
     refine ⟨s', a₁ ++ a₂, g',
       fun f => by rw [List.length_append, Nat.add_comm a₁.length, ← Nat.add_assoc, k1, h1],
       h2, h3, by simp [h4, k3], ⟨a₁, a₂, rfl, k4, ⟨k5, fun _ _ _ y hy => hflag y hy⟩, h5⟩, ?_, ?_, h8, h9,
-      ?_⟩
+      ?_, h11⟩
     · cases a₁ with
       | nil => simp at k4
       | cons z a₁ =>
@@ -1677,34 +1767,34 @@ theorem render_cons (l : Line) (ls : List Line) :
 theorem lexAll_lines {T : Edition} :
     ∀ {lines : List Line}, (∀ l ∈ lines, ∀ w ∈ l.2, Word.ok T w = true) → (∀ l ∈ lines, breaksOK l.2 = true) →
     ∀ {g : List Char} {s : LexState}, (∀ c ∈ g, c = ' ' ∨ c = '\n') → s.rest = g ++ (render lines).toList →
-      Fits s → s.target = T →
+      Fits s → s.target = T → s.templates = [] →
       ∃ s' a g', (∀ f, lexAll (f + a.length) s = lexAll f s') ∧ s'.rest = g' ∧
         (∀ c ∈ g', c = ' ' ∨ c = '\n') ∧ s'.tokens.toList = s.tokens.toList ++ a ∧ Laid a (lines.map Prod.snd) ∧
         ((s.newline || g.contains '\n') = true → ∀ y ∈ a.head?, y.newlineBefore = true) ∧ Fits s' ∧
-        s'.rest.length + a.length ≤ s.rest.length
-  | [], _, _, g, s, hg, hs, hf, _ =>
-    ⟨s, [], g, fun _ => rfl, by simpa [render] using hs, hg, by simp, rfl, by simp, hf, by simp⟩
-  | l :: ls, hw, hb, g, s, hg, hs, hf, hT => by
+        s'.rest.length + a.length ≤ s.rest.length ∧ s'.templates = []
+  | [], _, _, g, s, hg, hs, hf, _, ht =>
+    ⟨s, [], g, fun _ => rfl, by simpa [render] using hs, hg, by simp, rfl, by simp, hf, by simp, ht⟩
+  | l :: ls, hw, hb, g, s, hg, hs, hf, hT, ht => by
     rw [render_cons] at hs
     have hind : ∀ c ∈ ("".pushn ' ' (2 * l.1 + 4)).toList, c = ' ' := by
       intro c hc; rw [pushn_toList] at hc; exact (List.mem_replicate.mp hc).2
-    obtain ⟨s₁, a₁, g₁, k1, k2, k3, k4, k5, k6, k7, k8, k9, k10⟩ :=
+    obtain ⟨s₁, a₁, g₁, k1, k2, k3, k4, k5, k6, k7, k8, k9, k10, k11⟩ :=
       lexAll_words _ hind (fun w hw' => hw l (by simp) w hw') (hb l (by simp))
         (g := g ++ List.replicate (2 * l.1) ' ') (r := (render ls).toList)
         (by intro c hc; simp at hc; rcases hc with hc | ⟨_, rfl⟩
             · exact hg c hc
             · exact Or.inl rfl)
-        (by simp [hs]) hf hT
-    obtain ⟨s', a₂, g', h1, h2, h3, h4, h5, h6, h7, h8⟩ :=
+        (by simp [hs]) hf hT ht
+    obtain ⟨s', a₂, g', h1, h2, h3, h4, h5, h6, h7, h8, h9⟩ :=
       lexAll_lines (lines := ls) (fun l' hl' => hw l' (by simp [hl']))
         (fun l' hl' => hb l' (by simp [hl'])) (g := g₁ ++ ['\n']) (s := s₁)
         (by intro c hc; simp at hc; rcases hc with hc | rfl
             · exact k3 c hc
             · exact Or.inr rfl)
-        (by simp [k2]) k8 k9
+        (by simp [k2]) k8 k9 k11
     refine ⟨s', a₁ ++ a₂, g',
       fun f => by rw [List.length_append, Nat.add_comm a₁.length, ← Nat.add_assoc, k1, h1],
-      h2, h3, by simp [h4, k4], ⟨a₁, a₂, rfl, k5, k6, h6 (by simp), h5⟩, ?_, h7, ?_⟩
+      h2, h3, by simp [h4, k4], ⟨a₁, a₂, rfl, k5, k6, h6 (by simp), h5⟩, ?_, h7, ?_, h9⟩
     · intro hn y hy
       cases a₁ with
       | cons z a₁ =>
@@ -1858,6 +1948,29 @@ theorem lexAll_ok : ∀ (f : Nat) (s s' : LexState), lexAll f s = .ok () s' → 
     | some c =>
       rw [hc] at h2
       simp only at h2
+      -- A run that adds printable tokens, as a template literal does, and then the rest of `lexAll`.
+      have tail : ∀ s₂ new₁, s₂.tokens.toList = s₁.tokens.toList ++ new₁ →
+          (∀ y ∈ new₁, y.kind.ok s₁.target = true) → s₂.target = s₁.target → Fits s₂ →
+          lexAll f s₂ = .ok () s' →
+          ∃ new e, s'.tokens.toList = s.tokens.toList ++ new ++ [e] ∧ e.kind = .eof ∧
+            ∀ y ∈ new, y.kind.ok s.target = true := by
+        intro s₂ new₁ t₁ o₁ g₁ f₂ h₂
+        obtain ⟨new, e, e1, e2, e3⟩ := lexAll_ok f _ s' h₂ f₂
+        refine ⟨new₁ ++ new, e, by simp [e1, t₁, k1.tokens], e2, ?_⟩
+        intro y hy
+        rcases List.mem_append.mp hy with hy | hy
+        · rw [← k1.target]; exact o₁ y hy
+        · have := e3 y hy; rwa [g₁, k1.target] at this
+      split at h2
+      · obtain ⟨_, s₂, h3, h4⟩ := bind_ok.mp h2
+        obtain ⟨n₁, t₁, o₁, _, g₁, f₁⟩ := (pushes_lexTemplate _ _).run _ _ _ h3
+        exact tail s₂ n₁ t₁ o₁ g₁ (f₁ (k1.fits hf)) h4
+      rw [bind_eq (get_eq s₁)] at h2
+      split at h2
+      · rw [bind_eq (get_eq s₁)] at h2
+        obtain ⟨_, s₂, h3, h4⟩ := bind_ok.mp h2
+        obtain ⟨n₁, t₁, o₁, _, g₁, f₁⟩ := (pushes_lexTemplateMiddle _ _ _).run _ _ _ h3
+        exact tail s₂ n₁ t₁ o₁ g₁ (f₁ (k1.fits hf)) h4
       obtain ⟨k, s₂, h3, h4⟩ := bind_ok.mp h2
       obtain ⟨hk, k2⟩ := lexKind_ok hc (k1.fits hf) h3
       rw [bind_eq (here_eq s₂), bind_eq (modify_eq _ _)] at h4
@@ -1896,8 +2009,9 @@ theorem lexChars_render (T : Edition) (lines : List Line)
       e.kind = .eof := by
   let chars := (render lines).toList
   let s₀ : LexState := { rest := chars, size := chars.length, target := T }
-  obtain ⟨s', a, g', h1, h2, h3, h4, h5, _, h7, h8⟩ :=
+  obtain ⟨s', a, g', h1, h2, h3, h4, h5, _, h7, h8, _⟩ :=
     Lex.lexAll_lines h hb (g := []) (s := s₀) (by simp) (by simp [s₀, chars]) (Lex.fits_start T chars) rfl
+      rfl
   obtain ⟨s'', y, k1, k2, k3⟩ := Lex.lexAll_end h3 h2 h7 (chars.length - a.length)
   refine ⟨a, y, ?_, h5, k3⟩
   have hf : chars.length + 1 = (chars.length - a.length + 1) + a.length := by
