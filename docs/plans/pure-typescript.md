@@ -97,7 +97,6 @@ value claim already does.
 | TypeScript | Lean | Refused |
 |---|---|---|
 | `entries` | The `List` functions with the same meaning | The `index` argument of a callback other than one of `map`, and the `array` argument of any callback, until a later step adds them |
-| `xs.at(i)` and `xs.slice(i, j)` where an argument is not an integer literal (§23.1.3.1, §23.1.3.28) | `ToIntegerOrInfinity` on each argument, then the element or the slice as for literals. It needs `Math.trunc` from the numbers stage. | |
 | A certificate for a file that sorts by a `number` key | As for `bigint` and `string` keys, with the precondition that no key is `NaN`, and for a difference that every key is finite. A difference also needs new laws: `<` is a strict total order on numbers that are not `NaN`, and the sign of `a - b` is the order of `a` and `b`. `jsNumberLaws.test.ts` would check them. | |
 
 The certifier writes no precondition today, so such a file gets no
@@ -216,8 +215,7 @@ leaves a gap.
    `undefined` that narrows inside an expression, `a?.[i]` and `f?.()`, and
    re-exports.
 3. **P1.** Type guards.
-4. **P0.** The rest of the arrays without `sort`: `entries`, and `at` and
-   `slice` with arguments that are not integer literals.
+4. **P0.** The rest of the arrays without `sort`: `entries`.
 6. **P0.** Errors: `throw` in loop bodies and in branches that change
    locals, calls that can throw inside larger expressions, and declared error
    classes.

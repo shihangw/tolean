@@ -470,6 +470,13 @@ export class Gen {
           });
           // A sorted copy (`sortCall`).
           options.push(() => this.sortCall(this.pick(same_), vars, depth));
+          // A slice with a number bound, which may have a fraction or be
+          // `NaN` or infinite.
+          options.push(() => {
+            const n = this.expr(NUMBER, vars, depth);
+            const bounds = this.pick([n, `${n}, -1`, `1, ${n}`]);
+            return `${this.pick(same_).name}.slice(${bounds})`;
+          });
           // A spread of one array or two, with elements around them.
           options.push(() => {
             const parts = [`...${this.pick(same_).name}`];
@@ -498,6 +505,7 @@ export class Gen {
               () => `${recv}[${this.pick([0, 1, 2])}]`,
               () => `${recv}[${this.expr(NUMBER, vars, depth)}]`,
               () => `${recv}.at(${this.pick([0, 1, -1, -2])})`,
+              () => `${recv}.at(${this.expr(NUMBER, vars, depth)})`,
             ])();
             return `(${index} ?? ${this.expr(t, vars, depth)})`;
           });

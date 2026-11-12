@@ -314,6 +314,41 @@ test('the interpreter binds a parameter that a call leaves out to undefined', as
   }
 });
 
+// `at` and `slice` read a number argument with `ToIntegerOrInfinity`: a
+// fraction rounds toward zero, `NaN` is 0, and an infinite or huge number lands
+// past an end of the array. Random programs rarely pass such an index, so
+// these cases run each shape on each kind of number.
+test('the interpreter reads the index of at and slice as Node does', async () => {
+  const sources = [
+    'export function f(xs: ReadonlyArray<bigint>, i: number): bigint | null { return xs.at(i) ?? null; }',
+    'export function f(xs: ReadonlyArray<bigint>, i: number): ReadonlyArray<bigint> { return xs.slice(i); }',
+    'export function f(xs: ReadonlyArray<bigint>, i: number): ReadonlyArray<bigint> { return xs.slice(1, i); }',
+    'export function f(xs: ReadonlyArray<bigint>, i: number): ReadonlyArray<bigint> { return xs.slice(i, -1); }',
+  ];
+  const indexes = [0, -0, 1, -1, 0.5, -0.5, 2.7, -2.7, 3, 9, -9, NaN, Infinity, -Infinity, 2 ** 53, -(2 ** 53), 1e308, -1e308];
+  const xs = [10n, 20n, 30n, 40n];
+  const cases = sources.flatMap((source) => indexes.map((i) => ({ source, args: [xs, i] })));
+  const input = {
+    programs: cases.map(({ source, args }) => ({ source, calls: [{ function: 'f', args: args.map(encode) }] })),
+  };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const results = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-index-'));
+  for (const [k, source] of sources.entries()) {
+    const path = join(dir, `case${k}.mjs`);
+    writeFileSync(path, ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext } }).outputText);
+    const mod = (await import(pathToFileURL(path).href)) as { f: (...a: Array<unknown>) => unknown };
+    for (const [j, i] of indexes.entries()) {
+      const lean = results[k * indexes.length + j];
+      expect(lean?.parsed, source).toBe(true);
+      if (lean === undefined || !lean.parsed) continue;
+      const value = lean.results[0]?.value;
+      expect(value === undefined ? 'no value' : canonical(value), `${source} with ${i}`).toBe(canonical(encode(mod.f(xs, i))));
+    }
+  }
+});
+
 // An assignment to a `const` throws a `TypeError` in Node, so the interpreter
 // must give no value for it, whatever the operator.
 // A difference of keys is consistent only when every key is finite. The spec

@@ -2564,6 +2564,155 @@ theorem eval_slice (sp sp' : Span) (recv : Expr) (args : List Expr) {bounds : Li
   all_goals rcases hcases with ⟨h, -⟩ | ⟨a, h, ha, -⟩ | ⟨a, b, e, h, ha, -⟩ <;> simp_all [Eval.intLiteral?]
 
 
+/-- `ExprExt.apply` on `slice` with integer literals, without the other
+operations, so that a proof need not unfold them all. -/
+theorem apply_slice (a : Int) (b : Option Int) (w : Val N) :
+    IR.ExprExt.apply (.slice a b) [w] =
+      match w with
+      | .list xs => some (.list (Eval.sliceList xs a b))
+      | _ => none := by
+  cases w <;> rfl
+
+theorem apply_toIndexInt (u : Val N) :
+    IR.ExprExt.apply .toIndexInt [u] =
+      match u with
+      | .num n => some (.int (JSNumber.toIndexInt n))
+      | _ => none := by
+  cases u <;> rfl
+
+theorem apply_atNumber (w u : Val N) :
+    IR.ExprExt.apply .atNumber [w, u] =
+      match w, u with
+      | .list xs, .num n => some (Eval.atVal xs (JSNumber.toIndexInt n))
+      | _, _ => none := by
+  cases w <;> cases u <;> rfl
+
+theorem apply_sliceInt_one (w : Val N) (a : Int) :
+    IR.ExprExt.apply .sliceInt [w, .int a] =
+      match w with
+      | .list xs => some (.list (JSNumber.sliceInt xs a none))
+      | _ => none := by
+  cases w <;> rfl
+
+theorem apply_sliceInt_two (w : Val N) (a b : Int) :
+    IR.ExprExt.apply .sliceInt [w, .int a, .int b] =
+      match w with
+      | .list xs => some (.list (JSNumber.sliceInt xs a (some b)))
+      | _ => none := by
+  cases w <;> rfl
+
+omit [JSNumber N] in
+/-- The spec's `slice` is the function that the output calls. -/
+theorem sliceList_eq_sliceInt {α : Type} (xs : List α) (a : Int) (b : Option Int) :
+    Eval.sliceList xs a b = JSNumber.sliceInt xs a b := rfl
+
+/-- `xs.slice(a)` with any argument that is not an arrow function: the
+interpreter evaluates the array, then the integer of `a`, and `sliceList`
+gives the elements. -/
+theorem eval_slice_one (sp sp' : Span) (recv a : Expr) (ha : a.isArrow = false)
+    (hr : recv.namesNumber = false) (ρ : Eval.Env N) :
+    Eval.eval m fuel ρ (.call sp (.member sp' recv "slice") [a]) =
+      (Eval.eval m fuel ρ recv).bind fun
+        | .list items => (Eval.evalInt m fuel ρ a).map fun k => .list (Eval.sliceList items k none)
+        | _ => none := by
+  rw [Eval.eval]
+  · generalize Eval.eval m fuel ρ recv = r
+    cases r with
+    | none => rfl
+    | some w =>
+      cases w <;> simp only [Option.bind_eq_bind, Option.bind_some]
+      case list items => cases Eval.evalInt m fuel ρ a <;> rfl
+  all_goals intros; simp_all [Expr.namesNumber, Expr.isArrow]
+
+/-- `xs.slice(a, b)` with any arguments: the interpreter evaluates the array,
+then the integers of `a` and `b`, and `sliceList` gives the elements. -/
+theorem eval_slice_two (sp sp' : Span) (recv a b : Expr) (hr : recv.namesNumber = false)
+    (ρ : Eval.Env N) :
+    Eval.eval m fuel ρ (.call sp (.member sp' recv "slice") [a, b]) =
+      (Eval.eval m fuel ρ recv).bind fun
+        | .list items => (Eval.evalInt m fuel ρ a).bind fun k =>
+            (Eval.evalInt m fuel ρ b).map fun e => .list (Eval.sliceList items k (some e))
+        | _ => none := by
+  rw [Eval.eval]
+  · generalize Eval.eval m fuel ρ recv = r
+    cases r with
+    | none => rfl
+    | some w =>
+      cases w <;> simp only [Option.bind_eq_bind, Option.bind_some]
+      case list items =>
+        cases Eval.evalInt m fuel ρ a <;> cases Eval.evalInt m fuel ρ b <;> rfl
+  all_goals intros; simp_all [Expr.namesNumber]
+
+/-- The code of an integer gives that integer. -/
+theorem eval_intCode (k : Int) (ρ : Eval.Env N) :
+    IR.Expr.eval fs fuel ρ (intCode k) = some (.int k) := by
+  unfold intCode
+  split <;> simp [IR.Expr.eval]
+
+/-- A bound of `slice` gives an integer, and it is the integer that the
+interpreter reads from the argument. -/
+theorem sliceBound_sim {env : Translate.Env} {tr : Expr → TM Code} {arg : Expr}
+    (htr : ∀ ctx c ctx', tr arg ctx = .ok c ctx' → Sim (N := N) m fs fuel env arg c.code)
+    {ctx ctx' : Ctx} {b : IR.Expr} (h : sliceBound tr arg ctx = .ok b ctx')
+    (ρs ρo : Eval.Env N) (w : Val N) (ha : Agree ρs ρo) (hs : Scoped m env ρs)
+    (hw : IR.Expr.eval fs fuel ρo b = some w) :
+    ∃ k, w = .int k ∧ Eval.evalInt m fuel ρs arg = some k := by
+  unfold sliceBound at h
+  cases hk : Eval.intLiteral? arg with
+  | some k =>
+    simp only [hk, pure_ok] at h
+    obtain ⟨rfl, -⟩ := h
+    rw [eval_intCode] at hw
+    exact ⟨k, (Option.some.inj hw).symm, evalInt_lit m fuel hk⟩
+  | none =>
+    simp only [hk, bind_ok, ite_state] at h
+    obtain ⟨c, s₁, hc, h⟩ := h
+    split at h
+    rotate_left
+    · simp at h
+    simp only [pure_bind, pure_ok] at h
+    obtain ⟨rfl, -⟩ := h
+    simp only [IR.Expr.eval, IR.Expr.evalList] at hw
+    cases hn : IR.Expr.eval fs fuel ρo c.value with
+    | none => simp [hn] at hw
+    | some u =>
+      simp only [hn, Option.bind_eq_bind, Option.bind_some, Option.pure_def] at hw
+      cases u with
+      | num n =>
+        simp only [apply_toIndexInt, Option.some.injEq] at hw
+        subst hw
+        rw [eval_value] at hn
+        have harg := htr _ _ _ hc ρs ρo _ ha hs hn
+        refine ⟨_, rfl, ?_⟩
+        unfold Eval.evalInt
+        simp [hk, harg]
+      | _ => simp [apply_toIndexInt] at hw
+
+/-- `xs.at(i)` with an argument that is not an integer literal: the
+interpreter evaluates the array, then the argument, and `atVal` gives the
+element at the integer of the number. -/
+theorem eval_atNumber (sp sp' : Span) (recv arg : Expr) (hk : Eval.intLiteral? arg = none)
+    (harr : arg.isArrow = false) (hr : recv.namesNumber = false) (ρ : Eval.Env N) :
+    Eval.eval m fuel ρ (.call sp (.member sp' recv "at") [arg]) =
+      (Eval.eval m fuel ρ recv).bind fun
+        | .list items => (Eval.eval m fuel ρ arg).bind fun
+            | .num n => some (Eval.atVal items (JSNumber.toIndexInt n))
+            | _ => none
+        | _ => none := by
+  rw [Eval.eval]
+  · generalize Eval.eval m fuel ρ recv = r
+    cases r with
+    | none => rfl
+    | some w =>
+      cases w <;> simp only [Option.bind_eq_bind, Option.bind_some]
+      case list items =>
+        simp only [hk]
+        generalize Eval.eval m fuel ρ arg = r'
+        cases r' with
+        | none => rfl
+        | some u => cases u <;> rfl
+  all_goals intros; simp_all [Expr.namesNumber, Expr.isArrow]
+
 /-- `xs.at(k)` with an integer literal: the interpreter evaluates the array,
 and `atVal` gives the element. -/
 theorem eval_at (sp sp' : Span) (recv arg : Expr) (k : Int) (hk : Eval.intLiteral? arg = some k)
@@ -2617,7 +2766,7 @@ theorem arrayCall_sound {s : Span} {method : String} {elem : Ty} {xs : Code} {ar
           cases hy : IR.Expr.eval fs fuel ρ x.value with
           | none => simp [hx, hy] at hv
           | some u =>
-            simp only [hx, hy, Option.bind_eq_bind, Option.bind_some] at hv
+            simp only [hx, hy, Option.bind_eq_bind, Option.bind_some, Option.pure_def] at hv
             cases w
             case list items =>
               refine ⟨items, [u], rfl, by simp [IR.Expr.evalList, hy], ?_⟩
@@ -2774,26 +2923,61 @@ theorem translateArrayCall_sound {F : Nat}
     subst hat'
     rcases args with _ | ⟨arg, _ | ⟨_, _⟩⟩
     · simp at h
-    · simp only [bind_ok, orReject_ok, requireFeature_ok, ite_state] at h
-      obtain ⟨k, s₃, ⟨hk, rfl⟩, -, s₄, ⟨-, rfl⟩, h⟩ := h
+    · simp only [bind_ok, requireFeature_ok, ite_state] at h
+      obtain ⟨-, s₃, ⟨-, rfl⟩, h⟩ := h
       by_cases hm : elem.isMaybe = true
       · simp [hm] at h
-      simp only [hm, Bool.false_eq_true, if_false, pure_ok] at h
-      obtain ⟨rfl, -⟩ := h
-      intro ρs ρo v ha hs hv
-      simp only [IR.Expr.eval, IR.Expr.evalList] at hv
-      cases hx : IR.Expr.eval fs fuel ρo xs.value with
-      | none => simp [hx] at hv
-      | some w =>
-        simp only [hx, Option.bind_eq_bind, Option.bind_some] at hv
-        cases w with
-        | list items =>
-          simp [IR.ExprExt.apply] at hv
-          rw [eval_value] at hx
-          have hrecv := ihE _ _ _ _ _ _ hxs ρs ρo _ ha hs hx
-          rw [eval_at m fuel _ _ _ _ _ hk hr, hrecv]
-          simp [hv]
-        | _ => simp [IR.ExprExt.apply] at hv
+      simp only [hm, Bool.false_eq_true, if_false] at h
+      cases hk : Eval.intLiteral? arg with
+      | some k =>
+        -- An integer literal: the element that `atVal` gives at it.
+        simp only [hk, pure_ok] at h
+        obtain ⟨rfl, -⟩ := h
+        intro ρs ρo v ha hs hv
+        simp only [IR.Expr.eval, IR.Expr.evalList] at hv
+        cases hx : IR.Expr.eval fs fuel ρo xs.value with
+        | none => simp [hx] at hv
+        | some w =>
+          simp only [hx, Option.bind_eq_bind, Option.bind_some, Option.pure_def] at hv
+          cases w with
+          | list items =>
+            simp [IR.ExprExt.apply] at hv
+            rw [eval_value] at hx
+            have hrecv := ihE _ _ _ _ _ _ hxs ρs ρo _ ha hs hx
+            rw [eval_at m fuel _ _ _ _ _ hk hr, hrecv]
+            simp [hv]
+          | _ => simp [IR.ExprExt.apply] at hv
+      | none =>
+        -- Any other number: the element at the integer of `toIndexInt`.
+        simp only [hk, bind_ok, ite_state] at h
+        obtain ⟨i, s₄, hi, h⟩ := h
+        split at h
+        rotate_left
+        · simp at h
+        simp only [pure_ok] at h
+        obtain ⟨rfl, -⟩ := h
+        intro ρs ρo v ha hs hv
+        simp only [IR.Expr.eval, IR.Expr.evalList] at hv
+        cases hx : IR.Expr.eval fs fuel ρo xs.value with
+        | none => simp [hx] at hv
+        | some w =>
+          cases hn : IR.Expr.eval fs fuel ρo i.value with
+          | none => simp [hx, hn] at hv
+          | some u =>
+            simp only [hx, hn, Option.bind_eq_bind, Option.bind_some, Option.pure_def] at hv
+            cases w with
+            | list items =>
+              cases u with
+              | num n =>
+                simp only [apply_atNumber, Option.some.injEq] at hv
+                subst hv
+                rw [eval_value] at hx hn
+                have hrecv := ihE _ _ _ _ _ _ hxs ρs ρo _ ha hs hx
+                have harg' := ihE _ _ _ _ _ _ hi ρs ρo _ ha hs hn
+                rw [eval_atNumber m fuel _ _ _ _ hk (by simpa using harg) hr, hrecv]
+                simp [harg']
+              | _ => simp [apply_atNumber] at hv
+            | _ => simp [apply_atNumber] at hv
     · simp at h
   rename_i hat
   split at h
@@ -2801,24 +2985,90 @@ theorem translateArrayCall_sound {F : Nat}
     rename_i hsl
     have hsl' : method = "slice" := by simpa using hsl
     subst hsl'
-    simp only [bind_ok, orReject_ok] at h
-    obtain ⟨bounds, s₃, ⟨hk, rfl⟩, ⟨start, stop⟩, s₄, ⟨hb, rfl⟩, h⟩ := h
-    simp only [pure_ok] at h
-    obtain ⟨rfl, -⟩ := h
-    intro ρs ρo v ha hs hv
-    simp only [IR.Expr.eval, IR.Expr.evalList] at hv
-    cases hx : IR.Expr.eval fs fuel ρo xs.value with
-    | none => simp [hx] at hv
-    | some w =>
-      simp only [hx, Option.bind_eq_bind, Option.bind_some] at hv
-      cases w with
-      | list items =>
-        simp [IR.ExprExt.apply] at hv
-        rw [eval_value] at hx
-        have hrecv := ihE _ _ _ _ _ _ hxs ρs ρo _ ha hs hx
-        rw [eval_slice m fuel _ _ _ _ hk hb hr, hrecv]
-        simp [hv]
-      | _ => simp [IR.ExprExt.apply] at hv
+    cases hk : args.mapM Eval.intLiteral? with
+    | some bounds =>
+      -- Integer literals: the elements that `sliceList` gives between them.
+      simp only [hk, bind_ok, orReject_ok] at h
+      obtain ⟨⟨start, stop⟩, s₄, ⟨hb, rfl⟩, h⟩ := h
+      simp only [pure_ok] at h
+      obtain ⟨rfl, -⟩ := h
+      intro ρs ρo v ha hs hv
+      simp only [IR.Expr.eval, IR.Expr.evalList] at hv
+      cases hx : IR.Expr.eval fs fuel ρo xs.value with
+      | none => simp [hx] at hv
+      | some w =>
+        simp only [hx, Option.bind_eq_bind, Option.bind_some, Option.pure_def] at hv
+        cases w with
+        | list items =>
+          simp only [apply_slice, Option.some.injEq] at hv
+          subst hv
+          rw [eval_value] at hx
+          have hrecv := ihE _ _ _ _ _ _ hxs ρs ρo _ ha hs hx
+          rw [eval_slice m fuel _ _ _ _ hk hb hr, hrecv]
+          simp
+        | _ => simp [apply_slice] at hv
+    | none =>
+      -- A bound that is not a literal: `sliceInt` on the integers of the
+      -- bounds.
+      simp only [hk, ite_state] at h
+      split at h
+      rotate_left
+      · simp at h
+      rename_i hlen
+      simp only [bind_ok] at h
+      obtain ⟨bounds, s₄, hbounds, h⟩ := h
+      simp only [pure_ok] at h
+      obtain ⟨rfl, -⟩ := h
+      have hsb := fun a ctx c ctx' (hb : sliceBound (translateExpr F env none) a ctx = .ok c ctx') =>
+        sliceBound_sim m fs fuel (fun _ _ _ he => ihE _ _ _ _ _ _ he) hb
+      intro ρs ρo v ha hs hv
+      rcases args with _ | ⟨a, _ | ⟨b, _ | ⟨c, rest⟩⟩⟩
+      · simp at hk
+      · simp only [List.mapM_cons, List.mapM_nil, bind_ok, pure_bind, pure_ok] at hbounds
+        obtain ⟨ba, s₅, hba, rfl, -⟩ := hbounds
+        simp only [IR.Expr.eval, IR.Expr.evalList] at hv
+        cases hx : IR.Expr.eval fs fuel ρo xs.value with
+        | none => simp [hx] at hv
+        | some w =>
+          cases hn : IR.Expr.eval fs fuel ρo ba with
+          | none => simp [hx, hn] at hv
+          | some u =>
+            obtain ⟨k, rfl, hka⟩ := hsb a _ _ _ hba ρs ρo u ha hs hn
+            simp only [hx, hn, Option.bind_eq_bind, Option.bind_some, Option.pure_def] at hv
+            cases w with
+            | list items =>
+              simp only [apply_sliceInt_one, Option.some.injEq] at hv
+              subst hv
+              rw [eval_value] at hx
+              have hrecv := ihE _ _ _ _ _ _ hxs ρs ρo _ ha hs hx
+              rw [eval_slice_one m fuel _ _ _ _ (by simpa using harg) hr, hrecv]
+              simp [hka, sliceList_eq_sliceInt]
+            | _ => simp [apply_sliceInt_one] at hv
+      · simp only [List.mapM_cons, List.mapM_nil, bind_ok, pure_bind, pure_ok] at hbounds
+        obtain ⟨ba, s₅, hba, _, s₆, ⟨bb, s₇, hbb, rfl, rfl⟩, rfl, -⟩ := hbounds
+        simp only [IR.Expr.eval, IR.Expr.evalList] at hv
+        cases hx : IR.Expr.eval fs fuel ρo xs.value with
+        | none => simp [hx] at hv
+        | some w =>
+          cases hn : IR.Expr.eval fs fuel ρo ba with
+          | none => simp [hx, hn] at hv
+          | some u =>
+            cases hn' : IR.Expr.eval fs fuel ρo bb with
+            | none => simp [hx, hn, hn'] at hv
+            | some u' =>
+              obtain ⟨k, rfl, hka⟩ := hsb a _ _ _ hba ρs ρo u ha hs hn
+              obtain ⟨e, rfl, hkb⟩ := hsb b _ _ _ hbb ρs ρo u' ha hs hn'
+              simp only [hx, hn, hn', Option.bind_eq_bind, Option.bind_some, Option.pure_def] at hv
+              cases w with
+              | list items =>
+                simp only [apply_sliceInt_two, Option.some.injEq] at hv
+                subst hv
+                rw [eval_value] at hx
+                have hrecv := ihE _ _ _ _ _ _ hxs ρs ρo _ ha hs hx
+                rw [eval_slice_two m fuel _ _ _ _ _ hr, hrecv]
+                simp [hka, hkb, sliceList_eq_sliceInt]
+              | _ => simp [apply_sliceInt_two] at hv
+      · simp at hlen
   rename_i hsl
   simp only [bind_ok] at h
   obtain ⟨codes, s₃, hcodes, h⟩ := h

@@ -178,6 +178,16 @@ inductive ExprExt where
   `start` with a `stop` that is not negative, the drop counts back from
   `List.length xs`. -/
   | slice (start : Int) (stop : Option Int)
+  /-- `(JSNumber.atIndex? xs i)`, on `xs` and `i`: `xs.at(i)` with a number
+  `i` that is not an integer literal. -/
+  | atNumber
+  /-- `(JSNumber.toIndexInt i)`, on `i`: the integer that `at` and `slice`
+  read from the number `i`. -/
+  | toIndexInt
+  /-- `(JSNumber.sliceInt xs a none)` on `xs` and `a`, and
+  `(JSNumber.sliceInt xs a (some b))` on `xs`, `a` and `b`, where `a` and `b`
+  are integers: `xs.slice(a, b)` where a bound is not an integer literal. -/
+  | sliceInt
   /-- `JSMap.empty`, on no arguments: `new Map()`. The translator writes the
   type of the map after it. -/
   | mapEmpty
@@ -435,6 +445,11 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
       -- The start counts from the end and the end from the start, so the
       -- drop needs the length of the list.
       else s!"({leanName names "List.drop"} ({leanName names "List.length"} {xs} - {(-start).toNat}) {take e xs})"
+  | .atNumber, [xs, i] => s!"({js}.atIndex? {argument xs} {argument i})"
+  | .toIndexInt, [i] => s!"({js}.toIndexInt {argument i})"
+  | .sliceInt, [xs, a] => s!"({js}.sliceInt {argument xs} {argument a} {leanName names "none"})"
+  | .sliceInt, [xs, a, b] =>
+    s!"({js}.sliceInt {argument xs} {argument a} ({leanName names "some"} {argument b}))"
   | .pure, [a] => s!"({tolean.IR.wrapped (leanName names "pure") a})"
   | .error, [m] => s!"({tolean.IR.wrapped (leanName names "JSError.mk") m})"
   | _, _ => ""

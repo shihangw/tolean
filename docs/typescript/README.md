@@ -454,7 +454,9 @@ the file, the line and the reason. It never approximates.
 | `xs[k]`, where `k` is a number literal | `(xs[k]? : Option T)`. The value is `undefined` when `k` is not an index of the array, so it has the type of an optional field: `xs[0] ?? d`, `xs[0]?.f` and `xs[0] === undefined` work as they do on `s.f`. Tolean gives `xs[k]` this type whatever `noUncheckedIndexedAccess` says, so code that uses it as a `T` is refused. |
 | `xs[i]`, where `i` is any other number | `JSNumber.elementAt? xs i`: the element when `i` is a safe integer within the array, and `none` otherwise. `xs[-1]` and `xs[0.5]` are `undefined`, as in JS. |
 | `xs.at(k)`, where `k` is an integer literal | `(xs[k]? : Option T)`, or `((List.reverse xs)[-k - 1]? : Option T)` when `k` is negative, which counts from the end. It is in ES2022. |
+| `xs.at(i)`, where `i` is any other number | `(JSNumber.atIndex? xs i)`. JS reads the index with `ToIntegerOrInfinity` (§7.1.5), which `JSNumber.toIndexInt` models with `JSNumber.toInt`: a fraction rounds toward zero, so `xs.at(1.5)` is `xs.at(1)`, and `NaN` is `0`. `Infinity`, `-Infinity` and every number past the safe integers give `undefined`, because they land outside the array. |
 | `xs.slice(a, b)`, where `a` and `b` are integer literals or left out | `List.drop` and `List.take`, such as `(List.drop 1 (List.take 3 xs))` for `xs.slice(1, 3)`. A negative bound counts from the end, which the output reads on the reversed list: `xs.slice(-2)` is `(List.reverse (List.take 2 (List.reverse xs)))`. A negative start with an end that is not negative counts back from the length: `xs.slice(-2, 3)` is `(List.drop (List.length xs - 2) (List.take 3 xs))`. |
+| `xs.slice(a, b)`, where a bound is any other number | `(JSNumber.sliceInt xs a' (some b'))`, where each bound that is a number becomes `(JSNumber.toIndexInt a)`, and a literal stays an `Int`. `xs.slice(i)` is `(JSNumber.sliceInt xs (JSNumber.toIndexInt i) none)`. A bound past the safe integers, such as `Infinity`, clamps to an end of the array, as in JS. |
 | `xs.findLast(x => p)` | `List.find? (fun (x : T) => p) (List.reverse xs)`, which the callback reads from the last element to the first, as in JS. It has the type of `find`, and it is in ES2023. |
 | `xs.findIndex(x => p)` | `JSNumber.ofSafeInt (((List.findIdx? (fun (x : T) => p) xs).map Int.ofNat).getD (-1))`: the index of the first element that passes, as a `number`, or `-1` |
 | `xs.reduce((acc, x) => e, init)` | `List.foldl (fun (acc : A) (x : T) => e) init xs`, where `A` is the type of `init`. The body must give a value of that type. |
@@ -569,10 +571,9 @@ Tolean rejects these, among others:
   no callback, such as `indexOf`.
 - An index of an array of nullable values, and `at` on one, because Lean's
   `none` would stand for both `null` and `undefined`. Tolean also refuses an
-  index that is not a number, such as `xs[0n]`, and an argument of `at` that is
-  not an integer literal. `at` truncates a fraction toward zero, and the number
-  model cannot truncate yet. The bounds of `slice` must be integer literals
-  for the same reason.
+  index that is not a number, such as `xs[0n]`, and an argument of `at` or a
+  bound of `slice` that is not a number. `slice` takes at most two
+  arguments.
 - `reduce` without an initial value, which throws on an empty array, and a
   callback of `reduce` whose value has another type than the initial value.
 - `sort` on an array that the function did not make in the same expression,

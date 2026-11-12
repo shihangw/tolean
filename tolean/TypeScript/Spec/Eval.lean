@@ -896,15 +896,15 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     else none
   -- `xs.at(k)` (`Array.prototype.at`, ECMA-262 §23.1.3.1). Its argument
   -- becomes an integer by `ToIntegerOrInfinity`. A literal is the integer it
-  -- names, whatever the model of numbers. Any other number is its integer
-  -- when it is a safe integer; truncating other numbers leaves the subset.
+  -- names, whatever the model of numbers. Any other number gives the integer
+  -- of `JSNumber.toIndexInt`.
   | .call _ (.member _ recv "at") [arg] => do
     let .list items ← eval m fuel env recv | none
     match intLiteral? arg with
     | some k => return atVal items k
     | none =>
       let .num n ← eval m fuel env arg | none
-      return atVal items (← JSNumber.toSafeInt n)
+      return atVal items (JSNumber.toIndexInt n)
   -- `xs.slice(start, end)` (`Array.prototype.slice`, ECMA-262 §23.1.3.28).
   -- Each argument becomes an integer as the argument of `at` does. A missing
   -- start is `0`, and a missing end is the length.
@@ -1062,14 +1062,14 @@ termination_by e => (fuel, sizeOf e, 1)
 
 /-- The integer of an argument such as the start of `slice`, by
 `ToIntegerOrInfinity` (ECMA-262 §7.1.5): a literal is the integer it names,
-whatever the model of numbers, and any other number is its integer when it
-is a safe integer. Truncating any other number leaves the subset. -/
+whatever the model of numbers, and any other number gives the integer of
+`JSNumber.toIndexInt`. -/
 def evalInt (m : Scope) (fuel : Nat) (env : Env N) (e : Expr) : Option Int :=
   match intLiteral? e with
   | some k => some k
   | none => do
     let .num n ← eval m fuel env e | none
-    JSNumber.toSafeInt n
+    return JSNumber.toIndexInt n
 termination_by (fuel, sizeOf e, 1)
 
 def evalList (m : Scope) (fuel : Nat) (env : Env N) : List Expr → Option (List (Val N))

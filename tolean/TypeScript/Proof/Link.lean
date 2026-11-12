@@ -555,6 +555,20 @@ theorem int_compare_of_gt {a b : Int} (h : b < a) : compare a b = .gt := Int.com
 theorem int_compare_of_eq {a b : Int} (h1 : ¬a < b) (h2 : ¬b < a) : compare a b = .eq :=
   Int.compare_eq_eq.mpr (by omega)
 
+/-- `JSNumber.sliceInt` on an encoded list, which the output calls for a slice
+with a bound that is not a literal. -/
+@[simp high] theorem sliceInt_map {α β : Type} (f : α → β) (xs : List α) (a : Int) (b : Option Int) :
+    JSNumber.sliceInt (xs.map f) a b = (JSNumber.sliceInt xs a b).map f := by
+  simp [JSNumber.sliceInt, List.map_take, List.map_drop]
+
+/-- `xs.at(i)` with a number `i`, on an encoded list: `JSNumber.atIndex?`,
+which the output calls. It comes before `atVal_map`, which would write the
+index out. -/
+@[simp high] theorem atVal_map_toIndexInt {α : Type} (enc : α → Val N) (xs : List α) (i : N) :
+    Eval.atVal (xs.map enc) (JSNumber.toIndexInt i) = Eval.encUndef enc (JSNumber.atIndex? xs i) := by
+  rw [atVal_map]
+  rfl
+
 end tolean.TypeScript.Proof
 
 /-- The proof that the sign of a comparator of keys is a lexicographic
@@ -588,14 +602,16 @@ elab "split_find" : tactic => withMainContext do
 
 open Lean Elab Tactic Meta in
 /-- Split on an element that the goal reads from a list, such as `xs[0]?` or
-`JSNumber.elementAt? xs i`, where the evaluator encodes it with `encUndef`.
+`JSNumber.elementAt? xs i` or `JSNumber.atIndex? xs i`, where the evaluator
+encodes it with `encUndef`.
 The value is `undefined` when there is no element, so the evaluator and the
 printed definition read it only through a `match`, as for `find`. -/
 elab "split_undef" : tactic => withMainContext do
   let target ← instantiateMVars (← getMainTarget)
   let some e := target.find? fun e =>
       e.isAppOf ``tolean.TypeScript.Eval.encUndef && e.getAppNumArgs > 0 &&
-        (e.appArg!.isAppOf ``GetElem?.getElem? || e.appArg!.isAppOf ``tolean.TypeScript.JSNumber.elementAt?) &&
+        (e.appArg!.isAppOf ``GetElem?.getElem? || e.appArg!.isAppOf ``tolean.TypeScript.JSNumber.elementAt? ||
+          e.appArg!.isAppOf ``tolean.TypeScript.JSNumber.atIndex?) &&
         !e.hasLooseBVars
     | throwError "split_undef: no element of a list in the goal"
   let stx ← Term.exprToSyntax e.appArg!
