@@ -292,6 +292,10 @@ def sections : List Section := [
   ⟨"sec-string.prototype.startswith", "22.1.3.25", "String.prototype.startsWith",
     [``JSString.startsWith_iff, ``JSString.startsWithFrom_zero, ``Proof.stringMethod_of,
     ``Proof.stringCall_sound]⟩,
+  ⟨"sec-string.prototype.tolowercase", "22.1.3.28", "String.prototype.toLowerCase",
+    [``JSString.isAscii_toLowerAscii]⟩,
+  ⟨"sec-string.prototype.touppercase", "22.1.3.30", "String.prototype.toUpperCase",
+    [``JSString.isAscii_toUpperAscii]⟩,
   ⟨"sec-string.prototype-@@iterator", "22.1.3.36", "String.prototype [ @@iterator ] ( )",
     [``JSString.codePoints_units, ``JSString.codePointUnits_flatten,
     ``JSString.codePointUnits_length]⟩,
@@ -335,7 +339,10 @@ def sections : List Section := [
   ⟨"sec-set.prototype.delete", "24.2.4.4", "Set.prototype.delete", []⟩,
   ⟨"sec-set.prototype.has", "24.2.4.8", "Set.prototype.has", [``Proof.collection_call_sim]⟩,
   ⟨"sec-get-set.prototype.size", "24.2.4.14", "get Set.prototype.size", []⟩,
-  ⟨"sec-createsetiterator", "24.2.6.1", "CreateSetIterator", []⟩]
+  ⟨"sec-createsetiterator", "24.2.6.1", "CreateSetIterator", []⟩,
+  -- §25 Structured Data {#sec-structured-data}
+  ⟨"sec-json.stringify", "25.5.2", "JSON.stringify ( value [ , replacer [ , space ] ] )",
+    [``Proof.jsonCall_code]⟩]
 
 /-- The laws of the number model, from §6.1.6.1 The Number Type. The proofs
 assume them instead of proving them, and `tests/typescript/jsNumberLaws.test.ts`

@@ -305,6 +305,13 @@ export class Gen {
         });
         // `trim`, `trimStart` and `trimEnd`, which remove white space.
         options.push(() => `(${this.expr(STRING, vars, d)}).${this.pick(['trim', 'trimStart', 'trimEnd'])}()`);
+        // A case change, which the interpreter gives only on ASCII strings,
+        // and `JSON.stringify` of a string or a boolean, which escapes
+        // quotes, control characters and lone surrogates.
+        options.push(
+          () => `(${this.expr(STRING, vars, d)}).${this.pick(['toUpperCase', 'toLowerCase'])}()`,
+          () => `JSON.stringify(${this.expr(this.pick([STRING, BOOLEAN]), vars, d)})`,
+        );
         // `slice`, `at`, `padStart` and `padEnd`, with integer literals, which
         // count code units. A negative index counts from the end.
         options.push(

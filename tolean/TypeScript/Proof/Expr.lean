@@ -1312,12 +1312,14 @@ and from the integer literals that they are. `at` and `slice` reach the rules
 that they share with arrays, and a call with one argument reaches the rule of
 `get` and `has`. Each passes a string on to `stringMethod`. -/
 theorem eval_stringCall (sp sp' : Span) (recv : Expr) (method : String) (args : List Expr)
-    (hr : recv.namesNumber = false) (harg : args.any (·.isArrow) = false) (ρ : Eval.Env N) {t : JSString}
+    (hr : recv.namesGlobal = false) (harg : args.any (·.isArrow) = false) (ρ : Eval.Env N) {t : JSString}
     (hrecv : Eval.eval m fuel ρ recv = some (.str t)) :
     Eval.eval m fuel ρ (.call sp (.member sp' recv method) args) =
       (Eval.evalList m fuel ρ args).bind fun vs => Eval.stringMethod method t vs (args.map Eval.intLiteral?) := by
   have hr' : ∀ s, recv ≠ .ident s "Number" := by
-    intro s h; subst h; simp [Expr.namesNumber] at hr
+    intro s h; subst h; simp [Expr.namesGlobal] at hr
+  have hj : ∀ s, recv ≠ .ident s "JSON" := by
+    intro s h; subst h; simp [Expr.namesGlobal] at hr
   by_cases hat : method = "at"
   · subst hat
     rcases args with _ | ⟨a, _ | ⟨b, rest⟩⟩
@@ -1330,6 +1332,7 @@ theorem eval_stringCall (sp sp' : Span) (recv : Expr) (method : String) (args : 
       | exact hr'
       | (intros; contradiction)
       | (intros; subst_vars; exact absurd rfl (hr' _))
+      | (intros; subst_vars; exact absurd rfl (hj _))
       | (clear hrecv; intros; simp_all [Expr.isArrow]; done)
   by_cases hsl : method = "slice"
   · subst hsl
@@ -1340,6 +1343,7 @@ theorem eval_stringCall (sp sp' : Span) (recv : Expr) (method : String) (args : 
       | exact hr'
       | (intros; contradiction)
       | (intros; subst_vars; exact absurd rfl (hr' _))
+      | (intros; subst_vars; exact absurd rfl (hj _))
       | (clear hrecv; intros; simp_all [Expr.isArrow]; done)
   rcases args with _ | ⟨a, _ | ⟨b, rest⟩⟩
   all_goals rw [Eval.eval]
@@ -1351,6 +1355,7 @@ theorem eval_stringCall (sp sp' : Span) (recv : Expr) (method : String) (args : 
     | exact hr'
     | (intros; contradiction)
     | (intros; subst_vars; exact absurd rfl (hr' _))
+    | (intros; subst_vars; exact absurd rfl (hj _))
     | (clear hrecv; intros; simp_all [Expr.isArrow]; done)
     | (intros; subst_vars; exact absurd rfl hat)
     | (intros; subst_vars; exact absurd rfl hsl)
@@ -1382,6 +1387,8 @@ theorem stringCall_sound {s : Span} {method : String} {str : Code} {args : List 
       split at h
       · split at h
         · simp at h
+        split at h
+        · simp at h
         · simp only [bind_ok, pure_ok] at h
           obtain ⟨_, _, -, rfl, -⟩ := h
           simp only [IR.Expr.eval, IR.Expr.evalList] at hv
@@ -1397,6 +1404,19 @@ theorem stringCall_sound {s : Span} {method : String} {str : Code} {args : List 
               exact ⟨t, vs, rfl, rfl, by rw [stringMethod_of hm]; exact hv⟩
       · simp at h
   · simp at h
+
+omit [JSNumber N] in
+/-- The code of `JSON.stringify(x)` applies the opaque function to the code
+of `x`. -/
+theorem jsonCall_code {span : Span} {a c : Code} {ctx ctx' : Ctx} (h : jsonCall span a ctx = .ok c ctx') :
+    c.code = .ext .jsonStringify [a.value] := by
+  unfold jsonCall at h
+  split at h
+  all_goals first
+    | (simp only [bind_ok, pure_ok] at h
+       obtain ⟨_, _, -, rfl, -⟩ := h
+       rfl)
+    | simp at h
 
 /-- A string that becomes the constructor of a literal union has the same
 value: the evaluator gives a constructor its string. -/
@@ -1593,7 +1613,7 @@ def methodVal (method : IR.ListMethod) (ρ : Eval.Env N) (name : String) (body :
 
 theorem eval_arrayMethod (sp sp' sa : Span) (par : Bool) (recv : Expr) (name : String) (p : Param)
     (body : Expr) (method : IR.ListMethod) (hm : listMethod? name = some method)
-    (hr : recv.namesNumber = false) (ρ : Eval.Env N) :
+    (hr : recv.namesGlobal = false) (ρ : Eval.Env N) :
     Eval.eval m fuel ρ (.call sp (.member sp' recv name) [.arrow sa par [p] body]) =
       (Eval.eval m fuel ρ recv).bind fun
         | .list items => methodVal m fuel method ρ p.name body items
@@ -1626,7 +1646,9 @@ theorem eval_arrayMethod (sp sp' sa : Span) (par : Bool) (recv : Expr) (name : S
     by_cases h7 : name = "findLast" <;> simp [h7] at hm ⊢
     subst hm; rfl
   have hr' : ∀ s, recv ≠ .ident s "Number" := by
-    intro s h; subst h; simp [Expr.namesNumber] at hr
+    intro s h; subst h; simp [Expr.namesGlobal] at hr
+  have hj : ∀ s, recv ≠ .ident s "JSON" := by
+    intro s h; subst h; simp [Expr.namesGlobal] at hr
   generalize hR : Eval.eval m fuel ρ recv = r
   rw [Eval.eval]
   · rw [hR]
@@ -1635,24 +1657,26 @@ theorem eval_arrayMethod (sp sp' sa : Span) (par : Bool) (recv : Expr) (name : S
     | some v =>
       cases v <;> simp only [Option.bind_some, Option.bind_eq_bind]
       all_goals first | rfl | (rw [← key]; simp)
-  · exact hr'
+  all_goals first | exact hr' | (intro s h; intros; exact absurd h (hj s))
 
 /-- `xs.map((x, i) => e)`, from the value of the array. -/
 theorem eval_mapIdx (sp sp' sa : Span) (par : Bool) (recv : Expr) (p q : Param) (body : Expr)
-    (hr : recv.namesNumber = false) (hpq : p.name ≠ q.name) (ρ : Eval.Env N) :
+    (hr : recv.namesGlobal = false) (hpq : p.name ≠ q.name) (ρ : Eval.Env N) :
     Eval.eval m fuel ρ (.call sp (.member sp' recv "map") [.arrow sa par [p, q] body]) =
       (Eval.eval m fuel ρ recv).bind fun
         | .list items => methodVal m fuel (.mapIdx q.name) ρ p.name body items
         | _ => none := by
   have hr' : ∀ s, recv ≠ .ident s "Number" := by
-    intro s h; subst h; simp [Expr.namesNumber] at hr
+    intro s h; subst h; simp [Expr.namesGlobal] at hr
+  have hj : ∀ s, recv ≠ .ident s "JSON" := by
+    intro s h; subst h; simp [Expr.namesGlobal] at hr
   generalize hR : Eval.eval m fuel ρ recv = r
   rw [Eval.eval]
   · simp only [bne_self_eq_false, Bool.false_or, beq_iff_eq, hpq, ↓reduceIte, hR]
     cases r with
     | none => rfl
     | some v => cases v <;> simp [methodVal]
-  all_goals first | exact hr' | decide
+  all_goals first | exact hr' | decide | (intro s h; intros; exact absurd h (hj s))
 
 /-- The value of a `List` function with a callback in the output, from the
 value of the list. -/
@@ -2164,12 +2188,14 @@ theorem translateArrayIndex_sound {F : Nat}
 /-- A method of an array that takes no callback: the interpreter evaluates the
 array, then the arguments, and `arrayMethod` gives the value. -/
 theorem eval_arrayCall (sp sp' : Span) (recv : Expr) (method : String) (args : List Expr)
-    (hr : recv.namesNumber = false) (harg : args.any (·.isArrow) = false) (hat : method ≠ "at")
+    (hr : recv.namesGlobal = false) (harg : args.any (·.isArrow) = false) (hat : method ≠ "at")
     (hsl : method ≠ "slice") (ρ : Eval.Env N) {items : List (Val N)} (hrecv : Eval.eval m fuel ρ recv = some (.list items)) :
     Eval.eval m fuel ρ (.call sp (.member sp' recv method) args) =
       (Eval.evalList m fuel ρ args).bind (Eval.arrayMethod method items) := by
   have hr' : ∀ s, recv ≠ .ident s "Number" := by
-    intro s h; subst h; simp [Expr.namesNumber] at hr
+    intro s h; subst h; simp [Expr.namesGlobal] at hr
+  have hj : ∀ s, recv ≠ .ident s "JSON" := by
+    intro s h; subst h; simp [Expr.namesGlobal] at hr
   -- One argument goes to the rule of `get` and `has`, which passes an array
   -- on to `arrayMethod`; any other number to the rule of #94.
   rcases args with _ | ⟨a, _ | ⟨b, rest⟩⟩
@@ -2182,6 +2208,7 @@ theorem eval_arrayCall (sp sp' : Span) (recv : Expr) (method : String) (args : L
     | exact hr'
     | (intros; contradiction)
     | (intros; subst_vars; exact absurd rfl (hr' _))
+    | (intros; subst_vars; exact absurd rfl (hj _))
     | (clear hrecv; intros; simp_all [Expr.isArrow]; done)
     | (intros; subst_vars; exact absurd rfl hat)
     | (intros; subst_vars; exact absurd rfl hsl)
@@ -2216,7 +2243,7 @@ theorem evalInt_lit {ρ : Eval.Env N} {e : Expr} {k : Int} (h : Eval.intLiteral?
 the array, and `sliceList` gives the elements. -/
 theorem eval_slice (sp sp' : Span) (recv : Expr) (args : List Expr) {bounds : List Int} {start : Int}
     {stop : Option Int} (hk : args.mapM Eval.intLiteral? = some bounds)
-    (hb : sliceBounds bounds = some (start, stop)) (hr : recv.namesNumber = false) (ρ : Eval.Env N) :
+    (hb : sliceBounds bounds = some (start, stop)) (hr : recv.namesGlobal = false) (ρ : Eval.Env N) :
     Eval.eval m fuel ρ (.call sp (.member sp' recv "slice") args) =
       (Eval.eval m fuel ρ recv).bind fun
         | .list items => some (.list (Eval.sliceList items start stop))
@@ -2236,14 +2263,14 @@ theorem eval_slice (sp sp' : Span) (recv : Expr) (args : List Expr) {bounds : Li
         · rfl
         · simp [evalInt_lit m fuel ha]
         · simp [evalInt_lit m fuel ha, evalInt_lit m fuel hb']
-  all_goals intros; simp_all [Expr.namesNumber]
+  all_goals intros; simp_all [Expr.namesGlobal]
   all_goals rcases hcases with ⟨h, -⟩ | ⟨a, h, ha, -⟩ | ⟨a, b, e, h, ha, -⟩ <;> simp_all [Eval.intLiteral?]
 
 
 /-- `xs.at(k)` with an integer literal: the interpreter evaluates the array,
 and `atVal` gives the element. -/
 theorem eval_at (sp sp' : Span) (recv arg : Expr) (k : Int) (hk : Eval.intLiteral? arg = some k)
-    (hr : recv.namesNumber = false) (ρ : Eval.Env N) :
+    (hr : recv.namesGlobal = false) (ρ : Eval.Env N) :
     Eval.eval m fuel ρ (.call sp (.member sp' recv "at") [arg]) =
       (Eval.eval m fuel ρ recv).bind fun
         | .list items => some (Eval.atVal items k)
@@ -2255,7 +2282,7 @@ theorem eval_at (sp sp' : Span) (recv arg : Expr) (k : Int) (hk : Eval.intLitera
        cases r with
        | none => rfl
        | some w => cases w <;> simp [Option.bind_eq_bind, hk])
-    | (intros; simp_all [Expr.namesNumber, Eval.intLiteral?])
+    | (intros; simp_all [Expr.namesGlobal, Eval.intLiteral?])
 
 omit [JSNumber N] in
 /-- `includes` becomes one of its two operations. -/
@@ -2312,7 +2339,7 @@ theorem translateArrayCall_sound {F : Nat}
     {env : Translate.Env} {s : Span} {recv : Expr} {method : String}
     {args : List Expr} {ctx ctx' : Ctx} {c : Code}
     (h : translateArrayCall (F + 1) env s recv method args ctx = .ok c ctx')
-    {sp : Span} (hr : recv.namesNumber = false) :
+    {sp : Span} (hr : recv.namesGlobal = false) :
     Sim (N := N) m fs fuel env (.call s (.member sp recv method) args) c.code := by
   simp only [translateArrayCall, ite_state] at h
   split at h
@@ -2592,7 +2619,7 @@ def mapMethodVal (name : String) : Val N → Val N → Option (Val N)
   | .set elems, x => (Eval.setHas elems x).bind fun found => if name = "has" then some (.bool found) else none
   | _, _ => none
 
-theorem eval_mapMethod (sp sp' : Span) (recv key : Expr) (name : String) (hr : recv.namesNumber = false)
+theorem eval_mapMethod (sp sp' : Span) (recv key : Expr) (name : String) (hr : recv.namesGlobal = false)
     (hk : ∀ sa par ps b, key ≠ .arrow sa par ps b) (hat : name ≠ "at") (hsl : name ≠ "slice")
     (ρ : Eval.Env N) :
     Eval.eval m fuel ρ (.call sp (.member sp' recv name) [key]) =
@@ -2603,7 +2630,9 @@ theorem eval_mapMethod (sp sp' : Span) (recv key : Expr) (name : String) (hr : r
         | .str s => (Eval.eval m fuel ρ key).bind fun k => Eval.stringMethod name s [k] [Eval.intLiteral? key]
         | _ => none := by
   have hr' : ∀ s, recv ≠ .ident s "Number" := by
-    intro s h; subst h; simp [Expr.namesNumber] at hr
+    intro s h; subst h; simp [Expr.namesGlobal] at hr
+  have hj : ∀ s, recv ≠ .ident s "JSON" := by
+    intro s h; subst h; simp [Expr.namesGlobal] at hr
   generalize hR : Eval.eval m fuel ρ recv = r
   rw [Eval.eval]
   all_goals first
@@ -2616,6 +2645,7 @@ theorem eval_mapMethod (sp sp' : Span) (recv key : Expr) (name : String) (hr : r
            | rfl
            | (cases Eval.eval m fuel ρ key <;> simp [mapMethodVal]))
     | exact hr'
+    | (intro s h; intros; exact absurd h (hj s))
     | (intro sa par p b h; exact hk _ _ _ _ h)
     | (intro sa par p q b h; exact hk _ _ _ _ h)
     | (intro h; exact hat h)
@@ -2634,7 +2664,7 @@ theorem out_ext {op : IR.ExprExt} {args : List IR.Expr} {ρ : Eval.Env N} {v : V
 /-- `.ext op [r, k]` means `recv.name(key)`, when `r` means `recv`, `k` means
 `key`, and `op` gives what the interpreter's method gives. -/
 theorem collection_call_sim {env : Translate.Env} {s sp : Span} {recv key : Expr} {name : String}
-    {op : IR.ExprExt} {r k : IR.Expr} (hr : recv.namesNumber = false)
+    {op : IR.ExprExt} {r k : IR.Expr} (hr : recv.namesGlobal = false)
     (hk : ∀ sa par ps b, key ≠ .arrow sa par ps b) (hat : name ≠ "at") (hsl : name ≠ "slice")
     (hrecv : Sim (N := N) m fs fuel env recv r) (hkey : Sim (N := N) m fs fuel env key k)
     (happly : ∀ vr vk w : Val N, IR.ExprExt.apply op [vr, vk] = some w → mapMethodVal name vr vk = some w) :
@@ -2686,7 +2716,7 @@ theorem translateMapMethod_sound {F : Nat}
   have hrecv := translateRecv_sim m fs fuel (fun _ _ _ hx => ihE _ _ _ _ _ _ hx) ho
   have hrv : Sim (N := N) m fs fuel env recv o.value := fun ρs ρo w ha hs hw =>
     hrecv ρs ρo w ha hs (by rwa [eval_value] at hw)
-  have hr' : recv.namesNumber = false := by simpa using hr
+  have hr' : recv.namesGlobal = false := by simpa using hr
   have hk : ∀ sa par ps b, key ≠ .arrow sa par ps b := fun sa par ps b he => hka _ _ _ _ he
   -- `has` is the method when `op` is `.mapHas`, and `get` otherwise.
   have hasName : (op == .mapHas) = true → name = "has" := fun hhas => by
@@ -3259,7 +3289,34 @@ theorem translateCall_sound {F : Nat} (hc : CallsAgree (N := N) m.program fs fue
           · simp at h
         | [], h => simp at h
         | _ :: _ :: _, h => simp at h
-      · simp [hn] at h
+      · by_cases hj : oname = "JSON"
+        · -- `JSON.stringify(x)`: the value that `jsonStringify` gives.
+          subst hj
+          simp at h
+          cases hN : env.has "JSON" <;> simp [hN] at h
+          by_cases ht : test = "stringify"
+          · subst ht
+            simp only [if_true] at h
+            match args, h with
+            | [arg], h =>
+              simp only [bind_ok] at h
+              obtain ⟨a, s₁, hta, h⟩ := h
+              have hcode := jsonCall_code h
+              refine ⟨fun ρs ρo v ha hs hv => ?_, fun ref outs hout => by rw [hcode] at hout; cases hout⟩
+              rw [hcode] at hv
+              simp only [IR.Expr.eval, IR.Expr.evalList] at hv
+              cases hx : IR.Expr.eval fs fuel ρo a.value with
+              | none => simp [hx] at hv
+              | some w =>
+                simp [hx, IR.ExprExt.apply] at hv
+                rw [eval_value] at hx
+                have harg := ihE _ _ _ _ _ _ hta ρs ρo _ ha hs hx
+                have hnone := hs.none hN
+                simp [Eval.eval, hnone, harg, hv]
+            | [], h => simp at h
+            | _ :: _ :: _, h => simp at h
+          · simp [ht] at h
+        · simp [hn, hj] at h
     all_goals simp at h
 
 /-- An object literal of an interface, or of a member of a tagged union. -/
@@ -3397,7 +3454,7 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
       ∀ sp name, mapMethodOf (.member sp recv name) = some (recv, op) →
         Sim (N := N) m fs fuel env (.call s (.member sp recv name) args) c.code) ∧
     (∀ env s recv method args ctx c ctx', translateArrayCall F env s recv method args ctx = .ok c ctx' →
-      ∀ sp, recv.namesNumber = false →
+      ∀ sp, recv.namesGlobal = false →
         Sim (N := N) m fs fuel env (.call s (.member sp recv method) args) c.code) ∧
     (∀ env s o elem key ctx c ctx', translateArrayIndex F env s o elem key ctx = .ok c ctx' →
       ∀ sp obj, Sim (N := N) m fs fuel env obj o.value →

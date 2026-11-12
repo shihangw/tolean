@@ -94,6 +94,8 @@ def StringMethod.apply : StringMethod → JSString → List (Val N) → List (Op
   | .slice, s, args, lits => Eval.sliceArgs s args lits
   | .padStart, s, args, lits => Eval.padArgs s.padStart args lits
   | .padEnd, s, args, lits => Eval.padArgs s.padEnd args lits
+  | .toUpperCase, s, args, _ => Eval.asciiCase s.toUpperAscii s args
+  | .toLowerCase, s, args, _ => Eval.asciiCase s.toLowerAscii s args
 
 /-- The elements of a list. -/
 def listItems? : Val N → Option (List (Val N))
@@ -153,6 +155,7 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   | .setElems, [.set elems] => some (.list elems)
   | .mapEntries, [.map entries] => some (.list (entries.map fun (k, v) => .list [k, v]))
   | .stringCodePoints, [.str s] => some (.list (s.codePoints.map .str))
+  | .jsonStringify, [v] => Eval.jsonStringify v
   | .mapOfList, [.list items] => (Eval.mapOfItems items).map .map
   | .setOfList, [.list items] => (Eval.setOfItems items).map .set
   -- The elements of an array literal with a spread, in order.

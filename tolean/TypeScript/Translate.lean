@@ -1492,9 +1492,11 @@ def reducerOf : List Expr → Option (Param × Param × Expr × Expr)
   | [.arrow _ _ [a, p] body, init] => some (a, p, body, init)
   | _ => none
 
-/-- `e` is the name `Number`. -/
-def _root_.tolean.TypeScript.Syntax.Expr.namesNumber : Expr → Bool
-  | .ident _ "Number" => true
+/-- `e` is the name `Number` or `JSON`, a global object whose methods the
+subset calls by their own rules, such as `Number.isNaN(x)` and
+`JSON.stringify(x)`. -/
+def _root_.tolean.TypeScript.Syntax.Expr.namesGlobal : Expr → Bool
+  | .ident _ "Number" | .ident _ "JSON" => true
   | _ => false
 
 /-- `m.get(k)` and `m.has(k)`, as the method and the operation of the output. -/
@@ -1721,7 +1723,7 @@ def indexNumber (s : Span) (xs i : Code) (elem : Ty) : TM Code := do
 method that takes no callback. `Number.isNaN(x)` and the like are calls of the
 global `Number`, not of an array. -/
 def arrayCallOf : Expr → Option (Expr × String)
-  | .member _ recv name => if recv.namesNumber then none else some (recv, name)
+  | .member _ recv name => if recv.namesGlobal then none else some (recv, name)
   | _ => none
 
 /-- The start and the end of `slice`, from the integers of its arguments: a
@@ -1740,7 +1742,7 @@ def _root_.tolean.TypeScript.Syntax.Expr.isArrow : Expr → Bool
 /-- The methods of a string that the subset has. -/
 def stringMethods : List IR.StringMethod :=
   [.startsWith, .endsWith, .includes, .indexOf, .trim, .trimStart, .trimEnd, .split, .at, .slice,
-   .padStart, .padEnd]
+   .padStart, .padEnd, .toUpperCase, .toLowerCase]
 
 /-- The method of a string that `name` names, among those the subset has. -/
 def stringMethod? (name : String) : Option IR.StringMethod :=
@@ -1753,7 +1755,7 @@ argument with ToIntegerOrInfinity, which the translator has only on integer
 literals. -/
 def StringMethod.params : IR.StringMethod → List Ty × List Ty
   | .startsWith | .endsWith | .includes | .indexOf | .split => ([.string], [.number])
-  | .trim | .trimStart | .trimEnd => ([], [])
+  | .trim | .trimStart | .trimEnd | .toUpperCase | .toLowerCase => ([], [])
   | .at => ([.number], [])
   | .slice => ([], [.number, .number])
   | .padStart | .padEnd => ([.number], [.string])
@@ -1773,7 +1775,7 @@ def StringMethod.usage (method : String) : IR.StringMethod → String
   | .startsWith | .endsWith | .includes | .indexOf =>
     s!"'{method}' takes a string and perhaps a position, an integer literal"
   | .split => "'split' takes a string separator and perhaps a limit, an integer literal"
-  | .trim | .trimStart | .trimEnd => s!"'{method}' takes no arguments"
+  | .trim | .trimStart | .trimEnd | .toUpperCase | .toLowerCase => s!"'{method}' takes no arguments"
   | .at => "'at' on a string takes one integer literal, such as s.at(-1)"
   | .slice => "'slice' on a string takes at most two integer literals, such as s.slice(1) or s.slice(-2)"
   | .padStart | .padEnd => s!"'{method}' takes a length, an integer literal, and perhaps a string to fill with"
@@ -1792,7 +1794,7 @@ def StringMethod.padsTooFar : IR.StringMethod → List (Option Int) → Bool
 def StringMethod.result : IR.StringMethod → Ty
   | .startsWith | .endsWith | .includes => .boolean
   | .indexOf => .number
-  | .trim | .trimStart | .trimEnd | .slice | .padStart | .padEnd => .string
+  | .trim | .trimStart | .trimEnd | .slice | .padStart | .padEnd | .toUpperCase | .toLowerCase => .string
   | .split => .array .string
   | .at => .optional .string
 
@@ -1804,6 +1806,51 @@ def StringMethod.feature : IR.StringMethod → Option Feature
   | .padStart | .padEnd => some .stringPad
   | .at => some .stringAt
   | _ => none
+
+/-- `JSON.stringify` gives a string on a value of type `t`, and the Lean value
+fixes the text: a string, a number, a boolean, `null`, a member of a literal
+union, or an array, a tuple or a nullable value of such values. Two JS values
+that Tolean gives the same Lean value must give the same text, or a theorem
+about the output could be false in JS. An object breaks that: a caller may
+pass `{ y: 1, x: 2 }` for an interface that declares `x` first, or an object
+with more properties, and `JSON.stringify` writes them in their own order. A
+map or a set could carry properties of its own too. A bigint makes
+`JSON.stringify` throw (ECMA-262 §25.5.2.2), `undefined` gives `undefined`,
+and a type parameter could be either. `fuel` bounds the depth of the type. -/
+def Ty.jsonSafe : Nat → Ty → Bool
+  | 0, _ => false
+  | fuel + 1, t =>
+    match t with
+    | .number | .boolean | .string | .null | .enum _ | .literal _ => true
+    | .nullable v | .array v => Ty.jsonSafe fuel v
+    | .tuple ts => ts.all (Ty.jsonSafe fuel)
+    | _ => false
+
+/-- How deep `JSON.stringify` may look into the type of its argument. -/
+def jsonDepth : Nat := 64
+
+/-- The code for `JSON.stringify(x)`, where `a` is the code of `x`, at `span`. -/
+def jsonCall (span : Span) (a : Code) : TM Code := do
+  unless Ty.jsonSafe jsonDepth a.type do
+    reject span ("JSON.stringify needs a string, a number, a boolean or null, or an array, a tuple or a " ++
+      "nullable value of them; an object's text depends on the order of its keys, which a caller chooses")
+  return ⟨.ext .jsonStringify [a.value], false, .string⟩
+
+/-- The method changes case, which the model has only on ASCII strings. -/
+def StringMethod.changesCase : IR.StringMethod → Bool
+  | .toUpperCase | .toLowerCase => true
+  | _ => false
+
+/-- The translator can show that the string that `e` gives is ASCII: a
+literal of ASCII text, or `+`, `trim`, `trimStart`, `trimEnd`, `slice` or a
+case change of such strings. -/
+def asciiString : IR.Expr → Bool
+  | .string text => text.toList.all fun (c : Char) => c.toNat < 0x80
+  | .ext (.stringAppend .string .string) [a, b] => asciiString a && asciiString b
+  | .ext (.stringMethod m _) (s :: _) =>
+    [IR.StringMethod.trim, .trimStart, .trimEnd, .slice, .toUpperCase, .toLowerCase].contains m &&
+      asciiString s
+  | _ => false
 
 /-- Refuse the code when the target does not have `f`. -/
 def requireFeature? (s : Span) : Option Feature → TM Unit
@@ -1821,6 +1868,9 @@ def stringCall (s : Span) (method : String) (str : Code) (args : List Code) (lit
       if StringMethod.fits m (args.map (·.type)) lits then
         if StringMethod.padsTooFar m lits then
           reject s s!"'{method}' to more than {maxStringLength} code units could make a string that an engine refuses"
+        else if StringMethod.changesCase m && !asciiString str.value then
+          reject s (s!"'{method}' is supported only on a string that is ASCII, such as a literal; " ++
+            "on other strings its result depends on the Unicode version of the engine")
         else do
           requireFeature? s (StringMethod.feature m)
           return ⟨.ext (.stringMethod m lits) (str.value :: args.map (·.value)), false, StringMethod.result m⟩
@@ -2209,6 +2259,14 @@ def translateElements (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span)
 def translateCall (fuel : Nat) (env : Env) (s : Span) (callee : Expr) (args : List Expr) (top : Bool) :
     TM Code := do
   let fuel + 1 := fuel | tooDeep
+  -- `JSON.stringify(x)`: an opaque function of the value, on a value whose
+  -- text JS gives and which the Lean value fixes.
+  if let .member _ (.ident _ "JSON") method := callee then
+    if env.has "JSON" then reject s "a local named JSON hides the global JSON"
+    unless method == "stringify" do reject s "only JSON.stringify is supported"
+    let [arg] := args | reject s "JSON.stringify takes one value here; a replacer and an indent are not supported"
+    let a ← translateExpr fuel env none arg
+    return ← jsonCall arg.span a
   -- `Number.isNaN(x)` and the like. TypeScript lets them take any value; the
   -- model has them on numbers only.
   if let .member _ (.ident _ "Number") test := callee then
@@ -2282,7 +2340,7 @@ def translateArrayMethod (fuel : Nat) (env : Env) (expected : Option Ty) (s : Sp
   -- `xs.map((x, i) => e)` becomes `List.mapIdx`, whose function binds the
   -- index as a number.
   if let some (p, q, body) := indexedCallbackOf method args then
-    if recv.namesNumber then reject recv.span "only an array has this method"
+    if recv.namesGlobal then reject recv.span "only an array has this method"
     let xs ← translateExpr fuel env none recv
     let elem ← orReject xs.type.element? recv.span "only an array has this method"
     checkParamType p elem
@@ -2299,7 +2357,7 @@ def translateArrayMethod (fuel : Nat) (env : Env) (expected : Option Ty) (s : Sp
       "xs.map(x => x + 1n). Only the callback of map may also take the index, " ++
       "and no callback may take the array yet")
   -- `Number.map` is a property of the global `Number`, not of an array.
-  if recv.namesNumber then reject recv.span "only an array has this method"
+  if recv.namesGlobal then reject recv.span "only an array has this method"
   let xs ← translateExpr fuel env none recv
   let elem ← orReject xs.type.element? recv.span "only an array has this method"
   checkParamType p elem
@@ -2369,7 +2427,7 @@ def translateReduce (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (
   let (a, p, body, init) ← orReject (reducerOf args) s
     ("'reduce' takes an arrow function with two parameters and an initial value, " ++
       "such as xs.reduce((sum, x) => sum + x, 0n)")
-  if recv.namesNumber then reject recv.span "only an array has this method"
+  if recv.namesGlobal then reject recv.span "only an array has this method"
   let xs ← translateExpr fuel env none recv
   let elem ← orReject xs.type.element? recv.span "only an array has this method"
   let i ← translateExpr fuel env expected init
@@ -2394,7 +2452,7 @@ def translateMapMethod (fuel : Nat) (env : Env) (s : Span) (recv : Expr) (op : I
     (args : List Expr) : TM Code := do
   let fuel + 1 := fuel | tooDeep
   -- `Number.get` would be a property of the global `Number`, not of a map.
-  if recv.namesNumber then reject recv.span "only a map or a set has get and has"
+  if recv.namesGlobal then reject recv.span "only a map or a set has get and has"
   let [key] := args | reject s "get and has take one key"
   if key matches .arrow .. then reject key.span "a key cannot be an arrow function"
   let o ← translateRecv (translateExpr fuel env none) env recv
