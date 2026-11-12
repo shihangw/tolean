@@ -99,15 +99,10 @@ value claim already does.
 | `entries` | The `List` functions with the same meaning | The `index` argument of a callback other than one of `map`, and the `array` argument of any callback, until a later step adds them |
 | `xs.at(i)` and `xs.slice(i, j)` where an argument is not an integer literal (§23.1.3.1, §23.1.3.28) | `ToIntegerOrInfinity` on each argument, then the element or the slice as for literals. It needs `Math.trunc` from the numbers stage. | |
 | `xs.slice(-a, b)` with a negative start and an end that is not negative | `List.drop` and `List.take` with the length of the array | |
-| `[...xs].sort(cmp)` and `xs.toSorted(cmp)` | A stable merge sort. ECMA-262 has required a stable sort since ES2019 (§23.1.3.30). | `sort` on an array that the function does not own, and a comparator that is not consistent |
+| A certificate for a file that sorts by a `number` key | As for `bigint` and `string` keys, with the precondition that no key is `NaN`, and for a difference that every key is finite. A difference also needs new laws: `<` is a strict total order on numbers that are not `NaN`, and the sign of `a - b` is the order of `a` and `b`. `jsNumberLaws.test.ts` would check them. | |
 
-A comparator is consistent when it orders values as a total preorder. The
-spec leaves the result undefined for any other comparator, so the translator
-must refuse it or prove it consistent. The first version accepts two shapes
-whose consistency Tolean proves once: a comparison of integer keys, and a
-chain of such comparisons. A comparator such as `(a, b) => a.t - b.t` on
-`number` keys is consistent only when no key is `NaN`, so it becomes a
-precondition of each claim.
+The certifier writes no precondition today, so such a file gets no
+certificate.
 
 ### Errors
 
@@ -157,9 +152,7 @@ This is the borrow that Aeneas uses for Rust. It is sound here only
 because the translator checks that the caller owns the map and holds no other
 name for it during the call. The spec's call rule now gives no value for a
 function that changes a parameter (`Stmt.ownsChanges`), so the borrow must
-also give the spec this meaning: the call copies the map in and back out. Key equality is SameValueZero. For `string` and
-`bigint` keys that is Lean's equality. For `number` keys it is Lean's
-equality only when no key is `NaN` or `-0`.
+also give the spec this meaning: the call copies the map in and back out.
 
 One certificate gap is left. The initial value of a `reduce` can read a map
 or a set that `new Map(items)` or `new Set(items)` makes from a parameter,
@@ -235,7 +228,7 @@ leaves a gap.
 8. **P0.** The borrow for a map that a caller passes in.
 9. **P1.** Strings: template literals, the string methods and arguments in
    the table above, iteration by code point, and the opaque `JSON.stringify`.
-10. **P1.** Sorting with consistent comparators.
+10. **P1.** Sorting: certificates for a sort by a `number` key.
 11. **P2.** Recursion: tagged unions that refer to themselves first, then
     `@decreases`, mutual recursion, and `while` loops.
 12. **P1.** The new number and `bigint` operations, and the `Date` methods.

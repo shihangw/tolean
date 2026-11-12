@@ -108,11 +108,13 @@ deriving BEq, Repr, Inhabited
 whose function also takes the position of the element, bound to `index`.
 `findIndex` is the position of the first element that passes, as the
 language writes an index, and `findLast` is `List.find?` on the reversed
-list. -/
+list. `sortWith` sorts the list by a comparator, whose function takes two
+elements: the first under the parameter's name, the second under `other`. -/
 inductive ListMethod where
   | map | filter | any | all | find
   | mapIdx (index : String)
   | findIndex | findLast
+  | sortWith (other : String)
 deriving BEq, Repr, Inhabited
 
 /-- What a certificate needs to know about a callback, besides its code. The
@@ -805,6 +807,13 @@ class PrintTy (T : Type) where
   /-- The position `index`, a `Nat`, as a value of the type that the
   language gives the index of an array, such as `JSNumber.ofSafeInt` of it. -/
   indexValue : Names → String → String := fun names i => s!"({leanName names "Int"}.ofNat {i})"
+  /-- A sort of the list `xs` by the comparator `fn`, a function of two
+  elements, both as printed code. By default the comparator gives whether
+  the first may come before the second, as `List.mergeSort` reads it. A
+  language whose comparator gives a sign prints its own sort, as TypeScript
+  prints `JSNumber.sortWith`. -/
+  sortCall : Names → String → String → String := fun names fn xs =>
+    s!"({leanName names "List.mergeSort"} {xs} {fn})"
   /-- The name of the type of a map that keeps its entries in insertion
   order, which takes the key type and the value type, such as `JSMap`. -/
   map : Names → String
@@ -990,9 +999,13 @@ def Expr.callsShrink (self : DeclRef) (i : Nat) (need : Int) (depths : List (Str
   | .call r args =>
     (r != self || (args[i]?.bind fun a => a.unascribed.partOf depths).any (need ≤ ·)) &&
       Expr.callsShrinkList self i need depths args
-  | .listMethod _ items param _ body _ =>
-    items.callsShrink self i need depths &&
-      body.callsShrink self i need (bindPart depths param ((items.partOf depths).map (· + 1)))
+  | .listMethod method items param _ body _ =>
+    let elemPart := (items.partOf depths).map (· + 1)
+    -- A comparator's second parameter is an element too.
+    let inner := match method with
+      | .sortWith other => bindPart (bindPart depths other elemPart) param elemPart
+      | _ => bindPart depths param elemPart
+    items.callsShrink self i need depths && body.callsShrink self i need inner
   -- The accumulator is not a part of `p`, and the element is one step below
   -- `items`, as in a `listMethod`.
   | .listFold items init acc param _ body _ =>
@@ -1179,6 +1192,10 @@ def Expr.print (names : Names) : Expr T E → String
       PrintTy.indexValue (T := T) names
         s!"((({leanName names "List.findIdx?"} {fn} {xs}).map {int}.ofNat).getD (-1))"
     | .findLast => s!"({leanName names "List.find?"} {fn} ({leanName names "List.reverse"} {xs}))"
+    | .sortWith other =>
+      let elemTy := elem.print names
+      PrintTy.sortCall (T := T) names
+        s!"(fun ({param} : {elemTy}) ({other} : {elemTy}) => {body.print names})" xs
   | .listFold items init acc param elem body info =>
     let fn := s!"(fun ({acc} : {info.result.print names}) ({param} : {elem.print names}) => {body.print names})"
     s!"({leanName names "List.foldl"} {fn} {argument (init.print names)} {argument (items.print names)})"
