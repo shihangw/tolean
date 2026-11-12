@@ -1466,17 +1466,55 @@ theorem execCase_drop {e : Eval.Env N} : ∀ {body : List Stmt} {ρ : Eval.Env N
         rw [execCase_drop h]
         simp [endsInBreak]
 
+/-- A clause that ends in `throw` has no `break` to drop. -/
+theorem dropBreak_endsInThrow : ∀ {body : List Stmt}, endsInThrow body = true → dropBreak body = body
+  | [], h => by simp [endsInThrow] at h
+  | [s], h => by
+    cases s <;> simp [endsInThrow] at h
+    simp [dropBreak, Stmt.isBreak]
+  | _ :: t :: rest, h => by
+    simp only [endsInThrow] at h
+    simp [dropBreak, dropBreak_endsInThrow h]
+
+/-- Statements that end in `throw` do not end normally. -/
+theorem exec_endsInThrow {ρ e : Eval.Env N} : ∀ {body : List Stmt}, endsInThrow body = true →
+    Eval.exec m fuel ρ body ≠ some (.normal e)
+  | [], h, _ => by simp [endsInThrow] at h
+  | [s], h, hx => by
+    cases s <;> simp [endsInThrow] at h
+    rename_i sp v
+    rw [exec_single] at hx
+    simp only [Eval.execStmt] at hx
+    cases hv : Eval.eval m fuel ρ v <;> simp [hv] at hx
+  | s :: t :: rest, h, hx => by
+    simp only [endsInThrow] at h
+    rw [Eval.exec] at hx
+    by_cases hc : s.constAssignedIn (t :: rest) = true
+    · simp [hc] at hx
+    simp only [hc, Bool.false_eq_true, ↓reduceIte] at hx
+    cases ho : Eval.execStmt m fuel ρ s with
+    | none => simp [ho] at hx
+    | some o =>
+      cases o with
+      | normal ρ' =>
+        simp only [ho, Option.bind_eq_bind, Option.bind_some, pure_bind] at hx
+        exact exec_endsInThrow h hx
+      | ret _ | brk _ | cont _ => simp [ho] at hx
+
 /-- The selected clause ends normally, and the `switch` with it: by its `break`,
-or because no clause comes after it. -/
+or because no clause comes after it. A clause that ends in `throw` does not
+end normally. -/
 theorem execFrom_normal {e ρ : Eval.Env N} {t : Option Expr} {body : List Stmt}
     {more : List (Option Expr × List Stmt)} (h : Eval.exec m fuel ρ (dropBreak body) = some (.normal e))
-    (hlast : more = [] ∨ endsInBreak body = true) :
+    (hlast : more = [] ∨ clauseEnds body = true) :
     Eval.execFrom m fuel ρ ((t, body) :: more) = some (.normal e) := by
   rw [Eval.execFrom, execCase_drop m fuel h]
   cases hb : endsInBreak body
   · rcases hlast with rfl | h'
     · simp [Eval.execFrom]
-    · rw [hb] at h'; cases h'
+    · simp only [clauseEnds, hb, Bool.false_or] at h'
+      rw [dropBreak_endsInThrow h'] at h
+      exact absurd h (exec_endsInThrow m fuel h')
   · rfl
 
 /-- A clause that returns or throws before its `break`. -/
@@ -1662,7 +1700,7 @@ theorem state_default_sim {env : Translate.Env} {sw : SwitchOn} {known : Option 
 theorem state_last_sim {env envT : Translate.Env} {sw : SwitchOn} {test : Expr} {body : List Stmt}
     {more : List (Option Expr × List Stmt)} {tsp : Span} {tag : String} {b : IR.Body} {names : List String}
     (hT : ∀ x, envT.has x = env.has x) (hTf : globals envT = globals env)
-    (hst : test.stripParens = .string tsp tag) (hlast : more = [] ∨ endsInBreak body = true)
+    (hst : test.stripParens = .string tsp tag) (hlast : more = [] ∨ clauseEnds body = true)
     (hb : StmtSim (N := N) m fs fuel envT (.state names) (dropBreak body) b) :
     StateClauseSim (N := N) m fs fuel env sw (some tag) ((some test, body) :: more) b := by
   have hsT : ∀ ρs : Eval.Env N, Scoped m env ρs → Scoped m envT ρs := fun ρs hs =>
@@ -1687,7 +1725,7 @@ theorem state_case_sim {env envT envO : Translate.Env} {sw : SwitchOn} {known ot
     {wt wo : IR.Body} {names : List String}
     (hT : ∀ x, envT.has x = env.has x) (hTf : globals envT = globals env)
     (hO : ∀ x, envO.has x = env.has x) (hOf : globals envO = globals env)
-    (hst : test.stripParens = .string tsp tag) (hlast : more = [] ∨ endsInBreak body = true)
+    (hst : test.stripParens = .string tsp tag) (hlast : more = [] ∨ clauseEnds body = true)
     (hwt : StmtSim (N := N) m fs fuel envT (.state names) (dropBreak body) wt)
     (hwo : StateClauseSim (N := N) m fs fuel envO sw other more wo) :
     StateClauseSim (N := N) m fs fuel env sw known ((some test, body) :: more)
@@ -1760,7 +1798,7 @@ theorem translateStateClause_sound {F : Nat}
     (ihS : ∀ env tail ss ctx body ctx', translateStatements F env tail ss ctx = .ok body ctx' →
       StmtSim (N := N) m fs fuel env tail ss body) :
     ∀ env s names last body ctx b ctx', translateStateClause (F + 1) env s names last body ctx = .ok b ctx' →
-      (last = true ∨ endsInBreak body = true) ∧
+      (last = true ∨ clauseEnds body = true) ∧
         StmtSim (N := N) m fs fuel env (.state names) (dropBreak body) b := by
   intro env s names last body ctx b ctx' h
   unfold translateStateClause at h
@@ -1772,7 +1810,7 @@ theorem translateStateClause_sound {F : Nat}
   · simp at h
   refine ⟨?_, ihS _ _ _ _ _ _ h⟩
   revert hl
-  cases last <;> cases endsInBreak body <;> simp
+  cases last <;> cases clauseEnds body <;> simp
 
 /-- `translateStateClauses` is sound, when it and `translateStateClause` are with one unit of fuel less. -/
 theorem translateStateClauses_sound {F : Nat}
@@ -1780,7 +1818,7 @@ theorem translateStateClauses_sound {F : Nat}
       translateStateClauses F env s sw tags known names cs ctx = .ok body ctx' →
       StateClauseSim (N := N) m fs fuel env sw known cs body)
     (ihA : ∀ env s names last body ctx b ctx', translateStateClause F env s names last body ctx = .ok b ctx' →
-      (last = true ∨ endsInBreak body = true) ∧
+      (last = true ∨ clauseEnds body = true) ∧
         StmtSim (N := N) m fs fuel env (.state names) (dropBreak body) b) :
     ∀ env s sw tags known names cs ctx body ctx',
       translateStateClauses (F + 1) env s sw tags known names cs ctx = .ok body ctx' →
@@ -1815,7 +1853,7 @@ theorem translateStateClauses_sound {F : Nat}
         simp only [bind_ok] at h
         obtain ⟨wt, s₁, hwt, h⟩ := h
         have hA := ihA _ _ _ _ _ _ _ _ hwt
-        have hlast : more = [] ∨ endsInBreak cb = true := hA.1.imp (by simpa using ·) id
+        have hlast : more = [] ∨ clauseEnds cb = true := hA.1.imp (by simpa using ·) id
         simp only [ite_state] at h
         split at h
         · split at h
@@ -3328,7 +3366,7 @@ theorem stmts_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
       translateStateClauses F env s sw tags known names cs ctx = .ok body ctx' →
       StateClauseSim (N := N) m fs fuel env sw known cs body) ∧
     (∀ env s names last body ctx b ctx', translateStateClause F env s names last body ctx = .ok b ctx' →
-      (last = true ∨ endsInBreak body = true) ∧
+      (last = true ∨ clauseEnds body = true) ∧
         StmtSim (N := N) m fs fuel env (.state names) (dropBreak body) b) := by
   induction F with
   | zero =>

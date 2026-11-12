@@ -938,6 +938,16 @@ def endsInBreak : List Stmt → Bool
   | [s] => s.isBreak
   | _ :: rest => endsInBreak rest
 
+/-- The statements of a clause end in a `throw`, which ends the function, so
+the clause does not run into the next one. -/
+def endsInThrow : List Stmt → Bool
+  | [] => false
+  | [s] => (s matches .throwStmt ..)
+  | _ :: rest => endsInThrow rest
+
+/-- The clause does not run into the next: it ends in `break` or in `throw`. -/
+def clauseEnds (body : List Stmt) : Bool := endsInBreak body || endsInThrow body
+
 /-- The statements of a clause without the `break` it ends in. -/
 def dropBreak : List Stmt → List Stmt
   | [] => []
@@ -1023,11 +1033,14 @@ def clausesContainJump (brk cont : Bool) : List (Option Expr × List Stmt) → B
 
 end
 
-/-- Why an `if` whose first branch ends in `tail` may not have both an `else`
-and statements after it. -/
-def Tail.afterEarlyReason : Tail → String
-  | .ret => "code after an if whose branches both return or throw is unreachable"
-  | _ => "after an if whose first branch ends in continue, break or return, put the code that follows in its else branch"
+/-- Why an `if` whose branches both end early may have no statements after it. -/
+def bothEndReason : String :=
+  "code after an if whose branches both end in a return, a throw, a break or a continue is unreachable"
+
+/-- Why an `if` whose first branch ends early, and whose `else` does not, may
+not have statements after it. -/
+def afterEarlyReason : String :=
+  "after an if whose first branch ends in a return, a throw, a break or a continue, put the code that follows in its else branch"
 
 /-- The tail of the first branch of an `if`, when every path through it,
 `thenStatements`, ends the statements that end in `tail`: a `return` or a
@@ -1282,7 +1295,7 @@ def neverLeftReason (name : String) (tags : List String) : String :=
 
 /-- Why a clause of a `switch` must end in `return`. -/
 def fallthroughReason : String :=
-  "every clause of a switch must end in a return, or every clause in a break; Tolean does not translate fallthrough"
+  "every clause of a switch must end in a return, or every clause in a break or a throw; Tolean does not translate fallthrough"
 
 /-- The arm for the other members of a test of `name`'s tag tests it again
 only as more arms of the same `match`: first, or not at all. -/
@@ -2975,7 +2988,7 @@ def translateIf (fuel : Nat) (env : Env) (s : Span) (test : Expr) (thenBranch : 
   -- they join its other branch.
   if let some thenTail := earlyTail tail thenStatements then
     if elseBranch.isSome && !rest.isEmpty then
-      reject s thenTail.afterEarlyReason
+      reject s (if (earlyTail tail elseStatements).isSome then bothEndReason else afterEarlyReason)
     let whenTrue ← translateStatements fuel envTrue thenTail thenStatements
     let whenFalse ← translateStatements fuel envFalse tail (elseStatements ++ rest)
     return (← branch whenTrue whenFalse)
@@ -3009,7 +3022,7 @@ def translateSwitch (fuel : Nat) (env : Env) (s : Span) (disc : Expr)
   | (some _, _) :: _ =>
     if tail.isRet && clauses.all (fun c => alwaysReturns (clauseStatements c.2)) then
       translateClauses fuel env s sw sw.tags none clauses rest
-    else if clauses.dropLast.any (fun c => !(alwaysReturns (clauseStatements c.2) || endsInBreak c.2)) then
+    else if clauses.dropLast.any (fun c => !(alwaysReturns (clauseStatements c.2) || clauseEnds c.2)) then
       reject s fallthroughReason
     else
       -- The clauses end in `break` and change locals, as the branches of an
@@ -3117,12 +3130,12 @@ def translateStateClauses (fuel : Nat) (env : Env) (s : Span) (sw : SwitchOn) (t
     | _ => reject test.span "a case of a switch on a tag must be a string"
 
 /-- One clause of a `switch` whose clauses end in `break`: its statements,
-which end in the state of `names`. Only the last clause may leave out its
-`break`. -/
+which end in the state of `names`, or throw. Only the last clause may leave
+out its `break`. -/
 def translateStateClause (fuel : Nat) (env : Env) (s : Span) (names : List String) (last : Bool)
     (body : List Stmt) : TM IR.Body := do
   let fuel + 1 := fuel | tooDeep
-  if !(last || endsInBreak body) then reject s fallthroughReason
+  if !(last || clauseEnds body) then reject s fallthroughReason
   else if anyContainsJump true true (dropBreak body) then
     reject s "a clause of a switch that ends in break may not return, break or continue before its end"
   else translateStatements fuel env (.state names) (dropBreak body)
