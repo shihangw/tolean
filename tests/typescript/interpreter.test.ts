@@ -16,7 +16,10 @@
  * - When the interpreter says that a call throws a value, Node throws the
  *   same value. An `Error` compares by its class and its message.
  * - When the translator accepts the program and the interpreter gives no
- *   value, Node throws.
+ *   value, Node throws. A program that sorts by a `number` key is the
+ *   exception: its comparator is consistent only when no key is `NaN`, so the
+ *   interpreter gives no value on other arrays, where Node returns one. The
+ *   translation makes no claim there.
  *
  * The parser accepts some programs that Node does not load, because they break
  * an early error rule of ECMA-262, such as a name declared twice in a block.
@@ -158,7 +161,7 @@ function arbitrary(t: Ty, sig: Signatures): fc.Arbitrary<unknown> {
 }
 
 type Call = { function: string; args: Array<Value> };
-type Program = { seed: number; source: string; calls: Array<Call> };
+type Program = { seed: number; source: string; calls: Array<Call>; sortsByNumber: boolean };
 /** A result is `null` when the interpreter gives no value. */
 type Interpreted =
   | { parsed: false }
@@ -197,7 +200,7 @@ test(`the interpreter agrees with Node ${process.version} on random programs`, a
         .sample(fc.tuple(...f.params.map((p) => arbitrary(p, sig))), { numRuns: callsPerFunction, seed: programSeed * 7 + j })
         .map((args) => ({ function: f.name, args: args.map(encode) })),
     );
-    programs.push({ seed: programSeed, source, calls });
+    programs.push({ seed: programSeed, source, calls, sortsByNumber: gen.sortsByNumber });
   }
 
   // A few hundred programs at a time, so that no pipe holds a large input.
@@ -262,7 +265,7 @@ test(`the interpreter agrees with Node ${process.version} on random programs`, a
         } else if (shown(actual.returns) !== canonical(expected.value)) {
           failures.push(`${where}: the interpreter gives ${canonical(expected.value)}, Node ${shown(actual.returns)}`);
         }
-      } else if (lean.accepted) {
+      } else if (lean.accepted && !program.sortsByNumber) {
         tally.throws++;
         if ('returns' in actual) {
           failures.push(`${where}: the interpreter gives no value, Node ${shown(actual.returns)}`);
