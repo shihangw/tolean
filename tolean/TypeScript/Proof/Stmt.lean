@@ -2490,6 +2490,7 @@ theorem throwClass_sim {env : Translate.Env} {s sn tsp : Span} {c : String} {msg
   have hE : c ≠ "Error" := by rintro rfl; simp [isGlobalName] at hglob
   have hM : c ≠ "Map" := by rintro rfl; simp [isGlobalName] at hglob
   have hS : c ≠ "Set" := by rintro rfl; simp [isGlobalName] at hglob
+  have hD : c ≠ "Date" := by rintro rfl; simp [isGlobalName] at hglob
   have hnum : (Eval.ctorParams ctor).length = info.params.length := by
     have := congrArg List.length hps; simpa using this
   have hfields : ∀ vs : List (Val N), Eval.fieldArgs ctor vs =

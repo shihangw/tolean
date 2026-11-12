@@ -618,7 +618,7 @@ def Body.anyOp : Body T E → Bool
 imports the model that defines such operations then. -/
 def Decl.anyOp : Decl T E → Bool
   | .function _ _ _ body => body.anyOp p
-  | .struct .. | .tagged .. | .alias .. | .enum .. => false
+  | .struct .. | .tagged .. | .alias .. | .enum .. | .errors .. => false
 
 end
 
@@ -692,6 +692,7 @@ def Decl.mentions : Decl T E → Bool
   | .struct _ _ fields | .tagged _ _ fields => fields.any (·.2.anyExt onTy)
   | .alias _ _ type => type.anyExt onTy
   | .enum .. => false
+  | .errors _ members => members.any fun (_, fields) => fields.any (·.2.anyExt onTy)
   | .function _ params ret body =>
     params.any (·.2.anyExt onTy) || ret.anyExt onTy || body.mentions onTy onOp
 

@@ -808,7 +808,7 @@ def isNumberName (name : String) : Bool :=
 hide them. -/
 def isGlobalName (name : String) : Bool :=
   isNumberName name || name == "undefined" || name == "Map" || name == "Set" || name == "Error" ||
-    name == "Object"
+    name == "Object" || name == "Date"
 
 def checkName (span : Span) (name : String) : TM String := do
   if leanReserved.contains name then reject span s!"name '{name}' is reserved in Lean"

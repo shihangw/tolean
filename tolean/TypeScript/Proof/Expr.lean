@@ -2756,6 +2756,9 @@ theorem translateDateCall_ok {s : Span} {method : String} {d c : Code} {args : L
     · simp at h
   · simp at h
 
+-- The proof unfolds every array method once, which takes more than the
+-- default budget.
+set_option maxHeartbeats 400000 in
 theorem translateArrayCall_sound {F : Nat}
     (ihE : ∀ env exp e ctx c ctx', translateExpr F env exp e ctx = .ok c ctx' →
       Sim (N := N) m fs fuel env e c.code)
