@@ -486,6 +486,53 @@ theorem le_iff (a b : JSString) : a.le b = true ↔ a.units ≤ b.units := by
   rw [← List.not_lt, ← lt_iff]
   simp [le]
 
+/-- Strings compare by their code units, as `<` does. A certificate for a
+sort by a string key compares the keys with it. -/
+instance : Ord JSString := ⟨fun a b => compare a.units b.units⟩
+
+instance : Std.TransOrd JSString where
+  eq_swap {a b} := Std.OrientedCmp.eq_swap (cmp := (compare : List UInt16 → List UInt16 → Ordering))
+    (a := a.units) (b := b.units)
+  isLE_trans {a b c} := Std.TransCmp.isLE_trans (cmp := (compare : List UInt16 → List UInt16 → Ordering))
+    (a := a.units) (b := b.units) (c := c.units)
+
+/-- `unitsLt` is `compare` on lists of code units. -/
+theorem unitsLt_compare (a b : List UInt16) : unitsLt a b = true ↔ compare a b = .lt := by
+  induction a generalizing b with
+  | nil => cases b <;> simp [unitsLt]
+  | cons x xs ih =>
+    cases b with
+    | nil => simp [unitsLt]
+    | cons y ys =>
+      rw [List.compare_eq_compareLex, List.compareLex_cons_cons, ← List.compare_eq_compareLex, unitsLt]
+      by_cases hxy : x < y
+      · simp [hxy, Std.compare_eq_lt.mpr hxy, Ordering.then]
+      · by_cases hyx : y < x
+        · simp [hxy, hyx, Std.compare_eq_gt.mpr hyx, Ordering.then]
+        · have heq : x = y := by
+            simp only [UInt16.lt_iff_toNat_lt] at hxy hyx
+            exact UInt16.toNat_inj.mp (by omega)
+          subst heq
+          simp [Std.ReflCmp.compare_self, Ordering.then, ih]
+
+theorem compare_of_lt {a b : JSString} (h : a.lt b = true) : compare a b = .lt :=
+  (unitsLt_compare a.units b.units).mp h
+
+theorem compare_of_gt {a b : JSString} (h : b.lt a = true) : compare a b = .gt := by
+  have := (unitsLt_compare b.units a.units).mp h
+  show compare a.units b.units = .gt
+  rw [Std.OrientedCmp.eq_swap (cmp := compare) (a := a.units) (b := b.units), this]; rfl
+
+theorem compare_of_eq {a b : JSString} (h1 : ¬a.lt b = true) (h2 : ¬b.lt a = true) :
+    compare a b = .eq := by
+  show compare a.units b.units = .eq
+  cases hc : compare a.units b.units
+  · exact absurd ((unitsLt_compare _ _).mpr hc) h1
+  · rfl
+  · have : compare b.units a.units = .lt := by
+      rw [Std.OrientedCmp.eq_swap (cmp := compare) (a := b.units) (b := a.units), hc]; rfl
+    exact absurd ((unitsLt_compare _ _).mpr this) h2
+
 end JSString
 
 end tolean.TypeScript

@@ -1934,6 +1934,88 @@ def optPathType (s : Span) (t : Ty) : List String → TM (Bool × Ty)
       | reject s s!"a property after '{f}' needs a value of an interface type"
     optPathRest s ref args rest
 
+/-- The receiver and the method of `xs.toSorted(…)` or `xs.sort(…)`. -/
+def sortOf : Expr → Option (Expr × String)
+  | .member _ recv "toSorted" => some (recv, "toSorted")
+  | .member _ recv "sort" => some (recv, "sort")
+  | _ => none
+
+/-- The fields that `e` reads from the parameter `name`: `[]` for `name`,
+`["k"]` for `name.k`, and so on. -/
+def keyPath? (name : String) : Expr → Option (List String)
+  | .ident _ n => if n == name then some [] else none
+  | .member _ obj f => (keyPath? name obj).map (· ++ [f])
+  | .paren _ e => keyPath? name e
+  | _ => none
+
+/-- `x < y` or `x > y`, where one side reads a key of `a` and the other the
+same key of `b`: the fields of the key, and whether the test holds when the
+key of `a` is the smaller one. -/
+def keyTest? (a b : String) : Expr → Option (List String × Bool)
+  | .paren _ e => keyTest? a b e
+  | .binary _ op x y =>
+    let less := if op == .lt then some true else if op == .gt then some false else none
+    match less, keyPath? a x, keyPath? b y, keyPath? b x, keyPath? a y with
+    | some l, some p, some q, _, _ => if p == q then some (p, l) else none
+    | some l, _, _, some p, some q => if p == q then some (p, !l) else none
+    | _, _, _, _, _ => none
+  | _ => none
+
+/-- `x - y`, where one side reads a key of `a` and the other the same key of
+`b`: the fields of the key, and whether `x` is the key of `a`, which sorts
+from the least. -/
+def keyDifference? (a b : String) : Expr → Option (List String × Bool)
+  | .paren _ e => keyDifference? a b e
+  | .binary _ .sub x y =>
+    match keyPath? a x, keyPath? b y, keyPath? b x, keyPath? a y with
+    | some p, some q, _, _ => if p == q then some (p, true) else none
+    | _, _, some p, some q => if p == q then some (p, false) else none
+    | _, _, _, _ => none
+  | _ => none
+
+mutual
+
+/-- The keys that a comparator of `a` and `b` compares, in order, when it
+has the shape `(a.k < b.k) ? -1 : (a.k > b.k) ? 1 : rest`. The tests may
+come in the other order, the signs may be reversed to sort from the
+greatest, and `rest` is `0` or a comparison of the next key. The last
+comparison may also be a difference, `a.k - b.k` or `b.k - a.k`. Each key
+comes with whether it is a difference, and whether it sorts from the least.
+Such a comparator is consistent when each key is totally ordered on the
+elements. -/
+def keyComparator? (a b : String) : Expr → Option (List (List String × Bool × Bool))
+  | .paren _ e => keyComparator? a b e
+  | .cond _ t r e => keySecond? a b t r e
+  | e => (keyDifference? a b e).map fun (p, up) => [(p, true, up)]
+
+/-- The rest of `keyComparator?` after `t ? r : `, on the expression after
+the `:`. -/
+def keySecond? (a b : String) (t r : Expr) : Expr → Option (List (List String × Bool × Bool))
+  | .paren _ e => keySecond? a b t r e
+  | .cond _ t' r' rest => do
+    let (p, less) ← keyTest? a b t
+    let (p', less') ← keyTest? a b t'
+    let s ← Eval.intLiteral? r
+    let s' ← Eval.intLiteral? r'
+    unless p == p' && less != less' && (s == 1 || s == -1) && s' == -s do none
+    let tail ← if Eval.intLiteral? rest == some 0 then some [] else keyComparator? a b rest
+    -- `-1` where the key of `a` is the smaller one sorts from the least.
+    return (p, false, less == (s == -1)) :: tail
+  | _ => none
+
+end
+
+/-- The type of the key at `path` in a value of type `t`: the type of a field,
+of a field of it, and so on. -/
+def keyType (s : Span) : Ty → List String → TM Ty
+  | t, [] => pure t
+  | .struct ref args, f :: rest => do
+    let info ← orReject ((← get).knownStructs.find? (·.ref == ref)) s
+      "only fields of interfaces declared in this file, or exported by the files before it, may be read"
+    let t ← orReject ((info.fieldsAt args).lookup f) s s!"'{f}' is not a field"
+    keyType s t rest
+  | _, _ :: _ => reject s "a key of a comparator must be a field of an interface"
+
 /-- `applyOperator`, after a string operand becomes a constructor where the
 other operand is of a literal union. -/
 def translateOperator (s : Span) (op : BinOp) (r : Expr) (a b : Code) : TM Code := do
@@ -2134,6 +2216,9 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
   | .call s callee args =>
     match reduceOf callee with
     | some recv => translateReduce fuel env expected s recv args
+    | none =>
+    match sortOf callee with
+    | some (recv, method) => translateSort fuel env s recv method args
     | none =>
     match arrayMethodOf callee with
     | some (recv, method) => translateArrayMethod fuel env expected s recv method args
@@ -2386,6 +2471,51 @@ def translateReduce (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (
   let info : IR.CallbackInfo IR.TyExt :=
     { span := s, result := accType.lean, scope := env.locals.map fun l => (l.name, l.type.lean) }
   return ⟨.listFold xs.value i.value a.name p.name elem.lean b.value info, false, accType⟩
+
+/-- `xs.toSorted((a, b) => e)` and `[...xs].sort((a, b) => e)`:
+`JSNumber.sortWith (fun a b => e) xs`. `sort` changes the array it sorts, so
+it may sort only an array literal, which nothing else holds. The comparator
+must compare keys (`keyComparator?`) that are bigints, strings or numbers.
+Then it is consistent for every array whose number keys are not `NaN`, and
+whose keys of a difference are finite. The spec also compares each element
+with itself, and `Infinity - Infinity` is `NaN`, so one infinite key of a
+difference is enough to make it inconsistent. Elsewhere the interpreter
+gives no value, and the translation makes no claim. -/
+def translateSort (fuel : Nat) (env : Env) (s : Span) (recv : Expr) (method : String)
+    (args : List Expr) : TM Code := do
+  let fuel + 1 := fuel | tooDeep
+  let [.arrow _ _ [p, q] body] := args
+    | reject s (s!"'{method}' takes a comparator here, an arrow function with two parameters, such as " ++
+        s!"xs.{method}((a, b) => (a.k < b.k) ? -1 : (a.k > b.k) ? 1 : 0)")
+  if method == "sort" && !recv.isArrayLiteral then
+    reject s ("'sort' changes the array that it sorts, so it may sort only a new array, " ++
+      "such as [...xs].sort(cmp); use xs.toSorted(cmp)")
+  requireFeature s (if method == "sort" then .stableSort else .arrayToSorted)
+  if recv.namesNumber then reject recv.span "only an array has this method"
+  let xs ← translateExpr fuel env none recv
+  let elem ← orReject xs.type.element? recv.span "only an array has this method"
+  -- The spec puts `undefined` last without calling the comparator.
+  if elem.isMaybe then reject s s!"'{method}' on an array of nullable values is not supported"
+  checkParamType p elem
+  checkParamType q elem
+  let withQ ← declare env q.span q.name .param elem
+  let inner ← declare withQ p.span p.name .param elem
+  let b ← translateExpr fuel inner (some .number) body
+  unless b.type == .number do reject body.span "a comparator must give a number"
+  let keys ← orReject (keyComparator? p.name q.name body) body.span
+    ("a comparator here must compare keys, such as (a, b) => (a.k < b.k) ? -1 : (a.k > b.k) ? 1 : 0 " ++
+      "or (a, b) => a.t - b.t, with the tests in either order, the signs reversed, or a comparison " ++
+      "of the next key in place of the 0")
+  for (key, difference, _) in keys do
+    let t ← keyType body.span elem key
+    if difference then
+      unless t == .number do reject body.span "the keys of a difference in a comparator must be numbers"
+    else
+      unless t == .bigint || t == .string || t == .number do
+        reject body.span "a key of a comparator must be a bigint, a string or a number"
+  let info : IR.CallbackInfo IR.TyExt :=
+    { span := s, result := Ty.number.lean, scope := env.locals.map fun l => (l.name, l.type.lean) }
+  return ⟨.listMethod (.sortWith q.name) xs.value p.name elem.lean b.value info, false, xs.type⟩
 
 /-- `m.get(k)` and `m.has(k)` on a map. An owned map may be read here, as
 `ownedMap?` says. `get` gives `undefined` for a key that the map does not
