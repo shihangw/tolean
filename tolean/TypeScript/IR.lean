@@ -1,4 +1,5 @@
 import tolean.IR
+import tolean.TypeScript.Spec.Date
 
 /-!
 The TypeScript extension of the Tolean IR: the types and operations that the
@@ -77,6 +78,8 @@ inductive TyExt where
   | null
   /-- `JSError`, what `throw new Error(message)` throws. -/
   | error
+  /-- `JSDate`, a `Date` (`Spec/Date.lean`). -/
+  | date
 deriving BEq, Repr, Inhabited, DecidableEq
 
 /-- The operations that TypeScript adds to the IR, each with the number of
@@ -94,6 +97,14 @@ inductive ExprExt where
   | numberNe
   /-- `(JSNumber.isNaN a)`, or `(JSNumber.toSafeInt a).isSome`. -/
   | numberTest (test : NumberTest)
+  /-- `(JSDate.ofNumber t)`: `new Date(t)` on a number. -/
+  | dateOfNumber
+  /-- `(JSDate.getTime (N := N) d)`, or another method of a date that takes no
+  arguments, on `d`: `d.getTime()`, where `name` is the name of the method
+  in the source. -/
+  | dateMethod (name : String)
+  /-- `(JSDate.utc (N := N) [y, m])`, on the numbers: `Date.UTC(y, m)`. -/
+  | dateUtc
   /-- `(JSNumber.sameValue a b)`: `Object.is(a, b)` on numbers. -/
   | numberSameValue
   /-- `(JSNumber.ofInt a)`: `Number(a)` on a bigint. -/
@@ -241,6 +252,7 @@ abbrev LoopInfo := tolean.IR.LoopInfo TyExt
 @[match_pattern] abbrev Expr.isUndefined (a : Expr) : Expr := .ext .isUndefined [a]
 @[match_pattern] abbrev Expr.isDefined (a : Expr) : Expr := .ext .isDefined [a]
 @[match_pattern] abbrev Ty.error : Ty := .ext .error
+@[match_pattern] abbrev Ty.date : Ty := .ext .date
 @[match_pattern] abbrev Expr.pure (a : Expr) : Expr := .ext .pure [a]
 @[match_pattern] abbrev Expr.error (message : Expr) : Expr := .ext .error [message]
 
@@ -252,6 +264,7 @@ def leanNames : List (String × String) :=
     [("JSNumber", "tolean.TypeScript.JSNumber"), ("JSString", "tolean.TypeScript.JSString"),
      ("JSMap", "tolean.TypeScript.JSMap"), ("JSSet", "tolean.TypeScript.JSSet"),
      ("JSError", "tolean.TypeScript.JSError"), ("JSBigInt", "tolean.TypeScript.JSBigInt"),
+     ("JSDate", "tolean.TypeScript.JSDate"),
      ("pure", "Pure.pure"),
      ("Nat", "Nat")]
 
@@ -274,9 +287,10 @@ instance : tolean.IR.PrintTy TyExt where
     | .number => names.typeParam
     | .null => s!"({leanName names "Option"} Empty)"
     | .error => leanName names "JSError"
+    | .date => leanName names "JSDate"
   namesParam _
     | .number => true
-    | .null | .error => false
+    | .null | .error | .date => false
   binders names :=
     let n := names.typeParam
     s!" \{{n} : Type} [{leanName names "JSNumber"} {n}]"
@@ -324,6 +338,11 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
   | .numberTest .isFinite, [a] => s!"({js}.isFinite {argument a})"
   | .numberTest .isInteger, [a] => s!"({js}.isInteger {argument a})"
   | .numberFn f, [a] => s!"({js}.{f.name} {argument a})"
+  | .dateOfNumber, [t] => s!"({leanName names "JSDate"}.ofNumber {argument t})"
+  | .dateMethod name, [d] =>
+    s!"({leanName names "JSDate"}.{(JSDate.methodName? name).getD name} (N := {names.typeParam}) {argument d})"
+  | .dateUtc, args =>
+    s!"({leanName names "JSDate"}.utc (N := {names.typeParam}) [{", ".intercalate args}])"
   | .numberSameValue, [a, b] => s!"({js}.sameValue {argument a} {argument b})"
   | .numberOfInt, [a] => s!"({js}.ofInt (N := {names.typeParam}) {argument a})"
   | .numberFold isMax, args =>
@@ -421,6 +440,11 @@ An operation on strings may stand where no string type or literal is in
 sight, such as `a.key < b.key` on an interface of another file. -/
 def ExprExt.usesString : ExprExt → Bool
   | .stringOrder _ | .stringAppend .. | .stringLength | .stringMethod _ => true
+  | _ => false
+
+/-- The operation names `JSDate`, so the output imports its model. -/
+def ExprExt.onDate : ExprExt → Bool
+  | .dateOfNumber | .dateMethod _ | .dateUtc => true
   | _ => false
 
 /-- The operation names `JSBigInt`, so the output imports its model. -/

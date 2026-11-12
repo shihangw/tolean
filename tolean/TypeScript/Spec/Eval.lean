@@ -1,5 +1,6 @@
 import tolean.TypeScript.Syntax.Ast
 import tolean.TypeScript.Spec.BigInt
+import tolean.TypeScript.Spec.Date
 import tolean.TypeScript.Spec.Number
 import tolean.TypeScript.Spec.String
 
@@ -52,6 +53,8 @@ inductive Val (N : Type) where
   /-- An error object: the name of the class that made it, such as
   `"Error"`, and its own properties. `new Error(m)` has one, `message`. -/
   | error (cls : String) (fields : List (String × Val N))
+  /-- A `Date`: its time value, or `none` when it is invalid (`JSDate`). -/
+  | date (time : Option Int)
 deriving Inhabited
 
 /-- `ToBoolean` (ECMA-262 §7.1.2), on the values of the subset. A number is
@@ -62,7 +65,7 @@ def Val.truthy : Val N → Bool
   | .bool b => b
   | .str s => !s.isEmpty
   | .null | .undefined => false
-  | .list _ | .obj _ | .map _ | .set _ | .error _ _ => true
+  | .list _ | .obj _ | .map _ | .set _ | .error _ _ | .date _ => true
 
 /-- The result of `typeof` (ECMA-262 §13.5.3.1) on the values of the
 subset. `null` is `"object"`, and so are an array and an object, which are
@@ -73,7 +76,7 @@ def Val.typeOf : Val N → String
   | .bool _ => "boolean"
   | .str _ => "string"
   | .undefined => "undefined"
-  | .null | .list _ | .obj _ | .map _ | .set _ | .error _ _ => "object"
+  | .null | .list _ | .obj _ | .map _ | .set _ | .error _ _ | .date _ => "object"
 
 /-- The variables in scope, innermost first. -/
 abbrev Env (N : Type) := List (String × Val N)
@@ -160,14 +163,14 @@ def strictEq : Val N → Val N → Option Bool
   | .undefined, .undefined => some true
   | .undefined, .int _ | .undefined, .num _ | .undefined, .bool _ | .undefined, .str _
   | .undefined, .null | .undefined, .list _ | .undefined, .obj _ | .undefined, .map _
-  | .undefined, .set _ | .undefined, .error _ _ => some false
+  | .undefined, .set _ | .undefined, .error _ _ | .undefined, .date _ => some false
   | .int _, .undefined | .num _, .undefined | .bool _, .undefined | .str _, .undefined
   | .null, .undefined | .list _, .undefined | .obj _, .undefined | .map _, .undefined
-  | .set _, .undefined | .error _ _, .undefined => some false
+  | .set _, .undefined | .error _ _, .undefined | .date _, .undefined => some false
   | .null, .int _ | .null, .num _ | .null, .bool _ | .null, .str _ | .null, .list _
-  | .null, .obj _ | .null, .map _ | .null, .set _ | .null, .error _ _ => some false
+  | .null, .obj _ | .null, .map _ | .null, .set _ | .null, .error _ _ | .null, .date _ => some false
   | .int _, .null | .num _, .null | .bool _, .null | .str _, .null | .list _, .null
-  | .obj _, .null | .map _, .null | .set _, .null | .error _ _, .null => some false
+  | .obj _, .null | .map _, .null | .set _, .null | .error _ _, .null | .date _, .null => some false
   | _, _ => none
 
 /-- `IsLooselyEqual` (ECMA-262 §7.2.14) when one operand is `null` or
@@ -304,6 +307,12 @@ def sameValueZero : Val N → Val N → Option Bool
 def sameValue : Val N → Val N → Option Bool
   | .num a, .num b => some (JSNumber.sameValue a b)
   | a, b => strictEq a b
+
+/-- A method of a date with the time value `t` that takes no arguments, on
+the values of its arguments (`JSDate.method?`). -/
+def dateMethod (method : String) (t : Option Int) : List (Val N) → Option (Val N)
+  | [] => (JSDate.method? method).map fun f => .num (f ⟨t⟩)
+  | _ => none
 
 /-- `Number(v)` (§21.1.1.1) on the value of its one argument: a bigint
 becomes the Number value for it, and a number stays itself. ToNumber of a
@@ -817,6 +826,11 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
   | .call _ (.member _ (.ident _ "Math") f) args => do
     if (env.lookup "Math").isSome then none
     mathCall f (← evalList m fuel env args)
+  -- `Date.UTC(year, month, …)` (§21.4.3.4) on numbers, unless a variable
+  -- hides `Date`.
+  | .call _ (.member _ (.ident _ "Date") "UTC") args => do
+    if (env.lookup "Date").isSome then none
+    return .num (JSDate.utc (← numbers? (← evalList m fuel env args)))
   -- `Object.is(a, b)` (§20.1.2.15), unless a variable hides `Object`.
   | .call _ (.member _ (.ident _ "Object") "is") [a, b] => do
     if (env.lookup "Object").isSome then none
@@ -911,6 +925,8 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     match ← eval m fuel env recv with
     | .list items => arrayMethod method items (← evalList m fuel env args)
     | .str s => stringMethod method s (← evalList m fuel env args)
+    -- `d.getTime()` and the UTC getters of a date, which take no arguments.
+    | .date t => dateMethod method t (← evalList m fuel env args)
     | _ => none
   -- A call that throws inside an expression gives no value. Only a call that
   -- is the whole value of a declaration or a `return` passes its throw on
@@ -923,6 +939,12 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
   | .new _ "Map" _ [] => if (env.lookup "Map").isSome then none else some (.map [])
   -- `new Set()` (ECMA-262 §24.2.2.1), in the same way.
   | .new _ "Set" _ [] => if (env.lookup "Set").isSome then none else some (.set [])
+  -- `new Date(t)` on a number (§21.4.2.1): the date whose time value is
+  -- TimeClip of `t`.
+  | .new _ "Date" _ [arg] => do
+    if (env.lookup "Date").isSome then none
+    let .num t ← eval m fuel env arg | none
+    return .date (JSDate.timeClip t)
   -- `new Map(items)` and `new Set(items)` (`AddEntriesFromIterable`, ECMA-262
   -- §24.1.1.2, and §24.2.2.1): the constructor visits `items` as a loop
   -- would, and sets each `[key, value]`, or adds each value, in order.

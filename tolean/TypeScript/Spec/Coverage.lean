@@ -293,6 +293,12 @@ def sections : List Section := [
   ⟨"sec-function-properties-of-the-math-object", "21.3.2", "Function Properties of the Math Object",
     [``Proof.eval_math, ``Proof.translateMathCall_sound, ``Proof.out_numberFn,
     ``Proof.out_numberFold]⟩,
+  ⟨"sec-date", "21.4.2.1", "Date ( ...values )",
+    [``Proof.translateNewDate_sound, ``Proof.out_dateOfNumber]⟩,
+  ⟨"sec-date.utc", "21.4.3.4", "Date.UTC ( year [ , month [ , date [ , hours [ , minutes [ , seconds [ , ms ] ] ] ] ] ] )",
+    [``Proof.eval_dateUtc, ``Proof.translateDateUtc_sound, ``Proof.out_dateUtc]⟩,
+  ⟨"sec-properties-of-the-date-prototype-object", "21.4.4", "Properties of the Date Prototype Object",
+    [``Proof.eval_dateCall, ``Proof.translateDateCall_ok, ``Proof.out_dateMethod]⟩,
   -- §22 Text Processing {#sec-text-processing}
   ⟨"sec-string.prototype.endswith", "22.1.3.7", "String.prototype.endsWith",
     [``JSString.endsWith_iff]⟩,

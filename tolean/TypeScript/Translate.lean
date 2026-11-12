@@ -63,6 +63,8 @@ inductive Ty where
   /-- `Set<T>` or `ReadonlySet<T>`, where `T` is a type that a map key may
   have. -/
   | set (elem : Ty)
+  /-- `Date`, which the subset never changes, so a value stands for it. -/
+  | date
 deriving Repr, Inhabited
 
 -- `Ty` holds lists of itself, so Lean's derived `BEq` would not reduce in the
@@ -72,6 +74,7 @@ mutual
 
 def Ty.beq : Ty → Ty → Bool
   | .bigint, .bigint | .number, .number | .boolean, .boolean | .string, .string | .null, .null => true
+  | .date, .date => true
   | .nullable a, .nullable b | .optional a, .optional b | .array a, .array b => Ty.beq a b
   | .struct a as, .struct b bs => a == b && Ty.beqList as bs
   | .enum a, .enum b => a == b
@@ -200,7 +203,7 @@ def Ty.isEqPrimitive : Ty → Bool
 
 /-- An object, which `===` compares by identity. A tuple is an array. -/
 def Ty.isObject : Ty → Bool
-  | .array _ | .struct .. | .tagged .. | .tuple _ | .map .. | .set _ => true
+  | .array _ | .struct .. | .tagged .. | .tuple _ | .map .. | .set _ | .date => true
   | _ => false
 
 /-- The element types of a tuple type. -/
@@ -238,6 +241,7 @@ def Ty.lean : Ty → IR.Ty
   | .param name => .param name
   | .map k v => .map k.lean v.lean
   | .set t => .set t.lean
+  | .date => .date
 
 def Ty.leanList : List Ty → List IR.Ty
   | [] => []
@@ -732,7 +736,7 @@ def requireFeature (span : Span) (f : Feature) : TM Unit := do
 /-- The globals that the subset reads by name. A file that names one of them
 needs the number type. -/
 def isNumberName (name : String) : Bool :=
-  name == "Number" || name == "NaN" || name == "Infinity" || name == "Math"
+  name == "Number" || name == "NaN" || name == "Infinity" || name == "Math" || name == "Date"
 
 /-- The globals that the subset reads by name, so that no declaration may
 hide them. -/
@@ -879,6 +883,8 @@ def translateType (t : TypeExpr) : TM Ty := do
   | .ref _ name [] =>
     let ctx ← get
     if ctx.typeParams.contains name then return .param name
+    -- `Date`, which no declaration may hide.
+    if name == "Date" then return .date
     match ctx.structs.find? (·.name == name) with
     | some info =>
       unless info.typeParams.isEmpty do reject t.span (typeArgsMessage name info.typeParams.length)
@@ -1350,6 +1356,26 @@ def translateNumberCall (tr : Expr → TM Code) (s : Span) (args : List Expr) : 
     reject x.span "Number(v) needs a bigint; ToNumber of other values is not modelled"
   return ⟨.ext .numberOfInt [a.value], false, .number⟩
 
+/-- `Date.UTC(year, month, …)`, where `tr` translates an argument: the time
+value of the date, as a number. Before ES2017, a call with one argument is
+up to the engine, so it needs two arguments or more. -/
+def translateDateUtc (tr : Expr → TM Code) (s : Span) (args : List Expr) : TM Code := do
+  unless 2 ≤ args.length && args.length ≤ 7 do
+    reject s "Date.UTC takes from two to seven numbers: the year, the month, and then the date and the time"
+  let codes ← args.mapM tr
+  for (c, e) in codes.zip args do
+    unless c.type == .number do reject e.span "Date.UTC needs number operands"
+  return ⟨.ext .dateUtc (codes.map (·.value)), false, .number⟩
+
+/-- `d.getTime()` and the UTC getters of the date `d`. The getters of local
+time depend on the time zone of the host, so they stay refused. -/
+def translateDateCall (s : Span) (method : String) (d : Code) (args : List Expr) : TM Code := do
+  unless (JSDate.methodName? method).isSome do
+    reject s (s!"a Date has no method '{method}' in the subset; it has getTime, valueOf and the " ++
+        "UTC getters, such as getUTCFullYear, whose results do not depend on the time zone")
+  unless args.isEmpty do reject s s!"'{method}' takes no arguments"
+  return ⟨.ext (.dateMethod method) [d.value], false, .number⟩
+
 def numberConstant? : String → Option IR.NumberConstant
   | "NaN" => some .nan
   | "Infinity" => some .posInf
@@ -1580,7 +1606,7 @@ def reducerOf : List Expr → Option (Param × Param × Expr × Expr)
 /-- `e` is the name `Number` or `Math`, whose calls the interpreter reads
 before the methods of a value. -/
 def _root_.tolean.TypeScript.Syntax.Expr.namesNumber : Expr → Bool
-  | .ident _ "Number" | .ident _ "Math" | .ident _ "Object" => true
+  | .ident _ "Number" | .ident _ "Math" | .ident _ "Object" | .ident _ "Date" => true
   | _ => false
 
 /-- `m.get(k)` and `m.has(k)`, as the method and the operation of the output. -/
@@ -1758,6 +1784,20 @@ def translateRecv (tr : Expr → TM Code) (env : Env) (e : Expr) : TM Code :=
   | some c => pure c
   | none => tr e
 
+/-- `new Date(t)` on a number. `new Date()` reads the clock, and a date from
+its parts or from a string reads the time zone or parses, so they stay
+refused. -/
+def translateNewDate (tr : Option Ty → Expr → TM Code) (env : Env) (s : Span) (args : List Expr) :
+    TM Code := do
+  if env.has "Date" then reject s "a local named Date hides the global Date"
+  let [arg] := args
+    | reject s ("new Date takes one number here: new Date() reads the clock, and new Date(y, m, …) " ++
+        "reads the time zone of the host")
+  let t ← tr none arg
+  unless t.type == .number do
+    reject arg.span "new Date(v) needs a number; a string would be parsed, which is up to the engine"
+  return ⟨.ext .dateOfNumber [t.value], false, .date⟩
+
 /-- `new Map()` or `new Set()`, a map or a set without entries, or
 `new Map(items)` or `new Set(items)`, which sets each `[key, value]` or adds
 each value that `items` visits. `tr` translates an expression where a type is
@@ -1765,8 +1805,9 @@ expected. The type comes from the type arguments, or from the context, as in
 `const m: Map<K, V> = new Map()`, or else from `items`. -/
 def translateNew (tr : Option Ty → Expr → TM Code) (env : Env) (expected : Option Ty) (s : Span)
     (callee : String) (typeArgs : List TypeExpr) (args : List Expr) : TM Code := do
+  if callee == "Date" then translateNewDate tr env s args else
   let isMap := callee == "Map"
-  unless isMap || callee == "Set" do reject s "only new Map() and new Set() are supported"
+  unless isMap || callee == "Set" do reject s "only new Date(t), new Map() and new Set() are supported"
   if env.has callee then reject s s!"a local named {callee} hides the global {callee}"
   match args with
   | [] =>
@@ -2277,6 +2318,9 @@ def translateCall (fuel : Nat) (env : Env) (s : Span) (callee : Expr) (args : Li
   if let .member _ (.ident _ "Object") "is" := callee then
     if !env.has "Object" then
       return ← translateObjectIs (translateExpr fuel env none) s args
+  if let .member _ (.ident _ "Date") "UTC" := callee then
+    if !env.has "Date" then
+      return ← translateDateUtc (translateExpr fuel env none) s args
   let noCallMessage :=
     "calls may name only the function itself, functions declared earlier in this file, or imported ones"
   let noCall {A : Type} : TM A := reject s noCallMessage
@@ -2398,6 +2442,8 @@ def translateArrayCall (fuel : Nat) (env : Env) (s : Span) (recv : Expr) (method
   if xs.type == .string then
     let codes ← args.mapM (translateExpr fuel env none)
     stringCall s method xs codes
+  else
+  if xs.type == .date then translateDateCall s method xs args
   else
   let elem ← orReject xs.type.element? recv.span "only an array or a string has this method"
   -- `xs.at(k)`: the element at `k`, counted from the end when `k` is
@@ -4057,20 +4103,24 @@ def translateWith (file source ns : String) (target : Edition := .default)
   let usesMap := decls.any (IR.Decl.usesMap IR.ExprExt.onMap)
   -- And for the bitwise operators on bigints, which `JSBigInt` defines.
   let usesBigInt := decls.any (IR.Decl.anyOp IR.ExprExt.onBigInt)
+  -- And for dates, which `JSDate` models.
+  let usesDate := decls.any (IR.Decl.mentions (· == .date) IR.ExprExt.onDate)
   -- A function that can throw returns `Except JSError R`, and `JSError`
   -- holds a string.
   let throws := decls.any fun
     | .function _ _ (.except ..) _ => true
     | _ => false
   let header :=
-    (if names.generic then ["import tolean.TypeScript.Spec.Number"] else []) ++
+    (if usesDate then ["import tolean.TypeScript.Spec.Date"]
+     else if names.generic then ["import tolean.TypeScript.Spec.Number"] else []) ++
     (if throws then ["import tolean.TypeScript.Spec.Error"]
      else if usesString then ["import tolean.TypeScript.Spec.String"] else []) ++
     (if usesBigInt then ["import tolean.TypeScript.Spec.BigInt"] else []) ++
     (if usesMap then ["import tolean.TypeScript.Map"] else []) ++
     (if decls.any (IR.Decl.recursive names.file) then ["import tolean.TypeScript.Decreasing"] else []) ++
     imports ++
-    (if names.generic || usesString || throws || usesMap || usesBigInt then ["", "open tolean.TypeScript"]
+    (if names.generic || usesString || throws || usesMap || usesBigInt || usesDate then
+      ["", "open tolean.TypeScript"]
      else if imports.isEmpty then [] else [""])
   let text := "\n".intercalate
     ([s!"-- Generated by tolean {version} for {target.name} from {file}. Do not edit."] ++

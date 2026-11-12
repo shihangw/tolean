@@ -378,6 +378,10 @@ the file, the line and the reason. It never approximates.
 | `Object.is(a, b)` on two numbers | `JSNumber.sameValue a b`: `===`, except that `NaN` is the same as `NaN`, and `+0` is not the same as `-0` (SameValue). The model has one new operation for it, `JSNumber.isNegZero`. |
 | `Object.is(a, b)` on two bigints, booleans or strings | `decide (a = b)`, as for `===` |
 | `Number(b)` on a `bigint` | `JSNumber.ofInt (N := N) b`: the double nearest to `b`, with ties to the one whose last bit is zero, and `±Infinity` beyond the largest double. Tolean refuses `Number(v)` on other values, because the model has no ToNumber for them. |
+| `Date` | `JSDate` (`tolean/TypeScript/Spec/Date.lean`): the time value, as an `Option Int` of milliseconds since the start of 1970 in UTC, where `none` is an invalid date. The subset has no setters, so a date never changes, and a value stands for it. Tolean refuses `===` on dates, because JS compares them as objects. |
+| `new Date(t)` on a number | `JSDate.ofNumber t`: TimeClip of `t`, its integer part, or an invalid date when `t` is not finite or is more than 8.64 × 10^15 from zero |
+| `d.getTime()`, `d.valueOf()`, and the UTC getters `d.getUTCFullYear()`, `getUTCMonth`, `getUTCDate`, `getUTCDay`, `getUTCHours`, `getUTCMinutes`, `getUTCSeconds` and `getUTCMilliseconds` | `JSDate.getTime (N := N) d` and `JSDate.getUTCFullYear (N := N) d` and the others, which follow the calendar of ECMA-262 §21.4.1 on integers. Each is `NaN` for an invalid date. |
+| `Date.UTC(year, month, …)` with two to seven numbers | `JSDate.utc (N := N) [year, month, …]`: MakeDay, MakeTime and MakeDate, with the arithmetic of numbers where ECMA-262 uses it, so a large argument rounds as it does in JS. A year from 0 to 99 is a year of the 1900s. |
 | `Math.min(a, b, …)`, `Math.max(a, b, …)` on numbers | `JSNumber.minimum (N := N) [a, b, …]` and `JSNumber.maximum`. They fold `Math.min` of two numbers over the list, from `Infinity`, as ECMA-262 does, so `Math.min()` is `Infinity`. Tolean refuses a spread argument. |
 | `NaN`, `Infinity`, `-Infinity` | `JSNumber.nan`, `posInf`, `negInf` |
 | `T \| null`, `null` | `Option T`, `none` |
@@ -489,6 +493,17 @@ Tolean rejects these, among others:
   `tests/typescript/bigintBitwise.test.ts` checks the bitwise operators and
   `**` in the same way.
 - `**` on `number`, because ECMA-262 lets the result differ between engines.
+- `new Date()`, `Date.now()`, and a date from a string or from its local
+  parts, such as `new Date(2024, 0, 1)`, because they read the clock, parse,
+  or read the time zone of the host. The getters of local time, such as
+  `getFullYear`, and the setters stay refused too. `toISOString` waits for
+  the error classes of the errors stage, because it throws a `RangeError`
+  whose message is up to the engine. `tests/typescript/date.test.ts` checks
+  the getters and `Date.UTC` against Node on random arguments. One kind of
+  argument differs: V8 gives `NaN` when the year passes ±1,000,000, even when
+  the date argument brings the result back into range. ECMA-262 lets MakeDay
+  call such a year out of range, and the model follows its arithmetic, as
+  SpiderMonkey does.
 - `===` on objects, because in JS it compares references. It also rejects
   `===` between nullable values.
 - `==` and `!=` anywhere except in a test against `null`. Between two other
