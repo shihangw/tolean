@@ -4395,6 +4395,198 @@ def GivesFn (T : Edition) (p : ParseM Stmt) : Prop :=
         x.kind = .keyword "const" ∨ x.kind = .ident "let" ∨ x.kind = .keyword "function") ∧
       StmtOK T st
 
+theorem inFunctionBody_inv {α : Type} {body : ParseM α} {s s' : ParseState} {a : α}
+    (h : Parse.inFunctionBody body s = .ok a s') :
+    ∃ s₁, body { s with inFunction := true, loopDepth := 0 } = .ok a s₁ ∧
+      s' = { s₁ with inFunction := s.inFunction, loopDepth := s.loopDepth } := by
+  simp only [Parse.inFunctionBody] at h
+  have hg : (get : ParseM ParseState) s = .ok s s := rfl
+  rw [Parse.bind_eq hg, Parse.bind_eq (Parse.modify_eq _ _), Parse.bind_ok] at h
+  obtain ⟨a', s₁, hb, h⟩ := h
+  rw [Parse.bind_eq (Parse.modify_eq _ _)] at h
+  simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h
+  exact ⟨s₁, hb, rfl⟩
+
+/-- `parseBlock` gives a block. -/
+theorem parseBlock_block {n : Nat} {s s' : ParseState} {st : Stmt} (h : Parse.parseBlock n s = .ok st s') :
+    st.isBlock = true := by
+  cases n with
+  | zero => simp only [Parse.parseBlock] at h; exact absurd h (outOfFuel_ne_ok _ _ _)
+  | succ m =>
+    simp only [Parse.parseBlock] at h
+    rw [Parse.bind_ok] at h; obtain ⟨_, _, _, h⟩ := h
+    rw [Parse.bind_ok] at h; obtain ⟨_, _, _, h⟩ := h
+    rw [Parse.bind_ok] at h; obtain ⟨_, _, _, h⟩ := h
+    rw [Parse.bind_ok] at h; obtain ⟨_, _, _, h⟩ := h
+    rw [Parse.bind_ok] at h; obtain ⟨_, _, _, h⟩ := h
+    simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h
+    rfl
+
+theorem mem_separated {sep : String} {w : Word} : ∀ {items : List (List Word)} {x : List Word},
+    x ∈ items → w ∈ x → w ∈ separated sep items
+  | [], _, hx, _ => by simp at hx
+  | [i], x, hx, hw => by simp at hx; subst hx; simpa [separated] using hw
+  | i :: j :: rest, x, hx, hw => by
+    simp only [separated, List.mem_append, List.mem_cons]
+    rcases List.mem_cons.mp hx with rfl | hx
+    · exact .inl hw
+    · exact .inr (.inr (mem_separated hx hw))
+
+/-- The rest of the head of a local arrow function, as `localArrowRest`
+reads it after a `(`: parameters and a return type that the parser allows
+and that lex back. -/
+theorem localArrowRest_gives {T : Edition} {s s' : ParseState} {ps : List Param} {rt : Option TypeExpr}
+    {first : Token} {r : List Token} (hR : Ready s) (hT : s.target = T) (hs : s.rest = first :: r)
+    (hp : first.isPunct "(" = true) (h : Parse.localArrowRest s = .ok (some (ps, rt)) s') :
+    Ready s' ∧ Kept s s' ∧ (∀ p ∈ ps, p.wf = true) ∧ (∀ p ∈ ps, WordsOK T p.words) ∧
+      (∀ t ∈ rt, t.wf = true) ∧ (∀ t, rt = some t → WordsOK T t.words) := by
+  simp only [Parse.localArrowRest] at h
+  rw [Parse.bind_ok] at h; obtain ⟨ps', s₁, hps, h⟩ := h
+  obtain ⟨hR₁, hK₁, -, -, -, hpw, hpok⟩ := parseArrowParams_gives hR hT hs hps
+  rw [hp] at hpok
+  have hpok' : ∀ p ∈ ps', WordsOK T p.words := fun p hp' w hw =>
+    hpok w (by
+      simp only [arrowParams, enclose, List.mem_cons, List.mem_append]
+      exact .inl (.inr (mem_separated (List.mem_map.mpr ⟨p, hp', rfl⟩) hw)))
+  have hT₁ : s₁.target = T := hK₁.target_eq.trans hT
+  -- After the return type, if any: `=>`, then a `{`.
+  have tail : ∀ (rt' : Option TypeExpr) (s₂ : ParseState), Ready s₂ → Kept s s₂ →
+      (Parse.expectPunct "=>" >>= fun arrow =>
+        if arrow.newlineBefore = true then pure none else do
+          let t ← Parse.peek
+          if t.isPunct "{" = true then pure (some (ps', rt')) else pure none) s₂ = .ok (some (ps, rt)) s' →
+      Ready s' ∧ Kept s s' ∧ ps = ps' ∧ rt = rt' := by
+    intro rt' s₂ hR₂ hK₂ h
+    rw [Parse.bind_ok] at h; obtain ⟨arrow, s₃, harr, h⟩ := h
+    obtain ⟨_, r₃, _, rfl, hR₃⟩ := expectPunct_inv hR₂ harr
+    by_cases hn : arrow.newlineBefore = true
+    · rw [if_pos hn] at h; simp at h
+    rw [if_neg hn] at h
+    obtain ⟨z, r₄, hs₄⟩ := hR₃.cons
+    rw [Parse.bind_eq (Parse.peek_eq hs₄)] at h
+    by_cases hb : z.isPunct "{" = true
+    · rw [if_pos hb] at h
+      simp only [Parse.pure_ok, Option.some.injEq, Prod.mk.injEq] at h
+      obtain ⟨⟨rfl, rfl⟩, rfl⟩ := h
+      exact ⟨hR₃, hK₂.trans (Kept.past _ _ _), rfl, rfl⟩
+    · rw [if_neg hb] at h; simp at h
+  obtain ⟨z, r₂, hs₂⟩ := hR₁.cons
+  rw [Parse.bind_eq (Parse.peek_eq hs₂)] at h
+  by_cases hcol : z.isPunct ":" = true
+  · have hzne : z.kind ≠ .eof := by simp [Token.isPunct] at hcol; rw [hcol]; simp
+    rw [if_pos hcol, Parse.bind_eq (Parse.discard_eq (advance_past hR₁ hs₂ hzne)), Parse.bind_eq (Parse.budget_eq _),
+      Parse.bind_ok] at h
+    obtain ⟨ty, s₃, hty, h⟩ := h
+    obtain ⟨htwo, hR₃, hK₃⟩ := (types_give T _).1 _ _ _ (hR₁.past hs₂ (hR₁.more hs₂ hzne)) hT₁ hty
+    rw [Parse.pure_bind] at h
+    obtain ⟨hR', hK', rfl, rfl⟩ := tail _ _ hR₃ (hK₁.trans ((Kept.past _ _ _).trans hK₃)) h
+    exact ⟨hR', hK', fun p hp => (hpw p hp).1, hpok', fun t ht => by simp at ht; subst ht; simpa using both_left htwo,
+      fun t ht => by simp at ht; subst ht; exact both_right htwo⟩
+  · rw [if_neg hcol, Parse.pure_bind] at h
+    obtain ⟨hR', hK', rfl, rfl⟩ := tail _ _ hR₁ hK₁ h
+    exact ⟨hR', hK', fun p hp => (hpw p hp).1, hpok', fun t ht => by simp at ht, fun t ht => by simp at ht⟩
+
+/-- The head of a local arrow function, as `localArrowHeadTry` reads it: in
+a function, a name that the parser allows and that lexes back, and what
+`localArrowRest` gives. -/
+theorem localArrowHeadTry_gives {T : Edition} {s s' : ParseState} {name : String} {ps : List Param}
+    {rt : Option TypeExpr} {x : Token} {r : List Token} (hR : Ready s) (hT : s.target = T) (hs : s.rest = x :: r)
+    (hx : x.kind ≠ .eof) (h : Parse.localArrowHeadTry s = .ok (some (name, ps, rt)) s') :
+    Ready s' ∧ Kept s s' ∧ s.inFunction = true ∧ exprName name = true ∧ Word.ok T (identWord name) = true ∧
+      (∀ p ∈ ps, p.wf = true) ∧ (∀ p ∈ ps, WordsOK T p.words) ∧
+      (∀ t ∈ rt, t.wf = true) ∧ (∀ t, rt = some t → WordsOK T t.words) := by
+  simp only [Parse.localArrowHeadTry] at h
+  have hg : (get : ParseM ParseState) s = .ok s s := rfl
+  rw [Parse.bind_eq hg] at h
+  by_cases hf : s.inFunction = true
+  rotate_left
+  · rw [if_neg hf] at h; simp at h
+  rw [if_pos hf, Parse.pure_bind, Parse.bind_eq (advance_past hR hs hx)] at h
+  have hR₁ := hR.past hs (hR.more hs hx)
+  by_cases hk : x.isKeyword "const" = true
+  rotate_left
+  · rw [if_neg hk] at h; simp at h
+  rw [if_pos hk, Parse.pure_bind, Parse.bind_ok] at h
+  obtain ⟨name', s₂, hn, h⟩ := h
+  have hT₁ : (past s x r).target = T := hT
+  have hnok := readName_words hR₁ hT₁ hn
+  obtain ⟨tn, r₂, _, hnr, _, rfl, hR₂⟩ := readName_inv hR₁ hn
+  obtain ⟨z, r₃, hs₃⟩ := hR₂.cons
+  rw [Parse.bind_eq (Parse.peek_eq hs₃)] at h
+  by_cases he : z.isPunct "=" = true
+  rotate_left
+  · rw [if_neg he] at h; simp at h
+  rw [if_pos he, Parse.pure_bind, Parse.bind_ok] at h
+  obtain ⟨_, s₄, hadv, h⟩ := h
+  obtain ⟨hR₄, hK₄⟩ := discard_advance_ready hR₂ hadv
+  obtain ⟨y, r₄, hs₄⟩ := hR₄.cons
+  rw [Parse.bind_eq (Parse.peek_eq hs₄)] at h
+  have hsa : Parse.startsArrow s₄ = .ok (Parse.arrowStart ((s₄.rest.take 4).map (·.kind))) s₄ := by
+    simp [Parse.startsArrow, get, getThe, MonadStateOf.get, EStateM.get, bind, EStateM.bind, pure, EStateM.pure]
+  rw [Parse.bind_eq hsa] at h
+  by_cases hst : (y.isPunct "(" && Parse.arrowStart ((s₄.rest.take 4).map (·.kind))) = true
+  rotate_left
+  · rw [if_neg hst] at h; simp at h
+  rw [if_pos hst, Parse.pure_bind, Parse.bind_ok] at h
+  obtain ⟨res, s₅, hrest, h⟩ := h
+  cases res with
+  | none => simp at h
+  | some pr =>
+  obtain ⟨ps', rt'⟩ := pr
+  simp only [Parse.pure_ok, Option.some.injEq, Prod.mk.injEq] at h
+  obtain ⟨⟨rfl, rfl, rfl⟩, rfl⟩ := h
+  simp only [Bool.and_eq_true] at hst
+  have hK₄' : Kept s s₄ := (Kept.past _ _ _).trans ((Kept.past _ _ _).trans hK₄)
+  obtain ⟨hR₅, hK₅, hpw, hpok, hrw, hrok⟩ :=
+    localArrowRest_gives hR₄ (hK₄'.target_eq.trans hT) hs₄ hst.1 hrest
+  exact ⟨hR₅, hK₄'.trans hK₅, hf, by simpa [exprName] using hnr, hnok, hpw, hpok, hrw, hrok⟩
+
+/-- A `const` or `let` statement that does not destructure: a declaration of
+a variable, or a local function written as an arrow function. -/
+theorem parseDeclStatement_gives {T : Edition} {f : Nat} (hBlk : GivesS T (Parse.parseBlock f))
+    {s s' : ParseState} {st : Stmt} {x : Token} {r : List Token} (hR : Ready s) (hT : s.target = T)
+    (hs : s.rest = x :: r) (hk : x.kind = .keyword "const" ∨ x.kind = .ident "let")
+    (h : Parse.parseDeclStatement (Parse.parseBlock f) x.span.start s = .ok st s') :
+    Ready s' ∧ Kept s s' ∧ st.wf T s.inFunction (s.loopDepth != 0) = true ∧
+      (st.openIf = true → ∀ u ∈ s'.rest.head?, u.kind ≠ .keyword "else") ∧ StmtOK T st := by
+  have hxne : x.kind ≠ .eof := by rcases hk with hk | hk <;> rw [hk] <;> simp
+  simp only [Parse.parseDeclStatement] at h
+  rw [Parse.bind_ok] at h; obtain ⟨res, s₁, hh, h⟩ := h
+  simp only [Parse.localArrowHead] at hh
+  cases res with
+  | none =>
+    have hs₁ : s₁ = s := by split at hh <;> simp_all
+    subst hs₁
+    rw [Parse.bind_ok] at h; obtain ⟨d, s₂, hd, h⟩ := h
+    obtain ⟨hR₂, hK₂, hdw, hdok⟩ := parseVarDecl_inv hR hT hs hxne hd
+    rw [Parse.bind_eq (Parse.spanFrom_eq _ _)] at h
+    simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h
+    exact ⟨hR₂, hK₂, by simpa [Stmt.wf] using hdw, by simp [Stmt.openIf], StmtOK.varDecl hdok⟩
+  | some hd =>
+    obtain ⟨name, ps, rt⟩ := hd
+    have htry : Parse.localArrowHeadTry s = .ok (some (name, ps, rt)) s₁ := by
+      split at hh <;> simp_all
+    obtain ⟨hR₁, hK₁, hfn, hname, hnok, hpw, hpok, hrw, hrok⟩ := localArrowHeadTry_gives hR hT hs hxne htry
+    rw [Parse.bind_ok] at h; obtain ⟨body, s₂, hb, h⟩ := h
+    obtain ⟨s₂', hb', rfl⟩ := inFunctionBody_inv hb
+    have hR₁' : Ready { s₁ with inFunction := true, loopDepth := 0 } := ⟨hR₁.1, hR₁.2.1, hR₁.2.2.1, hR₁.2.2.2⟩
+    obtain ⟨hR₂, hK₂, hbw, _, _, hbok⟩ := hBlk _ _ _ hR₁' (by simp [hK₁.target_eq, hT]) hb'
+    have hR₂' : Ready { s₂' with inFunction := s₁.inFunction, loopDepth := s₁.loopDepth } :=
+      ⟨hR₂.1, hR₂.2.1, hR₂.2.2.1, hR₂.2.2.2⟩
+    rw [Parse.bind_ok] at h; obtain ⟨_, s₃, he, h⟩ := h
+    obtain ⟨hR₃, hK₃⟩ := endStatement_inv hR₂' he
+    rw [Parse.bind_eq (Parse.spanFrom_eq _ _)] at h
+    simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h
+    have hK₂' : Kept s₁ { s₂' with inFunction := s₁.inFunction, loopDepth := s₁.loopDepth } :=
+      ⟨by simp [hK₂.eof_eq], by simp, by simp, by simp [hK₂.target_eq]⟩
+    refine ⟨hR₃, hK₁.trans (hK₂'.trans hK₃), ?_, by simp [Stmt.openIf],
+      StmtOK.funDecl hnok WordsOK.nil hpok hrok hbok⟩
+    simp only [Stmt.wf, Bool.and_eq_true, List.all_eq_true]
+    refine ⟨⟨⟨⟨⟨⟨hfn, hname⟩, by simp⟩, hpw⟩, ?_⟩, parseBlock_block hb'⟩, by simpa using hbw⟩
+    cases rt with
+    | none => rfl
+    | some t => exact hrw t rfl
+
 theorem parseStatement_gives {T : Edition} {f : Nat} (hBlk : GivesS T (Parse.parseBlock f))
     (hBr : GivesB T (Parse.parseBranch f)) (hFor : GivesFor T (Parse.parseForOf f))
     (hCnt : GivesFor T (Parse.parseFor f)) (hCl : GivesC T (Parse.parseClause f))
@@ -4409,8 +4601,7 @@ theorem parseStatement_gives {T : Edition} {f : Nat} (hBlk : GivesS T (Parse.par
   -- of the `match` gives it.
   have hdecl : (x.kind = .keyword "const" ∨ x.kind = .ident "let") →
       (Parse.peekAt 1 >>= fun t => if t.isPunct "[" = true then Parse.parseDestructure x.span.start else
-        (Parse.parseVarDecl >>= fun decl => Parse.spanFrom x.span.start >>= fun sp => pure (Stmt.varDecl sp decl))) s =
-        .ok st s' →
+        Parse.parseDeclStatement (Parse.parseBlock f) x.span.start) s = .ok st s' →
       Ready s' ∧ Kept s s' ∧ st.wf T s.inFunction (s.loopDepth != 0) = true ∧
         (st.openIf = true → ∀ u ∈ s'.rest.head?, u.kind ≠ .keyword "else") ∧
         (st.isDecl = true → ∀ x ∈ s.rest.head?,
@@ -4427,12 +4618,8 @@ theorem parseStatement_gives {T : Edition} {f : Nat} (hBlk : GivesS T (Parse.par
       obtain ⟨hR₁, hK₁, hw, ho, hok⟩ := parseDestructure_gives hR hT hs hxne h
       exact ⟨hR₁, hK₁, hw, by simp [ho], fun _ => hfirst, hok⟩
     rw [if_neg hb] at h
-    rw [Parse.bind_ok] at h; obtain ⟨d, s₁, hd, h⟩ := h
-    obtain ⟨hR₁, hK₁, hdw, hdok⟩ := parseVarDecl_inv hR hT hs (by rcases hk with hk | hk <;> rw [hk] <;> simp) hd
-    rw [Parse.bind_eq (Parse.spanFrom_eq _ _)] at h
-    simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h
-    exact ⟨hR₁, hK₁, by simpa [Stmt.wf] using hdw, by simp [Stmt.openIf], fun _ => hfirst,
-      StmtOK.varDecl hdok⟩
+    obtain ⟨hR₁, hK₁, hw, ho, hok⟩ := parseDeclStatement_gives hBlk hR hT hs hk h
+    exact ⟨hR₁, hK₁, hw, ho, fun _ => hfirst, hok⟩
   generalize hk : x.kind = k at h
   cases k with
   | punct p =>
@@ -4914,21 +5101,6 @@ theorem parseEnumMember_wf {T : Edition} :
     simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h
     exact ⟨hR₃, hK, EnumMember.wordsOK _ hnmok hvok⟩
 
-/-- `parseBlock` gives a block. -/
-theorem parseBlock_block {n : Nat} {s s' : ParseState} {st : Stmt} (h : Parse.parseBlock n s = .ok st s') :
-    st.isBlock = true := by
-  cases n with
-  | zero => simp only [Parse.parseBlock] at h; exact absurd h (outOfFuel_ne_ok _ _ _)
-  | succ m =>
-    simp only [Parse.parseBlock] at h
-    rw [Parse.bind_ok] at h; obtain ⟨_, _, _, h⟩ := h
-    rw [Parse.bind_ok] at h; obtain ⟨_, _, _, h⟩ := h
-    rw [Parse.bind_ok] at h; obtain ⟨_, _, _, h⟩ := h
-    rw [Parse.bind_ok] at h; obtain ⟨_, _, _, h⟩ := h
-    rw [Parse.bind_ok] at h; obtain ⟨_, _, _, h⟩ := h
-    simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h
-    rfl
-
 /-- What a parser of declarations gives at the top of a module, outside every
 function and loop: a well-formed declaration. -/
 def GivesD (T : Edition) (p : ParseM Decl) : Prop :=
@@ -5011,18 +5183,6 @@ theorem parseTypeParams_wf {T : Edition} {s s' : ParseState} {tps : List String}
   · simp only [Parse.pure_ok] at h
     obtain ⟨rfl, rfl⟩ := h
     exact ⟨hR, Kept.refl _, by simp, WordsOK.nil⟩
-
-theorem inFunctionBody_inv {α : Type} {body : ParseM α} {s s' : ParseState} {a : α}
-    (h : Parse.inFunctionBody body s = .ok a s') :
-    ∃ s₁, body { s with inFunction := true, loopDepth := 0 } = .ok a s₁ ∧
-      s' = { s₁ with inFunction := s.inFunction, loopDepth := s.loopDepth } := by
-  simp only [Parse.inFunctionBody] at h
-  have hg : (get : ParseM ParseState) s = .ok s s := rfl
-  rw [Parse.bind_eq hg, Parse.bind_eq (Parse.modify_eq _ _), Parse.bind_ok] at h
-  obtain ⟨a', s₁, hb, h⟩ := h
-  rw [Parse.bind_eq (Parse.modify_eq _ _)] at h
-  simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h
-  exact ⟨s₁, hb, rfl⟩
 
 /-- The head of a function declaration: a name, type parameters and
 parameters that the parser allows and that lex back, and a return type. -/

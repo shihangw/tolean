@@ -60,7 +60,7 @@ exact. A construct leaves these tables when Tolean translates it, and the
 | TypeScript | Lean | Refused |
 |---|---|---|
 | An arrow function passed to a function of the program, which reads only `const` values and parameters | `fun` | A callback that changes a variable outside itself |
-| A local function or arrow function stored in a `const` and called later, which changes `let` variables of the enclosing function | A Lean function that takes those variables and returns their new values. The translator lifts it out and threads the variables through each call. | A local function that escapes: one that is returned, stored in a field or passed on |
+| A local function that returns a value and also changes `let` variables of the enclosing function | A Lean function that returns the value and the new values of those variables, which the call binds again | A `return` before the last statement of such a function |
 | A function-typed field or parameter, such as a comparator in an options object | A field of a function type | A function value that changes state when it is called |
 | A destructured parameter, such as `{ a, b }: Options` | A pattern on the structure | Defaults inside the pattern |
 | A default parameter value | `Option` with a default at the call | A default that reads another parameter |
@@ -223,8 +223,6 @@ leaves a gap.
 6. **P0.** Errors: `throw` in loop bodies and in branches that change
    locals, calls that can throw inside larger expressions, and declared error
    classes.
-7. **P0.** Local functions that change variables of the enclosing function, by
-   lifting them out and threading the variables through each call.
 8. **P0.** The borrow for a map that a caller passes in.
 9. **P1.** Strings: template literals, the string methods and arguments in
    the table above, iteration by code point, and the opaque `JSON.stringify`.
@@ -234,10 +232,12 @@ leaves a gap.
 12. **P1.** The new number and `bigint` operations, and the `Date` methods.
 13. **P2.** Classes with `readonly` fields and methods that do not change
     `this`.
+14. **P1.** Local functions: one that returns a value and changes variables
+    of the enclosing function, calls between local functions, and
+    certificates for files that have local functions.
 
-Steps 2 and 4 cover most of the code in the survey. Steps 7 and 8 matter
-most for proofs, because a fold over events keeps its state in local
-variables and in maps.
+Steps 2 and 4 cover most of the code in the survey. Step 8 matters most for
+proofs, because a fold over events keeps much of its state in maps.
 
 ## Open questions
 

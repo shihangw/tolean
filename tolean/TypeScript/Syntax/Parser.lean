@@ -1000,6 +1000,61 @@ def parseLocalFunction (parseBody : ParseM Stmt) : ParseM Stmt := do
   let body ← inFunctionBody parseBody
   return .funDecl (← spanFrom t.span.start) name typeParams params returnType body
 
+/-- The rest of the head of a local arrow function, after `=`: the
+parameters, the return type and `=>`, when a `{` comes next. It reads what
+`parseArrow` reads up to the `{`, which `parseArrow` refuses, so the two
+never both succeed. -/
+def localArrowRest : ParseM (Option (List Param × Option TypeExpr)) := do
+  let params ← parseArrowParams
+  let mut returnType := none
+  if (← peek).isPunct ":" then
+    discard advance
+    returnType := some (← parseType (← budget))
+  let arrow ← expectPunct "=>"
+  if arrow.newlineBefore then return none
+  unless (← peek).isPunct "{" do return none
+  return some (params, returnType)
+
+/-- The head of `const name = (params): T => {`, an arrow function with a
+block for its body in a `const` in the body of a function: the name, the
+parameters and the return type. It reads up to the `{`, and it gives
+nothing when the tokens ahead are anything else. -/
+def localArrowHeadTry : ParseM (Option (String × List Param × Option TypeExpr)) := do
+  unless (← get).inFunction do return none
+  let t ← advance
+  unless t.isKeyword "const" do return none
+  let name ← readName
+  unless (← peek).isPunct "=" do return none
+  discard advance
+  unless (← peek).isPunct "(" && (← startsArrow) do return none
+  match ← localArrowRest with
+  | some (params, returnType) => return some (name, params, returnType)
+  | none => return none
+
+/-- A local function written as `const name = (params): T => { … }`
+(ECMA-262 §15.3): its head, as `localArrowHeadTry` reads it. Otherwise it
+gives nothing and leaves the state as it was, so that the statement reads as
+a declaration of a variable, with the errors of one. -/
+def localArrowHead : ParseM (Option (String × List Param × Option TypeExpr)) := fun s =>
+  match localArrowHeadTry s with
+  | .ok (some h) s' => .ok (some h) s'
+  | _ => .ok none s
+
+/-- A `const` or `let` statement that does not destructure, from `start`:
+a declaration of a variable, or a local function written as
+`const g = (x: T): R => { … }`, whose body `parseBody` reads. The local
+function binds `g` where it stands, as the model binds a function
+declaration, so its tree is a `funDecl`. -/
+def parseDeclStatement (parseBody : ParseM Stmt) (start : Pos) : ParseM Stmt := do
+  match ← localArrowHead with
+  | some (name, params, returnType) =>
+    let body ← inFunctionBody parseBody
+    endStatement
+    return .funDecl (← spanFrom start) name [] params returnType body
+  | none =>
+    let decl ← parseVarDecl
+    return .varDecl (← spanFrom start) decl
+
 /-- Statements that JavaScript does not allow without a block around them, in
 the body of `if`, `for` and `while`. -/
 def refuseDeclaration (t : Token) : ParseM Unit := do
@@ -1022,8 +1077,7 @@ def parseStatement (fuel : Nat) : ParseM Stmt := do
   | .keyword "const" | .ident "let" =>
     if (← peekAt 1).isPunct "[" then parseDestructure start
     else
-      let decl ← parseVarDecl
-      return .varDecl (← spanFrom start) decl
+      parseDeclStatement (parseBlock fuel) start
   | .keyword "if" =>
     discard advance
     let _ ← expectPunct "("

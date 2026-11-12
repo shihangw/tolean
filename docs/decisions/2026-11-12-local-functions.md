@@ -47,9 +47,28 @@ with less fuel than the statement that calls it. `stmts_sound` therefore
 holds for every fuel at which calls agree at that fuel and below, and
 `calls_agree` proves that agreement by strong induction on the fuel.
 
+## An arrow function in a `const` has the same tree
+
+`const g = (x: T): R => { … }` in the body of a function is a local function
+too. The parser gives it the tree of `function g(x: T): R { … }`, a
+`Stmt.funDecl`, so the interpreter, the translator and their proofs need
+nothing new. The two differ in JavaScript only before the statement: a
+declaration is hoisted to the top of its block, and a `const` is in its
+temporal dead zone there. The interpreter binds the name where the statement
+stands, and Tolean refuses a call before it, so they mean the same wherever
+Tolean accepts them.
+
+The parser looks for the arrow form before it reads a declaration of a
+variable. It reads `const g = (`, the parameters, a return type if there is
+one, `=>` and then a `{`. If any of them is missing, it goes back to where
+it started and reads a declaration. `parseArrow` refuses the `{` that the
+check looks for, so the check never finds one where a declaration reads. The
+round-trip proof in `Syntax/RoundTripStmt.lean` (`localArrowHead_decl`) uses
+that fact, so the proof of a declaration needs only one more step.
+
 ## Left for later
 
 A local function that returns a value and also changes a variable of the
-function around it, and an arrow function stored in a `const`, are the next
-steps of `docs/plans/pure-typescript.md`. Recursion, calls between local
-functions and certificates for them come after those.
+function around it is step 14 of `docs/plans/pure-typescript.md`, with calls
+between local functions and certificates for them. The interpreter keeps no
+variables with a `return`, so such a function needs a new path in it.
