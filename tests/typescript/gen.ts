@@ -73,8 +73,9 @@ export class Gen {
   private functions: Array<{ name: string; params: Array<Ty>; ret: Ty }> = [];
   private counter = 0;
   /** The program sorts by a `number` key somewhere. Such a sort is consistent
-   * only when no key is `NaN`, so the interpreter gives it no value on other
-   * arrays, even where the translator accepts it. */
+   * only when no key is `NaN`, and a difference only when every key is
+   * finite, so the interpreter gives it no value on other arrays, even where
+   * the translator accepts it. */
   sortsByNumber = false;
 
   constructor(seed: number) {
@@ -324,7 +325,8 @@ export class Gen {
   }
 
   /** `toSorted`, or `sort` on a copy, of the array `recv`, with a comparator.
-   * A comparator that compares keys is consistent unless a key is `NaN`, and
+   * A comparator that compares keys is consistent unless a key is `NaN`, or
+   * infinite in a difference, and
    * any other one is rarely consistent, so then the interpreter gives no
    * value and Node is not compared. */
   private sortCall(recv: { name: string; elem: Ty }, vars: ReadonlyArray<Var>, depth: number): string {

@@ -17,9 +17,10 @@
  *   same value. An `Error` compares by its class and its message.
  * - When the translator accepts the program and the interpreter gives no
  *   value, Node throws. A program that sorts by a `number` key is the
- *   exception: its comparator is consistent only when no key is `NaN`, so the
- *   interpreter gives no value on other arrays, where Node returns one. The
- *   translation makes no claim there.
+ *   exception: its comparator is consistent only when no key is `NaN`, and a
+ *   difference only when every key is finite, so the interpreter gives no
+ *   value on other arrays, where Node returns one. The translation makes no
+ *   claim there.
  *
  * The parser accepts some programs that Node does not load, because they break
  * an early error rule of ECMA-262, such as a name declared twice in a block.
@@ -315,6 +316,22 @@ test('the interpreter binds a parameter that a call leaves out to undefined', as
 
 // An assignment to a `const` throws a `TypeError` in Node, so the interpreter
 // must give no value for it, whatever the operator.
+// A difference of keys is consistent only when every key is finite. The spec
+// compares each element with itself too, and `Infinity - Infinity` is `NaN`,
+// so one infinite key is enough to leave the order to the engine.
+test('the interpreter sorts by a difference only when every key is finite', () => {
+  const source = 'export function f(xs: ReadonlyArray<number>): number[] { return xs.toSorted((a, b) => a - b); }';
+  const arrays = [[2, 1], [Infinity], [Infinity, 2], [-Infinity, 2], [NaN, 1]];
+  const input = { programs: [{ source, calls: arrays.map((xs) => ({ function: 'f', args: [xs.map(encode)] })) }] };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const [lean] = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  expect(lean?.parsed).toBe(true);
+  if (lean === undefined || !lean.parsed) return;
+  expect(lean.results[0]).toEqual({ value: [1, 2].map(encode) });
+  expect(lean.results.slice(1)).toEqual([null, null, null, null]);
+});
+
 test('the interpreter gives no value where an assignment to a const throws', async () => {
   const sources = [
     'export function f(): bigint | null { const x: bigint | null = null; x ??= 1n; return x; }',

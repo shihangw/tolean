@@ -2437,8 +2437,10 @@ def translateReduce (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (
 it may sort only an array literal, which nothing else holds. The comparator
 must compare keys (`keyComparator?`) that are bigints, strings or numbers.
 Then it is consistent for every array whose number keys are not `NaN`, and
-whose keys of a difference are not two equal infinities. Elsewhere the
-interpreter gives no value, and the translation makes no claim. -/
+whose keys of a difference are finite. The spec also compares each element
+with itself, and `Infinity - Infinity` is `NaN`, so one infinite key of a
+difference is enough to make it inconsistent. Elsewhere the interpreter
+gives no value, and the translation makes no claim. -/
 def translateSort (fuel : Nat) (env : Env) (s : Span) (recv : Expr) (method : String)
     (args : List Expr) : TM Code := do
   let fuel + 1 := fuel | tooDeep
