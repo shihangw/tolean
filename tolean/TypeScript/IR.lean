@@ -94,6 +94,10 @@ inductive ExprExt where
   | numberNe
   /-- `(JSNumber.isNaN a)`, or `(JSNumber.toSafeInt a).isSome`. -/
   | numberTest (test : NumberTest)
+  /-- `(JSNumber.sameValue a b)`: `Object.is(a, b)` on numbers. -/
+  | numberSameValue
+  /-- `(JSNumber.ofInt a)`: `Number(a)` on a bigint. -/
+  | numberOfInt
   /-- `(JSNumber.floor a)`, or another function on one number: `Math.floor(a)`. -/
   | numberFn (f : NumberFn)
   /-- `(JSNumber.minimum (N := N) [a, b])`, or `JSNumber.maximum` when `isMax`,
@@ -323,6 +327,8 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
   | .numberTest .isFinite, [a] => s!"({js}.isFinite {argument a})"
   | .numberTest .isInteger, [a] => s!"({js}.isInteger {argument a})"
   | .numberFn f, [a] => s!"({js}.{f.name} {argument a})"
+  | .numberSameValue, [a, b] => s!"({js}.sameValue {argument a} {argument b})"
+  | .numberOfInt, [a] => s!"({js}.ofInt (N := {names.typeParam}) {argument a})"
   | .numberFold isMax, args =>
     s!"({js}.{if isMax then "maximum" else "minimum"} (N := {names.typeParam}) [{", ".intercalate args}])"
   | .bigintOp op, [a, b] => s!"({leanName names "JSBigInt"}.{op.name} {argument a} {argument b})"

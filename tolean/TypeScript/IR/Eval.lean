@@ -112,6 +112,8 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   | .numberNe, [.num a, .num b] => some (.bool !(JSNumber.eq a b))
   | .numberTest test, [.num a] => some (.bool (test.apply a))
   | .numberFn f, [.num a] => some (.num (f.apply a))
+  | .numberSameValue, [.num a, .num b] => some (.bool (JSNumber.sameValue a b))
+  | .numberOfInt, [.int i] => some (.num (JSNumber.ofInt i))
   | .numberFold isMax, vs =>
     (Eval.numbers? vs).map fun xs => .num (if isMax then JSNumber.maximum xs else JSNumber.minimum xs)
   | .bigintOp op, [.int a, .int b] => some (.int (op.apply a b))

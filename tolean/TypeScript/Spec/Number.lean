@@ -70,6 +70,12 @@ class JSNumber (N : Type) where
   ToInt32 (§7.1.6) starts from. A double is a fraction with a power of two
   below it, so this integer is exact, however large `x` is. -/
   toInt : N → Option Int
+  /-- `x` is `-0`, which `===` does not tell from `+0`, but `Object.is` does. -/
+  isNegZero : N → Bool
+  /-- `Number(b)` on a bigint `b` (§21.1.1.1): the Number value for `b`
+  (§6.1.6.1), the double nearest to it, with ties to the one whose last bit
+  is zero, and `±Infinity` beyond the largest double. -/
+  ofInt : Int → N
   /-- `a < b` -/
   lt : N → N → Bool
   /-- `a <= b` -/
@@ -151,6 +157,12 @@ of `a`, shifted right with zeros. -/
 def JSNumber.unsignedShiftRight {N : Type} [JSNumber N] (a b : N) : N :=
   ofSafeInt (toUint32 a >>> (toUint32 b % 32).toNat)
 
+/-- Number::sameValue (§6.1.6.1.14), which `Object.is` uses (SameValue,
+§7.2.10): `===`, except that `NaN` is the same as `NaN`, and `+0` is not the
+same as `-0`. -/
+def JSNumber.sameValue {N : Type} [JSNumber N] (a b : N) : Bool :=
+  (isNaN a && isNaN b) || (eq a b && isNegZero a == isNegZero b)
+
 /-- SameValueZero (ECMA-262 §7.2.11) on numbers: `===`, except that `NaN` is
 the same as `NaN`. `Array.prototype.includes` compares with it. -/
 def JSNumber.sameValueZero {N : Type} [JSNumber N] (a b : N) : Bool :=
@@ -229,6 +241,7 @@ class SafeIntLaws (N : Type) [JSNumber N] : Prop where
   max : ∀ {a b : N} {i j : Int}, toSafeInt a = some i → toSafeInt b = some j →
     toSafeInt (max a b) = some (Max.max i j)
   toInt : ∀ {a : N} {i : Int}, toSafeInt a = some i → toInt a = some i
+  ofInt : ∀ {i : Int}, InRange i → toSafeInt (ofInt (N := N) i) = some i
   lt : ∀ {a b : N} {i j : Int}, toSafeInt a = some i → toSafeInt b = some j →
     lt a b = decide (i < j)
   le : ∀ {a b : N} {i j : Int}, toSafeInt a = some i → toSafeInt b = some j →
@@ -255,6 +268,9 @@ class SpecialValueLaws (N : Type) [JSNumber N] : Prop where
   nan_min : ∀ {a b : N}, isNaN a = true → isNaN (min a b) = true ∧ isNaN (min b a) = true
   nan_max : ∀ {a b : N}, isNaN a = true → isNaN (max a b) = true ∧ isNaN (max b a) = true
   toInt_not_finite : ∀ {a : N}, isFinite a = false → toInt a = none
+  negZero_eq_zero : ∀ {a : N}, isNegZero a = true → eq a (ofSafeInt 0) = true
+  negZero_ofSafeInt : ∀ {i : Int}, isNegZero (ofSafeInt (N := N) i) = false
+  nan_not_negZero : ∀ {a : N}, isNaN a = true → isNegZero a = false
   isNaN_nan : isNaN (nan (N := N)) = true
   isNaN_posInf : isNaN (posInf (N := N)) = false
   isNaN_negInf : isNaN (negInf (N := N)) = false

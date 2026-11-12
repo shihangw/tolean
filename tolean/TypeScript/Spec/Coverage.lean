@@ -282,7 +282,13 @@ def sections : List Section := [
   -- §19 The Global Object {#sec-global-object}
   ⟨"sec-value-properties-of-the-global-object-infinity", "19.1.2", "Infinity", []⟩,
   ⟨"sec-value-properties-of-the-global-object-nan", "19.1.3", "NaN", []⟩,
+  -- §20 Fundamental Objects {#sec-fundamental-objects}
+  ⟨"sec-object.is", "20.1.2.15", "Object.is ( value1, value2 )",
+    [``Proof.eval_objectIs, ``Proof.translateObjectIs_sound, ``Proof.out_numberSameValue,
+    ``Proof.sameValue_of_eqVal]⟩,
   -- §21 Numbers and Dates {#sec-numbers-and-dates}
+  ⟨"sec-number-constructor-number-value", "21.1.1.1", "Number ( value )",
+    [``Proof.translateNumberCall_sound, ``Proof.out_numberOfInt]⟩,
   ⟨"sec-properties-of-the-number-constructor", "21.1.2", "Properties of the Number Constructor",
     [``Proof.out_numberTest, ``isInteger_of_safe]⟩,
   ⟨"sec-function-properties-of-the-math-object", "21.3.2", "Function Properties of the Math Object",
@@ -364,7 +370,9 @@ def numberLaws : List Name := [``SafeIntLaws.add,
     ``SafeIntLaws.min, ``SafeIntLaws.max, ``SpecialValueLaws.nan_div,
     ``SpecialValueLaws.nan_floor, ``SpecialValueLaws.nan_ceil, ``SpecialValueLaws.nan_trunc,
     ``SpecialValueLaws.nan_round, ``SpecialValueLaws.nan_abs, ``SpecialValueLaws.nan_min,
-    ``SpecialValueLaws.nan_max, ``SafeIntLaws.toInt, ``SpecialValueLaws.toInt_not_finite]
+    ``SpecialValueLaws.nan_max, ``SafeIntLaws.toInt, ``SpecialValueLaws.toInt_not_finite,
+    ``SafeIntLaws.ofInt, ``SpecialValueLaws.negZero_eq_zero, ``SpecialValueLaws.negZero_ofSafeInt,
+    ``SpecialValueLaws.nan_not_negZero]
 
 /-- The theorems that are about no section of ECMA-262. -/
 def extras : List Group := [

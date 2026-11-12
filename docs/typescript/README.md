@@ -378,6 +378,9 @@ the file, the line and the reason. It never approximates.
 | `Number.isNaN(x)`, `Number.isFinite(x)`, `Number.isInteger(x)` | `JSNumber.isNaN x`, `JSNumber.isFinite x`, `JSNumber.isInteger x`. `isInteger` holds when `x` is finite and `Math.trunc(x)` is `x`, as ECMA-262 defines it. |
 | `Math.floor(x)`, `Math.ceil(x)`, `Math.trunc(x)`, `Math.round(x)`, `Math.abs(x)` on a `number` | `JSNumber.floor x`, `ceil`, `trunc`, `round`, `abs` |
 | `a & b`, `a \| b`, `a ^ b`, `~a`, `a << b`, `a >> b` and `a >>> b` on numbers | `JSNumber.bitAnd a b` and its relatives (`tolean/TypeScript/Spec/Number.lean`). JS converts each operand with ToInt32, or with ToUint32 for `>>>` and for a shift count, so `x \| 0` is the integer part of `x` modulo 2^32, as a signed 32-bit integer. The model has one new operation for them, `JSNumber.toInt`, the exact integer part of a finite number. Lean defines the rest. |
+| `Object.is(a, b)` on two numbers | `JSNumber.sameValue a b`: `===`, except that `NaN` is the same as `NaN`, and `+0` is not the same as `-0` (SameValue). The model has one new operation for it, `JSNumber.isNegZero`. |
+| `Object.is(a, b)` on two bigints, booleans or strings | `decide (a = b)`, as for `===` |
+| `Number(b)` on a `bigint` | `JSNumber.ofInt (N := N) b`: the double nearest to `b`, with ties to the one whose last bit is zero, and `±Infinity` beyond the largest double. Tolean refuses `Number(v)` on other values, because the model has no ToNumber for them. |
 | `Math.min(a, b, …)`, `Math.max(a, b, …)` on numbers | `JSNumber.minimum (N := N) [a, b, …]` and `JSNumber.maximum`. They fold `Math.min` of two numbers over the list, from `Infinity`, as ECMA-262 does, so `Math.min()` is `Infinity`. Tolean refuses a spread argument. |
 | `NaN`, `Infinity`, `-Infinity` | `JSNumber.nan`, `posInf`, `negInf` |
 | `T \| null`, `null` | `Option T`, `none` |

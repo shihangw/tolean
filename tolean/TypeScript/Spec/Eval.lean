@@ -297,6 +297,22 @@ def sameValueZero : Val N → Val N → Option Bool
   | .num a, .num b => some (JSNumber.sameValueZero a b)
   | a, b => strictEq a b
 
+/-- SameValue (ECMA-262 §7.2.10), which `Object.is` gives: on two numbers,
+`===` except that `NaN` is the same as `NaN` and `+0` is not the same as
+`-0`, and on any other two values, SameValueNonNumber, as for
+`sameValueZero`. -/
+def sameValue : Val N → Val N → Option Bool
+  | .num a, .num b => some (JSNumber.sameValue a b)
+  | a, b => strictEq a b
+
+/-- `Number(v)` (§21.1.1.1) on the value of its one argument: a bigint
+becomes the Number value for it, and a number stays itself. ToNumber of a
+string or a boolean is not modelled. -/
+def numberOf : List (Val N) → Option (Val N)
+  | [.int i] => some (.num (JSNumber.ofInt i))
+  | [.num x] => some (.num x)
+  | _ => none
+
 /-- Whether an element of `items` is the same as `v` by SameValueZero. This
 is the loop of `Array.prototype.includes` (ECMA-262 §23.1.3.16), which
 compares the elements in order and stops at the first that is. -/
@@ -835,6 +851,10 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
   | .call _ (.member _ (.ident _ "Math") f) args => do
     if (env.lookup "Math").isSome then none
     mathCall f (← evalList m fuel env args)
+  -- `Object.is(a, b)` (§20.1.2.15), unless a variable hides `Object`.
+  | .call _ (.member _ (.ident _ "Object") "is") [a, b] => do
+    if (env.lookup "Object").isSome then none
+    return .bool (← sameValue (← eval m fuel env a) (← eval m fuel env b))
   -- `xs.map(x => e)` and the other methods of an array that take a callback
   -- (`Array.prototype.map`, `filter`, `some`, `every` and `find`, ECMA-262
   -- §23.1.3.21, §23.1.3.8, §23.1.3.29, §23.1.3.6 and §23.1.3.9). The callback
@@ -976,6 +996,9 @@ termination_by e => (fuel, sizeOf e, 0)
 def evalCall (m : Scope) (fuel : Nat) (env : Env N) (name : String) (args : List Expr) :
     Option (Except (Val N) (Val N)) := do
   let vs ← evalList m fuel env args
+  -- `Number(b)`, unless a variable hides `Number`. A declaration of the
+  -- module named `Number` would hide it too, and the translator refuses it.
+  if name == "Number" && (env.lookup "Number").isNone then return .ok (← numberOf vs)
   match fuel with
   | 0 => none
   | fuel + 1 =>
