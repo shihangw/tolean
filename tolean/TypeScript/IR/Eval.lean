@@ -53,6 +53,12 @@ def NumberOp.apply : NumberOp → N → N → Val N
   | .sub, a, b => .num (JSNumber.sub a b)
   | .mul, a, b => .num (JSNumber.mul a b)
   | .div, a, b => .num (JSNumber.div a b)
+  | .bitAnd, a, b => .num (JSNumber.bitAnd a b)
+  | .bitOr, a, b => .num (JSNumber.bitOr a b)
+  | .bitXor, a, b => .num (JSNumber.bitXor a b)
+  | .shiftLeft, a, b => .num (JSNumber.shiftLeft a b)
+  | .shiftRight, a, b => .num (JSNumber.shiftRight a b)
+  | .unsignedShiftRight, a, b => .num (JSNumber.unsignedShiftRight a b)
   | .lt, a, b => .bool (JSNumber.lt a b)
   | .le, a, b => .bool (JSNumber.le a b)
   | .eq, a, b => .bool (JSNumber.eq a b)
@@ -68,7 +74,7 @@ def NumberTest.apply : NumberTest → N → Bool
 
 def NumberFn.apply : NumberFn → N → N
   | .floor => JSNumber.floor | .ceil => JSNumber.ceil | .trunc => JSNumber.trunc
-  | .round => JSNumber.round | .abs => JSNumber.abs
+  | .round => JSNumber.round | .abs => JSNumber.abs | .bitNot => JSNumber.bitNot
 
 def BigintOp.apply : BigintOp → Int → Int → Int
   | .bitAnd => JSBigInt.bitAnd | .bitOr => JSBigInt.bitOr | .bitXor => JSBigInt.bitXor

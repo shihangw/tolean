@@ -21,6 +21,7 @@ export tolean.IR (IntOp Order Division Names ImportedFile leanReserved memberNam
 /-- An operation of the abstract number model `JSNumber` on two numbers. -/
 inductive NumberOp where
   | add | sub | mul | div | lt | le | eq
+  | bitAnd | bitOr | bitXor | shiftLeft | shiftRight | unsignedShiftRight
 deriving BEq, Repr, Inhabited, DecidableEq
 
 /-- A constant of the number model. -/
@@ -36,11 +37,12 @@ deriving BEq, Repr, Inhabited, DecidableEq
 /-- A function of the number model on one number: `Math.floor` and its
 relatives. -/
 inductive NumberFn where
-  | floor | ceil | trunc | round | abs
+  | floor | ceil | trunc | round | abs | bitNot
 deriving BEq, Repr, Inhabited, DecidableEq
 
 def NumberFn.name : NumberFn → String
   | .floor => "floor" | .ceil => "ceil" | .trunc => "trunc" | .round => "round" | .abs => "abs"
+  | .bitNot => "bitNot"
 
 /-- An operation of `JSBigInt` on two bigints: `&`, `|`, `^`, `<<` and `>>`. -/
 inductive BigintOp where
@@ -256,7 +258,9 @@ def leanName (names : Names) (name : String) : String :=
 
 def NumberOp.name : NumberOp → String
   | .add => "add" | .sub => "sub" | .mul => "mul" | .div => "div" | .lt => "lt" | .le => "le"
-  | .eq => "eq"
+  | .eq => "eq" | .bitAnd => "bitAnd" | .bitOr => "bitOr" | .bitXor => "bitXor"
+  | .shiftLeft => "shiftLeft" | .shiftRight => "shiftRight"
+  | .unsignedShiftRight => "unsignedShiftRight"
 
 def NumberConstant.name : NumberConstant → String
   | .nan => "nan" | .posInf => "posInf" | .negInf => "negInf"

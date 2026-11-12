@@ -29,6 +29,13 @@ variable [SafeIntLaws N]
     lt a a = false := by
   simp [SafeIntLaws.lt h h]
 
+/-- ToInt32 of a safe integer that a signed 32-bit integer can hold is that
+integer, so `x | 0` leaves it as it is. -/
+theorem toInt32_of_safe {a : N} {i : Int} (h : toSafeInt a = some i)
+    (hlo : -2147483648 ≤ i) (hhi : i < 2147483648) : JSNumber.toInt32 a = i := by
+  simp only [JSNumber.toInt32, SafeIntLaws.toInt h, Option.getD_some, wrapInt32]
+  split <;> omega
+
 end SafeIntegers
 
 section SpecialValues

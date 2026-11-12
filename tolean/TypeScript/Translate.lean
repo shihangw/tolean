@@ -1435,9 +1435,11 @@ def applyOperator (s : Span) (op : BinOp) (r : Expr) (a b : Code) : TM Code := d
     let some k := bigintLiteralNat? r | reject s message
     requireFeature s .bigintBitwise
     return ⟨.ext (.bigintPow k) [a.value], false, .bigint⟩
-  let bitwise (operation : IR.BigintOp) : TM Code := do
+  -- On numbers, the operators work on ToInt32 of each operand (§7.1.6).
+  let bitwise (operation : IR.BigintOp) (numberOp : IR.NumberOp) : TM Code := do
+    if bothNumber then return call numberOp a b .number
     unless bothBigInt do
-      reject s s!"'{op.symbol}' needs two bigints"
+      reject s s!"'{op.symbol}' needs two bigints or two numbers"
     requireFeature s .bigintBitwise
     return ⟨.ext (.bigintOp operation) [a.value, b.value], false, .bigint⟩
   let logical (isAnd : Bool) : TM Code := do
@@ -1454,12 +1456,14 @@ def applyOperator (s : Span) (op : BinOp) (r : Expr) (a b : Code) : TM Code := d
   | .div => if bothNumber then return call .div a b .number else divide .tdiv
   | .mod => divide .tmod
   | .exp => power
-  | .bitAnd => bitwise .bitAnd
-  | .bitOr => bitwise .bitOr
-  | .bitXor => bitwise .bitXor
-  | .shl => bitwise .shiftLeft
-  | .shr => bitwise .shiftRight
-  | .ushr => reject s "'>>>' needs numbers, and JS throws a TypeError for it on bigints"
+  | .bitAnd => bitwise .bitAnd .bitAnd
+  | .bitOr => bitwise .bitOr .bitOr
+  | .bitXor => bitwise .bitXor .bitXor
+  | .shl => bitwise .shiftLeft .shiftLeft
+  | .shr => bitwise .shiftRight .shiftRight
+  | .ushr =>
+    if bothNumber then return call .unsignedShiftRight a b .number
+    else reject s "'>>>' needs two numbers, and JS throws a TypeError for it on bigints"
   | .lt => compare .lt .lt false
   | .le => compare .le .le false
   | .gt => compare .gt .lt true
@@ -2136,7 +2140,8 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
       | .number => return ⟨.numberNeg a.value, false, .number⟩
       | _ => reject s "unsupported unary operator"
     | .bitNot =>
-      unless a.type == .bigint do reject s "'~' needs a bigint"
+      if a.type == .number then return ⟨.ext (.numberFn .bitNot) [a.value], false, .number⟩
+      unless a.type == .bigint do reject s "'~' needs a bigint or a number"
       requireFeature s .bigintBitwise
       return ⟨.ext .bigintNot [a.value], false, .bigint⟩
     | .typeof =>

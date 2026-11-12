@@ -3855,6 +3855,13 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
           obtain ⟨a, s₁, hta, h⟩ := h
           split at h
           · simp at h
+            obtain ⟨rfl, -⟩ := h
+            obtain ⟨n, hn, rfl⟩ := out_numberFn fs fuel hv'
+            rw [eval_value] at hn
+            have := ihE _ _ _ _ _ _ hta ρs ρo _ ha hs hn
+            simp [Eval.eval, this, IR.NumberFn.apply]
+          split at h
+          · simp at h
             obtain ⟨⟨-, -⟩, rfl⟩ := h
             obtain ⟨i, hi, rfl⟩ := out_bigintNot fs fuel hv'
             rw [eval_value] at hi

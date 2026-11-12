@@ -241,7 +241,9 @@ has no `%` on numbers.
 On bigints, `a ** b` throws a `RangeError` when `b` is negative
 (BigInt::exponentiate, §6.1.6.2.3), and `&`, `|`, `^`, `<<` and `>>` are the
 operations of `JSBigInt` (`Spec/BigInt.lean`). `>>>` throws a `TypeError` on
-bigints, so it has no rule. -/
+bigints, so it has no rule there. On numbers, the bitwise operators work on
+ToInt32 and ToUint32 of their operands, as `JSNumber.bitAnd` and its
+relatives do (`Spec/Number.lean`). -/
 def binary : BinOp → Val N → Val N → Option (Val N)
   | .add, .int a, .int b => some (.int (a + b))
   | .add, .str a, .str b => some (.str (a ++ b))
@@ -267,6 +269,12 @@ def binary : BinOp → Val N → Val N → Option (Val N)
   | .sub, .num a, .num b => some (.num (JSNumber.sub a b))
   | .mul, .num a, .num b => some (.num (JSNumber.mul a b))
   | .div, .num a, .num b => some (.num (JSNumber.div a b))
+  | .bitAnd, .num a, .num b => some (.num (JSNumber.bitAnd a b))
+  | .bitOr, .num a, .num b => some (.num (JSNumber.bitOr a b))
+  | .bitXor, .num a, .num b => some (.num (JSNumber.bitXor a b))
+  | .shl, .num a, .num b => some (.num (JSNumber.shiftLeft a b))
+  | .shr, .num a, .num b => some (.num (JSNumber.shiftRight a b))
+  | .ushr, .num a, .num b => some (.num (JSNumber.unsignedShiftRight a b))
   | .lt, .num a, .num b => some (.bool (JSNumber.lt a b))
   | .gt, .num a, .num b => some (.bool (JSNumber.lt b a))
   | .le, .num a, .num b => some (.bool (JSNumber.le a b))
@@ -754,10 +762,12 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     | .int i => some (.int (-i))
     | .num n => some (.num (JSNumber.neg n))
     | _ => none
-  -- `~a` on a bigint is `-a - 1` (BigInt::bitwiseNOT, §6.1.6.2.2).
+  -- `~a` on a bigint is `-a - 1` (BigInt::bitwiseNOT, §6.1.6.2.2), and on a
+  -- number it is that of ToInt32 (Number::bitwiseNOT, §6.1.6.1.2).
   | .unary _ .bitNot arg => do
     match ← eval m fuel env arg with
     | .int i => some (.int (JSBigInt.bitNot i))
+    | .num n => some (.num (JSNumber.bitNot n))
     | _ => none
   -- `&&`, `||` and `??` evaluate their right side only when they need it
   -- (ECMA-262 §13.13.1), and return an operand, not a boolean.
