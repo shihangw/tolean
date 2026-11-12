@@ -301,6 +301,9 @@ def Expr.eval (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
     | .findIndex =>
       return .num (JSNumber.ofSafeInt (((← Expr.evalFindIdx fs fuel ρ param body 0 xs).map Int.ofNat).getD (-1)))
     | .findLast => return (← Expr.evalFind fs fuel ρ param body true xs.reverse).getD .undefined
+    -- A sort calls the comparator on every pair of elements and gives the
+    -- order of `Eval.sortValues`, as the interpreter does.
+    | .sortWith other => return .list (← Eval.sortValues (Expr.evalCompare fs fuel ρ param other body) xs)
   -- `List.foldl` runs the function on each element in order, with the value
   -- so far bound to `acc`, as the callback of `reduce` does.
   | .listFold items init acc param _ body _ => do
@@ -330,6 +333,20 @@ def Expr.evalMap (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ :
   | x :: xs => do
     return (← Expr.eval fs fuel ((param, x) :: ρ) body) :: (← Expr.evalMap fs fuel ρ param body xs)
 termination_by xs => (fuel, sizeOf body, xs.length + 1)
+
+/-- The sign of the comparator `fun param other => body` on `x` and `y`, as
+`Eval.evalCompare` reads it: `undefined` comes after every other value, and
+the comparator must give a number. -/
+def Expr.evalCompare (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : Env N)
+    (param other : String) (body : Expr) (x y : Val N) : Option Ordering :=
+  match x, y with
+  | .undefined, .undefined => some .eq
+  | .undefined, _ => some .gt
+  | _, .undefined => some .lt
+  | _, _ => do
+    let .num v ← Expr.eval fs fuel ((param, x) :: (other, y) :: ρ) body | none
+    JSNumber.compareSign v
+termination_by (fuel, sizeOf body, 1)
 
 /-- `List.mapIdx (fun index param => body)` on `xs`, whose first element is at
 position `start`. The body sees the position as a number. -/

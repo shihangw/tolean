@@ -16,7 +16,11 @@
  * - When the interpreter says that a call throws a value, Node throws the
  *   same value. An `Error` compares by its class and its message.
  * - When the translator accepts the program and the interpreter gives no
- *   value, Node throws.
+ *   value, Node throws. A program that sorts by a `number` key is the
+ *   exception: its comparator is consistent only when no key is `NaN`, and a
+ *   difference only when every key is finite, so the interpreter gives no
+ *   value on other arrays, where Node returns one. The translation makes no
+ *   claim there.
  *
  * The parser accepts some programs that Node does not load, because they break
  * an early error rule of ECMA-262, such as a name declared twice in a block.
@@ -158,7 +162,7 @@ function arbitrary(t: Ty, sig: Signatures): fc.Arbitrary<unknown> {
 }
 
 type Call = { function: string; args: Array<Value> };
-type Program = { seed: number; source: string; calls: Array<Call> };
+type Program = { seed: number; source: string; calls: Array<Call>; sortsByNumber: boolean };
 /** A result is `null` when the interpreter gives no value. */
 type Interpreted =
   | { parsed: false }
@@ -197,7 +201,7 @@ test(`the interpreter agrees with Node ${process.version} on random programs`, a
         .sample(fc.tuple(...f.params.map((p) => arbitrary(p, sig))), { numRuns: callsPerFunction, seed: programSeed * 7 + j })
         .map((args) => ({ function: f.name, args: args.map(encode) })),
     );
-    programs.push({ seed: programSeed, source, calls });
+    programs.push({ seed: programSeed, source, calls, sortsByNumber: gen.sortsByNumber });
   }
 
   // A few hundred programs at a time, so that no pipe holds a large input.
@@ -262,7 +266,7 @@ test(`the interpreter agrees with Node ${process.version} on random programs`, a
         } else if (shown(actual.returns) !== canonical(expected.value)) {
           failures.push(`${where}: the interpreter gives ${canonical(expected.value)}, Node ${shown(actual.returns)}`);
         }
-      } else if (lean.accepted) {
+      } else if (lean.accepted && !program.sortsByNumber) {
         tally.throws++;
         if ('returns' in actual) {
           failures.push(`${where}: the interpreter gives no value, Node ${shown(actual.returns)}`);
@@ -312,6 +316,22 @@ test('the interpreter binds a parameter that a call leaves out to undefined', as
 
 // An assignment to a `const` throws a `TypeError` in Node, so the interpreter
 // must give no value for it, whatever the operator.
+// A difference of keys is consistent only when every key is finite. The spec
+// compares each element with itself too, and `Infinity - Infinity` is `NaN`,
+// so one infinite key is enough to leave the order to the engine.
+test('the interpreter sorts by a difference only when every key is finite', () => {
+  const source = 'export function f(xs: ReadonlyArray<number>): number[] { return xs.toSorted((a, b) => a - b); }';
+  const arrays = [[2, 1], [Infinity], [Infinity, 2], [-Infinity, 2], [NaN, 1]];
+  const input = { programs: [{ source, calls: arrays.map((xs) => ({ function: 'f', args: [xs.map(encode)] })) }] };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const [lean] = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  expect(lean?.parsed).toBe(true);
+  if (lean === undefined || !lean.parsed) return;
+  expect(lean.results[0]).toEqual({ value: [1, 2].map(encode) });
+  expect(lean.results.slice(1)).toEqual([null, null, null, null]);
+});
+
 test('the interpreter gives no value where an assignment to a const throws', async () => {
   const sources = [
     'export function f(): bigint | null { const x: bigint | null = null; x ??= 1n; return x; }',
@@ -441,6 +461,42 @@ test('the interpreter gives no value where a changed collection has another hold
     writeFileSync(path, ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext } }).outputText);
     const mod = (await import(pathToFileURL(path).href)) as { f: (b: boolean) => unknown };
     const value = lean.results[0]?.value;
+    expect(value === undefined ? 'no value' : canonical(value), source).toBe(canonical(encode(mod.f(true))));
+  }
+});
+
+// A map or a set compares number keys with SameValueZero, not `===`: `NaN` is
+// the same key as `NaN`, and `0` the same as `-0`. A new key `-0` is stored as
+// `0`, which a loop over the keys shows. The random programs rarely build these
+// cases, so each one is here, and the interpreter must agree with Node on it.
+test('the interpreter compares number keys of a map or a set with SameValueZero', async () => {
+  const fn = (ret: string, body: string) => `export function f(b: boolean): ${ret} { ${body} }`;
+  const sources = [
+    fn('number', 'const s = new Set<number>(); s.add(NaN); s.add(NaN); return s.size;'),
+    fn('boolean', 'const s = new Set<number>([NaN]); return s.has(NaN);'),
+    fn('number', 'const s = new Set<number>([0, -0]); return s.size;'),
+    fn('boolean', 'const s = new Set<number>(); s.add(-0); return s.has(0);'),
+    fn('number', 'const s = new Set<number>(); s.add(-0); let x = 1; for (const e of s) { x = e; } return x;'),
+    fn('number', 'const s = new Set<number>([NaN, 1]); s.delete(NaN); return s.size;'),
+    fn('bigint', 'const m = new Map<number, bigint>(); m.set(NaN, 1n); m.set(NaN, 2n); return m.get(NaN) ?? 0n;'),
+    fn('bigint', 'const m = new Map<number, bigint>(); m.set(0, 1n); m.set(-0, 2n); return m.get(0) ?? 0n;'),
+    fn('number', 'const m = new Map<number, bigint>([[-0, 1n]]); let x = 1; for (const e of m) { x = e[0]; } return x;'),
+    // The entry keeps the key that it has, so a later `set(-0, v)` leaves `0`.
+    fn('number', 'const m = new Map<number, bigint>(); m.set(0, 1n); m.set(-0, 2n); let x = 1; for (const e of m) { x = e[0]; } return x;'),
+    fn('number', 'const m = new Map<number, bigint>([[NaN, 1n], [2, 2n]]); m.delete(NaN); return m.size;'),
+  ];
+  const input = { programs: sources.map((source) => ({ source, calls: [{ function: 'f', args: [true] }] })) };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const results = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-keys-'));
+  for (const [i, source] of sources.entries()) {
+    const lean = results[i];
+    expect(lean?.accepted, source).toBe(true);
+    const path = join(dir, `case${i}.mjs`);
+    writeFileSync(path, ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext } }).outputText);
+    const mod = (await import(pathToFileURL(path).href)) as { f: (b: boolean) => unknown };
+    const value = lean?.results[0]?.value;
     expect(value === undefined ? 'no value' : canonical(value), source).toBe(canonical(encode(mod.f(true))));
   }
 });
