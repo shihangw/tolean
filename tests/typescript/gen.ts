@@ -191,6 +191,8 @@ export class Gen {
           options.push(
             () => `${this.expr(t, vars, d)} / ${this.expr(t, vars, d)}`,
             () => `Math.${this.pick(['floor', 'ceil', 'trunc', 'round', 'abs'])}(${this.expr(t, vars, d)})`,
+            // The Number value for a bigint, the double nearest to it.
+            () => `Number(${this.expr(BIGINT, vars, d)})`,
             // The bitwise operators, on ToInt32 and ToUint32 of each operand.
             () => `(${this.expr(t, vars, d)} ${this.pick(['&', '|', '^', '<<', '>>', '>>>'])} ${this.expr(t, vars, d)})`,
             () => `~${this.expr(t, vars, d)}`,
@@ -270,6 +272,11 @@ export class Gen {
             return flags.length > 0 ? `${this.pick(flags).name} === ${this.expr(BOOLEAN, vars, d)}` : 'true';
           },
           () => `Number.${this.pick(['isNaN', 'isFinite', 'isSafeInteger', 'isInteger'])}(${this.expr(NUMBER, vars, d)})`,
+          // SameValue, which tells `NaN` and `-0` apart, on two values of one type.
+          () => {
+            const u = this.pick([BIGINT, NUMBER, NUMBER]);
+            return `Object.is(${this.expr(u, vars, d)}, ${this.pick(['-0', '0', 'NaN', this.expr(u, vars, d)])})`;
+          },
           // A test of one string in another, by code units.
           () => `(${this.expr(STRING, vars, d)}).${this.pick(['startsWith', 'endsWith', 'includes'])}(${this.expr(STRING, vars, d)})`,
           // A test of the pieces that `split` gives.

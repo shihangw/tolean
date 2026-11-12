@@ -737,7 +737,8 @@ def isNumberName (name : String) : Bool :=
 /-- The globals that the subset reads by name, so that no declaration may
 hide them. -/
 def isGlobalName (name : String) : Bool :=
-  isNumberName name || name == "undefined" || name == "Map" || name == "Set" || name == "Error"
+  isNumberName name || name == "undefined" || name == "Map" || name == "Set" || name == "Error" ||
+    name == "Object"
 
 def checkName (span : Span) (name : String) : TM String := do
   if leanReserved.contains name then reject span s!"name '{name}' is reserved in Lean"
@@ -1327,6 +1328,28 @@ def translateMathCall (tr : Expr → TM Code) (s : Span) (f : String) (args : Li
     unless c.type == .number do reject e.span s!"Math.{f} needs number operands"
   return ⟨.ext (.numberFold (f == "max")) (codes.map (·.value)), false, .number⟩
 
+/-- `Object.is(a, b)`, where `tr` translates an argument. On two numbers it
+is SameValue, which tells `NaN` and `-0` apart from `===`. On two values of
+another primitive type it is `===`. -/
+def translateObjectIs (tr : Expr → TM Code) (s : Span) (args : List Expr) : TM Code := do
+  let [x, y] := args | reject s "Object.is takes two values"
+  let a ← tr x
+  let b ← tr y
+  if a.type == .number && b.type == .number then
+    return ⟨.ext .numberSameValue [a.value, b.value], false, .boolean⟩
+  unless a.type == b.type && a.type.isEqPrimitive do
+    reject s "Object.is needs two numbers, or two values of one primitive type"
+  return ⟨.eq a.value b.value, true, .boolean⟩
+
+/-- `Number(b)` on a bigint, where `tr` translates the argument: the Number
+value for `b`, the double nearest to it. -/
+def translateNumberCall (tr : Expr → TM Code) (s : Span) (args : List Expr) : TM Code := do
+  let [x] := args | reject s "Number takes one bigint here"
+  let a ← tr x
+  unless a.type == .bigint do
+    reject x.span "Number(v) needs a bigint; ToNumber of other values is not modelled"
+  return ⟨.ext .numberOfInt [a.value], false, .number⟩
+
 def numberConstant? : String → Option IR.NumberConstant
   | "NaN" => some .nan
   | "Infinity" => some .posInf
@@ -1557,7 +1580,7 @@ def reducerOf : List Expr → Option (Param × Param × Expr × Expr)
 /-- `e` is the name `Number` or `Math`, whose calls the interpreter reads
 before the methods of a value. -/
 def _root_.tolean.TypeScript.Syntax.Expr.namesNumber : Expr → Bool
-  | .ident _ "Number" | .ident _ "Math" => true
+  | .ident _ "Number" | .ident _ "Math" | .ident _ "Object" => true
   | _ => false
 
 /-- `m.get(k)` and `m.has(k)`, as the method and the operation of the output. -/
@@ -2251,10 +2274,18 @@ def translateCall (fuel : Nat) (env : Env) (s : Span) (callee : Expr) (args : Li
   if let .member _ (.ident _ "Math") f := callee then
     if !env.has "Math" then
       return ← translateMathCall (translateExpr fuel env none) s f args
+  if let .member _ (.ident _ "Object") "is" := callee then
+    if !env.has "Object" then
+      return ← translateObjectIs (translateExpr fuel env none) s args
   let noCallMessage :=
     "calls may name only the function itself, functions declared earlier in this file, or imported ones"
   let noCall {A : Type} : TM A := reject s noCallMessage
   let .ident _ name := callee | noCall
+  -- `Number(b)`. No declaration may be named `Number`, so a call of that
+  -- name that a local does not hide is the conversion.
+  if name == "Number" then
+    if env.has "Number" then noCall
+    return ← translateNumberCall (translateExpr fuel env none) s args
   if (name == "isNaN" || name == "isFinite") && !env.functions.any (·.name == name) then
     reject s s!"the global {name} converts its argument to a number; use Number.{name}"
   let fn ← orReject (env.functions.find? (·.name == name)) s noCallMessage

@@ -79,9 +79,28 @@ def jsToInt (x : Float) : Option Int :=
         if exp ≥ 1075 then m * 2 ^ (exp - 1075) else m / 2 ^ (1075 - exp)
       some (if bits >>> 63 == 1 then -(magnitude : Int) else magnitude)
 
+/-- The double nearest to `n`, with ties to the one whose last bit is zero:
+the Number value for `n` (ECMA-262 §6.1.6.1). A natural below 2^53 is a
+double already. Above it, the 53 highest bits round by the bits below them.
+`Float.ofNat` keeps only 64 bits before it rounds, which can round a value
+just past a halfway point down. -/
+def natToDouble (n : Nat) : Float :=
+  if n < 2 ^ 53 then Float.ofNat n
+  else
+    let shift := Nat.log2 n - 52
+    let q := n >>> shift
+    let r := n - (q <<< shift)
+    let half := 2 ^ (shift - 1)
+    let q := if r > half || (r == half && q % 2 == 1) then q + 1 else q
+    -- `q` has at most 54 bits, so it is a double, and `scaleB` is exact up
+    -- to the largest double, past which it gives `Infinity`.
+    (Float.ofNat q).scaleB shift
+
 /-- JS numbers as Lean's IEEE 754 doubles. -/
 instance : JSNumber Float where
   toInt := jsToInt
+  isNegZero := isNegZero
+  ofInt i := if i < 0 then -(natToDouble i.natAbs) else natToDouble i.natAbs
   add := Float.add
   sub := Float.sub
   mul := Float.mul

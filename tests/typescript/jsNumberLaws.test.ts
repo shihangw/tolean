@@ -199,6 +199,17 @@ const CHECKS: Record<string, { statement: string; check: () => void }> = {
     statement: `${BINARY} toSafeInt (max a b) = some (Max.max i j)`,
     check: exactBinary(Math.max, (i, j) => (i > j ? i : j)),
   },
+  ofInt: {
+    statement: '∀ {i : Int}, InRange i → toSafeInt (ofInt (N := N) i) = some i',
+    // `Number(b)` on a bigint in the safe range is that integer.
+    check: () =>
+      fc.assert(
+        fc.property(safeInteger, (a) => {
+          expect(toSafeInt(Number(BigInt(a)))).toBe(BigInt(a));
+        }),
+        RUNS,
+      ),
+  },
   toInt: {
     statement: `${UNARY} toInt a = some i`,
     // The integer part of a safe integer is itself, and ToInt32 sees it:
@@ -367,6 +378,25 @@ const SPECIAL_VALUE_CHECKS: Record<
     statement: '∀ {a : N}, isFinite a = false → toInt a = none',
     // ToInt32 reads `NaN` and `±Infinity` as 0, as it reads `none`.
     check: always((a) => Number.isFinite(a) || (a | 0) === 0),
+  },
+  negZero_eq_zero: {
+    statement: '∀ {a : N}, isNegZero a = true → eq a (ofSafeInt 0) = true',
+    check: always((a) => !Object.is(a, -0) || a === 0),
+  },
+  negZero_ofSafeInt: {
+    statement: '∀ {i : Int}, isNegZero (ofSafeInt (N := N) i) = false',
+    // An integer literal, and every integer the model makes, is never -0.
+    check: () =>
+      fc.assert(
+        fc.property(safeInteger, (a) => {
+          expect(Object.is(Number(BigInt(a).toString()), -0)).toBe(false);
+        }),
+        RUNS,
+      ),
+  },
+  nan_not_negZero: {
+    statement: '∀ {a : N}, isNaN a = true → isNegZero a = false',
+    check: withNaN((nan) => !Object.is(nan, -0)),
   },
   isNaN_nan: {
     statement: 'isNaN (nan (N := N)) = true',
