@@ -99,10 +99,10 @@ value claim already does.
 | `entries` | The `List` functions with the same meaning | The `index` argument of a callback other than one of `map`, and the `array` argument of any callback, until a later step adds them |
 | `xs.at(i)` and `xs.slice(i, j)` where an argument is not an integer literal (§23.1.3.1, §23.1.3.28) | `ToIntegerOrInfinity` on each argument, then the element or the slice as for literals. It needs `Math.trunc` from the numbers stage. | |
 | `xs.slice(-a, b)` with a negative start and an end that is not negative | `List.drop` and `List.take` with the length of the array | |
-| A certificate for a file that sorts | A lemma that the comparator is consistent for every array, from the signs of `-1` and `1` under `SafeIntLaws`. The claim takes the laws of the number model as hypotheses. On `number` keys the claim also needs the precondition that no key is `NaN`, and for a difference that every key is finite. A difference also needs new laws: `<` is a strict total order on numbers that are not `NaN`, and the sign of `a - b` is the order of `a` and `b`. `jsNumberLaws.test.ts` would check them. | |
+| A certificate for a file that sorts by a `number` key | As for `bigint` and `string` keys, with the precondition that no key is `NaN`, and for a difference that every key is finite. A difference also needs new laws: `<` is a strict total order on numbers that are not `NaN`, and the sign of `a - b` is the order of `a` and `b`. `jsNumberLaws.test.ts` would check them. | |
 
-A file that sorts gets no certificate yet, because the certifier writes no
-hypothesis and no precondition today.
+The certifier writes no precondition today, so such a file gets no
+certificate.
 
 ### Errors
 
@@ -233,7 +233,7 @@ leaves a gap.
 8. **P0.** The borrow for a map that a caller passes in.
 9. **P1.** Strings: template literals, the string methods and arguments in
    the table above, iteration by code point, and the opaque `JSON.stringify`.
-10. **P1.** Sorting: certificates for a file that sorts.
+10. **P1.** Sorting: certificates for a sort by a `number` key.
 11. **P2.** Recursion: tagged unions that refer to themselves first, then
     `@decreases`, mutual recursion, and `while` loops.
 12. **P1.** The new number and `bigint` operations, and the `Date` methods.

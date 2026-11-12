@@ -32,34 +32,19 @@ export function byTaskName(entries: ReadonlyArray<Entry>): Entry[] {
 
 // The elements themselves are the keys.
 export function ascending(xs: ReadonlyArray<bigint>): bigint[] {
-  return [...xs, 0n].sort((x, y) => (x < y) ? -1 : (x > y) ? 1 : 0);
+  return [...xs].sort((x, y) => (x < y) ? -1 : (x > y) ? 1 : 0);
 }
 
 export function names(xs: ReadonlyArray<string>): string[] {
   return xs.toSorted((a: string, b: string) => (a < b) ? -1 : (a > b) ? 1 : 0);
 }
 
-interface Event {
-  readonly time: number;
-  readonly kind: string;
+// `-0` in place of the last `0`, which JS reads as an equal pair too.
+export function minusZero(xs: ReadonlyArray<bigint>): bigint[] {
+  return xs.toSorted((a, b) => (a < b) ? -1 : (a > b) ? 1 : -0);
 }
 
-// A difference of number keys: the comparator is consistent when every key
-// is finite.
-export function chronological(events: ReadonlyArray<Event>): Event[] {
-  return events.toSorted((a, b) => a.time - b.time);
-}
-
-export function latestFirst(events: ReadonlyArray<Event>): Event[] {
-  return [...events].sort((a, b) => b.time - a.time);
-}
-
-// A difference as the last comparison of a chain.
-export function byKindThenTime(events: ReadonlyArray<Event>): Event[] {
-  return events.toSorted((a, b) => (a.kind < b.kind) ? -1 : (a.kind > b.kind) ? 1 : a.time - b.time);
-}
-
-// A comparison of number keys, which is consistent when no key is NaN.
-export function numbers(xs: ReadonlyArray<number>): number[] {
-  return xs.toSorted((x, y) => (x < y) ? -1 : (x > y) ? 1 : 0);
+export function minusZeroChain(tasks: ReadonlyArray<Task>): Task[] {
+  return tasks.toSorted((a, b) =>
+    (a.priority < b.priority) ? -1 : (a.priority > b.priority) ? 1 : (a.name < b.name) ? -1 : (a.name > b.name) ? 1 : -0);
 }

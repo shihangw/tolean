@@ -686,6 +686,11 @@ def extras : List Group := [
   ⟨"Certificates: slices of a list", [``Proof.sliceList_map, ``Proof.getElem?_rev,
     ``Proof.sliceList_nonneg, ``Proof.sliceList_from, ``Proof.sliceList_last,
     ``Proof.sliceList_dropLast, ``Proof.sliceList_neg]⟩,
+  ⟨"Certificates: sorts", [``Proof.consistentOn_of_transCmp, ``Proof.sortValues_sortWith,
+    ``Proof.int_compare_of_lt, ``Proof.int_compare_of_gt, ``Proof.int_compare_of_eq,
+    ``compareSign_one, ``compareSign_zero, ``compareSign_neg_zero, ``compareSign_neg_one, ``JSString.instTransOrd,
+    ``JSString.unitsLt_compare, ``JSString.compare_of_lt, ``JSString.compare_of_gt,
+    ``JSString.compare_of_eq]⟩,
   ⟨"Recursion: the facts that Lean adds to the goal of a call in a callback, for the proof that a recursive function ends",
     [``List.any_wfParam_tolean, ``List.any_unattach_tolean, ``List.all_wfParam_tolean,
       ``List.all_unattach_tolean, ``List.find?_wfParam_tolean, ``List.find?_unattach_tolean]⟩]

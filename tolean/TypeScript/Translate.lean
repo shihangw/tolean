@@ -1925,13 +1925,14 @@ def keyTest? (a b : String) : Expr → Option (List String × Bool)
   | _ => none
 
 /-- `x - y`, where one side reads a key of `a` and the other the same key of
-`b`: the fields of the key. -/
-def keyDifference? (a b : String) : Expr → Option (List String)
+`b`: the fields of the key, and whether `x` is the key of `a`, which sorts
+from the least. -/
+def keyDifference? (a b : String) : Expr → Option (List String × Bool)
   | .paren _ e => keyDifference? a b e
   | .binary _ .sub x y =>
     match keyPath? a x, keyPath? b y, keyPath? b x, keyPath? a y with
-    | some p, some q, _, _ => if p == q then some p else none
-    | _, _, some p, some q => if p == q then some p else none
+    | some p, some q, _, _ => if p == q then some (p, true) else none
+    | _, _, some p, some q => if p == q then some (p, false) else none
     | _, _, _, _ => none
   | _ => none
 
@@ -1941,17 +1942,18 @@ mutual
 has the shape `(a.k < b.k) ? -1 : (a.k > b.k) ? 1 : rest`. The tests may
 come in the other order, the signs may be reversed to sort from the
 greatest, and `rest` is `0` or a comparison of the next key. The last
-comparison may also be a difference, `a.k - b.k` or `b.k - a.k`, which marks
-its key `true`. Such a comparator is consistent when each key is totally
-ordered on the elements. -/
-def keyComparator? (a b : String) : Expr → Option (List (List String × Bool))
+comparison may also be a difference, `a.k - b.k` or `b.k - a.k`. Each key
+comes with whether it is a difference, and whether it sorts from the least.
+Such a comparator is consistent when each key is totally ordered on the
+elements. -/
+def keyComparator? (a b : String) : Expr → Option (List (List String × Bool × Bool))
   | .paren _ e => keyComparator? a b e
   | .cond _ t r e => keySecond? a b t r e
-  | e => (keyDifference? a b e).map fun p => [(p, true)]
+  | e => (keyDifference? a b e).map fun (p, up) => [(p, true, up)]
 
 /-- The rest of `keyComparator?` after `t ? r : `, on the expression after
 the `:`. -/
-def keySecond? (a b : String) (t r : Expr) : Expr → Option (List (List String × Bool))
+def keySecond? (a b : String) (t r : Expr) : Expr → Option (List (List String × Bool × Bool))
   | .paren _ e => keySecond? a b t r e
   | .cond _ t' r' rest => do
     let (p, less) ← keyTest? a b t
@@ -1960,7 +1962,8 @@ def keySecond? (a b : String) (t r : Expr) : Expr → Option (List (List String 
     let s' ← Eval.intLiteral? r'
     unless p == p' && less != less' && (s == 1 || s == -1) && s' == -s do none
     let tail ← if Eval.intLiteral? rest == some 0 then some [] else keyComparator? a b rest
-    return (p, false) :: tail
+    -- `-1` where the key of `a` is the smaller one sorts from the least.
+    return (p, false, less == (s == -1)) :: tail
   | _ => none
 
 end
@@ -2466,7 +2469,7 @@ def translateSort (fuel : Nat) (env : Env) (s : Span) (recv : Expr) (method : St
     ("a comparator here must compare keys, such as (a, b) => (a.k < b.k) ? -1 : (a.k > b.k) ? 1 : 0 " ++
       "or (a, b) => a.t - b.t, with the tests in either order, the signs reversed, or a comparison " ++
       "of the next key in place of the 0")
-  for (key, difference) in keys do
+  for (key, difference, _) in keys do
     let t ← keyType body.span elem key
     if difference then
       unless t == .number do reject body.span "the keys of a difference in a comparator must be numbers"

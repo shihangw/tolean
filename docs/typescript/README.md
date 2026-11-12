@@ -237,7 +237,10 @@ function that can throw, because a certificate has no encoder for `Except` yet.
 A `number` is a value of
 the abstract model `JSNumber N` in the interpreter, as it is in the
 translation, so each theorem holds for every `N`, real doubles among them,
-and assumes none of the number laws.
+and assumes none of the number laws. A file that sorts is the exception. Its
+theorems take `[SafeIntLaws N]`, because the order needs the signs of `-1`
+and `1` as numbers. A file that sorts by a `number` key has no certificate
+yet, because its claim needs the precondition that no key is `NaN`.
 
 A certificate's theorems follow from `translate_sound`, so they do not unfold
 the interpreter. The certificate holds the IR that the translator gives,
@@ -549,8 +552,7 @@ Tolean rejects these, among others:
   such as `xs.sort(cmp)` on a parameter, because `sort` changes the array
   that it sorts. Tolean also refuses `toSorted` and `sort` without a
   comparator, which compare the strings of the elements, a comparator of any
-  other shape, and a sort of an array of nullable values. A file that sorts
-  gets no certificate yet; `program_sound` covers it.
+  other shape, and a sort of an array of nullable values.
 - A map key or a set element of type `number`, which can be `NaN` or `-0`,
   and one of an interface type, which a map or a set compares by identity.
   Tolean also refuses `set`, `add` and `delete` on a map or a set that the
