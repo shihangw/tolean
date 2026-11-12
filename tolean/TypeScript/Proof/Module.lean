@@ -254,7 +254,7 @@ theorem translateFunction_ok {sp : Span} {ex : Bool} {name : String} {tps : List
     have hg := hps.2.1
     simp only [globals, Prod.mk.injEq] at hg
     refine ⟨rfl, htaken, rfl, rfl, hfresh, _, rfl, rfl, rfl, rfl, lp, _, out, rfl, ?_, _, _, _, _, hbody,
-      by simp [hg.1], hg.2, fun x => ?_, by simpa using hown⟩
+      by simp [hg.1], hg.2.1, fun x => ?_, by simpa using hown⟩
     · simpa using hps.2.2
     · have hx := hps.1 x
       simp only [Env.has, Env.lookup] at hx ⊢
@@ -1540,7 +1540,7 @@ theorem calls_agree (hrel : Forall₂ (FnRelP p) (Eval.functionsOf p) fs) :
     ∀ fuel, CallsAgree (N := N) p fs fuel
   | 0 => fun key vs v h => by simp [callO] at h
   | fuel + 1 => fun key vs v h => by
-    have hc := calls_agree hrel fuel
+    have hc : ∀ k ≤ fuel, CallsAgree (N := N) p fs k := fun k hk => calls_agree hrel k
     simp only [callO] at h
     cases hl : fs.lookup key with
     | none => simp [hl] at h
@@ -1560,7 +1560,7 @@ theorem calls_agree (hrel : Forall₂ (FnRelP p) (Eval.functionsOf p) fs) :
             subst h
             obtain ⟨bS, hlS, -, -, ⟨F, env, ctx, ctx', htr, hres, henv⟩, hown⟩ := lookup_rel hrel hl
             have hlen' : ps.length = vs.length := by simpa using hlen
-            have hsim := (stmts_sound ⟨p, key.file⟩ fs fuel hc F).1 _ _ _ _ _ _ htr
+            have hsim := (stmts_sound ⟨p, key.file⟩ fs F fuel hc).1 _ _ _ _ _ _ htr
             have hex := (hsim _ _ (fun _ => rfl) (scoped_params henv hres hlen')).1 w hb
             have hst := block_ret ⟨p, key.file⟩ fuel bS hex
             simp [callS, hlS, hlen', hst, hown]

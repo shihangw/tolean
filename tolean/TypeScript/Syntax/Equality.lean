@@ -400,4 +400,10 @@ theorem Module.beq_iff (a b : Module) : Module.beq a b = true ↔ a = b := by
   cases b
   simp [and_assoc, Module.beq, Decl.beqList_iff decls]
 
+instance : DecidableEq Stmt := fun a b => decidable_of_iff _ (Stmt.beq_iff a b)
+
+/-- A statement shows as a placeholder. Only a closure value of the spec
+holds one, and no output prints it. -/
+instance : Repr Stmt := ⟨fun _ _ => "<statement>"⟩
+
 end tolean.TypeScript.Syntax

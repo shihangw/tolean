@@ -240,7 +240,7 @@ theorem update_sound (hc : CallsAgree (N := N) m.program fs fuel) {env : Transla
     (h : translateUpdate env sp e ctx = .ok (name, upd) ctx')
     {ρs ρo : Eval.Env N} (ha : Agree ρs ρo) (hs : Scoped m env ρs) {w : Val N}
     (hw : IR.Expr.eval fs fuel ρo upd = some w) :
-    env.has name = true ∧ name ∈ exprChanges e ∧
+    env.has name = true ∧ name ∈ exprChanges env.fnChanges e ∧
       Eval.execStmt m fuel ρs (.exprStmt sp e) = some (.normal (ρs.set name w)) := by
   unfold translateUpdate at h
   cases e <;> (try simp only at h) <;> try (simp at h; done)
@@ -267,7 +267,7 @@ theorem update_sound (hc : CallsAgree (N := N) m.program fs fuel) {env : Transla
           obtain ⟨xs, va, hx, hva, rfl⟩ := out_push fs fuel hw
           rw [eval_value] at hva
           rw [← ha target] at hx
-          refine ⟨by simp [Env.has, hl], by simp [exprChanges], ?_⟩
+          refine ⟨by simp [Env.has, hl], by simp [exprChanges, calleeChanges], ?_⟩
           simp [Eval.execStmt, hx, hsim ρs ρo va ha hs hva]
         · simp at h
     by_cases hset : field = "set"
@@ -307,7 +307,7 @@ theorem update_sound (hc : CallsAgree (N := N) m.program fs fuel) {env : Transla
                   cases vm <;> simp [IR.ExprExt.apply] at happ
                   obtain ⟨es', hes, rfl⟩ := happ
                   rw [← ha target] at hx
-                  refine ⟨by simp [Env.has, hl], by simp [exprChanges], ?_⟩
+                  refine ⟨by simp [Env.has, hl], by simp [exprChanges, calleeChanges], ?_⟩
                   simp [Eval.execStmt, hx, hk ρs ρo vk ha hs hy, hv ρs ρo vv ha hs hz, hes]
           · simp at h
         · simp at h
@@ -341,7 +341,7 @@ theorem update_sound (hc : CallsAgree (N := N) m.program fs fuel) {env : Transla
                 cases vm <;> simp [IR.ExprExt.apply] at happ
                 obtain ⟨es', hes, rfl⟩ := happ
                 rw [← ha target] at hx
-                refine ⟨by simp [Env.has, hl], by simp [exprChanges], ?_⟩
+                refine ⟨by simp [Env.has, hl], by simp [exprChanges, calleeChanges], ?_⟩
                 simp [Eval.execStmt, hx, hk ρs ρo vk ha hs hy, hes]
           · simp at h
         next t =>
@@ -365,7 +365,7 @@ theorem update_sound (hc : CallsAgree (N := N) m.program fs fuel) {env : Transla
                 cases vm <;> simp [IR.ExprExt.apply] at happ
                 obtain ⟨es', hes, rfl⟩ := happ
                 rw [← ha target] at hx
-                refine ⟨by simp [Env.has, hl], by simp [exprChanges], ?_⟩
+                refine ⟨by simp [Env.has, hl], by simp [exprChanges, calleeChanges], ?_⟩
                 simp [Eval.execStmt, hx, hk ρs ρo vk ha hs hy, hes]
           · simp at h
     by_cases hadd : field = "add"
@@ -398,7 +398,7 @@ theorem update_sound (hc : CallsAgree (N := N) m.program fs fuel) {env : Transla
               cases vm <;> simp [IR.ExprExt.apply] at happ
               obtain ⟨es', hes, rfl⟩ := happ
               rw [← ha target] at hx
-              refine ⟨by simp [Env.has, hl], by simp [exprChanges], ?_⟩
+              refine ⟨by simp [Env.has, hl], by simp [exprChanges, calleeChanges], ?_⟩
               simp [Eval.execStmt, hx, hk ρs ρo vk ha hs hy, hes]
         · simp at h
     · simp [hf, hset, hdel, hadd] at h
@@ -512,7 +512,7 @@ def StmtSim (env : Translate.Env) (tail : Tail) (ss : List Stmt) (body : IR.Body
     (∀ brk ρo', IR.Body.exec fs fuel ρo body = some (endOf brk ρo') →
       tail.isRet = false ∧ ∃ new out mod, Ends tail brk (Eval.exec m fuel ρs ss) (new ++ mod) ∧
         Agree (out ++ mod) ρo' ∧ (∀ p ∈ new, env.has p.1 = false) ∧
-        (∀ p ∈ out, env.has p.1 = false) ∧ Frame (stmtsChanges ss) mod ρs)
+        (∀ p ∈ out, env.has p.1 = false) ∧ Frame (stmtsChanges env.fnChanges ss) mod ρs)
 
 omit [JSNumber N] in
 theorem Ends.congr {tail : Tail} {brk : Bool} {r r' : Option (Outcome N)} {e : Eval.Env N} (h : r = r') :
@@ -699,18 +699,20 @@ theorem if_ends {tail : Tail} {brk : Bool} {sp : Span} {test : Expr} {t : Stmt} 
     | _ => exact if_jump m fuel (.inr rfl) hw hex.brk hf
 
 omit [JSNumber N] in
-theorem stmtsChanges_append (a b : List Stmt) : stmtsChanges (a ++ b) = stmtsChanges a ++ stmtsChanges b := by
+theorem stmtsChanges_append (fns : List (String × List String)) (a b : List Stmt) :
+    stmtsChanges fns (a ++ b) = stmtsChanges fns a ++ stmtsChanges fns b := by
   induction a with
   | nil => simp [stmtsChanges]
   | cons s rest ih => simp [stmtsChanges, ih]
 
 omit [JSNumber N] in
-theorem stmtsChanges_block (t : Stmt) : stmtsChanges (blockStatements t) = stmtChanges t := by
+theorem stmtsChanges_block (fns : List (String × List String)) (t : Stmt) :
+    stmtsChanges fns (blockStatements t) = stmtChanges fns t := by
   cases t <;> simp [blockStatements, stmtsChanges, stmtChanges]
 
 omit [JSNumber N] in
 theorem mem_changedNames {ss : List Stmt} {env : Translate.Env} {n : String} :
-    n ∈ changedNames ss env ↔ env.has n = true ∧ n ∈ stmtsChanges ss := by
+    n ∈ changedNames ss env ↔ env.has n = true ∧ n ∈ stmtsChanges env.fnChanges ss := by
   simp only [changedNames, List.mem_map, List.mem_filter, Env.has, Env.lookup, List.find?_isSome,
     List.contains_iff_mem, beq_iff_eq]
   constructor
@@ -778,7 +780,7 @@ theorem decl_sim {env env' : Translate.Env} {s : Span} {d : VarDecl} {init : Exp
     refine ⟨htail, new ++ ρ₁, out ++ ρ₁, ρ₂, ?_, ?_, hfr₁ new hnew, hfr₁ out hout, ?_⟩
     · rw [hstep w (hw ρs ha hs), List.append_assoc]; exact hex
     · rwa [List.append_assoc]
-    · exact h₂.mono fun n hn => by simp [stmtsChanges, hn]
+    · exact h₂.mono fun n hn => by simp only [Env.fnChanges_add] at hn; simp [stmtsChanges, hn]
 
 omit [JSNumber N] in
 theorem lookup_append_fresh {n : String} :
@@ -830,6 +832,8 @@ theorem if_early_sim {env envT envF : Translate.Env} {sp : Span} {test : Expr} {
     (hwt : StmtSim (N := N) m fs fuel envT thenTail (blockStatements t) wt)
     (hwf : StmtSim (N := N) m fs fuel envF tail ((e.map blockStatements).getD [] ++ rest) wf) :
     StmtSim (N := N) m fs fuel env tail (.ifStmt sp test t e :: rest) br := by
+  simp only [StmtSim, fnChanges_congr hTf] at hwt
+  simp only [StmtSim, fnChanges_congr hFf] at hwf
   intro ρs ρo ha hs
   have hsT : Scoped m envT ρs := ⟨fun x => (hs.1 x).trans (hT x).symm, hs.2.congr hTf⟩
   have hsF : Scoped m envF ρs := ⟨fun x => (hs.1 x).trans (hF x).symm, hs.2.congr hFf⟩
@@ -878,7 +882,7 @@ theorem if_early_sim {env envT envF : Translate.Env} {sp : Span} {test : Expr} {
       -- statements.
       obtain ⟨htl0, new, out, mod, hex, hag, -, hout, hfr⟩ := (hwt ρs ρo ha hsT).2 brk ρo' hb
       have htl := htail.1 htl0
-      have hfr' : Frame (stmtsChanges (.ifStmt sp test t e :: rest)) mod ρs := hfr.mono fun n hn => by
+      have hfr' : Frame (stmtsChanges env.fnChanges (.ifStmt sp test t e :: rest)) mod ρs := hfr.mono fun n hn => by
         rw [stmtsChanges_block] at hn
         cases e <;> simp [stmtsChanges, stmtChanges, hn]
       cases brk
@@ -903,6 +907,8 @@ theorem if_state_sim {env envT envF : Translate.Env} {sp : Span} {test : Expr} {
     (hwf : StmtSim (N := N) m fs fuel envF (.state names) ((e.map blockStatements).getD []) wf)
     (hrest : StmtSim (N := N) m fs fuel env tail rest rb) :
     StmtSim (N := N) m fs fuel env tail (.ifStmt sp test t e :: rest) (.letState names br rb) := by
+  simp only [StmtSim, fnChanges_congr hTf] at hwt
+  simp only [StmtSim, fnChanges_congr hFf] at hwf
   intro ρs ρo ha hs
   have hsT : Scoped m envT ρs := ⟨fun x => (hs.1 x).trans (hT x).symm, hs.2.congr hTf⟩
   have hsF : Scoped m envF ρs := ⟨fun x => (hs.1 x).trans (hF x).symm, hs.2.congr hFf⟩
@@ -910,7 +916,7 @@ theorem if_state_sim {env envT envF : Translate.Env} {sp : Span} {test : Expr} {
   -- `letState`.
   have key : ∀ o, IR.Body.exec fs fuel ρo (.letState names br rb) = some o →
       ∃ mod ρo₂, Eval.execStmt m fuel ρs (.ifStmt sp test t e) = some (.normal mod) ∧
-        Agree mod ρo₂ ∧ Frame (stmtChanges (.ifStmt sp test t e)) mod ρs ∧
+        Agree mod ρo₂ ∧ Frame (stmtChanges env.fnChanges (.ifStmt sp test t e)) mod ρs ∧
         IR.Body.exec fs fuel ρo₂ rb = some o := by
     intro o ho
     simp only [IR.Body.exec] at ho
@@ -928,7 +934,7 @@ theorem if_state_sim {env envT envF : Translate.Env} {sp : Span} {test : Expr} {
           have hside : ∃ new out mod,
               Eval.exec m fuel ρs (branchStatements w t e) = some (.normal (new ++ mod)) ∧
               Agree (out ++ mod) inner ∧ (∀ p ∈ out, env.has p.1 = false) ∧
-              Frame (stmtsChanges (branchStatements w t e)) mod ρs := by
+              Frame (stmtsChanges env.fnChanges (branchStatements w t e)) mod ρs := by
             unfold branchStatements
             cases htr : w.truthy <;> simp only [htr, Bool.false_eq_true, ↓reduceIte] at hbw ⊢
             · obtain ⟨-, new, out, mod, h1, h2, -, h3, h4⟩ := (hwf ρs ρo ha hsF).2 false inner hbw
@@ -936,14 +942,14 @@ theorem if_state_sim {env envT envF : Translate.Env} {sp : Span} {test : Expr} {
             · obtain ⟨-, new, out, mod, h1, h2, -, h3, h4⟩ := (hwt ρs ρo ha hsT).2 false inner hbw
               exact ⟨new, out, mod, h1, h2, fun p hp => (hT p.1) ▸ h3 p hp, h4⟩
           obtain ⟨new, out, mod, hex, hag, hnew, hfr⟩ := hside
-          have hsub : ∀ n, n ∈ stmtsChanges (branchStatements w t e) →
-              n ∈ stmtsChanges (blockStatements t ++ (e.map blockStatements).getD []) := by
+          have hsub : ∀ n, n ∈ stmtsChanges env.fnChanges (branchStatements w t e) →
+              n ∈ stmtsChanges env.fnChanges (blockStatements t ++ (e.map blockStatements).getD []) := by
             intro n hn
             unfold branchStatements at hn
             rw [stmtsChanges_append]
             split at hn <;> simp [hn]
-          have hsub2 : ∀ n, n ∈ stmtsChanges (blockStatements t ++ (e.map blockStatements).getD []) →
-              n ∈ stmtChanges (.ifStmt sp test t e) := by
+          have hsub2 : ∀ n, n ∈ stmtsChanges env.fnChanges (blockStatements t ++ (e.map blockStatements).getD []) →
+              n ∈ stmtChanges env.fnChanges (.ifStmt sp test t e) := by
             intro n hn
             rw [stmtsChanges_append, stmtsChanges_block, List.mem_append] at hn
             cases e with
@@ -965,7 +971,7 @@ theorem if_state_sim {env envT envF : Translate.Env} {sp : Span} {test : Expr} {
           · rename_i hn
             rw [← ha n]
             by_cases hhas : env.has n = true
-            · have hnc : n ∉ stmtsChanges (branchStatements w t e) := fun hc =>
+            · have hnc : n ∉ stmtsChanges env.fnChanges (branchStatements w t e) := fun hc =>
                 hn (by rw [hnames, mem_changedNames]; exact ⟨hhas, hsub n hc⟩)
               exact hfr.lookup hnc
             · have h1 := hs.none (by simpa using hhas)
@@ -1056,7 +1062,7 @@ theorem loop_sim {env bodyEnv : Translate.Env} {x : String} {elemType : Ty} {nam
       IR.Body.runFold fs fuel names x bodyOut ρo vs = some o →
       (∀ w, o = .ret w → Eval.execLoop m fuel ρs (fun v => some [(x, v)]) bodyS vs = some (.ret w)) ∧
       ∀ ρo', o = .normal ρo' → ∃ mod, Eval.execLoop m fuel ρs (fun v => some [(x, v)]) bodyS vs = some (.normal mod) ∧
-        Agree mod ρo' ∧ Frame (stmtChanges bodyS) mod ρs := by
+        Agree mod ρo' ∧ Frame (stmtChanges env.fnChanges bodyS) mod ρs := by
   subst henv
   intro vs
   induction vs with
@@ -1150,7 +1156,7 @@ theorem loop_sim {env bodyEnv : Translate.Env} {x : String} {elemType : Ty} {nam
             · rename_i hn
               rw [← ha n]
               by_cases hhas : env.has n = true
-              · have hnc : n ∉ stmtsChanges (blockStatements bodyS) := fun hc =>
+              · have hnc : n ∉ stmtsChanges env.fnChanges (blockStatements bodyS) := fun hc =>
                   hn (by rw [hnames, mem_changedNames]; exact ⟨hhas, hc⟩)
                 exact hfr'.lookup hnc
               · have h1 := hs.none (by simpa using hhas)
@@ -1465,7 +1471,8 @@ theorem execFrom_normal {e ρ : Eval.Env N} {t : Option Expr} {body : List Stmt}
 
 omit [JSNumber N] in
 /-- A `break` changes no local. -/
-theorem stmtsChanges_dropBreak : ∀ (body : List Stmt), stmtsChanges (dropBreak body) = stmtsChanges body
+theorem stmtsChanges_dropBreak (fns : List (String × List String)) :
+    ∀ (body : List Stmt), stmtsChanges fns (dropBreak body) = stmtsChanges fns body
   | [] => rfl
   | [s] => by
     by_cases hb : s.isBreak = true
@@ -1474,18 +1481,18 @@ theorem stmtsChanges_dropBreak : ∀ (body : List Stmt), stmtsChanges (dropBreak
       rfl
     · simp [dropBreak, hb]
   | s :: t :: rest => by
-    simp only [dropBreak, stmtsChanges, stmtsChanges_dropBreak (t :: rest)]
+    simp only [dropBreak, stmtsChanges, stmtsChanges_dropBreak fns (t :: rest)]
 
 omit [JSNumber N] in
-theorem stmtsChanges_flatMap : ∀ (cs : List (Option Expr × List Stmt)),
-    ∀ n ∈ stmtsChanges (cs.flatMap (·.2)), n ∈ clausesChanges cs
+theorem stmtsChanges_flatMap (fns : List (String × List String)) : ∀ (cs : List (Option Expr × List Stmt)),
+    ∀ n ∈ stmtsChanges fns (cs.flatMap (·.2)), n ∈ clausesChanges fns cs
   | [], n, h => by simp [stmtsChanges] at h
   | (t, b) :: cs, n, h => by
     simp only [List.flatMap_cons, stmtsChanges_append, List.mem_append] at h
     simp only [clausesChanges, List.mem_append]
     rcases h with h | h
     · exact .inl (.inr h)
-    · exact .inr (stmtsChanges_flatMap cs n h)
+    · exact .inr (stmtsChanges_flatMap fns cs n h)
 
 /-- A statement that ends in the state of the locals `names`, as an `if`
 without a return or a `switch` whose clauses end in `break` does, and then
@@ -1493,17 +1500,17 @@ without a return or a `switch` whose clauses end in `break` does, and then
 theorem letState_sim {env : Translate.Env} {st : Stmt} {rest : List Stmt} {tail : Tail} {br rb : IR.Body}
     {names : List String} {ss : List Stmt} (hst0 : st.constAssignedIn rest = false)
     (hnames : names = changedNames ss env)
-    (hsub : ∀ n, n ∈ stmtsChanges ss → n ∈ stmtChanges st)
+    (hsub : ∀ n, n ∈ stmtsChanges env.fnChanges ss → n ∈ stmtChanges env.fnChanges st)
     (hbr : ∀ (ρs ρo inner : Eval.Env N), Agree ρs ρo → Scoped m env ρs →
       IR.Body.exec fs fuel ρo br = some (.normal inner) →
       ∃ new mod, Eval.execStmt m fuel ρs st = some (.normal mod) ∧ Agree (new ++ mod) inner ∧
-        (∀ p ∈ new, env.has p.1 = false) ∧ Frame (stmtsChanges ss) mod ρs)
+        (∀ p ∈ new, env.has p.1 = false) ∧ Frame (stmtsChanges env.fnChanges ss) mod ρs)
     (hrest : StmtSim (N := N) m fs fuel env tail rest rb) :
     StmtSim (N := N) m fs fuel env tail (st :: rest) (.letState names br rb) := by
   intro ρs ρo ha hs
   have key : ∀ o, IR.Body.exec fs fuel ρo (.letState names br rb) = some o →
       ∃ mod ρo₂, Eval.execStmt m fuel ρs st = some (.normal mod) ∧
-        Agree mod ρo₂ ∧ Frame (stmtChanges st) mod ρs ∧ IR.Body.exec fs fuel ρo₂ rb = some o := by
+        Agree mod ρo₂ ∧ Frame (stmtChanges env.fnChanges st) mod ρs ∧ IR.Body.exec fs fuel ρo₂ rb = some o := by
     intro o ho
     simp only [IR.Body.exec] at ho
     cases hb : IR.Body.exec fs fuel ρo br with
@@ -1528,7 +1535,7 @@ theorem letState_sim {env : Translate.Env} {st : Stmt} {rest : List Stmt} {tail 
           · rename_i hn
             rw [← ha n]
             by_cases hhas : env.has n = true
-            · have hnc : n ∉ stmtsChanges ss := fun hc =>
+            · have hnc : n ∉ stmtsChanges env.fnChanges ss := fun hc =>
                 hn (by rw [hnames, mem_changedNames]; exact ⟨hhas, hc⟩)
               exact hfr.lookup hnc
             · have h1 := hs.none (by simpa using hhas)
@@ -1563,7 +1570,7 @@ def StateClauseSim (env : Translate.Env) (sw : SwitchOn) (known : Option String)
         (∀ o, known = some o → k = o) →
         ∃ new out mod, Eval.execSwitch m fuel ρs (.str k) cs = some (.normal (new ++ mod)) ∧
           Agree (out ++ mod) inner ∧ (∀ p ∈ out, env.has p.1 = false) ∧
-          Frame (stmtsChanges (cs.flatMap (·.2))) mod ρs
+          Frame (stmtsChanges env.fnChanges (cs.flatMap (·.2))) mod ρs
 
 /-- No clause is left: the locals keep their values. -/
 theorem state_nil_sim {env : Translate.Env} {sw : SwitchOn} {known : Option String} {names : List String} :
@@ -1583,7 +1590,7 @@ theorem state_default_sim {env : Translate.Env} {sw : SwitchOn} {known : Option 
   obtain ⟨-, new, out, mod, hex, hag, -, hnew, hfr⟩ := (hb ρs ρo ha hs).2 false inner hv
   refine ⟨fun _ h => (by obtain ⟨_, _, _, h⟩ := h; cases h), fun _ _ _ _ _ => ⟨new, out, mod, ?_, hag, hnew, ?_⟩⟩
   · rw [Eval.execSwitch]; exact execFrom_normal m fuel hex (.inl rfl)
-  · exact hfr.mono fun n hn => by simpa [stmtsChanges] using (stmtsChanges_dropBreak body ▸ hn)
+  · exact hfr.mono fun n hn => by simpa [stmtsChanges] using (stmtsChanges_dropBreak _ body ▸ hn)
 
 /-- The case of the one member left, which an outer `match` has tested. -/
 theorem state_last_sim {env envT : Translate.Env} {sw : SwitchOn} {test : Expr} {body : List Stmt}
@@ -1592,6 +1599,7 @@ theorem state_last_sim {env envT : Translate.Env} {sw : SwitchOn} {test : Expr} 
     (hst : test.stripParens = .string tsp tag) (hlast : more = [] ∨ endsInBreak body = true)
     (hb : StmtSim (N := N) m fs fuel envT (.state names) (dropBreak body) b) :
     StateClauseSim (N := N) m fs fuel env sw (some tag) ((some test, body) :: more) b := by
+  simp only [StmtSim, fnChanges_congr hTf] at hb
   intro ρs ρo inner ha hs hv
   have hsT : Scoped m envT ρs := ⟨fun x => (hs.1 x).trans (hT x).symm, hs.2.congr hTf⟩
   obtain ⟨-, new, out, mod, hex, hag, -, hnew, hfr⟩ := (hb ρs ρo ha hsT).2 false inner hv
@@ -1600,7 +1608,7 @@ theorem state_last_sim {env envT : Translate.Env} {sw : SwitchOn} {test : Expr} 
   · rw [execSwitch_case m fuel hst, if_pos (hknown tag rfl)]
     exact execFrom_normal m fuel hex hlast
   · simp only [List.flatMap_cons, stmtsChanges_append, List.mem_append]
-    exact .inl ((stmtsChanges_dropBreak body ▸ hn))
+    exact .inl ((stmtsChanges_dropBreak _ body ▸ hn))
 
 /-- A case with members left after it: a `match` on its tag. -/
 theorem state_case_sim {env envT envO : Translate.Env} {sw : SwitchOn} {known other : Option String}
@@ -1613,6 +1621,8 @@ theorem state_case_sim {env envT envO : Translate.Env} {sw : SwitchOn} {known ot
     (hwo : StateClauseSim (N := N) m fs fuel envO sw other more wo) :
     StateClauseSim (N := N) m fs fuel env sw known ((some test, body) :: more)
       (.matchTag sw.name sw.ref sw.field tag other wt wo) := by
+  simp only [StmtSim, fnChanges_congr hTf] at hwt
+  simp only [StateClauseSim, fnChanges_congr hOf] at hwo
   intro ρs ρo inner ha hs hv
   have hsT : Scoped m envT ρs := ⟨fun x => (hs.1 x).trans (hT x).symm, hs.2.congr hTf⟩
   have hsO : Scoped m envO ρs := ⟨fun x => (hs.1 x).trans (hO x).symm, hs.2.congr hOf⟩
@@ -1628,7 +1638,7 @@ theorem state_case_sim {env envT envO : Translate.Env} {sw : SwitchOn} {known ot
     refine ⟨new, out, mod, ?_, hag, fun p hp => by rw [← hT]; exact hnew p hp, hfr.mono fun n hn => ?_⟩
     · rw [execSwitch_case m fuel hst, if_pos rfl]; exact execFrom_normal m fuel hex hlast
     · simp only [List.flatMap_cons, stmtsChanges_append, List.mem_append]
-      exact .inl ((stmtsChanges_dropBreak body ▸ hn))
+      exact .inl ((stmtsChanges_dropBreak _ body ▸ hn))
   · obtain ⟨-, hmain⟩ := hwo ρs ρo inner ha hsO h
     obtain ⟨new, out, mod, hex, hag, hnew, hfr⟩ := hmain fields k hl' hk hother
     refine ⟨new, out, mod, ?_, hag, fun p hp => by rw [← hO]; exact hnew p hp, hfr.mono fun n hn => ?_⟩
@@ -1646,7 +1656,7 @@ theorem switch_state_sim {env : Translate.Env} {sp : Span} {disc : Expr} {sw : S
     StmtSim (N := N) m fs fuel env tail (.switchStmt sp disc ((some test, body) :: more) :: rest)
       (.letState names b rb) := by
   refine letState_sim m fs fuel rfl hnames (fun n hn => ?_) (fun ρs ρo inner ha hs hv => ?_) hrest
-  · simp only [stmtChanges, List.mem_append]; exact .inr (stmtsChanges_flatMap _ n hn)
+  · simp only [stmtChanges, List.mem_append]; exact .inr (stmtsChanges_flatMap _ _ n hn)
   · obtain ⟨hfirst, hmain⟩ := hc ρs ρo inner ha hs hv
     obtain ⟨fields, k, hl, hk⟩ := hfirst rfl ⟨test, body, more, rfl⟩
     obtain ⟨new, out, mod, hex, hag, hnew, hfr⟩ := hmain fields k hl hk (fun _ h => by cases h)
@@ -1878,7 +1888,7 @@ theorem translateLoop_sound (hc : CallsAgree (N := N) m.program fs fuel) {F : Na
       have key : ∀ o, IR.Body.exec fs fuel ρo body = some o →
           (∃ w, o = .ret w ∧ Eval.execStmt m fuel ρs (head.stmt s b) = some (.ret w)) ∨
           ∃ mod ρo₂, Eval.execStmt m fuel ρs (head.stmt s b) = some (.normal mod) ∧
-            Agree mod ρo₂ ∧ Frame (stmtChanges (head.stmt s b)) mod ρs ∧
+            Agree mod ρo₂ ∧ Frame (stmtChanges env.fnChanges (head.stmt s b)) mod ρs ∧
             IR.Body.exec fs fuel ρo₂ rb = some o := by
         intro o ho
         rw [← hbodyEq] at ho
@@ -2214,11 +2224,1131 @@ theorem throw_sim {env : Translate.Env} {s sn : Span} {msg : Expr} {code : IR.Ex
     obtain ⟨t, ho, -⟩ := hout _ hv
     cases brk <;> simp [endOf] at ho
 
+omit [JSNumber N] in
+theorem lookup_isSome_zip {x : String} :
+    ∀ {names : List String} {ws : List (Val N)}, ws.length = names.length →
+      ((names.zip ws).lookup x).isSome = names.contains x
+  | [], _, _ => by simp
+  | _ :: _, [], h => by simp at h
+  | n :: names, w :: ws, h => by
+    simp only [List.zip_cons_cons, List.lookup, List.contains_cons]
+    by_cases hx : x = n
+    · subst hx; simp
+    · have h1 : (x == n) = false := by simpa using hx
+      simp only [h1, Bool.false_or]
+      exact lookup_isSome_zip (by simpa using h)
+
+omit [JSNumber N] in
+theorem lookup_isSome_append {x : String} (a b : Eval.Env N) :
+    ((a ++ b).lookup x).isSome = ((a.lookup x).isSome || (b.lookup x).isSome) := by
+  induction a with
+  | nil => simp
+  | cons p a ih =>
+    obtain ⟨k, v⟩ := p
+    simp only [List.cons_append, List.lookup]
+    split <;> simp_all
+
+omit [JSNumber N] in
+theorem lookup_isSome_reverse {x : String} (a : Eval.Env N) :
+    (a.reverse.lookup x).isSome = (a.lookup x).isSome := by
+  induction a with
+  | nil => simp
+  | cons p a ih =>
+    obtain ⟨k, v⟩ := p
+    rw [List.reverse_cons, lookup_isSome_append, ih]
+    simp only [List.lookup]
+    split <;> simp_all
+
+theorem evalList_append_inv {a b : List IR.Expr} {ρo : Eval.Env N} {ws : List (Val N)} :
+    IR.Expr.evalList fs fuel ρo (a ++ b) = some ws →
+      ∃ w₁ w₂, ws = w₁ ++ w₂ ∧ IR.Expr.evalList fs fuel ρo a = some w₁ ∧
+        IR.Expr.evalList fs fuel ρo b = some w₂ ∧ w₁.length = a.length := by
+  induction a generalizing ws with
+  | nil => intro h; exact ⟨[], ws, rfl, by simp [IR.Expr.evalList], h, rfl⟩
+  | cons e a ih =>
+    intro h
+    simp only [List.cons_append, IR.Expr.evalList] at h
+    cases he : IR.Expr.eval fs fuel ρo e with
+    | none => simp [he] at h
+    | some w =>
+      cases hr : IR.Expr.evalList fs fuel ρo (a ++ b) with
+      | none => simp [he, hr] at h
+      | some rs =>
+        simp [he, hr] at h
+        subst h
+        obtain ⟨w₁, w₂, rfl, h₁, h₂, hl⟩ := ih hr
+        exact ⟨w :: w₁, w₂, rfl, by simp [IR.Expr.evalList, he, h₁], h₂, by simp [hl]⟩
+
+/-! ### Local functions: what the translator checks -/
+
+theorem localCall?_some {env : Translate.Env} {e : Expr} {args : List Expr} {fn : LocalFn}
+    (h : localCall? env e = some (args, fn)) :
+    ∃ cs sp, e = .call cs (.ident sp fn.name) args ∧ env.localFns.find? (·.name == fn.name) = some fn := by
+  unfold localCall? at h
+  split at h
+  · rename_i cs sp name args'
+    simp only [Option.map_eq_some_iff, Prod.mk.injEq] at h
+    obtain ⟨fn', hf, rfl, rfl⟩ := h
+    have := List.find?_some hf
+    have hn : fn'.name = name := by simpa using this
+    subst hn
+    exact ⟨cs, sp, rfl, hf⟩
+  · simp at h
+
+theorem fnChanges_lookup {env : Translate.Env} {fn : LocalFn}
+    (h : env.localFns.find? (·.name == fn.name) = some fn) : env.fnChanges.lookup fn.name = some fn.changes := by
+  unfold Env.fnChanges
+  generalize env.localFns = fns at h
+  induction fns with
+  | nil => simp at h
+  | cons f fns ih =>
+    simp only [List.find?_cons] at h
+    simp only [List.map_cons, List.lookup_cons]
+    split at h
+    · rename_i hf
+      simp only [Option.some.injEq] at h
+      subst h
+      simp
+    · rename_i hf
+      have hne : (fn.name == f.name) = false := by
+        simp only [beq_eq_false_iff_ne, ne_eq]
+        intro he; simp [he] at hf
+      simp only [hne]
+      exact ih h
+
+theorem withLocalBody_ok {ret : Ty} {x : TM IR.Body} {ctx ctx' : Ctx} {b : IR.Body}
+    (h : withLocalBody ret x ctx = .ok b ctx') : ∃ c₁ c₂, x c₁ = .ok b c₂ := by
+  simp only [withLocalBody, bind_ok, get_ok, modify_ok, pure_ok] at h
+  obtain ⟨_, _, ⟨rfl, rfl⟩, _, _, rfl, b', c₂, hx, _, _, rfl, rfl, -⟩ := h
+  exact ⟨_, _, hx⟩
+
+/-- The facts that a call of a local function needs. -/
+theorem localCallProblem_none {env : Translate.Env} {fn : LocalFn} {args : List Expr}
+    (h : localCallProblem env fn args = none) :
+    (∃ sp ss, fn.body = .block sp ss) ∧
+    (fn.captured.all fun l => fn.body.mentions l.name && (env.lookup l.name).any (·.type == l.type) &&
+      !fn.params.any (·.name == l.name)) = true ∧
+    env.locals.any fn.late = false ∧
+    (fn.changes.all (fun c => fn.captured.any (·.name == c)) &&
+      fn.captured.all (fun l => fn.changes.contains l.name ||
+        !(stmtsChanges [] (blockStatements fn.body)).contains l.name)) = true ∧
+    (fn.ret.isSome && fn.captured.any (fun l => fn.body.assigns l.name || fn.body.mutates l.name)) = false ∧
+    args.length = fn.params.length := by
+  unfold localCallProblem at h
+  by_cases h0 : isBlockBody fn.body = true
+  · rw [if_neg (by rw [h0]; decide)] at h
+    by_cases h1 : (fn.captured.all fun l => fn.body.mentions l.name && (env.lookup l.name).any (·.type == l.type) &&
+        !fn.params.any (·.name == l.name)) = true
+    · rw [if_neg (by rw [h1]; decide)] at h
+      by_cases h2 : env.locals.any fn.late = true
+      · rw [if_pos h2] at h; simp at h
+      rw [if_neg h2] at h
+      by_cases h3 : (fn.changes.all (fun c => fn.captured.any (·.name == c)) &&
+          fn.captured.all (fun l => fn.changes.contains l.name ||
+            !(stmtsChanges [] (blockStatements fn.body)).contains l.name)) = true
+      · rw [if_neg (by rw [h3]; decide)] at h
+        by_cases h4 : (fn.ret.isSome && fn.captured.any (fun l => fn.body.assigns l.name || fn.body.mutates l.name)) = true
+        · rw [if_pos h4] at h; simp at h
+        rw [if_neg h4] at h
+        by_cases h5 : (args.length != fn.params.length) = true
+        · rw [if_pos h5] at h; simp at h
+        have hblk : ∃ sp ss, fn.body = .block sp ss := by
+          revert h0; cases fn.body <;> simp [isBlockBody]
+        exact ⟨hblk, h1, Bool.eq_false_iff.mpr h2, h3, Bool.eq_false_iff.mpr h4, by simpa using h5⟩
+      · rw [if_pos (by rw [Bool.eq_false_iff.mpr h3]; rfl)] at h; simp at h
+    · rw [if_pos (by rw [Bool.eq_false_iff.mpr h1]; rfl)] at h; simp at h
+  · rw [if_pos (by rw [Bool.eq_false_iff.mpr h0]; rfl)] at h; simp at h
+
+/-- What `translateLocalCall` checks and gives. -/
+theorem translateLocalCall_ok {env : Translate.Env} {s : Span} {fn : LocalFn} {args : List Expr}
+    {body : TM IR.Body} {ctx ctx' : Ctx} {b : IR.Body} {outs : List IR.Expr}
+    (h : translateLocalCall env s fn args body ctx = .ok (b, outs) ctx') :
+    localCallProblem env fn args = none ∧ (∃ c₁ c₂, body c₁ = .ok b c₂) ∧
+    ∃ outs' c₁ c₂, translateLocalArgs env fn.params args c₁ = .ok outs' c₂ ∧
+      outs = fn.captured.map (fun l => IR.Expr.var l.name) ++ outs' := by
+  unfold translateLocalCall at h
+  cases hp : localCallProblem env fn args with
+  | some why => simp [hp] at h
+  | none =>
+    simp only [hp, pure_bind, bind_ok] at h
+    obtain ⟨outs', c₂, ho, b', c₃, hb, h⟩ := h
+    simp only [ite_state] at h
+    split at h
+    · simp only [pure_ok, Prod.mk.injEq] at h
+      obtain ⟨⟨rfl, rfl⟩, -⟩ := h
+      obtain ⟨c₄, c₅, hx⟩ := withLocalBody_ok hb
+      exact ⟨rfl, ⟨_, _, hx⟩, outs', _, _, ho, rfl⟩
+    · simp at h
+
+
+/-- The arguments of a call of a local function mean what the source's
+arguments mean. -/
+theorem translateLocalArgs_sim (hc : CallsAgree (N := N) m.program fs fuel) {env : Translate.Env} :
+    ∀ (ps : List Local) (args : List Expr) (ctx : Ctx) (outs : List IR.Expr) (ctx' : Ctx),
+      args.length = ps.length → translateLocalArgs env ps args ctx = .ok outs ctx' →
+      SimList (N := N) m fs fuel env args outs
+  | [], [], _, outs, _, _, h => by
+    simp only [translateLocalArgs, pure_ok] at h
+    obtain ⟨rfl, -⟩ := h
+    intro ρs ρo vs _ _ hv
+    simp [IR.Expr.evalList] at hv
+    subst hv; simp [Eval.evalList]
+  | p :: ps, a :: as, ctx, outs, ctx', hlen, h => by
+    simp only [translateLocalArgs, bind_ok, fuelLimit_ok, ite_state] at h
+    obtain ⟨_, _, ⟨rfl, rfl⟩, code, s₁, hcode, h⟩ := h
+    split at h
+    rotate_left
+    · simp at h
+    simp only [bind_ok, pure_ok] at h
+    obtain ⟨_, _, ⟨-, rfl⟩, outs', s₂, hrest, hout, -⟩ := h
+    subst hout
+    have hsim := (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hcode
+    have ih := translateLocalArgs_sim hc ps as _ _ _ (by simpa using hlen) hrest
+    intro ρs ρo vs ha hs hv
+    simp only [IR.Expr.evalList] at hv
+    cases hx : IR.Expr.eval fs fuel ρo (withType code.value p.type code.type) with
+    | none => simp [hx] at hv
+    | some x =>
+      cases hxs : IR.Expr.evalList fs fuel ρo outs' with
+      | none => simp [hx, hxs] at hv
+      | some xs =>
+        simp [hx, hxs] at hv
+        subst hv
+        rw [eval_withType, eval_value] at hx
+        simp [Eval.evalList, hsim ρs ρo x ha hs hx, ih ρs ρo xs ha hs hxs]
+  | [], _ :: _, _, _, _, hlen, _ | _ :: _, [], _, _, _, hlen, _ => by simp at hlen
+
+
+/-! ### Local functions: the spec's call -/
+
+omit [JSNumber N] in
+theorem lookup_captures (ρ : Eval.Env N) (ps : List String) (body : Stmt) (n : String) :
+    (Eval.captures ρ ps body).lookup n =
+      if (body.mentions n && !ps.contains n) = true then ρ.lookup n else none := by
+  unfold Eval.captures
+  induction ρ with
+  | nil => simp
+  | cons p ρ ih =>
+    obtain ⟨k, v⟩ := p
+    by_cases hk : (body.mentions k && !ps.contains k) = true
+    · simp only [List.filter_cons, hk, ↓reduceIte, List.lookup_cons, ih]
+      by_cases hn : n = k
+      · subst hn; simp only [beq_self_eq_true, if_pos hk]
+      · have : (n == k) = false := by simpa using hn
+        simp [this]
+    · simp only [List.filter_cons, hk, Bool.false_eq_true, ↓reduceIte, ih, List.lookup_cons]
+      by_cases hn : n = k
+      · subst hn; rw [if_neg hk, if_neg hk]
+      · have : (n == k) = false := by simpa using hn
+        simp [this]
+
+omit [JSNumber N] in
+theorem Env.set_none {ρ : Eval.Env N} {n : String} {v : Val N} (h : ρ.lookup n = none) : ρ.set n v = ρ := by
+  induction ρ with
+  | nil => rfl
+  | cons p ρ ih =>
+    obtain ⟨k, w⟩ := p
+    by_cases hk : k = n
+    · subst hk; simp at h
+    · have h2 : (n == k) = false := by simpa using Ne.symm hk
+      simp [Eval.Env.set_cons, hk, ih (by simpa [List.lookup, h2] using h)]
+
+omit [JSNumber N] in
+theorem lookup_set (ρ : Eval.Env N) (k n : String) (v : Val N) :
+    (ρ.set k v).lookup n = if n = k ∧ (ρ.lookup k).isSome then some v else ρ.lookup n := by
+  by_cases hn : n = k
+  · subst hn
+    cases hl : ρ.lookup n with
+    | none => simp [Env.set_none hl, hl]
+    | some w => rw [Eval.Env.lookup_set_same _ _ _ (by rw [hl]; rfl)]; simp
+  · simp [hn, Eval.Env.lookup_set_ne _ _ _ _ (Ne.symm hn)]
+
+/-- One step of `writeBack`. -/
+abbrev writeStep (after : Eval.Env N) (e : Eval.Env N) (p : String × Val N) : Eval.Env N :=
+  match after.lookup p.1 with
+  | some v => e.set p.1 v
+  | none => e
+
+omit [JSNumber N] in
+theorem lookup_foldl_writeStep (after : Eval.Env N) (n : String) :
+    ∀ (L e : Eval.Env N), (L.foldl (writeStep after) e).lookup n =
+      if n ∈ L.map (·.1) ∧ (after.lookup n).isSome ∧ (e.lookup n).isSome then after.lookup n else e.lookup n
+  | [], e => by simp
+  | (k, w) :: L, e => by
+    rw [List.foldl_cons, lookup_foldl_writeStep after n L]
+    have hs : ((writeStep after e (k, w)).lookup n).isSome = (e.lookup n).isSome := by
+      simp only [writeStep]
+      split
+      · rw [lookup_set]; split <;> simp_all
+      · rfl
+    rw [hs]
+    by_cases hnk : n = k
+    · subst hnk
+      cases ha : after.lookup n with
+      | none => simp [writeStep, ha]
+      | some v =>
+        cases he : e.lookup n with
+        | none => simp [writeStep, ha, he, lookup_set]
+        | some u => simp [writeStep, ha, he, lookup_set]
+    · have hw : (writeStep after e (k, w)).lookup n = e.lookup n := by
+        simp only [writeStep]; split
+        · rw [lookup_set]; simp [hnk]
+        · rfl
+      simp only [hw, List.map_cons, List.mem_cons, hnk, false_or]
+
+theorem lookup_isSome_of_mem {β : Type} {k : String} {v : β} :
+    ∀ {l : List (String × β)}, (k, v) ∈ l → (l.lookup k).isSome
+  | (j, w) :: l, h => by
+    by_cases hj : k = j
+    · subst hj; simp
+    · have : (k == j) = false := by simpa using hj
+      simp only [List.lookup_cons, this]
+      rcases List.mem_cons.mp h with h | h
+      · simp at h; exact absurd h.1 hj
+      · exact lookup_isSome_of_mem h
+
+theorem mem_of_lookup {β : Type} {k : String} {v : β} :
+    ∀ {l : List (String × β)}, l.lookup k = some v → (k, v) ∈ l
+  | [], h => by simp at h
+  | (j, w) :: l, h => by
+    by_cases hj : k = j
+    · subst hj; simp at h; subst h; simp
+    · have : (k == j) = false := by simpa using hj
+      simp only [List.lookup_cons, this] at h
+      exact List.mem_cons_of_mem _ (mem_of_lookup h)
+
+omit [JSNumber N] in
+theorem lookup_writeBack (ρ after : Eval.Env N) (ps : List String) (body : Stmt) (n : String) :
+    (Eval.writeBack ρ after ps body).lookup n =
+      if (body.mentions n && !ps.contains n) = true ∧ (after.lookup n).isSome ∧ (ρ.lookup n).isSome then
+        after.lookup n else ρ.lookup n := by
+  have h := lookup_foldl_writeStep after n (Eval.captures ρ ps body) ρ
+  unfold Eval.writeBack
+  change (List.foldl (writeStep after) ρ (Eval.captures ρ ps body)).lookup n = _
+  rw [h]
+  have hmem : n ∈ (Eval.captures ρ ps body).map (·.1) ↔
+      (body.mentions n && !ps.contains n) = true ∧ (ρ.lookup n).isSome := by
+    constructor
+    · intro hm
+      obtain ⟨⟨k, v⟩, hp, rfl⟩ := List.mem_map.mp hm
+      unfold Eval.captures at hp
+      obtain ⟨hp, hk⟩ := List.mem_filter.mp hp
+      exact ⟨hk, lookup_isSome_of_mem hp⟩
+    · rintro ⟨hm, hs⟩
+      obtain ⟨v, hv⟩ := Option.isSome_iff_exists.mp hs
+      have := lookup_captures ρ ps body n
+      rw [hm, if_pos rfl, hv] at this
+      exact List.mem_map.mpr ⟨(n, v), mem_of_lookup this, rfl⟩
+  simp only [hmem]
+  by_cases h1 : (body.mentions n && !ps.contains n) = true <;> by_cases h2 : (after.lookup n).isSome = true <;>
+    by_cases h3 : (ρ.lookup n).isSome = true <;> simp [h2, h3]
+
+omit [JSNumber N] in
+theorem frame_foldl_writeStep {c : List String} {ρ after : Eval.Env N} {P : String → Prop}
+    (h : ∀ n, n ∉ c → P n → ∀ v, after.lookup n = some v → (ρ.lookup n).isSome = true → ρ.lookup n = some v) :
+    ∀ (L e : Eval.Env N), (∀ p ∈ L, P p.1 ∧ (ρ.lookup p.1).isSome = true) → Frame c e ρ →
+      Frame c (L.foldl (writeStep after) e) ρ
+  | [], _, _, he => he
+  | (k, w) :: L, e, hL, he => by
+    rw [List.foldl_cons]
+    refine frame_foldl_writeStep h L _ (fun p hp => hL p (List.mem_cons_of_mem _ hp)) ?_
+    simp only [writeStep]
+    split
+    · rename_i v hv
+      by_cases hk : k ∈ c
+      · exact ((Frame.set hk e).trans he).mono fun n hn => by simpa using hn
+      · have hkL := hL (k, w) (by simp)
+        have hρ := h k hk hkL.1 v hv hkL.2
+        rw [Eval.Env.set_of_lookup e k v (by rw [he.lookup hk, hρ])]
+        exact he
+    · exact he
+
+omit [JSNumber N] in
+theorem frame_writeBack {c : List String} {ρ after : Eval.Env N} {ps : List String} {body : Stmt}
+    (h : ∀ n, n ∉ c → (body.mentions n && !ps.contains n) = true → ∀ v, after.lookup n = some v →
+      (ρ.lookup n).isSome = true → ρ.lookup n = some v) :
+    Frame c (Eval.writeBack ρ after ps body) ρ := by
+  unfold Eval.writeBack
+  change Frame c (List.foldl (writeStep after) ρ (Eval.captures ρ ps body)) ρ
+  refine frame_foldl_writeStep (P := fun n => (body.mentions n && !ps.contains n) = true) h _ ρ
+    (fun p hp => ?_) (Frame.refl c ρ)
+  unfold Eval.captures at hp
+  exact ⟨(List.mem_filter.mp hp).2, lookup_isSome_of_mem (List.mem_filter.mp hp).1⟩
+
+omit [JSNumber N] in
+theorem lookup_of_all {L : Eval.Env N} {ρ : Eval.Env N} (h : ∀ p ∈ L, ρ.lookup p.1 = some p.2) (n : String) :
+    L.lookup n = if (L.lookup n).isSome then ρ.lookup n else none := by
+  cases hl : L.lookup n with
+  | none => simp
+  | some v => simp [h (n, v) (mem_of_lookup hl)]
+
+theorem find_name_isSome (l : List Local) (n : String) :
+    (l.find? (·.name == n)).isSome = (l.map (·.name)).contains n := by
+  induction l with
+  | nil => rfl
+  | cons x l ih =>
+    by_cases hx : x.name = n
+    · simp [hx]
+    · have : (x.name == n) = false := by simpa using hx
+      simp only [List.find?_cons, this, List.map_cons, List.contains_cons, ih]
+      simp [Ne.symm hx]
+
+
+theorem evalList_vars {ρo : Eval.Env N} :
+    ∀ {names : List String} {cvals : List (Val N)},
+      IR.Expr.evalList fs fuel ρo (names.map IR.Expr.var) = some cvals →
+        cvals.length = names.length ∧ ∀ p ∈ names.zip cvals, ρo.lookup p.1 = some p.2
+  | [], cvals, h => by simp [IR.Expr.evalList] at h; subst h; simp
+  | n :: names, cvals, h => by
+    simp only [List.map_cons, IR.Expr.evalList, IR.Expr.eval] at h
+    cases hn : ρo.lookup n with
+    | none => simp [hn] at h
+    | some v =>
+      cases hr : IR.Expr.evalList fs fuel ρo (names.map IR.Expr.var) with
+      | none => simp [hn, hr] at h
+      | some vs =>
+        simp [hn, hr] at h
+        subst h
+        obtain ⟨hl, hall⟩ := evalList_vars hr
+        refine ⟨by simp [hl], fun p hp => ?_⟩
+        simp only [List.zip_cons_cons, List.mem_cons] at hp
+        rcases hp with rfl | hp
+        · exact hn
+        · exact hall p hp
+
+/-- The environment in which the spec runs the body of a local function, and
+the one in which the output runs the lifted function, give every name the
+same value, and the first binds the names that the body's scope has. -/
+theorem localBody_env {env : Translate.Env} {fn : LocalFn} {ρs ρo : Eval.Env N} {vs cvals : List (Val N)}
+    (h1 : (fn.captured.all fun l => fn.body.mentions l.name && (env.lookup l.name).any (·.type == l.type)) = true)
+    (h2 : env.locals.any (fun l => fn.body.mentions l.name &&
+      !(fn.captured.any (·.name == l.name) || fn.params.any (·.name == l.name))) = false)
+    (ha : Agree ρs ρo) (hs : Scoped m env ρs)
+    (hcv : IR.Expr.evalList fs fuel ρo (fn.captured.map (fun l => IR.Expr.var l.name)) = some cvals)
+    (hlen : vs.length = fn.params.length) :
+    Agree (((fn.params.map (·.name)).zip vs).reverse ++ Eval.captures ρs (fn.params.map (·.name)) fn.body)
+        (((fn.leanParams.map (·.1)).zip (cvals ++ vs)).reverse) ∧
+      Scoped m (fn.bodyEnv env) (((fn.params.map (·.name)).zip vs).reverse ++ Eval.captures ρs (fn.params.map (·.name)) fn.body) := by
+  have hcv' : IR.Expr.evalList fs fuel ρo ((fn.captured.map (·.name)).map IR.Expr.var) = some cvals := by
+    simpa [List.map_map, Function.comp_def] using hcv
+  obtain ⟨hcl, hcall⟩ := evalList_vars fs fuel hcv'
+  have hzip : ((fn.leanParams.map (·.1)).zip (cvals ++ vs)).reverse =
+      ((fn.params.map (·.name)).zip vs).reverse ++ ((fn.captured.map (·.name)).zip cvals).reverse := by
+    simp only [LocalFn.leanParams, List.map_map, List.map_append]
+    rw [List.zip_append (by simpa [Function.comp_def] using hcl.symm), List.reverse_append]
+    simp [Function.comp_def]
+  rw [hzip]
+  simp only [List.all_eq_true, Bool.and_eq_true] at h1
+  have h2' : ∀ l ∈ env.locals, fn.body.mentions l.name = true →
+      (fn.captured.any (·.name == l.name) || fn.params.any (·.name == l.name)) = true := by
+    intro l hl hm
+    have := List.any_eq_false.mp h2 l hl
+    simp only [hm, Bool.true_and, Bool.not_eq_eq_eq_not, Bool.not_true] at this
+    cases h : (fn.captured.any (·.name == l.name) || fn.params.any (·.name == l.name)) <;> simp_all
+  -- For a name that is not a parameter, both sides look in what the body captures.
+  have hrest : ∀ n, n ∉ fn.params.map (·.name) →
+      (Eval.captures ρs (fn.params.map (·.name)) fn.body).lookup n = (((fn.captured.map (·.name)).zip cvals).reverse).lookup n := by
+    intro n hnp
+    rw [lookup_captures]
+    have hL : ∀ p ∈ ((fn.captured.map (·.name)).zip cvals).reverse, ρo.lookup p.1 = some p.2 :=
+      fun p hp => hcall p (List.mem_reverse.mp hp)
+    rw [lookup_of_all hL n, lookup_isSome_reverse, lookup_isSome_zip hcl]
+    by_cases hnc : n ∈ fn.captured.map (·.name)
+    · have hpc : (fn.params.map (·.name)).contains n = false := by simpa using hnp
+      obtain ⟨l, hl, rfl⟩ := List.mem_map.mp hnc
+      simp only [hnc, (h1 l hl).1, Bool.true_and, hpc, Bool.not_false, ↓reduceIte, ha l.name,
+        List.contains_iff_mem]
+    · have hcf : (fn.captured.map (·.name)).contains n = false := by simpa using hnc
+      rw [hcf]
+      simp only [Bool.false_eq_true, ↓reduceIte, ite_eq_right_iff]
+      intro hm'
+      have hm : fn.body.mentions n = true := by simp only [Bool.and_eq_true] at hm'; exact hm'.1
+      cases hlk : ρs.lookup n with
+      | none => rfl
+      | some w =>
+        exfalso
+        have hhas : env.has n = true := by rw [← hs.1 n, hlk]; rfl
+        simp only [Translate.Env.has, Translate.Env.lookup, Option.isSome_iff_exists] at hhas
+        obtain ⟨l, hl⟩ := hhas
+        have hln := List.find?_some hl
+        simp only [beq_iff_eq] at hln
+        subst hln
+        have := h2' l (List.mem_of_find?_eq_some hl) hm
+        simp only [Bool.or_eq_true, List.any_eq_true, beq_iff_eq] at this
+        rcases this with ⟨l', hl', he⟩ | ⟨l', hl', he⟩
+        · exact hnc (List.mem_map.mpr ⟨l', hl', he⟩)
+        · exact hnp (List.mem_map.mpr ⟨l', hl', he⟩)
+  refine ⟨fun n => ?_, fun n => ?_, ?_⟩
+  · simp only [List.lookup_append]
+    cases hp : (((fn.params.map (·.name)).zip vs).reverse).lookup n with
+    | some w => rfl
+    | none =>
+      have hnp : n ∉ fn.params.map (·.name) := by
+        intro hn
+        have := lookup_isSome_reverse (N := N) (x := n) ((fn.params.map (·.name)).zip vs)
+        rw [hp, lookup_isSome_zip (by simpa using hlen)] at this
+        simp [hn] at this
+      simp [hrest n hnp]
+  · rw [lookup_isSome_append, lookup_isSome_reverse, lookup_isSome_zip (by simpa using hlen)]
+    have hhas : (fn.bodyEnv env).has n =
+        ((fn.params.map (·.name)).contains n || (fn.captured.map (·.name)).contains n) := by
+      simp only [Translate.Env.has, Translate.Env.lookup, LocalFn.bodyEnv, find_name_isSome, List.map_append,
+        List.contains_append]
+    rw [hhas]
+    cases hp : (fn.params.map (·.name)).contains n with
+    | true => rfl
+    | false =>
+      have hnp : n ∉ fn.params.map (·.name) := by simpa using hp
+      rw [hrest n hnp, lookup_isSome_reverse, lookup_isSome_zip hcl]
+  · exact hs.2
+
+/-- What the output's lifted call does. -/
+theorem exec_letCall {names : List String} {ref : DeclRef} {g : String} {value : IR.Expr}
+    {params : List (String × IR.Ty)} {ret : IR.Ty} {returns : Bool} {body rest : IR.Body} {args : List IR.Expr}
+    {ρo : Eval.Env N} {o : Outcome N}
+    (h : IR.Body.exec fs fuel ρo (.letCall names ref g value params ret returns body args rest) = some o) :
+    ∃ ps b0 vsAll k inner ρo₂, IR.Expr.eval fs fuel ρo value = some (.closure ps b0) ∧
+      ρo.lookup g = some (.closure ps b0) ∧ IR.Expr.evalList fs fuel ρo args = some vsAll ∧
+      fuel = k + 1 ∧ params.length = vsAll.length ∧
+      ((returns = false ∧ IR.Body.exec fs k ((params.map (·.1)).zip vsAll).reverse body = some (.normal inner)) ∨
+        (returns = true ∧ ∃ w, IR.Body.exec fs k ((params.map (·.1)).zip vsAll).reverse body = some (.ret (.ok w)) ∧
+          IR.callResult names w = some inner)) ∧
+      IR.bindState names inner ρo = some ρo₂ ∧ IR.Body.exec fs fuel ρo₂ rest = some o := by
+  simp only [IR.Body.exec] at h
+  cases hv : IR.Expr.eval fs fuel ρo value with
+  | none => simp [hv] at h
+  | some v =>
+    cases v
+    all_goals try (simp [hv] at h; done)
+    rename_i ps b0
+    cases hg : ρo.lookup g with
+    | none => simp [hv, hg] at h
+    | some u =>
+      cases u
+      all_goals try (simp [hv, hg] at h; done)
+      rename_i ps' b'
+      by_cases hpb : (ps == ps' && b0 == b') = true
+      · simp only [Bool.and_eq_true, beq_iff_eq] at hpb
+        obtain ⟨rfl, rfl⟩ := hpb
+        cases hvs : IR.Expr.evalList fs fuel ρo args with
+        | none => simp [hv, hg, hvs] at h
+        | some vsAll =>
+          cases fuel with
+          | zero => simp [hv, hg, hvs] at h
+          | succ k =>
+            by_cases hl : params.length = vsAll.length
+            · cases hb : IR.Body.exec fs k ((params.map (·.1)).zip vsAll).reverse body with
+              | none => cases returns <;> simp [hv, hg, hvs, hl, hb] at h
+              | some ob =>
+                cases returns with
+                | false =>
+                  cases ob with
+                  | normal inner =>
+                    cases hbs : IR.bindState names inner ρo with
+                    | none => simp [hv, hg, hvs, hl, hb, hbs] at h
+                    | some ρo₂ =>
+                      simp [hv, hg, hvs, hl, hb, hbs] at h
+                      exact ⟨ps, b0, vsAll, k, inner, ρo₂, rfl, rfl, rfl, rfl, hl, .inl ⟨rfl, hb⟩, hbs, h⟩
+                  | ret _ | brk _ | cont _ => simp [hv, hg, hvs, hl, hb] at h
+                | true =>
+                  cases ob with
+                  | ret r =>
+                    cases r with
+                    | error t => simp [hv, hg, hvs, hl, hb] at h
+                    | ok w =>
+                      cases hcr : IR.callResult names w with
+                      | none => simp [hv, hg, hvs, hl, hb, hcr] at h
+                      | some inner =>
+                        cases hbs : IR.bindState names inner ρo with
+                        | none => simp [hv, hg, hvs, hl, hb, hcr, hbs] at h
+                        | some ρo₂ =>
+                          simp [hv, hg, hvs, hl, hb, hcr, hbs] at h
+                          exact ⟨ps, b0, vsAll, k, inner, ρo₂, rfl, rfl, rfl, rfl, hl, .inr ⟨rfl, w, hb, hcr⟩,
+                            hbs, h⟩
+                  | normal _ | brk _ | cont _ => simp [hv, hg, hvs, hl, hb] at h
+            · simp [hv, hg, hvs, hl] at h
+      · simp [hv, hg] at h
+        exact absurd (by simp [h.1.1, h.1.2]) hpb
+
+omit [JSNumber N] in
+theorem bindArgs_eq {ps : List String} {vs : List (Val N)} (h : vs.length = ps.length) :
+    Eval.bindArgs ps vs = some (ps.zip vs).reverse := by
+  simp [Eval.bindArgs, h]
+
+theorem execStmt_localCall (sp cs sp' : Span) (g : String) (args : List Expr) (ρ : Eval.Env N) (k : Nat) :
+    Eval.execStmt m (k + 1) ρ (.exprStmt sp (.call cs (.ident sp' g) args)) = (do
+      let vs ← Eval.evalList m (k + 1) ρ args
+      let .closure params body ← ρ.lookup g | none
+      match ← Eval.callLocal m k ρ params body vs with
+      | (.ok _, after) => some (.normal after)
+      | (.error t, _) => some (.ret (.error t))) := by
+  rw [Eval.execStmt]; rfl
+
+theorem callLocal_block (ps : List String) (sp : Span) (ss : List Stmt) (vs : List (Val N)) (ρ : Eval.Env N)
+    (k : Nat) :
+    Eval.callLocal m k ρ ps (.block sp ss) vs = (do
+      match ← Eval.execStmt m k ((← Eval.bindArgs ps vs) ++ Eval.captures ρ ps (.block sp ss)) (.block sp ss) with
+      | .normal after => some (.ok .undefined, Eval.writeBack ρ after ps (.block sp ss))
+      | .ret r => if Eval.changesCaptured ρ ps (.block sp ss) then none else some (r, ρ)
+      | .brk _ | .cont _ => none) := by
+  rw [Eval.callLocal]; rfl
+
+/-- A call of a local function that returns nothing. When the output's lifted
+body ends with the locals `inner`, the spec's call ends too: each local that
+the function changes gets the value that `inner` gives it, and every other
+local of the caller keeps its value. -/
+theorem localCall_void {env : Translate.Env} {fn : LocalFn} {k : Nat} {b : IR.Body}
+    {ρs ρo inner : Eval.Env N} {vs cvals : List (Val N)} {sp : Span} {ss : List Stmt}
+    (hblk : fn.body = .block sp ss)
+    (h1 : (fn.captured.all fun l => fn.body.mentions l.name && (env.lookup l.name).any (·.type == l.type) &&
+      !fn.params.any (·.name == l.name)) = true)
+    (h2 : env.locals.any fn.late = false)
+    (h3 : (fn.changes.all (fun c => fn.captured.any (·.name == c)) &&
+      fn.captured.all (fun l => fn.changes.contains l.name ||
+        !(stmtsChanges [] (blockStatements fn.body)).contains l.name)) = true)
+    (hbody : StmtSim (N := N) m fs k (fn.bodyEnv env) (.state fn.changes) (blockStatements fn.body) b)
+    (ha : Agree ρs ρo) (hs : Scoped m env ρs)
+    (hcv : IR.Expr.evalList fs fuel ρo (fn.captured.map (fun l => IR.Expr.var l.name)) = some cvals)
+    (hlen : vs.length = fn.params.length)
+    (hrun : IR.Body.exec fs k (((fn.leanParams.map (·.1)).zip (cvals ++ vs)).reverse) b =
+      some (.normal inner)) :
+    ∃ mod, Eval.callLocal m k ρs (fn.params.map (·.name)) fn.body vs =
+        some (.ok .undefined, Eval.writeBack ρs mod (fn.params.map (·.name)) fn.body) ∧
+      (∀ n ∈ fn.changes, (inner.lookup n).isSome →
+        (Eval.writeBack ρs mod (fn.params.map (·.name)) fn.body).lookup n = inner.lookup n) ∧
+      Frame fn.changes (Eval.writeBack ρs mod (fn.params.map (·.name)) fn.body) ρs := by
+  simp only [List.all_eq_true, Bool.and_eq_true, Bool.not_eq_true', List.any_eq_false] at h1 h3
+  have h1' : (fn.captured.all fun l => fn.body.mentions l.name && (env.lookup l.name).any (·.type == l.type)) =
+      true := by
+    simp only [List.all_eq_true, Bool.and_eq_true]; exact fun l hl => (h1 l hl).1
+  obtain ⟨hag, hsc⟩ := localBody_env m fs fuel h1' h2 ha hs hcv hlen
+  obtain ⟨-, new, out, mod, hex, hag', hnew, hout, hfr⟩ :=
+    (hbody _ _ hag hsc).2 false inner (by simpa [endOf] using hrun)
+  simp only [Ends] at hex
+  have hlenm := hfr.length
+  have hst : Eval.execStmt m k ((((fn.params.map (·.name)).zip vs).reverse) ++
+      Eval.captures ρs (fn.params.map (·.name)) fn.body) fn.body = some (.normal mod) := by
+    rw [hblk] at hex hlenm ⊢
+    simp only [blockStatements] at hex
+    rw [execStmt_block m k sp ss, hex]
+    simp only [hlenm, List.length_append, Nat.add_sub_cancel, List.drop_left, Option.bind_eq_bind,
+      Option.bind_some]
+  -- The captured locals that the function changes are in the body's scope.
+  have hcapt : ∀ n, n ∈ fn.captured.map (·.name) → (fn.bodyEnv env).has n = true := by
+    intro n hn
+    rw [show (fn.bodyEnv env).has n = ((fn.params ++ fn.captured).map (·.name)).contains n from
+      find_name_isSome _ _]
+    simp [hn]
+  -- A name that no parameter has finds the captured variable.
+  have hnotp : ∀ n, (fn.params.map (·.name)).contains n = false →
+      (((fn.params.map (·.name)).zip vs).reverse).lookup n = none := by
+    intro n hn
+    have := lookup_isSome_reverse (N := N) (x := n) ((fn.params.map (·.name)).zip vs)
+    rw [lookup_isSome_zip (by simpa using hlen), hn] at this
+    simpa using this
+  -- A captured local is in scope, and no parameter has its name.
+  have hcl : ∀ l ∈ fn.captured, fn.body.mentions l.name = true ∧ (fn.params.map (·.name)).contains l.name = false ∧
+      (ρs.lookup l.name).isSome = true := by
+    intro l hl
+    obtain ⟨⟨hm, hty⟩, hnp⟩ := h1 l hl
+    refine ⟨hm, ?_, ?_⟩
+    · simpa using hnp
+    · rw [hs.1 l.name]
+      simp only [Translate.Env.has]
+      cases h : env.lookup l.name <;> simp_all
+  refine ⟨mod, ?_, fun n hn hin => ?_, frame_writeBack fun n hnc hcap v hv hsn => ?_⟩
+  · rw [hblk] at hst ⊢
+    rw [callLocal_block, bindArgs_eq (by simpa using hlen)]
+    simp [hst]
+  · obtain ⟨l, hl, hln⟩ := List.any_eq_true.mp (h3.1 n hn)
+    simp only [beq_iff_eq] at hln
+    subst hln
+    obtain ⟨hm, hnp, hsome⟩ := hcl l hl
+    have hin' : inner.lookup l.name = mod.lookup l.name := by
+      rw [← hag' l.name, lookup_append_fresh mod fun p hp hk => by
+        have := hout p hp; rw [hk, hcapt l.name (List.mem_map.mpr ⟨l, hl, rfl⟩)] at this; exact absurd this (by simp)]
+    rw [lookup_writeBack, if_pos ⟨by rw [hm, hnp]; rfl, by rw [← hin']; exact hin, hsome⟩, hin']
+  · simp only [Bool.and_eq_true, Bool.not_eq_true'] at hcap
+    obtain ⟨hm, hnp⟩ := hcap
+    have hhas : env.has n = true := by rw [← hs.1 n]; exact hsn
+    simp only [Translate.Env.has, Translate.Env.lookup, Option.isSome_iff_exists] at hhas
+    obtain ⟨l, hl⟩ := hhas
+    have hln : l.name = n := by simpa using List.find?_some hl
+    have hlate := List.any_eq_false.mp h2 l (List.mem_of_find?_eq_some hl)
+    have hlate' : (fn.captured.any (·.name == n) || fn.params.any (·.name == n)) = true := by
+      simp only [LocalFn.late, hln, hm, Bool.true_and] at hlate
+      cases h : (fn.captured.any (·.name == n) || fn.params.any (·.name == n)) <;> simp_all
+    simp only [Bool.or_eq_true, List.any_eq_true, beq_iff_eq] at hlate'
+    obtain ⟨l', hl', hl'n⟩ : ∃ l' ∈ fn.captured, l'.name = n := by
+      rcases hlate' with h | ⟨q, hq, hqn⟩
+      · exact h
+      · exact absurd (List.mem_map.mpr ⟨q, hq, hqn⟩) (by simpa using hnp)
+    have hnc' : n ∉ stmtsChanges [] (blockStatements fn.body) := by
+      have := (h3.2 l' hl')
+      rw [hl'n] at this
+      simp only [Bool.or_eq_true] at this
+      cases hc : fn.changes.contains n
+      · rw [hc] at this; simpa using this
+      · exact absurd (by simpa using hc) hnc
+    have hmod := hfr.lookup (show n ∉ stmtsChanges (fn.bodyEnv env).fnChanges (blockStatements fn.body) from hnc')
+    rw [List.lookup_append, hnotp n hnp, Option.none_or, lookup_captures, if_pos (by rw [hm, hnp]; rfl)] at hmod
+    rw [← hmod, hv]
+
+omit [JSNumber N] in
+theorem bindState_isSome {inner : Eval.Env N} :
+    ∀ {names : List String} {outer ρ : Eval.Env N}, IR.bindState names inner outer = some ρ →
+      ∀ n ∈ names, (inner.lookup n).isSome = true
+  | [], _, _, _, n, hn => by simp at hn
+  | k :: ks, outer, ρ, h, n, hn => by
+    simp only [IR.bindState, List.foldlM_cons] at h
+    cases hk : inner.lookup k with
+    | none => simp [hk] at h
+    | some w =>
+      simp only [hk] at h
+      rcases List.mem_cons.mp hn with rfl | hn
+      · simp [hk]
+      · exact bindState_isSome (names := ks) (by simpa [IR.bindState] using h) n hn
+
+/-- A statement whose output runs `body`, which binds `names` again to the
+values in `inner`, as `letState` binds the state of a branch, and then `rb`,
+means what the source means, when the rest does. -/
+theorem rebind_sim {env : Translate.Env} {st : Stmt} {rest : List Stmt} {tail : Tail} {body rb : IR.Body}
+    {names : List String} (hst0 : st.constAssignedIn rest = false)
+    (hsub : ∀ n, n ∈ names → n ∈ stmtChanges env.fnChanges st)
+    (hbody : ∀ (ρs ρo : Eval.Env N) (o : Outcome N), Agree ρs ρo → Scoped m env ρs →
+      IR.Body.exec fs fuel ρo body = some o →
+      ∃ inner mod ρo₂, IR.bindState names inner ρo = some ρo₂ ∧ IR.Body.exec fs fuel ρo₂ rb = some o ∧
+        Eval.execStmt m fuel ρs st = some (.normal mod) ∧ (∀ n ∈ names, mod.lookup n = inner.lookup n) ∧
+        Frame names mod ρs)
+    (hrest : StmtSim (N := N) m fs fuel env tail rest rb) :
+    StmtSim (N := N) m fs fuel env tail (st :: rest) body := by
+  intro ρs ρo ha hs
+  have key : ∀ o, IR.Body.exec fs fuel ρo body = some o →
+      ∃ mod ρo₂, Eval.execStmt m fuel ρs st = some (.normal mod) ∧
+        Agree mod ρo₂ ∧ Frame (stmtChanges env.fnChanges st) mod ρs ∧ IR.Body.exec fs fuel ρo₂ rb = some o := by
+    intro o ho
+    obtain ⟨inner, mod, ρo₂, hbs, hrb, hst, hnames, hfr⟩ := hbody ρs ρo o ha hs ho
+    refine ⟨mod, ρo₂, hst, fun n => ?_, hfr.mono fun n hn => hsub n hn, hrb⟩
+    rw [bindState_lookup hbs n]
+    split
+    · rename_i hn; exact hnames n hn
+    · rename_i hn; rw [← ha n]; exact hfr.lookup hn
+  constructor
+  · intro v hv
+    obtain ⟨mod, ρo₂, hst, hag, hfr, hb⟩ := key _ hv
+    have := (hrest mod ρo₂ hag (scoped_frame hs hfr)).1 v hb
+    simp [Eval.exec, hst0, hst, this]
+  · intro brk ρo' hv
+    obtain ⟨mod, ρo₂, hst, hag, hfr, hb⟩ := key _ hv
+    obtain ⟨htail, new, out, mod₂, hex, hag₂, hnew, hout, hfr₂⟩ :=
+      (hrest mod ρo₂ hag (scoped_frame hs hfr)).2 brk ρo' hb
+    refine ⟨htail, new, out, mod₂, Ends.congr (by simp [Eval.exec, hst0, hst]) hex, hag₂, hnew, hout, ?_⟩
+    simpa [stmtsChanges] using hfr₂.trans hfr
+
+/-- `g(args);`, where `g` is a local function that returns nothing: the output
+calls the lifted function and binds the locals that it changes again. -/
+theorem localCallStmt_sim {env : Translate.Env} {sp cs sp' : Span} {args : List Expr} {rest : List Stmt}
+    {tail : Tail} {fn : LocalFn} {b rb : IR.Body} {outs : List IR.Expr}
+    (hfind : env.localFns.find? (·.name == fn.name) = some fn)
+    (hp : localCallProblem env fn args = none)
+    (hbody : ∀ k, fuel = k + 1 →
+      StmtSim (N := N) m fs k (fn.bodyEnv env) (.state fn.changes) (blockStatements fn.body) b)
+    (hargs : SimList (N := N) m fs fuel env args outs)
+    (hrest : StmtSim (N := N) m fs fuel env tail rest rb) :
+    StmtSim (N := N) m fs fuel env tail (.exprStmt sp (.call cs (.ident sp' fn.name) args) :: rest)
+      (.letCall fn.changes fn.ref fn.name fn.closure fn.leanParams fn.leanRet false b
+        (fn.captured.map (fun l => IR.Expr.var l.name) ++ outs) rb) := by
+  obtain ⟨⟨bsp, bss, hblk⟩, h1, h2, h3, -, -⟩ := localCallProblem_none hp
+  refine rebind_sim m fs fuel (names := fn.changes) (by simp) (fun n hn => ?_) (fun ρs ρo o ha hs ho => ?_) hrest
+  · simp [stmtChanges, exprChanges, calleeChanges, fnChanges_lookup hfind, hn]
+  obtain ⟨ps, b0, vsAll, k, inner, ρo₂, hval, hg, hvs, rfl, hl, hrun, hbs, hrb⟩ := exec_letCall fs _ ho
+  simp only [LocalFn.closure, IR.Expr.eval, IR.Expr.evalList, IR.ExprExt.apply, Option.bind_eq_bind,
+    Option.bind_some, Option.some.injEq, Val.closure.injEq] at hval
+  obtain ⟨rfl, rfl⟩ := hval
+  rcases hrun with ⟨-, hrun⟩ | ⟨h, -⟩
+  rotate_left
+  · cases h
+  obtain ⟨cvals, vs, rfl, hcv, hvo, hcl⟩ := evalList_append_inv fs (k + 1) hvs
+  have hlen : vs.length = fn.params.length := by
+    simp only [LocalFn.leanParams, List.length_map, List.length_append] at hl
+    simp only [List.length_map] at hcl
+    omega
+  obtain ⟨mod, hcall, hch, hfr⟩ := localCall_void m fs (k + 1) hblk h1 h2 h3 (hbody k rfl) ha hs hcv hlen hrun
+  refine ⟨inner, Eval.writeBack ρs mod (fn.params.map (·.name)) fn.body, ρo₂, hbs, hrb, ?_,
+    fun n hn => hch n hn (bindState_isSome hbs n hn), hfr⟩
+  have hgs : ρs.lookup fn.name = some (.closure (fn.params.map (·.name)) fn.body) := by rw [ha]; exact hg
+  rw [execStmt_localCall, hargs ρs ρo vs ha hs hvo]
+  simp [hgs, hcall]
+
+omit [JSNumber N] in
+/-- A local that a local function captures is one of the locals that it took
+where it was declared, when no later declaration hides its name. -/
+theorem captured_of_captures {env : Translate.Env} {fn : LocalFn} {ρs : Eval.Env N} {m : Eval.Scope}
+    (h2 : env.locals.any fn.late = false) (hs : Scoped m env ρs) {p : String × Val N}
+    (hp : p ∈ Eval.captures ρs (fn.params.map (·.name)) fn.body) : ∃ l ∈ fn.captured, l.name = p.1 := by
+  unfold Eval.captures at hp
+  obtain ⟨hp, hk⟩ := List.mem_filter.mp hp
+  simp only [Bool.and_eq_true, Bool.not_eq_true'] at hk
+  have hhas : env.has p.1 = true := by rw [← hs.1 p.1]; exact lookup_isSome_of_mem hp
+  simp only [Translate.Env.has, Translate.Env.lookup, Option.isSome_iff_exists] at hhas
+  obtain ⟨l, hl⟩ := hhas
+  have hln : l.name = p.1 := by simpa using List.find?_some hl
+  have hlate := List.any_eq_false.mp h2 l (List.mem_of_find?_eq_some hl)
+  have hlate' : (fn.captured.any (·.name == p.1) || fn.params.any (·.name == p.1)) = true := by
+    simp only [LocalFn.late, hln, hk.1, Bool.true_and] at hlate
+    cases h : (fn.captured.any (·.name == p.1) || fn.params.any (·.name == p.1)) <;> simp_all
+  simp only [Bool.or_eq_true, List.any_eq_true, beq_iff_eq] at hlate'
+  rcases hlate' with h | ⟨q, hq, hqn⟩
+  · exact h
+  · exact absurd (List.mem_map.mpr ⟨q, hq, hqn⟩) (by simpa using hk.2)
+
+/-- A call of a local function that returns a value and changes nothing
+around it: when the output's lifted body returns `w`, so does the spec's call. -/
+theorem localCall_value {env : Translate.Env} {fn : LocalFn} {k : Nat} {b : IR.Body} {args : List Expr}
+    {ρs ρo : Eval.Env N} {vs cvals : List (Val N)} {w : Val N}
+    (hp : localCallProblem env fn args = none) (hret : fn.ret.isSome = true)
+    (hbody : StmtSim (N := N) m fs k (fn.bodyEnv env) .ret (blockStatements fn.body) b)
+    (ha : Agree ρs ρo) (hs : Scoped m env ρs)
+    (hcv : IR.Expr.evalList fs fuel ρo (fn.captured.map (fun l => IR.Expr.var l.name)) = some cvals)
+    (hlen : vs.length = fn.params.length)
+    (hrun : IR.Body.exec fs k (((fn.leanParams.map (·.1)).zip (cvals ++ vs)).reverse) b = some (.ret (.ok w)))
+    (hgs : ρs.lookup fn.name = some (.closure (fn.params.map (·.name)) fn.body))
+    (hvs : Eval.evalList m (k + 1) ρs args = some vs) :
+    Eval.evalCall m (k + 1) ρs fn.name args = some (.ok w) := by
+  obtain ⟨⟨bsp, bss, hblk⟩, h1, h2, -, h4, -⟩ := localCallProblem_none hp
+  have h1' : (fn.captured.all fun l => fn.body.mentions l.name && (env.lookup l.name).any (·.type == l.type)) =
+      true := by
+    simp only [List.all_eq_true, Bool.and_eq_true] at h1 ⊢; exact fun l hl => (h1 l hl).1
+  obtain ⟨hag, hsc⟩ := localBody_env m fs fuel h1' h2 ha hs hcv hlen
+  have hex := (hbody _ _ hag hsc).1 _ hrun
+  have hst := block_ret m k fn.body hex
+  have hchg : Eval.changesCaptured ρs (fn.params.map (·.name)) fn.body = false := by
+    unfold Eval.changesCaptured
+    rw [List.any_eq_false]
+    intro p hp
+    obtain ⟨l, hl, hln⟩ := captured_of_captures h2 hs hp
+    simp only [hret, Bool.true_and, List.any_eq_false] at h4
+    have := h4 l hl
+    rw [← hln]
+    simpa using this
+  have hnum : (ρs.lookup "Number").isNone = false ∨ fn.name ≠ "Number" := by
+    by_cases hn : fn.name = "Number"
+    · left; rw [← hn, hgs]; rfl
+    · right; exact hn
+  rw [Eval.evalCall, hvs]
+  rw [hblk] at hst hgs hchg
+  have hnum' : (fn.name == "Number" && (ρs.lookup "Number").isNone) = false := by
+    rcases hnum with h | h
+    · rw [← hblk] at hgs; simp [h]
+    · simp [h]
+  simp only [Option.bind_eq_bind, Option.bind_some, hnum', Bool.false_eq_true, ↓reduceIte, hgs, hchg,
+    callLocal_block, bindArgs_eq (show vs.length = (fn.params.map (·.name)).length by simpa using hlen)]
+  simp [hst]
+
+theorem decl_sim_gen {env env' : Translate.Env} {s : Span} {d : VarDecl} {init : Expr} {rest : List Stmt}
+    {tail : Tail} {body rb : IR.Body} {b : Binding} {ty : Ty}
+    (hinit : d.init = some init) (hconst : (Stmt.varDecl s d).constAssignedIn rest = false)
+    (hfresh : env.has d.name = false)
+    (henv : env' = env.add { name := d.name, binding := b, type := ty })
+    (hbody : ∀ (ρs ρo : Eval.Env N) (o : Outcome N), Agree ρs ρo → Scoped m env ρs →
+      IR.Body.exec fs fuel ρo body = some o → ∃ w,
+        Eval.eval m fuel ρs init = some w ∧ IR.Body.exec fs fuel ((d.name, w) :: ρo) rb = some o)
+    (hrest : StmtSim (N := N) m fs fuel env' tail rest rb) :
+    StmtSim (N := N) m fs fuel env tail (.varDecl s d :: rest) body := by
+  subst henv
+  obtain ⟨kind, name, type, init?⟩ := d
+  simp only at hinit hfresh hbody ⊢
+  subst hinit
+  intro ρs ρo ha hs
+  have ha' : ∀ w, Agree ((name, w) :: ρs) ((name, w) :: ρo) := fun w x => by
+    simp only [List.lookup]; split
+    · rfl
+    · exact ha x
+  have hs' : ∀ w, Scoped m (env.add { name, binding := b, type := ty }) ((name, w) :: ρs) :=
+    fun w => ⟨fun x => by
+    rw [has_add, ← hs.1 x]
+    simp only [List.lookup]
+    by_cases hx : x = name
+    · subst hx; simp
+    · have h1 : (x == name) = false := by simpa using hx
+      have h2 : (name == x) = false := by simpa using Ne.symm hx
+      simp [h1, h2], hs.2⟩
+  have hstep : ∀ w, Eval.eval m fuel ρs init = some w →
+      Eval.exec m fuel ρs (.varDecl s { kind, name, type, init := some init } :: rest) =
+        Eval.exec m fuel ((name, w) :: ρs) rest := by
+    intro w hw
+    simp [Eval.exec, Eval.execStmt, evalTop_ok m fuel hw, hconst]
+  constructor
+  · intro v hv
+    obtain ⟨w, hw, hb⟩ := hbody ρs ρo _ ha hs hv
+    rw [hstep w hw]
+    exact ((hrest _ _ (ha' w) (hs' w)).1 v hb)
+  · intro brk ρo' hv
+    obtain ⟨w, hw, hb⟩ := hbody ρs ρo _ ha hs hv
+    obtain ⟨htail, new, out, mod, hex, hag, hnew, hout, hfr⟩ := (hrest _ _ (ha' w) (hs' w)).2 brk ρo' hb
+    obtain ⟨ρ₁, ρ₂, rfl, h₁, h₂⟩ := Frame.split (a := [(name, w)]) (b := ρs) hfr
+    -- The new bindings of either side, and the declared name, are not in `env`.
+    have hfr₁ : ∀ l : Eval.Env N,
+        (∀ p ∈ l, (env.add { name, binding := b, type := ty }).has p.1 = false) →
+        ∀ p ∈ l ++ ρ₁, env.has p.1 = false := by
+      intro l hl p hp
+      rcases List.mem_append.mp hp with hp | hp
+      · have := hl p hp
+        rw [has_add] at this
+        simp only [Bool.or_eq_false_iff] at this
+        exact this.1
+      · obtain ⟨q, hq, hk⟩ := Frame.mem h₁ hp
+        simp only [List.mem_singleton] at hq
+        subst hq
+        rw [hk]; exact hfresh
+    refine ⟨htail, new ++ ρ₁, out ++ ρ₁, ρ₂, ?_, ?_, hfr₁ new hnew, hfr₁ out hout, ?_⟩
+    · rw [hstep w hw, List.append_assoc]; exact hex
+    · rwa [List.append_assoc]
+    · exact h₂.mono fun n hn => by simp only [Env.fnChanges_add] at hn; simp [stmtsChanges, hn]
+
+omit [JSNumber N] in
+theorem bindState_fresh {x : String} {w : Val N} {ρ : Eval.Env N} (h : ρ.lookup x = none) :
+    IR.bindState [x] [(x, w)] ρ = some ((x, w) :: ρ) := by
+  simp [IR.bindState, h]
+
+/-- `const x = g(args)`, where `g` is a local function that returns a value:
+the output calls the lifted function and binds `x` to what it returns. -/
+theorem localDecl_sim {env env' : Translate.Env} {s cs sp' : Span} {d : VarDecl} {args : List Expr}
+    {rest : List Stmt} {tail : Tail} {fn : LocalFn} {b rb : IR.Body} {outs : List IR.Expr} {bnd : Binding}
+    {ty : Ty}
+    (hinit : d.init = some (.call cs (.ident sp' fn.name) args))
+    (hconst : (Stmt.varDecl s d).constAssignedIn rest = false) (hfresh : env.has d.name = false)
+    (henv : env' = env.add { name := d.name, binding := bnd, type := ty })
+    (hp : localCallProblem env fn args = none) (hret : fn.ret.isSome = true)
+    (hbody : ∀ k, fuel = k + 1 → StmtSim (N := N) m fs k (fn.bodyEnv env) .ret (blockStatements fn.body) b)
+    (hargs : SimList (N := N) m fs fuel env args outs)
+    (hrest : StmtSim (N := N) m fs fuel env' tail rest rb) :
+    StmtSim (N := N) m fs fuel env tail (.varDecl s d :: rest)
+      (.letCall [d.name] fn.ref fn.name fn.closure fn.leanParams fn.leanRet true b
+        (fn.captured.map (fun l => IR.Expr.var l.name) ++ outs) rb) := by
+  refine decl_sim_gen m fs fuel hinit hconst hfresh henv (fun ρs ρo o ha hs ho => ?_) hrest
+  obtain ⟨ps, b0, vsAll, k, inner, ρo₂, hval, hg, hvs, rfl, hl, hrun, hbs, hrb⟩ := exec_letCall fs _ ho
+  simp only [LocalFn.closure, IR.Expr.eval, IR.Expr.evalList, IR.ExprExt.apply, Option.bind_eq_bind,
+    Option.bind_some, Option.some.injEq, Val.closure.injEq] at hval
+  obtain ⟨rfl, rfl⟩ := hval
+  rcases hrun with ⟨h, -⟩ | ⟨-, w, hrun, hcr⟩
+  · cases h
+  simp only [IR.callResult, Option.some.injEq] at hcr
+  subst hcr
+  have hnone : ρo.lookup d.name = none := by rw [← ha]; exact hs.none hfresh
+  rw [bindState_fresh hnone] at hbs
+  cases hbs
+  obtain ⟨cvals, vs, rfl, hcv, hvo, hcl⟩ := evalList_append_inv fs (k + 1) hvs
+  have hlen : vs.length = fn.params.length := by
+    simp only [LocalFn.leanParams, List.length_map, List.length_append] at hl
+    simp only [List.length_map] at hcl
+    omega
+  have hgs : ρs.lookup fn.name = some (.closure (fn.params.map (·.name)) fn.body) := by rw [ha]; exact hg
+  have hcall := localCall_value m fs (k + 1) hp hret (hbody k rfl) ha hs hcv hlen hrun hgs
+    (hargs ρs ρo vs ha hs hvo)
+  refine ⟨w, ?_, hrb⟩
+  simp [Eval.eval, hcall, Except.toOption]
+
+/-- `return g(args)`, where `g` is a local function that returns a value: the
+output calls the lifted function and returns what it returns. -/
+theorem localReturn_sim {env : Translate.Env} {s cs sp' : Span} {args : List Expr} {tail : Tail}
+    {fn : LocalFn} {b : IR.Body} {outs : List IR.Expr} {throws : Bool}
+    (hp : localCallProblem env fn args = none) (hret : fn.ret.isSome = true)
+    (hbody : ∀ k, fuel = k + 1 → StmtSim (N := N) m fs k (fn.bodyEnv env) .ret (blockStatements fn.body) b)
+    (hargs : SimList (N := N) m fs fuel env args outs) :
+    StmtSim (N := N) m fs fuel env tail [.returnStmt s (some (.call cs (.ident sp' fn.name) args))]
+      (.letCall [fn.name] fn.ref fn.name fn.closure fn.leanParams fn.leanRet true b
+        (fn.captured.map (fun l => IR.Expr.var l.name) ++ outs)
+        (tail.returnBody (if throws then IR.Expr.pure (.var fn.name) else .var fn.name))) := by
+  have hretb : ∀ (ρ : Eval.Env N) (c : IR.Expr), IR.Body.exec fs fuel ρ (tail.returnBody c) =
+      (do return .ret (.ok (← IR.Expr.eval fs fuel ρ c))) := by
+    intro ρ c
+    cases tail <;> simp [Tail.returnBody, IR.Body.exec]
+  intro ρs ρo ha hs
+  have key : ∀ o, IR.Body.exec fs fuel ρo (.letCall [fn.name] fn.ref fn.name fn.closure fn.leanParams fn.leanRet
+      true b (fn.captured.map (fun l => IR.Expr.var l.name) ++ outs)
+      (tail.returnBody (if throws then IR.Expr.pure (.var fn.name) else .var fn.name))) = some o →
+      ∃ w, o = .ret (.ok w) ∧ Eval.evalCall m fuel ρs fn.name args = some (.ok w) := by
+    intro o ho
+    obtain ⟨ps, b0, vsAll, k, inner, ρo₂, hval, hg, hvs, rfl, hl, hrun, hbs, hrb⟩ := exec_letCall fs _ ho
+    simp only [LocalFn.closure, IR.Expr.eval, IR.Expr.evalList, IR.ExprExt.apply, Option.bind_eq_bind,
+      Option.bind_some, Option.some.injEq, Val.closure.injEq] at hval
+    obtain ⟨rfl, rfl⟩ := hval
+    rcases hrun with ⟨h, -⟩ | ⟨-, w, hrun, hcr⟩
+    · cases h
+    simp only [IR.callResult, Option.some.injEq] at hcr
+    subst hcr
+    have hlk : ρo₂.lookup fn.name = some w := by rw [bindState_lookup hbs]; simp
+    rw [hretb, eval_pureIf] at hrb
+    simp only [IR.Expr.eval, hlk, Option.bind_eq_bind, Option.bind_some] at hrb
+    obtain ⟨cvals, vs, rfl, hcv, hvo, hcl⟩ := evalList_append_inv fs (k + 1) hvs
+    have hlen : vs.length = fn.params.length := by
+      simp only [LocalFn.leanParams, List.length_map, List.length_append] at hl
+      simp only [List.length_map] at hcl
+      omega
+    have hgs : ρs.lookup fn.name = some (.closure (fn.params.map (·.name)) fn.body) := by rw [ha]; exact hg
+    exact ⟨w, by simpa [pure] using hrb.symm, localCall_value m fs (k + 1) hp hret (hbody k rfl) ha hs hcv hlen hrun hgs
+      (hargs ρs ρo vs ha hs hvo)⟩
+  constructor
+  · intro v hv
+    obtain ⟨w, hw, hcall⟩ := key _ hv
+    cases hw
+    rw [exec_single]
+    simp [Eval.execStmt, evalTop_call, hcall]
+  · intro brk ρo' hv
+    obtain ⟨w, hw, -⟩ := key _ hv
+    cases brk <;> simp [endOf] at hw
+
+/-- `function g(params): T { body }` in the body of the function: the spec binds
+`g` to the function, and so does the IR's meaning of the output, which lifts
+it out. -/
+theorem funDecl_sim {env env' : Translate.Env} {s : Span} {name : String} {tps : List String}
+    {params : List Param} {rt : Option TypeExpr} {body : Stmt} {rest : List Stmt} {rb : IR.Body}
+    (hhas : ∀ x, env'.has x = (env.has x || x == name)) (hfun : env'.functions = env.functions)
+    (henum : env'.enums = env.enums)
+    (hrest : StmtSim (N := N) m fs fuel env' .ret rest rb) :
+    StmtSim (N := N) m fs fuel env .ret (.funDecl s name tps params rt body :: rest)
+      (.letLifted name (IR.Expr.closure (params.map (·.name)) body) rb) := by
+  intro ρs ρo ha hs
+  let w : Val N := .closure (params.map (·.name)) body
+  have ha' : Agree ((name, w) :: ρs) ((name, w) :: ρo) := fun x => by
+    simp only [List.lookup]; split
+    · rfl
+    · exact ha x
+  have hs' : Scoped m env' ((name, w) :: ρs) := by
+    refine ⟨fun x => ?_, ?_, ?_⟩
+    · rw [hhas, ← hs.1 x]
+      simp only [List.lookup]
+      by_cases hx : x = name
+      · subst hx; simp
+      · have h1 : (x == name) = false := by simpa using hx
+        simp [h1]
+    · intro f hf; rw [hfun] at hf; exact hs.2.1 f hf
+    · intro e he; rw [henum] at he; exact hs.2.2 e he
+  have hexec : ∀ o, IR.Body.exec fs fuel ρo (.letLifted name (IR.Expr.closure (params.map (·.name)) body) rb) =
+      some o → IR.Body.exec fs fuel ((name, w) :: ρo) rb = some o := by
+    intro o ho
+    simpa [IR.Body.exec, IR.Expr.eval, IR.Expr.evalList, IR.ExprExt.apply] using ho
+  have hstep : Eval.exec m fuel ρs (.funDecl s name tps params rt body :: rest) =
+      Eval.exec m fuel ((name, w) :: ρs) rest := by
+    simp [Eval.exec, Eval.execStmt, w]
+  constructor
+  · intro v hv
+    rw [hstep]
+    exact (hrest _ _ ha' hs').1 v (hexec _ hv)
+  · intro brk ρo' hv
+    exact absurd ((hrest _ _ ha' hs').2 brk ρo' (hexec _ hv)).1 (by simp [Tail.isRet])
+
+omit [JSNumber N] in
+/-- A local function stands where its function returns. -/
+theorem translateLocalHead_tail {env : Translate.Env} {s : Span} {name : String} {tps : List String}
+    {params : List Param} {rt : Option TypeExpr} {body : Stmt} {tail : Tail} {ctx ctx' : Ctx} {fn : LocalFn}
+    (h : translateLocalHead env s name tps params rt body tail ctx = .ok fn ctx') : tail = .ret := by
+  cases tail
+  · rfl
+  all_goals
+    unfold translateLocalHead at h
+    rw [bind_ok] at h
+    obtain ⟨_, _, hget, h⟩ := h
+    rw [get_ok] at hget
+    obtain ⟨rfl, rfl⟩ := hget
+    simp only [Tail.isRet, Bool.false_and, Bool.false_eq_true, ↓reduceIte] at h
+    rw [bind_ok] at h
+    obtain ⟨_, _, hr, -⟩ := h
+    simp [reject] at hr
+
+/-- `g(a);`, where `g` is a local function, a case of `stmts_sound`. -/
+theorem translateLocalStmt_sound (hc : CallsAgree (N := N) m.program fs fuel) {F : Nat}
+    (ihS : ∀ env tail ss ctx body ctx', translateStatements F env tail ss ctx = .ok body ctx' →
+      StmtSim (N := N) m fs fuel env tail ss body)
+    (ihL : ∀ k, fuel = k + 1 → ∀ env tail ss ctx body ctx', translateStatements F env tail ss ctx = .ok body ctx' →
+      StmtSim (N := N) m fs k env tail ss body)
+    {env : Translate.Env} {tail : Tail} {s : Span} {e : Expr} {rest : List Stmt} {largs : List Expr}
+    {lfn : LocalFn} {ctx ctx' : Ctx} {body : IR.Body}
+    (hlc : localCall? env e = some (largs, lfn))
+    (h : translateStatements (F + 1) env tail (.exprStmt s e :: rest) ctx = .ok body ctx') :
+    StmtSim (N := N) m fs fuel env tail (.exprStmt s e :: rest) body := by
+  obtain ⟨cs, sp', rfl, hfind⟩ := localCall?_some hlc
+  unfold translateStatements at h
+  simp only [hlc, ite_state] at h
+  split at h
+  rotate_left
+  · simp at h
+  rename_i hnone
+  simp only [pure_bind, bind_ok] at h
+  obtain ⟨⟨b, outs⟩, c₁, hcall, rb, c₂, hrb, h⟩ := h
+  simp only [pure_ok] at h
+  obtain ⟨rfl, -⟩ := h
+  obtain ⟨hp, ⟨d₁, d₂, hb⟩, outs', e₁, e₂, hargs, rfl⟩ := translateLocalCall_ok hcall
+  have htail : lfn.tail = .state lfn.changes := by
+    cases hr : lfn.ret <;> simp_all [LocalFn.tail]
+  rw [htail] at hb
+  obtain ⟨-, -, -, -, -, hlen⟩ := localCallProblem_none hp
+  exact localCallStmt_sim m fs fuel hfind hp (fun k hk => ihL k hk _ _ _ _ _ _ hb)
+    (translateLocalArgs_sim m fs fuel hc _ _ _ _ _ hlen hargs) (ihS _ _ _ _ _ _ hrb)
+
+/-- `return g(a)`, where `g` is a local function, a case of `stmts_sound`. -/
+theorem translateLocalReturn_sound (hc : CallsAgree (N := N) m.program fs fuel) {F : Nat}
+    (ihL : ∀ k, fuel = k + 1 → ∀ env tail ss ctx body ctx', translateStatements F env tail ss ctx = .ok body ctx' →
+      StmtSim (N := N) m fs k env tail ss body)
+    {env : Translate.Env} {tail : Tail} {s : Span} {v : Expr} {largs : List Expr}
+    {lfn : LocalFn} {ctx ctx' : Ctx} {body : IR.Body}
+    (hcr : tail.canReturn = true) (hlc : localCall? env v = some (largs, lfn))
+    (h : translateStatements (F + 1) env tail [.returnStmt s (some v)] ctx = .ok body ctx') :
+    StmtSim (N := N) m fs fuel env tail [.returnStmt s (some v)] body := by
+  obtain ⟨cs, sp', rfl, hfind⟩ := localCall?_some hlc
+  unfold translateStatements at h
+  simp only [hcr, hlc] at h
+  cases hr : lfn.ret with
+  | none => simp [hr] at h
+  | some r =>
+    simp only [hr, bind_ok, get_ok, ite_state] at h
+    obtain ⟨_, _, ⟨rfl, rfl⟩, h⟩ := h
+    split at h
+    rotate_left
+    · simp at h
+    simp only [pure_bind, bind_ok, get_ok, pure_ok] at h
+    obtain ⟨⟨b, outs⟩, c₁, hcall, _, _, ⟨rfl, rfl⟩, rfl, -⟩ := h
+    obtain ⟨hp, ⟨d₁, d₂, hb⟩, outs', e₁, e₂, hargs, rfl⟩ := translateLocalCall_ok hcall
+    have htail : lfn.tail = .ret := by simp [LocalFn.tail, hr]
+    rw [htail] at hb
+    obtain ⟨-, -, -, -, -, hlen⟩ := localCallProblem_none hp
+    exact localReturn_sim m fs fuel hp (by simp [hr]) (fun k hk => ihL k hk _ _ _ _ _ _ hb)
+      (translateLocalArgs_sim m fs fuel hc _ _ _ _ _ hlen hargs)
+
+/-- `function g(…) { … }` in the body of the function, a case of
+`stmts_sound`. -/
+theorem translateFunDecl_sound {F : Nat}
+    (ihS : ∀ env tail ss ctx body ctx', translateStatements F env tail ss ctx = .ok body ctx' →
+      StmtSim (N := N) m fs fuel env tail ss body)
+    {env : Translate.Env} {tail : Tail} {s : Span} {name : String} {tps : List String} {params : List Param}
+    {rt : Option TypeExpr} {fbody : Stmt} {rest : List Stmt} {ctx ctx' : Ctx} {body : IR.Body}
+    (h : translateStatements (F + 1) env tail (.funDecl s name tps params rt fbody :: rest) ctx = .ok body ctx') :
+    StmtSim (N := N) m fs fuel env tail (.funDecl s name tps params rt fbody :: rest) body := by
+  unfold translateStatements at h
+  simp only [bind_ok, pure_ok] at h
+  obtain ⟨fn, c₁, hhead, b, c₂, hb, env', c₃, hdecl, rb, c₄, hrb, rfl, -⟩ := h
+  obtain rfl := translateLocalHead_tail hhead
+  obtain ⟨-, rfl, -⟩ := declare_ok hdecl
+  refine funDecl_sim m fs fuel (fun x => ?_) ?_ ?_ (ihS _ _ _ _ _ _ hrb)
+  rotate_left
+  · rfl
+  · rfl
+  change (env.add _).has x = _
+  rw [has_add]
+  by_cases hx : x = name
+  · subst hx; simp
+  · have h1 : (name == x) = false := by simpa using Ne.symm hx
+    have h2 : (x == name) = false := by simpa using hx
+    rw [h1, h2]
+
 /-- A declaration, a case of `stmts_sound`, on its own so that the mutual
 proof stays within its heartbeat budget. -/
 theorem translateVariable_sound (hc : CallsAgree (N := N) m.program fs fuel) {F : Nat}
     (ihS : ∀ env tail ss ctx body ctx', translateStatements F env tail ss ctx = .ok body ctx' →
-      StmtSim (N := N) m fs fuel env tail ss body) :
+      StmtSim (N := N) m fs fuel env tail ss body)
+    (ihL : ∀ k, fuel = k + 1 → ∀ env tail ss ctx body ctx', translateStatements F env tail ss ctx = .ok body ctx' →
+      StmtSim (N := N) m fs k env tail ss body) :
     ∀ env s d rest tail ctx body ctx', translateVariable (F + 1) env s d rest tail ctx = .ok body ctx' →
       StmtSim (N := N) m fs fuel env tail (.varDecl s d :: rest) body := by
   intro env s d rest tail ctx body ctx' h
@@ -2231,6 +3361,32 @@ theorem translateVariable_sound (hc : CallsAgree (N := N) m.program fs fuel) {F 
   simp only [pure_bind] at h
   simp only [bind_ok, orReject_ok] at h
   obtain ⟨init, s₁, ⟨rfl, rfl⟩, h⟩ := h
+  rcases hlc : localCall? env init with _ | ⟨largs, lfn⟩
+  rotate_left
+  · -- `const x = g(a)`, where `g` is a local function.
+    simp only [hlc] at h
+    obtain ⟨cs, sp', rfl, hfind⟩ := localCall?_some hlc
+    cases hr : lfn.ret with
+    | none => simp [hr] at h
+    | some r =>
+      simp only [hr, bind_ok, ite_state] at h
+      obtain ⟨declared, c₁, hdecl, h⟩ := h
+      split at h
+      rotate_left
+      · simp at h
+      simp only [bind_ok] at h
+      obtain ⟨⟨b, outs⟩, c₂, hcall, env', c₃, hdeclare, rb, c₄, hrb, h⟩ := h
+      simp only [pure_ok] at h
+      obtain ⟨rfl, -⟩ := h
+      obtain ⟨hp, ⟨d₁, d₂, hb⟩, outs', e₁, e₂, hargs, rfl⟩ := translateLocalCall_ok hcall
+      have htail : lfn.tail = .ret := by simp [LocalFn.tail, hr]
+      rw [htail] at hb
+      obtain ⟨-, -, -, -, -, hlen⟩ := localCallProblem_none hp
+      obtain ⟨hfresh, henv, -⟩ := declare_ok hdeclare
+      exact localDecl_sim m fs fuel (d := ⟨kind, name, type, some _⟩) rfl (by simpa using hconst) hfresh henv hp
+        (by simp [hr]) (fun k hk => ihL k hk _ _ _ _ _ _ hb)
+        (translateLocalArgs_sim m fs fuel hc _ _ _ _ _ hlen hargs) (ihS _ _ _ _ _ _ hrb)
+  simp only [hlc] at h
   rcases htc : throwingCall? env.functions init with _ | ⟨cs, sp, fname, args⟩
   rotate_left
   · -- `const x = f(a)`, where `f` can throw.
@@ -2358,41 +3514,6 @@ theorem Agree.append {ρs ρo : Eval.Env N} (ha : Agree ρs ρo) :
     · rfl
     · exact Agree.append ha bs x
 
-omit [JSNumber N] in
-theorem lookup_isSome_zip {x : String} :
-    ∀ {names : List String} {ws : List (Val N)}, ws.length = names.length →
-      ((names.zip ws).lookup x).isSome = names.contains x
-  | [], _, _ => by simp
-  | _ :: _, [], h => by simp at h
-  | n :: names, w :: ws, h => by
-    simp only [List.zip_cons_cons, List.lookup, List.contains_cons]
-    by_cases hx : x = n
-    · subst hx; simp
-    · have h1 : (x == n) = false := by simpa using hx
-      simp only [h1, Bool.false_or]
-      exact lookup_isSome_zip (by simpa using h)
-
-omit [JSNumber N] in
-theorem lookup_isSome_append {x : String} (a b : Eval.Env N) :
-    ((a ++ b).lookup x).isSome = ((a.lookup x).isSome || (b.lookup x).isSome) := by
-  induction a with
-  | nil => simp
-  | cons p a ih =>
-    obtain ⟨k, v⟩ := p
-    simp only [List.cons_append, List.lookup]
-    split <;> simp_all
-
-omit [JSNumber N] in
-theorem lookup_isSome_reverse {x : String} (a : Eval.Env N) :
-    (a.reverse.lookup x).isSome = (a.lookup x).isSome := by
-  induction a with
-  | nil => simp
-  | cons p a ih =>
-    obtain ⟨k, v⟩ := p
-    rw [List.reverse_cons, lookup_isSome_append, ih]
-    simp only [List.lookup]
-    split <;> simp_all
-
 /-- A statement whose output binds `names` to values `ws`, all at once, means
 what the source means, when the rest does: the source binds the same names to
 the same values, in the same order. -/
@@ -2401,7 +3522,7 @@ theorem binds_sim {env env' : Translate.Env} {stmt : Stmt} {rest : List Stmt} {t
     (hfresh : ∀ n ∈ names, env.has n = false)
     (hhas : ∀ x, env'.has x = (env.has x || names.contains x))
     (hglob : globals env' = globals env)
-    (hch : ∀ n, n ∈ stmtsChanges rest → n ∈ stmtsChanges (stmt :: rest))
+    (hch : ∀ n, n ∈ stmtsChanges env.fnChanges rest → n ∈ stmtsChanges env.fnChanges (stmt :: rest))
     (hbody : ∀ (ρo : Eval.Env N) (o : Outcome N), IR.Body.exec fs fuel ρo body = some o → ∃ ws,
       ws.length = names.length ∧
       (∀ ρs, Agree ρs ρo → Scoped m env ρs →
@@ -2409,6 +3530,7 @@ theorem binds_sim {env env' : Translate.Env} {stmt : Stmt} {rest : List Stmt} {t
         IR.Body.exec fs fuel ((names.zip ws).reverse ++ ρo) rb = some o)
     (hrest : StmtSim (N := N) m fs fuel env' tail rest rb) :
     StmtSim (N := N) m fs fuel env tail (stmt :: rest) body := by
+  simp only [StmtSim, fnChanges_congr hglob] at hrest
   intro ρs ρo ha hs
   have hs' : ∀ ws : List (Val N), ws.length = names.length →
       Scoped m env' ((names.zip ws).reverse ++ ρs) := fun ws hl =>
@@ -2617,26 +3739,6 @@ theorem tuplePlaces_all {v : IR.Expr} {size : Nat} {ρo : Eval.Env N} {items : L
     have hlt : i < items.length := by simp at hi; omega
     rw [List.drop_eq_getElem_cons hlt]
     simp [IR.Expr.eval, hv, ih, List.getElem?_eq_getElem hlt]
-
-theorem evalList_append_inv {a b : List IR.Expr} {ρo : Eval.Env N} {ws : List (Val N)} :
-    IR.Expr.evalList fs fuel ρo (a ++ b) = some ws →
-      ∃ w₁ w₂, ws = w₁ ++ w₂ ∧ IR.Expr.evalList fs fuel ρo a = some w₁ ∧
-        IR.Expr.evalList fs fuel ρo b = some w₂ ∧ w₁.length = a.length := by
-  induction a generalizing ws with
-  | nil => intro h; exact ⟨[], ws, rfl, by simp [IR.Expr.evalList], h, rfl⟩
-  | cons e a ih =>
-    intro h
-    simp only [List.cons_append, IR.Expr.evalList] at h
-    cases he : IR.Expr.eval fs fuel ρo e with
-    | none => simp [he] at h
-    | some w =>
-      cases hr : IR.Expr.evalList fs fuel ρo (a ++ b) with
-      | none => simp [he, hr] at h
-      | some rs =>
-        simp [he, hr] at h
-        subst h
-        obtain ⟨w₁, w₂, rfl, h₁, h₂, hl⟩ := ih hr
-        exact ⟨w :: w₁, w₂, rfl, by simp [IR.Expr.evalList, he, h₁], h₂, by simp [hl]⟩
 
 /-- The list that a loop over `items` visits is what the interpreter iterates
 in the value of `items`. -/
@@ -2984,7 +4086,8 @@ theorem loopPattern_sim {env bodyEnv : Translate.Env} {x : String} {p : ArrayPat
       ∀ ρo', o = .normal ρo' → ∃ mod, Eval.execLoop m fuel ρs
           (fun v => do return (Eval.patternBindings p (← Eval.iterValues v)).reverse) bodyS vs =
             some (.normal mod) ∧
-        Agree mod ρo' ∧ Frame (stmtChanges bodyS) mod ρs := by
+        Agree mod ρo' ∧ Frame (stmtChanges env.fnChanges bodyS) mod ρs := by
+  simp only [StmtSim, fnChanges_congr hglob] at hbody
   intro vs
   induction vs with
   | nil =>
@@ -3075,7 +4178,7 @@ theorem loopPattern_sim {env bodyEnv : Translate.Env} {x : String} {p : ArrayPat
             · rename_i hn
               rw [← ha n]
               by_cases hhas' : env.has n = true
-              · have hnc : n ∉ stmtsChanges (blockStatements bodyS) := fun hc =>
+              · have hnc : n ∉ stmtsChanges env.fnChanges (blockStatements bodyS) := fun hc =>
                   hn (by rw [hnames, mem_changedNames]; exact ⟨hhas', hc⟩)
                 exact h₂.lookup hnc
               · have h1 := hs.none (by simpa using hhas')
@@ -3142,7 +4245,7 @@ theorem translateForOfPattern_sound
         have key : ∀ o, IR.Body.exec fs fuel ρo body = some o →
             (∃ w, o = .ret w ∧ Eval.execStmt m fuel ρs (.forOfPattern s .const p iterable b) = some (.ret w)) ∨
             ∃ mod ρo₂, Eval.execStmt m fuel ρs (.forOfPattern s .const p iterable b) = some (.normal mod) ∧
-              Agree mod ρo₂ ∧ Frame (stmtChanges (.forOfPattern s .const p iterable b)) mod ρs ∧
+              Agree mod ρo₂ ∧ Frame (stmtChanges env.fnChanges (.forOfPattern s .const p iterable b)) mod ρs ∧
               IR.Body.exec fs fuel ρo₂ rb = some o := by
           intro o ho
           rw [← hbodyEq] at ho
@@ -3184,7 +4287,10 @@ theorem translateForOfPattern_sound
           simpa [stmtsChanges] using hfr₂.trans hfr
   · simp at h
 
-theorem stmts_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
+/-- The statement functions of the translator are sound, at every fuel for
+which calls agree at that fuel and below. The body of a local function runs
+with less fuel than its call, so the induction on `F` keeps the fuel general. -/
+theorem stmts_sound (F : Nat) : ∀ fuel, (∀ k ≤ fuel, CallsAgree (N := N) m.program fs k) →
     (∀ env tail ss ctx body ctx', translateStatements F env tail ss ctx = .ok body ctx' →
       StmtSim (N := N) m fs fuel env tail ss body) ∧
     (∀ env s d rest tail ctx body ctx', translateVariable F env s d rest tail ctx = .ok body ctx' →
@@ -3207,6 +4313,7 @@ theorem stmts_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
         StmtSim (N := N) m fs fuel env (.state names) (dropBreak body) b) := by
   induction F with
   | zero =>
+    intro fuel _
     refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
     · intro _ _ _ _ _ _ h; simp [translateStatements] at h
     · intro _ _ _ _ _ _ _ _ h; simp [translateVariable] at h
@@ -3217,9 +4324,16 @@ theorem stmts_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
     · intro _ _ _ _ _ _ _ _ _ _ h; simp [translateStateClauses] at h
     · intro _ _ _ _ _ _ _ _ h; simp [translateStateClause] at h
   | succ F ih =>
-    obtain ⟨ihS, ihV, ihI, ihF, ihW, ihC, ihSC, ihA⟩ := ih
+    intro fuel hcA
+    have hc := hcA fuel (Nat.le_refl _)
+    obtain ⟨ihS, ihV, ihI, ihF, ihW, ihC, ihSC, ihA⟩ := ih fuel hcA
+    -- The body of a local function, at the fuel that its call leaves.
+    have ihL : ∀ k, fuel = k + 1 → ∀ env tail ss ctx body ctx',
+        translateStatements F env tail ss ctx = .ok body ctx' → StmtSim (N := N) m fs k env tail ss body :=
+      fun k hk => (ih k fun j hj => hcA j (by omega)).1
     refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
     · intro env tail ss ctx body ctx' h
+      have h₀ := h
       unfold translateStatements at h
       cases ss with
       | nil =>
@@ -3265,6 +4379,11 @@ theorem stmts_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
           cases rest <;> cases value <;> simp only at h <;> try (simp at h; done)
           cases hcr : tail.canReturn <;> simp only [hcr] at h <;> try (simp at h; done)
           rename_i v
+          rcases hlc : localCall? env v with _ | ⟨largs, lfn⟩
+          rotate_left
+          · -- `return g(a)`, where `g` is a local function.
+            exact translateLocalReturn_sound m fs fuel hc ihL hcr hlc h₀
+          simp only [hlc, pure_bind] at h
           rcases htc : throwingCall? env.functions v with _ | ⟨cs, sp', name, args⟩
           rotate_left
           · -- `return f(a)`, where `f` can throw: the output passes its error on.
@@ -3284,7 +4403,7 @@ theorem stmts_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
           simp only [bind_ok, modify_ok, get_ok, fuelLimit_ok, ite_state] at h
           obtain ⟨_, s₁, rfl, _, _, ⟨rfl, rfl⟩, _, _, ⟨rfl, rfl⟩, code, s₂, hcode, h⟩ := h
           split at h
-          · simp only [pure_bind, bind_ok, modify_ok, get_ok, pure_ok] at h
+          · simp only [bind_ok, modify_ok, get_ok, pure_ok] at h
             obtain ⟨_, _, rfl, _, _, ⟨rfl, rfl⟩, rfl, -⟩ := h
             have hsim := (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hcode
             intro ρs ρo ha hs
@@ -3302,6 +4421,11 @@ theorem stmts_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
               cases hv' : IR.Expr.eval fs fuel ρo code.value <;> cases brk <;> simp [hv', endOf] at hv
           · simp at h
         | exprStmt sp e =>
+          rcases hlc : localCall? env e with _ | ⟨largs, lfn⟩
+          rotate_left
+          · -- `g(a);`, where `g` is a local function.
+            exact translateLocalStmt_sound m fs fuel hc ihS ihL hlc h₀
+          simp only [hlc, pure_bind] at h
           simp only [bind_ok] at h
           obtain ⟨⟨name, upd⟩, s₁, hu, rb, s₂, hr, h⟩ := h
           simp only [pure_ok] at h
@@ -3407,8 +4531,9 @@ theorem stmts_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
                 · simp at h
             · simp at h
           · simp at h
+        | funDecl sp name tps params rt fbody => exact translateFunDecl_sound m fs fuel ihS h₀
         | _ => simp at h
-    · exact translateVariable_sound m fs fuel hc ihS
+    · exact translateVariable_sound m fs fuel hc ihS ihL
     · exact translateIf_sound m fs fuel hc ihS
     · exact translateLoop_sound m fs fuel hc ihS
     · exact translateSwitch_sound m fs fuel ihS ihC ihSC
