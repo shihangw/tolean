@@ -176,6 +176,24 @@ def JSNumber.elementAt? {N α : Type} [JSNumber N] (xs : List α) (i : N) : Opti
   | some k => if 0 ≤ k then xs[k.toNat]? else none
   | none => none
 
+/-- The sign of `v`, the value of a sort's comparator, as
+`Array.prototype.sort` reads it: `lt` when `v < 0`, `gt` when `v > 0`, and
+`eq` when `v` is `+0` or `-0` (CompareArrayElements, ECMA-262 §23.1.3.30.2).
+It is none for `NaN`, which a consistent comparator never gives
+(§23.1.3.30.1). -/
+def JSNumber.compareSign {N : Type} [JSNumber N] (v : N) : Option Ordering :=
+  if lt v (ofSafeInt 0) then some .lt
+  else if lt (ofSafeInt 0) v then some .gt
+  else if eq v (ofSafeInt 0) then some .eq
+  else none
+
+/-- `xs.toSorted(cmp)` and `[...xs].sort(cmp)` when `cmp` is consistent for
+the elements of `xs`: the stable merge sort, where `a` comes after `b` only
+when `cmp a b` is greater than `0`. The interpreter gives this order
+(`Eval.sortValues`). -/
+def JSNumber.sortWith {N α : Type} [JSNumber N] (cmp : α → α → N) (xs : List α) : List α :=
+  xs.mergeSort fun a b => compareSign (cmp a b) != some .gt
+
 /-- The values of `i` from the safe integer `k` on, for as long as `i < b`
 holds, after the values in `acc`, which are in reverse order. At most `left`
 values may come, and `none` means that the loop would go on past them. The

@@ -237,7 +237,10 @@ function that can throw, because a certificate has no encoder for `Except` yet.
 A `number` is a value of
 the abstract model `JSNumber N` in the interpreter, as it is in the
 translation, so each theorem holds for every `N`, real doubles among them,
-and assumes none of the number laws.
+and assumes none of the number laws. A file that sorts is the exception. Its
+theorems take `[SafeIntLaws N]`, because the order needs the signs of `-1`
+and `1` as numbers. A file that sorts by a `number` key has no certificate
+yet, because its claim needs the precondition that no key is `NaN`.
 
 A certificate's theorems follow from `translate_sound`, so they do not unfold
 the interpreter. The certificate holds the IR that the translator gives,
@@ -425,10 +428,10 @@ the file, the line and the reason. It never approximates.
 | `[a, b]` where the context expects a tuple, such as a return value | `(a, b)`, with each element translated where its own type is expected |
 | `t[0]`, an element of a tuple at an index that is a number literal | `t.1`, and `t.2.1` or `t.2.2` for the second or the last of three, as Lean nests the product to the right |
 | `const xs: Array<T> = [...]`, then `xs.push(e)`; `xs` read only in the `return` | `let xs := xs ++ [e]` |
-| `Map<K, V>` and `ReadonlyMap<K, V>`, where `K` is `bigint`, `string`, `boolean` or a literal union of strings | `JSMap K V` (`tolean/TypeScript/Map.lean`): the list of entries, in the order that each key was first set, as ECMA-262 keeps them (§24.1). A key is found with `=`, which is SameValueZero on these key types. |
+| `Map<K, V>` and `ReadonlyMap<K, V>`, where `K` is `number`, `bigint`, `string`, `boolean` or a literal union of strings | `JSMap K V` (`tolean/TypeScript/Map.lean`): the list of entries, in the order that each key was first set, as ECMA-262 keeps them (§24.1). A key is found with SameValueZero, which `JSKey.same` gives. On every key type but `number` it is `=`. On `number` it is `JSNumber.sameValueZero`, so a map has at most one `NaN` key, and `0` and `-0` are the same key. A new key `-0` is stored as `0` (§24.1.3.9), so a loop over the keys never sees `-0`. |
 | `const m = new Map<K, V>()`, or `const m: Map<K, V> = new Map()`, then `m.set(k, v)` and `m.delete(k)` | `let m := (JSMap.empty : JSMap K V)`, then `let m := JSMap.set m k v` and `let m := JSMap.delete m k`. The function owns the map, as it owns an array that it pushes to. |
 | `m.get(k)`, `m.has(k)` and `m.size` | `JSMap.get? m k`, `JSMap.has m k` and `JSNumber.ofSafeInt (JSMap.size m)`. `get` gives `undefined` for a key that the map does not have, so its value has the type of an optional field: `m.get(k) ?? d` is `Option.getD (JSMap.get? m k) d`. |
-| `Set<T>` and `ReadonlySet<T>`, where `T` is a type that a map key may have | `JSSet T` (`tolean/TypeScript/Map.lean`): the list of elements, in the order that each was first added (§24.2) |
+| `Set<T>` and `ReadonlySet<T>`, where `T` is a type that a map key may have | `JSSet T` (`tolean/TypeScript/Map.lean`): the list of elements, in the order that each was first added (§24.2). Elements compare as map keys do, and `add(-0)` stores `0` (§24.2.4.1). |
 | `const s = new Set<T>()`, then `s.add(x)` and `s.delete(x)`; `s.has(x)` and `s.size` | `JSSet.empty`, `JSSet.add`, `JSSet.delete`, `JSSet.has` and `JSNumber.ofSafeInt (JSSet.size s)`, as for a map |
 | `new Map(items)` and `new Set(items)`, where `items` is an array, such as `[['a', 1n]]` or `['a']`, a map or a set | `JSMap.ofList` and `JSSet.ofList` of the list that a loop over `items` visits. The constructor sets each `[key, value]`, or adds each value, in order (§24.1.1.2), so a later entry for a key replaces an earlier one, and `new Map(m)` copies `m`. |
 | `for (const x of s)` over a set, and `for (const e of m)` over a map | `List.foldl` over `JSSet.elems s`, or over `JSMap.entries m`, as over an array. A map gives each entry as the tuple `[key, value]`, as JS does, so the body reads `e[0]` and `e[1]`. The loop may run over an owned map or set, if its body does not change it. |
@@ -451,6 +454,7 @@ the file, the line and the reason. It never approximates.
 | `xs.findLast(x => p)` | `List.find? (fun (x : T) => p) (List.reverse xs)`, which the callback reads from the last element to the first, as in JS. It has the type of `find`, and it is in ES2023. |
 | `xs.findIndex(x => p)` | `JSNumber.ofSafeInt (((List.findIdx? (fun (x : T) => p) xs).map Int.ofNat).getD (-1))`: the index of the first element that passes, as a `number`, or `-1` |
 | `xs.reduce((acc, x) => e, init)` | `List.foldl (fun (acc : A) (x : T) => e) init xs`, where `A` is the type of `init`. The body must give a value of that type. |
+| `xs.toSorted((a, b) => e)` and `[...xs].sort((a, b) => e)`, where `e` compares keys | `JSNumber.sortWith (fun (a b : T) => e) xs`: the stable merge sort, where `a` comes after `b` only when `e` is greater than `0`. The comparator must have the shape `(a.k < b.k) ? -1 : (a.k > b.k) ? 1 : 0`, where the key is the element or a field of it, and a `bigint`, a `string` or a `number`. The tests may come in either order, the signs may be reversed to sort from the greatest, and a comparison of the next key may take the place of the `0`. The last comparison may also be a difference of `number` keys, `a.t - b.t`, or `b.t - a.t` to sort from the greatest. Such a comparator is consistent, so the order is the one that JS gives. On `number` keys that holds only when no key is `NaN`. A difference also needs every key to be finite: the spec compares each element with itself too, and `Infinity - Infinity` is `NaN`, so one infinite key is enough to break it. On other arrays the spec leaves the order to the engine, and the translation makes no claim. `toSorted` is in ES2023, and `sort` is stable from ES2019. [A decision record](../decisions/2026-11-11-sort.md) explains the meaning. |
 | `if` that returns, `if` that changes locals, `c ? a : b` | `if … then … else …` |
 | `+ - *`, `< <= > >=`, `=== !==`, `&& \|\| !` | the same operators on `Int`, `Bool`, `Prop` |
 | `a + b` where one operand is a string and the other is a string, a `bigint` or a `boolean`, and `s += e` on a string local | `a ++ b` on `JSString`. ToString converts the other operand first: `JSString.ofInt n` writes the decimal digits of a bigint, and `JSString.ofBool b` writes `"true"` or `"false"`. `+` is left-associative, so `1n + 2n + "!"` is `"3!"`. Tolean refuses a `number` operand, because the model has no ToString for numbers yet. |
@@ -557,8 +561,13 @@ Tolean rejects these, among others:
   is not negative, such as `xs.slice(-2, 3)`.
 - `reduce` without an initial value, which throws on an empty array, and a
   callback of `reduce` whose value has another type than the initial value.
-- A map key or a set element of type `number`, which can be `NaN` or `-0`,
-  and one of an interface type, which a map or a set compares by identity.
+- `sort` on an array that the function did not make in the same expression,
+  such as `xs.sort(cmp)` on a parameter, because `sort` changes the array
+  that it sorts. Tolean also refuses `toSorted` and `sort` without a
+  comparator, which compare the strings of the elements, a comparator of any
+  other shape, and a sort of an array of nullable values.
+- A map key or a set element of an interface type, which a map or a set
+  compares by identity.
   Tolean also refuses `set`, `add` and `delete` on a map or a set that the
   function did not make with `const m = new Map()` or `const s = new Set()`,
   and a read of such an owned map or set anywhere except through `get`, `has`
