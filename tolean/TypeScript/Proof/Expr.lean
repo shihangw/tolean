@@ -97,7 +97,7 @@ theorem checkThrowingCall_ok {sp : Span} {name : String} {fn : FnInfo} {top : Bo
   split at h
   · simp only [bind_ok, get_ok] at h
     obtain ⟨_, _, ⟨rfl, rfl⟩, h⟩ := h
-    split at h <;> exact absurd h (reject_ne_ok _ _ _ _ _)
+    split at h <;> (try split at h) <;> exact absurd h (reject_ne_ok _ _ _ _ _)
   · simp only [pure_ok] at h; exact h.2.symm
 
 /-- The check of a call of a function of another file that can throw changes

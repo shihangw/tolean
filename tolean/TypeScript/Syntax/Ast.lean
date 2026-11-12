@@ -730,9 +730,15 @@ def Stmt.constAssignedIn (s : Stmt) (rest : List Stmt) : Bool :=
 /-- A clause of a `switch` declares a local at its top, outside braces. The
 clauses share one scope (ECMA-262 §14.12.2, §14.12.4): such a local is in
 its temporal dead zone from the start of the case block, and two clauses
-may not declare the same name. -/
+may not declare the same name. A name that ends in `'` is one that the
+hoisting of a call that can throw made (`Eval.Stmt.hoisted`). JS has no such
+name, and only the statement after it, in the same clause, reads it, so it
+does not count. -/
 def clausesDeclare (clauses : List (Option Expr × List Stmt)) : Bool :=
-  clauses.any fun (_, body) => body.any fun s => s matches .varDecl .. || s matches .destructure ..
+  clauses.any fun (_, body) => body.any fun
+    | .varDecl _ d => !d.name.endsWith "'"
+    | .destructure .. => true
+    | _ => false
 
 /-- A property of an interface. -/
 structure Field where

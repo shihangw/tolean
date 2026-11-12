@@ -237,7 +237,7 @@ def sections : List Section := [
     [``Proof.execCase_ret, ``Proof.exec_clauseStatements, ``Proof.execFrom_ret, ``Proof.execSwitch_case,
     ``Proof.matchTag_exec, ``Proof.switchOf_eval, ``Proof.clauses_nil_sim, ``Proof.clauses_default_sim,
     ``Proof.clauses_last_sim, ``Proof.clauses_case_sim, ``Proof.switch_sim, ``Proof.translateSwitch_sound,
-    ``Proof.translateClauses_sound, ``Proof.execCase_drop, ``Proof.execFrom_normal,
+    ``Proof.translateClauses_sound, ``Proof.execCase_drop, ``Proof.dropBreak_endsInThrow, ``Proof.exec_endsInThrow, ``Proof.execFrom_normal,
     ``Proof.execCase_ret_drop, ``Proof.execFrom_ret_drop,
     ``Proof.assignsList_dropBreak, ``Proof.constAssignedIn_dropBreak,
     ``Proof.stmtsChanges_dropBreak, ``Proof.stmtsChanges_flatMap, ``Proof.state_nil_sim,
