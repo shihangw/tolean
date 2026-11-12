@@ -368,7 +368,7 @@ theorem pushes_lexTemplateRest (start stop : Pos) (text : String) (more : Bool) 
 theorem pushes_lexTemplate (start : Pos) (nl : Bool) : Pushes (lexTemplate start nl) := by
   unfold lexTemplate; pushes
 
-theorem pushes_lexTemplateMiddle (start : Pos) (nl : Bool) (outer : List Nat) :
+theorem pushes_lexTemplateMiddle (start : Pos) (nl : Bool) (outer : List (Nat × Nat)) :
     Pushes (lexTemplateMiddle start nl outer) := by
   unfold lexTemplateMiddle; pushes
 
@@ -1534,15 +1534,16 @@ theorem lexAll_token {T : Edition} {k : TokenKind} {g text r : List Char} {s : L
       rw [lexKind]; simp [okOf_bind, okOf_failFrom, isIdentStart, okOf_peekChar])
   let s₂ := skipped s₁ text.length
   let y : Token := { kind := k, span := ⟨⟨s₁.line, s₁.col⟩, ⟨s₂.line, s₂.col⟩⟩, newlineBefore := s₁.newline }
-  refine ⟨{ s₂ with tokens := s₂.tokens.push y, newline := false, templates := countBraces k s₂.templates },
+  refine ⟨{ s₂ with tokens := s₂.tokens.push y, newline := false, templates := countDelimiters k s₂.templates },
     y, fun f => ?_, by simp [s₂, hr₁],
     by simp [s₂, hkept.tokens], rfl, hnl, rfl, ?_, by simp [s₂, hkept.target, hT], ?_, rfl,
-    fun h => by simp [y, hg₀ h], by simp [s₂, skipped, ht₁, ht, countBraces]⟩
+    fun h => by simp [y, hg₀ h], by simp [s₂, skipped, ht₁, ht, countDelimiters]⟩
   · rw [lexAll, bind_eq (budget_eq s), bind_eq hskip, bind_eq (here_eq s₁), bind_eq (get_eq s₁),
       bind_eq (peekChar_eq 0 s₁)]
     simp only [hpeek]
     rw [if_neg (by simpa using hcb), bind_eq (get_eq s₁),
-      if_neg (by simp [ht₁, ht]), bind_eq hlex, bind_eq (here_eq _), bind_eq (modify_eq _ _)]
+      if_neg (by simp [ht₁, ht]), if_neg (by simp [closesMadeUp, ht₁, ht]), bind_eq hlex, bind_eq (here_eq _),
+      bind_eq (modify_eq _ _)]
   · have := fits_skipped (hkept.fits hf) text.length
     exact this
   · have : 0 < text.length := by cases text with | nil => simp at hc | cons _ _ => simp
@@ -1967,10 +1968,11 @@ theorem lexAll_ok : ∀ (f : Nat) (s s' : LexState), lexAll f s = .ok () s' → 
         exact tail s₂ n₁ t₁ o₁ g₁ (f₁ (k1.fits hf)) h4
       rw [bind_eq (get_eq s₁)] at h2
       split at h2
-      · rw [bind_eq (get_eq s₁)] at h2
-        obtain ⟨_, s₂, h3, h4⟩ := bind_ok.mp h2
+      · obtain ⟨_, s₂, h3, h4⟩ := bind_ok.mp h2
         obtain ⟨n₁, t₁, o₁, _, g₁, f₁⟩ := (pushes_lexTemplateMiddle _ _ _).run _ _ _ h3
         exact tail s₂ n₁ t₁ o₁ g₁ (f₁ (k1.fits hf)) h4
+      split at h2
+      · exact absurd (okOf_eq_some.mpr h2) (by simp [okOf_failFrom])
       obtain ⟨k, s₂, h3, h4⟩ := bind_ok.mp h2
       obtain ⟨hk, k2⟩ := lexKind_ok hc (k1.fits hf) h3
       rw [bind_eq (here_eq s₂), bind_eq (modify_eq _ _)] at h4

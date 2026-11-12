@@ -33,9 +33,9 @@ structure LexState where
   newline : Bool := false
   tokens : Array Token := #[]
   /-- One entry for each substitution `${…}` of a template literal that the
-  lexer is inside, innermost first: the number of `{` open in it. A `}` when
-  none is open ends the substitution. -/
-  templates : List Nat := []
+  lexer is inside, innermost first: the number of `{` and the number of `(`
+  open in it. A `}` when neither is open ends the substitution. -/
+  templates : List (Nat × Nat) := []
 
 abbrev LexM := EStateM ParseError LexState
 
@@ -444,7 +444,7 @@ def lexTemplateRest (start stop : Pos) (text : String) (more : Bool) : LexM Unit
   if more then
     pushToken (.punct "+") stop stop false
     pushToken (.punct "(") stop stop false
-    modify fun s => { s with templates := 0 :: s.templates }
+    modify fun s => { s with templates := (0, 0) :: s.templates }
   else pushToken (.punct ")") stop stop false
 
 /-- A template literal, from its backtick at `start` to its end or to its
@@ -464,25 +464,35 @@ def lexTemplate (start : Pos) (newlineBefore : Bool) : LexM Unit := do
     pushToken (.string text) start stop false
     pushToken (.punct "+") stop stop false
     pushToken (.punct "(") stop stop false
-    modify fun s => { s with templates := 0 :: s.templates }
+    modify fun s => { s with templates := (0, 0) :: s.templates }
   else pushToken (.string text) start stop newlineBefore
 
 /-- The `}` at `start` that ends a substitution of a template literal, and the
 text after it. `outer` are the substitutions that stay open. -/
-def lexTemplateMiddle (start : Pos) (newlineBefore : Bool) (outer : List Nat) : LexM Unit := do
+def lexTemplateMiddle (start : Pos) (newlineBefore : Bool) (outer : List (Nat × Nat)) : LexM Unit := do
   skipChar
   modify fun s => { s with templates := outer }
   pushToken (.punct ")") start start newlineBefore
   let (text, more) ← readTemplateBody (← budget) start ""
   lexTemplateRest start (← here) text more
 
-/-- The open substitutions after the token `kind`: a `{` opens a brace in the
-innermost one, and a `}` closes one. -/
-def countBraces : TokenKind → List Nat → List Nat
+/-- The open substitutions after the token `kind`: a `{` or a `(` opens one
+in the innermost substitution, and a `}` or a `)` closes one. -/
+def countDelimiters : TokenKind → List (Nat × Nat) → List (Nat × Nat)
   | _, [] => []
-  | .punct "{", k :: outer => (k + 1) :: outer
-  | .punct "}", k :: outer => (k - 1) :: outer
+  | .punct "{", (b, p) :: outer => (b + 1, p) :: outer
+  | .punct "}", (b, p) :: outer => (b - 1, p) :: outer
+  | .punct "(", (b, p) :: outer => (b, p + 1) :: outer
+  | .punct ")", (b, p) :: outer => (b, p - 1) :: outer
   | _, ks => ks
+
+/-- The character `c` would close a delimiter that the lexer made up for the
+template literal of the innermost substitution `top`: a `)` when no `(` of
+the substitution is open, or the `}` that ends the substitution while a `(`
+of it is open. The source is not valid JS then. -/
+def closesMadeUp (c : Char) : Option (Nat × Nat) → Bool
+  | some (b, p) => (c == ')' && p == 0) || (c == '}' && b == 0 && p != 0)
+  | none => false
 
 def lexAll (fuel : Nat) : LexM Unit := do
   let fuel + 1 := fuel | outOfFuel
@@ -497,9 +507,13 @@ def lexAll (fuel : Nat) : LexM Unit := do
     if c == '`' then
       lexTemplate start newlineBefore
       lexAll fuel
-    else if c == '}' && (← get).templates.head? == some 0 then
-      lexTemplateMiddle start newlineBefore (← get).templates.tail
+    else
+    let st ← get
+    if c == '}' && st.templates.head? == some (0, 0) then
+      lexTemplateMiddle start newlineBefore st.templates.tail
       lexAll fuel
+    else if closesMadeUp c st.templates.head? then
+      failFrom start "the parentheses in a substitution of a template literal do not match"
     else
     let kind ← lexKind start c
     let stop ← here
@@ -507,7 +521,7 @@ def lexAll (fuel : Nat) : LexM Unit := do
       { s with
         tokens := s.tokens.push { kind, span := ⟨start, stop⟩, newlineBefore }
         newline := false
-        templates := countBraces kind s.templates }
+        templates := countDelimiters kind s.templates }
     lexAll fuel
 
 end Lex

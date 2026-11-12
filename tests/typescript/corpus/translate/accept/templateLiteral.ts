@@ -35,6 +35,11 @@ export function escapes(s: string): string {
   return `\`${s}\` costs \${0} \u{1F600}`;
 }
 
+/** Parentheses and braces of the source stay inside their substitution. */
+export function grouped(a: number, b: number): string {
+  return `${(a + b) * 2} ${[a, (b)].length}`;
+}
+
 export function inLoop(xs: ReadonlyArray<string>): string {
   let out = ``;
   for (const x of xs) {

@@ -28,6 +28,9 @@ def lines {N : Type} [JSNumber N] (n : N) : JSString :=
 def escapes {N : Type} [JSNumber N] (s : JSString) : JSString :=
   ((JSString.ofString "`" ++ s) ++ JSString.ofString "` costs ${0} 😀")
 
+def grouped {N : Type} [JSNumber N] (a : N) (b : N) : JSString :=
+  (((JSString.ofString "" ++ (JSNumber.toStr ((JSNumber.mul ((JSNumber.add a b)) ((JSNumber.ofSafeInt (N := N) (2 : Int))))))) ++ JSString.ofString " ") ++ (JSNumber.toStr ((JSNumber.ofSafeInt (N := N) ((List.length (([a, b] : List N)) : Nat) : Int)))))
+
 def inLoop {N : Type} [JSNumber N] (xs : List JSString) : JSString :=
   let out := JSString.ofString ""
   let out :=
