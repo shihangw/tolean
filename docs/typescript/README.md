@@ -22,8 +22,7 @@ marks which links are proved, tested against a reference, or trusted.
   `class Name extends Error { constructor(params) { super(message); } }`, with
   `readonly` allowed before a parameter, or the same with no constructor. The
   parser refuses every other class: one that does not extend `Error`, a field,
-  a method, or any other statement in the constructor. The translator does
-  not translate error classes yet.
+  a method, or any other statement in the constructor.
 - **Statements:** `const` and `let` declarations, array destructuring such as
   `const [a, , b, ...rest] = xs`, expression statements,
   `return`, `throw`, `if` and `else`, `for … of` with a name or an array
@@ -415,6 +414,8 @@ the file, the line and the reason. It never approximates.
 | A call of `f` inside a larger expression, such as `return f(a) + 1n`, where JS evaluates the call whenever it evaluates the statement | `f a >>= fun r0' => …` before the statement, which reads `r0'` in place of the call. Each operand that JS evaluates before the call, such as `x.count` in `x.count + f(a)`, moves out first, to a `let` of its own, so the output runs the same operations in the same order. The interpreter runs the statements in this form too (`Eval.Stmt.hoisted`), so the translator translates the body the interpreter runs. |
 | A loop whose body can throw, by a `throw` or a call of a function that can | The same fold in the `Except` monad: `List.foldlM`, or `forIn` without `Id.run`, followed by `>>= fun (x, y) =>` for the statements after the loop. Each run of the body ends in `pure` of its state, or throws. |
 | An `if` or a `switch` that changes locals, where a branch can throw | `(if c then throw e else pure (x, y)) >>= fun (x, y) =>`, so that the statements after it take the state from the branch that did not throw |
+| `class C extends Error { constructor(readonly a: T, b: U) { super(m); } }`, or the same with no constructor | A constructor `C` of `Thrown`, the inductive of the errors that the file's functions throw, with the message and the `readonly` parameters as fields. `Thrown` comes first in the file, with `error (value : JSError)` for `throw new Error(m)`. Every function of the file that can throw then returns `Except Thrown R`. A parameter must have a primitive type, and the class must be declared before the functions that throw it. [A decision record](../decisions/2026-11-11-thrown-per-file.md) explains the type. |
+| `throw new C(args)`, in the places where `throw new Error(m)` may stand | `throw (Thrown.«C» m a)`, with the constructor's message written over the arguments, which first move to names as the arguments of a call that can throw do, and the `readonly` arguments as the fields |
 | `const x = e`, `let x = e` | `let x := e` |
 | `x = e`, `x += e`, `x -= e`, `x *= e` on a `let` local | `let x := …` (shadowing) |
 | `x ??= e` on a `let` local of type `T \| null` | `let x := Option.or x e`. JS evaluates `e` only when `x` is `null`. Lean evaluates it either way, but the result is the same, because the subset has no side effects. |
@@ -478,6 +479,10 @@ Tolean rejects these, among others:
   function. A call of an imported function that can throw must be the whole
   value of a declaration or a `return`, because the hoisting decides which
   functions can throw from the file alone and does not follow imports yet.
+  When that file or this one declares error classes, the call is refused,
+  because the two files throw values of two types.
+- `new C(args)` for an error class anywhere but in a `throw`, and an error
+  class with a parameter whose type is not primitive.
 
 - Fractional or unsafe `number` literals, such as `0.5` and `2 ** 53`. It also
   rejects `/`, `%` and `Math.*` on `number`, because no law covers them yet.

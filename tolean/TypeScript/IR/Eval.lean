@@ -32,7 +32,7 @@ body. -/
 def functions (decls : List Decl) : List (String × List String × Body) :=
   decls.filterMap fun
     | .function name params _ body => some (name, params.map (·.1), body)
-    | .struct .. | .alias .. | .enum .. | .tagged .. => none
+    | .struct .. | .alias .. | .enum .. | .tagged .. | .errors .. => none
 
 /-- The functions of the output of a program, under the file of each: the
 output of each file, with that file's path. -/
@@ -148,6 +148,12 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   | .pure, [a] => some a
   -- `JSError.mk m` is the object that `new Error(m)` makes.
   | .error, [.str m] => some (.error "Error" [("message", .str m)])
+  -- `Thrown.«C» m a b` is the object that `new C(m, a, b)` makes: the
+  -- message, then the fields.
+  | .errorCase _ cls fields, .str m :: args =>
+    if fields.length == args.length + 1 then
+      some (.error cls ((fields.zip (.str m :: args)).filterMap fun (f, a) => f.map (·, a)))
+    else none
   | _, _ => none
 
 /-- The tag of `v`, a value of a tagged union: the string in its tag field

@@ -321,6 +321,12 @@ inductive Decl (T E : Type) where
   or by their type when `field` is none, as values of a union of primitive
   types do. -/
   | tagged (name : String) (field : Option String) (members : List (String × Ty T))
+  /-- `inductive Thrown where`, the errors that a file's functions can throw:
+  one constructor per member, with a field for each of its pairs. The
+  TypeScript translator writes one for a file that declares error classes,
+  with `error (value : JSError)` for `throw new Error(m)` and a constructor
+  with the message and the `readonly` fields for each class. -/
+  | errors (name : String) (members : List (String × List (String × Ty T)))
   /-- `def f (x : T) : R :=`, then the body. -/
   | function (name : String) (params : List (String × Ty T)) (ret : Ty T) (body : Body T E)
 deriving Repr, Inhabited
@@ -410,6 +416,7 @@ def Decl.refs : Decl T E → List DeclRef
   | .alias _ _ type => type.refs
   | .enum .. => []
   | .tagged _ _ members => members.flatMap (·.2.refs)
+  | .errors _ members => members.flatMap fun (_, fields) => fields.flatMap (·.2.refs)
   | .function _ params ret body => params.flatMap (·.2.refs) ++ ret.refs ++ body.refs
 
 /-! ### The declarations that name the string type -/
@@ -558,6 +565,7 @@ def Body.usesMap : Body T E → Bool
 or sets. A language imports its model of them then. -/
 def Decl.usesMap : Decl T E → Bool
   | .struct _ _ fields | .tagged _ _ fields => fields.any (·.2.usesMap)
+  | .errors _ members => members.any fun (_, fields) => fields.any (·.2.usesMap)
   | .alias _ _ type => type.usesMap
   | .enum .. => false
   | .function _ params ret body => params.any (·.2.usesMap) || ret.usesMap || body.usesMap onMap
@@ -571,6 +579,7 @@ def Decl.usesString (opUses : E → Bool) : Decl T E → Bool
   | .alias _ _ type => type.usesString
   | .enum .. => false
   | .tagged _ _ members => members.any (·.2.usesString)
+  | .errors _ members => members.any fun (_, fields) => fields.any (·.2.usesString)
   | .function _ params ret body =>
     params.any (·.2.usesString) || ret.usesString || Body.usesString opUses body
 
@@ -1289,6 +1298,11 @@ def Decl.print (names : Names) : Decl T E → String
     "\n".intercalate (s!"inductive {name} where" ::
       members.map (s!"  | {memberName ·}") ++
       [s!"deriving {leanName names "DecidableEq"}, {leanName names "Repr"}"])
+  | .errors name members =>
+    let generic := if names.generic then s!" ({names.typeParam} : Type)" else ""
+    "\n".intercalate (s!"inductive {name}{generic} where" ::
+      members.map fun (tag, fields) =>
+        s!"  | {memberName tag}" ++ String.join (fields.map fun (f, t) => s!" ({f} : {t.print names})"))
   | .alias name typeParams type =>
     let generic := if type.namesParam names then s!" ({names.typeParam} : Type)" else ""
     let generic := generic ++ String.join (typeParams.map (s!" ({·} : Type)"))

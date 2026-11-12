@@ -171,6 +171,13 @@ inductive ExprExt where
   | pure
   /-- `(JSError.mk m)`: the error that `new Error(m)` makes, from its message. -/
   | error
+  /-- `(Thrown.«C» m a)`: the error that `new C(m, a, b)` makes, for the
+  error class `C` of the file, whose errors the inductive `thrown` holds. The
+  arguments are the message and then the arguments of the constructor, and
+  `fields` names the field that each one sets, starting with `message`, or
+  is none for an argument that only the message used, which the output
+  leaves out. -/
+  | errorCase (thrown : DeclRef) (cls : String) (fields : List (Option String))
 deriving BEq, Repr, Inhabited, DecidableEq
 
 /-- An operation on maps or sets, whose output names `JSMap` or `JSSet`. -/
@@ -362,6 +369,9 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
       else ""
   | .pure, [a] => s!"({tolean.IR.wrapped (leanName names "pure") a})"
   | .error, [m] => s!"({tolean.IR.wrapped (leanName names "JSError.mk") m})"
+  | .errorCase thrown cls fields, args =>
+    let kept := (fields.zip args).filterMap fun (f, a) => if f.isSome then some (tolean.IR.argument a) else none
+    s!"({(names.ref thrown).1}.{tolean.IR.memberName cls} {" ".intercalate kept})"
   | _, _ => ""
 
 instance : tolean.IR.PrintOp ExprExt := ⟨ExprExt.print⟩
