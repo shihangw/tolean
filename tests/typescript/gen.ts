@@ -72,6 +72,11 @@ export class Gen {
   private records = new Set<string>();
   private functions: Array<{ name: string; params: Array<Ty>; ret: Ty }> = [];
   private counter = 0;
+  /** The program sorts by a `number` key somewhere. Such a sort is consistent
+   * only when no key is `NaN`, and a difference only when every key is
+   * finite, so the interpreter gives it no value on other arrays, even where
+   * the translator accepts it. */
+  sortsByNumber = false;
 
   constructor(seed: number) {
     this.next = random(seed);
@@ -186,6 +191,31 @@ export class Gen {
         // The length of a string and the index of a string in it, which count
         // UTF-16 code units.
         if (t.k === 'number') {
+          // `/` and the functions of `Math` that the model has. A division
+          // by zero gives an infinity or `NaN`, which the values check too.
+          options.push(
+            () => `${this.expr(t, vars, d)} / ${this.expr(t, vars, d)}`,
+            () => `Math.${this.pick(['floor', 'ceil', 'trunc', 'round', 'abs'])}(${this.expr(t, vars, d)})`,
+            // The Number value for a bigint, the double nearest to it.
+            () => `Number(${this.expr(BIGINT, vars, d)})`,
+            // A date from a time value, read back with a UTC getter, and
+            // `Date.UTC`, which takes two to seven numbers.
+            () => `new Date(${this.expr(t, vars, d)}).${this.pick(['getTime', 'valueOf', 'getUTCFullYear', 'getUTCMonth',
+              'getUTCDate', 'getUTCDay', 'getUTCHours', 'getUTCMinutes', 'getUTCSeconds', 'getUTCMilliseconds'])}()`,
+            () => {
+              const count = this.pick([2, 3, 7]);
+              const args = Array.from({ length: count }, () => this.expr(t, vars, d));
+              return `Date.UTC(${args.join(', ')})`;
+            },
+            // The bitwise operators, on ToInt32 and ToUint32 of each operand.
+            () => `(${this.expr(t, vars, d)} ${this.pick(['&', '|', '^', '<<', '>>', '>>>'])} ${this.expr(t, vars, d)})`,
+            () => `~${this.expr(t, vars, d)}`,
+            () => {
+              const count = this.pick([0, 1, 2, 3]);
+              const args = Array.from({ length: count }, () => this.expr(t, vars, d));
+              return `Math.${this.pick(['min', 'max'])}(${args.join(', ')})`;
+            },
+          );
           options.push(
             () => `(${this.expr(STRING, vars, d)}).length`,
             () => `(${this.expr(STRING, vars, d)}).indexOf(${this.expr(STRING, vars, d)})`,
@@ -226,6 +256,18 @@ export class Gen {
         if (t.k === 'bigint') {
           // Both translators accept a nonzero literal divisor only.
           options.push(() => `${this.expr(t, vars, d)} ${this.pick(['/', '%'])} ${this.pick(['2n', '-3n', '(7n)', '-(5n)', '0n', this.expr(t, vars, 0)])}`);
+          // The bitwise operators, and `**` with a literal exponent, which
+          // both translators require. The base is in parentheses, because
+          // `-a ** 2n` is a syntax error. A shift count and an exponent stay
+          // small, so that the values do too: JS throws a RangeError when a
+          // bigint gets too large, and Lean panics. So the shift is in
+          // parentheses too, or `a >> -2n - b` would shift by `-2n - b`.
+          options.push(
+            () => `${this.expr(t, vars, d)} ${this.pick(['&', '|', '^'])} ${this.expr(t, vars, d)}`,
+            () => `~${this.expr(t, vars, d)}`,
+            () => `((${this.expr(t, vars, d)}) ** ${this.pick(['0n', '2n', '(3n)', '-1n'])})`,
+            () => `(${this.expr(t, vars, d)} ${this.pick(['<<', '>>'])} ${this.pick(['1n', '-2n', '(5n)', '70n', `(${this.expr(t, vars, 0)} & 7n)`])})`,
+          );
         }
         break;
       case 'boolean': {
@@ -243,7 +285,12 @@ export class Gen {
             const flags = readable.filter((v) => v.ty.k === 'boolean');
             return flags.length > 0 ? `${this.pick(flags).name} === ${this.expr(BOOLEAN, vars, d)}` : 'true';
           },
-          () => `Number.${this.pick(['isNaN', 'isFinite', 'isSafeInteger'])}(${this.expr(NUMBER, vars, d)})`,
+          () => `Number.${this.pick(['isNaN', 'isFinite', 'isSafeInteger', 'isInteger'])}(${this.expr(NUMBER, vars, d)})`,
+          // SameValue, which tells `NaN` and `-0` apart, on two values of one type.
+          () => {
+            const u = this.pick([BIGINT, NUMBER, NUMBER]);
+            return `Object.is(${this.expr(u, vars, d)}, ${this.pick(['-0', '0', 'NaN', this.expr(u, vars, d)])})`;
+          },
           // A test of one string in another, by code units.
           () => `(${this.expr(STRING, vars, d)}).${this.pick(['startsWith', 'endsWith', 'includes'])}(${this.expr(STRING, vars, d)})`,
           // A test of the pieces that `split` gives.
@@ -319,6 +366,58 @@ export class Gen {
     return this.pick(options)();
   }
 
+  /** `toSorted`, or `sort` on a copy, of the array `recv`, with a comparator.
+   * A comparator that compares keys is consistent unless a key is `NaN`, or
+   * infinite in a difference, and
+   * any other one is rarely consistent, so then the interpreter gives no
+   * value and Node is not compared. */
+  private sortCall(recv: { name: string; elem: Ty }, vars: ReadonlyArray<Var>, depth: number): string {
+    const a = this.fresh('a');
+    const b = this.fresh('b');
+    const cmp = this.chance(0.8) ? this.comparator(recv.elem, a, b, vars, depth) : this.expr(NUMBER, [
+      ...vars,
+      { name: a, ty: recv.elem, mutable: false, owned: false },
+      { name: b, ty: recv.elem, mutable: false, owned: false },
+    ], depth);
+    const fn = `(${a}, ${b}) => (${cmp})`;
+    return this.chance(0.5) ? `${recv.name}.toSorted(${fn})` : `[...${recv.name}].sort(${fn})`;
+  }
+
+  /** A comparator of elements of type `elem`, bound to `a` and `b`, that
+   * compares a key of each (`compareKeys`). */
+  private comparator(elem: Ty, a: string, b: string, vars: ReadonlyArray<Var>, depth: number): string {
+    // Most keys are the element itself or one of its fields, the shape that
+    // the translator accepts. Others are any expression of the element.
+    const paths: Array<[string, Ty]> = [[a, elem]];
+    if (elem.k === 'struct') {
+      const s = this.structs.find((x) => x.name === elem.name);
+      for (const [f, ft] of s?.fields ?? []) paths.push([`${a}.${f}`, ft]);
+    }
+    const keys = paths.filter(([, t]) => ['bigint', 'string', 'number'].includes(t.k));
+    if (keys.length > 0 && this.chance(0.7)) {
+      const [ka, key] = this.pick(keys);
+      return this.compareKeys(ka, key, elem, a, b, vars, depth);
+    }
+    const key = this.pick([BIGINT, STRING, NUMBER]);
+    const ka = this.expr(key, [...vars, { name: a, ty: elem, mutable: false, owned: false }], depth);
+    return this.compareKeys(ka, key, elem, a, b, vars, depth);
+  }
+
+  /** The comparison of the key `ka` of `a`, of type `key`, with the same key
+   * `kb` of `b`, which is `ka` with `b` for `a`: `ka < kb ? -1 : ka > kb ? 1 : 0`,
+   * with a later comparison in place of the `0` or the order reversed, or
+   * `ka - kb` on a number. */
+  private compareKeys(ka: string, key: Ty, elem: Ty, a: string, b: string, vars: ReadonlyArray<Var>, depth: number): string {
+    const kb = ka.replace(new RegExp(`\\b${a}\\b`, 'g'), b);
+    if (key.k === 'number') this.sortsByNumber = true;
+    const [x, y] = this.chance(0.7) ? [ka, kb] : [kb, ka];
+    if (key.k === 'number' && this.chance(0.5)) return `(${x}) - (${y})`;
+    const rest = this.chance(0.3) ? this.comparator(elem, a, b, vars, depth) : '0';
+    // The parser refuses `x < y ? … : x > y`, which tsc could read as type
+    // arguments, so each comparison is in parentheses.
+    return `((${x}) < (${y})) ? -1 : ((${x}) > (${y})) ? 1 : ${rest}`;
+  }
+
   /** Calls of `map`, `filter`, `some`, `every` and `find` on an array in
    * scope that give a value of type `t`. The callback's parameter is a fresh
    * name, which its body may read with the other names in scope; a callback
@@ -369,6 +468,8 @@ export class Gen {
             const bounds = this.pick(['', '1', '-2', '0, 2', '1, -1', '-3, -1', '2, 1']);
             return `${this.pick(same_).name}.slice(${bounds})`;
           });
+          // A sorted copy (`sortCall`).
+          options.push(() => this.sortCall(this.pick(same_), vars, depth));
           // A spread of one array or two, with elements around them.
           options.push(() => {
             const parts = [`...${this.pick(same_).name}`];
@@ -389,6 +490,8 @@ export class Gen {
           options.push(() => `(${call(this.pick(['find', 'findLast']), this.pick(same_), (inner) => this.expr(BOOLEAN, inner, depth))} ?? ${this.expr(t, vars, depth)})`);
           // An element at an index, which is `undefined` outside the array:
           // a literal, any number, or a literal counted from the end.
+          // The first or the second element of a sorted copy.
+          options.push(() => `(${this.sortCall(this.pick(same_), vars, depth)}[${this.pick([0, 1])}] ?? ${this.expr(t, vars, depth)})`);
           options.push(() => {
             const recv = this.pick(same_).name;
             const index = this.pick([
@@ -578,7 +681,7 @@ export class Gen {
         vars.push({ name, ty: { k: 'array', of: t }, mutable: false, owned: false });
       } else if (roll < 0.89 && depth > 0 && this.chance(0.5)) {
         // A set that the function owns, with adds and deletes, read as a map is.
-        const elem = this.pick([BIGINT, STRING, BOOLEAN]);
+        const elem = this.pick([NUMBER, BIGINT, STRING, BOOLEAN]);
         const name = this.fresh('s');
         // Sometimes with values to start with, which may repeat.
         const start = this.chance(0.3) ? `[${this.expr(elem, vars, 1)}, ${this.expr(elem, vars, 1)}]` : '';
@@ -604,7 +707,7 @@ export class Gen {
       } else if (roll < 0.89 && depth > 0) {
         // A map that the function owns, with sets and deletes. Code may read
         // it only through get, has and size, so the reads go into locals.
-        const key = this.pick([BIGINT, STRING, BOOLEAN]);
+        const key = this.pick([NUMBER, BIGINT, STRING, BOOLEAN]);
         const value = this.pick([BIGINT, NUMBER, STRING]);
         const name = this.fresh('m');
         const start = this.chance(0.3)

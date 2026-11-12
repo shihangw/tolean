@@ -108,11 +108,13 @@ deriving BEq, Repr, Inhabited
 whose function also takes the position of the element, bound to `index`.
 `findIndex` is the position of the first element that passes, as the
 language writes an index, and `findLast` is `List.find?` on the reversed
-list. -/
+list. `sortWith` sorts the list by a comparator, whose function takes two
+elements: the first under the parameter's name, the second under `other`. -/
 inductive ListMethod where
   | map | filter | any | all | find
   | mapIdx (index : String)
   | findIndex | findLast
+  | sortWith (other : String)
 deriving BEq, Repr, Inhabited
 
 /-- What a certificate needs to know about a callback, besides its code. The
@@ -555,6 +557,129 @@ def Decl.usesMap : Decl T E → Bool
 
 end
 
+section
+variable (p : E → Bool)
+
+mutual
+
+/-- `e` runs an operation for which `p` holds. -/
+def Expr.anyOp : Expr T E → Bool
+  | .ext op args => p op || Expr.anyOpList args
+  | .call _ args | .tuple args | .list args _ => Expr.anyOpList args
+  | .struct fields _ _ => Expr.anyOpFields fields
+  | .structUpdate base fields => base.anyOp || Expr.anyOpFields fields
+  | .field a _ _ | .propNot a | .not a | .neg a | .isNone a | .isSome a
+  | .decide a | .push _ a | .update _ _ a | .inject _ _ a | .proj a _ _ | .ascribe a _ => a.anyOp
+  | .ite a b c => a.anyOp || b.anyOp || c.anyOp
+  | .matchNull _ a b | .coalesce a b _ | .intOp _ a b | .order _ a b | .division _ a b
+  | .eq a b | .ne a b | .propAnd a b | .propOr a b | .and a b | .or a b => a.anyOp || b.anyOp
+  | .listMethod _ items _ _ body _ => items.anyOp || body.anyOp
+  | .listFold items init _ _ _ body _ => items.anyOp || init.anyOp || body.anyOp
+  | .int _ | .none | .bool _ | .string _ | .var _ | .enumCase .. | .tagValue _ => false
+
+def Expr.anyOpList : List (Expr T E) → Bool
+  | [] => false
+  | e :: es => e.anyOp || Expr.anyOpList es
+
+def Expr.anyOpFields : List (String × Expr T E) → Bool
+  | [] => false
+  | (_, e) :: fs => e.anyOp || Expr.anyOpFields fs
+
+end
+
+def Body.anyOp : Body T E → Bool
+  | .value e | .exit e _ | .throw e => e.anyOp p
+  | .state _ | .yield .. | .done .. => false
+  | .let _ e rest | .letTuple _ e rest => e.anyOp p || rest.anyOp
+  | .letArray _ _ elems rest => Expr.anyOpList p elems || rest.anyOp
+  | .ite c a b => c.anyOp p || a.anyOp || b.anyOp
+  | .matchNull _ _ a b | .letState _ a b | .matchTag _ _ _ _ _ a b => a.anyOp || b.anyOp
+  | .fold _ _ body items rest _ => body.anyOp || items.anyOp p || rest.anyOp
+  | .bind _ _ args rest => Expr.anyOpList p args || rest.anyOp
+
+/-- The output of `d` runs an operation for which `p` holds. A language
+imports the model that defines such operations then. -/
+def Decl.anyOp : Decl T E → Bool
+  | .function _ _ _ body => body.anyOp p
+  | .struct .. | .tagged .. | .alias .. | .enum .. => false
+
+end
+
+section
+variable (onTy : T → Bool) (onOp : E → Bool)
+
+mutual
+
+/-- The printed type names a type that the language adds, for which `onTy`
+holds. -/
+def Ty.anyExt : Ty T → Bool
+  | .ext t => onTy t
+  | .option t | .optional t | .list t | .set t => t.anyExt
+  | .map k v | .except k v => k.anyExt || v.anyExt
+  | .tuple ts | .app _ ts => Ty.anyExtList ts
+  | .int | .bool | .string | .struct _ | .enum _ | .tagged _ | .tag _ | .param _ => false
+
+def Ty.anyExtList : List (Ty T) → Bool
+  | [] => false
+  | t :: ts => t.anyExt || Ty.anyExtList ts
+
+end
+
+mutual
+
+/-- `e` names a type for which `onTy` holds, or runs an operation for which
+`onOp` holds. -/
+def Expr.mentions : Expr T E → Bool
+  | .ext op args => onOp op || Expr.mentionsList args
+  | .call _ args | .tuple args => Expr.mentionsList args
+  | .list elems t => Expr.mentionsList elems || t.anyExt onTy
+  | .struct fields _ args => Expr.mentionsFields fields || Ty.anyExtList onTy args
+  | .structUpdate base fields => base.mentions || Expr.mentionsFields fields
+  | .field a _ _ | .propNot a | .not a | .neg a | .isNone a | .isSome a
+  | .decide a | .push _ a | .update _ _ a | .inject _ _ a | .proj a _ _ => a.mentions
+  | .ite a b c => a.mentions || b.mentions || c.mentions
+  | .matchNull _ a b | .coalesce a b _ | .intOp _ a b | .order _ a b | .division _ a b
+  | .eq a b | .ne a b | .propAnd a b | .propOr a b | .and a b | .or a b => a.mentions || b.mentions
+  | .ascribe e t => e.mentions || t.anyExt onTy
+  | .listMethod _ items _ t body _ => items.mentions || t.anyExt onTy || body.mentions
+  | .listFold items init _ _ t body info =>
+    items.mentions || init.mentions || t.anyExt onTy || body.mentions || info.result.anyExt onTy
+  | .int _ | .none | .bool _ | .string _ | .var _ | .enumCase .. | .tagValue _ => false
+
+def Expr.mentionsList : List (Expr T E) → Bool
+  | [] => false
+  | e :: es => e.mentions || Expr.mentionsList es
+
+def Expr.mentionsFields : List (String × Expr T E) → Bool
+  | [] => false
+  | (_, e) :: fs => e.mentions || Expr.mentionsFields fs
+
+end
+
+def Body.mentions : Body T E → Bool
+  | .value e | .exit e _ | .throw e => e.mentions onTy onOp
+  | .state _ | .yield .. | .done .. => false
+  | .let _ e rest | .letTuple _ e rest => e.mentions onTy onOp || rest.mentions
+  | .letArray _ t elems rest => t.anyExt onTy || Expr.mentionsList onTy onOp elems || rest.mentions
+  | .ite c a b => c.mentions onTy onOp || a.mentions || b.mentions
+  | .matchNull _ _ a b | .letState _ a b | .matchTag _ _ _ _ _ a b => a.mentions || b.mentions
+  | .fold _ _ body items rest info =>
+    body.mentions || items.mentions onTy onOp || rest.mentions ||
+      info.stateTypes.any (·.anyExt onTy) || info.elem.anyExt onTy
+  | .bind _ _ args rest => Expr.mentionsList onTy onOp args || rest.mentions
+
+/-- The output of `d` names a type for which `onTy` holds, or runs an
+operation for which `onOp` holds. A language imports the model that defines
+them then. -/
+def Decl.mentions : Decl T E → Bool
+  | .struct _ _ fields | .tagged _ _ fields => fields.any (·.2.anyExt onTy)
+  | .alias _ _ type => type.anyExt onTy
+  | .enum .. => false
+  | .function _ params ret body =>
+    params.any (·.2.anyExt onTy) || ret.anyExt onTy || body.mentions onTy onOp
+
+end
+
 /-- The output of `d` names the string type, or holds a string literal. A
 language whose strings are not Lean's `String` imports its model then. -/
 def Decl.usesString (opUses : E → Bool) : Decl T E → Bool
@@ -682,6 +807,13 @@ class PrintTy (T : Type) where
   /-- The position `index`, a `Nat`, as a value of the type that the
   language gives the index of an array, such as `JSNumber.ofSafeInt` of it. -/
   indexValue : Names → String → String := fun names i => s!"({leanName names "Int"}.ofNat {i})"
+  /-- A sort of the list `xs` by the comparator `fn`, a function of two
+  elements, both as printed code. By default the comparator gives whether
+  the first may come before the second, as `List.mergeSort` reads it. A
+  language whose comparator gives a sign prints its own sort, as TypeScript
+  prints `JSNumber.sortWith`. -/
+  sortCall : Names → String → String → String := fun names fn xs =>
+    s!"({leanName names "List.mergeSort"} {xs} {fn})"
   /-- The name of the type of a map that keeps its entries in insertion
   order, which takes the key type and the value type, such as `JSMap`. -/
   map : Names → String
@@ -867,9 +999,13 @@ def Expr.callsShrink (self : DeclRef) (i : Nat) (need : Int) (depths : List (Str
   | .call r args =>
     (r != self || (args[i]?.bind fun a => a.unascribed.partOf depths).any (need ≤ ·)) &&
       Expr.callsShrinkList self i need depths args
-  | .listMethod _ items param _ body _ =>
-    items.callsShrink self i need depths &&
-      body.callsShrink self i need (bindPart depths param ((items.partOf depths).map (· + 1)))
+  | .listMethod method items param _ body _ =>
+    let elemPart := (items.partOf depths).map (· + 1)
+    -- A comparator's second parameter is an element too.
+    let inner := match method with
+      | .sortWith other => bindPart (bindPart depths other elemPart) param elemPart
+      | _ => bindPart depths param elemPart
+    items.callsShrink self i need depths && body.callsShrink self i need inner
   -- The accumulator is not a part of `p`, and the element is one step below
   -- `items`, as in a `listMethod`.
   | .listFold items init acc param _ body _ =>
@@ -1056,6 +1192,10 @@ def Expr.print (names : Names) : Expr T E → String
       PrintTy.indexValue (T := T) names
         s!"((({leanName names "List.findIdx?"} {fn} {xs}).map {int}.ofNat).getD (-1))"
     | .findLast => s!"({leanName names "List.find?"} {fn} ({leanName names "List.reverse"} {xs}))"
+    | .sortWith other =>
+      let elemTy := elem.print names
+      PrintTy.sortCall (T := T) names
+        s!"(fun ({param} : {elemTy}) ({other} : {elemTy}) => {body.print names})" xs
   | .listFold items init acc param elem body info =>
     let fn := s!"(fun ({acc} : {info.result.print names}) ({param} : {elem.print names}) => {body.print names})"
     s!"({leanName names "List.foldl"} {fn} {argument (init.print names)} {argument (items.print names)})"

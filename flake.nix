@@ -70,8 +70,8 @@
       });
 
       # `nix run .#test-engines`, from the repository root after
-      # `pnpm install` in tests/typescript: the JS number laws, bigint
-      # division and the interpreter against Node, on every engine.
+      # `pnpm install` in tests/typescript: the JS number laws, the bigint
+      # operators and the interpreter against Node, on every engine.
       apps = forEachSystem (pkgs: {
         test-engines = {
           type = "app";
