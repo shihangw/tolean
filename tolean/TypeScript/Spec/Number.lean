@@ -212,6 +212,12 @@ def JSNumber.atIndex? {N α : Type} [JSNumber N] (xs : List α) (i : N) : Option
   let k := toIndexInt i
   if 0 ≤ k then xs[k.toNat]? else xs.reverse[(-k - 1).toNat]?
 
+/-- `xs.entries()` (`Array.prototype.entries`, ECMA-262 §23.1.3.4), as a loop
+or a spread visits it: each element with its index, as a number. An array
+has fewer than 2^32 elements, so each index is a safe integer. -/
+def JSNumber.entries {N α : Type} [JSNumber N] (xs : List α) : List (N × α) :=
+  xs.mapIdx fun i x => (ofSafeInt i, x)
+
 /-- A relative index into a list of `len` elements, as `slice` reads its
 bounds: a negative `k` counts from the end, and the result is clamped to `0`
 and `len`. -/

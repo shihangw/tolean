@@ -172,6 +172,8 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   -- the array `[key, value]`, as a Lean pair is.
   | .setElems, [.set elems] => some (.list elems)
   | .mapEntries, [.map entries] => some (.list (entries.map fun (k, v) => .list [k, v]))
+  -- What a loop visits in `xs.entries()`, as the spec's `evalIter` gives it.
+  | .arrayEntries, [.list xs] => some (.list (Eval.entriesOf xs))
   | .mapOfList, [.list items] => (Eval.mapOfItems items).map .map
   | .setOfList, [.list items] => (Eval.setOfItems items).map .set
   -- The elements of an array literal with a spread, in order.

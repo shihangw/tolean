@@ -428,6 +428,7 @@ the file, the line and the reason. It never approximates.
 | `const [a, b] = t`, where `t` is a tuple | `let (a, b) := t` when the pattern names each element, and `let (a, b) := (t.1, t.2.1)` for a pattern with holes or with fewer names. The value is read once. |
 | `const [a, , c, ...rest] = xs`, where `xs` is an array, a set or a map | `let (a, c, rest) := ((xs[0]? : Option T), (xs[2]? : Option T), (List.drop 3 xs))`. The pattern iterates `xs`, as `for … of` does (§8.6.3), so each name is optional, `undefined` past the end, as `xs[k]` is. The rest is a new array of the values after the places. A set gives `JSSet.elems s` and a map `JSMap.entries m`. |
 | `for (const [k, v] of xs)`, a pattern in the head of a loop | The fold binds each element to the first name of the pattern, and the body starts with `let (k, v) := k`, which binds the names as `const [k, v] = element` does and hides that first binding. So `for (const [k, v] of m)` on a map names the key and the value of each entry. |
+| `xs.entries()`, where a loop, a spread, `new Map` or `new Set` iterates it | `(JSNumber.entries (N := N) xs)`, the list of pairs of each index, a number, and its element (§23.1.3.4). So `for (const [i, x] of xs.entries())` names both. On a map, `m.entries()` is `JSMap.entries m`, as a loop over the map is. |
 | `[A, B]` and `readonly [A, B]`, a tuple of two elements or more | `A × B`. In JS a tuple is an array. |
 | `[a, b]` where the context expects a tuple, such as a return value | `(a, b)`, with each element translated where its own type is expected |
 | `t[0]`, an element of a tuple at an index that is a number literal | `t.1`, and `t.2.1` or `t.2.2` for the second or the last of three, as Lean nests the product to the right |
@@ -569,6 +570,10 @@ Tolean rejects these, among others:
   argument, the index to start at. On objects `includes` compares
   references. Tolean also refuses a call of any other array method that takes
   no callback, such as `indexOf`.
+- `xs.entries()` anywhere except where a loop, a spread, `new Map` or `new Set`
+  iterates it, such as in `const it = xs.entries()`. An iterator is used up by
+  one pass, so a second loop over `it` would visit nothing, and the subset
+  has no model of that. Tolean also refuses `s.entries()` on a set.
 - An index of an array of nullable values, and `at` on one, because Lean's
   `none` would stand for both `null` and `undefined`. Tolean also refuses an
   index that is not a number, such as `xs[0n]`, and an argument of `at` or a

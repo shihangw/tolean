@@ -1707,12 +1707,34 @@ def loopOver (items : Code) : Option (Ty × IR.Expr) :=
   | .map k v => some (.tuple [k, v], .ext .mapEntries [items.value])
   | _ => none
 
-/-- What a loop over `iterable`, which `items` translates, visits, when the
+/-- The receiver `xs` of a call `xs.entries()`, which the spec's `evalIter`
+reads as an iterator. -/
+def entriesRecv? : Expr → Option Expr
+  | .call _ (.member _ recv "entries") [] => some recv
+  | _ => none
+
+/-- What a form that iterates `iterable` visits, as the spec's `evalIter`
+reads it, with the type of each value. `trItems` translates the iterable,
+and `trRecv` the receiver of `xs.entries()`. On an array, `xs.entries()`
+visits each element with its index, a tuple `[number, T]`. On a map it
+visits the entries, as a loop over the map does. Any other iterable visits
+what `loopOver` gives. -/
+def iterOf (trItems trRecv : Expr → TM Code) (iterable : Expr) : TM (Option (Ty × IR.Expr)) :=
+  match entriesRecv? iterable with
+  | some recv => do
+    let xs ← trRecv recv
+    match xs.type with
+    | .array t => pure (some (.tuple [.number, t], .ext .arrayEntries [xs.value]))
+    | .map _ _ => pure (loopOver xs)
+    | _ => pure none
+  | none => do pure (loopOver (← trItems iterable))
+
+/-- What a loop over `iterable` visits, when `iterOf` found `found` and the
 loop body is `body`. -/
-def loopItems (iterable : Expr) (body : Stmt) (items : Code) : TM (Ty × IR.Expr) := do
+def loopItems (iterable : Expr) (body : Stmt) (found : Option (Ty × IR.Expr)) : TM (Ty × IR.Expr) := do
   if Stmt.mutatesIterable iterable body then
     reject iterable.span "a loop may not change the map or set that it runs over"
-  orReject (loopOver items) iterable.span "a loop must run over an array, a set or a map"
+  orReject found iterable.span "a loop must run over an array, a set, a map or xs.entries()"
 
 /-- A piece of an array literal: an element, or the list of values that a
 spread `...e` gives, with their type. -/
@@ -1728,13 +1750,14 @@ def ElemPart.asCode : ElemPart → Code
 /-- An element of an array literal, where `expected` is the type of the array
 when the context gives one, and `tr` translates an expression. A spread
 `...e` iterates `e` (ECMA-262 §13.2.4.1), so it gives the values that a loop
-over `e` visits: the elements of an array or a set, or the entries of a map. -/
+over `e` visits: the elements of an array or a set, the entries of a map,
+or what `iterOf` finds in `xs.entries()`. -/
 def translateElem (tr : Option Ty → Expr → TM Code) (expected : Option Ty) (e : Expr) :
     TM ElemPart :=
   match e.spreadArg? with
   | some (sp, x) => do
-    let items ← tr expected x
-    let (t, li) ← orReject (loopOver items) sp "a spread '...' in an array needs an array, a set or a map"
+    let (t, li) ← orReject (← iterOf (tr expected) (tr none) x) sp
+      "a spread '...' in an array needs an array, a set, a map or xs.entries()"
     pure (.many t li)
   | none => do
     let elem := match expected with
@@ -1819,8 +1842,9 @@ def translateNew (tr : Option Ty → Expr → TM Code) (env : Env) (expected : O
     return ⟨.ascribe (.ext (if isMap then .mapEmpty else .setEmpty) []) type.lean, false, type⟩
   | [arg] =>
     let declared ← if isMap then declaredMapType s typeArgs expected else declaredSetType s typeArgs expected
-    let items ← translateRecv (tr (declared.map fun t => if isMap then t.entriesOf else t.elemsOf)) env arg
-    let (elem, li) ← orReject (loopOver items) arg.span
+    let found ← iterOf (translateRecv (tr (declared.map fun t => if isMap then t.entriesOf else t.elemsOf)) env)
+      (translateRecv (tr none) env) arg
+    let (elem, li) ← orReject found arg.span
       (if isMap then "new Map takes an array of [key, value] entries, or a map"
        else "new Set takes an array or a set")
     let type ← if isMap then mapOfEntriesType arg.span declared elem else setOfElemsType arg.span declared elem
@@ -3024,7 +3048,7 @@ name of the pattern, and the body starts by binding the names of the pattern
 as `const [k, v] = element` does, which hides that first binding. `items`
 translates the iterable, `kBody` the body in its scope and `kRest` the
 statements after the loop. -/
-def translateForOfPattern (items : TM Code) (kBody : Env → Tail → List Stmt → TM IR.Body)
+def translateForOfPattern (items : TM (Option (Ty × IR.Expr))) (kBody : Env → Tail → List Stmt → TM IR.Body)
     (kRest : TM IR.Body) (env : Env) (s : Span) (kind : VarKind) (p : ArrayPattern) (iterable : Expr)
     (body : Stmt) (tail : Tail) : TM IR.Body := do
   unless kind == .const do reject s "a loop must be 'for (const [a, b] of xs)'"
@@ -3094,8 +3118,10 @@ def loopHead (env : Env) (s : Span) (body : Stmt) : LoopHead → TM (String × T
     unless kind == .const do reject s "a loop must be 'for (const x of xs)'"
     -- An owned map or set may be the iterable, as long as the body does not
     -- change it: a JS loop would visit the values that the body adds.
-    let items ← translateRecv (translateExpr (← fuelLimit) env none) env iterable
-    let (elemType, items) ← loopItems iterable body items
+    let fl ← fuelLimit
+    let found ← iterOf (translateRecv (translateExpr fl env none) env) (translateRecv (translateExpr fl env none) env)
+      iterable
+    let (elemType, items) ← loopItems iterable body found
     return (element, elemType, items)
   | .counted init test update => countedHead env s body init test update
 
@@ -3149,7 +3175,11 @@ def translateStatements (fuel : Nat) (env : Env) (tail : Tail) (statements : Lis
     | .forOfStmt s kind name iterable body =>
       translateLoop fuel env s (.forOf kind name iterable) body rest tail
     | .forOfPattern s kind p iterable body =>
-      translateForOfPattern (do translateRecv (translateExpr (← fuelLimit) env none) env iterable)
+      translateForOfPattern
+        (do
+          let fl ← fuelLimit
+          iterOf (translateRecv (translateExpr fl env none) env) (translateRecv (translateExpr fl env none) env)
+            iterable)
         (fun env' t ss => translateStatements fuel env' t ss) (translateStatements fuel env tail rest)
         env s kind p iterable body tail
     | .forStmt s init test update body =>

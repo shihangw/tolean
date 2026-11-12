@@ -188,6 +188,9 @@ inductive ExprExt where
   `(JSNumber.sliceInt xs a (some b))` on `xs`, `a` and `b`, where `a` and `b`
   are integers: `xs.slice(a, b)` where a bound is not an integer literal. -/
   | sliceInt
+  /-- `(JSNumber.entries (N := N) xs)`, on `xs`: what a loop or a spread
+  visits in `xs.entries()`, each element with its index. -/
+  | arrayEntries
   /-- `JSMap.empty`, on no arguments: `new Map()`. The translator writes the
   type of the map after it. -/
   | mapEmpty
@@ -403,6 +406,7 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
   | .setDelete, [s, x] => s!"({leanName names "JSSet"}.delete {argument s} {argument x})"
   | .setElems, [s] => s!"({leanName names "JSSet"}.elems {argument s})"
   | .mapEntries, [m] => s!"({leanName names "JSMap"}.entries {argument m})"
+  | .arrayEntries, [xs] => s!"({js}.entries (N := {names.typeParam}) {argument xs})"
   | .mapOfList, [xs] => s!"({leanName names "JSMap"}.ofList {argument xs})"
   | .setOfList, [xs] => s!"({leanName names "JSSet"}.ofList {argument xs})"
   | .append, [a] => a

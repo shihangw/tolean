@@ -313,6 +313,8 @@ def sections : List Section := [
   -- §23 Indexed Collections {#sec-indexed-collections}
   ⟨"sec-array.prototype.at", "23.1.3.1", "Array.prototype.at", [``Proof.eval_at,
     ``Proof.eval_atNumber, ``Proof.apply_atNumber]⟩,
+  ⟨"sec-array.prototype.entries", "23.1.3.4", "Array.prototype.entries",
+    [``Proof.entriesRecv?_some, ``Proof.evalIter_entries, ``Proof.evalIter_other, ``Proof.iterOf_sim]⟩,
   ⟨"sec-array.prototype.every", "23.1.3.6", "Array.prototype.every", []⟩,
   ⟨"sec-array.prototype.filter", "23.1.3.8", "Array.prototype.filter",
     [``Proof.evalFilter_sim]⟩,
@@ -719,7 +721,7 @@ def extras : List Group := [
     ``Proof.includesVal_int, ``Proof.includesVal_bool, ``Proof.includesVal_str,
     ``Proof.includesVal_num]⟩,
   ⟨"Certificates: elements of a list", [``Proof.elementAt_map_some, ``Proof.elementAt_cons, ``Proof.elementAt_map_toSafeInt,
-    ``Proof.atVal_map, ``Proof.atVal_map_toIndexInt]⟩,
+    ``Proof.atVal_map, ``Proof.atVal_map_toIndexInt, ``Proof.entriesOf_map]⟩,
   ⟨"Certificates: slices of a list", [``Proof.sliceList_map, ``Proof.getElem?_rev,
     ``Proof.sliceList_nonneg, ``Proof.sliceList_from, ``Proof.sliceList_last,
     ``Proof.sliceList_dropLast, ``Proof.sliceList_mixed, ``Proof.sliceList_neg,

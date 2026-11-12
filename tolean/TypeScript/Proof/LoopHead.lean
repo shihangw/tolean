@@ -22,10 +22,10 @@ variable {N : Type} [JSNumber N]
   · rintro ⟨c, s₁, ⟨rfl, rfl⟩, rfl, rfl⟩; exact ⟨rfl, rfl⟩
   · rintro ⟨rfl, rfl⟩; exact ⟨_, _, ⟨rfl, rfl⟩, rfl, rfl⟩
 
-/-- `loopItems` reads no state, and gives what `loopOver` gives. -/
-theorem loopItems_ok {iterable : Expr} {body : Stmt} {items : Code} {r : Ty × IR.Expr}
-    {ctx ctx' : Ctx} (h : loopItems iterable body items ctx = .ok r ctx') :
-    Stmt.mutatesIterable iterable body = false ∧ loopOver items = some r ∧ ctx' = ctx := by
+/-- `loopItems` reads no state, and gives what `iterOf` found. -/
+theorem loopItems_ok {iterable : Expr} {body : Stmt} {found : Option (Ty × IR.Expr)} {r : Ty × IR.Expr}
+    {ctx ctx' : Ctx} (h : loopItems iterable body found ctx = .ok r ctx') :
+    Stmt.mutatesIterable iterable body = false ∧ found = some r ∧ ctx' = ctx := by
   unfold loopItems at h
   simp only [ite_state] at h
   split at h
@@ -106,11 +106,14 @@ theorem loopHead_sim (hc : CallsAgree (N := N) m.program fs fuel) {env : Transla
       obtain ⟨hmut, hlo, rfl⟩ := loopItems_ok hli
       simp at h
       obtain ⟨rfl, rfl, rfl⟩ := h.1
-      have hsimI := translateRecv_sim m fs fuel
-        (fun _ _ _ hx => (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hx) hitems
+      have hit := iterOf_sim m fs fuel
+        (fun _ _ _ hx => translateRecv_sim m fs fuel
+          (fun _ _ _ hx => (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hx) hx)
+        (fun _ _ _ _ hx => translateRecv_sim m fs fuel
+          (fun _ _ _ hx => (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hx) hx) hitems
       intro ρs ρo vs ha hs hi
-      obtain ⟨vi, hvi, hiter⟩ := loopOver_sim m fs fuel hsimI hlo ha hs hi
-      simp [LoopHead.stmt, Eval.execStmt, hmut, hvi, hiter]
+      have hiter := hit _ _ hlo ρs ρo vs ha hs hi
+      simp [LoopHead.stmt, Eval.execStmt, hmut, hiter]
     · simp at h
   | counted init test update =>
     simp only [loopHead, countedHead] at h

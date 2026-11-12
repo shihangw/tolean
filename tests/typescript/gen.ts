@@ -658,16 +658,24 @@ export class Gen {
           if (xs.ty.k === 'array') {
             // Sometimes a loop over a literal of arrays, whose head is an
             // array pattern: the first value, which is optional, and the rest.
+            // Or a loop over `xs.entries()`, whose head names the index and
+            // the element.
             const of = xs.ty.of;
             const pattern = of.k !== 'nullable' && of.k !== 'optional' && this.chance(0.6);
+            const entries = !pattern && this.chance(0.3);
             const element = this.fresh('e');
             const restName = this.fresh('q');
+            const index = this.fresh('i');
             const inner = pattern
               ? [...vars, { name: element, ty: { k: 'optional', of } as Ty, mutable: false, owned: false },
                 { name: restName, ty: { k: 'array', of } as Ty, mutable: false, owned: false }]
-              : [...vars, { name: element, ty: xs.ty.of, mutable: false, owned: false }];
-            const head = pattern ? `[${element}, ...${restName}]` : element;
-            const iterable = pattern ? `[${xs.name}, ${this.pick(arrays.filter((a) => same(a.ty, xs.ty))).name}]` : xs.name;
+              : entries
+                ? [...vars, { name: index, ty: NUMBER, mutable: false, owned: false },
+                  { name: element, ty: xs.ty.of, mutable: false, owned: false }]
+                : [...vars, { name: element, ty: xs.ty.of, mutable: false, owned: false }];
+            const head = pattern ? `[${element}, ...${restName}]` : entries ? `[${index}, ${element}]` : element;
+            const iterable = pattern ? `[${xs.name}, ${this.pick(arrays.filter((a) => same(a.ty, xs.ty))).name}]`
+              : entries ? `${xs.name}.entries()` : xs.name;
             const assign = `${target.name} = ${this.expr(target.ty, inner, 1)};`;
             // A `continue` skips the assignment for some elements, a `break`
             // ends the loop there, and a `return` ends the function.
