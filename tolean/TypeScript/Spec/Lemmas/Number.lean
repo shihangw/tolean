@@ -29,6 +29,37 @@ variable [SafeIntLaws N]
     lt a a = false := by
   simp [SafeIntLaws.lt h h]
 
+/-- ToInt32 of a safe integer that a signed 32-bit integer can hold is that
+integer, so `x | 0` leaves it as it is. -/
+theorem toInt32_of_safe {a : N} {i : Int} (h : toSafeInt a = some i)
+    (hlo : -2147483648 ≤ i) (hhi : i < 2147483648) : JSNumber.toInt32 a = i := by
+  simp only [JSNumber.toInt32, SafeIntLaws.toInt h, Option.getD_some, wrapInt32]
+  split <;> omega
+
+/-- The sign of `1`, as a sort reads the value of a comparator. -/
+theorem compareSign_one : compareSign (ofSafeInt (N := N) 1) = some .gt := by
+  have h := SafeIntLaws.ofSafeInt (N := N) (i := 1) (by unfold InRange maxSafe; omega)
+  have h0 := SafeIntLaws.ofSafeInt (N := N) (i := 0) (by unfold InRange maxSafe; omega)
+  simp [compareSign, SafeIntLaws.lt h h0, SafeIntLaws.lt h0 h]
+
+/-- The sign of `0`. -/
+theorem compareSign_zero : compareSign (ofSafeInt (N := N) 0) = some .eq := by
+  have h0 := SafeIntLaws.ofSafeInt (N := N) (i := 0) (by unfold InRange maxSafe; omega)
+  simp [compareSign, SafeIntLaws.lt h0 h0, SafeIntLaws.eq h0 h0]
+
+/-- The sign of `-0`, which a comparator may give in place of `0`. -/
+theorem compareSign_neg_zero : compareSign (neg (ofSafeInt (N := N) 0)) = some .eq := by
+  have h0 := SafeIntLaws.ofSafeInt (N := N) (i := 0) (by unfold InRange maxSafe; omega)
+  have hn := SafeIntLaws.neg h0
+  simp only [Int.neg_zero] at hn
+  simp [compareSign, SafeIntLaws.lt hn h0, SafeIntLaws.lt h0 hn, SafeIntLaws.eq hn h0]
+
+/-- The sign of `-1`, which the translation writes as the negation of `1`. -/
+theorem compareSign_neg_one : compareSign (neg (ofSafeInt (N := N) 1)) = some .lt := by
+  have h := SafeIntLaws.ofSafeInt (N := N) (i := 1) (by unfold InRange maxSafe; omega)
+  have h0 := SafeIntLaws.ofSafeInt (N := N) (i := 0) (by unfold InRange maxSafe; omega)
+  simp [compareSign, SafeIntLaws.lt (SafeIntLaws.neg h) h0]
+
 end SafeIntegers
 
 section SpecialValues
@@ -52,6 +83,11 @@ theorem eq_self_eq_not_isNaN {a : N} : eq a a = !isNaN a := by
 @[simp] theorem isNaN_eq_false_of_safe {a : N} {i : Int} (h : toSafeInt a = some i) :
     isNaN a = false :=
   SpecialValueLaws.isFinite_not_nan (SpecialValueLaws.safe_finite h)
+
+/-- `Number.isInteger(x)` holds for a safe integer `x`. -/
+theorem isInteger_of_safe [SafeIntLaws N] {a : N} {i : Int} (h : toSafeInt a = some i) :
+    JSNumber.isInteger a = true := by
+  simp [JSNumber.isInteger, SpecialValueLaws.safe_finite h, SafeIntLaws.eq (SafeIntLaws.trunc h) h]
 
 end SpecialValues
 

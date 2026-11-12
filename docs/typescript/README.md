@@ -237,7 +237,10 @@ function that can throw, because a certificate has no encoder for `Except` yet.
 A `number` is a value of
 the abstract model `JSNumber N` in the interpreter, as it is in the
 translation, so each theorem holds for every `N`, real doubles among them,
-and assumes none of the number laws.
+and assumes none of the number laws. A file that sorts is the exception. Its
+theorems take `[SafeIntLaws N]`, because the order needs the signs of `-1`
+and `1` as numbers. A file that sorts by a `number` key has no certificate
+yet, because its claim needs the precondition that no key is `NaN`.
 
 A certificate's theorems follow from `translate_sound`, so they do not unfold
 the interpreter. The certificate holds the IR that the translator gives,
@@ -370,9 +373,19 @@ the file, the line and the reason. It never approximates.
 |---|---|
 | `bigint` | `Int` (exact; literals are typed `(n : Int)`) |
 | `number` | an abstract `N` with `[JSNumber N]` (see [Numbers](#numbers)) |
-| integer `number` literal, `-x`, `+ - *`, `< <= > >=`, `=== !==` on `number` | `JSNumber.ofSafeInt`, `neg`, `add`, `sub`, `mul`, `lt`, `le`, `eq` |
+| integer `number` literal, `-x`, `+ - * /`, `< <= > >=`, `=== !==` on `number` | `JSNumber.ofSafeInt`, `neg`, `add`, `sub`, `mul`, `div`, `lt`, `le`, `eq` |
 | `Number.isSafeInteger(x)` | `(JSNumber.toSafeInt x).isSome` |
-| `Number.isNaN(x)`, `Number.isFinite(x)` | `JSNumber.isNaN x`, `JSNumber.isFinite x` |
+| `Number.isNaN(x)`, `Number.isFinite(x)`, `Number.isInteger(x)` | `JSNumber.isNaN x`, `JSNumber.isFinite x`, `JSNumber.isInteger x`. `isInteger` holds when `x` is finite and `Math.trunc(x)` is `x`, as ECMA-262 defines it. |
+| `Math.floor(x)`, `Math.ceil(x)`, `Math.trunc(x)`, `Math.round(x)`, `Math.abs(x)` on a `number` | `JSNumber.floor x`, `ceil`, `trunc`, `round`, `abs` |
+| `a & b`, `a \| b`, `a ^ b`, `~a`, `a << b`, `a >> b` and `a >>> b` on numbers | `JSNumber.bitAnd a b` and its relatives (`tolean/TypeScript/Spec/Number.lean`). JS converts each operand with ToInt32, or with ToUint32 for `>>>` and for a shift count, so `x \| 0` is the integer part of `x` modulo 2^32, as a signed 32-bit integer. The model has one new operation for them, `JSNumber.toInt`, the exact integer part of a finite number. Lean defines the rest. |
+| `Object.is(a, b)` on two numbers | `JSNumber.sameValue a b`: `===`, except that `NaN` is the same as `NaN`, and `+0` is not the same as `-0` (SameValue). The model has one new operation for it, `JSNumber.isNegZero`. |
+| `Object.is(a, b)` on two bigints, booleans or strings | `decide (a = b)`, as for `===` |
+| `Number(b)` on a `bigint` | `JSNumber.ofInt (N := N) b`: the double nearest to `b`, with ties to the one whose last bit is zero, and `±Infinity` beyond the largest double. Tolean refuses `Number(v)` on other values, because the model has no ToNumber for them. |
+| `Date` | `JSDate` (`tolean/TypeScript/Spec/Date.lean`): the time value, as an `Option Int` of milliseconds since the start of 1970 in UTC, where `none` is an invalid date. The subset has no setters, so a date never changes, and a value stands for it. Tolean refuses `===` on dates, because JS compares them as objects. |
+| `new Date(t)` on a number | `JSDate.ofNumber t`: TimeClip of `t`, its integer part, or an invalid date when `t` is not finite or is more than 8.64 × 10^15 from zero |
+| `d.getTime()`, `d.valueOf()`, and the UTC getters `d.getUTCFullYear()`, `getUTCMonth`, `getUTCDate`, `getUTCDay`, `getUTCHours`, `getUTCMinutes`, `getUTCSeconds` and `getUTCMilliseconds` | `JSDate.getTime (N := N) d` and `JSDate.getUTCFullYear (N := N) d` and the others, which follow the calendar of ECMA-262 §21.4.1 on integers. Each is `NaN` for an invalid date. |
+| `Date.UTC(year, month, …)` with two to seven numbers | `JSDate.utc (N := N) [year, month, …]`: MakeDay, MakeTime and MakeDate, with the arithmetic of numbers where ECMA-262 uses it, so a large argument rounds as it does in JS. A year from 0 to 99 is a year of the 1900s. |
+| `Math.min(a, b, …)`, `Math.max(a, b, …)` on numbers | `JSNumber.minimum (N := N) [a, b, …]` and `JSNumber.maximum`. They fold `Math.min` of two numbers over the list, from `Infinity`, as ECMA-262 does, so `Math.min()` is `Infinity`. Tolean refuses a spread argument. |
 | `NaN`, `Infinity`, `-Infinity` | `JSNumber.nan`, `posInf`, `negInf` |
 | `T \| null`, `null` | `Option T`, `none` |
 | `x === null`, `x !== null` | `x.isNone`, `x.isSome` |
@@ -422,10 +435,10 @@ the file, the line and the reason. It never approximates.
 | `[a, b]` where the context expects a tuple, such as a return value | `(a, b)`, with each element translated where its own type is expected |
 | `t[0]`, an element of a tuple at an index that is a number literal | `t.1`, and `t.2.1` or `t.2.2` for the second or the last of three, as Lean nests the product to the right |
 | `const xs: Array<T> = [...]`, then `xs.push(e)`; `xs` read only in the `return` | `let xs := xs ++ [e]` |
-| `Map<K, V>` and `ReadonlyMap<K, V>`, where `K` is `bigint`, `string`, `boolean` or a literal union of strings | `JSMap K V` (`tolean/TypeScript/Map.lean`): the list of entries, in the order that each key was first set, as ECMA-262 keeps them (§24.1). A key is found with `=`, which is SameValueZero on these key types. |
+| `Map<K, V>` and `ReadonlyMap<K, V>`, where `K` is `number`, `bigint`, `string`, `boolean` or a literal union of strings | `JSMap K V` (`tolean/TypeScript/Map.lean`): the list of entries, in the order that each key was first set, as ECMA-262 keeps them (§24.1). A key is found with SameValueZero, which `JSKey.same` gives. On every key type but `number` it is `=`. On `number` it is `JSNumber.sameValueZero`, so a map has at most one `NaN` key, and `0` and `-0` are the same key. A new key `-0` is stored as `0` (§24.1.3.9), so a loop over the keys never sees `-0`. |
 | `const m = new Map<K, V>()`, or `const m: Map<K, V> = new Map()`, then `m.set(k, v)` and `m.delete(k)` | `let m := (JSMap.empty : JSMap K V)`, then `let m := JSMap.set m k v` and `let m := JSMap.delete m k`. The function owns the map, as it owns an array that it pushes to. |
 | `m.get(k)`, `m.has(k)` and `m.size` | `JSMap.get? m k`, `JSMap.has m k` and `JSNumber.ofSafeInt (JSMap.size m)`. `get` gives `undefined` for a key that the map does not have, so its value has the type of an optional field: `m.get(k) ?? d` is `Option.getD (JSMap.get? m k) d`. |
-| `Set<T>` and `ReadonlySet<T>`, where `T` is a type that a map key may have | `JSSet T` (`tolean/TypeScript/Map.lean`): the list of elements, in the order that each was first added (§24.2) |
+| `Set<T>` and `ReadonlySet<T>`, where `T` is a type that a map key may have | `JSSet T` (`tolean/TypeScript/Map.lean`): the list of elements, in the order that each was first added (§24.2). Elements compare as map keys do, and `add(-0)` stores `0` (§24.2.4.1). |
 | `const s = new Set<T>()`, then `s.add(x)` and `s.delete(x)`; `s.has(x)` and `s.size` | `JSSet.empty`, `JSSet.add`, `JSSet.delete`, `JSSet.has` and `JSNumber.ofSafeInt (JSSet.size s)`, as for a map |
 | `new Map(items)` and `new Set(items)`, where `items` is an array, such as `[['a', 1n]]` or `['a']`, a map or a set | `JSMap.ofList` and `JSSet.ofList` of the list that a loop over `items` visits. The constructor sets each `[key, value]`, or adds each value, in order (§24.1.1.2), so a later entry for a key replaces an earlier one, and `new Map(m)` copies `m`. |
 | `for (const x of s)` over a set, and `for (const e of m)` over a map | `List.foldl` over `JSSet.elems s`, or over `JSMap.entries m`, as over an array. A map gives each entry as the tuple `[key, value]`, as JS does, so the body reads `e[0]` and `e[1]`. The loop may run over an owned map or set, if its body does not change it. |
@@ -448,6 +461,7 @@ the file, the line and the reason. It never approximates.
 | `xs.findLast(x => p)` | `List.find? (fun (x : T) => p) (List.reverse xs)`, which the callback reads from the last element to the first, as in JS. It has the type of `find`, and it is in ES2023. |
 | `xs.findIndex(x => p)` | `JSNumber.ofSafeInt (((List.findIdx? (fun (x : T) => p) xs).map Int.ofNat).getD (-1))`: the index of the first element that passes, as a `number`, or `-1` |
 | `xs.reduce((acc, x) => e, init)` | `List.foldl (fun (acc : A) (x : T) => e) init xs`, where `A` is the type of `init`. The body must give a value of that type. |
+| `xs.toSorted((a, b) => e)` and `[...xs].sort((a, b) => e)`, where `e` compares keys | `JSNumber.sortWith (fun (a b : T) => e) xs`: the stable merge sort, where `a` comes after `b` only when `e` is greater than `0`. The comparator must have the shape `(a.k < b.k) ? -1 : (a.k > b.k) ? 1 : 0`, where the key is the element or a field of it, and a `bigint`, a `string` or a `number`. The tests may come in either order, the signs may be reversed to sort from the greatest, and a comparison of the next key may take the place of the `0`. The last comparison may also be a difference of `number` keys, `a.t - b.t`, or `b.t - a.t` to sort from the greatest. Such a comparator is consistent, so the order is the one that JS gives. On `number` keys that holds only when no key is `NaN`. A difference also needs every key to be finite: the spec compares each element with itself too, and `Infinity - Infinity` is `NaN`, so one infinite key is enough to break it. On other arrays the spec leaves the order to the engine, and the translation makes no claim. `toSorted` is in ES2023, and `sort` is stable from ES2019. [A decision record](../decisions/2026-11-11-sort.md) explains the meaning. |
 | `if` that returns, `if` that changes locals, `c ? a : b` | `if … then … else …` |
 | `+ - *`, `< <= > >=`, `=== !==`, `&& \|\| !` | the same operators on `Int`, `Bool`, `Prop` |
 | `a + b` where one operand is a string and the other is a string, a `bigint` or a `boolean`, and `s += e` on a string local | `a ++ b` on `JSString`. ToString converts the other operand first: `JSString.ofInt n` writes the decimal digits of a bigint, and `JSString.ofBool b` writes `"true"` or `"false"`. `+` is left-associative, so `1n + 2n + "!"` is `"3!"`. Tolean refuses a `number` operand, because the model has no ToString for numbers yet. |
@@ -458,6 +472,9 @@ the file, the line and the reason. It never approximates.
 | `s.indexOf(p)`, where `p` is a string | `JSNumber.ofSafeInt (N := N) (JSString.indexOf s p)`: the first index of `p` in code units, or -1. The empty string is at index 0. |
 | `a < b`, `a <= b`, `a > b` and `a >= b` on strings | `JSString.lt a b` and `JSString.le a b`, with the operands swapped for `>` and `>=`. JS compares strings by their UTF-16 code units (IsLessThan, ECMA-262 §7.2.13), not by their code points, so `"😀" < "\uFFFF"` is `true`. `JSString.lt_iff` states that `lt` is Lean's order on the lists of code units. |
 | `a / k`, `a % k` on `bigint`, where `k` is a nonzero literal | `Int.tdiv a k`, `Int.tmod a k` (both truncate toward zero, as JS does) |
+| `a ** k` on `bigint`, where `k` is a bigint literal | `a ^ (k : Nat)`. JS throws a `RangeError` when the exponent is negative, so the exponent must be a literal, which never is. |
+| `a & b`, `a \| b`, `a ^ b` and `~a` on `bigint` | `JSBigInt.bitAnd a b`, `JSBigInt.bitOr a b`, `JSBigInt.bitXor a b` and `JSBigInt.bitNot a` (`tolean/TypeScript/Spec/BigInt.lean`). JS applies them to the two's complement of each operand, with as many copies of the sign bit as it needs, so `-6n & 3n` is `2n`. Lean has no such operations on `Int`, so the model defines them from the ones on `Nat`. |
+| `a << n` and `a >> n` on `bigint` | `JSBigInt.shiftLeft a n` and `JSBigInt.shiftRight a n`. `a << n` is `a × 2^n`. A negative `n` shifts the other way, and a right shift rounds down, so `-5n >> 1n` is `-3n`. Tolean refuses `>>>`, because JS throws a `TypeError` for it on bigints. An engine throws a `RangeError` when a bigint gets too large for it, as `1n << (2n ** 40n)` does, and the model has no such limit, as for `*`. |
 | `{ a, b: e }` building a declared interface | structure instance |
 | `{ ...a, f: e }`, where `a` has an interface | `{ a with f := e }`. The spread keeps the keys of `a` in their order, and each property after it sets a required field in its place, so the object keeps the declared order. `{ ...a }` is `a`. |
 | Call to a function declared earlier in the file | application |
@@ -478,11 +495,26 @@ Tolean rejects these, among others:
   imported function.
 
 - Fractional or unsafe `number` literals, such as `0.5` and `2 ** 53`. It also
-  rejects `/`, `%` and `Math.*` on `number`, because no law covers them yet.
+  rejects `%` on `number`, because no law covers it yet, and the functions of
+  `Math` whose results ECMA-262 leaves to the engine, such as `Math.sin`.
 - `/` and `%` on `bigint`, unless the divisor is a nonzero literal. JS throws
   an error when the divisor is `0n`, but `Int.tdiv` returns 0.
   `tests/typescript/bigintDivision.test.ts` checks on random pairs that JS
-  `/` and `%` agree with `Int.tdiv` and `Int.tmod`.
+  `/` and `%` agree with `Int.tdiv` and `Int.tmod`, and
+  `tests/typescript/bigintBitwise.test.ts` checks the bitwise operators and
+  `**` in the same way.
+- `**` on `number`, because ECMA-262 lets the result differ between engines.
+- `new Date()`, `Date.now()`, and a date from a string or from its local
+  parts, such as `new Date(2024, 0, 1)`, because they read the clock, parse,
+  or read the time zone of the host. The getters of local time, such as
+  `getFullYear`, and the setters stay refused too. `toISOString` waits for
+  the error classes of the errors stage, because it throws a `RangeError`
+  whose message is up to the engine. `tests/typescript/date.test.ts` checks
+  the getters and `Date.UTC` against Node on random arguments. One kind of
+  argument differs: V8 gives `NaN` when the year passes ±1,000,000, even when
+  the date argument brings the result back into range. ECMA-262 lets MakeDay
+  call such a year out of range, and the model follows its arithmetic, as
+  SpiderMonkey does.
 - `===` on objects, because in JS it compares references. It also rejects
   `===` between nullable values.
 - `==` and `!=` anywhere except in a test against `null`. Between two other
@@ -551,8 +583,13 @@ Tolean rejects these, among others:
   is not negative, such as `xs.slice(-2, 3)`.
 - `reduce` without an initial value, which throws on an empty array, and a
   callback of `reduce` whose value has another type than the initial value.
-- A map key or a set element of type `number`, which can be `NaN` or `-0`,
-  and one of an interface type, which a map or a set compares by identity.
+- `sort` on an array that the function did not make in the same expression,
+  such as `xs.sort(cmp)` on a parameter, because `sort` changes the array
+  that it sorts. Tolean also refuses `toSorted` and `sort` without a
+  comparator, which compare the strings of the elements, a comparator of any
+  other shape, and a sort of an array of nullable values.
+- A map key or a set element of an interface type, which a map or a set
+  compares by identity.
   Tolean also refuses `set`, `add` and `delete` on a map or a set that the
   function did not make with `const m = new Map()` or `const s = new Set()`,
   and a read of such an owned map or set anywhere except through `get`, `has`
@@ -727,14 +764,18 @@ at three levels:
 - **Safe integers.** `toSafeInt : N → Option Int` returns the integer that a
   value is, when `Number.isSafeInteger` holds for it. `SafeIntLaws` states
   two facts about safe integers. JS arithmetic on them is exact as long as
-  the result stays in range, and comparison on them agrees with `Int`. A
+  the result stays in range, and comparison on them agrees with `Int`.
+  Division is exact when the divisor divides the dividend. `Math.floor` and
+  its relatives leave a safe integer as it is, and `Math.min` and `Math.max`
+  agree with `min` and `max` on `Int`. A
   theorem that needs this takes `[SafeIntLaws N]` and hypotheses such as
   `toSafeInt x = some i`. Then it reasons over `Int`.
 - **`NaN` and `±Infinity`.** `isNaN`, `isFinite`, `nan`, `posInf` and `negInf`
   model `Number.isNaN`, `Number.isFinite`, `NaN` and `±Infinity`.
   `SpecialValueLaws` states how they behave. `===` is symmetric, and it is
   reflexive for every value except `NaN`, so `x !== x` tests for `NaN`.
-  `NaN` fails every comparison and spreads through `+`, `-` and `*`.
+  `NaN` fails every comparison and spreads through arithmetic and the
+  functions of `Math`.
   `±Infinity` bound every finite number, and `Infinity - Infinity` is `NaN`.
   A theorem that needs these facts takes `[SpecialValueLaws N]`.
 
@@ -782,6 +823,7 @@ tolean translate --target ES2022 input.ts Output.lean My.Namespace
   | object spread (`{ ...p }`) | ES2018 |
   | bigint (literals, type, `+ - *`, comparisons) | ES2020 |
   | bigint `/` and `%` (`BigInt::divide`, `BigInt::remainder`) | ES2020 |
+  | bigint `**` and the bitwise operators (`BigInt::exponentiate`, `BigInt::bitwiseAND` and the others) | ES2020 |
   | `??` | ES2020 |
   | `?.` | ES2020 |
   | `&&=`, `\|\|=`, `??=` | ES2021 |
