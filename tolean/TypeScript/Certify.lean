@@ -266,6 +266,15 @@ abbrev Callback := CallbackKind × String × IR.Ty × IR.Expr × IR.CallbackInfo
 
 mutual
 
+/-- `e` compares or subtracts numbers. A comparator of keys holds such a
+test only for `number` keys. -/
+partial def comparesNumbers : IR.Expr → Bool
+  | .ext (.numberOp _) _ => true
+  | .ext _ args => args.any comparesNumbers
+  | .ite a b c => comparesNumbers a || comparesNumbers b || comparesNumbers c
+  | .decide a | .not a | .neg a => comparesNumbers a
+  | _ => false
+
 /-- The callbacks in `e`, inner ones first, in the order of the source. -/
 partial def exprCallbacks : IR.Expr → List Callback
   | .listMethod method items param elem body info =>
@@ -425,8 +434,14 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       | _ => false then
     throw s!"{file}: a counted loop has no certificate yet"
   let nv := names.typeParam
-  -- Every theorem is about every number model.
-  let generic := s!"\{{nv} : Type} [tolean.TypeScript.JSNumber {nv}]"
+  -- Every theorem is about every number model. A sort reads the signs of
+  -- `-1` and `1`, which hold in every model with the laws of safe integers,
+  -- so the theorems of a file that sorts take those laws as hypotheses.
+  let sorts := decls.any fun
+    | .function _ _ _ body => (bodyCallbacks body).any (·.1 matches .list (.sortWith _))
+    | _ => false
+  let laws := if sorts then s!" [tolean.TypeScript.SafeIntLaws {nv}]" else ""
+  let generic := s!"\{{nv} : Type} [tolean.TypeScript.JSNumber {nv}]{laws}"
   -- A generic translated definition takes the model by name, as the
   -- translation's own calls do.
   let callN := if names.generic then s!" ({nv} := {nv})" else ""
@@ -671,6 +686,8 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         | .list (.mapIdx index) =>
           s!"fun ({index} : {tolean.IR.leanName names "Nat"}) ({param} : {elem.print names}) => " ++
             s!"let {index} := {tolean.IR.PrintTy.indexValue (T := IR.TyExt) names index}; "
+        | .list (.sortWith other) =>
+          s!"fun ({param} : {elem.print names}) ({other} : {elem.print names}) => "
         | _ => s!"fun ({param} : {elem.print names}) => "
       let fn := s!"(({captured}{binders}({cbBody.print names} : {info.result.print names}))" ++
         String.join (scope.map fun (n, _) => s!" {decode n}") ++ ")"
@@ -716,10 +733,38 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           s!"  {casesOn decls vars}link_tac [{simpSet}]"
         continue
       let .list method := method | continue
-      -- A sort needs a proof that its comparator is consistent, which the
+      -- A sort: the lemma needs the comparator to be consistent for every
+      -- list. Its keys come from the source, and `sort_tac` shows that the
+      -- comparator's sign is their lexicographic comparison, which
+      -- `Std.TransCmp` says is a total preorder. A `number` key is consistent
+      -- only when it is not `NaN`, which needs a precondition that the
       -- certificate does not write yet.
-      if method matches .sortWith _ then
-        throw s!"{file}: cannot certify a sort in {name} yet"
+      if let .sortWith other := method then
+        if comparesNumbers cbBody then throw s!"{file}: cannot certify a sort by a number key in {name} yet"
+        let some (.call _ _ [.arrow _ _ [p, q] arrowBody]) := callAt syntaxBody info.span
+          | throw s!"{file}: no comparator at {info.span.start.line}:{info.span.start.col} in {name}"
+        let some keys := Translate.keyComparator? p.name q.name arrowBody
+          | throw s!"{file}: the comparator in {name} does not compare keys"
+        let elemTy := elem.print names
+        let keyCmp : List String × Bool × Bool → String := fun (path, _, up) =>
+          let key := s!"(fun ({param} : {elemTy}) => {".".intercalate (param :: path)})"
+          let cmp := s!"({r.full "compareOn"} {key})"
+          if up then cmp else s!"(fun (x y : {elemTy}) => {cmp} y x)"
+        let o := match (keys.map keyCmp).reverse with
+          | [] => "(fun _ _ => Ordering.eq)"
+          | last :: rest => rest.foldl (fun acc c => s!"({r.full "compareLex"} {c} {acc})") last
+        let vars := ("x", elem) :: ("y", elem) :: scope.zipIdx.map fun ((_, t), i) => (s!"v{i}", t)
+        loopLemmas := loopLemmas.push (r.cert lemmaName)
+        thms := thms.push <|
+          s!"theorem {lemmaName} {generic} (fs : List (tolean.DeclRef × List String × tolean.TypeScript.IR.Body)){hfs}\n" ++
+          s!"    (fuel : Nat) (ρ : Env {nv}){hI} (items : {itemsTy}) :\n" ++
+          s!"    tolean.TypeScript.Eval.sortValues (tolean.TypeScript.IR.Expr.evalCompare fs {fuel} ρ {str param} {str other} ({term cbBody}))\n" ++
+          s!"      (List.map {encX} items) = some (List.map {encX} (tolean.TypeScript.JSNumber.sortWith {fn} items)) := by\n" ++
+          s!"  refine tolean.TypeScript.Proof.sortValues_sortWith fs {fuel} ρ {str param} {str other} _ {encX} {fn} ?_\n" ++
+          s!"    (fun _ => by simp) (tolean.TypeScript.Proof.consistentOn_of_transCmp {o} (by sort_tac)) items\n" ++
+          s!"  intro x y\n" ++ substHfs ++ unpack ++
+          s!"  {casesOn decls vars}link_tac [{simpSet}]"
+        continue
       let (evalFn, want, result, fromLemma) := match method with
         | .map => ("evalMap", "", s!"List.map {encY} (List.map {fn} items)",
             s!"evalMap_map fs {fuel} ρ {str param} _ {encX} {encY} {fn}")
@@ -735,7 +780,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
             s!"evalFindIdx_findIdx fs {fuel} ρ {str param} _ {encX} {fn}")
         | .all => ("evalFind", " false", s!"Option.map {encX} (List.find? (fun x => !({fn} x)) items)",
             s!"evalFind_false fs {fuel} ρ {str param} _ {encX} {fn}")
-        -- Refused above.
+        -- Written above.
         | .sortWith _ => ("", "", "", "")
       let (indexArg, start, intros) := match method with
         -- The proof names the index `idx`, not by its name in the source,

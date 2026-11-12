@@ -27,25 +27,9 @@ def byTaskName {N : Type} [JSNumber N] (entries : List (Entry N)) : List (Entry 
   (JSNumber.sortWith (fun (x : (Entry N)) (y : (Entry N)) => (if (JSString.lt (y.task).name (x.task).name) then (JSNumber.ofSafeInt (N := N) (1 : Int)) else (if (JSString.lt (x.task).name (y.task).name) then (JSNumber.neg ((JSNumber.ofSafeInt (N := N) (1 : Int)))) else (JSNumber.ofSafeInt (N := N) (0 : Int))))) entries)
 
 def ascending {N : Type} [JSNumber N] (xs : List Int) : List Int :=
-  (JSNumber.sortWith (fun (x : Int) (y : Int) => (if x < y then (JSNumber.neg ((JSNumber.ofSafeInt (N := N) (1 : Int)))) else (if x > y then (JSNumber.ofSafeInt (N := N) (1 : Int)) else (JSNumber.ofSafeInt (N := N) (0 : Int))))) ((xs ++ ([(0 : Int)] : List Int))))
+  (JSNumber.sortWith (fun (x : Int) (y : Int) => (if x < y then (JSNumber.neg ((JSNumber.ofSafeInt (N := N) (1 : Int)))) else (if x > y then (JSNumber.ofSafeInt (N := N) (1 : Int)) else (JSNumber.ofSafeInt (N := N) (0 : Int))))) xs)
 
 def names {N : Type} [JSNumber N] (xs : List JSString) : List JSString :=
   (JSNumber.sortWith (fun (a : JSString) (b : JSString) => (if (JSString.lt a b) then (JSNumber.neg ((JSNumber.ofSafeInt (N := N) (1 : Int)))) else (if (JSString.lt b a) then (JSNumber.ofSafeInt (N := N) (1 : Int)) else (JSNumber.ofSafeInt (N := N) (0 : Int))))) xs)
-
-structure Event (N : Type) where
-  time : N
-  kind : JSString
-
-def chronological {N : Type} [JSNumber N] (events : List (Event N)) : List (Event N) :=
-  (JSNumber.sortWith (fun (a : (Event N)) (b : (Event N)) => (JSNumber.sub a.time b.time)) events)
-
-def latestFirst {N : Type} [JSNumber N] (events : List (Event N)) : List (Event N) :=
-  (JSNumber.sortWith (fun (a : (Event N)) (b : (Event N)) => (JSNumber.sub b.time a.time)) events)
-
-def byKindThenTime {N : Type} [JSNumber N] (events : List (Event N)) : List (Event N) :=
-  (JSNumber.sortWith (fun (a : (Event N)) (b : (Event N)) => (if (JSString.lt a.kind b.kind) then (JSNumber.neg ((JSNumber.ofSafeInt (N := N) (1 : Int)))) else (if (JSString.lt b.kind a.kind) then (JSNumber.ofSafeInt (N := N) (1 : Int)) else (JSNumber.sub a.time b.time)))) events)
-
-def numbers {N : Type} [JSNumber N] (xs : List N) : List N :=
-  (JSNumber.sortWith (fun (x : N) (y : N) => (if (JSNumber.lt x y) then (JSNumber.neg ((JSNumber.ofSafeInt (N := N) (1 : Int)))) else (if (JSNumber.lt y x) then (JSNumber.ofSafeInt (N := N) (1 : Int)) else (JSNumber.ofSafeInt (N := N) (0 : Int))))) xs)
 
 end Test

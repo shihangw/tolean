@@ -1,5 +1,6 @@
 import Lean
 import tolean.TypeScript.Proof.Module
+import tolean.TypeScript.Spec.Lemmas.Number
 import tolean.TypeScript.IR.Equality
 import Lean.Elab.Tactic.Basic
 import Lean.Meta.AppBuilder
@@ -489,7 +490,81 @@ macro "slice_tac" : tactic => `(tactic| (
     Eval.sliceList xs k (some e) = ((xs.reverse.take (-k).toNat).drop (-e).toNat).reverse := by
   slice_tac
 
+/-! ### Certificates: sorts -/
+
+/-- A comparator is consistent for every list when its signs are those of a
+lawful comparison: one that `Std.TransCmp` says is a total preorder. -/
+theorem consistentOn_of_transCmp {α : Type} {cmp : α → α → Option Ordering} (o : α → α → Ordering)
+    [Std.TransCmp o] (h : ∀ a b, cmp a b = some (o a b)) (xs : List α) :
+    Eval.consistentOn cmp xs = true := by
+  unfold Eval.consistentOn
+  simp only [List.all_eq_true]
+  intro a _ b _
+  simp only [h, Option.isSome_some, Option.map_some, beq_iff_eq, Option.some.injEq, Bool.true_and,
+    Bool.and_eq_true, List.all_eq_true, Bool.or_eq_true, Bool.not_eq_true']
+  refine ⟨Std.OrientedCmp.eq_swap, fun c _ => ?_⟩
+  by_cases hab : o a b = .gt
+  · simp [hab]
+  by_cases hbc : o b c = .gt
+  · simp [hbc]
+  right
+  have hle : ∀ x : Ordering, x ≠ .gt → x.isLE = true := by decide
+  have := Std.TransCmp.isLE_trans (hle _ hab) (hle _ hbc)
+  cases hac : o a c <;> simp_all
+
+/-- A sort of encoded values and `JSNumber.sortWith` agree, when the body of
+the comparator gives the number `cmp x y`, when no encoded value is
+`undefined`, and when the comparator is consistent for every list. A
+certificate proves a lemma for each sort from this one. -/
+theorem sortValues_sortWith {α : Type} (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
+    (ρ : Eval.Env N) (param other : String) (body : IR.Expr) (encX : α → Val N) (cmp : α → α → N)
+    (hb : ∀ x y, IR.Expr.eval fs fuel ((param, encX x) :: (other, encX y) :: ρ) body = some (.num (cmp x y)))
+    (hu : ∀ x, encX x ≠ .undefined)
+    (hc : ∀ xs : List α, Eval.consistentOn (fun x y => JSNumber.compareSign (cmp x y)) xs = true)
+    (xs : List α) :
+    Eval.sortValues (IR.Expr.evalCompare fs fuel ρ param other body) (xs.map encX) =
+      some ((JSNumber.sortWith cmp xs).map encX) := by
+  have he : ∀ x y, IR.Expr.evalCompare fs fuel ρ param other body (encX x) (encX y) =
+      JSNumber.compareSign (cmp x y) := by
+    intro x y
+    have hx := hu x
+    have hy := hu y
+    unfold IR.Expr.evalCompare
+    split
+    · contradiction
+    · contradiction
+    · contradiction
+    · rw [hb x y]; rfl
+  have hcons : Eval.consistentOn (IR.Expr.evalCompare fs fuel ρ param other body) (xs.map encX) = true := by
+    have := hc xs
+    unfold Eval.consistentOn at this ⊢
+    simpa [List.all_map, he] using this
+  unfold Eval.sortValues JSNumber.sortWith
+  rw [if_pos hcons, List.map_mergeSort (s := fun a b => IR.Expr.evalCompare fs fuel ρ param other body a b != some .gt)
+    (fun a _ b _ => by simp only [he])]
+
+theorem int_compare_of_lt {a b : Int} (h : a < b) : compare a b = .lt := Int.compare_eq_lt.mpr h
+theorem int_compare_of_gt {a b : Int} (h : b < a) : compare a b = .gt := Int.compare_eq_gt.mpr h
+theorem int_compare_of_eq {a b : Int} (h1 : ¬a < b) (h2 : ¬b < a) : compare a b = .eq :=
+  Int.compare_eq_eq.mpr (by omega)
+
 end tolean.TypeScript.Proof
+
+/-- The proof that the sign of a comparator of keys is a lexicographic
+comparison of the keys, for every two elements: split on each test of the
+comparator, and compare the keys in each branch. -/
+syntax "sort_tac" : tactic
+macro_rules
+  | `(tactic| sort_tac) =>
+    `(tactic| (
+      intro a b
+      try simp only []
+      repeat' split
+      all_goals simp_all [tolean.TypeScript.compareSign_one, tolean.TypeScript.compareSign_zero,
+        tolean.TypeScript.compareSign_neg_one, compareLex, compareOn, Ordering.then,
+        tolean.TypeScript.JSString.compare_of_lt, tolean.TypeScript.JSString.compare_of_gt,
+        tolean.TypeScript.JSString.compare_of_eq, tolean.TypeScript.Proof.int_compare_of_lt,
+        tolean.TypeScript.Proof.int_compare_of_gt, tolean.TypeScript.Proof.int_compare_of_eq]))
 
 namespace tolean.TypeScript.IR
 
