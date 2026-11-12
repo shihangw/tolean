@@ -1924,21 +1924,34 @@ def keyTest? (a b : String) : Expr → Option (List String × Bool)
     | _, _, _, _, _ => none
   | _ => none
 
+/-- `x - y`, where one side reads a key of `a` and the other the same key of
+`b`: the fields of the key. -/
+def keyDifference? (a b : String) : Expr → Option (List String)
+  | .paren _ e => keyDifference? a b e
+  | .binary _ .sub x y =>
+    match keyPath? a x, keyPath? b y, keyPath? b x, keyPath? a y with
+    | some p, some q, _, _ => if p == q then some p else none
+    | _, _, some p, some q => if p == q then some p else none
+    | _, _, _, _ => none
+  | _ => none
+
 mutual
 
 /-- The keys that a comparator of `a` and `b` compares, in order, when it
 has the shape `(a.k < b.k) ? -1 : (a.k > b.k) ? 1 : rest`. The tests may
 come in the other order, the signs may be reversed to sort from the
-greatest, and `rest` is `0` or a comparison of the next key. Such a
-comparator is consistent when each key is totally ordered. -/
-def keyComparator? (a b : String) : Expr → Option (List (List String))
+greatest, and `rest` is `0` or a comparison of the next key. The last
+comparison may also be a difference, `a.k - b.k` or `b.k - a.k`, which marks
+its key `true`. Such a comparator is consistent when each key is totally
+ordered on the elements. -/
+def keyComparator? (a b : String) : Expr → Option (List (List String × Bool))
   | .paren _ e => keyComparator? a b e
   | .cond _ t r e => keySecond? a b t r e
-  | _ => none
+  | e => (keyDifference? a b e).map fun p => [(p, true)]
 
 /-- The rest of `keyComparator?` after `t ? r : `, on the expression after
 the `:`. -/
-def keySecond? (a b : String) (t r : Expr) : Expr → Option (List (List String))
+def keySecond? (a b : String) (t r : Expr) : Expr → Option (List (List String × Bool))
   | .paren _ e => keySecond? a b t r e
   | .cond _ t' r' rest => do
     let (p, less) ← keyTest? a b t
@@ -1947,7 +1960,7 @@ def keySecond? (a b : String) (t r : Expr) : Expr → Option (List (List String)
     let s' ← Eval.intLiteral? r'
     unless p == p' && less != less' && (s == 1 || s == -1) && s' == -s do none
     let tail ← if Eval.intLiteral? rest == some 0 then some [] else keyComparator? a b rest
-    return p :: tail
+    return (p, false) :: tail
   | _ => none
 
 end
@@ -2422,8 +2435,12 @@ def translateReduce (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (
 /-- `xs.toSorted((a, b) => e)` and `[...xs].sort((a, b) => e)`:
 `JSNumber.sortWith (fun a b => e) xs`. `sort` changes the array it sorts, so
 it may sort only an array literal, which nothing else holds. The comparator
-must compare keys that are bigints or strings (`keyComparator?`), so that it
-is consistent for every array. -/
+must compare keys (`keyComparator?`) that are bigints, strings or numbers.
+Then it is consistent for every array whose number keys are not `NaN`, and
+whose keys of a difference are finite. The spec also compares each element
+with itself, and `Infinity - Infinity` is `NaN`, so one infinite key of a
+difference is enough to make it inconsistent. Elsewhere the interpreter
+gives no value, and the translation makes no claim. -/
 def translateSort (fuel : Nat) (env : Env) (s : Span) (recv : Expr) (method : String)
     (args : List Expr) : TM Code := do
   let fuel + 1 := fuel | tooDeep
@@ -2446,12 +2463,16 @@ def translateSort (fuel : Nat) (env : Env) (s : Span) (recv : Expr) (method : St
   let b ← translateExpr fuel inner (some .number) body
   unless b.type == .number do reject body.span "a comparator must give a number"
   let keys ← orReject (keyComparator? p.name q.name body) body.span
-    ("a comparator here must compare keys, such as (a, b) => (a.k < b.k) ? -1 : (a.k > b.k) ? 1 : 0, " ++
-      "with the tests in either order, the signs reversed, or a comparison of the next key in place of the 0")
-  for key in keys do
+    ("a comparator here must compare keys, such as (a, b) => (a.k < b.k) ? -1 : (a.k > b.k) ? 1 : 0 " ++
+      "or (a, b) => a.t - b.t, with the tests in either order, the signs reversed, or a comparison " ++
+      "of the next key in place of the 0")
+  for (key, difference) in keys do
     let t ← keyType body.span elem key
-    unless t == .bigint || t == .string do
-      reject body.span "a key of a comparator must be a bigint or a string, which are totally ordered"
+    if difference then
+      unless t == .number do reject body.span "the keys of a difference in a comparator must be numbers"
+    else
+      unless t == .bigint || t == .string || t == .number do
+        reject body.span "a key of a comparator must be a bigint, a string or a number"
   let info : IR.CallbackInfo IR.TyExt :=
     { span := s, result := Ty.number.lean, scope := env.locals.map fun l => (l.name, l.type.lean) }
   return ⟨.listMethod (.sortWith q.name) xs.value p.name elem.lean b.value info, false, xs.type⟩

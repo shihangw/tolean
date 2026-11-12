@@ -72,6 +72,11 @@ export class Gen {
   private records = new Set<string>();
   private functions: Array<{ name: string; params: Array<Ty>; ret: Ty }> = [];
   private counter = 0;
+  /** The program sorts by a `number` key somewhere. Such a sort is consistent
+   * only when no key is `NaN`, and a difference only when every key is
+   * finite, so the interpreter gives it no value on other arrays, even where
+   * the translator accepts it. */
+  sortsByNumber = false;
 
   constructor(seed: number) {
     this.next = random(seed);
@@ -320,7 +325,8 @@ export class Gen {
   }
 
   /** `toSorted`, or `sort` on a copy, of the array `recv`, with a comparator.
-   * A comparator that compares keys is consistent unless a key is `NaN`, and
+   * A comparator that compares keys is consistent unless a key is `NaN`, or
+   * infinite in a difference, and
    * any other one is rarely consistent, so then the interpreter gives no
    * value and Node is not compared. */
   private sortCall(recv: { name: string; elem: Ty }, vars: ReadonlyArray<Var>, depth: number): string {
@@ -361,6 +367,7 @@ export class Gen {
    * `ka - kb` on a number. */
   private compareKeys(ka: string, key: Ty, elem: Ty, a: string, b: string, vars: ReadonlyArray<Var>, depth: number): string {
     const kb = ka.replace(new RegExp(`\\b${a}\\b`, 'g'), b);
+    if (key.k === 'number') this.sortsByNumber = true;
     const [x, y] = this.chance(0.7) ? [ka, kb] : [kb, ka];
     if (key.k === 'number' && this.chance(0.5)) return `(${x}) - (${y})`;
     const rest = this.chance(0.3) ? this.comparator(elem, a, b, vars, depth) : '0';
