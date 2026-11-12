@@ -16,6 +16,7 @@ import tolean.TypeScript.Syntax.ParseWF
 import tolean.TypeScript.Syntax.RoundTripText
 import tolean.TypeScript.Spec.Error
 import tolean.TypeScript.Spec.Lemmas.Number
+import tolean.TypeScript.Spec.Lemmas.Sort
 import tolean.TypeScript.Spec.Coverage.LexicalGrammar
 import tolean.TypeScript.Spec.Coverage.Expressions
 import tolean.TypeScript.Spec.Coverage.Statements
@@ -100,7 +101,7 @@ def sections : List Section := [
     [``JSString.ofString_inj, ``JSString.toString_ofString, ``JSString.decode_flatMap_utf16]⟩,
   ⟨"sec-ecmascript-language-types-number-type", "6.1.6.1", "The Number Type",
     [``eq_refl_of_safe, ``le_refl_of_safe, ``lt_irrefl_of_safe, ``eq_self_eq_not_isNaN,
-    ``eq_posInf_posInf, ``eq_negInf_negInf, ``isNaN_eq_false_of_safe]⟩,
+    ``eq_posInf_posInf, ``eq_negInf_negInf, ``isNaN_eq_false_of_safe, ``toInt32_of_safe]⟩,
   ⟨"sec-ecmascript-language-types-bigint-type", "6.1.6.2", "The BigInt Type", []⟩,
   -- §7 Abstract Operations {#sec-abstract-operations}
   ⟨"sec-toboolean", "7.1.2", "ToBoolean", []⟩,
@@ -162,8 +163,13 @@ def sections : List Section := [
   ⟨"sec-unary-minus-operator", "13.5.5", "Unary - Operator",
     [``Proof.operator_sound, ``Proof.eval_neg, ``Proof.out_neg, ``Proof.out_numberNeg,
     ``Proof.isInfinity_eq_true, ``neg_local_infinity]⟩,
+  ⟨"sec-bitwise-not-operator", "13.5.6", "Bitwise NOT Operator ( ~ )",
+    [``Proof.operator_sound, ``Proof.out_bigintNot]⟩,
   ⟨"sec-logical-not-operator", "13.5.7", "Logical NOT Operator",
     [``Proof.operator_sound, ``Proof.out_not, ``Proof.out_propNot]⟩,
+  ⟨"sec-exp-operator", "13.6", "Exponentiation Operator",
+    [``Proof.operator_sound, ``Proof.eval_binary, ``Proof.out_bigintPow,
+    ``Proof.binary_exp_literal, ``Proof.bigintLiteralNat_eval, ``Proof.bigintLiteral_nonneg]⟩,
   ⟨"sec-multiplicative-operators", "13.7", "Multiplicative Operators",
     [``Proof.operator_sound, ``Proof.eval_binary, ``Proof.out_intOp, ``Proof.out_numberOp,
     ``Proof.out_division, ``Proof.nonzero_literal]⟩,
@@ -171,6 +177,8 @@ def sections : List Section := [
     [``Proof.operator_sound, ``Proof.eval_binary, ``Proof.out_intOp, ``Proof.out_numberOp,
     ``Proof.out_stringAppend, ``Proof.concatParts?_binary, ``Proof.concatOperands_ok,
     ``Proof.concat_sound, ``JSString.units_append, ``JSString.ofString_append]⟩,
+  ⟨"sec-bitwise-shift-operators", "13.9", "Bitwise Shift Operators",
+    [``Proof.operator_sound, ``Proof.eval_binary, ``Proof.out_bigintOp, ``Proof.apply_bigintOp]⟩,
   ⟨"sec-relational-operators", "13.10", "Relational Operators",
     [``Proof.operator_sound, ``Proof.eval_binary, ``Proof.out_order, ``Proof.out_numberOp,
     ``Proof.out_stringOrder, ``Proof.apply_stringOrder]⟩,
@@ -183,6 +191,8 @@ def sections : List Section := [
     ``Proof.isUndefinedName_eq, ``Proof.eval_undefined, ``Proof.strictEq_undefined,
     ``Proof.translateBinary_sound,
     ``Proof.tagSide_eval, ``Proof.tagTestOf_eval]⟩,
+  ⟨"sec-binary-bitwise-operators", "13.12", "Binary Bitwise Operators",
+    [``Proof.operator_sound, ``Proof.eval_binary, ``Proof.out_bigintOp, ``Proof.apply_bigintOp]⟩,
   ⟨"sec-binary-logical-operators", "13.13", "Binary Logical Operators",
     [``Proof.operator_sound, ``Proof.out_and, ``Proof.out_or, ``Proof.out_coalesce]⟩,
   ⟨"sec-conditional-operator", "13.14", "Conditional Operator",
@@ -250,7 +260,7 @@ def sections : List Section := [
     [``Proof.callbackOf_some, ``Proof.bodySim_of, ``Proof.eval_arrayMethod, ``Proof.out_listMethod,
     ``Proof.methodVal_sim, ``Proof.translateArrayMethod_sound, ``Proof.agree_cons, ``Proof.scoped_cons,
     ``Proof.bodySimIdx_of, ``Proof.indexedCallbackOf_some, ``Proof.listMethod?_map,
-    ``Proof.listMethod?_ne_mapIdx]⟩,
+    ``Proof.listMethod?_ne_mapIdx, ``Proof.listMethod?_ne_sortWith]⟩,
   -- §16 ECMAScript Language: Scripts and Modules {#sec-ecmascript-language-scripts-and-modules}
   ⟨"sec-source-text-module-record-initialize-environment", "16.2.1.6.4", "InitializeEnvironment",
     [``Proof.module_resolves, ``Proof.declareTopLevel_ok, ``Proof.translateDecl_ok,
@@ -273,9 +283,24 @@ def sections : List Section := [
   -- §19 The Global Object {#sec-global-object}
   ⟨"sec-value-properties-of-the-global-object-infinity", "19.1.2", "Infinity", []⟩,
   ⟨"sec-value-properties-of-the-global-object-nan", "19.1.3", "NaN", []⟩,
+  -- §20 Fundamental Objects {#sec-fundamental-objects}
+  ⟨"sec-object.is", "20.1.2.15", "Object.is ( value1, value2 )",
+    [``Proof.eval_objectIs, ``Proof.translateObjectIs_sound, ``Proof.out_numberSameValue,
+    ``Proof.sameValue_of_eqVal]⟩,
   -- §21 Numbers and Dates {#sec-numbers-and-dates}
+  ⟨"sec-number-constructor-number-value", "21.1.1.1", "Number ( value )",
+    [``Proof.translateNumberCall_sound, ``Proof.out_numberOfInt]⟩,
   ⟨"sec-properties-of-the-number-constructor", "21.1.2", "Properties of the Number Constructor",
-    [``Proof.out_numberTest]⟩,
+    [``Proof.out_numberTest, ``isInteger_of_safe]⟩,
+  ⟨"sec-function-properties-of-the-math-object", "21.3.2", "Function Properties of the Math Object",
+    [``Proof.eval_math, ``Proof.translateMathCall_sound, ``Proof.out_numberFn,
+    ``Proof.out_numberFold]⟩,
+  ⟨"sec-date", "21.4.2.1", "Date ( ...values )",
+    [``Proof.translateNewDate_sound, ``Proof.out_dateOfNumber]⟩,
+  ⟨"sec-date.utc", "21.4.3.4", "Date.UTC ( year [ , month [ , date [ , hours [ , minutes [ , seconds [ , ms ] ] ] ] ] ] )",
+    [``Proof.eval_dateUtc, ``Proof.translateDateUtc_sound, ``Proof.out_dateUtc]⟩,
+  ⟨"sec-properties-of-the-date-prototype-object", "21.4.4", "Properties of the Date Prototype Object",
+    [``Proof.eval_dateCall, ``Proof.translateDateCall_ok, ``Proof.out_dateMethod]⟩,
   -- §22 Text Processing {#sec-text-processing}
   ⟨"sec-string.prototype.endswith", "22.1.3.7", "String.prototype.endsWith",
     [``JSString.endsWith_iff]⟩,
@@ -309,6 +334,14 @@ def sections : List Section := [
     [``Proof.reducerOf_some, ``Proof.bodySim2_of, ``Proof.evalReduce_sim, ``Proof.eval_reduce,
     ``Proof.translateReduce_sound]⟩,
   ⟨"sec-array.prototype.some", "23.1.3.29", "Array.prototype.some", []⟩,
+  ⟨"sec-array.prototype.sort", "23.1.3.30", "Array.prototype.sort",
+    [``Proof.sortOf_some, ``Proof.eval_sort, ``Proof.translateSort_sound]⟩,
+  ⟨"sec-sortindexedproperties", "23.1.3.30.1", "SortIndexedProperties",
+    [``Eval.consistentOn_preorder, ``Eval.sortValues_perm, ``Eval.sortValues_sorted,
+    ``Eval.sortValues_stable, ``Eval.pairwise_mergeSort_of_mem, ``Eval.pair_sublist_mergeSort_of_mem,
+    ``Proof.all_congr_mem, ``Proof.consistentOn_congr, ``Proof.sortValues_sim]⟩,
+  ⟨"sec-comparearrayelements", "23.1.3.30.2", "CompareArrayElements", [``Proof.evalCompare_sim]⟩,
+  ⟨"sec-array.prototype.tosorted", "23.1.3.34", "Array.prototype.toSorted", []⟩,
   ⟨"sec-createarrayiterator", "23.1.5.1", "CreateArrayIterator", []⟩,
   -- §24 Keyed Collections {#sec-keyed-collections}
   ⟨"sec-map-iterable", "24.1.1.1", "Map ( [ iterable ] )", [``Proof.translateNew_sound]⟩,
@@ -339,7 +372,14 @@ def numberLaws : List Name := [``SafeIntLaws.add,
     ``SpecialValueLaws.eq_symm, ``SpecialValueLaws.nan_eq, ``SpecialValueLaws.nan_lt,
     ``SpecialValueLaws.nan_le, ``SpecialValueLaws.lt_posInf, ``SpecialValueLaws.negInf_lt,
     ``SpecialValueLaws.nan_add, ``SpecialValueLaws.nan_sub, ``SpecialValueLaws.nan_mul,
-    ``SpecialValueLaws.sub_posInf_posInf]
+    ``SpecialValueLaws.sub_posInf_posInf, ``SafeIntLaws.div, ``SafeIntLaws.floor,
+    ``SafeIntLaws.ceil, ``SafeIntLaws.trunc, ``SafeIntLaws.round, ``SafeIntLaws.abs,
+    ``SafeIntLaws.min, ``SafeIntLaws.max, ``SpecialValueLaws.nan_div,
+    ``SpecialValueLaws.nan_floor, ``SpecialValueLaws.nan_ceil, ``SpecialValueLaws.nan_trunc,
+    ``SpecialValueLaws.nan_round, ``SpecialValueLaws.nan_abs, ``SpecialValueLaws.nan_min,
+    ``SpecialValueLaws.nan_max, ``SafeIntLaws.toInt, ``SpecialValueLaws.toInt_not_finite,
+    ``SafeIntLaws.ofInt, ``SpecialValueLaws.negZero_eq_zero, ``SpecialValueLaws.negZero_ofSafeInt,
+    ``SpecialValueLaws.nan_not_negZero]
 
 /-- The theorems that are about no section of ECMA-262. -/
 def extras : List Group := [
@@ -674,6 +714,8 @@ def extras : List Group := [
     ``Proof.evalFind_find, ``Proof.evalFind_true, ``Proof.evalFind_false, ``Proof.find?_isSome,
     ``Proof.find?_not_isNone, ``Proof.getD_map_undefined, ``Proof.evalFindIdx_from,
     ``Proof.evalFindIdx_findIdx, ``Proof.evalReduce_foldl, ``Proof.evalReduce_foldl_val]⟩,
+  ⟨"Certificates: the keys of a map or a set in the output", [``JSKey.same_ofDecidableEq,
+    ``JSKey.stored_ofDecidableEq, ``JSKey.same_ofJSNumber, ``JSKey.stored_ofJSNumber]⟩,
   ⟨"Certificates: includes and membership", [``Proof.includesVal_map, ``Proof.includesVal_enc,
     ``Proof.includesVal_int, ``Proof.includesVal_bool, ``Proof.includesVal_str,
     ``Proof.includesVal_num]⟩,
@@ -682,6 +724,11 @@ def extras : List Group := [
   ⟨"Certificates: slices of a list", [``Proof.sliceList_map, ``Proof.getElem?_rev,
     ``Proof.sliceList_nonneg, ``Proof.sliceList_from, ``Proof.sliceList_last,
     ``Proof.sliceList_dropLast, ``Proof.sliceList_neg]⟩,
+  ⟨"Certificates: sorts", [``Proof.consistentOn_of_transCmp, ``Proof.sortValues_sortWith,
+    ``Proof.int_compare_of_lt, ``Proof.int_compare_of_gt, ``Proof.int_compare_of_eq,
+    ``compareSign_one, ``compareSign_zero, ``compareSign_neg_zero, ``compareSign_neg_one, ``JSString.instTransOrd,
+    ``JSString.unitsLt_compare, ``JSString.compare_of_lt, ``JSString.compare_of_gt,
+    ``JSString.compare_of_eq]⟩,
   ⟨"Recursion: the facts that Lean adds to the goal of a call in a callback, for the proof that a recursive function ends",
     [``List.any_wfParam_tolean, ``List.any_unattach_tolean, ``List.all_wfParam_tolean,
       ``List.all_unattach_tolean, ``List.find?_wfParam_tolean, ``List.find?_unattach_tolean]⟩]
