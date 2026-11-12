@@ -79,8 +79,17 @@ targets=$(echo "$closure" | grep -E '^(Init|Std|Lean)(\.|$)' | sed 's/^/+/; s/$/
 # Compile and link.
 objects=$work/obj
 cflags="-O3 -DNDEBUG -fwasm-exceptions -I$runtime/include -w"
+# An object is current when it came from the same source, which the checksum
+# beside it records. A newer object is not enough: CI restores the objects of
+# an older build and the C files of this one from two caches, so an object of
+# main's build can be newer than a changed C file of this branch. It would
+# then stay, and the link would mix the layouts of two versions.
 compile() { # SOURCE OBJECT
-  if [ ! "$2" -nt "$1" ]; then mkdir -p "$(dirname "$2")" && emcc $cflags -c "$1" -o "$2"; fi
+  local sum
+  sum=$(cksum < "$1")
+  if [ ! -f "$2" ] || [ "$(cat "$2.sum" 2>/dev/null)" != "$sum" ]; then
+    mkdir -p "$(dirname "$2")" && emcc $cflags -c "$1" -o "$2" && echo "$sum" > "$2.sum"
+  fi
 }
 export -f compile
 export cflags
