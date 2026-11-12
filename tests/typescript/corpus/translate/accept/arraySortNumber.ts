@@ -1,12 +1,13 @@
 // A sort by number keys. A file with one gets no certificate yet, because its
-// claim needs the precondition that no key is NaN.
+// claim needs the precondition that no key is NaN, and for a difference that
+// every key is finite.
 interface Event {
   readonly time: number;
   readonly kind: string;
 }
 
-// A difference of number keys: the comparator is consistent when no key is
-// NaN and no two keys are the same infinity.
+// A difference of number keys: the comparator is consistent when every key
+// is finite.
 export function chronological(events: ReadonlyArray<Event>): Event[] {
   return events.toSorted((a, b) => a.time - b.time);
 }
