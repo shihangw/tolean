@@ -2270,6 +2270,8 @@ theorem eval_sort (sp sp' sa : Span) (par : Bool) (recv : Expr) (method : String
     intro s h; subst h; simp [Expr.namesNumber] at hr
   have hrM : ∀ s, recv ≠ .ident s "Math" := by
     intro s h; subst h; simp [Expr.namesNumber] at hr
+  have hrD : ∀ s, recv ≠ .ident s "Date" := by
+    intro s h; subst h; simp [Expr.namesNumber] at hr
   rcases hm with rfl | ⟨rfl, hlit⟩
   all_goals
     generalize hR : Eval.eval m fuel ρ recv = r
@@ -2278,7 +2280,7 @@ theorem eval_sort (sp sp' sa : Span) (par : Bool) (recv : Expr) (method : String
       cases r with
       | none => simp
       | some v => cases v <;> simp_all [methodVal]
-    all_goals first | exact hr' | exact hrM | decide
+    all_goals first | exact hr' | exact hrM | (intro _ h _; exact hrD _ h) | decide
 
 omit [JSNumber N] in
 theorem sortOf_some {callee recv : Expr} {method : String} (h : sortOf callee = some (recv, method)) :
