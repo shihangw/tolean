@@ -31,12 +31,51 @@ namespace tolean.TypeScript.Interpret
 open Lean (Json)
 open tolean.TypeScript.Eval (Val)
 
+/-- `-0` is the one double that is `0` and whose reciprocal is negative. -/
+def isNegZero (x : Float) : Bool := x == 0 && 1 / x < 0
+
+/-- `Math.trunc(x)`: the integer part, toward zero. `ceil` keeps the sign of a
+negative `x` that rounds to zero, as JS does. -/
+def jsTrunc (x : Float) : Float := if x < 0 then x.ceil else x.floor
+
+/-- `Math.round(x)` (ECMA-262 §21.3.2.28): the nearest integer, and the larger
+one at a half. `x - floor(x)` is exact, so the test of the half is too. A
+negative `x` that rounds to zero gives `-0`. -/
+def jsRound (x : Float) : Float :=
+  if !x.isFinite then x
+  else
+    let r := x.floor
+    let y := if x - r ≥ 0.5 then r + 1 else r
+    if y == 0 && (x < 0 || isNegZero x) then -0.0 else y
+
+/-- `Math.min(a, b)` (§21.3.2.25): `NaN` when either is `NaN`, and `-0` is less
+than `+0`. -/
+def jsMin (a b : Float) : Float :=
+  if a.isNaN || b.isNaN then 0.0 / 0.0
+  else if a == 0 && b == 0 then (if isNegZero a then a else b)
+  else if a < b then a else b
+
+/-- `Math.max(a, b)` (§21.3.2.24): `NaN` when either is `NaN`, and `+0` is
+greater than `-0`. -/
+def jsMax (a b : Float) : Float :=
+  if a.isNaN || b.isNaN then 0.0 / 0.0
+  else if a == 0 && b == 0 then (if isNegZero a then b else a)
+  else if a > b then a else b
+
 /-- JS numbers as Lean's IEEE 754 doubles. -/
 instance : JSNumber Float where
   add := Float.add
   sub := Float.sub
   mul := Float.mul
+  div := Float.div
   neg := Float.neg
+  floor := Float.floor
+  ceil := Float.ceil
+  trunc := jsTrunc
+  round := jsRound
+  abs := Float.abs
+  min := jsMin
+  max := jsMax
   lt a b := decide (a < b)
   le a b := decide (a ≤ b)
   eq a b := a == b

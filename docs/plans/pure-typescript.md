@@ -174,7 +174,6 @@ should refuse such an initial value.
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| `Math.min`, `Math.max`, `Math.floor`, `Math.ceil`, `Math.trunc` (§21.3.2.35), `Math.round` (§21.3.2.28), `Math.abs`, `Number.isInteger`, and `/` on `number` | New `JSNumber` operations, with laws for safe integers and for `NaN` and the infinities | `Math` functions whose results the spec allows to differ between engines, such as `Math.sin` (§21.3.2) |
 | `**` on `bigint` (§6.1.6.2.3) whose exponent is not a literal | `a ^ b.toNat`, after a check that `b` is not negative, which needs the `Except` from the errors stage because JS throws a `RangeError` there | `>>>`, because it throws on a `bigint` |
 | `BigInt(n)` (§21.2.1.1) and `Number(b)` (§21.1.1.1) | Conversions. `BigInt(n)` throws a `RangeError` when `n` is not an integer, so it uses the `Except` from the errors stage. | `Number(b)` on a `bigint` that is not a safe integer, until the model rounds to the nearest double |
 | The bitwise operators on `number` | `ToInt32` (§7.1.6) and the operation on 32-bit integers | |

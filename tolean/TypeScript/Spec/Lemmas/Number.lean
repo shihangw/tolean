@@ -53,6 +53,11 @@ theorem eq_self_eq_not_isNaN {a : N} : eq a a = !isNaN a := by
     isNaN a = false :=
   SpecialValueLaws.isFinite_not_nan (SpecialValueLaws.safe_finite h)
 
+/-- `Number.isInteger(x)` holds for a safe integer `x`. -/
+theorem isInteger_of_safe [SafeIntLaws N] {a : N} {i : Int} (h : toSafeInt a = some i) :
+    JSNumber.isInteger a = true := by
+  simp [JSNumber.isInteger, SpecialValueLaws.safe_finite h, SafeIntLaws.eq (SafeIntLaws.trunc h) h]
+
 end SpecialValues
 
 end tolean.TypeScript

@@ -298,6 +298,28 @@ theorem out_numberTest {t : IR.NumberTest} {a : IR.Expr}
   | none => simp [hx, IR.ExprExt.apply] at h
   | some w => cases w <;> simp_all [IR.ExprExt.apply]
 
+theorem out_numberFn {f : IR.NumberFn} {a : IR.Expr}
+    (h : IR.Expr.eval fs fuel ρ (.ext (.numberFn f) [a]) = some v) :
+    ∃ n, IR.Expr.eval fs fuel ρ a = some (.num n) ∧ v = .num (f.apply n) := by
+  simp only [IR.Expr.eval, IR.Expr.evalList] at h
+  cases hx : IR.Expr.eval fs fuel ρ a with
+  | none => simp [hx, IR.ExprExt.apply] at h
+  | some w => cases w <;> simp_all [IR.ExprExt.apply]
+
+theorem out_numberFold {isMax : Bool} {args : List IR.Expr}
+    (h : IR.Expr.eval fs fuel ρ (.ext (.numberFold isMax) args) = some v) :
+    ∃ vs xs, IR.Expr.evalList fs fuel ρ args = some vs ∧ Eval.numbers? vs = some xs ∧
+      v = .num (if isMax then JSNumber.maximum xs else JSNumber.minimum xs) := by
+  simp only [IR.Expr.eval] at h
+  cases hx : IR.Expr.evalList fs fuel ρ args with
+  | none => simp [hx] at h
+  | some vs =>
+    cases hn : Eval.numbers? vs with
+    | none => simp [hx, hn, IR.ExprExt.apply] at h
+    | some xs =>
+      simp [hx, hn, IR.ExprExt.apply] at h
+      exact ⟨vs, xs, rfl, hn, h.symm⟩
+
 theorem out_intOp {op : IR.IntOp} {a b : IR.Expr}
     (h : IR.Expr.eval fs fuel ρ (.intOp op a b) = some v) :
     ∃ x y, IR.Expr.eval fs fuel ρ a = some (.int x) ∧ IR.Expr.eval fs fuel ρ b = some (.int y) ∧
@@ -1403,6 +1425,8 @@ theorem eval_stringCall (sp sp' : Span) (recv : Expr) (method : String) (args : 
       (Eval.evalList m fuel ρ args).bind (Eval.stringMethod method t) := by
   have hr' : ∀ s, recv ≠ .ident s "Number" := by
     intro s h; subst h; simp [Expr.namesNumber] at hr
+  have hrM : ∀ s, recv ≠ .ident s "Math" := by
+    intro s h; subst h; simp [Expr.namesNumber] at hr
   rcases args with _ | ⟨a, _ | ⟨b, rest⟩⟩
   all_goals rw [Eval.eval]
   all_goals first
@@ -1411,8 +1435,10 @@ theorem eval_stringCall (sp sp' : Span) (recv : Expr) (method : String) (args : 
          | rfl
          | (cases ha : Eval.eval m fuel ρ a <;> simp [Eval.evalList, ha]))
     | exact hr'
+    | exact hrM
     | (intros; contradiction)
     | (intros; subst_vars; exact absurd rfl (hr' _))
+    | (intros; subst_vars; exact absurd rfl (hrM _))
     | (clear hrecv; intros; simp_all [Expr.isArrow]; done)
     | (intros; subst_vars; exact absurd rfl hat)
     | (intros; subst_vars; exact absurd rfl hsl)
@@ -1698,6 +1724,8 @@ theorem eval_arrayMethod (sp sp' sa : Span) (par : Bool) (recv : Expr) (name : S
     subst hm; rfl
   have hr' : ∀ s, recv ≠ .ident s "Number" := by
     intro s h; subst h; simp [Expr.namesNumber] at hr
+  have hrM : ∀ s, recv ≠ .ident s "Math" := by
+    intro s h; subst h; simp [Expr.namesNumber] at hr
   generalize hR : Eval.eval m fuel ρ recv = r
   rw [Eval.eval]
   · rw [hR]
@@ -1706,7 +1734,7 @@ theorem eval_arrayMethod (sp sp' sa : Span) (par : Bool) (recv : Expr) (name : S
     | some v =>
       cases v <;> simp only [Option.bind_some, Option.bind_eq_bind]
       all_goals first | rfl | (rw [← key]; simp)
-  · exact hr'
+  all_goals first | exact hr' | exact hrM
 
 /-- `xs.map((x, i) => e)`, from the value of the array. -/
 theorem eval_mapIdx (sp sp' sa : Span) (par : Bool) (recv : Expr) (p q : Param) (body : Expr)
@@ -1717,13 +1745,15 @@ theorem eval_mapIdx (sp sp' sa : Span) (par : Bool) (recv : Expr) (p q : Param) 
         | _ => none := by
   have hr' : ∀ s, recv ≠ .ident s "Number" := by
     intro s h; subst h; simp [Expr.namesNumber] at hr
+  have hrM : ∀ s, recv ≠ .ident s "Math" := by
+    intro s h; subst h; simp [Expr.namesNumber] at hr
   generalize hR : Eval.eval m fuel ρ recv = r
   rw [Eval.eval]
   · simp only [bne_self_eq_false, Bool.false_or, beq_iff_eq, hpq, ↓reduceIte, hR]
     cases r with
     | none => rfl
     | some v => cases v <;> simp [methodVal]
-  all_goals first | exact hr' | decide
+  all_goals first | exact hr' | exact hrM | decide
 
 /-- The value of a `List` function with a callback in the output, from the
 value of the list. -/
@@ -2043,18 +2073,21 @@ theorem reducerOf_some {args : List Expr} {a p : Param} {body init : Expr}
 /-- `xs.reduce((a, x) => e, init)`: the interpreter evaluates the array, then
 the initial value, then the callback on each element. -/
 theorem eval_reduce (sp sp' sa : Span) (par : Bool) (recv : Expr) (a p : Param) (body init : Expr)
-    (hap : a.name ≠ p.name) (ρ : Eval.Env N) :
+    (hap : a.name ≠ p.name) (hr : recv.namesNumber = false) (ρ : Eval.Env N) :
     Eval.eval m fuel ρ (.call sp (.member sp' recv "reduce") [.arrow sa par [a, p] body, init]) =
       (Eval.eval m fuel ρ recv).bind fun
         | .list items => (Eval.eval m fuel ρ init).bind fun v =>
             Eval.evalReduce m fuel ρ a.name p.name body v items
         | _ => none := by
+  have hrM : ∀ s, recv ≠ .ident s "Math" := by
+    intro s h; subst h; simp [Expr.namesNumber] at hr
   rw [Eval.eval]
-  simp only [beq_iff_eq, hap, if_false]
-  generalize Eval.eval m fuel ρ recv = r
-  cases r with
-  | none => rfl
-  | some w => cases w <;> simp [Option.bind_eq_bind]
+  · simp only [beq_iff_eq, hap, if_false]
+    generalize Eval.eval m fuel ρ recv = r
+    cases r with
+    | none => rfl
+    | some w => cases w <;> simp [Option.bind_eq_bind]
+  · exact hrM
 
 theorem translateReduce_sound {F : Nat}
     (ihE : ∀ env exp e ctx c ctx', translateExpr F env exp e ctx = .ok c ctx' →
@@ -2069,6 +2102,7 @@ theorem translateReduce_sound {F : Nat}
   simp only [ite_state] at h
   split at h
   · simp only [bind_ok, reject_ne_ok, false_and, exists_false] at h
+  rename_i hnn
   simp only [pure_bind, bind_ok, orReject_ok] at h
   obtain ⟨xs, s₂, hxs, elem, s₃, ⟨-, rfl⟩, i, s₄, hi, h⟩ := h
   simp only [ite_state] at h
@@ -2101,7 +2135,7 @@ theorem translateReduce_sound {F : Nat}
           have hini := ihE _ _ _ _ _ _ hi ρs ρo _ ha hs hinit
           have hbody : Sim (N := N) m fs fuel _ body b.value := fun ρs ρo w ha hs hw =>
             ihE _ _ _ _ _ _ hb ρs ρo w ha hs (by rwa [eval_value] at hw)
-          rw [eval_reduce m fuel _ _ _ _ _ _ _ _ _ hap, hrecv]
+          rw [eval_reduce m fuel _ _ _ _ _ _ _ _ _ hap (by simpa using hnn), hrecv]
           simp only [Option.bind_some, hini]
           exact evalReduce_sim m fs fuel (bodySim2_of m fs fuel hbody ha hs) items u v hv
       | _ => simp [hx] at hv
@@ -2241,6 +2275,8 @@ theorem eval_arrayCall (sp sp' : Span) (recv : Expr) (method : String) (args : L
       (Eval.evalList m fuel ρ args).bind (Eval.arrayMethod method items) := by
   have hr' : ∀ s, recv ≠ .ident s "Number" := by
     intro s h; subst h; simp [Expr.namesNumber] at hr
+  have hrM : ∀ s, recv ≠ .ident s "Math" := by
+    intro s h; subst h; simp [Expr.namesNumber] at hr
   -- One argument goes to the rule of `get` and `has`, which passes an array
   -- on to `arrayMethod`; any other number to the rule of #94.
   rcases args with _ | ⟨a, _ | ⟨b, rest⟩⟩
@@ -2251,8 +2287,10 @@ theorem eval_arrayCall (sp sp' : Span) (recv : Expr) (method : String) (args : L
          | rfl
          | (cases ha : Eval.eval m fuel ρ a <;> simp [Eval.evalList, ha]))
     | exact hr'
+    | exact hrM
     | (intros; contradiction)
     | (intros; subst_vars; exact absurd rfl (hr' _))
+    | (intros; subst_vars; exact absurd rfl (hrM _))
     | (clear hrecv; intros; simp_all [Expr.isArrow]; done)
     | (intros; subst_vars; exact absurd rfl hat)
     | (intros; subst_vars; exact absurd rfl hsl)
@@ -2672,6 +2710,8 @@ theorem eval_mapMethod (sp sp' : Span) (recv key : Expr) (name : String) (hr : r
         | _ => none := by
   have hr' : ∀ s, recv ≠ .ident s "Number" := by
     intro s h; subst h; simp [Expr.namesNumber] at hr
+  have hrM : ∀ s, recv ≠ .ident s "Math" := by
+    intro s h; subst h; simp [Expr.namesNumber] at hr
   generalize hR : Eval.eval m fuel ρ recv = r
   rw [Eval.eval]
   all_goals first
@@ -2684,6 +2724,7 @@ theorem eval_mapMethod (sp sp' : Span) (recv key : Expr) (name : String) (hr : r
            | rfl
            | (cases Eval.eval m fuel ρ key <;> simp [mapMethodVal]))
     | exact hr'
+    | exact hrM
     | (intro sa par p b h; exact hk _ _ _ _ h)
     | (intro sa par p q b h; exact hk _ _ _ _ h)
     | (intro h; exact hat h)
@@ -3231,6 +3272,63 @@ theorem translateNew_sound {tr : Option Ty → Expr → TM Code} {env : Translat
         simp [Eval.eval, hnone ρs hs, hva, hit, hes]
     · simp at h
 
+/-- The interpreter's rule for `Math.f(args)`, where no variable hides `Math`:
+the function of `mathCall` on the values of the arguments. -/
+theorem eval_math (sp sp' sp'' : Span) (f : String) (args : List Expr) (ρ : Eval.Env N)
+    (hnone : ρ.lookup "Math" = none) :
+    Eval.eval m fuel ρ (.call sp (.member sp' (.ident sp'' "Math") f) args) =
+      (Eval.evalList m fuel ρ args).bind (Eval.mathCall f) := by
+  rw [Eval.eval]
+  · simp [hnone]
+  all_goals simp
+
+/-- `translateMathCall` means what the interpreter's rule for `Math.f(args)`
+means, when `tr` means what each argument means, and its code is an
+operation of the number model. -/
+theorem translateMathCall_sound {tr : Expr → TM Code} {env : Translate.Env}
+    (htr : ∀ e ctx c ctx', tr e ctx = .ok c ctx' → Sim (N := N) m fs fuel env e c.code)
+    (hM : env.has "Math" = false) {sp sp' sp'' : Span} {f : String} {args : List Expr}
+    {ctx ctx' : Ctx} {c : Code} (h : translateMathCall tr sp f args ctx = .ok c ctx') :
+    Sim (N := N) m fs fuel env (.call sp (.member sp' (.ident sp'' "Math") f) args) c.code ∧
+      ∃ op outs, c.code = .ext op outs := by
+  unfold translateMathCall at h
+  cases hfn : numberFn? f with
+  | some fn =>
+    simp only [hfn] at h
+    match args, h with
+    | [arg], h =>
+      simp at h
+      obtain ⟨a, s₁, hta, h⟩ := h
+      split at h
+      · simp at h
+        obtain ⟨hcode, -⟩ := h
+        refine ⟨fun ρs ρo v ha hs hv => ?_, _, _, by rw [← hcode]⟩
+        rw [← hcode] at hv
+        obtain ⟨n, hn, rfl⟩ := out_numberFn fs fuel hv
+        rw [eval_value] at hn
+        have harg := htr _ _ _ _ hta ρs ρo _ ha hs hn
+        rw [eval_math m fuel _ _ _ _ _ _ (hs.none hM)]
+        unfold numberFn? at hfn
+        split at hfn <;> cases hfn <;>
+          simp [Eval.evalList, harg, Eval.mathCall, IR.NumberFn.apply]
+      · simp at h
+    | [], h => simp at h
+    | _ :: _ :: _, h => simp at h
+  | none =>
+    simp only [hfn] at h
+    simp at h
+    split at h
+    · rename_i hf
+      simp at h
+      obtain ⟨codes, s₁, hcodes, -, hcode⟩ := h
+      have hargs := mapM_sim m fs fuel htr args ctx codes s₁ hcodes
+      refine ⟨fun ρs ρo v ha hs hv => ?_, _, _, by rw [← hcode]⟩
+      rw [← hcode] at hv
+      obtain ⟨vs, xs, hvs, hxs, rfl⟩ := out_numberFold fs fuel hv
+      rw [eval_math m fuel _ _ _ _ _ _ (hs.none hM), hargs ρs ρo vs ha hs hvs]
+      rcases hf with rfl | rfl <;> simp [Eval.mathCall, hxs]
+    · simp at h
+
 /-- A call of a function of the program: the output's call means what the
 source's call means, and it returns or throws what the source's call returns
 or throws (`CallSim`). -/
@@ -3327,7 +3425,14 @@ theorem translateCall_sound {F : Nat} (hc : CallsAgree (N := N) m.program fs fue
           · simp at h
         | [], h => simp at h
         | _ :: _ :: _, h => simp at h
-      · simp [hn] at h
+      · by_cases hM : oname = "Math"
+        · subst hM
+          simp [hn] at h
+          cases hMa : env.has "Math" <;> simp [hMa] at h
+          obtain ⟨hsim, op, outs, hcode⟩ :=
+            translateMathCall_sound m fs fuel (fun e ctx c ctx' h => ihE _ _ _ _ _ _ h) hMa h
+          exact ⟨hsim, fun ref outs' hout => by rw [hcode] at hout; cases hout⟩
+        · simp [hn, hM] at h
     all_goals simp at h
 
 /-- An object literal of an interface, or of a member of a tagged union. -/

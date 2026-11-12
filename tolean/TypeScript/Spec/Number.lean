@@ -21,8 +21,12 @@ checks each one against JS.
 
 Editions: every edition Tolean supports (`tolean.TypeScript.Edition`). ECMA-262
 has defined a `number` as an IEEE-754 binary64 double since its first edition
-(the Number type, with `Number::add`, `Number::lessThan` and the like), and
-`Number.isSafeInteger`, `Number.isNaN` and `Number.isFinite` since ES2015.
+(the Number type, with `Number::add`, `Number::divide`, `Number::lessThan` and
+the like), `Math.floor`, `Math.ceil`, `Math.round`, `Math.abs`, `Math.min` and
+`Math.max` since its first edition, and `Number.isSafeInteger`, `Number.isNaN`,
+`Number.isFinite`, `Number.isInteger` and `Math.trunc` since ES2015. ECMA-262
+defines each of these exactly, unlike `Math.sin` and its relatives, whose
+results it leaves to the engine.
 Engines: the laws pass on each engine in `engines` in `flake.nix`
 (`nix run .#test-engines`).
 -/
@@ -39,7 +43,26 @@ class JSNumber (N : Type) where
   add : N → N → N
   sub : N → N → N
   mul : N → N → N
+  /-- `a / b` (Number::divide, §6.1.6.1.5): the double nearest to the
+  quotient, `±Infinity` for a nonzero `a` over a zero `b`, and `NaN` for `0 / 0`. -/
+  div : N → N → N
   neg : N → N
+  /-- `Math.floor(x)` (§21.3.2.16) -/
+  floor : N → N
+  /-- `Math.ceil(x)` (§21.3.2.10) -/
+  ceil : N → N
+  /-- `Math.trunc(x)` (§21.3.2.35) -/
+  trunc : N → N
+  /-- `Math.round(x)` (§21.3.2.28): the nearest integer, and the larger one
+  when `x` is halfway between two. -/
+  round : N → N
+  /-- `Math.abs(x)` (§21.3.2.1) -/
+  abs : N → N
+  /-- `Math.min(a, b)` (§21.3.2.25): `NaN` when either is `NaN`, and `-0` is
+  less than `+0`. -/
+  min : N → N → N
+  /-- `Math.max(a, b)` (§21.3.2.24) -/
+  max : N → N → N
   /-- `a < b` -/
   lt : N → N → Bool
   /-- `a <= b` -/
@@ -62,6 +85,19 @@ class JSNumber (N : Type) where
   negInf : N
 
 open JSNumber
+
+/-- `Math.min(...xs)` (§21.3.2.25). The spec starts from `+Infinity` and
+takes each argument in turn, so this is a fold of `Math.min` of two. A `NaN`
+ends the spec's loop, and `Math.min(NaN, x)` is `NaN`, so the fold gives the
+same value. `Math.min()` is `+Infinity`. -/
+def JSNumber.minimum {N : Type} [JSNumber N] (xs : List N) : N := xs.foldl min posInf
+
+/-- `Math.max(...xs)` (§21.3.2.24), a fold from `-Infinity`. -/
+def JSNumber.maximum {N : Type} [JSNumber N] (xs : List N) : N := xs.foldl max negInf
+
+/-- `Number.isInteger(x)` (§21.1.2.3): IsIntegralNumber (§7.2.6), which holds
+when `x` is finite and its truncation is `x`. -/
+def JSNumber.isInteger {N : Type} [JSNumber N] (x : N) : Bool := isFinite x && eq (trunc x) x
 
 /-- SameValueZero (ECMA-262 §7.2.11) on numbers: `===`, except that `NaN` is
 the same as `NaN`. `Array.prototype.includes` compares with it. -/
@@ -111,6 +147,17 @@ class SafeIntLaws (N : Type) [JSNumber N] : Prop where
   mul : ∀ {a b : N} {i j : Int}, toSafeInt a = some i → toSafeInt b = some j →
     InRange (i * j) → toSafeInt (mul a b) = some (i * j)
   neg : ∀ {a : N} {i : Int}, toSafeInt a = some i → toSafeInt (neg a) = some (-i)
+  div : ∀ {a b : N} {i j : Int}, toSafeInt a = some i → toSafeInt b = some j →
+    j ≠ 0 → i.tmod j = 0 → toSafeInt (div a b) = some (i.tdiv j)
+  floor : ∀ {a : N} {i : Int}, toSafeInt a = some i → toSafeInt (floor a) = some i
+  ceil : ∀ {a : N} {i : Int}, toSafeInt a = some i → toSafeInt (ceil a) = some i
+  trunc : ∀ {a : N} {i : Int}, toSafeInt a = some i → toSafeInt (trunc a) = some i
+  round : ∀ {a : N} {i : Int}, toSafeInt a = some i → toSafeInt (round a) = some i
+  abs : ∀ {a : N} {i : Int}, toSafeInt a = some i → toSafeInt (abs a) = some (i.natAbs : Int)
+  min : ∀ {a b : N} {i j : Int}, toSafeInt a = some i → toSafeInt b = some j →
+    toSafeInt (min a b) = some (Min.min i j)
+  max : ∀ {a b : N} {i j : Int}, toSafeInt a = some i → toSafeInt b = some j →
+    toSafeInt (max a b) = some (Max.max i j)
   lt : ∀ {a b : N} {i j : Int}, toSafeInt a = some i → toSafeInt b = some j →
     lt a b = decide (i < j)
   le : ∀ {a b : N} {i j : Int}, toSafeInt a = some i → toSafeInt b = some j →
@@ -128,6 +175,14 @@ class SpecialValueLaws (N : Type) [JSNumber N] : Prop where
   nan_add : ∀ {a b : N}, isNaN a = true → isNaN (add a b) = true ∧ isNaN (add b a) = true
   nan_sub : ∀ {a b : N}, isNaN a = true → isNaN (sub a b) = true ∧ isNaN (sub b a) = true
   nan_mul : ∀ {a b : N}, isNaN a = true → isNaN (mul a b) = true ∧ isNaN (mul b a) = true
+  nan_div : ∀ {a b : N}, isNaN a = true → isNaN (div a b) = true ∧ isNaN (div b a) = true
+  nan_floor : ∀ {a : N}, isNaN a = true → isNaN (floor a) = true
+  nan_ceil : ∀ {a : N}, isNaN a = true → isNaN (ceil a) = true
+  nan_trunc : ∀ {a : N}, isNaN a = true → isNaN (trunc a) = true
+  nan_round : ∀ {a : N}, isNaN a = true → isNaN (round a) = true
+  nan_abs : ∀ {a : N}, isNaN a = true → isNaN (abs a) = true
+  nan_min : ∀ {a b : N}, isNaN a = true → isNaN (min a b) = true ∧ isNaN (min b a) = true
+  nan_max : ∀ {a b : N}, isNaN a = true → isNaN (max a b) = true ∧ isNaN (max b a) = true
   isNaN_nan : isNaN (nan (N := N)) = true
   isNaN_posInf : isNaN (posInf (N := N)) = false
   isNaN_negInf : isNaN (negInf (N := N)) = false
