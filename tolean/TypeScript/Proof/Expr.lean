@@ -1687,6 +1687,7 @@ def methodVal (method : IR.ListMethod) (ρ : Eval.Env N) (name : String) (body :
   | .findIndex => do
     return .num (JSNumber.ofSafeInt (((← Eval.evalFindIdx m fuel ρ name body 0 items).map Int.ofNat).getD (-1)))
   | .findLast => do return (← Eval.evalFind m fuel ρ name body true items.reverse).getD .undefined
+  | .sortWith other => do return .list (← Eval.sortValues (Eval.evalCompare m fuel ρ name other body) items)
 
 theorem eval_arrayMethod (sp sp' sa : Span) (par : Bool) (recv : Expr) (name : String) (p : Param)
     (body : Expr) (method : IR.ListMethod) (hm : listMethod? name = some method)
@@ -1749,7 +1750,7 @@ theorem eval_mapIdx (sp sp' sa : Span) (par : Bool) (recv : Expr) (p q : Param) 
     intro s h; subst h; simp [Expr.namesNumber] at hr
   generalize hR : Eval.eval m fuel ρ recv = r
   rw [Eval.eval]
-  · simp only [bne_self_eq_false, Bool.false_or, beq_iff_eq, hpq, ↓reduceIte, hR]
+  · simp only [beq_iff_eq, hpq, ↓reduceIte, hR]
     cases r with
     | none => rfl
     | some v => cases v <;> simp [methodVal]
@@ -1769,6 +1770,7 @@ def outMethodVal (method : IR.ListMethod) (ρ : Eval.Env N) (name : String) (bod
   | .findIndex => do
     return .num (JSNumber.ofSafeInt (((← IR.Expr.evalFindIdx fs fuel ρ name body 0 items).map Int.ofNat).getD (-1)))
   | .findLast => do return (← IR.Expr.evalFind fs fuel ρ name body true items.reverse).getD .undefined
+  | .sortWith other => do return .list (← Eval.sortValues (IR.Expr.evalCompare fs fuel ρ name other body) items)
 
 theorem out_listMethod {method : IR.ListMethod} {items : IR.Expr} {name : String} {t : IR.Ty}
     {body : IR.Expr} {ρ : Eval.Env N} {v : Val N}
@@ -1862,7 +1864,7 @@ theorem evalFindIdx_sim {ρs ρo : Eval.Env N} {x : String} {body : Expr} {code 
 
 theorem methodVal_sim {ρs ρo : Eval.Env N} {x : String} {body : Expr} {code : IR.Expr}
     (hb : BodySim m fs fuel ρs ρo x body code) (method : IR.ListMethod) (hm : ∀ i, method ≠ .mapIdx i)
-    (xs : List (Val N)) (v : Val N)
+    (hso : ∀ o, method ≠ .sortWith o) (xs : List (Val N)) (v : Val N)
     (h : outMethodVal fs fuel method ρo x code xs = some v) :
     methodVal m fuel method ρs x body xs = some v := by
   cases method <;> simp only [outMethodVal, methodVal] at h ⊢
@@ -1881,6 +1883,7 @@ theorem methodVal_sim {ρs ρo : Eval.Env N} {x : String} {body : Expr} {code : 
     | (cases hr : IR.Expr.evalFindIdx fs fuel ρo x code 0 xs <;> simp [hr] at h
        simp [evalFindIdx_sim m fs fuel hb xs 0 _ hr, h])
     | exact absurd rfl (hm _)
+    | exact absurd rfl (hso _)
 
 omit [JSNumber N] in
 theorem agree_cons {ρs ρo : Eval.Env N} (ha : Agree ρs ρo) (x : String) (w : Val N) :
@@ -1951,6 +1954,14 @@ theorem indexedCallbackOf_some {method : IR.ListMethod} {args : List Expr} {p q 
 omit [JSNumber N] in
 theorem listMethod?_ne_mapIdx {name : String} {method : IR.ListMethod} (h : listMethod? name = some method)
     (i : String) : method ≠ .mapIdx i := by
+  unfold listMethod? at h
+  intro hm; subst hm
+  repeat' split at h
+  all_goals simp at h
+
+omit [JSNumber N] in
+theorem listMethod?_ne_sortWith {name : String} {method : IR.ListMethod} (h : listMethod? name = some method)
+    (o : String) : method ≠ .sortWith o := by
   unfold listMethod? at h
   intro hm; subst hm
   repeat' split at h
@@ -2029,6 +2040,7 @@ theorem translateArrayMethod_sound {F : Nat}
       ihE _ _ _ _ _ _ hb ρs ρo w ha hs (by rwa [eval_value] at hw)
     rw [eval_arrayMethod m fuel _ _ _ _ _ _ _ _ _ hname (by simpa using hr), hrecv]
     exact methodVal_sim m fs fuel (bodySim_of m fs fuel hbody ha hs) method (listMethod?_ne_mapIdx hname)
+      (listMethod?_ne_sortWith hname)
       items v hval
 
 /-! ### `reduce` -/
@@ -2140,6 +2152,175 @@ theorem translateReduce_sound {F : Nat}
           exact evalReduce_sim m fs fuel (bodySim2_of m fs fuel hbody ha hs) items u v hv
       | _ => simp [hx] at hv
   · simp only [bind_ok, reject_ne_ok, false_and, exists_false] at h
+
+
+/-! ### Sorting -/
+
+/-- The comparator of the output gives a sign only where the interpreter's
+gives the same one, for every pair of elements. -/
+theorem evalCompare_sim {ρs ρo : Eval.Env N} {a x : String} {body : Expr} {code : IR.Expr}
+    (hb : BodySim2 m fs fuel ρs ρo a x body code) (w u : Val N) (o : Ordering)
+    (h : IR.Expr.evalCompare fs fuel ρo x a code w u = some o) :
+    Eval.evalCompare m fuel ρs x a body w u = some o := by
+  -- The comparator's own branch, for any two values.
+  have last : ∀ w u : Val N,
+      (do let .num v ← IR.Expr.eval fs fuel ((x, w) :: (a, u) :: ρo) code | none
+          JSNumber.compareSign v) = some o →
+      (do let .num v ← Eval.eval m fuel ((x, w) :: (a, u) :: ρs) body | none
+          JSNumber.compareSign v) = some o := by
+    intro w u h
+    cases hv : IR.Expr.eval fs fuel ((x, w) :: (a, u) :: ρo) code with
+    | none => rw [hv] at h; cases h
+    | some v => rw [hv] at h; rw [hb u w v hv]; exact h
+  unfold IR.Expr.evalCompare at h
+  unfold Eval.evalCompare
+  cases w <;> cases u <;> simp only at h ⊢ <;> first | exact h | exact last _ _ h
+
+omit [JSNumber N] in
+/-- `List.all` reads its test only on the elements. -/
+theorem all_congr_mem {α : Type} {l : List α} {p q : α → Bool} (h : ∀ a ∈ l, p a = q a) :
+    l.all p = l.all q := by
+  induction l with
+  | nil => rfl
+  | cons x xs ih =>
+    simp only [List.all_cons, h x List.mem_cons_self, ih (fun a ha => h a (List.mem_cons_of_mem _ ha))]
+
+omit [JSNumber N] in
+/-- `consistentOn` reads the comparator only on the elements. -/
+theorem consistentOn_congr {α : Type} {c₁ c₂ : α → α → Option Ordering} {items : List α}
+    (h : ∀ x ∈ items, ∀ y ∈ items, c₁ x y = c₂ x y) : Eval.consistentOn c₁ items = Eval.consistentOn c₂ items := by
+  unfold Eval.consistentOn
+  refine all_congr_mem fun a ha => all_congr_mem fun b hb => ?_
+  have hin : (items.all fun c => !(c₁ a b != some .gt && c₁ b c != some .gt) || c₁ a c != some .gt) =
+      (items.all fun c => !(c₂ a b != some .gt && c₂ b c != some .gt) || c₂ a c != some .gt) :=
+    all_congr_mem fun c hc => by rw [h a ha b hb, h b hb c hc, h a ha c hc]
+  rw [hin, h a ha b hb, h b hb a ha]
+
+omit [JSNumber N] in
+/-- A sort gives a value only where the interpreter's sort gives the same
+one, when each sign of the first comparator on the elements is a sign of the
+second. -/
+theorem sortValues_sim {α : Type} {c₁ c₂ : α → α → Option Ordering} {items ys : List α}
+    (hc : ∀ x ∈ items, ∀ y ∈ items, ∀ o, c₁ x y = some o → c₂ x y = some o)
+    (h : Eval.sortValues c₁ items = some ys) : Eval.sortValues c₂ items = some ys := by
+  unfold Eval.sortValues at h ⊢
+  split at h
+  · rename_i hcons
+    cases h
+    -- A consistent comparator gives a sign for every pair, so the two agree
+    -- on the elements.
+    have hsome : ∀ x ∈ items, ∀ y ∈ items, (c₁ x y).isSome = true := by
+      intro x hx y hy
+      unfold Eval.consistentOn at hcons
+      rw [List.all_eq_true] at hcons
+      have := hcons x hx
+      rw [List.all_eq_true] at this
+      have := this y hy
+      simp only [Bool.and_eq_true] at this
+      exact this.1.1
+    have heq : ∀ x ∈ items, ∀ y ∈ items, c₁ x y = c₂ x y := by
+      intro x hx y hy
+      have hs := hsome x hx y hy
+      cases h1 : c₁ x y with
+      | none => rw [h1] at hs; cases hs
+      | some o => exact (hc x hx y hy o h1).symm
+    rw [← consistentOn_congr heq, if_pos hcons]
+    have hm := List.map_mergeSort (f := id) (l := items) (r := fun a b => c₁ a b != some .gt)
+      (s := fun a b => c₂ a b != some .gt) (fun a ha b hb => by
+        show (c₁ a b != some .gt) = (c₂ a b != some .gt)
+        rw [heq a ha b hb])
+    simp only [List.map_id] at hm
+    rw [hm]
+  · cases h
+
+/-- `xs.toSorted((a, b) => e)` and `[...xs].sort((a, b) => e)`, from the value of
+the array. -/
+theorem eval_sort (sp sp' sa : Span) (par : Bool) (recv : Expr) (method : String) (p q : Param)
+    (body : Expr) (hm : method = "toSorted" ∨ (method = "sort" ∧ recv.isArrayLiteral = true))
+    (hr : recv.namesNumber = false) (hpq : p.name ≠ q.name) (ρ : Eval.Env N) :
+    Eval.eval m fuel ρ (.call sp (.member sp' recv method) [.arrow sa par [p, q] body]) =
+      (Eval.eval m fuel ρ recv).bind fun
+        | .list items => methodVal m fuel (.sortWith q.name) ρ p.name body items
+        | _ => none := by
+  have hr' : ∀ s, recv ≠ .ident s "Number" := by
+    intro s h; subst h; simp [Expr.namesNumber] at hr
+  rcases hm with rfl | ⟨rfl, hlit⟩
+  all_goals
+    generalize hR : Eval.eval m fuel ρ recv = r
+    rw [Eval.eval]
+    · simp only [beq_iff_eq, hpq, ↓reduceIte, hR]
+      cases r with
+      | none => simp
+      | some v => cases v <;> simp_all [methodVal]
+    all_goals first | exact hr' | decide
+
+omit [JSNumber N] in
+theorem sortOf_some {callee recv : Expr} {method : String} (h : sortOf callee = some (recv, method)) :
+    ∃ sp, callee = .member sp recv method ∧ (method = "toSorted" ∨ method = "sort") := by
+  unfold sortOf at h
+  split at h <;> simp at h
+  all_goals obtain ⟨rfl, rfl⟩ := h
+  all_goals exact ⟨_, rfl, by simp⟩
+
+theorem translateSort_sound {F : Nat}
+    (ihE : ∀ env exp e ctx c ctx', translateExpr F env exp e ctx = .ok c ctx' →
+      Sim (N := N) m fs fuel env e c.code)
+    {env : Translate.Env} {s : Span} {recv : Expr} {method : String} {args : List Expr}
+    {ctx ctx' : Ctx} {c : Code}
+    (h : translateSort (F + 1) env s recv method args ctx = .ok c ctx')
+    (hmethod : method = "toSorted" ∨ method = "sort") {sp : Span} :
+    Sim (N := N) m fs fuel env (.call s (.member sp recv method) args) c.code := by
+  simp only [translateSort] at h
+  split at h
+  rotate_left
+  · simp at h
+  rename_i sa par p q body
+  simp only [ite_state] at h
+  split at h
+  · simp at h
+  rename_i hsortlit
+  simp only [pure_bind, bind_ok, requireFeature_ok, ite_state] at h
+  obtain ⟨-, s₁, -, h⟩ := h
+  split at h
+  · simp only [bind_ok, reject_ne_ok, false_and, exists_false] at h
+  rename_i hr
+  simp only [bind_ok, orReject_ok, ite_state] at h
+  obtain ⟨xs, s₂, hxs, elem, s₃, ⟨-, rfl⟩, h⟩ := h
+  split at h
+  · simp only [bind_ok, reject_ne_ok, false_and, exists_false] at h
+  simp only [bind_ok] at h
+  obtain ⟨-, s₄, -, -, s₅, -, withQ, s₆, hdQ, inner, s₇, hdP, b, s₈, hb, h⟩ := h
+  simp only [ite_state] at h
+  split at h
+  rotate_left
+  · simp only [bind_ok, reject_ne_ok, false_and, exists_false] at h
+  simp only [bind_ok, orReject_ok, pure_ok] at h
+  obtain ⟨-, s₉, -, -, s₁₀, -, rfl, -⟩ := h
+  obtain ⟨-, rfl, -⟩ := declare_ok hdQ
+  obtain ⟨hnp, rfl, -⟩ := declare_ok hdP
+  have hpq : p.name ≠ q.name := by
+    intro he; rw [has_add] at hnp; simp [he] at hnp
+  have hm : method = "toSorted" ∨ (method = "sort" ∧ recv.isArrayLiteral = true) := by
+    rcases hmethod with rfl | rfl
+    · exact Or.inl rfl
+    · refine Or.inr ⟨rfl, ?_⟩
+      simpa using hsortlit
+  intro ρs ρo v ha hs hv
+  obtain ⟨items, hitems, hval⟩ := out_listMethod fs fuel hv
+  rw [eval_value] at hitems
+  have hrecv := ihE _ _ _ _ _ _ hxs ρs ρo _ ha hs hitems
+  have hbody : Sim (N := N) m fs fuel _ body b.value := fun ρs ρo w ha hs hw =>
+    ihE _ _ _ _ _ _ hb ρs ρo w ha hs (by rwa [eval_value] at hw)
+  have hb2 := bodySim2_of m fs fuel hbody ha hs
+  rw [eval_sort m fuel _ _ _ _ _ _ _ _ _ hm (by simpa using hr) hpq, hrecv]
+  simp only [outMethodVal] at hval
+  simp only [Option.bind_some, methodVal]
+  cases hys : Eval.sortValues (IR.Expr.evalCompare fs fuel ρo p.name q.name b.value) items with
+  | none => rw [hys] at hval; cases hval
+  | some ys =>
+    rw [hys] at hval
+    rw [sortValues_sim (fun x _ y _ o hxy => evalCompare_sim m fs fuel hb2 x y o hxy) hys]
+    exact hval
 
 /-! ### Arrays: length and indexes -/
 
@@ -3566,6 +3747,9 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
         Sim (N := N) m fs fuel env (.call s (.member sp recv name) args) c.code) ∧
     (∀ env exp s recv args ctx c ctx', translateReduce F env exp s recv args ctx = .ok c ctx' →
       ∀ sp, Sim (N := N) m fs fuel env (.call s (.member sp recv "reduce") args) c.code) ∧
+    (∀ env s recv method args ctx c ctx', translateSort F env s recv method args ctx = .ok c ctx' →
+      method = "toSorted" ∨ method = "sort" →
+      ∀ sp, Sim (N := N) m fs fuel env (.call s (.member sp recv method) args) c.code) ∧
     (∀ env s recv op args ctx c ctx', translateMapMethod F env s recv op args ctx = .ok c ctx' →
       ∀ sp name, mapMethodOf (.member sp recv name) = some (recv, op) →
         Sim (N := N) m fs fuel env (.call s (.member sp recv name) args) c.code) ∧
@@ -3581,13 +3765,13 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
       Sim (N := N) m fs fuel env e c.code) := by
   induction F with
   | zero =>
-    refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩ <;> intros <;>
+    refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩ <;> intros <;>
       simp_all [translateExpr, translateElements, translateArray, translateCall, translateObject,
-        translateBinary, translateArrayMethod, translateReduce, translateMapMethod, translateArrayCall, translateArrayIndex, translateSpread,
+        translateBinary, translateArrayMethod, translateReduce, translateSort, translateMapMethod, translateArrayCall, translateArrayIndex, translateSpread,
         translateExprCore]
   | succ F ih =>
-    obtain ⟨ihE, ihL, ihA, ihC, ihO, ihB, ihM, ihR, ihMM, ihK, ihI, ihS, ihX⟩ := ih
-    refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+    obtain ⟨ihE, ihL, ihA, ihC, ihO, ihB, ihM, ihR, ihT, ihMM, ihK, ihI, ihS, ihX⟩ := ih
+    refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
     -- The core first, then the step that makes a value a member of a union.
     rotate_right
     · intro env exp e ctx c ctx' h
@@ -3878,6 +4062,14 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
           · simp at hred
         | none =>
         simp only [hred] at h
+        cases hso : sortOf callee with
+        | some rm =>
+          obtain ⟨recv, method⟩ := rm
+          simp only [hso] at h
+          obtain ⟨sp', rfl, hmethod⟩ := sortOf_some hso
+          exact ihT _ _ _ _ _ _ _ _ h hmethod sp'
+        | none =>
+        simp only [hso] at h
         cases hm : arrayMethodOf callee with
         | some rm =>
           obtain ⟨recv, method⟩ := rm
@@ -4031,6 +4223,8 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
       exact translateArrayMethod_sound m fs fuel ihE h hname
     · intro env exp s recv args ctx c ctx' h sp
       exact translateReduce_sound m fs fuel ihE h
+    · intro env s recv method args ctx c ctx' h hmethod sp
+      exact translateSort_sound m fs fuel ihE h hmethod
     · intro env s recv op args ctx c ctx' h sp name hname
       exact translateMapMethod_sound m fs fuel ihE h hname
     · intro env s recv method args ctx c ctx' h sp hr
