@@ -471,6 +471,27 @@ def sliceList {α : Type} (items : List α) (start : Int) (stop : Option Int) : 
     | none => items.length
   (items.drop k).take (final - k)
 
+/-- The comparator `cmp` is consistent for `items` (ECMA-262 §23.1.3.30.1):
+for every pair of elements it gives a sign, the sign for `(b, a)` is the
+reverse of the sign for `(a, b)`, and "`a` does not come after `b`" is
+transitive. These are the conditions that the spec lists, with the order
+between `<` and `=` made explicit. They make "does not come after" a total
+preorder, and then exactly one order of the elements is sorted and stable. -/
+def consistentOn {α : Type} (cmp : α → α → Option Ordering) (items : List α) : Bool :=
+  items.all fun a => items.all fun b =>
+    (cmp a b).isSome && cmp b a == (cmp a b).map Ordering.swap &&
+      items.all fun c => !(cmp a b != some .gt && cmp b c != some .gt) || cmp a c != some .gt
+
+/-- The elements of `items` in the order that `Array.prototype.sort` gives
+them with the comparator `cmp` (SortIndexedProperties, ECMA-262
+§23.1.3.30.1). An element comes after another only when `cmp` says that it
+is greater, so equal elements keep their order: the sort is stable, as the
+spec has required since ES2019. The spec leaves the order to the engine when
+the comparator is not consistent for the elements, so the subset gives none
+there. -/
+def sortValues {α : Type} (cmp : α → α → Option Ordering) (items : List α) : Option (List α) :=
+  if consistentOn cmp items then some (items.mergeSort fun a b => cmp a b != some .gt) else none
+
 /-- The functions of the module, by name. -/
 def functions (m : Module) : List (String × List String × Stmt) :=
   m.decls.filterMap fun
@@ -793,10 +814,22 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
   -- (ECMA-262 §23.1.3.21, step 6.c.ii). An array has fewer than 2^32
   -- elements, so the index is a safe integer. Two parameters of one arrow
   -- function may not have the same name (§15.3.1).
+  --
+  -- `xs.toSorted((a, b) => e)` (`Array.prototype.toSorted`, ECMA-262
+  -- §23.1.3.34) gives a new array of the elements of `xs`, in the order that
+  -- the comparator gives (`sortValues`). `sort` (§23.1.3.30) gives the same
+  -- order, and it changes the array that it sorts. So the subset sorts only
+  -- an array literal, such as `[...xs].sort((a, b) => e)`, which nothing else
+  -- holds, and then the value is all that the call changes.
   | .call _ (.member _ recv method) [.arrow _ _ [p, q] body] => do
-    if method != "map" || p.name == q.name then none
-    let .list items ← eval m fuel env recv | none
-    return .list (← evalMapIdx m fuel env p.name q.name body 0 items)
+    if p.name == q.name then none
+    if method == "map" then
+      let .list items ← eval m fuel env recv | none
+      return .list (← evalMapIdx m fuel env p.name q.name body 0 items)
+    else if method == "toSorted" || (method == "sort" && recv.isArrayLiteral) then
+      let .list items ← eval m fuel env recv | none
+      return .list (← sortValues (evalCompare m fuel env p.name q.name body) items)
+    else none
   -- `xs.reduce((acc, x) => e, init)` (`Array.prototype.reduce`, ECMA-262
   -- §23.1.3.24) with an initial value: the callback runs on each element in
   -- order, with `acc` bound to the value so far, which starts at `init`.
@@ -975,6 +1008,23 @@ def evalMapIdx (m : Scope) (fuel : Nat) (env : Env N) (name index : String) (bod
     let v ← eval m fuel ((name, x) :: (index, .num (JSNumber.ofSafeInt start)) :: env) body
     return v :: (← evalMapIdx m fuel env name index body (start + 1) xs)
 termination_by xs => (fuel, sizeOf body, xs.length + 1)
+
+/-- The sign of the comparator `(a, b) => body` on the elements `x` and `y`
+(CompareArrayElements, ECMA-262 §23.1.3.30.2). The sort puts `undefined`
+after every other value without calling the comparator. The comparator must
+give a number, whose sign `JSNumber.compareSign` reads. A bigint would throw
+in `ToNumber`, and the spec reads any other value as a number, which the
+subset does not, so both leave it. -/
+def evalCompare (m : Scope) (fuel : Nat) (env : Env N) (a b : String) (body : Expr) (x y : Val N) :
+    Option Ordering :=
+  match x, y with
+  | .undefined, .undefined => some .eq
+  | .undefined, _ => some .gt
+  | _, .undefined => some .lt
+  | _, _ => do
+    let .num v ← eval m fuel ((a, x) :: (b, y) :: env) body | none
+    JSNumber.compareSign v
+termination_by (fuel, sizeOf body, 1)
 
 /-- The elements of `items` for which the callback `(name) => body` gives a
 truthy value, in order: what `Array.prototype.filter` keeps. -/
