@@ -1441,7 +1441,8 @@ def Stmt.isBlock : Stmt → Bool
   | _ => false
 
 /-- The constructor of an error class that `parseClass` reads: parameters
-that `parseParam` reads without `?`, and a message that ends at `)`. -/
+that `parseParam` reads, with `?` allowed as in a function, and a message
+that ends at `)`. -/
 def ctorWF (T : Edition) : Option (List CtorParam × Expr) → Bool
   | none => true
   | some (ps, m) => ps.all (fun p => p.param.wf) && m.wfParen T
