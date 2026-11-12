@@ -1102,9 +1102,14 @@ theorem translateCtorParam_ok {p : CtorParam} {s s' : Ctx} {x : String × Ty × 
   split at h
   · simp at h
   · simp only [pure_bind, bind_ok, orReject_ok] at h
-    obtain ⟨type, s₁, ⟨-, rfl⟩, pn, s₂, hpn, ty, s₃, -, h⟩ := h
+    obtain ⟨type, s₁, ⟨-, rfl⟩, pn, s₂, hpn, h⟩ := h
     obtain ⟨rfl, -⟩ := checkLocalName_ok hpn
-    cases ty <;> simp at h <;> obtain ⟨rfl, -⟩ := h <;> exact ⟨rfl, rfl⟩
+    simp only [ite_state] at h
+    split at h
+    · simp at h
+    · simp only [bind_ok] at h
+      obtain ⟨ty, s₃, -, h⟩ := h
+      cases ty <;> simp at h <;> obtain ⟨rfl, -⟩ := h <;> exact ⟨rfl, rfl⟩
 
 /-- The parameters of an error class, as translated, are the parameters of
 its constructor: the same names, with the same `readonly` marks. -/
@@ -1130,9 +1135,13 @@ theorem translateErrorClass_ok {sp : Span} {ex : Bool} {name : String} {ctor : O
       (∀ c ∈ s.errorClasses, c.name ≠ name) ∧ isGlobalName name = false ∧
       (Eval.ctorParams ctor).map (fun p => (p.param.name, p.readonly)) = info.params.map fun x => (x.1, x.2.2) := by
   unfold translateErrorClass at h
-  simp only [bind_ok, get_ok, modify_ok, pure_ok] at h
-  obtain ⟨name', s₁, hname, u, s₂, htop, params, s₃, hparams, c, s₄, ⟨rfl, rfl⟩, u', s₅, rfl, rfl, rfl⟩ := h
+  simp only [bind_ok, ite_state] at h
+  obtain ⟨name', s₁, hname, h⟩ := h
   obtain ⟨rfl, rfl⟩ := checkName_ok hname
+  split at h
+  · simp only [bind_ok, reject_ne_ok, false_and, exists_false] at h
+  simp only [pure_bind, bind_ok, get_ok, modify_ok, pure_ok] at h
+  obtain ⟨u, s₂, htop, params, s₃, hparams, c, s₄, ⟨rfl, rfl⟩, u', s₅, rfl, rfl, rfl⟩ := h
   obtain ⟨rfl, -⟩ := declareTopLevel_ok htop
   obtain ⟨rfl, s₆, hparams⟩ := isolated_ok hparams
   refine ⟨rfl, rfl, declareTopLevel_classes htop, declareTopLevel_global htop, ?_⟩
@@ -1146,15 +1155,17 @@ theorem translateErrorClass_ok {sp : Span} {ex : Bool} {name : String} {ctor : O
     simp only [bind_ok, ite_state] at hparams
     obtain ⟨params', s₇, hps, hparams⟩ := hparams
     split at hparams
-    · simp at hparams
-    · simp only [pure_bind, bind_ok, get_ok, fuelLimit_ok] at hparams
-      obtain ⟨_, _, ⟨rfl, rfl⟩, _, _, ⟨rfl, rfl⟩, code, s₈, -, hparams⟩ := hparams
-      simp only [ite_state] at hparams
-      split at hparams
-      · simp only [pure_ok] at hparams
-        obtain ⟨rfl, -⟩ := hparams
-        exact (ctorParams_shape ps _ _ _ hps).symm
-      · simp at hparams
+    · simp only [bind_ok, reject_ne_ok, false_and, exists_false] at hparams
+    · split at hparams
+      · simp only [bind_ok, get_ok, fuelLimit_ok] at hparams
+        obtain ⟨_, _, ⟨rfl, rfl⟩, _, _, ⟨rfl, rfl⟩, code, s₈, -, hparams⟩ := hparams
+        simp only [ite_state] at hparams
+        split at hparams
+        · simp only [pure_ok] at hparams
+          obtain ⟨rfl, -⟩ := hparams
+          exact (ctorParams_shape ps _ _ _ hps).symm
+        · simp at hparams
+      · simp only [bind_ok, reject_ne_ok, false_and, exists_false] at hparams
 
 /-- What the error classes among `ds` do to the state: they add themselves to
 the error classes, in order, and change nothing else. Each has a name that no

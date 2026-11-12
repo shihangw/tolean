@@ -662,6 +662,13 @@ through the functions of `m` is at most as long as the module, so that many
 steps decide it. -/
 def mayThrow (m : Module) (name : String) : Bool := mayThrowIn m (m.decls.length + 1) name
 
+/-- The type argument that `Stmt.hoisted` puts on `new C(message, args)` when
+it rewrites `throw new C(args)` for an error class `C`. No construction of
+the source has it, because the parser reads no type named by a quote. So a
+source `new C(…)` with one argument more than the constructor takes cannot
+pass for a rewritten one. -/
+def hoistedMark : TypeExpr := .keyword default "'"
+
 /-- `e` is a name or a literal, which hoisting would only rename. -/
 def Expr.isAtom : Expr → Bool
   | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => true
@@ -767,18 +774,22 @@ def Expr.hoist (thr : String → Bool) (cls : String → Option (Option (List Ct
   | .cond s t a b => let (t', h) := Expr.hoist thr cls h t; (.cond s t' a b, h)
   -- `new C(args)` for an error class `C` of the file: each argument moves out
   -- to a name, and the message of the class, written over those names,
-  -- comes first: `new C(message, args)`. So the statement that runs the
-  -- constructor needs no scope of its own.
+  -- comes first: `new C(message, args)`, with `hoistedMark` as the type
+  -- argument. So the statement that runs the constructor needs no scope of
+  -- its own. A construction with the wrong number of arguments stays as it
+  -- is, and so has no mark.
   | .new s c ts args =>
     match cls c with
     | some ctor =>
       let (args', h) := Expr.hoistAtoms thr cls h args
-      match ctor with
-      | none => (.new s c ts args', h)
-      | some (params, message) =>
-        if params.length == args'.length then
-          (.new s c ts (Expr.subst ((params.map (·.param.name)).zip args') message :: args'), h)
-        else (.new s c ts args', h)
+      if ts.isEmpty then
+        match ctor with
+        | none => if args'.length == 1 then (.new s c [hoistedMark] args', h) else (.new s c ts args', h)
+        | some (params, message) =>
+          if params.length == args'.length then
+            (.new s c [hoistedMark] (Expr.subst ((params.map (·.param.name)).zip args') message :: args'), h)
+          else (.new s c ts args', h)
+      else (.new s c ts args', h)
     | none => let (args', h) := Expr.hoistOperands thr cls h args; (.new s c ts args', h)
   | e => (e, h)
 termination_by structural e => e
@@ -1334,10 +1345,12 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     let .str s ← eval m fuel env msg | none
     return .error "Error" [("message", .str s)]
   -- `new C(message, args)` for an error class `C` of the file, as
-  -- `Stmt.hoisted` writes it: the object has the message, then a property
-  -- for each `readonly` parameter with its argument (ECMA-262 §20.5.1.1 for
-  -- `Error`, and §15.7.14 for the fields of a derived class).
-  | .new _ c [] (msg :: args) =>
+  -- `Stmt.hoisted` writes it, with its mark: the object has the message,
+  -- then a property for each `readonly` parameter with its argument
+  -- (ECMA-262 §20.5.1.1 for `Error`, and §15.7.14 for the fields of a
+  -- derived class). A construction without the mark has the wrong number
+  -- of arguments, and the model gives no value.
+  | .new _ c [.keyword _ "'"] (msg :: args) =>
     match errorClassIn m c with
     | none => none
     | some ctor =>

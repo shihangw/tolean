@@ -382,6 +382,9 @@ structure ClassInfo where
   file : String
   name : String
   exported : Bool := false
+  /-- The class declares a constructor. Without one, `new C(m)` takes only
+  the message. -/
+  hasCtor : Bool := false
   params : List (String × Ty × Bool)
 
 /-- The fields of an error of the class, with their types: the `readonly`
@@ -487,8 +490,8 @@ structure Ctx where
   before the declarations translate. -/
   errorClasses : List ClassInfo := []
   /-- The error classes declared so far, in the order of the declarations. A
-  `throw` may make an error only of a class declared before its function:
-  JS does not hoist a class. -/
+  `throw` may make an error only of a class declared before its function, as
+  a call may name only a function declared earlier. -/
   declaredClasses : List String := []
   currentFunction : String := ""
   /-- The type parameters of the function being translated. -/
@@ -2726,7 +2729,8 @@ def translateThrow (env : Env) (value : Expr) : TM IR.Body := do
     let code ← translateExpr (← fuelLimit) env (some .string) msg
     unless code.type == .string do reject msg.span "the message of an Error must be a string"
     return .throw ((← get).wrapError (IR.Expr.error code.value))
-  | .new sn c [] (msg :: atoms) =>
+  -- `new C(message, args)` with the mark of `Eval.Stmt.hoisted`.
+  | .new sn c [.keyword _ "'"] (msg :: atoms) =>
     let ctx ← get
     let some info := env.classes.find? (·.name == c)
       | reject value.span "tolean supports only 'throw new Error(message)', or 'throw new C(…)' for an error class C of this file"
@@ -2741,6 +2745,14 @@ def translateThrow (env : Env) (value : Expr) : TM IR.Body := do
       pure ca
     let marks := some "message" :: info.params.map fun (n, _, ro) => if ro then some n else none
     return .throw (.ext (.errorCase ⟨ctx.file, "Thrown"⟩ c marks) (code.value :: codes.map (·.value)))
+  -- A construction of an error class that the hoisting left alone has the
+  -- wrong number of arguments.
+  | .new _ c _ _ =>
+    match env.classes.find? (·.name == c) with
+    | some info =>
+      let n := if info.hasCtor then info.params.length else 1
+      reject value.span s!"'{c}' takes {n} argument{if n == 1 then "" else "s"}"
+    | none => reject value.span "tolean supports only 'throw new Error(message)', or 'throw new C(…)' for an error class C of this file"
   | _ => reject value.span "tolean supports only 'throw new Error(message)', or 'throw new C(…)' for an error class C of this file"
 
 /-- The places of a pattern on a tuple `v` of `size` elements, from the
@@ -3856,6 +3868,10 @@ def translateCtorParam (p : CtorParam) : TM (String × Ty × Bool) := do
   if p.param.optional then reject p.param.span "a parameter of a constructor may not be optional"
   let type ← orReject p.param.type p.param.span "parameters must be plain, typed identifiers"
   let pname ← checkLocalName p.param.span p.param.name
+  -- JS assigns a parameter property after `super(…)` returns, so one named
+  -- `message` would replace the message. `Error` owns the others too.
+  if ["message", "name", "stack", "cause"].contains pname then
+    reject p.param.span s!"a parameter of an error class may not be named {pname}, which Error owns"
   let ty ← translateType type
   unless ty matches .bigint | .number | .boolean | .string do
     reject p.param.span "a parameter of an error class must be a bigint, a number, a boolean or a string"
@@ -3867,6 +3883,8 @@ the `throw`s of the file. -/
 def translateErrorClass (s : Span) (exported : Bool) (name : String) (ctor : Option (List CtorParam × Expr)) :
     TM ClassInfo := do
   let name ← checkName s name
+  if name == "error" then
+    reject s "an error class may not be named error, the constructor of Thrown for new Error(message)"
   declareTopLevel s name
   -- The checks of the constructor read the state and change nothing.
   let params ← isolated <| match ctor with
@@ -3877,13 +3895,18 @@ def translateErrorClass (s : Span) (exported : Bool) (name : String) (ctor : Opt
         reject s "a parameter of the constructor is declared twice"
       -- The message is a string over the parameters. A `throw` writes it
       -- over the arguments, which `Eval.Stmt.hoisted` has moved to names.
+      -- The classes come before the functions of the file, so it may call
+      -- none of them.
+      unless (Eval.Expr.callNames message).isEmpty do
+        reject message.span ("the message of an error class may not call a function; " ++
+          "it is an expression over the parameters of the constructor")
       let ctx ← get
       let env : Env := params.foldl (fun env (n, t, _) => env.add { name := n, binding := .param, type := t })
         { functions := ctx.functions, unions := ctx.knownUnions, enums := ctx.enumValues }
       let code ← isolated (translateExpr (← fuelLimit) env (some .string) message)
       unless code.type == .string do reject message.span "the message of an error must be a string"
       pure params
-  let info : ClassInfo := { file := (← get).file, name, exported, params }
+  let info : ClassInfo := { file := (← get).file, name, exported, hasCtor := ctor.isSome, params }
   modify fun c => { c with errorClasses := c.errorClasses ++ [info] }
   return info
 

@@ -2476,12 +2476,12 @@ theorem zip_codes_sim {env : Translate.Env} {β : Type} {g : Expr × β → TM C
 /-- `throw new C(m, args)` for an error class `C` of the file: the output
 throws the constructor of `Thrown` for `C`, on the message and the arguments
 that set a field, which is the error that the interpreter makes. -/
-theorem throwClass_sim {env : Translate.Env} {s sn : Span} {c : String} {msg : Expr} {atoms : List Expr}
+theorem throwClass_sim {env : Translate.Env} {s sn tsp : Span} {c : String} {msg : Expr} {atoms : List Expr}
     {code : IR.Expr} {codes : List IR.Expr} {info : ClassInfo} {thrown : DeclRef} {tail : Tail}
     (hinfo : info ∈ env.classes) (hname : info.name = c) (hlen : codes.length = info.params.length)
     (hsim : Sim (N := N) m fs fuel env msg code) (hsims : SimList (N := N) m fs fuel env atoms codes)
     (hc : env.has c = false) :
-    StmtSim (N := N) m fs fuel env tail [.throwStmt s (.new sn c [] (msg :: atoms))]
+    StmtSim (N := N) m fs fuel env tail [.throwStmt s (.new sn c [.keyword tsp "'"] (msg :: atoms))]
       (.throw (.ext (.errorCase thrown c (some "message" :: info.params.map fun (n, _, ro) => if ro then some n else none))
         (code :: codes))) := by
   intro ρs ρo ha hs
@@ -2523,7 +2523,7 @@ theorem throwClass_sim {env : Translate.Env} {s sn : Span} {c : String} {msg : E
     simp only [Eval.execStmt]
     rw [Eval.eval]
     · simp [hctor, hs.none hc, hsim ρs ρo _ ha hs hm, hsims ρs ρo vs ha hs hvs, hnum, hl, hlen]
-    all_goals (intro h; exact absurd h ‹_›)
+    all_goals (intros; simp_all)
   · intro brk ρo' hv
     obtain ⟨t, vs, ho, -, -⟩ := hout _ hv
     cases brk <;> simp [endOf] at ho
@@ -2552,7 +2552,7 @@ theorem translateThrow_sound (hc : CallsAgree (N := N) m.program fs fuel) {env :
         exact throw_sim m fs fuel _ (fun ρs ρo w ha hs hw => hsim ρs ρo w ha hs (by rwa [eval_value] at hw))
           (by simpa using herr)
       · simp at h
-  · next _ c msg atoms _ =>
+  · next _ c _ msg atoms =>
     simp only [bind_ok, get_ok] at h
     obtain ⟨_, _, ⟨rfl, rfl⟩, h⟩ := h
     cases hfind : env.classes.find? (·.name == c) with
@@ -2589,6 +2589,8 @@ theorem translateThrow_sound (hc : CallsAgree (N := N) m.program fs fuel) {env :
             · simp at h
           · simp at h
       · simp at h
+  · next _ _ c _ _ _ _ =>
+    cases hfind : env.classes.find? (·.name == c) <;> simp [hfind] at h
   · simp at h
 
 /-- A declaration, a case of `stmts_sound`, on its own so that the mutual
