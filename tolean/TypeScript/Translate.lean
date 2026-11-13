@@ -3043,6 +3043,36 @@ def translateDestructure (tr : Option Ty → Expr → TM Code) (k : Env → TM I
   let rest ← k env'
   orReject (destructureBody p t (withType code.value t code.type) reads rest) s "a pattern must declare a name"
 
+/-- Where a local function may stand. -/
+def localFunctionPlace : String :=
+  "a local function must stand in the body of the function around it, " ++
+    "outside every branch, loop and other local function"
+
+mutual
+
+/-- `s` declares a local function, itself or in a block, a branch or a loop
+inside it. -/
+def stmtDeclaresFunction : Stmt → Bool
+  | .funDecl .. => true
+  | .block _ body => stmtsDeclareFunction body
+  | .ifStmt _ _ t (some e) => stmtDeclaresFunction t || stmtDeclaresFunction e
+  | .ifStmt _ _ t none => stmtDeclaresFunction t
+  | .forOfStmt _ _ _ _ body | .forOfPattern _ _ _ _ body | .forStmt _ _ _ _ body | .whileStmt _ _ body =>
+    stmtDeclaresFunction body
+  | _ => false
+
+def stmtsDeclareFunction : List Stmt → Bool
+  | [] => false
+  | s :: rest => stmtDeclaresFunction s || stmtsDeclareFunction rest
+
+end
+
+/-- Why a branch or a loop body that seems to change no local is refused. A
+local function there is the real reason: the analysis of changes does not
+see what its calls change, and a local function may not stand there anyway. -/
+def noChangeReason (statements : List Stmt) (reason : String) : String :=
+  if stmtsDeclareFunction statements then localFunctionPlace else reason
+
 /-- `for (const [k, v] of xs) body`, then the statements after it, as
 `translateLoop` translates a loop. The fold binds each element to the first
 name of the pattern, and the body starts by binding the names of the pattern
@@ -3059,7 +3089,8 @@ def translateForOfPattern (items : TM Code) (kBody : Env → Tail → List Stmt 
     reject s "a loop body may return only where the statements after the loop end in a return"
   let breaks := bodyStatements.any (containsJump true false)
   let names := changedNames bodyStatements env
-  if names.isEmpty && !returns then reject s "a loop must change a local or return"
+  if names.isEmpty && !returns then
+    reject s (noChangeReason bodyStatements "a loop must change a local or return")
   let (elemType, loopItems) ← loopItems iterable body (← items)
   let x ← orReject p.names.head? s "a pattern must declare a name"
   let reads ← patternReads s p ⟨.var x, false, elemType⟩
@@ -3186,8 +3217,7 @@ def translateLocalHead (env : Env) (s : Span) (name : String) (typeParams : List
     (params : List Param) (returnType : Option TypeExpr) (body : Stmt) (tail : Tail) : TM LocalFn := do
   let ctx ← get
   unless tail.isRet && !ctx.inLocal do
-    reject s ("a local function must stand in the body of the function around it, " ++
-      "outside every branch, loop and other local function")
+    reject s localFunctionPlace
   unless typeParams.isEmpty do reject s "a local function may not have type parameters"
   let some returnType := returnType | reject s "a local function needs a return type"
   if body.mentions name then reject s s!"'{name}' calls itself, which a local function may not do yet"
@@ -3497,7 +3527,8 @@ def translateIf (fuel : Nat) (env : Env) (s : Span) (test : Expr) (thenBranch : 
   if (thenStatements ++ elseStatements).any (containsJump true true) then
     reject s "a branch that does not always return may not return, throw, break or continue"
   let names := changedNames (thenStatements ++ elseStatements) env
-  if names.isEmpty then reject s "an if without a return must change a local"
+  if names.isEmpty then
+    reject s (noChangeReason (thenStatements ++ elseStatements) "an if without a return must change a local")
   let tested := match nullTest, tagTest with
     | some (name, _, _, _), _ => some name
     | none, some t => some t.name
@@ -3654,7 +3685,8 @@ def translateLoop (fuel : Nat) (env : Env) (s : Span) (head : LoopHead) (body : 
     reject s "a loop body may return only where the statements after the loop end in a return"
   let breaks := bodyStatements.any (containsJump true false)
   let names := changedNames bodyStatements env
-  if names.isEmpty && !returns then reject s "a loop must change a local or return"
+  if names.isEmpty && !returns then
+    reject s (noChangeReason bodyStatements "a loop must change a local or return")
   let (element, elemType, loopItems) ← loopHead env s body head
   let bodyEnv ← declare env s element .const elemType
   let bodyOut ← translateStatements fuel bodyEnv (.loop names breaks returns) bodyStatements

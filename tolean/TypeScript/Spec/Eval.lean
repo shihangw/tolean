@@ -1373,9 +1373,16 @@ def execStmt (m : Scope) (fuel : Nat) (env : Env N) : Stmt → Option (Outcome N
     | .brk env' => some (.brk (env'.drop (env'.length - env.length)))
     | .cont env' => some (.cont (env'.drop (env'.length - env.length)))
   -- A function declaration in a block (ECMA-262 §15.2.4) binds its name to
-  -- the function. JS binds it when the block starts, so a call may come
-  -- before the declaration; the translator refuses such a call.
-  | .funDecl _ name _ params _ body => some (.normal ((name, .closure (params.map (·.name)) body) :: env))
+  -- the function. JS binds every declaration of a block when the block
+  -- starts, so a call may come before the declaration, and a second
+  -- declaration of the name replaces the first for every call. The model
+  -- binds the name where the declaration stands, so it gives no value for a
+  -- name that is bound already: a second declaration, or a `let` of the
+  -- same name. A call before the declaration is a gap that
+  -- `interpreter.test.ts` lists, and the translator refuses it.
+  | .funDecl _ name _ params _ body =>
+    if (env.lookup name).isSome then none
+    else some (.normal ((name, .closure (params.map (·.name)) body) :: env))
   | _ => none
 termination_by s => (fuel, sizeOf s, 0)
 

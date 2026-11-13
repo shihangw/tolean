@@ -3204,6 +3204,7 @@ theorem localReturn_sim {env : Translate.Env} {s cs sp' : Span} {args : List Exp
 it out. -/
 theorem funDecl_sim {env env' : Translate.Env} {s : Span} {name : String} {tps : List String}
     {params : List Param} {rt : Option TypeExpr} {body : Stmt} {rest : List Stmt} {rb : IR.Body}
+    (hfresh : env.has name = false)
     (hhas : ∀ x, env'.has x = (env.has x || x == name)) (hfun : env'.functions = env.functions)
     (henum : env'.enums = env.enums)
     (hrest : StmtSim (N := N) m fs fuel env' .ret rest rb) :
@@ -3231,7 +3232,7 @@ theorem funDecl_sim {env env' : Translate.Env} {s : Span} {name : String} {tps :
     simpa [IR.Body.exec, IR.Expr.eval, IR.Expr.evalList, IR.ExprExt.apply] using ho
   have hstep : Eval.exec m fuel ρs (.funDecl s name tps params rt body :: rest) =
       Eval.exec m fuel ((name, w) :: ρs) rest := by
-    simp [Eval.exec, Eval.execStmt, w]
+    simp [Eval.exec, Eval.execStmt, w, hs.none hfresh]
   constructor
   · intro v hv
     rw [hstep]
@@ -3329,8 +3330,8 @@ theorem translateFunDecl_sound {F : Nat}
   simp only [bind_ok, pure_ok] at h
   obtain ⟨fn, c₁, hhead, b, c₂, hb, env', c₃, hdecl, rb, c₄, hrb, rfl, -⟩ := h
   obtain rfl := translateLocalHead_tail hhead
-  obtain ⟨-, rfl, -⟩ := declare_ok hdecl
-  refine funDecl_sim m fs fuel (fun x => ?_) ?_ ?_ (ihS _ _ _ _ _ _ hrb)
+  obtain ⟨hfresh, rfl, -⟩ := declare_ok hdecl
+  refine funDecl_sim m fs fuel hfresh (fun x => ?_) ?_ ?_ (ihS _ _ _ _ _ _ hrb)
   rotate_left
   · rfl
   · rfl
