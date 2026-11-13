@@ -434,6 +434,7 @@ the file, the line and the reason. It never approximates.
 | A function that calls itself, where each call passes a part of one parameter, the same one in every call. A part is a field of it, a value that a test of `null`, `undefined` or a tag narrows it to, an element of an array in it, an element of a tuple in it, or a part of one of these. | The same `def`, followed by `termination_by p` for the parameter `p`, and `decreasing_by all_goals tolean_decreasing`. Each call passes a value that is smaller by `sizeOf`, and the tactic from `tolean.TypeScript.Decreasing` proves it, so Lean checks that the function ends. Each `match` in such a function names the equation of its value `_h'`, which the tactic reads. Lean defines the function by well-founded recursion, so a claim unfolds it with `unfold` or `simp`, not with `rfl` or `decide`. |
 | `throw new Error(m)`, where `m` is a `string`, as the last statement of a function, of a loop body, or of a branch | `throw (JSError.mk m)`. A function that can throw returns `Except JSError R`, and each value that it returns is `pure` of the value. `JSError`, in `tolean/TypeScript/Spec/Error.lean`, holds the message. |
 | `const x = f(a)`, `let x = f(a)` or `return f(a)`, where `f` can throw | `f a >>= fun x => …`, which passes the error of the call on. So the function that holds the call can throw too. |
+| A call of `f` inside a larger expression, such as `return f(a) + 1n`, where JS evaluates the call whenever it evaluates the statement | `f a >>= fun r0' => …` before the statement, which reads `r0'` in place of the call. Each operand that JS evaluates before the call, such as `x.count` in `x.count + f(a)`, moves out first, to a `let` of its own, so the output runs the same operations in the same order. A literal whose parts are all literals stays, because it reads nothing and runs nothing, and its type comes from its position. The interpreter runs the statements in this form too (`Eval.Stmt.hoisted`), so the translator translates the body the interpreter runs. |
 | A loop whose body can throw, by a `throw` or a call of a function that can, and that changes a local or returns | The same fold in the `Except` monad: `List.foldlM`, or `forIn` without `Id.run`, followed by `>>= fun (x, y) =>` for the statements after the loop. Each run of the body ends in `pure` of its state, or throws. |
 | An `if` or a `switch` that changes locals, where a branch can throw | `(if c then throw e else pure (x, y)) >>= fun (x, y) =>`, so that the statements after it take the state from the branch that did not throw |
 | `const x = e`, `let x = e` | `let x := e` |
@@ -507,8 +508,14 @@ the file, the line and the reason. It never approximates.
 Tolean rejects these, among others:
 
 - `try` and `catch`, and a `throw` of anything but `new Error(message)`. It
-  also rejects a call of a function that can throw anywhere but as the whole
-  value of a declaration or a `return`.
+  also rejects a call of a function that can throw where JS may not evaluate
+  it, or evaluates it more than once: in a branch of `?:`, after `&&`, `||`
+  or `??`, in the test or the update of a counted `for` loop, or in an arrow
+  function. A call of an imported function that can throw must be the whole
+  value of a declaration or a `return`, because the hoisting decides which
+  functions can throw from the file alone and does not follow imports yet.
+  The same holds for a function of the file that can throw only through an
+  imported function.
 
 - Fractional or unsafe `number` literals, such as `0.5` and `2 ** 53`. It also
   rejects `%` on `number`, because no law covers it yet, and the functions of
