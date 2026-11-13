@@ -10,9 +10,13 @@
  *
  * - When the interpreter gives a value, Node returns the same value. This
  *   holds for every program that the parser accepts, in the subset or not,
- *   except for one gap that the plan for pure TypeScript lists and the
- *   random programs do not reach: an assignment to the variable of a
- *   `for (const x of xs)` loop.
+ *   except for two gaps that the random programs do not reach. The first,
+ *   which the plan for pure TypeScript lists, is an assignment to the
+ *   variable of a `for (const x of xs)` loop. The second is a call of a local
+ *   function before its declaration, where a function of the module has the
+ *   same name: JS binds the local function when its block starts, but the
+ *   interpreter binds it where the declaration stands, so the call runs the
+ *   function of the module. The translator refuses both.
  * - When the interpreter says that a call throws a value, Node throws the
  *   same value. An `Error` compares by its class and its message.
  * - When the translator accepts the program and the interpreter gives no
@@ -314,6 +318,29 @@ test('the interpreter binds a parameter that a call leaves out to undefined', as
   }
 });
 
+// JS binds every function declaration of a block when the block starts, so a
+// second declaration of `g` replaces the first for both calls, and Node gives
+// 20n. The interpreter binds each where it stands, so it must give no value.
+test('the interpreter gives no value for a function declared twice in a block', () => {
+  const source = [
+    'export function f(): bigint {',
+    '  let t = 0n;',
+    '  function g(): void { t += 1n; }',
+    '  g();',
+    '  function g(): void { t += 10n; }',
+    '  g();',
+    '  return t;',
+    '}',
+  ].join('\n');
+  const input = { programs: [{ source, calls: [{ function: 'f', args: [] }] }] };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const [lean] = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  expect(lean?.parsed).toBe(true);
+  if (lean === undefined || !lean.parsed) return;
+  expect(lean.results).toEqual([null]);
+});
+
 // An assignment to a `const` throws a `TypeError` in Node, so the interpreter
 // must give no value for it, whatever the operator.
 // A difference of keys is consistent only when every key is finite. The spec
@@ -370,6 +397,55 @@ test('the interpreter keeps the lone surrogates that split gives', async () => {
   const value = lean?.results[0]?.value;
   expect(value).toEqual([{ utf16: [0xd83d] }, { utf16: [0xde00] }]);
   expect(canonical(value as Value)).toBe(canonical(encode('😀'.split(''))));
+});
+
+// A spread of a string gives its code points: a surrogate pair stays one
+// string, and a lone surrogate is a string of its own, not U+FFFD.
+test('the interpreter iterates a string by code point', async () => {
+  const source = 'export function chars(s: string): ReadonlyArray<string> { return [...s]; }';
+  const s = 'a😀\ud800b\udc00';
+  const input = { programs: [{ source, calls: [{ function: 'chars', args: [encode(s)] }] }] };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const [lean] = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  expect(lean?.accepted).toBe(true);
+  const value = lean?.results[0]?.value;
+  expect(value).toEqual(['a', '😀', { utf16: [0xd800] }, 'b', { utf16: [0xdc00] }]);
+  expect(canonical(value as Value)).toBe(canonical(encode([...s])));
+});
+
+// ToString of a number is abstract in the proofs, but the interpreter writes
+// it, and it must write what Node writes: the fewest digits that read back as
+// the same double, in the format of Number::toString.
+test('the interpreter converts numbers to strings as Node does', async () => {
+  const source = 'export function text(x: number): string { return "" + x; }';
+  const xs = [0.1, 0.1 + 0.2, 1 / 3, -0, NaN, Infinity, -Infinity, 1e21, 1e20, 123e-20, 1e-6, 1e-7,
+    5e-324, Number.MAX_VALUE, 2 ** 53, 2 ** -1022, -1.5, 4.35, 100, 9007199254740993];
+  for (let i = 0; i < 200; i++) xs.push(Math.random() * 10 ** Math.floor(Math.random() * 60 - 30));
+  const input = { programs: [{ source, calls: xs.map((x) => ({ function: 'text', args: [encode(x)] })) }] };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const [lean] = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  expect(lean?.accepted).toBe(true);
+  expect(lean?.results.map((r) => r.value)).toEqual(xs.map((x) => encode(String(x))));
+});
+
+// `JSON.stringify` is opaque in the proofs, but the interpreter writes its
+// text, which must be the text that Node writes: an optional field that is
+// missing is left out, and quotes, control characters and lone surrogates
+// are escaped. The translator refuses an object here, because a caller
+// chooses the order of its keys, but the interpreter runs it.
+test('the interpreter writes the text of JSON.stringify', async () => {
+  const source = [
+    'export interface P { readonly name: string; readonly tags: ReadonlyArray<boolean>; readonly note?: string }',
+    'export function render(p: P): string { return JSON.stringify(p); }',
+  ].join('\n');
+  const p = { name: 'a"b\\c\n\u0001\ud800😀', tags: [true, false] };
+  const input = { programs: [{ source, calls: [{ function: 'render', args: [encode(p)] }] }] };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const [lean] = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  expect(canonical(lean?.results[0]?.value as Value)).toBe(canonical(encode(JSON.stringify(p))));
 });
 
 // A JS loop over a set, a map or an array sees a change that its body makes
