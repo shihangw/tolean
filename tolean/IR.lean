@@ -1441,7 +1441,11 @@ def Body.lines (names : Names) (monadic : Bool := false) : Body T E → List Str
   | .throw e => [wrapped "throw" (e.print names)]
   | .bind name ref args rest =>
     s!"{(Expr.call ref args).print names} >>= fun {name} =>" :: rest.lines names monadic
-  -- A call whose value the body returns at once is that value.
+  -- A call whose value the body returns at once is that value. The lifted
+  -- body of the call is not printed here: `printFunction` prints the body
+  -- that the declaration gave, and the translator checks that each call's
+  -- body prints the same (`translateLocalCall`), so the printed `f.g` and
+  -- the body that `Body.exec` runs at a call are one function.
   | .letCall ns ref _ _ _ _ _ _ args rest =>
     let call := (Expr.call ref args).print names
     match ns, rest with

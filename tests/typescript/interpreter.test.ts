@@ -10,13 +10,16 @@
  *
  * - When the interpreter gives a value, Node returns the same value. This
  *   holds for every program that the parser accepts, in the subset or not,
- *   except for two gaps that the random programs do not reach. The first,
+ *   except for three gaps that the random programs do not reach. The first,
  *   which the plan for pure TypeScript lists, is an assignment to the
  *   variable of a `for (const x of xs)` loop. The second is a call of a local
  *   function before its declaration, where a function of the module has the
  *   same name: JS binds the local function when its block starts, but the
  *   interpreter binds it where the declaration stands, so the call runs the
- *   function of the module. The translator refuses both.
+ *   function of the module. The third is a declaration, between a local
+ *   function and a call of it, that hides a name the local function reads:
+ *   JS keeps the variable of the declaration, and the interpreter takes the
+ *   one in scope at the call. The translator refuses all three.
  * - When the interpreter says that a call throws a value, Node throws the
  *   same value. An `Error` compares by its class and its message.
  * - When the translator accepts the program and the interpreter gives no
