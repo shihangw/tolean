@@ -372,6 +372,21 @@ test('the interpreter keeps the lone surrogates that split gives', async () => {
   expect(canonical(value as Value)).toBe(canonical(encode('😀'.split(''))));
 });
 
+// A spread of a string gives its code points: a surrogate pair stays one
+// string, and a lone surrogate is a string of its own, not U+FFFD.
+test('the interpreter iterates a string by code point', async () => {
+  const source = 'export function chars(s: string): ReadonlyArray<string> { return [...s]; }';
+  const s = 'a😀\ud800b\udc00';
+  const input = { programs: [{ source, calls: [{ function: 'chars', args: [encode(s)] }] }] };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const [lean] = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  expect(lean?.accepted).toBe(true);
+  const value = lean?.results[0]?.value;
+  expect(value).toEqual(['a', '😀', { utf16: [0xd800] }, 'b', { utf16: [0xdc00] }]);
+  expect(canonical(value as Value)).toBe(canonical(encode([...s])));
+});
+
 // A JS loop over a set, a map or an array sees a change that its body makes
 // to what it runs over, and the interpreter takes the values when the loop
 // starts. So it must give no value for such a loop, however the iterable

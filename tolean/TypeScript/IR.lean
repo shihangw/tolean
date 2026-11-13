@@ -148,6 +148,9 @@ inductive ExprExt where
   arguments: `s.startsWith(p)`. `indexOf` gives an index, which the output
   makes a number: `(JSNumber.ofSafeInt (N := N) (JSString.indexOf s p))`. -/
   | stringMethod (method : StringMethod)
+  /-- `(JSString.codePoints s)`, on `s`: the strings that `for (const c of s)`
+  and `[...s]` visit, one for each code point. -/
+  | stringCodePoints
   /-- `match k with | K.a => r.a | …`, on `r` and `k`: `r[k]`, where `r` is a
   `Record<K, V>` with the keys `keys`, and `K` is the literal union `key`. -/
   | recordGet (key : DeclRef) (keys : List String)
@@ -372,6 +375,7 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
       s!"{" ".intercalate (args.map argument)}))"
   | .stringMethod method, args =>
     s!"({leanName names "JSString"}.{method.name} {" ".intercalate (args.map argument)})"
+  | .stringCodePoints, [s] => s!"({leanName names "JSString"}.codePoints {argument s})"
   | .undefined, _ => leanName names "none"
   | .isUndefined, [a] => s!"{argument a}.isNone"
   | .isDefined, [a] => s!"{argument a}.isSome"
@@ -442,7 +446,7 @@ instance : tolean.IR.PrintOp ExprExt := ⟨ExprExt.print⟩
 An operation on strings may stand where no string type or literal is in
 sight, such as `a.key < b.key` on an interface of another file. -/
 def ExprExt.usesString : ExprExt → Bool
-  | .stringOrder _ | .stringAppend .. | .stringLength | .stringMethod _ => true
+  | .stringOrder _ | .stringAppend .. | .stringLength | .stringMethod _ | .stringCodePoints => true
   | _ => false
 
 /-- The operation names `JSDate`, so the output imports its model. -/

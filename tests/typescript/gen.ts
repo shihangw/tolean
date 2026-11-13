@@ -358,6 +358,9 @@ export class Gen {
         // `split` with a string separator gives an array of strings.
         if (t.of.k === 'string') {
           options.push(() => `(${this.expr(STRING, vars, d)}).split(${this.expr(STRING, vars, d)})`);
+          // A spread of a string gives its code points, so a surrogate pair
+          // stays one string and a lone surrogate is a string of its own.
+          options.push(() => `[...${this.expr(STRING, vars, d)}]`);
         }
         break;
       default:
