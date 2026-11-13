@@ -405,6 +405,7 @@ def numberLaws : List Name := [``SafeIntLaws.add,
     ``SpecialValueLaws.nan_floor, ``SpecialValueLaws.nan_ceil, ``SpecialValueLaws.nan_trunc,
     ``SpecialValueLaws.nan_round, ``SpecialValueLaws.nan_abs, ``SpecialValueLaws.nan_min,
     ``SpecialValueLaws.nan_max, ``SafeIntLaws.toInt, ``SpecialValueLaws.toInt_not_finite,
+    ``SpecialValueLaws.toInt_finite, ``SpecialValueLaws.toInt_trunc,
     ``SafeIntLaws.ofInt, ``SpecialValueLaws.negZero_eq_zero, ``SpecialValueLaws.negZero_ofSafeInt,
     ``SpecialValueLaws.nan_not_negZero]
 

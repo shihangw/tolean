@@ -443,7 +443,7 @@ the lemmas for each kind of bound, so that the list keeps the shape
 `List.map enc xs` that the lemmas of callbacks match. -/
 @[simp high] theorem sliceList_map {α β : Type} (f : α → β) (xs : List α) (start : Int) (stop : Option Int) :
     Eval.sliceList (xs.map f) start stop = (Eval.sliceList xs start stop).map f := by
-  simp [Eval.sliceList, List.map_take, List.map_drop]
+  simp [Eval.sliceList, JSNumber.sliceInt, List.map_take, List.map_drop]
 
 /-- An element of a reversed list, with no side condition. -/
 theorem getElem?_rev {α : Type} (l : List α) (i : Nat) :
@@ -456,7 +456,7 @@ theorem getElem?_rev {α : Type} (l : List α) (i : Nat) :
 macro "slice_tac" : tactic => `(tactic| (
   apply List.ext_getElem?
   intro i
-  simp only [Eval.sliceList, Eval.relIndex, List.getElem?_take, List.getElem?_drop, getElem?_rev,
+  simp only [Eval.sliceList, JSNumber.sliceInt, JSNumber.clampIndex, List.getElem?_take, List.getElem?_drop, getElem?_rev,
     List.length_take, List.length_drop, List.length_reverse]
   repeat' split
   all_goals first
