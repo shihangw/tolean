@@ -737,9 +737,11 @@ def Stmt.leaks (n : String) : Stmt → Bool
   | .block _ ss => Stmt.leaksList n ss
   | .breakStmt _ | .continueStmt _ | .empty _ => false
   | .switchStmt _ d cs => d.leaks n || Stmt.leaksClauses n cs
-  -- A local function may hold any name of its block and return it, so the
-  -- test counts it as handing on every one.
-  | .funDecl .. => true
+  -- A local function may hold any name that it mentions and hand it on, so
+  -- the test counts it as handing on each of those. It cannot reach a name
+  -- that it does not mention: a call captures only the names that the body
+  -- names (`Eval.captures`).
+  | .funDecl _ name _ params _ b => name == n || params.any (·.name == n) || b.mentions n
 
 def Stmt.leaksList (n : String) : List Stmt → Bool
   | [] => false
