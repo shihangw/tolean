@@ -3131,7 +3131,8 @@ def translateForOfPattern (items : TM Code) (kBody : Env → Tail → List Stmt 
     reject s "a loop body may return only where the statements after the loop end in a return"
   let breaks := bodyStatements.any (containsJump true false)
   let names := changedNames bodyStatements env
-  if names.isEmpty && !returns then reject s "a loop must change a local or return"
+  if names.isEmpty && !returns then
+    reject s "a loop must change a local or return; a body that only throws does not count yet"
   let (elemType, loopItems) ← loopItems iterable body (← items)
   let x ← orReject p.names.head? s "a pattern must declare a name"
   let reads ← patternReads s p ⟨.var x, false, elemType⟩
@@ -3534,7 +3535,8 @@ def translateLoop (fuel : Nat) (env : Env) (s : Span) (head : LoopHead) (body : 
     reject s "a loop body may return only where the statements after the loop end in a return"
   let breaks := bodyStatements.any (containsJump true false)
   let names := changedNames bodyStatements env
-  if names.isEmpty && !returns then reject s "a loop must change a local or return"
+  if names.isEmpty && !returns then
+    reject s "a loop must change a local or return; a body that only throws does not count yet"
   let (element, elemType, loopItems) ← loopHead env s body head
   let bodyEnv ← declare env s element .const elemType
   let bodyOut ← translateStatements fuel bodyEnv (.loop names breaks returns) bodyStatements
