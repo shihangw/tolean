@@ -848,6 +848,8 @@ no call, so where it runs changes nothing that the model observes. Such an
 operand stays in place, because its type comes from its position. -/
 def Expr.isClosedLiteral : Expr → Bool
   | .number .. | .bigint .. | .string .. | .bool .. | .null _ => true
+  | .unary _ .neg (.number ..) | .unary _ .neg (.bigint ..) => true
+  | .paren _ e => Expr.isClosedLiteral e
   | .array _ es => Expr.isClosedLiteralList es
   | .object _ ps => Property.isClosedLiteralList ps
   | _ => false

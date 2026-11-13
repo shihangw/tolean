@@ -52,4 +52,14 @@ def f (x : Int) : (Except JSError Int) :=
   (checked x) >>= fun r4' =>
   (pure (r3' + (sum (([] : List Int)) r4')))
 
+def negated (x : Int) : (Except JSError Int) :=
+  (checked x) >>= fun r0' =>
+  let r1' := (g (({ a := (-(1 : Int)) } : P)) r0')
+  (checked x) >>= fun r2' =>
+  let r3' := (r1' + (h ((U.«a» (({ n := (-(2 : Int)) } : A)))) r2'))
+  (checked x) >>= fun r4' =>
+  let r5' := (r3' + (sum (([(-(1 : Int))] : List Int)) r4'))
+  (checked x) >>= fun r6' =>
+  (pure (r5' + (g (({ a := (1 : Int) } : P)) r6')))
+
 end Test
