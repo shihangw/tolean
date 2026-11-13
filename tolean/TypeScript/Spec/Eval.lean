@@ -855,6 +855,8 @@ def Stmt.callNames : Stmt → List String
       update.elim [] Expr.callNames ++ Stmt.callNames body
   | .block _ ss => Stmt.callNamesList ss
   | .switchStmt _ d cs => Expr.callNames d ++ Stmt.callNamesClauses cs
+  -- A local function runs where it is called, and its calls with it.
+  | .funDecl _ _ _ _ _ body => Stmt.callNames body
 
 def Stmt.callNamesList : List Stmt → List String
   | [] => []
@@ -877,6 +879,8 @@ def Stmt.hasThrow : Stmt → Bool
     Stmt.hasThrow body
   | .block _ ss => Stmt.hasThrowList ss
   | .switchStmt _ _ cs => Stmt.hasThrowClauses cs
+  -- A `throw` in a local function throws from the function that calls it.
+  | .funDecl _ _ _ _ _ body => Stmt.hasThrow body
   | .varDecl .. | .destructure .. | .exprStmt .. | .returnStmt .. | .breakStmt _ | .continueStmt _
   | .empty _ => false
 

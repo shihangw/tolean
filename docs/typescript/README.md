@@ -35,6 +35,13 @@ marks which links are proved, tested against a reference, or trusted.
   clause ends the `switch`, so it may stand outside a loop. The parser
   refuses a `case` test that uses `<` or `<<`, because a `:` does not end its
   search for a `>` after one, and a `switch` with two `default` clauses.
+- **Local functions:** a function declaration in a block of another function,
+  as at the top of the module but without `export`. Its body is a function of
+  its own, so a `break` or a `continue` in it cannot leave a loop around the
+  declaration. The parser refuses a function declaration as the body of an
+  `if` or a loop without a block around it, as JavaScript does, and one in a
+  block outside every function. The translator refuses every local function
+  for now.
 - **Expressions:** names; number, bigint, string, boolean and `null` literals;
   array and object literals, with shorthand and `key: value` properties;
   parentheses, member access, indexing and calls; the unary operators `!`,

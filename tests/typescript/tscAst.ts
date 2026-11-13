@@ -229,7 +229,7 @@ class Printer {
       return this.importDecl(s);
     }
     if (ts.isFunctionDeclaration(s)) {
-      return this.functionDecl(s);
+      return this.functionDecl(s, true);
     }
     if (ts.isInterfaceDeclaration(s)) {
       const exported = this.modifiers(s, [ts.SyntaxKind.ExportKeyword]).size > 0;
@@ -405,8 +405,11 @@ class Printer {
     });
   }
 
-  private functionDecl(s: ts.FunctionDeclaration): Sexp {
-    const exported = this.modifiers(s, [ts.SyntaxKind.ExportKeyword]).size > 0;
+  /** A function declaration: at the top of the module, where it may have
+   * `export`, or in a block of another function. Its body is a function of
+   * its own, so no loop is around it. */
+  private functionDecl(s: ts.FunctionDeclaration, topLevel: boolean): Sexp {
+    const exported = this.modifiers(s, topLevel ? [ts.SyntaxKind.ExportKeyword] : []).size > 0;
     if (s.asteriskToken !== undefined) {
       refuse(s, 'generator');
     }
@@ -416,9 +419,12 @@ class Printer {
     }
     const params = s.parameters.map((p) => this.param(p, true));
     const returnType = s.type === undefined ? [] : [this.type(s.type)];
+    const outer = { inFunction: this.inFunction, loopDepth: this.loopDepth };
     this.inFunction = true;
+    this.loopDepth = 0;
     const body = this.statement(s.body);
-    this.inFunction = false;
+    this.inFunction = outer.inFunction;
+    this.loopDepth = outer.loopDepth;
     return this.node(
       'function',
       s,
@@ -579,7 +585,7 @@ class Printer {
 
   /** The body of `if`, `else`, `for` or `while`. */
   private branch(s: ts.Statement): Sexp {
-    if (ts.isVariableStatement(s)) {
+    if (ts.isVariableStatement(s) || ts.isFunctionDeclaration(s)) {
       refuse(s, 'declaration without a block');
     }
     return this.statement(s);
@@ -690,6 +696,12 @@ class Printer {
     }
     if (ts.isEmptyStatement(s)) {
       return this.node('empty', s, [], []);
+    }
+    if (ts.isFunctionDeclaration(s)) {
+      if (!this.inFunction) {
+        refuse(s, 'function declaration in a block outside a function');
+      }
+      return this.functionDecl(s, false);
     }
     if (ts.isSwitchStatement(s)) {
       const clauses = s.caseBlock.clauses;
