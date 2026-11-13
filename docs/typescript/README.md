@@ -16,9 +16,14 @@ marks which links are proved, tested against a reference, or trusted.
 
 - **Declarations:** functions, with optional parameters such as `x?: T`,
   interfaces and type aliases, each of which may have type parameters such as
-  `<A, B>`, enums whose members are strings, and `const` and `let`. Each of
-  them may be exported, by `export` before it or by an export list such as
-  `export { a, type B }`.
+  `<A, B>`, enums whose members are strings, error classes, and `const` and
+  `let`. Each of them may be exported, by `export` before it or by an export
+  list such as `export { a, type B }`. An error class is
+  `class Name extends Error { constructor(params) { super(message); } }`, with
+  `readonly` allowed before a parameter, or the same with no constructor. The
+  parser refuses every other class: one that does not extend `Error`, a field,
+  a method, or any other statement in the constructor. The translator does
+  not translate error classes yet.
 - **Statements:** `const` and `let` declarations, array destructuring such as
   `const [a, , b, ...rest] = xs`, expression statements,
   `return`, `throw`, `if` and `else`, `for … of` with a name or an array
