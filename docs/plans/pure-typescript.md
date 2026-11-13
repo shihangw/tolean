@@ -142,9 +142,7 @@ This is the borrow that Aeneas uses for Rust. It is sound here only
 because the translator checks that the caller owns the map and holds no other
 name for it during the call. The spec's call rule now gives no value for a
 function that changes a parameter (`Stmt.ownsChanges`), so the borrow must
-also give the spec this meaning: the call copies the map in and back out. Key equality is SameValueZero. For `string` and
-`bigint` keys that is Lean's equality. For `number` keys it is Lean's
-equality only when no key is `NaN` or `-0`.
+also give the spec this meaning: the call copies the map in and back out.
 
 One certificate gap is left. The initial value of a `reduce` can read a map
 or a set that `new Map(items)` or `new Set(items)` makes from a parameter,
@@ -159,12 +157,9 @@ should refuse such an initial value.
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| `Math.min`, `Math.max`, `Math.floor`, `Math.ceil`, `Math.trunc` (§21.3.2.35), `Math.round` (§21.3.2.28), `Math.abs`, `Number.isInteger`, and `/` on `number` | New `JSNumber` operations, with laws for safe integers and for `NaN` and the infinities | `Math` functions whose results the spec allows to differ between engines, such as `Math.sin` (§21.3.2) |
-| `**` on `bigint` (§6.1.6.2.3), and the bitwise operators on `bigint` | The same operations on `Int` | `**` with a negative exponent, and `>>>`, because both throw on a `bigint` |
-| `BigInt(n)` (§21.2.1.1) and `Number(b)` (§21.1.1.1) | Conversions. `BigInt(n)` throws a `RangeError` when `n` is not an integer, so it uses the `Except` from the errors stage. | `Number(b)` on a `bigint` that is not a safe integer, until the model rounds to the nearest double |
-| The bitwise operators on `number` | `ToInt32` (§7.1.6) and the operation on 32-bit integers | |
-| `Object.is` (§20.1.2.15) | SameValue (§7.2.10), which tells `NaN` and `-0` apart | |
-| `new Date(t).toISOString()`, `Date.UTC`, `getTime`, and the UTC getters | A model of the time value (§21.4.1) | Local-time getters, setters, and `Date.now()` |
+| `**` on `bigint` (§6.1.6.2.3) whose exponent is not a literal | `a ^ b.toNat`, after a check that `b` is not negative, which needs the `Except` from the errors stage because JS throws a `RangeError` there | `>>>` on a `bigint`, because it throws |
+| `BigInt(n)` (§21.2.1.1) | A conversion that throws a `RangeError` when `n` is not an integer. The message of that error is up to the engine, so it needs the error classes of the errors stage, and a model of an error whose message the program cannot read. | |
+| `d.toISOString()` | The Date Time String Format of `JSDate`. It throws a `RangeError` for an invalid date, and the message is up to the engine, so it needs the error classes of the errors stage. | Local-time getters, setters, and `Date.now()` |
 | `Date.parse(s)` | Only when the translator can show that `s` is in the Date Time String Format (§21.4.1.32) | Any other string, because the spec leaves its result to the engine |
 
 `toISOString` throws a `RangeError` for an invalid date, so it uses the

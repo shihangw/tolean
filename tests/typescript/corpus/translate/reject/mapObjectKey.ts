@@ -1,4 +1,4 @@
-// expect: 6:22 a map key must be a bigint, a string, a boolean or a literal union of strings
+// expect: 6:22 a map key must be a number, a bigint, a string, a boolean or a literal union of strings
 interface P {
   readonly x: bigint;
 }
