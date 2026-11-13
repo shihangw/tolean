@@ -53,6 +53,10 @@ inductive Feature where
   /-- bigint `/` truncates toward zero and `%` takes the sign of the dividend:
   `BigInt::divide` and `BigInt::remainder`. -/
   | bigintDivision
+  /-- bigint `**`, `&`, `|`, `^`, `<<`, `>>` and `~`: BigInt::exponentiate,
+  BigInt::bitwiseAND, BigInt::bitwiseOR, BigInt::bitwiseXOR,
+  BigInt::leftShift, BigInt::signedRightShift and BigInt::bitwiseNOT. -/
+  | bigintBitwise
   /-- `??`: `CoalesceExpression`. -/
   | nullishCoalescing
   /-- `x?.f`: `OptionalExpression`. -/
@@ -87,7 +91,7 @@ def Feature.since : Feature → Edition
   | .exponent | .arrayIncludes | .trimWhiteSpace => .es2016
   | .objectSpread => .es2018
   | .trimStartEnd | .stableSort => .es2019
-  | .bigint | .bigintDivision | .nullishCoalescing | .optionalChaining => .es2020
+  | .bigint | .bigintDivision | .bigintBitwise | .nullishCoalescing | .optionalChaining => .es2020
   | .logicalAssignment | .numericSeparators => .es2021
   | .arrayAt => .es2022
   | .arrayFindLast | .arrayToSorted => .es2023
@@ -97,6 +101,7 @@ def Feature.describe : Feature → String
   | .objectSpread => "object spread '...'"
   | .bigint => "bigint"
   | .bigintDivision => "bigint '/' and '%'"
+  | .bigintBitwise => "bigint '**' and the bitwise operators"
   | .nullishCoalescing => "'??'"
   | .optionalChaining => "'?.'"
   | .logicalAssignment => "'&&=', '||=' and '??='"

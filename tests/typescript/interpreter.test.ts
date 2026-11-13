@@ -479,3 +479,39 @@ test('the interpreter gives no value where a changed collection has another hold
     expect(value === undefined ? 'no value' : canonical(value), source).toBe(canonical(encode(mod.f(true))));
   }
 });
+
+// A map or a set compares number keys with SameValueZero, not `===`: `NaN` is
+// the same key as `NaN`, and `0` the same as `-0`. A new key `-0` is stored as
+// `0`, which a loop over the keys shows. The random programs rarely build these
+// cases, so each one is here, and the interpreter must agree with Node on it.
+test('the interpreter compares number keys of a map or a set with SameValueZero', async () => {
+  const fn = (ret: string, body: string) => `export function f(b: boolean): ${ret} { ${body} }`;
+  const sources = [
+    fn('number', 'const s = new Set<number>(); s.add(NaN); s.add(NaN); return s.size;'),
+    fn('boolean', 'const s = new Set<number>([NaN]); return s.has(NaN);'),
+    fn('number', 'const s = new Set<number>([0, -0]); return s.size;'),
+    fn('boolean', 'const s = new Set<number>(); s.add(-0); return s.has(0);'),
+    fn('number', 'const s = new Set<number>(); s.add(-0); let x = 1; for (const e of s) { x = e; } return x;'),
+    fn('number', 'const s = new Set<number>([NaN, 1]); s.delete(NaN); return s.size;'),
+    fn('bigint', 'const m = new Map<number, bigint>(); m.set(NaN, 1n); m.set(NaN, 2n); return m.get(NaN) ?? 0n;'),
+    fn('bigint', 'const m = new Map<number, bigint>(); m.set(0, 1n); m.set(-0, 2n); return m.get(0) ?? 0n;'),
+    fn('number', 'const m = new Map<number, bigint>([[-0, 1n]]); let x = 1; for (const e of m) { x = e[0]; } return x;'),
+    // The entry keeps the key that it has, so a later `set(-0, v)` leaves `0`.
+    fn('number', 'const m = new Map<number, bigint>(); m.set(0, 1n); m.set(-0, 2n); let x = 1; for (const e of m) { x = e[0]; } return x;'),
+    fn('number', 'const m = new Map<number, bigint>([[NaN, 1n], [2, 2n]]); m.delete(NaN); return m.size;'),
+  ];
+  const input = { programs: sources.map((source) => ({ source, calls: [{ function: 'f', args: [true] }] })) };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const results = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-keys-'));
+  for (const [i, source] of sources.entries()) {
+    const lean = results[i];
+    expect(lean?.accepted, source).toBe(true);
+    const path = join(dir, `case${i}.mjs`);
+    writeFileSync(path, ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext } }).outputText);
+    const mod = (await import(pathToFileURL(path).href)) as { f: (b: boolean) => unknown };
+    const value = lean?.results[0]?.value;
+    expect(value === undefined ? 'no value' : canonical(value), source).toBe(canonical(encode(mod.f(true))));
+  }
+});
