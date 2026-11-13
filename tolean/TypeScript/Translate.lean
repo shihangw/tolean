@@ -945,6 +945,16 @@ def endsInBreak : List Stmt → Bool
   | [s] => s.isBreak
   | _ :: rest => endsInBreak rest
 
+/-- The statements of a clause end in a `throw`, which ends the function, so
+the clause does not run into the next one. -/
+def endsInThrow : List Stmt → Bool
+  | [] => false
+  | [s] => (s matches .throwStmt ..)
+  | _ :: rest => endsInThrow rest
+
+/-- The clause does not run into the next: it ends in `break` or in `throw`. -/
+def clauseEnds (body : List Stmt) : Bool := endsInBreak body || endsInThrow body
+
 /-- The statements of a clause without the `break` it ends in. -/
 def dropBreak : List Stmt → List Stmt
   | [] => []
@@ -982,37 +992,27 @@ both end the function. -/
 def alwaysReturns : List Stmt → Bool :=
   alwaysEnds fun s => s matches .returnStmt .. || s matches .throwStmt ..
 
-/-- `s` ends one run of a loop body: a `continue`, or a `break` or a `return`
-in a loop that one can end. -/
+/-- `s` ends one run of a loop body: a `continue`, a `throw`, or a `break`
+or a `return` in a loop that one can end. -/
 def isLoopJump (breaks returns : Bool) : Stmt → Bool
-  | .continueStmt _ => true
+  | .continueStmt _ | .throwStmt .. => true
   | .breakStmt _ => breaks
   | .returnStmt .. => returns
   | _ => false
 
-/-- Why an `if` whose first branch ends in `tail` may not have both an `else`
-and statements after it. -/
-def Tail.afterEarlyReason : Tail → String
-  | .ret => "code after an if whose branches both return or throw is unreachable"
-  | _ => "after an if whose first branch ends in continue, break or return, put the code that follows in its else branch"
-
-/-- The tail of the first branch of an `if`, when every path through it,
-`thenStatements`, ends the statements that end in `tail`: a `return` in a
-function body, or a `continue`, `break` or `return` in a loop body. -/
-def earlyTail (tail : Tail) (thenStatements : List Stmt) : Option Tail :=
-  match tail with
-  | .ret => if alwaysReturns thenStatements then some .ret else none
-  | .loop names b r | .cont names b r =>
-    if alwaysEnds (isLoopJump b r) thenStatements then some (.cont names b r) else none
-  | .state _ => none
+/-- Every path through `statements` ends in a `throw`. -/
+def alwaysThrows : List Stmt → Bool :=
+  alwaysEnds fun s => s matches .throwStmt ..
 
 mutual
 
 /-- `s` contains a `return`, or a `break` or `continue` that leaves `s`. The
 flags say whether a `break` and a `continue` count. Inside a loop that `s`
-contains, neither counts, because they leave only that loop. -/
+contains, neither counts, because they leave only that loop. A `throw` is
+not a jump here: it ends the function from anywhere, through the `Except`
+monad, so a branch or a loop body may hold one. -/
 def containsJump (brk cont : Bool) : Stmt → Bool
-  | .returnStmt .. | .throwStmt .. => true
+  | .returnStmt .. => true
   | .breakStmt _ => brk
   | .continueStmt _ => cont
   | .ifStmt _ _ t (some e) => containsJump brk cont t || containsJump brk cont e
@@ -1039,6 +1039,30 @@ def clausesContainJump (brk cont : Bool) : List (Option Expr × List Stmt) → B
   | (_, body) :: rest => clauseContainsJump brk cont body || clausesContainJump brk cont rest
 
 end
+
+/-- Why an `if` whose branches both end early may have no statements after it. -/
+def bothEndReason : String :=
+  "code after an if whose branches both end in a return, a throw, a break or a continue is unreachable"
+
+/-- Why an `if` whose first branch ends early, and whose `else` does not, may
+not have statements after it. -/
+def afterEarlyReason : String :=
+  "after an if whose first branch ends in a return, a throw, a break or a continue, put the code that follows in its else branch"
+
+/-- The tail of the first branch of an `if`, when every path through it,
+`thenStatements`, ends the statements that end in `tail`: a `return` or a
+`throw` in a function body, a `continue`, `break`, `return` or `throw` in a
+loop body, or a `throw` in a branch that ends in its state. A `throw` ends
+the function from anywhere, so the branch that throws is translated as the
+end of the function; it may hold no other jump, which the function's tail
+would also accept. -/
+def earlyTail (tail : Tail) (thenStatements : List Stmt) : Option Tail :=
+  match tail with
+  | .ret => if alwaysReturns thenStatements then some .ret else none
+  | .loop names b r | .cont names b r =>
+    if alwaysEnds (isLoopJump b r) thenStatements then some (.cont names b r) else none
+  | .state _ =>
+    if alwaysThrows thenStatements && !anyContainsJump true true thenStatements then some .ret else none
 
 mutual
 
@@ -1278,7 +1302,7 @@ def neverLeftReason (name : String) (tags : List String) : String :=
 
 /-- Why a clause of a `switch` must end in `return`. -/
 def fallthroughReason : String :=
-  "every clause of a switch must end in a return, or every clause in a break; Tolean does not translate fallthrough"
+  "every clause of a switch must end in a return, or every clause in a break or a throw; Tolean does not translate fallthrough"
 
 /-- The arm for the other members of a test of `name`'s tag tests it again
 only as more arms of the same `match`: first, or not at all. -/
@@ -2988,12 +3012,9 @@ def translateAnnotation : Option TypeExpr → TM (Option Ty)
 
 /-- `const x = f(a)` or `let x = f(a)`, where `f` can throw: the call of the
 output, and the scope after the declaration. The output passes the error of
-the call on, so the declaration must be in the statements that end the
-function. -/
-def translateBindHead (env : Env) (s : Span) (d : VarDecl) (tail : Tail) (cs sp : Span) (name : String)
+the call on. -/
+def translateBindHead (env : Env) (s : Span) (d : VarDecl) (cs sp : Span) (name : String)
     (args : List Expr) : TM (DeclRef × List IR.Expr × Env) := do
-  unless tail.isRet do
-    reject s "a call of a function that can throw may stand only in the statements that end the function"
   let code ← translateCall (← fuelLimit) env cs (.ident sp name) args true
   let declared ← translateAnnotation d.type
   unless declared.all (· == code.type) do reject s "the call must have the declared type"
@@ -3002,10 +3023,9 @@ def translateBindHead (env : Env) (s : Span) (d : VarDecl) (tail : Tail) (cs sp 
   return (ref, outs, env')
 
 /-- `return f(a)`, where `f` can throw: the call of the output. The output
-passes the error of the call on, so the `return` must end the function. -/
-def translateReturnCall (env : Env) (s : Span) (tail : Tail) (cs sp : Span) (name : String)
+passes the error of the call on. -/
+def translateReturnCall (env : Env) (s : Span) (cs sp : Span) (name : String)
     (args : List Expr) : TM (DeclRef × List IR.Expr) := do
-  unless tail.isRet do reject s "a loop body may not return a call of a function that can throw"
   let returnType := (← get).returnType
   let code ← translateCall (← fuelLimit) env cs (.ident sp name) args true
   unless code.type == returnType do reject s "the call must have the function's return type"
@@ -3111,7 +3131,8 @@ def translateForOfPattern (items : TM Code) (kBody : Env → Tail → List Stmt 
     reject s "a loop body may return only where the statements after the loop end in a return"
   let breaks := bodyStatements.any (containsJump true false)
   let names := changedNames bodyStatements env
-  if names.isEmpty && !returns then reject s "a loop must change a local or return"
+  if names.isEmpty && !returns then
+    reject s "a loop must change a local or return; a body that only throws does not count yet"
   let (elemType, loopItems) ← loopItems iterable body (← items)
   let x ← orReject p.names.head? s "a pattern must declare a name"
   let reads ← patternReads s p ⟨.var x, false, elemType⟩
@@ -3200,8 +3221,8 @@ def translateStatements (fuel : Nat) (env : Env) (tail : Tail) (statements : Lis
       match throwingCall? env.functions v with
       -- `return f(x)`, where `f` can throw: the output passes its error on.
       | some (cs, sp, name, args) =>
-        let (ref, outs) ← translateReturnCall env s tail cs sp name args
-        return .bind "r" ref outs (.value (IR.Expr.pure (.var "r")))
+        let (ref, outs) ← translateReturnCall env s cs sp name args
+        return .bind "r" ref outs (tail.returnBody (IR.Expr.pure (.var "r")))
       | none =>
         modify fun c => { c with returning := true }
         let returnType := (← get).returnType
@@ -3232,10 +3253,10 @@ def translateStatements (fuel : Nat) (env : Env) (tail : Tail) (statements : Lis
     | .forStmt s init test update body =>
       translateLoop fuel env s (.counted init test update) body rest tail
     | .switchStmt s disc clauses => translateSwitch fuel env s disc clauses rest tail
-    -- `throw new Error(m)` ends the function with the error.
+    -- `throw new Error(m)` ends the function with the error, from a loop
+    -- body or a branch as well: the output runs those in the `Except` monad.
     | .throwStmt s value =>
-      unless rest.isEmpty && tail.isRet do
-        reject s "throw must be the last statement of a function body, or of a branch of an if that ends it"
+      unless rest.isEmpty do reject s "code after throw is unreachable"
       let .new _ "Error" [] [msg] := value
         | reject value.span "tolean supports only 'throw new Error(message)'"
       if env.has "Error" then reject value.span "a local named Error hides the global"
@@ -3267,7 +3288,7 @@ def translateVariable (fuel : Nat) (env : Env) (s : Span) (d : VarDecl) (rest : 
   -- `const x = f(a)`, where `f` can throw: the output passes its error on, and
   -- binds `x` to the value otherwise.
   | some (cs, sp, name, args) =>
-    let (ref, outs, env') ← translateBindHead env s d tail cs sp name args
+    let (ref, outs, env') ← translateBindHead env s d cs sp name args
     return .bind d.name ref outs (← translateStatements fuel env' tail rest)
   | none =>
     -- `const xs: Array<T> = [...]` (or `T[]`) is an owned array, which the
@@ -3350,12 +3371,12 @@ def translateIf (fuel : Nat) (env : Env) (s : Span) (test : Expr) (thenBranch : 
   -- they join its other branch.
   if let some thenTail := earlyTail tail thenStatements then
     if elseBranch.isSome && !rest.isEmpty then
-      reject s thenTail.afterEarlyReason
+      reject s (if (earlyTail tail elseStatements).isSome then bothEndReason else afterEarlyReason)
     let whenTrue ← translateStatements fuel envTrue thenTail thenStatements
     let whenFalse ← translateStatements fuel envFalse tail (elseStatements ++ rest)
     return (← branch whenTrue whenFalse)
   if (thenStatements ++ elseStatements).any (containsJump true true) then
-    reject s "a branch that does not always return may not return, throw, break or continue"
+    reject s "a branch that does not always return may not return, break or continue"
   let names := changedNames (thenStatements ++ elseStatements) env
   if names.isEmpty then reject s "an if without a return must change a local"
   let tested := match nullTest, tagTest with
@@ -3384,7 +3405,7 @@ def translateSwitch (fuel : Nat) (env : Env) (s : Span) (disc : Expr)
   | (some _, _) :: _ =>
     if tail.isRet && clauses.all (fun c => alwaysReturns (clauseStatements c.2)) then
       translateClauses fuel env s sw sw.tags none clauses rest
-    else if clauses.dropLast.any (fun c => !(alwaysReturns (clauseStatements c.2) || endsInBreak c.2)) then
+    else if clauses.dropLast.any (fun c => !(alwaysReturns (clauseStatements c.2) || clauseEnds c.2)) then
       reject s fallthroughReason
     else
       -- The clauses end in `break` and change locals, as the branches of an
@@ -3492,14 +3513,14 @@ def translateStateClauses (fuel : Nat) (env : Env) (s : Span) (sw : SwitchOn) (t
     | _ => reject test.span "a case of a switch on a tag must be a string"
 
 /-- One clause of a `switch` whose clauses end in `break`: its statements,
-which end in the state of `names`. Only the last clause may leave out its
-`break`. -/
+which end in the state of `names`, or throw. Only the last clause may leave
+out its `break`. -/
 def translateStateClause (fuel : Nat) (env : Env) (s : Span) (names : List String) (last : Bool)
     (body : List Stmt) : TM IR.Body := do
   let fuel + 1 := fuel | tooDeep
-  if !(last || endsInBreak body) then reject s fallthroughReason
+  if !(last || clauseEnds body) then reject s fallthroughReason
   else if anyContainsJump true true (dropBreak body) then
-    reject s "a clause of a switch that ends in break may not return, throw, break or continue before its end"
+    reject s "a clause of a switch that ends in break may not return, break or continue before its end"
   else translateStatements fuel env (.state names) (dropBreak body)
 
 def translateLoop (fuel : Nat) (env : Env) (s : Span) (head : LoopHead) (body : Stmt)
@@ -3514,7 +3535,8 @@ def translateLoop (fuel : Nat) (env : Env) (s : Span) (head : LoopHead) (body : 
     reject s "a loop body may return only where the statements after the loop end in a return"
   let breaks := bodyStatements.any (containsJump true false)
   let names := changedNames bodyStatements env
-  if names.isEmpty && !returns then reject s "a loop must change a local or return"
+  if names.isEmpty && !returns then
+    reject s "a loop must change a local or return; a body that only throws does not count yet"
   let (element, elemType, loopItems) ← loopHead env s body head
   let bodyEnv ← declare env s element .const elemType
   let bodyOut ← translateStatements fuel bodyEnv (.loop names breaks returns) bodyStatements

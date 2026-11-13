@@ -489,10 +489,12 @@ def Body.exec (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
     let k ← tagOf field (← ρ.lookup name)
     if k == JSString.ofString tag then Body.exec fs fuel ρ whenTag
     else if other.all (JSString.ofString · == k) then Body.exec fs fuel ρ whenOther else none
+  -- A branch that throws ends the function, as `>>=` passes the error on.
   | .letState names branch rest => do
     match ← Body.exec fs fuel ρ branch with
     | .normal inner => Body.exec fs fuel (← bindState names inner ρ) rest
-    | .ret _ | .brk _ | .cont _ => none
+    | .ret v => some (.ret v)
+    | .brk _ | .cont _ => none
   | .fold names element body items rest _ => do
     let .list vs ← Expr.eval fs fuel ρ items | none
     match ← Body.runFold fs fuel names element body ρ vs with

@@ -795,8 +795,9 @@ export class Gen {
         }
       } else if (roll < 0.93 && depth > 0 && !inLoop) {
         lines.push(...this.switchStatement(vars, ret, lets));
-      } else if (roll < 0.97 && !inLoop) {
-        // An early exit with an error, which a caller passes on.
+      } else if (roll < 0.97) {
+        // An early exit with an error, which a caller passes on. In a loop
+        // body, the output runs the loop in the `Except` monad.
         lines.push(`if (${this.test(vars, 2)}) throw new Error(${this.pick(["'too big'", "''", "'é'"])});`);
       } else if (!inLoop && this.chance(0.3)) {
         // Rarely, something outside the subset or ill-typed, to check that both refuse.

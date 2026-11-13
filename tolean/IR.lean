@@ -397,6 +397,15 @@ def Body.refs : Body T E → List DeclRef
   | .throw e => e.refs
   | .bind _ r args rest => r :: (Expr.refsList args ++ rest.refs)
 
+/-- `b` can throw: it holds a `throw`, or a `bind` of a call that can throw.
+The printer then writes the branch or the loop in the `Except` monad. -/
+def Body.throws : Body T E → Bool
+  | .throw _ | .bind .. => true
+  | .value _ | .state _ | .yield .. | .done .. | .exit .. => false
+  | .let _ _ rest | .letTuple _ _ rest | .letArray _ _ _ rest => rest.throws
+  | .ite _ a b | .matchNull _ _ a b | .matchTag _ _ _ _ _ a b | .letState _ a b => a.throws || b.throws
+  | .fold _ _ body _ rest _ => body.throws || rest.throws
+
 /-- The functions and structures of the program that `d` names. -/
 def Decl.refs : Decl T E → List DeclRef
   | .struct _ _ fields => fields.flatMap (·.2.refs)
@@ -748,7 +757,8 @@ names from the root. -/
 def leanNames : List (String × String) :=
   [("decide", "Decidable.decide"), ("List", "List"), ("Option", "Option"),
    ("some", "Option.some"), ("none", "Option.none"), ("Int", "Int"), ("Nat", "Nat"), ("Bool", "Bool"),
-   ("String", "String"), ("DecidableEq", "DecidableEq"), ("Repr", "Repr"), ("Except", "Except")]
+   ("String", "String"), ("DecidableEq", "DecidableEq"), ("Repr", "Repr"), ("Except", "Except"),
+   ("pure", "Pure.pure")]
 
 /-- Write the Lean name `name` (or `name.rest`), from the root when the source
 declares the same name. `table` gives the full names. -/
@@ -762,6 +772,7 @@ def leanNameIn (table : List (String × String)) (names : Names) (name : String)
 /-- Write a Lean name of the shared part of the output. -/
 def leanName (names : Names) (name : String) : String := leanNameIn leanNames names name
 
+
 /-- Lean code as an argument: parenthesized unless it is one atom. A prefix
 `!` or `¬` takes the rest of the line in Lean, so code that starts with one is
 not an atom even without a space: `f !(a) b` reads as `f !((a) b)`. -/
@@ -771,6 +782,11 @@ def argument (code : String) : String :=
 def wrapped (constructor argument : String) : String :=
   constructor ++ " " ++
     (if argument.contains ' ' && !argument.startsWith "(" then s!"({argument})" else argument)
+
+
+/-- `code`, or `pure code` in the `Except` monad. -/
+def inMonad (names : Names) (monadic : Bool) (code : String) : String :=
+  if monadic then wrapped (leanName names "pure") code else code
 
 def tuple (names : List String) : String :=
   match names with
@@ -1277,83 +1293,119 @@ end
 
 mutual
 
-/-- The lines of a body. -/
-def Body.lines (names : Names) : Body T E → List String
+/-- The lines of a body. In the `Except` monad (`monadic`), which a branch
+or a loop body that can throw runs in, the end of a branch or of a run of a
+loop body is `pure` of its state, and the body of a loop that can throw runs
+in the monad with `>>=`. -/
+def Body.lines (names : Names) (monadic : Bool := false) : Body T E → List String
   | .value e => [e.print names]
-  | .state ns => [tuple ns]
+  | .state ns => [inMonad names monadic (tuple ns)]
   | .yield ns slot =>
-    [wrapped (leanName names "ForInStep.yield")
-      (stepTuple (if slot then some (leanName names "none") else Option.none) ns)]
+    [inMonad names monadic (wrapped (leanName names "ForInStep.yield")
+      (stepTuple (if slot then some (leanName names "none") else Option.none) ns))]
   | .done ns slot =>
-    [wrapped (leanName names "ForInStep.done")
-      (stepTuple (if slot then some (leanName names "none") else Option.none) ns)]
+    [inMonad names monadic (wrapped (leanName names "ForInStep.done")
+      (stepTuple (if slot then some (leanName names "none") else Option.none) ns))]
   | .exit e ns =>
-    [wrapped (leanName names "ForInStep.done")
-      (stepTuple (some (wrapped (leanName names "some") (e.print names))) ns)]
-  | .let name e rest => s!"let {name} := {e.print names}" :: rest.lines names
-  | .letTuple ns e rest => s!"let {tuple ns} := {e.print names}" :: rest.lines names
+    [inMonad names monadic (wrapped (leanName names "ForInStep.done")
+      (stepTuple (some (wrapped (leanName names "some") (e.print names))) ns))]
+  | .let name e rest => s!"let {name} := {e.print names}" :: rest.lines names monadic
+  | .letTuple ns e rest => s!"let {tuple ns} := {e.print names}" :: rest.lines names monadic
   | .letArray name type elems rest =>
     s!"let {name} : {type.print names} := [{", ".intercalate (Expr.printList names elems)}]" ::
-      rest.lines names
+      rest.lines names monadic
   | .ite c whenTrue whenFalse =>
-    [s!"if {c.print names} then"] ++ indent (whenTrue.lines names) ++ ["else"] ++
-      indent (whenFalse.lines names)
+    [s!"if {c.print names} then"] ++ indent (whenTrue.lines names monadic) ++ ["else"] ++
+      indent (whenFalse.lines names monadic)
   | .matchNull name _ whenNull whenValue =>
-    [s!"match {names.matchBinder}{name} with", s!"| {leanName names "none"} =>"] ++ indent (whenNull.lines names) ++
-      [s!"| {leanName names "some"} {name} =>"] ++ indent (whenValue.lines names)
+    [s!"match {names.matchBinder}{name} with", s!"| {leanName names "none"} =>"] ++
+      indent (whenNull.lines names monadic) ++
+      [s!"| {leanName names "some"} {name} =>"] ++ indent (whenValue.lines names monadic)
   | .matchTag name ref _ tag other whenTag whenOther =>
     let ctor (t : String) := s!"{(names.ref ref).1}.{memberName t}"
     let rest : List String := match other with
-      | some t => s!"| {ctor t} {name} =>" :: indent (whenOther.lines names)
+      | some t => s!"| {ctor t} {name} =>" :: indent (whenOther.lines names monadic)
       | Option.none =>
         match whenOther with
         | .matchTag n .. =>
-          if n == name then Body.tagArms names name whenOther
-          else s!"| {name} =>" :: indent (whenOther.lines names)
-        | _ => s!"| {name} =>" :: indent (whenOther.lines names)
-    s!"match {names.matchBinder}{name} with" :: s!"| {ctor tag} {name} =>" :: indent (whenTag.lines names) ++ rest
+          if n == name then Body.tagArms names monadic name whenOther
+          else s!"| {name} =>" :: indent (whenOther.lines names monadic)
+        | _ => s!"| {name} =>" :: indent (whenOther.lines names monadic)
+    s!"match {names.matchBinder}{name} with" :: s!"| {ctor tag} {name} =>" ::
+      indent (whenTag.lines names monadic) ++ rest
   | .letState ns branch rest =>
-    [s!"let {tuple ns} :="] ++ indent (branch.lines names) ++ rest.lines names
+    if branch.throws then
+      -- The branch throws or gives the state, so it runs in the monad, and
+      -- the statements after it take the state from `>>=`.
+      let branchLines := branch.lines names true
+      let lastLine := branchLines.getLast?.getD ""
+      let closed := branchLines.dropLast ++ [lastLine ++ s!") >>= fun {tuple ns} =>"]
+      (match closed with
+        | first :: more => ("(" ++ first) :: more
+        | [] => []) ++ rest.lines names monadic
+    else
+      [s!"let {tuple ns} :="] ++ indent (branch.lines names) ++ rest.lines names monadic
   | .fold ns element body items rest info =>
-    let bodyLines := body.lines names
+    let throws := body.throws
+    let bodyLines := body.lines names throws
     let lastLine := bodyLines.getLast?.getD ""
-    if info.returns.isSome then
+    if throws then
+      -- The loop runs in the `Except` monad, and the statements after it
+      -- take its state from `>>=`.
+      if info.returns.isSome then
+        let none_ := leanName names "none"
+        [s!"({leanName names "forIn"} {items.print names} {stepTuple (some none_) ns}",
+          s!"    (fun {foldBinders names ns element info} =>"] ++
+          indentBy "      " (bodyLines.dropLast ++ [lastLine ++ ")) >>= fun"]) ++
+          [s!"  | {stepTuple (some s!"{leanName names "some"} r") (if ns.isEmpty then [] else ["_"])} => r",
+            s!"  | {stepTuple (some none_) ns} =>"] ++ indentBy "    " (rest.lines names monadic)
+      else if info.breaks then
+        [s!"({leanName names "forIn"} {items.print names} {tuple ns}",
+          s!"    (fun {foldBinders names ns element info} =>"] ++
+          indentBy "      " (bodyLines.dropLast ++ [lastLine ++ s!")) >>= fun {tuple ns} =>"]) ++
+          rest.lines names monadic
+      else
+        [s!"({leanName names "List.foldlM"}",
+          s!"    (fun {foldBinders names ns element info} =>"] ++
+          indentBy "      " (bodyLines.dropLast ++ [lastLine ++ ")"]) ++
+          [s!"    {tuple ns} {items.print names}) >>= fun {tuple ns} =>"] ++ rest.lines names monadic
+    else if info.returns.isSome then
       let none_ := leanName names "none"
       [s!"match {leanName names "Id.run"} ({leanName names "forIn"} {items.print names} {stepTuple (some none_) ns}",
         s!"    (fun {foldBinders names ns element info} =>"] ++
         indentBy "      " (bodyLines.dropLast ++ [lastLine ++ ")) with"]) ++
         [s!"| {stepTuple (some s!"{leanName names "some"} r") (if ns.isEmpty then [] else ["_"])} => r",
-          s!"| {stepTuple (some none_) ns} =>"] ++ indent (rest.lines names)
+          s!"| {stepTuple (some none_) ns} =>"] ++ indent (rest.lines names monadic)
     else if info.breaks then
       [s!"let {tuple ns} :=",
         s!"  {leanName names "Id.run"} ({leanName names "forIn"} {items.print names} {tuple ns}",
         s!"    (fun {foldBinders names ns element info} =>"] ++
-        indentBy "      " (bodyLines.dropLast ++ [lastLine ++ "))"]) ++ rest.lines names
+        indentBy "      " (bodyLines.dropLast ++ [lastLine ++ "))"]) ++ rest.lines names monadic
     else
       [s!"let {tuple ns} :=", s!"  {leanName names "List.foldl"}",
         s!"    (fun {foldBinders names ns element info} =>"] ++
         indentBy "      " (bodyLines.dropLast ++ [lastLine ++ ")"]) ++
-        [s!"    {tuple ns} {items.print names}"] ++ rest.lines names
+        [s!"    {tuple ns} {items.print names}"] ++ rest.lines names monadic
   | .throw e => [wrapped "throw" (e.print names)]
   | .bind name ref args rest =>
-    s!"{(Expr.call ref args).print names} >>= fun {name} =>" :: rest.lines names
+    s!"{(Expr.call ref args).print names} >>= fun {name} =>" :: rest.lines names monadic
 
 /-- The arms of `match name with` for a test of its tag, nested in the arm
 for the other members of a test of the same local. They join the outer
 `match`, so that Lean sees that the arms cover every member: a nested
 `match` would not know which members the outer one ruled out. -/
-def Body.tagArms (names : Names) (name : String) : Body T E → List String
+def Body.tagArms (names : Names) (monadic : Bool) (name : String) : Body T E → List String
   | .matchTag _ ref _ tag other whenTag whenOther =>
     let ctor (t : String) := s!"{(names.ref ref).1}.{memberName t}"
     let rest : List String := match other with
-      | some t => s!"| {ctor t} {name} =>" :: indent (whenOther.lines names)
+      | some t => s!"| {ctor t} {name} =>" :: indent (whenOther.lines names monadic)
       | Option.none =>
         match whenOther with
         | .matchTag n .. =>
-          if n == name then Body.tagArms names name whenOther
-          else s!"| {name} =>" :: indent (whenOther.lines names)
-        | _ => s!"| {name} =>" :: indent (whenOther.lines names)
-    s!"| {ctor tag} {name} =>" :: indent (whenTag.lines names) ++ rest
+          if n == name then Body.tagArms names monadic name whenOther
+          else s!"| {name} =>" :: indent (whenOther.lines names monadic)
+        | _ => s!"| {name} =>" :: indent (whenOther.lines names monadic)
+    s!"| {ctor tag} {name} =>" :: indent (whenTag.lines names monadic) ++ rest
   -- `Body.lines` calls this only on a test of a tag.
   | _ => []
 
