@@ -1,5 +1,5 @@
-// expect: 4:10 'split' takes one string here; a limit is not supported
-// The limit of split is not supported.
-export function f(s: string): ReadonlyArray<string> {
-  return s.split(",", 2);
+// expect: 4:10 'split' takes a string separator and perhaps a limit, an integer literal
+// A limit that is not an integer literal is not supported.
+export function f(s: string, n: number): ReadonlyArray<string> {
+  return s.split(",", n);
 }
