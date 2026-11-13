@@ -334,6 +334,8 @@ change. An `array` or a `map` local is owned: the function made it, and
 nothing else holds it. A `map` local holds a map or a set. -/
 inductive Binding where
   | param | const | «let» | array | map
+  /-- A local function, which code may only call (`LocalFn`). -/
+  | fn
 deriving BEq, Repr, Inhabited
 
 structure Local where
@@ -405,6 +407,28 @@ structure EnumValue where
   ref : DeclRef
   members : List (String × String)
 
+/-- A function that the body of the function being translated declares. The
+translator lifts it out: the output declares it before that function, under
+the name `ref`, with the locals around it that its body names as parameters
+in front of its own. -/
+structure LocalFn where
+  name : String
+  ref : DeclRef
+  /-- The locals of the function around it that its body names, as they were
+  where it is declared. -/
+  captured : List Local
+  /-- The captured `let` locals that its body changes. The lifted function
+  returns their tuple, and each call binds them again. -/
+  changes : List String
+  /-- Its own parameters. -/
+  params : List Local
+  /-- What it returns, or `none` when it returns nothing (`void`). -/
+  ret : Option Ty
+  body : Stmt
+  /-- The lifted body as the declaration translated it, so that each call can
+  check that it translates it the same way. -/
+  printed : String := ""
+
 /-- The names in scope, in the order they were declared, and the functions
 that a call may name. -/
 structure Env where
@@ -417,6 +441,11 @@ structure Env where
   enums : List EnumValue := []
   /-- The error classes of the file, which a `throw` may make an error of. -/
   classes : List ClassInfo := []
+  /-- The local functions in scope, each also a local with the binding `fn`. -/
+  localFns : List LocalFn := []
+
+/-- Each local function in scope, with the locals that a call of it changes. -/
+def Env.fnChanges (env : Env) : List (String × List String) := env.localFns.map fun f => (f.name, f.changes)
 
 def Env.lookup (env : Env) (name : String) : Option Local := env.locals.find? (·.name == name)
 
@@ -427,6 +456,12 @@ def Env.add (env : Env) (l : Local) : Env := { env with locals := env.locals ++ 
 /-- `name` has the type `type` from here on, as after `x !== null`. -/
 def Env.narrow (env : Env) (name : String) (type : Ty) : Env :=
   { env with locals := env.locals.map fun l => if l.name == name then { l with type } else l }
+
+/-- A new local or a narrower type keeps the local functions in scope. -/
+@[simp] theorem Env.fnChanges_add (env : Env) (l : Local) : (env.add l).fnChanges = env.fnChanges := rfl
+
+@[simp] theorem Env.fnChanges_narrow (env : Env) (name : String) (type : Ty) :
+    (env.narrow name type).fnChanges = env.fnChanges := rfl
 
 /-- A literal union of strings of the program, `type T = 'a' | 'b'`, with the
 file that declares it and its strings in the order of the source. A string
@@ -514,6 +549,8 @@ structure Ctx where
   JS, so an earlier read (an alias, a field, a loop over it) could see a
   stale value. -/
   returning : Bool := false
+  /-- True while translating the body of a local function. -/
+  inLocal : Bool := false
 
 abbrev TM := EStateM String Ctx
 
@@ -1134,78 +1171,83 @@ def earlyTail (tail : Tail) (thenStatements : List Stmt) : Option Tail :=
 
 mutual
 
-/-- The names that `e` assigns, increments or pushes to. -/
-def exprChanges : Expr → List String
+/-- The locals that a call with the callee `callee` changes by itself: the
+array of `xs.push(v)`, the map or set of `m.set(k, v)`, `s.add(x)` and
+`m.delete(k)`, and what the body of a local function changes, as `fns` gives
+it. -/
+def calleeChanges (fns : List (String × List String)) (callee : Expr) : List String :=
+  match callee with
+  | .ident _ name => (fns.lookup name).getD []
+  | .member _ (.ident _ name) method =>
+    if method == "push" || method == "set" || method == "delete" || method == "add" then [name] else []
+  | _ => []
+
+/-- The names that `e` assigns, increments or pushes to, where `fns` gives the
+locals that a call of each local function changes. -/
+def exprChanges (fns : List (String × List String)) : Expr → List String
   | .assign _ op target value =>
     let own := match target with
       | .ident _ name => if op.isSimple || op == .coalesce then [name] else []
       | _ => []
-    own ++ exprChanges target ++ exprChanges value
+    own ++ exprChanges fns target ++ exprChanges fns value
   | .prefix _ _ (.ident _ name) | .postfix _ _ (.ident _ name) => [name]
-  -- `m.set(k, v)`, `s.add(x)` and `m.delete(k)` change the map or set.
-  | .call _ (.member _ (.ident _ name) "set") args | .call _ (.member _ (.ident _ name) "delete") args
-  | .call _ (.member _ (.ident _ name) "add") args =>
-    name :: exprsChanges args
   | .prefix _ _ e | .postfix _ _ e | .paren _ e | .unary _ _ e | .member _ e _ | .optMember _ e _
   | .asConst _ e | .satisfies _ e _ | .spread _ e =>
-    exprChanges e
+    exprChanges fns e
   | .call _ callee args =>
-    let own := match callee with
-      | .member _ (.ident _ name) "push" => [name]
-      | _ => []
-    own ++ exprChanges callee ++ exprsChanges args
-  | .array _ elems => exprsChanges elems
-  | .object _ props => propsChanges props
-  | .index _ a b | .binary _ _ a b => exprChanges a ++ exprChanges b
-  | .cond _ a b c => exprChanges a ++ exprChanges b ++ exprChanges c
+    calleeChanges fns callee ++ exprChanges fns callee ++ exprsChanges fns args
+  | .array _ elems => exprsChanges fns elems
+  | .object _ props => propsChanges fns props
+  | .index _ a b | .binary _ _ a b => exprChanges fns a ++ exprChanges fns b
+  | .cond _ a b c => exprChanges fns a ++ exprChanges fns b ++ exprChanges fns c
   | _ => []
 
-def exprsChanges : List Expr → List String
+def exprsChanges (fns : List (String × List String)) : List Expr → List String
   | [] => []
-  | e :: es => exprChanges e ++ exprsChanges es
+  | e :: es => exprChanges fns e ++ exprsChanges fns es
 
-def propsChanges : List Property → List String
+def propsChanges (fns : List (String × List String)) : List Property → List String
   | [] => []
-  | .keyValue _ _ v :: ps | .spread _ v :: ps => exprChanges v ++ propsChanges ps
-  | .shorthand .. :: ps => propsChanges ps
+  | .keyValue _ _ v :: ps | .spread _ v :: ps => exprChanges fns v ++ propsChanges fns ps
+  | .shorthand .. :: ps => propsChanges fns ps
 
 end
 
-def optionChanges : Option Expr → List String
-  | some e => exprChanges e
+def optionChanges (fns : List (String × List String)) : Option Expr → List String
+  | some e => exprChanges fns e
   | none => []
 
 mutual
 
-def stmtChanges : Stmt → List String
-  | .varDecl _ d => optionChanges d.init
-  | .destructure _ _ _ _ init => exprChanges init
-  | .exprStmt _ e => exprChanges e
-  | .returnStmt _ v => optionChanges v
-  | .ifStmt _ test t (some e) => exprChanges test ++ stmtChanges t ++ stmtChanges e
-  | .ifStmt _ test t none => exprChanges test ++ stmtChanges t
+def stmtChanges (fns : List (String × List String)) : Stmt → List String
+  | .varDecl _ d => optionChanges fns d.init
+  | .destructure _ _ _ _ init => exprChanges fns init
+  | .exprStmt _ e => exprChanges fns e
+  | .returnStmt _ v => optionChanges fns v
+  | .ifStmt _ test t (some e) => exprChanges fns test ++ stmtChanges fns t ++ stmtChanges fns e
+  | .ifStmt _ test t none => exprChanges fns test ++ stmtChanges fns t
   | .forOfStmt _ _ _ iterable body | .forOfPattern _ _ _ iterable body =>
-    exprChanges iterable ++ stmtChanges body
+    exprChanges fns iterable ++ stmtChanges fns body
   | .forStmt _ init test update body =>
-    optionChanges (init.bind (·.init)) ++ optionChanges test ++ optionChanges update ++ stmtChanges body
-  | .whileStmt _ test body => exprChanges test ++ stmtChanges body
-  | .block _ body => stmtsChanges body
-  | .switchStmt _ disc clauses => exprChanges disc ++ clausesChanges clauses
+    optionChanges fns (init.bind (·.init)) ++ optionChanges fns test ++ optionChanges fns update ++ stmtChanges fns body
+  | .whileStmt _ test body => exprChanges fns test ++ stmtChanges fns body
+  | .block _ body => stmtsChanges fns body
+  | .switchStmt _ disc clauses => exprChanges fns disc ++ clausesChanges fns clauses
   | _ => []
 
-def stmtsChanges : List Stmt → List String
+def stmtsChanges (fns : List (String × List String)) : List Stmt → List String
   | [] => []
-  | s :: rest => stmtChanges s ++ stmtsChanges rest
+  | s :: rest => stmtChanges fns s ++ stmtsChanges fns rest
 
-def clausesChanges : List (Option Expr × List Stmt) → List String
+def clausesChanges (fns : List (String × List String)) : List (Option Expr × List Stmt) → List String
   | [] => []
-  | (test, body) :: rest => optionChanges test ++ stmtsChanges body ++ clausesChanges rest
+  | (test, body) :: rest => optionChanges fns test ++ stmtsChanges fns body ++ clausesChanges fns rest
 
 end
 
 /-- The locals of `env` that `statements` change, in the order of `env`. -/
 def changedNames (statements : List Stmt) (env : Env) : List String :=
-  let changed := stmtsChanges statements
+  let changed := stmtsChanges env.fnChanges statements
   (env.locals.filter fun l => changed.contains l.name).map (·.name)
 
 /-- The operators that can test a value against `null`: `some true` for `===`
@@ -2377,6 +2419,9 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
         | reject s "only parameters and locals may be referenced"
       return ⟨.numberConstant constant, false, .number⟩
     | some l =>
+      if l.binding == .fn then
+        reject s ("a local function may be called only as a statement of its own, or as the whole " ++
+          "value of a const, a let or a return")
       if l.binding == .array && !(← get).returning then
         reject s "an owned array may be read only in the return value"
       if l.binding == .map && !(← get).returning then
@@ -2613,7 +2658,10 @@ def translateCall (fuel : Nat) (env : Env) (s : Span) (callee : Expr) (args : Li
     return ← translateNumberCall (translateExpr fuel env none) s args
   if (name == "isNaN" || name == "isFinite") && !env.functions.any (·.name == name) then
     reject s s!"the global {name} converts its argument to a number; use Number.{name}"
-  let fn ← orReject (env.functions.find? (·.name == name)) s noCallMessage
+  let fn ← orReject (env.functions.find? (·.name == name)) s
+    (if (env.lookup name).any (·.binding == .fn) then
+      "a local function may be called only as a statement of its own, or as the whole value of a const, a let or a return"
+     else noCallMessage)
   if env.has name then noCall
   checkCrossFileThrow s name fn
   checkThrowingCall s name fn top
@@ -3222,6 +3270,41 @@ def translateDestructure (tr : Option Ty → Expr → TM Code) (k : Env → TM I
   let rest ← k env'
   orReject (destructureBody p t (withType code.value t code.type) reads rest) s "a pattern must declare a name"
 
+/-- Where a local function may stand. -/
+def localFunctionPlace : String :=
+  "a local function must stand in the body of the function around it, " ++
+    "outside every branch, loop and other local function"
+
+mutual
+
+/-- `s` declares a local function, itself or in a block, a branch or a loop
+inside it. -/
+def stmtDeclaresFunction : Stmt → Bool
+  | .funDecl .. => true
+  | .block _ body => stmtsDeclareFunction body
+  | .ifStmt _ _ t (some e) => stmtDeclaresFunction t || stmtDeclaresFunction e
+  | .ifStmt _ _ t none => stmtDeclaresFunction t
+  | .forOfStmt _ _ _ _ body | .forOfPattern _ _ _ _ body | .forStmt _ _ _ _ body | .whileStmt _ _ body =>
+    stmtDeclaresFunction body
+  | .switchStmt _ _ clauses => clausesDeclareFunction clauses
+  | _ => false
+
+def stmtsDeclareFunction : List Stmt → Bool
+  | [] => false
+  | s :: rest => stmtDeclaresFunction s || stmtsDeclareFunction rest
+
+def clausesDeclareFunction : List (Option Expr × List Stmt) → Bool
+  | [] => false
+  | (_, body) :: rest => stmtsDeclareFunction body || clausesDeclareFunction rest
+
+end
+
+/-- Why a branch or a loop body that seems to change no local is refused. A
+local function there is the real reason: the analysis of changes does not
+see what its calls change, and a local function may not stand there anyway. -/
+def noChangeReason (statements : List Stmt) (reason : String) : String :=
+  if stmtsDeclareFunction statements then localFunctionPlace else reason
+
 /-- `for (const [k, v] of xs) body`, then the statements after it, as
 `translateLoop` translates a loop. The fold binds each element to the first
 name of the pattern, and the body starts by binding the names of the pattern
@@ -3239,7 +3322,8 @@ def translateForOfPattern (items : TM Code) (kBody : Env → Tail → List Stmt 
   let breaks := bodyStatements.any (containsJump true false)
   let names := changedNames bodyStatements env
   if names.isEmpty && !returns then
-    reject s "a loop must change a local or return; a body that only throws does not count yet"
+    reject s (noChangeReason bodyStatements
+      "a loop must change a local or return; a body that only throws does not count yet")
   let (elemType, loopItems) ← loopItems iterable body (← items)
   let x ← orReject p.names.head? s "a pattern must declare a name"
   let reads ← patternReads s p ⟨.var x, false, elemType⟩
@@ -3305,6 +3389,162 @@ def loopHead (env : Env) (s : Span) (body : Stmt) : LoopHead → TM (String × T
     return (element, elemType, items)
   | .counted init test update => countedHead env s body init test update
 
+/-! ### Local functions
+
+A function declaration in the body of a function becomes a function of the
+output that the translator lifts out of it: the output declares it before
+the function around it. The lifted function takes the locals around it that
+its body names, then its own parameters. It returns their new values when
+its body changes some of them, and each call binds them again, as a loop
+binds the state it changes. -/
+
+/-- The call `f(args)` of a local function in scope: the arguments and the
+function. -/
+def localCall? (env : Env) : Expr → Option (List Expr × LocalFn)
+  | .call _ (.ident _ name) args => (env.localFns.find? (·.name == name)).map (args, ·)
+  | _ => none
+
+/-- The scope of the body of `fn`, where `env` is the scope at a call: its
+parameters and the locals it captures, and the functions of `env`. -/
+def LocalFn.bodyEnv (fn : LocalFn) (env : Env) : Env :=
+  { env with locals := fn.params ++ fn.captured, localFns := [] }
+
+/-- What the body of `fn` ends in: the tuple of the locals it changes, when
+it returns nothing, or a `return`. -/
+def LocalFn.tail (fn : LocalFn) : Tail :=
+  match fn.ret with
+  | none => .state fn.changes
+  | some _ => .ret
+
+/-- The parameters of the lifted function: the captured locals, then its own. -/
+def LocalFn.leanParams (fn : LocalFn) : List (String × IR.Ty) :=
+  (fn.captured ++ fn.params).map fun l => (l.name, l.type.lean)
+
+/-- The result type of the lifted function: what it returns, or the tuple of
+the locals it changes. -/
+def LocalFn.leanRet (fn : LocalFn) : IR.Ty :=
+  match fn.ret with
+  | some t => t.lean
+  | none =>
+    match fn.changes.map fun c => ((fn.captured.find? (·.name == c)).map (·.type.lean)).getD .int with
+    | [t] => t
+    | ts => .tuple ts
+
+/-- The value that the name of `fn` holds in the IR's meaning. -/
+def LocalFn.closure (fn : LocalFn) : IR.Expr := IR.Expr.closure (fn.params.map (·.name)) fn.body
+
+/-- Translate the body of a local function with `x`, in a context that
+returns `ret` and cannot throw. -/
+def withLocalBody (ret : Ty) (x : TM IR.Body) : TM IR.Body := do
+  let c ← get
+  modify fun c => { c with returnType := ret, throws := false, returning := false, inLocal := true }
+  let b ← x
+  modify fun c' =>
+    { c' with returnType := c.returnType, throws := c.throws, returning := c.returning, inLocal := c.inLocal }
+  return b
+
+/-- The parts of `function name(params): T { body }` in the body of a function,
+where `env` is the scope at the declaration. Each call checks again the
+facts that its proof needs (`translateLocalCall`), so this only refuses what
+the subset leaves out. -/
+def translateLocalHead (env : Env) (s : Span) (name : String) (typeParams : List String)
+    (params : List Param) (returnType : Option TypeExpr) (body : Stmt) (tail : Tail) : TM LocalFn := do
+  let ctx ← get
+  unless tail.isRet && !ctx.inLocal do
+    reject s localFunctionPlace
+  unless typeParams.isEmpty do reject s "a local function may not have type parameters"
+  let some returnType := returnType | reject s "a local function needs a return type"
+  if body.mentions name then reject s s!"'{name}' calls itself, which a local function may not do yet"
+  if body.mentions ctx.currentFunction then
+    reject s s!"a local function may not call '{ctx.currentFunction}', the function around it"
+  let penv ← params.foldlM (init := env) fun penv p => do
+    let type ← orReject p.type p.span "parameters must be plain, typed identifiers"
+    if p.optional then reject p.span "a parameter of a local function may not be optional"
+    declare penv p.span p.name .param (← translateType type)
+  let own := penv.locals.drop env.locals.length
+  let captured := env.locals.filter fun l => body.mentions l.name
+  for l in captured do
+    if l.binding == .fn then
+      reject s s!"a local function may not call another local function, such as '{l.name}', yet"
+    if l.binding == .array || l.binding == .map then
+      reject s s!"a local function may not use '{l.name}', which the function around it owns"
+  let changed := stmtsChanges [] (blockStatements body)
+  let changes := (captured.filter fun l => changed.contains l.name).map (·.name)
+  for c in changes do
+    unless (captured.find? (·.name == c)).any (·.binding == .«let») do
+      reject s s!"a local function may change only a let local of the function around it, and '{c}' is not one"
+  -- A call that can throw may stand anywhere in the body, inside a larger
+  -- expression too, so look at every call, as the hoisting of such calls does.
+  if stmtsThrow env.functions (blockStatements body) ||
+      (Eval.Stmt.callNames body).any (fun n => (env.functions.find? (·.name == n)).any (·.throws)) then
+    reject s "a local function may not throw"
+  let ret ← match returnType with
+    | .keyword _ "void" => pure none
+    | t => some <$> translateType t
+  match ret with
+  | none =>
+    if changes.isEmpty then
+      reject s "a local function that returns nothing must change a let local of the function around it"
+  | some _ =>
+    if captured.any fun l => body.assigns l.name || body.mutates l.name then
+      reject s "a local function that returns a value may not change a variable of the function around it yet"
+  return { name, ref := ⟨ctx.file, ctx.currentFunction ++ "." ++ name⟩, captured, changes, params := own,
+            ret, body }
+
+/-- `s` is a block, as the body of a function is. -/
+def isBlockBody : Stmt → Bool
+  | .block .. => true
+  | _ => false
+
+/-- The arguments of a call of a local function with the parameters `ps`, each
+where the type of its parameter is expected. -/
+def translateLocalArgs (env : Env) : List Local → List Expr → TM (List IR.Expr)
+  | p :: ps, a :: as => do
+    let code ← translateExpr (← fuelLimit) env (some p.type) a
+    unless code.type.assignableTo p.type do reject a.span "the argument does not have the parameter's type"
+    return withType code.value p.type code.type :: (← translateLocalArgs env ps as)
+  | _, _ => pure []
+
+/-- The local in `env` that the body of `fn` names but that `fn` does not
+capture or take as a parameter: one that the function around it declares
+after it. -/
+def LocalFn.late (fn : LocalFn) (l : Local) : Bool :=
+  fn.body.mentions l.name && !(fn.captured.any (·.name == l.name) || fn.params.any (·.name == l.name))
+
+/-- Why a call of `fn` with `args` in the scope `env` is outside the subset,
+if it is: each check is a fact that the proof of the call needs. -/
+def localCallProblem (env : Env) (fn : LocalFn) (args : List Expr) : Option String :=
+  if !isBlockBody fn.body then some s!"the body of '{fn.name}' must be a block"
+  else if !(fn.captured.all fun l => fn.body.mentions l.name && (env.lookup l.name).any (·.type == l.type) &&
+      !fn.params.any (·.name == l.name)) then
+    some (s!"a local that '{fn.name}' uses has another type here than where it is declared; " ++
+      "narrow it in the body of the function instead")
+  else if env.locals.any fn.late then
+    let name := ((env.locals.find? fn.late).map (·.name)).getD ""
+    some (s!"the function around '{fn.name}' declares '{name}' after '{fn.name}', and the " ++
+      s!"body of '{fn.name}' names '{name}' too; rename one of them")
+  else if !(fn.changes.all (fun c => fn.captured.any (·.name == c)) &&
+      fn.captured.all (fun l => fn.changes.contains l.name ||
+        !(stmtsChanges [] (blockStatements fn.body)).contains l.name)) then
+    some s!"'{fn.name}' changes a local that it does not return"
+  else if fn.ret.isSome && fn.captured.any (fun l => fn.body.assigns l.name || fn.body.mutates l.name) then
+    some s!"'{fn.name}' returns a value and changes a variable of the function around it"
+  else if args.length != fn.params.length then some s!"'{fn.name}' takes {fn.params.length} arguments"
+  else none
+
+/-- A call of the local function `fn` with `args`, in the scope `env`: the
+body of the lifted function, which `body` translates again, and the
+arguments of the output's call. -/
+def translateLocalCall (env : Env) (s : Span) (fn : LocalFn) (args : List Expr) (body : TM IR.Body) :
+    TM (IR.Body × List IR.Expr) := do
+  match localCallProblem env fn args with
+  | some why => reject s why
+  | none => pure ()
+  let outs ← translateLocalArgs env fn.params args
+  let b ← withLocalBody (fn.ret.getD .boolean) body
+  unless reprStr b == fn.printed do reject s s!"a call of '{fn.name}' translates its body another way"
+  return (b, fn.captured.map (fun l => IR.Expr.var l.name) ++ outs)
+
 mutual
 
 def translateStatements (fuel : Nat) (env : Env) (tail : Tail) (statements : List Stmt) :
@@ -3326,6 +3566,15 @@ def translateStatements (fuel : Nat) (env : Env) (tail : Tail) (statements : Lis
     | .returnStmt s value =>
       let ([], some v, true) := (rest, value, tail.canReturn)
         | reject s "return must be the last statement of a function or a loop body and carry a value"
+      -- `return f(x)`, where `f` is a local function.
+      if let some (args, fn) := localCall? env v then
+        let some r := fn.ret | reject s s!"'{fn.name}' returns nothing"
+        unless r == (← get).returnType do reject s "the call must have the function's return type"
+        let (b, outs) ← translateLocalCall env s fn args
+          (translateStatements fuel (fn.bodyEnv env) fn.tail (blockStatements fn.body))
+        let code := IR.Expr.var fn.name
+        return .letCall [fn.name] fn.ref fn.name fn.closure fn.leanParams fn.leanRet true b outs
+          (tail.returnBody (if (← get).throws then IR.Expr.pure code else code))
       match throwingCall? env.functions v with
       -- `return f(x)`, where `f` can throw: the output passes its error on.
       | some (cs, sp, name, args) =>
@@ -3348,8 +3597,28 @@ def translateStatements (fuel : Nat) (env : Env) (tail : Tail) (statements : Lis
       translateDestructure (fun exp e => do translateExpr (← fuelLimit) env exp e)
         (fun env' => translateStatements fuel env' tail rest) env s kind p type init
     | .exprStmt s e =>
+      -- `f(x);`, where `f` is a local function: the call binds the locals
+      -- that it changes again.
+      if let some (args, fn) := localCall? env e then
+        unless fn.ret.isNone do
+          reject s s!"a call of '{fn.name}' as a statement drops its value; declare a const for it"
+        let (b, outs) ← translateLocalCall env s fn args
+          (translateStatements fuel (fn.bodyEnv env) fn.tail (blockStatements fn.body))
+        return .letCall fn.changes fn.ref fn.name fn.closure fn.leanParams fn.leanRet false b outs
+          (← translateStatements fuel env tail rest)
       let (name, update) ← translateUpdate env s e
       return .let name update (← translateStatements fuel env tail rest)
+    -- `function g(x: T): R { … }` in the body of the function: the output
+    -- lifts it out, and the IR's meaning binds `g` to the function.
+    | .funDecl s name typeParams params returnType body =>
+      let fn ← translateLocalHead env s name typeParams params returnType body tail
+      let b ← withLocalBody (fn.ret.getD .boolean)
+        (translateStatements fuel (fn.bodyEnv env) fn.tail (blockStatements fn.body))
+      let fn := { fn with printed := reprStr b }
+      let env' ← declare env s name .fn (fn.ret.getD .boolean)
+      let env' := { env' with localFns := env'.localFns ++ [fn] }
+      return .letLifted name (IR.Expr.closure (params.map (·.name)) body)
+        (← translateStatements fuel env' tail rest)
     | .ifStmt s test thenBranch elseBranch =>
       translateIf fuel env s test thenBranch elseBranch rest tail
     | .forOfStmt s kind name iterable body =>
@@ -3387,6 +3656,16 @@ def translateVariable (fuel : Nat) (env : Env) (s : Span) (d : VarDecl) (rest : 
   if (Stmt.varDecl s d).constAssignedIn rest then
     reject s s!"'{d.name}' is a const, and a later statement assigns it; declare it with let"
   let init ← orReject d.init s "declare one const or let identifier with an initializer"
+  -- `const x = f(a)`, where `f` is a local function.
+  if let some (args, fn) := localCall? env init then
+    let some r := fn.ret | reject s s!"'{fn.name}' returns nothing"
+    let declared ← translateAnnotation d.type
+    unless declared.all (· == r) do reject s "the call must have the declared type"
+    let (b, outs) ← translateLocalCall env s fn args
+      (translateStatements fuel (fn.bodyEnv env) fn.tail (blockStatements fn.body))
+    let env' ← declare env s d.name (if d.kind == .const then .const else .«let») r
+    return .letCall [d.name] fn.ref fn.name fn.closure fn.leanParams fn.leanRet true b outs
+      (← translateStatements fuel env' tail rest)
   match throwingCall? env.functions init with
   -- `const x = f(a)`, where `f` can throw: the output passes its error on, and
   -- binds `x` to the value otherwise.
@@ -3481,7 +3760,8 @@ def translateIf (fuel : Nat) (env : Env) (s : Span) (test : Expr) (thenBranch : 
   if (thenStatements ++ elseStatements).any (containsJump true true) then
     reject s "a branch that does not always return may not return, break or continue"
   let names := changedNames (thenStatements ++ elseStatements) env
-  if names.isEmpty then reject s "an if without a return must change a local"
+  if names.isEmpty then
+    reject s (noChangeReason (thenStatements ++ elseStatements) "an if without a return must change a local")
   let tested := match nullTest, tagTest with
     | some (name, _, _, _), _ => some name
     | none, some t => some t.name
@@ -3639,7 +3919,8 @@ def translateLoop (fuel : Nat) (env : Env) (s : Span) (head : LoopHead) (body : 
   let breaks := bodyStatements.any (containsJump true false)
   let names := changedNames bodyStatements env
   if names.isEmpty && !returns then
-    reject s "a loop must change a local or return; a body that only throws does not count yet"
+    reject s (noChangeReason bodyStatements
+      "a loop must change a local or return; a body that only throws does not count yet")
   let (element, elemType, loopItems) ← loopHead env s body head
   let bodyEnv ← declare env s element .const elemType
   let bodyOut ← translateStatements fuel bodyEnv (.loop names breaks returns) bodyStatements
@@ -4131,6 +4412,11 @@ def stmtUsesNumber : Stmt → Bool
       (update.map exprUsesNumber).getD false || stmtUsesNumber body
   | .whileStmt _ test body => exprUsesNumber test || stmtUsesNumber body
   | .block _ body => stmtsUseNumber body
+  -- The output lifts a local function out, and it needs `N` as the
+  -- function around it does.
+  | .funDecl _ name _ params ret body =>
+    isNumberName name || params.any (fun p => isNumberName p.name || (p.type.map typeUsesNumber).getD false) ||
+      (ret.map typeUsesNumber).getD false || stmtUsesNumber body
   | _ => false
 
 def stmtsUseNumber : List Stmt → Bool

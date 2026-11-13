@@ -235,6 +235,9 @@ partial def toJson : Val Float → Json
     Json.mkObj [("error", Json.arr #[Json.str cls,
       Json.arr (fs.map fun (k, v) => Json.arr #[Json.str k, toJson v]).toArray])]
   | .date t => Json.mkObj [("date", match t with | some i => Json.str (toString i) | none => Json.null)]
+  -- A function cannot leave the function that declares it, so no result
+  -- holds one; the test of the interpreter compares only results.
+  | .closure _ _ => Json.mkObj [("function", Json.bool true)]
 
 partial def ofJson (j : Json) : Except String (Val Float) :=
   match j with

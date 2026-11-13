@@ -472,6 +472,54 @@ def Property.mayHoldList (p : String → Bool) : List Property → Bool
 
 end
 
+mutual
+
+/-- `s` names `n` somewhere inside it: it reads it, assigns it, declares it
+or binds it in a loop or a parameter. The names that a local function's body
+mentions are the variables around it that it may read or change. Counting a
+name that the body declares itself only adds a variable that the body never
+sees from outside. -/
+def Stmt.mentions (n : String) : Stmt → Bool
+  | .varDecl _ d => d.name == n || (match d.init with
+    | some e => e.mayHold (· == n)
+    | none => false)
+  | .destructure _ _ p _ e => p.names.contains n || e.mayHold (· == n)
+  | .exprStmt _ e | .throwStmt _ e => e.mayHold (· == n)
+  | .returnStmt _ e => match e with
+    | some e => e.mayHold (· == n)
+    | none => false
+  | .ifStmt _ t a b => t.mayHold (· == n) || a.mentions n || (match b with
+    | some b => b.mentions n
+    | none => false)
+  | .forOfStmt _ _ x it b => x == n || it.mayHold (· == n) || b.mentions n
+  | .forOfPattern _ _ p it b => p.names.contains n || it.mayHold (· == n) || b.mentions n
+  | .forStmt _ init t u b => (match init with
+    | some d => d.name == n || (match d.init with
+      | some e => e.mayHold (· == n)
+      | none => false)
+    | none => false) || (match t with
+    | some t => t.mayHold (· == n)
+    | none => false) || (match u with
+    | some u => u.mayHold (· == n)
+    | none => false) || b.mentions n
+  | .whileStmt _ t b => t.mayHold (· == n) || b.mentions n
+  | .block _ ss => Stmt.mentionsList n ss
+  | .breakStmt _ | .continueStmt _ | .empty _ => false
+  | .switchStmt _ d cs => d.mayHold (· == n) || Stmt.mentionsClauses n cs
+  | .funDecl _ name _ params _ b => name == n || params.any (·.name == n) || b.mentions n
+
+def Stmt.mentionsList (n : String) : List Stmt → Bool
+  | [] => false
+  | s :: ss => s.mentions n || Stmt.mentionsList n ss
+
+def Stmt.mentionsClauses (n : String) : List (Option Expr × List Stmt) → Bool
+  | [] => false
+  | (t, body) :: cs => (match t with
+    | some t => t.mayHold (· == n)
+    | none => false) || Stmt.mentionsList n body || Stmt.mentionsClauses n cs
+
+end
+
 /-- `e` is a new collection: a `new`, perhaps in parentheses or with `as const`
 or `satisfies T`. No name holds it, so a loop over it sees no change that the
 body makes to a name. A `new Set(s)` copies the values of `s` when it runs. -/
@@ -689,9 +737,11 @@ def Stmt.leaks (n : String) : Stmt → Bool
   | .block _ ss => Stmt.leaksList n ss
   | .breakStmt _ | .continueStmt _ | .empty _ => false
   | .switchStmt _ d cs => d.leaks n || Stmt.leaksClauses n cs
-  -- A local function may hold any name of its block and return it, so the
-  -- test counts it as handing on every one.
-  | .funDecl .. => true
+  -- A local function may hold any name that it mentions and hand it on, so
+  -- the test counts it as handing on each of those. It cannot reach a name
+  -- that it does not mention: a call captures only the names that the body
+  -- names (`Eval.captures`).
+  | .funDecl _ name _ params _ b => name == n || params.any (·.name == n) || b.mentions n
 
 def Stmt.leaksList (n : String) : List Stmt → Bool
   | [] => false

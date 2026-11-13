@@ -40,8 +40,8 @@ marks which links are proved, tested against a reference, or trusted.
   its own, so a `break` or a `continue` in it cannot leave a loop around the
   declaration. The parser refuses a function declaration as the body of an
   `if` or a loop without a block around it, as JavaScript does, and one in a
-  block outside every function. The translator refuses every local function
-  for now.
+  block outside every function. The translator accepts some of them; see
+  [The subset](#the-subset).
 - **Expressions:** names; number, bigint, string, boolean and `null` literals;
   array and object literals, with shorthand and `key: value` properties;
   parentheses, member access, indexing and calls; the unary operators `!`,
@@ -442,6 +442,8 @@ the file, the line and the reason. It never approximates.
 | `type R = Record<K, V>` or `Readonly<Record<K, V>>`, where `K` is a literal union of strings | `structure R` with one field of type `V` for each string of `K`, in the order of `K`. A value has a property for each string, so an object literal must set every key, in that order, as for an interface. `r.a` and `r['a']` read a field. |
 | `r[k]`, where `r` is such a `Record` and `k` has the type `K` | `match k with \| K.a => r.a \| …`, which reads the field that `k` names |
 | `function` with typed parameters and return type | `def` |
+| `function g(a: A): void { … }` at the top of the body of a function `f`, which changes `let` locals of `f`, and a call `g(a);` as a statement | `def f.g`, before `f`. It takes the locals of `f` that its body names, then its own parameters, and it returns the locals that it changes, as a tuple when there are two or more. A call is `let (x, y) := f.g x y a`, which binds those locals again, so a call in a loop body changes the state of the loop. |
+| `function g(a: A): T { … }` in the same place, which changes no variable of `f`, called as the whole value of a `const`, a `let` or a `return` | `def f.g` that returns the `T`, and `let v := f.g x a` at the call |
 | A function that calls itself, where each call passes a part of one parameter, the same one in every call. A part is a field of it, a value that a test of `null`, `undefined` or a tag narrows it to, an element of an array in it, an element of a tuple in it, or a part of one of these. | The same `def`, followed by `termination_by p` for the parameter `p`, and `decreasing_by all_goals tolean_decreasing`. Each call passes a value that is smaller by `sizeOf`, and the tactic from `tolean.TypeScript.Decreasing` proves it, so Lean checks that the function ends. Each `match` in such a function names the equation of its value `_h'`, which the tactic reads. Lean defines the function by well-founded recursion, so a claim unfolds it with `unfold` or `simp`, not with `rfl` or `decide`. |
 | `throw new Error(m)`, where `m` is a `string`, as the last statement of a function, of a loop body, or of a branch | `throw (JSError.mk m)`. A function that can throw returns `Except JSError R`, and each value that it returns is `pure` of the value. `JSError`, in `tolean/TypeScript/Spec/Error.lean`, holds the message. |
 | `const x = f(a)`, `let x = f(a)` or `return f(a)`, where `f` can throw | `f a >>= fun x => …`, which passes the error of the call on. So the function that holds the call can throw too. |
@@ -766,6 +768,16 @@ Tolean rejects these, among others:
 - A function that calls itself on anything but a part of one parameter, the
   same one in every call, and a call of a function that the file declares
   later. Without such a part, Lean could not see that the function ends.
+- A local function anywhere but at the top of the body of the function
+  around it, such as in a loop, in a branch or in another local function.
+  Tolean also refuses a local function that calls itself, another local
+  function or the function around it, one that throws, and one without a
+  return type. It refuses one that uses an array, a map or a set that the
+  function around it owns. It also refuses one that returns a value and
+  changes a variable of the function around it, which a later step will
+  translate. A call of a local function must be a statement of its own, or
+  the whole value of a `const`, a `let` or a `return`. So the function never
+  escapes, because no code can return it, store it or pass it on.
 - Closures and arrow functions, classes, `async`, exceptions, and mutable
   interface fields.
 - Imports other than the named imports of [Imports](#imports).
