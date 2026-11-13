@@ -843,6 +843,28 @@ def Expr.isAtom : Expr → Bool
 
 mutual
 
+/-- `e` is a literal whose parts are all literals: it reads no local and runs
+no call, so where it runs changes nothing that the model observes. Such an
+operand stays in place, because its type comes from its position. -/
+def Expr.isClosedLiteral : Expr → Bool
+  | .number .. | .bigint .. | .string .. | .bool .. | .null _ => true
+  | .array _ es => Expr.isClosedLiteralList es
+  | .object _ ps => Property.isClosedLiteralList ps
+  | _ => false
+
+def Expr.isClosedLiteralList : List Expr → Bool
+  | [] => true
+  | e :: es => Expr.isClosedLiteral e && Expr.isClosedLiteralList es
+
+def Property.isClosedLiteralList : List Property → Bool
+  | [] => true
+  | .keyValue _ _ v :: ps => Expr.isClosedLiteral v && Property.isClosedLiteralList ps
+  | .shorthand .. :: _ | .spread .. :: _ => false
+
+end
+
+mutual
+
 /-- `e` holds a call of a function that `thr` says can throw, in a place that
 JS evaluates whenever it evaluates `e`. A call in a branch of `?:`, after
 `&&`, `||` or `??`, or in an arrow function may not run, so it stays where
@@ -879,9 +901,10 @@ structure Hoisted where
   next : Nat
 
 /-- Bind `e` to a fresh name before the statement, and read the name in its
-place. An atom stays as it is. -/
+place. An atom stays as it is, and so does a literal whose parts are all
+literals. -/
 def Hoisted.bind (h : Hoisted) (e : Expr) : Expr × Hoisted :=
-  if Expr.isAtom e then (e, h) else
+  if Expr.isAtom e || Expr.isClosedLiteral e then (e, h) else
     let name := hoistName h.next
     (.ident (Expr.span e) name,
       { decls := h.decls ++ [.varDecl (Expr.span e) { kind := .const, name, type := none, init := some e }],
