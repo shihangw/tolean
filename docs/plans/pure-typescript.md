@@ -357,12 +357,14 @@ a reason to choose otherwise.
 - Should `try` and `catch` come in a later step? The survey had none, but much
   other pure code catches its own errors.
 
-  Recommendation: yes, after step 7. Once the IR has `Except`, the interpreter
+  Recommendation: yes. Once the IR has `Except`, the interpreter
   change is small. The first version takes `try { … } catch (e) { … }` where
   the catch tests `e` with `instanceof` or ignores it, and refuses `finally`,
   a rethrow of a changed value, and a `throw` of anything but an error. The
   locals that the `try` body assigns become its result tuple, as a loop
-  body's do, which is why it comes after the threading of step 7.
+  body's do and a local function's do
+  ([decision](../decisions/2026-11-12-local-functions.md)), so the
+  threading that these use is already in place.
 
 - Should a map that a caller passes in become a borrow, as above, or should the
   callee run in a state monad? A borrow keeps the output plain, but it only
