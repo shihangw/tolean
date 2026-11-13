@@ -1,4 +1,6 @@
 import tolean.TypeScript.Syntax.Ast
+import tolean.TypeScript.Spec.BigInt
+import tolean.TypeScript.Spec.Date
 import tolean.TypeScript.Spec.Number
 import tolean.TypeScript.Spec.String
 
@@ -51,6 +53,8 @@ inductive Val (N : Type) where
   /-- An error object: the name of the class that made it, such as
   `"Error"`, and its own properties. `new Error(m)` has one, `message`. -/
   | error (cls : String) (fields : List (String × Val N))
+  /-- A `Date`: its time value, or `none` when it is invalid (`JSDate`). -/
+  | date (time : Option Int)
 deriving Inhabited
 
 /-- `ToBoolean` (ECMA-262 §7.1.2), on the values of the subset. A number is
@@ -61,7 +65,7 @@ def Val.truthy : Val N → Bool
   | .bool b => b
   | .str s => !s.isEmpty
   | .null | .undefined => false
-  | .list _ | .obj _ | .map _ | .set _ | .error _ _ => true
+  | .list _ | .obj _ | .map _ | .set _ | .error _ _ | .date _ => true
 
 /-- The result of `typeof` (ECMA-262 §13.5.3.1) on the values of the
 subset. `null` is `"object"`, and so are an array and an object, which are
@@ -72,7 +76,7 @@ def Val.typeOf : Val N → String
   | .bool _ => "boolean"
   | .str _ => "string"
   | .undefined => "undefined"
-  | .null | .list _ | .obj _ | .map _ | .set _ | .error _ _ => "object"
+  | .null | .list _ | .obj _ | .map _ | .set _ | .error _ _ | .date _ => "object"
 
 /-- The variables in scope, innermost first. -/
 abbrev Env (N : Type) := List (String × Val N)
@@ -159,14 +163,14 @@ def strictEq : Val N → Val N → Option Bool
   | .undefined, .undefined => some true
   | .undefined, .int _ | .undefined, .num _ | .undefined, .bool _ | .undefined, .str _
   | .undefined, .null | .undefined, .list _ | .undefined, .obj _ | .undefined, .map _
-  | .undefined, .set _ | .undefined, .error _ _ => some false
+  | .undefined, .set _ | .undefined, .error _ _ | .undefined, .date _ => some false
   | .int _, .undefined | .num _, .undefined | .bool _, .undefined | .str _, .undefined
   | .null, .undefined | .list _, .undefined | .obj _, .undefined | .map _, .undefined
-  | .set _, .undefined | .error _ _, .undefined => some false
+  | .set _, .undefined | .error _ _, .undefined | .date _, .undefined => some false
   | .null, .int _ | .null, .num _ | .null, .bool _ | .null, .str _ | .null, .list _
-  | .null, .obj _ | .null, .map _ | .null, .set _ | .null, .error _ _ => some false
+  | .null, .obj _ | .null, .map _ | .null, .set _ | .null, .error _ _ | .null, .date _ => some false
   | .int _, .null | .num _, .null | .bool _, .null | .str _, .null | .list _, .null
-  | .obj _, .null | .map _, .null | .set _, .null | .error _ _, .null => some false
+  | .obj _, .null | .map _, .null | .set _, .null | .error _ _, .null | .date _, .null => some false
   | _, _ => none
 
 /-- `IsLooselyEqual` (ECMA-262 §7.2.14) when one operand is `null` or
@@ -235,7 +239,15 @@ one operand of `+` is a string, `+` converts the other with ToString and
 joins the code units (ApplyStringOrNumericBinaryOperator, §13.15.3). The
 subset converts strings, bigints, booleans and numbers. A number becomes
 `JSNumber.toStr`, which the model leaves abstract: `SafeIntLaws.toStr` says
-what it gives for a safe integer. The subset has no `/` or `%` on numbers. -/
+what it gives for a safe integer. `/` on numbers is Number::divide
+(§6.1.6.1.5), and the subset has no `%` on numbers.
+
+On bigints, `a ** b` throws a `RangeError` when `b` is negative
+(BigInt::exponentiate, §6.1.6.2.3), and `&`, `|`, `^`, `<<` and `>>` are the
+operations of `JSBigInt` (`Spec/BigInt.lean`). `>>>` throws a `TypeError` on
+bigints, so it has no rule there. On numbers, the bitwise operators work on
+ToInt32 and ToUint32 of their operands, as `JSNumber.bitAnd` and its
+relatives do (`Spec/Number.lean`). -/
 def binary : BinOp → Val N → Val N → Option (Val N)
   | .add, .int a, .int b => some (.int (a + b))
   | .add, .str a, .str b => some (.str (a ++ b))
@@ -249,6 +261,12 @@ def binary : BinOp → Val N → Val N → Option (Val N)
   | .mul, .int a, .int b => some (.int (a * b))
   | .div, .int a, .int b => if b == 0 then none else some (.int (a.tdiv b))
   | .mod, .int a, .int b => if b == 0 then none else some (.int (a.tmod b))
+  | .exp, .int a, .int b => if b < 0 then none else some (.int (a ^ b.toNat))
+  | .bitAnd, .int a, .int b => some (.int (JSBigInt.bitAnd a b))
+  | .bitOr, .int a, .int b => some (.int (JSBigInt.bitOr a b))
+  | .bitXor, .int a, .int b => some (.int (JSBigInt.bitXor a b))
+  | .shl, .int a, .int b => some (.int (JSBigInt.shiftLeft a b))
+  | .shr, .int a, .int b => some (.int (JSBigInt.shiftRight a b))
   | .lt, .int a, .int b => some (.bool (decide (a < b)))
   | .gt, .int a, .int b => some (.bool (decide (a > b)))
   | .le, .int a, .int b => some (.bool (decide (a ≤ b)))
@@ -256,6 +274,13 @@ def binary : BinOp → Val N → Val N → Option (Val N)
   | .add, .num a, .num b => some (.num (JSNumber.add a b))
   | .sub, .num a, .num b => some (.num (JSNumber.sub a b))
   | .mul, .num a, .num b => some (.num (JSNumber.mul a b))
+  | .div, .num a, .num b => some (.num (JSNumber.div a b))
+  | .bitAnd, .num a, .num b => some (.num (JSNumber.bitAnd a b))
+  | .bitOr, .num a, .num b => some (.num (JSNumber.bitOr a b))
+  | .bitXor, .num a, .num b => some (.num (JSNumber.bitXor a b))
+  | .shl, .num a, .num b => some (.num (JSNumber.shiftLeft a b))
+  | .shr, .num a, .num b => some (.num (JSNumber.shiftRight a b))
+  | .ushr, .num a, .num b => some (.num (JSNumber.unsignedShiftRight a b))
   | .lt, .num a, .num b => some (.bool (JSNumber.lt a b))
   | .gt, .num a, .num b => some (.bool (JSNumber.lt b a))
   | .le, .num a, .num b => some (.bool (JSNumber.le a b))
@@ -277,6 +302,28 @@ Any other two values are the same when they are `===` (SameValueNonNumber,
 def sameValueZero : Val N → Val N → Option Bool
   | .num a, .num b => some (JSNumber.sameValueZero a b)
   | a, b => strictEq a b
+
+/-- SameValue (ECMA-262 §7.2.10), which `Object.is` gives: on two numbers,
+`===` except that `NaN` is the same as `NaN` and `+0` is not the same as
+`-0`, and on any other two values, SameValueNonNumber, as for
+`sameValueZero`. -/
+def sameValue : Val N → Val N → Option Bool
+  | .num a, .num b => some (JSNumber.sameValue a b)
+  | a, b => strictEq a b
+
+/-- A method of a date with the time value `t` that takes no arguments, on
+the values of its arguments (`JSDate.method?`). -/
+def dateMethod (method : String) (t : Option Int) : List (Val N) → Option (Val N)
+  | [] => (JSDate.method? method).map fun f => .num (f ⟨t⟩)
+  | _ => none
+
+/-- `Number(v)` (§21.1.1.1) on the value of its one argument: a bigint
+becomes the Number value for it, and a number stays itself. ToNumber of a
+string or a boolean is not modelled. -/
+def numberOf : List (Val N) → Option (Val N)
+  | [.int i] => some (.num (JSNumber.ofInt i))
+  | [.num x] => some (.num x)
+  | _ => none
 
 /-- Whether an element of `items` is the same as `v` by SameValueZero. This
 is the loop of `Array.prototype.includes` (ECMA-262 §23.1.3.16), which
@@ -449,6 +496,10 @@ where
     | .null | .undefined => ascii "null"
     | .bool b => ascii (if b then "true" else "false")
     | .str s => jsonQuote s
+    -- `Date.prototype.toJSON` gives `null` for an invalid date and the text of
+    -- `toISOString` for a valid one, which the model does not have yet.
+    | .date none => ascii "null"
+    | .date (some _) => panic! "the interpreter cannot write a date as JSON yet"
     | .num n => if JSNumber.isNaN n || !JSNumber.isFinite n then ascii "null" else (JSNumber.toStr n).units
     | .int _ => panic! "JSON.stringify throws on a bigint"
     | .list items => ascii "[" ++ (ascii ",").intercalate (items.map go) ++ ascii "]"
@@ -483,13 +534,24 @@ def elementAt (items : List (Val N)) : Option Int → Val N
   | none => .undefined
 
 /-- SameValueZero (ECMA-262 §7.2.11), which a `Map` uses to compare keys, on
-the keys of the subset: bigints, booleans and strings. On these it is
+the keys of the subset: numbers, bigints, booleans and strings. Two numbers
+are the same when they are `===` or both `NaN`, so a map has at most one `NaN`
+key, and `+0` is the same key as `-0`. On the other keys SameValueZero is
 `IsStrictlyEqual`. A key of another type leaves the subset. -/
 def sameKey : Val N → Val N → Option Bool
+  | .num a, .num b => some (JSNumber.sameValueZero a b)
   | .int a, .int b => some (decide (a = b))
   | .bool a, .bool b => some (decide (a = b))
   | .str a, .str b => some (decide (a = b))
   | _, _ => none
+
+/-- The key that a map or a set stores when it adds `k`: `+0` when `k` is
+`-0`, and `k` otherwise (`Map.prototype.set` and `Set.prototype.add`, ECMA-262
+§24.1.3.9 and §24.2.4.1). A loop over the keys therefore never sees `-0`.
+A number is `+0` or `-0` exactly when it is `=== 0`. -/
+def storedKey : Val N → Val N
+  | .num a => .num (if JSNumber.eq a (JSNumber.ofSafeInt 0) then JSNumber.ofSafeInt 0 else a)
+  | k => k
 
 /-- The value of the key `k` in the entries of a map, or `none` when no entry
 has the key (`Map.prototype.get`, ECMA-262 §24.1.3.6). -/
@@ -499,9 +561,10 @@ def mapFind : List (Val N × Val N) → Val N → Option (Option (Val N))
 
 /-- The entries after `Map.prototype.set` (ECMA-262 §24.1.3.9): the entry of
 `k` gets the value `v` in its place, or a new entry goes last when no entry
-has the key. -/
+has the key. The entry keeps the key that it has, and a new entry stores
+`storedKey k`. -/
 def mapSet : List (Val N × Val N) → Val N → Val N → Option (List (Val N × Val N))
-  | [], k, v => some [(k, v)]
+  | [], k, v => some [(storedKey k, v)]
   | (k', v') :: rest, k, v => do
     if ← sameKey k' k then return (k', v) :: rest else return (k', v') :: (← mapSet rest k v)
 
@@ -518,10 +581,11 @@ def setHas : List (Val N) → Val N → Option Bool
   | [], _ => some false
   | y :: rest, x => do if ← sameKey y x then return true else setHas rest x
 
-/-- The elements after `Set.prototype.add` (ECMA-262 §24.2.4.1): `x` goes last
-when the set does not have it, and the set stays as it is when it does. -/
+/-- The elements after `Set.prototype.add` (ECMA-262 §24.2.4.1): `storedKey x`
+goes last when the set does not have `x`, and the set stays as it is when it
+does. -/
 def setAdd (elems : List (Val N)) (x : Val N) : Option (List (Val N)) := do
-  if ← setHas elems x then return elems else return elems ++ [x]
+  if ← setHas elems x then return elems else return elems ++ [storedKey x]
 
 /-- The elements after `Set.prototype.delete` (ECMA-262 §24.2.4.4), which
 removes `x`. The other elements keep their order. -/
@@ -780,6 +844,31 @@ def bindArgs (params : List String) (vs : List (Val N)) : Option (Env N) :=
   if params.length < vs.length then none
   else some (params.zip (vs ++ List.replicate (params.length - vs.length) .undefined)).reverse
 
+/-- The numbers among `vs`, when every value is a number. -/
+def numbers? : List (Val N) → Option (List N)
+  | [] => some []
+  | .num x :: vs => (numbers? vs).map (x :: ·)
+  | _ :: _ => none
+
+/-- A function of `Math` that the subset has, on the values of its arguments:
+`Math.floor`, `ceil`, `trunc`, `round` and `abs` on one number, and
+`Math.min` and `Math.max` on any count of numbers (ECMA-262 §21.3.2). These
+convert a value of another type with ToNumber, or throw on a bigint, so the
+subset has them on numbers only. -/
+def mathCall (f : String) (args : List (Val N)) : Option (Val N) :=
+  if f == "min" then (numbers? args).map (.num ∘ JSNumber.minimum)
+  else if f == "max" then (numbers? args).map (.num ∘ JSNumber.maximum)
+  else
+    match args with
+    | [.num x] =>
+      if f == "floor" then some (.num (JSNumber.floor x))
+      else if f == "ceil" then some (.num (JSNumber.ceil x))
+      else if f == "trunc" then some (.num (JSNumber.trunc x))
+      else if f == "round" then some (.num (JSNumber.round x))
+      else if f == "abs" then some (.num (JSNumber.abs x))
+      else none
+    | _ => none
+
 -- With the array callbacks and the map and set methods both in `eval`, this
 -- block takes a little more than the default 200000 heartbeats to elaborate,
 -- most of it in the proofs that each recursive call is smaller.
@@ -896,6 +985,13 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     | .int i => some (.int (-i))
     | .num n => some (.num (JSNumber.neg n))
     | _ => none
+  -- `~a` on a bigint is `-a - 1` (BigInt::bitwiseNOT, §6.1.6.2.2), and on a
+  -- number it is that of ToInt32 (Number::bitwiseNOT, §6.1.6.1.2).
+  | .unary _ .bitNot arg => do
+    match ← eval m fuel env arg with
+    | .int i => some (.int (JSBigInt.bitNot i))
+    | .num n => some (.num (JSNumber.bitNot n))
+    | _ => none
   -- `&&`, `||` and `??` evaluate their right side only when they need it
   -- (ECMA-262 §13.13.1), and return an operand, not a boolean.
   | .binary _ .and l r => do
@@ -912,19 +1008,38 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
   | .binary _ op l r => do binary op (← eval m fuel env l) (← eval m fuel env r)
   | .cond _ test t f => do
     if (← eval m fuel env test).truthy then eval m fuel env t else eval m fuel env f
-  -- `Number.isNaN(x)`, `Number.isFinite(x)` and `Number.isSafeInteger(x)` on a
-  -- number (ECMA-262 §21.1.2), unless a variable hides `Number`.
+  -- `Number.isNaN(x)`, `Number.isFinite(x)`, `Number.isSafeInteger(x)` and
+  -- `Number.isInteger(x)` on a number (ECMA-262 §21.1.2), unless a variable
+  -- hides `Number`.
   | .call _ (.member _ (.ident _ "Number") test) [arg] => do
     if (env.lookup "Number").isSome then none
     let .num n ← eval m fuel env arg | none
     if test == "isNaN" then some (.bool (JSNumber.isNaN n))
     else if test == "isFinite" then some (.bool (JSNumber.isFinite n))
     else if test == "isSafeInteger" then some (.bool (JSNumber.toSafeInt n).isSome)
+    else if test == "isInteger" then some (.bool (JSNumber.isInteger n))
     else none
   -- `JSON.stringify(x)` (ECMA-262 §25.5.2.1), unless a variable hides `JSON`.
-  | .call _ (.member _ (.ident _ "JSON") "stringify") [arg] => do
-    if (env.lookup "JSON").isSome then none
+  -- The method and the arguments are checked in the body, as for `Math`, so
+  -- that the rule adds few cases to the equations of `eval`.
+  | .call _ (.member _ (.ident _ "JSON") f) args => do
+    if (env.lookup "JSON").isSome || f != "stringify" then none
+    let [arg] := args | none
     jsonStringify (← eval m fuel env arg)
+  -- `Math.floor(x)` and the other functions of `Math` that `mathCall` has,
+  -- unless a variable hides `Math`.
+  | .call _ (.member _ (.ident _ "Math") f) args => do
+    if (env.lookup "Math").isSome then none
+    mathCall f (← evalList m fuel env args)
+  -- `Date.UTC(year, month, …)` (§21.4.3.4) on numbers, unless a variable
+  -- hides `Date`.
+  | .call _ (.member _ (.ident _ "Date") "UTC") args => do
+    if (env.lookup "Date").isSome then none
+    return .num (JSDate.utc (← numbers? (← evalList m fuel env args)))
+  -- `Object.is(a, b)` (§20.1.2.15), unless a variable hides `Object`.
+  | .call _ (.member _ (.ident _ "Object") "is") [a, b] => do
+    if (env.lookup "Object").isSome then none
+    return .bool (← sameValue (← eval m fuel env a) (← eval m fuel env b))
   -- `xs.map(x => e)` and the other methods of an array that take a callback
   -- (`Array.prototype.map`, `filter`, `some`, `every` and `find`, ECMA-262
   -- §23.1.3.21, §23.1.3.8, §23.1.3.29, §23.1.3.6 and §23.1.3.9). The callback
@@ -1035,6 +1150,8 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     match ← eval m fuel env recv with
     | .list items => arrayMethod method items (← evalList m fuel env args)
     | .str s => stringMethod method s (← evalList m fuel env args) (args.map intLiteral?)
+    -- `d.getTime()` and the UTC getters of a date, which take no arguments.
+    | .date t => dateMethod method t (← evalList m fuel env args)
     | _ => none
   -- A call that throws inside an expression gives no value. Only a call that
   -- is the whole value of a declaration or a `return` passes its throw on
@@ -1047,6 +1164,12 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
   | .new _ "Map" _ [] => if (env.lookup "Map").isSome then none else some (.map [])
   -- `new Set()` (ECMA-262 §24.2.2.1), in the same way.
   | .new _ "Set" _ [] => if (env.lookup "Set").isSome then none else some (.set [])
+  -- `new Date(t)` on a number (§21.4.2.1): the date whose time value is
+  -- TimeClip of `t`.
+  | .new _ "Date" _ [arg] => do
+    if (env.lookup "Date").isSome then none
+    let .num t ← eval m fuel env arg | none
+    return .date (JSDate.timeClip t)
   -- `new Map(items)` and `new Set(items)` (`AddEntriesFromIterable`, ECMA-262
   -- §24.1.1.2, and §24.2.2.1): the constructor visits `items` as a loop
   -- would, and sets each `[key, value]`, or adds each value, in order.
@@ -1074,6 +1197,9 @@ termination_by e => (fuel, sizeOf e, 0)
 def evalCall (m : Scope) (fuel : Nat) (env : Env N) (name : String) (args : List Expr) :
     Option (Except (Val N) (Val N)) := do
   let vs ← evalList m fuel env args
+  -- `Number(b)`, unless a variable hides `Number`. A declaration of the
+  -- module named `Number` would hide it too, and the translator refuses it.
+  if name == "Number" && (env.lookup "Number").isNone then return .ok (← numberOf vs)
   match fuel with
   | 0 => none
   | fuel + 1 =>
