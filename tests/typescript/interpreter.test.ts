@@ -169,10 +169,17 @@ type Interpreted =
   | { parsed: true; accepted: boolean; results: Array<{ value: Value } | { throws: Value } | null> };
 type NodeResult = { returns: unknown } | { throws: string; thrown: unknown };
 
-/** What Node threw, as `tolean interpret` writes it: an `Error` as its class
- * and its message, and any other value as itself. */
+/** What Node threw, as `tolean interpret` writes it: an `Error` as its class,
+ * its message and its own enumerable properties, which are the fields of an
+ * error class, and any other value as itself. */
 function shownThrow(x: unknown): string {
-  if (x instanceof Error) return JSON.stringify({ error: [x.name, [['message', x.message]]] });
+  if (x instanceof Error) {
+    const fields: Array<[string, Value]> = [
+      ['message', encode(x.message)],
+      ...Object.entries(x).map(([k, v]): [string, Value] => [k, encode(v)]),
+    ];
+    return canonical({ error: [x.constructor.name, fields] });
+  }
   return shown(x);
 }
 

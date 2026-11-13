@@ -254,6 +254,9 @@ class Printer {
         [...typeParams, this.type(s.type)],
       );
     }
+    if (ts.isClassDeclaration(s)) {
+      return this.errorClass(s);
+    }
     if (ts.isEnumDeclaration(s)) {
       const exported = this.modifiers(s, [ts.SyntaxKind.ExportKeyword]).size > 0;
       return this.node(
@@ -268,6 +271,59 @@ class Printer {
       return this.variable(s, exported);
     }
     return this.statement(s);
+  }
+
+  /** `class Name extends Error { constructor(params) { super(message); } }`:
+   * an error class, with at most a constructor whose body is one `super`
+   * call. The Lean parser refuses every other class. */
+  private errorClass(s: ts.ClassDeclaration): Sexp {
+    const exported = this.modifiers(s, [ts.SyntaxKind.ExportKeyword]).size > 0;
+    if (s.name === undefined || s.typeParameters !== undefined) {
+      refuse(s, 'class without a name, or with type parameters');
+    }
+    const clauses = s.heritageClauses ?? [];
+    const base = clauses.length === 1 && clauses[0].token === ts.SyntaxKind.ExtendsKeyword &&
+      clauses[0].types.length === 1 ? clauses[0].types[0] : undefined;
+    if (base === undefined || base.typeArguments !== undefined || !ts.isIdentifier(base.expression) ||
+        base.expression.text !== 'Error') {
+      refuse(s, 'class that does not extend Error');
+    }
+    if (s.members.length === 0) {
+      return this.node('class', s, [this.name(s.name), ...(exported ? ['export'] : [])], []);
+    }
+    const ctor = s.members[0];
+    if (s.members.length !== 1 || !ts.isConstructorDeclaration(ctor) || ctor.body === undefined) {
+      refuse(s, 'class member other than one constructor');
+    }
+    this.modifiers(ctor, []);
+    const params = ctor.parameters.map((p) => this.ctorParam(p));
+    const body = ctor.body.statements;
+    const call = body.length === 1 && ts.isExpressionStatement(body[0]) ? body[0].expression : undefined;
+    if (call === undefined || !ts.isCallExpression(call) || call.expression.kind !== ts.SyntaxKind.SuperKeyword ||
+        call.typeArguments !== undefined || call.arguments.length !== 1 || ts.isSpreadElement(call.arguments[0])) {
+      refuse(ctor, "constructor body other than 'super(message);'");
+    }
+    return this.node('class', s, [this.name(s.name), ...(exported ? ['export'] : [])], [
+      ...params,
+      this.expr(call.arguments[0]),
+    ]);
+  }
+
+  /** A parameter of a constructor, which `readonly` may mark. */
+  private ctorParam(p: ts.ParameterDeclaration): Sexp {
+    const readonly = this.modifiers(p, [ts.SyntaxKind.ReadonlyKeyword]).size > 0;
+    if (p.dotDotDotToken !== undefined) {
+      refuse(p, 'rest parameter');
+    }
+    if (p.initializer !== undefined) {
+      refuse(p, 'default value');
+    }
+    return this.node(
+      'param',
+      p,
+      [this.name(p.name), ...(p.questionToken !== undefined ? ['optional'] : []), ...(readonly ? ['readonly'] : [])],
+      p.type === undefined ? [] : [this.type(p.type)],
+    );
   }
 
   // `Name = "value"`. A name that is a reserved word is an identifier here.

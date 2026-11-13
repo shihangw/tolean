@@ -191,6 +191,12 @@ def decl : Decl → String
     s!"({ns}Decl.interface {span s} {e} {str n} {list (tps.map str)} {list (fs.map field)})"
   | .typeAlias s e n tps t => s!"({ns}Decl.typeAlias {span s} {e} {str n} {list (tps.map str)} {typeExpr t})"
   | .enum s e n ms => s!"({ns}Decl.enum {span s} {e} {str n} {list (ms.map enumMember)})"
+  | .errorClass s e n ctor =>
+    let c := match ctor with
+      | none => "none"
+      | some (ps, m) =>
+        s!"(some ({list (ps.map fun (p : CtorParam) => s!"\{ readonly := {p.readonly}, param := {param p.param} }")}, {expr m}))"
+    s!"({ns}Decl.errorClass {span s} {e} {str n} {c})"
   | .exportedVar s d => s!"({ns}Decl.exportedVar {span s} {varDecl d})"
   | .stmt s => s!"({ns}Decl.stmt {stmt s})"
 
