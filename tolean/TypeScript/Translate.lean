@@ -1463,13 +1463,15 @@ def concatParts? : Ty → Ty → Option (IR.StringPart × IR.StringPart)
   | .bigint, .string => some (.bigint, .string)
   | .string, .boolean => some (.string, .boolean)
   | .boolean, .string => some (.boolean, .string)
+  | .string, .number => some (.string, .number)
+  | .number, .string => some (.number, .string)
   | _, _ => none
 
 /-- `a + b` where one operand is a string: ToString converts the other
 operand, and the code units join. -/
 def concatOperands (s : Span) (a b : Code) : TM Code := do
   let some (left, right) := concatParts? a.type b.type
-    | reject s "'+' on a string needs a string, a bigint or a boolean on the other side"
+    | reject s "'+' on a string needs a string, a number, a bigint or a boolean on the other side"
   return ⟨.ext (.stringAppend left right) [a.value, b.value], false, .string⟩
 
 /-- The code for `op` on the operands `a` and `b`, which the translator has
@@ -1641,10 +1643,11 @@ def reducerOf : List Expr → Option (Param × Param × Expr × Expr)
   | [.arrow _ _ [a, p] body, init] => some (a, p, body, init)
   | _ => none
 
-/-- `e` is the name `Number` or `Math`, whose calls the interpreter reads
-before the methods of a value. -/
-def _root_.tolean.TypeScript.Syntax.Expr.namesNumber : Expr → Bool
-  | .ident _ "Number" | .ident _ "Math" | .ident _ "Object" | .ident _ "Date" => true
+/-- `e` is the name of a global object whose calls the interpreter reads by
+their own rules, before the methods of a value: `Number`, `Math`, `Object`,
+`Date` or `JSON`, as in `Number.isNaN(x)` and `JSON.stringify(x)`. -/
+def _root_.tolean.TypeScript.Syntax.Expr.namesGlobal : Expr → Bool
+  | .ident _ "Number" | .ident _ "Math" | .ident _ "Object" | .ident _ "Date" | .ident _ "JSON" => true
   | _ => false
 
 /-- `m.get(k)` and `m.has(k)`, as the method and the operation of the output. -/
@@ -1736,13 +1739,14 @@ def newSetType (s : Span) (typeArgs : List TypeExpr) (expected : Option Ty) : TM
   | _, _ => reject s "new Set needs the type of its elements, such as new Set<string>()"
 
 /-- What `for (const x of items)` visits, with its type: the elements of an
-array or a set, or the entries of a map, which a loop sees as tuples
-`[key, value]`. -/
+array or a set, the entries of a map, which a loop sees as tuples
+`[key, value]`, or the code points of a string, each as a string. -/
 def loopOver (items : Code) : Option (Ty × IR.Expr) :=
   match items.type with
   | .array t => some (t, items.code)
   | .set t => some (t, .ext .setElems [items.value])
   | .map k v => some (.tuple [k, v], .ext .mapEntries [items.value])
+  | .string => some (.string, .ext .stringCodePoints [items.value])
   | _ => none
 
 /-- What a loop over `iterable`, which `items` translates, visits, when the
@@ -1750,7 +1754,7 @@ loop body is `body`. -/
 def loopItems (iterable : Expr) (body : Stmt) (items : Code) : TM (Ty × IR.Expr) := do
   if Stmt.mutatesIterable iterable body then
     reject iterable.span "a loop may not change the map or set that it runs over"
-  orReject (loopOver items) iterable.span "a loop must run over an array, a set or a map"
+  orReject (loopOver items) iterable.span "a loop must run over an array, a set, a map or a string"
 
 /-- A piece of an array literal: an element, or the list of values that a
 spread `...e` gives, with their type. -/
@@ -1772,7 +1776,7 @@ def translateElem (tr : Option Ty → Expr → TM Code) (expected : Option Ty) (
   match e.spreadArg? with
   | some (sp, x) => do
     let items ← tr expected x
-    let (t, li) ← orReject (loopOver items) sp "a spread '...' in an array needs an array, a set or a map"
+    let (t, li) ← orReject (loopOver items) sp "a spread '...' in an array needs an array, a set, a map or a string"
     pure (.many t li)
   | none => do
     let elem := match expected with
@@ -1860,7 +1864,7 @@ def translateNew (tr : Option Ty → Expr → TM Code) (env : Env) (expected : O
     let items ← translateRecv (tr (declared.map fun t => if isMap then t.entriesOf else t.elemsOf)) env arg
     let (elem, li) ← orReject (loopOver items) arg.span
       (if isMap then "new Map takes an array of [key, value] entries, or a map"
-       else "new Set takes an array or a set")
+       else "new Set takes an array, a set, a map or a string")
     let type ← if isMap then mapOfEntriesType arg.span declared elem else setOfElemsType arg.span declared elem
     return ⟨.ascribe (.ext (if isMap then .mapOfList else .setOfList) [li]) type.lean, false, type⟩
   | _ => reject s s!"new {callee} takes at most one argument"
@@ -1889,7 +1893,7 @@ def indexNumber (s : Span) (xs i : Code) (elem : Ty) : TM Code := do
 method that takes no callback. `Number.isNaN(x)` and the like are calls of the
 global `Number`, not of an array. -/
 def arrayCallOf : Expr → Option (Expr × String)
-  | .member _ recv name => if recv.namesNumber then none else some (recv, name)
+  | .member _ recv name => if recv.namesGlobal then none else some (recv, name)
   | _ => none
 
 /-- The start and the end of `slice`, from the integers of its arguments: a
@@ -1905,38 +1909,122 @@ def _root_.tolean.TypeScript.Syntax.Expr.isArrow : Expr → Bool
   | .arrow .. => true
   | _ => false
 
+/-- The methods of a string that the subset has. -/
+def stringMethods : List IR.StringMethod :=
+  [.startsWith, .endsWith, .includes, .indexOf, .trim, .trimStart, .trimEnd, .split, .at, .slice,
+   .padStart, .padEnd, .toUpperCase, .toLowerCase]
+
 /-- The method of a string that `name` names, among those the subset has. -/
 def stringMethod? (name : String) : Option IR.StringMethod :=
-  if name == "startsWith" then some .startsWith
-  else if name == "endsWith" then some .endsWith
-  else if name == "includes" then some .includes
-  else if name == "indexOf" then some .indexOf
-  else if name == "trim" then some .trim
-  else if name == "trimStart" then some .trimStart
-  else if name == "trimEnd" then some .trimEnd
-  else if name == "split" then some .split
-  else none
+  stringMethods.find? (·.name == name)
 
-/-- The types of the arguments that a method of a string takes here. JS converts
-another argument with ToString, which the subset has only on strings, and a
-position argument is not supported. -/
-def StringMethod.params : IR.StringMethod → List Ty
-  | .startsWith | .endsWith | .includes | .indexOf | .split => [.string]
-  | .trim | .trimStart | .trimEnd => []
+/-- The types of the arguments that a method of a string takes here: those
+that a call must pass, then those that it may leave out. JS converts a string
+argument with ToString, which the subset has only on strings, and a number
+argument with ToIntegerOrInfinity, which the translator has only on integer
+literals. -/
+def StringMethod.params : IR.StringMethod → List Ty × List Ty
+  | .startsWith | .endsWith | .includes | .indexOf | .split => ([.string], [.number])
+  | .trim | .trimStart | .trimEnd | .toUpperCase | .toLowerCase => ([], [])
+  | .at => ([.number], [])
+  | .slice => ([], [.number, .number])
+  | .padStart | .padEnd => ([.number], [.string])
+
+/-- The arguments of a call fit the method: there are at least as many as it
+must take and no more than it can, each has the type of its parameter, and
+each number is an integer literal. `types` are the types of the arguments, and
+`lits` are the integer literals that they are. -/
+def StringMethod.fits (m : IR.StringMethod) (types : List Ty) (lits : List (Option Int)) : Bool :=
+  let all := (StringMethod.params m).1 ++ (StringMethod.params m).2
+  (StringMethod.params m).1.length ≤ types.length && types.length ≤ all.length &&
+    types == all.take types.length && (types.zip lits).all fun (t, k) => t != .number || k.isSome
+
+/-- What a call of the method must pass, for the message that refuses another
+call. -/
+def StringMethod.usage (method : String) : IR.StringMethod → String
+  | .startsWith | .endsWith | .includes | .indexOf =>
+    s!"'{method}' takes a string and perhaps a position, an integer literal"
+  | .split => "'split' takes a string separator and perhaps a limit, an integer literal"
+  | .trim | .trimStart | .trimEnd | .toUpperCase | .toLowerCase => s!"'{method}' takes no arguments"
+  | .at => "'at' on a string takes one integer literal, such as s.at(-1)"
+  | .slice => "'slice' on a string takes at most two integer literals, such as s.slice(1) or s.slice(-2)"
+  | .padStart | .padEnd => s!"'{method}' takes a length, an integer literal, and perhaps a string to fill with"
+
+/-- The longest string that every engine can make. V8 has the smallest limit,
+2^28 - 16 code units on 32-bit systems. JS throws a `RangeError` for a longer
+one, which the model does not. -/
+def maxStringLength : Int := 2 ^ 28 - 16
+
+/-- The call pads to a length that an engine may refuse to make. -/
+def StringMethod.padsTooFar : IR.StringMethod → List (Option Int) → Bool
+  | .padStart, some n :: _ | .padEnd, some n :: _ => maxStringLength < n
+  | _, _ => false
 
 /-- The type of the value of a method of a string. -/
 def StringMethod.result : IR.StringMethod → Ty
   | .startsWith | .endsWith | .includes => .boolean
   | .indexOf => .number
-  | .trim | .trimStart | .trimEnd => .string
+  | .trim | .trimStart | .trimEnd | .slice | .padStart | .padEnd | .toUpperCase | .toLowerCase => .string
   | .split => .array .string
+  | .at => .optional .string
 
 /-- The edition from which a method of a string means what the model says,
 when that is later than ES2015. -/
 def StringMethod.feature : IR.StringMethod → Option Feature
   | .trim => some .trimWhiteSpace
   | .trimStart | .trimEnd => some .trimStartEnd
+  | .padStart | .padEnd => some .stringPad
+  | .at => some .stringAt
   | _ => none
+
+/-- `JSON.stringify` gives a string on a value of type `t`, and the Lean value
+fixes the text: a string, a number, a boolean, `null`, a member of a literal
+union, or an array, a tuple or a nullable value of such values. Two JS values
+that Tolean gives the same Lean value must give the same text, or a theorem
+about the output could be false in JS. An object breaks that: a caller may
+pass `{ y: 1, x: 2 }` for an interface that declares `x` first, or an object
+with more properties, and `JSON.stringify` writes them in their own order. A
+map or a set could carry properties of its own too. A bigint makes
+`JSON.stringify` throw (ECMA-262 §25.5.2.2), `undefined` gives `undefined`,
+and a type parameter could be either. Two types that Lean writes alike break
+it too. Lean writes `[A, [B, C]]` and `[A, B, C]` both as `A × B × C`, so a
+tuple whose last element is a tuple is refused. A type of one string literal,
+such as `'circle'`, is a tag, which another literal could share. `fuel`
+bounds the depth of the type. -/
+def Ty.jsonSafe : Nat → Ty → Bool
+  | 0, _ => false
+  | fuel + 1, t =>
+    match t with
+    | .number | .boolean | .string | .null | .enum _ => true
+    | .nullable v | .array v => Ty.jsonSafe fuel v
+    | .tuple ts => !(ts.getLast?.any (· matches .tuple _)) && ts.all (Ty.jsonSafe fuel)
+    | _ => false
+
+/-- How deep `JSON.stringify` may look into the type of its argument. -/
+def jsonDepth : Nat := 64
+
+/-- The code for `JSON.stringify(x)`, where `a` is the code of `x`, at `span`. -/
+def jsonCall (span : Span) (a : Code) : TM Code := do
+  unless Ty.jsonSafe jsonDepth a.type do
+    reject span ("JSON.stringify needs a string, a number, a boolean or null, or an array, a tuple or a " ++
+      "nullable value of them; an object's text depends on the order of its keys, which a caller chooses")
+  return ⟨.ext .jsonStringify [.ascribe a.value a.type.lean], false, .string⟩
+
+/-- The method changes case, which the model has only on ASCII strings. -/
+def StringMethod.changesCase : IR.StringMethod → Bool
+  | .toUpperCase | .toLowerCase => true
+  | _ => false
+
+/-- The translator can show that the string that `e` gives is ASCII: a
+literal of ASCII text, or `+`, `trim`, `trimStart`, `trimEnd`, `slice` or a
+case change of such strings. -/
+def asciiString : IR.Expr → Bool
+  | .string text => text.toList.all fun (c : Char) => c.toNat < 0x80
+  | .ext (.stringAppend .string .string) [a, b] => asciiString a && asciiString b
+  | .ext (.stringMethod m _) (s :: _) =>
+    [IR.StringMethod.trim, .trimStart, .trimEnd, .slice, .toUpperCase, .toLowerCase].contains m &&
+      asciiString s
+  | _ => false
 
 /-- Refuse the code when the target does not have `f`. -/
 def requireFeature? (s : Span) : Option Feature → TM Unit
@@ -1944,19 +2032,23 @@ def requireFeature? (s : Span) : Option Feature → TM Unit
   | none => pure ()
 
 /-- The code for `str.method(args)`, a method of a string, where `str` is the
-code of the receiver and `args` are the codes of the arguments. -/
-def stringCall (s : Span) (method : String) (str : Code) (args : List Code) : TM Code :=
+code of the receiver, `args` are the codes of the arguments, and `lits` are
+the integer literals that the arguments are. -/
+def stringCall (s : Span) (method : String) (str : Code) (args : List Code) (lits : List (Option Int)) :
+    TM Code :=
   if str.type == .string then
     match stringMethod? method with
     | some m =>
-      if args.length == (StringMethod.params m).length then
-        if args.map (·.type) == StringMethod.params m then do
+      if StringMethod.fits m (args.map (·.type)) lits then
+        if StringMethod.padsTooFar m lits then
+          reject s s!"'{method}' to more than {maxStringLength} code units could make a string that an engine refuses"
+        else if StringMethod.changesCase m && !asciiString str.value then
+          reject s (s!"'{method}' is supported only on a string that is ASCII, such as a literal; " ++
+            "on other strings its result depends on the Unicode version of the engine")
+        else do
           requireFeature? s (StringMethod.feature m)
-          return ⟨.ext (.stringMethod m) (str.value :: args.map (·.value)), false, StringMethod.result m⟩
-        else reject s s!"the argument of '{method}' must be a string"
-      else reject s (if (StringMethod.params m).isEmpty then s!"'{method}' takes no arguments"
-        else if m == .split then s!"'{method}' takes one string here; a limit is not supported"
-        else s!"'{method}' takes one string here; a position argument is not supported")
+          return ⟨.ext (.stringMethod m lits) (str.value :: args.map (·.value)), false, StringMethod.result m⟩
+      else reject s (StringMethod.usage method m)
     | none => reject s s!"the string method '{method}' is not supported here"
   else reject s s!"only a string has the method '{method}' here"
 
@@ -2431,6 +2523,14 @@ def translateElements (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span)
 def translateCall (fuel : Nat) (env : Env) (s : Span) (callee : Expr) (args : List Expr) (top : Bool) :
     TM Code := do
   let fuel + 1 := fuel | tooDeep
+  -- `JSON.stringify(x)`: an opaque function of the value, on a value whose
+  -- text JS gives and which the Lean value fixes.
+  if let .member _ (.ident _ "JSON") method := callee then
+    if env.has "JSON" then reject s "a local named JSON hides the global JSON"
+    unless method == "stringify" do reject s "only JSON.stringify is supported"
+    let [arg] := args | reject s "JSON.stringify takes one value here; a replacer and an indent are not supported"
+    let a ← translateExpr fuel env none arg
+    return ← jsonCall arg.span a
   -- `Number.isNaN(x)` and the like. TypeScript lets them take any value; the
   -- model has them on numbers only.
   if let .member _ (.ident _ "Number") test := callee then
@@ -2518,7 +2618,7 @@ def translateArrayMethod (fuel : Nat) (env : Env) (expected : Option Ty) (s : Sp
   -- `xs.map((x, i) => e)` becomes `List.mapIdx`, whose function binds the
   -- index as a number.
   if let some (p, q, body) := indexedCallbackOf method args then
-    if recv.namesNumber then reject recv.span "only an array has this method"
+    if recv.namesGlobal then reject recv.span "only an array has this method"
     let xs ← translateExpr fuel env none recv
     let elem ← orReject xs.type.element? recv.span "only an array has this method"
     checkParamType p elem
@@ -2535,7 +2635,7 @@ def translateArrayMethod (fuel : Nat) (env : Env) (expected : Option Ty) (s : Sp
       "xs.map(x => x + 1n). Only the callback of map may also take the index, " ++
       "and no callback may take the array yet")
   -- `Number.map` is a property of the global `Number`, not of an array.
-  if recv.namesNumber then reject recv.span "only an array has this method"
+  if recv.namesGlobal then reject recv.span "only an array has this method"
   let xs ← translateExpr fuel env none recv
   let elem ← orReject xs.type.element? recv.span "only an array has this method"
   checkParamType p elem
@@ -2568,7 +2668,7 @@ def translateArrayCall (fuel : Nat) (env : Env) (s : Span) (recv : Expr) (method
   let xs ← translateExpr fuel env none recv
   if xs.type == .string then
     let codes ← args.mapM (translateExpr fuel env none)
-    stringCall s method xs codes
+    stringCall s method xs codes (args.map Eval.intLiteral?)
   else
   if xs.type == .date then translateDateCall s method xs args
   else
@@ -2607,7 +2707,7 @@ def translateReduce (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (
   let (a, p, body, init) ← orReject (reducerOf args) s
     ("'reduce' takes an arrow function with two parameters and an initial value, " ++
       "such as xs.reduce((sum, x) => sum + x, 0n)")
-  if recv.namesNumber then reject recv.span "only an array has this method"
+  if recv.namesGlobal then reject recv.span "only an array has this method"
   let xs ← translateExpr fuel env none recv
   let elem ← orReject xs.type.element? recv.span "only an array has this method"
   let i ← translateExpr fuel env expected init
@@ -2644,7 +2744,7 @@ def translateSort (fuel : Nat) (env : Env) (s : Span) (recv : Expr) (method : St
     reject s ("'sort' changes the array that it sorts, so it may sort only a new array, " ++
       "such as [...xs].sort(cmp); use xs.toSorted(cmp)")
   requireFeature s (if method == "sort" then .stableSort else .arrayToSorted)
-  if recv.namesNumber then reject recv.span "only an array has this method"
+  if recv.namesGlobal then reject recv.span "only an array has this method"
   let xs ← translateExpr fuel env none recv
   let elem ← orReject xs.type.element? recv.span "only an array has this method"
   -- The spec puts `undefined` last without calling the comparator.
@@ -2677,7 +2777,7 @@ def translateMapMethod (fuel : Nat) (env : Env) (s : Span) (recv : Expr) (op : I
     (args : List Expr) : TM Code := do
   let fuel + 1 := fuel | tooDeep
   -- `Number.get` would be a property of the global `Number`, not of a map.
-  if recv.namesNumber then reject recv.span "only a map or a set has get and has"
+  if recv.namesGlobal then reject recv.span "only a map or a set has get and has"
   let [key] := args | reject s "get and has take one key"
   if key matches .arrow .. then reject key.span "a key cannot be an arrow function"
   let o ← translateRecv (translateExpr fuel env none) env recv
@@ -2965,7 +3065,7 @@ def listPlaces (elem : Ty) (li : IR.Expr) : List (Option String) → Nat → Lis
 
 /-- What `const [a, , b, ...r] = e` binds, where `c` is the code of `e`: each
 name, with its type and the code that reads its value. A tuple gives its
-elements. An array, a set or a map gives the values that a loop over it
+elements. An array, a set, a map or a string gives the values that a loop over it
 visits, each optional, and the rest is the list of the values after the
 places. -/
 def patternReads (s : Span) (p : ArrayPattern) (c : Code) : TM (List (String × Ty × IR.Expr)) := do
@@ -2975,7 +3075,7 @@ def patternReads (s : Span) (p : ArrayPattern) (c : Code) : TM (List (String × 
     unless p.elems.length ≤ tys.length do reject s s!"the tuple has only {tys.length} elements"
     return tuplePlaces c.value tys.length p.elems tys 0
   | none =>
-    let (elem, li) ← orReject (loopOver c) s "destructuring needs a tuple, an array, a set or a map"
+    let (elem, li) ← orReject (loopOver c) s "destructuring needs a tuple, an array, a set, a map or a string"
     -- The output has one `none` for `undefined` and `null`.
     if elem.isMaybe then reject s "destructuring an array of nullable values could give null or undefined"
     return listPlaces elem li p.elems 0 ++
@@ -3045,7 +3145,8 @@ def translateForOfPattern (items : TM Code) (kBody : Env → Tail → List Stmt 
     reject s "a loop body may return only where the statements after the loop end in a return"
   let breaks := bodyStatements.any (containsJump true false)
   let names := changedNames bodyStatements env
-  if names.isEmpty && !returns then reject s "a loop must change a local or return"
+  if names.isEmpty && !returns then
+    reject s "a loop must change a local or return; a body that only throws does not count yet"
   let (elemType, loopItems) ← loopItems iterable body (← items)
   let x ← orReject p.names.head? s "a pattern must declare a name"
   let reads ← patternReads s p ⟨.var x, false, elemType⟩
@@ -3448,7 +3549,8 @@ def translateLoop (fuel : Nat) (env : Env) (s : Span) (head : LoopHead) (body : 
     reject s "a loop body may return only where the statements after the loop end in a return"
   let breaks := bodyStatements.any (containsJump true false)
   let names := changedNames bodyStatements env
-  if names.isEmpty && !returns then reject s "a loop must change a local or return"
+  if names.isEmpty && !returns then
+    reject s "a loop must change a local or return; a body that only throws does not count yet"
   let (element, elemType, loopItems) ← loopHead env s body head
   let bodyEnv ← declare env s element .const elemType
   let bodyOut ← translateStatements fuel bodyEnv (.loop names breaks returns) bodyStatements
