@@ -237,9 +237,10 @@ is `b < a` and `a >= b` is `b <= a`, as `IsLessThan` evaluates them
 (ECMA-262 §13.10.1). Strings compare by their code units (§7.2.13). When
 one operand of `+` is a string, `+` converts the other with ToString and
 joins the code units (ApplyStringOrNumericBinaryOperator, §13.15.3). The
-subset converts strings, bigints and booleans; ToString of a number is not
-modelled yet. `/` on numbers is Number::divide (§6.1.6.1.5), and the subset
-has no `%` on numbers.
+subset converts strings, bigints, booleans and numbers. A number becomes
+`JSNumber.toStr`, which the model leaves abstract: `SafeIntLaws.toStr` says
+what it gives for a safe integer. `/` on numbers is Number::divide
+(§6.1.6.1.5), and the subset has no `%` on numbers.
 
 On bigints, `a ** b` throws a `RangeError` when `b` is negative
 (BigInt::exponentiate, §6.1.6.2.3), and `&`, `|`, `^`, `<<` and `>>` are the
@@ -254,6 +255,8 @@ def binary : BinOp → Val N → Val N → Option (Val N)
   | .add, .int a, .str b => some (.str (JSString.ofInt a ++ b))
   | .add, .str a, .bool b => some (.str (a ++ JSString.ofBool b))
   | .add, .bool a, .str b => some (.str (JSString.ofBool a ++ b))
+  | .add, .str a, .num n => some (.str (a ++ JSNumber.toStr n))
+  | .add, .num n, .str b => some (.str (JSNumber.toStr n ++ b))
   | .sub, .int a, .int b => some (.int (a - b))
   | .mul, .int a, .int b => some (.int (a * b))
   | .div, .int a, .int b => if b == 0 then none else some (.int (a.tdiv b))
@@ -348,23 +351,181 @@ def noArgs (v : Val N) : List (Val N) → Option (Val N)
   | [] => some v
   | _ => none
 
+/-- The integer of a number argument, as ToIntegerOrInfinity gives it
+(ECMA-262 §7.1.5): the integer that a literal names, whatever the model of
+numbers, as for `xs.at(k)`, or else a safe integer. `lit` is the integer
+literal that the argument is, if it is one. Any other value leaves the subset. -/
+def intArg : Option Int → Val N → Option Int
+  | some k, _ => some k
+  | none, .num n => JSNumber.toSafeInt n
+  | none, _ => none
+
+/-- The value of a method whose arguments are a string `p` and perhaps a
+number: `f p` without the number, and `g p k` with it, where `k` is its
+integer. -/
+def stringAndInt (f : JSString → Val N) (g : JSString → Int → Val N) :
+    List (Val N) → List (Option Int) → Option (Val N)
+  | [.str p], _ => some (f p)
+  | [.str p, v], [_, k] => (intArg k v).map (g p)
+  | _, _ => none
+
+/-- The value `g k` of a method whose argument is one number, with the
+integer `k`. -/
+def oneInt (g : Int → Val N) : List (Val N) → List (Option Int) → Option (Val N)
+  | [v], [k] => (intArg k v).map g
+  | _, _ => none
+
+/-- `s.slice(start, end)` on the values of its arguments: a missing start is
+`0`, and a missing end is the length (ECMA-262 §22.1.3.22). -/
+def sliceArgs (s : JSString) : List (Val N) → List (Option Int) → Option (Val N)
+  | [], _ => some (.str (s.slice 0 none))
+  | [a], [ka] => do return .str (s.slice (← intArg ka a) none)
+  | [a, b], [ka, kb] => do return .str (s.slice (← intArg ka a) (some (← intArg kb b)))
+  | _, _ => none
+
+/-- `padStart` or `padEnd` on the values of its arguments, where `g n fill` is
+the padded string: a missing filler is `" "` (ECMA-262 §22.1.3.17.1). -/
+def padArgs (g : Int → JSString → JSString) : List (Val N) → List (Option Int) → Option (Val N)
+  | [v], [k] => (intArg k v).map fun n => .str (g n (JSString.ofString " "))
+  | [v, .str fill], [k, _] => (intArg k v).map fun n => .str (g n fill)
+  | _, _ => none
+
+/-- `toUpperCase` or `toLowerCase` on `s`, where `r` is the result that the
+ASCII rule gives. Any other string leaves the subset, because its result
+follows the Unicode version of the engine (ECMA-262 §22.1.3.30). -/
+def asciiCase (r s : JSString) (args : List (Val N)) : Option (Val N) :=
+  if s.isAscii then noArgs (.str r) args else none
+
+/-- `s.at(k)` as a value: the string of one code unit, or `undefined`. -/
+def stringAt (s : JSString) (k : Int) : Val N :=
+  match s.at? k with
+  | some c => .str c
+  | none => .undefined
+
 /-- A method of the string `s` that takes no callback, on the values of its
-arguments: `startsWith`, `endsWith`, `includes` and `indexOf` with one string
-(ECMA-262 §22.1.3.25, §22.1.3.7, §22.1.3.8 and §22.1.3.9), `trim`,
-`trimStart` and `trimEnd` (§22.1.3.32 to §22.1.3.34), and `split` with a
-string separator (§22.1.3.23). Each converts its argument with ToString, which
-the subset has on strings only. A position argument and the limit of `split`
-leave the subset. -/
-def stringMethod (method : String) (s : JSString) (args : List (Val N)) : Option (Val N) :=
-  if method == "startsWith" then oneString (fun p => .bool (s.startsWith p)) args
-  else if method == "endsWith" then oneString (fun p => .bool (s.endsWith p)) args
-  else if method == "includes" then oneString (fun p => .bool (s.includes p)) args
-  else if method == "indexOf" then oneString (fun p => .num (JSNumber.ofSafeInt (s.indexOf p))) args
+arguments `args`, where `lits` holds the integer literal that each argument
+is, if it is one:
+
+- `startsWith`, `endsWith`, `includes` and `indexOf` (ECMA-262 §22.1.3.25,
+  §22.1.3.7, §22.1.3.8 and §22.1.3.9), with a string and perhaps a position;
+- `trim`, `trimStart` and `trimEnd` (§22.1.3.32 to §22.1.3.34);
+- `split` (§22.1.3.23), with a string separator and perhaps a limit;
+- `at` (§22.1.3.1) and `slice` (§22.1.3.22);
+- `toUpperCase` and `toLowerCase` (§22.1.3.30 and §22.1.3.28) on ASCII
+  strings;
+- `padStart` and `padEnd` (§22.1.3.17 and §22.1.3.16), with a length and
+  perhaps a string to fill with.
+
+ToString converts a string argument, and the subset has it on strings only.
+ToIntegerOrInfinity converts a number argument, and the subset has it on
+integer literals and safe integers (`intArg`). Other arguments leave the
+subset. -/
+def stringMethod (method : String) (s : JSString) (args : List (Val N)) (lits : List (Option Int)) :
+    Option (Val N) :=
+  if method == "startsWith" then
+    stringAndInt (fun p => .bool (s.startsWith p)) (fun p k => .bool (s.startsWithFrom p k)) args lits
+  else if method == "endsWith" then
+    stringAndInt (fun p => .bool (s.endsWith p)) (fun p k => .bool (s.endsWithAt p k)) args lits
+  else if method == "includes" then
+    stringAndInt (fun p => .bool (s.includes p)) (fun p k => .bool (s.includesFrom p k)) args lits
+  else if method == "indexOf" then
+    stringAndInt (fun p => .num (JSNumber.ofSafeInt (s.indexOf p)))
+      (fun p k => .num (JSNumber.ofSafeInt (s.indexOfFrom p k))) args lits
   else if method == "trim" then noArgs (.str s.trim) args
   else if method == "trimStart" then noArgs (.str s.trimStart) args
   else if method == "trimEnd" then noArgs (.str s.trimEnd) args
-  else if method == "split" then oneString (fun sep => .list ((s.split sep).map .str)) args
+  else if method == "split" then
+    stringAndInt (fun sep => .list ((s.split sep).map .str))
+      (fun sep k => .list ((s.splitLimit sep k).map .str)) args lits
+  else if method == "at" then oneInt (stringAt s) args lits
+  else if method == "slice" then sliceArgs s args lits
+  else if method == "padStart" then padArgs s.padStart args lits
+  else if method == "padEnd" then padArgs s.padEnd args lits
+  else if method == "toUpperCase" then asciiCase s.toUpperAscii s args
+  else if method == "toLowerCase" then asciiCase s.toLowerAscii s args
   else none
+
+mutual
+/-- `JSON.stringify` throws a `TypeError` on `v`, because it reaches a bigint
+(SerializeJSONProperty, ECMA-262 §25.5.2.2, step 10). It reads the elements of
+an array and the own properties of an object, but not the entries of a map or
+a set, which have no own properties. -/
+def Val.jsonThrows : Val N → Bool
+  | .int _ => true
+  | .list items => jsonThrowsList items
+  | .obj fields | .error _ fields => jsonThrowsFields fields
+  | _ => false
+
+/-- `JSON.stringify` throws on an element of `items`. -/
+def jsonThrowsList : List (Val N) → Bool
+  | [] => false
+  | x :: xs => x.jsonThrows || jsonThrowsList xs
+
+/-- `JSON.stringify` throws on the value of a field of `fields`. -/
+def jsonThrowsFields : List (String × Val N) → Bool
+  | [] => false
+  | (_, x) :: fs => x.jsonThrows || jsonThrowsFields fs
+end
+
+/-- The code units of `text`, which is ASCII. -/
+private def ascii (text : String) : List UInt16 := text.toList.map fun c => c.toNat.toUInt16
+
+/-- QuoteJSONString (ECMA-262 §25.5.2.3): `s` in double quotes, with `"`, `\`
+and the control characters escaped, and each lone surrogate as `\uXXXX`. -/
+private def jsonQuote (s : JSString) : List UInt16 :=
+  let hex (n : Nat) : List UInt16 :=
+    ascii ("\\u" ++ String.ofList ((Nat.toDigits 16 (n + 0x10000)).drop 1))
+  let escape : List UInt16 → List UInt16
+    | [u] =>
+      if u = 0x08 then ascii "\\b" else if u = 0x09 then ascii "\\t"
+      else if u = 0x0A then ascii "\\n" else if u = 0x0C then ascii "\\f"
+      else if u = 0x0D then ascii "\\r" else if u = 0x22 then ascii "\\\""
+      else if u = 0x5C then ascii "\\\\"
+      else if u.toNat < 0x20 || (0xD800 ≤ u.toNat && u.toNat < 0xE000) then hex u.toNat
+      else [u]
+    | pair => pair
+  ascii "\"" ++ (JSString.codePointUnits s.units).flatMap escape ++ ascii "\""
+
+/-- The text that `JSON.stringify(v)` gives, for the interpreter. A finite
+number is its ToString, and `NaN` and the infinities are `null`
+(SerializeJSONProperty, ECMA-262 §25.5.2.2, step 9). -/
+private partial def jsonTextImpl {N : Type} [JSNumber N] (v : Val N) : JSString :=
+  ⟨go v⟩
+where
+  go : Val N → List UInt16
+    | .null | .undefined => ascii "null"
+    | .bool b => ascii (if b then "true" else "false")
+    | .str s => jsonQuote s
+    -- `Date.prototype.toJSON` gives `null` for an invalid date and the text of
+    -- `toISOString` for a valid one, which the model does not have yet.
+    | .date none => ascii "null"
+    | .date (some _) => panic! "the interpreter cannot write a date as JSON yet"
+    | .num n => if JSNumber.isNaN n || !JSNumber.isFinite n then ascii "null" else (JSNumber.toStr n).units
+    | .int _ => panic! "JSON.stringify throws on a bigint"
+    | .list items => ascii "[" ++ (ascii ",").intercalate (items.map go) ++ ascii "]"
+    | .obj fields | .error _ fields =>
+      let present := fields.filter fun (_, x) => !(x matches .undefined)
+      ascii "{" ++
+        (ascii ",").intercalate (present.map fun (k, x) => jsonQuote (JSString.ofString k) ++ ascii ":" ++ go x) ++
+        ascii "}"
+    | .map _ | .set _ => ascii "{}"
+
+/-- The text of `JSON.stringify(v)` (ECMA-262 §25.5.2), where `v` is not
+`undefined` and reaches no bigint. The spec defines it fully, but the model
+does not: it is opaque, so a proof cannot depend on the text. A theorem then
+holds for the real `JSON.stringify`, because the text is a function of the
+value. The interpreter writes the text with `jsonTextImpl`, which the logic
+never sees. -/
+@[implemented_by jsonTextImpl]
+opaque jsonText {N : Type} [JSNumber N] (v : Val N) : JSString
+
+/-- `JSON.stringify(v)`, with no replacer and no indent (ECMA-262 §25.5.2.1):
+`undefined` for `undefined`, no value where it throws on a bigint, and the
+opaque text otherwise. -/
+def jsonStringify (v : Val N) : Option (Val N) :=
+  match v with
+  | .undefined => some .undefined
+  | v => if v.jsonThrows then none else some (.str (jsonText v))
 
 /-- The element of the array `items` whose index is the safe integer `i`, or
 `undefined` when `i` is none or no index of the array. -/
@@ -438,11 +599,14 @@ order (`CreateArrayIterator`, ECMA-262 §23.1.5.1), the elements of a set, in
 the order of insertion (`CreateSetIterator`, §24.2.6.1), and the entries of a
 map, in the same order, each as the array `[key, value]` (`CreateMapIterator`,
 §24.1.5.1). The subset does not change a map or a set while a loop runs over
-it, so the loop sees the values that it had when it started. -/
+it, so the loop sees the values that it had when it started. A string visits
+its code points, each as a string (`CreateStringIterator`, §22.1.5.1), so a
+surrogate pair is one value. -/
 def iterValues : Val N → Option (List (Val N))
   | .list items => some items
   | .set elems => some elems
   | .map entries => some (entries.map fun (k, v) => .list [k, v])
+  | .str s => some (s.codePoints.map .str)
   | _ => none
 
 /-- The entries of a map that `new Map(items)` makes: each item, an array
@@ -549,11 +713,529 @@ there. -/
 def sortValues {α : Type} (cmp : α → α → Option Ordering) (items : List α) : Option (List α) :=
   if consistentOn cmp items then some (items.mergeSort fun a b => cmp a b != some .gt) else none
 
+
+/-! ### Calls that can throw inside larger expressions
+
+JS evaluates the operands of an expression in order, and a call that throws
+ends the statement at once (ECMA-262 §13.15.2 and §13.3.6.1, and the
+completion records of §6.2.4). The model rewrites each statement so that such
+a call stands on its own: `const r0' = f(x)` before the statement, which then
+reads `r0'` in its place. Every operand that JS evaluates before the call
+moves out the same way, so the rewritten statements run the same operations
+in the same order as the source. A statement whose whole value is a call
+keeps it, because the statement already passes what the call throws on.
+
+The translator rewrites a function body with the same function before it
+translates it, so the body it translates is the body the model runs. Which
+calls move depends on which functions can throw, and the model decides that
+from the module alone (`mayThrow`): a function whose body has a `throw`, or
+calls a function of the module that can throw, can throw. A name that the
+module does not declare as a function, such as an imported function, does
+not count, so a call of it stays where it is. The translator then refuses
+such a call inside a larger expression when the function can throw.
+
+JS has no `'` in a name, so no hoisted name hides a name of the source. -/
+
+
+/-- The constructor of the error class `name` among the declarations `ds`,
+when one declares it: its parameters and its message, or none for a class
+without a constructor. -/
+def errorClassOfDecls (name : String) : List Decl → Option (Option (List CtorParam × Expr))
+  | [] => none
+  | .errorClass _ _ n ctor :: ds => if n == name then some ctor else errorClassOfDecls name ds
+  | _ :: ds => errorClassOfDecls name ds
+
+/-- The constructor of the error class `name` of `m`, when `m` declares one. -/
+def errorClassOf (m : Module) (name : String) : Option (Option (List CtorParam × Expr)) :=
+  errorClassOfDecls name m.decls
+
+/-- The parameters of the constructor `ctor` of an error class. -/
+def ctorParams : Option (List CtorParam × Expr) → List CtorParam
+  | none => []
+  | some (ps, _) => ps
+
+/-- The fields of an error made by the constructor `ctor`, from the values
+of its arguments: each `readonly` parameter, with its argument. The other
+arguments have served the message already, which `Stmt.hoisted` wrote over
+them. -/
+def fieldArgs {α : Type} (ctor : Option (List CtorParam × Expr)) (args : List α) : List (String × α) :=
+  ((ctorParams ctor).zip args).filterMap fun (p, a) => if p.readonly then some (p.param.name, a) else none
+
+mutual
+
+/-- `e` with each name of `σ` replaced by its expression. The message of an
+error class is written over its constructor's parameters. An arrow function
+inside `e` binds its own parameters, so the substitution stops at them. Each
+replacement is a literal or a hoisted name, which no binder of the source
+can bind, so no binder captures one. -/
+def Expr.subst (σ : List (String × Expr)) : Expr → Expr
+  | .ident s n => match σ.lookup n with | some e => e | none => .ident s n
+  | .number s t => .number s t
+  | .bigint s t => .bigint s t
+  | .string s v => .string s v
+  | .bool s b => .bool s b
+  | .null s => .null s
+  | .array s es => .array s (Expr.substList σ es)
+  | .object s ps => .object s (Property.substList σ ps)
+  | .paren s e => .paren s (Expr.subst σ e)
+  | .member s e n => .member s (Expr.subst σ e) n
+  | .optMember s e n => .optMember s (Expr.subst σ e) n
+  | .index s a b => .index s (Expr.subst σ a) (Expr.subst σ b)
+  | .call s c args => .call s (Expr.subst σ c) (Expr.substList σ args)
+  | .unary s op e => .unary s op (Expr.subst σ e)
+  | .prefix s op e => .prefix s op (Expr.subst σ e)
+  | .postfix s op e => .postfix s op (Expr.subst σ e)
+  | .binary s op a b => .binary s op (Expr.subst σ a) (Expr.subst σ b)
+  | .cond s t a b => .cond s (Expr.subst σ t) (Expr.subst σ a) (Expr.subst σ b)
+  | .assign s op t v => .assign s op (Expr.subst σ t) (Expr.subst σ v)
+  | .arrow s p ps body => .arrow s p ps (Expr.subst (σ.filter fun (n, _) => !(ps.map (·.name)).contains n) body)
+  | .asConst s e => .asConst s (Expr.subst σ e)
+  | .satisfies s e t => .satisfies s (Expr.subst σ e) t
+  | .new s c ts args => .new s c ts (Expr.substList σ args)
+  | .spread s e => .spread s (Expr.subst σ e)
+
+def Expr.substList (σ : List (String × Expr)) : List Expr → List Expr
+  | [] => []
+  | e :: es => Expr.subst σ e :: Expr.substList σ es
+
+def Property.substList (σ : List (String × Expr)) : List Property → List Property
+  | [] => []
+  | .shorthand s n :: ps =>
+    -- `{ n }` reads `n`, so it becomes `{ n: e }` when `σ` replaces `n`.
+    (match σ.lookup n with
+      | some e => Property.keyValue s (.ident n) e
+      | none => Property.shorthand s n) :: Property.substList σ ps
+  | .keyValue s k v :: ps => Property.keyValue s k (Expr.subst σ v) :: Property.substList σ ps
+  | .spread s v :: ps => Property.spread s (Expr.subst σ v) :: Property.substList σ ps
+
+end
+
+/-- The name of the `k`-th value that a function body hoists: `r0'`, `r1'`, … -/
+def hoistName (k : Nat) : String := s!"r{k}'"
+
+mutual
+
+/-- The names of the functions that `e` calls, anywhere in it. -/
+def Expr.callNames : Expr → List String
+  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => []
+  | .array _ es => Expr.callNamesList es
+  | .object _ ps => Property.callNamesList ps
+  | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e
+  | .spread _ e | .asConst _ e | .satisfies _ e _ => Expr.callNames e
+  | .index _ a b | .binary _ _ a b | .assign _ _ a b => Expr.callNames a ++ Expr.callNames b
+  | .call _ (.ident _ name) args => name :: Expr.callNamesList args
+  | .call _ c args => Expr.callNames c ++ Expr.callNamesList args
+  | .cond _ a b c => Expr.callNames a ++ Expr.callNames b ++ Expr.callNames c
+  | .arrow _ _ _ body => Expr.callNames body
+  | .new _ _ _ args => Expr.callNamesList args
+
+def Expr.callNamesList : List Expr → List String
+  | [] => []
+  | e :: es => Expr.callNames e ++ Expr.callNamesList es
+
+def Property.callNamesList : List Property → List String
+  | [] => []
+  | .shorthand .. :: ps => Property.callNamesList ps
+  | .keyValue _ _ v :: ps | .spread _ v :: ps => Expr.callNames v ++ Property.callNamesList ps
+
+end
+
+mutual
+
+/-- The names of the functions that `s` calls, anywhere in it. -/
+def Stmt.callNames : Stmt → List String
+  | .varDecl _ { init := some e, .. } | .destructure _ _ _ _ e | .exprStmt _ e | .returnStmt _ (some e)
+  | .throwStmt _ e => Expr.callNames e
+  | .varDecl _ { init := none, .. } | .returnStmt _ none | .breakStmt _ | .continueStmt _ | .empty _ => []
+  | .ifStmt _ t a (some b) => Expr.callNames t ++ Stmt.callNames a ++ Stmt.callNames b
+  | .ifStmt _ t a none => Expr.callNames t ++ Stmt.callNames a
+  | .forOfStmt _ _ _ e body | .forOfPattern _ _ _ e body | .whileStmt _ e body => Expr.callNames e ++ Stmt.callNames body
+  | .forStmt _ init test update body =>
+    (init.bind (·.init)).elim [] Expr.callNames ++ test.elim [] Expr.callNames ++
+      update.elim [] Expr.callNames ++ Stmt.callNames body
+  | .block _ ss => Stmt.callNamesList ss
+  | .switchStmt _ d cs => Expr.callNames d ++ Stmt.callNamesClauses cs
+
+def Stmt.callNamesList : List Stmt → List String
+  | [] => []
+  | s :: ss => Stmt.callNames s ++ Stmt.callNamesList ss
+
+def Stmt.callNamesClauses : List (Option Expr × List Stmt) → List String
+  | [] => []
+  | (t, ss) :: cs => t.elim [] Expr.callNames ++ Stmt.callNamesList ss ++ Stmt.callNamesClauses cs
+
+end
+
+mutual
+
+/-- `s` holds a `throw` statement. -/
+def Stmt.hasThrow : Stmt → Bool
+  | .throwStmt .. => true
+  | .ifStmt _ _ a (some b) => Stmt.hasThrow a || Stmt.hasThrow b
+  | .ifStmt _ _ a none => Stmt.hasThrow a
+  | .forOfStmt _ _ _ _ body | .forOfPattern _ _ _ _ body | .forStmt _ _ _ _ body | .whileStmt _ _ body =>
+    Stmt.hasThrow body
+  | .block _ ss => Stmt.hasThrowList ss
+  | .switchStmt _ _ cs => Stmt.hasThrowClauses cs
+  | .varDecl .. | .destructure .. | .exprStmt .. | .returnStmt .. | .breakStmt _ | .continueStmt _
+  | .empty _ => false
+
+def Stmt.hasThrowList : List Stmt → Bool
+  | [] => false
+  | s :: ss => Stmt.hasThrow s || Stmt.hasThrowList ss
+
+def Stmt.hasThrowClauses : List (Option Expr × List Stmt) → Bool
+  | [] => false
+  | (_, ss) :: cs => Stmt.hasThrowList ss || Stmt.hasThrowClauses cs
+
+end
+
+/-- The body of the function `name` of `m`, if `m` declares one. -/
+def functionBody (m : Module) (name : String) : Option Stmt :=
+  m.decls.findSome? fun
+    | .function _ _ n _ _ _ body => if n == name then some body else none
+    | _ => none
+
+/-- `name` is a function of `m` that can throw, as far as `fuel` calls deep:
+its body has a `throw`, or calls a function of `m` that can throw. -/
+def mayThrowIn (m : Module) : Nat → String → Bool
+  | 0, _ => false
+  | fuel + 1, name =>
+    match functionBody m name with
+    | none => false
+    | some body => Stmt.hasThrow body || (Stmt.callNames body).any (mayThrowIn m fuel)
+
+/-- `name`, called from `m`, is a function that can throw. A chain of calls
+through the functions of `m` is at most as long as the module, so that many
+steps decide it. -/
+def mayThrow (m : Module) (name : String) : Bool := mayThrowIn m (m.decls.length + 1) name
+
+/-- The type argument that `Stmt.hoisted` puts on `new C(message, args)` when
+it rewrites `throw new C(args)` for an error class `C`. No construction of
+the source has it, because the parser reads no type named by a quote. So a
+source `new C(…)` with one argument more than the constructor takes cannot
+pass for a rewritten one. -/
+def hoistedMark : TypeExpr := .keyword default "'"
+
+/-- `e` is a name or a literal, which hoisting would only rename. -/
+def Expr.isAtom : Expr → Bool
+  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => true
+  | _ => false
+
+mutual
+
+/-- `e` is a literal whose parts are all literals: it reads no local and runs
+no call, so where it runs changes nothing that the model observes. Such an
+operand stays in place, because its type comes from its position. -/
+def Expr.isClosedLiteral : Expr → Bool
+  | .number .. | .bigint .. | .string .. | .bool .. | .null _ => true
+  | .unary _ .neg (.number ..) | .unary _ .neg (.bigint ..) => true
+  | .paren _ e => Expr.isClosedLiteral e
+  | .array _ es => Expr.isClosedLiteralList es
+  | .object _ ps => Property.isClosedLiteralList ps
+  | _ => false
+
+def Expr.isClosedLiteralList : List Expr → Bool
+  | [] => true
+  | e :: es => Expr.isClosedLiteral e && Expr.isClosedLiteralList es
+
+def Property.isClosedLiteralList : List Property → Bool
+  | [] => true
+  | .keyValue _ _ v :: ps => Expr.isClosedLiteral v && Property.isClosedLiteralList ps
+  | .shorthand .. :: _ | .spread .. :: _ => false
+
+end
+
+mutual
+
+/-- `e` holds a call of a function that `thr` says can throw, in a place that
+JS evaluates whenever it evaluates `e`. A call in a branch of `?:`, after
+`&&`, `||` or `??`, or in an arrow function may not run, so it stays where
+it is. -/
+def Expr.hoists (thr : String → Bool) : Expr → Bool
+  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .arrow .. => false
+  | .array _ es => Expr.hoistsList thr es
+  | .object _ ps => Property.hoistsList thr ps
+  | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e
+  | .spread _ e | .asConst _ e | .satisfies _ e _ => Expr.hoists thr e
+  | .index _ a b | .assign _ _ a b => Expr.hoists thr a || Expr.hoists thr b
+  | .binary _ .and a _ | .binary _ .or a _ | .binary _ .coalesce a _ => Expr.hoists thr a
+  | .binary _ _ a b => Expr.hoists thr a || Expr.hoists thr b
+  | .call _ (.ident _ name) args => thr name || Expr.hoistsList thr args
+  | .call _ c args => Expr.hoists thr c || Expr.hoistsList thr args
+  | .cond _ t _ _ => Expr.hoists thr t
+  | .new _ _ _ args => Expr.hoistsList thr args
+
+def Expr.hoistsList (thr : String → Bool) : List Expr → Bool
+  | [] => false
+  | e :: es => Expr.hoists thr e || Expr.hoistsList thr es
+
+def Property.hoistsList (thr : String → Bool) : List Property → Bool
+  | [] => false
+  | .shorthand .. :: ps => Property.hoistsList thr ps
+  | .keyValue _ _ v :: ps | .spread _ v :: ps => Expr.hoists thr v || Property.hoistsList thr ps
+
+end
+
+/-- What hoisting has produced so far: the declarations to put before the
+statement, in order, and the number of the next name. -/
+structure Hoisted where
+  decls : List Stmt
+  next : Nat
+
+/-- Bind `e` to a fresh name before the statement, whatever `e` is. -/
+def Hoisted.fresh (h : Hoisted) (e : Expr) : Expr × Hoisted :=
+  let name := hoistName h.next
+  (.ident (Expr.span e) name,
+    { decls := h.decls ++ [.varDecl (Expr.span e) { kind := .const, name, type := none, init := some e }],
+      next := h.next + 1 })
+
+/-- Bind `e` to a fresh name before the statement, and read the name in its
+place. An atom stays as it is, and so does a literal whose parts are all
+literals. -/
+def Hoisted.bind (h : Hoisted) (e : Expr) : Expr × Hoisted :=
+  if Expr.isAtom e || Expr.isClosedLiteral e then (e, h) else h.fresh e
+
+/-- An argument of an error class's constructor: a literal stays, and any
+other argument, a name among them, moves out to a fresh name. The message
+is then written over literals and hoisted names, which no binder of the
+source can bind. -/
+def Hoisted.bindArg (h : Hoisted) (e : Expr) : Expr × Hoisted :=
+  if Expr.isClosedLiteral e then (e, h) else h.fresh e
+
+/-- An operand that JS evaluates before a call that can throw, after its own
+calls have moved out: it moves out whole, so that it still runs before them.
+An arrow function stays, and a spread moves its value. -/
+def Hoisted.bindOperand (h : Hoisted) : Expr → Expr × Hoisted
+  | .arrow s p ps body => (.arrow s p ps body, h)
+  | .spread s e => let (e', h) := h.bind e; (.spread s e', h)
+  | e => h.bind e
+
+mutual
+
+/-- Hoist the calls out of `e` that `thr` says can throw: each moves to a
+declaration before the statement, with every operand that JS evaluates
+before it, and `e` reads the names in their place. -/
+def Expr.hoist (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr))) (h : Hoisted) :
+    Expr → Expr × Hoisted
+  | .call s (.ident sn name) args =>
+    let (args', h) := Expr.hoistOperands thr cls h args
+    if thr name then h.bind (.call s (.ident sn name) args') else (.call s (.ident sn name) args', h)
+  | .call s (.member ms recv mname) args =>
+    -- The receiver of a method is evaluated before the arguments.
+    let (recv', h) := Expr.hoist thr cls h recv
+    let (recv', h) := if Expr.hoistsList thr args then h.bindOperand recv' else (recv', h)
+    let (args', h) := Expr.hoistOperands thr cls h args
+    (.call s (.member ms recv' mname) args', h)
+  | .call s c args =>
+    let (c', h) := Expr.hoist thr cls h c
+    let (args', h) := Expr.hoistOperands thr cls h args
+    (.call s c' args', h)
+  | .array s es => let (es', h) := Expr.hoistOperands thr cls h es; (.array s es', h)
+  | .object s ps => let (ps', h) := Property.hoistOperands thr cls h ps; (.object s ps', h)
+  | .paren s e => let (e', h) := Expr.hoist thr cls h e; (.paren s e', h)
+  | .member s e n => let (e', h) := Expr.hoist thr cls h e; (.member s e' n, h)
+  | .optMember s e n => let (e', h) := Expr.hoist thr cls h e; (.optMember s e' n, h)
+  | .unary s op e => let (e', h) := Expr.hoist thr cls h e; (.unary s op e', h)
+  | .spread s e => let (e', h) := Expr.hoist thr cls h e; (.spread s e', h)
+  | .asConst s e => let (e', h) := Expr.hoist thr cls h e; (.asConst s e', h)
+  | .satisfies s e t => let (e', h) := Expr.hoist thr cls h e; (.satisfies s e' t, h)
+  | .index s a b =>
+    let (a', h) := Expr.hoist thr cls h a
+    let (a', h) := if Expr.hoists thr b then h.bindOperand a' else (a', h)
+    let (b', h) := Expr.hoist thr cls h b
+    (.index s a' b', h)
+  | .binary s .and a b => let (a', h) := Expr.hoist thr cls h a; (.binary s .and a' b, h)
+  | .binary s .or a b => let (a', h) := Expr.hoist thr cls h a; (.binary s .or a' b, h)
+  | .binary s .coalesce a b => let (a', h) := Expr.hoist thr cls h a; (.binary s .coalesce a' b, h)
+  | .binary s op a b =>
+    let (a', h) := Expr.hoist thr cls h a
+    let (a', h) := if Expr.hoists thr b then h.bindOperand a' else (a', h)
+    let (b', h) := Expr.hoist thr cls h b
+    (.binary s op a' b', h)
+  | .assign s op target value => let (v', h) := Expr.hoist thr cls h value; (.assign s op target v', h)
+  | .cond s t a b => let (t', h) := Expr.hoist thr cls h t; (.cond s t' a b, h)
+  -- `new C(args)` for an error class `C` of the file: each argument moves out
+  -- to a name, and the message of the class, written over those names,
+  -- comes first: `new C(message, args)`, with `hoistedMark` as the type
+  -- argument. So the statement that runs the constructor needs no scope of
+  -- its own. A construction with the wrong number of arguments stays as it
+  -- is, and so has no mark.
+  | .new s c ts args =>
+    match cls c with
+    | some ctor =>
+      let (args', h) := Expr.hoistAtoms thr cls h args
+      if ts.isEmpty then
+        match ctor with
+        | none => if args'.length == 1 then (.new s c [hoistedMark] args', h) else (.new s c ts args', h)
+        | some (params, message) =>
+          if params.length == args'.length then
+            (.new s c [hoistedMark] (Expr.subst ((params.map (·.param.name)).zip args') message :: args'), h)
+          else (.new s c ts args', h)
+      else (.new s c ts args', h)
+    | none => let (args', h) := Expr.hoistOperands thr cls h args; (.new s c ts args', h)
+  | e => (e, h)
+termination_by structural e => e
+
+/-- The arguments of an error class's constructor: each that is not a
+literal moves out to a name, after its own calls. -/
+def Expr.hoistAtoms (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr)))
+    (h : Hoisted) : List Expr → List Expr × Hoisted
+  | [] => ([], h)
+  | e :: es =>
+    let (e', h) := Expr.hoist thr cls h e
+    let (e', h) := h.bindArg e'
+    let (es', h) := Expr.hoistAtoms thr cls h es
+    (e' :: es', h)
+termination_by structural es => es
+
+/-- Hoist the calls out of operands that JS evaluates in order. An operand
+before the last one that holds such a call moves out whole, after its own
+calls, so that it still runs before them. -/
+def Expr.hoistOperands (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr)))
+    (h : Hoisted) : List Expr → List Expr × Hoisted
+  | [] => ([], h)
+  | e :: es =>
+    let (e', h) := Expr.hoist thr cls h e
+    let (e', h) := if Expr.hoistsList thr es then h.bindOperand e' else (e', h)
+    let (es', h) := Expr.hoistOperands thr cls h es
+    (e' :: es', h)
+termination_by structural es => es
+
+/-- The values of the properties of an object literal, in order. -/
+def Property.hoistOperands (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr)))
+    (h : Hoisted) : List Property → List Property × Hoisted
+  | [] => ([], h)
+  | p :: ps =>
+    let later := Property.hoistsList thr ps
+    let (p', h) := match p with
+      | .shorthand s n => (Property.shorthand s n, h)
+      | .keyValue s k v =>
+        let (v', h) := Expr.hoist thr cls h v
+        let (v', h) := if later then h.bindOperand v' else (v', h)
+        (Property.keyValue s k v', h)
+      | .spread s v =>
+        let (v', h) := Expr.hoist thr cls h v
+        let (v', h) := if later then h.bindOperand v' else (v', h)
+        (Property.spread s v', h)
+    let (ps', h) := Property.hoistOperands thr cls h ps
+    (p' :: ps', h)
+termination_by structural ps => ps
+
+end
+
+/-- Hoist the calls out of the value of a statement. A value that is itself
+a call keeps it, after the calls in its arguments, because the statement
+passes what the call throws on. -/
+def Expr.hoistValue (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr)))
+    (h : Hoisted) : Expr → Expr × Hoisted
+  | .call s (.ident sn name) args =>
+    let (args', h) := Expr.hoistOperands thr cls h args
+    (.call s (.ident sn name) args', h)
+  | e => Expr.hoist thr cls h e
+
+/-- The body of a loop or a branch, from the statements that replace its
+one statement `s`. When hoisting adds declarations before it, a block holds
+them, as the body of a loop does. -/
+def asBody (s : Stmt) : List Stmt → Stmt
+  | [s'] => s'
+  | ss => .block (Stmt.span s) ss
+
+mutual
+
+/-- The statements of a body with the calls that can throw hoisted out of
+their statements, numbering the fresh names from `k` on. -/
+def Stmt.hoistList (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr))) (k : Nat) :
+    List Stmt → List Stmt × Nat
+  | [] => ([], k)
+  | s :: ss =>
+    let (ds, k) := Stmt.hoistOne thr cls k s
+    let (ss', k) := Stmt.hoistList thr cls k ss
+    (ds ++ ss', k)
+termination_by structural ss => ss
+
+/-- One statement, as the statements that replace it: the hoisted
+declarations, then the statement with the names in place of the calls. -/
+def Stmt.hoistOne (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr))) (k : Nat) :
+    Stmt → List Stmt × Nat
+  | .varDecl s ⟨kind, name, type, some e⟩ =>
+    let (e', h) := Expr.hoistValue thr cls ⟨[], k⟩ e
+    (h.decls ++ [.varDecl s ⟨kind, name, type, some e'⟩], h.next)
+  | .destructure s kind p t e =>
+    let (e', h) := Expr.hoistValue thr cls ⟨[], k⟩ e
+    (h.decls ++ [.destructure s kind p t e'], h.next)
+  | .returnStmt s (some e) =>
+    let (e', h) := Expr.hoistValue thr cls ⟨[], k⟩ e
+    (h.decls ++ [.returnStmt s (some e')], h.next)
+  | .exprStmt s e =>
+    let (e', h) := Expr.hoist thr cls ⟨[], k⟩ e
+    (h.decls ++ [.exprStmt s e'], h.next)
+  | .throwStmt s e =>
+    let (e', h) := Expr.hoist thr cls ⟨[], k⟩ e
+    (h.decls ++ [.throwStmt s e'], h.next)
+  | .ifStmt s t a b =>
+    let (t', h) := Expr.hoist thr cls ⟨[], k⟩ t
+    let (as, k) := Stmt.hoistOne thr cls h.next a
+    match b with
+    | some b =>
+      let (bs, k) := Stmt.hoistOne thr cls k b
+      (h.decls ++ [.ifStmt s t' (asBody a as) (some (asBody b bs))], k)
+    | none => (h.decls ++ [.ifStmt s t' (asBody a as) none], k)
+  | .forOfStmt s kind x e body =>
+    let (e', h) := Expr.hoist thr cls ⟨[], k⟩ e
+    let (bs, k) := Stmt.hoistOne thr cls h.next body
+    (h.decls ++ [.forOfStmt s kind x e' (asBody body bs)], k)
+  | .forOfPattern s kind p e body =>
+    let (e', h) := Expr.hoist thr cls ⟨[], k⟩ e
+    let (bs, k) := Stmt.hoistOne thr cls h.next body
+    (h.decls ++ [.forOfPattern s kind p e' (asBody body bs)], k)
+  -- JS evaluates the test and the update of a counted loop before each run,
+  -- so a call in them stays where it is.
+  | .forStmt s init test update body =>
+    let (bs, k) := Stmt.hoistOne thr cls k body
+    ([.forStmt s init test update (asBody body bs)], k)
+  | .whileStmt s t body =>
+    let (bs, k) := Stmt.hoistOne thr cls k body
+    ([.whileStmt s t (asBody body bs)], k)
+  | .block s ss =>
+    let (ss', k) := Stmt.hoistList thr cls k ss
+    ([.block s ss'], k)
+  | .switchStmt s d cs =>
+    let (d', h) := Expr.hoist thr cls ⟨[], k⟩ d
+    let (cs', k) := Stmt.hoistClauses thr cls h.next cs
+    (h.decls ++ [.switchStmt s d' cs'], k)
+  | s => ([s], k)
+termination_by structural s => s
+
+def Stmt.hoistClauses (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr))) (k : Nat) :
+    List (Option Expr × List Stmt) → List (Option Expr × List Stmt) × Nat
+  | [] => ([], k)
+  | (t, ss) :: cs =>
+    let (ss', k) := Stmt.hoistList thr cls k ss
+    let (cs', k) := Stmt.hoistClauses thr cls k cs
+    ((t, ss') :: cs', k)
+termination_by structural cs => cs
+
+end
+
+/-- A function body with the calls that can throw hoisted out of its
+statements. The model runs this body, and the translator translates it. -/
+def Stmt.hoisted (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr))) : Stmt → Stmt
+  | .block s ss => .block s (Stmt.hoistList thr cls 0 ss).1
+  | s => s
+
+/-- The functions of the declarations `ds`, by name, where `thr` says which
+functions can throw: their parameters and their body, with the calls that
+can throw hoisted out of its statements. -/
+def functionsIn (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr)))
+    (ds : List Decl) : List (String × List String × Stmt) :=
+  ds.filterMap fun
+    | .function _ _ name _ params _ body => some (name, params.map (·.name), Stmt.hoisted thr cls body)
+    | _ => none
+
 /-- The functions of the module, by name. -/
 def functions (m : Module) : List (String × List String × Stmt) :=
-  m.decls.filterMap fun
-    | .function _ _ name _ params _ body => some (name, params.map (·.name), body)
-    | _ => none
+  functionsIn (mayThrow m) (errorClassOf m) m.decls
 
 /-! ### Programs of several files
 
@@ -612,6 +1294,10 @@ def exportsFunction (m : Module) (name : String) : Bool :=
   m.decls.any fun
     | .function _ exported n _ _ _ _ => (exported || listsExport m name) && n == name
     | _ => false
+
+/-- The constructor of the error class `name` of the file of `s`. -/
+def errorClassIn (s : Scope) (name : String) : Option (Option (List CtorParam × Expr)) :=
+  (s.program.lookup s.file).bind fun m => errorClassOf m name
 
 /-- The function that a call of `name` runs, in the file of `s`: the file's
 own function, or else the exported function of the file it imports `name`
@@ -855,6 +1541,13 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     else if test == "isSafeInteger" then some (.bool (JSNumber.toSafeInt n).isSome)
     else if test == "isInteger" then some (.bool (JSNumber.isInteger n))
     else none
+  -- `JSON.stringify(x)` (ECMA-262 §25.5.2.1), unless a variable hides `JSON`.
+  -- The method and the arguments are checked in the body, as for `Math`, so
+  -- that the rule adds few cases to the equations of `eval`.
+  | .call _ (.member _ (.ident _ "JSON") f) args => do
+    if (env.lookup "JSON").isSome || f != "stringify" then none
+    let [arg] := args | none
+    jsonStringify (← eval m fuel env arg)
   -- `Math.floor(x)` and the other functions of `Math` that `mathCall` has,
   -- unless a variable hides `Math`.
   | .call _ (.member _ (.ident _ "Math") f) args => do
@@ -898,22 +1591,30 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
   -- becomes an integer by `ToIntegerOrInfinity`. A literal is the integer it
   -- names, whatever the model of numbers. Any other number gives the integer
   -- of `JSNumber.toIndexInt`.
+  -- `s.at(k)` on a string is a string method, as the last rule takes it.
   | .call _ (.member _ recv "at") [arg] => do
-    let .list items ← eval m fuel env recv | none
-    match intLiteral? arg with
-    | some k => return atVal items k
-    | none =>
-      let .num n ← eval m fuel env arg | none
-      return atVal items (JSNumber.toIndexInt n)
+    match ← eval m fuel env recv with
+    | .list items =>
+      match intLiteral? arg with
+      | some k => return atVal items k
+      | none =>
+        let .num n ← eval m fuel env arg | none
+        return atVal items (JSNumber.toIndexInt n)
+    | .str s => stringMethod "at" s [← eval m fuel env arg] [intLiteral? arg]
+    | _ => none
   -- `xs.slice(start, end)` (`Array.prototype.slice`, ECMA-262 §23.1.3.28).
   -- Each argument becomes an integer as the argument of `at` does. A missing
-  -- start is `0`, and a missing end is the length.
+  -- start is `0`, and a missing end is the length. `s.slice` on a string is a
+  -- string method.
   | .call _ (.member _ recv "slice") args => do
-    let .list items ← eval m fuel env recv | none
-    match args with
-    | [] => return .list (sliceList items 0 none)
-    | [a] => return .list (sliceList items (← evalInt m fuel env a) none)
-    | [a, b] => return .list (sliceList items (← evalInt m fuel env a) (some (← evalInt m fuel env b)))
+    match ← eval m fuel env recv with
+    | .list items =>
+      match args with
+      | [] => return .list (sliceList items 0 none)
+      | [a] => return .list (sliceList items (← evalInt m fuel env a) none)
+      | [a, b] => return .list (sliceList items (← evalInt m fuel env a) (some (← evalInt m fuel env b)))
+      | _ => none
+    | .str s => stringMethod "slice" s (← evalList m fuel env args) (args.map intLiteral?)
     | _ => none
   -- `xs.map((x, i) => e)`: `map` passes the index too, as a number
   -- (ECMA-262 §23.1.3.21, step 6.c.ii). An array has fewer than 2^32
@@ -960,7 +1661,7 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
       if method == "has" then return .bool found else none
     -- An array or a string, as the next rule takes it.
     | .list items => arrayMethod method items [← eval m fuel env arg]
-    | .str s => stringMethod method s [← eval m fuel env arg]
+    | .str s => stringMethod method s [← eval m fuel env arg] [intLiteral? arg]
     | _ => none
   -- Any other call of a method of an array or a string, such as
   -- `xs.includes(v)` or `s.trim()`. The receiver comes first, then the
@@ -970,7 +1671,7 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
   | .call _ (.member _ recv method) args => do
     match ← eval m fuel env recv with
     | .list items => arrayMethod method items (← evalList m fuel env args)
-    | .str s => stringMethod method s (← evalList m fuel env args)
+    | .str s => stringMethod method s (← evalList m fuel env args) (args.map intLiteral?)
     -- `d.getTime()` and the UTC getters of a date, which take no arguments.
     | .date t => dateMethod method t (← evalList m fuel env args)
     | _ => none
@@ -1009,6 +1710,21 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     if (env.lookup "Error").isSome then none
     let .str s ← eval m fuel env msg | none
     return .error "Error" [("message", .str s)]
+  -- `new C(message, args)` for an error class `C` of the file, as
+  -- `Stmt.hoisted` writes it, with its mark: the object has the message,
+  -- then a property for each `readonly` parameter with its argument
+  -- (ECMA-262 §20.5.1.1 for `Error`, and §15.7.14 for the fields of a
+  -- derived class). A construction without the mark has the wrong number
+  -- of arguments, and the model gives no value.
+  | .new _ c [.keyword _ "'"] (msg :: args) =>
+    match errorClassIn m c with
+    | none => none
+    | some ctor =>
+      if (env.lookup c).isSome then none else do
+        let .str s ← eval m fuel env msg | none
+        let vs ← evalList m fuel env args
+        if (ctorParams ctor).length != vs.length then none
+        return .error c (("message", .str s) :: fieldArgs ctor vs)
   | _ => none
 termination_by e => (fuel, sizeOf e, 0)
 
@@ -1260,7 +1976,7 @@ def execStmt (m : Scope) (fuel : Nat) (env : Env N) : Stmt → Option (Outcome N
   -- `break` and `continue` without a label (ECMA-262 §14.8.2 and §14.9.2).
   | .breakStmt _ => some (.brk env)
   | .continueStmt _ => some (.cont env)
-  -- `for (const x of xs)` on an array, a set or a map: the body runs once for
+  -- `for (const x of xs)` on an array, a set, a map or a string: the body runs once for
   -- each value that `iterValues` gives, in order, with `x` bound to it in a
   -- new scope (`ForIn/OfBodyEvaluation`, ECMA-262 §14.7.5.7).
   -- A JS loop sees a change to what it runs over while it runs: it visits an

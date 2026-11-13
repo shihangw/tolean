@@ -349,6 +349,36 @@ theorem Field.beqList_iff : (xs ys : List Field) → Field.beqList xs ys = true 
   | x :: xs, ys => by
     cases ys <;> simp [and_assoc, Field.beqList, Field.beq_iff x, Field.beqList_iff xs]
 
+def CtorParam.beq (a b : CtorParam) : Bool := decide (a.readonly = b.readonly) && Param.beq a.param b.param
+
+theorem CtorParam.beq_iff (a b : CtorParam) : CtorParam.beq a b = true ↔ a = b := by
+  obtain ⟨r, p⟩ := a
+  cases b
+  simp [CtorParam.beq, Param.beq_iff p]
+
+def CtorParam.beqList : List CtorParam → List CtorParam → Bool
+  | [], [] => true
+  | x :: xs, y :: ys => CtorParam.beq x y && CtorParam.beqList xs ys
+  | _, _ => false
+
+theorem CtorParam.beqList_iff : (xs ys : List CtorParam) → CtorParam.beqList xs ys = true ↔ xs = ys
+  | [], ys => by cases ys <;> simp [CtorParam.beqList]
+  | x :: xs, ys => by
+    cases ys <;> simp [CtorParam.beqList, CtorParam.beq_iff x, CtorParam.beqList_iff xs]
+
+/-- The constructor of an error class: its parameters and its message. -/
+def ctorBeq : Option (List CtorParam × Expr) → Option (List CtorParam × Expr) → Bool
+  | none, none => true
+  | some (ps, m), some (qs, n) => CtorParam.beqList ps qs && Expr.beq m n
+  | _, _ => false
+
+theorem ctorBeq_iff : (a b : Option (List CtorParam × Expr)) → ctorBeq a b = true ↔ a = b
+  | none, b => by cases b <;> simp [ctorBeq]
+  | some (ps, m), b => by
+    cases b with
+    | none => simp [ctorBeq]
+    | some q => obtain ⟨qs, n⟩ := q; simp [ctorBeq, CtorParam.beqList_iff ps, Expr.beq_iff m]
+
 def Decl.beq : Decl → Decl → Bool
   | .import a0 a1 a2, .import b0 b1 b2 => decide (a0 = b0) && decide (a1 = b1) && decide (a2 = b2)
   | .exports a0 a1 a2, .exports b0 b1 b2 => decide (a0 = b0) && decide (a1 = b1) && decide (a2 = b2)
@@ -356,6 +386,7 @@ def Decl.beq : Decl → Decl → Bool
   | .interface a0 a1 a2 a4 a3, .interface b0 b1 b2 b4 b3 => decide (a0 = b0) && decide (a1 = b1) && decide (a2 = b2) && decide (a4 = b4) && Field.beqList a3 b3
   | .typeAlias a0 a1 a2 a4 a3, .typeAlias b0 b1 b2 b4 b3 => decide (a0 = b0) && decide (a1 = b1) && decide (a2 = b2) && decide (a4 = b4) && TypeExpr.beq a3 b3
   | .enum a0 a1 a2 a3, .enum b0 b1 b2 b3 => decide (a0 = b0) && decide (a1 = b1) && decide (a2 = b2) && decide (a3 = b3)
+  | .errorClass a0 a1 a2 a3, .errorClass b0 b1 b2 b3 => decide (a0 = b0) && decide (a1 = b1) && decide (a2 = b2) && ctorBeq a3 b3
   | .exportedVar a0 a1, .exportedVar b0 b1 => decide (a0 = b0) && VarDecl.beq a1 b1
   | .stmt a0, .stmt b0 => Stmt.beq a0 b0
   | _, _ => false
@@ -373,6 +404,8 @@ theorem Decl.beq_iff : (a b : Decl) → Decl.beq a b = true ↔ a = b
     cases b <;> simp [and_assoc, Decl.beq, TypeExpr.beq_iff a3]
   | .enum a0 a1 a2 a3, b => by
     cases b <;> simp [and_assoc, Decl.beq]
+  | .errorClass a0 a1 a2 a3, b => by
+    cases b <;> simp [and_assoc, Decl.beq, ctorBeq_iff a3]
   | .exportedVar a0 a1, b => by
     cases b <;> simp [and_assoc, Decl.beq, VarDecl.beq_iff a1]
   | .stmt a0, b => by

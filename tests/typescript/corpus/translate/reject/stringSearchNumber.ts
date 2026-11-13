@@ -1,4 +1,4 @@
-// expect: 4:10 the argument of 'includes' must be a string
+// expect: 4:10 'includes' takes a string and perhaps a position, an integer literal
 // JS would convert the number with ToString first.
 export function f(s: string, n: number): boolean {
   return s.includes(n);

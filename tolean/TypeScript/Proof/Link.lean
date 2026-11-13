@@ -43,11 +43,12 @@ theorem translatesTo_ok {m : Module} {start : Ctx} {decls : List IR.Decl}
   · simp at h
 
 /-- The translator is sound for one file that imports nothing. When it gives
-`decls` for `m`, from a state with the file's name, no functions and no enums, a call
-of the output gives a value only when the interpreter gives the same value
-for the same call of `m`. -/
+`decls` for `m`, from a state with the file's name and no functions, enums or
+error classes, a call of the output gives a value only when the interpreter
+gives the same value for the same call of `m`. -/
 theorem decls_sound {file : String} {m : Module} {decls : List IR.Decl} {start : Ctx}
-    (hfile : start.file = file) (hfns : (start.functions, start.enums, start.enumValues) = ([], [], []))
+    (hfile : start.file = file)
+    (hfns : (start.functions, start.enums, start.enumValues, start.errorClasses) = ([], [], [], []))
     (hifaces : start.interfaces = [])
     (h : translatesTo m start decls = true) (name : String) (args : List (Val N)) (fuel : Nat) (v : Val N)
     (hv : IR.runIn (IR.functionsOf [(file, decls)]) ⟨file, name⟩ args fuel = some v) :
@@ -603,18 +604,21 @@ elab "split_find" : tactic => withMainContext do
 open Lean Elab Tactic Meta in
 /-- Split on an element that the goal reads from a list, such as `xs[0]?` or
 `JSNumber.elementAt? xs i` or `JSNumber.atIndex? xs i`, where the evaluator
-encodes it with `encUndef`.
+encodes it with `encUndef`, or on the code unit that `s.at(k)` reads from a
+string, `JSString.at? s k`.
 The value is `undefined` when there is no element, so the evaluator and the
 printed definition read it only through a `match`, as for `find`. -/
 elab "split_undef" : tactic => withMainContext do
   let target ← instantiateMVars (← getMainTarget)
-  let some e := target.find? fun e =>
+  let element := target.find? fun e =>
       e.isAppOf ``tolean.TypeScript.Eval.encUndef && e.getAppNumArgs > 0 &&
         (e.appArg!.isAppOf ``GetElem?.getElem? || e.appArg!.isAppOf ``tolean.TypeScript.JSNumber.elementAt? ||
           e.appArg!.isAppOf ``tolean.TypeScript.JSNumber.atIndex?) &&
         !e.hasLooseBVars
-    | throwError "split_undef: no element of a list in the goal"
-  let stx ← Term.exprToSyntax e.appArg!
+  let unit := target.find? fun e => e.isAppOfArity ``tolean.TypeScript.JSString.at? 2 && !e.hasLooseBVars
+  let some e := (element.map (·.appArg!)).orElse fun _ => unit
+    | throwError "split_undef: no element of a list or code unit of a string in the goal"
+  let stx ← Term.exprToSyntax e
   evalTactic (← `(tactic| cases _ : $stx))
 
 /-- The proof of a link theorem: unfold the IR's evaluator on the IR and the
@@ -634,7 +638,7 @@ macro_rules
         -- has reduced, so strict equality on primitives must reduce too.
         Eval.includesVal, Eval.sameValueZero, Eval.strictEq, Eval.setProp,
         tolean.IR.IntOp.apply, tolean.IR.Order.apply,
-        tolean.IR.Division.apply, ExprExt.apply, listItems?, StringPart.toStr, StringMethod.apply, Eval.oneString, Eval.noArgs, NumberOp.apply, NumberConstant.value,
+        tolean.IR.Division.apply, ExprExt.apply, listItems?, StringPart.toStr, StringMethod.apply, Eval.oneString, Eval.noArgs, Eval.stringAndInt, Eval.oneInt, Eval.sliceArgs, Eval.padArgs, Eval.stringAt, Eval.intArg, Eval.asciiCase, NumberOp.apply, NumberConstant.value,
         NumberTest.apply, tagOf, Eval.Val.typeOf, Eval.Env.set, Eval.getProp, Eval.getKey_ofString, Eval.getPath,
         Eval.objectPrototypeNames, List.lookup, DeclRef.beq_def, -List.map_map, -List.map_tail, ← List.map_drop, ← List.map_take, ← List.map_reverse, ← List.map_append,
         -- A map or set read, such as the initial value of a `reduce`, must
@@ -653,7 +657,7 @@ macro_rules
       all_goals repeat' (split_find <;> simp [-List.map_map, -List.map_tail, ← List.map_drop, ← List.map_take, ← List.map_reverse, ← List.map_append, $defs,*])
       all_goals repeat' (split_undef <;> simp [-List.map_map, -List.map_tail, ← List.map_drop, ← List.map_take, ← List.map_reverse, ← List.map_append, $defs,*])
       all_goals repeat' (split <;> (try simp_all [bindState, eqVal, tolean.IR.IntOp.apply,
-        tolean.IR.Order.apply, tolean.IR.Division.apply, ExprExt.apply, listItems?, StringPart.toStr, StringMethod.apply, Eval.oneString, Eval.noArgs, NumberOp.apply,
+        tolean.IR.Order.apply, tolean.IR.Division.apply, ExprExt.apply, listItems?, StringPart.toStr, StringMethod.apply, Eval.oneString, Eval.noArgs, Eval.stringAndInt, Eval.oneInt, Eval.sliceArgs, Eval.padArgs, Eval.stringAt, Eval.intArg, Eval.asciiCase, NumberOp.apply,
         NumberTest.apply, tagOf, Eval.Val.typeOf, Eval.Env.set, Eval.getProp, Eval.getKey_ofString, Eval.getPath,
         Eval.objectPrototypeNames, List.lookup, DeclRef.beq_def, -List.map_map, -List.map_tail, ← List.map_drop, ← List.map_take, ← List.map_reverse, ← List.map_append,
         -Bool.if_true_left, -Bool.if_false_right, -Bool.if_false_left, -Bool.if_true_right, $defs,*]))
@@ -663,6 +667,9 @@ macro_rules
       -- encoded literal stands beside it, the two sides agree once the map
       -- splits again.
       all_goals (try simp [List.map_append])
+      -- A case change of a string that the translator showed is ASCII
+      -- leaves a branch where it is not, which a literal refutes.
+      all_goals (try exact absurd ‹JSString.isAscii _ = false› (by decide))
       -- Two `match`es that differ only in their auxiliary functions, as a
       -- loop lemma's step and the printed definition can, agree by `rfl`.
       all_goals (try rfl)))
