@@ -2570,10 +2570,10 @@ theorem translateThrow_sound (hc : CallsAgree (N := N) m.program fs fuel) {env :
           split at h
           · rename_i hlen
             simp only [bind_ok, fuelLimit_ok] at h
-            obtain ⟨_, _, ⟨rfl, rfl⟩, code, s₁, hcode, h⟩ := h
+            obtain ⟨codes, s₁, hcodes, _, _, ⟨rfl, rfl⟩, code, s₂, hcode, h⟩ := h
             split at h
-            · simp only [bind_ok, pure_ok] at h
-              obtain ⟨codes, s₂, hcodes, rfl, -⟩ := h
+            · simp only [pure_ok] at h
+              obtain ⟨rfl, -⟩ := h
               have hsim := (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hcode
               obtain ⟨hl, hsims⟩ := zip_codes_sim m fs fuel (fun x b ctx o ctx' hx => by
                   obtain ⟨n, t, ro⟩ := b

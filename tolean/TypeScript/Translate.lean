@@ -3119,12 +3119,14 @@ def translateThrow (env : Env) (value : Expr) : TM IR.Body := do
     unless ctx.declaredClasses.contains c do reject sn "declare the error class before the function that throws it"
     if env.has c then reject sn s!"a local named {c} hides the error class"
     unless atoms.length == info.params.length do reject value.span s!"'{c}' takes {info.params.length} arguments"
-    let code ← translateExpr (← fuelLimit) env (some .string) msg
-    unless code.type == .string do reject msg.span "the message of an error must be a string"
+    -- The arguments first: a wrong one is a fault of the throw, and the
+    -- message, written over them, would blame the class for it.
     let codes ← (atoms.zip info.params).mapM fun (a, (_, t, _)) => do
       let ca ← translateExpr (← fuelLimit) env (some t) a
       unless ca.type.assignableTo t do reject a.span "the argument does not have the parameter's type"
       pure ca
+    let code ← translateExpr (← fuelLimit) env (some .string) msg
+    unless code.type == .string do reject msg.span "the message of an error must be a string"
     let marks := some "message" :: info.params.map fun (n, _, ro) => if ro then some n else none
     return .throw (.ext (.errorCase ⟨ctx.file, "Thrown"⟩ c marks) (code.value :: codes.map (·.value)))
   -- A construction of an error class that the hoisting left alone has the
@@ -4239,6 +4241,10 @@ def exportsError? (c : Ctx) (names : List ImportName) : Option (Span × String) 
         | some true => some (n.span, s!"'{n.name}' is exported already")
         | some false => none
         | none => some (n.span, s!"this file declares no interface or type named '{n.name}' before this export list")
+      -- An error class may be in an export list, as a function may. No file
+      -- can import one yet, so the list changes nothing for it.
+      else if let some k := c.errorClasses.find? fun k => k.file == c.file && k.name == n.name then
+        if k.exported then some (n.span, s!"'{n.name}' is exported already") else none
       else
         match ownFn, ownType with
         | some f, _ => if f.exported then some (n.span, s!"'{n.name}' is exported already") else none

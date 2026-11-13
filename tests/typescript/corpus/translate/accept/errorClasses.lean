@@ -15,7 +15,8 @@ def checked (n : Int) (limit : Int) : (Except Thrown Int) :=
     throw (Thrown.«NotFound» (JSString.ofString "no count"))
   else
     if n > limit then
-      throw (Thrown.«TooMany» ((JSString.ofString "too many: " ++ JSString.ofString "over")) limit)
+      let r0' := limit
+      throw (Thrown.«TooMany» ((JSString.ofString "too many: " ++ JSString.ofString "over")) r0')
     else
       if n = (7 : Int) then
         throw (Thrown.«error» ((JSError.mk (JSString.ofString "seven"))))
@@ -31,8 +32,9 @@ def evens (xs : List Int) : (Except Thrown Int) :=
   (List.foldlM
       (fun (s : Int) (x : Int) =>
         if (Int.tmod x ((2 : Int))) = (1 : Int) then
-          let r0' := (JSString.ofString "odd: " ++ JSString.ofString "x")
-          throw (Thrown.«Odd» r0' x r0')
+          let r0' := x
+          let r1' := (JSString.ofString "odd: " ++ JSString.ofString "x")
+          throw (Thrown.«Odd» r1' r0' r1')
         else
           let s := s + x
           pure s)
@@ -42,7 +44,8 @@ def evens (xs : List Int) : (Except Thrown Int) :=
 def described (n : Int) (extra : JSString) : (Except Thrown Int) :=
   if n > (100 : Int) then
     let r0' := (n - (100 : Int))
-    throw (Thrown.«TooMany» ((JSString.ofString "too many: " ++ extra)) r0')
+    let r1' := extra
+    throw (Thrown.«TooMany» ((JSString.ofString "too many: " ++ r1')) r0')
   else
     (pure n)
 

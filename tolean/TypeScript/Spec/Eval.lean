@@ -764,8 +764,10 @@ def fieldArgs {α : Type} (ctor : Option (List CtorParam × Expr)) (args : List 
 mutual
 
 /-- `e` with each name of `σ` replaced by its expression. The message of an
-error class is written over its constructor's parameters, which only `σ`
-names, so no binder inside `e` captures a replacement. -/
+error class is written over its constructor's parameters. An arrow function
+inside `e` binds its own parameters, so the substitution stops at them. Each
+replacement is a literal or a hoisted name, which no binder of the source
+can bind, so no binder captures one. -/
 def Expr.subst (σ : List (String × Expr)) : Expr → Expr
   | .ident s n => match σ.lookup n with | some e => e | none => .ident s n
   | .number s t => .number s t
@@ -786,7 +788,7 @@ def Expr.subst (σ : List (String × Expr)) : Expr → Expr
   | .binary s op a b => .binary s op (Expr.subst σ a) (Expr.subst σ b)
   | .cond s t a b => .cond s (Expr.subst σ t) (Expr.subst σ a) (Expr.subst σ b)
   | .assign s op t v => .assign s op (Expr.subst σ t) (Expr.subst σ v)
-  | .arrow s p ps body => .arrow s p ps (Expr.subst σ body)
+  | .arrow s p ps body => .arrow s p ps (Expr.subst (σ.filter fun (n, _) => !(ps.map (·.name)).contains n) body)
   | .asConst s e => .asConst s (Expr.subst σ e)
   | .satisfies s e t => .satisfies s (Expr.subst σ e) t
   | .new s c ts args => .new s c ts (Expr.substList σ args)
@@ -979,15 +981,25 @@ structure Hoisted where
   decls : List Stmt
   next : Nat
 
+/-- Bind `e` to a fresh name before the statement, whatever `e` is. -/
+def Hoisted.fresh (h : Hoisted) (e : Expr) : Expr × Hoisted :=
+  let name := hoistName h.next
+  (.ident (Expr.span e) name,
+    { decls := h.decls ++ [.varDecl (Expr.span e) { kind := .const, name, type := none, init := some e }],
+      next := h.next + 1 })
+
 /-- Bind `e` to a fresh name before the statement, and read the name in its
 place. An atom stays as it is, and so does a literal whose parts are all
 literals. -/
 def Hoisted.bind (h : Hoisted) (e : Expr) : Expr × Hoisted :=
-  if Expr.isAtom e || Expr.isClosedLiteral e then (e, h) else
-    let name := hoistName h.next
-    (.ident (Expr.span e) name,
-      { decls := h.decls ++ [.varDecl (Expr.span e) { kind := .const, name, type := none, init := some e }],
-        next := h.next + 1 })
+  if Expr.isAtom e || Expr.isClosedLiteral e then (e, h) else h.fresh e
+
+/-- An argument of an error class's constructor: a literal stays, and any
+other argument, a name among them, moves out to a fresh name. The message
+is then written over literals and hoisted names, which no binder of the
+source can bind. -/
+def Hoisted.bindArg (h : Hoisted) (e : Expr) : Expr × Hoisted :=
+  if Expr.isClosedLiteral e then (e, h) else h.fresh e
 
 /-- An operand that JS evaluates before a call that can throw, after its own
 calls have moved out: it moves out whole, so that it still runs before them.
@@ -1063,14 +1075,14 @@ def Expr.hoist (thr : String → Bool) (cls : String → Option (Option (List Ct
   | e => (e, h)
 termination_by structural e => e
 
-/-- The arguments of an error class's constructor: each moves out to a name,
-after its own calls. -/
+/-- The arguments of an error class's constructor: each that is not a
+literal moves out to a name, after its own calls. -/
 def Expr.hoistAtoms (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr)))
     (h : Hoisted) : List Expr → List Expr × Hoisted
   | [] => ([], h)
   | e :: es =>
     let (e', h) := Expr.hoist thr cls h e
-    let (e', h) := h.bindOperand e'
+    let (e', h) := h.bindArg e'
     let (es', h) := Expr.hoistAtoms thr cls h es
     (e' :: es', h)
 termination_by structural es => es
