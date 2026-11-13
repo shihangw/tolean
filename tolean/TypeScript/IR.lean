@@ -1,4 +1,5 @@
 import tolean.IR
+import tolean.TypeScript.Spec.Date
 
 /-!
 The TypeScript extension of the Tolean IR: the types and operations that the
@@ -20,7 +21,8 @@ export tolean.IR (IntOp Order Division Names ImportedFile leanReserved memberNam
 
 /-- An operation of the abstract number model `JSNumber` on two numbers. -/
 inductive NumberOp where
-  | add | sub | mul | lt | le | eq
+  | add | sub | mul | div | lt | le | eq
+  | bitAnd | bitOr | bitXor | shiftLeft | shiftRight | unsignedShiftRight
 deriving BEq, Repr, Inhabited, DecidableEq
 
 /-- A constant of the number model. -/
@@ -30,8 +32,27 @@ deriving BEq, Repr, Inhabited, DecidableEq
 
 /-- A test of the number model on one number. -/
 inductive NumberTest where
-  | isSafeInteger | isNaN | isFinite
+  | isSafeInteger | isNaN | isFinite | isInteger
 deriving BEq, Repr, Inhabited, DecidableEq
+
+/-- A function of the number model on one number: `Math.floor` and its
+relatives. -/
+inductive NumberFn where
+  | floor | ceil | trunc | round | abs | bitNot
+deriving BEq, Repr, Inhabited, DecidableEq
+
+def NumberFn.name : NumberFn → String
+  | .floor => "floor" | .ceil => "ceil" | .trunc => "trunc" | .round => "round" | .abs => "abs"
+  | .bitNot => "bitNot"
+
+/-- An operation of `JSBigInt` on two bigints: `&`, `|`, `^`, `<<` and `>>`. -/
+inductive BigintOp where
+  | bitAnd | bitOr | bitXor | shiftLeft | shiftRight
+deriving BEq, Repr, Inhabited, DecidableEq
+
+def BigintOp.name : BigintOp → String
+  | .bitAnd => "bitAnd" | .bitOr => "bitOr" | .bitXor => "bitXor"
+  | .shiftLeft => "shiftLeft" | .shiftRight => "shiftRight"
 
 /-- How one operand of `a + b` on strings becomes a string, by ToString: a
 string stays itself, and a bigint or a boolean becomes its text. -/
@@ -74,6 +95,8 @@ inductive TyExt where
   | null
   /-- `JSError`, what `throw new Error(message)` throws. -/
   | error
+  /-- `JSDate`, a `Date` (`Spec/Date.lean`). -/
+  | date
 deriving BEq, Repr, Inhabited, DecidableEq
 
 /-- The operations that TypeScript adds to the IR, each with the number of
@@ -91,6 +114,31 @@ inductive ExprExt where
   | numberNe
   /-- `(JSNumber.isNaN a)`, or `(JSNumber.toSafeInt a).isSome`. -/
   | numberTest (test : NumberTest)
+  /-- `(JSDate.ofNumber t)`: `new Date(t)` on a number. -/
+  | dateOfNumber
+  /-- `(JSDate.getTime (N := N) d)`, or another method of a date that takes no
+  arguments, on `d`: `d.getTime()`, where `name` is the name of the method
+  in the source. -/
+  | dateMethod (name : String)
+  /-- `(JSDate.utc (N := N) [y, m])`, on the numbers: `Date.UTC(y, m)`. -/
+  | dateUtc
+  /-- `(JSNumber.sameValue a b)`: `Object.is(a, b)` on numbers. -/
+  | numberSameValue
+  /-- `(JSNumber.ofInt a)`: `Number(a)` on a bigint. -/
+  | numberOfInt
+  /-- `(JSNumber.floor a)`, or another function on one number: `Math.floor(a)`. -/
+  | numberFn (f : NumberFn)
+  /-- `(JSNumber.minimum (N := N) [a, b])`, or `JSNumber.maximum` when `isMax`,
+  on any count of numbers: `Math.min(a, b)` or `Math.max(a, b)`. -/
+  | numberFold (isMax : Bool)
+  /-- `(JSBigInt.bitAnd a b)`, or another operation of `JSBigInt` on two
+  bigints. -/
+  | bigintOp (op : BigintOp)
+  /-- `(JSBigInt.bitNot a)`: `~a` on a bigint. -/
+  | bigintNot
+  /-- `(a ^ (k : Nat))`, on `a`: `a ** k` on bigints, where `k` is a bigint
+  literal, which is never negative. -/
+  | bigintPow (k : Nat)
   /-- `none`, on no arguments, as an optional value: `undefined`, such as
   the argument of an optional parameter that a call leaves out. -/
   | undefined
@@ -227,6 +275,7 @@ abbrev LoopInfo := tolean.IR.LoopInfo TyExt
 @[match_pattern] abbrev Expr.isUndefined (a : Expr) : Expr := .ext .isUndefined [a]
 @[match_pattern] abbrev Expr.isDefined (a : Expr) : Expr := .ext .isDefined [a]
 @[match_pattern] abbrev Ty.error : Ty := .ext .error
+@[match_pattern] abbrev Ty.date : Ty := .ext .date
 @[match_pattern] abbrev Expr.pure (a : Expr) : Expr := .ext .pure [a]
 @[match_pattern] abbrev Expr.error (message : Expr) : Expr := .ext .error [message]
 
@@ -237,7 +286,9 @@ def leanNames : List (String × String) :=
   tolean.IR.leanNames ++
     [("JSNumber", "tolean.TypeScript.JSNumber"), ("JSString", "tolean.TypeScript.JSString"),
      ("JSMap", "tolean.TypeScript.JSMap"), ("JSSet", "tolean.TypeScript.JSSet"),
-     ("JSError", "tolean.TypeScript.JSError"), ("pure", "Pure.pure"),
+     ("JSError", "tolean.TypeScript.JSError"), ("JSBigInt", "tolean.TypeScript.JSBigInt"),
+     ("JSDate", "tolean.TypeScript.JSDate"),
+     ("pure", "Pure.pure"),
      ("Nat", "Nat")]
 
 /-- Write the Lean name `name` (or `name.rest`), from the root when the source
@@ -246,7 +297,10 @@ def leanName (names : Names) (name : String) : String :=
   tolean.IR.leanNameIn leanNames names name
 
 def NumberOp.name : NumberOp → String
-  | .add => "add" | .sub => "sub" | .mul => "mul" | .lt => "lt" | .le => "le" | .eq => "eq"
+  | .add => "add" | .sub => "sub" | .mul => "mul" | .div => "div" | .lt => "lt" | .le => "le"
+  | .eq => "eq" | .bitAnd => "bitAnd" | .bitOr => "bitOr" | .bitXor => "bitXor"
+  | .shiftLeft => "shiftLeft" | .shiftRight => "shiftRight"
+  | .unsignedShiftRight => "unsignedShiftRight"
 
 def NumberConstant.name : NumberConstant → String
   | .nan => "nan" | .posInf => "posInf" | .negInf => "negInf"
@@ -256,9 +310,10 @@ instance : tolean.IR.PrintTy TyExt where
     | .number => names.typeParam
     | .null => s!"({leanName names "Option"} Empty)"
     | .error => leanName names "JSError"
+    | .date => leanName names "JSDate"
   namesParam _
     | .number => true
-    | .null | .error => false
+    | .null | .error | .date => false
   binders names :=
     let n := names.typeParam
     s!" \{{n} : Type} [{leanName names "JSNumber"} {n}]"
@@ -307,6 +362,20 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
   | .numberTest .isSafeInteger, [a] => s!"({js}.toSafeInt {argument a}).isSome"
   | .numberTest .isNaN, [a] => s!"({js}.isNaN {argument a})"
   | .numberTest .isFinite, [a] => s!"({js}.isFinite {argument a})"
+  | .numberTest .isInteger, [a] => s!"({js}.isInteger {argument a})"
+  | .numberFn f, [a] => s!"({js}.{f.name} {argument a})"
+  | .dateOfNumber, [t] => s!"({leanName names "JSDate"}.ofNumber {argument t})"
+  | .dateMethod name, [d] =>
+    s!"({leanName names "JSDate"}.{(JSDate.methodName? name).getD name} (N := {names.typeParam}) {argument d})"
+  | .dateUtc, args =>
+    s!"({leanName names "JSDate"}.utc (N := {names.typeParam}) [{", ".intercalate args}])"
+  | .numberSameValue, [a, b] => s!"({js}.sameValue {argument a} {argument b})"
+  | .numberOfInt, [a] => s!"({js}.ofInt (N := {names.typeParam}) {argument a})"
+  | .numberFold isMax, args =>
+    s!"({js}.{if isMax then "maximum" else "minimum"} (N := {names.typeParam}) [{", ".intercalate args}])"
+  | .bigintOp op, [a, b] => s!"({leanName names "JSBigInt"}.{op.name} {argument a} {argument b})"
+  | .bigintNot, [a] => s!"({leanName names "JSBigInt"}.bitNot {argument a})"
+  | .bigintPow k, [a] => s!"({argument a} ^ ({k} : {leanName names "Nat"}))"
   | .stringOrder le, [a, b] =>
     s!"({leanName names "JSString"}.{if le then "le" else "lt"} {argument a} {argument b})"
   | .stringAppend left right, [a, b] =>
@@ -409,6 +478,16 @@ An operation on strings may stand where no string type or literal is in
 sight, such as `a.key < b.key` on an interface of another file. -/
 def ExprExt.usesString : ExprExt → Bool
   | .stringOrder _ | .stringAppend .. | .stringLength | .stringMethod .. | .stringCodePoints => true
+  | _ => false
+
+/-- The operation names `JSDate`, so the output imports its model. -/
+def ExprExt.onDate : ExprExt → Bool
+  | .dateOfNumber | .dateMethod _ | .dateUtc => true
+  | _ => false
+
+/-- The operation names `JSBigInt`, so the output imports its model. -/
+def ExprExt.onBigInt : ExprExt → Bool
+  | .bigintOp _ | .bigintNot => true
   | _ => false
 
 end tolean.TypeScript.IR
