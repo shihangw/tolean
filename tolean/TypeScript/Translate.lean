@@ -1425,13 +1425,15 @@ def concatParts? : Ty → Ty → Option (IR.StringPart × IR.StringPart)
   | .bigint, .string => some (.bigint, .string)
   | .string, .boolean => some (.string, .boolean)
   | .boolean, .string => some (.boolean, .string)
+  | .string, .number => some (.string, .number)
+  | .number, .string => some (.number, .string)
   | _, _ => none
 
 /-- `a + b` where one operand is a string: ToString converts the other
 operand, and the code units join. -/
 def concatOperands (s : Span) (a b : Code) : TM Code := do
   let some (left, right) := concatParts? a.type b.type
-    | reject s "'+' on a string needs a string, a bigint or a boolean on the other side"
+    | reject s "'+' on a string needs a string, a number, a bigint or a boolean on the other side"
   return ⟨.ext (.stringAppend left right) [a.value, b.value], false, .string⟩
 
 /-- The code for `op` on the operands `a` and `b`, which the translator has

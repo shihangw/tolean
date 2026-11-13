@@ -382,7 +382,7 @@ assume them instead of proving them, and `tests/typescript/jsNumberLaws.test.ts`
 checks each one against the doubles of every maintained Node release line. -/
 def numberLaws : List Name := [``SafeIntLaws.add,
     ``SafeIntLaws.sub, ``SafeIntLaws.mul, ``SafeIntLaws.neg, ``SafeIntLaws.eq, ``SafeIntLaws.lt,
-    ``SafeIntLaws.le, ``SafeIntLaws.ofSafeInt, ``SafeIntLaws.toSafeInt_inRange,
+    ``SafeIntLaws.le, ``SafeIntLaws.ofSafeInt, ``SafeIntLaws.toSafeInt_inRange, ``SafeIntLaws.toStr,
     ``SpecialValueLaws.safe_finite, ``SpecialValueLaws.isNaN_nan, ``SpecialValueLaws.isNaN_posInf,
     ``SpecialValueLaws.isNaN_negInf, ``SpecialValueLaws.isFinite_not_nan,
     ``SpecialValueLaws.isFinite_posInf, ``SpecialValueLaws.isFinite_negInf, ``SpecialValueLaws.eq_refl,

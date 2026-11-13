@@ -57,7 +57,7 @@ def BigintOp.name : BigintOp → String
 /-- How one operand of `a + b` on strings becomes a string, by ToString: a
 string stays itself, and a bigint or a boolean becomes its text. -/
 inductive StringPart where
-  | string | bigint | boolean
+  | string | bigint | boolean | number
 deriving BEq, Repr, Inhabited, DecidableEq
 
 /-- A method of a string that the subset has. -/
@@ -391,6 +391,7 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
       | .string => x
       | .bigint => s!"({leanName names "JSString"}.ofInt {argument x})"
       | .boolean => s!"({leanName names "JSString"}.ofBool {argument x})"
+      | .number => s!"({js}.toStr {argument x})"
     s!"({part left a} ++ {part right b})"
   | .stringLength, [a] =>
     s!"({js}.ofSafeInt (N := {names.typeParam}) (({leanName names "JSString"}.length {argument a} : " ++

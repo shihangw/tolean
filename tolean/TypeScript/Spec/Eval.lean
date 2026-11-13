@@ -237,9 +237,10 @@ is `b < a` and `a >= b` is `b <= a`, as `IsLessThan` evaluates them
 (ECMA-262 §13.10.1). Strings compare by their code units (§7.2.13). When
 one operand of `+` is a string, `+` converts the other with ToString and
 joins the code units (ApplyStringOrNumericBinaryOperator, §13.15.3). The
-subset converts strings, bigints and booleans; ToString of a number is not
-modelled yet. `/` on numbers is Number::divide (§6.1.6.1.5), and the subset
-has no `%` on numbers.
+subset converts strings, bigints, booleans and numbers. A number becomes
+`JSNumber.toStr`, which the model leaves abstract: `SafeIntLaws.toStr` says
+what it gives for a safe integer. `/` on numbers is Number::divide
+(§6.1.6.1.5), and the subset has no `%` on numbers.
 
 On bigints, `a ** b` throws a `RangeError` when `b` is negative
 (BigInt::exponentiate, §6.1.6.2.3), and `&`, `|`, `^`, `<<` and `>>` are the
@@ -254,6 +255,8 @@ def binary : BinOp → Val N → Val N → Option (Val N)
   | .add, .int a, .str b => some (.str (JSString.ofInt a ++ b))
   | .add, .str a, .bool b => some (.str (a ++ JSString.ofBool b))
   | .add, .bool a, .str b => some (.str (JSString.ofBool a ++ b))
+  | .add, .str a, .num n => some (.str (a ++ JSNumber.toStr n))
+  | .add, .num n, .str b => some (.str (JSNumber.toStr n ++ b))
   | .sub, .int a, .int b => some (.int (a - b))
   | .mul, .int a, .int b => some (.int (a * b))
   | .div, .int a, .int b => if b == 0 then none else some (.int (a.tdiv b))
@@ -483,10 +486,9 @@ private def jsonQuote (s : JSString) : List UInt16 :=
     | pair => pair
   ascii "\"" ++ (JSString.codePointUnits s.units).flatMap escape ++ ascii "\""
 
-/-- The text that `JSON.stringify(v)` gives, for the interpreter. It writes a
-number only when it is a safe integer, `NaN` or an infinity, because the model
-has no ToString for other numbers, and it stops the interpreter on any other
-number. -/
+/-- The text that `JSON.stringify(v)` gives, for the interpreter. A finite
+number is its ToString, and `NaN` and the infinities are `null`
+(SerializeJSONProperty, ECMA-262 §25.5.2.2, step 9). -/
 private partial def jsonTextImpl {N : Type} [JSNumber N] (v : Val N) : JSString :=
   ⟨go v⟩
 where
@@ -498,12 +500,7 @@ where
     -- `toISOString` for a valid one, which the model does not have yet.
     | .date none => ascii "null"
     | .date (some _) => panic! "the interpreter cannot write a date as JSON yet"
-    | .num n =>
-      match JSNumber.toSafeInt n with
-      | some i => ascii (toString i)
-      | none =>
-        if JSNumber.isNaN n || !JSNumber.isFinite n then ascii "null"
-        else panic! "the interpreter cannot write this number as JSON"
+    | .num n => if JSNumber.isNaN n || !JSNumber.isFinite n then ascii "null" else (JSNumber.toStr n).units
     | .int _ => panic! "JSON.stringify throws on a bigint"
     | .list items => ascii "[" ++ (ascii ",").intercalate (items.map go) ++ ascii "]"
     | .obj fields | .error _ fields =>

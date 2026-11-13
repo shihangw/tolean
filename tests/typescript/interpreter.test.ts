@@ -387,6 +387,22 @@ test('the interpreter iterates a string by code point', async () => {
   expect(canonical(value as Value)).toBe(canonical(encode([...s])));
 });
 
+// ToString of a number is abstract in the proofs, but the interpreter writes
+// it, and it must write what Node writes: the fewest digits that read back as
+// the same double, in the format of Number::toString.
+test('the interpreter converts numbers to strings as Node does', async () => {
+  const source = 'export function text(x: number): string { return "" + x; }';
+  const xs = [0.1, 0.1 + 0.2, 1 / 3, -0, NaN, Infinity, -Infinity, 1e21, 1e20, 123e-20, 1e-6, 1e-7,
+    5e-324, Number.MAX_VALUE, 2 ** 53, 2 ** -1022, -1.5, 4.35, 100, 9007199254740993];
+  for (let i = 0; i < 200; i++) xs.push(Math.random() * 10 ** Math.floor(Math.random() * 60 - 30));
+  const input = { programs: [{ source, calls: xs.map((x) => ({ function: 'text', args: [encode(x)] })) }] };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const [lean] = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  expect(lean?.accepted).toBe(true);
+  expect(lean?.results.map((r) => r.value)).toEqual(xs.map((x) => encode(String(x))));
+});
+
 // `JSON.stringify` is opaque in the proofs, but the interpreter writes its
 // text, which must be the text that Node writes: an optional field that is
 // missing is left out, and quotes, control characters and lone surrogates
