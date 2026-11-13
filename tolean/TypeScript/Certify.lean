@@ -442,6 +442,15 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       | .function _ _ _ _ _ _ body => (stmtsOf body).any (· matches .funDecl ..)
       | _ => false then
     throw s!"{file}: a local function has no certificate yet"
+  -- `JSON.stringify` is opaque in the output and in the interpreter, so no
+  -- proof links one to the other.
+  if m.decls.any fun d => match d with
+      | .function _ _ _ _ _ _ body =>
+        ((stmtsOf body).flatMap stmtExprs).any fun e => (subExprs e).any fun
+          | .call _ (.member _ (.ident _ "JSON") _) _ => true
+          | _ => false
+      | _ => false then
+    throw s!"{file}: JSON.stringify has no certificate"
   let nv := names.typeParam
   -- Every theorem is about every number model. A sort reads the signs of
   -- `-1` and `1`, which hold in every model with the laws of safe integers,

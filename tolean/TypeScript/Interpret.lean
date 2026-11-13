@@ -33,6 +33,93 @@ namespace tolean.TypeScript.Interpret
 open Lean (Json)
 open tolean.TypeScript.Eval (Val)
 
+/-- `a * 2^b < c * 10^d` and the like, exactly: the two sides as integers
+after moving each negative exponent to the other side. -/
+def cmpScaled (a : Nat) (b : Int) (c : Nat) (d : Int) : Ordering :=
+  let l := a * 2 ^ b.toNat * 10 ^ (-d).toNat
+  let r := c * 10 ^ d.toNat * 2 ^ (-b).toNat
+  compare l r
+
+/-- The decimal digits of `n`. -/
+def digitsOf (n : Nat) : String := toString n
+
+/-- Number::toString of a positive finite double `m * 2^e`, whose rounding
+interval is `(lo, hi)` around it, with the ends in it when `even`. -/
+def shortest (m : Nat) (e : Int) (loNum : Nat) (loExp : Int) (hiNum : Nat) (hiExp : Int) (even : Bool) :
+    Nat × Int × Nat :=
+  -- `n` with 10^(n-1) ≤ v < 10^n.
+  let v := (m, e)
+  let below (d : Int) : Bool := cmpScaled v.1 v.2 1 d == .lt  -- v < 10^d
+  let n0 : Int := ((e + Nat.log2 m + 1) * 30103 / 100000)
+  let rec up (n : Int) : Nat → Int
+    | 0 => n
+    | f + 1 => if below n then n else up (n + 1) f
+  let rec down (n : Int) : Nat → Int
+    | 0 => n
+    | f + 1 => if below (n - 1) then down (n - 1) f else n
+  let n := down (up n0 40) 40
+  let inside (s : Nat) (d : Int) : Bool :=
+    let gtLo := match cmpScaled loNum loExp s d with | .lt => true | .eq => even | .gt => false
+    let ltHi := match cmpScaled hiNum hiExp s d with | .gt => true | .eq => even | .lt => false
+    gtLo && ltHi
+  -- `|s * 10^d - v|` compared between two candidates, as twice the scale.
+  let rec tryK : Nat → Nat × Int × Nat
+    | 0 => (m, e, 0)  -- unreachable: 17 digits always suffice
+    | fuel + 1 =>
+      let k : Nat := 18 - (fuel + 1)
+      let d : Int := n - k
+      -- s = floor(v / 10^d)
+      let num := m * 2 ^ e.toNat * 10 ^ (-d).toNat
+      let den := 10 ^ d.toNat * 2 ^ (-e).toNat
+      let s := num / den
+      let lowOk := inside s d
+      let highOk := inside (s + 1) d
+      if lowOk && highOk then
+        -- The closer one: compare v - s*10^d with (s+1)*10^d - v, that is
+        -- 2v with (2s+1)*10^d.
+        match cmpScaled (2 * m) e (2 * s + 1) d with
+        | .lt => (s, n, k)
+        | .gt => (s + 1, n, k)
+        | .eq => if s % 2 == 0 then (s, n, k) else (s + 1, n, k)
+      else if lowOk then (s, n, k)
+      else if highOk then (s + 1, n, k)
+      else tryK fuel
+  tryK 17
+
+/-- Formats `s * 10^(n-k)`, where `s` has `k` digits, as Number::toString
+does (§6.1.6.1.20, steps 6 to 12). -/
+def format (s : Nat) (n : Int) (k : Nat) : String :=
+  -- A rounded-up `s` may have k + 1 digits, such as 10 for k = 1.
+  let (s, n, k) := if (digitsOf s).length > k then (s / 10, n + 1, k) else (s, n, k)
+  let ds := digitsOf s
+  if k ≤ n ∧ n ≤ 21 then ds ++ String.ofList (List.replicate (n - k).toNat '0')
+  else if 0 < n ∧ n ≤ 21 then String.ofList (ds.toList.take n.toNat) ++ "." ++ String.ofList (ds.toList.drop n.toNat)
+  else if -6 < n ∧ n ≤ 0 then "0." ++ String.ofList (List.replicate (-n).toNat '0') ++ ds
+  else
+    let e := n - 1
+    let sign := if e < 0 then "-" else "+"
+    let mant := if k = 1 then ds else String.ofList (ds.toList.take 1) ++ "." ++ String.ofList (ds.toList.drop 1)
+    mant ++ "e" ++ sign ++ toString e.natAbs
+
+/-- Number::toString of a positive finite double. -/
+def positiveToString (x : Float) : String :=
+    let bits : Nat := x.toBits.toNat
+    let ef : Nat := (bits / 2 ^ 52) % 2048
+    let f : Nat := bits % 2 ^ 52
+    let (m, e) : Nat × Int := if ef = 0 then (f, -1074) else (f + 2 ^ 52, (ef : Int) - 1075)
+    -- The neighbours are half an ulp away, and a quarter below a power of two.
+    let (loNum, loExp) : Nat × Int :=
+      if f = 0 ∧ ef > 1 then (4 * m - 1, e - 2) else (2 * m - 1, e - 1)
+    let (s, n, k) := shortest m e loNum loExp (2 * m + 1) (e - 1) (m % 2 == 0)
+    format s n k
+
+/-- Number::toString(x) with radix 10 (ECMA-262 §6.1.6.1.20). -/
+def jsNumberToString (x : Float) : String :=
+  if x.isNaN then "NaN"
+  else if x == 0 then "0"
+  else if x.isInf then (if x < 0 then "-Infinity" else "Infinity")
+  else if x < 0 then "-" ++ positiveToString (-x)
+  else positiveToString x
 /-- `-0` is the one double that is `0` and whose reciprocal is negative. -/
 def isNegZero (x : Float) : Bool := x == 0 && 1 / x < 0
 
@@ -121,6 +208,7 @@ instance : JSNumber Float where
   ofSafeInt := Float.ofInt
   toSafeInt x :=
     if x.isFinite && x.floor == x && x.abs ≤ 9007199254740991 then some x.toInt64.toInt else none
+  toStr x := JSString.ofString (jsNumberToString x)
   isNaN := Float.isNaN
   isFinite := Float.isFinite
   nan := 0.0 / 0.0

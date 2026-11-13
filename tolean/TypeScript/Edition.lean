@@ -80,6 +80,12 @@ inductive Feature where
   /-- `s.trimStart()` and `s.trimEnd()`: `String.prototype.trimStart` and
   `trimEnd`. -/
   | trimStartEnd
+  /-- `s.padStart(n)` and `s.padEnd(n)`: `String.prototype.padStart` and
+  `padEnd`. -/
+  | stringPad
+  /-- `s.at(k)`, which counts a negative `k` from the end:
+  `String.prototype.at`. -/
+  | stringAt
   /-- `xs.sort(cmp)` keeps the order of elements that `cmp` calls equal:
   `SortIndexedProperties`, which is stable since ES2019. -/
   | stableSort
@@ -89,11 +95,12 @@ deriving BEq, Repr, Inhabited
 
 def Feature.since : Feature → Edition
   | .exponent | .arrayIncludes | .trimWhiteSpace => .es2016
+  | .stringPad => .es2017
   | .objectSpread => .es2018
   | .trimStartEnd | .stableSort => .es2019
   | .bigint | .bigintDivision | .bigintBitwise | .nullishCoalescing | .optionalChaining => .es2020
   | .logicalAssignment | .numericSeparators => .es2021
-  | .arrayAt => .es2022
+  | .arrayAt | .stringAt => .es2022
   | .arrayFindLast | .arrayToSorted => .es2023
 
 def Feature.describe : Feature → String
@@ -111,6 +118,8 @@ def Feature.describe : Feature → String
   | .arrayFindLast => "Array.prototype.findLast"
   | .trimWhiteSpace => "the white space of String.prototype.trim without U+180E"
   | .trimStartEnd => "String.prototype.trimStart and trimEnd"
+  | .stringPad => "String.prototype.padStart and padEnd"
+  | .stringAt => "String.prototype.at"
   | .stableSort => "a stable Array.prototype.sort"
   | .arrayToSorted => "Array.prototype.toSorted"
 
