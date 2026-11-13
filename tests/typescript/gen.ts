@@ -352,6 +352,17 @@ export class Gen {
         });
         // `trim`, `trimStart` and `trimEnd`, which remove white space.
         options.push(() => `(${this.expr(STRING, vars, d)}).${this.pick(['trim', 'trimStart', 'trimEnd'])}()`);
+        // A template literal, which converts each substitution with
+        // ToString. The text holds an escaped backtick, an escaped `${`,
+        // and a line break, which the lexer reads as `\n`.
+        options.push(() => {
+          const part = (): string => `\${${this.expr(this.pick([STRING, NUMBER, BIGINT, BOOLEAN]), vars, d)}}`;
+          return this.pick([
+            () => '`plain`',
+            () => `\`a${part()}\``,
+            () => `\`${part()}\\\`-${part()}\\\${x}\n${part()}\``,
+          ])();
+        });
         // A case change, which the interpreter gives only on ASCII strings,
         // and `JSON.stringify` of a string or a boolean, which escapes
         // quotes, control characters and lone surrogates.
