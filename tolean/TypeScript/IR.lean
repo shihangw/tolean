@@ -63,12 +63,29 @@ deriving BEq, Repr, Inhabited, DecidableEq
 /-- A method of a string that the subset has. -/
 inductive StringMethod where
   | startsWith | endsWith | includes | indexOf | trim | trimStart | trimEnd | split
+  | at | slice | padStart | padEnd
 deriving BEq, Repr, Inhabited, DecidableEq
 
 def StringMethod.name : StringMethod → String
   | .startsWith => "startsWith" | .endsWith => "endsWith" | .includes => "includes"
   | .indexOf => "indexOf" | .trim => "trim" | .trimStart => "trimStart" | .trimEnd => "trimEnd"
-  | .split => "split"
+  | .split => "split" | .at => "at" | .slice => "slice" | .padStart => "padStart"
+  | .padEnd => "padEnd"
+
+/-- An integer literal as a Lean term, in parentheses when it is negative. -/
+def intTerm (k : Int) : String := if 0 ≤ k then s!"{k}" else s!"({k})"
+
+/-- The Lean function that a call of a string method with `count`
+arguments becomes, when it is not its own name: a position, an end
+position or a limit picks the function that takes it. -/
+def StringMethod.leanName : StringMethod → Nat → String
+  | .startsWith, 2 => "startsWithFrom"
+  | .endsWith, 2 => "endsWithAt"
+  | .includes, 2 => "includesFrom"
+  | .indexOf, 2 => "indexOfFrom"
+  | .split, 2 => "splitLimit"
+  | .at, _ => "at?"
+  | m, _ => m.name
 
 /-- The types that TypeScript adds to the IR. -/
 inductive TyExt where
@@ -146,8 +163,11 @@ inductive ExprExt where
   | stringLength
   /-- `(JSString.startsWith s p)`, or the other method, on `s` and the
   arguments: `s.startsWith(p)`. `indexOf` gives an index, which the output
-  makes a number: `(JSNumber.ofSafeInt (N := N) (JSString.indexOf s p))`. -/
-  | stringMethod (method : StringMethod)
+  makes a number: `(JSNumber.ofSafeInt (N := N) (JSString.indexOf s p))`.
+  `lits` holds the integer literal that each argument is, if it is one. The
+  output writes a number argument as its literal, such as
+  `(JSString.slice s 1 none)` for `s.slice(1)`. -/
+  | stringMethod (method : StringMethod) (lits : List (Option Int))
   /-- `(JSString.codePoints s)`, on `s`: the strings that `for (const c of s)`
   and `[...s]` visit, one for each code point. -/
   | stringCodePoints
@@ -370,11 +390,22 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
   | .stringLength, [a] =>
     s!"({js}.ofSafeInt (N := {names.typeParam}) (({leanName names "JSString"}.length {argument a} : " ++
       s!"{leanName names "Nat"}) : {leanName names "Int"}))"
-  | .stringMethod .indexOf, args =>
-    s!"({js}.ofSafeInt (N := {names.typeParam}) ({leanName names "JSString"}.indexOf " ++
-      s!"{" ".intercalate (args.map argument)}))"
-  | .stringMethod method, args =>
-    s!"({leanName names "JSString"}.{method.name} {" ".intercalate (args.map argument)})"
+  | .stringMethod method lits, s :: args =>
+    let str := leanName names "JSString"
+    -- A number argument is its literal, and the others are their code.
+    let terms := (args.zip (lits ++ List.replicate args.length none)).map fun
+      | (_, some k) => intTerm k
+      | (a, none) => argument a
+    -- `slice` and the padding take the arguments that the call leaves out.
+    let terms := match method, terms with
+      | .slice, [] => ["0", leanName names "none"]
+      | .slice, [k] => [k, leanName names "none"]
+      | .slice, [k, j] => [k, s!"({leanName names "some"} {j})"]
+      | .padStart, [n] | .padEnd, [n] => [n, s!"({leanName names "JSString.ofString"} {tolean.Sexp.quote " "})"]
+      | _, ts => ts
+    let call := s!"{str}.{method.leanName args.length} {" ".intercalate (argument s :: terms)}"
+    if method == .indexOf then s!"({js}.ofSafeInt (N := {names.typeParam}) ({call}))"
+    else s!"({call})"
   | .stringCodePoints, [s] => s!"({leanName names "JSString"}.codePoints {argument s})"
   | .undefined, _ => leanName names "none"
   | .isUndefined, [a] => s!"{argument a}.isNone"
@@ -446,7 +477,7 @@ instance : tolean.IR.PrintOp ExprExt := ⟨ExprExt.print⟩
 An operation on strings may stand where no string type or literal is in
 sight, such as `a.key < b.key` on an interface of another file. -/
 def ExprExt.usesString : ExprExt → Bool
-  | .stringOrder _ | .stringAppend .. | .stringLength | .stringMethod _ | .stringCodePoints => true
+  | .stringOrder _ | .stringAppend .. | .stringLength | .stringMethod .. | .stringCodePoints => true
   | _ => false
 
 /-- The operation names `JSDate`, so the output imports its model. -/

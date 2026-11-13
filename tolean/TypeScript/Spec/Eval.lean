@@ -348,22 +348,88 @@ def noArgs (v : Val N) : List (Val N) → Option (Val N)
   | [] => some v
   | _ => none
 
+/-- The integer of a number argument, as ToIntegerOrInfinity gives it
+(ECMA-262 §7.1.5): the integer that a literal names, whatever the model of
+numbers, as for `xs.at(k)`, or else a safe integer. `lit` is the integer
+literal that the argument is, if it is one. Any other value leaves the subset. -/
+def intArg : Option Int → Val N → Option Int
+  | some k, _ => some k
+  | none, .num n => JSNumber.toSafeInt n
+  | none, _ => none
+
+/-- The value of a method whose arguments are a string `p` and perhaps a
+number: `f p` without the number, and `g p k` with it, where `k` is its
+integer. -/
+def stringAndInt (f : JSString → Val N) (g : JSString → Int → Val N) :
+    List (Val N) → List (Option Int) → Option (Val N)
+  | [.str p], _ => some (f p)
+  | [.str p, v], [_, k] => (intArg k v).map (g p)
+  | _, _ => none
+
+/-- The value `g k` of a method whose argument is one number, with the
+integer `k`. -/
+def oneInt (g : Int → Val N) : List (Val N) → List (Option Int) → Option (Val N)
+  | [v], [k] => (intArg k v).map g
+  | _, _ => none
+
+/-- `s.slice(start, end)` on the values of its arguments: a missing start is
+`0`, and a missing end is the length (ECMA-262 §22.1.3.22). -/
+def sliceArgs (s : JSString) : List (Val N) → List (Option Int) → Option (Val N)
+  | [], _ => some (.str (s.slice 0 none))
+  | [a], [ka] => do return .str (s.slice (← intArg ka a) none)
+  | [a, b], [ka, kb] => do return .str (s.slice (← intArg ka a) (some (← intArg kb b)))
+  | _, _ => none
+
+/-- `padStart` or `padEnd` on the values of its arguments, where `g n fill` is
+the padded string: a missing filler is `" "` (ECMA-262 §22.1.3.17.1). -/
+def padArgs (g : Int → JSString → JSString) : List (Val N) → List (Option Int) → Option (Val N)
+  | [v], [k] => (intArg k v).map fun n => .str (g n (JSString.ofString " "))
+  | [v, .str fill], [k, _] => (intArg k v).map fun n => .str (g n fill)
+  | _, _ => none
+
+/-- `s.at(k)` as a value: the string of one code unit, or `undefined`. -/
+def stringAt (s : JSString) (k : Int) : Val N :=
+  match s.at? k with
+  | some c => .str c
+  | none => .undefined
+
 /-- A method of the string `s` that takes no callback, on the values of its
-arguments: `startsWith`, `endsWith`, `includes` and `indexOf` with one string
-(ECMA-262 §22.1.3.25, §22.1.3.7, §22.1.3.8 and §22.1.3.9), `trim`,
-`trimStart` and `trimEnd` (§22.1.3.32 to §22.1.3.34), and `split` with a
-string separator (§22.1.3.23). Each converts its argument with ToString, which
-the subset has on strings only. A position argument and the limit of `split`
-leave the subset. -/
-def stringMethod (method : String) (s : JSString) (args : List (Val N)) : Option (Val N) :=
-  if method == "startsWith" then oneString (fun p => .bool (s.startsWith p)) args
-  else if method == "endsWith" then oneString (fun p => .bool (s.endsWith p)) args
-  else if method == "includes" then oneString (fun p => .bool (s.includes p)) args
-  else if method == "indexOf" then oneString (fun p => .num (JSNumber.ofSafeInt (s.indexOf p))) args
+arguments `args`, where `lits` holds the integer literal that each argument
+is, if it is one:
+
+- `startsWith`, `endsWith`, `includes` and `indexOf` (ECMA-262 §22.1.3.25,
+  §22.1.3.7, §22.1.3.8 and §22.1.3.9), with a string and perhaps a position;
+- `trim`, `trimStart` and `trimEnd` (§22.1.3.32 to §22.1.3.34);
+- `split` (§22.1.3.23), with a string separator and perhaps a limit;
+- `at` (§22.1.3.1) and `slice` (§22.1.3.22);
+- `padStart` and `padEnd` (§22.1.3.17 and §22.1.3.16), with a length and
+  perhaps a string to fill with.
+
+ToString converts a string argument, and the subset has it on strings only.
+ToIntegerOrInfinity converts a number argument, and the subset has it on
+integer literals and safe integers (`intArg`). Other arguments leave the
+subset. -/
+def stringMethod (method : String) (s : JSString) (args : List (Val N)) (lits : List (Option Int)) :
+    Option (Val N) :=
+  if method == "startsWith" then
+    stringAndInt (fun p => .bool (s.startsWith p)) (fun p k => .bool (s.startsWithFrom p k)) args lits
+  else if method == "endsWith" then
+    stringAndInt (fun p => .bool (s.endsWith p)) (fun p k => .bool (s.endsWithAt p k)) args lits
+  else if method == "includes" then
+    stringAndInt (fun p => .bool (s.includes p)) (fun p k => .bool (s.includesFrom p k)) args lits
+  else if method == "indexOf" then
+    stringAndInt (fun p => .num (JSNumber.ofSafeInt (s.indexOf p)))
+      (fun p k => .num (JSNumber.ofSafeInt (s.indexOfFrom p k))) args lits
   else if method == "trim" then noArgs (.str s.trim) args
   else if method == "trimStart" then noArgs (.str s.trimStart) args
   else if method == "trimEnd" then noArgs (.str s.trimEnd) args
-  else if method == "split" then oneString (fun sep => .list ((s.split sep).map .str)) args
+  else if method == "split" then
+    stringAndInt (fun sep => .list ((s.split sep).map .str))
+      (fun sep k => .list ((s.splitLimit sep k).map .str)) args lits
+  else if method == "at" then oneInt (stringAt s) args lits
+  else if method == "slice" then sliceArgs s args lits
+  else if method == "padStart" then padArgs s.padStart args lits
+  else if method == "padEnd" then padArgs s.padEnd args lits
   else none
 
 /-- The element of the array `items` whose index is the safe integer `i`, or
@@ -901,22 +967,30 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
   -- becomes an integer by `ToIntegerOrInfinity`. A literal is the integer it
   -- names, whatever the model of numbers. Any other number is its integer
   -- when it is a safe integer; truncating other numbers leaves the subset.
+  -- `s.at(k)` on a string is a string method, as the last rule takes it.
   | .call _ (.member _ recv "at") [arg] => do
-    let .list items ← eval m fuel env recv | none
-    match intLiteral? arg with
-    | some k => return atVal items k
-    | none =>
-      let .num n ← eval m fuel env arg | none
-      return atVal items (← JSNumber.toSafeInt n)
+    match ← eval m fuel env recv with
+    | .list items =>
+      match intLiteral? arg with
+      | some k => return atVal items k
+      | none =>
+        let .num n ← eval m fuel env arg | none
+        return atVal items (← JSNumber.toSafeInt n)
+    | .str s => stringMethod "at" s [← eval m fuel env arg] [intLiteral? arg]
+    | _ => none
   -- `xs.slice(start, end)` (`Array.prototype.slice`, ECMA-262 §23.1.3.28).
   -- Each argument becomes an integer as the argument of `at` does. A missing
-  -- start is `0`, and a missing end is the length.
+  -- start is `0`, and a missing end is the length. `s.slice` on a string is a
+  -- string method.
   | .call _ (.member _ recv "slice") args => do
-    let .list items ← eval m fuel env recv | none
-    match args with
-    | [] => return .list (sliceList items 0 none)
-    | [a] => return .list (sliceList items (← evalInt m fuel env a) none)
-    | [a, b] => return .list (sliceList items (← evalInt m fuel env a) (some (← evalInt m fuel env b)))
+    match ← eval m fuel env recv with
+    | .list items =>
+      match args with
+      | [] => return .list (sliceList items 0 none)
+      | [a] => return .list (sliceList items (← evalInt m fuel env a) none)
+      | [a, b] => return .list (sliceList items (← evalInt m fuel env a) (some (← evalInt m fuel env b)))
+      | _ => none
+    | .str s => stringMethod "slice" s (← evalList m fuel env args) (args.map intLiteral?)
     | _ => none
   -- `xs.map((x, i) => e)`: `map` passes the index too, as a number
   -- (ECMA-262 §23.1.3.21, step 6.c.ii). An array has fewer than 2^32
@@ -963,7 +1037,7 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
       if method == "has" then return .bool found else none
     -- An array or a string, as the next rule takes it.
     | .list items => arrayMethod method items [← eval m fuel env arg]
-    | .str s => stringMethod method s [← eval m fuel env arg]
+    | .str s => stringMethod method s [← eval m fuel env arg] [intLiteral? arg]
     | _ => none
   -- Any other call of a method of an array or a string, such as
   -- `xs.includes(v)` or `s.trim()`. The receiver comes first, then the
@@ -973,7 +1047,7 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
   | .call _ (.member _ recv method) args => do
     match ← eval m fuel env recv with
     | .list items => arrayMethod method items (← evalList m fuel env args)
-    | .str s => stringMethod method s (← evalList m fuel env args)
+    | .str s => stringMethod method s (← evalList m fuel env args) (args.map intLiteral?)
     -- `d.getTime()` and the UTC getters of a date, which take no arguments.
     | .date t => dateMethod method t (← evalList m fuel env args)
     | _ => none
