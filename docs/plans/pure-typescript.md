@@ -103,18 +103,6 @@ value claim already does.
 The certifier writes no precondition today, so such a file gets no
 certificate.
 
-### Errors
-
-| TypeScript | Lean | Refused |
-|---|---|---|
-| `throw` of a declared error class, a `throw` in a loop body or in a branch that changes locals, and a call that can throw inside a larger expression | `Except E`, with `forIn` and `let` in the `Except` monad | `try` and `catch` in the first version |
-| A class that extends `Error` and only sets `readonly` fields in its constructor | A structure | Methods, `static` members, and reads of `stack` |
-
-ECMA-262 does not define `Error.prototype.stack`, so a read of `stack` stays
-refused. A claim about a function that can throw says what holds when the
-function returns normally. A separate claim can show that it does not throw
-when its inputs meet a precondition.
-
 ### Strings
 
 Each operation below becomes a function on `JSString`, the list of UTF-16
@@ -128,18 +116,7 @@ of a literal as a Lean `String`.
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| Template literals whose parts are `string`, `boolean`, `bigint` or a safe integer `number`, and `+` on a string and a safe integer `number` | `++` on `JSString`, as `+` on strings is now. A number converts to ASCII digits (§6.1.6.1.20). | A part that is a non-integer `number` or an object |
-| `at` (§22.1.3.1), `slice` (§22.1.3.22), `padStart` and `padEnd`, the position argument of `startsWith`, `endsWith`, `includes` and `indexOf`, and the limit of `split` | Functions on the list of code units. `slice` and `at` follow the spec for negative and out-of-range indexes. | `split` with a regular expression, and every regular expression in the first version |
-| `for (const c of s)` and `[...s]` | Iteration by code point, which joins each surrogate pair (§22.1.3.36 and §22.1.5) | |
-| `toUpperCase` and `toLowerCase` (§22.1.3.30 and §22.1.3.28) | Only for strings that the translator can show are ASCII | `normalize` (§22.1.3.15), and case changes of other strings, because their results follow the Unicode version of the engine, and that version changes between Node releases |
-| `JSON.stringify(x)` | An opaque function | |
-
-`JSON.stringify` is deterministic and fully specified (§25.5.2), but a model
-of it is large. Code calls it mostly to build error messages. The first
-version makes it a function that the generated Lean declares but never
-defines. A theorem then cannot depend on the text that it returns, so every
-theorem still holds for the real function. A claim about the text needs the
-full model, which a later step can add.
+| A number argument of `at`, `slice`, `padStart`, `padEnd`, `startsWith`, `endsWith`, `includes`, `indexOf` or `split` that is not an integer literal | `ToIntegerOrInfinity` on the argument, then the function on code units that a literal gets now. It needs `Math.trunc` from the numbers stage, as `xs.at(i)` does. | `split` with a regular expression, and every regular expression in the first version |
 
 ### Maps and sets
 
@@ -183,6 +160,9 @@ be exact:
 
 - `localeCompare`, `Intl`, and every local-time `Date` method, because their
   results depend on the host.
+- `normalize`, and `toUpperCase` and `toLowerCase` on a string that the
+  translator cannot show is ASCII, because their results follow the Unicode
+  version of the engine, and that version changes between Node releases.
 - `Date.now()`, `Math.random()` and `crypto`, because they are not
   deterministic. The [effects plan](effects.md) makes them inputs.
 - `Error.prototype.stack`, and every other property that ECMA-262 does not
@@ -218,18 +198,14 @@ leaves a gap.
 3. **P1.** Type guards.
 4. **P0.** The rest of the arrays without `sort`: `entries`, and `at` and
    `slice` with arguments that are not integer literals.
-6. **P0.** Errors: `throw` in loop bodies and in branches that change
-   locals, calls that can throw inside larger expressions, and declared error
-   classes.
 7. **P0.** Local functions that change variables of the enclosing function, by
    lifting them out and threading the variables through each call.
 8. **P0.** The borrow for a map that a caller passes in.
-9. **P1.** Strings: template literals, the string methods and arguments in
-   the table above, iteration by code point, and the opaque `JSON.stringify`.
 10. **P1.** Sorting: certificates for a sort by a `number` key.
 11. **P2.** Recursion: tagged unions that refer to themselves first, then
     `@decreases`, mutual recursion, and `while` loops.
-12. **P1.** The new number and `bigint` operations, and the `Date` methods.
+12. **P1.** The new number and `bigint` operations, the `Date` methods, and
+    the number arguments of string methods that are not integer literals.
 13. **P2.** Classes with `readonly` fields and methods that do not change
     `this`.
 
@@ -344,22 +320,6 @@ a reason to choose otherwise.
   version accepts constraints that are interfaces or object types with
   readonly fields, and refuses primitive bounds. Every instance gets a name,
   so that instance search never has two candidates.
-
-- Which type should a function throw once the program declares error
-  classes? `JSError` holds only a message. A class with fields needs a sum of
-  the program's error classes, and a call can reach a class of another file.
-
-  Recommendation: one inductive for the whole program, generated into the
-  project as `Errors.lean`, with a constructor per error class in any file
-  and one for `JSError`. Every function that can throw returns
-  `Except Thrown α`, so a callee's error passes through `←` without an
-  injection, a class of another file is one more constructor, and a later
-  `catch` with `instanceof` is a `match`. A precise union per function would
-  say exactly what each function throws, but every call would need a
-  coercion, and a new `throw` in a callee would change every caller's
-  signature. The cost of one type is that a new error class recompiles every
-  function that throws. A program with no error classes keeps `JSError`, so
-  the output of today's subset does not change.
 
 - Should `try` and `catch` come in a later step? The survey had none, but much
   other pure code catches its own errors.

@@ -217,6 +217,252 @@ def split (s sep : JSString) : List JSString :=
   | [] => (s.units.take (2 ^ 32 - 1)).map fun u => ⟨[u]⟩
   | c :: cs => ((splitUnits c cs s.units []).take (2 ^ 32 - 1)).map JSString.mk
 
+/-- A position argument clamped to the string, as `startsWith`, `endsWith`,
+`includes` and `indexOf` clamp it (ECMA-262 §22.1.3.25, step 6): a negative
+position is `0`, and one past the end is the length. -/
+def clampPos (len : Nat) (k : Int) : Nat := min k.toNat len
+
+/-- `s.at(k)` (ECMA-262 §22.1.3.1): the code unit at `k`, as a string, where a
+negative `k` counts from the end. An index outside the string gives
+`undefined`, which is `none`. -/
+def at? (s : JSString) (k : Int) : Option JSString :=
+  let i := if 0 ≤ k then k else s.length + k
+  if 0 ≤ i then (s.units[i.toNat]?).map fun u => ⟨[u]⟩ else none
+
+/-- A relative index into a string of `len` code units, as `slice` reads its
+arguments (ECMA-262 §22.1.3.22, steps 4 to 9): a negative `k` counts from the
+end, and the result is clamped to `0` and `len`. -/
+def relIndex (len : Nat) (k : Int) : Nat :=
+  if k < 0 then (len + k).toNat else min k.toNat len
+
+/-- `s.slice(start, stop)` (ECMA-262 §22.1.3.22): the code units from `start`
+up to `stop`, or to the end when `stop` is none. A start at or after the stop
+gives the empty string. -/
+def slice (s : JSString) (start : Int) (stop : Option Int) : JSString :=
+  let lo := relIndex s.length start
+  let hi := match stop with
+    | some e => relIndex s.length e
+    | none => s.length
+  ⟨(s.units.drop lo).take (hi - lo)⟩
+
+/-- The code units that StringPad puts before or after a string of `len`
+code units (ECMA-262 §22.1.3.17.2), where `maxLength` is the integer of the
+argument. ToLength clamps it to `0` and 2^53 - 1. When it is at most `len`, or
+the filler is empty, there is no padding. Otherwise the padding is the filler
+repeated and then cut to `maxLength - len` code units. -/
+def padding (len : Nat) (maxLength : Int) (fill : JSString) : List UInt16 :=
+  let target := min maxLength.toNat (2 ^ 53 - 1)
+  if target ≤ len ∨ fill.units = [] then []
+  else
+    let n := target - len
+    ((List.replicate (n / fill.units.length + 1) fill.units).flatten).take n
+
+/-- `s.padStart(maxLength, fill)` (ECMA-262 §22.1.3.17): the padding, then `s`.
+`fill` is `" "` when the call leaves it out. -/
+def padStart (s : JSString) (maxLength : Int) (fill : JSString) : JSString :=
+  ⟨padding s.length maxLength fill ++ s.units⟩
+
+/-- `s.padEnd(maxLength, fill)` (ECMA-262 §22.1.3.16): `s`, then the padding. -/
+def padEnd (s : JSString) (maxLength : Int) (fill : JSString) : JSString :=
+  ⟨s.units ++ padding s.length maxLength fill⟩
+
+/-- `s.startsWith(p, pos)` (ECMA-262 §22.1.3.25): the code units of `p` begin
+those of `s` from the clamped position on. -/
+def startsWithFrom (s p : JSString) (pos : Int) : Bool :=
+  p.units.isPrefixOf (s.units.drop (clampPos s.length pos))
+
+/-- `s.endsWith(p, endPosition)` (ECMA-262 §22.1.3.7): the code units of `p`
+end those of `s` before the clamped end position. -/
+def endsWithAt (s p : JSString) (endPosition : Int) : Bool :=
+  p.units.isSuffixOf (s.units.take (clampPos s.length endPosition))
+
+/-- StringIndexOf(s, p, k) (ECMA-262 §6.1.4.1), where `k` is the clamped
+position: the first index from `k` on at which `p` occurs. The empty string
+occurs at `k`. -/
+def indexOfFrom? (s p : JSString) (pos : Int) : Option Nat :=
+  let k := clampPos s.length pos
+  indexOf?.go p (s.units.drop k) k
+
+/-- `s.indexOf(p, pos)` (ECMA-262 §22.1.3.9): the first index from the
+clamped position on at which `p` occurs, or -1. -/
+def indexOfFrom (s p : JSString) (pos : Int) : Int :=
+  match indexOfFrom? s p pos with
+  | some i => i
+  | none => -1
+
+/-- `s.includes(p, pos)` (ECMA-262 §22.1.3.8): `p` occurs in `s` from the
+clamped position on. -/
+def includesFrom (s p : JSString) (pos : Int) : Bool := (indexOfFrom? s p pos).isSome
+
+/-- `s.split(sep, limit)` with a string separator (ECMA-262 §22.1.3.23), where
+`limit` is the integer of the argument. ToUint32 takes it modulo 2^32, so -1 is
+2^32 - 1. The result has at most that many pieces, and none when it is `0`. -/
+def splitLimit (s sep : JSString) (limit : Int) : List JSString :=
+  let lim := (limit % 2 ^ 32).toNat
+  match sep.units with
+  | [] => (s.units.take lim).map fun u => ⟨[u]⟩
+  | c :: cs => ((splitUnits c cs s.units []).take lim).map JSString.mk
+
+/-- Every code unit of the string is ASCII, below U+0080. -/
+def isAscii (s : JSString) : Bool := s.units.all (·.toNat < 0x80)
+
+/-- `c.toUpperCase()` on one ASCII code unit: `a` to `z` become `A` to `Z`. -/
+def upperUnit (u : UInt16) : UInt16 := if 0x61 ≤ u.toNat ∧ u.toNat ≤ 0x7A then u - 0x20 else u
+
+/-- `c.toLowerCase()` on one ASCII code unit: `A` to `Z` become `a` to `z`. -/
+def lowerUnit (u : UInt16) : UInt16 := if 0x41 ≤ u.toNat ∧ u.toNat ≤ 0x5A then u + 0x20 else u
+
+/-- `s.toUpperCase()` on an ASCII string (ECMA-262 §22.1.3.30). The spec maps
+each code point by the Unicode Default Case Conversion, whose result for the
+other code points depends on the Unicode version of the engine. On ASCII it is
+the same in every version: only `a` to `z` change. -/
+def toUpperAscii (s : JSString) : JSString := ⟨s.units.map upperUnit⟩
+
+/-- `s.toLowerCase()` on an ASCII string (ECMA-262 §22.1.3.28): only `A` to
+`Z` change. -/
+def toLowerAscii (s : JSString) : JSString := ⟨s.units.map lowerUnit⟩
+
+/-- A case change keeps a string ASCII, so a second one is exact too. -/
+theorem isAscii_toUpperAscii {s : JSString} (h : s.isAscii) : s.toUpperAscii.isAscii := by
+  simp only [isAscii, toUpperAscii, List.all_map, List.all_eq_true, Function.comp_apply,
+    decide_eq_true_eq] at h ⊢
+  intro u hu
+  have := h u hu
+  simp only [upperUnit]
+  split
+  · rw [UInt16.toNat_sub_of_le] <;> simp_all [UInt16.le_iff_toNat_le] <;> omega
+  · exact this
+
+/-- A case change keeps a string ASCII, so a second one is exact too. -/
+theorem isAscii_toLowerAscii {s : JSString} (h : s.isAscii) : s.toLowerAscii.isAscii := by
+  simp only [isAscii, toLowerAscii, List.all_map, List.all_eq_true, Function.comp_apply,
+    decide_eq_true_eq] at h ⊢
+  intro u hu
+  have := h u hu
+  simp only [lowerUnit]
+  split
+  · rw [UInt16.toNat_add]
+    have h32 : (32 : UInt16).toNat = 32 := rfl
+    rw [h32]; omega
+  · exact this
+
+/-- The text of `JSON.stringify(x)` (ECMA-262 §25.5.2), where `x` is the Lean
+value of a JS value. The model declares this function but does not define it,
+so a proof cannot depend on the text. A proof can only use that equal values
+give equal texts. That holds for the real `JSON.stringify` on every type that
+the translator lets it take: strings, numbers, booleans, `null`, literal
+unions, and arrays, tuples and nullable values of them, where no tuple ends
+with a tuple. On these types each Lean value fixes the text. It does not hold
+for an object, whose text follows the order of its keys, which a caller
+chooses. Nor does it hold for a tuple that ends with a tuple: Lean writes
+`[A, [B, C]]` and `[A, B, C]` both as `A × B × C`. So every theorem about the
+output holds for the real function, if no code gives a value or a prototype a
+`toJSON` method, as Tolean assumes that no code changes the built-in
+prototypes. -/
+opaque json {α : Type} (x : α) : JSString
+
+/-- A position of `0` is no position. -/
+theorem startsWithFrom_zero (s p : JSString) : s.startsWithFrom p 0 = s.startsWith p := by
+  simp [startsWithFrom, startsWith, clampPos]
+
+/-- An end position at the length is no end position. -/
+theorem endsWithAt_length (s p : JSString) : s.endsWithAt p s.length = s.endsWith p := by
+  simp [endsWithAt, endsWith, clampPos, length]
+
+/-- A position of `0` is no position. -/
+theorem indexOfFrom_zero (s p : JSString) : s.indexOfFrom p 0 = s.indexOf p := by
+  simp [indexOfFrom, indexOf, indexOfFrom?, indexOf?, clampPos]
+
+/-- A position of `0` is no position. -/
+theorem includesFrom_zero (s p : JSString) : s.includesFrom p 0 = s.includes p := by
+  simp [includesFrom, includes, indexOfFrom?, indexOf?, clampPos]
+
+/-- `split` with no limit is `split` with the limit 2^32 - 1, which ToUint32
+gives for `undefined` (ECMA-262 §22.1.3.23, step 6). -/
+theorem split_eq_splitLimit (s sep : JSString) : s.split sep = s.splitLimit sep (2 ^ 32 - 1) := by
+  simp only [split, splitLimit]
+  rfl
+
+/-- `s.slice(0)` is `s`. -/
+theorem slice_zero (s : JSString) : s.slice 0 none = s := by
+  simp [slice, relIndex, length]
+
+private theorem sum_replicate (k a : Nat) : (List.replicate k a).sum = k * a := by
+  induction k with
+  | zero => simp
+  | succ k ih => simp [List.replicate_succ, ih, Nat.succ_mul, Nat.add_comm]
+
+/-- `padStart` makes a string of at least `maxLength` code units, when the
+filler is not empty and `maxLength` is at most 2^53 - 1. -/
+theorem padStart_length {s fill : JSString} {n : Nat} (hf : fill.units ≠ []) (hn : n ≤ 2 ^ 53 - 1) :
+    n ≤ (s.padStart n fill).length := by
+  have hmin : min (n : Int).toNat (2 ^ 53 - 1) = n := by simp; omega
+  simp only [padStart, length, padding, List.length_append, hmin]
+  split
+  · rename_i h
+    rcases h with h | h
+    · omega
+    · exact absurd h hf
+  · have hlen : 0 < fill.units.length := List.length_pos_iff.mpr hf
+    rw [List.length_take, List.length_flatten]
+    simp only [List.map_replicate, sum_replicate, Nat.succ_mul]
+    have := Nat.lt_div_mul_add (a := n - s.units.length) hlen
+    generalize (n - s.units.length) / fill.units.length * fill.units.length = q at *
+    omega
+
+/-- The code unit is a leading surrogate, from D800 to DBFF (ECMA-262 §11.1.3). -/
+def isLeading (u : UInt16) : Bool := 0xD800 ≤ u.toNat && u.toNat < 0xDC00
+
+/-- The code unit is a trailing surrogate, from DC00 to DFFF (ECMA-262 §11.1.3). -/
+def isTrailing (u : UInt16) : Bool := 0xDC00 ≤ u.toNat && u.toNat < 0xE000
+
+/-- The code units of each code point of `l`, in order, as CodePointAt reads
+them (ECMA-262 §11.1.4): a leading surrogate and then a trailing one make one
+code point of two code units. Every other code unit is a code point by
+itself, a lone surrogate too. -/
+def codePointUnits : List UInt16 → List (List UInt16)
+  | [] => []
+  | [u] => [[u]]
+  | u :: l :: rest =>
+    if isLeading u && isTrailing l then [u, l] :: codePointUnits rest
+    else [u] :: codePointUnits (l :: rest)
+
+/-- The strings that `for (const c of s)` and `[...s]` visit
+(`String.prototype[@@iterator]`, ECMA-262 §22.1.3.36, and the
+%StringIteratorPrototype%, §22.1.5): each code point of `s`, as a string of
+one or two code units. A lone surrogate is a string of its own code unit, not
+U+FFFD. -/
+def codePoints (s : JSString) : List JSString := (codePointUnits s.units).map JSString.mk
+
+theorem codePointUnits_flatten (l : List UInt16) : (codePointUnits l).flatten = l := by
+  induction l using codePointUnits.induct with
+  | case1 => rfl
+  | case2 u => rfl
+  | case3 u l rest h ih => simp [codePointUnits, h, ih]
+  | case4 u l rest h ih => simp [codePointUnits, h, ih]
+
+/-- The code points of a string hold its code units, in order, so iteration
+loses and adds nothing. -/
+theorem codePoints_units (s : JSString) : (s.codePoints.map (·.units)).flatten = s.units := by
+  simp [codePoints, List.map_map, Function.comp_def, codePointUnits_flatten]
+
+/-- Each code point is one or two code units. -/
+theorem codePointUnits_length {l : List UInt16} {c : List UInt16} (h : c ∈ codePointUnits l) :
+    c.length = 1 ∨ c.length = 2 := by
+  induction l using codePointUnits.induct with
+  | case1 => simp [codePointUnits] at h
+  | case2 u => simp [codePointUnits] at h; simp [h]
+  | case3 u l rest hc ih =>
+    simp only [codePointUnits, hc, if_true, List.mem_cons] at h
+    rcases h with rfl | h
+    · simp
+    · exact ih h
+  | case4 u l rest hc ih =>
+    simp only [codePointUnits, hc, Bool.false_eq_true, if_false, List.mem_cons] at h
+    rcases h with rfl | h
+    · simp
+    · exact ih h
+
 /-- `startsWith` is Lean's prefix order on the code units. -/
 theorem startsWith_iff (s p : JSString) : s.startsWith p = true ↔ p.units <+: s.units :=
   List.isPrefixOf_iff_prefix

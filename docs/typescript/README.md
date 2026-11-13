@@ -16,9 +16,13 @@ marks which links are proved, tested against a reference, or trusted.
 
 - **Declarations:** functions, with optional parameters such as `x?: T`,
   interfaces and type aliases, each of which may have type parameters such as
-  `<A, B>`, enums whose members are strings, and `const` and `let`. Each of
-  them may be exported, by `export` before it or by an export list such as
-  `export { a, type B }`.
+  `<A, B>`, enums whose members are strings, error classes, and `const` and
+  `let`. Each of them may be exported, by `export` before it or by an export
+  list such as `export { a, type B }`. An error class is
+  `class Name extends Error { constructor(params) { super(message); } }`, with
+  `readonly` allowed before a parameter, or the same with no constructor. The
+  parser refuses every other class: one that does not extend `Error`, a field,
+  a method, or any other statement in the constructor.
 - **Statements:** `const` and `let` declarations, array destructuring such as
   `const [a, , b, ...rest] = xs`, expression statements,
   `return`, `throw`, `if` and `else`, `for … of` with a name or an array
@@ -117,8 +121,22 @@ The parser refuses every other type assertion, such as `x as T`, `<T>x` and
 the non-null assertion `x!`, because TypeScript does not check them.
 
 The parser also refuses code that Tolean cannot represent exactly. Examples
-are lone surrogates, legacy octal literals, template literals and non-ASCII
+are lone surrogates, legacy octal literals, tagged templates and non-ASCII
 names.
+
+The lexer reads a template literal as `+` on strings: `` `a${e}b` `` gives
+the tokens of `("a" + (e) + "b")`, and `` `a` `` gives the string `"a"`.
+When one operand of `+` is a string, `+` converts the other with ToString,
+as a template literal converts each substitution (ECMA-262 §13.2.8.6 and
+§13.15.3). The two can differ only on an object, whose ToPrimitive calls
+`valueOf` first, and the subset has `+` only on primitives. A line break in
+the text reads as `\n`, as the spec gives it. A template literal right after
+a name, `)`, `]`, `}`, `>` or `!` could be a tagged template, such as
+``f`a` ``, which calls `f` with the pieces. The lexer would read that as a
+call of `f`, so it refuses a template literal in those places. The printer
+never writes a template literal, so the parser's round trip covers the tokens
+that the lexer makes, and the lexer's proofs show that its template branches
+never run on printed text.
 
 `tests/typescript/check.ts` checks the parser against `tsc`. To do this,
 `tests/typescript/tscAst.ts` prints the tree from `tsc` in the same
@@ -410,7 +428,7 @@ the file, the line and the reason. It never approximates.
 | `type T = A \| B`, a union of interfaces with a tag field such as `kind: 'circle'` | `inductive T` with a constructor for each member, which holds the member's structure. The structure leaves the tag field out, because its value never changes. An object literal where a `T` is expected becomes the constructor of its tag. |
 | `if (s.kind === 'circle')`, with `===` or `!==` and the string on either side | `match s with \| T.circle s => … \| …`. TypeScript narrows `s` in each branch, and so does the output. A chain of such tests on the same value becomes one `match`. |
 | `switch (s.kind)` with a `case 'circle':` for each member, or a `default:` last, where every clause returns | The same `match`, with one arm for each case. The `default`, or the code after the `switch` when it has no `default`, becomes the arm for the members that no case names. |
-| The same `switch`, where every clause changes locals and ends in `break` | `let (x, y) := match s with …`, as for an `if` that changes locals. The last clause may leave out its `break`. Without a `default`, the arm for the members that no case names keeps the locals as they are. In a loop body, the `match` is the step of the `List.foldl`. |
+| The same `switch`, where every clause changes locals and ends in `break`, or throws | `let (x, y) := match s with …`, as for an `if` that changes locals. The last clause may leave out its `break`. Without a `default`, the arm for the members that no case names keeps the locals as they are. In a loop body, the `match` is the step of the `List.foldl`. |
 | The same `switch`, where the cases cover every member and a last `default: { const x: never = s; … }` checks it | The same `match`, without the `default`. TypeScript accepts the check only where no member is left, so the clause never runs. The statements after the check are not translated. In a `switch` whose clauses end in `break`, the last case needs its `break`, because without it the case would run into the `default`. |
 | `type T = string \| bigint`, a union of two or more of `string`, `number`, `bigint` and `boolean` | `inductive T` with a constructor for each member, which holds a value of its type, such as `T.string (value : JSString)`. The constructor is named after what `typeof` gives for the value. A value of a member where a `T` is expected becomes that member's constructor. |
 | `if (typeof x === 'string')`, with `===` or `!==` and the string on either side, where `x` is a local of such a union | `match x with \| T.string x => … \| …`, which narrows `x` as a test of a tag does |
@@ -418,15 +436,20 @@ the file, the line and the reason. It never approximates.
 | `r[k]`, where `r` is such a `Record` and `k` has the type `K` | `match k with \| K.a => r.a \| …`, which reads the field that `k` names |
 | `function` with typed parameters and return type | `def` |
 | A function that calls itself, where each call passes a part of one parameter, the same one in every call. A part is a field of it, a value that a test of `null`, `undefined` or a tag narrows it to, an element of an array in it, an element of a tuple in it, or a part of one of these. | The same `def`, followed by `termination_by p` for the parameter `p`, and `decreasing_by all_goals tolean_decreasing`. Each call passes a value that is smaller by `sizeOf`, and the tactic from `tolean.TypeScript.Decreasing` proves it, so Lean checks that the function ends. Each `match` in such a function names the equation of its value `_h'`, which the tactic reads. Lean defines the function by well-founded recursion, so a claim unfolds it with `unfold` or `simp`, not with `rfl` or `decide`. |
-| `throw new Error(m)`, where `m` is a `string`, as the last statement of a function or of a branch that ends it | `throw (JSError.mk m)`. A function that can throw returns `Except JSError R`, and each value that it returns is `pure` of the value. `JSError`, in `tolean/TypeScript/Spec/Error.lean`, holds the message. |
-| `const x = f(a)`, `let x = f(a)` or `return f(a)`, where `f` can throw, in the statements that end the function | `f a >>= fun x => …`, which passes the error of the call on. So the function that holds the call can throw too. |
+| `throw new Error(m)`, where `m` is a `string`, as the last statement of a function, of a loop body, or of a branch | `throw (JSError.mk m)`. A function that can throw returns `Except JSError R`, and each value that it returns is `pure` of the value. `JSError`, in `tolean/TypeScript/Spec/Error.lean`, holds the message. |
+| `const x = f(a)`, `let x = f(a)` or `return f(a)`, where `f` can throw | `f a >>= fun x => …`, which passes the error of the call on. So the function that holds the call can throw too. |
+| A call of `f` inside a larger expression, such as `return f(a) + 1n`, where JS evaluates the call whenever it evaluates the statement | `f a >>= fun r0' => …` before the statement, which reads `r0'` in place of the call. Each operand that JS evaluates before the call, such as `x.count` in `x.count + f(a)`, moves out first, to a `let` of its own, so the output runs the same operations in the same order. A literal whose parts are all literals stays, because it reads nothing and runs nothing, and its type comes from its position. The interpreter runs the statements in this form too (`Eval.Stmt.hoisted`), so the translator translates the body the interpreter runs. |
+| A loop whose body can throw, by a `throw` or a call of a function that can, and that changes a local or returns | The same fold in the `Except` monad: `List.foldlM`, or `forIn` without `Id.run`, followed by `>>= fun (x, y) =>` for the statements after the loop. Each run of the body ends in `pure` of its state, or throws. |
+| An `if` or a `switch` that changes locals, where a branch can throw | `(if c then throw e else pure (x, y)) >>= fun (x, y) =>`, so that the statements after it take the state from the branch that did not throw |
+| `class C extends Error { constructor(readonly a: T, b: U) { super(m); } }`, or the same with no constructor | A constructor `C` of `Thrown`, the inductive of the errors that the file's functions throw, with the message and the `readonly` parameters as fields. `Thrown` comes first in the file, with `error (value : JSError)` for `throw new Error(m)`. Every function of the file that can throw then returns `Except Thrown R`. A parameter must have a primitive type and may not be named `message`, `name`, `stack` or `cause`; the message may not call a function; and the class must be declared before the functions that throw it, and may not be named `error`. [A decision record](../decisions/2026-11-11-thrown-per-file.md) explains the type and the rules. |
+| `throw new C(args)`, in the places where `throw new Error(m)` may stand | `throw (Thrown.«C» m a)`, with the constructor's message written over the arguments, which first move to names unless they are literals, and the `readonly` arguments as the fields. The substitution stops at the parameters of an arrow function in the message. |
 | `const x = e`, `let x = e` | `let x := e` |
 | `x = e`, `x += e`, `x -= e`, `x *= e` on a `let` local | `let x := …` (shadowing) |
 | `x ??= e` on a `let` local of type `T \| null` | `let x := Option.or x e`. JS evaluates `e` only when `x` is `null`. Lean evaluates it either way, but the result is the same, because the subset has no side effects. |
 | `[a, b]` with the element type from the context or the elements, such as `return [a, b]` or `const xs: ReadonlyArray<T> = []` | `([a, b] : List T)` |
-| `[...xs, a, b, ...ys]`, where each spread is an array, a set or a map | `(xs ++ ([a, b] : List T) ++ ys)`, and `[...xs]` is `xs`. A spread iterates its value, as `for … of` does (§13.2.4.1). So a set gives `JSSet.elems s` and a map gives `JSMap.entries m`, each in the order of insertion. |
+| `[...xs, a, b, ...ys]`, where each spread is an array, a set, a map or a string | `(xs ++ ([a, b] : List T) ++ ys)`, and `[...xs]` is `xs`. A spread iterates its value, as `for … of` does (§13.2.4.1). So a set gives `JSSet.elems s` and a map gives `JSMap.entries m`, each in the order of insertion. A string gives `JSString.codePoints s`, its code points as strings. |
 | `const [a, b] = t`, where `t` is a tuple | `let (a, b) := t` when the pattern names each element, and `let (a, b) := (t.1, t.2.1)` for a pattern with holes or with fewer names. The value is read once. |
-| `const [a, , c, ...rest] = xs`, where `xs` is an array, a set or a map | `let (a, c, rest) := ((xs[0]? : Option T), (xs[2]? : Option T), (List.drop 3 xs))`. The pattern iterates `xs`, as `for … of` does (§8.6.3), so each name is optional, `undefined` past the end, as `xs[k]` is. The rest is a new array of the values after the places. A set gives `JSSet.elems s` and a map `JSMap.entries m`. |
+| `const [a, , c, ...rest] = xs`, where `xs` is an array, a set, a map or a string | `let (a, c, rest) := ((xs[0]? : Option T), (xs[2]? : Option T), (List.drop 3 xs))`. The pattern iterates `xs`, as `for … of` does (§8.6.3), so each name is optional, `undefined` past the end, as `xs[k]` is. The rest is a new array of the values after the places. A set gives `JSSet.elems s`, a map `JSMap.entries m` and a string `JSString.codePoints s`. |
 | `for (const [k, v] of xs)`, a pattern in the head of a loop | The fold binds each element to the first name of the pattern, and the body starts with `let (k, v) := k`, which binds the names as `const [k, v] = element` does and hides that first binding. So `for (const [k, v] of m)` on a map names the key and the value of each entry. |
 | `[A, B]` and `readonly [A, B]`, a tuple of two elements or more | `A × B`. In JS a tuple is an array. |
 | `[a, b]` where the context expects a tuple, such as a return value | `(a, b)`, with each element translated where its own type is expected |
@@ -437,7 +460,7 @@ the file, the line and the reason. It never approximates.
 | `m.get(k)`, `m.has(k)` and `m.size` | `JSMap.get? m k`, `JSMap.has m k` and `JSNumber.ofSafeInt (JSMap.size m)`. `get` gives `undefined` for a key that the map does not have, so its value has the type of an optional field: `m.get(k) ?? d` is `Option.getD (JSMap.get? m k) d`. |
 | `Set<T>` and `ReadonlySet<T>`, where `T` is a type that a map key may have | `JSSet T` (`tolean/TypeScript/Map.lean`): the list of elements, in the order that each was first added (§24.2). Elements compare as map keys do, and `add(-0)` stores `0` (§24.2.4.1). |
 | `const s = new Set<T>()`, then `s.add(x)` and `s.delete(x)`; `s.has(x)` and `s.size` | `JSSet.empty`, `JSSet.add`, `JSSet.delete`, `JSSet.has` and `JSNumber.ofSafeInt (JSSet.size s)`, as for a map |
-| `new Map(items)` and `new Set(items)`, where `items` is an array, such as `[['a', 1n]]` or `['a']`, a map or a set | `JSMap.ofList` and `JSSet.ofList` of the list that a loop over `items` visits. The constructor sets each `[key, value]`, or adds each value, in order (§24.1.1.2), so a later entry for a key replaces an earlier one, and `new Map(m)` copies `m`. |
+| `new Map(items)` and `new Set(items)`, where `items` is an array, such as `[['a', 1n]]` or `['a']`, a map or a set | `JSMap.ofList` and `JSSet.ofList` of the list that a loop over `items` visits. The constructor sets each `[key, value]`, or adds each value, in order (§24.1.1.2), so a later entry for a key replaces an earlier one, and `new Map(m)` copies `m`. `new Set(s)` on a string adds each of its code points. |
 | `for (const x of s)` over a set, and `for (const e of m)` over a map | `List.foldl` over `JSSet.elems s`, or over `JSMap.entries m`, as over an array. A map gives each entry as the tuple `[key, value]`, as JS does, so the body reads `e[0]` and `e[1]`. The loop may run over an owned map or set, if its body does not change it. |
 | `for (const x of xs) { … }` | `List.foldl` over the tuple of locals the body changes |
 | `if (c) continue;` at the top of a loop body, or a branch of that `if` that ends in `continue` on every path | `if c then (x, y) else …`, where the rest of the body is the `else` branch, as after an `if` that returns. A test of `null` or of a tag narrows the local for the rest of the body. |
@@ -461,12 +484,21 @@ the file, the line and the reason. It never approximates.
 | `xs.toSorted((a, b) => e)` and `[...xs].sort((a, b) => e)`, where `e` compares keys | `JSNumber.sortWith (fun (a b : T) => e) xs`: the stable merge sort, where `a` comes after `b` only when `e` is greater than `0`. The comparator must have the shape `(a.k < b.k) ? -1 : (a.k > b.k) ? 1 : 0`, where the key is the element or a field of it, and a `bigint`, a `string` or a `number`. The tests may come in either order, the signs may be reversed to sort from the greatest, and a comparison of the next key may take the place of the `0`. The last comparison may also be a difference of `number` keys, `a.t - b.t`, or `b.t - a.t` to sort from the greatest. Such a comparator is consistent, so the order is the one that JS gives. On `number` keys that holds only when no key is `NaN`. A difference also needs every key to be finite: the spec compares each element with itself too, and `Infinity - Infinity` is `NaN`, so one infinite key is enough to break it. On other arrays the spec leaves the order to the engine, and the translation makes no claim. `toSorted` is in ES2023, and `sort` is stable from ES2019. [A decision record](../decisions/2026-11-11-sort.md) explains the meaning. |
 | `if` that returns, `if` that changes locals, `c ? a : b` | `if … then … else …` |
 | `+ - *`, `< <= > >=`, `=== !==`, `&& \|\| !` | the same operators on `Int`, `Bool`, `Prop` |
-| `a + b` where one operand is a string and the other is a string, a `bigint` or a `boolean`, and `s += e` on a string local | `a ++ b` on `JSString`. ToString converts the other operand first: `JSString.ofInt n` writes the decimal digits of a bigint, and `JSString.ofBool b` writes `"true"` or `"false"`. `+` is left-associative, so `1n + 2n + "!"` is `"3!"`. Tolean refuses a `number` operand, because the model has no ToString for numbers yet. |
+| `a + b` where one operand is a string and the other is a string, a `number`, a `bigint` or a `boolean`, and `s += e` on a string local | `a ++ b` on `JSString`. ToString converts the other operand first: `JSString.ofInt n` writes the decimal digits of a bigint, and `JSString.ofBool b` writes `"true"` or `"false"`. A number becomes `JSNumber.toStr x`, an operation of the number model, as `JSNumber.add` is. The model leaves it abstract, and the law `SafeIntLaws.toStr` states that a safe integer gives its decimal digits, so `"n=" + 3` is `"n=3"` in a proof. `+` is left-associative, so `1n + 2n + "!"` is `"3!"`. |
+| `` `Hello, ${name}! ${n}` ``, a template literal | The `+` chain that the lexer reads it as, such as `((JSString.ofString "Hello, " ++ name) ++ JSString.ofString "! ") ++ JSNumber.toStr n`, with the conversions of `+`. A part that `+` refuses, such as an object or `null`, is refused here too. |
 | `s.length` | `JSNumber.ofSafeInt (N := N) ((JSString.length s : Nat) : Int)`: the number of UTF-16 code units, so `"😀".length` is 2 |
-| `s.startsWith(p)`, `s.endsWith(p)` and `s.includes(p)`, where `p` is a string | `JSString.startsWith s p`, `JSString.endsWith s p` and `JSString.includes s p`, which compare code units. `startsWith_iff`, `endsWith_iff` and `includes_iff` state them as Lean's prefix, suffix and infix orders on the lists of code units. Tolean refuses the position argument. |
+| `s.startsWith(p)`, `s.endsWith(p)` and `s.includes(p)`, where `p` is a string | `JSString.startsWith s p`, `JSString.endsWith s p` and `JSString.includes s p`, which compare code units. `startsWith_iff`, `endsWith_iff` and `includes_iff` state them as Lean's prefix, suffix and infix orders on the lists of code units. |
+| `s.startsWith(p, k)`, `s.endsWith(p, k)`, `s.includes(p, k)` and `s.indexOf(p, k)`, where `k` is an integer literal | `JSString.startsWithFrom s p k`, `JSString.endsWithAt s p k`, `JSString.includesFrom s p k` and `JSString.indexOfFrom s p k`. Each clamps the position to the string, so a negative `k` is `0`. For `endsWith`, `k` is the end of the part that must end with `p`. A position of `0` gives the method without one, as `startsWithFrom_zero` states. |
 | `s.trim()`, `s.trimStart()` and `s.trimEnd()` | `JSString.trim s`, `JSString.trimStart s` and `JSString.trimEnd s`. They remove the code points of WhiteSpace and LineTerminator, among them U+00A0, U+2028 and U+FEFF. Each of them is one code unit, so the model drops code units. `trim` needs ES2016 or later: ES2015 names Unicode 5.1, where U+180E is white space too. `trimStart` and `trimEnd` are in ES2019. |
-| `s.split(sep)`, where `sep` is a string | `JSString.split s sep`, a `List JSString`: the pieces between the occurrences of `sep`. An empty separator gives each code unit as a string, so a surrogate pair gives two lone surrogates, as in JS. Tolean refuses the limit argument and a regular expression. |
+| `s.split(sep)`, where `sep` is a string | `JSString.split s sep`, a `List JSString`: the pieces between the occurrences of `sep`. An empty separator gives each code unit as a string, so a surrogate pair gives two lone surrogates, as in JS. Tolean refuses a regular expression. |
+| `s.split(sep, k)`, where `k` is an integer literal | `JSString.splitLimit s sep k`: at most `k` pieces. ToUint32 takes `k` modulo 2^32, so `-1` allows every piece and `0` gives none. |
+| `s.at(k)`, where `k` is an integer literal | `JSString.at? s k`, an `Option JSString`: the code unit at `k` as a string, or `none` for `undefined`. A negative `k` counts from the end. It is in ES2022. |
+| `s.slice()`, `s.slice(a)` and `s.slice(a, b)`, where `a` and `b` are integer literals | `JSString.slice s a none` and `JSString.slice s a (some b)`: the code units from `a` up to `b`. A negative bound counts from the end, and each bound is clamped to the string. |
+| `s.padStart(n)`, `s.padStart(n, f)`, `s.padEnd(n)` and `s.padEnd(n, f)`, where `n` is an integer literal | `JSString.padStart s n f` and `JSString.padEnd s n f`, with `f` as `" "` when the call leaves it out. The filler repeats and is cut to make `n` code units in all, and an empty filler adds nothing. Tolean refuses an `n` above 2^28 - 16, because V8 throws a `RangeError` for a longer string and the model would not. They are in ES2017. |
+| `for (const c of s)`, `[...s]` and `const [c] = s` on a string | A loop over `JSString.codePoints s`, the code points of `s`, each as a string (§22.1.5). A surrogate pair is one string of two code units, so `[..."😀"]` has one element. A lone surrogate is a string of its own code unit, not U+FFFD. `codePoints_units` states that the code points hold the code units of `s`, in order. |
 | `s.indexOf(p)`, where `p` is a string | `JSNumber.ofSafeInt (N := N) (JSString.indexOf s p)`: the first index of `p` in code units, or -1. The empty string is at index 0. |
+| `s.toUpperCase()` and `s.toLowerCase()`, where Tolean can show that `s` is ASCII: a literal of ASCII text, or `+`, `trim`, `slice` or a case change of such strings | `JSString.toUpperAscii s` and `JSString.toLowerAscii s`, which change only `a` to `z` or `A` to `Z`. On other strings the result follows the Unicode version of the engine, which changes between Node releases, so Tolean refuses them. |
+| `JSON.stringify(x)`, where `x` is a string, a number, a boolean, `null` or a member of a literal union, or an array, a tuple or a nullable value of them | `JSString.json x`, a function that `Spec/String.lean` declares but does not define. A proof cannot depend on the text, only on equal values giving equal texts, so every theorem also holds for the real `JSON.stringify`. Tolean refuses an object, because its text follows the order of its keys, which a caller chooses, so two objects with the same Lean value can give different texts. For the same reason it refuses a tuple that ends with a tuple, because Lean writes `[A, [B, C]]` and `[A, B, C]` both as `A × B × C`. The output writes the type of the argument, so `JSON.stringify(null)` is `JSString.json (none : Option Empty)`. A bigint would make it throw, and `undefined` would give `undefined`. A certificate does not cover a file that calls it. |
 | `a < b`, `a <= b`, `a > b` and `a >= b` on strings | `JSString.lt a b` and `JSString.le a b`, with the operands swapped for `>` and `>=`. JS compares strings by their UTF-16 code units (IsLessThan, ECMA-262 §7.2.13), not by their code points, so `"😀" < "\uFFFF"` is `true`. `JSString.lt_iff` states that `lt` is Lean's order on the lists of code units. |
 | `a / k`, `a % k` on `bigint`, where `k` is a nonzero literal | `Int.tdiv a k`, `Int.tmod a k` (both truncate toward zero, as JS does) |
 | `a ** k` on `bigint`, where `k` is a bigint literal | `a ^ (k : Nat)`. JS throws a `RangeError` when the exponent is negative, so the exponent must be a literal, which never is. |
@@ -482,10 +514,17 @@ the file, the line and the reason. It never approximates.
 Tolean rejects these, among others:
 
 - `try` and `catch`, and a `throw` of anything but `new Error(message)`. It
-  also rejects a `throw` in a loop body, or in a branch that changes locals,
-  and a call of a function that can throw anywhere but as the whole value of
-  a declaration or a `return`. The output would need `forIn` and `let` in the
-  `Except` monad there.
+  also rejects a call of a function that can throw where JS may not evaluate
+  it, or evaluates it more than once: in a branch of `?:`, after `&&`, `||`
+  or `??`, in the test or the update of a counted `for` loop, or in an arrow
+  function. A call of an imported function that can throw must be the whole
+  value of a declaration or a `return`, because the hoisting decides which
+  functions can throw from the file alone and does not follow imports yet.
+  The same holds for a function of the file that can throw only through an
+  imported function. When that file or this one declares error classes, the
+  call is refused, because the two files throw values of two types.
+- `new C(args)` for an error class anywhere but in a `throw`, and an error
+  class with a parameter whose type is not primitive.
 
 - Fractional or unsafe `number` literals, such as `0.5` and `2 ** 53`. It also
   rejects `%` on `number`, because no law covers it yet, and the functions of
@@ -554,8 +593,7 @@ Tolean rejects these, among others:
   is not of an interface, and a property after a spread that sets an
   optional field or a tag field. JS appends a key that the spread did not
   copy, so the order of the keys would differ from the declared one.
-- A spread of a string in an array literal, which iterates the string by code
-  point, and a spread in a tuple literal or in the arguments of a call. A
+- A spread in a tuple literal or in the arguments of a call. A
   spread must also have the array's element type itself, so `[...xs, null]`
   with `xs` of `bigint` is refused. Lean converts an element to the type of
   its place, but it does not convert the elements of a list.
@@ -573,6 +611,9 @@ Tolean rejects these, among others:
   not an integer literal. `at` truncates a fraction toward zero, and the number
   model cannot truncate yet. The bounds of `slice` must be integer literals
   for the same reason.
+- A number argument of a string method that is not an integer literal, such
+  as `s.slice(i)` or `s.startsWith(p, i)`, for the same reason as for `at` on
+  an array.
 - `reduce` without an initial value, which throws on an empty array, and a
   callback of `reduce` whose value has another type than the initial value.
 - `sort` on an array that the function did not make in the same expression,
@@ -650,8 +691,9 @@ Tolean rejects these, among others:
   a chain of `if (s.kind === 'a') return …`, so that Lean sees one `match`
   that covers every member.
 - A `switch` that does not test the tag of a tagged union, and fallthrough:
-  each clause must end in `return`, or each in `break`. A clause that ends in
-  `break` may not return, and may not break or continue before its end.
+  each clause must end in `return`, or each in `break` or `throw`. A clause
+  that ends in `break` may not return, and may not break or continue before
+  its end.
   Tolean also refuses a `default` that is not the last clause, and one that
   no member can reach unless it assigns the local to `never`. It refuses a
   `default` that assigns the local to `never` while a member is left, a
@@ -685,7 +727,8 @@ Tolean rejects these, among others:
   them, and a caller can see that order through `Object.keys` or
   `JSON.stringify`. A Lean structure has no order, so the literal must use
   the declared one. Code in the subset can only read a field by name, so
-  inside the subset the order never changes a result.
+  inside the subset the order never changes a result. That is why Tolean
+  refuses `JSON.stringify` on an object.
 - An optional field that is also nullable, a tag field that is optional, and
   an optional field with the name of a property of `Object.prototype`, such
   as `toString`, because an object without the field has that property.
