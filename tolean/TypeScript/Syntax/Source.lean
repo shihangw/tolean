@@ -140,6 +140,10 @@ def optionalMark : Bool → List Word
 
 def Param.words (p : Param) : List Word := identWord p.name :: (optionalMark p.optional ++ typeAnnotation p.type)
 
+/-- `readonly id: string`, a parameter of the constructor of an error class. -/
+def CtorParam.words (p : CtorParam) : List Word :=
+  (if p.readonly then [identWord "readonly"] else []) ++ p.param.words
+
 /-- The parameters of an arrow function: one name, when the source has no
 parentheses around it, or the list in parentheses. -/
 def arrowParams : Bool → List Param → List Word
@@ -310,6 +314,15 @@ def fromWords : Option String → List Word
   | some source => [identWord "from", [.string source]]
   | none => []
 
+/-- The lines of the constructor of an error class, inside the class:
+`constructor(params) {`, then `super(message);`, then `}`. -/
+def ctorLines : Option (List CtorParam × Expr) → List Line
+  | none => []
+  | some (params, message) =>
+    [(1, identWord "constructor" :: enclose "(" ")" (params.map CtorParam.words) ++ [punctWord "{"]),
+      (2, keywordWord "super" :: punctWord "(" :: message.words ++ [punctWord ")", punctWord ";"]),
+      (1, [punctWord "}"])]
+
 def Decl.lines : Decl → List Line
   | .import _ names source =>
     [(0, keywordWord "import" :: enclose "{" "}" (names.map ImportName.words) ++
@@ -329,6 +342,10 @@ def Decl.lines : Decl → List Line
   | .enum _ exported name members =>
     (0, exportWords exported ++ [keywordWord "enum", identWord name, punctWord "{"]) ::
       members.map (fun m => (1, m.words)) ++ [(0, [punctWord "}"])]
+  | .errorClass _ exported name ctor =>
+    (0, exportWords exported ++
+      [keywordWord "class", identWord name, keywordWord "extends", identWord "Error", punctWord "{"]) ::
+      ctorLines ctor ++ [(0, [punctWord "}"])]
   | .exportedVar _ d => [(0, keywordWord "export" :: d.words)]
   | .stmt s => s.lines 0
 
@@ -387,6 +404,8 @@ def TypeExpr.eraseAll : List TypeExpr → List TypeExpr
 end
 
 def Param.erase (p : Param) : Param := { p with span := noSpan, type := p.type.map TypeExpr.erase }
+
+def CtorParam.erase (p : CtorParam) : CtorParam := { p with param := p.param.erase }
 
 mutual
 
@@ -485,6 +504,8 @@ def Decl.erase : Decl → Decl
     .interface noSpan exported name typeParams (fields.map Field.erase)
   | .typeAlias _ exported name typeParams type => .typeAlias noSpan exported name typeParams type.erase
   | .enum _ exported name members => .enum noSpan exported name (members.map EnumMember.erase)
+  | .errorClass _ exported name ctor =>
+    .errorClass noSpan exported name (ctor.map fun (ps, m) => (ps.map CtorParam.erase, m.erase))
   | .exportedVar _ d => .exportedVar noSpan d.erase
   | .stmt s => .stmt s.erase
 

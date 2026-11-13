@@ -1295,6 +1295,57 @@ def parseEnum (start : Pos) (exported : Bool) : ParseM Decl := do
   let _ ← expectPunct "}"
   return .enum (← spanFrom start) exported name members.toList
 
+/-- A parameter of a constructor: `readonly` before it declares a field. -/
+def parseCtorParam : ParseM CtorParam := do
+  let t ← peek
+  let next ← peekAt 1
+  let readonly := t.isIdent "readonly" && !next.newlineBefore && next.isAnyIdent
+  if readonly then discard advance
+  let param ← parseParam true
+  -- The parameter's span starts at `readonly`, as in `tsc`.
+  return { readonly, param := { param with span := ← spanFrom t.span.start } }
+
+/-- What a class must be: an error class with at most a constructor whose
+body calls `super` with the message. -/
+def refuseClass {A : Type} (t : Token) : ParseM A :=
+  failAt t ("tolean supports only 'class Name extends Error', with at most a constructor whose body " ++
+    "is 'super(message);'")
+
+/-- `class`, a name, `extends Error`, `{`, at most a constructor, and `}`.
+The constructor is `constructor(params) { super(message); }`. -/
+def parseClass (start : Pos) (exported : Bool) : ParseM Decl := do
+  discard advance
+  let name ← readName
+  let t ← peek
+  unless t.isKeyword "extends" do refuseClass t
+  discard advance
+  let base ← peek
+  unless base.isIdent "Error" do refuseClass base
+  discard advance
+  let _ ← expectPunct "{"
+  let t ← peek
+  if t.isPunct "}" then
+    discard advance
+    return .errorClass (← spanFrom start) exported name none
+  unless t.isIdent "constructor" do refuseClass t
+  discard advance
+  let _ ← expectPunct "("
+  let params ← iterate (← budget) #[] (listStep ")" (fun _ => pure ()) parseCtorParam)
+  let _ ← expectPunct ")"
+  let _ ← expectPunct "{"
+  let sup ← peek
+  unless sup.isKeyword "super" do refuseClass sup
+  discard advance
+  let _ ← expectPunct "("
+  let message ← parseExpression (← budget)
+  let _ ← expectPunct ")"
+  endStatement
+  let t ← peek
+  unless t.isPunct "}" do refuseClass t
+  discard advance
+  let _ ← expectPunct "}"
+  return .errorClass (← spanFrom start) exported name (some (params.toList, message))
+
 /-- What `parseImport` refuses: every form of `import` outside the subset. -/
 def refuseImport {A : Type} (t : Token) : ParseM A :=
   failAt t "tolean supports only 'import { a, b } from \"./file.ts\"', with no default or namespace import and no 'as'"
@@ -1379,9 +1430,10 @@ def parseDeclBody (start : Pos) (exported : Bool) : ParseM Decl := do
   else if t.isIdent "interface" && nameFollows then parseInterface start exported
   else if t.isIdent "type" && nameFollows then parseTypeAlias start exported
   else if t.isKeyword "enum" then parseEnum start exported
+  else if t.isKeyword "class" then parseClass start exported
   else if exported then
     unless t.isKeyword "const" || t.isIdent "let" do
-      failAt t "tolean supports 'export' only of a function, an interface, a type, an enum or a variable"
+      failAt t "tolean supports 'export' only of a function, an interface, a type, an enum, a class or a variable"
     let decl ← parseVarDecl
     return .exportedVar (← spanFrom start) decl
   else return .stmt (← parseStatement (← budget))

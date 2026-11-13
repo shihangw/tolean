@@ -1,0 +1,1 @@
+'viaImport' can throw only through an imported function, so a call of it must be the whole value of a const, a let or a return
