@@ -27,3 +27,7 @@ export function sum(xs: ReadonlyArray<bigint>, n: bigint): bigint {
 export function f(x: bigint): bigint {
   return g({ a: 1n }, checked(x)) + h({ kind: "a", n: 2n }, checked(x)) + sum([], checked(x));
 }
+export function negated(x: bigint): bigint {
+  return g({ a: -1n }, checked(x)) + h({ kind: "a", n: -2n }, checked(x)) + sum([-1n], checked(x)) +
+    g(({ a: 1n }), checked(x));
+}
