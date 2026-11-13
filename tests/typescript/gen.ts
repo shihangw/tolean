@@ -71,6 +71,9 @@ export class Gen {
   /** The structures that are declared as `Record<K, T>`. */
   private records = new Set<string>();
   private functions: Array<{ name: string; params: Array<Ty>; ret: Ty }> = [];
+  /** The error classes, with the parameters of their constructors, or none
+   * for a class without a constructor. */
+  private classes: Array<{ name: string; params: Array<[string, Ty]> | null }> = [];
   private counter = 0;
   /** The program sorts by a `number` key somewhere. Such a sort is consistent
    * only when no key is `NaN`, and a difference only when every key is
@@ -797,8 +800,15 @@ export class Gen {
         lines.push(...this.switchStatement(vars, ret, lets));
       } else if (roll < 0.97) {
         // An early exit with an error, which a caller passes on. In a loop
-        // body, the output runs the loop in the `Except` monad.
-        lines.push(`if (${this.test(vars, 2)}) throw new Error(${this.pick(["'too big'", "''", "'é'"])});`);
+        // body, the output runs the loop in the `Except` monad. The error
+        // may be of an error class of the program.
+        const cls = this.classes.length > 0 && this.chance(0.5) ? this.pick(this.classes) : undefined;
+        const made = cls === undefined
+          ? `new Error(${this.pick(["'too big'", "''", "'é'"])})`
+          : cls.params === null
+            ? `new ${cls.name}(${this.expr(STRING, vars, 1)})`
+            : `new ${cls.name}(${cls.params.map(([, t]) => this.expr(t, vars, 1)).join(', ')})`;
+        lines.push(`if (${this.test(vars, 2)}) throw ${made};`);
       } else if (!inLoop && this.chance(0.3)) {
         // Rarely, something outside the subset or ill-typed, to check that both refuse.
         lines.push(this.pick([
@@ -847,6 +857,28 @@ export class Gen {
 
   program(): string {
     const out: Array<string> = [];
+    // Error classes come first, because a function may throw only a class
+    // declared before it. A class has at most two parameters, some of them
+    // `readonly` fields, and its message is a string over them.
+    const classCount = this.chance(0.4) ? 1 + Math.floor(this.next() * 2) : 0;
+    for (let i = 0; i < classCount; i++) {
+      const name = `E${i}`;
+      const exported = this.chance(0.5) ? 'export ' : '';
+      if (this.chance(0.3)) {
+        out.push(`${exported}class ${name} extends Error {}`);
+        this.classes.push({ name, params: null });
+        continue;
+      }
+      const n = Math.floor(this.next() * 3);
+      const params: Array<[string, Ty, boolean]> = Array.from({ length: n }, (_, j) =>
+        [`p${j}`, this.pick([BIGINT, NUMBER, STRING, BOOLEAN]), this.chance(0.6)]);
+      const stringParam = params.find(([, t]) => t.k === 'string');
+      const message = stringParam === undefined ? `'${name} failed'` : `'${name}: ' + ${stringParam[0]}`;
+      out.push(`${exported}class ${name} extends Error {`,
+        `  constructor(${params.map(([p, t, ro]) => `${ro ? 'readonly ' : ''}${p}: ${show(t)}`).join(', ')}) {`,
+        `    super(${message});`, '  }', '}');
+      this.classes.push({ name, params: params.map(([p, t]) => [p, t]) });
+    }
     if (this.chance(0.3)) {
       // A string enum. Two members may have one string, which the
       // translator refuses and the interpreter reads as JS does.

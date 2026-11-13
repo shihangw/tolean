@@ -736,6 +736,80 @@ such a call inside a larger expression when the function can throw.
 
 JS has no `'` in a name, so no hoisted name hides a name of the source. -/
 
+
+/-- The constructor of the error class `name` among the declarations `ds`,
+when one declares it: its parameters and its message, or none for a class
+without a constructor. -/
+def errorClassOfDecls (name : String) : List Decl → Option (Option (List CtorParam × Expr))
+  | [] => none
+  | .errorClass _ _ n ctor :: ds => if n == name then some ctor else errorClassOfDecls name ds
+  | _ :: ds => errorClassOfDecls name ds
+
+/-- The constructor of the error class `name` of `m`, when `m` declares one. -/
+def errorClassOf (m : Module) (name : String) : Option (Option (List CtorParam × Expr)) :=
+  errorClassOfDecls name m.decls
+
+/-- The parameters of the constructor `ctor` of an error class. -/
+def ctorParams : Option (List CtorParam × Expr) → List CtorParam
+  | none => []
+  | some (ps, _) => ps
+
+/-- The fields of an error made by the constructor `ctor`, from the values
+of its arguments: each `readonly` parameter, with its argument. The other
+arguments have served the message already, which `Stmt.hoisted` wrote over
+them. -/
+def fieldArgs {α : Type} (ctor : Option (List CtorParam × Expr)) (args : List α) : List (String × α) :=
+  ((ctorParams ctor).zip args).filterMap fun (p, a) => if p.readonly then some (p.param.name, a) else none
+
+mutual
+
+/-- `e` with each name of `σ` replaced by its expression. The message of an
+error class is written over its constructor's parameters. An arrow function
+inside `e` binds its own parameters, so the substitution stops at them. Each
+replacement is a literal or a hoisted name, which no binder of the source
+can bind, so no binder captures one. -/
+def Expr.subst (σ : List (String × Expr)) : Expr → Expr
+  | .ident s n => match σ.lookup n with | some e => e | none => .ident s n
+  | .number s t => .number s t
+  | .bigint s t => .bigint s t
+  | .string s v => .string s v
+  | .bool s b => .bool s b
+  | .null s => .null s
+  | .array s es => .array s (Expr.substList σ es)
+  | .object s ps => .object s (Property.substList σ ps)
+  | .paren s e => .paren s (Expr.subst σ e)
+  | .member s e n => .member s (Expr.subst σ e) n
+  | .optMember s e n => .optMember s (Expr.subst σ e) n
+  | .index s a b => .index s (Expr.subst σ a) (Expr.subst σ b)
+  | .call s c args => .call s (Expr.subst σ c) (Expr.substList σ args)
+  | .unary s op e => .unary s op (Expr.subst σ e)
+  | .prefix s op e => .prefix s op (Expr.subst σ e)
+  | .postfix s op e => .postfix s op (Expr.subst σ e)
+  | .binary s op a b => .binary s op (Expr.subst σ a) (Expr.subst σ b)
+  | .cond s t a b => .cond s (Expr.subst σ t) (Expr.subst σ a) (Expr.subst σ b)
+  | .assign s op t v => .assign s op (Expr.subst σ t) (Expr.subst σ v)
+  | .arrow s p ps body => .arrow s p ps (Expr.subst (σ.filter fun (n, _) => !(ps.map (·.name)).contains n) body)
+  | .asConst s e => .asConst s (Expr.subst σ e)
+  | .satisfies s e t => .satisfies s (Expr.subst σ e) t
+  | .new s c ts args => .new s c ts (Expr.substList σ args)
+  | .spread s e => .spread s (Expr.subst σ e)
+
+def Expr.substList (σ : List (String × Expr)) : List Expr → List Expr
+  | [] => []
+  | e :: es => Expr.subst σ e :: Expr.substList σ es
+
+def Property.substList (σ : List (String × Expr)) : List Property → List Property
+  | [] => []
+  | .shorthand s n :: ps =>
+    -- `{ n }` reads `n`, so it becomes `{ n: e }` when `σ` replaces `n`.
+    (match σ.lookup n with
+      | some e => Property.keyValue s (.ident n) e
+      | none => Property.shorthand s n) :: Property.substList σ ps
+  | .keyValue s k v :: ps => Property.keyValue s k (Expr.subst σ v) :: Property.substList σ ps
+  | .spread s v :: ps => Property.spread s (Expr.subst σ v) :: Property.substList σ ps
+
+end
+
 /-- The name of the `k`-th value that a function body hoists: `r0'`, `r1'`, … -/
 def hoistName (k : Nat) : String := s!"r{k}'"
 
@@ -836,6 +910,13 @@ through the functions of `m` is at most as long as the module, so that many
 steps decide it. -/
 def mayThrow (m : Module) (name : String) : Bool := mayThrowIn m (m.decls.length + 1) name
 
+/-- The type argument that `Stmt.hoisted` puts on `new C(message, args)` when
+it rewrites `throw new C(args)` for an error class `C`. No construction of
+the source has it, because the parser reads no type named by a quote. So a
+source `new C(…)` with one argument more than the constructor takes cannot
+pass for a rewritten one. -/
+def hoistedMark : TypeExpr := .keyword default "'"
+
 /-- `e` is a name or a literal, which hoisting would only rename. -/
 def Expr.isAtom : Expr → Bool
   | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => true
@@ -902,15 +983,25 @@ structure Hoisted where
   decls : List Stmt
   next : Nat
 
+/-- Bind `e` to a fresh name before the statement, whatever `e` is. -/
+def Hoisted.fresh (h : Hoisted) (e : Expr) : Expr × Hoisted :=
+  let name := hoistName h.next
+  (.ident (Expr.span e) name,
+    { decls := h.decls ++ [.varDecl (Expr.span e) { kind := .const, name, type := none, init := some e }],
+      next := h.next + 1 })
+
 /-- Bind `e` to a fresh name before the statement, and read the name in its
 place. An atom stays as it is, and so does a literal whose parts are all
 literals. -/
 def Hoisted.bind (h : Hoisted) (e : Expr) : Expr × Hoisted :=
-  if Expr.isAtom e || Expr.isClosedLiteral e then (e, h) else
-    let name := hoistName h.next
-    (.ident (Expr.span e) name,
-      { decls := h.decls ++ [.varDecl (Expr.span e) { kind := .const, name, type := none, init := some e }],
-        next := h.next + 1 })
+  if Expr.isAtom e || Expr.isClosedLiteral e then (e, h) else h.fresh e
+
+/-- An argument of an error class's constructor: a literal stays, and any
+other argument, a name among them, moves out to a fresh name. The message
+is then written over literals and hoisted names, which no binder of the
+source can bind. -/
+def Hoisted.bindArg (h : Hoisted) (e : Expr) : Expr × Hoisted :=
+  if Expr.isClosedLiteral e then (e, h) else h.fresh e
 
 /-- An operand that JS evaluates before a call that can throw, after its own
 calls have moved out: it moves out whole, so that it still runs before them.
@@ -925,76 +1016,109 @@ mutual
 /-- Hoist the calls out of `e` that `thr` says can throw: each moves to a
 declaration before the statement, with every operand that JS evaluates
 before it, and `e` reads the names in their place. -/
-def Expr.hoist (thr : String → Bool) (h : Hoisted) : Expr → Expr × Hoisted
+def Expr.hoist (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr))) (h : Hoisted) :
+    Expr → Expr × Hoisted
   | .call s (.ident sn name) args =>
-    let (args', h) := Expr.hoistOperands thr h args
+    let (args', h) := Expr.hoistOperands thr cls h args
     if thr name then h.bind (.call s (.ident sn name) args') else (.call s (.ident sn name) args', h)
   | .call s (.member ms recv mname) args =>
     -- The receiver of a method is evaluated before the arguments.
-    let (recv', h) := Expr.hoist thr h recv
+    let (recv', h) := Expr.hoist thr cls h recv
     let (recv', h) := if Expr.hoistsList thr args then h.bindOperand recv' else (recv', h)
-    let (args', h) := Expr.hoistOperands thr h args
+    let (args', h) := Expr.hoistOperands thr cls h args
     (.call s (.member ms recv' mname) args', h)
   | .call s c args =>
-    let (c', h) := Expr.hoist thr h c
-    let (args', h) := Expr.hoistOperands thr h args
+    let (c', h) := Expr.hoist thr cls h c
+    let (args', h) := Expr.hoistOperands thr cls h args
     (.call s c' args', h)
-  | .array s es => let (es', h) := Expr.hoistOperands thr h es; (.array s es', h)
-  | .object s ps => let (ps', h) := Property.hoistOperands thr h ps; (.object s ps', h)
-  | .paren s e => let (e', h) := Expr.hoist thr h e; (.paren s e', h)
-  | .member s e n => let (e', h) := Expr.hoist thr h e; (.member s e' n, h)
-  | .optMember s e n => let (e', h) := Expr.hoist thr h e; (.optMember s e' n, h)
-  | .unary s op e => let (e', h) := Expr.hoist thr h e; (.unary s op e', h)
-  | .spread s e => let (e', h) := Expr.hoist thr h e; (.spread s e', h)
-  | .asConst s e => let (e', h) := Expr.hoist thr h e; (.asConst s e', h)
-  | .satisfies s e t => let (e', h) := Expr.hoist thr h e; (.satisfies s e' t, h)
+  | .array s es => let (es', h) := Expr.hoistOperands thr cls h es; (.array s es', h)
+  | .object s ps => let (ps', h) := Property.hoistOperands thr cls h ps; (.object s ps', h)
+  | .paren s e => let (e', h) := Expr.hoist thr cls h e; (.paren s e', h)
+  | .member s e n => let (e', h) := Expr.hoist thr cls h e; (.member s e' n, h)
+  | .optMember s e n => let (e', h) := Expr.hoist thr cls h e; (.optMember s e' n, h)
+  | .unary s op e => let (e', h) := Expr.hoist thr cls h e; (.unary s op e', h)
+  | .spread s e => let (e', h) := Expr.hoist thr cls h e; (.spread s e', h)
+  | .asConst s e => let (e', h) := Expr.hoist thr cls h e; (.asConst s e', h)
+  | .satisfies s e t => let (e', h) := Expr.hoist thr cls h e; (.satisfies s e' t, h)
   | .index s a b =>
-    let (a', h) := Expr.hoist thr h a
+    let (a', h) := Expr.hoist thr cls h a
     let (a', h) := if Expr.hoists thr b then h.bindOperand a' else (a', h)
-    let (b', h) := Expr.hoist thr h b
+    let (b', h) := Expr.hoist thr cls h b
     (.index s a' b', h)
-  | .binary s .and a b => let (a', h) := Expr.hoist thr h a; (.binary s .and a' b, h)
-  | .binary s .or a b => let (a', h) := Expr.hoist thr h a; (.binary s .or a' b, h)
-  | .binary s .coalesce a b => let (a', h) := Expr.hoist thr h a; (.binary s .coalesce a' b, h)
+  | .binary s .and a b => let (a', h) := Expr.hoist thr cls h a; (.binary s .and a' b, h)
+  | .binary s .or a b => let (a', h) := Expr.hoist thr cls h a; (.binary s .or a' b, h)
+  | .binary s .coalesce a b => let (a', h) := Expr.hoist thr cls h a; (.binary s .coalesce a' b, h)
   | .binary s op a b =>
-    let (a', h) := Expr.hoist thr h a
+    let (a', h) := Expr.hoist thr cls h a
     let (a', h) := if Expr.hoists thr b then h.bindOperand a' else (a', h)
-    let (b', h) := Expr.hoist thr h b
+    let (b', h) := Expr.hoist thr cls h b
     (.binary s op a' b', h)
-  | .assign s op target value => let (v', h) := Expr.hoist thr h value; (.assign s op target v', h)
-  | .cond s t a b => let (t', h) := Expr.hoist thr h t; (.cond s t' a b, h)
-  | .new s c ts args => let (args', h) := Expr.hoistOperands thr h args; (.new s c ts args', h)
+  | .assign s op target value => let (v', h) := Expr.hoist thr cls h value; (.assign s op target v', h)
+  | .cond s t a b => let (t', h) := Expr.hoist thr cls h t; (.cond s t' a b, h)
+  -- `new C(args)` for an error class `C` of the file: each argument moves out
+  -- to a name, and the message of the class, written over those names,
+  -- comes first: `new C(message, args)`, with `hoistedMark` as the type
+  -- argument. So the statement that runs the constructor needs no scope of
+  -- its own. A construction with the wrong number of arguments stays as it
+  -- is, and so has no mark.
+  | .new s c ts args =>
+    match cls c with
+    | some ctor =>
+      let (args', h) := Expr.hoistAtoms thr cls h args
+      if ts.isEmpty then
+        match ctor with
+        | none => if args'.length == 1 then (.new s c [hoistedMark] args', h) else (.new s c ts args', h)
+        | some (params, message) =>
+          if params.length == args'.length then
+            (.new s c [hoistedMark] (Expr.subst ((params.map (·.param.name)).zip args') message :: args'), h)
+          else (.new s c ts args', h)
+      else (.new s c ts args', h)
+    | none => let (args', h) := Expr.hoistOperands thr cls h args; (.new s c ts args', h)
   | e => (e, h)
 termination_by structural e => e
+
+/-- The arguments of an error class's constructor: each that is not a
+literal moves out to a name, after its own calls. -/
+def Expr.hoistAtoms (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr)))
+    (h : Hoisted) : List Expr → List Expr × Hoisted
+  | [] => ([], h)
+  | e :: es =>
+    let (e', h) := Expr.hoist thr cls h e
+    let (e', h) := h.bindArg e'
+    let (es', h) := Expr.hoistAtoms thr cls h es
+    (e' :: es', h)
+termination_by structural es => es
 
 /-- Hoist the calls out of operands that JS evaluates in order. An operand
 before the last one that holds such a call moves out whole, after its own
 calls, so that it still runs before them. -/
-def Expr.hoistOperands (thr : String → Bool) (h : Hoisted) : List Expr → List Expr × Hoisted
+def Expr.hoistOperands (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr)))
+    (h : Hoisted) : List Expr → List Expr × Hoisted
   | [] => ([], h)
   | e :: es =>
-    let (e', h) := Expr.hoist thr h e
+    let (e', h) := Expr.hoist thr cls h e
     let (e', h) := if Expr.hoistsList thr es then h.bindOperand e' else (e', h)
-    let (es', h) := Expr.hoistOperands thr h es
+    let (es', h) := Expr.hoistOperands thr cls h es
     (e' :: es', h)
 termination_by structural es => es
 
 /-- The values of the properties of an object literal, in order. -/
-def Property.hoistOperands (thr : String → Bool) (h : Hoisted) : List Property → List Property × Hoisted
+def Property.hoistOperands (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr)))
+    (h : Hoisted) : List Property → List Property × Hoisted
   | [] => ([], h)
   | p :: ps =>
     let later := Property.hoistsList thr ps
     let (p', h) := match p with
       | .shorthand s n => (Property.shorthand s n, h)
       | .keyValue s k v =>
-        let (v', h) := Expr.hoist thr h v
+        let (v', h) := Expr.hoist thr cls h v
         let (v', h) := if later then h.bindOperand v' else (v', h)
         (Property.keyValue s k v', h)
       | .spread s v =>
-        let (v', h) := Expr.hoist thr h v
+        let (v', h) := Expr.hoist thr cls h v
         let (v', h) := if later then h.bindOperand v' else (v', h)
         (Property.spread s v', h)
-    let (ps', h) := Property.hoistOperands thr h ps
+    let (ps', h) := Property.hoistOperands thr cls h ps
     (p' :: ps', h)
 termination_by structural ps => ps
 
@@ -1003,11 +1127,12 @@ end
 /-- Hoist the calls out of the value of a statement. A value that is itself
 a call keeps it, after the calls in its arguments, because the statement
 passes what the call throws on. -/
-def Expr.hoistValue (thr : String → Bool) (h : Hoisted) : Expr → Expr × Hoisted
+def Expr.hoistValue (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr)))
+    (h : Hoisted) : Expr → Expr × Hoisted
   | .call s (.ident sn name) args =>
-    let (args', h) := Expr.hoistOperands thr h args
+    let (args', h) := Expr.hoistOperands thr cls h args
     (.call s (.ident sn name) args', h)
-  | e => Expr.hoist thr h e
+  | e => Expr.hoist thr cls h e
 
 /-- The body of a loop or a branch, from the statements that replace its
 one statement `s`. When hoisting adds declarations before it, a block holds
@@ -1020,72 +1145,74 @@ mutual
 
 /-- The statements of a body with the calls that can throw hoisted out of
 their statements, numbering the fresh names from `k` on. -/
-def Stmt.hoistList (thr : String → Bool) (k : Nat) : List Stmt → List Stmt × Nat
+def Stmt.hoistList (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr))) (k : Nat) :
+    List Stmt → List Stmt × Nat
   | [] => ([], k)
   | s :: ss =>
-    let (ds, k) := Stmt.hoistOne thr k s
-    let (ss', k) := Stmt.hoistList thr k ss
+    let (ds, k) := Stmt.hoistOne thr cls k s
+    let (ss', k) := Stmt.hoistList thr cls k ss
     (ds ++ ss', k)
 termination_by structural ss => ss
 
 /-- One statement, as the statements that replace it: the hoisted
 declarations, then the statement with the names in place of the calls. -/
-def Stmt.hoistOne (thr : String → Bool) (k : Nat) : Stmt → List Stmt × Nat
+def Stmt.hoistOne (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr))) (k : Nat) :
+    Stmt → List Stmt × Nat
   | .varDecl s ⟨kind, name, type, some e⟩ =>
-    let (e', h) := Expr.hoistValue thr ⟨[], k⟩ e
+    let (e', h) := Expr.hoistValue thr cls ⟨[], k⟩ e
     (h.decls ++ [.varDecl s ⟨kind, name, type, some e'⟩], h.next)
   | .destructure s kind p t e =>
-    let (e', h) := Expr.hoistValue thr ⟨[], k⟩ e
+    let (e', h) := Expr.hoistValue thr cls ⟨[], k⟩ e
     (h.decls ++ [.destructure s kind p t e'], h.next)
   | .returnStmt s (some e) =>
-    let (e', h) := Expr.hoistValue thr ⟨[], k⟩ e
+    let (e', h) := Expr.hoistValue thr cls ⟨[], k⟩ e
     (h.decls ++ [.returnStmt s (some e')], h.next)
   | .exprStmt s e =>
-    let (e', h) := Expr.hoist thr ⟨[], k⟩ e
+    let (e', h) := Expr.hoist thr cls ⟨[], k⟩ e
     (h.decls ++ [.exprStmt s e'], h.next)
   | .throwStmt s e =>
-    let (e', h) := Expr.hoist thr ⟨[], k⟩ e
+    let (e', h) := Expr.hoist thr cls ⟨[], k⟩ e
     (h.decls ++ [.throwStmt s e'], h.next)
   | .ifStmt s t a b =>
-    let (t', h) := Expr.hoist thr ⟨[], k⟩ t
-    let (as, k) := Stmt.hoistOne thr h.next a
+    let (t', h) := Expr.hoist thr cls ⟨[], k⟩ t
+    let (as, k) := Stmt.hoistOne thr cls h.next a
     match b with
     | some b =>
-      let (bs, k) := Stmt.hoistOne thr k b
+      let (bs, k) := Stmt.hoistOne thr cls k b
       (h.decls ++ [.ifStmt s t' (asBody a as) (some (asBody b bs))], k)
     | none => (h.decls ++ [.ifStmt s t' (asBody a as) none], k)
   | .forOfStmt s kind x e body =>
-    let (e', h) := Expr.hoist thr ⟨[], k⟩ e
-    let (bs, k) := Stmt.hoistOne thr h.next body
+    let (e', h) := Expr.hoist thr cls ⟨[], k⟩ e
+    let (bs, k) := Stmt.hoistOne thr cls h.next body
     (h.decls ++ [.forOfStmt s kind x e' (asBody body bs)], k)
   | .forOfPattern s kind p e body =>
-    let (e', h) := Expr.hoist thr ⟨[], k⟩ e
-    let (bs, k) := Stmt.hoistOne thr h.next body
+    let (e', h) := Expr.hoist thr cls ⟨[], k⟩ e
+    let (bs, k) := Stmt.hoistOne thr cls h.next body
     (h.decls ++ [.forOfPattern s kind p e' (asBody body bs)], k)
   -- JS evaluates the test and the update of a counted loop before each run,
   -- so a call in them stays where it is.
   | .forStmt s init test update body =>
-    let (bs, k) := Stmt.hoistOne thr k body
+    let (bs, k) := Stmt.hoistOne thr cls k body
     ([.forStmt s init test update (asBody body bs)], k)
   | .whileStmt s t body =>
-    let (bs, k) := Stmt.hoistOne thr k body
+    let (bs, k) := Stmt.hoistOne thr cls k body
     ([.whileStmt s t (asBody body bs)], k)
   | .block s ss =>
-    let (ss', k) := Stmt.hoistList thr k ss
+    let (ss', k) := Stmt.hoistList thr cls k ss
     ([.block s ss'], k)
   | .switchStmt s d cs =>
-    let (d', h) := Expr.hoist thr ⟨[], k⟩ d
-    let (cs', k) := Stmt.hoistClauses thr h.next cs
+    let (d', h) := Expr.hoist thr cls ⟨[], k⟩ d
+    let (cs', k) := Stmt.hoistClauses thr cls h.next cs
     (h.decls ++ [.switchStmt s d' cs'], k)
   | s => ([s], k)
 termination_by structural s => s
 
-def Stmt.hoistClauses (thr : String → Bool) (k : Nat) :
+def Stmt.hoistClauses (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr))) (k : Nat) :
     List (Option Expr × List Stmt) → List (Option Expr × List Stmt) × Nat
   | [] => ([], k)
   | (t, ss) :: cs =>
-    let (ss', k) := Stmt.hoistList thr k ss
-    let (cs', k) := Stmt.hoistClauses thr k cs
+    let (ss', k) := Stmt.hoistList thr cls k ss
+    let (cs', k) := Stmt.hoistClauses thr cls k cs
     ((t, ss') :: cs', k)
 termination_by structural cs => cs
 
@@ -1093,20 +1220,22 @@ end
 
 /-- A function body with the calls that can throw hoisted out of its
 statements. The model runs this body, and the translator translates it. -/
-def Stmt.hoisted (thr : String → Bool) : Stmt → Stmt
-  | .block s ss => .block s (Stmt.hoistList thr 0 ss).1
+def Stmt.hoisted (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr))) : Stmt → Stmt
+  | .block s ss => .block s (Stmt.hoistList thr cls 0 ss).1
   | s => s
 
 /-- The functions of the declarations `ds`, by name, where `thr` says which
 functions can throw: their parameters and their body, with the calls that
 can throw hoisted out of its statements. -/
-def functionsIn (thr : String → Bool) (ds : List Decl) : List (String × List String × Stmt) :=
+def functionsIn (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr)))
+    (ds : List Decl) : List (String × List String × Stmt) :=
   ds.filterMap fun
-    | .function _ _ name _ params _ body => some (name, params.map (·.name), Stmt.hoisted thr body)
+    | .function _ _ name _ params _ body => some (name, params.map (·.name), Stmt.hoisted thr cls body)
     | _ => none
 
 /-- The functions of the module, by name. -/
-def functions (m : Module) : List (String × List String × Stmt) := functionsIn (mayThrow m) m.decls
+def functions (m : Module) : List (String × List String × Stmt) :=
+  functionsIn (mayThrow m) (errorClassOf m) m.decls
 
 /-! ### Programs of several files
 
@@ -1165,6 +1294,10 @@ def exportsFunction (m : Module) (name : String) : Bool :=
   m.decls.any fun
     | .function _ exported n _ _ _ _ => (exported || listsExport m name) && n == name
     | _ => false
+
+/-- The constructor of the error class `name` of the file of `s`. -/
+def errorClassIn (s : Scope) (name : String) : Option (Option (List CtorParam × Expr)) :=
+  (s.program.lookup s.file).bind fun m => errorClassOf m name
 
 /-- The function that a call of `name` runs, in the file of `s`: the file's
 own function, or else the exported function of the file it imports `name`
@@ -1577,6 +1710,21 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     if (env.lookup "Error").isSome then none
     let .str s ← eval m fuel env msg | none
     return .error "Error" [("message", .str s)]
+  -- `new C(message, args)` for an error class `C` of the file, as
+  -- `Stmt.hoisted` writes it, with its mark: the object has the message,
+  -- then a property for each `readonly` parameter with its argument
+  -- (ECMA-262 §20.5.1.1 for `Error`, and §15.7.14 for the fields of a
+  -- derived class). A construction without the mark has the wrong number
+  -- of arguments, and the model gives no value.
+  | .new _ c [.keyword _ "'"] (msg :: args) =>
+    match errorClassIn m c with
+    | none => none
+    | some ctor =>
+      if (env.lookup c).isSome then none else do
+        let .str s ← eval m fuel env msg | none
+        let vs ← evalList m fuel env args
+        if (ctorParams ctor).length != vs.length then none
+        return .error c (("message", .str s) :: fieldArgs ctor vs)
   | _ => none
 termination_by e => (fuel, sizeOf e, 0)
 

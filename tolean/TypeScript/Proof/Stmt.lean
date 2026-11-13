@@ -2008,7 +2008,8 @@ theorem translateLoop_sound (hc : CallsAgree (N := N) m.program fs fuel) {F : Na
       obtain ⟨⟨x, elemType, li⟩, s₁, hhead, h⟩ := h
       have hhs := loopHead_sim m fs fuel hc hhead
       simp at h
-      obtain ⟨bodyEnv, s₂, hdecl, bodyOut, s₃, hbody, _, _, ⟨rfl, rfl⟩, _, _, ⟨rfl, rfl⟩, rb, hrb, hbodyEq⟩ := h
+      obtain ⟨bodyEnv, s₂, hdecl, bodyOut, s₃, hbody, _, _, ⟨rfl, rfl⟩, _, _, ⟨rfl, rfl⟩, _, _, ⟨rfl, rfl⟩,
+        rb, hrb, hbodyEq⟩ := h
       obtain ⟨hfresh, rfl, -⟩ := declare_ok hdecl
       have hloop := loop_sim m fs fuel (ihS _ _ _ _ _ _ hbody) rfl hfresh rfl
       have hrest := ihS _ _ _ _ _ _ hrb
@@ -2351,17 +2352,29 @@ theorem returnCall_sim {env : Translate.Env} {s cs sp : Span} {name : String} {a
     obtain ⟨r, hr, -⟩ := hout _ hv
     cases brk <;> simp [endOf] at hr
 
+/-- Wrapping an error in the file's `Thrown` does not change its value. -/
+theorem eval_wrapError (c : Ctx) (e : IR.Expr) (ρ : Eval.Env N) :
+    IR.Expr.eval fs fuel ρ (c.wrapError e) = IR.Expr.eval fs fuel ρ e := by
+  unfold Ctx.wrapError
+  split
+  · rfl
+  · rw [IR.Expr.eval]
+
 /-- `throw new Error(m)`, anywhere in the function: the output throws the
-error that the source's `new Error(m)` makes. -/
-theorem throw_sim {env : Translate.Env} {s sn : Span} {msg : Expr} {code : IR.Expr} {tail : Tail}
+error that the source's `new Error(m)` makes, as `Thrown.error` of it when
+the file declares error classes. -/
+theorem throw_sim {env : Translate.Env} {s sn : Span} {msg : Expr} {code : IR.Expr} {tail : Tail} (c : Ctx)
     (hsim : Sim (N := N) m fs fuel env msg code) (herr : env.has "Error" = false) :
-    StmtSim (N := N) m fs fuel env tail [.throwStmt s (.new sn "Error" [] [msg])] (.throw (IR.Expr.error code)) := by
+    StmtSim (N := N) m fs fuel env tail [.throwStmt s (.new sn "Error" [] [msg])]
+      (.throw (c.wrapError (IR.Expr.error code))) := by
   intro ρs ρo ha hs
-  have hout : ∀ o, IR.Body.exec fs fuel ρo (.throw (IR.Expr.error code)) = some o →
+  have hout : ∀ o, IR.Body.exec fs fuel ρo (.throw (c.wrapError (IR.Expr.error code))) = some o →
       ∃ t, o = .ret (.error (.error "Error" [("message", .str t)])) ∧
         IR.Expr.eval fs fuel ρo code = some (.str t) := by
     intro o ho
-    simp only [IR.Body.exec, IR.Expr.eval, IR.Expr.evalList] at ho
+    simp only [IR.Body.exec] at ho
+    rw [eval_wrapError] at ho
+    simp only [IR.Expr.eval, IR.Expr.evalList] at ho
     cases hm : IR.Expr.eval fs fuel ρo code with
     | none => simp [hm] at ho
     | some w =>
@@ -2376,6 +2389,210 @@ theorem throw_sim {env : Translate.Env} {s sn : Span} {msg : Expr} {code : IR.Ex
   · intro brk ρo' hv
     obtain ⟨t, ho, -⟩ := hout _ hv
     cases brk <;> simp [endOf] at ho
+
+/-- The values of a list of codes are as many as the codes. -/
+theorem evalList_length {ρ : Eval.Env N} : ∀ {outs : List IR.Expr} {vs : List (Val N)},
+    IR.Expr.evalList fs fuel ρ outs = some vs → vs.length = outs.length
+  | [], _, h => by simp [IR.Expr.evalList] at h; subst h; rfl
+  | o :: os, _, h => by
+    simp only [IR.Expr.evalList] at h
+    cases hx : IR.Expr.eval fs fuel ρ o with
+    | none => simp [hx] at h
+    | some w =>
+      cases hxs : IR.Expr.evalList fs fuel ρ os with
+      | none => simp [hx, hxs] at h
+      | some ws =>
+        simp [hx, hxs] at h
+        subst h
+        simp [evalList_length hxs]
+
+omit [JSNumber N] in
+/-- The fields that the output keeps, from the marks of the parameters, are
+the fields that the interpreter keeps, from the parameters: those marked
+`readonly`, each with its argument. -/
+theorem fieldArgs_marks {α : Type} :
+    ∀ (ps : List CtorParam) (qs : List (String × Ty × Bool)) (vs : List α),
+      ps.map (fun p => (p.param.name, p.readonly)) = qs.map (fun x => (x.1, x.2.2)) →
+      ((qs.map fun (n, _, ro) => if ro then some n else none).zip vs).filterMap
+          (fun (f, a) => f.map (·, a)) =
+        Eval.fieldArgs (α := α) (some (ps, default)) vs
+  | [], qs, vs, h => by cases qs <;> simp at h; simp [Eval.fieldArgs, Eval.ctorParams]
+  | p :: ps, [], _, h => by simp at h
+  | p :: ps, q :: qs, vs, h => by
+    simp only [List.map_cons, List.cons.injEq, Prod.mk.injEq] at h
+    obtain ⟨⟨h1, h2⟩, h3⟩ := h
+    cases vs with
+    | nil => simp [Eval.fieldArgs, Eval.ctorParams]
+    | cons v vs =>
+      have ih := fieldArgs_marks ps qs vs h3
+      simp only [Eval.fieldArgs, Eval.ctorParams] at ih ⊢
+      obtain ⟨n, t, ro⟩ := q
+      simp only at h1 h2
+      simp only [List.map_cons, List.zip_cons_cons, List.filterMap_cons, ih, ← h1, ← h2]
+      cases p.readonly <;> simp
+
+/-- When each argument's translation means what the argument means, the list
+of the codes means what the list of arguments means, and there is one code
+per argument. -/
+theorem zip_codes_sim {env : Translate.Env} {β : Type} {g : Expr × β → TM Code}
+    (hg : ∀ x b ctx o ctx', g (x, b) ctx = .ok o ctx' → Sim (N := N) m fs fuel env x o.code) :
+    ∀ (args : List Expr) (bs : List β) (ctx : Ctx) (vals : List Code) (ctx' : Ctx),
+      args.length = bs.length → (args.zip bs).mapM g ctx = .ok vals ctx' →
+      vals.length = args.length ∧ SimList (N := N) m fs fuel env args (vals.map (·.value)) := by
+  intro args
+  induction args with
+  | nil =>
+    intro bs ctx vals ctx' _ h
+    simp [List.mapM_nil] at h
+    obtain ⟨rfl, -⟩ := h
+    refine ⟨rfl, ?_⟩
+    intro ρs ρo vs _ _ hv
+    simp [IR.Expr.evalList] at hv
+    subst hv; simp [Eval.evalList]
+  | cons x xs ih =>
+    intro bs ctx vals ctx' hlen h
+    cases bs with
+    | nil => simp at hlen
+    | cons b bs =>
+      simp [List.mapM_cons] at h
+      obtain ⟨o, s₁, ho, os, hos, rfl⟩ := h
+      obtain ⟨hl, hrest⟩ := ih bs _ _ _ (by simpa using hlen) hos
+      refine ⟨by simp [hl], ?_⟩
+      intro ρs ρo vs ha hs hv
+      simp only [List.map_cons, IR.Expr.evalList] at hv
+      cases hx : IR.Expr.eval fs fuel ρo o.value with
+      | none => simp [hx] at hv
+      | some w =>
+        cases hxs : IR.Expr.evalList fs fuel ρo (os.map (·.value)) with
+        | none => simp [hx, hxs] at hv
+        | some ws =>
+          simp [hx, hxs] at hv
+          subst hv
+          rw [eval_value] at hx
+          have h1 := hg _ _ _ _ _ ho ρs ρo w ha hs hx
+          have h2 := hrest ρs ρo ws ha hs hxs
+          simp [Eval.evalList, h1, h2]
+
+/-- `throw new C(m, args)` for an error class `C` of the file: the output
+throws the constructor of `Thrown` for `C`, on the message and the arguments
+that set a field, which is the error that the interpreter makes. -/
+theorem throwClass_sim {env : Translate.Env} {s sn tsp : Span} {c : String} {msg : Expr} {atoms : List Expr}
+    {code : IR.Expr} {codes : List IR.Expr} {info : ClassInfo} {thrown : DeclRef} {tail : Tail}
+    (hinfo : info ∈ env.classes) (hname : info.name = c) (hlen : codes.length = info.params.length)
+    (hsim : Sim (N := N) m fs fuel env msg code) (hsims : SimList (N := N) m fs fuel env atoms codes)
+    (hc : env.has c = false) :
+    StmtSim (N := N) m fs fuel env tail [.throwStmt s (.new sn c [.keyword tsp "'"] (msg :: atoms))]
+      (.throw (.ext (.errorCase thrown c (some "message" :: info.params.map fun (n, _, ro) => if ro then some n else none))
+        (code :: codes))) := by
+  intro ρs ρo ha hs
+  obtain ⟨ctor, hctor, hps, hglob⟩ := hs.2.2.2 info hinfo
+  rw [hname] at hctor hglob
+  have hE : c ≠ "Error" := by rintro rfl; simp [isGlobalName] at hglob
+  have hM : c ≠ "Map" := by rintro rfl; simp [isGlobalName] at hglob
+  have hS : c ≠ "Set" := by rintro rfl; simp [isGlobalName] at hglob
+  have hD : c ≠ "Date" := by rintro rfl; simp [isGlobalName] at hglob
+  have hnum : (Eval.ctorParams ctor).length = info.params.length := by
+    have := congrArg List.length hps; simpa using this
+  have hfields : ∀ vs : List (Val N), Eval.fieldArgs ctor vs =
+      ((info.params.map fun (n, _, ro) => if ro then some n else none).zip vs).filterMap
+        (fun (f, a) => f.map (·, a)) := by
+    intro vs
+    rw [fieldArgs_marks _ _ _ hps]
+    cases ctor <;> simp [Eval.fieldArgs, Eval.ctorParams]
+  have hout : ∀ o, IR.Body.exec fs fuel ρo (.throw (.ext (.errorCase thrown c
+      (some "message" :: info.params.map fun (n, _, ro) => if ro then some n else none)) (code :: codes))) = some o →
+      ∃ t vs, o = .ret (.error (.error c (("message", .str t) :: Eval.fieldArgs ctor vs))) ∧
+        IR.Expr.eval fs fuel ρo code = some (.str t) ∧ IR.Expr.evalList fs fuel ρo codes = some vs := by
+    intro o ho
+    simp only [IR.Body.exec, IR.Expr.eval, IR.Expr.evalList] at ho
+    cases hm : IR.Expr.eval fs fuel ρo code with
+    | none => simp [hm] at ho
+    | some w =>
+      cases hvs : IR.Expr.evalList fs fuel ρo codes with
+      | none => simp [hm, hvs] at ho
+      | some vs =>
+        have hl := evalList_length fs fuel hvs
+        cases w <;> simp [hm, hvs, IR.ExprExt.apply, hl, hlen] at ho
+        refine ⟨_, vs, ?_, rfl, rfl⟩
+        rw [← ho, hfields]
+  constructor
+  · intro v hv
+    obtain ⟨t, vs, ho, hm, hvs⟩ := hout _ hv
+    cases ho
+    have hl := evalList_length fs fuel hvs
+    rw [exec_single]
+    simp only [Eval.execStmt]
+    rw [Eval.eval]
+    · simp [hctor, hs.none hc, hsim ρs ρo _ ha hs hm, hsims ρs ρo vs ha hs hvs, hnum, hl, hlen]
+    all_goals (intros; simp_all)
+  · intro brk ρo' hv
+    obtain ⟨t, vs, ho, -, -⟩ := hout _ hv
+    cases brk <;> simp [endOf] at ho
+
+/-- A `throw`: of `new Error(m)`, or of `new C(m, args)` for an error class
+`C` of the file. -/
+theorem translateThrow_sound (hc : CallsAgree (N := N) m.program fs fuel) {env : Translate.Env}
+    {s : Span} {value : Expr} {tail : Tail} {ctx ctx' : Ctx} {body : IR.Body}
+    (h : translateThrow env value ctx = .ok body ctx') :
+    StmtSim (N := N) m fs fuel env tail [.throwStmt s value] body := by
+  unfold translateThrow at h
+  simp only [pure_bind] at h
+  split at h
+  · next sn msg =>
+    simp only [ite_state] at h
+    split at h
+    · simp at h
+    · rename_i herr
+      simp only [bind_ok, fuelLimit_ok] at h
+      obtain ⟨_, _, ⟨rfl, rfl⟩, code, s₁, hcode, h⟩ := h
+      simp only [ite_state] at h
+      split at h
+      · simp only [bind_ok, get_ok, pure_ok] at h
+        obtain ⟨_, _, ⟨rfl, rfl⟩, rfl, -⟩ := h
+        have hsim := (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hcode
+        exact throw_sim m fs fuel _ (fun ρs ρo w ha hs hw => hsim ρs ρo w ha hs (by rwa [eval_value] at hw))
+          (by simpa using herr)
+      · simp at h
+  · next _ c _ msg atoms =>
+    simp only [bind_ok, get_ok] at h
+    obtain ⟨_, _, ⟨rfl, rfl⟩, h⟩ := h
+    cases hfind : env.classes.find? (·.name == c) with
+    | none => simp [hfind] at h
+    | some info =>
+      have hinfo := List.mem_of_find?_eq_some hfind
+      have hname : info.name = c := by simpa using List.find?_some hfind
+      simp only [hfind, ite_state] at h
+      split at h
+      · rename_i hdecl
+        split at h
+        · simp at h
+        · rename_i hhas
+          split at h
+          · rename_i hlen
+            simp only [bind_ok, fuelLimit_ok] at h
+            obtain ⟨codes, s₁, hcodes, _, _, ⟨rfl, rfl⟩, code, s₂, hcode, h⟩ := h
+            split at h
+            · simp only [pure_ok] at h
+              obtain ⟨rfl, -⟩ := h
+              have hsim := (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hcode
+              obtain ⟨hl, hsims⟩ := zip_codes_sim m fs fuel (fun x b ctx o ctx' hx => by
+                  obtain ⟨n, t, ro⟩ := b
+                  simp only [bind_ok, fuelLimit_ok, ite_state] at hx
+                  obtain ⟨_, _, ⟨rfl, rfl⟩, ca, s₃, hca, hx⟩ := hx
+                  split at hx
+                  · simp only [pure_ok] at hx
+                    obtain ⟨rfl, -⟩ := hx
+                    exact (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hca
+                  · simp at hx) atoms info.params _ _ _ (by simpa using hlen) hcodes
+              exact throwClass_sim m fs fuel hinfo hname (by simp only [List.length_map, hl]; simpa using hlen)
+                (fun ρs ρo w ha hs hw => hsim ρs ρo w ha hs (by rwa [eval_value] at hw)) hsims
+                (by simpa using hhas)
+            · simp at h
+          · simp at h
+      · simp at h
+  · next _ _ c _ _ _ _ =>
+    cases hfind : env.classes.find? (·.name == c) <;> simp [hfind] at h
+  · simp at h
 
 /-- A declaration, a case of `stmts_sound`, on its own so that the mutual
 proof stays within its heartbeat budget. -/
@@ -3291,7 +3508,7 @@ theorem translateForOfPattern_sound
         obtain ⟨x, s₂, ⟨hxh, rfl⟩, reads, s₃, hreads, bodyEnv, s₄, hdecl, bodyOut, s₅, hbody, step, s₆,
           ⟨hstep, rfl⟩, h⟩ := h
         simp at h
-        obtain ⟨_, _, ⟨rfl, rfl⟩, _, _, ⟨rfl, rfl⟩, rb, hrb, hbodyEq⟩ := h
+        obtain ⟨_, _, ⟨rfl, rfl⟩, _, _, ⟨rfl, rfl⟩, _, _, ⟨rfl, rfl⟩, rb, hrb, hbodyEq⟩ := h
         obtain ⟨hfresh, hhas, hglob⟩ := declarePlaces_ok hdecl
         have hx : x ∈ reads.map (·.1) := by
           rw [patternReads_names hreads]
@@ -3550,23 +3767,7 @@ theorem stmts_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
           · rename_i hrest
             cases rest <;> simp at hrest
             simp only [pure_bind] at h
-            split at h
-            · next sn msg =>
-              simp only [ite_state] at h
-              split at h
-              · simp at h
-              · rename_i herr
-                simp only [bind_ok, fuelLimit_ok] at h
-                obtain ⟨_, _, ⟨rfl, rfl⟩, code, s₁, hcode, h⟩ := h
-                simp only [ite_state] at h
-                split at h
-                · simp only [pure_ok] at h
-                  obtain ⟨rfl, -⟩ := h
-                  have hsim := (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hcode
-                  exact throw_sim m fs fuel (fun ρs ρo w ha hs hw => hsim ρs ρo w ha hs (by rwa [eval_value] at hw))
-                    (by simpa using herr)
-                · simp at h
-            · simp at h
+            exact translateThrow_sound m fs fuel hc h
           · simp at h
         | _ => simp at h
     · exact translateVariable_sound m fs fuel hc ihS

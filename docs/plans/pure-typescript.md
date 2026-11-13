@@ -104,18 +104,6 @@ value claim already does.
 The certifier writes no precondition today, so such a file gets no
 certificate.
 
-### Errors
-
-| TypeScript | Lean | Refused |
-|---|---|---|
-| `throw` of a declared error class | `Except E` | `try` and `catch` in the first version |
-| A class that extends `Error` and only sets `readonly` fields in its constructor | A structure | Methods, `static` members, and reads of `stack` |
-
-ECMA-262 does not define `Error.prototype.stack`, so a read of `stack` stays
-refused. A claim about a function that can throw says what holds when the
-function returns normally. A separate claim can show that it does not throw
-when its inputs meet a precondition.
-
 ### Strings
 
 Each operation below becomes a function on `JSString`, the list of UTF-16
@@ -212,7 +200,6 @@ leaves a gap.
 4. **P0.** The rest of the arrays without `sort`: `entries`, `at` and
    `slice` with arguments that are not integer literals, and `slice` with a
    negative start and an end that is not negative.
-6. **P0.** Errors: declared error classes.
 7. **P0.** Local functions that change variables of the enclosing function, by
    lifting them out and threading the variables through each call.
 8. **P0.** The borrow for a map that a caller passes in.
@@ -335,22 +322,6 @@ a reason to choose otherwise.
   version accepts constraints that are interfaces or object types with
   readonly fields, and refuses primitive bounds. Every instance gets a name,
   so that instance search never has two candidates.
-
-- Which type should a function throw once the program declares error
-  classes? `JSError` holds only a message. A class with fields needs a sum of
-  the program's error classes, and a call can reach a class of another file.
-
-  Recommendation: one inductive for the whole program, generated into the
-  project as `Errors.lean`, with a constructor per error class in any file
-  and one for `JSError`. Every function that can throw returns
-  `Except Thrown α`, so a callee's error passes through `←` without an
-  injection, a class of another file is one more constructor, and a later
-  `catch` with `instanceof` is a `match`. A precise union per function would
-  say exactly what each function throws, but every call would need a
-  coercion, and a new `throw` in a callee would change every caller's
-  signature. The cost of one type is that a new error class recompiles every
-  function that throws. A program with no error classes keeps `JSError`, so
-  the output of today's subset does not change.
 
 - Should `try` and `catch` come in a later step? The survey had none, but much
   other pure code catches its own errors.
