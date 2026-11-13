@@ -758,6 +758,142 @@ theorem stmt_expr {T : Edition} {fn loop : Bool} (g : Nat) (sp : Span) (e : Expr
     Parse.bind_eq (endStatement_semi hs₂ hr hsemi), Parse.bind_eq (Parse.spanFrom_eq _ _)]
   rfl
 
+/-! ### A local function written as an arrow function
+
+`localArrowHead` reads ahead for `const g = (…): T => {`. These lemmas show
+that it finds nothing, and leaves the state as it was, wherever a declaration
+of a variable reads. -/
+
+theorem fail_bind_ne_ok {α β : Type} {t : Token} {m : String} {k : α → ParseM β} {s s' : ParseState} {b : β} :
+    (Parse.failAt (A := α) t m >>= k) s ≠ .ok b s' := by
+  intro h
+  rw [Parse.bind_ok] at h
+  obtain ⟨_, _, h, -⟩ := h
+  exact Parse.failAt_ne_ok _ _ _ _ _ h
+
+theorem peek_self (s : ParseState) : Parse.peek s = .ok (s.rest[0]?.getD s.eof) s := Parse.peekAt_rest s 0
+
+/-- `parseArrow` refuses the `{` that `localArrowRest` looks for, so the two
+never both succeed from the same state. -/
+theorem localArrowRest_arrow {c : Nat} {s s₁ s₂ : ParseState} {e : Expr} {r : List Param × Option TypeExpr}
+    (ha : Parse.parseArrow c s = .ok e s₁) (hr : Parse.localArrowRest s = .ok (some r) s₂) : False := by
+  cases c with
+  | zero =>
+    simp only [Parse.parseArrow, Parse.outOfFuel] at ha
+    rw [Parse.bind_ok] at ha
+    obtain ⟨_, _, _, ha⟩ := ha
+    exact Parse.failAt_ne_ok _ _ _ _ _ ha
+  | succ c =>
+  simp only [Parse.parseArrow] at ha
+  rw [Parse.bind_eq (peek_self s)] at ha
+  simp only [Parse.localArrowRest] at hr
+  rw [Parse.bind_ok] at hr
+  obtain ⟨ps, t₁, hps, hr⟩ := hr
+  rw [Parse.bind_eq hps, Parse.bind_eq (peek_self t₁)] at ha
+  rw [Parse.bind_eq (peek_self t₁)] at hr
+  by_cases hc : (t₁.rest[0]?.getD t₁.eof).isPunct ":" = true
+  · rw [if_pos hc] at ha
+    exact fail_bind_ne_ok ha
+  rw [if_neg hc] at ha hr
+  simp only [Parse.pure_bind] at ha hr
+  rw [Parse.bind_ok] at hr
+  obtain ⟨arrow, t₂, harr, hr⟩ := hr
+  have hp : (t₁.rest[0]?.getD t₁.eof).isPunct "=>" = true := by
+    simp only [Parse.expectPunct] at harr
+    rw [Parse.bind_eq (peek_self t₁)] at harr
+    by_cases h : (t₁.rest[0]?.getD t₁.eof).isPunct "=>" = true
+    · exact h
+    · rw [if_neg h] at harr; exact absurd harr (Parse.unexpected_ne_ok _ _ _ _ _)
+  rw [if_neg (by simp [hp]), Parse.pure_bind, Parse.bind_eq harr] at ha
+  by_cases hn : arrow.newlineBefore = true
+  · rw [if_pos hn] at hr
+    simp at hr
+  rw [if_neg hn, Parse.pure_bind, Parse.bind_eq (peek_self t₂)] at ha
+  simp only [hn, Bool.false_eq_true, ↓reduceIte, Parse.pure_bind, Parse.bind_eq (peek_self t₂)] at hr
+  by_cases hb : (t₂.rest[0]?.getD t₂.eof).isPunct "{" = true
+  · rw [if_pos hb] at ha
+    exact fail_bind_ne_ok ha
+  · simp [hb] at hr
+
+
+theorem startsArrow_self (s : ParseState) :
+    Parse.startsArrow s = .ok (Parse.arrowStart ((s.rest.take 4).map (·.kind))) s := by
+  simp [Parse.startsArrow, get, getThe, MonadStateOf.get, EStateM.get, bind, EStateM.bind, pure, EStateM.pure]
+
+/-- Where an arrow function starts, `parseAssign` reads it with `parseArrow`,
+so `localArrowRest` finds no `{` there either. -/
+theorem localArrowRest_assign {b : Nat} {s s₁ s₂ : ParseState} {e : Expr} {r : List Param × Option TypeExpr}
+    (hst : Parse.arrowStart ((s.rest.take 4).map (·.kind)) = true)
+    (ha : Parse.parseAssign b s = .ok e s₁) (hr : Parse.localArrowRest s = .ok (some r) s₂) : False := by
+  cases b with
+  | zero =>
+    simp only [Parse.parseAssign, Parse.outOfFuel] at ha
+    rw [Parse.bind_ok] at ha
+    obtain ⟨_, _, _, ha⟩ := ha
+    exact Parse.failAt_ne_ok _ _ _ _ _ ha
+  | succ b =>
+  simp only [Parse.parseAssign] at ha
+  rw [Parse.bind_eq (startsArrow_self s), if_pos hst, Parse.bind_ok] at ha
+  obtain ⟨e', s', ha, -⟩ := ha
+  exact localArrowRest_arrow ha hr
+
+/-- Where `parseDeclaration` reads a declaration of a variable,
+`localArrowHeadTry` finds no local function. -/
+theorem localArrowHeadTry_decl {s s₁ s₂ : ParseState} {d : VarDecl} {h : String × List Param × Option TypeExpr}
+    (hd : Parse.parseDeclaration s = .ok d s₁) (hh : Parse.localArrowHeadTry s = .ok (some h) s₂) : False := by
+  simp only [Parse.localArrowHeadTry] at hh
+  have hg : (get : ParseM ParseState) s = .ok s s := rfl
+  rw [Parse.bind_eq hg] at hh
+  by_cases hf : s.inFunction = true
+  rotate_left
+  · rw [if_neg hf] at hh; simp at hh
+  rw [if_pos hf, Parse.pure_bind, Parse.bind_ok] at hh
+  obtain ⟨t, s₃, hadv, hh⟩ := hh
+  by_cases hk : t.isKeyword "const" = true
+  rotate_left
+  · rw [if_neg hk] at hh; simp at hh
+  rw [if_pos hk, Parse.pure_bind, Parse.bind_ok] at hh
+  obtain ⟨name, s₄, hname, hh⟩ := hh
+  rw [Parse.bind_eq (peek_self s₄)] at hh
+  by_cases he : (s₄.rest[0]?.getD s₄.eof).isPunct "=" = true
+  rotate_left
+  · rw [if_neg he] at hh; simp at hh
+  rw [if_pos he, Parse.pure_bind, Parse.bind_ok] at hh
+  obtain ⟨_, s₅, hadv₂, hh⟩ := hh
+  rw [Parse.bind_eq (peek_self s₅), Parse.bind_eq (startsArrow_self s₅)] at hh
+  by_cases hst : ((s₅.rest[0]?.getD s₅.eof).isPunct "(" && Parse.arrowStart ((s₅.rest.take 4).map (·.kind))) = true
+  rotate_left
+  · rw [if_neg hst] at hh; simp at hh
+  rw [if_pos hst, Parse.pure_bind, Parse.bind_ok] at hh
+  obtain ⟨res, s₆, hrest, hh⟩ := hh
+  cases res with
+  | none => simp at hh
+  | some r =>
+  simp only [Parse.parseDeclaration] at hd
+  rw [Parse.bind_eq hadv, Parse.bind_eq (peek_self s₃)] at hd
+  by_cases hb : ((s₃.rest[0]?.getD s₃.eof).isPunct "[" || (s₃.rest[0]?.getD s₃.eof).isPunct "{") = true
+  · rw [if_pos hb] at hd
+    exact fail_bind_ne_ok hd
+  rw [if_neg hb, Parse.pure_bind, Parse.bind_eq hname, Parse.bind_eq (peek_self s₄)] at hd
+  have hcol : ¬ ((s₄.rest[0]?.getD s₄.eof).isPunct ":" = true) := by
+    have : (s₄.rest[0]?.getD s₄.eof).kind = .punct "=" := by simpa [Token.isPunct] using he
+    simp [Token.isPunct, this]
+  rw [if_neg hcol, Parse.pure_bind, Parse.bind_eq (peek_self s₄), if_pos he, Parse.bind_eq hadv₂,
+    Parse.bind_eq (Parse.budget_eq _), Parse.bind_ok] at hd
+  obtain ⟨e, s₇, hae, -⟩ := hd
+  simp only [Bool.and_eq_true] at hst
+  exact localArrowRest_assign hst.2 hae hrest
+
+/-- So where a declaration of a variable reads, `localArrowHead` gives
+nothing and keeps the state. -/
+theorem localArrowHead_decl {s s₁ : ParseState} {d : VarDecl} (hd : Parse.parseDeclaration s = .ok d s₁) :
+    Parse.localArrowHead s = .ok none s := by
+  simp only [Parse.localArrowHead]
+  split
+  · rename_i hh
+    exact (localArrowHeadTry_decl hd hh).elim
+  · rfl
+
 /-- A declaration of a variable. -/
 theorem stmt_varDecl {T : Edition} {fn loop : Bool} (f : Nat) (sp : Span) (d : VarDecl)
     (hw : (Stmt.varDecl sp d).wf T fn loop = true) :
@@ -767,6 +903,12 @@ theorem stmt_varDecl {T : Edition} {fn loop : Bool} (f : Nat) (sp : Span) (d : V
   simp only [Stmt.wordLines, Stmt.lines, List.map_cons, List.map_nil] at ht
   obtain ⟨h1, hn⟩ := Laid.one ht
   obtain ⟨d', s', hp, hd', hL⟩ := parseVarDecl_reads d hw s ts rest hT hs hl h1 hn hr
+  have hdecl : ∃ d₀ s₀, Parse.parseDeclaration s = .ok d₀ s₀ := by
+    simp only [Parse.parseVarDecl] at hp
+    rw [Parse.bind_ok] at hp
+    obtain ⟨d₀, s₀, h₀, -⟩ := hp
+    exact ⟨d₀, s₀, h₀⟩
+  obtain ⟨d₀, s₀, hd₀⟩ := hdecl
   have h1' := h1
   simp only [VarDecl.words, VarKind.word_eq] at h1'
   obtain ⟨kw, ts', rfl, hkw, h2⟩ := Touching.cons_one (by simpa using h1')
@@ -778,7 +920,9 @@ theorem stmt_varDecl {T : Edition} {fn loop : Bool} (f : Nat) (sp : Span) (d : V
   simp only [Parse.parseStatement]
   rw [Parse.bind_eq (Parse.peek_eq hs')]
   rcases hk : d.kind <;> rw [hk] at hkw <;> simp only [VarKind.token] at hkw <;> simp only [hkw] <;>
-    rw [Parse.bind_eq (Parse.peekAt_rest _ _), if_neg hnb, Parse.bind_eq hp, Parse.bind_eq (Parse.spanFrom_eq _ _)] <;>
+    rw [Parse.bind_eq (Parse.peekAt_rest _ _), if_neg hnb] <;> simp only [Parse.parseDeclStatement] <;>
+    rw [Parse.bind_eq (localArrowHead_decl hd₀)] <;>
+    simp only [] <;> rw [Parse.bind_eq hp, Parse.bind_eq (Parse.spanFrom_eq _ _)] <;>
     rfl
 
 /-! ### Array destructuring -/

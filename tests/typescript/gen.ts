@@ -797,17 +797,22 @@ export class Gen {
           vars.push({ name: acc, ty: t, mutable: true, owned: false });
         }
       } else if (roll < 0.91 && depth === 2 && !inLoop) {
-        // A local function at the top of the body. One that returns nothing
-        // sets a `let` around it, and runs once and then in a loop; one that
-        // returns a value reads the locals around it.
+        // A local function at the top of the body, as a declaration or as an
+        // arrow function in a `const`. One that returns nothing sets a `let`
+        // around it, and runs once and then in a loop; one that returns a
+        // value reads the locals around it.
         const name = this.fresh('lf');
+        const arrow = this.chance(0.5);
+        const head = (params: string, rt: string): string =>
+          arrow ? `const ${name} = (${params}): ${rt} => {` : `function ${name}(${params}): ${rt} {`;
+        const end = arrow ? '};' : '}';
         const pt = this.pick([BIGINT, NUMBER, BOOLEAN, STRING]);
         const param = this.fresh('a');
         const inner = [...vars, { name: param, ty: pt, mutable: false, owned: false }];
         if (lets.length > 0 && this.chance(0.6)) {
           const target = this.pick(lets);
-          lines.push(`function ${name}(${param}: ${show(pt)}): void {`,
-            `  ${target.name} = ${this.expr(target.ty, inner, 1)};`, '}');
+          lines.push(head(`${param}: ${show(pt)}`, 'void'),
+            `  ${target.name} = ${this.expr(target.ty, inner, 1)};`, end);
           lines.push(`${name}(${this.expr(pt, vars, 1)});`);
           const arrays = vars.filter((v) => v.ty.k === 'array' && !v.owned && same(v.ty.of, pt));
           if (arrays.length > 0) {
@@ -816,9 +821,9 @@ export class Gen {
           }
         } else {
           const rt = this.pick([BIGINT, NUMBER, BOOLEAN, STRING]);
-          lines.push(`function ${name}(${param}: ${show(pt)}): ${show(rt)} {`,
+          lines.push(head(`${param}: ${show(pt)}`, show(rt)),
             `  if (${this.test(inner, 1)}) return ${this.expr(rt, inner, 1)};`,
-            `  return ${this.expr(rt, inner, 1)};`, '}');
+            `  return ${this.expr(rt, inner, 1)};`, end);
           const z = this.fresh('z');
           lines.push(`const ${z} = ${name}(${this.expr(pt, vars, 1)});`);
           vars.push({ name: z, ty: rt, mutable: false, owned: false });
