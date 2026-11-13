@@ -32,7 +32,7 @@ body. -/
 def functions (decls : List Decl) : List (String × List String × Body) :=
   decls.filterMap fun
     | .function name params _ body => some (name, params.map (·.1), body)
-    | .struct .. | .alias .. | .enum .. | .tagged .. => none
+    | .struct .. | .alias .. | .enum .. | .tagged .. | .errors .. => none
 
 /-- The functions of the output of a program, under the file of each: the
 output of each file, with that file's path. -/
@@ -85,18 +85,34 @@ def StringPart.toStr : StringPart → Val N → Option JSString
   | .string, .str s => some s
   | .bigint, .int i => some (JSString.ofInt i)
   | .boolean, .bool b => some (JSString.ofBool b)
+  | .number, .num n => some (JSNumber.toStr n)
   | _, _ => none
 
-/-- A method of a string, on the string and the values of its arguments. -/
-def StringMethod.apply : StringMethod → JSString → List (Val N) → Option (Val N)
-  | .startsWith, s, args => Eval.oneString (fun p => .bool (s.startsWith p)) args
-  | .endsWith, s, args => Eval.oneString (fun p => .bool (s.endsWith p)) args
-  | .includes, s, args => Eval.oneString (fun p => .bool (s.includes p)) args
-  | .indexOf, s, args => Eval.oneString (fun p => .num (JSNumber.ofSafeInt (s.indexOf p))) args
-  | .trim, s, args => Eval.noArgs (.str s.trim) args
-  | .trimStart, s, args => Eval.noArgs (.str s.trimStart) args
-  | .trimEnd, s, args => Eval.noArgs (.str s.trimEnd) args
-  | .split, s, args => Eval.oneString (fun sep => .list ((s.split sep).map .str)) args
+/-- A method of a string, on the string, the values of its arguments, and the
+integer literal that each argument is, if it is one, as the spec's
+`stringMethod` takes them. -/
+def StringMethod.apply : StringMethod → JSString → List (Val N) → List (Option Int) → Option (Val N)
+  | .startsWith, s, args, lits =>
+    Eval.stringAndInt (fun p => .bool (s.startsWith p)) (fun p k => .bool (s.startsWithFrom p k)) args lits
+  | .endsWith, s, args, lits =>
+    Eval.stringAndInt (fun p => .bool (s.endsWith p)) (fun p k => .bool (s.endsWithAt p k)) args lits
+  | .includes, s, args, lits =>
+    Eval.stringAndInt (fun p => .bool (s.includes p)) (fun p k => .bool (s.includesFrom p k)) args lits
+  | .indexOf, s, args, lits =>
+    Eval.stringAndInt (fun p => .num (JSNumber.ofSafeInt (s.indexOf p)))
+      (fun p k => .num (JSNumber.ofSafeInt (s.indexOfFrom p k))) args lits
+  | .trim, s, args, _ => Eval.noArgs (.str s.trim) args
+  | .trimStart, s, args, _ => Eval.noArgs (.str s.trimStart) args
+  | .trimEnd, s, args, _ => Eval.noArgs (.str s.trimEnd) args
+  | .split, s, args, lits =>
+    Eval.stringAndInt (fun sep => .list ((s.split sep).map .str))
+      (fun sep k => .list ((s.splitLimit sep k).map .str)) args lits
+  | .at, s, args, lits => Eval.oneInt (Eval.stringAt s) args lits
+  | .slice, s, args, lits => Eval.sliceArgs s args lits
+  | .padStart, s, args, lits => Eval.padArgs s.padStart args lits
+  | .padEnd, s, args, lits => Eval.padArgs s.padEnd args lits
+  | .toUpperCase, s, args, _ => Eval.asciiCase s.toUpperAscii s args
+  | .toLowerCase, s, args, _ => Eval.asciiCase s.toLowerAscii s args
 
 /-- The elements of a list. -/
 def listItems? : Val N → Option (List (Val N))
@@ -124,7 +140,7 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   | .bigintPow k, [.int a] => some (.int (a ^ k))
   | .stringOrder le, [.str a, .str b] => some (.bool (if le then a.le b else a.lt b))
   | .stringLength, [.str s] => some (.num (JSNumber.ofSafeInt s.length))
-  | .stringMethod method, .str s :: args => method.apply s args
+  | .stringMethod method lits, .str s :: args => method.apply s args lits
   | .stringAppend left right, [a, b] => do
     return .str ((← left.toStr a) ++ (← right.toStr b))
   | .undefined, [] => some .undefined
@@ -174,6 +190,8 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   | .mapEntries, [.map entries] => some (.list (entries.map fun (k, v) => .list [k, v]))
   -- What a loop visits in `xs.entries()`, as the spec's `evalIter` gives it.
   | .arrayEntries, [.list xs] => some (.list (Eval.entriesOf xs))
+  | .stringCodePoints, [.str s] => some (.list (s.codePoints.map .str))
+  | .jsonStringify, [v] => Eval.jsonStringify v
   | .mapOfList, [.list items] => (Eval.mapOfItems items).map .map
   | .setOfList, [.list items] => (Eval.setOfItems items).map .set
   -- The elements of an array literal with a spread, in order.
@@ -183,6 +201,12 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   | .pure, [a] => some a
   -- `JSError.mk m` is the object that `new Error(m)` makes.
   | .error, [.str m] => some (.error "Error" [("message", .str m)])
+  -- `Thrown.«C» m a b` is the object that `new C(m, a, b)` makes: the
+  -- message, then the fields.
+  | .errorCase _ cls fields, .str m :: args =>
+    if fields.length == args.length + 1 then
+      some (.error cls ((fields.zip (.str m :: args)).filterMap fun (f, a) => f.map (·, a)))
+    else none
   | _, _ => none
 
 /-- The tag of `v`, a value of a tagged union: the string in its tag field
@@ -479,10 +503,12 @@ def Body.exec (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
     let k ← tagOf field (← ρ.lookup name)
     if k == JSString.ofString tag then Body.exec fs fuel ρ whenTag
     else if other.all (JSString.ofString · == k) then Body.exec fs fuel ρ whenOther else none
+  -- A branch that throws ends the function, as `>>=` passes the error on.
   | .letState names branch rest => do
     match ← Body.exec fs fuel ρ branch with
     | .normal inner => Body.exec fs fuel (← bindState names inner ρ) rest
-    | .ret _ | .brk _ | .cont _ => none
+    | .ret v => some (.ret v)
+    | .brk _ | .cont _ => none
   | .fold names element body items rest _ => do
     let .list vs ← Expr.eval fs fuel ρ items | none
     match ← Body.runFold fs fuel names element body ρ vs with

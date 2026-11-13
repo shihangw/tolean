@@ -1,3 +1,5 @@
+import tolean.TypeScript.Spec.String
+
 /-
 The model of a JS `number` that `tolean` translates to.
 
@@ -86,6 +88,9 @@ class JSNumber (N : Type) where
   ofSafeInt : Int → N
   /-- The integer `x` is when `Number.isSafeInteger(x)`, and `none` otherwise. -/
   toSafeInt : N → Option Int
+  /-- `String(x)`: Number::toString with radix 10 (ECMA-262 §6.1.6.1.20), the
+  fewest digits that read back as `x`, such as `"0.1"` or `"1e+21"`. -/
+  toStr : N → JSString
   /-- `Number.isNaN(x)` -/
   isNaN : N → Bool
   /-- `Number.isFinite(x)`: neither `NaN` nor `±Infinity`. -/
@@ -288,6 +293,9 @@ class SafeIntLaws (N : Type) [JSNumber N] : Prop where
     le a b = decide (i ≤ j)
   eq : ∀ {a b : N} {i j : Int}, toSafeInt a = some i → toSafeInt b = some j →
     eq a b = decide (i = j)
+  /-- A safe integer is written as its decimal digits, after `-` when it is
+  negative, as for a bigint. `-0` is a safe integer, and it is `"0"`. -/
+  toStr : ∀ {x : N} {i : Int}, toSafeInt x = some i → toStr x = JSString.ofInt i
 
 /-- How `NaN` and `±Infinity` behave. -/
 class SpecialValueLaws (N : Type) [JSNumber N] : Prop where

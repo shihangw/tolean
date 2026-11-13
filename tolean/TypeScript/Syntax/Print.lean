@@ -42,6 +42,10 @@ partial def TypeExpr.toSexp : TypeExpr → Sexp
 def Param.toSexp (p : Param) : Sexp :=
   node "param" p.span ([p.name] ++ flag p.optional "optional") (p.type.map TypeExpr.toSexp).toList
 
+def CtorParam.toSexp (p : CtorParam) : Sexp :=
+  node "param" p.param.span ([p.param.name] ++ flag p.param.optional "optional" ++ flag p.readonly "readonly")
+    (p.param.type.map TypeExpr.toSexp).toList
+
 mutual
 
 partial def Expr.toSexp : Expr → Sexp
@@ -144,6 +148,11 @@ def Decl.toSexp : Decl → Sexp
   | .enum s exported name members =>
     node "enum" s ([name] ++ flag exported "export")
       (members.map fun m => node "member" m.span [m.name, Sexp.quote m.value] [])
+  -- The constructor's parameters, then the message. A class without a
+  -- constructor has no children.
+  | .errorClass s exported name ctor =>
+    node "class" s ([name] ++ flag exported "export")
+      ((ctor.map fun (ps, m) => ps.map CtorParam.toSexp ++ [m.toSexp]).getD [])
   | .exports s names source =>
     node "export" s (source.map Sexp.quote).toList
       (names.map fun n => node "name" n.span ([n.name] ++ flag n.typeOnly "type") [])

@@ -371,8 +371,31 @@ structure FnInfo where
   ret : Ty
   /-- The function can throw, so its output returns `Except JSError R`. -/
   throws : Bool := false
+  /-- The hoisting (`Eval.mayThrow`) knows that the function can throw, so a
+  call of it may stand inside a larger expression. It does not know a
+  function that throws only through an imported function. -/
+  hoists : Bool := false
 
 def FnInfo.ref (f : FnInfo) : DeclRef := ⟨f.file, f.name⟩
+
+/-- An error class of the file, `class C extends Error`: the parameters of
+its constructor, each with its type and whether `readonly` makes it a field,
+in order. A class without a constructor has no parameters; `new C(m)` then
+takes only the message. -/
+structure ClassInfo where
+  file : String
+  name : String
+  exported : Bool := false
+  /-- The class declares a constructor. Without one, `new C(m)` takes only
+  the message. -/
+  hasCtor : Bool := false
+  params : List (String × Ty × Bool)
+
+/-- The fields of an error of the class, with their types: the `readonly`
+parameters, in order. -/
+def ClassInfo.fields (c : ClassInfo) : List (String × Ty) :=
+  c.params.filterMap fun (n, t, ro) => if ro then some (n, t) else none
+
 
 /-- A string enum whose members code may read, such as `Color.Red`: its
 name in the file, its declaration, and the name and the string of each
@@ -392,6 +415,8 @@ structure Env where
   /-- The string enums whose members code may read: the file's own, and the
   ones it imports without `type`. -/
   enums : List EnumValue := []
+  /-- The error classes of the file, which a `throw` may make an error of. -/
+  classes : List ClassInfo := []
 
 def Env.lookup (env : Env) (name : String) : Option Local := env.locals.find? (·.name == name)
 
@@ -442,6 +467,10 @@ structure Interface where
   /-- The edition that it is translated for. A file may import from it only
   when the file's own edition is at least as new. -/
   target : Edition := .default
+  /-- The file declares error classes, so its functions that can throw return
+  `Except Thrown R` for its own `Thrown`, which another file cannot pass on
+  yet. -/
+  errorClasses : Bool := false
 
 structure Ctx where
   file : String
@@ -461,6 +490,13 @@ structure Ctx where
   enumValues : List EnumValue := []
   /-- The files that this file may import from, by path. -/
   interfaces : List (String × Interface) := []
+  /-- The error classes of the file, which `translateErrorTypes` records
+  before the declarations translate. -/
+  errorClasses : List ClassInfo := []
+  /-- The error classes declared so far, in the order of the declarations. A
+  `throw` may make an error only of a class declared before its function, as
+  a call may name only a function declared earlier. -/
+  declaredClasses : List String := []
   currentFunction : String := ""
   /-- The type parameters of the function being translated. -/
   typeParams : List String := []
@@ -629,10 +665,20 @@ def Tail.returnBody (tail : Tail) (code : IR.Expr) : IR.Body :=
 
 def leanReserved : List String := IR.leanReserved
 
+/-- The type of the errors that the file's functions throw: `JSError`, or the
+file's `Thrown` when it declares error classes. -/
+def Ctx.errorType (c : Ctx) : IR.Ty :=
+  if c.errorClasses.isEmpty then IR.Ty.error else .tagged ⟨c.file, "Thrown"⟩
+
+/-- The error that `new Error(m)` makes, as a value of the file's error type:
+`Thrown.error` of it when the file declares error classes. -/
+def Ctx.wrapError (c : Ctx) (e : IR.Expr) : IR.Expr :=
+  if c.errorClasses.isEmpty then e else .inject ⟨c.file, "Thrown"⟩ "error" e
+
 /-- The type of the output of a function whose result has the type `ret`:
-`Except JSError R` when it can throw. -/
-def leanResult (throws : Bool) (ret : Ty) : IR.Ty :=
-  if throws then .except IR.Ty.error ret.lean else ret.lean
+`Except E R` when it can throw, for the file's error type `E`. -/
+def leanResult (err : IR.Ty) (throws : Bool) (ret : Ty) : IR.Ty :=
+  if throws then .except err ret.lean else ret.lean
 
 /-- The parts of `e` when it is a call of a function of `fns` that can
 throw: the spans of the call and of the name, the name, and the arguments. -/
@@ -700,10 +746,30 @@ def reject {A : Type} (span : Span) (reason : String) : TM A := do
 
 /-- Refuse a call of `fn` that can throw, unless the call is the whole value
 of a declaration or a `return` (`top`). The output passes the error of such
-a call on with `>>=`, which only a statement can do. -/
-def checkThrowingCall (s : Span) (name : String) (fn : FnInfo) (top : Bool) : TM Unit :=
+a call on with `>>=`, which only a statement can do. `Eval.Stmt.hoisted` has
+moved every such call of a function of the file that JS always evaluates into
+a declaration of its own, so one that is left stands where JS may not
+evaluate it, or calls an imported function, which the hoisting does not
+follow yet. -/
+def checkThrowingCall (s : Span) (name : String) (fn : FnInfo) (top : Bool) : TM Unit := do
   if fn.throws && !top then
-    reject s s!"'{name}' can throw, so a call of it must be the whole value of a const, a let or a return"
+    if fn.file != (← get).file then
+      reject s s!"'{name}' is imported and can throw, so a call of it must be the whole value of a const, a let or a return"
+    else if !fn.hoists then
+      reject s s!"'{name}' can throw only through an imported function, so a call of it must be the whole value of a const, a let or a return"
+    else
+      reject s (s!"'{name}' can throw, so a call of it may not stand in a branch of ?:, after &&, || or ??, " ++
+        "in the test or the update of a for loop, or in an arrow function")
+  else pure ()
+
+/-- Refuse a call of `fn`, a function of another file that can throw, when
+that file or this one declares error classes: the two files throw values of
+two types then, which `>>=` cannot pass on. -/
+def checkCrossFileThrow (s : Span) (name : String) (fn : FnInfo) : TM Unit := do
+  let ctx ← get
+  if fn.throws && fn.file != ctx.file &&
+      (!ctx.errorClasses.isEmpty || (ctx.interfaces.lookup fn.file).any (·.errorClasses)) then
+    reject s s!"'{name}' can throw, and its file or this one declares error classes, whose errors cannot pass between files yet"
   else pure ()
 
 /-- The program nests deeper than `Ctx.fuel` allows. -/
@@ -742,7 +808,7 @@ def isNumberName (name : String) : Bool :=
 hide them. -/
 def isGlobalName (name : String) : Bool :=
   isNumberName name || name == "undefined" || name == "Map" || name == "Set" || name == "Error" ||
-    name == "Object"
+    name == "Object" || name == "Date"
 
 def checkName (span : Span) (name : String) : TM String := do
   if leanReserved.contains name then reject span s!"name '{name}' is reserved in Lean"
@@ -760,6 +826,8 @@ def checkLocalName (span : Span) (name : String) : TM String := do
     reject span s!"'{name}' would hide the type {name} in Lean; choose another name"
   if ctx.typeParams.contains name then
     reject span s!"'{name}' would hide the type parameter {name} in Lean; choose another name"
+  if ctx.errorClasses.any fun c => c.name == name then
+    reject span s!"'{name}' would hide the error class {name}; choose another name"
   checkName span name
 
 def declare (env : Env) (span : Span) (name : String) (binding : Binding) (type : Ty) :
@@ -945,6 +1013,16 @@ def endsInBreak : List Stmt → Bool
   | [s] => s.isBreak
   | _ :: rest => endsInBreak rest
 
+/-- The statements of a clause end in a `throw`, which ends the function, so
+the clause does not run into the next one. -/
+def endsInThrow : List Stmt → Bool
+  | [] => false
+  | [s] => (s matches .throwStmt ..)
+  | _ :: rest => endsInThrow rest
+
+/-- The clause does not run into the next: it ends in `break` or in `throw`. -/
+def clauseEnds (body : List Stmt) : Bool := endsInBreak body || endsInThrow body
+
 /-- The statements of a clause without the `break` it ends in. -/
 def dropBreak : List Stmt → List Stmt
   | [] => []
@@ -982,37 +1060,27 @@ both end the function. -/
 def alwaysReturns : List Stmt → Bool :=
   alwaysEnds fun s => s matches .returnStmt .. || s matches .throwStmt ..
 
-/-- `s` ends one run of a loop body: a `continue`, or a `break` or a `return`
-in a loop that one can end. -/
+/-- `s` ends one run of a loop body: a `continue`, a `throw`, or a `break`
+or a `return` in a loop that one can end. -/
 def isLoopJump (breaks returns : Bool) : Stmt → Bool
-  | .continueStmt _ => true
+  | .continueStmt _ | .throwStmt .. => true
   | .breakStmt _ => breaks
   | .returnStmt .. => returns
   | _ => false
 
-/-- Why an `if` whose first branch ends in `tail` may not have both an `else`
-and statements after it. -/
-def Tail.afterEarlyReason : Tail → String
-  | .ret => "code after an if whose branches both return or throw is unreachable"
-  | _ => "after an if whose first branch ends in continue, break or return, put the code that follows in its else branch"
-
-/-- The tail of the first branch of an `if`, when every path through it,
-`thenStatements`, ends the statements that end in `tail`: a `return` in a
-function body, or a `continue`, `break` or `return` in a loop body. -/
-def earlyTail (tail : Tail) (thenStatements : List Stmt) : Option Tail :=
-  match tail with
-  | .ret => if alwaysReturns thenStatements then some .ret else none
-  | .loop names b r | .cont names b r =>
-    if alwaysEnds (isLoopJump b r) thenStatements then some (.cont names b r) else none
-  | .state _ => none
+/-- Every path through `statements` ends in a `throw`. -/
+def alwaysThrows : List Stmt → Bool :=
+  alwaysEnds fun s => s matches .throwStmt ..
 
 mutual
 
 /-- `s` contains a `return`, or a `break` or `continue` that leaves `s`. The
 flags say whether a `break` and a `continue` count. Inside a loop that `s`
-contains, neither counts, because they leave only that loop. -/
+contains, neither counts, because they leave only that loop. A `throw` is
+not a jump here: it ends the function from anywhere, through the `Except`
+monad, so a branch or a loop body may hold one. -/
 def containsJump (brk cont : Bool) : Stmt → Bool
-  | .returnStmt .. | .throwStmt .. => true
+  | .returnStmt .. => true
   | .breakStmt _ => brk
   | .continueStmt _ => cont
   | .ifStmt _ _ t (some e) => containsJump brk cont t || containsJump brk cont e
@@ -1039,6 +1107,30 @@ def clausesContainJump (brk cont : Bool) : List (Option Expr × List Stmt) → B
   | (_, body) :: rest => clauseContainsJump brk cont body || clausesContainJump brk cont rest
 
 end
+
+/-- Why an `if` whose branches both end early may have no statements after it. -/
+def bothEndReason : String :=
+  "code after an if whose branches both end in a return, a throw, a break or a continue is unreachable"
+
+/-- Why an `if` whose first branch ends early, and whose `else` does not, may
+not have statements after it. -/
+def afterEarlyReason : String :=
+  "after an if whose first branch ends in a return, a throw, a break or a continue, put the code that follows in its else branch"
+
+/-- The tail of the first branch of an `if`, when every path through it,
+`thenStatements`, ends the statements that end in `tail`: a `return` or a
+`throw` in a function body, a `continue`, `break`, `return` or `throw` in a
+loop body, or a `throw` in a branch that ends in its state. A `throw` ends
+the function from anywhere, so the branch that throws is translated as the
+end of the function; it may hold no other jump, which the function's tail
+would also accept. -/
+def earlyTail (tail : Tail) (thenStatements : List Stmt) : Option Tail :=
+  match tail with
+  | .ret => if alwaysReturns thenStatements then some .ret else none
+  | .loop names b r | .cont names b r =>
+    if alwaysEnds (isLoopJump b r) thenStatements then some (.cont names b r) else none
+  | .state _ =>
+    if alwaysThrows thenStatements && !anyContainsJump true true thenStatements then some .ret else none
 
 mutual
 
@@ -1278,7 +1370,7 @@ def neverLeftReason (name : String) (tags : List String) : String :=
 
 /-- Why a clause of a `switch` must end in `return`. -/
 def fallthroughReason : String :=
-  "every clause of a switch must end in a return, or every clause in a break; Tolean does not translate fallthrough"
+  "every clause of a switch must end in a return, or every clause in a break or a throw; Tolean does not translate fallthrough"
 
 /-- The arm for the other members of a test of `name`'s tag tests it again
 only as more arms of the same `match`: first, or not at all. -/
@@ -1425,13 +1517,15 @@ def concatParts? : Ty → Ty → Option (IR.StringPart × IR.StringPart)
   | .bigint, .string => some (.bigint, .string)
   | .string, .boolean => some (.string, .boolean)
   | .boolean, .string => some (.boolean, .string)
+  | .string, .number => some (.string, .number)
+  | .number, .string => some (.number, .string)
   | _, _ => none
 
 /-- `a + b` where one operand is a string: ToString converts the other
 operand, and the code units join. -/
 def concatOperands (s : Span) (a b : Code) : TM Code := do
   let some (left, right) := concatParts? a.type b.type
-    | reject s "'+' on a string needs a string, a bigint or a boolean on the other side"
+    | reject s "'+' on a string needs a string, a number, a bigint or a boolean on the other side"
   return ⟨.ext (.stringAppend left right) [a.value, b.value], false, .string⟩
 
 /-- The code for `op` on the operands `a` and `b`, which the translator has
@@ -1603,10 +1697,11 @@ def reducerOf : List Expr → Option (Param × Param × Expr × Expr)
   | [.arrow _ _ [a, p] body, init] => some (a, p, body, init)
   | _ => none
 
-/-- `e` is the name `Number` or `Math`, whose calls the interpreter reads
-before the methods of a value. -/
-def _root_.tolean.TypeScript.Syntax.Expr.namesNumber : Expr → Bool
-  | .ident _ "Number" | .ident _ "Math" | .ident _ "Object" | .ident _ "Date" => true
+/-- `e` is the name of a global object whose calls the interpreter reads by
+their own rules, before the methods of a value: `Number`, `Math`, `Object`,
+`Date` or `JSON`, as in `Number.isNaN(x)` and `JSON.stringify(x)`. -/
+def _root_.tolean.TypeScript.Syntax.Expr.namesGlobal : Expr → Bool
+  | .ident _ "Number" | .ident _ "Math" | .ident _ "Object" | .ident _ "Date" | .ident _ "JSON" => true
   | _ => false
 
 /-- `m.get(k)` and `m.has(k)`, as the method and the operation of the output. -/
@@ -1698,13 +1793,14 @@ def newSetType (s : Span) (typeArgs : List TypeExpr) (expected : Option Ty) : TM
   | _, _ => reject s "new Set needs the type of its elements, such as new Set<string>()"
 
 /-- What `for (const x of items)` visits, with its type: the elements of an
-array or a set, or the entries of a map, which a loop sees as tuples
-`[key, value]`. -/
+array or a set, the entries of a map, which a loop sees as tuples
+`[key, value]`, or the code points of a string, each as a string. -/
 def loopOver (items : Code) : Option (Ty × IR.Expr) :=
   match items.type with
   | .array t => some (t, items.code)
   | .set t => some (t, .ext .setElems [items.value])
   | .map k v => some (.tuple [k, v], .ext .mapEntries [items.value])
+  | .string => some (.string, .ext .stringCodePoints [items.value])
   | _ => none
 
 /-- The receiver `xs` of a call `xs.entries()`, which the spec's `evalIter`
@@ -1734,7 +1830,7 @@ loop body is `body`. -/
 def loopItems (iterable : Expr) (body : Stmt) (found : Option (Ty × IR.Expr)) : TM (Ty × IR.Expr) := do
   if Stmt.mutatesIterable iterable body then
     reject iterable.span "a loop may not change the map or set that it runs over"
-  orReject found iterable.span "a loop must run over an array, a set, a map or xs.entries()"
+  orReject found iterable.span "a loop must run over an array, a set, a map, a string or xs.entries()"
 
 /-- A piece of an array literal: an element, or the list of values that a
 spread `...e` gives, with their type. -/
@@ -1757,7 +1853,7 @@ def translateElem (tr : Option Ty → Expr → TM Code) (expected : Option Ty) (
   match e.spreadArg? with
   | some (sp, x) => do
     let (t, li) ← orReject (← iterOf (tr expected) (tr none) x) sp
-      "a spread '...' in an array needs an array, a set, a map or xs.entries()"
+      "a spread '...' in an array needs an array, a set, a map, a string or xs.entries()"
     pure (.many t li)
   | none => do
     let elem := match expected with
@@ -1846,7 +1942,7 @@ def translateNew (tr : Option Ty → Expr → TM Code) (env : Env) (expected : O
       (translateRecv (tr none) env) arg
     let (elem, li) ← orReject found arg.span
       (if isMap then "new Map takes an array of [key, value] entries, or a map"
-       else "new Set takes an array or a set")
+       else "new Set takes an array, a set, a map or a string")
     let type ← if isMap then mapOfEntriesType arg.span declared elem else setOfElemsType arg.span declared elem
     return ⟨.ascribe (.ext (if isMap then .mapOfList else .setOfList) [li]) type.lean, false, type⟩
   | _ => reject s s!"new {callee} takes at most one argument"
@@ -1875,7 +1971,7 @@ def indexNumber (s : Span) (xs i : Code) (elem : Ty) : TM Code := do
 method that takes no callback. `Number.isNaN(x)` and the like are calls of the
 global `Number`, not of an array. -/
 def arrayCallOf : Expr → Option (Expr × String)
-  | .member _ recv name => if recv.namesNumber then none else some (recv, name)
+  | .member _ recv name => if recv.namesGlobal then none else some (recv, name)
   | _ => none
 
 /-- The start and the end of `slice`, from the integers of its arguments: a
@@ -1908,38 +2004,122 @@ def _root_.tolean.TypeScript.Syntax.Expr.isArrow : Expr → Bool
   | .arrow .. => true
   | _ => false
 
+/-- The methods of a string that the subset has. -/
+def stringMethods : List IR.StringMethod :=
+  [.startsWith, .endsWith, .includes, .indexOf, .trim, .trimStart, .trimEnd, .split, .at, .slice,
+   .padStart, .padEnd, .toUpperCase, .toLowerCase]
+
 /-- The method of a string that `name` names, among those the subset has. -/
 def stringMethod? (name : String) : Option IR.StringMethod :=
-  if name == "startsWith" then some .startsWith
-  else if name == "endsWith" then some .endsWith
-  else if name == "includes" then some .includes
-  else if name == "indexOf" then some .indexOf
-  else if name == "trim" then some .trim
-  else if name == "trimStart" then some .trimStart
-  else if name == "trimEnd" then some .trimEnd
-  else if name == "split" then some .split
-  else none
+  stringMethods.find? (·.name == name)
 
-/-- The types of the arguments that a method of a string takes here. JS converts
-another argument with ToString, which the subset has only on strings, and a
-position argument is not supported. -/
-def StringMethod.params : IR.StringMethod → List Ty
-  | .startsWith | .endsWith | .includes | .indexOf | .split => [.string]
-  | .trim | .trimStart | .trimEnd => []
+/-- The types of the arguments that a method of a string takes here: those
+that a call must pass, then those that it may leave out. JS converts a string
+argument with ToString, which the subset has only on strings, and a number
+argument with ToIntegerOrInfinity, which the translator has only on integer
+literals. -/
+def StringMethod.params : IR.StringMethod → List Ty × List Ty
+  | .startsWith | .endsWith | .includes | .indexOf | .split => ([.string], [.number])
+  | .trim | .trimStart | .trimEnd | .toUpperCase | .toLowerCase => ([], [])
+  | .at => ([.number], [])
+  | .slice => ([], [.number, .number])
+  | .padStart | .padEnd => ([.number], [.string])
+
+/-- The arguments of a call fit the method: there are at least as many as it
+must take and no more than it can, each has the type of its parameter, and
+each number is an integer literal. `types` are the types of the arguments, and
+`lits` are the integer literals that they are. -/
+def StringMethod.fits (m : IR.StringMethod) (types : List Ty) (lits : List (Option Int)) : Bool :=
+  let all := (StringMethod.params m).1 ++ (StringMethod.params m).2
+  (StringMethod.params m).1.length ≤ types.length && types.length ≤ all.length &&
+    types == all.take types.length && (types.zip lits).all fun (t, k) => t != .number || k.isSome
+
+/-- What a call of the method must pass, for the message that refuses another
+call. -/
+def StringMethod.usage (method : String) : IR.StringMethod → String
+  | .startsWith | .endsWith | .includes | .indexOf =>
+    s!"'{method}' takes a string and perhaps a position, an integer literal"
+  | .split => "'split' takes a string separator and perhaps a limit, an integer literal"
+  | .trim | .trimStart | .trimEnd | .toUpperCase | .toLowerCase => s!"'{method}' takes no arguments"
+  | .at => "'at' on a string takes one integer literal, such as s.at(-1)"
+  | .slice => "'slice' on a string takes at most two integer literals, such as s.slice(1) or s.slice(-2)"
+  | .padStart | .padEnd => s!"'{method}' takes a length, an integer literal, and perhaps a string to fill with"
+
+/-- The longest string that every engine can make. V8 has the smallest limit,
+2^28 - 16 code units on 32-bit systems. JS throws a `RangeError` for a longer
+one, which the model does not. -/
+def maxStringLength : Int := 2 ^ 28 - 16
+
+/-- The call pads to a length that an engine may refuse to make. -/
+def StringMethod.padsTooFar : IR.StringMethod → List (Option Int) → Bool
+  | .padStart, some n :: _ | .padEnd, some n :: _ => maxStringLength < n
+  | _, _ => false
 
 /-- The type of the value of a method of a string. -/
 def StringMethod.result : IR.StringMethod → Ty
   | .startsWith | .endsWith | .includes => .boolean
   | .indexOf => .number
-  | .trim | .trimStart | .trimEnd => .string
+  | .trim | .trimStart | .trimEnd | .slice | .padStart | .padEnd | .toUpperCase | .toLowerCase => .string
   | .split => .array .string
+  | .at => .optional .string
 
 /-- The edition from which a method of a string means what the model says,
 when that is later than ES2015. -/
 def StringMethod.feature : IR.StringMethod → Option Feature
   | .trim => some .trimWhiteSpace
   | .trimStart | .trimEnd => some .trimStartEnd
+  | .padStart | .padEnd => some .stringPad
+  | .at => some .stringAt
   | _ => none
+
+/-- `JSON.stringify` gives a string on a value of type `t`, and the Lean value
+fixes the text: a string, a number, a boolean, `null`, a member of a literal
+union, or an array, a tuple or a nullable value of such values. Two JS values
+that Tolean gives the same Lean value must give the same text, or a theorem
+about the output could be false in JS. An object breaks that: a caller may
+pass `{ y: 1, x: 2 }` for an interface that declares `x` first, or an object
+with more properties, and `JSON.stringify` writes them in their own order. A
+map or a set could carry properties of its own too. A bigint makes
+`JSON.stringify` throw (ECMA-262 §25.5.2.2), `undefined` gives `undefined`,
+and a type parameter could be either. Two types that Lean writes alike break
+it too. Lean writes `[A, [B, C]]` and `[A, B, C]` both as `A × B × C`, so a
+tuple whose last element is a tuple is refused. A type of one string literal,
+such as `'circle'`, is a tag, which another literal could share. `fuel`
+bounds the depth of the type. -/
+def Ty.jsonSafe : Nat → Ty → Bool
+  | 0, _ => false
+  | fuel + 1, t =>
+    match t with
+    | .number | .boolean | .string | .null | .enum _ => true
+    | .nullable v | .array v => Ty.jsonSafe fuel v
+    | .tuple ts => !(ts.getLast?.any (· matches .tuple _)) && ts.all (Ty.jsonSafe fuel)
+    | _ => false
+
+/-- How deep `JSON.stringify` may look into the type of its argument. -/
+def jsonDepth : Nat := 64
+
+/-- The code for `JSON.stringify(x)`, where `a` is the code of `x`, at `span`. -/
+def jsonCall (span : Span) (a : Code) : TM Code := do
+  unless Ty.jsonSafe jsonDepth a.type do
+    reject span ("JSON.stringify needs a string, a number, a boolean or null, or an array, a tuple or a " ++
+      "nullable value of them; an object's text depends on the order of its keys, which a caller chooses")
+  return ⟨.ext .jsonStringify [.ascribe a.value a.type.lean], false, .string⟩
+
+/-- The method changes case, which the model has only on ASCII strings. -/
+def StringMethod.changesCase : IR.StringMethod → Bool
+  | .toUpperCase | .toLowerCase => true
+  | _ => false
+
+/-- The translator can show that the string that `e` gives is ASCII: a
+literal of ASCII text, or `+`, `trim`, `trimStart`, `trimEnd`, `slice` or a
+case change of such strings. -/
+def asciiString : IR.Expr → Bool
+  | .string text => text.toList.all fun (c : Char) => c.toNat < 0x80
+  | .ext (.stringAppend .string .string) [a, b] => asciiString a && asciiString b
+  | .ext (.stringMethod m _) (s :: _) =>
+    [IR.StringMethod.trim, .trimStart, .trimEnd, .slice, .toUpperCase, .toLowerCase].contains m &&
+      asciiString s
+  | _ => false
 
 /-- Refuse the code when the target does not have `f`. -/
 def requireFeature? (s : Span) : Option Feature → TM Unit
@@ -1947,19 +2127,23 @@ def requireFeature? (s : Span) : Option Feature → TM Unit
   | none => pure ()
 
 /-- The code for `str.method(args)`, a method of a string, where `str` is the
-code of the receiver and `args` are the codes of the arguments. -/
-def stringCall (s : Span) (method : String) (str : Code) (args : List Code) : TM Code :=
+code of the receiver, `args` are the codes of the arguments, and `lits` are
+the integer literals that the arguments are. -/
+def stringCall (s : Span) (method : String) (str : Code) (args : List Code) (lits : List (Option Int)) :
+    TM Code :=
   if str.type == .string then
     match stringMethod? method with
     | some m =>
-      if args.length == (StringMethod.params m).length then
-        if args.map (·.type) == StringMethod.params m then do
+      if StringMethod.fits m (args.map (·.type)) lits then
+        if StringMethod.padsTooFar m lits then
+          reject s s!"'{method}' to more than {maxStringLength} code units could make a string that an engine refuses"
+        else if StringMethod.changesCase m && !asciiString str.value then
+          reject s (s!"'{method}' is supported only on a string that is ASCII, such as a literal; " ++
+            "on other strings its result depends on the Unicode version of the engine")
+        else do
           requireFeature? s (StringMethod.feature m)
-          return ⟨.ext (.stringMethod m) (str.value :: args.map (·.value)), false, StringMethod.result m⟩
-        else reject s s!"the argument of '{method}' must be a string"
-      else reject s (if (StringMethod.params m).isEmpty then s!"'{method}' takes no arguments"
-        else if m == .split then s!"'{method}' takes one string here; a limit is not supported"
-        else s!"'{method}' takes one string here; a position argument is not supported")
+          return ⟨.ext (.stringMethod m lits) (str.value :: args.map (·.value)), false, StringMethod.result m⟩
+      else reject s (StringMethod.usage method m)
     | none => reject s s!"the string method '{method}' is not supported here"
   else reject s s!"only a string has the method '{method}' here"
 
@@ -2434,6 +2618,14 @@ def translateElements (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span)
 def translateCall (fuel : Nat) (env : Env) (s : Span) (callee : Expr) (args : List Expr) (top : Bool) :
     TM Code := do
   let fuel + 1 := fuel | tooDeep
+  -- `JSON.stringify(x)`: an opaque function of the value, on a value whose
+  -- text JS gives and which the Lean value fixes.
+  if let .member _ (.ident _ "JSON") method := callee then
+    if env.has "JSON" then reject s "a local named JSON hides the global JSON"
+    unless method == "stringify" do reject s "only JSON.stringify is supported"
+    let [arg] := args | reject s "JSON.stringify takes one value here; a replacer and an indent are not supported"
+    let a ← translateExpr fuel env none arg
+    return ← jsonCall arg.span a
   -- `Number.isNaN(x)` and the like. TypeScript lets them take any value; the
   -- model has them on numbers only.
   if let .member _ (.ident _ "Number") test := callee then
@@ -2464,6 +2656,7 @@ def translateCall (fuel : Nat) (env : Env) (s : Span) (callee : Expr) (args : Li
     reject s s!"the global {name} converts its argument to a number; use Number.{name}"
   let fn ← orReject (env.functions.find? (·.name == name)) s noCallMessage
   if env.has name then noCall
+  checkCrossFileThrow s name fn
   checkThrowingCall s name fn top
   -- A call may leave out optional parameters, which come last. Each is
   -- `undefined` then, and the output passes `none` for it.
@@ -2521,7 +2714,7 @@ def translateArrayMethod (fuel : Nat) (env : Env) (expected : Option Ty) (s : Sp
   -- `xs.map((x, i) => e)` becomes `List.mapIdx`, whose function binds the
   -- index as a number.
   if let some (p, q, body) := indexedCallbackOf method args then
-    if recv.namesNumber then reject recv.span "only an array has this method"
+    if recv.namesGlobal then reject recv.span "only an array has this method"
     let xs ← translateExpr fuel env none recv
     let elem ← orReject xs.type.element? recv.span "only an array has this method"
     checkParamType p elem
@@ -2538,7 +2731,7 @@ def translateArrayMethod (fuel : Nat) (env : Env) (expected : Option Ty) (s : Sp
       "xs.map(x => x + 1n). Only the callback of map may also take the index, " ++
       "and no callback may take the array yet")
   -- `Number.map` is a property of the global `Number`, not of an array.
-  if recv.namesNumber then reject recv.span "only an array has this method"
+  if recv.namesGlobal then reject recv.span "only an array has this method"
   let xs ← translateExpr fuel env none recv
   let elem ← orReject xs.type.element? recv.span "only an array has this method"
   checkParamType p elem
@@ -2571,7 +2764,7 @@ def translateArrayCall (fuel : Nat) (env : Env) (s : Span) (recv : Expr) (method
   let xs ← translateExpr fuel env none recv
   if xs.type == .string then
     let codes ← args.mapM (translateExpr fuel env none)
-    stringCall s method xs codes
+    stringCall s method xs codes (args.map Eval.intLiteral?)
   else
   if xs.type == .date then translateDateCall s method xs args
   else
@@ -2616,7 +2809,7 @@ def translateReduce (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (
   let (a, p, body, init) ← orReject (reducerOf args) s
     ("'reduce' takes an arrow function with two parameters and an initial value, " ++
       "such as xs.reduce((sum, x) => sum + x, 0n)")
-  if recv.namesNumber then reject recv.span "only an array has this method"
+  if recv.namesGlobal then reject recv.span "only an array has this method"
   let xs ← translateExpr fuel env none recv
   let elem ← orReject xs.type.element? recv.span "only an array has this method"
   let i ← translateExpr fuel env expected init
@@ -2653,7 +2846,7 @@ def translateSort (fuel : Nat) (env : Env) (s : Span) (recv : Expr) (method : St
     reject s ("'sort' changes the array that it sorts, so it may sort only a new array, " ++
       "such as [...xs].sort(cmp); use xs.toSorted(cmp)")
   requireFeature s (if method == "sort" then .stableSort else .arrayToSorted)
-  if recv.namesNumber then reject recv.span "only an array has this method"
+  if recv.namesGlobal then reject recv.span "only an array has this method"
   let xs ← translateExpr fuel env none recv
   let elem ← orReject xs.type.element? recv.span "only an array has this method"
   -- The spec puts `undefined` last without calling the comparator.
@@ -2686,7 +2879,7 @@ def translateMapMethod (fuel : Nat) (env : Env) (s : Span) (recv : Expr) (op : I
     (args : List Expr) : TM Code := do
   let fuel + 1 := fuel | tooDeep
   -- `Number.get` would be a property of the global `Number`, not of a map.
-  if recv.namesNumber then reject recv.span "only a map or a set has get and has"
+  if recv.namesGlobal then reject recv.span "only a map or a set has get and has"
   let [key] := args | reject s "get and has take one key"
   if key matches .arrow .. then reject key.span "a key cannot be an arrow function"
   let o ← translateRecv (translateExpr fuel env none) env recv
@@ -2935,12 +3128,9 @@ def translateAnnotation : Option TypeExpr → TM (Option Ty)
 
 /-- `const x = f(a)` or `let x = f(a)`, where `f` can throw: the call of the
 output, and the scope after the declaration. The output passes the error of
-the call on, so the declaration must be in the statements that end the
-function. -/
-def translateBindHead (env : Env) (s : Span) (d : VarDecl) (tail : Tail) (cs sp : Span) (name : String)
+the call on. -/
+def translateBindHead (env : Env) (s : Span) (d : VarDecl) (cs sp : Span) (name : String)
     (args : List Expr) : TM (DeclRef × List IR.Expr × Env) := do
-  unless tail.isRet do
-    reject s "a call of a function that can throw may stand only in the statements that end the function"
   let code ← translateCall (← fuelLimit) env cs (.ident sp name) args true
   let declared ← translateAnnotation d.type
   unless declared.all (· == code.type) do reject s "the call must have the declared type"
@@ -2949,15 +3139,52 @@ def translateBindHead (env : Env) (s : Span) (d : VarDecl) (tail : Tail) (cs sp 
   return (ref, outs, env')
 
 /-- `return f(a)`, where `f` can throw: the call of the output. The output
-passes the error of the call on, so the `return` must end the function. -/
-def translateReturnCall (env : Env) (s : Span) (tail : Tail) (cs sp : Span) (name : String)
+passes the error of the call on. -/
+def translateReturnCall (env : Env) (s : Span) (cs sp : Span) (name : String)
     (args : List Expr) : TM (DeclRef × List IR.Expr) := do
-  unless tail.isRet do reject s "a loop body may not return a call of a function that can throw"
   let returnType := (← get).returnType
   let code ← translateCall (← fuelLimit) env cs (.ident sp name) args true
   unless code.type == returnType do reject s "the call must have the function's return type"
   let .call ref outs := code.code | reject s "unsupported call"
   return (ref, outs)
+
+/-- `throw new Error(m)` ends the function with the error. `throw new C(m,
+args)`, for an error class `C` of the file as `Eval.Stmt.hoisted` writes it,
+throws `Thrown.«C»` of the message and the fields. -/
+def translateThrow (env : Env) (value : Expr) : TM IR.Body := do
+  match value with
+  | .new _ "Error" [] [msg] =>
+    if env.has "Error" then reject value.span "a local named Error hides the global"
+    let code ← translateExpr (← fuelLimit) env (some .string) msg
+    unless code.type == .string do reject msg.span "the message of an Error must be a string"
+    return .throw ((← get).wrapError (IR.Expr.error code.value))
+  -- `new C(message, args)` with the mark of `Eval.Stmt.hoisted`.
+  | .new sn c [.keyword _ "'"] (msg :: atoms) =>
+    let ctx ← get
+    let some info := env.classes.find? (·.name == c)
+      | reject value.span "tolean supports only 'throw new Error(message)', or 'throw new C(…)' for an error class C of this file"
+    unless ctx.declaredClasses.contains c do reject sn "declare the error class before the function that throws it"
+    if env.has c then reject sn s!"a local named {c} hides the error class"
+    unless atoms.length == info.params.length do reject value.span s!"'{c}' takes {info.params.length} arguments"
+    -- The arguments first: a wrong one is a fault of the throw, and the
+    -- message, written over them, would blame the class for it.
+    let codes ← (atoms.zip info.params).mapM fun (a, (_, t, _)) => do
+      let ca ← translateExpr (← fuelLimit) env (some t) a
+      unless ca.type.assignableTo t do reject a.span "the argument does not have the parameter's type"
+      pure ca
+    let code ← translateExpr (← fuelLimit) env (some .string) msg
+    unless code.type == .string do reject msg.span "the message of an error must be a string"
+    let marks := some "message" :: info.params.map fun (n, _, ro) => if ro then some n else none
+    return .throw (.ext (.errorCase ⟨ctx.file, "Thrown"⟩ c marks) (code.value :: codes.map (·.value)))
+  -- A construction of an error class that the hoisting left alone has the
+  -- wrong number of arguments.
+  | .new _ c _ _ =>
+    match env.classes.find? (·.name == c) with
+    | some info =>
+      let n := if info.hasCtor then info.params.length else 1
+      reject value.span s!"'{c}' takes {n} argument{if n == 1 then "" else "s"}"
+    | none => reject value.span "tolean supports only 'throw new Error(message)', or 'throw new C(…)' for an error class C of this file"
+  | _ => reject value.span "tolean supports only 'throw new Error(message)', or 'throw new C(…)' for an error class C of this file"
 
 /-- The places of a pattern on a tuple `v` of `size` elements, from the
 element `i` on: each name with the type of its element and the code that
@@ -2978,7 +3205,7 @@ def listPlaces (elem : Ty) (li : IR.Expr) : List (Option String) → Nat → Lis
 
 /-- What `const [a, , b, ...r] = e` binds, where `c` is the code of `e`: each
 name, with its type and the code that reads its value. A tuple gives its
-elements. An array, a set or a map gives the values that a loop over it
+elements. An array, a set, a map or a string gives the values that a loop over it
 visits, each optional, and the rest is the list of the values after the
 places. -/
 def patternReads (s : Span) (p : ArrayPattern) (c : Code) : TM (List (String × Ty × IR.Expr)) := do
@@ -2988,7 +3215,7 @@ def patternReads (s : Span) (p : ArrayPattern) (c : Code) : TM (List (String × 
     unless p.elems.length ≤ tys.length do reject s s!"the tuple has only {tys.length} elements"
     return tuplePlaces c.value tys.length p.elems tys 0
   | none =>
-    let (elem, li) ← orReject (loopOver c) s "destructuring needs a tuple, an array, a set or a map"
+    let (elem, li) ← orReject (loopOver c) s "destructuring needs a tuple, an array, a set, a map or a string"
     -- The output has one `none` for `undefined` and `null`.
     if elem.isMaybe then reject s "destructuring an array of nullable values could give null or undefined"
     return listPlaces elem li p.elems 0 ++
@@ -3058,7 +3285,8 @@ def translateForOfPattern (items : TM (Option (Ty × IR.Expr))) (kBody : Env →
     reject s "a loop body may return only where the statements after the loop end in a return"
   let breaks := bodyStatements.any (containsJump true false)
   let names := changedNames bodyStatements env
-  if names.isEmpty && !returns then reject s "a loop must change a local or return"
+  if names.isEmpty && !returns then
+    reject s "a loop must change a local or return; a body that only throws does not count yet"
   let (elemType, loopItems) ← loopItems iterable body (← items)
   let x ← orReject p.names.head? s "a pattern must declare a name"
   let reads ← patternReads s p ⟨.var x, false, elemType⟩
@@ -3067,11 +3295,12 @@ def translateForOfPattern (items : TM (Option (Ty × IR.Expr))) (kBody : Env →
   let step ← orReject (destructureBody p elemType (.var x) reads bodyOut) s "a pattern must declare a name"
   let returnType := (← get).returnType
   let throws := (← get).throws
+  let err := (← get).errorType
   let info : IR.LoopInfo :=
     { span := s, elem := elemType.lean,
       stateTypes := names.filterMap fun n => (env.lookup n).map (·.type.lean),
       scope := (env.locals.filter fun l => !names.contains l.name).map fun l => (l.name, l.type.lean),
-      breaks, returns := if returns then some (leanResult throws returnType) else none }
+      breaks, returns := if returns then some (leanResult err throws returnType) else none }
   return .fold names x step loopItems (← kRest) info
 
 /-- The head of a loop that the output runs as a fold: `for (kind x of xs)`,
@@ -3149,8 +3378,8 @@ def translateStatements (fuel : Nat) (env : Env) (tail : Tail) (statements : Lis
       match throwingCall? env.functions v with
       -- `return f(x)`, where `f` can throw: the output passes its error on.
       | some (cs, sp, name, args) =>
-        let (ref, outs) ← translateReturnCall env s tail cs sp name args
-        return .bind "r" ref outs (.value (IR.Expr.pure (.var "r")))
+        let (ref, outs) ← translateReturnCall env s cs sp name args
+        return .bind "r" ref outs (tail.returnBody (IR.Expr.pure (.var "r")))
       | none =>
         modify fun c => { c with returning := true }
         let returnType := (← get).returnType
@@ -3185,16 +3414,11 @@ def translateStatements (fuel : Nat) (env : Env) (tail : Tail) (statements : Lis
     | .forStmt s init test update body =>
       translateLoop fuel env s (.counted init test update) body rest tail
     | .switchStmt s disc clauses => translateSwitch fuel env s disc clauses rest tail
-    -- `throw new Error(m)` ends the function with the error.
+    -- `throw` ends the function with the error, from a loop body or a branch
+    -- as well: the output runs those in the `Except` monad.
     | .throwStmt s value =>
-      unless rest.isEmpty && tail.isRet do
-        reject s "throw must be the last statement of a function body, or of a branch of an if that ends it"
-      let .new _ "Error" [] [msg] := value
-        | reject value.span "tolean supports only 'throw new Error(message)'"
-      if env.has "Error" then reject value.span "a local named Error hides the global"
-      let code ← translateExpr (← fuelLimit) env (some .string) msg
-      unless code.type == .string do reject msg.span "the message of an Error must be a string"
-      return .throw (IR.Expr.error code.value)
+      unless rest.isEmpty do reject s "code after throw is unreachable"
+      translateThrow env value
     -- `continue` ends one run of the loop body with the state as it is.
     | .continueStmt s =>
       let some next := tail.continues
@@ -3220,7 +3444,7 @@ def translateVariable (fuel : Nat) (env : Env) (s : Span) (d : VarDecl) (rest : 
   -- `const x = f(a)`, where `f` can throw: the output passes its error on, and
   -- binds `x` to the value otherwise.
   | some (cs, sp, name, args) =>
-    let (ref, outs, env') ← translateBindHead env s d tail cs sp name args
+    let (ref, outs, env') ← translateBindHead env s d cs sp name args
     return .bind d.name ref outs (← translateStatements fuel env' tail rest)
   | none =>
     -- `const xs: Array<T> = [...]` (or `T[]`) is an owned array, which the
@@ -3303,12 +3527,12 @@ def translateIf (fuel : Nat) (env : Env) (s : Span) (test : Expr) (thenBranch : 
   -- they join its other branch.
   if let some thenTail := earlyTail tail thenStatements then
     if elseBranch.isSome && !rest.isEmpty then
-      reject s thenTail.afterEarlyReason
+      reject s (if (earlyTail tail elseStatements).isSome then bothEndReason else afterEarlyReason)
     let whenTrue ← translateStatements fuel envTrue thenTail thenStatements
     let whenFalse ← translateStatements fuel envFalse tail (elseStatements ++ rest)
     return (← branch whenTrue whenFalse)
   if (thenStatements ++ elseStatements).any (containsJump true true) then
-    reject s "a branch that does not always return may not return, throw, break or continue"
+    reject s "a branch that does not always return may not return, break or continue"
   let names := changedNames (thenStatements ++ elseStatements) env
   if names.isEmpty then reject s "an if without a return must change a local"
   let tested := match nullTest, tagTest with
@@ -3337,7 +3561,7 @@ def translateSwitch (fuel : Nat) (env : Env) (s : Span) (disc : Expr)
   | (some _, _) :: _ =>
     if tail.isRet && clauses.all (fun c => alwaysReturns (clauseStatements c.2)) then
       translateClauses fuel env s sw sw.tags none clauses rest
-    else if clauses.dropLast.any (fun c => !(alwaysReturns (clauseStatements c.2) || endsInBreak c.2)) then
+    else if clauses.dropLast.any (fun c => !(alwaysReturns (clauseStatements c.2) || clauseEnds c.2)) then
       reject s fallthroughReason
     else
       -- The clauses end in `break` and change locals, as the branches of an
@@ -3445,14 +3669,14 @@ def translateStateClauses (fuel : Nat) (env : Env) (s : Span) (sw : SwitchOn) (t
     | _ => reject test.span "a case of a switch on a tag must be a string"
 
 /-- One clause of a `switch` whose clauses end in `break`: its statements,
-which end in the state of `names`. Only the last clause may leave out its
-`break`. -/
+which end in the state of `names`, or throw. Only the last clause may leave
+out its `break`. -/
 def translateStateClause (fuel : Nat) (env : Env) (s : Span) (names : List String) (last : Bool)
     (body : List Stmt) : TM IR.Body := do
   let fuel + 1 := fuel | tooDeep
-  if !(last || endsInBreak body) then reject s fallthroughReason
+  if !(last || clauseEnds body) then reject s fallthroughReason
   else if anyContainsJump true true (dropBreak body) then
-    reject s "a clause of a switch that ends in break may not return, throw, break or continue before its end"
+    reject s "a clause of a switch that ends in break may not return, break or continue before its end"
   else translateStatements fuel env (.state names) (dropBreak body)
 
 def translateLoop (fuel : Nat) (env : Env) (s : Span) (head : LoopHead) (body : Stmt)
@@ -3467,17 +3691,19 @@ def translateLoop (fuel : Nat) (env : Env) (s : Span) (head : LoopHead) (body : 
     reject s "a loop body may return only where the statements after the loop end in a return"
   let breaks := bodyStatements.any (containsJump true false)
   let names := changedNames bodyStatements env
-  if names.isEmpty && !returns then reject s "a loop must change a local or return"
+  if names.isEmpty && !returns then
+    reject s "a loop must change a local or return; a body that only throws does not count yet"
   let (element, elemType, loopItems) ← loopHead env s body head
   let bodyEnv ← declare env s element .const elemType
   let bodyOut ← translateStatements fuel bodyEnv (.loop names breaks returns) bodyStatements
   let returnType := (← get).returnType
   let throws := (← get).throws
+  let err := (← get).errorType
   let info : IR.LoopInfo :=
     { span := s, elem := elemType.lean,
       stateTypes := names.filterMap fun n => (env.lookup n).map (·.type.lean),
       scope := (env.locals.filter fun l => !names.contains l.name).map fun l => (l.name, l.type.lean),
-      breaks, returns := if returns then some (leanResult throws returnType) else none }
+      breaks, returns := if returns then some (leanResult err throws returnType) else none }
   return .fold names element bodyOut loopItems (← translateStatements fuel env tail rest) info
 
 end
@@ -3503,7 +3729,7 @@ def Ctx.taken (ctx : Ctx) (name : String) : Bool :=
 
 def declareTopLevel (s : Span) (name : String) : TM Unit := do
   let ctx ← get
-  if ctx.taken name then
+  if ctx.taken name || ctx.errorClasses.any (·.name == name) then
     reject s s!"'{name}' is declared twice"
   -- A declaration of the module hides the global of the same name, and the
   -- subset reads these names as the globals.
@@ -3819,17 +4045,25 @@ def paramType (span : Span) (optional : Bool) (type : TypeExpr) (before : List T
   if ty.isNullable || ty == .null then reject span "an optional parameter may not also be nullable"
   return .optional ty
 
-def translateFunction (s : Span) (exported : Bool) (name : String) (typeParams : List String)
+def translateFunction (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr)))
+    (classes : List ClassInfo) (s : Span) (exported : Bool) (name : String) (typeParams : List String)
     (params : List Param) (returnType : Option TypeExpr) (body : Stmt) : TM IR.Decl := do
   let some returnType := returnType
     | reject s "functions must be named, typed and synchronous"
+  -- Each call that can throw moves out of its statement into a `const` of
+  -- its own, as the model runs the body (`Eval.Stmt.hoisted`). So the body
+  -- translated here is the body the model runs, and a call of a function
+  -- that can throw meets the translator only as the whole value of a
+  -- declaration or a `return`, or in a place that JS may not evaluate.
+  let body := Eval.Stmt.hoisted thr cls body
   let name ← checkName s name
   declareTopLevel s name
   checkTypeParams s (fun v => params.any fun p => (p.type.map (typeNames v)).getD false) [] typeParams
   modify fun c => { c with typeParams }
   -- The scope of the body, and the parameters in Lean and as types.
   let ctx ← get
-  let start : Env := { functions := ctx.functions, unions := ctx.knownUnions, enums := ctx.enumValues }
+  let start : Env :=
+    { functions := ctx.functions, unions := ctx.knownUnions, enums := ctx.enumValues, classes }
   let (env, leanParams, types) ← isolated <| params.foldlM
     (init := (start, ([] : List (String × IR.Ty)), ([] : List Ty)))
     fun (env, leanParams, types) p => do
@@ -3845,7 +4079,8 @@ def translateFunction (s : Span) (exported : Bool) (name : String) (typeParams :
   -- The body may call the function itself. Lean must see that the calls
   -- end, so each must pass a part of one parameter, the same one in every
   -- call.
-  let self : FnInfo := { file := ctx.file, name, exported, typeParams, params := types, ret, throws }
+  let self : FnInfo :=
+    { file := ctx.file, name, exported, typeParams, params := types, ret, throws, hoists := thr name }
   let out ← isolated (translateStatements (← fuelLimit) { env with functions := env.functions ++ [self] } .ret
     (blockStatements body))
   if out.calls self.ref && (out.decreasingParam? self.ref leanParams).isNone then
@@ -3857,7 +4092,7 @@ def translateFunction (s : Span) (exported : Bool) (name : String) (typeParams :
     reject s ("a function may change only an array, a map or a set that it makes in a const, under a " ++
       "name that no other variable of it has, and may hand it on only in its return value")
   modify fun c => { c with typeParams := [], throws := false, functions := c.functions ++ [self] }
-  return .function name leanParams (leanResult throws ret) out
+  return .function name leanParams (leanResult ctx.errorType throws ret) out
 
 /-! ### The number model -/
 
@@ -3974,6 +4209,10 @@ def moduleUsesNumber (m : Module) : Bool :=
       isNumberName name || fields.any fun f => isNumberName f.name || typeUsesNumber f.type
     | .typeAlias _ _ name _ type => isNumberName name || typeUsesNumber type
     | .enum _ _ name _ => isNumberName name
+    | .errorClass _ _ name ctor =>
+      isNumberName name || ctor.any fun (ps, m) =>
+        ps.any (fun p => isNumberName p.param.name || (p.param.type.map typeUsesNumber).getD false) ||
+          exprUsesNumber m
     | .exportedVar _ d => varUsesNumber d
     | .stmt st => stmtUsesNumber st
 
@@ -4055,6 +4294,10 @@ def exportsError? (c : Ctx) (names : List ImportName) : Option (Span × String) 
         | some true => some (n.span, s!"'{n.name}' is exported already")
         | some false => none
         | none => some (n.span, s!"this file declares no interface or type named '{n.name}' before this export list")
+      -- An error class may be in an export list, as a function may. No file
+      -- can import one yet, so the list changes nothing for it.
+      else if let some k := c.errorClasses.find? fun k => k.file == c.file && k.name == n.name then
+        if k.exported then some (n.span, s!"'{n.name}' is exported already") else none
       else
         match ownFn, ownType with
         | some f, _ => if f.exported then some (n.span, s!"'{n.name}' is exported already") else none
@@ -4062,9 +4305,80 @@ def exportsError? (c : Ctx) (names : List ImportName) : Option (Span × String) 
         | none, none =>
           some (n.span, s!"this file declares no function named '{n.name}' before this export list")
 
-/-- One declaration: an output declaration, or none for an import or an
-export list. -/
-def translateDecl : Decl → TM (Option IR.Decl)
+/-- A parameter of the constructor of an error class: its name, its type and
+whether it is `readonly`, so a field of the error. -/
+def translateCtorParam (p : CtorParam) : TM (String × Ty × Bool) := do
+  if p.param.optional then reject p.param.span "a parameter of a constructor may not be optional"
+  let type ← orReject p.param.type p.param.span "parameters must be plain, typed identifiers"
+  let pname ← checkLocalName p.param.span p.param.name
+  -- JS assigns a parameter property after `super(…)` returns, so one named
+  -- `message` would replace the message. `Error` owns the others too.
+  if ["message", "name", "stack", "cause"].contains pname then
+    reject p.param.span s!"a parameter of an error class may not be named {pname}, which Error owns"
+  let ty ← translateType type
+  unless ty matches .bigint | .number | .boolean | .string do
+    reject p.param.span "a parameter of an error class must be a bigint, a number, a boolean or a string"
+  pure (pname, ty, p.readonly)
+
+/-- An error class: its name is taken, its parameters have primitive types,
+and its message is a string over its parameters. The class is recorded for
+the `throw`s of the file. -/
+def translateErrorClass (s : Span) (exported : Bool) (name : String) (ctor : Option (List CtorParam × Expr)) :
+    TM ClassInfo := do
+  let name ← checkName s name
+  if name == "error" then
+    reject s "an error class may not be named error, the constructor of Thrown for new Error(message)"
+  declareTopLevel s name
+  -- The checks of the constructor read the state and change nothing.
+  let params ← isolated <| match ctor with
+    | none => pure []
+    | some (ps, message) => do
+      let params ← ps.mapM translateCtorParam
+      if (params.map (·.1)).eraseDups.length != params.length then
+        reject s "a parameter of the constructor is declared twice"
+      -- The message is a string over the parameters. A `throw` writes it
+      -- over the arguments, which `Eval.Stmt.hoisted` has moved to names.
+      -- The classes come before the functions of the file, so it may call
+      -- none of them.
+      unless (Eval.Expr.callNames message).isEmpty do
+        reject message.span ("the message of an error class may not call a function; " ++
+          "it is an expression over the parameters of the constructor")
+      let ctx ← get
+      let env : Env := params.foldl (fun env (n, t, _) => env.add { name := n, binding := .param, type := t })
+        { functions := ctx.functions, unions := ctx.knownUnions, enums := ctx.enumValues }
+      let code ← isolated (translateExpr (← fuelLimit) env (some .string) message)
+      unless code.type == .string do reject message.span "the message of an error must be a string"
+      pure params
+  let info : ClassInfo := { file := (← get).file, name, exported, hasCtor := ctor.isSome, params }
+  modify fun c => { c with errorClasses := c.errorClasses ++ [info] }
+  return info
+
+/-- The error class that `d` declares, translated, or none for another
+declaration. -/
+def translateErrorClass? : Decl → TM (Option ClassInfo)
+  | .errorClass s exported name ctor => some <$> translateErrorClass s exported name ctor
+  | _ => pure none
+
+/-- The error classes of `m`, before its declarations translate. When `m`
+declares one, the output starts with `Thrown`, the inductive of the errors
+that the file's functions can throw: `error` holds a `JSError`, and each
+class has a constructor with the message and its fields. It comes first
+because the functions name it, and it names only `JSError` and primitive
+types. -/
+def translateErrorTypes (m : Module) : TM (List IR.Decl) := do
+  let classes := (← m.decls.mapM translateErrorClass?).filterMap id
+  if classes.isEmpty then return []
+  let span := ((m.decls.find? (· matches .errorClass ..)).map (·.span)).getD default
+  declareTopLevel span "Thrown"
+  let members := ("error", [("value", IR.Ty.error)]) :: classes.map fun c =>
+    (c.name, ("message", IR.Ty.string) :: c.fields.map fun (n, t) => (n, t.lean))
+  return [.errors "Thrown" members]
+
+/-- One declaration: an output declaration, or none for an import, an
+export list or an error class, whose types `translateErrorTypes` wrote. A
+function may throw an error of `classes`, the error classes of the file. -/
+def translateDecl (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr)))
+    (classes : List ClassInfo) : Decl → TM (Option IR.Decl)
   | .import s names source => do translateImport s names source; return none
   | .exports s names source => do
     if source.isSome then
@@ -4074,8 +4388,13 @@ def translateDecl : Decl → TM (Option IR.Decl)
   | .interface s exported name typeParams fields => some <$> translateInterface s exported name typeParams fields
   | .typeAlias s exported name typeParams type => some <$> translateAlias s exported name typeParams type
   | .function s exported name typeParams params ret body =>
-    some <$> translateFunction s exported name typeParams params ret body
+    some <$> translateFunction thr cls classes s exported name typeParams params ret body
   | .enum s exported name members => some <$> translateStringEnum s exported name members
+  -- `translateErrorTypes` has checked the class and written its constructor
+  -- of `Thrown`. From here on, a `throw` may make an error of it.
+  | .errorClass _ _ name _ => do
+    modify fun c => { c with declaredClasses := c.declaredClasses ++ [name] }
+    return none
   | d => reject d.span "only imports, interfaces, types, enums and functions may appear at top level"
 
 /-- The names of the export lists of `m` that name declarations of the file:
@@ -4096,7 +4415,9 @@ from one syntax tree to another: `translate` parses the source before it and
 prints the result after it. -/
 def translateDecls (m : Module) : TM (List IR.Decl) := do
   if let some n := duplicateExport? m then reject n.span s!"'{n.name}' is in two export lists"
-  return (← m.decls.mapM translateDecl).filterMap id
+  let types ← translateErrorTypes m
+  let classes := (← get).errorClasses
+  return types ++ (← m.decls.mapM (translateDecl (Eval.mayThrow m) (Eval.errorClassOf m) classes)).filterMap id
 
 mutual
 
@@ -4180,7 +4501,7 @@ def Ctx.interface (c : Ctx) (usesNumber : Bool) (numberVar : String) : Interface
     aliases := c.aliases.filter fun a => a.exported && a.file == c.file,
     enums := c.reachableEnums,
     unions := c.reachableUnions,
-    usesNumber, numberVar, target := c.target }
+    usesNumber, numberVar, target := c.target, errorClasses := !c.errorClasses.isEmpty }
 
 def lineStarts (src : Array Char) : Array Nat := Id.run do
   let mut starts := #[0]
@@ -4295,7 +4616,7 @@ def translateWith (file source ns : String) (target : Edition := .default)
   -- A function that can throw returns `Except JSError R`, and `JSError`
   -- holds a string.
   let throws := decls.any fun
-    | .function _ _ (.except ..) _ => true
+    | .function _ _ (.except ..) _ | .errors .. => true
     | _ => false
   let header :=
     (if usesDate then ["import tolean.TypeScript.Spec.Date"]
