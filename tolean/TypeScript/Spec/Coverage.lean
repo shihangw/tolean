@@ -147,7 +147,7 @@ def sections : List Section := [
     [``Proof.fold_sim, ``shorthand_reads_global, ``Proof.translateObject_sound, ``Proof.eval_spread,
     ``Proof.spreadOf_some, ``Proof.spreadFieldType_ok, ``Proof.translateSpread_sound]⟩,
   ⟨"sec-grouping-operator", "13.2.9", "The Grouping Operator",
-    [``Proof.eval_stripParens]⟩,
+    [``Proof.eval_stripParens, ``Syntax.Expr.sizeOf_stripParens_le]⟩,
   ⟨"sec-property-accessors", "13.3.2", "Property Accessors", [``Proof.translateMember_sound, ``Eval.eval_index_str, ``Eval.getKey_ofString, ``Eval.find?_fst_lookup,
     ``Coverage.index_lone_surrogate]⟩,
   ⟨"sec-function-calls", "13.3.6", "Function Calls",

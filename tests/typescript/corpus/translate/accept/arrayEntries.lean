@@ -55,4 +55,15 @@ def indexSum {N : Type} [JSNumber N] (xs : List Bool) : N :=
 def pairs {N : Type} [JSNumber N] (xs : List JSString) : List (N × JSString) :=
   (JSNumber.entries (N := N) xs)
 
+def parenSum {N : Type} [JSNumber N] (xs : List Int) : Int :=
+  let total := (0 : Int)
+  let total :=
+    List.foldl
+      (fun (total : Int) (x : (N × Int)) =>
+        let x := x.2
+        let total := (total + x)
+        total)
+      total (JSNumber.entries (N := N) xs)
+  total
+
 end Test

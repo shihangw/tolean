@@ -1794,19 +1794,31 @@ termination_by (fuel, sizeOf e, 1)
 
 /-- The values that a form which iterates `e` visits (`GetIterator`, ECMA-262
 §7.4.3): those that `iterValues` gives for the value of `e`, except for a
-call `xs.entries()`. That call makes a new iterator (§23.1.3.4 on an array,
-§24.1.3.4 on a map), which the form uses up at once. An array's iterator
-gives each element with its index, as `[i, x]`, and a map's gives its
-entries, as iterating the map does. The subset reads an iterator nowhere
-else, so `eval` gives `xs.entries()` no value. -/
-def evalIter (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (List (Val N))
+call `xs.entries()`, in any number of parentheses. That call makes a new
+iterator (§23.1.3.4 on an array, §24.1.3.4 on a map), which the form uses
+up at once. An array's iterator gives each element with its index, as
+`[i, x]`, and a map's gives its entries, as iterating the map does. The
+subset reads an iterator nowhere else, so `eval` gives `xs.entries()` no
+value. -/
+def evalIter (m : Scope) (fuel : Nat) (env : Env N) (e : Expr) : Option (List (Val N)) :=
+  match _h : e.stripParens with
   | .call _ (.member _ recv "entries") [] => do
     match ← eval m fuel env recv with
     | .list items => return entriesOf items
     | .map entries => iterValues (.map entries)
     | _ => none
-  | e => do iterValues (← eval m fuel env e)
-termination_by e => (fuel, sizeOf e, 1)
+  | _ => do iterValues (← eval m fuel env e)
+termination_by (fuel, sizeOf e, 1)
+-- The receiver is a part of what `stripParens` gives, which is no larger
+-- than `e`.
+decreasing_by
+  all_goals first
+    | decreasing_tactic
+    | (simp_wf
+       have hle := Expr.sizeOf_stripParens_le e
+       rw [_h] at hle
+       simp only [Expr.call.sizeOf_spec, Expr.member.sizeOf_spec, List.nil.sizeOf_spec] at hle
+       exact Prod.Lex.right _ (Prod.Lex.left _ _ (by omega)))
 
 def evalList (m : Scope) (fuel : Nat) (env : Env N) : List Expr → Option (List (Val N))
   | [] => some []

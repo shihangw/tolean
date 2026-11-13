@@ -1803,9 +1803,10 @@ def loopOver (items : Code) : Option (Ty × IR.Expr) :=
   | .string => some (.string, .ext .stringCodePoints [items.value])
   | _ => none
 
-/-- The receiver `xs` of a call `xs.entries()`, which the spec's `evalIter`
-reads as an iterator. -/
-def entriesRecv? : Expr → Option Expr
+/-- The receiver `xs` of a call `xs.entries()`, in any number of
+parentheses, which the spec's `evalIter` reads as an iterator. -/
+def entriesRecv? (e : Expr) : Option Expr :=
+  match e.stripParens with
   | .call _ (.member _ recv "entries") [] => some recv
   | _ => none
 

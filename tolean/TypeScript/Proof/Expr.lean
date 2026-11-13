@@ -3734,35 +3734,47 @@ theorem loopOver_sim {env : Translate.Env} {iterable : Expr} {items : Code} {ele
 /-! ### What a form that iterates visits -/
 
 omit [JSNumber N] in
+/-- Without its parentheses, `e` is the call `xs.entries()`. -/
 theorem entriesRecv?_some {e recv : Expr} (h : entriesRecv? e = some recv) :
-    ∃ sp sp', e = .call sp (.member sp' recv "entries") [] := by
+    ∃ sp sp', e.stripParens = .call sp (.member sp' recv "entries") [] := by
   unfold entriesRecv? at h
   split at h
-  · cases h; exact ⟨_, _, rfl⟩
+  · cases h; exact ⟨_, _, ‹_›⟩
   · cases h
 
 /-- An iterable other than `xs.entries()` gives what `iterValues` gives for
 its value. -/
 theorem evalIter_other {e : Expr} (h : entriesRecv? e = none) (ρ : Eval.Env N) :
     Eval.evalIter m fuel ρ e = (Eval.eval m fuel ρ e).bind Eval.iterValues := by
+  unfold entriesRecv? at h
   rw [Eval.evalIter]
-  all_goals first
-    | rfl
-    | (intros; subst_vars; simp [entriesRecv?] at h)
+  split at h
+  · cases h
+  · rename_i hne
+    split
+    · rename_i sp sp' recv heq; exact absurd heq (hne sp sp' recv)
+    · rfl
 
-/-- `xs.entries()` gives each element of an array with its index, and the
-entries of a map. -/
-theorem evalIter_entries (sp sp' : Span) (recv : Expr) (ρ : Eval.Env N) :
-    Eval.evalIter m fuel ρ (.call sp (.member sp' recv "entries") []) =
+/-- `xs.entries()`, in any number of parentheses, gives each element of an
+array with its index, and the entries of a map. -/
+theorem evalIter_entries {e recv : Expr} (h : entriesRecv? e = some recv) (ρ : Eval.Env N) :
+    Eval.evalIter m fuel ρ e =
       (Eval.eval m fuel ρ recv).bind fun
         | .list items => some (Eval.entriesOf items)
         | .map es => Eval.iterValues (.map es)
         | _ => none := by
+  obtain ⟨sp, sp', hs⟩ := entriesRecv?_some h
   rw [Eval.evalIter]
-  generalize Eval.eval m fuel ρ recv = r
-  cases r with
-  | none => rfl
-  | some w => cases w <;> rfl
+  split
+  · rename_i sp₁ sp₁' recv' heq
+    rw [hs] at heq
+    cases heq
+    generalize Eval.eval m fuel ρ recv = r
+    cases r with
+    | none => rfl
+    | some w => cases w <;> rfl
+  · rename_i hne
+    exact absurd hs (hne sp sp' recv)
 
 /-- What a form that iterates `iterable` visits in the output, when `iterOf`
 found `found`, is what the interpreter's `evalIter` visits. -/
@@ -3785,12 +3797,11 @@ theorem iterOf_sim {env : Translate.Env} {trItems trRecv : Expr → TM Code} {it
     rw [evalIter_other m fuel he, hv]
     simpa using hiter
   | some recv =>
-    obtain ⟨sp, sp', rfl⟩ := entriesRecv?_some he
     simp only [he, bind_ok] at h
     obtain ⟨xs, s₁, hxs, h⟩ := h
     have hsim := hR _ _ _ _ hxs
     intro t li hfound ρs ρo vs ha hs hi
-    rw [evalIter_entries]
+    rw [evalIter_entries m fuel he]
     generalize hty : xs.type = ty at h
     cases ty
     case array elem =>

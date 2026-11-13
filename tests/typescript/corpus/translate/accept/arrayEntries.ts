@@ -34,3 +34,12 @@ export function indexSum(xs: ReadonlyArray<boolean>): number {
 export function pairs(xs: ReadonlyArray<string>): ReadonlyArray<[number, string]> {
   return [...xs.entries()];
 }
+
+// Parentheses around the call change nothing.
+export function parenSum(xs: ReadonlyArray<bigint>): bigint {
+  let total = 0n;
+  for (const [, x] of (xs.entries())) {
+    total = total + x;
+  }
+  return total;
+}
