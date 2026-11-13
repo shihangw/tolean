@@ -3286,11 +3286,16 @@ def stmtDeclaresFunction : Stmt → Bool
   | .ifStmt _ _ t none => stmtDeclaresFunction t
   | .forOfStmt _ _ _ _ body | .forOfPattern _ _ _ _ body | .forStmt _ _ _ _ body | .whileStmt _ _ body =>
     stmtDeclaresFunction body
+  | .switchStmt _ _ clauses => clausesDeclareFunction clauses
   | _ => false
 
 def stmtsDeclareFunction : List Stmt → Bool
   | [] => false
   | s :: rest => stmtDeclaresFunction s || stmtsDeclareFunction rest
+
+def clausesDeclareFunction : List (Option Expr × List Stmt) → Bool
+  | [] => false
+  | (_, body) :: rest => stmtsDeclareFunction body || clausesDeclareFunction rest
 
 end
 
@@ -3468,7 +3473,11 @@ def translateLocalHead (env : Env) (s : Span) (name : String) (typeParams : List
   for c in changes do
     unless (captured.find? (·.name == c)).any (·.binding == .«let») do
       reject s s!"a local function may change only a let local of the function around it, and '{c}' is not one"
-  if stmtsThrow env.functions (blockStatements body) then reject s "a local function may not throw"
+  -- A call that can throw may stand anywhere in the body, inside a larger
+  -- expression too, so look at every call, as the hoisting of such calls does.
+  if stmtsThrow env.functions (blockStatements body) ||
+      (Eval.Stmt.callNames body).any (fun n => (env.functions.find? (·.name == n)).any (·.throws)) then
+    reject s "a local function may not throw"
   let ret ← match returnType with
     | .keyword _ "void" => pure none
     | t => some <$> translateType t
