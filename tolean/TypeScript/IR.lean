@@ -63,14 +63,14 @@ deriving BEq, Repr, Inhabited, DecidableEq
 /-- A method of a string that the subset has. -/
 inductive StringMethod where
   | startsWith | endsWith | includes | indexOf | trim | trimStart | trimEnd | split
-  | at | slice | padStart | padEnd
+  | at | slice | padStart | padEnd | toUpperCase | toLowerCase
 deriving BEq, Repr, Inhabited, DecidableEq
 
 def StringMethod.name : StringMethod → String
   | .startsWith => "startsWith" | .endsWith => "endsWith" | .includes => "includes"
   | .indexOf => "indexOf" | .trim => "trim" | .trimStart => "trimStart" | .trimEnd => "trimEnd"
   | .split => "split" | .at => "at" | .slice => "slice" | .padStart => "padStart"
-  | .padEnd => "padEnd"
+  | .padEnd => "padEnd" | .toUpperCase => "toUpperCase" | .toLowerCase => "toLowerCase"
 
 /-- An integer literal as a Lean term, in parentheses when it is negative. -/
 def intTerm (k : Int) : String := if 0 ≤ k then s!"{k}" else s!"({k})"
@@ -85,6 +85,8 @@ def StringMethod.leanName : StringMethod → Nat → String
   | .indexOf, 2 => "indexOfFrom"
   | .split, 2 => "splitLimit"
   | .at, _ => "at?"
+  | .toUpperCase, _ => "toUpperAscii"
+  | .toLowerCase, _ => "toLowerAscii"
   | m, _ => m.name
 
 /-- The types that TypeScript adds to the IR. -/
@@ -171,6 +173,9 @@ inductive ExprExt where
   /-- `(JSString.codePoints s)`, on `s`: the strings that `for (const c of s)`
   and `[...s]` visit, one for each code point. -/
   | stringCodePoints
+  /-- `(JSString.json x)`, on `x`: `JSON.stringify(x)`, a function that the
+  model declares but does not define. -/
+  | jsonStringify
   /-- `match k with | K.a => r.a | …`, on `r` and `k`: `r[k]`, where `r` is a
   `Record<K, V>` with the keys `keys`, and `K` is the literal union `key`. -/
   | recordGet (key : DeclRef) (keys : List String)
@@ -407,6 +412,7 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
     if method == .indexOf then s!"({js}.ofSafeInt (N := {names.typeParam}) ({call}))"
     else s!"({call})"
   | .stringCodePoints, [s] => s!"({leanName names "JSString"}.codePoints {argument s})"
+  | .jsonStringify, [x] => s!"({leanName names "JSString"}.json {argument x})"
   | .undefined, _ => leanName names "none"
   | .isUndefined, [a] => s!"{argument a}.isNone"
   | .isDefined, [a] => s!"{argument a}.isSome"
@@ -477,7 +483,7 @@ instance : tolean.IR.PrintOp ExprExt := ⟨ExprExt.print⟩
 An operation on strings may stand where no string type or literal is in
 sight, such as `a.key < b.key` on an interface of another file. -/
 def ExprExt.usesString : ExprExt → Bool
-  | .stringOrder _ | .stringAppend .. | .stringLength | .stringMethod .. | .stringCodePoints => true
+  | .stringOrder _ | .stringAppend .. | .stringLength | .stringMethod .. | .stringCodePoints | .jsonStringify => true
   | _ => false
 
 /-- The operation names `JSDate`, so the output imports its model. -/

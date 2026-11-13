@@ -387,6 +387,24 @@ test('the interpreter iterates a string by code point', async () => {
   expect(canonical(value as Value)).toBe(canonical(encode([...s])));
 });
 
+// `JSON.stringify` is opaque in the proofs, but the interpreter writes its
+// text, which must be the text that Node writes: an optional field that is
+// missing is left out, and quotes, control characters and lone surrogates
+// are escaped. The translator refuses an object here, because a caller
+// chooses the order of its keys, but the interpreter runs it.
+test('the interpreter writes the text of JSON.stringify', async () => {
+  const source = [
+    'export interface P { readonly name: string; readonly tags: ReadonlyArray<boolean>; readonly note?: string }',
+    'export function render(p: P): string { return JSON.stringify(p); }',
+  ].join('\n');
+  const p = { name: 'a"b\\c\n\u0001\ud800😀', tags: [true, false] };
+  const input = { programs: [{ source, calls: [{ function: 'render', args: [encode(p)] }] }] };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const [lean] = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  expect(canonical(lean?.results[0]?.value as Value)).toBe(canonical(encode(JSON.stringify(p))));
+});
+
 // A JS loop over a set, a map or an array sees a change that its body makes
 // to what it runs over, and the interpreter takes the values when the loop
 // starts. So it must give no value for such a loop, however the iterable

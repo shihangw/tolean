@@ -303,6 +303,64 @@ def splitLimit (s sep : JSString) (limit : Int) : List JSString :=
   | [] => (s.units.take lim).map fun u => ⟨[u]⟩
   | c :: cs => ((splitUnits c cs s.units []).take lim).map JSString.mk
 
+/-- Every code unit of the string is ASCII, below U+0080. -/
+def isAscii (s : JSString) : Bool := s.units.all (·.toNat < 0x80)
+
+/-- `c.toUpperCase()` on one ASCII code unit: `a` to `z` become `A` to `Z`. -/
+def upperUnit (u : UInt16) : UInt16 := if 0x61 ≤ u.toNat ∧ u.toNat ≤ 0x7A then u - 0x20 else u
+
+/-- `c.toLowerCase()` on one ASCII code unit: `A` to `Z` become `a` to `z`. -/
+def lowerUnit (u : UInt16) : UInt16 := if 0x41 ≤ u.toNat ∧ u.toNat ≤ 0x5A then u + 0x20 else u
+
+/-- `s.toUpperCase()` on an ASCII string (ECMA-262 §22.1.3.30). The spec maps
+each code point by the Unicode Default Case Conversion, whose result for the
+other code points depends on the Unicode version of the engine. On ASCII it is
+the same in every version: only `a` to `z` change. -/
+def toUpperAscii (s : JSString) : JSString := ⟨s.units.map upperUnit⟩
+
+/-- `s.toLowerCase()` on an ASCII string (ECMA-262 §22.1.3.28): only `A` to
+`Z` change. -/
+def toLowerAscii (s : JSString) : JSString := ⟨s.units.map lowerUnit⟩
+
+/-- A case change keeps a string ASCII, so a second one is exact too. -/
+theorem isAscii_toUpperAscii {s : JSString} (h : s.isAscii) : s.toUpperAscii.isAscii := by
+  simp only [isAscii, toUpperAscii, List.all_map, List.all_eq_true, Function.comp_apply,
+    decide_eq_true_eq] at h ⊢
+  intro u hu
+  have := h u hu
+  simp only [upperUnit]
+  split
+  · rw [UInt16.toNat_sub_of_le] <;> simp_all [UInt16.le_iff_toNat_le] <;> omega
+  · exact this
+
+/-- A case change keeps a string ASCII, so a second one is exact too. -/
+theorem isAscii_toLowerAscii {s : JSString} (h : s.isAscii) : s.toLowerAscii.isAscii := by
+  simp only [isAscii, toLowerAscii, List.all_map, List.all_eq_true, Function.comp_apply,
+    decide_eq_true_eq] at h ⊢
+  intro u hu
+  have := h u hu
+  simp only [lowerUnit]
+  split
+  · rw [UInt16.toNat_add]
+    have h32 : (32 : UInt16).toNat = 32 := rfl
+    rw [h32]; omega
+  · exact this
+
+/-- The text of `JSON.stringify(x)` (ECMA-262 §25.5.2), where `x` is the Lean
+value of a JS value. The model declares this function but does not define it,
+so a proof cannot depend on the text. A proof can only use that equal values
+give equal texts. That holds for the real `JSON.stringify` on every type that
+the translator lets it take: strings, numbers, booleans, `null`, literal
+unions, and arrays, tuples and nullable values of them, where no tuple ends
+with a tuple. On these types each Lean value fixes the text. It does not hold
+for an object, whose text follows the order of its keys, which a caller
+chooses. Nor does it hold for a tuple that ends with a tuple: Lean writes
+`[A, [B, C]]` and `[A, B, C]` both as `A × B × C`. So every theorem about the
+output holds for the real function, if no code gives a value or a prototype a
+`toJSON` method, as Tolean assumes that no code changes the built-in
+prototypes. -/
+opaque json {α : Type} (x : α) : JSString
+
 /-- A position of `0` is no position. -/
 theorem startsWithFrom_zero (s p : JSString) : s.startsWithFrom p 0 = s.startsWith p := by
   simp [startsWithFrom, startsWith, clampPos]

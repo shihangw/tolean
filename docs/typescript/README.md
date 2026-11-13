@@ -473,6 +473,8 @@ the file, the line and the reason. It never approximates.
 | `s.padStart(n)`, `s.padStart(n, f)`, `s.padEnd(n)` and `s.padEnd(n, f)`, where `n` is an integer literal | `JSString.padStart s n f` and `JSString.padEnd s n f`, with `f` as `" "` when the call leaves it out. The filler repeats and is cut to make `n` code units in all, and an empty filler adds nothing. Tolean refuses an `n` above 2^28 - 16, because V8 throws a `RangeError` for a longer string and the model would not. They are in ES2017. |
 | `for (const c of s)`, `[...s]` and `const [c] = s` on a string | A loop over `JSString.codePoints s`, the code points of `s`, each as a string (§22.1.5). A surrogate pair is one string of two code units, so `[..."😀"]` has one element. A lone surrogate is a string of its own code unit, not U+FFFD. `codePoints_units` states that the code points hold the code units of `s`, in order. |
 | `s.indexOf(p)`, where `p` is a string | `JSNumber.ofSafeInt (N := N) (JSString.indexOf s p)`: the first index of `p` in code units, or -1. The empty string is at index 0. |
+| `s.toUpperCase()` and `s.toLowerCase()`, where Tolean can show that `s` is ASCII: a literal of ASCII text, or `+`, `trim`, `slice` or a case change of such strings | `JSString.toUpperAscii s` and `JSString.toLowerAscii s`, which change only `a` to `z` or `A` to `Z`. On other strings the result follows the Unicode version of the engine, which changes between Node releases, so Tolean refuses them. |
+| `JSON.stringify(x)`, where `x` is a string, a number, a boolean, `null` or a member of a literal union, or an array, a tuple or a nullable value of them | `JSString.json x`, a function that `Spec/String.lean` declares but does not define. A proof cannot depend on the text, only on equal values giving equal texts, so every theorem also holds for the real `JSON.stringify`. Tolean refuses an object, because its text follows the order of its keys, which a caller chooses, so two objects with the same Lean value can give different texts. For the same reason it refuses a tuple that ends with a tuple, because Lean writes `[A, [B, C]]` and `[A, B, C]` both as `A × B × C`. The output writes the type of the argument, so `JSON.stringify(null)` is `JSString.json (none : Option Empty)`. A bigint would make it throw, and `undefined` would give `undefined`. A certificate does not cover a file that calls it. |
 | `a < b`, `a <= b`, `a > b` and `a >= b` on strings | `JSString.lt a b` and `JSString.le a b`, with the operands swapped for `>` and `>=`. JS compares strings by their UTF-16 code units (IsLessThan, ECMA-262 §7.2.13), not by their code points, so `"😀" < "\uFFFF"` is `true`. `JSString.lt_iff` states that `lt` is Lean's order on the lists of code units. |
 | `a / k`, `a % k` on `bigint`, where `k` is a nonzero literal | `Int.tdiv a k`, `Int.tmod a k` (both truncate toward zero, as JS does) |
 | `a ** k` on `bigint`, where `k` is a bigint literal | `a ^ (k : Nat)`. JS throws a `RangeError` when the exponent is negative, so the exponent must be a literal, which never is. |
@@ -694,7 +696,8 @@ Tolean rejects these, among others:
   them, and a caller can see that order through `Object.keys` or
   `JSON.stringify`. A Lean structure has no order, so the literal must use
   the declared one. Code in the subset can only read a field by name, so
-  inside the subset the order never changes a result.
+  inside the subset the order never changes a result. That is why Tolean
+  refuses `JSON.stringify` on an object.
 - An optional field that is also nullable, a tag field that is optional, and
   an optional field with the name of a property of `Object.prototype`, such
   as `toString`, because an object without the field has that property.

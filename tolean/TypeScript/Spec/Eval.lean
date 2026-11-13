@@ -387,6 +387,12 @@ def padArgs (g : Int → JSString → JSString) : List (Val N) → List (Option 
   | [v, .str fill], [k, _] => (intArg k v).map fun n => .str (g n fill)
   | _, _ => none
 
+/-- `toUpperCase` or `toLowerCase` on `s`, where `r` is the result that the
+ASCII rule gives. Any other string leaves the subset, because its result
+follows the Unicode version of the engine (ECMA-262 §22.1.3.30). -/
+def asciiCase (r s : JSString) (args : List (Val N)) : Option (Val N) :=
+  if s.isAscii then noArgs (.str r) args else none
+
 /-- `s.at(k)` as a value: the string of one code unit, or `undefined`. -/
 def stringAt (s : JSString) (k : Int) : Val N :=
   match s.at? k with
@@ -402,6 +408,8 @@ is, if it is one:
 - `trim`, `trimStart` and `trimEnd` (§22.1.3.32 to §22.1.3.34);
 - `split` (§22.1.3.23), with a string separator and perhaps a limit;
 - `at` (§22.1.3.1) and `slice` (§22.1.3.22);
+- `toUpperCase` and `toLowerCase` (§22.1.3.30 and §22.1.3.28) on ASCII
+  strings;
 - `padStart` and `padEnd` (§22.1.3.17 and §22.1.3.16), with a length and
   perhaps a string to fill with.
 
@@ -430,7 +438,97 @@ def stringMethod (method : String) (s : JSString) (args : List (Val N)) (lits : 
   else if method == "slice" then sliceArgs s args lits
   else if method == "padStart" then padArgs s.padStart args lits
   else if method == "padEnd" then padArgs s.padEnd args lits
+  else if method == "toUpperCase" then asciiCase s.toUpperAscii s args
+  else if method == "toLowerCase" then asciiCase s.toLowerAscii s args
   else none
+
+mutual
+/-- `JSON.stringify` throws a `TypeError` on `v`, because it reaches a bigint
+(SerializeJSONProperty, ECMA-262 §25.5.2.2, step 10). It reads the elements of
+an array and the own properties of an object, but not the entries of a map or
+a set, which have no own properties. -/
+def Val.jsonThrows : Val N → Bool
+  | .int _ => true
+  | .list items => jsonThrowsList items
+  | .obj fields | .error _ fields => jsonThrowsFields fields
+  | _ => false
+
+/-- `JSON.stringify` throws on an element of `items`. -/
+def jsonThrowsList : List (Val N) → Bool
+  | [] => false
+  | x :: xs => x.jsonThrows || jsonThrowsList xs
+
+/-- `JSON.stringify` throws on the value of a field of `fields`. -/
+def jsonThrowsFields : List (String × Val N) → Bool
+  | [] => false
+  | (_, x) :: fs => x.jsonThrows || jsonThrowsFields fs
+end
+
+/-- The code units of `text`, which is ASCII. -/
+private def ascii (text : String) : List UInt16 := text.toList.map fun c => c.toNat.toUInt16
+
+/-- QuoteJSONString (ECMA-262 §25.5.2.3): `s` in double quotes, with `"`, `\`
+and the control characters escaped, and each lone surrogate as `\uXXXX`. -/
+private def jsonQuote (s : JSString) : List UInt16 :=
+  let hex (n : Nat) : List UInt16 :=
+    ascii ("\\u" ++ String.ofList ((Nat.toDigits 16 (n + 0x10000)).drop 1))
+  let escape : List UInt16 → List UInt16
+    | [u] =>
+      if u = 0x08 then ascii "\\b" else if u = 0x09 then ascii "\\t"
+      else if u = 0x0A then ascii "\\n" else if u = 0x0C then ascii "\\f"
+      else if u = 0x0D then ascii "\\r" else if u = 0x22 then ascii "\\\""
+      else if u = 0x5C then ascii "\\\\"
+      else if u.toNat < 0x20 || (0xD800 ≤ u.toNat && u.toNat < 0xE000) then hex u.toNat
+      else [u]
+    | pair => pair
+  ascii "\"" ++ (JSString.codePointUnits s.units).flatMap escape ++ ascii "\""
+
+/-- The text that `JSON.stringify(v)` gives, for the interpreter. It writes a
+number only when it is a safe integer, `NaN` or an infinity, because the model
+has no ToString for other numbers, and it stops the interpreter on any other
+number. -/
+private partial def jsonTextImpl {N : Type} [JSNumber N] (v : Val N) : JSString :=
+  ⟨go v⟩
+where
+  go : Val N → List UInt16
+    | .null | .undefined => ascii "null"
+    | .bool b => ascii (if b then "true" else "false")
+    | .str s => jsonQuote s
+    -- `Date.prototype.toJSON` gives `null` for an invalid date and the text of
+    -- `toISOString` for a valid one, which the model does not have yet.
+    | .date none => ascii "null"
+    | .date (some _) => panic! "the interpreter cannot write a date as JSON yet"
+    | .num n =>
+      match JSNumber.toSafeInt n with
+      | some i => ascii (toString i)
+      | none =>
+        if JSNumber.isNaN n || !JSNumber.isFinite n then ascii "null"
+        else panic! "the interpreter cannot write this number as JSON"
+    | .int _ => panic! "JSON.stringify throws on a bigint"
+    | .list items => ascii "[" ++ (ascii ",").intercalate (items.map go) ++ ascii "]"
+    | .obj fields | .error _ fields =>
+      let present := fields.filter fun (_, x) => !(x matches .undefined)
+      ascii "{" ++
+        (ascii ",").intercalate (present.map fun (k, x) => jsonQuote (JSString.ofString k) ++ ascii ":" ++ go x) ++
+        ascii "}"
+    | .map _ | .set _ => ascii "{}"
+
+/-- The text of `JSON.stringify(v)` (ECMA-262 §25.5.2), where `v` is not
+`undefined` and reaches no bigint. The spec defines it fully, but the model
+does not: it is opaque, so a proof cannot depend on the text. A theorem then
+holds for the real `JSON.stringify`, because the text is a function of the
+value. The interpreter writes the text with `jsonTextImpl`, which the logic
+never sees. -/
+@[implemented_by jsonTextImpl]
+opaque jsonText {N : Type} [JSNumber N] (v : Val N) : JSString
+
+/-- `JSON.stringify(v)`, with no replacer and no indent (ECMA-262 §25.5.2.1):
+`undefined` for `undefined`, no value where it throws on a bigint, and the
+opaque text otherwise. -/
+def jsonStringify (v : Val N) : Option (Val N) :=
+  match v with
+  | .undefined => some .undefined
+  | v => if v.jsonThrows then none else some (.str (jsonText v))
 
 /-- The element of the array `items` whose index is the safe integer `i`, or
 `undefined` when `i` is none or no index of the array. -/
@@ -924,6 +1022,13 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     else if test == "isSafeInteger" then some (.bool (JSNumber.toSafeInt n).isSome)
     else if test == "isInteger" then some (.bool (JSNumber.isInteger n))
     else none
+  -- `JSON.stringify(x)` (ECMA-262 §25.5.2.1), unless a variable hides `JSON`.
+  -- The method and the arguments are checked in the body, as for `Math`, so
+  -- that the rule adds few cases to the equations of `eval`.
+  | .call _ (.member _ (.ident _ "JSON") f) args => do
+    if (env.lookup "JSON").isSome || f != "stringify" then none
+    let [arg] := args | none
+    jsonStringify (← eval m fuel env arg)
   -- `Math.floor(x)` and the other functions of `Math` that `mathCall` has,
   -- unless a variable hides `Math`.
   | .call _ (.member _ (.ident _ "Math") f) args => do
