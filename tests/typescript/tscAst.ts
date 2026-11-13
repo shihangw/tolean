@@ -507,8 +507,10 @@ class Printer {
       return undefined;
     }
     // ECMA-262 allows no line break before `=>`, and the Lean parser reads
-    // the statement as a declaration then, which it refuses.
-    if (this.text.slice(e.parameters.end, e.equalsGreaterThanToken.getStart(this.sf)).includes('\n')) {
+    // the statement as a declaration then, which it refuses. Only the trivia
+    // right before `=>` counts, as for the Lean token's `newlineBefore`.
+    const arrow = e.equalsGreaterThanToken;
+    if (this.text.slice(arrow.getFullStart(), arrow.getStart(this.sf)).includes('\n')) {
       return undefined;
     }
     const params = e.parameters.map((p) => this.param(p, false));
