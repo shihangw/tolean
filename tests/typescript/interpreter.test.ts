@@ -175,7 +175,7 @@ type NodeResult = { returns: unknown } | { throws: string; thrown: unknown };
 function shownThrow(x: unknown): string {
   if (x instanceof Error) {
     const fields: Array<[string, Value]> = [
-      ['message', x.message],
+      ['message', encode(x.message)],
       ...Object.entries(x).map(([k, v]): [string, Value] => [k, encode(v)]),
     ];
     return canonical({ error: [x.constructor.name, fields] });
