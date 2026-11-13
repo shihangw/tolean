@@ -237,9 +237,10 @@ is `b < a` and `a >= b` is `b <= a`, as `IsLessThan` evaluates them
 (ECMA-262 §13.10.1). Strings compare by their code units (§7.2.13). When
 one operand of `+` is a string, `+` converts the other with ToString and
 joins the code units (ApplyStringOrNumericBinaryOperator, §13.15.3). The
-subset converts strings, bigints and booleans; ToString of a number is not
-modelled yet. `/` on numbers is Number::divide (§6.1.6.1.5), and the subset
-has no `%` on numbers.
+subset converts strings, bigints, booleans and numbers. A number becomes
+`JSNumber.toStr`, which the model leaves abstract: `SafeIntLaws.toStr` says
+what it gives for a safe integer. `/` on numbers is Number::divide
+(§6.1.6.1.5), and the subset has no `%` on numbers.
 
 On bigints, `a ** b` throws a `RangeError` when `b` is negative
 (BigInt::exponentiate, §6.1.6.2.3), and `&`, `|`, `^`, `<<` and `>>` are the
@@ -254,6 +255,8 @@ def binary : BinOp → Val N → Val N → Option (Val N)
   | .add, .int a, .str b => some (.str (JSString.ofInt a ++ b))
   | .add, .str a, .bool b => some (.str (a ++ JSString.ofBool b))
   | .add, .bool a, .str b => some (.str (JSString.ofBool a ++ b))
+  | .add, .str a, .num n => some (.str (a ++ JSNumber.toStr n))
+  | .add, .num n, .str b => some (.str (JSNumber.toStr n ++ b))
   | .sub, .int a, .int b => some (.int (a - b))
   | .mul, .int a, .int b => some (.int (a * b))
   | .div, .int a, .int b => if b == 0 then none else some (.int (a.tdiv b))
@@ -348,23 +351,181 @@ def noArgs (v : Val N) : List (Val N) → Option (Val N)
   | [] => some v
   | _ => none
 
+/-- The integer of a number argument, as ToIntegerOrInfinity gives it
+(ECMA-262 §7.1.5): the integer that a literal names, whatever the model of
+numbers, as for `xs.at(k)`, or else a safe integer. `lit` is the integer
+literal that the argument is, if it is one. Any other value leaves the subset. -/
+def intArg : Option Int → Val N → Option Int
+  | some k, _ => some k
+  | none, .num n => JSNumber.toSafeInt n
+  | none, _ => none
+
+/-- The value of a method whose arguments are a string `p` and perhaps a
+number: `f p` without the number, and `g p k` with it, where `k` is its
+integer. -/
+def stringAndInt (f : JSString → Val N) (g : JSString → Int → Val N) :
+    List (Val N) → List (Option Int) → Option (Val N)
+  | [.str p], _ => some (f p)
+  | [.str p, v], [_, k] => (intArg k v).map (g p)
+  | _, _ => none
+
+/-- The value `g k` of a method whose argument is one number, with the
+integer `k`. -/
+def oneInt (g : Int → Val N) : List (Val N) → List (Option Int) → Option (Val N)
+  | [v], [k] => (intArg k v).map g
+  | _, _ => none
+
+/-- `s.slice(start, end)` on the values of its arguments: a missing start is
+`0`, and a missing end is the length (ECMA-262 §22.1.3.22). -/
+def sliceArgs (s : JSString) : List (Val N) → List (Option Int) → Option (Val N)
+  | [], _ => some (.str (s.slice 0 none))
+  | [a], [ka] => do return .str (s.slice (← intArg ka a) none)
+  | [a, b], [ka, kb] => do return .str (s.slice (← intArg ka a) (some (← intArg kb b)))
+  | _, _ => none
+
+/-- `padStart` or `padEnd` on the values of its arguments, where `g n fill` is
+the padded string: a missing filler is `" "` (ECMA-262 §22.1.3.17.1). -/
+def padArgs (g : Int → JSString → JSString) : List (Val N) → List (Option Int) → Option (Val N)
+  | [v], [k] => (intArg k v).map fun n => .str (g n (JSString.ofString " "))
+  | [v, .str fill], [k, _] => (intArg k v).map fun n => .str (g n fill)
+  | _, _ => none
+
+/-- `toUpperCase` or `toLowerCase` on `s`, where `r` is the result that the
+ASCII rule gives. Any other string leaves the subset, because its result
+follows the Unicode version of the engine (ECMA-262 §22.1.3.30). -/
+def asciiCase (r s : JSString) (args : List (Val N)) : Option (Val N) :=
+  if s.isAscii then noArgs (.str r) args else none
+
+/-- `s.at(k)` as a value: the string of one code unit, or `undefined`. -/
+def stringAt (s : JSString) (k : Int) : Val N :=
+  match s.at? k with
+  | some c => .str c
+  | none => .undefined
+
 /-- A method of the string `s` that takes no callback, on the values of its
-arguments: `startsWith`, `endsWith`, `includes` and `indexOf` with one string
-(ECMA-262 §22.1.3.25, §22.1.3.7, §22.1.3.8 and §22.1.3.9), `trim`,
-`trimStart` and `trimEnd` (§22.1.3.32 to §22.1.3.34), and `split` with a
-string separator (§22.1.3.23). Each converts its argument with ToString, which
-the subset has on strings only. A position argument and the limit of `split`
-leave the subset. -/
-def stringMethod (method : String) (s : JSString) (args : List (Val N)) : Option (Val N) :=
-  if method == "startsWith" then oneString (fun p => .bool (s.startsWith p)) args
-  else if method == "endsWith" then oneString (fun p => .bool (s.endsWith p)) args
-  else if method == "includes" then oneString (fun p => .bool (s.includes p)) args
-  else if method == "indexOf" then oneString (fun p => .num (JSNumber.ofSafeInt (s.indexOf p))) args
+arguments `args`, where `lits` holds the integer literal that each argument
+is, if it is one:
+
+- `startsWith`, `endsWith`, `includes` and `indexOf` (ECMA-262 §22.1.3.25,
+  §22.1.3.7, §22.1.3.8 and §22.1.3.9), with a string and perhaps a position;
+- `trim`, `trimStart` and `trimEnd` (§22.1.3.32 to §22.1.3.34);
+- `split` (§22.1.3.23), with a string separator and perhaps a limit;
+- `at` (§22.1.3.1) and `slice` (§22.1.3.22);
+- `toUpperCase` and `toLowerCase` (§22.1.3.30 and §22.1.3.28) on ASCII
+  strings;
+- `padStart` and `padEnd` (§22.1.3.17 and §22.1.3.16), with a length and
+  perhaps a string to fill with.
+
+ToString converts a string argument, and the subset has it on strings only.
+ToIntegerOrInfinity converts a number argument, and the subset has it on
+integer literals and safe integers (`intArg`). Other arguments leave the
+subset. -/
+def stringMethod (method : String) (s : JSString) (args : List (Val N)) (lits : List (Option Int)) :
+    Option (Val N) :=
+  if method == "startsWith" then
+    stringAndInt (fun p => .bool (s.startsWith p)) (fun p k => .bool (s.startsWithFrom p k)) args lits
+  else if method == "endsWith" then
+    stringAndInt (fun p => .bool (s.endsWith p)) (fun p k => .bool (s.endsWithAt p k)) args lits
+  else if method == "includes" then
+    stringAndInt (fun p => .bool (s.includes p)) (fun p k => .bool (s.includesFrom p k)) args lits
+  else if method == "indexOf" then
+    stringAndInt (fun p => .num (JSNumber.ofSafeInt (s.indexOf p)))
+      (fun p k => .num (JSNumber.ofSafeInt (s.indexOfFrom p k))) args lits
   else if method == "trim" then noArgs (.str s.trim) args
   else if method == "trimStart" then noArgs (.str s.trimStart) args
   else if method == "trimEnd" then noArgs (.str s.trimEnd) args
-  else if method == "split" then oneString (fun sep => .list ((s.split sep).map .str)) args
+  else if method == "split" then
+    stringAndInt (fun sep => .list ((s.split sep).map .str))
+      (fun sep k => .list ((s.splitLimit sep k).map .str)) args lits
+  else if method == "at" then oneInt (stringAt s) args lits
+  else if method == "slice" then sliceArgs s args lits
+  else if method == "padStart" then padArgs s.padStart args lits
+  else if method == "padEnd" then padArgs s.padEnd args lits
+  else if method == "toUpperCase" then asciiCase s.toUpperAscii s args
+  else if method == "toLowerCase" then asciiCase s.toLowerAscii s args
   else none
+
+mutual
+/-- `JSON.stringify` throws a `TypeError` on `v`, because it reaches a bigint
+(SerializeJSONProperty, ECMA-262 §25.5.2.2, step 10). It reads the elements of
+an array and the own properties of an object, but not the entries of a map or
+a set, which have no own properties. -/
+def Val.jsonThrows : Val N → Bool
+  | .int _ => true
+  | .list items => jsonThrowsList items
+  | .obj fields | .error _ fields => jsonThrowsFields fields
+  | _ => false
+
+/-- `JSON.stringify` throws on an element of `items`. -/
+def jsonThrowsList : List (Val N) → Bool
+  | [] => false
+  | x :: xs => x.jsonThrows || jsonThrowsList xs
+
+/-- `JSON.stringify` throws on the value of a field of `fields`. -/
+def jsonThrowsFields : List (String × Val N) → Bool
+  | [] => false
+  | (_, x) :: fs => x.jsonThrows || jsonThrowsFields fs
+end
+
+/-- The code units of `text`, which is ASCII. -/
+private def ascii (text : String) : List UInt16 := text.toList.map fun c => c.toNat.toUInt16
+
+/-- QuoteJSONString (ECMA-262 §25.5.2.3): `s` in double quotes, with `"`, `\`
+and the control characters escaped, and each lone surrogate as `\uXXXX`. -/
+private def jsonQuote (s : JSString) : List UInt16 :=
+  let hex (n : Nat) : List UInt16 :=
+    ascii ("\\u" ++ String.ofList ((Nat.toDigits 16 (n + 0x10000)).drop 1))
+  let escape : List UInt16 → List UInt16
+    | [u] =>
+      if u = 0x08 then ascii "\\b" else if u = 0x09 then ascii "\\t"
+      else if u = 0x0A then ascii "\\n" else if u = 0x0C then ascii "\\f"
+      else if u = 0x0D then ascii "\\r" else if u = 0x22 then ascii "\\\""
+      else if u = 0x5C then ascii "\\\\"
+      else if u.toNat < 0x20 || (0xD800 ≤ u.toNat && u.toNat < 0xE000) then hex u.toNat
+      else [u]
+    | pair => pair
+  ascii "\"" ++ (JSString.codePointUnits s.units).flatMap escape ++ ascii "\""
+
+/-- The text that `JSON.stringify(v)` gives, for the interpreter. A finite
+number is its ToString, and `NaN` and the infinities are `null`
+(SerializeJSONProperty, ECMA-262 §25.5.2.2, step 9). -/
+private partial def jsonTextImpl {N : Type} [JSNumber N] (v : Val N) : JSString :=
+  ⟨go v⟩
+where
+  go : Val N → List UInt16
+    | .null | .undefined => ascii "null"
+    | .bool b => ascii (if b then "true" else "false")
+    | .str s => jsonQuote s
+    -- `Date.prototype.toJSON` gives `null` for an invalid date and the text of
+    -- `toISOString` for a valid one, which the model does not have yet.
+    | .date none => ascii "null"
+    | .date (some _) => panic! "the interpreter cannot write a date as JSON yet"
+    | .num n => if JSNumber.isNaN n || !JSNumber.isFinite n then ascii "null" else (JSNumber.toStr n).units
+    | .int _ => panic! "JSON.stringify throws on a bigint"
+    | .list items => ascii "[" ++ (ascii ",").intercalate (items.map go) ++ ascii "]"
+    | .obj fields | .error _ fields =>
+      let present := fields.filter fun (_, x) => !(x matches .undefined)
+      ascii "{" ++
+        (ascii ",").intercalate (present.map fun (k, x) => jsonQuote (JSString.ofString k) ++ ascii ":" ++ go x) ++
+        ascii "}"
+    | .map _ | .set _ => ascii "{}"
+
+/-- The text of `JSON.stringify(v)` (ECMA-262 §25.5.2), where `v` is not
+`undefined` and reaches no bigint. The spec defines it fully, but the model
+does not: it is opaque, so a proof cannot depend on the text. A theorem then
+holds for the real `JSON.stringify`, because the text is a function of the
+value. The interpreter writes the text with `jsonTextImpl`, which the logic
+never sees. -/
+@[implemented_by jsonTextImpl]
+opaque jsonText {N : Type} [JSNumber N] (v : Val N) : JSString
+
+/-- `JSON.stringify(v)`, with no replacer and no indent (ECMA-262 §25.5.2.1):
+`undefined` for `undefined`, no value where it throws on a bigint, and the
+opaque text otherwise. -/
+def jsonStringify (v : Val N) : Option (Val N) :=
+  match v with
+  | .undefined => some .undefined
+  | v => if v.jsonThrows then none else some (.str (jsonText v))
 
 /-- The element of the array `items` whose index is the safe integer `i`, or
 `undefined` when `i` is none or no index of the array. -/
@@ -438,11 +599,14 @@ order (`CreateArrayIterator`, ECMA-262 §23.1.5.1), the elements of a set, in
 the order of insertion (`CreateSetIterator`, §24.2.6.1), and the entries of a
 map, in the same order, each as the array `[key, value]` (`CreateMapIterator`,
 §24.1.5.1). The subset does not change a map or a set while a loop runs over
-it, so the loop sees the values that it had when it started. -/
+it, so the loop sees the values that it had when it started. A string visits
+its code points, each as a string (`CreateStringIterator`, §22.1.5.1), so a
+surrogate pair is one value. -/
 def iterValues : Val N → Option (List (Val N))
   | .list items => some items
   | .set elems => some elems
   | .map entries => some (entries.map fun (k, v) => .list [k, v])
+  | .str s => some (s.codePoints.map .str)
   | _ => none
 
 /-- The entries of a map that `new Map(items)` makes: each item, an array
@@ -1219,6 +1383,13 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     else if test == "isSafeInteger" then some (.bool (JSNumber.toSafeInt n).isSome)
     else if test == "isInteger" then some (.bool (JSNumber.isInteger n))
     else none
+  -- `JSON.stringify(x)` (ECMA-262 §25.5.2.1), unless a variable hides `JSON`.
+  -- The method and the arguments are checked in the body, as for `Math`, so
+  -- that the rule adds few cases to the equations of `eval`.
+  | .call _ (.member _ (.ident _ "JSON") f) args => do
+    if (env.lookup "JSON").isSome || f != "stringify" then none
+    let [arg] := args | none
+    jsonStringify (← eval m fuel env arg)
   -- `Math.floor(x)` and the other functions of `Math` that `mathCall` has,
   -- unless a variable hides `Math`.
   | .call _ (.member _ (.ident _ "Math") f) args => do
@@ -1262,22 +1433,30 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
   -- becomes an integer by `ToIntegerOrInfinity`. A literal is the integer it
   -- names, whatever the model of numbers. Any other number is its integer
   -- when it is a safe integer; truncating other numbers leaves the subset.
+  -- `s.at(k)` on a string is a string method, as the last rule takes it.
   | .call _ (.member _ recv "at") [arg] => do
-    let .list items ← eval m fuel env recv | none
-    match intLiteral? arg with
-    | some k => return atVal items k
-    | none =>
-      let .num n ← eval m fuel env arg | none
-      return atVal items (← JSNumber.toSafeInt n)
+    match ← eval m fuel env recv with
+    | .list items =>
+      match intLiteral? arg with
+      | some k => return atVal items k
+      | none =>
+        let .num n ← eval m fuel env arg | none
+        return atVal items (← JSNumber.toSafeInt n)
+    | .str s => stringMethod "at" s [← eval m fuel env arg] [intLiteral? arg]
+    | _ => none
   -- `xs.slice(start, end)` (`Array.prototype.slice`, ECMA-262 §23.1.3.28).
   -- Each argument becomes an integer as the argument of `at` does. A missing
-  -- start is `0`, and a missing end is the length.
+  -- start is `0`, and a missing end is the length. `s.slice` on a string is a
+  -- string method.
   | .call _ (.member _ recv "slice") args => do
-    let .list items ← eval m fuel env recv | none
-    match args with
-    | [] => return .list (sliceList items 0 none)
-    | [a] => return .list (sliceList items (← evalInt m fuel env a) none)
-    | [a, b] => return .list (sliceList items (← evalInt m fuel env a) (some (← evalInt m fuel env b)))
+    match ← eval m fuel env recv with
+    | .list items =>
+      match args with
+      | [] => return .list (sliceList items 0 none)
+      | [a] => return .list (sliceList items (← evalInt m fuel env a) none)
+      | [a, b] => return .list (sliceList items (← evalInt m fuel env a) (some (← evalInt m fuel env b)))
+      | _ => none
+    | .str s => stringMethod "slice" s (← evalList m fuel env args) (args.map intLiteral?)
     | _ => none
   -- `xs.map((x, i) => e)`: `map` passes the index too, as a number
   -- (ECMA-262 §23.1.3.21, step 6.c.ii). An array has fewer than 2^32
@@ -1324,7 +1503,7 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
       if method == "has" then return .bool found else none
     -- An array or a string, as the next rule takes it.
     | .list items => arrayMethod method items [← eval m fuel env arg]
-    | .str s => stringMethod method s [← eval m fuel env arg]
+    | .str s => stringMethod method s [← eval m fuel env arg] [intLiteral? arg]
     | _ => none
   -- Any other call of a method of an array or a string, such as
   -- `xs.includes(v)` or `s.trim()`. The receiver comes first, then the
@@ -1334,7 +1513,7 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
   | .call _ (.member _ recv method) args => do
     match ← eval m fuel env recv with
     | .list items => arrayMethod method items (← evalList m fuel env args)
-    | .str s => stringMethod method s (← evalList m fuel env args)
+    | .str s => stringMethod method s (← evalList m fuel env args) (args.map intLiteral?)
     -- `d.getTime()` and the UTC getters of a date, which take no arguments.
     | .date t => dateMethod method t (← evalList m fuel env args)
     | _ => none
@@ -1624,7 +1803,7 @@ def execStmt (m : Scope) (fuel : Nat) (env : Env N) : Stmt → Option (Outcome N
   -- `break` and `continue` without a label (ECMA-262 §14.8.2 and §14.9.2).
   | .breakStmt _ => some (.brk env)
   | .continueStmt _ => some (.cont env)
-  -- `for (const x of xs)` on an array, a set or a map: the body runs once for
+  -- `for (const x of xs)` on an array, a set, a map or a string: the body runs once for
   -- each value that `iterValues` gives, in order, with `x` bound to it in a
   -- new scope (`ForIn/OfBodyEvaluation`, ECMA-262 §14.7.5.7).
   -- A JS loop sees a change to what it runs over while it runs: it visits an
