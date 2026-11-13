@@ -227,7 +227,7 @@ def JSNumber.entries {N α : Type} [JSNumber N] (xs : List α) : List (N × α) 
 bounds: a negative `k` counts from the end, and the result is clamped to `0`
 and `len`. -/
 def JSNumber.clampIndex (len : Nat) (k : Int) : Nat :=
-  if k < 0 then (len + k).toNat else Nat.min k.toNat len
+  if k < 0 then (len + k).toNat else Min.min k.toNat len
 
 /-- `xs.slice(start, stop)` (`Array.prototype.slice`, ECMA-262 §23.1.3.28),
 where `start` and `stop` are the integers of the arguments: the elements from
@@ -316,6 +316,15 @@ class SpecialValueLaws (N : Type) [JSNumber N] : Prop where
   nan_min : ∀ {a b : N}, isNaN a = true → isNaN (min a b) = true ∧ isNaN (min b a) = true
   nan_max : ∀ {a b : N}, isNaN a = true → isNaN (max a b) = true ∧ isNaN (max b a) = true
   toInt_not_finite : ∀ {a : N}, isFinite a = false → toInt a = none
+  /-- Every finite number has an integer part. -/
+  toInt_finite : ∀ {a : N}, isFinite a = true → ∃ i, toInt a = some i
+  /-- The integer part is the truncation toward zero: a number that is not
+  negative lies in `[i, i + 1)`, and a negative one in `(i - 1, i]`. The
+  neighbours `i ± 1` are stated for a safe `i` only, because past 2^53 a
+  double cannot hold every integer, so `ofInt (i + 1)` may round to `i`. -/
+  toInt_trunc : ∀ {a : N} {i : Int}, toInt a = some i → InRange i →
+    if lt a (ofSafeInt 0) then lt (ofInt (i - 1)) a = true ∧ le a (ofInt i) = true
+    else le (ofInt i) a = true ∧ lt a (ofInt (i + 1)) = true
   negZero_eq_zero : ∀ {a : N}, isNegZero a = true → eq a (ofSafeInt 0) = true
   negZero_ofSafeInt : ∀ {i : Int}, isNegZero (ofSafeInt (N := N) i) = false
   nan_not_negZero : ∀ {a : N}, isNaN a = true → isNegZero a = false

@@ -478,9 +478,9 @@ the file, the line and the reason. It never approximates.
 | `xs[k]`, where `k` is a number literal | `(xs[k]? : Option T)`. The value is `undefined` when `k` is not an index of the array, so it has the type of an optional field: `xs[0] ?? d`, `xs[0]?.f` and `xs[0] === undefined` work as they do on `s.f`. Tolean gives `xs[k]` this type whatever `noUncheckedIndexedAccess` says, so code that uses it as a `T` is refused. |
 | `xs[i]`, where `i` is any other number | `JSNumber.elementAt? xs i`: the element when `i` is a safe integer within the array, and `none` otherwise. `xs[-1]` and `xs[0.5]` are `undefined`, as in JS. |
 | `xs.at(k)`, where `k` is an integer literal | `(xs[k]? : Option T)`, or `((List.reverse xs)[-k - 1]? : Option T)` when `k` is negative, which counts from the end. It is in ES2022. |
-| `xs.at(i)`, where `i` is any other number | `(JSNumber.atIndex? xs i)`. JS reads the index with `ToIntegerOrInfinity` (§7.1.5), which `JSNumber.toIndexInt` models with `JSNumber.toInt`: a fraction rounds toward zero, so `xs.at(1.5)` is `xs.at(1)`, and `NaN` is `0`. `Infinity`, `-Infinity` and every number past the safe integers give `undefined`, because they land outside the array. |
+| `xs.at(i)`, where `i` is any other number | `(JSNumber.atIndex? xs i)`. JS reads the index with `ToIntegerOrInfinity` (§7.1.5), which `JSNumber.toIndexInt` models with `JSNumber.toInt`: a fraction rounds toward zero, so `xs.at(1.5)` is `xs.at(1)`, and `NaN` is `0`. `Infinity`, `-Infinity` and every number past the safe integers give `undefined`, because they land outside the array. A number literal must be an integer, as every number literal in the subset must, so a fraction comes only from a variable or an expression. |
 | `xs.slice(a, b)`, where `a` and `b` are integer literals or left out | `List.drop` and `List.take`, such as `(List.drop 1 (List.take 3 xs))` for `xs.slice(1, 3)`. A negative bound counts from the end, which the output reads on the reversed list: `xs.slice(-2)` is `(List.reverse (List.take 2 (List.reverse xs)))`. A negative start with an end that is not negative counts back from the length: `xs.slice(-2, 3)` is `(List.drop (List.length xs - 2) (List.take 3 xs))`. |
-| `xs.slice(a, b)`, where a bound is any other number | `(JSNumber.sliceInt xs a' (some b'))`, where each bound that is a number becomes `(JSNumber.toIndexInt a)`, and a literal stays an `Int`. `xs.slice(i)` is `(JSNumber.sliceInt xs (JSNumber.toIndexInt i) none)`. A bound past the safe integers, such as `Infinity`, clamps to an end of the array, as in JS. |
+| `xs.slice(a, b)`, where a bound is any other number | `(JSNumber.sliceInt xs a' (some b'))`, where each bound that is a number becomes `(JSNumber.toIndexInt a)`, and a literal stays an `Int`. `xs.slice(i)` is `(JSNumber.sliceInt xs (JSNumber.toIndexInt i) none)`. A bound past the safe integers, such as `Infinity`, clamps to an end of the array, as in JS. As for `at`, a literal bound must be an integer. |
 | `xs.findLast(x => p)` | `List.find? (fun (x : T) => p) (List.reverse xs)`, which the callback reads from the last element to the first, as in JS. It has the type of `find`, and it is in ES2023. |
 | `xs.findIndex(x => p)` | `JSNumber.ofSafeInt (((List.findIdx? (fun (x : T) => p) xs).map Int.ofNat).getD (-1))`: the index of the first element that passes, as a `number`, or `-1` |
 | `xs.reduce((acc, x) => e, init)` | `List.foldl (fun (acc : A) (x : T) => e) init xs`, where `A` is the type of `init`. The body must give a value of that type. |
@@ -819,6 +819,10 @@ at three levels:
   `NaN` fails every comparison and spreads through arithmetic and the
   functions of `Math`.
   `±Infinity` bound every finite number, and `Infinity - Infinity` is `NaN`.
+  Every finite number has an integer part, `toInt`, which is its truncation
+  toward zero, and `NaN` and `±Infinity` have none. So `JSNumber.toIndexInt`,
+  the index that `at` and `slice` read from a number, is what JS reads for
+  every model that satisfies the laws.
   A theorem that needs these facts takes `[SpecialValueLaws N]`.
 
 The laws are hypotheses, not Lean axioms. If one of them were false, the
