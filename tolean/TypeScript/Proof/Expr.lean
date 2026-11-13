@@ -65,7 +65,9 @@ theorem checkLocalName_ok {sp : Span} {name r : String} {s s' : Ctx}
     · simp at h
     · split at h
       · simp at h
-      · exact checkName_ok h
+      · split at h
+        · simp at h
+        · exact checkName_ok h
 
 theorem declare_ok {env env' : Translate.Env} {sp : Span} {name : String} {b : Binding} {t : Ty}
     {s s' : Ctx} (h : declare env sp name b t s = .ok env' s') :
@@ -93,7 +95,20 @@ theorem checkThrowingCall_ok {sp : Span} {name : String} {fn : FnInfo} {top : Bo
     (h : checkThrowingCall sp name fn top s = .ok u s') : s' = s := by
   simp only [checkThrowingCall, ite_state] at h
   split at h
-  · simp at h
+  · simp only [bind_ok, get_ok] at h
+    obtain ⟨_, _, ⟨rfl, rfl⟩, h⟩ := h
+    split at h <;> (try split at h) <;> exact absurd h (reject_ne_ok _ _ _ _ _)
+  · simp only [pure_ok] at h; exact h.2.symm
+
+/-- The check of a call of a function of another file that can throw changes
+nothing. -/
+theorem checkCrossFileThrow_ok {sp : Span} {name : String} {fn : FnInfo} {s s' : Ctx} {u : Unit}
+    (h : checkCrossFileThrow sp name fn s = .ok u s') : s' = s := by
+  simp only [checkCrossFileThrow, bind_ok, get_ok] at h
+  obtain ⟨_, _, ⟨rfl, rfl⟩, h⟩ := h
+  simp only [ite_state] at h
+  split at h
+  · exact absurd h (reject_ne_ok _ _ _ _ _)
   · simp only [pure_ok] at h; exact h.2.symm
 
 end Monad
@@ -110,24 +125,35 @@ theorem has_add (env : Translate.Env) (l : Local) (x : String) :
   cases env.locals.find? (·.name == x) <;> simp [List.find?]
   split <;> simp_all
 
+/-- The error class `c` that the translator knows is the one the interpreter
+makes errors of, in the file of `m`: its constructor has the same parameters,
+with the same names and the same `readonly` marks. And its name is not one
+that the interpreter reads as a global, such as `Map`. -/
+def ClassAgrees (m : Eval.Scope) (c : ClassInfo) : Prop :=
+  ∃ ctor, Eval.errorClassIn m c.name = some ctor ∧
+    (Eval.ctorParams ctor).map (fun p => (p.param.name, p.readonly)) = c.params.map (fun x => (x.1, x.2.2)) ∧
+    isGlobalName c.name = false
+
 /-- Each function that a call may name is the one the interpreter calls: in
-the file of `m`, a call of `f.name` runs `f`. And each string enum whose
-members code may read is the one the interpreter reads: in the file of `m`,
-the name `e.name` is the enum with the members `e.members`. -/
+the file of `m`, a call of `f.name` runs `f`. Each string enum whose members
+code may read is the one the interpreter reads: in the file of `m`, the name
+`e.name` is the enum with the members `e.members`. And each error class that
+a `throw` may make an error of is the one the interpreter makes. -/
 def Resolves (m : Eval.Scope) (env : Translate.Env) : Prop :=
   (∀ f ∈ env.functions, Eval.resolve m f.name = some f.ref) ∧
-    ∀ e ∈ env.enums, Eval.resolveEnum m e.name = some e.members
+    (∀ e ∈ env.enums, Eval.resolveEnum m e.name = some e.members) ∧
+    ∀ c ∈ env.classes, ClassAgrees m c
 
-/-- The functions and the string enums that code may name. A branch or a
-loop body keeps them, and changes only the locals. -/
-def globals (env : Translate.Env) : List FnInfo × List EnumValue × List LocalFn :=
-  (env.functions, env.enums, env.localFns)
+/-- The functions, the string enums, the error classes and the local functions
+that code may name. A branch or a loop body keeps them, and changes only the
+locals. -/
+def globals (env : Translate.Env) : List FnInfo × List EnumValue × List ClassInfo × List LocalFn :=
+  (env.functions, env.enums, env.classes, env.localFns)
 
 theorem Resolves.congr {m : Eval.Scope} {env env' : Translate.Env} (h : Resolves m env)
     (hg : globals env' = globals env) : Resolves m env' := by
   simp only [globals, Prod.mk.injEq] at hg
-  replace hg := And.intro hg.1 hg.2.1
-  exact ⟨fun f hf => h.1 f (hg.1 ▸ hf), fun e he => h.2 e (hg.2 ▸ he)⟩
+  exact ⟨fun f hf => h.1 f (hg.1 ▸ hf), fun e he => h.2.1 e (hg.2.1 ▸ he), fun c hc => h.2.2 c (hg.2.2.1 ▸ hc)⟩
 
 /-- A scope with the same globals has the same local functions, which change
 the same locals. -/
@@ -2809,8 +2835,8 @@ theorem translateDateCall_ok {s : Span} {method : String} {d c : Code} {args : L
     · simp at h
   · simp at h
 
--- The value type has many constructors, and `cases` on a value makes a goal
--- for each, so this proof takes more than the default heartbeats.
+-- The proof unfolds every array method once, which takes more than the
+-- default budget.
 set_option maxHeartbeats 400000 in
 theorem translateArrayCall_sound {F : Nat}
     (ihE : ∀ env exp e ctx c ctx', translateExpr F env exp e ctx = .ok c ctx' →
@@ -3302,7 +3328,7 @@ theorem translateMember_sound {F : Nat}
     rename_i hng
     simp only [not_or, Bool.not_eq_true] at hng
     have hname : e.name = n := by simpa using List.find?_some he
-    have hres := hs.2.2 e (List.mem_of_find?_eq_some he)
+    have hres := hs.2.2.1 e (List.mem_of_find?_eq_some he)
     rw [hname] at hres
     have hnone : ρs.lookup n = none := hs.none hng.1
     have hg : n ≠ "NaN" ∧ n ≠ "Infinity" ∧ n ≠ "undefined" := by
@@ -3918,6 +3944,9 @@ theorem translateCall_sound {F : Nat} (hc : CallsAgree (N := N) m.program fs fue
       · simp at h
       · rename_i hlocal
         have hlocal' : env.has name = false := by simpa using hlocal
+        try simp only [bind_ok] at h
+        obtain ⟨_, s₂, hcf, h⟩ := h
+        obtain rfl := checkCrossFileThrow_ok hcf
         try simp only [bind_ok] at h
         obtain ⟨_, s₂, hck, h⟩ := h
         obtain rfl := checkThrowingCall_ok hck

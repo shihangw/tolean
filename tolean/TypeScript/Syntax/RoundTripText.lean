@@ -477,6 +477,31 @@ theorem exportWords_line (e : Bool) : LineOK (exportWords e) := by
   · exact LineOK.word (by simp [keywordWord])
 
 theorem Decl.lineOK : ∀ d : Decl, ∀ l ∈ d.lines, LineOK l.2
+  | .errorClass _ exported name ctor, l, hl => by
+    simp only [Decl.lines, List.mem_cons, List.mem_append, List.not_mem_nil, or_false] at hl
+    rcases hl with (rfl | hl) | rfl
+    · exact (exportWords_line exported).append (LineOK.cons (by simp [keywordWord]) (LineOK.cons (by simp [identWord])
+        (LineOK.cons (by simp [keywordWord]) (LineOK.cons (by simp [identWord])
+          (LineOK.word (by simp [punctWord]))))))
+    · cases ctor with
+      | none => simp [ctorLines] at hl
+      | some c =>
+        obtain ⟨ps, m⟩ := c
+        simp only [ctorLines, List.mem_cons, List.not_mem_nil, or_false] at hl
+        rcases hl with rfl | rfl | rfl
+        · have hp : ∀ x ∈ ps.map CtorParam.words, Fine x := by
+            intro x hx
+            simp only [List.mem_map] at hx
+            obtain ⟨p, _, rfl⟩ := hx
+            have hline : Fine p.param.words := Fine.ofLine (by simp [identWord]) (paramRest_line p.param)
+            unfold CtorParam.words; split
+            · exact Fine.ofLine (by simp [identWord]) hline.line
+            · simpa using hline
+          exact LineOK.cons (by simp [identWord]) ((fine_enclose hp).line.append (LineOK.word (by simp [punctWord])))
+        · exact LineOK.cons (by simp [keywordWord]) (LineOK.cons (by simp [punctWord])
+            ((Expr.fine m).line.append (LineOK.cons (by simp [punctWord]) (LineOK.word (by simp [punctWord])))))
+        · exact LineOK.word (by simp [punctWord])
+    · exact LineOK.word (by simp [punctWord])
   | .import _ names source, l, hl => by
     simp [Decl.lines] at hl; subst hl
     have hn : ∀ x ∈ names.map ImportName.words, Fine x := by

@@ -16,9 +16,13 @@ marks which links are proved, tested against a reference, or trusted.
 
 - **Declarations:** functions, with optional parameters such as `x?: T`,
   interfaces and type aliases, each of which may have type parameters such as
-  `<A, B>`, enums whose members are strings, and `const` and `let`. Each of
-  them may be exported, by `export` before it or by an export list such as
-  `export { a, type B }`.
+  `<A, B>`, enums whose members are strings, error classes, and `const` and
+  `let`. Each of them may be exported, by `export` before it or by an export
+  list such as `export { a, type B }`. An error class is
+  `class Name extends Error { constructor(params) { super(message); } }`, with
+  `readonly` allowed before a parameter, or the same with no constructor. The
+  parser refuses every other class: one that does not extend `Error`, a field,
+  a method, or any other statement in the constructor.
 - **Statements:** `const` and `let` declarations, array destructuring such as
   `const [a, , b, ...rest] = xs`, expression statements,
   `return`, `throw`, `if` and `else`, `for … of` with a name or an array
@@ -431,7 +435,7 @@ the file, the line and the reason. It never approximates.
 | `type T = A \| B`, a union of interfaces with a tag field such as `kind: 'circle'` | `inductive T` with a constructor for each member, which holds the member's structure. The structure leaves the tag field out, because its value never changes. An object literal where a `T` is expected becomes the constructor of its tag. |
 | `if (s.kind === 'circle')`, with `===` or `!==` and the string on either side | `match s with \| T.circle s => … \| …`. TypeScript narrows `s` in each branch, and so does the output. A chain of such tests on the same value becomes one `match`. |
 | `switch (s.kind)` with a `case 'circle':` for each member, or a `default:` last, where every clause returns | The same `match`, with one arm for each case. The `default`, or the code after the `switch` when it has no `default`, becomes the arm for the members that no case names. |
-| The same `switch`, where every clause changes locals and ends in `break` | `let (x, y) := match s with …`, as for an `if` that changes locals. The last clause may leave out its `break`. Without a `default`, the arm for the members that no case names keeps the locals as they are. In a loop body, the `match` is the step of the `List.foldl`. |
+| The same `switch`, where every clause changes locals and ends in `break`, or throws | `let (x, y) := match s with …`, as for an `if` that changes locals. The last clause may leave out its `break`. Without a `default`, the arm for the members that no case names keeps the locals as they are. In a loop body, the `match` is the step of the `List.foldl`. |
 | The same `switch`, where the cases cover every member and a last `default: { const x: never = s; … }` checks it | The same `match`, without the `default`. TypeScript accepts the check only where no member is left, so the clause never runs. The statements after the check are not translated. In a `switch` whose clauses end in `break`, the last case needs its `break`, because without it the case would run into the `default`. |
 | `type T = string \| bigint`, a union of two or more of `string`, `number`, `bigint` and `boolean` | `inductive T` with a constructor for each member, which holds a value of its type, such as `T.string (value : JSString)`. The constructor is named after what `typeof` gives for the value. A value of a member where a `T` is expected becomes that member's constructor. |
 | `if (typeof x === 'string')`, with `===` or `!==` and the string on either side, where `x` is a local of such a union | `match x with \| T.string x => … \| …`, which narrows `x` as a test of a tag does |
@@ -441,8 +445,13 @@ the file, the line and the reason. It never approximates.
 | `function g(a: A): void { … }` at the top of the body of a function `f`, which changes `let` locals of `f`, and a call `g(a);` as a statement | `def f.g`, before `f`. It takes the locals of `f` that its body names, then its own parameters, and it returns the locals that it changes, as a tuple when there are two or more. A call is `let (x, y) := f.g x y a`, which binds those locals again, so a call in a loop body changes the state of the loop. |
 | `function g(a: A): T { … }` in the same place, which changes no variable of `f`, called as the whole value of a `const`, a `let` or a `return` | `def f.g` that returns the `T`, and `let v := f.g x a` at the call |
 | A function that calls itself, where each call passes a part of one parameter, the same one in every call. A part is a field of it, a value that a test of `null`, `undefined` or a tag narrows it to, an element of an array in it, an element of a tuple in it, or a part of one of these. | The same `def`, followed by `termination_by p` for the parameter `p`, and `decreasing_by all_goals tolean_decreasing`. Each call passes a value that is smaller by `sizeOf`, and the tactic from `tolean.TypeScript.Decreasing` proves it, so Lean checks that the function ends. Each `match` in such a function names the equation of its value `_h'`, which the tactic reads. Lean defines the function by well-founded recursion, so a claim unfolds it with `unfold` or `simp`, not with `rfl` or `decide`. |
-| `throw new Error(m)`, where `m` is a `string`, as the last statement of a function or of a branch that ends it | `throw (JSError.mk m)`. A function that can throw returns `Except JSError R`, and each value that it returns is `pure` of the value. `JSError`, in `tolean/TypeScript/Spec/Error.lean`, holds the message. |
-| `const x = f(a)`, `let x = f(a)` or `return f(a)`, where `f` can throw, in the statements that end the function | `f a >>= fun x => …`, which passes the error of the call on. So the function that holds the call can throw too. |
+| `throw new Error(m)`, where `m` is a `string`, as the last statement of a function, of a loop body, or of a branch | `throw (JSError.mk m)`. A function that can throw returns `Except JSError R`, and each value that it returns is `pure` of the value. `JSError`, in `tolean/TypeScript/Spec/Error.lean`, holds the message. |
+| `const x = f(a)`, `let x = f(a)` or `return f(a)`, where `f` can throw | `f a >>= fun x => …`, which passes the error of the call on. So the function that holds the call can throw too. |
+| A call of `f` inside a larger expression, such as `return f(a) + 1n`, where JS evaluates the call whenever it evaluates the statement | `f a >>= fun r0' => …` before the statement, which reads `r0'` in place of the call. Each operand that JS evaluates before the call, such as `x.count` in `x.count + f(a)`, moves out first, to a `let` of its own, so the output runs the same operations in the same order. A literal whose parts are all literals stays, because it reads nothing and runs nothing, and its type comes from its position. The interpreter runs the statements in this form too (`Eval.Stmt.hoisted`), so the translator translates the body the interpreter runs. |
+| A loop whose body can throw, by a `throw` or a call of a function that can, and that changes a local or returns | The same fold in the `Except` monad: `List.foldlM`, or `forIn` without `Id.run`, followed by `>>= fun (x, y) =>` for the statements after the loop. Each run of the body ends in `pure` of its state, or throws. |
+| An `if` or a `switch` that changes locals, where a branch can throw | `(if c then throw e else pure (x, y)) >>= fun (x, y) =>`, so that the statements after it take the state from the branch that did not throw |
+| `class C extends Error { constructor(readonly a: T, b: U) { super(m); } }`, or the same with no constructor | A constructor `C` of `Thrown`, the inductive of the errors that the file's functions throw, with the message and the `readonly` parameters as fields. `Thrown` comes first in the file, with `error (value : JSError)` for `throw new Error(m)`. Every function of the file that can throw then returns `Except Thrown R`. A parameter must have a primitive type and may not be named `message`, `name`, `stack` or `cause`; the message may not call a function; and the class must be declared before the functions that throw it, and may not be named `error`. [A decision record](../decisions/2026-11-11-thrown-per-file.md) explains the type and the rules. |
+| `throw new C(args)`, in the places where `throw new Error(m)` may stand | `throw (Thrown.«C» m a)`, with the constructor's message written over the arguments, which first move to names unless they are literals, and the `readonly` arguments as the fields. The substitution stops at the parameters of an arrow function in the message. |
 | `const x = e`, `let x = e` | `let x := e` |
 | `x = e`, `x += e`, `x -= e`, `x *= e` on a `let` local | `let x := …` (shadowing) |
 | `x ??= e` on a `let` local of type `T \| null` | `let x := Option.or x e`. JS evaluates `e` only when `x` is `null`. Lean evaluates it either way, but the result is the same, because the subset has no side effects. |
@@ -514,10 +523,17 @@ the file, the line and the reason. It never approximates.
 Tolean rejects these, among others:
 
 - `try` and `catch`, and a `throw` of anything but `new Error(message)`. It
-  also rejects a `throw` in a loop body, or in a branch that changes locals,
-  and a call of a function that can throw anywhere but as the whole value of
-  a declaration or a `return`. The output would need `forIn` and `let` in the
-  `Except` monad there.
+  also rejects a call of a function that can throw where JS may not evaluate
+  it, or evaluates it more than once: in a branch of `?:`, after `&&`, `||`
+  or `??`, in the test or the update of a counted `for` loop, or in an arrow
+  function. A call of an imported function that can throw must be the whole
+  value of a declaration or a `return`, because the hoisting decides which
+  functions can throw from the file alone and does not follow imports yet.
+  The same holds for a function of the file that can throw only through an
+  imported function. When that file or this one declares error classes, the
+  call is refused, because the two files throw values of two types.
+- `new C(args)` for an error class anywhere but in a `throw`, and an error
+  class with a parameter whose type is not primitive.
 
 - Fractional or unsafe `number` literals, such as `0.5` and `2 ** 53`. It also
   rejects `%` on `number`, because no law covers it yet, and the functions of
@@ -685,8 +701,9 @@ Tolean rejects these, among others:
   a chain of `if (s.kind === 'a') return …`, so that Lean sees one `match`
   that covers every member.
 - A `switch` that does not test the tag of a tagged union, and fallthrough:
-  each clause must end in `return`, or each in `break`. A clause that ends in
-  `break` may not return, and may not break or continue before its end.
+  each clause must end in `return`, or each in `break` or `throw`. A clause
+  that ends in `break` may not return, and may not break or continue before
+  its end.
   Tolean also refuses a `default` that is not the last clause, and one that
   no member can reach unless it assigns the local to `never`. It refuses a
   `default` that assigns the local to `never` while a member is left, a
