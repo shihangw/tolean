@@ -244,6 +244,19 @@ const CHECKS: Record<string, { statement: string; check: () => void }> = {
       (i, j) => i === j,
     ),
   },
+  toStr: {
+    statement: '∀ {x : N} {i : Int}, toSafeInt x = some i → toStr x = JSString.ofInt i',
+    // `String(x)` on a safe integer is the decimal text of the integer, as
+    // Lean's `toString` writes an `Int`. `-0` writes as `0`.
+    check: () =>
+      fc.assert(
+        fc.property(safeInteger, (x) => {
+          const i = toSafeInt(x);
+          if (i != null) expect(String(x)).toBe(i.toString());
+        }),
+        RUNS,
+      ),
+  },
 };
 
 // Every kind of double: NaN in several forms, ±Infinity, ±0, subnormals,

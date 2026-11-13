@@ -89,6 +89,13 @@ export class Gen {
     return this.next() < p;
   }
 
+  /** An integer literal for an index or a position: negative ones count
+   * from the end where a method allows it, and 9 is past the end of most
+   * strings here. */
+  private intLiteral(): string {
+    return this.pick(['-3', '-1', '0', '1', '2', '9']);
+  }
+
   private pick<T>(xs: ReadonlyArray<T>): T {
     const x = xs[Math.floor(this.next() * xs.length)];
     if (x === undefined) {
@@ -222,6 +229,8 @@ export class Gen {
           options.push(
             () => `(${this.expr(STRING, vars, d)}).length`,
             () => `(${this.expr(STRING, vars, d)}).indexOf(${this.expr(STRING, vars, d)})`,
+            // A position, which `indexOf` clamps to the string.
+            () => `(${this.expr(STRING, vars, d)}).indexOf(${this.expr(STRING, vars, d)}, ${this.intLiteral()})`,
           );
         }
         // An element of an array, by an index that is a number literal,
@@ -296,6 +305,10 @@ export class Gen {
           },
           // A test of one string in another, by code units.
           () => `(${this.expr(STRING, vars, d)}).${this.pick(['startsWith', 'endsWith', 'includes'])}(${this.expr(STRING, vars, d)})`,
+          // The same tests from a position, or before an end position.
+          () =>
+            `(${this.expr(STRING, vars, d)}).${this.pick(['startsWith', 'endsWith', 'includes'])}(` +
+            `${this.expr(STRING, vars, d)}, ${this.intLiteral()})`,
           // A test of the pieces that `split` gives.
           () => {
             const p = this.fresh('c');
@@ -336,12 +349,45 @@ export class Gen {
         // with ToString. The operands are in parentheses, so that a
         // conditional inside one does not take the `+` into its test.
         options.push(() => {
-          const other = this.expr(this.pick([STRING, BIGINT, BOOLEAN]), vars, d);
+          const other = this.expr(this.pick([STRING, NUMBER, BIGINT, BOOLEAN]), vars, d);
           const s = this.expr(STRING, vars, d);
           return this.chance(0.5) ? `(${s}) + (${other})` : `(${other}) + (${s})`;
         });
         // `trim`, `trimStart` and `trimEnd`, which remove white space.
         options.push(() => `(${this.expr(STRING, vars, d)}).${this.pick(['trim', 'trimStart', 'trimEnd'])}()`);
+        // A template literal, which converts each substitution with
+        // ToString. The text holds an escaped backtick, an escaped `${`,
+        // and a line break, which the lexer reads as `\n`.
+        options.push(() => {
+          const part = (): string => `\${${this.expr(this.pick([STRING, NUMBER, BIGINT, BOOLEAN]), vars, d)}}`;
+          return this.pick([
+            () => '`plain`',
+            () => `\`a${part()}\``,
+            () => `\`${part()}\\\`-${part()}\\\${x}\n${part()}\``,
+          ])();
+        });
+        // A case change, which the interpreter gives only on ASCII strings,
+        // and `JSON.stringify` of a string or a boolean, which escapes
+        // quotes, control characters and lone surrogates.
+        options.push(
+          () => `(${this.expr(STRING, vars, d)}).${this.pick(['toUpperCase', 'toLowerCase'])}()`,
+          () => `JSON.stringify(${this.expr(this.pick([STRING, BOOLEAN]), vars, d)})`,
+        );
+        // `slice`, `at`, `padStart` and `padEnd`, with integer literals, which
+        // count code units. A negative index counts from the end.
+        options.push(
+          () => {
+            const s = `(${this.expr(STRING, vars, d)})`;
+            const bounds = this.pick([[], [this.intLiteral()], [this.intLiteral(), this.intLiteral()]]);
+            return `${s}.slice(${bounds.join(', ')})`;
+          },
+          () => `((${this.expr(STRING, vars, d)}).at(${this.intLiteral()}) ?? ${this.expr(STRING, vars, d)})`,
+          () => {
+            const method = this.pick(['padStart', 'padEnd']);
+            const fill = this.chance(0.5) ? `, ${this.expr(STRING, vars, d)}` : '';
+            return `(${this.expr(STRING, vars, d)}).${method}(${this.pick(['0', '3', '6'])}${fill})`;
+          },
+        );
         // `typeof` on a value of any type. The translator accepts it only in
         // the test of an `if` on a union of primitive types, but the
         // interpreter runs it anywhere, so this and the comparison of
@@ -361,6 +407,13 @@ export class Gen {
         // `split` with a string separator gives an array of strings.
         if (t.of.k === 'string') {
           options.push(() => `(${this.expr(STRING, vars, d)}).split(${this.expr(STRING, vars, d)})`);
+          // A limit, which ToUint32 takes modulo 2^32, so 4294967297 is 1.
+          options.push(() =>
+            `(${this.expr(STRING, vars, d)}).split(${this.expr(STRING, vars, d)}, ` +
+            `${this.pick(['0', '1', '2', '-1', '4294967297'])})`);
+          // A spread of a string gives its code points, so a surrogate pair
+          // stays one string and a lone surrogate is a string of its own.
+          options.push(() => `[...${this.expr(STRING, vars, d)}]`);
         }
         break;
       default:
