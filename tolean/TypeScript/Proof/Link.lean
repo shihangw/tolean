@@ -520,16 +520,15 @@ theorem consistentOn_of_transCmp {α : Type} {cmp : α → α → Option Orderin
   have := Std.TransCmp.isLE_trans (hle _ hab) (hle _ hbc)
   cases hac : o a c <;> simp_all
 
-/-- A sort of encoded values and `JSNumber.sortWith` agree, when the body of
-the comparator gives the number `cmp x y`, when no encoded value is
-`undefined`, and when the comparator is consistent for every list. A
-certificate proves a lemma for each sort from this one. -/
-theorem sortValues_sortWith {α : Type} (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
+/-- A sort of encoded values and `JSNumber.sortWith` agree when the comparator
+is consistent on this input list. The condition need not hold for other
+inputs, so a proof may exclude NaN keys or infinite keys. -/
+theorem sortValues_sortWith_on {α : Type} (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
     (ρ : Eval.Env N) (param other : String) (body : IR.Expr) (encX : α → Val N) (cmp : α → α → N)
     (hb : ∀ x y, IR.Expr.eval fs fuel ((param, encX x) :: (other, encX y) :: ρ) body = some (.num (cmp x y)))
     (hu : ∀ x, encX x ≠ .undefined)
-    (hc : ∀ xs : List α, Eval.consistentOn (fun x y => JSNumber.compareSign (cmp x y)) xs = true)
-    (xs : List α) :
+    (xs : List α)
+    (hc : Eval.consistentOn (fun x y => JSNumber.compareSign (cmp x y)) xs = true) :
     Eval.sortValues (IR.Expr.evalCompare fs fuel ρ param other body) (xs.map encX) =
       some ((JSNumber.sortWith cmp xs).map encX) := by
   have he : ∀ x y, IR.Expr.evalCompare fs fuel ρ param other body (encX x) (encX y) =
@@ -544,12 +543,25 @@ theorem sortValues_sortWith {α : Type} (fs : List (DeclRef × List String × IR
     · contradiction
     · rw [hb x y]; rfl
   have hcons : Eval.consistentOn (IR.Expr.evalCompare fs fuel ρ param other body) (xs.map encX) = true := by
-    have := hc xs
-    unfold Eval.consistentOn at this ⊢
-    simpa [List.all_map, he] using this
+    unfold Eval.consistentOn at hc ⊢
+    simpa [List.all_map, he] using hc
   unfold Eval.sortValues JSNumber.sortWith
   rw [if_pos hcons, List.map_mergeSort (s := fun a b => IR.Expr.evalCompare fs fuel ρ param other body a b != some .gt)
     (fun a _ b _ => by simp only [he])]
+
+/-- A sort of encoded values and `JSNumber.sortWith` agree, when the body of
+the comparator gives the number `cmp x y`, when no encoded value is
+`undefined`, and when the comparator is consistent for every list. A
+certificate proves a lemma for each sort from this one. -/
+theorem sortValues_sortWith {α : Type} (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
+    (ρ : Eval.Env N) (param other : String) (body : IR.Expr) (encX : α → Val N) (cmp : α → α → N)
+    (hb : ∀ x y, IR.Expr.eval fs fuel ((param, encX x) :: (other, encX y) :: ρ) body = some (.num (cmp x y)))
+    (hu : ∀ x, encX x ≠ .undefined)
+    (hc : ∀ xs : List α, Eval.consistentOn (fun x y => JSNumber.compareSign (cmp x y)) xs = true)
+    (xs : List α) :
+    Eval.sortValues (IR.Expr.evalCompare fs fuel ρ param other body) (xs.map encX) =
+      some ((JSNumber.sortWith cmp xs).map encX) :=
+  sortValues_sortWith_on fs fuel ρ param other body encX cmp hb hu xs (hc xs)
 
 theorem int_compare_of_lt {a b : Int} (h : a < b) : compare a b = .lt := Int.compare_eq_lt.mpr h
 theorem int_compare_of_gt {a b : Int} (h : b < a) : compare a b = .gt := Int.compare_eq_gt.mpr h
