@@ -1,5 +1,5 @@
 /**
- * `SafeIntLaws` and `SpecialValueLaws` (tolean/TypeScript/Spec/Number.lean),
+ * `SafeIntLaws`, `SpecialValueLaws` and `NumberOrderLaws` (Spec/Number.lean),
  * checked against real JS doubles.
  *
  * The laws are the only facts about `number` that the proofs may use. They are
@@ -469,6 +469,55 @@ const SPECIAL_VALUE_CHECKS: Record<
   },
 };
 
+// Include infinities for the order laws, but not for subtraction: even
+// Infinity - Infinity is NaN. Finite differences may overflow to infinity.
+const orderedNumber = anyNumber.filter((a) => !Number.isNaN(a));
+const finiteNumber = fc.oneof(
+  anyNumber.filter(Number.isFinite),
+  fc.constantFrom(Number.MAX_VALUE, -Number.MAX_VALUE, Number.MIN_VALUE, -Number.MIN_VALUE, -0),
+);
+const NUMBER_ORDER_CHECKS: Record<string, { statement: string; check: () => void }> = {
+  lt_irrefl: {
+    statement: '∀ {a : N}, isNaN a = false → lt a a = false',
+    check: () => fc.assert(fc.property(orderedNumber, (a) => !(a < a)), RUNS),
+  },
+  lt_trans: {
+    statement: '∀ {a b c : N}, isNaN a = false → isNaN b = false → isNaN c = false → lt a b = true → lt b c = true → lt a c = true',
+    check: () => fc.assert(fc.property(orderedNumber, orderedNumber, orderedNumber,
+      (a, b, c) => !(a < b && b < c) || a < c), RUNS),
+  },
+  lt_asymm: {
+    statement: '∀ {a b : N}, isNaN a = false → isNaN b = false → lt a b = true → lt b a = false',
+    check: () => fc.assert(fc.property(orderedNumber, orderedNumber,
+      (a, b) => !(a < b) || !(b < a)), RUNS),
+  },
+  eq_iff: {
+    statement: '∀ {a b : N}, isNaN a = false → isNaN b = false → eq a b = (!(lt a b) && !(lt b a))',
+    check: () => fc.assert(fc.property(orderedNumber, orderedNumber,
+      (a, b) => (a === b) === (!(a < b) && !(b < a))), RUNS),
+  },
+  not_lt_trans: {
+    statement: '∀ {a b c : N}, isNaN a = false → isNaN b = false → isNaN c = false → lt a b = false → lt b c = false → lt a c = false',
+    check: () => fc.assert(fc.property(orderedNumber, orderedNumber, orderedNumber,
+      (a, b, c) => a < b || b < c || !(a < c)), RUNS),
+  },
+  sub_not_nan: {
+    statement: '∀ {a b : N}, isFinite a = true → isFinite b = true → isNaN (sub a b) = false',
+    check: () => fc.assert(fc.property(finiteNumber, finiteNumber,
+      (a, b) => !Number.isNaN(a - b)), RUNS),
+  },
+  sub_lt_zero: {
+    statement: '∀ {a b : N}, isFinite a = true → isFinite b = true → lt (sub a b) (ofSafeInt 0) = lt a b',
+    check: () => fc.assert(fc.property(finiteNumber, finiteNumber,
+      (a, b) => (a - b < 0) === (a < b)), RUNS),
+  },
+  zero_lt_sub: {
+    statement: '∀ {a b : N}, isFinite a = true → isFinite b = true → lt (ofSafeInt 0) (sub a b) = lt b a',
+    check: () => fc.assert(fc.property(finiteNumber, finiteNumber,
+      (a, b) => (0 < a - b) === (b < a)), RUNS),
+  },
+};
+
 const SOURCE = readFileSync(
   new URL('../../tolean/TypeScript/Spec/Number.lean', import.meta.url),
   'utf8',
@@ -505,6 +554,7 @@ function readLaws(className: string): ReadonlyMap<string, string> {
 describe.each([
   ['SafeIntLaws', CHECKS],
   ['SpecialValueLaws', SPECIAL_VALUE_CHECKS],
+  ['NumberOrderLaws', NUMBER_ORDER_CHECKS],
 ])('%s hold for JS doubles', (className, checks) => {
   const laws = readLaws(className);
 

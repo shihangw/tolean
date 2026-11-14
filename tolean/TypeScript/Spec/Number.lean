@@ -297,6 +297,27 @@ class SafeIntLaws (N : Type) [JSNumber N] : Prop where
   negative, as for a bigint. `-0` is a safe integer, and it is `"0"`. -/
   toStr : ∀ {x : N} {i : Int}, toSafeInt x = some i → toStr x = JSString.ofInt i
 
+/-- The order of non-NaN numbers and the sign of a finite-key difference.
+These are hypotheses on a number model, not axioms. Equality here is JS
+equality, so positive and negative zero compare equal. ECMA-262 §6.1.6.1.13
+defines the order; §6.1.6.1.8 and §6.1.6.1.14 define subtraction and equality. -/
+class NumberOrderLaws (N : Type) [JSNumber N] : Prop where
+  lt_irrefl : ∀ {a : N}, isNaN a = false → lt a a = false
+  lt_trans : ∀ {a b c : N}, isNaN a = false → isNaN b = false → isNaN c = false →
+    lt a b = true → lt b c = true → lt a c = true
+  lt_asymm : ∀ {a b : N}, isNaN a = false → isNaN b = false →
+    lt a b = true → lt b a = false
+  not_lt_trans : ∀ {a b c : N}, isNaN a = false → isNaN b = false → isNaN c = false →
+    lt a b = false → lt b c = false → lt a c = false
+  eq_iff : ∀ {a b : N}, isNaN a = false → isNaN b = false →
+    eq a b = (!(lt a b) && !(lt b a))
+  sub_not_nan : ∀ {a b : N}, isFinite a = true → isFinite b = true →
+    isNaN (sub a b) = false
+  sub_lt_zero : ∀ {a b : N}, isFinite a = true → isFinite b = true →
+    lt (sub a b) (ofSafeInt 0) = lt a b
+  zero_lt_sub : ∀ {a b : N}, isFinite a = true → isFinite b = true →
+    lt (ofSafeInt 0) (sub a b) = lt b a
+
 /-- How `NaN` and `±Infinity` behave. -/
 class SpecialValueLaws (N : Type) [JSNumber N] : Prop where
   eq_refl : ∀ {a : N}, isNaN a = false → eq a a = true

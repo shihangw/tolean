@@ -424,7 +424,10 @@ def numberLaws : List Name := [``SafeIntLaws.add,
     ``SpecialValueLaws.nan_max, ``SafeIntLaws.toInt, ``SpecialValueLaws.toInt_not_finite,
     ``SpecialValueLaws.toInt_finite, ``SpecialValueLaws.toInt_trunc,
     ``SafeIntLaws.ofInt, ``SpecialValueLaws.negZero_eq_zero, ``SpecialValueLaws.negZero_ofSafeInt,
-    ``SpecialValueLaws.nan_not_negZero]
+    ``SpecialValueLaws.nan_not_negZero,
+    ``NumberOrderLaws.lt_irrefl, ``NumberOrderLaws.lt_trans, ``NumberOrderLaws.lt_asymm,
+    ``NumberOrderLaws.not_lt_trans, ``NumberOrderLaws.eq_iff, ``NumberOrderLaws.sub_not_nan,
+    ``NumberOrderLaws.sub_lt_zero, ``NumberOrderLaws.zero_lt_sub]
 
 /-- The theorems that are about no section of ECMA-262. -/
 def extras : List Group := [
