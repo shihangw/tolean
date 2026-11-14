@@ -285,7 +285,7 @@ partial def exprCallbacks : IR.Expr → List Callback
   | .field a _ _ | .propNot a | .not a | .neg a | .isNone a | .isSome a | .decide a | .push _ a
   | .update _ _ a | .inject _ _ a | .ascribe a _ => exprCallbacks a
   | .ite a b c => exprCallbacks a ++ exprCallbacks b ++ exprCallbacks c
-  | .matchNull _ a b | .coalesce a b _ | .intOp _ a b | .order _ a b | .division _ a b
+  | .matchNull _ a b _ | .coalesce a b _ | .intOp _ a b | .order _ a b | .division _ a b
   | .eq a b | .ne a b | .propAnd a b | .propOr a b | .and a b | .or a b =>
     exprCallbacks a ++ exprCallbacks b
   | .call _ args | .list args _ | .ext _ args => args.flatMap exprCallbacks
@@ -301,7 +301,7 @@ partial def exprNames : IR.Expr → List String
   | .listMethod _ items _ _ body _ => exprNames items ++ exprNames body
   | .listFold items init _ _ _ body _ => exprNames items ++ exprNames init ++ exprNames body
   | .push n a | .update _ n a => n :: exprNames a
-  | .matchNull n a b => n :: exprNames a ++ exprNames b
+  | .matchNull n a b _ => n :: exprNames a ++ exprNames b
   | .field a _ _ | .propNot a | .not a | .neg a | .isNone a | .isSome a | .decide a
   | .inject _ _ a | .ascribe a _ => exprNames a
   | .ite a b c => exprNames a ++ exprNames b ++ exprNames c

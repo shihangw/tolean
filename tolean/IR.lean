@@ -162,8 +162,10 @@ inductive Expr (T E : Type) where
   | isNone (a : Expr T E)
   /-- `a.isSome`. -/
   | isSome (a : Expr T E)
-  /-- `(match x with | none => a | some x => b)`. -/
-  | matchNull (name : String) (whenNull whenValue : Expr T E)
+  /-- `(match x with | none => a | some x => b)`.
+  Match null, or undefined when `optional`, without evaluating the
+  unselected branch. The defined branch binds the unwrapped value. -/
+  | matchNull (name : String) (whenNull whenValue : Expr T E) (optional : Bool := false)
   /-- `T.a`: the constructor `a` of the inductive type `T`. -/
   | enumCase (ref : DeclRef) (member : String)
   /-- The value of a tag field in a structure instance, such as `kind:
@@ -380,7 +382,7 @@ def Expr.refs : Expr T E → List DeclRef
   | .field a _ _ | .propNot a | .not a | .neg a | .isNone a | .isSome a
   | .decide a | .push _ a | .update _ _ a => a.refs
   | .ite a b c => a.refs ++ b.refs ++ c.refs
-  | .matchNull _ a b | .coalesce a b _ | .intOp _ a b | .order _ a b | .division _ a b
+  | .matchNull _ a b _ | .coalesce a b _ | .intOp _ a b | .order _ a b | .division _ a b
   | .eq a b | .ne a b | .propAnd a b | .propOr a b | .and a b | .or a b =>
     a.refs ++ b.refs
   | .enumCase r _ => [r]
@@ -478,7 +480,7 @@ def Expr.usesString (opUses : E → Bool) : Expr T E → Bool
   | .field a _ _ | .propNot a | .not a | .neg a | .isNone a | .isSome a
   | .decide a | .push _ a | .update _ _ a | .inject _ _ a => Expr.usesString opUses a
   | .ite a b c => Expr.usesString opUses a || Expr.usesString opUses b || Expr.usesString opUses c
-  | .matchNull _ a b | .coalesce a b _ | .intOp _ a b | .order _ a b | .division _ a b
+  | .matchNull _ a b _ | .coalesce a b _ | .intOp _ a b | .order _ a b | .division _ a b
   | .eq a b | .ne a b | .propAnd a b | .propOr a b | .and a b | .or a b =>
     Expr.usesString opUses a || Expr.usesString opUses b
   | .ascribe e t => Expr.usesString opUses e || t.usesString
@@ -559,7 +561,7 @@ def Expr.usesMap : Expr T E → Bool
   | .field a _ _ | .propNot a | .not a | .neg a | .isNone a | .isSome a
   | .decide a | .push _ a | .update _ _ a | .inject _ _ a | .proj a _ _ => a.usesMap
   | .ite a b c => a.usesMap || b.usesMap || c.usesMap
-  | .matchNull _ a b | .coalesce a b _ | .intOp _ a b | .order _ a b | .division _ a b
+  | .matchNull _ a b _ | .coalesce a b _ | .intOp _ a b | .order _ a b | .division _ a b
   | .eq a b | .ne a b | .propAnd a b | .propOr a b | .and a b | .or a b => a.usesMap || b.usesMap
   | .ascribe e t => e.usesMap || t.usesMap
   | .listMethod _ items _ t body _ => items.usesMap || t.usesMap || body.usesMap
@@ -618,7 +620,7 @@ def Expr.anyOp : Expr T E → Bool
   | .field a _ _ | .propNot a | .not a | .neg a | .isNone a | .isSome a
   | .decide a | .push _ a | .update _ _ a | .inject _ _ a | .proj a _ _ | .ascribe a _ => a.anyOp
   | .ite a b c => a.anyOp || b.anyOp || c.anyOp
-  | .matchNull _ a b | .coalesce a b _ | .intOp _ a b | .order _ a b | .division _ a b
+  | .matchNull _ a b _ | .coalesce a b _ | .intOp _ a b | .order _ a b | .division _ a b
   | .eq a b | .ne a b | .propAnd a b | .propOr a b | .and a b | .or a b => a.anyOp || b.anyOp
   | .listMethod _ items _ _ body _ => items.anyOp || body.anyOp
   | .listFold items init _ _ _ body _ => items.anyOp || init.anyOp || body.anyOp
@@ -687,7 +689,7 @@ def Expr.mentions : Expr T E → Bool
   | .field a _ _ | .propNot a | .not a | .neg a | .isNone a | .isSome a
   | .decide a | .push _ a | .update _ _ a | .inject _ _ a | .proj a _ _ => a.mentions
   | .ite a b c => a.mentions || b.mentions || c.mentions
-  | .matchNull _ a b | .coalesce a b _ | .intOp _ a b | .order _ a b | .division _ a b
+  | .matchNull _ a b _ | .coalesce a b _ | .intOp _ a b | .order _ a b | .division _ a b
   | .eq a b | .ne a b | .propAnd a b | .propOr a b | .and a b | .or a b => a.mentions || b.mentions
   | .ascribe e t => e.mentions || t.anyExt onTy
   | .listMethod _ items _ t body _ => items.mentions || t.anyExt onTy || body.mentions
@@ -1074,7 +1076,7 @@ def Expr.callsShrink (self : DeclRef) (i : Nat) (need : Int) (depths : List (Str
     items.callsShrink self i need depths && init.callsShrink self i need depths &&
       body.callsShrink self i need
         (bindPart (bindPart depths acc Option.none) param ((items.partOf depths).map (· + 1)))
-  | .matchNull name whenNull whenValue =>
+  | .matchNull name whenNull whenValue _ =>
     whenNull.callsShrink self i need depths && whenValue.callsShrink self i need (narrowPart depths name)
   | .field e _ _ | .propNot e | .not e | .neg e | .isNone e | .isSome e | .inject _ _ e
   | .decide e | .push _ e | .update _ _ e | .ascribe e _ | .proj e _ _ => e.callsShrink self i need depths
@@ -1148,7 +1150,7 @@ def Expr.calls (self : DeclRef) : Expr T E → Bool
   | .call r args => r == self || Expr.callsList self args
   | .listMethod _ items _ _ body _ => items.calls self || body.calls self
   | .listFold items init _ _ _ body _ => items.calls self || init.calls self || body.calls self
-  | .matchNull _ a b | .coalesce a b _ | .intOp _ a b | .order _ a b | .division _ a b | .eq a b
+  | .matchNull _ a b _ | .coalesce a b _ | .intOp _ a b | .order _ a b | .division _ a b | .eq a b
   | .ne a b | .propAnd a b | .propOr a b | .and a b | .or a b => a.calls self || b.calls self
   | .field e _ _ | .propNot e | .not e | .neg e | .isNone e | .isSome e | .inject _ _ e
   | .decide e | .push _ e | .update _ _ e | .ascribe e _ | .proj e _ _ => e.calls self
@@ -1306,7 +1308,7 @@ def Expr.print (names : Names) : Expr T E → String
     "({ " ++ ", ".intercalate (Expr.printFields names fields) ++ " } : " ++ type.print names ++ ")"
   | .isNone a => s!"{argument (a.print names)}.isNone"
   | .isSome a => s!"{argument (a.print names)}.isSome"
-  | .matchNull name whenNull whenValue =>
+  | .matchNull name whenNull whenValue _ =>
     s!"(match {names.matchBinder}{name} with | {leanName names "none"} => {whenNull.print names} | " ++
       s!"{leanName names "some"} {name} => {whenValue.print names})"
   | .coalesce a b nullable =>
