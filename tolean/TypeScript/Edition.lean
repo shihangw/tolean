@@ -86,6 +86,10 @@ inductive Feature where
   /-- `s.at(k)`, which counts a negative `k` from the end:
   `String.prototype.at`. -/
   | stringAt
+  /-- Number arguments of string methods: `ToIntegerOrInfinity` (§7.1.5
+  in ES2024), and `ToUint32` (§7.1.7) for `String.prototype.split`.
+  ES2015 calls the first operation `ToInteger`; the behavior is unchanged. -/
+  | stringNumberArguments
   /-- `xs.sort(cmp)` keeps the order of elements that `cmp` calls equal:
   `SortIndexedProperties`, which is stable since ES2019. -/
   | stableSort
@@ -94,6 +98,7 @@ inductive Feature where
 deriving BEq, Repr, Inhabited
 
 def Feature.since : Feature → Edition
+  | .stringNumberArguments => .es2015
   | .exponent | .arrayIncludes | .trimWhiteSpace => .es2016
   | .stringPad => .es2017
   | .objectSpread => .es2018
@@ -120,6 +125,7 @@ def Feature.describe : Feature → String
   | .trimStartEnd => "String.prototype.trimStart and trimEnd"
   | .stringPad => "String.prototype.padStart and padEnd"
   | .stringAt => "String.prototype.at"
+  | .stringNumberArguments => "number arguments of string methods"
   | .stableSort => "a stable Array.prototype.sort"
   | .arrayToSorted => "Array.prototype.toSorted"
 

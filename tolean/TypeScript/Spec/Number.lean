@@ -203,8 +203,8 @@ def JSNumber.sortWith {N α : Type} [JSNumber N] (cmp : α → α → N) (xs : L
 index: `NaN` is `0`, and a finite number loses its fraction, rounded toward
 zero, as `toInt` gives it. `Infinity` becomes `2^53` and `-Infinity`
 becomes `-2^53`. That changes no index, because an array has fewer than 2^32
-elements: either way, the index is past the end of the array, or before its
-start. -/
+elements and a string has at most 2^53 - 1 code units: either way, the index
+is past the end, or before the start. -/
 def JSNumber.toIndexInt {N : Type} [JSNumber N] (x : N) : Int :=
   match toInt x with
   | some i => i
