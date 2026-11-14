@@ -675,11 +675,12 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     "Env.set_set", "Env.length_set"].map r.eval
   let mut loopLemmas : Array String := #[]
   let mut thms : Array String := #[]
+  -- The translator requires a callee before its caller, so the condition
+  -- of a callee is available when the caller's theorem is written.
+  let mut functionConditions : List (String × List (Nat × IR.Ty × List String × Bool)) := []
   for d in m.decls do
     let .function _ _ name _ params _ syntaxBody := d | continue
     unless fns.contains name do continue
-    if numericSorts && !((stmtsOf syntaxBody).flatMap stmtCalls).isEmpty then
-      throw s!"{file}: cannot yet propagate number-sort preconditions through calls in {name}"
     let some (.function _ outParams outRet outBody) := decls.find? fun
         | .function n .. => n == name
         | _ => false
@@ -688,6 +689,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     -- hold one, and before the callbacks that hold it.
     let mut cbIndex := 0
     let mut obligations : List (String × String) := []
+    let mut inputConditions : List (Nat × IR.Ty × List String × Bool) := []
     for (method, param, elem, cbBody, info) in bodyCallbacks outBody do
       cbIndex := cbIndex + 1
       let lemmaName := s!"{name}_cb{cbIndex}"
@@ -807,6 +809,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
             "        tolean.TypeScript.compareSign_neg_one, tolean.TypeScript.compareSign_neg_zero]\n" ++
             s!"    simpa only [hs] using {orderLemma} {key} items hkeys"
           obligations := obligations ++ [(hname, condition input)]
+          inputConditions := inputConditions ++ [((outParams.map (·.1)).idxOf input, elem, path, difference)]
           loopLemmas := loopLemmas.push (r.cert lemmaName)
           thms := thms.push <|
             s!"theorem {lemmaName} {generic} (fs : List (tolean.DeclRef × List String × tolean.TypeScript.IR.Body)){hfs}\n" ++
@@ -999,6 +1002,35 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         -- With no locals in the state, the goal is `ρ = ρ`, which the step
         -- before may already close.
         s!"    all_goals simp [{", ".intercalate ((List.range count).map fun i => s!"Env.set_of_lookup _ _ _ h{i}")}]"
+    -- A direct forwarding call transports each obligation to the actual
+    -- list parameter. Other expressions need a proof about how they build
+    -- the sorted list and remain refused.
+    for callee in ((stmtsOf syntaxBody).flatMap stmtCalls).eraseDups do
+      let conditions := (functionConditions.lookup callee).getD []
+      if conditions.isEmpty then continue
+      let .value (.call ref actuals) := outBody
+        | throw s!"{file}: a call with number-sort preconditions must be returned directly in {name}"
+      unless ref.name == callee do
+        throw s!"{file}: a call with number-sort preconditions must be returned directly in {name}"
+      for (argIndex, elem, path, difference) in conditions do
+        let some actual := actuals[argIndex]?
+          | throw s!"{file}: missing list argument for the sort precondition in {name}"
+        let some input := (match actual with
+          | .var n | .ext .append [.var n] => some n
+          | _ => none)
+          | throw s!"{file}: a sort precondition can only be passed from a list parameter in {name}"
+        unless outParams.any (fun (n, _) => n == input) do
+          throw s!"{file}: a sort precondition can only be passed from a list parameter in {name}"
+        let hname := s!"{name}_sort_precondition"
+        if r.idents.contains hname then
+          throw s!"{file}: reserved certificate hypothesis name {hname}"
+        let key := s!"(fun (x : {elem.print names}) => {".".intercalate ("x" :: path)})"
+        let predicate := if difference then "isFinite" else "isNaN"
+        let truth := if difference then "true" else "false"
+        obligations := obligations ++ [(hname,
+          s!"∀ x ∈ {input}, tolean.TypeScript.JSNumber.{predicate} ({key} x) = {truth}")]
+        inputConditions := inputConditions ++ [((outParams.map (·.1)).idxOf input, elem, path, difference)]
+    functionConditions := (name, inputConditions) :: functionConditions
     -- The encoders follow the types of the output, which the translator has
     -- already worked out from the source's types.
     let some retEnc := encoderOf r outRet | throw s!"{file}: cannot encode the result of {name}"

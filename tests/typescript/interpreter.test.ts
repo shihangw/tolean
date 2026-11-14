@@ -526,6 +526,22 @@ test('the interpreter sorts by a difference only when every key is finite', () =
   expect(lean.results.slice(finite.length)).toEqual([null, null, null, null]);
 });
 
+test('number-sort preconditions pass through forwarding calls', () => {
+  const source = 'function sorted(xs: ReadonlyArray<number>): number[] { return xs.toSorted((a, b) => b - a); }\n' +
+    'function middle(_unused: boolean, ys: ReadonlyArray<number>): number[] { return sorted(ys); }\n' +
+    'export function f(xs: ReadonlyArray<number>): number[] { return middle(true, xs); }';
+  const arrays = [[], [2, 1, 2], [Number.MAX_VALUE, -Number.MAX_VALUE, -0, 0]];
+  const input = { programs: [{ source, calls: arrays.map((xs) => ({ function: 'f', args: [xs.map(encode)] })) }] };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const [lean] = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  expect(lean?.parsed).toBe(true);
+  if (lean === undefined || !lean.parsed) return;
+  for (const [i, xs] of arrays.entries()) {
+    expect(lean.results[i]).toEqual({ value: xs.toSorted((a, b) => b - a).map(encode) });
+  }
+});
+
 test('the interpreter gives no value where an assignment to a const throws', async () => {
   const sources = [
     'export function f(): bigint | null { const x: bigint | null = null; x ??= 1n; return x; }',
