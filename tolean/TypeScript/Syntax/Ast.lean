@@ -982,4 +982,16 @@ def Expr.stripParens : Expr → Expr
   | .paren _ inner => inner.stripParens
   | e => e
 
+/-- Stripping parentheses does not grow an expression, so a function that
+matches on `e.stripParens` may recurse on a part of what it finds. -/
+theorem Expr.sizeOf_stripParens_le (e : Expr) : sizeOf e.stripParens ≤ sizeOf e := by
+  unfold Expr.stripParens
+  split
+  · rename_i s inner
+    have := Expr.sizeOf_stripParens_le inner
+    simp only [Expr.paren.sizeOf_spec]
+    omega
+  · exact Nat.le_refl _
+termination_by sizeOf e
+
 end tolean.TypeScript.Syntax

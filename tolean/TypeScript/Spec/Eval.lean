@@ -622,6 +622,12 @@ def iterValues : Val N → Option (List (Val N))
   | .str s => some (s.codePoints.map .str)
   | _ => none
 
+/-- The values that the iterator of `xs.entries()` gives on an array of
+`items` (`CreateArrayIterator` with the kind key+value, ECMA-262 §23.1.5.1):
+each element with its index, as the array `[i, x]`. -/
+def entriesOf (items : List (Val N)) : List (Val N) :=
+  (JSNumber.entries (N := N) items).map fun (i, x) => .list [.num i, x]
+
 /-- The entries of a map that `new Map(items)` makes: each item, an array
 `[key, value]`, is set in order, as `Map.prototype.set` sets it. An item of
 another shape leaves the subset. -/
@@ -1734,10 +1740,10 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
   -- would, and sets each `[key, value]`, or adds each value, in order.
   | .new _ "Map" _ [arg] => do
     if (env.lookup "Map").isSome then none
-    return .map (← mapOfItems (← iterValues (← eval m fuel env arg)))
+    return .map (← mapOfItems (← evalIter m fuel env arg))
   | .new _ "Set" _ [arg] => do
     if (env.lookup "Set").isSome then none
-    return .set (← setOfItems (← iterValues (← eval m fuel env arg)))
+    return .set (← setOfItems (← evalIter m fuel env arg))
   -- `new Error(message)` with a string message (`Error`, ECMA-262
   -- §20.5.1.1): an error object whose own property `message` is the string,
   -- unless a variable hides `Error`. As for `NaN`, a function or an enum of
@@ -1852,6 +1858,34 @@ def evalInt (m : Scope) (fuel : Nat) (env : Env N) (e : Expr) : Option Int :=
     return JSNumber.toIndexInt n
 termination_by (fuel, sizeOf e, 1)
 
+/-- The values that a form which iterates `e` visits (`GetIterator`, ECMA-262
+§7.4.3): those that `iterValues` gives for the value of `e`, except for a
+call `xs.entries()`, in any number of parentheses. That call makes a new
+iterator (§23.1.3.4 on an array, §24.1.3.4 on a map), which the form uses
+up at once. An array's iterator gives each element with its index, as
+`[i, x]`, and a map's gives its entries, as iterating the map does. The
+subset reads an iterator nowhere else, so `eval` gives `xs.entries()` no
+value. -/
+def evalIter (m : Scope) (fuel : Nat) (env : Env N) (e : Expr) : Option (List (Val N)) :=
+  match _h : e.stripParens with
+  | .call _ (.member _ recv "entries") [] => do
+    match ← eval m fuel env recv with
+    | .list items => return entriesOf items
+    | .map entries => iterValues (.map entries)
+    | _ => none
+  | _ => do iterValues (← eval m fuel env e)
+termination_by (fuel, sizeOf e, 1)
+-- The receiver is a part of what `stripParens` gives, which is no larger
+-- than `e`.
+decreasing_by
+  all_goals first
+    | decreasing_tactic
+    | (simp_wf
+       have hle := Expr.sizeOf_stripParens_le e
+       rw [_h] at hle
+       simp only [Expr.call.sizeOf_spec, Expr.member.sizeOf_spec, List.nil.sizeOf_spec] at hle
+       exact Prod.Lex.right _ (Prod.Lex.left _ _ (by omega)))
+
 def evalList (m : Scope) (fuel : Nat) (env : Env N) : List Expr → Option (List (Val N))
   | [] => some []
   | e :: es => do return (← eval m fuel env e) :: (← evalList m fuel env es)
@@ -1860,12 +1894,12 @@ termination_by es => (fuel, sizeOf es, 0)
 /-- The values that an array literal holds (`ArrayAccumulation`, ECMA-262
 §13.2.4.1): the value of each element, and in place of a spread `...e` each
 value that iterating `e` gives, in order. The subset iterates an array, a set
-and a map as `for … of` does (`iterValues`), and a spread of anything else
+and a map as `for … of` does (`evalIter`), and a spread of anything else
 leaves the subset. -/
 def evalElems (m : Scope) (fuel : Nat) (env : Env N) : List Expr → Option (List (Val N))
   | [] => some []
   | .spread _ e :: es => do
-    return (← iterValues (← eval m fuel env e)) ++ (← evalElems m fuel env es)
+    return (← evalIter m fuel env e) ++ (← evalElems m fuel env es)
   | e :: es => do return (← eval m fuel env e) :: (← evalElems m fuel env es)
 termination_by es => (fuel, sizeOf es, 0)
 
@@ -2052,7 +2086,7 @@ def execStmt (m : Scope) (fuel : Nat) (env : Env N) : Stmt → Option (Outcome N
   | .breakStmt _ => some (.brk env)
   | .continueStmt _ => some (.cont env)
   -- `for (const x of xs)` on an array, a set, a map or a string: the body runs once for
-  -- each value that `iterValues` gives, in order, with `x` bound to it in a
+  -- each value that `evalIter` gives, in order, with `x` bound to it in a
   -- new scope (`ForIn/OfBodyEvaluation`, ECMA-262 §14.7.5.7).
   -- A JS loop sees a change to what it runs over while it runs: it visits an
   -- element that the body pushes or adds, and skips one that the body
@@ -2060,14 +2094,14 @@ def execStmt (m : Scope) (fuel : Nat) (env : Env N) : Stmt → Option (Outcome N
   -- loop starts, so it gives no value for a body that changes them.
   | .forOfStmt _ .const name iterable body => do
     if Stmt.mutatesIterable iterable body then none
-    execLoop m fuel env (fun v => some [(name, v)]) body (← iterValues (← eval m fuel env iterable))
+    execLoop m fuel env (fun v => some [(name, v)]) body (← evalIter m fuel env iterable)
   -- `for (const [k, v] of xs)`: each run binds the names of the pattern to
   -- the values that iterating the item gives, as `const [k, v] = item` does
   -- (`ForDeclarationBindingInitialization`, ECMA-262 §14.7.5.3).
   | .forOfPattern _ .const p iterable body => do
     if Stmt.mutatesIterable iterable body then none
     execLoop m fuel env (fun v => do return (patternBindings p (← iterValues v)).reverse) body
-      (← iterValues (← eval m fuel env iterable))
+      (← evalIter m fuel env iterable)
   -- `for (let i = k; i < b; i++)` (`ForStatement`, ECMA-262 §14.7.4.2), where
   -- the start `k` is an integer literal: `execCounted` runs the body once for
   -- each value of `i`, in order, with `i` bound to it in a new scope, as in

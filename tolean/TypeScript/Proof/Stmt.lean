@@ -4584,10 +4584,10 @@ theorem loopPattern_sim {env bodyEnv : Translate.Env} {x : String} {p : ArrayPat
 
 /-- `translateForOfPattern` is sound, when what it calls is. -/
 theorem translateForOfPattern_sound
-    {items : TM Code} {kBody : Translate.Env → Tail → List Stmt → TM IR.Body} {kRest : TM IR.Body}
+    {items : TM (Option (Ty × IR.Expr))} {kBody : Translate.Env → Tail → List Stmt → TM IR.Body} {kRest : TM IR.Body}
     {env : Translate.Env} {s : Span} {kind : VarKind} {p : ArrayPattern} {iterable : Expr} {b : Stmt}
     {rest : List Stmt} {tail : Tail} {ctx ctx' : Ctx} {body : IR.Body}
-    (hitems : ∀ ctx c ctx', items ctx = .ok c ctx' → Sim (N := N) m fs fuel env iterable c.code)
+    (hitems : ∀ ctx found ctx', items ctx = .ok found ctx' → IterSim (N := N) m fs fuel env iterable found)
     (hkBody : ∀ env' t ss ctx b ctx', kBody env' t ss ctx = .ok b ctx' →
       StmtSim (N := N) m fs fuel env' t ss b)
     (hkRest : ∀ ctx b ctx', kRest ctx = .ok b ctx' → StmtSim (N := N) m fs fuel env tail rest b)
@@ -4618,7 +4618,7 @@ theorem translateForOfPattern_sound
         have hx : x ∈ reads.map (·.1) := by
           rw [patternReads_names hreads]
           exact List.mem_of_mem_head? hxh
-        have hsimI := hitems _ _ _ hc
+        have hit := hitems _ _ _ hc
         have hloop := loopPattern_sim m fs fuel (hkBody _ _ _ _ _ _ hbody) hreads hstep hx hfresh hhas hglob rfl
         have hrest := hkRest _ _ _ hrb
         intro ρs ρo ha hs
@@ -4637,7 +4637,7 @@ theorem translateForOfPattern_sound
           | some u =>
             cases u <;> simp [hi] at ho
             rename_i vs
-            obtain ⟨vi, hvi, hiter⟩ := loopOver_sim m fs fuel hsimI hlo ha hs hi
+            have hiter := hit _ _ hlo ρs ρo vs ha hs hi
             cases hf : IR.Body.runFold fs fuel (changedNames (blockStatements b) env) x step ρo vs with
             | none => simp [hf] at ho
             | some ro =>
@@ -4647,11 +4647,11 @@ theorem translateForOfPattern_sound
                 simp [hf] at ho
                 obtain ⟨mod, hl, hag, hfr⟩ := hnorm ρo₂ rfl
                 refine .inr ⟨mod, ρo₂, ?_, hag, hfr.mono fun n hn => by simp [stmtChanges, hn], ho⟩
-                simp [Eval.execStmt, hmut, hvi, hiter]; exact hl
+                simp [Eval.execStmt, hmut, hiter]; exact hl
               | ret w =>
                 simp [hf] at ho
                 subst ho
-                exact .inl ⟨w, rfl, by simp [Eval.execStmt, hmut, hvi, hiter]; exact hret w rfl⟩
+                exact .inl ⟨w, rfl, by simp [Eval.execStmt, hmut, hiter]; exact hret w rfl⟩
               | brk _ | cont _ => simp [hf] at ho
         constructor
         · intro v hv
@@ -4754,8 +4754,11 @@ theorem stmts_sound (F : Nat) : ∀ fuel, (∀ k ≤ fuel, CallsAgree (N := N) m
             (fun _ _ _ hx => by
               simp only [bind_ok, fuelLimit_ok] at hx
               obtain ⟨_, _, ⟨rfl, rfl⟩, hx⟩ := hx
-              exact translateRecv_sim m fs fuel
-                (fun _ _ _ hx => (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hx) hx)
+              exact iterOf_sim m fs fuel
+                (fun _ _ _ hx => translateRecv_sim m fs fuel
+                  (fun _ _ _ hx => (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hx) hx)
+                (fun _ _ _ _ hx => translateRecv_sim m fs fuel
+                  (fun _ _ _ hx => (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hx) hx) hx)
             (fun _ _ _ _ _ _ hb => ihS _ _ _ _ _ _ hb) (fun _ _ _ hb => ihS _ _ _ _ _ _ hb) h
         | returnStmt sp value =>
           cases rest <;> cases value <;> simp only at h <;> try (simp at h; done)

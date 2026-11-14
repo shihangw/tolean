@@ -3742,15 +3742,126 @@ theorem loopOver_sim {env : Translate.Env} {iterable : Expr} {items : Code} {ele
       subst happ
       rfl
 
+/-! ### What a form that iterates visits -/
+
+omit [JSNumber N] in
+/-- Without its parentheses, `e` is the call `xs.entries()`. -/
+theorem entriesRecv?_some {e recv : Expr} (h : entriesRecv? e = some recv) :
+    ∃ sp sp', e.stripParens = .call sp (.member sp' recv "entries") [] := by
+  unfold entriesRecv? at h
+  split at h
+  · cases h; exact ⟨_, _, ‹_›⟩
+  · cases h
+
+/-- An iterable other than `xs.entries()` gives what `iterValues` gives for
+its value. -/
+theorem evalIter_other {e : Expr} (h : entriesRecv? e = none) (ρ : Eval.Env N) :
+    Eval.evalIter m fuel ρ e = (Eval.eval m fuel ρ e).bind Eval.iterValues := by
+  unfold entriesRecv? at h
+  rw [Eval.evalIter]
+  split at h
+  · cases h
+  · rename_i hne
+    split
+    · rename_i sp sp' recv heq; exact absurd heq (hne sp sp' recv)
+    · rfl
+
+/-- `xs.entries()`, in any number of parentheses, gives each element of an
+array with its index, and the entries of a map. -/
+theorem evalIter_entries {e recv : Expr} (h : entriesRecv? e = some recv) (ρ : Eval.Env N) :
+    Eval.evalIter m fuel ρ e =
+      (Eval.eval m fuel ρ recv).bind fun
+        | .list items => some (Eval.entriesOf items)
+        | .map es => Eval.iterValues (.map es)
+        | _ => none := by
+  obtain ⟨sp, sp', hs⟩ := entriesRecv?_some h
+  rw [Eval.evalIter]
+  split
+  · rename_i sp₁ sp₁' recv' heq
+    rw [hs] at heq
+    cases heq
+    generalize Eval.eval m fuel ρ recv = r
+    cases r with
+    | none => rfl
+    | some w => cases w <;> rfl
+  · rename_i hne
+    exact absurd hs (hne sp sp' recv)
+
+/-- What a form that iterates `iterable` visits in the output, when `iterOf`
+found `found`, is what the interpreter's `evalIter` visits. -/
+def IterSim (env : Translate.Env) (iterable : Expr) (found : Option (Ty × IR.Expr)) : Prop :=
+  ∀ t li, found = some (t, li) → ∀ (ρs ρo : Eval.Env N) vs, Agree ρs ρo → Scoped m env ρs →
+    IR.Expr.eval fs fuel ρo li = some (.list vs) → Eval.evalIter m fuel ρs iterable = some vs
+
+theorem iterOf_sim {env : Translate.Env} {trItems trRecv : Expr → TM Code} {iterable : Expr}
+    (hI : ∀ ctx c ctx', trItems iterable ctx = .ok c ctx' → Sim (N := N) m fs fuel env iterable c.code)
+    (hR : ∀ e ctx c ctx', trRecv e ctx = .ok c ctx' → Sim (N := N) m fs fuel env e c.code)
+    {ctx ctx' : Ctx} {found : Option (Ty × IR.Expr)} (h : iterOf trItems trRecv iterable ctx = .ok found ctx') :
+    IterSim (N := N) m fs fuel env iterable found := by
+  unfold iterOf at h
+  cases he : entriesRecv? iterable with
+  | none =>
+    simp only [he, bind_ok, pure_ok] at h
+    obtain ⟨items, s₁, hitems, rfl, -⟩ := h
+    intro t li hlo ρs ρo vs ha hs hi
+    obtain ⟨v, hv, hiter⟩ := loopOver_sim m fs fuel (hI _ _ _ hitems) hlo ha hs hi
+    rw [evalIter_other m fuel he, hv]
+    simpa using hiter
+  | some recv =>
+    simp only [he, bind_ok] at h
+    obtain ⟨xs, s₁, hxs, h⟩ := h
+    have hsim := hR _ _ _ _ hxs
+    intro t li hfound ρs ρo vs ha hs hi
+    rw [evalIter_entries m fuel he]
+    generalize hty : xs.type = ty at h
+    cases ty
+    case array elem =>
+      simp only [pure_ok] at h
+      obtain ⟨rfl, -⟩ := h
+      simp only [Option.some.injEq, Prod.mk.injEq] at hfound
+      obtain ⟨-, rfl⟩ := hfound
+      obtain ⟨ws, hws, happ⟩ := out_ext fs fuel hi
+      simp only [IR.Expr.evalList] at hws
+      cases hx : IR.Expr.eval fs fuel ρo xs.value with
+      | none => simp [hx] at hws
+      | some w =>
+        simp [hx] at hws
+        subst hws
+        rw [eval_value] at hx
+        rw [hsim ρs ρo _ ha hs hx]
+        cases w <;> simp [IR.ExprExt.apply] at happ
+        subst happ
+        rfl
+    case map k v =>
+      simp only [pure_ok] at h
+      obtain ⟨rfl, -⟩ := h
+      simp only [loopOver, hty, Option.some.injEq, Prod.mk.injEq] at hfound
+      obtain ⟨-, rfl⟩ := hfound
+      obtain ⟨ws, hws, happ⟩ := out_ext fs fuel hi
+      simp only [IR.Expr.evalList] at hws
+      cases hx : IR.Expr.eval fs fuel ρo xs.value with
+      | none => simp [hx] at hws
+      | some w =>
+        simp [hx] at hws
+        subst hws
+        rw [eval_value] at hx
+        rw [hsim ρs ρo _ ha hs hx]
+        cases w <;> simp [IR.ExprExt.apply] at happ
+        subst happ
+        rfl
+    all_goals
+      simp only [pure_ok] at h
+      obtain ⟨rfl, -⟩ := h
+      simp at hfound
+
 /-! ### Array spread -/
 
 /-- What a piece of an array literal stands for: an element that is not a
-spread, which its code means, or a spread `...x`, whose list is what a loop
-over `x` visits. -/
+spread, which its code means, or a spread `...x`, whose list is what
+`evalIter` visits in `x`. -/
 def PartSim (env : Translate.Env) (e : Expr) : ElemPart → Prop
   | .one c => e.spreadArg? = none ∧ Sim (N := N) m fs fuel env e c.code
-  | .many t li => ∃ sp x items, e = .spread sp x ∧ Sim (N := N) m fs fuel env x items.code ∧
-      loopOver items = some (t, li)
+  | .many t li => ∃ sp x, e = .spread sp x ∧ IterSim (N := N) m fs fuel env x (some (t, li))
 
 theorem spreadArg?_some {e x : Expr} {sp : Span} (h : e.spreadArg? = some (sp, x)) :
     e = .spread sp x := by
@@ -3768,8 +3879,9 @@ theorem translateElem_sim {env : Translate.Env} {tr : Option Ty → Expr → TM 
     obtain ⟨sp, x⟩ := q
     rw [hs] at h
     simp only [bind_ok, orReject_ok, pure_ok] at h
-    obtain ⟨items, s₁, hi, ⟨t, li⟩, s₂, ⟨hlo, -⟩, rfl, -⟩ := h
-    exact ⟨sp, x, items, spreadArg?_some hs, htr _ _ _ _ _ hi, hlo⟩
+    obtain ⟨found, s₁, hi, ⟨t, li⟩, s₂, ⟨rfl, -⟩, rfl, -⟩ := h
+    exact ⟨sp, x, spreadArg?_some hs,
+      iterOf_sim m fs fuel (fun _ _ _ he => htr _ _ _ _ _ he) (fun _ _ _ _ he => htr _ _ _ _ _ he) hi⟩
   | none =>
     rw [hs] at h
     simp only [bind_ok, pure_ok] at h
@@ -3803,7 +3915,7 @@ theorem mapM_parts_sim {env : Translate.Env} {f : Expr → TM ElemPart}
     have hpart := hf _ _ _ _ hp
     cases p with
     | many t' li =>
-      obtain ⟨sp, x, items, rfl, hsim, hlo⟩ := hpart
+      obtain ⟨sp, x, rfl, hit⟩ := hpart
       simp only [partLists, IR.Expr.evalList] at hws
       cases hw : IR.Expr.eval fs fuel ρo li with
       | none => simp [hw] at hws
@@ -3820,9 +3932,9 @@ theorem mapM_parts_sim {env : Translate.Env} {f : Expr → TM ElemPart}
             | some lss' =>
               simp [List.mapM_cons, IR.listItems?, hl'] at hl
               subst hl
-              obtain ⟨v, hv, hiter⟩ := loopOver_sim m fs fuel hsim hlo ha hs hw
+              have hiter := hit _ _ rfl ρs ρo l ha hs hw
               have := ih _ _ _ hps ρs ρo ws' lss' ha hs hws' hl'
-              simp [Eval.evalElems, hv, hiter, this]
+              simp [Eval.evalElems, hiter, this]
           | _ => simp [List.mapM_cons, IR.listItems?] at hl
     | one c =>
       obtain ⟨hsp, hsim⟩ := hpart
@@ -3964,10 +4076,12 @@ theorem translateNew_sound {tr : Option Ty → Expr → TM Code} {env : Translat
       subst hv
       simp [Eval.eval, hnone ρs hs]
     · simp only [bind_ok, orReject_ok] at h
-      obtain ⟨declared, s₁, -, items, s₂, hitems, ⟨elem, li⟩, s₃, ⟨hlo, rfl⟩, type, s₄, -, h⟩ := h
+      obtain ⟨declared, s₁, -, found, s₂, hfound, ⟨elem, li⟩, s₃, ⟨rfl, rfl⟩, type, s₄, -, h⟩ := h
       simp only [pure_ok] at h
       obtain ⟨rfl, -⟩ := h
-      have hsim := translateRecv_sim m fs fuel (fun _ _ _ hx => htr _ _ _ _ _ hx) hitems
+      have hit := iterOf_sim m fs fuel
+        (fun _ _ _ hx => translateRecv_sim m fs fuel (fun _ _ _ hx => htr _ _ _ _ _ hx) hx)
+        (fun _ _ _ _ hx => translateRecv_sim m fs fuel (fun _ _ _ hx => htr _ _ _ _ _ hx) hx) hfound
       intro ρs ρo v ha hs hv
       simp only [IR.Expr.eval] at hv
       cases hli : IR.Expr.eval fs fuel ρo li with
@@ -3977,8 +4091,8 @@ theorem translateNew_sound {tr : Option Ty → Expr → TM Code} {env : Translat
         cases u <;> simp [IR.ExprExt.apply] at hv
         rename_i vs
         obtain ⟨es, hes, rfl⟩ := hv
-        obtain ⟨va, hva, hit⟩ := loopOver_sim m fs fuel hsim hlo ha hs hli
-        simp [Eval.eval, hnone ρs hs, hva, hit, hes]
+        have hiter := hit _ _ rfl ρs ρo _ ha hs hli
+        simp [Eval.eval, hnone ρs hs, hiter, hes]
     · simp at h
   · simp only [show ("Set" == "Map") = false from rfl, ↓reduceIte, Bool.false_eq_true] at h
     rcases args with _ | ⟨arg, _ | ⟨_, _⟩⟩
@@ -3991,10 +4105,12 @@ theorem translateNew_sound {tr : Option Ty → Expr → TM Code} {env : Translat
       subst hv
       simp [Eval.eval, hnone ρs hs]
     · simp only [bind_ok, orReject_ok] at h
-      obtain ⟨declared, s₁, -, items, s₂, hitems, ⟨elem, li⟩, s₃, ⟨hlo, rfl⟩, type, s₄, -, h⟩ := h
+      obtain ⟨declared, s₁, -, found, s₂, hfound, ⟨elem, li⟩, s₃, ⟨rfl, rfl⟩, type, s₄, -, h⟩ := h
       simp only [pure_ok] at h
       obtain ⟨rfl, -⟩ := h
-      have hsim := translateRecv_sim m fs fuel (fun _ _ _ hx => htr _ _ _ _ _ hx) hitems
+      have hit := iterOf_sim m fs fuel
+        (fun _ _ _ hx => translateRecv_sim m fs fuel (fun _ _ _ hx => htr _ _ _ _ _ hx) hx)
+        (fun _ _ _ _ hx => translateRecv_sim m fs fuel (fun _ _ _ hx => htr _ _ _ _ _ hx) hx) hfound
       intro ρs ρo v ha hs hv
       simp only [IR.Expr.eval] at hv
       cases hli : IR.Expr.eval fs fuel ρo li with
@@ -4004,8 +4120,8 @@ theorem translateNew_sound {tr : Option Ty → Expr → TM Code} {env : Translat
         cases u <;> simp [IR.ExprExt.apply] at hv
         rename_i vs
         obtain ⟨es, hes, rfl⟩ := hv
-        obtain ⟨va, hva, hit⟩ := loopOver_sim m fs fuel hsim hlo ha hs hli
-        simp [Eval.eval, hnone ρs hs, hva, hit, hes]
+        have hiter := hit _ _ rfl ρs ρo _ ha hs hli
+        simp [Eval.eval, hnone ρs hs, hiter, hes]
     · simp at h
 
 theorem out_numberSameValue {a b : IR.Expr} {ρ : Eval.Env N} {v : Val N}

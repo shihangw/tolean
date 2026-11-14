@@ -556,6 +556,17 @@ theorem int_compare_of_gt {a b : Int} (h : b < a) : compare a b = .gt := Int.com
 theorem int_compare_of_eq {a b : Int} (h1 : ¬a < b) (h2 : ¬b < a) : compare a b = .eq :=
   Int.compare_eq_eq.mpr (by omega)
 
+/-- What a loop visits in `xs.entries()`, on an encoded list: the pairs of
+`JSNumber.entries`, each encoded as the array `[i, x]`, which is how a
+certificate encodes a tuple. -/
+@[simp] theorem entriesOf_map {α : Type} (enc : α → Val N) (xs : List α) :
+    Eval.entriesOf (xs.map enc) =
+      (JSNumber.entries (N := N) xs).map (Eval.encTuple (Eval.encCons Val.num (Eval.encLast enc))) := by
+  apply List.ext_getElem
+  · simp [Eval.entriesOf, JSNumber.entries]
+  · intro i h₁ h₂
+    simp [Eval.entriesOf, JSNumber.entries, Eval.encCons]
+
 /-- `JSNumber.sliceInt` on an encoded list, which the output calls for a slice
 with a bound that is not a literal. -/
 @[simp high] theorem sliceInt_map {α β : Type} (f : α → β) (xs : List α) (a : Int) (b : Option Int) :
