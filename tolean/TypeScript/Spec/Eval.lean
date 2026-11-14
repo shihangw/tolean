@@ -55,6 +55,13 @@ inductive Val (N : Type) where
   | error (cls : String) (fields : List (String × Val N))
   /-- A `Date`: its time value, or `none` when it is invalid (`JSDate`). -/
   | date (time : Option Int)
+  /-- A function that a block of another function declares: the names of
+  its parameters and its body. A call finds the variables it sees in the
+  caller's environment, by the names that the body mentions
+  (`captures`). That is the variable that JS closes over when no
+  declaration between the function and the call hides the name, and the
+  translator refuses a declaration that hides one. -/
+  | closure (params : List String) (body : Stmt)
 deriving Inhabited
 
 /-- `ToBoolean` (ECMA-262 §7.1.2), on the values of the subset. A number is
@@ -65,7 +72,7 @@ def Val.truthy : Val N → Bool
   | .bool b => b
   | .str s => !s.isEmpty
   | .null | .undefined => false
-  | .list _ | .obj _ | .map _ | .set _ | .error _ _ | .date _ => true
+  | .list _ | .obj _ | .map _ | .set _ | .error _ _ | .date _ | .closure _ _ => true
 
 /-- The result of `typeof` (ECMA-262 §13.5.3.1) on the values of the
 subset. `null` is `"object"`, and so are an array and an object, which are
@@ -77,6 +84,7 @@ def Val.typeOf : Val N → String
   | .str _ => "string"
   | .undefined => "undefined"
   | .null | .list _ | .obj _ | .map _ | .set _ | .error _ _ | .date _ => "object"
+  | .closure _ _ => "function"
 
 /-- The variables in scope, innermost first. -/
 abbrev Env (N : Type) := List (String × Val N)
@@ -163,14 +171,16 @@ def strictEq : Val N → Val N → Option Bool
   | .undefined, .undefined => some true
   | .undefined, .int _ | .undefined, .num _ | .undefined, .bool _ | .undefined, .str _
   | .undefined, .null | .undefined, .list _ | .undefined, .obj _ | .undefined, .map _
-  | .undefined, .set _ | .undefined, .error _ _ | .undefined, .date _ => some false
+  | .undefined, .set _ | .undefined, .error _ _ | .undefined, .date _ | .undefined, .closure _ _ => some false
   | .int _, .undefined | .num _, .undefined | .bool _, .undefined | .str _, .undefined
   | .null, .undefined | .list _, .undefined | .obj _, .undefined | .map _, .undefined
-  | .set _, .undefined | .error _ _, .undefined | .date _, .undefined => some false
+  | .set _, .undefined | .error _ _, .undefined | .date _, .undefined | .closure _ _, .undefined => some false
   | .null, .int _ | .null, .num _ | .null, .bool _ | .null, .str _ | .null, .list _
-  | .null, .obj _ | .null, .map _ | .null, .set _ | .null, .error _ _ | .null, .date _ => some false
+  | .null, .obj _ | .null, .map _ | .null, .set _ | .null, .error _ _ | .null, .date _
+  | .null, .closure _ _ => some false
   | .int _, .null | .num _, .null | .bool _, .null | .str _, .null | .list _, .null
-  | .obj _, .null | .map _, .null | .set _, .null | .error _ _, .null | .date _, .null => some false
+  | .obj _, .null | .map _, .null | .set _, .null | .error _ _, .null | .date _, .null
+  | .closure _ _, .null => some false
   | _, _ => none
 
 /-- `IsLooselyEqual` (ECMA-262 §7.2.14) when one operand is `null` or
@@ -449,9 +459,11 @@ mutual
 /-- `JSON.stringify` throws a `TypeError` on `v`, because it reaches a bigint
 (SerializeJSONProperty, ECMA-262 §25.5.2.2, step 10). It reads the elements of
 an array and the own properties of an object, but not the entries of a map or
-a set, which have no own properties. -/
+a set, which have no own properties. It also holds where `v` reaches a local
+function: JS writes nothing for one, and the model gives no value there. -/
 def Val.jsonThrows : Val N → Bool
   | .int _ => true
+  | .closure _ _ => true
   | .list items => jsonThrowsList items
   | .obj fields | .error _ fields => jsonThrowsFields fields
   | _ => false
@@ -509,6 +521,7 @@ where
         (ascii ",").intercalate (present.map fun (k, x) => jsonQuote (JSString.ofString k) ++ ascii ":" ++ go x) ++
         ascii "}"
     | .map _ | .set _ => ascii "{}"
+    | .closure _ _ => panic! "the interpreter does not write a function as JSON"
 
 /-- The text of `JSON.stringify(v)` (ECMA-262 §25.5.2), where `v` is not
 `undefined` and reaches no bigint. The spec defines it fully, but the model
@@ -855,6 +868,8 @@ def Stmt.callNames : Stmt → List String
       update.elim [] Expr.callNames ++ Stmt.callNames body
   | .block _ ss => Stmt.callNamesList ss
   | .switchStmt _ d cs => Expr.callNames d ++ Stmt.callNamesClauses cs
+  -- A local function runs where it is called, and its calls with it.
+  | .funDecl _ _ _ _ _ body => Stmt.callNames body
 
 def Stmt.callNamesList : List Stmt → List String
   | [] => []
@@ -877,6 +892,8 @@ def Stmt.hasThrow : Stmt → Bool
     Stmt.hasThrow body
   | .block _ ss => Stmt.hasThrowList ss
   | .switchStmt _ _ cs => Stmt.hasThrowClauses cs
+  -- A `throw` in a local function throws from the function that calls it.
+  | .funDecl _ _ _ _ _ body => Stmt.hasThrow body
   | .varDecl .. | .destructure .. | .exprStmt .. | .returnStmt .. | .breakStmt _ | .continueStmt _
   | .empty _ => false
 
@@ -1391,10 +1408,32 @@ def mathCall (f : String) (args : List (Val N)) : Option (Val N) :=
       else none
     | _ => none
 
--- With the array callbacks and the map and set methods both in `eval`, this
--- block takes a little more than the default 200000 heartbeats to elaborate,
--- most of it in the proofs that each recursive call is smaller.
-set_option maxHeartbeats 400000 in
+/-- The variables of `env` that a local function with the parameters `params`
+and the body `body` can read and change: the ones whose names the body
+mentions and no parameter hides, in the order of `env`. -/
+def captures (env : Env N) (params : List String) (body : Stmt) : Env N :=
+  env.filter fun p => body.mentions p.1 && !params.contains p.1
+
+/-- The body may change one of the variables of `env` that it captures: it
+assigns it, or changes the collection it holds. -/
+def changesCaptured (env : Env N) (params : List String) (body : Stmt) : Bool :=
+  (captures env params body).any fun p => body.assigns p.1 || body.mutates p.1
+
+/-- `env` after a call of a local function with the parameters `params` and
+the body `body`, which ended with the variables `after`: each variable of
+`env` that the function captures takes the value that it has in `after`. The
+body is a block, which drops the variables it declares, so a name that no
+parameter has finds the captured variable in `after`. -/
+def writeBack (env after : Env N) (params : List String) (body : Stmt) : Env N :=
+  (captures env params body).foldl (fun e p => match after.lookup p.1 with
+    | some v => e.set p.1 v
+    | none => e) env
+
+-- With the array callbacks and the map and set methods in `eval`, and the
+-- calls of local functions, this block takes several times the default 200000
+-- heartbeats to elaborate, most of it in the proofs that each recursive call
+-- is smaller.
+set_option maxHeartbeats 800000 in
 mutual
 
 /-- The value of `e`. `fuel` bounds the depth of nested calls, so that the
@@ -1740,6 +1779,15 @@ def evalCall (m : Scope) (fuel : Nat) (env : Env N) (name : String) (args : List
   match fuel with
   | 0 => none
   | fuel + 1 =>
+    match env.lookup name with
+    -- A local function (`callLocal`). An expression keeps no change to a
+    -- variable, so the model gives no value for a body that may make one.
+    | some (.closure params body) =>
+      if changesCaptured env params body then none
+      return (← callLocal m fuel env params body vs).1
+    -- A call of a value that is not a function throws a `TypeError`.
+    | some _ => none
+    | none =>
     let key ← resolve m name
     let (params, body) ← (functionsOf m.program).lookup key
     -- The model holds a collection as a value, which is exact only when
@@ -1751,6 +1799,24 @@ def evalCall (m : Scope) (fuel : Nat) (env : Env N) (name : String) (args : List
     | .ret r => some r
     | .normal _ | .brk _ | .cont _ => none
 termination_by (fuel, sizeOf args, 1)
+
+/-- A call of a local function with the parameters `params`, the body `body`
+and the arguments `vs` (`[[Call]]`, ECMA-262 §10.2.1): the body runs with
+each parameter bound to its argument, in front of the variables of the
+caller that it captures. The call gives what the body returns, or
+`undefined` when the body runs to its end, and the caller's variables with
+the values that the body left in them. The model keeps no variables with a
+return, so it gives no value for a body that returns and may change a
+variable of the caller. -/
+def callLocal (m : Scope) (fuel : Nat) (env : Env N) (params : List String) (body : Stmt)
+    (vs : List (Val N)) : Option (Except (Val N) (Val N) × Env N) := do
+  -- A function declaration has a block for its body.
+  let .block sp ss := body | none
+  match ← execStmt m fuel ((← bindArgs params vs) ++ captures env params body) (.block sp ss) with
+  | .normal after => some (.ok .undefined, writeBack env after params body)
+  | .ret r => if changesCaptured env params body then none else some (r, env)
+  | .brk _ | .cont _ => none
+termination_by (fuel, sizeOf body, 1)
 
 /-- The value of `e` as the whole value of a declaration or a `return`: `.ok`
 of its value, or `.error` of what it throws when it is a call that throws. -/
@@ -1944,6 +2010,17 @@ def execStmt (m : Scope) (fuel : Nat) (env : Env N) : Stmt → Option (Outcome N
   | .exprStmt _ (.call _ (.member _ (.ident _ name) "add") [elem]) => do
     let .set elems ← env.lookup name | none
     return .normal (env.set name (.set (← setAdd elems (← eval m fuel env elem))))
+  -- `f(args);`, where `f` is a local function: the call keeps the changes
+  -- that the body makes to the caller's variables (`callLocal`).
+  | .exprStmt _ (.call _ (.ident _ name) args) => do
+    let vs ← evalList m fuel env args
+    match fuel with
+    | 0 => none
+    | fuel + 1 =>
+      let .closure params body ← env.lookup name | none
+      match ← callLocal m fuel env params body vs with
+      | (.ok _, after) => some (.normal after)
+      | (.error t, _) => some (.ret (.error t))
   | .exprStmt _ (.assign _ .assign (.ident _ name) value) => do
     return .normal (env.set name (← eval m fuel env value))
   -- `x ??= e` (`LogicalAssignment`, ECMA-262 §13.15.2): `e` runs, and its
@@ -2018,6 +2095,17 @@ def execStmt (m : Scope) (fuel : Nat) (env : Env N) : Stmt → Option (Outcome N
     | .normal env' => some (.normal (env'.drop (env'.length - env.length)))
     | .brk env' => some (.brk (env'.drop (env'.length - env.length)))
     | .cont env' => some (.cont (env'.drop (env'.length - env.length)))
+  -- A function declaration in a block (ECMA-262 §15.2.4) binds its name to
+  -- the function. JS binds every declaration of a block when the block
+  -- starts, so a call may come before the declaration, and a second
+  -- declaration of the name replaces the first for every call. The model
+  -- binds the name where the declaration stands, so it gives no value for a
+  -- name that is bound already: a second declaration, or a `let` of the
+  -- same name. A call before the declaration is a gap that
+  -- `interpreter.test.ts` lists, and the translator refuses it.
+  | .funDecl _ name _ params _ body =>
+    if (env.lookup name).isSome then none
+    else some (.normal ((name, .closure (params.map (·.name)) body) :: env))
   | _ => none
 termination_by s => (fuel, sizeOf s, 0)
 

@@ -152,6 +152,9 @@ def stmt : Stmt → String
   | .empty s => s!"({ns}Stmt.empty {span s})"
   | .switchStmt s d cs => s!"({ns}Stmt.switchStmt {span s} {expr d} {list (clauses cs)})"
   | .throwStmt s e => s!"({ns}Stmt.throwStmt {span s} {expr e})"
+  | .funDecl s n tps ps r b =>
+    s!"({ns}Stmt.funDecl {span s} {str n} {list (tps.map str)} {list (ps.map param)} " ++
+      s!"{option (r.map typeExpr)} {stmt b})"
 
 def optStmt : Option Stmt → Option String
   | some s => some (stmt s)

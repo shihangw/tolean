@@ -229,7 +229,7 @@ class Printer {
       return this.importDecl(s);
     }
     if (ts.isFunctionDeclaration(s)) {
-      return this.functionDecl(s);
+      return this.functionDecl(s, true);
     }
     if (ts.isInterfaceDeclaration(s)) {
       const exported = this.modifiers(s, [ts.SyntaxKind.ExportKeyword]).size > 0;
@@ -405,8 +405,11 @@ class Printer {
     });
   }
 
-  private functionDecl(s: ts.FunctionDeclaration): Sexp {
-    const exported = this.modifiers(s, [ts.SyntaxKind.ExportKeyword]).size > 0;
+  /** A function declaration: at the top of the module, where it may have
+   * `export`, or in a block of another function. Its body is a function of
+   * its own, so no loop is around it. */
+  private functionDecl(s: ts.FunctionDeclaration, topLevel: boolean): Sexp {
+    const exported = this.modifiers(s, topLevel ? [ts.SyntaxKind.ExportKeyword] : []).size > 0;
     if (s.asteriskToken !== undefined) {
       refuse(s, 'generator');
     }
@@ -416,9 +419,12 @@ class Printer {
     }
     const params = s.parameters.map((p) => this.param(p, true));
     const returnType = s.type === undefined ? [] : [this.type(s.type)];
+    const outer = { inFunction: this.inFunction, loopDepth: this.loopDepth };
     this.inFunction = true;
+    this.loopDepth = 0;
     const body = this.statement(s.body);
-    this.inFunction = false;
+    this.inFunction = outer.inFunction;
+    this.loopDepth = outer.loopDepth;
     return this.node(
       'function',
       s,
@@ -473,6 +479,48 @@ class Printer {
       ],
       [this.type(m.type)],
     );
+  }
+
+  /** `const g = (x: T): R => { … }` in the body of a function: a local
+   * function, which the Lean tree holds as a function declaration, because
+   * both bind `g` where they stand. Anything else, such as a name before
+   * `=>` without parentheses, is left to `variable`, which refuses an arrow
+   * function with a body in braces. */
+  private localArrow(s: ts.VariableStatement): Sexp | undefined {
+    const list = s.declarationList;
+    const [decl, ...more] = list.declarations;
+    if (!this.inFunction || this.declarationKind(list) !== 'const' || decl === undefined || more.length > 0) {
+      return undefined;
+    }
+    const e = decl.initializer;
+    if (
+      !ts.isIdentifier(decl.name) ||
+      decl.type !== undefined ||
+      decl.exclamationToken !== undefined ||
+      e === undefined ||
+      !ts.isArrowFunction(e) ||
+      !ts.isBlock(e.body) ||
+      e.modifiers !== undefined ||
+      e.typeParameters !== undefined ||
+      this.text[e.getStart(this.sf)] !== '('
+    ) {
+      return undefined;
+    }
+    // ECMA-262 allows no line break before `=>`, and the Lean parser reads
+    // the statement as a declaration then, which it refuses. Only the trivia
+    // right before `=>` counts, as for the Lean token's `newlineBefore`.
+    const arrow = e.equalsGreaterThanToken;
+    if (this.text.slice(arrow.getFullStart(), arrow.getStart(this.sf)).includes('\n')) {
+      return undefined;
+    }
+    const params = e.parameters.map((p) => this.param(p, false));
+    const returnType = e.type === undefined ? [] : [this.type(e.type)];
+    const outer = { inFunction: this.inFunction, loopDepth: this.loopDepth };
+    this.loopDepth = 0;
+    const body = this.statement(e.body);
+    this.inFunction = outer.inFunction;
+    this.loopDepth = outer.loopDepth;
+    return this.node('function', s, [this.name(decl.name)], [...params, ...returnType, body]);
   }
 
   private variable(s: ts.VariableStatement, exported: boolean): Sexp {
@@ -579,7 +627,7 @@ class Printer {
 
   /** The body of `if`, `else`, `for` or `while`. */
   private branch(s: ts.Statement): Sexp {
-    if (ts.isVariableStatement(s)) {
+    if (ts.isVariableStatement(s) || ts.isFunctionDeclaration(s)) {
       refuse(s, 'declaration without a block');
     }
     return this.statement(s);
@@ -607,6 +655,10 @@ class Printer {
   private statement(s: ts.Statement): Sexp {
     if (ts.isVariableStatement(s)) {
       this.modifiers(s, []);
+      const local = this.localArrow(s);
+      if (local !== undefined) {
+        return local;
+      }
       return this.variable(s, false);
     }
     if (ts.isExpressionStatement(s)) {
@@ -690,6 +742,12 @@ class Printer {
     }
     if (ts.isEmptyStatement(s)) {
       return this.node('empty', s, [], []);
+    }
+    if (ts.isFunctionDeclaration(s)) {
+      if (!this.inFunction) {
+        refuse(s, 'function declaration in a block outside a function');
+      }
+      return this.functionDecl(s, false);
     }
     if (ts.isSwitchStatement(s)) {
       const clauses = s.caseBlock.clauses;

@@ -257,6 +257,9 @@ def Stmt.beq : Stmt → Stmt → Bool
   | .empty a0, .empty b0 => decide (a0 = b0)
   | .switchStmt a0 a1 a2, .switchStmt b0 b1 b2 => decide (a0 = b0) && Expr.beq a1 b1 && Stmt.beqClauses a2 b2
   | .throwStmt a0 a1, .throwStmt b0 b1 => decide (a0 = b0) && Expr.beq a1 b1
+  | .funDecl a0 a1 a2 a3 a4 a5, .funDecl b0 b1 b2 b3 b4 b5 =>
+    decide (a0 = b0) && decide (a1 = b1) && decide (a2 = b2) && Param.beqList a3 b3 && TypeExpr.beqOpt a4 b4 &&
+      Stmt.beq a5 b5
   | _, _ => false
 
 def Stmt.beqList : List Stmt → List Stmt → Bool
@@ -310,6 +313,8 @@ theorem Stmt.beq_iff : (a b : Stmt) → Stmt.beq a b = true ↔ a = b
     cases b <;> simp [and_assoc, Stmt.beq, Expr.beq_iff a1, Stmt.beqClauses_iff a2]
   | .throwStmt a0 a1, b => by
     cases b <;> simp [and_assoc, Stmt.beq, Expr.beq_iff a1]
+  | .funDecl a0 a1 a2 a3 a4 a5, b => by
+    cases b <;> simp [and_assoc, Stmt.beq, Param.beqList_iff a3, TypeExpr.beqOpt_iff a4, Stmt.beq_iff a5]
 
 theorem Stmt.beqList_iff : (xs ys : List Stmt) → Stmt.beqList xs ys = true ↔ xs = ys
   | [], ys => by cases ys <;> simp [and_assoc, Stmt.beqList]
@@ -427,5 +432,11 @@ theorem Module.beq_iff (a b : Module) : Module.beq a b = true ↔ a = b := by
   obtain ⟨decls⟩ := a
   cases b
   simp [and_assoc, Module.beq, Decl.beqList_iff decls]
+
+instance : DecidableEq Stmt := fun a b => decidable_of_iff _ (Stmt.beq_iff a b)
+
+/-- A statement shows as a placeholder. Only a closure value of the spec
+holds one, and no output prints it. -/
+instance : Repr Stmt := ⟨fun _ _ => "<statement>"⟩
 
 end tolean.TypeScript.Syntax

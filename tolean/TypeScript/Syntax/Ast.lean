@@ -275,6 +275,11 @@ inductive Stmt where
   | switchStmt (span : Span) (disc : Expr) (clauses : List (Option Expr × List Stmt))
   /-- `throw value;`. -/
   | throwStmt (span : Span) (value : Expr)
+  /-- `function name<A>(params): T { … }` in a block: a function declaration
+  (ECMA-262 §15.2) inside another function, which the block binds to
+  `name`. -/
+  | funDecl (span : Span) (name : String) (typeParams : List String) (params : List Param)
+      (returnType : Option TypeExpr) (body : Stmt)
 
 instance : Inhabited Stmt := ⟨.empty default⟩
 
@@ -345,6 +350,9 @@ def Stmt.assigns (n : String) : Stmt → Bool
   | .breakStmt _ | .continueStmt _ | .empty _ => false
   | .switchStmt _ d cs => d.assigns n || Stmt.assignsClauses n cs
   | .throwStmt _ e => e.assigns n
+  -- The body runs only when the function is called; counting it anyway only
+  -- refuses more.
+  | .funDecl _ _ _ _ _ b => b.assigns n
 
 def Stmt.assignsList (n : String) : List Stmt → Bool
   | [] => false
@@ -419,6 +427,7 @@ def Stmt.mutates (n : String) : Stmt → Bool
   | .block _ ss => Stmt.mutatesList n ss
   | .breakStmt _ | .continueStmt _ | .empty _ => false
   | .switchStmt _ d cs => d.mutates n || Stmt.mutatesClauses n cs
+  | .funDecl _ _ _ _ _ b => b.mutates n
 
 def Stmt.mutatesList (n : String) : List Stmt → Bool
   | [] => false
@@ -460,6 +469,54 @@ def Property.mayHoldList (p : String → Bool) : List Property → Bool
   | [] => false
   | .shorthand _ n :: ps => p n || Property.mayHoldList p ps
   | .keyValue _ _ v :: ps | .spread _ v :: ps => v.mayHold p || Property.mayHoldList p ps
+
+end
+
+mutual
+
+/-- `s` names `n` somewhere inside it: it reads it, assigns it, declares it
+or binds it in a loop or a parameter. The names that a local function's body
+mentions are the variables around it that it may read or change. Counting a
+name that the body declares itself only adds a variable that the body never
+sees from outside. -/
+def Stmt.mentions (n : String) : Stmt → Bool
+  | .varDecl _ d => d.name == n || (match d.init with
+    | some e => e.mayHold (· == n)
+    | none => false)
+  | .destructure _ _ p _ e => p.names.contains n || e.mayHold (· == n)
+  | .exprStmt _ e | .throwStmt _ e => e.mayHold (· == n)
+  | .returnStmt _ e => match e with
+    | some e => e.mayHold (· == n)
+    | none => false
+  | .ifStmt _ t a b => t.mayHold (· == n) || a.mentions n || (match b with
+    | some b => b.mentions n
+    | none => false)
+  | .forOfStmt _ _ x it b => x == n || it.mayHold (· == n) || b.mentions n
+  | .forOfPattern _ _ p it b => p.names.contains n || it.mayHold (· == n) || b.mentions n
+  | .forStmt _ init t u b => (match init with
+    | some d => d.name == n || (match d.init with
+      | some e => e.mayHold (· == n)
+      | none => false)
+    | none => false) || (match t with
+    | some t => t.mayHold (· == n)
+    | none => false) || (match u with
+    | some u => u.mayHold (· == n)
+    | none => false) || b.mentions n
+  | .whileStmt _ t b => t.mayHold (· == n) || b.mentions n
+  | .block _ ss => Stmt.mentionsList n ss
+  | .breakStmt _ | .continueStmt _ | .empty _ => false
+  | .switchStmt _ d cs => d.mayHold (· == n) || Stmt.mentionsClauses n cs
+  | .funDecl _ name _ params _ b => name == n || params.any (·.name == n) || b.mentions n
+
+def Stmt.mentionsList (n : String) : List Stmt → Bool
+  | [] => false
+  | s :: ss => s.mentions n || Stmt.mentionsList n ss
+
+def Stmt.mentionsClauses (n : String) : List (Option Expr × List Stmt) → Bool
+  | [] => false
+  | (t, body) :: cs => (match t with
+    | some t => t.mayHold (· == n)
+    | none => false) || Stmt.mentionsList n body || Stmt.mentionsClauses n cs
 
 end
 
@@ -595,6 +652,9 @@ def Stmt.binds (n : String) : Stmt → List Bool
   | .block _ ss => Stmt.bindsList n ss
   | .switchStmt _ _ cs => Stmt.bindsClauses n cs
   | .exprStmt .. | .returnStmt .. | .breakStmt _ | .continueStmt _ | .empty _ | .throwStmt .. => []
+  -- The function's name and its parameters hold no new collection.
+  | .funDecl _ name _ params _ b =>
+    (if name == n then [false] else []) ++ (params.filter (·.name == n)).map (fun _ => false) ++ b.binds n
 
 def Stmt.bindsList (n : String) : List Stmt → List Bool
   | [] => []
@@ -633,6 +693,7 @@ def Stmt.changed : Stmt → List String
   | .block _ ss => Stmt.changedList ss
   | .breakStmt _ | .continueStmt _ | .empty _ => []
   | .switchStmt _ d cs => d.changed ++ Stmt.changedClauses cs
+  | .funDecl _ _ _ _ _ b => b.changed
 
 def Stmt.changedList : List Stmt → List String
   | [] => []
@@ -676,6 +737,11 @@ def Stmt.leaks (n : String) : Stmt → Bool
   | .block _ ss => Stmt.leaksList n ss
   | .breakStmt _ | .continueStmt _ | .empty _ => false
   | .switchStmt _ d cs => d.leaks n || Stmt.leaksClauses n cs
+  -- A local function may hold any name that it mentions and hand it on, so
+  -- the test counts it as handing on each of those. It cannot reach a name
+  -- that it does not mention: a call captures only the names that the body
+  -- names (`Eval.captures`).
+  | .funDecl _ name _ params _ b => name == n || params.any (·.name == n) || b.mentions n
 
 def Stmt.leaksList (n : String) : List Stmt → Bool
   | [] => false
@@ -723,6 +789,7 @@ def Stmt.constAssignedIn (s : Stmt) (rest : List Stmt) : Bool :=
 @[simp] theorem Stmt.constAssignedIn_empty : (Stmt.empty sp).constAssignedIn rest = false := rfl
 @[simp] theorem Stmt.constAssignedIn_switchStmt : (Stmt.switchStmt sp d cs).constAssignedIn rest = false := rfl
 @[simp] theorem Stmt.constAssignedIn_throwStmt : (Stmt.throwStmt sp e).constAssignedIn rest = false := rfl
+@[simp] theorem Stmt.constAssignedIn_funDecl : (Stmt.funDecl sp n tps ps rt b).constAssignedIn rest = false := rfl
 
 @[simp] theorem Stmt.constAssignedIn_nil (s : Stmt) : s.constAssignedIn [] = false := by
   cases s <;> simp [Stmt.constAssignedIn, Stmt.assignsList]
@@ -821,7 +888,7 @@ def Stmt.span : Stmt → Span
   | .varDecl s _ | .destructure s _ _ _ _ | .exprStmt s _ | .returnStmt s _ | .ifStmt s _ _ _ | .forOfStmt s _ _ _ _
   | .forOfPattern s _ _ _ _
   | .forStmt s _ _ _ _ | .whileStmt s _ _ | .block s _ | .breakStmt s | .continueStmt s | .empty s | .switchStmt s _ _
-  | .throwStmt s _ => s
+  | .throwStmt s _ | .funDecl s _ _ _ _ _ => s
 
 mutual
 

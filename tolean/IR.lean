@@ -303,6 +303,20 @@ inductive Body (T E : Type) where
   that can throw. The function ends with the error when the call throws, and
   `rest` runs with `x` bound to its value otherwise. -/
   | bind (name : String) (ref : DeclRef) (args : List (Expr T E)) (rest : Body T E)
+  /-- `let (x, y) := f.g a b`, then `rest`: a call of the function `ref` that
+  the translator lifted out of the function around the call. The call holds
+  the lifted function: its parameters, its result type and its body, which
+  the output declares before the function around it. The body ends in the
+  state `names`, or returns a value when `returns`. For the IR's meaning,
+  the call also names the local `fn` that the source calls and the value
+  `value` it holds, which `letLifted` bound; the output writes neither. -/
+  | letCall (names : List String) (ref : DeclRef) (fn : String) (value : Expr T E)
+      (params : List (String × Ty T)) (ret : Ty T) (returns : Bool) (body : Body T E) (args : List (Expr T E))
+      (rest : Body T E)
+  /-- `rest`, with `name` bound to `e` for the IR's meaning only: the name of a
+  local function that the translator lifted out. The output has no binding
+  for it, because each call names the lifted function. -/
+  | letLifted (name : String) (e : Expr T E) (rest : Body T E)
 deriving Repr, Inhabited
 
 /-- A declaration in the output. -/
@@ -402,6 +416,11 @@ def Body.refs : Body T E → List DeclRef
   | .fold _ _ body items rest _ => body.refs ++ items.refs ++ rest.refs
   | .throw e => e.refs
   | .bind _ r args rest => r :: (Expr.refsList args ++ rest.refs)
+  -- The lifted function is declared with the function around the call, so
+  -- only what it names counts.
+  | .letCall _ _ _ _ ps rt _ body args rest =>
+    Ty.refsList (ps.map (·.2)) ++ rt.refs ++ body.refs ++ Expr.refsList args ++ rest.refs
+  | .letLifted _ e rest => e.refs ++ rest.refs
 
 /-- `b` can throw: it holds a `throw`, or a `bind` of a call that can throw.
 The printer then writes the branch or the loop in the `Except` monad. -/
@@ -411,6 +430,9 @@ def Body.throws : Body T E → Bool
   | .let _ _ rest | .letTuple _ _ rest | .letArray _ _ _ rest => rest.throws
   | .ite _ a b | .matchNull _ _ a b | .matchTag _ _ _ _ _ a b | .letState _ a b => a.throws || b.throws
   | .fold _ _ body _ rest _ => body.throws || rest.throws
+  -- The lifted function is printed apart from the call, and it cannot
+  -- throw, so only what comes after the call counts.
+  | .letCall _ _ _ _ _ _ _ _ _ rest | .letLifted _ _ rest => rest.throws
 
 /-- The functions and structures of the program that `d` names. -/
 def Decl.refs : Decl T E → List DeclRef
@@ -497,6 +519,11 @@ def Body.usesString (opUses : E → Bool) : Body T E → Bool
       info.stateTypes.any (·.usesString) || info.elem.usesString
   | .throw e => Expr.usesString opUses e
   | .bind _ _ args rest => Expr.usesStringList opUses args || Body.usesString opUses rest
+  | .letCall _ _ _ _ ps rt _ body args rest =>
+    ps.any (·.2.usesString) || rt.usesString || Body.usesString opUses body ||
+      Expr.usesStringList opUses args || Body.usesString opUses rest
+  -- The output does not write the bound value.
+  | .letLifted _ _ rest => Body.usesString opUses rest
 
 /-! ### The declarations that name a map -/
 
@@ -562,6 +589,9 @@ def Body.usesMap : Body T E → Bool
       info.stateTypes.any (·.usesMap) || info.elem.usesMap
   | .throw e => e.usesMap onMap
   | .bind _ _ args rest => Expr.usesMapList onMap args || rest.usesMap
+  | .letCall _ _ _ _ ps rt _ body args rest =>
+    ps.any (·.2.usesMap) || rt.usesMap || body.usesMap || Expr.usesMapList onMap args || rest.usesMap
+  | .letLifted _ _ rest => rest.usesMap
 
 /-- The output of `d` names a map or set type, or runs an operation on maps
 or sets. A language imports its model of them then. -/
@@ -613,6 +643,8 @@ def Body.anyOp : Body T E → Bool
   | .matchNull _ _ a b | .letState _ a b | .matchTag _ _ _ _ _ a b => a.anyOp || b.anyOp
   | .fold _ _ body items rest _ => body.anyOp || items.anyOp p || rest.anyOp
   | .bind _ _ args rest => Expr.anyOpList p args || rest.anyOp
+  | .letCall _ _ _ _ _ _ _ body args rest => body.anyOp || Expr.anyOpList p args || rest.anyOp
+  | .letLifted _ _ rest => rest.anyOp
 
 /-- The output of `d` runs an operation for which `p` holds. A language
 imports the model that defines such operations then. -/
@@ -684,6 +716,10 @@ def Body.mentions : Body T E → Bool
     body.mentions || items.mentions onTy onOp || rest.mentions ||
       info.stateTypes.any (·.anyExt onTy) || info.elem.anyExt onTy
   | .bind _ _ args rest => Expr.mentionsList onTy onOp args || rest.mentions
+  | .letCall _ _ _ _ ps rt _ body args rest =>
+    ps.any (·.2.anyExt onTy) || rt.anyExt onTy || body.mentions || Expr.mentionsList onTy onOp args ||
+      rest.mentions
+  | .letLifted _ _ rest => rest.mentions
 
 /-- The output of `d` names a type for which `onTy` holds, or runs an
 operation for which `onOp` holds. A language imports the model that defines
@@ -968,7 +1004,7 @@ def Body.testsTag (name : String) : Body T E → Bool
   | .let _ _ rest | .letArray _ _ _ rest | .letTuple _ _ rest => rest.testsTag name
   | .ite _ a b | .matchNull _ _ a b | .letState _ a b => a.testsTag name || b.testsTag name
   | .fold _ _ body _ rest _ => body.testsTag name || rest.testsTag name
-  | .bind _ _ _ rest => rest.testsTag name
+  | .bind _ _ _ rest | .letCall _ _ _ _ _ _ _ _ _ rest | .letLifted _ _ rest => rest.testsTag name
   | .value _ | .state _ | .yield .. | .done .. | .exit .. | .throw _ => false
 
 /-! ### Recursion
@@ -1100,6 +1136,10 @@ def Body.callsShrink (self : DeclRef) (i : Nat) (need : Int) (depths : List (Str
   | .bind name r args rest =>
     (Expr.call r args).callsShrink self i need depths &&
       rest.callsShrink self i need (bindPart depths name Option.none)
+  -- A lifted function never calls the function around it.
+  | .letCall names _ _ _ _ _ _ _ args rest =>
+    Expr.callsShrinkList self i need depths args && rest.callsShrink self i need (forgetParts depths names)
+  | .letLifted name _ rest => rest.callsShrink self i need (bindPart depths name Option.none)
 
 mutual
 
@@ -1139,6 +1179,8 @@ def Body.calls (self : DeclRef) : Body T E → Bool
   | .fold _ _ body items rest _ => body.calls self || items.calls self || rest.calls self
   | .throw e => e.calls self
   | .bind _ r args rest => r == self || Expr.callsList self args || rest.calls self
+  | .letCall _ _ _ _ _ _ _ _ args rest => Expr.callsList self args || rest.calls self
+  | .letLifted _ _ rest => rest.calls self
 
 /-- The parameter that each call of `self` in `body` makes smaller, the first
 one when there are several. `none` when the body does not call `self`, or
@@ -1399,6 +1441,17 @@ def Body.lines (names : Names) (monadic : Bool := false) : Body T E → List Str
   | .throw e => [wrapped "throw" (e.print names)]
   | .bind name ref args rest =>
     s!"{(Expr.call ref args).print names} >>= fun {name} =>" :: rest.lines names monadic
+  -- A call whose value the body returns at once is that value. The lifted
+  -- body of the call is not printed here: `printFunction` prints the body
+  -- that the declaration gave, and the translator checks that each call's
+  -- body prints the same (`translateLocalCall`), so the printed `f.g` and
+  -- the body that `Body.exec` runs at a call are one function.
+  | .letCall ns ref _ _ _ _ _ _ args rest =>
+    let call := (Expr.call ref args).print names
+    match ns, rest with
+    | [x], .value (.var y) => if x == y then [call] else s!"let {x} := {call}" :: rest.lines names monadic
+    | _, _ => s!"let {tuple ns} := {call}" :: rest.lines names monadic
+  | .letLifted _ _ rest => rest.lines names monadic
 
 /-- The arms of `match name with` for a test of its tag, nested in the arm
 for the other members of a test of the same local. They join the outer
@@ -1420,6 +1473,41 @@ def Body.tagArms (names : Names) (monadic : Bool) (name : String) : Body T E →
   | _ => []
 
 end
+
+/-- The functions that the calls of a body lifted out, with their
+parameters, result types and bodies, in the order of the calls. -/
+def Body.lifted : Body T E → List (DeclRef × List (String × Ty T) × Ty T × Body T E)
+  | .letCall _ r _ _ ps rt _ body _ rest => (r, ps, rt, body) :: rest.lifted
+  | .let _ _ rest | .letTuple _ _ rest | .letArray _ _ _ rest | .letLifted _ _ rest | .bind _ _ _ rest =>
+    rest.lifted
+  | .ite _ a b | .matchNull _ _ a b | .matchTag _ _ _ _ _ a b | .letState _ a b => a.lifted ++ b.lifted
+  | .fold _ _ body _ rest _ => body.lifted ++ rest.lifted
+  | .value _ | .state _ | .yield .. | .done .. | .exit .. | .throw _ => []
+
+/-- `def f (x : T) : R :=` and the body. -/
+def printFunction (names : Names) (name : String) (params : List (String × Ty T)) (ret : Ty T)
+    (body : Body T E) : String :=
+  -- A function that calls itself ends because each call passes a part of
+  -- one parameter. Lean then needs that parameter as the measure, and the
+  -- proof of each call.
+  let decreasing := body.decreasingParam? ⟨names.file, name⟩ params
+  let names := if decreasing.isSome then { names with matchHyp := true } else names
+  let termination := match decreasing with
+    | some p => [s!"termination_by {p}", "decreasing_by all_goals tolean_decreasing"]
+    | Option.none => []
+  let generic := if names.generic then PrintTy.binders (T := T) names else ""
+  -- The type parameters, in the order that the parameters name them. The
+  -- translator refuses one that no parameter's type names.
+  let vars := (Ty.typeVarsList (params.map (·.2) ++ [ret])).eraseDups
+  let generic := if vars.isEmpty then generic else generic ++ " {" ++ " ".intercalate vars ++ " : Type}"
+  -- An optional parameter defaults to `none`, so that a claim may leave
+  -- it out, as a call in the source may.
+  let leanParams := params.map fun (param, type) =>
+    let default := if type matches .optional _ then s!" := {leanName names "none"}" else ""
+    s!"({param} : {type.print names}{default})"
+  "\n".intercalate
+    (s!"def {name}{generic} {" ".intercalate leanParams} : {ret.print names} :=" ::
+      indent (body.lines names) ++ termination)
 
 def Decl.print (names : Names) : Decl T E → String
   | .struct name typeParams fields =>
@@ -1448,28 +1536,14 @@ def Decl.print (names : Names) : Decl T E → String
     let generic := if type.namesParam names then s!" ({names.typeParam} : Type)" else ""
     let generic := generic ++ String.join (typeParams.map (s!" ({·} : Type)"))
     s!"abbrev {name}{generic} := {type.print names}"
+  -- Each function that a call lifted out comes first, once.
   | .function name params ret body =>
-    -- A function that calls itself ends because each call passes a part of
-    -- one parameter. Lean then needs that parameter as the measure, and the
-    -- proof of each call.
-    let decreasing := body.decreasingParam? ⟨names.file, name⟩ params
-    let names := if decreasing.isSome then { names with matchHyp := true } else names
-    let termination := match decreasing with
-      | some p => [s!"termination_by {p}", "decreasing_by all_goals tolean_decreasing"]
-      | Option.none => []
-    let generic := if names.generic then PrintTy.binders (T := T) names else ""
-    -- The type parameters, in the order that the parameters name them. The
-    -- translator refuses one that no parameter's type names.
-    let vars := (Ty.typeVarsList (params.map (·.2) ++ [ret])).eraseDups
-    let generic := if vars.isEmpty then generic else generic ++ " {" ++ " ".intercalate vars ++ " : Type}"
-    -- An optional parameter defaults to `none`, so that a claim may leave
-    -- it out, as a call in the source may.
-    let leanParams := params.map fun (param, type) =>
-      let default := if type matches .optional _ then s!" := {leanName names "none"}" else ""
-      s!"({param} : {type.print names}{default})"
-    "\n".intercalate
-      (s!"def {name}{generic} {" ".intercalate leanParams} : {ret.print names} :=" ::
-        indent (body.lines names) ++ termination)
+    let lifted := body.lifted.foldl (fun acc f => if acc.any (·.1 == f.1) then acc else acc ++ [f]) []
+    -- A lifted function takes each local that its body names, also one that
+    -- the body only sets, which Lean would report as unused.
+    "\n\n".intercalate (lifted.map (fun (r, ps, rt, b) =>
+        "set_option linter.unusedVariables false in\n" ++ printFunction names r.name ps rt b) ++
+      [printFunction names name params ret body])
 
 end
 

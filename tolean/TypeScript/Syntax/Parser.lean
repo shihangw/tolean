@@ -938,10 +938,127 @@ def clauseStep (parseItem : ParseM Stmt) (items : Array Stmt) : ParseM (Array St
 def defaultCount (clauses : List (Option Expr × List Stmt)) : Nat :=
   (clauses.filter (·.1.isNone)).length
 
+/-- One step of the loop over the type parameters of a function: a name, and
+the `,` after it, if one comes. A parameter has no constraint and no default. -/
+def typeParamStep (names : Array String) : ParseM (Array String × Bool) := do
+  let t ← advance
+  let .ident name := t.kind | unexpected t "a type parameter"
+  if keywordTypes.contains name || typeOperatorWords.contains name || refusedNames.contains name then
+    failAt t s!"'{name}' cannot name a type parameter"
+  let next ← peek
+  if next.isKeyword "extends" then failAt next "type parameters with a constraint are not supported"
+  if next.isPunct "=" then failAt next "type parameters with a default are not supported"
+  let names := names.push name
+  if !next.isPunct "," then return (names, false)
+  discard advance
+  return (names, true)
+
+/-- `<A, B>` after the name of a generic function, or nothing. -/
+def parseTypeParams : ParseM (List String) := do
+  unless (← peek).isPunct "<" do return []
+  discard advance
+  let names ← iterate (← budget) #[] typeParamStep
+  let _ ← expectPunct ">"
+  return names.toList
+
+/-- `function`, the name, the type parameters, the parameters in
+parentheses and the return type of a function declaration, up to the `{` of
+its body, which comes next. -/
+def parseSignature : ParseM (String × List String × List Param × Option TypeExpr) := do
+  discard advance
+  let t ← peek
+  if t.isPunct "*" then failAt t "generators are not supported"
+  let name ← readName
+  let typeParams ← parseTypeParams
+  let _ ← expectPunct "("
+  let params ← iterate (← budget) #[] (listStep ")" (fun _ => pure ()) (parseParam true))
+  let _ ← expectPunct ")"
+  let mut returnType := none
+  if (← peek).isPunct ":" then
+    discard advance
+    returnType := some (← parseType (← budget))
+  let t ← peek
+  unless t.isPunct "{" do unexpected t "'{' (a function needs a body)"
+  return (name, typeParams, params.toList, returnType)
+
+/-- The body of a function: `return` may stand in it, and a `break` or a
+`continue` in it cannot leave a loop around the function. -/
+def inFunctionBody {A : Type} (body : ParseM A) : ParseM A := do
+  let outer ← get
+  modify fun s => { s with inFunction := true, loopDepth := 0 }
+  let result ← body
+  modify fun s => { s with inFunction := outer.inFunction, loopDepth := outer.loopDepth }
+  return result
+
+/-- A function declaration in a block (ECMA-262 §15.2), whose body
+`parseBody` reads. Only a function may hold one: at the top of a module, a
+declaration is a `Decl.function`. -/
+def parseLocalFunction (parseBody : ParseM Stmt) : ParseM Stmt := do
+  let t ← peek
+  unless (← get).inFunction do failAt t "a function declaration in a block outside a function is not supported"
+  let (name, typeParams, params, returnType) ← parseSignature
+  let body ← inFunctionBody parseBody
+  return .funDecl (← spanFrom t.span.start) name typeParams params returnType body
+
+/-- The rest of the head of a local arrow function, after `=`: the
+parameters, the return type and `=>`, when a `{` comes next. It reads what
+`parseArrow` reads up to the `{`, which `parseArrow` refuses, so the two
+never both succeed. -/
+def localArrowRest : ParseM (Option (List Param × Option TypeExpr)) := do
+  let params ← parseArrowParams
+  let mut returnType := none
+  if (← peek).isPunct ":" then
+    discard advance
+    returnType := some (← parseType (← budget))
+  let arrow ← expectPunct "=>"
+  if arrow.newlineBefore then return none
+  unless (← peek).isPunct "{" do return none
+  return some (params, returnType)
+
+/-- The head of `const name = (params): T => {`, an arrow function with a
+block for its body in a `const` in the body of a function: the name, the
+parameters and the return type. It reads up to the `{`, and it gives
+nothing when the tokens ahead are anything else. -/
+def localArrowHeadTry : ParseM (Option (String × List Param × Option TypeExpr)) := do
+  unless (← get).inFunction do return none
+  let t ← advance
+  unless t.isKeyword "const" do return none
+  let name ← readName
+  unless (← peek).isPunct "=" do return none
+  discard advance
+  unless (← peek).isPunct "(" && (← startsArrow) do return none
+  match ← localArrowRest with
+  | some (params, returnType) => return some (name, params, returnType)
+  | none => return none
+
+/-- A local function written as `const name = (params): T => { … }`
+(ECMA-262 §15.3): its head, as `localArrowHeadTry` reads it. Otherwise it
+gives nothing and leaves the state as it was, so that the statement reads as
+a declaration of a variable, with the errors of one. -/
+def localArrowHead : ParseM (Option (String × List Param × Option TypeExpr)) := fun s =>
+  match localArrowHeadTry s with
+  | .ok (some h) s' => .ok (some h) s'
+  | _ => .ok none s
+
+/-- A `const` or `let` statement that does not destructure, from `start`:
+a declaration of a variable, or a local function written as
+`const g = (x: T): R => { … }`, whose body `parseBody` reads. The local
+function binds `g` where it stands, as the model binds a function
+declaration, so its tree is a `funDecl`. -/
+def parseDeclStatement (parseBody : ParseM Stmt) (start : Pos) : ParseM Stmt := do
+  match ← localArrowHead with
+  | some (name, params, returnType) =>
+    let body ← inFunctionBody parseBody
+    endStatement
+    return .funDecl (← spanFrom start) name [] params returnType body
+  | none =>
+    let decl ← parseVarDecl
+    return .varDecl (← spanFrom start) decl
+
 /-- Statements that JavaScript does not allow without a block around them, in
 the body of `if`, `for` and `while`. -/
 def refuseDeclaration (t : Token) : ParseM Unit := do
-  if t.isKeyword "const" || t.isIdent "let" then
+  if t.isKeyword "const" || t.isIdent "let" || t.isKeyword "function" then
     failAt t "a declaration here needs a block around it"
 
 mutual
@@ -960,8 +1077,7 @@ def parseStatement (fuel : Nat) : ParseM Stmt := do
   | .keyword "const" | .ident "let" =>
     if (← peekAt 1).isPunct "[" then parseDestructure start
     else
-      let decl ← parseVarDecl
-      return .varDecl (← spanFrom start) decl
+      parseDeclStatement (parseBlock fuel) start
   | .keyword "if" =>
     discard advance
     let _ ← expectPunct "("
@@ -1019,6 +1135,7 @@ def parseStatement (fuel : Nat) : ParseM Stmt := do
     return .switchStmt (← spanFrom start) disc clauses.toList
   | .keyword "true" | .keyword "false" | .keyword "null" | .keyword "typeof"
   | .keyword "void" | .keyword "new" => parseExpressionStatement fuel
+  | .keyword "function" => parseLocalFunction (parseBlock fuel)
   | .keyword word => failAt t s!"'{word}' is not supported here"
   | _ => parseExpressionStatement fuel
 
@@ -1103,48 +1220,10 @@ end
 
 /-! ### Declarations -/
 
-/-- One step of the loop over the type parameters of a function: a name, and
-the `,` after it, if one comes. A parameter has no constraint and no default. -/
-def typeParamStep (names : Array String) : ParseM (Array String × Bool) := do
-  let t ← advance
-  let .ident name := t.kind | unexpected t "a type parameter"
-  if keywordTypes.contains name || typeOperatorWords.contains name || refusedNames.contains name then
-    failAt t s!"'{name}' cannot name a type parameter"
-  let next ← peek
-  if next.isKeyword "extends" then failAt next "type parameters with a constraint are not supported"
-  if next.isPunct "=" then failAt next "type parameters with a default are not supported"
-  let names := names.push name
-  if !next.isPunct "," then return (names, false)
-  discard advance
-  return (names, true)
-
-/-- `<A, B>` after the name of a generic function, or nothing. -/
-def parseTypeParams : ParseM (List String) := do
-  unless (← peek).isPunct "<" do return []
-  discard advance
-  let names ← iterate (← budget) #[] typeParamStep
-  let _ ← expectPunct ">"
-  return names.toList
-
 def parseFunction (start : Pos) (exported : Bool) : ParseM Decl := do
-  discard advance
-  let t ← peek
-  if t.isPunct "*" then failAt t "generators are not supported"
-  let name ← readName
-  let typeParams ← parseTypeParams
-  let _ ← expectPunct "("
-  let params ← iterate (← budget) #[] (listStep ")" (fun _ => pure ()) (parseParam true))
-  let _ ← expectPunct ")"
-  let mut returnType := none
-  if (← peek).isPunct ":" then
-    discard advance
-    returnType := some (← parseType (← budget))
-  let t ← peek
-  unless t.isPunct "{" do unexpected t "'{' (a function needs a body)"
-  modify fun s => { s with inFunction := true }
-  let body ← parseBlock (← budget)
-  modify fun s => { s with inFunction := false }
-  return .function (← spanFrom start) exported name typeParams params.toList returnType body
+  let (name, typeParams, params, returnType) ← parseSignature
+  let body ← inFunctionBody (parseBlock (← budget))
+  return .function (← spanFrom start) exported name typeParams params returnType body
 
 def parseField : ParseM Field := do
   let t ← peek
