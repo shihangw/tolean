@@ -487,6 +487,12 @@ macro "slice_tac" : tactic => `(tactic| (
     Eval.sliceList xs k (some e) = ((xs.reverse.drop (-e).toNat).reverse).drop k.toNat := by
   slice_tac
 
+/-- `slice` with a negative start and an end that is not negative: the start
+counts back from the length. -/
+@[simp] theorem sliceList_mixed {α : Type} (xs : List α) (k e : Int) (hk : k < 0) (he : 0 ≤ e) :
+    Eval.sliceList xs k (some e) = (xs.take e.toNat).drop (xs.length - (-k).toNat) := by
+  slice_tac
+
 /-- `slice` with two negative bounds. -/
 @[simp] theorem sliceList_neg {α : Type} (xs : List α) (k e : Int) (hk : k < 0) (he : e < 0) :
     Eval.sliceList xs k (some e) = ((xs.reverse.take (-k).toNat).drop (-e).toNat).reverse := by

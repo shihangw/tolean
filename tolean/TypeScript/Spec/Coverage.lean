@@ -770,7 +770,7 @@ def extras : List Group := [
     ``Proof.atVal_map]⟩,
   ⟨"Certificates: slices of a list", [``Proof.sliceList_map, ``Proof.getElem?_rev,
     ``Proof.sliceList_nonneg, ``Proof.sliceList_from, ``Proof.sliceList_last,
-    ``Proof.sliceList_dropLast, ``Proof.sliceList_neg]⟩,
+    ``Proof.sliceList_dropLast, ``Proof.sliceList_mixed, ``Proof.sliceList_neg]⟩,
   ⟨"Certificates: sorts", [``Proof.consistentOn_of_transCmp, ``Proof.sortValues_sortWith,
     ``Proof.int_compare_of_lt, ``Proof.int_compare_of_gt, ``Proof.int_compare_of_eq,
     ``compareSign_one, ``compareSign_zero, ``compareSign_neg_zero, ``compareSign_neg_one, ``JSString.instTransOrd,

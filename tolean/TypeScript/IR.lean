@@ -203,8 +203,9 @@ inductive ExprExt where
   `xs`: `xs.at(k)` with an integer literal `k`. -/
   | at (k : Int)
   /-- `List.take` and `List.drop` on `xs`, with `List.reverse` for a negative
-  bound: `xs.slice(start, stop)` with integer literals. A negative `start`
-  with a `stop` that is not negative is not one of them. -/
+  bound: `xs.slice(start, stop)` with integer literals. For a negative
+  `start` with a `stop` that is not negative, the drop counts back from
+  `List.length xs`. -/
   | slice (start : Int) (stop : Option Int)
   /-- `JSMap.empty`, on no arguments: `new Map()`. The translator writes the
   type of the map after it. -/
@@ -487,7 +488,9 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
       if 0 ≤ start && 0 ≤ e then drop start (take e xs)
       else if 0 ≤ start then drop start (rev (drop (-e) (rev xs)))
       else if e < 0 then rev (drop (-e) (take (-start) (rev xs)))
-      else ""
+      -- The start counts from the end and the end from the start, so the
+      -- drop needs the length of the list.
+      else s!"({leanName names "List.drop"} ({leanName names "List.length"} {xs} - {(-start).toNat}) {take e xs})"
   | .pure, [a] => s!"({tolean.IR.wrapped (leanName names "pure") a})"
   | .error, [m] => s!"({tolean.IR.wrapped (leanName names "JSError.mk") m})"
   | .errorCase thrown cls fields, args =>

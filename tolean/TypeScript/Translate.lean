@@ -2793,9 +2793,6 @@ def translateArrayCall (fuel : Nat) (env : Env) (s : Span) (recv : Expr) (method
     let bounds ← orReject (args.mapM Eval.intLiteral?) s
       "the arguments of 'slice' must be integer literals, such as xs.slice(1) or xs.slice(-2)"
     let (start, stop) ← orReject (sliceBounds bounds) s "'slice' takes at most two arguments"
-    if start < 0 && stop.any (0 ≤ ·) then
-      reject s ("'slice' with a negative start and an end that is not negative is not supported; " ++
-        "write both bounds from the start or both from the end")
     return ⟨.ext (.slice start stop) [xs.value], false, xs.type⟩
   let codes ← args.mapM (translateExpr fuel env (arrayArgExpected method elem))
   arrayCall s method elem xs codes

@@ -58,3 +58,13 @@ export function lastPlusOne(xs: ReadonlyArray<bigint>): ReadonlyArray<bigint> {
 export function innerAny(xs: ReadonlyArray<bigint>): boolean {
   return xs.slice(1, -1).some((x) => x < 0n);
 }
+
+// A negative start with an end that is not negative counts the start back
+// from the length of the array.
+export function window(xs: ReadonlyArray<bigint>): ReadonlyArray<bigint> {
+  return xs.slice(-2, 3);
+}
+
+export function windowSum(xs: ReadonlyArray<bigint>): bigint {
+  return xs.slice(-3, 2).reduce((sum, x) => sum + x, 0n);
+}
