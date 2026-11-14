@@ -308,6 +308,14 @@ test('the interpreter binds a parameter that a call leaves out to undefined', as
     },
     { source: 'export function f(a?: boolean): boolean { return a !== undefined; }', args: [] },
     { source: 'export function f(a?: number): number | null { return a ?? null; }', args: [] },
+    { source: 'export function f(): bigint | undefined { return undefined; }', args: [] },
+    { source: 'export function f(a: bigint): undefined | bigint { return a; }', args: [7n] },
+    {
+      source: 'export function f(a: bigint): bigint { let x: bigint | undefined = undefined; x = a; return x ?? 0n; }',
+      args: [9n],
+    },
+    { source: 'export function f(a?: bigint): bigint | undefined { const x: bigint | undefined = a; return x; }', args: [] },
+    { source: 'export function f(a?: bigint): bigint | undefined { const x: bigint | undefined = a; return x; }', args: [0n] },
   ];
   const input = {
     programs: cases.map(({ source, args }) => ({ source, calls: [{ function: 'f', args: args.map(encode) }] })),
