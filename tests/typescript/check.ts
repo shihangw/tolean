@@ -379,6 +379,19 @@ class Gen {
           ...(this.chance(0.8) ? this.block(d, true) : this.statement(d, true)),
         ],
         () => this.block(d, inLoop),
+        // A function declaration, which may also come as the body of an `if`
+        // without a block, and whose body now and then has a `break` of the
+        // loop around it. The parsers refuse both.
+        () => [
+          'function',
+          this.chance(0.05) ? '*' : this.name(),
+          ...(this.chance(0.2) ? ['<', 'T', '>'] : []),
+          '(',
+          ...this.pick([[], ['x'], ['x', ':', ...this.type(1)], ['x', ',', 'y', '?', ':', ...this.type(1)]]),
+          ')',
+          ...(this.chance(0.6) ? [':', ...this.type(2)] : []),
+          ...this.block(d, inLoop && this.chance(0.2)),
+        ],
       );
     }
     if (inLoop) {

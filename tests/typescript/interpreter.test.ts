@@ -10,9 +10,16 @@
  *
  * - When the interpreter gives a value, Node returns the same value. This
  *   holds for every program that the parser accepts, in the subset or not,
- *   except for one gap that the plan for pure TypeScript lists and the
- *   random programs do not reach: an assignment to the variable of a
- *   `for (const x of xs)` loop.
+ *   except for three gaps that the random programs do not reach. The first,
+ *   which the plan for pure TypeScript lists, is an assignment to the
+ *   variable of a `for (const x of xs)` loop. The second is a call of a local
+ *   function before its declaration, where a function of the module has the
+ *   same name: JS binds the local function when its block starts, but the
+ *   interpreter binds it where the declaration stands, so the call runs the
+ *   function of the module. The third is a declaration, between a local
+ *   function and a call of it, that hides a name the local function reads:
+ *   JS keeps the variable of the declaration, and the interpreter takes the
+ *   one in scope at the call. The translator refuses all three.
  * - When the interpreter says that a call throws a value, Node throws the
  *   same value. An `Error` compares by its class and its message.
  * - When the translator accepts the program and the interpreter gives no
@@ -354,6 +361,29 @@ test('the interpreter reads the index of at and slice as Node does', async () =>
       expect(value === undefined ? 'no value' : canonical(value), `${source} with ${i}`).toBe(canonical(encode(mod.f(xs, i))));
     }
   }
+});
+
+// JS binds every function declaration of a block when the block starts, so a
+// second declaration of `g` replaces the first for both calls, and Node gives
+// 20n. The interpreter binds each where it stands, so it must give no value.
+test('the interpreter gives no value for a function declared twice in a block', () => {
+  const source = [
+    'export function f(): bigint {',
+    '  let t = 0n;',
+    '  function g(): void { t += 1n; }',
+    '  g();',
+    '  function g(): void { t += 10n; }',
+    '  g();',
+    '  return t;',
+    '}',
+  ].join('\n');
+  const input = { programs: [{ source, calls: [{ function: 'f', args: [] }] }] };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const [lean] = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  expect(lean?.parsed).toBe(true);
+  if (lean === undefined || !lean.parsed) return;
+  expect(lean.results).toEqual([null]);
 });
 
 // An assignment to a `const` throws a `TypeError` in Node, so the interpreter
