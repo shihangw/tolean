@@ -500,6 +500,41 @@ counts back from the length. -/
 
 /-! ### Certificates: sorts -/
 
+/-- Compare numbers by their order, treating signed zero as equal. -/
+def numberOrder (a b : N) : Ordering :=
+  if JSNumber.lt a b then .lt else if JSNumber.lt b a then .gt else .eq
+
+theorem numberOrder_ne_gt [NumberOrderLaws N] {a b : N}
+    (ha : JSNumber.isNaN a = false) (hb : JSNumber.isNaN b = false) :
+    (numberOrder a b != .gt) = !JSNumber.lt b a := by
+  unfold numberOrder
+  cases hab : JSNumber.lt a b <;> cases hba : JSNumber.lt b a <;> simp_all
+  have := NumberOrderLaws.lt_asymm ha hb hab
+  simp_all
+
+/-- A number key gives a consistent comparison on inputs without NaN keys. -/
+theorem consistentOn_numberOrder {α : Type} [NumberOrderLaws N]
+    (key : α → N) (xs : List α)
+    (h : ∀ x ∈ xs, JSNumber.isNaN (key x) = false) :
+    Eval.consistentOn (fun a b => some (numberOrder (key a) (key b))) xs = true := by
+  unfold Eval.consistentOn
+  simp only [List.all_eq_true, Option.isSome_some, Bool.true_and, Bool.and_eq_true]
+  intro a ha b hb
+  constructor
+  · have hab := NumberOrderLaws.lt_asymm (h a ha) (h b hb)
+    have hba := NumberOrderLaws.lt_asymm (h b hb) (h a ha)
+    unfold numberOrder
+    cases e : JSNumber.lt (key a) (key b) <;>
+      cases e' : JSNumber.lt (key b) (key a) <;> simp_all
+  · intro c hc
+    have hab := numberOrder_ne_gt (h a ha) (h b hb)
+    have hbc := numberOrder_ne_gt (h b hb) (h c hc)
+    have hac := numberOrder_ne_gt (h a ha) (h c hc)
+    have ht := NumberOrderLaws.not_lt_trans (h c hc) (h b hb) (h a ha)
+    cases e : JSNumber.lt (key b) (key a) <;>
+      cases e' : JSNumber.lt (key c) (key b) <;>
+      cases e'' : JSNumber.lt (key c) (key a) <;> simp_all
+
 /-- A comparator is consistent for every list when its signs are those of a
 lawful comparison: one that `Std.TransCmp` says is a total preorder. -/
 theorem consistentOn_of_transCmp {α : Type} {cmp : α → α → Option Ordering} (o : α → α → Ordering)
