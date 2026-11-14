@@ -4,7 +4,7 @@
  * `checkTranslate.ts` translates them and compiles the output, and
  * `interpreter.test.ts` runs them in the interpreter and in Node. A program has
  * up to three interfaces, some of them declared as a `Record` over a literal
- * union, and up to four exported functions. A function calls
+ * union, and up to five exported functions. A function calls
  * only the functions before it, so no program recurses.
  */
 
@@ -1020,6 +1020,18 @@ export class Gen {
         '}',
       );
       this.functions.push({ name: 'optionalValue', params: [BOOLEAN, BIGINT], ret });
+    }
+    if (this.chance(0.25)) {
+      const body = this.pick([
+        'x !== undefined && x > 0n',
+        'undefined === x || x > 0n',
+        '!(x === undefined) && x > 0n',
+        '!(undefined !== x) || x > 0n',
+        'x === undefined ? false : x > 0n',
+        '!(x === undefined) ? x > 0n : false',
+      ]);
+      out.push(`export function optionalGuard(x?: bigint): boolean { return ${body}; }`);
+      this.functions.push({ name: 'optionalGuard', params: [{ k: 'optional', of: BIGINT }], ret: BOOLEAN });
     }
     return out.join('\n') + '\n';
   }

@@ -33,6 +33,11 @@ every supported edition specifies them.
 A type-only re-export erases before execution. Its module dependency follows
 the ExportDeclaration grammar (ES2015 §15.2.3; ES2024 §16.2.3). It introduces
 no local binding and preserves the type's identity in the defining module.
+
+Expression narrowing follows the strict equality test and the selected
+branch of LogicalANDExpression, LogicalORExpression and ConditionalExpression
+(ES2024 §13.13 and §13.14). Logical NOT (§13.5.7) reverses the test. ES2015
+already specifies these operations, so all supported targets allow them.
 -/
 namespace tolean.TypeScript
 
