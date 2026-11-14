@@ -3,6 +3,7 @@ import tolean.Version
 import tolean.TypeScript.Edition
 import tolean.TypeScript.Syntax.Parser
 import tolean.TypeScript.IR
+import tolean.TypeScript.IR.Equality
 import tolean.TypeScript.Spec.Eval
 
 /-!
@@ -427,7 +428,7 @@ structure LocalFn where
   body : Stmt
   /-- The lifted body as the declaration translated it, so that each call can
   check that it translates it the same way. -/
-  printed : String := ""
+  translated : Option IR.Body := none
 
 /-- The names in scope, in the order they were declared, and the functions
 that a call may name. -/
@@ -3592,7 +3593,7 @@ def translateLocalCall (env : Env) (s : Span) (fn : LocalFn) (args : List Expr) 
   | none => pure ()
   let outs ← translateLocalArgs env fn.params args
   let b ← withLocalBody (fn.ret.getD .boolean) body
-  unless reprStr b == fn.printed do reject s s!"a call of '{fn.name}' translates its body another way"
+  unless decide (some b = fn.translated) do reject s s!"a call of '{fn.name}' translates its body another way"
   return (b, fn.captured.map (fun l => IR.Expr.var l.name) ++ outs)
 
 mutual
@@ -3664,7 +3665,7 @@ def translateStatements (fuel : Nat) (env : Env) (tail : Tail) (statements : Lis
       let fn ← translateLocalHead env s name typeParams params returnType body tail
       let b ← withLocalBody (fn.ret.getD .boolean)
         (translateStatements fuel (fn.bodyEnv env) fn.tail (blockStatements fn.body))
-      let fn := { fn with printed := reprStr b }
+      let fn := { fn with translated := some b }
       let env' ← declare env s name .fn (fn.ret.getD .boolean)
       let env' := { env' with localFns := env'.localFns ++ [fn] }
       return .letLifted name (IR.Expr.closure (params.map (·.name)) body)
