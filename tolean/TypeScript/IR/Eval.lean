@@ -165,6 +165,12 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   | .countUp k, [.num b] => (JSNumber.countUp? k b).map fun xs => .list (xs.map .num)
   | .at k, [.list xs] => some (Eval.atVal xs k)
   | .slice start stop, [.list xs] => some (.list (Eval.sliceList xs start stop))
+  -- `at` and `slice` with an argument that is not a literal, as the spec
+  -- reads its integer.
+  | .atNumber, [.list xs, .num i] => some (Eval.atVal xs (JSNumber.toIndexInt i))
+  | .toIndexInt, [.num i] => some (.int (JSNumber.toIndexInt i))
+  | .sliceInt, [.list xs, .int a] => some (.list (JSNumber.sliceInt xs a none))
+  | .sliceInt, [.list xs, .int a, .int b] => some (.list (JSNumber.sliceInt xs a (some b)))
   -- The operations of a `Map`, as the spec gives them.
   | .mapEmpty, [] => some (.map [])
   | .mapGet, [.map entries, k] => (Eval.mapFind entries k).map (·.getD .undefined)

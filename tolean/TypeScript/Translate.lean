@@ -2000,6 +2000,23 @@ def sliceBounds : List Int → Option (Int × Option Int)
   | [k, e] => some (k, some e)
   | _ => none
 
+/-- The code of the integer `k`: `(k : Int)`, or `(-(k : Int))` for a negative
+`k`, because the IR writes only literals that are not negative. -/
+def intCode (k : Int) : IR.Expr :=
+  if 0 ≤ k then .int k else .neg (.int (-k))
+
+/-- A bound of `slice` as an integer, in a call where some bound is not an
+integer literal: a literal is its integer, and any other argument must be a
+number, which `JSNumber.toIndexInt` reads as `slice` does. `tr` translates
+the argument. -/
+def sliceBound (tr : Expr → TM Code) (arg : Expr) : TM IR.Expr :=
+  match Eval.intLiteral? arg with
+  | some k => pure (intCode k)
+  | none => do
+    let c ← tr arg
+    unless c.type == .number do reject arg.span "an argument of 'slice' must be a number"
+    pure (.ext .toIndexInt [c.value])
+
 /-- `e` is an arrow function. -/
 def _root_.tolean.TypeScript.Syntax.Expr.isArrow : Expr → Bool
   | .arrow .. => true
@@ -2777,23 +2794,32 @@ def translateArrayCall (fuel : Nat) (env : Env) (s : Span) (recv : Expr) (method
   else
   let elem ← orReject xs.type.element? recv.span "only an array or a string has this method"
   -- `xs.at(k)`: the element at `k`, counted from the end when `k` is
-  -- negative, or `undefined`. The model of numbers cannot truncate yet, so
-  -- the argument must be an integer literal, which is the integer it names.
+  -- negative, or `undefined`. An integer literal is the integer it names,
+  -- and any other number goes through `JSNumber.toIndexInt`, which truncates
+  -- it as `ToIntegerOrInfinity` does.
   if method == "at" then
     let [arg] := args | reject s "'at' takes one argument"
-    let k ← orReject (Eval.intLiteral? arg) arg.span
-      "the argument of 'at' must be an integer literal, such as xs.at(-1)"
     requireFeature s .arrayAt
     if elem.isMaybe then reject s "'at' on an array of nullable values could give null or undefined"
-    return ⟨.ascribe (.ext (.at k) [xs.value]) (Ty.optional elem).lean, false, .optional elem⟩
+    match Eval.intLiteral? arg with
+    | some k => return ⟨.ascribe (.ext (.at k) [xs.value]) (Ty.optional elem).lean, false, .optional elem⟩
+    | none =>
+      let i ← translateExpr fuel env none arg
+      unless i.type == .number do reject arg.span "the argument of 'at' must be a number"
+      return ⟨.ext .atNumber [xs.value, i.value], false, .optional elem⟩
   -- `xs.slice(start, end)`: a new array of the elements from `start` up to
-  -- `end`, where a negative bound counts from the end. The bounds must be
-  -- integer literals, as the argument of `at` must.
+  -- `end`, where a negative bound counts from the end. Integer literals
+  -- become `List.drop` and `List.take`. When a bound is any other number,
+  -- the output is `JSNumber.sliceInt` on the integers of the bounds.
   if method == "slice" then
-    let bounds ← orReject (args.mapM Eval.intLiteral?) s
-      "the arguments of 'slice' must be integer literals, such as xs.slice(1) or xs.slice(-2)"
-    let (start, stop) ← orReject (sliceBounds bounds) s "'slice' takes at most two arguments"
-    return ⟨.ext (.slice start stop) [xs.value], false, xs.type⟩
+    match args.mapM Eval.intLiteral? with
+    | some bounds =>
+      let (start, stop) ← orReject (sliceBounds bounds) s "'slice' takes at most two arguments"
+      return ⟨.ext (.slice start stop) [xs.value], false, xs.type⟩
+    | none =>
+      unless args.length ≤ 2 do reject s "'slice' takes at most two arguments"
+      let bounds ← args.mapM (sliceBound (translateExpr fuel env none))
+      return ⟨.ext .sliceInt (xs.value :: bounds), false, xs.type⟩
   let codes ← args.mapM (translateExpr fuel env (arrayArgExpected method elem))
   arrayCall s method elem xs codes
 

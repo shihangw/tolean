@@ -11,6 +11,10 @@ open tolean.TypeScript tolean.TypeScript.Eval tolean.TypeScript.Syntax
 -- The proofs pass the same lemmas everywhere, so some go unused.
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false
+-- A link theorem for a function with a nullable record parameter splits
+-- the record into every shape, and `link_tac` unfolds the evaluator in
+-- each. That can pass Lean's default budget.
+set_option maxHeartbeats 400000
 
 /-- The program, as the parser read it. -/
 def program : tolean.TypeScript.Syntax.Module :=

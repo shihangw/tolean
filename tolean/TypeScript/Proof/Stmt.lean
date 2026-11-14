@@ -3878,7 +3878,7 @@ omit [JSNumber N] in
 /-- `xs.slice(n)` is the list after the first `n` elements. -/
 theorem sliceList_drop {α : Type} (items : List α) (n : Nat) :
     Eval.sliceList items (n : Int) none = items.drop n := by
-  simp only [Eval.sliceList, Eval.relIndex]
+  simp only [Eval.sliceList, JSNumber.sliceInt, JSNumber.clampIndex]
   have hn : ¬ ((n : Int) < 0) := by omega
   simp only [hn, if_false, Int.toNat_natCast]
   rw [List.take_of_length_le (by simp)]

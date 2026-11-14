@@ -392,6 +392,22 @@ const SPECIAL_VALUE_CHECKS: Record<
     // ToInt32 reads `NaN` and `±Infinity` as 0, as it reads `none`.
     check: always((a) => Number.isFinite(a) || (a | 0) === 0),
   },
+  toInt_finite: {
+    statement: '∀ {a : N}, isFinite a = true → ∃ i, toInt a = some i',
+    // `Math.trunc` of a finite double is an integer.
+    check: always((a) => !Number.isFinite(a) || Number.isInteger(Math.trunc(a))),
+  },
+  toInt_trunc: {
+    statement:
+      '∀ {a : N} {i : Int}, toInt a = some i → InRange i → if lt a (ofSafeInt 0) then lt (ofInt (i - 1)) a = true ∧ le a (ofInt i) = true else le (ofInt i) a = true ∧ lt a (ofInt (i + 1)) = true',
+    // `Math.trunc` rounds toward zero, so the number lies within one of its
+    // integer part, on the side of zero.
+    check: always((a) => {
+      const t = Math.trunc(a);
+      if (!Number.isFinite(a) || !Number.isSafeInteger(t)) return true;
+      return a < 0 ? Number(BigInt(t) - 1n) < a && a <= t : t <= a && a < Number(BigInt(t) + 1n);
+    }),
+  },
   negZero_eq_zero: {
     statement: '∀ {a : N}, isNegZero a = true → eq a (ofSafeInt 0) = true',
     check: always((a) => !Object.is(a, -0) || a === 0),

@@ -691,19 +691,17 @@ def atVal (items : List (Val N)) (k : Int) : Val N :=
 
 /-- A relative index into an array of `len` elements, as `slice` reads its
 arguments: a negative `k` counts from the end, and the result is clamped to
-`0` and `len`. -/
-def relIndex (len : Nat) (k : Int) : Nat :=
-  if k < 0 then (len + k).toNat else min k.toNat len
+`0` and `len`. It is `JSNumber.clampIndex`, which the output also calls, so
+the two cannot drift apart. -/
+def relIndex (len : Nat) (k : Int) : Nat := JSNumber.clampIndex len k
 
 /-- `items.slice(start, stop)` (`Array.prototype.slice`, ECMA-262
 §23.1.3.28), where `start` and `stop` are the integers of the arguments: the
-elements from `start` up to `stop`, or to the end when `stop` is none. -/
+elements from `start` up to `stop`, or to the end when `stop` is none. It is
+`JSNumber.sliceInt`, which the output calls for a slice with a bound that is
+not a literal. -/
 def sliceList {α : Type} (items : List α) (start : Int) (stop : Option Int) : List α :=
-  let k := relIndex items.length start
-  let final := match stop with
-    | some e => relIndex items.length e
-    | none => items.length
-  (items.drop k).take (final - k)
+  JSNumber.sliceInt items start stop
 
 /-- The comparator `cmp` is consistent for `items` (ECMA-262 §23.1.3.30.1):
 for every pair of elements it gives a sign, the sign for `(b, a)` is the
@@ -1628,8 +1626,8 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     else none
   -- `xs.at(k)` (`Array.prototype.at`, ECMA-262 §23.1.3.1). Its argument
   -- becomes an integer by `ToIntegerOrInfinity`. A literal is the integer it
-  -- names, whatever the model of numbers. Any other number is its integer
-  -- when it is a safe integer; truncating other numbers leaves the subset.
+  -- names, whatever the model of numbers. Any other number gives the integer
+  -- of `JSNumber.toIndexInt`.
   -- `s.at(k)` on a string is a string method, as the last rule takes it.
   | .call _ (.member _ recv "at") [arg] => do
     match ← eval m fuel env recv with
@@ -1638,7 +1636,7 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
       | some k => return atVal items k
       | none =>
         let .num n ← eval m fuel env arg | none
-        return atVal items (← JSNumber.toSafeInt n)
+        return atVal items (JSNumber.toIndexInt n)
     | .str s => stringMethod "at" s [← eval m fuel env arg] [intLiteral? arg]
     | _ => none
   -- `xs.slice(start, end)` (`Array.prototype.slice`, ECMA-262 §23.1.3.28).
@@ -1844,14 +1842,14 @@ termination_by e => (fuel, sizeOf e, 1)
 
 /-- The integer of an argument such as the start of `slice`, by
 `ToIntegerOrInfinity` (ECMA-262 §7.1.5): a literal is the integer it names,
-whatever the model of numbers, and any other number is its integer when it
-is a safe integer. Truncating any other number leaves the subset. -/
+whatever the model of numbers, and any other number gives the integer of
+`JSNumber.toIndexInt`. -/
 def evalInt (m : Scope) (fuel : Nat) (env : Env N) (e : Expr) : Option Int :=
   match intLiteral? e with
   | some k => some k
   | none => do
     let .num n ← eval m fuel env e | none
-    JSNumber.toSafeInt n
+    return JSNumber.toIndexInt n
 termination_by (fuel, sizeOf e, 1)
 
 def evalList (m : Scope) (fuel : Nat) (env : Env N) : List Expr → Option (List (Val N))
