@@ -427,6 +427,7 @@ the file, the line and the reason. It never approximates.
 | `a ?? b` on `T \| null`, where `b` may be `null` | `Option.or a b` |
 | `boolean` | `Bool` |
 | `string`, `"abc"` | `JSString`, `JSString.ofString "abc"`. A `JSString` holds the UTF-16 code units of the string, as ECMA-262 defines a string, so a value can hold a lone surrogate, which a Lean `String` cannot. `ofString` is injective, so a claim can state a literal as a Lean `String`. |
+| `T \| undefined` on a local or return value | `Option T`. A defined value becomes `some`, and `undefined` becomes `none`. A local may be initialized or assigned either value. The type may not also include `null`. A field must use `f?: T` instead, because a missing key and a key whose value is `undefined` share one Lean value. |
 | `ReadonlyArray<T>`, `Array<T>`, `T[]` | `List T` |
 | `interface` with `readonly`, required fields | `structure` |
 | An interface whose fields name the interface itself, such as `readonly next: Node \| null` or `readonly children: ReadonlyArray<Tree<T>>` | The same `structure`. Lean reads it as a nested inductive type, so a value is a finite tree, as every value that the subset can build is. |
@@ -757,15 +758,16 @@ Tolean rejects these, among others:
 - An optional field that is also nullable, a tag field that is optional, and
   an optional field with the name of a property of `Object.prototype`, such
   as `toString`, because an object without the field has that property.
-  Tolean also refuses `undefined` as a value, except as the argument of an
-  optional parameter. So a literal must leave an optional field out rather
+  Tolean also refuses `undefined` as a value unless the context expects an
+  optional value, such as a local or return value typed `T | undefined`, or
+  the argument of an optional parameter. A literal must leave an optional field out rather
   than set it to `undefined`, or to the value of another optional field. JS
   tells an object without the key from one whose key holds `undefined`, and
   Lean has one `none` for both. It also refuses `== null` and `=== null` on
   an optional value, and `== undefined`.
 - An optional parameter that is also nullable, and a required parameter after
-  an optional one. Tolean also refuses `T | undefined` as a type, and a test
-  of `undefined` that narrows a value inside an expression, such as
+  an optional one. Tolean also refuses a test of `undefined` that narrows a
+  value inside an expression, such as
   `x !== undefined && x > 0n`. Only the test of an `if` narrows an optional
   value.
 - `?.` where the value cannot be `null` or `undefined`, `?.` on a nullable

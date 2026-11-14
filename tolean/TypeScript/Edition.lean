@@ -15,6 +15,11 @@ editions; these names do not.
 A feature whose meaning changes in a later edition gets a new feature for the
 new meaning, never a second meaning for the same one. An edition joins `all`
 only after a review of what it changed.
+
+`T | undefined` erases to `T` at runtime. Its optional value uses the Undefined
+type (ES2015, §6.1.1; unchanged in ES2024), and a strict test of it uses
+IsStrictlyEqual (ES2024 §7.2.15). These operations need no edition gate because
+every supported edition specifies them.
 -/
 namespace tolean.TypeScript
 
