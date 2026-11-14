@@ -266,6 +266,10 @@ recursive encoder. A file with a function that calls itself has none either.
 A certificate runs the interpreter with as much fuel as the calls need, and
 the depth of a recursive call depends on its argument. Nor does a file with a
 function that can throw, because a certificate has no encoder for `Except` yet.
+A local function can get a certificate when neither its body nor the body of
+the function around it has a loop. This covers calls that return a value
+and calls that write back captured `let` variables, but not a call that does
+both. A loop lemma cannot yet describe the closure that a local call reads.
 A `number` is a value of
 the abstract model `JSNumber N` in the interpreter, as it is in the
 translation, so each theorem holds for every `N`, real doubles among them,
