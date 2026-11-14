@@ -330,19 +330,12 @@ a reason to choose otherwise.
   ([decision](../decisions/2026-11-12-local-functions.md)), so the
   threading that these use is already in place.
 
-- Should a map that a caller passes in become a borrow, as above, or should the
-  callee run in a state monad? A borrow keeps the output plain, but it only
-  covers a call that changes one map.
-
-  Recommendation: the borrow, with a tuple when a callee changes several
-  maps. A callee that changes two maps returns a pair, and one with a result
-  returns a triple, as a loop already returns the tuple of the locals it
-  changes, and as Aeneas does for Rust. A state monad would hide which maps a
-  function touches and bring `StateT` lemmas into every proof about pure
-  code. The [effects plan](effects.md) keeps the monad for state that is
-  global. The parameter's type is the signal: a `Map` parameter with a `set`
-  in the body is a borrow, and a `ReadonlyMap` is plain. A call statement
-  `f(m, x);` becomes `let m := f m x`.
+- The map-borrow question is settled by the
+  [decision to pass changed maps back](../decisions/2026-11-14-map-borrows.md).
+  The result carries a tuple when the callee changes several maps or also
+  returns a value. `ReadonlyMap` stays plain. Step 8 remains open because
+  the interpreter and the IR still need a call result that preserves the
+  final parameter bindings, including on a return.
 
 - Should `tolean.json` accept imports without the `.ts` extension, for
   projects that use bundler resolution? Tolean refuses them now because Node
