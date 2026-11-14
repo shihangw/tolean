@@ -27,6 +27,7 @@ def TypeExpr.beq : TypeExpr → TypeExpr → Bool
   | .union a0 a1, .union b0 b1 => decide (a0 = b0) && TypeExpr.beqList a1 b1
   | .paren a0 a1, .paren b0 b1 => decide (a0 = b0) && TypeExpr.beq a1 b1
   | .tuple a0 a1 a2, .tuple b0 b1 b2 => decide (a0 = b0) && decide (a1 = b1) && TypeExpr.beqList a2 b2
+  | .predicate a0 a1 a2, .predicate b0 b1 b2 => decide (a0 = b0) && decide (a1 = b1) && TypeExpr.beq a2 b2
   | _, _ => false
 
 def TypeExpr.beqList : List TypeExpr → List TypeExpr → Bool
@@ -60,6 +61,8 @@ theorem TypeExpr.beq_iff : (a b : TypeExpr) → TypeExpr.beq a b = true ↔ a = 
     cases b <;> simp [and_assoc, TypeExpr.beq, TypeExpr.beq_iff a1]
   | .tuple a0 a1 a2, b => by
     cases b <;> simp [and_assoc, TypeExpr.beq, TypeExpr.beqList_iff a2]
+  | .predicate a0 a1 a2, b => by
+    cases b <;> simp [and_assoc, TypeExpr.beq, TypeExpr.beq_iff a2]
 
 theorem TypeExpr.beqList_iff : (xs ys : List TypeExpr) → TypeExpr.beqList xs ys = true ↔ xs = ys
   | [], ys => by cases ys <;> simp [and_assoc, TypeExpr.beqList]

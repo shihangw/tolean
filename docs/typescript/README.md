@@ -23,6 +23,12 @@ marks which links are proved, tested against a reference, or trusted.
   `readonly` allowed before a parameter, or the same with no constructor. The
   parser refuses every other class: one that does not extend `Error`, a field,
   a method, or any other statement in the constructor.
+
+A function return annotation may be a predicate, as in `shape is Circle`.
+The parser preserves its parameter and target type, including on local
+declarations and local arrows. The interpreter ignores the annotation, as
+Node does after type stripping: it evaluates the body rather than trusting
+the claimed type. Translation still refuses these annotations.
 - **Statements:** `const` and `let` declarations, array destructuring such as
   `const [a, , b, ...rest] = xs`, expression statements,
   `return`, `throw`, `if` and `else`, `for … of` with a name or an array
@@ -708,7 +714,7 @@ Tolean rejects these, among others:
   enum is one of its members, so Tolean refuses a string such as `'a'` where
   the enum is expected, and a member where a `string` is expected. It also
   refuses the enum's object as a value, and a local with the enum's name.
-- A type guard annotation, such as `shape is Circle`, even when its body
+- Translation of a type guard annotation, such as `shape is Circle`, even when its body
   tests the tag exactly. Step 3 of the [pure TypeScript plan](../plans/pure-typescript.md)
   is still open. The translator must check the body before it can trust the
   annotation at a call site. Both branches matter: a guard that recognizes
