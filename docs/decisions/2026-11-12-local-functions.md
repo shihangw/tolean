@@ -70,17 +70,25 @@ check looks for, so the check never finds one where a declaration reads. The
 round-trip proof in `Syntax/RoundTripStmt.lean` (`localArrowHead_decl`) uses
 that fact, so the proof of a declaration needs only one more step.
 
+## Certificates
+
+A certificate writes the closure's syntax tree as a Lean term, and its link
+proof unfolds the lifted definition at each call. A loop that calls a local
+function has an invariant for the closure bound to that name. The closure
+has no data encoder: the invariant states its exact parameters and body.
+The loop's printed step captures only data, because the printed call names
+the lifted function directly.
+
+Each local call spends one unit of fuel. A loop lemma therefore reserves
+that unit in addition to the depth of calls to functions of the module.
+The certifier also visits loops inside a lifted body, so a local function
+can contain a loop as well as be called by one.
+
 ## Left for later
 
 A local function that returns a value and also changes a variable of the
 function around it is step 14 of `docs/plans/pure-typescript.md`, with calls
-between local functions and certificates for functions that combine local
-functions with loops. A certificate can now cover a local function without
-loops. It writes the closure's syntax tree as a Lean term, and its link
-proof unfolds the lifted definition at each call.
+between local functions.
 
 The interpreter keeps no variables with a `return`, so returning a value
-while changing captured variables still needs a new path in it. A loop
-certificate also needs an invariant for the closure bound to the local
-function's name. The current loop invariants describe encoded data, not
-closures.
+while changing captured variables still needs a new path in it.

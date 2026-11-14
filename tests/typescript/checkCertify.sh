@@ -23,7 +23,8 @@ certifyOne() {
   if ! $T translate "$f" "$work/Corpus/$n.lean" "Corpus.$n" 2>/dev/null ||
       ! $T certify "$f" "Corpus.$n" "Corpus.$n" "$work/Corpus/${n}Cert.lean" "Corpus.${n}Cert" 2>/dev/null; then
     case "$b" in
-      localFunctionCertificate | localFunctionNumber)
+      localFunctionCertificate | localFunctionNumber | localFunctionLoopCertificates | \
+      localFunctions | localArrows | localFunctionOwnedArray)
         { echo failed; echo "A required local-function certificate was refused"; } >"$result"
         return 0
         ;;

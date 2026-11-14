@@ -207,8 +207,7 @@ leaves a gap.
 13. **P2.** Classes with `readonly` fields and methods that do not change
     `this`.
 14. **P1.** Local functions: one that returns a value and changes variables
-    of the enclosing function, calls between local functions, and
-    certificates for files that combine local functions with loops.
+    of the enclosing function, and calls between local functions.
 
 Steps 2 and 4 cover most of the code in the survey. Step 8 matters most for
 proofs, because a fold over events keeps much of its state in maps.
