@@ -978,7 +978,10 @@ def parseSignature : ParseM (String × List String × List Param × Option TypeE
     discard advance
     returnType := some (← parseType (← budget))
   let t ← peek
-  unless t.isPunct "{" do unexpected t "'{' (a function needs a body)"
+  unless t.isPunct "{" do
+    unexpected t (if t.isIdent "is" then
+      "'{' (type guards are not supported: the tag test and call-site narrowing must be checked)"
+      else "'{' (a function needs a body)")
   return (name, typeParams, params.toList, returnType)
 
 /-- The body of a function: `return` may stand in it, and a `break` or a
