@@ -644,7 +644,7 @@ macro_rules
       simp [runIn, callIn, Except.toOption, functionsOf, functions, Body.exec, Body.runFold, Expr.eval,
         Expr.evalCall, Expr.evalList,
         Expr.evalFields, Expr.evalMap, Expr.evalMapIdx, Expr.evalFilter, Expr.evalFind, Expr.evalFindIdx, Expr.evalReduce,
-        bindState, eqVal, ← List.map_reverse,
+        bindState, callResult, eqVal, ← List.map_reverse,
         -- `includes` on an array literal compares with `===` once the list
         -- has reduced, so strict equality on primitives must reduce too.
         Eval.includesVal, Eval.sameValueZero, Eval.strictEq, Eval.setProp,

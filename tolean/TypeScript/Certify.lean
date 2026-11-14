@@ -156,6 +156,7 @@ partial def stmtsOf : Stmt → List Stmt
   | .forOfPattern s k p i b => .forOfPattern s k p i b :: stmtsOf b
   | .forStmt s i t u b => .forStmt s i t u b :: stmtsOf b
   | .whileStmt s t b => .whileStmt s t b :: stmtsOf b
+  | .funDecl s n tps ps r b => .funDecl s n tps ps r b :: stmtsOf b
   | .switchStmt s d cs => .switchStmt s d cs :: cs.flatMap fun (_, body) => body.flatMap stmtsOf
   | s => [s]
 
@@ -327,8 +328,9 @@ partial def bodyCallbacks : IR.Body → List Callback
   | .fold _ _ body items rest _ => exprCallbacks items ++ bodyCallbacks body ++ bodyCallbacks rest
   | .throw e => exprCallbacks e
   | .bind _ _ args rest => args.flatMap exprCallbacks ++ bodyCallbacks rest
-  -- A file with a local function gets no certificate yet.
-  | .letCall _ _ _ _ _ _ _ _ _ rest | .letLifted _ _ rest => bodyCallbacks rest
+  | .letCall _ _ _ _ _ _ _ body args rest =>
+    args.flatMap exprCallbacks ++ bodyCallbacks body ++ bodyCallbacks rest
+  | .letLifted _ _ rest => bodyCallbacks rest
 
 end
 
@@ -403,9 +405,18 @@ def project (s : String) (count index : Nat) : String :=
     let seconds := String.join (List.replicate index ".2")
     if index + 1 == count then s!"{s}{seconds}" else s!"{s}{seconds}.1"
 
-/-- A value as a Lean term. The derived `Repr` writes each constructor by its
-full name, so Lean reads the text back as the same value. If it did not, the
-kernel's check in the certificate would fail, so this need not be trusted. -/
+/-- A closure needs its syntax tree as a term, not the debug printer's
+`<statement>` marker. Other operations use their derived representation. -/
+private def exprExtTerm (x : IR.ExprExt) (prec : Nat) : Std.Format :=
+  match x with
+  | .closure params body =>
+    Std.Format.text s!"(tolean.TypeScript.IR.ExprExt.closure {list (params.map str)} {stmt body})"
+  | _ => reprPrec x prec
+
+local instance : Repr IR.ExprExt := ⟨exprExtTerm⟩
+
+/-- A value as a Lean term. The kernel checks that it is the translator's
+output, so this printer need not be trusted. -/
 def term {α : Type} [Repr α] (x : α) : String := (repr x).pretty 100
 
 /-- The certificate file for `source`, translated as the Lean module `leanModule`
@@ -436,12 +447,13 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       | .function _ _ _ _ _ _ body => (stmtsOf body).any (· matches .forStmt ..)
       | _ => false then
     throw s!"{file}: a counted loop has no certificate yet"
-  -- The certificate has no lemma for a function that the translator lifted
-  -- out of another.
+  -- A loop lemma cannot yet describe a captured local function.
   if m.decls.any fun d => match d with
-      | .function _ _ _ _ _ _ body => (stmtsOf body).any (· matches .funDecl ..)
+      | .function _ _ _ _ _ _ body =>
+        (stmtsOf body).any (· matches .funDecl ..) &&
+        (stmtsOf body).any (fun s => s matches .forOfStmt .. | .forOfPattern ..)
       | _ => false then
-    throw s!"{file}: a local function has no certificate yet"
+    throw s!"{file}: a function with both local functions and loops has no certificate yet"
   -- `JSON.stringify` is opaque in the output and in the interpreter, so no
   -- proof links one to the other.
   if m.decls.any fun d => match d with
@@ -659,7 +671,11 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         s!"@[simp] theorem decList_decNull_decode{name} {generic} (xs : List (Option {ty})) : decList (decNull decode{name}) (some (Val.list (List.map (encNull (encode{name} ({nv} := {nv}))) xs))) = xs :=\n" ++
         s!"  decList_list_null _ _ decode{name}_encode{name} encode{name}_ne_null xs"
       lemmaNames := lemmaNames ++ #[r.cert s!"encode{name}", r.cert s!"decode{name}"]
-  let defs := (functionsOf m).map fun f => r.full s!"{transNs}.{f.1}"
+  let defs := decls.flatMap fun
+    | .function name _ _ body =>
+      r.full s!"{transNs}.{name}" ::
+        body.lifted.map (fun (ref, _, _, _) => r.full s!"{transNs}.{ref.name}")
+    | _ => []
   let outputFs := s!"({r.full "tolean.TypeScript.IR.functionsOf"} [(\"\", {r.cert "decls"})])"
   let envLemmas := ["Env.set_cons", "Env.lookup_cons", "Env.lookup_set_same", "Env.lookup_set_ne",
     "Env.set_set", "Env.length_set"].map r.eval
