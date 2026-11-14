@@ -13,6 +13,18 @@ trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/Corpus" "$work/results"
 export lean_path="$(cd "$root" && lake env printenv LEAN_PATH):$work"
 
+# These files translate, but their certificate obligations cannot yet be
+# stated over the parameters. Check the refusal rather than counting a skip.
+for f in corpus/certify/reject/*.ts; do
+  expected=$(sed -n 's|^// expect: ||p' "$f" | head -1)
+  [ -n "$expected" ] || { echo "FAIL: no refusal expected in $f"; exit 1; }
+  "$T" translate "$f" "$work/Refused.lean" Refused >/dev/null
+  if out=$("$T" certify "$f" Refused Refused "$work/RefusedCert.lean" RefusedCert 2>&1); then
+    echo "FAIL: certificate unexpectedly accepted for $f"; exit 1
+  fi
+  grep -qF "$expected" <<<"$out" || { echo "FAIL: wrong refusal for $f: $out"; exit 1; }
+done
+
 # Certify one file. The result is in $work/results/<name>: proved, skipped, or
 # failed followed by Lean's output.
 certifyOne() {

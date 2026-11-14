@@ -788,6 +788,7 @@ def extras : List Group := [
     ``Proof.sliceList_dropLast, ``Proof.sliceList_mixed, ``Proof.sliceList_neg,
     ``Proof.sliceInt_map]⟩,
   ⟨"Certificates: sorts", [``Proof.numberOrder_ne_gt, ``Proof.consistentOn_numberOrder,
+    ``Proof.compareSign_sub, ``Proof.consistentOn_congr_on, ``Proof.consistentOn_numberOrder_reverse,
     ``Proof.consistentOn_of_transCmp, ``Proof.sortValues_sortWith_on,
     ``Proof.sortValues_sortWith,
     ``Proof.int_compare_of_lt, ``Proof.int_compare_of_gt, ``Proof.int_compare_of_eq,

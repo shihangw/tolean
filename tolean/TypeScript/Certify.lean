@@ -464,6 +464,11 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         (method matches .list (.sortWith _)) && comparesNumbers cb
     | _ => false
   let laws := laws ++ if numericSorts then s!" [tolean.TypeScript.NumberOrderLaws {nv}]" else ""
+  let differences := decls.any fun
+    | .function _ _ _ body => (bodyCallbacks body).any fun (method, _, _, cb, _) =>
+        (method matches .list (.sortWith _)) && (cb matches .ext (.numberOp .sub) _)
+    | _ => false
+  let laws := laws ++ if differences then s!" [tolean.TypeScript.SpecialValueLaws {nv}]" else ""
   let generic := s!"\{{nv} : Type} [tolean.TypeScript.JSNumber {nv}]{laws}"
   -- A generic translated definition takes the model by name, as the
   -- translation's own calls do.
@@ -771,9 +776,13 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           | throw s!"{file}: the comparator in {name} does not compare keys"
         let elemTy := elem.print names
         if comparesNumbers cbBody then
-          let [(path, false, true)] := keys
-            | throw s!"{file}: number-key certificates currently require one ascending comparison key in {name}"
-          let .value (.listMethod (.sortWith _) (.var input) _ _ _ _) := outBody
+          let [(path, difference, up)] := keys
+            | throw s!"{file}: number-key certificates currently require one key in {name}"
+          let .value (.listMethod (.sortWith _) items _ _ _ _) := outBody
+            | throw s!"{file}: the sorted list must be a parameter returned directly in {name}"
+          let some input := (match items with
+            | .var n | .ext .append [.var n] => some n
+            | _ => none)
             | throw s!"{file}: the sorted list must be a parameter returned directly in {name}"
           unless outParams.any (fun (n, _) => n == input) && scope.isEmpty do
             throw s!"{file}: the sorted list must be a parameter and its comparator must not capture locals in {name}"
@@ -781,7 +790,22 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           let hname := s!"{name}_sort_precondition"
           if r.idents.contains hname then
             throw s!"{file}: reserved certificate hypothesis name {hname}"
-          let condition := fun items => s!"∀ _sortItem' ∈ {items}, tolean.TypeScript.JSNumber.isNaN ({key} _sortItem') = false"
+          let predicate := if difference then "isFinite" else "isNaN"
+          let truth := if difference then "true" else "false"
+          let condition := fun items => s!"∀ _sortItem' ∈ {items}, tolean.TypeScript.JSNumber.{predicate} ({key} _sortItem') = {truth}"
+          let orderLemma := "tolean.TypeScript.Proof.consistentOn_numberOrder" ++ if up then "" else "_reverse"
+          let (left, right) := if up then ("a", "b") else ("b", "a")
+          let consistency := if difference then
+            s!"  · rw [tolean.TypeScript.Proof.consistentOn_congr_on (fun a ha b hb =>\n" ++
+            s!"      tolean.TypeScript.Proof.compareSign_sub (hkeys {left} h{left}) (hkeys {right} h{right}))]\n" ++
+            s!"    exact {orderLemma} {key} items (fun x hx => tolean.TypeScript.SpecialValueLaws.isFinite_not_nan (hkeys x hx))"
+            else
+            s!"  · have hs : ∀ a b, tolean.TypeScript.JSNumber.compareSign ({fn} a b) =\n" ++
+            s!"        some (tolean.TypeScript.Proof.numberOrder ({key} {left}) ({key} {right})) := by\n" ++
+            "      intro a b\n      simp only []\n      unfold tolean.TypeScript.Proof.numberOrder\n      repeat' split\n" ++
+            "      all_goals simp_all [tolean.TypeScript.compareSign_one, tolean.TypeScript.compareSign_zero,\n" ++
+            "        tolean.TypeScript.compareSign_neg_one, tolean.TypeScript.compareSign_neg_zero]\n" ++
+            s!"    simpa only [hs] using {orderLemma} {key} items hkeys"
           obligations := obligations ++ [(hname, condition input)]
           loopLemmas := loopLemmas.push (r.cert lemmaName)
           thms := thms.push <|
@@ -792,12 +816,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
             s!"  refine tolean.TypeScript.Proof.sortValues_sortWith_on fs {fuel} ρ {str param} {str other} _ {encX} {fn} ?_\n" ++
             s!"    (fun _ => by simp) items ?_\n" ++
             s!"  · intro x y\n    {casesOn decls [("x", elem), ("y", elem)]}link_tac [{simpSet}]\n" ++
-            s!"  · have hs : ∀ a b, tolean.TypeScript.JSNumber.compareSign ({fn} a b) =\n" ++
-            s!"        some (tolean.TypeScript.Proof.numberOrder ({key} a) ({key} b)) := by\n" ++
-            "      intro a b\n      simp only []\n      unfold tolean.TypeScript.Proof.numberOrder\n      repeat' split\n" ++
-            "      all_goals simp_all [tolean.TypeScript.compareSign_one, tolean.TypeScript.compareSign_zero,\n" ++
-            "        tolean.TypeScript.compareSign_neg_one, tolean.TypeScript.compareSign_neg_zero]\n" ++
-            s!"    simpa only [hs] using tolean.TypeScript.Proof.consistentOn_numberOrder {key} items hkeys"
+            consistency
           continue
         let keyCmp : List String × Bool × Bool → String := fun (path, _, up) =>
           let key := s!"(fun ({param} : {elemTy}) => {".".intercalate (param :: path)})"
