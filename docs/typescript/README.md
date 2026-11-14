@@ -271,8 +271,15 @@ the abstract model `JSNumber N` in the interpreter, as it is in the
 translation, so each theorem holds for every `N`, real doubles among them,
 and assumes none of the number laws. A file that sorts is the exception. Its
 theorems take `[SafeIntLaws N]`, because the order needs the signs of `-1`
-and `1` as numbers. A file that sorts by a `number` key has no certificate
-yet, because its claim needs the precondition that no key is `NaN`.
+and `1` as numbers. A function that directly returns a parameter sorted by
+one ascending number key with the comparison shape gets a certificate too.
+Its theorems also take `[NumberOrderLaws N]` and a hypothesis over the
+parameter, such as `(f_sort_precondition : ∀ x ∈ xs, JSNumber.isNaN x.key = false)`.
+The key may be the number itself or a field of the element. This condition
+allows infinities and both signed zeros. The certificate proves consistency
+on that input list, not on every list. A difference comparator, descending
+or multiple keys, a sort of a local list, and calls that need to pass a sort
+precondition remain refused by the certifier.
 
 A certificate's theorems follow from `translate_sound`, so they do not unfold
 the interpreter. The certificate holds the IR that the translator gives,
@@ -859,9 +866,8 @@ at three levels:
   never gives `NaN`, and its sign agrees with their order, even when the
   difference overflows to an infinity. These laws are hypotheses, and
   `jsNumberLaws.test.ts` checks each one on the maintained Node lines.
-  They do not yet enable certificates for sorts by number keys. The
-  certifier still needs to state input preconditions and pass them through
-  calls and callbacks.
+  The certifier uses these laws for direct ascending comparison sorts of a
+  list parameter, under the non-NaN hypothesis described above.
 
 The laws are hypotheses, not Lean axioms. If one of them were false, the
 theorems that use it would not apply to JS. But Lean would stay consistent,

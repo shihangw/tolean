@@ -97,12 +97,10 @@ value claim already does.
 | TypeScript | Lean | Refused |
 |---|---|---|
 | The `index` argument of a callback other than one of `map`, and the `array` argument of any callback | The `List` functions that also pass the index, as `List.mapIdx` does for `map`, and the list itself | |
-| A certificate for a file that sorts by a `number` key | As for `bigint` and `string` keys, with the precondition that no key is `NaN`, and for a difference that every key is finite. `NumberOrderLaws` states the order laws and the sign of a finite-key difference, and `jsNumberLaws.test.ts` checks them. The certifier still needs to write and propagate the precondition. | |
+| A number-sort certificate for a difference comparator, descending or multiple keys, a non-parameter list, or a call that needs a sort precondition | A hypothesis over the parameters excludes `NaN` keys, or requires finite keys for a difference. Direct ascending comparison sorts of a list parameter already get this hypothesis. | |
 
-The certifier writes no precondition today, so such a file gets no
-certificate. The library lemma `sortValues_sortWith_on` now requires
-consistency only on the input list, rather than on every list. The certifier
-still uses the unconditional lemma until it can pass that input condition.
+The certifier uses `sortValues_sortWith_on` for a direct ascending comparison
+sort of a parameter. Its input hypothesis excludes NaN keys.
 
 ### Strings
 
