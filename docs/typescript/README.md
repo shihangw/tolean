@@ -708,6 +708,13 @@ Tolean rejects these, among others:
   enum is one of its members, so Tolean refuses a string such as `'a'` where
   the enum is expected, and a member where a `string` is expected. It also
   refuses the enum's object as a value, and a local with the enum's name.
+- A type guard annotation, such as `shape is Circle`, even when its body
+  tests the tag exactly. Step 3 of the [pure TypeScript plan](../plans/pure-typescript.md)
+  is still open. The translator must check the body before it can trust the
+  annotation at a call site. Both branches matter: a guard that recognizes
+  only circles with a positive radius does not make its false branch a
+  square. Until those checks are implemented, use a direct tag test at the
+  branch instead.
 - A field of a tagged union read before a test of its tag, a read of the tag
   field outside such a test, and a union of interfaces without a tag. Tolean
   also refuses a member, such as a `Circle`, where the union is expected,
