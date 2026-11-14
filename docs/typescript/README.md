@@ -852,6 +852,17 @@ at three levels:
   every model that satisfies the laws.
   A theorem that needs these facts takes `[SpecialValueLaws N]`.
 
+  `NumberOrderLaws` states the order laws for numbers that are not `NaN`.
+  Both strict comparison and its negation are transitive, and JS equality
+  holds exactly when neither value is less than the other. This treats
+  positive and negative zero as equal. For finite operands, subtraction
+  never gives `NaN`, and its sign agrees with their order, even when the
+  difference overflows to an infinity. These laws are hypotheses, and
+  `jsNumberLaws.test.ts` checks each one on the maintained Node lines.
+  They do not yet enable certificates for sorts by number keys. The
+  certifier still needs to state input preconditions and pass them through
+  calls and callbacks.
+
 The laws are hypotheses, not Lean axioms. If one of them were false, the
 theorems that use it would not apply to JS. But Lean would stay consistent,
 and every other theorem would still stand.
@@ -948,7 +959,7 @@ path = "node_modules/tolean/lean"
 | 1. Parse and type-check | Tolean's parser reads the source, and the translator types the subset itself | Trusted, tested | `tests/typescript/check.ts` compares the parser's syntax trees with `tsc`'s, on the corpus and on random programs. It also prints each tree as source and requires the parser to read it as the same tree. `parseChars_reads` proves this second check for every tree that the parser gives. The proof shows that the parser and the printer agree, but not that the parser reads TypeScript as `tsc` does. The type checker is tested through the translation corpus. |
 | 2. Translate | Tolean writes readable Lean definitions (the generated `.lean` files) | **Proved** up to the printer | `program_sound` proves the translation to the Tolean IR for every accepted program: when the IR's evaluator gives a value, the interpreter gives the same value. The printer link is trusted: that the printed Lean computes what the evaluator gives for the IR, and that the evaluator gives a value where the printed Lean does. No theorem can state it for every program, because the printed Lean is text that means something only after Lean compiles it. The golden files of the corpus, compiling random programs and the CI drift check test it, and a [certificate](#certificates) proves the link, and so the whole step, for one file. |
 | 3. Prove the claims | Hand-written proofs show that each claim in `Spec/*.lean` holds for the generated definitions | **Proved** | The Lean kernel, `#audit_claims`, `lake build --wfail`, and no `sorry`, `admit`, `axiom` or `native_decide` |
-| 4. Assume JS number facts | `SafeIntLaws` and `SpecialValueLaws` in `tolean/TypeScript/Spec/Number.lean` | Trusted, tested | `tests/typescript/jsNumberLaws.test.ts` checks each law against real doubles. |
+| 4. Assume JS number facts | `SafeIntLaws`, `SpecialValueLaws` and `NumberOrderLaws` in `tolean/TypeScript/Spec/Number.lean` | Trusted, tested | `tests/typescript/jsNumberLaws.test.ts` checks each law against real doubles. |
 | 5. Run | Type stripping or a bundler makes the JavaScript that Node runs | Trusted | The subset uses only constructs that type stripping leaves unchanged, except `enum`. Type stripping refuses an enum, so code with one needs `tsc`, a bundler or Node's `--experimental-transform-types`. The interpreter reads an enum as the object that `tsc` makes for it. |
 | 6. Inputs | The code that calls the verified functions passes inputs that meet the theorems' preconditions | Trusted | The callers are responsible for it. A function can check its own inputs instead, so that its claim has no precondition, and [a plan](../plans/input-checks.md) lets `tolean.json` require that. |
 
