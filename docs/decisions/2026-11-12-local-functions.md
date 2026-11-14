@@ -31,9 +31,13 @@ interpreter has none.
 The proof needs to know what the lifted function means at each call. At the
 declaration, the translator has a scope with the function's parameters and
 the captured locals. At a call, it translates the body again in the same
-scope, and it checks that the text is the text of the lifted function. So
+scope, and it checks that the IR equals the IR of the lifted function. So
 the proof of the call gets the translation of the body as a fact, and the
 induction over the translator's fuel covers it.
+
+The check uses decidable equality on the IR rather than comparing its debug
+text. The Lean kernel can run that equality when a certificate checks the
+translation. It cannot run the formatter that produces the debug text.
 
 The IR's meaning of a call also checks that the name holds the closure that
 the declaration bound. The printed Lean code does not contain that check,
