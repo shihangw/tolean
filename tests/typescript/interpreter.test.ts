@@ -297,6 +297,23 @@ test(`the interpreter agrees with Node ${process.version} on random programs`, a
 
 // A parameter that a call leaves out is `undefined`, both for a call inside
 // the program and for the call that runs it, as in Node.
+test('type re-exports introduce no runtime binding', async () => {
+  const source = 'export type { Point } from "./origin.ts"; export function f(n: bigint): bigint { return n + 1n; }';
+  const input = { programs: [{ source, calls: [{ function: 'f', args: [encode(4n)] }] }] };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (result === undefined || !result.parsed) return;
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-type-reexport-'));
+  writeFileSync(join(dir, 'origin.ts'), 'export interface Point { readonly x: bigint }');
+  const path = join(dir, 'barrel.mjs');
+  writeFileSync(path, ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText);
+  const mod = await import(pathToFileURL(path).href) as { f: (n: bigint) => bigint };
+  const value = result.results[0]?.value;
+  expect(value === undefined ? 'no value' : canonical(value)).toBe(canonical(encode(mod.f(4n))));
+});
+
 test('the interpreter binds a parameter that a call leaves out to undefined', async () => {
   const cases: Array<{ source: string; args: Array<unknown> }> = [
     { source: 'export function f(a: bigint, b?: bigint): bigint { return a + (b ?? 10n); }', args: [1n] },

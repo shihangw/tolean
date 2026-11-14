@@ -4670,16 +4670,38 @@ def translateErrorTypes (m : Module) : TM (List IR.Decl) := do
     (c.name, ("message", IR.Ty.string) :: c.fields.map fun (n, t) => (n, t.lean))
   return [.errors "Thrown" members]
 
+/-- Check a type re-export against the translated source module. -/
+def reexportsError? (c : Ctx) (s : Span) (names : List ImportName) (source : String) :
+    Option (Span × String) :=
+  match Eval.resolvePath c.file source with
+  | none => some (s, s!"'{source}' is not a relative path to a .ts file, such as './x.ts'")
+  | some target =>
+    match c.interfaces.lookup target with
+    | none => some (s, s!"'{source}' is not a translated file of the project")
+    | some iface =>
+      if c.target.year < iface.target.year then
+        some (s, s!"'{source}' is translated for a newer edition than this file")
+      else names.findSome? fun n =>
+        if !n.typeOnly then
+          some (n.span, "re-exported values are not supported; use 'export type' for an interface or type alias")
+        else if (iface.aliases.any (·.name == n.name)) ||
+            (iface.structs.any fun i => i.name == n.name && i.exported) then none
+        else some (n.span, s!"'{source}' exports no interface or type alias named '{n.name}'")
+
+def exportListError? (c : Ctx) (s : Span) (names : List ImportName) (source : Option String) :
+    Option (Span × String) :=
+  match source with
+  | some path => reexportsError? c s names path
+  | none => exportsError? c names
+
 /-- One declaration: an output declaration, or none for an import, an
-export list or an error class, whose types `translateErrorTypes` wrote. A
-function may throw an error of `classes`, the error classes of the file. -/
+export list or an error class. -/
 def translateDecl (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr)))
     (classes : List ClassInfo) : Decl → TM (Option IR.Decl)
   | .import s names source => do translateImport s names source; return none
   | .exports s names source => do
-    if source.isSome then
-      reject s "tolean does not translate a re-export such as 'export { a } from \"./x.ts\"'; import the names instead"
-    if let some (sp, msg) := exportsError? (← get) names then reject sp msg
+    let ctx ← get
+    if let some (sp, msg) := exportListError? ctx s names source then reject sp msg
     return none
   | .interface s exported name typeParams fields => some <$> translateInterface s exported name typeParams fields
   | .typeAlias s exported name typeParams type => some <$> translateAlias s exported name typeParams type
@@ -4791,10 +4813,28 @@ def Ctx.withExports (c : Ctx) (listed : List ImportName) : Ctx :=
 aliases. The interfaces include the private ones that an exported declaration
 names, so that a file that imports it can read and build their fields. They
 keep `exported := false`, so that no file can import them by name. -/
-def Ctx.interface (c : Ctx) (usesNumber : Bool) (numberVar : String) : Interface :=
+def reexportListed (m : Module) : List (List ImportName × String) :=
+  m.decls.filterMap fun
+    | .exports _ names (some source) => some (names, source)
+    | _ => none
+
+/-- Type re-exports retain the defining file's type identity. They do not
+bind names in the re-exporting file. -/
+def Ctx.reexportInterfaces (c : Ctx) (listed : List (List ImportName × String)) :
+    List (List ImportName × Interface) :=
+  listed.filterMap fun (names, source) => do
+    let file ← Eval.resolvePath c.file source
+    let iface ← c.interfaces.lookup file
+    return (names, iface)
+
+def Ctx.interface (c : Ctx) (usesNumber : Bool) (numberVar : String)
+    (listed : List (List ImportName × String) := []) : Interface :=
   { functions := c.functions.filter fun f => f.exported && f.file == c.file,
-    structs := c.reachableStructs,
-    aliases := c.aliases.filter fun a => a.exported && a.file == c.file,
+    structs := c.reachableStructs ++ (c.reexportInterfaces listed).flatMap fun (names, iface) =>
+      iface.structs.filter fun i => i.exported && names.any fun n => n.typeOnly && n.name == i.name,
+    aliases := (c.aliases.filter fun a => a.exported && a.file == c.file) ++
+      (c.reexportInterfaces listed).flatMap fun (names, iface) =>
+        iface.aliases.filter fun a => names.any fun n => n.typeOnly && n.name == a.name,
     enums := c.reachableEnums,
     unions := c.reachableUnions,
     usesNumber, numberVar, target := c.target, errorClasses := !c.errorClasses.isEmpty }
@@ -4827,7 +4867,7 @@ structure Dependency where
 imports, without repeats. -/
 def importedFiles (file : String) (m : Module) : List String :=
   (m.decls.filterMap fun
-    | .import _ _ source => Eval.resolvePath file source
+    | .import _ _ source | .exports _ _ (some source) => Eval.resolvePath file source
     | _ => none).eraseDups
 
 /-- Parse and translate `source`, the TypeScript file `file`, which may import
@@ -4862,7 +4902,8 @@ def translateFile (file source : String) (target : Edition := .default)
       interfaces := deps.map fun (f, d) => (f, d.interface) }
   match (translateDecls m).run ctx with
   | .error e _ => .error e
-  | .ok decls ctx' => return (m, names, decls, (ctx'.withExports (exportListed m)).interface usesNumber names.typeParam)
+  | .ok decls ctx' => return (m, names, decls,
+      (ctx'.withExports (exportListed m)).interface usesNumber names.typeParam (reexportListed m))
 
 /-- Parse and translate `source`, the TypeScript file `file`: the parsed
 module, the names that the printer needs, and the Tolean IR. -/
