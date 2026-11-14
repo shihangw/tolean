@@ -43,7 +43,7 @@
 import { expect, test } from 'vitest';
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -198,6 +198,36 @@ function shown(x: unknown): string {
     return e instanceof Error ? e.message : String(e);
   }
 }
+
+test('certified local functions agree with Node on random arguments', async () => {
+  const source = readFileSync(new URL('./corpus/translate/accept/localFunctionCertificate.ts', import.meta.url), 'utf8');
+  const inputs = fc.sample(fc.tuple(fc.bigInt(), fc.bigInt()), { seed, numRuns: 50 });
+  const calls = inputs.flatMap(([start, amount]) => [
+    { function: 'tally', args: [encode(start), encode(amount)] },
+    { function: 'twice', args: [encode([start, amount])] },
+  ]);
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: [{ source, calls }] }), encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (!result?.parsed) return;
+  expect(result.accepted).toBe(true);
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-local-certificate-'));
+  const path = join(dir, 'local.mjs');
+  writeFileSync(path, ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+  }).outputText);
+  const mod = await import(pathToFileURL(path).href) as {
+    tally: (start: bigint, amount: bigint) => bigint;
+    twice: (xs: Array<bigint>) => Array<bigint>;
+  };
+  for (const [i, [start, amount]] of inputs.entries()) {
+    expect(result.results[2 * i]).toEqual({ value: encode(mod.tally(start, amount)) });
+    expect(result.results[2 * i + 1]).toEqual({ value: encode(mod.twice([start, amount])) });
+  }
+});
 
 test(`the interpreter agrees with Node ${process.version} on random programs`, async () => {
   // First, so that the seed shows when a step below fails.
