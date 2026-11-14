@@ -586,6 +586,61 @@ test('the interpreter gives no value where a changed collection has another hold
   }
 });
 
+// Until calls carry changed parameters back, even an exclusive map argument
+// must give no value. Aliased arguments must remain refused after borrows land.
+test('map calls preserve the boundary between readonly inputs and pending borrows', async () => {
+  const change = 'function change(m: Map<bigint, bigint>): boolean { m.set(1n, 2n); return true; }\n';
+  const cases = [
+    {
+      source: change + 'export function f(): boolean { const m = new Map<bigint, bigint>(); ' +
+        'const done = change(m); return m.has(1n); }',
+      refused: true,
+    },
+    {
+      source: change + 'export function f(): boolean { const m = new Map<bigint, bigint>(); const alias = m; ' +
+        'const done = change(m); return alias.has(1n); }',
+      refused: true,
+    },
+    {
+      source: change + 'export function f(): boolean { const m = new Map<bigint, bigint>(); const box = { m }; ' +
+        'const done = change(m); return box.m.has(1n); }',
+      refused: true,
+    },
+    {
+      source: 'function change(m: Map<bigint, bigint>, other: ReadonlyMap<bigint, bigint>): boolean { ' +
+        'm.set(1n, 2n); return other.has(1n); }\n' +
+        'export function f(): boolean { const m = new Map<bigint, bigint>(); return change(m, m); }',
+      refused: true,
+    },
+    {
+      source: 'function read(m: ReadonlyMap<bigint, bigint>): boolean { return m.has(1n); }\n' +
+        'export function f(): boolean { const m = new Map<bigint, bigint>([[1n, 2n]]); return read(m); }',
+      refused: false,
+    },
+  ];
+  const input = { programs: cases.map(({ source }) => ({ source, calls: [{ function: 'f', args: [] }] })) };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const results = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-map-calls-'));
+  for (const [i, { source, refused }] of cases.entries()) {
+    const lean = results[i];
+    expect(lean?.parsed, source).toBe(true);
+    const path = join(dir, `case${i}.mjs`);
+    writeFileSync(path, ts.transpileModule(source, {
+      compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+    }).outputText);
+    const mod = (await import(pathToFileURL(path).href)) as { f: () => boolean };
+    expect(mod.f(), source).toBe(true);
+    if (lean === undefined || !lean.parsed) continue;
+    if (refused) {
+      expect(lean.results[0] ?? null, source).toBeNull();
+    } else {
+      expect(lean.results[0]?.value, source).toEqual(encode(mod.f()));
+    }
+  }
+});
+
 // A map or a set compares number keys with SameValueZero, not `===`: `NaN` is
 // the same key as `NaN`, and `0` the same as `-0`. A new key `-0` is stored as
 // `0`, which a loop over the keys shows. The random programs rarely build these
