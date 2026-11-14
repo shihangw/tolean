@@ -22,7 +22,11 @@ certifyOne() {
   result="$work/results/$b"
   if ! $T translate "$f" "$work/Corpus/$n.lean" "Corpus.$n" 2>/dev/null ||
       ! $T certify "$f" "Corpus.$n" "Corpus.$n" "$work/Corpus/${n}Cert.lean" "Corpus.${n}Cert" 2>/dev/null; then
-    echo skipped >"$result"
+    if grep -q '^// certify: required$' "$f"; then
+      printf 'failed\nrequired certificate was refused\n' >"$result"
+    else
+      echo skipped >"$result"
+    fi
     return 0
   fi
   (cd "$root" && LEAN_PATH=$lean_path lake env lean --root="$work" -o "$work/Corpus/$n.olean" "$work/Corpus/$n.lean" >/dev/null)

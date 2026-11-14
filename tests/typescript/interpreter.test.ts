@@ -391,6 +391,20 @@ test('the interpreter gives no value for a function declared twice in a block', 
 // A difference of keys is consistent only when every key is finite. The spec
 // compares each element with itself too, and `Infinity - Infinity` is `NaN`,
 // so one infinite key is enough to leave the order to the engine.
+test('number comparison sorts agree with Node on non-NaN keys, including infinities and signed zero', () => {
+  const source = 'export function f(xs: ReadonlyArray<number>): number[] { return xs.toSorted((a, b) => (a < b) ? -1 : (a > b) ? 1 : 0); }';
+  const arrays = [[], [Infinity, -Infinity, 0, -0], [0, -0, 0, -0], [Number.MIN_VALUE, -Number.MIN_VALUE, 1, 1]];
+  const input = { programs: [{ source, calls: arrays.map((xs) => ({ function: 'f', args: [xs.map(encode)] })) }] };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const [lean] = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  expect(lean?.parsed).toBe(true);
+  if (lean === undefined || !lean.parsed) return;
+  for (const [i, xs] of arrays.entries()) {
+    expect(lean.results[i]).toEqual({ value: xs.toSorted((a, b) => a < b ? -1 : a > b ? 1 : 0).map(encode) });
+  }
+});
+
 test('the interpreter sorts by a difference only when every key is finite', () => {
   const source = 'export function f(xs: ReadonlyArray<number>): number[] { return xs.toSorted((a, b) => a - b); }';
   const arrays = [[2, 1], [Infinity], [Infinity, 2], [-Infinity, 2], [NaN, 1]];

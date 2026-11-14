@@ -459,6 +459,11 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     | .function _ _ _ body => (bodyCallbacks body).any (·.1 matches .list (.sortWith _))
     | _ => false
   let laws := if sorts then s!" [tolean.TypeScript.SafeIntLaws {nv}]" else ""
+  let numericSorts := decls.any fun
+    | .function _ _ _ body => (bodyCallbacks body).any fun (method, _, _, cb, _) =>
+        (method matches .list (.sortWith _)) && comparesNumbers cb
+    | _ => false
+  let laws := laws ++ if numericSorts then s!" [tolean.TypeScript.NumberOrderLaws {nv}]" else ""
   let generic := s!"\{{nv} : Type} [tolean.TypeScript.JSNumber {nv}]{laws}"
   -- A generic translated definition takes the model by name, as the
   -- translation's own calls do.
@@ -668,6 +673,8 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
   for d in m.decls do
     let .function _ _ name _ params _ syntaxBody := d | continue
     unless fns.contains name do continue
+    if numericSorts && !((stmtsOf syntaxBody).flatMap stmtCalls).isEmpty then
+      throw s!"{file}: cannot yet propagate number-sort preconditions through calls in {name}"
     let some (.function _ outParams outRet outBody) := decls.find? fun
         | .function n .. => n == name
         | _ => false
@@ -675,6 +682,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     -- A callback gets a lemma before the loops, because a loop's body can
     -- hold one, and before the callbacks that hold it.
     let mut cbIndex := 0
+    let mut obligations : List (String × String) := []
     for (method, param, elem, cbBody, info) in bodyCallbacks outBody do
       cbIndex := cbIndex + 1
       let lemmaName := s!"{name}_cb{cbIndex}"
@@ -754,16 +762,43 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       -- A sort: the lemma needs the comparator to be consistent for every
       -- list. Its keys come from the source, and `sort_tac` shows that the
       -- comparator's sign is their lexicographic comparison, which
-      -- `Std.TransCmp` says is a total preorder. A `number` key is consistent
-      -- only when it is not `NaN`, which needs a precondition that the
-      -- certificate does not write yet.
+      -- `Std.TransCmp` says is a total preorder. A number key instead uses
+      -- consistency on the input and an explicit hypothesis on its keys.
       if let .sortWith other := method then
-        if comparesNumbers cbBody then throw s!"{file}: cannot certify a sort by a number key in {name} yet"
         let some (.call _ _ [.arrow _ _ [p, q] arrowBody]) := callAt syntaxBody info.span
           | throw s!"{file}: no comparator at {info.span.start.line}:{info.span.start.col} in {name}"
         let some keys := Translate.keyComparator? p.name q.name arrowBody
           | throw s!"{file}: the comparator in {name} does not compare keys"
         let elemTy := elem.print names
+        if comparesNumbers cbBody then
+          let [(path, false, true)] := keys
+            | throw s!"{file}: number-key certificates currently require one ascending comparison key in {name}"
+          let .value (.listMethod (.sortWith _) (.var input) _ _ _ _) := outBody
+            | throw s!"{file}: the sorted list must be a parameter returned directly in {name}"
+          unless outParams.any (fun (n, _) => n == input) && scope.isEmpty do
+            throw s!"{file}: the sorted list must be a parameter and its comparator must not capture locals in {name}"
+          let key := s!"(fun ({param} : {elemTy}) => {".".intercalate (param :: path)})"
+          let hname := s!"{name}_sort_precondition"
+          if r.idents.contains hname then
+            throw s!"{file}: reserved certificate hypothesis name {hname}"
+          let condition := fun items => s!"∀ x ∈ {items}, tolean.TypeScript.JSNumber.isNaN ({key} x) = false"
+          obligations := obligations ++ [(hname, condition input)]
+          loopLemmas := loopLemmas.push (r.cert lemmaName)
+          thms := thms.push <|
+            s!"theorem {lemmaName} {generic} (fs : List (tolean.DeclRef × List String × tolean.TypeScript.IR.Body)){hfs}\n" ++
+            s!"    (fuel : Nat) (ρ : Env {nv}) (items : {itemsTy}) (hkeys : {condition "items"}) :\n" ++
+            s!"    tolean.TypeScript.Eval.sortValues (tolean.TypeScript.IR.Expr.evalCompare fs {fuel} ρ {str param} {str other} ({term cbBody}))\n" ++
+            s!"      (List.map {encX} items) = some (List.map {encX} (tolean.TypeScript.JSNumber.sortWith {fn} items)) := by\n" ++
+            s!"  refine tolean.TypeScript.Proof.sortValues_sortWith_on fs {fuel} ρ {str param} {str other} _ {encX} {fn} ?_\n" ++
+            s!"    (fun _ => by simp) items ?_\n" ++
+            s!"  · intro x y\n    {casesOn decls [("x", elem), ("y", elem)]}link_tac [{simpSet}]\n" ++
+            s!"  · have hs : ∀ a b, tolean.TypeScript.JSNumber.compareSign ({fn} a b) =\n" ++
+            s!"        some (tolean.TypeScript.Proof.numberOrder ({key} a) ({key} b)) := by\n" ++
+            "      intro a b\n      simp only []\n      unfold tolean.TypeScript.Proof.numberOrder\n      repeat' split\n" ++
+            "      all_goals simp_all [tolean.TypeScript.compareSign_one, tolean.TypeScript.compareSign_zero,\n" ++
+            "        tolean.TypeScript.compareSign_neg_one, tolean.TypeScript.compareSign_neg_zero]\n" ++
+            s!"    simpa only [hs] using tolean.TypeScript.Proof.consistentOn_numberOrder {key} items hkeys"
+          continue
         let keyCmp : List String × Bool × Bool → String := fun (path, _, up) =>
           let key := s!"(fun ({param} : {elemTy}) => {".".intercalate (param :: path)})"
           let cmp := s!"({r.full "compareOn"} {key})"
@@ -951,11 +986,12 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     let args ← outParams.mapM fun (p, t) => do
       let some e := encoderOf r t | throw s!"{file}: cannot encode the parameter {p}"
       return s!"({e} {p})"
-    let binders := " ".intercalate (params.map fun p => s!"({p.name} : _)")
+    let binders := " ".intercalate (params.map fun p => s!"({p.name} : _)") ++
+      String.join (obligations.map fun (n, p) => s!" ({n} : {p})")
     let call := " ".intercalate ((r.full s!"{transNs}.{name}" ++ callN) :: params.map (·.name))
     let retNames := if returnsLoop then ["tolean.TypeScript.Proof.retResult"] else []
     let simpSet := ", ".intercalate ([r.cert "decls"] ++ retNames ++ envLemmas ++ lemmaNames.toList ++
-      loopLemmas.toList ++ defs)
+      loopLemmas.toList ++ defs ++ obligations.map (·.1))
     let some_ := r.write "some" "Option.some"
     let rfl := r.full "rfl"
     thms := thms.push <|
@@ -975,7 +1011,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       s!"theorem {name}_cert {generic} {binders} :\n" ++
       s!"    {r.eval "run"} (N := {nv}) {r.cert "program"} {str name} {list args} = {some_} ({retEnc} ({call})) :=\n" ++
       s!"  {r.full "tolean.TypeScript.Proof.decls_sound"} {rfl} {rfl} {rfl} {r.cert "program_translated"} {str name} _ 64 _\n" ++
-      s!"    ({" ".intercalate (r.cert s!"{name}_link" :: params.map (·.name))})"
+      s!"    ({" ".intercalate (r.cert s!"{name}_link" :: params.map (·.name) ++ obligations.map (·.1))})"
   return "\n".intercalate ([
     s!"-- Certificate written by tolean for {file}. Do not edit.",
     "import tolean.TypeScript.Spec.Lemmas.Eval",
