@@ -204,7 +204,7 @@ none, and a block, which `parseBlock` reads in a function. -/
 theorem parseFunction_reads {T : Edition} (start : Pos) (exported : Bool) (sp : Span) (name : String)
     (typeParams : List String) (params : List Param) (rt : Option TypeExpr) (bsp : Span) (bs : List Stmt)
     (hname : exprName name = true) (htps : ∀ n ∈ typeParams, typeName n = true)
-    (hps : ∀ p ∈ params, p.wf = true) (hrt : ∀ t ∈ rt, t.wf = true)
+    (hps : ∀ p ∈ params, p.wf = true) (hrt : ∀ t ∈ rt, t.returnWF = true)
     (hbw : (Stmt.block bsp bs).wf T true false = true) :
     ∀ (s : ParseState) (ts bts rest : List Token), s.target = T → s.inFunction = false →
       s.rest = ts ++ bts ++ rest → s.left = s.rest.length →
@@ -1254,7 +1254,7 @@ def Decl.wf (T : Edition) : Decl → Bool
   | .«import» _ names _ => !names.isEmpty && names.all (fun n => exprName n.name)
   | .exports _ names _ => !names.isEmpty && names.all (fun n => exprName n.name)
   | .function _ _ name tps params rt body => exprName name && tps.all typeName && params.all Param.wf &&
-      (match rt with | some t => t.wf | none => true) && body.isBlock && body.wf T true false
+      (match rt with | some t => t.returnWF | none => true) && body.isBlock && body.wf T true false
   | .interface _ _ name tps fields => exprName name && tps.all typeName && fields.all (fun f => f.type.wf)
   | .typeAlias _ _ name tps ty => exprName name && tps.all typeName && ty.wf
   | .enum _ _ name _ => exprName name
@@ -1921,7 +1921,7 @@ theorem parseDecl_function {T : Edition} (sp : Span) (exported : Bool) (name : S
   obtain ⟨⟨⟨⟨⟨hname, htps⟩, hps⟩, hrt⟩, hblk⟩, hbw⟩ := hw
   obtain ⟨bsp, bs, rfl⟩ : ∃ bsp bs, body = .block bsp bs := by
     cases body <;> simp [Stmt.isBlock] at hblk; exact ⟨_, _, rfl⟩
-  have hrt' : ∀ t ∈ rt, t.wf = true := by
+  have hrt' : ∀ t ∈ rt, t.returnWF = true := by
     intro t ht; cases rt with
     | none => cases ht
     | some t' => simp at ht; subst ht; simpa using hrt

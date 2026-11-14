@@ -251,6 +251,17 @@ end
 
 /-! ### Expressions -/
 
+/-- Predicates are return annotations, not types in parameter or field declarations. -/
+def parseReturnType : ParseM TypeExpr := do
+  let first ← parseType (← budget)
+  let t ← peek
+  unless t.isIdent "is" && !t.newlineBefore do return first
+  let .ref sp parameter [] := first
+    | failAt t "a type predicate must name a parameter before 'is'"
+  discard advance
+  let target ← parseType (← budget)
+  return .predicate (← spanFrom sp.start) parameter target
+
 /-- `>` tokens that touch make one operator: `>=`, `>>`, `>>>`, `>>=`, `>>>=`.
 Gives the operator and its number of tokens. -/
 def peekGreater : ParseM (String × Nat) := do
@@ -976,7 +987,7 @@ def parseSignature : ParseM (String × List String × List Param × Option TypeE
   let mut returnType := none
   if (← peek).isPunct ":" then
     discard advance
-    returnType := some (← parseType (← budget))
+    returnType := some (← parseReturnType)
   let t ← peek
   unless t.isPunct "{" do
     unexpected t (if t.isIdent "is" then
@@ -1012,7 +1023,7 @@ def localArrowRest : ParseM (Option (List Param × Option TypeExpr)) := do
   let mut returnType := none
   if (← peek).isPunct ":" then
     discard advance
-    returnType := some (← parseType (← budget))
+    returnType := some (← parseReturnType)
   let arrow ← expectPunct "=>"
   if arrow.newlineBefore then return none
   unless (← peek).isPunct "{" do return none

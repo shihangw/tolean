@@ -68,6 +68,7 @@ def typeExpr : TypeExpr → String
   | .union s ms => s!"({ns}TypeExpr.union {span s} {list (ms.map typeExpr)})"
   | .paren s e => s!"({ns}TypeExpr.paren {span s} {typeExpr e})"
   | .tuple s ro es => s!"({ns}TypeExpr.tuple {span s} {ro} {list (es.map typeExpr)})"
+  | .predicate s n t => s!"({ns}TypeExpr.predicate {span s} {str n} {typeExpr t})"
 
 def propKey (k : PropKey) : String :=
   match k with

@@ -112,6 +112,8 @@ mutual
 
 /-- A type's words have tokens: no `lineBreak` is among them. -/
 theorem TypeExpr.no_lineBreak : ∀ t : TypeExpr, [] ∉ t.words
+  | .predicate _ _ target => by
+    simpa [TypeExpr.words, identWord] using TypeExpr.no_lineBreak target
   | .keyword _ name => by simp only [TypeExpr.words]; split <;> simp [keywordWord, identWord]
   | .null _ => by simp [TypeExpr.words, keywordWord]
   | .literal _ (.string _) | .literal _ (.number _) | .literal _ (.bigint _) | .literal _ (.bool _) => by

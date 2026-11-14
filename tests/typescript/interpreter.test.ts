@@ -297,6 +297,53 @@ test(`the interpreter agrees with Node ${process.version} on random programs`, a
 
 // A parameter that a call leaves out is `undefined`, both for a call inside
 // the program and for the call that runs it, as in Node.
+test('predicate annotations do not change what a guard computes', async () => {
+  const bodies = [
+    'return value.kind === "circle";',
+    'return true;',
+    'if (value.kind === "circle") { return value.radius > 0n; } return false;',
+  ];
+  const args = fc.sample(fc.oneof(
+    bigints.map((radius) => ({ kind: 'circle', radius })),
+    bigints.map((side) => ({ kind: 'square', side })),
+  ), { seed, numRuns: 100 });
+  const sources = bodies.map((body) => `
+    interface Circle { readonly kind: "circle"; readonly radius: bigint; }
+    interface Square { readonly kind: "square"; readonly side: bigint; }
+    type Shape = Circle | Square;
+    export function guard(value: Shape): value is Circle { ${body} }
+    export function caller(value: Shape): boolean {
+      if (guard(value)) { return true; } else { return false; }
+    }
+  `);
+  const calls = args.flatMap((arg) => ['guard', 'caller'].map((name) =>
+    ({ function: name, args: [encode(arg)] })));
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: sources.map((source) => ({ source, calls })) }),
+    encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const results = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-predicate-'));
+  for (const [i, source] of sources.entries()) {
+    const lean = results[i];
+    expect(lean?.parsed, source).toBe(true);
+    if (lean === undefined || !lean.parsed) continue;
+    const path = join(dir, `case${i}.mjs`);
+    writeFileSync(path, ts.transpileModule(source, {
+      compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+    }).outputText);
+    const mod = await import(pathToFileURL(path).href);
+    for (const [j, arg] of args.entries()) {
+      for (const [k, name] of ['guard', 'caller'].entries()) {
+        const value = lean.results[2 * j + k]?.value;
+        expect(value === undefined ? 'no value' : canonical(value), source)
+          .toBe(canonical(encode(mod[name](arg))));
+      }
+    }
+  }
+});
+
 test('the interpreter binds a parameter that a call leaves out to undefined', async () => {
   const cases: Array<{ source: string; args: Array<unknown> }> = [
     { source: 'export function f(a: bigint, b?: bigint): bigint { return a + (b ?? 10n); }', args: [1n] },

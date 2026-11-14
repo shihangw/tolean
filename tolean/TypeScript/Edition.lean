@@ -15,6 +15,12 @@ editions; these names do not.
 A feature whose meaning changes in a later edition gets a new feature for the
 new meaning, never a second meaning for the same one. An edition joins `all`
 only after a review of what it changed.
+
+TypeScript's `parameter is Type` return annotation is erased before runtime.
+It adds no ECMAScript feature or edition gate. Its function declaration uses
+`FunctionDeclaration` (ES2015 §14.1, ES2024 §15.2), and a strict tag test uses
+`Strict Equality Comparison` (ES2015 §7.2.13, `IsStrictlyEqual` in ES2024
+§7.2.15). Both are available in every target that this module lists.
 -/
 namespace tolean.TypeScript
 
