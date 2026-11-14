@@ -396,11 +396,18 @@ def sliceArgs (s : JSString) : List (Val N) → List (Option Int) → Option (Va
   | _, _ => none
 
 /-- `padStart` or `padEnd` on the values of its arguments, where `g n fill` is
-the padded string: a missing filler is `" "` (ECMA-262 §22.1.3.17.1). -/
+the padded string: a missing filler is `" "` (ECMA-262 §22.1.3.17.1).
+Padding keeps its previous safe-integer restriction. In particular, an
+infinity must not become an index sentinel and then an allocation size. -/
 def padArgs (g : Int → JSString → JSString) : List (Val N) → List (Option Int) → Option (Val N)
-  | [v], [k] => (intArg k v).map fun n => .str (g n (JSString.ofString " "))
-  | [v, .str fill], [k, _] => (intArg k v).map fun n => .str (g n fill)
+  | [v], [k] => (lengthArg k v).map fun n => .str (g n (JSString.ofString " "))
+  | [v, .str fill], [k, _] => (lengthArg k v).map fun n => .str (g n fill)
   | _, _ => none
+where
+  lengthArg : Option Int → Val N → Option Int
+    | some k, _ => some k
+    | none, .num n => JSNumber.toSafeInt n
+    | none, _ => none
 
 /-- `toUpperCase` or `toLowerCase` on `s`, where `r` is the result that the
 ASCII rule gives. Any other string leaves the subset, because its result

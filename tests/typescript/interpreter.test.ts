@@ -429,6 +429,20 @@ test('the interpreter gives no value where an assignment to a const throws', asy
   }
 });
 
+test('padding does not allocate an infinity index sentinel', () => {
+  for (const method of ['padStart', 'padEnd'] as const) {
+    expect(() => 'a'[method](Infinity, 'x')).toThrow(RangeError);
+    const source = `export function f(n: number): string { return "a".${method}(n, "x"); }`;
+    const input = { programs: [{ source, calls: [{ function: 'f', args: [encode(Infinity)] }] }] };
+    const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+    expect(run.status, run.stderr).toBe(0);
+    const [lean] = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+    expect(lean?.parsed).toBe(true);
+    if (lean === undefined || !lean.parsed) continue;
+    expect(lean.results).toEqual([null]);
+  }
+});
+
 test('string number arguments agree with Node, including fractions and infinities', async () => {
   const bodies = [
     's.at(i) ?? null', 's.slice(i)', 's.slice(i, -1)', 's.slice(1, i)',
