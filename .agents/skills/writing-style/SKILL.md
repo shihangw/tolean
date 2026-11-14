@@ -1,6 +1,6 @@
 ---
 name: writing-style
-description: Write human-facing text (README, docs/, code comments, commit messages, PR text) at the density of ordinary technical prose. Use whenever you write or edit any of them. Not for agent files (AGENTS.md, .agents/), which stay dense.
+description: Write human-facing text at the density of ordinary technical prose. Use whenever you write or edit text that a person will read. Not for agent files (AGENTS.md, .agents/), which stay dense.
 ---
 
 # Writing style

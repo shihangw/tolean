@@ -331,6 +331,16 @@ theorem ArrayPattern.line (p : ArrayPattern) : LineOK p.words := by
   · exact hm w hw
   · simp [punctWord]
 
+theorem typeParamWords_line : ∀ names : List String, LineOK (typeParamWords names)
+  | [] => LineOK.nil
+  | n :: more => by
+    have h : ∀ x ∈ (n :: more).map (fun k => [identWord k]), Fine x := by
+      intro x hx
+      simp only [List.mem_map] at hx
+      obtain ⟨k, _, rfl⟩ := hx
+      exact Fine.word (by simp [identWord])
+    exact (fine_enclose (o := "<") (c := ">") h).line
+
 mutual
 
 theorem Stmt.lineOK : ∀ (st : Stmt) (d : Nat), ∀ l ∈ st.lines d, LineOK l.2
@@ -396,6 +406,20 @@ theorem Stmt.lineOK : ∀ (st : Stmt) (d : Nat), ∀ l ∈ st.lines d, LineOK l.
       exact (((LineOK.cons (by simp [keywordWord]) (LineOK.cons (by simp [punctWord]) hi)).append (ho test)).append
         (LineOK.cons (by simp [punctWord]) (ho update))).append (LineOK.word (w := punctWord ")") (by simp [punctWord]))
     · exact Stmt.lineOK body _ l hl
+  | .funDecl _ name tps params rt body, d, l, hl => by
+    simp only [Stmt.lines, List.mem_cons] at hl
+    rcases hl with rfl | hl
+    · have hp : ∀ x ∈ params.map Param.words, Fine x := by
+        intro x hx
+        simp only [List.mem_map] at hx
+        obtain ⟨p, _, rfl⟩ := hx
+        exact Fine.ofLine (by simp [identWord]) (paramRest_line p)
+      have := LineOK.cons (w := keywordWord "function") (by simp [keywordWord])
+        (LineOK.cons (w := identWord name) (by simp [identWord])
+          ((typeParamWords_line tps).append ((fine_enclose (o := "(") (c := ")") hp).line.append
+            (typeAnnotation_line rt))))
+      simpa [List.append_assoc] using this
+    · exact Stmt.lineOK body _ l hl
   | .whileStmt _ test body, d, l, hl => by
     simp only [Stmt.lines, List.mem_cons] at hl
     rcases hl with rfl | hl
@@ -451,16 +475,6 @@ theorem exportWords_line (e : Bool) : LineOK (exportWords e) := by
   cases e
   · exact LineOK.nil
   · exact LineOK.word (by simp [keywordWord])
-
-theorem typeParamWords_line : ∀ names : List String, LineOK (typeParamWords names)
-  | [] => LineOK.nil
-  | n :: more => by
-    have h : ∀ x ∈ (n :: more).map (fun k => [identWord k]), Fine x := by
-      intro x hx
-      simp only [List.mem_map] at hx
-      obtain ⟨k, _, rfl⟩ := hx
-      exact Fine.word (by simp [identWord])
-    exact (fine_enclose (o := "<") (c := ">") h).line
 
 theorem Decl.lineOK : ∀ d : Decl, ∀ l ∈ d.lines, LineOK l.2
   | .errorClass _ exported name ctor, l, hl => by

@@ -327,6 +327,8 @@ partial def bodyCallbacks : IR.Body → List Callback
   | .fold _ _ body items rest _ => exprCallbacks items ++ bodyCallbacks body ++ bodyCallbacks rest
   | .throw e => exprCallbacks e
   | .bind _ _ args rest => args.flatMap exprCallbacks ++ bodyCallbacks rest
+  -- A file with a local function gets no certificate yet.
+  | .letCall _ _ _ _ _ _ _ _ _ rest | .letLifted _ _ rest => bodyCallbacks rest
 
 end
 
@@ -391,7 +393,7 @@ partial def loopsOf : IR.Body → List (List String × String × IR.Body × IR.L
   | .letState _ branch rest => loopsOf branch ++ loopsOf rest
   | .fold names element body _ rest info => loopsOf body ++ [(names, element, body, info)] ++ loopsOf rest
   | .throw _ => []
-  | .bind _ _ _ rest => loopsOf rest
+  | .bind _ _ _ rest | .letCall _ _ _ _ _ _ _ _ _ rest | .letLifted _ _ rest => loopsOf rest
 
 /-- `s`, the state of a loop with the locals `names`, as the path to one of
 them: `s`, `s.1`, `s.2.1`, and so on. -/
@@ -434,6 +436,12 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       | .function _ _ _ _ _ _ body => (stmtsOf body).any (· matches .forStmt ..)
       | _ => false then
     throw s!"{file}: a counted loop has no certificate yet"
+  -- The certificate has no lemma for a function that the translator lifted
+  -- out of another.
+  if m.decls.any fun d => match d with
+      | .function _ _ _ _ _ _ body => (stmtsOf body).any (· matches .funDecl ..)
+      | _ => false then
+    throw s!"{file}: a local function has no certificate yet"
   -- `JSON.stringify` is opaque in the output and in the interpreter, so no
   -- proof links one to the other.
   if m.decls.any fun d => match d with

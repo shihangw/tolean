@@ -1,4 +1,5 @@
 import tolean.IR
+import tolean.TypeScript.Syntax.Equality
 import tolean.TypeScript.Spec.Date
 
 /-!
@@ -261,6 +262,10 @@ inductive ExprExt where
   | pure
   /-- `(JSError.mk m)`: the error that `new Error(m)` makes, from its message. -/
   | error
+  /-- A local function, with the names of its parameters and its body in the
+  source, on no arguments. Only `Body.letLifted` binds one, for the IR's
+  meaning: the output lifts the function out, and prints no value for it. -/
+  | closure (params : List String) (body : Syntax.Stmt)
   /-- `(Thrown.«C» m a)`: the error that `new C(m, a, b)` makes, for the
   error class `C` of the file, whose errors the inductive `thrown` holds. The
   arguments are the message and then the arguments of the constructor, and
@@ -304,6 +309,8 @@ abbrev LoopInfo := tolean.IR.LoopInfo TyExt
 @[match_pattern] abbrev Ty.date : Ty := .ext .date
 @[match_pattern] abbrev Expr.pure (a : Expr) : Expr := .ext .pure [a]
 @[match_pattern] abbrev Expr.error (message : Expr) : Expr := .ext .error [message]
+@[match_pattern] abbrev Expr.closure (params : List String) (body : Syntax.Stmt) : Expr :=
+  .ext (.closure params body) []
 
 /-! ### Printing -/
 

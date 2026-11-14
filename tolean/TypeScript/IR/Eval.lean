@@ -201,6 +201,7 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   | .pure, [a] => some a
   -- `JSError.mk m` is the object that `new Error(m)` makes.
   | .error, [.str m] => some (.error "Error" [("message", .str m)])
+  | .closure params body, [] => some (.closure params body)
   -- `Thrown.«C» m a b` is the object that `new C(m, a, b)` makes: the
   -- message, then the fields.
   | .errorCase _ cls fields, .str m :: args =>
@@ -228,6 +229,13 @@ def bindState (names : List String) (inner outer : Env N) : Option (Env N) :=
   names.foldlM (fun ρ n => do
     let v ← inner.lookup n
     return if (ρ.lookup n).isSome then Eval.Env.set ρ n v else (n, v) :: ρ) outer
+
+/-- The bindings for `names` that the value `w` of a lifted call gives: the
+value itself for one name, and its elements in order for a tuple. -/
+def callResult : List String → Val N → Option (Env N)
+  | [x], w => some [(x, w)]
+  | names, .list ws => if names.length == ws.length then some (names.zip ws) else none
+  | _, _ => none
 
 mutual
 
@@ -509,6 +517,26 @@ def Body.exec (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
     | .normal inner => Body.exec fs fuel (← bindState names inner ρ) rest
     | .ret v => some (.ret v)
     | .brk _ | .cont _ => none
+  -- The lifted function runs with each parameter bound to its argument, as
+  -- a call of a function of the program does. It ends in the state `names`,
+  -- or returns their value, and each name takes its part, as `letState`
+  -- binds the state of a branch. The local `fn` must hold the function
+  -- `value`, as the source's call finds the function under its name.
+  | .letCall names _ fn value params _ returns body args rest => do
+    let .closure ps b ← Expr.eval fs fuel ρ value | none
+    let some (.closure ps' b') := ρ.lookup fn | none
+    if !(ps == ps' && b == b') then none
+    let vs ← Expr.evalList fs fuel ρ args
+    match fuel with
+    | 0 => none
+    | k + 1 =>
+      if params.length != vs.length then none
+      let inner ← match returns, ← Body.exec fs k ((params.map (·.1)).zip vs).reverse body with
+        | false, .normal inner => some inner
+        | true, .ret (.ok w) => callResult names w
+        | _, _ => none
+      Body.exec fs (k + 1) (← bindState names inner ρ) rest
+  | .letLifted name e rest => do Body.exec fs fuel ((name, ← Expr.eval fs fuel ρ e) :: ρ) rest
   | .fold names element body items rest _ => do
     let .list vs ← Expr.eval fs fuel ρ items | none
     match ← Body.runFold fs fuel names element body ρ vs with

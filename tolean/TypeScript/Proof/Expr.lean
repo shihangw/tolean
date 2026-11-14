@@ -144,15 +144,23 @@ def Resolves (m : Eval.Scope) (env : Translate.Env) : Prop :=
     (∀ e ∈ env.enums, Eval.resolveEnum m e.name = some e.members) ∧
     ∀ c ∈ env.classes, ClassAgrees m c
 
-/-- The functions, the string enums and the error classes that code may
-name. A branch or a loop body keeps them, and changes only the locals. -/
-def globals (env : Translate.Env) : List FnInfo × List EnumValue × List ClassInfo :=
-  (env.functions, env.enums, env.classes)
+/-- The functions, the string enums, the error classes and the local functions
+that code may name. A branch or a loop body keeps them, and changes only the
+locals. -/
+def globals (env : Translate.Env) : List FnInfo × List EnumValue × List ClassInfo × List LocalFn :=
+  (env.functions, env.enums, env.classes, env.localFns)
 
 theorem Resolves.congr {m : Eval.Scope} {env env' : Translate.Env} (h : Resolves m env)
     (hg : globals env' = globals env) : Resolves m env' := by
   simp only [globals, Prod.mk.injEq] at hg
-  exact ⟨fun f hf => h.1 f (hg.1 ▸ hf), fun e he => h.2.1 e (hg.2.1 ▸ he), fun c hc => h.2.2 c (hg.2.2 ▸ hc)⟩
+  exact ⟨fun f hf => h.1 f (hg.1 ▸ hf), fun e he => h.2.1 e (hg.2.1 ▸ he), fun c hc => h.2.2 c (hg.2.2.1 ▸ hc)⟩
+
+/-- A scope with the same globals has the same local functions, which change
+the same locals. -/
+theorem fnChanges_congr {env env' : Translate.Env} (hg : globals env' = globals env) :
+    env'.fnChanges = env.fnChanges := by
+  simp only [globals, Prod.mk.injEq] at hg
+  simp [Env.fnChanges, hg.2.2]
 
 /-- The interpreter's environment binds exactly the names that the translator
 has in scope, so a name out of scope, such as `NaN`, is the global. And the
@@ -842,21 +850,22 @@ omit [JSNumber N] in
   | none => simp
   | some r => cases r <;> simp [Except.toOption]
 
-theorem evalCall_eq (name : String) (args : List Expr) (ρ : Eval.Env N) (hn : name ≠ "Number") :
+theorem evalCall_eq (name : String) (args : List Expr) (ρ : Eval.Env N) (hn : name ≠ "Number")
+    (hl : ρ.lookup name = none) :
     Eval.evalCall m fuel ρ name args =
       (Eval.evalList m fuel ρ args).bind fun vs => (Eval.resolve m name).bind fun key =>
         callS m.program fuel key vs := by
   have hn' : (name == "Number") = false := by simpa using hn
   rw [Eval.evalCall]
   cases Eval.evalList m fuel ρ args <;> cases fuel <;> cases Eval.resolve m name <;>
-    simp only [hn', Bool.false_and, Bool.false_eq_true, ↓reduceIte] <;> rfl
+    simp only [hn', hl, Bool.false_and, Bool.false_eq_true, ↓reduceIte] <;> rfl
 
 theorem eval_call (sp sp' : Span) (name : String) (args : List Expr) (ρ : Eval.Env N)
-    (hn : name ≠ "Number") :
+    (hn : name ≠ "Number") (hl : ρ.lookup name = none) :
     Eval.eval m fuel ρ (.call sp (.ident sp' name) args) =
       ((Eval.evalList m fuel ρ args).bind fun vs => (Eval.resolve m name).bind fun key =>
         callS m.program fuel key vs).bind Except.toOption := by
-  rw [Eval.eval, ← evalCall_eq _ _ _ _ _ hn]; rfl
+  rw [Eval.eval, ← evalCall_eq _ _ _ _ _ hn hl]; rfl
 
 /-- An expression that gives a value gives it at the top of a declaration or
 a `return` too. -/
@@ -1361,6 +1370,9 @@ theorem concat_sound {sp s : Span} {l r : Expr} {a b c : Code} {ctx ctx' : Ctx}
   rw [eval_binary m fuel sp _ l r ρs rfl, hl _ hx, hr _ hy]
   exact concatParts?_binary hp hsx hsy
 
+-- The value type has many constructors, and `cases` on a value makes a goal
+-- for each, so this proof takes more than the default heartbeats.
+set_option maxHeartbeats 400000 in
 /-- The operator step means what the interpreter's rule for the operator
 means, when each operand's code means what the operand means. -/
 theorem applyOperator_sound {sp s : Span} {op : BinOp} {l r : Expr} {a b c : Code} {ctx ctx' : Ctx}
@@ -1609,10 +1621,9 @@ theorem operator_sound {sp s : Span} {op : BinOp} {l r : Expr} {a b c : Code} {c
     (fun w hw => hl w (by rwa [enumOperand_code] at hw))
     (fun w hw => hr w (by rwa [enumOperand_code] at hw)) hv
 
--- The cases of a null test run `simp +decide` on every kind of value, and
--- each new IR operation makes them slower, so the proof needs more than the
--- default budget.
-set_option maxHeartbeats 300000 in
+-- The value type has many constructors, and `cases` on a value makes a goal
+-- for each, so this proof takes more than the default heartbeats.
+set_option maxHeartbeats 400000 in
 /-- `translateBinary` is sound, when `translateExpr` is with one unit of fuel less. -/
 theorem translateBinary_sound {F : Nat}
     (ihE : ∀ env exp e ctx c ctx', translateExpr F env exp e ctx = .ok c ctx' →
@@ -4303,7 +4314,9 @@ theorem translateCall_sound {F : Nat} (hc : CallsAgree (N := N) m.program fs fue
       obtain ⟨fn, s₁, ⟨hfind, rfl⟩, h⟩ := h
       split at h
       · simp at h
-      · try simp only [bind_ok] at h
+      · rename_i hlocal
+        have hlocal' : env.has name = false := by simpa using hlocal
+        try simp only [bind_ok] at h
         obtain ⟨_, s₂, hcf, h⟩ := h
         obtain rfl := checkCrossFileThrow_ok hcf
         try simp only [bind_ok] at h
@@ -4339,7 +4352,7 @@ theorem translateCall_sound {F : Nat} (hc : CallsAgree (N := N) m.program fs fue
               · have hname : fn.name = name := by simpa using List.find?_some hfind
                 have hres := hs.2.1 fn (List.mem_of_find?_eq_some hfind)
                 rw [hname] at hres
-                rw [evalCall_eq (hn := hN), hargs]
+                rw [evalCall_eq (hn := hN) (hl := hs.none hlocal'), hargs]
                 simp only [Option.bind_some, hres, callS_append_undefined (hc _ _ _ hr)]
               case hg =>
                 intro x t c₀ o c₁ hgo
@@ -4710,6 +4723,9 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
             · cases hk
         | some l =>
           simp only [hl] at h
+          -- A local function may only be called.
+          split at h
+          · simp at h
           simp at h
           obtain ⟨_, _, ⟨rfl, rfl⟩, h⟩ := h
           have hc : c.code = .var name := by

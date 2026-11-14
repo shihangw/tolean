@@ -237,6 +237,11 @@ def forInitWords : Option VarDecl → List Word
   | some d => d.words
   | none => [punctWord ";"]
 
+/-- `<A, B>` after the name of a generic function, or nothing. -/
+def typeParamWords : List String → List Word
+  | [] => []
+  | n :: more => enclose "<" ">" ((n :: more).map fun k => [identWord k])
+
 /-- `case test :`, or `default :`. -/
 def clauseHead : Option Expr → List Word
   | some e => keywordWord "case" :: e.words ++ [punctWord ":"]
@@ -275,6 +280,9 @@ def Stmt.lines (depth : Nat) : Stmt → List Line
     (depth, keywordWord "switch" :: punctWord "(" :: disc.words ++ [punctWord ")", punctWord "{"]) ::
       Stmt.clauseLines (depth + 1) clauses ++ [(depth, [punctWord "}"])]
   | .throwStmt _ e => [(depth, keywordWord "throw" :: e.words ++ [punctWord ";"])]
+  | .funDecl _ name typeParams params returnType body =>
+    (depth, keywordWord "function" :: identWord name :: typeParamWords typeParams ++
+      enclose "(" ")" (params.map Param.words) ++ typeAnnotation returnType) :: body.lines depth
 
 def Stmt.linesOf (depth : Nat) : List Stmt → List Line
   | [] => []
@@ -305,11 +313,6 @@ def exportWords (exported : Bool) : List Word := if exported then [keywordWord "
 def fromWords : Option String → List Word
   | some source => [identWord "from", [.string source]]
   | none => []
-
-/-- `<A, B>` after the name of a generic function, or nothing. -/
-def typeParamWords : List String → List Word
-  | [] => []
-  | n :: more => enclose "<" ">" ((n :: more).map fun k => [identWord k])
 
 /-- The lines of the constructor of an error class, inside the class:
 `constructor(params) {`, then `super(message);`, then `}`. -/
@@ -469,6 +472,8 @@ def Stmt.erase : Stmt → Stmt
   | .empty _ => .empty noSpan
   | .switchStmt _ disc clauses => .switchStmt noSpan disc.erase (Stmt.eraseClauses clauses)
   | .throwStmt _ e => .throwStmt noSpan e.erase
+  | .funDecl _ name typeParams params returnType body =>
+    .funDecl noSpan name typeParams (params.map Param.erase) (returnType.map TypeExpr.erase) body.erase
 
 def Stmt.eraseOpt : Option Stmt → Option Stmt
   | none => none
