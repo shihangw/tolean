@@ -349,7 +349,13 @@ import { clamp, type Gauge } from "./lib/util.ts";
   the JavaScript would import a name that does not exist at run time.
 - Only named imports are supported. Tolean refuses `as`, a default or
   namespace import, an import with no names or for its side effects, a
-  re-export such as `export { a } from "./x.ts"`, and an import cycle.
+  value re-export such as `export { a } from "./x.ts"`, and an import cycle.
+- A type re-export, such as `export type { Point } from "./x.ts"`, may name
+  an exported interface or type alias. The output imports the translated
+  source module but adds no declaration. A consumer uses the original
+  type's identity, even through several re-exporting files. The re-export
+  does not bind `Point` locally. Re-exports of functions, enums and tagged
+  unions remain refused.
 - An export list, such as `export { clamp, type Range }`, exports
   declarations of the file, as `export` before each of them would. It may
   name only functions, interfaces and types that the file declares before the

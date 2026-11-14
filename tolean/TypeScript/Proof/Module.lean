@@ -1066,13 +1066,11 @@ theorem translateExports_ok {thr : String → Bool} {cls : String → Option (Op
     {o : Option IR.Decl} (h : translateDecl thr cls classes (.exports sp names source) s = .ok o s') :
     o = none ∧ s' = s := by
   simp only [translateDecl] at h
-  by_cases hs : source.isSome = true
-  · rw [if_pos hs] at h; simp at h
-  rw [if_neg hs, pure_bind, bind_ok] at h
+  simp only [bind_ok] at h
   obtain ⟨c, s₁, hg, h⟩ := h
   simp only [get, getThe, MonadStateOf.get, EStateM.get, EStateM.Result.ok.injEq] at hg
   obtain ⟨rfl, rfl⟩ := hg
-  cases he : exportsError? s names with
+  cases he : exportListError? s sp names source with
   | some pm => simp [he] at h
   | none =>
     simp only [he, pure_bind, pure_ok] at h
@@ -1785,7 +1783,7 @@ inductive ProgramTranslation :
       (start.functions, start.enums, start.enumValues, start.errorClasses) = ([], [], [], []) →
       start.interfaces = ifaces → translateDecls m start = .ok decls finish →
       ProgramTranslation (p ++ [(file, m)]) (outs ++ [(file, decls)])
-        (ifaces ++ [(file, (finish.withExports (exportListed m)).interface usesNumber numberVar)])
+        (ifaces ++ [(file, (finish.withExports (exportListed m)).interface usesNumber numberVar (reexportListed m))])
 
 theorem lookup_append_some {β : Type} {k : String} {b : β} {l l' : List (String × β)}
     (h : l.lookup k = some b) : (l ++ l').lookup k = some b := by

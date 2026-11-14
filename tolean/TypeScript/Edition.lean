@@ -20,6 +20,10 @@ The annotation `T | undefined` erases at runtime. Its optional value uses the Un
 type (ES2015, §6.1.1; unchanged in ES2024), and a strict test of it uses
 IsStrictlyEqual (ES2024 §7.2.15). These operations need no edition gate because
 every supported edition specifies them.
+
+A type-only re-export erases before execution. Its module dependency follows
+the ExportDeclaration grammar (ES2015 §15.2.3; ES2024 §16.2.3). It introduces
+no local binding and preserves the type's identity in the defining module.
 -/
 namespace tolean.TypeScript
 
