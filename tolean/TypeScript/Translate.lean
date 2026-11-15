@@ -4092,8 +4092,6 @@ def translateInterface (s : Span) (exported : Bool) (name : String) (typeParams 
   let infos ← isolated do
     modify fun c => { c with structs := c.structs ++ [{ file := c.file, name, exported, typeParams, fields := [] }] }
     fields.foldlM (init := ([] : List (String × Ty))) fun infos f => do
-      unless f.readonly do
-        reject f.span "interface fields must be readonly and typed"
       let field ← checkName f.span f.name
       if infos.any (·.1 == field) then reject f.span s!"'{field}' is declared twice"
       -- A Lean structure's fields are in scope in the types of the fields after

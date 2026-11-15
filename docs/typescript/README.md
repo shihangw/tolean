@@ -401,6 +401,34 @@ that cannot alias mutable state. For this reason, the subset lets a function
 change only the locals that it owns. Tolean rejects anything else and reports
 the file, the line and the reason. It never approximates.
 
+An interface field needs a type, but it need not say `readonly`. Both `x: T`
+and `x?: T` translate as their `readonly` forms do, because Tolean refuses
+every write to a field. This includes compound assignments, increments and
+decrements, and writes through loop variables, callbacks and local functions.
+`delete`, destructuring assignment and calls such as `Object.assign` cannot
+bypass that rule. A nested interface follows the same rule. Inline object
+types remain outside the subset. The `readonly` mark on a constructor
+parameter of an error class is different: it declares a field, so Tolean
+still uses it there.
+
+The claim is about each call's values, not the lifetime of a JavaScript
+object. Calls are synchronous, and the subset cannot call caller-supplied
+code that might change a field during a call. A caller may later change an
+object that a function returned, or an object held in an array or map.
+A later call that receives the changed object has different input values.
+A result describes the value when the call returns. It does not promise
+that a returned reference stays unchanged. The model does not represent
+object identity, getters or proxies.
+Callers must pass values that the model represents, as they must meet the
+other [input preconditions](#what-is-proved-and-what-is-trusted).
+
+`ReadonlyArray<T>`, `Array<T>` and `T[]` still have the same value model.
+Only an owned array may be pushed to, and the ownership checks forbid
+changing a collection that something else holds. Removing `readonly` from
+an interface field does not relax those checks, even when the field holds
+a collection. The parser still refuses `readonly T[]`; this change concerns
+interface fields, not new array type syntax.
+
 | TypeScript | Lean |
 |---|---|
 | `bigint` | `Int` (exact; literals are typed `(n : Int)`) |
@@ -428,9 +456,9 @@ the file, the line and the reason. It never approximates.
 | `boolean` | `Bool` |
 | `string`, `"abc"` | `JSString`, `JSString.ofString "abc"`. A `JSString` holds the UTF-16 code units of the string, as ECMA-262 defines a string, so a value can hold a lone surrogate, which a Lean `String` cannot. `ofString` is injective, so a claim can state a literal as a Lean `String`. |
 | `ReadonlyArray<T>`, `Array<T>`, `T[]` | `List T` |
-| `interface` with `readonly`, required fields | `structure` |
+| `interface` with typed, required fields, with or without `readonly` | `structure` |
 | An interface whose fields name the interface itself, such as `readonly next: Node \| null` or `readonly children: ReadonlyArray<Tree<T>>` | The same `structure`. Lean reads it as a nested inductive type, so a value is a finite tree, as every value that the subset can build is. |
-| `readonly f?: T`, an optional field | `f : Option T := none`. An object literal may leave the field out, or set it to a `T`. A read of a field that the object lacks gives `undefined`, which is `none`. `s.f ?? d` is `Option.getD s.f d`, and `s.f === undefined` is `s.f.isNone`. |
+| `f?: T` or `readonly f?: T`, an optional field | `f : Option T := none`. An object literal may leave the field out, or set it to a `T`. A read of a field that the object lacks gives `undefined`, which is `none`. `s.f ?? d` is `Option.getD s.f d`, and `s.f === undefined` is `s.f.isNone`. |
 | `x?: T`, an optional parameter | `(x : Option T := none)`. A call may leave out the optional parameters, which come last, and then the output passes `none` for each. A call may also pass a `T`, or `undefined`, which is `none` too. `x ?? d`, `x === undefined` and `x?.f` work as they do on an optional field. |
 | `if (x === undefined)` or `if (x !== undefined)`, with `undefined` on either side, where `x` is an optional parameter or a local with an optional value | `match x with \| none => … \| some x => …`, as for a test of `null`. The branch where `x` is defined reads it as a `T`. |
 | `p?.f`, where `p` is a `S \| null` or an optional field of type `S` | `p.map (·.f)`, or `p.bind (·.f)` when `f` is optional. The value is `undefined` when `p` is `null` or `undefined`, so it has the type of an optional field: `p?.f ?? d` and `p?.f === undefined` work as they do on `s.f`. |
@@ -793,8 +821,8 @@ Tolean rejects these, among others:
   translate. A call of a local function must be a statement of its own, or
   the whole value of a `const`, a `let` or a `return`. So the function never
   escapes, because no code can return it, store it or pass it on.
-- A function value that escapes, classes, `async`, exceptions, and mutable
-  interface fields.
+- A function value that escapes, classes other than the error classes above,
+  `async`, and exceptions other than the throws above.
 - Imports other than the named imports of [Imports](#imports).
 
 The files in `tests/typescript/corpus/translate/reject/` state in executable

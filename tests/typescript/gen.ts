@@ -955,7 +955,7 @@ export class Gen {
         for (let j = 0; j < n; j++) {
           fields.push([`f${j}`, this.pick(types)]);
         }
-        out.push(`interface ${name} {`, ...fields.map(([f, t]) => `  readonly ${f}: ${show(t)};`), '}');
+        out.push(`interface ${name} {`, ...fields.map(([f, t]) => `  ${this.next() < 0.5 ? 'readonly ' : ''}${f}: ${show(t)};`), '}');
       }
       this.structs.push({ name, fields });
     }

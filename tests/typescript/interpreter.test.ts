@@ -493,6 +493,44 @@ test('the interpreter writes the text of JSON.stringify', async () => {
   expect(canonical(lean?.results[0]?.value as Value)).toBe(canonical(encode(JSON.stringify(p))));
 });
 
+test('interface fields describe the values at each call, not aliases between calls', async () => {
+  const source = [
+    'export interface P { value: bigint; extra?: bigint; }',
+    'export function identity(p: P): P { return p; }',
+    'export function total(ps: ReadonlyArray<P>): bigint {',
+    '  let n = 0n;',
+    '  for (const p of ps) { n += p.value + (p.extra ?? 0n); }',
+    '  return n;',
+    '}',
+  ].join('\n');
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-interface-'));
+  const path = join(dir, 'case.mjs');
+  writeFileSync(path, ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext } }).outputText);
+  type P = { value: bigint; extra?: bigint };
+  const mod = (await import(pathToFileURL(path).href)) as {
+    identity: (p: P) => P;
+    total: (ps: ReadonlyArray<P>) => bigint;
+  };
+  const p: P = { value: 1n };
+  const ps = [p, p];
+  const calls = [{ function: 'identity', args: [encode(p)] }, { function: 'total', args: [encode(ps)] }];
+  const expected = [encode(mod.identity(p)), encode(mod.total(ps))];
+  expect(mod.identity(p)).toBe(p);
+  p.value = 4n;
+  p.extra = 2n;
+  calls.push({ function: 'total', args: [encode(ps)] });
+  expected.push(encode(mod.total(ps)));
+  delete p.extra;
+  calls.push({ function: 'total', args: [encode(ps)] });
+  expected.push(encode(mod.total(ps)));
+  const input = { programs: [{ source, calls }] };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const [lean] = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  expect(lean?.accepted).toBe(true);
+  expect(lean?.results.map((r) => r.value)).toEqual(expected);
+});
+
 // A JS loop over a set, a map or an array sees a change that its body makes
 // to what it runs over, and the interpreter takes the values when the loop
 // starts. So it must give no value for such a loop, however the iterable
