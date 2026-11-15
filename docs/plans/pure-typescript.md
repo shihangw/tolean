@@ -63,7 +63,8 @@ exact. A construct leaves these tables when Tolean translates it, and the
 | TypeScript | Lean | Refused |
 |---|---|---|
 | An arrow function passed to a function of the program, which reads only `const` values and parameters | `fun` | A callback that changes a variable outside itself |
-| A local function that returns a value and also changes `let` variables of the enclosing function | A Lean function that returns the value and the new values of those variables, which the call binds again | A `return` before the last statement of such a function |
+| A state-writing local function whose final return is an expression or names a variable other than a changed captured variable | A Lean function that returns the value and the new values of the captured variables, which the call binds again | A `return` before the last statement of such a function |
+| A sibling call whose callee captures variables not named by the caller, a longer chain of sibling calls, or a value-returning caller that changes state only through sibling calls | Lifted functions with transitive capture and state arguments | Recursive local functions |
 | A function-typed field or parameter, such as a comparator in an options object | A field of a function type | A function value that changes state when it is called |
 | A destructured parameter, such as `{ a, b }: Options` | A pattern on the structure | Defaults inside the pattern |
 | A default parameter value | `Option` with a default at the call | A default that reads another parameter |
@@ -131,13 +132,15 @@ sets the restrictions for those later operations.
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| A function that changes a map that its caller passes in | A function that returns the new map. The caller takes the result in place of the old map. | A call where the caller keeps another name for the same map |
+| A map borrow with an early return, several changed maps, an ordinary returned value, control flow or an imported callee | A function that returns the changed maps, with its ordinary result when there is one. The caller binds the changed maps again. | A call where the caller keeps another name for the same map |
 
-This is the borrow that Aeneas uses for Rust. It is sound here only
-because the translator checks that the caller owns the map and holds no other
-name for it during the call. The spec's call rule now gives no value for a
-function that changes a parameter (`Stmt.ownsChanges`), so the borrow must
-also give the spec this meaning: the call copies the map in and back out.
+The translator now accepts one changed Map parameter in a void function
+whose body contains only straight-line set, delete and forwarding calls
+with atomic arguments and an optional terminal bare return. The call copies
+the map in and back out, and `program_sound`
+covers that call rule. The [TypeScript guide](../typescript/README.md#map-borrows)
+describes this case. The remaining cases need a wider call result, including
+the final parameter bindings when the callee returns or throws.
 
 One certificate gap is left. The initial value of a `reduce` can read a map
 or a set that `new Map(items)` or `new Set(items)` makes from a parameter,
@@ -227,21 +230,109 @@ leaves a gap.
 2. **P0.** Types and narrowing: `T | undefined` as a type, a test of
    `undefined` that narrows inside an expression, `a?.[i]` and `f?.()`, and
    re-exports.
-8. **P0.** The borrow for a map that a caller passes in.
+8. **P0.** Widen map borrows to early returns, several changed maps, an
+   ordinary returned value, control flow and imported callees.
 10. **P1.** Sorting: certificates for a sort by a `number` key.
 11. **P2.** Recursion: tagged unions that refer to themselves first, then
-    `@decreases`, mutual recursion, and `while` loops.
+    `@decreases`, mutual recursion, and `while` loops. Add certificates for
+    self-referential interfaces and recursive functions, with existential
+    fuel, as proposed in the [recursion open question](#open-questions).
 12. **P1.** Non-literal `bigint` exponents, `BigInt(number)`,
     `toISOString`, and non-literal padding lengths. These still need a
     model of built-in errors whose messages the program cannot read.
 13. **P2.** Classes with `readonly` fields and methods that do not change
     `this`.
-14. **P1.** Local functions: one that returns a value and changes variables
-    of the enclosing function, calls between local functions, and
-    certificates for files that have local functions.
+14. **P1.** Local functions: general final return expressions in functions
+    that change captured variables, implicit transitive captures, longer
+    sibling call chains, and value-returning callers with only indirect state changes.
+15. **P1.** Certificates for counted `for` loops: each counted loop adds a
+    hypothesis that `countUp?` on its bound gives a value. Print the bound
+    over the parameters, and refuse bounds that read anything but parameters.
+    See the [counted-loop open question](#open-questions).
+16. **P1.** Certificates for generic functions and interfaces: take a
+    `Codec N T` for each type parameter and write codec constructors for
+    generic interfaces. See the [generic certificate open question](#open-questions).
+17. **P2.** `try` and `catch`: accept `try { … } catch (e) { … }` where the
+    catch tests `e` with `instanceof` or ignores it. Keep `finally`, rethrowing
+    a changed value and throwing anything but an error refused. See the
+    [`try` and `catch` open question](#open-questions).
+18. **P2.** Proof obligations: Tolean states `Consistent cmp` for a comparator
+    outside the two known shapes and accepts a project-supplied proof beside
+    the output. The build checks the proof for `sorry` and axioms. The same
+    mechanism later serves `@decreases`. See the
+    [proof-obligation open question](#open-questions).
+19. **P2.** Close the `const` gap: share one predicate between the translator's
+    refusal and the interpreter's `none` for assignments to a
+    `for (const x of xs)` binding. See the [`const` open question](#open-questions).
 
 Steps 2 and 4 cover most of the code in the survey. Step 8 matters most for
 proofs, because a fold over events keeps much of its state in maps.
+
+## Refactors from review
+
+These follow-ups track design feedback from the open pull requests. A fix in
+a descendant does not mean that the earlier pull request already contains it.
+
+- **Make expression scans exhaustive.** Enumerate leaf constructors instead
+  of ending a scan with `| _ => false` or `| _ => []`. Traverse ordinary
+  children, and name any deliberately unsupported binding scopes explicitly.
+  Audit the call, name, callback and number scans rather than adding another
+  independently maintained partial traversal. Keep source-call counts as
+  invariant checks, not as the definition of which syntax is supported.
+
+  The [call-traversal review on #220](https://github.com/shihangw/tolean/pull/220#discussion_r4576745761)
+  identified dropped `.struct` fields and `.structUpdate` children.
+  **#238 covers that concrete case:** at the step 10 tip `d92ef7e` on #240,
+  `conditionCalls` visits record fields, the update base and replacement
+  fields. Its catch-all still remains, and `bodyConditionCalls` still omits
+  `matchTag`. Preserve the record certificate cases while making each
+  constructor decision explicit. Tagged narrowing needs its own scope
+  contract before it can be supported.
+
+  The [number-use scan on #221](https://github.com/shihangw/tolean/pull/221#discussion_r4576744315)
+  is being fixed there, including the missing optional-index receiver and
+  explicit number-free leaves. That work also serves #229 and #235; do not
+  duplicate it here. Its compile regression must keep number operations
+  only inside the optional-index receiver so missing imports and binders
+  remain observable.
+
+- **Choose the local-function executor before running the body.**
+  The [review on #226](https://github.com/shihangw/tolean/pull/226#discussion_r4576809523),
+  also inherited by #236, found that `callLocal` runs a state-writing
+  value-returning body through `execStmt`, then repeats it through
+  `execReturnState` to recover its state. Dispatch to the state-preserving
+  executor first for the supported final-return form. Use `returnState_exec`
+  to justify the value relationship, retain the ordinary path for void
+  locals, and keep unsupported returns refused. Test a captured-state loop
+  and calls in its prefix without making replay part of the interpreter's
+  contract.
+
+- **Preserve both map-escape regression tests.**
+  The [review on #231](https://github.com/shihangw/tolean/pull/231#discussion_r4577273721)
+  found that a rebase removed the nested-map case where `forward(a, b)`
+  stores `b` in `a` through `change`, then the caller mutates `b`.
+  [#231](https://github.com/shihangw/tolean/pull/231) restored that test in
+  commit `4bd0eac`, with `refused: true`, alongside the direct-call escape
+  test. Keep both tests so the direct and forwarding paths stay protected.
+
+- **Share literal-encoding normalization between certificate proof paths.**
+  The [review on #233](https://github.com/shihangw/tolean/pull/233#discussion_r4576995912)
+  found that a literal appended inside a conditional callback prevented the
+  sort lemma from matching. #237 fixes the concrete certificate failure,
+  as the reviewer verified, but the step 10 tip still emits the reverse
+  literal-map and append normalization in separate callback, loop and
+  function paths. Extract one proof-emission step that takes the required
+  encoders. Keep the nested literal-append and loop certificate cases so
+  the shared step preserves their normalization order.
+
+- **Complete the structural type-argument ambiguity check.**
+  The [design summary on #217](https://github.com/shihangw/tolean/pull/217#issuecomment-6887789375)
+  validates the bounded operator stop set, not a complete ambiguity
+  algorithm. Retain its bracket-depth rule and pinned-TypeScript controls.
+  The remaining plan on that branch calls for a speculative type-list
+  parse and follow-token test, with enough identifier, contextual-token
+  and line-break information in the round-trip relation. This remains
+  separate work; extending the stop set alone does not finish it.
 
 ## Open questions
 
@@ -364,19 +455,13 @@ a reason to choose otherwise.
   ([decision](../decisions/2026-11-12-local-functions.md)), so the
   threading that these use is already in place.
 
-- Should a map that a caller passes in become a borrow, as above, or should the
-  callee run in a state monad? A borrow keeps the output plain, but it only
-  covers a call that changes one map.
-
-  Recommendation: the borrow, with a tuple when a callee changes several
-  maps. A callee that changes two maps returns a pair, and one with a result
-  returns a triple, as a loop already returns the tuple of the locals it
-  changes, and as Aeneas does for Rust. A state monad would hide which maps a
-  function touches and bring `StateT` lemmas into every proof about pure
-  code. The [effects plan](effects.md) keeps the monad for state that is
-  global. The parameter's type is the signal: a `Map` parameter with a `set`
-  in the body is a borrow, and a `ReadonlyMap` is plain. A call statement
-  `f(m, x);` becomes `let m := f m x`.
+- The map-borrow question is settled by the
+  [decision to pass changed maps back](../decisions/2026-11-14-map-borrows.md).
+  A single map now passes back on normal completion, including a terminal
+  bare return and forwarding through another checked call. The remaining
+  tuple result must carry several maps or an ordinary result as well.
+  `ReadonlyMap` stays plain. Step 8 remains open because early returns
+  and returned values still need to preserve the final parameter bindings.
 
 - Should a comparator that is not one of the two shapes be accepted when the
   project supplies a proof that it is consistent?

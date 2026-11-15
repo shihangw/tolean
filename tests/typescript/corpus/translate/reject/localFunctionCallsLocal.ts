@@ -1,4 +1,4 @@
-// expect: 7:3 a local function may not call another local function, such as 'one'
+// expect: 7:3 a sibling call requires each captured variable to be named in its caller
 export function f(x: bigint): bigint {
   let n = 0n;
   function one(): void {

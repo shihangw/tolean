@@ -775,6 +775,96 @@ def Stmt.ownsChanges (params : List String) (body : Stmt) : Bool :=
   body.changed.all fun n =>
     !params.contains n && !(body.binds n).isEmpty && (body.binds n).all id && !body.leaks n
 
+/-- The first borrow implementation accepts only atoms in the callee's map
+operations. In particular, evaluating an argument cannot call another function. -/
+def Expr.borrowAtom : Expr → Bool
+  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. => true
+  | _ => false
+
+/-- The shape of a straight-line update candidate. A forwarding call also
+needs `borrowCallsValid` to establish which argument changes. -/
+def Stmt.borrowUpdate (param : String) : Stmt → Bool
+  | .exprStmt _ (.call _ (.member _ (.ident _ name) method) args) =>
+    name == param &&
+      ((method == "set" && args.length == 2) || (method == "delete" && args.length == 1)) &&
+      args.all (fun e => e.borrowAtom && !e.leaks param)
+  | .exprStmt _ (.call _ (.ident _ _) args) =>
+    args.all (·.borrowAtom) &&
+      (args.filter (fun e => match e with
+        | .ident _ name => name == param
+        | _ => false)).length == 1
+  | _ => false
+
+/-- A terminal bare return has no value for a void borrowing call. Keep its
+prefix so the borrowing call can copy the final parameter binding out. -/
+def Stmt.borrowPrefix : Stmt → Stmt
+  | .block sp ss =>
+    match ss.getLast? with
+    | some (.returnStmt _ none) => .block sp ss.dropLast
+    | _ => .block sp ss
+  | s => s
+
+/-- A candidate map parameter for copy-out. Forwarded calls still need the
+callee-index check in `borrowParam?` before this becomes a signature. -/
+def borrowCandidate? (params : List Param) (ret : Option TypeExpr) (body : Stmt) : Option Nat := do
+  let some (.keyword _ "void") := ret | none
+  let .block _ ss := body.borrowPrefix | none
+  let maps := params.zipIdx |>.filter fun (p, _) =>
+    match p.type with
+    | some (.ref _ "Map" [_, _]) => true
+    | _ => false
+  let [(p, i)] := maps | none
+  if params.any (·.optional) || ss.isEmpty || !(ss.all (·.borrowUpdate p.name)) then none
+  else some i
+
+/-- A forwarded call changes the candidate parameter only when it occurs
+at the checked callee's borrowed argument index. No parameter may hide
+that top-level callee. -/
+def Stmt.borrowCallsValid (borrows : List (String × Nat)) (params : List String)
+    (param : String) : Stmt → Bool
+  | .exprStmt _ (.call _ (.ident _ name) args) =>
+    !params.contains name &&
+      match borrows.lookup name with
+      | some i =>
+        match args[i]? with
+        | some (.ident _ actual) => actual == param
+        | _ => false
+      | none => false
+  | _ => true
+
+/-- The map parameter whose final value a normal completion copies out.
+Every forwarded call must use an already checked borrowing signature. -/
+def borrowParam? (borrows : List (String × Nat)) (params : List Param)
+    (ret : Option TypeExpr) (body : Stmt) : Option Nat := do
+  let i ← borrowCandidate? params ret body
+  let p ← params[i]?
+  let .block _ ss := body.borrowPrefix | none
+  if ss.all (·.borrowCallsValid borrows (params.map (·.name)) p.name) then some i else none
+
+/-- Replace a checked borrow statement by a mutation marker for the existing
+ownership test. Every other mention of a borrowing function is refused here,
+so nested calls cannot bypass the check on the caller's source. -/
+def Stmt.borrowOwnershipBody (borrows : List (String × Nat)) (body : Stmt) : Option Stmt := do
+  let .block sp ss := body | if borrows.any (fun b => body.mentions b.1) then none else some body
+  let ss ← ss.mapM fun s => do
+    match s with
+    | .exprStmt sp (.call cs (.ident ns fn) args) =>
+      match borrows.lookup fn with
+      | some i =>
+        let some (.ident ms map) := args[i]? | none
+        if (args.eraseIdx i).any (·.leaks map) then none
+        else some (.exprStmt sp (.call cs (.member ns (.ident ms map) "delete") (args.eraseIdx i)))
+      | none => if borrows.any (fun b => s.mentions b.1) then none else some s
+    | _ => if borrows.any (fun b => s.mentions b.1) then none else some s
+  return .block sp ss
+
+/-- The interpreter and translator share this source-level ownership guard.
+The marker makes a borrowed argument count as changed, but not as an alias
+that escapes the call. It retains the other arguments so collections that
+they hold still fail the ordinary leak test. -/
+def Stmt.ownsChangesBorrow (borrows : List (String × Nat)) (params : List String) (body : Stmt) : Bool :=
+  (body.borrowOwnershipBody borrows).any (Stmt.ownsChanges params)
+
 /-- `s` declares a `const` that a statement of `rest` assigns. In JS that
 assignment throws a `TypeError` (ECMA-262 §9.1.1.1.5), so the spec gives no
 value for such a block, and the translator refuses it. -/
