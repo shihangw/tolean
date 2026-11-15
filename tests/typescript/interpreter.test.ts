@@ -920,6 +920,14 @@ test('normal-completion map borrows copy the final map back without aliases', as
       refused: true,
     },
     {
+      source: 'function change(a: Map<bigint, ReadonlyMap<bigint, bigint>>, b: ReadonlyMap<bigint, bigint>): void { a.set(1n, b); }\n' +
+        'function forward(a: Map<bigint, ReadonlyMap<bigint, bigint>>, b: ReadonlyMap<bigint, bigint>): void { change(a, b); }\n' +
+        'export function f(x: bigint): ReadonlyMap<bigint, ReadonlyMap<bigint, bigint>> { ' +
+        'const a = new Map<bigint, ReadonlyMap<bigint, bigint>>(); const b = new Map<bigint, bigint>(); ' +
+        'forward(a, b); b.set(1n, x); return a; }',
+      refused: true,
+    },
+    {
       source: 'function change(m: Map<bigint, bigint>, other: ReadonlyMap<bigint, bigint>): void { m.set(1n, 2n); }\n' +
         'function forward(m: Map<bigint, bigint>): void { change(m, m); }\n' +
         'export function f(x: bigint): bigint { const m = new Map<bigint, bigint>(); ' +
