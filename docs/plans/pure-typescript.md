@@ -213,6 +213,71 @@ leaves a gap.
 Steps 2 and 4 cover most of the code in the survey. Step 8 matters most for
 proofs, because a fold over events keeps much of its state in maps.
 
+## Refactors from review
+
+These follow-ups track design feedback from the open pull requests. A fix in
+a descendant does not mean that the earlier pull request already contains it.
+
+- **Make expression scans exhaustive.** Enumerate leaf constructors instead
+  of ending a scan with `| _ => false` or `| _ => []`. Traverse ordinary
+  children, and name any deliberately unsupported binding scopes explicitly.
+  Audit the call, name, callback and number scans rather than adding another
+  independently maintained partial traversal. Keep source-call counts as
+  invariant checks, not as the definition of which syntax is supported.
+
+  The [call-traversal review on #220](https://github.com/shihangw/tolean/pull/220#discussion_r4576745761)
+  identified dropped `.struct` fields and `.structUpdate` children.
+  **#238 covers that concrete case:** at the step 10 tip `d92ef7e` on #240,
+  `conditionCalls` visits record fields, the update base and replacement
+  fields. Its catch-all still remains, and `bodyConditionCalls` still omits
+  `matchTag`. Preserve the record certificate cases while making each
+  constructor decision explicit. Tagged narrowing needs its own scope
+  contract before it can be supported.
+
+  The [number-use scan on #221](https://github.com/shihangw/tolean/pull/221#discussion_r4576744315)
+  is being fixed there, including the missing optional-index receiver and
+  explicit number-free leaves. That work also serves #229 and #235; do not
+  duplicate it here. Its compile regression must keep number operations
+  only inside the optional-index receiver so missing imports and binders
+  remain observable.
+
+- **Choose the local-function executor before running the body.**
+  The [review on #226](https://github.com/shihangw/tolean/pull/226#discussion_r4576809523),
+  also inherited by #236, found that `callLocal` runs a state-writing
+  value-returning body through `execStmt`, then repeats it through
+  `execReturnState` to recover its state. Dispatch to the state-preserving
+  executor first for the supported final-return form. Use `returnState_exec`
+  to justify the value relationship, retain the ordinary path for void
+  locals, and keep unsupported returns refused. Test a captured-state loop
+  and calls in its prefix without making replay part of the interpreter's
+  contract.
+
+- **Restore the forwarding escape regression.**
+  The [review on #231](https://github.com/shihangw/tolean/pull/231#discussion_r4577273721)
+  found that a rebase removed the nested-map case where `forward(a, b)`
+  stores `b` in `a` through `change`, then the caller mutates `b`. The
+  implementation still refuses it. Restore that test alongside the
+  direct-call escape test so both paths stay protected.
+
+- **Share literal-encoding normalization between certificate proof paths.**
+  The [review on #233](https://github.com/shihangw/tolean/pull/233#discussion_r4576995912)
+  found that a literal appended inside a conditional callback prevented the
+  sort lemma from matching. #237 fixes the concrete certificate failure,
+  as the reviewer verified, but the step 10 tip still emits the reverse
+  literal-map and append normalization in separate callback, loop and
+  function paths. Extract one proof-emission step that takes the required
+  encoders. Keep the nested literal-append and loop certificate cases so
+  the shared step preserves their normalization order.
+
+- **Complete the structural type-argument ambiguity check.**
+  The [design summary on #217](https://github.com/shihangw/tolean/pull/217#issuecomment-6887789375)
+  validates the bounded operator stop set, not a complete ambiguity
+  algorithm. Retain its bracket-depth rule and pinned-TypeScript controls.
+  The remaining plan on that branch calls for a speculative type-list
+  parse and follow-token test, with enough identifier, contextual-token
+  and line-break information in the round-trip relation. This remains
+  separate work; extending the stop set alone does not finish it.
+
 ## Open questions
 
 Each question ends with a recommendation. A recommendation is not a decision:
