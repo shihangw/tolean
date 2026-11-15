@@ -1104,6 +1104,10 @@ mutual
 
 /-- A type nests no deeper than it has tokens. -/
 theorem TypeExpr.height_le : ∀ t : TypeExpr, t.height ≤ t.tokens.length
+  | .predicate _ _ target => by
+    have h := TypeExpr.height_le target
+    simp [TypeExpr.height, TypeExpr.tokens, TypeExpr.words, identWord] at h ⊢
+    omega
   | .ref _ _ [] => by simp [TypeExpr.height, TypeExpr.heightOf, TypeExpr.tokens, TypeExpr.words, identWord]
   | .ref sp n (a :: as) => by
     have := TypeExpr.heightOf_le (a :: as)
@@ -3716,6 +3720,9 @@ mutual
 
 /-- The tokens of a type are neutral: its brackets match, and it has no `;`. -/
 theorem TypeExpr.neutral : ∀ t : TypeExpr, Neutral t.tokens
+  | .predicate _ _ target => by
+    simpa [TypeExpr.tokens, TypeExpr.words, identWord] using
+      Neutral.cons (k := .ident _) (by simp) (Neutral.cons (k := .ident "is") (by simp) (TypeExpr.neutral target))
   | .ref _ n [] => Neutral.all (by simp [TypeExpr.tokens, TypeExpr.words, identWord])
   | .ref sp n (a :: as) => by
     rw [tokens_ref sp n _ (by simp)]

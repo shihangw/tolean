@@ -1038,6 +1038,12 @@ class Printer {
         (t.typeArguments ?? []).map((a) => this.type(a)),
       );
     }
+    if (ts.isTypePredicateNode(t)) {
+      if (t.assertsModifier || !ts.isIdentifier(t.parameterName) || !t.type) {
+        refuse(t, 'only a parameter predicate is supported');
+      }
+      return this.node('type-predicate', t, [this.name(t.parameterName)], [this.type(t.type)]);
+    }
     if (ts.isArrayTypeNode(t)) {
       return this.node('type-array', t, [], [this.type(t.elementType)]);
     }

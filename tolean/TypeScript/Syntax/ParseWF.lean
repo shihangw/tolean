@@ -4435,11 +4435,50 @@ theorem mem_separated {sep : String} {w : Word} : ∀ {items : List (List Word)}
 /-- The rest of the head of a local arrow function, as `localArrowRest`
 reads it after a `(`: parameters and a return type that the parser allows
 and that lex back. -/
+theorem parseReturnType_gives {T : Edition} {s s' : ParseState} {ty : TypeExpr}
+    (hR : Ready s) (hT : s.target = T) (h : Parse.parseReturnType s = .ok ty s') :
+    (ty.returnWF = true ∧ WordsOK T ty.words) ∧ Ready s' ∧ Kept s s' := by
+  simp only [Parse.parseReturnType] at h
+  rw [Parse.bind_eq (Parse.budget_eq _), Parse.bind_ok] at h
+  obtain ⟨first, s₁, hp, h⟩ := h
+  obtain ⟨hw, hR₁, hK₁⟩ := (types_give T _).1 _ _ _ hR hT hp
+  obtain ⟨next, rest, hs⟩ := hR₁.cons
+  rw [Parse.bind_eq (Parse.peek_eq hs)] at h
+  by_cases hi : (next.isIdent "is" && !next.newlineBefore) = true
+  · rw [if_pos hi, Parse.pure_bind] at h
+    split at h
+    next sp name =>
+      have hk : next.kind = .ident "is" := by
+        simp only [Bool.and_eq_true] at hi
+        simpa [Token.isIdent] using hi.1
+      have hne : next.kind ≠ .eof := by rw [hk]; simp
+      rw [Parse.bind_eq (Parse.discard_eq (advance_past hR₁ hs hne)),
+        Parse.bind_eq (Parse.budget_eq _), Parse.bind_ok] at h
+      obtain ⟨target, s₂, hpt, h⟩ := h
+      obtain ⟨hwt, hR₂, hK₂⟩ := (types_give T _).1 _ _ _
+        (hR₁.past hs (hR₁.more hs hne)) (hK₁.target_eq.trans hT) hpt
+      rw [Parse.bind_eq (Parse.spanFrom_eq _ _)] at h
+      simp only [Parse.pure_ok] at h
+      obtain ⟨rfl, rfl⟩ := h
+      refine ⟨⟨?_, ?_⟩, hR₂, hK₁.trans ((Kept.past _ _ _).trans hK₂)⟩
+      · simpa [TypeExpr.returnWF, TypeExpr.wf, TypeExpr.allWF] using
+          And.intro (both_left hw) (both_left hwt)
+      · have hn : Word.ok T (identWord name) = true :=
+          both_right hw _ (by simp [TypeExpr.words])
+        exact WordsOK.cons hn (WordsOK.cons (by words_ok) (both_right hwt))
+    next => exact False.elim (Parse.failAt_ne_ok _ _ _ _ _ h)
+  · rw [if_neg hi] at h
+    simp only [Parse.pure_ok] at h
+    obtain ⟨rfl, rfl⟩ := h
+    refine ⟨⟨?_, both_right hw⟩, hR₁, hK₁⟩
+    have hf := both_left hw
+    cases first <;> simp_all [TypeExpr.returnWF, TypeExpr.wf]
+
 theorem localArrowRest_gives {T : Edition} {s s' : ParseState} {ps : List Param} {rt : Option TypeExpr}
     {first : Token} {r : List Token} (hR : Ready s) (hT : s.target = T) (hs : s.rest = first :: r)
     (hp : first.isPunct "(" = true) (h : Parse.localArrowRest s = .ok (some (ps, rt)) s') :
     Ready s' ∧ Kept s s' ∧ (∀ p ∈ ps, p.wf = true) ∧ (∀ p ∈ ps, WordsOK T p.words) ∧
-      (∀ t ∈ rt, t.wf = true) ∧ (∀ t, rt = some t → WordsOK T t.words) := by
+      (∀ t ∈ rt, t.returnWF = true) ∧ (∀ t, rt = some t → WordsOK T t.words) := by
   simp only [Parse.localArrowRest] at h
   rw [Parse.bind_ok] at h; obtain ⟨ps', s₁, hps, h⟩ := h
   obtain ⟨hR₁, hK₁, -, -, -, hpw, hpok⟩ := parseArrowParams_gives hR hT hs hps
@@ -4474,14 +4513,14 @@ theorem localArrowRest_gives {T : Edition} {s s' : ParseState} {ps : List Param}
   rw [Parse.bind_eq (Parse.peek_eq hs₂)] at h
   by_cases hcol : z.isPunct ":" = true
   · have hzne : z.kind ≠ .eof := by simp [Token.isPunct] at hcol; rw [hcol]; simp
-    rw [if_pos hcol, Parse.bind_eq (Parse.discard_eq (advance_past hR₁ hs₂ hzne)), Parse.bind_eq (Parse.budget_eq _),
+    rw [if_pos hcol, Parse.bind_eq (Parse.discard_eq (advance_past hR₁ hs₂ hzne)),
       Parse.bind_ok] at h
     obtain ⟨ty, s₃, hty, h⟩ := h
-    obtain ⟨htwo, hR₃, hK₃⟩ := (types_give T _).1 _ _ _ (hR₁.past hs₂ (hR₁.more hs₂ hzne)) hT₁ hty
+    obtain ⟨htwo, hR₃, hK₃⟩ := parseReturnType_gives (hR₁.past hs₂ (hR₁.more hs₂ hzne)) hT₁ hty
     rw [Parse.pure_bind] at h
     obtain ⟨hR', hK', rfl, rfl⟩ := tail _ _ hR₃ (hK₁.trans ((Kept.past _ _ _).trans hK₃)) h
-    exact ⟨hR', hK', fun p hp => (hpw p hp).1, hpok', fun t ht => by simp at ht; subst ht; simpa using both_left htwo,
-      fun t ht => by simp at ht; subst ht; exact both_right htwo⟩
+    exact ⟨hR', hK', fun p hp => (hpw p hp).1, hpok', fun t ht => by simp at ht; subst ht; exact htwo.1,
+      fun t ht => by simp at ht; subst ht; exact htwo.2⟩
   · rw [if_neg hcol, Parse.pure_bind] at h
     obtain ⟨hR', hK', rfl, rfl⟩ := tail _ _ hR₁ hK₁ h
     exact ⟨hR', hK', fun p hp => (hpw p hp).1, hpok', fun t ht => by simp at ht, fun t ht => by simp at ht⟩
@@ -4494,7 +4533,7 @@ theorem localArrowHeadTry_gives {T : Edition} {s s' : ParseState} {name : String
     (hx : x.kind ≠ .eof) (h : Parse.localArrowHeadTry s = .ok (some (name, ps, rt)) s') :
     Ready s' ∧ Kept s s' ∧ s.inFunction = true ∧ exprName name = true ∧ Word.ok T (identWord name) = true ∧
       (∀ p ∈ ps, p.wf = true) ∧ (∀ p ∈ ps, WordsOK T p.words) ∧
-      (∀ t ∈ rt, t.wf = true) ∧ (∀ t, rt = some t → WordsOK T t.words) := by
+      (∀ t ∈ rt, t.returnWF = true) ∧ (∀ t, rt = some t → WordsOK T t.words) := by
   simp only [Parse.localArrowHeadTry] at h
   have hg : (get : ParseM ParseState) s = .ok s s := rfl
   rw [Parse.bind_eq hg] at h
@@ -5216,7 +5255,7 @@ theorem parseSignature_gives {T : Edition} {s s' : ParseState} {name : String} {
     {ps : List Param} {rt : Option TypeExpr} (hR : Ready s) (hT : s.target = T)
     (h : Parse.parseSignature s = .ok (name, tps, ps, rt) s') :
     Ready s' ∧ Kept s s' ∧ exprName name = true ∧ (∀ n ∈ tps, typeName n = true) ∧ (∀ p ∈ ps, p.wf = true) ∧
-      (∀ t ∈ rt, t.wf = true) ∧ Word.ok T (identWord name) = true ∧
+      (∀ t ∈ rt, t.returnWF = true) ∧ Word.ok T (identWord name) = true ∧
       WordsOK T (typeParamWords tps) ∧ (∀ p ∈ ps, WordsOK T p.words) ∧ (∀ t, rt = some t → WordsOK T t.words) := by
   simp only [Parse.parseSignature] at h
   rw [Parse.bind_ok] at h; obtain ⟨_, s₁, hadv, h⟩ := h
@@ -5249,10 +5288,10 @@ theorem parseSignature_gives {T : Edition} {s s' : ParseState} {name : String} {
   rw [Parse.bind_eq (Parse.peek_eq hs₆)] at h
   by_cases hcol : z.isPunct ":" = true
   · have hzne : z.kind ≠ .eof := by simp [Token.isPunct] at hcol; rw [hcol]; simp
-    rw [if_pos hcol, Parse.bind_eq (Parse.discard_eq (advance_past hR₅ hs₆ hzne)), Parse.bind_eq (Parse.budget_eq _),
+    rw [if_pos hcol, Parse.bind_eq (Parse.discard_eq (advance_past hR₅ hs₆ hzne)),
       Parse.bind_ok] at h
     obtain ⟨ty, s₆, hty, h⟩ := h
-    obtain ⟨htwo, hR₆, hK₆'⟩ := (types_give T _).1 _ _ _ (hR₅.past hs₆ (hR₅.more hs₆ hzne))
+    obtain ⟨htwo, hR₆, hK₆'⟩ := parseReturnType_gives (hR₅.past hs₆ (hR₅.more hs₆ hzne))
       (hK₅.target_eq.trans hT) hty
     have hK₆ : Kept s s₆ := hK₅.trans ((Kept.past _ _ _).trans hK₆')
     rw [Parse.pure_bind] at h
@@ -5262,8 +5301,8 @@ theorem parseSignature_gives {T : Edition} {s s' : ParseState} {name : String} {
     simp only [Parse.pure_ok, Prod.mk.injEq] at h
     obtain ⟨⟨rfl, rfl, rfl, rfl⟩, rfl⟩ := h
     exact ⟨hR₆, hK₆, by simpa [exprName] using hnr, htpn, fun p hp => (hpw p (by simpa using hp)).1,
-      fun t ht => by simp at ht; subst ht; simpa using both_left htwo, hnok, htpw, fun p hp => (hpw p (by simpa using hp)).2,
-      fun t ht => by simp at ht; subst ht; exact both_right htwo⟩
+      fun t ht => by simp at ht; subst ht; exact htwo.1, hnok, htpw, fun p hp => (hpw p (by simpa using hp)).2,
+      fun t ht => by simp at ht; subst ht; exact htwo.2⟩
   · rw [if_neg hcol, Parse.pure_bind] at h
     obtain ⟨w, r₇, hs₇⟩ := hR₅.cons
     rw [Parse.bind_eq (Parse.peek_eq hs₇)] at h

@@ -103,6 +103,7 @@ def LitType.words : LitType → List Word
 mutual
 
 def TypeExpr.words : TypeExpr → List Word
+  | .predicate _ parameter target => identWord parameter :: identWord "is" :: target.words
   | .keyword _ name => [if name == "void" then keywordWord name else identWord name]
   | .null _ => [keywordWord "null"]
   | .literal _ lit => lit.words
@@ -388,6 +389,7 @@ def noSpan : Span := ⟨⟨0, 0⟩, ⟨0, 0⟩⟩
 mutual
 
 def TypeExpr.erase : TypeExpr → TypeExpr
+  | .predicate _ parameter target => .predicate noSpan parameter target.erase
   | .keyword _ name => .keyword noSpan name
   | .null _ => .null noSpan
   | .literal _ lit => .literal noSpan lit

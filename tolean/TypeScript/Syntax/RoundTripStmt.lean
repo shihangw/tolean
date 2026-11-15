@@ -1,4 +1,4 @@
-import tolean.TypeScript.Syntax.RoundTripExpr
+import tolean.TypeScript.Syntax.RoundTripReturn
 
 /-!
 The parser's round trip for statements, on tokens: the parser reads the
@@ -182,7 +182,7 @@ def Stmt.wf (T : Edition) (fn loop : Bool) : Stmt → Bool
     disc.wfParen T && decide (Parse.defaultCount cs ≤ 1) && Stmt.clausesWF T fn loop cs
   -- The body is a function's own, so it may return, and no loop is around it.
   | .funDecl _ name tps params rt body => fn && exprName name && tps.all typeName && params.all Param.wf &&
-      (match rt with | some t => t.wf | none => true) && body.isBlock && body.wf T true false
+      (match rt with | some t => t.returnWF | none => true) && body.isBlock && body.wf T true false
 
 def Stmt.allWF (T : Edition) (fn loop : Bool) : List Stmt → Bool
   | [] => true
@@ -1477,7 +1477,7 @@ type or none, which a `{` follows: `parseSignature` reads them and stops at
 the `{`. -/
 theorem parseSignature_reads {T : Edition} (name : String) (typeParams : List String) (params : List Param)
     (rt : Option TypeExpr) (hname : exprName name = true) (htps : ∀ n ∈ typeParams, typeName n = true)
-    (hps : ∀ p ∈ params, p.wf = true) (hrt : ∀ t ∈ rt, t.wf = true) :
+    (hps : ∀ p ∈ params, p.wf = true) (hrt : ∀ t ∈ rt, t.returnWF = true) :
     ∀ (s : ParseState) (ts : List Token) (lb : Token) (rest : List Token), s.target = T →
       s.rest = ts ++ lb :: rest → s.left = s.rest.length →
       Touching ts (keywordWord "function" :: identWord name :: typeParamWords typeParams ++
@@ -1534,7 +1534,7 @@ theorem parseSignature_reads {T : Edition} (name : String) (typeParams : List St
         (leaves_trans hLg (leaves_trans (leaves_advance hs₂' (by rw [hLg.left_eq, hs₂'])) (leaves_trans hL₄
           (leaves_advance hs₄ (by rw [hL₄.left_eq, hs₄]))))))
   | some t =>
-    have htw : t.wf = true := hrt t rfl
+    have htw : t.returnWF = true := hrt t rfl
     obtain ⟨colon, tts, rfl, hcolon, htt⟩ := Touching.cons_one (by simpa [typeAnnotation, punctWord] using hrts)
     have hs' : s.rest = fk :: nm :: (gts ++ lp :: (its ++ rp :: (colon :: (tts ++ (lb :: rest))))) := by
       simpa using hs
@@ -1558,8 +1558,9 @@ theorem parseSignature_reads {T : Edition} (name : String) (typeParams : List St
       { s₄ with rest := colon :: (tts ++ (lb :: rest)), left := s₄.left - 1, lastStop := rp.span.stop }
     let s₅' : ParseState := { s₅ with rest := tts ++ (lb :: rest), left := s₅.left - 1, lastStop := colon.span.stop }
     have hl₅' : s₅'.left = s₅'.rest.length := by simp [s₅', s₅, hL₄.left_eq]
-    obtain ⟨t', s₆, hpt, het, hL₆⟩ := parseType_budget t htw s₅' tts (lb :: rest) rfl hl₅' htt.kinds
+    obtain ⟨t', s₆, hpt, het, hL₆⟩ := parseReturnType_reads t htw s₅' tts (lb :: rest) rfl hl₅' htt.kinds
       (fun y hy => hn y (by simp [hy])) (by simp) (followsType_punct hlb (by simp))
+      (by simp [Token.isIdent, hlb])
     have hs₆ : s₆.rest = lb :: rest := by simpa using hL₆.rest_eq
     refine ⟨res.toList, some t', s₆, ?_, hes, by simp [het], ?_⟩
     · simp only [Parse.parseSignature]
@@ -1571,7 +1572,7 @@ theorem parseSignature_reads {T : Edition} (name : String) (typeParams : List St
         Parse.bind_eq (Parse.peek_eq (s := s₅) rfl)]
       rw [if_pos (by simp [Token.isPunct, hcolon])]
       rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_cons (s := s₅) rfl (by simp))),
-        Parse.bind_eq (Parse.budget_eq _), Parse.bind_eq hpt, Parse.pure_bind, Parse.bind_eq (Parse.peek_eq hs₆)]
+        Parse.bind_eq hpt, Parse.pure_bind, Parse.bind_eq (Parse.peek_eq hs₆)]
       rw [if_pos (by simp [Token.isPunct, hlb]), Parse.pure_bind]
       rfl
     · exact leaves_trans (leaves_advance hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))

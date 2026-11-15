@@ -102,6 +102,8 @@ inductive TypeExpr where
   | paren (span : Span) (inner : TypeExpr)
   /-- `[A, B]`, or `readonly [A, B]` when `readonly` is true: a tuple type. -/
   | tuple (span : Span) (readonly : Bool) (elems : List TypeExpr)
+  /-- A predicate return annotation, `parameter is target`. -/
+  | predicate (span : Span) (parameter : String) (target : TypeExpr)
 
 /-- A parameter of a function or an arrow function. An optional parameter,
 `x?: T`, is `undefined` when a call leaves it out. -/
@@ -876,7 +878,7 @@ open tolean
 
 def TypeExpr.span : TypeExpr → Span
   | .keyword s _ | .null s | .literal s _ | .ref s _ _ | .array s _ | .union s _ | .paren s _
-  | .tuple s _ _ => s
+  | .tuple s _ _ | .predicate s _ _ => s
 
 def Expr.span : Expr → Span
   | .ident s _ | .number s _ | .bigint s _ | .string s _ | .bool s _ | .null s | .array s _

@@ -948,6 +948,7 @@ def translateType (t : TypeExpr) : TM Ty := do
       reject t.span ("a union of primitive types and null needs a name for its primitive types; " ++
         "declare type T = string | bigint and write T | null")
   match t with
+  | .predicate s _ _ => reject s "type guards are not supported: the tag test and call-site narrowing must be checked"
   | .keyword s "bigint" =>
     requireFeature s .bigint
     return .bigint

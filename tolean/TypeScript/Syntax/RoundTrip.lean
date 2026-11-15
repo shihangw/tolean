@@ -99,7 +99,7 @@ def TypeExpr.primaryWF : TypeExpr → Bool
   | .ref _ name args => typeName name && TypeExpr.allWF args
   | .paren _ inner => inner.wf
   | .tuple _ readonly elems => !readonly && !elems.isEmpty && TypeExpr.allWF elems
-  | .array .. | .union .. => false
+  | .array .. | .union .. | .predicate .. => false
 
 /-- `t` is a type that `parseArrayType` reads: a primary type, with `[]`
 after it any number of times. -/
@@ -111,11 +111,12 @@ def TypeExpr.arrayWF : TypeExpr → Bool
   | .ref _ name args => typeName name && TypeExpr.allWF args
   | .paren _ inner => inner.wf
   | .tuple _ _ elems => !elems.isEmpty && TypeExpr.allWF elems
-  | .union .. => false
+  | .union .. | .predicate .. => false
 
 /-- `t` is a type that `parseType` reads. A union has two members or more, or
 one after a `|`, and each member is a type that `parseArrayType` reads. -/
 def TypeExpr.wf : TypeExpr → Bool
+  | .predicate .. => false
   | .union _ [member] => member.arrayWF
   | .union _ members => 2 ≤ members.length && TypeExpr.allArrayWF members
   | .array _ elem => elem.arrayWF && !elem.isReadonlyTuple
@@ -141,6 +142,7 @@ mutual
 /-- How deep `parseType` calls nest to read `t`: one step for each `<…>`,
 each `(…)` and each `[…]`, and one more for `readonly`. -/
 def TypeExpr.height : TypeExpr → Nat
+  | .predicate _ _ target => target.height + 1
   | .ref _ _ args => TypeExpr.heightOf args + 1
   | .paren _ inner => inner.height + 1
   | .tuple _ readonly elems => TypeExpr.heightOf elems + (if readonly then 2 else 1)
@@ -153,6 +155,11 @@ def TypeExpr.heightOf : List TypeExpr → Nat
   | t :: ts => max t.height (TypeExpr.heightOf ts)
 
 end
+
+/-- Only a return annotation may hold a predicate. Its target is an ordinary type. -/
+def TypeExpr.returnWF : TypeExpr → Bool
+  | .predicate _ parameter target => typeName parameter && target.wf
+  | t => t.wf
 
 /-- The kinds of the tokens of `t`. -/
 def TypeExpr.tokens (t : TypeExpr) : List TokenKind := t.words.flatten
@@ -437,6 +444,7 @@ theorem arrayWF_split : ∀ (t : TypeExpr), t.arrayWF = true → t.isReadonlyTup
       exact ⟨.tuple sp false es, 0, by simpa [TypeExpr.arrayWF, TypeExpr.primaryWF] using h, by simp [brackets],
         rfl, rfl⟩
   | .union .., h, _ => by simp [TypeExpr.arrayWF] at h
+  | .predicate .., h, _ => by simp [TypeExpr.arrayWF] at h
 
 /-- `iterate_brackets`, in the shape of a goal about a parser that starts at
 `s₀`, so that `refine` finds the step. -/
@@ -461,6 +469,7 @@ theorem Parse.budget_eq (s : ParseState) : Parse.budget s = .ok (10 * (s.left + 
 /-- A primary type has tokens. -/
 theorem primaryWF_tokens {b : TypeExpr} (hb : b.primaryWF = true) : b.tokens ≠ [] := by
   cases b with
+  | predicate _ _ _ => simp [TypeExpr.primaryWF] at hb
   | keyword sp name => simp only [TypeExpr.tokens, TypeExpr.words]; split <;> simp [keywordWord, identWord]
   | null sp => simp [TypeExpr.tokens, TypeExpr.words, keywordWord]
   | literal sp lit => cases lit <;> simp [TypeExpr.tokens, TypeExpr.words, LitType.words, keywordWord]
@@ -474,6 +483,7 @@ theorem primaryWF_tokens {b : TypeExpr} (hb : b.primaryWF = true) : b.tokens ≠
 theorem primaryWF_first {b : TypeExpr} (hb : b.primaryWF = true) :
     ∀ k ∈ b.tokens.head?, k ≠ .ident "readonly" := by
   cases b with
+  | predicate _ _ _ => simp [TypeExpr.primaryWF] at hb
   | keyword sp name =>
     simp only [TypeExpr.primaryWF, Bool.or_eq_true, beq_iff_eq] at hb
     simp only [TypeExpr.tokens, TypeExpr.words, keywordWord, identWord]
@@ -941,6 +951,7 @@ theorem arrayWF_head (t : TypeExpr) (h : t.arrayWF = true) :
   obtain ⟨base, k, hb, htok, _, _⟩ := arrayWF_split t h (by simpa using hro)
   rw [htok]
   cases base with
+  | predicate _ _ _ => simp [TypeExpr.primaryWF] at hb
   | keyword sp name =>
     simp only [TypeExpr.tokens, TypeExpr.words, keywordWord, identWord]
     split <;> simp
@@ -1152,6 +1163,7 @@ theorem types_reads : ∀ f : Nat,
     refine ⟨?_, ?_, ?_⟩
     · intro t hwf hf
       cases t with
+      | predicate _ _ _ => simp [TypeExpr.wf] at hwf
       | union sp ms =>
         refine parseType_union f sp ms hwf fun m hm => ihA m ?_ ?_
         · match ms, hwf, hm with
@@ -1181,6 +1193,7 @@ theorem types_reads : ∀ f : Nat,
       exact parseArrayType_reads f t hwf (fun b hb hh => ihP b hb (by omega)) fun b hb hh => ihA b hb (by omega)
     · intro t hwf hf
       cases t with
+      | predicate _ _ _ => simp [TypeExpr.primaryWF] at hwf
       | keyword sp name =>
         by_cases hv : name = "void"
         · subst hv
