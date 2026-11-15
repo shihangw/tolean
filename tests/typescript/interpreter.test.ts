@@ -52,12 +52,17 @@ import ts from 'typescript';
 
 import { Gen, type Signatures, type Ty } from './gen.ts';
 import { dateParseCases } from './dateParseCases.ts';
+import { checkRegexpModel } from './regexpModel.ts';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const tolean = process.env.TOLEAN ?? join(root, '.lake/build/bin/tolean');
 const seed = Number(process.env.TOLEAN_SEED ?? Math.floor(Math.random() * 1e9));
 const programCount = Number(process.env.TOLEAN_PROGRAMS ?? 1000);
 const callsPerFunction = 5;
+
+test('the flagless RegExp matcher agrees with Node on patterns and UTF-16 inputs', () => {
+  checkRegexpModel(seed);
+}, 200_000);
 
 /** A value as `tolean interpret` writes it (see `Interpret.lean`). */
 type Value =

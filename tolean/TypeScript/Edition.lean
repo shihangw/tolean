@@ -52,6 +52,10 @@ maintained. -/
 def Edition.default : Edition := .es2024
 
 inductive Feature where
+  /-- Flagless RegExp patterns and `test`: Pattern Semantics, RepeatMatcher
+  and RegExpBuiltinExec (ES2024 §22.2.2, §22.2.2.3.1 and §22.2.7.2).
+  The model is available in ES2015. The translator does not accept it yet. -/
+  | regexp
   /-- `**` and `**=`: `ExponentiationExpression`. -/
   | exponent
   /-- `{ ...e }`: `PropertyDefinition : ... AssignmentExpression`. -/
@@ -110,6 +114,7 @@ inductive Feature where
 deriving BEq, Repr, Inhabited
 
 def Feature.since : Feature → Edition
+  | .regexp => .es2015
   | .stringNumberArguments => .es2015
   | .dateParseFormat => .es2016
   | .exponent | .arrayIncludes | .trimWhiteSpace => .es2016
@@ -122,6 +127,7 @@ def Feature.since : Feature → Edition
   | .arrayFindLast | .arrayToSorted => .es2023
 
 def Feature.describe : Feature → String
+  | .regexp => "regular expressions without flags"
   | .exponent => "'**'"
   | .objectSpread => "object spread '...'"
   | .bigint => "bigint"

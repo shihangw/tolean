@@ -15,6 +15,7 @@ import tolean.TypeScript.Syntax.RoundTripLex
 import tolean.TypeScript.Syntax.ParseWF
 import tolean.TypeScript.Syntax.RoundTripText
 import tolean.TypeScript.Spec.Error
+import tolean.TypeScript.Spec.RegExp
 import tolean.TypeScript.Spec.Lemmas.Number
 import tolean.TypeScript.Spec.Lemmas.Sort
 import tolean.TypeScript.Spec.Coverage.LexicalGrammar
@@ -348,6 +349,11 @@ def sections : List Section := [
     [``JSString.codePoints_units, ``JSString.codePointUnits_flatten,
     ``JSString.codePointUnits_length]⟩,
   ⟨"sec-properties-of-string-instances-length", "22.1.4.1", "length", []⟩,
+  -- §22.2 RegExp Objects {#sec-regexp-regular-expression-objects}
+  ⟨"sec-pattern-semantics", "22.2.2", "Pattern Semantics",
+    [``JSRegExp.one_forward, ``JSRegExp.compile_forward]⟩,
+  ⟨"sec-repeatmatcher", "22.2.2.3.1", "RepeatMatcher",
+    [``JSRegExp.repeat_forward, ``JSRegExp.repeat_spec_step]⟩,
   -- §23 Indexed Collections {#sec-indexed-collections}
   ⟨"sec-array.prototype.at", "23.1.3.1", "Array.prototype.at", [``Proof.eval_at,
     ``Proof.eval_atNumber, ``Proof.apply_atNumber]⟩,
