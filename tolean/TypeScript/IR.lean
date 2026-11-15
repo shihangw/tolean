@@ -169,7 +169,8 @@ inductive ExprExt where
   makes a number: `(JSNumber.ofSafeInt (N := N) (JSString.indexOf s p))`.
   `lits` holds the integer literal that each argument is, if it is one. The
   output writes a number argument as its literal, such as
-  `(JSString.slice s 1 none)` for `s.slice(1)`. -/
+  `(JSString.slice s 1 none)` for `s.slice(1)`, or applies
+  `JSNumber.toIndexInt` when it is not a literal. -/
   | stringMethod (method : StringMethod) (lits : List (Option Int))
   /-- `(JSString.codePoints s)`, on `s`: the strings that `for (const c of s)`
   and `[...s]` visit, one for each code point. -/
@@ -426,10 +427,18 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
       s!"{leanName names "Nat"}) : {leanName names "Int"}))"
   | .stringMethod method lits, s :: args =>
     let str := leanName names "JSString"
-    -- A number argument is its literal, and the others are their code.
-    let terms := (args.zip (lits ++ List.replicate args.length none)).map fun
+    -- Literal numbers keep their old output. Other number arguments use
+    -- ToIntegerOrInfinity; split then reduces the integer modulo 2^32.
+    let terms := (args.zip (lits ++ List.replicate args.length none)).mapIdx fun i pair =>
+      match pair with
       | (_, some k) => intTerm k
-      | (a, none) => argument a
+      | (a, none) =>
+        let numeric := match method with
+          | .at | .slice => true
+          | .startsWith | .endsWith | .includes | .indexOf | .split => i == 1
+          | .padStart | .padEnd => i == 0
+          | _ => false
+        if numeric then s!"({js}.toIndexInt {argument a})" else argument a
     -- `slice` and the padding take the arguments that the call leaves out.
     let terms := match method, terms with
       | .slice, [] => ["0", leanName names "none"]

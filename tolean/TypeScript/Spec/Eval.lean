@@ -363,11 +363,13 @@ def noArgs (v : Val N) : List (Val N) → Option (Val N)
 
 /-- The integer of a number argument, as ToIntegerOrInfinity gives it
 (ECMA-262 §7.1.5): the integer that a literal names, whatever the model of
-numbers, as for `xs.at(k)`, or else a safe integer. `lit` is the integer
-literal that the argument is, if it is one. Any other value leaves the subset. -/
+numbers, as for `xs.at(k)`, or else `JSNumber.toIndexInt`. `lit` is the integer
+literal that the argument is, if it is one. A non-number leaves the subset.
+For `split`, the subsequent reduction modulo 2^32 turns either infinity
+sentinel into zero, as ToUint32 requires. -/
 def intArg : Option Int → Val N → Option Int
   | some k, _ => some k
-  | none, .num n => JSNumber.toSafeInt n
+  | none, .num n => some (JSNumber.toIndexInt n)
   | none, _ => none
 
 /-- The value of a method whose arguments are a string `p` and perhaps a
@@ -394,11 +396,18 @@ def sliceArgs (s : JSString) : List (Val N) → List (Option Int) → Option (Va
   | _, _ => none
 
 /-- `padStart` or `padEnd` on the values of its arguments, where `g n fill` is
-the padded string: a missing filler is `" "` (ECMA-262 §22.1.3.17.1). -/
+the padded string: a missing filler is `" "` (ECMA-262 §22.1.3.17.1).
+Padding keeps its previous safe-integer restriction. In particular, an
+infinity must not become an index sentinel and then an allocation size. -/
 def padArgs (g : Int → JSString → JSString) : List (Val N) → List (Option Int) → Option (Val N)
-  | [v], [k] => (intArg k v).map fun n => .str (g n (JSString.ofString " "))
-  | [v, .str fill], [k, _] => (intArg k v).map fun n => .str (g n fill)
+  | [v], [k] => (lengthArg k v).map fun n => .str (g n (JSString.ofString " "))
+  | [v, .str fill], [k, _] => (lengthArg k v).map fun n => .str (g n fill)
   | _, _ => none
+where
+  lengthArg : Option Int → Val N → Option Int
+    | some k, _ => some k
+    | none, .num n => JSNumber.toSafeInt n
+    | none, _ => none
 
 /-- `toUpperCase` or `toLowerCase` on `s`, where `r` is the result that the
 ASCII rule gives. Any other string leaves the subset, because its result
@@ -427,8 +436,8 @@ is, if it is one:
   perhaps a string to fill with.
 
 ToString converts a string argument, and the subset has it on strings only.
-ToIntegerOrInfinity converts a number argument, and the subset has it on
-integer literals and safe integers (`intArg`). Other arguments leave the
+ToIntegerOrInfinity converts a number argument (`intArg`). For `split`,
+ToUint32 also reduces that integer modulo 2^32. Other arguments leave the
 subset. -/
 def stringMethod (method : String) (s : JSString) (args : List (Val N)) (lits : List (Option Int)) :
     Option (Val N) :=

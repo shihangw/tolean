@@ -429,6 +429,56 @@ test('the interpreter gives no value where an assignment to a const throws', asy
   }
 });
 
+test('padding does not allocate an infinity index sentinel', () => {
+  for (const method of ['padStart', 'padEnd'] as const) {
+    expect(() => 'a'[method](Infinity, 'x')).toThrow(RangeError);
+    const source = `export function f(n: number): string { return "a".${method}(n, "x"); }`;
+    const input = { programs: [{ source, calls: [{ function: 'f', args: [encode(Infinity)] }] }] };
+    const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+    expect(run.status, run.stderr).toBe(0);
+    const [lean] = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+    expect(lean?.parsed).toBe(true);
+    if (lean === undefined || !lean.parsed) continue;
+    expect(lean.results).toEqual([null]);
+  }
+});
+
+test('string number arguments agree with Node, including fractions and infinities', async () => {
+  const bodies = [
+    's.at(i) ?? null', 's.slice(i)', 's.slice(i, -1)', 's.slice(1, i)',
+    's.slice(i, i + 2)', 's.startsWith("a", i)', 's.endsWith("a", i)',
+    's.includes("a", i)', 's.indexOf("a", i)', 's.split("a", i)', 's.split("", i)',
+  ];
+  const indexes = [
+    0, -0, 1, -1, 0.5, -0.5, 2.7, -2.7, NaN, Infinity, -Infinity,
+    2 ** 32 - 1, 2 ** 32, 2 ** 32 + 1, -(2 ** 32) - 1,
+    2 ** 53, -(2 ** 53), 1e308, -1e308,
+    ...fc.sample(fc.double({ noNaN: false }), { seed, numRuns: 100 }),
+  ];
+  const strings = ['', 'ababa', '😀a😀', '\uD800a\uDC00'];
+  const inputs = strings.flatMap((s) => indexes.map((i) => [s, i]));
+  const sources = bodies.map((body) => `export function f(s: string, i: number) { return ${body}; }`);
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: sources.map((source) => ({
+      source, calls: inputs.map((args) => ({ function: 'f', args: args.map(encode) })),
+    })) }),
+    encoding: 'utf8', maxBuffer: 16 * 1024 * 1024,
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const results = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  for (const [k, body] of bodies.entries()) {
+    const node = new Function('s', 'i', `return ${body};`) as (s: unknown, i: unknown) => unknown;
+    const lean = results[k];
+    expect(lean?.parsed, body).toBe(true);
+    if (lean === undefined || !lean.parsed) continue;
+    for (const [j, [s, i]] of inputs.entries()) {
+      const value = lean.results[j]?.value;
+      expect(value === undefined ? 'no value' : canonical(value), `${body} with ${String(i)}`)
+        .toBe(canonical(encode(node(s, i))));
+    }
+  }
+});
+
 // `split("")` gives each code unit, so a surrogate pair becomes two lone
 // surrogates. The interpreter writes each as its code units, which a JSON
 // string could not hold, so Node and the interpreter agree on them.

@@ -649,7 +649,7 @@ macro_rules
         -- has reduced, so strict equality on primitives must reduce too.
         Eval.includesVal, Eval.sameValueZero, Eval.strictEq, Eval.setProp,
         tolean.IR.IntOp.apply, tolean.IR.Order.apply,
-        tolean.IR.Division.apply, ExprExt.apply, listItems?, StringPart.toStr, StringMethod.apply, Eval.oneString, Eval.noArgs, Eval.stringAndInt, Eval.oneInt, Eval.sliceArgs, Eval.padArgs, Eval.stringAt, Eval.intArg, Eval.asciiCase, NumberOp.apply, NumberConstant.value,
+        tolean.IR.Division.apply, ExprExt.apply, listItems?, StringPart.toStr, StringMethod.apply, Eval.oneString, Eval.noArgs, Eval.stringAndInt, Eval.oneInt, Eval.sliceArgs, Eval.padArgs, Eval.padArgs.lengthArg, Eval.stringAt, Eval.intArg, Eval.asciiCase, NumberOp.apply, NumberConstant.value,
         NumberTest.apply, tagOf, Eval.Val.typeOf, Eval.Env.set, Eval.getProp, Eval.getKey_ofString, Eval.getPath,
         Eval.objectPrototypeNames, List.lookup, DeclRef.beq_def, -List.map_map, -List.map_tail, ← List.map_drop, ← List.map_take, ← List.map_reverse, ← List.map_append,
         -- A map or set read, such as the initial value of a `reduce`, must
@@ -668,7 +668,7 @@ macro_rules
       all_goals repeat' (split_find <;> simp [-List.map_map, -List.map_tail, ← List.map_drop, ← List.map_take, ← List.map_reverse, ← List.map_append, $defs,*])
       all_goals repeat' (split_undef <;> simp [-List.map_map, -List.map_tail, ← List.map_drop, ← List.map_take, ← List.map_reverse, ← List.map_append, $defs,*])
       all_goals repeat' (split <;> (try simp_all [bindState, eqVal, tolean.IR.IntOp.apply,
-        tolean.IR.Order.apply, tolean.IR.Division.apply, ExprExt.apply, listItems?, StringPart.toStr, StringMethod.apply, Eval.oneString, Eval.noArgs, Eval.stringAndInt, Eval.oneInt, Eval.sliceArgs, Eval.padArgs, Eval.stringAt, Eval.intArg, Eval.asciiCase, NumberOp.apply,
+        tolean.IR.Order.apply, tolean.IR.Division.apply, ExprExt.apply, listItems?, StringPart.toStr, StringMethod.apply, Eval.oneString, Eval.noArgs, Eval.stringAndInt, Eval.oneInt, Eval.sliceArgs, Eval.padArgs, Eval.padArgs.lengthArg, Eval.stringAt, Eval.intArg, Eval.asciiCase, NumberOp.apply,
         NumberTest.apply, tagOf, Eval.Val.typeOf, Eval.Env.set, Eval.getProp, Eval.getKey_ofString, Eval.getPath,
         Eval.objectPrototypeNames, List.lookup, DeclRef.beq_def, -List.map_map, -List.map_tail, ← List.map_drop, ← List.map_take, ← List.map_reverse, ← List.map_append,
         -Bool.if_true_left, -Bool.if_false_right, -Bool.if_false_left, -Bool.if_true_right, $defs,*]))
