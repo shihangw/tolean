@@ -4947,6 +4947,25 @@ def Ctx.reexportInterfaces (c : Ctx) (listed : List (List ImportName × String))
     let iface ← c.interfaces.lookup file
     return (names, iface)
 
+/-- Names forwarded by explicit value exports retain their original metadata.
+The declaration checker reports missing exports before this table is built. -/
+def Ctx.forwardedValues {α : Type} (c : Ctx) (m : Module)
+    (exports : Module → String → Bool) (select : Interface → String → Option α) : List α :=
+  ((reexportListed m).flatMap (·.1)).filterMap fun n =>
+    if n.typeOnly || exports m n.name then none
+    else do
+      let target ← Eval.exportSource? c.file m n.name
+      let iface ← c.interfaces.lookup target
+      select iface n.name
+
+def Ctx.forwardedFunctions (c : Ctx) (m : Module) : List FnInfo :=
+  c.forwardedValues m Eval.exportsFunction fun iface name =>
+    iface.functions.find? (·.name == name)
+
+def Ctx.forwardedEnums (c : Ctx) (m : Module) : List EnumInfo :=
+  c.forwardedValues m Eval.exportsEnum fun iface name =>
+    (iface.stringEnum? name).map (·.1)
+
 def Ctx.interface (c : Ctx) (usesNumber : Bool) (numberVar : String)
     (listed : List (List ImportName × String) := []) : Interface :=
   { functions := c.functions.filter fun f => f.exported && f.file == c.file,
@@ -4958,6 +4977,10 @@ def Ctx.interface (c : Ctx) (usesNumber : Bool) (numberVar : String)
     enums := c.reachableEnums,
     unions := c.reachableUnions,
     usesNumber, numberVar, target := c.target, errorClasses := !c.errorClasses.isEmpty }
+
+def Ctx.moduleInterface (c : Ctx) (m : Module) (usesNumber : Bool) (numberVar : String) : Interface :=
+  let own := c.interface usesNumber numberVar (reexportListed m)
+  { own with functions := own.functions ++ c.forwardedFunctions m }
 
 def lineStarts (src : Array Char) : Array Nat := Id.run do
   let mut starts := #[0]
@@ -5027,7 +5050,7 @@ def translateFile (file source : String) (target : Edition := .default)
   match (translateDecls m).run ctx with
   | .error e _ => .error e
   | .ok decls ctx' => return (m, names, decls,
-      (ctx'.withExports (exportListed m)).interface usesNumber names.typeParam (reexportListed m))
+      (ctx'.withExports (exportListed m)).moduleInterface m usesNumber names.typeParam)
 
 /-- Parse and translate `source`, the TypeScript file `file`: the parsed
 module, the names that the printer needs, and the Tolean IR. -/

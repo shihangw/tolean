@@ -280,6 +280,10 @@ def sections : List Section := [
     ``Proof.bodySimIdx_of, ``Proof.indexedCallbackOf_some, ``Proof.listMethod?_map,
     ``Proof.listMethod?_ne_mapIdx, ``Proof.listMethod?_ne_sortWith]⟩,
   -- §16 ECMAScript Language: Scripts and Modules {#sec-ecmascript-language-scripts-and-modules}
+  ⟨"sec-source-text-module-record-resolveexport", "16.2.1.6.3", "ResolveExport",
+    [``Eval.removeModule_shorter, ``Eval.exportedRefOf_own, ``Eval.exportedRefOf_forward,
+     ``Eval.lookup_remove_other, ``Eval.lookup_remove_self, ``Eval.exportedRefOf_origin,
+     ``Eval.exportedEnum_own, ``Eval.exportedEnum_forward]⟩,
   ⟨"sec-source-text-module-record-initialize-environment", "16.2.1.6.4", "InitializeEnvironment",
     [``Proof.module_resolves, ``Proof.declareTopLevel_ok, ``Proof.declareTopLevel_classes,
     ``Proof.declareTopLevel_global, ``Proof.translateDecl_ok,
