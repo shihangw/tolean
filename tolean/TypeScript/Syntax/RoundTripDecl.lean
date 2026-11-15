@@ -311,7 +311,7 @@ theorem notIdent_assignOp (op : AssignOp) : ∃ k ks, symbol op.symbol = k :: ks
 /-- No `as` or `satisfies` follows one of `Parse.declarationWords` at the left
 edge of `e`, where it would make a name the second token of `e`. -/
 def Expr.spineOK : Expr → Bool
-  | .member _ o _ | .optMember _ o _ | .index _ o _ | .call _ o _ | .postfix _ _ o | .binary _ _ o _
+  | .member _ o _ | .optMember _ o _ | .index _ o _ | .optIndex _ o _ | .call _ o _ | .postfix _ _ o | .binary _ _ o _
   | .cond _ o _ _ | .assign _ _ o _ => o.spineOK
   | .asConst _ o | .satisfies _ o _ => !Parse.refusedBeforeType o && o.spineOK
   | _ => true
@@ -339,11 +339,12 @@ theorem Expr.eq_ident_of_tokens : ∀ (e : Expr) {n : String}, e.tokens = [.iden
       | (rw [Expr.tokens_member] at this; simp at this <;> first | omega | exact absurd this (Expr.tokens_ne_nil o))
       | (rw [Expr.tokens_optMember] at this; simp at this <;> first | omega | exact absurd this (Expr.tokens_ne_nil o))
       | (rw [Expr.tokens_postfix] at this; simp at this <;> first | omega | exact absurd this (Expr.tokens_ne_nil o))
-  | .index _ o _, _, h | .call _ o _, _, h | .asConst _ o, _, h | .satisfies _ o _, _, h => by
+  | .index _ o _, _, h | .optIndex _ o _, _, h | .call _ o _, _, h | .asConst _ o, _, h | .satisfies _ o _, _, h => by
     have := congrArg List.length h
     have ho := List.length_pos_iff.mpr (Expr.tokens_ne_nil o)
     first
       | (rw [Expr.tokens_index] at this; simp at this <;> first | omega | exact absurd this (Expr.tokens_ne_nil o))
+      | (rw [Expr.tokens_optIndex] at this; simp at this <;> first | omega | exact absurd this (Expr.tokens_ne_nil o))
       | (rw [Expr.tokens_call] at this; simp at this <;> first | omega | exact absurd this (Expr.tokens_ne_nil o))
       | (rw [Expr.tokens_asConst] at this; simp at this <;> first | omega | exact absurd this (Expr.tokens_ne_nil o))
       | (rw [Expr.tokens_satisfies] at this; simp at this <;> first | omega | exact absurd this (Expr.tokens_ne_nil o))
@@ -402,6 +403,9 @@ theorem Expr.second : ∀ (e : Expr) {n : String} {k : TokenKind} {r : List Toke
   | .index sp o i, _, _, _, hs, hn, h => by
     rw [Expr.tokens_index, List.append_assoc] at h
     exact second_append rfl (by simp [NotIdent]) (Expr.tokens_ne_nil o) (fun h' => Expr.second o (by simpa [Expr.spineOK] using hs) hn h') h
+  | .optIndex sp o i, _, _, _, hs, hn, h => by
+    rw [Expr.tokens_optIndex, List.append_assoc] at h
+    exact second_append rfl (by simp [NotIdent]) (Expr.tokens_ne_nil o) (fun h' => Expr.second o (by simpa [Expr.spineOK] using hs) hn h') h
   | .call sp c as, _, _, _, hs, hn, h => by
     rw [Expr.tokens_call, List.append_assoc] at h
     exact second_append rfl (by simp [NotIdent]) (Expr.tokens_ne_nil c) (fun h' => Expr.second c (by simpa [Expr.spineOK] using hs) hn h') h
@@ -450,7 +454,7 @@ theorem Expr.spineOK_wf {T : Edition} : ∀ (e : Expr) (level : Level), e.wfAt T
   | .member _ o _, level, h | .index _ o _, level, h | .call _ o _, level, h => by
     have : o.wfAt T .lhs = true := by cases level <;> simp_all [Expr.wfAt]
     simpa [Expr.spineOK] using Expr.spineOK_wf o .lhs this
-  | .optMember _ o _, level, h => by
+  | .optMember _ o _, level, h | .optIndex _ o _, level, h => by
     have : o.wfAt T .lhs = true := by cases level <;> simp_all [Expr.wfAt]
     simpa [Expr.spineOK] using Expr.spineOK_wf o .lhs this
   | .postfix _ _ o, level, h => by
