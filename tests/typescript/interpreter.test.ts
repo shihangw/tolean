@@ -702,6 +702,34 @@ test('an absent optional receiver skips the index expression', async () => {
   expect(value === undefined ? 'no value' : canonical(value)).toBe(canonical(encode(mod.f(null))));
 });
 
+test('optional indexed member access handles every kind of number index', async () => {
+  const source = 'export interface Item { readonly value: bigint; }\nexport function f(xs: ReadonlyArray<Item> | null, i: number): bigint { return xs?.[i]?.value ?? 17n; }';
+  const arrays: Array<unknown> = [null, undefined, [], [{ value: 3n }, { value: 5n }, { value: 8n }]];
+  const indexes = [NaN, Infinity, -Infinity, -0, 0, 1, 2, 3, -1, 0.5, Number.MAX_SAFE_INTEGER];
+  const args = arrays.flatMap(xs => indexes.map(i => [xs, i]));
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: [{ source, calls: args.map(a => ({
+      function: 'f', args: a.map(encode),
+    })) }] }),
+    encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (result === undefined || !result.parsed) return;
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-optional-number-index-'));
+  const path = join(dir, 'index.mjs');
+  writeFileSync(path, ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+  }).outputText);
+  const mod = (await import(pathToFileURL(path).href)) as { f: (...xs: Array<unknown>) => unknown };
+  for (const [j, a] of args.entries()) {
+    const value = result.results[j]?.value;
+    expect(value === undefined ? 'no value' : canonical(value))
+      .toBe(canonical(encode(mod.f(...a))));
+  }
+});
+
 // JS binds every function declaration of a block when the block starts, so a
 // second declaration of `g` replaces the first for both calls, and Node gives
 // 20n. The interpreter binds each where it stands, so it must give no value.

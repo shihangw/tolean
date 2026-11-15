@@ -119,6 +119,18 @@ def listItems? : Val N → Option (List (Val N))
   | .list items => some items
   | _ => none
 
+/-- Read a number index only when an optional array is present. -/
+@[simp] def optionalNumberIndex : List (Val N) → Option (Val N)
+  | [.null, _] | [.undefined, _] => some .undefined
+  | [.list xs, .num i] => some (Eval.elementAt xs (JSNumber.toSafeInt i))
+  | _ => none
+
+/-- Read a literal index only when its optional array or tuple is present. -/
+@[simp] def optionalLiteralIndex (k : Nat) : List (Val N) → Option (Val N)
+  | [.null] | [.undefined] => some .undefined
+  | [.list xs] => some (Eval.elementAt xs (some k))
+  | _ => none
+
 /-- An operation that TypeScript adds, on the values of its arguments. The
 operation is matched before its arguments, so a proof about one operation
 does not reduce the argument cases of every other one. -/
@@ -225,13 +237,11 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
     | .indexLit k => match args with
       | [.list xs] => some (Eval.elementAt xs (some k))
       | _ => none
-    | .optIndexLit k => match args with
-      | [.null] | [.undefined] => some .undefined
-      | [.list xs] => some (Eval.elementAt xs (some k))
-      | _ => none
+    | .optIndexLit k => optionalLiteralIndex k args
     | .indexNumber => match args with
       | [.list xs, .num i] => some (Eval.elementAt xs (JSNumber.toSafeInt i))
       | _ => none
+    | .optIndexNumber => optionalNumberIndex args
     -- `JSNumber.countUp k b`: the values that the interpreter's counted loop
     -- visits. It has no value where `countUp?` gives none.
     | .countUp k => match args with

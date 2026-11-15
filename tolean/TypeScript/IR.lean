@@ -211,6 +211,8 @@ inductive ExprExt where
   /-- `(JSNumber.elementAt? xs i)`, on `xs` and `i`: `xs[i]` with a number
   `i`. -/
   | indexNumber
+  /-- An optional array binds its value before reading a number index. -/
+  | optIndexNumber
   /-- `(JSNumber.countUp (k : Int) b)`, on `b`: the values of `i` in
   `for (let i = k; i < b; i++)`. -/
   | countUp (k : Int)
@@ -539,6 +541,8 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
   | .indexLit k, [xs] => s!"{argument xs}[{k}]?"
   | .optIndexLit k, [xs] => s!"({argument xs}.bind (·[{k}]?))"
   | .indexNumber, [xs, i] => s!"({js}.elementAt? {argument xs} {argument i})"
+  | .optIndexNumber, [xs, i] =>
+    s!"({argument xs}.bind (fun _xs' => {js}.elementAt? _xs' {argument i}))"
   | .countUp k, [b] => s!"({js}.countUp ({k} : {leanName names "Int"}) {argument b})"
   | .at k, [xs] =>
     if 0 ≤ k then s!"{argument xs}[{k.toNat}]?"
