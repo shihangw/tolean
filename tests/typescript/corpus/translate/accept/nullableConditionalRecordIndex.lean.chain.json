@@ -1,0 +1,44 @@
+{"tolean": "0.3.0",
+ "target": "ES2024",
+ "sources":
+ [{"sha256": "f518a806a170431bf74edadc89e5b64f0b97b8b099796609e859c1ddee9c81e4",
+   "path": "corpus/translate/accept/nullableConditionalRecordIndex.ts"}],
+ "output":
+ {"sha256": "8f0c3c5e415b3ef657c17cf6c3e386249b1b683f84a6c699d41ebe143ce96621",
+  "path": "corpus/translate/accept/nullableConditionalRecordIndex.lean"},
+ "nodes":
+ [{"status": "tested",
+   "label": "TypeScript parser",
+   "kind": "parser",
+   "id": "parser",
+   "evidence":
+   {"reference": "tsc", "check": "typescript-parse", "by": "tolean"}},
+  {"status": "tested",
+   "label": "TypeScript translator",
+   "kind": "translator",
+   "id": "translator",
+   "evidence":
+   {"reference": "fixed corpus output and random programs",
+    "check": "typescript-translate",
+    "by": "tolean"}},
+  {"status": "tested",
+   "module": "tolean.TypeScript.Spec.Number",
+   "label": "JavaScript number laws",
+   "kind": "spec",
+   "id": "spec",
+   "evidence":
+   {"reference": "Node 22 and 24",
+    "check": "typescript-engines",
+    "by": "tolean"}},
+  {"status": "trusted",
+   "label": "JavaScript engine",
+   "kind": "runtime",
+   "id": "runtime"}],
+ "module": "Test",
+ "language": "typescript",
+ "edges":
+ [["source", "parser"],
+  ["parser", "translator"],
+  ["translator", "output"],
+  ["spec", "output"],
+  ["runtime", "output"]]}
