@@ -3,6 +3,7 @@ import tolean.Version
 import tolean.TypeScript.Edition
 import tolean.TypeScript.Syntax.Parser
 import tolean.TypeScript.IR
+import tolean.TypeScript.IR.Equality
 import tolean.TypeScript.Spec.Eval
 
 /-!
@@ -441,7 +442,7 @@ structure LocalFn where
   body : Stmt
   /-- The lifted body as the declaration translated it, so that each call can
   check that it translates it the same way. -/
-  printed : String := ""
+  translated : Option IR.Body := none
 
 /-- The names in scope, in the order they were declared, and the functions
 that a call may name. -/
@@ -2886,7 +2887,8 @@ def translateArrayMethod (fuel : Nat) (env : Env) (expected : Option Ty) (s : Sp
     let b ← translateExpr fuel inner (callbackExpected .map expected) body
     let type ← callbackResult s body.span .map elem b.type
     let info : IR.CallbackInfo IR.TyExt :=
-      { span := s, result := b.type.lean, scope := env.locals.map fun l => (l.name, l.type.lean) }
+      { span := s, result := b.type.lean,
+        scope := (env.locals.filter fun l => l.binding != .fn).map fun l => (l.name, l.type.lean) }
     return ⟨.listMethod (.mapIdx q.name) xs.value p.name elem.lean b.value info, false, type⟩
   let (p, body) ← orReject (callbackOf args) s
     ("an array method here takes one arrow function with one parameter, such as " ++
@@ -2901,7 +2903,8 @@ def translateArrayMethod (fuel : Nat) (env : Env) (expected : Option Ty) (s : Sp
   let b ← translateExpr fuel inner (callbackExpected method expected) body
   let type ← callbackResult s body.span method elem b.type
   let info : IR.CallbackInfo IR.TyExt :=
-    { span := s, result := b.type.lean, scope := env.locals.map fun l => (l.name, l.type.lean) }
+    { span := s, result := b.type.lean,
+      scope := (env.locals.filter fun l => l.binding != .fn).map fun l => (l.name, l.type.lean) }
   return ⟨.listMethod method xs.value p.name elem.lean b.value info, false, type⟩
 
 /-- `xs[i]` on an array whose code is `o` and whose elements have the type
@@ -2993,7 +2996,8 @@ def translateReduce (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (
   unless b.type == accType do
     reject body.span "the callback of 'reduce' must give a value of the type of the initial value"
   let info : IR.CallbackInfo IR.TyExt :=
-    { span := s, result := accType.lean, scope := env.locals.map fun l => (l.name, l.type.lean) }
+    { span := s, result := accType.lean,
+      scope := (env.locals.filter fun l => l.binding != .fn).map fun l => (l.name, l.type.lean) }
   return ⟨.listFold xs.value i.value a.name p.name elem.lean b.value info, false, accType⟩
 
 /-- `xs.toSorted((a, b) => e)` and `[...xs].sort((a, b) => e)`:
@@ -3038,7 +3042,8 @@ def translateSort (fuel : Nat) (env : Env) (s : Span) (recv : Expr) (method : St
       unless t == .bigint || t == .string || t == .number do
         reject body.span "a key of a comparator must be a bigint, a string or a number"
   let info : IR.CallbackInfo IR.TyExt :=
-    { span := s, result := Ty.number.lean, scope := env.locals.map fun l => (l.name, l.type.lean) }
+    { span := s, result := Ty.number.lean,
+      scope := (env.locals.filter fun l => l.binding != .fn).map fun l => (l.name, l.type.lean) }
   return ⟨.listMethod (.sortWith q.name) xs.value p.name elem.lean b.value info, false, xs.type⟩
 
 /-- `m.get(k)` and `m.has(k)` on a map. An owned map may be read here, as
@@ -3509,7 +3514,7 @@ def translateForOfPattern (items : TM (Option (Ty × IR.Expr))) (kBody : Env →
   let info : IR.LoopInfo :=
     { span := s, elem := elemType.lean,
       stateTypes := names.filterMap fun n => (env.lookup n).map (·.type.lean),
-      scope := (env.locals.filter fun l => !names.contains l.name).map fun l => (l.name, l.type.lean),
+      scope := (env.locals.filter fun l => !names.contains l.name && l.binding != .fn).map fun l => (l.name, l.type.lean),
       breaks, returns := if returns then some (leanResult err throws returnType) else none }
   return .fold names x step loopItems (← kRest) info
 
@@ -3582,7 +3587,7 @@ def localCall? (env : Env) : Expr → Option (List Expr × LocalFn)
 /-- The scope of the body of `fn`, where `env` is the scope at a call: its
 parameters and the locals it captures, and the functions of `env`. -/
 def LocalFn.bodyEnv (fn : LocalFn) (env : Env) : Env :=
-  { env with locals := fn.params ++ fn.captured, localFns := [] }
+  { env with locals := fn.params ++ fn.captured }
 
 /-- What the body of `fn` ends in: the tuple of the locals it changes, when
 it returns nothing, or a `return`. -/
@@ -3593,12 +3598,25 @@ def LocalFn.tail (fn : LocalFn) : Tail :=
 
 /-- The parameters of the lifted function: the captured locals, then its own. -/
 def LocalFn.leanParams (fn : LocalFn) : List (String × IR.Ty) :=
-  (fn.captured ++ fn.params).map fun l => (l.name, l.type.lean)
+  (fn.captured ++ fn.params).map fun l =>
+    (l.name, if l.binding == .fn then .ext .closure else l.type.lean)
 
 /-- The result type of the lifted function: what it returns, or the tuple of
 the locals it changes. -/
+def localReturnIdent : List Stmt → Option (List Stmt × String)
+  | [.returnStmt _ (some (.ident _ name))] => some ([], name)
+  | s :: rest => (fun (ss, name) => (s :: ss, name)) <$> localReturnIdent rest
+  | [] => none
+
+/-- A state-writing local can return one of the captured variables that its
+state tuple already contains. The caller reads the returned value from that
+tuple instead of copying the same value into it twice. -/
+def LocalFn.stateReturn (fn : LocalFn) : Option (List Stmt × String) :=
+  if fn.ret.isSome && !fn.changes.isEmpty then localReturnIdent (blockStatements fn.body)
+  else none
+
 def LocalFn.leanRet (fn : LocalFn) : IR.Ty :=
-  match fn.ret with
+  match if fn.stateReturn.isSome then none else fn.ret with
   | some t => t.lean
   | none =>
     match fn.changes.map fun c => ((fn.captured.find? (·.name == c)).map (·.type.lean)).getD .int with
@@ -3640,10 +3658,16 @@ def translateLocalHead (env : Env) (s : Span) (name : String) (typeParams : List
   let captured := env.locals.filter fun l => body.mentions l.name
   for l in captured do
     if l.binding == .fn then
-      reject s s!"a local function may not call another local function, such as '{l.name}', yet"
+      requireFeature s .localSiblingCalls
+      let some sibling := env.localFns.find? (·.name == l.name)
+        | reject s s!"the local function '{l.name}' is not declared here"
+      if sibling.captured.any (·.binding == .fn) then
+        reject s "a called sibling may not call another local function yet"
+      unless sibling.captured.all (fun c => body.mentions c.name && !own.any (·.name == c.name)) do
+        reject s "a sibling call requires each captured variable to be named in its caller"
     if l.binding == .array || l.binding == .map then
       reject s s!"a local function may not use '{l.name}', which the function around it owns"
-  let changed := stmtsChanges [] (blockStatements body)
+  let changed := stmtsChanges env.fnChanges (blockStatements body)
   let changes := (captured.filter fun l => changed.contains l.name).map (·.name)
   for c in changes do
     unless (captured.find? (·.name == c)).any (·.binding == .«let») do
@@ -3661,8 +3685,14 @@ def translateLocalHead (env : Env) (s : Span) (name : String) (typeParams : List
     if changes.isEmpty then
       reject s "a local function that returns nothing must change a let local of the function around it"
   | some _ =>
-    if captured.any fun l => body.assigns l.name || body.mutates l.name then
-      reject s "a local function that returns a value may not change a variable of the function around it yet"
+    if !changes.isEmpty then
+      unless captured.any (fun l => body.assigns l.name || body.mutates l.name) do
+        reject s "a value-returning sibling caller must write a captured variable directly"
+      requireFeature s .localReturnState
+      let some (_, result) := localReturnIdent (blockStatements body)
+        | reject s "a state-writing local function must end by returning a captured variable"
+      unless changes.contains result && (captured.find? (·.name == result)).any (fun l => some l.type == ret) do
+        reject s "a state-writing local function must return a changed captured variable of its return type"
   return { name, ref := ⟨ctx.file, ctx.currentFunction ++ "." ++ name⟩, captured, changes, params := own,
             ret, body }
 
@@ -3700,7 +3730,7 @@ def localCallProblem (env : Env) (fn : LocalFn) (args : List Expr) : Option Stri
       s!"body of '{fn.name}' names '{name}' too; rename one of them")
   else if !(fn.changes.all (fun c => fn.captured.any (·.name == c)) &&
       fn.captured.all (fun l => fn.changes.contains l.name ||
-        !(stmtsChanges [] (blockStatements fn.body)).contains l.name)) then
+        !(stmtsChanges (fn.bodyEnv env).fnChanges (blockStatements fn.body)).contains l.name)) then
     some s!"'{fn.name}' changes a local that it does not return"
   else if fn.ret.isSome && fn.captured.any (fun l => fn.body.assigns l.name || fn.body.mutates l.name) then
     some s!"'{fn.name}' returns a value and changes a variable of the function around it"
@@ -3717,7 +3747,23 @@ def translateLocalCall (env : Env) (s : Span) (fn : LocalFn) (args : List Expr) 
   | none => pure ()
   let outs ← translateLocalArgs env fn.params args
   let b ← withLocalBody (fn.ret.getD .boolean) body
-  unless reprStr b == fn.printed do reject s s!"a call of '{fn.name}' translates its body another way"
+  unless decide (some b = fn.translated) do reject s s!"a call of '{fn.name}' translates its body another way"
+  return (b, fn.captured.map (fun l => IR.Expr.var l.name) ++ outs)
+
+/-- Check a state-writing local call whose result is in its state tuple. -/
+def translateLocalStateCall (env : Env) (s : Span) (fn : LocalFn) (args : List Expr)
+    (result : String) (body : TM IR.Body) : TM (IR.Body × List IR.Expr) := do
+  unless fn.captured.any (fun l => fn.body.assigns l.name || fn.body.mutates l.name) do
+    reject s "the local function must write a captured variable"
+  unless fn.changes.contains result && (fn.bodyEnv env).has result do
+    reject s "the local return must name a changed captured variable"
+  match localCallProblem env { fn with ret := none } args with
+  | some why => reject s why
+  | none => pure ()
+  let outs ← translateLocalArgs env fn.params args
+  let b ← withLocalBody (fn.ret.getD .boolean) body
+  unless decide (some b = fn.translated) do
+    reject s s!"a call of '{fn.name}' translates its body another way"
   return (b, fn.captured.map (fun l => IR.Expr.var l.name) ++ outs)
 
 /-- A borrowing global function called as a statement. -/
@@ -3787,6 +3833,11 @@ def translateStatements (fuel : Nat) (env : Env) (tail : Tail) (statements : Lis
       if let some (args, fn) := localCall? env v then
         let some r := fn.ret | reject s s!"'{fn.name}' returns nothing"
         unless r == (← get).returnType do reject s "the call must have the function's return type"
+        if let some (ss, result) := fn.stateReturn then
+          let (b, outs) ← translateLocalStateCall env s fn args result
+            (translateStatements fuel (fn.bodyEnv env) (.state fn.changes) ss)
+          return .letCall fn.changes fn.ref fn.name fn.closure fn.leanParams fn.leanRet false b outs
+            (tail.returnBody (if (← get).throws then IR.Expr.pure (.var result) else .var result))
         let (b, outs) ← translateLocalCall env s fn args
           (translateStatements fuel (fn.bodyEnv env) fn.tail (blockStatements fn.body))
         let code := IR.Expr.var fn.name
@@ -3834,8 +3885,10 @@ def translateStatements (fuel : Nat) (env : Env) (tail : Tail) (statements : Lis
     | .funDecl s name typeParams params returnType body =>
       let fn ← translateLocalHead env s name typeParams params returnType body tail
       let b ← withLocalBody (fn.ret.getD .boolean)
-        (translateStatements fuel (fn.bodyEnv env) fn.tail (blockStatements fn.body))
-      let fn := { fn with printed := reprStr b }
+        (match fn.stateReturn with
+        | some (ss, _) => translateStatements fuel (fn.bodyEnv env) (.state fn.changes) ss
+        | none => translateStatements fuel (fn.bodyEnv env) fn.tail (blockStatements fn.body))
+      let fn := { fn with translated := some b }
       let env' ← declare env s name .fn (fn.ret.getD .boolean)
       let env' := { env' with localFns := env'.localFns ++ [fn] }
       return .letLifted name (IR.Expr.closure (params.map (·.name)) body)
@@ -3886,6 +3939,12 @@ def translateVariable (fuel : Nat) (env : Env) (s : Span) (d : VarDecl) (rest : 
     let some r := fn.ret | reject s s!"'{fn.name}' returns nothing"
     let declared ← translateAnnotation d.type
     unless declared.all (· == r) do reject s "the call must have the declared type"
+    if let some (ss, result) := fn.stateReturn then
+      let (b, outs) ← translateLocalStateCall env s fn args result
+        (translateStatements fuel (fn.bodyEnv env) (.state fn.changes) ss)
+      let env' ← declare env s d.name (if d.kind == .const then .const else .«let») r
+      return .letCall fn.changes fn.ref fn.name fn.closure fn.leanParams fn.leanRet false b outs
+        (.let d.name (.var result) (← translateStatements fuel env' tail rest))
     let (b, outs) ← translateLocalCall env s fn args
       (translateStatements fuel (fn.bodyEnv env) fn.tail (blockStatements fn.body))
     let env' ← declare env s d.name (if d.kind == .const then .const else .«let») r
@@ -4155,7 +4214,7 @@ def translateLoop (fuel : Nat) (env : Env) (s : Span) (head : LoopHead) (body : 
   let info : IR.LoopInfo :=
     { span := s, elem := elemType.lean,
       stateTypes := names.filterMap fun n => (env.lookup n).map (·.type.lean),
-      scope := (env.locals.filter fun l => !names.contains l.name).map fun l => (l.name, l.type.lean),
+      scope := (env.locals.filter fun l => !names.contains l.name && l.binding != .fn).map fun l => (l.name, l.type.lean),
       breaks, returns := if returns then some (leanResult err throws returnType) else none }
   return .fold names element bodyOut loopItems (← translateStatements fuel env tail rest) info
 
@@ -5098,7 +5157,12 @@ def translateFile (file source : String) (target : Edition := .default)
       interfaces := deps.map fun (f, d) => (f, d.interface) }
   match (translateDecls m).run ctx with
   | .error e _ => .error e
-  | .ok decls ctx' => return (m, names, decls,
+  | .ok decls ctx' =>
+    -- Array entries introduce number indices even when the source never
+    -- names a number. Check the IR so map entries stay nongeneric.
+    let usesNumber := usesNumber || decls.any (tolean.IR.Decl.anyOp (· == .arrayEntries))
+    let names := { names with generic := usesNumber }
+    return (m, names, decls,
       (ctx'.withExports (exportListed m)).interface usesNumber names.typeParam (reexportListed m))
 
 /-- Parse and translate `source`, the TypeScript file `file`: the parsed
