@@ -1,4 +1,4 @@
-// expect: number-key certificates currently require one key
+// certify: required
 interface Pair {
   readonly x: number;
   readonly y: number;

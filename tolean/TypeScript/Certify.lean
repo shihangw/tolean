@@ -266,6 +266,16 @@ inductive CallbackKind where
 its type, the body and what a certificate needs to know about it. -/
 abbrev Callback := CallbackKind × String × IR.Ty × IR.Expr × IR.CallbackInfo IR.TyExt
 
+/-- The type at a comparator's field path, in the translated declarations. -/
+def keyPathType (decls : List IR.Decl) : IR.Ty → List String → Option IR.Ty
+  | ty, [] => some ty
+  | .struct ref, field :: rest => do
+    let ty ← decls.findSome? fun
+      | .struct name _ fields => if name == ref.name then fields.lookup field else none
+      | _ => none
+    keyPathType decls ty rest
+  | _, _ => none
+
 mutual
 
 /-- `e` compares or subtracts numbers. A comparator of keys holds such a
@@ -483,10 +493,12 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         (method matches .list (.sortWith _)) && comparesNumbers cb
     | _ => false
   let laws := laws ++ if numericSorts then s!" [tolean.TypeScript.NumberOrderLaws {nv}]" else ""
-  let differences := decls.any fun
-    | .function _ _ _ body => (bodyCallbacks body).any fun (method, _, _, cb, _) =>
-        (method matches .list (.sortWith _)) && (cb matches .ext (.numberOp .sub) _)
-    | _ => false
+  let differences := numericSorts && (functionsOf m).any fun (_, _, _, body) =>
+    ((stmtsOf body).flatMap stmtExprs).any fun e => (subExprs e).any fun
+      | .call _ (.member _ _ method) [.arrow _ _ [a, b] cb] =>
+        (method == "sort" || method == "toSorted") &&
+          ((Translate.keyComparator? a.name b.name cb).getD []).any (·.2.1)
+      | _ => false
   let laws := laws ++ if differences then s!" [tolean.TypeScript.SpecialValueLaws {nv}]" else ""
   let generic := s!"\{{nv} : Type} [tolean.TypeScript.JSNumber {nv}]{laws}"
   -- A generic translated definition takes the model by name, as the
@@ -801,8 +813,6 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           | throw s!"{file}: the comparator in {name} does not compare keys"
         let elemTy := elem.print names
         if comparesNumbers cbBody then
-          let [(path, difference, up)] := keys
-            | throw s!"{file}: number-key certificates currently require one key in {name}"
           let .value (.listMethod (.sortWith _) items _ _ _ _) := outBody
             | throw s!"{file}: the sorted list must be a parameter returned directly in {name}"
           let some input := (match items with
@@ -811,6 +821,64 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
             | throw s!"{file}: the sorted list must be a parameter returned directly in {name}"
           unless outParams.any (fun (n, _) => n == input) && scope.isEmpty do
             throw s!"{file}: the sorted list must be a parameter and its comparator must not capture locals in {name}"
+          if keys.length > 1 then
+            let subtype := "{ x : " ++ elemTy ++ " // x ∈ items }"
+            let mut hypotheses := ""
+            let mut instances := ""
+            let mut facts := ""
+            let mut comparisons : List String := []
+            for ((path, difference, up), ki) in keys.zipIdx do
+              let some ty := keyPathType decls elem path
+                | throw s!"{file}: cannot read a comparator key type in {name}"
+              let key := s!"(fun ({param} : {elemTy}) => {".".intercalate (param :: path)})"
+              let numeric := ty matches .number
+              if numeric then
+                let hn := s!"hkeys{ki}"
+                let hname := s!"{name}_sort_precondition{ki}"
+                if r.idents.contains hname then
+                  throw s!"{file}: reserved certificate hypothesis name {hname}"
+                let predicate := if difference then "isFinite" else "isNaN"
+                let truth := if difference then "true" else "false"
+                let condition := fun xs => s!"∀ x ∈ {xs}, tolean.TypeScript.JSNumber.{predicate} ({key} x) = {truth}"
+                hypotheses := hypotheses ++ s!" ({hn} : {condition "items"})"
+                obligations := obligations ++ [(hname, condition input)]
+                inputConditions := inputConditions ++ [((outParams.map (·.1)).idxOf input, elem, path, difference)]
+                let validity := if difference then
+                  s!"tolean.TypeScript.SpecialValueLaws.isFinite_not_nan ({hn} a.val a.property)"
+                  else s!"{hn} a.val a.property"
+                instances := instances ++
+                  s!"    letI : Std.TransCmp (fun (a b : {subtype}) => tolean.TypeScript.Proof.numberOrder ({key} a.val) ({key} b.val)) :=\n" ++
+                  s!"      tolean.TypeScript.Proof.transCmp_numberOrder (fun (a : {subtype}) => {key} a.val) (fun a => {validity})\n"
+                facts := facts ++ s!"    have h{ki}a := {hn} a.val a.property\n    have h{ki}b := {hn} b.val b.property\n"
+              let cmp := if numeric then
+                s!"(fun (a b : {subtype}) => tolean.TypeScript.Proof.numberOrder ({key} a.val) ({key} b.val))"
+                else s!"({r.full "compareOn"} (fun (a : {subtype}) => {key} a.val))"
+              comparisons := comparisons ++ [if up then cmp else s!"(fun (a b : {subtype}) => {cmp} b a)"]
+            let o := match comparisons.reverse with
+              | [] => "(fun _ _ => Ordering.eq)"
+              | last :: rest => rest.foldl (fun acc c => s!"({r.full "compareLex"} {c} {acc})") last
+            loopLemmas := loopLemmas.push (r.cert lemmaName)
+            thms := thms.push <|
+              s!"theorem {lemmaName} {generic} (fs : List (tolean.DeclRef × List String × tolean.TypeScript.IR.Body)){hfs}\n" ++
+              s!"    (fuel : Nat) (ρ : Env {nv}) (items : {itemsTy}){hypotheses} :\n" ++
+              s!"    tolean.TypeScript.Eval.sortValues (tolean.TypeScript.IR.Expr.evalCompare fs {fuel} ρ {str param} {str other} ({term cbBody}))\n" ++
+              s!"      (List.map {encX} items) = some (List.map {encX} (tolean.TypeScript.JSNumber.sortWith {fn} items)) := by\n" ++
+              s!"  refine tolean.TypeScript.Proof.sortValues_sortWith_on fs {fuel} ρ {str param} {str other} _ {encX} {fn} ?_ (fun _ => by simp) items ?_\n" ++
+              s!"  · intro x y\n    {casesOn decls [("x", elem), ("y", elem)]}link_tac [{simpSet}]\n" ++
+              "  ·\n" ++ instances ++
+              s!"    apply tolean.TypeScript.Proof.consistentOn_of_transCmp_on items {o}\n" ++
+              "    intro a b\n" ++ facts ++
+              "    simp only []\n    repeat' split\n" ++
+              "    all_goals simp_all [tolean.TypeScript.Proof.numberOrder, tolean.TypeScript.Proof.compareSign_sub,\n" ++
+              "      tolean.TypeScript.compareSign_one, tolean.TypeScript.compareSign_zero,\n" ++
+              "      tolean.TypeScript.compareSign_neg_one, tolean.TypeScript.compareSign_neg_zero,\n" ++
+              "      compareLex, compareOn, Ordering.then, tolean.TypeScript.JSString.compare_of_lt,\n" ++
+              "      tolean.TypeScript.JSString.compare_of_gt, tolean.TypeScript.JSString.compare_of_eq,\n" ++
+              "      tolean.TypeScript.Proof.int_compare_of_lt, tolean.TypeScript.Proof.int_compare_of_gt,\n" ++
+              "      tolean.TypeScript.Proof.int_compare_of_eq]"
+            continue
+          let [(path, difference, up)] := keys
+            | throw s!"{file}: empty comparator keys in {name}"
           let key := s!"(fun ({param} : {elemTy}) => {".".intercalate (param :: path)})"
           let hname := s!"{name}_sort_precondition"
           if r.idents.contains hname then
@@ -1054,7 +1122,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           | throw s!"{file}: a sort precondition can only be passed from a list parameter in {name}"
         unless outParams.any (fun (n, _) => n == input) do
           throw s!"{file}: a sort precondition can only be passed from a list parameter in {name}"
-        let hname := s!"{name}_sort_precondition"
+        let hname := s!"{name}_sort_precondition{obligations.length}"
         if r.idents.contains hname then
           throw s!"{file}: reserved certificate hypothesis name {hname}"
         let key := s!"(fun (x : {elem.print names}) => {".".intercalate ("x" :: path)})"
