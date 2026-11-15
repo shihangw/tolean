@@ -14,8 +14,8 @@ parser reads is one that it moves past.
 Most of `wf` is the shape of a tree, which follows from the function that
 read it. `afterOK` is different: it looks at the printed tokens after a
 node, and the parser looked at the source tokens after it. The two agree
-where it matters. The parser reads the same brackets, `;`, `>`, `&&` and
-`||` that the printer writes (`skel`). The printed tokens after a node end
+where it matters. The parser reads the same brackets, `;`, `>` and stop
+operators that the printer writes (`skel`). The printed tokens after a node end
 the scan for a `>` wherever the source tokens end it (`Follows`).
 
 The lexer reads the printed source back only when each printed word is one
@@ -32,11 +32,13 @@ open tolean
 
 /-! ### Token skeletons -/
 
-/-- The token kinds that `closesKinds` reads: brackets, `;`, `>`, the logical
+/-- The token kinds that `closesKinds` reads: brackets, `;`, `>`, the expression
 operators that rule out types, and the end of the file. -/
 def skelKind : TokenKind → Bool
   | .punct "(" | .punct "[" | .punct "{" | .punct ")" | .punct "]" | .punct "}" | .punct ";" | .punct ">"
-  | .punct "&&" | .punct "||"
+  | .punct "&&" | .punct "||" | .punct "??"
+  | .punct "===" | .punct "!==" | .punct "==" | .punct "!="
+  | .punct "+" | .punct "*" | .punct "/" | .punct "%" | .punct "**"
   | .eof => true
   | _ => false
 

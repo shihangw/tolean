@@ -186,7 +186,8 @@ be exact:
 ## Unfinished parser work
 
 [#208](https://github.com/shihangw/tolean/issues/208) remains open. The parser
-accepts comparisons separated by a top-level `&&` or `||`, but it still
+accepts comparisons separated by a top-level `&&`, `||`, `??`, `===`,
+`!==`, `==`, `!=`, `+`, `*`, `/`, `%` or `**`, but it still
 refuses `f(a < b, c > d)`. TypeScript 6.0.3 reads two comparisons there.
 This is a known gap, not a permanent restriction, so the case is not in the
 rejection corpus. The completed rule must accept it while still refusing
@@ -198,7 +199,11 @@ follow-token test. Before the parser can use that probe, the relation between
 source tokens and printed tokens must preserve the identifiers, contextual
 syntax and line-break information that the probe needs. The round-trip proof
 must then show that printing cannot turn a comparison into type arguments.
-The current logical-operator rule is a sound first stage, not a substitute
+These tokens stop the scan only outside brackets. The scan does not stop at
+`-`, `&`, `|`, `.`, `!` or `?`, because types can contain them. The operators
+`>>`, `>=`, `<<` and `<=` need a separate argument because TypeScript rescans
+`>` when it closes type arguments.
+The current operator rule is a sound first stage, not a substitute
 for that structural fix.
 
 ## Steps

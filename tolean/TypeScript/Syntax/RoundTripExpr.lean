@@ -34,7 +34,10 @@ def closesKinds (depth : Nat) : List TokenKind → Bool
     | .punct "(" | .punct "[" | .punct "{" => closesKinds (depth + 1) rest
     | .punct ")" | .punct "]" | .punct "}" => if depth == 0 then false else closesKinds (depth - 1) rest
     | .punct ";" => if depth == 0 then false else closesKinds depth rest
-    | .punct "&&" | .punct "||" => if depth == 0 then false else closesKinds depth rest
+    | .punct "&&" | .punct "||" | .punct "??"
+    | .punct "===" | .punct "!==" | .punct "==" | .punct "!="
+    | .punct "+" | .punct "*" | .punct "/" | .punct "%" | .punct "**" =>
+      if depth == 0 then false else closesKinds depth rest
     | .punct ">" => true
     | _ => closesKinds depth rest
 
@@ -3644,7 +3647,9 @@ def scanKinds (depth : Nat) : List TokenKind → TypeArgScan
     | .punct "(" | .punct "[" | .punct "{" => scanKinds (depth + 1) rest
     | .punct ")" | .punct "]" | .punct "}" =>
       if depth == 0 then .done false else scanKinds (depth - 1) rest
-    | .punct ";" | .punct "&&" | .punct "||" =>
+    | .punct ";" | .punct "&&" | .punct "||" | .punct "??"
+    | .punct "===" | .punct "!==" | .punct "==" | .punct "!="
+    | .punct "+" | .punct "*" | .punct "/" | .punct "%" | .punct "**" =>
       if depth == 0 then .done false else scanKinds depth rest
     | .punct ">" => .done true
     | _ => scanKinds depth rest
@@ -3712,15 +3717,17 @@ theorem Neutral.one {k : TokenKind} (h1 : k ∉ [.punct "(", .punct "[", .punct 
   intro d
   simp at h1
   obtain ⟨h1, h2, h3, h4, h5, h6, h7, h8⟩ := h1
-  by_cases hand : k = .punct "&&"
-  · subst k; cases d <;> simp [scanKinds]
-  by_cases hor : k = .punct "||"
-  · subst k; cases d <;> simp [scanKinds]
+  by_cases hs : k ∈ [.punct "&&", .punct "||", .punct "??",
+      .punct "===", .punct "!==", .punct "==", .punct "!=",
+      .punct "+", .punct "*", .punct "/", .punct "%", .punct "**"]
+  · simp only [List.mem_cons, List.not_mem_nil, or_false] at hs
+    rcases hs with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl
+    all_goals cases d <;> simp [scanKinds]
   by_cases hg : k = .punct ">"
   · subst k; simp [scanKinds]
   cases k with
   | punct p =>
-    simp only [TokenKind.punct.injEq] at h1 h2 h3 h4 h5 h6 h7 hand hor hg
+    simp only [TokenKind.punct.injEq] at h1 h2 h3 h4 h5 h6 h7 hg
     simp_all [scanKinds]
   | eof => exact absurd rfl h8
   | _ => rfl
