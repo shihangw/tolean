@@ -358,8 +358,55 @@ the abstract model `JSNumber N` in the interpreter, as it is in the
 translation, so each theorem holds for every `N`, real doubles among them,
 and assumes none of the number laws. A file that sorts is the exception. Its
 theorems take `[SafeIntLaws N]`, because the order needs the signs of `-1`
-and `1` as numbers. A file that sorts by a `number` key has no certificate
-yet, because its claim needs the precondition that no key is `NaN`.
+and `1` as numbers. A function that directly returns a parameter sorted by
+number keys with the comparison shape gets a certificate too, in either
+direction. Sorting a copy, `[...xs].sort(...)`, works as well.
+Its theorems also take `[NumberOrderLaws N]` and a hypothesis over the
+parameter, such as `(f_sort_precondition : ∀ x ∈ xs, JSNumber.isNaN x.key = false)`.
+The key may be the number itself or a field of the element. This condition
+allows infinities and both signed zeros. For `a.key - b.key` or its reverse,
+the hypothesis is instead `∀ x ∈ xs, JSNumber.isFinite x.key = true`, and
+the theorem also takes `[SpecialValueLaws N]`. The difference may overflow
+to infinity: the keys, not their differences, must be finite.
+The certificate proves consistency on that input list, not on every list.
+A function may directly return a call to such a function, with its own list
+parameter as the argument. Its theorems carry the same condition over that
+parameter. This works through a chain of calls, even when the argument
+changes name or position, and permits a spread copy of the parameter.
+For several keys, each number key has its own hypothesis. Number keys may
+mix with string and bigint keys, which need no input condition. A final
+difference key requires finite values even when earlier keys break the tie.
+The sorted list may also be a field of a parameter or a concatenation of
+spread copies of parameter lists, such as `[...xs, ...ys]`. Forwarding calls
+may pass these expressions too. The hypothesis quantifies over the resulting
+list. A spread may insert literal elements, as in `[...xs, 0, 1]`.
+Local bindings may alias these lists or concatenate them before returning the
+sort. The condition binds the same local names, so it still depends only on
+parameters. Lists that are not reachable from parameters remain refused.
+Calls may also occur in conditionals, in local initializers, or as the input
+of a later array method. Each call adds the callee's condition over its
+actual arguments. A condition is required even for a branch that the call
+does not take. Inside `map` and `filter`, each sort condition quantifies over
+the elements of that callback's input. This works for nested maps, captured
+parameter lists and calls to functions that sort. The callback proof assumes
+the condition only for its current element. A `for … of` loop similarly
+carries key conditions in its environment invariant. The condition applies
+to the current input element and captured inputs, including in nested loops
+and loops with `break` or `return`. The result may accumulate sorted lists.
+Sorts of changing loop state or body-local lists remain refused because their
+conditions need a preservation proof. Other callback methods still need
+corresponding element or state conditions.
+Sort expressions may likewise appear in conditionals, local initializers
+and as inputs of later array methods. Their list inputs may come from `map`,
+`filter`, `slice`, a conditional or a call. The precondition concerns the
+resulting keys, so a map that computes a difference must produce finite keys
+when the later sort uses a difference comparator. Other computed list shapes
+remain refused. Calls in record literals and spreads also pass their key
+conditions to callers. Calls inside nullable matches carry a condition for
+the selected branch only, including in `map`, `filter` and loop bodies.
+A direct sort, conditioned callback or loop under an enclosing nullable
+narrowing still needs scope propagation; a helper call inside the match is
+supported instead.
 
 A certificate's theorems follow from `translate_sound`, so they do not unfold
 the interpreter. The certificate holds the IR that the translator gives,
@@ -477,7 +524,13 @@ explains this boundary.
   the JavaScript would import a name that does not exist at run time.
 - Only named imports are supported. Tolean refuses `as`, a default or
   namespace import, an import with no names or for its side effects, a
-  re-export such as `export { a } from "./x.ts"`, and an import cycle.
+  value re-export such as `export { a } from "./x.ts"`, and an import cycle.
+- A type re-export, such as `export type { Point } from "./x.ts"`, may name
+  an exported interface or type alias. The output imports the translated
+  source module but adds no declaration. A consumer uses the original
+  type's identity, even through several re-exporting files. The re-export
+  does not bind `Point` locally. Re-exports of functions, enums and tagged
+  unions remain refused.
 - An export list, such as `export { clamp, type Range }`, exports
   declarations of the file, as `export` before each of them would. It may
   name only functions, interfaces and types that the file declares before the
@@ -588,13 +641,19 @@ interface fields, not new array type syntax.
 | `a ?? b` on `T \| null`, where `b` may be `null` | `Option.or a b` |
 | `boolean` | `Bool` |
 | `string`, `"abc"` | `JSString`, `JSString.ofString "abc"`. A `JSString` holds the UTF-16 code units of the string, as ECMA-262 defines a string, so a value can hold a lone surrogate, which a Lean `String` cannot. `ofString` is injective, so a claim can state a literal as a Lean `String`. |
+| `T \| undefined` on a local or return value | `Option T`. A defined value becomes `some`, and `undefined` becomes `none`. A local may be initialized or assigned either value. The type may not also include `null`. A field must use `f?: T` instead, because a missing key and a key whose value is `undefined` share one Lean value. |
 | `ReadonlyArray<T>`, `Array<T>`, `T[]` | `List T` |
 | `interface` with typed, required fields, with or without `readonly` | `structure` |
 | An interface whose fields name the interface itself, such as `readonly next: Node \| null` or `readonly children: ReadonlyArray<Tree<T>>` | The same `structure`. Lean reads it as a nested inductive type, so a value is a finite tree, as every value that the subset can build is. |
 | `f?: T` or `readonly f?: T`, an optional field | `f : Option T := none`. An object literal may leave the field out, or set it to a `T`. A read of a field that the object lacks gives `undefined`, which is `none`. `s.f ?? d` is `Option.getD s.f d`, and `s.f === undefined` is `s.f.isNone`. |
 | `x?: T`, an optional parameter | `(x : Option T := none)`. A call may leave out the optional parameters, which come last, and then the output passes `none` for each. A call may also pass a `T`, or `undefined`, which is `none` too. `x ?? d`, `x === undefined` and `x?.f` work as they do on an optional field. |
 | `if (x === undefined)` or `if (x !== undefined)`, with `undefined` on either side, where `x` is an optional parameter or a local with an optional value | `match x with \| none => … \| some x => …`, as for a test of `null`. The branch where `x` is defined reads it as a `T`. |
+| `x !== undefined && e`, `x === undefined \|\| e`, and a conditional that tests `x` against undefined | A match on `Option`. The branch where `x` is defined reads it as a `T`. The test may put undefined first, or negate the comparison with `!`. Only the selected branch runs. Existing expressions that need no narrowing keep their output. |
 | `p?.f`, where `p` is a `S \| null` or an optional field of type `S` | `p.map (·.f)`, or `p.bind (·.f)` when `f` is optional. The value is `undefined` when `p` is `null` or `undefined`, so it has the type of an optional field: `p?.f ?? d` and `p?.f === undefined` work as they do on `s.f`. |
+| `xs?.[k]`, where `xs` is a nullable or optional array and `k` is a nonnegative safe-integer literal | `xs.bind (·[k]?)`. An absent receiver or an index past the end gives `undefined`. The element type must not be nullable or optional. |
+| `xs?.[i]`, with any other number expression as the index | `xs.bind (fun ys => JSNumber.elementAt? ys i)`. Negative, fractional and nonfinite indices give `undefined`, as they do for ordinary array indexing. Another optional access may follow, as in `xs?.[i]?.value`. |
+| `pair?.[k]`, on a nullable or optional tuple | Bind the tuple, then read its projection. As for ordinary tuple indexing, `k` must be an in-range integer literal. The selected element may be optional but must not be nullable. |
+| `record?.[key]`, on a nullable or optional `Record<K, V>` | Bind the record, then read the field selected by `key`. The key must have the Record's literal-union type `K`. `V` may be optional but must not be nullable. |
 | `e as const` and `e satisfies T` | `e`. Type stripping removes both, so the value is the value of `e`. Tolean types `e` in the context of `T` and checks that the value has the type `T`, as `tsc` does. The value keeps its own type, which can be wider than the type `tsc` gives it, because the output types a literal by its context, as it does without `as const`. |
 | `p?.f.g`, a chain of reads after `?.` | `p.map (·.f.g)`, or `p.bind (·.f.g)` when `g` is optional. The reads after `?.` are a part of the same optional chain, so the whole chain is `undefined` when `p` is `null` or `undefined`. Each field before the last must be a required field of an interface type. |
 | `type T = U`, declared before its uses | `abbrev T := U`. The output writes `U` itself wherever the source names `T`, so the `abbrev` is only for claims. |
@@ -926,19 +985,25 @@ Tolean rejects these, among others:
 - An optional field that is also nullable, a tag field that is optional, and
   an optional field with the name of a property of `Object.prototype`, such
   as `toString`, because an object without the field has that property.
-  Tolean also refuses `undefined` as a value, except as the argument of an
-  optional parameter. So a literal must leave an optional field out rather
+  Tolean also refuses `undefined` as a value unless the context expects an
+  optional value, such as a local or return value typed `T | undefined`, or
+  the argument of an optional parameter. A literal must leave an optional field out rather
   than set it to `undefined`, or to the value of another optional field. JS
   tells an object without the key from one whose key holds `undefined`, and
   Lean has one `none` for both. It also refuses `== null` and `=== null` on
   an optional value, and `== undefined`.
 - An optional parameter that is also nullable, and a required parameter after
-  an optional one. Tolean also refuses `T | undefined` as a type, and a test
-  of `undefined` that narrows a value inside an expression, such as
-  `x !== undefined && x > 0n`. Only the test of an `if` narrows an optional
-  value.
+  an optional one. Expression narrowing tests a local name directly. A
+  test of a property access, and `'x' in obj`, remain refused.
 - `?.` where the value cannot be `null` or `undefined`, `?.` on a nullable
-  field, and `a?.[i]` and `f?.()`. In a chain such as `a?.b.c`, Tolean
+  field, and optional indexing outside the array, tuple and Record cases above.
+- Optional calls, `f?.()`. Neither `Syntax.TypeExpr` nor `Translate.Ty` has a
+  function type. No accepted parameter, field or variable declaration gives
+  a possibly `undefined` value a callable type. A generic type parameter
+  does not make its value callable, and a local function value cannot
+  escape a direct call. There is therefore no accepted program for optional
+  calls to apply to.
+  In a chain such as `a?.b.c`, Tolean
   refuses a field before the last that may be `null` or `undefined`, because
   `.` on it throws. `(a?.b).c` is not a chain, because the parentheses end
   it: it reads `.c` of `undefined` when `a` is `null`, so Tolean refuses
@@ -1075,6 +1140,16 @@ at three levels:
   every model that satisfies the laws.
   A theorem that needs these facts takes `[SpecialValueLaws N]`.
 
+  `NumberOrderLaws` states the order laws for numbers that are not `NaN`.
+  Both strict comparison and its negation are transitive, and JS equality
+  holds exactly when neither value is less than the other. This treats
+  positive and negative zero as equal. For finite operands, subtraction
+  never gives `NaN`, and its sign agrees with their order, even when the
+  difference overflows to an infinity. These laws are hypotheses, and
+  `jsNumberLaws.test.ts` checks each one on the maintained Node lines.
+  The certifier uses these laws for direct comparison and difference sorts of
+  a list parameter, under the input hypotheses described above.
+
 The laws are hypotheses, not Lean axioms. If one of them were false, the
 theorems that use it would not apply to JS. But Lean would stay consistent,
 and every other theorem would still stand.
@@ -1171,7 +1246,7 @@ path = "node_modules/tolean/lean"
 | 1. Parse and type-check | Tolean's parser reads the source, and the translator types the subset itself | Trusted, tested | `tests/typescript/check.ts` compares the parser's syntax trees with `tsc`'s, on the corpus and on random programs. It also prints each tree as source and requires the parser to read it as the same tree. `parseChars_reads` proves this second check for every tree that the parser gives. The proof shows that the parser and the printer agree, but not that the parser reads TypeScript as `tsc` does. The type checker is tested through the translation corpus. |
 | 2. Translate | Tolean writes readable Lean definitions (the generated `.lean` files) | **Proved** up to the printer | `program_sound` proves the translation to the Tolean IR for every accepted program: when the IR's evaluator gives a value, the interpreter gives the same value. The printer link is trusted: that the printed Lean computes what the evaluator gives for the IR, and that the evaluator gives a value where the printed Lean does. No theorem can state it for every program, because the printed Lean is text that means something only after Lean compiles it. The golden files of the corpus, compiling random programs and the CI drift check test it, and a [certificate](#certificates) proves the link, and so the whole step, for one file. |
 | 3. Prove the claims | Hand-written proofs show that each claim in `Spec/*.lean` holds for the generated definitions | **Proved** | The Lean kernel, `#audit_claims`, `lake build --wfail`, and no `sorry`, `admit`, `axiom` or `native_decide` |
-| 4. Assume JS number facts | `SafeIntLaws` and `SpecialValueLaws` in `tolean/TypeScript/Spec/Number.lean` | Trusted, tested | `tests/typescript/jsNumberLaws.test.ts` checks each law against real doubles. |
+| 4. Assume JS number facts | `SafeIntLaws`, `SpecialValueLaws` and `NumberOrderLaws` in `tolean/TypeScript/Spec/Number.lean` | Trusted, tested | `tests/typescript/jsNumberLaws.test.ts` checks each law against real doubles. |
 | 5. Run | Type stripping or a bundler makes the JavaScript that Node runs | Trusted | The subset uses only constructs that type stripping leaves unchanged, except `enum`. Type stripping refuses an enum, so code with one needs `tsc`, a bundler or Node's `--experimental-transform-types`. The interpreter reads an enum as the object that `tsc` makes for it. |
 | 6. Inputs | The code that calls the verified functions passes inputs that meet the theorems' preconditions | Trusted | The callers are responsible for it. A function can check its own inputs instead, so that its claim has no precondition, and [a plan](../plans/input-checks.md) lets `tolean.json` require that. |
 

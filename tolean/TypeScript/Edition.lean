@@ -24,6 +24,24 @@ It adds no ECMAScript feature or edition gate. Its function declaration uses
 Guard calls use `EvaluateCall` (ES2024 §13.3.6.2), and their branches use
 `IfStatement` (§14.6). A primitive guard uses `typeof` (§13.5.3). These
 operations also exist in ES2015, the oldest target.
+
+The annotation `T | undefined` erases at runtime. Its optional value uses the Undefined
+type (ES2015, §6.1.1; unchanged in ES2024), and a strict test of it uses
+IsStrictlyEqual (ES2024 §7.2.15). These operations need no edition gate because
+every supported edition specifies them.
+
+A type-only re-export erases before execution. Its module dependency follows
+the ExportDeclaration grammar (ES2015 §15.2.3; ES2024 §16.2.3). It introduces
+no local binding and preserves the type's identity in the defining module.
+
+Optional element access follows OptionalExpression and ChainEvaluation
+(ES2020 §12.3.9; ES2024 §13.3.9). An absent receiver skips the index and
+gives undefined. A present array uses the existing array-index operation.
+
+Expression narrowing follows the strict equality test and the selected
+branch of LogicalANDExpression, LogicalORExpression and ConditionalExpression
+(ES2024 §13.13 and §13.14). Logical NOT (§13.5.7) reverses the test. ES2015
+already specifies these operations, so all supported targets allow them.
 -/
 namespace tolean.TypeScript
 

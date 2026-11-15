@@ -216,6 +216,7 @@ def Expr.wfAt (T : Edition) : Level → Expr → Bool
   | .lhs, .member _ obj _ => obj.wfAt T .lhs
   | .lhs, .optMember _ obj _ => T.supports .optionalChaining && obj.wfAt T .lhs
   | .lhs, .index _ obj idx => obj.wfAt T .lhs && idx.wfAt T .assign
+  | .lhs, .optIndex _ obj idx => T.supports .optionalChaining && (obj.wfAt T .lhs && idx.wfAt T .assign)
   | .lhs, .call _ callee args => callee.wfAt T .lhs && Expr.allWF T args
   | .lhs, e => e.wfAt T .primary
   | .primary, .ident _ name => exprName name
@@ -271,6 +272,9 @@ def Expr.afterOK (after : List TokenKind) : Expr → Bool
   | .optMember _ obj name => obj.afterOK (.punct "?." :: propertyName name ++ after)
   | .index _ obj idx =>
     obj.afterOK (.punct "[" :: idx.tokens ++ .punct "]" :: after) && idx.afterOK (.punct "]" :: after)
+  | .optIndex _ obj idx =>
+    obj.afterOK (.punct "?." :: .punct "[" :: idx.tokens ++ .punct "]" :: after) &&
+      idx.afterOK (.punct "]" :: after)
   | .call _ callee args =>
     callee.afterOK ((enclose "(" ")" (Expr.wordsOf args)).flatten ++ after) &&
       Expr.afterOKList (.punct ")" :: after) args
@@ -512,7 +516,7 @@ theorem Expr.first : ∀ e : Expr, ∃ k, e.tokens.head? = some k ∧ startsExpr
   | .optMember _ o _ => by
     obtain ⟨k, h, hk⟩ := Expr.first o
     exact ⟨k, by simp [Expr.tokens, Expr.words] at h ⊢; simp [h], hk⟩
-  | .index _ o _ => by
+  | .index _ o _ | .optIndex _ o _ => by
     obtain ⟨k, h, hk⟩ := Expr.first o
     exact ⟨k, by simp [Expr.tokens, Expr.words] at h ⊢; simp [h], hk⟩
   | .call _ c _ => by
@@ -720,7 +724,7 @@ def Expr.height : Expr → Nat
   | .object _ ps => Property.heightOf ps + 1
   | .paren _ i | .member _ i _ | .optMember _ i _ | .unary _ _ i | .prefix _ _ i | .postfix _ _ i =>
     i.height + 1
-  | .index _ o i | .binary _ _ o i | .assign _ _ o i => max o.height i.height + 1
+  | .index _ o i | .optIndex _ o i | .binary _ _ o i | .assign _ _ o i => max o.height i.height + 1
   | .call _ c as => max c.height (Expr.heightOf as) + 1
   | .new _ _ _ as => Expr.heightOf as + 1
   | .cond _ t a b => max t.height (max a.height b.height) + 1
@@ -1018,7 +1022,7 @@ theorem Expr.head_wf {T : Edition} : ∀ (e : Expr) (level : Level), e.wfAt T le
     e.tokens.head? ≠ some (.punct "...")
   | .spread .., level, h => by cases level <;> simp [Expr.wfAt] at h
   | .member _ o _, level, h | .index _ o _, level, h | .call _ o _, level, h
-  | .optMember _ o _, level, h | .postfix _ _ o, level, h => by
+  | .optMember _ o _, level, h | .optIndex _ o _, level, h | .postfix _ _ o, level, h => by
     have ho : o.wfAt T .lhs = true := by cases level <;> simp_all [Expr.wfAt]
     exact head_of_first (fun k hk => by simp [Expr.tokens, Expr.words] at hk ⊢; simp [hk])
       (Expr.head_wf o .lhs ho)
@@ -1661,7 +1665,7 @@ theorem parsePrimary_paren {T : Edition} (f : Nat) (sp : Span) (inner : Expr)
 
 /-- The expression that a chain of members, indices and calls starts with. -/
 def lhsHead : Expr → Expr
-  | .member _ o _ | .optMember _ o _ | .index _ o _ | .call _ o _ => lhsHead o
+  | .member _ o _ | .optMember _ o _ | .index _ o _ | .optIndex _ o _ | .call _ o _ => lhsHead o
   | e => e
 
 /-- The words of the members, indices and calls of a chain, after its head. -/
@@ -1669,12 +1673,13 @@ def lhsSuffix : Expr → List Word
   | .member _ o n => lhsSuffix o ++ [punctWord ".", propertyName n]
   | .optMember _ o n => lhsSuffix o ++ [punctWord "?.", propertyName n]
   | .index _ o i => lhsSuffix o ++ punctWord "[" :: i.words ++ [punctWord "]"]
+  | .optIndex _ o i => lhsSuffix o ++ punctWord "?." :: punctWord "[" :: i.words ++ [punctWord "]"]
   | .call _ o as => lhsSuffix o ++ callBreak o ++ enclose "(" ")" (Expr.wordsOf as)
   | _ => []
 
 /-- The number of members, indices and calls of a chain. -/
 def lhsSteps : Expr → Nat
-  | .member _ o _ | .optMember _ o _ | .index _ o _ | .call _ o _ => lhsSteps o + 1
+  | .member _ o _ | .optMember _ o _ | .index _ o _ | .optIndex _ o _ | .call _ o _ => lhsSteps o + 1
   | _ => 0
 
 theorem words_lhs (e : Expr) : e.words = (lhsHead e).words ++ lhsSuffix e := by
@@ -1682,6 +1687,7 @@ theorem words_lhs (e : Expr) : e.words = (lhsHead e).words ++ lhsSuffix e := by
   | member _ o n => simp [lhsHead, lhsSuffix, Expr.words, words_lhs o]
   | optMember _ o n => simp [lhsHead, lhsSuffix, Expr.words, words_lhs o]
   | index _ o i => simp [lhsHead, lhsSuffix, Expr.words, words_lhs o]
+  | optIndex _ o i => simp [lhsHead, lhsSuffix, Expr.words, words_lhs o]
   | call _ o as => simp [lhsHead, lhsSuffix, Expr.words, words_lhs o]
   | _ => simp [lhsHead, lhsSuffix]
 
@@ -1690,6 +1696,7 @@ theorem wf_lhsHead {T : Edition} (e : Expr) (h : e.wfAt T .lhs = true) : (lhsHea
   | member _ o n => simp [Expr.wfAt] at h; simpa [lhsHead] using wf_lhsHead o h
   | optMember _ o n => simp [Expr.wfAt] at h; simpa [lhsHead] using wf_lhsHead o h.2
   | index _ o i => simp [Expr.wfAt] at h; simpa [lhsHead] using wf_lhsHead o h.1
+  | optIndex _ o i => simp [Expr.wfAt] at h; simpa [lhsHead] using wf_lhsHead o h.2.1
   | call _ o as => simp [Expr.wfAt] at h; simpa [lhsHead] using wf_lhsHead o h.1
   | _ => simp_all [lhsHead, Expr.wfAt]
 
@@ -1705,6 +1712,9 @@ theorem afterOK_lhsHead (e : Expr) (after : List TokenKind) (h : e.afterOK after
   | index _ o i =>
     simp [Expr.afterOK] at h
     simpa [lhsHead, lhsSuffix, punctWord, Expr.tokens] using afterOK_lhsHead o _ h.1
+  | optIndex _ o i =>
+    simp [Expr.afterOK] at h
+    simpa [lhsHead, lhsSuffix, punctWord, Expr.tokens] using afterOK_lhsHead o _ h.1
   | call _ o as =>
     simp only [Expr.afterOK, Bool.and_eq_true] at h
     obtain ⟨h, _⟩ := h
@@ -1716,6 +1726,7 @@ theorem height_lhsHead (e : Expr) : (lhsHead e).height ≤ e.height := by
   | member _ o n => have := height_lhsHead o; simp [lhsHead, Expr.height]; omega
   | optMember _ o n => have := height_lhsHead o; simp [lhsHead, Expr.height]; omega
   | index _ o i => have := height_lhsHead o; simp [lhsHead, Expr.height]; omega
+  | optIndex _ o i => have := height_lhsHead o; simp [lhsHead, Expr.height]; omega
   | call _ o as => have := height_lhsHead o; simp [lhsHead, Expr.height]; omega
   | _ => simp [lhsHead]
 
@@ -1727,6 +1738,7 @@ theorem lhsSteps_le (e : Expr) : lhsSteps e ≤ (lhsSuffix e).flatten.length := 
   | member _ o n => have := lhsSteps_le o; simp [lhsSteps, lhsSuffix, punctWord, length_propertyName] at this ⊢; omega
   | optMember _ o n => have := lhsSteps_le o; simp [lhsSteps, lhsSuffix, punctWord, length_propertyName] at this ⊢; omega
   | index _ o i => have := lhsSteps_le o; simp [lhsSteps, lhsSuffix, punctWord] at this ⊢; omega
+  | optIndex _ o i => have := lhsSteps_le o; simp [lhsSteps, lhsSuffix, punctWord] at this ⊢; omega
   | call _ o as => have := lhsSteps_le o; simp [lhsSteps, lhsSuffix, enclose, punctWord] at this ⊢; omega
   | _ => simp [lhsSteps]
 
@@ -1784,6 +1796,11 @@ theorem lhsStep_optMember {pi : ParseM Expr} {pa : ParseM (List Expr)} {start : 
     simp [Parse.requireFeature, hT, get, getThe, MonadStateOf.get, EStateM.get, bind, EStateM.bind, pure,
       EStateM.pure]
   rw [Parse.bind_eq hreq, Parse.bind_eq (Parse.discard_eq (Parse.advance_eq hs))]
+  rw [Parse.bind_eq (Parse.peek_eq (s := s₁) rfl)]
+  have hnmBracket : nm.kind ≠ .punct "[" := by
+    unfold propertyName at hnm
+    split at hnm <;> simp [keywordWord, identWord] at hnm <;> simp [hnm]
+  rw [if_neg (by simpa only [beq_iff_eq] using hnmBracket), Parse.pure_bind]
   rw [Parse.bind_eq (refuseSplitMember_ok (s := s₁) rfl hn), Parse.bind_eq (readPropertyName_ok (s := s₁) rfl hnm),
     Parse.bind_eq (Parse.spanFrom_eq _ _)]
   rfl
@@ -1803,6 +1820,32 @@ theorem lhsStep_index {pi : ParseM Expr} {pa : ParseM (List Expr)} {start : Pos}
     TokenKind.punct.injEq]
   rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_cons hs (by simp))), Parse.bind_eq hi,
     Parse.bind_eq (Parse.expectPunct_ok hs₂ hr hrb), Parse.bind_eq (Parse.spanFrom_eq _ _)]
+  rfl
+
+/-- An optional index skips the optional-chain token before reading the brackets. -/
+theorem lhsStep_optIndex {pi : ParseM Expr} {pa : ParseM (List Expr)} {start : Pos} {acc : Expr}
+    {s s₂ : ParseState} {dot lb rb : Token} {its r : List Token} {i' : Expr}
+    (hs : s.rest = dot :: lb :: (its ++ rb :: r))
+    (hdot : dot.kind = .punct "?.") (hlb : lb.kind = .punct "[") (hr : r ≠ [])
+    (hT : s.target.supports .optionalChaining = true)
+    (hi : pi { s with rest := its ++ rb :: r, left := s.left - 1 - 1, lastStop := lb.span.stop } = .ok i' s₂)
+    (hs₂ : s₂.rest = rb :: r) (hrb : rb.kind = .punct "]") :
+    Parse.leftHandSideStep pi pa start acc s =
+      .ok (.optIndex ⟨start, rb.span.stop⟩ acc i', true)
+        { s₂ with rest := r, left := s₂.left - 1, lastStop := rb.span.stop } := by
+  simp only [Parse.leftHandSideStep]
+  rw [Parse.bind_eq (Parse.peek_eq hs)]
+  simp (config := { decide := true }) only [Token.isPunct, hdot, beq_self_eq_true,
+    ↓reduceIte, beq_iff_eq, TokenKind.punct.injEq]
+  have hreq : Parse.requireFeature dot .optionalChaining s = .ok () s := by
+    simp [Parse.requireFeature, hT, get, getThe, MonadStateOf.get, EStateM.get, bind,
+      EStateM.bind, pure, EStateM.pure]
+  rw [Parse.bind_eq hreq, Parse.bind_eq (Parse.discard_eq (Parse.advance_eq hs))]
+  rw [Parse.bind_eq (Parse.peek_eq rfl)]
+  simp only [hlb, beq_self_eq_true, ↓reduceIte]
+  rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_cons rfl (by simp))),
+    Parse.bind_eq hi, Parse.bind_eq (Parse.expectPunct_ok hs₂ hr hrb),
+    Parse.bind_eq (Parse.spanFrom_eq _ _)]
   rfl
 
 /-- The arguments of a call, which `pa` reads. -/
@@ -1940,6 +1983,44 @@ theorem lhs_loop {T : Edition} {pi : ParseM Expr} {pa : ParseM (List Expr)} {sta
         Parse.iterate_true (lhsStep_index hs₁ hlb hr hpi hs₂ hrb)]
     · exact leaves_trans hL (leaves_trans (leaves_advance hs₁ hl₁)
         (leaves_trans hLi (leaves_advance hs₂ (by rw [hLi.left_eq, hs₂]))))
+  | optIndex sp o i =>
+    simp only [Expr.wfAt, Bool.and_eq_true] at he
+    have hHo : o.height ≤ H := by simp [Expr.height] at hH; omega
+    have hHi : i.height < H := by simp [Expr.height] at hH; omega
+    simp only [lhsSuffix] at ht
+    rw [List.append_assoc] at ht
+    obtain ⟨ots, more, rfl, hot, hmore⟩ := Touching.append_split ht
+    obtain ⟨dot, more₁, rfl, hdot, hm₁⟩ := Touching.cons_one (by simpa [punctWord] using hmore)
+    obtain ⟨lb, its, rb, rfl, hlb, hits, hrb⟩ := Touching.enclosed hm₁
+    simp only [Expr.afterOK, Bool.and_eq_true] at ha
+    obtain ⟨o', s₁, hit, he', hL⟩ := lhs_loop hE hA o he.2.1 hHo (n + 1) acc s ots
+      (dot :: lb :: (its ++ rb :: rest))
+      (by simpa [lhsHead] using hacc) hT (by simp [hs]) hl hot
+      (fun y hy => hn y (by simp [hy])) (by simp)
+      (by simpa [hdot, hlb, hrb, hits.kinds, Expr.tokens] using ha.1)
+    have hs₁ : s₁.rest = dot :: lb :: (its ++ rb :: rest) := hL.rest_eq
+    have hl₁ : s₁.left = s₁.rest.length := by rw [hL.left_eq, hL.rest_eq]
+    let s₀ := past s₁ dot (lb :: (its ++ rb :: rest))
+    have hl₀ : s₀.left = s₀.rest.length := by simp [s₀, hl₁, hs₁]
+    let s₁' := past s₀ lb (its ++ rb :: rest)
+    have hE' : EndsExpr (rb :: rest) :=
+      ⟨endsAssign_separator hrb (by simp [separators]), fun t ht => by
+        simp at ht; subst ht; rw [hrb]; exact punct_ne (by decide)⟩
+    obtain ⟨i', s₂, hpi, hei, hLi⟩ := hE i hHi he.2.2 s₁' its (rb :: rest)
+      (hL.target_eq.trans hT) rfl (by simp [s₁', s₀, hl₁, hs₁]) hits
+      (fun y hy => hn y (by simp [List.mem_of_mem_tail hy])) (by simp) hE'
+      (by simpa [hrb] using ha.2)
+    have hs₂ : s₂.rest = rb :: rest := hLi.rest_eq
+    refine ⟨.optIndex ⟨start, rb.span.stop⟩ o' i',
+      { s₂ with rest := rest, left := s₂.left - 1, lastStop := rb.span.stop },
+      ?_, by simp [Expr.erase, he', hei], ?_⟩
+    · rw [show n + lhsSteps (.optIndex sp o i) = (n + 1) + lhsSteps o by
+        simp [lhsSteps]; omega, hit,
+        Parse.iterate_true (lhsStep_optIndex hs₁ hdot hlb hr
+          (by rw [hL.target_eq, hT]; exact he.1) hpi hs₂ hrb)]
+    · exact leaves_trans hL (leaves_trans (leaves_advance hs₁ hl₁)
+        (leaves_trans (leaves_advance (s := s₀) rfl hl₀)
+          (leaves_trans hLi (leaves_advance hs₂ (by rw [hLi.left_eq, hs₂])))))
   | call sp o args =>
     simp only [Expr.wfAt, Bool.and_eq_true] at he
     have hHo : o.height ≤ H := by simp [Expr.height] at hH; omega
@@ -2020,7 +2101,7 @@ theorem parseLeftHandSide_reads {T : Edition} (f : Nat) (e : Expr) (he : e.wfAt 
 theorem Expr.isSimpleTarget_erase : ∀ e : Expr, e.erase.isSimpleTarget = e.isSimpleTarget
   | .paren _ i => by simp [Expr.erase, Expr.isSimpleTarget, Expr.isSimpleTarget_erase i]
   | .ident .. | .member .. | .index .. => by simp [Expr.erase, Expr.isSimpleTarget]
-  | .regexp .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .array .. | .object .. | .call .. | .optMember ..
+  | .regexp .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .array .. | .object .. | .call .. | .optMember .. | .optIndex ..
   | .unary .. | .prefix .. | .postfix .. | .binary .. | .cond .. | .assign .. | .arrow .. | .asConst ..
   | .satisfies .. | .new .. | .spread .. => by
     simp [Expr.erase, Expr.isSimpleTarget]
@@ -2322,7 +2403,7 @@ theorem binSuffix_first : ∀ e : Expr, (binSuffix e).flatten = [] ∨
     · exact .inr ⟨.ident "satisfies", t.words.flatten, by simp [binSuffix, h, identWord], rfl⟩
     · exact .inr ⟨k, ks ++ (.ident "satisfies" :: t.words.flatten), by simp [binSuffix, h, identWord], hk⟩
   | .regexp .. | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .array .. | .object ..
-  | .paren .. | .member .. | .optMember .. | .index .. | .call .. | .unary .. | .prefix .. | .postfix ..
+  | .paren .. | .member .. | .optMember .. | .index .. | .optIndex .. | .call .. | .unary .. | .prefix .. | .postfix ..
   | .cond .. | .assign .. | .arrow .. | .new .. | .spread .. => .inl (by simp [binSuffix])
 
 theorem Expr.isLogical_erase (e : Expr) : e.erase.isLogical = e.isLogical := by
@@ -2844,6 +2925,10 @@ theorem Expr.tokens_index (o i : Expr) :
     (Expr.index sp o i).tokens = o.tokens ++ .punct "[" :: i.tokens ++ [.punct "]"] := by
   simp [Expr.tokens, Expr.words, punctWord]
 
+theorem Expr.tokens_optIndex (o i : Expr) :
+    (Expr.optIndex sp o i).tokens = o.tokens ++ .punct "?." :: .punct "[" :: i.tokens ++ [.punct "]"] := by
+  simp [Expr.tokens, Expr.words, punctWord]
+
 theorem Expr.tokens_call (c : Expr) (as : List Expr) :
     (Expr.call sp c as).tokens = c.tokens ++ .punct "(" :: joined "," (as.map Expr.tokens) ++ [.punct ")"] := by
   simp [Expr.tokens, Expr.words, enclose, punctWord, separated_flatten, Expr.wordsOf_eq, List.map_map,
@@ -2967,6 +3052,10 @@ theorem Expr.second_ok : ∀ e : Expr, ∀ n k r, e.tokens = .ident n :: k :: r 
     simp only [Expr.tokens_index, List.append_assoc, List.cons_append] at h
     obtain ⟨x, hx, _⟩ := Expr.first o
     exact secondOK_append (c := .punct "[") (by intro h'; simp [h'] at hx) (Expr.second_ok o) (by decide) n k r h
+  | .optIndex _ o i, n, k, r, h => by
+    simp only [Expr.tokens_optIndex, List.append_assoc, List.cons_append] at h
+    obtain ⟨x, hx, _⟩ := Expr.first o
+    exact secondOK_append (c := .punct "?.") (by intro h'; simp [h'] at hx) (Expr.second_ok o) (by decide) n k r h
   | .call _ c as, n, k, r, h => by
     simp only [Expr.tokens_call, List.append_assoc, List.cons_append] at h
     obtain ⟨x, hx, _⟩ := Expr.first c
@@ -3004,7 +3093,7 @@ theorem Expr.second_ok : ∀ e : Expr, ∀ n k r, e.tokens = .ident n :: k :: r 
 left operands, callees and objects that the tokens of `e` start with. -/
 def Expr.leftArrow : Expr → Bool
   | .arrow .. => true
-  | .member _ o _ | .optMember _ o _ | .index _ o _ | .call _ o _ | .postfix _ _ o | .binary _ _ o _
+  | .member _ o _ | .optMember _ o _ | .index _ o _ | .optIndex _ o _ | .call _ o _ | .postfix _ _ o | .binary _ _ o _
   | .cond _ o _ _ | .assign _ _ o _ | .asConst _ o | .satisfies _ o _ => o.leftArrow
   | _ => false
 
@@ -3074,6 +3163,9 @@ theorem Expr.arrowStart_false : ∀ e : Expr, e.leftArrow = false → ∀ after 
   | .index _ o i, h, after, _ => by
     simp only [Expr.tokens_index, List.append_assoc, List.cons_append]
     exact arrowStart_append (Expr.arrowStart_false o (by simpa [Expr.leftArrow] using h)) (by simp)
+  | .optIndex _ o i, h, after, _ => by
+    simp only [Expr.tokens_optIndex, List.append_assoc, List.cons_append]
+    exact arrowStart_append (Expr.arrowStart_false o (by simpa [Expr.leftArrow] using h)) (by simp)
   | .call _ c as, h, after, _ => by
     simp only [Expr.tokens_call, List.append_assoc, List.cons_append]
     exact arrowStart_append (Expr.arrowStart_false c (by simpa [Expr.leftArrow] using h)) (by simp)
@@ -3111,7 +3203,7 @@ theorem Expr.leftArrow_wf {T : Edition} : ∀ (e : Expr) (level : Level), e.wfAt
   | .member _ o _, level, h, _ | .index _ o _, level, h, _ | .call _ o _, level, h, _ => by
     have : o.wfAt T .lhs = true := by cases level <;> simp_all [Expr.wfAt]
     simpa [Expr.leftArrow] using Expr.leftArrow_wf o .lhs this (by simp)
-  | .optMember _ o _, level, h, _ => by
+  | .optMember _ o _, level, h, _ | .optIndex _ o _, level, h, _ => by
     have : o.wfAt T .lhs = true := by cases level <;> simp_all [Expr.wfAt]
     simpa [Expr.leftArrow] using Expr.leftArrow_wf o .lhs this (by simp)
   | .postfix _ _ o, level, h, _ => by
@@ -3910,6 +4002,10 @@ theorem Expr.neutral : ∀ e : Expr, Neutral e.tokens
     have h := Neutral.append (Expr.neutral o)
       (Neutral.enclosed (o := "[") (c := "]") (by simp) (by simp) (Expr.neutral i))
     simpa [Expr.tokens, Expr.words, punctWord] using h
+  | .optIndex _ o i => by
+    have h := Neutral.append (Expr.neutral o) (Neutral.cons (k := .punct "?.") (by simp)
+      (Neutral.enclosed (o := "[") (c := "]") (by simp) (by simp) (Expr.neutral i)))
+    simpa [Expr.tokens, Expr.words, punctWord] using h
   | .call _ c as => by
     have h := Neutral.append (Expr.neutral c)
       (Neutral.enclosed (o := "(") (c := ")") (by simp) (by simp) (Neutral.join (Expr.neutralAll as)))
@@ -4026,6 +4122,13 @@ theorem Expr.afterOK_congr : ∀ (e : Expr) {a b : List TokenKind}, AfterEquiv a
   | .index _ o i, a, b, h => by
     simp only [Expr.afterOK]
     have hx := Neutral.enclosed (o := "[") (c := "]") (by simp) (by simp) (Expr.neutral i)
+    have ho := Expr.afterOK_congr o (AfterEquiv.prepend hx (by simp) h)
+    simp only [List.cons_append, List.append_assoc, List.nil_append] at ho ⊢
+    rw [ho, Expr.afterOK_congr i (AfterEquiv.closer (c := "]") (by simp) a b)]
+  | .optIndex _ o i, a, b, h => by
+    simp only [Expr.afterOK]
+    have hx := Neutral.cons (k := .punct "?.") (by simp)
+      (Neutral.enclosed (o := "[") (c := "]") (by simp) (by simp) (Expr.neutral i))
     have ho := Expr.afterOK_congr o (AfterEquiv.prepend hx (by simp) h)
     simp only [List.cons_append, List.append_assoc, List.nil_append] at ho ⊢
     rw [ho, Expr.afterOK_congr i (AfterEquiv.closer (c := "]") (by simp) a b)]
@@ -4146,6 +4249,12 @@ theorem Expr.height_le : ∀ e : Expr, e.height ≤ e.tokens.length
   | .index _ o i => by
     have := Expr.height_le o; have := Expr.height_le i
     rw [Expr.tokens_index]; simp only [Expr.height, List.length_cons, List.length_append, List.length_nil]
+    omega
+  | .optIndex _ o i => by
+    have ho := Expr.height_le o
+    have hi := Expr.height_le i
+    rw [Expr.tokens_optIndex]
+    simp only [Expr.height, List.length_append, List.length_cons, List.length_nil]
     omega
   | .call _ c as => by
     have := Expr.height_le c; have := Expr.heightOf_le as

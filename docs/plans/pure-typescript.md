@@ -54,9 +54,8 @@ exact. A construct leaves these tables when Tolean translates it, and the
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| `T \| undefined` as the type of a local or of a return value, and a test such as `x !== undefined && x > 0n` that narrows an optional value inside an expression | `Option T` | `'x' in obj`, which can tell a missing key from `undefined` |
-| `a?.[i]` and `f?.()` | `Option.bind` | `==` against anything except `null` and `undefined` |
-| A re-export, such as `export { a } from "./x.ts"` | Nothing: the names stay in scope | `export *` |
+| `f?.()` | No accepted program to translate: `Syntax.TypeExpr` and `Translate.Ty` have no function type, and no accepted declaration gives a possibly `undefined` value a callable type. A generic type parameter does not make a value callable. Local function values cannot escape a direct call. | Optional calls stay refused; so does `==` against anything except `null` and `undefined`. |
+| A value re-export, such as `export { a } from "./x.ts"` | Nothing: the names stay in scope | `export *` |
 
 ### Functions
 
@@ -101,10 +100,11 @@ value claim already does.
 | TypeScript | Lean | Refused |
 |---|---|---|
 | The `index` argument of a callback other than one of `map`, and the `array` argument of any callback | The `List` functions that also pass the index, as `List.mapIdx` does for `map`, and the list itself | |
-| A certificate for a file that sorts by a `number` key | As for `bigint` and `string` keys, with the precondition that no key is `NaN`, and for a difference that every key is finite. A difference also needs new laws: `<` is a strict total order on numbers that are not `NaN`, and the sign of `a - b` is the order of `a` and `b`. `jsNumberLaws.test.ts` would check them. | |
+| A number-sort certificate inside a callback other than `map` or `filter`, for changing loop state or body-local lists, for a remaining computed list shape, or under an enclosing nullable narrowing | A hypothesis over the parameters excludes `NaN` keys, or requires finite keys for a difference. Sorts and calls in ordinary expressions and records, in `map` and `filter`, and over loop elements or captured inputs already carry these conditions. Inputs may use parameter fields, local aliases, spreads, literal elements, maps, filters, slices, conditionals and calls. Calls in nullable matches carry guarded conditions for the selected branch. | Lists that cannot be reached from parameters. |
 
-The certifier writes no precondition today, so such a file gets no
-certificate.
+The certifier uses `sortValues_sortWith_on` for a direct sort of a
+parameter. Its input hypothesis excludes NaN keys for a comparison, or
+requires finite keys for a difference.
 
 ### Strings
 
@@ -247,12 +247,14 @@ the P2 steps. Steps with the same priority keep the order of their numbers.
 The steps keep the numbers that pull requests refer to, so a finished step
 leaves a gap.
 
-2. **P0.** Types and narrowing: `T | undefined` as a type, a test of
-   `undefined` that narrows inside an expression, `a?.[i]` and `f?.()`, and
-   re-exports.
+2. **P0.** Value re-exports. Optional calls have no accepted program to apply
+   to, as the types table explains; they are not unfinished work in this step.
 8. **P0.** Widen map borrows to early returns, several changed maps, an
    ordinary returned value, control flow and imported callees.
-10. **P1.** Sorting: certificates for a sort by a `number` key.
+10. **P1.** Sorting: number-key certificates inside the remaining callbacks, for changing loop state and body locals,
+    remaining computed list shapes, and direct sorts or conditioned helpers
+    under enclosing nullable narrowing. Calls inside nullable matches are
+    covered.
 11. **P2.** Recursion: tagged unions that refer to themselves first, then
     `@decreases`, mutual recursion, and `while` loops. Add certificates for
     self-referential interfaces and recursive functions, with existential
@@ -302,12 +304,14 @@ a descendant does not mean that the earlier pull request already contains it.
 
   The [call-traversal review on #220](https://github.com/shihangw/tolean/pull/220#discussion_r4576745761)
   identified dropped `.struct` fields and `.structUpdate` children.
-  **#238 covers that concrete case:** at the step 10 tip `d92ef7e` on #240,
-  `conditionCalls` visits record fields, the update base and replacement
-  fields. Its catch-all still remains, and `bodyConditionCalls` still omits
-  `matchTag`. Preserve the record certificate cases while making each
-  constructor decision explicit. Tagged narrowing needs its own scope
-  contract before it can be supported.
+  **#220 now covers the condition-call traversal:** `conditionCalls` visits
+  record fields, the update base and replacement fields, and enumerates
+  leaves explicitly. The source scan also counts calls in object spreads.
+  Required certificates cover each record position and both update sides.
+  `bodyConditionCalls` explicitly refuses tagged narrowing with a named
+  scope error because its rebound parameter needs guarded conditions over
+  the original union. #238 retains its additional record certificate cases.
+  The other scans still need the broader audit described above.
 
   The [number-use scan on #221](https://github.com/shihangw/tolean/pull/221#discussion_r4576744315)
   is being fixed there, including the missing optional-index receiver and

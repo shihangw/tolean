@@ -13,6 +13,18 @@ trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/Corpus" "$work/results"
 export lean_path="$(cd "$root" && lake env printenv LEAN_PATH):$work"
 
+# These files translate, but their certificate obligations cannot yet be
+# stated over the parameters. Check the refusal rather than counting a skip.
+for f in corpus/certify/reject/*.ts; do
+  expected=$(sed -n 's|^// expect: ||p' "$f" | head -1)
+  [ -n "$expected" ] || { echo "FAIL: no refusal expected in $f"; exit 1; }
+  "$T" translate "$f" "$work/Refused.lean" Refused >/dev/null
+  if out=$("$T" certify "$f" Refused Refused "$work/RefusedCert.lean" RefusedCert 2>&1); then
+    echo "FAIL: certificate unexpectedly accepted for $f"; exit 1
+  fi
+  grep -qF "$expected" <<<"$out" || { echo "FAIL: wrong refusal for $f: $out"; exit 1; }
+done
+
 # Certify one file. The result is in $work/results/<name>: proved, skipped, or
 # failed followed by Lean's output.
 certifyOne() {
@@ -22,15 +34,21 @@ certifyOne() {
   result="$work/results/$b"
   if ! $T translate "$f" "$work/Corpus/$n.lean" "Corpus.$n" 2>/dev/null ||
       ! $T certify "$f" "Corpus.$n" "Corpus.$n" "$work/Corpus/${n}Cert.lean" "Corpus.${n}Cert" 2>/dev/null; then
-    case "$b" in
-      localFunctionCertificate | localFunctionNumber | localFunctionLoopCertificates | \
-      localFunctionReturnsAndChanges | localFunctionSiblingCalls | \
-      localFunctions | localArrows | localFunctionOwnedArray | localFunctionLoopParameter)
-        { echo failed; echo "A required local-function certificate was refused"; } >"$result"
-        return 0
-        ;;
-    esac
-    echo skipped >"$result"
+    if grep -q '^// certify: required$' "$f"; then
+      printf 'failed\nrequired certificate was refused\n' >"$result"
+    else
+      case "$b" in
+        localFunctionCertificate | localFunctionNumber | localFunctionLoopCertificates | \
+        localFunctionReturnsAndChanges | localFunctionSiblingCalls | \
+        localFunctions | localArrows | localFunctionOwnedArray | localFunctionLoopParameter)
+          { echo failed; echo "A required local-function certificate was refused"; } >"$result"
+          return 0
+          ;;
+        *)
+          echo skipped >"$result"
+          ;;
+      esac
+    fi
     return 0
   fi
   (cd "$root" && LEAN_PATH=$lean_path lake env lean --root="$work" -o "$work/Corpus/$n.olean" "$work/Corpus/$n.lean" >/dev/null)

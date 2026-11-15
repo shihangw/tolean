@@ -496,6 +496,23 @@ test('checked guards narrow both branches, aliases, local calls, and tag chains'
   }
 });
 
+test('type re-exports introduce no runtime binding', async () => {
+  const source = 'export type { Point } from "./origin.ts"; export function f(n: bigint): bigint { return n + 1n; }';
+  const input = { programs: [{ source, calls: [{ function: 'f', args: [encode(4n)] }] }] };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (result === undefined || !result.parsed) return;
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-type-reexport-'));
+  writeFileSync(join(dir, 'origin.ts'), 'export interface Point { readonly x: bigint }');
+  const path = join(dir, 'barrel.mjs');
+  writeFileSync(path, ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText);
+  const mod = await import(pathToFileURL(path).href) as { f: (n: bigint) => bigint };
+  const value = result.results[0]?.value;
+  expect(value === undefined ? 'no value' : canonical(value)).toBe(canonical(encode(mod.f(4n))));
+});
+
 test('the interpreter reads comparisons separated by expression operators as Node does', async () => {
   const sources = [
     'export function f(a: number, b: number, c: number, d: number): boolean { return a < b && c > d; }',
@@ -557,6 +574,25 @@ test('the interpreter binds a parameter that a call leaves out to undefined', as
     },
     { source: 'export function f(a?: boolean): boolean { return a !== undefined; }', args: [] },
     { source: 'export function f(a?: number): number | null { return a ?? null; }', args: [] },
+    { source: 'export function f(): bigint | undefined { return undefined; }', args: [] },
+    { source: 'export function f(a: bigint): undefined | bigint { return a; }', args: [7n] },
+    {
+      source: 'export function f(a: bigint): bigint { let x: bigint | undefined = undefined; x = a; return x ?? 0n; }',
+      args: [9n],
+    },
+    { source: 'export function f(a?: bigint): bigint | undefined { const x: bigint | undefined = a; return x; }', args: [] },
+    { source: 'export function f(a?: bigint): bigint | undefined { const x: bigint | undefined = a; return x; }', args: [0n] },
+    ...[
+      'x !== undefined && x > 0n',
+      'undefined === x || x > 0n',
+      '!(x === undefined) && x > 0n',
+      '!(undefined !== x) || x > 0n',
+      'x === undefined ? false : x > 0n',
+      '!(x === undefined) ? x > 0n : false',
+    ].flatMap((body) => [[], [-1n], [0n], [1n]].map((args) => ({
+      source: `export function f(x?: bigint): boolean { return ${body}; }`,
+      args,
+    }))),
   ];
   const input = {
     programs: cases.map(({ source, args }) => ({ source, calls: [{ function: 'f', args: args.map(encode) }] })),
@@ -612,6 +648,135 @@ test('the interpreter reads the index of at and slice as Node does', async () =>
   }
 });
 
+test('optional array indexing agrees with Node', async () => {
+  const sources = [
+    'export function f(xs: ReadonlyArray<bigint> | null): bigint { return xs?.[0] ?? 7n; }',
+    'export function f(xs?: ReadonlyArray<bigint>): bigint { return xs?.[1] ?? 9n; }',
+  ];
+  const arrays = fc.sample(fc.array(fc.bigInt(), { maxLength: 8 }), { seed, numRuns: 50 });
+  const args: Array<unknown> = [null, undefined, [], ...arrays];
+  const input = {
+    programs: sources.map(source => ({
+      source,
+      calls: args.map(xs => ({ function: 'f', args: [encode(xs)] })),
+    })),
+  };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const results = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-optional-index-'));
+  for (const [i, source] of sources.entries()) {
+    const path = join(dir, `case${i}.mjs`);
+    writeFileSync(path, ts.transpileModule(source, {
+      compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+    }).outputText);
+    const mod = (await import(pathToFileURL(path).href)) as { f: (xs: unknown) => unknown };
+    const result = results[i];
+    expect(result?.parsed, source).toBe(true);
+    if (result === undefined || !result.parsed) continue;
+    for (const [j, xs] of args.entries()) {
+      const value = result.results[j]?.value;
+      expect(value === undefined ? 'no value' : canonical(value), source)
+        .toBe(canonical(encode(mod.f(xs))));
+    }
+  }
+});
+
+test('an absent optional receiver skips the index expression', async () => {
+  const source = 'export function f(xs: ReadonlyArray<bigint> | null): bigint { return xs?.[missing()] ?? 11n; }';
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: [{ source, calls: [{ function: 'f', args: [null] }] }] }),
+    encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (result === undefined || !result.parsed) return;
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-optional-index-skip-'));
+  const path = join(dir, 'skip.mjs');
+  writeFileSync(path, ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+  }).outputText);
+  const mod = (await import(pathToFileURL(path).href)) as { f: (xs: null) => unknown };
+  const value = result.results[0]?.value;
+  expect(value === undefined ? 'no value' : canonical(value)).toBe(canonical(encode(mod.f(null))));
+});
+
+test('optional indexed member access handles every kind of number index', async () => {
+  const source = 'export interface Item { readonly value: bigint; }\nexport function f(xs: ReadonlyArray<Item> | null, i: number): bigint { return xs?.[i]?.value ?? 17n; }';
+  const arrays: Array<unknown> = [null, undefined, [], [{ value: 3n }, { value: 5n }, { value: 8n }]];
+  const indexes = [NaN, Infinity, -Infinity, -0, 0, 1, 2, 3, -1, 0.5, Number.MAX_SAFE_INTEGER];
+  const args = arrays.flatMap(xs => indexes.map(i => [xs, i]));
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: [{ source, calls: args.map(a => ({
+      function: 'f', args: a.map(encode),
+    })) }] }),
+    encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (result === undefined || !result.parsed) return;
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-optional-number-index-'));
+  const path = join(dir, 'index.mjs');
+  writeFileSync(path, ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+  }).outputText);
+  const mod = (await import(pathToFileURL(path).href)) as { f: (...xs: Array<unknown>) => unknown };
+  for (const [j, a] of args.entries()) {
+    const value = result.results[j]?.value;
+    expect(value === undefined ? 'no value' : canonical(value))
+      .toBe(canonical(encode(mod.f(...a))));
+  }
+});
+
+test('optional tuple and Record indices agree with Node', async () => {
+  const source = readFileSync(new URL('./corpus/translate/accept/optionalTupleRecordIndex.ts', import.meta.url), 'utf8');
+  const calls: Array<{ function: string; args: Array<unknown> }> = [];
+  const values = [undefined, 0n, -3n, ...fc.sample(fc.bigInt(), { seed, numRuns: 20 })];
+  for (const value of values) {
+    calls.push({ function: 'optionalValue', args: [[value, 'text']] });
+    for (const key of ['apple', 'pear']) {
+      calls.push({ function: 'optionalRecordValue', args: [{ apple: value, pear: 5n }, key] });
+    }
+  }
+  for (const absent of [null, undefined]) {
+    for (const name of ['first', 'last', 'literal', 'optionalValue']) {
+      calls.push({ function: name, args: [absent] });
+    }
+    calls.push({ function: 'record', args: [absent, 'apple'] });
+    calls.push({ function: 'optionalRecordValue', args: [absent, 'pear'] });
+    calls.push({ function: 'shadowed', args: [true, absent] });
+  }
+  calls.push({ function: 'first', args: [[19n, 'value']] });
+  calls.push({ function: 'last', args: [[19n, 'value']] });
+  calls.push({ function: 'record', args: [{ apple: 3n, pear: 7n }, 'pear'] });
+  calls.push({ function: 'literal', args: [{ apple: 3n, pear: 7n }] });
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: [{ source, calls: calls.map(c => ({
+      function: c.function, args: c.args.map(encode),
+    })) }] }),
+    encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (result === undefined || !result.parsed) return;
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-optional-tuple-record-'));
+  const path = join(dir, 'index.mjs');
+  writeFileSync(path, ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+  }).outputText);
+  const mod = (await import(pathToFileURL(path).href)) as Record<string, (...xs: Array<unknown>) => unknown>;
+  for (const [i, call] of calls.entries()) {
+    const fn = mod[call.function];
+    if (fn === undefined) throw new Error(`missing export ${call.function}`);
+    const value = result.results[i]?.value;
+    expect(value === undefined ? 'no value' : canonical(value))
+      .toBe(canonical(encode(fn(...call.args))));
+  }
+});
+
 // JS binds every function declaration of a block when the block starts, so a
 // second declaration of `g` replaces the first for both calls, and Node gives
 // 20n. The interpreter binds each where it stands, so it must give no value.
@@ -640,17 +805,219 @@ test('the interpreter gives no value for a function declared twice in a block', 
 // A difference of keys is consistent only when every key is finite. The spec
 // compares each element with itself too, and `Infinity - Infinity` is `NaN`,
 // so one infinite key is enough to leave the order to the engine.
-test('the interpreter sorts by a difference only when every key is finite', () => {
-  const source = 'export function f(xs: ReadonlyArray<number>): number[] { return xs.toSorted((a, b) => a - b); }';
-  const arrays = [[2, 1], [Infinity], [Infinity, 2], [-Infinity, 2], [NaN, 1]];
+test('number comparison sorts agree with Node on non-NaN keys, including infinities and signed zero', () => {
+  const source = 'export function f(xs: ReadonlyArray<number>): number[] { return xs.toSorted((a, b) => (a < b) ? -1 : (a > b) ? 1 : 0); }';
+  const arrays = [[], [Infinity, -Infinity, 0, -0], [0, -0, 0, -0], [Number.MIN_VALUE, -Number.MIN_VALUE, 1, 1]];
   const input = { programs: [{ source, calls: arrays.map((xs) => ({ function: 'f', args: [xs.map(encode)] })) }] };
   const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
   expect(run.status, run.stderr).toBe(0);
   const [lean] = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
   expect(lean?.parsed).toBe(true);
   if (lean === undefined || !lean.parsed) return;
-  expect(lean.results[0]).toEqual({ value: [1, 2].map(encode) });
-  expect(lean.results.slice(1)).toEqual([null, null, null, null]);
+  for (const [i, xs] of arrays.entries()) {
+    expect(lean.results[i]).toEqual({ value: xs.toSorted((a, b) => a < b ? -1 : a > b ? 1 : 0).map(encode) });
+  }
+});
+
+test('the interpreter sorts by a difference only when every key is finite', () => {
+  const source = 'export function f(xs: ReadonlyArray<number>): number[] { return xs.toSorted((a, b) => a - b); }';
+  const finite = [[2, 1], [], [Number.MAX_VALUE, -Number.MAX_VALUE, 0, -0],
+    [Number.MIN_VALUE, -Number.MIN_VALUE, 1, 1], [-0, 0, -0]];
+  const arrays = [...finite, [Infinity], [Infinity, 2], [-Infinity, 2], [NaN, 1]];
+  const input = { programs: [{ source, calls: arrays.map((xs) => ({ function: 'f', args: [xs.map(encode)] })) }] };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const [lean] = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  expect(lean?.parsed).toBe(true);
+  if (lean === undefined || !lean.parsed) return;
+  for (const [i, xs] of finite.entries()) {
+    expect(lean.results[i]).toEqual({ value: xs.toSorted((a, b) => a - b).map(encode) });
+  }
+  expect(lean.results.slice(finite.length)).toEqual([null, null, null, null]);
+});
+
+test('number sorts compare successive keys against Node', () => {
+  const source = 'interface Item { readonly rank: number; readonly time: number; }\n' +
+    'export function f(xs: ReadonlyArray<Item>): Item[] { return xs.toSorted((a, b) => (a.rank < b.rank) ? -1 : (a.rank > b.rank) ? 1 : b.time - a.time); }';
+  const arrays = [[], [{ rank: Infinity, time: 0 }, { rank: -Infinity, time: -0 }],
+    [{ rank: 1, time: Number.MAX_VALUE }, { rank: 1, time: -Number.MAX_VALUE },
+      { rank: 0, time: 3 }, { rank: 1, time: Number.MAX_VALUE }]];
+  const input = { programs: [{ source, calls: arrays.map((xs) => ({ function: 'f', args: [xs.map(encode)] })) }] };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const [lean] = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  expect(lean?.parsed).toBe(true);
+  if (lean === undefined || !lean.parsed) return;
+  for (const [i, xs] of arrays.entries()) {
+    expect(lean.results[i]).toEqual({ value: xs.toSorted((a, b) =>
+      a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : b.time - a.time).map(encode) });
+  }
+});
+
+test('number-sort preconditions pass through forwarding calls', () => {
+  const source = 'function sorted(xs: ReadonlyArray<number>): number[] { return xs.toSorted((a, b) => b - a); }\n' +
+    'function middle(_unused: boolean, ys: ReadonlyArray<number>): number[] { return sorted(ys); }\n' +
+    'export function f(xs: ReadonlyArray<number>): number[] { return middle(true, xs); }';
+  const arrays = [[], [2, 1, 2], [Number.MAX_VALUE, -Number.MAX_VALUE, -0, 0]];
+  const input = { programs: [{ source, calls: arrays.map((xs) => ({ function: 'f', args: [xs.map(encode)] })) }] };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const [lean] = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  expect(lean?.parsed).toBe(true);
+  if (lean === undefined || !lean.parsed) return;
+  for (const [i, xs] of arrays.entries()) {
+    expect(lean.results[i]).toEqual({ value: xs.toSorted((a, b) => b - a).map(encode) });
+  }
+});
+
+test('number-sort calls compose with a conditional and a map', () => {
+  const source = 'function sorted(xs: ReadonlyArray<number>): number[] { return xs.toSorted((a, b) => a - b); }\n' +
+    'export function f(xs: ReadonlyArray<number>, flag: boolean): number[] { const ys = flag ? sorted(xs) : xs; return ys.map(x => x + 1); }';
+  const xs = [3, -0, 1, 1];
+  const input = { programs: [{ source, calls: [false, true].map(flag =>
+    ({ function: 'f', args: [xs.map(encode), encode(flag)] })) }] };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const [lean] = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  expect(lean?.parsed).toBe(true);
+  if (lean === undefined || !lean.parsed) return;
+  expect(lean.results).toEqual([false, true].map(flag =>
+    ({ value: (flag ? xs.toSorted((a, b) => a - b) : xs).map(x => encode(x + 1)) })));
+});
+
+test('number sorts compose with mapped, filtered and sliced inputs', () => {
+  const source = 'export function f(xs: ReadonlyArray<number>): number[] { const ys = xs.map(x => x + 1).filter(x => x > 0).slice(1); return ys.toSorted((a, b) => b - a).map(x => x + 1); }';
+  const arrays = fc.sample(fc.array(fc.integer({ min: -100, max: 100 }), { maxLength: 12 }), 40);
+  const input = { programs: [{ source, calls: arrays.map(xs =>
+    ({ function: 'f', args: [xs.map(encode)] })) }] };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const [lean] = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  expect(lean?.parsed).toBe(true);
+  if (lean === undefined || !lean.parsed) return;
+  expect(lean.results).toEqual(arrays.map(xs =>
+    ({ value: xs.map(x => x + 1).filter(x => x > 0).slice(1)
+      .toSorted((a, b) => b - a).map(x => encode(x + 1)) })));
+});
+
+test('number-sort input filters may bind nested some callback elements', () => {
+  const source = 'interface Row { readonly key: number; readonly values: ReadonlyArray<number>; }\n' +
+    'export function f(xs: ReadonlyArray<Row>): Row[] { return xs.filter(x => x.values.some(y => y > 0)).toSorted((a, b) => a.key - b.key); }';
+  const arrays = fc.sample(fc.array(fc.record({
+    key: fc.integer({ min: -10, max: 10 }),
+    values: fc.array(fc.integer({ min: -5, max: 5 }), { maxLength: 5 }),
+  }), { maxLength: 6 }), 30);
+  const input = { programs: [{ source, calls: arrays.map(xs =>
+    ({ function: 'f', args: [xs.map(encode)] })) }] };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const [lean] = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  expect(lean?.parsed).toBe(true);
+  if (lean === undefined || !lean.parsed) return;
+  expect(lean.results).toEqual(arrays.map(xs => ({ value: xs
+    .filter(x => x.values.some(y => y > 0)).toSorted((a, b) => a.key - b.key).map(encode) })));
+});
+
+test('nested map and filter callbacks sort only finite input rows', () => {
+  const source = 'function sorted(xs: ReadonlyArray<number>): number[] { return xs.toSorted((a, b) => a - b); }\n' +
+    'export function f(xs: ReadonlyArray<ReadonlyArray<number>>): number[][] { return xs.filter(row => sorted(row).length > 0).map(row => row.toSorted((a, b) => b - a)); }';
+  const arrays = fc.sample(fc.array(fc.array(fc.integer({ min: -100, max: 100 }), { maxLength: 8 }), { maxLength: 5 }), 30);
+  arrays.push([[Number.MAX_VALUE, -Number.MAX_VALUE, -0, 0], []]);
+  const input = { programs: [{ source, calls: arrays.map(xs =>
+    ({ function: 'f', args: [xs.map(encode)] })) }] };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const [lean] = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  expect(lean?.parsed).toBe(true);
+  if (lean === undefined || !lean.parsed) return;
+  expect(lean.results).toEqual(arrays.map(xs => ({ value: xs
+    .filter(row => row.toSorted((a, b) => a - b).length > 0)
+    .map(row => encode(row.toSorted((a, b) => b - a))) })));
+});
+
+test('number sorts in loops agree with Node through break and return', () => {
+  const prefix = 'export function f(rows: ReadonlyArray<ReadonlyArray<number>>): ReadonlyArray<number> { ';
+  const sources = [
+    prefix + 'let result: ReadonlyArray<number> = []; for (const row of rows) { result = [...result, ...row.toSorted((a, b) => a - b)]; if (row.length > 2) { break; } } return result; }',
+    prefix + 'for (const row of rows) { if (row.length > 0) { return row.toSorted((a, b) => a - b); } } return []; }',
+  ];
+  const arrays = fc.sample(fc.array(fc.array(fc.integer({ min: -100, max: 100 }), { maxLength: 5 }), { maxLength: 5 }), 25);
+  arrays.push([[], [Number.MAX_VALUE, -Number.MAX_VALUE, -0, 0]]);
+  const input = { programs: sources.map(source => ({ source, calls: arrays.map(xs =>
+    ({ function: 'f', args: [xs.map(encode)] })) })) };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const programs = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  for (const [i, lean] of programs.entries()) {
+    expect(lean.parsed).toBe(true);
+    if (!lean.parsed) continue;
+    expect(lean.results).toEqual(arrays.map(rows => {
+      let result: number[] = [];
+      for (const row of rows) {
+        if (i === 1) {
+          if (row.length > 0) { result = row.toSorted((a, b) => a - b); break; }
+        } else {
+          result = [...result, ...row.toSorted((a, b) => a - b)];
+          if (row.length > 2) break;
+        }
+      }
+      return { value: result.map(encode) };
+    }));
+  }
+});
+
+test('records carry calls to number sorts inside map callbacks', () => {
+  const source = 'interface Box { readonly values: ReadonlyArray<number>; }\n' +
+    'function sorted(xs: ReadonlyArray<number>): number[] { return xs.toSorted((a, b) => a - b); }\n' +
+    'export function f(boxes: ReadonlyArray<Box>): Box[] { return boxes.map(box => ({ ...box, values: sorted([...box.values, 0]) })); }';
+  const arrays = fc.sample(fc.array(fc.record({
+    values: fc.array(fc.integer({ min: -10, max: 10 }), { maxLength: 5 }),
+  }), { maxLength: 5 }), 25);
+  const input = { programs: [{ source, calls: arrays.map(xs =>
+    ({ function: 'f', args: [xs.map(encode)] })) }] };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const [lean] = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  expect(lean?.parsed).toBe(true);
+  if (lean === undefined || !lean.parsed) return;
+  expect(lean.results).toEqual(arrays.map(xs => ({ value: xs.map(box => encode({
+    ...box, values: [...box.values, 0].toSorted((a, b) => a - b),
+  })) })));
+});
+
+test('nullable loop elements guard calls to number sorts', () => {
+  const source = 'interface Box { readonly values: ReadonlyArray<number>; }\n' +
+    'function sorted(xs: ReadonlyArray<number>): number[] { return xs.toSorted((a, b) => a - b); }\n' +
+    'export function f(boxes: ReadonlyArray<Box | null>): ReadonlyArray<number> { let result: ReadonlyArray<number> = []; for (const box of boxes) { if (box !== null) { result = [...result, ...sorted(box.values)]; } } return result; }';
+  const arrays = fc.sample(fc.array(fc.option(fc.record({
+    values: fc.array(fc.integer({ min: -10, max: 10 }), { maxLength: 5 }),
+  }), { nil: null }), { maxLength: 5 }), 25);
+  arrays.push([null, { values: [Number.MAX_VALUE, -Number.MAX_VALUE, -0, 0] }]);
+  const input = { programs: [{ source, calls: arrays.map(xs =>
+    ({ function: 'f', args: [xs.map(encode)] })) }] };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const [lean] = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  expect(lean?.parsed).toBe(true);
+  if (lean === undefined || !lean.parsed) return;
+  expect(lean.results).toEqual(arrays.map(xs => ({ value: xs.flatMap(box =>
+    box === null ? [] : box.values.toSorted((a, b) => a - b)).map(encode) })));
+});
+
+test('number sorts read local concatenations with literal elements', () => {
+  const source = 'export function f(xs: ReadonlyArray<number>, ys: ReadonlyArray<number>): number[] { const first = xs; const both = [...first, ...ys, 0, 1]; return both.toSorted((a, b) => a - b); }';
+  const pairs = [[[], []], [[2, -0], [0, 1]],
+    [[Number.MAX_VALUE], [-Number.MAX_VALUE, Number.MIN_VALUE]]];
+  const input = { programs: [{ source, calls: pairs.map(([xs, ys]) =>
+    ({ function: 'f', args: [xs!.map(encode), ys!.map(encode)] })) }] };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const [lean] = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  expect(lean?.parsed).toBe(true);
+  if (lean === undefined || !lean.parsed) return;
+  for (const [i, [xs, ys]] of pairs.entries()) {
+    expect(lean.results[i]).toEqual({ value: [...xs!, ...ys!, 0, 1].sort((a, b) => a - b).map(encode) });
+  }
 });
 
 test('the interpreter gives no value where an assignment to a const throws', async () => {
