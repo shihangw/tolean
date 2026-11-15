@@ -952,6 +952,23 @@ test('number-sort input filters may bind nested some callback elements', () => {
     .filter(x => x.values.some(y => y > 0)).toSorted((a, b) => a.key - b.key).map(encode) })));
 });
 
+test('nested map and filter callbacks sort only finite input rows', () => {
+  const source = 'function sorted(xs: ReadonlyArray<number>): number[] { return xs.toSorted((a, b) => a - b); }\n' +
+    'export function f(xs: ReadonlyArray<ReadonlyArray<number>>): number[][] { return xs.filter(row => sorted(row).length > 0).map(row => row.toSorted((a, b) => b - a)); }';
+  const arrays = fc.sample(fc.array(fc.array(fc.integer({ min: -100, max: 100 }), { maxLength: 8 }), { maxLength: 5 }), 30);
+  arrays.push([[Number.MAX_VALUE, -Number.MAX_VALUE, -0, 0], []]);
+  const input = { programs: [{ source, calls: arrays.map(xs =>
+    ({ function: 'f', args: [xs.map(encode)] })) }] };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const [lean] = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  expect(lean?.parsed).toBe(true);
+  if (lean === undefined || !lean.parsed) return;
+  expect(lean.results).toEqual(arrays.map(xs => ({ value: xs
+    .filter(row => row.toSorted((a, b) => a - b).length > 0)
+    .map(row => encode(row.toSorted((a, b) => b - a))) })));
+});
+
 test('number sorts read local concatenations with literal elements', () => {
   const source = 'export function f(xs: ReadonlyArray<number>, ys: ReadonlyArray<number>): number[] { const first = xs; const both = [...first, ...ys, 0, 1]; return both.toSorted((a, b) => a - b); }';
   const pairs = [[[], []], [[2, -0], [0, 1]],

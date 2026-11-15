@@ -822,7 +822,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
   let envLemmas := ["Env.set_cons", "Env.lookup_cons", "Env.lookup_set_same", "Env.lookup_set_ne",
     "Env.set_set", "Env.length_set"].map r.eval
   let mut loopLemmas : Array String := #[]
-  let mut conditionalSortLemmas : List String := []
+  let mut conditionalLemmas : List String := []
   let mut thms : Array String := #[]
   -- The translator requires a callee before its caller, so the condition
   -- of a callee is available when the caller's theorem is written.
@@ -840,14 +840,40 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     let mut obligations : List (String × String) := []
     let mut inputConditions : List String := []
     let mut literalMaps : List String := []
+    let callbacks := bodyCallbacks outBody
+    let parentOf := fun span => callbacks.find? fun (_, _, _, cb, _, _) =>
+      (exprCallbacks cb).any fun (_, _, _, _, child, _) => child.span == span
+    let mut callbackConditions : List (Span × String) := []
+    let mut callbackCalls : List String := []
     let hasNumberSort := fun callbacks : List Callback => callbacks.any fun (method, _, _, cb, _, _) =>
       (method matches .list (.sortWith _)) && comparesNumbers cb
-    if (bodyCallbacks outBody).any (fun (_, _, _, cb, _, _) => hasNumberSort (exprCallbacks cb)) ||
-        (loopsOf outBody).any (fun (_, _, body, _) => hasNumberSort (bodyCallbacks body)) then
+    if (loopsOf outBody).any (fun (_, _, body, _) => hasNumberSort (bodyCallbacks body)) then
       throw s!"{file}: number sorts inside callback or loop bodies need element or state preconditions in {name}"
     for (method, param, elem, cbBody, info, items) in bodyCallbacks outBody do
       cbIndex := cbIndex + 1
       let lemmaName := s!"{name}_cb{cbIndex}"
+      let parent := parentOf info.span
+      let mut childConditions := callbackConditions.filterMap fun (span, condition) =>
+        match parentOf span with
+        | some (_, _, _, _, parentInfo, _) => if parentInfo.span == info.span then some condition else none
+        | none => none
+      for (callee, (formals, conditions)) in functionConditions do
+        if conditions.isEmpty then continue
+        for actuals in conditionCalls callee cbBody do
+          unless actuals.length == formals.length do
+            throw s!"{file}: missing callback argument for a sort condition in {name}"
+          let available := param :: info.scope.map (·.1)
+          unless (actuals.zip formals).all (fun (e, _, ty) =>
+              (sortInputNames e).all available.contains &&
+              (!(ty matches .list _) || sortInputShape e)) do
+            throw s!"{file}: callback sort arguments must be reachable from its element or captured inputs in {name}"
+          callbackCalls := callee :: callbackCalls
+          for condition in conditions do
+            let binders := " ".intercalate (formals.map fun (p, t) => s!"({p} : {t.print names})")
+            let arguments := " ".intercalate (actuals.map fun e => s!"({e.print names})")
+            childConditions := childConditions ++ [s!"((fun {binders} => {condition}) {arguments})"]
+      unless childConditions.isEmpty || (method matches .list .map | .list .filter) do
+        throw s!"{file}: sort conditions in this callback need an element-restricted link lemma in {name}"
       let some encX := encoderOf r elem
         | throw s!"{file}: cannot encode the elements of a callback in {name}"
       let some encY := encoderOf r info.result
@@ -933,12 +959,12 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           | throw s!"{file}: the comparator in {name} does not compare keys"
         let elemTy := elem.print names
         if comparesNumbers cbBody then
-          conditionalSortLemmas := conditionalSortLemmas ++ [r.cert lemmaName]
+          conditionalLemmas := conditionalLemmas ++ [r.cert lemmaName]
           literalMaps := literalMaps ++ [s!"← List.map_singleton (f := {encX})",
             s!"← List.map_cons (f := {encX})"]
-          let bindings := (leadingBindings outBody).filter fun (n, _) =>
+          let bindings := if parent.isSome then [] else (leadingBindings outBody).filter fun (n, _) =>
             info.scope.any fun (p, _) => p == n
-          let mut available := outParams.map (·.1)
+          let mut available := if parent.isSome then info.scope.map (·.1) else outParams.map (·.1)
           for (localName, value) in bindings do
             unless sortInputShape value && !(sortInputNames value).isEmpty &&
                 (sortInputNames value).all available.contains do
@@ -967,10 +993,13 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
                   throw s!"{file}: reserved certificate hypothesis name {hname}"
                 let predicate := if difference then "isFinite" else "isNaN"
                 let truth := if difference then "true" else "false"
-                let condition := fun xs => s!"∀ x ∈ {xs}, tolean.TypeScript.JSNumber.{predicate} ({key} x) = {truth}"
+                let condition := fun xs => s!"∀ _sortItem' ∈ {xs}, tolean.TypeScript.JSNumber.{predicate} ({key} _sortItem') = {truth}"
                 hypotheses := hypotheses ++ s!" ({hn} : {condition "items"})"
-                obligations := obligations ++ [(hname, condition input)]
-                inputConditions := inputConditions ++ [condition input]
+                if parent.isSome then
+                  callbackConditions := callbackConditions ++ [(info.span, condition input)]
+                else
+                  obligations := obligations ++ [(hname, condition input)]
+                  inputConditions := inputConditions ++ [condition input]
                 let validity := if difference then
                   s!"tolean.TypeScript.SpecialValueLaws.isFinite_not_nan ({hn} a.val a.property)"
                   else s!"{hn} a.val a.property"
@@ -1028,8 +1057,11 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
             "      all_goals simp_all [tolean.TypeScript.compareSign_one, tolean.TypeScript.compareSign_zero,\n" ++
             "        tolean.TypeScript.compareSign_neg_one, tolean.TypeScript.compareSign_neg_zero]\n" ++
             s!"    simpa only [hs] using {orderLemma} {key} items hkeys"
-          obligations := obligations ++ [(hname, condition input)]
-          inputConditions := inputConditions ++ [condition input]
+          if parent.isSome then
+            callbackConditions := callbackConditions ++ [(info.span, condition input)]
+          else
+            obligations := obligations ++ [(hname, condition input)]
+            inputConditions := inputConditions ++ [condition input]
           loopLemmas := loopLemmas.push (r.cert lemmaName)
           thms := thms.push <|
             s!"theorem {lemmaName} {generic} (fs : List (tolean.DeclRef × List String × tolean.TypeScript.IR.Body)){hfs}\n" ++
@@ -1083,6 +1115,55 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         | .mapIdx index => (s!" {str index}", " 0", "idx x")
         | .findIndex => ("", " 0", "x")
         | _ => ("", "", "x")
+      if !childConditions.isEmpty then
+        unless method == .map || method == .filter do
+          throw s!"{file}: sort conditions in this callback need an element-restricted link lemma in {name}"
+        let predicate := " ∧ ".intercalate (childConditions.map fun c => s!"({c})")
+        let abstracted := s!"(fun ({param} : {elem.print names}) " ++
+          " ".intercalate (scope.map fun (n, t) => s!"({n} : {t.print names})") ++ s!" => {predicate})"
+        let applied := s!"({abstracted} x" ++ String.join (scope.map fun (n, _) => s!" {decode n}") ++ ")"
+        let raw := s!"∀ _sortElement' ∈ ({items.print names}), ((fun ({param} : {elem.print names}) => {predicate}) _sortElement')"
+        if parent.isSome then
+          callbackConditions := callbackConditions ++ [(info.span, raw)]
+        else
+          let bindings := (leadingBindings outBody).filter fun (n, _) => info.scope.any fun (p, _) => p == n
+          let mut available := outParams.map (·.1)
+          for (n, value) in bindings do
+            unless sortInputShape value && (sortInputNames value).all available.contains do
+              throw s!"{file}: callback sort conditions must be reachable from parameters in {name}"
+            available := n :: available
+          unless sortInputShape items && !(sortInputNames items).isEmpty &&
+              (sortInputNames items).all available.contains do
+            throw s!"{file}: callback sort conditions must be reachable from parameters in {name}"
+          let condition := "(" ++ String.join (bindings.map fun (n, e) => s!"let {n} := {e.print names}; ") ++ raw ++ ")"
+          let hn := s!"{name}_sort_precondition{obligations.length}"
+          if r.idents.contains hn then throw s!"{file}: reserved certificate hypothesis name {hn}"
+          obligations := obligations ++ [(hn, condition)]
+          inputConditions := inputConditions ++ [condition]
+        let restricted := if method == .map then
+          s!"evalMap_map_on fs {fuel} ρ {str param} _ {encX} {encY} {fn}"
+          else s!"evalFilter_filter_on fs {fuel} ρ {str param} _ {encX} {fn}"
+        let unpackKeys := hypNames.foldl (fun text h => text.replace s!"at {h} ⊢" s!"at {h} hkeys ⊢") unpack
+        let vars := ("x", elem) :: scope.zipIdx.map fun ((_, t), i) => (s!"v{i}", t)
+        let rewrites := if conditionalLemmas.isEmpty then "" else
+          "  all_goals repeat' first\n" ++ String.join (conditionalLemmas.map fun lemma =>
+            s!"    | rw [{lemma}]\n")
+        loopLemmas := loopLemmas.push (r.cert lemmaName)
+        conditionalLemmas := conditionalLemmas ++ [r.cert lemmaName]
+        thms := thms.push <|
+          s!"theorem {lemmaName} {generic} (fs : List (tolean.DeclRef × List String × tolean.TypeScript.IR.Body)){hfs}\n" ++
+          s!"    (fuel : Nat) (ρ : Env {nv}){hI} (items : {itemsTy}) (hkeys : ∀ x ∈ items, {applied}) :\n" ++
+          s!"    tolean.TypeScript.IR.Expr.{evalFn} fs {fuel} ρ {str param} ({term cbBody})\n" ++
+          s!"      (List.map {encX} items) = some ({result}) := by\n" ++
+          s!"  refine tolean.TypeScript.Proof.{restricted} items ?_\n" ++
+          "  intro x hx\n" ++ substHfs ++ unpackKeys ++
+          "  have hs := hkeys x hx\n" ++
+          s!"  {casesOn decls vars}link_tac [{simpSet}, hs]\n" ++
+          (if literalMaps.isEmpty then "" else s!"  all_goals (try simp only [{", ".intercalate literalMaps}, ← List.map_append])\n") ++
+          rewrites ++
+          s!"  all_goals (try simp_all [{simpSet}, hs])\n" ++
+          "  all_goals first | assumption | rfl\n"
+        continue
       let vars := ("x", elem) :: scope.zipIdx.map fun ((_, t), i) => (s!"v{i}", t)
       loopLemmas := loopLemmas.push (r.cert lemmaName)
       thms := thms.push <|
@@ -1238,7 +1319,8 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       let (formals, conditions) := (functionConditions.lookup callee).getD ([], [])
       if conditions.isEmpty then continue
       let calls := bodyConditionCalls callee outBody
-      let sourceCount := (((stmtsOf syntaxBody).flatMap stmtCalls).filter (· == callee)).length
+      let sourceCount := (((stmtsOf syntaxBody).flatMap stmtCalls).filter (· == callee)).length -
+        (callbackCalls.filter (· == callee)).length
       unless calls.length == sourceCount do
         if hasTaggedConditionScope outBody then
           throw s!"{file}: a call with number-sort preconditions in unsupported tagged narrowing scope in {name}"
@@ -1279,8 +1361,8 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       loopLemmas.toList ++ defs ++ obligations.map (·.1))
     let some_ := r.write "some" "Option.some"
     let rfl := r.full "rfl"
-    let sortRewrites := if conditionalSortLemmas.isEmpty then "" else
-      "\n  all_goals repeat' first\n" ++ String.join (conditionalSortLemmas.map fun lemma =>
+    let conditionRewrites := if conditionalLemmas.isEmpty then "" else
+      "\n  all_goals repeat' first\n" ++ String.join (conditionalLemmas.map fun lemma =>
         s!"    | rw [{lemma}]\n") ++
       s!"  all_goals (try simp_all [{simpSet}])\n  all_goals first | assumption | rfl"
     thms := thms.push <|
@@ -1291,7 +1373,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       (if literalMaps.isEmpty then "" else
         s!"\n  all_goals (try simp only [{", ".intercalate literalMaps}, ← List.map_append])\n" ++
         s!"  all_goals (try simp_all [{simpSet}, -List.map_cons, -List.map_nil, -List.map_map, ← List.map_append])") ++
-      sortRewrites ++
+      conditionRewrites ++
       -- After a loop that a `return` can end, the evaluator matches on the
       -- loop's outcome, which is itself a match on the value to return. Once
       -- that match is split, the arms for a `break` or a `continue` close, and
