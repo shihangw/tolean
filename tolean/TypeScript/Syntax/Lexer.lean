@@ -392,7 +392,7 @@ def lexRegExp (start : Pos) : LexM TokenKind := do
   | .ok _ =>
     if !RegExp.bodyOK s.target source then
       failFrom start "regular expression body cannot be printed as a literal"
-    let consumed := s.rest.length - rest.length
+    let consumed := body.length + 2
     modify fun s => { s with rest, i := s.i + consumed, col := s.col + consumed }
     return .regexp source s.target
 

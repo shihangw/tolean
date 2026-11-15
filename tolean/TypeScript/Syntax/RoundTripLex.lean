@@ -1401,13 +1401,9 @@ theorem lexRegExp_word (start : Pos) {T : Edition} {source : String}
   have hflags : isIdentPart b = false ∧ b ≠ '\\' := by
     rcases hb with rfl | rfl <;> decide
   have htail : s.rest.tail = source.toList ++ '/' :: b :: more := by simp [hs]
-  have hcount : s.rest.length - (b :: more).length = source.length + 2 := by
-    simp [hs]
-    omega
   simp [lexRegExp, bind, EStateM.bind, get, getThe, MonadStateOf.get, EStateM.get,
     htail, hr, pure, EStateM.pure, hflags.1, hflags.2, hT, hp, hOK,
     modify, modifyGet, MonadStateOf.modifyGet, EStateM.modifyGet]
-  exact hcount
 
 theorem lexRegExp_result {start : Pos} {s s' : LexState} {k : TokenKind}
     (h : lexRegExp start s = .ok k s') :
@@ -1442,7 +1438,8 @@ theorem lexRegExp_result {start : Pos} {s s' : LexState} {k : TokenKind}
           simp only [EStateM.pure, EStateM.bind, modify, modifyGet,
             MonadStateOf.modifyGet, EStateM.modifyGet, EStateM.Result.ok.injEq] at h
           obtain ⟨rfl, rfl⟩ := h
-          exact ⟨body, rest, rfl, by simpa using hOK, rfl, rfl⟩
+          exact ⟨body, rest, rfl, by simpa using hOK, rfl,
+            by rw [RegExp.readBody_length hr]⟩
 
 theorem lexKind_regexp_word (start : Pos) {T : Edition} {source : String}
     (hOK : RegExp.bodyOK T source = true) {b : Char} (hb : b = ' ' ∨ b = '\n')

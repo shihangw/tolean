@@ -73,6 +73,19 @@ theorem readBody_frame (chars : List Char) (escaped inClass : Bool)
                 · intro tail
                   simp_all [readBody]
 
+theorem readBody_length {chars body rest : List Char}
+    (h : readBody false false [] chars.tail = .ok (body, rest)) :
+    chars.length - rest.length = body.length + 2 := by
+  obtain ⟨consumed, hc, hb, _⟩ := readBody_frame chars.tail false false [] body rest h
+  simp only [List.reverse_nil, List.nil_append] at hb
+  subst body
+  cases chars with
+  | nil => simp [readBody] at h
+  | cons c cs =>
+    simp only [List.tail_cons] at hc
+    simp [hc]
+    omega
+
 theorem readBody_replay (chars body rest : List Char)
     (h : readBody false false [] chars = .ok (body, rest)) (tail : List Char) :
     readBody false false [] (body ++ '/' :: tail) = .ok (body, tail) := by
