@@ -3570,8 +3570,10 @@ def translateLocalHead (env : Env) (s : Span) (name : String) (typeParams : List
       requireFeature s .localSiblingCalls
       let some sibling := env.localFns.find? (·.name == l.name)
         | reject s s!"the local function '{l.name}' is not declared here"
-      unless sibling.captured.isEmpty do
-        reject s s!"a called sibling such as '{l.name}' must not capture variables yet"
+      if sibling.captured.any (·.binding == .fn) then
+        reject s "a called sibling may not call another local function yet"
+      unless sibling.captured.all (fun c => body.mentions c.name && !own.any (·.name == c.name)) do
+        reject s "a sibling call requires each captured variable to be named in its caller"
     if l.binding == .array || l.binding == .map then
       reject s s!"a local function may not use '{l.name}', which the function around it owns"
   let changed := stmtsChanges env.fnChanges (blockStatements body)
@@ -3592,7 +3594,9 @@ def translateLocalHead (env : Env) (s : Span) (name : String) (typeParams : List
     if changes.isEmpty then
       reject s "a local function that returns nothing must change a let local of the function around it"
   | some _ =>
-    if captured.any fun l => body.assigns l.name || body.mutates l.name then
+    if !changes.isEmpty then
+      unless captured.any (fun l => body.assigns l.name || body.mutates l.name) do
+        reject s "a value-returning sibling caller must write a captured variable directly"
       requireFeature s .localReturnState
       let some (_, result) := localReturnIdent (blockStatements body)
         | reject s "a state-writing local function must end by returning a captured variable"

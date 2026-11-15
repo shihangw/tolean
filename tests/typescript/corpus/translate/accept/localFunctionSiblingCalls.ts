@@ -27,3 +27,29 @@ export function accumulate(xs: ReadonlyArray<bigint>): bigint {
   }
   return total + seen;
 }
+
+export function captured(factor: bigint, x: bigint): bigint {
+  function scale(value: bigint): bigint {
+    return value * factor;
+  }
+  function apply(value: bigint): bigint {
+    const scaled = scale(value);
+    return scaled + factor;
+  }
+  return apply(x);
+}
+
+export function siblingState(start: bigint, amount: bigint): bigint {
+  let total = start;
+  function add(value: bigint): void {
+    total += value;
+  }
+  function twice(value: bigint): bigint {
+    add(value);
+    add(value);
+    total += 1n;
+    return total;
+  }
+  const result = twice(amount);
+  return result + total;
+}

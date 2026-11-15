@@ -36,4 +36,34 @@ def accumulate (xs : List Int) : Int :=
       (total, seen) xs
   (total + seen)
 
+set_option linter.unusedVariables false in
+def captured.scale (factor : Int) (value : Int) : Int :=
+  (value * factor)
+
+set_option linter.unusedVariables false in
+def captured.apply (factor : Int) (scale : Unit) (value : Int) : Int :=
+  let scaled := (captured.scale factor value)
+  (scaled + factor)
+
+def captured (factor : Int) (x : Int) : Int :=
+  (captured.apply factor () x)
+
+set_option linter.unusedVariables false in
+def siblingState.add (total : Int) (value : Int) : Int :=
+  let total := total + value
+  total
+
+set_option linter.unusedVariables false in
+def siblingState.twice (total : Int) (add : Unit) (value : Int) : Int :=
+  let total := (siblingState.add total value)
+  let total := (siblingState.add total value)
+  let total := total + (1 : Int)
+  total
+
+def siblingState (start : Int) (amount : Int) : Int :=
+  let total := start
+  let total := (siblingState.twice total () amount)
+  let result := total
+  (result + total)
+
 end Test

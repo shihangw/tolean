@@ -1,4 +1,4 @@
-// expect: 7:3 a called sibling such as 'one' must not capture variables yet
+// expect: 7:3 a sibling call requires each captured variable to be named in its caller
 export function f(x: bigint): bigint {
   let n = 0n;
   function one(): void {

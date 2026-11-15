@@ -252,6 +252,8 @@ test('local returns and sibling calls preserve captured state and agree with Nod
     { function: 'capturedTotal', args: [encode([start, amount])] },
     { function: 'calculate', args: [encode(start)] },
     { function: 'accumulate', args: [encode([start, amount])] },
+    { function: 'captured', args: [encode(start), encode(amount)] },
+    { function: 'siblingState', args: [encode(start), encode(amount)] },
   ]);
   const run = spawnSync(tolean, ['interpret'], {
     input: JSON.stringify({ programs: [{ source, calls }] }), encoding: 'utf8',
@@ -274,15 +276,19 @@ test('local returns and sibling calls preserve captured state and agree with Nod
     capturedTotal: (xs: Array<bigint>) => bigint;
     calculate: (x: bigint) => bigint;
     accumulate: (xs: Array<bigint>) => bigint;
+    captured: (factor: bigint, x: bigint) => bigint;
+    siblingState: (start: bigint, amount: bigint) => bigint;
   };
   for (const [i, [start, amount]] of inputs.entries()) {
-    expect(result.results[7 * i]).toEqual({ value: encode(mod.f(start)) });
-    expect(result.results[7 * i + 1]).toEqual({ value: encode(mod.tally(start, amount)) });
-    expect(result.results[7 * i + 2]).toEqual({ value: encode(mod.returnCall(start, amount)) });
-    expect(result.results[7 * i + 3]).toEqual({ value: encode(mod.loopCalls([start, amount])) });
-    expect(result.results[7 * i + 4]).toEqual({ value: encode(mod.capturedTotal([start, amount])) });
-    expect(result.results[7 * i + 5]).toEqual({ value: encode(mod.calculate(start)) });
-    expect(result.results[7 * i + 6]).toEqual({ value: encode(mod.accumulate([start, amount])) });
+    expect(result.results[9 * i]).toEqual({ value: encode(mod.f(start)) });
+    expect(result.results[9 * i + 1]).toEqual({ value: encode(mod.tally(start, amount)) });
+    expect(result.results[9 * i + 2]).toEqual({ value: encode(mod.returnCall(start, amount)) });
+    expect(result.results[9 * i + 3]).toEqual({ value: encode(mod.loopCalls([start, amount])) });
+    expect(result.results[9 * i + 4]).toEqual({ value: encode(mod.capturedTotal([start, amount])) });
+    expect(result.results[9 * i + 5]).toEqual({ value: encode(mod.calculate(start)) });
+    expect(result.results[9 * i + 6]).toEqual({ value: encode(mod.accumulate([start, amount])) });
+    expect(result.results[9 * i + 7]).toEqual({ value: encode(mod.captured(start, amount)) });
+    expect(result.results[9 * i + 8]).toEqual({ value: encode(mod.siblingState(start, amount)) });
   }
 });
 
