@@ -54,6 +54,7 @@ partial def Expr.toSexp : Expr → Sexp
   | .number s text => node "number" s [text] []
   | .bigint s text => node "bigint" s [text] []
   | .string s value => node "string" s [Sexp.quote value] []
+  | .regexp s source _ => node "regexp" s [Sexp.quote source] []
   | .bool s value => node (if value then "true" else "false") s [] []
   | .null s => node "null" s [] []
   | .array s elems => node "array" s [] (elems.map Expr.toSexp)

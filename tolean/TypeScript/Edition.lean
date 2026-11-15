@@ -48,7 +48,7 @@ namespace tolean.TypeScript
 inductive Edition where
   | es2015 | es2016 | es2017 | es2018 | es2019 | es2020 | es2021 | es2022 | es2023 | es2024
   | es2025
-deriving BEq, Repr, Inhabited
+deriving BEq, DecidableEq, ReflBEq, LawfulBEq, Repr, Inhabited
 
 def Edition.year : Edition → Nat
   | .es2015 => 2015 | .es2016 => 2016 | .es2017 => 2017 | .es2018 => 2018
@@ -70,6 +70,16 @@ maintained. -/
 def Edition.default : Edition := .es2024
 
 inductive Feature where
+  /-- Flagless RegExp patterns and `test`: Pattern Semantics, RepeatMatcher
+  and RegExpBuiltinExec (ES2024 §22.2.2, §22.2.2.3.1 and §22.2.7.2).
+  The translator accepts flagless literals and their `test` method from ES2015. -/
+  | regexp
+  /-- A call changes an exclusively owned Map argument: `EvaluateCall`,
+  `OrdinaryCallBindThis`, `FunctionDeclarationInstantiation`,
+  `Map.prototype.set`, `Map.prototype.delete` and `ReturnStatement`.
+  Copying the final map back
+  models the shared object without exposing an alias. Maps date to ES2015. -/
+  | mapBorrow
   /-- `**` and `**=`: `ExponentiationExpression`. -/
   | exponent
   /-- `{ ...e }`: `PropertyDefinition : ... AssignmentExpression`. -/
@@ -128,8 +138,10 @@ inductive Feature where
 deriving BEq, Repr, Inhabited
 
 def Feature.since : Feature → Edition
+  | .regexp => .es2015
   | .stringNumberArguments => .es2015
   | .dateParseFormat => .es2016
+  | .mapBorrow => .es2015
   | .exponent | .arrayIncludes | .trimWhiteSpace => .es2016
   | .stringPad => .es2017
   | .objectSpread => .es2018
@@ -140,6 +152,8 @@ def Feature.since : Feature → Edition
   | .arrayFindLast | .arrayToSorted => .es2023
 
 def Feature.describe : Feature → String
+  | .regexp => "regular expressions without flags"
+  | .mapBorrow => "a call that changes an exclusively owned Map argument"
   | .exponent => "'**'"
   | .objectSpread => "object spread '...'"
   | .bigint => "bigint"
