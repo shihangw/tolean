@@ -254,7 +254,10 @@ export class Gen {
           const chains = readable.flatMap((v) => {
             const of = v.ty.k === 'nullable' ? v.ty.of : undefined;
             const s = of?.k === 'struct' ? this.structs.find((x) => x.name === of.name) : undefined;
-            const direct = (s?.fields ?? []).filter(([, ft]) => same(ft, t)).map(([f]) => `${v.name}?.${f}`);
+            const direct = (s?.fields ?? []).filter(([, ft]) => same(ft, t)).flatMap(([f]) =>
+              s !== undefined && this.records.has(s.name)
+                ? [`${v.name}?.${f}`, `${v.name}?.['${f}']`]
+                : [`${v.name}?.${f}`]);
             const nested = (s?.fields ?? []).flatMap(([f, ft]) => {
               const inner = ft.k === 'struct' ? this.structs.find((x) => x.name === ft.name) : undefined;
               return (inner?.fields ?? []).filter(([, gt]) => same(gt, t)).map(([g]) => `${v.name}?.${f}.${g}`);
@@ -1041,6 +1044,18 @@ export class Gen {
         params: [NUMBER, { k: 'optional', of: { k: 'array', of: BIGINT } }],
         ret: BIGINT,
       });
+    }
+    if (this.chance(0.25)) {
+      const first = this.chance(0.5);
+      const ret = first ? BIGINT : STRING;
+      out.push(
+        `export function optionalTuple(flag: boolean, left: bigint, right: string): ${show(ret)} {`,
+        '  const pair: readonly [bigint, string] = [left, right];',
+        '  const maybe: readonly [bigint, string] | null = flag ? pair : null;',
+        `  return maybe?.[${first ? '0' : '1'}] ?? ${first ? '0n' : "''"};`,
+        '}',
+      );
+      this.functions.push({ name: 'optionalTuple', params: [BOOLEAN, BIGINT, STRING], ret });
     }
     return out.join('\n') + '\n';
   }

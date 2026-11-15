@@ -131,6 +131,12 @@ def listItems? : Val N → Option (List (Val N))
   | [.list xs] => some (Eval.elementAt xs (some k))
   | _ => none
 
+/-- Read a record key only when its optional receiver is present. -/
+@[simp] def optionalRecordIndex : List (Val N) → Option (Val N)
+  | [.null, _] | [.undefined, _] => some .undefined
+  | [.obj fields, .str k] => Eval.getKey fields k
+  | _ => none
+
 /-- An operation that TypeScript adds, on the values of its arguments. The
 operation is matched before its arguments, so a proof about one operation
 does not reduce the argument cases of every other one. -/
@@ -224,6 +230,7 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
     | .recordGet _ _ => match args with
       | [.obj fields, .str k] => Eval.getKey fields k
       | _ => none
+    | .optRecordGet _ _ _ => optionalRecordIndex args
     -- `x ∈ xs` and `List.any xs (JSNumber.sameValueZero x)`: whether an
     -- element is `x`, as `includes` compares them.
     | .includes | .includesNumber => match args with
@@ -237,7 +244,7 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
     | .indexLit k => match args with
       | [.list xs] => some (Eval.elementAt xs (some k))
       | _ => none
-    | .optIndexLit k => optionalLiteralIndex k args
+    | .optIndexLit k _ => optionalLiteralIndex k args
     | .indexNumber => match args with
       | [.list xs, .num i] => some (Eval.elementAt xs (JSNumber.toSafeInt i))
       | _ => none

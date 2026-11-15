@@ -730,6 +730,53 @@ test('optional indexed member access handles every kind of number index', async 
   }
 });
 
+test('optional tuple and Record indices agree with Node', async () => {
+  const source = readFileSync(new URL('./corpus/translate/accept/optionalTupleRecordIndex.ts', import.meta.url), 'utf8');
+  const calls: Array<{ function: string; args: Array<unknown> }> = [];
+  const values = [undefined, 0n, -3n, ...fc.sample(fc.bigInt(), { seed, numRuns: 20 })];
+  for (const value of values) {
+    calls.push({ function: 'optionalValue', args: [[value, 'text']] });
+    for (const key of ['apple', 'pear']) {
+      calls.push({ function: 'optionalRecordValue', args: [{ apple: value, pear: 5n }, key] });
+    }
+  }
+  for (const absent of [null, undefined]) {
+    for (const name of ['first', 'last', 'literal', 'optionalValue']) {
+      calls.push({ function: name, args: [absent] });
+    }
+    calls.push({ function: 'record', args: [absent, 'apple'] });
+    calls.push({ function: 'optionalRecordValue', args: [absent, 'pear'] });
+    calls.push({ function: 'shadowed', args: [true, absent] });
+  }
+  calls.push({ function: 'first', args: [[19n, 'value']] });
+  calls.push({ function: 'last', args: [[19n, 'value']] });
+  calls.push({ function: 'record', args: [{ apple: 3n, pear: 7n }, 'pear'] });
+  calls.push({ function: 'literal', args: [{ apple: 3n, pear: 7n }] });
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: [{ source, calls: calls.map(c => ({
+      function: c.function, args: c.args.map(encode),
+    })) }] }),
+    encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (result === undefined || !result.parsed) return;
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-optional-tuple-record-'));
+  const path = join(dir, 'index.mjs');
+  writeFileSync(path, ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+  }).outputText);
+  const mod = (await import(pathToFileURL(path).href)) as Record<string, (...xs: Array<unknown>) => unknown>;
+  for (const [i, call] of calls.entries()) {
+    const fn = mod[call.function];
+    if (fn === undefined) throw new Error(`missing export ${call.function}`);
+    const value = result.results[i]?.value;
+    expect(value === undefined ? 'no value' : canonical(value))
+      .toBe(canonical(encode(fn(...call.args))));
+  }
+});
+
 // JS binds every function declaration of a block when the block starts, so a
 // second declaration of `g` replaces the first for both calls, and Node gives
 // 20n. The interpreter binds each where it stands, so it must give no value.

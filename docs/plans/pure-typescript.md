@@ -54,7 +54,7 @@ exact. A construct leaves these tables when Tolean translates it, and the
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| Optional indexing of tuples and records, and `f?.()` | `Option.bind` | `==` against anything except `null` and `undefined` |
+| `f?.()` | No accepted program to translate: `Syntax.TypeExpr` and `Translate.Ty` have no function type, and no accepted declaration gives a possibly `undefined` value a callable type. A generic type parameter does not make a value callable. Local function values cannot escape a direct call. | Optional calls stay refused; so does `==` against anything except `null` and `undefined`. |
 | A value re-export, such as `export { a } from "./x.ts"` | Nothing: the names stay in scope | `export *` |
 
 ### Functions
@@ -226,8 +226,8 @@ the P2 steps. Steps with the same priority keep the order of their numbers.
 The steps keep the numbers that pull requests refer to, so a finished step
 leaves a gap.
 
-2. **P0.** Types and narrowing: `a?.[i]` and `f?.()`, and
-   re-exports.
+2. **P0.** Value re-exports. Optional calls have no accepted program to apply
+   to, as the types table explains; they are not unfinished work in this step.
 8. **P0.** Widen map borrows to early returns, several changed maps, an
    ordinary returned value, control flow and imported callees.
 10. **P1.** Sorting: certificates for a sort by a `number` key.
