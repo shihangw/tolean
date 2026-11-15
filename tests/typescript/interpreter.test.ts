@@ -940,6 +940,20 @@ test('normal-completion map borrows copy the final map back without aliases', as
         'export function f(x: bigint): bigint { const m = new Map<bigint, bigint>(); ' +
         'forward(m, x); return m.get(1n) ?? 0n; }',
     },
+    {
+      source: 'type Other = Map<bigint, bigint>;\n' +
+        'function change(a: Map<bigint, bigint>, other: ReadonlyMap<bigint, bigint>): void { a.set(1n, 5n); }\n' +
+        'function forward(m: Map<bigint, bigint>, b: Other): void { change(m, b); }\n' +
+        'export function f(x: bigint): boolean { const a = new Map<bigint, bigint>(); ' +
+        'const b = new Map<bigint, bigint>(); forward(a, b); return a.has(1n); }',
+    },
+    {
+      source: 'function forward(m: Map<bigint, bigint>, x: bigint): void { change(x, m); }\n' +
+        'function change(x: bigint, m: Map<bigint, bigint>): void { m.set(1n, x); }\n' +
+        'export function f(x: bigint): bigint { const m = new Map<bigint, bigint>(); ' +
+        'forward(m, x); return m.get(1n) ?? 0n; }',
+      refused: true,
+    },
   ];
   const inputs = [-9n, 0n, 17n];
   const run = spawnSync(tolean, ['interpret'], {
