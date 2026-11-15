@@ -123,9 +123,18 @@ of a literal as a Lean `String`.
 Flagless regular expressions now support `test` with a string argument.
 Literals must start with `(?:` so the parser can distinguish them from
 division. The matcher uses UTF-16 code units and total ordered backtracking.
-Flags, `match`, `replace` and regex values at certificate boundaries remain
-outside this subset. The [decision record](../decisions/2026-11-14-regexp-subset.md)
-sets the restrictions for those later operations.
+`s.replace(r, replacement)` accepts a direct flagless literal and a literal
+replacement string without dollar signs. It replaces the first match,
+including an empty match, and accepts capturing groups in the pattern.
+Dollar substitutions and function replacers need their own substitution
+model. Dynamic replacement strings remain refused because they may contain
+substitution tokens. Flags remain refused because global and sticky searches
+need state, and other flags change the matcher semantics.
+`match` and regex values at certificate boundaries remain outside this subset.
+`match` needs a result that preserves unmatched captures as `undefined` and
+accounts for the `index`, `input` and `groups` properties.
+The [decision record](../decisions/2026-11-14-regexp-subset.md) sets the
+restrictions for those later operations.
 
 ### Maps and sets
 

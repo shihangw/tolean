@@ -285,7 +285,8 @@ inline tests. The native and WebAssembly translators use the same source.
 #### Regular expressions
 
 The translator accepts `test` on flagless regular expressions with a string
-argument. It still refuses `match` and `replace` with a regex argument.
+argument. It also accepts the restricted first-match replacement below.
+It still refuses `match` with a regex argument.
 The parser accepts flagless
 literals that start with a non-capturing group, such as `/(?:a|ab)/`.
 Wrap a pattern in `(?:...)`, or prefix it with `(?:)`, to use that spelling.
@@ -305,7 +306,14 @@ classes, alternatives, captures, greedy repetition and the input anchors.
 It proves termination with the remaining minimum and input length, rather
 than interpreting fuel exhaustion as failure to match. See the
 [decision record](../decisions/2026-11-14-regexp-subset.md) for the intended
-source subset and the restrictions on future `match` and `replace` support.
+source subset and the restrictions on future `match` support.
+
+`s.replace(/(?:pattern)/, "replacement")` replaces the first match. The
+pattern may contain captures. The replacement must be a string literal
+without dollar signs, because substitution tokens and replacement callbacks
+are not modeled. Dynamic replacements and regex aliases in this call are
+refused. Flags, named groups and the other pattern restrictions above still
+apply. Empty matches insert the replacement at the first matching position.
 
 #### Certificates
 

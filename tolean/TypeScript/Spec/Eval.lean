@@ -435,6 +435,13 @@ def stringAt (s : JSString) (k : Int) : Val N :=
   | some c => .str c
   | none => .undefined
 
+/-- Literal replacement strings have no GetSubstitution tokens. -/
+def regexpReplace (s : JSString) : List (Val N) → Option (Val N)
+  | [.regexp r, .str replacement] =>
+    if replacement.units.contains 36 then none
+    else some (.str (r.replaceLiteral s replacement))
+  | _ => none
+
 /-- A method of the string `s` that takes no callback, on the values of its
 arguments `args`, where `lits` holds the integer literal that each argument
 is, if it is one:
@@ -476,6 +483,7 @@ def stringMethod (method : String) (s : JSString) (args : List (Val N)) (lits : 
   else if method == "padEnd" then padArgs s.padEnd args lits
   else if method == "toUpperCase" then asciiCase s.toUpperAscii s args
   else if method == "toLowerCase" then asciiCase s.toLowerAscii s args
+  else if method == "replace" then regexpReplace s args
   else none
 
 mutual

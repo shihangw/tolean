@@ -675,6 +675,54 @@ test('flagless RegExp.test agrees with Node on UTF-16 strings', () => {
   }
 });
 
+test('flagless RegExp replacement agrees with Node on UTF-16 strings', () => {
+  const atom = fc.constantFrom('a', 'b', '.', '[a-c]', '[^b]', '(a|ab)', '(a?)', '\\s');
+  const generated = fc.sample(fc.tuple(atom, fc.constantFrom('', '*', '+', '?', '{1,3}'), atom), {
+    seed, numRuns: 40,
+  }).map(([a, quantifier, b]) => `${a}${quantifier}${b}`);
+  const patterns = ['^(a|ab)+c$', '(?:){3,}', '^.$', 'a$', '^\\s+$', '[^a-c]*$', '(a?)*b', ...generated];
+  const randomInputs = fc.sample(fc.array(fc.constantFrom('a', 'b', 'c', '\n', '\uD800', '\uDC00'), {
+    maxLength: 12,
+  }), { seed, numRuns: 20 }).map(units => units.join(''));
+  const inputs = ['', 'a', 'abc', 'ababc', 'b', '\n', '\u2028', '😀', '\uD800', ' \t', ...randomInputs];
+  const replacements = ['', 'x', '😀'];
+  const cases = patterns.flatMap(pattern => replacements.map(replacement => ({ pattern, replacement })));
+  const programs = cases.map(({ pattern, replacement }) => ({
+    source: `export function f(s: string): string {
+      return s.replace(/(?:${pattern})/, ${JSON.stringify(replacement)});
+    }`,
+    calls: inputs.map(s => ({ function: 'f', args: [encode(s)] })),
+  }));
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify({ programs }), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const results = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  for (const [i, { pattern, replacement }] of cases.entries()) {
+    expect(results[i]?.accepted, pattern).toBe(true);
+    for (const [j, s] of inputs.entries()) {
+      expect(results[i]?.results[j]?.value, `${pattern}: ${JSON.stringify(s)}`)
+        .toEqual(encode(s.replace(new RegExp(pattern), replacement)));
+    }
+  }
+});
+
+test('RegExp replacement refuses substitutions and dynamic replacements', () => {
+  const bodies = [
+    's.replace(/(?:a)/, "$&")',
+    's.replace(/(?:a)/, "$$")',
+    's.replace(/(?:a)/, s)',
+    's.replace(/(?:a)/g, "x")',
+    's.replace(/(?:a)/, () => "x")',
+  ];
+  const programs = bodies.map(body => ({
+    source: `export function f(s: string): string { return ${body}; }`,
+    calls: [],
+  }));
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify({ programs }), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const results = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  for (const result of results) expect(result.accepted).not.toBe(true);
+});
+
 test('Date.parse refuses local time and fallback formats', () => {
   const strings = [
     '2000-01-01T00:00', '2000-01-01T00:00:00.000', 'January 1, 2000',

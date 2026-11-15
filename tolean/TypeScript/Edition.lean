@@ -56,6 +56,10 @@ inductive Feature where
   and RegExpBuiltinExec (ES2024 §22.2.2, §22.2.2.3.1 and §22.2.7.2).
   The translator accepts flagless literals and their `test` method from ES2015. -/
   | regexp
+  /-- String.prototype.replace and RegExp.prototype[@@replace],
+  with a literal replacement without GetSubstitution tokens
+  (ES2024 §22.1.3.19, §22.2.6.11 and §22.1.3.19.1). -/
+  | regexpReplace
   /-- `**` and `**=`: `ExponentiationExpression`. -/
   | exponent
   /-- `{ ...e }`: `PropertyDefinition : ... AssignmentExpression`. -/
@@ -115,6 +119,7 @@ deriving BEq, Repr, Inhabited
 
 def Feature.since : Feature → Edition
   | .regexp => .es2015
+  | .regexpReplace => .es2015
   | .stringNumberArguments => .es2015
   | .dateParseFormat => .es2016
   | .exponent | .arrayIncludes | .trimWhiteSpace => .es2016
@@ -128,6 +133,7 @@ def Feature.since : Feature → Edition
 
 def Feature.describe : Feature → String
   | .regexp => "regular expressions without flags"
+  | .regexpReplace => "regular expression replacement without substitutions"
   | .exponent => "'**'"
   | .objectSpread => "object spread '...'"
   | .bigint => "bigint"
