@@ -133,6 +133,18 @@ theorem evalMap_map {α β : Type} (fs : List (DeclRef × List String × IR.Body
   | [] => by simp [IR.Expr.evalMap]
   | x :: xs => by simp [IR.Expr.evalMap, hb x, evalMap_map fs fuel ρ param body encX encY f hb xs]
 
+/-- Mapping needs agreement only on the input elements. -/
+theorem evalMap_map_on {α β : Type} (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
+    (ρ : Eval.Env N) (param : String) (body : IR.Expr) (encX : α → Val N) (encY : β → Val N)
+    (f : α → β) (xs : List α)
+    (hb : ∀ x ∈ xs, IR.Expr.eval fs fuel ((param, encX x) :: ρ) body = some (encY (f x))) :
+    IR.Expr.evalMap fs fuel ρ param body (xs.map encX) = some ((xs.map f).map encY) := by
+  induction xs with
+  | nil => simp [IR.Expr.evalMap]
+  | cons x xs ih =>
+    simp only [List.mem_cons, forall_eq_or_imp] at hb
+    simp [IR.Expr.evalMap, hb.1, ih hb.2]
+
 /-- The same for `List.mapIdx`, whose function also takes the index, where the
 first element is at `start`. -/
 theorem evalMapIdx_from {α β : Type} (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
@@ -213,6 +225,18 @@ theorem evalReduce_foldl_val {α β : Type} (fs : List (DeclRef × List String �
       some (encA (xs.foldl f (dec (some v)))) := by
   have := evalReduce_foldl fs fuel ρ acc param body encA encX f hb xs (dec (some v))
   rwa [hv] at this
+
+/-- Filtering needs agreement only on the input elements. -/
+theorem evalFilter_filter_on {α : Type} (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
+    (ρ : Eval.Env N) (param : String) (body : IR.Expr) (encX : α → Val N) (p : α → Bool)
+    (xs : List α)
+    (hb : ∀ x ∈ xs, IR.Expr.eval fs fuel ((param, encX x) :: ρ) body = some (.bool (p x))) :
+    IR.Expr.evalFilter fs fuel ρ param body (xs.map encX) = some ((xs.filter p).map encX) := by
+  induction xs with
+  | nil => simp [IR.Expr.evalFilter]
+  | cons x xs ih =>
+    simp only [List.mem_cons, forall_eq_or_imp] at hb
+    cases hp : p x <;> simp [IR.Expr.evalFilter, hb.1, ih hb.2, hp]
 
 /-- The same for `filter`. -/
 theorem evalFilter_filter {α : Type} (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)

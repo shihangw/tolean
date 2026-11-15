@@ -339,8 +339,11 @@ parameters. Lists that are not reachable from parameters remain refused.
 Calls may also occur in conditionals, in local initializers, or as the input
 of a later array method. Each call adds the callee's condition over its
 actual arguments. A condition is required even for a branch that the call
-does not take. Calls inside callbacks and loops still get no certificate:
-their conditions need hypotheses over the callback element or loop state.
+does not take. Inside `map` and `filter`, each sort condition quantifies over
+the elements of that callback's input. This works for nested maps, captured
+parameter lists and calls to functions that sort. The callback proof assumes
+the condition only for its current element. Other callback methods and loop
+bodies still need corresponding element or state conditions.
 Sort expressions may likewise appear in conditionals, local initializers
 and as inputs of later array methods. Their list inputs may come from `map`,
 `filter`, `slice`, a conditional or a call. The precondition concerns the
