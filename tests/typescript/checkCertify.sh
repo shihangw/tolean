@@ -8,37 +8,98 @@ set -euo pipefail
 cd "$(dirname "$0")"
 export T=$PWD/../../.lake/build/bin/tolean
 export root=$(cd ../.. && pwd)
-export work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
-mkdir -p "$work/Corpus" "$work/results"
+if [[ -n "${TOLEAN_CERTIFY_WORK:-}" ]]; then
+  # Keep every generated Lean file and diagnostic in this caller-owned directory.
+  export work=$TOLEAN_CERTIFY_WORK
+  mkdir -p "$work"
+else
+  export work=$(mktemp -d)
+  trap 'rm -rf "$work"' EXIT
+fi
+mkdir -p "$work/Corpus" "$work/results" "$work/logs"
 export lean_path="$(cd "$root" && lake env printenv LEAN_PATH):$work"
 
 # Certify one file. The result is in $work/results/<name>: proved, skipped, or
 # failed followed by Lean's output.
 certifyOne() {
-  local f=$1 b n out result
+  local f=$1 b n result translate_log certify_log output_log cert_log rc required=false
   b=$(basename "$f" .ts)
   n="$(tr '[:lower:]' '[:upper:]' <<<"${b:0:1}")${b:1}"
   result="$work/results/$b"
-  if ! $T translate "$f" "$work/Corpus/$n.lean" "Corpus.$n" 2>/dev/null ||
-      ! $T certify "$f" "Corpus.$n" "Corpus.$n" "$work/Corpus/${n}Cert.lean" "Corpus.${n}Cert" 2>/dev/null; then
+  if grep -qx '// certify: required' "$f"; then required=true; fi
+  translate_log="$work/logs/$b.translate.log"
+  certify_log="$work/logs/$b.certify.log"
+  output_log="$work/logs/$b.output-compile.log"
+  cert_log="$work/logs/$b.certificate-compile.log"
+  if ! $T translate "$f" "$work/Corpus/$n.lean" "Corpus.$n" >"$translate_log" 2>&1; then
+    if [[ "$required" == true ]]; then
+      {
+        echo failed
+        echo "A required certificate translation was refused"
+        cat "$translate_log"
+      } >"$result"
+      return 0
+    fi
     case "$b" in
       localFunctionCertificate | localFunctionNumber | localFunctionLoopCertificates | \
       localFunctionReturnsAndChanges | localFunctionSiblingCalls | \
       localFunctions | localArrows | localFunctionOwnedArray | localFunctionLoopParameter)
-        { echo failed; echo "A required local-function certificate was refused"; } >"$result"
+        {
+          echo failed
+          echo "A required local-function translation was refused"
+          cat "$translate_log"
+        } >"$result"
         return 0
         ;;
     esac
     echo skipped >"$result"
     return 0
   fi
-  (cd "$root" && LEAN_PATH=$lean_path lake env lean --root="$work" -o "$work/Corpus/$n.olean" "$work/Corpus/$n.lean" >/dev/null)
-  if out=$(cd "$root" && LEAN_PATH=$lean_path lake env lean "$work/Corpus/${n}Cert.lean" 2>&1) &&
-      ! grep -q "error" <<<"$out"; then
+  if ! $T certify "$f" "Corpus.$n" "Corpus.$n" "$work/Corpus/${n}Cert.lean" "Corpus.${n}Cert" \
+      >"$certify_log" 2>&1; then
+    if [[ "$required" == true ]]; then
+      {
+        echo failed
+        echo "A required certificate was refused"
+        cat "$certify_log"
+      } >"$result"
+      return 0
+    fi
+    case "$b" in
+      localFunctionCertificate | localFunctionNumber | localFunctionLoopCertificates | \
+      localFunctionReturnsAndChanges | localFunctionSiblingCalls | \
+      localFunctions | localArrows | localFunctionOwnedArray | localFunctionLoopParameter)
+        {
+          echo failed
+          echo "A required local-function certificate was refused"
+          cat "$certify_log"
+        } >"$result"
+        return 0
+        ;;
+    esac
+    echo skipped >"$result"
+    return 0
+  fi
+  if ! (cd "$root" && LEAN_PATH=$lean_path lake env lean --root="$work" \
+      -o "$work/Corpus/$n.olean" "$work/Corpus/$n.lean" >"$output_log" 2>&1); then
+    {
+      echo failed
+      echo "Lean refused the translated output"
+      cat "$output_log"
+    } >"$result"
+    return 0
+  fi
+  rc=0
+  (cd "$root" && LEAN_PATH=$lean_path lake env lean "$work/Corpus/${n}Cert.lean" \
+    >"$cert_log" 2>&1) || rc=$?
+  if [[ "$rc" -eq 0 ]] && ! grep -q "error" "$cert_log"; then
     echo proved >"$result"
   else
-    { echo failed; echo "$out" | head -20; } >"$result"
+    {
+      echo failed
+      echo "Lean refused the complete certificate"
+      cat "$cert_log"
+    } >"$result"
   fi
 }
 export -f certifyOne
