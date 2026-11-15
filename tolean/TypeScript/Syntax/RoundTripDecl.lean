@@ -496,7 +496,7 @@ theorem Expr.spineOK_wf {T : Edition} : ∀ (e : Expr) (level : Level), e.wfAt T
       | assign => simp [Expr.wfAt] at h; exact h.1.1.1
       | _ => simp [Expr.wfAt] at h
     simpa [Expr.spineOK] using Expr.spineOK_wf o .cond this
-  | .ident .., _, _ | .number .., _, _ | .bigint .., _, _ | .string .., _, _ | .bool .., _, _ | .null _, _, _
+  | .regexp .., _, _ | .ident .., _, _ | .number .., _, _ | .bigint .., _, _ | .string .., _, _ | .bool .., _, _ | .null _, _, _
   | .array .., _, _ | .object .., _, _ | .paren .., _, _ | .unary .., _, _ | .prefix .., _, _
   | .arrow .., _, _ | .new .., _, _ => by simp [Expr.spineOK]
 
