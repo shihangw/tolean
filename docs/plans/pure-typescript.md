@@ -369,10 +369,11 @@ a reason to choose otherwise.
 
 - The map-borrow question is settled by the
   [decision to pass changed maps back](../decisions/2026-11-14-map-borrows.md).
-  A single map now passes back on normal completion. The remaining tuple
-  result must carry several maps or an ordinary result as well.
-  `ReadonlyMap` stays plain. Step 8 remains open because a return still
-  needs to preserve the final parameter bindings.
+  A single map now passes back on normal completion, including a terminal
+  bare return and forwarding through another checked call. The remaining
+  tuple result must carry several maps or an ordinary result as well.
+  `ReadonlyMap` stays plain. Step 8 remains open because early returns
+  and returned values still need to preserve the final parameter bindings.
 
 - Should a comparator that is not one of the two shapes be accepted when the
   project supplies a proof that it is consistent?
