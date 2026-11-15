@@ -526,6 +526,24 @@ test('the interpreter sorts by a difference only when every key is finite', () =
   expect(lean.results.slice(finite.length)).toEqual([null, null, null, null]);
 });
 
+test('number sorts compare successive keys against Node', () => {
+  const source = 'interface Item { readonly rank: number; readonly time: number; }\n' +
+    'export function f(xs: ReadonlyArray<Item>): Item[] { return xs.toSorted((a, b) => (a.rank < b.rank) ? -1 : (a.rank > b.rank) ? 1 : b.time - a.time); }';
+  const arrays = [[], [{ rank: Infinity, time: 0 }, { rank: -Infinity, time: -0 }],
+    [{ rank: 1, time: Number.MAX_VALUE }, { rank: 1, time: -Number.MAX_VALUE },
+      { rank: 0, time: 3 }, { rank: 1, time: Number.MAX_VALUE }]];
+  const input = { programs: [{ source, calls: arrays.map((xs) => ({ function: 'f', args: [xs.map(encode)] })) }] };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const [lean] = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  expect(lean?.parsed).toBe(true);
+  if (lean === undefined || !lean.parsed) return;
+  for (const [i, xs] of arrays.entries()) {
+    expect(lean.results[i]).toEqual({ value: xs.toSorted((a, b) =>
+      a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : b.time - a.time).map(encode) });
+  }
+});
+
 test('number-sort preconditions pass through forwarding calls', () => {
   const source = 'function sorted(xs: ReadonlyArray<number>): number[] { return xs.toSorted((a, b) => b - a); }\n' +
     'function middle(_unused: boolean, ys: ReadonlyArray<number>): number[] { return sorted(ys); }\n' +

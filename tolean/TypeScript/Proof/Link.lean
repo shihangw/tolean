@@ -611,6 +611,41 @@ theorem consistentOn_of_transCmp {α : Type} {cmp : α → α → Option Orderin
   have := Std.TransCmp.isLE_trans (hle _ hab) (hle _ hbc)
   cases hac : o a c <;> simp_all
 
+/-- On a domain without NaN keys, number comparison is a total preorder.
+The domain may be the subtype of elements of one input list. -/
+theorem transCmp_numberOrder {α : Type} [NumberOrderLaws N] (key : α → N)
+    (h : ∀ x, JSNumber.isNaN (key x) = false) :
+    Std.TransCmp (fun a b => numberOrder (key a) (key b)) := by
+  refine { eq_swap := ?_, isLE_trans := ?_ }
+  · intro a b
+    have hab := NumberOrderLaws.lt_asymm (h a) (h b)
+    have hba := NumberOrderLaws.lt_asymm (h b) (h a)
+    unfold numberOrder
+    cases e : JSNumber.lt (key a) (key b) <;>
+      cases e' : JSNumber.lt (key b) (key a) <;> simp_all
+  · intro a b c hab hbc
+    have eab := numberOrder_ne_gt (h a) (h b)
+    have ebc := numberOrder_ne_gt (h b) (h c)
+    have eac := numberOrder_ne_gt (h a) (h c)
+    have ht := NumberOrderLaws.not_lt_trans (h c) (h b) (h a)
+    have eqLE : ∀ o : Ordering, o.isLE = (o != .gt) := by decide
+    simp only [eqLE, eab, ebc, eac] at *
+    simp only [Bool.not_eq_true'] at hab hbc ⊢
+    exact ht hbc hab
+
+/-- A comparison may be lawful only on the elements of the input. -/
+theorem consistentOn_of_transCmp_on {α : Type} (xs : List α)
+    {cmp : α → α → Option Ordering}
+    (o : {x // x ∈ xs} → {x // x ∈ xs} → Ordering) [Std.TransCmp o]
+    (h : ∀ a b, cmp a.val b.val = some (o a b)) :
+    Eval.consistentOn cmp xs = true := by
+  have hc := consistentOn_of_transCmp o h xs.attach
+  unfold Eval.consistentOn at hc ⊢
+  simp only [List.all_eq_true, Bool.and_eq_true] at hc ⊢
+  intro a ha b hb
+  have hab := hc ⟨a, ha⟩ (by simp) ⟨b, hb⟩ (by simp)
+  exact ⟨hab.1, fun c hc => hab.2 ⟨c, hc⟩ (by simp)⟩
+
 /-- A sort of encoded values and `JSNumber.sortWith` agree when the comparator
 is consistent on this input list. The condition need not hold for other
 inputs, so a proof may exclude NaN keys or infinite keys. -/

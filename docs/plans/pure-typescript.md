@@ -100,9 +100,9 @@ value claim already does.
 | TypeScript | Lean | Refused |
 |---|---|---|
 | The `index` argument of a callback other than one of `map`, and the `array` argument of any callback | The `List` functions that also pass the index, as `List.mapIdx` does for `map`, and the list itself | |
-| A number-sort certificate for multiple keys, a non-parameter list, or a call inside a larger expression | A hypothesis over the parameters excludes `NaN` keys, or requires finite keys for a difference. Direct single-key sorts and direct forwarding calls already get this hypothesis, in either direction. | |
+| A number-sort certificate for a non-parameter list or a call inside a larger expression | A hypothesis over the parameters excludes `NaN` keys, or requires finite keys for a difference. Direct sorts and direct forwarding calls already get one hypothesis per numeric key, in either direction. | |
 
-The certifier uses `sortValues_sortWith_on` for a direct single-key sort of a
+The certifier uses `sortValues_sortWith_on` for a direct sort of a
 parameter. Its input hypothesis excludes NaN keys for a comparison, or
 requires finite keys for a difference.
 
@@ -199,7 +199,8 @@ leaves a gap.
    `undefined` that narrows inside an expression, `a?.[i]` and `f?.()`, and
    re-exports.
 8. **P0.** The borrow for a map that a caller passes in.
-10. **P1.** Sorting: certificates for a sort by a `number` key.
+10. **P1.** Sorting: number-key certificates for non-parameter lists and
+    calls inside larger expressions.
 11. **P2.** Recursion: tagged unions that refer to themselves first, then
     `@decreases`, mutual recursion, and `while` loops.
 12. **P1.** Non-literal `bigint` exponents, `BigInt(number)`,

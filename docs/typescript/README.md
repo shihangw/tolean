@@ -312,7 +312,7 @@ translation, so each theorem holds for every `N`, real doubles among them,
 and assumes none of the number laws. A file that sorts is the exception. Its
 theorems take `[SafeIntLaws N]`, because the order needs the signs of `-1`
 and `1` as numbers. A function that directly returns a parameter sorted by
-one number key with the comparison shape gets a certificate too, in either
+number keys with the comparison shape gets a certificate too, in either
 direction. Sorting a copy, `[...xs].sort(...)`, works as well.
 Its theorems also take `[NumberOrderLaws N]` and a hypothesis over the
 parameter, such as `(f_sort_precondition : ∀ x ∈ xs, JSNumber.isNaN x.key = false)`.
@@ -326,7 +326,10 @@ A function may directly return a call to such a function, with its own list
 parameter as the argument. Its theorems carry the same condition over that
 parameter. This works through a chain of calls, even when the argument
 changes name or position, and permits a spread copy of the parameter.
-Multiple keys, a sort of a local list, a computed list argument, and a
+For several keys, each number key has its own hypothesis. Number keys may
+mix with string and bigint keys, which need no input condition. A final
+difference key requires finite values even when earlier keys break the tie.
+A sort of a local list, a computed list argument, and a
 conditional sort call inside a larger expression remain refused by the
 certifier.
 
