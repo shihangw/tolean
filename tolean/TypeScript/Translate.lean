@@ -602,6 +602,13 @@ structure Code where
   prop : Bool
   type : Ty
 
+/-- A nullable conditional needs its type where an optional projection reads
+it, because Lean elaborates the receiver before the projection. -/
+def nullableConditionalReceiver (e : Expr) (code : IR.Expr) (type : Ty) : IR.Expr :=
+  match e.stripParens with
+  | .cond .. => if type.isNullable then .ascribe code type.lean else code
+  | _ => code
+
 /-- In value position, a `Prop` becomes a `Bool` with `decide`. -/
 def Code.value (c : Code) : IR.Expr :=
   if c.prop then .decide c.code else c.code
@@ -2578,7 +2585,7 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
         | reject s "a chain after '?.' must read a property"
       let o ← translateExpr fuel env none base
       let (bind, type) ← optPathType s o.type path
-      return ⟨.ext (.optField path bind) [o.code], false, type⟩
+      return ⟨.ext (.optField path bind) [nullableConditionalReceiver base o.code o.type], false, type⟩
     let o ← translateRecv (translateExpr fuel env none) env obj
     -- `xs.length`, the number of elements of an array.
     if o.type.element?.isSome && name == "length" then
@@ -2613,9 +2620,10 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
   | .optMember s obj name =>
     let o ← translateExpr fuel env none obj
     let (bind, type) ← optFieldType s o.type name
-    return ⟨.ext (.optField [name] bind) [o.code], false, type⟩
+    return ⟨.ext (.optField [name] bind) [nullableConditionalReceiver obj o.code o.type], false, type⟩
   | .optIndex s obj key =>
     let o ← translateExpr fuel env none obj
+    let receiver := nullableConditionalReceiver obj o.value o.type
     let underlying := o.type.maybeValue?
     match underlying.bind Ty.tupleElems? with
     | some tys =>
@@ -2625,7 +2633,7 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
       unless 0 ≤ k do reject key.span s!"the tuple has no element {k}"
       if elem.isMaybe && !elem.isOptional then reject s "an optional tuple index could give null or undefined"
       let result := if elem.isOptional then elem else .optional elem
-      return ⟨.ascribe (.ext (.optIndexLit k.toNat (some (tys.length, elem.isOptional))) [o.value])
+      return ⟨.ascribe (.ext (.optIndexLit k.toNat (some (tys.length, elem.isOptional))) [receiver])
         result.lean, false, result⟩
     | none =>
       let ctx ← get
@@ -2645,11 +2653,11 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
         | .number _ text =>
           let k ← orReject (safeIntegerValue? text) key.span "a number literal must be a safe integer"
           unless 0 ≤ k do reject key.span "an index must not be negative"
-          return ⟨.ascribe (.ext (.optIndexLit k.toNat none) [o.value]) (Ty.optional elem).lean, false, .optional elem⟩
+          return ⟨.ascribe (.ext (.optIndexLit k.toNat none) [receiver]) (Ty.optional elem).lean, false, .optional elem⟩
         | _ =>
           let i ← translateExpr fuel env none key
           unless i.type == .number do reject key.span "the index of an array must be a number"
-          return ⟨.ext .optIndexNumber [o.value, i.value], false, .optional elem⟩
+          return ⟨.ext .optIndexNumber [receiver, i.value], false, .optional elem⟩
   | .index s obj key =>
     let o ← translateExpr fuel env none obj
     match o.type.tupleElems? with
@@ -2711,7 +2719,11 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
         | some (.literal _) => "a tag field must be its string literal itself, not the value of '?:'"
         | _ => "the branches of '?:' have different types"
       let type ← orReject ((a.type.join b.type).filter fun t => !(t matches .literal _)) s message
-      return ⟨.ite c.code a.value b.value, false, type⟩) (do
+      let code := IR.Expr.ite c.code a.value b.value
+      -- `null` is polymorphic, but two non-null branches need the joined type
+      -- to coerce a value into `Option`.
+      let needsAscription := type.isNullable && a.type != .null && b.type != .null
+      return ⟨if needsAscription then .ascribe code type.lean else code, false, type⟩) (do
       let some (name, isEq, value, optional) := optionTestOf env test
         | reject s "the conditional expression cannot be typed; only a direct null or undefined test narrows its branches"
       let a ← translateExpr fuel (if isEq then env else env.narrow name value) expected ifTrue

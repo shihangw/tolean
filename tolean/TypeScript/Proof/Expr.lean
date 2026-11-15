@@ -681,6 +681,17 @@ theorem eval_value (c : Code) (ρ : Eval.Env N) :
   unfold Code.value
   split <;> simp [IR.Expr.eval]
 
+/-- An optional projection's conditional receiver has the same value with its
+type annotation, because the IR evaluator ignores ascriptions. -/
+theorem nullableConditionalReceiver_eval (e : Expr) (code : IR.Expr) (type : Ty)
+    (ρ : Eval.Env N) :
+    IR.Expr.eval fs fuel ρ (nullableConditionalReceiver e code type) =
+      IR.Expr.eval fs fuel ρ code := by
+  unfold nullableConditionalReceiver
+  split
+  · split <;> simp only [IR.Expr.eval]
+  · rfl
+
 /-- An element that is not a spread holds its own value in an array literal. -/
 theorem evalElems_cons {ρ : Eval.Env N} {e : Expr} {es : List Expr} (he : e.spreadArg? = none) :
     Eval.evalElems m fuel ρ (e :: es) =
@@ -3781,6 +3792,7 @@ theorem translateMember_sound {F : Nat}
       obtain ⟨rfl, -⟩ := h
       intro ρs ρo v ha hs hv'
       simp only [IR.Expr.eval, IR.Expr.evalList] at hv'
+      rw [nullableConditionalReceiver_eval] at hv'
       cases hobj : IR.Expr.eval fs fuel ρo o.code with
       | none => simp [hobj] at hv'
       | some ov =>
@@ -4941,6 +4953,7 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
         obtain ⟨rfl, -⟩ := h
         intro ρs ρo v ha hs hv'
         simp only [IR.Expr.eval, IR.Expr.evalList] at hv'
+        rw [nullableConditionalReceiver_eval] at hv'
         cases hobj : IR.Expr.eval fs fuel ρo o.code with
         | none => simp [hobj] at hv'
         | some ov =>
@@ -4968,6 +4981,7 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
               obtain ⟨rfl, _⟩ := h
               intro ρs ρo v ha hs hv
               simp only [IR.Expr.eval, IR.Expr.evalList] at hv
+              rw [nullableConditionalReceiver_eval] at hv
               cases hx : IR.Expr.eval fs fuel ρo o.value with
               | none => simp [hx] at hv
               | some w =>
@@ -5039,6 +5053,7 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
             obtain ⟨rfl, _⟩ := h
             intro ρs ρo v ha hs hv
             simp only [IR.Expr.eval, IR.Expr.evalList] at hv
+            rw [nullableConditionalReceiver_eval] at hv
             cases hx : IR.Expr.eval fs fuel ρo o.value with
             | none => simp [hx] at hv
             | some w =>
@@ -5067,6 +5082,7 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
             obtain ⟨rfl, _⟩ := h
             intro ρs ρo v ha hs hv
             simp only [IR.Expr.eval, IR.Expr.evalList] at hv
+            rw [nullableConditionalReceiver_eval] at hv
             cases hx : IR.Expr.eval fs fuel ρo o.value with
             | none => simp [hx] at hv
             | some w =>
@@ -5354,6 +5370,8 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
             obtain ⟨ty, ⟨-, -⟩, hcode⟩ := h
             intro ρs ρo v ha hs hv'
             rw [← hcode] at hv'
+            have hv' : IR.Expr.eval fs fuel ρo (.ite tc.code ta.value tb.value) = some v := by
+              split at hv' <;> simpa only [IR.Expr.eval] using hv'
             obtain ⟨t, ht, hbr⟩ := out_ite fs fuel hv'
             have htest := ihE _ _ _ _ _ _ htc ρs ρo _ ha hs ht
             simp only [Eval.eval, htest, Option.bind_eq_bind, Option.bind_some, Val.truthy]
