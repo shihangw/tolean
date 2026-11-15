@@ -64,20 +64,20 @@ Afterwards, each successful recursive repetition consumes at least one code
 unit. This gives a local decreasing measure: the remaining minimum plus
 the remaining input length. A finite maximum decreases too.
 
-That local measure does not by itself prove termination of an entire
-continuation-passing matcher. A continuation may resume an enclosing
-quantifier or try another alternative. The implementation must account for
-those calls, either with well-founded recursion over its explicit search
-state or with fuel and a proof that the chosen bound suffices. Exponential
-backtracking is allowed; no claim of linear running time is made.
+The matcher in `Spec/RegExp.lean` uses that measure for a total repetition
+helper and structural recursion on patterns for compilation. The helper
+guards against a candidate that moves backwards, so its measure decreases
+even for an arbitrary atom function. `compile_forward` proves that compiled
+atoms call their continuations only at positions at or after their start.
+`repeat_spec_step` then proves that the extra guard has no effect on such
+atoms. Each compiled atom and continuation is already a total Lean function,
+so the composition needs no fuel bound.
 
-If a sufficient bound is not proved, exhaustion must be distinct from
-failure to match. It must not yield `false`, `null` or an unchanged string.
-In that case, only a conditional value claim is permitted, as for recursion:
-when evaluation returns a value, it agrees with the spec. The translation
-must refuse a program unless its generated result and soundness theorem
-preserve that distinction. A fixed unproved budget is not an implementation
-of a total boolean `test`.
+This model permits exponential backtracking. It makes no claim of linear
+running time, and a real engine may run out of resources. There is no model
+fuel whose exhaustion could be mistaken for `false`, `null` or an unchanged
+string. The first implementation therefore does not need the conditional
+fuel fallback considered for recursion.
 
 ## Deliver the methods separately
 

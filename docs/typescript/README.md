@@ -282,6 +282,21 @@ its evaluator use their existing boolean functions, calls and tag matches.
 `program_sound` covers this lowering through the same statement proofs as
 inline tests. The native and WebAssembly translators use the same source.
 
+#### Regular expressions
+
+The translator still refuses regular expressions, including `test`, `match`
+and `replace` with a regex argument. A matcher model now exists in
+`tolean/TypeScript/Spec/RegExp.lean`, but the parser, IR and translator do
+not use it yet. Its tests compare generated pattern trees and UTF-16 inputs
+with Node; they do not yet test translation of regex source programs.
+
+The model uses ordered backtracking without flags. It includes character
+classes, alternatives, captures, greedy repetition and the input anchors.
+It proves termination with the remaining minimum and input length, rather
+than interpreting fuel exhaustion as failure to match. See the
+[decision record](../decisions/2026-11-14-regexp-subset.md) for the intended
+source subset and the restrictions on future `match` and `replace` support.
+
 #### Certificates
 
 A certificate proves one file's translation, so that file no longer trusts
