@@ -327,6 +327,13 @@ def dateMethod (method : String) (t : Option Int) : List (Val N) → Option (Val
   | [] => (JSDate.method? method).map fun f => .num (f ⟨t⟩)
   | _ => none
 
+/-- Date.parse accepts only a recognized literal, with no evaluation of a
+host-dependent fallback format. -/
+def dateParseArgs : List Expr → Option (Val N)
+  | [.string _ text] =>
+    (JSDate.parseFormat (JSString.ofString text)).map fun time => .num (JSDate.number time)
+  | _ => none
+
 /-- `Number(v)` (§21.1.1.1) on the value of its one argument: a bigint
 becomes the Number value for it, and a number stays itself. ToNumber of a
 string or a boolean is not modelled. -/
@@ -1607,9 +1614,12 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     mathCall f (← evalList m fuel env args)
   -- `Date.UTC(year, month, …)` (§21.4.3.4) on numbers, unless a variable
   -- hides `Date`.
-  | .call _ (.member _ (.ident _ "Date") "UTC") args => do
+  | .call _ (.member _ (.ident _ "Date") method) args => do
     if (env.lookup "Date").isSome then none
-    return .num (JSDate.utc (← numbers? (← evalList m fuel env args)))
+    if method == "UTC" then
+      return .num (JSDate.utc (← numbers? (← evalList m fuel env args)))
+    else if method == "parse" then dateParseArgs args
+    else none
   -- `Object.is(a, b)` (§20.1.2.15), unless a variable hides `Object`.
   | .call _ (.member _ (.ident _ "Object") "is") [a, b] => do
     if (env.lookup "Object").isSome then none

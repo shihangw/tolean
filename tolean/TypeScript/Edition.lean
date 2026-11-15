@@ -90,6 +90,9 @@ inductive Feature where
   in ES2024), and `ToUint32` (§7.1.7) for `String.prototype.split`.
   ES2015 calls the first operation `ToInteger`; the behavior is unchanged. -/
   | stringNumberArguments
+  /-- `Date.parse` (§21.4.3.2) on the Date Time String Format
+  (§21.4.1.32). Date-only forms use UTC from ES2016 onward. -/
+  | dateParseFormat
   /-- `xs.sort(cmp)` keeps the order of elements that `cmp` calls equal:
   `SortIndexedProperties`, which is stable since ES2019. -/
   | stableSort
@@ -99,6 +102,7 @@ deriving BEq, Repr, Inhabited
 
 def Feature.since : Feature → Edition
   | .stringNumberArguments => .es2015
+  | .dateParseFormat => .es2016
   | .exponent | .arrayIncludes | .trimWhiteSpace => .es2016
   | .stringPad => .es2017
   | .objectSpread => .es2018
@@ -126,6 +130,7 @@ def Feature.describe : Feature → String
   | .stringPad => "String.prototype.padStart and padEnd"
   | .stringAt => "String.prototype.at"
   | .stringNumberArguments => "number arguments of string methods"
+  | .dateParseFormat => "Date.parse on the Date Time String Format"
   | .stableSort => "a stable Array.prototype.sort"
   | .arrayToSorted => "Array.prototype.toSorted"
 

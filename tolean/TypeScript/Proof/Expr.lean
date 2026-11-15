@@ -2218,7 +2218,7 @@ theorem eval_reduce (sp sp' sa : Span) (par : Bool) (recv : Expr) (a p : Param) 
     cases r with
     | none => rfl
     | some w => cases w <;> simp [Option.bind_eq_bind]
-  all_goals first | exact hrM | exact hj
+  all_goals first | exact hrM | exact hrD | exact hj
 
 theorem translateReduce_sound {F : Nat}
     (ihE : ∀ env exp e ctx c ctx', translateExpr F env exp e ctx = .ok c ctx' →
@@ -2377,7 +2377,7 @@ theorem eval_sort (sp sp' sa : Span) (par : Bool) (recv : Expr) (method : String
       cases r with
       | none => simp
       | some v => cases v <;> simp_all [methodVal]
-    all_goals first | exact hr' | exact hrM | (intro _ h _; exact hrD _ h) | decide | (intro s h; intros; exact absurd h (hj s))
+    all_goals first | exact hr' | exact hrM | exact hrD | decide | (intro s h; intros; exact absurd h (hj s))
 
 omit [JSNumber N] in
 theorem sortOf_some {callee recv : Expr} {method : String} (h : sortOf callee = some (recv, method)) :
@@ -2952,6 +2952,28 @@ theorem translateDateUtc_sound {tr : Expr → TM Code} {env : Translate.Env}
     obtain ⟨vs, xs, hvs, hxs, rfl⟩ := out_dateUtc fs fuel hv
     rw [eval_dateUtc m fuel _ _ _ _ _ (hs.none hD), hargs ρs ρo vs ha hs hvs]
     simp [hxs]
+  · simp at h
+
+/-- A recognized Date.parse literal has the same time value in both evaluators. -/
+theorem translateDateParse_sound {env : Translate.Env}
+    (hD : env.has "Date" = false) {sp sp' sp'' : Span} {args : List Expr}
+    {ctx ctx' : Ctx} {c : Code} (h : translateDateParse sp args ctx = .ok c ctx') :
+    Sim (N := N) m fs fuel env (.call sp (.member sp' (.ident sp'' "Date") "parse") args) c.code ∧
+      ∀ ref outs, c.code ≠ .call ref outs := by
+  unfold translateDateParse at h
+  simp only [bind_ok] at h
+  obtain ⟨_, s₁, _, h⟩ := h
+  split at h
+  · simp only [bind_ok] at h
+    obtain ⟨time, s₂, ht, hc⟩ := h
+    obtain ⟨ht', rfl⟩ := (orReject_ok _ _ _ _ _ _).mp ht
+    simp only [pure_ok] at hc
+    obtain ⟨rfl, rfl⟩ := hc
+    refine ⟨fun ρs ρo v _ hs hv => ?_, by intros; simp⟩
+    simp only [IR.Expr.eval, IR.Expr.evalList, IR.ExprExt.apply] at hv
+    simp at hv
+    rw [← hv]
+    simp [Eval.eval, hs.none hD, Eval.dateParseArgs, ht']
   · simp at h
 
 /-- A method of a date that takes no arguments: the interpreter evaluates the
@@ -4422,7 +4444,13 @@ theorem translateCall_sound {F : Nat} (hc : CallsAgree (N := N) m.program fs fue
                 obtain ⟨hsim, hnc⟩ :=
                   translateDateUtc_sound m fs fuel (fun e ctx c ctx' h => ihE _ _ _ _ _ _ h) hDb h
                 exact ⟨hsim, fun ref outs' hout => absurd hout (hnc ref outs')⟩
-              · simp [hu] at h
+              · by_cases hp : test = "parse"
+                · subst hp
+                  simp at h
+                  cases hDb : env.has "Date" <;> simp [hDb] at h
+                  obtain ⟨hsim, hnc⟩ := translateDateParse_sound (N := N) m fs fuel hDb h
+                  exact ⟨hsim, fun ref outs' hout => absurd hout (hnc ref outs')⟩
+                · simp [hu, hp] at h
             · by_cases hj : oname = "JSON"
               · -- `JSON.stringify(x)`: the value that `jsonStringify` gives.
                 subst hj

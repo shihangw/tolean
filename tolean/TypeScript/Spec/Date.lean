@@ -201,6 +201,81 @@ def utc (args : List N) : N :=
     (makeTime (arg 3 (ofSafeInt 0)) (arg 4 (ofSafeInt 0)) (arg 5 (ofSafeInt 0)) (arg 6 (ofSafeInt 0)))
   number (timeClip t)
 
+/-- Decimal digits in the Date Time String Format. Only ASCII code units
+are digits in this grammar. -/
+def formatDigits (units : List UInt16) : Option Int :=
+  if units.all (fun u => 48 ≤ u.toNat && u.toNat ≤ 57) then
+    some (units.foldl (fun n u => n * 10 + (u.toNat : Int) - 48) 0)
+  else none
+
+/-- The year and the remaining code units. Expanded years have six digits
+and a sign; the forbidden expanded year `-000000` is not recognized. -/
+def formatYear (units : List UInt16) : Option (Int × List UInt16) := do
+  let (sign, width, rest) := match units with
+    | 43 :: tail => (1, 6, tail)
+    | 45 :: tail => (-1, 6, tail)
+    | _ => (1, 4, units)
+  if rest.length < width then none else do
+    let y ← formatDigits (rest.take width)
+    if sign == -1 && y == 0 then none else
+      some (sign * y, rest.drop width)
+
+/-- The time and explicit UTC offset, in milliseconds. An absent offset
+is refused, because a date-time without one uses the host's local time.
+The outer `none` means unrecognized syntax; `some none` means a recognized
+form with an out-of-range field, whose parse result is NaN. -/
+def formatTime : List UInt16 → Option (Option Int)
+  | h₁ :: h₂ :: 58 :: m₁ :: m₂ :: rest => do
+    let h ← formatDigits [h₁, h₂]
+    let m ← formatDigits [m₁, m₂]
+    let (s, ms, zone) ← match rest with
+      | 58 :: s₁ :: s₂ :: 46 :: a :: b :: c :: zone => do
+        some (← formatDigits [s₁, s₂], ← formatDigits [a, b, c], zone)
+      | 58 :: s₁ :: s₂ :: zone => do some (← formatDigits [s₁, s₂], 0, zone)
+      | zone => some (0, 0, zone)
+    let (offset, valid) ← match zone with
+      | [90] => some (0, true)
+      | [sign, a, b, 58, c, d] => do
+        if sign != 43 && sign != 45 then none else do
+          let oh ← formatDigits [a, b]
+          let om ← formatDigits [c, d]
+          some ((if sign == 43 then 1 else -1) * (oh * 60 + om) * 60000,
+            oh ≤ 23 && om ≤ 59)
+      | _ => none
+    if !valid || h > 24 || m > 59 || s > 59 ||
+        (h == 24 && (m != 0 || s != 0 || ms != 0)) then
+      some none
+    else some (some (((h * 60 + m) * 60 + s) * 1000 + ms - offset))
+  | _ => none
+
+/-- Date.parse on the Date Time String Format (§21.4.1.32 and §21.4.3.2).
+Date-only forms default the month and day to 01 and use UTC. Date-time
+forms must give a full date and an explicit offset. Other strings are
+refused rather than sent to an engine-specific fallback parser.
+
+Fields outside their specified ranges give NaN. MakeDay normalizes a day
+such as February 30. A time of 24:00 denotes the following midnight.
+TimeClip rejects a result outside ±8.64 × 10^15 milliseconds. Arithmetic
+within that range is integral and exact, so it needs no floating rounding. -/
+def parseFormat (text : JSString) : Option (Option Int) := do
+  let (y, rest) ← formatYear text.units
+  let (m, d, time) : Int × Int × Option Int ← match rest with
+    | [] => some ((1 : Int), (1 : Int), some (0 : Int))
+    | [45, a, b] => do some (← formatDigits [a, b], (1 : Int), some (0 : Int))
+    | 45 :: a :: b :: 45 :: c :: d :: tail => do
+      let m ← formatDigits [a, b]
+      let day ← formatDigits [c, d]
+      let time ← match tail with
+        | [] => some (some 0)
+        | 84 :: units => formatTime units
+        | _ => none
+      some (m, day, time)
+    | _ => none
+  if m < 1 || m > 12 || d < 1 || d > 31 then some none else
+    some (time.bind fun time =>
+      let t := (dayFromYear y + monthStart (isLeap y) (m - 1).toNat + d - 1) * msPerDay + time
+      if t.natAbs ≤ maxTime then some t else none)
+
 end JSDate
 
 end tolean.TypeScript

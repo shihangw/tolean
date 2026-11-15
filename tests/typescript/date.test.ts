@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 
 import fc from 'fast-check';
 import { expect, test } from 'vitest';
+import { dateParseCases } from './dateParseCases.ts';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const tolean = process.env.TOLEAN ?? join(root, '.lake/build/bin/tolean');
@@ -40,9 +41,9 @@ const source = [
 
 type Call = { function: string; args: Array<number>; expected: number };
 
-function run(calls: Array<Call>): Array<string> {
+function run(calls: Array<Call>, program = source): Array<string> {
   const input = {
-    programs: [{ source, calls: calls.map((c) => ({ function: c.function, args: c.args.map((a) => ({ number: bitsOf(a) })) })) }],
+    programs: [{ source: program, calls: calls.map((c) => ({ function: c.function, args: c.args.map((a) => ({ number: bitsOf(a) })) })) }],
   };
   const out = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8', maxBuffer: 1 << 28 });
   expect(out.status, out.stderr).toBe(0);
@@ -81,4 +82,22 @@ test('Date.UTC agrees with Node', () => {
     ...seven.map((a) => ({ function: 'utc7', args: a, expected: Date.UTC(...a) })),
   ];
   expect(run(calls)).toEqual([]);
+}, 120_000);
+
+test('Date.parse format literals agree with Node', () => {
+  const random = fc.sample(fc.tuple(
+    fc.integer({ min: -300000, max: 300000 }),
+    fc.integer({ min: 0, max: 13 }), fc.integer({ min: 0, max: 32 }),
+    fc.integer({ min: 0, max: 25 }), fc.integer({ min: 0, max: 60 }),
+  ), { numRuns: 500, seed: 12 }).map(([y, m, d, h, mi]) => {
+    const year = y < 0 ? `-${String(-y).padStart(6, '0')}` : `+${String(y).padStart(6, '0')}`;
+    const two = (n: number) => String(n).padStart(2, '0');
+    return `${year}-${two(m)}-${two(d)}T${two(h)}:${two(mi)}Z`;
+  });
+  const inputs = [...dateParseCases, ...random];
+  const program = inputs.map((s, i) =>
+    `export function parse${i}(): number { return Date.parse(${JSON.stringify(s)}); }`).join('\n');
+  expect(run(inputs.map((s, i) => ({
+    function: `parse${i}`, args: [], expected: Date.parse(s),
+  })), program)).toEqual([]);
 }, 120_000);

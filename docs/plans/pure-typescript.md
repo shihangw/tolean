@@ -142,13 +142,13 @@ should refuse such an initial value.
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| `**` on `bigint` (§6.1.6.2.3) whose exponent is not a literal | `a ^ b.toNat`, after a check that `b` is not negative, which needs the `Except` from the errors stage because JS throws a `RangeError` there | `>>>` on a `bigint`, because it throws |
-| `BigInt(n)` (§21.2.1.1) | A conversion that throws a `RangeError` when `n` is not an integer. The message of that error is up to the engine, so it needs the error classes of the errors stage, and a model of an error whose message the program cannot read. | |
-| `d.toISOString()` | The Date Time String Format of `JSDate`. It throws a `RangeError` for an invalid date, and the message is up to the engine, so it needs the error classes of the errors stage. | Local-time getters, setters, and `Date.now()` |
-| `Date.parse(s)` | Only when the translator can show that `s` is in the Date Time String Format (§21.4.1.32) | Any other string, because the spec leaves its result to the engine |
+| `**` on `bigint` (§6.1.6.2.3) whose exponent is not a literal | `a ^ b.toNat`, after a check that `b` is not negative. JS throws a `RangeError` otherwise, so this needs a built-in error whose message the program cannot read. | `>>>` on a `bigint`, because it throws |
+| `BigInt(n)` (§21.2.1.1) | A conversion that throws a `RangeError` when `n` is not an integer. Its message is up to the engine, so this needs a built-in error whose message the program cannot read. | |
+| `d.toISOString()` | The Date Time String Format of `JSDate`. It throws a `RangeError` for an invalid date, so this needs a built-in error whose message the program cannot read. | Local-time getters, setters, and `Date.now()` |
 
-`toISOString` throws a `RangeError` for an invalid date, so it uses the
-`Except` from the errors stage. The new number laws are hypotheses, as the
+`Except` and per-file error classes already exist, but their errors carry
+specified messages. They do not model the opaque message of a built-in
+`RangeError`. The new number laws are hypotheses, as the
 current ones are. `jsNumberLaws.test.ts` checks each of them on every
 maintained Node release line.
 
@@ -199,8 +199,9 @@ leaves a gap.
 10. **P1.** Sorting: certificates for a sort by a `number` key.
 11. **P2.** Recursion: tagged unions that refer to themselves first, then
     `@decreases`, mutual recursion, and `while` loops.
-12. **P1.** The new number and `bigint` operations, the `Date` methods, and
-    the number arguments of padding methods that are not integer literals.
+12. **P1.** Non-literal `bigint` exponents, `BigInt(number)`,
+    `toISOString`, and non-literal padding lengths. These still need a
+    model of built-in errors whose messages the program cannot read.
 13. **P2.** Classes with `readonly` fields and methods that do not change
     `this`.
 14. **P1.** Local functions: one that returns a value and changes variables

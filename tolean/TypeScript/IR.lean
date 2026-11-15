@@ -125,6 +125,9 @@ inductive ExprExt where
   | dateMethod (name : String)
   /-- `(JSDate.utc (N := N) [y, m])`, on the numbers: `Date.UTC(y, m)`. -/
   | dateUtc
+  /-- The time value of a Date Time String Format literal, or NaN. The
+  translator folds the format parser, not an engine's fallback parser. -/
+  | dateParse (time : Option Int)
   /-- `(JSNumber.sameValue a b)`: `Object.is(a, b)` on numbers. -/
   | numberSameValue
   /-- `(JSNumber.ofInt a)`: `Number(a)` on a bigint. -/
@@ -403,6 +406,11 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
     s!"({leanName names "JSDate"}.{(JSDate.methodName? name).getD name} (N := {names.typeParam}) {argument d})"
   | .dateUtc, args =>
     s!"({leanName names "JSDate"}.utc (N := {names.typeParam}) [{", ".intercalate args}])"
+  | .dateParse time, [] =>
+    let t := match time with
+      | none => leanName names "none"
+      | some t => s!"({leanName names "some"} {intTerm t})"
+    s!"({leanName names "JSDate"}.number (N := {names.typeParam}) {t})"
   | .numberSameValue, [a, b] => s!"({js}.sameValue {argument a} {argument b})"
   | .numberOfInt, [a] => s!"({js}.ofInt (N := {names.typeParam}) {argument a})"
   | .numberFold isMax, args =>
@@ -537,7 +545,7 @@ def ExprExt.usesString : ExprExt → Bool
 
 /-- The operation names `JSDate`, so the output imports its model. -/
 def ExprExt.onDate : ExprExt → Bool
-  | .dateOfNumber | .dateMethod _ | .dateUtc => true
+  | .dateOfNumber | .dateMethod _ | .dateUtc | .dateParse _ => true
   | _ => false
 
 /-- The operation names `JSBigInt`, so the output imports its model. -/

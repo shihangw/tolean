@@ -1501,6 +1501,16 @@ def translateDateUtc (tr : Expr → TM Code) (s : Span) (args : List Expr) : TM 
     unless c.type == .number do reject e.span "Date.UTC needs number operands"
   return ⟨.ext .dateUtc (codes.map (·.value)), false, .number⟩
 
+/-- Date.parse on a recognized format literal. An explicit offset is
+required on date-time forms; date-only forms use UTC. -/
+def translateDateParse (s : Span) (args : List Expr) : TM Code := do
+  requireFeature s .dateParseFormat
+  let [.string _ text] := args |
+    reject s "Date.parse needs a Date Time String Format string literal"
+  let time ← orReject (JSDate.parseFormat (JSString.ofString text)) s
+    "Date.parse needs a Date Time String Format literal; date-time forms need an explicit UTC offset"
+  return ⟨.ext (.dateParse time) [], false, .number⟩
+
 /-- `d.getTime()` and the UTC getters of the date `d`. The getters of local
 time depend on the time zone of the host, so they stay refused. -/
 def translateDateCall (s : Span) (method : String) (d : Code) (args : List Expr) : TM Code := do
@@ -2693,6 +2703,9 @@ def translateCall (fuel : Nat) (env : Env) (s : Span) (callee : Expr) (args : Li
   if let .member _ (.ident _ "Date") "UTC" := callee then
     if !env.has "Date" then
       return ← translateDateUtc (translateExpr fuel env none) s args
+  if let .member _ (.ident _ "Date") "parse" := callee then
+    if !env.has "Date" then
+      return ← translateDateParse s args
   let noCallMessage :=
     "calls may name only the function itself, functions declared earlier in this file, or imported ones"
   let noCall {A : Type} : TM A := reject s noCallMessage
