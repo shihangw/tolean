@@ -78,8 +78,14 @@ reading. There are three such cases:
   comparisons. The parser accepts `a < b && c > d` and `x < n && n > 0`,
   because a top-level `&&` or `||` before the closing `>` cannot occur in
   a list of types. It keeps refusing tokens that it cannot rule out this
-  way. For example, `f(a < b, c > d)` still needs parentheses, although
-  TypeScript 6.0.3's follow-token check reads it as two comparisons.
+  way. The refusal of `f(a < b, c > d)` is a known gap tracked by
+  [#208](https://github.com/shihangw/tolean/issues/208), not an intended
+  restriction. TypeScript 6.0.3 reads two comparisons there, so the parser
+  should accept it without extra parentheses. The remaining work is a
+  speculative type-list parse followed by TypeScript's follow-token test.
+  Its round-trip proof needs a stronger relation between source tokens and
+  printed tokens. The [plan](../plans/pure-typescript.md#unfinished-parser-work)
+  tracks that work.
 - `(a)` followed by `{`. `tsc` reads an arrow function that is missing its
   `=>`, but JavaScript reads `(a); {`.
 - `(a)`, then a line break, then `=>`. `tsc` reads an arrow function, but
