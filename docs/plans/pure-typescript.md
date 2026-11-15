@@ -233,7 +233,9 @@ leaves a gap.
    ordinary returned value, control flow and imported callees.
 10. **P1.** Sorting: certificates for a sort by a `number` key.
 11. **P2.** Recursion: tagged unions that refer to themselves first, then
-    `@decreases`, mutual recursion, and `while` loops.
+    `@decreases`, mutual recursion, and `while` loops. Add certificates for
+    self-referential interfaces and recursive functions, with existential
+    fuel, as proposed in the [recursion open question](#open-questions).
 12. **P1.** Non-literal `bigint` exponents, `BigInt(number)`,
     `toISOString`, and non-literal padding lengths. These still need a
     model of built-in errors whose messages the program cannot read.
@@ -242,6 +244,25 @@ leaves a gap.
 14. **P1.** Local functions: one that returns a value and changes variables
     of the enclosing function, calls between local functions, and
     certificates for files that have local functions.
+15. **P1.** Certificates for counted `for` loops: each counted loop adds a
+    hypothesis that `countUp?` on its bound gives a value. Print the bound
+    over the parameters, and refuse bounds that read anything but parameters.
+    See the [counted-loop open question](#open-questions).
+16. **P1.** Certificates for generic functions and interfaces: take a
+    `Codec N T` for each type parameter and write codec constructors for
+    generic interfaces. See the [generic certificate open question](#open-questions).
+17. **P2.** `try` and `catch`: accept `try { … } catch (e) { … }` where the
+    catch tests `e` with `instanceof` or ignores it. Keep `finally`, rethrowing
+    a changed value and throwing anything but an error refused. See the
+    [`try` and `catch` open question](#open-questions).
+18. **P2.** Proof obligations: Tolean states `Consistent cmp` for a comparator
+    outside the two known shapes and accepts a project-supplied proof beside
+    the output. The build checks the proof for `sorry` and axioms. The same
+    mechanism later serves `@decreases`. See the
+    [proof-obligation open question](#open-questions).
+19. **P2.** Close the `const` gap: share one predicate between the translator's
+    refusal and the interpreter's `none` for assignments to a
+    `for (const x of xs)` binding. See the [`const` open question](#open-questions).
 
 Steps 2 and 4 cover most of the code in the survey. Step 8 matters most for
 proofs, because a fold over events keeps much of its state in maps.
