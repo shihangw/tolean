@@ -4893,7 +4893,12 @@ def translateFile (file source : String) (target : Edition := .default)
       interfaces := deps.map fun (f, d) => (f, d.interface) }
   match (translateDecls m).run ctx with
   | .error e _ => .error e
-  | .ok decls ctx' => return (m, names, decls, (ctx'.withExports (exportListed m)).interface usesNumber names.typeParam)
+  | .ok decls ctx' =>
+    -- Array entries introduce number indices even when the source never
+    -- names a number. Check the IR so map entries stay nongeneric.
+    let usesNumber := usesNumber || decls.any (tolean.IR.Decl.anyOp (· == .arrayEntries))
+    let names := { names with generic := usesNumber }
+    return (m, names, decls, (ctx'.withExports (exportListed m)).interface usesNumber names.typeParam)
 
 /-- Parse and translate `source`, the TypeScript file `file`: the parsed
 module, the names that the printer needs, and the Tolean IR. -/
