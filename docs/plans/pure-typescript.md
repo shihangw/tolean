@@ -63,7 +63,7 @@ exact. A construct leaves these tables when Tolean translates it, and the
 | TypeScript | Lean | Refused |
 |---|---|---|
 | An arrow function passed to a function of the program, which reads only `const` values and parameters | `fun` | A callback that changes a variable outside itself |
-| A local function that returns a value and also changes `let` variables of the enclosing function | A Lean function that returns the value and the new values of those variables, which the call binds again | A `return` before the last statement of such a function |
+| A state-writing local function whose final return is an expression or names a variable other than a changed captured variable | A Lean function that returns the value and the new values of the captured variables, which the call binds again | A `return` before the last statement of such a function |
 | A function-typed field or parameter, such as a comparator in an options object | A field of a function type | A function value that changes state when it is called |
 | A destructured parameter, such as `{ a, b }: Options` | A pattern on the structure | Defaults inside the pattern |
 | A default parameter value | `Option` with a default at the call | A default that reads another parameter |
@@ -241,8 +241,8 @@ leaves a gap.
     model of built-in errors whose messages the program cannot read.
 13. **P2.** Classes with `readonly` fields and methods that do not change
     `this`.
-14. **P1.** Local functions: one that returns a value and changes variables
-    of the enclosing function, and calls between local functions.
+14. **P1.** Local functions: general final return expressions in functions
+    that change captured variables, and calls between local functions.
 15. **P1.** Certificates for counted `for` loops: each counted loop adds a
     hypothesis that `countUp?` on its bound gives a value. Print the bound
     over the parameters, and refuse bounds that read anything but parameters.

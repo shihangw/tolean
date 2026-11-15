@@ -245,6 +245,45 @@ test('certified local functions agree with Node on random arguments', async () =
   }
 });
 
+test('local returns preserve captured state and agree with Node', async () => {
+  const source = readFileSync(new URL('./corpus/translate/accept/localFunctionReturnsAndChanges.ts', import.meta.url), 'utf8');
+  const inputs = fc.sample(fc.tuple(fc.bigInt(), fc.bigInt()), { seed, numRuns: 50 });
+  const calls = inputs.flatMap(([start, amount]) => [
+    { function: 'f', args: [encode(start)] },
+    { function: 'tally', args: [encode(start), encode(amount)] },
+    { function: 'returnCall', args: [encode(start), encode(amount)] },
+    { function: 'loopCalls', args: [encode([start, amount])] },
+    { function: 'capturedTotal', args: [encode([start, amount])] },
+  ]);
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: [{ source, calls }] }), encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (!result?.parsed) return;
+  expect(result.accepted).toBe(true);
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-local-return-state-'));
+  const path = join(dir, 'local.mjs');
+  writeFileSync(path, ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+  }).outputText);
+  const mod = await import(pathToFileURL(path).href) as {
+    f: (x: bigint) => bigint;
+    tally: (start: bigint, amount: bigint) => bigint;
+    returnCall: (start: bigint, amount: bigint) => bigint;
+    loopCalls: (xs: Array<bigint>) => bigint;
+    capturedTotal: (xs: Array<bigint>) => bigint;
+  };
+  for (const [i, [start, amount]] of inputs.entries()) {
+    expect(result.results[5 * i]).toEqual({ value: encode(mod.f(start)) });
+    expect(result.results[5 * i + 1]).toEqual({ value: encode(mod.tally(start, amount)) });
+    expect(result.results[5 * i + 2]).toEqual({ value: encode(mod.returnCall(start, amount)) });
+    expect(result.results[5 * i + 3]).toEqual({ value: encode(mod.loopCalls([start, amount])) });
+    expect(result.results[5 * i + 4]).toEqual({ value: encode(mod.capturedTotal([start, amount])) });
+  }
+});
+
 test(`the interpreter agrees with Node ${process.version} on random programs`, async () => {
   // First, so that the seed shows when a step below fails.
   console.log(`interpreter: ${programCount} programs from seed ${seed} on Node ${process.version}`);

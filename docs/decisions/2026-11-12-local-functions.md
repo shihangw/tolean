@@ -84,11 +84,27 @@ that unit in addition to the depth of calls to functions of the module.
 The certifier also visits loops inside a lifted body, so a local function
 can contain a loop as well as be called by one.
 
+## A final return can read the captured state
+
+The interpreter now retains the environment of a final return. The first
+translation accepts a final return that names a changed captured variable.
+Before it executes the body, the interpreter checks whether it changes
+captured variables and ends with a value return. It selects the
+state-preserving executor for that form and the ordinary executor otherwise.
+It never recovers state by replaying the body. The call-contract proof
+relates this dispatch to the same results, including refusal and normal
+termination.
+The lifted function returns the state tuple, and the caller reads that
+variable from the tuple as the call's value. This avoids returning the same
+value twice.
+
+The proof simulates the statements before the return with `StmtSim`. That
+relation preserves values of names that were in scope before the body.
+The final identifier therefore has the same value in the interpreter and
+the IR. The proof also relates the state that the call writes back.
+
 ## Left for later
 
-A local function that returns a value and also changes a variable of the
-function around it is step 14 of `docs/plans/pure-typescript.md`, with calls
-between local functions.
-
-The interpreter keeps no variables with a `return`, so returning a value
-while changing captured variables still needs a new path in it.
+A compound final return expression, a final return of a new local variable,
+and calls between local functions remain in step 14. An earlier return in
+a state-writing local stays refused.
