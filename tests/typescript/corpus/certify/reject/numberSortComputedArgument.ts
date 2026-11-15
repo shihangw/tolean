@@ -1,4 +1,4 @@
-// expect: a sort precondition can only be passed from a list parameter
+// expect: a sort precondition needs arguments reachable from parameters
 function sorted(xs: ReadonlyArray<number>): number[] {
   return xs.toSorted((a, b) => a - b);
 }

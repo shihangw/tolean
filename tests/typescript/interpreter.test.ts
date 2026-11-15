@@ -560,6 +560,22 @@ test('number-sort preconditions pass through forwarding calls', () => {
   }
 });
 
+test('number sorts read concatenated parameter lists', () => {
+  const source = 'export function f(xs: ReadonlyArray<number>, ys: ReadonlyArray<number>): number[] { return [...xs, ...ys].sort((a, b) => a - b); }';
+  const pairs = [[[], []], [[2, -0], [0, 1]],
+    [[Number.MAX_VALUE], [-Number.MAX_VALUE, Number.MIN_VALUE]]];
+  const input = { programs: [{ source, calls: pairs.map(([xs, ys]) =>
+    ({ function: 'f', args: [xs!.map(encode), ys!.map(encode)] })) }] };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const [lean] = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  expect(lean?.parsed).toBe(true);
+  if (lean === undefined || !lean.parsed) return;
+  for (const [i, [xs, ys]] of pairs.entries()) {
+    expect(lean.results[i]).toEqual({ value: [...xs!, ...ys!].sort((a, b) => a - b).map(encode) });
+  }
+});
+
 test('the interpreter gives no value where an assignment to a const throws', async () => {
   const sources = [
     'export function f(): bigint | null { const x: bigint | null = null; x ??= 1n; return x; }',

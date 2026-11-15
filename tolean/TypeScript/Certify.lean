@@ -276,6 +276,20 @@ def keyPathType (decls : List IR.Decl) : IR.Ty → List String → Option IR.Ty
   | _, _ => none
 
 mutual
+/-- Lists whose encoding stays a map, so the sort link lemma can rewrite it.
+Literal elements mixed into an append need a separate encoding lemma. -/
+def sortInputShape : IR.Expr → Bool
+  | .var _ => true
+  | .field e _ _ => sortInputShape e
+  | .ext .append es => sortInputShapes es
+  | _ => false
+
+def sortInputShapes : List IR.Expr → Bool
+  | [] => true
+  | e :: es => sortInputShape e && sortInputShapes es
+end
+
+mutual
 
 /-- `e` compares or subtracts numbers. A comparator of keys holds such a
 test only for `number` keys. -/
@@ -689,7 +703,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
   let mut thms : Array String := #[]
   -- The translator requires a callee before its caller, so the condition
   -- of a callee is available when the caller's theorem is written.
-  let mut functionConditions : List (String × List (Nat × IR.Ty × List String × Bool)) := []
+  let mut functionConditions : List (String × (List (String × IR.Ty) × List String)) := []
   for d in m.decls do
     let .function _ _ name _ params _ syntaxBody := d | continue
     unless fns.contains name do continue
@@ -701,7 +715,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     -- hold one, and before the callbacks that hold it.
     let mut cbIndex := 0
     let mut obligations : List (String × String) := []
-    let mut inputConditions : List (Nat × IR.Ty × List String × Bool) := []
+    let mut inputConditions : List String := []
     for (method, param, elem, cbBody, info) in bodyCallbacks outBody do
       cbIndex := cbIndex + 1
       let lemmaName := s!"{name}_cb{cbIndex}"
@@ -792,12 +806,10 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         if comparesNumbers cbBody then
           let .value (.listMethod (.sortWith _) items _ _ _ _) := outBody
             | throw s!"{file}: the sorted list must be a parameter returned directly in {name}"
-          let some input := (match items with
-            | .var n | .ext .append [.var n] => some n
-            | _ => none)
-            | throw s!"{file}: the sorted list must be a parameter returned directly in {name}"
-          unless outParams.any (fun (n, _) => n == input) && scope.isEmpty do
-            throw s!"{file}: the sorted list must be a parameter and its comparator must not capture locals in {name}"
+          unless (exprNames items).all (fun n => outParams.any (fun (p, _) => p == n)) &&
+              scope.isEmpty && sortInputShape items do
+            throw s!"{file}: the sorted list must be reachable from parameters and its comparator must not capture locals in {name}"
+          let input := s!"({items.print names})"
           if keys.length > 1 then
             let subtype := "{ x : " ++ elemTy ++ " // x ∈ items }"
             let mut hypotheses := ""
@@ -819,7 +831,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
                 let condition := fun xs => s!"∀ x ∈ {xs}, tolean.TypeScript.JSNumber.{predicate} ({key} x) = {truth}"
                 hypotheses := hypotheses ++ s!" ({hn} : {condition "items"})"
                 obligations := obligations ++ [(hname, condition input)]
-                inputConditions := inputConditions ++ [((outParams.map (·.1)).idxOf input, elem, path, difference)]
+                inputConditions := inputConditions ++ [condition input]
                 let validity := if difference then
                   s!"tolean.TypeScript.SpecialValueLaws.isFinite_not_nan ({hn} a.val a.property)"
                   else s!"{hn} a.val a.property"
@@ -877,7 +889,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
             "        tolean.TypeScript.compareSign_neg_one, tolean.TypeScript.compareSign_neg_zero]\n" ++
             s!"    simpa only [hs] using {orderLemma} {key} items hkeys"
           obligations := obligations ++ [(hname, condition input)]
-          inputConditions := inputConditions ++ [((outParams.map (·.1)).idxOf input, elem, path, difference)]
+          inputConditions := inputConditions ++ [condition input]
           loopLemmas := loopLemmas.push (r.cert lemmaName)
           thms := thms.push <|
             s!"theorem {lemmaName} {generic} (fs : List (tolean.DeclRef × List String × tolean.TypeScript.IR.Body)){hfs}\n" ++
@@ -1070,35 +1082,31 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         -- With no locals in the state, the goal is `ρ = ρ`, which the step
         -- before may already close.
         s!"    all_goals simp [{", ".intercalate ((List.range count).map fun i => s!"Env.set_of_lookup _ _ _ h{i}")}]"
-    -- A direct forwarding call transports each obligation to the actual
-    -- list parameter. Other expressions need a proof about how they build
-    -- the sorted list and remain refused.
+    -- A direct forwarding call applies the callee's conditions to its actual
+    -- arguments. Lambda binding avoids capturing names in those arguments.
     for callee in ((stmtsOf syntaxBody).flatMap stmtCalls).eraseDups do
-      let conditions := (functionConditions.lookup callee).getD []
+      let (formals, conditions) := (functionConditions.lookup callee).getD ([], [])
       if conditions.isEmpty then continue
       let .value (.call ref actuals) := outBody
         | throw s!"{file}: a call with number-sort preconditions must be returned directly in {name}"
       unless ref.name == callee do
         throw s!"{file}: a call with number-sort preconditions must be returned directly in {name}"
-      for (argIndex, elem, path, difference) in conditions do
-        let some actual := actuals[argIndex]?
-          | throw s!"{file}: missing list argument for the sort precondition in {name}"
-        let some input := (match actual with
-          | .var n | .ext .append [.var n] => some n
-          | _ => none)
-          | throw s!"{file}: a sort precondition can only be passed from a list parameter in {name}"
-        unless outParams.any (fun (n, _) => n == input) do
-          throw s!"{file}: a sort precondition can only be passed from a list parameter in {name}"
+      unless actuals.length == formals.length do
+        throw s!"{file}: missing argument for the sort precondition in {name}"
+      unless (actuals.zip formals).all (fun (e, _, ty) =>
+          (exprNames e).all (fun n => outParams.any (fun (p, _) => p == n)) &&
+          (!(ty matches .list _) || sortInputShape e)) do
+        throw s!"{file}: a sort precondition needs arguments reachable from parameters in {name}"
+      for condition in conditions do
         let hname := s!"{name}_sort_precondition{obligations.length}"
         if r.idents.contains hname then
           throw s!"{file}: reserved certificate hypothesis name {hname}"
-        let key := s!"(fun (x : {elem.print names}) => {".".intercalate ("x" :: path)})"
-        let predicate := if difference then "isFinite" else "isNaN"
-        let truth := if difference then "true" else "false"
-        obligations := obligations ++ [(hname,
-          s!"∀ x ∈ {input}, tolean.TypeScript.JSNumber.{predicate} ({key} x) = {truth}")]
-        inputConditions := inputConditions ++ [((outParams.map (·.1)).idxOf input, elem, path, difference)]
-    functionConditions := (name, inputConditions) :: functionConditions
+        let binders := " ".intercalate (formals.map fun (p, t) => s!"({p} : {t.print names})")
+        let arguments := " ".intercalate (actuals.map fun e => s!"({e.print names})")
+        let applied := s!"((fun {binders} => {condition}) {arguments})"
+        obligations := obligations ++ [(hname, applied)]
+        inputConditions := inputConditions ++ [applied]
+    functionConditions := (name, (outParams, inputConditions)) :: functionConditions
     -- The encoders follow the types of the output, which the translator has
     -- already worked out from the source's types.
     let some retEnc := encoderOf r outRet | throw s!"{file}: cannot encode the result of {name}"
