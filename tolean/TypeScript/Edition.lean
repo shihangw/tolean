@@ -58,7 +58,8 @@ inductive Feature where
   | regexp
   /-- A call changes an exclusively owned Map argument: `EvaluateCall`,
   `OrdinaryCallBindThis`, `FunctionDeclarationInstantiation`,
-  `Map.prototype.set` and `Map.prototype.delete`. Copying the final map back
+  `Map.prototype.set`, `Map.prototype.delete` and `ReturnStatement`.
+  Copying the final map back
   models the shared object without exposing an alias. Maps date to ES2015. -/
   | mapBorrow
   /-- `**` and `**=`: `ExponentiationExpression`. -/

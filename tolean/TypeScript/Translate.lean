@@ -4460,7 +4460,7 @@ def translateFunction (thr : String → Bool) (cls : String → Option (Option (
   -- that can throw meets the translator only as the whole value of a
   -- declaration or a `return`, or in a place that JS may not evaluate.
   let sourceBody := body
-  let body := Eval.Stmt.hoisted thr cls (Eval.guardedBody guards params (some returnType) body)
+  let body := Eval.preparedBody thr cls guards params (some returnType) body
   let name ← checkName s name
   declareTopLevel s name
   checkTypeParams s (fun v => params.any fun p => (p.type.map (typeNames v)).getD false) [] typeParams

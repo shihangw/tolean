@@ -790,11 +790,20 @@ def Stmt.borrowUpdate (param : String) : Stmt → Bool
       args.all (fun e => e.borrowAtom && !e.leaks param)
   | _ => false
 
+/-- A terminal bare return has no value for a void borrowing call. Keep its
+prefix so the borrowing call can copy the final parameter binding out. -/
+def Stmt.borrowPrefix : Stmt → Stmt
+  | .block sp ss =>
+    match ss.getLast? with
+    | some (.returnStmt _ none) => .block sp ss.dropLast
+    | _ => .block sp ss
+  | s => s
+
 /-- The map parameter whose final value a normal completion copies out.
-This deliberately excludes explicit returns and calls in the callee. -/
+Only a terminal bare return may follow the straight-line updates. -/
 def borrowParam? (params : List Param) (ret : Option TypeExpr) (body : Stmt) : Option Nat := do
   let some (.keyword _ "void") := ret | none
-  let .block _ ss := body | none
+  let .block _ ss := body.borrowPrefix | none
   let maps := params.zipIdx |>.filter fun (p, _) =>
     match p.type with
     | some (.ref _ "Map" [_, _]) => true

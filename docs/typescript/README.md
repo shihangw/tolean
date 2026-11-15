@@ -969,7 +969,9 @@ A function may change one Map that its caller owns. The function must be
 declared earlier in the same file, have a `void` return type, and contain
 only `set` and `delete` statements. Their arguments must be identifiers or
 literal numbers, bigints, strings or booleans. The function reaches the end
-of its body without an explicit `return`.
+of its body, optionally through a terminal bare `return;`. The interpreter
+executes the checked update prefix before copying out the map, so that
+return does not discard the final parameter binding.
 
 ```ts
 function change(m: Map<bigint, bigint>, x: bigint): void {
@@ -991,11 +993,12 @@ copies the final parameter binding back. `program_sound` covers this
 translation.
 
 The caller may not keep another name or a field that holds the map, or pass
-the same map in another argument. The call must be a statement, and its
-other arguments must be atomic values. A read-only Map parameter does not
-become a borrow.
+the same map in another argument. The call must be a statement at the top
+level of the caller's body. Its other arguments follow the ordinary
+expression subset and may not hold the borrowed map. A read-only Map
+parameter does not become a borrow.
 
-Explicit returns, several Map parameters, returned values, branches,
+Early returns, several Map parameters, returned values, branches,
 loops, imported borrows and forwarding a borrowed map remain refused.
 Optional parameters and generic borrowing functions remain refused too.
 The certifier also refuses borrowing functions: its link proof does not

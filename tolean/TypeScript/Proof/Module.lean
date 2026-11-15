@@ -296,12 +296,12 @@ theorem translateFunction_ok {thr : String → Bool} {cls : String → Option (O
       ∃ lp r out, o = .function name lp r out ∧ lp.map (·.1) = params.map (·.name) ∧
         (params.map (·.name)).Nodup ∧
         ∃ tail F env c c', translateStatements F env tail
-          (blockStatements (Eval.Stmt.hoisted thr cls (Eval.guardedBody guards params ret body))) c = .ok out c' ∧
+          (blockStatements (Eval.preparedBody thr cls guards params ret body)) c = .ok out c' ∧
           env.functions = s.functions ++ [f] ∧ env.enums = s.enumValues ∧ env.classes = classes ∧
           (∀ x, env.has x = decide (x ∈ params.map (·.name))) ∧
           ((tail = .ret ∧
             Stmt.ownsChangesBorrow s.borrows (params.map (·.name))
-              (Eval.Stmt.hoisted thr cls (Eval.guardedBody guards params ret body)) = true) ∨
+              (Eval.preparedBody thr cls guards params ret body) = true) ∨
             ∃ index param, tail = .state [param] ∧ s.borrows.lookup name = some index ∧
               (params.map (·.name))[index]? = some param ∧ out.returnedState = some [param]) := by
   unfold translateFunction at h
@@ -356,7 +356,7 @@ theorem translateFunction_ok {thr : String → Bool} {cls : String → Option (O
     obtain ⟨rfl, hmode⟩ := checkBorrowResult_ok hborrow
     generalize hb : (if tps.isEmpty then
       borrowParam? params (some returnType)
-        (Eval.Stmt.hoisted thr cls (Eval.guardedBody guards params (some returnType) body)) else none) = borrow at h hbody hmode hr
+        (Eval.preparedBody thr cls guards params (some returnType) body) else none) = borrow at h hbody hmode hr
     generalize hp : (borrow.bind fun i => (params[i]?).map (·.name)) = param at h hbody hmode
     -- The check that a call of the function itself passes a part of a
     -- parameter only refuses.
@@ -1728,8 +1728,8 @@ theorem module_resolves {p : Eval.Program} {file : String} {m : Module} (hp : p.
       obtain ⟨rfl, -, rfl⟩ := hsel
       exact ⟨_, _, _, _, _, _, hd⟩
     · rintro ⟨sp, ex, tps, ps, r, b, hd⟩
-      exact ⟨(f.name, ps.map (·.name), Eval.Stmt.hoisted (Eval.mayThrow m) (Eval.errorClassOf m)
-        (Eval.guardedBody (Eval.guardTests m) ps r b)), ⟨_, hd, rfl⟩, rfl⟩
+      exact ⟨(f.name, ps.map (·.name), Eval.preparedBody (Eval.mayThrow m) (Eval.errorClassOf m)
+        (Eval.guardTests m) ps r b), ⟨_, hd, rfl⟩, rfl⟩
   unfold Eval.resolve
   simp only [hp, Option.bind_eq_bind, Option.bind_some]
   by_cases hown : ((Eval.functions m).any fun x => x.fst == f.name) = true
