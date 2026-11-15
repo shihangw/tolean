@@ -318,6 +318,8 @@ def sections : List Section := [
     ``Proof.out_numberFold]⟩,
   ⟨"sec-date", "21.4.2.1", "Date ( ...values )",
     [``Proof.translateNewDate_sound, ``Proof.out_dateOfNumber]⟩,
+  ⟨"sec-regexp.prototype.test", "22.2.6.16", "RegExp.prototype.test",
+    [``Proof.out_regexpTest, ``Proof.eval_regexpCall, ``Proof.regexpLiteral_sound]⟩,
   ⟨"sec-date.parse", "21.4.3.2", "Date.parse ( string )",
     [``Proof.translateDateParse_sound]⟩,
   ⟨"sec-date.utc", "21.4.3.4", "Date.UTC ( year [ , month [ , date [ , hours [ , minutes [ , seconds [ , ms ] ] ] ] ] ] )",

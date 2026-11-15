@@ -118,7 +118,14 @@ of a literal as a Lean `String`.
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| A number argument of `padStart` or `padEnd` that is not an integer literal | `ToLength` on the argument, then padding on code units. A dynamic length can exceed the engine's string limit and throw a `RangeError`, whose opaque message the error model does not yet support. | Every regular expression in the first version |
+| A number argument of `padStart` or `padEnd` that is not an integer literal | `ToLength` on the argument, then padding on code units. A dynamic length can exceed the engine's string limit and throw a `RangeError`, whose opaque message the error model does not yet support. | |
+
+Flagless regular expressions now support `test` with a string argument.
+Literals must start with `(?:` so the parser can distinguish them from
+division. The matcher uses UTF-16 code units and total ordered backtracking.
+Flags, `match`, `replace` and regex values at certificate boundaries remain
+outside this subset. The [decision record](../decisions/2026-11-14-regexp-subset.md)
+sets the restrictions for those later operations.
 
 ### Maps and sets
 

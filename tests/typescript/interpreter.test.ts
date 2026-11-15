@@ -650,6 +650,31 @@ test('Date.parse accepts only deterministic format literals and agrees with Node
   }
 });
 
+test('flagless RegExp.test agrees with Node on UTF-16 strings', () => {
+  const patterns = ['^(a|ab)+c$', '(?:){3,}', '^.$', 'a$', '^\\s+$', '[^a-c]*$', '(a?)*b'];
+  const inputs = ['', 'a', 'abc', 'ababc', 'b', '\n', '\u2028', '😀', '\uD800', ' \t'];
+  const programs = patterns.map((pattern) => ({
+    source: `export function f(s: string): boolean {
+      const r = /(?:${pattern})/;
+      const alias = r;
+      return r.test(s) && alias.test(s);
+    }`,
+    calls: inputs.map((s) => ({ function: 'f', args: [encode(s)] })),
+  }));
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs }), encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const results = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  for (const [i, pattern] of patterns.entries()) {
+    expect(results[i]?.accepted, pattern).toBe(true);
+    for (const [j, s] of inputs.entries()) {
+      expect(results[i]?.results[j]?.value, `${pattern}: ${JSON.stringify(s)}`)
+        .toEqual(new RegExp(pattern).test(s));
+    }
+  }
+});
+
 test('Date.parse refuses local time and fallback formats', () => {
   const strings = [
     '2000-01-01T00:00', '2000-01-01T00:00:00.000', 'January 1, 2000',

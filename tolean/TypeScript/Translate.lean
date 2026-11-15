@@ -65,6 +65,8 @@ inductive Ty where
   | set (elem : Ty)
   /-- `Date`, which the subset never changes, so a value stands for it. -/
   | date
+  /-- An inferred flagless literal. `RegExp` parameter types stay refused. -/
+  | regexp
 deriving Repr, Inhabited
 
 -- `Ty` holds lists of itself, so Lean's derived `BEq` would not reduce in the
@@ -75,6 +77,7 @@ mutual
 def Ty.beq : Ty → Ty → Bool
   | .bigint, .bigint | .number, .number | .boolean, .boolean | .string, .string | .null, .null => true
   | .date, .date => true
+  | .regexp, .regexp => true
   | .nullable a, .nullable b | .optional a, .optional b | .array a, .array b => Ty.beq a b
   | .struct a as, .struct b bs => a == b && Ty.beqList as bs
   | .enum a, .enum b => a == b
@@ -203,7 +206,7 @@ def Ty.isEqPrimitive : Ty → Bool
 
 /-- An object, which `===` compares by identity. A tuple is an array. -/
 def Ty.isObject : Ty → Bool
-  | .array _ | .struct .. | .tagged .. | .tuple _ | .map .. | .set _ | .date => true
+  | .array _ | .struct .. | .tagged .. | .tuple _ | .map .. | .set _ | .date | .regexp => true
   | _ => false
 
 /-- The element types of a tuple type. -/
@@ -242,6 +245,7 @@ def Ty.lean : Ty → IR.Ty
   | .map k v => .map k.lean v.lean
   | .set t => .set t.lean
   | .date => .date
+  | .regexp => .regexp
 
 def Ty.leanList : List Ty → List IR.Ty
   | [] => []
@@ -2462,7 +2466,10 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
     return ⟨.number v, false, .number⟩
   | .null _ => return ⟨.none, false, .null⟩
   | .bool _ value => return ⟨.bool value, false, .boolean⟩
-  | .regexp s .. => reject s "regular expression calls are not translated yet"
+  | .regexp s source target => do
+    requireFeature s .regexp
+    let r ← orReject (Syntax.RegExp.literal source target).toOption s "invalid regular expression literal"
+    return ⟨.ext (.regexpLiteral r) [], false, .regexp⟩
   | .string s value =>
     -- In the context of a literal union, a string is one of its constructors.
     match expected with
@@ -2851,6 +2858,13 @@ def translateArrayCall (fuel : Nat) (env : Env) (s : Span) (recv : Expr) (method
     stringCall s method xs codes (args.map Eval.intLiteral?)
   else
   if xs.type == .date then translateDateCall s method xs args
+  else
+  if xs.type == .regexp then
+    unless method == "test" do reject s "only 'test' is supported on a regular expression"
+    let [arg] := args | reject s "'test' takes one string argument"
+    let input ← translateExpr fuel env (some .string) arg
+    unless input.type == .string do reject arg.span "the argument of 'test' must be a string"
+    return ⟨.ext .regexpTest [xs.value, input.value], false, .boolean⟩
   else
   let elem ← orReject xs.type.element? recv.span "only an array or a string has this method"
   -- `xs.at(k)`: the element at `k`, counted from the end when `k` is
@@ -4941,6 +4955,7 @@ def translateWith (file source ns : String) (target : Edition := .default)
   let usesBigInt := decls.any (IR.Decl.anyOp IR.ExprExt.onBigInt)
   -- And for dates, which `JSDate` models.
   let usesDate := decls.any (IR.Decl.mentions (· == .date) IR.ExprExt.onDate)
+  let usesRegExp := decls.any (IR.Decl.mentions (· == .regexp) IR.ExprExt.onRegExp)
   -- A function that can throw returns `Except JSError R`, and `JSError`
   -- holds a string.
   let throws := decls.any fun
@@ -4953,9 +4968,10 @@ def translateWith (file source ns : String) (target : Edition := .default)
      else if usesString then ["import tolean.TypeScript.Spec.String"] else []) ++
     (if usesBigInt then ["import tolean.TypeScript.Spec.BigInt"] else []) ++
     (if usesMap then ["import tolean.TypeScript.Map"] else []) ++
+    (if usesRegExp then ["import tolean.TypeScript.Spec.RegExp"] else []) ++
     (if decls.any (IR.Decl.recursive names.file) then ["import tolean.TypeScript.Decreasing"] else []) ++
     imports ++
-    (if names.generic || usesString || throws || usesMap || usesBigInt || usesDate then
+    (if names.generic || usesString || throws || usesMap || usesBigInt || usesDate || usesRegExp then
       ["", "open tolean.TypeScript"]
      else if imports.isEmpty then [] else [""])
   let text := "\n".intercalate

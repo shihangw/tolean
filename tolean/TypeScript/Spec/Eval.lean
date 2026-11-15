@@ -1,4 +1,5 @@
 import tolean.TypeScript.Syntax.Ast
+import tolean.TypeScript.Syntax.RegExp
 import tolean.TypeScript.Spec.Guards
 import tolean.TypeScript.Spec.BigInt
 import tolean.TypeScript.Spec.Date
@@ -56,6 +57,8 @@ inductive Val (N : Type) where
   | error (cls : String) (fields : List (String × Val N))
   /-- A `Date`: its time value, or `none` when it is invalid (`JSDate`). -/
   | date (time : Option Int)
+  /-- A flagless literal. No operation of the subset observes its identity. -/
+  | regexp (value : JSRegExp.Regex)
   /-- A function that a block of another function declares: the names of
   its parameters and its body. A call finds the variables it sees in the
   caller's environment, by the names that the body mentions
@@ -68,6 +71,7 @@ deriving Inhabited
 /-- `ToBoolean` (ECMA-262 §7.1.2), on the values of the subset. A number is
 false when it is `+0`, `-0` or `NaN`, and `-0 === 0`. -/
 def Val.truthy : Val N → Bool
+  | .regexp _ => true
   | .int i => i != 0
   | .num n => !(JSNumber.isNaN n || JSNumber.eq n (JSNumber.ofSafeInt 0))
   | .bool b => b
@@ -79,6 +83,7 @@ def Val.truthy : Val N → Bool
 subset. `null` is `"object"`, and so are an array and an object, which are
 not callable. -/
 def Val.typeOf : Val N → String
+  | .regexp _ => "object"
   | .int _ => "bigint"
   | .num _ => "number"
   | .bool _ => "boolean"
@@ -170,6 +175,7 @@ def strictEq : Val N → Val N → Option Bool
   | .str a, .str b => some (decide (a = b))
   | .null, .null => some true
   | .undefined, .undefined => some true
+  | .regexp _, .null | .null, .regexp _ | .regexp _, .undefined | .undefined, .regexp _ => some false
   | .undefined, .int _ | .undefined, .num _ | .undefined, .bool _ | .undefined, .str _
   | .undefined, .null | .undefined, .list _ | .undefined, .obj _ | .undefined, .map _
   | .undefined, .set _ | .undefined, .error _ _ | .undefined, .date _ | .undefined, .closure _ _ => some false
@@ -522,6 +528,7 @@ private partial def jsonTextImpl {N : Type} [JSNumber N] (v : Val N) : JSString 
   ⟨go v⟩
 where
   go : Val N → List UInt16
+    | .regexp _ => ascii "{}"
     | .null | .undefined => ascii "null"
     | .bool b => ascii (if b then "true" else "false")
     | .str s => jsonQuote s
@@ -1485,7 +1492,7 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
   | .number _ text => (numberLiteral text).map (.num ∘ JSNumber.ofSafeInt)
   | .bool _ b => some (.bool b)
   | .string _ s => some (.str (JSString.ofString s))
-  | .regexp .. => none
+  | .regexp _ source target => (Syntax.RegExp.literal source target).toOption.map .regexp
   | .null _ => some .null
   | .paren _ inner => eval m fuel env inner
   -- Type stripping removes `as const` and `satisfies T`.
@@ -1721,6 +1728,11 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
   -- `s.has(x)` on a set (ECMA-262 §24.2.4.8).
   | .call _ (.member _ recv method) [arg] => do
     match ← eval m fuel env recv with
+    | .regexp r =>
+      if method == "test" then
+        let .str input ← eval m fuel env arg | none
+        return .bool (r.test input)
+      else none
     | .map entries =>
       let found ← mapFind entries (← eval m fuel env arg)
       if method == "get" then return found.getD .undefined

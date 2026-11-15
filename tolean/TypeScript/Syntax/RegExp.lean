@@ -192,4 +192,7 @@ def parse (source : String) (target : Edition := .default) : Except String (Patt
   if !after.rest.isEmpty then throw "unmatched regular expression closing parenthesis"
   return (p, after.captures)
 
+def literal (source : String) (target : Edition) : Except String Regex :=
+  (parse source target).map fun (pattern, count) => ⟨pattern, count⟩
+
 end tolean.TypeScript.Syntax.RegExp

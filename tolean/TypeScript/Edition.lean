@@ -54,7 +54,7 @@ def Edition.default : Edition := .es2024
 inductive Feature where
   /-- Flagless RegExp patterns and `test`: Pattern Semantics, RepeatMatcher
   and RegExpBuiltinExec (ES2024 §22.2.2, §22.2.2.3.1 and §22.2.7.2).
-  The model is available in ES2015. The translator does not accept it yet. -/
+  The translator accepts flagless literals and their `test` method from ES2015. -/
   | regexp
   /-- `**` and `**=`: `ExponentiationExpression`. -/
   | exponent
