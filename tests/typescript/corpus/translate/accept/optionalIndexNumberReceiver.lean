@@ -4,7 +4,10 @@ import tolean.TypeScript.Spec.Number
 open tolean.TypeScript
 namespace Test
 
+def values {N : Type} [JSNumber N] (absent : Bool) : Option (List Int) :=
+  (if absent then none else ([(1 : Int)] : List Int))
+
 def f {N : Type} [JSNumber N]  : Int :=
-  (Option.getD (((((if (JSNumber.isNaN ((JSNumber.nan (N := N)))) then none else ([(1 : Int)] : List Int))).bind (·[0]?)) : Option Int)) ((0 : Int)))
+  (Option.getD (((((values (N := N) ((JSNumber.isNaN ((JSNumber.nan (N := N))))))).bind (·[0]?)) : Option Int)) ((0 : Int)))
 
 end Test
