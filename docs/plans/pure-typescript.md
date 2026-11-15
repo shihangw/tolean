@@ -100,7 +100,7 @@ value claim already does.
 | TypeScript | Lean | Refused |
 |---|---|---|
 | The `index` argument of a callback other than one of `map`, and the `array` argument of any callback | The `List` functions that also pass the index, as `List.mapIdx` does for `map`, and the list itself | |
-| A number-sort certificate inside a callback or loop, or for a remaining computed list shape | A hypothesis over the parameters excludes `NaN` keys, or requires finite keys for a difference. Sorts and calls in ordinary expressions already carry these conditions. Inputs may use parameter fields, local aliases, spreads, literal elements, maps, filters, slices, conditionals and calls. | Lists that cannot be reached from parameters. |
+| A number-sort certificate inside a callback or loop, for a remaining computed list shape, or in another call scope | A hypothesis over the parameters excludes `NaN` keys, or requires finite keys for a difference. Sorts and calls in the supported ordinary expressions already carry these conditions. Inputs may use parameter fields, local aliases, spreads, literal elements, maps, filters, slices, conditionals and calls. Calls in record literals and nullable matches still need condition propagation. | Lists that cannot be reached from parameters. |
 
 The certifier uses `sortValues_sortWith_on` for a direct sort of a
 parameter. Its input hypothesis excludes NaN keys for a comparison, or
@@ -200,7 +200,8 @@ leaves a gap.
    re-exports.
 8. **P0.** The borrow for a map that a caller passes in.
 10. **P1.** Sorting: number-key certificates inside callbacks and loops,
-    and remaining computed list shapes.
+    remaining computed list shapes, and calls in record literals and nullable
+    matches.
 11. **P2.** Recursion: tagged unions that refer to themselves first, then
     `@decreases`, mutual recursion, and `while` loops.
 12. **P1.** Non-literal `bigint` exponents, `BigInt(number)`,
