@@ -369,8 +369,13 @@ the hypothesis is instead `∀ x ∈ xs, JSNumber.isFinite x.key = true`, and
 the theorem also takes `[SpecialValueLaws N]`. The difference may overflow
 to infinity: the keys, not their differences, must be finite.
 The certificate proves consistency on that input list, not on every list.
-Multiple keys, a sort of a local list, and calls that need to pass a sort
-precondition remain refused by the certifier.
+A function may directly return a call to such a function, with its own list
+parameter as the argument. Its theorems carry the same condition over that
+parameter. This works through a chain of calls, even when the argument
+changes name or position, and permits a spread copy of the parameter.
+Multiple keys, a sort of a local list, a computed list argument, and a
+conditional sort call inside a larger expression remain refused by the
+certifier.
 
 A certificate's theorems follow from `translate_sound`, so they do not unfold
 the interpreter. The certificate holds the IR that the translator gives,
