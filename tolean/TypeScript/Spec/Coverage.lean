@@ -156,7 +156,12 @@ def sections : List Section := [
     ``Proof.eval_call_toOption, ``Proof.out_call_toOption, ``Proof.translateCall_sound,
     ``Proof.translateCall_callSim, ``Proof.checkThrowingCall_ok, ``Proof.checkCrossFileThrow_ok,
     ``Proof.throwingCall?_some, ``Proof.zip_sim, ``Proof.zip_sim_value, ``Proof.zip_codes_sim,
-    ``Proof.evalList_length, ``Proof.calls_agree,
+    ``Proof.evalList_length, ``Proof.calls_agree, ``Proof.calls_agree_ordinary,
+    ``Proof.CallsAgree.ordinary, ``Proof.CallsAgree.borrow,
+    ``Proof.returnedState_not_ret, ``Proof.exec_letBorrow, ``Proof.borrow_call_from_agreement,
+    ``Proof.translateBorrowPlain_sim, ``Proof.translateBorrowArg_sim, ``Proof.translateBorrowArgs_sim,
+    ``Proof.translateBorrowCall_sim, ``Proof.borrowCall?_some, ``Proof.exprChanges_stmt,
+    ``Proof.borrowCallStmt_sim, ``Proof.translateBorrowStmt_sound,
     ``Proof.evalList_append_undefined, ``Proof.callS_append_undefined, ``Proof.evalList_optArgs, ``Proof.fixArgs_value,
 
     -- A call of a local function, which the output lifts out.
@@ -272,7 +277,8 @@ def sections : List Section := [
     ``Proof.throwClass_sim, ``Proof.fieldArgs_marks, ``Proof.translateThrow_sound]⟩,
   -- §15 ECMAScript Language: Functions and Classes {#sec-ecmascript-language-functions-and-classes}
   ⟨"sec-function-definitions", "15.2", "Function Definitions",
-    [``Proof.translateFunction_ok, ``Proof.checkTypeParams_ok, ``Proof.params_fold,
+    [``Proof.translateFunction_ok, ``Proof.checkTypeParams_ok, ``Proof.params_fold, ``Proof.params_fold_nodup,
+    ``Proof.functionReturnType_ok, ``Proof.borrowLocals_has, ``Proof.checkBorrowResult_ok,
     ``Proof.funDecl_sim, ``Proof.translateFunDecl_sound, ``Proof.translateLocalHead_tail, ``Proof.withLocalBody_ok]⟩,
   ⟨"sec-arrow-function-definitions", "15.3", "Arrow Function Definitions",
     [``Proof.callbackOf_some, ``Proof.bodySim_of, ``Proof.eval_arrayMethod, ``Proof.out_listMethod,
@@ -283,7 +289,7 @@ def sections : List Section := [
   ⟨"sec-source-text-module-record-initialize-environment", "16.2.1.6.4", "InitializeEnvironment",
     [``Proof.module_resolves, ``Proof.declareTopLevel_ok, ``Proof.declareTopLevel_classes,
     ``Proof.declareTopLevel_global, ``Proof.translateDecl_ok,
-    ``Proof.decls_ok, ``Proof.translateExports_ok, ``Proof.translateDecls_ok, ``Proof.functions_append,
+    ``Proof.decls_ok, ``Proof.translateDecl_borrows, ``Proof.translateExports_ok, ``Proof.translateDecls_ok, ``Proof.functions_append,
     ``Proof.translateCtorParam_ok, ``Proof.ctorParams_shape, ``Proof.translateErrorClass_ok,
     ``Proof.errorClasses_ok, ``Proof.translateErrorTypes_ok,
     ``Proof.mem_withExports_functions, ``Proof.mem_withExports_enums, ``Proof.listsExport_of, ``declareTopLevel_not_global, ``Proof.declareTopLevel_fresh, ``Proof.declRefs_bound,

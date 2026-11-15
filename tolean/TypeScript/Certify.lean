@@ -326,7 +326,7 @@ partial def bodyCallbacks : IR.Body → List Callback
   | .matchNull _ _ a b | .matchTag _ _ _ _ _ a b | .letState _ a b => bodyCallbacks a ++ bodyCallbacks b
   | .fold _ _ body items rest _ => exprCallbacks items ++ bodyCallbacks body ++ bodyCallbacks rest
   | .throw e => exprCallbacks e
-  | .bind _ _ args rest => args.flatMap exprCallbacks ++ bodyCallbacks rest
+  | .bind _ _ args rest | .letBorrow _ _ _ args rest => args.flatMap exprCallbacks ++ bodyCallbacks rest
   -- A file with a local function gets no certificate yet.
   | .letCall _ _ _ _ _ _ _ _ _ rest | .letLifted _ _ rest => bodyCallbacks rest
 
@@ -393,7 +393,8 @@ partial def loopsOf : IR.Body → List (List String × String × IR.Body × IR.L
   | .letState _ branch rest => loopsOf branch ++ loopsOf rest
   | .fold names element body _ rest info => loopsOf body ++ [(names, element, body, info)] ++ loopsOf rest
   | .throw _ => []
-  | .bind _ _ _ rest | .letCall _ _ _ _ _ _ _ _ _ rest | .letLifted _ _ rest => loopsOf rest
+  | .bind _ _ _ rest | .letCall _ _ _ _ _ _ _ _ _ rest | .letLifted _ _ rest
+  | .letBorrow _ _ _ _ rest => loopsOf rest
 
 /-- `s`, the state of a loop with the locals `names`, as the path to one of
 them: `s`, `s.1`, `s.2.1`, and so on. -/
@@ -418,6 +419,8 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
   -- The certificate's program is the file "", so the tree names the file's
   -- own declarations under "".
   let (m, names, decls) ← (Translate.translateTree "" source target).mapError (file ++ ·)
+  if !(Eval.borrowsOf ⟨[("", m)], ""⟩).isEmpty then
+    throw s!"{file}: a map borrow has no certificate yet"
   let r : Refs := { idents := sourceIdents source target, certNs }
   -- A loop lemma's step function binds the loop's locals, so the printer
   -- writes the translation's names as `Refs` does.

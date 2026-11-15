@@ -95,6 +95,9 @@ theorem checkThrowingCall_ok {sp : Span} {name : String} {fn : FnInfo} {top : Bo
     (h : checkThrowingCall sp name fn top s = .ok u s') : s' = s := by
   simp only [checkThrowingCall, ite_state] at h
   split at h
+  · simp at h
+  simp only [pure_bind] at h
+  split at h
   · simp only [bind_ok, get_ok] at h
     obtain ⟨_, _, ⟨rfl, rfl⟩, h⟩ := h
     split at h <;> (try split at h) <;> exact absurd h (reject_ne_ok _ _ _ _ _)
@@ -140,7 +143,8 @@ code may read is the one the interpreter reads: in the file of `m`, the name
 `e.name` is the enum with the members `e.members`. And each error class that
 a `throw` may make an error of is the one the interpreter makes. -/
 def Resolves (m : Eval.Scope) (env : Translate.Env) : Prop :=
-  (∀ f ∈ env.functions, Eval.resolve m f.name = some f.ref) ∧
+  (∀ f ∈ env.functions, Eval.resolve m f.name = some f.ref ∧
+    (f.borrow.isSome = true → f.file = m.file)) ∧
     (∀ e ∈ env.enums, Eval.resolveEnum m e.name = some e.members) ∧
     ∀ c ∈ env.classes, ClassAgrees m c
 
@@ -186,7 +190,7 @@ def callS (p : Eval.Program) (fuel : Nat) (key : DeclRef) (vs : List (Val N)) :
   | 0 => none
   | fuel + 1 => do
     let (params, body) ← (Eval.functionsOf p).lookup key
-    if !Stmt.ownsChanges params body then none
+    if !Stmt.ownsChangesBorrow (Eval.borrowsOf ⟨p, key.file⟩) params body then none
     match ← Eval.execStmt ⟨p, key.file⟩ fuel (← Eval.bindArgs params vs) body with
     | .ret r => some r
     | .normal _ | .brk _ | .cont _ => none
@@ -206,9 +210,27 @@ def callO (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat) (key : De
 
 /-- Every call that returns or throws in the output returns or throws the
 same value in the interpreter. -/
-def CallsAgree (p : Eval.Program) (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat) :
-    Prop :=
-  ∀ key vs r, callO (N := N) fs fuel key vs = some r → callS p fuel key vs = some r
+structure CallsAgree (p : Eval.Program) (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat) :
+    Prop where
+  ordinary : ∀ key vs r, callO (N := N) fs fuel key vs = some r → callS p fuel key vs = some r
+  /-- A normal completion returns the selected map through the parameter
+  binding, not through the ordinary result of the JavaScript call. -/
+  borrow : ∀ k, fuel = k + 1 → ∀ key ps body index param (vs : List (Val N)) after entries,
+    fs.lookup key = some (ps, body) →
+    ps[index]? = some param →
+    body.returnedState = some [param] →
+    ps.length = vs.length →
+    IR.Body.exec fs k (ps.zip vs).reverse body = some (.normal after) →
+    after.lookup param = some (.map entries) →
+    ∃ source afterS,
+      (Eval.functionsOf p).lookup key = some (ps, source) ∧
+      (Eval.borrowsOf ⟨p, key.file⟩).lookup key.name = some index ∧
+      Eval.execStmt ⟨p, key.file⟩ k (ps.zip vs).reverse source = some (.normal afterS) ∧
+      afterS.lookup param = some (.map entries)
+
+instance : CoeFun (CallsAgree (N := N) p fs fuel)
+    (fun _ => ∀ key vs r, callO (N := N) fs fuel key vs = some r → callS p fuel key vs = some r) :=
+  ⟨CallsAgree.ordinary⟩
 
 /-! ### The statement -/
 
@@ -4423,7 +4445,7 @@ theorem translateCall_sound {F : Nat} (hc : CallsAgree (N := N) m.program fs fue
               have hargs := zip_sim_value m fs fuel ?hg args fn.params _ first _ hle hcodes
                 ρs ρo vs ha hs hx
               · have hname : fn.name = name := by simpa using List.find?_some hfind
-                have hres := hs.2.1 fn (List.mem_of_find?_eq_some hfind)
+                have hres := (hs.2.1 fn (List.mem_of_find?_eq_some hfind)).1
                 rw [hname] at hres
                 rw [evalCall_eq (hn := hN) (hl := hs.none hlocal'), hargs]
                 simp only [Option.bind_some, hres, callS_append_undefined (hc _ _ _ hr)]

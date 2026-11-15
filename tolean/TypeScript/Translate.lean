@@ -381,6 +381,8 @@ structure FnInfo where
   call of it may stand inside a larger expression. It does not know a
   function that throws only through an imported function. -/
   hoists : Bool := false
+  /-- A normal-completion map borrow returns this parameter instead of void. -/
+  borrow : Option Nat := none
 
 def FnInfo.ref (f : FnInfo) : DeclRef := ⟨f.file, f.name⟩
 
@@ -513,6 +515,9 @@ structure Interface where
 
 structure Ctx where
   file : String
+  /-- All source borrow signatures, including declarations later in the file.
+  The interpreter uses the same list for its ownership guard. -/
+  borrows : List (String × Nat) := []
   /-- The edition the code runs on. A feature newer than it is refused. -/
   target : Edition
   src : Array Char
@@ -793,6 +798,7 @@ a declaration of its own, so one that is left stands where JS may not
 evaluate it, or calls an imported function, which the hoisting does not
 follow yet. -/
 def checkThrowingCall (s : Span) (name : String) (fn : FnInfo) (top : Bool) : TM Unit := do
+  if fn.borrow.isSome then reject s "a map borrow must be a statement of its own"
   if fn.throws && !top then
     if fn.file != (← get).file then
       reject s s!"'{name}' is imported and can throw, so a call of it must be the whole value of a const, a let or a return"
@@ -1227,6 +1233,10 @@ mutual
 def stmtChanges (fns : List (String × List String)) : Stmt → List String
   | .varDecl _ d => optionChanges fns d.init
   | .destructure _ _ _ _ init => exprChanges fns init
+  | .exprStmt _ (.call _ (.ident _ name) args) =>
+    match fns.lookup name with
+    | some _ => calleeChanges fns (.ident default name) ++ exprsChanges fns args
+    | none => args.filterMap (fun e => match e with | .ident _ n => some n | _ => none) ++ exprsChanges fns args
   | .exprStmt _ e => exprChanges fns e
   | .returnStmt _ v => optionChanges fns v
   | .ifStmt _ test t (some e) => exprChanges fns test ++ stmtChanges fns t ++ stmtChanges fns e
@@ -3644,6 +3654,48 @@ def translateLocalCall (env : Env) (s : Span) (fn : LocalFn) (args : List Expr) 
   unless reprStr b == fn.printed do reject s s!"a call of '{fn.name}' translates its body another way"
   return (b, fn.captured.map (fun l => IR.Expr.var l.name) ++ outs)
 
+/-- A borrowing global function called as a statement. -/
+def borrowCall? (env : Env) : Expr → Option (FnInfo × Nat × List Expr)
+  | .call _ (.ident _ name) args => do
+    let fn ← env.functions.find? (·.name == name)
+    let i ← fn.borrow
+    return (fn, i, args)
+  | _ => none
+
+/-- Translate the exclusive map argument without treating it as an escaping
+value. The whole-body source guard checks all other holders of that map. -/
+def translateBorrowPlain (env : Env) (ty : Ty) (arg : Expr) : TM IR.Expr := do
+  let code ← translateExpr (← fuelLimit) env (some ty) arg
+  unless code.type.assignableTo ty do reject arg.span "the argument does not have the parameter's type"
+  return withType code.value ty code.type
+
+def translateBorrowArg (env : Env) (target : String) (mapType ty : Ty) (arg : Expr) : TM IR.Expr :=
+  match arg with
+  | .ident sp name => do
+    if name == target then
+      unless mapType == ty do reject sp "the borrowed map has the wrong type"
+      return IR.Expr.var name
+    else translateBorrowPlain env ty arg
+  | _ => translateBorrowPlain env ty arg
+
+def translateBorrowArgs (env : Env) (target : String) (mapType : Ty) :
+    List Ty → List Expr → TM (List IR.Expr)
+  | ty :: ps, arg :: args => do
+    let code ← translateBorrowArg env target mapType ty arg
+    return code :: (← translateBorrowArgs env target mapType ps args)
+  | _, _ => pure []
+
+def translateBorrowCall (env : Env) (s : Span) (fn : FnInfo) (i : Nat) (args : List Expr) :
+    TM (String × IR.Expr) := do
+  if env.has fn.name then reject s "a local hides the borrowing function"
+  unless fn.file == (← get).file do reject s "an imported map borrow is not supported yet"
+  unless args.length == fn.params.length do reject s "a map borrow needs every argument"
+  let some (.ident _ name) := args[i]? | reject s "a map borrow needs an owned map variable"
+  let some binding := env.lookup name | reject s "a map borrow needs an owned map variable"
+  unless binding.binding == .map do reject s "a map borrow needs an exclusively owned map"
+  let outs ← translateBorrowArgs env name binding.type fn.params args
+  return (name, .call fn.ref outs)
+
 mutual
 
 def translateStatements (fuel : Nat) (env : Env) (tail : Tail) (statements : List Stmt) :
@@ -3705,6 +3757,10 @@ def translateStatements (fuel : Nat) (env : Env) (tail : Tail) (statements : Lis
           (translateStatements fuel (fn.bodyEnv env) fn.tail (blockStatements fn.body))
         return .letCall fn.changes fn.ref fn.name fn.closure fn.leanParams fn.leanRet false b outs
           (← translateStatements fuel env tail rest)
+      if let some (fn, i, args) := borrowCall? env e then
+        let (name, call) ← translateBorrowCall env s fn i args
+        let .call ref outs := call | reject s "invalid map borrow"
+        return .letBorrow name ref i outs (← translateStatements fuel env tail rest)
       let (name, update) ← translateUpdate env s e
       return .let name update (← translateStatements fuel env tail rest)
     -- `function g(x: T): R { … }` in the body of the function: the output
@@ -4374,6 +4430,24 @@ def paramType (span : Span) (optional : Bool) (type : TypeExpr) (before : List T
   if ty.isNullable || ty == .null then reject span "an optional parameter may not also be nullable"
   return .optional ty
 
+def functionReturnType (borrow : Option Nat) (types : List Ty) (s : Span) (rt : TypeExpr)
+    (env : Env) (params : List Param) (body : Stmt) : TM Ty :=
+  match borrow with
+  | some i => orReject types[i]? s "the borrowed parameter has no type"
+  | none => isolated (translateReturnType env params rt body)
+
+def checkBorrowResult (s : Span) (borrow : Option Nat) (name : String)
+    (borrows : List (String × Nat)) (param : Option String) (out : IR.Body) : TM Unit :=
+  match borrow, param with
+  | some index, some param => do
+    unless borrows.lookup name == some index && out.returnedState == some [param] do
+      reject s "a map borrow must return its one changed parameter on normal completion"
+  | some _, none => reject s "the borrowed parameter is missing"
+  | none, _ => pure ()
+
+def borrowLocals (locals : List Local) (param : Option String) : List Local :=
+  locals.map fun l => if param == some l.name then { l with binding := .map } else l
+
 def translateFunction (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr)))
     (guards : List (String × Eval.GuardTest))
     (classes : List ClassInfo) (s : Span) (exported : Bool) (name : String) (typeParams : List String)
@@ -4404,22 +4478,28 @@ def translateFunction (thr : String → Bool) (cls : String → Option (Option (
       let ty ← paramType p.span p.optional type types
       pure (env.add { name := paramName, binding := .param, type := ty },
         leanParams ++ [(paramName, ty.lean)], types ++ [ty])
-  let ret ← isolated (translateReturnType env params returnType sourceBody)
+  let borrow := if typeParams.isEmpty then borrowParam? params (some returnType) body else none
+  let ret ← functionReturnType borrow types s returnType env params sourceBody
   let throws := stmtsThrow ctx.functions (blockStatements body)
   modify fun c => { c with currentFunction := name, returnType := ret, throws }
   -- The body may call the function itself. Lean must see that the calls
   -- end, so each must pass a part of one parameter, the same one in every
   -- call.
   let self : FnInfo :=
-    { file := ctx.file, name, exported, typeParams, params := types, ret, throws, hoists := thr name }
-  let out ← isolated (translateStatements (← fuelLimit) { env with functions := env.functions ++ [self] } .ret
+    { file := ctx.file, name, exported, typeParams, params := types, ret, throws, hoists := thr name, borrow }
+  let borrowedName := borrow.bind fun i => (params[i]?).map (·.name)
+  let locals := borrowLocals env.locals borrowedName
+  let env : Env := { env with locals }
+  let tail := match borrowedName with | some n => Tail.state [n] | none => .ret
+  let out ← isolated (translateStatements (← fuelLimit) { env with functions := env.functions ++ [self] } tail
     (blockStatements body))
+  checkBorrowResult s borrow name ctx.borrows borrowedName out
   if out.calls self.ref && (out.decreasingParam? self.ref leanParams).isNone then
     reject s ("a function may call itself only on a part of one of its parameters, the same one in " ++
       "every call: a field of it, a value that a test narrows it to, or an element of an array in it")
   -- The spec gives no value for a function that fails this test, because its
   -- model of a collection as a value would not be the JS meaning.
-  if !Stmt.ownsChanges (params.map (·.name)) body then
+  if borrow.isNone && !Stmt.ownsChangesBorrow ctx.borrows (params.map (·.name)) body then
     reject s ("a function may change only an array, a map or a set that it makes in a const, under a " ++
       "name that no other variable of it has, and may hand it on only in its return value")
   modify fun c => { c with typeParams := [], throws := false, functions := c.functions ++ [self] }
@@ -4607,6 +4687,7 @@ def translateImport (s : Span) (names : List ImportName) (source : String) : TM 
         reject n.span s!"'{n.name}' is a type; import it with 'type {n.name}'"
       let fn ← orReject (iface.functions.find? (·.name == n.name)) n.span
         s!"'{source}' exports no function named '{n.name}'"
+      if fn.borrow.isSome then reject n.span "an imported map borrow is not supported yet"
       modify fun c => { c with functions := c.functions ++ [{ fn with exported := false }] }
 
 /-- Why the export list `names` is wrong in `c`, if it is. Each name must be
@@ -4751,6 +4832,7 @@ def duplicateExport? (m : Module) : Option ImportName :=
 from one syntax tree to another: `translate` parses the source before it and
 prints the result after it. -/
 def translateDecls (m : Module) : TM (List IR.Decl) := do
+  modify fun c => { c with borrows := Eval.moduleBorrows m }
   if let some n := duplicateExport? m then reject n.span s!"'{n.name}' is in two export lists"
   let types ← translateErrorTypes m
   let classes := (← get).errorClasses
