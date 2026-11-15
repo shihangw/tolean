@@ -12,6 +12,107 @@ namespace tolean.TypeScript.Eval
 
 variable {N : Type}
 
+/-! ### Named exports -/
+
+open Syntax (Module)
+
+theorem exportedRefOf_own {exports : Module → String → Bool}
+    {p : Program} {file name : String} {m : Module}
+    (hp : p.lookup file = some m) (he : exports m name = true) :
+    exportedRefOf exports p file name = some ⟨file, name⟩ := by
+  rw [exportedRefOf.eq_def]
+  split <;> simp_all
+
+theorem exportedRefOf_forward {exports : Module → String → Bool}
+    {p : Program} {file name target : String} {m : Module}
+    (hp : p.lookup file = some m) (he : exports m name = false)
+    (hs : exportSource? file m name = some target) :
+    exportedRefOf exports p file name =
+      exportedRefOf exports (p.filter fun item => item.1 != file) target name := by
+  rw [exportedRefOf.eq_def]
+  split <;> simp_all
+
+theorem lookup_remove_other {p : Program} {file target : String}
+    (h : file ≠ target) :
+    (p.filter fun item => item.1 != file).lookup target = p.lookup target := by
+  induction p with
+  | nil => rfl
+  | cons item rest ih =>
+    obtain ⟨key, value⟩ := item
+    by_cases hk : key = file
+    · subst hk
+      have ht : (target == key) = false := by simp [Ne.symm h]
+      simp [List.filter, List.lookup, ht, ih]
+    · have hk' : (key != file) = true := by simp [hk]
+      simp [hk', List.lookup_cons, ih]
+
+theorem lookup_remove_self (p : Program) (file : String) :
+    (p.filter fun item => item.1 != file).lookup file = none := by
+  induction p with
+  | nil => rfl
+  | cons item rest ih =>
+    obtain ⟨key, value⟩ := item
+    by_cases hk : key = file
+    · subst hk
+      simpa using ih
+    · have hk' : (key != file) = true := by simp [hk]
+      have hk'' : (file == key) = false := by simp [Ne.symm hk]
+      simp [hk', hk'', List.lookup_cons, ih]
+
+/-- Every resolved export names a declaration in the project. -/
+theorem exportedRefOf_origin {exports : Module → String → Bool}
+    {p : Program} {file name : String} {r : DeclRef}
+    (h : exportedRefOf exports p file name = some r) :
+    ∃ m, p.lookup r.file = some m ∧ exports m r.name = true := by
+  rw [exportedRefOf.eq_def] at h
+  split at h
+  · contradiction
+  · rename_i m hp
+    split at h
+    · rename_i hex
+      simp only [Option.some.injEq] at h
+      subst r
+      exact ⟨m, hp, hex⟩
+    · cases hs : exportSource? file m name with
+      | none => simp [hs] at h
+      | some target =>
+        simp only [hs, Option.bind_eq_bind, Option.bind_some] at h
+        obtain ⟨tm, hm, hex⟩ := exportedRefOf_origin h
+        have hne : file ≠ r.file := by
+          intro heq
+          rw [← heq, lookup_remove_self] at hm
+          contradiction
+        rw [lookup_remove_other hne] at hm
+        exact ⟨tm, hm, hex⟩
+termination_by p.length
+decreasing_by
+  apply removeModule_shorter
+  assumption
+
+theorem exportedEnum_own {p : Program} {file name : String} {m : Module}
+    {pairs : List (String × String)}
+    (hp : p.lookup file = some m) (he : (enumsOf m true).lookup name = some pairs) :
+    exportedEnum p file name = some pairs := by
+  have href := exportedRefOf_own (exports := exportsEnum) (name := name) hp
+    (by simp [exportsEnum, he])
+  simp [exportedEnum, href, hp, he]
+
+theorem exportedEnum_forward {p : Program} {file name target : String} {m : Module}
+    (hp : p.lookup file = some m) (he : exportsEnum m name = false)
+    (hs : exportSource? file m name = some target) :
+    exportedEnum p file name = exportedEnum (p.filter fun item => item.1 != file) target name := by
+  unfold exportedEnum
+  rw [exportedRefOf_forward hp he hs]
+  cases hr : exportedRefOf exportsEnum (p.filter fun item => item.1 != file) target name with
+  | none => rfl
+  | some r =>
+    obtain ⟨origin, ho, _⟩ := exportedRefOf_origin hr
+    have hne : file ≠ r.file := by
+      intro heq
+      rw [← heq, lookup_remove_self] at ho
+      contradiction
+    simp only [Option.bind_eq_bind, Option.bind_some, lookup_remove_other hne]
+
 /-! ### Calls -/
 
 /-- A call with an argument for each parameter binds each parameter to its

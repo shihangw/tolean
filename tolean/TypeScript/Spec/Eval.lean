@@ -1337,6 +1337,42 @@ def exportsFunction (m : Module) (name : String) : Bool :=
     | .function _ exported n _ _ _ _ => (exported || listsExport m name) && n == name
     | _ => false
 
+/-- Removing a module found by lookup shortens the project. -/
+theorem removeModule_shorter {p : Program} {file : String} {m : Module}
+    (h : p.lookup file = some m) :
+    (p.filter fun item => item.1 != file).length < p.length := by
+  obtain ⟨before, after, rfl, _⟩ := List.lookup_eq_some_iff.mp h
+  apply List.length_filter_lt_length_iff_exists.mpr
+  exact ⟨(file, m), by simp, by simp⟩
+
+/-- The source of a named value re-export. It introduces no local binding. -/
+def exportSource? (file : String) (m : Module) (name : String) : Option String :=
+  m.decls.findSome? fun
+    | .exports _ names (some source) =>
+      if names.any fun n => !n.typeOnly && n.name == name then resolvePath file source else none
+    | _ => none
+
+/-- Follow named exports to their declaration (`ResolveExport`, ECMA-262
+§16.2.1.6.3). Removing each visited module detects cycles without fuel.
+The predicate selects functions or string enums; export stars stay outside
+the subset. -/
+def exportedRefOf (exports : Module → String → Bool)
+    (p : Program) (file name : String) : Option DeclRef :=
+  match _h : p.lookup file with
+  | none => none
+  | some m =>
+    if exports m name then some ⟨file, name⟩
+    else do
+      let target ← exportSource? file m name
+      exportedRefOf exports (p.filter fun item => item.1 != file) target name
+termination_by p.length
+decreasing_by
+  rw [List.unattach_filter (g := fun item : String × Module => item.1 != file)
+    (hf := by intros; rfl), List.unattach_attach]
+  exact removeModule_shorter _h
+
+def exportedRef := exportedRefOf exportsFunction
+
 /-- The constructor of the error class `name` of the file of `s`. -/
 def errorClassIn (s : Scope) (name : String) : Option (Option (List CtorParam × Expr)) :=
   (s.program.lookup s.file).bind fun m => errorClassOf m name
@@ -1351,8 +1387,7 @@ def resolve (s : Scope) (name : String) : Option DeclRef := do
     | .import _ names source =>
       if names.any fun n => !n.typeOnly && n.name == name then resolvePath s.file source else none
     | _ => none
-  let tm ← s.program.lookup target
-  if exportsFunction tm name then return ⟨target, name⟩ else none
+  exportedRef s.program target name
 
 /-- The string enums that `m` declares, or only the exported ones when
 `exportedOnly`: each with its name, and the name and the string of each
@@ -1362,6 +1397,16 @@ def enumsOf (m : Module) (exportedOnly : Bool) : List (String × List (String ×
     | .enum _ exported name members =>
       if exported || !exportedOnly then some (name, members.map fun x => (x.name, x.value)) else none
     | _ => none
+
+/-- Whether the module declares and exports this string enum. -/
+def exportsEnum (m : Module) (name : String) : Bool :=
+  ((enumsOf m true).lookup name).isSome
+
+/-- The members of a string enum, through any named value re-exports. -/
+def exportedEnum (p : Program) (file name : String) : Option (List (String × String)) := do
+  let r ← exportedRefOf exportsEnum p file name
+  let m ← p.lookup r.file
+  (enumsOf m true).lookup r.name
 
 /-- What the declaration `d` of the file `file` binds the name `name` to, when
 it is a string enum or an import of `name` without `type`: the members of the
