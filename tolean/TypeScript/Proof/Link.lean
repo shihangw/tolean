@@ -83,6 +83,33 @@ theorem runFold_foldl {α σ : Type} (fs : List (DeclRef × List String × IR.Bo
   have := key xs (dec ρ)
   rwa [hdec ρ hI] at this
 
+/-- A loop body needs agreement only for elements of the input. The
+environment invariant may carry conditions on captured number keys. -/
+theorem runFold_foldl_on {α σ : Type} (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
+    (names : List String) (element : String) (body : IR.Body) (encX : α → Val N)
+    (upd : σ → Eval.Env N → Eval.Env N) (dec : Eval.Env N → σ) (step : Eval.Env N → σ → α → σ)
+    (I : Eval.Env N → Prop) (xs : List α)
+    (hbody : ∀ ρ s x, I ρ → x ∈ xs → ∃ inner,
+      IR.Body.exec fs fuel ((element, encX x) :: upd s ρ) body = some (.normal inner) ∧
+        IR.bindState names inner (upd s ρ) = some (upd (step ρ s x) ρ))
+    (hdec : ∀ ρ, I ρ → upd (dec ρ) ρ = ρ) (ρ : Eval.Env N) (hI : I ρ) :
+    IR.Body.runFold fs fuel names element body ρ (xs.map encX) =
+      some (.normal (upd (xs.foldl (step ρ) (dec ρ)) ρ)) := by
+  have key : ∀ (ys : List α), (∀ x ∈ ys, x ∈ xs) → ∀ (s : σ),
+      IR.Body.runFold fs fuel names element body (upd s ρ) (ys.map encX) =
+        some (.normal (upd (ys.foldl (step ρ) s) ρ)) := by
+    intro ys
+    induction ys with
+    | nil => intro _ s; simp [IR.Body.runFold]
+    | cons x ys ih =>
+      intro hmem s
+      obtain ⟨inner, hex, hb⟩ := hbody ρ s x hI (hmem x (by simp))
+      simp only [List.map_cons, IR.Body.runFold, hex, hb, Option.bind_eq_bind, Option.bind_some,
+        List.foldl_cons]
+      exact ih (fun y hy => hmem y (by simp [hy])) (step ρ s x)
+  have := key xs (fun _ h => h) (dec ρ)
+  rwa [hdec ρ hI] at this
+
 /-- How one step of `forIn` ends, as the evaluator gives it: a `done` is a
 `break`. -/
 def stepOutcome {σ : Type} : ForInStep σ → Eval.Env N → Eval.Outcome N
@@ -123,6 +150,40 @@ theorem runFold_forIn {α σ : Type} (fs : List (DeclRef × List String × IR.Bo
         exact ih s'
   have := key xs (dec ρ)
   rwa [hdec ρ hI] at this
+/-- A loop with `break` needs agreement only on its input elements. -/
+theorem runFold_forIn_on {α σ : Type} (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
+    (names : List String) (element : String) (body : IR.Body) (encX : α → Val N)
+    (upd : σ → Eval.Env N → Eval.Env N) (dec : Eval.Env N → σ)
+    (step : Eval.Env N → α → σ → ForInStep σ) (I : Eval.Env N → Prop) (xs : List α)
+    (hbody : ∀ ρ s x, I ρ → x ∈ xs → ∃ inner,
+      IR.Body.exec fs fuel ((element, encX x) :: upd s ρ) body = some (stepOutcome (step ρ x s) inner) ∧
+        IR.bindState names inner (upd s ρ) = some (upd (step ρ x s).value ρ))
+    (hdec : ∀ ρ, I ρ → upd (dec ρ) ρ = ρ) (ρ : Eval.Env N) (hI : I ρ) :
+    IR.Body.runFold fs fuel names element body ρ (xs.map encX) =
+      some (.normal (upd (Id.run (forIn xs (dec ρ) (step ρ))) ρ)) := by
+  have key : ∀ (ys : List α), (∀ x ∈ ys, x ∈ xs) → ∀ (s : σ),
+      IR.Body.runFold fs fuel names element body (upd s ρ) (ys.map encX) =
+        some (.normal (upd (Id.run (forIn ys s (step ρ))) ρ)) := by
+    intro ys
+    induction ys with
+    | nil => intro _ s; simp [IR.Body.runFold]
+    | cons x ys ih =>
+      intro hmem s
+      obtain ⟨inner, hex, hb⟩ := hbody ρ s x hI (hmem x (by simp))
+      cases hst : step ρ x s with
+      | done s' =>
+        rw [hst] at hex hb
+        simp only [List.map_cons, IR.Body.runFold, hex, stepOutcome, hb, ForInStep.value,
+          Option.bind_eq_bind, Option.bind_some, List.forIn_cons, hst]
+        rfl
+      | yield s' =>
+        rw [hst] at hex hb
+        simp only [List.map_cons, IR.Body.runFold, hex, stepOutcome, hb, ForInStep.value,
+          Option.bind_eq_bind, Option.bind_some, List.forIn_cons, hst]
+        exact ih (fun y hy => hmem y (by simp [hy])) s'
+  have := key xs (fun _ h => h) (dec ρ)
+  rwa [hdec ρ hI] at this
+
 /-- A callback of the output and a Lean function agree on the elements of a
 list when they agree on each element. A certificate proves a lemma for each
 call of `map` from this one. -/
@@ -368,6 +429,58 @@ theorem runFold_forInRet {α σ τ R : Type} (fs : List (DeclRef × List String 
         have := ih (getS t)
         rwa [← ht] at this
   have := key xs (dec ρ)
+  rwa [hdec ρ hI] at this
+
+/-- A loop with `return` needs agreement only on its input elements. -/
+theorem runFold_forInRet_on {α σ τ R : Type} (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
+    (names : List String) (element : String) (body : IR.Body) (encX : α → Val N) (encR : R → Val N)
+    (getRet : τ → Option R) (getS : τ → σ) (init : σ → τ)
+    (upd : σ → Eval.Env N → Eval.Env N) (dec : Eval.Env N → σ)
+    (step : Eval.Env N → α → τ → ForInStep τ) (I : Eval.Env N → Prop)
+    (hinit : ∀ s, getRet (init s) = none ∧ getS (init s) = s) (xs : List α)
+    (hbody : ∀ ρ s x, I ρ → x ∈ xs → ∃ inner,
+      IR.Body.exec fs fuel ((element, encX x) :: upd s ρ) body =
+        some (retOutcome encR getRet (step ρ x (init s)) inner) ∧
+      (getRet (step ρ x (init s)).value = none →
+        IR.bindState names inner (upd s ρ) = some (upd (getS (step ρ x (init s)).value) ρ)) ∧
+      ∀ t, step ρ x (init s) = .yield t → t = init (getS t) ∧ getRet t = none)
+    (hdec : ∀ ρ, I ρ → upd (dec ρ) ρ = ρ) (ρ : Eval.Env N) (hI : I ρ) :
+    IR.Body.runFold fs fuel names element body ρ (xs.map encX) =
+      some (retResult encR getRet getS upd ρ (Id.run (forIn xs (init (dec ρ)) (step ρ)))) := by
+  have key : ∀ (ys : List α), (∀ x ∈ ys, x ∈ xs) → ∀ (s : σ),
+      IR.Body.runFold fs fuel names element body (upd s ρ) (ys.map encX) =
+        some (retResult encR getRet getS upd ρ (Id.run (forIn ys (init s) (step ρ)))) := by
+    intro ys
+    induction ys with
+    | nil => intro _ s; simp [IR.Body.runFold, retResult, (hinit s).1, (hinit s).2]
+    | cons x ys ih =>
+      intro hmem s
+      obtain ⟨inner, hex, hb, hy⟩ := hbody ρ s x hI (hmem x (by simp))
+      cases hst : step ρ x (init s) with
+      | done t =>
+        rw [hst] at hex hb
+        cases hr : getRet t with
+        | some r =>
+          simp only [List.map_cons, IR.Body.runFold, hex, retOutcome, hr, Option.bind_eq_bind,
+            Option.bind_some, List.forIn_cons, hst]
+          simp [retResult, hr]
+        | none =>
+          simp only [ForInStep.value] at hb
+          simp only [List.map_cons, IR.Body.runFold, hex, retOutcome, hr, hb hr, Option.bind_eq_bind,
+            Option.bind_some, List.forIn_cons, hst]
+          simp [retResult, hr]
+      | yield t =>
+        obtain ⟨ht, hr⟩ := hy t hst
+        rw [hst] at hex hb
+        simp only [ForInStep.value] at hb
+        have hstep : Id.run (forIn (x :: ys) (init s) (step ρ)) = Id.run (forIn ys t (step ρ)) := by
+          simp [List.forIn_cons, hst]
+        rw [hstep]
+        simp only [List.map_cons, IR.Body.runFold, hex, retOutcome, hb hr, Option.bind_eq_bind,
+          Option.bind_some]
+        have := ih (fun y hy => hmem y (by simp [hy])) (getS t)
+        rwa [← ht] at this
+  have := key xs (fun _ h => h) (dec ρ)
   rwa [hdec ρ hI] at this
 
 /-- `includes` on the encoded elements of a list, when SameValueZero of `v`

@@ -625,6 +625,37 @@ test('nested map and filter callbacks sort only finite input rows', () => {
     .map(row => encode(row.toSorted((a, b) => b - a))) })));
 });
 
+test('number sorts in loops agree with Node through break and return', () => {
+  const prefix = 'export function f(rows: ReadonlyArray<ReadonlyArray<number>>): ReadonlyArray<number> { ';
+  const sources = [
+    prefix + 'let result: ReadonlyArray<number> = []; for (const row of rows) { result = [...result, ...row.toSorted((a, b) => a - b)]; if (row.length > 2) { break; } } return result; }',
+    prefix + 'for (const row of rows) { if (row.length > 0) { return row.toSorted((a, b) => a - b); } } return []; }',
+  ];
+  const arrays = fc.sample(fc.array(fc.array(fc.integer({ min: -100, max: 100 }), { maxLength: 5 }), { maxLength: 5 }), 25);
+  arrays.push([[], [Number.MAX_VALUE, -Number.MAX_VALUE, -0, 0]]);
+  const input = { programs: sources.map(source => ({ source, calls: arrays.map(xs =>
+    ({ function: 'f', args: [xs.map(encode)] })) })) };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const programs = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  for (const [i, lean] of programs.entries()) {
+    expect(lean.parsed).toBe(true);
+    if (!lean.parsed) continue;
+    expect(lean.results).toEqual(arrays.map(rows => {
+      let result: number[] = [];
+      for (const row of rows) {
+        if (i === 1) {
+          if (row.length > 0) { result = row.toSorted((a, b) => a - b); break; }
+        } else {
+          result = [...result, ...row.toSorted((a, b) => a - b)];
+          if (row.length > 2) break;
+        }
+      }
+      return { value: result.map(encode) };
+    }));
+  }
+});
+
 test('number sorts read local concatenations with literal elements', () => {
   const source = 'export function f(xs: ReadonlyArray<number>, ys: ReadonlyArray<number>): number[] { const first = xs; const both = [...first, ...ys, 0, 1]; return both.toSorted((a, b) => a - b); }';
   const pairs = [[[], []], [[2, -0], [0, 1]],
