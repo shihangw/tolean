@@ -1,12 +1,13 @@
 # Pass changed maps back to the caller
 
-**Status:** accepted design, implementation pending · **Date:** 2026-11-14
+**Status:** accepted design, partly implemented · **Date:** 2026-11-14
 
 A function that changes a caller's map should return the new map, and the
 caller should bind that result in place of its old map. We choose this
 borrow translation rather than a state monad. This record settles the design
 question in step 8 of the [pure TypeScript plan](../plans/pure-typescript.md).
-It does not enable map parameters that change.
+The first implementation and two later extensions now cover the
+[single-map case](../typescript/README.md#map-borrows) described below.
 
 ## The result carries the maps
 
@@ -41,8 +42,8 @@ same checks and must pass the final map back through every call.
 
 ## The spec must return the state too
 
-The current interpreter binds arguments as values. `Stmt.ownsChanges`
-refuses every function that changes a parameter, and `evalCall` returns
+The original interpreter bound arguments as values. `Stmt.ownsChanges`
+refused every function that changed a parameter, and `evalCall` returned
 only the ordinary result. Removing that guard would lose the change at the
 call, so it would not implement a borrow.
 
@@ -58,16 +59,31 @@ the translator accepts a borrow. The proof of `program_sound` must cover
 the new call rule, and tests must compare the caller's observations with
 Node. Both translators must print the same tuple and rebinding code.
 
-## Current boundary
+## Boundary when decided
 
-Step 8 remains unfinished. The interpreter has no result that carries both
-a returned value and final parameter bindings, and calls in expressions
-have no path to update the caller's environment. Local-function writeback
-does not fill this gap: it handles captured locals on normal completion,
-not returned values with changed parameters.
+When this decision was made, every changed map parameter was refused,
+including an exclusive borrow of one map. The decision chose the result
+shape without changing that boundary.
 
-Until that machinery and its soundness proof exist, all changed map
-parameters stay refused, including an exclusive borrow of a single map.
-Readonly inputs and maps created and changed within one function retain
-their existing translation. This decision introduces no new accepted
-construct and makes no new claim about `program_sound`.
+## Current implementation
+
+A void function may now change one Map parameter through straight-line
+set, delete and forwarding calls with atomic arguments. It may end with a
+bare return. A forwarded borrow must go to an earlier borrowing function
+in the same file. At the outer call, the caller owns the map and passes it
+exactly once in a top-level call statement. Other arguments must not keep
+that map, and the ownership check still counts collections that those
+arguments let escape.
+
+The source interpreter copies the final map back, and the IR evaluator
+uses the same state result. The proof of `program_sound` covers this call
+rule. Corpus tests check the generated code, and interpreter tests compare
+the caller's observations with Node. Readonly inputs retain their existing
+translation.
+
+Step 8 remains open. Several changed maps, ordinary returned results,
+early returns, branches, loops and imported borrowing functions remain
+refused. Borrowing functions receive no per-file certificate yet. A wider
+result must preserve the final parameter bindings on every supported
+completion path; the statement proof must also relate newly declared
+source and output variables before a returned value can be copied out.
