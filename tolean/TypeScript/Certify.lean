@@ -362,19 +362,36 @@ partial def bodyCallbacks : IR.Body → List Callback
 end
 
 mutual
-/-- Free names of the list expressions accepted by `sortInputShape`. -/
+/-- Free names of list inputs and their callbacks. Each callback removes
+its own binders after visiting nested callbacks. -/
 def sortInputNames : IR.Expr → List String
   | .listMethod method items param _ cb _ =>
     let bound := param :: (match method with | .mapIdx index => [index] | _ => [])
-    sortInputNames items ++ (exprNames cb).filter (fun n => !bound.contains n)
-  | .field e _ _ => sortInputNames e
-  | .ext _ es | .call _ es | .list es _ => sortInputNamesList es
+    sortInputNames items ++ (sortInputNames cb).filter (fun n => !bound.contains n)
+  | .listFold items init acc param _ cb _ =>
+    sortInputNames items ++ sortInputNames init ++
+      (sortInputNames cb).filter (fun n => n != acc && n != param)
+  | .field e _ _ | .proj e _ _ | .ascribe e _ | .decide e | .not e | .neg e
+  | .isNone e | .isSome e | .propNot e | .inject _ _ e => sortInputNames e
+  | .push n e | .update _ n e => n :: sortInputNames e
+  | .matchNull n a b => n :: sortInputNames a ++ sortInputNames b
+  | .intOp _ a b | .order _ a b | .division _ a b | .eq a b | .ne a b
+  | .propAnd a b | .propOr a b | .and a b | .or a b | .coalesce a b _ =>
+    sortInputNames a ++ sortInputNames b
+  | .ext _ es | .call _ es | .list es _ | .tuple es => sortInputNamesList es
   | .ite c a b => sortInputNames c ++ sortInputNames a ++ sortInputNames b
-  | e => exprNames e
+  | .struct fields _ _ => sortInputFieldNames fields
+  | .structUpdate base fields => sortInputNames base ++ sortInputFieldNames fields
+  | .var n => [n]
+  | .int _ | .none | .bool _ | .string _ | .enumCase .. | .tagValue _ => []
 
 def sortInputNamesList : List IR.Expr → List String
   | [] => []
   | e :: es => sortInputNames e ++ sortInputNamesList es
+
+def sortInputFieldNames : List (String × IR.Expr) → List String
+  | [] => []
+  | (_, e) :: fields => sortInputNames e ++ sortInputFieldNames fields
 end
 
 /-- Leading bindings remain in source order. A callback's scope determines
@@ -755,6 +772,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
   let envLemmas := ["Env.set_cons", "Env.lookup_cons", "Env.lookup_set_same", "Env.lookup_set_ne",
     "Env.set_set", "Env.length_set"].map r.eval
   let mut loopLemmas : Array String := #[]
+  let mut conditionalSortLemmas : List String := []
   let mut thms : Array String := #[]
   -- The translator requires a callee before its caller, so the condition
   -- of a callee is available when the caller's theorem is written.
@@ -865,6 +883,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           | throw s!"{file}: the comparator in {name} does not compare keys"
         let elemTy := elem.print names
         if comparesNumbers cbBody then
+          conditionalSortLemmas := conditionalSortLemmas ++ [r.cert lemmaName]
           literalMaps := literalMaps ++ [s!"← List.map_singleton (f := {encX})",
             s!"← List.map_cons (f := {encX})"]
           let bindings := (leadingBindings outBody).filter fun (n, _) =>
@@ -1198,14 +1217,19 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       loopLemmas.toList ++ defs ++ obligations.map (·.1))
     let some_ := r.write "some" "Option.some"
     let rfl := r.full "rfl"
+    let sortRewrites := if conditionalSortLemmas.isEmpty then "" else
+      "\n  all_goals repeat' first\n" ++ String.join (conditionalSortLemmas.map fun lemma =>
+        s!"    | rw [{lemma}]\n") ++
+      s!"  all_goals (try simp_all [{simpSet}])\n  all_goals first | assumption | rfl"
     thms := thms.push <|
       s!"theorem {name}_link {generic} {binders} :\n" ++
       s!"    {r.full "tolean.TypeScript.IR.runIn"} (N := {nv}) {outputFs} ⟨\"\", {str name}⟩ {list args} =\n" ++
       s!"      {some_} ({retEnc} ({call})) := by\n" ++
       s!"  {casesOn decls outParams}link_tac [{simpSet}]" ++
       (if literalMaps.isEmpty then "" else
-        s!"\n  all_goals simp only [{", ".intercalate literalMaps}, ← List.map_append]\n" ++
-        s!"  all_goals simp_all [{simpSet}, -List.map_cons, -List.map_nil, -List.map_map, ← List.map_append]") ++
+        s!"\n  all_goals (try simp only [{", ".intercalate literalMaps}, ← List.map_append])\n" ++
+        s!"  all_goals (try simp_all [{simpSet}, -List.map_cons, -List.map_nil, -List.map_map, ← List.map_append])") ++
+      sortRewrites ++
       -- After a loop that a `return` can end, the evaluator matches on the
       -- loop's outcome, which is itself a match on the value to return. Once
       -- that match is split, the arms for a `break` or a `continue` close, and
