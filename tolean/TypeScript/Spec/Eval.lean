@@ -1280,7 +1280,7 @@ def preparedBody (thr : String → Bool) (cls : String → Option (Option (List 
     (guards : List (String × GuardTest))
     (params : List Param) (ret : Option TypeExpr) (body : Stmt) : Stmt :=
   Stmt.hoisted thr cls (guardedBody guards params ret
-    (if (borrowParam? params ret body).isSome then body.borrowPrefix else body))
+    (if (borrowCandidate? params ret body).isSome then body.borrowPrefix else body))
 
 def functionsIn (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr)))
     (guards : List (String × GuardTest))
@@ -1313,12 +1313,17 @@ structure Scope where
   program : Program
   file : String
 
-/-- Borrow signatures of top-level functions in this file. Imports and
-generic functions are outside the first normal-completion borrow case. -/
+/-- Borrow signatures checked in declaration order. A forwarding function
+must put its map at the borrowed argument index of an earlier checked
+callee. Imports and generic functions are outside this borrow case. -/
 def moduleBorrows (file : Module) : List (String × Nat) :=
-  file.decls.filterMap fun
-    | .function _ _ name [] ps ret body => (borrowParam? ps ret body).map (name, ·)
-    | _ => none
+  file.decls.foldl (fun borrows decl =>
+    match decl with
+    | .function _ _ name [] ps ret body =>
+      match borrowParam? borrows ps ret body with
+      | some i => borrows ++ [(name, i)]
+      | none => borrows
+    | _ => borrows) []
 
 def borrowsOf (m : Scope) : List (String × Nat) :=
   ((m.program.lookup m.file).map moduleBorrows).getD []

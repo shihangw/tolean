@@ -355,7 +355,7 @@ theorem translateFunction_ok {thr : String → Bool} {cls : String → Option (O
     obtain ⟨r, s₆, hr, _, s₇, rfl, _, _, ⟨rfl, rfl⟩, out, s₈, hbody, _, s₈', hborrow, h⟩ := h
     obtain ⟨rfl, hmode⟩ := checkBorrowResult_ok hborrow
     generalize hb : (if tps.isEmpty then
-      borrowParam? params (some returnType)
+      borrowCandidate? params (some returnType)
         (Eval.preparedBody thr cls guards params (some returnType) body) else none) = borrow at h hbody hmode hr
     generalize hp : (borrow.bind fun i => (params[i]?).map (·.name)) = param at h hbody hmode
     -- The check that a call of the function itself passes a part of a
