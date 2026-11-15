@@ -205,6 +205,98 @@ function shown(x: unknown): string {
   }
 }
 
+test('certified local functions agree with Node on random arguments', async () => {
+  const source = ['localFunctionCertificate', 'localFunctionLoopCertificates'].map(name =>
+    readFileSync(new URL(`./corpus/translate/accept/${name}.ts`, import.meta.url), 'utf8')).join('\n');
+  const inputs = fc.sample(fc.tuple(fc.bigInt(), fc.bigInt()), { seed, numRuns: 50 });
+  const calls = inputs.flatMap(([start, amount]) => [
+    { function: 'tally', args: [encode(start), encode(amount)] },
+    { function: 'twice', args: [encode([start, amount])] },
+    { function: 'localLoopSum', args: [encode([start, amount]), encode(amount)] },
+    { function: 'localLoopUpdate', args: [encode([start, amount])] },
+    { function: 'localLoopNested', args: [encode([start, amount])] },
+  ]);
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: [{ source, calls }] }), encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (!result?.parsed) return;
+  expect(result.accepted).toBe(true);
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-local-certificate-'));
+  const path = join(dir, 'local.mjs');
+  writeFileSync(path, ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+  }).outputText);
+  const mod = await import(pathToFileURL(path).href) as {
+    tally: (start: bigint, amount: bigint) => bigint;
+    twice: (xs: Array<bigint>) => Array<bigint>;
+    localLoopSum: (xs: Array<bigint>, fee: bigint) => bigint;
+    localLoopUpdate: (xs: Array<bigint>) => bigint;
+    localLoopNested: (xs: Array<bigint>) => bigint;
+  };
+  for (const [i, [start, amount]] of inputs.entries()) {
+    expect(result.results[5 * i]).toEqual({ value: encode(mod.tally(start, amount)) });
+    expect(result.results[5 * i + 1]).toEqual({ value: encode(mod.twice([start, amount])) });
+    expect(result.results[5 * i + 2]).toEqual({ value: encode(mod.localLoopSum([start, amount], amount)) });
+    expect(result.results[5 * i + 3]).toEqual({ value: encode(mod.localLoopUpdate([start, amount])) });
+    expect(result.results[5 * i + 4]).toEqual({ value: encode(mod.localLoopNested([start, amount])) });
+  }
+});
+
+test('local returns and sibling calls preserve captured state and agree with Node', async () => {
+  const source = ['localFunctionReturnsAndChanges', 'localFunctionSiblingCalls'].map(name =>
+    readFileSync(new URL(`./corpus/translate/accept/${name}.ts`, import.meta.url), 'utf8')).join('\n');
+  const inputs = fc.sample(fc.tuple(fc.bigInt(), fc.bigInt()), { seed, numRuns: 50 });
+  const calls = inputs.flatMap(([start, amount]) => [
+    { function: 'f', args: [encode(start)] },
+    { function: 'tally', args: [encode(start), encode(amount)] },
+    { function: 'returnCall', args: [encode(start), encode(amount)] },
+    { function: 'loopCalls', args: [encode([start, amount])] },
+    { function: 'capturedTotal', args: [encode([start, amount])] },
+    { function: 'calculate', args: [encode(start)] },
+    { function: 'accumulate', args: [encode([start, amount])] },
+    { function: 'captured', args: [encode(start), encode(amount)] },
+    { function: 'siblingState', args: [encode(start), encode(amount)] },
+  ]);
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: [{ source, calls }] }), encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (!result?.parsed) return;
+  expect(result.accepted).toBe(true);
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-local-return-state-'));
+  const path = join(dir, 'local.mjs');
+  writeFileSync(path, ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+  }).outputText);
+  const mod = await import(pathToFileURL(path).href) as {
+    f: (x: bigint) => bigint;
+    tally: (start: bigint, amount: bigint) => bigint;
+    returnCall: (start: bigint, amount: bigint) => bigint;
+    loopCalls: (xs: Array<bigint>) => bigint;
+    capturedTotal: (xs: Array<bigint>) => bigint;
+    calculate: (x: bigint) => bigint;
+    accumulate: (xs: Array<bigint>) => bigint;
+    captured: (factor: bigint, x: bigint) => bigint;
+    siblingState: (start: bigint, amount: bigint) => bigint;
+  };
+  for (const [i, [start, amount]] of inputs.entries()) {
+    expect(result.results[9 * i]).toEqual({ value: encode(mod.f(start)) });
+    expect(result.results[9 * i + 1]).toEqual({ value: encode(mod.tally(start, amount)) });
+    expect(result.results[9 * i + 2]).toEqual({ value: encode(mod.returnCall(start, amount)) });
+    expect(result.results[9 * i + 3]).toEqual({ value: encode(mod.loopCalls([start, amount])) });
+    expect(result.results[9 * i + 4]).toEqual({ value: encode(mod.capturedTotal([start, amount])) });
+    expect(result.results[9 * i + 5]).toEqual({ value: encode(mod.calculate(start)) });
+    expect(result.results[9 * i + 6]).toEqual({ value: encode(mod.accumulate([start, amount])) });
+    expect(result.results[9 * i + 7]).toEqual({ value: encode(mod.captured(start, amount)) });
+    expect(result.results[9 * i + 8]).toEqual({ value: encode(mod.siblingState(start, amount)) });
+  }
+});
+
 test(`the interpreter agrees with Node ${process.version} on random programs`, async () => {
   // First, so that the seed shows when a step below fails.
   console.log(`interpreter: ${programCount} programs from seed ${seed} on Node ${process.version}`);
