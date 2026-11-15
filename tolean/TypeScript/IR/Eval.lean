@@ -301,10 +301,10 @@ def Expr.eval (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
     | .null => return .bool false
     | .undefined => none
     | _ => return .bool true
-  | .matchNull name whenNull whenValue => do
+  | .matchNull name whenNull whenValue optional => do
     match ← ρ.lookup name with
-    | .null => Expr.eval fs fuel ρ whenNull
-    | .undefined => none
+    | .null => if optional then none else Expr.eval fs fuel ρ whenNull
+    | .undefined => if optional then Expr.eval fs fuel ρ whenNull else none
     | _ => Expr.eval fs fuel ρ whenValue
   -- `none` is `null`, or `undefined` for an optional field, and `some v` is
   -- the value of `v`. So both forms take `a` unless it is `null` or

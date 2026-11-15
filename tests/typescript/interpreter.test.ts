@@ -582,6 +582,17 @@ test('the interpreter binds a parameter that a call leaves out to undefined', as
     },
     { source: 'export function f(a?: bigint): bigint | undefined { const x: bigint | undefined = a; return x; }', args: [] },
     { source: 'export function f(a?: bigint): bigint | undefined { const x: bigint | undefined = a; return x; }', args: [0n] },
+    ...[
+      'x !== undefined && x > 0n',
+      'undefined === x || x > 0n',
+      '!(x === undefined) && x > 0n',
+      '!(undefined !== x) || x > 0n',
+      'x === undefined ? false : x > 0n',
+      '!(x === undefined) ? x > 0n : false',
+    ].flatMap((body) => [[], [-1n], [0n], [1n]].map((args) => ({
+      source: `export function f(x?: bigint): boolean { return ${body}; }`,
+      args,
+    }))),
   ];
   const input = {
     programs: cases.map(({ source, args }) => ({ source, calls: [{ function: 'f', args: args.map(encode) }] })),

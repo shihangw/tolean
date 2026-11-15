@@ -152,6 +152,14 @@ def Ty.join (a b : Ty) : Option Ty :=
     | .null, t | t, .null => some (.nullable t)
     | _, _ => none
 
+/-- The branches of a narrowed match may join a defined value with an
+optional one. The missing branch prints first, so Lean infers `Option`. -/
+def Ty.joinOptional (a b : Ty) : Option Ty :=
+  (a.join b).orElse fun _ =>
+    match a, b with
+    | .optional t, u | u, .optional t => if t == u then some (.optional t) else none
+    | _, _ => none
+
 /-- The type of the value that an optional field holds when it is set. -/
 def Ty.unoptional : Ty → Ty
   | .optional t => t
@@ -842,6 +850,16 @@ def firstFitting {A : Type} (x y : TM A) (fits : A → Bool) : TM A := fun s =>
   | .ok a s' => if fits a then .ok a s' else y s
   | .error _ _ => y s
 
+/-- Try narrowing only when the ordinary translation fails. If neither
+translation succeeds, keep the original diagnostic. -/
+def narrowFallback {A : Type} (ordinary narrowed : TM A) : TM A := fun s =>
+  match ordinary s with
+  | .ok a s' => .ok a s'
+  | .error err s' =>
+    match narrowed s with
+    | .ok a s'' => .ok a s''
+    | .error _ _ => .error err s'
+
 /-- Refuse the node at `span` unless the target edition has `f`. -/
 def requireFeature (span : Span) (f : Feature) : TM Unit := do
   let target := (← get).target
@@ -1329,6 +1347,14 @@ def noneTestOf (env : Env) (e : Expr) : Option (String × Bool × Ty × Bool) :=
   match nullTestOf env e with
   | some (name, isEquality, value) => some (name, isEquality, value, false)
   | none => (undefinedTestOf env e).map fun (name, isEquality, value) => (name, isEquality, value, true)
+
+/-- A direct test of an absent value, or its negation. -/
+def optionTestOf (env : Env) (e : Expr) : Option (String × Bool × Ty × Bool) :=
+  match e.stripParens with
+  | .unary _ .not inner =>
+    (noneTestOf env inner).map fun (name, isEquality, value, optional) =>
+      (name, !isEquality, value, optional)
+  | _ => noneTestOf env e
 
 /-- The tag that an object literal sets: the string of its property `field`. -/
 def tagOfProps (field : String) (props : List Property) : Option String :=
@@ -2436,6 +2462,13 @@ def translateOperator (s : Span) (op : BinOp) (r : Expr) (a b : Code) : TM Code 
   let known := (← get).knownEnums
   applyOperator s op r (enumOperand known a b.type) (enumOperand known b a.type)
 
+/-- The defined branch of a short-circuiting absent-value test. -/
+def translateBooleanMatch (rhs : Env → TM Code) (env : Env) (name : String)
+    (value : Ty) (optional : Bool) (op : BinOp) (span : Span) : TM Code := do
+  let whenSome ← rhs (env.narrow name value)
+  unless whenSome.type == .boolean do reject span s!"'{op.symbol}' needs two booleans"
+  return ⟨.matchNull name (.bool (op == .or)) whenSome.value optional, false, .boolean⟩
+
 mutual
 
 /-- `expected` is the type the context gives, which an object literal needs:
@@ -2628,17 +2661,24 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
     | _ => reject s "unsupported unary operator"
   | .binary s op l r => translateBinary fuel env s op l r
   | .cond s test ifTrue ifFalse =>
-    let c ← translateExpr fuel env none test
-    unless c.type == .boolean do reject test.span "a condition must be a boolean"
-    let a ← translateExpr fuel env expected ifTrue
-    let b ← translateExpr fuel env expected ifFalse
-    -- A tag field holds the string itself, which the output leaves out, so
-    -- it may not be the value of '?:'.
-    let message := match a.type.join b.type with
-      | some (.literal _) => "a tag field must be its string literal itself, not the value of '?:'"
-      | _ => "the branches of '?:' have different types"
-    let type ← orReject ((a.type.join b.type).filter fun t => !(t matches .literal _)) s message
-    return ⟨.ite c.code a.value b.value, false, type⟩
+    narrowFallback (do
+      let c ← translateExpr fuel env none test
+      unless c.type == .boolean do reject test.span "a condition must be a boolean"
+      let a ← translateExpr fuel env expected ifTrue
+      let b ← translateExpr fuel env expected ifFalse
+      let message := match a.type.join b.type with
+        | some (.literal _) => "a tag field must be its string literal itself, not the value of '?:'"
+        | _ => "the branches of '?:' have different types"
+      let type ← orReject ((a.type.join b.type).filter fun t => !(t matches .literal _)) s message
+      return ⟨.ite c.code a.value b.value, false, type⟩) (do
+      let some (name, isEq, value, optional) := optionTestOf env test
+        | reject s "the conditional expression cannot be typed; only a direct null or undefined test narrows its branches"
+      let a ← translateExpr fuel (if isEq then env else env.narrow name value) expected ifTrue
+      let b ← translateExpr fuel (if isEq then env.narrow name value else env) expected ifFalse
+      let type ← orReject ((a.type.joinOptional b.type).filter fun t => !(t matches .literal _)) s
+        "the branches of '?:' have different types"
+      return ⟨.matchNull name (if isEq then a.value else b.value)
+        (if isEq then b.value else a.value) optional, false, type⟩)
   | .call s callee args =>
     match reduceOf callee with
     | some recv => translateReduce fuel env expected s recv args
@@ -3137,11 +3177,15 @@ def translateBinary (fuel : Nat) (env : Env) (s : Span) (op : BinOp) (l r : Expr
         else "the type fixes the answer of this test with null, so it does nothing; remove it")
   -- `x === null || e` and `x !== null && e`: TypeScript narrows `x` in `e`,
   -- so Lean matches on `x` and binds it to the value inside.
-  if let some (name, isNullTest, value) := nullTestOf env l then
+  if let some (name, isNullTest, value, optional) := optionTestOf env l then
     if (op == .or && isNullTest) || (op == .and && !isNullTest) then
-      let whenSome ← translateExpr fuel (env.narrow name value) none r
-      unless whenSome.type == .boolean do reject r.span s!"'{op.symbol}' needs two booleans"
-      return ⟨.matchNull name (.bool (op == .or)) whenSome.value, false, .boolean⟩
+      let narrowed := translateBooleanMatch (fun env => translateExpr fuel env none r)
+        env name value optional op r.span
+      if (nullTestOf env l).isSome then return ← narrowed
+      return ← narrowFallback (do
+        let a ← translateExpr fuel env none l
+        let b ← translateExpr fuel env none r
+        translateOperator s op r a b) narrowed
   let a ← translateExpr fuel env none l
   let b ← translateExpr fuel env none r
   translateOperator s op r a b
