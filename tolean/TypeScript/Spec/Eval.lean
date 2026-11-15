@@ -1452,6 +1452,15 @@ def writeBack (env after : Env N) (params : List String) (body : Stmt) : Env N :
     | some v => e.set p.1 v
     | none => e) env
 
+/-- Whether the last statement returns a value. The translator's
+`localReturnIdent` accepts the identifier case of this shape. The interpreter
+also evaluates expressions that the translator refuses, so dispatch must
+retain those final returns too. -/
+def endsValueReturn : List Stmt → Bool
+  | [.returnStmt _ (some _)] => true
+  | _ :: rest => endsValueReturn rest
+  | [] => false
+
 -- With the array callbacks and the map and set methods in `eval`, and the
 -- calls of local functions, this block takes several times the default 200000
 -- heartbeats to elaborate, most of it in the proofs that each recursive call
@@ -1838,12 +1847,14 @@ def callLocal (m : Scope) (fuel : Nat) (env : Env N) (params : List String) (bod
     (vs : List (Val N)) : Option (Except (Val N) (Val N) × Env N) := do
   -- A function declaration has a block for its body.
   let .block sp ss := body | none
-  match ← execStmt m fuel ((← bindArgs params vs) ++ captures env params body) (.block sp ss) with
+  let inner := (← bindArgs params vs) ++ captures env params body
+  if changesCaptured env params body && endsValueReturn ss then do
+    let (value, after) ← execReturnState m fuel inner ss
+    return (value, writeBack env after params body)
+  match ← execStmt m fuel inner (.block sp ss) with
   | .normal after => some (.ok .undefined, writeBack env after params body)
   | .ret r =>
-    if changesCaptured env params body then do
-      let (value, after) ← execReturnState m fuel ((← bindArgs params vs) ++ captures env params body) ss
-      some (value, writeBack env after params body)
+    if changesCaptured env params body then none
     else some (r, env)
   | .brk _ | .cont _ => none
 termination_by (fuel, sizeOf body, 1)

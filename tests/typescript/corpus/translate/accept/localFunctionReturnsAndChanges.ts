@@ -45,3 +45,16 @@ export function loopCalls(xs: ReadonlyArray<bigint>): bigint {
   }
   return result + total;
 }
+
+export function capturedTotal(xs: ReadonlyArray<bigint>): bigint {
+  let total = 0n;
+  function addAll(): bigint {
+    for (const x of xs) {
+      total += x;
+    }
+    return total;
+  }
+  const first = addAll();
+  const second = addAll();
+  return first + second + total;
+}

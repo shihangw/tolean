@@ -164,6 +164,7 @@ def sections : List Section := [
     ``Proof.bindArgs_eq, ``Proof.localBody_env, ``Proof.localCall_void, ``Proof.localCall_value,
     ``Proof.assignsList_append_return_ident, ``Proof.constAssigned_append_return_ident,
     ``Proof.returnState_prefix_ident, ``Proof.returnState_exec, ``Proof.callLocal_return_state,
+    ``Proof.returnState_noReturn, ``Proof.exec_finalReturn_not_normal,
     ``Proof.localPrefix_frame, ``Proof.localCall_stateIdent,
     ``Proof.localReturnIdent_some, ``Proof.stmtsChanges_append_return_ident,
     ``Proof.translateLocalStateCall_ok, ``Proof.changesCaptured_of_local, ``Proof.stateReturn_parts,

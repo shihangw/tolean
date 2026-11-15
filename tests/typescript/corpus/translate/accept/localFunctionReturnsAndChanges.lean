@@ -55,4 +55,22 @@ def loopCalls (xs : List Int) : Int :=
       (total, result) xs
   (result + total)
 
+set_option linter.unusedVariables false in
+def capturedTotal.addAll (xs : List Int) (total : Int) : Int :=
+  let total :=
+    List.foldl
+      (fun (total : Int) (x : Int) =>
+        let total := total + x
+        total)
+      total xs
+  total
+
+def capturedTotal (xs : List Int) : Int :=
+  let total := (0 : Int)
+  let total := (capturedTotal.addAll xs total)
+  let first := total
+  let total := (capturedTotal.addAll xs total)
+  let second := total
+  ((first + second) + total)
+
 end Test

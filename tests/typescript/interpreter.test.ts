@@ -248,6 +248,7 @@ test('local returns preserve captured state and agree with Node', async () => {
     { function: 'tally', args: [encode(start), encode(amount)] },
     { function: 'returnCall', args: [encode(start), encode(amount)] },
     { function: 'loopCalls', args: [encode([start, amount])] },
+    { function: 'capturedTotal', args: [encode([start, amount])] },
   ]);
   const run = spawnSync(tolean, ['interpret'], {
     input: JSON.stringify({ programs: [{ source, calls }] }), encoding: 'utf8',
@@ -267,12 +268,14 @@ test('local returns preserve captured state and agree with Node', async () => {
     tally: (start: bigint, amount: bigint) => bigint;
     returnCall: (start: bigint, amount: bigint) => bigint;
     loopCalls: (xs: Array<bigint>) => bigint;
+    capturedTotal: (xs: Array<bigint>) => bigint;
   };
   for (const [i, [start, amount]] of inputs.entries()) {
-    expect(result.results[4 * i]).toEqual({ value: encode(mod.f(start)) });
-    expect(result.results[4 * i + 1]).toEqual({ value: encode(mod.tally(start, amount)) });
-    expect(result.results[4 * i + 2]).toEqual({ value: encode(mod.returnCall(start, amount)) });
-    expect(result.results[4 * i + 3]).toEqual({ value: encode(mod.loopCalls([start, amount])) });
+    expect(result.results[5 * i]).toEqual({ value: encode(mod.f(start)) });
+    expect(result.results[5 * i + 1]).toEqual({ value: encode(mod.tally(start, amount)) });
+    expect(result.results[5 * i + 2]).toEqual({ value: encode(mod.returnCall(start, amount)) });
+    expect(result.results[5 * i + 3]).toEqual({ value: encode(mod.loopCalls([start, amount])) });
+    expect(result.results[5 * i + 4]).toEqual({ value: encode(mod.capturedTotal([start, amount])) });
   }
 });
 

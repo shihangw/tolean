@@ -88,6 +88,12 @@ can contain a loop as well as be called by one.
 
 The interpreter now retains the environment of a final return. The first
 translation accepts a final return that names a changed captured variable.
+Before it executes the body, the interpreter checks whether it changes
+captured variables and ends with a value return. It selects the
+state-preserving executor for that form and the ordinary executor otherwise.
+It never recovers state by replaying the body. The call-contract proof
+relates this dispatch to the same results, including refusal and normal
+termination.
 The lifted function returns the state tuple, and the caller reads that
 variable from the tuple as the call's value. This avoids returning the same
 value twice.

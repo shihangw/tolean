@@ -3163,20 +3163,6 @@ theorem execStmt_localCall (sp cs sp' : Span) (g : String) (args : List Expr) (�
       | (.error t, _) => some (.ret (.error t))) := by
   rw [Eval.execStmt]; rfl
 
-theorem callLocal_block (ps : List String) (sp : Span) (ss : List Stmt) (vs : List (Val N)) (ρ : Eval.Env N)
-    (k : Nat) :
-    Eval.callLocal m k ρ ps (.block sp ss) vs = (do
-      match ← Eval.execStmt m k ((← Eval.bindArgs ps vs) ++ Eval.captures ρ ps (.block sp ss)) (.block sp ss) with
-      | .normal after => some (.ok .undefined, Eval.writeBack ρ after ps (.block sp ss))
-      | .ret r =>
-        if Eval.changesCaptured ρ ps (.block sp ss) then do
-          let (value, after) ← Eval.execReturnState m k
-            ((← Eval.bindArgs ps vs) ++ Eval.captures ρ ps (.block sp ss)) ss
-          some (value, Eval.writeBack ρ after ps (.block sp ss))
-        else some (r, ρ)
-      | .brk _ | .cont _ => none) := by
-  rw [Eval.callLocal]; rfl
-
 theorem assignsList_append_return_ident (n result : String) (sp ep : Span) (ss : List Stmt) :
     Stmt.assignsList n (ss ++ [.returnStmt sp (some (.ident ep result))]) =
       Stmt.assignsList n ss := by
@@ -3274,6 +3260,95 @@ theorem returnState_exec (ss : List Stmt) (env after : Eval.Env N)
           have hr := ih inner h
           simpa [Eval.exec, hc, he] using hr
 
+theorem returnState_noReturn (ss : List Stmt) (env : Eval.Env N)
+    (hshape : Eval.endsValueReturn ss = false) :
+    Eval.execReturnState m fuel env ss = none := by
+  induction ss generalizing env with
+  | nil => simp [Eval.execReturnState]
+  | cons s ss ih =>
+    cases ss with
+    | nil =>
+      cases s
+      all_goals try (rename_i sp value; cases value)
+      all_goals simp_all [Eval.endsValueReturn, Eval.execReturnState]
+      all_goals intro a ha; cases a <;> rfl
+    | cons t ts =>
+      simp only [Eval.endsValueReturn] at hshape
+      simp only [Eval.execReturnState]
+      split
+      · rfl
+      · cases he : Eval.execStmt m fuel env s with
+        | none => rfl
+        | some o =>
+          cases o <;> simp [ih _ hshape]
+
+theorem exec_finalReturn_not_normal (ss : List Stmt) (env after : Eval.Env N)
+    (hshape : Eval.endsValueReturn ss = true) :
+    Eval.exec m fuel env ss ≠ some (.normal after) := by
+  induction ss generalizing env with
+  | nil => simp [Eval.endsValueReturn] at hshape
+  | cons s ss ih =>
+    cases ss with
+    | nil =>
+      cases s <;> simp_all [Eval.endsValueReturn]
+      rename_i sp value
+      cases value <;> simp_all [Eval.endsValueReturn]
+      simp [Eval.exec, Eval.execStmt]
+      split <;> try simp_all
+      cases Eval.evalTopState m fuel env _ <;> simp
+    | cons t ts =>
+      simp only [Eval.endsValueReturn] at hshape
+      rw [Eval.exec]
+      split
+      · simp
+      · cases he : Eval.execStmt m fuel env s with
+        | none => simp
+        | some o =>
+          cases o <;> simp [ih _ hshape]
+
+/-- The static dispatch has the original call contract, including failed
+executions. This equality is a proof, not a second interpreter pass. -/
+theorem callLocal_block (ps : List String) (sp : Span) (ss : List Stmt) (vs : List (Val N)) (ρ : Eval.Env N)
+    (k : Nat) :
+    Eval.callLocal m k ρ ps (.block sp ss) vs = (do
+      match ← Eval.execStmt m k ((← Eval.bindArgs ps vs) ++ Eval.captures ρ ps (.block sp ss)) (.block sp ss) with
+      | .normal after => some (.ok .undefined, Eval.writeBack ρ after ps (.block sp ss))
+      | .ret r =>
+        if Eval.changesCaptured ρ ps (.block sp ss) then do
+          let (value, after) ← Eval.execReturnState m k
+            ((← Eval.bindArgs ps vs) ++ Eval.captures ρ ps (.block sp ss)) ss
+          some (value, Eval.writeBack ρ after ps (.block sp ss))
+        else some (r, ρ)
+      | .brk _ | .cont _ => none) := by
+  rw [Eval.callLocal]
+  cases hb : Eval.bindArgs ps vs with
+  | none => simp
+  | some bound =>
+    cases hc : Eval.changesCaptured ρ ps (.block sp ss) with
+    | false =>
+      simp
+      rfl
+    | true =>
+      cases hs : Eval.endsValueReturn ss with
+      | false =>
+        have hr := returnState_noReturn m k ss (bound ++ Eval.captures ρ ps (.block sp ss)) hs
+        simp [hr]
+        rfl
+      | true =>
+        cases hr : Eval.execReturnState m k (bound ++ Eval.captures ρ ps (.block sp ss)) ss with
+        | some result =>
+          obtain ⟨r, after⟩ := result
+          have hx := returnState_exec m k ss _ after r hr
+          simp [hr, Eval.execStmt, hx]
+        | none =>
+          have hn := exec_finalReturn_not_normal m k ss
+            (bound ++ Eval.captures ρ ps (.block sp ss))
+          cases hx : Eval.exec m k (bound ++ Eval.captures ρ ps (.block sp ss)) ss with
+          | none => simp [hr, Eval.execStmt, hx]
+          | some o =>
+            cases o <;> simp [hr, Eval.execStmt, hx]
+            exact False.elim (hn _ hs hx)
+
 theorem callLocal_return_state (env : Eval.Env N)
     (params : List String) (sp : Span) (ss : List Stmt)
     (vs : List (Val N)) (bound after : Eval.Env N) (r : Except (Val N) (Val N))
@@ -3283,8 +3358,13 @@ theorem callLocal_return_state (env : Eval.Env N)
       some (r, after)) :
     Eval.callLocal m fuel env params (.block sp ss) vs =
       some (r, Eval.writeBack env after params (.block sp ss)) := by
-  have hx := returnState_exec m fuel ss _ after r hrun
-  simp [Eval.callLocal, Eval.execStmt, hargs, hchanges, hx, hrun]
+  have hshape : Eval.endsValueReturn ss = true := by
+    cases hs : Eval.endsValueReturn ss with
+    | true => rfl
+    | false =>
+      rw [returnState_noReturn m fuel ss _ hs] at hrun
+      contradiction
+  simp [Eval.callLocal, hargs, hchanges, hshape, hrun]
 
 /-- The prefix preserves every initially scoped value and writes back
 exactly the captured variables in its change set. -/
