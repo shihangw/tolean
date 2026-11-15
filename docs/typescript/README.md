@@ -329,15 +329,15 @@ changes name or position, and permits a spread copy of the parameter.
 For several keys, each number key has its own hypothesis. Number keys may
 mix with string and bigint keys, which need no input condition. A final
 difference key requires finite values even when earlier keys break the tie.
-A sort of a local list, a computed list argument, and a
-conditional sort call inside a larger expression remain refused by the
-certifier.
-
 The sorted list may also be a field of a parameter or a concatenation of
 spread copies of parameter lists, such as `[...xs, ...ys]`. Forwarding calls
 may pass these expressions too. The hypothesis quantifies over the resulting
-list. An append that inserts literal elements, such as `[...xs, 0]`, still
-gets no certificate because the link tactic cannot yet rewrite that encoding.
+list. A spread may insert literal elements, as in `[...xs, 0, 1]`.
+Local bindings may alias these lists or concatenate them before returning the
+sort. The condition binds the same local names, so it still depends only on
+parameters. Lists that are not reachable from parameters remain refused.
+Other computed list expressions and sort calls inside larger expressions
+still get no certificate.
 
 A certificate's theorems follow from `translate_sound`, so they do not unfold
 the interpreter. The certificate holds the IR that the translator gives,
