@@ -603,6 +603,7 @@ interface fields, not new array type syntax.
 | `if (x === undefined)` or `if (x !== undefined)`, with `undefined` on either side, where `x` is an optional parameter or a local with an optional value | `match x with \| none => … \| some x => …`, as for a test of `null`. The branch where `x` is defined reads it as a `T`. |
 | `x !== undefined && e`, `x === undefined \|\| e`, and a conditional that tests `x` against undefined | A match on `Option`. The branch where `x` is defined reads it as a `T`. The test may put undefined first, or negate the comparison with `!`. Only the selected branch runs. Existing expressions that need no narrowing keep their output. |
 | `p?.f`, where `p` is a `S \| null` or an optional field of type `S` | `p.map (·.f)`, or `p.bind (·.f)` when `f` is optional. The value is `undefined` when `p` is `null` or `undefined`, so it has the type of an optional field: `p?.f ?? d` and `p?.f === undefined` work as they do on `s.f`. |
+| `xs?.[k]`, where `xs` is a nullable or optional array and `k` is a nonnegative safe-integer literal | `xs.bind (·[k]?)`. An absent receiver or an index past the end gives `undefined`. The element type must not be nullable or optional. |
 | `e as const` and `e satisfies T` | `e`. Type stripping removes both, so the value is the value of `e`. Tolean types `e` in the context of `T` and checks that the value has the type `T`, as `tsc` does. The value keeps its own type, which can be wider than the type `tsc` gives it, because the output types a literal by its context, as it does without `as const`. |
 | `p?.f.g`, a chain of reads after `?.` | `p.map (·.f.g)`, or `p.bind (·.f.g)` when `g` is optional. The reads after `?.` are a part of the same optional chain, so the whole chain is `undefined` when `p` is `null` or `undefined`. Each field before the last must be a required field of an interface type. |
 | `type T = U`, declared before its uses | `abbrev T := U`. The output writes `U` itself wherever the source names `T`, so the `abbrev` is only for claims. |
@@ -945,7 +946,8 @@ Tolean rejects these, among others:
   an optional one. Expression narrowing tests a local name directly. A
   test of a property access, and `'x' in obj`, remain refused.
 - `?.` where the value cannot be `null` or `undefined`, `?.` on a nullable
-  field, and `a?.[i]` and `f?.()`. In a chain such as `a?.b.c`, Tolean
+  field, optional indexing outside the literal-array case above, and `f?.()`.
+  In a chain such as `a?.b.c`, Tolean
   refuses a field before the last that may be `null` or `undefined`, because
   `.` on it throws. `(a?.b).c` is not a chain, because the parentheses end
   it: it reads `.c` of `undefined` when `a` is `null`, so Tolean refuses

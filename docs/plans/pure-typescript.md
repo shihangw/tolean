@@ -54,7 +54,7 @@ exact. A construct leaves these tables when Tolean translates it, and the
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| `a?.[i]` and `f?.()` | `Option.bind` | `==` against anything except `null` and `undefined` |
+| Optional indexing beyond a literal index of an optional array, and `f?.()` | `Option.bind` | `==` against anything except `null` and `undefined` |
 | A value re-export, such as `export { a } from "./x.ts"` | Nothing: the names stay in scope | `export *` |
 
 ### Functions

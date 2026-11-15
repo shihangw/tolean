@@ -659,7 +659,7 @@ macro_rules
         tolean.IR.IntOp.apply, tolean.IR.Order.apply,
         tolean.IR.Division.apply, ExprExt.apply, listItems?, StringPart.toStr, StringMethod.apply, Eval.oneString, Eval.noArgs, Eval.stringAndInt, Eval.oneInt, Eval.sliceArgs, Eval.padArgs, Eval.padArgs.lengthArg, Eval.stringAt, Eval.intArg, Eval.asciiCase, NumberOp.apply, NumberConstant.value,
         NumberTest.apply, tagOf, Eval.Val.typeOf, Eval.Env.set, Eval.getProp, Eval.getKey_ofString, Eval.getPath,
-        Eval.objectPrototypeNames, List.lookup, DeclRef.beq_def, -List.map_map, -List.map_tail, ← List.map_drop, ← List.map_take, ← List.map_reverse, ← List.map_append,
+        Eval.objectPrototypeNames, List.lookup, DeclRef.beq_def, -List.map_map, -List.map_tail, ← List.map_tail, ← List.map_dropLast, ← List.map_drop, ← List.map_take, ← List.map_reverse, ← List.map_append,
         -- A map or set read, such as the initial value of a `reduce`, must
         -- reach a value before a fold lemma can rewrite the call that uses it.
         -- So must the map or set that the read looks in, when `new Map(items)`

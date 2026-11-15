@@ -34,6 +34,10 @@ A type-only re-export erases before execution. Its module dependency follows
 the ExportDeclaration grammar (ES2015 §15.2.3; ES2024 §16.2.3). It introduces
 no local binding and preserves the type's identity in the defining module.
 
+Optional element access follows OptionalExpression and ChainEvaluation
+(ES2020 §12.3.9; ES2024 §13.3.9). An absent receiver skips the index and
+gives undefined. A present array uses the existing array-index operation.
+
 Expression narrowing follows the strict equality test and the selected
 branch of LogicalANDExpression, LogicalORExpression and ConditionalExpression
 (ES2024 §13.13 and §13.14). Logical NOT (§13.5.7) reverses the test. ES2015

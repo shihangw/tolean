@@ -166,7 +166,7 @@ partial def exprCalls : Expr → List String
   | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e
   | .asConst _ e | .satisfies _ e _ | .spread _ e =>
     exprCalls e
-  | .index _ a b | .binary _ _ a b | .assign _ _ a b => exprCalls a ++ exprCalls b
+  | .index _ a b | .optIndex _ a b | .binary _ _ a b | .assign _ _ a b => exprCalls a ++ exprCalls b
   | .cond _ a b c => exprCalls a ++ exprCalls b ++ exprCalls c
   | .array _ es => es.flatMap exprCalls
   | .object _ ps => ps.flatMap fun | .keyValue _ _ v => exprCalls v | _ => []
@@ -180,7 +180,7 @@ partial def exprNumbers : Expr → List String
   | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e
   | .asConst _ e | .satisfies _ e _ | .spread _ e =>
     exprNumbers e
-  | .index _ a b | .binary _ _ a b | .assign _ _ a b => exprNumbers a ++ exprNumbers b
+  | .index _ a b | .optIndex _ a b | .binary _ _ a b | .assign _ _ a b => exprNumbers a ++ exprNumbers b
   | .cond _ a b c => exprNumbers a ++ exprNumbers b ++ exprNumbers c
   | .array _ es => es.flatMap exprNumbers
   | .object _ ps => ps.flatMap fun | .keyValue _ _ v => exprNumbers v | _ => []
@@ -235,7 +235,7 @@ partial def subExprs (e : Expr) : List Expr :=
     | .call _ c args => subExprs c ++ args.flatMap subExprs
     | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e
     | .arrow _ _ _ e | .spread _ e => subExprs e
-    | .index _ a b | .binary _ _ a b | .assign _ _ a b => subExprs a ++ subExprs b
+    | .index _ a b | .optIndex _ a b | .binary _ _ a b | .assign _ _ a b => subExprs a ++ subExprs b
     | .cond _ a b c => subExprs a ++ subExprs b ++ subExprs c
     | .array _ es => es.flatMap subExprs
     | .object _ ps => ps.flatMap fun | .keyValue _ _ v => subExprs v | _ => []

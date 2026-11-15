@@ -1234,7 +1234,7 @@ def exprChanges (fns : List (String × List String)) : Expr → List String
     calleeChanges fns callee ++ exprChanges fns callee ++ exprsChanges fns args
   | .array _ elems => exprsChanges fns elems
   | .object _ props => propsChanges fns props
-  | .index _ a b | .binary _ _ a b => exprChanges fns a ++ exprChanges fns b
+  | .index _ a b | .optIndex _ a b | .binary _ _ a b => exprChanges fns a ++ exprChanges fns b
   | .cond _ a b c => exprChanges fns a ++ exprChanges fns b ++ exprChanges fns c
   | _ => []
 
@@ -2609,6 +2609,16 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
     let o ← translateExpr fuel env none obj
     let (bind, type) ← optFieldType s o.type name
     return ⟨.ext (.optField [name] bind) [o.code], false, type⟩
+  | .optIndex s obj key =>
+    let o ← translateExpr fuel env none obj
+    let elem ← orReject (match o.type with
+      | .optional (.array t) | .nullable (.array t) => some t
+      | _ => none) s "optional indexing requires a nullable or optional array"
+    if elem.isMaybe then reject s "an index of an array of nullable values could give null or undefined"
+    let .number _ text := key | reject key.span "optional indexing currently requires a number literal"
+    let k ← orReject (safeIntegerValue? text) key.span "a number literal must be a safe integer"
+    unless 0 ≤ k do reject key.span "an index must not be negative"
+    return ⟨.ascribe (.ext (.optIndexLit k.toNat) [o.value]) (Ty.optional elem).lean, false, .optional elem⟩
   | .index s obj key =>
     let o ← translateExpr fuel env none obj
     match o.type.tupleElems? with
@@ -4659,8 +4669,9 @@ def exprUsesNumber : Expr → Bool
   | .asConst _ e | .spread _ e => exprUsesNumber e
   | .satisfies _ e t => exprUsesNumber e || typeUsesNumber t
   -- The index of a tuple, `t[0]`, is a position in the output, not a number.
-  | .index _ a (.number ..) => exprUsesNumber a
-  | .index _ a b | .binary _ _ a b | .assign _ _ a b => exprUsesNumber a || exprUsesNumber b
+  | .index _ a (.number ..) | .optIndex _ a (.number ..) => exprUsesNumber a
+  | .index _ a b | .optIndex _ a b | .binary _ _ a b | .assign _ _ a b =>
+    exprUsesNumber a || exprUsesNumber b
   | .cond _ a b c => exprUsesNumber a || exprUsesNumber b || exprUsesNumber c
   -- `new Map<bigint, number>()` names `number` only in its type arguments.
   | .new _ callee typeArgs args => isNumberName callee || typesUseNumber typeArgs || exprsUseNumber args
@@ -4669,7 +4680,7 @@ def exprUsesNumber : Expr → Bool
     ps.length ≥ 2 ||
     ps.any (fun p => isNumberName p.name || (p.type.map typeUsesNumber).getD false) ||
       exprUsesNumber body
-  | _ => false
+  | .regexp .. | .bigint .. | .string .. | .bool .. | .null .. => false
 
 def exprsUseNumber : List Expr → Bool
   | [] => false

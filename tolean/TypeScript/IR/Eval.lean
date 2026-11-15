@@ -119,99 +119,223 @@ def listItems? : Val N → Option (List (Val N))
   | .list items => some items
   | _ => none
 
-/-- An operation that TypeScript adds, on the values of its arguments. -/
+/-- An operation that TypeScript adds, on the values of its arguments. The
+operation is matched before its arguments, so a proof about one operation
+does not reduce the argument cases of every other one. -/
 def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
-  | .number n, [] => some (.num (JSNumber.ofSafeInt n))
-  | .numberConstant c, [] => some (.num c.value)
-  | .numberNeg, [.num a] => some (.num (JSNumber.neg a))
-  | .numberOp op, [.num a, .num b] => some (op.apply a b)
-  | .numberNe, [.num a, .num b] => some (.bool !(JSNumber.eq a b))
-  | .numberTest test, [.num a] => some (.bool (test.apply a))
-  | .numberFn f, [.num a] => some (.num (f.apply a))
-  | .dateOfNumber, [.num t] => some (.date (JSDate.timeClip t))
-  | .dateMethod name, [.date t] => Eval.dateMethod name t []
-  | .dateUtc, vs => (Eval.numbers? vs).map fun xs => .num (JSDate.utc xs)
-  | .dateParse time, [] => some (.num (JSDate.number time))
-  | .regexpLiteral r, [] => some (.regexp r)
-  | .regexpTest, [.regexp r, .str s] => some (.bool (r.test s))
-  | .numberSameValue, [.num a, .num b] => some (.bool (JSNumber.sameValue a b))
-  | .numberOfInt, [.int i] => some (.num (JSNumber.ofInt i))
-  | .numberFold isMax, vs =>
-    (Eval.numbers? vs).map fun xs => .num (if isMax then JSNumber.maximum xs else JSNumber.minimum xs)
-  | .bigintOp op, [.int a, .int b] => some (.int (op.apply a b))
-  | .bigintNot, [.int a] => some (.int (JSBigInt.bitNot a))
-  | .bigintPow k, [.int a] => some (.int (a ^ k))
-  | .stringOrder le, [.str a, .str b] => some (.bool (if le then a.le b else a.lt b))
-  | .stringLength, [.str s] => some (.num (JSNumber.ofSafeInt s.length))
-  | .stringMethod method lits, .str s :: args => method.apply s args lits
-  | .stringAppend left right, [a, b] => do
-    return .str ((← left.toStr a) ++ (← right.toStr b))
-  | .undefined, [] => some .undefined
-  -- `a === undefined` and `a !== undefined`, as `IsStrictlyEqual` gives them.
-  | .isUndefined, [a] => some (.bool (a matches .undefined))
-  | .isDefined, [a] => some (.bool !(a matches .undefined))
-  -- `a?.f.g`, as the spec evaluates it.
-  | .optField _ _, [.null] | .optField _ _, [.undefined] => some .undefined
-  | .optField path _, [.obj fields] => Eval.getPath fields path
-  -- `r[k]`, as the spec evaluates it: the property that the string `k` names.
-  | .recordGet _ _, [.obj fields, .str k] => Eval.getKey fields k
-  -- `x ∈ xs` and `List.any xs (JSNumber.sameValueZero x)`: whether an
-  -- element is `x`, as `includes` compares them.
-  | .includes, [.list xs, x] | .includesNumber, [.list xs, x] => (Eval.includesVal x xs).map .bool
-  -- `xs.length`, `xs[k]?`, `JSNumber.elementAt? xs i` and `xs.at(k)`, as the
-  -- spec reads them: `none` is `undefined`.
-  | .length, [.list xs] => some (.num (JSNumber.ofSafeInt xs.length))
-  | .indexLit k, [.list xs] => some (Eval.elementAt xs (some k))
-  | .indexNumber, [.list xs, .num i] => some (Eval.elementAt xs (JSNumber.toSafeInt i))
-  -- `JSNumber.countUp k b`: the values that the interpreter's counted loop
-  -- visits. It has no value where `countUp?` gives none.
-  | .countUp k, [.num b] => (JSNumber.countUp? k b).map fun xs => .list (xs.map .num)
-  | .at k, [.list xs] => some (Eval.atVal xs k)
-  | .slice start stop, [.list xs] => some (.list (Eval.sliceList xs start stop))
-  -- `at` and `slice` with an argument that is not a literal, as the spec
-  -- reads its integer.
-  | .atNumber, [.list xs, .num i] => some (Eval.atVal xs (JSNumber.toIndexInt i))
-  | .toIndexInt, [.num i] => some (.int (JSNumber.toIndexInt i))
-  | .sliceInt, [.list xs, .int a] => some (.list (JSNumber.sliceInt xs a none))
-  | .sliceInt, [.list xs, .int a, .int b] => some (.list (JSNumber.sliceInt xs a (some b)))
-  -- The operations of a `Map`, as the spec gives them.
-  | .mapEmpty, [] => some (.map [])
-  | .mapGet, [.map entries, k] => (Eval.mapFind entries k).map (·.getD .undefined)
-  | .mapHas, [.map entries, k] => (Eval.mapFind entries k).map (.bool ·.isSome)
-  | .mapSize, [.map entries] => some (.num (JSNumber.ofSafeInt entries.length))
-  | .mapSet, [.map entries, k, v] => (Eval.mapSet entries k v).map .map
-  | .mapDelete, [.map entries, k] => (Eval.mapDelete entries k).map .map
-  -- The operations of a `Set`, as the spec gives them.
-  | .setEmpty, [] => some (.set [])
-  | .setHas, [.set elems, x] => (Eval.setHas elems x).map .bool
-  | .setSize, [.set elems] => some (.num (JSNumber.ofSafeInt elems.length))
-  | .setAdd, [.set elems, x] => (Eval.setAdd elems x).map .set
-  | .setDelete, [.set elems, x] => (Eval.setDelete elems x).map .set
-  -- What a loop visits, as the spec's `iterValues` gives it: a JS entry is
-  -- the array `[key, value]`, as a Lean pair is.
-  | .setElems, [.set elems] => some (.list elems)
-  | .mapEntries, [.map entries] => some (.list (entries.map fun (k, v) => .list [k, v]))
-  -- What a loop visits in `xs.entries()`, as the spec's `evalIter` gives it.
-  | .arrayEntries, [.list xs] => some (.list (Eval.entriesOf xs))
-  | .stringCodePoints, [.str s] => some (.list (s.codePoints.map .str))
-  | .jsonStringify, [v] => Eval.jsonStringify v
-  | .mapOfList, [.list items] => (Eval.mapOfItems items).map .map
-  | .setOfList, [.list items] => (Eval.setOfItems items).map .set
-  -- The elements of an array literal with a spread, in order.
-  | .append, lists => (lists.mapM listItems?).map fun items => .list items.flatten
-  -- `pure a` is the value of `a`, as the result of a function that does not
-  -- throw this time.
-  | .pure, [a] => some a
-  -- `JSError.mk m` is the object that `new Error(m)` makes.
-  | .error, [.str m] => some (.error "Error" [("message", .str m)])
-  | .closure params body, [] => some (.closure params body)
-  -- `Thrown.«C» m a b` is the object that `new C(m, a, b)` makes: the
-  -- message, then the fields.
-  | .errorCase _ cls fields, .str m :: args =>
-    if fields.length == args.length + 1 then
-      some (.error cls ((fields.zip (.str m :: args)).filterMap fun (f, a) => f.map (·, a)))
-    else none
-  | _, _ => none
+  | op, args =>
+    match op with
+    | .number n => match args with
+      | [] => some (.num (JSNumber.ofSafeInt n))
+      | _ => none
+    | .numberConstant c => match args with
+      | [] => some (.num c.value)
+      | _ => none
+    | .numberNeg => match args with
+      | [.num a] => some (.num (JSNumber.neg a))
+      | _ => none
+    | .numberOp op => match args with
+      | [.num a, .num b] => some (op.apply a b)
+      | _ => none
+    | .numberNe => match args with
+      | [.num a, .num b] => some (.bool !(JSNumber.eq a b))
+      | _ => none
+    | .numberTest test => match args with
+      | [.num a] => some (.bool (test.apply a))
+      | _ => none
+    | .numberFn f => match args with
+      | [.num a] => some (.num (f.apply a))
+      | _ => none
+    | .dateOfNumber => match args with
+      | [.num t] => some (.date (JSDate.timeClip t))
+      | _ => none
+    | .dateMethod name => match args with
+      | [.date t] => Eval.dateMethod name t []
+      | _ => none
+    | .dateUtc => (Eval.numbers? args).map fun xs => .num (JSDate.utc xs)
+    | .dateParse time => match args with
+      | [] => some (.num (JSDate.number time))
+      | _ => none
+    | .regexpLiteral r => match args with
+      | [] => some (.regexp r)
+      | _ => none
+    | .regexpTest => match args with
+      | [.regexp r, .str s] => some (.bool (r.test s))
+      | _ => none
+    | .numberSameValue => match args with
+      | [.num a, .num b] => some (.bool (JSNumber.sameValue a b))
+      | _ => none
+    | .numberOfInt => match args with
+      | [.int i] => some (.num (JSNumber.ofInt i))
+      | _ => none
+    | .numberFold isMax =>
+      (Eval.numbers? args).map fun xs =>
+        .num (if isMax then JSNumber.maximum xs else JSNumber.minimum xs)
+    | .bigintOp op => match args with
+      | [.int a, .int b] => some (.int (op.apply a b))
+      | _ => none
+    | .bigintNot => match args with
+      | [.int a] => some (.int (JSBigInt.bitNot a))
+      | _ => none
+    | .bigintPow k => match args with
+      | [.int a] => some (.int (a ^ k))
+      | _ => none
+    | .stringOrder le => match args with
+      | [.str a, .str b] => some (.bool (if le then a.le b else a.lt b))
+      | _ => none
+    | .stringLength => match args with
+      | [.str s] => some (.num (JSNumber.ofSafeInt s.length))
+      | _ => none
+    | .stringMethod method lits => match args with
+      | .str s :: rest => method.apply s rest lits
+      | _ => none
+    | .stringAppend left right => match args with
+      | [a, b] => do
+        return .str ((← left.toStr a) ++ (← right.toStr b))
+      | _ => none
+    | .undefined => match args with
+      | [] => some .undefined
+      | _ => none
+    -- `a === undefined` and `a !== undefined`, as `IsStrictlyEqual` gives them.
+    | .isUndefined => match args with
+      | [a] => some (.bool (a matches .undefined))
+      | _ => none
+    | .isDefined => match args with
+      | [a] => some (.bool !(a matches .undefined))
+      | _ => none
+    -- `a?.f.g`, as the spec evaluates it.
+    | .optField path _ => match args with
+      | [.null] | [.undefined] => some .undefined
+      | [.obj fields] => Eval.getPath fields path
+      | _ => none
+    -- `r[k]`, as the spec evaluates it: the property that the string `k` names.
+    | .recordGet _ _ => match args with
+      | [.obj fields, .str k] => Eval.getKey fields k
+      | _ => none
+    -- `x ∈ xs` and `List.any xs (JSNumber.sameValueZero x)`: whether an
+    -- element is `x`, as `includes` compares them.
+    | .includes | .includesNumber => match args with
+      | [.list xs, x] => (Eval.includesVal x xs).map .bool
+      | _ => none
+    -- `xs.length`, `xs[k]?`, `JSNumber.elementAt? xs i` and `xs.at(k)`, as the
+    -- spec reads them: `none` is `undefined`.
+    | .length => match args with
+      | [.list xs] => some (.num (JSNumber.ofSafeInt xs.length))
+      | _ => none
+    | .indexLit k => match args with
+      | [.list xs] => some (Eval.elementAt xs (some k))
+      | _ => none
+    | .optIndexLit k => match args with
+      | [.null] | [.undefined] => some .undefined
+      | [.list xs] => some (Eval.elementAt xs (some k))
+      | _ => none
+    | .indexNumber => match args with
+      | [.list xs, .num i] => some (Eval.elementAt xs (JSNumber.toSafeInt i))
+      | _ => none
+    -- `JSNumber.countUp k b`: the values that the interpreter's counted loop
+    -- visits. It has no value where `countUp?` gives none.
+    | .countUp k => match args with
+      | [.num b] => (JSNumber.countUp? k b).map fun xs => .list (xs.map .num)
+      | _ => none
+    | .at k => match args with
+      | [.list xs] => some (Eval.atVal xs k)
+      | _ => none
+    | .slice start stop => match args with
+      | [.list xs] => some (.list (Eval.sliceList xs start stop))
+      | _ => none
+    -- `at` and `slice` with an argument that is not a literal, as the spec
+    -- reads its integer.
+    | .atNumber => match args with
+      | [.list xs, .num i] => some (Eval.atVal xs (JSNumber.toIndexInt i))
+      | _ => none
+    | .toIndexInt => match args with
+      | [.num i] => some (.int (JSNumber.toIndexInt i))
+      | _ => none
+    | .sliceInt => match args with
+      | [.list xs, .int a] => some (.list (JSNumber.sliceInt xs a none))
+      | [.list xs, .int a, .int b] => some (.list (JSNumber.sliceInt xs a (some b)))
+      | _ => none
+    -- The operations of a `Map`, as the spec gives them.
+    | .mapEmpty => match args with
+      | [] => some (.map [])
+      | _ => none
+    | .mapGet => match args with
+      | [.map entries, k] => (Eval.mapFind entries k).map (·.getD .undefined)
+      | _ => none
+    | .mapHas => match args with
+      | [.map entries, k] => (Eval.mapFind entries k).map (.bool ·.isSome)
+      | _ => none
+    | .mapSize => match args with
+      | [.map entries] => some (.num (JSNumber.ofSafeInt entries.length))
+      | _ => none
+    | .mapSet => match args with
+      | [.map entries, k, v] => (Eval.mapSet entries k v).map .map
+      | _ => none
+    | .mapDelete => match args with
+      | [.map entries, k] => (Eval.mapDelete entries k).map .map
+      | _ => none
+    -- The operations of a `Set`, as the spec gives them.
+    | .setEmpty => match args with
+      | [] => some (.set [])
+      | _ => none
+    | .setHas => match args with
+      | [.set elems, x] => (Eval.setHas elems x).map .bool
+      | _ => none
+    | .setSize => match args with
+      | [.set elems] => some (.num (JSNumber.ofSafeInt elems.length))
+      | _ => none
+    | .setAdd => match args with
+      | [.set elems, x] => (Eval.setAdd elems x).map .set
+      | _ => none
+    | .setDelete => match args with
+      | [.set elems, x] => (Eval.setDelete elems x).map .set
+      | _ => none
+    -- What a loop visits, as the spec's `iterValues` gives it: a JS entry is
+    -- the array `[key, value]`, as a Lean pair is.
+    | .setElems => match args with
+      | [.set elems] => some (.list elems)
+      | _ => none
+    | .mapEntries => match args with
+      | [.map entries] => some (.list (entries.map fun (k, v) => .list [k, v]))
+      | _ => none
+    -- What a loop visits in `xs.entries()`, as the spec's `evalIter` gives it.
+    | .arrayEntries => match args with
+      | [.list xs] => some (.list (Eval.entriesOf xs))
+      | _ => none
+    | .stringCodePoints => match args with
+      | [.str s] => some (.list (s.codePoints.map .str))
+      | _ => none
+    | .jsonStringify => match args with
+      | [v] => Eval.jsonStringify v
+      | _ => none
+    | .mapOfList => match args with
+      | [.list items] => (Eval.mapOfItems items).map .map
+      | _ => none
+    | .setOfList => match args with
+      | [.list items] => (Eval.setOfItems items).map .set
+      | _ => none
+    -- The elements of an array literal with a spread, in order.
+    | .append => (args.mapM listItems?).map fun items => .list items.flatten
+    -- `pure a` is the value of `a`, as the result of a function that does not
+    -- throw this time.
+    | .pure => match args with
+      | [a] => some a
+      | _ => none
+    -- `JSError.mk m` is the object that `new Error(m)` makes.
+    | .error => match args with
+      | [.str m] => some (.error "Error" [("message", .str m)])
+      | _ => none
+    | .closure params body => match args with
+      | [] => some (.closure params body)
+      | _ => none
+    -- `Thrown.«C» m a b` is the object that `new C(m, a, b)` makes: the
+    -- message, then the fields.
+    | .errorCase _ cls fields => match args with
+      | .str m :: rest =>
+        if fields.length == rest.length + 1 then
+          some (.error cls ((fields.zip (.str m :: rest)).filterMap fun (f, a) => f.map (·, a)))
+        else none
+      | _ => none
 
 /-- The tag of `v`, a value of a tagged union: the string in its tag field
 `field`, or the result of `typeof v` when the union has no tag field. -/
