@@ -415,11 +415,17 @@ def conditionCalls (callee : String) : IR.Expr → List (List IR.Expr)
   | .propAnd a b | .propOr a b | .and a b | .or a b | .coalesce a b _ =>
     conditionCalls callee a ++ conditionCalls callee b
   | .ext _ es | .list es _ | .tuple es => conditionCallsList callee es
+  | .struct fields _ _ => conditionCallFields callee fields
+  | .structUpdate base fields => conditionCalls callee base ++ conditionCallFields callee fields
   | _ => []
 
 def conditionCallsList (callee : String) : List IR.Expr → List (List IR.Expr)
   | [] => []
   | e :: es => conditionCalls callee e ++ conditionCallsList callee es
+
+def conditionCallFields (callee : String) : List (String × IR.Expr) → List (List IR.Expr)
+  | [] => []
+  | (_, e) :: fields => conditionCalls callee e ++ conditionCallFields callee fields
 end
 
 def bodyConditionCalls (callee : String) : IR.Body → List (List IR.Expr)

@@ -656,6 +656,25 @@ test('number sorts in loops agree with Node through break and return', () => {
   }
 });
 
+test('records carry calls to number sorts inside map callbacks', () => {
+  const source = 'interface Box { readonly values: ReadonlyArray<number>; }\n' +
+    'function sorted(xs: ReadonlyArray<number>): number[] { return xs.toSorted((a, b) => a - b); }\n' +
+    'export function f(boxes: ReadonlyArray<Box>): Box[] { return boxes.map(box => ({ ...box, values: sorted([...box.values, 0]) })); }';
+  const arrays = fc.sample(fc.array(fc.record({
+    values: fc.array(fc.integer({ min: -10, max: 10 }), { maxLength: 5 }),
+  }), { maxLength: 5 }), 25);
+  const input = { programs: [{ source, calls: arrays.map(xs =>
+    ({ function: 'f', args: [xs.map(encode)] })) }] };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const [lean] = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  expect(lean?.parsed).toBe(true);
+  if (lean === undefined || !lean.parsed) return;
+  expect(lean.results).toEqual(arrays.map(xs => ({ value: xs.map(box => encode({
+    ...box, values: [...box.values, 0].toSorted((a, b) => a - b),
+  })) })));
+});
+
 test('number sorts read local concatenations with literal elements', () => {
   const source = 'export function f(xs: ReadonlyArray<number>, ys: ReadonlyArray<number>): number[] { const first = xs; const both = [...first, ...ys, 0, 1]; return both.toSorted((a, b) => a - b); }';
   const pairs = [[[], []], [[2, -0], [0, 1]],
