@@ -815,6 +815,7 @@ def Expr.subst (σ : List (String × Expr)) : Expr → Expr
   | .member s e n => .member s (Expr.subst σ e) n
   | .optMember s e n => .optMember s (Expr.subst σ e) n
   | .index s a b => .index s (Expr.subst σ a) (Expr.subst σ b)
+  | .optIndex s a b => .optIndex s (Expr.subst σ a) (Expr.subst σ b)
   | .call s c args => .call s (Expr.subst σ c) (Expr.substList σ args)
   | .unary s op e => .unary s op (Expr.subst σ e)
   | .prefix s op e => .prefix s op (Expr.subst σ e)
@@ -856,7 +857,7 @@ def Expr.callNames : Expr → List String
   | .object _ ps => Property.callNamesList ps
   | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e
   | .spread _ e | .asConst _ e | .satisfies _ e _ => Expr.callNames e
-  | .index _ a b | .binary _ _ a b | .assign _ _ a b => Expr.callNames a ++ Expr.callNames b
+  | .index _ a b | .optIndex _ a b | .binary _ _ a b | .assign _ _ a b => Expr.callNames a ++ Expr.callNames b
   | .call _ (.ident _ name) args => name :: Expr.callNamesList args
   | .call _ c args => Expr.callNames c ++ Expr.callNamesList args
   | .cond _ a b c => Expr.callNames a ++ Expr.callNames b ++ Expr.callNames c
@@ -996,7 +997,7 @@ def Expr.hoists (thr : String → Bool) : Expr → Bool
   | .object _ ps => Property.hoistsList thr ps
   | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e
   | .spread _ e | .asConst _ e | .satisfies _ e _ => Expr.hoists thr e
-  | .index _ a b | .assign _ _ a b => Expr.hoists thr a || Expr.hoists thr b
+  | .index _ a b | .optIndex _ a b | .assign _ _ a b => Expr.hoists thr a || Expr.hoists thr b
   | .binary _ .and a _ | .binary _ .or a _ | .binary _ .coalesce a _ => Expr.hoists thr a
   | .binary _ _ a b => Expr.hoists thr a || Expr.hoists thr b
   | .call _ (.ident _ name) args => thr name || Expr.hoistsList thr args
@@ -1074,6 +1075,7 @@ def Expr.hoist (thr : String → Bool) (cls : String → Option (Option (List Ct
   | .paren s e => let (e', h) := Expr.hoist thr cls h e; (.paren s e', h)
   | .member s e n => let (e', h) := Expr.hoist thr cls h e; (.member s e' n, h)
   | .optMember s e n => let (e', h) := Expr.hoist thr cls h e; (.optMember s e' n, h)
+  | .optIndex s a b => let (a', h) := Expr.hoist thr cls h a; (.optIndex s a' b, h)
   | .unary s op e => let (e', h) := Expr.hoist thr cls h e; (.unary s op e', h)
   | .spread s e => let (e', h) := Expr.hoist thr cls h e; (.spread s e', h)
   | .asConst s e => let (e', h) := Expr.hoist thr cls h e; (.asConst s e', h)
@@ -1456,7 +1458,22 @@ def writeBack (env after : Env N) (params : List String) (body : Stmt) : Env N :
 -- calls of local functions, this block takes several times the default 200000
 -- heartbeats to elaborate, most of it in the proofs that each recursive call
 -- is smaller.
-set_option maxHeartbeats 800000 in
+/-- Read an index after the receiver of an optional chain is known to be present. -/
+def optionalIndexValue (receiver : Val N) (key : Expr) (readKey : Unit → Option (Val N)) : Option (Val N) := do
+  match receiver with
+  | .list items =>
+    match numberText? key with
+    | some text => return elementAt items (some (← numberLiteral text))
+    | none =>
+      let .num n ← readKey () | none
+      return elementAt items (JSNumber.toSafeInt n)
+  | .obj fields =>
+    let .str k ← readKey () | none
+    getKey fields k
+  | _ => none
+
+set_option maxHeartbeats 2000000 in
+set_option backward.eqns.deepRecursiveSplit false in
 mutual
 
 /-- The value of `e`. `fuel` bounds the depth of nested calls, so that the
@@ -1529,6 +1546,10 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     | .null | .undefined => some .undefined
     | .obj fields => getProp fields name
     | _ => none
+  | .optIndex _ obj key => do
+    match ← eval m fuel env obj with
+    | .null | .undefined => some .undefined
+    | receiver => optionalIndexValue receiver key (fun _ => eval m fuel env key)
   -- `xs[i]` on an array, with a number `i` (`OrdinaryGet` on an array exotic
   -- object, ECMA-262 §10.4.2): the element when `i` is an index of the
   -- array. Any other number is `undefined`, because no element and no
@@ -1855,6 +1876,10 @@ termination_by e => (fuel, sizeOf e, 1)
 `undefined`, which skips the rest of the chain, and the value of the chain
 otherwise. -/
 def evalChain (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Option (Val N))
+  | .optIndex _ obj key => do
+    match ← eval m fuel env obj with
+    | .null | .undefined => some none
+    | receiver => (optionalIndexValue receiver key (fun _ => eval m fuel env key)).map some
   | .optMember _ obj name => do
     match ← eval m fuel env obj with
     | .null | .undefined => some none

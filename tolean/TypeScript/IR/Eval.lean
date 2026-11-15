@@ -160,6 +160,8 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   -- spec reads them: `none` is `undefined`.
   | .length, [.list xs] => some (.num (JSNumber.ofSafeInt xs.length))
   | .indexLit k, [.list xs] => some (Eval.elementAt xs (some k))
+  | .optIndexLit _, [.null] | .optIndexLit _, [.undefined] => some .undefined
+  | .optIndexLit k, [.list xs] => some (Eval.elementAt xs (some k))
   | .indexNumber, [.list xs, .num i] => some (Eval.elementAt xs (JSNumber.toSafeInt i))
   -- `JSNumber.countUp k b`: the values that the interpreter's counted loop
   -- visits. It has no value where `countUp?` gives none.

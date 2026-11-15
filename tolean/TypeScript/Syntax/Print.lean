@@ -62,6 +62,7 @@ partial def Expr.toSexp : Expr → Sexp
   | .member s obj name => node "member" s [name] [obj.toSexp]
   | .optMember s obj name => node "optMember" s [name] [obj.toSexp]
   | .index s obj idx => node "index" s [] [obj.toSexp, idx.toSexp]
+  | .optIndex s obj idx => node "optIndex" s [] [obj.toSexp, idx.toSexp]
   | .call s callee args => node "call" s [] (callee.toSexp :: args.map Expr.toSexp)
   | .unary s op arg => node "unary" s [op.symbol] [arg.toSexp]
   | .prefix s op arg => node "prefix" s [op.symbol] [arg.toSexp]

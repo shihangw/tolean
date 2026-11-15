@@ -220,6 +220,11 @@ theorem Expr.fine : ∀ e : Expr, Fine e.words
   | .index _ o i => by
     simpa [Expr.words] using (Expr.fine o).append (Fine.cons (w := punctWord "[") (by simp [punctWord])
       ((Expr.fine i).append (Fine.word (w := punctWord "]") (by simp [punctWord]))))
+  | .optIndex _ o i => by
+    simpa [Expr.words] using (Expr.fine o).append
+      (Fine.cons (w := punctWord "?.") (by simp [punctWord])
+        (Fine.cons (w := punctWord "[") (by simp [punctWord])
+          ((Expr.fine i).append (Fine.word (w := punctWord "]") (by simp [punctWord])))))
   | .call _ c as => by
     simpa [Expr.words, List.append_assoc] using (Expr.fine c).append (Fine.call (c := c) (Expr.fineAll as))
   | .unary _ op a => by

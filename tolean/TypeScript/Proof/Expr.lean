@@ -4862,6 +4862,41 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
           simp only [hobj] at hv'
           simp only [Eval.eval, this, Option.bind_eq_bind, Option.bind_some]
           cases ov <;> simp only [IR.ExprExt.apply] at hv' <;> first | exact hv' | simp at hv'
+      | optIndex sp obj key =>
+        simp only [translateExprCore, bind_ok, orReject_ok] at h
+        obtain ⟨o, s₁, ho, elem, s₂, ⟨_, rfl⟩, h⟩ := h
+        simp only [ite_state] at h
+        split at h
+        · simp at h
+        simp only [pure_bind] at h
+        split at h
+        · rename_i sp' text
+          simp only [bind_ok, orReject_ok, ite_state] at h
+          obtain ⟨k, s₃, ⟨hk, rfl⟩, h⟩ := h
+          split at h
+          · rename_i hpos
+            simp only [pure_ok] at h
+            obtain ⟨rfl, _⟩ := h
+            intro ρs ρo v ha hs hv
+            simp only [IR.Expr.eval, IR.Expr.evalList] at hv
+            cases hx : IR.Expr.eval fs fuel ρo o.value with
+            | none => simp [hx] at hv
+            | some w =>
+              have hobj := ihE _ _ _ _ _ _ ho ρs ρo w ha hs
+                (by rw [← eval_value]; exact hx)
+              rw [Eval.eval.eq_def]
+              simp only [hobj, Option.bind_eq_bind, Option.bind_some]
+              cases w
+              case list items =>
+                change Eval.numberLiteral text = some k at hk
+                simp only [hx, Option.bind_eq_bind, Option.bind_some, pure_bind,
+                  IR.ExprExt.apply, Option.some.injEq, Int.toNat_of_nonneg hpos] at hv
+                simp [Eval.optionalIndexValue, Eval.numberText?, hk, hv]
+              case null => simpa [hx, IR.ExprExt.apply] using hv
+              case undefined => simpa [hx, IR.ExprExt.apply] using hv
+              all_goals simp [hx, IR.ExprExt.apply] at hv
+          · simp at h
+        · simp at h
       | index sp obj key =>
         simp only [translateExprCore, bind_ok] at h
         obtain ⟨o, s₁, ho, h⟩ := h

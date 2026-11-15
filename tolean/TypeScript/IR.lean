@@ -197,6 +197,8 @@ inductive ExprExt where
   /-- `xs[k]?`, on `xs`: `xs[k]` with a number literal `k`, which is the
   element at `k` or `undefined`. -/
   | indexLit (k : Nat)
+  /-- An optional array binds its value before reading a literal index. -/
+  | optIndexLit (k : Nat)
   /-- `(JSNumber.elementAt? xs i)`, on `xs` and `i`: `xs[i]` with a number
   `i`. -/
   | indexNumber
@@ -499,6 +501,7 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
     let int := leanName names "Int"
     s!"({js}.ofSafeInt (N := {names.typeParam}) (({leanName names "List.length"} {argument xs} : {leanName names "Nat"}) : {int}))"
   | .indexLit k, [xs] => s!"{argument xs}[{k}]?"
+  | .optIndexLit k, [xs] => s!"({argument xs}.bind (·[{k}]?))"
   | .indexNumber, [xs, i] => s!"({js}.elementAt? {argument xs} {argument i})"
   | .countUp k, [b] => s!"({js}.countUp ({k} : {leanName names "Int"}) {argument b})"
   | .at k, [xs] =>
