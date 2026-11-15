@@ -2710,7 +2710,7 @@ theorem localCallProblem_none {env : Translate.Env} {fn : LocalFn} {args : List 
     env.locals.any fn.late = false ∧
     (fn.changes.all (fun c => fn.captured.any (·.name == c)) &&
       fn.captured.all (fun l => fn.changes.contains l.name ||
-        !(stmtsChanges [] (blockStatements fn.body)).contains l.name)) = true ∧
+        !(stmtsChanges (fn.bodyEnv env).fnChanges (blockStatements fn.body)).contains l.name)) = true ∧
     (fn.ret.isSome && fn.captured.any (fun l => fn.body.assigns l.name || fn.body.mutates l.name)) = false ∧
     args.length = fn.params.length := by
   unfold localCallProblem at h
@@ -2724,7 +2724,7 @@ theorem localCallProblem_none {env : Translate.Env} {fn : LocalFn} {args : List 
       rw [if_neg h2] at h
       by_cases h3 : (fn.changes.all (fun c => fn.captured.any (·.name == c)) &&
           fn.captured.all (fun l => fn.changes.contains l.name ||
-            !(stmtsChanges [] (blockStatements fn.body)).contains l.name)) = true
+            !(stmtsChanges (fn.bodyEnv env).fnChanges (blockStatements fn.body)).contains l.name)) = true
       · rw [if_neg (by rw [h3]; decide)] at h
         by_cases h4 : (fn.ret.isSome && fn.captured.any (fun l => fn.body.assigns l.name || fn.body.mutates l.name)) = true
         · rw [if_pos h4] at h; simp at h
@@ -3168,7 +3168,12 @@ theorem callLocal_block (ps : List String) (sp : Span) (ss : List Stmt) (vs : Li
     Eval.callLocal m k ρ ps (.block sp ss) vs = (do
       match ← Eval.execStmt m k ((← Eval.bindArgs ps vs) ++ Eval.captures ρ ps (.block sp ss)) (.block sp ss) with
       | .normal after => some (.ok .undefined, Eval.writeBack ρ after ps (.block sp ss))
-      | .ret r => if Eval.changesCaptured ρ ps (.block sp ss) then none else some (r, ρ)
+      | .ret r =>
+        if Eval.changesCaptured ρ ps (.block sp ss) then do
+          let (value, after) ← Eval.execReturnState m k
+            ((← Eval.bindArgs ps vs) ++ Eval.captures ρ ps (.block sp ss)) ss
+          some (value, Eval.writeBack ρ after ps (.block sp ss))
+        else some (r, ρ)
       | .brk _ | .cont _ => none) := by
   rw [Eval.callLocal]; rfl
 
@@ -3184,7 +3189,7 @@ theorem localCall_void {env : Translate.Env} {fn : LocalFn} {k : Nat} {b : IR.Bo
     (h2 : env.locals.any fn.late = false)
     (h3 : (fn.changes.all (fun c => fn.captured.any (·.name == c)) &&
       fn.captured.all (fun l => fn.changes.contains l.name ||
-        !(stmtsChanges [] (blockStatements fn.body)).contains l.name)) = true)
+        !(stmtsChanges (fn.bodyEnv env).fnChanges (blockStatements fn.body)).contains l.name)) = true)
     (hbody : StmtSim (N := N) m fs k (fn.bodyEnv env) (.state fn.changes) (blockStatements fn.body) b)
     (ha : Agree ρs ρo) (hs : Scoped m env ρs)
     (hcv : IR.Expr.evalList fs fuel ρo (fn.captured.map (fun l => IR.Expr.var l.name)) = some cvals)
@@ -3262,7 +3267,7 @@ theorem localCall_void {env : Translate.Env} {fn : LocalFn} {k : Nat} {b : IR.Bo
       rcases hlate' with h | ⟨q, hq, hqn⟩
       · exact h
       · exact absurd (List.mem_map.mpr ⟨q, hq, hqn⟩) (by simpa using hnp)
-    have hnc' : n ∉ stmtsChanges [] (blockStatements fn.body) := by
+    have hnc' : n ∉ stmtsChanges (fn.bodyEnv env).fnChanges (blockStatements fn.body) := by
       have := (h3.2 l' hl')
       rw [hl'n] at this
       simp only [Bool.or_eq_true] at this

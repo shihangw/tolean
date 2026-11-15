@@ -3492,7 +3492,7 @@ def localCall? (env : Env) : Expr → Option (List Expr × LocalFn)
 /-- The scope of the body of `fn`, where `env` is the scope at a call: its
 parameters and the locals it captures, and the functions of `env`. -/
 def LocalFn.bodyEnv (fn : LocalFn) (env : Env) : Env :=
-  { env with locals := fn.params ++ fn.captured, localFns := [] }
+  { env with locals := fn.params ++ fn.captured }
 
 /-- What the body of `fn` ends in: the tuple of the locals it changes, when
 it returns nothing, or a `return`. -/
@@ -3553,7 +3553,7 @@ def translateLocalHead (env : Env) (s : Span) (name : String) (typeParams : List
       reject s s!"a local function may not call another local function, such as '{l.name}', yet"
     if l.binding == .array || l.binding == .map then
       reject s s!"a local function may not use '{l.name}', which the function around it owns"
-  let changed := stmtsChanges [] (blockStatements body)
+  let changed := stmtsChanges env.fnChanges (blockStatements body)
   let changes := (captured.filter fun l => changed.contains l.name).map (·.name)
   for c in changes do
     unless (captured.find? (·.name == c)).any (·.binding == .«let») do
@@ -3610,7 +3610,7 @@ def localCallProblem (env : Env) (fn : LocalFn) (args : List Expr) : Option Stri
       s!"body of '{fn.name}' names '{name}' too; rename one of them")
   else if !(fn.changes.all (fun c => fn.captured.any (·.name == c)) &&
       fn.captured.all (fun l => fn.changes.contains l.name ||
-        !(stmtsChanges [] (blockStatements fn.body)).contains l.name)) then
+        !(stmtsChanges (fn.bodyEnv env).fnChanges (blockStatements fn.body)).contains l.name)) then
     some s!"'{fn.name}' changes a local that it does not return"
   else if fn.ret.isSome && fn.captured.any (fun l => fn.body.assigns l.name || fn.body.mutates l.name) then
     some s!"'{fn.name}' returns a value and changes a variable of the function around it"
