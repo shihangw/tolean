@@ -395,8 +395,19 @@ partial def loopsOf : IR.Body → List (List String × String × IR.Body × IR.L
   | .letState _ branch rest => loopsOf branch ++ loopsOf rest
   | .fold names element body _ rest info => loopsOf body ++ [(names, element, body, info)] ++ loopsOf rest
   | .throw _ => []
-  | .bind _ _ _ rest | .letCall _ _ _ _ _ _ _ _ _ rest | .letLifted _ _ rest
-  | .letBorrow _ _ _ _ rest => loopsOf rest
+  | .letCall _ _ _ _ _ _ _ body _ rest => loopsOf body ++ loopsOf rest
+  | .bind _ _ _ rest | .letLifted _ _ rest | .letBorrow _ _ _ _ rest => loopsOf rest
+
+/-- The closure values that calls in a body require from their environment. -/
+def closureReads : IR.Body → List (String × IR.Expr)
+  | .value _ | .state _ | .yield .. | .done .. | .exit .. | .throw _ => []
+  | .let _ _ rest | .letArray _ _ _ rest | .letTuple _ _ rest |
+    .bind _ _ _ rest | .letLifted _ _ rest | .letBorrow _ _ _ _ rest => closureReads rest
+  | .ite _ a b | .matchNull _ _ a b | .matchTag _ _ _ _ _ a b |
+    .letState _ a b => closureReads a ++ closureReads b
+  | .fold _ _ body _ rest _ => closureReads body ++ closureReads rest
+  | .letCall _ _ name value _ _ _ body _ rest =>
+    (name, value) :: closureReads body ++ closureReads rest
 
 /-- `s`, the state of a loop with the locals `names`, as the path to one of
 them: `s`, `s.1`, `s.2.1`, and so on. -/
@@ -450,13 +461,6 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       | .function _ _ _ _ _ _ body => (stmtsOf body).any (· matches .forStmt ..)
       | _ => false then
     throw s!"{file}: a counted loop has no certificate yet"
-  -- A loop lemma cannot yet describe a captured local function.
-  if m.decls.any fun d => match d with
-      | .function _ _ _ _ _ _ body =>
-        (stmtsOf body).any (· matches .funDecl ..) &&
-        (stmtsOf body).any (fun s => s matches .forOfStmt .. | .forOfPattern ..)
-      | _ => false then
-    throw s!"{file}: a function with both local functions and loops has no certificate yet"
   -- `JSON.stringify` is opaque in the output and in the interpreter, so no
   -- proof links one to the other.
   if m.decls.any fun d => match d with
@@ -847,8 +851,15 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       if info.elem matches .list .. then
         throw s!"{file}: cannot certify a loop over arrays of arrays in {name} yet"
       let some encX := encoderOf r info.elem | throw s!"{file}: cannot encode the elements of a loop in {name}"
+      let closures := (closureReads body).foldl (init := []) fun found entry =>
+        if found.any (·.1 == entry.1) then found else found ++ [entry]
+      let closures ← closures.mapM fun (n, value) => do
+        let .ext (.closure params body) [] := value
+          | throw s!"{file}: cannot state the closure invariant for {n}"
+        pure (n, s!"{r.eval "Val.closure"} {list (params.map str)} {stmt body}")
+      let scope := info.scope
       let state := stateNames.zip info.stateTypes
-      let vars := state ++ info.scope
+      let vars := state ++ scope
       let coded ← vars.mapM fun (n, t) => do
         let (some e, some dec) := (encoderOf r t, decoderOf r t)
           | throw s!"{file}: cannot encode the variable {n} in {name}"
@@ -867,13 +878,15 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         if count == 1 then decode ρ stateNames.head! else
           "(" ++ ", ".intercalate (stateNames.map (decode ρ)) ++ ")"
       let inv (ρ : String) : String :=
-        " ∧ ".intercalate (coded.map fun (n, e, dec) =>
-          s!"{ρ}.lookup {str n} = some ({e} ({dec} ({ρ}.lookup {str n})))")
-      let scopeNames := info.scope.map (·.1)
+        " ∧ ".intercalate ((coded.map fun (n, e, dec) =>
+          s!"{ρ}.lookup {str n} = some ({e} ({dec} ({ρ}.lookup {str n})))") ++
+          closures.map fun (n, value) =>
+            s!"{ρ}.lookup {str n} = some ({value})")
+      let scopeNames := scope.map (·.1)
       let stepLines := IR.indentBy "        " (body.lines names)
       -- Every binder has its type, as in the output's loop (see `IR.foldBinders`).
       let captured := if scopeNames.isEmpty then "" else
-        s!"fun {" ".intercalate (info.scope.map fun (n, t) => s!"({n} : {t.print names})")} => "
+        s!"fun {" ".intercalate (scope.map fun (n, t) => s!"({n} : {t.print names})")} => "
       -- A loop that a `break` can end runs with `forIn`, and its step gives a
       -- `ForInStep` of the state. The type says `Id`, as `forIn` expects in the
       -- printed definition, so that the two `if`s have the same type and the
@@ -918,7 +931,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           ["tolean.TypeScript.Proof.retOutcome", "ForInStep.value"]
         else if info.breaks then ["tolean.TypeScript.Proof.stepOutcome", "ForInStep.value"] else []
       if info.returns.isSome then returnsLoop := true
-      let depth := callDepth m bodyStmt
+      let depth := if closures.isEmpty then callDepth m bodyStmt else callDepth m syntaxBody + 1
       let fuel := if depth == 0 then "fuel" else s!"(fuel + {depth})"
       -- A body with calls looks the functions up in the output, so the lemma
       -- is about the output's functions.
@@ -927,7 +940,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       let hfsName := if depth == 0 then [] else [r.cert "decls"]
       -- `List (Option Int)`, with the parentheses that an element type needs.
       let itemsTy := (tolean.IR.Ty.list info.elem).print names
-      let hypNames := (List.range coded.length).map (s!"h{·}")
+      let hypNames := (List.range (coded.length + closures.length)).map (s!"h{·}")
       -- `obtain h0 := hI` would lose the name, so one hypothesis gets a `have`.
       let bindHyps := if hypNames.length == 1 then "have h0 := hI"
         else "obtain ⟨" ++ ", ".intercalate hypNames ++ "⟩ := hI"
@@ -937,7 +950,8 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       let stateCoded := coded.take count
       let destruct := if count ≤ 1 then "" else
         s!"    obtain ⟨{", ".intercalate ((List.range count).map (s!"s{·}"))}⟩ := s\n"
-      let simpSet := ", ".intercalate (hfsName ++ stepNames ++ envLemmas ++ lemmaNames.toList ++
+      let closureLemmas := if closures.isEmpty then [] else ["tolean.TypeScript.Proof.lookup_ite"]
+      let simpSet := ", ".intercalate (hfsName ++ stepNames ++ closureLemmas ++ envLemmas ++ lemmaNames.toList ++
         loopLemmas.toList ++ defs)
       -- The values that one step sees: the element, the state, and the other
       -- locals, which the lemma generalizes to `v0`, `v1` and so on.

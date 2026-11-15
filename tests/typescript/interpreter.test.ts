@@ -206,11 +206,15 @@ function shown(x: unknown): string {
 }
 
 test('certified local functions agree with Node on random arguments', async () => {
-  const source = readFileSync(new URL('./corpus/translate/accept/localFunctionCertificate.ts', import.meta.url), 'utf8');
+  const source = ['localFunctionCertificate', 'localFunctionLoopCertificates'].map(name =>
+    readFileSync(new URL(`./corpus/translate/accept/${name}.ts`, import.meta.url), 'utf8')).join('\n');
   const inputs = fc.sample(fc.tuple(fc.bigInt(), fc.bigInt()), { seed, numRuns: 50 });
   const calls = inputs.flatMap(([start, amount]) => [
     { function: 'tally', args: [encode(start), encode(amount)] },
     { function: 'twice', args: [encode([start, amount])] },
+    { function: 'localLoopSum', args: [encode([start, amount]), encode(amount)] },
+    { function: 'localLoopUpdate', args: [encode([start, amount])] },
+    { function: 'localLoopNested', args: [encode([start, amount])] },
   ]);
   const run = spawnSync(tolean, ['interpret'], {
     input: JSON.stringify({ programs: [{ source, calls }] }), encoding: 'utf8',
@@ -228,10 +232,16 @@ test('certified local functions agree with Node on random arguments', async () =
   const mod = await import(pathToFileURL(path).href) as {
     tally: (start: bigint, amount: bigint) => bigint;
     twice: (xs: Array<bigint>) => Array<bigint>;
+    localLoopSum: (xs: Array<bigint>, fee: bigint) => bigint;
+    localLoopUpdate: (xs: Array<bigint>) => bigint;
+    localLoopNested: (xs: Array<bigint>) => bigint;
   };
   for (const [i, [start, amount]] of inputs.entries()) {
-    expect(result.results[2 * i]).toEqual({ value: encode(mod.tally(start, amount)) });
-    expect(result.results[2 * i + 1]).toEqual({ value: encode(mod.twice([start, amount])) });
+    expect(result.results[5 * i]).toEqual({ value: encode(mod.tally(start, amount)) });
+    expect(result.results[5 * i + 1]).toEqual({ value: encode(mod.twice([start, amount])) });
+    expect(result.results[5 * i + 2]).toEqual({ value: encode(mod.localLoopSum([start, amount], amount)) });
+    expect(result.results[5 * i + 3]).toEqual({ value: encode(mod.localLoopUpdate([start, amount])) });
+    expect(result.results[5 * i + 4]).toEqual({ value: encode(mod.localLoopNested([start, amount])) });
   }
 });
 

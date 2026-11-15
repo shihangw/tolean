@@ -26,6 +26,14 @@ open tolean.TypeScript.Eval (Val)
 
 variable {N : Type} [JSNumber N]
 
+omit [JSNumber N] in
+/-- Reading a name distributes over the choice of an environment. A local
+call may bind its result by updating an old slot or adding a fresh one. -/
+theorem lookup_ite (p : Prop) [Decidable p] (yes no : Eval.Env N) (name : String) :
+    (if p then yes else no).lookup name =
+      (if p then yes.lookup name else no.lookup name) := by
+  split <;> rfl
+
 /-- The translator gives `decls` for `m`, from the state `start`. The kernel
 can decide this, and a certificate does. -/
 def translatesTo (m : Module) (start : Ctx) (decls : List IR.Decl) : Bool :=

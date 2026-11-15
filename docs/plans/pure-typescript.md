@@ -242,8 +242,7 @@ leaves a gap.
 13. **P2.** Classes with `readonly` fields and methods that do not change
     `this`.
 14. **P1.** Local functions: one that returns a value and changes variables
-    of the enclosing function, calls between local functions, and
-    certificates for files that combine local functions with loops.
+    of the enclosing function, and calls between local functions.
 15. **P1.** Certificates for counted `for` loops: each counted loop adds a
     hypothesis that `countUp?` on its bound gives a value. Print the bound
     over the parameters, and refuse bounds that read anything but parameters.

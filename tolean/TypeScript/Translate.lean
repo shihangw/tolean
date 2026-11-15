@@ -3444,7 +3444,7 @@ def translateForOfPattern (items : TM (Option (Ty × IR.Expr))) (kBody : Env →
   let info : IR.LoopInfo :=
     { span := s, elem := elemType.lean,
       stateTypes := names.filterMap fun n => (env.lookup n).map (·.type.lean),
-      scope := (env.locals.filter fun l => !names.contains l.name).map fun l => (l.name, l.type.lean),
+      scope := (env.locals.filter fun l => !names.contains l.name && l.binding != .fn).map fun l => (l.name, l.type.lean),
       breaks, returns := if returns then some (leanResult err throws returnType) else none }
   return .fold names x step loopItems (← kRest) info
 
@@ -4090,7 +4090,7 @@ def translateLoop (fuel : Nat) (env : Env) (s : Span) (head : LoopHead) (body : 
   let info : IR.LoopInfo :=
     { span := s, elem := elemType.lean,
       stateTypes := names.filterMap fun n => (env.lookup n).map (·.type.lean),
-      scope := (env.locals.filter fun l => !names.contains l.name).map fun l => (l.name, l.type.lean),
+      scope := (env.locals.filter fun l => !names.contains l.name && l.binding != .fn).map fun l => (l.name, l.type.lean),
       breaks, returns := if returns then some (leanResult err throws returnType) else none }
   return .fold names element bodyOut loopItems (← translateStatements fuel env tail rest) info
 
