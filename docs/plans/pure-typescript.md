@@ -196,25 +196,38 @@ be exact:
 ## Unfinished parser work
 
 [#208](https://github.com/shihangw/tolean/issues/208) remains open. The parser
-accepts comparisons separated by a top-level `&&`, `||`, `??`, `===`,
-`!==`, `==`, `!=`, `+`, `*`, `/`, `%` or `**`, but it still
-refuses `f(a < b, c > d)`. TypeScript 6.0.3 reads two comparisons there.
-This is a known gap, not a permanent restriction, so the case is not in the
-rejection corpus. The completed rule must accept it while still refusing
-`f(a < b, c > (d))` and `f < A, B > (x)`, which TypeScript reads with type
-arguments.
+The merged [#217](https://github.com/shihangw/tolean/pull/217) delivered the
+bounded comparison rule. It accepts comparisons when a top-level `&&`, `||`,
+`??`, `===`, `!==`, `==`, `!=`, `+`, `*`, `/`, `%` or `**` rules out a type
+list before a closing `>`. The scan keeps going inside brackets, because a
+type literal can contain a computed property name. It also keeps going at
+`-`, `&`, `|`, `.`, `!` and `?`, because types can contain them. The
+conservative treatment of `>>`, `>=`, `<<` and `<=` remains unchanged because
+TypeScript rescans `>` while it closes type arguments. The unrelated merged
+[#230](https://github.com/shihangw/tolean/pull/230) fixes WebAssembly list
+termination and does not change this parser rule.
 
-The remaining work is a speculative type-list parse followed by TypeScript's
-follow-token test. Before the parser can use that probe, the relation between
-source tokens and printed tokens must preserve the identifiers, contextual
-syntax and line-break information that the probe needs. The round-trip proof
-must then show that printing cannot turn a comparison into type arguments.
-These tokens stop the scan only outside brackets. The scan does not stop at
-`-`, `&`, `|`, `.`, `!` or `?`, because types can contain them. The operators
-`>>`, `>=`, `<<` and `<=` need a separate argument because TypeScript rescans
-`>` when it closes type arguments.
-The current operator rule is a sound first stage, not a substitute
-for that structural fix.
+Open [PR #242](https://github.com/shihangw/tolean/pull/242) prepares the
+proof interface for a later ambiguity check; it does not change which source
+expressions the parser accepts. Its token observations retain token kinds
+(including identifier text), preceding line breaks and adjacency across
+fragment boundaries. Its prefix and suffix relations let a future probe be
+reasoned about in surrounding token contexts and across printed suffixes.
+The current parser still scans token kinds and still refuses
+`f(a < b, c > d)`.
+
+The remaining task is to parse a possible comma-separated type list
+speculatively, then apply TypeScript 6.0.3's follow-token test. In
+`f(a < b, c > d)`, `b, c` can parse as types, but the following `d` can start
+an expression, so TypeScript reads two comparisons. In
+`f(a < b, c > (d))`, the parenthesis can instead follow type arguments, so
+TypeScript reads a call with type arguments; `f < A, B > (x)` is the same
+kind of ambiguity. The future check must use the token adjacency and
+line-break information that its rules inspect, and the round-trip proof must
+show that printing preserves the probe's decision. Until that work is done,
+the parser should keep refusing the type-argument cases and any form whose
+reading it cannot establish. Extending the operator stop set alone does not
+complete #208.
 
 ## Steps
 
@@ -326,13 +339,14 @@ a descendant does not mean that the earlier pull request already contains it.
   the shared step preserves their normalization order.
 
 - **Complete the structural type-argument ambiguity check.**
-  The [design summary on #217](https://github.com/shihangw/tolean/pull/217#issuecomment-6887789375)
-  validates the bounded operator stop set, not a complete ambiguity
-  algorithm. Retain its bracket-depth rule and pinned-TypeScript controls.
-  The remaining plan on that branch calls for a speculative type-list
-  parse and follow-token test, with enough identifier, contextual-token
-  and line-break information in the round-trip relation. This remains
-  separate work; extending the stop set alone does not finish it.
+  The merged [#217](https://github.com/shihangw/tolean/pull/217) validates
+  the bounded operator stop set, not a complete ambiguity algorithm. Open
+  [#242](https://github.com/shihangw/tolean/pull/242) supplies observations
+  and prefix proofs for a later probe, but does not implement that probe.
+  Retain #217's bracket-depth rule and pinned-TypeScript controls. The
+  remaining work is the speculative type-list parse, TypeScript's
+  follow-token test, and a round-trip proof that preserves the identifiers,
+  contextual tokens, adjacency and line breaks those checks use.
 
 ## Open questions
 
