@@ -61,6 +61,7 @@ def numberOK (T : Edition) (k : TokenKind) : Bool :=
 /-- A token that the lexer reads back as itself, for the target `T`, when a space or a line break follows
 its text. An identifier is a name that is not a reserved word, and a keyword is a reserved word. -/
 def TokenKind.ok (T : Edition) : TokenKind → Bool
+  | .regexp source target => target == T && RegExp.bodyOK T source
   | .ident n => identName n && !Lex.reservedWords.contains n
   | .keyword n => Lex.reservedWords.contains n
   | .punct p => Lex.punctuators.contains p
@@ -1240,7 +1241,7 @@ theorem punct_second : ∀ p ∈ punctuators, p.toList ≠ [] ∧ p.toList[1]?.a
 theorem lexKind_punct (start : Pos) {p : String} (hp : p ∈ punctuators) {b : Char}
     (hb : b = ' ' ∨ b = '\n') {more : List Char} {s : LexState} (hs : s.rest = p.toList ++ b :: more) :
     ∃ c, p.toList.head? = some c ∧ lexKind start c s = .ok (.punct p) (skipped s p.toList.length) := by
-  obtain ⟨hne, h1, _⟩ := punct_second p hp
+  obtain ⟨hne, h1, hSlash⟩ := punct_second p hp
   obtain ⟨c, cs, hcs⟩ : ∃ c cs, p.toList = c :: cs := by
     cases h : p.toList with | nil => exact absurd h hne | cons c cs => exact ⟨c, cs, rfl⟩
   obtain ⟨hi, hd, hq1, hq2, hbt, hlow, _⟩ := punct_start p hp c (by simp [hcs])
@@ -1253,6 +1254,19 @@ theorem lexKind_punct (start : Pos) {p : String} (hp : p ∈ punctuators) {b : C
   unfold lexKind
   rw [if_neg (by simp [hi]), bind_eq (peekChar_eq 1 s), if_neg (by simp [hd, hsec]),
     if_neg (by simp [hq1, hq2]), if_neg (by simpa using hbt), if_neg (by omega)]
+  rw [bind_eq (get_eq s)]
+  have noRegex : (c == '/' && startsWith s.rest "/(?:".toList) = false := by
+    by_cases hc : c = '/'
+    · have hn := hSlash (by simp [hcs, hc])
+      cases cs with
+      | nil => rcases hb with rfl | rfl <;> simp [hc, hs, hcs, startsWith]
+      | cons d ds =>
+        simp only [hcs, List.getElem?_cons_succ, List.getElem?_cons_zero,
+          reduceCtorEq, false_or, Option.some.injEq] at hn
+        subst d
+        simp [hc, hs, hcs, startsWith]
+    · simp [hc]
+  rw [if_neg (by rw [noRegex]; decide)]
   rw [lexPunct_eq start hp hb hs, String.length_toList]
 
 /-- The lexer reads `>` alone, whatever follows it. -/
@@ -1375,6 +1389,76 @@ theorem lexKind_number (start : Pos) {T : Edition} {k : TokenKind} (hk : numberO
 
 theorem reserved_identName : ∀ w ∈ reservedWords, identName w = true := by decide
 
+theorem lexRegExp_word (start : Pos) {T : Edition} {source : String}
+    (hOK : RegExp.bodyOK T source = true) {b : Char} (hb : b = ' ' ∨ b = '\n')
+    {more : List Char} {s : LexState}
+    (hs : s.rest = '/' :: (source.toList ++ '/' :: b :: more)) (hT : s.target = T) :
+    lexRegExp start s =
+      .ok (.regexp source T)
+        { s with rest := b :: more, i := s.i + (source.length + 2), col := s.col + (source.length + 2) } := by
+  have hp := RegExp.validateBody_ok.mpr hOK
+  have hr := RegExp.bodyOK_read hOK (b :: more)
+  have hflags : isIdentPart b = false ∧ b ≠ '\\' := by
+    rcases hb with rfl | rfl <;> decide
+  have htail : s.rest.tail = source.toList ++ '/' :: b :: more := by simp [hs]
+  simp [lexRegExp, bind, EStateM.bind, get, getThe, MonadStateOf.get, EStateM.get,
+    htail, hr, pure, EStateM.pure, hflags.1, hflags.2, hT, hp,
+    modify, modifyGet, MonadStateOf.modifyGet, EStateM.modifyGet]
+
+theorem lexRegExp_result {start : Pos} {s s' : LexState} {k : TokenKind}
+    (h : lexRegExp start s = .ok k s') :
+    ∃ body rest, RegExp.readBody false false [] s.rest.tail = .ok (body, rest) ∧
+      RegExp.bodyOK s.target (String.ofList body) = true ∧
+      k = .regexp (String.ofList body) s.target ∧
+      s' = { s with rest, i := s.i + (s.rest.length - rest.length), col := s.col + (s.rest.length - rest.length) } := by
+  unfold lexRegExp at h
+  rw [bind_eq (get_eq s)] at h
+  cases hr : RegExp.readBody false false [] s.rest.tail with
+  | error message =>
+    simp [hr, failFrom, here, bind, EStateM.bind, get, getThe, MonadStateOf.get,
+      EStateM.get, throw, throwThe, MonadExceptOf.throw, EStateM.throw, pure, EStateM.pure] at h
+  | ok result =>
+    rcases result with ⟨body, rest⟩
+    simp only [hr, pure, EStateM.pure, bind, EStateM.bind] at h
+    split at h
+    · simp [failFrom, here, bind, EStateM.bind, get, getThe, MonadStateOf.get,
+        EStateM.get, throw, throwThe, MonadExceptOf.throw, EStateM.throw, pure, EStateM.pure] at h
+    · simp only [EStateM.pure, EStateM.bind] at h
+      cases hp : RegExp.validateBody s.target (String.ofList body) with
+      | error message =>
+        simp [hp, failFrom, here, bind, EStateM.bind, get, getThe, MonadStateOf.get,
+          EStateM.get, throw, throwThe, MonadExceptOf.throw, EStateM.throw, pure, EStateM.pure] at h
+      | ok result =>
+        cases result
+        rw [hp] at h
+        simp only [EStateM.pure, EStateM.bind, modify, modifyGet,
+          MonadStateOf.modifyGet, EStateM.modifyGet, EStateM.Result.ok.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        exact ⟨body, rest, rfl, RegExp.validateBody_ok.mp hp, rfl,
+          by rw [RegExp.readBody_length hr]⟩
+
+theorem lexKind_regexp_word (start : Pos) {T : Edition} {source : String}
+    (hOK : RegExp.bodyOK T source = true) {b : Char} (hb : b = ' ' ∨ b = '\n')
+    {more : List Char} {s : LexState}
+    (hs : s.rest = '/' :: (source.toList ++ '/' :: b :: more)) (hT : s.target = T) :
+    lexKind start '/' s =
+      .ok (.regexp source T)
+        { s with rest := b :: more, i := s.i + (source.length + 2), col := s.col + (source.length + 2) } := by
+  obtain ⟨tail, hprefix⟩ := RegExp.bodyOK_prefix hOK
+  have hc : startsWith s.rest "/(?:".toList = true := by
+    simp [hs, hprefix, startsWith]
+  unfold lexKind
+  rw [if_neg (by decide), bind_eq (peekChar_eq 1 s)]
+  rw [if_neg (by simp), if_neg (by decide), if_neg (by decide), if_neg (by decide)]
+  rw [bind_eq (get_eq s), if_pos (by simpa using hc)]
+  exact lexRegExp_word start hOK hb hs hT
+
+theorem regexpWord_drop {source : String} {b : Char} {more : List Char} {s : LexState}
+    (hs : s.rest = '/' :: (source.toList ++ '/' :: b :: more)) :
+    s.rest.drop (source.length + 2) = b :: more := by
+  rw [hs]
+  simp [List.drop_append]
+
 /-- The lexer reads the text of a printable token `k`, followed by a space or a line break, as `k`. -/
 theorem lexKind_text (start : Pos) {T : Edition} {k : TokenKind} (hk : k.ok T = true) {b : Char}
     (hb : b = ' ' ∨ b = '\n') {more : List Char} {s : LexState} (hs : s.rest = k.text.toList ++ b :: more)
@@ -1396,6 +1480,18 @@ theorem lexKind_text (start : Pos) {T : Edition} {k : TokenKind} (hk : k.ok T = 
     exact lexKind_punct start (by simpa using hk) hb hs
   | string v =>
     refine ⟨'"', by simp [TokenKind.text, quote_toList], lexKind_string start v hs hf⟩
+  | regexp source target =>
+    simp only [TokenKind.ok, Bool.and_eq_true, beq_iff_eq] at hk
+    have hOK := hk.2
+    have heq := hk.1
+    subst target
+    have hsrc : s.rest = '/' :: (source.toList ++ '/' :: b :: more) := by
+      simpa [TokenKind.text] using hs
+    refine ⟨'/', by simp [TokenKind.text], ?_⟩
+    have hl : (TokenKind.regexp source T).text.toList.length = source.length + 2 := by
+      simp [TokenKind.text]
+    rw [hl]
+    simpa only [skipped, regexpWord_drop hsrc] using lexKind_regexp_word start hOK hb hsrc hT
   | number t => exact lexKind_number start hk hb hs hf hT
   | bigint t => exact lexKind_number start hk hb hs hf hT
   | eof => simp [TokenKind.ok] at hk
@@ -1416,6 +1512,10 @@ theorem noTrivia_text {T : Edition} {k : TokenKind} (hk : k.ok T = true) {b : Ch
     obtain ⟨h1, h2, h3⟩ := not_trivia (P := isIdentStart) (by decide) hc
     exact ⟨h1, h2, fun h => absurd h h3⟩
   cases k with
+  | regexp source target =>
+    simp only [TokenKind.ok, Bool.and_eq_true] at hk
+    obtain ⟨tail, hp⟩ := RegExp.bodyOK_prefix hk.2
+    simp [TokenKind.text, hp, NoTrivia, isSpace, isLineBreak]
   | ident n =>
     simp only [TokenKind.ok, Bool.and_eq_true] at hk
     exact name n hk.1
@@ -1839,6 +1939,17 @@ theorem lexPunct_ok {start : Pos} {s s' : LexState} {k : TokenKind} (hf : Fits s
          exact ⟨by simp only [TokenKind.ok]; decide, kept_skipped hf _⟩)
 
 /-- Every token that `lexKind` gives is printable. -/
+theorem lexRegExp_ok {start : Pos} {s s' : LexState} {k : TokenKind}
+    (h : lexRegExp start s = .ok k s') : k.ok s.target = true ∧ Kept s s' := by
+  obtain ⟨body, rest, hr, hOK, rfl, rfl⟩ := lexRegExp_result h
+  refine ⟨by simpa [TokenKind.ok] using hOK, rfl, rfl, rfl, ?_⟩
+  intro hf
+  obtain ⟨consumed, hchars, _, _⟩ := RegExp.readBody_frame _ _ _ _ _ _ hr
+  have hlength := congrArg List.length hchars
+  simp only [List.length_tail, List.length_append, List.length_cons] at hlength
+  simp only [Fits] at hf ⊢
+  omega
+
 theorem lexKind_ok {start : Pos} {c : Char} {s s' : LexState} {k : TokenKind}
     (hc : s.rest[0]? = some c) (hf : Fits s) (h : lexKind start c s = .ok k s') : k.ok s.target = true ∧ Kept s s' := by
   have hfuel : s.rest.length < s.size - s.i + 1 := by unfold Fits at hf; omega
@@ -1923,7 +2034,10 @@ theorem lexKind_ok {start : Pos} {c : Char} {s s' : LexState} {k : TokenKind}
         · exact absurd (okOf_eq_some.mpr h) (by simp)
         · split at h
           · exact absurd (okOf_eq_some.mpr h) (by simp)
-          · exact lexPunct_ok hf h
+          · rw [bind_eq (get_eq s)] at h
+            split at h
+            · exact lexRegExp_ok h
+            · exact lexPunct_ok hf h
 
 /-- Every run of `lexAll` adds printable tokens and then the end of the file. -/
 theorem lexAll_ok : ∀ (f : Nat) (s s' : LexState), lexAll f s = .ok () s' → Fits s →
