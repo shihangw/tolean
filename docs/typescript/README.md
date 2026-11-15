@@ -963,6 +963,44 @@ form what the translator refuses. To see what that does and does not guarantee,
 read [What is proved and what is
 trusted](#what-is-proved-and-what-is-trusted).
 
+### Map borrows
+
+A function may change one Map that its caller owns. The function must be
+declared earlier in the same file, have a `void` return type, and contain
+only `set` and `delete` statements. Their arguments must be identifiers or
+literal numbers, bigints, strings or booleans. The function reaches the end
+of its body without an explicit `return`.
+
+```ts
+function change(m: Map<bigint, bigint>, x: bigint): void {
+  m.set(1n, x);
+  m.delete(2n);
+}
+
+export function f(x: bigint): bigint {
+  const m = new Map<bigint, bigint>([[2n, 9n]]);
+  change(m, x);
+  return m.get(1n) ?? 0n;
+}
+```
+
+The Lean function `change` returns the changed map. Its caller writes
+`let m := change m x`, so later reads use that map. The interpreter gives
+the call the same meaning: it copies the argument into the parameter and
+copies the final parameter binding back. `program_sound` covers this
+translation.
+
+The caller may not keep another name or a field that holds the map, or pass
+the same map in another argument. The call must be a statement, and its
+other arguments must be atomic values. A read-only Map parameter does not
+become a borrow.
+
+Explicit returns, several Map parameters, returned values, branches,
+loops, imported borrows and forwarding a borrowed map remain refused.
+Optional parameters and generic borrowing functions remain refused too.
+The certifier also refuses borrowing functions: its link proof does not
+yet describe the final map as the function's result.
+
 ## Numbers
 
 A JS `number` is an IEEE-754 double. Tolean does not map it to Lean's

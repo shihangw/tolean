@@ -131,13 +131,14 @@ sets the restrictions for those later operations.
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| A function that changes a map that its caller passes in | A function that returns the new map. The caller takes the result in place of the old map. | A call where the caller keeps another name for the same map |
+| A map borrow with an explicit return, several changed maps, an ordinary returned value, control flow, an imported callee, or a callee that forwards its borrowed map | A function that returns the changed maps, with its ordinary result when there is one. The caller binds the changed maps again. | A call where the caller keeps another name for the same map |
 
-This is the borrow that Aeneas uses for Rust. It is sound here only
-because the translator checks that the caller owns the map and holds no other
-name for it during the call. The spec's call rule now gives no value for a
-function that changes a parameter (`Stmt.ownsChanges`), so the borrow must
-also give the spec this meaning: the call copies the map in and back out.
+The translator now accepts one changed Map parameter in a void function
+whose body contains only straight-line set and delete statements with atomic
+arguments. The call copies the map in and back out, and `program_sound`
+covers that call rule. The [TypeScript guide](../typescript/README.md#map-borrows)
+describes this case. The remaining cases need a wider call result, including
+the final parameter bindings when the callee returns or throws.
 
 One certificate gap is left. The initial value of a `reduce` can read a map
 or a set that `new Map(items)` or `new Set(items)` makes from a parameter,
@@ -227,7 +228,8 @@ leaves a gap.
 2. **P0.** Types and narrowing: `T | undefined` as a type, a test of
    `undefined` that narrows inside an expression, `a?.[i]` and `f?.()`, and
    re-exports.
-8. **P0.** The borrow for a map that a caller passes in.
+8. **P0.** Widen map borrows to explicit returns, several changed maps, an
+   ordinary returned value, control flow, imported callees and forwarding.
 10. **P1.** Sorting: certificates for a sort by a `number` key.
 11. **P2.** Recursion: tagged unions that refer to themselves first, then
     `@decreases`, mutual recursion, and `while` loops.
@@ -366,10 +368,10 @@ a reason to choose otherwise.
 
 - The map-borrow question is settled by the
   [decision to pass changed maps back](../decisions/2026-11-14-map-borrows.md).
-  The result carries a tuple when the callee changes several maps or also
-  returns a value. `ReadonlyMap` stays plain. Step 8 remains open because
-  the interpreter and the IR still need a call result that preserves the
-  final parameter bindings, including on a return.
+  A single map now passes back on normal completion. The remaining tuple
+  result must carry several maps or an ordinary result as well.
+  `ReadonlyMap` stays plain. Step 8 remains open because a return still
+  needs to preserve the final parameter bindings.
 
 - Should a comparator that is not one of the two shapes be accepted when the
   project supplies a proof that it is consistent?
