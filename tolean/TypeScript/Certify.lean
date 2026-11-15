@@ -365,6 +365,34 @@ def returnedSortInput : IR.Body → Option (List (String × IR.Expr) × IR.Expr)
     return ((name, value) :: bindings, items)
   | _ => none
 
+mutual
+/-- Calls outside callback bodies. A source-call count below checks that no
+call which needs a condition was hidden in a callback or another scope. -/
+def conditionCalls (callee : String) : IR.Expr → List (List IR.Expr)
+  | .call ref args => (if ref.name == callee then [args] else []) ++ conditionCallsList callee args
+  | .listMethod _ items _ _ _ _ => conditionCalls callee items
+  | .listFold items init _ _ _ _ _ => conditionCalls callee items ++ conditionCalls callee init
+  | .field e _ _ | .proj e _ _ | .ascribe e _ | .decide e | .not e | .neg e
+  | .isNone e | .isSome e | .propNot e | .inject _ _ e | .push _ e | .update _ _ e =>
+    conditionCalls callee e
+  | .ite a b c => conditionCalls callee a ++ conditionCalls callee b ++ conditionCalls callee c
+  | .intOp _ a b | .order _ a b | .division _ a b | .eq a b | .ne a b
+  | .propAnd a b | .propOr a b | .and a b | .or a b | .coalesce a b _ =>
+    conditionCalls callee a ++ conditionCalls callee b
+  | .ext _ es | .list es _ | .tuple es => conditionCallsList callee es
+  | _ => []
+
+def conditionCallsList (callee : String) : List IR.Expr → List (List IR.Expr)
+  | [] => []
+  | e :: es => conditionCalls callee e ++ conditionCallsList callee es
+end
+
+def bodyConditionCalls (callee : String) : IR.Body → List (List IR.Expr)
+  | .value e | .exit e _ => conditionCalls callee e
+  | .let _ e rest | .letTuple _ e rest => conditionCalls callee e ++ bodyConditionCalls callee rest
+  | .ite c a b => conditionCalls callee c ++ bodyConditionCalls callee a ++ bodyConditionCalls callee b
+  | _ => []
+
 /-- The body of the `for…of` statement at `span`. -/
 def loopBody (s : Stmt) (span : Span) : Option Stmt :=
   (stmtsOf s).findSome? fun
@@ -1106,30 +1134,31 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     for callee in ((stmtsOf syntaxBody).flatMap stmtCalls).eraseDups do
       let (formals, conditions) := (functionConditions.lookup callee).getD ([], [])
       if conditions.isEmpty then continue
-      let .value (.call ref actuals) := outBody
-        | throw s!"{file}: a call with number-sort preconditions must be returned directly in {name}"
-      unless ref.name == callee do
-        throw s!"{file}: a call with number-sort preconditions must be returned directly in {name}"
-      unless actuals.length == formals.length do
-        throw s!"{file}: missing argument for the sort precondition in {name}"
-      unless (actuals.zip formals).all (fun (e, _, ty) =>
-          (exprNames e).all (fun n => outParams.any (fun (p, _) => p == n)) &&
-          (!(ty matches .list _) || (sortInputShape e && !(exprNames e).isEmpty))) do
-        throw s!"{file}: a sort precondition needs arguments reachable from parameters in {name}"
-      for (_, ty) in formals do
-        let .list elem := ty | continue
-        let some enc := encoderOf r elem | continue
-        literalMaps := literalMaps ++ [s!"← List.map_singleton (f := {enc})",
-          s!"← List.map_cons (f := {enc})"]
-      for condition in conditions do
-        let hname := s!"{name}_sort_precondition{obligations.length}"
-        if r.idents.contains hname then
-          throw s!"{file}: reserved certificate hypothesis name {hname}"
-        let binders := " ".intercalate (formals.map fun (p, t) => s!"({p} : {t.print names})")
-        let arguments := " ".intercalate (actuals.map fun e => s!"({e.print names})")
-        let applied := s!"((fun {binders} => {condition}) {arguments})"
-        obligations := obligations ++ [(hname, applied)]
-        inputConditions := inputConditions ++ [applied]
+      let calls := bodyConditionCalls callee outBody
+      let sourceCount := (((stmtsOf syntaxBody).flatMap stmtCalls).filter (· == callee)).length
+      unless calls.length == sourceCount do
+        throw s!"{file}: a call with number-sort preconditions inside a callback or unsupported scope in {name}"
+      for actuals in calls do
+        unless actuals.length == formals.length do
+          throw s!"{file}: missing argument for the sort precondition in {name}"
+        unless (actuals.zip formals).all (fun (e, _, ty) =>
+            (exprNames e).all (fun n => outParams.any (fun (p, _) => p == n)) &&
+            (!(ty matches .list _) || (sortInputShape e && !(exprNames e).isEmpty))) do
+          throw s!"{file}: a sort precondition needs arguments reachable from parameters in {name}"
+        for (_, ty) in formals do
+          let .list elem := ty | continue
+          let some enc := encoderOf r elem | continue
+          literalMaps := literalMaps ++ [s!"← List.map_singleton (f := {enc})",
+            s!"← List.map_cons (f := {enc})"]
+        for condition in conditions do
+          let hname := s!"{name}_sort_precondition{obligations.length}"
+          if r.idents.contains hname then
+            throw s!"{file}: reserved certificate hypothesis name {hname}"
+          let binders := " ".intercalate (formals.map fun (p, t) => s!"({p} : {t.print names})")
+          let arguments := " ".intercalate (actuals.map fun e => s!"({e.print names})")
+          let applied := s!"((fun {binders} => {condition}) {arguments})"
+          obligations := obligations ++ [(hname, applied)]
+          inputConditions := inputConditions ++ [applied]
     functionConditions := (name, (outParams, inputConditions)) :: functionConditions
     -- The encoders follow the types of the output, which the translator has
     -- already worked out from the source's types.

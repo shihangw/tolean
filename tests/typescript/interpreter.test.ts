@@ -560,6 +560,21 @@ test('number-sort preconditions pass through forwarding calls', () => {
   }
 });
 
+test('number-sort calls compose with a conditional and a map', () => {
+  const source = 'function sorted(xs: ReadonlyArray<number>): number[] { return xs.toSorted((a, b) => a - b); }\n' +
+    'export function f(xs: ReadonlyArray<number>, flag: boolean): number[] { const ys = flag ? sorted(xs) : xs; return ys.map(x => x + 1); }';
+  const xs = [3, -0, 1, 1];
+  const input = { programs: [{ source, calls: [false, true].map(flag =>
+    ({ function: 'f', args: [xs.map(encode), encode(flag)] })) }] };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const [lean] = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  expect(lean?.parsed).toBe(true);
+  if (lean === undefined || !lean.parsed) return;
+  expect(lean.results).toEqual([false, true].map(flag =>
+    ({ value: (flag ? xs.toSorted((a, b) => a - b) : xs).map(x => encode(x + 1)) })));
+});
+
 test('number sorts read local concatenations with literal elements', () => {
   const source = 'export function f(xs: ReadonlyArray<number>, ys: ReadonlyArray<number>): number[] { const first = xs; const both = [...first, ...ys, 0, 1]; return both.toSorted((a, b) => a - b); }';
   const pairs = [[[], []], [[2, -0], [0, 1]],
