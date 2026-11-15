@@ -855,10 +855,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         let .ext (.closure params body) [] := value
           | throw s!"{file}: cannot state the closure invariant for {n}"
         pure (n, s!"{r.eval "Val.closure"} {list (params.map str)} {stmt body}")
-      let localNames := (stmtsOf syntaxBody).filterMap fun
-        | .funDecl _ n .. => some n
-        | _ => none
-      let scope := info.scope.filter fun (n, _) => !localNames.contains n
+      let scope := info.scope
       let state := stateNames.zip info.stateTypes
       let vars := state ++ scope
       let coded ← vars.mapM fun (n, t) => do
