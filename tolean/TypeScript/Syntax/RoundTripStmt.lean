@@ -559,6 +559,7 @@ theorem Expr.firstWord : ∀ e : Expr, ∃ w ws, e.words = w :: ws ∧ w ≠ []
   | .number _ t => ⟨_, _, by simp only [Expr.words]; exact rfl, by simp⟩
   | .bigint _ t => ⟨_, _, by simp only [Expr.words]; exact rfl, by simp⟩
   | .string _ v => ⟨_, _, by simp only [Expr.words]; exact rfl, by simp⟩
+  | .regexp _ v target => ⟨_, _, by simp only [Expr.words]; exact rfl, by simp⟩
   | .bool _ b => ⟨_, _, by simp only [Expr.words]; exact rfl, by simp [keywordWord]⟩
   | .null _ => ⟨_, _, by simp only [Expr.words]; exact rfl, by simp [keywordWord]⟩
   | .array _ es => ⟨_, _, by simp only [Expr.words, enclose]; exact rfl, by simp [punctWord]⟩
@@ -2195,6 +2196,7 @@ theorem Parse.unlessPunct_none {α : Type} {stop : String} {p : ParseM α} {s : 
 mutual
 
 theorem Expr.inFree_erase : ∀ e : Expr, e.erase.inFree = e.inFree
+  | .regexp .. => rfl
   | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .object .. | .paren ..
   | .new .. => rfl
   | .array _ es => by simp only [Expr.erase, Expr.inFree]; exact Expr.inFreeList_eraseAll es
@@ -2416,6 +2418,7 @@ theorem stmt_counted {T : Edition} {fn loop : Bool} (f : Nat) (sp : Span) (init 
 mutual
 
 theorem Expr.lessFree_erase : ∀ e : Expr, e.erase.lessFree = e.lessFree
+  | .regexp .. => rfl
   | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => rfl
   | .array _ es => by simp only [Expr.erase, Expr.lessFree]; exact Expr.lessFreeList_eraseAll es
   | .object _ ps => by simp only [Expr.erase, Expr.lessFree]; exact Property.lessFreeList_eraseAll ps
@@ -2463,6 +2466,7 @@ mutual
 only on the first token after it. -/
 theorem Expr.afterOK_head : ∀ (e : Expr) {a b : List TokenKind}, e.lessFree = true → a.head? = b.head? →
     e.afterOK a = e.afterOK b
+  | .regexp .., _, _, _, _ => rfl
   | .binary _ op l r, a, b, hf, h => by
     simp only [Expr.lessFree, Bool.and_eq_true, bne_iff_ne, ne_eq] at hf
     obtain ⟨⟨⟨h1, h2⟩, hl⟩, hr⟩ := hf
