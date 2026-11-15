@@ -2596,10 +2596,15 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
       | .optional (.array t) | .nullable (.array t) => some t
       | _ => none) s "optional indexing requires a nullable or optional array"
     if elem.isMaybe then reject s "an index of an array of nullable values could give null or undefined"
-    let .number _ text := key | reject key.span "optional indexing currently requires a number literal"
-    let k ← orReject (safeIntegerValue? text) key.span "a number literal must be a safe integer"
-    unless 0 ≤ k do reject key.span "an index must not be negative"
-    return ⟨.ascribe (.ext (.optIndexLit k.toNat) [o.value]) (Ty.optional elem).lean, false, .optional elem⟩
+    match key with
+    | .number _ text =>
+      let k ← orReject (safeIntegerValue? text) key.span "a number literal must be a safe integer"
+      unless 0 ≤ k do reject key.span "an index must not be negative"
+      return ⟨.ascribe (.ext (.optIndexLit k.toNat) [o.value]) (Ty.optional elem).lean, false, .optional elem⟩
+    | _ =>
+      let i ← translateExpr fuel env none key
+      unless i.type == .number do reject key.span "the index of an array must be a number"
+      return ⟨.ext .optIndexNumber [o.value, i.value], false, .optional elem⟩
   | .index s obj key =>
     let o ← translateExpr fuel env none obj
     match o.type.tupleElems? with

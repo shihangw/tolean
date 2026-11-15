@@ -4896,7 +4896,37 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
               case undefined => simpa [hx, IR.ExprExt.apply] using hv
               all_goals simp [hx, IR.ExprExt.apply] at hv
           · simp at h
-        · simp at h
+        · rename_i hnot
+          have hnt : Eval.numberText? key = none := by
+            cases key <;> simp [Eval.numberText?] at hnot ⊢
+          simp only [bind_ok] at h
+          obtain ⟨i, s₂, hi, h⟩ := h
+          simp only [ite_state] at h
+          split at h
+          · simp only [pure_ok] at h
+            obtain ⟨rfl, _⟩ := h
+            intro ρs ρo v ha hs hv
+            simp only [IR.Expr.eval, IR.Expr.evalList] at hv
+            cases hx : IR.Expr.eval fs fuel ρo o.value with
+            | none => simp [hx] at hv
+            | some w =>
+              cases hy : IR.Expr.eval fs fuel ρo i.value with
+              | none => simp [hx, hy] at hv
+              | some j =>
+                have hobj := ihE _ _ _ _ _ _ ho ρs ρo w ha hs
+                  (by rw [← eval_value]; exact hx)
+                have hkey := ihE _ _ _ _ _ _ hi ρs ρo j ha hs
+                  (by rw [← eval_value]; exact hy)
+                rw [Eval.eval.eq_def]
+                simp only [hobj, Option.bind_eq_bind, Option.bind_some]
+                cases w
+                case null => simpa [hx, hy, IR.ExprExt.apply] using hv
+                case undefined => simpa [hx, hy, IR.ExprExt.apply] using hv
+                case list items =>
+                  cases j <;> simp [hx, hy, IR.ExprExt.apply] at hv
+                  simp [Eval.optionalIndexValue, hnt, hkey, hv]
+                all_goals simp [hx, hy, IR.ExprExt.apply] at hv
+          · simp at h
       | index sp obj key =>
         simp only [translateExprCore, bind_ok] at h
         obtain ⟨o, s₁, ho, h⟩ := h
