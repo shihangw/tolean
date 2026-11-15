@@ -75,7 +75,11 @@ ways. When that happens, the parser refuses the code instead of choosing one
 reading. There are three such cases:
 
 - `f < A, B > (x)`. `tsc` reads type arguments, but JavaScript reads two
-  comparisons.
+  comparisons. The parser accepts `a < b && c > d` and `x < n && n > 0`,
+  because a top-level `&&` or `||` before the closing `>` cannot occur in
+  a list of types. It keeps refusing tokens that it cannot rule out this
+  way. For example, `f(a < b, c > d)` still needs parentheses, although
+  TypeScript 6.0.3's follow-token check reads it as two comparisons.
 - `(a)` followed by `{`. `tsc` reads an arrow function that is missing its
   `=>`, but JavaScript reads `(a); {`.
 - `(a)`, then a line break, then `=>`. `tsc` reads an arrow function, but

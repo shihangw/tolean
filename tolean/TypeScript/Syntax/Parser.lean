@@ -11,8 +11,8 @@ a reason. Where `tsc` and JavaScript could read the same tokens two ways, it
 refuses the code instead of choosing one:
 
 - `f < A, B > (x)`: `tsc` reads type arguments, JavaScript reads comparisons.
-  The parser refuses a `<` operator that a `>` follows before the end of its
-  group or statement.
+  The parser refuses a `<` operator when a `>` follows before the end of its
+  group or statement, unless a top-level `&&` or `||` rules out types first.
 - `(a)` or `async(a)`, then `{`: `tsc` reads an arrow function that lacks its
   `=>`, JavaScript reads `(a); {`. The parser refuses the `{` there, and a
   `:` after `async(a)`, which `tsc` reads as a return type.
@@ -301,8 +301,10 @@ def peekAssignOp : ParseM (Option (AssignOp × Nat)) := do
 
 /-- A `>` comes in `tokens` before the end of the group or the statement
 that they start in, `depth` brackets in: before a `)`, `]` or `}` that closes
-that group, a `;` outside every bracket, or the end of the file. The
-recursion is structural, so that a proof can state what the scan finds. -/
+that group, a `;` outside every bracket, or the end of the file. A top-level
+`&&` or `||` ends the scan too, because neither can occur in a type argument
+list in TypeScript 6.0.3. Inside brackets they may occur in the computed
+property name of a type literal, so the scan keeps going there. -/
 def closesTypeArguments (depth : Nat) : List Token → Bool
   | [] => false
   | t :: rest =>
@@ -312,15 +314,19 @@ def closesTypeArguments (depth : Nat) : List Token → Bool
     | .punct ")" | .punct "]" | .punct "}" =>
       if depth == 0 then false else closesTypeArguments (depth - 1) rest
     | .punct ";" => if depth == 0 then false else closesTypeArguments depth rest
+    | .punct "&&" | .punct "||" =>
+      if depth == 0 then false else closesTypeArguments depth rest
     | .punct ">" => true
     | _ => closesTypeArguments depth rest
 
 /-- `tsc` reads `f < A, B > (x)` as a call with type arguments, where
 JavaScript reads two comparisons, and type stripping keeps `tsc`'s reading.
-Tolean does not parse type arguments in expressions, so it refuses every `<`
-operator that `tsc` could read as their start: any `<` followed by a `>`
-before the end of its group or statement. This refuses some plain
-comparisons, such as `a < b && c > d`; parentheses make them parse. -/
+Tolean does not translate type arguments in expressions. It refuses a `<`
+or `<<` that a later `>` could close, unless a top-level `&&` or `||`
+first rules out a list of types. Thus `a < b && c > d` parses, independently
+of what follows `>`. The check stays conservative: `f(a < b, c > d)` still
+needs parentheses, although TypeScript 6.0.3's follow-token check rules out
+type arguments there. -/
 def refuseTypeArgumentLookalike (lt : Token) : ParseM Unit := do
   if closesTypeArguments 0 ((← get).rest.drop 1) then
     failAt lt ("tsc may read this '<' as the start of type arguments; " ++
