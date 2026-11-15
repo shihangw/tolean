@@ -205,6 +205,98 @@ function shown(x: unknown): string {
   }
 }
 
+test('certified local functions agree with Node on random arguments', async () => {
+  const source = ['localFunctionCertificate', 'localFunctionLoopCertificates'].map(name =>
+    readFileSync(new URL(`./corpus/translate/accept/${name}.ts`, import.meta.url), 'utf8')).join('\n');
+  const inputs = fc.sample(fc.tuple(fc.bigInt(), fc.bigInt()), { seed, numRuns: 50 });
+  const calls = inputs.flatMap(([start, amount]) => [
+    { function: 'tally', args: [encode(start), encode(amount)] },
+    { function: 'twice', args: [encode([start, amount])] },
+    { function: 'localLoopSum', args: [encode([start, amount]), encode(amount)] },
+    { function: 'localLoopUpdate', args: [encode([start, amount])] },
+    { function: 'localLoopNested', args: [encode([start, amount])] },
+  ]);
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: [{ source, calls }] }), encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (!result?.parsed) return;
+  expect(result.accepted).toBe(true);
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-local-certificate-'));
+  const path = join(dir, 'local.mjs');
+  writeFileSync(path, ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+  }).outputText);
+  const mod = await import(pathToFileURL(path).href) as {
+    tally: (start: bigint, amount: bigint) => bigint;
+    twice: (xs: Array<bigint>) => Array<bigint>;
+    localLoopSum: (xs: Array<bigint>, fee: bigint) => bigint;
+    localLoopUpdate: (xs: Array<bigint>) => bigint;
+    localLoopNested: (xs: Array<bigint>) => bigint;
+  };
+  for (const [i, [start, amount]] of inputs.entries()) {
+    expect(result.results[5 * i]).toEqual({ value: encode(mod.tally(start, amount)) });
+    expect(result.results[5 * i + 1]).toEqual({ value: encode(mod.twice([start, amount])) });
+    expect(result.results[5 * i + 2]).toEqual({ value: encode(mod.localLoopSum([start, amount], amount)) });
+    expect(result.results[5 * i + 3]).toEqual({ value: encode(mod.localLoopUpdate([start, amount])) });
+    expect(result.results[5 * i + 4]).toEqual({ value: encode(mod.localLoopNested([start, amount])) });
+  }
+});
+
+test('local returns and sibling calls preserve captured state and agree with Node', async () => {
+  const source = ['localFunctionReturnsAndChanges', 'localFunctionSiblingCalls'].map(name =>
+    readFileSync(new URL(`./corpus/translate/accept/${name}.ts`, import.meta.url), 'utf8')).join('\n');
+  const inputs = fc.sample(fc.tuple(fc.bigInt(), fc.bigInt()), { seed, numRuns: 50 });
+  const calls = inputs.flatMap(([start, amount]) => [
+    { function: 'f', args: [encode(start)] },
+    { function: 'tally', args: [encode(start), encode(amount)] },
+    { function: 'returnCall', args: [encode(start), encode(amount)] },
+    { function: 'loopCalls', args: [encode([start, amount])] },
+    { function: 'capturedTotal', args: [encode([start, amount])] },
+    { function: 'calculate', args: [encode(start)] },
+    { function: 'accumulate', args: [encode([start, amount])] },
+    { function: 'captured', args: [encode(start), encode(amount)] },
+    { function: 'siblingState', args: [encode(start), encode(amount)] },
+  ]);
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: [{ source, calls }] }), encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (!result?.parsed) return;
+  expect(result.accepted).toBe(true);
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-local-return-state-'));
+  const path = join(dir, 'local.mjs');
+  writeFileSync(path, ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+  }).outputText);
+  const mod = await import(pathToFileURL(path).href) as {
+    f: (x: bigint) => bigint;
+    tally: (start: bigint, amount: bigint) => bigint;
+    returnCall: (start: bigint, amount: bigint) => bigint;
+    loopCalls: (xs: Array<bigint>) => bigint;
+    capturedTotal: (xs: Array<bigint>) => bigint;
+    calculate: (x: bigint) => bigint;
+    accumulate: (xs: Array<bigint>) => bigint;
+    captured: (factor: bigint, x: bigint) => bigint;
+    siblingState: (start: bigint, amount: bigint) => bigint;
+  };
+  for (const [i, [start, amount]] of inputs.entries()) {
+    expect(result.results[9 * i]).toEqual({ value: encode(mod.f(start)) });
+    expect(result.results[9 * i + 1]).toEqual({ value: encode(mod.tally(start, amount)) });
+    expect(result.results[9 * i + 2]).toEqual({ value: encode(mod.returnCall(start, amount)) });
+    expect(result.results[9 * i + 3]).toEqual({ value: encode(mod.loopCalls([start, amount])) });
+    expect(result.results[9 * i + 4]).toEqual({ value: encode(mod.capturedTotal([start, amount])) });
+    expect(result.results[9 * i + 5]).toEqual({ value: encode(mod.calculate(start)) });
+    expect(result.results[9 * i + 6]).toEqual({ value: encode(mod.accumulate([start, amount])) });
+    expect(result.results[9 * i + 7]).toEqual({ value: encode(mod.captured(start, amount)) });
+    expect(result.results[9 * i + 8]).toEqual({ value: encode(mod.siblingState(start, amount)) });
+  }
+});
+
 test(`the interpreter agrees with Node ${process.version} on random programs`, async () => {
   // First, so that the seed shows when a step below fails.
   console.log(`interpreter: ${programCount} programs from seed ${seed} on Node ${process.version}`);
@@ -404,6 +496,23 @@ test('checked guards narrow both branches, aliases, local calls, and tag chains'
   }
 });
 
+test('type re-exports introduce no runtime binding', async () => {
+  const source = 'export type { Point } from "./origin.ts"; export function f(n: bigint): bigint { return n + 1n; }';
+  const input = { programs: [{ source, calls: [{ function: 'f', args: [encode(4n)] }] }] };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (result === undefined || !result.parsed) return;
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-type-reexport-'));
+  writeFileSync(join(dir, 'origin.ts'), 'export interface Point { readonly x: bigint }');
+  const path = join(dir, 'barrel.mjs');
+  writeFileSync(path, ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText);
+  const mod = await import(pathToFileURL(path).href) as { f: (n: bigint) => bigint };
+  const value = result.results[0]?.value;
+  expect(value === undefined ? 'no value' : canonical(value)).toBe(canonical(encode(mod.f(4n))));
+});
+
 test('the interpreter reads comparisons separated by expression operators as Node does', async () => {
   const sources = [
     'export function f(a: number, b: number, c: number, d: number): boolean { return a < b && c > d; }',
@@ -465,6 +574,25 @@ test('the interpreter binds a parameter that a call leaves out to undefined', as
     },
     { source: 'export function f(a?: boolean): boolean { return a !== undefined; }', args: [] },
     { source: 'export function f(a?: number): number | null { return a ?? null; }', args: [] },
+    { source: 'export function f(): bigint | undefined { return undefined; }', args: [] },
+    { source: 'export function f(a: bigint): undefined | bigint { return a; }', args: [7n] },
+    {
+      source: 'export function f(a: bigint): bigint { let x: bigint | undefined = undefined; x = a; return x ?? 0n; }',
+      args: [9n],
+    },
+    { source: 'export function f(a?: bigint): bigint | undefined { const x: bigint | undefined = a; return x; }', args: [] },
+    { source: 'export function f(a?: bigint): bigint | undefined { const x: bigint | undefined = a; return x; }', args: [0n] },
+    ...[
+      'x !== undefined && x > 0n',
+      'undefined === x || x > 0n',
+      '!(x === undefined) && x > 0n',
+      '!(undefined !== x) || x > 0n',
+      'x === undefined ? false : x > 0n',
+      '!(x === undefined) ? x > 0n : false',
+    ].flatMap((body) => [[], [-1n], [0n], [1n]].map((args) => ({
+      source: `export function f(x?: bigint): boolean { return ${body}; }`,
+      args,
+    }))),
   ];
   const input = {
     programs: cases.map(({ source, args }) => ({ source, calls: [{ function: 'f', args: args.map(encode) }] })),
@@ -517,6 +645,135 @@ test('the interpreter reads the index of at and slice as Node does', async () =>
       const value = lean.results[0]?.value;
       expect(value === undefined ? 'no value' : canonical(value), `${source} with ${i}`).toBe(canonical(encode(mod.f(xs, i))));
     }
+  }
+});
+
+test('optional array indexing agrees with Node', async () => {
+  const sources = [
+    'export function f(xs: ReadonlyArray<bigint> | null): bigint { return xs?.[0] ?? 7n; }',
+    'export function f(xs?: ReadonlyArray<bigint>): bigint { return xs?.[1] ?? 9n; }',
+  ];
+  const arrays = fc.sample(fc.array(fc.bigInt(), { maxLength: 8 }), { seed, numRuns: 50 });
+  const args: Array<unknown> = [null, undefined, [], ...arrays];
+  const input = {
+    programs: sources.map(source => ({
+      source,
+      calls: args.map(xs => ({ function: 'f', args: [encode(xs)] })),
+    })),
+  };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const results = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-optional-index-'));
+  for (const [i, source] of sources.entries()) {
+    const path = join(dir, `case${i}.mjs`);
+    writeFileSync(path, ts.transpileModule(source, {
+      compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+    }).outputText);
+    const mod = (await import(pathToFileURL(path).href)) as { f: (xs: unknown) => unknown };
+    const result = results[i];
+    expect(result?.parsed, source).toBe(true);
+    if (result === undefined || !result.parsed) continue;
+    for (const [j, xs] of args.entries()) {
+      const value = result.results[j]?.value;
+      expect(value === undefined ? 'no value' : canonical(value), source)
+        .toBe(canonical(encode(mod.f(xs))));
+    }
+  }
+});
+
+test('an absent optional receiver skips the index expression', async () => {
+  const source = 'export function f(xs: ReadonlyArray<bigint> | null): bigint { return xs?.[missing()] ?? 11n; }';
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: [{ source, calls: [{ function: 'f', args: [null] }] }] }),
+    encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (result === undefined || !result.parsed) return;
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-optional-index-skip-'));
+  const path = join(dir, 'skip.mjs');
+  writeFileSync(path, ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+  }).outputText);
+  const mod = (await import(pathToFileURL(path).href)) as { f: (xs: null) => unknown };
+  const value = result.results[0]?.value;
+  expect(value === undefined ? 'no value' : canonical(value)).toBe(canonical(encode(mod.f(null))));
+});
+
+test('optional indexed member access handles every kind of number index', async () => {
+  const source = 'export interface Item { readonly value: bigint; }\nexport function f(xs: ReadonlyArray<Item> | null, i: number): bigint { return xs?.[i]?.value ?? 17n; }';
+  const arrays: Array<unknown> = [null, undefined, [], [{ value: 3n }, { value: 5n }, { value: 8n }]];
+  const indexes = [NaN, Infinity, -Infinity, -0, 0, 1, 2, 3, -1, 0.5, Number.MAX_SAFE_INTEGER];
+  const args = arrays.flatMap(xs => indexes.map(i => [xs, i]));
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: [{ source, calls: args.map(a => ({
+      function: 'f', args: a.map(encode),
+    })) }] }),
+    encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (result === undefined || !result.parsed) return;
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-optional-number-index-'));
+  const path = join(dir, 'index.mjs');
+  writeFileSync(path, ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+  }).outputText);
+  const mod = (await import(pathToFileURL(path).href)) as { f: (...xs: Array<unknown>) => unknown };
+  for (const [j, a] of args.entries()) {
+    const value = result.results[j]?.value;
+    expect(value === undefined ? 'no value' : canonical(value))
+      .toBe(canonical(encode(mod.f(...a))));
+  }
+});
+
+test('optional tuple and Record indices agree with Node', async () => {
+  const source = readFileSync(new URL('./corpus/translate/accept/optionalTupleRecordIndex.ts', import.meta.url), 'utf8');
+  const calls: Array<{ function: string; args: Array<unknown> }> = [];
+  const values = [undefined, 0n, -3n, ...fc.sample(fc.bigInt(), { seed, numRuns: 20 })];
+  for (const value of values) {
+    calls.push({ function: 'optionalValue', args: [[value, 'text']] });
+    for (const key of ['apple', 'pear']) {
+      calls.push({ function: 'optionalRecordValue', args: [{ apple: value, pear: 5n }, key] });
+    }
+  }
+  for (const absent of [null, undefined]) {
+    for (const name of ['first', 'last', 'literal', 'optionalValue']) {
+      calls.push({ function: name, args: [absent] });
+    }
+    calls.push({ function: 'record', args: [absent, 'apple'] });
+    calls.push({ function: 'optionalRecordValue', args: [absent, 'pear'] });
+    calls.push({ function: 'shadowed', args: [true, absent] });
+  }
+  calls.push({ function: 'first', args: [[19n, 'value']] });
+  calls.push({ function: 'last', args: [[19n, 'value']] });
+  calls.push({ function: 'record', args: [{ apple: 3n, pear: 7n }, 'pear'] });
+  calls.push({ function: 'literal', args: [{ apple: 3n, pear: 7n }] });
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: [{ source, calls: calls.map(c => ({
+      function: c.function, args: c.args.map(encode),
+    })) }] }),
+    encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (result === undefined || !result.parsed) return;
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-optional-tuple-record-'));
+  const path = join(dir, 'index.mjs');
+  writeFileSync(path, ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+  }).outputText);
+  const mod = (await import(pathToFileURL(path).href)) as Record<string, (...xs: Array<unknown>) => unknown>;
+  for (const [i, call] of calls.entries()) {
+    const fn = mod[call.function];
+    if (fn === undefined) throw new Error(`missing export ${call.function}`);
+    const value = result.results[i]?.value;
+    expect(value === undefined ? 'no value' : canonical(value))
+      .toBe(canonical(encode(fn(...call.args))));
   }
 });
 
