@@ -75,7 +75,23 @@ ways. When that happens, the parser refuses the code instead of choosing one
 reading. There are three such cases:
 
 - `f < A, B > (x)`. `tsc` reads type arguments, but JavaScript reads two
-  comparisons.
+  comparisons. The parser accepts `a < b && c > d` and `x < n && n > 0`,
+  because a top-level expression operator before the closing `>` can rule out
+  a list of types. The scan stops at `&&`, `||`, `??`, `===`, `!==`, `==`,
+  `!=`, `+`, `*`, `/`, `%` and `**`. It does not stop at these tokens inside
+  brackets, where a type can contain a computed property expression.
+  It does not stop at `-`, `&`, `|`, `.`, `!` or `?`, which can occur in
+  types. Nor does it stop at `>>`, `>=`, `<<` or `<=`, because TypeScript
+  rescans `>` when it closes type arguments.
+  It keeps refusing tokens that it cannot rule out this
+  way. The refusal of `f(a < b, c > d)` is a known gap tracked by
+  [#208](https://github.com/shihangw/tolean/issues/208), not an intended
+  restriction. TypeScript 6.0.3 reads two comparisons there, so the parser
+  should accept it without extra parentheses. The remaining work is a
+  speculative type-list parse followed by TypeScript's follow-token test.
+  Its round-trip proof needs a stronger relation between source tokens and
+  printed tokens. The [plan](../plans/pure-typescript.md#unfinished-parser-work)
+  tracks that work.
 - `(a)` followed by `{`. `tsc` reads an arrow function that is missing its
   `=>`, but JavaScript reads `(a); {`.
 - `(a)`, then a line break, then `=>`. `tsc` reads an arrow function, but
@@ -265,6 +281,31 @@ before the match; checked guards only read their parameter's tag. The IR and
 its evaluator use their existing boolean functions, calls and tag matches.
 `program_sound` covers this lowering through the same statement proofs as
 inline tests. The native and WebAssembly translators use the same source.
+
+#### Regular expressions
+
+The translator accepts `test` on flagless regular expressions with a string
+argument. It still refuses `match` and `replace` with a regex argument.
+The parser accepts flagless
+literals that start with a non-capturing group, such as `/(?:a|ab)/`.
+Wrap a pattern in `(?:...)`, or prefix it with `(?:)`, to use that spelling.
+The unambiguous prefix keeps division distinct from a literal without
+weakening the parser's round-trip proof. Plain `/a/` literals remain refused.
+Before a regex statement, end the preceding simple statement with a
+semicolon; do not rely on a line break to separate them.
+
+The pattern parser in `Syntax/RegExp.lean` and matcher in `Spec/RegExp.lean`
+are tested against Node using generated patterns and UTF-16 inputs. Parser
+corpus tests also compare literal syntax with `tsc` and check source round
+trips. Translation corpus tests cover `test`, and interpreter tests compare
+its results with Node, including repeated calls and UTF-16 surrogate inputs.
+
+The model uses ordered backtracking without flags. It includes character
+classes, alternatives, captures, greedy repetition and the input anchors.
+It proves termination with the remaining minimum and input length, rather
+than interpreting fuel exhaustion as failure to match. See the
+[decision record](../decisions/2026-11-14-regexp-subset.md) for the intended
+source subset and the restrictions on future `match` and `replace` support.
 
 #### Certificates
 
@@ -940,6 +981,54 @@ The files in `tests/typescript/corpus/translate/reject/` state in executable
 form what the translator refuses. To see what that does and does not guarantee,
 read [What is proved and what is
 trusted](#what-is-proved-and-what-is-trusted).
+
+### Map borrows
+
+A function may change one Map that its caller owns. The function must be
+declared earlier in the same file, have a `void` return type, and contain
+only `set`, `delete` and forwarding calls. Their arguments must be identifiers or
+literal numbers, bigints, strings or booleans. The function reaches the end
+of its body, optionally through a terminal bare `return;`. The interpreter
+executes the checked update prefix before copying out the map, so that
+return does not discard the final parameter binding.
+
+```ts
+function change(m: Map<bigint, bigint>, x: bigint): void {
+  m.set(1n, x);
+  m.delete(2n);
+}
+
+export function f(x: bigint): bigint {
+  const m = new Map<bigint, bigint>([[2n, 9n]]);
+  change(m, x);
+  return m.get(1n) ?? 0n;
+}
+```
+
+The Lean function `change` returns the changed map. Its caller writes
+`let m := change m x`, so later reads use that map. The interpreter gives
+the call the same meaning: it copies the argument into the parameter and
+copies the final parameter binding back. `program_sound` covers this
+translation.
+
+The caller may not keep another name or a field that holds the map, or pass
+the same map in another argument. The call must be a statement at the top
+level of the caller's body. Its other arguments follow the ordinary
+expression subset and may not hold the borrowed map. A read-only Map
+parameter does not become a borrow.
+
+The callee may forward its borrowed map to an earlier borrowing function in
+the same file. It must pass that map exactly once. For example,
+`function forward(m: Map<bigint, bigint>, x: bigint): void { change(m, x); }`
+passes the final map from `change` back through `forward` to its caller.
+Each call rebinds the map, so updates before and after the forwarded call
+remain visible.
+
+Early returns, several Map parameters, returned values, branches,
+loops and imported borrows remain refused.
+Optional parameters and generic borrowing functions remain refused too.
+The certifier also refuses borrowing functions: its link proof does not
+yet describe the final map as the function's result.
 
 ## Numbers
 
