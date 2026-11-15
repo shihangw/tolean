@@ -494,6 +494,11 @@ def leftHandSideStep (parseIndex : ParseM Expr) (parseArgs : ParseM (List Expr))
   else if t.isPunct "?." then
     requireFeature t .optionalChaining
     discard advance
+    if (← peek).isPunct "[" then
+      discard advance
+      let idx ← parseIndex
+      let _ ← expectPunct "]"
+      return (.optIndex (← spanFrom start) expr idx, true)
     refuseSplitMember
     let name ← readPropertyName
     return (.optMember (← spanFrom start) expr name, true)

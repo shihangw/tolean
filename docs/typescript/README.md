@@ -347,6 +347,12 @@ recursive encoder. A file with a function that calls itself has none either.
 A certificate runs the interpreter with as much fuel as the calls need, and
 the depth of a recursive call depends on its argument. Nor does a file with a
 function that can throw, because a certificate has no encoder for `Except` yet.
+A local function can get a certificate, including one that contains a loop
+or is called from a loop. This covers calls that return a value and calls
+that write back captured `let` variables. A call can do both when its final
+return names one of the captured variables that it changes.
+The loop invariant records the closure that each local call reads as well
+as the encoded data that the body uses.
 A `number` is a value of
 the abstract model `JSNumber N` in the interpreter, as it is in the
 translation, so each theorem holds for every `N`, real doubles among them,
@@ -506,7 +512,13 @@ explains this boundary.
   the JavaScript would import a name that does not exist at run time.
 - Only named imports are supported. Tolean refuses `as`, a default or
   namespace import, an import with no names or for its side effects, a
-  re-export such as `export { a } from "./x.ts"`, and an import cycle.
+  value re-export such as `export { a } from "./x.ts"`, and an import cycle.
+- A type re-export, such as `export type { Point } from "./x.ts"`, may name
+  an exported interface or type alias. The output imports the translated
+  source module but adds no declaration. A consumer uses the original
+  type's identity, even through several re-exporting files. The re-export
+  does not bind `Point` locally. Re-exports of functions, enums and tagged
+  unions remain refused.
 - An export list, such as `export { clamp, type Range }`, exports
   declarations of the file, as `export` before each of them would. It may
   name only functions, interfaces and types that the file declares before the
@@ -617,13 +629,19 @@ interface fields, not new array type syntax.
 | `a ?? b` on `T \| null`, where `b` may be `null` | `Option.or a b` |
 | `boolean` | `Bool` |
 | `string`, `"abc"` | `JSString`, `JSString.ofString "abc"`. A `JSString` holds the UTF-16 code units of the string, as ECMA-262 defines a string, so a value can hold a lone surrogate, which a Lean `String` cannot. `ofString` is injective, so a claim can state a literal as a Lean `String`. |
+| `T \| undefined` on a local or return value | `Option T`. A defined value becomes `some`, and `undefined` becomes `none`. A local may be initialized or assigned either value. The type may not also include `null`. A field must use `f?: T` instead, because a missing key and a key whose value is `undefined` share one Lean value. |
 | `ReadonlyArray<T>`, `Array<T>`, `T[]` | `List T` |
 | `interface` with typed, required fields, with or without `readonly` | `structure` |
 | An interface whose fields name the interface itself, such as `readonly next: Node \| null` or `readonly children: ReadonlyArray<Tree<T>>` | The same `structure`. Lean reads it as a nested inductive type, so a value is a finite tree, as every value that the subset can build is. |
 | `f?: T` or `readonly f?: T`, an optional field | `f : Option T := none`. An object literal may leave the field out, or set it to a `T`. A read of a field that the object lacks gives `undefined`, which is `none`. `s.f ?? d` is `Option.getD s.f d`, and `s.f === undefined` is `s.f.isNone`. |
 | `x?: T`, an optional parameter | `(x : Option T := none)`. A call may leave out the optional parameters, which come last, and then the output passes `none` for each. A call may also pass a `T`, or `undefined`, which is `none` too. `x ?? d`, `x === undefined` and `x?.f` work as they do on an optional field. |
 | `if (x === undefined)` or `if (x !== undefined)`, with `undefined` on either side, where `x` is an optional parameter or a local with an optional value | `match x with \| none => … \| some x => …`, as for a test of `null`. The branch where `x` is defined reads it as a `T`. |
+| `x !== undefined && e`, `x === undefined \|\| e`, and a conditional that tests `x` against undefined | A match on `Option`. The branch where `x` is defined reads it as a `T`. The test may put undefined first, or negate the comparison with `!`. Only the selected branch runs. Existing expressions that need no narrowing keep their output. |
 | `p?.f`, where `p` is a `S \| null` or an optional field of type `S` | `p.map (·.f)`, or `p.bind (·.f)` when `f` is optional. The value is `undefined` when `p` is `null` or `undefined`, so it has the type of an optional field: `p?.f ?? d` and `p?.f === undefined` work as they do on `s.f`. |
+| `xs?.[k]`, where `xs` is a nullable or optional array and `k` is a nonnegative safe-integer literal | `xs.bind (·[k]?)`. An absent receiver or an index past the end gives `undefined`. The element type must not be nullable or optional. |
+| `xs?.[i]`, with any other number expression as the index | `xs.bind (fun ys => JSNumber.elementAt? ys i)`. Negative, fractional and nonfinite indices give `undefined`, as they do for ordinary array indexing. Another optional access may follow, as in `xs?.[i]?.value`. |
+| `pair?.[k]`, on a nullable or optional tuple | Bind the tuple, then read its projection. As for ordinary tuple indexing, `k` must be an in-range integer literal. The selected element may be optional but must not be nullable. |
+| `record?.[key]`, on a nullable or optional `Record<K, V>` | Bind the record, then read the field selected by `key`. The key must have the Record's literal-union type `K`. `V` may be optional but must not be nullable. |
 | `e as const` and `e satisfies T` | `e`. Type stripping removes both, so the value is the value of `e`. Tolean types `e` in the context of `T` and checks that the value has the type `T`, as `tsc` does. The value keeps its own type, which can be wider than the type `tsc` gives it, because the output types a literal by its context, as it does without `as const`. |
 | `p?.f.g`, a chain of reads after `?.` | `p.map (·.f.g)`, or `p.bind (·.f.g)` when `g` is optional. The reads after `?.` are a part of the same optional chain, so the whole chain is `undefined` when `p` is `null` or `undefined`. Each field before the last must be a required field of an interface type. |
 | `type T = U`, declared before its uses | `abbrev T := U`. The output writes `U` itself wherever the source names `T`, so the `abbrev` is only for claims. |
@@ -640,6 +658,8 @@ interface fields, not new array type syntax.
 | `r[k]`, where `r` is such a `Record` and `k` has the type `K` | `match k with \| K.a => r.a \| …`, which reads the field that `k` names |
 | `function` with typed parameters and return type | `def` |
 | `function g(a: A): void { … }`, or `const g = (a: A): void => { … }`, at the top of the body of a function `f`, which changes `let` locals of `f`, and a call `g(a);` as a statement | `def f.g`, before `f`. It takes the locals of `f` that its body names, then its own parameters, and it returns the locals that it changes, as a tuple when there are two or more. A call is `let (x, y) := f.g x y a`, which binds those locals again, so a call in a loop body changes the state of the loop. |
+| A local function that changes captured `let` variables and ends with `return total`, where `total` is one of those changed variables | The lifted function returns the captured state. A call binds that state again and reads `total` from it as the call's value. The tuple need not contain a second copy of the same value. The call can initialize a `const` or `let`, or be the whole value of a `return`. This also works in a loop and with a local arrow function. |
+| A local function that calls an earlier sibling which calls no other local function | The lifted definitions appear in callee-before-caller order. The IR passes the sibling closure and checks it at a call. The printed code passes `()` for that closure, since the call names the lifted definition directly. The caller must itself name each variable that the sibling captures. A value-returning caller that changes captured state must also write a captured variable directly and obey the final-return rule above. |
 | `function g(a: A): T { … }` or `const g = (a: A): T => { … }` in the same place, which changes no variable of `f`, called as the whole value of a `const`, a `let` or a `return` | `def f.g` that returns the `T`, and `let v := f.g x a` at the call |
 | A function that calls itself, where each call passes a part of one parameter, the same one in every call. A part is a field of it, a value that a test of `null`, `undefined` or a tag narrows it to, an element of an array in it, an element of a tuple in it, or a part of one of these. | The same `def`, followed by `termination_by p` for the parameter `p`, and `decreasing_by all_goals tolean_decreasing`. Each call passes a value that is smaller by `sizeOf`, and the tactic from `tolean.TypeScript.Decreasing` proves it, so Lean checks that the function ends. Each `match` in such a function names the equation of its value `_h'`, which the tactic reads. Lean defines the function by well-founded recursion, so a claim unfolds it with `unfold` or `simp`, not with `rfl` or `decide`. |
 | `throw new Error(m)`, where `m` is a `string`, as the last statement of a function, of a loop body, or of a branch | `throw (JSError.mk m)`. A function that can throw returns `Except JSError R`, and each value that it returns is `pure` of the value. `JSError`, in `tolean/TypeScript/Spec/Error.lean`, holds the message. |
@@ -953,19 +973,25 @@ Tolean rejects these, among others:
 - An optional field that is also nullable, a tag field that is optional, and
   an optional field with the name of a property of `Object.prototype`, such
   as `toString`, because an object without the field has that property.
-  Tolean also refuses `undefined` as a value, except as the argument of an
-  optional parameter. So a literal must leave an optional field out rather
+  Tolean also refuses `undefined` as a value unless the context expects an
+  optional value, such as a local or return value typed `T | undefined`, or
+  the argument of an optional parameter. A literal must leave an optional field out rather
   than set it to `undefined`, or to the value of another optional field. JS
   tells an object without the key from one whose key holds `undefined`, and
   Lean has one `none` for both. It also refuses `== null` and `=== null` on
   an optional value, and `== undefined`.
 - An optional parameter that is also nullable, and a required parameter after
-  an optional one. Tolean also refuses `T | undefined` as a type, and a test
-  of `undefined` that narrows a value inside an expression, such as
-  `x !== undefined && x > 0n`. Only the test of an `if` narrows an optional
-  value.
+  an optional one. Expression narrowing tests a local name directly. A
+  test of a property access, and `'x' in obj`, remain refused.
 - `?.` where the value cannot be `null` or `undefined`, `?.` on a nullable
-  field, and `a?.[i]` and `f?.()`. In a chain such as `a?.b.c`, Tolean
+  field, and optional indexing outside the array, tuple and Record cases above.
+- Optional calls, `f?.()`. Neither `Syntax.TypeExpr` nor `Translate.Ty` has a
+  function type. No accepted parameter, field or variable declaration gives
+  a possibly `undefined` value a callable type. A generic type parameter
+  does not make its value callable, and a local function value cannot
+  escape a direct call. There is therefore no accepted program for optional
+  calls to apply to.
+  In a chain such as `a?.b.c`, Tolean
   refuses a field before the last that may be `null` or `undefined`, because
   `.` on it throws. `(a?.b).c` is not a chain, because the parentheses end
   it: it reads `.c` of `undefined` when `a` is `null`, so Tolean refuses
@@ -981,12 +1007,18 @@ Tolean rejects these, among others:
   later. Without such a part, Lean could not see that the function ends.
 - A local function anywhere but at the top of the body of the function
   around it, such as in a loop, in a branch or in another local function.
-  Tolean also refuses a local function that calls itself, another local
-  function or the function around it, one that throws, and one without a
+  Tolean also refuses a local function that calls itself or the function
+  around it, one that throws, and one without a
   return type. It refuses one that uses an array, a map or a set that the
-  function around it owns. It also refuses one that returns a value and
-  changes a variable of the function around it, which a later step will
-  translate. A call of a local function must be a statement of its own, or
+  function around it owns. A state-writing local must end by returning one
+  of the captured variables that it changes, with the declared return type.
+  An earlier return, a compound return expression, or a return of a variable
+  declared inside the local function stays refused.
+  A sibling call is refused when the callee is declared later, calls another
+  local function, or captures a variable that the caller does not itself
+  name. A value-returning sibling caller that changes state only through
+  its calls is refused too.
+  A call of a local function must be a statement of its own, or
   the whole value of a `const`, a `let` or a `return`. So the function never
   escapes, because no code can return it, store it or pass it on.
 - A function value that escapes, classes other than the error classes above,
