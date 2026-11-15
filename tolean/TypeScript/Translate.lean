@@ -1367,6 +1367,22 @@ def tagTestOf (env : Env) (e : Expr) : Option TagTest := do
   return { name := n, ref, field := f, tag := t, isEq := op == .strictEq,
            whenTag := member, whenOther, other }
 
+/-- A predicate is accepted only when both outcomes of its test describe the
+annotation exactly. An annotation alone is never evidence for narrowing. -/
+def translateReturnType (env : Env) (params : List Param) (annotation : TypeExpr) (body : Stmt) : TM Ty := do
+  match annotation with
+  | .predicate s _ target =>
+    let some guard := Eval.guardTest params (some annotation) body
+      | reject s "a type guard must have one required parameter and return exactly a strict test of its tag"
+    let some test := tagTestOf env (guard.expr s guard.parameter)
+      | reject s "a type guard must test the tag of its union parameter"
+    let targetType ← translateType target
+    let trueType := if test.isEq then test.whenTag else test.whenOther
+    unless trueType == targetType do
+      reject s "a type guard must be true exactly on its annotated type, not a subset or another member"
+    return .boolean
+  | _ => translateType annotation
+
 /-- What `switch (x.kind)` tests: the local, its tagged union, the union's
 tag field, and the tags that the local may have where the `switch` starts. -/
 structure SwitchOn where
@@ -3548,7 +3564,7 @@ def translateLocalHead (env : Env) (s : Span) (name : String) (typeParams : List
     reject s "a local function may not throw"
   let ret ← match returnType with
     | .keyword _ "void" => pure none
-    | t => some <$> translateType t
+    | t => some <$> translateReturnType penv params t body
   match ret with
   | none =>
     if changes.isEmpty then
@@ -4346,6 +4362,7 @@ def paramType (span : Span) (optional : Bool) (type : TypeExpr) (before : List T
   return .optional ty
 
 def translateFunction (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr)))
+    (guards : List (String × Eval.GuardTest))
     (classes : List ClassInfo) (s : Span) (exported : Bool) (name : String) (typeParams : List String)
     (params : List Param) (returnType : Option TypeExpr) (body : Stmt) : TM IR.Decl := do
   let some returnType := returnType
@@ -4355,7 +4372,8 @@ def translateFunction (thr : String → Bool) (cls : String → Option (Option (
   -- translated here is the body the model runs, and a call of a function
   -- that can throw meets the translator only as the whole value of a
   -- declaration or a `return`, or in a place that JS may not evaluate.
-  let body := Eval.Stmt.hoisted thr cls body
+  let sourceBody := body
+  let body := Eval.Stmt.hoisted thr cls (Eval.guardedBody guards params (some returnType) body)
   let name ← checkName s name
   declareTopLevel s name
   checkTypeParams s (fun v => params.any fun p => (p.type.map (typeNames v)).getD false) [] typeParams
@@ -4373,7 +4391,7 @@ def translateFunction (thr : String → Bool) (cls : String → Option (Option (
       let ty ← paramType p.span p.optional type types
       pure (env.add { name := paramName, binding := .param, type := ty },
         leanParams ++ [(paramName, ty.lean)], types ++ [ty])
-  let ret ← isolated (translateType returnType)
+  let ret ← isolated (translateReturnType env params returnType sourceBody)
   let throws := stmtsThrow ctx.functions (blockStatements body)
   modify fun c => { c with currentFunction := name, returnType := ret, throws }
   -- The body may call the function itself. Lean must see that the calls
@@ -4683,6 +4701,7 @@ def translateErrorTypes (m : Module) : TM (List IR.Decl) := do
 export list or an error class, whose types `translateErrorTypes` wrote. A
 function may throw an error of `classes`, the error classes of the file. -/
 def translateDecl (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr)))
+    (guards : List (String × Eval.GuardTest))
     (classes : List ClassInfo) : Decl → TM (Option IR.Decl)
   | .import s names source => do translateImport s names source; return none
   | .exports s names source => do
@@ -4693,7 +4712,7 @@ def translateDecl (thr : String → Bool) (cls : String → Option (Option (List
   | .interface s exported name typeParams fields => some <$> translateInterface s exported name typeParams fields
   | .typeAlias s exported name typeParams type => some <$> translateAlias s exported name typeParams type
   | .function s exported name typeParams params ret body =>
-    some <$> translateFunction thr cls classes s exported name typeParams params ret body
+    some <$> translateFunction thr cls guards classes s exported name typeParams params ret body
   | .enum s exported name members => some <$> translateStringEnum s exported name members
   -- `translateErrorTypes` has checked the class and written its constructor
   -- of `Thrown`. From here on, a `throw` may make an error of it.
@@ -4722,7 +4741,7 @@ def translateDecls (m : Module) : TM (List IR.Decl) := do
   if let some n := duplicateExport? m then reject n.span s!"'{n.name}' is in two export lists"
   let types ← translateErrorTypes m
   let classes := (← get).errorClasses
-  return types ++ (← m.decls.mapM (translateDecl (Eval.mayThrow m) (Eval.errorClassOf m) classes)).filterMap id
+  return types ++ (← m.decls.mapM (translateDecl (Eval.mayThrow m) (Eval.errorClassOf m) (Eval.guardTests m) classes)).filterMap id
 
 mutual
 

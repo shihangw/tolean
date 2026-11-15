@@ -14,6 +14,29 @@ open tolean.TypeScript tolean.TypeScript.Syntax tolean.TypeScript.Translate tole
 
 /-! ### Extras: How Lean reads the output -/
 
+/-- An accepted predicate returns a boolean, never the type that it names. -/
+theorem checked_guard_boolean {env : Env} {params : List Param} {sp : tolean.Span}
+    {name : String} {target : TypeExpr} {body : Stmt} {s s' : Ctx} {ty : Ty}
+    (h : translateReturnType env params (.predicate sp name target) body s = .ok ty s') :
+    ty = .boolean := by
+  simp only [translateReturnType] at h
+  cases hg : Eval.guardTest params (some (.predicate sp name target)) body with
+  | none => simp [hg] at h
+  | some g =>
+    simp only [hg] at h
+    cases ht : tagTestOf env (g.expr sp g.parameter) with
+    | none => simp [ht] at h
+    | some test =>
+      simp only [ht, bind_ok] at h
+      obtain ⟨t, c, _, h⟩ := h
+      by_cases hb : test.isEq = true
+      all_goals
+        simp only [hb, Bool.false_eq_true, if_false, if_true] at h
+        split at h
+        · simp only [pure_bind, pure_ok] at h
+          exact h.1.symm
+        · simp at h
+
 /-- A parameter or a local never has the name of an interface of its file,
 which Lean, unlike TypeScript, would read as the local. -/
 theorem checkLocalName_not_interface {sp : Span} {name r : String} {s s' : Ctx}

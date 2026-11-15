@@ -53,7 +53,6 @@ exact. A construct leaves these tables when Tolean translates it, and the
 | `T \| undefined` as the type of a local or of a return value, and a test such as `x !== undefined && x > 0n` that narrows an optional value inside an expression | `Option T` | `'x' in obj`, which can tell a missing key from `undefined` |
 | `a?.[i]` and `f?.()` | `Option.bind` | `==` against anything except `null` and `undefined` |
 | A re-export, such as `export { a } from "./x.ts"` | Nothing: the names stay in scope | `export *` |
-| A type guard `x is T` | A `Bool` function | A guard whose body the translator cannot show to be a test of the tag |
 
 ### Functions
 
@@ -194,7 +193,6 @@ leaves a gap.
 2. **P0.** Types and narrowing: `T | undefined` as a type, a test of
    `undefined` that narrows inside an expression, `a?.[i]` and `f?.()`, and
    re-exports.
-3. **P1.** Type guards.
 8. **P0.** The borrow for a map that a caller passes in.
 10. **P1.** Sorting: certificates for a sort by a `number` key.
 11. **P2.** Recursion: tagged unions that refer to themselves first, then

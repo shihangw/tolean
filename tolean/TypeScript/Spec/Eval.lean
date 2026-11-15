@@ -1,4 +1,5 @@
 import tolean.TypeScript.Syntax.Ast
+import tolean.TypeScript.Spec.Guards
 import tolean.TypeScript.Spec.BigInt
 import tolean.TypeScript.Spec.Date
 import tolean.TypeScript.Spec.Number
@@ -1265,14 +1266,16 @@ def Stmt.hoisted (thr : String → Bool) (cls : String → Option (Option (List 
 functions can throw: their parameters and their body, with the calls that
 can throw hoisted out of its statements. -/
 def functionsIn (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr)))
+    (guards : List (String × GuardTest))
     (ds : List Decl) : List (String × List String × Stmt) :=
   ds.filterMap fun
-    | .function _ _ name _ params _ body => some (name, params.map (·.name), Stmt.hoisted thr cls body)
+    | .function _ _ name _ params ret body =>
+      some (name, params.map (·.name), Stmt.hoisted thr cls (guardedBody guards params ret body))
     | _ => none
 
 /-- The functions of the module, by name. -/
 def functions (m : Module) : List (String × List String × Stmt) :=
-  functionsIn (mayThrow m) (errorClassOf m) m.decls
+  functionsIn (mayThrow m) (errorClassOf m) (guardTests m) m.decls
 
 /-! ### Programs of several files
 

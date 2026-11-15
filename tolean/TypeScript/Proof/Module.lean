@@ -41,6 +41,7 @@ open tolean.TypeScript.Eval (Val Outcome)
 section State
 
 variable {α : Type}
+variable {guards : List (String × Eval.GuardTest)}
 
 @[simp] theorem set_ok {c s s' : Ctx} {u : PUnit} : (set c : TM PUnit) s = .ok u s' ↔ s' = c := by
   simp [set, MonadStateOf.set, EStateM.set]
@@ -220,17 +221,19 @@ of the functions declared before it. -/
 theorem translateFunction_ok {thr : String → Bool} {cls : String → Option (Option (List CtorParam × Expr))}
     {classes : List ClassInfo} {sp : Span} {ex : Bool} {name : String} {tps : List String}
     {params : List Param} {ret : Option TypeExpr} {body : Stmt} {s s' : Ctx} {o : IR.Decl}
-    (h : translateFunction thr cls classes sp ex name tps params ret body s = .ok o s') :
+    (h : translateFunction thr cls guards classes sp ex name tps params ret body s = .ok o s') :
     (s'.structs, s'.aliases, s'.enums, s'.unions, s'.enumValues) =
       (s.structs, s.aliases, s.enums, s.unions, s.enumValues) ∧ s.taken name = false ∧
     s'.file = s.file ∧ s'.interfaces = s.interfaces ∧
       (∀ g ∈ s.functions, g.name ≠ name) ∧
       ∃ f, s'.functions = s.functions ++ [f] ∧ f.file = s.file ∧ f.name = name ∧ f.exported = ex ∧
       ∃ lp r out, o = .function name lp r out ∧ lp.map (·.1) = params.map (·.name) ∧
-        ∃ F env c c', translateStatements F env .ret (blockStatements (Eval.Stmt.hoisted thr cls body)) c = .ok out c' ∧
+        ∃ F env c c', translateStatements F env .ret
+          (blockStatements (Eval.Stmt.hoisted thr cls (Eval.guardedBody guards params ret body))) c = .ok out c' ∧
           env.functions = s.functions ++ [f] ∧ env.enums = s.enumValues ∧ env.classes = classes ∧
           (∀ x, env.has x = decide (x ∈ params.map (·.name))) ∧
-          Stmt.ownsChanges (params.map (·.name)) (Eval.Stmt.hoisted thr cls body) = true := by
+          Stmt.ownsChanges (params.map (·.name))
+            (Eval.Stmt.hoisted thr cls (Eval.guardedBody guards params ret body)) = true := by
   unfold translateFunction at h
   cases ret with
   | none => simp at h
@@ -702,7 +705,7 @@ theorem translateInterface_names {P : Eval.Program} {sp : Span} {ex : Bool} {nam
 theorem translateFunction_names {P : Eval.Program} {thr : String → Bool}
     {cls : String → Option (Option (List CtorParam × Expr))} {classes : List ClassInfo} {sp : Span} {ex : Bool}
     {name : String} {tps : List String} {params : List Param} {ret : Option TypeExpr} {body : Stmt} {s s' : Ctx}
-    {o : IR.Decl} (h : translateFunction thr cls classes sp ex name tps params ret body s = .ok o s') :
+    {o : IR.Decl} (h : translateFunction thr cls guards classes sp ex name tps params ret body s = .ok o s') :
     DeclNames P (.function sp ex name tps params ret body) s s' := by
   obtain ⟨hl, hfresh, hf, -, -, f, hfns, -, hname, -⟩ := translateFunction_ok h
   simp only [Prod.mk.injEq] at hl
@@ -1063,7 +1066,7 @@ theorem translateImport_names {P : Eval.Program} {sp : Span} {names : List Impor
 state. -/
 theorem translateExports_ok {thr : String → Bool} {cls : String → Option (Option (List CtorParam × Expr))}
     {classes : List ClassInfo} {sp : Span} {names : List ImportName} {source : Option String} {s s' : Ctx}
-    {o : Option IR.Decl} (h : translateDecl thr cls classes (.exports sp names source) s = .ok o s') :
+    {o : Option IR.Decl} (h : translateDecl thr cls guards classes (.exports sp names source) s = .ok o s') :
     o = none ∧ s' = s := by
   simp only [translateDecl] at h
   by_cases hs : source.isSome = true
@@ -1083,7 +1086,7 @@ after it checks that no name is in two export lists. -/
 theorem translateDecls_ok {m : Module} {s s' : Ctx} {ds : List IR.Decl}
     (h : translateDecls m s = .ok ds s') :
     ∃ pre s₁ os, translateErrorTypes m s = .ok pre s₁ ∧
-      m.decls.mapM (translateDecl (Eval.mayThrow m) (Eval.errorClassOf m) s₁.errorClasses) s₁ = .ok os s' ∧
+      m.decls.mapM (translateDecl (Eval.mayThrow m) (Eval.errorClassOf m) (Eval.guardTests m) s₁.errorClasses) s₁ = .ok os s' ∧
       ds = pre ++ os.filterMap id := by
   simp only [translateDecls] at h
   cases hd : duplicateExport? m with
@@ -1284,7 +1287,7 @@ interfaces, adds its functions at the end, and keeps their names distinct. A
 function that it adds as exported is one that it declares as exported. -/
 theorem translateDecl_ok {thr : String → Bool} {cls : String → Option (Option (List CtorParam × Expr))}
     {classes : List ClassInfo} {d : Decl} {s s' : Ctx} {o : Option IR.Decl}
-    (hself : IfacesSelf s.interfaces) (h : translateDecl thr cls classes d s = .ok o s') :
+    (hself : IfacesSelf s.interfaces) (h : translateDecl thr cls guards classes d s = .ok o s') :
     s'.file = s.file ∧ s'.interfaces = s.interfaces ∧
       ∃ more, s'.functions = s.functions ++ more ∧ (∀ f ∈ more, f.ref ∈ declRefs s.file d) ∧
         ((s.functions.map (·.name)).Nodup → (s'.functions.map (·.name)).Nodup) ∧
@@ -1348,7 +1351,7 @@ theorem translateDecl_ok {thr : String → Bool} {cls : String → Option (Optio
 /-- What one declaration does to the names and the string enums of the file. -/
 theorem translateDecl_names {P : Eval.Program} {thr : String → Bool}
     {cls : String → Option (Option (List CtorParam × Expr))} {classes : List ClassInfo} {d : Decl} {s s' : Ctx}
-    {o : Option IR.Decl} (hfe : FaithfulE P s.interfaces) (h : translateDecl thr cls classes d s = .ok o s') :
+    {o : Option IR.Decl} (hfe : FaithfulE P s.interfaces) (h : translateDecl thr cls guards classes d s = .ok o s') :
     DeclNames P d s s' := by
   cases d with
   | «import» sp names source =>
@@ -1415,7 +1418,7 @@ translate. -/
 theorem decls_ok (P : Eval.Program) (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr)))
     (classes : List ClassInfo) :
     ∀ (ds : List Decl) (s s' : Ctx) (os : List (Option IR.Decl)),
-    IfacesSelf s.interfaces → FaithfulE P s.interfaces → ds.mapM (translateDecl thr cls classes) s = .ok os s' →
+    IfacesSelf s.interfaces → FaithfulE P s.interfaces → ds.mapM (translateDecl thr cls guards classes) s = .ok os s' →
     s'.file = s.file ∧ s'.interfaces = s.interfaces ∧
       (∃ more, s'.functions = s.functions ++ more ∧ (∀ f ∈ more, f.ref ∈ ds.flatMap (declRefs s.file)) ∧
         (∀ f ∈ more, f.exported = true → ∃ sp tps ps r b, Decl.function sp true f.name tps ps r b ∈ ds) ∧
@@ -1423,7 +1426,7 @@ theorem decls_ok (P : Eval.Program) (thr : String → Bool) (cls : String → Op
           ∃ i, s.interfaces.lookup f.file = some i ∧ ∃ g ∈ i.functions, g.name = f.name) ∧
       ((s.functions.map (·.name)).Nodup → (s'.functions.map (·.name)).Nodup) ∧
       DeclsNames P ds s s' ∧
-      Forall₂ (FnRelIn s'.functions s'.enumValues classes) (Eval.functionsIn thr cls ds)
+      Forall₂ (FnRelIn s'.functions s'.enumValues classes) (Eval.functionsIn thr cls guards ds)
         (IR.functions (os.filterMap id))
   | [], s, s', os, _, _, h => by
     simp only [List.mapM_nil, pure_ok] at h
@@ -1567,7 +1570,8 @@ theorem module_resolves {p : Eval.Program} {file : String} {m : Module} (hp : p.
       obtain ⟨rfl, -, rfl⟩ := hsel
       exact ⟨_, _, _, _, _, _, hd⟩
     · rintro ⟨sp, ex, tps, ps, r, b, hd⟩
-      exact ⟨(f.name, ps.map (·.name), Eval.Stmt.hoisted (Eval.mayThrow m) (Eval.errorClassOf m) b), ⟨_, hd, rfl⟩, rfl⟩
+      exact ⟨(f.name, ps.map (·.name), Eval.Stmt.hoisted (Eval.mayThrow m) (Eval.errorClassOf m)
+        (Eval.guardedBody (Eval.guardTests m) ps r b)), ⟨_, hd, rfl⟩, rfl⟩
   unfold Eval.resolve
   simp only [hp, Option.bind_eq_bind, Option.bind_some]
   by_cases hown : ((Eval.functions m).any fun x => x.fst == f.name) = true

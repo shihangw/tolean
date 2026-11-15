@@ -43,7 +43,7 @@
 import { expect, test } from 'vitest';
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -303,6 +303,7 @@ test('predicate annotations do not change what a guard computes', async () => {
     'return value.kind === "circle";',
     'return true;',
     'if (value.kind === "circle") { return value.radius > 0n; } return false;',
+    'if (value.kind === "circle") { return true; } else { return false; }',
   ];
   const args = fc.sample(fc.oneof(
     bigints.map((radius) => ({ kind: 'circle', radius })),
@@ -330,6 +331,7 @@ test('predicate annotations do not change what a guard computes', async () => {
     const lean = results[i];
     expect(lean?.parsed, source).toBe(true);
     if (lean === undefined || !lean.parsed) continue;
+    expect(lean.accepted, source).toBe(i === 0 || i === 3);
     const path = join(dir, `case${i}.mjs`);
     writeFileSync(path, ts.transpileModule(source, {
       compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
@@ -341,6 +343,60 @@ test('predicate annotations do not change what a guard computes', async () => {
         expect(value === undefined ? 'no value' : canonical(value), source)
           .toBe(canonical(encode(mod[name](arg))));
       }
+    }
+  }
+});
+
+test('checked guards narrow both branches, aliases, local calls, and tag chains', async () => {
+  const templates = [
+    { file: 'typeGuards', names: ['isCircle', 'isSquare', 'size', 'squareSize', 'circleValue', 'aliasSize'], three: false },
+    { file: 'typeGuardsLocal', names: ['localSize', 'arrowSize'], three: false },
+    { file: 'typeGuardsThree', names: ['size'], three: true },
+  ];
+  const generated = fc.sample(fc.tuple(fc.nat({ max: 10000 }), bigints, bigints, bigints), { seed, numRuns: 20 });
+  const cases = templates.flatMap((template) => generated.map(([tag, radius, side, height]) => {
+    const circle = `circle${tag}`;
+    const square = `square${tag}`;
+    const triangle = `triangle${tag}`;
+    const source = readFileSync(new URL(`./corpus/translate/accept/${template.file}.ts`, import.meta.url), 'utf8')
+      .replaceAll('"circle"', JSON.stringify(circle))
+      .replaceAll('"square"', JSON.stringify(square))
+      .replaceAll('"triangle"', JSON.stringify(triangle));
+    const args: Array<unknown> = [{ kind: circle, radius }, { kind: square, side }];
+    if (template.three) args.push({ kind: triangle, height });
+    const calls: Array<{ name: string; arg: unknown }> =
+      args.flatMap((arg) => template.names.map((name) => ({ name, arg })));
+    if (template.file === 'typeGuards') {
+      for (const arg of [circle, radius]) {
+        calls.push({ name: 'isText', arg }, { name: 'text', arg });
+      }
+    }
+    return { source, calls };
+  }));
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: cases.map(({ source, calls }) => ({
+      source, calls: calls.map(({ name, arg }) => ({ function: name, args: [encode(arg)] })),
+    })) }),
+    encoding: 'utf8',
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const results = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-checked-guard-'));
+  for (const [i, { source, calls }] of cases.entries()) {
+    const lean = results[i];
+    expect(lean?.parsed, source).toBe(true);
+    if (lean === undefined || !lean.parsed) continue;
+    expect(lean.accepted, source).toBe(true);
+    const path = join(dir, `case${i}.mjs`);
+    writeFileSync(path, ts.transpileModule(source, {
+      compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+    }).outputText);
+    const mod = await import(pathToFileURL(path).href);
+    for (const [j, { name, arg }] of calls.entries()) {
+      const value = lean.results[j]?.value;
+      expect(value === undefined ? 'no value' : canonical(value), `${source}\n${name}`)
+        .toBe(canonical(encode(mod[name](arg))));
     }
   }
 });
