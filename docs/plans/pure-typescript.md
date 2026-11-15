@@ -115,7 +115,7 @@ of a literal as a Lean `String`.
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| A number argument of `at`, `slice`, `padStart`, `padEnd`, `startsWith`, `endsWith`, `includes`, `indexOf` or `split` that is not an integer literal | `ToIntegerOrInfinity` on the argument, then the function on code units that a literal gets now. It needs `Math.trunc` from the numbers stage, as `xs.at(i)` does. | `split` with a regular expression, and every regular expression in the first version |
+| A number argument of `padStart` or `padEnd` that is not an integer literal | `ToLength` on the argument, then padding on code units. A dynamic length can exceed the engine's string limit and throw a `RangeError`, whose opaque message the error model does not yet support. | Every regular expression in the first version |
 
 ### Maps and sets
 
@@ -200,7 +200,7 @@ leaves a gap.
 11. **P2.** Recursion: tagged unions that refer to themselves first, then
     `@decreases`, mutual recursion, and `while` loops.
 12. **P1.** The new number and `bigint` operations, the `Date` methods, and
-    the number arguments of string methods that are not integer literals.
+    the number arguments of padding methods that are not integer literals.
 13. **P2.** Classes with `readonly` fields and methods that do not change
     `this`.
 14. **P1.** Local functions: one that returns a value and changes variables

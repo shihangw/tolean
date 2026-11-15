@@ -2059,8 +2059,8 @@ def stringMethod? (name : String) : Option IR.StringMethod :=
 /-- The types of the arguments that a method of a string takes here: those
 that a call must pass, then those that it may leave out. JS converts a string
 argument with ToString, which the subset has only on strings, and a number
-argument with ToIntegerOrInfinity, which the translator has only on integer
-literals. -/
+argument with ToIntegerOrInfinity. Padding still needs an integer literal
+so that the translator can check the engine's length limit. -/
 def StringMethod.params : IR.StringMethod → List Ty × List Ty
   | .startsWith | .endsWith | .includes | .indexOf | .split => ([.string], [.number])
   | .trim | .trimStart | .trimEnd | .toUpperCase | .toLowerCase => ([], [])
@@ -2070,23 +2070,27 @@ def StringMethod.params : IR.StringMethod → List Ty × List Ty
 
 /-- The arguments of a call fit the method: there are at least as many as it
 must take and no more than it can, each has the type of its parameter, and
-each number is an integer literal. `types` are the types of the arguments, and
+each padding length is an integer literal. `types` are the types of the arguments, and
 `lits` are the integer literals that they are. -/
 def StringMethod.fits (m : IR.StringMethod) (types : List Ty) (lits : List (Option Int)) : Bool :=
   let all := (StringMethod.params m).1 ++ (StringMethod.params m).2
   (StringMethod.params m).1.length ≤ types.length && types.length ≤ all.length &&
-    types == all.take types.length && (types.zip lits).all fun (t, k) => t != .number || k.isSome
+    types == all.take types.length &&
+    (types.zip lits).all fun (t, k) =>
+      t != .number || k.isSome || (m != .padStart && m != .padEnd)
 
 /-- What a call of the method must pass, for the message that refuses another
 call. -/
 def StringMethod.usage (method : String) : IR.StringMethod → String
   | .startsWith | .endsWith | .includes | .indexOf =>
-    s!"'{method}' takes a string and perhaps a position, an integer literal"
-  | .split => "'split' takes a string separator and perhaps a limit, an integer literal"
+    s!"'{method}' takes a string and perhaps a number position"
+  | .split => "'split' takes a string separator and perhaps a number limit"
   | .trim | .trimStart | .trimEnd | .toUpperCase | .toLowerCase => s!"'{method}' takes no arguments"
-  | .at => "'at' on a string takes one integer literal, such as s.at(-1)"
-  | .slice => "'slice' on a string takes at most two integer literals, such as s.slice(1) or s.slice(-2)"
-  | .padStart | .padEnd => s!"'{method}' takes a length, an integer literal, and perhaps a string to fill with"
+  | .at => "'at' on a string takes one number"
+  | .slice => "'slice' on a string takes at most two numbers"
+  | .padStart | .padEnd =>
+    s!"'{method}' takes an integer literal length and perhaps a string to fill with; " ++
+    "a dynamic length can throw RangeError, whose engine-defined message is not modeled"
 
 /-- The longest string that every engine can make. V8 has the smallest limit,
 2^28 - 16 code units on 32-bit systems. JS throws a `RangeError` for a longer
