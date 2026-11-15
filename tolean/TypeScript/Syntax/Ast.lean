@@ -1,4 +1,5 @@
 import tolean.Source
+import tolean.TypeScript.Edition
 
 /-!
 The TypeScript syntax tree: the part of TypeScript that the parser reads.
@@ -135,6 +136,7 @@ inductive Expr where
   /-- As written in the source, with its `n`. -/
   | bigint (span : Span) (text : String)
   | string (span : Span) (value : String)
+  | regexp (span : Span) (source : String) (target : Edition)
   | bool (span : Span) (value : Bool)
   | null (span : Span)
   | array (span : Span) (elems : List Expr)
@@ -297,6 +299,7 @@ mutual
 `++` or another assignment. The cases list every constructor, so a new one
 cannot be missed. -/
 def Expr.assigns (n : String) : Expr → Bool
+  | .regexp .. => false
   | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => false
   | .array _ es => Expr.assignsList n es
   | .object _ ps => Property.assignsList n ps
@@ -376,6 +379,7 @@ mutual
 /-- `e` calls a method that changes the array, map or set that the name `n`
 holds, such as `n.push(x)` or `n.delete(k)`, somewhere inside it. -/
 def Expr.mutates (n : String) : Expr → Bool
+  | .regexp .. => false
   | .call _ (.member _ (.ident _ m) method) args =>
     (m == n && changingMethods.contains method) || Expr.mutatesList n args
   | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => false
@@ -450,6 +454,7 @@ collection of that name, such as `(s)`, `s satisfies T`, `c ? s : t` or
 `f(s)`. So may the arguments of a `new`: `new Map([[k, s]])` holds `s` as a
 value, and `.get(k)` gives it back. -/
 def Expr.mayHold (p : String → Bool) : Expr → Bool
+  | .regexp .. => false
   | .ident _ n => p n
   | .number .. | .bigint .. | .string .. | .bool .. | .null _ => false
   | .new _ _ _ args => Expr.mayHoldList p args
@@ -565,6 +570,7 @@ mutual
 /-- The names whose array, map or set `e` changes: the receiver of each
 `push`, `set`, `add` or `delete` in it. -/
 def Expr.changed : Expr → List String
+  | .regexp .. => []
   | .call _ (.member _ (.ident _ m) method) args =>
     (if changingMethods.contains method then [m] else []) ++ Expr.changedList args
   | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => []
@@ -595,6 +601,7 @@ a call or an index, or as what a `new` or a spread copies. A receiver gives a ne
 `n.get(k)`; the spec has no rule for a method that gives `n` itself back,
 such as `n.set(k, v)` used as a value. -/
 def Expr.leaks (n : String) : Expr → Bool
+  | .regexp .. => false
   | .ident _ m => m == n
   | .number .. | .bigint .. | .string .. | .bool .. | .null _ => false
   | .member _ (.ident ..) _ | .optMember _ (.ident ..) _ => false
@@ -881,6 +888,7 @@ def TypeExpr.span : TypeExpr → Span
   | .tuple s _ _ | .predicate s _ _ => s
 
 def Expr.span : Expr → Span
+  | .regexp s .. => s
   | .ident s _ | .number s _ | .bigint s _ | .string s _ | .bool s _ | .null s | .array s _
   | .object s _ | .paren s _ | .member s _ _ | .optMember s _ _ | .index s _ _ | .call s _ _ | .unary s _ _
   | .prefix s _ _ | .postfix s _ _ | .binary s _ _ _ | .cond s _ _ _ | .assign s _ _ _
@@ -896,6 +904,7 @@ mutual
 
 /-- `e` has no `<` or `<<` operator. -/
 def Expr.lessFree : Expr → Bool
+  | .regexp .. => true
   | .binary _ op l r => op != .lt && op != .shl && l.lessFree && r.lessFree
   | .array _ es => Expr.lessFreeList es
   | .object _ ps => Property.lessFreeList ps
@@ -933,6 +942,7 @@ parameter), so that an `in` after the declaration starts a `for … in` loop.
 ECMA-262 also allows an `in` inside `[ … ]` there, but `tsc` does not, so
 `e` has none there either. -/
 def Expr.inFree : Expr → Bool
+  | .regexp .. => true
   | .binary _ op l r => op != .«in» && l.inFree && r.inFree
   | .cond _ test _ ifFalse => test.inFree && ifFalse.inFree
   | .assign _ _ target value => target.inFree && value.inFree

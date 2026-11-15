@@ -284,11 +284,19 @@ inline tests. The native and WebAssembly translators use the same source.
 
 #### Regular expressions
 
-The translator still refuses regular expressions, including `test`, `match`
-and `replace` with a regex argument. A matcher model now exists in
-`tolean/TypeScript/Spec/RegExp.lean`, but the parser, IR and translator do
-not use it yet. Its tests compare generated pattern trees and UTF-16 inputs
-with Node; they do not yet test translation of regex source programs.
+The translator still refuses regular expression calls, including `test`,
+`match` and `replace` with a regex argument. The parser now accepts flagless
+literals that start with a non-capturing group, such as `/(?:a|ab)/`.
+Wrap a pattern in `(?:...)`, or prefix it with `(?:)`, to use that spelling.
+The unambiguous prefix keeps division distinct from a literal without
+weakening the parser's round-trip proof. Plain `/a/` literals remain refused.
+Before a regex statement, end the preceding simple statement with a
+semicolon; do not rely on a line break to separate them.
+
+The pattern parser in `Syntax/RegExp.lean` and matcher in `Spec/RegExp.lean`
+are tested against Node using generated patterns and UTF-16 inputs. Parser
+corpus tests also compare literal syntax with `tsc` and check source round
+trips. These tests do not yet cover translation of regex source programs.
 
 The model uses ordered backtracking without flags. It includes character
 classes, alternatives, captures, greedy repetition and the input anchors.

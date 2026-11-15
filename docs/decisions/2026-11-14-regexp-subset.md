@@ -8,8 +8,9 @@ alternatives is part of the result. A language-membership matcher alone
 cannot specify captures or replacement.
 
 This decision answers the open questions in
-[#218](https://github.com/shihangw/tolean/issues/218). It does not add regular
-expressions to the accepted subset.
+[#218](https://github.com/shihangw/tolean/issues/218). The matcher and literal
+parser implement the first part; regular expression calls are not yet
+translated.
 
 ## Start without flags
 
@@ -42,12 +43,37 @@ underscore. `\s` needs the WhiteSpace and LineTerminator sets of the target
 edition, not a host library's whitespace predicate. Unsupported escapes
 remain errors rather than being interpreted as literal text.
 
-Lazy quantifiers, backreferences, lookaround, named groups and constructor
-calls remain refused. The parser must distinguish a literal slash from
-division with the syntactic context that TypeScript uses. A rule that looks
-only at the preceding token is insufficient: a closing parenthesis can end
-either an expression or an `if` condition. Tests must compare these contexts
-with `tsc`, including comments and escaped slashes in character classes.
+Lazy quantifiers, backreferences, lookaround and named groups remain refused.
+The translator also refuses constructor calls.
+
+## Give literals an unambiguous lexical boundary
+
+The first accepted literals must begin with a non-capturing group:
+`/(?:PATTERN)/` or `/(?:)PATTERN/`. Wrapping a pattern this way changes neither
+its matching behavior nor its capture numbering. The prefix `/(?:` cannot
+be division followed by an expression, so the lexer recognizes it without
+guessing a lexical goal from the preceding token. Ordinary `/PATTERN/`
+literals receive an explicit refusal.
+
+Before a regex statement, the preceding simple statement must have a
+written semicolon. Otherwise a slash on the next line could continue an
+expression as division; accepting it as a new literal would insert a
+semicolon that JavaScript does not insert.
+
+This restriction preserves the existing token-local round-trip proof. A
+contextual lexer would make its universal punctuator lemma false: a printed
+division token followed by a space and `a /` would become a regular
+expression at an expression-start state. Adding the preceding token is not
+enough: a closing parenthesis can end either an expression or an `if`
+condition. Supporting the unrestricted spelling needs a grammar-sensitive
+lexical invariant, rather than weakening the round-trip theorem.
+
+The literal reader proves its consumed prefix and replay with an arbitrary
+suffix. These lemmas extend `lexKind_text`, `lexKind_ok` and the parser's
+`parseChars_reads` theorem. Tests compare literals after an `if` condition,
+division, empty classes, Unicode characters and escaped slashes with `tsc`.
+Tokens and expression trees keep the target edition: the interpreter must
+not lose the ES2015 meaning of `\s` when it receives the parsed tree.
 
 ## Preserve priority and prove progress
 

@@ -2462,6 +2462,7 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
     return ⟨.number v, false, .number⟩
   | .null _ => return ⟨.none, false, .null⟩
   | .bool _ value => return ⟨.bool value, false, .boolean⟩
+  | .regexp s .. => reject s "regular expression calls are not translated yet"
   | .string s value =>
     -- In the context of a literal union, a string is one of its constructors.
     match expected with

@@ -733,7 +733,7 @@ theorem types_give (T : Edition) : ∀ f : Nat,
               ((WordsOK.separated (sep := ",") (by decide) _ (WordsOK.wordsOf _ hw)).append
                 (WordsOK.word (ok_punct (by decide))))
         · simp [hp, hb] at h
-      | eof => simp at h
+      | regexp source target | eof => simp at h
 
 /-! ### The skeleton of a type -/
 
@@ -1106,7 +1106,7 @@ theorem types_skel : ∀ f : Nat,
           obtain ⟨rfl, rfl⟩ := h
           exact ⟨hR₄, (hP₃.trans (PastSkel.tok hs₄)).of_eq (by rw [skel_tuple, hck]; simp [skel, skelKind])⟩
         · simp [hp, hb] at h
-      | eof => simp at h
+      | regexp source target | eof => simp at h
 
 /-! ### Operators -/
 
@@ -1612,7 +1612,7 @@ theorem wfAt_bin_mono {T : Edition} {m m' : Nat} (hm : m' ≤ m) :
   | .satisfies sp e t, h => by
     simp only [Expr.wfAt, Bool.and_eq_true, decide_eq_true_eq] at h ⊢
     exact ⟨⟨⟨by omega, wfAt_bin_mono hm h.1.1.2⟩, h.1.2⟩, h.2⟩
-  | .ident .., h | .number .., h | .bigint .., h | .string .., h | .bool .., h | .null _, h | .array .., h
+  | .regexp .., h | .ident .., h | .number .., h | .bigint .., h | .string .., h | .bool .., h | .null _, h | .array .., h
   | .object .., h | .paren .., h | .member .., h | .optMember .., h | .index .., h | .call .., h
   | .unary .., h | .prefix .., h | .postfix .., h | .cond .., h | .assign .., h | .arrow .., h
   | .new .., h | .spread .., h => by simp_all [Expr.wfAt]
@@ -2728,7 +2728,7 @@ theorem parsePrimary_gives {T : Edition} {f : Nat} (hE : GivesE T .assign (Parse
     exact leaf_gives hs hR₁ (by simp [Expr.tokens, Expr.words, identWord, htk])
       (by simpa [Expr.wfAt, exprName] using hnr) (fun _ => by simp [Expr.afterOK])
       (by simpa [Expr.words, WordsOK, identWord, htk] using htok (by simp [htk]))
-  | number v | bigint v | string v =>
+  | regexp v target | number v | bigint v | string v =>
     simp only at h
     rw [Parse.bind_eq (Parse.discard_eq (advance_past hR hs (by rw [hk]; simp)))] at h
     simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h
@@ -2760,6 +2760,8 @@ theorem parsePrimary_gives {T : Edition} {f : Nat} (hE : GivesE T .assign (Parse
     · subst h4; simp only at h; exact hNew _ _ _ hR hT h x r hs hk
     simp at h
   | punct p =>
+    by_cases hslash : p = "/"
+    · subst hslash; simp at h
     by_cases h1 : p = "("
     · subst h1; simp only at h
       have hR₁ := hadv (by simp)
@@ -2792,7 +2794,7 @@ theorem parsePrimary_gives {T : Edition} {f : Nat} (hE : GivesE T .assign (Parse
     · subst h2; simp only at h; exact hArr _ _ _ hR hT h
     by_cases h3 : p = "{"
     · subst h3; simp only at h; exact hObj _ _ _ hR hT h
-    simp [h1, h2, h3] at h
+    simp [hslash, h1, h2, h3] at h
   | eof => simp at h
 
 /-- A check that keeps the state, run or not by an `if`, keeps the state. -/
@@ -3512,6 +3514,9 @@ theorem endStatement_inv {s s' : ParseState} (hR : Ready s) (h : Parse.endStatem
     cases h
     exact ⟨hR.past hs (hR.more hs hne), Kept.past _ _ _⟩
   · rw [if_neg h1] at h
+    split at h
+    · simp at h
+    simp only [Bool.false_eq_true, if_false] at h
     split at h
     · simp only [Parse.pure_ok] at h; obtain ⟨_, rfl⟩ := h; exact ⟨hR, Kept.refl _⟩
     · exact absurd h (Parse.unexpected_ne_ok _ _ _ _ _)
@@ -4861,7 +4866,7 @@ theorem parseStatement_gives {T : Edition} {f : Nat} (hBlk : GivesS T (Parse.par
     simp only [not_or] at he
     obtain ⟨e1, e2, e3, e4, e5, e6⟩ := he
     simp at h
-  | number v | bigint v | string v | eof =>
+  | regexp v target | number v | bigint v | string v | eof =>
     simp only at h
     exact exprStmt_gives hR hT hs (by rw [hk]; simp [startsExprStmt]) h
 
