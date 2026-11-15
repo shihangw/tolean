@@ -33,6 +33,10 @@ stays refused, even when the code that uses it is pure.
    to one object. Each of them gets the ownership rule that arrays, maps and
    sets have now: only the function that created the object may change it,
    and nothing else may hold it while it changes.
+   Interface fields need not say `readonly`, because the translator refuses
+   every field write regardless of that mark. The [TypeScript
+   guide](../typescript/README.md#the-subset) explains why the claim concerns
+   each call's values, not aliases that caller code keeps between calls.
 3. **The proof of the translator still covers it.** Each construct extends
    the Tolean IR, its evaluator and the interpreter, so `program_sound` holds
    for programs that use it. `tests/typescript/interpreter.test.ts` checks
@@ -314,7 +318,8 @@ a reason to choose otherwise.
   every caller. For a certificate, the codec of `T` gains one law per method:
   the object's field holds the encoding of the method's result. The first
   version accepts constraints that are interfaces or object types with
-  readonly fields, and refuses primitive bounds. Every instance gets a name,
+  typed fields, and refuses primitive bounds. Field writes stay refused,
+  whether or not the fields say `readonly`. Every instance gets a name,
   so that instance search never has two candidates.
 
 - Should `try` and `catch` come in a later step? The survey had none, but much

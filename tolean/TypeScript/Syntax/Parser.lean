@@ -1251,7 +1251,7 @@ def parseField : ParseM Field := do
   if optional then discard advance
   let next ← peek
   if next.isPunct "(" || next.isPunct "<" then failAt next "method signatures are not supported"
-  unless next.isPunct ":" do unexpected next "':' (a field needs a type)"
+  unless next.isPunct ":" do unexpected next "':' (interface fields must be typed)"
   discard advance
   let type ← parseType (← budget)
   let next ← peek
