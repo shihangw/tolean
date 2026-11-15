@@ -462,6 +462,7 @@ the file, the line and the reason. It never approximates.
 | `new Date(t)` on a number | `JSDate.ofNumber t`: TimeClip of `t`, its integer part, or an invalid date when `t` is not finite or is more than 8.64 × 10^15 from zero |
 | `d.getTime()`, `d.valueOf()`, and the UTC getters `d.getUTCFullYear()`, `getUTCMonth`, `getUTCDate`, `getUTCDay`, `getUTCHours`, `getUTCMinutes`, `getUTCSeconds` and `getUTCMilliseconds` | `JSDate.getTime (N := N) d` and `JSDate.getUTCFullYear (N := N) d` and the others, which follow the calendar of ECMA-262 §21.4.1 on integers. Each is `NaN` for an invalid date. |
 | `Date.UTC(year, month, …)` with two to seven numbers | `JSDate.utc (N := N) [year, month, …]`: MakeDay, MakeTime and MakeDate, with the arithmetic of numbers where ECMA-262 uses it, so a large argument rounds as it does in JS. A year from 0 to 99 is a year of the 1900s. |
+| `Date.parse(s)` where `s` is a Date Time String Format literal | `JSDate.parseFormat` recognizes and parses its UTF-16 code units at translation time. The output is `JSDate.number` of the resulting time value, or `none` for NaN. Date-only forms use UTC and may omit the month and day. Date-time forms need a full date and an explicit `Z` or numeric offset. Expanded years, `24:00:00`, and out-of-range fields are covered. This needs ES2016 or later. Other strings and non-literal arguments stay refused. |
 | `Math.min(a, b, …)`, `Math.max(a, b, …)` on numbers | `JSNumber.minimum (N := N) [a, b, …]` and `JSNumber.maximum`. They fold `Math.min` of two numbers over the list, from `Infinity`, as ECMA-262 does, so `Math.min()` is `Infinity`. Tolean refuses a spread argument. |
 | `NaN`, `Infinity`, `-Infinity` | `JSNumber.nan`, `posInf`, `negInf` |
 | `T \| null`, `null` | `Option T`, `none` |
@@ -604,9 +605,11 @@ Tolean rejects these, among others:
   parts, such as `new Date(2024, 0, 1)`, because they read the clock, parse,
   or read the time zone of the host. The getters of local time, such as
   `getFullYear`, and the setters stay refused too. `toISOString` waits for
-  the error classes of the errors stage, because it throws a `RangeError`
-  whose message is up to the engine. `tests/typescript/date.test.ts` checks
-  the getters and `Date.UTC` against Node on random arguments. One kind of
+  a model of built-in errors with messages that source code cannot read,
+  because it throws a `RangeError` whose message is up to the engine.
+  The existing per-file error classes require a specified message.
+  `tests/typescript/date.test.ts` checks the getters, `Date.UTC` and
+  recognized `Date.parse` literals against Node on random arguments. One kind of
   argument differs: V8 gives `NaN` when the year passes ±1,000,000, even when
   the date argument brings the result back into range. ECMA-262 lets MakeDay
   call such a year out of range, and the model follows its arithmetic, as

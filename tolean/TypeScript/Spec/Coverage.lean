@@ -317,6 +317,8 @@ def sections : List Section := [
     ``Proof.out_numberFold]⟩,
   ⟨"sec-date", "21.4.2.1", "Date ( ...values )",
     [``Proof.translateNewDate_sound, ``Proof.out_dateOfNumber]⟩,
+  ⟨"sec-date.parse", "21.4.3.2", "Date.parse ( string )",
+    [``Proof.translateDateParse_sound]⟩,
   ⟨"sec-date.utc", "21.4.3.4", "Date.UTC ( year [ , month [ , date [ , hours [ , minutes [ , seconds [ , ms ] ] ] ] ] ] )",
     [``Proof.eval_dateUtc, ``Proof.translateDateUtc_sound, ``Proof.out_dateUtc]⟩,
   ⟨"sec-properties-of-the-date-prototype-object", "21.4.4", "Properties of the Date Prototype Object",

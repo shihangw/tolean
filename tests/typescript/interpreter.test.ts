@@ -51,6 +51,7 @@ import fc from 'fast-check';
 import ts from 'typescript';
 
 import { Gen, type Signatures, type Ty } from './gen.ts';
+import { dateParseCases } from './dateParseCases.ts';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const tolean = process.env.TOLEAN ?? join(root, '.lake/build/bin/tolean');
@@ -476,6 +477,39 @@ test('string number arguments agree with Node, including fractions and infinitie
       expect(value === undefined ? 'no value' : canonical(value), `${body} with ${String(i)}`)
         .toBe(canonical(encode(node(s, i))));
     }
+  }
+});
+
+test('Date.parse accepts only deterministic format literals and agrees with Node', () => {
+  const input = { programs: dateParseCases.map((s) => ({
+    source: `export function f(): number { return Date.parse(${JSON.stringify(s)}); }`,
+    calls: [{ function: 'f', args: [] }],
+  })) };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const results = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  for (const [i, s] of dateParseCases.entries()) {
+    expect(results[i]?.accepted, s).toBe(true);
+    expect(results[i]?.results[0]?.value, s).toEqual(encode(Date.parse(s)));
+  }
+});
+
+test('Date.parse refuses local time and fallback formats', () => {
+  const strings = [
+    '2000-01-01T00:00', '2000-01-01T00:00:00.000', 'January 1, 2000',
+    '-000000-01-01', '2000-1-1', '2000-01-01T00:00:00.00Z',
+    '2000-01-01T00:00:00.0000Z', '2000-01-01T00:00Z ',
+  ];
+  const input = { programs: strings.map((s) => ({
+    source: `export function f(): number { return Date.parse(${JSON.stringify(s)}); }`,
+    calls: [{ function: 'f', args: [] }],
+  })) };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const results = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  for (const [i, s] of strings.entries()) {
+    expect(results[i]?.accepted, s).toBe(false);
+    expect(results[i]?.results[0], s).toBeNull();
   }
 });
 

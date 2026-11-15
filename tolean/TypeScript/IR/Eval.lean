@@ -131,6 +131,7 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   | .dateOfNumber, [.num t] => some (.date (JSDate.timeClip t))
   | .dateMethod name, [.date t] => Eval.dateMethod name t []
   | .dateUtc, vs => (Eval.numbers? vs).map fun xs => .num (JSDate.utc xs)
+  | .dateParse time, [] => some (.num (JSDate.number time))
   | .numberSameValue, [.num a, .num b] => some (.bool (JSNumber.sameValue a b))
   | .numberOfInt, [.int i] => some (.num (JSNumber.ofInt i))
   | .numberFold isMax, vs =>
