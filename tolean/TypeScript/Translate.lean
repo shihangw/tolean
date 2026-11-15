@@ -4515,8 +4515,9 @@ def exprUsesNumber : Expr → Bool
   | .asConst _ e | .spread _ e => exprUsesNumber e
   | .satisfies _ e t => exprUsesNumber e || typeUsesNumber t
   -- The index of a tuple, `t[0]`, is a position in the output, not a number.
-  | .index _ a (.number ..) => exprUsesNumber a
-  | .index _ a b | .binary _ _ a b | .assign _ _ a b => exprUsesNumber a || exprUsesNumber b
+  | .index _ a (.number ..) | .optIndex _ a (.number ..) => exprUsesNumber a
+  | .index _ a b | .optIndex _ a b | .binary _ _ a b | .assign _ _ a b =>
+    exprUsesNumber a || exprUsesNumber b
   | .cond _ a b c => exprUsesNumber a || exprUsesNumber b || exprUsesNumber c
   -- `new Map<bigint, number>()` names `number` only in its type arguments.
   | .new _ callee typeArgs args => isNumberName callee || typesUseNumber typeArgs || exprsUseNumber args
@@ -4525,7 +4526,7 @@ def exprUsesNumber : Expr → Bool
     ps.length ≥ 2 ||
     ps.any (fun p => isNumberName p.name || (p.type.map typeUsesNumber).getD false) ||
       exprUsesNumber body
-  | _ => false
+  | .bigint .. | .string .. | .bool .. | .null .. => false
 
 def exprsUseNumber : List Expr → Bool
   | [] => false
