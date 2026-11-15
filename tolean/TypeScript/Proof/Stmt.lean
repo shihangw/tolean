@@ -3177,6 +3177,250 @@ theorem callLocal_block (ps : List String) (sp : Span) (ss : List Stmt) (vs : Li
       | .brk _ | .cont _ => none) := by
   rw [Eval.callLocal]; rfl
 
+theorem assignsList_append_return_ident (n result : String) (sp ep : Span) (ss : List Stmt) :
+    Stmt.assignsList n (ss ++ [.returnStmt sp (some (.ident ep result))]) =
+      Stmt.assignsList n ss := by
+  induction ss with
+  | nil => rfl
+  | cons s ss ih => simp only [List.cons_append, Stmt.assignsList, ih]
+
+theorem constAssigned_append_return_ident (s : Stmt) (result : String)
+    (sp ep : Span) (ss : List Stmt) :
+    s.constAssignedIn (ss ++ [.returnStmt sp (some (.ident ep result))]) =
+      s.constAssignedIn ss := by
+  cases s <;> simp only [Stmt.constAssignedIn]
+  · rw [assignsList_append_return_ident]
+  · have h : (fun n => Stmt.assignsList n
+        (ss ++ [.returnStmt sp (some (.ident ep result))])) =
+        (fun n => Stmt.assignsList n ss) :=
+      funext fun n => assignsList_append_return_ident n result sp ep ss
+    rw [h]
+
+/-- A normally terminating prefix leaves the environment for its final
+return. No fresh result binding is needed. -/
+theorem returnState_prefix_ident (result : String) (sp ep : Span)
+    (ss : List Stmt) (ρ after : Eval.Env N) (v : Val N)
+    (hprefix : Eval.exec m fuel ρ ss = some (.normal after))
+    (hv : after.lookup result = some v) :
+    Eval.execReturnState m fuel ρ (ss ++ [.returnStmt sp (some (.ident ep result))]) =
+      some (.ok v, after) := by
+  induction ss generalizing ρ with
+  | nil =>
+    simp only [Eval.exec, Option.some.injEq, Outcome.normal.injEq] at hprefix
+    subst ρ
+    simp [Eval.execReturnState, Eval.evalTop, Eval.eval, hv]
+  | cons s ss ih =>
+    cases hc : s.constAssignedIn ss with
+    | true => simp [Eval.exec, hc] at hprefix
+    | false =>
+      cases he : Eval.execStmt m fuel ρ s with
+      | none => simp [Eval.exec, hc, he] at hprefix
+      | some o =>
+        cases o with
+        | ret r | brk inner | cont inner => simp [Eval.exec, hc, he] at hprefix
+        | normal inner =>
+          simp only [Eval.exec, hc, Bool.false_eq_true, ↓reduceIte,
+            pure_bind, he] at hprefix
+          have hr := ih inner hprefix
+          have hc' : s.constAssignedIn (ss ++ [.returnStmt sp (some (.ident ep result))]) = false := by
+            rw [constAssigned_append_return_ident, hc]
+          cases ss <;> simp only [List.nil_append, List.cons_append] at *
+          all_goals
+            rw [Eval.execReturnState]
+            simpa only [hc', Bool.false_eq_true, ↓reduceIte, pure_bind, he,
+              Option.bind_eq_bind, Option.bind_some] using hr
+          all_goals simp
+
+/-- Keeping the environment does not change the returned value. -/
+theorem returnState_exec (ss : List Stmt) (env after : Eval.Env N)
+    (r : Except (Val N) (Val N))
+    (h : Eval.execReturnState m fuel env ss = some (r, after)) :
+    Eval.exec m fuel env ss = some (.ret r) := by
+  induction ss generalizing env with
+  | nil => simp [Eval.execReturnState] at h
+  | cons s ss ih =>
+    cases ss with
+    | nil =>
+      cases s
+      all_goals try
+        simp [Eval.execReturnState, bind, Option.bind] at h
+        split at h
+        · contradiction
+        · rename_i o _
+          cases o <;> contradiction
+      rename_i sp value
+      cases value with
+      | none => simp [Eval.execReturnState, Eval.execStmt] at h
+      | some e =>
+        cases he : Eval.evalTop m fuel env e with
+        | none =>
+          simp only [Eval.execReturnState, he] at h
+          simp [Eval.exec, Eval.execStmt, he, h]
+        | some value =>
+          simp [Eval.execReturnState, he] at h
+          obtain ⟨rfl, rfl⟩ := h
+          simp [Eval.exec, Eval.execStmt, he]
+    | cons t ts =>
+      simp only [Eval.execReturnState] at h
+      split at h
+      · simp at h
+      · rename_i hc
+        cases he : Eval.execStmt m fuel env s with
+        | none => simp [he] at h
+        | some o =>
+          cases o <;> simp only [he] at h
+          all_goals try contradiction
+          rename_i inner
+          have hr := ih inner h
+          simpa [Eval.exec, hc, he] using hr
+
+theorem callLocal_return_state (env : Eval.Env N)
+    (params : List String) (sp : Span) (ss : List Stmt)
+    (vs : List (Val N)) (bound after : Eval.Env N) (r : Except (Val N) (Val N))
+    (hargs : Eval.bindArgs params vs = some bound)
+    (hchanges : Eval.changesCaptured env params (.block sp ss) = true)
+    (hrun : Eval.execReturnState m fuel (bound ++ Eval.captures env params (.block sp ss)) ss =
+      some (r, after)) :
+    Eval.callLocal m fuel env params (.block sp ss) vs =
+      some (r, Eval.writeBack env after params (.block sp ss)) := by
+  have hx := returnState_exec m fuel ss _ after r hrun
+  simp [Eval.callLocal, Eval.execStmt, hargs, hchanges, hx, hrun]
+
+/-- The prefix preserves every initially scoped value and writes back
+exactly the captured variables in its change set. -/
+theorem localPrefix_frame {env : Translate.Env} {fn : LocalFn} {k : Nat} {b : IR.Body}
+    {ρs ρo inner : Eval.Env N} {vs cvals : List (Val N)} {ss : List Stmt}
+    (h1 : (fn.captured.all fun l => fn.body.mentions l.name && (env.lookup l.name).any (·.type == l.type) &&
+      !fn.params.any (·.name == l.name)) = true)
+    (h2 : env.locals.any fn.late = false)
+    (h3 : (fn.changes.all (fun c => fn.captured.any (·.name == c)) &&
+      fn.captured.all (fun l => fn.changes.contains l.name ||
+        !(stmtsChanges (fn.bodyEnv env).fnChanges ss).contains l.name)) = true)
+    (hbody : StmtSim (N := N) m fs k (fn.bodyEnv env) (.state fn.changes) ss b)
+    (ha : Agree ρs ρo) (hs : Scoped m env ρs)
+    (hcv : IR.Expr.evalList fs fuel ρo (fn.captured.map (fun l => IR.Expr.var l.name)) = some cvals)
+    (hlen : vs.length = fn.params.length)
+    (hrun : IR.Body.exec fs k (((fn.leanParams.map (·.1)).zip (cvals ++ vs)).reverse) b =
+      some (.normal inner)) :
+    ∃ new mod,
+      Eval.exec m k ((((fn.params.map (·.name)).zip vs).reverse) ++
+        Eval.captures ρs (fn.params.map (·.name)) fn.body) ss = some (.normal (new ++ mod)) ∧
+      (∀ n, (fn.bodyEnv env).has n = true → (new ++ mod).lookup n = inner.lookup n) ∧
+      (∀ n ∈ fn.changes, (inner.lookup n).isSome →
+        (Eval.writeBack ρs (new ++ mod) (fn.params.map (·.name)) fn.body).lookup n = inner.lookup n) ∧
+      Frame fn.changes (Eval.writeBack ρs (new ++ mod) (fn.params.map (·.name)) fn.body) ρs := by
+  simp only [List.all_eq_true, Bool.and_eq_true, Bool.not_eq_true', List.any_eq_false] at h1 h3
+  have h1' : (fn.captured.all fun l => fn.body.mentions l.name && (env.lookup l.name).any (·.type == l.type)) =
+      true := by
+    simp only [List.all_eq_true, Bool.and_eq_true]
+    exact fun l hl => (h1 l hl).1
+  obtain ⟨hag, hsc⟩ := localBody_env m fs fuel h1' h2 ha hs hcv hlen
+  obtain ⟨_, new, out, mod, hex, hag', hnew, hout, hfr⟩ :=
+    (hbody _ _ hag hsc).2 false inner hrun
+  have hcapt : ∀ n, n ∈ fn.captured.map (·.name) → (fn.bodyEnv env).has n = true := by
+    intro n hn
+    rw [show (fn.bodyEnv env).has n = ((fn.params ++ fn.captured).map (·.name)).contains n from
+      find_name_isSome _ _]
+    simp [hn]
+  have hlook : ∀ n, (fn.bodyEnv env).has n = true → (new ++ mod).lookup n = inner.lookup n := by
+    intro n hn
+    rw [← hag' n]
+    rw [lookup_append_fresh mod (fun p hp hpn => ?_),
+        lookup_append_fresh mod (fun p hp hpn => ?_)]
+    · have h := hout p hp
+      rw [hpn, hn] at h
+      contradiction
+    · have h := hnew p hp
+      rw [hpn, hn] at h
+      contradiction
+  have hnotp : ∀ n, (fn.params.map (·.name)).contains n = false →
+      (((fn.params.map (·.name)).zip vs).reverse).lookup n = none := by
+    intro n hn
+    have := lookup_isSome_reverse (N := N) (x := n) ((fn.params.map (·.name)).zip vs)
+    rw [lookup_isSome_zip (by simpa using hlen), hn] at this
+    simpa using this
+  have hcl : ∀ l ∈ fn.captured, fn.body.mentions l.name = true ∧
+      (fn.params.map (·.name)).contains l.name = false ∧ (ρs.lookup l.name).isSome = true := by
+    intro l hl
+    obtain ⟨⟨hm, hty⟩, hnp⟩ := h1 l hl
+    refine ⟨hm, ?_, ?_⟩
+    · simpa using hnp
+    · rw [hs.1 l.name]
+      simp only [Translate.Env.has]
+      cases h : env.lookup l.name <;> simp_all
+  refine ⟨new, mod, hex, hlook, fun n hn hin => ?_, frame_writeBack fun n hnc hcap v hv hsn => ?_⟩
+  · obtain ⟨l, hl, hln⟩ := List.any_eq_true.mp (h3.1 n hn)
+    simp only [beq_iff_eq] at hln
+    subst hln
+    obtain ⟨hm, hnp, hsome⟩ := hcl l hl
+    have hin' := hlook l.name (hcapt l.name (List.mem_map.mpr ⟨l, hl, rfl⟩))
+    rw [lookup_writeBack, if_pos ⟨by rw [hm, hnp]; rfl, by rw [hin']; exact hin, hsome⟩, hin']
+  · simp only [Bool.and_eq_true, Bool.not_eq_true'] at hcap
+    obtain ⟨hm, hnp⟩ := hcap
+    have hhas : env.has n = true := by rw [← hs.1 n]; exact hsn
+    simp only [Translate.Env.has, Translate.Env.lookup, Option.isSome_iff_exists] at hhas
+    obtain ⟨l, hl⟩ := hhas
+    have hln : l.name = n := by simpa using List.find?_some hl
+    have hlate := List.any_eq_false.mp h2 l (List.mem_of_find?_eq_some hl)
+    have hlate' : (fn.captured.any (·.name == n) || fn.params.any (·.name == n)) = true := by
+      simp only [LocalFn.late, hln, hm, Bool.true_and] at hlate
+      cases h : (fn.captured.any (·.name == n) || fn.params.any (·.name == n)) <;> simp_all
+    simp only [Bool.or_eq_true, List.any_eq_true, beq_iff_eq] at hlate'
+    obtain ⟨l', hl', hl'n⟩ : ∃ l' ∈ fn.captured, l'.name = n := by
+      rcases hlate' with h | ⟨q, hq, hqn⟩
+      · exact h
+      · exact absurd (List.mem_map.mpr ⟨q, hq, hqn⟩) (by simpa using hnp)
+    have hnc' : n ∉ stmtsChanges (fn.bodyEnv env).fnChanges ss := by
+      have := (h3.2 l' hl')
+      rw [hl'n] at this
+      simp only [Bool.or_eq_true] at this
+      cases hc : fn.changes.contains n
+      · rw [hc] at this
+        simpa using this
+      · exact absurd (by simpa using hc) hnc
+    have hmod := hfr.lookup hnc'
+    rw [List.lookup_append, hnotp n hnp, Option.none_or, lookup_captures,
+      if_pos (by rw [hm, hnp]; rfl)] at hmod
+    rw [lookup_append_fresh mod (fun p hp hpn => ?_), hmod] at hv
+    · exact hv
+    · have h := hnew p hp
+      rw [hpn, hcapt n (List.mem_map.mpr ⟨l', hl', hl'n⟩)] at h
+      contradiction
+
+/-- The final return reads an initially scoped name, so the prefix proof
+relates its value as well as the captured state. -/
+theorem localCall_stateIdent {env : Translate.Env} {fn : LocalFn} {k : Nat} {b : IR.Body}
+    {ρs ρo inner : Eval.Env N} {vs cvals : List (Val N)} {ss : List Stmt}
+    {sp rp ep : Span} {result : String} {v : Val N}
+    (hblk : fn.body = .block sp (ss ++ [.returnStmt rp (some (.ident ep result))]))
+    (h1 : (fn.captured.all fun l => fn.body.mentions l.name && (env.lookup l.name).any (·.type == l.type) &&
+      !fn.params.any (·.name == l.name)) = true)
+    (h2 : env.locals.any fn.late = false)
+    (h3 : (fn.changes.all (fun c => fn.captured.any (·.name == c)) &&
+      fn.captured.all (fun l => fn.changes.contains l.name ||
+        !(stmtsChanges (fn.bodyEnv env).fnChanges ss).contains l.name)) = true)
+    (hbody : StmtSim (N := N) m fs k (fn.bodyEnv env) (.state fn.changes) ss b)
+    (ha : Agree ρs ρo) (hs : Scoped m env ρs)
+    (hcv : IR.Expr.evalList fs fuel ρo (fn.captured.map (fun l => IR.Expr.var l.name)) = some cvals)
+    (hlen : vs.length = fn.params.length)
+    (hrun : IR.Body.exec fs k (((fn.leanParams.map (·.1)).zip (cvals ++ vs)).reverse) b =
+      some (.normal inner))
+    (hname : (fn.bodyEnv env).has result = true)
+    (hv : inner.lookup result = some v)
+    (hchanges : Eval.changesCaptured ρs (fn.params.map (·.name)) fn.body = true) :
+    ∃ after,
+      Eval.callLocal m k ρs (fn.params.map (·.name)) fn.body vs = some (.ok v, after) ∧
+      (∀ n ∈ fn.changes, (inner.lookup n).isSome → after.lookup n = inner.lookup n) ∧
+      Frame fn.changes after ρs := by
+  obtain ⟨new, mod, hx, hag, hw, hf⟩ :=
+    localPrefix_frame m fs fuel h1 h2 h3 hbody ha hs hcv hlen hrun
+  refine ⟨Eval.writeBack ρs (new ++ mod) (fn.params.map (·.name)) fn.body, ?_, hw, hf⟩
+  have hr := returnState_prefix_ident m k result rp ep ss _ (new ++ mod) v hx
+    (by rw [hag result hname, hv])
+  rw [hblk] at hr hchanges ⊢
+  exact callLocal_return_state m k ρs _ sp _ vs _ _ (.ok v)
+    (bindArgs_eq (by simpa using hlen)) hchanges hr
+
 /-- A call of a local function that returns nothing. When the output's lifted
 body ends with the locals `inner`, the spec's call ends too: each local that
 the function changes gets the value that `inner` gives it, and every other
