@@ -788,6 +788,11 @@ def Stmt.borrowUpdate (param : String) : Stmt → Bool
     name == param &&
       ((method == "set" && args.length == 2) || (method == "delete" && args.length == 1)) &&
       args.all (fun e => e.borrowAtom && !e.leaks param)
+  | .exprStmt _ (.call _ (.ident _ _) args) =>
+    args.all (·.borrowAtom) &&
+      (args.filter (fun e => match e with
+        | .ident _ name => name == param
+        | _ => false)).length == 1
   | _ => false
 
 /-- A terminal bare return has no value for a void borrowing call. Keep its
@@ -800,7 +805,8 @@ def Stmt.borrowPrefix : Stmt → Stmt
   | s => s
 
 /-- The map parameter whose final value a normal completion copies out.
-Only a terminal bare return may follow the straight-line updates. -/
+Calls may forward that parameter once. The translator checks that each
+callee is an earlier borrowing function. -/
 def borrowParam? (params : List Param) (ret : Option TypeExpr) (body : Stmt) : Option Nat := do
   let some (.keyword _ "void") := ret | none
   let .block _ ss := body.borrowPrefix | none

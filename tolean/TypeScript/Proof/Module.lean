@@ -1917,6 +1917,10 @@ theorem returnedState_not_ret (fuel : Nat) (ρ : Eval.Env N) (b : IR.Body)
     | none => simp
     | some w =>
       exact returnedState_not_ret fuel ((n, w) :: ρ) rest hs v
+  case letBorrow n ref index args rest =>
+    intro hex
+    obtain ⟨_, _, _, _, _, _, _, entries, _, _, _, _, _, _, _, _, _, hrest⟩ := exec_letBorrow hex
+    exact returnedState_not_ret fuel (ρ.set n (.map entries)) rest hs v hrest
 
 mutual
 /-- Every call of the output gives what the same call of the source gives,

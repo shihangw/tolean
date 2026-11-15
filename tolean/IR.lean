@@ -326,7 +326,7 @@ deriving Repr, Inhabited
 before copying out a parameter, rather than accepting any normal completion. -/
 def Body.returnedState : Body T E → Option (List String)
   | .state names => some names
-  | .let _ _ rest => rest.returnedState
+  | .let _ _ rest | .letBorrow _ _ _ _ rest => rest.returnedState
   | _ => none
 
 /-- A declaration in the output. -/
