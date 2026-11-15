@@ -1147,14 +1147,14 @@ theorem undefinedTestOf_eval {env : Translate.Env} {l : Expr} {name : String} {i
             simp only [Option.some.injEq] at hother
             subst hother
             rw [hid, hund']
-            cases w <;> simp [Eval.binary, Eval.strictEq, isUndefVal]
+            simp [Eval.binary, (strictEq_undefined w).1, isUndefVal]
           · split at hother
             · rename_i _ ha
               obtain ⟨sa, rfl⟩ := isUndefinedName_eq ha
               simp only [Option.some.injEq] at hother
               subst hother
               rw [hid, hund']
-              cases w <;> simp [Eval.binary, Eval.strictEq, isUndefVal]
+              simp [Eval.binary, (strictEq_undefined w).2, isUndefVal]
             · simp at hother
         · simp at h
       · simp at h
@@ -2898,6 +2898,34 @@ theorem out_dateOfNumber {a : IR.Expr} {ρ : Eval.Env N} {v : Val N}
   | none => simp [hx, IR.ExprExt.apply] at h
   | some w => cases w <;> simp_all [IR.ExprExt.apply]
 
+theorem out_regexpTest {a b : IR.Expr} {ρ : Eval.Env N} {v : Val N}
+    (h : IR.Expr.eval fs fuel ρ (.ext .regexpTest [a, b]) = some v) :
+    ∃ r s, IR.Expr.eval fs fuel ρ a = some (.regexp r) ∧
+      IR.Expr.eval fs fuel ρ b = some (.str s) ∧ v = .bool (r.test s) := by
+  simp only [IR.Expr.eval, IR.Expr.evalList] at h
+  cases ha : IR.Expr.eval fs fuel ρ a with
+  | none => simp [ha] at h
+  | some va =>
+    cases hb : IR.Expr.eval fs fuel ρ b with
+    | none => simp [ha, hb] at h
+    | some vb =>
+      simp [ha, hb] at h
+      cases va with
+      | regexp r => cases vb <;> simp_all [IR.ExprExt.apply]
+      | _ => simp [IR.ExprExt.apply] at h
+
+theorem eval_regexpCall (sp sp' : Span) (recv arg : Expr)
+    (hr : recv.namesGlobal = false) (ρ : Eval.Env N) {r : JSRegExp.Regex} {s : JSString}
+    (hrecv : Eval.eval m fuel ρ recv = some (.regexp r))
+    (harg : Eval.eval m fuel ρ arg = some (.str s)) :
+    Eval.eval m fuel ρ (.call sp (.member sp' recv "test") [arg]) = some (.bool (r.test s)) := by
+  rw [Eval.eval]
+  all_goals first
+    | (rw [hrecv, harg]; rfl)
+    | (intros; subst_vars; simp [Expr.namesGlobal] at hr; done)
+    | (intros; subst_vars; simp [Eval.eval] at harg; done)
+    | simp
+
 theorem out_dateMethod {name : String} {a : IR.Expr} {ρ : Eval.Env N} {v : Val N}
     (h : IR.Expr.eval fs fuel ρ (.ext (.dateMethod name) [a]) = some v) :
     ∃ t, IR.Expr.eval fs fuel ρ a = some (.date t) ∧ Eval.dateMethod name t [] = some v := by
@@ -3051,6 +3079,24 @@ theorem translateArrayCall_sound {F : Nat}
     obtain ⟨t, ht, hval⟩ := out_dateMethod fs fuel hv
     rw [eval_value] at ht
     rw [eval_dateCall m fuel _ _ _ _ hr hsl _ (ihE _ _ _ _ _ _ hxs ρs ρo _ ha hs ht), hval]
+  split at h
+  · by_cases hm : method = "test"
+    · subst method
+      simp only [beq_self_eq_true, ↓reduceIte] at h
+      rcases args with _ | ⟨arg, _ | ⟨_, _⟩⟩ <;> simp only at h <;> try (simp at h; done)
+      simp only [bind_ok] at h
+      obtain ⟨input, s₂, hinput, h⟩ := h
+      simp only [ite_state] at h
+      split at h <;> try (simp at h; done)
+      simp only [pure_ok] at h
+      obtain ⟨rfl, -⟩ := h
+      intro ρs ρo v ha hs hv
+      obtain ⟨r, text, hregex, htext, rfl⟩ := out_regexpTest fs fuel hv
+      rw [eval_value] at hregex htext
+      exact eval_regexpCall m fuel _ _ _ _ hr _
+        (ihE _ _ _ _ _ _ hxs ρs ρo _ ha hs hregex)
+        (ihE _ _ _ _ _ _ hinput ρs ρo _ ha hs htext)
+    · simp [hm] at h
   simp only [bind_ok, orReject_ok] at h
   obtain ⟨elem, s₂, ⟨-, rfl⟩, h⟩ := h
   simp only [ite_state] at h
@@ -3415,6 +3461,11 @@ theorem eval_mapMethod (sp sp' : Span) (recv key : Expr) (name : String) (hr : r
     Eval.eval m fuel ρ (.call sp (.member sp' recv name) [key]) =
       (Eval.eval m fuel ρ recv).bind fun r =>
         match r with
+        | .regexp re =>
+          if name == "test" then do
+            let .str input ← Eval.eval m fuel ρ key | none
+            return .bool (re.test input)
+          else none
         | .map _ | .set _ => (Eval.eval m fuel ρ key).bind (mapMethodVal name r)
         | .list items => (Eval.eval m fuel ρ key).bind fun k => Eval.arrayMethod name items [k]
         | .str s => (Eval.eval m fuel ρ key).bind fun k => Eval.stringMethod name s [k] [Eval.intLiteral? key]
@@ -4593,6 +4644,17 @@ theorem apply_recordGet {r : DeclRef} {keys : List String} {ov kv v : Val N}
   cases kv <;> simp at h
   exact ⟨_, _, rfl, rfl, h⟩
 
+theorem regexpLiteral_sound {F : Nat} {env : Translate.Env} {expected : Option Ty}
+    {sp : Span} {source : String} {target : Edition} {ctx ctx' : Ctx} {c : Code}
+    (h : translateExprCore (F + 1) env expected (.regexp sp source target) ctx = .ok c ctx') :
+    Sim (N := N) m fs fuel env (.regexp sp source target) c.code := by
+  simp [translateExprCore] at h
+  obtain ⟨s₁, ⟨-, rfl⟩, r, ⟨hparse, rfl⟩, rfl⟩ := h
+  intro ρs ρo v _ _ hv
+  simp [IR.Expr.eval, IR.Expr.evalList, IR.ExprExt.apply] at hv
+  subst v
+  simp [Eval.eval, hparse]
+
 theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
     (∀ env exp e ctx c ctx', translateExpr F env exp e ctx = .ok c ctx' →
       Sim (N := N) m fs fuel env e c.code) ∧
@@ -4691,6 +4753,8 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
         intro ρs ρo v _ _ hv'
         simp [IR.Expr.eval] at hv'
         subst hv'; simp [Eval.eval]
+      | regexp sp source target =>
+        exact regexpLiteral_sound m fs fuel h
       | string sp str =>
         -- A string, or the constructor of a literal union for it: either is
         -- the string.

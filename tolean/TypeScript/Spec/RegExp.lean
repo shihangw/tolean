@@ -4,7 +4,7 @@ import tolean.TypeScript.Spec.String
 Ordered, greedy matching without flags, following ECMA-262 §22.2.2.
 Positions count UTF-16 code units. A continuation decides whether the part
 after a candidate match succeeds, so an alternative can backtrack when it
-fails. This module does not yet extend the translator's accepted subset.
+fails. Flagless literals and their `test` method use this model.
 -/
 namespace tolean.TypeScript.JSRegExp
 
@@ -47,7 +47,14 @@ inductive Pattern where
   | alt (left right : Pattern)
   | capture (index : Nat) (body : Pattern)
   | repeat (body : Pattern) (minimum : Nat) (maximum : Option Nat)
-deriving Repr, Inhabited
+deriving Repr, Inhabited, BEq, DecidableEq
+
+/-- A compiled flagless literal. The subset never changes `lastIndex` or
+observes identity, so `test` needs only the pattern. -/
+structure Regex where
+  pattern : Pattern
+  captureCount : Nat
+deriving Repr, Inhabited, BEq, DecidableEq
 
 def Pattern.captureIndices : Pattern → List Nat
   | .seq a b | .alt a b => a.captureIndices ++ b.captureIndices
@@ -100,6 +107,9 @@ def search (input : JSString) (p : Pattern) (captureCount : Nat) :
 Captures cannot affect success in the fragment without backreferences. -/
 def test (input : JSString) (p : Pattern) : Bool :=
   (search input p 0).isSome
+
+def Regex.test (r : Regex) (input : JSString) : Bool :=
+  JSRegExp.test input r.pattern
 
 /-- The matcher invokes its continuation only at positions at or after the
 start. The continuation itself may return any state, so a claim about only
