@@ -107,7 +107,7 @@ def encoderOf (r : Refs) : IR.Ty → Option String
   -- A type parameter has no encoder, so a generic function or interface gets no
   -- certificate yet. Neither has a map, a set or a date, nor a function that
   -- can throw.
-  | .null | .tag _ | .param _ | .app .. | .map .. | .set _ | .except .. | .error | .date | .regexp => none
+  | .null | .tag _ | .param _ | .app .. | .map .. | .set _ | .except .. | .error | .date | .regexp | .ext .closure => none
 
 /-- How the elements of a tuple of the types `ts` become a list of `Val`s. -/
 def elementsEncoder (r : Refs) : List IR.Ty → Option String
@@ -130,7 +130,7 @@ def decoderOf (r : Refs) : IR.Ty → Option String
   | .struct ref | .enum ref | .tagged ref => some (r.cert s!"decode{ref.name}")
   | .number => some (r.eval "decNum")
   | .tuple ts => do return s!"({r.eval "decTuple"} {← elementsDecoder r ts})"
-  | .null | .tag _ | .param _ | .app .. | .map .. | .set _ | .except .. | .error | .date | .regexp => none
+  | .null | .tag _ | .param _ | .app .. | .map .. | .set _ | .except .. | .error | .date | .regexp | .ext .closure => none
 
 /-- How a list of `Val`s becomes the elements of a tuple of the types `ts`. -/
 def elementsDecoder (r : Refs) : List IR.Ty → Option String
@@ -156,6 +156,7 @@ partial def stmtsOf : Stmt → List Stmt
   | .forOfPattern s k p i b => .forOfPattern s k p i b :: stmtsOf b
   | .forStmt s i t u b => .forStmt s i t u b :: stmtsOf b
   | .whileStmt s t b => .whileStmt s t b :: stmtsOf b
+  | .funDecl s n tps ps r b => .funDecl s n tps ps r b :: stmtsOf b
   | .switchStmt s d cs => .switchStmt s d cs :: cs.flatMap fun (_, body) => body.flatMap stmtsOf
   | s => [s]
 
@@ -165,7 +166,7 @@ partial def exprCalls : Expr → List String
   | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e
   | .asConst _ e | .satisfies _ e _ | .spread _ e =>
     exprCalls e
-  | .index _ a b | .binary _ _ a b | .assign _ _ a b => exprCalls a ++ exprCalls b
+  | .index _ a b | .optIndex _ a b | .binary _ _ a b | .assign _ _ a b => exprCalls a ++ exprCalls b
   | .cond _ a b c => exprCalls a ++ exprCalls b ++ exprCalls c
   | .array _ es => es.flatMap exprCalls
   | .object _ ps => ps.flatMap fun
@@ -181,7 +182,7 @@ partial def exprNumbers : Expr → List String
   | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e
   | .asConst _ e | .satisfies _ e _ | .spread _ e =>
     exprNumbers e
-  | .index _ a b | .binary _ _ a b | .assign _ _ a b => exprNumbers a ++ exprNumbers b
+  | .index _ a b | .optIndex _ a b | .binary _ _ a b | .assign _ _ a b => exprNumbers a ++ exprNumbers b
   | .cond _ a b c => exprNumbers a ++ exprNumbers b ++ exprNumbers c
   | .array _ es => es.flatMap exprNumbers
   | .object _ ps => ps.flatMap fun | .keyValue _ _ v => exprNumbers v | _ => []
@@ -236,7 +237,7 @@ partial def subExprs (e : Expr) : List Expr :=
     | .call _ c args => subExprs c ++ args.flatMap subExprs
     | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e
     | .arrow _ _ _ e | .spread _ e => subExprs e
-    | .index _ a b | .binary _ _ a b | .assign _ _ a b => subExprs a ++ subExprs b
+    | .index _ a b | .optIndex _ a b | .binary _ _ a b | .assign _ _ a b => subExprs a ++ subExprs b
     | .cond _ a b c => subExprs a ++ subExprs b ++ subExprs c
     | .array _ es => es.flatMap subExprs
     | .object _ ps => ps.flatMap fun | .keyValue _ _ v => subExprs v | _ => []
@@ -316,7 +317,7 @@ partial def exprCallbacks : IR.Expr → List Callback
   | .field a _ _ | .propNot a | .not a | .neg a | .isNone a | .isSome a | .decide a | .push _ a
   | .update _ _ a | .inject _ _ a | .ascribe a _ => exprCallbacks a
   | .ite a b c => exprCallbacks a ++ exprCallbacks b ++ exprCallbacks c
-  | .matchNull _ a b | .coalesce a b _ | .intOp _ a b | .order _ a b | .division _ a b
+  | .matchNull _ a b _ | .coalesce a b _ | .intOp _ a b | .order _ a b | .division _ a b
   | .eq a b | .ne a b | .propAnd a b | .propOr a b | .and a b | .or a b =>
     exprCallbacks a ++ exprCallbacks b
   | .call _ args | .list args _ | .ext _ args => args.flatMap exprCallbacks
@@ -332,7 +333,7 @@ partial def exprNames : IR.Expr → List String
   | .listMethod _ items _ _ body _ => exprNames items ++ exprNames body
   | .listFold items init _ _ _ body _ => exprNames items ++ exprNames init ++ exprNames body
   | .push n a | .update _ n a => n :: exprNames a
-  | .matchNull n a b => n :: exprNames a ++ exprNames b
+  | .matchNull n a b _ => n :: exprNames a ++ exprNames b
   | .field a _ _ | .propNot a | .not a | .neg a | .isNone a | .isSome a | .decide a
   | .inject _ _ a | .ascribe a _ => exprNames a
   | .ite a b c => exprNames a ++ exprNames b ++ exprNames c
@@ -358,8 +359,9 @@ partial def bodyCallbacks : IR.Body → List Callback
   | .fold _ _ body items rest _ => exprCallbacks items ++ bodyCallbacks body ++ bodyCallbacks rest
   | .throw e => exprCallbacks e
   | .bind _ _ args rest | .letBorrow _ _ _ args rest => args.flatMap exprCallbacks ++ bodyCallbacks rest
-  -- A file with a local function gets no certificate yet.
-  | .letCall _ _ _ _ _ _ _ _ _ rest | .letLifted _ _ rest => bodyCallbacks rest
+  | .letCall _ _ _ _ _ _ _ body args rest =>
+    args.flatMap exprCallbacks ++ bodyCallbacks body ++ bodyCallbacks rest
+  | .letLifted _ _ rest => bodyCallbacks rest
 
 end
 
@@ -516,8 +518,19 @@ partial def loopsOf : IR.Body → List (List String × String × IR.Body × IR.L
   | .letState _ branch rest => loopsOf branch ++ loopsOf rest
   | .fold names element body _ rest info => loopsOf body ++ [(names, element, body, info)] ++ loopsOf rest
   | .throw _ => []
-  | .bind _ _ _ rest | .letCall _ _ _ _ _ _ _ _ _ rest | .letLifted _ _ rest
-  | .letBorrow _ _ _ _ rest => loopsOf rest
+  | .letCall _ _ _ _ _ _ _ body _ rest => loopsOf body ++ loopsOf rest
+  | .bind _ _ _ rest | .letLifted _ _ rest | .letBorrow _ _ _ _ rest => loopsOf rest
+
+/-- The closure values that calls in a body require from their environment. -/
+def closureReads : IR.Body → List (String × IR.Expr)
+  | .value _ | .state _ | .yield .. | .done .. | .exit .. | .throw _ => []
+  | .let _ _ rest | .letArray _ _ _ rest | .letTuple _ _ rest |
+    .bind _ _ _ rest | .letLifted _ _ rest | .letBorrow _ _ _ _ rest => closureReads rest
+  | .ite _ a b | .matchNull _ _ a b | .matchTag _ _ _ _ _ a b |
+    .letState _ a b => closureReads a ++ closureReads b
+  | .fold _ _ body _ rest _ => closureReads body ++ closureReads rest
+  | .letCall _ _ name value _ _ _ body _ rest =>
+    (name, value) :: closureReads body ++ closureReads rest
 
 /-- `s`, the state of a loop with the locals `names`, as the path to one of
 them: `s`, `s.1`, `s.2.1`, and so on. -/
@@ -527,9 +540,18 @@ def project (s : String) (count index : Nat) : String :=
     let seconds := String.join (List.replicate index ".2")
     if index + 1 == count then s!"{s}{seconds}" else s!"{s}{seconds}.1"
 
-/-- A value as a Lean term. The derived `Repr` writes each constructor by its
-full name, so Lean reads the text back as the same value. If it did not, the
-kernel's check in the certificate would fail, so this need not be trusted. -/
+/-- A closure needs its syntax tree as a term, not the debug printer's
+`<statement>` marker. Other operations use their derived representation. -/
+private def exprExtTerm (x : IR.ExprExt) (prec : Nat) : Std.Format :=
+  match x with
+  | .closure params body =>
+    Std.Format.text s!"(tolean.TypeScript.IR.ExprExt.closure {list (params.map str)} {stmt body})"
+  | _ => reprPrec x prec
+
+local instance : Repr IR.ExprExt := ⟨exprExtTerm⟩
+
+/-- A value as a Lean term. The kernel checks that it is the translator's
+output, so this printer need not be trusted. -/
 def term {α : Type} [Repr α] (x : α) : String := (repr x).pretty 100
 
 /-- The certificate file for `source`, translated as the Lean module `leanModule`
@@ -562,12 +584,6 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       | .function _ _ _ _ _ _ body => (stmtsOf body).any (· matches .forStmt ..)
       | _ => false then
     throw s!"{file}: a counted loop has no certificate yet"
-  -- The certificate has no lemma for a function that the translator lifted
-  -- out of another.
-  if m.decls.any fun d => match d with
-      | .function _ _ _ _ _ _ body => (stmtsOf body).any (· matches .funDecl ..)
-      | _ => false then
-    throw s!"{file}: a local function has no certificate yet"
   -- `JSON.stringify` is opaque in the output and in the interpreter, so no
   -- proof links one to the other.
   if m.decls.any fun d => match d with
@@ -797,7 +813,11 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         s!"@[simp] theorem decList_decNull_decode{name} {generic} (xs : List (Option {ty})) : decList (decNull decode{name}) (some (Val.list (List.map (encNull (encode{name} ({nv} := {nv}))) xs))) = xs :=\n" ++
         s!"  decList_list_null _ _ decode{name}_encode{name} encode{name}_ne_null xs"
       lemmaNames := lemmaNames ++ #[r.cert s!"encode{name}", r.cert s!"decode{name}"]
-  let defs := (functionsOf m).map fun f => r.full s!"{transNs}.{f.1}"
+  let defs := decls.flatMap fun
+    | .function name _ _ body =>
+      r.full s!"{transNs}.{name}" ::
+        body.lifted.map (fun (ref, _, _, _) => r.full s!"{transNs}.{ref.name}")
+    | _ => []
   let outputFs := s!"({r.full "tolean.TypeScript.IR.functionsOf"} [(\"\", {r.cert "decls"})])"
   let envLemmas := ["Env.set_cons", "Env.lookup_cons", "Env.lookup_set_same", "Env.lookup_set_ne",
     "Env.set_set", "Env.length_set"].map r.eval
@@ -1166,8 +1186,15 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       if info.elem matches .list .. then
         throw s!"{file}: cannot certify a loop over arrays of arrays in {name} yet"
       let some encX := encoderOf r info.elem | throw s!"{file}: cannot encode the elements of a loop in {name}"
+      let closures := (closureReads body).foldl (init := []) fun found entry =>
+        if found.any (·.1 == entry.1) then found else found ++ [entry]
+      let closures ← closures.mapM fun (n, value) => do
+        let .ext (.closure params body) [] := value
+          | throw s!"{file}: cannot state the closure invariant for {n}"
+        pure (n, s!"{r.eval "Val.closure"} {list (params.map str)} {stmt body}")
+      let scope := info.scope
       let state := stateNames.zip info.stateTypes
-      let vars := state ++ info.scope
+      let vars := state ++ scope
       let coded ← vars.mapM fun (n, t) => do
         let (some e, some dec) := (encoderOf r t, decoderOf r t)
           | throw s!"{file}: cannot encode the variable {n} in {name}"
@@ -1186,13 +1213,15 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         if count == 1 then decode ρ stateNames.head! else
           "(" ++ ", ".intercalate (stateNames.map (decode ρ)) ++ ")"
       let inv (ρ : String) : String :=
-        " ∧ ".intercalate (coded.map fun (n, e, dec) =>
-          s!"{ρ}.lookup {str n} = some ({e} ({dec} ({ρ}.lookup {str n})))")
-      let scopeNames := info.scope.map (·.1)
+        " ∧ ".intercalate ((coded.map fun (n, e, dec) =>
+          s!"{ρ}.lookup {str n} = some ({e} ({dec} ({ρ}.lookup {str n})))") ++
+          closures.map fun (n, value) =>
+            s!"{ρ}.lookup {str n} = some ({value})")
+      let scopeNames := scope.map (·.1)
       let stepLines := IR.indentBy "        " (body.lines names)
       -- Every binder has its type, as in the output's loop (see `IR.foldBinders`).
       let captured := if scopeNames.isEmpty then "" else
-        s!"fun {" ".intercalate (info.scope.map fun (n, t) => s!"({n} : {t.print names})")} => "
+        s!"fun {" ".intercalate (scope.map fun (n, t) => s!"({n} : {t.print names})")} => "
       -- A loop that a `break` can end runs with `forIn`, and its step gives a
       -- `ForInStep` of the state. The type says `Id`, as `forIn` expects in the
       -- printed definition, so that the two `if`s have the same type and the
@@ -1237,7 +1266,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           ["tolean.TypeScript.Proof.retOutcome", "ForInStep.value"]
         else if info.breaks then ["tolean.TypeScript.Proof.stepOutcome", "ForInStep.value"] else []
       if info.returns.isSome then returnsLoop := true
-      let depth := callDepth m bodyStmt
+      let depth := if closures.isEmpty then callDepth m bodyStmt else callDepth m syntaxBody + closures.length
       let fuel := if depth == 0 then "fuel" else s!"(fuel + {depth})"
       -- A body with calls looks the functions up in the output, so the lemma
       -- is about the output's functions.
@@ -1246,7 +1275,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       let hfsName := if depth == 0 then [] else [r.cert "decls"]
       -- `List (Option Int)`, with the parentheses that an element type needs.
       let itemsTy := (tolean.IR.Ty.list info.elem).print names
-      let hypNames := (List.range coded.length).map (s!"h{·}")
+      let hypNames := (List.range (coded.length + closures.length)).map (s!"h{·}")
       -- `obtain h0 := hI` would lose the name, so one hypothesis gets a `have`.
       let bindHyps := if hypNames.length == 1 then "have h0 := hI"
         else "obtain ⟨" ++ ", ".intercalate hypNames ++ "⟩ := hI"
@@ -1256,7 +1285,8 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       let stateCoded := coded.take count
       let destruct := if count ≤ 1 then "" else
         s!"    obtain ⟨{", ".intercalate ((List.range count).map (s!"s{·}"))}⟩ := s\n"
-      let simpSet := ", ".intercalate (hfsName ++ stepNames ++ envLemmas ++ lemmaNames.toList ++
+      let closureLemmas := if closures.isEmpty then [] else ["tolean.TypeScript.Proof.lookup_ite"]
+      let simpSet := ", ".intercalate (hfsName ++ stepNames ++ closureLemmas ++ envLemmas ++ lemmaNames.toList ++
         loopLemmas.toList ++ defs)
       -- The values that one step sees: the element, the state, and the other
       -- locals, which the lemma generalizes to `v0`, `v1` and so on.

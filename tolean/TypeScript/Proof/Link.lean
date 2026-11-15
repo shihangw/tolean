@@ -26,6 +26,14 @@ open tolean.TypeScript.Eval (Val)
 
 variable {N : Type} [JSNumber N]
 
+omit [JSNumber N] in
+/-- Reading a name distributes over the choice of an environment. A local
+call may bind its result by updating an old slot or adding a fresh one. -/
+theorem lookup_ite (p : Prop) [Decidable p] (yes no : Eval.Env N) (name : String) :
+    (if p then yes else no).lookup name =
+      (if p then yes.lookup name else no.lookup name) := by
+  split <;> rfl
+
 /-- The translator gives `decls` for `m`, from the state `start`. The kernel
 can decide this, and a certificate does. -/
 def translatesTo (m : Module) (start : Ctx) (decls : List IR.Decl) : Bool :=
@@ -806,14 +814,14 @@ macro_rules
       simp [runIn, callIn, Except.toOption, functionsOf, functions, Body.exec, Body.runFold, Expr.eval,
         Expr.evalCall, Expr.evalList,
         Expr.evalFields, Expr.evalMap, Expr.evalMapIdx, Expr.evalFilter, Expr.evalFind, Expr.evalFindIdx, Expr.evalReduce,
-        bindState, eqVal, ← List.map_reverse,
+        bindState, callResult, eqVal, ← List.map_reverse,
         -- `includes` on an array literal compares with `===` once the list
         -- has reduced, so strict equality on primitives must reduce too.
         Eval.includesVal, Eval.sameValueZero, Eval.strictEq, Eval.setProp,
         tolean.IR.IntOp.apply, tolean.IR.Order.apply,
         tolean.IR.Division.apply, ExprExt.apply, listItems?, StringPart.toStr, StringMethod.apply, Eval.oneString, Eval.noArgs, Eval.stringAndInt, Eval.oneInt, Eval.sliceArgs, Eval.padArgs, Eval.padArgs.lengthArg, Eval.stringAt, Eval.intArg, Eval.asciiCase, NumberOp.apply, NumberConstant.value,
         NumberTest.apply, tagOf, Eval.Val.typeOf, Eval.Env.set, Eval.getProp, Eval.getKey_ofString, Eval.getPath,
-        Eval.objectPrototypeNames, List.lookup, DeclRef.beq_def, -List.map_map, -List.map_tail, ← List.map_drop, ← List.map_take, ← List.map_reverse, ← List.map_append,
+        Eval.objectPrototypeNames, List.lookup, DeclRef.beq_def, -List.map_map, -List.map_tail, ← List.map_tail, ← List.map_dropLast, ← List.map_drop, ← List.map_take, ← List.map_reverse, ← List.map_append,
         -- A map or set read, such as the initial value of a `reduce`, must
         -- reach a value before a fold lemma can rewrite the call that uses it.
         -- So must the map or set that the read looks in, when `new Map(items)`
