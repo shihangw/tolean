@@ -86,6 +86,7 @@ def expr : Expr → String
   | .number s t => s!"({ns}Expr.number {span s} {str t})"
   | .bigint s t => s!"({ns}Expr.bigint {span s} {str t})"
   | .string s v => s!"({ns}Expr.string {span s} {str v})"
+  | .regexp s v target => s!"({ns}Expr.regexp {span s} {str v} .es{target.year})"
   | .bool s b => s!"({ns}Expr.bool {span s} {b})"
   | .null s => s!"({ns}Expr.null {span s})"
   | .array s es => s!"({ns}Expr.array {span s} {list (exprs es)})"
