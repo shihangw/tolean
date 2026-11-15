@@ -818,15 +818,18 @@ def borrowCandidate? (params : List Param) (ret : Option TypeExpr) (body : Stmt)
   else some i
 
 /-- A forwarded call changes the candidate parameter only when it occurs
-at the checked callee's borrowed argument index. -/
-def Stmt.borrowCallsValid (borrows : List (String × Nat)) (param : String) : Stmt → Bool
+at the checked callee's borrowed argument index. No parameter may hide
+that top-level callee. -/
+def Stmt.borrowCallsValid (borrows : List (String × Nat)) (params : List String)
+    (param : String) : Stmt → Bool
   | .exprStmt _ (.call _ (.ident _ name) args) =>
-    match borrows.lookup name with
-    | some i =>
-      match args[i]? with
-      | some (.ident _ actual) => actual == param
-      | _ => false
-    | none => false
+    !params.contains name &&
+      match borrows.lookup name with
+      | some i =>
+        match args[i]? with
+        | some (.ident _ actual) => actual == param
+        | _ => false
+      | none => false
   | _ => true
 
 /-- The map parameter whose final value a normal completion copies out.
@@ -836,7 +839,7 @@ def borrowParam? (borrows : List (String × Nat)) (params : List Param)
   let i ← borrowCandidate? params ret body
   let p ← params[i]?
   let .block _ ss := body.borrowPrefix | none
-  if ss.all (·.borrowCallsValid borrows p.name) then some i else none
+  if ss.all (·.borrowCallsValid borrows (params.map (·.name)) p.name) then some i else none
 
 /-- Replace a checked borrow statement by a mutation marker for the existing
 ownership test. Every other mention of a borrowing function is refused here,
