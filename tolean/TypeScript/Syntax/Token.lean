@@ -1,4 +1,5 @@
 import tolean.Source
+import tolean.TypeScript.Edition
 
 /-!
 The tokens of the TypeScript lexer.
@@ -18,6 +19,9 @@ inductive TokenKind where
   | bigint (text : String)
   /-- A string literal, with its escapes decoded. -/
   | string (value : String)
+  /-- The source of a flagless regular expression, without its slashes.
+  Keep the target because the whitespace escape changed after ES2015. -/
+  | regexp (source : String) (target : Edition)
   /-- A punctuator. The lexer gives each `>` alone, as `tsc` does; the parser
   joins `>` `>` `=` and the like in expressions, so that `Array<Array<T>>`
   closes two type argument lists. -/
@@ -40,6 +44,7 @@ def TokenKind.describe : TokenKind → String
   | .number text => s!"number {text}"
   | .bigint text => s!"bigint {text}"
   | .string _ => "a string"
+  | .regexp .. => "a regular expression"
   | .punct symbol => s!"'{symbol}'"
   | .eof => "the end of the file"
 

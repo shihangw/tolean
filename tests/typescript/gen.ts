@@ -1023,4 +1023,25 @@ export class Gen {
     }
     return out.join('\n') + '\n';
   }
+
+  /** A normal-completion borrow, including replacement and deletion of keys. */
+  borrowProgram(terminalReturn = false, forward = false): string {
+    const updates: Array<string> = [];
+    for (let i = 0; i < 1 + Math.floor(this.next() * 8); i++) {
+      const key = `${Math.floor(this.next() * 4)}n`;
+      updates.push(this.chance(0.7) ? `m.set(${key}, x);` : `m.delete(${key});`);
+    }
+    return `function change(m: Map<bigint, bigint>, x: bigint): void {
+      ${updates.join('\n')}
+      ${terminalReturn ? 'return;' : ''}
+    }
+    ${forward ? `function forward(m: Map<bigint, bigint>, x: bigint): void {
+      change(m, x);
+    }` : ''}
+    export function f(x: bigint): bigint {
+      const m = new Map<bigint, bigint>([[0n, 7n], [2n, 9n]]);
+      ${forward ? 'forward' : 'change'}(m, x);
+      return (m.get(0n) ?? 0n) + (m.get(1n) ?? 0n) + (m.get(2n) ?? 0n) + (m.get(3n) ?? 0n);
+    }\n`;
+  }
 }
