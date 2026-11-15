@@ -1033,6 +1033,15 @@ export class Gen {
       out.push(`export function optionalGuard(x?: bigint): boolean { return ${body}; }`);
       this.functions.push({ name: 'optionalGuard', params: [{ k: 'optional', of: BIGINT }], ret: BOOLEAN });
     }
+    if (this.chance(0.25)) {
+      const index = this.pick(['i', '0', '1']);
+      out.push(`export function optionalIndex(i: number, xs?: ReadonlyArray<bigint>): bigint { return xs?.[${index}] ?? 0n; }`);
+      this.functions.push({
+        name: 'optionalIndex',
+        params: [NUMBER, { k: 'optional', of: { k: 'array', of: BIGINT } }],
+        ret: BIGINT,
+      });
+    }
     return out.join('\n') + '\n';
   }
 }
