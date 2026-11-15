@@ -16,10 +16,10 @@ def wrapped {N : Type} [JSNumber N] (xs : List N) : (Box N) :=
 def replacement {N : Type} [JSNumber N] (box : (Box N)) (xs : List N) : (Box N) :=
   ({ box with values := (sorted (N := N) xs) } : (Box N))
 
-def base {N : Type} [JSNumber N] (xs : List N) : (Box N) :=
+def wrappedBase {N : Type} [JSNumber N] (xs : List N) : (Box N) :=
   ({ ((wrapped (N := N) xs)) with values := xs } : (Box N))
 
-def both {N : Type} [JSNumber N] (xs : List N) (ys : List N) : (Box N) :=
+def wrappedBoth {N : Type} [JSNumber N] (xs : List N) (ys : List N) : (Box N) :=
   ({ ((wrapped (N := N) xs)) with values := (sorted (N := N) ys) } : (Box N))
 
 end Test

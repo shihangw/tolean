@@ -9,9 +9,9 @@ export function wrapped(xs: ReadonlyArray<number>): Box {
 export function replacement(box: Box, xs: ReadonlyArray<number>): Box {
   return { ...box, values: sorted(xs) };
 }
-export function base(xs: ReadonlyArray<number>): Box {
+export function wrappedBase(xs: ReadonlyArray<number>): Box {
   return { ...wrapped(xs), values: xs };
 }
-export function both(xs: ReadonlyArray<number>, ys: ReadonlyArray<number>): Box {
+export function wrappedBoth(xs: ReadonlyArray<number>, ys: ReadonlyArray<number>): Box {
   return { ...wrapped(xs), values: sorted(ys) };
 }

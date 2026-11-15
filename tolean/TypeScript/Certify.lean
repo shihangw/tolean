@@ -168,7 +168,9 @@ partial def exprCalls : Expr → List String
   | .index _ a b | .binary _ _ a b | .assign _ _ a b => exprCalls a ++ exprCalls b
   | .cond _ a b c => exprCalls a ++ exprCalls b ++ exprCalls c
   | .array _ es => es.flatMap exprCalls
-  | .object _ ps => ps.flatMap fun | .keyValue _ _ v => exprCalls v | _ => []
+  | .object _ ps => ps.flatMap fun
+      | .keyValue _ _ v | .spread _ v => exprCalls v
+      | .shorthand .. => []
   | .arrow _ _ _ body => exprCalls body
   | _ => []
 
