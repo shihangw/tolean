@@ -15,6 +15,7 @@ import tolean.TypeScript.Syntax.RoundTripLex
 import tolean.TypeScript.Syntax.ParseWF
 import tolean.TypeScript.Syntax.RoundTripText
 import tolean.TypeScript.Spec.Error
+import tolean.TypeScript.Spec.RegExp
 import tolean.TypeScript.Spec.Lemmas.Number
 import tolean.TypeScript.Spec.Lemmas.Sort
 import tolean.TypeScript.Spec.Coverage.LexicalGrammar
@@ -155,7 +156,12 @@ def sections : List Section := [
     ``Proof.eval_call_toOption, ``Proof.out_call_toOption, ``Proof.translateCall_sound,
     ``Proof.translateCall_callSim, ``Proof.checkThrowingCall_ok, ``Proof.checkCrossFileThrow_ok,
     ``Proof.throwingCall?_some, ``Proof.zip_sim, ``Proof.zip_sim_value, ``Proof.zip_codes_sim,
-    ``Proof.evalList_length, ``Proof.calls_agree,
+    ``Proof.evalList_length, ``Proof.calls_agree, ``Proof.calls_agree_ordinary,
+    ``Proof.CallsAgree.ordinary, ``Proof.CallsAgree.borrow,
+    ``Proof.returnedState_not_ret, ``Proof.exec_letBorrow, ``Proof.borrow_call_from_agreement,
+    ``Proof.translateBorrowPlain_sim, ``Proof.translateBorrowArg_sim, ``Proof.translateBorrowArgs_sim,
+    ``Proof.translateBorrowCall_sim, ``Proof.borrowCall?_some, ``Proof.exprChanges_stmt,
+    ``Proof.borrowCallStmt_sim, ``Proof.translateBorrowStmt_sound,
     ``Proof.evalList_append_undefined, ``Proof.callS_append_undefined, ``Proof.evalList_optArgs, ``Proof.fixArgs_value,
 
     -- A call of a local function, which the output lifts out.
@@ -271,7 +277,8 @@ def sections : List Section := [
     ``Proof.throwClass_sim, ``Proof.fieldArgs_marks, ``Proof.translateThrow_sound]⟩,
   -- §15 ECMAScript Language: Functions and Classes {#sec-ecmascript-language-functions-and-classes}
   ⟨"sec-function-definitions", "15.2", "Function Definitions",
-    [``Proof.translateFunction_ok, ``Proof.checkTypeParams_ok, ``Proof.params_fold,
+    [``Proof.translateFunction_ok, ``Proof.checkTypeParams_ok, ``Proof.params_fold, ``Proof.params_fold_nodup,
+    ``Proof.functionReturnType_ok, ``Proof.borrowLocals_has, ``Proof.checkBorrowResult_ok,
     ``Proof.funDecl_sim, ``Proof.translateFunDecl_sound, ``Proof.translateLocalHead_tail, ``Proof.withLocalBody_ok]⟩,
   ⟨"sec-arrow-function-definitions", "15.3", "Arrow Function Definitions",
     [``Proof.callbackOf_some, ``Proof.bodySim_of, ``Proof.eval_arrayMethod, ``Proof.out_listMethod,
@@ -282,7 +289,7 @@ def sections : List Section := [
   ⟨"sec-source-text-module-record-initialize-environment", "16.2.1.6.4", "InitializeEnvironment",
     [``Proof.module_resolves, ``Proof.declareTopLevel_ok, ``Proof.declareTopLevel_classes,
     ``Proof.declareTopLevel_global, ``Proof.translateDecl_ok,
-    ``Proof.decls_ok, ``Proof.translateExports_ok, ``Proof.translateDecls_ok, ``Proof.functions_append,
+    ``Proof.decls_ok, ``Proof.translateDecl_borrows, ``Proof.translateExports_ok, ``Proof.translateDecls_ok, ``Proof.functions_append,
     ``Proof.translateCtorParam_ok, ``Proof.ctorParams_shape, ``Proof.translateErrorClass_ok,
     ``Proof.errorClasses_ok, ``Proof.translateErrorTypes_ok,
     ``Proof.mem_withExports_functions, ``Proof.mem_withExports_enums, ``Proof.listsExport_of, ``declareTopLevel_not_global, ``Proof.declareTopLevel_fresh, ``Proof.declRefs_bound,
@@ -317,6 +324,8 @@ def sections : List Section := [
     ``Proof.out_numberFold]⟩,
   ⟨"sec-date", "21.4.2.1", "Date ( ...values )",
     [``Proof.translateNewDate_sound, ``Proof.out_dateOfNumber]⟩,
+  ⟨"sec-regexp.prototype.test", "22.2.6.16", "RegExp.prototype.test",
+    [``Proof.out_regexpTest, ``Proof.eval_regexpCall, ``Proof.regexpLiteral_sound]⟩,
   ⟨"sec-date.parse", "21.4.3.2", "Date.parse ( string )",
     [``Proof.translateDateParse_sound]⟩,
   ⟨"sec-date.utc", "21.4.3.4", "Date.UTC ( year [ , month [ , date [ , hours [ , minutes [ , seconds [ , ms ] ] ] ] ] ] )",
@@ -348,6 +357,11 @@ def sections : List Section := [
     [``JSString.codePoints_units, ``JSString.codePointUnits_flatten,
     ``JSString.codePointUnits_length]⟩,
   ⟨"sec-properties-of-string-instances-length", "22.1.4.1", "length", []⟩,
+  -- §22.2 RegExp Objects {#sec-regexp-regular-expression-objects}
+  ⟨"sec-pattern-semantics", "22.2.2", "Pattern Semantics",
+    [``JSRegExp.one_forward, ``JSRegExp.compile_forward]⟩,
+  ⟨"sec-repeatmatcher", "22.2.2.3.1", "RepeatMatcher",
+    [``JSRegExp.repeat_forward, ``JSRegExp.repeat_spec_step]⟩,
   -- §23 Indexed Collections {#sec-indexed-collections}
   ⟨"sec-array.prototype.at", "23.1.3.1", "Array.prototype.at", [``Proof.eval_at,
     ``Proof.eval_atNumber, ``Proof.apply_atNumber]⟩,
@@ -465,6 +479,7 @@ def extras : List Group := [
     ``Syntax.Leaves.toKept, ``Syntax.Leaves.refl, ``Syntax.leaves_trans, ``Syntax.Leaves.rest_eq,
     ``Syntax.Leaves.left_eq,
     ``Syntax.instReflBEqTokenKind,
+    ``instLawfulBEqEdition, ``instReflBEqEdition,
     ``Syntax.instLawfulBEqTokenKind, ``Syntax.Parse.bind_ok, ``Syntax.Parse.ite_state,
     ``Syntax.Parse.pure_ok, ``Syntax.Parse.get_ok, ``Syntax.Parse.failAt_ne_ok,
     ``Syntax.Parse.unexpected_ne_ok, ``Syntax.Parse.peek_eq, ``Syntax.Parse.peekAt_eq,
@@ -519,6 +534,7 @@ def extras : List Group := [
     ``Syntax.Expr.tokens_new, ``Syntax.parsePrimaryType_budget,
     ``Syntax.parsePrimary_object, ``Syntax.primary_reads, ``Syntax.allRead_succ, ``Syntax.exprs_read_le,
     ``Syntax.exprs_read, ``Syntax.instLawfulBEqPos, ``Syntax.instReflBEqPos, ``Syntax.instLawfulBEqBinOp,
+    ``Syntax.closesKinds_scan, ``Syntax.scanKinds_append, ``Syntax.Neutral.congr,
     ``Syntax.Neutral.nil, ``Syntax.Neutral.append, ``Syntax.Neutral.one, ``Syntax.Neutral.enclosed,
     ``Syntax.Neutral.cons, ``Syntax.Neutral.all, ``Syntax.Neutral.join, ``Syntax.neutral_binOp,
     ``Syntax.neutral_assignOp, ``Syntax.neutral_unaryOp, ``Syntax.neutral_updateOp,
@@ -654,6 +670,12 @@ def extras : List Group := [
     ``Syntax.Lex.numberOK_some, ``Syntax.Lex.numberOK_of, ``Syntax.Lex.not_trivia, ``Syntax.Lex.digit_mem,
     ``Syntax.Lex.digit_not_identStart, ``Syntax.Lex.lexKind_number, ``Syntax.Lex.reserved_identName,
     ``Syntax.Lex.lexKind_text, ``Syntax.Lex.noTrivia_text, ``Syntax.Lex.skipTrivia_stop,
+    ``Syntax.RegExp.readBody_frame, ``Syntax.RegExp.readBody_length,
+    ``Syntax.RegExp.readBody_replay, ``Syntax.RegExp.validateBody_ok,
+    ``Syntax.RegExp.bodyOK_eq, ``Syntax.RegExp.bodyOK_parts,
+    ``Syntax.RegExp.bodyOK_prefix, ``Syntax.RegExp.bodyOK_read, ``Syntax.Lex.lexRegExp_word,
+    ``Syntax.Lex.lexRegExp_result, ``Syntax.Lex.lexKind_regexp_word, ``Syntax.Lex.regexpWord_drop,
+    ``Syntax.Lex.lexRegExp_ok,
     ``Syntax.Lex.skipTrivia_gap, ``Syntax.Lex.modify_eq, ``Syntax.Lex.blank_length,
     ``Syntax.Lex.lexAll_token, ``Syntax.Lex.lexAll_end, ``Syntax.Lex.word_text, ``Syntax.Lex.lexAll_word,
     ``Syntax.Lex.wordsText_break, ``Syntax.Lex.wordsText_one, ``Syntax.Lex.wordsText_cons_break,
