@@ -363,7 +363,13 @@ test('checked guards narrow both branches, aliases, local calls, and tag chains'
       .replaceAll('"triangle"', JSON.stringify(triangle));
     const args: Array<unknown> = [{ kind: circle, radius }, { kind: square, side }];
     if (template.three) args.push({ kind: triangle, height });
-    const calls = args.flatMap((arg) => template.names.map((name) => ({ name, arg })));
+    const calls: Array<{ name: string; arg: unknown }> =
+      args.flatMap((arg) => template.names.map((name) => ({ name, arg })));
+    if (template.file === 'typeGuards') {
+      for (const arg of [circle, radius]) {
+        calls.push({ name: 'isText', arg }, { name: 'text', arg });
+      }
+    }
     return { source, calls };
   }));
   const run = spawnSync(tolean, ['interpret'], {
