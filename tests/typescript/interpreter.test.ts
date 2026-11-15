@@ -675,6 +675,25 @@ test('records carry calls to number sorts inside map callbacks', () => {
   })) })));
 });
 
+test('nullable loop elements guard calls to number sorts', () => {
+  const source = 'interface Box { readonly values: ReadonlyArray<number>; }\n' +
+    'function sorted(xs: ReadonlyArray<number>): number[] { return xs.toSorted((a, b) => a - b); }\n' +
+    'export function f(boxes: ReadonlyArray<Box | null>): ReadonlyArray<number> { let result: ReadonlyArray<number> = []; for (const box of boxes) { if (box !== null) { result = [...result, ...sorted(box.values)]; } } return result; }';
+  const arrays = fc.sample(fc.array(fc.option(fc.record({
+    values: fc.array(fc.integer({ min: -10, max: 10 }), { maxLength: 5 }),
+  }), { nil: null }), { maxLength: 5 }), 25);
+  arrays.push([null, { values: [Number.MAX_VALUE, -Number.MAX_VALUE, -0, 0] }]);
+  const input = { programs: [{ source, calls: arrays.map(xs =>
+    ({ function: 'f', args: [xs.map(encode)] })) }] };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const [lean] = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  expect(lean?.parsed).toBe(true);
+  if (lean === undefined || !lean.parsed) return;
+  expect(lean.results).toEqual(arrays.map(xs => ({ value: xs.flatMap(box =>
+    box === null ? [] : box.values.toSorted((a, b) => a - b)).map(encode) })));
+});
+
 test('number sorts read local concatenations with literal elements', () => {
   const source = 'export function f(xs: ReadonlyArray<number>, ys: ReadonlyArray<number>): number[] { const first = xs; const both = [...first, ...ys, 0, 1]; return both.toSorted((a, b) => a - b); }';
   const pairs = [[[], []], [[2, -0], [0, 1]],
