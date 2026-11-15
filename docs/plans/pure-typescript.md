@@ -54,16 +54,16 @@ exact. A construct leaves these tables when Tolean translates it, and the
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| `T \| undefined` as the type of a local or of a return value, and a test such as `x !== undefined && x > 0n` that narrows an optional value inside an expression | `Option T` | `'x' in obj`, which can tell a missing key from `undefined` |
-| `a?.[i]` and `f?.()` | `Option.bind` | `==` against anything except `null` and `undefined` |
-| A re-export, such as `export { a } from "./x.ts"` | Nothing: the names stay in scope | `export *` |
+| `f?.()` | No accepted program to translate: `Syntax.TypeExpr` and `Translate.Ty` have no function type, and no accepted declaration gives a possibly `undefined` value a callable type. A generic type parameter does not make a value callable. Local function values cannot escape a direct call. | Optional calls stay refused; so does `==` against anything except `null` and `undefined`. |
+| A value re-export, such as `export { a } from "./x.ts"` | Nothing: the names stay in scope | `export *` |
 
 ### Functions
 
 | TypeScript | Lean | Refused |
 |---|---|---|
 | An arrow function passed to a function of the program, which reads only `const` values and parameters | `fun` | A callback that changes a variable outside itself |
-| A local function that returns a value and also changes `let` variables of the enclosing function | A Lean function that returns the value and the new values of those variables, which the call binds again | A `return` before the last statement of such a function |
+| A state-writing local function whose final return is an expression or names a variable other than a changed captured variable | A Lean function that returns the value and the new values of the captured variables, which the call binds again | A `return` before the last statement of such a function |
+| A sibling call whose callee captures variables not named by the caller, a longer chain of sibling calls, or a value-returning caller that changes state only through sibling calls | Lifted functions with transitive capture and state arguments | Recursive local functions |
 | A function-typed field or parameter, such as a comparator in an options object | A field of a function type | A function value that changes state when it is called |
 | A destructured parameter, such as `{ a, b }: Options` | A pattern on the structure | Defaults inside the pattern |
 | A default parameter value | `Option` with a default at the call | A default that reads another parameter |
@@ -227,9 +227,8 @@ the P2 steps. Steps with the same priority keep the order of their numbers.
 The steps keep the numbers that pull requests refer to, so a finished step
 leaves a gap.
 
-2. **P0.** Types and narrowing: `T | undefined` as a type, a test of
-   `undefined` that narrows inside an expression, `a?.[i]` and `f?.()`, and
-   re-exports.
+2. **P0.** Value re-exports. Optional calls have no accepted program to apply
+   to, as the types table explains; they are not unfinished work in this step.
 8. **P0.** Widen map borrows to early returns, several changed maps, an
    ordinary returned value, control flow and imported callees.
 10. **P1.** Sorting: number-key certificates inside the remaining callbacks, for changing loop state and body locals,
@@ -245,9 +244,9 @@ leaves a gap.
     model of built-in errors whose messages the program cannot read.
 13. **P2.** Classes with `readonly` fields and methods that do not change
     `this`.
-14. **P1.** Local functions: one that returns a value and changes variables
-    of the enclosing function, calls between local functions, and
-    certificates for files that have local functions.
+14. **P1.** Local functions: general final return expressions in functions
+    that change captured variables, implicit transitive captures, longer
+    sibling call chains, and value-returning callers with only indirect state changes.
 15. **P1.** Certificates for counted `for` loops: each counted loop adds a
     hypothesis that `countUp?` on its bound gives a value. Print the bound
     over the parameters, and refuse bounds that read anything but parameters.

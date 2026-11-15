@@ -37,7 +37,17 @@ certifyOne() {
     if grep -q '^// certify: required$' "$f"; then
       printf 'failed\nrequired certificate was refused\n' >"$result"
     else
-      echo skipped >"$result"
+      case "$b" in
+        localFunctionCertificate | localFunctionNumber | localFunctionLoopCertificates | \
+        localFunctionReturnsAndChanges | localFunctionSiblingCalls | \
+        localFunctions | localArrows | localFunctionOwnedArray | localFunctionLoopParameter)
+          { echo failed; echo "A required local-function certificate was refused"; } >"$result"
+          return 0
+          ;;
+        *)
+          echo skipped >"$result"
+          ;;
+      esac
     fi
     return 0
   fi
