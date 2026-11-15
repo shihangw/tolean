@@ -165,7 +165,7 @@ partial def exprCalls : Expr → List String
   | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e
   | .asConst _ e | .satisfies _ e _ | .spread _ e =>
     exprCalls e
-  | .index _ a b | .binary _ _ a b | .assign _ _ a b => exprCalls a ++ exprCalls b
+  | .index _ a b | .optIndex _ a b | .binary _ _ a b | .assign _ _ a b => exprCalls a ++ exprCalls b
   | .cond _ a b c => exprCalls a ++ exprCalls b ++ exprCalls c
   | .array _ es => es.flatMap exprCalls
   | .object _ ps => ps.flatMap fun | .keyValue _ _ v => exprCalls v | _ => []
@@ -179,7 +179,7 @@ partial def exprNumbers : Expr → List String
   | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e
   | .asConst _ e | .satisfies _ e _ | .spread _ e =>
     exprNumbers e
-  | .index _ a b | .binary _ _ a b | .assign _ _ a b => exprNumbers a ++ exprNumbers b
+  | .index _ a b | .optIndex _ a b | .binary _ _ a b | .assign _ _ a b => exprNumbers a ++ exprNumbers b
   | .cond _ a b c => exprNumbers a ++ exprNumbers b ++ exprNumbers c
   | .array _ es => es.flatMap exprNumbers
   | .object _ ps => ps.flatMap fun | .keyValue _ _ v => exprNumbers v | _ => []
@@ -234,7 +234,7 @@ partial def subExprs (e : Expr) : List Expr :=
     | .call _ c args => subExprs c ++ args.flatMap subExprs
     | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e
     | .arrow _ _ _ e | .spread _ e => subExprs e
-    | .index _ a b | .binary _ _ a b | .assign _ _ a b => subExprs a ++ subExprs b
+    | .index _ a b | .optIndex _ a b | .binary _ _ a b | .assign _ _ a b => subExprs a ++ subExprs b
     | .cond _ a b c => subExprs a ++ subExprs b ++ subExprs c
     | .array _ es => es.flatMap subExprs
     | .object _ ps => ps.flatMap fun | .keyValue _ _ v => subExprs v | _ => []
@@ -285,7 +285,7 @@ partial def exprCallbacks : IR.Expr → List Callback
   | .field a _ _ | .propNot a | .not a | .neg a | .isNone a | .isSome a | .decide a | .push _ a
   | .update _ _ a | .inject _ _ a | .ascribe a _ => exprCallbacks a
   | .ite a b c => exprCallbacks a ++ exprCallbacks b ++ exprCallbacks c
-  | .matchNull _ a b | .coalesce a b _ | .intOp _ a b | .order _ a b | .division _ a b
+  | .matchNull _ a b _ | .coalesce a b _ | .intOp _ a b | .order _ a b | .division _ a b
   | .eq a b | .ne a b | .propAnd a b | .propOr a b | .and a b | .or a b =>
     exprCallbacks a ++ exprCallbacks b
   | .call _ args | .list args _ | .ext _ args => args.flatMap exprCallbacks
@@ -301,7 +301,7 @@ partial def exprNames : IR.Expr → List String
   | .listMethod _ items _ _ body _ => exprNames items ++ exprNames body
   | .listFold items init _ _ _ body _ => exprNames items ++ exprNames init ++ exprNames body
   | .push n a | .update _ n a => n :: exprNames a
-  | .matchNull n a b => n :: exprNames a ++ exprNames b
+  | .matchNull n a b _ => n :: exprNames a ++ exprNames b
   | .field a _ _ | .propNot a | .not a | .neg a | .isNone a | .isSome a | .decide a
   | .inject _ _ a | .ascribe a _ => exprNames a
   | .ite a b c => exprNames a ++ exprNames b ++ exprNames c
@@ -326,7 +326,7 @@ partial def bodyCallbacks : IR.Body → List Callback
   | .matchNull _ _ a b | .matchTag _ _ _ _ _ a b | .letState _ a b => bodyCallbacks a ++ bodyCallbacks b
   | .fold _ _ body items rest _ => exprCallbacks items ++ bodyCallbacks body ++ bodyCallbacks rest
   | .throw e => exprCallbacks e
-  | .bind _ _ args rest => args.flatMap exprCallbacks ++ bodyCallbacks rest
+  | .bind _ _ args rest | .letBorrow _ _ _ args rest => args.flatMap exprCallbacks ++ bodyCallbacks rest
   -- A file with a local function gets no certificate yet.
   | .letCall _ _ _ _ _ _ _ _ _ rest | .letLifted _ _ rest => bodyCallbacks rest
 
@@ -393,7 +393,8 @@ partial def loopsOf : IR.Body → List (List String × String × IR.Body × IR.L
   | .letState _ branch rest => loopsOf branch ++ loopsOf rest
   | .fold names element body _ rest info => loopsOf body ++ [(names, element, body, info)] ++ loopsOf rest
   | .throw _ => []
-  | .bind _ _ _ rest | .letCall _ _ _ _ _ _ _ _ _ rest | .letLifted _ _ rest => loopsOf rest
+  | .bind _ _ _ rest | .letCall _ _ _ _ _ _ _ _ _ rest | .letLifted _ _ rest
+  | .letBorrow _ _ _ _ rest => loopsOf rest
 
 /-- `s`, the state of a loop with the locals `names`, as the path to one of
 them: `s`, `s.1`, `s.2.1`, and so on. -/
@@ -418,6 +419,8 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
   -- The certificate's program is the file "", so the tree names the file's
   -- own declarations under "".
   let (m, names, decls) ← (Translate.translateTree "" source target).mapError (file ++ ·)
+  if !(Eval.borrowsOf ⟨[("", m)], ""⟩).isEmpty then
+    throw s!"{file}: a map borrow has no certificate yet"
   let r : Refs := { idents := sourceIdents source target, certNs }
   -- A loop lemma's step function binds the loop's locals, so the printer
   -- writes the translation's names as `Refs` does.

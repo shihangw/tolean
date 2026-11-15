@@ -404,6 +404,23 @@ test('checked guards narrow both branches, aliases, local calls, and tag chains'
   }
 });
 
+test('type re-exports introduce no runtime binding', async () => {
+  const source = 'export type { Point } from "./origin.ts"; export function f(n: bigint): bigint { return n + 1n; }';
+  const input = { programs: [{ source, calls: [{ function: 'f', args: [encode(4n)] }] }] };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (result === undefined || !result.parsed) return;
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-type-reexport-'));
+  writeFileSync(join(dir, 'origin.ts'), 'export interface Point { readonly x: bigint }');
+  const path = join(dir, 'barrel.mjs');
+  writeFileSync(path, ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText);
+  const mod = await import(pathToFileURL(path).href) as { f: (n: bigint) => bigint };
+  const value = result.results[0]?.value;
+  expect(value === undefined ? 'no value' : canonical(value)).toBe(canonical(encode(mod.f(4n))));
+});
+
 test('the interpreter reads comparisons separated by expression operators as Node does', async () => {
   const sources = [
     'export function f(a: number, b: number, c: number, d: number): boolean { return a < b && c > d; }',
@@ -465,6 +482,25 @@ test('the interpreter binds a parameter that a call leaves out to undefined', as
     },
     { source: 'export function f(a?: boolean): boolean { return a !== undefined; }', args: [] },
     { source: 'export function f(a?: number): number | null { return a ?? null; }', args: [] },
+    { source: 'export function f(): bigint | undefined { return undefined; }', args: [] },
+    { source: 'export function f(a: bigint): undefined | bigint { return a; }', args: [7n] },
+    {
+      source: 'export function f(a: bigint): bigint { let x: bigint | undefined = undefined; x = a; return x ?? 0n; }',
+      args: [9n],
+    },
+    { source: 'export function f(a?: bigint): bigint | undefined { const x: bigint | undefined = a; return x; }', args: [] },
+    { source: 'export function f(a?: bigint): bigint | undefined { const x: bigint | undefined = a; return x; }', args: [0n] },
+    ...[
+      'x !== undefined && x > 0n',
+      'undefined === x || x > 0n',
+      '!(x === undefined) && x > 0n',
+      '!(undefined !== x) || x > 0n',
+      'x === undefined ? false : x > 0n',
+      '!(x === undefined) ? x > 0n : false',
+    ].flatMap((body) => [[], [-1n], [0n], [1n]].map((args) => ({
+      source: `export function f(x?: bigint): boolean { return ${body}; }`,
+      args,
+    }))),
   ];
   const input = {
     programs: cases.map(({ source, args }) => ({ source, calls: [{ function: 'f', args: args.map(encode) }] })),
@@ -517,6 +553,135 @@ test('the interpreter reads the index of at and slice as Node does', async () =>
       const value = lean.results[0]?.value;
       expect(value === undefined ? 'no value' : canonical(value), `${source} with ${i}`).toBe(canonical(encode(mod.f(xs, i))));
     }
+  }
+});
+
+test('optional array indexing agrees with Node', async () => {
+  const sources = [
+    'export function f(xs: ReadonlyArray<bigint> | null): bigint { return xs?.[0] ?? 7n; }',
+    'export function f(xs?: ReadonlyArray<bigint>): bigint { return xs?.[1] ?? 9n; }',
+  ];
+  const arrays = fc.sample(fc.array(fc.bigInt(), { maxLength: 8 }), { seed, numRuns: 50 });
+  const args: Array<unknown> = [null, undefined, [], ...arrays];
+  const input = {
+    programs: sources.map(source => ({
+      source,
+      calls: args.map(xs => ({ function: 'f', args: [encode(xs)] })),
+    })),
+  };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const results = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-optional-index-'));
+  for (const [i, source] of sources.entries()) {
+    const path = join(dir, `case${i}.mjs`);
+    writeFileSync(path, ts.transpileModule(source, {
+      compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+    }).outputText);
+    const mod = (await import(pathToFileURL(path).href)) as { f: (xs: unknown) => unknown };
+    const result = results[i];
+    expect(result?.parsed, source).toBe(true);
+    if (result === undefined || !result.parsed) continue;
+    for (const [j, xs] of args.entries()) {
+      const value = result.results[j]?.value;
+      expect(value === undefined ? 'no value' : canonical(value), source)
+        .toBe(canonical(encode(mod.f(xs))));
+    }
+  }
+});
+
+test('an absent optional receiver skips the index expression', async () => {
+  const source = 'export function f(xs: ReadonlyArray<bigint> | null): bigint { return xs?.[missing()] ?? 11n; }';
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: [{ source, calls: [{ function: 'f', args: [null] }] }] }),
+    encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (result === undefined || !result.parsed) return;
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-optional-index-skip-'));
+  const path = join(dir, 'skip.mjs');
+  writeFileSync(path, ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+  }).outputText);
+  const mod = (await import(pathToFileURL(path).href)) as { f: (xs: null) => unknown };
+  const value = result.results[0]?.value;
+  expect(value === undefined ? 'no value' : canonical(value)).toBe(canonical(encode(mod.f(null))));
+});
+
+test('optional indexed member access handles every kind of number index', async () => {
+  const source = 'export interface Item { readonly value: bigint; }\nexport function f(xs: ReadonlyArray<Item> | null, i: number): bigint { return xs?.[i]?.value ?? 17n; }';
+  const arrays: Array<unknown> = [null, undefined, [], [{ value: 3n }, { value: 5n }, { value: 8n }]];
+  const indexes = [NaN, Infinity, -Infinity, -0, 0, 1, 2, 3, -1, 0.5, Number.MAX_SAFE_INTEGER];
+  const args = arrays.flatMap(xs => indexes.map(i => [xs, i]));
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: [{ source, calls: args.map(a => ({
+      function: 'f', args: a.map(encode),
+    })) }] }),
+    encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (result === undefined || !result.parsed) return;
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-optional-number-index-'));
+  const path = join(dir, 'index.mjs');
+  writeFileSync(path, ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+  }).outputText);
+  const mod = (await import(pathToFileURL(path).href)) as { f: (...xs: Array<unknown>) => unknown };
+  for (const [j, a] of args.entries()) {
+    const value = result.results[j]?.value;
+    expect(value === undefined ? 'no value' : canonical(value))
+      .toBe(canonical(encode(mod.f(...a))));
+  }
+});
+
+test('optional tuple and Record indices agree with Node', async () => {
+  const source = readFileSync(new URL('./corpus/translate/accept/optionalTupleRecordIndex.ts', import.meta.url), 'utf8');
+  const calls: Array<{ function: string; args: Array<unknown> }> = [];
+  const values = [undefined, 0n, -3n, ...fc.sample(fc.bigInt(), { seed, numRuns: 20 })];
+  for (const value of values) {
+    calls.push({ function: 'optionalValue', args: [[value, 'text']] });
+    for (const key of ['apple', 'pear']) {
+      calls.push({ function: 'optionalRecordValue', args: [{ apple: value, pear: 5n }, key] });
+    }
+  }
+  for (const absent of [null, undefined]) {
+    for (const name of ['first', 'last', 'literal', 'optionalValue']) {
+      calls.push({ function: name, args: [absent] });
+    }
+    calls.push({ function: 'record', args: [absent, 'apple'] });
+    calls.push({ function: 'optionalRecordValue', args: [absent, 'pear'] });
+    calls.push({ function: 'shadowed', args: [true, absent] });
+  }
+  calls.push({ function: 'first', args: [[19n, 'value']] });
+  calls.push({ function: 'last', args: [[19n, 'value']] });
+  calls.push({ function: 'record', args: [{ apple: 3n, pear: 7n }, 'pear'] });
+  calls.push({ function: 'literal', args: [{ apple: 3n, pear: 7n }] });
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: [{ source, calls: calls.map(c => ({
+      function: c.function, args: c.args.map(encode),
+    })) }] }),
+    encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (result === undefined || !result.parsed) return;
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-optional-tuple-record-'));
+  const path = join(dir, 'index.mjs');
+  writeFileSync(path, ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+  }).outputText);
+  const mod = (await import(pathToFileURL(path).href)) as Record<string, (...xs: Array<unknown>) => unknown>;
+  for (const [i, call] of calls.entries()) {
+    const fn = mod[call.function];
+    if (fn === undefined) throw new Error(`missing export ${call.function}`);
+    const value = result.results[i]?.value;
+    expect(value === undefined ? 'no value' : canonical(value))
+      .toBe(canonical(encode(fn(...call.args))));
   }
 });
 
@@ -886,6 +1051,169 @@ test('the interpreter gives no value where a changed collection has another hold
     const mod = (await import(pathToFileURL(path).href)) as { f: (b: boolean) => unknown };
     const value = lean.results[0]?.value;
     expect(value === undefined ? 'no value' : canonical(value), source).toBe(canonical(encode(mod.f(true))));
+  }
+});
+
+test('normal-completion map borrows copy the final map back without aliases', async () => {
+  const change = 'function change(m: Map<bigint, bigint>, x: bigint): void { m.set(1n, x); }\n';
+  const cases = [
+    ...Array.from({ length: 80 }, (_, seed) => ({
+      source: new Gen(seed + 1000).borrowProgram(seed % 2 === 1, seed % 3 === 0),
+      refused: false,
+    })),
+    {
+      source: change + 'export function f(x: bigint): bigint { const m = new Map<bigint, bigint>(); ' +
+        'const alias = m; change(m, x); return alias.get(1n) ?? 0n; }',
+      refused: true,
+    },
+    {
+      source: change + 'export function f(x: bigint): bigint { const m = new Map<bigint, bigint>(); ' +
+        'const box = { m }; change(m, x); return box.m.get(1n) ?? 0n; }',
+      refused: true,
+    },
+    {
+      source: 'function change(m: Map<bigint, bigint>, other: ReadonlyMap<bigint, bigint>): void { m.set(1n, 2n); }\n' +
+        'export function f(x: bigint): bigint { const m = new Map<bigint, bigint>(); ' +
+        'change(m, m); return m.get(1n) ?? 0n; }',
+      refused: true,
+    },
+    {
+      source: 'function change(a: Map<bigint, ReadonlyMap<bigint, bigint>>, b: ReadonlyMap<bigint, bigint>): void { a.set(1n, b); }\n' +
+        'export function f(x: bigint): ReadonlyMap<bigint, ReadonlyMap<bigint, bigint>> { ' +
+        'const a = new Map<bigint, ReadonlyMap<bigint, bigint>>(); const b = new Map<bigint, bigint>(); ' +
+        'change(a, b); b.set(1n, x); return a; }',
+      refused: true,
+    },
+    {
+      source: 'function change(a: Map<bigint, ReadonlyMap<bigint, bigint>>, b: ReadonlyMap<bigint, bigint>): void { a.set(1n, b); }\n' +
+        'function forward(a: Map<bigint, ReadonlyMap<bigint, bigint>>, b: ReadonlyMap<bigint, bigint>): void { change(a, b); }\n' +
+        'export function f(x: bigint): ReadonlyMap<bigint, ReadonlyMap<bigint, bigint>> { ' +
+        'const a = new Map<bigint, ReadonlyMap<bigint, bigint>>(); const b = new Map<bigint, bigint>(); ' +
+        'forward(a, b); b.set(1n, x); return a; }',
+      refused: true,
+    },
+    {
+      source: 'function change(m: Map<bigint, bigint>, other: ReadonlyMap<bigint, bigint>): void { m.set(1n, 2n); }\n' +
+        'function forward(m: Map<bigint, bigint>): void { change(m, m); }\n' +
+        'export function f(x: bigint): bigint { const m = new Map<bigint, bigint>(); ' +
+        'forward(m); return m.get(1n) ?? 0n; }',
+      refused: true,
+    },
+    {
+      source: 'type Other = Map<bigint, bigint>;\n' +
+        'function change(a: Map<bigint, bigint>, other: ReadonlyMap<bigint, bigint>): void { a.set(1n, 5n); }\n' +
+        'function forward(m: Map<bigint, bigint>, b: Other): void { change(b, m); }\n' +
+        'export function f(x: bigint): boolean { const a = new Map<bigint, bigint>(); ' +
+        'const b = new Map<bigint, bigint>(); forward(a, b); return b.has(1n); }',
+      refused: true,
+    },
+    {
+      source: 'function change(x: bigint, m: Map<bigint, bigint>): void { m.set(1n, x); }\n' +
+        'function forward(m: Map<bigint, bigint>, x: bigint): void { change(x, m); }\n' +
+        'export function f(x: bigint): bigint { const m = new Map<bigint, bigint>(); ' +
+        'forward(m, x); return m.get(1n) ?? 0n; }',
+    },
+    {
+      source: 'type Other = Map<bigint, bigint>;\n' +
+        'function change(a: Map<bigint, bigint>, other: ReadonlyMap<bigint, bigint>): void { a.set(1n, 5n); }\n' +
+        'function forward(m: Map<bigint, bigint>, b: Other): void { change(m, b); }\n' +
+        'export function f(x: bigint): boolean { const a = new Map<bigint, bigint>(); ' +
+        'const b = new Map<bigint, bigint>(); forward(a, b); return a.has(1n); }',
+    },
+    {
+      source: 'function forward(m: Map<bigint, bigint>, x: bigint): void { change(x, m); }\n' +
+        'function change(x: bigint, m: Map<bigint, bigint>): void { m.set(1n, x); }\n' +
+        'export function f(x: bigint): bigint { const m = new Map<bigint, bigint>(); ' +
+        'forward(m, x); return m.get(1n) ?? 0n; }',
+      refused: true,
+    },
+    {
+      source: 'function change(m: Map<bigint, bigint>): void { m.set(1n, 5n); }\n' +
+        'function forward(m: Map<bigint, bigint>, change: any, x: bigint): void { change(m); }\n' +
+        'export function f(n: bigint): bigint { let x = 0n; ' +
+        'function g(z: Map<bigint, bigint>): void { x = 5n; } ' +
+        'const m = new Map<bigint, bigint>(); forward(m, g, x); return x; }',
+      refused: true,
+    },
+  ];
+  const inputs = [-9n, 0n, 17n];
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: cases.map(({ source }) => ({
+      source, calls: inputs.map(x => ({ function: 'f', args: [encode(x)] })),
+    })) }),
+    encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const results = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-map-borrows-'));
+  for (const [i, { source, refused }] of cases.entries()) {
+    const lean = results[i];
+    expect(lean?.parsed, source).toBe(true);
+    const path = join(dir, `case${i}.mjs`);
+    writeFileSync(path, ts.transpileModule(source, {
+      compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+    }).outputText);
+    const mod = (await import(pathToFileURL(path).href)) as { f: (x: bigint) => bigint };
+    if (!lean?.parsed) continue;
+    for (const [j, x] of inputs.entries()) {
+      const expected = encode(mod.f(x));
+      if (refused) expect(lean.results[j] ?? null, source).toBeNull();
+      else expect(lean.results[j]?.value, source).toEqual(expected);
+    }
+  }
+});
+
+// Calls that return a value still have no state-carrying result.
+test('map calls preserve the boundary between readonly inputs and pending borrows', async () => {
+  const change = 'function change(m: Map<bigint, bigint>): boolean { m.set(1n, 2n); return true; }\n';
+  const cases = [
+    {
+      source: change + 'export function f(): boolean { const m = new Map<bigint, bigint>(); ' +
+        'const done = change(m); return m.has(1n); }',
+      refused: true,
+    },
+    {
+      source: change + 'export function f(): boolean { const m = new Map<bigint, bigint>(); const alias = m; ' +
+        'const done = change(m); return alias.has(1n); }',
+      refused: true,
+    },
+    {
+      source: change + 'export function f(): boolean { const m = new Map<bigint, bigint>(); const box = { m }; ' +
+        'const done = change(m); return box.m.has(1n); }',
+      refused: true,
+    },
+    {
+      source: 'function change(m: Map<bigint, bigint>, other: ReadonlyMap<bigint, bigint>): boolean { ' +
+        'm.set(1n, 2n); return other.has(1n); }\n' +
+        'export function f(): boolean { const m = new Map<bigint, bigint>(); return change(m, m); }',
+      refused: true,
+    },
+    {
+      source: 'function read(m: ReadonlyMap<bigint, bigint>): boolean { return m.has(1n); }\n' +
+        'export function f(): boolean { const m = new Map<bigint, bigint>([[1n, 2n]]); return read(m); }',
+      refused: false,
+    },
+  ];
+  const input = { programs: cases.map(({ source }) => ({ source, calls: [{ function: 'f', args: [] }] })) };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const results = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-map-calls-'));
+  for (const [i, { source, refused }] of cases.entries()) {
+    const lean = results[i];
+    expect(lean?.parsed, source).toBe(true);
+    const path = join(dir, `case${i}.mjs`);
+    writeFileSync(path, ts.transpileModule(source, {
+      compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+    }).outputText);
+    const mod = (await import(pathToFileURL(path).href)) as { f: () => boolean };
+    expect(mod.f(), source).toBe(true);
+    if (lean === undefined || !lean.parsed) continue;
+    if (refused) {
+      expect(lean.results[0] ?? null, source).toBeNull();
+    } else {
+      expect(lean.results[0]?.value, source).toEqual(encode(mod.f()));
+    }
   }
 });
 

@@ -119,6 +119,24 @@ def listItems? : Val N → Option (List (Val N))
   | .list items => some items
   | _ => none
 
+/-- Read a number index only when an optional array is present. -/
+@[simp] def optionalNumberIndex : List (Val N) → Option (Val N)
+  | [.null, _] | [.undefined, _] => some .undefined
+  | [.list xs, .num i] => some (Eval.elementAt xs (JSNumber.toSafeInt i))
+  | _ => none
+
+/-- Read a literal index only when its optional array or tuple is present. -/
+@[simp] def optionalLiteralIndex (k : Nat) : List (Val N) → Option (Val N)
+  | [.null] | [.undefined] => some .undefined
+  | [.list xs] => some (Eval.elementAt xs (some k))
+  | _ => none
+
+/-- Read a record key only when its optional receiver is present. -/
+@[simp] def optionalRecordIndex : List (Val N) → Option (Val N)
+  | [.null, _] | [.undefined, _] => some .undefined
+  | [.obj fields, .str k] => Eval.getKey fields k
+  | _ => none
+
 /-- An operation that TypeScript adds, on the values of its arguments. -/
 def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   | .number n, [] => some (.num (JSNumber.ofSafeInt n))
@@ -155,6 +173,7 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   | .optField path _, [.obj fields] => Eval.getPath fields path
   -- `r[k]`, as the spec evaluates it: the property that the string `k` names.
   | .recordGet _ _, [.obj fields, .str k] => Eval.getKey fields k
+  | .optRecordGet _ _ _, args => optionalRecordIndex args
   -- `x ∈ xs` and `List.any xs (JSNumber.sameValueZero x)`: whether an
   -- element is `x`, as `includes` compares them.
   | .includes, [.list xs, x] | .includesNumber, [.list xs, x] => (Eval.includesVal x xs).map .bool
@@ -162,7 +181,9 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   -- spec reads them: `none` is `undefined`.
   | .length, [.list xs] => some (.num (JSNumber.ofSafeInt xs.length))
   | .indexLit k, [.list xs] => some (Eval.elementAt xs (some k))
+  | .optIndexLit k _, args => optionalLiteralIndex k args
   | .indexNumber, [.list xs, .num i] => some (Eval.elementAt xs (JSNumber.toSafeInt i))
+  | .optIndexNumber, args => optionalNumberIndex args
   -- `JSNumber.countUp k b`: the values that the interpreter's counted loop
   -- visits. It has no value where `countUp?` gives none.
   | .countUp k, [.num b] => (JSNumber.countUp? k b).map fun xs => .list (xs.map .num)
@@ -301,10 +322,10 @@ def Expr.eval (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
     | .null => return .bool false
     | .undefined => none
     | _ => return .bool true
-  | .matchNull name whenNull whenValue => do
+  | .matchNull name whenNull whenValue optional => do
     match ← ρ.lookup name with
-    | .null => Expr.eval fs fuel ρ whenNull
-    | .undefined => none
+    | .null => if optional then none else Expr.eval fs fuel ρ whenNull
+    | .undefined => if optional then Expr.eval fs fuel ρ whenNull else none
     | _ => Expr.eval fs fuel ρ whenValue
   -- `none` is `null`, or `undefined` for an optional field, and `some v` is
   -- the value of `v`. So both forms take `a` unless it is `null` or
@@ -539,6 +560,17 @@ def Body.exec (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
         | true, .ret (.ok w) => callResult names w
         | _, _ => none
       Body.exec fs (k + 1) (← bindState names inner ρ) rest
+  | .letBorrow name ref index args rest => do
+    let .map _ ← ρ.lookup name | none
+    let vs ← Expr.evalList fs fuel ρ args
+    let fuel + 1 := fuel | none
+    let (params, body) ← fs.lookup ref
+    if params.length != vs.length then none
+    let param ← params[index]?
+    if body.returnedState != some [param] then none
+    let .normal after ← Body.exec fs fuel (params.zip vs).reverse body | none
+    let .map entries ← after.lookup param | none
+    Body.exec fs (fuel + 1) (ρ.set name (.map entries)) rest
   | .letLifted name e rest => do Body.exec fs fuel ((name, ← Expr.eval fs fuel ρ e) :: ρ) rest
   | .fold names element body items rest _ => do
     let .list vs ← Expr.eval fs fuel ρ items | none

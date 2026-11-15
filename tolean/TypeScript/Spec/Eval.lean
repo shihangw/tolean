@@ -823,6 +823,7 @@ def Expr.subst (σ : List (String × Expr)) : Expr → Expr
   | .member s e n => .member s (Expr.subst σ e) n
   | .optMember s e n => .optMember s (Expr.subst σ e) n
   | .index s a b => .index s (Expr.subst σ a) (Expr.subst σ b)
+  | .optIndex s a b => .optIndex s (Expr.subst σ a) (Expr.subst σ b)
   | .call s c args => .call s (Expr.subst σ c) (Expr.substList σ args)
   | .unary s op e => .unary s op (Expr.subst σ e)
   | .prefix s op e => .prefix s op (Expr.subst σ e)
@@ -865,7 +866,7 @@ def Expr.callNames : Expr → List String
   | .object _ ps => Property.callNamesList ps
   | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e
   | .spread _ e | .asConst _ e | .satisfies _ e _ => Expr.callNames e
-  | .index _ a b | .binary _ _ a b | .assign _ _ a b => Expr.callNames a ++ Expr.callNames b
+  | .index _ a b | .optIndex _ a b | .binary _ _ a b | .assign _ _ a b => Expr.callNames a ++ Expr.callNames b
   | .call _ (.ident _ name) args => name :: Expr.callNamesList args
   | .call _ c args => Expr.callNames c ++ Expr.callNamesList args
   | .cond _ a b c => Expr.callNames a ++ Expr.callNames b ++ Expr.callNames c
@@ -1007,7 +1008,7 @@ def Expr.hoists (thr : String → Bool) : Expr → Bool
   | .object _ ps => Property.hoistsList thr ps
   | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e
   | .spread _ e | .asConst _ e | .satisfies _ e _ => Expr.hoists thr e
-  | .index _ a b | .assign _ _ a b => Expr.hoists thr a || Expr.hoists thr b
+  | .index _ a b | .optIndex _ a b | .assign _ _ a b => Expr.hoists thr a || Expr.hoists thr b
   | .binary _ .and a _ | .binary _ .or a _ | .binary _ .coalesce a _ => Expr.hoists thr a
   | .binary _ _ a b => Expr.hoists thr a || Expr.hoists thr b
   | .call _ (.ident _ name) args => thr name || Expr.hoistsList thr args
@@ -1085,6 +1086,7 @@ def Expr.hoist (thr : String → Bool) (cls : String → Option (Option (List Ct
   | .paren s e => let (e', h) := Expr.hoist thr cls h e; (.paren s e', h)
   | .member s e n => let (e', h) := Expr.hoist thr cls h e; (.member s e' n, h)
   | .optMember s e n => let (e', h) := Expr.hoist thr cls h e; (.optMember s e' n, h)
+  | .optIndex s a b => let (a', h) := Expr.hoist thr cls h a; (.optIndex s a' b, h)
   | .unary s op e => let (e', h) := Expr.hoist thr cls h e; (.unary s op e', h)
   | .spread s e => let (e', h) := Expr.hoist thr cls h e; (.spread s e', h)
   | .asConst s e => let (e', h) := Expr.hoist thr cls h e; (.asConst s e', h)
@@ -1276,12 +1278,18 @@ def Stmt.hoisted (thr : String → Bool) (cls : String → Option (Option (List 
 /-- The functions of the declarations `ds`, by name, where `thr` says which
 functions can throw: their parameters and their body, with the calls that
 can throw hoisted out of its statements. -/
+def preparedBody (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr)))
+    (guards : List (String × GuardTest))
+    (params : List Param) (ret : Option TypeExpr) (body : Stmt) : Stmt :=
+  Stmt.hoisted thr cls (guardedBody guards params ret
+    (if (borrowCandidate? params ret body).isSome then body.borrowPrefix else body))
+
 def functionsIn (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr)))
     (guards : List (String × GuardTest))
     (ds : List Decl) : List (String × List String × Stmt) :=
   ds.filterMap fun
     | .function _ _ name _ params ret body =>
-      some (name, params.map (·.name), Stmt.hoisted thr cls (guardedBody guards params ret body))
+      some (name, params.map (·.name), preparedBody thr cls guards params ret body)
     | _ => none
 
 /-- The functions of the module, by name. -/
@@ -1306,6 +1314,21 @@ abbrev Program := List (String × Module)
 structure Scope where
   program : Program
   file : String
+
+/-- Borrow signatures checked in declaration order. A forwarding function
+must put its map at the borrowed argument index of an earlier checked
+callee. Imports and generic functions are outside this borrow case. -/
+def moduleBorrows (file : Module) : List (String × Nat) :=
+  file.decls.foldl (fun borrows decl =>
+    match decl with
+    | .function _ _ name [] ps ret body =>
+      match borrowParam? borrows ps ret body with
+      | some i => borrows ++ [(name, i)]
+      | none => borrows
+    | _ => borrows) []
+
+def borrowsOf (m : Scope) : List (String × Nat) :=
+  ((m.program.lookup m.file).map moduleBorrows).getD []
 
 /-- `path` with `.` and `..` segments resolved, or none when `..` would leave
 the root. -/
@@ -1467,7 +1490,22 @@ def writeBack (env after : Env N) (params : List String) (body : Stmt) : Env N :
 -- calls of local functions, this block takes several times the default 200000
 -- heartbeats to elaborate, most of it in the proofs that each recursive call
 -- is smaller.
-set_option maxHeartbeats 800000 in
+/-- Read an index after the receiver of an optional chain is known to be present. -/
+def optionalIndexValue (receiver : Val N) (key : Expr) (readKey : Unit → Option (Val N)) : Option (Val N) := do
+  match receiver with
+  | .list items =>
+    match numberText? key with
+    | some text => return elementAt items (some (← numberLiteral text))
+    | none =>
+      let .num n ← readKey () | none
+      return elementAt items (JSNumber.toSafeInt n)
+  | .obj fields =>
+    let .str k ← readKey () | none
+    getKey fields k
+  | _ => none
+
+set_option maxHeartbeats 2000000 in
+set_option backward.eqns.deepRecursiveSplit false in
 mutual
 
 /-- The value of `e`. `fuel` bounds the depth of nested calls, so that the
@@ -1541,6 +1579,10 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     | .null | .undefined => some .undefined
     | .obj fields => getProp fields name
     | _ => none
+  | .optIndex _ obj key => do
+    match ← eval m fuel env obj with
+    | .null | .undefined => some .undefined
+    | receiver => optionalIndexValue receiver key (fun _ => eval m fuel env key)
   -- `xs[i]` on an array, with a number `i` (`OrdinaryGet` on an array exotic
   -- object, ECMA-262 §10.4.2): the element when `i` is an index of the
   -- array. Any other number is `undefined`, because no element and no
@@ -1835,7 +1877,7 @@ def evalCall (m : Scope) (fuel : Nat) (env : Env N) (name : String) (args : List
     let (params, body) ← (functionsOf m.program).lookup key
     -- The model holds a collection as a value, which is exact only when
     -- nothing else holds the object while the function changes it.
-    if !Stmt.ownsChanges params body then none
+    if !Stmt.ownsChangesBorrow (borrowsOf { m with file := key.file }) params body then none
     -- A `break` or a `continue` outside a loop is an early error
     -- (ECMA-262 §14.8.1 and §14.9.1), so the model gives no value.
     match ← execStmt { m with file := key.file } fuel (← bindArgs params vs) body with
@@ -1872,6 +1914,10 @@ termination_by e => (fuel, sizeOf e, 1)
 `undefined`, which skips the rest of the chain, and the value of the chain
 otherwise. -/
 def evalChain (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Option (Val N))
+  | .optIndex _ obj key => do
+    match ← eval m fuel env obj with
+    | .null | .undefined => some none
+    | receiver => (optionalIndexValue receiver key (fun _ => eval m fuel env key)).map some
   | .optMember _ obj name => do
     match ← eval m fuel env obj with
     | .null | .undefined => some none
@@ -2088,10 +2134,21 @@ def execStmt (m : Scope) (fuel : Nat) (env : Env N) : Stmt → Option (Outcome N
     match fuel with
     | 0 => none
     | fuel + 1 =>
-      let .closure params body ← env.lookup name | none
-      match ← callLocal m fuel env params body vs with
-      | (.ok _, after) => some (.normal after)
-      | (.error t, _) => some (.ret (.error t))
+      match env.lookup name with
+      | some (.closure params body) =>
+        match ← callLocal m fuel env params body vs with
+        | (.ok _, after) => some (.normal after)
+        | (.error t, _) => some (.ret (.error t))
+      | some _ => none
+      | none =>
+        let i ← (borrowsOf m).lookup name
+        let some (.ident _ target) := args[i]? | none
+        let (params, body) ← (functionsOf m.program).lookup ⟨m.file, name⟩
+        let param ← params[i]?
+        let .map _ ← env.lookup target | none
+        let .normal after ← execStmt m fuel (← bindArgs params vs) body | none
+        let .map entries ← after.lookup param | none
+        return .normal (env.set target (.map entries))
   | .exprStmt _ (.assign _ .assign (.ident _ name) value) => do
     return .normal (env.set name (← eval m fuel env value))
   -- `x ??= e` (`LogicalAssignment`, ECMA-262 §13.15.2): `e` runs, and its
@@ -2286,7 +2343,7 @@ def callIn (p : Program) (key : DeclRef) (args : List (Val N)) (fuel : Nat := 64
     Option (Except (Val N) (Val N)) := do
   let (params, body) ← (functionsOf p).lookup key
   -- As in `evalCall`: the function changes only collections that it owns.
-  if !Stmt.ownsChanges params body then none
+  if !Stmt.ownsChangesBorrow (borrowsOf ⟨p, key.file⟩) params body then none
   match ← execStmt ⟨p, key.file⟩ fuel (← bindArgs params args) body with
   | .ret r => some r
   | .normal _ | .brk _ | .cont _ => none
