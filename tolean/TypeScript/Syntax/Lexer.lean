@@ -1,5 +1,6 @@
 import tolean.TypeScript.Edition
 import tolean.TypeScript.Syntax.Token
+import tolean.TypeScript.Syntax.RegExpLiteral
 
 /-!
 The TypeScript lexer. It reads the source as Unicode code points and gives the
@@ -377,6 +378,22 @@ def lexPunct (start : Pos) : LexM TokenKind := do
     for _ in [0:p.length] do skipChar
     return .punct p
 
+def lexRegExp (start : Pos) : LexM TokenKind := do
+  let s ← get
+  let (body, rest) ←
+    match RegExp.readBody false false [] s.rest.tail with
+    | .error message => failFrom start message
+    | .ok found => pure found
+  if rest.head?.any isIdentPart || rest.head? == some '\\' then
+    failFrom start "regular expression flags are not supported"
+  let source := String.ofList body
+  match RegExp.validateBody s.target source with
+  | .error message => failFrom start message
+  | .ok _ =>
+    let consumed := body.length + 2
+    modify fun s => { s with rest, i := s.i + consumed, col := s.col + consumed }
+    return .regexp source s.target
+
 def lexKind (start : Pos) (c : Char) : LexM TokenKind := do
   if isIdentStart c then
     let name ← readWhile (← budget) isIdentPart ""
@@ -388,6 +405,7 @@ def lexKind (start : Pos) (c : Char) : LexM TokenKind := do
   else if c == '`' then failFrom start "template literals are not supported"
   else if c.toNat ≥ 0x80 then
     failFrom start s!"unsupported character U+{(hexDigits c.toNat 4).map Char.toUpper}"
+  else if c == '/' && startsWith (← get).rest "/(?:".toList then lexRegExp start
   else lexPunct start
 
 /-- The text of a template literal from here to its closing backtick or to
@@ -428,7 +446,7 @@ def tagsTemplate : Option Token → Bool
   | none => false
   | some t =>
     match t.kind with
-    | .ident _ | .number _ | .bigint _ | .string _ => true
+    | .ident _ | .number _ | .bigint _ | .string _ | .regexp .. => true
     | .keyword w => ["this", "super", "null", "true", "false"].contains w
     | .punct p => [")", "]", "}", ">", "!", "?.", "++", "--"].contains p
     | .eof => false
