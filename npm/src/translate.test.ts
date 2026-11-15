@@ -43,6 +43,85 @@ describe('translateSource', () => {
 });
 
 describe('translateWorkspace', () => {
+  const source = 'export function f(): bigint { return 1n; }';
+  const user = (path: string) => `import { f } from "${path}"; export function g(): bigint { return f(); }`;
+
+  test.each([
+    ['bundler', './lib'],
+    ['bundler', './lib.js'],
+    ['node16', './lib.js'],
+    ['nodenext', './lib.js'],
+  ])('resolves %s imports of %s', async (moduleResolution, path) => {
+    const units = await translateWorkspace([
+      { path: 'tolean.json', text: JSON.stringify({ typescript: { sources: ['*.ts'], moduleResolution } }) },
+      { path: 'main.ts', text: user(path) },
+      { path: 'lib.ts', text: source },
+    ]);
+    expect(units.every((u) => u.kind === 'ok')).toBe(true);
+    expect(units.find((u) => u.kind === 'ok' && u.output === 'Main.lean')).toMatchObject({
+      kind: 'ok', lean: expect.stringContaining('import Lib'),
+    });
+  });
+
+  test('reads JSONC and gives tsconfig precedence over the project fallback', async () => {
+    const units = await translateWorkspace([
+      { path: 'tolean.json', text: '{"typescript":{"sources":["*.ts"],"moduleResolution":"node16"}}' },
+      { path: 'tsconfig.json', text: '{/* options */"compilerOptions":{"moduleResolution":"Bundler",},}' },
+      { path: 'main.ts', text: user('./lib') },
+      { path: 'lib.ts', text: source },
+    ]);
+    expect(units.every((u) => u.kind === 'ok')).toBe(true);
+  });
+
+  test('prefers index.ts as a file before any unsupported file target', async () => {
+    const units = await translateWorkspace([
+      { path: 'tolean.json', text: '{"typescript":{"sources":["*.ts"],"moduleResolution":"bundler"}}' },
+      { path: 'main.ts', text: user('./index') },
+      { path: 'index.ts', text: source },
+      { path: 'index.tsx', text: source },
+    ]);
+    expect(units.every((u) => u.kind === 'ok')).toBe(true);
+  });
+
+  test('refuses an inherited resolution mode instead of guessing it', async () => {
+    await expect(translateWorkspace([
+      { path: 'tolean.json', text: '{"typescript":{"sources":["*.ts"]}}' },
+      { path: 'tsconfig.json', text: '{"extends":"./base.json"}' },
+      { path: 'lib.ts', text: source },
+    ])).rejects.toThrow(/inherited moduleResolution/);
+  });
+
+  test.each(['{} /*', '{"compilerOptions":{"moduleResolution":42}}', '[]', '{"compilerOptions":42}'])(
+    'refuses an invalid tsconfig: %s', async (text) => {
+      await expect(translateWorkspace([
+        { path: 'tolean.json', text: '{"typescript":{"sources":["*.ts"]}}' },
+        { path: 'tsconfig.json', text },
+        { path: 'lib.ts', text: source },
+      ])).rejects.toThrow(/tsconfig.json/);
+    },
+  );
+
+  test.each(['bundler', 'node16', 'nodenext'])('keeps unsafe paths refused under %s', async (moduleResolution) => {
+    for (const path of ['./lib.tsx', './lib.d.ts', './lib.d.js', './lib.json', 'lib', './lib%2Ets', './lib.ts?x', './lib.ts#x', './lib.ts/.', '../lib.js']) {
+      const units = await translateWorkspace([
+        { path: 'tolean.json', text: JSON.stringify({ typescript: { sources: ['main.ts'], moduleResolution } }) },
+        { path: 'main.ts', text: user(path) },
+        { path: 'lib.d.ts', text: source },
+      ]);
+      expect(units).toMatchObject([{ kind: 'error' }]);
+    }
+  });
+
+  test('does not use the fallback when a tsconfig has no resolution setting', async () => {
+    const units = await translateWorkspace([
+      { path: 'tolean.json', text: '{"typescript":{"sources":["*.ts"],"moduleResolution":"bundler"}}' },
+      { path: 'tsconfig.json', text: '{}' },
+      { path: 'main.ts', text: user('./lib') },
+      { path: 'lib.ts', text: source },
+    ]);
+    expect(units.some((u) => u.kind === 'error')).toBe(true);
+  });
+
   test('translates each unit that tolean.json names, in any language', async () => {
     const units = await translateWorkspace([
       { path: 'tolean.json', text: '{ "go": { "sources": ["calc/*.go"] } }' },

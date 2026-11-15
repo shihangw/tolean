@@ -1,6 +1,7 @@
 import tolean.Chain.Emit
 import tolean.TypeScript.Translate
 import tolean.TypeScript.Certify
+import tolean.TypeScript.ModuleResolution
 import tolean.Go.Translate
 import tolean.Sql.Translate
 
@@ -155,6 +156,40 @@ def units (config : Json) (files : List String) : List Job := Id.run do
       out := out ++ [.sql s f (expand files (strings s "migrations"))]
   return out
 
+/-- Resolve the project-wide tsconfig setting before per-file translation. -/
+def configuredUnits (config : Json) (files : List String) (tsconfig : Option String) :
+    Except String (List Job) :=
+  (units config files).mapM fun
+    | .typescript s f => do
+      if tsconfig.isNone then
+        if let .ok value := s.getObjVal? "moduleResolution" then
+          unless value matches .str _ do
+            throw "tolean.json: typescript.moduleResolution must be a string"
+      let resolution ← TypeScript.ModuleResolution.setting tsconfig (string? s "moduleResolution")
+      let name := match resolution with
+        | .explicit => "explicit"
+        | .bundler => "bundler"
+        | .node => "node16"
+      return .typescript (s.mergeObj (Json.mkObj [("moduleResolution", Json.str name)])) f
+    | j => pure j
+
+/-- Replace import specifiers only after parsing, so spans still refer to the
+original text. The interpreter and translator see concrete relative paths. -/
+def resolvedImports (s : Json) (files : List String) (source text : String)
+    (target : TypeScript.Edition) : Except String (List (String × String)) := do
+  let m ← (TypeScript.Syntax.parse text target).mapError (·.render source)
+  let mode := TypeScript.ModuleResolution.mode ((string? s "moduleResolution").getD "")
+  let mut out := []
+  for d in m.decls do
+    if let .import span _ path := d then
+      -- Keep the existing translator's diagnostics for explicit-only projects.
+      if mode == .explicit && !(path.endsWith ".d.ts") then continue
+      let resolved ← (TypeScript.ModuleResolution.resolve mode files source path).mapError fun e =>
+        s!"{source}:{span.start.line}:{span.start.col}: {e}"
+      let relative := "./" ++ String.join (List.replicate (segments source).dropLast.length "../") ++ resolved
+      out := out ++ [(path, relative)]
+  return out
+
 /-- The files that a unit reads. -/
 def Job.sources : Job → List String
   | .typescript _ f => [f]
@@ -202,7 +237,8 @@ def Job.moduleRoot (u : Job) : String :=
 /-- Translate one unit, given the text of each file it reads. This does no IO,
 so the playground runs it in the browser. -/
 def translateUnit (u : Job) (read : String → Except String String)
-    (deps : List (String × TypeScript.Translate.Dependency) := []) : Except String Translation := do
+    (deps : List (String × TypeScript.Translate.Dependency) := []) (files : List String := []) :
+    Except String Translation := do
   let output := u.output
   let module ← moduleOf u.moduleRoot output
   let ns := (string? u.settings "namespace").getD (namespaceOf output)
@@ -211,7 +247,9 @@ def translateUnit (u : Job) (read : String → Except String String)
     let targetName := (string? s "target").getD TypeScript.Edition.default.name
     let some target := TypeScript.Edition.parse? targetName
       | throw s!"{source}: unknown target '{targetName}'"
-    let t ← TypeScript.Translate.translateWith source (← read source) ns target deps
+    let text ← read source
+    let resolved ← resolvedImports s files source text target
+    let t ← TypeScript.Translate.translateWith source text ns target deps resolved
     return { output, module, ns, lean := t.lean, interface := some t.interface, imports := t.imports }
   | .go s files =>
     let sources ← files.mapM fun f => return (f, ← read f)
@@ -232,13 +270,18 @@ def translateUnit (u : Job) (read : String → Except String String)
 /-- The TypeScript files of the project that `source` imports from, as the
 parser reads it for the edition `target`. -/
 def typescriptImports (sources : List String) (read : String → Except String String)
-    (target : TypeScript.Edition) (source : String) : List String :=
+    (target : TypeScript.Edition) (source : String) (s : Json) (files : List String) : List String :=
   match read source with
   | .error _ => []
   | .ok text =>
     match TypeScript.Syntax.parse text target with
     | .error _ => []
-    | .ok m => (TypeScript.Translate.importedFiles source m).filter sources.contains
+    | .ok m =>
+      let resolved := (resolvedImports s files source text target).toOption.getD []
+      let m := { m with decls := m.decls.map fun
+        | .import sp names path => .import sp names ((resolved.lookup path).getD path)
+        | d => d }
+      (TypeScript.Translate.importedFiles source m).filter sources.contains
 
 /-- The edition that a unit's settings name, or the default one. -/
 def Job.edition : Job → TypeScript.Edition
@@ -248,12 +291,13 @@ def Job.edition : Job → TypeScript.Edition
 
 /-- The units, with each TypeScript file after the files it imports from, and
 an error for each TypeScript file that an import cycle leaves out. -/
-def typescriptOrder (jobs : List Job) (read : String → Except String String) :
+def typescriptOrder (jobs : List Job) (read : String → Except String String) (files : List String := []) :
     List Job × List (Job × String) := Id.run do
   let ts := jobs.filter (· matches .typescript ..)
   let others := jobs.filter fun j => !(j matches .typescript ..)
   let sources := ts.flatMap Job.sources
-  let imports := ts.map fun j => (j, j.sources.flatMap (typescriptImports sources read j.edition))
+  let imports := ts.map fun j =>
+    (j, j.sources.flatMap fun f => typescriptImports sources read j.edition f j.settings files)
   -- Kahn's algorithm: take a file when every file it imports is taken.
   let mut done : List String := []
   let mut ordered : List Job := []
@@ -279,15 +323,15 @@ def outputClash (jobs : List Job) (u : Job) : Option String := do
 
 /-- Translate every unit. A TypeScript file comes after the files it imports
 from, and it sees what they export. -/
-def translateAll (jobs : List Job) (read : String → Except String String) :
+def translateAll (jobs : List Job) (read : String → Except String String) (files : List String := []) :
     List (Job × Except String Translation) := Id.run do
-  let (ordered, cyclic) := typescriptOrder jobs read
+  let (ordered, cyclic) := typescriptOrder jobs read files
   let mut deps : List (String × TypeScript.Translate.Dependency) := []
   let mut out : List (Job × Except String Translation) := []
   for j in ordered do
     let t : Except String Translation := match outputClash ordered j with
       | some e => .error e
-      | none => translateUnit j read deps
+      | none => translateUnit j read deps files
     if let (.typescript _ source, .ok tr) := (j, t) then
       if let some interface := tr.interface then
         deps := deps ++ [(source, { module := tr.module, ns := tr.ns, interface, imports := tr.imports })]
@@ -328,14 +372,15 @@ def unitWrites (u : Job) (read : String → Except String String) (result : Exce
 are relative to the project root, which must be the working directory. -/
 def plan (config : Json) : IO (List Write) := do
   let files ← projectFiles "."
-  let jobs := units config files
+  let tsconfig ← if files.contains "tsconfig.json" then some <$> IO.FS.readFile "tsconfig.json" else pure none
+  let jobs ← ok (configuredUnits config files tsconfig)
   let texts ← (jobs.flatMap Job.sources).eraseDups.mapM fun (f : String) => do
     return (f, ← IO.FS.readFile f)
   let read (f : String) : Except String String :=
     match texts.lookup f with
     | some t => .ok t
     | none => .error s!"{f}: not read"
-  return (← (translateAll jobs read).mapM fun (u, t) => unitWrites u read t).flatten
+  return (← (translateAll jobs read files).mapM fun (u, t) => unitWrites u read t).flatten
 
 /-! ### Workspaces as JSON
 
@@ -359,12 +404,12 @@ def translateWorkspace (input : String) : Except String Json := do
   let some configText := texts.lookup "tolean.json"
     | throw "the workspace has no tolean.json"
   let config ← (Json.parse configText).mapError (s!"tolean.json: {·}")
-  let jobs := units config (texts.map (·.1))
+  let jobs ← configuredUnits config (texts.map (·.1)) (texts.lookup "tsconfig.json")
   let read (f : String) : Except String String :=
     match texts.lookup f with
     | some t => .ok t
     | none => .error s!"{f}: no such file"
-  let results := translateAll jobs read
+  let results := translateAll jobs read (texts.map (·.1))
   -- Report the units in the project's order, whatever order they ran in.
   let ordered := jobs.filterMap fun j => (results.find? fun (k, _) => k.sources == j.sources).map
     fun (_, r) => unitJson j r

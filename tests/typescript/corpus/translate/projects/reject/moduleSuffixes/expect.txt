@@ -1,0 +1,1 @@
+moduleSuffixes is not supported for import resolution

@@ -1,0 +1,1 @@
+resolves through unsupported file 'lib.tsx' before index.ts
