@@ -33,6 +33,16 @@ if (m._tolean_init() !== 1) throw new Error('the WebAssembly translator did not 
 
 export type WasmResult = { kind: 'lean'; text: string } | { kind: 'refused'; message: string };
 
+/** Run the same project entry point that the native workspace command uses. */
+export function translateWorkspaceInWasm(files: Array<{ path: string; text: string }>): unknown {
+  const p = m.stringToNewUTF8(JSON.stringify({ files }));
+  const r = m._tolean_translate(p);
+  m._free(p);
+  const out: unknown = JSON.parse(m.UTF8ToString(r));
+  m._free(r);
+  return out;
+}
+
 /** Translate one file with the WebAssembly build, into the namespace `Test`. */
 export function translateInWasm(path: string, text: string, target?: string): WasmResult {
   const config = {
@@ -42,12 +52,9 @@ export function translateInWasm(path: string, text: string, target?: string): Wa
       overrides: [{ sources: [path], output: 'Output.lean', namespace: 'Test' }],
     },
   };
-  const input = JSON.stringify({ files: [{ path: 'tolean.json', text: JSON.stringify(config) }, { path, text }] });
-  const p = m.stringToNewUTF8(input);
-  const r = m._tolean_translate(p);
-  m._free(p);
-  const out = JSON.parse(m.UTF8ToString(r)) as { units?: { lean?: string; error?: string }[]; error?: string };
-  m._free(r);
+  const out = translateWorkspaceInWasm([{ path: 'tolean.json', text: JSON.stringify(config) }, { path, text }]) as {
+    units?: { lean?: string; error?: string }[]; error?: string;
+  };
   const unit = out.units?.[0];
   if (unit?.lean !== undefined) return { kind: 'lean', text: unit.lean };
   return { kind: 'refused', message: unit?.error ?? out.error ?? 'no unit' };

@@ -1,0 +1,9 @@
+{
+  // Tolean reads the setting next to tolean.json, not the fallback above.
+  "compilerOptions": {
+    "moduleResolution": "Bundler",
+    "module": "preserve",
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+  },
+}

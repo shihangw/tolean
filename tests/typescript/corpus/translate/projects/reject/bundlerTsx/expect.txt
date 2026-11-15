@@ -1,0 +1,1 @@
+.tsx and declaration files are refused

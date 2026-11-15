@@ -52,7 +52,8 @@ if (process.argv.includes('--require-wasm') && !existsSync(wasmOut)) {
   process.exit(1);
 }
 // Loaded only when it exists, because loading it starts the translator.
-const translateInWasm = existsSync(wasmOut) ? (await import('./wasm.ts')).translateInWasm : null;
+const wasm = existsSync(wasmOut) ? await import('./wasm.ts') : null;
+const translateInWasm = wasm?.translateInWasm ?? null;
 
 type Result = { kind: 'lean'; text: string } | { kind: 'refused'; message: string };
 
@@ -221,6 +222,40 @@ function compilesProject(dir: string, leanPath: string, lean: string): string | 
 }
 
 const projectsDir = 'corpus/translate/projects';
+
+/** Check the IO-free entry point too. WebAssembly runs precisely this code,
+so projects exercise resolution in both builds whenever wasm/out is present. */
+function checkWorkspace(dir: string, accepted: boolean): void {
+  const files = (function walk(prefix: string): Array<{ path: string; text: string }> {
+    return readdirSync(join(dir, prefix), { withFileTypes: true }).flatMap((e) => {
+      const path = prefix === '' ? e.name : `${prefix}/${e.name}`;
+      return e.isDirectory() ? walk(path) : [{ path, text: readFileSync(join(dir, path), 'utf8') }];
+    });
+  })('');
+  const run = spawnSync(tolean, ['translate-workspace'], { input: JSON.stringify({ files }), encoding: 'utf8' });
+  if (run.status !== 0) {
+    failures.push(`${dir}: translate-workspace failed: ${run.stderr}`);
+    return;
+  }
+  const native = JSON.parse(run.stdout) as { units?: Array<{ output?: string; lean?: string; error?: string }>; error?: string };
+  if (wasm !== null) {
+    const other = wasm.translateWorkspaceInWasm(files);
+    if (JSON.stringify(native) === JSON.stringify(other)) agreed++;
+    else failures.push(`${dir}: the WebAssembly workspace output differs from native`);
+  }
+  if (accepted) {
+    if (native.error !== undefined || native.units === undefined || native.units.some((u) => u.error !== undefined)) {
+      failures.push(`${dir}: workspace refused an accepted project: ${run.stdout.slice(0, 600)}`);
+    } else {
+      for (const u of native.units) {
+        if (u.output === undefined || u.lean !== readFileSync(join(dir, u.output), 'utf8')) {
+          failures.push(`${dir}: workspace output differs from the committed Lean file ${u.output}`);
+        }
+      }
+    }
+  }
+}
+
 const acceptProjects = readdirSync(`${projectsDir}/accept`).sort();
 const leanPath = rootLeanPath();
 const projectLean = rootLean();
@@ -233,6 +268,7 @@ for (const name of acceptProjects) {
   }
   const error = compilesProject(dir, leanPath, projectLean);
   if (error !== null) failures.push(`${dir}: the Lean output does not compile:\n${error}`);
+  checkWorkspace(dir, true);
 }
 const rejectProjects = readdirSync(`${projectsDir}/reject`).sort();
 for (const name of rejectProjects) {
@@ -243,6 +279,7 @@ for (const name of rejectProjects) {
   const run = spawnSync(tolean, ['translate'], { cwd: build, encoding: 'utf8' });
   if (run.status === 0) failures.push(`${dir}: accepted, but it should be refused`);
   else if (!run.stderr.includes(expect)) failures.push(`${dir}: refused with '${run.stderr.trim()}', expected '${expect}'`);
+  checkWorkspace(dir, false);
 }
 
 // ---------------------------------------------------------------------------

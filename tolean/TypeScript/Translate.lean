@@ -4825,9 +4825,13 @@ def importedFiles (file : String) (m : Module) : List String :=
 from the files `deps`: the parsed module, the names that the printer needs,
 the Tolean IR, and what the file exports. -/
 def translateFile (file source : String) (target : Edition := .default)
-    (deps : List (String × Dependency) := []) :
+    (deps : List (String × Dependency) := []) (resolved : List (String × String) := []) :
     Except String (Module × IR.Names × List IR.Decl × Interface) := do
   let m ← (parse source target).mapError (·.render file)
+  let m := if resolved.isEmpty then m else
+    { m with decls := m.decls.map fun
+      | .import s names path => .import s names ((resolved.lookup path).getD path)
+      | d => d }
   let src := source.toList.toArray
   -- Every identifier in the source, at any level. A Lean name in this list is
   -- written from the root, and the number type parameter avoids it.
@@ -4875,8 +4879,9 @@ structure Translated where
 definitions are in namespace `ns`, for code that runs on the edition
 `target`. `deps` are the files it may import from. -/
 def translateWith (file source ns : String) (target : Edition := .default)
-    (deps : List (String × Dependency) := []) : Except String Translated := do
-  let (m, names, decls, iface) ← translateFile file source target deps
+    (deps : List (String × Dependency) := []) (resolved : List (String × String) := []) :
+    Except String Translated := do
+  let (m, names, decls, iface) ← translateFile file source target deps resolved
   -- Inside `namespace A.B`, Lean finds a plain name in `A.B` and `A` first.
   -- So a file whose namespace is, or holds, another file's would let that
   -- file's declarations capture the plain names that the output writes, such

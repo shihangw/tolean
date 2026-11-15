@@ -1,0 +1,1 @@
+only extensionless, .js and .ts imports are supported
