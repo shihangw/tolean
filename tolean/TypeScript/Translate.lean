@@ -2643,7 +2643,7 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
         let k ← translateExpr fuel env (some (.enum keyRef)) key
         unless k.type == .enum keyRef do reject key.span "the key must have the key type of the Record"
         let result := if type.isOptional then type else .optional type
-        return ⟨.ext (.optRecordGet keyRef keys type.isOptional) [o.value, k.value], false, result⟩
+        return ⟨.ext (.optRecordGet keyRef keys type.isOptional) [receiver, k.value], false, result⟩
       | none =>
         let elem ← orReject (match o.type with
           | .optional (.array t) | .nullable (.array t) => some t
