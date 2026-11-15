@@ -1465,7 +1465,7 @@ theorem translateDecl_ok {thr : String → Bool} {cls : String → Option (Optio
 theorem translateDecl_borrows {thr : String → Bool}
     {cls : String → Option (Option (List CtorParam × Expr))}
     {classes : List ClassInfo} {d : Decl} {s s' : Ctx} {o : Option IR.Decl}
-    (hself : IfacesSelf s.interfaces) (h : translateDecl thr cls classes d s = .ok o s') :
+    (hself : IfacesSelf s.interfaces) (h : translateDecl thr cls guards classes d s = .ok o s') :
     s'.borrows = s.borrows := by
   cases d with
   | «import» sp names source =>
