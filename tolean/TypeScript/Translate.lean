@@ -2621,7 +2621,10 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
       | some (.literal _) => "a tag field must be its string literal itself, not the value of '?:'"
       | _ => "the branches of '?:' have different types"
     let type ← orReject ((a.type.join b.type).filter fun t => !(t matches .literal _)) s message
-    return ⟨.ite c.code a.value b.value, false, type⟩
+    let code := IR.Expr.ite c.code a.value b.value
+    -- A receiver is elaborated before its projection supplies an expected
+    -- type. Give nullable branches their joined type so Lean can insert `some`.
+    return ⟨if type.isNullable then .ascribe code type.lean else code, false, type⟩
   | .call s callee args =>
     match reduceOf callee with
     | some recv => translateReduce fuel env expected s recv args

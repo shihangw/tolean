@@ -5113,6 +5113,8 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
           obtain ⟨ty, ⟨-, -⟩, hcode⟩ := h
           intro ρs ρo v ha hs hv'
           rw [← hcode] at hv'
+          have hv' : IR.Expr.eval fs fuel ρo (.ite tc.code ta.value tb.value) = some v := by
+            split at hv' <;> simpa only [IR.Expr.eval] using hv'
           obtain ⟨t, ht, hbr⟩ := out_ite fs fuel hv'
           have htest := ihE _ _ _ _ _ _ htc ρs ρo _ ha hs ht
           simp only [Eval.eval, htest, Option.bind_eq_bind, Option.bind_some, Val.truthy]
