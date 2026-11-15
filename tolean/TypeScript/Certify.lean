@@ -378,7 +378,7 @@ def sortInputNames : IR.Expr → List String
   | .field e _ _ | .proj e _ _ | .ascribe e _ | .decide e | .not e | .neg e
   | .isNone e | .isSome e | .propNot e | .inject _ _ e => sortInputNames e
   | .push n e | .update _ n e => n :: sortInputNames e
-  | .matchNull n a b => n :: sortInputNames a ++ sortInputNames b
+  | .matchNull n a b _ => n :: sortInputNames a ++ sortInputNames b
   | .intOp _ a b | .order _ a b | .division _ a b | .eq a b | .ne a b
   | .propAnd a b | .propOr a b | .and a b | .or a b | .coalesce a b _ =>
     sortInputNames a ++ sortInputNames b
