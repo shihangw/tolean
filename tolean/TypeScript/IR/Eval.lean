@@ -539,6 +539,17 @@ def Body.exec (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
         | true, .ret (.ok w) => callResult names w
         | _, _ => none
       Body.exec fs (k + 1) (← bindState names inner ρ) rest
+  | .letBorrow name ref index args rest => do
+    let .map _ ← ρ.lookup name | none
+    let vs ← Expr.evalList fs fuel ρ args
+    let fuel + 1 := fuel | none
+    let (params, body) ← fs.lookup ref
+    if params.length != vs.length then none
+    let param ← params[index]?
+    if body.returnedState != some [param] then none
+    let .normal after ← Body.exec fs fuel (params.zip vs).reverse body | none
+    let .map entries ← after.lookup param | none
+    Body.exec fs (fuel + 1) (ρ.set name (.map entries)) rest
   | .letLifted name e rest => do Body.exec fs fuel ((name, ← Expr.eval fs fuel ρ e) :: ρ) rest
   | .fold names element body items rest _ => do
     let .list vs ← Expr.eval fs fuel ρ items | none

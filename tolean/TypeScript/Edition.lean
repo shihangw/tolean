@@ -56,6 +56,11 @@ inductive Feature where
   and RegExpBuiltinExec (ES2024 §22.2.2, §22.2.2.3.1 and §22.2.7.2).
   The translator accepts flagless literals and their `test` method from ES2015. -/
   | regexp
+  /-- A call changes an exclusively owned Map argument: `EvaluateCall`,
+  `OrdinaryCallBindThis`, `FunctionDeclarationInstantiation`,
+  `Map.prototype.set` and `Map.prototype.delete`. Copying the final map back
+  models the shared object without exposing an alias. Maps date to ES2015. -/
+  | mapBorrow
   /-- `**` and `**=`: `ExponentiationExpression`. -/
   | exponent
   /-- `{ ...e }`: `PropertyDefinition : ... AssignmentExpression`. -/
@@ -117,6 +122,7 @@ def Feature.since : Feature → Edition
   | .regexp => .es2015
   | .stringNumberArguments => .es2015
   | .dateParseFormat => .es2016
+  | .mapBorrow => .es2015
   | .exponent | .arrayIncludes | .trimWhiteSpace => .es2016
   | .stringPad => .es2017
   | .objectSpread => .es2018
@@ -128,6 +134,7 @@ def Feature.since : Feature → Edition
 
 def Feature.describe : Feature → String
   | .regexp => "regular expressions without flags"
+  | .mapBorrow => "a call that changes an exclusively owned Map argument"
   | .exponent => "'**'"
   | .objectSpread => "object spread '...'"
   | .bigint => "bigint"

@@ -889,8 +889,65 @@ test('the interpreter gives no value where a changed collection has another hold
   }
 });
 
-// Until calls carry changed parameters back, even an exclusive map argument
-// must give no value. Aliased arguments must remain refused after borrows land.
+test('normal-completion map borrows copy the final map back without aliases', async () => {
+  const change = 'function change(m: Map<bigint, bigint>, x: bigint): void { m.set(1n, x); }\n';
+  const cases = [
+    ...Array.from({ length: 80 }, (_, seed) => ({
+      source: new Gen(seed + 1000).borrowProgram(),
+      refused: false,
+    })),
+    {
+      source: change + 'export function f(x: bigint): bigint { const m = new Map<bigint, bigint>(); ' +
+        'const alias = m; change(m, x); return alias.get(1n) ?? 0n; }',
+      refused: true,
+    },
+    {
+      source: change + 'export function f(x: bigint): bigint { const m = new Map<bigint, bigint>(); ' +
+        'const box = { m }; change(m, x); return box.m.get(1n) ?? 0n; }',
+      refused: true,
+    },
+    {
+      source: 'function change(m: Map<bigint, bigint>, other: ReadonlyMap<bigint, bigint>): void { m.set(1n, 2n); }\n' +
+        'export function f(x: bigint): bigint { const m = new Map<bigint, bigint>(); ' +
+        'change(m, m); return m.get(1n) ?? 0n; }',
+      refused: true,
+    },
+    {
+      source: 'function change(a: Map<bigint, ReadonlyMap<bigint, bigint>>, b: ReadonlyMap<bigint, bigint>): void { a.set(1n, b); }\n' +
+        'export function f(x: bigint): ReadonlyMap<bigint, ReadonlyMap<bigint, bigint>> { ' +
+        'const a = new Map<bigint, ReadonlyMap<bigint, bigint>>(); const b = new Map<bigint, bigint>(); ' +
+        'change(a, b); b.set(1n, x); return a; }',
+      refused: true,
+    },
+  ];
+  const inputs = [-9n, 0n, 17n];
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: cases.map(({ source }) => ({
+      source, calls: inputs.map(x => ({ function: 'f', args: [encode(x)] })),
+    })) }),
+    encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const results = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-map-borrows-'));
+  for (const [i, { source, refused }] of cases.entries()) {
+    const lean = results[i];
+    expect(lean?.parsed, source).toBe(true);
+    const path = join(dir, `case${i}.mjs`);
+    writeFileSync(path, ts.transpileModule(source, {
+      compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+    }).outputText);
+    const mod = (await import(pathToFileURL(path).href)) as { f: (x: bigint) => bigint };
+    if (!lean?.parsed) continue;
+    for (const [j, x] of inputs.entries()) {
+      const expected = encode(mod.f(x));
+      if (refused) expect(lean.results[j] ?? null, source).toBeNull();
+      else expect(lean.results[j]?.value, source).toEqual(expected);
+    }
+  }
+});
+
+// Calls that return a value still have no state-carrying result.
 test('map calls preserve the boundary between readonly inputs and pending borrows', async () => {
   const change = 'function change(m: Map<bigint, bigint>): boolean { m.set(1n, 2n); return true; }\n';
   const cases = [

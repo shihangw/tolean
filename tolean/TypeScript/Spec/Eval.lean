@@ -1307,6 +1307,16 @@ structure Scope where
   program : Program
   file : String
 
+/-- Borrow signatures of top-level functions in this file. Imports and
+generic functions are outside the first normal-completion borrow case. -/
+def moduleBorrows (file : Module) : List (String × Nat) :=
+  file.decls.filterMap fun
+    | .function _ _ name [] ps ret body => (borrowParam? ps ret body).map (name, ·)
+    | _ => none
+
+def borrowsOf (m : Scope) : List (String × Nat) :=
+  ((m.program.lookup m.file).map moduleBorrows).getD []
+
 /-- `path` with `.` and `..` segments resolved, or none when `..` would leave
 the root. -/
 def normalizeSegments : List String → List String → Option (List String)
@@ -1835,7 +1845,7 @@ def evalCall (m : Scope) (fuel : Nat) (env : Env N) (name : String) (args : List
     let (params, body) ← (functionsOf m.program).lookup key
     -- The model holds a collection as a value, which is exact only when
     -- nothing else holds the object while the function changes it.
-    if !Stmt.ownsChanges params body then none
+    if !Stmt.ownsChangesBorrow (borrowsOf { m with file := key.file }) params body then none
     -- A `break` or a `continue` outside a loop is an early error
     -- (ECMA-262 §14.8.1 and §14.9.1), so the model gives no value.
     match ← execStmt { m with file := key.file } fuel (← bindArgs params vs) body with
@@ -2088,10 +2098,21 @@ def execStmt (m : Scope) (fuel : Nat) (env : Env N) : Stmt → Option (Outcome N
     match fuel with
     | 0 => none
     | fuel + 1 =>
-      let .closure params body ← env.lookup name | none
-      match ← callLocal m fuel env params body vs with
-      | (.ok _, after) => some (.normal after)
-      | (.error t, _) => some (.ret (.error t))
+      match env.lookup name with
+      | some (.closure params body) =>
+        match ← callLocal m fuel env params body vs with
+        | (.ok _, after) => some (.normal after)
+        | (.error t, _) => some (.ret (.error t))
+      | some _ => none
+      | none =>
+        let i ← (borrowsOf m).lookup name
+        let some (.ident _ target) := args[i]? | none
+        let (params, body) ← (functionsOf m.program).lookup ⟨m.file, name⟩
+        let param ← params[i]?
+        let .map _ ← env.lookup target | none
+        let .normal after ← execStmt m fuel (← bindArgs params vs) body | none
+        let .map entries ← after.lookup param | none
+        return .normal (env.set target (.map entries))
   | .exprStmt _ (.assign _ .assign (.ident _ name) value) => do
     return .normal (env.set name (← eval m fuel env value))
   -- `x ??= e` (`LogicalAssignment`, ECMA-262 §13.15.2): `e` runs, and its
@@ -2286,7 +2307,7 @@ def callIn (p : Program) (key : DeclRef) (args : List (Val N)) (fuel : Nat := 64
     Option (Except (Val N) (Val N)) := do
   let (params, body) ← (functionsOf p).lookup key
   -- As in `evalCall`: the function changes only collections that it owns.
-  if !Stmt.ownsChanges params body then none
+  if !Stmt.ownsChangesBorrow (borrowsOf ⟨p, key.file⟩) params body then none
   match ← execStmt ⟨p, key.file⟩ fuel (← bindArgs params args) body with
   | .ret r => some r
   | .normal _ | .brk _ | .cont _ => none
