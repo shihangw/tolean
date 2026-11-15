@@ -575,6 +575,21 @@ test('number-sort calls compose with a conditional and a map', () => {
     ({ value: (flag ? xs.toSorted((a, b) => a - b) : xs).map(x => encode(x + 1)) })));
 });
 
+test('number sorts compose with mapped, filtered and sliced inputs', () => {
+  const source = 'export function f(xs: ReadonlyArray<number>): number[] { const ys = xs.map(x => x + 1).filter(x => x > 0).slice(1); return ys.toSorted((a, b) => b - a).map(x => x + 1); }';
+  const arrays = fc.sample(fc.array(fc.integer({ min: -100, max: 100 }), { maxLength: 12 }), 40);
+  const input = { programs: [{ source, calls: arrays.map(xs =>
+    ({ function: 'f', args: [xs.map(encode)] })) }] };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const [lean] = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  expect(lean?.parsed).toBe(true);
+  if (lean === undefined || !lean.parsed) return;
+  expect(lean.results).toEqual(arrays.map(xs =>
+    ({ value: xs.map(x => x + 1).filter(x => x > 0).slice(1)
+      .toSorted((a, b) => b - a).map(x => encode(x + 1)) })));
+});
+
 test('number sorts read local concatenations with literal elements', () => {
   const source = 'export function f(xs: ReadonlyArray<number>, ys: ReadonlyArray<number>): number[] { const first = xs; const both = [...first, ...ys, 0, 1]; return both.toSorted((a, b) => a - b); }';
   const pairs = [[[], []], [[2, -0], [0, 1]],
