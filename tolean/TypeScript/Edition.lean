@@ -61,6 +61,13 @@ maintained. -/
 def Edition.default : Edition := .es2024
 
 inductive Feature where
+  /-- A local call returns a value and writes captured bindings:
+  [[Call]] (§10.2.1), SetMutableBinding (§9.1.1.1.5), and ReturnStatement
+  (§14.10), with section numbers from ES2024. ES2015 is the oldest target. -/
+  | localReturnState
+  /-- Calls between local declarations: FunctionDeclarationInstantiation
+  (§10.2.11) and [[Call]] (§10.2.1), with ES2024 section numbers. -/
+  | localSiblingCalls
   /-- Flagless RegExp patterns and `test`: Pattern Semantics, RepeatMatcher
   and RegExpBuiltinExec (ES2024 §22.2.2, §22.2.2.3.1 and §22.2.7.2).
   The translator accepts flagless literals and their `test` method from ES2015. -/
@@ -132,6 +139,7 @@ def Feature.since : Feature → Edition
   | .regexp => .es2015
   | .stringNumberArguments => .es2015
   | .dateParseFormat => .es2016
+  | .localReturnState | .localSiblingCalls => .es2015
   | .mapBorrow => .es2015
   | .exponent | .arrayIncludes | .trimWhiteSpace => .es2016
   | .stringPad => .es2017
@@ -143,6 +151,8 @@ def Feature.since : Feature → Edition
   | .arrayFindLast | .arrayToSorted => .es2023
 
 def Feature.describe : Feature → String
+  | .localReturnState => "a local function that returns a value and changes captured variables"
+  | .localSiblingCalls => "calls between local functions"
   | .regexp => "regular expressions without flags"
   | .mapBorrow => "a call that changes an exclusively owned Map argument"
   | .exponent => "'**'"
