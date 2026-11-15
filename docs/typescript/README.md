@@ -28,7 +28,7 @@ A function return annotation may be a predicate, as in `shape is Circle`.
 The parser preserves its parameter and target type, including on local
 declarations and local arrows. The interpreter ignores the annotation, as
 Node does after type stripping: it evaluates the body rather than trusting
-the claimed type. Translation still refuses these annotations.
+the claimed type. Translation accepts checked tag guards as described below.
 - **Statements:** `const` and `let` declarations, array destructuring such as
   `const [a, , b, ...rest] = xs`, expression statements,
   `return`, `throw`, `if` and `else`, `for … of` with a name or an array
@@ -231,6 +231,40 @@ change and still compiles; certificates prove more for the files they cover.
 - Fuzz: 200 random typed programs per run, from a printed seed. When the
   translator accepts one, Lean must compile the output, and a second
   translation must give the same text.
+
+#### Checked type guards
+
+A function with a predicate annotation becomes a `Bool` function only when
+its body computes exactly the tag test for the claimed type:
+
+```ts
+function isCircle(shape: Shape): shape is Circle {
+  return shape.kind === "circle";
+}
+```
+
+The parameter must be required and must be the function's only parameter.
+The body must return the strict comparison directly, or use that comparison
+in an `if` whose branches return `true` and `false`. The comparison may use
+`===` or `!==`, with the literal on either side. A named union of primitives
+can use `typeof value === "string"` instead. The translator checks that the
+true branch is exactly the annotated type. A constant result, a test of
+another parameter, and a test of only part of a member are refused.
+
+In `if (isCircle(shape))`, where the argument is an identifier, both branches
+narrow as they do for an inline tag test. This also works for local guards
+and local arrows declared before the call. A chain of guard tests can
+separate three or more members. Calls in other expression positions remain
+ordinary boolean calls and do not narrow. Imported guards likewise remain
+boolean calls; their interfaces do not carry a body for the caller to check.
+
+The interpreter and translator lower these tests to the existing tag
+branches. They retain each call in a fresh binding so that argument checking
+and call fuel remain in the model. In a chain of tag tests, these calls run
+before the match; checked guards only read their parameter's tag. The IR and
+its evaluator use their existing boolean functions, calls and tag matches.
+`program_sound` covers this lowering through the same statement proofs as
+inline tests. The native and WebAssembly translators use the same source.
 
 #### Certificates
 
@@ -714,13 +748,10 @@ Tolean rejects these, among others:
   enum is one of its members, so Tolean refuses a string such as `'a'` where
   the enum is expected, and a member where a `string` is expected. It also
   refuses the enum's object as a value, and a local with the enum's name.
-- Translation of a type guard annotation, such as `shape is Circle`, even when its body
-  tests the tag exactly. Step 3 of the [pure TypeScript plan](../plans/pure-typescript.md)
-  is still open. The translator must check the body before it can trust the
-  annotation at a call site. Both branches matter: a guard that recognizes
-  only circles with a positive radius does not make its false branch a
-  square. Until those checks are implemented, use a direct tag test at the
-  branch instead.
+- A type guard whose body is not exactly a strict tag test of its one
+  required parameter, or whose true branch is not exactly its annotated
+  type. A guard that recognizes only circles with a positive radius does
+  not make its false branch a square.
 - A field of a tagged union read before a test of its tag, a read of the tag
   field outside such a test, and a union of interfaces without a tag. Tolean
   also refuses a member, such as a `Circle`, where the union is expected,
@@ -748,9 +779,9 @@ Tolean rejects these, among others:
   type. A union of primitive types and `null` needs that name too: declare
   `type T = string | bigint`, then write `T | null`. Tolean also refuses
   `typeof` anywhere except in the test of an `if` on a local of such a
-  union, against one of its members. So it refuses `typeof` on a union of
+  union, or in a checked guard, against one of its members. So it refuses `typeof` on a union of
   interfaces, on a value that may be `null`, and as a value, as in
-  `return typeof x === 'string'`.
+  `return typeof x === 'string'` in a function without a predicate annotation.
 - A `Record` that is not the whole of a type alias, such as
   `(r: Record<K, V>)`, because the output needs a name for its structure.
   Tolean also refuses `Record<string, V>` and other keys that are not a

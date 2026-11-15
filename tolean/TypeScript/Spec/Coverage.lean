@@ -444,7 +444,7 @@ def extras : List Group := [
     ``Proof.translateAlias_ok, ``Proof.translateRecord_ok, ``Proof.translateRecord_shape, ``Proof.translateEnum_ok, ``Proof.translateUnion_ok,
     ``Proof.declareUnion_ok, ``Proof.translatePrimitiveUnion_ok, ``Proof.eval_into]⟩,
   ⟨"How Lean reads the output", [``Proof.eval_value, ``Proof.checkName_ok, ``Proof.checkLocalName_ok,
-    ``checkLocalName_not_interface]⟩,
+    ``checkLocalName_not_interface, ``checked_guard_boolean]⟩,
   ⟨"Imports across editions", [``translateImport_edition]⟩,
   ⟨"The parser's round trip: types, as tokens",
     [``Syntax.types_reads, ``Syntax.parseType_union, ``Syntax.parseType_plain,

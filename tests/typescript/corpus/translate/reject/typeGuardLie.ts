@@ -1,4 +1,4 @@
-// expect: 5:34 type guards are not supported
+// expect: 5:34 a type guard must have one required parameter and return exactly a strict test of its tag
 interface Circle { readonly kind: "circle"; readonly radius: bigint; }
 interface Square { readonly kind: "square"; readonly side: bigint; }
 type Shape = Circle | Square;
