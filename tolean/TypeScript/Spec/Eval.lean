@@ -1484,6 +1484,15 @@ def writeBack (env after : Env N) (params : List String) (body : Stmt) : Env N :
     | some v => e.set p.1 v
     | none => e) env
 
+/-- Whether the last statement returns a value. The translator's
+`localReturnIdent` accepts the identifier case of this shape. The interpreter
+also evaluates expressions that the translator refuses, so dispatch must
+retain those final returns too. -/
+def endsValueReturn : List Stmt → Bool
+  | [.returnStmt _ (some _)] => true
+  | _ :: rest => endsValueReturn rest
+  | [] => false
+
 -- With the array callbacks and the map and set methods in `eval`, and the
 -- calls of local functions, this block takes several times the default 200000
 -- heartbeats to elaborate, most of it in the proofs that each recursive call
@@ -1869,24 +1878,59 @@ and the arguments `vs` (`[[Call]]`, ECMA-262 §10.2.1): the body runs with
 each parameter bound to its argument, in front of the variables of the
 caller that it captures. The call gives what the body returns, or
 `undefined` when the body runs to its end, and the caller's variables with
-the values that the body left in them. The model keeps no variables with a
-return, so it gives no value for a body that returns and may change a
-variable of the caller. -/
+the values that the body left in them. For a final return, `execReturnState`
+keeps the environment alongside the value. An earlier return in a body
+that changes captured variables still gives no result. -/
 def callLocal (m : Scope) (fuel : Nat) (env : Env N) (params : List String) (body : Stmt)
     (vs : List (Val N)) : Option (Except (Val N) (Val N) × Env N) := do
   -- A function declaration has a block for its body.
   let .block sp ss := body | none
-  match ← execStmt m fuel ((← bindArgs params vs) ++ captures env params body) (.block sp ss) with
+  let inner := (← bindArgs params vs) ++ captures env params body
+  if changesCaptured env params body && endsValueReturn ss then do
+    let (value, after) ← execReturnState m fuel inner ss
+    return (value, writeBack env after params body)
+  match ← execStmt m fuel inner (.block sp ss) with
   | .normal after => some (.ok .undefined, writeBack env after params body)
-  | .ret r => if changesCaptured env params body then none else some (r, env)
+  | .ret r =>
+    if changesCaptured env params body then none
+    else some (r, env)
   | .brk _ | .cont _ => none
 termination_by (fuel, sizeOf body, 1)
+
+/-- A final return keeps the environment in which its expression runs.
+An earlier return in the prefix gives no result. -/
+def execReturnState (m : Scope) (fuel : Nat) (env : Env N) :
+    List Stmt → Option (Except (Val N) (Val N) × Env N)
+  | [.returnStmt _ (some e)] => do
+    match evalTop m fuel env e with
+    | some r => return (r, env)
+    | none => evalTopState m fuel env e
+  | s :: rest => do
+    if s.constAssignedIn rest then none
+    let .normal after ← execStmt m fuel env s | none
+    execReturnState m fuel after rest
+  | [] => none
+termination_by ss => (fuel, sizeOf ss, 0)
 
 /-- The value of `e` as the whole value of a declaration or a `return`: `.ok`
 of its value, or `.error` of what it throws when it is a call that throws. -/
 def evalTop (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Except (Val N) (Val N))
   | .call _ (.ident _ name) args => evalCall m fuel env name args
   | e => (eval m fuel env e).map .ok
+termination_by e => (fuel, sizeOf e, 1)
+
+/-- A whole-statement local call can return captured state with its value.
+Ordinary expressions still use `evalTop`, which keeps no state. -/
+def evalTopState (m : Scope) (fuel : Nat) (env : Env N) :
+    Expr → Option (Except (Val N) (Val N) × Env N)
+  | .call _ (.ident _ name) args => do
+    let .closure params body ← env.lookup name | none
+    if !changesCaptured env params body then none
+    let vs ← evalList m fuel env args
+    match fuel with
+    | 0 => none
+    | k + 1 => callLocal m k env params body vs
+  | _ => none
 termination_by e => (fuel, sizeOf e, 1)
 
 /-- An optional chain such as `a?.b.c`: `none` where a `?.` meets `null` or
@@ -2063,9 +2107,14 @@ termination_by xs => (fuel, sizeOf body, xs.length + 1)
 they make to outer variables and drop the variables they declare. -/
 def execStmt (m : Scope) (fuel : Nat) (env : Env N) : Stmt → Option (Outcome N)
   | .varDecl _ { name, init := some init, .. } => do
-    match ← evalTop m fuel env init with
-    | .ok v => return .normal ((name, v) :: env)
-    | .error t => return .ret (.error t)
+    match evalTop m fuel env init with
+    | some (.ok v) => return .normal ((name, v) :: env)
+    | some (.error t) => return .ret (.error t)
+    | none =>
+      let (value, after) ← evalTopState m fuel env init
+      match value with
+      | .ok v => return .normal ((name, v) :: after)
+      | .error t => return .ret (.error t)
   -- `const [a, , b, ...r] = e` (ECMA-262 §14.3.3.1): the pattern iterates the
   -- value of `e`, as `for … of` does, and binds each name in order. A value
   -- that the subset cannot iterate leaves it.
@@ -2073,7 +2122,10 @@ def execStmt (m : Scope) (fuel : Nat) (env : Env N) : Stmt → Option (Outcome N
     match ← evalTop m fuel env init with
     | .ok v => return .normal ((patternBindings p (← iterValues v)).reverse ++ env)
     | .error t => return .ret (.error t)
-  | .returnStmt _ (some e) => do return .ret (← evalTop m fuel env e)
+  | .returnStmt _ (some e) => do
+    match evalTop m fuel env e with
+    | some r => return .ret r
+    | none => return .ret (← evalTopState m fuel env e).1
   -- `throw e` ends the function with what it throws (ECMA-262 §14.14.1).
   | .throwStmt _ e => do return .ret (.error (← eval m fuel env e))
   -- `xs.push(v)` adds `v` at the end (`Array.prototype.push`, ECMA-262

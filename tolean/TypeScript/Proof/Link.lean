@@ -26,6 +26,14 @@ open tolean.TypeScript.Eval (Val)
 
 variable {N : Type} [JSNumber N]
 
+omit [JSNumber N] in
+/-- Reading a name distributes over the choice of an environment. A local
+call may bind its result by updating an old slot or adding a fresh one. -/
+theorem lookup_ite (p : Prop) [Decidable p] (yes no : Eval.Env N) (name : String) :
+    (if p then yes else no).lookup name =
+      (if p then yes.lookup name else no.lookup name) := by
+  split <;> rfl
+
 /-- The translator gives `decls` for `m`, from the state `start`. The kernel
 can decide this, and a certificate does. -/
 def translatesTo (m : Module) (start : Ctx) (decls : List IR.Decl) : Bool :=
@@ -644,7 +652,7 @@ macro_rules
       simp [runIn, callIn, Except.toOption, functionsOf, functions, Body.exec, Body.runFold, Expr.eval,
         Expr.evalCall, Expr.evalList,
         Expr.evalFields, Expr.evalMap, Expr.evalMapIdx, Expr.evalFilter, Expr.evalFind, Expr.evalFindIdx, Expr.evalReduce,
-        bindState, eqVal, ← List.map_reverse,
+        bindState, callResult, eqVal, ← List.map_reverse,
         -- `includes` on an array literal compares with `===` once the list
         -- has reduced, so strict equality on primitives must reduce too.
         Eval.includesVal, Eval.sameValueZero, Eval.strictEq, Eval.setProp,
