@@ -34,6 +34,10 @@ def closesKinds (depth : Nat) : List TokenKind → Bool
     | .punct "(" | .punct "[" | .punct "{" => closesKinds (depth + 1) rest
     | .punct ")" | .punct "]" | .punct "}" => if depth == 0 then false else closesKinds (depth - 1) rest
     | .punct ";" => if depth == 0 then false else closesKinds depth rest
+    | .punct "&&" | .punct "||" | .punct "??"
+    | .punct "===" | .punct "!==" | .punct "==" | .punct "!="
+    | .punct "+" | .punct "*" | .punct "/" | .punct "%" | .punct "**" =>
+      if depth == 0 then false else closesKinds depth rest
     | .punct ">" => true
     | _ => closesKinds depth rest
 
@@ -207,7 +211,7 @@ def Expr.wfAt (T : Edition) : Level → Expr → Bool
   | .lhs, .call _ callee args => callee.wfAt T .lhs && Expr.allWF T args
   | .lhs, e => e.wfAt T .primary
   | .primary, .ident _ name => exprName name
-  | .primary, .number .. | .primary, .bigint .. | .primary, .string .. | .primary, .bool ..
+  | .primary, .regexp .. | .primary, .number .. | .primary, .bigint .. | .primary, .string .. | .primary, .bool ..
   | .primary, .null _ => true
   | .primary, .paren _ inner => inner.wfAt T .assign
   | .primary, .array _ elems => Expr.allWF T elems
@@ -250,6 +254,7 @@ operator, and no `{` follows `(…)`. The parser also checks what follows a
 call of `async`, but only when no line break comes before its `(`, and the
 printer puts one there. -/
 def Expr.afterOK (after : List TokenKind) : Expr → Bool
+  | .regexp .. => true
   | .binary _ op l r =>
     (if op == .lt || op == .shl then !closesKinds 0 (r.tokens ++ after) else true) &&
       l.afterOK ((symbol op.symbol) ++ r.tokens ++ after) && r.afterOK after
@@ -335,6 +340,7 @@ def simpleExpr (x : Token) : Option Expr :=
   | .number text => some (.number x.span text)
   | .bigint text => some (.bigint x.span text)
   | .string value => some (.string x.span value)
+  | .regexp source target => some (.regexp x.span source target)
   | .keyword "true" => some (.bool x.span true)
   | .keyword "false" => some (.bool x.span false)
   | .keyword "null" => some (.null x.span)
@@ -469,6 +475,7 @@ theorem Touching.cons_one {ts : List Token} {k : TokenKind} {ws : List Word} (h 
 
 /-- A token that can start an expression. -/
 def startsExpr : TokenKind → Bool
+  | .regexp .. => true
   | .ident _ | .number _ | .bigint _ | .string _ | .keyword _ => true
   | .punct p => p ∈ ["(", "[", "{", "!", "-", "+", "~", "++", "--", "..."]
   | .eof => false
@@ -479,6 +486,7 @@ theorem Expr.first : ∀ e : Expr, ∃ k, e.tokens.head? = some k ∧ startsExpr
   | .number _ t => ⟨.number t, by simp [Expr.tokens, Expr.words], rfl⟩
   | .bigint _ t => ⟨.bigint t, by simp [Expr.tokens, Expr.words], rfl⟩
   | .string _ v => ⟨.string v, by simp [Expr.tokens, Expr.words], rfl⟩
+  | .regexp _ v target => ⟨.regexp v target, by simp [Expr.tokens, Expr.words], rfl⟩
   | .bool _ b => ⟨.keyword (if b then "true" else "false"), by simp [Expr.tokens, Expr.words, keywordWord], rfl⟩
   | .null _ => ⟨.keyword "null", by simp [Expr.tokens, Expr.words, keywordWord], rfl⟩
   | .array _ es => ⟨.punct "[", by simp [Expr.tokens, Expr.words, enclose, punctWord], by decide⟩
@@ -699,6 +707,7 @@ mutual
 
 /-- How deep the subexpressions of `e` nest. -/
 def Expr.height : Expr → Nat
+  | .regexp .. => 0
   | .array _ es => Expr.heightOf es + 1
   | .object _ ps => Property.heightOf ps + 1
   | .paren _ i | .member _ i _ | .optMember _ i _ | .unary _ _ i | .prefix _ _ i | .postfix _ _ i =>
@@ -1028,7 +1037,7 @@ theorem Expr.head_wf {T : Edition} : ∀ (e : Expr) (level : Level), e.wfAt T le
   | .unary _ op _, _, _ => by
     cases op <;> simp [Expr.tokens, Expr.words, UnaryOp.symbol, symbol, Lex.reservedWords, punctWord, keywordWord]
   | .prefix _ op _, _, _ => by cases op <;> simp [Expr.tokens, Expr.words, UpdateOp.symbol, punctWord]
-  | .ident .., _, _ | .number .., _, _ | .bigint .., _, _ | .string .., _, _ | .bool .., _, _
+  | .regexp .., _, _ | .ident .., _, _ | .number .., _, _ | .bigint .., _, _ | .string .., _, _ | .bool .., _, _
   | .null _, _, _ | .array .., _, _ | .object .., _, _ | .paren .., _, _ | .new .., _, _ => by
     simp [Expr.tokens, Expr.words, identWord, keywordWord, enclose, punctWord]
 
@@ -2003,7 +2012,7 @@ theorem parseLeftHandSide_reads {T : Edition} (f : Nat) (e : Expr) (he : e.wfAt 
 theorem Expr.isSimpleTarget_erase : ∀ e : Expr, e.erase.isSimpleTarget = e.isSimpleTarget
   | .paren _ i => by simp [Expr.erase, Expr.isSimpleTarget, Expr.isSimpleTarget_erase i]
   | .ident .. | .member .. | .index .. => by simp [Expr.erase, Expr.isSimpleTarget]
-  | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .array .. | .object .. | .call .. | .optMember ..
+  | .regexp .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .array .. | .object .. | .call .. | .optMember ..
   | .unary .. | .prefix .. | .postfix .. | .binary .. | .cond .. | .assign .. | .arrow .. | .asConst ..
   | .satisfies .. | .new .. | .spread .. => by
     simp [Expr.erase, Expr.isSimpleTarget]
@@ -2017,6 +2026,7 @@ theorem updateOp_symbol {t : Token} {op : UpdateOp} (h : t.kind = .punct op.symb
 
 /-- A token that can start a primary expression. -/
 def startsPrimary : TokenKind → Bool
+  | .regexp .. => true
   | .ident _ | .number _ | .bigint _ | .string _ => true
   | .keyword w => w == "true" || w == "false" || w == "null" || w == "new"
   | .punct p => p == "(" || p == "[" || p == "{"
@@ -2303,7 +2313,7 @@ theorem binSuffix_first : ∀ e : Expr, (binSuffix e).flatten = [] ∨
     rcases binSuffix_first l with h | ⟨k, ks, h, hk⟩
     · exact .inr ⟨.ident "satisfies", t.words.flatten, by simp [binSuffix, h, identWord], rfl⟩
     · exact .inr ⟨k, ks ++ (.ident "satisfies" :: t.words.flatten), by simp [binSuffix, h, identWord], hk⟩
-  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .array .. | .object ..
+  | .regexp .. | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .array .. | .object ..
   | .paren .. | .member .. | .optMember .. | .index .. | .call .. | .unary .. | .prefix .. | .postfix ..
   | .cond .. | .assign .. | .arrow .. | .new .. | .spread .. => .inl (by simp [binSuffix])
 
@@ -2921,7 +2931,7 @@ theorem unary_notIdent (op : UnaryOp) : ∃ k ks, symbol op.symbol = k :: ks ∧
 or a `(`, or nothing. -/
 theorem Expr.second_ok : ∀ e : Expr, ∀ n k r, e.tokens = .ident n :: k :: r → secondOK k = true
   | .ident .., _, _, _, h => by simp [Expr.tokens, Expr.words, identWord] at h
-  | .number .., _, _, _, h | .bigint .., _, _, _, h | .string .., _, _, _, h | .null _, _, _, _, h => by
+  | .regexp .., _, _, _, h | .number .., _, _, _, h | .bigint .., _, _, _, h | .string .., _, _, _, h | .null _, _, _, _, h => by
     simp [Expr.tokens, Expr.words, keywordWord] at h
   | .bool _ b, _, _, _, h => by cases b <;> simp [Expr.tokens, Expr.words, keywordWord] at h
   | .array .., _, _, _, h => by simp [Expr.tokens_array] at h
@@ -3010,7 +3020,7 @@ theorem Expr.arrowStart_false : ∀ e : Expr, e.leftArrow = false → ∀ after 
     cases after with
     | nil => rfl
     | cons b after => simp_all [Expr.tokens, Expr.words, identWord, Parse.arrowStart]
-  | .number .., _, after, _ | .bigint .., _, after, _ | .string .., _, after, _ | .null _, _, after, _ =>
+  | .regexp .., _, after, _ | .number .., _, after, _ | .bigint .., _, after, _ | .string .., _, after, _ | .null _, _, after, _ =>
     arrowStart_cons (by simp) (by simp) _
   | .bool _ b, _, after, _ => by cases b <;> exact arrowStart_cons (by simp) (by simp) _
   | .array .., _, after, _ => by rw [Expr.tokens_array]; exact arrowStart_cons (by simp) (by simp) _
@@ -3134,7 +3144,7 @@ theorem Expr.leftArrow_wf {T : Edition} : ∀ (e : Expr) (level : Level), e.wfAt
       | _ => simp [Expr.wfAt] at h
     simpa [Expr.leftArrow] using Expr.leftArrow_wf o (.bin 0) this (by simp)
   | .assign .., level, h, hl => by cases level <;> simp_all [Expr.wfAt]
-  | .ident .., _, _, _ | .number .., _, _, _ | .bigint .., _, _, _ | .string .., _, _, _ | .bool .., _, _, _
+  | .regexp .., _, _, _ | .ident .., _, _, _ | .number .., _, _, _ | .bigint .., _, _, _ | .string .., _, _, _ | .bool .., _, _, _
   | .null _, _, _, _ | .array .., _, _, _ | .object .., _, _, _ | .paren .., _, _, _ | .unary .., _, _, _
   | .prefix .., _, _, _ | .new .., _, _, _ | .spread .., _, _, _ => by simp [Expr.leftArrow]
 
@@ -3506,6 +3516,9 @@ theorem primary_reads {T : Edition} (f : Nat) (IH : ∀ g ≤ f, AllRead T g) (e
   | string sp v =>
     exact readsE_one (k := .string v) (by simp [Expr.words]) fun s x u r hs hx =>
       ⟨_, parsePrimary_simple f s x u r (.string x.span v) hs (by simp [simpleExpr, hx]), by simp [Expr.erase]⟩
+  | regexp sp v target =>
+    exact readsE_one (k := .regexp v target) (by simp [Expr.words]) fun s x u r hs hx =>
+      ⟨_, parsePrimary_simple f s x u r (.regexp x.span v target) hs (by simp [simpleExpr, hx]), by simp [Expr.erase]⟩
   | bool sp b =>
     cases b
     · exact readsE_one (k := .keyword "false") (by simp [Expr.words, keywordWord]) fun s x u r hs hx =>
@@ -3627,49 +3640,124 @@ theorem exprs_read (T : Edition) (f : Nat) : AllRead T f := exprs_read_le T f f 
 
 /-! ### What follows an expression -/
 
-/-- A `>` comes in `ks`. -/
-def hasGreater (ks : List TokenKind) : Bool := ks.contains (.punct ">")
+/-- A scan either needs more tokens at a bracket depth, or has stopped.
+Stopping without `>` differs from needing more tokens: a top-level logical
+operator rules out type arguments even when more tokens follow it. -/
+inductive TypeArgScan where
+  | more (depth : Nat)
+  | done (found : Bool)
 
-/-- The scan of `closesKinds` passes over `ks` at every depth: `ks` closes no
-group that it does not open, and has no `;` and no end of file. -/
+/-- `closesKinds` with an explicit result for a scan that needs more tokens. -/
+def scanKinds (depth : Nat) : List TokenKind → TypeArgScan
+  | [] => .more depth
+  | k :: rest =>
+    match k with
+    | .eof => .done false
+    | .punct "(" | .punct "[" | .punct "{" => scanKinds (depth + 1) rest
+    | .punct ")" | .punct "]" | .punct "}" =>
+      if depth == 0 then .done false else scanKinds (depth - 1) rest
+    | .punct ";" | .punct "&&" | .punct "||" | .punct "??"
+    | .punct "===" | .punct "!==" | .punct "==" | .punct "!="
+    | .punct "+" | .punct "*" | .punct "/" | .punct "%" | .punct "**" =>
+      if depth == 0 then .done false else scanKinds depth rest
+    | .punct ">" => .done true
+    | _ => scanKinds depth rest
+
+def TypeArgScan.found : TypeArgScan → Bool
+  | .more _ => false
+  | .done b => b
+
+theorem closesKinds_scan (d : Nat) (ks : List TokenKind) :
+    closesKinds d ks = (scanKinds d ks).found := by
+  induction ks generalizing d with
+  | nil => rfl
+  | cons k ks ih =>
+    by_cases hd : d = 0 <;> simp only [closesKinds, scanKinds, hd]
+    all_goals split <;> simp_all [TypeArgScan.found]
+
+theorem scanKinds_append (d : Nat) (a b : List TokenKind) :
+    scanKinds d (a ++ b) =
+      match scanKinds d a with
+      | .more n => scanKinds n b
+      | .done v => .done v := by
+  induction a generalizing d with
+  | nil => rfl
+  | cons k a ih =>
+    simp only [List.cons_append, scanKinds]
+    split <;> simp_all
+    all_goals split <;> simp_all
+
+/-- A scan that passes through `ks` leaves the bracket depth unchanged.
+It may instead stop at `>` or at a token that rules out type arguments. -/
 def Neutral (ks : List TokenKind) : Prop :=
-  ∀ d a, closesKinds d (ks ++ a) = (hasGreater ks || closesKinds d a)
+  ∀ d, match scanKinds d ks with
+    | .more n => n = d
+    | .done _ => True
 
-theorem Neutral.nil : Neutral [] := fun _ _ => by simp [hasGreater]
+theorem Neutral.nil : Neutral [] := fun _ => rfl
 
-theorem Neutral.append {a b : List TokenKind} (ha : Neutral a) (hb : Neutral b) : Neutral (a ++ b) :=
-  fun d x => by rw [List.append_assoc, ha, hb]; simp [hasGreater, Bool.or_assoc]
+theorem Neutral.append {a b : List TokenKind} (ha : Neutral a) (hb : Neutral b) :
+    Neutral (a ++ b) := by
+  intro d
+  rw [scanKinds_append]
+  have h := ha d
+  cases hs : scanKinds d a with
+  | done v => trivial
+  | more n =>
+    simp only [hs] at h
+    subst n
+    exact hb d
+
+theorem Neutral.congr {ks a b : List TokenKind} (h : Neutral ks) {d : Nat}
+    (hab : closesKinds d a = closesKinds d b) :
+    closesKinds d (ks ++ a) = closesKinds d (ks ++ b) := by
+  rw [closesKinds_scan, closesKinds_scan, scanKinds_append, scanKinds_append]
+  have hn := h d
+  cases hs : scanKinds d ks with
+  | done v => rfl
+  | more n =>
+    simp only [hs] at hn
+    subst n
+    exact (closesKinds_scan d a).symm.trans (hab.trans (closesKinds_scan d b))
 
 /-- A token other than a bracket, a `;` and the end of the file. -/
 theorem Neutral.one {k : TokenKind} (h1 : k ∉ [.punct "(", .punct "[", .punct "{", .punct ")", .punct "]",
     .punct "}", .punct ";", .eof]) : Neutral [k] := by
-  intro d a
+  intro d
   simp at h1
   obtain ⟨h1, h2, h3, h4, h5, h6, h7, h8⟩ := h1
+  by_cases hs : k ∈ [.punct "&&", .punct "||", .punct "??",
+      .punct "===", .punct "!==", .punct "==", .punct "!=",
+      .punct "+", .punct "*", .punct "/", .punct "%", .punct "**"]
+  · simp only [List.mem_cons, List.not_mem_nil, or_false] at hs
+    rcases hs with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl
+    all_goals cases d <;> simp [scanKinds]
   by_cases hg : k = .punct ">"
-  · subst hg; simp [closesKinds, hasGreater]
-  · cases k with
-    | punct p =>
-      simp only [TokenKind.punct.injEq] at h1 h2 h3 h4 h5 h6 h7 hg
-      have hg' : ">" ≠ p := fun e => hg e.symm
-      simp [closesKinds, hasGreater, h1, h2, h3, h4, h5, h6, h7, hg, hg']
-    | eof => exact absurd rfl h8
-    | _ => simp [closesKinds, hasGreater]
+  · subst k; simp [scanKinds]
+  cases k with
+  | punct p =>
+    simp only [TokenKind.punct.injEq] at h1 h2 h3 h4 h5 h6 h7 hg
+    simp_all [scanKinds]
+  | eof => exact absurd rfl h8
+  | _ => rfl
 
 /-- A group in brackets. -/
 theorem Neutral.enclosed {o c : String} (ho : o ∈ ["(", "[", "{"]) (hc : c ∈ [")", "]", "}"])
     {ks : List TokenKind} (h : Neutral ks) : Neutral (.punct o :: (ks ++ [.punct c])) := by
-  intro d a
-  simp at ho hc
-  have hopen : closesKinds d (.punct o :: (ks ++ .punct c :: a)) = closesKinds (d + 1) (ks ++ .punct c :: a) := by
-    rcases ho with rfl | rfl | rfl <;> simp [closesKinds]
-  have hclose : closesKinds (d + 1) (.punct c :: a) = closesKinds d a := by
-    rcases hc with rfl | rfl | rfl <;> simp [closesKinds]
-  simp only [List.cons_append, List.append_assoc, List.nil_append]
-  rw [hopen, h, hclose]
-  have h1 : ">" ≠ o := by rcases ho with rfl | rfl | rfl <;> decide
-  have h2 : ">" ≠ c := by rcases hc with rfl | rfl | rfl <;> decide
-  simp [hasGreater, h1, h2]
+  intro d
+  have hopen : scanKinds d (.punct o :: (ks ++ [.punct c])) =
+      scanKinds (d + 1) (ks ++ [.punct c]) := by
+    simp at ho
+    rcases ho with rfl | rfl | rfl <;> simp [scanKinds]
+  rw [hopen, scanKinds_append]
+  have hn := h (d + 1)
+  cases hs : scanKinds (d + 1) ks with
+  | done v => trivial
+  | more n =>
+    simp only [hs] at hn
+    subst n
+    simp at hc
+    rcases hc with rfl | rfl | rfl <;> simp [scanKinds]
 
 
 theorem Neutral.cons {k : TokenKind} {ks : List TokenKind} (hk : k ∉ [.punct "(", .punct "[", .punct "{",
@@ -3787,7 +3875,7 @@ mutual
 `;`. -/
 theorem Expr.neutral : ∀ e : Expr, Neutral e.tokens
   | .ident _ n => Neutral.all (by simp [Expr.tokens, Expr.words, identWord])
-  | .number .. | .bigint .. | .string .. | .null _ => Neutral.all (by simp [Expr.tokens, Expr.words, keywordWord])
+  | .regexp .. | .number .. | .bigint .. | .string .. | .null _ => Neutral.all (by simp [Expr.tokens, Expr.words, keywordWord])
   | .bool _ b => Neutral.all (by cases b <;> simp [Expr.tokens, Expr.words, keywordWord])
   | .array _ es => by
     have h := Neutral.enclosed (o := "[") (c := "]") (by simp) (by simp) (Neutral.join (Expr.neutralAll es))
@@ -3893,7 +3981,7 @@ def AfterEquiv (a b : List TokenKind) : Prop := a.head? = b.head? ∧ closesKind
 
 theorem AfterEquiv.prepend {x a b : List TokenKind} (hx : Neutral x) (hne : x ≠ []) (h : AfterEquiv a b) :
     AfterEquiv (x ++ a) (x ++ b) := by
-  refine ⟨?_, by rw [hx, hx, h.2]⟩
+  refine ⟨?_, hx.congr h.2⟩
   cases x with
   | nil => exact absurd rfl hne
   | cons k x => simp
@@ -3914,7 +4002,7 @@ theorem Expr.afterOK_congr : ∀ (e : Expr) {a b : List TokenKind}, AfterEquiv a
   | .binary _ op l r, a, b, h => by
     obtain ⟨k, ks, hk, _⟩ := binOp_head op
     simp only [Expr.afterOK]
-    rw [Expr.neutral r 0 a, Expr.neutral r 0 b, h.2, Expr.afterOK_congr r h,
+    rw [(Expr.neutral r).congr h.2, Expr.afterOK_congr r h,
       Expr.afterOK_congr l (AfterEquiv.prepend (Neutral.append (neutral_binOp op) (Expr.neutral r))
         (by simp [hk]) h)]
   | .paren _ i, a, b, h => by
@@ -3973,7 +4061,7 @@ theorem Expr.afterOK_congr : ∀ (e : Expr) {a b : List TokenKind}, AfterEquiv a
   | .new _ _ _ as, a, b, h => by
     simp only [Expr.afterOK]
     exact Expr.afterOKList_congr as (AfterEquiv.closer (c := ")") (by simp) a b)
-  | .ident .., _, _, _ | .number .., _, _, _ | .bigint .., _, _, _ | .string .., _, _, _
+  | .regexp .., _, _, _ | .ident .., _, _, _ | .number .., _, _, _ | .bigint .., _, _, _ | .string .., _, _, _
   | .bool .., _, _, _ | .null _, _, _, _ => rfl
 
 theorem Expr.afterOKList_congr : ∀ (es : List Expr) {c c' : List TokenKind}, AfterEquiv c c' →
@@ -4026,7 +4114,7 @@ mutual
 
 /-- An expression nests no deeper than it has tokens. -/
 theorem Expr.height_le : ∀ e : Expr, e.height ≤ e.tokens.length
-  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => by simp [Expr.height]
+  | .regexp .. | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => by simp [Expr.height]
   | .array _ es => by
     have := Expr.heightOf_le es
     rw [Expr.tokens_array]; simp only [Expr.height, List.length_cons, List.length_append, List.length_nil]
