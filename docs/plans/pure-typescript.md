@@ -195,15 +195,22 @@ be exact:
 
 ## Unfinished parser work
 
-[#208](https://github.com/shihangw/tolean/issues/208) remains open. The parser
-The merged [#217](https://github.com/shihangw/tolean/pull/217) delivered the
-bounded comparison rule. It accepts comparisons when a top-level `&&`, `||`,
-`??`, `===`, `!==`, `==`, `!=`, `+`, `*`, `/`, `%` or `**` rules out a type
-list before a closing `>`. The scan keeps going inside brackets, because a
-type literal can contain a computed property name. It also keeps going at
-`-`, `&`, `|`, `.`, `!` and `?`, because types can contain them. The
-conservative treatment of `>>`, `>=`, `<<` and `<=` remains unchanged because
-TypeScript rescans `>` while it closes type arguments. The unrelated merged
+[#208](https://github.com/shihangw/tolean/issues/208) remains open, but merged
+[#217](https://github.com/shihangw/tolean/pull/217) accepts its original
+example, `a < b && c > d`. A CLI translation of a typed
+`between` function containing that exact return expression succeeds. The
+issue still needs a broader fix: a typed function calling
+`f(a < b, c > d)` is refused, although TypeScript 6.0.3 reads two comparisons
+there. This is a known gap, not a permanent restriction, so the case is not
+in the rejection corpus.
+
+The parser accepts comparisons when a top-level `&&`, `||`, `??`, `===`,
+`!==`, `==`, `!=`, `+`, `*`, `/`, `%` or `**` rules out a type list before a
+closing `>`. The scan keeps going inside brackets, because a type literal can
+contain a computed property name. It also keeps going at `-`, `&`, `|`, `.`,
+`!` and `?`, because types can contain them. The conservative treatment of
+`>>`, `>=`, `<<` and `<=` remains unchanged because TypeScript rescans `>`
+while it closes type arguments. The unrelated merged
 [#230](https://github.com/shihangw/tolean/pull/230) fixes WebAssembly list
 termination and does not change this parser rule.
 
