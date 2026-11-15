@@ -387,11 +387,9 @@ def lexRegExp (start : Pos) : LexM TokenKind := do
   if rest.head?.any isIdentPart || rest.head? == some '\\' then
     failFrom start "regular expression flags are not supported"
   let source := String.ofList body
-  match RegExp.parse source s.target with
+  match RegExp.validateBody s.target source with
   | .error message => failFrom start message
   | .ok _ =>
-    if !RegExp.bodyOK s.target source then
-      failFrom start "regular expression body cannot be printed as a literal"
     let consumed := body.length + 2
     modify fun s => { s with rest, i := s.i + consumed, col := s.col + consumed }
     return .regexp source s.target

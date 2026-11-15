@@ -94,22 +94,44 @@ theorem readBody_replay (chars body rest : List Char)
   subst body
   exact htail tail
 
-/-- A printable body cannot open a comment, and its closing slash must be
-read as its delimiter. Pattern validation is independent of the suffix. -/
-def bodyOK (target : Edition) (source : String) : Bool :=
+/-- Check the literal boundaries without parsing the pattern. -/
+def boundaryOK (source : String) : Bool :=
   source.toList.take 3 == ['(', '?', ':'] &&
     (match readBody false false [] (source.toList ++ ['/']) with
      | .ok (body, []) => body == source.toList
-     | _ => false) &&
-    (match parse source target with
-     | .ok _ => true
-     | .error _ => false)
+     | _ => false)
+
+/-- Validate the pattern once and preserve its diagnostic before checking
+whether its text can be printed between slash delimiters. -/
+def validateBody (target : Edition) (source : String) : Except String Unit :=
+  match parse source target with
+  | .error message => .error message
+  | .ok _ =>
+    if boundaryOK source then .ok ()
+    else .error "regular expression body cannot be printed as a literal"
+
+def bodyOK (target : Edition) (source : String) : Bool :=
+  match validateBody target source with
+  | .ok _ => true
+  | .error _ => false
+
+theorem validateBody_ok {T : Edition} {source : String} :
+    validateBody T source = .ok () ↔ bodyOK T source = true := by
+  unfold bodyOK
+  cases validateBody T source <;> simp
+
+theorem bodyOK_eq (T : Edition) (source : String) :
+    bodyOK T source =
+      (boundaryOK source &&
+        match parse source T with | .ok _ => true | .error _ => false) := by
+  cases hp : parse source T <;>
+    cases hb : boundaryOK source <;> simp [bodyOK, validateBody, hp, hb]
 
 theorem bodyOK_parts {T : Edition} {source : String} (h : bodyOK T source = true) :
     source.toList.take 3 = ['(', '?', ':'] ∧
     readBody false false [] (source.toList ++ ['/']) = .ok (source.toList, []) ∧
     ∃ p n, parse source T = .ok (p, n) := by
-  simp only [bodyOK, Bool.and_eq_true, beq_iff_eq] at h
+  simp only [bodyOK_eq, boundaryOK, Bool.and_eq_true, beq_iff_eq] at h
   obtain ⟨⟨hp, hr⟩, hparse⟩ := h
   refine ⟨hp, ?_, ?_⟩
   · cases he : readBody false false [] (source.toList ++ ['/']) with

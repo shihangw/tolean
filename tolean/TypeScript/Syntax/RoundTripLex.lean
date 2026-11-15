@@ -1396,13 +1396,13 @@ theorem lexRegExp_word (start : Pos) {T : Edition} {source : String}
     lexRegExp start s =
       .ok (.regexp source T)
         { s with rest := b :: more, i := s.i + (source.length + 2), col := s.col + (source.length + 2) } := by
-  obtain ⟨p, n, hp⟩ := (RegExp.bodyOK_parts hOK).2.2
+  have hp := RegExp.validateBody_ok.mpr hOK
   have hr := RegExp.bodyOK_read hOK (b :: more)
   have hflags : isIdentPart b = false ∧ b ≠ '\\' := by
     rcases hb with rfl | rfl <;> decide
   have htail : s.rest.tail = source.toList ++ '/' :: b :: more := by simp [hs]
   simp [lexRegExp, bind, EStateM.bind, get, getThe, MonadStateOf.get, EStateM.get,
-    htail, hr, pure, EStateM.pure, hflags.1, hflags.2, hT, hp, hOK,
+    htail, hr, pure, EStateM.pure, hflags.1, hflags.2, hT, hp,
     modify, modifyGet, MonadStateOf.modifyGet, EStateM.modifyGet]
 
 theorem lexRegExp_result {start : Pos} {s s' : LexState} {k : TokenKind}
@@ -1424,22 +1424,18 @@ theorem lexRegExp_result {start : Pos} {s s' : LexState} {k : TokenKind}
     · simp [failFrom, here, bind, EStateM.bind, get, getThe, MonadStateOf.get,
         EStateM.get, throw, throwThe, MonadExceptOf.throw, EStateM.throw, pure, EStateM.pure] at h
     · simp only [EStateM.pure, EStateM.bind] at h
-      cases hp : RegExp.parse (String.ofList body) s.target with
+      cases hp : RegExp.validateBody s.target (String.ofList body) with
       | error message =>
         simp [hp, failFrom, here, bind, EStateM.bind, get, getThe, MonadStateOf.get,
           EStateM.get, throw, throwThe, MonadExceptOf.throw, EStateM.throw, pure, EStateM.pure] at h
       | ok result =>
+        cases result
         rw [hp] at h
-        dsimp only at h
-        split at h
-        · simp [failFrom, here, bind, EStateM.bind, get, getThe, MonadStateOf.get,
-            EStateM.get, throw, throwThe, MonadExceptOf.throw, EStateM.throw, pure, EStateM.pure] at h
-        · rename_i hOK
-          simp only [EStateM.pure, EStateM.bind, modify, modifyGet,
-            MonadStateOf.modifyGet, EStateM.modifyGet, EStateM.Result.ok.injEq] at h
-          obtain ⟨rfl, rfl⟩ := h
-          exact ⟨body, rest, rfl, by simpa using hOK, rfl,
-            by rw [RegExp.readBody_length hr]⟩
+        simp only [EStateM.pure, EStateM.bind, modify, modifyGet,
+          MonadStateOf.modifyGet, EStateM.modifyGet, EStateM.Result.ok.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        exact ⟨body, rest, rfl, RegExp.validateBody_ok.mp hp, rfl,
+          by rw [RegExp.readBody_length hr]⟩
 
 theorem lexKind_regexp_word (start : Pos) {T : Edition} {source : String}
     (hOK : RegExp.bodyOK T source = true) {b : Char} (hb : b = ' ' ∨ b = '\n')
