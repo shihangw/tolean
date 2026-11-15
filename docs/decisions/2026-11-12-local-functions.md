@@ -106,5 +106,24 @@ the IR. The proof also relates the state that the call writes back.
 ## Left for later
 
 A compound final return expression, a final return of a new local variable,
-and calls between local functions remain in step 14. An earlier return in
-a state-writing local stays refused.
+implicit transitive captures, and longer sibling call chains remain in
+step 14. An earlier return in a state-writing local stays refused.
+
+## Calls of earlier siblings
+
+A local can call an earlier sibling that calls no other local function.
+The caller must name the sibling's captured variables itself, so both
+interpreters already pass those variables into the body. The change analysis
+uses the actual local function environment and includes state written by
+the sibling.
+
+The IR keeps a captured closure as an ordinary argument and checks its
+parameters and body at each call. The printer marks that argument's type
+as erased, writes `Unit`, and passes `()`. The generated call names the
+lifted definition directly, so it does not read the erased argument.
+Certificates check this erasure by relating the IR to the printed body.
+The printer emits nested callees before the local that calls them.
+
+A caller that returns a value while changing captured state must write
+some captured variable directly. The interpreter's expression-call guard
+does not yet count state changes made only through sibling calls.

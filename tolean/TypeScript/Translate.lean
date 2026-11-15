@@ -2826,7 +2826,8 @@ def translateArrayMethod (fuel : Nat) (env : Env) (expected : Option Ty) (s : Sp
     let b ← translateExpr fuel inner (callbackExpected .map expected) body
     let type ← callbackResult s body.span .map elem b.type
     let info : IR.CallbackInfo IR.TyExt :=
-      { span := s, result := b.type.lean, scope := env.locals.map fun l => (l.name, l.type.lean) }
+      { span := s, result := b.type.lean,
+        scope := (env.locals.filter fun l => l.binding != .fn).map fun l => (l.name, l.type.lean) }
     return ⟨.listMethod (.mapIdx q.name) xs.value p.name elem.lean b.value info, false, type⟩
   let (p, body) ← orReject (callbackOf args) s
     ("an array method here takes one arrow function with one parameter, such as " ++
@@ -2841,7 +2842,8 @@ def translateArrayMethod (fuel : Nat) (env : Env) (expected : Option Ty) (s : Sp
   let b ← translateExpr fuel inner (callbackExpected method expected) body
   let type ← callbackResult s body.span method elem b.type
   let info : IR.CallbackInfo IR.TyExt :=
-    { span := s, result := b.type.lean, scope := env.locals.map fun l => (l.name, l.type.lean) }
+    { span := s, result := b.type.lean,
+      scope := (env.locals.filter fun l => l.binding != .fn).map fun l => (l.name, l.type.lean) }
   return ⟨.listMethod method xs.value p.name elem.lean b.value info, false, type⟩
 
 /-- `xs[i]` on an array whose code is `o` and whose elements have the type
@@ -2933,7 +2935,8 @@ def translateReduce (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (
   unless b.type == accType do
     reject body.span "the callback of 'reduce' must give a value of the type of the initial value"
   let info : IR.CallbackInfo IR.TyExt :=
-    { span := s, result := accType.lean, scope := env.locals.map fun l => (l.name, l.type.lean) }
+    { span := s, result := accType.lean,
+      scope := (env.locals.filter fun l => l.binding != .fn).map fun l => (l.name, l.type.lean) }
   return ⟨.listFold xs.value i.value a.name p.name elem.lean b.value info, false, accType⟩
 
 /-- `xs.toSorted((a, b) => e)` and `[...xs].sort((a, b) => e)`:
@@ -2978,7 +2981,8 @@ def translateSort (fuel : Nat) (env : Env) (s : Span) (recv : Expr) (method : St
       unless t == .bigint || t == .string || t == .number do
         reject body.span "a key of a comparator must be a bigint, a string or a number"
   let info : IR.CallbackInfo IR.TyExt :=
-    { span := s, result := Ty.number.lean, scope := env.locals.map fun l => (l.name, l.type.lean) }
+    { span := s, result := Ty.number.lean,
+      scope := (env.locals.filter fun l => l.binding != .fn).map fun l => (l.name, l.type.lean) }
   return ⟨.listMethod (.sortWith q.name) xs.value p.name elem.lean b.value info, false, xs.type⟩
 
 /-- `m.get(k)` and `m.has(k)` on a map. An owned map may be read here, as
@@ -3528,7 +3532,8 @@ def LocalFn.tail (fn : LocalFn) : Tail :=
 
 /-- The parameters of the lifted function: the captured locals, then its own. -/
 def LocalFn.leanParams (fn : LocalFn) : List (String × IR.Ty) :=
-  (fn.captured ++ fn.params).map fun l => (l.name, l.type.lean)
+  (fn.captured ++ fn.params).map fun l =>
+    (l.name, if l.binding == .fn then .ext .closure else l.type.lean)
 
 /-- The result type of the lifted function: what it returns, or the tuple of
 the locals it changes. -/
@@ -3587,7 +3592,13 @@ def translateLocalHead (env : Env) (s : Span) (name : String) (typeParams : List
   let captured := env.locals.filter fun l => body.mentions l.name
   for l in captured do
     if l.binding == .fn then
-      reject s s!"a local function may not call another local function, such as '{l.name}', yet"
+      requireFeature s .localSiblingCalls
+      let some sibling := env.localFns.find? (·.name == l.name)
+        | reject s s!"the local function '{l.name}' is not declared here"
+      if sibling.captured.any (·.binding == .fn) then
+        reject s "a called sibling may not call another local function yet"
+      unless sibling.captured.all (fun c => body.mentions c.name && !own.any (·.name == c.name)) do
+        reject s "a sibling call requires each captured variable to be named in its caller"
     if l.binding == .array || l.binding == .map then
       reject s s!"a local function may not use '{l.name}', which the function around it owns"
   let changed := stmtsChanges env.fnChanges (blockStatements body)
@@ -3608,7 +3619,9 @@ def translateLocalHead (env : Env) (s : Span) (name : String) (typeParams : List
     if changes.isEmpty then
       reject s "a local function that returns nothing must change a let local of the function around it"
   | some _ =>
-    if captured.any fun l => body.assigns l.name || body.mutates l.name then
+    if !changes.isEmpty then
+      unless captured.any (fun l => body.assigns l.name || body.mutates l.name) do
+        reject s "a value-returning sibling caller must write a captured variable directly"
       requireFeature s .localReturnState
       let some (_, result) := localReturnIdent (blockStatements body)
         | reject s "a state-writing local function must end by returning a captured variable"

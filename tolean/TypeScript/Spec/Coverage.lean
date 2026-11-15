@@ -167,7 +167,7 @@ def sections : List Section := [
     -- A call of a local function, which the output lifts out.
     ``Proof.localCall?_some, ``Proof.localCallProblem_none, ``Proof.translateLocalCall_ok,
     ``Proof.translateLocalArgs_sim, ``Proof.exec_letCall, ``Proof.callLocal_block, ``Proof.execStmt_localCall,
-    ``Proof.bindArgs_eq, ``Proof.localBody_env, ``Proof.localCall_void, ``Proof.localCall_value,
+    ``Proof.bindArgs_eq, ``Proof.localParams_names, ``Proof.localBody_env, ``Proof.localCall_void, ``Proof.localCall_value,
     ``Proof.assignsList_append_return_ident, ``Proof.constAssigned_append_return_ident,
     ``Proof.returnState_prefix_ident, ``Proof.returnState_exec, ``Proof.callLocal_return_state,
     ``Proof.returnState_noReturn, ``Proof.exec_finalReturn_not_normal,
