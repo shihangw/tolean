@@ -10,6 +10,23 @@ import { tscAst } from './tscAst.ts';
 const tolean = process.env.TOLEAN ?? fileURLToPath(new URL('../../.lake/build/bin/tolean', import.meta.url));
 const operators = ['??', '===', '!==', '==', '!=', '+', '*', '/', '%', '**'];
 
+test('TypeScript distinguishes a joined greater-equal operator from a spaced close and assignment', () => {
+  for (const [source, hasTypeArguments] of [
+    ['f < A >= x', false],
+    ['f < A > = x', true],
+  ] as const) {
+    const sf = ts.createSourceFile('adjacency.ts', source, ts.ScriptTarget.Latest, true);
+    expect((sf as unknown as { parseDiagnostics: Array<ts.Diagnostic> }).parseDiagnostics).toEqual([]);
+    let found = false;
+    const visit = (node: ts.Node): void => {
+      if (ts.isExpressionWithTypeArguments(node)) found = true;
+      ts.forEachChild(node, visit);
+    };
+    visit(sf);
+    expect(found, source).toBe(hasTypeArguments);
+  }
+});
+
 test('the comparison translation fixtures type-check with pinned TypeScript', () => {
   const path = fileURLToPath(new URL('./corpus/translate/accept/comparisonTypeLookalikes.ts', import.meta.url));
   const program = ts.createProgram([path], {

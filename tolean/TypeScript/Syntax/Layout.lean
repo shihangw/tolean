@@ -12,21 +12,53 @@ namespace tolean.TypeScript.Syntax
 -- parser's tests such as `isPunct`.
 deriving instance ReflBEq, LawfulBEq for TokenKind
 
-/-- A probe can inspect the token kind and the preceding line break without
-depending on absolute source positions. Identifier text remains intact, so
-contextual words such as `as` and `satisfies` remain distinct. -/
+/-- A probe can inspect the token kind, the preceding line break and whether
+the next token touches this one without retaining absolute positions.
+Identifier text remains intact, so contextual words remain distinct. -/
 structure TokenObservation where
   kind : TokenKind
   newlineBefore : Bool
+  touchesNext : Bool
 deriving BEq, Repr
 
-def Token.observe (t : Token) : TokenObservation := ⟨t.kind, t.newlineBefore⟩
+/-- The first token after a prefix supplies its right boundary. If that
+suffix is empty, the caller's boundary still applies. -/
+def observationBoundary (ts : List Token) (boundary : Option tolean.Pos) : Option tolean.Pos :=
+  match ts with
+  | [] => boundary
+  | t :: _ => some t.span.start
 
-def observations (ts : List Token) : List TokenObservation := ts.map Token.observe
+def Token.observe (t : Token) (next : Option tolean.Pos) : TokenObservation :=
+  ⟨t.kind, t.newlineBefore, next.any (· == t.span.stop)⟩
 
-theorem observations_kinds (ts : List Token) :
-    (observations ts).map (·.kind) = ts.map (·.kind) := by
-  simp [observations, Token.observe, List.map_map]
+/-- Observe a fragment with its right boundary. Use `none` only when no token
+follows it. In particular, observing two fragments separately must not lose
+whether the last `>` of the first touches the first `=` of the second. -/
+def observations (ts : List Token) (boundary : Option tolean.Pos := none) : List TokenObservation :=
+  match ts with
+  | [] => []
+  | t :: rest => t.observe (observationBoundary rest boundary) :: observations rest boundary
+
+theorem observationBoundary_append (a b : List Token) (boundary : Option tolean.Pos) :
+    observationBoundary (a ++ b) boundary =
+      observationBoundary a (observationBoundary b boundary) := by
+  cases a <;> rfl
+
+theorem observations_append (a b : List Token) (boundary : Option tolean.Pos) :
+    observations (a ++ b) boundary =
+      observations a (observationBoundary b boundary) ++ observations b boundary := by
+  induction a with
+  | nil => rfl
+  | cons t a ih =>
+    simp only [List.cons_append, observations, observationBoundary_append, ih]
+
+theorem observations_kinds (ts : List Token) (boundary : Option tolean.Pos := none) :
+    (observations ts boundary).map (·.kind) = ts.map (·.kind) := by
+  induction ts with
+  | nil => rfl
+  | cons t ts ih =>
+    rw [show t :: ts = [t] ++ ts from rfl, observations_append, List.map_append, ih]
+    rfl
 
 /-- Replacing a prefix cannot change the probe, even when tokens precede or
 follow that prefix. Unlike an equality at one initial state, this relation

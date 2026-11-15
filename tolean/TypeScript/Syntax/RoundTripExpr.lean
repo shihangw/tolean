@@ -46,11 +46,11 @@ available for the speculative probe. -/
 theorem closesTypeArguments_observations (depth : Nat) (ts : List Token) :
     Parse.closesTypeArguments depth ts =
       closesKinds depth ((observations ts).map (·.kind)) := by
+  rw [observations_kinds]
   induction ts generalizing depth with
   | nil => rfl
   | cons t ts ih =>
-    simp only [observations, List.map_cons, Token.observe] at ih ⊢
-    simp only [Parse.closesTypeArguments, closesKinds]
+    simp only [Parse.closesTypeArguments, closesKinds, List.map_cons]
     split <;> simp_all
 
 theorem closesTypeArguments_kinds (depth : Nat) (ts : List Token) :
