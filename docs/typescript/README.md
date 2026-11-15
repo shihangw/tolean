@@ -380,6 +380,12 @@ A sort of a local list, a computed list argument, and a
 conditional sort call inside a larger expression remain refused by the
 certifier.
 
+The sorted list may also be a field of a parameter or a concatenation of
+spread copies of parameter lists, such as `[...xs, ...ys]`. Forwarding calls
+may pass these expressions too. The hypothesis quantifies over the resulting
+list. An append that inserts literal elements, such as `[...xs, 0]`, still
+gets no certificate because the link tactic cannot yet rewrite that encoding.
+
 A certificate's theorems follow from `translate_sound`, so they do not unfold
 the interpreter. The certificate holds the IR that the translator gives,
 and the kernel checks that the translator gives that IR for the program.
