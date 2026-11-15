@@ -42,6 +42,15 @@ if [ ! -d "$lean4" ]; then
     "$lean4/src/runtime/thread.h"
 fi
 runtime=$work/runtime
+# Lean 4.30 ends String.toList with lean_box_uint32(0). On wasm32 that
+# allocates a boxed character, not List.nil, so String.ofList reads past the
+# end and can throw std::bad_alloc. The list terminator must be lean_box(0).
+# Apply this to cached sources too, and rebuild the runtime when it changes.
+if grep -Fq 'obj_res  r = lean_box_uint32(0);' "$lean4/src/runtime/object.cpp"; then
+  sed -i 's/obj_res  r = lean_box_uint32(0);/obj_res  r = lean_box(0);/' \
+    "$lean4/src/runtime/object.cpp"
+  rm -rf "$runtime"
+fi
 if [ ! -f "$runtime/lib/lean/libleanrt.a" ]; then
   emcmake cmake -S "$lean4/src" -B "$runtime" -DSTAGE=1 -DMULTI_THREAD=OFF -DUSE_GMP=OFF -DUSE_MIMALLOC=OFF \
     -DCMAKE_BUILD_TYPE=Release >/dev/null

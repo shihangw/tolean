@@ -12,6 +12,7 @@ interface TranslatorModule {
   _free(ptr: number): void;
   stringToNewUTF8(s: string): number;
   UTF8ToString(ptr: number): string;
+  getExceptionMessage(error: unknown): [string, string];
 }
 
 const dir = new URL('../../wasm/out/', import.meta.url);
@@ -36,8 +37,18 @@ export type WasmResult = { kind: 'lean'; text: string } | { kind: 'refused'; mes
 /** Run the same project entry point that the native workspace command uses. */
 export function translateWorkspaceInWasm(files: Array<{ path: string; text: string }>): unknown {
   const p = m.stringToNewUTF8(JSON.stringify({ files }));
-  const r = m._tolean_translate(p);
-  m._free(p);
+  let r: number;
+  try {
+    r = m._tolean_translate(p);
+  } catch (error) {
+    if (error instanceof WebAssembly.Exception) {
+      const [type, message] = m.getExceptionMessage(error);
+      throw new Error(`the WebAssembly translator threw ${type}: ${message}`, { cause: error });
+    }
+    throw error;
+  } finally {
+    m._free(p);
+  }
   const out: unknown = JSON.parse(m.UTF8ToString(r));
   m._free(r);
   return out;

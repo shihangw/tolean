@@ -239,7 +239,12 @@ function checkWorkspace(dir: string, accepted: boolean): void {
   }
   const native = JSON.parse(run.stdout) as { units?: Array<{ output?: string; lean?: string; error?: string }>; error?: string };
   if (wasm !== null) {
-    const other = wasm.translateWorkspaceInWasm(files);
+    let other: unknown;
+    try {
+      other = wasm.translateWorkspaceInWasm(files);
+    } catch (error) {
+      throw new Error(`${dir}: the WebAssembly workspace translation failed`, { cause: error });
+    }
     if (JSON.stringify(native) === JSON.stringify(other)) agreed++;
     else failures.push(`${dir}: the WebAssembly workspace output differs from native`);
   }
