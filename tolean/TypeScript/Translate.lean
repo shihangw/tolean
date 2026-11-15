@@ -4626,7 +4626,7 @@ def exprUsesNumber : Expr → Bool
     ps.length ≥ 2 ||
     ps.any (fun p => isNumberName p.name || (p.type.map typeUsesNumber).getD false) ||
       exprUsesNumber body
-  | .bigint .. | .string .. | .bool .. | .null .. => false
+  | .regexp .. | .bigint .. | .string .. | .bool .. | .null .. => false
 
 def exprsUseNumber : List Expr → Bool
   | [] => false
