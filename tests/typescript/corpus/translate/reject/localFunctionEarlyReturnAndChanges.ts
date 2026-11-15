@@ -1,4 +1,4 @@
-// expect: 4:3 a local function that returns a value may not change a variable
+// expect: 6:5 a branch that does not always return may not return, break or continue
 export function count(x: bigint): bigint {
   let total = 0n;
   function add(y: bigint): bigint {

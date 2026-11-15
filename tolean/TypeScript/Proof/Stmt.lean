@@ -3917,6 +3917,304 @@ theorem translateLocalStmt_sound (hc : CallsAgree (N := N) m.program fs fuel) {F
   exact localCallStmt_sim m fs fuel hfind hp (fun k hk => ihL k hk _ _ _ _ _ _ hb)
     (translateLocalArgs_sim m fs fuel hc _ _ _ _ _ hlen hargs) (ihS _ _ _ _ _ _ hrb)
 
+theorem localReturnIdent_some {body ss : List Stmt} {result : String}
+    (h : localReturnIdent body = some (ss, result)) :
+    ∃ sp ep, body = ss ++ [.returnStmt sp (some (.ident ep result))] := by
+  induction body generalizing ss with
+  | nil => simp [localReturnIdent] at h
+  | cons s rest ih =>
+    cases rest with
+    | nil =>
+      cases s <;> try solve | simp [localReturnIdent] at h
+      rename_i sp e
+      cases e with
+      | none => simp [localReturnIdent] at h
+      | some e =>
+        cases e <;> try solve | simp [localReturnIdent] at h
+        rename_i ep name
+        simp only [localReturnIdent, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        exact ⟨sp, ep, rfl⟩
+    | cons t ts =>
+      simp only [localReturnIdent] at h
+      cases hr : localReturnIdent (t :: ts) with
+      | none => simp [hr] at h
+      | some pair =>
+        obtain ⟨tail, name⟩ := pair
+        simp only [hr] at h
+        obtain ⟨rfl, rfl⟩ := h
+        obtain ⟨sp, ep, hs⟩ := ih hr
+        exact ⟨sp, ep, by simp [hs]⟩
+
+theorem stmtsChanges_append_return_ident (fns : List (String × List String))
+    (result : String) (sp ep : Span) (ss : List Stmt) :
+    stmtsChanges fns (ss ++ [.returnStmt sp (some (.ident ep result))]) = stmtsChanges fns ss := by
+  induction ss with
+  | nil => rfl
+  | cons s ss ih => simp only [List.cons_append, stmtsChanges, ih]
+
+theorem translateLocalStateCall_ok {env : Translate.Env} {s : Span} {fn : LocalFn}
+    {args : List Expr} {result : String} {body : TM IR.Body} {ctx ctx' : Ctx}
+    {b : IR.Body} {outs : List IR.Expr}
+    (h : translateLocalStateCall env s fn args result body ctx = .ok (b, outs) ctx') :
+    (fn.captured.any (fun l => fn.body.assigns l.name || fn.body.mutates l.name)) = true ∧
+    fn.changes.contains result = true ∧ (fn.bodyEnv env).has result = true ∧
+    localCallProblem env { fn with ret := none } args = none ∧
+    (∃ c₁ c₂, body c₁ = .ok b c₂) ∧
+    ∃ outs' c₁ c₂, translateLocalArgs env fn.params args c₁ = .ok outs' c₂ ∧
+      outs = fn.captured.map (fun l => IR.Expr.var l.name) ++ outs' := by
+  unfold translateLocalStateCall at h
+  simp only [ite_state] at h
+  split at h
+  rotate_left
+  · simp at h
+  rename_i hw
+  simp only [pure_bind, ite_state] at h
+  split at h
+  rotate_left
+  · simp at h
+  rename_i hn
+  cases hp : localCallProblem env { fn with ret := none } args with
+  | some why => simp [hp] at h
+  | none =>
+    simp only [hp, bind_ok] at h
+    obtain ⟨outs', c₂, ho, b', c₃, hb, h⟩ := h
+    simp only [ite_state] at h
+    split at h
+    · simp only [pure_ok, Prod.mk.injEq] at h
+      obtain ⟨⟨rfl, rfl⟩, -⟩ := h
+      obtain ⟨c₄, c₅, hx⟩ := withLocalBody_ok hb
+      simp only [Bool.and_eq_true] at hw hn
+      exact ⟨hw, hn.1, hn.2, rfl, ⟨_, _, hx⟩, outs', _, _, ho, rfl⟩
+    · simp at h
+
+omit [JSNumber N] in
+theorem changesCaptured_of_local {env : Translate.Env} {fn : LocalFn}
+    {ρ : Eval.Env N} (hs : Scoped m env ρ)
+    (h1 : (fn.captured.all fun l => fn.body.mentions l.name && (env.lookup l.name).any (·.type == l.type) &&
+      !fn.params.any (·.name == l.name)) = true)
+    (hw : (fn.captured.any fun l => fn.body.assigns l.name || fn.body.mutates l.name) = true) :
+    Eval.changesCaptured ρ (fn.params.map (·.name)) fn.body = true := by
+  obtain ⟨l, hl, hw⟩ := List.any_eq_true.mp hw
+  have hh := List.all_eq_true.mp h1 l hl
+  simp only [Bool.and_eq_true] at hh
+  obtain ⟨⟨hm, hty⟩, hnp⟩ := hh
+  have hsome : (ρ.lookup l.name).isSome = true := by
+    rw [hs.1 l.name]
+    simp only [Translate.Env.has]
+    cases h : env.lookup l.name <;> simp_all
+  obtain ⟨v, hv⟩ := Option.isSome_iff_exists.mp hsome
+  have hnp' : (fn.params.map (·.name)).contains l.name = false := by simpa using hnp
+  apply List.any_eq_true.mpr
+  refine ⟨(l.name, v), ?_, hw⟩
+  apply mem_of_lookup
+  rw [lookup_captures, if_pos (by rw [hm, hnp']; rfl), hv]
+
+theorem stateReturn_parts {fn : LocalFn} {ss : List Stmt} {result : String}
+    (hblk : ∃ sp body, fn.body = .block sp body)
+    (hr : fn.stateReturn = some (ss, result)) :
+    ∃ sp rp ep, fn.body = .block sp (ss ++ [.returnStmt rp (some (.ident ep result))]) := by
+  obtain ⟨sp, body, hb⟩ := hblk
+  unfold LocalFn.stateReturn at hr
+  split at hr
+  · rw [hb] at hr
+    obtain ⟨rp, ep, he⟩ := localReturnIdent_some hr
+    exact ⟨sp, rp, ep, by rw [hb]; exact congrArg (Stmt.block sp) he⟩
+  · contradiction
+
+/-- The call binds captured state in both environments before its caller
+reads the result from that state. -/
+theorem localStateCall_run {env : Translate.Env} {fn : LocalFn}
+    {args : List Expr} {ss : List Stmt} {result : String}
+    {b rb : IR.Body} {outs : List IR.Expr} {ρs ρo : Eval.Env N} {o : Outcome N}
+    (hp : localCallProblem env { fn with ret := none } args = none)
+    (hw : (fn.captured.any fun l => fn.body.assigns l.name || fn.body.mutates l.name) = true)
+    (hname : (fn.bodyEnv env).has result = true)
+    (hnames : fn.changes.contains result = true)
+    (hsr : fn.stateReturn = some (ss, result))
+    (hbody : ∀ k, fuel = k + 1 →
+      StmtSim (N := N) m fs k (fn.bodyEnv env) (.state fn.changes) ss b)
+    (hargs : SimList (N := N) m fs fuel env args outs)
+    (ha : Agree ρs ρo) (hs : Scoped m env ρs)
+    (ho : IR.Body.exec fs fuel ρo
+      (.letCall fn.changes fn.ref fn.name fn.closure fn.leanParams fn.leanRet false b
+        (fn.captured.map (fun l => IR.Expr.var l.name) ++ outs) rb) = some o) :
+    ∃ v after ρo₂,
+      (∀ cs ep, Eval.evalTop m fuel ρs (.call cs (.ident ep fn.name) args) = none) ∧
+      (∀ cs ep, Eval.evalTopState m fuel ρs (.call cs (.ident ep fn.name) args) = some (.ok v, after)) ∧
+      Agree after ρo₂ ∧ Frame fn.changes after ρs ∧ ρo₂.lookup result = some v ∧
+      IR.Body.exec fs fuel ρo₂ rb = some o := by
+  obtain ⟨hblk, h1, h2, h3, _, _⟩ := localCallProblem_none hp
+  obtain ⟨sp, rp, ep, hb⟩ := stateReturn_parts (fn := fn) hblk hsr
+  change (fn.changes.all (fun c => fn.captured.any (·.name == c)) &&
+    fn.captured.all (fun l => fn.changes.contains l.name ||
+      !(stmtsChanges (fn.bodyEnv env).fnChanges (blockStatements fn.body)).contains l.name)) = true at h3
+  rw [hb, blockStatements, stmtsChanges_append_return_ident] at h3
+  obtain ⟨ps, b0, vsAll, k, inner, ρo₂, hval, hg, hvs, rfl, hl, hrun, hbs, hrb⟩ :=
+    exec_letCall fs _ ho
+  simp only [LocalFn.closure, IR.Expr.eval, IR.Expr.evalList, IR.ExprExt.apply,
+    Option.bind_eq_bind, Option.bind_some, Option.some.injEq, Val.closure.injEq] at hval
+  obtain ⟨rfl, rfl⟩ := hval
+  rcases hrun with ⟨_, hrun⟩ | ⟨h, _⟩
+  rotate_left
+  · cases h
+  obtain ⟨cvals, vs, rfl, hcv, hvo, hcl⟩ := evalList_append_inv fs (k + 1) hvs
+  have hlen : vs.length = fn.params.length := by
+    simp only [LocalFn.leanParams, List.length_map, List.length_append] at hl
+    simp only [List.length_map] at hcl
+    omega
+  have hn : result ∈ fn.changes := by simpa using hnames
+  obtain ⟨v, hv⟩ := Option.isSome_iff_exists.mp (bindState_isSome hbs result hn)
+  have hchanges := changesCaptured_of_local m (fn := fn) hs h1 hw
+  obtain ⟨after, hcall, hch, hframe⟩ :=
+    localCall_stateIdent m fs (k + 1) (fn := fn) hb h1 h2 h3 (hbody k rfl) ha hs hcv hlen hrun hname hv hchanges
+  have hgs : ρs.lookup fn.name = some (.closure (fn.params.map (·.name)) fn.body) := by
+    rw [ha]; exact hg
+  have hva := hargs ρs ρo vs ha hs hvo
+  have hnum : (fn.name == "Number" && (ρs.lookup "Number").isNone) = false := by
+    by_cases hn : fn.name = "Number"
+    · rw [← hn, hgs]
+      simp
+    · simp [hn]
+  refine ⟨v, after, ρo₂, ?_, ?_, ?_, hframe, ?_, hrb⟩
+  · intro cs ep
+    simp [Eval.evalTop, Eval.evalCall, hva, hnum, hgs, hchanges]
+  · intro cs ep
+    simp [Eval.evalTopState, hgs, hchanges, hva, hcall]
+  · intro n
+    rw [bindState_lookup hbs n]
+    split
+    · rename_i hn
+      exact hch n hn (bindState_isSome hbs n hn)
+    · rename_i hn
+      rw [← ha n]
+      exact hframe.lookup hn
+  · rw [bindState_lookup hbs result, if_pos hn, hv]
+
+theorem decl_state_sim_gen {env : Translate.Env} {s : Span} {d : VarDecl} {rest : List Stmt}
+    {tail : Tail} {body rb : IR.Body} {bnd : Binding} {ty : Ty} {changes : List String}
+    (hconst : (Stmt.varDecl s d).constAssignedIn rest = false)
+    (hfresh : env.has d.name = false)
+    (hsub : ∀ n ∈ changes, n ∈ stmtChanges env.fnChanges (.varDecl s d))
+    (hbody : ∀ (ρs ρo : Eval.Env N) (o : Outcome N), Agree ρs ρo → Scoped m env ρs →
+      IR.Body.exec fs fuel ρo body = some o → ∃ w after ρo₂,
+        Eval.execStmt m fuel ρs (.varDecl s d) = some (.normal ((d.name, w) :: after)) ∧
+        Agree after ρo₂ ∧ Frame changes after ρs ∧
+        IR.Body.exec fs fuel ((d.name, w) :: ρo₂) rb = some o)
+    (hrest : StmtSim (N := N) m fs fuel (env.add { name := d.name, binding := bnd, type := ty }) tail rest rb) :
+    StmtSim (N := N) m fs fuel env tail (.varDecl s d :: rest) body := by
+  intro ρs ρo ha hs
+  constructor
+  · intro v hv
+    obtain ⟨w, after, ρo₂, hstep, hag, hframe, hb⟩ := hbody ρs ρo _ ha hs hv
+    have hr := (hrest _ _ (agree_cons hag d.name w)
+      (scoped_cons m (scoped_frame hs hframe) d.name bnd ty w)).1 v hb
+    simpa [Eval.exec, hconst, hstep] using hr
+  · intro brk ρo' hv
+    obtain ⟨w, after, ρo₂, hstep, hag, hframe, hb⟩ := hbody ρs ρo _ ha hs hv
+    obtain ⟨htail, new, out, mod, hex, hag', hnew, hout, hfr⟩ :=
+      (hrest _ _ (agree_cons hag d.name w)
+        (scoped_cons m (scoped_frame hs hframe) d.name bnd ty w)).2 brk ρo' hb
+    obtain ⟨ρ₁, ρ₂, rfl, h₁, h₂⟩ := Frame.split (a := [(d.name, w)]) (b := after) hfr
+    have hfresh' : ∀ l : Eval.Env N,
+        (∀ p ∈ l, (env.add { name := d.name, binding := bnd, type := ty }).has p.1 = false) →
+        ∀ p ∈ l ++ ρ₁, env.has p.1 = false := by
+      intro l hl p hp
+      rcases List.mem_append.mp hp with hp | hp
+      · have h := hl p hp
+        rw [has_add] at h
+        simp only [Bool.or_eq_false_iff] at h
+        exact h.1
+      · obtain ⟨q, hq, hk⟩ := Frame.mem h₁ hp
+        simp only [List.mem_singleton] at hq
+        subst hq
+        rw [hk]
+        exact hfresh
+    refine ⟨htail, new ++ ρ₁, out ++ ρ₁, ρ₂, ?_, ?_,
+      hfresh' new hnew, hfresh' out hout, ?_⟩
+    · have he : Eval.exec m fuel ρs (.varDecl s d :: rest) =
+          Eval.exec m fuel ((d.name, w) :: after) rest := by
+        simp [Eval.exec, hconst, hstep]
+      rw [he, List.append_assoc]
+      exact hex
+    · simpa only [List.append_assoc] using hag'
+    · apply (h₂.trans hframe).mono
+      intro n hn
+      simp only [List.mem_append, Env.fnChanges_add] at hn
+      rcases hn with hn | hn
+      · simp [stmtsChanges, hsub n hn]
+      · simp [stmtsChanges, hn]
+
+theorem localStateDecl_sim {env : Translate.Env} {fn : LocalFn} {args : List Expr} {ss : List Stmt}
+    {result : String} {b rb : IR.Body} {outs : List IR.Expr}
+    {s cs ep : Span} {d : VarDecl} {rest : List Stmt} {tail : Tail} {bnd : Binding} {ty : Ty}
+    (hinit : d.init = some (.call cs (.ident ep fn.name) args))
+    (hfind : env.localFns.find? (·.name == fn.name) = some fn)
+    (hconst : (Stmt.varDecl s d).constAssignedIn rest = false)
+    (hfresh : env.has d.name = false)
+    (hp : localCallProblem env { fn with ret := none } args = none)
+    (hw : (fn.captured.any fun l => fn.body.assigns l.name || fn.body.mutates l.name) = true)
+    (hname : (fn.bodyEnv env).has result = true) (hnames : fn.changes.contains result = true)
+    (hsr : fn.stateReturn = some (ss, result))
+    (hbody : ∀ k, fuel = k + 1 →
+      StmtSim (N := N) m fs k (fn.bodyEnv env) (.state fn.changes) ss b)
+    (hargs : SimList (N := N) m fs fuel env args outs)
+    (hrest : StmtSim (N := N) m fs fuel (env.add { name := d.name, binding := bnd, type := ty }) tail rest rb) :
+    StmtSim (N := N) m fs fuel env tail (.varDecl s d :: rest)
+      (.letCall fn.changes fn.ref fn.name fn.closure fn.leanParams fn.leanRet false b
+        (fn.captured.map (fun l => IR.Expr.var l.name) ++ outs)
+        (.let d.name (.var result) rb)) := by
+  apply decl_state_sim_gen m fs fuel (changes := fn.changes) hconst hfresh ?_ ?_ hrest
+  · intro n hn
+    simp [stmtChanges, hinit, optionChanges, exprChanges, calleeChanges, fnChanges_lookup hfind, hn]
+  · intro ρs ρo o ha hs ho
+    obtain ⟨v, after, ρo₂, hnone, hcall, hag, hf, hl, hr⟩ :=
+      localStateCall_run m fs fuel hp hw hname hnames hsr hbody hargs ha hs ho
+    refine ⟨v, after, ρo₂, ?_, hag, hf, ?_⟩
+    · cases d
+      simp_all [Eval.execStmt]
+    · simpa [IR.Body.exec, IR.Expr.eval, hl] using hr
+
+theorem localStateReturn_sim {env : Translate.Env} {fn : LocalFn} {args : List Expr} {ss : List Stmt}
+    {result : String} {b : IR.Body} {outs : List IR.Expr} {s cs ep : Span} {tail : Tail} {throws : Bool}
+    (hp : localCallProblem env { fn with ret := none } args = none)
+    (hw : (fn.captured.any fun l => fn.body.assigns l.name || fn.body.mutates l.name) = true)
+    (hname : (fn.bodyEnv env).has result = true) (hnames : fn.changes.contains result = true)
+    (hsr : fn.stateReturn = some (ss, result))
+    (hbody : ∀ k, fuel = k + 1 →
+      StmtSim (N := N) m fs k (fn.bodyEnv env) (.state fn.changes) ss b)
+    (hargs : SimList (N := N) m fs fuel env args outs) :
+    StmtSim (N := N) m fs fuel env tail [.returnStmt s (some (.call cs (.ident ep fn.name) args))]
+      (.letCall fn.changes fn.ref fn.name fn.closure fn.leanParams fn.leanRet false b
+        (fn.captured.map (fun l => IR.Expr.var l.name) ++ outs)
+        (tail.returnBody (if throws then IR.Expr.pure (.var result) else .var result))) := by
+  intro ρs ρo ha hs
+  have key : ∀ o, IR.Body.exec fs fuel ρo
+      (.letCall fn.changes fn.ref fn.name fn.closure fn.leanParams fn.leanRet false b
+        (fn.captured.map (fun l => IR.Expr.var l.name) ++ outs)
+        (tail.returnBody (if throws then IR.Expr.pure (.var result) else .var result))) = some o →
+      ∃ v, o = .ret (.ok v) ∧
+        Eval.exec m fuel ρs [.returnStmt s (some (.call cs (.ident ep fn.name) args))] = some (.ret (.ok v)) := by
+    intro o ho
+    obtain ⟨v, after, ρo₂, hnone, hcall, _, _, hl, hr⟩ :=
+      localStateCall_run m fs fuel hp hw hname hnames hsr hbody hargs ha hs ho
+    refine ⟨v, ?_, ?_⟩
+    · have he : IR.Body.exec fs fuel ρo₂
+          (tail.returnBody (if throws then IR.Expr.pure (.var result) else .var result)) =
+          some (.ret (.ok v)) := by
+        cases tail <;> simp [Tail.returnBody, IR.Body.exec, eval_pureIf, IR.Expr.eval, hl]
+      rw [he] at hr
+      exact (Option.some.inj hr).symm
+    · simp [Eval.exec, Eval.execStmt, hnone, hcall]
+  constructor
+  · intro v hv
+    obtain ⟨w, he, hx⟩ := key _ hv
+    cases he
+    exact hx
+  · intro brk ρo' hv
+    obtain ⟨w, he, _⟩ := key _ hv
+    cases brk <;> cases he
+
 /-- `return g(a)`, where `g` is a local function, a case of `stmts_sound`. -/
 theorem translateLocalReturn_sound (hc : CallsAgree (N := N) m.program fs fuel) {F : Nat}
     (ihL : ∀ k, fuel = k + 1 → ∀ env tail ss ctx body ctx', translateStatements F env tail ss ctx = .ok body ctx' →
@@ -3937,7 +4235,16 @@ theorem translateLocalReturn_sound (hc : CallsAgree (N := N) m.program fs fuel) 
     split at h
     rotate_left
     · simp at h
-    simp only [pure_bind, bind_ok, get_ok, pure_ok] at h
+    rcases hsr : lfn.stateReturn with _ | ⟨ss, result⟩
+    rotate_left
+    · simp only [hsr, pure_bind, bind_ok, get_ok, pure_ok] at h
+      obtain ⟨⟨b, outs⟩, c₁, hcall, _, _, ⟨rfl, rfl⟩, rfl, -⟩ := h
+      obtain ⟨hw, hn, hname, hp, ⟨d₁, d₂, hb⟩, outs', e₁, e₂, hargs, rfl⟩ :=
+        translateLocalStateCall_ok hcall
+      obtain ⟨_, _, _, _, _, hlen⟩ := localCallProblem_none hp
+      exact localStateReturn_sim m fs fuel hp hw hname hn hsr (fun k hk => ihL k hk _ _ _ _ _ _ hb)
+        (translateLocalArgs_sim m fs fuel hc _ _ _ _ _ hlen hargs)
+    simp only [hsr, pure_bind, bind_ok, get_ok, pure_ok] at h
     obtain ⟨⟨b, outs⟩, c₁, hcall, _, _, ⟨rfl, rfl⟩, rfl, -⟩ := h
     obtain ⟨hp, ⟨d₁, d₂, hb⟩, outs', e₁, e₂, hargs, rfl⟩ := translateLocalCall_ok hcall
     have htail : lfn.tail = .ret := by simp [LocalFn.tail, hr]
@@ -3985,7 +4292,7 @@ theorem translateVariable_sound (hc : CallsAgree (N := N) m.program fs fuel) {F 
   intro env s d rest tail ctx body ctx' h
   obtain ⟨kind, name, type, init?⟩ := d
   unfold translateVariable at h
-  simp only [ite_state] at h
+  rw [ite_state] at h
   split at h
   · simp at h
   rename_i hconst
@@ -4005,7 +4312,19 @@ theorem translateVariable_sound (hc : CallsAgree (N := N) m.program fs fuel) {F 
       split at h
       rotate_left
       · simp at h
-      simp only [bind_ok] at h
+      rcases hsr : lfn.stateReturn with _ | ⟨ss, result⟩
+      rotate_left
+      · simp only [hsr, bind_ok, pure_ok] at h
+        obtain ⟨⟨b, outs⟩, c₂, hcall, env', c₃, hdeclare, rb, c₄, hrb, rfl, -⟩ := h
+        obtain ⟨hw, hn, hname, hp, ⟨d₁, d₂, hb⟩, outs', e₁, e₂, hargs, rfl⟩ :=
+          translateLocalStateCall_ok hcall
+        obtain ⟨_, _, _, _, _, hlen⟩ := localCallProblem_none hp
+        obtain ⟨hfresh, rfl, _⟩ := declare_ok hdeclare
+        exact localStateDecl_sim m fs fuel (d := ⟨kind, name, type, some _⟩) rfl hfind
+          (by simpa using hconst) hfresh hp hw hname hn hsr
+          (fun k hk => ihL k hk _ _ _ _ _ _ hb)
+          (translateLocalArgs_sim m fs fuel hc _ _ _ _ _ hlen hargs) (ihS _ _ _ _ _ _ hrb)
+      simp only [hsr, bind_ok] at h
       obtain ⟨⟨b, outs⟩, c₂, hcall, env', c₃, hdeclare, rb, c₄, hrb, h⟩ := h
       simp only [pure_ok] at h
       obtain ⟨rfl, -⟩ := h

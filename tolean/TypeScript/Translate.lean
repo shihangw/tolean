@@ -3507,8 +3507,20 @@ def LocalFn.leanParams (fn : LocalFn) : List (String × IR.Ty) :=
 
 /-- The result type of the lifted function: what it returns, or the tuple of
 the locals it changes. -/
+def localReturnIdent : List Stmt → Option (List Stmt × String)
+  | [.returnStmt _ (some (.ident _ name))] => some ([], name)
+  | s :: rest => (fun (ss, name) => (s :: ss, name)) <$> localReturnIdent rest
+  | [] => none
+
+/-- A state-writing local can return one of the captured variables that its
+state tuple already contains. The caller reads the returned value from that
+tuple instead of copying the same value into it twice. -/
+def LocalFn.stateReturn (fn : LocalFn) : Option (List Stmt × String) :=
+  if fn.ret.isSome && !fn.changes.isEmpty then localReturnIdent (blockStatements fn.body)
+  else none
+
 def LocalFn.leanRet (fn : LocalFn) : IR.Ty :=
-  match fn.ret with
+  match if fn.stateReturn.isSome then none else fn.ret with
   | some t => t.lean
   | none =>
     match fn.changes.map fun c => ((fn.captured.find? (·.name == c)).map (·.type.lean)).getD .int with
@@ -3572,7 +3584,11 @@ def translateLocalHead (env : Env) (s : Span) (name : String) (typeParams : List
       reject s "a local function that returns nothing must change a let local of the function around it"
   | some _ =>
     if captured.any fun l => body.assigns l.name || body.mutates l.name then
-      reject s "a local function that returns a value may not change a variable of the function around it yet"
+      requireFeature s .localReturnState
+      let some (_, result) := localReturnIdent (blockStatements body)
+        | reject s "a state-writing local function must end by returning a captured variable"
+      unless changes.contains result && (captured.find? (·.name == result)).any (fun l => some l.type == ret) do
+        reject s "a state-writing local function must return a changed captured variable of its return type"
   return { name, ref := ⟨ctx.file, ctx.currentFunction ++ "." ++ name⟩, captured, changes, params := own,
             ret, body }
 
@@ -3630,6 +3646,22 @@ def translateLocalCall (env : Env) (s : Span) (fn : LocalFn) (args : List Expr) 
   unless decide (some b = fn.translated) do reject s s!"a call of '{fn.name}' translates its body another way"
   return (b, fn.captured.map (fun l => IR.Expr.var l.name) ++ outs)
 
+/-- Check a state-writing local call whose result is in its state tuple. -/
+def translateLocalStateCall (env : Env) (s : Span) (fn : LocalFn) (args : List Expr)
+    (result : String) (body : TM IR.Body) : TM (IR.Body × List IR.Expr) := do
+  unless fn.captured.any (fun l => fn.body.assigns l.name || fn.body.mutates l.name) do
+    reject s "the local function must write a captured variable"
+  unless fn.changes.contains result && (fn.bodyEnv env).has result do
+    reject s "the local return must name a changed captured variable"
+  match localCallProblem env { fn with ret := none } args with
+  | some why => reject s why
+  | none => pure ()
+  let outs ← translateLocalArgs env fn.params args
+  let b ← withLocalBody (fn.ret.getD .boolean) body
+  unless decide (some b = fn.translated) do
+    reject s s!"a call of '{fn.name}' translates its body another way"
+  return (b, fn.captured.map (fun l => IR.Expr.var l.name) ++ outs)
+
 mutual
 
 def translateStatements (fuel : Nat) (env : Env) (tail : Tail) (statements : List Stmt) :
@@ -3655,6 +3687,11 @@ def translateStatements (fuel : Nat) (env : Env) (tail : Tail) (statements : Lis
       if let some (args, fn) := localCall? env v then
         let some r := fn.ret | reject s s!"'{fn.name}' returns nothing"
         unless r == (← get).returnType do reject s "the call must have the function's return type"
+        if let some (ss, result) := fn.stateReturn then
+          let (b, outs) ← translateLocalStateCall env s fn args result
+            (translateStatements fuel (fn.bodyEnv env) (.state fn.changes) ss)
+          return .letCall fn.changes fn.ref fn.name fn.closure fn.leanParams fn.leanRet false b outs
+            (tail.returnBody (if (← get).throws then IR.Expr.pure (.var result) else .var result))
         let (b, outs) ← translateLocalCall env s fn args
           (translateStatements fuel (fn.bodyEnv env) fn.tail (blockStatements fn.body))
         let code := IR.Expr.var fn.name
@@ -3698,7 +3735,9 @@ def translateStatements (fuel : Nat) (env : Env) (tail : Tail) (statements : Lis
     | .funDecl s name typeParams params returnType body =>
       let fn ← translateLocalHead env s name typeParams params returnType body tail
       let b ← withLocalBody (fn.ret.getD .boolean)
-        (translateStatements fuel (fn.bodyEnv env) fn.tail (blockStatements fn.body))
+        (match fn.stateReturn with
+        | some (ss, _) => translateStatements fuel (fn.bodyEnv env) (.state fn.changes) ss
+        | none => translateStatements fuel (fn.bodyEnv env) fn.tail (blockStatements fn.body))
       let fn := { fn with translated := some b }
       let env' ← declare env s name .fn (fn.ret.getD .boolean)
       let env' := { env' with localFns := env'.localFns ++ [fn] }
@@ -3750,6 +3789,12 @@ def translateVariable (fuel : Nat) (env : Env) (s : Span) (d : VarDecl) (rest : 
     let some r := fn.ret | reject s s!"'{fn.name}' returns nothing"
     let declared ← translateAnnotation d.type
     unless declared.all (· == r) do reject s "the call must have the declared type"
+    if let some (ss, result) := fn.stateReturn then
+      let (b, outs) ← translateLocalStateCall env s fn args result
+        (translateStatements fuel (fn.bodyEnv env) (.state fn.changes) ss)
+      let env' ← declare env s d.name (if d.kind == .const then .const else .«let») r
+      return .letCall fn.changes fn.ref fn.name fn.closure fn.leanParams fn.leanRet false b outs
+        (.let d.name (.var result) (← translateStatements fuel env' tail rest))
     let (b, outs) ← translateLocalCall env s fn args
       (translateStatements fuel (fn.bodyEnv env) fn.tail (blockStatements fn.body))
     let env' ← declare env s d.name (if d.kind == .const then .const else .«let») r

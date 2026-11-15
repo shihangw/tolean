@@ -52,6 +52,10 @@ maintained. -/
 def Edition.default : Edition := .es2024
 
 inductive Feature where
+  /-- A local call returns a value and writes captured bindings:
+  [[Call]] (§10.2.1), SetMutableBinding (§9.1.1.1.5), and ReturnStatement
+  (§14.10), with section numbers from ES2024. ES2015 is the oldest target. -/
+  | localReturnState
   /-- `**` and `**=`: `ExponentiationExpression`. -/
   | exponent
   /-- `{ ...e }`: `PropertyDefinition : ... AssignmentExpression`. -/
@@ -112,6 +116,7 @@ deriving BEq, Repr, Inhabited
 def Feature.since : Feature → Edition
   | .stringNumberArguments => .es2015
   | .dateParseFormat => .es2016
+  | .localReturnState => .es2015
   | .exponent | .arrayIncludes | .trimWhiteSpace => .es2016
   | .stringPad => .es2017
   | .objectSpread => .es2018
@@ -122,6 +127,7 @@ def Feature.since : Feature → Edition
   | .arrayFindLast | .arrayToSorted => .es2023
 
 def Feature.describe : Feature → String
+  | .localReturnState => "a local function that returns a value and changes captured variables"
   | .exponent => "'**'"
   | .objectSpread => "object spread '...'"
   | .bigint => "bigint"
