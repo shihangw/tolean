@@ -795,6 +795,13 @@ class Printer {
     if (ts.isStringLiteral(e)) {
       return this.node('string', e, [JSON.stringify(e.text)], []);
     }
+    if (ts.isRegularExpressionLiteral(e)) {
+      const raw = e.text;
+      if (!raw.startsWith('/(?:') || !raw.endsWith('/')) {
+        refuse(e, 'regex literals must start with a non-capturing group and have no flags');
+      }
+      return this.node('regexp', e, [JSON.stringify(raw.slice(1, -1))], []);
+    }
     switch (e.kind) {
       case ts.SyntaxKind.TrueKeyword:
         return this.node('true', e, [], []);

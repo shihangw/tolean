@@ -140,10 +140,14 @@ def readPropertyName : ParseM String := do
   | _ => unexpected t "a property name"
 
 /-- End a statement: read its `;`, or insert one where ECMAScript inserts it,
-before a line break, a `}` or the end of the file. -/
+before a line break, a `}` or the end of the file. Require a written `;`
+before a regex statement: otherwise its slash could continue the preceding
+expression as division, rather than start a literal. -/
 def endStatement : ParseM Unit := do
   let t ← peek
   if t.isPunct ";" then discard advance
+  else if t.kind matches .regexp .. then
+    failAt t "a semicolon is required before a regular expression statement"
   else if t.isPunct "}" || t.isEof || t.newlineBefore then return
   else unexpected t "';'"
 
@@ -750,6 +754,11 @@ def parsePrimary (fuel : Nat) : ParseM Expr := do
   | .string value =>
     discard advance
     return .string t.span value
+  | .regexp source target =>
+    discard advance
+    return .regexp t.span source target
+  | .punct "/" =>
+    failAt t "regular expression literals must start with a non-capturing group '(?:...)'"
   | .keyword "true" =>
     discard advance
     return .bool t.span true

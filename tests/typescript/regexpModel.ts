@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 type Pattern = { source: string; lean: string };
 
-/** Check the matcher directly until regex literals reach the interpreter.
+/** Check parsed bodies and the matcher until literals reach the interpreter.
  * Each generated pattern has both ECMAScript source and a Lean pattern tree.
  * Inputs include lone surrogates, which Lean string literals cannot express.
  */
@@ -22,6 +22,16 @@ export function checkRegexpModel(seed: number): void {
   const literal = (u: number): Pattern => ({
     source: `\\u${u.toString(16).padStart(4, '0')}`,
     lean: `(.unit ${u})`,
+  });
+  const classes = [
+    { name: 'd', ranges: '[(48, 57)]' },
+    { name: 'w', ranges: '[(48, 57), (65, 90), (95, 95), (97, 122)]' },
+    { name: 's', ranges: '[(9, 13), (32, 32), (160, 160), (5760, 5760), ' +
+      '(8192, 8202), (8232, 8233), (8239, 8239), (8287, 8287), (12288, 12288), (65279, 65279)]' },
+  ];
+  const classEscape = (index: number, negated: boolean): Pattern => ({
+    source: `\\${negated ? classes[index].name.toUpperCase() : classes[index].name}`,
+    lean: `(.charClass ${negated} ${classes[index].ranges})`,
   });
   const sequence = (a: Pattern, b: Pattern): Pattern => ({
     source: `(?:${a.source}${b.source})`,
@@ -39,6 +49,7 @@ export function checkRegexpModel(seed: number): void {
     `⟨[${Array.from({ length: s.length }, (_, i) => s.charCodeAt(i)).join(', ')}]⟩`;
   const output = [
     'import tolean.TypeScript.Spec.RegExp',
+    'import tolean.TypeScript.Syntax.RegExpLiteral',
     'open tolean.TypeScript',
     'open tolean.TypeScript.JSRegExp',
     'def observe (input : JSString) (p : Pattern) (count : Nat) :',
@@ -46,6 +57,8 @@ export function checkRegexpModel(seed: number): void {
     '  (search input p count).map fun (start, result) =>',
     '    (start, result.pos.val, result.captures.map fun capture =>',
     '      capture.map fun (lo, hi) => ⟨(input.units.drop lo).take (hi - lo)⟩)',
+    '#guard match Syntax.RegExp.parse "\\\\s" .es2015 with | .error _ => false | .ok (p, _) => test ⟨[0x180e]⟩ p',
+    '#guard match Syntax.RegExp.parse "\\\\s" .es2016 with | .error _ => false | .ok (p, _) => !(test ⟨[0x180e]⟩ p)',
   ];
   const add = (p: Pattern, s: string, captures: number): void => {
     const found = new RegExp(p.source).exec(s);
@@ -55,6 +68,10 @@ export function checkRegexpModel(seed: number): void {
       }])`;
     output.push(`#guard observe ${text(s)} ${p.lean} ${captures} = ${expected}`);
     output.push(`#guard test ${text(s)} ${p.lean} = ${found !== null}`);
+    output.push(`#guard Syntax.RegExp.bodyOK .default ${JSON.stringify(`(?:${p.source})`)}`);
+    output.push(`#guard (match Syntax.RegExp.parse ${JSON.stringify(p.source)} with ` +
+      `| .error _ => false | .ok (parsed, count) => ` +
+      `decide (observe ${text(s)} parsed count = ${expected}))`);
   };
   let captures = 0;
   const capture = (body: () => Pattern): Pattern => {
@@ -64,7 +81,7 @@ export function checkRegexpModel(seed: number): void {
   };
   const generate = (depth: number): Pattern => {
     if (depth === 0) {
-      switch (pick(6)) {
+      switch (pick(9)) {
         case 0: return { source: '(?:)', lean: '.empty' };
         case 1: return { source: '.', lean: '.dot' };
         case 2: return { source: '^', lean: '.beginInput' };
@@ -76,6 +93,9 @@ export function checkRegexpModel(seed: number): void {
             lean: `(.charClass ${negated} [(97, 99), (48, 50)])`,
           };
         }
+        case 6: return classEscape(0, pick(2) === 0);
+        case 7: return classEscape(1, pick(2) === 0);
+        case 8: return classEscape(2, pick(2) === 0);
         default: return literal(units[pick(units.length)]);
       }
     }
@@ -94,6 +114,14 @@ export function checkRegexpModel(seed: number): void {
   const a = literal(97);
   const b = literal(98);
   const c = literal(99);
+  for (let i = 0; i < classes.length; i++) {
+    for (const s of ['A_5', '\t\u00a0\u1680\u2000\u2028\u2029\u202f\u205f\u3000\ufeff', '\u180e', '😀']) {
+      add(classEscape(i, false), s, 0);
+      add(classEscape(i, true), s, 0);
+    }
+  }
+  add({ source: '[]', lean: '(.charClass false [])' }, 'a', 0);
+  add({ source: '[^]', lean: '(.charClass true [])' }, '\n', 0);
   add(sequence(alternative(a, sequence(a, b)), c), 'abc', 0);
   add(sequence(repeat(a, 0, null), a), 'aaa', 0);
   add(repeat({ source: '(?:)', lean: '.empty' }, 3, null), '', 0);

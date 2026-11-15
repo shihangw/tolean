@@ -807,6 +807,7 @@ def Expr.subst (σ : List (String × Expr)) : Expr → Expr
   | .number s t => .number s t
   | .bigint s t => .bigint s t
   | .string s v => .string s v
+  | .regexp s v target => .regexp s v target
   | .bool s b => .bool s b
   | .null s => .null s
   | .array s es => .array s (Expr.substList σ es)
@@ -851,6 +852,7 @@ mutual
 
 /-- The names of the functions that `e` calls, anywhere in it. -/
 def Expr.callNames : Expr → List String
+  | .regexp .. => []
   | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => []
   | .array _ es => Expr.callNamesList es
   | .object _ ps => Property.callNamesList ps
@@ -957,6 +959,7 @@ def hoistedMark : TypeExpr := .keyword default "'"
 
 /-- `e` is a name or a literal, which hoisting would only rename. -/
 def Expr.isAtom : Expr → Bool
+  | .regexp .. => true
   | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => true
   | _ => false
 
@@ -966,6 +969,7 @@ mutual
 no call, so where it runs changes nothing that the model observes. Such an
 operand stays in place, because its type comes from its position. -/
 def Expr.isClosedLiteral : Expr → Bool
+  | .regexp .. => true
   | .number .. | .bigint .. | .string .. | .bool .. | .null _ => true
   | .unary _ .neg (.number ..) | .unary _ .neg (.bigint ..) => true
   | .paren _ e => Expr.isClosedLiteral e
@@ -991,7 +995,7 @@ JS evaluates whenever it evaluates `e`. A call in a branch of `?:`, after
 `&&`, `||` or `??`, or in an arrow function may not run, so it stays where
 it is. -/
 def Expr.hoists (thr : String → Bool) : Expr → Bool
-  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .arrow .. => false
+  | .regexp .. | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .arrow .. => false
   | .array _ es => Expr.hoistsList thr es
   | .object _ ps => Property.hoistsList thr ps
   | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e
@@ -1481,6 +1485,7 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
   | .number _ text => (numberLiteral text).map (.num ∘ JSNumber.ofSafeInt)
   | .bool _ b => some (.bool b)
   | .string _ s => some (.str (JSString.ofString s))
+  | .regexp .. => none
   | .null _ => some .null
   | .paren _ inner => eval m fuel env inner
   -- Type stripping removes `as const` and `satisfies T`.

@@ -30,7 +30,7 @@ namespace tolean.TypeScript
 inductive Edition where
   | es2015 | es2016 | es2017 | es2018 | es2019 | es2020 | es2021 | es2022 | es2023 | es2024
   | es2025
-deriving BEq, Repr, Inhabited
+deriving BEq, DecidableEq, ReflBEq, LawfulBEq, Repr, Inhabited
 
 def Edition.year : Edition → Nat
   | .es2015 => 2015 | .es2016 => 2016 | .es2017 => 2017 | .es2018 => 2018

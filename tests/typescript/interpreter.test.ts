@@ -60,7 +60,7 @@ const seed = Number(process.env.TOLEAN_SEED ?? Math.floor(Math.random() * 1e9));
 const programCount = Number(process.env.TOLEAN_PROGRAMS ?? 1000);
 const callsPerFunction = 5;
 
-test('the flagless RegExp matcher agrees with Node on patterns and UTF-16 inputs', () => {
+test('the flagless RegExp parser and matcher agree with Node on patterns and UTF-16 inputs', () => {
   checkRegexpModel(seed);
 }, 200_000);
 
