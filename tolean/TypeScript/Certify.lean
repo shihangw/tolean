@@ -404,45 +404,58 @@ def leadingBindings : IR.Body → List (String × IR.Expr)
   | .let name value rest => (name, value) :: leadingBindings rest
   | _ => []
 
+/-- A call's nullable branches, followed by its actual arguments. -/
+abbrev ConditionalCall := List (String × Bool) × List IR.Expr
+
+def guardCondition (guards : List (String × Bool)) (condition : String) : String :=
+  guards.foldr (fun (n, nonnull) rest =>
+    if nonnull then s!"(match {n} with | .none => _root_.True | .some {n} => {rest})"
+    else s!"(match {n} with | .none => {rest} | .some _ => _root_.True)") condition
+
 mutual
 /-- Calls outside callback bodies. A source-call count below checks that no
 call which needs a condition was hidden in a callback or another scope. -/
-def conditionCalls (callee : String) : IR.Expr → List (List IR.Expr)
-  | .call ref args => (if ref.name == callee then [args] else []) ++ conditionCallsList callee args
+def conditionCalls (callee : String) : IR.Expr → List ConditionalCall
+  | .call ref args => (if ref.name == callee then [([], args)] else []) ++ conditionCallsList callee args
   | .listMethod _ items _ _ _ _ => conditionCalls callee items
   | .listFold items init _ _ _ _ _ => conditionCalls callee items ++ conditionCalls callee init
   | .field e _ _ | .proj e _ _ | .ascribe e _ | .decide e | .not e | .neg e
   | .isNone e | .isSome e | .propNot e | .inject _ _ e | .push _ e | .update _ _ e =>
     conditionCalls callee e
   | .ite a b c => conditionCalls callee a ++ conditionCalls callee b ++ conditionCalls callee c
+  | .matchNull n a b _ =>
+    (conditionCalls callee a).map (fun (guards, args) => ((n, false) :: guards, args)) ++
+      (conditionCalls callee b).map (fun (guards, args) => ((n, true) :: guards, args))
   | .intOp _ a b | .order _ a b | .division _ a b | .eq a b | .ne a b
   | .propAnd a b | .propOr a b | .and a b | .or a b | .coalesce a b _ =>
     conditionCalls callee a ++ conditionCalls callee b
   | .ext _ es | .list es _ | .tuple es => conditionCallsList callee es
   | .struct fields _ _ => conditionCallFields callee fields
   | .structUpdate base fields => conditionCalls callee base ++ conditionCallFields callee fields
-  -- Nullable branches bind a narrowed value, so their conditions need guards.
-  | .matchNull .. => []
   | .int _ | .none | .bool _ | .string _ | .var _ | .enumCase .. | .tagValue _ => []
 
-def conditionCallsList (callee : String) : List IR.Expr → List (List IR.Expr)
+def conditionCallsList (callee : String) : List IR.Expr → List ConditionalCall
   | [] => []
   | e :: es => conditionCalls callee e ++ conditionCallsList callee es
 
-def conditionCallFields (callee : String) : List (String × IR.Expr) → List (List IR.Expr)
+def conditionCallFields (callee : String) : List (String × IR.Expr) → List ConditionalCall
   | [] => []
   | (_, e) :: fields => conditionCalls callee e ++ conditionCallFields callee fields
 end
 
-def bodyConditionCalls (callee : String) : IR.Body → List (List IR.Expr)
+def bodyConditionCalls (callee : String) : IR.Body → List ConditionalCall
   | .value e | .exit e _ => conditionCalls callee e
   | .let _ e rest | .letTuple _ e rest => conditionCalls callee e ++ bodyConditionCalls callee rest
+  | .letState _ a b => bodyConditionCalls callee a ++ bodyConditionCalls callee b
   | .ite c a b => conditionCalls callee c ++ bodyConditionCalls callee a ++ bodyConditionCalls callee b
-  -- Tagged and nullable branches rebind the scrutinee at a narrower type.
+  | .matchNull n _ a b =>
+    (bodyConditionCalls callee a).map (fun (guards, args) => ((n, false) :: guards, args)) ++
+      (bodyConditionCalls callee b).map (fun (guards, args) => ((n, true) :: guards, args))
+  -- Tagged branches rebind the scrutinee at a narrower type.
   -- Do not lift their conditions into the original parameter scope.
-  | .matchTag .. | .matchNull .. => []
+  | .matchTag .. => []
   | .state _ | .yield .. | .done .. => []
-  | .letArray .. | .letState .. | .fold .. | .throw ..
+  | .letArray .. | .fold .. | .throw ..
   | .bind .. | .letCall .. | .letLifted .. | .letBorrow .. => []
 
 /-- Tagged narrowing needs guarded conditions over the original union value. -/
@@ -861,16 +874,18 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         | none => none
       for (callee, (formals, conditions)) in functionConditions do
         if conditions.isEmpty then continue
-        for actuals in conditionCalls callee cbBody do
+        for (guards, actuals) in conditionCalls callee cbBody do
           unless actuals.length == formals.length do
             throw s!"{file}: missing callback argument for a sort condition in {name}"
           let available := param :: info.scope.map (·.1)
-          unless (actuals.zip formals).all (fun (e, _, ty) =>
+          unless guards.all (fun (n, _) => available.contains n) &&
+              (actuals.zip formals).all (fun (e, _, ty) =>
               (sortInputNames e).all available.contains &&
               (!(ty matches .list _) || sortInputShape e)) do
             throw s!"{file}: callback sort arguments must be reachable from its element or captured inputs in {name}"
           for (stateNames, _, _, _, _) in enclosingLoopsOf info.span do
-            if actuals.any (fun e => (sortInputNames e).any stateNames.contains) then
+            if actuals.any (fun e => (sortInputNames e).any stateNames.contains) ||
+                guards.any (fun (n, _) => stateNames.contains n) then
               throw s!"{file}: a sort condition depends on changing loop state in {name}"
           callbackCalls := callee :: callbackCalls
           for (_, ty) in formals do
@@ -881,9 +896,16 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           for condition in conditions do
             let binders := " ".intercalate (formals.map fun (p, t) => s!"({p} : {t.print names})")
             let arguments := " ".intercalate (actuals.map fun e => s!"({e.print names})")
-            childConditions := childConditions ++ [s!"((fun {binders} => {condition}) {arguments})"]
+            childConditions := childConditions ++ [guardCondition guards s!"((fun {binders} => {condition}) {arguments})"]
       unless childConditions.isEmpty || (method matches .list .map | .list .filter) do
         throw s!"{file}: sort conditions in this callback need an element-restricted link lemma in {name}"
+      if comparesNumbers cbBody || !childConditions.isEmpty then
+        let outerScope := match parent, enclosingLoop with
+          | some (_, p, ty, _, parentInfo, _), _ => (p, ty) :: parentInfo.scope
+          | none, some (_, p, _, loopInfo, _) => (p, loopInfo.elem) :: loopInfo.scope
+          | none, none => outParams
+        if info.scope.any (fun (n, ty) => (outerScope.lookup n).any (fun outer => outer.print names != ty.print names)) then
+          throw s!"{file}: sort conditions across an enclosing nullable narrowing need scope propagation in {name}"
       let some encX := encoderOf r elem
         | throw s!"{file}: cannot encode the elements of a callback in {name}"
       let some encY := encoderOf r info.result
@@ -1188,7 +1210,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           (if literalMaps.isEmpty then "" else s!"  all_goals (try simp only [{", ".intercalate literalMaps}, ← List.map_append])\n") ++
           rewrites ++
           s!"  all_goals (try simp_all [{simpSet}, hs])\n" ++
-          "  all_goals first | assumption | rfl\n"
+          "  all_goals first | assumption | rfl | (intros; rfl)\n"
         continue
       let vars := ("x", elem) :: scope.zipIdx.map fun ((_, t), i) => (s!"v{i}", t)
       loopLemmas := loopLemmas.push (r.cert lemmaName)
@@ -1210,11 +1232,12 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         if span == info.span then some condition else none
       for (callee, (formals, calleeConditions)) in functionConditions do
         if calleeConditions.isEmpty then continue
-        for actuals in bodyConditionCalls callee body do
+        for (guards, actuals) in bodyConditionCalls callee body do
           let available := element :: info.scope.map (·.1)
           let ancestorState := (loopsOf outBody).flatMap fun (ns, _, b, _, _) =>
             if (loopsOf b).any (fun (_, _, _, child, _) => child.span == info.span) then ns else []
           unless actuals.length == formals.length &&
+              guards.all (fun (n, _) => available.contains n && !ancestorState.contains n) &&
               actuals.all (fun e => (sortInputNames e).all available.contains &&
                 !(sortInputNames e).any ancestorState.contains) do
             throw s!"{file}: a loop sort condition depends on changing state or body locals in {name}"
@@ -1227,8 +1250,14 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           for condition in calleeConditions do
             let binders := " ".intercalate (formals.map fun (p, t) => s!"({p} : {t.print names})")
             let arguments := " ".intercalate (actuals.map fun e => s!"({e.print names})")
-            conditions := conditions ++ [s!"((fun {binders} => {condition}) {arguments})"]
+            conditions := conditions ++ [guardCondition guards s!"((fun {binders} => {condition}) {arguments})"]
       let restricted := !conditions.isEmpty
+      if restricted then
+        let outerScope := match parentLoop with
+          | some (_, p, _, outerInfo, _) => (p, outerInfo.elem) :: outerInfo.scope
+          | none => outParams
+        if info.scope.any (fun (n, ty) => (outerScope.lookup n).any (fun outer => outer.print names != ty.print names)) then
+          throw s!"{file}: sort conditions across an enclosing nullable narrowing need scope propagation in {name}"
       let some bodyStmt := loopBody syntaxBody info.span
         | throw s!"{file}: no loop at {info.span.start.line}:{info.span.start.col} in {name}"
       -- The loop lemma's rewrite does not reach a list of encoded lists yet,
@@ -1397,7 +1426,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         rewrites ++
         (if restricted then s!"    all_goals (try simp_all [{simpSet}, hs])\n" ++
           s!"    all_goals (try link_tac [{simpSet}, hs, {", ".intercalate hypNames}])\n" ++
-          "    all_goals first | assumption | rfl\n" else "") ++
+          "    all_goals first | assumption | rfl | (intros; rfl)\n" else "") ++
         s!"  · intro ρ hI\n" ++
         s!"    {bindHyps}\n    try simp only []\n" ++
         generalize "ρ" stateCoded ++
@@ -1416,10 +1445,11 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         if hasTaggedConditionScope outBody then
           throw s!"{file}: a call with number-sort preconditions in unsupported tagged narrowing scope in {name}"
         throw s!"{file}: a call with number-sort preconditions inside a callback or unsupported scope in {name}"
-      for actuals in calls do
+      for (guards, actuals) in calls do
         unless actuals.length == formals.length do
           throw s!"{file}: missing argument for the sort precondition in {name}"
-        unless (actuals.zip formals).all (fun (e, _, ty) =>
+        unless guards.all (fun (n, _) => outParams.any (fun (p, _) => p == n)) &&
+            (actuals.zip formals).all (fun (e, _, ty) =>
             (sortInputNames e).all (fun n => outParams.any (fun (p, _) => p == n)) &&
             (!(ty matches .list _) || (sortInputShape e && !(sortInputNames e).isEmpty))) do
           throw s!"{file}: a sort precondition needs arguments reachable from parameters in {name}"
@@ -1434,7 +1464,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
             throw s!"{file}: reserved certificate hypothesis name {hname}"
           let binders := " ".intercalate (formals.map fun (p, t) => s!"({p} : {t.print names})")
           let arguments := " ".intercalate (actuals.map fun e => s!"({e.print names})")
-          let applied := s!"((fun {binders} => {condition}) {arguments})"
+          let applied := guardCondition guards s!"((fun {binders} => {condition}) {arguments})"
           obligations := obligations ++ [(hname, applied)]
           inputConditions := inputConditions ++ [applied]
     functionConditions := (name, (outParams, inputConditions)) :: functionConditions
@@ -1455,7 +1485,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     let conditionRewrites := if conditionalLemmas.isEmpty then "" else
       "\n  all_goals repeat' first\n" ++ String.join (conditionalLemmas.map fun lemma =>
         s!"    | rw [{lemma}]\n") ++
-      s!"  all_goals (try simp_all [{simpSet}])\n  all_goals first | assumption | rfl"
+      s!"  all_goals (try simp_all [{simpSet}])\n  all_goals first | assumption | rfl | (intros; rfl)"
     thms := thms.push <|
       s!"theorem {name}_link {generic} {binders} :\n" ++
       s!"    {r.full "tolean.TypeScript.IR.runIn"} (N := {nv}) {outputFs} ⟨\"\", {str name}⟩ {list args} =\n" ++

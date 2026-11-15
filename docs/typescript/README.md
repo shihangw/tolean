@@ -402,8 +402,11 @@ and as inputs of later array methods. Their list inputs may come from `map`,
 resulting keys, so a map that computes a difference must produce finite keys
 when the later sort uses a difference comparator. Other computed list shapes
 remain refused. Calls in record literals and spreads also pass their key
-conditions to callers. Nullable matches still need condition propagation
-and remain refused.
+conditions to callers. Calls inside nullable matches carry a condition for
+the selected branch only, including in `map`, `filter` and loop bodies.
+A direct sort, conditioned callback or loop under an enclosing nullable
+narrowing still needs scope propagation; a helper call inside the match is
+supported instead.
 
 A certificate's theorems follow from `translate_sound`, so they do not unfold
 the interpreter. The certificate holds the IR that the translator gives,
