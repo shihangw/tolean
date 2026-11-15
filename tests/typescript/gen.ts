@@ -4,7 +4,7 @@
  * `checkTranslate.ts` translates them and compiles the output, and
  * `interpreter.test.ts` runs them in the interpreter and in Node. A program has
  * up to three interfaces, some of them declared as a `Record` over a literal
- * union, and up to three exported functions. A function calls
+ * union, and up to five exported functions. A function calls
  * only the functions before it, so no program recurses.
  */
 
@@ -30,7 +30,7 @@ export type Ty =
   | { k: 'boolean' }
   | { k: 'string' }
   | { k: 'nullable'; of: Ty }
-  /** An optional parameter `p?: T`, only ever the last parameter. */
+  /** A value that may be undefined, including an optional parameter. */
   | { k: 'optional'; of: Ty }
   | { k: 'array'; of: Ty }
   | { k: 'struct'; name: string };
@@ -254,7 +254,10 @@ export class Gen {
           const chains = readable.flatMap((v) => {
             const of = v.ty.k === 'nullable' ? v.ty.of : undefined;
             const s = of?.k === 'struct' ? this.structs.find((x) => x.name === of.name) : undefined;
-            const direct = (s?.fields ?? []).filter(([, ft]) => same(ft, t)).map(([f]) => `${v.name}?.${f}`);
+            const direct = (s?.fields ?? []).filter(([, ft]) => same(ft, t)).flatMap(([f]) =>
+              s !== undefined && this.records.has(s.name)
+                ? [`${v.name}?.${f}`, `${v.name}?.['${f}']`]
+                : [`${v.name}?.${f}`]);
             const nested = (s?.fields ?? []).flatMap(([f, ft]) => {
               const inner = ft.k === 'struct' ? this.structs.find((x) => x.name === ft.name) : undefined;
               return (inner?.fields ?? []).filter(([, gt]) => same(gt, t)).map(([g]) => `${v.name}?.${f}.${g}`);
@@ -1006,6 +1009,53 @@ export class Gen {
       lines.push(...this.body(vars, ret, 2, false));
       out.push(`export function ${name}(${signature}): ${show(ret)} {`, ...lines.map((l) => `  ${l}`), '}');
       this.functions.push({ name, params, ret });
+    }
+    // An explicitly optional local keeps its type across an assignment in a
+    // branch. Both Node and the interpreter run this with random arguments.
+    if (this.chance(0.25)) {
+      const ret: Ty = { k: 'optional', of: BIGINT };
+      const type = this.pick(['bigint | undefined', 'undefined | bigint']);
+      out.push(
+        `export function optionalValue(p0: boolean, p1: bigint): ${type} {`,
+        `  let value: ${type} = undefined;`,
+        '  if (p0) { value = p1; }',
+        '  return value;',
+        '}',
+      );
+      this.functions.push({ name: 'optionalValue', params: [BOOLEAN, BIGINT], ret });
+    }
+    if (this.chance(0.25)) {
+      const body = this.pick([
+        'x !== undefined && x > 0n',
+        'undefined === x || x > 0n',
+        '!(x === undefined) && x > 0n',
+        '!(undefined !== x) || x > 0n',
+        'x === undefined ? false : x > 0n',
+        '!(x === undefined) ? x > 0n : false',
+      ]);
+      out.push(`export function optionalGuard(x?: bigint): boolean { return ${body}; }`);
+      this.functions.push({ name: 'optionalGuard', params: [{ k: 'optional', of: BIGINT }], ret: BOOLEAN });
+    }
+    if (this.chance(0.25)) {
+      const index = this.pick(['i', '0', '1']);
+      out.push(`export function optionalIndex(i: number, xs?: ReadonlyArray<bigint>): bigint { return xs?.[${index}] ?? 0n; }`);
+      this.functions.push({
+        name: 'optionalIndex',
+        params: [NUMBER, { k: 'optional', of: { k: 'array', of: BIGINT } }],
+        ret: BIGINT,
+      });
+    }
+    if (this.chance(0.25)) {
+      const first = this.chance(0.5);
+      const ret = first ? BIGINT : STRING;
+      out.push(
+        `export function optionalTuple(flag: boolean, left: bigint, right: string): ${show(ret)} {`,
+        '  const pair: readonly [bigint, string] = [left, right];',
+        '  const maybe: readonly [bigint, string] | null = flag ? pair : null;',
+        `  return maybe?.[${first ? '0' : '1'}] ?? ${first ? '0n' : "''"};`,
+        '}',
+      );
+      this.functions.push({ name: 'optionalTuple', params: [BOOLEAN, BIGINT, STRING], ret });
     }
     return out.join('\n') + '\n';
   }

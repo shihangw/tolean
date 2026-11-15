@@ -844,10 +844,8 @@ class Printer {
       return this.node(kind, e, [e.name.text], [this.expr(e.expression)]);
     }
     if (ts.isElementAccessExpression(e)) {
-      if (e.questionDotToken !== undefined) {
-        refuse(e, 'optional chain');
-      }
-      return this.node('index', e, [], [this.expr(e.expression), this.expr(e.argumentExpression)]);
+      return this.node(e.questionDotToken !== undefined ? 'optIndex' : 'index', e, [],
+        [this.expr(e.expression), this.expr(e.argumentExpression)]);
     }
     if (ts.isCallExpression(e)) {
       if (e.questionDotToken !== undefined || e.typeArguments !== undefined) {
