@@ -519,6 +519,7 @@ def extras : List Group := [
     ``Syntax.Expr.tokens_new, ``Syntax.parsePrimaryType_budget,
     ``Syntax.parsePrimary_object, ``Syntax.primary_reads, ``Syntax.allRead_succ, ``Syntax.exprs_read_le,
     ``Syntax.exprs_read, ``Syntax.instLawfulBEqPos, ``Syntax.instReflBEqPos, ``Syntax.instLawfulBEqBinOp,
+    ``Syntax.closesKinds_scan, ``Syntax.scanKinds_append, ``Syntax.Neutral.congr,
     ``Syntax.Neutral.nil, ``Syntax.Neutral.append, ``Syntax.Neutral.one, ``Syntax.Neutral.enclosed,
     ``Syntax.Neutral.cons, ``Syntax.Neutral.all, ``Syntax.Neutral.join, ``Syntax.neutral_binOp,
     ``Syntax.neutral_assignOp, ``Syntax.neutral_unaryOp, ``Syntax.neutral_updateOp,

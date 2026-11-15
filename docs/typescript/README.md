@@ -75,7 +75,23 @@ ways. When that happens, the parser refuses the code instead of choosing one
 reading. There are three such cases:
 
 - `f < A, B > (x)`. `tsc` reads type arguments, but JavaScript reads two
-  comparisons.
+  comparisons. The parser accepts `a < b && c > d` and `x < n && n > 0`,
+  because a top-level expression operator before the closing `>` can rule out
+  a list of types. The scan stops at `&&`, `||`, `??`, `===`, `!==`, `==`,
+  `!=`, `+`, `*`, `/`, `%` and `**`. It does not stop at these tokens inside
+  brackets, where a type can contain a computed property expression.
+  It does not stop at `-`, `&`, `|`, `.`, `!` or `?`, which can occur in
+  types. Nor does it stop at `>>`, `>=`, `<<` or `<=`, because TypeScript
+  rescans `>` when it closes type arguments.
+  It keeps refusing tokens that it cannot rule out this
+  way. The refusal of `f(a < b, c > d)` is a known gap tracked by
+  [#208](https://github.com/shihangw/tolean/issues/208), not an intended
+  restriction. TypeScript 6.0.3 reads two comparisons there, so the parser
+  should accept it without extra parentheses. The remaining work is a
+  speculative type-list parse followed by TypeScript's follow-token test.
+  Its round-trip proof needs a stronger relation between source tokens and
+  printed tokens. The [plan](../plans/pure-typescript.md#unfinished-parser-work)
+  tracks that work.
 - `(a)` followed by `{`. `tsc` reads an arrow function that is missing its
   `=>`, but JavaScript reads `(a); {`.
 - `(a)`, then a line break, then `=>`. `tsc` reads an arrow function, but

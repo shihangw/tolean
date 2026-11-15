@@ -34,6 +34,10 @@ def closesKinds (depth : Nat) : List TokenKind → Bool
     | .punct "(" | .punct "[" | .punct "{" => closesKinds (depth + 1) rest
     | .punct ")" | .punct "]" | .punct "}" => if depth == 0 then false else closesKinds (depth - 1) rest
     | .punct ";" => if depth == 0 then false else closesKinds depth rest
+    | .punct "&&" | .punct "||" | .punct "??"
+    | .punct "===" | .punct "!==" | .punct "==" | .punct "!="
+    | .punct "+" | .punct "*" | .punct "/" | .punct "%" | .punct "**" =>
+      if depth == 0 then false else closesKinds depth rest
     | .punct ">" => true
     | _ => closesKinds depth rest
 
@@ -3627,49 +3631,124 @@ theorem exprs_read (T : Edition) (f : Nat) : AllRead T f := exprs_read_le T f f 
 
 /-! ### What follows an expression -/
 
-/-- A `>` comes in `ks`. -/
-def hasGreater (ks : List TokenKind) : Bool := ks.contains (.punct ">")
+/-- A scan either needs more tokens at a bracket depth, or has stopped.
+Stopping without `>` differs from needing more tokens: a top-level logical
+operator rules out type arguments even when more tokens follow it. -/
+inductive TypeArgScan where
+  | more (depth : Nat)
+  | done (found : Bool)
 
-/-- The scan of `closesKinds` passes over `ks` at every depth: `ks` closes no
-group that it does not open, and has no `;` and no end of file. -/
+/-- `closesKinds` with an explicit result for a scan that needs more tokens. -/
+def scanKinds (depth : Nat) : List TokenKind → TypeArgScan
+  | [] => .more depth
+  | k :: rest =>
+    match k with
+    | .eof => .done false
+    | .punct "(" | .punct "[" | .punct "{" => scanKinds (depth + 1) rest
+    | .punct ")" | .punct "]" | .punct "}" =>
+      if depth == 0 then .done false else scanKinds (depth - 1) rest
+    | .punct ";" | .punct "&&" | .punct "||" | .punct "??"
+    | .punct "===" | .punct "!==" | .punct "==" | .punct "!="
+    | .punct "+" | .punct "*" | .punct "/" | .punct "%" | .punct "**" =>
+      if depth == 0 then .done false else scanKinds depth rest
+    | .punct ">" => .done true
+    | _ => scanKinds depth rest
+
+def TypeArgScan.found : TypeArgScan → Bool
+  | .more _ => false
+  | .done b => b
+
+theorem closesKinds_scan (d : Nat) (ks : List TokenKind) :
+    closesKinds d ks = (scanKinds d ks).found := by
+  induction ks generalizing d with
+  | nil => rfl
+  | cons k ks ih =>
+    by_cases hd : d = 0 <;> simp only [closesKinds, scanKinds, hd]
+    all_goals split <;> simp_all [TypeArgScan.found]
+
+theorem scanKinds_append (d : Nat) (a b : List TokenKind) :
+    scanKinds d (a ++ b) =
+      match scanKinds d a with
+      | .more n => scanKinds n b
+      | .done v => .done v := by
+  induction a generalizing d with
+  | nil => rfl
+  | cons k a ih =>
+    simp only [List.cons_append, scanKinds]
+    split <;> simp_all
+    all_goals split <;> simp_all
+
+/-- A scan that passes through `ks` leaves the bracket depth unchanged.
+It may instead stop at `>` or at a token that rules out type arguments. -/
 def Neutral (ks : List TokenKind) : Prop :=
-  ∀ d a, closesKinds d (ks ++ a) = (hasGreater ks || closesKinds d a)
+  ∀ d, match scanKinds d ks with
+    | .more n => n = d
+    | .done _ => True
 
-theorem Neutral.nil : Neutral [] := fun _ _ => by simp [hasGreater]
+theorem Neutral.nil : Neutral [] := fun _ => rfl
 
-theorem Neutral.append {a b : List TokenKind} (ha : Neutral a) (hb : Neutral b) : Neutral (a ++ b) :=
-  fun d x => by rw [List.append_assoc, ha, hb]; simp [hasGreater, Bool.or_assoc]
+theorem Neutral.append {a b : List TokenKind} (ha : Neutral a) (hb : Neutral b) :
+    Neutral (a ++ b) := by
+  intro d
+  rw [scanKinds_append]
+  have h := ha d
+  cases hs : scanKinds d a with
+  | done v => trivial
+  | more n =>
+    simp only [hs] at h
+    subst n
+    exact hb d
+
+theorem Neutral.congr {ks a b : List TokenKind} (h : Neutral ks) {d : Nat}
+    (hab : closesKinds d a = closesKinds d b) :
+    closesKinds d (ks ++ a) = closesKinds d (ks ++ b) := by
+  rw [closesKinds_scan, closesKinds_scan, scanKinds_append, scanKinds_append]
+  have hn := h d
+  cases hs : scanKinds d ks with
+  | done v => rfl
+  | more n =>
+    simp only [hs] at hn
+    subst n
+    exact (closesKinds_scan d a).symm.trans (hab.trans (closesKinds_scan d b))
 
 /-- A token other than a bracket, a `;` and the end of the file. -/
 theorem Neutral.one {k : TokenKind} (h1 : k ∉ [.punct "(", .punct "[", .punct "{", .punct ")", .punct "]",
     .punct "}", .punct ";", .eof]) : Neutral [k] := by
-  intro d a
+  intro d
   simp at h1
   obtain ⟨h1, h2, h3, h4, h5, h6, h7, h8⟩ := h1
+  by_cases hs : k ∈ [.punct "&&", .punct "||", .punct "??",
+      .punct "===", .punct "!==", .punct "==", .punct "!=",
+      .punct "+", .punct "*", .punct "/", .punct "%", .punct "**"]
+  · simp only [List.mem_cons, List.not_mem_nil, or_false] at hs
+    rcases hs with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl
+    all_goals cases d <;> simp [scanKinds]
   by_cases hg : k = .punct ">"
-  · subst hg; simp [closesKinds, hasGreater]
-  · cases k with
-    | punct p =>
-      simp only [TokenKind.punct.injEq] at h1 h2 h3 h4 h5 h6 h7 hg
-      have hg' : ">" ≠ p := fun e => hg e.symm
-      simp [closesKinds, hasGreater, h1, h2, h3, h4, h5, h6, h7, hg, hg']
-    | eof => exact absurd rfl h8
-    | _ => simp [closesKinds, hasGreater]
+  · subst k; simp [scanKinds]
+  cases k with
+  | punct p =>
+    simp only [TokenKind.punct.injEq] at h1 h2 h3 h4 h5 h6 h7 hg
+    simp_all [scanKinds]
+  | eof => exact absurd rfl h8
+  | _ => rfl
 
 /-- A group in brackets. -/
 theorem Neutral.enclosed {o c : String} (ho : o ∈ ["(", "[", "{"]) (hc : c ∈ [")", "]", "}"])
     {ks : List TokenKind} (h : Neutral ks) : Neutral (.punct o :: (ks ++ [.punct c])) := by
-  intro d a
-  simp at ho hc
-  have hopen : closesKinds d (.punct o :: (ks ++ .punct c :: a)) = closesKinds (d + 1) (ks ++ .punct c :: a) := by
-    rcases ho with rfl | rfl | rfl <;> simp [closesKinds]
-  have hclose : closesKinds (d + 1) (.punct c :: a) = closesKinds d a := by
-    rcases hc with rfl | rfl | rfl <;> simp [closesKinds]
-  simp only [List.cons_append, List.append_assoc, List.nil_append]
-  rw [hopen, h, hclose]
-  have h1 : ">" ≠ o := by rcases ho with rfl | rfl | rfl <;> decide
-  have h2 : ">" ≠ c := by rcases hc with rfl | rfl | rfl <;> decide
-  simp [hasGreater, h1, h2]
+  intro d
+  have hopen : scanKinds d (.punct o :: (ks ++ [.punct c])) =
+      scanKinds (d + 1) (ks ++ [.punct c]) := by
+    simp at ho
+    rcases ho with rfl | rfl | rfl <;> simp [scanKinds]
+  rw [hopen, scanKinds_append]
+  have hn := h (d + 1)
+  cases hs : scanKinds (d + 1) ks with
+  | done v => trivial
+  | more n =>
+    simp only [hs] at hn
+    subst n
+    simp at hc
+    rcases hc with rfl | rfl | rfl <;> simp [scanKinds]
 
 
 theorem Neutral.cons {k : TokenKind} {ks : List TokenKind} (hk : k ∉ [.punct "(", .punct "[", .punct "{",
@@ -3893,7 +3972,7 @@ def AfterEquiv (a b : List TokenKind) : Prop := a.head? = b.head? ∧ closesKind
 
 theorem AfterEquiv.prepend {x a b : List TokenKind} (hx : Neutral x) (hne : x ≠ []) (h : AfterEquiv a b) :
     AfterEquiv (x ++ a) (x ++ b) := by
-  refine ⟨?_, by rw [hx, hx, h.2]⟩
+  refine ⟨?_, hx.congr h.2⟩
   cases x with
   | nil => exact absurd rfl hne
   | cons k x => simp
@@ -3914,7 +3993,7 @@ theorem Expr.afterOK_congr : ∀ (e : Expr) {a b : List TokenKind}, AfterEquiv a
   | .binary _ op l r, a, b, h => by
     obtain ⟨k, ks, hk, _⟩ := binOp_head op
     simp only [Expr.afterOK]
-    rw [Expr.neutral r 0 a, Expr.neutral r 0 b, h.2, Expr.afterOK_congr r h,
+    rw [(Expr.neutral r).congr h.2, Expr.afterOK_congr r h,
       Expr.afterOK_congr l (AfterEquiv.prepend (Neutral.append (neutral_binOp op) (Expr.neutral r))
         (by simp [hk]) h)]
   | .paren _ i, a, b, h => by

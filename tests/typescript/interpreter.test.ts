@@ -296,8 +296,6 @@ test(`the interpreter agrees with Node ${process.version} on random programs`, a
   expect(failures).toEqual([]);
 }, 600_000);
 
-// A parameter that a call leaves out is `undefined`, both for a call inside
-// the program and for the call that runs it, as in Node.
 test('predicate annotations do not change what a guard computes', async () => {
   const bodies = [
     'return value.kind === "circle";',
@@ -401,6 +399,56 @@ test('checked guards narrow both branches, aliases, local calls, and tag chains'
   }
 });
 
+test('the interpreter reads comparisons separated by expression operators as Node does', async () => {
+  const sources = [
+    'export function f(a: number, b: number, c: number, d: number): boolean { return a < b && c > d; }',
+    'export function f(a: number, b: number, c: number, d: number): boolean { return a < b || c > d; }',
+    'export function f(x: number, n: number): boolean { return x < n && n > 0; }',
+    'export function f(p: boolean, q: number, r: number, s: number, u: number): boolean { return p === q < r === s > u; }',
+    ...['===', '!=='].map(
+      (op) => `export function f(a: number, b: number, c: number, d: number) { return a < b ${op} c > d; }`,
+    ),
+    ...['+', '*', '/'].map(
+      (op) => `export function f(a: number, b: number, c: number, d: number) { return a < b ${op} c === d > 0; }`,
+    ),
+  ];
+  const inputs = [[1, 2, 4, 3, 2], [2, 1, 4, 3, 4], [1, 2, 3, 4, 5], [NaN, 2, 4, 3, 0], [1, Infinity, 4, 3, 1]];
+  const argumentsFor = (i: number, args: Array<number>): Array<number | boolean> =>
+    i === 3 ? [args[0] === 1, ...args.slice(1)] : args.slice(0, i === 2 ? 2 : 4);
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-comparisons-'));
+  const paths = sources.map((source, i) => {
+    const path = join(dir, `case${i}.ts`);
+    writeFileSync(path, source);
+    return path;
+  });
+  const program = ts.createProgram(paths, {
+    target: ts.ScriptTarget.ES2024, noEmit: true, strict: true, types: [], skipLibCheck: true,
+  });
+  expect(ts.getPreEmitDiagnostics(program).map((d) => ts.flattenDiagnosticMessageText(d.messageText, '\n'))).toEqual([]);
+  const input = {
+    programs: sources.map((source, i) => ({
+      source,
+      calls: inputs.map((args) => ({ function: 'f', args: argumentsFor(i, args).map(encode) })),
+    })),
+  };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const results = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  for (const [i, source] of sources.entries()) {
+    const lean = results[i];
+    expect(lean?.parsed, source).toBe(true);
+    if (lean === undefined || !lean.parsed) continue;
+    const path = join(dir, `case${i}.mjs`);
+    writeFileSync(path, ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext } }).outputText);
+    const mod = (await import(pathToFileURL(path).href)) as { f: (...args: Array<number | boolean>) => boolean };
+    for (const [j, args] of inputs.entries()) {
+      expect(lean.results[j]?.value, source).toBe(mod.f(...argumentsFor(i, args)));
+    }
+  }
+});
+
+// A parameter that a call leaves out is `undefined`, both for a call inside
+// the program and for the call that runs it, as in Node.
 test('the interpreter binds a parameter that a call leaves out to undefined', async () => {
   const cases: Array<{ source: string; args: Array<unknown> }> = [
     { source: 'export function f(a: bigint, b?: bigint): bigint { return a + (b ?? 10n); }', args: [1n] },
