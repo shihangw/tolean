@@ -107,7 +107,7 @@ def encoderOf (r : Refs) : IR.Ty → Option String
   -- A type parameter has no encoder, so a generic function or interface gets no
   -- certificate yet. Neither has a map, a set or a date, nor a function that
   -- can throw.
-  | .null | .tag _ | .param _ | .app .. | .map .. | .set _ | .except .. | .error | .date => none
+  | .null | .tag _ | .param _ | .app .. | .map .. | .set _ | .except .. | .error | .date | .ext .closure => none
 
 /-- How the elements of a tuple of the types `ts` become a list of `Val`s. -/
 def elementsEncoder (r : Refs) : List IR.Ty → Option String
@@ -130,7 +130,7 @@ def decoderOf (r : Refs) : IR.Ty → Option String
   | .struct ref | .enum ref | .tagged ref => some (r.cert s!"decode{ref.name}")
   | .number => some (r.eval "decNum")
   | .tuple ts => do return s!"({r.eval "decTuple"} {← elementsDecoder r ts})"
-  | .null | .tag _ | .param _ | .app .. | .map .. | .set _ | .except .. | .error | .date => none
+  | .null | .tag _ | .param _ | .app .. | .map .. | .set _ | .except .. | .error | .date | .ext .closure => none
 
 /-- How a list of `Val`s becomes the elements of a tuple of the types `ts`. -/
 def elementsDecoder (r : Refs) : List IR.Ty → Option String
@@ -929,7 +929,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           ["tolean.TypeScript.Proof.retOutcome", "ForInStep.value"]
         else if info.breaks then ["tolean.TypeScript.Proof.stepOutcome", "ForInStep.value"] else []
       if info.returns.isSome then returnsLoop := true
-      let depth := if closures.isEmpty then callDepth m bodyStmt else callDepth m syntaxBody + 1
+      let depth := if closures.isEmpty then callDepth m bodyStmt else callDepth m syntaxBody + closures.length
       let fuel := if depth == 0 then "fuel" else s!"(fuel + {depth})"
       -- A body with calls looks the functions up in the output, so the lemma
       -- is about the output's functions.

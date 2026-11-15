@@ -56,6 +56,9 @@ inductive Feature where
   [[Call]] (§10.2.1), SetMutableBinding (§9.1.1.1.5), and ReturnStatement
   (§14.10), with section numbers from ES2024. ES2015 is the oldest target. -/
   | localReturnState
+  /-- Calls between local declarations: FunctionDeclarationInstantiation
+  (§10.2.11) and [[Call]] (§10.2.1), with ES2024 section numbers. -/
+  | localSiblingCalls
   /-- `**` and `**=`: `ExponentiationExpression`. -/
   | exponent
   /-- `{ ...e }`: `PropertyDefinition : ... AssignmentExpression`. -/
@@ -116,7 +119,7 @@ deriving BEq, Repr, Inhabited
 def Feature.since : Feature → Edition
   | .stringNumberArguments => .es2015
   | .dateParseFormat => .es2016
-  | .localReturnState => .es2015
+  | .localReturnState | .localSiblingCalls => .es2015
   | .exponent | .arrayIncludes | .trimWhiteSpace => .es2016
   | .stringPad => .es2017
   | .objectSpread => .es2018
@@ -128,6 +131,7 @@ def Feature.since : Feature → Edition
 
 def Feature.describe : Feature → String
   | .localReturnState => "a local function that returns a value and changes captured variables"
+  | .localSiblingCalls => "calls between local functions"
   | .exponent => "'**'"
   | .objectSpread => "object spread '...'"
   | .bigint => "bigint"

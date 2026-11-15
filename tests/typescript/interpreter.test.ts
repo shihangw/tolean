@@ -240,8 +240,9 @@ test('certified local functions agree with Node on random arguments', async () =
   }
 });
 
-test('local returns preserve captured state and agree with Node', async () => {
-  const source = readFileSync(new URL('./corpus/translate/accept/localFunctionReturnsAndChanges.ts', import.meta.url), 'utf8');
+test('local returns and sibling calls preserve captured state and agree with Node', async () => {
+  const source = ['localFunctionReturnsAndChanges', 'localFunctionSiblingCalls'].map(name =>
+    readFileSync(new URL(`./corpus/translate/accept/${name}.ts`, import.meta.url), 'utf8')).join('\n');
   const inputs = fc.sample(fc.tuple(fc.bigInt(), fc.bigInt()), { seed, numRuns: 50 });
   const calls = inputs.flatMap(([start, amount]) => [
     { function: 'f', args: [encode(start)] },
@@ -249,6 +250,8 @@ test('local returns preserve captured state and agree with Node', async () => {
     { function: 'returnCall', args: [encode(start), encode(amount)] },
     { function: 'loopCalls', args: [encode([start, amount])] },
     { function: 'capturedTotal', args: [encode([start, amount])] },
+    { function: 'calculate', args: [encode(start)] },
+    { function: 'accumulate', args: [encode([start, amount])] },
   ]);
   const run = spawnSync(tolean, ['interpret'], {
     input: JSON.stringify({ programs: [{ source, calls }] }), encoding: 'utf8',
@@ -269,13 +272,17 @@ test('local returns preserve captured state and agree with Node', async () => {
     returnCall: (start: bigint, amount: bigint) => bigint;
     loopCalls: (xs: Array<bigint>) => bigint;
     capturedTotal: (xs: Array<bigint>) => bigint;
+    calculate: (x: bigint) => bigint;
+    accumulate: (xs: Array<bigint>) => bigint;
   };
   for (const [i, [start, amount]] of inputs.entries()) {
-    expect(result.results[5 * i]).toEqual({ value: encode(mod.f(start)) });
-    expect(result.results[5 * i + 1]).toEqual({ value: encode(mod.tally(start, amount)) });
-    expect(result.results[5 * i + 2]).toEqual({ value: encode(mod.returnCall(start, amount)) });
-    expect(result.results[5 * i + 3]).toEqual({ value: encode(mod.loopCalls([start, amount])) });
-    expect(result.results[5 * i + 4]).toEqual({ value: encode(mod.capturedTotal([start, amount])) });
+    expect(result.results[7 * i]).toEqual({ value: encode(mod.f(start)) });
+    expect(result.results[7 * i + 1]).toEqual({ value: encode(mod.tally(start, amount)) });
+    expect(result.results[7 * i + 2]).toEqual({ value: encode(mod.returnCall(start, amount)) });
+    expect(result.results[7 * i + 3]).toEqual({ value: encode(mod.loopCalls([start, amount])) });
+    expect(result.results[7 * i + 4]).toEqual({ value: encode(mod.capturedTotal([start, amount])) });
+    expect(result.results[7 * i + 5]).toEqual({ value: encode(mod.calculate(start)) });
+    expect(result.results[7 * i + 6]).toEqual({ value: encode(mod.accumulate([start, amount])) });
   }
 });
 

@@ -2995,6 +2995,12 @@ theorem evalList_vars {ρo : Eval.Env N} :
         · exact hn
         · exact hall p hp
 
+/-- Erasing closure parameters from the printed values does not remove
+their names from the evaluator's environment. -/
+theorem localParams_names (fn : LocalFn) :
+    fn.leanParams.map (·.1) = (fn.captured ++ fn.params).map (·.name) := by
+  simp [LocalFn.leanParams, Function.comp_def]
+
 /-- The environment in which the spec runs the body of a local function, and
 the one in which the output runs the lifted function, give every name the
 same value, and the first binds the names that the body's scope has. -/
@@ -3013,9 +3019,8 @@ theorem localBody_env {env : Translate.Env} {fn : LocalFn} {ρs ρo : Eval.Env N
   obtain ⟨hcl, hcall⟩ := evalList_vars fs fuel hcv'
   have hzip : ((fn.leanParams.map (·.1)).zip (cvals ++ vs)).reverse =
       ((fn.params.map (·.name)).zip vs).reverse ++ ((fn.captured.map (·.name)).zip cvals).reverse := by
-    simp only [LocalFn.leanParams, List.map_map, List.map_append]
-    rw [List.zip_append (by simpa [Function.comp_def] using hcl.symm), List.reverse_append]
-    simp [Function.comp_def]
+    simp only [localParams_names, List.map_append]
+    rw [List.zip_append hcl.symm, List.reverse_append]
   rw [hzip]
   simp only [List.all_eq_true, Bool.and_eq_true] at h1
   have h2' : ∀ l ∈ env.locals, fn.body.mentions l.name = true →

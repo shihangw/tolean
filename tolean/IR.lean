@@ -856,6 +856,9 @@ class PrintTy (T : Type) where
   print : Names → T → String
   /-- The printed type names the type parameter. -/
   namesParam : Names → T → Bool
+  /-- A proof-only parameter is printed as Unit. Its argument is erased
+  only at a lifted call, whose evaluator still checks the original value. -/
+  erased : T → Bool := fun _ => false
   /-- What a function that is generic over the type parameter binds after its
   name, such as ` {N : Type} [JSNumber N]`. -/
   binders : Names → String
@@ -1446,7 +1449,11 @@ def Body.lines (names : Names) (monadic : Bool := false) : Body T E → List Str
   -- that the declaration gave, and the translator checks that each call's
   -- body prints the same (`translateLocalCall`), so the printed `f.g` and
   -- the body that `Body.exec` runs at a call are one function.
-  | .letCall ns ref _ _ _ _ _ _ args rest =>
+  | .letCall ns ref _ _ params _ _ _ args rest =>
+    let args := (params.zip args).map fun ((_, t), arg) =>
+      match t with
+      | .ext t => if PrintTy.erased t then .tuple [] else arg
+      | _ => arg
     let call := (Expr.call ref args).print names
     match ns, rest with
     | [x], .value (.var y) => if x == y then [call] else s!"let {x} := {call}" :: rest.lines names monadic
@@ -1475,9 +1482,9 @@ def Body.tagArms (names : Names) (monadic : Bool) (name : String) : Body T E →
 end
 
 /-- The functions that the calls of a body lifted out, with their
-parameters, result types and bodies, in the order of the calls. -/
+parameters, result types and bodies. A callee comes before its caller. -/
 def Body.lifted : Body T E → List (DeclRef × List (String × Ty T) × Ty T × Body T E)
-  | .letCall _ r _ _ ps rt _ body _ rest => (r, ps, rt, body) :: rest.lifted
+  | .letCall _ r _ _ ps rt _ body _ rest => body.lifted ++ (r, ps, rt, body) :: rest.lifted
   | .let _ _ rest | .letTuple _ _ rest | .letArray _ _ _ rest | .letLifted _ _ rest | .bind _ _ _ rest =>
     rest.lifted
   | .ite _ a b | .matchNull _ _ a b | .matchTag _ _ _ _ _ a b | .letState _ a b => a.lifted ++ b.lifted

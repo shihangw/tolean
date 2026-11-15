@@ -100,6 +100,9 @@ inductive TyExt where
   | error
   /-- `JSDate`, a `Date` (`Spec/Date.lean`). -/
   | date
+  /-- A captured local closure is checked only by the evaluator. Calls name
+  its lifted definition, so the printed parameter is Unit. -/
+  | closure
 deriving BEq, Repr, Inhabited, DecidableEq
 
 /-- The operations that TypeScript adds to the IR, each with the number of
@@ -348,9 +351,13 @@ instance : tolean.IR.PrintTy TyExt where
     | .null => s!"({leanName names "Option"} Empty)"
     | .error => leanName names "JSError"
     | .date => leanName names "JSDate"
+    | .closure => leanName names "Unit"
+  erased
+    | .closure => true
+    | _ => false
   namesParam _
     | .number => true
-    | .null | .error | .date => false
+    | .null | .error | .date | .closure => false
   binders names :=
     let n := names.typeParam
     s!" \{{n} : Type} [{leanName names "JSNumber"} {n}]"
