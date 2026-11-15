@@ -30,6 +30,6 @@ def lastSign {N : Type} [JSNumber N] (xs : List Int) (init : Sign) : Sign :=
   (List.foldl (fun (s : Sign) (x : Int) => (if x < (0 : Int) then Sign.«neg» else (if x > (0 : Int) then Sign.«pos» else s))) init xs)
 
 def firstBig {N : Type} [JSNumber N] (xs : List Int) (init : Option Int) : Option Int :=
-  (List.foldl (fun (b : Option Int) (x : Int) => (if (b.isNone && decide (x > (10 : Int))) then x else b)) init xs)
+  (List.foldl (fun (b : Option Int) (x : Int) => ((if (b.isNone && decide (x > (10 : Int))) then x else b) : Option Int)) init xs)
 
 end Test

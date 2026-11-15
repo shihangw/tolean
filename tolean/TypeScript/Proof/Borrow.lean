@@ -91,7 +91,7 @@ variable (m : Eval.Scope) (fs : List (DeclRef × List String × IR.Body)) (fuel 
 theorem eval_withType (e : IR.Expr) (t source : Ty) (ρ : Eval.Env N) :
     IR.Expr.eval fs fuel ρ (withType e t source) = IR.Expr.eval fs fuel ρ e := by
   unfold withType
-  cases e <;> (try simp only) <;> (try split) <;> simp [IR.Expr.eval]
+  repeat' first | (solve | simp only [IR.Expr.eval]) | split
 
 theorem translateBorrowPlain_sim (hc : CallsAgree (N := N) m.program fs fuel)
     {env : Translate.Env} {ty : Ty} {arg : Expr} {ctx ctx' : Ctx} {out : IR.Expr}
