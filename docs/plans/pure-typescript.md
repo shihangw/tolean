@@ -292,8 +292,9 @@ proofs, because a fold over events keeps much of its state in maps.
 
 ## Refactors from review
 
-These follow-ups track design feedback from the open pull requests. A fix in
-a descendant does not mean that the earlier pull request already contains it.
+These entries record design feedback from pull requests and separate fixes
+that have landed from work that remains. A fix in a descendant does not mean
+that the earlier pull request already contains it.
 
 - **Make expression scans exhaustive.** Enumerate leaf constructors instead
   of ending a scan with `| _ => false` or `| _ => []`. Traverse ordinary
@@ -314,22 +315,24 @@ a descendant does not mean that the earlier pull request already contains it.
   The other scans still need the broader audit described above.
 
   The [number-use scan on #221](https://github.com/shihangw/tolean/pull/221#discussion_r4576744315)
-  is being fixed there, including the missing optional-index receiver and
-  explicit number-free leaves. That work also serves #229 and #235; do not
-  duplicate it here. Its compile regression must keep number operations
-  only inside the optional-index receiver so missing imports and binders
-  remain observable.
+  has landed: `exprUsesNumber` follows an optional-index receiver, and it
+  names the expression forms that cannot use numbers. The accepted
+  `optionalIndexNumberReceiver` fixture keeps the receiver-only regression
+  visible. Do not repeat that fix. The broader scan audit remains open,
+  because `typeUsesNumber` and `stmtUsesNumber` still have fallback cases.
+  Keep checking all of these traversals against their syntax constructors;
+  do not treat source-call counts as a definition of coverage.
 
 - **Choose the local-function executor before running the body.**
   The [review on #226](https://github.com/shihangw/tolean/pull/226#discussion_r4576809523),
-  also inherited by #236, found that `callLocal` runs a state-writing
-  value-returning body through `execStmt`, then repeats it through
-  `execReturnState` to recover its state. Dispatch to the state-preserving
-  executor first for the supported final-return form. Use `returnState_exec`
-  to justify the value relationship, retain the ordinary path for void
-  locals, and keep unsupported returns refused. Test a captured-state loop
-  and calls in its prefix without making replay part of the interpreter's
-  contract.
+  also inherited by #236, found that `callLocal` could run a state-writing,
+  value-returning body twice. That is fixed: `callLocal` recognizes a
+  changing body with a final value return before it calls `execStmt`, then
+  runs `execReturnState` once and writes the captured values back. This fixes
+  execution order, not the supported syntax. Earlier returns with captured
+  changes still have no modeled result. Step 14 still tracks general final
+  return expressions, transitive captures, longer sibling call chains and
+  callers whose local functions change state only indirectly.
 
 - **Preserve both map-escape regression tests.**
   The [review on #231](https://github.com/shihangw/tolean/pull/231#discussion_r4577273721)
