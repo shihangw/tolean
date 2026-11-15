@@ -383,8 +383,13 @@ list. A spread may insert literal elements, as in `[...xs, 0, 1]`.
 Local bindings may alias these lists or concatenate them before returning the
 sort. The condition binds the same local names, so it still depends only on
 parameters. Lists that are not reachable from parameters remain refused.
-Other computed list expressions and sort calls inside larger expressions
-still get no certificate.
+Calls may also occur in conditionals, in local initializers, or as the input
+of a later array method. Each call adds the callee's condition over its
+actual arguments. A condition is required even for a branch that the call
+does not take. Calls inside callbacks and loops still get no certificate:
+their conditions need hypotheses over the callback element or loop state.
+Other computed list expressions and a sort expression that is not returned
+directly also remain refused.
 
 A certificate's theorems follow from `translate_sound`, so they do not unfold
 the interpreter. The certificate holds the IR that the translator gives,
