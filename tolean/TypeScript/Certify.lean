@@ -266,7 +266,7 @@ inductive CallbackKind where
 
 /-- A call of a `List` function with a callback: what it is for, the parameter,
 its type, the body and what a certificate needs to know about it. -/
-abbrev Callback := CallbackKind × String × IR.Ty × IR.Expr × IR.CallbackInfo IR.TyExt
+abbrev Callback := CallbackKind × String × IR.Ty × IR.Expr × IR.CallbackInfo IR.TyExt × IR.Expr
 
 /-- The type at a comparator's field path, in the translated declarations. -/
 def keyPathType (decls : List IR.Decl) : IR.Ty → List String → Option IR.Ty
@@ -285,6 +285,11 @@ def sortInputShape : IR.Expr → Bool
   | .field e _ _ => sortInputShape e
   | .ext .append es => sortInputShapes es
   | .list _ _ => true
+  | .listMethod .map items _ _ _ _ | .listMethod .filter items _ _ _ _
+  | .listMethod (.mapIdx _) items _ _ _ _ => sortInputShape items
+  | .ext (.slice _ _) [items] | .ext .sliceInt (items :: _) => sortInputShape items
+  | .call _ _ => true
+  | .ite _ a b => sortInputShape a && sortInputShape b
   | _ => false
 
 def sortInputShapes : List IR.Expr → Bool
@@ -306,9 +311,9 @@ partial def comparesNumbers : IR.Expr → Bool
 /-- The callbacks in `e`, inner ones first, in the order of the source. -/
 partial def exprCallbacks : IR.Expr → List Callback
   | .listMethod method items param elem body info =>
-    exprCallbacks items ++ exprCallbacks body ++ [(.list method, param, elem, body, info)]
+    exprCallbacks items ++ exprCallbacks body ++ [(.list method, param, elem, body, info, items)]
   | .listFold items init acc param elem body info =>
-    exprCallbacks items ++ exprCallbacks init ++ exprCallbacks body ++ [(.fold acc, param, elem, body, info)]
+    exprCallbacks items ++ exprCallbacks init ++ exprCallbacks body ++ [(.fold acc, param, elem, body, info, items)]
   | .field a _ _ | .propNot a | .not a | .neg a | .isNone a | .isSome a | .decide a | .push _ a
   | .update _ _ a | .inject _ _ a | .ascribe a _ => exprCallbacks a
   | .ite a b c => exprCallbacks a ++ exprCallbacks b ++ exprCallbacks c
@@ -360,14 +365,44 @@ partial def bodyCallbacks : IR.Body → List Callback
 
 end
 
-/-- A returned sort after simple list bindings. The bindings remain in order
-so the input condition can bind the same names without textual substitution. -/
-def returnedSortInput : IR.Body → Option (List (String × IR.Expr) × IR.Expr)
-  | .value (.listMethod (.sortWith _) items _ _ _ _) => some ([], items)
-  | .let name value rest => do
-    let (bindings, items) ← returnedSortInput rest
-    return ((name, value) :: bindings, items)
-  | _ => none
+mutual
+/-- Free names of list inputs and their callbacks. Each callback removes
+its own binders after visiting nested callbacks. -/
+def sortInputNames : IR.Expr → List String
+  | .listMethod method items param _ cb _ =>
+    let bound := param :: (match method with | .mapIdx index => [index] | _ => [])
+    sortInputNames items ++ (sortInputNames cb).filter (fun n => !bound.contains n)
+  | .listFold items init acc param _ cb _ =>
+    sortInputNames items ++ sortInputNames init ++
+      (sortInputNames cb).filter (fun n => n != acc && n != param)
+  | .field e _ _ | .proj e _ _ | .ascribe e _ | .decide e | .not e | .neg e
+  | .isNone e | .isSome e | .propNot e | .inject _ _ e => sortInputNames e
+  | .push n e | .update _ n e => n :: sortInputNames e
+  | .matchNull n a b _ => n :: sortInputNames a ++ sortInputNames b
+  | .intOp _ a b | .order _ a b | .division _ a b | .eq a b | .ne a b
+  | .propAnd a b | .propOr a b | .and a b | .or a b | .coalesce a b _ =>
+    sortInputNames a ++ sortInputNames b
+  | .ext _ es | .call _ es | .list es _ | .tuple es => sortInputNamesList es
+  | .ite c a b => sortInputNames c ++ sortInputNames a ++ sortInputNames b
+  | .struct fields _ _ => sortInputFieldNames fields
+  | .structUpdate base fields => sortInputNames base ++ sortInputFieldNames fields
+  | .var n => [n]
+  | .int _ | .none | .bool _ | .string _ | .enumCase .. | .tagValue _ => []
+
+def sortInputNamesList : List IR.Expr → List String
+  | [] => []
+  | e :: es => sortInputNames e ++ sortInputNamesList es
+
+def sortInputFieldNames : List (String × IR.Expr) → List String
+  | [] => []
+  | (_, e) :: fields => sortInputNames e ++ sortInputFieldNames fields
+end
+
+/-- Leading bindings remain in source order. A callback's scope determines
+which of them precede it. -/
+def leadingBindings : IR.Body → List (String × IR.Expr)
+  | .let name value rest => (name, value) :: leadingBindings rest
+  | _ => []
 
 mutual
 /-- Calls outside callback bodies. A source-call count below checks that no
@@ -567,7 +602,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     | _ => false
   let laws := if sorts then s!" [tolean.TypeScript.SafeIntLaws {nv}]" else ""
   let numericSorts := decls.any fun
-    | .function _ _ _ body => (bodyCallbacks body).any fun (method, _, _, cb, _) =>
+    | .function _ _ _ body => (bodyCallbacks body).any fun (method, _, _, cb, _, _) =>
         (method matches .list (.sortWith _)) && comparesNumbers cb
     | _ => false
   let laws := laws ++ if numericSorts then s!" [tolean.TypeScript.NumberOrderLaws {nv}]" else ""
@@ -787,6 +822,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
   let envLemmas := ["Env.set_cons", "Env.lookup_cons", "Env.lookup_set_same", "Env.lookup_set_ne",
     "Env.set_set", "Env.length_set"].map r.eval
   let mut loopLemmas : Array String := #[]
+  let mut conditionalSortLemmas : List String := []
   let mut thms : Array String := #[]
   -- The translator requires a callee before its caller, so the condition
   -- of a callee is available when the caller's theorem is written.
@@ -804,7 +840,12 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     let mut obligations : List (String × String) := []
     let mut inputConditions : List String := []
     let mut literalMaps : List String := []
-    for (method, param, elem, cbBody, info) in bodyCallbacks outBody do
+    let hasNumberSort := fun callbacks : List Callback => callbacks.any fun (method, _, _, cb, _, _) =>
+      (method matches .list (.sortWith _)) && comparesNumbers cb
+    if (bodyCallbacks outBody).any (fun (_, _, _, cb, _, _) => hasNumberSort (exprCallbacks cb)) ||
+        (loopsOf outBody).any (fun (_, _, body, _) => hasNumberSort (bodyCallbacks body)) then
+      throw s!"{file}: number sorts inside callback or loop bodies need element or state preconditions in {name}"
+    for (method, param, elem, cbBody, info, items) in bodyCallbacks outBody do
       cbIndex := cbIndex + 1
       let lemmaName := s!"{name}_cb{cbIndex}"
       let some encX := encoderOf r elem
@@ -892,17 +933,18 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           | throw s!"{file}: the comparator in {name} does not compare keys"
         let elemTy := elem.print names
         if comparesNumbers cbBody then
+          conditionalSortLemmas := conditionalSortLemmas ++ [r.cert lemmaName]
           literalMaps := literalMaps ++ [s!"← List.map_singleton (f := {encX})",
             s!"← List.map_cons (f := {encX})"]
-          let some (bindings, items) := returnedSortInput outBody
-            | throw s!"{file}: the sorted list must be returned directly in {name}"
+          let bindings := (leadingBindings outBody).filter fun (n, _) =>
+            info.scope.any fun (p, _) => p == n
           let mut available := outParams.map (·.1)
           for (localName, value) in bindings do
-            unless sortInputShape value && !(exprNames value).isEmpty &&
-                (exprNames value).all available.contains do
+            unless sortInputShape value && !(sortInputNames value).isEmpty &&
+                (sortInputNames value).all available.contains do
               throw s!"{file}: the sorted list must be reachable from parameters through list bindings in {name}"
             available := localName :: available
-          unless !(exprNames items).isEmpty && (exprNames items).all available.contains &&
+          unless !(sortInputNames items).isEmpty && (sortInputNames items).all available.contains &&
               scope.isEmpty && sortInputShape items do
             throw s!"{file}: the sorted list must be reachable from parameters and its comparator must not capture locals in {name}"
           let lets := String.join (bindings.map fun (n, e) => s!"let {n} := {e.print names}; ")
@@ -920,7 +962,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
               let numeric := ty matches .number
               if numeric then
                 let hn := s!"hkeys{ki}"
-                let hname := s!"{name}_sort_precondition{ki}"
+                let hname := s!"{name}_sort_precondition{obligations.length}"
                 if r.idents.contains hname then
                   throw s!"{file}: reserved certificate hypothesis name {hname}"
                 let predicate := if difference then "isFinite" else "isNaN"
@@ -966,7 +1008,8 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           let [(path, difference, up)] := keys
             | throw s!"{file}: empty comparator keys in {name}"
           let key := s!"(fun ({param} : {elemTy}) => {".".intercalate (param :: path)})"
-          let hname := s!"{name}_sort_precondition"
+          let hname := s!"{name}_sort_precondition" ++
+            if obligations.isEmpty then "" else toString obligations.length
           if r.idents.contains hname then
             throw s!"{file}: reserved certificate hypothesis name {hname}"
           let predicate := if difference then "isFinite" else "isNaN"
@@ -1204,8 +1247,8 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         unless actuals.length == formals.length do
           throw s!"{file}: missing argument for the sort precondition in {name}"
         unless (actuals.zip formals).all (fun (e, _, ty) =>
-            (exprNames e).all (fun n => outParams.any (fun (p, _) => p == n)) &&
-            (!(ty matches .list _) || (sortInputShape e && !(exprNames e).isEmpty))) do
+            (sortInputNames e).all (fun n => outParams.any (fun (p, _) => p == n)) &&
+            (!(ty matches .list _) || (sortInputShape e && !(sortInputNames e).isEmpty))) do
           throw s!"{file}: a sort precondition needs arguments reachable from parameters in {name}"
         for (_, ty) in formals do
           let .list elem := ty | continue
@@ -1236,14 +1279,19 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       loopLemmas.toList ++ defs ++ obligations.map (·.1))
     let some_ := r.write "some" "Option.some"
     let rfl := r.full "rfl"
+    let sortRewrites := if conditionalSortLemmas.isEmpty then "" else
+      "\n  all_goals repeat' first\n" ++ String.join (conditionalSortLemmas.map fun lemma =>
+        s!"    | rw [{lemma}]\n") ++
+      s!"  all_goals (try simp_all [{simpSet}])\n  all_goals first | assumption | rfl"
     thms := thms.push <|
       s!"theorem {name}_link {generic} {binders} :\n" ++
       s!"    {r.full "tolean.TypeScript.IR.runIn"} (N := {nv}) {outputFs} ⟨\"\", {str name}⟩ {list args} =\n" ++
       s!"      {some_} ({retEnc} ({call})) := by\n" ++
       s!"  {casesOn decls outParams}link_tac [{simpSet}]" ++
       (if literalMaps.isEmpty then "" else
-        s!"\n  all_goals simp only [{", ".intercalate literalMaps}, ← List.map_append]\n" ++
-        s!"  all_goals simp_all [{simpSet}, -List.map_cons, -List.map_nil, -List.map_map, ← List.map_append]") ++
+        s!"\n  all_goals (try simp only [{", ".intercalate literalMaps}, ← List.map_append])\n" ++
+        s!"  all_goals (try simp_all [{simpSet}, -List.map_cons, -List.map_nil, -List.map_map, ← List.map_append])") ++
+      sortRewrites ++
       -- After a loop that a `return` can end, the evaluator matches on the
       -- loop's outcome, which is itself a match on the value to return. Once
       -- that match is split, the arms for a `break` or a `continue` close, and

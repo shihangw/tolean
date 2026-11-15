@@ -100,7 +100,7 @@ value claim already does.
 | TypeScript | Lean | Refused |
 |---|---|---|
 | The `index` argument of a callback other than one of `map`, and the `array` argument of any callback | The `List` functions that also pass the index, as `List.mapIdx` does for `map`, and the list itself | |
-| A number-sort certificate for another computed list, a sort that is not returned directly, or a call in a callback or loop | A hypothesis over the parameters excludes `NaN` keys, or requires finite keys for a difference. Direct sorts of parameters, their fields, local aliases and spread concatenations with literal elements already get one hypothesis per numeric key. Calls in ordinary expressions pass those conditions to callers. | Lists that cannot be reached from parameters. |
+| A number-sort certificate inside a callback or loop, for a remaining computed list shape, or in another call scope | A hypothesis over the parameters excludes `NaN` keys, or requires finite keys for a difference. Sorts and calls in the supported ordinary expressions already carry these conditions. Inputs may use parameter fields, local aliases, spreads, literal elements, maps, filters, slices, conditionals and calls. Calls in record literals and nullable matches still need condition propagation. | Lists that cannot be reached from parameters. |
 
 The certifier uses `sortValues_sortWith_on` for a direct sort of a
 parameter. Its input hypothesis excludes NaN keys for a comparison, or
@@ -231,8 +231,8 @@ leaves a gap.
    to, as the types table explains; they are not unfinished work in this step.
 8. **P0.** Widen map borrows to early returns, several changed maps, an
    ordinary returned value, control flow and imported callees.
-10. **P1.** Sorting: number-key certificates for remaining computed lists,
-    sorts not returned directly, and calls in callbacks and loops.
+10. **P1.** Sorting: number-key certificates inside callbacks and loops,
+    remaining computed list shapes, and calls in nullable matches.
 11. **P2.** Recursion: tagged unions that refer to themselves first, then
     `@decreases`, mutual recursion, and `while` loops. Add certificates for
     self-referential interfaces and recursive functions, with existential

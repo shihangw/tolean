@@ -388,8 +388,13 @@ of a later array method. Each call adds the callee's condition over its
 actual arguments. A condition is required even for a branch that the call
 does not take. Calls inside callbacks and loops still get no certificate:
 their conditions need hypotheses over the callback element or loop state.
-Other computed list expressions and a sort expression that is not returned
-directly also remain refused.
+Sort expressions may likewise appear in conditionals, local initializers
+and as inputs of later array methods. Their list inputs may come from `map`,
+`filter`, `slice`, a conditional or a call. The precondition concerns the
+resulting keys, so a map that computes a difference must produce finite keys
+when the later sort uses a difference comparator. Other computed list shapes
+remain refused. Calls in record literals and nullable matches still need
+condition propagation and also remain refused.
 
 A certificate's theorems follow from `translate_sound`, so they do not unfold
 the interpreter. The certificate holds the IR that the translator gives,
