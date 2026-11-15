@@ -7,6 +7,9 @@ namespace Test
 def rows {N : Type} [JSNumber N] (xs : List (List N)) : List (List N) :=
   (List.map (fun (row : List N) => (JSNumber.sortWith (fun (a : N) (b : N) => (JSNumber.sub a b)) row)) xs)
 
+def appendedRows {N : Type} [JSNumber N] (xs : List (List N)) : List (List N) :=
+  (List.map (fun (row : List N) => (JSNumber.sortWith (fun (a : N) (b : N) => (JSNumber.sub a b)) ((row ++ ([(JSNumber.ofSafeInt (N := N) (0 : Int))] : List N))))) xs)
+
 def captured {N : Type} [JSNumber N] (xs : List N) (ys : List N) : List (List N) :=
   (List.map (fun (_y : N) => (JSNumber.sortWith (fun (a : N) (b : N) => (JSNumber.sub a b)) xs)) ys)
 
@@ -21,8 +24,5 @@ def called {N : Type} [JSNumber N] (xs : List (List N)) : List (List N) :=
 
 def selected {N : Type} [JSNumber N] (xs : List (List N)) : List (List N) :=
   (List.filter (fun (row : List N) => (JSNumber.lt ((JSNumber.ofSafeInt (N := N) (0 : Int))) ((JSNumber.ofSafeInt (N := N) ((List.length ((sorted (N := N) row)) : Nat) : Int))))) xs)
-
-def renamed {N : Type} [JSNumber N] (x : List N) : List N :=
-  (JSNumber.sortWith (fun (a : N) (b : N) => (JSNumber.sub a b)) x)
 
 end Test

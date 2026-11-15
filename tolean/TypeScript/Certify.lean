@@ -1109,6 +1109,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           "  intro x hx\n" ++ substHfs ++ unpackKeys ++
           "  have hs := hkeys x hx\n" ++
           s!"  {casesOn decls vars}link_tac [{simpSet}, hs]\n" ++
+          (if literalMaps.isEmpty then "" else s!"  all_goals (try simp only [{", ".intercalate literalMaps}, ← List.map_append])\n") ++
           rewrites ++
           s!"  all_goals (try simp_all [{simpSet}, hs])\n" ++
           "  all_goals first | assumption | rfl\n"
