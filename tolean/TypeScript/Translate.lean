@@ -4478,7 +4478,7 @@ def translateFunction (thr : String → Bool) (cls : String → Option (Option (
       let ty ← paramType p.span p.optional type types
       pure (env.add { name := paramName, binding := .param, type := ty },
         leanParams ++ [(paramName, ty.lean)], types ++ [ty])
-  let borrow := if typeParams.isEmpty then borrowParam? params (some returnType) body else none
+  let borrow := if typeParams.isEmpty then borrowCandidate? params (some returnType) body else none
   let ret ← functionReturnType borrow types s returnType env params sourceBody
   let throws := stmtsThrow ctx.functions (blockStatements body)
   modify fun c => { c with currentFunction := name, returnType := ret, throws }

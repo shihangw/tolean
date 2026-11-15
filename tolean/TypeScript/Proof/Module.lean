@@ -355,7 +355,7 @@ theorem translateFunction_ok {thr : String → Bool} {cls : String → Option (O
     obtain ⟨r, s₆, hr, _, s₇, rfl, _, _, ⟨rfl, rfl⟩, out, s₈, hbody, _, s₈', hborrow, h⟩ := h
     obtain ⟨rfl, hmode⟩ := checkBorrowResult_ok hborrow
     generalize hb : (if tps.isEmpty then
-      borrowParam? params (some returnType)
+      borrowCandidate? params (some returnType)
         (Eval.preparedBody thr cls guards params (some returnType) body) else none) = borrow at h hbody hmode hr
     generalize hp : (borrow.bind fun i => (params[i]?).map (·.name)) = param at h hbody hmode
     -- The check that a call of the function itself passes a part of a
@@ -1917,6 +1917,10 @@ theorem returnedState_not_ret (fuel : Nat) (ρ : Eval.Env N) (b : IR.Body)
     | none => simp
     | some w =>
       exact returnedState_not_ret fuel ((n, w) :: ρ) rest hs v
+  case letBorrow n ref index args rest =>
+    intro hex
+    obtain ⟨_, _, _, _, _, _, _, entries, _, _, _, _, _, _, _, _, _, hrest⟩ := exec_letBorrow hex
+    exact returnedState_not_ret fuel (ρ.set n (.map entries)) rest hs v hrest
 
 mutual
 /-- Every call of the output gives what the same call of the source gives,

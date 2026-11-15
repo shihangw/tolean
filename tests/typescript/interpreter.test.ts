@@ -893,7 +893,7 @@ test('normal-completion map borrows copy the final map back without aliases', as
   const change = 'function change(m: Map<bigint, bigint>, x: bigint): void { m.set(1n, x); }\n';
   const cases = [
     ...Array.from({ length: 80 }, (_, seed) => ({
-      source: new Gen(seed + 1000).borrowProgram(seed % 2 === 1),
+      source: new Gen(seed + 1000).borrowProgram(seed % 2 === 1, seed % 3 === 0),
       refused: false,
     })),
     {
@@ -917,6 +917,57 @@ test('normal-completion map borrows copy the final map back without aliases', as
         'export function f(x: bigint): ReadonlyMap<bigint, ReadonlyMap<bigint, bigint>> { ' +
         'const a = new Map<bigint, ReadonlyMap<bigint, bigint>>(); const b = new Map<bigint, bigint>(); ' +
         'change(a, b); b.set(1n, x); return a; }',
+      refused: true,
+    },
+    {
+      source: 'function change(a: Map<bigint, ReadonlyMap<bigint, bigint>>, b: ReadonlyMap<bigint, bigint>): void { a.set(1n, b); }\n' +
+        'function forward(a: Map<bigint, ReadonlyMap<bigint, bigint>>, b: ReadonlyMap<bigint, bigint>): void { change(a, b); }\n' +
+        'export function f(x: bigint): ReadonlyMap<bigint, ReadonlyMap<bigint, bigint>> { ' +
+        'const a = new Map<bigint, ReadonlyMap<bigint, bigint>>(); const b = new Map<bigint, bigint>(); ' +
+        'forward(a, b); b.set(1n, x); return a; }',
+      refused: true,
+    },
+    {
+      source: 'function change(m: Map<bigint, bigint>, other: ReadonlyMap<bigint, bigint>): void { m.set(1n, 2n); }\n' +
+        'function forward(m: Map<bigint, bigint>): void { change(m, m); }\n' +
+        'export function f(x: bigint): bigint { const m = new Map<bigint, bigint>(); ' +
+        'forward(m); return m.get(1n) ?? 0n; }',
+      refused: true,
+    },
+    {
+      source: 'type Other = Map<bigint, bigint>;\n' +
+        'function change(a: Map<bigint, bigint>, other: ReadonlyMap<bigint, bigint>): void { a.set(1n, 5n); }\n' +
+        'function forward(m: Map<bigint, bigint>, b: Other): void { change(b, m); }\n' +
+        'export function f(x: bigint): boolean { const a = new Map<bigint, bigint>(); ' +
+        'const b = new Map<bigint, bigint>(); forward(a, b); return b.has(1n); }',
+      refused: true,
+    },
+    {
+      source: 'function change(x: bigint, m: Map<bigint, bigint>): void { m.set(1n, x); }\n' +
+        'function forward(m: Map<bigint, bigint>, x: bigint): void { change(x, m); }\n' +
+        'export function f(x: bigint): bigint { const m = new Map<bigint, bigint>(); ' +
+        'forward(m, x); return m.get(1n) ?? 0n; }',
+    },
+    {
+      source: 'type Other = Map<bigint, bigint>;\n' +
+        'function change(a: Map<bigint, bigint>, other: ReadonlyMap<bigint, bigint>): void { a.set(1n, 5n); }\n' +
+        'function forward(m: Map<bigint, bigint>, b: Other): void { change(m, b); }\n' +
+        'export function f(x: bigint): boolean { const a = new Map<bigint, bigint>(); ' +
+        'const b = new Map<bigint, bigint>(); forward(a, b); return a.has(1n); }',
+    },
+    {
+      source: 'function forward(m: Map<bigint, bigint>, x: bigint): void { change(x, m); }\n' +
+        'function change(x: bigint, m: Map<bigint, bigint>): void { m.set(1n, x); }\n' +
+        'export function f(x: bigint): bigint { const m = new Map<bigint, bigint>(); ' +
+        'forward(m, x); return m.get(1n) ?? 0n; }',
+      refused: true,
+    },
+    {
+      source: 'function change(m: Map<bigint, bigint>): void { m.set(1n, 5n); }\n' +
+        'function forward(m: Map<bigint, bigint>, change: any, x: bigint): void { change(m); }\n' +
+        'export function f(n: bigint): bigint { let x = 0n; ' +
+        'function g(z: Map<bigint, bigint>): void { x = 5n; } ' +
+        'const m = new Map<bigint, bigint>(); forward(m, g, x); return x; }',
       refused: true,
     },
   ];

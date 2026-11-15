@@ -781,13 +781,18 @@ def Expr.borrowAtom : Expr → Bool
   | .ident .. | .number .. | .bigint .. | .string .. | .bool .. => true
   | _ => false
 
-/-- A straight-line map update cannot return early, throw through a call,
-retain the map, or change another object. -/
+/-- The shape of a straight-line update candidate. A forwarding call also
+needs `borrowCallsValid` to establish which argument changes. -/
 def Stmt.borrowUpdate (param : String) : Stmt → Bool
   | .exprStmt _ (.call _ (.member _ (.ident _ name) method) args) =>
     name == param &&
       ((method == "set" && args.length == 2) || (method == "delete" && args.length == 1)) &&
       args.all (fun e => e.borrowAtom && !e.leaks param)
+  | .exprStmt _ (.call _ (.ident _ _) args) =>
+    args.all (·.borrowAtom) &&
+      (args.filter (fun e => match e with
+        | .ident _ name => name == param
+        | _ => false)).length == 1
   | _ => false
 
 /-- A terminal bare return has no value for a void borrowing call. Keep its
@@ -799,9 +804,9 @@ def Stmt.borrowPrefix : Stmt → Stmt
     | _ => .block sp ss
   | s => s
 
-/-- The map parameter whose final value a normal completion copies out.
-Only a terminal bare return may follow the straight-line updates. -/
-def borrowParam? (params : List Param) (ret : Option TypeExpr) (body : Stmt) : Option Nat := do
+/-- A candidate map parameter for copy-out. Forwarded calls still need the
+callee-index check in `borrowParam?` before this becomes a signature. -/
+def borrowCandidate? (params : List Param) (ret : Option TypeExpr) (body : Stmt) : Option Nat := do
   let some (.keyword _ "void") := ret | none
   let .block _ ss := body.borrowPrefix | none
   let maps := params.zipIdx |>.filter fun (p, _) =>
@@ -811,6 +816,30 @@ def borrowParam? (params : List Param) (ret : Option TypeExpr) (body : Stmt) : O
   let [(p, i)] := maps | none
   if params.any (·.optional) || ss.isEmpty || !(ss.all (·.borrowUpdate p.name)) then none
   else some i
+
+/-- A forwarded call changes the candidate parameter only when it occurs
+at the checked callee's borrowed argument index. No parameter may hide
+that top-level callee. -/
+def Stmt.borrowCallsValid (borrows : List (String × Nat)) (params : List String)
+    (param : String) : Stmt → Bool
+  | .exprStmt _ (.call _ (.ident _ name) args) =>
+    !params.contains name &&
+      match borrows.lookup name with
+      | some i =>
+        match args[i]? with
+        | some (.ident _ actual) => actual == param
+        | _ => false
+      | none => false
+  | _ => true
+
+/-- The map parameter whose final value a normal completion copies out.
+Every forwarded call must use an already checked borrowing signature. -/
+def borrowParam? (borrows : List (String × Nat)) (params : List Param)
+    (ret : Option TypeExpr) (body : Stmt) : Option Nat := do
+  let i ← borrowCandidate? params ret body
+  let p ← params[i]?
+  let .block _ ss := body.borrowPrefix | none
+  if ss.all (·.borrowCallsValid borrows (params.map (·.name)) p.name) then some i else none
 
 /-- Replace a checked borrow statement by a mutation marker for the existing
 ownership test. Every other mention of a borrowing function is refused here,
