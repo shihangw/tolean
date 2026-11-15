@@ -204,6 +204,11 @@ def Ty.isOptional : Ty → Bool
   | .optional _ => true
   | _ => false
 
+/-- The type of a present nullable or optional value. -/
+def Ty.maybeValue? : Ty → Option Ty
+  | .nullable t | .optional t => some t
+  | _ => none
+
 /-- A primitive that `===` compares by value and the output compares with `=`. -/
 def Ty.isEqPrimitive : Ty → Bool
   | .boolean | .string | .bigint | .enum _ => true
@@ -2592,19 +2597,40 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
     return ⟨.ext (.optField [name] bind) [o.code], false, type⟩
   | .optIndex s obj key =>
     let o ← translateExpr fuel env none obj
-    let elem ← orReject (match o.type with
-      | .optional (.array t) | .nullable (.array t) => some t
-      | _ => none) s "optional indexing requires a nullable or optional array"
-    if elem.isMaybe then reject s "an index of an array of nullable values could give null or undefined"
-    match key with
-    | .number _ text =>
-      let k ← orReject (safeIntegerValue? text) key.span "a number literal must be a safe integer"
-      unless 0 ≤ k do reject key.span "an index must not be negative"
-      return ⟨.ascribe (.ext (.optIndexLit k.toNat) [o.value]) (Ty.optional elem).lean, false, .optional elem⟩
-    | _ =>
-      let i ← translateExpr fuel env none key
-      unless i.type == .number do reject key.span "the index of an array must be a number"
-      return ⟨.ext .optIndexNumber [o.value, i.value], false, .optional elem⟩
+    let underlying := o.type.maybeValue?
+    match underlying.bind Ty.tupleElems? with
+    | some tys =>
+      let .number _ text := key | reject key.span "the index of a tuple must be a number literal, such as t[0]"
+      let k ← orReject (safeIntegerValue? text) key.span "the index of a tuple must be an integer"
+      let elem ← orReject tys[k.toNat]? key.span s!"the tuple has no element {k}"
+      unless 0 ≤ k do reject key.span s!"the tuple has no element {k}"
+      if elem.isMaybe && !elem.isOptional then reject s "an optional tuple index could give null or undefined"
+      let result := if elem.isOptional then elem else .optional elem
+      return ⟨.ascribe (.ext (.optIndexLit k.toNat (some (tys.length, elem.isOptional))) [o.value])
+        result.lean, false, result⟩
+    | none =>
+      let ctx ← get
+      match underlying.bind (recordIndex ctx) with
+      | some (keyRef, keys, type) =>
+        if type.isMaybe && !type.isOptional then reject s "an optional Record index could give null or undefined"
+        let k ← translateExpr fuel env (some (.enum keyRef)) key
+        unless k.type == .enum keyRef do reject key.span "the key must have the key type of the Record"
+        let result := if type.isOptional then type else .optional type
+        return ⟨.ext (.optRecordGet keyRef keys type.isOptional) [o.value, k.value], false, result⟩
+      | none =>
+        let elem ← orReject (match o.type with
+          | .optional (.array t) | .nullable (.array t) => some t
+          | _ => none) s "optional indexing requires a nullable or optional array, tuple or Record"
+        if elem.isMaybe then reject s "an index of an array of nullable values could give null or undefined"
+        match key with
+        | .number _ text =>
+          let k ← orReject (safeIntegerValue? text) key.span "a number literal must be a safe integer"
+          unless 0 ≤ k do reject key.span "an index must not be negative"
+          return ⟨.ascribe (.ext (.optIndexLit k.toNat none) [o.value]) (Ty.optional elem).lean, false, .optional elem⟩
+        | _ =>
+          let i ← translateExpr fuel env none key
+          unless i.type == .number do reject key.span "the index of an array must be a number"
+          return ⟨.ext .optIndexNumber [o.value, i.value], false, .optional elem⟩
   | .index s obj key =>
     let o ← translateExpr fuel env none obj
     match o.type.tupleElems? with

@@ -131,6 +131,12 @@ def listItems? : Val N → Option (List (Val N))
   | [.list xs] => some (Eval.elementAt xs (some k))
   | _ => none
 
+/-- Read a record key only when its optional receiver is present. -/
+@[simp] def optionalRecordIndex : List (Val N) → Option (Val N)
+  | [.null, _] | [.undefined, _] => some .undefined
+  | [.obj fields, .str k] => Eval.getKey fields k
+  | _ => none
+
 /-- An operation that TypeScript adds, on the values of its arguments. -/
 def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   | .number n, [] => some (.num (JSNumber.ofSafeInt n))
@@ -165,6 +171,7 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   | .optField path _, [.obj fields] => Eval.getPath fields path
   -- `r[k]`, as the spec evaluates it: the property that the string `k` names.
   | .recordGet _ _, [.obj fields, .str k] => Eval.getKey fields k
+  | .optRecordGet _ _ _, args => optionalRecordIndex args
   -- `x ∈ xs` and `List.any xs (JSNumber.sameValueZero x)`: whether an
   -- element is `x`, as `includes` compares them.
   | .includes, [.list xs, x] | .includesNumber, [.list xs, x] => (Eval.includesVal x xs).map .bool
@@ -172,7 +179,7 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
   -- spec reads them: `none` is `undefined`.
   | .length, [.list xs] => some (.num (JSNumber.ofSafeInt xs.length))
   | .indexLit k, [.list xs] => some (Eval.elementAt xs (some k))
-  | .optIndexLit k, args => optionalLiteralIndex k args
+  | .optIndexLit k _, args => optionalLiteralIndex k args
   | .indexNumber, [.list xs, .num i] => some (Eval.elementAt xs (JSNumber.toSafeInt i))
   | .optIndexNumber, args => optionalNumberIndex args
   -- `JSNumber.countUp k b`: the values that the interpreter's counted loop
