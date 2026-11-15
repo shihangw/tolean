@@ -74,5 +74,13 @@ that fact, so the proof of a declaration needs only one more step.
 
 A local function that returns a value and also changes a variable of the
 function around it is step 14 of `docs/plans/pure-typescript.md`, with calls
-between local functions and certificates for them. The interpreter keeps no
-variables with a `return`, so such a function needs a new path in it.
+between local functions and certificates for functions that combine local
+functions with loops. A certificate can now cover a local function without
+loops. It writes the closure's syntax tree as a Lean term, and its link
+proof unfolds the lifted definition at each call.
+
+The interpreter keeps no variables with a `return`, so returning a value
+while changing captured variables still needs a new path in it. A loop
+certificate also needs an invariant for the closure bound to the local
+function's name. The current loop invariants describe encoded data, not
+closures.
