@@ -815,14 +815,15 @@ def Stmt.borrowOwnershipBody (borrows : List (String × Nat)) (body : Stmt) : Op
       | some i =>
         let some (.ident ms map) := args[i]? | none
         if (args.eraseIdx i).any (·.leaks map) then none
-        else some (.exprStmt sp (.call cs (.member ns (.ident ms map) "delete") []))
+        else some (.exprStmt sp (.call cs (.member ns (.ident ms map) "delete") (args.eraseIdx i)))
       | none => if borrows.any (fun b => s.mentions b.1) then none else some s
     | _ => if borrows.any (fun b => s.mentions b.1) then none else some s
   return .block sp ss
 
 /-- The interpreter and translator share this source-level ownership guard.
 The marker makes a borrowed argument count as changed, but not as an alias
-that escapes the call. All other holders still fail the ordinary leak test. -/
+that escapes the call. It retains the other arguments so collections that
+they hold still fail the ordinary leak test. -/
 def Stmt.ownsChangesBorrow (borrows : List (String × Nat)) (params : List String) (body : Stmt) : Bool :=
   (body.borrowOwnershipBody borrows).any (Stmt.ownsChanges params)
 

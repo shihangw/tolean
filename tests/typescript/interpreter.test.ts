@@ -912,6 +912,13 @@ test('normal-completion map borrows copy the final map back without aliases', as
         'change(m, m); return m.get(1n) ?? 0n; }',
       refused: true,
     },
+    {
+      source: 'function change(a: Map<bigint, ReadonlyMap<bigint, bigint>>, b: ReadonlyMap<bigint, bigint>): void { a.set(1n, b); }\n' +
+        'export function f(x: bigint): ReadonlyMap<bigint, ReadonlyMap<bigint, bigint>> { ' +
+        'const a = new Map<bigint, ReadonlyMap<bigint, bigint>>(); const b = new Map<bigint, bigint>(); ' +
+        'change(a, b); b.set(1n, x); return a; }',
+      refused: true,
+    },
   ];
   const inputs = [-9n, 0n, 17n];
   const run = spawnSync(tolean, ['interpret'], {
