@@ -41,13 +41,21 @@ def closesKinds (depth : Nat) : List TokenKind → Bool
     | .punct ">" => true
     | _ => closesKinds depth rest
 
-theorem closesTypeArguments_kinds (depth : Nat) (ts : List Token) :
-    Parse.closesTypeArguments depth ts = closesKinds depth (ts.map (·.kind)) := by
+/-- The scan currently ignores line breaks, but its observation keeps them
+available for the speculative probe. -/
+theorem closesTypeArguments_observations (depth : Nat) (ts : List Token) :
+    Parse.closesTypeArguments depth ts =
+      closesKinds depth ((observations ts).map (·.kind)) := by
   induction ts generalizing depth with
   | nil => rfl
   | cons t ts ih =>
-    simp only [Parse.closesTypeArguments, closesKinds, List.map_cons]
+    simp only [observations, List.map_cons, Token.observe] at ih ⊢
+    simp only [Parse.closesTypeArguments, closesKinds]
     split <;> simp_all
+
+theorem closesTypeArguments_kinds (depth : Nat) (ts : List Token) :
+    Parse.closesTypeArguments depth ts = closesKinds depth (ts.map (·.kind)) := by
+  rw [closesTypeArguments_observations, observations_kinds]
 
 /-- The tokens of a word touch. A `lineBreak` has no tokens, and no tokens
 touch trivially. -/

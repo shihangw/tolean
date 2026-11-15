@@ -12,6 +12,61 @@ namespace tolean.TypeScript.Syntax
 -- parser's tests such as `isPunct`.
 deriving instance ReflBEq, LawfulBEq for TokenKind
 
+/-- A probe can inspect the token kind and the preceding line break without
+depending on absolute source positions. Identifier text remains intact, so
+contextual words such as `as` and `satisfies` remain distinct. -/
+structure TokenObservation where
+  kind : TokenKind
+  newlineBefore : Bool
+deriving BEq, Repr
+
+def Token.observe (t : Token) : TokenObservation := ⟨t.kind, t.newlineBefore⟩
+
+def observations (ts : List Token) : List TokenObservation := ts.map Token.observe
+
+theorem observations_kinds (ts : List Token) :
+    (observations ts).map (·.kind) = ts.map (·.kind) := by
+  simp [observations, Token.observe, List.map_map]
+
+/-- Replacing a prefix cannot change the probe, even when tokens precede or
+follow that prefix. Unlike an equality at one initial state, this relation
+can be used inside a larger expression. -/
+def ProbePrefixEquiv {α β : Type} (probe : List α → β) (a b : List α) : Prop :=
+  ∀ before after, probe (before ++ a ++ after) = probe (before ++ b ++ after)
+
+/-- Every prefix that the source permits is also permitted before the
+printed suffix. A false probe result means that the scan permits it. -/
+def ProbeFollows {α : Type} (probe : List α → Bool) (source printed : List α) : Prop :=
+  ∀ before, probe (before ++ source) = false → probe (before ++ printed) = false
+
+theorem ProbePrefixEquiv.of_eq {α β : Type} {probe : List α → β} {a b : List α}
+    (h : a = b) : ProbePrefixEquiv probe a b := by
+  subst b
+  intro before after
+  rfl
+
+theorem ProbePrefixEquiv.append {α β : Type} {probe : List α → β} {a b c d : List α}
+    (hab : ProbePrefixEquiv probe a b) (hcd : ProbePrefixEquiv probe c d) :
+    ProbePrefixEquiv probe (a ++ c) (b ++ d) := by
+  intro before after
+  calc
+    probe (before ++ (a ++ c) ++ after) = probe (before ++ (b ++ c) ++ after) := by
+      simpa only [List.append_assoc] using hab before (c ++ after)
+    _ = probe (before ++ (b ++ d) ++ after) := by
+      simpa only [List.append_assoc] using hcd (before ++ b) after
+
+theorem ProbeFollows.prefix {α : Type} {probe : List α → Bool} {source printed a b : List α}
+    (h : ProbeFollows probe source printed) (hp : ProbePrefixEquiv probe a b) :
+    ProbeFollows probe (a ++ source) (b ++ printed) := by
+  intro before hbefore
+  have hp' := (ProbePrefixEquiv.of_eq (probe := probe) (rfl : before = before)).append hp
+  have heq := hp' [] source
+  simp only [List.nil_append] at heq
+  have hs : probe ((before ++ b) ++ source) = false := by
+    rw [← heq]
+    simpa only [List.append_assoc] using hbefore
+  simpa only [List.append_assoc] using h (before ++ b) hs
+
 /-- No line break comes before `y`, unless `y` is a `(`. Inside a line, the
 printer puts a line break only before the `(` of a call of `async`, so that
 `tsc` reads a call (`Syntax/Source.lean`). Most proofs read only whether a

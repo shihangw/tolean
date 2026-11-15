@@ -70,13 +70,21 @@ theorem closesKinds_of_skel {d : Nat} {a b : List TokenKind} (h : skel a = skel 
     closesKinds d a = closesKinds d b := by
   rw [← closesKinds_skel d a, h, closesKinds_skel]
 
+/-- The current scan needs only the old skeleton. A later probe can use
+`TokenObservation` and the same prefix-equivalence interface instead. -/
+theorem skel_prefix_equiv {a b : List TokenKind} (h : skel a = skel b) :
+    ProbePrefixEquiv (closesKinds 0) a b := by
+  intro before after
+  apply closesKinds_of_skel
+  simp only [skel_append, h]
+
 /-! ### What follows a node -/
 
 /-- `after`, the printed tokens after a node, ends the scan for a `>` wherever
 `rest`, the tokens after the node in the source, ends it. And `after` does
 not start with `{`. -/
 def Follows (rest after : List TokenKind) : Prop :=
-  (∀ a, closesKinds 0 (a ++ rest) = false → closesKinds 0 (a ++ after) = false) ∧
+  ProbeFollows (closesKinds 0) rest after ∧
     after.head? ≠ some (.punct "{")
 
 /-- The scan of `a ++ [c]`, where `c` is `;` or `)`, finds a `>` only in `a`. -/
@@ -109,13 +117,10 @@ theorem follows_colon {rest : List TokenKind} : Follows rest [.punct ":"] :=
 /-- Tokens with the same skeleton before both lists keep `Follows`. -/
 theorem Follows.prefix {rest after p p' : List TokenKind} (h : Follows rest after) (hs : skel p = skel p')
     (hh : p'.head? ≠ some (.punct "{")) : Follows (p ++ rest) (p' ++ after) := by
-  refine ⟨fun a ha => ?_, ?_⟩
-  · have h1 : closesKinds 0 ((a ++ p') ++ rest) = false := by
-      rw [← ha]; apply closesKinds_of_skel; simp [skel_append, hs]
-    simpa using h.1 (a ++ p') h1
-  · cases p' with
-    | nil => simpa using h.2
-    | cons k _ => simpa using hh
+  refine ⟨h.1.prefix (skel_prefix_equiv hs), ?_⟩
+  cases p' with
+  | nil => simpa using h.2
+  | cons k _ => simpa using hh
 
 /-! ### States -/
 
