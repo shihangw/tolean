@@ -26,7 +26,8 @@ Node can read it back exactly:
 - an error object as `{"error": ["<class>", [["<key>", <value>], …]]}`, with
   its own properties, such as `message`;
 - a date as `{"date": "<time value in decimal>"}`, or `{"date": null}` when
-  it is invalid.
+  it is invalid;
+- a regular expression as `{"regexp": "<compiled pattern and capture count>"}`.
 -/
 namespace tolean.TypeScript.Interpret
 
@@ -235,6 +236,7 @@ partial def toJson : Val Float → Json
     Json.mkObj [("error", Json.arr #[Json.str cls,
       Json.arr (fs.map fun (k, v) => Json.arr #[Json.str k, toJson v]).toArray])]
   | .date t => Json.mkObj [("date", match t with | some i => Json.str (toString i) | none => Json.null)]
+  | .regexp r => Json.mkObj [("regexp", Json.str (reprStr r))]
   -- A function cannot leave the function that declares it, so no result
   -- holds one; the test of the interpreter compares only results.
   | .closure _ _ => Json.mkObj [("function", Json.bool true)]
