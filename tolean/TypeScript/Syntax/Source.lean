@@ -172,6 +172,7 @@ def Expr.words : Expr → List Word
   | .member _ obj name => obj.words ++ [punctWord ".", propertyName name]
   | .optMember _ obj name => obj.words ++ [punctWord "?.", propertyName name]
   | .index _ obj idx => obj.words ++ punctWord "[" :: idx.words ++ [punctWord "]"]
+  | .optIndex _ obj idx => obj.words ++ punctWord "?." :: punctWord "[" :: idx.words ++ [punctWord "]"]
   | .call _ callee args => callee.words ++ callBreak callee ++ enclose "(" ")" (Expr.wordsOf args)
   | .unary _ op arg => symbol op.symbol :: arg.words
   | .prefix _ op arg => punctWord op.symbol :: arg.words
@@ -427,6 +428,7 @@ def Expr.erase : Expr → Expr
   | .member _ obj name => .member noSpan obj.erase name
   | .optMember _ obj name => .optMember noSpan obj.erase name
   | .index _ obj idx => .index noSpan obj.erase idx.erase
+  | .optIndex _ obj idx => .optIndex noSpan obj.erase idx.erase
   | .call _ callee args => .call noSpan callee.erase (Expr.eraseAll args)
   | .unary _ op arg => .unary noSpan op arg.erase
   | .prefix _ op arg => .prefix noSpan op arg.erase
