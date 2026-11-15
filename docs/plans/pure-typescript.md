@@ -252,12 +252,13 @@ a descendant does not mean that the earlier pull request already contains it.
   and calls in its prefix without making replay part of the interpreter's
   contract.
 
-- **Restore the forwarding escape regression.**
+- **Preserve both map-escape regression tests.**
   The [review on #231](https://github.com/shihangw/tolean/pull/231#discussion_r4577273721)
   found that a rebase removed the nested-map case where `forward(a, b)`
-  stores `b` in `a` through `change`, then the caller mutates `b`. The
-  implementation still refuses it. Restore that test alongside the
-  direct-call escape test so both paths stay protected.
+  stores `b` in `a` through `change`, then the caller mutates `b`.
+  [#231](https://github.com/shihangw/tolean/pull/231) restored that test in
+  commit `4bd0eac`, with `refused: true`, alongside the direct-call escape
+  test. Keep both tests so the direct and forwarding paths stay protected.
 
 - **Share literal-encoding normalization between certificate proof paths.**
   The [review on #233](https://github.com/shihangw/tolean/pull/233#discussion_r4576995912)
