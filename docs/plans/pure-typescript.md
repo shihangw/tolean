@@ -131,11 +131,11 @@ sets the restrictions for those later operations.
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| A map borrow with an explicit return, several changed maps, an ordinary returned value, control flow, an imported callee, or a callee that forwards its borrowed map | A function that returns the changed maps, with its ordinary result when there is one. The caller binds the changed maps again. | A call where the caller keeps another name for the same map |
+| A map borrow with an early return, several changed maps, an ordinary returned value, control flow, an imported callee, or a callee that forwards its borrowed map | A function that returns the changed maps, with its ordinary result when there is one. The caller binds the changed maps again. | A call where the caller keeps another name for the same map |
 
 The translator now accepts one changed Map parameter in a void function
 whose body contains only straight-line set and delete statements with atomic
-arguments. The call copies the map in and back out, and `program_sound`
+arguments and an optional terminal bare return. The call copies the map in and back out, and `program_sound`
 covers that call rule. The [TypeScript guide](../typescript/README.md#map-borrows)
 describes this case. The remaining cases need a wider call result, including
 the final parameter bindings when the callee returns or throws.
@@ -228,7 +228,7 @@ leaves a gap.
 2. **P0.** Types and narrowing: `T | undefined` as a type, a test of
    `undefined` that narrows inside an expression, `a?.[i]` and `f?.()`, and
    re-exports.
-8. **P0.** Widen map borrows to explicit returns, several changed maps, an
+8. **P0.** Widen map borrows to early returns, several changed maps, an
    ordinary returned value, control flow, imported callees and forwarding.
 10. **P1.** Sorting: certificates for a sort by a `number` key.
 11. **P2.** Recursion: tagged unions that refer to themselves first, then

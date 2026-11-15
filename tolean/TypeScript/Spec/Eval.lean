@@ -1276,12 +1276,18 @@ def Stmt.hoisted (thr : String → Bool) (cls : String → Option (Option (List 
 /-- The functions of the declarations `ds`, by name, where `thr` says which
 functions can throw: their parameters and their body, with the calls that
 can throw hoisted out of its statements. -/
+def preparedBody (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr)))
+    (guards : List (String × GuardTest))
+    (params : List Param) (ret : Option TypeExpr) (body : Stmt) : Stmt :=
+  Stmt.hoisted thr cls (guardedBody guards params ret
+    (if (borrowParam? params ret body).isSome then body.borrowPrefix else body))
+
 def functionsIn (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr)))
     (guards : List (String × GuardTest))
     (ds : List Decl) : List (String × List String × Stmt) :=
   ds.filterMap fun
     | .function _ _ name _ params ret body =>
-      some (name, params.map (·.name), Stmt.hoisted thr cls (guardedBody guards params ret body))
+      some (name, params.map (·.name), preparedBody thr cls guards params ret body)
     | _ => none
 
 /-- The functions of the module, by name. -/

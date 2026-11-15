@@ -893,7 +893,7 @@ test('normal-completion map borrows copy the final map back without aliases', as
   const change = 'function change(m: Map<bigint, bigint>, x: bigint): void { m.set(1n, x); }\n';
   const cases = [
     ...Array.from({ length: 80 }, (_, seed) => ({
-      source: new Gen(seed + 1000).borrowProgram(),
+      source: new Gen(seed + 1000).borrowProgram(seed % 2 === 1),
       refused: false,
     })),
     {

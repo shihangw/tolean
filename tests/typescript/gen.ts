@@ -1011,7 +1011,7 @@ export class Gen {
   }
 
   /** A normal-completion borrow, including replacement and deletion of keys. */
-  borrowProgram(): string {
+  borrowProgram(terminalReturn = false): string {
     const updates: Array<string> = [];
     for (let i = 0; i < 1 + Math.floor(this.next() * 8); i++) {
       const key = `${Math.floor(this.next() * 4)}n`;
@@ -1019,6 +1019,7 @@ export class Gen {
     }
     return `function change(m: Map<bigint, bigint>, x: bigint): void {
       ${updates.join('\n')}
+      ${terminalReturn ? 'return;' : ''}
     }
     export function f(x: bigint): bigint {
       const m = new Map<bigint, bigint>([[0n, 7n], [2n, 9n]]);
