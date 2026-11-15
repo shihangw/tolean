@@ -32,10 +32,8 @@ certifyOne() {
           { echo failed; echo "A required local-function certificate was refused"; } >"$result"
           return 0
           ;;
-        *)
-          echo skipped >"$result"
-          ;;
       esac
+      echo skipped >"$result"
     fi
     return 0
   fi
