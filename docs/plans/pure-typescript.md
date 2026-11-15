@@ -57,6 +57,11 @@ exact. A construct leaves these tables when Tolean translates it, and the
 | `f?.()` | No accepted program to translate: `Syntax.TypeExpr` and `Translate.Ty` have no function type, and no accepted declaration gives a possibly `undefined` value a callable type. A generic type parameter does not make a value callable. Local function values cannot escape a direct call. | Optional calls stay refused; so does `==` against anything except `null` and `undefined`. |
 | A value re-export, such as `export { a } from "./x.ts"` | Nothing: the names stay in scope | `export *` |
 
+[#247](https://github.com/shihangw/tolean/pull/247) fixes optional indexing
+after a conditional join makes a `Record` nullable, as in
+`(absent ? null : r)?.[k]`. The required-certificate fixture and
+Node-backed interpreter test cover that case. Optional calls remain refused.
+
 ### Functions
 
 | TypeScript | Lean | Refused |
