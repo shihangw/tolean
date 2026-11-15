@@ -96,6 +96,7 @@ theorem Param.beqList_iff : (xs ys : List Param) → Param.beqList xs ys = true 
 mutual
 
 def Expr.beq : Expr → Expr → Bool
+  | .regexp a0 a1 a2, .regexp b0 b1 b2 => decide (a0 = b0) && decide (a1 = b1) && decide (a2 = b2)
   | .ident a0 a1, .ident b0 b1 => decide (a0 = b0) && decide (a1 = b1)
   | .number a0 a1, .number b0 b1 => decide (a0 = b0) && decide (a1 = b1)
   | .bigint a0 a1, .bigint b0 b1 => decide (a0 = b0) && decide (a1 = b1)
@@ -151,6 +152,8 @@ def Expr.beqOpt : Option Expr → Option Expr → Bool
 mutual
 
 theorem Expr.beq_iff : (a b : Expr) → Expr.beq a b = true ↔ a = b
+  | .regexp a0 a1 a2, b => by
+    cases b <;> simp [and_assoc, Expr.beq]
   | .ident a0 a1, b => by
     cases b <;> simp [and_assoc, Expr.beq]
   | .number a0 a1, b => by

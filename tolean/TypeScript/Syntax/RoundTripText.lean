@@ -204,6 +204,7 @@ theorem Expr.fine : ∀ e : Expr, Fine e.words
   | .number _ t => by simpa [Expr.words] using Fine.word (w := [.number t]) (by simp)
   | .bigint _ t => by simpa [Expr.words] using Fine.word (w := [.bigint t]) (by simp)
   | .string _ v => by simpa [Expr.words] using Fine.word (w := [.string v]) (by simp)
+  | .regexp _ v target => by simpa [Expr.words] using Fine.word (w := [.regexp v target]) (by simp)
   | .bool _ b => by simpa [Expr.words] using Fine.word (w := keywordWord (if b then "true" else "false")) (by simp [keywordWord])
   | .null _ => by simpa [Expr.words] using Fine.word (w := keywordWord "null") (by simp [keywordWord])
   | .array _ es => by simpa [Expr.words] using fine_enclose (o := "[") (c := "]") (Expr.fineAll es)
