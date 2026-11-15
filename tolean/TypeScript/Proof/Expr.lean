@@ -5017,6 +5017,7 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
             obtain ⟨rfl, _⟩ := h
             intro ρs ρo v ha hs hv
             simp only [IR.Expr.eval, IR.Expr.evalList] at hv
+            rw [nullableConditionalReceiver_eval] at hv
             cases hx : IR.Expr.eval fs fuel ρo o.value with
             | none => simp [hx] at hv
             | some w =>
