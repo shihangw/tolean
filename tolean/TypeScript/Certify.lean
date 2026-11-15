@@ -441,13 +441,14 @@ def bodyConditionCalls (callee : String) : IR.Body → List (List IR.Expr)
   | .matchTag .. | .matchNull .. => []
   | .state _ | .yield .. | .done .. => []
   | .letArray .. | .letState .. | .fold .. | .throw ..
-  | .bind .. | .letCall .. | .letLifted .. => []
+  | .bind .. | .letCall .. | .letLifted .. | .letBorrow .. => []
 
 /-- Tagged narrowing needs guarded conditions over the original union value. -/
 def hasTaggedConditionScope : IR.Body → Bool
   | .matchTag .. => true
   | .let _ _ rest | .letTuple _ _ rest | .letArray _ _ _ rest
-  | .bind _ _ _ rest | .letCall _ _ _ _ _ _ _ _ _ rest | .letLifted _ _ rest =>
+  | .bind _ _ _ rest | .letCall _ _ _ _ _ _ _ _ _ rest | .letLifted _ _ rest
+  | .letBorrow _ _ _ _ rest =>
     hasTaggedConditionScope rest
   | .ite _ a b | .matchNull _ _ a b | .letState _ a b =>
     hasTaggedConditionScope a || hasTaggedConditionScope b
