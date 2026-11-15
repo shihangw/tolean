@@ -277,12 +277,12 @@ def keyPathType (decls : List IR.Decl) : IR.Ty → List String → Option IR.Ty
   | _, _ => none
 
 mutual
-/-- Lists whose encoding stays a map, so the sort link lemma can rewrite it.
-Literal elements mixed into an append need a separate encoding lemma. -/
+/-- List expressions whose encodings the sort link tactic can reconstruct. -/
 def sortInputShape : IR.Expr → Bool
   | .var _ => true
   | .field e _ _ => sortInputShape e
   | .ext .append es => sortInputShapes es
+  | .list _ _ => true
   | _ => false
 
 def sortInputShapes : List IR.Expr → Bool
@@ -357,6 +357,15 @@ partial def bodyCallbacks : IR.Body → List Callback
   | .letLifted _ _ rest => bodyCallbacks rest
 
 end
+
+/-- A returned sort after simple list bindings. The bindings remain in order
+so the input condition can bind the same names without textual substitution. -/
+def returnedSortInput : IR.Body → Option (List (String × IR.Expr) × IR.Expr)
+  | .value (.listMethod (.sortWith _) items _ _ _ _) => some ([], items)
+  | .let name value rest => do
+    let (bindings, items) ← returnedSortInput rest
+    return ((name, value) :: bindings, items)
+  | _ => none
 
 /-- The body of the `for…of` statement at `span`. -/
 def loopBody (s : Stmt) (span : Span) : Option Stmt :=
@@ -739,6 +748,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     let mut cbIndex := 0
     let mut obligations : List (String × String) := []
     let mut inputConditions : List String := []
+    let mut literalMaps : List String := []
     for (method, param, elem, cbBody, info) in bodyCallbacks outBody do
       cbIndex := cbIndex + 1
       let lemmaName := s!"{name}_cb{cbIndex}"
@@ -827,12 +837,21 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           | throw s!"{file}: the comparator in {name} does not compare keys"
         let elemTy := elem.print names
         if comparesNumbers cbBody then
-          let .value (.listMethod (.sortWith _) items _ _ _ _) := outBody
-            | throw s!"{file}: the sorted list must be a parameter returned directly in {name}"
-          unless (exprNames items).all (fun n => outParams.any (fun (p, _) => p == n)) &&
+          literalMaps := literalMaps ++ [s!"← List.map_singleton (f := {encX})",
+            s!"← List.map_cons (f := {encX})"]
+          let some (bindings, items) := returnedSortInput outBody
+            | throw s!"{file}: the sorted list must be returned directly in {name}"
+          let mut available := outParams.map (·.1)
+          for (localName, value) in bindings do
+            unless sortInputShape value && !(exprNames value).isEmpty &&
+                (exprNames value).all available.contains do
+              throw s!"{file}: the sorted list must be reachable from parameters through list bindings in {name}"
+            available := localName :: available
+          unless !(exprNames items).isEmpty && (exprNames items).all available.contains &&
               scope.isEmpty && sortInputShape items do
             throw s!"{file}: the sorted list must be reachable from parameters and its comparator must not capture locals in {name}"
-          let input := s!"({items.print names})"
+          let lets := String.join (bindings.map fun (n, e) => s!"let {n} := {e.print names}; ")
+          let input := s!"({lets}{items.print names})"
           if keys.length > 1 then
             let subtype := "{ x : " ++ elemTy ++ " // x ∈ items }"
             let mut hypotheses := ""
@@ -1128,8 +1147,13 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         throw s!"{file}: missing argument for the sort precondition in {name}"
       unless (actuals.zip formals).all (fun (e, _, ty) =>
           (exprNames e).all (fun n => outParams.any (fun (p, _) => p == n)) &&
-          (!(ty matches .list _) || sortInputShape e)) do
+          (!(ty matches .list _) || (sortInputShape e && !(exprNames e).isEmpty))) do
         throw s!"{file}: a sort precondition needs arguments reachable from parameters in {name}"
+      for (_, ty) in formals do
+        let .list elem := ty | continue
+        let some enc := encoderOf r elem | continue
+        literalMaps := literalMaps ++ [s!"← List.map_singleton (f := {enc})",
+          s!"← List.map_cons (f := {enc})"]
       for condition in conditions do
         let hname := s!"{name}_sort_precondition{obligations.length}"
         if r.idents.contains hname then
@@ -1159,6 +1183,9 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       s!"    {r.full "tolean.TypeScript.IR.runIn"} (N := {nv}) {outputFs} ⟨\"\", {str name}⟩ {list args} =\n" ++
       s!"      {some_} ({retEnc} ({call})) := by\n" ++
       s!"  {casesOn decls outParams}link_tac [{simpSet}]" ++
+      (if literalMaps.isEmpty then "" else
+        s!"\n  all_goals simp only [{", ".intercalate literalMaps}, ← List.map_append]\n" ++
+        s!"  all_goals simp_all [{simpSet}, -List.map_cons, -List.map_nil, -List.map_map, ← List.map_append]") ++
       -- After a loop that a `return` can end, the evaluator matches on the
       -- loop's outcome, which is itself a match on the value to return. Once
       -- that match is split, the arms for a `break` or a `continue` close, and

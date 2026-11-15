@@ -904,8 +904,8 @@ test('number-sort preconditions pass through forwarding calls', () => {
   }
 });
 
-test('number sorts read concatenated parameter lists', () => {
-  const source = 'export function f(xs: ReadonlyArray<number>, ys: ReadonlyArray<number>): number[] { return [...xs, ...ys].sort((a, b) => a - b); }';
+test('number sorts read local concatenations with literal elements', () => {
+  const source = 'export function f(xs: ReadonlyArray<number>, ys: ReadonlyArray<number>): number[] { const first = xs; const both = [...first, ...ys, 0, 1]; return both.toSorted((a, b) => a - b); }';
   const pairs = [[[], []], [[2, -0], [0, 1]],
     [[Number.MAX_VALUE], [-Number.MAX_VALUE, Number.MIN_VALUE]]];
   const input = { programs: [{ source, calls: pairs.map(([xs, ys]) =>
@@ -916,7 +916,7 @@ test('number sorts read concatenated parameter lists', () => {
   expect(lean?.parsed).toBe(true);
   if (lean === undefined || !lean.parsed) return;
   for (const [i, [xs, ys]] of pairs.entries()) {
-    expect(lean.results[i]).toEqual({ value: [...xs!, ...ys!].sort((a, b) => a - b).map(encode) });
+    expect(lean.results[i]).toEqual({ value: [...xs!, ...ys!, 0, 1].sort((a, b) => a - b).map(encode) });
   }
 });
 

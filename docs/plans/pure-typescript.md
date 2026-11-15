@@ -100,7 +100,7 @@ value claim already does.
 | TypeScript | Lean | Refused |
 |---|---|---|
 | The `index` argument of a callback other than one of `map`, and the `array` argument of any callback | The `List` functions that also pass the index, as `List.mapIdx` does for `map`, and the list itself | |
-| A number-sort certificate for a local list, an append with literal elements, another computed list, or a call inside a larger expression | A hypothesis over the parameters excludes `NaN` keys, or requires finite keys for a difference. Direct sorts of parameters, their fields and spread concatenations already get one hypothesis per numeric key, as do direct forwarding calls. | |
+| A number-sort certificate for another computed list or a call inside a larger expression | A hypothesis over the parameters excludes `NaN` keys, or requires finite keys for a difference. Direct sorts of parameters, their fields, local aliases and spread concatenations with literal elements already get one hypothesis per numeric key, as do direct forwarding calls. | Lists that cannot be reached from parameters. |
 
 The certifier uses `sortValues_sortWith_on` for a direct sort of a
 parameter. Its input hypothesis excludes NaN keys for a comparison, or
@@ -231,8 +231,8 @@ leaves a gap.
    to, as the types table explains; they are not unfinished work in this step.
 8. **P0.** Widen map borrows to early returns, several changed maps, an
    ordinary returned value, control flow and imported callees.
-10. **P1.** Sorting: number-key certificates for local lists, remaining
-    computed lists and calls inside larger expressions.
+10. **P1.** Sorting: number-key certificates for remaining computed lists
+    and calls inside larger expressions.
 11. **P2.** Recursion: tagged unions that refer to themselves first, then
     `@decreases`, mutual recursion, and `while` loops. Add certificates for
     self-referential interfaces and recursive functions, with existential
