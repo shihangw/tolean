@@ -15,4 +15,7 @@ def byValue {N : Type} [JSNumber N] (xs : List (Reading N)) : List (Reading N) :
 def numbers {N : Type} [JSNumber N] (xs : List N) : List N :=
   (JSNumber.sortWith (fun (a : N) (b : N) => (if (JSNumber.lt a b) then (JSNumber.neg ((JSNumber.ofSafeInt (N := N) (1 : Int)))) else (if (JSNumber.lt b a) then (JSNumber.ofSafeInt (N := N) (1 : Int)) else (JSNumber.ofSafeInt (N := N) (0 : Int))))) xs)
 
+def renamed {N : Type} [JSNumber N] (x : List N) : List N :=
+  (JSNumber.sortWith (fun (a : N) (b : N) => (if (JSNumber.lt a b) then (JSNumber.neg ((JSNumber.ofSafeInt (N := N) (1 : Int)))) else (if (JSNumber.lt b a) then (JSNumber.ofSafeInt (N := N) (1 : Int)) else (JSNumber.ofSafeInt (N := N) (0 : Int))))) x)
+
 end Test

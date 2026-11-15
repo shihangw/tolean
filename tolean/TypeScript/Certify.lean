@@ -781,7 +781,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           let hname := s!"{name}_sort_precondition"
           if r.idents.contains hname then
             throw s!"{file}: reserved certificate hypothesis name {hname}"
-          let condition := fun items => s!"∀ x ∈ {items}, tolean.TypeScript.JSNumber.isNaN ({key} x) = false"
+          let condition := fun items => s!"∀ _sortItem' ∈ {items}, tolean.TypeScript.JSNumber.isNaN ({key} _sortItem') = false"
           obligations := obligations ++ [(hname, condition input)]
           loopLemmas := loopLemmas.push (r.cert lemmaName)
           thms := thms.push <|

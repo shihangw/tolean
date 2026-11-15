@@ -11,3 +11,7 @@ export function byValue(xs: ReadonlyArray<Reading>): Reading[] {
 export function numbers(xs: ReadonlyArray<number>): number[] {
   return xs.toSorted((a, b) => (a < b) ? -1 : (a > b) ? 1 : 0);
 }
+
+export function renamed(x: ReadonlyArray<number>): number[] {
+  return x.toSorted((a, b) => (a < b) ? -1 : (a > b) ? 1 : 0);
+}
