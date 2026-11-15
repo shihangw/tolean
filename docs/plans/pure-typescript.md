@@ -100,7 +100,7 @@ value claim already does.
 | TypeScript | Lean | Refused |
 |---|---|---|
 | The `index` argument of a callback other than one of `map`, and the `array` argument of any callback | The `List` functions that also pass the index, as `List.mapIdx` does for `map`, and the list itself | |
-| A number-sort certificate inside a callback other than `map` or `filter`, inside a loop, for a remaining computed list shape, or in another call scope | A hypothesis over the parameters excludes `NaN` keys, or requires finite keys for a difference. Sorts and calls in ordinary expressions and in `map` and `filter` already carry these conditions. Inputs may use parameter fields, local aliases, spreads, literal elements, maps, filters, slices, conditionals and calls. Calls in record literals and nullable matches still need condition propagation. | Lists that cannot be reached from parameters. |
+| A number-sort certificate inside a callback other than `map` or `filter`, for changing loop state or body-local lists, for a remaining computed list shape, or in another call scope | A hypothesis over the parameters excludes `NaN` keys, or requires finite keys for a difference. Sorts and calls in ordinary expressions, in `map` and `filter`, and over loop elements or captured inputs already carry these conditions. Inputs may use parameter fields, local aliases, spreads, literal elements, maps, filters, slices, conditionals and calls. Calls in record literals and nullable matches still need condition propagation. | Lists that cannot be reached from parameters. |
 
 The certifier uses `sortValues_sortWith_on` for a direct sort of a
 parameter. Its input hypothesis excludes NaN keys for a comparison, or
@@ -231,7 +231,7 @@ leaves a gap.
    to, as the types table explains; they are not unfinished work in this step.
 8. **P0.** Widen map borrows to early returns, several changed maps, an
    ordinary returned value, control flow and imported callees.
-10. **P1.** Sorting: number-key certificates inside the remaining callbacks and loops,
+10. **P1.** Sorting: number-key certificates inside the remaining callbacks, for changing loop state and body locals,
     remaining computed list shapes, and calls in nullable matches.
 11. **P2.** Recursion: tagged unions that refer to themselves first, then
     `@decreases`, mutual recursion, and `while` loops. Add certificates for

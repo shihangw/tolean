@@ -511,12 +511,12 @@ def casesOn (decls : List IR.Decl) (vars : List (String × IR.Ty)) : String :=
     (s!"(try {·}) <;> "))
 
 /-- The loops of a body, inner ones first, in the order of the source. -/
-partial def loopsOf : IR.Body → List (List String × String × IR.Body × IR.LoopInfo)
+partial def loopsOf : IR.Body → List (List String × String × IR.Body × IR.LoopInfo × IR.Expr)
   | .value _ | .state _ | .yield .. | .done .. | .exit .. => []
   | .let _ _ rest | .letArray _ _ _ rest | .letTuple _ _ rest => loopsOf rest
   | .ite _ a b | .matchNull _ _ a b | .matchTag _ _ _ _ _ a b => loopsOf a ++ loopsOf b
   | .letState _ branch rest => loopsOf branch ++ loopsOf rest
-  | .fold names element body _ rest info => loopsOf body ++ [(names, element, body, info)] ++ loopsOf rest
+  | .fold names element body items rest info => loopsOf body ++ [(names, element, body, info, items)] ++ loopsOf rest
   | .throw _ => []
   | .letCall _ _ _ _ _ _ _ body _ rest => loopsOf body ++ loopsOf rest
   | .bind _ _ _ rest | .letLifted _ _ rest | .letBorrow _ _ _ _ rest => loopsOf rest
@@ -844,15 +844,17 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     let parentOf := fun span => callbacks.find? fun (_, _, _, cb, _, _) =>
       (exprCallbacks cb).any fun (_, _, _, _, child, _) => child.span == span
     let mut callbackConditions : List (Span × String) := []
+    let mut loopConditions : List (Span × String) := []
     let mut callbackCalls : List String := []
-    let hasNumberSort := fun callbacks : List Callback => callbacks.any fun (method, _, _, cb, _, _) =>
-      (method matches .list (.sortWith _)) && comparesNumbers cb
-    if (loopsOf outBody).any (fun (_, _, body, _) => hasNumberSort (bodyCallbacks body)) then
-      throw s!"{file}: number sorts inside callback or loop bodies need element or state preconditions in {name}"
+    let enclosingLoopsOf := fun span => (loopsOf outBody).filter fun (_, _, body, _, _) =>
+      (bodyCallbacks body).any fun (_, _, _, _, child, _) => child.span == span
+    let parentLoopOf := fun span => (loopsOf outBody).find? fun (_, _, body, _, _) =>
+      (loopsOf body).any fun (_, _, _, child, _) => child.span == span
     for (method, param, elem, cbBody, info, items) in bodyCallbacks outBody do
       cbIndex := cbIndex + 1
       let lemmaName := s!"{name}_cb{cbIndex}"
       let parent := parentOf info.span
+      let enclosingLoop := (enclosingLoopsOf info.span).head?
       let mut childConditions := callbackConditions.filterMap fun (span, condition) =>
         match parentOf span with
         | some (_, _, _, _, parentInfo, _) => if parentInfo.span == info.span then some condition else none
@@ -867,7 +869,15 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
               (sortInputNames e).all available.contains &&
               (!(ty matches .list _) || sortInputShape e)) do
             throw s!"{file}: callback sort arguments must be reachable from its element or captured inputs in {name}"
+          for (stateNames, _, _, _, _) in enclosingLoopsOf info.span do
+            if actuals.any (fun e => (sortInputNames e).any stateNames.contains) then
+              throw s!"{file}: a sort condition depends on changing loop state in {name}"
           callbackCalls := callee :: callbackCalls
+          for (_, ty) in formals do
+            let .list itemTy := ty | continue
+            let some enc := encoderOf r itemTy | continue
+            literalMaps := literalMaps ++ [s!"← List.map_singleton (f := {enc})",
+              s!"← List.map_cons (f := {enc})"]
           for condition in conditions do
             let binders := " ".intercalate (formals.map fun (p, t) => s!"({p} : {t.print names})")
             let arguments := " ".intercalate (actuals.map fun e => s!"({e.print names})")
@@ -962,9 +972,19 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           conditionalLemmas := conditionalLemmas ++ [r.cert lemmaName]
           literalMaps := literalMaps ++ [s!"← List.map_singleton (f := {encX})",
             s!"← List.map_cons (f := {encX})"]
-          let bindings := if parent.isSome then [] else (leadingBindings outBody).filter fun (n, _) =>
+          let nested := parent.isSome || enclosingLoop.isSome
+          let bindings := if nested then [] else (leadingBindings outBody).filter fun (n, _) =>
             info.scope.any fun (p, _) => p == n
-          let mut available := if parent.isSome then info.scope.map (·.1) else outParams.map (·.1)
+          let mut available := if nested then info.scope.map (·.1) else outParams.map (·.1)
+          for (stateNames, _, _, _, _) in enclosingLoopsOf info.span do
+            if (sortInputNames items).any stateNames.contains then
+              throw s!"{file}: a sort condition depends on changing loop state in {name}"
+          if let some (_, loopElement, _, loopInfo, _) := enclosingLoop then
+            let callbackParams := callbacks.filterMap fun (_, p, _, cb, _, _) =>
+              if (exprCallbacks cb).any (fun (_, _, _, _, child, _) => child.span == info.span) then some p else none
+            let reachable := loopElement :: loopInfo.scope.map (·.1) ++ callbackParams
+            unless (sortInputNames items).all reachable.contains do
+              throw s!"{file}: a loop sort condition depends on body locals in {name}"
           for (localName, value) in bindings do
             unless sortInputShape value && !(sortInputNames value).isEmpty &&
                 (sortInputNames value).all available.contains do
@@ -997,6 +1017,8 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
                 hypotheses := hypotheses ++ s!" ({hn} : {condition "items"})"
                 if parent.isSome then
                   callbackConditions := callbackConditions ++ [(info.span, condition input)]
+                else if let some (_, _, _, loopInfo, _) := enclosingLoop then
+                  loopConditions := loopConditions ++ [(loopInfo.span, condition input)]
                 else
                   obligations := obligations ++ [(hname, condition input)]
                   inputConditions := inputConditions ++ [condition input]
@@ -1059,6 +1081,8 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
             s!"    simpa only [hs] using {orderLemma} {key} items hkeys"
           if parent.isSome then
             callbackConditions := callbackConditions ++ [(info.span, condition input)]
+          else if let some (_, _, _, loopInfo, _) := enclosingLoop then
+            loopConditions := loopConditions ++ [(loopInfo.span, condition input)]
           else
             obligations := obligations ++ [(hname, condition input)]
             inputConditions := inputConditions ++ [condition input]
@@ -1125,6 +1149,8 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         let raw := s!"∀ _sortElement' ∈ ({items.print names}), ((fun ({param} : {elem.print names}) => {predicate}) _sortElement')"
         if parent.isSome then
           callbackConditions := callbackConditions ++ [(info.span, raw)]
+        else if let some (_, _, _, loopInfo, _) := enclosingLoop then
+          loopConditions := loopConditions ++ [(loopInfo.span, raw)]
         else
           let bindings := (leadingBindings outBody).filter fun (n, _) => info.scope.any fun (p, _) => p == n
           let mut available := outParams.map (·.1)
@@ -1176,14 +1202,38 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         s!"  {casesOn decls vars}link_tac [{simpSet}]"
     let mut index := 0
     let mut returnsLoop := false
-    for (stateNames, element, body, info) in loopsOf outBody do
+    for (stateNames, element, body, info, loopItems) in loopsOf outBody do
       index := index + 1
       let lemmaName := s!"{name}_loop{index}"
+      let parentLoop := parentLoopOf info.span
+      let mut conditions := loopConditions.filterMap fun (span, condition) =>
+        if span == info.span then some condition else none
+      for (callee, (formals, calleeConditions)) in functionConditions do
+        if calleeConditions.isEmpty then continue
+        for actuals in bodyConditionCalls callee body do
+          let available := element :: info.scope.map (·.1)
+          let ancestorState := (loopsOf outBody).flatMap fun (ns, _, b, _, _) =>
+            if (loopsOf b).any (fun (_, _, _, child, _) => child.span == info.span) then ns else []
+          unless actuals.length == formals.length &&
+              actuals.all (fun e => (sortInputNames e).all available.contains &&
+                !(sortInputNames e).any ancestorState.contains) do
+            throw s!"{file}: a loop sort condition depends on changing state or body locals in {name}"
+          callbackCalls := callee :: callbackCalls
+          for (_, ty) in formals do
+            let .list itemTy := ty | continue
+            let some enc := encoderOf r itemTy | continue
+            literalMaps := literalMaps ++ [s!"← List.map_singleton (f := {enc})",
+              s!"← List.map_cons (f := {enc})"]
+          for condition in calleeConditions do
+            let binders := " ".intercalate (formals.map fun (p, t) => s!"({p} : {t.print names})")
+            let arguments := " ".intercalate (actuals.map fun e => s!"({e.print names})")
+            conditions := conditions ++ [s!"((fun {binders} => {condition}) {arguments})"]
+      let restricted := !conditions.isEmpty
       let some bodyStmt := loopBody syntaxBody info.span
         | throw s!"{file}: no loop at {info.span.start.line}:{info.span.start.col} in {name}"
       -- The loop lemma's rewrite does not reach a list of encoded lists yet,
       -- so a loop over arrays gets no certificate instead of one that fails.
-      if info.elem matches .list .. then
+      if (info.elem matches .list ..) && !restricted then
         throw s!"{file}: cannot certify a loop over arrays of arrays in {name} yet"
       let some encX := encoderOf r info.elem | throw s!"{file}: cannot encode the elements of a loop in {name}"
       let closures := (closureReads body).foldl (init := []) fun found entry =>
@@ -1203,6 +1253,32 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         match coded.find? (·.1 == n) with
         | some (_, _, dec) => s!"({dec} ({ρ}.lookup {str n}))"
         | none => "default"
+      let predicate := " ∧ ".intercalate (conditions.map fun c => s!"({c})")
+      let keyInvariant (ρ : String) : String :=
+        let binders := " ".intercalate (info.scope.map fun (n, t) => s!"({n} : {t.print names})")
+        let arguments := String.join (info.scope.map fun (n, _) => s!" {decode ρ n}")
+        s!"∀ x ∈ items, ((fun ({element} : {info.elem.print names}) {binders} => {predicate}) x{arguments})"
+      if restricted then
+        let raw := s!"∀ _sortElement' ∈ ({loopItems.print names}), ((fun ({element} : {info.elem.print names}) => {predicate}) _sortElement')"
+        if let some (outerState, _, _, outerInfo, _) := parentLoop then
+          if (sortInputNames loopItems).any outerState.contains then
+            throw s!"{file}: a nested sort condition depends on changing loop state in {name}"
+          loopConditions := loopConditions ++ [(outerInfo.span, raw)]
+        else
+          let bindings := (leadingBindings outBody).filter fun (n, _) => info.scope.any fun (p, _) => p == n
+          let mut available := outParams.map (·.1)
+          for (n, e) in bindings do
+            unless sortInputShape e && (sortInputNames e).all available.contains do
+              throw s!"{file}: loop sort conditions must be reachable from parameters in {name}"
+            available := n :: available
+          unless sortInputShape loopItems && !(sortInputNames loopItems).isEmpty &&
+              (sortInputNames loopItems).all available.contains do
+            throw s!"{file}: loop sort conditions must be reachable from parameters in {name}"
+          let condition := "(" ++ String.join (bindings.map fun (n, e) => s!"let {n} := {e.print names}; ") ++ raw ++ ")"
+          let hn := s!"{name}_sort_precondition{obligations.length}"
+          if r.idents.contains hn then throw s!"{file}: reserved certificate hypothesis name {hn}"
+          obligations := obligations ++ [(hn, condition)]
+          inputConditions := inputConditions ++ [condition]
       let count := stateNames.length
       let upd (s ρ : String) : String :=
         (stateNames.zipIdx.foldl (init := ρ) fun acc (n, i) =>
@@ -1213,10 +1289,11 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         if count == 1 then decode ρ stateNames.head! else
           "(" ++ ", ".intercalate (stateNames.map (decode ρ)) ++ ")"
       let inv (ρ : String) : String :=
-        " ∧ ".intercalate ((coded.map fun (n, e, dec) =>
+        let shape := " ∧ ".intercalate ((coded.map fun (n, e, dec) =>
           s!"{ρ}.lookup {str n} = some ({e} ({dec} ({ρ}.lookup {str n})))") ++
           closures.map fun (n, value) =>
             s!"{ρ}.lookup {str n} = some ({value})")
+        if restricted then s!"({shape}) ∧ ({keyInvariant ρ})" else shape
       let scopeNames := scope.map (·.1)
       let stepLines := IR.indentBy "        " (body.lines names)
       -- Every binder has its type, as in the output's loop (see `IR.foldBinders`).
@@ -1258,8 +1335,9 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         if info.returns.isSome then
           s!"(tolean.TypeScript.Proof.retResult {encR} {getRet} {getS} (fun s ρ => {upd "s" "ρ"}) {ρ} {runLoop ρ})"
         else s!"(.normal {upd (runLoop ρ) ρ})"
-      let loopLemma := if info.returns.isSome then "runFold_forInRet"
-        else if info.breaks then "runFold_forIn" else "runFold_foldl"
+      let loopLemma := (if info.returns.isSome then "runFold_forInRet"
+        else if info.breaks then "runFold_forIn" else "runFold_foldl") ++
+        (if restricted then "_on" else "")
       let loopArgs := if info.returns.isSome then s!"{encX} {encR} {getRet} {getS} {init}" else encX
       let initProof := if info.returns.isSome then " (fun _ => ⟨rfl, rfl⟩)" else ""
       let stepNames := if info.returns.isSome then
@@ -1279,9 +1357,10 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       -- `obtain h0 := hI` would lose the name, so one hypothesis gets a `have`.
       let bindHyps := if hypNames.length == 1 then "have h0 := hI"
         else "obtain ⟨" ++ ", ".intercalate hypNames ++ "⟩ := hI"
+      let bindHyps := (if restricted then "obtain ⟨hI, hkeys⟩ := hI\n    " else "") ++ bindHyps
       let generalize (ρ : String) (which : List (String × String × String)) : String :=
         String.join (which.zipIdx.map fun ((n, _, dec), i) =>
-          s!"    generalize {dec} ({ρ}.lookup {str n}) = v{i} at h{i} ⊢\n")
+          s!"    generalize {dec} ({ρ}.lookup {str n}) = v{i} at h{i}{if restricted then " hkeys" else ""} ⊢\n")
       let stateCoded := coded.take count
       let destruct := if count ≤ 1 then "" else
         s!"    obtain ⟨{", ".intercalate ((List.range count).map (s!"s{·}"))}⟩ := s\n"
@@ -1293,7 +1372,11 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       let stateVars := if count ≤ 1 then ["s"].zip info.stateTypes
         else (List.range count).map (s!"s{·}") |>.zip info.stateTypes
       let loopVars := ("x", info.elem) :: stateVars ++ vars.zipIdx.map fun ((_, t), i) => (s!"v{i}", t)
+      let rewrites := if !restricted || conditionalLemmas.isEmpty then "" else
+        "    all_goals repeat' first\n" ++ String.join (conditionalLemmas.map fun lemma =>
+          s!"      | rw [{lemma}]\n")
       loopLemmas := loopLemmas.push (r.cert lemmaName)
+      if restricted then conditionalLemmas := conditionalLemmas ++ [r.cert lemmaName]
       thms := thms.push <|
         s!"theorem {lemmaName} {generic} (fs : List (tolean.DeclRef × List String × tolean.TypeScript.IR.Body)){hfs}\n" ++
         s!"    (fuel : Nat) (items : {itemsTy}) (ρ : Env {nv}) (hI : {inv "ρ"}) :\n" ++
@@ -1301,12 +1384,20 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         s!"      ({term body}) ρ (List.map {encX} items) =\n" ++
         s!"      some {result "ρ"} := by\n" ++
         s!"  refine tolean.TypeScript.Proof.{loopLemma} fs {fuel} _ {str element} _ {loopArgs} (fun s ρ => {upd "s" "ρ"})\n" ++
-        s!"    (fun ρ => {decState "ρ"}) (fun ρ => {stepFn "ρ"}) (fun ρ => {inv "ρ"}){initProof} ?_ ?_ items ρ hI\n" ++
-        s!"  · intro ρ s x hI\n" ++
+        s!"    (fun ρ => {decState "ρ"}) (fun ρ => {stepFn "ρ"}) (fun ρ => {inv "ρ"}){initProof}" ++
+        (if restricted then " items ?_ ?_ ρ hI\n" else " ?_ ?_ items ρ hI\n") ++
+        s!"  · intro ρ s x hI{if restricted then " hx" else ""}\n" ++
         substHfs ++
         s!"    {bindHyps}\n    try simp only []\n" ++
         generalize "ρ" coded ++ destruct ++
-        s!"    {casesOn decls loopVars}link_tac [{simpSet}, {", ".intercalate hypNames}]\n" ++
+        (if restricted then "    have hs := hkeys x hx\n" else "") ++
+        s!"    {casesOn decls loopVars}link_tac [{simpSet}, {", ".intercalate hypNames}{if restricted then ", hs" else ""}]\n" ++
+        (if !restricted || literalMaps.isEmpty then "" else
+          s!"    all_goals (try simp only [{", ".intercalate literalMaps}, ← List.map_append])\n") ++
+        rewrites ++
+        (if restricted then s!"    all_goals (try simp_all [{simpSet}, hs])\n" ++
+          s!"    all_goals (try link_tac [{simpSet}, hs, {", ".intercalate hypNames}])\n" ++
+          "    all_goals first | assumption | rfl\n" else "") ++
         s!"  · intro ρ hI\n" ++
         s!"    {bindHyps}\n    try simp only []\n" ++
         generalize "ρ" stateCoded ++
