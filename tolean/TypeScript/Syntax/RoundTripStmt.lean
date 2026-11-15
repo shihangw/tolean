@@ -580,7 +580,7 @@ theorem Expr.firstWord : ∀ e : Expr, ∃ w ws, e.words = w :: ws ∧ w ≠ []
   | .optMember _ o _ => by
     obtain ⟨w, ws, h, hw⟩ := Expr.firstWord o
     exact ⟨w, _, by simp only [Expr.words, h, List.cons_append]; exact rfl, hw⟩
-  | .index _ o _ => by
+  | .index _ o _ | .optIndex _ o _ => by
     obtain ⟨w, ws, h, hw⟩ := Expr.firstWord o
     exact ⟨w, _, by simp only [Expr.words, h, List.cons_append]; exact rfl, hw⟩
   | .call _ c _ => by
@@ -2200,7 +2200,7 @@ theorem Expr.inFree_erase : ∀ e : Expr, e.erase.inFree = e.inFree
   | .array _ es => by simp only [Expr.erase, Expr.inFree]; exact Expr.inFreeList_eraseAll es
   | .member _ e _ => by simp only [Expr.erase, Expr.inFree]; exact Expr.inFree_erase e
   | .optMember _ e _ => by simp only [Expr.erase, Expr.inFree]; exact Expr.inFree_erase e
-  | .index _ e _ => by simp only [Expr.erase, Expr.inFree]; exact Expr.inFree_erase e
+  | .index _ e _ | .optIndex _ e _ => by simp only [Expr.erase, Expr.inFree]; exact Expr.inFree_erase e
   | .call _ e _ => by simp only [Expr.erase, Expr.inFree]; exact Expr.inFree_erase e
   | .unary _ _ e => by simp only [Expr.erase, Expr.inFree]; exact Expr.inFree_erase e
   | .prefix _ _ e => by simp only [Expr.erase, Expr.inFree]; exact Expr.inFree_erase e
@@ -2426,7 +2426,7 @@ theorem Expr.lessFree_erase : ∀ e : Expr, e.erase.lessFree = e.lessFree
   | .unary _ _ e => by simp only [Expr.erase, Expr.lessFree]; exact Expr.lessFree_erase e
   | .prefix _ _ e => by simp only [Expr.erase, Expr.lessFree]; exact Expr.lessFree_erase e
   | .postfix _ _ e => by simp only [Expr.erase, Expr.lessFree]; exact Expr.lessFree_erase e
-  | .index _ a b => by simp only [Expr.erase, Expr.lessFree, Expr.lessFree_erase a, Expr.lessFree_erase b]
+  | .index _ a b | .optIndex _ a b => by simp only [Expr.erase, Expr.lessFree, Expr.lessFree_erase a, Expr.lessFree_erase b]
   | .assign _ _ a b => by simp only [Expr.erase, Expr.lessFree, Expr.lessFree_erase a, Expr.lessFree_erase b]
   | .call _ c as => by
     simp only [Expr.erase, Expr.lessFree, Expr.lessFree_erase c, Expr.lessFreeList_eraseAll as]
@@ -2483,7 +2483,7 @@ theorem Expr.afterOK_head : ∀ (e : Expr) {a b : List TokenKind}, e.lessFree = 
     simp only [Expr.afterOK]; exact Expr.afterOK_head o hf rfl
   | .arrow _ _ _ b, _, _, hf, h => by
     simp only [Expr.lessFree] at hf; simp only [Expr.afterOK]; exact Expr.afterOK_head b hf h
-  | .index _ o i, a, b, hf, h => by
+  | .index _ o i, a, b, hf, h | .optIndex _ o i, a, b, hf, h => by
     simp only [Expr.lessFree, Bool.and_eq_true] at hf
     simp only [Expr.afterOK]
     congr 1

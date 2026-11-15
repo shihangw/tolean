@@ -1223,7 +1223,7 @@ def exprChanges (fns : List (String × List String)) : Expr → List String
     calleeChanges fns callee ++ exprChanges fns callee ++ exprsChanges fns args
   | .array _ elems => exprsChanges fns elems
   | .object _ props => propsChanges fns props
-  | .index _ a b | .binary _ _ a b => exprChanges fns a ++ exprChanges fns b
+  | .index _ a b | .optIndex _ a b | .binary _ _ a b => exprChanges fns a ++ exprChanges fns b
   | .cond _ a b c => exprChanges fns a ++ exprChanges fns b ++ exprChanges fns c
   | _ => []
 
@@ -2590,6 +2590,16 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
     let o ← translateExpr fuel env none obj
     let (bind, type) ← optFieldType s o.type name
     return ⟨.ext (.optField [name] bind) [o.code], false, type⟩
+  | .optIndex s obj key =>
+    let o ← translateExpr fuel env none obj
+    let elem ← orReject (match o.type with
+      | .optional (.array t) | .nullable (.array t) => some t
+      | _ => none) s "optional indexing requires a nullable or optional array"
+    if elem.isMaybe then reject s "an index of an array of nullable values could give null or undefined"
+    let .number _ text := key | reject key.span "optional indexing currently requires a number literal"
+    let k ← orReject (safeIntegerValue? text) key.span "a number literal must be a safe integer"
+    unless 0 ≤ k do reject key.span "an index must not be negative"
+    return ⟨.ascribe (.ext (.optIndexLit k.toNat) [o.value]) (Ty.optional elem).lean, false, .optional elem⟩
   | .index s obj key =>
     let o ← translateExpr fuel env none obj
     match o.type.tupleElems? with
