@@ -168,7 +168,9 @@ partial def exprCalls : Expr → List String
   | .index _ a b | .binary _ _ a b | .assign _ _ a b => exprCalls a ++ exprCalls b
   | .cond _ a b c => exprCalls a ++ exprCalls b ++ exprCalls c
   | .array _ es => es.flatMap exprCalls
-  | .object _ ps => ps.flatMap fun | .keyValue _ _ v => exprCalls v | _ => []
+  | .object _ ps => ps.flatMap fun
+      | .keyValue _ _ v | .spread _ v => exprCalls v
+      | .shorthand .. => []
   | .arrow _ _ _ body => exprCalls body
   | _ => []
 
@@ -417,7 +419,9 @@ def conditionCalls (callee : String) : IR.Expr → List (List IR.Expr)
   | .ext _ es | .list es _ | .tuple es => conditionCallsList callee es
   | .struct fields _ _ => conditionCallFields callee fields
   | .structUpdate base fields => conditionCalls callee base ++ conditionCallFields callee fields
-  | _ => []
+  -- Nullable branches bind a narrowed value, so their conditions need guards.
+  | .matchNull .. => []
+  | .int _ | .none | .bool _ | .string _ | .var _ | .enumCase .. | .tagValue _ => []
 
 def conditionCallsList (callee : String) : List IR.Expr → List (List IR.Expr)
   | [] => []
@@ -432,7 +436,23 @@ def bodyConditionCalls (callee : String) : IR.Body → List (List IR.Expr)
   | .value e | .exit e _ => conditionCalls callee e
   | .let _ e rest | .letTuple _ e rest => conditionCalls callee e ++ bodyConditionCalls callee rest
   | .ite c a b => conditionCalls callee c ++ bodyConditionCalls callee a ++ bodyConditionCalls callee b
-  | _ => []
+  -- Tagged and nullable branches rebind the scrutinee at a narrower type.
+  -- Do not lift their conditions into the original parameter scope.
+  | .matchTag .. | .matchNull .. => []
+  | .state _ | .yield .. | .done .. => []
+  | .letArray .. | .letState .. | .fold .. | .throw ..
+  | .bind .. | .letCall .. | .letLifted .. => []
+
+/-- Tagged narrowing needs guarded conditions over the original union value. -/
+def hasTaggedConditionScope : IR.Body → Bool
+  | .matchTag .. => true
+  | .let _ _ rest | .letTuple _ _ rest | .letArray _ _ _ rest
+  | .bind _ _ _ rest | .letCall _ _ _ _ _ _ _ _ _ rest | .letLifted _ _ rest =>
+    hasTaggedConditionScope rest
+  | .ite _ a b | .matchNull _ _ a b | .letState _ a b =>
+    hasTaggedConditionScope a || hasTaggedConditionScope b
+  | .fold _ _ body _ rest _ => hasTaggedConditionScope body || hasTaggedConditionScope rest
+  | .value _ | .exit .. | .state _ | .yield .. | .done .. | .throw _ => false
 
 /-- The body of the `for…of` statement at `span`. -/
 def loopBody (s : Stmt) (span : Span) : Option Stmt :=
@@ -1359,6 +1379,8 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       let sourceCount := (((stmtsOf syntaxBody).flatMap stmtCalls).filter (· == callee)).length -
         (callbackCalls.filter (· == callee)).length
       unless calls.length == sourceCount do
+        if hasTaggedConditionScope outBody then
+          throw s!"{file}: a call with number-sort preconditions in unsupported tagged narrowing scope in {name}"
         throw s!"{file}: a call with number-sort preconditions inside a callback or unsupported scope in {name}"
       for actuals in calls do
         unless actuals.length == formals.length do
