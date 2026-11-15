@@ -4,7 +4,7 @@
  * `checkTranslate.ts` translates them and compiles the output, and
  * `interpreter.test.ts` runs them in the interpreter and in Node. A program has
  * up to three interfaces, some of them declared as a `Record` over a literal
- * union, and up to three exported functions. A function calls
+ * union, and up to four exported functions. A function calls
  * only the functions before it, so no program recurses.
  */
 
@@ -30,7 +30,7 @@ export type Ty =
   | { k: 'boolean' }
   | { k: 'string' }
   | { k: 'nullable'; of: Ty }
-  /** An optional parameter `p?: T`, only ever the last parameter. */
+  /** A value that may be undefined, including an optional parameter. */
   | { k: 'optional'; of: Ty }
   | { k: 'array'; of: Ty }
   | { k: 'struct'; name: string };
@@ -1006,6 +1006,20 @@ export class Gen {
       lines.push(...this.body(vars, ret, 2, false));
       out.push(`export function ${name}(${signature}): ${show(ret)} {`, ...lines.map((l) => `  ${l}`), '}');
       this.functions.push({ name, params, ret });
+    }
+    // An explicitly optional local keeps its type across an assignment in a
+    // branch. Both Node and the interpreter run this with random arguments.
+    if (this.chance(0.25)) {
+      const ret: Ty = { k: 'optional', of: BIGINT };
+      const type = this.pick(['bigint | undefined', 'undefined | bigint']);
+      out.push(
+        `export function optionalValue(p0: boolean, p1: bigint): ${type} {`,
+        `  let value: ${type} = undefined;`,
+        '  if (p0) { value = p1; }',
+        '  return value;',
+        '}',
+      );
+      this.functions.push({ name: 'optionalValue', params: [BOOLEAN, BIGINT], ret });
     }
     return out.join('\n') + '\n';
   }
