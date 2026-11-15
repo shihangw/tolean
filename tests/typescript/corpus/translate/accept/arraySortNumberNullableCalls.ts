@@ -38,6 +38,9 @@ export function optional(xs?: ReadonlyArray<number>): boolean {
   if (xs === undefined) { return false; }
   return sorted(xs).length > 0;
 }
+export function undefinedGuard(box: Box | undefined): number[] {
+  return box === undefined ? [] : sorted(box.values);
+}
 export function forwarded(box: Box | null): boolean {
   return expression(box);
 }

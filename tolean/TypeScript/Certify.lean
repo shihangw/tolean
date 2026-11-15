@@ -423,7 +423,7 @@ def conditionCalls (callee : String) : IR.Expr → List ConditionalCall
   | .isNone e | .isSome e | .propNot e | .inject _ _ e | .push _ e | .update _ _ e =>
     conditionCalls callee e
   | .ite a b c => conditionCalls callee a ++ conditionCalls callee b ++ conditionCalls callee c
-  | .matchNull n a b =>
+  | .matchNull n a b _ =>
     (conditionCalls callee a).map (fun (guards, args) => ((n, false) :: guards, args)) ++
       (conditionCalls callee b).map (fun (guards, args) => ((n, true) :: guards, args))
   | .intOp _ a b | .order _ a b | .division _ a b | .eq a b | .ne a b

@@ -67,6 +67,9 @@ def optional {N : Type} [JSNumber N] (xs : Option (List N) := none) : Bool :=
   | _root_.Option.some xs =>
     (JSNumber.lt ((JSNumber.ofSafeInt (N := N) (0 : Int))) ((JSNumber.ofSafeInt (N := N) ((List.length ((sorted (N := N) xs)) : Nat) : Int))))
 
+def undefinedGuard {N : Type} [JSNumber N] (box : Option (Box N) := none) : List N :=
+  (match box with | none => ([] : List N) | _root_.Option.some box => (sorted (N := N) box.values))
+
 def forwarded {N : Type} [JSNumber N] (box : Option (Box N)) : Bool :=
   (expression (N := N) box)
 
