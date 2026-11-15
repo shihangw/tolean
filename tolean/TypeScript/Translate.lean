@@ -128,7 +128,7 @@ of type `[T, T]` is not. -/
 def Ty.assignableTo (source target : Ty) : Bool :=
   source.sameLean target ||
     match target with
-    | .nullable value => source == value
+    | .nullable value | .optional value => source == value
     | _ => false
 
 /-- A value of type `source` can be the argument of a parameter of type
@@ -974,8 +974,14 @@ def translateType (t : TypeExpr) : TM Ty := do
       -- `Maybe | null`, where the alias `Maybe` is nullable already, is
       -- `Maybe`, as in TypeScript.
       match ← translateType value with
+      | .optional _ => reject t.span "a type may not include both null and undefined"
       | .nullable t => return .nullable t
       | t => return .nullable t
+    | .keyword _ "undefined", value | value, .keyword _ "undefined" =>
+      match ← translateType value with
+      | .nullable _ | .null => reject t.span "a type may not include both null and undefined"
+      | .optional t => return .optional t
+      | t => return .optional t
     | _, _ => unsupportedType t
   | .array _ elem => return .array (← translateType elem)
   | .ref _ "Record" [_, _] | .ref _ "Readonly" [.ref _ "Record" [_, _]] =>
@@ -3154,7 +3160,8 @@ def assignOps? : AssignOp → Option (IR.IntOp × IR.NumberOp)
 written out where Lean would infer another: a `T` or `null` where the local
 is `T | null`, and an `if` with `none` in one branch. -/
 def withType (e : IR.Expr) (t source : Ty) : IR.Expr :=
-  if t.isNullable && (source != t || e matches .none || e matches .ite ..) then
+  if (t.isNullable && (source != t || e matches .none || e matches .ite ..)) ||
+      ((t matches .optional _) && (source != t || e matches .undefined)) then
     .ascribe e t.lean
   else e
 
@@ -4267,6 +4274,8 @@ def translateInterface (s : Span) (exported : Bool) (name : String) (typeParams 
         | .literal _ (.string v) =>
           if f.optional then reject f.span "a tag field may not be optional" else pure (Ty.literal v)
         | t => translateType t
+      if type matches .optional _ then
+        reject f.span "a field type may not include undefined; use an optional field instead"
       -- Lean's kernel accepts a structure that refers to itself only with
       -- its own type parameters, in order.
       unless type.namesSelfWith ⟨(← get).file, name⟩ (typeParams.map .param) do
@@ -4487,7 +4496,7 @@ def paramType (span : Span) (optional : Bool) (type : TypeExpr) (before : List T
       reject span "a required parameter may not follow an optional one"
     return ty
   if ty.isNullable || ty == .null then reject span "an optional parameter may not also be nullable"
-  return .optional ty
+  return .optional ty.unoptional
 
 def functionReturnType (borrow : Option Nat) (types : List Ty) (s : Span) (rt : TypeExpr)
     (env : Env) (params : List Param) (body : Stmt) : TM Ty :=
