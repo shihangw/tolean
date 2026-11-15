@@ -855,15 +855,19 @@ test('number comparison sorts agree with Node on non-NaN keys, including infinit
 
 test('the interpreter sorts by a difference only when every key is finite', () => {
   const source = 'export function f(xs: ReadonlyArray<number>): number[] { return xs.toSorted((a, b) => a - b); }';
-  const arrays = [[2, 1], [Infinity], [Infinity, 2], [-Infinity, 2], [NaN, 1]];
+  const finite = [[2, 1], [], [Number.MAX_VALUE, -Number.MAX_VALUE, 0, -0],
+    [Number.MIN_VALUE, -Number.MIN_VALUE, 1, 1], [-0, 0, -0]];
+  const arrays = [...finite, [Infinity], [Infinity, 2], [-Infinity, 2], [NaN, 1]];
   const input = { programs: [{ source, calls: arrays.map((xs) => ({ function: 'f', args: [xs.map(encode)] })) }] };
   const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
   expect(run.status, run.stderr).toBe(0);
   const [lean] = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
   expect(lean?.parsed).toBe(true);
   if (lean === undefined || !lean.parsed) return;
-  expect(lean.results[0]).toEqual({ value: [1, 2].map(encode) });
-  expect(lean.results.slice(1)).toEqual([null, null, null, null]);
+  for (const [i, xs] of finite.entries()) {
+    expect(lean.results[i]).toEqual({ value: xs.toSorted((a, b) => a - b).map(encode) });
+  }
+  expect(lean.results.slice(finite.length)).toEqual([null, null, null, null]);
 });
 
 test('the interpreter gives no value where an assignment to a const throws', async () => {

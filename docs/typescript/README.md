@@ -359,13 +359,17 @@ translation, so each theorem holds for every `N`, real doubles among them,
 and assumes none of the number laws. A file that sorts is the exception. Its
 theorems take `[SafeIntLaws N]`, because the order needs the signs of `-1`
 and `1` as numbers. A function that directly returns a parameter sorted by
-one ascending number key with the comparison shape gets a certificate too.
+one number key with the comparison shape gets a certificate too, in either
+direction. Sorting a copy, `[...xs].sort(...)`, works as well.
 Its theorems also take `[NumberOrderLaws N]` and a hypothesis over the
 parameter, such as `(f_sort_precondition : ∀ x ∈ xs, JSNumber.isNaN x.key = false)`.
 The key may be the number itself or a field of the element. This condition
-allows infinities and both signed zeros. The certificate proves consistency
-on that input list, not on every list. A difference comparator, descending
-or multiple keys, a sort of a local list, and calls that need to pass a sort
+allows infinities and both signed zeros. For `a.key - b.key` or its reverse,
+the hypothesis is instead `∀ x ∈ xs, JSNumber.isFinite x.key = true`, and
+the theorem also takes `[SpecialValueLaws N]`. The difference may overflow
+to infinity: the keys, not their differences, must be finite.
+The certificate proves consistency on that input list, not on every list.
+Multiple keys, a sort of a local list, and calls that need to pass a sort
 precondition remain refused by the certifier.
 
 A certificate's theorems follow from `translate_sound`, so they do not unfold
@@ -1107,8 +1111,8 @@ at three levels:
   never gives `NaN`, and its sign agrees with their order, even when the
   difference overflows to an infinity. These laws are hypotheses, and
   `jsNumberLaws.test.ts` checks each one on the maintained Node lines.
-  The certifier uses these laws for direct ascending comparison sorts of a
-  list parameter, under the non-NaN hypothesis described above.
+  The certifier uses these laws for direct comparison and difference sorts of
+  a list parameter, under the input hypotheses described above.
 
 The laws are hypotheses, not Lean axioms. If one of them were false, the
 theorems that use it would not apply to JS. But Lean would stay consistent,

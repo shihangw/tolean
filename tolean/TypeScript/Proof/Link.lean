@@ -543,6 +543,62 @@ theorem consistentOn_numberOrder {α : Type} [NumberOrderLaws N]
       cases e' : JSNumber.lt (key c) (key b) <;>
       cases e'' : JSNumber.lt (key c) (key a) <;> simp_all
 
+/-- A finite-key difference has the sign of the keys' order, even if it
+overflows to infinity. -/
+theorem compareSign_sub [SafeIntLaws N] [SpecialValueLaws N] [NumberOrderLaws N]
+    {a b : N} (ha : JSNumber.isFinite a = true) (hb : JSNumber.isFinite b = true) :
+    JSNumber.compareSign (JSNumber.sub a b) = some (numberOrder a b) := by
+  have hz : JSNumber.isNaN (JSNumber.ofSafeInt (N := N) 0) = false :=
+    isNaN_eq_false_of_safe (SafeIntLaws.ofSafeInt (by unfold InRange maxSafe; omega))
+  have he := NumberOrderLaws.eq_iff (NumberOrderLaws.sub_not_nan ha hb) hz
+  simp only [NumberOrderLaws.sub_lt_zero ha hb, NumberOrderLaws.zero_lt_sub ha hb] at he
+  unfold JSNumber.compareSign numberOrder
+  rw [NumberOrderLaws.sub_lt_zero ha hb, NumberOrderLaws.zero_lt_sub ha hb, he]
+  cases JSNumber.lt a b <;> cases JSNumber.lt b a <;> rfl
+
+/-- Consistency reads only pairs of elements of the input list. -/
+theorem consistentOn_congr_on {α : Type} {f g : α → α → Option Ordering} {xs : List α}
+    (h : ∀ a ∈ xs, ∀ b ∈ xs, f a b = g a b) :
+    Eval.consistentOn f xs = Eval.consistentOn g xs := by
+  unfold Eval.consistentOn
+  have all_congr_mem {p q : α → Bool} (hh : ∀ x ∈ xs, p x = q x) :
+      xs.all p = xs.all q := by
+    apply Bool.eq_iff_iff.mpr
+    simp only [List.all_eq_true]
+    exact forall_congr' fun x => forall_congr' fun hx => by rw [hh x hx]
+  apply all_congr_mem
+  intro a ha
+  apply all_congr_mem
+  intro b hb
+  simp only [h a ha b hb, h b hb a ha]
+  congr 1
+  apply all_congr_mem
+  intro c hc
+  simp only [h b hb c hc, h a ha c hc]
+
+/-- The reverse number order is consistent on the same non-NaN inputs. -/
+theorem consistentOn_numberOrder_reverse {α : Type} [NumberOrderLaws N]
+    (key : α → N) (xs : List α)
+    (h : ∀ x ∈ xs, JSNumber.isNaN (key x) = false) :
+    Eval.consistentOn (fun a b => some (numberOrder (key b) (key a))) xs = true := by
+  unfold Eval.consistentOn
+  simp only [List.all_eq_true, Option.isSome_some, Bool.true_and, Bool.and_eq_true]
+  intro a ha b hb
+  constructor
+  · have hab := NumberOrderLaws.lt_asymm (h a ha) (h b hb)
+    have hba := NumberOrderLaws.lt_asymm (h b hb) (h a ha)
+    unfold numberOrder
+    cases e : JSNumber.lt (key a) (key b) <;>
+      cases e' : JSNumber.lt (key b) (key a) <;> simp_all
+  · intro c hc
+    have hab := numberOrder_ne_gt (h b hb) (h a ha)
+    have hbc := numberOrder_ne_gt (h c hc) (h b hb)
+    have hac := numberOrder_ne_gt (h c hc) (h a ha)
+    have ht := NumberOrderLaws.not_lt_trans (h a ha) (h b hb) (h c hc)
+    cases e : JSNumber.lt (key a) (key b) <;>
+      cases e' : JSNumber.lt (key b) (key c) <;>
+      cases e'' : JSNumber.lt (key a) (key c) <;> simp_all
+
 /-- A comparator is consistent for every list when its signs are those of a
 lawful comparison: one that `Std.TransCmp` says is a total preorder. -/
 theorem consistentOn_of_transCmp {α : Type} {cmp : α → α → Option Ordering} (o : α → α → Ordering)

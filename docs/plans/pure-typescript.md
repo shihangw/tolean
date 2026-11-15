@@ -100,10 +100,11 @@ value claim already does.
 | TypeScript | Lean | Refused |
 |---|---|---|
 | The `index` argument of a callback other than one of `map`, and the `array` argument of any callback | The `List` functions that also pass the index, as `List.mapIdx` does for `map`, and the list itself | |
-| A number-sort certificate for a difference comparator, descending or multiple keys, a non-parameter list, or a call that needs a sort precondition | A hypothesis over the parameters excludes `NaN` keys, or requires finite keys for a difference. Direct ascending comparison sorts of a list parameter already get this hypothesis. | |
+| A number-sort certificate for multiple keys, a non-parameter list, or a call that needs a sort precondition | A hypothesis over the parameters excludes `NaN` keys, or requires finite keys for a difference. Direct single-key sorts of a list parameter already get this hypothesis, in either direction. | |
 
-The certifier uses `sortValues_sortWith_on` for a direct ascending comparison
-sort of a parameter. Its input hypothesis excludes NaN keys.
+The certifier uses `sortValues_sortWith_on` for a direct single-key sort of a
+parameter. Its input hypothesis excludes NaN keys for a comparison, or
+requires finite keys for a difference.
 
 ### Strings
 
