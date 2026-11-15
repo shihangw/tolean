@@ -323,7 +323,7 @@ that the earlier pull request already contains it.
   Keep checking all of these traversals against their syntax constructors;
   do not treat source-call counts as a definition of coverage.
 
-- **Choose the local-function executor before running the body.**
+- **Preserve the state-aware local-function return path.**
   The [review on #226](https://github.com/shihangw/tolean/pull/226#discussion_r4576809523),
   also inherited by #236, found that `callLocal` could run a state-writing,
   value-returning body twice. That is fixed: `callLocal` recognizes a
