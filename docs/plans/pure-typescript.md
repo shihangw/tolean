@@ -344,19 +344,6 @@ a reason to choose otherwise.
   in the body is a borrow, and a `ReadonlyMap` is plain. A call statement
   `f(m, x);` becomes `let m := f m x`.
 
-- Should `tolean.json` accept imports without the `.ts` extension, for
-  projects that use bundler resolution? Tolean refuses them now because Node
-  reads an import as a URL.
-
-  Recommendation: accept them, and follow the project's `tsconfig.json`.
-  Import resolution happens outside the parsed program, so no proof sees it.
-  Tolean reads `moduleResolution` from the tsconfig when there is one, and a
-  field of `tolean.json` otherwise. Under bundler resolution, `./x` resolves
-  to `x.ts`, then to `x/index.ts`. Under node16 resolution, `./x.js` resolves
-  to `x.ts`, which is the common setup today. The manifest records the
-  resolved paths, so the chain stays unambiguous. `.tsx` and anything else
-  stay refused.
-
 - Should a comparator that is not one of the two shapes be accepted when the
   project supplies a proof that it is consistent?
 

@@ -335,14 +335,55 @@ other files of the project:
 import { clamp, type Gauge } from "./lib/util.ts";
 ```
 
-- An import names the file by a relative path with its `.ts` extension, such
-  as `"./util.ts"`. Node's type stripping needs that extension, and a bundler
-  accepts it, so the import names the same file wherever the code runs.
-  Tolean refuses `"./util.js"` and `"./util"`. Node reads a source as a URL,
-  so Tolean also refuses a source with `%`, `?`, `#` or `\`, and one such as
-  `"./util.ts/."` that names a directory there. The file must be among the
-  sources of `tolean.json`, and its edition may not be newer than the
-  importing file's.
+Project imports follow `compilerOptions.moduleResolution` in the
+`tsconfig.json` next to `tolean.json`. Tolean accepts comments and trailing
+commas in that file. If there is no tsconfig, set the fallback in
+`tolean.json`:
+
+```json
+{
+  "typescript": {
+    "sources": ["src/**/*.ts"],
+    "moduleResolution": "bundler"
+  }
+}
+```
+
+Mode names are case-insensitive. A tsconfig takes precedence over the
+fallback, including per-file overrides. If it has no `moduleResolution`,
+or the setting names another mode, imports still need `.ts`.
+
+| Mode | Import | File that Tolean selects |
+|---|---|---|
+| `bundler` | `./x` | `x.ts`, then `x/index.ts` if the file is absent |
+| `bundler`, `node16`, `nodenext` | `./x.js` | `x.ts` |
+| Every mode | `./x.ts` | `x.ts` |
+
+The file wins when both `x.ts` and `x/index.ts` exist, as in TypeScript.
+Tolean checks all project files before it checks which ones are listed as
+sources. Omitting `x.ts` from the sources therefore refuses the import
+instead of selecting `x/index.ts`. The node modes use the ESM spelling.
+They do not accept extensionless imports even in a CommonJS project.
+Raw Node type stripping still needs `.ts`; use the matching TypeScript
+build or bundler when running code that uses the other spellings.
+
+Tolean does not implement the whole TypeScript resolver. It refuses
+`extends` in a tsconfig because inherited options could change which file
+wins, even when the local config sets `moduleResolution`. It also refuses
+`moduleSuffixes`. Use a standalone tsconfig without that option. The
+[decision record](../decisions/2026-11-14-project-import-resolution.md)
+explains this boundary.
+
+- An import must name a relative path to a translated `.ts` file. Tolean
+  refuses packages, `.tsx`, declaration files such as `.d.ts`, and other
+  extensions. It does not search arbitrary extensions such as `./x.custom`.
+  It also refuses a directory's `package.json` rather than guessing whether
+  that file redirects the import. If an unsupported file would win before
+  `index.ts`, such as `x.tsx`, Tolean refuses the import.
+- Node reads a source as a URL, so Tolean refuses a source with `%`, `?`,
+  `#` or `\`, and one such as `"./util.ts/."` that names a directory there.
+  The resolved file must be among the sources of `tolean.json`, and its
+  edition may not be newer than the importing file's.
 - An interface or a type alias needs `type`, either before its name or as
   `import type`.
   Node's type stripping removes only imports that say `type`, so without it
@@ -377,7 +418,8 @@ after the files it imports from. Each file becomes its own Lean module, with
 an `import` line for each file that it imports from. The module's name comes
 from the output's path, from the directory that `moduleRoot` names, or from
 the directory of `tolean.json` by default. Each file's manifest lists the
-files it imports from among its sources. The output writes a name
+files it imports from among its sources, with their resolved paths. The
+output writes a name
 from another file from the root, with that file's namespace, such as
 `_root_.lib.Util.clamp`, so that a local name cannot capture it. A file may
 read and build the fields of an interface that reaches it through another
@@ -387,9 +429,12 @@ has a number type to pass. The command for one file,
 `tolean translate <file>`, refuses an import, because it does not see the
 other files.
 
-The interpreter runs a program of several files, and a call runs the function
-that its file declares or imports under that name. `program_sound` covers
-such programs. A file with imports has no certificate yet.
+The project resolves imports before translation, without changing the
+source spans of the parsed program. The interpreter runs that resolved
+program of several files, and a call runs the function that its file
+declares or imports under that name. `program_sound` covers such programs.
+File selection remains a tested part of loading the project, not a new
+operation in the interpreter. A file with imports has no certificate yet.
 `corpus/translate/projects/` holds projects that the translator must accept
 and compile, and projects that it must refuse.
 
