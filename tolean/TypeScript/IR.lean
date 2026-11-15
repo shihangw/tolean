@@ -1,6 +1,7 @@
 import tolean.IR
 import tolean.TypeScript.Syntax.Equality
 import tolean.TypeScript.Spec.Date
+import tolean.TypeScript.Spec.RegExp
 
 /-!
 The TypeScript extension of the Tolean IR: the types and operations that the
@@ -103,6 +104,8 @@ inductive TyExt where
   /-- A captured local closure is checked only by the evaluator. Calls name
   its lifted definition, so the printed parameter is Unit. -/
   | closure
+  /-- A compiled flagless literal, with no observable object identity. -/
+  | regexp
 deriving BEq, Repr, Inhabited, DecidableEq
 
 /-- The operations that TypeScript adds to the IR, each with the number of
@@ -131,6 +134,9 @@ inductive ExprExt where
   /-- The time value of a Date Time String Format literal, or NaN. The
   translator folds the format parser, not an engine's fallback parser. -/
   | dateParse (time : Option Int)
+  | regexpLiteral (value : JSRegExp.Regex)
+  /-- `RegExp.prototype.test`, on a flagless literal and a string. -/
+  | regexpTest
   /-- `(JSNumber.sameValue a b)`: `Object.is(a, b)` on numbers. -/
   | numberSameValue
   /-- `(JSNumber.ofInt a)`: `Number(a)` on a bigint. -/
@@ -314,6 +320,7 @@ abbrev LoopInfo := tolean.IR.LoopInfo TyExt
 @[match_pattern] abbrev Expr.isDefined (a : Expr) : Expr := .ext .isDefined [a]
 @[match_pattern] abbrev Ty.error : Ty := .ext .error
 @[match_pattern] abbrev Ty.date : Ty := .ext .date
+@[match_pattern] abbrev Ty.regexp : Ty := .ext .regexp
 @[match_pattern] abbrev Expr.pure (a : Expr) : Expr := .ext .pure [a]
 @[match_pattern] abbrev Expr.error (message : Expr) : Expr := .ext .error [message]
 @[match_pattern] abbrev Expr.closure (params : List String) (body : Syntax.Stmt) : Expr :=
@@ -328,6 +335,7 @@ def leanNames : List (String × String) :=
      ("JSMap", "tolean.TypeScript.JSMap"), ("JSSet", "tolean.TypeScript.JSSet"),
      ("JSError", "tolean.TypeScript.JSError"), ("JSBigInt", "tolean.TypeScript.JSBigInt"),
      ("JSDate", "tolean.TypeScript.JSDate"),
+     ("JSRegExp", "tolean.TypeScript.JSRegExp"),
      ("pure", "Pure.pure"),
      ("Nat", "Nat")]
 
@@ -352,12 +360,13 @@ instance : tolean.IR.PrintTy TyExt where
     | .error => leanName names "JSError"
     | .date => leanName names "JSDate"
     | .closure => leanName names "Unit"
+    | .regexp => leanName names "JSRegExp.Regex"
   erased
     | .closure => true
     | _ => false
   namesParam _
     | .number => true
-    | .null | .error | .date | .closure => false
+    | .null | .error | .date | .closure | .regexp => false
   binders names :=
     let n := names.typeParam
     s!" \{{n} : Type} [{leanName names "JSNumber"} {n}]"
@@ -391,6 +400,22 @@ where
     | ')' :: cs, d, false => if d == 1 then cs.isEmpty else go cs (d - 1) false
     | _ :: cs, d, false => d != 0 && go cs d false
 
+def regexpPatternTerm : JSRegExp.Pattern → String
+  | .empty => ".empty"
+  | .unit u => s!"(.unit {u.toNat})"
+  | .charClass negated ranges =>
+    let ranges := ranges.map fun (lo, hi) => s!"({lo.toNat}, {hi.toNat})"
+    s!"(.charClass {negated} [{", ".intercalate ranges}])"
+  | .dot => ".dot"
+  | .beginInput => ".beginInput"
+  | .endInput => ".endInput"
+  | .seq a b => s!"(.seq {regexpPatternTerm a} {regexpPatternTerm b})"
+  | .alt a b => s!"(.alt {regexpPatternTerm a} {regexpPatternTerm b})"
+  | .capture i p => s!"(.capture {i} {regexpPatternTerm p})"
+  | .repeat p minimum maximum =>
+    let bound := match maximum with | none => ".none" | some n => s!"(.some {n})"
+    s!"(.repeat {regexpPatternTerm p} {minimum} {bound})"
+
 open tolean.IR (argument) in
 /-- An operation on its printed arguments. The translator gives each one the
 number of arguments it takes, and the printer writes nothing more for others. -/
@@ -418,6 +443,10 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
       | none => leanName names "none"
       | some t => s!"({leanName names "some"} {intTerm t})"
     s!"({leanName names "JSDate"}.number (N := {names.typeParam}) {t})"
+  | .regexpLiteral r, [] =>
+    s!"({leanName names "JSRegExp.Regex"}.mk {regexpPatternTerm r.pattern} {r.captureCount})"
+  | .regexpTest, [r, s] =>
+    s!"({leanName names "JSRegExp.Regex"}.test {argument r} {argument s})"
   | .numberSameValue, [a, b] => s!"({js}.sameValue {argument a} {argument b})"
   | .numberOfInt, [a] => s!"({js}.ofInt (N := {names.typeParam}) {argument a})"
   | .numberFold isMax, args =>
@@ -553,6 +582,10 @@ def ExprExt.usesString : ExprExt → Bool
 /-- The operation names `JSDate`, so the output imports its model. -/
 def ExprExt.onDate : ExprExt → Bool
   | .dateOfNumber | .dateMethod _ | .dateUtc | .dateParse _ => true
+  | _ => false
+
+def ExprExt.onRegExp : ExprExt → Bool
+  | .regexpLiteral _ | .regexpTest => true
   | _ => false
 
 /-- The operation names `JSBigInt`, so the output imports its model. -/

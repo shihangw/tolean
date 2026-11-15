@@ -107,7 +107,7 @@ def encoderOf (r : Refs) : IR.Ty → Option String
   -- A type parameter has no encoder, so a generic function or interface gets no
   -- certificate yet. Neither has a map, a set or a date, nor a function that
   -- can throw.
-  | .null | .tag _ | .param _ | .app .. | .map .. | .set _ | .except .. | .error | .date | .ext .closure => none
+  | .null | .tag _ | .param _ | .app .. | .map .. | .set _ | .except .. | .error | .date | .regexp | .ext .closure => none
 
 /-- How the elements of a tuple of the types `ts` become a list of `Val`s. -/
 def elementsEncoder (r : Refs) : List IR.Ty → Option String
@@ -130,7 +130,7 @@ def decoderOf (r : Refs) : IR.Ty → Option String
   | .struct ref | .enum ref | .tagged ref => some (r.cert s!"decode{ref.name}")
   | .number => some (r.eval "decNum")
   | .tuple ts => do return s!"({r.eval "decTuple"} {← elementsDecoder r ts})"
-  | .null | .tag _ | .param _ | .app .. | .map .. | .set _ | .except .. | .error | .date | .ext .closure => none
+  | .null | .tag _ | .param _ | .app .. | .map .. | .set _ | .except .. | .error | .date | .regexp | .ext .closure => none
 
 /-- How a list of `Val`s becomes the elements of a tuple of the types `ts`. -/
 def elementsDecoder (r : Refs) : List IR.Ty → Option String
@@ -327,7 +327,7 @@ partial def bodyCallbacks : IR.Body → List Callback
   | .matchNull _ _ a b | .matchTag _ _ _ _ _ a b | .letState _ a b => bodyCallbacks a ++ bodyCallbacks b
   | .fold _ _ body items rest _ => exprCallbacks items ++ bodyCallbacks body ++ bodyCallbacks rest
   | .throw e => exprCallbacks e
-  | .bind _ _ args rest => args.flatMap exprCallbacks ++ bodyCallbacks rest
+  | .bind _ _ args rest | .letBorrow _ _ _ args rest => args.flatMap exprCallbacks ++ bodyCallbacks rest
   | .letCall _ _ _ _ _ _ _ body args rest =>
     args.flatMap exprCallbacks ++ bodyCallbacks body ++ bodyCallbacks rest
   | .letLifted _ _ rest => bodyCallbacks rest
@@ -396,13 +396,13 @@ partial def loopsOf : IR.Body → List (List String × String × IR.Body × IR.L
   | .fold names element body _ rest info => loopsOf body ++ [(names, element, body, info)] ++ loopsOf rest
   | .throw _ => []
   | .letCall _ _ _ _ _ _ _ body _ rest => loopsOf body ++ loopsOf rest
-  | .bind _ _ _ rest | .letLifted _ _ rest => loopsOf rest
+  | .bind _ _ _ rest | .letLifted _ _ rest | .letBorrow _ _ _ _ rest => loopsOf rest
 
 /-- The closure values that calls in a body require from their environment. -/
 def closureReads : IR.Body → List (String × IR.Expr)
   | .value _ | .state _ | .yield .. | .done .. | .exit .. | .throw _ => []
   | .let _ _ rest | .letArray _ _ _ rest | .letTuple _ _ rest |
-    .bind _ _ _ rest | .letLifted _ _ rest => closureReads rest
+    .bind _ _ _ rest | .letLifted _ _ rest | .letBorrow _ _ _ _ rest => closureReads rest
   | .ite _ a b | .matchNull _ _ a b | .matchTag _ _ _ _ _ a b |
     .letState _ a b => closureReads a ++ closureReads b
   | .fold _ _ body _ rest _ => closureReads body ++ closureReads rest
@@ -441,6 +441,8 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
   -- The certificate's program is the file "", so the tree names the file's
   -- own declarations under "".
   let (m, names, decls) ← (Translate.translateTree "" source target).mapError (file ++ ·)
+  if !(Eval.borrowsOf ⟨[("", m)], ""⟩).isEmpty then
+    throw s!"{file}: a map borrow has no certificate yet"
   let r : Refs := { idents := sourceIdents source target, certNs }
   -- A loop lemma's step function binds the loop's locals, so the printer
   -- writes the translation's names as `Refs` does.
