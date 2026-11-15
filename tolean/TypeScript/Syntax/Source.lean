@@ -163,6 +163,7 @@ def Expr.words : Expr → List Word
   | .number _ text => [[.number text]]
   | .bigint _ text => [[.bigint text]]
   | .string _ value => [[.string value]]
+  | .regexp _ source target => [[.regexp source target]]
   | .bool _ b => [keywordWord (if b then "true" else "false")]
   | .null _ => [keywordWord "null"]
   | .array _ elems => enclose "[" "]" (Expr.wordsOf elems)
@@ -358,6 +359,7 @@ def Module.lines (m : Module) : List Line := m.decls.flatMap Decl.lines
 def TokenKind.text : TokenKind → String
   | .ident s | .keyword s | .number s | .bigint s | .punct s => s
   | .string value => quote value
+  | .regexp source _ => "/" ++ source ++ "/"
   | .eof => ""
 
 def Word.text (w : Word) : String := String.join (w.map TokenKind.text)
@@ -417,6 +419,7 @@ def Expr.erase : Expr → Expr
   | .number _ text => .number noSpan text
   | .bigint _ text => .bigint noSpan text
   | .string _ value => .string noSpan value
+  | .regexp _ source target => .regexp noSpan source target
   | .bool _ b => .bool noSpan b
   | .null _ => .null noSpan
   | .array _ elems => .array noSpan (Expr.eraseAll elems)

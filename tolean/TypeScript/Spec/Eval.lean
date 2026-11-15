@@ -1,4 +1,5 @@
 import tolean.TypeScript.Syntax.Ast
+import tolean.TypeScript.Syntax.RegExp
 import tolean.TypeScript.Spec.Guards
 import tolean.TypeScript.Spec.BigInt
 import tolean.TypeScript.Spec.Date
@@ -56,6 +57,8 @@ inductive Val (N : Type) where
   | error (cls : String) (fields : List (String × Val N))
   /-- A `Date`: its time value, or `none` when it is invalid (`JSDate`). -/
   | date (time : Option Int)
+  /-- A flagless literal. No operation of the subset observes its identity. -/
+  | regexp (value : JSRegExp.Regex)
   /-- A function that a block of another function declares: the names of
   its parameters and its body. A call finds the variables it sees in the
   caller's environment, by the names that the body mentions
@@ -68,6 +71,7 @@ deriving Inhabited
 /-- `ToBoolean` (ECMA-262 §7.1.2), on the values of the subset. A number is
 false when it is `+0`, `-0` or `NaN`, and `-0 === 0`. -/
 def Val.truthy : Val N → Bool
+  | .regexp _ => true
   | .int i => i != 0
   | .num n => !(JSNumber.isNaN n || JSNumber.eq n (JSNumber.ofSafeInt 0))
   | .bool b => b
@@ -79,6 +83,7 @@ def Val.truthy : Val N → Bool
 subset. `null` is `"object"`, and so are an array and an object, which are
 not callable. -/
 def Val.typeOf : Val N → String
+  | .regexp _ => "object"
   | .int _ => "bigint"
   | .num _ => "number"
   | .bool _ => "boolean"
@@ -170,6 +175,7 @@ def strictEq : Val N → Val N → Option Bool
   | .str a, .str b => some (decide (a = b))
   | .null, .null => some true
   | .undefined, .undefined => some true
+  | .regexp _, .null | .null, .regexp _ | .regexp _, .undefined | .undefined, .regexp _ => some false
   | .undefined, .int _ | .undefined, .num _ | .undefined, .bool _ | .undefined, .str _
   | .undefined, .null | .undefined, .list _ | .undefined, .obj _ | .undefined, .map _
   | .undefined, .set _ | .undefined, .error _ _ | .undefined, .date _ | .undefined, .closure _ _ => some false
@@ -522,6 +528,7 @@ private partial def jsonTextImpl {N : Type} [JSNumber N] (v : Val N) : JSString 
   ⟨go v⟩
 where
   go : Val N → List UInt16
+    | .regexp _ => ascii "{}"
     | .null | .undefined => ascii "null"
     | .bool b => ascii (if b then "true" else "false")
     | .str s => jsonQuote s
@@ -807,6 +814,7 @@ def Expr.subst (σ : List (String × Expr)) : Expr → Expr
   | .number s t => .number s t
   | .bigint s t => .bigint s t
   | .string s v => .string s v
+  | .regexp s v target => .regexp s v target
   | .bool s b => .bool s b
   | .null s => .null s
   | .array s es => .array s (Expr.substList σ es)
@@ -852,6 +860,7 @@ mutual
 
 /-- The names of the functions that `e` calls, anywhere in it. -/
 def Expr.callNames : Expr → List String
+  | .regexp .. => []
   | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => []
   | .array _ es => Expr.callNamesList es
   | .object _ ps => Property.callNamesList ps
@@ -958,6 +967,7 @@ def hoistedMark : TypeExpr := .keyword default "'"
 
 /-- `e` is a name or a literal, which hoisting would only rename. -/
 def Expr.isAtom : Expr → Bool
+  | .regexp .. => true
   | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => true
   | _ => false
 
@@ -967,6 +977,7 @@ mutual
 no call, so where it runs changes nothing that the model observes. Such an
 operand stays in place, because its type comes from its position. -/
 def Expr.isClosedLiteral : Expr → Bool
+  | .regexp .. => true
   | .number .. | .bigint .. | .string .. | .bool .. | .null _ => true
   | .unary _ .neg (.number ..) | .unary _ .neg (.bigint ..) => true
   | .paren _ e => Expr.isClosedLiteral e
@@ -992,7 +1003,7 @@ JS evaluates whenever it evaluates `e`. A call in a branch of `?:`, after
 `&&`, `||` or `??`, or in an arrow function may not run, so it stays where
 it is. -/
 def Expr.hoists (thr : String → Bool) : Expr → Bool
-  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .arrow .. => false
+  | .regexp .. | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .arrow .. => false
   | .array _ es => Expr.hoistsList thr es
   | .object _ ps => Property.hoistsList thr ps
   | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e
@@ -1267,12 +1278,18 @@ def Stmt.hoisted (thr : String → Bool) (cls : String → Option (Option (List 
 /-- The functions of the declarations `ds`, by name, where `thr` says which
 functions can throw: their parameters and their body, with the calls that
 can throw hoisted out of its statements. -/
+def preparedBody (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr)))
+    (guards : List (String × GuardTest))
+    (params : List Param) (ret : Option TypeExpr) (body : Stmt) : Stmt :=
+  Stmt.hoisted thr cls (guardedBody guards params ret
+    (if (borrowCandidate? params ret body).isSome then body.borrowPrefix else body))
+
 def functionsIn (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr)))
     (guards : List (String × GuardTest))
     (ds : List Decl) : List (String × List String × Stmt) :=
   ds.filterMap fun
     | .function _ _ name _ params ret body =>
-      some (name, params.map (·.name), Stmt.hoisted thr cls (guardedBody guards params ret body))
+      some (name, params.map (·.name), preparedBody thr cls guards params ret body)
     | _ => none
 
 /-- The functions of the module, by name. -/
@@ -1297,6 +1314,21 @@ abbrev Program := List (String × Module)
 structure Scope where
   program : Program
   file : String
+
+/-- Borrow signatures checked in declaration order. A forwarding function
+must put its map at the borrowed argument index of an earlier checked
+callee. Imports and generic functions are outside this borrow case. -/
+def moduleBorrows (file : Module) : List (String × Nat) :=
+  file.decls.foldl (fun borrows decl =>
+    match decl with
+    | .function _ _ name [] ps ret body =>
+      match borrowParam? borrows ps ret body with
+      | some i => borrows ++ [(name, i)]
+      | none => borrows
+    | _ => borrows) []
+
+def borrowsOf (m : Scope) : List (String × Nat) :=
+  ((m.program.lookup m.file).map moduleBorrows).getD []
 
 /-- `path` with `.` and `..` segments resolved, or none when `..` would leave
 the root. -/
@@ -1498,6 +1530,7 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
   | .number _ text => (numberLiteral text).map (.num ∘ JSNumber.ofSafeInt)
   | .bool _ b => some (.bool b)
   | .string _ s => some (.str (JSString.ofString s))
+  | .regexp _ source target => (Syntax.RegExp.literal source target).toOption.map .regexp
   | .null _ => some .null
   | .paren _ inner => eval m fuel env inner
   -- Type stripping removes `as const` and `satisfies T`.
@@ -1737,6 +1770,11 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
   -- `s.has(x)` on a set (ECMA-262 §24.2.4.8).
   | .call _ (.member _ recv method) [arg] => do
     match ← eval m fuel env recv with
+    | .regexp r =>
+      if method == "test" then
+        let .str input ← eval m fuel env arg | none
+        return .bool (r.test input)
+      else none
     | .map entries =>
       let found ← mapFind entries (← eval m fuel env arg)
       if method == "get" then return found.getD .undefined
@@ -1839,7 +1877,7 @@ def evalCall (m : Scope) (fuel : Nat) (env : Env N) (name : String) (args : List
     let (params, body) ← (functionsOf m.program).lookup key
     -- The model holds a collection as a value, which is exact only when
     -- nothing else holds the object while the function changes it.
-    if !Stmt.ownsChanges params body then none
+    if !Stmt.ownsChangesBorrow (borrowsOf { m with file := key.file }) params body then none
     -- A `break` or a `continue` outside a loop is an early error
     -- (ECMA-262 §14.8.1 and §14.9.1), so the model gives no value.
     match ← execStmt { m with file := key.file } fuel (← bindArgs params vs) body with
@@ -2096,10 +2134,21 @@ def execStmt (m : Scope) (fuel : Nat) (env : Env N) : Stmt → Option (Outcome N
     match fuel with
     | 0 => none
     | fuel + 1 =>
-      let .closure params body ← env.lookup name | none
-      match ← callLocal m fuel env params body vs with
-      | (.ok _, after) => some (.normal after)
-      | (.error t, _) => some (.ret (.error t))
+      match env.lookup name with
+      | some (.closure params body) =>
+        match ← callLocal m fuel env params body vs with
+        | (.ok _, after) => some (.normal after)
+        | (.error t, _) => some (.ret (.error t))
+      | some _ => none
+      | none =>
+        let i ← (borrowsOf m).lookup name
+        let some (.ident _ target) := args[i]? | none
+        let (params, body) ← (functionsOf m.program).lookup ⟨m.file, name⟩
+        let param ← params[i]?
+        let .map _ ← env.lookup target | none
+        let .normal after ← execStmt m fuel (← bindArgs params vs) body | none
+        let .map entries ← after.lookup param | none
+        return .normal (env.set target (.map entries))
   | .exprStmt _ (.assign _ .assign (.ident _ name) value) => do
     return .normal (env.set name (← eval m fuel env value))
   -- `x ??= e` (`LogicalAssignment`, ECMA-262 §13.15.2): `e` runs, and its
@@ -2294,7 +2343,7 @@ def callIn (p : Program) (key : DeclRef) (args : List (Val N)) (fuel : Nat := 64
     Option (Except (Val N) (Val N)) := do
   let (params, body) ← (functionsOf p).lookup key
   -- As in `evalCall`: the function changes only collections that it owns.
-  if !Stmt.ownsChanges params body then none
+  if !Stmt.ownsChangesBorrow (borrowsOf ⟨p, key.file⟩) params body then none
   match ← execStmt ⟨p, key.file⟩ fuel (← bindArgs params args) body with
   | .ret r => some r
   | .normal _ | .brk _ | .cont _ => none

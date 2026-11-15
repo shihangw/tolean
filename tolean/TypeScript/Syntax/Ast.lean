@@ -1,4 +1,5 @@
 import tolean.Source
+import tolean.TypeScript.Edition
 
 /-!
 The TypeScript syntax tree: the part of TypeScript that the parser reads.
@@ -135,6 +136,7 @@ inductive Expr where
   /-- As written in the source, with its `n`. -/
   | bigint (span : Span) (text : String)
   | string (span : Span) (value : String)
+  | regexp (span : Span) (source : String) (target : Edition)
   | bool (span : Span) (value : Bool)
   | null (span : Span)
   | array (span : Span) (elems : List Expr)
@@ -299,6 +301,7 @@ mutual
 `++` or another assignment. The cases list every constructor, so a new one
 cannot be missed. -/
 def Expr.assigns (n : String) : Expr → Bool
+  | .regexp .. => false
   | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => false
   | .array _ es => Expr.assignsList n es
   | .object _ ps => Property.assignsList n ps
@@ -378,6 +381,7 @@ mutual
 /-- `e` calls a method that changes the array, map or set that the name `n`
 holds, such as `n.push(x)` or `n.delete(k)`, somewhere inside it. -/
 def Expr.mutates (n : String) : Expr → Bool
+  | .regexp .. => false
   | .call _ (.member _ (.ident _ m) method) args =>
     (m == n && changingMethods.contains method) || Expr.mutatesList n args
   | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => false
@@ -452,6 +456,7 @@ collection of that name, such as `(s)`, `s satisfies T`, `c ? s : t` or
 `f(s)`. So may the arguments of a `new`: `new Map([[k, s]])` holds `s` as a
 value, and `.get(k)` gives it back. -/
 def Expr.mayHold (p : String → Bool) : Expr → Bool
+  | .regexp .. => false
   | .ident _ n => p n
   | .number .. | .bigint .. | .string .. | .bool .. | .null _ => false
   | .new _ _ _ args => Expr.mayHoldList p args
@@ -567,6 +572,7 @@ mutual
 /-- The names whose array, map or set `e` changes: the receiver of each
 `push`, `set`, `add` or `delete` in it. -/
 def Expr.changed : Expr → List String
+  | .regexp .. => []
   | .call _ (.member _ (.ident _ m) method) args =>
     (if changingMethods.contains method then [m] else []) ++ Expr.changedList args
   | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => []
@@ -597,6 +603,7 @@ a call or an index, or as what a `new` or a spread copies. A receiver gives a ne
 `n.get(k)`; the spec has no rule for a method that gives `n` itself back,
 such as `n.set(k, v)` used as a value. -/
 def Expr.leaks (n : String) : Expr → Bool
+  | .regexp .. => false
   | .ident _ m => m == n
   | .number .. | .bigint .. | .string .. | .bool .. | .null _ => false
   | .member _ (.ident ..) _ | .optMember _ (.ident ..) _ => false
@@ -770,6 +777,96 @@ def Stmt.ownsChanges (params : List String) (body : Stmt) : Bool :=
   body.changed.all fun n =>
     !params.contains n && !(body.binds n).isEmpty && (body.binds n).all id && !body.leaks n
 
+/-- The first borrow implementation accepts only atoms in the callee's map
+operations. In particular, evaluating an argument cannot call another function. -/
+def Expr.borrowAtom : Expr → Bool
+  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. => true
+  | _ => false
+
+/-- The shape of a straight-line update candidate. A forwarding call also
+needs `borrowCallsValid` to establish which argument changes. -/
+def Stmt.borrowUpdate (param : String) : Stmt → Bool
+  | .exprStmt _ (.call _ (.member _ (.ident _ name) method) args) =>
+    name == param &&
+      ((method == "set" && args.length == 2) || (method == "delete" && args.length == 1)) &&
+      args.all (fun e => e.borrowAtom && !e.leaks param)
+  | .exprStmt _ (.call _ (.ident _ _) args) =>
+    args.all (·.borrowAtom) &&
+      (args.filter (fun e => match e with
+        | .ident _ name => name == param
+        | _ => false)).length == 1
+  | _ => false
+
+/-- A terminal bare return has no value for a void borrowing call. Keep its
+prefix so the borrowing call can copy the final parameter binding out. -/
+def Stmt.borrowPrefix : Stmt → Stmt
+  | .block sp ss =>
+    match ss.getLast? with
+    | some (.returnStmt _ none) => .block sp ss.dropLast
+    | _ => .block sp ss
+  | s => s
+
+/-- A candidate map parameter for copy-out. Forwarded calls still need the
+callee-index check in `borrowParam?` before this becomes a signature. -/
+def borrowCandidate? (params : List Param) (ret : Option TypeExpr) (body : Stmt) : Option Nat := do
+  let some (.keyword _ "void") := ret | none
+  let .block _ ss := body.borrowPrefix | none
+  let maps := params.zipIdx |>.filter fun (p, _) =>
+    match p.type with
+    | some (.ref _ "Map" [_, _]) => true
+    | _ => false
+  let [(p, i)] := maps | none
+  if params.any (·.optional) || ss.isEmpty || !(ss.all (·.borrowUpdate p.name)) then none
+  else some i
+
+/-- A forwarded call changes the candidate parameter only when it occurs
+at the checked callee's borrowed argument index. No parameter may hide
+that top-level callee. -/
+def Stmt.borrowCallsValid (borrows : List (String × Nat)) (params : List String)
+    (param : String) : Stmt → Bool
+  | .exprStmt _ (.call _ (.ident _ name) args) =>
+    !params.contains name &&
+      match borrows.lookup name with
+      | some i =>
+        match args[i]? with
+        | some (.ident _ actual) => actual == param
+        | _ => false
+      | none => false
+  | _ => true
+
+/-- The map parameter whose final value a normal completion copies out.
+Every forwarded call must use an already checked borrowing signature. -/
+def borrowParam? (borrows : List (String × Nat)) (params : List Param)
+    (ret : Option TypeExpr) (body : Stmt) : Option Nat := do
+  let i ← borrowCandidate? params ret body
+  let p ← params[i]?
+  let .block _ ss := body.borrowPrefix | none
+  if ss.all (·.borrowCallsValid borrows (params.map (·.name)) p.name) then some i else none
+
+/-- Replace a checked borrow statement by a mutation marker for the existing
+ownership test. Every other mention of a borrowing function is refused here,
+so nested calls cannot bypass the check on the caller's source. -/
+def Stmt.borrowOwnershipBody (borrows : List (String × Nat)) (body : Stmt) : Option Stmt := do
+  let .block sp ss := body | if borrows.any (fun b => body.mentions b.1) then none else some body
+  let ss ← ss.mapM fun s => do
+    match s with
+    | .exprStmt sp (.call cs (.ident ns fn) args) =>
+      match borrows.lookup fn with
+      | some i =>
+        let some (.ident ms map) := args[i]? | none
+        if (args.eraseIdx i).any (·.leaks map) then none
+        else some (.exprStmt sp (.call cs (.member ns (.ident ms map) "delete") (args.eraseIdx i)))
+      | none => if borrows.any (fun b => s.mentions b.1) then none else some s
+    | _ => if borrows.any (fun b => s.mentions b.1) then none else some s
+  return .block sp ss
+
+/-- The interpreter and translator share this source-level ownership guard.
+The marker makes a borrowed argument count as changed, but not as an alias
+that escapes the call. It retains the other arguments so collections that
+they hold still fail the ordinary leak test. -/
+def Stmt.ownsChangesBorrow (borrows : List (String × Nat)) (params : List String) (body : Stmt) : Bool :=
+  (body.borrowOwnershipBody borrows).any (Stmt.ownsChanges params)
+
 /-- `s` declares a `const` that a statement of `rest` assigns. In JS that
 assignment throws a `TypeError` (ECMA-262 §9.1.1.1.5), so the spec gives no
 value for such a block, and the translator refuses it. -/
@@ -883,6 +980,7 @@ def TypeExpr.span : TypeExpr → Span
   | .tuple s _ _ | .predicate s _ _ => s
 
 def Expr.span : Expr → Span
+  | .regexp s .. => s
   | .ident s _ | .number s _ | .bigint s _ | .string s _ | .bool s _ | .null s | .array s _
   | .object s _ | .paren s _ | .member s _ _ | .optMember s _ _ | .index s _ _ | .optIndex s _ _ | .call s _ _ | .unary s _ _
   | .prefix s _ _ | .postfix s _ _ | .binary s _ _ _ | .cond s _ _ _ | .assign s _ _ _
@@ -898,6 +996,7 @@ mutual
 
 /-- `e` has no `<` or `<<` operator. -/
 def Expr.lessFree : Expr → Bool
+  | .regexp .. => true
   | .binary _ op l r => op != .lt && op != .shl && l.lessFree && r.lessFree
   | .array _ es => Expr.lessFreeList es
   | .object _ ps => Property.lessFreeList ps
@@ -935,6 +1034,7 @@ parameter), so that an `in` after the declaration starts a `for … in` loop.
 ECMA-262 also allows an `in` inside `[ … ]` there, but `tsc` does not, so
 `e` has none there either. -/
 def Expr.inFree : Expr → Bool
+  | .regexp .. => true
   | .binary _ op l r => op != .«in» && l.inFree && r.inFree
   | .cond _ test _ ifFalse => test.inFree && ifFalse.inFree
   | .assign _ _ target value => target.inFree && value.inFree
