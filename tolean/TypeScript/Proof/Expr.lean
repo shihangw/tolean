@@ -4890,7 +4890,7 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
               case list items =>
                 change Eval.numberLiteral text = some k at hk
                 simp only [hx, Option.bind_eq_bind, Option.bind_some, pure_bind,
-                  IR.ExprExt.apply, Option.some.injEq, Int.toNat_of_nonneg hpos] at hv
+                  IR.ExprExt.apply, IR.optionalLiteralIndex, Option.some.injEq, Int.toNat_of_nonneg hpos] at hv
                 simp [Eval.optionalIndexValue, Eval.numberText?, hk, hv]
               case null => simpa [hx, IR.ExprExt.apply] using hv
               case undefined => simpa [hx, IR.ExprExt.apply] using hv
