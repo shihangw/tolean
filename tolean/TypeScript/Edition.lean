@@ -205,3 +205,10 @@ def Feature.refusal (f : Feature) (target : Edition) : String :=
   s!"the target {target.name} does not have {f.describe} (added in {f.since.name})"
 
 end tolean.TypeScript
+
+-- Inline object-type annotations erase before runtime, so they add no edition
+-- gate. Their values use Object Initializer (ES2015 §12.2.6, ES2024 §13.2.5)
+-- and Property Accessors (ES2015 §12.3.2, ES2024 §13.3.2). An omitted optional
+-- field uses OrdinaryGet (ES2024 §10.1.8.1). A named union of anonymous shapes
+-- uses the existing strict tag tests and SwitchStatement (ES2024 §14.12).
+-- Every supported target has these operations.

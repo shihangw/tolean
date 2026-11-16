@@ -53,6 +53,40 @@ theorem isolated_ok {x : TM α} {s s' : Ctx} {a : α} (h : isolated x s = .ok a 
   obtain ⟨c, s₁, ⟨rfl, rfl⟩, r, s₂, hx, u, s₃, rfl, rfl, rfl⟩ := h
   exact ⟨rfl, s₂, hx⟩
 
+/-- Preparing an annotation changes only the anonymous-structure registry. -/
+theorem prepareInline_ok {decl : Decl} {s s' : Ctx} {u : Unit}
+    (h : prepareInline decl s = .ok u s') :
+    ∃ shapes, s' = { s with inlineStructs := shapes } := by
+  simp only [prepareInline, bind_ok] at h
+  obtain ⟨shapes, c, hcollect, hpublish⟩ := h
+  obtain ⟨rfl, -⟩ := isolated_ok hcollect
+  simp only [modify_ok] at hpublish
+  exact ⟨shapes, hpublish⟩
+
+/-- The early constructor-annotation pass also leaves runtime bindings and
+the source declarations alone. -/
+theorem prepareInlineErrors_ok (decls : List Decl) {s s' : Ctx}
+    (h : (decls.forM fun decl =>
+      if decl matches .errorClass _ _ _ _ then prepareInline decl else pure ()) s = .ok () s') :
+    ∃ shapes, s' = { s with inlineStructs := shapes } := by
+  induction decls generalizing s s' with
+  | nil =>
+    simp only [List.forM, pure_ok] at h
+    obtain ⟨-, rfl⟩ := h
+    exact ⟨s.inlineStructs, rfl⟩
+  | cons decl decls ih =>
+    simp only [List.forM, bind_ok] at h
+    obtain ⟨u, c, hfirst, hrest⟩ := h
+    have hc : ∃ shapes, c = { s with inlineStructs := shapes } := by
+      cases decl <;> simp only [↓reduceIte] at hfirst
+      all_goals first
+        | exact prepareInline_ok hfirst
+        | obtain ⟨-, rfl⟩ := pure_ok.mp hfirst
+          exact ⟨s.inlineStructs, rfl⟩
+    obtain ⟨shapes, rfl⟩ := hc
+    obtain ⟨more, rfl⟩ := ih hrest
+    exact ⟨more, rfl⟩
+
 theorem declareTopLevel_ok {sp : Span} {name : String} {s s' : Ctx} {u : Unit}
     (h : declareTopLevel sp name s = .ok u s') : s' = s ∧ ∀ f ∈ s.functions, f.name ≠ name := by
   simp only [declareTopLevel, bind_ok, get_ok, ite_state] at h
@@ -610,7 +644,7 @@ theorem translateAlias_ok {sp : Span} {ex : Bool} {name : String} {tps : List St
   | none =>
     simp only [hl, bind_ok, get_ok] at h
     obtain ⟨c, s₄, ⟨hc, hc4⟩, h⟩ := h
-    cases hu : unionMembers c.structs type with
+    cases hu : unionMembers c type with
     | some ms =>
       simp only [hu, bind_ok, pure_ok] at h
       obtain ⟨d, s₅, hd, rfl, rfl⟩ := h
@@ -972,7 +1006,7 @@ theorem translateAlias_names {P : Eval.Program} {sp : Span} {ex : Bool} {name : 
   | none =>
     simp only [hl, bind_ok, get_ok] at h
     obtain ⟨c, s₄, ⟨hc, hc4⟩, h⟩ := h
-    cases hu : unionMembers c.structs type with
+    cases hu : unionMembers c type with
     | some ms =>
       simp only [hu, bind_ok, pure_ok] at h
       obtain ⟨d, s₅, hd, rfl, rfl⟩ := h
@@ -1192,21 +1226,76 @@ theorem translateExports_ok {thr : String → Bool} {cls : String → Option (Op
     simp only [he, pure_bind, pure_ok] at h
     exact ⟨h.1.symm, h.2.symm⟩
 
-/-- `translateDecls` translates the error classes and then each declaration,
-after it checks that no name is in two export lists. -/
+/-- Generated structure declarations introduce no IR function. -/
+theorem functions_inlineStructs (infos : List StructInfo) :
+    IR.functions (infos.map StructInfo.inlineDecl) = [] := by
+  induction infos with
+  | nil => rfl
+  | cons info infos ih =>
+    simpa only [List.map_cons, StructInfo.inlineDecl, IR.functions, List.filterMap_cons] using ih
+
+/-- Interleaving generated structures preserves the original functions and
+their order, even for an empty or shorter prefix schedule. -/
+theorem functions_insertInlineDecls (decls : List (Option IR.Decl)) (prefixes : List (List StructInfo)) :
+    IR.functions (insertInlineDecls decls prefixes) = IR.functions (decls.filterMap id) := by
+  induction decls generalizing prefixes with
+  | nil => rfl
+  | cons decl decls ih =>
+    cases prefixes with
+    | nil =>
+      cases decl with
+      | none => exact ih []
+      | some decl =>
+        change IR.functions ([decl] ++ insertInlineDecls decls []) =
+          IR.functions ([decl] ++ decls.filterMap id)
+        have htail := ih []
+        simp only [IR.functions] at htail
+        simp only [IR.functions, List.filterMap_append]
+        rw [htail]
+    | cons prefixDecls prefixes =>
+      simp only [insertInlineDecls, IR.functions, List.filterMap_append] at ih ⊢
+      have hprefix := functions_inlineStructs prefixDecls
+      simp only [IR.functions] at hprefix
+      rw [hprefix, List.nil_append, ih]
+      cases decl with
+      | none => rfl
+      | some decl => cases decl <;> rfl
+
+def inlineStart (m : Module) (s : Ctx) : Ctx :=
+  { s with
+    borrows := Eval.moduleBorrows m
+    inlinePrefixes := []
+    inlineReserved := m.lines.flatMap fun line => line.2.flatten.filterMap fun
+      | .ident name => some name
+      | _ => none }
+
+/-- Anonymous structures can change the output's type declarations, but not
+its functions. Each runtime declaration still translates from the original
+source tree. -/
 theorem translateDecls_ok {m : Module} {s s' : Ctx} {ds : List IR.Decl}
     (h : translateDecls m s = .ok ds s') :
-    ∃ pre s₁ os, translateErrorTypes m { s with borrows := Eval.moduleBorrows m } = .ok pre s₁ ∧
-      m.decls.mapM (translateDecl (Eval.mayThrow m) (Eval.errorClassOf m) (Eval.guardTests m) s₁.errorClasses) s₁ = .ok os s' ∧
-      ds = pre ++ os.filterMap id := by
+    ∃ shapes pre s₁ os,
+      translateErrorTypes m { inlineStart m s with inlineStructs := shapes } = .ok pre s₁ ∧
+      m.decls.mapM
+        (translateDeclWithInline (Eval.mayThrow m) (Eval.errorClassOf m) (Eval.guardTests m) s₁.errorClasses)
+        s₁ = .ok os s' ∧
+      IR.functions ds = IR.functions (pre ++ os.filterMap id) := by
   simp only [translateDecls, bind_ok, modify_ok] at h
   obtain ⟨_, _, rfl, h⟩ := h
   cases hd : duplicateExport? m with
   | some n => simp [hd] at h
   | none =>
     simp only [hd, pure_bind, bind_ok, get_ok, pure_ok] at h
-    obtain ⟨pre, s₁, hpre, _, _, ⟨rfl, rfl⟩, os, s₂, hos, rfl, rfl⟩ := h
-    exact ⟨_, _, _, hpre, hos, rfl⟩
+    obtain ⟨_, c, herrors, _, _, ⟨rfl, rfl⟩, pre, s₁, hpre,
+      _, _, ⟨rfl, rfl⟩, os, s₂, hos, _, _, ⟨rfl, rfl⟩, rfl, rfl⟩ := h
+    obtain ⟨shapes, hshapes⟩ := prepareInlineErrors_ok m.decls herrors
+    refine ⟨shapes, pre, _, os, ?_, hos, ?_⟩
+    · simpa only [hshapes, inlineStart] using hpre
+    · simp only [hshapes, IR.functions, List.filterMap_append]
+      have htypes := functions_inlineStructs shapes
+      have hdecls := functions_insertInlineDecls os
+      simp only [IR.functions] at htypes hdecls
+      rw [htypes, List.nil_append, hdecls]
 
 /-- Each parameter of a constructor translates to its name and its type,
 with its `readonly` mark. -/
@@ -1571,7 +1660,8 @@ translate. -/
 theorem decls_ok (P : Eval.Program) (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr)))
     (classes : List ClassInfo) :
     ∀ (ds : List Decl) (s s' : Ctx) (os : List (Option IR.Decl)),
-    IfacesSelf s.interfaces → FaithfulE P s.interfaces → ds.mapM (translateDecl thr cls guards classes) s = .ok os s' →
+    IfacesSelf s.interfaces → FaithfulE P s.interfaces →
+    ds.mapM (translateDeclWithInline thr cls guards classes) s = .ok os s' →
     s'.file = s.file ∧ s'.interfaces = s.interfaces ∧
       (∃ more, s'.functions = s.functions ++ more ∧ (∀ f ∈ more, f.ref ∈ ds.flatMap (declRefs s.file)) ∧
         (∀ f ∈ more, f.exported = true → ∃ sp tps ps r b, Decl.function sp true f.name tps ps r b ∈ ds) ∧
@@ -1589,9 +1679,19 @@ theorem decls_ok (P : Eval.Program) (thr : String → Bool) (cls : String → Op
   | d :: ds, s, s', os, hself, hfe, h => by
     simp only [List.mapM_cons, bind_ok, pure_ok] at h
     obtain ⟨o, s₁, h₁, os', s₂, h₂, rfl, rfl⟩ := h
-    have hb₁ := translateDecl_borrows hself h₁
-    obtain ⟨hf₁, hi₁, more₁, hfns₁, hrefs₁, hnd₁, hex₁, hor₁⟩ := translateDecl_ok hself h₁
-    have hn₁ := translateDecl_names hfe h₁
+    unfold translateDeclWithInline at h₁
+    rw [EStateM.bind_eq (show (get : TM Ctx) s = .ok s s from rfl)] at h₁
+    simp only [bind_ok, modify_ok, pure_ok] at h₁
+    obtain ⟨_, prepared, hprepare, _, state, h₁, _, _, rfl, rfl, rfl⟩ := h₁
+    obtain ⟨shapes, rfl⟩ := prepareInline_ok hprepare
+    have hb₁ := translateDecl_borrows (s := { s with inlineStructs := shapes }) hself h₁
+    obtain ⟨hf₁, hi₁, more₁, hfns₁, hrefs₁, hnd₁, hex₁, hor₁⟩ :=
+      translateDecl_ok (s := { s with inlineStructs := shapes }) hself h₁
+    have hn := translateDecl_names (s := { s with inlineStructs := shapes }) hfe h₁
+    let s₁ : Ctx :=
+      { state with inlinePrefixes := state.inlinePrefixes ++ [state.inlineStructs.drop s.inlineStructs.length] }
+    have hn₁ : DeclNames P d s s₁ :=
+      ⟨hn.file, hn.mono, hn.bound, hn.nodup, hn.fresh, hn.values, hn.exports⟩
     obtain ⟨hf₂, hi₂, ⟨more₂, hfns₂, hrefs₂, hex₂, hor₂⟩, hnd₂, hn₂, hrel⟩ :=
       decls_ok P thr cls classes ds s₁ s₂ os' (by rw [hi₁]; exact hself) (by rw [hi₁]; exact hfe) h₂
     rw [hb₁] at hrel
@@ -2065,7 +2165,7 @@ theorem programTranslation_rel {p : Eval.Program} {outs : List (String × List I
     simp only [Prod.mk.injEq] at hfns
     obtain ⟨hfns, hen0, hev0, hcls0⟩ := hfns
     -- The file's error classes, then its own translation.
-    obtain ⟨pre, s₁, os, hpre, hos, rfl⟩ := translateDecls_ok htr
+    obtain ⟨shapes, pre, s₁, os, hpre, hos, hfuncs⟩ := translateDecls_ok htr
     obtain ⟨hf₁, hi₁, hfn₁, hen₁, hev₁, hb₁, hpre0, hcls⟩ := translateErrorTypes_ok hpre
     have hfile : s₁.file = file := hf₁.trans hfile
     have hfns : s₁.functions = [] := hfn₁.trans hfns
@@ -2162,7 +2262,7 @@ theorem programTranslation_rel {p : Eval.Program} {outs : List (String × List I
         · simp at hti
     · simp only [Eval.functionsOf, IR.functionsOf, List.flatMap_append, List.flatMap_cons,
         List.flatMap_nil, List.append_nil]
-      rw [functions_append, hpre0, List.nil_append]
+      rw [hfuncs, functions_append, hpre0, List.nil_append]
       refine hrel.append (Forall₂.map ?_ hrelm)
       intro x y hxy
       obtain ⟨hn, hps, hnd, tail, Fu, env, c, c', ht, hsub, hsubE, hsubC, hhas, hmode⟩ := hxy
@@ -2176,7 +2276,7 @@ theorem programTranslation_rel {p : Eval.Program} {outs : List (String × List I
         · exact hfl.trans hfile
         · simp [hno] at hborrow
       · have hbs : Eval.borrowsOf ⟨P, file⟩ = s₁.borrows := by
-          simp [Eval.borrowsOf, hPm, hb₁]
+          simp [Eval.borrowsOf, hPm, hb₁, inlineStart]
         simpa [hbs] using hmode
 
 variable {N : Type} [JSNumber N]

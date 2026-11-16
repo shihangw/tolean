@@ -52,6 +52,13 @@ exact. A construct leaves these tables when Tolean translates it, and the
 
 ### Types and narrowing
 
+Inline object types now use generated structures. This includes object
+aliases and anonymous members of named tagged unions. The translator shares
+equivalent shapes and captures their lexical type parameters rather than
+giving each annotation a different nominal type. The
+[TypeScript guide](../typescript/README.md#the-subset) describes the supported
+positions and the restrictions inherited from named interfaces.
+
 | TypeScript | Lean | Refused |
 |---|---|---|
 | `f?.()` | No accepted program to translate: `Syntax.TypeExpr` and `Translate.Ty` have no function type, and no accepted declaration gives a possibly `undefined` value a callable type. A generic type parameter does not make a value callable. Local function values cannot escape a direct call. | Optional calls stay refused; so does `==` against anything except `null` and `undefined`. |

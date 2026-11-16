@@ -1424,6 +1424,79 @@ test('interface fields describe the values at each call, not aliases between cal
   expect(lean?.results.map((r) => r.value)).toEqual(expected);
 });
 
+test('inline object shapes and tagged unions agree with Node', async () => {
+  const fixtures: Array<{ name: string; calls: Array<{ function: string; args: Array<unknown> }> }> = [
+    {
+      name: 'inlineObjects',
+      calls: [
+        { function: 'id', args: [{ n: 7n }] },
+        { function: 'make', args: [8n] },
+        { function: 'use', args: [9n] },
+        { function: 'reordered', args: [{ a: 3n, b: true }] },
+        { function: 'aliases', args: [{ n: 10n }] },
+        { function: 'generic', args: [{ value: 11n }] },
+        { function: 'alpha', args: [{ value: 12n }] },
+        { function: 'concrete', args: [19n] },
+        { function: 'typedCell', args: [{ value: 13n }] },
+        { function: 'unusedGeneric', args: [{ a: 13n }, false] },
+        { function: 'nested', args: [{ child: { n: 2n }, items: [{ n: 3n }, { n: 4n }] }] },
+        { function: 'optional', args: [{}] },
+        { function: 'optional', args: [{ n: undefined }] },
+        { function: 'optional', args: [{ n: null }] },
+        { function: 'optional', args: [{ n: 5n }] },
+        { function: 'satisfies', args: [14n] },
+        { function: 'localValue', args: [15n] },
+        { function: 'arrayValue', args: [16n] },
+        { function: 'names', args: [{ ToleanInlineType1: 16n }] },
+      ],
+    },
+    {
+      name: 'inlineObjectUnion',
+      calls: [
+        { function: 'size', args: [{ kind: 'circle', r: 3 }] },
+        { function: 'size', args: [{ kind: 'square', side: 4 }] },
+        { function: 'circle', args: [5] },
+        { function: 'pair', args: [6] },
+        { function: 'area', args: [{ w: 7, h: 8 }] },
+        { function: 'startX', args: [{ start: { x: 9, y: 10 }, items: [{ n: 11 }] }] },
+        { function: 'segment', args: [12, 13] },
+        { function: 'state', args: [{ kind: 'on', value: 17n }] },
+        { function: 'state', args: [{ kind: 'off' }] },
+      ],
+    },
+    {
+      name: 'inlineObjectIdentity',
+      calls: [
+        { function: 'identity', args: [{ n: 1n }] },
+        { function: 'made', args: [2n] },
+        { function: 'copy', args: [{ inner: { n: 3n } }] },
+        { function: 'build', args: [4n] },
+        { function: 'total', args: [{ inner: { n: 5n }, extra: null }] },
+        { function: 'total', args: [{ inner: { n: 6n }, extra: 7n }] },
+        { function: 'empty', args: [] },
+      ],
+    },
+  ];
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-inline-objects-'));
+  for (const fixture of fixtures) {
+    const source = readFileSync(join(root, `tests/typescript/corpus/translate/accept/${fixture.name}.ts`), 'utf8');
+    const path = join(dir, `${fixture.name}.mjs`);
+    writeFileSync(path, ts.transpileModule(source, {
+      compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+    }).outputText);
+    const mod = await import(pathToFileURL(path).href) as Record<string, (...args: Array<unknown>) => unknown>;
+    const expected = fixture.calls.map(call => encode(mod[call.function]!(...call.args)));
+    const calls = fixture.calls.map(call => ({ function: call.function, args: call.args.map(encode) }));
+    const run = spawnSync(tolean, ['interpret'], {
+      input: JSON.stringify({ programs: [{ source, calls }] }), encoding: 'utf8',
+    });
+    expect(run.status, run.stderr).toBe(0);
+    const [lean] = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+    expect(lean?.accepted, fixture.name).toBe(true);
+    expect(lean?.results.map(result => result.value)).toEqual(expected);
+  }
+});
+
 // A JS loop over a set, a map or an array sees a change that its body makes
 // to what it runs over, and the interpreter takes the values when the loop
 // starts. So it must give no value for such a loop, however the iterable
