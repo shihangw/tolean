@@ -539,7 +539,7 @@ theorem parseField_plain (sp : Span) (name : String) (ty : TypeExpr) (hty : ty.w
     { s₃ with rest := rest, left := s₃.left - 1, lastStop := semi.span.stop }, ?_, by simp [Field.erase, het],
     leaves_trans (leaves_advance hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))
       (leaves_trans hL₃ (leaves_advance hs₃ (by rw [hL₃.left_eq, hs₃]))))⟩
-  simp only [Parse.parseField]
+  simp only [Parse.parseField, Parse.parseFieldWith]
   rw [Parse.bind_eq (Parse.peek_eq hs'), Parse.bind_eq (Parse.peekAt_rest _ _)]
   simp only [hs', List.getElem?_cons_succ, List.getElem?_cons_zero, Option.getD_some, Token.isAnyIdent, hc,
     Bool.and_false, Bool.or_false, Bool.false_eq_true, ↓reduceIte, Parse.pure_bind]
@@ -588,7 +588,7 @@ theorem parseField_opt (sp : Span) (name : String) (ty : TypeExpr) (hty : ty.wf 
     leaves_trans (leaves_advance hs' hl) (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, hl, hs']))
       (leaves_trans (leaves_advance (s := s₁') rfl (by simp [s₁', s₁, hl, hs']))
         (leaves_trans hL₃ (leaves_advance hs₃ (by rw [hL₃.left_eq, hs₃])))))⟩
-  simp only [Parse.parseField]
+  simp only [Parse.parseField, Parse.parseFieldWith]
   rw [Parse.bind_eq (Parse.peek_eq hs'), Parse.bind_eq (Parse.peekAt_rest _ _)]
   simp only [hs', List.getElem?_cons_succ, List.getElem?_cons_zero, Option.getD_some, Token.isAnyIdent, hq,
     Bool.and_false, Bool.or_false, Bool.false_eq_true, ↓reduceIte, Parse.pure_bind]
@@ -641,7 +641,7 @@ theorem parseField_ro (sp : Span) (name : String) (opt : Bool) (ty : TypeExpr) (
       leaves_trans (leaves_advance hs' hl) (leaves_trans (leaves_advance (s := s₀) rfl (by simp [s₀, hl, hs']))
         (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, s₀, hl, hs']))
           (leaves_trans hL₃ (leaves_advance hs₃ (by rw [hL₃.left_eq, hs₃])))))⟩
-    simp only [Parse.parseField]
+    simp only [Parse.parseField, Parse.parseFieldWith]
     rw [Parse.bind_eq (Parse.peek_eq hs'), Parse.bind_eq (Parse.peekAt_rest _ _)]
     rcases hnmk with hnmk | hnmk
     all_goals
@@ -680,7 +680,7 @@ theorem parseField_ro (sp : Span) (name : String) (opt : Bool) (ty : TypeExpr) (
         (leaves_trans (leaves_advance (s := s₁) rfl (by simp [s₁, s₀, hl, hs']))
           (leaves_trans (leaves_advance (s := s₁') rfl (by simp [s₁', s₁, s₀, hl, hs']))
             (leaves_trans hL₃ (leaves_advance hs₃ (by rw [hL₃.left_eq, hs₃]))))))⟩
-    simp only [Parse.parseField]
+    simp only [Parse.parseField, Parse.parseFieldWith]
     rw [Parse.bind_eq (Parse.peek_eq hs'), Parse.bind_eq (Parse.peekAt_rest _ _)]
     rcases hnmk with hnmk | hnmk
     all_goals

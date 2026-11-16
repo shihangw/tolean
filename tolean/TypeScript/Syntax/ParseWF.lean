@@ -311,6 +311,25 @@ theorem arrayWF_wf : ∀ t : TypeExpr, t.arrayWF = true → t.wf = true
     revert h; simp [TypeExpr.arrayWF, TypeExpr.wf]
   | .union .., h => by simp [TypeExpr.arrayWF] at h
 
+theorem wordsOK_append_iff {T : Edition} {a b : List Word} : WordsOK T (a ++ b) ↔ WordsOK T a ∧ WordsOK T b := by
+  simp [WordsOK, or_imp, forall_and]
+
+theorem wordsOK_cons_iff {T : Edition} {w : Word} {ws : List Word} :
+    WordsOK T (w :: ws) ↔ Word.ok T w = true ∧ WordsOK T ws := by
+  simp [WordsOK]
+
+theorem wordsOK_nil_iff {T : Edition} : WordsOK T [] ↔ True := by simp [WordsOK]
+
+/-- Closes `Word.ok T w = true` for a word of fixed keywords, names, punctuators and strings. -/
+macro "word_ok" : tactic =>
+  `(tactic| (simp only [keywordWord, punctWord, identWord, Word.ok, TokenKind.ok] <;> decide))
+
+/-- Splits `WordsOK T ws` into its words, and closes each from a hypothesis or as a fixed word. -/
+macro "words_ok" : tactic => `(tactic| (
+  try simp only [wordsOK_append_iff, wordsOK_cons_iff, wordsOK_nil_iff, and_true, true_and]
+  all_goals (repeat' apply And.intro)
+  all_goals first | assumption | trivial | word_ok))
+
 theorem TypeField.wordsOK {T : Edition} (f : TypeField)
     (hn : ∀ span readonly name optional type, f = .field span readonly name optional type →
       Word.ok T (propertyName name) = true)
@@ -320,8 +339,10 @@ theorem TypeField.wordsOK {T : Edition} (f : TypeField)
   | field span readonly name optional type =>
     have hname := hn span readonly name optional type rfl
     have htype := ht span readonly name optional type rfl
-    unfold TypeField.words
-    cases readonly <;> cases optional <;> words_ok
+    cases readonly <;> cases optional
+    all_goals
+      dsimp [TypeField.words]
+      words_ok
 
 theorem TypeField.wordsOfOK {T : Edition} : ∀ (fields : List TypeField),
     (hn : ∀ f ∈ fields, ∀ span readonly name optional type, f = .field span readonly name optional type →
@@ -344,7 +365,7 @@ theorem TypeExpr.objectFieldsWF_of : ∀ (fields : List TypeField),
     cases field with
     | field span readonly name optional type =>
       simp only [TypeExpr.objectFieldsWF, Bool.and_eq_true]
-      exact ⟨h _ (by simp) _ _ _ _ _ rfl,
+      exact ⟨h (.field span readonly name optional type) (by simp) span readonly name optional type rfl,
         TypeExpr.objectFieldsWF_of fields
           (fun f hf sp ro n opt ty heq => h f (by simp [hf]) sp ro n opt ty heq)⟩
 
@@ -722,7 +743,7 @@ theorem types_give (T : Edition) : ∀ f : Nat,
       obtain ⟨z, r₄, hs₄⟩ := hR₃.cons
       rw [Parse.bind_eq (Parse.peek_eq hs₄)] at h
       obtain ⟨_, h⟩ := fail_inv h
-      obtain ⟨hcol, h⟩ := pass_err (unexpected_refuses _) h
+      obtain ⟨hcol, h⟩ := pass_err (unexpected_refuses _ _) h
       have hzne : z.kind ≠ .eof := by simp [Token.isPunct] at hcol; rw [hcol]; simp
       rw [Parse.bind_eq (Parse.discard_eq (advance_past hR₃ hs₄ hzne))] at h
       have hR₄ := hR₃.past hs₄ (hR₃.more hs₄ hzne)
@@ -745,7 +766,7 @@ theorem types_give (T : Edition) : ∀ f : Nat,
         exact ⟨hR₅.past hs₆ (hR₅.more hs₆ hwne), hK.trans (Kept.past _ _ _), htw,
           hnmok, both_right htwo⟩
       · rw [if_neg hsep] at h
-        obtain ⟨_, h⟩ := fail_err (unexpected_refuses _) h
+        obtain ⟨_, h⟩ := fail_err (unexpected_refuses _ _) h
         rw [Parse.bind_eq (Parse.spanFrom_eq _ _)] at h
         simp only [Parse.pure_ok] at h
         obtain ⟨rfl, rfl⟩ := h
@@ -1034,15 +1055,14 @@ theorem types_give (T : Edition) : ∀ f : Nat,
             obtain ⟨fields, s₂, hfields, h⟩ := h
             let s₀ := past s t0 r
             have hT₀ : s₀.target = T := by simp [s₀, hT]
-            obtain ⟨⟨hall, hR₂, hK₂⟩, a₁, s₁, hI₁, hlast⟩ := iterate_inv
+            obtain ⟨⟨hR₂, hK₂, hall⟩, a₁, s₁, hI₁, hlast⟩ := iterate_inv
               (I := fun a st => Ready st ∧ Kept s₀ st ∧
                 ∀ field ∈ a.toList, ∀ sp readonly name optional type,
                   field = .field sp readonly name optional type →
                     type.wf = true ∧ Word.ok T (propertyName name) = true ∧ WordsOK T type.words)
               (fun _ st _ _ st' hI hstep => blockStep_wf objectField_gives hT₀ hI hstep)
-              _ #[] _ fields s₁
-              ⟨by simp, hR₁, Kept.refl _,
-                by simp⟩ hfields
+              _ #[] _ fields s₂
+              ⟨hR₁, Kept.refl _, by simp⟩ hfields
             rw [Parse.bind_ok] at h
             obtain ⟨close, s₃, hclose, h⟩ := h
             obtain ⟨_, r₃, _, rfl, hR₃⟩ := expectPunct_inv hR₂ hclose
@@ -3301,25 +3321,6 @@ theorem parseLeftHandSide_gives {T : Edition} {f : Nat} (hE : GivesE T .assign (
     (fun _ _ _ _ _ hI hst => lhsStep_inv hE hA hT hI hst) _ p s₁ e s' gp h).1
 
 /-! #### The words of printed lines -/
-
-theorem wordsOK_append_iff {T : Edition} {a b : List Word} : WordsOK T (a ++ b) ↔ WordsOK T a ∧ WordsOK T b := by
-  simp [WordsOK, or_imp, forall_and]
-
-theorem wordsOK_cons_iff {T : Edition} {w : Word} {ws : List Word} :
-    WordsOK T (w :: ws) ↔ Word.ok T w = true ∧ WordsOK T ws := by
-  simp [WordsOK]
-
-theorem wordsOK_nil_iff {T : Edition} : WordsOK T [] ↔ True := by simp [WordsOK]
-
-/-- Closes `Word.ok T w = true` for a word of fixed keywords, names, punctuators and strings. -/
-macro "word_ok" : tactic =>
-  `(tactic| (simp only [keywordWord, punctWord, identWord, Word.ok, TokenKind.ok] <;> decide))
-
-/-- Splits `WordsOK T ws` into its words, and closes each from a hypothesis or as a fixed word. -/
-macro "words_ok" : tactic => `(tactic| (
-  try simp only [wordsOK_append_iff, wordsOK_cons_iff, wordsOK_nil_iff, and_true, true_and]
-  all_goals (repeat' apply And.intro)
-  all_goals first | assumption | trivial | word_ok))
 
 /-- The name that `readName` read lexes back. -/
 theorem readName_words {T : Edition} {s s' : ParseState} {n : String} (h : Ready s) (hT : s.target = T)

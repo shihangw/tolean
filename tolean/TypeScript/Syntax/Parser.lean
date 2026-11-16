@@ -159,6 +159,15 @@ def withLoop {A : Type} (body : ParseM A) : ParseM A := do
 
 /-! ### Types -/
 
+/-- One step of a loop over the items of a block in `{ … }`: an item that
+`parseItem` reads, unless the `}` comes. The statements of a block and the
+fields of an interface are such items. -/
+def blockStep {α : Type} (parseItem : ParseM α) (items : Array α) : ParseM (Array α × Bool) := do
+  let t ← peek
+  if t.isPunct "}" then return (items, false)
+  if t.isEof then unexpected t "'}'"
+  return (items.push (← parseItem), true)
+
 /-- One step of the loop over type arguments: an argument, and the `,` after
 it, if one comes. The loops of the parser are named, so that a proof can name
 them. -/
@@ -195,7 +204,7 @@ def parseFieldWith (parseFieldType : Nat → ParseM TypeExpr) : ParseM Field := 
   -- `readonly` is a modifier only before a name on the same line.
   let readonly := t.isIdent "readonly" && !next.newlineBefore &&
     (next.isAnyIdent || (next.kind matches .keyword _ | .string _ | .number _))
-  if readonly then discard advance
+  if readonly = true then discard advance
   let name ← readPropertyName
   let optional := (← peek).isPunct "?"
   if optional then discard advance
@@ -972,15 +981,6 @@ def countedFor : ParseM Bool := do
   let afterName ← peekAt 4
   return first.isPunct ";" || ((first.isKeyword "const" || first.isIdent "let") && !second.isPunct "[" &&
     !afterName.isIdent "of" && !afterName.isKeyword "in")
-
-/-- One step of a loop over the items of a block in `{ … }`: an item that
-`parseItem` reads, unless the `}` comes. The statements of a block and the
-fields of an interface are such items. -/
-def blockStep {α : Type} (parseItem : ParseM α) (items : Array α) : ParseM (Array α × Bool) := do
-  let t ← peek
-  if t.isPunct "}" then return (items, false)
-  if t.isEof then unexpected t "'}'"
-  return (items.push (← parseItem), true)
 
 /-- `break;` at the top of a clause of a `switch`. It ends the `switch`, so
 JavaScript allows it outside a loop. -/

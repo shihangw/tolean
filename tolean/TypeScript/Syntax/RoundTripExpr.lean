@@ -975,24 +975,6 @@ theorem Touching.enclosed {ts : List Token} {o c : String} {inner : List Word}
   simp [Touching] at h₃; subst h₃
   exact ⟨lp, its, rp, rfl, hlp, hits, hrp⟩
 
-theorem Parse.pure_bind {α β : Type} (a : α) (f : α → ParseM β) (s : ParseState) :
-    ((pure a : ParseM α) >>= f) s = f a s := rfl
-
-theorem Parse.pure_eq {α : Type} (a : α) (s : ParseState) : (pure a : ParseM α) s = .ok a s := rfl
-
-theorem Parse.discard_eq {α : Type} {x : ParseM α} {s s' : ParseState} {a : α} (h : x s = .ok a s') :
-    (discard x) s = .ok () s' := by
-  simp [discard, Functor.mapConst, Function.comp_apply, EStateM.map, h]
-
-/-- A check that the do notation writes as `if c then A; k else k`, where `A`
-passes whenever `c` holds. -/
-theorem Parse.ite_guard {β : Type} {c : Bool} {A : ParseM PUnit} {k : PUnit → ParseM β} {s : ParseState}
-    (hA : c = true → A s = .ok () s) :
-    (if c = true then A >>= k else pure PUnit.unit >>= k) s = k () s := by
-  split
-  · rename_i h; exact Parse.bind_eq (hA h)
-  · rfl
-
 /-! ### Elements and arguments -/
 
 /-- `e` starts with the token that `o` starts with. -/
@@ -1170,8 +1152,10 @@ theorem TypeExpr.heightFields_le : ∀ fields : List TypeField,
     have ih := TypeExpr.heightFields_le fields
     cases field with
     | field sp readonly name optional type =>
-      simp only [TypeExpr.heightFields, TypeField.tokensOf, List.map_cons, List.flatten_cons,
-        TypeField.tokens, List.length_append]
+      change max type.height (TypeExpr.heightFields fields) ≤
+        ((TypeField.field sp readonly name optional type).tokens ++ TypeField.tokensOf fields).length
+      simp only [List.length_append]
+      change type.tokens.length ≤ (TypeField.field sp readonly name optional type).tokens.length at hfield
       have ht := TypeExpr.height_le type
       omega
 
