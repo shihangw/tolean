@@ -469,7 +469,7 @@ def bodyConditionCalls (callee : String) : IR.Body → List ConditionalCall
   | .let _ e rest | .letTuple _ e rest => conditionCalls callee e ++ bodyConditionCalls callee rest
   | .letState _ a b => bodyConditionCalls callee a ++ bodyConditionCalls callee b
   | .ite c a b => conditionCalls callee c ++ bodyConditionCalls callee a ++ bodyConditionCalls callee b
-  | .matchNull n _ a b kind =>
+  | .matchNull n kind a b =>
     (bodyConditionCalls callee a).map (fun (guards, args) => ((n, false, kind) :: guards, args)) ++
       (bodyConditionCalls callee b).map (fun (guards, args) => ((n, true, kind) :: guards, args))
   -- Tagged branches rebind the scrutinee at a narrower type.
