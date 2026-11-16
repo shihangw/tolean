@@ -38,6 +38,10 @@ partial def TypeExpr.toSexp : TypeExpr → Sexp
   | .union s members => node "type-union" s [] (members.map toSexp)
   | .paren s inner => node "type-paren" s [] [inner.toSexp]
   | .tuple s readonly elems => node "type-tuple" s (flag readonly "readonly") (elems.map toSexp)
+  | .object s fields => node "type-object" s [] (fields.map fun
+      | .field sp readonly name optional type =>
+        node "type-field" sp ([name] ++ flag readonly "readonly" ++ flag optional "optional")
+          [type.toSexp])
   | .predicate s parameter target => node "type-predicate" s [parameter] [target.toSexp]
 
 def Param.toSexp (p : Param) : Sexp :=

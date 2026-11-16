@@ -27,12 +27,24 @@ def TypeExpr.beq : TypeExpr → TypeExpr → Bool
   | .union a0 a1, .union b0 b1 => decide (a0 = b0) && TypeExpr.beqList a1 b1
   | .paren a0 a1, .paren b0 b1 => decide (a0 = b0) && TypeExpr.beq a1 b1
   | .tuple a0 a1 a2, .tuple b0 b1 b2 => decide (a0 = b0) && decide (a1 = b1) && TypeExpr.beqList a2 b2
+  | .object a0 a1, .object b0 b1 => decide (a0 = b0) && TypeField.beqList a1 b1
   | .predicate a0 a1 a2, .predicate b0 b1 b2 => decide (a0 = b0) && decide (a1 = b1) && TypeExpr.beq a2 b2
   | _, _ => false
 
 def TypeExpr.beqList : List TypeExpr → List TypeExpr → Bool
   | [], [] => true
   | x :: xs, y :: ys => TypeExpr.beq x y && TypeExpr.beqList xs ys
+  | _, _ => false
+
+def TypeField.beq (a b : TypeField) : Bool :=
+  match a, b with
+  | .field sp ro n optional type, .field sp' ro' n' optional' type' =>
+    decide (sp = sp') && decide (ro = ro') && decide (n = n') &&
+      decide (optional = optional') && TypeExpr.beq type type'
+
+def TypeField.beqList : List TypeField → List TypeField → Bool
+  | [], [] => true
+  | x :: xs, y :: ys => TypeField.beq x y && TypeField.beqList xs ys
   | _, _ => false
 
 end
@@ -61,6 +73,8 @@ theorem TypeExpr.beq_iff : (a b : TypeExpr) → TypeExpr.beq a b = true ↔ a = 
     cases b <;> simp [and_assoc, TypeExpr.beq, TypeExpr.beq_iff a1]
   | .tuple a0 a1 a2, b => by
     cases b <;> simp [and_assoc, TypeExpr.beq, TypeExpr.beqList_iff a2]
+  | .object a0 a1, b => by
+    cases b <;> simp [and_assoc, TypeExpr.beq, TypeField.beqList_iff a1]
   | .predicate a0 a1 a2, b => by
     cases b <;> simp [and_assoc, TypeExpr.beq, TypeExpr.beq_iff a2]
 
@@ -68,6 +82,21 @@ theorem TypeExpr.beqList_iff : (xs ys : List TypeExpr) → TypeExpr.beqList xs y
   | [], ys => by cases ys <;> simp [and_assoc, TypeExpr.beqList]
   | x :: xs, ys => by
     cases ys <;> simp [and_assoc, TypeExpr.beqList, TypeExpr.beq_iff x, TypeExpr.beqList_iff xs]
+
+theorem TypeField.beq_iff (a b : TypeField) : TypeField.beq a b = true ↔ a = b := by
+  cases a with
+  | field span readonly name optional type =>
+    cases b with
+    | field span' readonly' name' optional' type' =>
+      simp [and_assoc, TypeField.beq, TypeExpr.beq_iff type]
+
+theorem TypeField.beqList_iff : (xs ys : List TypeField) → TypeField.beqList xs ys = true ↔ xs = ys
+  | [], ys => by cases ys <;> simp [and_assoc, TypeField.beqList]
+  | x :: xs, ys => by
+    cases ys with
+    | nil => simp [TypeField.beqList]
+    | cons y ys =>
+      simp [and_assoc, TypeField.beqList, TypeField.beq_iff x, TypeField.beqList_iff xs]
 
 end
 

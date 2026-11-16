@@ -117,6 +117,17 @@ def TypeExpr.words : TypeExpr → List Word
   | .tuple _ readonly elems =>
     (if readonly then [identWord "readonly"] else []) ++
       punctWord "[" :: separated "," (TypeExpr.wordsOf elems) ++ [punctWord "]"]
+  | .object _ fields =>
+    punctWord "{" :: TypeField.wordsOf fields ++ [punctWord "}"]
+
+def TypeField.words : TypeField → List Word
+  | .field _ readonly name optional type =>
+    (if readonly then [identWord "readonly"] else []) ++ [propertyName name] ++
+      (if optional then [punctWord "?"] else []) ++ punctWord ":" :: type.words ++ [punctWord ";"]
+
+def TypeField.wordsOf : List TypeField → List Word
+  | [] => []
+  | field :: fields => field.words ++ TypeField.wordsOf fields
 
 def TypeExpr.wordsOf : List TypeExpr → List (List Word)
   | [] => []
@@ -401,10 +412,19 @@ def TypeExpr.erase : TypeExpr → TypeExpr
   | .union _ members => .union noSpan (TypeExpr.eraseAll members)
   | .paren _ inner => .paren noSpan inner.erase
   | .tuple _ readonly elems => .tuple noSpan readonly (TypeExpr.eraseAll elems)
+  | .object _ fields => .object noSpan (TypeField.eraseAll fields)
 
 def TypeExpr.eraseAll : List TypeExpr → List TypeExpr
   | [] => []
   | t :: ts => t.erase :: TypeExpr.eraseAll ts
+
+def TypeField.erase (field : TypeField) : TypeField :=
+  match field with
+  | .field _ readonly name optional type => .field noSpan readonly name optional type.erase
+
+def TypeField.eraseAll : List TypeField → List TypeField
+  | [] => []
+  | field :: fields => field.erase :: TypeField.eraseAll fields
 
 end
 

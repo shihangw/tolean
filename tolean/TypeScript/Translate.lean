@@ -1098,6 +1098,7 @@ def translateType (t : TypeExpr) : TM Ty := do
   | .tuple s _ elems =>
     if elems.length < 2 then reject s "a tuple needs two elements or more"
     return .tuple (← translateTypes elems)
+  | .object s _ => reject s "inline object types are parsed but not translated yet"
   | _ => unsupportedType t
 
 def translateTypes : List TypeExpr → TM (List Ty)
@@ -4352,11 +4353,16 @@ def typeNames (name : String) : TypeExpr → Bool
   | .ref _ n args => n == name || typesName name args
   | .array _ e | .paren _ e => typeNames name e
   | .union _ members | .tuple _ _ members => typesName name members
+  | .object _ fields => typeFieldsName name fields
   | _ => false
 
 def typesName (name : String) : List TypeExpr → Bool
   | [] => false
   | t :: ts => typeNames name t || typesName name ts
+
+def typeFieldsName (name : String) : List TypeField → Bool
+  | [] => false
+  | .field _ _ _ _ type :: fields => typeNames name type || typeFieldsName name fields
 
 end
 
@@ -4737,11 +4743,16 @@ def typeUsesNumber : TypeExpr → Bool
   | .ref _ name args => isNumberName name || typesUseNumber args
   | .array _ e | .paren _ e => typeUsesNumber e
   | .union _ members | .tuple _ _ members => typesUseNumber members
+  | .object _ fields => typeFieldsUseNumber fields
   | _ => false
 
 def typesUseNumber : List TypeExpr → Bool
   | [] => false
   | t :: ts => typeUsesNumber t || typesUseNumber ts
+
+def typeFieldsUseNumber : List TypeField → Bool
+  | [] => false
+  | .field _ _ _ _ type :: fields => typeUsesNumber type || typeFieldsUseNumber fields
 
 end
 

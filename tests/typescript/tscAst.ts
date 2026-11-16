@@ -1061,6 +1061,9 @@ class Printer {
     if (ts.isTupleTypeNode(t)) {
       return this.node('type-tuple', t, [], this.tupleElements(t));
     }
+    if (ts.isTypeLiteralNode(t)) {
+      return this.node('type-object', t, [], t.members.map((m) => this.typeField(m)));
+    }
     // `readonly [A, B]`. `readonly` takes the whole array type after it, so
     // only a tuple may follow.
     if (ts.isTypeOperatorNode(t) && t.operator === ts.SyntaxKind.ReadonlyKeyword && ts.isTupleTypeNode(t.type)) {
@@ -1081,6 +1084,32 @@ class Printer {
       }
       return this.type(e);
     });
+  }
+
+  private typeField(m: ts.TypeElement): Sexp {
+    if (!ts.isPropertySignature(m)) {
+      refuse(m, 'not a property signature');
+    }
+    const readonly = this.modifiers(m, [ts.SyntaxKind.ReadonlyKeyword]).size > 0;
+    if (!ts.isIdentifier(m.name)) {
+      refuse(m.name, 'field name');
+    }
+    if (m.type === undefined) {
+      refuse(m, 'field without a type');
+    }
+    if ((m as { initializer?: ts.Expression }).initializer !== undefined) {
+      refuse(m, 'field initializer');
+    }
+    return this.node(
+      'type-field',
+      m,
+      [
+        m.name.text,
+        ...(readonly ? ['readonly'] : []),
+        ...(m.questionToken === undefined ? [] : ['optional']),
+      ],
+      [this.type(m.type)],
+    );
   }
 }
 

@@ -59,6 +59,8 @@ def litType (l : LitType) : String :=
   | .bigint t => s!"({ns}LitType.bigint {str t})"
   | .bool b => s!"({ns}LitType.bool {b})"
 
+mutual
+
 def typeExpr : TypeExpr → String
   | .keyword s n => s!"({ns}TypeExpr.keyword {span s} {str n})"
   | .null s => s!"({ns}TypeExpr.null {span s})"
@@ -68,7 +70,15 @@ def typeExpr : TypeExpr → String
   | .union s ms => s!"({ns}TypeExpr.union {span s} {list (ms.map typeExpr)})"
   | .paren s e => s!"({ns}TypeExpr.paren {span s} {typeExpr e})"
   | .tuple s ro es => s!"({ns}TypeExpr.tuple {span s} {ro} {list (es.map typeExpr)})"
+  | .object s fields => s!"({ns}TypeExpr.object {span s} {list (typeFields fields)})"
   | .predicate s n t => s!"({ns}TypeExpr.predicate {span s} {str n} {typeExpr t})"
+
+def typeFields : List TypeField → List String
+  | [] => []
+  | .field sp ro name optional type :: fields =>
+    s!"({ns}TypeField.field {span sp} {ro} {str name} {optional} {typeExpr type})" :: typeFields fields
+
+end
 
 def propKey (k : PropKey) : String :=
   match k with

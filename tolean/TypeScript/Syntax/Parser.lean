@@ -189,6 +189,26 @@ def arrayStep (start : Pos) (type : TypeExpr) : ParseM (TypeExpr × Bool) := do
   skip 2
   return (.array (← spanFrom start) type, true)
 
+def parseFieldWith (parseFieldType : Nat → ParseM TypeExpr) : ParseM Field := do
+  let t ← peek
+  let next ← peekAt 1
+  -- `readonly` is a modifier only before a name on the same line.
+  let readonly := t.isIdent "readonly" && !next.newlineBefore &&
+    (next.isAnyIdent || (next.kind matches .keyword _ | .string _ | .number _))
+  if readonly then discard advance
+  let name ← readPropertyName
+  let optional := (← peek).isPunct "?"
+  if optional then discard advance
+  let next ← peek
+  if next.isPunct "(" || next.isPunct "<" then failAt next "method signatures are not supported"
+  unless next.isPunct ":" do unexpected next "':' (interface fields must be typed)"
+  discard advance
+  let type ← parseFieldType (← budget)
+  let next ← peek
+  if next.isPunct ";" || next.isPunct "," then discard advance
+  else if !(next.isPunct "}" || next.newlineBefore) then unexpected next "';' or ','"
+  return { span := ← spanFrom t.span.start, readonly, name, optional, type }
+
 mutual
 
 def parseType (fuel : Nat) : ParseM TypeExpr := do
@@ -204,6 +224,18 @@ def parseType (fuel : Nat) : ParseM TypeExpr := do
   if t.isPunct "&" then failAt t "intersection types are not supported"
   if leading || members.size > 1 then return .union (← spanFrom start) members.toList
   return first
+
+def objectTypeField (parseFieldType : Nat → ParseM TypeExpr) : ParseM TypeField := do
+  let t ← peek
+  if t.isPunct "[" then failAt t "mapped types and index signatures are not supported"
+  if t.isPunct "(" then failAt t "call and method signatures are not supported"
+  let field ← parseFieldWith parseFieldType
+  return .field field.span field.readonly field.name field.optional field.type
+
+def parseObjectType (parseFieldType : Nat → ParseM TypeExpr) (start : Pos) : ParseM TypeExpr := do
+  let fields ← iterate (← budget) #[] (blockStep (objectTypeField parseFieldType))
+  let _ ← expectPunct "}"
+  return .object (← spanFrom start) fields.toList
 
 def parseArrayType (fuel : Nat) : ParseM TypeExpr := do
   let fuel + 1 := fuel | outOfFuel
@@ -249,6 +281,7 @@ def parsePrimaryType (fuel : Nat) : ParseM TypeExpr := do
     let elems ← iterate (← budget) #[] (typeArgStep (parseType fuel))
     let _ ← expectPunct "]"
     return .tuple (← spanFrom t.span.start) false elems.toList
+  | .punct "{" => parseObjectType (fun _ => parseType fuel) t.span.start
   | _ => unexpected t "a type"
 
 end
@@ -1263,24 +1296,7 @@ def parseFunction (start : Pos) (exported : Bool) : ParseM Decl := do
   return .function (← spanFrom start) exported name typeParams params returnType body
 
 def parseField : ParseM Field := do
-  let t ← peek
-  let next ← peekAt 1
-  -- `readonly` is a modifier only before a name on the same line.
-  let readonly := t.isIdent "readonly" && !next.newlineBefore &&
-    (next.isAnyIdent || (next.kind matches .keyword _ | .string _ | .number _))
-  if readonly then discard advance
-  let name ← readPropertyName
-  let optional := (← peek).isPunct "?"
-  if optional then discard advance
-  let next ← peek
-  if next.isPunct "(" || next.isPunct "<" then failAt next "method signatures are not supported"
-  unless next.isPunct ":" do unexpected next "':' (interface fields must be typed)"
-  discard advance
-  let type ← parseType (← budget)
-  let next ← peek
-  if next.isPunct ";" || next.isPunct "," then discard advance
-  else if !(next.isPunct "}" || next.newlineBefore) then unexpected next "';' or ','"
-  return { span := ← spanFrom t.span.start, readonly, name, optional, type }
+  parseFieldWith parseType
 
 def parseInterface (start : Pos) (exported : Bool) : ParseM Decl := do
   discard advance
