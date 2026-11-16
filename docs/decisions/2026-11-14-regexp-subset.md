@@ -1,6 +1,6 @@
 # Model regular expressions with ordered backtracking
 
-**Status:** accepted design; implementation pending · **Date:** 2026-11-14
+**Status:** partially implemented · **Date:** 2026-11-14
 
 Tolean will model the first TypeScript regular expressions with the
 continuation-passing matcher of ECMA-262 §22.2.2. The order in which it tries
@@ -8,9 +8,11 @@ alternatives is part of the result. A language-membership matcher alone
 cannot specify captures or replacement.
 
 This decision answers the open questions in
-[#218](https://github.com/shihangw/tolean/issues/218). The matcher and literal
-parser implement the first part; regular expression calls are not yet
-translated.
+[#218](https://github.com/shihangw/tolean/issues/218). PR #239 delivers
+flagless patterns and `test` with a string argument. `test` may use a regex
+literal or an alias. PR #244 adds first-match replacement when the pattern is
+a direct flagless literal and the replacement is a literal string without
+`$`. `match`, `exec` and replacement substitutions remain future work.
 
 ## Start without flags
 
@@ -107,31 +109,37 @@ fuel fallback considered for recursion.
 
 ## Deliver the methods separately
 
-The first translated call is `r.test(s)` where `r` is a literal pattern and
-`s` is a string. Its edition entry cites ECMA-262 §22.2, including the
-Pattern semantics and the algorithms for `test` and RegExpBuiltinExec.
-The search tries successive starting positions in order, including the end
-of the input so that an empty pattern can match there.
+The translated call `r.test(s)` takes a string argument, and `r` may be a
+literal pattern or an alias to one. Its edition entry cites ECMA-262 §22.2,
+including the Pattern semantics and the algorithms for `test` and
+RegExpBuiltinExec. The search tries successive starting positions in order,
+including the end of the input so that an empty pattern can match there.
 
-Next comes `s.match(r)` without `g`. Failure is `null`. Success includes the
-whole match followed by the captures, and a capture that did not participate
-is `undefined`, not an empty string. Repetition must clear the captures
-inside its atom as the spec requires. Translation must refuse uses that
-need an optional element type until that type is supported. Result
-properties such as `index`, `input` and `groups` require their own
-representation before programs can read them.
+`s.match(r)` and `r.exec(s)` remain refused. Their results must represent
+`null` on failure and the whole match followed by its captures on success. A
+capture that did not participate is `undefined`, not an empty string. The
+result also exposes `index`, `input` and `groups`, so the translator needs a
+representation that preserves those values and properties before programs
+can use either method. `exec` also changes `lastIndex` for global and sticky
+expressions, whose flags remain refused.
 
-Replacement comes in a separate change. `s.replace(r, replacement)` replaces
-only the first match, and the initial version accepts only a literal
-replacement string with no dollar sign. This conservative restriction
-avoids silently treating substitution patterns as literal text. Replacement
-callbacks and dollar substitutions remain future work.
+The initial `s.replace(r, replacement)` subset replaces only the first match
+and accepts a direct flagless regex literal with a literal replacement string
+that contains no dollar sign. Captures may affect which match wins, but the
+replacement does not substitute capture values. Dynamic replacement strings
+remain refused because they may contain GetSubstitution tokens. Dollar
+substitutions remain refused because the model does not implement
+GetSubstitution. Function replacers remain refused because callback
+replacement semantics are not modeled. Regex aliases are supported by
+`test`, but `replace` currently requires a direct literal because the
+translator's safe-replacement check recognizes that literal form.
 
-Each method must extend the interpreter and IR evaluator together, and keep
-`program_sound` proved. Node comparisons must cover randomized patterns and
-inputs as well as fixed cases for backtracking, empty repetitions, captures,
-line terminators and surrogate code units. Parser round trips and existing
-translation output must remain unchanged for already accepted programs.
+The `test` and replacement implementations extend the interpreter and IR
+evaluator, and their proofs preserve `program_sound`. Node comparisons cover
+randomized patterns and inputs, including backtracking, empty repetitions,
+captures, line terminators and surrogate code units. Parser round trips and
+existing translation output remain unchanged for already accepted programs.
+Later operations must keep the interpreter, IR evaluator and proofs aligned.
 
 ## Do not share a matcher across languages yet
 
