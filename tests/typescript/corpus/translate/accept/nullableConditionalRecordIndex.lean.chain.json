@@ -1,10 +1,10 @@
-{"tolean": "0.3.0",
+{"tolean": "0.3.1",
  "target": "ES2024",
  "sources":
  [{"sha256": "f518a806a170431bf74edadc89e5b64f0b97b8b099796609e859c1ddee9c81e4",
    "path": "corpus/translate/accept/nullableConditionalRecordIndex.ts"}],
  "output":
- {"sha256": "8f0c3c5e415b3ef657c17cf6c3e386249b1b683f84a6c699d41ebe143ce96621",
+ {"sha256": "7c60014829a148e8fe381382078bae87bc4bd15803fcfce263e32083c5a9e874",
   "path": "corpus/translate/accept/nullableConditionalRecordIndex.lean"},
  "nodes":
  [{"status": "tested",
