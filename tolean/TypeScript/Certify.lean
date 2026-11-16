@@ -406,12 +406,13 @@ def leadingBindings : IR.Body → List (String × IR.Expr)
   | .let name value rest => (name, value) :: leadingBindings rest
   | _ => []
 
-/-- A call's nullish branches, followed by its actual arguments. -/
-abbrev ConditionalCall := List (String × Bool × IR.MatchNullKind) × List IR.Expr
+/-- A call's nullish branches, followed by its actual arguments.
+The last flag records whether a statement narrowed the null arm. -/
+abbrev ConditionalCall := List (String × Bool × IR.MatchNullKind × Bool) × List IR.Expr
 
-def guardCondition (r : Refs) (guards : List (String × Bool × IR.MatchNullKind))
+def guardCondition (r : Refs) (guards : List (String × Bool × IR.MatchNullKind × Bool))
     (condition : String) : String :=
-  guards.foldr (fun (n, valueBranch, kind) rest =>
+  guards.foldr (fun (n, valueBranch, kind, narrowedNull) rest =>
     match kind with
     | .nullable | .optional =>
       if valueBranch then s!"(match {n} with | .none => _root_.True | .some {n} => {rest})"
@@ -427,6 +428,8 @@ def guardCondition (r : Refs) (guards : List (String × Bool × IR.MatchNullKind
       if valueBranch then
         s!"(match {n} with | {nullish}.undefined => (let {n} := {r.write "Option.join" "Option.join"} {n}; {rest}) | {nullish}.null => _root_.True | {nullish}.value {n} => (let {n} := _root_.Option.some {n}; {rest}))"
       else
+        let rest := if narrowedNull then
+          s!"(let {n} \{α : Type} : _root_.Option α := _root_.Option.none; {rest})" else rest
         s!"(match {n} with | {nullish}.undefined => _root_.True | {nullish}.null => {rest} | {nullish}.value _ => _root_.True)"
     | .strictUndefined =>
       let nullish := r.write "JSNullish" "tolean.TypeScript.JSNullish"
@@ -447,8 +450,8 @@ def conditionCalls (callee : String) : IR.Expr → List ConditionalCall
     conditionCalls callee e
   | .ite a b c => conditionCalls callee a ++ conditionCalls callee b ++ conditionCalls callee c
   | .matchNull n a b kind =>
-    (conditionCalls callee a).map (fun (guards, args) => ((n, false, kind) :: guards, args)) ++
-      (conditionCalls callee b).map (fun (guards, args) => ((n, true, kind) :: guards, args))
+    (conditionCalls callee a).map (fun (guards, args) => ((n, false, kind, false) :: guards, args)) ++
+      (conditionCalls callee b).map (fun (guards, args) => ((n, true, kind, false) :: guards, args))
   | .intOp _ a b | .order _ a b | .division _ a b | .eq a b | .ne a b
   | .propAnd a b | .propOr a b | .and a b | .or a b | .coalesce a b _ =>
     conditionCalls callee a ++ conditionCalls callee b
@@ -472,8 +475,8 @@ def bodyConditionCalls (callee : String) : IR.Body → List ConditionalCall
   | .letState _ a b => bodyConditionCalls callee a ++ bodyConditionCalls callee b
   | .ite c a b => conditionCalls callee c ++ bodyConditionCalls callee a ++ bodyConditionCalls callee b
   | .matchNull n kind a b =>
-    (bodyConditionCalls callee a).map (fun (guards, args) => ((n, false, kind) :: guards, args)) ++
-      (bodyConditionCalls callee b).map (fun (guards, args) => ((n, true, kind) :: guards, args))
+    (bodyConditionCalls callee a).map (fun (guards, args) => ((n, false, kind, true) :: guards, args)) ++
+      (bodyConditionCalls callee b).map (fun (guards, args) => ((n, true, kind, true) :: guards, args))
   -- Tagged branches rebind the scrutinee at a narrower type.
   -- Do not lift their conditions into the original parameter scope.
   | .matchTag .. => []

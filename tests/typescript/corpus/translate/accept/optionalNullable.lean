@@ -77,6 +77,7 @@ def strictNarrow (limit : JSNullish Int := JSNullish.undefined) : Int :=
     let limit := Option.join limit
     (Option.getD limit ((10 : Int)))
   | JSNullish.null =>
+    let limit {α : Type} : Option α := none
     (0 : Int)
   | JSNullish.value limit =>
     let limit := some limit
@@ -88,6 +89,7 @@ def unusedAfterNull (limit : JSNullish Int := JSNullish.undefined) : Int :=
     let limit := Option.join limit
     (0 : Int)
   | JSNullish.null =>
+    let limit {α : Type} : Option α := none
     (1 : Int)
   | JSNullish.value limit =>
     let limit := some limit

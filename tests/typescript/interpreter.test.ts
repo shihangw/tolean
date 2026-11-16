@@ -817,6 +817,39 @@ test('optional indexed member access handles every kind of number index', async 
   }
 });
 
+test('strict-null expression and statement arms agree with Node', async () => {
+  for (const fixture of ['optionalNullableStrictNullExpression', 'optionalNullableStrictNullReturn']) {
+    const source = readFileSync(new URL(`./corpus/translate/accept/${fixture}.ts`, import.meta.url), 'utf8');
+    expect(source).toContain('// certify: required');
+    const calls = [null, undefined, 0n, -3n].flatMap(x => [
+      { function: 'f', args: [x] },
+      { function: 'inverted', args: [x] },
+      { function: 'guardedSort', args: [[3, -1, 2], x] },
+    ]);
+    const run = spawnSync(tolean, ['interpret'], {
+      input: JSON.stringify({ programs: [{ source, calls: calls.map(call => ({
+        function: call.function, args: call.args.map(encode),
+      })) }] }),
+      encoding: 'utf8',
+    });
+    expect(run.status, run.stderr).toBe(0);
+    const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+    expect(result?.parsed).toBe(true);
+    if (result === undefined || !result.parsed) return;
+    const dir = mkdtempSync(join(tmpdir(), 'tolean-strict-null-'));
+    const path = join(dir, 'fixture.mjs');
+    writeFileSync(path, ts.transpileModule(source, {
+      compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+    }).outputText);
+    const mod = (await import(pathToFileURL(path).href)) as Record<string, (...args: unknown[]) => unknown>;
+    for (const [i, call] of calls.entries()) {
+      const value = result.results[i]?.value;
+      expect(value === undefined ? 'no value' : canonical(value), `${fixture}.${call.function}`)
+        .toBe(canonical(encode(mod[call.function]!(...call.args))));
+    }
+  }
+});
+
 test('optional tuple and Record indices agree with Node', async () => {
   const source = readFileSync(new URL('./corpus/translate/accept/optionalTupleRecordIndex.ts', import.meta.url), 'utf8');
   const calls: Array<{ function: string; args: Array<unknown> }> = [];
