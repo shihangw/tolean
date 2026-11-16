@@ -15,6 +15,7 @@ import tolean.TypeScript.Syntax.RoundTripDecl
 import tolean.TypeScript.Syntax.RoundTripLex
 import tolean.TypeScript.Syntax.ParseWF
 import tolean.TypeScript.Syntax.RoundTripText
+import tolean.TypeScript.Syntax.Scan
 import tolean.TypeScript.Spec.Error
 import tolean.TypeScript.Spec.RegExp
 import tolean.TypeScript.Spec.Lemmas.Number
@@ -761,7 +762,23 @@ def extras : List Group := [
     ``Syntax.PastSkel.refl, ``Syntax.PastSkel.trans, ``Syntax.PastSkel.tok, ``Syntax.PastSkel.of_eq,
     ``Syntax.skel_nonSkel, ``Syntax.skel_joined, ``Syntax.skel_bars, ``Syntax.skel_union, ``Syntax.skel_ref,
     ``Syntax.skelsOf_push, ``Syntax.arrayStep_skel, ``Syntax.unionStep_skel, ``Syntax.typeArgStep_skel,
-    ``Syntax.keywordType_skel, ``Syntax.types_skel, ``Syntax.parseParam_skel, ``Syntax.parseParam_item,
+    ``Syntax.keywordType_skel, ``Syntax.types_skel,
+    ``Syntax.scanEq_skel, ``Syntax.ScanEq.of_skeletons, ``Syntax.Follows.prefix_scan,
+    ``Syntax.seq_advance_summary, ``Syntax.fieldWith_summary, ``Syntax.objectField_summary,
+    ``Syntax.objectStep_summary,
+    ``Syntax.ScanEq.refl, ``Syntax.ScanEq.of_eq, ``Syntax.ScanEq.probeEquiv, ``Syntax.ScanEq.of_probeEquiv,
+    ``Syntax.ScanEq.trans, ``Syntax.ScanEq.symm, ``Syntax.ScanEq.append, ``Syntax.ScanEq.cons,
+    ``Syntax.closesKinds_openPrefix, ``Syntax.ScanEq.at_depth,
+    ``Syntax.ScanSummary.nil, ``Syntax.ScanSummary.weaken, ``Syntax.ScanSummary.of_scanEq,
+    ``Syntax.ScanSummary.append, ``Syntax.ScanSummary.ident, ``Syntax.ScanSummary.keyword,
+    ``Syntax.ScanSummary.comma, ``Syntax.ScanSummary.colon, ``Syntax.ScanSummary.question,
+    ``Syntax.ScanSummary.bar, ``Syntax.ScanSummary.less, ``Syntax.ScanSummary.semicolon,
+    ``Syntax.ScanSummary.greater, ``Syntax.ScanSummary.enclose,
+    ``Syntax.probePrefixEquiv_of_continuations, ``Syntax.ScanSummary.probeEquiv, ``Syntax.ScanSummary.scanEq,
+    ``Syntax.ScanSafe.append, ``Syntax.ScanSafe.weaken, ``Syntax.ScanSafe.enclose, ``Syntax.ScanSafe.joined,
+    ``Syntax.ScanSafe.propertyName_safe, ``Syntax.ScanSummary.propertyName_safe, ``Syntax.ScanSummary.field,
+    ``Syntax.TypeExpr.scanSafe, ``Syntax.TypeExpr.scanSafe_joined, ``Syntax.TypeField.scanSafe, ``Syntax.TypeField.scanSafe_all,
+    ``Syntax.parseParam_skel, ``Syntax.parseParam_item,
     ``Syntax.parseArrowParams_gives, ``Syntax.parseArrow_gives, ``Syntax.tokens_ref_span,
     ``Syntax.parseNew_gives,
     ``Syntax.parseObjectLiteral_gives, ``Syntax.leaf_gives, ``Syntax.parsePrimary_gives, ``Syntax.seq_same,
