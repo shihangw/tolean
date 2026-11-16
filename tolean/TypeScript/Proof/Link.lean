@@ -91,6 +91,33 @@ theorem runFold_foldl {α σ : Type} (fs : List (DeclRef × List String × IR.Bo
   have := key xs (dec ρ)
   rwa [hdec ρ hI] at this
 
+/-- A loop body needs agreement only for elements of the input. The
+environment invariant may carry conditions on captured number keys. -/
+theorem runFold_foldl_on {α σ : Type} (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
+    (names : List String) (element : String) (body : IR.Body) (encX : α → Val N)
+    (upd : σ → Eval.Env N → Eval.Env N) (dec : Eval.Env N → σ) (step : Eval.Env N → σ → α → σ)
+    (I : Eval.Env N → Prop) (xs : List α)
+    (hbody : ∀ ρ s x, I ρ → x ∈ xs → ∃ inner,
+      IR.Body.exec fs fuel ((element, encX x) :: upd s ρ) body = some (.normal inner) ∧
+        IR.bindState names inner (upd s ρ) = some (upd (step ρ s x) ρ))
+    (hdec : ∀ ρ, I ρ → upd (dec ρ) ρ = ρ) (ρ : Eval.Env N) (hI : I ρ) :
+    IR.Body.runFold fs fuel names element body ρ (xs.map encX) =
+      some (.normal (upd (xs.foldl (step ρ) (dec ρ)) ρ)) := by
+  have key : ∀ (ys : List α), (∀ x ∈ ys, x ∈ xs) → ∀ (s : σ),
+      IR.Body.runFold fs fuel names element body (upd s ρ) (ys.map encX) =
+        some (.normal (upd (ys.foldl (step ρ) s) ρ)) := by
+    intro ys
+    induction ys with
+    | nil => intro _ s; simp [IR.Body.runFold]
+    | cons x ys ih =>
+      intro hmem s
+      obtain ⟨inner, hex, hb⟩ := hbody ρ s x hI (hmem x (by simp))
+      simp only [List.map_cons, IR.Body.runFold, hex, hb, Option.bind_eq_bind, Option.bind_some,
+        List.foldl_cons]
+      exact ih (fun y hy => hmem y (by simp [hy])) (step ρ s x)
+  have := key xs (fun _ h => h) (dec ρ)
+  rwa [hdec ρ hI] at this
+
 /-- How one step of `forIn` ends, as the evaluator gives it: a `done` is a
 `break`. -/
 def stepOutcome {σ : Type} : ForInStep σ → Eval.Env N → Eval.Outcome N
@@ -131,6 +158,40 @@ theorem runFold_forIn {α σ : Type} (fs : List (DeclRef × List String × IR.Bo
         exact ih s'
   have := key xs (dec ρ)
   rwa [hdec ρ hI] at this
+/-- A loop with `break` needs agreement only on its input elements. -/
+theorem runFold_forIn_on {α σ : Type} (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
+    (names : List String) (element : String) (body : IR.Body) (encX : α → Val N)
+    (upd : σ → Eval.Env N → Eval.Env N) (dec : Eval.Env N → σ)
+    (step : Eval.Env N → α → σ → ForInStep σ) (I : Eval.Env N → Prop) (xs : List α)
+    (hbody : ∀ ρ s x, I ρ → x ∈ xs → ∃ inner,
+      IR.Body.exec fs fuel ((element, encX x) :: upd s ρ) body = some (stepOutcome (step ρ x s) inner) ∧
+        IR.bindState names inner (upd s ρ) = some (upd (step ρ x s).value ρ))
+    (hdec : ∀ ρ, I ρ → upd (dec ρ) ρ = ρ) (ρ : Eval.Env N) (hI : I ρ) :
+    IR.Body.runFold fs fuel names element body ρ (xs.map encX) =
+      some (.normal (upd (Id.run (forIn xs (dec ρ) (step ρ))) ρ)) := by
+  have key : ∀ (ys : List α), (∀ x ∈ ys, x ∈ xs) → ∀ (s : σ),
+      IR.Body.runFold fs fuel names element body (upd s ρ) (ys.map encX) =
+        some (.normal (upd (Id.run (forIn ys s (step ρ))) ρ)) := by
+    intro ys
+    induction ys with
+    | nil => intro _ s; simp [IR.Body.runFold]
+    | cons x ys ih =>
+      intro hmem s
+      obtain ⟨inner, hex, hb⟩ := hbody ρ s x hI (hmem x (by simp))
+      cases hst : step ρ x s with
+      | done s' =>
+        rw [hst] at hex hb
+        simp only [List.map_cons, IR.Body.runFold, hex, stepOutcome, hb, ForInStep.value,
+          Option.bind_eq_bind, Option.bind_some, List.forIn_cons, hst]
+        rfl
+      | yield s' =>
+        rw [hst] at hex hb
+        simp only [List.map_cons, IR.Body.runFold, hex, stepOutcome, hb, ForInStep.value,
+          Option.bind_eq_bind, Option.bind_some, List.forIn_cons, hst]
+        exact ih (fun y hy => hmem y (by simp [hy])) s'
+  have := key xs (fun _ h => h) (dec ρ)
+  rwa [hdec ρ hI] at this
+
 /-- A callback of the output and a Lean function agree on the elements of a
 list when they agree on each element. A certificate proves a lemma for each
 call of `map` from this one. -/
@@ -140,6 +201,18 @@ theorem evalMap_map {α β : Type} (fs : List (DeclRef × List String × IR.Body
     ∀ xs : List α, IR.Expr.evalMap fs fuel ρ param body (xs.map encX) = some ((xs.map f).map encY)
   | [] => by simp [IR.Expr.evalMap]
   | x :: xs => by simp [IR.Expr.evalMap, hb x, evalMap_map fs fuel ρ param body encX encY f hb xs]
+
+/-- Mapping needs agreement only on the input elements. -/
+theorem evalMap_map_on {α β : Type} (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
+    (ρ : Eval.Env N) (param : String) (body : IR.Expr) (encX : α → Val N) (encY : β → Val N)
+    (f : α → β) (xs : List α)
+    (hb : ∀ x ∈ xs, IR.Expr.eval fs fuel ((param, encX x) :: ρ) body = some (encY (f x))) :
+    IR.Expr.evalMap fs fuel ρ param body (xs.map encX) = some ((xs.map f).map encY) := by
+  induction xs with
+  | nil => simp [IR.Expr.evalMap]
+  | cons x xs ih =>
+    simp only [List.mem_cons, forall_eq_or_imp] at hb
+    simp [IR.Expr.evalMap, hb.1, ih hb.2]
 
 /-- The same for `List.mapIdx`, whose function also takes the index, where the
 first element is at `start`. -/
@@ -221,6 +294,18 @@ theorem evalReduce_foldl_val {α β : Type} (fs : List (DeclRef × List String �
       some (encA (xs.foldl f (dec (some v)))) := by
   have := evalReduce_foldl fs fuel ρ acc param body encA encX f hb xs (dec (some v))
   rwa [hv] at this
+
+/-- Filtering needs agreement only on the input elements. -/
+theorem evalFilter_filter_on {α : Type} (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
+    (ρ : Eval.Env N) (param : String) (body : IR.Expr) (encX : α → Val N) (p : α → Bool)
+    (xs : List α)
+    (hb : ∀ x ∈ xs, IR.Expr.eval fs fuel ((param, encX x) :: ρ) body = some (.bool (p x))) :
+    IR.Expr.evalFilter fs fuel ρ param body (xs.map encX) = some ((xs.filter p).map encX) := by
+  induction xs with
+  | nil => simp [IR.Expr.evalFilter]
+  | cons x xs ih =>
+    simp only [List.mem_cons, forall_eq_or_imp] at hb
+    cases hp : p x <;> simp [IR.Expr.evalFilter, hb.1, ih hb.2, hp]
 
 /-- The same for `filter`. -/
 theorem evalFilter_filter {α : Type} (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
@@ -352,6 +437,58 @@ theorem runFold_forInRet {α σ τ R : Type} (fs : List (DeclRef × List String 
         have := ih (getS t)
         rwa [← ht] at this
   have := key xs (dec ρ)
+  rwa [hdec ρ hI] at this
+
+/-- A loop with `return` needs agreement only on its input elements. -/
+theorem runFold_forInRet_on {α σ τ R : Type} (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
+    (names : List String) (element : String) (body : IR.Body) (encX : α → Val N) (encR : R → Val N)
+    (getRet : τ → Option R) (getS : τ → σ) (init : σ → τ)
+    (upd : σ → Eval.Env N → Eval.Env N) (dec : Eval.Env N → σ)
+    (step : Eval.Env N → α → τ → ForInStep τ) (I : Eval.Env N → Prop)
+    (hinit : ∀ s, getRet (init s) = none ∧ getS (init s) = s) (xs : List α)
+    (hbody : ∀ ρ s x, I ρ → x ∈ xs → ∃ inner,
+      IR.Body.exec fs fuel ((element, encX x) :: upd s ρ) body =
+        some (retOutcome encR getRet (step ρ x (init s)) inner) ∧
+      (getRet (step ρ x (init s)).value = none →
+        IR.bindState names inner (upd s ρ) = some (upd (getS (step ρ x (init s)).value) ρ)) ∧
+      ∀ t, step ρ x (init s) = .yield t → t = init (getS t) ∧ getRet t = none)
+    (hdec : ∀ ρ, I ρ → upd (dec ρ) ρ = ρ) (ρ : Eval.Env N) (hI : I ρ) :
+    IR.Body.runFold fs fuel names element body ρ (xs.map encX) =
+      some (retResult encR getRet getS upd ρ (Id.run (forIn xs (init (dec ρ)) (step ρ)))) := by
+  have key : ∀ (ys : List α), (∀ x ∈ ys, x ∈ xs) → ∀ (s : σ),
+      IR.Body.runFold fs fuel names element body (upd s ρ) (ys.map encX) =
+        some (retResult encR getRet getS upd ρ (Id.run (forIn ys (init s) (step ρ)))) := by
+    intro ys
+    induction ys with
+    | nil => intro _ s; simp [IR.Body.runFold, retResult, (hinit s).1, (hinit s).2]
+    | cons x ys ih =>
+      intro hmem s
+      obtain ⟨inner, hex, hb, hy⟩ := hbody ρ s x hI (hmem x (by simp))
+      cases hst : step ρ x (init s) with
+      | done t =>
+        rw [hst] at hex hb
+        cases hr : getRet t with
+        | some r =>
+          simp only [List.map_cons, IR.Body.runFold, hex, retOutcome, hr, Option.bind_eq_bind,
+            Option.bind_some, List.forIn_cons, hst]
+          simp [retResult, hr]
+        | none =>
+          simp only [ForInStep.value] at hb
+          simp only [List.map_cons, IR.Body.runFold, hex, retOutcome, hr, hb hr, Option.bind_eq_bind,
+            Option.bind_some, List.forIn_cons, hst]
+          simp [retResult, hr]
+      | yield t =>
+        obtain ⟨ht, hr⟩ := hy t hst
+        rw [hst] at hex hb
+        simp only [ForInStep.value] at hb
+        have hstep : Id.run (forIn (x :: ys) (init s) (step ρ)) = Id.run (forIn ys t (step ρ)) := by
+          simp [List.forIn_cons, hst]
+        rw [hstep]
+        simp only [List.map_cons, IR.Body.runFold, hex, retOutcome, hb hr, Option.bind_eq_bind,
+          Option.bind_some]
+        have := ih (fun y hy => hmem y (by simp [hy])) (getS t)
+        rwa [← ht] at this
+  have := key xs (fun _ h => h) (dec ρ)
   rwa [hdec ρ hI] at this
 
 /-- `includes` on the encoded elements of a list, when SameValueZero of `v`
@@ -508,6 +645,97 @@ counts back from the length. -/
 
 /-! ### Certificates: sorts -/
 
+/-- Compare numbers by their order, treating signed zero as equal. -/
+def numberOrder (a b : N) : Ordering :=
+  if JSNumber.lt a b then .lt else if JSNumber.lt b a then .gt else .eq
+
+theorem numberOrder_ne_gt [NumberOrderLaws N] {a b : N}
+    (ha : JSNumber.isNaN a = false) (hb : JSNumber.isNaN b = false) :
+    (numberOrder a b != .gt) = !JSNumber.lt b a := by
+  unfold numberOrder
+  cases hab : JSNumber.lt a b <;> cases hba : JSNumber.lt b a <;> simp_all
+  have := NumberOrderLaws.lt_asymm ha hb hab
+  simp_all
+
+/-- A number key gives a consistent comparison on inputs without NaN keys. -/
+theorem consistentOn_numberOrder {α : Type} [NumberOrderLaws N]
+    (key : α → N) (xs : List α)
+    (h : ∀ x ∈ xs, JSNumber.isNaN (key x) = false) :
+    Eval.consistentOn (fun a b => some (numberOrder (key a) (key b))) xs = true := by
+  unfold Eval.consistentOn
+  simp only [List.all_eq_true, Option.isSome_some, Bool.true_and, Bool.and_eq_true]
+  intro a ha b hb
+  constructor
+  · have hab := NumberOrderLaws.lt_asymm (h a ha) (h b hb)
+    have hba := NumberOrderLaws.lt_asymm (h b hb) (h a ha)
+    unfold numberOrder
+    cases e : JSNumber.lt (key a) (key b) <;>
+      cases e' : JSNumber.lt (key b) (key a) <;> simp_all
+  · intro c hc
+    have hab := numberOrder_ne_gt (h a ha) (h b hb)
+    have hbc := numberOrder_ne_gt (h b hb) (h c hc)
+    have hac := numberOrder_ne_gt (h a ha) (h c hc)
+    have ht := NumberOrderLaws.not_lt_trans (h c hc) (h b hb) (h a ha)
+    cases e : JSNumber.lt (key b) (key a) <;>
+      cases e' : JSNumber.lt (key c) (key b) <;>
+      cases e'' : JSNumber.lt (key c) (key a) <;> simp_all
+
+/-- A finite-key difference has the sign of the keys' order, even if it
+overflows to infinity. -/
+theorem compareSign_sub [SafeIntLaws N] [SpecialValueLaws N] [NumberOrderLaws N]
+    {a b : N} (ha : JSNumber.isFinite a = true) (hb : JSNumber.isFinite b = true) :
+    JSNumber.compareSign (JSNumber.sub a b) = some (numberOrder a b) := by
+  have hz : JSNumber.isNaN (JSNumber.ofSafeInt (N := N) 0) = false :=
+    isNaN_eq_false_of_safe (SafeIntLaws.ofSafeInt (by unfold InRange maxSafe; omega))
+  have he := NumberOrderLaws.eq_iff (NumberOrderLaws.sub_not_nan ha hb) hz
+  simp only [NumberOrderLaws.sub_lt_zero ha hb, NumberOrderLaws.zero_lt_sub ha hb] at he
+  unfold JSNumber.compareSign numberOrder
+  rw [NumberOrderLaws.sub_lt_zero ha hb, NumberOrderLaws.zero_lt_sub ha hb, he]
+  cases JSNumber.lt a b <;> cases JSNumber.lt b a <;> rfl
+
+/-- Consistency reads only pairs of elements of the input list. -/
+theorem consistentOn_congr_on {α : Type} {f g : α → α → Option Ordering} {xs : List α}
+    (h : ∀ a ∈ xs, ∀ b ∈ xs, f a b = g a b) :
+    Eval.consistentOn f xs = Eval.consistentOn g xs := by
+  unfold Eval.consistentOn
+  have all_congr_mem {p q : α → Bool} (hh : ∀ x ∈ xs, p x = q x) :
+      xs.all p = xs.all q := by
+    apply Bool.eq_iff_iff.mpr
+    simp only [List.all_eq_true]
+    exact forall_congr' fun x => forall_congr' fun hx => by rw [hh x hx]
+  apply all_congr_mem
+  intro a ha
+  apply all_congr_mem
+  intro b hb
+  simp only [h a ha b hb, h b hb a ha]
+  congr 1
+  apply all_congr_mem
+  intro c hc
+  simp only [h b hb c hc, h a ha c hc]
+
+/-- The reverse number order is consistent on the same non-NaN inputs. -/
+theorem consistentOn_numberOrder_reverse {α : Type} [NumberOrderLaws N]
+    (key : α → N) (xs : List α)
+    (h : ∀ x ∈ xs, JSNumber.isNaN (key x) = false) :
+    Eval.consistentOn (fun a b => some (numberOrder (key b) (key a))) xs = true := by
+  unfold Eval.consistentOn
+  simp only [List.all_eq_true, Option.isSome_some, Bool.true_and, Bool.and_eq_true]
+  intro a ha b hb
+  constructor
+  · have hab := NumberOrderLaws.lt_asymm (h a ha) (h b hb)
+    have hba := NumberOrderLaws.lt_asymm (h b hb) (h a ha)
+    unfold numberOrder
+    cases e : JSNumber.lt (key a) (key b) <;>
+      cases e' : JSNumber.lt (key b) (key a) <;> simp_all
+  · intro c hc
+    have hab := numberOrder_ne_gt (h b hb) (h a ha)
+    have hbc := numberOrder_ne_gt (h c hc) (h b hb)
+    have hac := numberOrder_ne_gt (h c hc) (h a ha)
+    have ht := NumberOrderLaws.not_lt_trans (h a ha) (h b hb) (h c hc)
+    cases e : JSNumber.lt (key a) (key b) <;>
+      cases e' : JSNumber.lt (key b) (key c) <;>
+      cases e'' : JSNumber.lt (key a) (key c) <;> simp_all
+
 /-- A comparator is consistent for every list when its signs are those of a
 lawful comparison: one that `Std.TransCmp` says is a total preorder. -/
 theorem consistentOn_of_transCmp {α : Type} {cmp : α → α → Option Ordering} (o : α → α → Ordering)
@@ -528,16 +756,50 @@ theorem consistentOn_of_transCmp {α : Type} {cmp : α → α → Option Orderin
   have := Std.TransCmp.isLE_trans (hle _ hab) (hle _ hbc)
   cases hac : o a c <;> simp_all
 
-/-- A sort of encoded values and `JSNumber.sortWith` agree, when the body of
-the comparator gives the number `cmp x y`, when no encoded value is
-`undefined`, and when the comparator is consistent for every list. A
-certificate proves a lemma for each sort from this one. -/
-theorem sortValues_sortWith {α : Type} (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
+/-- On a domain without NaN keys, number comparison is a total preorder.
+The domain may be the subtype of elements of one input list. -/
+theorem transCmp_numberOrder {α : Type} [NumberOrderLaws N] (key : α → N)
+    (h : ∀ x, JSNumber.isNaN (key x) = false) :
+    Std.TransCmp (fun a b => numberOrder (key a) (key b)) := by
+  refine { eq_swap := ?_, isLE_trans := ?_ }
+  · intro a b
+    have hab := NumberOrderLaws.lt_asymm (h a) (h b)
+    have hba := NumberOrderLaws.lt_asymm (h b) (h a)
+    unfold numberOrder
+    cases e : JSNumber.lt (key a) (key b) <;>
+      cases e' : JSNumber.lt (key b) (key a) <;> simp_all
+  · intro a b c hab hbc
+    have eab := numberOrder_ne_gt (h a) (h b)
+    have ebc := numberOrder_ne_gt (h b) (h c)
+    have eac := numberOrder_ne_gt (h a) (h c)
+    have ht := NumberOrderLaws.not_lt_trans (h c) (h b) (h a)
+    have eqLE : ∀ o : Ordering, o.isLE = (o != .gt) := by decide
+    simp only [eqLE, eab, ebc, eac] at *
+    simp only [Bool.not_eq_true'] at hab hbc ⊢
+    exact ht hbc hab
+
+/-- A comparison may be lawful only on the elements of the input. -/
+theorem consistentOn_of_transCmp_on {α : Type} (xs : List α)
+    {cmp : α → α → Option Ordering}
+    (o : {x // x ∈ xs} → {x // x ∈ xs} → Ordering) [Std.TransCmp o]
+    (h : ∀ a b, cmp a.val b.val = some (o a b)) :
+    Eval.consistentOn cmp xs = true := by
+  have hc := consistentOn_of_transCmp o h xs.attach
+  unfold Eval.consistentOn at hc ⊢
+  simp only [List.all_eq_true, Bool.and_eq_true] at hc ⊢
+  intro a ha b hb
+  have hab := hc ⟨a, ha⟩ (by simp) ⟨b, hb⟩ (by simp)
+  exact ⟨hab.1, fun c hc => hab.2 ⟨c, hc⟩ (by simp)⟩
+
+/-- A sort of encoded values and `JSNumber.sortWith` agree when the comparator
+is consistent on this input list. The condition need not hold for other
+inputs, so a proof may exclude NaN keys or infinite keys. -/
+theorem sortValues_sortWith_on {α : Type} (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
     (ρ : Eval.Env N) (param other : String) (body : IR.Expr) (encX : α → Val N) (cmp : α → α → N)
     (hb : ∀ x y, IR.Expr.eval fs fuel ((param, encX x) :: (other, encX y) :: ρ) body = some (.num (cmp x y)))
     (hu : ∀ x, encX x ≠ .undefined)
-    (hc : ∀ xs : List α, Eval.consistentOn (fun x y => JSNumber.compareSign (cmp x y)) xs = true)
-    (xs : List α) :
+    (xs : List α)
+    (hc : Eval.consistentOn (fun x y => JSNumber.compareSign (cmp x y)) xs = true) :
     Eval.sortValues (IR.Expr.evalCompare fs fuel ρ param other body) (xs.map encX) =
       some ((JSNumber.sortWith cmp xs).map encX) := by
   have he : ∀ x y, IR.Expr.evalCompare fs fuel ρ param other body (encX x) (encX y) =
@@ -552,12 +814,25 @@ theorem sortValues_sortWith {α : Type} (fs : List (DeclRef × List String × IR
     · contradiction
     · rw [hb x y]; rfl
   have hcons : Eval.consistentOn (IR.Expr.evalCompare fs fuel ρ param other body) (xs.map encX) = true := by
-    have := hc xs
-    unfold Eval.consistentOn at this ⊢
-    simpa [List.all_map, he] using this
+    unfold Eval.consistentOn at hc ⊢
+    simpa [List.all_map, he] using hc
   unfold Eval.sortValues JSNumber.sortWith
   rw [if_pos hcons, List.map_mergeSort (s := fun a b => IR.Expr.evalCompare fs fuel ρ param other body a b != some .gt)
     (fun a _ b _ => by simp only [he])]
+
+/-- A sort of encoded values and `JSNumber.sortWith` agree, when the body of
+the comparator gives the number `cmp x y`, when no encoded value is
+`undefined`, and when the comparator is consistent for every list. A
+certificate proves a lemma for each sort from this one. -/
+theorem sortValues_sortWith {α : Type} (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
+    (ρ : Eval.Env N) (param other : String) (body : IR.Expr) (encX : α → Val N) (cmp : α → α → N)
+    (hb : ∀ x y, IR.Expr.eval fs fuel ((param, encX x) :: (other, encX y) :: ρ) body = some (.num (cmp x y)))
+    (hu : ∀ x, encX x ≠ .undefined)
+    (hc : ∀ xs : List α, Eval.consistentOn (fun x y => JSNumber.compareSign (cmp x y)) xs = true)
+    (xs : List α) :
+    Eval.sortValues (IR.Expr.evalCompare fs fuel ρ param other body) (xs.map encX) =
+      some ((JSNumber.sortWith cmp xs).map encX) :=
+  sortValues_sortWith_on fs fuel ρ param other body encX cmp hb hu xs (hc xs)
 
 theorem int_compare_of_lt {a b : Int} (h : a < b) : compare a b = .lt := Int.compare_eq_lt.mpr h
 theorem int_compare_of_gt {a b : Int} (h : b < a) : compare a b = .gt := Int.compare_eq_gt.mpr h
@@ -657,9 +932,9 @@ macro_rules
         -- has reduced, so strict equality on primitives must reduce too.
         Eval.includesVal, Eval.sameValueZero, Eval.strictEq, Eval.setProp,
         tolean.IR.IntOp.apply, tolean.IR.Order.apply,
-        tolean.IR.Division.apply, ExprExt.apply, listItems?, StringPart.toStr, StringMethod.apply, Eval.oneString, Eval.noArgs, Eval.stringAndInt, Eval.oneInt, Eval.sliceArgs, Eval.padArgs, Eval.padArgs.lengthArg, Eval.stringAt, Eval.intArg, Eval.asciiCase, NumberOp.apply, NumberConstant.value,
+        tolean.IR.Division.apply, ExprExt.apply, listItems?, StringPart.toStr, StringMethod.apply, Eval.regexpReplace, Eval.oneString, Eval.noArgs, Eval.stringAndInt, Eval.oneInt, Eval.sliceArgs, Eval.padArgs, Eval.padArgs.lengthArg, Eval.stringAt, Eval.intArg, Eval.asciiCase, NumberOp.apply, NumberConstant.value,
         NumberTest.apply, tagOf, Eval.Val.typeOf, Eval.Env.set, Eval.getProp, Eval.getKey_ofString, Eval.getPath,
-        Eval.objectPrototypeNames, List.lookup, DeclRef.beq_def, -List.map_map, -List.map_tail, ← List.map_drop, ← List.map_take, ← List.map_reverse, ← List.map_append,
+        Eval.objectPrototypeNames, List.lookup, DeclRef.beq_def, -List.map_map, -List.map_tail, ← List.map_tail, ← List.map_dropLast, ← List.map_drop, ← List.map_take, ← List.map_reverse, ← List.map_append,
         -- A map or set read, such as the initial value of a `reduce`, must
         -- reach a value before a fold lemma can rewrite the call that uses it.
         -- So must the map or set that the read looks in, when `new Map(items)`
@@ -676,7 +951,7 @@ macro_rules
       all_goals repeat' (split_find <;> simp [-List.map_map, -List.map_tail, ← List.map_drop, ← List.map_take, ← List.map_reverse, ← List.map_append, $defs,*])
       all_goals repeat' (split_undef <;> simp [-List.map_map, -List.map_tail, ← List.map_drop, ← List.map_take, ← List.map_reverse, ← List.map_append, $defs,*])
       all_goals repeat' (split <;> (try simp_all [bindState, eqVal, tolean.IR.IntOp.apply,
-        tolean.IR.Order.apply, tolean.IR.Division.apply, ExprExt.apply, listItems?, StringPart.toStr, StringMethod.apply, Eval.oneString, Eval.noArgs, Eval.stringAndInt, Eval.oneInt, Eval.sliceArgs, Eval.padArgs, Eval.padArgs.lengthArg, Eval.stringAt, Eval.intArg, Eval.asciiCase, NumberOp.apply,
+        tolean.IR.Order.apply, tolean.IR.Division.apply, ExprExt.apply, listItems?, StringPart.toStr, StringMethod.apply, Eval.regexpReplace, Eval.oneString, Eval.noArgs, Eval.stringAndInt, Eval.oneInt, Eval.sliceArgs, Eval.padArgs, Eval.padArgs.lengthArg, Eval.stringAt, Eval.intArg, Eval.asciiCase, NumberOp.apply,
         NumberTest.apply, tagOf, Eval.Val.typeOf, Eval.Env.set, Eval.getProp, Eval.getKey_ofString, Eval.getPath,
         Eval.objectPrototypeNames, List.lookup, DeclRef.beq_def, -List.map_map, -List.map_tail, ← List.map_drop, ← List.map_take, ← List.map_reverse, ← List.map_append,
         -Bool.if_true_left, -Bool.if_false_right, -Bool.if_false_left, -Bool.if_true_right, $defs,*]))
@@ -686,6 +961,7 @@ macro_rules
       -- encoded literal stands beside it, the two sides agree once the map
       -- splits again.
       all_goals (try simp [List.map_append])
+      all_goals (try simp_all [JSString.ofString, JSString.utf16])
       -- A case change of a string that the translator showed is ASCII
       -- leaves a branch where it is not, which a literal refutes.
       all_goals (try exact absurd ‹JSString.isAscii _ = false› (by decide))

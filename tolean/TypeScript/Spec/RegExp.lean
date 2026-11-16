@@ -111,6 +111,14 @@ def test (input : JSString) (p : Pattern) : Bool :=
 def Regex.test (r : Regex) (input : JSString) : Bool :=
   JSRegExp.test input r.pattern
 
+/-- The first replacement, without dollar substitutions or callbacks
+(ECMA-262 §22.2.6.11). Captures affect the search but not this replacement. -/
+def Regex.replaceLiteral (r : Regex) (input replacement : JSString) : JSString :=
+  match search input r.pattern r.captureCount with
+  | none => input
+  | some (start, state) =>
+    ⟨input.units.take start ++ replacement.units ++ input.units.drop state.pos.val⟩
+
 /-- The matcher invokes its continuation only at positions at or after the
 start. The continuation itself may return any state, so a claim about only
 the final position would not express this property. -/

@@ -681,6 +681,17 @@ theorem eval_value (c : Code) (ρ : Eval.Env N) :
   unfold Code.value
   split <;> simp [IR.Expr.eval]
 
+/-- An optional projection's conditional receiver has the same value with its
+type annotation, because the IR evaluator ignores ascriptions. -/
+theorem nullableConditionalReceiver_eval (e : Expr) (code : IR.Expr) (type : Ty)
+    (ρ : Eval.Env N) :
+    IR.Expr.eval fs fuel ρ (nullableConditionalReceiver e code type) =
+      IR.Expr.eval fs fuel ρ code := by
+  unfold nullableConditionalReceiver
+  split
+  · split <;> simp only [IR.Expr.eval]
+  · rfl
+
 /-- An element that is not a spread holds its own value in an array literal. -/
 theorem evalElems_cons {ρ : Eval.Env N} {e : Expr} {es : List Expr} (he : e.spreadArg? = none) :
     Eval.evalElems m fuel ρ (e :: es) =
@@ -1182,6 +1193,55 @@ theorem undefinedTestOf_eval {env : Translate.Env} {l : Expr} {name : String} {i
       · simp at h
   | _ => simp at h
 
+/-- A test of an absent local evaluates to the corresponding boolean. The
+null test excludes undefined, as the nullable IR match does. -/
+theorem noneTestOf_eval {env : Translate.Env} {l : Expr} {name : String}
+    {isEq optional : Bool} {value : Ty}
+    (h : noneTestOf env l = some (name, isEq, value, optional)) {ρ : Eval.Env N}
+    (hs : Scoped m env ρ) :
+    ∃ w, ρ.lookup name = some w ∧
+      ((optional = false → w ≠ .undefined) →
+        Eval.eval m fuel ρ l = some (.bool
+          (if isEq then (if optional then isUndefVal w else isNullVal w)
+           else !(if optional then isUndefVal w else isNullVal w)))) := by
+  unfold noneTestOf at h
+  split at h
+  · rename_i n eq t hn
+    simp only [Option.some.injEq, Prod.mk.injEq] at h
+    obtain ⟨rfl, rfl, rfl, rfl⟩ := h
+    obtain ⟨w, hw, hl⟩ := nullTestOf_eval m fuel hn hs
+    refine ⟨w, hw, ?_⟩
+    intro hvalid
+    simpa using hl (hvalid rfl)
+  · obtain ⟨⟨n, eq, t⟩, hu, he⟩ := Option.map_eq_some_iff.mp h
+    simp only [Prod.mk.injEq] at he
+    obtain ⟨rfl, rfl, rfl, rfl⟩ := he
+    obtain ⟨w, hw, hl⟩ := undefinedTestOf_eval m fuel hu hs
+    exact ⟨w, hw, fun _ => by simpa using hl⟩
+
+/-- Negating an absent-value test reverses its two branches. -/
+theorem optionTestOf_eval {env : Translate.Env} {l : Expr} {name : String}
+    {isEq optional : Bool} {value : Ty}
+    (h : optionTestOf env l = some (name, isEq, value, optional)) {ρ : Eval.Env N}
+    (hs : Scoped m env ρ) :
+    ∃ w, ρ.lookup name = some w ∧
+      ((optional = false → w ≠ .undefined) →
+        Eval.eval m fuel ρ l = some (.bool
+          (if isEq then (if optional then isUndefVal w else isNullVal w)
+           else !(if optional then isUndefVal w else isNullVal w)))) := by
+  unfold optionTestOf at h
+  split at h
+  · rename_i sp inner he
+    obtain ⟨⟨n, eq, t, opt⟩, ht, heq⟩ := Option.map_eq_some_iff.mp h
+    simp only [Prod.mk.injEq] at heq
+    obtain ⟨rfl, rfl, rfl, rfl⟩ := heq
+    obtain ⟨w, hw, hl⟩ := noneTestOf_eval m fuel ht hs
+    refine ⟨w, hw, ?_⟩
+    intro hvalid
+    rw [← eval_stripParens, he, Eval.eval, hl hvalid]
+    cases eq <;> simp [Val.truthy]
+  · exact noneTestOf_eval m fuel h hs
+
 /-- The two sides that `tagSide` reads: a read of the tag of the local `n`,
 as `n.kind` or `typeof n`, and the string `t`, in either order. The read
 gives the tag that the IR's evaluator reads. -/
@@ -1646,6 +1706,22 @@ theorem operator_sound {sp s : Span} {op : BinOp} {l r : Expr} {a b c : Code} {c
 -- The value type has many constructors, and `cases` on a value makes a goal
 -- for each, so this proof takes more than the default heartbeats.
 set_option maxHeartbeats 400000 in
+omit [JSNumber N] in
+/-- A successful narrowing fallback is a result of one of its two paths. -/
+theorem narrowFallback_ok {A : Type} {x y : TM A} {s s' : Ctx} {a : A}
+    (h : narrowFallback x y s = .ok a s') : x s = .ok a s' ∨ y s = .ok a s' := by
+  unfold narrowFallback at h
+  split at h
+  · rename_i b sx hx
+    cases h
+    exact .inl hx
+  · split at h
+    · rename_i b sy hy
+      cases h
+      exact .inr hy
+    · contradiction
+
+set_option maxHeartbeats 800000 in
 /-- `translateBinary` is sound, when `translateExpr` is with one unit of fuel less. -/
 theorem translateBinary_sound {F : Nat}
     (ihE : ∀ env exp e ctx c ctx', translateExpr F env exp e ctx = .ok c ctx' →
@@ -1763,36 +1839,49 @@ theorem translateBinary_sound {F : Nat}
         obtain ⟨sr, rfl⟩ := isNull_eq_true hr
         simp [hl] at hw'
         simp [hw', Eval.eval, (hb w hu).1]
-  · cases hn : nullTestOf env l with
+  · cases hn : optionTestOf env l with
     | none =>
       simp only [hn, pure_bind] at h
       exact general h
     | some t =>
-      obtain ⟨name, isNullTest, value⟩ := t
+      obtain ⟨name, isNullTest, value, optional⟩ := t
       simp only [hn, pure_bind] at h
       split at h
       · -- `x === null || e` and `x !== null && e`: `e` sees `x` narrowed.
         rename_i hcond
-        simp only [bind_ok, ite_state] at h
-        obtain ⟨ws, s₁, hws, h⟩ := h
+        have narrowSound (h : translateBooleanMatch (fun env => translateExpr F env none r)
+            env name value optional op r.span ctx = .ok c ctx') :
+            Sim (N := N) m fs fuel env (.binary sp op l r) c.code := by
+          unfold translateBooleanMatch at h
+          simp only [bind_ok, ite_state] at h
+          obtain ⟨ws, s₁, hws, h⟩ := h
+          split at h
+          · simp at h
+            obtain ⟨rfl, -⟩ := h
+            intro ρs ρo v hag hs hv
+            obtain ⟨w, hw, hl⟩ := optionTestOf_eval m fuel hn hs
+            have hso : ρo.lookup name = some w := by rw [← hag]; exact hw
+            have valid : optional = false → w ≠ .undefined := by
+              intro hop hu
+              subst hop; subst hu
+              simp [IR.Expr.eval, hso] at hv
+            replace hl := hl valid
+            have hs' : Scoped m (env.narrow name value) ρs :=
+              ⟨fun x => by rw [narrow_has]; exact hs.1 x, hs.2⟩
+            have hr := fun u hu => ihE _ _ _ _ _ _ hws ρs ρo u hag hs' hu
+            have hcases : (op = .or ∧ isNullTest = true) ∨ (op = .and ∧ isNullTest = false) := by
+              revert hcond; cases op <;> cases isNullTest <;> simp +decide
+            rcases hcases with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ <;> rw [Eval.eval, hl] <;>
+              cases optional <;> cases w <;>
+                simp +decide [IR.Expr.eval, hso, isNullVal, isUndefVal, Val.truthy, eval_value] at hv ⊢
+            all_goals first | exact hr v hv | (subst hv; rfl) | (subst hv; simp +decide)
+          · simp at h
+        simp only [bind_pure] at h
         split at h
-        · simp at h
-          obtain ⟨rfl, -⟩ := h
-          intro ρs ρo v hag hs hv
-          obtain ⟨w, hw, hl⟩ := nullTestOf_eval m fuel hn hs
-          have hso : ρo.lookup name = some w := by rw [← hag]; exact hw
-          by_cases hu : w = .undefined
-          · subst hu; simp [IR.Expr.eval, hso] at hv
-          replace hl := hl hu
-          have hs' : Scoped m (env.narrow name value) ρs :=
-            ⟨fun x => by rw [narrow_has]; exact hs.1 x, hs.2⟩
-          have hr := fun u hu => ihE _ _ _ _ _ _ hws ρs ρo u hag hs' hu
-          have hcases : (op = .or ∧ isNullTest = true) ∨ (op = .and ∧ isNullTest = false) := by
-            revert hcond; cases op <;> cases isNullTest <;> simp +decide
-          rcases hcases with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩ <;> rw [Eval.eval, hl] <;>
-            cases w <;> simp +decide [IR.Expr.eval, hso, isNullVal, Val.truthy, eval_value] at hv ⊢
-          all_goals first | exact hr v hv | (subst hv; rfl) | (subst hv; simp +decide)
-        · simp at h
+        · exact narrowSound h
+        · rcases narrowFallback_ok h with hg | hn
+          · exact general hg
+          · exact narrowSound hn
       · exact general h
 
 /-! ### Array methods with a callback -/
@@ -3703,6 +3792,7 @@ theorem translateMember_sound {F : Nat}
       obtain ⟨rfl, -⟩ := h
       intro ρs ρo v ha hs hv'
       simp only [IR.Expr.eval, IR.Expr.evalList] at hv'
+      rw [nullableConditionalReceiver_eval] at hv'
       cases hobj : IR.Expr.eval fs fuel ρo o.code with
       | none => simp [hobj] at hv'
       | some ov =>
@@ -4677,6 +4767,7 @@ theorem regexpLiteral_sound {F : Nat} {env : Translate.Env} {expected : Option T
   subst v
   simp [Eval.eval, hparse]
 
+set_option maxHeartbeats 800000 in
 theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
     (∀ env exp e ctx c ctx', translateExpr F env exp e ctx = .ok c ctx' →
       Sim (N := N) m fs fuel env e c.code) ∧
@@ -4862,6 +4953,7 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
         obtain ⟨rfl, -⟩ := h
         intro ρs ρo v ha hs hv'
         simp only [IR.Expr.eval, IR.Expr.evalList] at hv'
+        rw [nullableConditionalReceiver_eval] at hv'
         cases hobj : IR.Expr.eval fs fuel ρo o.code with
         | none => simp [hobj] at hv'
         | some ov =>
@@ -4869,6 +4961,149 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
           simp only [hobj] at hv'
           simp only [Eval.eval, this, Option.bind_eq_bind, Option.bind_some]
           cases ov <;> simp only [IR.ExprExt.apply] at hv' <;> first | exact hv' | simp at hv'
+      | optIndex sp obj key =>
+        simp only [translateExprCore, bind_ok] at h
+        obtain ⟨o, s₁, ho, h⟩ := h
+        generalize htu : o.type.maybeValue?.bind Ty.tupleElems? = tuple at h
+        cases tuple
+        case some tys =>
+          dsimp only at h
+          split at h
+          · rename_i sp' text
+            simp only [bind_ok, orReject_ok, ite_state] at h
+            obtain ⟨k, s₂, ⟨hk, rfl⟩, elem, s₃, ⟨_, rfl⟩, h⟩ := h
+            split at h
+            · rename_i hpos
+              simp only [pure_bind, ite_state] at h
+              split at h
+              · simp at h
+              simp only [pure_ok] at h
+              obtain ⟨rfl, _⟩ := h
+              intro ρs ρo v ha hs hv
+              simp only [IR.Expr.eval, IR.Expr.evalList] at hv
+              rw [nullableConditionalReceiver_eval] at hv
+              cases hx : IR.Expr.eval fs fuel ρo o.value with
+              | none => simp [hx] at hv
+              | some w =>
+                have hobj := ihE _ _ _ _ _ _ ho ρs ρo w ha hs
+                  (by rw [← eval_value]; exact hx)
+                rw [Eval.eval.eq_def]
+                simp only [hobj, Option.bind_eq_bind, Option.bind_some]
+                cases w
+                case list items =>
+                  change Eval.numberLiteral text = some k at hk
+                  simp only [hx, Option.bind_eq_bind, Option.bind_some, pure_bind,
+                    IR.ExprExt.apply, IR.optionalLiteralIndex, Option.some.injEq, Int.toNat_of_nonneg hpos] at hv
+                  simp [Eval.optionalIndexValue, Eval.numberText?, hk, hv]
+                case null => simpa [hx, IR.ExprExt.apply] using hv
+                case undefined => simpa [hx, IR.ExprExt.apply] using hv
+                all_goals simp [hx, IR.ExprExt.apply] at hv
+            · simp at h
+          · simp at h
+        simp only [bind_ok, get_ok] at h
+        obtain ⟨ctx, s₂, ⟨rfl, rfl⟩, h⟩ := h
+        generalize hr : o.type.maybeValue?.bind (recordIndex s₂) = record at h
+        cases record
+        case some r =>
+          rcases r with ⟨keyRef, keys, type⟩
+          dsimp only at h
+          simp only [ite_state] at h
+          split at h
+          · simp at h
+          simp only [pure_bind, bind_ok, ite_state] at h
+          obtain ⟨k, s₂, hk, h⟩ := h
+          split at h
+          · simp only [pure_ok] at h
+            obtain ⟨rfl, _⟩ := h
+            intro ρs ρo v ha hs hv
+            simp only [IR.Expr.eval, IR.Expr.evalList] at hv
+            rw [nullableConditionalReceiver_eval] at hv
+            cases hx : IR.Expr.eval fs fuel ρo o.value with
+            | none => simp [hx] at hv
+            | some w =>
+              cases hy : IR.Expr.eval fs fuel ρo k.value with
+              | none => simp [hx, hy] at hv
+              | some j =>
+                have hobj := ihE _ _ _ _ _ _ ho ρs ρo w ha hs
+                  (by rw [← eval_value]; exact hx)
+                have hkey := ihE _ _ _ _ _ _ hk ρs ρo j ha hs
+                  (by rw [← eval_value]; exact hy)
+                rw [Eval.eval.eq_def]
+                simp only [hobj, Option.bind_eq_bind, Option.bind_some]
+                cases w
+                case null => simpa [hx, hy, IR.ExprExt.apply] using hv
+                case undefined => simpa [hx, hy, IR.ExprExt.apply] using hv
+                case obj fields =>
+                  cases j <;> simp [hx, hy, IR.ExprExt.apply] at hv
+                  simpa [Eval.optionalIndexValue, hkey] using hv
+                all_goals simp [hx, hy, IR.ExprExt.apply] at hv
+          · simp at h
+        simp only [bind_ok, orReject_ok] at h
+        obtain ⟨elem, s₂, ⟨_, rfl⟩, h⟩ := h
+        simp only [ite_state] at h
+        split at h
+        · simp at h
+        simp only [pure_bind] at h
+        split at h
+        · rename_i sp' text
+          simp only [bind_ok, orReject_ok, ite_state] at h
+          obtain ⟨k, s₃, ⟨hk, rfl⟩, h⟩ := h
+          split at h
+          · rename_i hpos
+            simp only [pure_ok] at h
+            obtain ⟨rfl, _⟩ := h
+            intro ρs ρo v ha hs hv
+            simp only [IR.Expr.eval, IR.Expr.evalList] at hv
+            rw [nullableConditionalReceiver_eval] at hv
+            cases hx : IR.Expr.eval fs fuel ρo o.value with
+            | none => simp [hx] at hv
+            | some w =>
+              have hobj := ihE _ _ _ _ _ _ ho ρs ρo w ha hs
+                (by rw [← eval_value]; exact hx)
+              rw [Eval.eval.eq_def]
+              simp only [hobj, Option.bind_eq_bind, Option.bind_some]
+              cases w
+              case list items =>
+                change Eval.numberLiteral text = some k at hk
+                simp only [hx, Option.bind_eq_bind, Option.bind_some, pure_bind,
+                  IR.ExprExt.apply, IR.optionalLiteralIndex, Option.some.injEq, Int.toNat_of_nonneg hpos] at hv
+                simp [Eval.optionalIndexValue, Eval.numberText?, hk, hv]
+              case null => simpa [hx, IR.ExprExt.apply] using hv
+              case undefined => simpa [hx, IR.ExprExt.apply] using hv
+              all_goals simp [hx, IR.ExprExt.apply] at hv
+          · simp at h
+        · rename_i hnot
+          have hnt : Eval.numberText? key = none := by
+            cases key <;> simp [Eval.numberText?] at hnot ⊢
+          simp only [bind_ok] at h
+          obtain ⟨i, s₂, hi, h⟩ := h
+          simp only [ite_state] at h
+          split at h
+          · simp only [pure_ok] at h
+            obtain ⟨rfl, _⟩ := h
+            intro ρs ρo v ha hs hv
+            simp only [IR.Expr.eval, IR.Expr.evalList] at hv
+            rw [nullableConditionalReceiver_eval] at hv
+            cases hx : IR.Expr.eval fs fuel ρo o.value with
+            | none => simp [hx] at hv
+            | some w =>
+              cases hy : IR.Expr.eval fs fuel ρo i.value with
+              | none => simp [hx, hy] at hv
+              | some j =>
+                have hobj := ihE _ _ _ _ _ _ ho ρs ρo w ha hs
+                  (by rw [← eval_value]; exact hx)
+                have hkey := ihE _ _ _ _ _ _ hi ρs ρo j ha hs
+                  (by rw [← eval_value]; exact hy)
+                rw [Eval.eval.eq_def]
+                simp only [hobj, Option.bind_eq_bind, Option.bind_some]
+                cases w
+                case null => simpa [hx, hy, IR.ExprExt.apply] using hv
+                case undefined => simpa [hx, hy, IR.ExprExt.apply] using hv
+                case list items =>
+                  cases j <;> simp [hx, hy, IR.ExprExt.apply] at hv
+                  simp [Eval.optionalIndexValue, hnt, hkey, hv]
+                all_goals simp [hx, hy, IR.ExprExt.apply] at hv
+          · simp at h
       | index sp obj key =>
         simp only [translateExprCore, bind_ok] at h
         obtain ⟨o, s₁, ho, h⟩ := h
@@ -5127,23 +5362,52 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
           all_goals exact ihA _ _ _ _ _ _ _ h
       | cond sp test ifTrue ifFalse =>
         simp only [translateExprCore] at h
-        simp at h
-        obtain ⟨tc, s₁, htc, h⟩ := h
-        split at h
+        rcases narrowFallback_ok h with h | h
         · simp at h
-          obtain ⟨ta, s₂, hta, tb, s₃, htb, h⟩ := h
-          obtain ⟨ty, ⟨-, -⟩, hcode⟩ := h
-          intro ρs ρo v ha hs hv'
-          rw [← hcode] at hv'
-          obtain ⟨t, ht, hbr⟩ := out_ite fs fuel hv'
-          have htest := ihE _ _ _ _ _ _ htc ρs ρo _ ha hs ht
-          simp only [Eval.eval, htest, Option.bind_eq_bind, Option.bind_some, Val.truthy]
-          cases t
-          · simp only [eval_value] at hbr ⊢
-            exact ihE _ _ _ _ _ _ htb ρs ρo _ ha hs hbr
-          · simp only [if_true, eval_value] at hbr ⊢
-            exact ihE _ _ _ _ _ _ hta ρs ρo _ ha hs hbr
-        · simp at h
+          obtain ⟨tc, s₁, htc, h⟩ := h
+          split at h
+          · simp at h
+            obtain ⟨ta, s₂, hta, tb, s₃, htb, h⟩ := h
+            obtain ⟨ty, ⟨-, -⟩, hcode⟩ := h
+            intro ρs ρo v ha hs hv'
+            rw [← hcode] at hv'
+            have hv' : IR.Expr.eval fs fuel ρo (.ite tc.code ta.value tb.value) = some v := by
+              split at hv' <;> simpa only [IR.Expr.eval] using hv'
+            obtain ⟨t, ht, hbr⟩ := out_ite fs fuel hv'
+            have htest := ihE _ _ _ _ _ _ htc ρs ρo _ ha hs ht
+            simp only [Eval.eval, htest, Option.bind_eq_bind, Option.bind_some, Val.truthy]
+            cases t
+            · simp only [eval_value] at hbr ⊢
+              exact ihE _ _ _ _ _ _ htb ρs ρo _ ha hs hbr
+            · simp only [if_true, eval_value] at hbr ⊢
+              exact ihE _ _ _ _ _ _ hta ρs ρo _ ha hs hbr
+          · simp at h
+        · cases hn : optionTestOf env test with
+          | none => simp [hn] at h
+          | some t =>
+            obtain ⟨name, isEq, value, optional⟩ := t
+            simp [hn] at h
+            obtain ⟨ta, s₁, hta, tb, s₂, htb, ty, ⟨-, -⟩, hcode⟩ := h
+            intro ρs ρo v ha hs hv
+            rw [← hcode] at hv
+            obtain ⟨w, hw, ht⟩ := optionTestOf_eval m fuel hn hs
+            have hso : ρo.lookup name = some w := by rw [← ha]; exact hw
+            have valid : optional = false → w ≠ .undefined := by
+              intro hop hu
+              subst hop; subst hu
+              simp [IR.Expr.eval, hso] at hv
+            have hs' : Scoped m (env.narrow name value) ρs :=
+              ⟨fun x => by rw [narrow_has]; exact hs.1 x, hs.2⟩
+            have hsa : Scoped m (if isEq then env else env.narrow name value) ρs := by
+              cases isEq <;> assumption
+            have hsb : Scoped m (if isEq then env.narrow name value else env) ρs := by
+              cases isEq <;> assumption
+            have ra := fun u hu => ihE _ _ _ _ _ _ hta ρs ρo u ha hsa hu
+            have rb := fun u hu => ihE _ _ _ _ _ _ htb ρs ρo u ha hsb hu
+            rw [Eval.eval, ht valid]
+            cases isEq <;> cases optional <;> cases w <;>
+              simp [IR.Expr.eval, hso, isNullVal, isUndefVal, Val.truthy, eval_value] at hv ⊢
+            all_goals first | exact ra v hv | exact rb v hv
       | new sp callee typeArgs args =>
         simp only [translateExprCore] at h
         exact translateNew_sound m fs fuel (fun _ _ _ _ _ hx => ihE _ _ _ _ _ _ hx) h

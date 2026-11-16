@@ -1220,7 +1220,9 @@ theorem execCase_ret {v : Except (Val N) (Val N)} : ∀ {ss : List Stmt} {ρ : E
     have hnb : ∀ sp, s ≠ .breakStmt sp := by
       rintro sp rfl; simp [Eval.exec, Eval.execStmt] at h
     simp only [Eval.exec] at h
-    rw [Eval.execCase.eq_3 _ _ _ _ _ hnb]
+    rw [Eval.execCase.eq_2]
+    split
+    · exact False.elim (hnb _ rfl)
     simp only [Bool.false_eq_true, ↓reduceIte]
     by_cases hc : s.constAssignedIn rest = true
     · simp [hc] at h
@@ -1444,14 +1446,18 @@ theorem execCase_drop {e : Eval.Env N} : ∀ {body : List Stmt} {ρ : Eval.Env N
     · have hnb : ∀ sp, s ≠ .breakStmt sp := by rintro sp rfl; simp [Stmt.isBreak] at hb
       simp only [dropBreak, hb, Bool.false_eq_true, ↓reduceIte] at h
       rw [exec_single] at h
-      rw [Eval.execCase.eq_3 _ _ _ _ _ hnb]
+      rw [Eval.execCase.eq_2]
+      split
+      · exact False.elim (hnb _ rfl)
       simp only [Bool.false_eq_true, ↓reduceIte, h, Option.bind_eq_bind, Option.bind_some]
       simp [Eval.execCase, endsInBreak, hb]
   | s :: t :: rest, ρ, h => by
     have hnb : ∀ sp, s ≠ .breakStmt sp := by
       rintro sp rfl; simp [dropBreak, Eval.exec, Eval.execStmt] at h
     simp only [dropBreak, Eval.exec] at h
-    rw [Eval.execCase.eq_3 _ _ _ _ _ hnb]
+    rw [Eval.execCase.eq_2]
+    split
+    · exact False.elim (hnb _ rfl)
     simp only [Bool.false_eq_true, ↓reduceIte]
     rw [← constAssignedIn_dropBreak s (t :: rest)]
     by_cases hc : s.constAssignedIn (dropBreak (t :: rest)) = true
@@ -1531,7 +1537,9 @@ theorem execCase_ret_drop {v : Except (Val N) (Val N)} : ∀ {body : List Stmt} 
     have hnb : ∀ sp, s ≠ .breakStmt sp := by
       rintro sp rfl; simp [dropBreak, Eval.exec, Eval.execStmt] at h
     simp only [dropBreak, Eval.exec] at h
-    rw [Eval.execCase.eq_3 _ _ _ _ _ hnb]
+    rw [Eval.execCase.eq_2]
+    split
+    · exact False.elim (hnb _ rfl)
     simp only [Bool.false_eq_true, ↓reduceIte]
     rw [← constAssignedIn_dropBreak s (t :: rest)]
     by_cases hc : s.constAssignedIn (dropBreak (t :: rest)) = true

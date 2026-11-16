@@ -128,7 +128,7 @@ of type `[T, T]` is not. -/
 def Ty.assignableTo (source target : Ty) : Bool :=
   source.sameLean target ||
     match target with
-    | .nullable value => source == value
+    | .nullable value | .optional value => source == value
     | _ => false
 
 /-- A value of type `source` can be the argument of a parameter of type
@@ -150,6 +150,14 @@ def Ty.join (a b : Ty) : Option Ty :=
     -- hold a value that may be either.
     | .null, .optional _ | .optional _, .null => none
     | .null, t | t, .null => some (.nullable t)
+    | _, _ => none
+
+/-- The branches of a narrowed match may join a defined value with an
+optional one. The missing branch prints first, so Lean infers `Option`. -/
+def Ty.joinOptional (a b : Ty) : Option Ty :=
+  (a.join b).orElse fun _ =>
+    match a, b with
+    | .optional t, u | u, .optional t => if t == u then some (.optional t) else none
     | _, _ => none
 
 /-- The type of the value that an optional field holds when it is set. -/
@@ -199,6 +207,11 @@ def Ty.isMaybe : Ty → Bool
 def Ty.isOptional : Ty → Bool
   | .optional _ => true
   | _ => false
+
+/-- The type of a present nullable or optional value. -/
+def Ty.maybeValue? : Ty → Option Ty
+  | .nullable t | .optional t => some t
+  | _ => none
 
 /-- A primitive that `===` compares by value and the output compares with `=`. -/
 def Ty.isEqPrimitive : Ty → Bool
@@ -589,6 +602,13 @@ structure Code where
   prop : Bool
   type : Ty
 
+/-- A nullable conditional needs its type where an optional projection reads
+it, because Lean elaborates the receiver before the projection. -/
+def nullableConditionalReceiver (e : Expr) (code : IR.Expr) (type : Ty) : IR.Expr :=
+  match e.stripParens with
+  | .cond .. => if type.isNullable then .ascribe code type.lean else code
+  | _ => code
+
 /-- In value position, a `Prop` becomes a `Bool` with `decide`. -/
 def Code.value (c : Code) : IR.Expr :=
   if c.prop then .decide c.code else c.code
@@ -842,6 +862,16 @@ def firstFitting {A : Type} (x y : TM A) (fits : A → Bool) : TM A := fun s =>
   | .ok a s' => if fits a then .ok a s' else y s
   | .error _ _ => y s
 
+/-- Try narrowing only when the ordinary translation fails. If neither
+translation succeeds, keep the original diagnostic. -/
+def narrowFallback {A : Type} (ordinary narrowed : TM A) : TM A := fun s =>
+  match ordinary s with
+  | .ok a s' => .ok a s'
+  | .error err s' =>
+    match narrowed s with
+    | .ok a s'' => .ok a s''
+    | .error _ _ => .error err s'
+
 /-- Refuse the node at `span` unless the target edition has `f`. -/
 def requireFeature (span : Span) (f : Feature) : TM Unit := do
   let target := (← get).target
@@ -974,8 +1004,14 @@ def translateType (t : TypeExpr) : TM Ty := do
       -- `Maybe | null`, where the alias `Maybe` is nullable already, is
       -- `Maybe`, as in TypeScript.
       match ← translateType value with
+      | .optional _ => reject t.span "a type may not include both null and undefined"
       | .nullable t => return .nullable t
       | t => return .nullable t
+    | .keyword _ "undefined", value | value, .keyword _ "undefined" =>
+      match ← translateType value with
+      | .nullable _ | .null => reject t.span "a type may not include both null and undefined"
+      | .optional t => return .optional t
+      | t => return .optional t
     | _, _ => unsupportedType t
   | .array _ elem => return .array (← translateType elem)
   | .ref _ "Record" [_, _] | .ref _ "Readonly" [.ref _ "Record" [_, _]] =>
@@ -1210,7 +1246,7 @@ def exprChanges (fns : List (String × List String)) : Expr → List String
     calleeChanges fns callee ++ exprChanges fns callee ++ exprsChanges fns args
   | .array _ elems => exprsChanges fns elems
   | .object _ props => propsChanges fns props
-  | .index _ a b | .binary _ _ a b => exprChanges fns a ++ exprChanges fns b
+  | .index _ a b | .optIndex _ a b | .binary _ _ a b => exprChanges fns a ++ exprChanges fns b
   | .cond _ a b c => exprChanges fns a ++ exprChanges fns b ++ exprChanges fns c
   | _ => []
 
@@ -1323,6 +1359,14 @@ def noneTestOf (env : Env) (e : Expr) : Option (String × Bool × Ty × Bool) :=
   match nullTestOf env e with
   | some (name, isEquality, value) => some (name, isEquality, value, false)
   | none => (undefinedTestOf env e).map fun (name, isEquality, value) => (name, isEquality, value, true)
+
+/-- A direct test of an absent value, or its negation. -/
+def optionTestOf (env : Env) (e : Expr) : Option (String × Bool × Ty × Bool) :=
+  match e.stripParens with
+  | .unary _ .not inner =>
+    (noneTestOf env inner).map fun (name, isEquality, value, optional) =>
+      (name, !isEquality, value, optional)
+  | _ => noneTestOf env e
 
 /-- The tag that an object literal sets: the string of its property `field`. -/
 def tagOfProps (field : String) (props : List Property) : Option String :=
@@ -2092,7 +2136,7 @@ def _root_.tolean.TypeScript.Syntax.Expr.isArrow : Expr → Bool
 /-- The methods of a string that the subset has. -/
 def stringMethods : List IR.StringMethod :=
   [.startsWith, .endsWith, .includes, .indexOf, .trim, .trimStart, .trimEnd, .split, .at, .slice,
-   .padStart, .padEnd, .toUpperCase, .toLowerCase]
+   .padStart, .padEnd, .toUpperCase, .toLowerCase, .regexpReplace]
 
 /-- The method of a string that `name` names, among those the subset has. -/
 def stringMethod? (name : String) : Option IR.StringMethod :=
@@ -2109,6 +2153,7 @@ def StringMethod.params : IR.StringMethod → List Ty × List Ty
   | .at => ([.number], [])
   | .slice => ([], [.number, .number])
   | .padStart | .padEnd => ([.number], [.string])
+  | .regexpReplace => ([.regexp, .string], [])
 
 /-- The arguments of a call fit the method: there are at least as many as it
 must take and no more than it can, each has the type of its parameter, and
@@ -2124,6 +2169,7 @@ def StringMethod.fits (m : IR.StringMethod) (types : List Ty) (lits : List (Opti
 /-- What a call of the method must pass, for the message that refuses another
 call. -/
 def StringMethod.usage (method : String) : IR.StringMethod → String
+  | .regexpReplace => "'replace' takes a flagless regular expression and a literal string without dollar signs"
   | .startsWith | .endsWith | .includes | .indexOf =>
     s!"'{method}' takes a string and perhaps a number position"
   | .split => "'split' takes a string separator and perhaps a number limit"
@@ -2146,6 +2192,7 @@ def StringMethod.padsTooFar : IR.StringMethod → List (Option Int) → Bool
 
 /-- The type of the value of a method of a string. -/
 def StringMethod.result : IR.StringMethod → Ty
+  | .regexpReplace => .string
   | .startsWith | .endsWith | .includes => .boolean
   | .indexOf => .number
   | .trim | .trimStart | .trimEnd | .slice | .padStart | .padEnd | .toUpperCase | .toLowerCase => .string
@@ -2155,6 +2202,7 @@ def StringMethod.result : IR.StringMethod → Ty
 /-- The edition from which a method of a string means what the model says,
 when that is later than ES2015. -/
 def StringMethod.feature : IR.StringMethod → Option Feature
+  | .regexpReplace => some .regexpReplace
   | .trim => some .trimWhiteSpace
   | .trimStart | .trimEnd => some .trimStartEnd
   | .padStart | .padEnd => some .stringPad
@@ -2215,6 +2263,14 @@ def requireFeature? (s : Span) : Option Feature → TM Unit
   | some f => requireFeature s f
   | none => pure ()
 
+/-- Replacement needs a literal without GetSubstitution tokens. -/
+def unsafeReplacement (method : IR.StringMethod) (args : List Code) : Bool :=
+  if method == .regexpReplace then
+    match args.map Code.value with
+    | [.ext (.regexpLiteral _) [], .string text] => text.toList.contains '$'
+    | _ => true
+  else false
+
 /-- The code for `str.method(args)`, a method of a string, where `str` is the
 code of the receiver, `args` are the codes of the arguments, and `lits` are
 the integer literals that the arguments are. -/
@@ -2226,8 +2282,10 @@ def stringCall (s : Span) (method : String) (str : Code) (args : List Code) (lit
       if StringMethod.fits m (args.map (·.type)) lits then
         if StringMethod.padsTooFar m lits then
           reject s s!"'{method}' to more than {maxStringLength} code units could make a string that an engine refuses"
-        else if StringMethod.changesCase m && !asciiString str.value then
-          reject s (s!"'{method}' is supported only on a string that is ASCII, such as a literal; " ++
+        else if unsafeReplacement m args || (StringMethod.changesCase m && !asciiString str.value) then
+          reject s (if m == .regexpReplace then
+            "'replace' needs a direct flagless regular expression literal and a literal replacement without dollar signs"
+          else s!"'{method}' is supported only on a string that is ASCII, such as a literal; " ++
             "on other strings its result depends on the Unicode version of the engine")
         else do
           requireFeature? s (StringMethod.feature m)
@@ -2430,6 +2488,13 @@ def translateOperator (s : Span) (op : BinOp) (r : Expr) (a b : Code) : TM Code 
   let known := (← get).knownEnums
   applyOperator s op r (enumOperand known a b.type) (enumOperand known b a.type)
 
+/-- The defined branch of a short-circuiting absent-value test. -/
+def translateBooleanMatch (rhs : Env → TM Code) (env : Env) (name : String)
+    (value : Ty) (optional : Bool) (op : BinOp) (span : Span) : TM Code := do
+  let whenSome ← rhs (env.narrow name value)
+  unless whenSome.type == .boolean do reject span s!"'{op.symbol}' needs two booleans"
+  return ⟨.matchNull name (.bool (op == .or)) whenSome.value optional, false, .boolean⟩
+
 mutual
 
 /-- `expected` is the type the context gives, which an object literal needs:
@@ -2534,7 +2599,7 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
         | reject s "a chain after '?.' must read a property"
       let o ← translateExpr fuel env none base
       let (bind, type) ← optPathType s o.type path
-      return ⟨.ext (.optField path bind) [o.code], false, type⟩
+      return ⟨.ext (.optField path bind) [nullableConditionalReceiver base o.code o.type], false, type⟩
     let o ← translateRecv (translateExpr fuel env none) env obj
     -- `xs.length`, the number of elements of an array.
     if o.type.element?.isSome && name == "length" then
@@ -2569,7 +2634,44 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
   | .optMember s obj name =>
     let o ← translateExpr fuel env none obj
     let (bind, type) ← optFieldType s o.type name
-    return ⟨.ext (.optField [name] bind) [o.code], false, type⟩
+    return ⟨.ext (.optField [name] bind) [nullableConditionalReceiver obj o.code o.type], false, type⟩
+  | .optIndex s obj key =>
+    let o ← translateExpr fuel env none obj
+    let receiver := nullableConditionalReceiver obj o.value o.type
+    let underlying := o.type.maybeValue?
+    match underlying.bind Ty.tupleElems? with
+    | some tys =>
+      let .number _ text := key | reject key.span "the index of a tuple must be a number literal, such as t[0]"
+      let k ← orReject (safeIntegerValue? text) key.span "the index of a tuple must be an integer"
+      let elem ← orReject tys[k.toNat]? key.span s!"the tuple has no element {k}"
+      unless 0 ≤ k do reject key.span s!"the tuple has no element {k}"
+      if elem.isMaybe && !elem.isOptional then reject s "an optional tuple index could give null or undefined"
+      let result := if elem.isOptional then elem else .optional elem
+      return ⟨.ascribe (.ext (.optIndexLit k.toNat (some (tys.length, elem.isOptional))) [receiver])
+        result.lean, false, result⟩
+    | none =>
+      let ctx ← get
+      match underlying.bind (recordIndex ctx) with
+      | some (keyRef, keys, type) =>
+        if type.isMaybe && !type.isOptional then reject s "an optional Record index could give null or undefined"
+        let k ← translateExpr fuel env (some (.enum keyRef)) key
+        unless k.type == .enum keyRef do reject key.span "the key must have the key type of the Record"
+        let result := if type.isOptional then type else .optional type
+        return ⟨.ext (.optRecordGet keyRef keys type.isOptional) [receiver, k.value], false, result⟩
+      | none =>
+        let elem ← orReject (match o.type with
+          | .optional (.array t) | .nullable (.array t) => some t
+          | _ => none) s "optional indexing requires a nullable or optional array, tuple or Record"
+        if elem.isMaybe then reject s "an index of an array of nullable values could give null or undefined"
+        match key with
+        | .number _ text =>
+          let k ← orReject (safeIntegerValue? text) key.span "a number literal must be a safe integer"
+          unless 0 ≤ k do reject key.span "an index must not be negative"
+          return ⟨.ascribe (.ext (.optIndexLit k.toNat none) [receiver]) (Ty.optional elem).lean, false, .optional elem⟩
+        | _ =>
+          let i ← translateExpr fuel env none key
+          unless i.type == .number do reject key.span "the index of an array must be a number"
+          return ⟨.ext .optIndexNumber [receiver, i.value], false, .optional elem⟩
   | .index s obj key =>
     let o ← translateExpr fuel env none obj
     match o.type.tupleElems? with
@@ -2622,17 +2724,28 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
     | _ => reject s "unsupported unary operator"
   | .binary s op l r => translateBinary fuel env s op l r
   | .cond s test ifTrue ifFalse =>
-    let c ← translateExpr fuel env none test
-    unless c.type == .boolean do reject test.span "a condition must be a boolean"
-    let a ← translateExpr fuel env expected ifTrue
-    let b ← translateExpr fuel env expected ifFalse
-    -- A tag field holds the string itself, which the output leaves out, so
-    -- it may not be the value of '?:'.
-    let message := match a.type.join b.type with
-      | some (.literal _) => "a tag field must be its string literal itself, not the value of '?:'"
-      | _ => "the branches of '?:' have different types"
-    let type ← orReject ((a.type.join b.type).filter fun t => !(t matches .literal _)) s message
-    return ⟨.ite c.code a.value b.value, false, type⟩
+    narrowFallback (do
+      let c ← translateExpr fuel env none test
+      unless c.type == .boolean do reject test.span "a condition must be a boolean"
+      let a ← translateExpr fuel env expected ifTrue
+      let b ← translateExpr fuel env expected ifFalse
+      let message := match a.type.join b.type with
+        | some (.literal _) => "a tag field must be its string literal itself, not the value of '?:'"
+        | _ => "the branches of '?:' have different types"
+      let type ← orReject ((a.type.join b.type).filter fun t => !(t matches .literal _)) s message
+      let code := IR.Expr.ite c.code a.value b.value
+      -- `null` is polymorphic, but two non-null branches need the joined type
+      -- to coerce a value into `Option`.
+      let needsAscription := type.isNullable && a.type != .null && b.type != .null
+      return ⟨if needsAscription then .ascribe code type.lean else code, false, type⟩) (do
+      let some (name, isEq, value, optional) := optionTestOf env test
+        | reject s "the conditional expression cannot be typed; only a direct null or undefined test narrows its branches"
+      let a ← translateExpr fuel (if isEq then env else env.narrow name value) expected ifTrue
+      let b ← translateExpr fuel (if isEq then env.narrow name value else env) expected ifFalse
+      let type ← orReject ((a.type.joinOptional b.type).filter fun t => !(t matches .literal _)) s
+        "the branches of '?:' have different types"
+      return ⟨.matchNull name (if isEq then a.value else b.value)
+        (if isEq then b.value else a.value) optional, false, type⟩)
   | .call s callee args =>
     match reduceOf callee with
     | some recv => translateReduce fuel env expected s recv args
@@ -3131,11 +3244,15 @@ def translateBinary (fuel : Nat) (env : Env) (s : Span) (op : BinOp) (l r : Expr
         else "the type fixes the answer of this test with null, so it does nothing; remove it")
   -- `x === null || e` and `x !== null && e`: TypeScript narrows `x` in `e`,
   -- so Lean matches on `x` and binds it to the value inside.
-  if let some (name, isNullTest, value) := nullTestOf env l then
+  if let some (name, isNullTest, value, optional) := optionTestOf env l then
     if (op == .or && isNullTest) || (op == .and && !isNullTest) then
-      let whenSome ← translateExpr fuel (env.narrow name value) none r
-      unless whenSome.type == .boolean do reject r.span s!"'{op.symbol}' needs two booleans"
-      return ⟨.matchNull name (.bool (op == .or)) whenSome.value, false, .boolean⟩
+      let narrowed := translateBooleanMatch (fun env => translateExpr fuel env none r)
+        env name value optional op r.span
+      if (nullTestOf env l).isSome then return ← narrowed
+      return ← narrowFallback (do
+        let a ← translateExpr fuel env none l
+        let b ← translateExpr fuel env none r
+        translateOperator s op r a b) narrowed
   let a ← translateExpr fuel env none l
   let b ← translateExpr fuel env none r
   translateOperator s op r a b
@@ -3154,7 +3271,8 @@ def assignOps? : AssignOp → Option (IR.IntOp × IR.NumberOp)
 written out where Lean would infer another: a `T` or `null` where the local
 is `T | null`, and an `if` with `none` in one branch. -/
 def withType (e : IR.Expr) (t source : Ty) : IR.Expr :=
-  if t.isNullable && (source != t || e matches .none || e matches .ite ..) then
+  if (t.isNullable && (source != t || e matches .none || e matches .ite ..)) ||
+      ((t matches .optional _) && (source != t || e matches .undefined)) then
     .ascribe e t.lean
   else e
 
@@ -4267,6 +4385,8 @@ def translateInterface (s : Span) (exported : Bool) (name : String) (typeParams 
         | .literal _ (.string v) =>
           if f.optional then reject f.span "a tag field may not be optional" else pure (Ty.literal v)
         | t => translateType t
+      if type matches .optional _ then
+        reject f.span "a field type may not include undefined; use an optional field instead"
       -- Lean's kernel accepts a structure that refers to itself only with
       -- its own type parameters, in order.
       unless type.namesSelfWith ⟨(← get).file, name⟩ (typeParams.map .param) do
@@ -4487,7 +4607,7 @@ def paramType (span : Span) (optional : Bool) (type : TypeExpr) (before : List T
       reject span "a required parameter may not follow an optional one"
     return ty
   if ty.isNullable || ty == .null then reject span "an optional parameter may not also be nullable"
-  return .optional ty
+  return .optional ty.unoptional
 
 def functionReturnType (borrow : Option Nat) (types : List Ty) (s : Span) (rt : TypeExpr)
     (env : Env) (params : List Param) (body : Stmt) : TM Ty :=
@@ -4606,8 +4726,9 @@ def exprUsesNumber : Expr → Bool
   | .asConst _ e | .spread _ e => exprUsesNumber e
   | .satisfies _ e t => exprUsesNumber e || typeUsesNumber t
   -- The index of a tuple, `t[0]`, is a position in the output, not a number.
-  | .index _ a (.number ..) => exprUsesNumber a
-  | .index _ a b | .binary _ _ a b | .assign _ _ a b => exprUsesNumber a || exprUsesNumber b
+  | .index _ a (.number ..) | .optIndex _ a (.number ..) => exprUsesNumber a
+  | .index _ a b | .optIndex _ a b | .binary _ _ a b | .assign _ _ a b =>
+    exprUsesNumber a || exprUsesNumber b
   | .cond _ a b c => exprUsesNumber a || exprUsesNumber b || exprUsesNumber c
   -- `new Map<bigint, number>()` names `number` only in its type arguments.
   | .new _ callee typeArgs args => isNumberName callee || typesUseNumber typeArgs || exprsUseNumber args
@@ -4616,7 +4737,7 @@ def exprUsesNumber : Expr → Bool
     ps.length ≥ 2 ||
     ps.any (fun p => isNumberName p.name || (p.type.map typeUsesNumber).getD false) ||
       exprUsesNumber body
-  | _ => false
+  | .regexp .. | .bigint .. | .string .. | .bool .. | .null .. => false
 
 def exprsUseNumber : List Expr → Bool
   | [] => false
@@ -4850,17 +4971,39 @@ def translateErrorTypes (m : Module) : TM (List IR.Decl) := do
     (c.name, ("message", IR.Ty.string) :: c.fields.map fun (n, t) => (n, t.lean))
   return [.errors "Thrown" members]
 
+/-- Check a type re-export against the translated source module. -/
+def reexportsError? (c : Ctx) (s : Span) (names : List ImportName) (source : String) :
+    Option (Span × String) :=
+  match Eval.resolvePath c.file source with
+  | none => some (s, s!"'{source}' is not a relative path to a .ts file, such as './x.ts'")
+  | some target =>
+    match c.interfaces.lookup target with
+    | none => some (s, s!"'{source}' is not a translated file of the project")
+    | some iface =>
+      if c.target.year < iface.target.year then
+        some (s, s!"'{source}' is translated for a newer edition than this file")
+      else names.findSome? fun n =>
+        if !n.typeOnly then
+          some (n.span, "re-exported values are not supported; use 'export type' for an interface or type alias")
+        else if (iface.aliases.any (·.name == n.name)) ||
+            (iface.structs.any fun i => i.name == n.name && i.exported) then none
+        else some (n.span, s!"'{source}' exports no interface or type alias named '{n.name}'")
+
+def exportListError? (c : Ctx) (s : Span) (names : List ImportName) (source : Option String) :
+    Option (Span × String) :=
+  match source with
+  | some path => reexportsError? c s names path
+  | none => exportsError? c names
+
 /-- One declaration: an output declaration, or none for an import, an
-export list or an error class, whose types `translateErrorTypes` wrote. A
-function may throw an error of `classes`, the error classes of the file. -/
+export list or an error class. -/
 def translateDecl (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr)))
     (guards : List (String × Eval.GuardTest))
     (classes : List ClassInfo) : Decl → TM (Option IR.Decl)
   | .import s names source => do translateImport s names source; return none
   | .exports s names source => do
-    if source.isSome then
-      reject s "tolean does not translate a re-export such as 'export { a } from \"./x.ts\"'; import the names instead"
-    if let some (sp, msg) := exportsError? (← get) names then reject sp msg
+    let ctx ← get
+    if let some (sp, msg) := exportListError? ctx s names source then reject sp msg
     return none
   | .interface s exported name typeParams fields => some <$> translateInterface s exported name typeParams fields
   | .typeAlias s exported name typeParams type => some <$> translateAlias s exported name typeParams type
@@ -4973,10 +5116,28 @@ def Ctx.withExports (c : Ctx) (listed : List ImportName) : Ctx :=
 aliases. The interfaces include the private ones that an exported declaration
 names, so that a file that imports it can read and build their fields. They
 keep `exported := false`, so that no file can import them by name. -/
-def Ctx.interface (c : Ctx) (usesNumber : Bool) (numberVar : String) : Interface :=
+def reexportListed (m : Module) : List (List ImportName × String) :=
+  m.decls.filterMap fun
+    | .exports _ names (some source) => some (names, source)
+    | _ => none
+
+/-- Type re-exports retain the defining file's type identity. They do not
+bind names in the re-exporting file. -/
+def Ctx.reexportInterfaces (c : Ctx) (listed : List (List ImportName × String)) :
+    List (List ImportName × Interface) :=
+  listed.filterMap fun (names, source) => do
+    let file ← Eval.resolvePath c.file source
+    let iface ← c.interfaces.lookup file
+    return (names, iface)
+
+def Ctx.interface (c : Ctx) (usesNumber : Bool) (numberVar : String)
+    (listed : List (List ImportName × String) := []) : Interface :=
   { functions := c.functions.filter fun f => f.exported && f.file == c.file,
-    structs := c.reachableStructs,
-    aliases := c.aliases.filter fun a => a.exported && a.file == c.file,
+    structs := c.reachableStructs ++ (c.reexportInterfaces listed).flatMap fun (names, iface) =>
+      iface.structs.filter fun i => i.exported && names.any fun n => n.typeOnly && n.name == i.name,
+    aliases := (c.aliases.filter fun a => a.exported && a.file == c.file) ++
+      (c.reexportInterfaces listed).flatMap fun (names, iface) =>
+        iface.aliases.filter fun a => names.any fun n => n.typeOnly && n.name == a.name,
     enums := c.reachableEnums,
     unions := c.reachableUnions,
     usesNumber, numberVar, target := c.target, errorClasses := !c.errorClasses.isEmpty }
@@ -5009,7 +5170,7 @@ structure Dependency where
 imports, without repeats. -/
 def importedFiles (file : String) (m : Module) : List String :=
   (m.decls.filterMap fun
-    | .import _ _ source => Eval.resolvePath file source
+    | .import _ _ source | .exports _ _ (some source) => Eval.resolvePath file source
     | _ => none).eraseDups
 
 /-- Parse and translate `source`, the TypeScript file `file`, which may import
@@ -5053,7 +5214,8 @@ def translateFile (file source : String) (target : Edition := .default)
     -- names a number. Check the IR so map entries stay nongeneric.
     let usesNumber := usesNumber || decls.any (tolean.IR.Decl.anyOp (· == .arrayEntries))
     let names := { names with generic := usesNumber }
-    return (m, names, decls, (ctx'.withExports (exportListed m)).interface usesNumber names.typeParam)
+    return (m, names, decls,
+      (ctx'.withExports (exportListed m)).interface usesNumber names.typeParam (reexportListed m))
 
 /-- Parse and translate `source`, the TypeScript file `file`: the parsed
 module, the names that the printer needs, and the Tolean IR. -/

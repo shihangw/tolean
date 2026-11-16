@@ -54,9 +54,13 @@ exact. A construct leaves these tables when Tolean translates it, and the
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| `T \| undefined` as the type of a local or of a return value, and a test such as `x !== undefined && x > 0n` that narrows an optional value inside an expression | `Option T` | `'x' in obj`, which can tell a missing key from `undefined` |
-| `a?.[i]` and `f?.()` | `Option.bind` | `==` against anything except `null` and `undefined` |
-| A re-export, such as `export { a } from "./x.ts"` | Nothing: the names stay in scope | `export *` |
+| `f?.()` | No accepted program to translate: `Syntax.TypeExpr` and `Translate.Ty` have no function type, and no accepted declaration gives a possibly `undefined` value a callable type. A generic type parameter does not make a value callable. Local function values cannot escape a direct call. | Optional calls stay refused; so does `==` against anything except `null` and `undefined`. |
+| A value re-export, such as `export { a } from "./x.ts"` | Nothing: the names stay in scope | `export *` |
+
+[#247](https://github.com/shihangw/tolean/pull/247) fixes optional indexing
+after a conditional join makes a `Record` nullable, as in
+`(absent ? null : r)?.[k]`. The required-certificate fixture and
+Node-backed interpreter test cover that case. Optional calls remain refused.
 
 ### Functions
 
@@ -101,10 +105,11 @@ value claim already does.
 | TypeScript | Lean | Refused |
 |---|---|---|
 | The `index` argument of a callback other than one of `map`, and the `array` argument of any callback | The `List` functions that also pass the index, as `List.mapIdx` does for `map`, and the list itself | |
-| A certificate for a file that sorts by a `number` key | As for `bigint` and `string` keys, with the precondition that no key is `NaN`, and for a difference that every key is finite. A difference also needs new laws: `<` is a strict total order on numbers that are not `NaN`, and the sign of `a - b` is the order of `a` and `b`. `jsNumberLaws.test.ts` would check them. | |
+| A number-sort certificate inside a callback other than `map` or `filter`, for changing loop state or body-local lists, for a remaining computed list shape, or under an enclosing nullable narrowing | A hypothesis over the parameters excludes `NaN` keys, or requires finite keys for a difference. Sorts and calls in ordinary expressions and records, in `map` and `filter`, and over loop elements or captured inputs already carry these conditions. Inputs may use parameter fields, local aliases, spreads, literal elements, maps, filters, slices, conditionals and calls. Calls in nullable matches carry guarded conditions for the selected branch. | Lists that cannot be reached from parameters. |
 
-The certifier writes no precondition today, so such a file gets no
-certificate.
+The certifier uses `sortValues_sortWith_on` for a direct sort of a
+parameter. Its input hypothesis excludes NaN keys for a comparison, or
+requires finite keys for a difference.
 
 ### Strings
 
@@ -121,12 +126,35 @@ of a literal as a Lean `String`.
 |---|---|---|
 | A number argument of `padStart` or `padEnd` that is not an integer literal | `ToLength` on the argument, then padding on code units. A dynamic length can exceed the engine's string limit and throw a `RangeError`, whose opaque message the error model does not yet support. | |
 
-Flagless regular expressions now support `test` with a string argument.
-Literals must start with `(?:` so the parser can distinguish them from
-division. The matcher uses UTF-16 code units and total ordered backtracking.
-Flags, `match`, `replace` and regex values at certificate boundaries remain
-outside this subset. The [decision record](../decisions/2026-11-14-regexp-subset.md)
-sets the restrictions for those later operations.
+Issue [#218](https://github.com/shihangw/tolean/issues/218) is partly
+implemented. PR #239 delivers flagless regular-expression `test` with a
+string argument. `test` accepts a literal or an alias to one. A literal must
+start with `(?:` so the parser can distinguish it from division. The matcher
+uses UTF-16 code units and total ordered backtracking.
+
+PR #244 adds first-match replacement, including empty matches, only for
+`s.replace(/(?:pattern)/, "replacement")`. The pattern may contain captures,
+but the replacement must be a literal without `$`; captures affect matching
+but are not substituted into the result. Replacement requires a direct regex
+literal, while `test` may use an alias. Dynamic replacement strings remain
+refused because they may contain substitution tokens. Dollar substitutions
+and function replacers remain refused because their semantics are not modeled.
+Flags `i`, `g`, `m`, `s`, `u`, `y`, `d` and `v` remain refused. Global and
+sticky searches need `lastIndex` state, while the other flags change pattern
+or matcher semantics.
+
+The parser refuses ordinary `/pattern/` literals and regular-expression
+constructor calls. The supported grammar includes capturing and
+non-capturing groups, but refuses lazy quantifiers, backreferences,
+lookaround, named groups and escapes without a specified character set.
+
+`String.match` and `RegExp.exec` remain refused because their results need a
+representation for `null`, unmatched captures as `undefined`, and the
+`index`, `input` and `groups` properties. The interpreter, IR evaluator and
+`program_sound` proof do not yet cover that result shape. Regex values also
+remain outside certificate boundaries because certificates have no encoder
+or decoder for them. The [decision record](../decisions/2026-11-14-regexp-subset.md)
+explains these restrictions and the future work.
 
 ### Maps and sets
 
@@ -195,26 +223,46 @@ be exact:
 
 ## Unfinished parser work
 
-[#208](https://github.com/shihangw/tolean/issues/208) remains open. The parser
-accepts comparisons separated by a top-level `&&`, `||`, `??`, `===`,
-`!==`, `==`, `!=`, `+`, `*`, `/`, `%` or `**`, but it still
-refuses `f(a < b, c > d)`. TypeScript 6.0.3 reads two comparisons there.
-This is a known gap, not a permanent restriction, so the case is not in the
-rejection corpus. The completed rule must accept it while still refusing
-`f(a < b, c > (d))` and `f < A, B > (x)`, which TypeScript reads with type
-arguments.
+[#208](https://github.com/shihangw/tolean/issues/208) remains open, but merged
+[#217](https://github.com/shihangw/tolean/pull/217) accepts its original
+example, `a < b && c > d`. A CLI translation of a typed
+`between` function containing that exact return expression succeeds. The
+issue still needs a broader fix: a typed function calling
+`f(a < b, c > d)` is refused, although TypeScript 6.0.3 reads two comparisons
+there. This is a known gap, not a permanent restriction, so the case is not
+in the rejection corpus.
 
-The remaining work is a speculative type-list parse followed by TypeScript's
-follow-token test. Before the parser can use that probe, the relation between
-source tokens and printed tokens must preserve the identifiers, contextual
-syntax and line-break information that the probe needs. The round-trip proof
-must then show that printing cannot turn a comparison into type arguments.
-These tokens stop the scan only outside brackets. The scan does not stop at
-`-`, `&`, `|`, `.`, `!` or `?`, because types can contain them. The operators
-`>>`, `>=`, `<<` and `<=` need a separate argument because TypeScript rescans
-`>` when it closes type arguments.
-The current operator rule is a sound first stage, not a substitute
-for that structural fix.
+The parser accepts comparisons when a top-level `&&`, `||`, `??`, `===`,
+`!==`, `==`, `!=`, `+`, `*`, `/`, `%` or `**` rules out a type list before a
+closing `>`. The scan keeps going inside brackets, because a type literal can
+contain a computed property name. It also keeps going at `-`, `&`, `|`, `.`,
+`!` and `?`, because types can contain them. The conservative treatment of
+`>>`, `>=`, `<<` and `<=` remains unchanged because TypeScript rescans `>`
+while it closes type arguments. The unrelated merged
+[#230](https://github.com/shihangw/tolean/pull/230) fixes WebAssembly list
+termination and does not change this parser rule.
+
+Merged [PR #242](https://github.com/shihangw/tolean/pull/242) prepares the
+proof interface for a later ambiguity check; it does not change which source
+expressions the parser accepts. Its token observations retain token kinds
+(including identifier text), preceding line breaks and adjacency across
+fragment boundaries. Its prefix and suffix relations let a future probe be
+reasoned about in surrounding token contexts and across printed suffixes.
+The current parser still scans token kinds and still refuses
+`f(a < b, c > d)`.
+
+The remaining task is to parse a possible comma-separated type list
+speculatively, then apply TypeScript 6.0.3's follow-token test. In
+`f(a < b, c > d)`, `b, c` can parse as types, but the following `d` can start
+an expression, so TypeScript reads two comparisons. In
+`f(a < b, c > (d))`, the parenthesis can instead follow type arguments, so
+TypeScript reads a call with type arguments; `f < A, B > (x)` is the same
+kind of ambiguity. The future check must use the token adjacency and
+line-break information that its rules inspect, and the round-trip proof must
+show that printing preserves the probe's decision. Until that work is done,
+the parser should keep refusing the type-argument cases and any form whose
+reading it cannot establish. Extending the operator stop set alone does not
+complete #208.
 
 ## Steps
 
@@ -227,12 +275,14 @@ the P2 steps. Steps with the same priority keep the order of their numbers.
 The steps keep the numbers that pull requests refer to, so a finished step
 leaves a gap.
 
-2. **P0.** Types and narrowing: `T | undefined` as a type, a test of
-   `undefined` that narrows inside an expression, `a?.[i]` and `f?.()`, and
-   re-exports.
+2. **P0.** Value re-exports. Optional calls have no accepted program to apply
+   to, as the types table explains; they are not unfinished work in this step.
 8. **P0.** Widen map borrows to early returns, several changed maps, an
    ordinary returned value, control flow and imported callees.
-10. **P1.** Sorting: certificates for a sort by a `number` key.
+10. **P1.** Sorting: number-key certificates inside the remaining callbacks, for changing loop state and body locals,
+    remaining computed list shapes, and direct sorts or conditioned helpers
+    under enclosing nullable narrowing. Calls inside nullable matches are
+    covered.
 11. **P2.** Recursion: tagged unions that refer to themselves first, then
     `@decreases`, mutual recursion, and `while` loops. Add certificates for
     self-referential interfaces and recursive functions, with existential
@@ -270,8 +320,9 @@ proofs, because a fold over events keeps much of its state in maps.
 
 ## Refactors from review
 
-These follow-ups track design feedback from the open pull requests. A fix in
-a descendant does not mean that the earlier pull request already contains it.
+These entries record design feedback from pull requests and separate fixes
+that have landed from work that remains. A fix in a descendant does not mean
+that the earlier pull request already contains it.
 
 - **Make expression scans exhaustive.** Enumerate leaf constructors instead
   of ending a scan with `| _ => false` or `| _ => []`. Traverse ordinary
@@ -282,30 +333,34 @@ a descendant does not mean that the earlier pull request already contains it.
 
   The [call-traversal review on #220](https://github.com/shihangw/tolean/pull/220#discussion_r4576745761)
   identified dropped `.struct` fields and `.structUpdate` children.
-  **#238 covers that concrete case:** at the step 10 tip `d92ef7e` on #240,
-  `conditionCalls` visits record fields, the update base and replacement
-  fields. Its catch-all still remains, and `bodyConditionCalls` still omits
-  `matchTag`. Preserve the record certificate cases while making each
-  constructor decision explicit. Tagged narrowing needs its own scope
-  contract before it can be supported.
+  **#220 now covers the condition-call traversal:** `conditionCalls` visits
+  record fields, the update base and replacement fields, and enumerates
+  leaves explicitly. The source scan also counts calls in object spreads.
+  Required certificates cover each record position and both update sides.
+  `bodyConditionCalls` explicitly refuses tagged narrowing with a named
+  scope error because its rebound parameter needs guarded conditions over
+  the original union. #238 retains its additional record certificate cases.
+  The other scans still need the broader audit described above.
 
   The [number-use scan on #221](https://github.com/shihangw/tolean/pull/221#discussion_r4576744315)
-  is being fixed there, including the missing optional-index receiver and
-  explicit number-free leaves. That work also serves #229 and #235; do not
-  duplicate it here. Its compile regression must keep number operations
-  only inside the optional-index receiver so missing imports and binders
-  remain observable.
+  has landed: `exprUsesNumber` follows an optional-index receiver, and it
+  names the expression forms that cannot use numbers. The accepted
+  `optionalIndexNumberReceiver` fixture keeps the receiver-only regression
+  visible. Do not repeat that fix. The broader scan audit remains open,
+  because `typeUsesNumber` and `stmtUsesNumber` still have fallback cases.
+  Keep checking all of these traversals against their syntax constructors;
+  do not treat source-call counts as a definition of coverage.
 
-- **Choose the local-function executor before running the body.**
+- **Preserve the state-aware local-function return path.**
   The [review on #226](https://github.com/shihangw/tolean/pull/226#discussion_r4576809523),
-  also inherited by #236, found that `callLocal` runs a state-writing
-  value-returning body through `execStmt`, then repeats it through
-  `execReturnState` to recover its state. Dispatch to the state-preserving
-  executor first for the supported final-return form. Use `returnState_exec`
-  to justify the value relationship, retain the ordinary path for void
-  locals, and keep unsupported returns refused. Test a captured-state loop
-  and calls in its prefix without making replay part of the interpreter's
-  contract.
+  also inherited by #236, found that `callLocal` could run a state-writing,
+  value-returning body twice. That is fixed: `callLocal` recognizes a
+  changing body with a final value return before it calls `execStmt`, then
+  runs `execReturnState` once and writes the captured values back. This fixes
+  execution order, not the supported syntax. Earlier returns with captured
+  changes still have no modeled result. Step 14 still tracks general final
+  return expressions, transitive captures, longer sibling call chains and
+  callers whose local functions change state only indirectly.
 
 - **Preserve both map-escape regression tests.**
   The [review on #231](https://github.com/shihangw/tolean/pull/231#discussion_r4577273721)
@@ -326,13 +381,14 @@ a descendant does not mean that the earlier pull request already contains it.
   the shared step preserves their normalization order.
 
 - **Complete the structural type-argument ambiguity check.**
-  The [design summary on #217](https://github.com/shihangw/tolean/pull/217#issuecomment-6887789375)
-  validates the bounded operator stop set, not a complete ambiguity
-  algorithm. Retain its bracket-depth rule and pinned-TypeScript controls.
-  The remaining plan on that branch calls for a speculative type-list
-  parse and follow-token test, with enough identifier, contextual-token
-  and line-break information in the round-trip relation. This remains
-  separate work; extending the stop set alone does not finish it.
+  The merged [#217](https://github.com/shihangw/tolean/pull/217) validates
+  the bounded operator stop set, not a complete ambiguity algorithm. Merged
+  [#242](https://github.com/shihangw/tolean/pull/242) supplies observations
+  and prefix proofs for a later probe, but does not implement that probe.
+  Retain #217's bracket-depth rule and pinned-TypeScript controls. The
+  remaining work is the speculative type-list parse, TypeScript's
+  follow-token test, and a round-trip proof that preserves the identifiers,
+  contextual tokens, adjacency and line breaks those checks use.
 
 ## Open questions
 

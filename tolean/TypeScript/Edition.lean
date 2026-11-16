@@ -24,6 +24,24 @@ It adds no ECMAScript feature or edition gate. Its function declaration uses
 Guard calls use `EvaluateCall` (ES2024 §13.3.6.2), and their branches use
 `IfStatement` (§14.6). A primitive guard uses `typeof` (§13.5.3). These
 operations also exist in ES2015, the oldest target.
+
+The annotation `T | undefined` erases at runtime. Its optional value uses the Undefined
+type (ES2015, §6.1.1; unchanged in ES2024), and a strict test of it uses
+IsStrictlyEqual (ES2024 §7.2.15). These operations need no edition gate because
+every supported edition specifies them.
+
+A type-only re-export erases before execution. Its module dependency follows
+the ExportDeclaration grammar (ES2015 §15.2.3; ES2024 §16.2.3). It introduces
+no local binding and preserves the type's identity in the defining module.
+
+Optional element access follows OptionalExpression and ChainEvaluation
+(ES2020 §12.3.9; ES2024 §13.3.9). An absent receiver skips the index and
+gives undefined. A present array uses the existing array-index operation.
+
+Expression narrowing follows the strict equality test and the selected
+branch of LogicalANDExpression, LogicalORExpression and ConditionalExpression
+(ES2024 §13.13 and §13.14). Logical NOT (§13.5.7) reverses the test. ES2015
+already specifies these operations, so all supported targets allow them.
 -/
 namespace tolean.TypeScript
 
@@ -63,6 +81,10 @@ inductive Feature where
   and RegExpBuiltinExec (ES2024 §22.2.2, §22.2.2.3.1 and §22.2.7.2).
   The translator accepts flagless literals and their `test` method from ES2015. -/
   | regexp
+  /-- String.prototype.replace and RegExp.prototype[@@replace],
+  with a literal replacement without GetSubstitution tokens
+  (ES2024 §22.1.3.19, §22.2.6.11 and §22.1.3.19.1). -/
+  | regexpReplace
   /-- A call changes an exclusively owned Map argument: `EvaluateCall`,
   `OrdinaryCallBindThis`, `FunctionDeclarationInstantiation`,
   `Map.prototype.set`, `Map.prototype.delete` and `ReturnStatement`.
@@ -128,6 +150,7 @@ deriving BEq, Repr, Inhabited
 
 def Feature.since : Feature → Edition
   | .regexp => .es2015
+  | .regexpReplace => .es2015
   | .stringNumberArguments => .es2015
   | .dateParseFormat => .es2016
   | .localReturnState | .localSiblingCalls => .es2015
@@ -145,6 +168,7 @@ def Feature.describe : Feature → String
   | .localReturnState => "a local function that returns a value and changes captured variables"
   | .localSiblingCalls => "calls between local functions"
   | .regexp => "regular expressions without flags"
+  | .regexpReplace => "regular expression replacement without substitutions"
   | .mapBorrow => "a call that changes an exclusively owned Map argument"
   | .exponent => "'**'"
   | .objectSpread => "object spread '...'"
