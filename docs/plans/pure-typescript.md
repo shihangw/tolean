@@ -242,7 +242,7 @@ while it closes type arguments. The unrelated merged
 [#230](https://github.com/shihangw/tolean/pull/230) fixes WebAssembly list
 termination and does not change this parser rule.
 
-Open [PR #242](https://github.com/shihangw/tolean/pull/242) prepares the
+Merged [PR #242](https://github.com/shihangw/tolean/pull/242) prepares the
 proof interface for a later ambiguity check; it does not change which source
 expressions the parser accepts. Its token observations retain token kinds
 (including identifier text), preceding line breaks and adjacency across
@@ -382,7 +382,7 @@ that the earlier pull request already contains it.
 
 - **Complete the structural type-argument ambiguity check.**
   The merged [#217](https://github.com/shihangw/tolean/pull/217) validates
-  the bounded operator stop set, not a complete ambiguity algorithm. Open
+  the bounded operator stop set, not a complete ambiguity algorithm. Merged
   [#242](https://github.com/shihangw/tolean/pull/242) supplies observations
   and prefix proofs for a later probe, but does not implement that probe.
   Retain #217's bracket-depth rule and pinned-TypeScript controls. The
