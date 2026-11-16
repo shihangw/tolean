@@ -226,10 +226,10 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
       | [a] => some (.bool !(a matches .undefined))
       | _ => none
     | .isNull => match args with
-      | [a] => some (.bool (a == .null))
+      | [a] => some (.bool (a matches .null))
       | _ => none
     | .isNullish => match args with
-      | [a] => some (.bool (a == .null || a == .undefined))
+      | [a] => some (.bool ((a matches .null) || (a matches .undefined)))
       | _ => none
     -- `a?.f.g`, as the spec evaluates it.
     | .optField path _ => match args with
