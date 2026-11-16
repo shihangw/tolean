@@ -67,7 +67,9 @@ the claimed type. Translation accepts checked tag guards as described below.
   argument of a call or a `new`, such as `[...xs, x]` and `f(...xs)`.
 - **Types:** keyword types such as `number`, `null`, literal types, named types
   with type arguments, arrays, tuples such as `[A, B]` and `readonly [A, B]`,
-  unions and parentheses.
+  unions, parentheses and object types such as `{ readonly n: bigint }`.
+  Object fields may use semicolons, commas or line breaks as separators.
+  Fields may be optional, and an object type may be empty or nested.
 
 The translator accepts less than the parser reads; see
 [The TypeScript subset](#the-subset). Sometimes `tsc` and JavaScript read the same tokens in two different
@@ -608,10 +610,53 @@ and `x?: T` translate as their `readonly` forms do, because Tolean refuses
 every write to a field. This includes compound assignments, increments and
 decrements, and writes through loop variables, callbacks and local functions.
 `delete`, destructuring assignment and calls such as `Object.assign` cannot
-bypass that rule. A nested interface follows the same rule. Inline object
-types remain outside the subset. The `readonly` mark on a constructor
+bypass that rule. A nested interface or inline object type follows the same
+rule. The `readonly` mark on a constructor
 parameter of an error class is different: it declares a field, so Tolean
 still uses it there.
+
+Inline object types work in aliases, parameters, return types, interface
+fields, array elements and local annotations. They also work as the members
+of a named tagged union:
+
+```typescript
+export type Shape =
+  | { readonly kind: 'circle'; readonly r: number }
+  | { readonly kind: 'square'; readonly side: number };
+```
+
+The translator gives each anonymous shape a generated Lean structure.
+Equivalent annotations in a module share that structure, even when they occur
+at different source positions. For example, this identity function keeps one
+type for its argument and result:
+
+```typescript
+export function id(x: { readonly n: bigint }): { readonly n: bigint } {
+  return x;
+}
+```
+
+The comparison uses resolved field types, so aliases do not create a new
+shape. Field order and the `readonly` mark do not change its identity.
+Captured generic parameters become parameters of the generated structure.
+Their source scopes still determine which types they name. Generated names
+avoid source identifiers, including local names and field names.
+
+Shapes exposed by source dependencies can be reused too. Unrelated project
+units do not change a file's generated names or introduce hidden dependencies.
+Two modules that independently define a shape can still have different
+Lean structures; use a type from a common dependency when passing values
+between them. There is no general structural coercion between generated
+types. A concrete annotation can reuse a generic shape already in scope
+when substituting its parameters makes every field agree.
+
+The existing restrictions on named interfaces also apply here. A literal
+must write its fields in the order of the shape's first annotation, because
+JavaScript can observe property order. The translator reports that order
+when a literal differs. A named interface keeps its own type identity, even
+when its fields match an anonymous shape; width subtyping is not supported.
+Recursive anonymous shapes that refer to their enclosing declaration need
+a separate named interface. Generic tagged unions remain refused.
 
 The claim is about each call's values, not the lifetime of a JavaScript
 object. Calls are synchronous, and the subset cannot call caller-supplied

@@ -67,6 +67,28 @@ theorem advance_eq {s : ParseState} {t u : Token} {r : List Token} (h : s.rest =
   simp [advance, h, get, getThe, MonadStateOf.get, EStateM.get, set, MonadStateOf.set, EStateM.set,
     bind, EStateM.bind, pure, EStateM.pure]
 
+/-- `spanFrom` returns the range from its start to the last token read. -/
+theorem spanFrom_eq (start : Pos) (s : ParseState) :
+    spanFrom start s = .ok ⟨start, s.lastStop⟩ s := by
+  simp [spanFrom, get, getThe, MonadStateOf.get, EStateM.get, bind, EStateM.bind, pure, EStateM.pure]
+
+theorem pure_bind {α β : Type} (a : α) (f : α → ParseM β) (s : ParseState) :
+    ((pure a : ParseM α) >>= f) s = f a s := rfl
+
+theorem pure_eq {α : Type} (a : α) (s : ParseState) : (pure a : ParseM α) s = .ok a s := rfl
+
+theorem ite_guard {β : Type} {c : Bool} {A : ParseM PUnit} {k : PUnit → ParseM β}
+    {s : ParseState} (hA : c = true → A s = .ok () s) :
+    (if c = true then A >>= k else pure PUnit.unit >>= k) s = k () s := by
+  split
+  · rename_i h
+    exact Parse.bind_eq (hA h)
+  · rfl
+
+theorem discard_eq {α : Type} {x : ParseM α} {s s' : ParseState} {a : α} (h : x s = .ok a s') :
+    (discard x) s = .ok () s' := by
+  simp [discard, Functor.mapConst, Function.comp_apply, EStateM.map, h]
+
 theorem iterate_succ {σ : Type} (fuel : Nat) (st : σ) (step : σ → ParseM (σ × Bool)) :
     iterate (fuel + 1) st step = (do
       let (st', again) ← step st
@@ -99,7 +121,12 @@ def TypeExpr.primaryWF : TypeExpr → Bool
   | .ref _ name args => typeName name && TypeExpr.allWF args
   | .paren _ inner => inner.wf
   | .tuple _ readonly elems => !readonly && !elems.isEmpty && TypeExpr.allWF elems
+  | .object _ fields => TypeExpr.objectFieldsWF fields
   | .array .. | .union .. | .predicate .. => false
+
+def TypeExpr.objectFieldsWF : List TypeField → Bool
+  | [] => true
+  | .field _ _ _ _ type :: fields => type.wf && TypeExpr.objectFieldsWF fields
 
 /-- `t` is a type that `parseArrayType` reads: a primary type, with `[]`
 after it any number of times. -/
@@ -111,6 +138,7 @@ def TypeExpr.arrayWF : TypeExpr → Bool
   | .ref _ name args => typeName name && TypeExpr.allWF args
   | .paren _ inner => inner.wf
   | .tuple _ _ elems => !elems.isEmpty && TypeExpr.allWF elems
+  | .object _ fields => TypeExpr.objectFieldsWF fields
   | .union .. | .predicate .. => false
 
 /-- `t` is a type that `parseType` reads. A union has two members or more, or
@@ -126,6 +154,7 @@ def TypeExpr.wf : TypeExpr → Bool
   | .ref _ name args => typeName name && TypeExpr.allWF args
   | .paren _ inner => inner.wf
   | .tuple _ _ elems => !elems.isEmpty && TypeExpr.allWF elems
+  | .object _ fields => TypeExpr.objectFieldsWF fields
 
 def TypeExpr.allWF : List TypeExpr → Bool
   | [] => true
@@ -137,6 +166,27 @@ def TypeExpr.allArrayWF : List TypeExpr → Bool
 
 end
 
+theorem TypeExpr.objectFieldsWF_iff (fields : List TypeField) :
+    TypeExpr.objectFieldsWF fields = true ↔
+      ∀ field ∈ fields, ∀ sp readonly name optional type,
+        field = .field sp readonly name optional type → type.wf = true := by
+  induction fields with
+  | nil => simp [TypeExpr.objectFieldsWF]
+  | cons field fields ih =>
+    cases field with
+    | field sp readonly name optional type =>
+      simp only [TypeExpr.objectFieldsWF, Bool.and_eq_true, List.mem_cons]
+      constructor
+      · intro h f hf sp' ro' name' opt' ty heq
+        rcases hf with rfl | hf
+        · cases heq; exact h.1
+        · exact (ih.mp h.2) f hf sp' ro' name' opt' ty heq
+      · intro h
+        refine ⟨h _ (by simp) sp readonly name optional type rfl, ?_⟩
+        apply ih.mpr
+        intro f hf sp' ro' name' opt' ty heq
+        exact h f (by simp [hf]) sp' ro' name' opt' ty heq
+
 mutual
 
 /-- How deep `parseType` calls nest to read `t`: one step for each `<…>`,
@@ -146,6 +196,7 @@ def TypeExpr.height : TypeExpr → Nat
   | .ref _ _ args => TypeExpr.heightOf args + 1
   | .paren _ inner => inner.height + 1
   | .tuple _ readonly elems => TypeExpr.heightOf elems + (if readonly then 2 else 1)
+  | .object _ fields => TypeExpr.heightFields fields + 1
   | .array _ elem => elem.height
   | .union _ members => TypeExpr.heightOf members
   | .keyword .. | .null _ | .literal .. => 0
@@ -153,6 +204,10 @@ def TypeExpr.height : TypeExpr → Nat
 def TypeExpr.heightOf : List TypeExpr → Nat
   | [] => 0
   | t :: ts => max t.height (TypeExpr.heightOf ts)
+
+def TypeExpr.heightFields : List TypeField → Nat
+  | [] => 0
+  | .field _ _ _ _ type :: fields => max type.height (TypeExpr.heightFields fields)
 
 end
 
@@ -163,6 +218,216 @@ def TypeExpr.returnWF : TypeExpr → Bool
 
 /-- The kinds of the tokens of `t`. -/
 def TypeExpr.tokens (t : TypeExpr) : List TokenKind := t.words.flatten
+
+def TypeField.tokens (field : TypeField) : List TokenKind := field.words.flatten
+
+abbrev past (s : ParseState) (x : Token) (r : List Token) : ParseState :=
+  { s with rest := r, left := s.left - 1, lastStop := x.span.stop }
+
+theorem propertyName_length (name : String) : (propertyName name).length = 1 := by
+  unfold propertyName
+  split <;> simp [keywordWord, identWord]
+
+theorem propertyName_kind {name : String} {k : TokenKind} (h : [k] = propertyName name) :
+    k = .ident name ∨ k = .keyword name := by
+  unfold propertyName at h
+  split at h
+  · simp [keywordWord] at h
+    exact Or.inr h
+  · simp [identWord] at h
+    exact Or.inl h
+
+theorem readPropertyName_ok {s : ParseState} {x u : Token} {r : List Token} {name : String}
+    (hs : s.rest = x :: u :: r) (hx : [x.kind] = propertyName name) :
+    Parse.readPropertyName s = .ok name (past s x (u :: r)) := by
+  unfold propertyName at hx
+  split at hx <;> simp [keywordWord, identWord] at hx <;>
+    simp [Parse.readPropertyName, Parse.advance_eq hs, hx, bind, EStateM.bind, pure, EStateM.pure]
+
+theorem split_map_prefix_one {ts : List Token} {ks restKinds : List TokenKind}
+    (h : ts.map (·.kind) = ks ++ restKinds) (hlen : ks.length = 1) :
+    ∃ t rest, ts = t :: rest ∧ [t.kind] = ks ∧ rest.map (·.kind) = restKinds := by
+  obtain ⟨left, right, hts, hleft, hright⟩ := List.map_eq_append_iff.mp h
+  have hleftLen : left.length = 1 := by
+    rw [← List.length_map, hleft]
+    exact hlen
+  cases left with
+  | nil => simp at hleftLen
+  | cons t left =>
+    cases left with
+    | nil =>
+      simp only [List.map_cons, List.map_nil] at hleft
+      refine ⟨t, right, ?_, hleft, hright⟩
+      simpa using hts
+    | cons x xs => simp at hleftLen
+
+theorem split_map_single {ts : List Token} {k : TokenKind} {ks : List TokenKind}
+    (h : ts.map (·.kind) = [k] ++ ks) :
+    ∃ t rest, ts = t :: rest ∧ t.kind = k ∧ rest.map (·.kind) = ks := by
+  obtain ⟨t, rest, hts, hk, hrest⟩ := split_map_prefix_one h (by simp)
+  have hkind : t.kind = k := by simpa using hk
+  exact ⟨t, rest, hts, hkind, hrest⟩
+
+theorem split_map_singleton {ts : List Token} {k : TokenKind}
+    (h : ts.map (·.kind) = [k]) :
+    ∃ t, ts = [t] ∧ t.kind = k := by
+  cases ts with
+  | nil => simp at h
+  | cons t rest =>
+    cases rest with
+    | nil =>
+      simp only [List.map_cons, List.map_nil, List.cons.injEq] at h
+      exact ⟨t, rfl, h.1⟩
+    | cons _ _ => simp at h
+
+def pastTokens (s : ParseState) : List Token → List Token → ParseState
+  | [], _ => s
+  | x :: xs, rest => pastTokens (past s x (xs ++ rest)) xs rest
+
+theorem pastTokens_rest (s : ParseState) (ts rest : List Token)
+    (hs : s.rest = ts ++ rest) :
+    (pastTokens s ts rest).rest = rest := by
+  induction ts generalizing s with
+  | nil =>
+    change s.rest = [] ++ rest at hs
+    simpa using hs
+  | cons x xs ih =>
+    have hs' : (past s x (xs ++ rest)).rest = xs ++ rest := by
+      simp
+    simpa [pastTokens] using ih (past s x (xs ++ rest)) hs'
+
+theorem pastTokens_left (s : ParseState) (ts rest : List Token)
+    (hs : s.rest = ts ++ rest) (hl : s.left = s.rest.length) :
+    (pastTokens s ts rest).left = rest.length := by
+  induction ts generalizing s with
+  | nil => simpa [pastTokens, hs] using hl
+  | cons x xs ih =>
+    have hl' : (past s x (xs ++ rest)).left = (xs ++ rest).length := by
+      have hleft : s.left = (xs ++ rest).length + 1 := by
+        simpa [hs, List.length_append, Nat.add_assoc] using hl
+      simp [hleft]
+    simpa [pastTokens] using ih (past s x (xs ++ rest)) rfl hl'
+
+theorem TypeField.tokens_field (sp : Span) (readonly : Bool) (name : String)
+    (optional : Bool) (type : TypeExpr) :
+    (TypeField.field sp readonly name optional type).tokens =
+      (if readonly then [.ident "readonly"] else []) ++ propertyName name ++
+        (if optional then [.punct "?"] else []) ++ [.punct ":"] ++ type.tokens ++ [.punct ";"] := by
+  cases readonly <;> cases optional <;>
+    simp [TypeField.tokens, TypeField.words, TypeExpr.tokens, identWord, punctWord]
+
+theorem split_map_trailing_semi {ts : List Token} {ks : List TokenKind}
+    (h : ts.map (·.kind) = ks ++ [.punct ";"]) :
+    ∃ typeTokens semi, ts = typeTokens ++ [semi] ∧
+      typeTokens.map (·.kind) = ks ∧ semi.kind = .punct ";" := by
+  obtain ⟨typeTokens, semiTokens, hsplit, htype, hsemi⟩ := List.map_eq_append_iff.mp h
+  obtain ⟨semi, hsemiSplit, hsemiKind⟩ := split_map_singleton hsemi
+  refine ⟨typeTokens, semi, ?_, htype, hsemiKind⟩
+  rw [hsplit, hsemiSplit]
+
+theorem TypeField.tokens_parts (readonly : Bool) (name : String) (optional : Bool)
+    (type : TypeExpr) (ts : List Token)
+    (h : ts.map (·.kind) = (TypeField.field noSpan readonly name optional type).tokens) :
+    ∃ (ro : Option Token) (nm : Token) (q : Option Token) (colon : Token)
+      (typeTokens : List Token) (semi : Token),
+      ts = ro.toList ++ [nm] ++ q.toList ++ [colon] ++ typeTokens ++ [semi] ∧
+      ro.map (·.kind) = (if readonly then some (.ident "readonly") else none) ∧
+      [nm.kind] = propertyName name ∧
+      q.map (·.kind) = (if optional then some (.punct "?") else none) ∧
+      colon.kind = .punct ":" ∧ typeTokens.map (·.kind) = type.tokens ∧ semi.kind = .punct ";" := by
+  rw [TypeField.tokens_field] at h
+  cases readonly <;> cases optional <;> simp at h
+  · have hnamePrefix : ts.map (·.kind) =
+        propertyName name ++ ([.punct ":"] ++ type.tokens ++ [.punct ";"]) := by
+      simpa [List.append_assoc] using h
+    obtain ⟨nm, afterName, hts, hnm, hafterName⟩ :=
+      split_map_prefix_one (ks := propertyName name)
+        (restKinds := [.punct ":"] ++ type.tokens ++ [.punct ";"])
+        hnamePrefix (propertyName_length name)
+    obtain ⟨colon, afterColon, hcolonSplit, hcolon, hafterColon⟩ :=
+      split_map_single (ks := type.tokens ++ [.punct ";"]) (by simpa using hafterName)
+    obtain ⟨typeTokens, semi, htail, htype, hsemi⟩ := split_map_trailing_semi hafterColon
+    refine ⟨none, nm, none, colon, typeTokens, semi, ?_, rfl, hnm, rfl, hcolon, htype, hsemi⟩
+    rw [hts, hcolonSplit, htail]
+    simp
+  · have hnamePrefix : ts.map (·.kind) =
+        propertyName name ++ ([.punct "?"] ++ [.punct ":"] ++ type.tokens ++ [.punct ";"]) := by
+      simpa [List.append_assoc] using h
+    obtain ⟨nm, afterName, hts, hnm, hafterName⟩ :=
+      split_map_prefix_one (ks := propertyName name)
+        (restKinds := [.punct "?"] ++ [.punct ":"] ++ type.tokens ++ [.punct ";"])
+        hnamePrefix (propertyName_length name)
+    obtain ⟨q, afterQ, hqSplit, hq, hafterQ⟩ :=
+      split_map_single (ks := [.punct ":"] ++ type.tokens ++ [.punct ";"]) (by simpa using hafterName)
+    obtain ⟨colon, afterColon, hcolonSplit, hcolon, hafterColon⟩ :=
+      split_map_single (ks := type.tokens ++ [.punct ";"]) (by simpa using hafterQ)
+    obtain ⟨typeTokens, semi, htail, htype, hsemi⟩ := split_map_trailing_semi hafterColon
+    refine ⟨none, nm, some q, colon, typeTokens, semi, ?_, rfl, hnm, ?_, hcolon, htype, hsemi⟩
+    · rw [hts, hqSplit, hcolonSplit, htail]
+      simp
+    · simpa using hq
+  · have hreadonlyPrefix : ts.map (·.kind) =
+        [.ident "readonly"] ++
+          (propertyName name ++ ([.punct ":"] ++ type.tokens ++ [.punct ";"])) := by
+      simpa [List.append_assoc] using h
+    obtain ⟨ro, afterReadonly, hroSplit, hro, hafterReadonly⟩ :=
+      split_map_single (ks := propertyName name ++ ([.punct ":"] ++ type.tokens ++ [.punct ";"]))
+        (by simpa [List.append_assoc] using hreadonlyPrefix)
+    obtain ⟨nm, afterName, hts, hnm, hafterName⟩ :=
+      split_map_prefix_one (ks := propertyName name)
+        (restKinds := [.punct ":"] ++ type.tokens ++ [.punct ";"])
+        (by simpa using hafterReadonly) (propertyName_length name)
+    obtain ⟨colon, afterColon, hcolonSplit, hcolon, hafterColon⟩ :=
+      split_map_single (ks := type.tokens ++ [.punct ";"]) (by simpa using hafterName)
+    obtain ⟨typeTokens, semi, htail, htype, hsemi⟩ := split_map_trailing_semi hafterColon
+    refine ⟨some ro, nm, none, colon, typeTokens, semi, ?_, ?_, hnm, rfl, hcolon, htype, hsemi⟩
+    · rw [hroSplit, hts, hcolonSplit, htail]
+      simp
+    · simpa using hro
+  · have hreadonlyPrefix : ts.map (·.kind) =
+        [.ident "readonly"] ++
+          (propertyName name ++ ([.punct "?"] ++ [.punct ":"] ++ type.tokens ++ [.punct ";"])) := by
+      simpa [List.append_assoc] using h
+    obtain ⟨ro, afterReadonly, hroSplit, hro, hafterReadonly⟩ :=
+      split_map_single (ks := propertyName name ++
+        ([.punct "?"] ++ [.punct ":"] ++ type.tokens ++ [.punct ";"]))
+        (by simpa [List.append_assoc] using hreadonlyPrefix)
+    obtain ⟨nm, afterName, hts, hnm, hafterName⟩ :=
+      split_map_prefix_one (ks := propertyName name)
+        (restKinds := [.punct "?"] ++ [.punct ":"] ++ type.tokens ++ [.punct ";"])
+        (by simpa using hafterReadonly) (propertyName_length name)
+    obtain ⟨q, afterQ, hqSplit, hq, hafterQ⟩ :=
+      split_map_single (ks := [.punct ":"] ++ type.tokens ++ [.punct ";"]) (by simpa using hafterName)
+    obtain ⟨colon, afterColon, hcolonSplit, hcolon, hafterColon⟩ :=
+      split_map_single (ks := type.tokens ++ [.punct ";"]) (by simpa using hafterQ)
+    obtain ⟨typeTokens, semi, htail, htype, hsemi⟩ := split_map_trailing_semi hafterColon
+    refine ⟨some ro, nm, some q, colon, typeTokens, semi, ?_, ?_, hnm, ?_, hcolon, htype, hsemi⟩
+    · rw [hroSplit, hts, hqSplit, hcolonSplit, htail]
+      simp
+    · simpa using hro
+    · simpa using hq
+
+theorem TypeField.first (field : TypeField) :
+    ∃ k, field.tokens.head? = some k ∧ k ≠ .punct "}" ∧ k ≠ .eof := by
+  cases field with
+  | field sp readonly name optional type =>
+    rw [TypeField.tokens_field]
+    cases readonly
+    · obtain ⟨k, hk⟩ : ∃ k, propertyName name = [k] := by
+        exact List.length_eq_one_iff.mp (propertyName_length name)
+      have hkind := propertyName_kind hk.symm
+      refine ⟨k, ?_, ?_, ?_⟩
+      · simp [hk]
+      · rcases hkind with h | h <;> simp [h]
+      · rcases hkind with h | h <;> simp [h]
+    · simp
+
+theorem TypeField.tokens_pos (field : TypeField) : 0 < field.tokens.length := by
+  cases field with
+  | field sp readonly name optional type =>
+    rw [TypeField.tokens_field]
+    cases readonly <;> cases optional <;>
+      simp only [List.length_append, List.length_cons, List.length_nil, propertyName_length] <;> omega
 
 /-- The first token of `rest` cannot continue a primary type: no `<` of type
 arguments and no `.` of a qualified name. -/
@@ -189,10 +454,6 @@ theorem Kept.refl (s : ParseState) : Kept s s := ⟨rfl, rfl, rfl, rfl⟩
 theorem Kept.trans {s₁ s₂ s₃ : ParseState} (h₁ : Kept s₁ s₂) (h₂ : Kept s₂ s₃) : Kept s₁ s₃ :=
   ⟨h₂.eof_eq.trans h₁.eof_eq, h₂.inFunction_eq.trans h₁.inFunction_eq,
     h₂.loopDepth_eq.trans h₁.loopDepth_eq, h₂.target_eq.trans h₁.target_eq⟩
-
-/-- The state after `advance` reads `x`. -/
-abbrev past (s : ParseState) (x : Token) (r : List Token) : ParseState :=
-  { s with rest := r, left := s.left - 1, lastStop := x.span.stop }
 
 theorem Kept.past (s : ParseState) (x : Token) (r : List Token) : Kept s (past s x r) := ⟨rfl, rfl, rfl, rfl⟩
 
@@ -226,6 +487,13 @@ def Reads (p : ParseM TypeExpr) (t : TypeExpr) (follows : List Token → Prop) :
   ∀ (s : ParseState) (ts rest : List Token), s.rest = ts ++ rest → s.left = s.rest.length →
     ts.map (·.kind) = t.tokens → (∀ x ∈ ts, NoBreak x) → rest ≠ [] → follows rest →
     ∃ t' s', p s = .ok t' s' ∧ t'.erase = t.erase ∧ Leaves s s' rest
+
+/-- A type field reader preserves the field apart from spans and leaves the
+following field or closing brace untouched. -/
+def ReadsTypeField (p : ParseM TypeField) (field : TypeField) : Prop :=
+  ∀ (s : ParseState) (ts rest : List Token), s.rest = ts ++ rest → s.left = s.rest.length →
+    ts.map (·.kind) = field.tokens → (∀ x ∈ ts, NoBreak x) → rest ≠ [] →
+    ∃ field' s', p s = .ok field' s' ∧ field'.erase = field.erase ∧ Leaves s s' rest
 
 /-- A parser that reads one token of kind `k` as `expected`, whatever follows
 that `follows` allows, reads every type whose tokens are `[k]`. -/
@@ -299,6 +567,21 @@ theorem Parse.expectPunct_ok {s : ParseState} {x : Token} {r : List Token} {p : 
 theorem leaves_trans {s₁ s₂ s₃ : ParseState} {r₂ r₃ : List Token} (h₁ : Leaves s₁ s₂ r₂)
     (h₂ : Leaves s₂ s₃ r₃) : Leaves s₁ s₃ r₃ :=
   { toKept := h₁.toKept.trans h₂.toKept, rest_eq := h₂.rest_eq, left_eq := h₂.left_eq }
+
+theorem pastTokens_leaves (s : ParseState) (ts rest : List Token)
+    (hs : s.rest = ts ++ rest) (hl : s.left = s.rest.length) :
+    Leaves s (pastTokens s ts rest) rest := by
+  induction ts generalizing s with
+  | nil => exact Leaves.refl hs (by simpa [hs] using hl)
+  | cons x xs ih =>
+    have hs' : s.rest = x :: (xs ++ rest) := by simpa using hs
+    have hnext : (past s x (xs ++ rest)).left = (xs ++ rest).length := by
+      have hleft : s.left = (xs ++ rest).length + 1 := by
+        simpa [hs', List.length_append, Nat.add_assoc] using hl
+      simp [hleft]
+    have hL := leaves_advance hs' hl
+    have htail := ih (past s x (xs ++ rest)) rfl hnext
+    simpa [pastTokens] using leaves_trans hL htail
 
 /-- `( T )`, when `parseType` reads `T`. -/
 theorem parsePrimaryType_paren (f : Nat) (sp : Span) (inner : TypeExpr)
@@ -443,6 +726,9 @@ theorem arrayWF_split : ∀ (t : TypeExpr), t.arrayWF = true → t.isReadonlyTup
     | false =>
       exact ⟨.tuple sp false es, 0, by simpa [TypeExpr.arrayWF, TypeExpr.primaryWF] using h, by simp [brackets],
         rfl, rfl⟩
+  | .object sp fields, h, _ =>
+      ⟨.object sp fields, 0, by simpa [TypeExpr.arrayWF, TypeExpr.primaryWF] using h,
+        by simp [brackets], rfl, rfl⟩
   | .union .., h, _ => by simp [TypeExpr.arrayWF] at h
   | .predicate .., h, _ => by simp [TypeExpr.arrayWF] at h
 
@@ -476,6 +762,7 @@ theorem primaryWF_tokens {b : TypeExpr} (hb : b.primaryWF = true) : b.tokens ≠
   | ref sp name args => cases args <;> simp [TypeExpr.tokens, TypeExpr.words, identWord]
   | paren sp inner => simp [TypeExpr.tokens, TypeExpr.words, punctWord]
   | tuple sp ro elems => cases ro <;> simp [TypeExpr.tokens, TypeExpr.words, punctWord, identWord]
+  | object _ _ => simp [TypeExpr.tokens, TypeExpr.words, punctWord]
   | array sp e => simp [TypeExpr.primaryWF] at hb
   | union sp ms => simp [TypeExpr.primaryWF] at hb
 
@@ -501,6 +788,7 @@ theorem primaryWF_first {b : TypeExpr} (hb : b.primaryWF = true) :
   | tuple sp ro elems =>
     cases ro <;> simp [TypeExpr.primaryWF] at hb
     simp [TypeExpr.tokens, TypeExpr.words, punctWord]
+  | object _ _ => simp [TypeExpr.tokens, TypeExpr.words, punctWord]
   | array sp e => simp [TypeExpr.primaryWF] at hb
   | union sp ms => simp [TypeExpr.primaryWF] at hb
 
@@ -618,11 +906,47 @@ theorem eraseAll_append (xs ys : List TypeExpr) :
   | nil => rfl
   | cons x xs ih => simp [TypeExpr.eraseAll, ih]
 
+theorem TypeField.eraseAll_eq (fields : List TypeField) :
+    TypeField.eraseAll fields = fields.map TypeField.erase := by
+  induction fields with
+  | nil => rfl
+  | cons field fields ih => simp [TypeField.eraseAll, ih]
+
+theorem TypeField.eraseAll_append (xs ys : List TypeField) :
+    TypeField.eraseAll (xs ++ ys) = TypeField.eraseAll xs ++ TypeField.eraseAll ys := by
+  induction xs with
+  | nil => rfl
+  | cons field fields ih => simp [TypeField.eraseAll, ih]
+
 /-- The kinds of `items`' tokens, with a `sep` token between two of them. -/
 def joined (sep : String) : List (List TokenKind) → List TokenKind
   | [] => []
   | [item] => item
   | item :: rest => item ++ .punct sep :: joined sep rest
+
+def TypeField.tokensOf (fields : List TypeField) : List TokenKind :=
+  (fields.map TypeField.tokens).flatten
+
+theorem TypeField.tokensOf_eq (fields : List TypeField) :
+    TypeField.tokensOf fields = (TypeField.wordsOf fields).flatten := by
+  induction fields with
+  | nil => rfl
+  | cons item fields ih =>
+    change item.tokens ++ TypeField.tokensOf fields =
+      (item.words ++ TypeField.wordsOf fields).flatten
+    rw [List.flatten_append]
+    rw [← ih]
+    rfl
+
+theorem TypeField.length_le_tokensOf : ∀ fields : List TypeField,
+    fields.length ≤ (TypeField.tokensOf fields).length
+  | [] => by simp [TypeField.tokensOf]
+  | item :: fields => by
+    have hp := TypeField.tokens_pos item
+    have ih := TypeField.length_le_tokensOf fields
+    change fields.length + 1 ≤ (item.tokens ++ TypeField.tokensOf fields).length
+    simp only [List.length_append]
+    omega
 
 /-- A loop that reads one item with `p` in each step, and goes on while a `sep`
 token follows it. It reads items with `sep` between them, which a token other
@@ -755,6 +1079,12 @@ theorem wordsOf_eq (ts : List TypeExpr) : TypeExpr.wordsOf ts = ts.map TypeExpr.
   | nil => rfl
   | cons t ts ih => simp [TypeExpr.wordsOf, ih]
 
+theorem TypeField.wordsOf_eq (fields : List TypeField) :
+    TypeField.wordsOf fields = (fields.map TypeField.words).flatten := by
+  induction fields with
+  | nil => rfl
+  | cons field fields ih => simp [TypeField.wordsOf, ih, List.flatten_cons]
+
 theorem separated_flatten (sep : String) (items : List (List Word)) :
     (separated sep items).flatten = joined sep (items.map List.flatten) := by
   induction items with
@@ -883,6 +1213,13 @@ theorem tokens_tuple (sp : Span) (elems : List TypeExpr) :
   simp [List.map_map, Function.comp_def]
   rfl
 
+theorem tokens_object (sp : Span) (fields : List TypeField) :
+    (TypeExpr.object sp fields).tokens =
+      .punct "{" :: TypeField.tokensOf fields ++ [.punct "}"] := by
+  simp only [TypeExpr.tokens, TypeExpr.words, punctWord, List.flatten_cons, List.flatten_append]
+  rw [TypeField.tokensOf_eq]
+  rfl
+
 theorem tokens_readonly (sp : Span) (elems : List TypeExpr) :
     (TypeExpr.tuple sp true elems).tokens = .ident "readonly" :: (TypeExpr.tuple sp false elems).tokens := by
   simp [TypeExpr.tokens, TypeExpr.words, identWord]
@@ -968,6 +1305,8 @@ theorem arrayWF_head (t : TypeExpr) (h : t.arrayWF = true) :
     simp only [TypeExpr.tokens, TypeExpr.words, punctWord, Bool.false_eq_true, ↓reduceIte, List.nil_append]
     refine ⟨by simp, fun k hk => ?_⟩
     simp at hk; subst hk; exact punct_ne (by decide)
+  | object sp fields =>
+    simp [TypeExpr.tokens, TypeExpr.words, punctWord]
   | array sp e => simp [TypeExpr.primaryWF] at hb
   | union sp ms => simp [TypeExpr.primaryWF] at hb
 
@@ -988,6 +1327,16 @@ theorem iterate_stop {σ : Type} {step : σ → ParseM (σ × Bool)} {acc : σ} 
   obtain ⟨f', rfl⟩ : ∃ f', fuel = f' + 1 := ⟨fuel - 1, by omega⟩
   rw [Parse.iterate_succ]
   simp [bind, EStateM.bind, h, pure, EStateM.pure]
+
+theorem Parse.iterate_true {σ : Type} {step : σ → ParseM (σ × Bool)} {n : Nat} {acc acc' : σ}
+    {s s' : ParseState} (h : step acc s = .ok (acc', true) s') :
+    Parse.iterate (n + 1) acc step s = Parse.iterate n acc' step s' := by
+  rw [Parse.iterate_succ]; simp [bind, EStateM.bind, h]
+
+theorem Parse.iterate_false {σ : Type} {step : σ → ParseM (σ × Bool)} {n : Nat} {acc acc' : σ}
+    {s s' : ParseState} (h : step acc s = .ok (acc', false) s') :
+    Parse.iterate (n + 1) acc step s = .ok acc' s' := by
+  rw [Parse.iterate_succ]; simp [bind, EStateM.bind, h, pure, EStateM.pure]
 
 /-- `parseType` reads a type that `parseArrayType` reads, when no `|` follows. -/
 theorem parseType_plain (f : Nat) (t : TypeExpr) (hwf : t.arrayWF = true)
@@ -1143,10 +1492,511 @@ theorem height_le_heightOf {m : TypeExpr} {ms : List TypeExpr} (h : m ∈ ms) :
     · simp only [TypeExpr.heightOf]; exact Nat.le_max_left _ _
     · have := ih h; simp only [TypeExpr.heightOf]; exact Nat.le_trans this (Nat.le_max_right _ _)
 
+theorem TypeExpr.heightField_le : ∀ (fields : List TypeField) (type : TypeExpr),
+    (∃ field ∈ fields, ∃ sp ro name optional, field = .field sp ro name optional type) →
+    type.height ≤ TypeExpr.heightFields fields
+  | [], _, h => by simp at h
+  | .field headSpan headReadonly headName headOptional first :: fields, type, h => by
+    rcases h with ⟨candidate, hmem, sp, ro, name, optional, heq⟩
+    simp only [List.mem_cons] at hmem
+    rcases hmem with hhead | htail
+    · have htypes : first = type := by
+        have hfields : TypeField.field headSpan headReadonly headName headOptional first =
+            TypeField.field sp ro name optional type :=
+          hhead.symm.trans heq
+        exact congrArg (fun f : TypeField => match f with
+          | .field _ _ _ _ ty => ty) hfields
+      subst type
+      simp only [TypeExpr.heightFields]
+      exact Nat.le_max_left _ _
+    · simp only [TypeExpr.heightFields]
+      exact Nat.le_trans
+        (TypeExpr.heightField_le fields type ⟨candidate, htail, sp, ro, name, optional, heq⟩)
+        (Nat.le_max_right _ _)
+
 theorem allWF_iff (ms : List TypeExpr) : TypeExpr.allWF ms = true ↔ ∀ m ∈ ms, m.wf = true := by
   induction ms with
   | nil => simp [TypeExpr.allWF]
   | cons m ms ih => simp [TypeExpr.allWF, ih]
+
+/-- An object type's field parser reads the field words, including the
+semicolon, while the nested type reader reads exactly the type before it. -/
+theorem parseTypeField_reads (fuel : Nat) (field : TypeField)
+    (hread : Reads (Parse.parseType fuel) (match field with | .field _ _ _ _ type => type) FollowsType) :
+    ReadsTypeField (Parse.objectTypeField (fun _ => Parse.parseType fuel)) field := by
+  cases field with
+  | field sp readonly name optional type =>
+    intro s ts rest hs hl hk hn hr
+    obtain ⟨ro, nm, q, colon, typeTokens, semi, hparts, hro, hnm, hq, hcolon, htype, hsemi⟩ :=
+      TypeField.tokens_parts readonly name optional type ts hk
+    have hnameKind : nm.kind = .ident name ∨ nm.kind = .keyword name :=
+      propertyName_kind hnm
+    have hnameNotPunct : nm.kind ≠ .punct "(" := by
+      intro hp
+      rcases hnameKind with h | h <;> rw [hp] at h <;> cases h
+    have hnmNoBreak : nm.newlineBefore = false :=
+      hn nm (by rw [hparts]; simp) hnameNotPunct
+    have htypeNoBreak : ∀ x ∈ typeTokens, NoBreak x := by
+      intro x hx
+      apply hn x
+      rw [hparts]
+      simp [hx]
+    let startToken := ro.getD nm
+    let nextToken := if ro.isSome then nm else q.getD colon
+    have hreadonlyTest :
+        (startToken.isIdent "readonly" && !nextToken.newlineBefore &&
+          (nextToken.isAnyIdent || (nextToken.kind matches .keyword _ | .string _ | .number _))) =
+          readonly := by
+      cases ro with
+      | none =>
+        have hfalse : readonly = false := by
+          cases readonly <;> simp_all
+        subst readonly
+        cases q with
+        | none => simp [startToken, nextToken, Token.isIdent, Token.isAnyIdent, hcolon]
+        | some q =>
+          have hqKind : q.kind = .punct "?" := by
+            cases optional <;> simp_all
+          simp [startToken, nextToken, Token.isIdent, Token.isAnyIdent, hqKind]
+      | some token =>
+        have htrue : readonly = true := by
+          cases readonly <;> simp_all
+        subst readonly
+        have htokenKind : token.kind = .ident "readonly" := by simpa using hro
+        rcases hnameKind with hident | hkeyword
+        · simp [startToken, nextToken, Token.isIdent, Token.isAnyIdent, htokenKind, hnmNoBreak,
+            hident]
+        · simp [startToken, nextToken, Token.isIdent, Token.isAnyIdent, htokenKind, hnmNoBreak,
+            hkeyword]
+    have hreadonlyConvert :
+        ((startToken.isIdent "readonly" = true ∧ nextToken.newlineBefore = false) ∧
+          (nextToken.isAnyIdent = true ∨
+            ((nextToken.kind matches .keyword _ | .string _ | .number _) = true))) ↔
+          (startToken.isIdent "readonly" && !nextToken.newlineBefore &&
+            (nextToken.isAnyIdent ||
+              (nextToken.kind matches .keyword _ | .string _ | .number _))) = true := by
+      simp
+    have hreadonlyProp :
+        ((startToken.isIdent "readonly" = true ∧ nextToken.newlineBefore = false) ∧
+          (nextToken.isAnyIdent = true ∨
+            ((nextToken.kind matches .keyword _ | .string _ | .number _) = true))) ↔
+          readonly = true := by
+      rw [hreadonlyConvert, hreadonlyTest]
+    have hsource : s.rest =
+        (ro.toList ++ [nm] ++ q.toList ++ [colon]) ++ (typeTokens ++ [semi] ++ rest) := by
+      rw [hs, hparts]
+      simp [List.append_assoc]
+    obtain ⟨initialTail, hstart⟩ :
+        ∃ initialTail, s.rest = startToken :: nextToken :: initialTail := by
+      cases ro <;> cases q <;>
+        simp [hsource, startToken, nextToken, List.append_assoc]
+    have hlook : s.rest[1]? = some nextToken := by
+      rw [hstart]
+      simp
+    let sType := pastTokens s (ro.toList ++ [nm] ++ q.toList ++ [colon]) (typeTokens ++ [semi] ++ rest)
+    have hsType : sType.rest = typeTokens ++ [semi] ++ rest := by
+      exact pastTokens_rest s _ _ hsource
+    have hsTypeInput : sType.rest = typeTokens ++ semi :: rest := by
+      simpa [List.append_assoc] using hsType
+    have hlType : sType.left = sType.rest.length := by
+      have hleft : sType.left = (typeTokens ++ [semi] ++ rest).length := by
+        simpa [sType] using pastTokens_left s _ _ hsource hl
+      calc
+        sType.left = (typeTokens ++ [semi] ++ rest).length := hleft
+        _ = sType.rest.length := by rw [hsType]
+    have hfollows : FollowsType (semi :: rest) :=
+      followsType_punct hsemi (by simp)
+    obtain ⟨type', sType', hpt, htypeErase, htypeLeaves⟩ :=
+      hread sType typeTokens (semi :: rest) hsTypeInput hlType htype htypeNoBreak (by simp) hfollows
+    have hsType' : sType'.rest = semi :: rest := htypeLeaves.rest_eq
+    let sFinal := past sType' semi rest
+    have htypeLeft : sType'.left = sType'.rest.length := by
+      rw [htypeLeaves.rest_eq]
+      exact htypeLeaves.left_eq
+    have hsemiLeaves : Leaves sType' sFinal rest :=
+      leaves_advance hsType' htypeLeft
+    have hsource' : s.rest =
+        (ro.toList ++ [nm] ++ q.toList ++ [colon]) ++ (typeTokens ++ semi :: rest) := by
+      simpa [List.append_assoc] using hsource
+    have hprefixLeaves : Leaves s sType (typeTokens ++ semi :: rest) :=
+      by
+        simpa [sType] using
+          pastTokens_leaves s (ro.toList ++ [nm] ++ q.toList ++ [colon])
+            (typeTokens ++ semi :: rest) hsource' hl
+    have hleaves : Leaves s sFinal rest :=
+      leaves_trans hprefixLeaves (leaves_trans htypeLeaves hsemiLeaves)
+    have hfirstNotPunct : (ro.getD nm).kind ≠ .punct "[" ∧
+        (ro.getD nm).kind ≠ .punct "(" := by
+      cases ro with
+      | none =>
+        cases hnameKind with
+        | inl hn => simp [hn]
+        | inr hn => simp [hn]
+      | some token =>
+        have htokenKind : token.kind = .ident "readonly" := by
+          cases readonly with
+          | false => simp at hro
+          | true => simpa using hro
+        simp [htokenKind]
+    have hnotIndex : startToken.isPunct "[" = false := by
+      simpa [Token.isPunct, startToken] using hfirstNotPunct.1
+    have hnotCall : startToken.isPunct "(" = false := by
+      simpa [Token.isPunct, startToken] using hfirstNotPunct.2
+    have hparser : Parse.objectTypeField (fun _ => Parse.parseType fuel) s =
+        .ok (.field ⟨startToken.span.start, semi.span.stop⟩ readonly name optional type') sFinal := by
+      cases readonly with
+      | false =>
+        have hroNone : ro = none := by
+          cases ro with
+          | none => rfl
+          | some token => simp at hro
+        subst ro
+        have hsName : s.rest = nm :: nextToken :: initialTail := by
+          simpa [startToken] using hstart
+        let sName := past s nm (nextToken :: initialTail)
+        have hsNameRest : sName.rest = nextToken :: initialTail := by
+          simp [sName]
+        unfold Parse.objectTypeField
+        rw [Parse.bind_eq (Parse.peek_eq hstart)]
+        rw [if_neg (by simp [hnotIndex]), Parse.pure_bind]
+        rw [if_neg (by simp [hnotCall])]
+        simp only [bind, EStateM.bind, pure, EStateM.pure]
+        unfold Parse.parseFieldWith
+        rw [Parse.bind_eq (Parse.peek_eq hstart), Parse.bind_eq (Parse.peekAt_eq hlook)]
+        rw [if_neg (by
+          intro hp
+          have hp' := hreadonlyConvert.mpr hp
+          have h := hreadonlyProp.mp hp'
+          cases h)]
+        rw [Parse.pure_bind]
+        dsimp
+        rw [Parse.bind_eq (readPropertyName_ok hsName hnm)]
+        rw [Parse.bind_eq (Parse.peek_eq hsNameRest)]
+        cases q with
+        | none =>
+          have hoptional : optional = false := by simpa using hq
+          have htail : initialTail = typeTokens ++ [semi] ++ rest := by
+            have h := hstart.symm.trans hsource
+            simpa [startToken, nextToken, List.append_assoc] using h
+          have hstate : past sName colon initialTail = sType := by
+            rw [htail]
+            simp [sType, sName, pastTokens, past,
+              List.append_assoc]
+          have hstate' := hstate
+          simp only [past] at hstate'
+          have hnextToken : nextToken = colon := by simp [nextToken]
+          have hreadonlyExpr :
+              ((none.getD nm).isIdent "readonly" && !colon.newlineBefore &&
+                (colon.isAnyIdent || false)) = false := by
+            simpa [startToken, nextToken, hcolon] using hreadonlyTest
+          have hnotOptional : (TokenKind.punct ":" == TokenKind.punct "?") = false := by
+            decide
+          rw [if_neg (by simp [Token.isPunct, nextToken, hcolon]), Parse.pure_bind]
+          rw [Parse.bind_eq (Parse.peek_eq hsNameRest)]
+          rw [if_neg (by simp [Token.isPunct, nextToken, hcolon]), Parse.pure_bind]
+          rw [if_pos (by simp [Token.isPunct, nextToken, hcolon]), Parse.pure_bind]
+          rw [Parse.bind_eq (Parse.discard_eq
+            (Parse.advance_cons (s := sName) hsNameRest (by rw [htail]; simp)))]
+          rw [hnextToken, hstate']
+          rw [Parse.bind_eq (Parse.budget_eq _), Parse.bind_eq hpt]
+          rw [Parse.bind_eq (Parse.peek_eq hsType')]
+          rw [if_pos (by simp [Token.isPunct, hsemi])]
+          rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_cons hsType' (by simp [hr])))]
+          rw [Parse.bind_eq (Parse.spanFrom_eq _ _)]
+          simp only [startToken, Token.isPunct, hcolon]
+          simp only [hreadonlyExpr]
+          simp [hnotOptional, hoptional, sFinal, past] <;> rfl
+        | some qToken =>
+          have hqKind : qToken.kind = .punct "?" := by
+            cases optional <;> simp_all
+          have hoptional : optional = true := by
+            cases optional <;> simp_all
+          have htail : initialTail = colon :: (typeTokens ++ [semi] ++ rest) := by
+            have h := hstart.symm.trans hsource
+            simpa [startToken, nextToken, hqKind, List.append_assoc] using h
+          let sOpt := past sName qToken initialTail
+          have hsOptRest : sOpt.rest = initialTail := by
+            simp [sOpt]
+          have hsOptRest' : sOpt.rest = colon :: (typeTokens ++ [semi] ++ rest) := by
+            rw [hsOptRest, htail]
+          have hOptState := (show past sName qToken initialTail = sOpt from rfl)
+          simp only [past] at hOptState
+          have hstate : past sOpt colon (typeTokens ++ [semi] ++ rest) = sType := by
+            simp [sType, sOpt, sName, pastTokens, past, List.append_assoc]
+          have hstate' := hstate
+          simp only [past] at hstate'
+          have hnextToken : nextToken = qToken := by simp [nextToken]
+          rw [if_pos (by simp [Token.isPunct, nextToken, hqKind]),
+            Parse.bind_eq (Parse.discard_eq
+              (Parse.advance_cons (s := sName) hsNameRest (by simp [htail])))]
+          rw [hnextToken, hOptState]
+          rw [Parse.bind_eq (Parse.peek_eq hsOptRest')]
+          rw [if_neg (by simp [Token.isPunct, hcolon])]
+          rw [if_pos (by simp [Token.isPunct, hcolon]), Parse.pure_bind]
+          rw [Parse.pure_bind]
+          rw [Parse.bind_eq (Parse.discard_eq
+            (Parse.advance_cons (s := sOpt) hsOptRest' (by simp)))]
+          rw [hstate']
+          rw [Parse.bind_eq (Parse.budget_eq _), Parse.bind_eq hpt]
+          rw [Parse.bind_eq (Parse.peek_eq hsType')]
+          rw [if_pos (by simp [Token.isPunct, hsemi])]
+          rw [Parse.bind_eq (Parse.discard_eq
+            (Parse.advance_cons hsType' (by simp [hr])))]
+          rw [Parse.bind_eq (Parse.spanFrom_eq _ _)]
+          simp [Token.isAnyIdent, Token.isIdent, Token.isPunct, hqKind,
+            hoptional, sFinal, past] <;> rfl
+      | true =>
+        unfold Parse.objectTypeField
+        rw [Parse.bind_eq (Parse.peek_eq hstart)]
+        rw [if_neg (by simp [hnotIndex]), Parse.pure_bind]
+        rw [if_neg (by simp [hnotCall])]
+        simp only [bind, EStateM.bind, pure, EStateM.pure]
+        unfold Parse.parseFieldWith
+        rw [Parse.bind_eq (Parse.peek_eq hstart), Parse.bind_eq (Parse.peekAt_eq hlook)]
+        cases ro with
+        | none => simp at hro
+        | some readonlyToken =>
+          have hreadonlyCond :
+              (readonlyToken.isIdent "readonly" && !nm.newlineBefore &&
+                (nm.isAnyIdent ||
+                  match nm.kind with
+                  | .keyword _ | .string _ | .number _ => true
+                  | _ => false)) = true := by
+            simpa [startToken, nextToken, Option.isSome_some, if_true] using
+              hreadonlyConvert.mp (hreadonlyProp.mpr rfl)
+          cases q with
+          | none =>
+            have hoptional : optional = false := by simpa using hq
+            have htail : initialTail = colon :: (typeTokens ++ [semi] ++ rest) := by
+              have h := hstart.symm.trans hsource
+              simpa [startToken, nextToken, List.append_assoc] using h
+            let s0 := past s readonlyToken (nm :: initialTail)
+            have hs0 : s0.rest = nm :: colon :: (typeTokens ++ [semi] ++ rest) := by
+              simp [s0, htail]
+            let sName := past s0 nm initialTail
+            have hsNameRest : sName.rest = initialTail := by
+              simp [sName]
+            have hstate : past sName colon (typeTokens ++ [semi] ++ rest) = sType := by
+              simp [sType, sName, s0, pastTokens, past, List.append_assoc]
+            have hstate' := hstate
+            simp only [past] at hstate'
+            erw [if_pos hreadonlyTest]
+            rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_eq hstart))]
+            dsimp only
+            erw [Parse.bind_eq (readPropertyName_ok hs0 hnm)]
+            rw [← htail]
+            have hsNameRest' : sName.rest = colon :: (typeTokens ++ [semi] ++ rest) :=
+              hsNameRest.trans htail
+            rw [Parse.bind_eq (Parse.peek_eq hsNameRest')]
+            rw [if_neg (by simp [Token.isPunct, hcolon]), Parse.pure_bind]
+            rw [Parse.bind_eq (Parse.peek_eq hsNameRest')]
+            rw [Parse.ite_guard (fun h => by
+              simp [Token.isPunct, hcolon] at h)]
+            rw [if_pos (by simp [Token.isPunct, hcolon]), Parse.pure_bind]
+            rw [Parse.bind_eq (Parse.discard_eq
+              (Parse.advance_cons (s := sName) hsNameRest' (by simp)))]
+            rw [hstate']
+            rw [Parse.bind_eq (Parse.budget_eq _), Parse.bind_eq hpt]
+            rw [Parse.bind_eq (Parse.peek_eq hsType')]
+            rw [if_pos (by simp [Token.isPunct, hsemi])]
+            rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_cons hsType' (by simp [hr])))]
+            rw [Parse.bind_eq (Parse.spanFrom_eq _ _)]
+            erw [hreadonlyTest]
+            simp [Token.isPunct, hcolon, hoptional, pure, EStateM.pure, sFinal, past]
+          | some qToken =>
+            have hqKind : qToken.kind = .punct "?" := by
+              cases optional <;> simp_all
+            have hoptional : optional = true := by
+              cases optional <;> simp_all
+            have htail : initialTail = qToken :: colon :: (typeTokens ++ [semi] ++ rest) := by
+              have h := hstart.symm.trans hsource
+              simpa [startToken, nextToken, hqKind, List.append_assoc] using h
+            let s0 := past s readonlyToken (nm :: initialTail)
+            have hs0 : s0.rest =
+                nm :: qToken :: colon :: (typeTokens ++ [semi] ++ rest) := by
+              simp [s0, htail]
+            let sName := past s0 nm initialTail
+            have hsNameRest : sName.rest = initialTail := by
+              simp [sName]
+            let sOpt := past sName qToken (colon :: (typeTokens ++ [semi] ++ rest))
+            have hsOptRest : sOpt.rest = colon :: (typeTokens ++ [semi] ++ rest) := by
+              simp [sOpt]
+            have hstate : past sOpt colon (typeTokens ++ [semi] ++ rest) = sType := by
+              simp [sType, sOpt, sName, s0, pastTokens, past, List.append_assoc]
+            have hstate' := hstate
+            simp only [past] at hstate'
+            have hOptState := (show
+              past sName qToken (colon :: (typeTokens ++ [semi] ++ rest)) = sOpt from rfl)
+            simp only [past] at hOptState
+            erw [if_pos hreadonlyTest]
+            rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_eq hstart))]
+            dsimp only
+            have hs0' : s0.rest = nm :: qToken :: (colon :: (typeTokens ++ [semi] ++ rest)) :=
+              hs0
+            erw [Parse.bind_eq (readPropertyName_ok hs0' hnm)]
+            rw [← htail]
+            have hsNameRest' : sName.rest =
+                qToken :: colon :: (typeTokens ++ [semi] ++ rest) := hsNameRest.trans htail
+            rw [Parse.bind_eq (Parse.peek_eq hsNameRest')]
+            rw [if_pos (by simp [Token.isPunct, hqKind])]
+            rw [Parse.bind_eq (Parse.discard_eq
+              (Parse.advance_cons (s := sName) hsNameRest' (by simp)))]
+            rw [hOptState]
+            rw [Parse.bind_eq (Parse.peek_eq hsOptRest)]
+            rw [Parse.ite_guard (fun h => by
+              simp [Token.isPunct, hcolon] at h)]
+            rw [if_pos (by simp [Token.isPunct, hcolon]), Parse.pure_bind]
+            rw [Parse.bind_eq (Parse.discard_eq
+              (Parse.advance_cons (s := sOpt) hsOptRest (by simp)))]
+            rw [hstate']
+            rw [Parse.bind_eq (Parse.budget_eq _), Parse.bind_eq hpt]
+            rw [Parse.bind_eq (Parse.peek_eq hsType')]
+            rw [if_pos (by simp [Token.isPunct, hsemi])]
+            rw [Parse.bind_eq (Parse.discard_eq
+              (Parse.advance_cons hsType' (by simp [hr])))]
+            rw [Parse.bind_eq (Parse.spanFrom_eq _ _)]
+            erw [hreadonlyTest]
+            simp [Token.isPunct, hqKind, hoptional, pure, EStateM.pure, sFinal, past]
+    refine ⟨.field ⟨startToken.span.start, semi.span.stop⟩ readonly name optional type', sFinal,
+      hparser, ?_, hleaves⟩
+    simp [TypeField.erase, htypeErase]
+
+/-- The object type loop reads its field list and stops at `}`. -/
+theorem typeField_block_loop (fuelType : Nat) :
+    ∀ (fields : List TypeField) (fuel : Nat) (acc : Array TypeField) (s : ParseState)
+      (ts rest : List Token) (close : Token),
+      (∀ field ∈ fields, ReadsTypeField
+        (Parse.objectTypeField (fun _ => Parse.parseType fuelType)) field) →
+      fields.length < fuel → s.rest = ts ++ close :: rest → s.left = s.rest.length →
+      ts.map (·.kind) = TypeField.tokensOf fields → (∀ x ∈ ts, NoBreak x) →
+      close.kind = .punct "}" →
+      ∃ result s', Parse.iterate fuel acc
+        (Parse.blockStep (Parse.objectTypeField (fun _ => Parse.parseType fuelType))) s = .ok result s' ∧
+        result.toList.map TypeField.erase = (acc.toList ++ fields).map TypeField.erase ∧
+        Leaves s s' (close :: rest)
+  | [], fuel, acc, s, ts, rest, close, hreads, hlen, hs, hl, htokens, hn, hclose => by
+    have hmap : ts.map (·.kind) = [] := by simpa [TypeField.tokensOf] using htokens
+    have hts : ts = [] := List.map_eq_nil_iff.mp hmap
+    subst ts
+    obtain ⟨n, rfl⟩ : ∃ n, fuel = n + 1 := ⟨fuel - 1, by simp at hlen; omega⟩
+    have hs' : s.rest = close :: rest := by simpa using hs
+    have hstop : Parse.blockStep
+        (Parse.objectTypeField (fun _ => Parse.parseType fuelType)) acc s =
+          .ok (acc, false) s := by
+      simp [Parse.blockStep, Parse.peek_eq hs', Token.isPunct, hclose,
+        bind, EStateM.bind, pure, EStateM.pure]
+    refine ⟨acc, s, Parse.iterate_false hstop, by simp, Leaves.refl hs' ?_⟩
+    simp [hl, hs']
+  | field :: fields, fuel, acc, s, ts, rest, close, hreads, hlen, hs, hl, htokens, hn, hclose => by
+    have htokens' : ts.map (·.kind) = field.tokens ++ TypeField.tokensOf fields := by
+      simpa [TypeField.tokensOf] using htokens
+    obtain ⟨a, b, hts, ha, hb⟩ := List.map_eq_append_iff.mp htokens'
+    have hsStep : s.rest = a ++ (b ++ close :: rest) := by
+      rw [hs, hts]
+      simp [List.append_assoc]
+    have hna : ∀ x ∈ a, NoBreak x := by
+      intro x hx
+      apply hn x
+      rw [hts]
+      simp [hx]
+    obtain ⟨field', s₁, hp, heField, hL₁⟩ :=
+      hreads field (by simp) s a (b ++ close :: rest) hsStep hl ha hna (by simp)
+    obtain ⟨k, hk, hkClose, hkEof⟩ := TypeField.first field
+    have hhead : (a.map (·.kind)).head? = some k := by rw [ha]; exact hk
+    obtain ⟨x, a', rfl, hx⟩ : ∃ x a', a = x :: a' ∧ x.kind = k := by
+      cases a with
+      | nil => simp at hhead
+      | cons x a' => simp at hhead; exact ⟨x, a', rfl, hhead⟩
+    have hstep : Parse.blockStep
+        (Parse.objectTypeField (fun _ => Parse.parseType fuelType)) acc s =
+          .ok (acc.push field', true) s₁ := by
+      simp [Parse.blockStep, Parse.peek_eq hsStep, Token.isPunct, Token.isEof,
+        hx, hkClose, hkEof, hp, bind, EStateM.bind, pure, EStateM.pure]
+    obtain ⟨n, rfl⟩ : ∃ n, fuel = n + 1 := ⟨fuel - 1, by simp at hlen; omega⟩
+    have hlenTail : fields.length < n := by simp at hlen; omega
+    have hnTail : ∀ x ∈ b, NoBreak x := by
+      intro x hx
+      apply hn x
+      rw [hts]
+      simp [hx]
+    obtain ⟨result, s₂, hit, he, hL₂⟩ :=
+      typeField_block_loop fuelType fields n (acc.push field') s₁ b rest close
+        (fun item hi => hreads item (by simp [hi])) hlenTail hL₁.rest_eq
+        (by rw [hL₁.rest_eq]; exact hL₁.left_eq) hb hnTail hclose
+    refine ⟨result, s₂, ?_, ?_, leaves_trans hL₁ hL₂⟩
+    · rw [Parse.iterate_true hstep]
+      exact hit
+    · simpa [heField] using he
+
+/-- `{ field ; … }`, when every field type is read by the induction hypothesis. -/
+theorem parsePrimaryType_object (fuelType : Nat) (sp : Span) (fields : List TypeField)
+    (hread : ∀ field ∈ fields, ReadsTypeField
+      (Parse.objectTypeField (fun _ => Parse.parseType fuelType)) field) :
+    Reads (Parse.parsePrimaryType (fuelType + 1)) (.object sp fields) FollowsPrimary := by
+  intro s ts rest hs hl hk hn hr hf
+  rw [tokens_object] at hk
+  obtain ⟨lb, ts', hts, hlb, htail⟩ : ∃ lb ts', ts = lb :: ts' ∧ lb.kind = .punct "{" ∧
+      ts'.map (·.kind) = TypeField.tokensOf fields ++ [.punct "}"] := by
+    cases ts with
+    | nil => simp at hk
+    | cons lb ts' => simp at hk; exact ⟨lb, ts', rfl, hk.1, hk.2⟩
+  obtain ⟨fts, closeTokens, hsplit, hfields, hcloseTokens⟩ := List.map_eq_append_iff.mp htail
+  obtain ⟨close, hcloseSplit, hcloseKind⟩ := split_map_singleton hcloseTokens
+  have htsAll : ts = lb :: (fts ++ [close]) := by
+    rw [hts, hsplit, hcloseSplit]
+  have hs₀ : s.rest = lb :: (fts ++ close :: rest) := by
+    rw [hs, hts, hsplit, hcloseSplit]
+    simp
+  let s₁ := past s lb (fts ++ close :: rest)
+  have hs₁ : s₁.rest = fts ++ close :: rest := rfl
+  have hl₁ : s₁.left = s₁.rest.length := by simp [s₁, hl, hs₀]
+  have hnFields : ∀ x ∈ fts, NoBreak x := by
+    intro x hx
+    apply hn x
+    rw [htsAll]
+    simp [hx]
+  have hfieldsLen : fields.length ≤ fts.length := by
+    calc
+      fields.length ≤ (TypeField.tokensOf fields).length := TypeField.length_le_tokensOf fields
+      _ = fts.length := by
+        calc
+          (TypeField.tokensOf fields).length = (fts.map (·.kind)).length :=
+            congrArg List.length hfields.symm
+          _ = fts.length := by simp
+  let fuel := 10 * (s₁.left + 1)
+  have hfuel : fields.length < fuel := by
+    have hleft : s₁.left = fts.length + (close :: rest).length := by
+      rw [hl₁, hs₁]
+      simp [List.length_append]
+    simp [fuel, hleft]
+    omega
+  obtain ⟨res, s₂, hloop, herase, hL₂⟩ :=
+    typeField_block_loop fuelType fields fuel #[] s₁ fts rest close hread hfuel rfl hl₁ hfields hnFields hcloseKind
+  have hs₂ : s₂.rest = close :: rest := hL₂.rest_eq
+  have hleft₂ : s₂.left = s₂.rest.length := by
+    rw [hL₂.rest_eq]
+    exact hL₂.left_eq
+  have hLclose : Leaves s₂ (past s₂ close rest) rest :=
+    leaves_advance hs₂ hleft₂
+  let s₃ := past s₂ close rest
+  have hobj : Parse.parseObjectType (fun _ => Parse.parseType fuelType) lb.span.start s₁ =
+      .ok (.object ⟨lb.span.start, close.span.stop⟩ res.toList) s₃ := by
+    simp only [Parse.parseObjectType]
+    rw [Parse.bind_eq (Parse.budget_eq _), Parse.bind_eq hloop,
+      Parse.bind_eq (Parse.expectPunct_ok hs₂ hr hcloseKind),
+      Parse.bind_eq (Parse.spanFrom_eq _ _)]
+    simp [s₃, past]
+  have hreadPrimary : Parse.parsePrimaryType (fuelType + 1) s =
+      .ok (.object ⟨lb.span.start, close.span.stop⟩ res.toList) s₃ := by
+    simp only [Parse.parsePrimaryType, bind, EStateM.bind,
+      Parse.advance_cons hs₀ (by simp)]
+    simp only [hlb]
+    exact hobj
+  refine ⟨.object ⟨lb.span.start, close.span.stop⟩ res.toList, s₃, hreadPrimary, ?_,
+    leaves_trans (leaves_advance hs₀ hl)
+      (leaves_trans hL₂ (by simpa [s₃] using hLclose))⟩
+  simp only [TypeExpr.erase, TypeField.eraseAll_eq]
+  simpa using herase
 
 /-- The parser reads the tokens of every well-formed type as that type, given
 fuel for how deep the type nests. `types_give` proves that every type the
@@ -1189,6 +2039,10 @@ theorem types_reads : ∀ f : Nat,
       | tuple sp ro es =>
         exact parseType_plain f _ (by simpa [TypeExpr.wf, TypeExpr.arrayWF] using hwf)
           (ihA _ (by simpa [TypeExpr.wf, TypeExpr.arrayWF] using hwf) (by omega))
+      | object sp fields =>
+        exact parseType_plain f _ (by simpa [TypeExpr.wf, TypeExpr.arrayWF] using hwf)
+          (ihA _ (by simpa [TypeExpr.wf, TypeExpr.arrayWF] using hwf)
+            (by simp [TypeExpr.height] at hf ⊢; omega))
     · intro t hwf hf
       exact parseArrayType_reads f t hwf (fun b hb hh => ihP b hb (by omega)) fun b hb hh => ihA b hb (by omega)
     · intro t hwf hf
@@ -1257,6 +2111,21 @@ theorem types_reads : ∀ f : Nat,
           exact parsePrimaryType_tuple f sp es hwf.1 fun m hm =>
             ihT m ((allWF_iff _).mp hwf.2 m hm)
               (by have := height_le_heightOf hm; simp [TypeExpr.height] at hf; omega)
+      | object sp fields =>
+        have hfieldsWF : ∀ field ∈ fields, ∀ fsp ro name optional type,
+            field = .field fsp ro name optional type → type.wf = true :=
+          (TypeExpr.objectFieldsWF_iff fields).mp (by simpa [TypeExpr.primaryWF] using hwf)
+        exact parsePrimaryType_object f sp fields fun field hfield => by
+          cases field with
+          | field fsp ro name optional type =>
+            have htypeWF := hfieldsWF _ hfield fsp ro name optional type rfl
+            have hheight : type.height ≤ TypeExpr.heightFields fields :=
+              TypeExpr.heightField_le fields type
+                  ⟨.field fsp ro name optional type, hfield, fsp, ro, name, optional, rfl⟩
+            apply parseTypeField_reads f (.field fsp ro name optional type)
+            apply ihT type htypeWF
+            simp [TypeExpr.height] at hf
+            omega
       | array sp e => simp [TypeExpr.primaryWF] at hwf
       | union sp ms => simp [TypeExpr.primaryWF] at hwf
 

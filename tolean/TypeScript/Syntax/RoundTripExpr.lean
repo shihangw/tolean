@@ -679,10 +679,6 @@ theorem EndsBin.mono {m m' : Nat} {rest : List Token} (h : EndsBin m rest) (hm :
 
 /-! ### Steps of the parser -/
 
-theorem Parse.spanFrom_eq (start : Pos) (s : ParseState) :
-    Parse.spanFrom start s = .ok ⟨start, s.lastStop⟩ s := by
-  simp [Parse.spanFrom, get, getThe, MonadStateOf.get, EStateM.get, bind, EStateM.bind, pure, EStateM.pure]
-
 theorem Parse.requireFeature_ok {t : Token} {f : Feature} {s : ParseState} (h : s.target.supports f = true) :
     Parse.requireFeature t f s = .ok () s := by
   simp [Parse.requireFeature, h, get, getThe, MonadStateOf.get, EStateM.get, bind, EStateM.bind, pure,
@@ -702,16 +698,6 @@ theorem Parse.skip_ok : ∀ (a : List Token) {b : List Token} {s : ParseState}, 
     simp only [Parse.skip, discard, Functor.mapConst, Function.comp_apply, bind,
       EStateM.bind, EStateM.map, Parse.advance_cons hs' hne]
     exact h
-
-theorem Parse.iterate_true {σ : Type} {step : σ → ParseM (σ × Bool)} {n : Nat} {acc acc' : σ}
-    {s s' : ParseState} (h : step acc s = .ok (acc', true) s') :
-    Parse.iterate (n + 1) acc step s = Parse.iterate n acc' step s' := by
-  rw [Parse.iterate_succ]; simp [bind, EStateM.bind, h]
-
-theorem Parse.iterate_false {σ : Type} {step : σ → ParseM (σ × Bool)} {n : Nat} {acc acc' : σ}
-    {s s' : ParseState} (h : step acc s = .ok (acc', false) s') :
-    Parse.iterate (n + 1) acc step s = .ok acc' s' := by
-  rw [Parse.iterate_succ]; simp [bind, EStateM.bind, h, pure, EStateM.pure]
 
 /-! ### Fuel -/
 
@@ -989,24 +975,6 @@ theorem Touching.enclosed {ts : List Token} {o c : String} {inner : List Word}
   simp [Touching] at h₃; subst h₃
   exact ⟨lp, its, rp, rfl, hlp, hits, hrp⟩
 
-theorem Parse.pure_bind {α β : Type} (a : α) (f : α → ParseM β) (s : ParseState) :
-    ((pure a : ParseM α) >>= f) s = f a s := rfl
-
-theorem Parse.pure_eq {α : Type} (a : α) (s : ParseState) : (pure a : ParseM α) s = .ok a s := rfl
-
-theorem Parse.discard_eq {α : Type} {x : ParseM α} {s s' : ParseState} {a : α} (h : x s = .ok a s') :
-    (discard x) s = .ok () s' := by
-  simp [discard, Functor.mapConst, Function.comp_apply, EStateM.map, h]
-
-/-- A check that the do notation writes as `if c then A; k else k`, where `A`
-passes whenever `c` holds. -/
-theorem Parse.ite_guard {β : Type} {c : Bool} {A : ParseM PUnit} {k : PUnit → ParseM β} {s : ParseState}
-    (hA : c = true → A s = .ok () s) :
-    (if c = true then A >>= k else pure PUnit.unit >>= k) s = k () s := by
-  split
-  · rename_i h; exact Parse.bind_eq (hA h)
-  · rfl
-
 /-! ### Elements and arguments -/
 
 /-- `e` starts with the token that `o` starts with. -/
@@ -1121,6 +1089,16 @@ theorem TypeExpr.tokens_array (sp : Span) (e : TypeExpr) :
     (TypeExpr.array sp e).tokens = e.tokens ++ [.punct "[", .punct "]"] := by
   simp [TypeExpr.tokens, TypeExpr.words, punctWord]
 
+theorem TypeField.typeTokens_le_tokens (field : TypeField) :
+    (match field with | .field _ _ _ _ type => type.tokens.length) ≤ field.tokens.length := by
+  cases field with
+  | field sp readonly name optional type =>
+    have hname : (propertyName name).length = 1 := by
+      unfold propertyName
+      split <;> simp [keywordWord, identWord]
+    simp [TypeField.tokens, TypeField.words, TypeExpr.tokens, punctWord, hname]
+    omega
+
 mutual
 
 /-- A type nests no deeper than it has tokens. -/
@@ -1159,7 +1137,27 @@ theorem TypeExpr.height_le : ∀ t : TypeExpr, t.height ≤ t.tokens.length
     rw [tokens_readonly, tokens_tuple]
     simp only [TypeExpr.height, List.length_cons, List.length_append, List.length_nil]
     simp; omega
+  | .object sp fields => by
+    have hf := TypeExpr.heightFields_le fields
+    rw [tokens_object]
+    simp only [TypeExpr.height, List.length_cons, List.length_append]
+    omega
   | .keyword .. | .null _ | .literal .. => by simp [TypeExpr.height]
+
+theorem TypeExpr.heightFields_le : ∀ fields : List TypeField,
+    TypeExpr.heightFields fields ≤ (TypeField.tokensOf fields).length
+  | [] => by simp [TypeExpr.heightFields, TypeField.tokensOf]
+  | field :: fields => by
+    have hfield := TypeField.typeTokens_le_tokens field
+    have ih := TypeExpr.heightFields_le fields
+    cases field with
+    | field sp readonly name optional type =>
+      change max type.height (TypeExpr.heightFields fields) ≤
+        ((TypeField.field sp readonly name optional type).tokens ++ TypeField.tokensOf fields).length
+      simp only [List.length_append]
+      change type.tokens.length ≤ (TypeField.field sp readonly name optional type).tokens.length at hfield
+      have ht := TypeExpr.height_le type
+      omega
 
 theorem TypeExpr.heightOf_le : ∀ ts : List TypeExpr, TypeExpr.heightOf ts ≤ (joined "," (ts.map TypeExpr.tokens)).length
   | [] => by simp [TypeExpr.heightOf, joined]
@@ -1749,13 +1747,6 @@ theorem refuseSplitMember_ok {s : ParseState} {x : Token} {r : List Token} (hs :
     (hx : x.newlineBefore = false) : Parse.refuseSplitMember s = .ok () s := by
   simp [Parse.refuseSplitMember, Parse.peek_eq hs, Parse.peekAt_rest, hs, hx, bind, EStateM.bind, pure,
     EStateM.pure]
-
-theorem readPropertyName_ok {s : ParseState} {x u : Token} {r : List Token} {name : String}
-    (hs : s.rest = x :: u :: r) (hx : [x.kind] = propertyName name) :
-    Parse.readPropertyName s = .ok name (past s x (u :: r)) := by
-  unfold propertyName at hx
-  split at hx <;> simp [keywordWord, identWord] at hx <;>
-    simp [Parse.readPropertyName, Parse.advance_eq hs, hx, bind, EStateM.bind, pure, EStateM.pure]
 
 /-- A `.` and a property name. -/
 theorem lhsStep_member {pi : ParseM Expr} {pa : ParseM (List Expr)} {start : Pos} {acc : Expr}
@@ -3841,6 +3832,10 @@ theorem Neutral.one {k : TokenKind} (h1 : k ∉ [.punct "(", .punct "[", .punct 
   | eof => exact absurd rfl h8
   | _ => rfl
 
+theorem Neutral.semicolon : Neutral [.punct ";"] := by
+  intro d
+  cases d <;> simp [scanKinds]
+
 /-- A group in brackets. -/
 theorem Neutral.enclosed {o c : String} (ho : o ∈ ["(", "[", "{"]) (hc : c ∈ [")", "]", "}"])
     {ks : List TokenKind} (h : Neutral ks) : Neutral (.punct o :: (ks ++ [.punct c])) := by
@@ -3939,6 +3934,31 @@ theorem TypeExpr.neutral : ∀ t : TypeExpr, Neutral t.tokens
     rw [tokens_readonly, tokens_tuple]
     exact Neutral.cons (by simp)
       (Neutral.enclosed (o := "[") (c := "]") (by simp) (by simp) (Neutral.join (TypeExpr.neutralAll es)))
+  | .object sp fields => by
+    rw [tokens_object]
+    exact Neutral.enclosed (o := "{") (c := "}") (by simp) (by simp)
+      (TypeField.neutralAll fields)
+
+theorem TypeField.neutral (field : TypeField) : Neutral field.tokens := by
+  cases field with
+  | field sp readonly name optional type =>
+    have hreadonly : Neutral (if readonly then [.ident "readonly"] else []) := by
+      cases readonly <;> simp [Neutral.all]
+    have hname := neutral_propertyName name
+    have hoptional : Neutral (if optional then [.punct "?"] else []) := by
+      cases optional <;> simp [Neutral.all]
+    have hcolon : Neutral [.punct ":"] := Neutral.one (by decide)
+    have hsemi : Neutral [.punct ";"] := Neutral.semicolon
+    have htype := TypeExpr.neutral type
+    cases readonly <;> cases optional <;>
+      simpa [TypeField.tokens, TypeField.words, TypeExpr.tokens, identWord, punctWord, List.append_assoc] using
+        hreadonly.append (hname.append (hoptional.append (hcolon.append (htype.append hsemi))))
+
+theorem TypeField.neutralAll : ∀ fields : List TypeField, Neutral (TypeField.tokensOf fields)
+  | [] => by simp [TypeField.tokensOf, Neutral.nil]
+  | field :: fields => by
+    simp only [TypeField.tokensOf, List.map_cons, List.flatten_cons]
+    exact Neutral.append (TypeField.neutral field) (TypeField.neutralAll fields)
 
 theorem TypeExpr.neutralAll : ∀ ts : List TypeExpr, ∀ x ∈ ts.map TypeExpr.tokens, Neutral x
   | [], _, h => by simp at h

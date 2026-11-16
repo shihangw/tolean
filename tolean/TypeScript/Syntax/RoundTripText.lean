@@ -143,6 +143,10 @@ theorem TypeExpr.no_lineBreak : ∀ t : TypeExpr, [] ∉ t.words
     have := nil_not_mem_separated "," _ (TypeExpr.no_lineBreakAll elems)
     cases ro <;> simp only [TypeExpr.words, List.mem_cons, List.mem_append, not_or] <;>
       simp [identWord, punctWord, this]
+  | .object _ fields => by
+    have hfields := TypeField.no_lineBreakAll fields
+    simp only [TypeExpr.words, List.mem_cons, List.mem_append, not_or]
+    simp [punctWord, hfields]
 
 theorem TypeExpr.no_lineBreakAll : ∀ ts : List TypeExpr, ∀ x ∈ TypeExpr.wordsOf ts, [] ∉ x
   | [], _, hx => by simp [TypeExpr.wordsOf] at hx
@@ -151,6 +155,23 @@ theorem TypeExpr.no_lineBreakAll : ∀ ts : List TypeExpr, ∀ x ∈ TypeExpr.wo
     rcases hx with rfl | hx
     · exact TypeExpr.no_lineBreak t
     · exact TypeExpr.no_lineBreakAll ts x hx
+
+theorem TypeField.no_lineBreak : ∀ f : TypeField, [] ∉ f.words
+  | .field _ readonly name optional type => by
+    have := TypeExpr.no_lineBreak type
+    have hname : propertyName name ≠ [] := by
+      intro hnil
+      have := propertyName_length name
+      rw [hnil] at this
+      contradiction
+    simp only [TypeField.words, List.mem_cons, List.mem_append, not_or]
+    simp [identWord, punctWord, hname, this]
+
+theorem TypeField.no_lineBreakAll : ∀ fs : List TypeField, [] ∉ TypeField.wordsOf fs
+  | [] => by simp [TypeField.wordsOf]
+  | f :: fs => by
+    simpa only [TypeField.wordsOf, List.mem_append, not_or] using
+      And.intro (TypeField.no_lineBreak f) (TypeField.no_lineBreakAll fs)
 
 end
 

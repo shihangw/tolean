@@ -89,6 +89,8 @@ inductive LitType where
   | bigint (text : String)
   | bool (value : Bool)
 
+mutual
+
 inductive TypeExpr where
   /-- `number`, `bigint`, `boolean`, `string`, `void`, `undefined`, `any`,
   `unknown`, `never`, `object` or `symbol`. -/
@@ -103,8 +105,16 @@ inductive TypeExpr where
   | paren (span : Span) (inner : TypeExpr)
   /-- `[A, B]`, or `readonly [A, B]` when `readonly` is true: a tuple type. -/
   | tuple (span : Span) (readonly : Bool) (elems : List TypeExpr)
+  /-- An anonymous object type. Each field keeps its source span, readonly
+  marker, name, optional marker and type, in source order. -/
+  | object (span : Span) (fields : List TypeField)
   /-- A predicate return annotation, `parameter is target`. -/
   | predicate (span : Span) (parameter : String) (target : TypeExpr)
+
+inductive TypeField where
+  | field (span : Span) (readonly : Bool) (name : String) (optional : Bool) (type : TypeExpr)
+
+end
 
 /-- A parameter of a function or an arrow function. An optional parameter,
 `x?: T`, is `undefined` when a call leaves it out. -/
@@ -977,7 +987,7 @@ open tolean
 
 def TypeExpr.span : TypeExpr → Span
   | .keyword s _ | .null s | .literal s _ | .ref s _ _ | .array s _ | .union s _ | .paren s _
-  | .tuple s _ _ | .predicate s _ _ => s
+  | .tuple s _ _ | .object s _ | .predicate s _ _ => s
 
 def Expr.span : Expr → Span
   | .regexp s .. => s

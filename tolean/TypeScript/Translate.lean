@@ -2,6 +2,7 @@ import tolean.Sexp
 import tolean.Version
 import tolean.TypeScript.Edition
 import tolean.TypeScript.Syntax.Parser
+import tolean.TypeScript.Syntax.Source
 import tolean.TypeScript.IR
 import tolean.TypeScript.IR.Equality
 import tolean.TypeScript.Spec.Eval
@@ -313,6 +314,41 @@ end
 
 mutual
 
+/-- The free type parameters, in traversal order. -/
+def Ty.parameters : Ty → List String
+  | .param name => [name]
+  | .nullable t | .optional t | .array t | .set t => t.parameters
+  | .tuple ts | .struct _ ts => Ty.parametersList ts
+  | .map k v => k.parameters ++ v.parameters
+  | .bigint | .number | .boolean | .string | .null | .enum _ | .tagged _ _ | .literal _
+  | .date | .regexp => []
+
+def Ty.parametersList : List Ty → List String
+  | [] => []
+  | t :: ts => t.parameters ++ Ty.parametersList ts
+
+end
+
+mutual
+
+/-- The type names a declaration of this file, which Lean writes without an
+imported namespace. A field binder could hide such a name in a later field. -/
+def Ty.namesDecl (file name : String) : Ty → Bool
+  | .struct r rs => (r.file == file && r.name == name) || Ty.namesDeclList file name rs
+  | .enum r | .tagged r _ => r.file == file && r.name == name
+  | .nullable t | .optional t | .array t | .set t => t.namesDecl file name
+  | .tuple ts => Ty.namesDeclList file name ts
+  | .map k v => k.namesDecl file name || v.namesDecl file name
+  | .bigint | .number | .boolean | .string | .null | .literal _ | .param _ | .date | .regexp => false
+
+def Ty.namesDeclList (file name : String) : List Ty → Bool
+  | [] => false
+  | t :: ts => t.namesDecl file name || Ty.namesDeclList file name ts
+
+end
+
+mutual
+
 /-- `sol`, the types found so far for the type parameters of a call, with the
 ones that an argument of type `t` gives for a parameter of type `pattern`. A
 parameter of type `T | null` takes `null` without fixing `T`. -/
@@ -418,6 +454,9 @@ structure StructInfo where
   /-- The type parameters of a generic interface, which its field types name. -/
   typeParams : List String := []
   fields : List (String × Ty)
+  /-- Anonymous shapes share their identity when their resolved fields agree.
+  Named interfaces retain their existing nominal identity. -/
+  anonymous : Bool := false
   /-- For `type T = Record<K, V>`, the literal union `K`, whose strings are
   the fields. An index `r[k]` with a key of type `K` reads one. -/
   key : Option DeclRef := none
@@ -427,6 +466,40 @@ def StructInfo.ref (i : StructInfo) : DeclRef := ⟨i.file, i.name⟩
 /-- The fields of the interface where its type parameters are `args`. -/
 def StructInfo.fieldsAt (i : StructInfo) (args : List Ty) : List (String × Ty) :=
   i.fields.map fun (f, t) => (f, t.subst (i.typeParams.zip args))
+
+/-- Insert a field in name order. These structural recursors, unlike the
+well-founded library merge sort, compute inside `decide +kernel`. Objects
+have few fields, and this order is used only for shape keys. -/
+def insertInlineField (field : String × Ty) : List (String × Ty) → List (String × Ty)
+  | [] => [field]
+  | head :: tail =>
+    if field.1 ≤ head.1 then field :: head :: tail else head :: insertInlineField field tail
+
+def orderedInlineFields : List (String × Ty) → List (String × Ty)
+  | [] => []
+  | field :: fields => insertInlineField field (orderedInlineFields fields)
+
+/-- A structural key uses field names in sorted order and replaces captured
+parameters by their positions. The markers occur only in keys, never in Lean
+output or in a source scope. -/
+def inlineShapeKey (fields : List (String × Ty)) : List (String × Ty) :=
+  let fields := orderedInlineFields fields
+  let params := (fields.flatMap (·.2.parameters)).eraseDups
+  let markers := (List.range params.length).map fun n => Ty.param s!"${n}"
+  fields.map fun (name, type) => (name, type.subst (params.zip markers))
+
+/-- Instantiate a previously declared generic anonymous shape only when all
+its fields then agree exactly. This does not coerce or drop any value. -/
+def StructInfo.inlineInstance? (info : StructInfo) (fields : List (String × Ty)) : Option (List Ty) := do
+  if info.typeParams.isEmpty then none else do
+    let actual := orderedInlineFields fields
+    let pattern := orderedInlineFields info.fields
+    let solution := (pattern.zip actual).foldl (fun sol (p, a) => Ty.unify sol p.2 a.2) []
+    let args ← info.typeParams.mapM fun param => List.lookup param solution
+    if args.all Ty.bindable &&
+        orderedInlineFields (info.fieldsAt args) == actual then
+      some args
+    else none
 
 /-- A function of the program, with the file that declares it. -/
 structure FnInfo where
@@ -586,6 +659,18 @@ structure Ctx where
   src : Array Char
   lineStarts : Array Nat
   structs : List StructInfo := []
+  /-- The canonical anonymous structures that earlier annotations need. -/
+  inlineStructs : List StructInfo := []
+  /-- One prefix per source declaration, so generated structures appear after
+  their dependencies and before the declaration that first needs them. -/
+  inlinePrefixes : List (List StructInfo) := []
+  /-- Every source identifier, including local bindings and field names. -/
+  inlineReserved : List String := []
+  /-- Source dependencies whose anonymous shapes are in scope. Unrelated
+  project units must not change a file's generated types or certificates. -/
+  inlineFiles : List String := []
+  /-- Only the annotation preparation pass may allocate a new shape. -/
+  inlineCollecting : Bool := false
   /-- The type aliases that the file declares or imports. -/
   aliases : List AliasInfo := []
   /-- The literal unions that the file declares or imports. -/
@@ -631,7 +716,7 @@ ones it imports, and the exported interfaces of the files before it. A value
 of an interface that the file does not import can reach it through a field
 of one that it does. -/
 def Ctx.knownStructs (c : Ctx) : List StructInfo :=
-  c.structs ++ c.interfaces.flatMap (·.2.structs)
+  c.structs ++ c.inlineStructs ++ c.interfaces.flatMap (·.2.structs)
 
 /-- The literal unions whose strings the file may write: its own and the ones
 it imports, and the exported ones of the files before it, which can reach it
@@ -1037,6 +1122,32 @@ def mapKey (s : Span) (k : Ty) (what : String := "a map key") : TM Ty := do
   | .number | .bigint | .string | .boolean | .enum _ => return k
   | _ => reject s s!"{what} must be a number, a bigint, a string, a boolean or a literal union of strings"
 
+/-- Pick a deterministic generated identifier that no source identifier or
+earlier generated declaration can hide. The search has more candidates than
+the forbidden list has entries. -/
+def freshInlineName (span : Span) (stem : String) (forbidden : List String) : TM String :=
+  orReject ((List.range (forbidden.length + 1)).map (fun n => s!"{stem}{n + 1}") |>.find?
+    (!forbidden.contains ·)) span "could not allocate a fresh inline-object name"
+
+/-- The caller supplies the recursive translation as a monadic value. Keeping
+this wrapper outside the recursive group lets type translation recurse
+structurally, so certificates can compute it in the kernel. -/
+def translateFieldType (span : Span) (optional : Bool) (field : String) (type : TypeExpr)
+    (ordinary : TM Ty) : TM Ty := do
+  let type ← match type with
+    | .literal _ (.string value) =>
+      if optional then reject span "a tag field may not be optional" else pure (Ty.literal value)
+    | _ => ordinary
+  if type matches .optional _ then
+    reject span "a field type may not include undefined; use an optional field instead"
+  let type ← if !optional then pure type
+    else if Eval.objectPrototypeNames.contains field then
+      reject span s!"an optional field may not be named '{field}', because an object without it has Object.prototype.{field}"
+    else pure (Ty.optional type)
+  if type.hasOpenNullish then
+    reject span "optional nullable types with unresolved type parameters are not supported"
+  return type
+
 mutual
 
 /-- The type of `t` in the subset. The output writes it as `Ty.lean`. -/
@@ -1147,11 +1258,52 @@ def translateType (t : TypeExpr) : TM Ty := do
   | .tuple s _ elems =>
     if elems.length < 2 then reject s "a tuple needs two elements or more"
     return .tuple (← translateTypes elems)
+  | .object s fields =>
+    let fields ← translateInlineFields [] fields
+    let captured := ((orderedInlineFields fields).flatMap (·.2.parameters)).eraseDups
+    let key := inlineShapeKey fields
+    let ctx ← get
+    let available := ctx.knownStructs.filter fun i =>
+      i.anonymous && (i.file == ctx.file || ctx.inlineFiles.contains i.file)
+    if let some info := available.find? (inlineShapeKey ·.fields == key) then
+      return .struct info.ref (captured.map .param)
+    if let some (info, args) := available.findSome? fun info =>
+        (info.inlineInstance? fields).map (info, ·) then
+      return .struct info.ref args
+    unless ctx.inlineCollecting do
+      reject s "inline object type was not prepared before its use"
+    let forbidden := ctx.inlineReserved ++ ctx.structs.map (·.name) ++ ctx.inlineStructs.map (·.name) ++
+      ctx.aliases.map (·.name) ++ ctx.enums.map (·.name) ++ ctx.unions.map (·.name) ++
+      ctx.functions.map (·.name) ++ ctx.errorClasses.map (·.name)
+    let name ← freshInlineName s "ToleanInline" forbidden
+    let params ← captured.foldlM (init := ([] : List String)) fun params _ => do
+      let param ← freshInlineName s "ToleanInlineType" (forbidden ++ params)
+      return params ++ [param]
+    let fields := fields.map fun (field, type) =>
+      (field, type.subst (captured.zip (params.map .param)))
+    let _ ← fields.foldlM (init := ([] : List String)) fun seen (field, type) => do
+      if let some hidden := seen.find? (type.namesDecl ctx.file) then
+        reject s s!"the field '{hidden}' before this one would hide the type {hidden} in Lean; rename the field"
+      return seen ++ [field]
+    let info : StructInfo := { file := ctx.file, name, typeParams := params, fields, anonymous := true }
+    modify fun c => { c with inlineStructs := c.inlineStructs ++ [info] }
+    return .struct info.ref (captured.map .param)
   | _ => unsupportedType t
+termination_by structural t
 
 def translateTypes : List TypeExpr → TM (List Ty)
   | [] => return []
   | t :: ts => return (← translateType t) :: (← translateTypes ts)
+termination_by structural ts => ts
+
+def translateInlineFields (seen : List String) : List TypeField → TM (List (String × Ty))
+  | [] => return []
+  | .field span _ name optional type :: fields => do
+    let name ← checkName span name
+    if seen.contains name then reject span s!"'{name}' is declared twice"
+    let type ← translateFieldType span optional name type (translateType type)
+    return (name, type) :: (← translateInlineFields (name :: seen) fields)
+termination_by structural fields => fields
 
 end
 
@@ -4401,11 +4553,16 @@ def typeNames (name : String) : TypeExpr → Bool
   | .ref _ n args => n == name || typesName name args
   | .array _ e | .paren _ e => typeNames name e
   | .union _ members | .tuple _ _ members => typesName name members
+  | .object _ fields => typeFieldsName name fields
   | _ => false
 
 def typesName (name : String) : List TypeExpr → Bool
   | [] => false
   | t :: ts => typeNames name t || typesName name ts
+
+def typeFieldsName (name : String) : List TypeField → Bool
+  | [] => false
+  | .field _ _ _ _ type :: fields => typeNames name type || typeFieldsName name fields
 
 end
 
@@ -4438,23 +4595,6 @@ def Ty.namesSelfWithList (self : DeclRef) (args : List Ty) : List Ty → Bool
 
 end
 
-mutual
-
-/-- The type names a declaration `name` of the file `file`, which the output
-writes by that name alone. -/
-def Ty.namesDecl (file name : String) : Ty → Bool
-  | .struct r rs => (r.file == file && r.name == name) || Ty.namesDeclList file name rs
-  | .enum r | .tagged r _ => r.file == file && r.name == name
-  | .nullable t | .optional t | .array t => t.namesDecl file name
-  | .tuple ts => Ty.namesDeclList file name ts
-  | _ => false
-
-def Ty.namesDeclList (file name : String) : List Ty → Bool
-  | [] => false
-  | t :: ts => t.namesDecl file name || Ty.namesDeclList file name ts
-
-end
-
 def translateInterface (s : Span) (exported : Bool) (name : String) (typeParams : List String)
     (fields : List Field) : TM IR.Decl := do
   let name ← checkName s name
@@ -4473,13 +4613,7 @@ def translateInterface (s : Span) (exported : Bool) (name : String) (typeParams 
       -- them, so a field may not hide a type parameter.
       if typeParams.contains field then
         reject f.span s!"'{field}' would hide the type parameter {field} in Lean; choose another name"
-      -- A field of one string literal type is a tag, which a union reads.
-      let type ← match f.type with
-        | .literal _ (.string v) =>
-          if f.optional then reject f.span "a tag field may not be optional" else pure (Ty.literal v)
-        | t => translateType t
-      if type matches .optional _ then
-        reject f.span "a field type may not include undefined; use an optional field instead"
+      let type ← translateFieldType f.span f.optional field f.type (translateType f.type)
       -- Lean's kernel accepts a structure that refers to itself only with
       -- its own type parameters, in order.
       unless type.namesSelfWith ⟨(← get).file, name⟩ (typeParams.map .param) do
@@ -4489,15 +4623,6 @@ def translateInterface (s : Span) (exported : Bool) (name : String) (typeParams 
       let file := (← get).file
       if let some (hidden, _) := infos.find? fun (g, _) => type.namesDecl file g then
         reject f.span s!"the field '{hidden}' before this one would hide the type {hidden} in Lean; rename the field"
-      -- `f?: T`: an object may leave the field out, and a read of it then gives
-      -- `undefined`. An object without the field would inherit a property of
-      -- `Object.prototype` of the same name.
-      let type ← if !f.optional then pure type
-        else if Eval.objectPrototypeNames.contains field then
-          reject f.span s!"an optional field may not be named '{field}', because an object without it has Object.prototype.{field}"
-        else pure (Ty.optional type)
-      if type.hasOpenNullish then
-        reject f.span "optional nullable types with unresolved type parameters are not supported"
       pure (infos ++ [(field, type)])
   modify fun c => { c with
     typeParams := [], structs := c.structs ++ [{ file := c.file, name, exported, typeParams, fields := infos }] }
@@ -4576,9 +4701,10 @@ def translateStringEnum (s : Span) (exported : Bool) (name : String) (members : 
 
 /-- The interfaces of a union `A | B` of interfaces that the file declares or
 imports, or none when a member is something else. -/
-def unionMembers (structs : List StructInfo) : TypeExpr → Option (List StructInfo)
-  | .union _ members => members.mapM fun
-    | .ref _ n [] => structs.find? fun i => i.name == n && i.typeParams.isEmpty
+def unionMembers (ctx : Ctx) : TypeExpr → Option (List StructInfo)
+  | .union _ members => members.mapM fun member =>
+    match translateType member ctx with
+    | .ok (.struct ref []) _ => ctx.knownStructs.find? (·.ref == ref)
     | _ => none
   | _ => none
 
@@ -4631,7 +4757,9 @@ def translatePrimitiveUnion (s : Span) (exported : Bool) (name : String) (member
 /-- `t` is a union of names only, such as `A | B`, which a type alias declares
 as a union of interfaces. -/
 def isNameUnion : TypeExpr → Bool
-  | .union _ members => members.all (· matches .ref _ _ [])
+  | .union _ members => members.all fun
+    | .ref _ _ [] | .object _ _ => true
+    | _ => false
   | _ => false
 
 /-- The key type and the value type of `Record<K, V>`, or of
@@ -4676,7 +4804,7 @@ def translateAlias (s : Span) (exported : Bool) (name : String) (typeParams : Li
     reject s "a union of string literals, primitive types or interfaces, or a Record, may not have type parameters"
   if let some members := stringLiterals type then
     return ← translateEnum s exported name members
-  if let some members := unionMembers (← get).structs type then
+  if let some members := unionMembers (← get) type then
     return ← translateUnion s exported name members
   if let some members := primitiveMembers type then
     return ← translatePrimitiveUnion s exported name members
@@ -4790,11 +4918,16 @@ def typeUsesNumber : TypeExpr → Bool
   | .ref _ name args => isNumberName name || typesUseNumber args
   | .array _ e | .paren _ e => typeUsesNumber e
   | .union _ members | .tuple _ _ members => typesUseNumber members
+  | .object _ fields => typeFieldsUseNumber fields
   | _ => false
 
 def typesUseNumber : List TypeExpr → Bool
   | [] => false
   | t :: ts => typeUsesNumber t || typesUseNumber ts
+
+def typeFieldsUseNumber : List TypeField → Bool
+  | [] => false
+  | .field _ _ _ _ type :: fields => typeUsesNumber type || typeFieldsUseNumber fields
 
 end
 
@@ -5091,6 +5224,128 @@ def exportListError? (c : Ctx) (s : Span) (names : List ImportName) (source : Op
   | some path => reexportsError? c s names path
   | none => exportsError? c names
 
+mutual
+
+/-- Prepare only the anonymous subtypes. Ordinary type names still resolve
+when their source declaration translates, in its original scope. -/
+def prepareInlineType : TypeExpr → TM Unit
+  | .object span fields => discard (translateType (.object span fields))
+  | .array _ type | .paren _ type | .predicate _ _ type => prepareInlineType type
+  | .ref _ _ types | .union _ types | .tuple _ _ types => prepareInlineTypes types
+  | .keyword _ _ | .null _ | .literal _ _ => pure ()
+
+def prepareInlineTypes : List TypeExpr → TM Unit
+  | [] => pure ()
+  | type :: types => do prepareInlineType type; prepareInlineTypes types
+
+end
+
+def prepareInlineParams (params : List Param) : TM Unit :=
+  params.forM fun p => p.type.forM prepareInlineType
+
+mutual
+
+def prepareInlineExpr : Expr → TM Unit
+  | .ident _ _ | .number _ _ | .bigint _ _ | .string _ _ | .regexp _ _ _
+  | .bool _ _ | .null _ => pure ()
+  | .array _ exprs => prepareInlineExprs exprs
+  | .object _ props => prepareInlineProperties props
+  | .paren _ expr | .member _ expr _ | .optMember _ expr _ | .unary _ _ expr
+  | .prefix _ _ expr | .postfix _ _ expr | .asConst _ expr | .spread _ expr => prepareInlineExpr expr
+  | .index _ a b | .optIndex _ a b | .binary _ _ a b | .assign _ _ a b => do
+    prepareInlineExpr a; prepareInlineExpr b
+  | .call _ callee args => do prepareInlineExpr callee; prepareInlineExprs args
+  | .cond _ a b c => do prepareInlineExpr a; prepareInlineExpr b; prepareInlineExpr c
+  | .arrow _ _ params body => do prepareInlineParams params; prepareInlineExpr body
+  | .satisfies _ expr type => do prepareInlineExpr expr; prepareInlineType type
+  | .new _ _ types args => do prepareInlineTypes types; prepareInlineExprs args
+
+def prepareInlineExprs : List Expr → TM Unit
+  | [] => pure ()
+  | expr :: exprs => do prepareInlineExpr expr; prepareInlineExprs exprs
+
+def prepareInlineProperties : List Property → TM Unit
+  | [] => pure ()
+  | .shorthand _ _ :: props => prepareInlineProperties props
+  | .keyValue _ _ expr :: props | .spread _ expr :: props => do
+    prepareInlineExpr expr; prepareInlineProperties props
+
+end
+
+def prepareInlineVar (decl : VarDecl) : TM Unit := do
+  decl.type.forM prepareInlineType
+  decl.init.forM prepareInlineExpr
+
+mutual
+
+def prepareInlineStmt : Stmt → TM Unit
+  | .varDecl _ decl => prepareInlineVar decl
+  | .destructure _ _ _ type expr => do type.forM prepareInlineType; prepareInlineExpr expr
+  | .exprStmt _ expr | .throwStmt _ expr => prepareInlineExpr expr
+  | .returnStmt _ expr => expr.forM prepareInlineExpr
+  | .ifStmt _ test yes no => do
+    prepareInlineExpr test
+    prepareInlineStmt yes
+    match no with
+    | none => pure ()
+    | some no => prepareInlineStmt no
+  | .forOfStmt _ _ _ expr body | .forOfPattern _ _ _ expr body | .whileStmt _ expr body => do
+    prepareInlineExpr expr; prepareInlineStmt body
+  | .forStmt _ init test update body => do
+    init.forM prepareInlineVar
+    test.forM prepareInlineExpr
+    update.forM prepareInlineExpr
+    prepareInlineStmt body
+  | .block _ body => prepareInlineStmts body
+  | .switchStmt _ expr clauses => do prepareInlineExpr expr; prepareInlineClauses clauses
+  | .funDecl _ _ params args ret body => do
+    let outer := (← get).typeParams
+    modify fun c => { c with typeParams := params ++ outer.filter (!params.contains ·) }
+    prepareInlineParams args
+    ret.forM prepareInlineType
+    prepareInlineStmt body
+    modify fun c => { c with typeParams := outer }
+  | .breakStmt _ | .continueStmt _ | .empty _ => pure ()
+
+def prepareInlineStmts : List Stmt → TM Unit
+  | [] => pure ()
+  | stmt :: stmts => do prepareInlineStmt stmt; prepareInlineStmts stmts
+
+def prepareInlineClauses : List (Option Expr × List Stmt) → TM Unit
+  | [] => pure ()
+  | (test, body) :: clauses => do
+    test.forM prepareInlineExpr; prepareInlineStmts body; prepareInlineClauses clauses
+
+end
+
+def prepareInlineDecl : Decl → TM Unit
+  | .function _ _ _ params args ret body => do
+    modify fun c => { c with typeParams := params }
+    prepareInlineParams args
+    ret.forM prepareInlineType
+    prepareInlineStmt body
+  | .interface _ _ _ params fields => do
+    modify fun c => { c with typeParams := params }
+    fields.forM fun f => prepareInlineType f.type
+  | .typeAlias _ _ _ params type => do
+    modify fun c => { c with typeParams := params }
+    prepareInlineType type
+  | .errorClass _ _ _ ctor => ctor.forM fun (params, expr) => do
+    prepareInlineParams (params.map (·.param))
+    prepareInlineExpr expr
+  | .exportedVar _ decl => prepareInlineVar decl
+  | .stmt stmt => prepareInlineStmt stmt
+  | .import _ _ _ | .exports _ _ _ | .enum _ _ _ _ => pure ()
+
+/-- Publish the prepared shapes, but no speculative type scope or other
+translator state. The source tree and all runtime bindings stay unchanged. -/
+def prepareInline (decl : Decl) : TM Unit := do
+  let shapes ← isolated do
+    modify fun c => { c with inlineCollecting := true }
+    prepareInlineDecl decl
+    return (← get).inlineStructs
+  modify fun c => { c with inlineStructs := shapes }
+
 /-- One declaration: an output declaration, or none for an import, an
 export list or an error class. -/
 def translateDecl (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr)))
@@ -5113,6 +5368,28 @@ def translateDecl (thr : String → Bool) (cls : String → Option (Option (List
     return none
   | d => reject d.span "only imports, interfaces, types, enums and functions may appear at top level"
 
+/-- The new structures precede the declaration that first needs them. Type
+preparation does not change the declaration that the semantic proof reads. -/
+def translateDeclWithInline (thr : String → Bool) (cls : String → Option (Option
+    (List CtorParam × Expr))) (guards : List (String × Eval.GuardTest)) (classes : List ClassInfo)
+    (decl : Decl) : TM (Option IR.Decl) := do
+  let before := (← get).inlineStructs.length
+  prepareInline decl
+  let result ← translateDecl thr cls guards classes decl
+  modify fun c => { c with inlinePrefixes := c.inlinePrefixes ++ [c.inlineStructs.drop before] }
+  return result
+
+def StructInfo.inlineDecl (info : StructInfo) : IR.Decl :=
+  .struct info.name info.typeParams (info.fields.map fun (name, type) => (name, type.lean))
+
+/-- Interleave the prepared structures without changing any function. The
+empty-prefix case also retains every declaration. -/
+def insertInlineDecls : List (Option IR.Decl) → List (List StructInfo) → List IR.Decl
+  | [], _ => []
+  | decl :: decls, [] => decl.toList ++ insertInlineDecls decls []
+  | decl :: decls, prefixDecls :: prefixes =>
+    prefixDecls.map StructInfo.inlineDecl ++ decl.toList ++ insertInlineDecls decls prefixes
+
 /-- The names of the export lists of `m` that name declarations of the file:
 `export { a, type B }`. -/
 def exportListed (m : Module) : List ImportName :=
@@ -5130,11 +5407,19 @@ def duplicateExport? (m : Module) : Option ImportName :=
 from one syntax tree to another: `translate` parses the source before it and
 prints the result after it. -/
 def translateDecls (m : Module) : TM (List IR.Decl) := do
-  modify fun c => { c with borrows := Eval.moduleBorrows m }
+  let reserved := m.lines.flatMap fun line => line.2.flatten.filterMap fun
+    | .ident name => some name
+    | _ => none
+  modify fun c => { c with borrows := Eval.moduleBorrows m, inlineReserved := reserved, inlinePrefixes := [] }
   if let some n := duplicateExport? m then reject n.span s!"'{n.name}' is in two export lists"
+  m.decls.forM fun decl => do
+    if decl matches .errorClass _ _ _ _ then prepareInline decl else pure ()
+  let errorShapes := (← get).inlineStructs.map StructInfo.inlineDecl
   let types ← translateErrorTypes m
   let classes := (← get).errorClasses
-  return types ++ (← m.decls.mapM (translateDecl (Eval.mayThrow m) (Eval.errorClassOf m) (Eval.guardTests m) classes)).filterMap id
+  let decls ← m.decls.mapM
+    (translateDeclWithInline (Eval.mayThrow m) (Eval.errorClassOf m) (Eval.guardTests m) classes)
+  return errorShapes ++ types ++ insertInlineDecls decls (← get).inlinePrefixes
 
 mutual
 
@@ -5161,7 +5446,7 @@ function names, directly or through the fields of an interface or the
 members of a union. A type names only the ones before it, so as many rounds
 as the file has types find them all. -/
 def Ctx.reachable (c : Ctx) : List DeclRef :=
-  let own := c.structs.filter (·.file == c.file)
+  let own := (c.structs ++ c.inlineStructs).filter (·.file == c.file)
   let ownUnions := c.unions.filter (·.file == c.file)
   let roots := (c.aliases.filter fun a => a.exported && a.file == c.file).flatMap (·.type.declRefs) ++
     (own.filter (·.exported)).map (·.ref) ++
@@ -5179,7 +5464,7 @@ The private ones keep `exported := false`, so no file can import them by
 name. -/
 def Ctx.reachableStructs (c : Ctx) : List StructInfo :=
   let reached := c.reachable
-  c.structs.filter fun i => i.file == c.file && (i.exported || reached.contains i.ref)
+  (c.structs ++ c.inlineStructs).filter fun i => i.file == c.file && (i.exported || reached.contains i.ref)
 
 /-- The file's literal unions that a file importing from it needs the strings
 of. -/
@@ -5302,6 +5587,7 @@ def translateFile (file source : String) (target : Edition := .default)
         (f, { ns := d.ns, generic := d.interface.usesNumber, typeParam := d.interface.numberVar }) }
   let ctx : Ctx :=
     { file, target, src, lineStarts := lineStarts src, fuel := 4 * src.size + 4,
+      inlineFiles := imported.flatMap fun (f, d) => f :: d.imports,
       interfaces := deps.map fun (f, d) => (f, d.interface) }
   match (translateDecls m).run ctx with
   | .error e _ => .error e
