@@ -1,7 +1,7 @@
 {
-  // Tolean reads the setting next to tolean.json, not the fallback above.
+  // The later base supplies bundler mode, not the project fallback.
+  "extends": ["./config/node.json", "./config/middle"],
   "compilerOptions": {
-    "moduleResolution": "Bundler",
     "module": "preserve",
     "allowImportingTsExtensions": true,
     "noEmit": true,

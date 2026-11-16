@@ -157,7 +157,7 @@ def units (config : Json) (files : List String) : List Job := Id.run do
   return out
 
 /-- Resolve the project-wide tsconfig setting before per-file translation. -/
-def configuredUnits (config : Json) (files : List String) (tsconfig : Option String) :
+def configuredUnits (config : Json) (files : List String) (tsconfig : Option Json) :
     Except String (List Job) :=
   (units config files).mapM fun
     | .typescript s f => do
@@ -372,7 +372,13 @@ def unitWrites (u : Job) (read : String → Except String String) (result : Exce
 are relative to the project root, which must be the working directory. -/
 def plan (config : Json) : IO (List Write) := do
   let files ← projectFiles "."
-  let tsconfig ← if files.contains "tsconfig.json" then some <$> IO.FS.readFile "tsconfig.json" else pure none
+  let hasTypeScript := (units config files).any (· matches .typescript ..)
+  let tsconfig ← if hasTypeScript && files.contains "tsconfig.json" then do
+      let loaded ← (TypeScript.ModuleResolution.loadOptions files
+        (fun path => (liftM (IO.FS.readFile path) : ExceptT String IO String))
+        (files.length + 1) [] "tsconfig.json").run
+      pure (some (← ok loaded))
+    else pure none
   let jobs ← ok (configuredUnits config files tsconfig)
   let texts ← (jobs.flatMap Job.sources).eraseDups.mapM fun (f : String) => do
     return (f, ← IO.FS.readFile f)
@@ -404,11 +410,16 @@ def translateWorkspace (input : String) : Except String Json := do
   let some configText := texts.lookup "tolean.json"
     | throw "the workspace has no tolean.json"
   let config ← (Json.parse configText).mapError (s!"tolean.json: {·}")
-  let jobs ← configuredUnits config (texts.map (·.1)) (texts.lookup "tsconfig.json")
   let read (f : String) : Except String String :=
     match texts.lookup f with
     | some t => .ok t
     | none => .error s!"{f}: no such file"
+  let hasTypeScript := (units config (texts.map (·.1))).any (· matches .typescript ..)
+  let tsconfig ← if hasTypeScript && (texts.lookup "tsconfig.json").isSome then
+      some <$> TypeScript.ModuleResolution.loadOptions (texts.map (·.1)) read
+        (texts.length + 1) [] "tsconfig.json"
+    else pure none
+  let jobs ← configuredUnits config (texts.map (·.1)) tsconfig
   let results := translateAll jobs read (texts.map (·.1))
   -- Report the units in the project's order, whatever order they ran in.
   let ordered := jobs.filterMap fun j => (results.find? fun (k, _) => k.sources == j.sources).map

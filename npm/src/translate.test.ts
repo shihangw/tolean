@@ -1,4 +1,9 @@
 import { describe, expect, test } from 'vitest';
+import { spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 
 import { TranslateError, translateSource, translateWorkspace } from './translate.ts';
 
@@ -83,12 +88,93 @@ describe('translateWorkspace', () => {
     expect(units.every((u) => u.kind === 'ok')).toBe(true);
   });
 
-  test('refuses an inherited resolution mode instead of guessing it', async () => {
-    await expect(translateWorkspace([
+  const base = '{"compilerOptions":{"moduleResolution":"bundler","module":"esnext","strict":true,"noEmit":true}}';
+  const inheritanceCases = [
+    { name: 'issue 250', configs: { 'tsconfig.json': '{"extends":"./base.json","include":["src"]}', 'base.json': base }, mode: 'bundler', path: './lib' },
+    { name: 'inherited bundler with .js', configs: { 'tsconfig.json': '{"extends":"./base.json"}', 'base.json': base }, mode: 'bundler', path: './lib.js' },
+    { name: 'two bases in a chain', configs: { 'tsconfig.json': '{"extends":"./config/middle"}', 'config/middle.json': '{"extends":"../base.json"}', 'base.json': base }, mode: 'bundler', path: './lib' },
+    { name: 'later array base wins', configs: { 'tsconfig.json': '{"extends":["./node.json","./base.json"]}', 'node.json': '{"compilerOptions":{"moduleResolution":"node16"}}', 'base.json': base }, mode: 'bundler', path: './lib' },
+    { name: 'child overrides moduleResolution', configs: { 'tsconfig.json': '{"extends":"./base.json","compilerOptions":{"moduleResolution":"nodenext","module":"nodenext"}}', 'base.json': base }, mode: 'nodenext', path: './lib.js' },
+    { name: 'shared ancestor is not a cycle', configs: { 'tsconfig.json': '{"extends":["./left.json","./right.json"]}', 'left.json': '{"extends":"./base.json","compilerOptions":{"moduleResolution":"node16"}}', 'right.json': '{"extends":"./base.json"}', 'base.json': base }, mode: 'bundler', path: './lib' },
+  ];
+
+  function showConfig(files: { path: string; text: string }[]) {
+    const dir = mkdtempSync(join(tmpdir(), 'tolean-extends-'));
+    try {
+      for (const file of files) {
+        const path = join(dir, file.path);
+        mkdirSync(dirname(path), { recursive: true });
+        writeFileSync(path, file.text);
+      }
+      return spawnSync(process.execPath, [createRequire(import.meta.url).resolve('typescript/bin/tsc'), '--showConfig', '-p', dir], { encoding: 'utf8' });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  test.each(inheritanceCases)('merges extends like tsc: $name', async ({ configs, mode, path }) => {
+    const files = [
+      { path: 'tolean.json', text: '{"typescript":{"sources":["src/*.ts"],"moduleResolution":"classic"}}' },
+      ...Object.entries(configs).map(([path, text]) => ({ path, text })),
+      { path: 'src/main.ts', text: `import { double } from "${path}"; export function quadruple(n: number): number { return double(double(n)); }` },
+      { path: 'src/lib.ts', text: 'export function double(n: number): number { return n * 2; }' },
+    ];
+    const shown = showConfig(files);
+    expect(shown.status, shown.stdout + shown.stderr).toBe(0);
+    expect(JSON.parse(shown.stdout).compilerOptions.moduleResolution).toBe(mode);
+    const units = await translateWorkspace(files);
+    expect(units.every((u) => u.kind === 'ok')).toBe(true);
+    expect(units.find((u) => u.kind === 'ok' && u.output === 'src/Main.lean')).toMatchObject({
+      kind: 'ok', lean: expect.stringContaining('import src.Lib'),
+    });
+  });
+
+  test.each(['moduleSuffixes', 'rootDirs'])('refuses inherited %s after merging', async (key) => {
+    const files = [
+      { path: 'tolean.json', text: '{"typescript":{"sources":["*.ts"]}}' },
+      { path: 'tsconfig.json', text: '{"extends":"./base.json","compilerOptions":{"moduleResolution":"bundler"}}' },
+      { path: 'base.json', text: JSON.stringify({ compilerOptions: { moduleResolution: 'bundler', [key]: ['.native', ''] } }) },
+      { path: 'lib.ts', text: source },
+    ];
+    const shown = showConfig(files);
+    expect(shown.status, shown.stdout + shown.stderr).toBe(0);
+    expect(JSON.parse(shown.stdout).compilerOptions[key]).toHaveLength(2);
+    await expect(translateWorkspace(files)).rejects.toThrow(`${key} is not supported`);
+  });
+
+  test('detects config cycles like tsc', async () => {
+    const files = [
       { path: 'tolean.json', text: '{"typescript":{"sources":["*.ts"]}}' },
       { path: 'tsconfig.json', text: '{"extends":"./base.json"}' },
+      { path: 'base.json', text: '{"extends":"./nested/../tsconfig.json"}' },
       { path: 'lib.ts', text: source },
-    ])).rejects.toThrow(/inherited moduleResolution/);
+    ];
+    const shown = showConfig(files);
+    expect(shown.status).not.toBe(0);
+    expect(shown.stdout).toContain('Circularity');
+    await expect(translateWorkspace(files)).rejects.toThrow(/extends cycle.*tsconfig.json.*base.json.*tsconfig.json/);
+  });
+
+  test.each([
+    ['{"extends":"./missing.json"}', /has no config file/],
+    ['{"extends":"@tsconfig/node22"}', /package or absolute extends/],
+    ['{"extends":"../base.json"}', /leaves the project/],
+    ['{"extends":["./base.json",42]}', /array of strings/],
+  ])('refuses unsupported extends: %s', async (text, error) => {
+    await expect(translateWorkspace([
+      { path: 'tolean.json', text: '{"typescript":{"sources":["*.ts"]}}' },
+      { path: 'tsconfig.json', text },
+      { path: 'lib.ts', text: source },
+    ])).rejects.toThrow(error);
+  });
+
+  test('reports invalid base JSON even when the child overrides its options', async () => {
+    await expect(translateWorkspace([
+      { path: 'tolean.json', text: '{"typescript":{"sources":["*.ts"]}}' },
+      { path: 'tsconfig.json', text: '{"extends":"./base.json","compilerOptions":{"moduleResolution":"bundler"}}' },
+      { path: 'base.json', text: '{"compilerOptions":42}' },
+      { path: 'lib.ts', text: source },
+    ])).rejects.toThrow(/base.json: compilerOptions must be an object/);
   });
 
   test.each(['{} /*', '{"compilerOptions":{"moduleResolution":42}}', '[]', '{"compilerOptions":42}'])(
