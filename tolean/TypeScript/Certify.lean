@@ -496,10 +496,11 @@ def hasTaggedConditionScope : IR.Body → Bool
   | .fold _ _ body _ rest _ => hasTaggedConditionScope body || hasTaggedConditionScope rest
   | .value _ | .exit .. | .state _ | .yield .. | .done .. | .throw _ => false
 
-/-- The body of the `for…of` statement at `span`. -/
+/-- The body of the loop statement at `span`. -/
 def loopBody (s : Stmt) (span : Span) : Option Stmt :=
   (stmtsOf s).findSome? fun
     | .forOfStmt sp _ _ _ body | .forOfPattern sp _ _ _ body => if sp == span then some body else none
+    | .forStmt sp _ _ _ body => if sp == span then some body else none
     | _ => none
 
 /-- The tactics that split the variable `name` of type `t`, so that each case
