@@ -603,6 +603,15 @@ test('the interpreter binds a parameter that a call leaves out to undefined', as
         'export function f(): bigint { return g(); }',
       args: [],
     },
+    ...[
+      'value === null || false',
+      'value !== null && true',
+      'value === undefined || false',
+      'value !== undefined && true',
+    ].flatMap((expression) => [[], [undefined], [null], [5n]].map((args) => ({
+      source: `export function f(value?: bigint | null): boolean { return ${expression}; }`,
+      args,
+    }))),
     ...[[], [null], [5n]].map((args) => ({
       source: 'export function f(x?: bigint | null): bigint { if (x === undefined) return 0n; if (x === null) return 1n; return x; }',
       args,

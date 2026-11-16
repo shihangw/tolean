@@ -338,25 +338,31 @@ end
 
 mutual
 
-/-- Alias expansion collapses repeated null unions. Function type
+/-- Alias expansion collapses repeated null unions and refuses mixed null unions.
+Function type
 substitution keeps the wrapper shape of the generic Lean function. -/
-def Ty.normalizeNulls : Ty → Ty
-  | .nullable t =>
-    match t.normalizeNulls with
-    | .null => .null
-    | .nullable value => .nullable value
-    | value => .nullable value
-  | .optional t => .optional t.normalizeNulls
-  | .array t => .array t.normalizeNulls
-  | .tuple ts => .tuple (Ty.normalizeNullsList ts)
-  | .struct ref args => .struct ref (Ty.normalizeNullsList args)
-  | .map k v => .map k.normalizeNulls v.normalizeNulls
-  | .set t => .set t.normalizeNulls
-  | t => t
+def Ty.normalizeNulls : Ty → Option Ty
+  | .nullable t => do
+    match ← t.normalizeNulls with
+    | .optional _ => none
+    | .null => some .null
+    | .nullable value => some (.nullable value)
+    | value => some (.nullable value)
+  | .optional t => do
+    match ← t.normalizeNulls with
+    | .nullable _ | .null => none
+    | .optional value => some (.optional value)
+    | value => some (.optional value)
+  | .array t => return .array (← t.normalizeNulls)
+  | .tuple ts => return .tuple (← Ty.normalizeNullsList ts)
+  | .struct ref args => return .struct ref (← Ty.normalizeNullsList args)
+  | .map k v => return .map (← k.normalizeNulls) (← v.normalizeNulls)
+  | .set t => return .set (← t.normalizeNulls)
+  | t => some t
 
-def Ty.normalizeNullsList : List Ty → List Ty
-  | [] => []
-  | t :: ts => t.normalizeNulls :: Ty.normalizeNullsList ts
+def Ty.normalizeNullsList : List Ty → Option (List Ty)
+  | [] => some []
+  | t :: ts => return (← t.normalizeNulls) :: (← Ty.normalizeNullsList ts)
 
 end
 
@@ -1090,7 +1096,9 @@ def translateType (t : TypeExpr) : TM Ty := do
       return .struct info.ref args
     | none, some info =>
       unless info.typeParams.length == 1 do reject t.span (typeArgsMessage name info.typeParams.length)
-      return (info.type.subst (info.typeParams.zip args)).normalizeNulls
+      match (info.type.subst (info.typeParams.zip args)).normalizeNulls with
+      | some type => return type
+      | none => reject t.span "a type may not include both null and undefined"
     | none, none => unsupportedType t
   | .ref _ name [] =>
     let ctx ← get
@@ -1131,7 +1139,9 @@ def translateType (t : TypeExpr) : TM Ty := do
     | none, some info =>
       unless info.typeParams.length == tys.length do
         reject t.span (typeArgsMessage name info.typeParams.length)
-      return (info.type.subst (info.typeParams.zip tys)).normalizeNulls
+      match (info.type.subst (info.typeParams.zip tys)).normalizeNulls with
+      | some type => return type
+      | none => reject t.span "a type may not include both null and undefined"
     | none, none => unsupportedType t
   -- A tuple. Lean has no tuple of one element.
   | .tuple s _ elems =>

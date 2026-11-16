@@ -1336,7 +1336,7 @@ def Expr.print (names : Names) : Expr T E → String
     let some_ := leanName names "some"
     let nullish := leanName names "JSNullish"
     let scrutinee := names.matchBinder ++ name
-    let noneBinding := s!"(let {name} := {none_}; {whenValue.print names})"
+    let noneBinding := s!"(let {name} := {leanName names "Option"}.join {name}; {whenValue.print names})"
     let someBinding := s!"(let {name} := {some_} {name}; {whenValue.print names})"
     match kind with
     | .nullable | .optional =>

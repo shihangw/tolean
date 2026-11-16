@@ -40,6 +40,22 @@ export function isStrictUndefined(limit?: bigint | null): boolean {
   return limit === undefined;
 }
 
+export function nullOr(value?: bigint | null): boolean {
+  return value === null || false;
+}
+
+export function notNullAnd(value?: bigint | null): boolean {
+  return value !== null && true;
+}
+
+export function undefinedOr(value?: bigint | null): boolean {
+  return value === undefined || false;
+}
+
+export function notUndefinedAnd(value?: bigint | null): boolean {
+  return value !== undefined && true;
+}
+
 export function looseNarrow(limit?: bigint | null): bigint {
   if (limit != null) return limit;
   return 0n;

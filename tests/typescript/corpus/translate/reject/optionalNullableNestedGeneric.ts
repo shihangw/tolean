@@ -1,4 +1,4 @@
-// expect: 5:3 optional nullable types with unresolved type parameters are not supported
+// expect: 5:34 a type may not include both null and undefined
 type Maybe<T> = T | null;
 type Optional<T> = T | undefined;
 export interface Box<T> {
