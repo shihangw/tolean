@@ -404,13 +404,34 @@ def leadingBindings : IR.Body → List (String × IR.Expr)
   | .let name value rest => (name, value) :: leadingBindings rest
   | _ => []
 
-/-- A call's nullable branches, followed by its actual arguments. -/
-abbrev ConditionalCall := List (String × Bool) × List IR.Expr
+/-- A call's nullish branches, followed by its actual arguments. -/
+abbrev ConditionalCall := List (String × Bool × IR.MatchNullKind) × List IR.Expr
 
-def guardCondition (guards : List (String × Bool)) (condition : String) : String :=
-  guards.foldr (fun (n, nonnull) rest =>
-    if nonnull then s!"(match {n} with | .none => _root_.True | .some {n} => {rest})"
-    else s!"(match {n} with | .none => {rest} | .some _ => _root_.True)") condition
+def guardCondition (r : Refs) (guards : List (String × Bool × IR.MatchNullKind))
+    (condition : String) : String :=
+  guards.foldr (fun (n, valueBranch, kind) rest =>
+    match kind with
+    | .nullable | .optional =>
+      if valueBranch then s!"(match {n} with | .none => _root_.True | .some {n} => {rest})"
+      else s!"(match {n} with | .none => {rest} | .some _ => _root_.True)"
+    | .nullish =>
+      let nullish := r.write "JSNullish" "tolean.TypeScript.JSNullish"
+      if valueBranch then
+        s!"(match {n} with | {nullish}.undefined => _root_.True | {nullish}.null => _root_.True | {nullish}.value {n} => {rest})"
+      else
+        s!"(match {n} with | {nullish}.undefined => {rest} | {nullish}.null => {rest} | {nullish}.value _ => _root_.True)"
+    | .strictNull =>
+      let nullish := r.write "JSNullish" "tolean.TypeScript.JSNullish"
+      if valueBranch then
+        s!"(match {n} with | {nullish}.undefined => (let {n} := {nullish}.undefined; {rest}) | {nullish}.null => _root_.True | {nullish}.value {n} => (let {n} := {nullish}.value {n}; {rest}))"
+      else
+        s!"(match {n} with | {nullish}.undefined => _root_.True | {nullish}.null => {rest} | {nullish}.value _ => _root_.True)"
+    | .strictUndefined =>
+      let nullish := r.write "JSNullish" "tolean.TypeScript.JSNullish"
+      if valueBranch then
+        s!"(match {n} with | {nullish}.undefined => _root_.True | {nullish}.null => (let {n} := {nullish}.null; {rest}) | {nullish}.value {n} => (let {n} := {nullish}.value {n}; {rest}))"
+      else
+        s!"(match {n} with | {nullish}.undefined => {rest} | {nullish}.null => _root_.True | {nullish}.value _ => _root_.True)") condition
 
 mutual
 /-- Calls outside callback bodies. A source-call count below checks that no
@@ -423,9 +444,9 @@ def conditionCalls (callee : String) : IR.Expr → List ConditionalCall
   | .isNone e | .isSome e | .propNot e | .inject _ _ e | .push _ e | .update _ _ e =>
     conditionCalls callee e
   | .ite a b c => conditionCalls callee a ++ conditionCalls callee b ++ conditionCalls callee c
-  | .matchNull n a b _ =>
-    (conditionCalls callee a).map (fun (guards, args) => ((n, false) :: guards, args)) ++
-      (conditionCalls callee b).map (fun (guards, args) => ((n, true) :: guards, args))
+  | .matchNull n a b kind =>
+    (conditionCalls callee a).map (fun (guards, args) => ((n, false, kind) :: guards, args)) ++
+      (conditionCalls callee b).map (fun (guards, args) => ((n, true, kind) :: guards, args))
   | .intOp _ a b | .order _ a b | .division _ a b | .eq a b | .ne a b
   | .propAnd a b | .propOr a b | .and a b | .or a b | .coalesce a b _ =>
     conditionCalls callee a ++ conditionCalls callee b
@@ -448,9 +469,9 @@ def bodyConditionCalls (callee : String) : IR.Body → List ConditionalCall
   | .let _ e rest | .letTuple _ e rest => conditionCalls callee e ++ bodyConditionCalls callee rest
   | .letState _ a b => bodyConditionCalls callee a ++ bodyConditionCalls callee b
   | .ite c a b => conditionCalls callee c ++ bodyConditionCalls callee a ++ bodyConditionCalls callee b
-  | .matchNull n _ a b =>
-    (bodyConditionCalls callee a).map (fun (guards, args) => ((n, false) :: guards, args)) ++
-      (bodyConditionCalls callee b).map (fun (guards, args) => ((n, true) :: guards, args))
+  | .matchNull n _ a b kind =>
+    (bodyConditionCalls callee a).map (fun (guards, args) => ((n, false, kind) :: guards, args)) ++
+      (bodyConditionCalls callee b).map (fun (guards, args) => ((n, true, kind) :: guards, args))
   -- Tagged branches rebind the scrutinee at a narrower type.
   -- Do not lift their conditions into the original parameter scope.
   | .matchTag .. => []
@@ -878,14 +899,14 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           unless actuals.length == formals.length do
             throw s!"{file}: missing callback argument for a sort condition in {name}"
           let available := param :: info.scope.map (·.1)
-          unless guards.all (fun (n, _) => available.contains n) &&
+          unless guards.all (fun (n, _, _) => available.contains n) &&
               (actuals.zip formals).all (fun (e, _, ty) =>
               (sortInputNames e).all available.contains &&
               (!(ty matches .list _) || sortInputShape e)) do
             throw s!"{file}: callback sort arguments must be reachable from its element or captured inputs in {name}"
           for (stateNames, _, _, _, _) in enclosingLoopsOf info.span do
             if actuals.any (fun e => (sortInputNames e).any stateNames.contains) ||
-                guards.any (fun (n, _) => stateNames.contains n) then
+                guards.any (fun (n, _, _) => stateNames.contains n) then
               throw s!"{file}: a sort condition depends on changing loop state in {name}"
           callbackCalls := callee :: callbackCalls
           for (_, ty) in formals do
@@ -896,7 +917,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           for condition in conditions do
             let binders := " ".intercalate (formals.map fun (p, t) => s!"({p} : {t.print names})")
             let arguments := " ".intercalate (actuals.map fun e => s!"({e.print names})")
-            childConditions := childConditions ++ [guardCondition guards s!"((fun {binders} => {condition}) {arguments})"]
+            childConditions := childConditions ++ [guardCondition r guards s!"((fun {binders} => {condition}) {arguments})"]
       unless childConditions.isEmpty || (method matches .list .map | .list .filter) do
         throw s!"{file}: sort conditions in this callback need an element-restricted link lemma in {name}"
       if comparesNumbers cbBody || !childConditions.isEmpty then
@@ -1237,7 +1258,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           let ancestorState := (loopsOf outBody).flatMap fun (ns, _, b, _, _) =>
             if (loopsOf b).any (fun (_, _, _, child, _) => child.span == info.span) then ns else []
           unless actuals.length == formals.length &&
-              guards.all (fun (n, _) => available.contains n && !ancestorState.contains n) &&
+              guards.all (fun (n, _, _) => available.contains n && !ancestorState.contains n) &&
               actuals.all (fun e => (sortInputNames e).all available.contains &&
                 !(sortInputNames e).any ancestorState.contains) do
             throw s!"{file}: a loop sort condition depends on changing state or body locals in {name}"
@@ -1250,7 +1271,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           for condition in calleeConditions do
             let binders := " ".intercalate (formals.map fun (p, t) => s!"({p} : {t.print names})")
             let arguments := " ".intercalate (actuals.map fun e => s!"({e.print names})")
-            conditions := conditions ++ [guardCondition guards s!"((fun {binders} => {condition}) {arguments})"]
+            conditions := conditions ++ [guardCondition r guards s!"((fun {binders} => {condition}) {arguments})"]
       let restricted := !conditions.isEmpty
       if restricted then
         let outerScope := match parentLoop with
@@ -1448,7 +1469,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       for (guards, actuals) in calls do
         unless actuals.length == formals.length do
           throw s!"{file}: missing argument for the sort precondition in {name}"
-        unless guards.all (fun (n, _) => outParams.any (fun (p, _) => p == n)) &&
+        unless guards.all (fun (n, _, _) => outParams.any (fun (p, _) => p == n)) &&
             (actuals.zip formals).all (fun (e, _, ty) =>
             (sortInputNames e).all (fun n => outParams.any (fun (p, _) => p == n)) &&
             (!(ty matches .list _) || (sortInputShape e && !(sortInputNames e).isEmpty))) do
@@ -1464,7 +1485,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
             throw s!"{file}: reserved certificate hypothesis name {hname}"
           let binders := " ".intercalate (formals.map fun (p, t) => s!"({p} : {t.print names})")
           let arguments := " ".intercalate (actuals.map fun e => s!"({e.print names})")
-          let applied := guardCondition guards s!"((fun {binders} => {condition}) {arguments})"
+          let applied := guardCondition r guards s!"((fun {binders} => {condition}) {arguments})"
           obligations := obligations ++ [(hname, applied)]
           inputConditions := inputConditions ++ [applied]
     functionConditions := (name, (outParams, inputConditions)) :: functionConditions
