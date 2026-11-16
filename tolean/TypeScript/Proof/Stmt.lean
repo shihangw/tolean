@@ -1020,26 +1020,17 @@ theorem branch_none {env : Translate.Env} {test : Expr} {name : String} {isNullT
     (hn : noneTestOf env test = some (name, isNullTest, value, kind)) :
     BranchSim (N := N) m fs fuel env test
       (if isNullTest then .matchNull name kind wt wf else .matchNull name kind wf wt) wt wf := by
-  unfold noneTestOf at hn
-  split at hn
-  · rename_i name' isEq value' kind' hnull
-    simp only [Option.some.injEq, Prod.mk.injEq] at hn
-    obtain ⟨rfl, rfl, rfl, rfl, rfl⟩ := hn
-    intro ρs ρo o ha hs ho
-    obtain ⟨w, hw, hl⟩ := nullTestOf_eval m fuel hnull hs
-    have hwo : ρo.lookup name' = some w := by rw [← ha]; exact hw
-    refine ⟨.bool (if isEq then nullTestVal kind' w else !nullTestVal kind' w), hl, ?_⟩
-    cases isEq <;> cases kind' <;> cases w <;>
-      simp_all [IR.Body.exec, hwo, nullTestVal, Val.truthy]
-  · obtain ⟨⟨name', isEq, value', kind'⟩, hu, heq⟩ := Option.map_eq_some_iff.mp hn
-    simp only [Prod.mk.injEq] at heq
-    obtain ⟨rfl, rfl, rfl, rfl, rfl⟩ := heq
-    intro ρs ρo o ha hs ho
-    obtain ⟨w, hw, hl⟩ := undefinedTestOf_eval m fuel hu hs
-    have hwo : ρo.lookup name' = some w := by rw [← ha]; exact hw
-    refine ⟨.bool (if isEq then isUndefVal w else !isUndefVal w), hl, ?_⟩
-    cases isEq <;> cases kind' <;> cases w <;>
-      simp_all [IR.Body.exec, hwo, nullTestVal, isUndefVal, Val.truthy]
+  intro ρs ρo o ha hs ho
+  obtain ⟨w, hw, hl⟩ := noneTestOf_eval m fuel hn hs
+  have hwo : ρo.lookup name = some w := by rw [← ha]; exact hw
+  have hvalid : kind = .nullable → w ≠ .undefined := by
+    intro hk hu
+    subst kind
+    subst w
+    cases isNullTest <;> simp [IR.Body.exec, hwo] at ho
+  refine ⟨.bool (if isNullTest then nullTestVal kind w else !nullTestVal kind w), hl hvalid, ?_⟩
+  cases isNullTest <;> cases kind <;> cases w <;>
+    simp_all [IR.Body.exec, nullTestVal, Val.truthy]
 
 theorem branch_tag {env : Translate.Env} {test : Expr} {t : TagTest} {wt wf : IR.Body}
     (ht : tagTestOf env test = some t) :
