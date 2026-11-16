@@ -128,6 +128,15 @@ structure CallbackInfo (T : Type) where
   scope : List (String × Ty T)
 deriving Repr, Inhabited
 
+/-- Which nullish value a source test matches. -/
+inductive MatchNullKind where
+  | nullable
+  | optional
+  | nullish
+  | strictNull
+  | strictUndefined
+  deriving BEq, DecidableEq, Repr
+
 /-- A Lean expression in the output. Some are a `Prop`, such as `a < b`; the
 translator knows which, and wraps one in `decide` where Lean needs a `Bool`.
 `T` holds the types that a language adds, and `E` its operations. -/
@@ -162,10 +171,10 @@ inductive Expr (T E : Type) where
   | isNone (a : Expr T E)
   /-- `a.isSome`. -/
   | isSome (a : Expr T E)
-  /-- `(match x with | none => a | some x => b)`.
-  Match null, or undefined when `optional`, without evaluating the
-  unselected branch. The defined branch binds the unwrapped value. -/
-  | matchNull (name : String) (whenNull whenValue : Expr T E) (optional : Bool := false)
+  /-- Match the selected nullish state without evaluating the unselected
+  branch. The defined branch binds the value. -/
+  | matchNull (name : String) (whenNull whenValue : Expr T E)
+      (kind : MatchNullKind := .nullable)
   /-- `T.a`: the constructor `a` of the inductive type `T`. -/
   | enumCase (ref : DeclRef) (member : String)
   /-- The value of a tag field in a structure instance, such as `kind:
@@ -272,10 +281,8 @@ inductive Body (T E : Type) where
   | letArray (name : String) (type : Ty T) (elems : List (Expr T E)) (rest : Body T E)
   /-- `if c then … else …`. -/
   | ite (c : Expr T E) (whenTrue whenFalse : Body T E)
-  /-- `match x with | none => … | some x => …`. When `optional` is true, `x`
-  is an optional value, whose `none` the source writes as a value left out
-  rather than a null, as `Ty.optional` is. -/
-  | matchNull (name : String) (optional : Bool) (whenNull whenValue : Body T E)
+  /-- Match the selected nullish state. -/
+  | matchNull (name : String) (kind : MatchNullKind) (whenNull whenValue : Body T E)
   /-- `match x with | T.a x => … | T.b x => …`: a test of the tag of `x`, a
   value of the tagged union `T`. The tag is the tag field `field` of the
   source's value, or its type, such as TypeScript's `typeof x`, when `field`
@@ -814,6 +821,7 @@ def Names.ref (names : Names) (r : DeclRef) : String × Option String :=
 names from the root. -/
 def leanNames : List (String × String) :=
   [("decide", "Decidable.decide"), ("List", "List"), ("Option", "Option"),
+   ("JSNullish", "tolean.TypeScript.JSNullish"),
    ("some", "Option.some"), ("none", "Option.none"), ("Int", "Int"), ("Nat", "Nat"), ("Bool", "Bool"),
    ("String", "String"), ("DecidableEq", "DecidableEq"), ("Repr", "Repr"), ("Except", "Except"),
    ("pure", "Pure.pure")]
@@ -909,6 +917,7 @@ def Ty.print [PrintTy T] (names : Names) : Ty T → String
   | .int => leanName names "Int"
   | .bool => leanName names "Bool"
   | .string => PrintTy.string (T := T) names
+  | .optional (.option t) => wrapped (leanName names "JSNullish") (t.print names)
   | .option t | .optional t => wrapped (leanName names "Option") (t.print names)
   | .list t => wrapped (leanName names "List") (t.print names)
   | .struct ref =>
@@ -1322,12 +1331,31 @@ def Expr.print (names : Names) : Expr T E → String
     "({ " ++ ", ".intercalate (Expr.printFields names fields) ++ " } : " ++ type.print names ++ ")"
   | .isNone a => s!"{argument (a.print names)}.isNone"
   | .isSome a => s!"{argument (a.print names)}.isSome"
-  | .matchNull name whenNull whenValue _ =>
-    s!"(match {names.matchBinder}{name} with | {leanName names "none"} => {whenNull.print names} | " ++
-      s!"{leanName names "some"} {name} => {whenValue.print names})"
+  | .matchNull name whenNull whenValue kind =>
+    let none_ := leanName names "none"
+    let some_ := leanName names "some"
+    let nullish := leanName names "JSNullish"
+    let scrutinee := names.matchBinder ++ name
+    let noneBinding := s!"(let {name} := {leanName names "Option"}.join {name}; {whenValue.print names})"
+    let someBinding := s!"(let {name} := {some_} {name}; {whenValue.print names})"
+    match kind with
+    | .nullable | .optional =>
+      s!"(match {scrutinee} with | {none_} => {whenNull.print names} | {some_} {name} => {whenValue.print names})"
+    | .nullish =>
+      s!"(match {scrutinee} with | {nullish}.undefined => {whenNull.print names} | " ++
+        s!"{nullish}.null => {whenNull.print names} | {nullish}.value {name} => {whenValue.print names})"
+    | .strictNull =>
+      s!"(match {scrutinee} with | {nullish}.undefined => {noneBinding} | " ++
+        s!"{nullish}.null => {whenNull.print names} | {nullish}.value {name} => {someBinding})"
+    | .strictUndefined =>
+      s!"(match {scrutinee} with | {nullish}.undefined => {whenNull.print names} | " ++
+        s!"{nullish}.null => {noneBinding} | {nullish}.value {name} => {someBinding})"
   | .coalesce a b nullable =>
     let fn := leanName names (if nullable then "Option.or" else "Option.getD")
-    s!"({fn} {argument (a.print names)} {argument (b.print names)})"
+    let receiver := match a with
+      | .ascribe _ (.optional (.option _)) => s!"{argument (a.print names)}.join"
+      | _ => a.print names
+    s!"({fn} {argument receiver} {argument (b.print names)})"
   | .intOp op a b => s!"({a.print names} {op.symbol} {b.print names})"
   | .order op a b => s!"{a.print names} {op.symbol} {b.print names}"
   | .division op a b =>
@@ -1385,10 +1413,29 @@ def Body.lines (names : Names) (monadic : Bool := false) : Body T E → List Str
   | .ite c whenTrue whenFalse =>
     [s!"if {c.print names} then"] ++ indent (whenTrue.lines names monadic) ++ ["else"] ++
       indent (whenFalse.lines names monadic)
-  | .matchNull name _ whenNull whenValue =>
-    [s!"match {names.matchBinder}{name} with", s!"| {leanName names "none"} =>"] ++
-      indent (whenNull.lines names monadic) ++
-      [s!"| {leanName names "some"} {name} =>"] ++ indent (whenValue.lines names monadic)
+  | .matchNull name kind whenNull whenValue =>
+    let none_ := leanName names "none"
+    let some_ := leanName names "some"
+    let nullish := leanName names "JSNullish"
+    let scrutinee := names.matchBinder ++ name
+    let noneBinding := [s!"let {name} := {leanName names "Option"}.join {name}"] ++ whenValue.lines names monadic
+    let someBinding := [s!"let {name} := {some_} {name}"] ++ whenValue.lines names monadic
+    match kind with
+    | .nullable | .optional =>
+      [s!"match {scrutinee} with", s!"| {none_} =>"] ++ indent (whenNull.lines names monadic) ++
+        [s!"| {some_} {name} =>"] ++ indent (whenValue.lines names monadic)
+    | .nullish =>
+      [s!"match {scrutinee} with", s!"| {nullish}.undefined =>"] ++ indent (whenNull.lines names monadic) ++
+        [s!"| {nullish}.null =>"] ++ indent (whenNull.lines names monadic) ++
+        [s!"| {nullish}.value {name} =>"] ++ indent (whenValue.lines names monadic)
+    | .strictNull =>
+      [s!"match {scrutinee} with", s!"| {nullish}.undefined =>"] ++ indent noneBinding ++
+        [s!"| {nullish}.null =>"] ++ indent (whenNull.lines names monadic) ++
+        [s!"| {nullish}.value {name} =>"] ++ indent someBinding
+    | .strictUndefined =>
+      [s!"match {scrutinee} with", s!"| {nullish}.undefined =>"] ++ indent (whenNull.lines names monadic) ++
+        [s!"| {nullish}.null =>"] ++ indent noneBinding ++
+        [s!"| {nullish}.value {name} =>"] ++ indent someBinding
   | .matchTag name ref _ tag other whenTag whenOther =>
     let ctor (t : String) := s!"{(names.ref ref).1}.{memberName t}"
     let rest : List String := match other with
@@ -1526,7 +1573,10 @@ def printFunction (names : Names) (name : String) (params : List (String × Ty T
   -- An optional parameter defaults to `none`, so that a claim may leave
   -- it out, as a call in the source may.
   let leanParams := params.map fun (param, type) =>
-    let default := if type matches .optional _ then s!" := {leanName names "none"}" else ""
+    let default := match type with
+      | .optional (.option _) => s!" := {leanName names "JSNullish"}.undefined"
+      | .optional _ => s!" := {leanName names "none"}"
+      | _ => ""
     s!"({param} : {type.print names}{default})"
   "\n".intercalate
     (s!"def {name}{generic} {" ".intercalate leanParams} : {ret.print names} :=" ::
@@ -1540,7 +1590,10 @@ def Decl.print (names : Names) : Decl T E → String
     let kept := fields.filter fun (_, type) => !(type matches .tag _)
     "\n".intercalate (s!"structure {name}{generic} where" ::
       kept.map fun (field, type) =>
-        let default := if type matches .optional _ then s!" := {leanName names "none"}" else ""
+        let default := match type with
+          | .optional (.option _) => s!" := {leanName names "JSNullish"}.undefined"
+          | .optional _ => s!" := {leanName names "none"}"
+          | _ => ""
         s!"  {field} : {type.print names}{default}")
   | .tagged name _ members =>
     let generic := if names.generic then s!" ({names.typeParam} : Type)" else ""

@@ -565,6 +565,93 @@ test('the interpreter reads comparisons separated by expression operators as Nod
 // the program and for the call that runs it, as in Node.
 test('the interpreter binds a parameter that a call leaves out to undefined', async () => {
   const cases: Array<{ source: string; args: Array<unknown> }> = [
+    ...[[], [null], [0n], [5n]].map((args) => ({
+      source: 'export function f(x?: bigint | null): bigint { return x ?? 10n; }',
+      args,
+    })),
+    ...[[], [null], [5n]].map((args) => ({
+      source: 'export function f(x?: bigint | null): boolean { return x === null; }',
+      args,
+    })),
+    ...[[], [null], [5n]].map((args) => ({
+      source: 'export function f(x?: bigint | null): boolean { return x == null; }',
+      args,
+    })),
+    ...[[], [null], [5n]].map((args) => ({
+      source: 'export function f(x?: bigint | null): boolean { return x === undefined; }',
+      args,
+    })),
+    ...[[], [null], [5n]].map((args) => ({
+      source: 'export function f(x?: bigint | null): bigint { if (x != null) return x; return 0n; }',
+      args,
+    })),
+    ...[[], [null], [5n]].map((args) => ({
+      source: 'export function f(x?: bigint | null): bigint { if (x !== null) return x ?? 10n; return 0n; }',
+      args,
+    })),
+    ...[[], [null], [5n]].map((args) => ({
+      source: 'export function f(x?: bigint | null): bigint { if (x === null) return 1n; return 0n; }',
+      args,
+    })),
+    ...[[], [null], [5n]].map((args) => ({
+      source: 'export function f(x?: bigint | null): bigint { if (x === undefined) return 1n; return 0n; }',
+      args,
+    })),
+    {
+      source:
+        'function g(x?: bigint | null): bigint { return x ?? 10n; }\n' +
+        'export function f(): bigint { return g(); }',
+      args: [],
+    },
+    ...[
+      'value === null || false',
+      'value !== null && true',
+      'value === undefined || false',
+      'value !== undefined && true',
+    ].flatMap((expression) => [[], [undefined], [null], [5n]].map((args) => ({
+      source: `export function f(value?: bigint | null): boolean { return ${expression}; }`,
+      args,
+    }))),
+    ...[[], [null], [5n]].map((args) => ({
+      source: 'export function f(x?: bigint | null): bigint { if (x === undefined) return 0n; if (x === null) return 1n; return x; }',
+      args,
+    })),
+    ...[{}, { limit: null }, { limit: 5n }].map((value) => ({
+      source: 'interface Settings { readonly limit?: bigint | null; } export function f(s: Settings): bigint { return s.limit ?? 10n; }',
+      args: [value],
+    })),
+    ...[{}, { limit: null }, { limit: 5n }].map((value) => ({
+      source: 'interface JSNullish { readonly limit?: bigint | null; } export function f(s: JSNullish): bigint { return s.limit ?? 10n; }',
+      args: [value],
+    })),
+    ...[{}, { limit: null }, { limit: 5n }].map((value) => ({
+      source: 'interface Settings { readonly limit?: bigint | null; } export function f(s: Settings): boolean { return s.limit === null; }',
+      args: [value],
+    })),
+    ...[{}, { limit: null }, { limit: 5n }].map((value) => ({
+      source: 'interface Settings { readonly limit?: bigint | null; } export function f(s: Settings): boolean { return s.limit == null; }',
+      args: [value],
+    })),
+    ...[{}, { limit: null }, { limit: 5n }].map((value) => ({
+      source: 'interface Settings { readonly limit?: bigint | null; } export function f(s: Settings): boolean { return s.limit === undefined; }',
+      args: [value],
+    })),
+    ...[[], [null], [{ count: null }], [{ count: 5n }]].map((args) => ({
+      source: 'interface Inner { readonly count: bigint | null; } export function f(x?: Inner | null): bigint { return x?.count ?? 10n; }',
+      args,
+    })),
+    ...[null, {}, { count: null }, { count: 5n }].map((value) => ({
+      source: 'interface Inner { readonly count?: bigint | null; } export function f(x: Inner | null): bigint { return x?.count ?? 10n; }',
+      args: [value],
+    })),
+    ...[[], [null], [{}], [{ count: null }], [{ count: 5n }]].map((args) => ({
+      source: 'interface Inner { readonly count?: bigint | null; } export function f(x?: Inner | null): bigint { return x?.count ?? 10n; }',
+      args,
+    })),
+    ...[{}, { value: null }, { value: 5n }].map((value) => ({
+      source: 'type Maybe<T> = T | null; interface Settings { readonly value?: Maybe<bigint | null>; } export function f(s: Settings): bigint { return s.value ?? 10n; }',
+      args: [value],
+    })),
     { source: 'export function f(a: bigint, b?: bigint): bigint { return a + (b ?? 10n); }', args: [1n] },
     {
       source:

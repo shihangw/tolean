@@ -98,7 +98,8 @@ def Expr.beq : Expr T E → Expr T E → Bool
   | .struct a0 a1 a2, .struct b0 b1 b2 => Expr.beqFields a0 b0 && Decidable.decide (a1 = b1) && Decidable.decide (a2 = b2)
   | .isNone a0, .isNone b0 => Expr.beq a0 b0
   | .isSome a0, .isSome b0 => Expr.beq a0 b0
-  | .matchNull a0 a1 a2 a3, .matchNull b0 b1 b2 b3 => Decidable.decide (a0 = b0) && Expr.beq a1 b1 && Expr.beq a2 b2 && (a3 == b3)
+  | .matchNull a0 a1 a2 a3, .matchNull b0 b1 b2 b3 =>
+    Decidable.decide (a0 = b0) && Expr.beq a1 b1 && Expr.beq a2 b2 && Decidable.decide (a3 = b3)
   | .coalesce a0 a1 a2, .coalesce b0 b1 b2 => Expr.beq a0 b0 && Expr.beq a1 b1 && Decidable.decide (a2 = b2)
   | .intOp a0 a1 a2, .intOp b0 b1 b2 => Decidable.decide (a0 = b0) && Expr.beq a1 b1 && Expr.beq a2 b2
   | .order a0 a1 a2, .order b0 b1 b2 => Decidable.decide (a0 = b0) && Expr.beq a1 b1 && Expr.beq a2 b2

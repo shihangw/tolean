@@ -12,6 +12,13 @@ Each feature names the first edition that specifies it as Tolean reads it, and
 the ECMA-262 production or operation that does. Section numbers move between
 editions; these names do not.
 
+An optional nullable annotation is erased before runtime. Its three values
+use Undefined and Null (ES2015 and ES2024 §6.1.2 and §6.1.3).
+Reading an absent field uses OrdinaryGet (ES2024 §10.1.8.1), and omitted
+arguments use FunctionDeclarationInstantiation (§10.2.11). These operations
+are available in every supported target. Coalescing and optional chaining
+retain their existing ES2020 gates (§13.13.1 and §13.3.9 in ES2024).
+
 A feature whose meaning changes in a later edition gets a new feature for the
 new meaning, never a second meaning for the same one. An edition joins `all`
 only after a review of what it changed.
