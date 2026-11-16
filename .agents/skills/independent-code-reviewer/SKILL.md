@@ -20,6 +20,17 @@ Author and reviewer can share one GitHub login, so the login does not identify t
 - Identify findings already raised on this PR and related PRs. For a stacked PR, compare against its declared base and distinguish inherited defects from new ones.
 - Preserve a checkpoint with PR numbers, last reviewed head and base SHAs, finding summaries, thread IDs, root comment IDs, resolution state, relevant reply IDs, the reviewer's conversation marker, and the review summary comment ID and URL. Keep credentials out of it.
 
+Keep four kinds of state distinct:
+
+| State | Authority and purpose |
+|---|---|
+| Provider discovery | Live provider metadata and complete, paginated PR and discussion reads establish what exists and what changed. |
+| Canonical review and assignment state | The checkpoint records active PRs, history, findings, assignments, reviewed revisions, processed replies, and pending work. A JSON entry does not establish platform tracking. |
+| Platform association and watch | Replit's PR bindings and per-PR watch settings establish which PRs this conversation tracks and watches. A worker's binding is not a coordinator's binding. |
+| Activity display | Cards and board links show progress to the user. They do not register a PR, enable watch, assign a reviewer, or schedule checks. |
+
+On Replit, read `.local/skills/pr-delivery/SKILL.md` and its `references/watching.md` before handling association or watch. For a one-off review, associate the subject PR with verified live metadata, without requesting watch or creating a monitoring routine. Check and disclose any inherited watch setting; do not silently treat it as authorization for ongoing monitoring or change a conversation-wide preference. Association alone grants no review actions.
+
 ## Review independently
 
 Read the changed code and the surrounding callers, invariants, and tests. Follow consequences across parsing, translation, evaluation, serialization, generated artifacts, and proofs when those layers are affected.
@@ -89,24 +100,61 @@ For each tracked unresolved finding, read the full thread and inspect the curren
 
 Verify the original failing behavior and any important edge case of the proposed fix. A new commit or an author's assurance alone is insufficient.
 
-Verify a code fix at the PR's own reviewed head. A plan entry, another branch, or a follow-up PR does not fix the defect at that head, so keep the thread unresolved there. Record the follow-up remediation separately, for example with a reply linking the PR that fixes the defect on main, as #247 does for #243. This rule does not prevent withdrawing a finding when evidence shows it was mistaken. Manage the tracked review threads; leave unrelated reviewers' threads alone unless the user includes them in scope.
+Verify a code fix at the PR's own reviewed head. A plan entry, another branch, or a follow-up PR does not fix the defect at that head, so keep the thread unresolved there. Record the follow-up remediation separately, for example with a reply linking the PR that fixes the defect on the target branch. This rule does not prevent withdrawing a finding when evidence shows it was mistaken. Manage the tracked review threads; leave unrelated reviewers' threads alone unless the user includes them in scope.
 
 ## Monitor when requested
 
-Unless the user specifies otherwise, poll every **10 minutes** and pause after **10 consecutive successful checks with no changes**. On resumption, reset the count and check immediately.
+Use the user's authorized repositories, PR scope, cadence, and stop or pause conditions. Do not embed a particular repository, PR, worker, cursor, deadline, or cadence in this reusable procedure. Confirm an actual scheduling mechanism before claiming checks will continue after the turn. On resumption, check immediately and reset any agreed unchanged-check count.
 
-At each poll:
+### Reconcile platform coverage
 
-1. Rediscover open PRs if the scope is all open PRs. Fetch changed heads, bases, PR content, and discussions, including tracked threads on recently closed or merged PRs when follow-up is still relevant.
-2. Review new PRs and changed code. Read new replies and apply the thread rules above.
-3. Reset the unchanged count when relevant code, PR state, or discussion changes. Otherwise increment it after a successful complete check. Failed or incomplete checks do not count. Do not count missed intervals as checks.
-4. After a completed review round, create or edit its required summary. Then save the baseline after all comments, summary edits and resolutions, including the summary comment ID. This keeps the reviewer's own already-processed actions from appearing as new author activity on the next poll.
-5. At ten unchanged checks, record the paused state and stop. Honor an earlier user pause or stop immediately.
+For every in-scope open PR under authorized monitoring, including PRs already in the checkpoint:
 
-Wait between polls without busy polling. Stay interruptible and follow the environment's wait limits. Do not claim that monitoring will continue after the turn unless an actual scheduling mechanism has been configured and confirmed.
+1. Read live provider metadata. On GitHub, use `gh pr view <url> --json url,title,state,isDraft,updatedAt,headRefName,baseRefName,headRefOid`; use the equivalent provider fields elsewhere. Map OPEN to `draft` when `isDraft` is true, otherwise `open`; map terminal states to `merged` or `closed`.
+2. In the conversation responsible for monitoring, call `associatePr({ url, title, state, updatedAt, headRef, baseRef, headSha, watch: true })` with those verified fields. Map `headRefName`, `baseRefName`, and `headRefOid` to `headRef`, `baseRef`, and `headSha`. Batch independent PRs with `associatePr({ pullRequests: [...] })`. Do not include incidental or out-of-scope PRs. For an explicit watch opt-out, associate without requesting watch and report polling-only coverage.
+3. Verify with `listPrLinks({})` and `getPrWatchStatus({ urls: [...] })`. The former returns the newest 32 direct bindings, groups canonical aliases, excludes worker links, and contains last-known states, not live provider status. If `mayHaveMore` is true, absence from that window is not proof of no binding; use the association result and URL-specific watch status, and disclose any remaining verification limit. The no-argument watch call reads preferences, not links.
+4. If a scoped PR is not tracked, repair its association from live metadata. If its watch is disabled, use `setPrWatch({ enabled: true, urls: [...] })` only within the user's monitoring authorization, then verify again. A chat preference can override `watch: true` on new associations. Never omit `urls`: that changes all tracked PRs and the default for future links. Respect an explicit user watch opt-out and report the coverage limit instead of overriding it.
+5. Record verified coverage separately from review completion and assignment. If registration or verification fails, keep a pending repair and report the gap; do not claim active watch from a checkpoint entry, successful card display, or attempted registration.
+
+Watched review comments can arrive as notifications. Do not promise that every comment or push will arrive, or that delivery is immediate. Notifications are wake-ups to reconcile live state, not a complete event log. Retain a scheduled provider-polling fallback for all authorized PRs and discussions even when watch is enabled. Do not read or wait for CI as part of independent review.
+
+### Reconcile each check
+
+1. If authorized for all open PRs, discover **all** open PRs in that scope, following provider pagination to exhaustion. Do not use only PRs absent from JSON or only the first page. Reconcile every result against assignments, pending work, and platform coverage, including already-known but unassigned or unassociated PRs. For a fixed PR scope, check every authorized PR without expanding it. Refresh tracked PRs with a live GET even when they disappear from the open listing; absence alone does not prove closure.
+2. Fetch current heads, bases, PR content, and complete discussions, including resolved threads and replies. Follow every relevant discussion page. Continue reads for terminal PRs with pending audits or thread follow-up. Reconcile association and watch as above on every check; polling and notifications use the same checkpoint.
+3. Persist pending routing before dispatching new work. Identify a code-review round by canonical PR identity and head/base SHAs, and a reply by its provider ID and any changed content or update version. Track pending, dispatched, and completed work separately. Reuse the recorded assignment for the same work key instead of creating another worker or review. If dispatch has an ambiguous result, reconcile the existing assignment or delivery before retrying; do not blindly resend it. A new head during review remains pending for a later round.
+4. Route each new revision or reply once to its assigned reviewer, or review it directly when there is no delegated assignment. Review changed code, read new replies, and apply the existing thread rules. Record completion only after the reviewer reports the revision actually reviewed and the actions actually performed. Review completion does not end an authorized watch on an open PR.
+5. Do not advance a processed cursor or successful-check baseline over a failed read, registration, or routing step. Preserve the last successful boundary and the pending gap; safely completed work stays deduplicated. Re-read the gap on retry. After a completed review round, create or edit its required summary, then save the processed baseline after comments, summary edits, and resolutions. Record their IDs so the reviewer's own actions do not look like new author activity.
+6. Remove a PR from the active open list only after a live GET confirms merged or closed. Retain its history, findings, and pending work. Audit any unreviewed final head; for a merge, also inspect the landed change on the actual target revision, recording what was checked and any unavailable evidence. Keep own-head fix verification distinct from landed remediation. A terminal PR does not cancel these audits or close a stack; close the stack only after every member is terminal and required audits and follow-up are complete.
+7. Reset any agreed unchanged count when relevant code, PR state, discussion, assignment, or coverage changes. Increment it only after a successful complete check with no changes. Failed or incomplete checks and missed intervals do not count. Honor the user's pause or stop immediately; record pending work and the actual schedule and watch state rather than claiming all activity stopped when a subscription remains enabled.
+
+Wait between scheduled checks without busy polling. Stay interruptible and follow the environment's wait limits. If scheduling or provider access is unavailable, report monitoring as incomplete or paused, preserve pending work, and name the missing coverage.
+
+### Clean up without losing follow-up
+
+During authorized cleanup, call `listPrLinks({})` in each responsible conversation and verify each candidate's current provider state before `unassociatePr({ url })`. Unlink only confirmed merged or closed PRs, never open PRs. Keep terminal PRs with unfinished audits or replies in canonical pending state and the polling fallback even after unlinking; unlinking does not erase findings or finish an audit.
+
+If `mayHaveMore` is true, repeat after removing eligible terminal links. There is no cursor through the older bindings: if no returned link can be removed, report cleanup as incomplete rather than unlinking open PRs to reach older ones. A coordinator's list excludes worker links, so worker cleanup must inspect the worker's own bindings.
+
+Archive an idle reviewer only when it has no open PR assignment, pending routing, audit, reply, or other unfinished assignment, and when worker archival is authorized. Preserve its checkpoint and findings before archival. Neither a clean review nor a merged PR alone makes the worker idle.
+
+### Process regression cases
+
+When changing this procedure, check these cases without enabling watch or posting comments merely to test it:
+
+| Case | Required outcome |
+|---|---|
+| Newly discovered, untracked open PR | Complete paginated discovery; persist assignment and pending work; associate and verify authorized watch before reporting coverage. |
+| PR already in JSON but missing platform association | Repair association and verify URL-specific watch; do not skip it as already known or mistake an Activity link for coverage. |
+| Associated PR with disabled watch | Repair only the authorized PR's watch and verify; preserve explicit opt-outs and global defaults. |
+| Repeated latest head or reply from polling and notifications | Reuse the same work key and assignment; route once, keep newer work pending, and do not duplicate findings or summaries. |
+| Merged PR with a pending final audit | Remove from the live open list after GET; retain final-head and landed audits, findings, and history; keep its stack unfinished until audited. |
+| Idle worker cleanup | Archive only with authorization and no open or unfinished assignment; do not lose pending follow-up or another PR's work. |
+| Failed read, registration, or routing | Preserve the gap and successful boundary, retry pending work without duplicating completed actions, and report incomplete coverage. |
+| One-off review without monitoring authorization | Associate the subject without requesting watch or scheduling a routine; disclose inherited watch and do not change global preferences. |
 
 ## Report progress and completion
 
 During review, report meaningful findings, verified fixes, and remaining uncertainty. During monitoring, keep status updates brief and include the unchanged count when useful.
 
-At the end, state whether monitoring is active, paused, or stopped. Link posted reviews and material unresolved findings, mention verified resolutions, and disclose relevant validation limits. Do not imply that untested changes were verified or that unresolved issues were fixed.
+At the end, report review completion separately from monitoring: not requested, active, incomplete, paused, or stopped. Claim active monitoring only with verified in-scope association and watch plus a confirmed polling fallback. State subscription or scheduling limits separately. Link posted reviews and material unresolved findings, mention verified resolutions, and disclose relevant validation limits. Do not imply that untested changes were verified or that unresolved issues were fixed.
