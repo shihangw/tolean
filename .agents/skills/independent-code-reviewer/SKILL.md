@@ -89,24 +89,18 @@ For each tracked unresolved finding, read the full thread and inspect the curren
 
 Verify the original failing behavior and any important edge case of the proposed fix. A new commit or an author's assurance alone is insufficient.
 
-Verify a code fix at the PR's own reviewed head. A plan entry, another branch, or a follow-up PR does not fix the defect at that head, so keep the thread unresolved there. Record the follow-up remediation separately, for example with a reply linking the PR that fixes the defect on main, as #247 does for #243. This rule does not prevent withdrawing a finding when evidence shows it was mistaken. Manage the tracked review threads; leave unrelated reviewers' threads alone unless the user includes them in scope.
+Verify a code fix at the PR's own reviewed head. A plan entry, another branch, or a follow-up PR does not fix the defect at that head, so keep the thread unresolved there. Record the follow-up remediation separately, for example with a reply linking the PR that fixes the defect on the target branch. This rule does not prevent withdrawing a finding when evidence shows it was mistaken. Manage the tracked review threads; leave unrelated reviewers' threads alone unless the user includes them in scope.
 
-## Monitor when requested
+## Follow up when requested
 
-Unless the user specifies otherwise, poll every **10 minutes** and pause after **10 consecutive successful checks with no changes**. On resumption, reset the count and check immediately.
+Follow up only within the user's authorized scope and honor a pause or stop immediately. Scheduling, watch setup, and reviewer assignment belong to the coordinating workflow, not this review method. Completing a review round does not by itself start or stop ongoing monitoring.
 
-At each poll:
+On follow-up, refresh the head, base, PR content, and complete discussion. Review changed code and new replies using the rules above, including relevant threads on closed or merged PRs. Do not repeat completed work on unchanged evidence or treat a failed read as proof that nothing changed.
 
-1. Rediscover open PRs if the scope is all open PRs. Fetch changed heads, bases, PR content, and discussions, including tracked threads on recently closed or merged PRs when follow-up is still relevant.
-2. Review new PRs and changed code. Read new replies and apply the thread rules above.
-3. Reset the unchanged count when relevant code, PR state, or discussion changes. Otherwise increment it after a successful complete check. Failed or incomplete checks do not count. Do not count missed intervals as checks.
-4. After a completed review round, create or edit its required summary. Then save the baseline after all comments, summary edits and resolutions, including the summary comment ID. This keeps the reviewer's own already-processed actions from appearing as new author activity on the next poll.
-5. At ten unchanged checks, record the paused state and stop. Honor an earlier user pause or stop immediately.
-
-Wait between polls without busy polling. Stay interruptible and follow the environment's wait limits. Do not claim that monitoring will continue after the turn unless an actual scheduling mechanism has been configured and confirmed.
+After a completed review round, update its summary and checkpoint with the revisions reviewed and actions performed, including comment IDs. Preserve unresolved findings and incomplete work so a later round neither loses them nor duplicates completed actions.
 
 ## Report progress and completion
 
-During review, report meaningful findings, verified fixes, and remaining uncertainty. During monitoring, keep status updates brief and include the unchanged count when useful.
+During review, report meaningful findings, verified fixes, and remaining uncertainty. Keep follow-up status updates brief.
 
-At the end, state whether monitoring is active, paused, or stopped. Link posted reviews and material unresolved findings, mention verified resolutions, and disclose relevant validation limits. Do not imply that untested changes were verified or that unresolved issues were fixed.
+At the end, report review completion separately from any confirmed monitoring status; do not promise future checks that have not been arranged. Link posted reviews and material unresolved findings, mention verified resolutions, and disclose relevant validation limits. Do not imply that untested changes were verified or that unresolved issues were fixed.

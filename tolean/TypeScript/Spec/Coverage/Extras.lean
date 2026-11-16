@@ -95,6 +95,63 @@ theorem translateImport_edition {sp : Span} {names : List ImportName} {source : 
 -- The project reads each file's imports for the file's own target.
 #guard Project.Job.edition (.typescript (Lean.Json.mkObj [("target", "ES2019")]) "x.ts") == .es2019
 
+/-! ### Extras: Config inheritance -/
+
+-- Fail on a second read, so a missing cache fails the regression immediately
+-- instead of expanding the shared ancestry exponentially.
+private def checkedConfigReads (configs : List (String × Lean.Json)) :
+    Except String (Lean.Json × List String) :=
+  let read (path : String) : StateT (List String) (Except String) String := do
+    if (← get).contains path then throw s!"{path}: read twice"
+    modify (path :: ·)
+    match configs.lookup path with
+    | some config => return config.compress
+    | none => throw s!"{path}: missing config"
+  (ModuleResolution.loadOptions (configs.map (·.1)) read
+    (configs.length + 1) [] "tsconfig.json").run []
+
+-- Thirty-two levels of repeated bases used to expand into billions of reads.
+-- Both spellings of each ancestor must use its resolved path as the cache key.
+#guard
+  let configs := ("tsconfig.json", Lean.Json.mkObj [("extends", "./c31.json")]) ::
+    (List.range 32).map fun n =>
+      (s!"c{n}.json", if n == 0 then
+        Lean.Json.mkObj [("compilerOptions", Lean.Json.mkObj [("moduleResolution", "bundler")])]
+      else
+        Lean.Json.mkObj [("extends", .arr #[
+          .str s!"./c{n - 1}.json", .str s!"./nested/../c{n - 1}.json"])])
+  match checkedConfigReads configs with
+  | .ok (options, reads) =>
+    reads.length == configs.length &&
+    (ModuleResolution.setting (some options) none matches .ok .bundler)
+  | .error _ => false
+
+-- A cached ancestor supplies its own options, not a previous child's options.
+-- The right branch replaces the left branch, even when its base is cached.
+#guard
+  let configs := [
+    ("tsconfig.json", Lean.Json.mkObj [("extends", .arr #["./left.json", "./right.json"])]),
+    ("left.json", Lean.Json.mkObj [("extends", "./base.json"),
+      ("compilerOptions", Lean.Json.mkObj [("moduleResolution", "node16")])]),
+    ("right.json", Lean.Json.mkObj [("extends", "./nested/../base.json")]),
+    ("base.json", Lean.Json.mkObj [
+      ("compilerOptions", Lean.Json.mkObj [("moduleResolution", "bundler")])])]
+  match checkedConfigReads configs with
+  | .ok (options, reads) =>
+    reads.length == 4 && (ModuleResolution.setting (some options) none matches .ok .bundler)
+  | .error _ => false
+
+-- An unfinished ancestor is not a cache hit. Normalize the back edge before
+-- checking the active stack, and keep the cycle diagnostic.
+#guard
+  let configs := [
+    ("tsconfig.json", Lean.Json.mkObj [("extends", "./base.json")]),
+    ("base.json", Lean.Json.mkObj [("extends", "./nested/../tsconfig.json")])]
+  match checkedConfigReads configs with
+  | .error message =>
+    message == "tsconfig.json: config extends cycle: tsconfig.json -> base.json -> tsconfig.json"
+  | .ok _ => false
+
 end tolean.TypeScript.Coverage
 
 -- The lexer splits both forms into the same kinds. The observation must

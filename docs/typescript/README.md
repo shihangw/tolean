@@ -511,12 +511,21 @@ They do not accept extensionless imports even in a CommonJS project.
 Raw Node type stripping still needs `.ts`; use the matching TypeScript
 build or bundler when running code that uses the other spellings.
 
-Tolean does not implement the whole TypeScript resolver. It refuses
-`extends` in a tsconfig because inherited options could change which file
-wins, even when the local config sets `moduleResolution`. It also refuses
-`moduleSuffixes`. Use a standalone tsconfig without that option. The
-[decision record](../decisions/2026-11-14-project-import-resolution.md)
-explains this boundary.
+Tolean loads relative `extends` chains inside the project. A base path is
+relative to the config that declares it, and may omit `.json`. An array of
+bases follows TypeScript 5's order: later bases override earlier ones, then
+the child overrides each inherited compiler option. A cycle or missing base
+is an error. Package names in `extends`, absolute paths and bases outside
+the project remain refused. Use a relative config inside the project instead.
+
+Tolean checks the merged options before it resolves imports. It refuses
+`moduleSuffixes` and `rootDirs`, including inherited settings, because they
+can select a different relative import target. `paths` and `baseUrl` do not
+enable nonrelative imports. Other compiler options and source-selection
+settings do not change Tolean's project settings: `tolean.json` still lists
+the sources. The
+[inheritance decision](../decisions/2026-11-15-tsconfig-extends.md) explains
+this boundary.
 
 - An import must name a relative path to a translated `.ts` file. Tolean
   refuses packages, `.tsx`, declaration files such as `.d.ts`, and other

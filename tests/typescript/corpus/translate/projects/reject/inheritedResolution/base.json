@@ -1,1 +1,1 @@
-{"compilerOptions":{"moduleResolution":"bundler"}}
+{"compilerOptions":{"moduleResolution":"bundler","moduleSuffixes":[".native",""]}}
