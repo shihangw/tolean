@@ -51,10 +51,10 @@ def isStrictUndefined (limit : JSNullish Int := JSNullish.undefined) : Bool :=
   limit.isNone
 
 def nullOr (value : JSNullish Int := JSNullish.undefined) : Bool :=
-  (match value with | JSNullish.undefined => (let value := Option.join value; false) | JSNullish.null => true | JSNullish.value value => (let value := some value; false))
+  (match value with | JSNullish.undefined => (let value := Option.join value; false) | JSNullish.null => (let value {α : Type} : Option α := none; true) | JSNullish.value value => (let value := some value; false))
 
 def notNullAnd (value : JSNullish Int := JSNullish.undefined) : Bool :=
-  (match value with | JSNullish.undefined => (let value := Option.join value; true) | JSNullish.null => false | JSNullish.value value => (let value := some value; true))
+  (match value with | JSNullish.undefined => (let value := Option.join value; true) | JSNullish.null => (let value {α : Type} : Option α := none; false) | JSNullish.value value => (let value := some value; true))
 
 def undefinedOr (value : JSNullish Int := JSNullish.undefined) : Bool :=
   (value.isNone || false)
@@ -77,6 +77,7 @@ def strictNarrow (limit : JSNullish Int := JSNullish.undefined) : Int :=
     let limit := Option.join limit
     (Option.getD limit ((10 : Int)))
   | JSNullish.null =>
+    let limit {α : Type} : Option α := none
     (0 : Int)
   | JSNullish.value limit =>
     let limit := some limit
@@ -88,6 +89,7 @@ def unusedAfterNull (limit : JSNullish Int := JSNullish.undefined) : Int :=
     let limit := Option.join limit
     (0 : Int)
   | JSNullish.null =>
+    let limit {α : Type} : Option α := none
     (1 : Int)
   | JSNullish.value limit =>
     let limit := some limit

@@ -1338,6 +1338,7 @@ def Expr.print (names : Names) : Expr T E → String
     let scrutinee := names.matchBinder ++ name
     let noneBinding := s!"(let {name} := {leanName names "Option"}.join {name}; {whenValue.print names})"
     let someBinding := s!"(let {name} := {some_} {name}; {whenValue.print names})"
+    let nullBinding := s!"(let {name} \{α : Type} : {leanName names "Option"} α := {none_}; {whenNull.print names})"
     match kind with
     | .nullable | .optional =>
       s!"(match {scrutinee} with | {none_} => {whenNull.print names} | {some_} {name} => {whenValue.print names})"
@@ -1346,7 +1347,7 @@ def Expr.print (names : Names) : Expr T E → String
         s!"{nullish}.null => {whenNull.print names} | {nullish}.value {name} => {whenValue.print names})"
     | .strictNull =>
       s!"(match {scrutinee} with | {nullish}.undefined => {noneBinding} | " ++
-        s!"{nullish}.null => {whenNull.print names} | {nullish}.value {name} => {someBinding})"
+        s!"{nullish}.null => {nullBinding} | {nullish}.value {name} => {someBinding})"
     | .strictUndefined =>
       s!"(match {scrutinee} with | {nullish}.undefined => {whenNull.print names} | " ++
         s!"{nullish}.null => {noneBinding} | {nullish}.value {name} => {someBinding})"
@@ -1420,6 +1421,8 @@ def Body.lines (names : Names) (monadic : Bool := false) : Body T E → List Str
     let scrutinee := names.matchBinder ++ name
     let noneBinding := [s!"let {name} := {leanName names "Option"}.join {name}"] ++ whenValue.lines names monadic
     let someBinding := [s!"let {name} := {some_} {name}"] ++ whenValue.lines names monadic
+    -- A null read may inhabit any nullable payload type in this branch.
+    let nullBinding := [s!"let {name} \{α : Type} : {leanName names "Option"} α := {none_}"] ++ whenNull.lines names monadic
     match kind with
     | .nullable | .optional =>
       [s!"match {scrutinee} with", s!"| {none_} =>"] ++ indent (whenNull.lines names monadic) ++
@@ -1430,7 +1433,7 @@ def Body.lines (names : Names) (monadic : Bool := false) : Body T E → List Str
         [s!"| {nullish}.value {name} =>"] ++ indent (whenValue.lines names monadic)
     | .strictNull =>
       [s!"match {scrutinee} with", s!"| {nullish}.undefined =>"] ++ indent noneBinding ++
-        [s!"| {nullish}.null =>"] ++ indent (whenNull.lines names monadic) ++
+        [s!"| {nullish}.null =>"] ++ indent nullBinding ++
         [s!"| {nullish}.value {name} =>"] ++ indent someBinding
     | .strictUndefined =>
       [s!"match {scrutinee} with", s!"| {nullish}.undefined =>"] ++ indent (whenNull.lines names monadic) ++

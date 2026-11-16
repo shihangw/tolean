@@ -427,7 +427,7 @@ def guardCondition (r : Refs) (guards : List (String × Bool × IR.MatchNullKind
       if valueBranch then
         s!"(match {n} with | {nullish}.undefined => (let {n} := {r.write "Option.join" "Option.join"} {n}; {rest}) | {nullish}.null => _root_.True | {nullish}.value {n} => (let {n} := _root_.Option.some {n}; {rest}))"
       else
-        s!"(match {n} with | {nullish}.undefined => _root_.True | {nullish}.null => {rest} | {nullish}.value _ => _root_.True)"
+        s!"(match {n} with | {nullish}.undefined => _root_.True | {nullish}.null => (let {n} \{α : Type} : _root_.Option α := _root_.Option.none; {rest}) | {nullish}.value _ => _root_.True)"
     | .strictUndefined =>
       let nullish := r.write "JSNullish" "tolean.TypeScript.JSNullish"
       if valueBranch then
