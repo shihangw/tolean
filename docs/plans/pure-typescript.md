@@ -57,6 +57,11 @@ exact. A construct leaves these tables when Tolean translates it, and the
 | `f?.()` | No accepted program to translate: `Syntax.TypeExpr` and `Translate.Ty` have no function type, and no accepted declaration gives a possibly `undefined` value a callable type. A generic type parameter does not make a value callable. Local function values cannot escape a direct call. | Optional calls stay refused; so does `==` against anything except `null` and `undefined`. |
 | A value re-export, such as `export { a } from "./x.ts"` | Nothing: the names stay in scope | `export *` |
 
+[#247](https://github.com/shihangw/tolean/pull/247) fixes optional indexing
+after a conditional join makes a `Record` nullable, as in
+`(absent ? null : r)?.[k]`. The required-certificate fixture and
+Node-backed interpreter test cover that case. Optional calls remain refused.
+
 ### Functions
 
 | TypeScript | Lean | Refused |
@@ -195,26 +200,46 @@ be exact:
 
 ## Unfinished parser work
 
-[#208](https://github.com/shihangw/tolean/issues/208) remains open. The parser
-accepts comparisons separated by a top-level `&&`, `||`, `??`, `===`,
-`!==`, `==`, `!=`, `+`, `*`, `/`, `%` or `**`, but it still
-refuses `f(a < b, c > d)`. TypeScript 6.0.3 reads two comparisons there.
-This is a known gap, not a permanent restriction, so the case is not in the
-rejection corpus. The completed rule must accept it while still refusing
-`f(a < b, c > (d))` and `f < A, B > (x)`, which TypeScript reads with type
-arguments.
+[#208](https://github.com/shihangw/tolean/issues/208) remains open, but merged
+[#217](https://github.com/shihangw/tolean/pull/217) accepts its original
+example, `a < b && c > d`. A CLI translation of a typed
+`between` function containing that exact return expression succeeds. The
+issue still needs a broader fix: a typed function calling
+`f(a < b, c > d)` is refused, although TypeScript 6.0.3 reads two comparisons
+there. This is a known gap, not a permanent restriction, so the case is not
+in the rejection corpus.
 
-The remaining work is a speculative type-list parse followed by TypeScript's
-follow-token test. Before the parser can use that probe, the relation between
-source tokens and printed tokens must preserve the identifiers, contextual
-syntax and line-break information that the probe needs. The round-trip proof
-must then show that printing cannot turn a comparison into type arguments.
-These tokens stop the scan only outside brackets. The scan does not stop at
-`-`, `&`, `|`, `.`, `!` or `?`, because types can contain them. The operators
-`>>`, `>=`, `<<` and `<=` need a separate argument because TypeScript rescans
-`>` when it closes type arguments.
-The current operator rule is a sound first stage, not a substitute
-for that structural fix.
+The parser accepts comparisons when a top-level `&&`, `||`, `??`, `===`,
+`!==`, `==`, `!=`, `+`, `*`, `/`, `%` or `**` rules out a type list before a
+closing `>`. The scan keeps going inside brackets, because a type literal can
+contain a computed property name. It also keeps going at `-`, `&`, `|`, `.`,
+`!` and `?`, because types can contain them. The conservative treatment of
+`>>`, `>=`, `<<` and `<=` remains unchanged because TypeScript rescans `>`
+while it closes type arguments. The unrelated merged
+[#230](https://github.com/shihangw/tolean/pull/230) fixes WebAssembly list
+termination and does not change this parser rule.
+
+Open [PR #242](https://github.com/shihangw/tolean/pull/242) prepares the
+proof interface for a later ambiguity check; it does not change which source
+expressions the parser accepts. Its token observations retain token kinds
+(including identifier text), preceding line breaks and adjacency across
+fragment boundaries. Its prefix and suffix relations let a future probe be
+reasoned about in surrounding token contexts and across printed suffixes.
+The current parser still scans token kinds and still refuses
+`f(a < b, c > d)`.
+
+The remaining task is to parse a possible comma-separated type list
+speculatively, then apply TypeScript 6.0.3's follow-token test. In
+`f(a < b, c > d)`, `b, c` can parse as types, but the following `d` can start
+an expression, so TypeScript reads two comparisons. In
+`f(a < b, c > (d))`, the parenthesis can instead follow type arguments, so
+TypeScript reads a call with type arguments; `f < A, B > (x)` is the same
+kind of ambiguity. The future check must use the token adjacency and
+line-break information that its rules inspect, and the round-trip proof must
+show that printing preserves the probe's decision. Until that work is done,
+the parser should keep refusing the type-argument cases and any form whose
+reading it cannot establish. Extending the operator stop set alone does not
+complete #208.
 
 ## Steps
 
@@ -272,8 +297,9 @@ proofs, because a fold over events keeps much of its state in maps.
 
 ## Refactors from review
 
-These follow-ups track design feedback from the open pull requests. A fix in
-a descendant does not mean that the earlier pull request already contains it.
+These entries record design feedback from pull requests and separate fixes
+that have landed from work that remains. A fix in a descendant does not mean
+that the earlier pull request already contains it.
 
 - **Make expression scans exhaustive.** Enumerate leaf constructors instead
   of ending a scan with `| _ => false` or `| _ => []`. Traverse ordinary
@@ -294,22 +320,24 @@ a descendant does not mean that the earlier pull request already contains it.
   The other scans still need the broader audit described above.
 
   The [number-use scan on #221](https://github.com/shihangw/tolean/pull/221#discussion_r4576744315)
-  is being fixed there, including the missing optional-index receiver and
-  explicit number-free leaves. That work also serves #229 and #235; do not
-  duplicate it here. Its compile regression must keep number operations
-  only inside the optional-index receiver so missing imports and binders
-  remain observable.
+  has landed: `exprUsesNumber` follows an optional-index receiver, and it
+  names the expression forms that cannot use numbers. The accepted
+  `optionalIndexNumberReceiver` fixture keeps the receiver-only regression
+  visible. Do not repeat that fix. The broader scan audit remains open,
+  because `typeUsesNumber` and `stmtUsesNumber` still have fallback cases.
+  Keep checking all of these traversals against their syntax constructors;
+  do not treat source-call counts as a definition of coverage.
 
-- **Choose the local-function executor before running the body.**
+- **Preserve the state-aware local-function return path.**
   The [review on #226](https://github.com/shihangw/tolean/pull/226#discussion_r4576809523),
-  also inherited by #236, found that `callLocal` runs a state-writing
-  value-returning body through `execStmt`, then repeats it through
-  `execReturnState` to recover its state. Dispatch to the state-preserving
-  executor first for the supported final-return form. Use `returnState_exec`
-  to justify the value relationship, retain the ordinary path for void
-  locals, and keep unsupported returns refused. Test a captured-state loop
-  and calls in its prefix without making replay part of the interpreter's
-  contract.
+  also inherited by #236, found that `callLocal` could run a state-writing,
+  value-returning body twice. That is fixed: `callLocal` recognizes a
+  changing body with a final value return before it calls `execStmt`, then
+  runs `execReturnState` once and writes the captured values back. This fixes
+  execution order, not the supported syntax. Earlier returns with captured
+  changes still have no modeled result. Step 14 still tracks general final
+  return expressions, transitive captures, longer sibling call chains and
+  callers whose local functions change state only indirectly.
 
 - **Preserve both map-escape regression tests.**
   The [review on #231](https://github.com/shihangw/tolean/pull/231#discussion_r4577273721)
@@ -330,13 +358,14 @@ a descendant does not mean that the earlier pull request already contains it.
   the shared step preserves their normalization order.
 
 - **Complete the structural type-argument ambiguity check.**
-  The [design summary on #217](https://github.com/shihangw/tolean/pull/217#issuecomment-6887789375)
-  validates the bounded operator stop set, not a complete ambiguity
-  algorithm. Retain its bracket-depth rule and pinned-TypeScript controls.
-  The remaining plan on that branch calls for a speculative type-list
-  parse and follow-token test, with enough identifier, contextual-token
-  and line-break information in the round-trip relation. This remains
-  separate work; extending the stop set alone does not finish it.
+  The merged [#217](https://github.com/shihangw/tolean/pull/217) validates
+  the bounded operator stop set, not a complete ambiguity algorithm. Open
+  [#242](https://github.com/shihangw/tolean/pull/242) supplies observations
+  and prefix proofs for a later probe, but does not implement that probe.
+  Retain #217's bracket-depth rule and pinned-TypeScript controls. The
+  remaining work is the speculative type-list parse, TypeScript's
+  follow-token test, and a round-trip proof that preserves the identifiers,
+  contextual tokens, adjacency and line breaks those checks use.
 
 ## Open questions
 
