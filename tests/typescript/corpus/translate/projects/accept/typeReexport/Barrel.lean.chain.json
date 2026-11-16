@@ -1,0 +1,46 @@
+{"tolean": "0.3.0",
+ "target": "ES2024",
+ "sources":
+ [{"sha256": "a16a0e92734499a02250fbccee8eb8f9e9500051cd6e9f1edea985f9513fba19",
+   "path": "barrel.ts"},
+  {"sha256": "16331a08f02686f8d00711cab757ebd42002f950f1a239aecfa76569ba6ed57c",
+   "path": "origin.ts"}],
+ "output":
+ {"sha256": "6f4aee71278d19c5745eb7dffa8b461149febb097aff82c760616b029b1a11b0",
+  "path": "Barrel.lean"},
+ "nodes":
+ [{"status": "tested",
+   "label": "TypeScript parser",
+   "kind": "parser",
+   "id": "parser",
+   "evidence":
+   {"reference": "tsc", "check": "typescript-parse", "by": "tolean"}},
+  {"status": "tested",
+   "label": "TypeScript translator",
+   "kind": "translator",
+   "id": "translator",
+   "evidence":
+   {"reference": "fixed corpus output and random programs",
+    "check": "typescript-translate",
+    "by": "tolean"}},
+  {"status": "tested",
+   "module": "tolean.TypeScript.Spec.Number",
+   "label": "JavaScript number laws",
+   "kind": "spec",
+   "id": "spec",
+   "evidence":
+   {"reference": "Node 22 and 24",
+    "check": "typescript-engines",
+    "by": "tolean"}},
+  {"status": "trusted",
+   "label": "JavaScript engine",
+   "kind": "runtime",
+   "id": "runtime"}],
+ "module": "Barrel",
+ "language": "typescript",
+ "edges":
+ [["source", "parser"],
+  ["parser", "translator"],
+  ["translator", "output"],
+  ["spec", "output"],
+  ["runtime", "output"]]}

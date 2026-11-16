@@ -54,16 +54,21 @@ exact. A construct leaves these tables when Tolean translates it, and the
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| `T \| undefined` as the type of a local or of a return value, and a test such as `x !== undefined && x > 0n` that narrows an optional value inside an expression | `Option T` | `'x' in obj`, which can tell a missing key from `undefined` |
-| `a?.[i]` and `f?.()` | `Option.bind` | `==` against anything except `null` and `undefined` |
-| A re-export, such as `export { a } from "./x.ts"` | Nothing: the names stay in scope | `export *` |
+| `f?.()` | No accepted program to translate: `Syntax.TypeExpr` and `Translate.Ty` have no function type, and no accepted declaration gives a possibly `undefined` value a callable type. A generic type parameter does not make a value callable. Local function values cannot escape a direct call. | Optional calls stay refused; so does `==` against anything except `null` and `undefined`. |
+| A value re-export, such as `export { a } from "./x.ts"` | Nothing: the names stay in scope | `export *` |
+
+[#247](https://github.com/shihangw/tolean/pull/247) fixes optional indexing
+after a conditional join makes a `Record` nullable, as in
+`(absent ? null : r)?.[k]`. The required-certificate fixture and
+Node-backed interpreter test cover that case. Optional calls remain refused.
 
 ### Functions
 
 | TypeScript | Lean | Refused |
 |---|---|---|
 | An arrow function passed to a function of the program, which reads only `const` values and parameters | `fun` | A callback that changes a variable outside itself |
-| A local function that returns a value and also changes `let` variables of the enclosing function | A Lean function that returns the value and the new values of those variables, which the call binds again | A `return` before the last statement of such a function |
+| A state-writing local function whose final return is an expression or names a variable other than a changed captured variable | A Lean function that returns the value and the new values of the captured variables, which the call binds again | A `return` before the last statement of such a function |
+| A sibling call whose callee captures variables not named by the caller, a longer chain of sibling calls, or a value-returning caller that changes state only through sibling calls | Lifted functions with transitive capture and state arguments | Recursive local functions |
 | A function-typed field or parameter, such as a comparator in an options object | A field of a function type | A function value that changes state when it is called |
 | A destructured parameter, such as `{ a, b }: Options` | A pattern on the structure | Defaults inside the pattern |
 | A default parameter value | `Option` with a default at the call | A default that reads another parameter |
@@ -100,10 +105,11 @@ value claim already does.
 | TypeScript | Lean | Refused |
 |---|---|---|
 | The `index` argument of a callback other than one of `map`, and the `array` argument of any callback | The `List` functions that also pass the index, as `List.mapIdx` does for `map`, and the list itself | |
-| A certificate for a file that sorts by a `number` key | As for `bigint` and `string` keys, with the precondition that no key is `NaN`, and for a difference that every key is finite. A difference also needs new laws: `<` is a strict total order on numbers that are not `NaN`, and the sign of `a - b` is the order of `a` and `b`. `jsNumberLaws.test.ts` would check them. | |
+| A number-sort certificate inside a callback other than `map` or `filter`, for changing loop state or body-local lists, for a remaining computed list shape, or under an enclosing nullable narrowing | A hypothesis over the parameters excludes `NaN` keys, or requires finite keys for a difference. Sorts and calls in ordinary expressions and records, in `map` and `filter`, and over loop elements or captured inputs already carry these conditions. Inputs may use parameter fields, local aliases, spreads, literal elements, maps, filters, slices, conditionals and calls. Calls in nullable matches carry guarded conditions for the selected branch. | Lists that cannot be reached from parameters. |
 
-The certifier writes no precondition today, so such a file gets no
-certificate.
+The certifier uses `sortValues_sortWith_on` for a direct sort of a
+parameter. Its input hypothesis excludes NaN keys for a comparison, or
+requires finite keys for a difference.
 
 ### Strings
 
@@ -140,13 +146,15 @@ restrictions for those later operations.
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| A function that changes a map that its caller passes in | A function that returns the new map. The caller takes the result in place of the old map. | A call where the caller keeps another name for the same map |
+| A map borrow with an early return, several changed maps, an ordinary returned value, control flow or an imported callee | A function that returns the changed maps, with its ordinary result when there is one. The caller binds the changed maps again. | A call where the caller keeps another name for the same map |
 
-This is the borrow that Aeneas uses for Rust. It is sound here only
-because the translator checks that the caller owns the map and holds no other
-name for it during the call. The spec's call rule now gives no value for a
-function that changes a parameter (`Stmt.ownsChanges`), so the borrow must
-also give the spec this meaning: the call copies the map in and back out.
+The translator now accepts one changed Map parameter in a void function
+whose body contains only straight-line set, delete and forwarding calls
+with atomic arguments and an optional terminal bare return. The call copies
+the map in and back out, and `program_sound`
+covers that call rule. The [TypeScript guide](../typescript/README.md#map-borrows)
+describes this case. The remaining cases need a wider call result, including
+the final parameter bindings when the callee returns or throws.
 
 One certificate gap is left. The initial value of a `reduce` can read a map
 or a set that `new Map(items)` or `new Set(items)` makes from a parameter,
@@ -201,26 +209,46 @@ be exact:
 
 ## Unfinished parser work
 
-[#208](https://github.com/shihangw/tolean/issues/208) remains open. The parser
-accepts comparisons separated by a top-level `&&`, `||`, `??`, `===`,
-`!==`, `==`, `!=`, `+`, `*`, `/`, `%` or `**`, but it still
-refuses `f(a < b, c > d)`. TypeScript 6.0.3 reads two comparisons there.
-This is a known gap, not a permanent restriction, so the case is not in the
-rejection corpus. The completed rule must accept it while still refusing
-`f(a < b, c > (d))` and `f < A, B > (x)`, which TypeScript reads with type
-arguments.
+[#208](https://github.com/shihangw/tolean/issues/208) remains open, but merged
+[#217](https://github.com/shihangw/tolean/pull/217) accepts its original
+example, `a < b && c > d`. A CLI translation of a typed
+`between` function containing that exact return expression succeeds. The
+issue still needs a broader fix: a typed function calling
+`f(a < b, c > d)` is refused, although TypeScript 6.0.3 reads two comparisons
+there. This is a known gap, not a permanent restriction, so the case is not
+in the rejection corpus.
 
-The remaining work is a speculative type-list parse followed by TypeScript's
-follow-token test. Before the parser can use that probe, the relation between
-source tokens and printed tokens must preserve the identifiers, contextual
-syntax and line-break information that the probe needs. The round-trip proof
-must then show that printing cannot turn a comparison into type arguments.
-These tokens stop the scan only outside brackets. The scan does not stop at
-`-`, `&`, `|`, `.`, `!` or `?`, because types can contain them. The operators
-`>>`, `>=`, `<<` and `<=` need a separate argument because TypeScript rescans
-`>` when it closes type arguments.
-The current operator rule is a sound first stage, not a substitute
-for that structural fix.
+The parser accepts comparisons when a top-level `&&`, `||`, `??`, `===`,
+`!==`, `==`, `!=`, `+`, `*`, `/`, `%` or `**` rules out a type list before a
+closing `>`. The scan keeps going inside brackets, because a type literal can
+contain a computed property name. It also keeps going at `-`, `&`, `|`, `.`,
+`!` and `?`, because types can contain them. The conservative treatment of
+`>>`, `>=`, `<<` and `<=` remains unchanged because TypeScript rescans `>`
+while it closes type arguments. The unrelated merged
+[#230](https://github.com/shihangw/tolean/pull/230) fixes WebAssembly list
+termination and does not change this parser rule.
+
+Open [PR #242](https://github.com/shihangw/tolean/pull/242) prepares the
+proof interface for a later ambiguity check; it does not change which source
+expressions the parser accepts. Its token observations retain token kinds
+(including identifier text), preceding line breaks and adjacency across
+fragment boundaries. Its prefix and suffix relations let a future probe be
+reasoned about in surrounding token contexts and across printed suffixes.
+The current parser still scans token kinds and still refuses
+`f(a < b, c > d)`.
+
+The remaining task is to parse a possible comma-separated type list
+speculatively, then apply TypeScript 6.0.3's follow-token test. In
+`f(a < b, c > d)`, `b, c` can parse as types, but the following `d` can start
+an expression, so TypeScript reads two comparisons. In
+`f(a < b, c > (d))`, the parenthesis can instead follow type arguments, so
+TypeScript reads a call with type arguments; `f < A, B > (x)` is the same
+kind of ambiguity. The future check must use the token adjacency and
+line-break information that its rules inspect, and the round-trip proof must
+show that printing preserves the probe's decision. Until that work is done,
+the parser should keep refusing the type-argument cases and any form whose
+reading it cannot establish. Extending the operator stop set alone does not
+complete #208.
 
 ## Steps
 
@@ -233,24 +261,120 @@ the P2 steps. Steps with the same priority keep the order of their numbers.
 The steps keep the numbers that pull requests refer to, so a finished step
 leaves a gap.
 
-2. **P0.** Types and narrowing: `T | undefined` as a type, a test of
-   `undefined` that narrows inside an expression, `a?.[i]` and `f?.()`, and
-   re-exports.
-8. **P0.** The borrow for a map that a caller passes in.
-10. **P1.** Sorting: certificates for a sort by a `number` key.
+2. **P0.** Value re-exports. Optional calls have no accepted program to apply
+   to, as the types table explains; they are not unfinished work in this step.
+8. **P0.** Widen map borrows to early returns, several changed maps, an
+   ordinary returned value, control flow and imported callees.
+10. **P1.** Sorting: number-key certificates inside the remaining callbacks, for changing loop state and body locals,
+    remaining computed list shapes, and direct sorts or conditioned helpers
+    under enclosing nullable narrowing. Calls inside nullable matches are
+    covered.
 11. **P2.** Recursion: tagged unions that refer to themselves first, then
-    `@decreases`, mutual recursion, and `while` loops.
+    `@decreases`, mutual recursion, and `while` loops. Add certificates for
+    self-referential interfaces and recursive functions, with existential
+    fuel, as proposed in the [recursion open question](#open-questions).
 12. **P1.** Non-literal `bigint` exponents, `BigInt(number)`,
     `toISOString`, and non-literal padding lengths. These still need a
     model of built-in errors whose messages the program cannot read.
 13. **P2.** Classes with `readonly` fields and methods that do not change
     `this`.
-14. **P1.** Local functions: one that returns a value and changes variables
-    of the enclosing function, calls between local functions, and
-    certificates for files that have local functions.
+14. **P1.** Local functions: general final return expressions in functions
+    that change captured variables, implicit transitive captures, longer
+    sibling call chains, and value-returning callers with only indirect state changes.
+15. **P1.** Certificates for counted `for` loops: each counted loop adds a
+    hypothesis that `countUp?` on its bound gives a value. Print the bound
+    over the parameters, and refuse bounds that read anything but parameters.
+    See the [counted-loop open question](#open-questions).
+16. **P1.** Certificates for generic functions and interfaces: take a
+    `Codec N T` for each type parameter and write codec constructors for
+    generic interfaces. See the [generic certificate open question](#open-questions).
+17. **P2.** `try` and `catch`: accept `try { … } catch (e) { … }` where the
+    catch tests `e` with `instanceof` or ignores it. Keep `finally`, rethrowing
+    a changed value and throwing anything but an error refused. See the
+    [`try` and `catch` open question](#open-questions).
+18. **P2.** Proof obligations: Tolean states `Consistent cmp` for a comparator
+    outside the two known shapes and accepts a project-supplied proof beside
+    the output. The build checks the proof for `sorry` and axioms. The same
+    mechanism later serves `@decreases`. See the
+    [proof-obligation open question](#open-questions).
+19. **P2.** Close the `const` gap: share one predicate between the translator's
+    refusal and the interpreter's `none` for assignments to a
+    `for (const x of xs)` binding. See the [`const` open question](#open-questions).
 
 Steps 2 and 4 cover most of the code in the survey. Step 8 matters most for
 proofs, because a fold over events keeps much of its state in maps.
+
+## Refactors from review
+
+These entries record design feedback from pull requests and separate fixes
+that have landed from work that remains. A fix in a descendant does not mean
+that the earlier pull request already contains it.
+
+- **Make expression scans exhaustive.** Enumerate leaf constructors instead
+  of ending a scan with `| _ => false` or `| _ => []`. Traverse ordinary
+  children, and name any deliberately unsupported binding scopes explicitly.
+  Audit the call, name, callback and number scans rather than adding another
+  independently maintained partial traversal. Keep source-call counts as
+  invariant checks, not as the definition of which syntax is supported.
+
+  The [call-traversal review on #220](https://github.com/shihangw/tolean/pull/220#discussion_r4576745761)
+  identified dropped `.struct` fields and `.structUpdate` children.
+  **#220 now covers the condition-call traversal:** `conditionCalls` visits
+  record fields, the update base and replacement fields, and enumerates
+  leaves explicitly. The source scan also counts calls in object spreads.
+  Required certificates cover each record position and both update sides.
+  `bodyConditionCalls` explicitly refuses tagged narrowing with a named
+  scope error because its rebound parameter needs guarded conditions over
+  the original union. #238 retains its additional record certificate cases.
+  The other scans still need the broader audit described above.
+
+  The [number-use scan on #221](https://github.com/shihangw/tolean/pull/221#discussion_r4576744315)
+  has landed: `exprUsesNumber` follows an optional-index receiver, and it
+  names the expression forms that cannot use numbers. The accepted
+  `optionalIndexNumberReceiver` fixture keeps the receiver-only regression
+  visible. Do not repeat that fix. The broader scan audit remains open,
+  because `typeUsesNumber` and `stmtUsesNumber` still have fallback cases.
+  Keep checking all of these traversals against their syntax constructors;
+  do not treat source-call counts as a definition of coverage.
+
+- **Preserve the state-aware local-function return path.**
+  The [review on #226](https://github.com/shihangw/tolean/pull/226#discussion_r4576809523),
+  also inherited by #236, found that `callLocal` could run a state-writing,
+  value-returning body twice. That is fixed: `callLocal` recognizes a
+  changing body with a final value return before it calls `execStmt`, then
+  runs `execReturnState` once and writes the captured values back. This fixes
+  execution order, not the supported syntax. Earlier returns with captured
+  changes still have no modeled result. Step 14 still tracks general final
+  return expressions, transitive captures, longer sibling call chains and
+  callers whose local functions change state only indirectly.
+
+- **Preserve both map-escape regression tests.**
+  The [review on #231](https://github.com/shihangw/tolean/pull/231#discussion_r4577273721)
+  found that a rebase removed the nested-map case where `forward(a, b)`
+  stores `b` in `a` through `change`, then the caller mutates `b`.
+  [#231](https://github.com/shihangw/tolean/pull/231) restored that test in
+  commit `4bd0eac`, with `refused: true`, alongside the direct-call escape
+  test. Keep both tests so the direct and forwarding paths stay protected.
+
+- **Share literal-encoding normalization between certificate proof paths.**
+  The [review on #233](https://github.com/shihangw/tolean/pull/233#discussion_r4576995912)
+  found that a literal appended inside a conditional callback prevented the
+  sort lemma from matching. #237 fixes the concrete certificate failure,
+  as the reviewer verified, but the step 10 tip still emits the reverse
+  literal-map and append normalization in separate callback, loop and
+  function paths. Extract one proof-emission step that takes the required
+  encoders. Keep the nested literal-append and loop certificate cases so
+  the shared step preserves their normalization order.
+
+- **Complete the structural type-argument ambiguity check.**
+  The merged [#217](https://github.com/shihangw/tolean/pull/217) validates
+  the bounded operator stop set, not a complete ambiguity algorithm. Open
+  [#242](https://github.com/shihangw/tolean/pull/242) supplies observations
+  and prefix proofs for a later probe, but does not implement that probe.
+  Retain #217's bracket-depth rule and pinned-TypeScript controls. The
+  remaining work is the speculative type-list parse, TypeScript's
+  follow-token test, and a round-trip proof that preserves the identifiers,
+  contextual tokens, adjacency and line breaks those checks use.
 
 ## Open questions
 
@@ -373,19 +497,13 @@ a reason to choose otherwise.
   ([decision](../decisions/2026-11-12-local-functions.md)), so the
   threading that these use is already in place.
 
-- Should a map that a caller passes in become a borrow, as above, or should the
-  callee run in a state monad? A borrow keeps the output plain, but it only
-  covers a call that changes one map.
-
-  Recommendation: the borrow, with a tuple when a callee changes several
-  maps. A callee that changes two maps returns a pair, and one with a result
-  returns a triple, as a loop already returns the tuple of the locals it
-  changes, and as Aeneas does for Rust. A state monad would hide which maps a
-  function touches and bring `StateT` lemmas into every proof about pure
-  code. The [effects plan](effects.md) keeps the monad for state that is
-  global. The parameter's type is the signal: a `Map` parameter with a `set`
-  in the body is a borrow, and a `ReadonlyMap` is plain. A call statement
-  `f(m, x);` becomes `let m := f m x`.
+- The map-borrow question is settled by the
+  [decision to pass changed maps back](../decisions/2026-11-14-map-borrows.md).
+  A single map now passes back on normal completion, including a terminal
+  bare return and forwarding through another checked call. The remaining
+  tuple result must carry several maps or an ordinary result as well.
+  `ReadonlyMap` stays plain. Step 8 remains open because early returns
+  and returned values still need to preserve the final parameter bindings.
 
 - Should a comparator that is not one of the two shapes be accepted when the
   project supplies a proof that it is consistent?

@@ -1,6 +1,5 @@
-// A sort by number keys. A file with one gets no certificate yet, because its
-// claim needs the precondition that no key is NaN, and for a difference that
-// every key is finite.
+// certify: required
+// Number-key certificates state non-NaN or finite-key input hypotheses.
 interface Event {
   readonly time: number;
   readonly kind: string;

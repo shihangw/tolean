@@ -103,6 +103,9 @@ inductive TyExt where
   | error
   /-- `JSDate`, a `Date` (`Spec/Date.lean`). -/
   | date
+  /-- A captured local closure is checked only by the evaluator. Calls name
+  its lifted definition, so the printed parameter is Unit. -/
+  | closure
   /-- A compiled flagless literal, with no observable object identity. -/
   | regexp
 deriving BEq, Repr, Inhabited, DecidableEq
@@ -192,6 +195,8 @@ inductive ExprExt where
   /-- `match k with | K.a => r.a | …`, on `r` and `k`: `r[k]`, where `r` is a
   `Record<K, V>` with the keys `keys`, and `K` is the literal union `key`. -/
   | recordGet (key : DeclRef) (keys : List String)
+  /-- Bind an optional record before reading its selected field. -/
+  | optRecordGet (key : DeclRef) (keys : List String) (bind : Bool)
   /-- `x ∈ xs`, a `Prop`, on `xs` and `x`: `xs.includes(x)`, where the
   elements are integers, booleans, strings or constructors of a literal
   union, which SameValueZero compares as `=` does. -/
@@ -205,9 +210,13 @@ inductive ExprExt where
   /-- `xs[k]?`, on `xs`: `xs[k]` with a number literal `k`, which is the
   element at `k` or `undefined`. -/
   | indexLit (k : Nat)
+  /-- Bind an optional array or tuple before reading a literal index. -/
+  | optIndexLit (k : Nat) (tupleSize : Option (Nat × Bool))
   /-- `(JSNumber.elementAt? xs i)`, on `xs` and `i`: `xs[i]` with a number
   `i`. -/
   | indexNumber
+  /-- An optional array binds its value before reading a number index. -/
+  | optIndexNumber
   /-- `(JSNumber.countUp (k : Int) b)`, on `b`: the values of `i` in
   `for (let i = k; i < b; i++)`. -/
   | countUp (k : Int)
@@ -358,10 +367,14 @@ instance : tolean.IR.PrintTy TyExt where
     | .null => s!"({leanName names "Option"} Empty)"
     | .error => leanName names "JSError"
     | .date => leanName names "JSDate"
+    | .closure => leanName names "Unit"
     | .regexp => leanName names "JSRegExp.Regex"
+  erased
+    | .closure => true
+    | _ => false
   namesParam _
     | .number => true
-    | .null | .error | .date | .regexp => false
+    | .null | .error | .date | .closure | .regexp => false
   binders names :=
     let n := names.typeParam
     s!" \{{n} : Type} [{leanName names "JSNumber"} {n}]"
@@ -410,6 +423,15 @@ def regexpPatternTerm : JSRegExp.Pattern → String
   | .repeat p minimum maximum =>
     let bound := match maximum with | none => ".none" | some n => s!"(.some {n})"
     s!"(.repeat {regexpPatternTerm p} {minimum} {bound})"
+
+open tolean.IR (argument) in
+private def printRecordGet (names : Names) (key : DeclRef) (keys : List String)
+    (r k : String) : String :=
+  let case (f : String) := s!"{(names.ref key).1}.{memberName f}"
+  match keys.find? (case · == k) with
+  | some f => s!"{argument r}.{f}"
+  | Option.none =>
+    s!"(match {k} with{String.join (keys.map fun f => s!" | {case f} => {argument r}.{f}")})"
 
 open tolean.IR (argument) in
 /-- An operation on its printed arguments. The translator gives each one the
@@ -519,13 +541,11 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
   | .append, [a] => a
   | .append, lists =>
     s!"({" ++ ".intercalate (lists.map fun a => if wholeParens a then a else argument a)})"
-  | .recordGet key keys, [r, k] =>
-    let case (f : String) := s!"{(names.ref key).1}.{memberName f}"
-    -- A key that is one constructor, as `r['a']` gives, reads its field.
-    match keys.find? (case · == k) with
-    | some f => s!"{argument r}.{f}"
-    | Option.none =>
-      s!"(match {k} with{String.join (keys.map fun f => s!" | {case f} => {argument r}.{f}")})"
+  | .recordGet key keys, [r, k] => printRecordGet names key keys r k
+  | .optRecordGet key keys bind, [r, k] =>
+    let value := printRecordGet names key keys "_record'" k
+    let body := if bind then value else s!"{leanName names "some"} {argument value}"
+    s!"({argument r}.bind (fun _record' => {body}))"
   | .includes, [xs, x] => s!"{argument x} ∈ {argument xs}"
   | .includesNumber, [xs, x] =>
     s!"({leanName names "List.any"} {argument xs} ({js}.sameValueZero {argument x}))"
@@ -533,7 +553,14 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
     let int := leanName names "Int"
     s!"({js}.ofSafeInt (N := {names.typeParam}) (({leanName names "List.length"} {argument xs} : {leanName names "Nat"}) : {int}))"
   | .indexLit k, [xs] => s!"{argument xs}[{k}]?"
+  | .optIndexLit k none, [xs] => s!"({argument xs}.bind (·[{k}]?))"
+  | .optIndexLit k (some (size, bind)), [xs] =>
+    let value := s!"_tuple'{tolean.IR.projPath k size}"
+    let body := if bind then value else s!"{leanName names "some"} {value}"
+    s!"({argument xs}.bind (fun _tuple' => {body}))"
   | .indexNumber, [xs, i] => s!"({js}.elementAt? {argument xs} {argument i})"
+  | .optIndexNumber, [xs, i] =>
+    s!"({argument xs}.bind (fun _xs' => {js}.elementAt? _xs' {argument i}))"
   | .countUp k, [b] => s!"({js}.countUp ({k} : {leanName names "Int"}) {argument b})"
   | .at k, [xs] =>
     if 0 ≤ k then s!"{argument xs}[{k.toNat}]?"

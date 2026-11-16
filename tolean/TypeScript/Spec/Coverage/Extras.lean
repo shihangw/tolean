@@ -1,3 +1,4 @@
+import tolean.TypeScript.Syntax.Layout
 import tolean.TypeScript.Proof.Expr
 import tolean.Project
 
@@ -95,3 +96,27 @@ theorem translateImport_edition {sp : Span} {names : List ImportName} {source : 
 #guard Project.Job.edition (.typescript (Lean.Json.mkObj [("target", "ES2019")]) "x.ts") == .es2019
 
 end tolean.TypeScript.Coverage
+
+-- The lexer splits both forms into the same kinds. The observation must
+-- retain the adjacency that TypeScript uses when it rescans the closing `>`.
+#guard match tolean.TypeScript.Syntax.lex "f < A >= x",
+    tolean.TypeScript.Syntax.lex "f < A > = x" with
+  | .ok tight, .ok spaced =>
+    let a := tight.toList
+    let b := spaced.toList
+    a.map (·.kind) == b.map (·.kind) &&
+    a.map (·.newlineBefore) == b.map (·.newlineBefore) &&
+    tolean.TypeScript.Syntax.observations a != tolean.TypeScript.Syntax.observations b
+  | _, _ => false
+
+-- A split between `>` and `=` must carry the right boundary into the prefix.
+#guard match tolean.TypeScript.Syntax.lex "f < A >= x" with
+  | .ok tokens =>
+    let ts := tokens.toList
+    let before := ts.take 4
+    let suffix := ts.drop 4
+    let boundary := tolean.TypeScript.Syntax.observationBoundary suffix none
+    let expected := (tolean.TypeScript.Syntax.observations ts).take 4
+    tolean.TypeScript.Syntax.observations before boundary == expected &&
+    tolean.TypeScript.Syntax.observations before != expected
+  | _ => false
