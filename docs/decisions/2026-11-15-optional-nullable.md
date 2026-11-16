@@ -27,13 +27,12 @@ must skip its projection for either nullish value, but preserve a null
 that the projected field holds. Narrowing against undefined removes only
 the outer layer.
 
-Optional nullable fields and parameters whose payload still names type
-parameters remain refused, including through aliases and containers.
-Substituting a nullable type for a payload parameter can otherwise give
-two representations of null. A call-site restriction does not enforce that
-invariant on the generated polymorphic Lean type. The generic certificate
-step must decide codec laws or a canonical representation before lifting
-this refusal.
+At the time of this decision, optional nullable fields and parameters whose
+payload still named type parameters were refused, including through aliases
+and containers. The [generic codec decision](2026-11-16-generic-codecs.md)
+resolves that restriction for certified generic code. Each codec proves that
+its encoding is neither null nor undefined, so a payload cannot collide with
+the outer nullish values.
 
 An object without a key is still not the same object as one whose key
 holds undefined. The nested option models the value of a field read, not

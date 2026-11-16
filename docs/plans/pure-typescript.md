@@ -399,35 +399,22 @@ that the earlier pull request already contains it.
 
 ## Open questions
 
-Each question ends with a recommendation. A recommendation is not a decision:
-the step that takes the question up turns it into a decision record, or finds
-a reason to choose otherwise.
+An open question ends with a recommendation until a step decides it. A
+decision record then states the choice and any limits that remain.
 
-- How should a certificate cover a generic function or interface? The
-  certifier has no encoder for a type parameter, so a file with either gets
-  no certificate. The claim could take an encoder for each type parameter as
-  an argument, since the code never looks inside such a value.
+- How should a certificate cover a generic function or interface? Before step
+  16, the certifier had no encoder for a type parameter, so a file with either
+  got no certificate. The claim could take an encoder for each type parameter
+  as an argument, since the code never looks inside such a value.
 
-  Recommendation: take a codec for each type parameter, not only an encoder.
-  The loop lemmas decode the environment back into Lean values, so they need
-  a decoder and the round trip `dec (some (enc x)) = x`. A test such as
-  `x === null` on a `T | null` needs `enc x ≠ Val.null`, and `??` needs
-  `enc x ≠ Val.undefined`. Those are the lemmas that the certifier writes for
-  every enum and struct today. One structure `Codec N T` bundles them. The
-  theorem of a generic function takes `(c : Codec N T)`, the certifier writes
-  `codecGauge : Codec N Gauge` for each concrete type from the same pieces,
-  and a generic interface gets a codec constructor such as
-  `codecPair (cA : Codec N A) (cB : Codec N B) : Codec N (Pair A B)`. The
-  claim holds because the translator refuses every construct that looks
-  inside a value of type `T`. If a later construct breaks that, Lean refuses
-  the certificate rather than accepting a false one.
-
-  Issue #248 keeps optional nullable payloads with unresolved type parameters
-  refused. Before step 16 lifts that restriction, decide whether a codec
-  must prove that it never encodes a payload as null or undefined, or the
-  representation must enforce canonical values. Merely bundling an
-  arbitrary encoder does not distinguish `JSNullish.null` from a payload
-  that encodes to null.
+  Decision: require a `Codec N T` for each type parameter. A codec proves that
+  its decoder reverses its encoder, and that the encoder never gives `null`
+  or `undefined`. The exclusions distinguish a payload from the nullish case
+  of a surrounding type, which lifts the optional-nullable generic refusal.
+  A generic interface gets a codec constructor from the codecs of its
+  parameters. Recursive interfaces and generic-interface uses with a
+  non-parameter argument remain refused; see the
+  [decision record](../decisions/2026-11-16-generic-codecs.md).
 
 - How should a certificate cover an interface that refers to itself, and a
   function that calls itself? The encoder of such an interface would be a

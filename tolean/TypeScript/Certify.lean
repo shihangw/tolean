@@ -53,6 +53,8 @@ structure Refs where
   idents : List String
   /-- The namespace of the certificate. -/
   certNs : String
+  /-- The codec variables for the type parameters in the current declaration. -/
+  codecs : List (String × String) := []
 
 /-- `short`, or `full` from the root when a source name would hide `short`. -/
 def Refs.write (r : Refs) (short full : String) : String :=
@@ -82,6 +84,22 @@ def Refs.cert (r : Refs) (name : String) : String := r.write name s!"{r.certNs}.
 /-- A name that is already written in full. -/
 def Refs.full (r : Refs) (name : String) : String := r.write name name
 
+/-- The codec variable for a source type parameter. -/
+def Refs.codec (r : Refs) (name : String) : Option String :=
+  (r.codecs.find? (·.1 == name)).map (·.2)
+
+/-- A local codec binder that cannot hide an identifier from the source. -/
+def Refs.codecName (r : Refs) (name : String) : String :=
+  let base := s!"toleanCodec_{name}"
+  let candidates := (List.range (r.idents.length + 1)).map fun n =>
+    base ++ String.join (List.replicate n "_")
+  (candidates.find? fun candidate => !(r.idents.contains candidate)).getD (base ++ "_")
+
+/-- The binders for codecs that a generic declaration needs. -/
+def Refs.codecBinders (r : Refs) (nv : String) (params : List String) : String :=
+  String.join (params.map fun name =>
+    s!" \{{name} : Type} ({r.codecName name} : tolean.TypeScript.Eval.Codec {nv} {name})")
+
 /-- Every identifier in `source`, at any level, as `Translate.translateFile`
 finds them. -/
 def sourceIdents (source : String) (target : Edition) : List String :=
@@ -104,10 +122,16 @@ def encoderOf (r : Refs) : IR.Ty → Option String
   | .struct ref | .enum ref | .tagged ref => some (r.cert s!"encode{ref.name}")
   | .number => some (r.eval "Val.num")
   | .tuple ts => do return s!"({r.eval "encTuple"} {← elementsEncoder r ts})"
-  -- A type parameter has no encoder, so a generic function or interface gets no
-  -- certificate yet. Neither has a map, a set or a date, nor a function that
-  -- can throw.
-  | .null | .tag _ | .param _ | .app .. | .map .. | .set _ | .except .. | .error | .date | .regexp | .ext .closure => none
+  -- A type parameter uses the codec that its function or interface certificate
+  -- binds. A generic application is supported when every argument is such a
+  -- parameter; other applications have no codec yet.
+  | .param name => do return s!"({← r.codec name}.encode)"
+  | .app ref args => do
+    let codecs ← args.mapM fun
+      | .param name => r.codec name
+      | _ => none
+    return s!"({r.cert s!"encode{ref.name}"} {" ".intercalate codecs})"
+  | .null | .tag _ | .map .. | .set _ | .except .. | .error | .date | .regexp | .ext .closure => none
 
 /-- How the elements of a tuple of the types `ts` become a list of `Val`s. -/
 def elementsEncoder (r : Refs) : List IR.Ty → Option String
@@ -130,7 +154,13 @@ def decoderOf (r : Refs) : IR.Ty → Option String
   | .struct ref | .enum ref | .tagged ref => some (r.cert s!"decode{ref.name}")
   | .number => some (r.eval "decNum")
   | .tuple ts => do return s!"({r.eval "decTuple"} {← elementsDecoder r ts})"
-  | .null | .tag _ | .param _ | .app .. | .map .. | .set _ | .except .. | .error | .date | .regexp | .ext .closure => none
+  | .param name => do return s!"({← r.codec name}.decode)"
+  | .app ref args => do
+    let codecs ← args.mapM fun
+      | .param name => r.codec name
+      | _ => none
+    return s!"({r.cert s!"decode{ref.name}"} {" ".intercal codecs})"
+  | .null | .tag _ | .map .. | .set _ | .except .. | .error | .date | .regexp | .ext .closure => none
 
 /-- How a list of `Val`s becomes the elements of a tuple of the types `ts`. -/
 def elementsDecoder (r : Refs) : List IR.Ty → Option String
@@ -713,7 +743,12 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           s!"simp [encode{name}, {r.eval "sameValueZero"}, {r.eval "strictEq"}]) xs"
     -- An interface.
     if let .struct name typeParams allFields := d then
-      unless typeParams.isEmpty do throw s!"{file}: the generic interface {name} has no certificate yet"
+      let structCodecs := typeParams.map fun p => (p, r.codecName p)
+      let structRefs := { r with codecs := structCodecs }
+      let structGeneric := generic ++ structRefs.codecBinders nv typeParams
+      let structType := if typeParams.isEmpty then structTy name else
+        (IR.Ty.app ⟨"", name⟩ (typeParams.map IR.Ty.param) : IR.Ty).print names
+      let codecArgs := String.join (typeParams.map fun p => s!" ({structRefs.codecName p})")
       -- The encoder of an interface that refers to itself would be recursive.
       if allFields.any (fun (_, t) => t.refs.any (·.name == name)) then
         throw s!"{file}: the recursive interface {name} has no certificate yet"
@@ -722,9 +757,9 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       let parts ← allFields.mapM fun (f, t) => do
         if let .tag v := t then return (s!"({str f}, Val.str {r.jsString v})", false)
         if let .optional u := t then
-          let some e := encoderOf r u | throw s!"{file}: cannot encode the field {name}.{f}"
+          let some e := encoderOf structRefs u | throw s!"{file}: cannot encode the field {name}.{f}"
           return (s!"({r.eval "encField"} {str f} {e} x.{f})", true)
-        let some e := encoderOf r t | throw s!"{file}: cannot encode the field {name}.{f}"
+        let some e := encoderOf structRefs t | throw s!"{file}: cannot encode the field {name}.{f}"
         return (s!"({str f}, {e} x.{f})", false)
       let hasOptional := parts.any (·.2)
       let objList := if hasOptional then
@@ -733,13 +768,13 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       -- The structure has no tag fields, so the decoder reads none.
       let fields := allFields.filter fun (_, t) => !(t matches .tag _)
       let decs ← fields.mapM fun (f, t) => do
-        let some dec := decoderOf r t | throw s!"{file}: cannot decode the field {name}.{f}"
+        let some dec := decoderOf structRefs t | throw s!"{file}: cannot decode the field {name}.{f}"
         return (f, dec)
       let some_ := ", ".intercalate (decs.map fun (f, dec) => s!"{f} := {dec} (fs.lookup {str f})")
       let none_ := ", ".intercalate (decs.map fun (f, dec) => s!"{f} := {dec} (none : Option (Val {nv}))")
-      encs := encs.push s!"def encode{name} {generic} (x : {structTy name}) : Val {nv} := Val.obj {if hasOptional then s!"({objList})" else objList}"
+      encs := encs.push s!"def encode{name} {structGeneric} (x : {structType}) : Val {nv} := Val.obj {if hasOptional then s!"({objList})" else objList}"
       encs := encs.push <|
-        s!"def decode{name} {generic} : Option (Val {nv}) → {structTy name}\n" ++
+        s!"def decode{name} {structGeneric} : Option (Val {nv}) → {structType}\n" ++
         s!"  | some (.obj fs) => \{ {some_} }\n" ++
         s!"  | _ => \{ {none_} }"
       -- With optional fields, the proof splits each into its two cases.
@@ -748,26 +783,36 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         else s!"obtain ⟨{", ".intercalate (fields.map fun (f, _) => s!"x_{f}")}⟩ := x\n  " ++
           String.join (optionalFields.map fun f => s!"cases x_{f} <;> ")
       encs := encs.push <|
-        s!"@[simp] theorem decode{name}_encode{name} {generic} (x : {structTy name}) : decode{name} (some (encode{name} ({nv} := {nv}) x)) = x := by\n" ++
-        s!"  {splitOptional}{if optionalFields.isEmpty then "; " else ""}simp [decode{name}, encode{name}, List.lookup, encList]"
+        s!"@[simp] theorem decode{name}_encode{name} {structGeneric} (x : {structType}) : decode{name} (some (encode{name} ({nv} := {nv}) x)) = x := by\n" ++
+        s!"  {splitOptional}{if optionalFields.isEmpty then "; " else ""}simp [decode{name}, encode{name}, List.lookup, encList{if typeParams.isEmpty then "" else ", " ++ String.intercalate ", " (typeParams.map fun p => s!"{structRefs.codecName p}.decode_encode, {structRefs.codecName p}.encode_ne_null, {structRefs.codecName p}.encode_ne_undefined")}]"
       encs := encs.push <|
-        s!"@[simp] theorem encode{name}_ne_null {generic} (x : {structTy name}) : encode{name} ({nv} := {nv}) x ≠ Val.null := by\n" ++
+        s!"@[simp] theorem encode{name}_ne_null {structGeneric} (x : {structType}) : encode{name} ({nv} := {nv}) x ≠ Val.null := by\n" ++
         s!"  simp [encode{name}]"
       encs := encs.push <|
-        s!"@[simp] theorem encode{name}_ne_undefined {generic} (x : {structTy name}) : encode{name} ({nv} := {nv}) x ≠ Val.undefined := by\n" ++
+        s!"@[simp] theorem encode{name}_ne_undefined {structGeneric} (x : {structType}) : encode{name} ({nv} := {nv}) x ≠ Val.undefined := by\n" ++
         s!"  simp [encode{name}]"
       -- An array of the interface, as a loop over it reads its variable back.
       -- `simp` cannot find this from `decList_list` when the fields nest, so
       -- the certificate states it.
       encs := encs.push <|
-        s!"@[simp] theorem decList_decode{name} {generic} (xs : List {structTy name}) : decList decode{name} (some (Val.list (List.map (encode{name} ({nv} := {nv})) xs))) = xs :=\n" ++
+        s!"@[simp] theorem decList_decode{name} {structGeneric} (xs : List {structType}) : decList (decode{name}{codecArgs}) (some (Val.list (List.map (encode{name} ({nv} := {nv}){codecArgs}) xs))) = xs :=\n" ++
         s!"  decList_list _ _ decode{name}_encode{name} xs"
       -- The same for an array of nullable values, which `simp` would
       -- otherwise reach only through side conditions that it cannot discharge
       -- once it unfolds the encoder.
       encs := encs.push <|
-        s!"@[simp] theorem decList_decNull_decode{name} {generic} (xs : List (Option {structTy name})) : decList (decNull decode{name}) (some (Val.list (List.map (encNull (encode{name} ({nv} := {nv}))) xs))) = xs :=\n" ++
+        s!"@[simp] theorem decList_decNull_decode{name} {structGeneric} (xs : List (Option {structType})) : decList (decNull (decode{name}{codecArgs})) (some (Val.list (List.map (encNull (encode{name} ({nv} := {nv}){codecArgs})) xs))) = xs :=\n" ++
         s!"  decList_list_null _ _ decode{name}_encode{name} encode{name}_ne_null xs"
+      unless typeParams.isEmpty do
+        let genericTy := (IR.Ty.app ⟨"", name⟩ (typeParams.map IR.Ty.param) : IR.Ty).print names
+        encs := encs.push <|
+          s!"def codec{name} {structGeneric} : tolean.TypeScript.Eval.Codec {nv} ({genericTy}) where\n" ++
+          s!"  encode x := .list [encode{name}{codecArgs} x]\n" ++
+          s!"  decode\n    | some (.list [v]) => decode{name}{codecArgs} (some v)\n" ++
+          s!"    | _ => decode{name}{codecArgs} none\n" ++
+          s!"  decode_encode x := by simp [decode{name}_encode{name}]\n" ++
+          s!"  encode_ne_null x := by simp\n" ++
+          s!"  encode_ne_undefined x := by simp"
       lemmaNames := lemmaNames ++ #[r.cert s!"encode{name}", r.cert s!"decode{name}"]
     -- A union of primitive types: each member is its value, and the decoder
     -- reads the kind of the value to pick the member.
@@ -867,12 +912,18 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
   -- of a callee is available when the caller's theorem is written.
   let mut functionConditions : List (String × (List (String × IR.Ty) × List String)) := []
   for d in m.decls do
-    let .function _ _ name _ params _ syntaxBody := d | continue
+    let .function _ _ name typeParams params _ syntaxBody := d | continue
     unless fns.contains name do continue
     let some (.function _ outParams outRet outBody) := decls.find? fun
         | .function n .. => n == name
         | _ => false
       | throw s!"{file}: no translation of {name}"
+    let functionCodecs := typeParams.map fun p => (p, r.codecName p)
+    let r := { r with codecs := functionCodecs }
+    let functionGeneric := generic ++ r.codecBinders nv typeParams
+    let codecLemmas := typeParams.flatMap fun p =>
+      let c := r.codecName p
+      [s!"{c}.decode_encode", s!"{c}.encode_ne_null", s!"{c}.encode_ne_undefined"]
     -- A callback gets a lemma before the loops, because a loop's body can
     -- hold one, and before the callbacks that hold it.
     let mut cbIndex := 0
@@ -982,7 +1033,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           "  try simp only []\n" ++
           String.join (coded.zipIdx.map fun ((n, _, dec), i) =>
             s!"  generalize {dec} (ρ.lookup {str n}) = v{i} at h{i} ⊢\n")
-      let simpSet := ", ".intercalate (hfsName ++ envLemmas ++ lemmaNames.toList ++ loopLemmas.toList ++ defs ++ hypNames)
+      let simpSet := ", ".intercalate (hfsName ++ envLemmas ++ lemmaNames.toList ++ codecLemmas ++ loopLemmas.toList ++ defs ++ hypNames)
       let itemsTy := (IR.Ty.list elem).print names
       -- A callback of `reduce`: the lemma holds for every value so far `a`,
       -- which the body reads under the name of the first parameter. It holds
@@ -995,7 +1046,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         let vars := ("a", info.result) :: ("x", elem) :: scope.zipIdx.map fun ((_, t), i) => (s!"v{i}", t)
         loopLemmas := loopLemmas.push (r.cert lemmaName)
         thms := thms.push <|
-          s!"theorem {lemmaName} {generic} (fs : List (tolean.DeclRef × List String × tolean.TypeScript.IR.Body)){hfs}\n" ++
+          s!"theorem {lemmaName} {functionGeneric} (fs : List (tolean.DeclRef × List String × tolean.TypeScript.IR.Body)){hfs}\n" ++
           s!"    (fuel : Nat) (ρ : Env {nv}){hI} (items : {itemsTy}) (v : Val {nv})\n" ++
           s!"    (hv : {encY} ({decY} (some v)) = v) :\n" ++
           s!"    tolean.TypeScript.IR.Expr.evalReduce fs {fuel} ρ {str acc} {str param} ({term cbBody})\n" ++
@@ -1086,7 +1137,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
               | last :: rest => rest.foldl (fun acc c => s!"({r.full "compareLex"} {c} {acc})") last
             loopLemmas := loopLemmas.push (r.cert lemmaName)
             thms := thms.push <|
-              s!"theorem {lemmaName} {generic} (fs : List (tolean.DeclRef × List String × tolean.TypeScript.IR.Body)){hfs}\n" ++
+              s!"theorem {lemmaName} {functionGeneric} (fs : List (tolean.DeclRef × List String × tolean.TypeScript.IR.Body)){hfs}\n" ++
               s!"    (fuel : Nat) (ρ : Env {nv}) (items : {itemsTy}){hypotheses} :\n" ++
               s!"    tolean.TypeScript.Eval.sortValues (tolean.TypeScript.IR.Expr.evalCompare fs {fuel} ρ {str param} {str other} ({term cbBody}))\n" ++
               s!"      (List.map {encX} items) = some (List.map {encX} (tolean.TypeScript.JSNumber.sortWith {fn} items)) := by\n" ++
@@ -1136,7 +1187,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
             inputConditions := inputConditions ++ [condition input]
           loopLemmas := loopLemmas.push (r.cert lemmaName)
           thms := thms.push <|
-            s!"theorem {lemmaName} {generic} (fs : List (tolean.DeclRef × List String × tolean.TypeScript.IR.Body)){hfs}\n" ++
+            s!"theorem {lemmaName} {functionGeneric} (fs : List (tolean.DeclRef × List String × tolean.TypeScript.IR.Body)){hfs}\n" ++
             s!"    (fuel : Nat) (ρ : Env {nv}) (items : {itemsTy}) (hkeys : {condition "items"}) :\n" ++
             s!"    tolean.TypeScript.Eval.sortValues (tolean.TypeScript.IR.Expr.evalCompare fs {fuel} ρ {str param} {str other} ({term cbBody}))\n" ++
             s!"      (List.map {encX} items) = some (List.map {encX} (tolean.TypeScript.JSNumber.sortWith {fn} items)) := by\n" ++
@@ -1155,7 +1206,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         let vars := ("x", elem) :: ("y", elem) :: scope.zipIdx.map fun ((_, t), i) => (s!"v{i}", t)
         loopLemmas := loopLemmas.push (r.cert lemmaName)
         thms := thms.push <|
-          s!"theorem {lemmaName} {generic} (fs : List (tolean.DeclRef × List String × tolean.TypeScript.IR.Body)){hfs}\n" ++
+          s!"theorem {lemmaName} {functionGeneric} (fs : List (tolean.DeclRef × List String × tolean.TypeScript.IR.Body)){hfs}\n" ++
           s!"    (fuel : Nat) (ρ : Env {nv}){hI} (items : {itemsTy}) :\n" ++
           s!"    tolean.TypeScript.Eval.sortValues (tolean.TypeScript.IR.Expr.evalCompare fs {fuel} ρ {str param} {str other} ({term cbBody}))\n" ++
           s!"      (List.map {encX} items) = some (List.map {encX} (tolean.TypeScript.JSNumber.sortWith {fn} items)) := by\n" ++
@@ -1227,7 +1278,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         loopLemmas := loopLemmas.push (r.cert lemmaName)
         conditionalLemmas := conditionalLemmas ++ [r.cert lemmaName]
         thms := thms.push <|
-          s!"theorem {lemmaName} {generic} (fs : List (tolean.DeclRef × List String × tolean.TypeScript.IR.Body)){hfs}\n" ++
+          s!"theorem {lemmaName} {functionGeneric} (fs : List (tolean.DeclRef × List String × tolean.TypeScript.IR.Body)){hfs}\n" ++
           s!"    (fuel : Nat) (ρ : Env {nv}){hI} (items : {itemsTy}) (hkeys : ∀ x ∈ items, {applied}) :\n" ++
           s!"    tolean.TypeScript.IR.Expr.{evalFn} fs {fuel} ρ {str param} ({term cbBody})\n" ++
           s!"      (List.map {encX} items) = some ({result}) := by\n" ++
@@ -1243,7 +1294,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       let vars := ("x", elem) :: scope.zipIdx.map fun ((_, t), i) => (s!"v{i}", t)
       loopLemmas := loopLemmas.push (r.cert lemmaName)
       thms := thms.push <|
-        s!"theorem {lemmaName} {generic} (fs : List (tolean.DeclRef × List String × tolean.TypeScript.IR.Body)){hfs}\n" ++
+        s!"theorem {lemmaName} {functionGeneric} (fs : List (tolean.DeclRef × List String × tolean.TypeScript.IR.Body)){hfs}\n" ++
         s!"    (fuel : Nat) (ρ : Env {nv}){hI} (items : {itemsTy}) :\n" ++
         s!"    tolean.TypeScript.IR.Expr.{evalFn} fs {fuel} ρ {str param}{indexArg} ({term cbBody}){want}{start}\n" ++
         s!"      (List.map {encX} items) = some ({result}) := by\n" ++
@@ -1422,7 +1473,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       let destruct := if count ≤ 1 then "" else
         s!"    obtain ⟨{", ".intercalate ((List.range count).map (s!"s{·}"))}⟩ := s\n"
       let closureLemmas := if closures.isEmpty then [] else ["tolean.TypeScript.Proof.lookup_ite"]
-      let simpSet := ", ".intercalate (hfsName ++ stepNames ++ closureLemmas ++ envLemmas ++ lemmaNames.toList ++
+      let simpSet := ", ".intercalate (hfsName ++ stepNames ++ closureLemmas ++ envLemmas ++ lemmaNames.toList ++ codecLemmas ++
         loopLemmas.toList ++ defs)
       -- The values that one step sees: the element, the state, and the other
       -- locals, which the lemma generalizes to `v0`, `v1` and so on.
@@ -1435,7 +1486,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       loopLemmas := loopLemmas.push (r.cert lemmaName)
       if restricted then conditionalLemmas := conditionalLemmas ++ [r.cert lemmaName]
       thms := thms.push <|
-        s!"theorem {lemmaName} {generic} (fs : List (tolean.DeclRef × List String × tolean.TypeScript.IR.Body)){hfs}\n" ++
+        s!"theorem {lemmaName} {functionGeneric} (fs : List (tolean.DeclRef × List String × tolean.TypeScript.IR.Body)){hfs}\n" ++
         s!"    (fuel : Nat) (items : {itemsTy}) (ρ : Env {nv}) (hI : {inv "ρ"}) :\n" ++
         s!"    tolean.TypeScript.IR.Body.runFold fs {fuel} {list (stateNames.map str)} {str element}\n" ++
         s!"      ({term body}) ρ (List.map {encX} items) =\n" ++
@@ -1506,7 +1557,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       String.join (obligations.map fun (n, p) => s!" ({n} : {p})")
     let call := " ".intercalate ((r.full s!"{transNs}.{name}" ++ callN) :: params.map (·.name))
     let retNames := if returnsLoop then ["tolean.TypeScript.Proof.retResult"] else []
-    let simpSet := ", ".intercalate ([r.cert "decls"] ++ retNames ++ envLemmas ++ lemmaNames.toList ++
+    let simpSet := ", ".intercalate ([r.cert "decls"] ++ retNames ++ envLemmas ++ lemmaNames.toList ++ codecLemmas ++
       loopLemmas.toList ++ defs ++ obligations.map (·.1))
     let some_ := r.write "some" "Option.some"
     let rfl := r.full "rfl"
@@ -1515,7 +1566,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         s!"    | rw [{lemma}]\n") ++
       s!"  all_goals (try simp_all [{simpSet}])\n  all_goals first | assumption | rfl | (intros; first | rfl | simp_all)"
     thms := thms.push <|
-      s!"theorem {name}_link {generic} {binders} :\n" ++
+      s!"theorem {name}_link {functionGeneric} {binders} :\n" ++
       s!"    {r.full "tolean.TypeScript.IR.runIn"} (N := {nv}) {outputFs} ⟨\"\", {str name}⟩ {list args} =\n" ++
       s!"      {some_} ({retEnc} ({call})) := by\n" ++
       s!"  {casesOn decls outParams}link_tac [{simpSet}]" ++
@@ -1532,7 +1583,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       (if returnsLoop then
         "\n  all_goals (try split at *)\n  all_goals (subst_vars; link_eqs; simp_all [List.lookup])" else "")
     thms := thms.push <|
-      s!"theorem {name}_cert {generic} {binders} :\n" ++
+      s!"theorem {name}_cert {functionGeneric} {binders} :\n" ++
       s!"    {r.eval "run"} (N := {nv}) {r.cert "program"} {str name} {list args} = {some_} ({retEnc} ({call})) :=\n" ++
       s!"  {r.full "tolean.TypeScript.Proof.decls_sound"} {rfl} {rfl} {rfl} {r.cert "program_translated"} {str name} _ 64 _\n" ++
       s!"    ({" ".intercalate (r.cert s!"{name}_link" :: params.map (·.name) ++ obligations.map (·.1))})"

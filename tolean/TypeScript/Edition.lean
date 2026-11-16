@@ -28,6 +28,12 @@ It adds no ECMAScript feature or edition gate. Its function declaration uses
 `FunctionDeclaration` (ES2015 §14.1, ES2024 §15.2), and a strict tag test uses
 `Strict Equality Comparison` (ES2015 §7.2.13, `IsStrictlyEqual` in ES2024
 §7.2.15). Both are available in every target that this module lists.
+Generic function type parameters and interface declarations are erased before
+runtime too. The remaining function declaration uses `FunctionDeclaration`
+(ES2015 §14.1, ES2024 §15.2), and a call uses `EvaluateCall` (ES2024
+§13.3.6.2). These operations exist in every supported target, so generic
+certificates add no edition gate.
+
 Guard calls use `EvaluateCall` (ES2024 §13.3.6.2), and their branches use
 `IfStatement` (§14.6). A primitive guard uses `typeof` (§13.5.3). These
 operations also exist in ES2015, the oldest target.

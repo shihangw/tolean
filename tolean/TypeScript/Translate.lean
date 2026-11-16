@@ -402,21 +402,6 @@ def Ty.normalizeNullsList : List Ty → Option (List Ty)
 
 end
 
-mutual
-
-def Ty.hasOpenNullish : Ty → Bool
-  | .optional (.nullable t) => t.isGeneric
-  | .nullable t | .optional t | .array t | .set t => t.hasOpenNullish
-  | .tuple ts | .struct _ ts => Ty.hasOpenNullishList ts
-  | .map k v => k.hasOpenNullish || v.hasOpenNullish
-  | _ => false
-
-def Ty.hasOpenNullishList : List Ty → Bool
-  | [] => false
-  | t :: ts => t.hasOpenNullish || Ty.hasOpenNullishList ts
-
-end
-
 /-- A tagged union of the program, with the file that declares it: a union
 of interfaces, `type T = A | B`, or a union of primitive types,
 `type T = string | bigint`. `members` maps each tag to the type of its
@@ -1144,8 +1129,6 @@ def translateFieldType (span : Span) (optional : Bool) (field : String) (type : 
     else if Eval.objectPrototypeNames.contains field then
       reject span s!"an optional field may not be named '{field}', because an object without it has Object.prototype.{field}"
     else pure (Ty.optional type)
-  if type.hasOpenNullish then
-    reject span "optional nullable types with unresolved type parameters are not supported"
   return type
 
 mutual
@@ -4824,8 +4807,6 @@ one. A nullable payload retains an inner option, so an omitted argument
 differs from a null argument. -/
 def paramType (span : Span) (optional : Bool) (type : TypeExpr) (before : List Ty) : TM Ty := do
   let ty ← translateType type
-  if ty.hasOpenNullish || (optional && (ty matches .nullable _) && ty.isGeneric) then
-    reject span "optional nullable types with unresolved type parameters are not supported"
   if !optional then
     if before.any (· matches .optional _) then
       reject span "a required parameter may not follow an optional one"
