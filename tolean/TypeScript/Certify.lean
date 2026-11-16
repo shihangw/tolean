@@ -1586,7 +1586,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       s!"theorem {name}_cert {functionGeneric} {binders} :\n" ++
       s!"    {r.eval "run"} (N := {nv}) {r.cert "program"} {str name} {list args} = {some_} ({retEnc} ({call})) :=\n" ++
       s!"  {r.full "tolean.TypeScript.Proof.decls_sound"} {rfl} {rfl} {rfl} {r.cert "program_translated"} {str name} _ 64 _\n" ++
-      s!"    ({" ".intercalate (r.cert s!"{name}_link" :: params.map (·.name) ++ obligations.map (·.1))})"
+      s!"    ({" ".intercalate ([r.cert s!"{name}_link"] ++ functionCodecs.map (·.2) ++ params.map (·.name) ++ obligations.map (·.1))})"
   return "\n".intercalate ([
     s!"-- Certificate written by tolean for {file}. Do not edit.",
     "import tolean.TypeScript.Spec.Lemmas.Eval",
