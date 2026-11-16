@@ -7,14 +7,18 @@ description: Independently review pull requests, post supported findings, and fo
 
 Act as an independent reviewer. Check the implementation against its contracts and base revision. Treat the author's description and claimed fixes as evidence to verify, not as conclusions to adopt. Do not wait for or read CI output; GitHub checks already inform the author.
 
-Use the repository and PR scope the user specifies. Honor existing authorization to post reviews, reply, and resolve threads; do not ask for it again. A request to create or edit this skill alone does not authorize GitHub actions. Keep implementation changes, pushes, and merges outside the review unless separately requested.
+Use the repository and PR scope the user specifies. Honor existing authorization to post comments, reply, and resolve threads; do not ask for it again. A request to create or edit this skill alone does not authorize GitHub actions.
+
+Reviewer authority is comment-only: inline findings, thread replies, thread resolutions, and the review summary. Never submit an approval or a request-changes review, and never edit source, push, or merge as the reviewer.
+
+Author and reviewer can share one GitHub login, so the login does not identify the reviewer. Identify this reviewer's comments by the comment IDs in the checkpoint and the reviewer's known conversation marker. The presence of some other `replit-nexus:cnv` marker does not make a comment the reviewer's.
 
 ## Establish the review state
 
 - Read applicable repository instructions and relevant skills.
 - Fetch the current head and base SHAs, diff, PR description, and complete discussion. Include resolved threads and author replies.
 - Identify findings already raised on this PR and related PRs. For a stacked PR, compare against its declared base and distinguish inherited defects from new ones.
-- Preserve a checkpoint with PR numbers, last reviewed head and base SHAs, finding summaries, thread IDs, root comment IDs, resolution state, relevant reply IDs, and the review summary comment ID and URL. Keep credentials out of it.
+- Preserve a checkpoint with PR numbers, last reviewed head and base SHAs, finding summaries, thread IDs, root comment IDs, resolution state, relevant reply IDs, the reviewer's conversation marker, and the review summary comment ID and URL. Keep credentials out of it.
 
 ## Review independently
 
@@ -46,25 +50,25 @@ Post only actionable findings supported by the review. If none remain, state tha
 
 After every completed independent review, always publish a top-level summary comment on the PR, even when no issues were found. This must be a PR-level comment, not an inline comment or a review body.
 
-Keep one summary comment per PR per reviewer. Create it after the first completed review. Whenever a later independent review round completes, edit that same comment in place rather than posting another summary. Read the checkpoint and the current PR comments before creating one. If the checkpoint lacks its ID, find this reviewer's existing summary first. Do not edit another reviewer's summary.
+Keep one summary comment per PR per reviewer. Create it after the first completed review. Whenever a later independent review round completes, edit that same comment in place rather than posting another summary. Read the checkpoint and the current PR comments before creating one. If the checkpoint lacks its ID, find this reviewer's existing summary first, identified as described above. Do not edit another reviewer's summary.
 
 Use the heading `Independent review summary` and include only:
 
 - `Reviewed:` the UTC date of the completed review round, as `YYYY-MM-DD`.
 - `Head:` the first seven characters of the reviewed head SHA.
 - For a long PR only (roughly more than 300 changed lines, or more than one subsystem), before `Result:`: one short paragraph on the goal or problem, and one on the behavior before versus after. Otherwise omit both.
-- `Result:` each new finding and each verified resolution as a short linked item. If there are none, use the no-findings sentence below. If the review is blocked or incomplete, say so rather than claiming a clean result.
-- `Design:` optional, after `Result:`. One bullet per design objection or recommendation, one or two sentences each, linked to the inline comment that holds the detail. Omit the section when there are none.
+- `Result:` each new finding, each finding from an earlier round that is still unresolved, and each verified resolution, as a short linked item. An unresolved actionable design defect belongs here too. If there are none, use the no-findings sentence below. If the review is blocked or incomplete, say so rather than claiming a clean result.
+- `Design:` optional, after `Result:`. One bullet per additional design recommendation, one or two sentences each, linked to the inline comment that holds the detail. An unresolved defect must not appear only here. Omit the section when there are none.
 
 Templates for completed reviews:
 
 | With issues | Without issues |
 | --- | --- |
-| `## Independent review summary`<br><br>Reviewed: 2026-11-10<br>Head: `2f1f17f`<br><br>Result:<br>- New finding: [Short issue](FINDING_URL)<br>- Verified resolution: [Short fix](RESOLUTION_URL)<br><br>Design:<br>- [Short objection](DESIGN_URL). One or two sentences on what is wrong and the remedy. | `## Independent review summary`<br><br>Reviewed: 2026-11-10<br>Head: `2f1f17f`<br><br>Result: No new issues were found. No resolutions were verified or performed. |
+| `## Independent review summary`<br><br>Reviewed: 2026-11-10<br>Head: `2f1f17f`<br><br>Result:<br>- New finding: [Short issue](FINDING_URL)<br>- Still unresolved: [Earlier issue](FINDING_URL)<br>- Verified resolution: [Short fix](RESOLUTION_URL)<br><br>Design:<br>- [Short objection](DESIGN_URL). One or two sentences on what is wrong and the remedy. | `## Independent review summary`<br><br>Reviewed: 2026-11-10<br>Head: `2f1f17f`<br><br>Result: No new issues were found. No resolutions were verified or performed. |
 
-Replace the sample date, head and links. List only findings, resolutions and design points from the completed round. Use the linked-item form when there are verified resolutions but no new findings; omit items and sections that do not apply. For a long PR, place the two context paragraphs between `Head:` and `Result:`.
+Replace the sample date, head and links. Carry every unresolved finding forward under `Result:` until it is resolved or withdrawn, so a later clean round never hides it. List new findings, resolutions and design points only from the completed round. Use the no-findings sentence only when no finding remains unresolved. Use the linked-item form when there are verified resolutions but no new findings; omit items and sections that do not apply. For a long PR, place the two context paragraphs between `Head:` and `Result:`.
 
-Do not include base or merge-base SHAs, branch ancestry, review reasoning, validation inventories, CI summaries, or earlier-round history. Keep full revision details, validation evidence and limits in the checkpoint; put evidence for findings in their threads.
+Do not include base or merge-base SHAs, branch ancestry, review reasoning, validation inventories, CI summaries, or earlier-round history beyond the still-unresolved findings. Keep full revision details, validation evidence and limits in the checkpoint; put evidence for findings in their threads.
 
 After each completed round, update the reviewed date, head and result in place. A formatting-only edit keeps the original review date. Record the summary comment ID and URL in the checkpoint after creating or editing it. Inline findings and useful thread replies supplement this summary; they do not replace it.
 
@@ -83,7 +87,9 @@ For each tracked unresolved finding, read the full thread and inspect the curren
 | No fix and no new reply or evidence | Leave the thread unchanged. |
 | Verification is blocked or inconclusive | Keep it unresolved and state the concrete verification limit when relevant. |
 
-Verify the original failing behavior and any important edge case of the proposed fix. A new commit or an author's assurance alone is insufficient. Manage the tracked review threads; leave unrelated reviewers' threads alone unless the user includes them in scope.
+Verify the original failing behavior and any important edge case of the proposed fix. A new commit or an author's assurance alone is insufficient.
+
+Verify a code fix at the PR's own reviewed head. A plan entry, another branch, or a follow-up PR does not fix the defect at that head, so keep the thread unresolved there. Record the follow-up remediation separately, for example with a reply linking the PR that fixes the defect on main, as #247 does for #243. This rule does not prevent withdrawing a finding when evidence shows it was mistaken. Manage the tracked review threads; leave unrelated reviewers' threads alone unless the user includes them in scope.
 
 ## Monitor when requested
 
