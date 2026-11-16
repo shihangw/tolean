@@ -1,3 +1,4 @@
+// certify: required
 export interface Settings {
   readonly limit?: bigint | null;
 }

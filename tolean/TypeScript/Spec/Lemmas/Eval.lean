@@ -357,6 +357,16 @@ def decCons {α β : Type} (dec : Option (Val N) → α) (rest : List (Val N) �
   | none => rfl
   | some v => simp [decNull_some dec (enc v) (hn v), h]
 
+/-- A present optional nullable value retains its inner null case. -/
+@[simp] theorem decUndef_decNull_encNull {α : Type}
+    (dec : Option (Val N) → α) (enc : α → Val N)
+    (h : ∀ x, dec (some (enc x)) = x) (hn : ∀ x, enc x ≠ .null)
+    (hu : ∀ x, enc x ≠ .undefined) (o : Option α) :
+    decUndef (decNull dec) (some (encNull enc o)) = some o := by
+  cases o with
+  | none => rfl
+  | some v => simp [decUndef_some _ (enc v) (hu v), decNull_some dec (enc v) (hn v), h]
+
 /-- `decList_list` on a list of nullable values, in one step. Its side
 conditions are about `enc` alone, so `simp` can discharge them when it uses
 this lemma for a side condition itself, as in a loop's invariant. -/

@@ -1,3 +1,4 @@
+// certify: required
 export interface JSNullish {
   readonly limit?: bigint | null;
 }
