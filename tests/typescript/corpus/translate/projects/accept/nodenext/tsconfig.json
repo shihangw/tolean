@@ -1,1 +1,1 @@
-{"compilerOptions":{"moduleResolution":"nodenext"}}
+{"extends":"./base.json","compilerOptions":{"moduleResolution":"nodenext"}}

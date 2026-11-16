@@ -1,1 +1,1 @@
-inherited moduleResolution and other resolution options are not supported
+moduleSuffixes is not supported for import resolution

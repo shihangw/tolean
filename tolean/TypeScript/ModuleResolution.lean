@@ -1,5 +1,6 @@
 import tolean.TypeScript.Spec.Eval
 import Lean.Data.Json
+import Std.Data.HashMap
 
 /-! Project import resolution happens before translation. The interpreter
 continues to see only relative paths to concrete TypeScript files. -/
@@ -49,23 +50,78 @@ def uncomma : List Char → Bool → Bool → List Char
     (if next == some '}' || next == some ']' then ' ' else ',') :: uncomma cs false false
   | c :: cs, quoted, escaped => c :: uncomma cs quoted escaped
 
-/-- A tsconfig next to tolean.json takes precedence over the fallback.
-Inherited resolution options are refused rather than guessed. -/
-def setting (tsconfig : Option String) (fallback : Option String) : Except String Mode := do
+/-- Parse each config before merging, so an invalid base is not hidden by a child. -/
+def parseConfig (path text : String) : Except String Json := do
+  let j ← (Json.parse (String.ofList (uncomma (uncomment text.toList false false) false false))).mapError
+    (s!"{path}: {·}")
+  unless j matches .obj _ do throw s!"{path}: expected an object"
+  if let .ok o := j.getObjVal? "compilerOptions" then
+    unless o matches .obj _ do throw s!"{path}: compilerOptions must be an object"
+  return j
+
+/-- Config paths are relative to the declaring config, never to its child.
+The workspace boundary is shared by the native and browser hosts. -/
+def basePath (files : List String) (path base : String) : Except String String := do
+  unless base.startsWith "./" || base.startsWith "../" do
+    throw s!"{path}: package or absolute extends '{base}' is not supported; use a relative config inside the project"
+  if base.any fun c => c == '\\' || c == '$' then
+    throw s!"{path}: unsupported extends path '{base}'"
+  let some parts := Eval.normalizeSegments (path.splitOn "/").dropLast (base.splitOn "/")
+    | throw s!"{path}: extends '{base}' leaves the project"
+  let name := "/".intercalate parts
+  if files.contains name then return name
+  if !name.endsWith ".json" && files.contains (name ++ ".json") then return name ++ ".json"
+  throw s!"{path}: extends '{base}' has no config file"
+
+-- Only completed configs enter the cache. The separate active stack still
+-- detects cycles, while shared ancestors are read and merged once.
+private def loadOptionsCached {m : Type → Type} [Monad m] [MonadExceptOf String m]
+    (files : List String) (read : String → m String) :
+    Nat → List String → String → StateT (Std.HashMap String Json) m Json
+  | 0, _, path => throw s!"{path}: config inheritance exceeds the workspace file count"
+  | fuel + 1, stack, path => do
+    if stack.contains path then
+      throw s!"{path}: config extends cycle: {" -> ".intercalate (stack.reverse ++ [path])}"
+    if let some options := (← get)[path]? then return options
+    let j ← match parseConfig path (← liftM (read path)) with
+      | .ok j => pure j
+      | .error e => throw e
+    let bases ← match (j.getObjVal? "extends").toOption with
+      | none => pure []
+      | some (.str s) => pure [s]
+      | some (.arr xs) => xs.toList.mapM fun x => match x with
+        | .str s => pure s
+        | _ => throw s!"{path}: extends must be a string or an array of strings"
+      | some _ => throw s!"{path}: extends must be a string or an array of strings"
+    let mut options := Json.mkObj []
+    for base in bases do
+      let target ← match basePath files path base with
+        | .ok target => pure target
+        | .error e => throw e
+      let inherited ← loadOptionsCached files read fuel (path :: stack) target
+      options := options.mergeObj inherited
+    options := options.mergeObj ((j.getObjVal? "compilerOptions").toOption.getD (Json.mkObj []))
+    modify (·.insert path options)
+    return options
+
+/-- Merge the compiler options that import resolution consumes. Each base
+starts independently, and later bases replace earlier options. Path-valued
+options are not consumed: imports remain relative to their source files.
+The cache belongs to one load, so subsequent loads read fresh config text. -/
+def loadOptions {m : Type → Type} [Monad m] [MonadExceptOf String m]
+    (files : List String) (read : String → m String)
+    (fuel : Nat) (stack : List String) (path : String) : m Json :=
+  (loadOptionsCached files read fuel stack path).run' {}
+
+/-- A merged tsconfig takes precedence over the fallback. -/
+def setting (tsconfig : Option Json) (fallback : Option String) : Except String Mode := do
   match tsconfig with
   | none => return mode (fallback.getD "")
-  | some text =>
-    let j ← (Json.parse (String.ofList (uncomma (uncomment text.toList false false) false false))).mapError
-      (s!"tsconfig.json: {·}")
-    unless j matches .obj _ do throw "tsconfig.json: expected an object"
-    if (j.getObjVal? "extends").isOk then
-      throw "tsconfig.json: inherited moduleResolution and other resolution options are not supported; use a standalone tsconfig.json"
-    let options := (j.getObjVal? "compilerOptions").toOption
-    if let some o := options then
-      unless o matches .obj _ do throw "tsconfig.json: compilerOptions must be an object"
-      if (o.getObjVal? "moduleSuffixes").isOk then
-        throw "tsconfig.json: moduleSuffixes is not supported for import resolution"
-    let value := options.bind fun o => (o.getObjVal? "moduleResolution").toOption
+  | some options =>
+    for key in ["moduleSuffixes", "rootDirs"] do
+      if (options.getObjVal? key).isOk then
+        throw s!"tsconfig.json: {key} is not supported for import resolution"
+    let value := (options.getObjVal? "moduleResolution").toOption
     match value with
     | none => return .explicit
     | some (.str name) => return mode name
