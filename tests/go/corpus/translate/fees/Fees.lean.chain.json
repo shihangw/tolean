@@ -1,4 +1,4 @@
-{"tolean": "0.3.0",
+{"tolean": "0.3.1",
  "sources":
  [{"sha256": "5919f4d05647c9dd16b50ff59f90f4c3348fa8aaa0c4a0a50ab530a20f01b4d5",
    "path": "corpus/translate/fees/fees.go"}],

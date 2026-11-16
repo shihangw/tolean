@@ -1,10 +1,10 @@
-{"tolean": "0.3.0",
+{"tolean": "0.3.1",
  "target": "ES2024",
  "sources":
  [{"sha256": "57460b9162406873bbfdf8260a31ad8a953bd142099c10b013830f3e1098d869",
    "path": "corpus/translate/accept/arraySortNumberLoops.ts"}],
  "output":
- {"sha256": "4d09c30aaece00ea8e4688ee6b9da480e861389b13c0fea594eb48c3b95e69f9",
+ {"sha256": "52be29a5e7b5c19a6334500d5be9698c610d22b99203dd5edb266d4a590c9155",
   "path": "corpus/translate/accept/arraySortNumberLoops.lean"},
  "nodes":
  [{"status": "tested",

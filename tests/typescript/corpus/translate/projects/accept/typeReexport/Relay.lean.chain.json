@@ -1,4 +1,4 @@
-{"tolean": "0.3.0",
+{"tolean": "0.3.1",
  "target": "ES2024",
  "sources":
  [{"sha256": "72e0269bf97228f48380e9ff5b8a07e197d85e2fd9001fa1870b36e3e772a691",
@@ -8,7 +8,7 @@
   {"sha256": "16331a08f02686f8d00711cab757ebd42002f950f1a239aecfa76569ba6ed57c",
    "path": "origin.ts"}],
  "output":
- {"sha256": "46021b528fd89b41cf80048d5f1f94b22c67b2a9fce997848cfa82dc2fbce1d6",
+ {"sha256": "3d6fb6531ee16a325c6c40a29eb74e620b81a342efdb6f3b94f495dfeca14f56",
   "path": "Relay.lean"},
  "nodes":
  [{"status": "tested",

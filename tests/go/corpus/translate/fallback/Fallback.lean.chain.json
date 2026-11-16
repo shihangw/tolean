@@ -1,4 +1,4 @@
-{"tolean": "0.3.0",
+{"tolean": "0.3.1",
  "sources":
  [{"sha256": "71f195ee71c21903416ad3f91bbd32eea07559711e74943299689dedaf1dfdb4",
    "path": "corpus/translate/fallback/fallback.go"}],
