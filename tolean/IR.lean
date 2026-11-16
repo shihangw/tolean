@@ -1338,7 +1338,6 @@ def Expr.print (names : Names) : Expr T E → String
     let scrutinee := names.matchBinder ++ name
     let noneBinding := s!"(let {name} := {leanName names "Option"}.join {name}; {whenValue.print names})"
     let someBinding := s!"(let {name} := {some_} {name}; {whenValue.print names})"
-    let nullBinding := s!"(let {name} \{α : Type} : {leanName names "Option"} α := {none_}; {whenNull.print names})"
     match kind with
     | .nullable | .optional =>
       s!"(match {scrutinee} with | {none_} => {whenNull.print names} | {some_} {name} => {whenValue.print names})"
@@ -1346,8 +1345,9 @@ def Expr.print (names : Names) : Expr T E → String
       s!"(match {scrutinee} with | {nullish}.undefined => {whenNull.print names} | " ++
         s!"{nullish}.null => {whenNull.print names} | {nullish}.value {name} => {whenValue.print names})"
     | .strictNull =>
+      -- Expression null arms retain the original environment and representation.
       s!"(match {scrutinee} with | {nullish}.undefined => {noneBinding} | " ++
-        s!"{nullish}.null => {nullBinding} | {nullish}.value {name} => {someBinding})"
+        s!"{nullish}.null => {whenNull.print names} | {nullish}.value {name} => {someBinding})"
     | .strictUndefined =>
       s!"(match {scrutinee} with | {nullish}.undefined => {whenNull.print names} | " ++
         s!"{nullish}.null => {noneBinding} | {nullish}.value {name} => {someBinding})"
