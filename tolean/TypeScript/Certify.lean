@@ -130,7 +130,7 @@ def encoderOf (r : Refs) : IR.Ty → Option String
     let codecs ← args.mapM fun
       | .param name => r.codec name
       | _ => none
-    return s!"({r.cert s!"encode{ref.name}"} {" ".intercalate codecs})"
+    return s!"({r.cert s!"encode{ref.name}"} {String.intercalate " " codecs})"
   | .null | .tag _ | .map .. | .set _ | .except .. | .error | .date | .regexp | .ext .closure => none
 
 /-- How the elements of a tuple of the types `ts` become a list of `Val`s. -/
@@ -159,7 +159,7 @@ def decoderOf (r : Refs) : IR.Ty → Option String
     let codecs ← args.mapM fun
       | .param name => r.codec name
       | _ => none
-    return s!"({r.cert s!"decode{ref.name}"} {" ".intercal codecs})"
+    return s!"({r.cert s!"decode{ref.name}"} {String.intercalate " " codecs})"
   | .null | .tag _ | .map .. | .set _ | .except .. | .error | .date | .regexp | .ext .closure => none
 
 /-- How a list of `Val`s becomes the elements of a tuple of the types `ts`. -/
