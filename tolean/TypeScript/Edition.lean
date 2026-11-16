@@ -19,6 +19,10 @@ arguments use FunctionDeclarationInstantiation (§10.2.11). These operations
 are available in every supported target. Coalescing and optional chaining
 retain their existing ES2020 gates (§13.13.1 and §13.3.9 in ES2024).
 
+A counted `for` loop uses `ForStatement` and `ForBodyEvaluation`
+(ES2024 §14.7.4.2). ES2015, the oldest supported target, specifies these
+operations.
+
 A feature whose meaning changes in a later edition gets a new feature for the
 new meaning, never a second meaning for the same one. An edition joins `all`
 only after a review of what it changed.
@@ -77,6 +81,9 @@ maintained. -/
 def Edition.default : Edition := .es2024
 
 inductive Feature where
+  /-- The counted `for` loop: `ForStatement` and `ForBodyEvaluation`
+  (§14.7.4.2 in ES2024). -/
+  | countedFor
   /-- A local call returns a value and writes captured bindings:
   [[Call]] (§10.2.1), SetMutableBinding (§9.1.1.1.5), and ReturnStatement
   (§14.10), with section numbers from ES2024. ES2015 is the oldest target. -/
@@ -156,6 +163,7 @@ inductive Feature where
 deriving BEq, Repr, Inhabited
 
 def Feature.since : Feature → Edition
+  | .countedFor => .es2015
   | .regexp => .es2015
   | .regexpReplace => .es2015
   | .stringNumberArguments => .es2015
@@ -172,6 +180,7 @@ def Feature.since : Feature → Edition
   | .arrayFindLast | .arrayToSorted => .es2023
 
 def Feature.describe : Feature → String
+  | .countedFor => "a counted 'for' loop"
   | .localReturnState => "a local function that returns a value and changes captured variables"
   | .localSiblingCalls => "calls between local functions"
   | .regexp => "regular expressions without flags"

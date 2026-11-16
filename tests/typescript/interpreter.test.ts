@@ -245,6 +245,43 @@ test('certified local functions agree with Node on random arguments', async () =
   }
 });
 
+test('counted-loop certificates agree with Node for parameter and literal bounds', async () => {
+  const source = readFileSync(new URL('./corpus/translate/accept/countedLoopCertificate.ts', import.meta.url), 'utf8');
+  expect(source).toContain('// certify: required');
+  const limits = fc.sample(fc.integer({ min: 0, max: 30 }), { seed, numRuns: 50 });
+  const arrays = fc.sample(fc.array(fc.bigInt(), { maxLength: 20 }), { seed, numRuns: 50 });
+  const calls = [
+    ...limits.map(limit => ({ function: 'sum', args: [encode(limit)] })),
+    ...arrays.map(xs => ({ function: 'length', args: [encode(xs)] })),
+    { function: 'literal', args: [] },
+  ];
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: [{ source, calls }] }), encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (result === undefined || !result.parsed) return;
+  expect(result.accepted).toBe(true);
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-counted-loop-certificate-'));
+  const path = join(dir, 'counted.mjs');
+  writeFileSync(path, ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+  }).outputText);
+  const mod = (await import(pathToFileURL(path).href)) as {
+    sum: (limit: number) => number;
+    length: (xs: ReadonlyArray<bigint>) => number;
+    literal: () => number;
+  };
+  for (const [i, limit] of limits.entries()) {
+    expect(result.results[i]).toEqual({ value: encode(mod.sum(limit)) });
+  }
+  for (const [i, xs] of arrays.entries()) {
+    expect(result.results[limits.length + i]).toEqual({ value: encode(mod.length(xs)) });
+  }
+  expect(result.results.at(-1)).toEqual({ value: encode(mod.literal()) });
+});
+
 test('local returns and sibling calls preserve captured state and agree with Node', async () => {
   const source = ['localFunctionReturnsAndChanges', 'localFunctionSiblingCalls'].map(name =>
     readFileSync(new URL(`./corpus/translate/accept/${name}.ts`, import.meta.url), 'utf8')).join('\n');

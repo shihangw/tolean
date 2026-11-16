@@ -616,13 +616,6 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
   for d in decls do
     if let .function name _ _ body := d then
       if body.calls ⟨"", name⟩ then throw s!"{file}: the recursive function {name} has no certificate yet"
-  -- A theorem states that the interpreter gives a value for every input, but
-  -- it gives none for a counted loop whose counter would pass
-  -- `Number.MAX_SAFE_INTEGER`.
-  if m.decls.any fun d => match d with
-      | .function _ _ _ _ _ _ body => (stmtsOf body).any (· matches .forStmt ..)
-      | _ => false then
-    throw s!"{file}: a counted loop has no certificate yet"
   -- `JSON.stringify` is opaque in the output and in the interpreter, so no
   -- proof links one to the other.
   if m.decls.any fun d => match d with
@@ -852,11 +845,12 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         s!"@[simp] theorem decList_decNull_decode{name} {generic} (xs : List (Option {ty})) : decList (decNull decode{name}) (some (Val.list (List.map (encNull (encode{name} ({nv} := {nv}))) xs))) = xs :=\n" ++
         s!"  decList_list_null _ _ decode{name}_encode{name} encode{name}_ne_null xs"
       lemmaNames := lemmaNames ++ #[r.cert s!"encode{name}", r.cert s!"decode{name}"]
-  let defs := decls.flatMap fun
-    | .function name _ _ body =>
-      r.full s!"{transNs}.{name}" ::
-        body.lifted.map (fun (ref, _, _, _) => r.full s!"{transNs}.{ref.name}")
-    | _ => []
+  let defs := [r.write "JSNumber.countUp?_eq_of_isSome" "tolean.TypeScript.JSNumber.countUp?_eq_of_isSome"] ++
+    (decls.flatMap fun
+      | .function name _ _ body =>
+        r.full s!"{transNs}.{name}" ::
+          body.lifted.map (fun (ref, _, _, _) => r.full s!"{transNs}.{ref.name}")
+      | _ => [])
   let outputFs := s!"({r.full "tolean.TypeScript.IR.functionsOf"} [(\"\", {r.cert "decls"})])"
   let envLemmas := ["Env.set_cons", "Env.lookup_cons", "Env.lookup_set_same", "Env.lookup_set_ne",
     "Env.set_set", "Env.length_set"].map r.eval
@@ -1255,6 +1249,16 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     for (stateNames, element, body, info, loopItems) in loopsOf outBody do
       index := index + 1
       let lemmaName := s!"{name}_loop{index}"
+      if let .ext (.countUp k) [bound] := loopItems then
+        let parameterNames := outParams.map (·.1)
+        unless (sortInputNames bound).all parameterNames.contains do
+          throw s!"{file}: counted loop bounds must read only function parameters in {name}"
+        let hname := s!"{name}_counted_loop_precondition{obligations.length}"
+        if r.idents.contains hname then throw s!"{file}: reserved certificate hypothesis name {hname}"
+        let condition :=
+          s!"({r.write "JSNumber.countUp?" "tolean.TypeScript.JSNumber.countUp?"} ({k} : _root_.Int) ({bound.print names})).isSome"
+        obligations := obligations ++ [(hname, condition)]
+        inputConditions := inputConditions ++ [condition]
       let parentLoop := parentLoopOf info.span
       let mut conditions := loopConditions.filterMap fun (span, condition) =>
         if span == info.span then some condition else none
