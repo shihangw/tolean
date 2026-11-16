@@ -126,12 +126,35 @@ of a literal as a Lean `String`.
 |---|---|---|
 | A number argument of `padStart` or `padEnd` that is not an integer literal | `ToLength` on the argument, then padding on code units. A dynamic length can exceed the engine's string limit and throw a `RangeError`, whose opaque message the error model does not yet support. | |
 
-Flagless regular expressions now support `test` with a string argument.
-Literals must start with `(?:` so the parser can distinguish them from
-division. The matcher uses UTF-16 code units and total ordered backtracking.
-Flags, `match`, `replace` and regex values at certificate boundaries remain
-outside this subset. The [decision record](../decisions/2026-11-14-regexp-subset.md)
-sets the restrictions for those later operations.
+Issue [#218](https://github.com/shihangw/tolean/issues/218) is partly
+implemented. PR #239 delivers flagless regular-expression `test` with a
+string argument. `test` accepts a literal or an alias to one. A literal must
+start with `(?:` so the parser can distinguish it from division. The matcher
+uses UTF-16 code units and total ordered backtracking.
+
+PR #244 adds first-match replacement, including empty matches, only for
+`s.replace(/(?:pattern)/, "replacement")`. The pattern may contain captures,
+but the replacement must be a literal without `$`; captures affect matching
+but are not substituted into the result. Replacement requires a direct regex
+literal, while `test` may use an alias. Dynamic replacement strings remain
+refused because they may contain substitution tokens. Dollar substitutions
+and function replacers remain refused because their semantics are not modeled.
+Flags `i`, `g`, `m`, `s`, `u`, `y`, `d` and `v` remain refused. Global and
+sticky searches need `lastIndex` state, while the other flags change pattern
+or matcher semantics.
+
+The parser refuses ordinary `/pattern/` literals and regular-expression
+constructor calls. The supported grammar includes capturing and
+non-capturing groups, but refuses lazy quantifiers, backreferences,
+lookaround, named groups and escapes without a specified character set.
+
+`String.match` and `RegExp.exec` remain refused because their results need a
+representation for `null`, unmatched captures as `undefined`, and the
+`index`, `input` and `groups` properties. The interpreter, IR evaluator and
+`program_sound` proof do not yet cover that result shape. Regex values also
+remain outside certificate boundaries because certificates have no encoder
+or decoder for them. The [decision record](../decisions/2026-11-14-regexp-subset.md)
+explains these restrictions and the future work.
 
 ### Maps and sets
 
@@ -219,7 +242,7 @@ while it closes type arguments. The unrelated merged
 [#230](https://github.com/shihangw/tolean/pull/230) fixes WebAssembly list
 termination and does not change this parser rule.
 
-Open [PR #242](https://github.com/shihangw/tolean/pull/242) prepares the
+Merged [PR #242](https://github.com/shihangw/tolean/pull/242) prepares the
 proof interface for a later ambiguity check; it does not change which source
 expressions the parser accepts. Its token observations retain token kinds
 (including identifier text), preceding line breaks and adjacency across
@@ -359,7 +382,7 @@ that the earlier pull request already contains it.
 
 - **Complete the structural type-argument ambiguity check.**
   The merged [#217](https://github.com/shihangw/tolean/pull/217) validates
-  the bounded operator stop set, not a complete ambiguity algorithm. Open
+  the bounded operator stop set, not a complete ambiguity algorithm. Merged
   [#242](https://github.com/shihangw/tolean/pull/242) supplies observations
   and prefix proofs for a later probe, but does not implement that probe.
   Retain #217's bracket-depth rule and pinned-TypeScript controls. The

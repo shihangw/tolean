@@ -66,6 +66,7 @@ deriving BEq, Repr, Inhabited, DecidableEq
 inductive StringMethod where
   | startsWith | endsWith | includes | indexOf | trim | trimStart | trimEnd | split
   | at | slice | padStart | padEnd | toUpperCase | toLowerCase
+  | regexpReplace
 deriving BEq, Repr, Inhabited, DecidableEq
 
 def StringMethod.name : StringMethod → String
@@ -73,6 +74,7 @@ def StringMethod.name : StringMethod → String
   | .indexOf => "indexOf" | .trim => "trim" | .trimStart => "trimStart" | .trimEnd => "trimEnd"
   | .split => "split" | .at => "at" | .slice => "slice" | .padStart => "padStart"
   | .padEnd => "padEnd" | .toUpperCase => "toUpperCase" | .toLowerCase => "toLowerCase"
+  | .regexpReplace => "replace"
 
 /-- An integer literal as a Lean term, in parentheses when it is negative. -/
 def intTerm (k : Int) : String := if 0 ≤ k then s!"{k}" else s!"({k})"
@@ -505,7 +507,10 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
       | .slice, [k, j] => [k, s!"({leanName names "some"} {j})"]
       | .padStart, [n] | .padEnd, [n] => [n, s!"({leanName names "JSString.ofString"} {tolean.Sexp.quote " "})"]
       | _, ts => ts
-    let call := s!"{str}.{method.leanName args.length} {" ".intercalate (argument s :: terms)}"
+    let call := match method, terms with
+      | .regexpReplace, [r, replacement] =>
+        s!"{leanName names "JSRegExp.Regex"}.replaceLiteral {r} {argument s} {replacement}"
+      | _, _ => s!"{str}.{method.leanName args.length} {" ".intercalate (argument s :: terms)}"
     if method == .indexOf then s!"({js}.ofSafeInt (N := {names.typeParam}) ({call}))"
     else s!"({call})"
   | .stringCodePoints, [s] => s!"({leanName names "JSString"}.codePoints {argument s})"
@@ -606,6 +611,7 @@ def ExprExt.onDate : ExprExt → Bool
 
 def ExprExt.onRegExp : ExprExt → Bool
   | .regexpLiteral _ | .regexpTest => true
+  | .stringMethod .regexpReplace _ => true
   | _ => false
 
 /-- The operation names `JSBigInt`, so the output imports its model. -/

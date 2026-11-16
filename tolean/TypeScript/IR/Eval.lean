@@ -113,6 +113,7 @@ def StringMethod.apply : StringMethod → JSString → List (Val N) → List (Op
   | .padEnd, s, args, lits => Eval.padArgs s.padEnd args lits
   | .toUpperCase, s, args, _ => Eval.asciiCase s.toUpperAscii s args
   | .toLowerCase, s, args, _ => Eval.asciiCase s.toLowerAscii s args
+  | .regexpReplace, s, args, _ => Eval.regexpReplace s args
 
 /-- The elements of a list. -/
 def listItems? : Val N → Option (List (Val N))

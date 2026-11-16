@@ -81,6 +81,10 @@ inductive Feature where
   and RegExpBuiltinExec (ES2024 §22.2.2, §22.2.2.3.1 and §22.2.7.2).
   The translator accepts flagless literals and their `test` method from ES2015. -/
   | regexp
+  /-- String.prototype.replace and RegExp.prototype[@@replace],
+  with a literal replacement without GetSubstitution tokens
+  (ES2024 §22.1.3.19, §22.2.6.11 and §22.1.3.19.1). -/
+  | regexpReplace
   /-- A call changes an exclusively owned Map argument: `EvaluateCall`,
   `OrdinaryCallBindThis`, `FunctionDeclarationInstantiation`,
   `Map.prototype.set`, `Map.prototype.delete` and `ReturnStatement`.
@@ -146,6 +150,7 @@ deriving BEq, Repr, Inhabited
 
 def Feature.since : Feature → Edition
   | .regexp => .es2015
+  | .regexpReplace => .es2015
   | .stringNumberArguments => .es2015
   | .dateParseFormat => .es2016
   | .localReturnState | .localSiblingCalls => .es2015
@@ -163,6 +168,7 @@ def Feature.describe : Feature → String
   | .localReturnState => "a local function that returns a value and changes captured variables"
   | .localSiblingCalls => "calls between local functions"
   | .regexp => "regular expressions without flags"
+  | .regexpReplace => "regular expression replacement without substitutions"
   | .mapBorrow => "a call that changes an exclusively owned Map argument"
   | .exponent => "'**'"
   | .objectSpread => "object spread '...'"

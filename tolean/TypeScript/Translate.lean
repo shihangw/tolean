@@ -2136,7 +2136,7 @@ def _root_.tolean.TypeScript.Syntax.Expr.isArrow : Expr → Bool
 /-- The methods of a string that the subset has. -/
 def stringMethods : List IR.StringMethod :=
   [.startsWith, .endsWith, .includes, .indexOf, .trim, .trimStart, .trimEnd, .split, .at, .slice,
-   .padStart, .padEnd, .toUpperCase, .toLowerCase]
+   .padStart, .padEnd, .toUpperCase, .toLowerCase, .regexpReplace]
 
 /-- The method of a string that `name` names, among those the subset has. -/
 def stringMethod? (name : String) : Option IR.StringMethod :=
@@ -2153,6 +2153,7 @@ def StringMethod.params : IR.StringMethod → List Ty × List Ty
   | .at => ([.number], [])
   | .slice => ([], [.number, .number])
   | .padStart | .padEnd => ([.number], [.string])
+  | .regexpReplace => ([.regexp, .string], [])
 
 /-- The arguments of a call fit the method: there are at least as many as it
 must take and no more than it can, each has the type of its parameter, and
@@ -2168,6 +2169,7 @@ def StringMethod.fits (m : IR.StringMethod) (types : List Ty) (lits : List (Opti
 /-- What a call of the method must pass, for the message that refuses another
 call. -/
 def StringMethod.usage (method : String) : IR.StringMethod → String
+  | .regexpReplace => "'replace' takes a flagless regular expression and a literal string without dollar signs"
   | .startsWith | .endsWith | .includes | .indexOf =>
     s!"'{method}' takes a string and perhaps a number position"
   | .split => "'split' takes a string separator and perhaps a number limit"
@@ -2190,6 +2192,7 @@ def StringMethod.padsTooFar : IR.StringMethod → List (Option Int) → Bool
 
 /-- The type of the value of a method of a string. -/
 def StringMethod.result : IR.StringMethod → Ty
+  | .regexpReplace => .string
   | .startsWith | .endsWith | .includes => .boolean
   | .indexOf => .number
   | .trim | .trimStart | .trimEnd | .slice | .padStart | .padEnd | .toUpperCase | .toLowerCase => .string
@@ -2199,6 +2202,7 @@ def StringMethod.result : IR.StringMethod → Ty
 /-- The edition from which a method of a string means what the model says,
 when that is later than ES2015. -/
 def StringMethod.feature : IR.StringMethod → Option Feature
+  | .regexpReplace => some .regexpReplace
   | .trim => some .trimWhiteSpace
   | .trimStart | .trimEnd => some .trimStartEnd
   | .padStart | .padEnd => some .stringPad
@@ -2259,6 +2263,14 @@ def requireFeature? (s : Span) : Option Feature → TM Unit
   | some f => requireFeature s f
   | none => pure ()
 
+/-- Replacement needs a literal without GetSubstitution tokens. -/
+def unsafeReplacement (method : IR.StringMethod) (args : List Code) : Bool :=
+  if method == .regexpReplace then
+    match args.map Code.value with
+    | [.ext (.regexpLiteral _) [], .string text] => text.toList.contains '$'
+    | _ => true
+  else false
+
 /-- The code for `str.method(args)`, a method of a string, where `str` is the
 code of the receiver, `args` are the codes of the arguments, and `lits` are
 the integer literals that the arguments are. -/
@@ -2270,8 +2282,10 @@ def stringCall (s : Span) (method : String) (str : Code) (args : List Code) (lit
       if StringMethod.fits m (args.map (·.type)) lits then
         if StringMethod.padsTooFar m lits then
           reject s s!"'{method}' to more than {maxStringLength} code units could make a string that an engine refuses"
-        else if StringMethod.changesCase m && !asciiString str.value then
-          reject s (s!"'{method}' is supported only on a string that is ASCII, such as a literal; " ++
+        else if unsafeReplacement m args || (StringMethod.changesCase m && !asciiString str.value) then
+          reject s (if m == .regexpReplace then
+            "'replace' needs a direct flagless regular expression literal and a literal replacement without dollar signs"
+          else s!"'{method}' is supported only on a string that is ASCII, such as a literal; " ++
             "on other strings its result depends on the Unicode version of the engine")
         else do
           requireFeature? s (StringMethod.feature m)
