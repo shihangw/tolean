@@ -1,5 +1,6 @@
 import tolean.TypeScript.Spec.Eval
 import Lean.Data.Json
+import Std.Data.HashMap
 
 /-! Project import resolution happens before translation. The interpreter
 continues to see only relative paths to concrete TypeScript files. -/
@@ -72,17 +73,17 @@ def basePath (files : List String) (path base : String) : Except String String :
   if !name.endsWith ".json" && files.contains (name ++ ".json") then return name ++ ".json"
   throw s!"{path}: extends '{base}' has no config file"
 
-/-- Merge the compiler options that import resolution consumes. Each base
-starts independently, and later bases replace earlier options. Path-valued
-options are not consumed: imports remain relative to their source files. -/
-def loadOptions {m : Type → Type} [Monad m] [MonadExceptOf String m]
+-- Only completed configs enter the cache. The separate active stack still
+-- detects cycles, while shared ancestors are read and merged once.
+private def loadOptionsCached {m : Type → Type} [Monad m] [MonadExceptOf String m]
     (files : List String) (read : String → m String) :
-    Nat → List String → String → m Json
+    Nat → List String → String → StateT (Std.HashMap String Json) m Json
   | 0, _, path => throw s!"{path}: config inheritance exceeds the workspace file count"
   | fuel + 1, stack, path => do
     if stack.contains path then
       throw s!"{path}: config extends cycle: {" -> ".intercalate (stack.reverse ++ [path])}"
-    let j ← match parseConfig path (← read path) with
+    if let some options := (← get)[path]? then return options
+    let j ← match parseConfig path (← liftM (read path)) with
       | .ok j => pure j
       | .error e => throw e
     let bases ← match (j.getObjVal? "extends").toOption with
@@ -97,9 +98,20 @@ def loadOptions {m : Type → Type} [Monad m] [MonadExceptOf String m]
       let target ← match basePath files path base with
         | .ok target => pure target
         | .error e => throw e
-      let inherited ← loadOptions files read fuel (path :: stack) target
+      let inherited ← loadOptionsCached files read fuel (path :: stack) target
       options := options.mergeObj inherited
-    return options.mergeObj ((j.getObjVal? "compilerOptions").toOption.getD (Json.mkObj []))
+    options := options.mergeObj ((j.getObjVal? "compilerOptions").toOption.getD (Json.mkObj []))
+    modify (·.insert path options)
+    return options
+
+/-- Merge the compiler options that import resolution consumes. Each base
+starts independently, and later bases replace earlier options. Path-valued
+options are not consumed: imports remain relative to their source files.
+The cache belongs to one load, so subsequent loads read fresh config text. -/
+def loadOptions {m : Type → Type} [Monad m] [MonadExceptOf String m]
+    (files : List String) (read : String → m String)
+    (fuel : Nat) (stack : List String) (path : String) : m Json :=
+  (loadOptionsCached files read fuel stack path).run' {}
 
 /-- A merged tsconfig takes precedence over the fallback. -/
 def setting (tsconfig : Option Json) (fallback : Option String) : Except String Mode := do
