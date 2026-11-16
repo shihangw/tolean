@@ -1,3 +1,4 @@
+import tolean.TypeScript.Spec.Nullish
 import Lean
 import tolean.TypeScript.Certify
 import tolean.TypeScript.Decreasing
@@ -162,7 +163,8 @@ def sections : List Section := [
     ``Proof.translateBorrowPlain_sim, ``Proof.translateBorrowArg_sim, ``Proof.translateBorrowArgs_sim,
     ``Proof.translateBorrowCall_sim, ``Proof.borrowCall?_some, ``Proof.exprChanges_stmt,
     ``Proof.borrowCallStmt_sim, ``Proof.translateBorrowStmt_sound,
-    ``Proof.evalList_append_undefined, ``Proof.callS_append_undefined, ``Proof.evalList_optArgs, ``Proof.fixArgs_value,
+    ``Proof.evalList_append_undefined, ``Proof.callS_append_undefined, ``Proof.fieldValue_eval,
+    ``Proof.evalList_optArgs, ``Proof.fixArgs_value,
 
     -- A call of a local function, which the output lifts out.
     ``Proof.localCall?_some, ``Proof.localCallProblem_none, ``Proof.translateLocalCall_ok,
@@ -806,7 +808,8 @@ def extras : List Group := [
     ``Eval.decNull_some, ``Eval.decList_nil, ``Eval.decList_cons, ``Eval.decList_encList,
     ``Eval.decNull_encNull, ``Eval.decNull_null, ``Eval.decList_list_null, ``Eval.decList_encList_null, ``Eval.encUndef_some, ``Eval.encUndef_none,
     ``Eval.encField_some, ``Eval.encField_none, ``Eval.decUndef_none, ``Eval.decUndef_undefined,
-    ``Eval.decUndef_some, ``Eval.decUndef_encUndef, ``Eval.encTuple_def, ``Eval.encLast_def, ``Eval.encCons_def,
+    ``Eval.decUndef_some, ``Eval.decUndef_encUndef, ``Eval.decUndef_decNull_encNull,
+    ``Eval.encTuple_def, ``Eval.encLast_def, ``Eval.encCons_def,
     ``Eval.decTuple_list, ``Eval.decLast_cons, ``Eval.decCons_cons]⟩,
   ⟨"Certificates: callbacks and the List functions", [``Proof.evalMap_map, ``Proof.evalMap_map_on, ``Proof.evalMapIdx_from,
     ``Proof.evalMapIdx_mapIdx, ``Proof.evalFilter_filter, ``Proof.evalFilter_filter_on,
