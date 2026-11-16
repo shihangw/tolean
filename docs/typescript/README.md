@@ -868,9 +868,6 @@ Tolean rejects these, among others:
   index that is not a number, such as `xs[0n]`, and an argument of `at` or a
   bound of `slice` that is not a number. `slice` takes at most two
   arguments.
-- A number argument of a string method that is not an integer literal, such
-  as `s.slice(i)` or `s.startsWith(p, i)`. The string methods do not read a
-  number with `ToIntegerOrInfinity` yet, as `at` and `slice` on an array do.
 - `reduce` without an initial value, which throws on an empty array, and a
   callback of `reduce` whose value has another type than the initial value.
 - `sort` on an array that the function did not make in the same expression,
