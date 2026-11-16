@@ -27,6 +27,7 @@ def strictNull {N : Type} [JSNumber N] (values : JSNullish (List N) := JSNullish
     | some values =>
       (sorted (N := N) values)
   | JSNullish.null =>
+    let values {α : Type} : Option α := none
     ([] : List N)
   | JSNullish.value values =>
     let values := some values
