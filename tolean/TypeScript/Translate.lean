@@ -40,7 +40,7 @@ inductive Ty where
   /-- `T | null`, where `T` is not `null` and not nullable. -/
   | nullable (value : Ty)
   /-- The value of an optional field `f?: T`: a `T`, or `undefined` when the
-  object has no such field. `T` is neither nullable nor optional. -/
+  object has no such field. A nullable `T` retains its own inner option. -/
   | optional (value : Ty)
   | array (elem : Ty)
   /-- An interface of the program: one that the file declares, or one that it
@@ -146,8 +146,8 @@ def Ty.join (a b : Ty) : Option Ty :=
   else match a, b with
     | .null, .nullable t | .nullable t, .null => some (.nullable t)
     | .nullable t, u | u, .nullable t => if t == u then some (.nullable t) else none
-    -- The output has one `none` for both `undefined` and `null`, so it cannot
-    -- hold a value that may be either.
+    -- A conditional still needs conversions between the nested optional
+    -- nullable type and a single nullable or optional branch.
     | .null, .optional _ | .optional _, .null => none
     | .null, t | t, .null => some (.nullable t)
     | _, _ => none
@@ -163,6 +163,10 @@ def Ty.joinOptional (a b : Ty) : Option Ty :=
 /-- The type of the value that an optional field holds when it is set. -/
 def Ty.unoptional : Ty → Ty
   | .optional t => t
+  | t => t
+
+def Ty.unnullable : Ty → Ty
+  | .nullable t => t
   | t => t
 
 /-- The spread that an object literal starts with, and the properties after
@@ -605,17 +609,33 @@ structure Code where
 /-- A nullable conditional needs its type where an optional projection reads
 it, because Lean elaborates the receiver before the projection. -/
 def nullableConditionalReceiver (e : Expr) (code : IR.Expr) (type : Ty) : IR.Expr :=
-  match e.stripParens with
-  | .cond .. => if type.isNullable then .ascribe code type.lean else code
-  | _ => code
+  if type matches .optional (.nullable _) then
+    .ext .nullishFlatten [.ascribe code type.lean]
+  else
+    match e.stripParens with
+    | .cond .. => if type.isNullable then .ascribe code type.lean else code
+    | _ => code
 
 /-- In value position, a `Prop` becomes a `Bool` with `decide`. -/
 def Code.value (c : Code) : IR.Expr :=
   if c.prop then .decide c.code else c.code
 
+/-- Record both option layers so the printer can coalesce both nullish states. -/
+def Code.coalesceValue (c : Code) : IR.Expr :=
+  match c.type with
+  | .optional (.nullable _) => .ascribe c.value c.type.lean
+  | _ => c.value
+
+/-- A present nullable field needs an explicit outer constructor. -/
+def Code.fieldValue (c : Code) (target : Ty) : IR.Expr :=
+  match target with
+  | .optional (.nullable t) => .ext .present [.ascribe c.value (.option t.lean)]
+  | _ => c.value
+
 /-- An `undefined` argument whose type names type parameters of the function
 that it is passed to, which the other arguments have to fix. -/
-def Code.unfixed (c : Code) : Bool := c.value matches .undefined && c.type.isGeneric
+def Code.unfixed (c : Code) : Bool :=
+  (c.value matches .undefined || c.value matches .nullishUndefined) && c.type.isGeneric
 
 /-- The type parameters of a function that the arguments of a call other than
 its `undefined` ones fix. A type parameter may be fixed to a type that names
@@ -1310,11 +1330,9 @@ def nullOp? : BinOp → Option Bool
   | .strictNe | .looseNe => some false
   | _ => none
 
-/-- `x === null` or `x !== null`, or the same with `==` and `!=`, where `x`
-is a name in scope that may be `null` here: `(x, the test is equality, the
-type of x when not null)`. A name already narrowed is not an `Option` in Lean
-any more, so it gets no `match`. -/
-def nullTestOf (env : Env) (e : Expr) : Option (String × Bool × Ty) :=
+/-- `x === null`, `x == null`, or their negations, where `x` may be null:
+the name, whether the test is equality, its non-null type, and its match mode. -/
+def nullTestOf (env : Env) (e : Expr) : Option (String × Bool × Ty × IR.MatchNullKind) :=
   match e.stripParens with
   | .binary _ op l r =>
     match nullOp? op with
@@ -1324,15 +1342,21 @@ def nullTestOf (env : Env) (e : Expr) : Option (String × Bool × Ty) :=
       match other? with
       | some (.ident _ name) =>
         match env.lookup name with
-        | some { type := .nullable value, .. } => some (name, isEquality, value)
+        | some { type := .nullable value, .. } =>
+          some (name, isEquality, value, .nullable)
+        | some { type := .optional (.nullable value), .. } =>
+          if op == .looseEq || op == .looseNe then
+            some (name, isEquality, value, .nullish)
+          else
+            some (name, isEquality, .optional value, .strictNull)
         | _ => none
       | _ => none
   | _ => none
 
-/-- `x === undefined` or `x !== undefined`, where `x` is a name in scope with
-an optional value, and no local hides `undefined`: `(x, the test is equality,
-the type of x when it is defined)`. -/
-def undefinedTestOf (env : Env) (e : Expr) : Option (String × Bool × Ty) :=
+/-- `x === undefined` or `x !== undefined`, where `x` is optional and no
+local hides `undefined`: the name, equality flag, defined type, and match mode. -/
+def undefinedTestOf (env : Env) (e : Expr) :
+    Option (String × Bool × Ty × IR.MatchNullKind) :=
   if env.has "undefined" then none else
   match e.stripParens with
   | .binary _ op l r =>
@@ -1347,25 +1371,28 @@ def undefinedTestOf (env : Env) (e : Expr) : Option (String × Bool × Ty) :=
       match other? with
       | some (.ident _ name) =>
         match env.lookup name with
-        | some { type := .optional value, .. } => some (name, isEquality, value)
+        | some { type := .optional (.nullable value), .. } =>
+          some (name, isEquality, .nullable value, .strictUndefined)
+        | some { type := .optional value, .. } =>
+          some (name, isEquality, value, .optional)
         | _ => none
       | _ => none
   | _ => none
 
-/-- A test that narrows a name of an `Option` type: `x === null` and the like
-on a nullable value, or `x === undefined` and `x !== undefined` on an optional
-one. `(x, the test is equality, the type of x when not none, x is optional)`. -/
-def noneTestOf (env : Env) (e : Expr) : Option (String × Bool × Ty × Bool) :=
+/-- A test that narrows a name: its equality flag, narrowed type, and match mode. -/
+def noneTestOf (env : Env) (e : Expr) :
+    Option (String × Bool × Ty × IR.MatchNullKind) :=
   match nullTestOf env e with
-  | some (name, isEquality, value) => some (name, isEquality, value, false)
-  | none => (undefinedTestOf env e).map fun (name, isEquality, value) => (name, isEquality, value, true)
+  | some test => some test
+  | none => undefinedTestOf env e
 
 /-- A direct test of an absent value, or its negation. -/
-def optionTestOf (env : Env) (e : Expr) : Option (String × Bool × Ty × Bool) :=
+def optionTestOf (env : Env) (e : Expr) :
+    Option (String × Bool × Ty × IR.MatchNullKind) :=
   match e.stripParens with
   | .unary _ .not inner =>
-    (noneTestOf env inner).map fun (name, isEquality, value, optional) =>
-      (name, !isEquality, value, optional)
+    (noneTestOf env inner).map fun (name, isEquality, value, kind) =>
+      (name, !isEquality, value, kind)
   | _ => noneTestOf env e
 
 /-- The tag that an object literal sets: the string of its property `field`. -/
@@ -1749,7 +1776,8 @@ def applyOperator (s : Span) (op : BinOp) (r : Expr) (a b : Code) : TM Code := d
 the field is optional, and the type of `obj?.name`. -/
 def optFieldType (s : Span) (t : Ty) (name : String) : TM (Bool × Ty) := do
   let some (ref, args) := (match t with
-      | .nullable (.struct ref args) | .optional (.struct ref args) => some (ref, args)
+      | .nullable (.struct ref args) | .optional (.struct ref args)
+      | .optional (.nullable (.struct ref args)) => some (ref, args)
       | _ => none : Option (DeclRef × List Ty))
     | reject s (if t matches .struct .. then
         "the left side of '?.' is never null or undefined here, so '?.' does nothing; use '.'"
@@ -1758,11 +1786,10 @@ def optFieldType (s : Span) (t : Ty) (name : String) : TM (Bool × Ty) := do
   let field? := (ctx.knownStructs.find? fun (i : StructInfo) => i.ref == ref).bind
     fun info => (info.fieldsAt args).lookup name
   match field? with
-  | some (.optional v) => return (true, .optional v)
+  | some (.optional v) =>
+    return (if v.isNullable then false else true, .optional v)
   | some (.literal _) => reject s "a tag field may be read only in a test of its union, such as x.kind === 'circle'"
   | some v =>
-    if v.isNullable then
-      reject s "'?.' may not read a nullable field, because the value could be null or undefined"
     return (false, .optional v)
   | none => reject s "only fields of interfaces declared in this file, or exported by the files before it, may be read"
 
@@ -2490,10 +2517,10 @@ def translateOperator (s : Span) (op : BinOp) (r : Expr) (a b : Code) : TM Code 
 
 /-- The defined branch of a short-circuiting absent-value test. -/
 def translateBooleanMatch (rhs : Env → TM Code) (env : Env) (name : String)
-    (value : Ty) (optional : Bool) (op : BinOp) (span : Span) : TM Code := do
+    (value : Ty) (kind : IR.MatchNullKind) (op : BinOp) (span : Span) : TM Code := do
   let whenSome ← rhs (env.narrow name value)
   unless whenSome.type == .boolean do reject span s!"'{op.symbol}' needs two booleans"
-  return ⟨.matchNull name (.bool (op == .or)) whenSome.value optional, false, .boolean⟩
+  return ⟨.matchNull name (.bool (op == .or)) whenSome.value kind, false, .boolean⟩
 
 mutual
 
@@ -2738,14 +2765,14 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
       -- to coerce a value into `Option`.
       let needsAscription := type.isNullable && a.type != .null && b.type != .null
       return ⟨if needsAscription then .ascribe code type.lean else code, false, type⟩) (do
-      let some (name, isEq, value, optional) := optionTestOf env test
+      let some (name, isEq, value, kind) := optionTestOf env test
         | reject s "the conditional expression cannot be typed; only a direct null or undefined test narrows its branches"
       let a ← translateExpr fuel (if isEq then env else env.narrow name value) expected ifTrue
       let b ← translateExpr fuel (if isEq then env.narrow name value else env) expected ifFalse
       let type ← orReject ((a.type.joinOptional b.type).filter fun t => !(t matches .literal _)) s
         "the branches of '?:' have different types"
       return ⟨.matchNull name (if isEq then a.value else b.value)
-        (if isEq then b.value else a.value) optional, false, type⟩)
+        (if isEq then b.value else a.value) kind, false, type⟩)
   | .call s callee args =>
     match reduceOf callee with
     | some recv => translateReduce fuel env expected s recv args
@@ -2903,7 +2930,8 @@ def translateCall (fuel : Nat) (env : Env) (s : Span) (callee : Expr) (args : Li
   (args.zip (codes.zip fn.params)).forM fun (arg, c, paramType) => do
     unless c.type.passableTo (paramType.subst sol) do
       reject arg.span "the argument does not have the parameter's type"
-  let missing := (fn.params.drop args.length).map fun _ => IR.Expr.undefined
+  let missing := (fn.params.drop args.length).map fun param =>
+    if param matches .optional (.nullable _) then IR.Expr.nullishUndefined else IR.Expr.undefined
   return ⟨.call fn.ref (optArgs sol codes fn.params ++ missing), false, fn.ret.subst sol⟩
 
 /-- The arguments of a call, with the type of each argument of an optional
@@ -2913,7 +2941,10 @@ knows the type of a `none`, where it could not infer `T` from the rest of
 the call. -/
 def optArgs (sol : List (String × Ty)) : List Code → List Ty → List IR.Expr
   | c :: cs, p :: ps =>
-    (if p matches .optional _ && p.isGeneric then .ascribe c.value (p.subst sol).lean else c.value) ::
+    (if p matches .optional (.nullable _) then
+      if c.value matches .undefined then IR.Expr.nullishUndefined
+      else if c.type.isOptional then c.value else c.fieldValue (p.subst sol)
+     else if p matches .optional _ && p.isGeneric then .ascribe c.value (p.subst sol).lean else c.value) ::
       optArgs sol cs ps
   | cs, [] => cs.map (·.value)
   | [], _ :: _ => []
@@ -3158,12 +3189,11 @@ def translateObject (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (
         | .keyValue ps _ _ => reject ps "object literal fields must be plain name: value pairs"
       let fieldType ← orReject ((info.fieldsAt args).lookup key) span s!"'{key}' is not a field of {structName}"
       if seen.contains key then reject span s!"'{key}' is set twice"
-      -- An optional field holds a `T` when the literal sets it. A key that
-      -- holds `undefined` is not the same JS value as no key, and Lean has
-      -- one `none` for both, so the literal must leave the field out instead.
+      -- The representation models the value of a field read, not whether
+      -- the object owns the key, so explicit undefined fields remain refused.
       let v ← translateExpr fuel env (some fieldType.unoptional) value
       unless v.type.assignableTo fieldType.unoptional do reject span s!"'{key}' does not have the field's type"
-      pure (seen ++ [key], parts ++ [(key, v.value)])
+      pure (seen ++ [key], parts ++ [(key, v.fieldValue fieldType)])
   for (field, type) in info.fieldsAt args do
     unless seen.contains field || type matches .optional _ do
       reject s s!"the object lacks the field '{field}'"
@@ -3210,14 +3240,18 @@ def translateBinary (fuel : Nat) (env : Env) (s : Span) (op : BinOp) (l r : Expr
   if op == .coalesce then
     let a ← translateExpr fuel env none l
     let some value := (match a.type with
-        | .nullable v | .optional v => some v
+        | .nullable v => some v
+        | .optional v => some v.unnullable
         | _ => none : Option Ty)
       | reject l.span "the left side of '??' is never null here, so '??' does nothing; remove it"
     let b ← translateExpr fuel env (some value) r
-    if b.type.assignableTo value then return ⟨.coalesce a.value b.value false, false, value⟩
-    unless b.type.assignableTo a.type do
+    if b.type.assignableTo value then return ⟨.coalesce a.coalesceValue b.value false, false, value⟩
+    let result := match a.type with
+      | .optional (.nullable t) => Ty.nullable t
+      | t => t
+    unless b.type.assignableTo result do
       reject r.span "the right side of '??' must have the type of the left side"
-    return ⟨.coalesce a.value b.value true, false, a.type⟩
+    return ⟨.coalesce a.coalesceValue b.value true, false, result⟩
   -- `x === undefined` and `x !== undefined`, on an optional value: a test on
   -- a Lean `Option`, unless a local hides `undefined`. Other uses of
   -- `undefined` reach the general path, which refuses the name.
@@ -3233,6 +3267,10 @@ def translateBinary (fuel : Nat) (env : Env) (s : Span) (op : BinOp) (l r : Expr
     let isEquality := nullOp? op == some true
     let o ← translateExpr fuel env none other
     match o.type with
+    | .optional (.nullable _) =>
+      let testOp := if op == .looseEq || op == .looseNe then .isNullish else .isNull
+      let test := IR.Expr.ext testOp [o.code]
+      return ⟨if isEquality then test else .not test, false, .boolean⟩
     | .nullable _ =>
       return ⟨if isEquality then .isNone o.code else .isSome o.code, false, .boolean⟩
     | _ =>
@@ -3244,10 +3282,10 @@ def translateBinary (fuel : Nat) (env : Env) (s : Span) (op : BinOp) (l r : Expr
         else "the type fixes the answer of this test with null, so it does nothing; remove it")
   -- `x === null || e` and `x !== null && e`: TypeScript narrows `x` in `e`,
   -- so Lean matches on `x` and binds it to the value inside.
-  if let some (name, isNullTest, value, optional) := optionTestOf env l then
+  if let some (name, isNullTest, value, kind) := optionTestOf env l then
     if (op == .or && isNullTest) || (op == .and && !isNullTest) then
       let narrowed := translateBooleanMatch (fun env => translateExpr fuel env none r)
-        env name value optional op r.span
+        env name value kind op r.span
       if (nullTestOf env l).isSome then return ← narrowed
       return ← narrowFallback (do
         let a ← translateExpr fuel env none l
@@ -4058,10 +4096,16 @@ def translateIf (fuel : Nat) (env : Env) (s : Span) (test : Expr) (thenBranch : 
   -- branch and to the other members in the other, so Lean matches on the
   -- constructor.
   let tagTest := tagTestOf env test
-  let noneType (value : Ty) (optional : Bool) : Ty := if optional then .optional value else .null
+  let noneType (value : Ty) (kind : IR.MatchNullKind) : Ty :=
+    match kind with
+    | .nullable | .strictNull => .null
+    | .optional | .strictUndefined => .optional value
+    | .nullish => .optional (.nullable value)
   let (envTrue, envFalse) := match nullTest, tagTest with
-    | some (name, true, value, o), _ => (env.narrow name (noneType value o), env.narrow name value)
-    | some (name, false, value, o), _ => (env.narrow name value, env.narrow name (noneType value o))
+    | some (name, true, value, kind), _ =>
+      (env.narrow name (noneType value kind), env.narrow name value)
+    | some (name, false, value, kind), _ =>
+      (env.narrow name value, env.narrow name (noneType value kind))
     | none, some t =>
       if t.isEq then (env.narrow t.name t.whenTag, env.narrow t.name t.whenOther)
       else (env.narrow t.name t.whenOther, env.narrow t.name t.whenTag)
@@ -4072,9 +4116,9 @@ def translateIf (fuel : Nat) (env : Env) (s : Span) (test : Expr) (thenBranch : 
       let c ← translateExpr (← fuelLimit) env none test
       unless c.type == .boolean do reject test.span "a condition must be a boolean"
       return .ite c.code whenTrue whenFalse
-    | some (name, isNullTest, _, optional), _ =>
-      return if isNullTest then .matchNull name optional whenTrue whenFalse
-        else .matchNull name optional whenFalse whenTrue
+    | some (name, isNullTest, _, kind), _ =>
+      return if isNullTest then .matchNull name kind whenTrue whenFalse
+        else .matchNull name kind whenFalse whenTrue
     | none, some t =>
       let (whenTag, whenOther) := if t.isEq then (whenTrue, whenFalse) else (whenFalse, whenTrue)
       -- Where more than one member is left, Lean matches the others with a
@@ -4400,7 +4444,6 @@ def translateInterface (s : Span) (exported : Bool) (name : String) (typeParams 
       -- `undefined`. An object without the field would inherit a property of
       -- `Object.prototype` of the same name.
       let type ← if !f.optional then pure type
-        else if type.isNullable then reject f.span "an optional field may not also be nullable"
         else if Eval.objectPrototypeNames.contains field then
           reject f.span s!"an optional field may not be named '{field}', because an object without it has Object.prototype.{field}"
         else pure (Ty.optional type)
@@ -4598,15 +4641,15 @@ def translateAlias (s : Span) (exported : Bool) (name : String) (typeParams : Li
 /-- The type of a parameter of type `type`, after parameters of the types
 `before`: `T`, or the optional `T` of `x?: T`, which is `undefined` when a
 call leaves it out. TypeScript lets no required parameter follow an optional
-one. The output has one `none` for both `undefined` and `null`, so an
-optional parameter may not be nullable too. -/
+one. A nullable payload retains an inner option, so an omitted argument
+differs from a null argument. -/
 def paramType (span : Span) (optional : Bool) (type : TypeExpr) (before : List Ty) : TM Ty := do
   let ty ← translateType type
   if !optional then
     if before.any (· matches .optional _) then
       reject span "a required parameter may not follow an optional one"
     return ty
-  if ty.isNullable || ty == .null then reject span "an optional parameter may not also be nullable"
+  if ty == .null then reject span "an optional parameter of only null is not supported"
   return .optional ty.unoptional
 
 def functionReturnType (borrow : Option Nat) (types : List Ty) (s : Span) (rt : TypeExpr)
@@ -5264,6 +5307,7 @@ def translateWith (file source ns : String) (target : Edition := .default)
   -- And for dates, which `JSDate` models.
   let usesDate := decls.any (IR.Decl.mentions (· == .date) IR.ExprExt.onDate)
   let usesRegExp := decls.any (IR.Decl.mentions (· == .regexp) IR.ExprExt.onRegExp)
+  let usesNullish := decls.any fun d => ((d.print names).splitOn "JSNullish").length > 1
   -- A function that can throw returns `Except JSError R`, and `JSError`
   -- holds a string.
   let throws := decls.any fun
@@ -5277,9 +5321,10 @@ def translateWith (file source ns : String) (target : Edition := .default)
     (if usesBigInt then ["import tolean.TypeScript.Spec.BigInt"] else []) ++
     (if usesMap then ["import tolean.TypeScript.Map"] else []) ++
     (if usesRegExp then ["import tolean.TypeScript.Spec.RegExp"] else []) ++
+    (if usesNullish then ["import tolean.TypeScript.Spec.Nullish"] else []) ++
     (if decls.any (IR.Decl.recursive names.file) then ["import tolean.TypeScript.Decreasing"] else []) ++
     imports ++
-    (if names.generic || usesString || throws || usesMap || usesBigInt || usesDate || usesRegExp then
+    (if names.generic || usesString || throws || usesMap || usesBigInt || usesDate || usesRegExp || usesNullish then
       ["", "open tolean.TypeScript"]
      else if imports.isEmpty then [] else [""])
   let text := "\n".intercalate

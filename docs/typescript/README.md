@@ -642,6 +642,10 @@ interface fields, not new array type syntax.
 | `Math.min(a, b, …)`, `Math.max(a, b, …)` on numbers | `JSNumber.minimum (N := N) [a, b, …]` and `JSNumber.maximum`. They fold `Math.min` of two numbers over the list, from `Infinity`, as ECMA-262 does, so `Math.min()` is `Infinity`. Tolean refuses a spread argument. |
 | `NaN`, `Infinity`, `-Infinity` | `JSNumber.nan`, `posInf`, `negInf` |
 | `T \| null`, `null` | `Option T`, `none` |
+| `f?: T \| null`, `x?: T \| null` | An optional field or parameter has type `JSNullish T`, with `JSNullish.undefined` as its default. `JSNullish T` abbreviates `Option (Option T)`, so null and undefined remain distinct. `??` checks both layers, and `?.` skips a projection for either nullish value. |
+| `x === null`, `x !== null` | `JSNullish.isNull x`, or its negation |
+| `x == null`, `x != null` | `JSNullish.isNullish x`, or its negation |
+| `x === undefined`, `x !== undefined` | `x.isNone`, `x.isSome` |
 | `x === null`, `x !== null` | `x.isNone`, `x.isSome` |
 | `x == null`, `x != null` | the same as `===` and `!==`, because a value of `T \| null` is never `undefined` |
 | `x === null \|\| e`, `x !== null && e` | `match x with \| none => … \| some x => e` (TypeScript's narrowing) |
@@ -759,6 +763,25 @@ interface fields, not new array type syntax.
 | `interface Box<T> { readonly value: T }`, where the type parameters have no constraint | `structure Box (T : Type)`. `Box<bigint>` becomes `Box Int`, and a read of a field has the field's type with `bigint` for `T`. An object literal where a `Box<bigint>` is expected becomes `({ value := … } : (Box Int))`. |
 | `type Maybe<T> = T \| null` | `abbrev Maybe (T : Type) := Option T`. As for any alias, the output writes the type itself wherever the source names it, so `Maybe<bigint>` becomes `Option Int`. |
 | `function f<T>(x: T): T`, where the type parameters have no constraint | `def f {T : Type} (x : T) : T`. A call fixes each type parameter from the types of its arguments, and Lean infers the same types. An argument of `T \| null` may be `null`, which leaves `T` to another argument. |
+
+The absent values depend on the declared type:
+
+| TypeScript declaration | Lean type | Null | Undefined | Value |
+|---|---|---|---|---|
+| `a: T \| null` | `Option T` | `none` | Not allowed | `some v` |
+| `a?: T` | `Option T` | Not allowed | `none` | `some v` |
+| `a?: T \| null` | `JSNullish T` | `JSNullish.null` | `JSNullish.undefined` | `JSNullish.value v` |
+
+The names in the last row are abbreviations, so `simp` and `decide` see
+the underlying options. A missing field and a present field holding
+undefined are still different objects in JavaScript. Tolean continues
+to refuse explicit undefined object fields and operations that observe
+whether the key exists.
+
+Tests of an optional nullable value preserve the same distinctions.
+`=== null` matches only null, `=== undefined` matches only undefined, and
+`== null` matches either. A loose non-null test narrows to `T`; a strict
+non-null test may still leave undefined.
 
 Tolean rejects these, among others:
 
@@ -987,21 +1010,23 @@ Tolean rejects these, among others:
   the declared one. Code in the subset can only read a field by name, so
   inside the subset the order never changes a result. That is why Tolean
   refuses `JSON.stringify` on an object.
-- An optional field that is also nullable, a tag field that is optional, and
+- A tag field that is optional, and
   an optional field with the name of a property of `Object.prototype`, such
   as `toString`, because an object without the field has that property.
   Tolean also refuses `undefined` as a value unless the context expects an
   optional value, such as a local or return value typed `T | undefined`, or
   the argument of an optional parameter. A literal must leave an optional field out rather
   than set it to `undefined`, or to the value of another optional field. JS
-  tells an object without the key from one whose key holds `undefined`, and
-  Lean has one `none` for both. It also refuses `== null` and `=== null` on
-  an optional value, and `== undefined`.
-- An optional parameter that is also nullable, and a required parameter after
+  distinguishes an object without the key from one whose key holds
+  `undefined`. `JSNullish` preserves the field value but not key presence.
+  An explicit `T | null | undefined` union also remains unsupported.
+  Tolean refuses `== null` and `=== null` on a plain optional value, and
+  `== undefined`.
+- A required parameter after
   an optional one. Expression narrowing tests a local name directly. A
   test of a property access, and `'x' in obj`, remain refused.
-- `?.` where the value cannot be `null` or `undefined`, `?.` on a nullable
-  field, and optional indexing outside the array, tuple and Record cases above.
+- `?.` where the value cannot be `null` or `undefined`, and optional indexing
+  outside the array, tuple and Record cases above.
 - Optional calls, `f?.()`. Neither `Syntax.TypeExpr` nor `Translate.Ty` has a
   function type. No accepted parameter, field or variable declaration gives
   a possibly `undefined` value a callable type. A generic type parameter
@@ -1014,9 +1039,9 @@ Tolean rejects these, among others:
   it: it reads `.c` of `undefined` when `a` is `null`, so Tolean refuses
   it.
 - A local or a function named `undefined`, which would hide the global the
-  subset reads. Tolean also refuses a value that may be either `undefined` or
-  `null`, such as `b ? s.f : null`, because the output has one `none` for
-  both.
+  subset reads. Tolean also refuses a conditional that combines optional
+  and nullable branches, such as `b ? s.f : null`. The translator does not
+  yet insert the conversions between those branch types and `JSNullish`.
 - A `__proto__: v` key in an object literal. It sets the object's prototype,
   not a field.
 - A function that calls itself on anything but a part of one parameter, the

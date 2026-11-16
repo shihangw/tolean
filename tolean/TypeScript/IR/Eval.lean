@@ -212,8 +212,11 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
       | [a, b] => do
         return .str ((← left.toStr a) ++ (← right.toStr b))
       | _ => none
-    | .undefined => match args with
+    | .undefined | .nullishUndefined => match args with
       | [] => some .undefined
+      | _ => none
+    | .present | .nullishFlatten => match args with
+      | [a] => some a
       | _ => none
     -- `a === undefined` and `a !== undefined`, as `IsStrictlyEqual` gives them.
     | .isUndefined => match args with
@@ -221,6 +224,12 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
       | _ => none
     | .isDefined => match args with
       | [a] => some (.bool !(a matches .undefined))
+      | _ => none
+    | .isNull => match args with
+      | [a] => some (.bool (a == .null))
+      | _ => none
+    | .isNullish => match args with
+      | [a] => some (.bool (a == .null || a == .undefined))
       | _ => none
     -- `a?.f.g`, as the spec evaluates it.
     | .optField path _ => match args with
@@ -443,10 +452,19 @@ def Expr.eval (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
     | .null => return .bool false
     | .undefined => none
     | _ => return .bool true
-  | .matchNull name whenNull whenValue optional => do
+  | .matchNull name whenNull whenValue kind => do
     match ← ρ.lookup name with
-    | .null => if optional then none else Expr.eval fs fuel ρ whenNull
-    | .undefined => if optional then Expr.eval fs fuel ρ whenNull else none
+    | .null =>
+      match kind with
+      | .nullable | .strictNull => Expr.eval fs fuel ρ whenNull
+      | .optional => Expr.eval fs fuel ρ whenValue
+      | .nullish => Expr.eval fs fuel ρ whenNull
+      | .strictUndefined => Expr.eval fs fuel ρ whenValue
+    | .undefined =>
+      match kind with
+      | .nullable => none
+      | .optional | .nullish | .strictUndefined => Expr.eval fs fuel ρ whenNull
+      | .strictNull => Expr.eval fs fuel ρ whenValue
     | _ => Expr.eval fs fuel ρ whenValue
   -- `none` is `null`, or `undefined` for an optional field, and `some v` is
   -- the value of `v`. So both forms take `a` unless it is `null` or
@@ -644,10 +662,19 @@ def Body.exec (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
   -- A value of `T | null` is never `undefined`, and an optional value is
   -- never `null`. So each test gives no value for the other, as the tests of
   -- `null` in expressions do.
-  | .matchNull name optional whenNull whenValue => do
+  | .matchNull name kind whenNull whenValue => do
     match ← ρ.lookup name with
-    | .null => if optional then none else Body.exec fs fuel ρ whenNull
-    | .undefined => if optional then Body.exec fs fuel ρ whenNull else none
+    | .null =>
+      match kind with
+      | .nullable | .strictNull => Body.exec fs fuel ρ whenNull
+      | .optional => Body.exec fs fuel ρ whenValue
+      | .nullish => Body.exec fs fuel ρ whenNull
+      | .strictUndefined => Body.exec fs fuel ρ whenValue
+    | .undefined =>
+      match kind with
+      | .nullable => none
+      | .optional | .nullish | .strictUndefined => Body.exec fs fuel ρ whenNull
+      | .strictNull => Body.exec fs fuel ρ whenValue
     | _ => Body.exec fs fuel ρ whenValue
   -- The tag is a field of the object, or the type of the value, so the
   -- evaluator reads it, as JS does. The arm of the one member left runs only

@@ -1,6 +1,7 @@
 import tolean.IR
 import tolean.TypeScript.Syntax.Equality
 import tolean.TypeScript.Spec.Date
+import tolean.TypeScript.Spec.Nullish
 import tolean.TypeScript.Spec.RegExp
 
 /-!
@@ -159,10 +160,20 @@ inductive ExprExt where
   /-- `none`, on no arguments, as an optional value: `undefined`, such as
   the argument of an optional parameter that a call leaves out. -/
   | undefined
+  /-- `JSNullish.undefined`, as the absent argument of a three-state value. -/
+  | nullishUndefined
+  /-- Add the outer presence layer without changing the JavaScript value. -/
+  | present
+  /-- Flatten both nullish layers before an optional projection. -/
+  | nullishFlatten
   /-- `a.isNone`, on an optional value: `a === undefined`. -/
   | isUndefined
   /-- `a.isSome`, on an optional value: `a !== undefined`. -/
   | isDefined
+  /-- Strict `a === null` on a three-state nullish value. -/
+  | isNull
+  /-- Loose `a == null` on a three-state nullish value. -/
+  | isNullish
   /-- `a.map (·.f.g)`, or `a.bind (·.f.g)` when the last field is optional:
   `a?.f.g`, which is `undefined` when `a` is `null` or `undefined`. The
   fields before the last are required. -/
@@ -324,6 +335,8 @@ abbrev LoopInfo := tolean.IR.LoopInfo TyExt
 @[match_pattern] abbrev Expr.numberTest (test : NumberTest) (a : Expr) : Expr :=
   .ext (.numberTest test) [a]
 @[match_pattern] abbrev Expr.undefined : Expr := .ext .undefined []
+
+@[match_pattern] abbrev Expr.nullishUndefined : Expr := .ext .nullishUndefined []
 @[match_pattern] abbrev Expr.isUndefined (a : Expr) : Expr := .ext .isUndefined [a]
 @[match_pattern] abbrev Expr.isDefined (a : Expr) : Expr := .ext .isDefined [a]
 @[match_pattern] abbrev Ty.error : Ty := .ext .error
@@ -343,6 +356,7 @@ def leanNames : List (String × String) :=
      ("JSMap", "tolean.TypeScript.JSMap"), ("JSSet", "tolean.TypeScript.JSSet"),
      ("JSError", "tolean.TypeScript.JSError"), ("JSBigInt", "tolean.TypeScript.JSBigInt"),
      ("JSDate", "tolean.TypeScript.JSDate"),
+     ("JSNullish", "tolean.TypeScript.JSNullish"),
      ("JSRegExp", "tolean.TypeScript.JSRegExp"),
      ("pure", "Pure.pure"),
      ("Nat", "Nat")]
@@ -516,8 +530,15 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
   | .stringCodePoints, [s] => s!"({leanName names "JSString"}.codePoints {argument s})"
   | .jsonStringify, [x] => s!"({leanName names "JSString"}.json {argument x})"
   | .undefined, _ => leanName names "none"
+  | .nullishUndefined, _ => s!"{leanName names "JSNullish"}.undefined"
+  | .present, [a] =>
+    s!"(match {a} with | {leanName names "none"} => {leanName names "JSNullish"}.null | " ++
+      s!"{leanName names "some"} v => {leanName names "JSNullish"}.value v)"
+  | .nullishFlatten, [a] => s!"{argument a}.join"
   | .isUndefined, [a] => s!"{argument a}.isNone"
   | .isDefined, [a] => s!"{argument a}.isSome"
+  | .isNull, [a] => s!"{leanName names "JSNullish"}.isNull {argument a}"
+  | .isNullish, [a] => s!"{leanName names "JSNullish"}.isNullish {argument a}"
   | .optField path bind, [a] =>
     s!"({argument a}.{if bind then "bind" else "map"} (·.{".".intercalate path}))"
   | .mapEmpty, _ => s!"{leanName names "JSMap"}.empty"
