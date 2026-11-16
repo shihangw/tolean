@@ -778,6 +778,10 @@ undefined are still different objects in JavaScript. Tolean continues
 to refuse explicit undefined object fields and operations that observe
 whether the key exists.
 
+An optional nullable field or parameter whose payload still names type
+parameters is refused. Concrete aliases are normalized first, so
+`Maybe<bigint | null>` has only one null state when `Maybe<T>` is `T | null`.
+
 Tests of an optional nullable value preserve the same distinctions.
 `=== null` matches only null, `=== undefined` matches only undefined, and
 `== null` matches either. A loose non-null test narrows to `T`; a strict

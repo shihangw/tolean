@@ -821,6 +821,7 @@ def Names.ref (names : Names) (r : DeclRef) : String × Option String :=
 names from the root. -/
 def leanNames : List (String × String) :=
   [("decide", "Decidable.decide"), ("List", "List"), ("Option", "Option"),
+   ("JSNullish", "tolean.TypeScript.JSNullish"),
    ("some", "Option.some"), ("none", "Option.none"), ("Int", "Int"), ("Nat", "Nat"), ("Bool", "Bool"),
    ("String", "String"), ("DecidableEq", "DecidableEq"), ("Repr", "Repr"), ("Except", "Except"),
    ("pure", "Pure.pure")]
@@ -1335,7 +1336,7 @@ def Expr.print (names : Names) : Expr T E → String
     let some_ := leanName names "some"
     let nullish := leanName names "JSNullish"
     let scrutinee := names.matchBinder ++ name
-    let noneBinding := s!"(let {name} := {none_}; {whenValue.print names})"
+    let noneBinding := s!"(let {name} := {leanName names "Option"}.join {name}; {whenValue.print names})"
     let someBinding := s!"(let {name} := {some_} {name}; {whenValue.print names})"
     match kind with
     | .nullable | .optional =>
@@ -1417,7 +1418,7 @@ def Body.lines (names : Names) (monadic : Bool := false) : Body T E → List Str
     let some_ := leanName names "some"
     let nullish := leanName names "JSNullish"
     let scrutinee := names.matchBinder ++ name
-    let noneBinding := [s!"let {name} := {none_}"] ++ whenValue.lines names monadic
+    let noneBinding := [s!"let {name} := {leanName names "Option"}.join {name}"] ++ whenValue.lines names monadic
     let someBinding := [s!"let {name} := {some_} {name}"] ++ whenValue.lines names monadic
     match kind with
     | .nullable | .optional =>

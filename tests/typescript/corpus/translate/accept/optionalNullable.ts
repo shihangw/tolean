@@ -40,6 +40,22 @@ export function isStrictUndefined(limit?: bigint | null): boolean {
   return limit === undefined;
 }
 
+export function nullOr(value?: bigint | null): boolean {
+  return value === null || false;
+}
+
+export function notNullAnd(value?: bigint | null): boolean {
+  return value !== null && true;
+}
+
+export function undefinedOr(value?: bigint | null): boolean {
+  return value === undefined || false;
+}
+
+export function notUndefinedAnd(value?: bigint | null): boolean {
+  return value !== undefined && true;
+}
+
 export function looseNarrow(limit?: bigint | null): bigint {
   if (limit != null) return limit;
   return 0n;
@@ -47,6 +63,16 @@ export function looseNarrow(limit?: bigint | null): bigint {
 
 export function strictNarrow(limit?: bigint | null): bigint {
   if (limit !== null) return limit ?? 10n;
+  return 0n;
+}
+
+export function unusedAfterNull(limit?: bigint | null): bigint {
+  if (limit === null) return 1n;
+  return 0n;
+}
+
+export function unusedAfterUndefined(limit?: bigint | null): bigint {
+  if (limit === undefined) return 1n;
   return 0n;
 }
 
@@ -79,5 +105,17 @@ export interface Inner {
 }
 
 export function projected(inner?: Inner | null): bigint {
+  return inner?.count ?? 10n;
+}
+
+export interface OptionalInner {
+  readonly count?: bigint | null;
+}
+
+export function projectedOptionalField(inner: OptionalInner | null): bigint {
+  return inner?.count ?? 10n;
+}
+
+export function projectedOptionalReceiver(inner?: OptionalInner | null): bigint {
   return inner?.count ?? 10n;
 }
