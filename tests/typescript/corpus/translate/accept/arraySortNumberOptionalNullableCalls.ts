@@ -41,3 +41,11 @@ export function classifyNull(): number {
 export function classifyValue(): number {
   return classify(7);
 }
+
+interface Numbers {
+  readonly values?: ReadonlyArray<number> | null;
+}
+
+export function projected(values?: Numbers | null): number[] {
+  return sorted(values?.values ?? []);
+}

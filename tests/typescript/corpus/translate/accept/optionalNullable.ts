@@ -50,6 +50,16 @@ export function strictNarrow(limit?: bigint | null): bigint {
   return 0n;
 }
 
+export function unusedAfterNull(limit?: bigint | null): bigint {
+  if (limit === null) return 1n;
+  return 0n;
+}
+
+export function unusedAfterUndefined(limit?: bigint | null): bigint {
+  if (limit === undefined) return 1n;
+  return 0n;
+}
+
 export function cleared(): Settings {
   return { limit: null };
 }
@@ -79,5 +89,17 @@ export interface Inner {
 }
 
 export function projected(inner?: Inner | null): bigint {
+  return inner?.count ?? 10n;
+}
+
+export interface OptionalInner {
+  readonly count?: bigint | null;
+}
+
+export function projectedOptionalField(inner: OptionalInner | null): bigint {
+  return inner?.count ?? 10n;
+}
+
+export function projectedOptionalReceiver(inner?: OptionalInner | null): bigint {
   return inner?.count ?? 10n;
 }

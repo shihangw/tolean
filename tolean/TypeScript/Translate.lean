@@ -336,6 +336,45 @@ def Ty.unifyList (sol : List (String × Ty)) : List Ty → List Ty → List (Str
 
 end
 
+mutual
+
+/-- Alias expansion collapses repeated null unions. Function type
+substitution keeps the wrapper shape of the generic Lean function. -/
+def Ty.normalizeNulls : Ty → Ty
+  | .nullable t =>
+    match t.normalizeNulls with
+    | .null => .null
+    | .nullable value => .nullable value
+    | value => .nullable value
+  | .optional t => .optional t.normalizeNulls
+  | .array t => .array t.normalizeNulls
+  | .tuple ts => .tuple (Ty.normalizeNullsList ts)
+  | .struct ref args => .struct ref (Ty.normalizeNullsList args)
+  | .map k v => .map k.normalizeNulls v.normalizeNulls
+  | .set t => .set t.normalizeNulls
+  | t => t
+
+def Ty.normalizeNullsList : List Ty → List Ty
+  | [] => []
+  | t :: ts => t.normalizeNulls :: Ty.normalizeNullsList ts
+
+end
+
+mutual
+
+def Ty.hasOpenNullish : Ty → Bool
+  | .optional (.nullable t) => t.isGeneric
+  | .nullable t | .optional t | .array t | .set t => t.hasOpenNullish
+  | .tuple ts | .struct _ ts => Ty.hasOpenNullishList ts
+  | .map k v => k.hasOpenNullish || v.hasOpenNullish
+  | _ => false
+
+def Ty.hasOpenNullishList : List Ty → Bool
+  | [] => false
+  | t :: ts => t.hasOpenNullish || Ty.hasOpenNullishList ts
+
+end
+
 /-- A tagged union of the program, with the file that declares it: a union
 of interfaces, `type T = A | B`, or a union of primitive types,
 `type T = string | bigint`. `members` maps each tag to the type of its
@@ -1051,7 +1090,7 @@ def translateType (t : TypeExpr) : TM Ty := do
       return .struct info.ref args
     | none, some info =>
       unless info.typeParams.length == 1 do reject t.span (typeArgsMessage name info.typeParams.length)
-      return info.type.subst (info.typeParams.zip args)
+      return (info.type.subst (info.typeParams.zip args)).normalizeNulls
     | none, none => unsupportedType t
   | .ref _ name [] =>
     let ctx ← get
@@ -1092,7 +1131,7 @@ def translateType (t : TypeExpr) : TM Ty := do
     | none, some info =>
       unless info.typeParams.length == tys.length do
         reject t.span (typeArgsMessage name info.typeParams.length)
-      return info.type.subst (info.typeParams.zip tys)
+      return (info.type.subst (info.typeParams.zip tys)).normalizeNulls
     | none, none => unsupportedType t
   -- A tuple. Lean has no tuple of one element.
   | .tuple s _ elems =>
@@ -1787,7 +1826,7 @@ def optFieldType (s : Span) (t : Ty) (name : String) : TM (Bool × Ty) := do
     fun info => (info.fieldsAt args).lookup name
   match field? with
   | some (.optional v) =>
-    return (if v.isNullable then false else true, .optional v)
+    return (true, .optional v)
   | some (.literal _) => reject s "a tag field may be read only in a test of its union, such as x.kind === 'circle'"
   | some v =>
     return (false, .optional v)
@@ -4447,6 +4486,8 @@ def translateInterface (s : Span) (exported : Bool) (name : String) (typeParams 
         else if Eval.objectPrototypeNames.contains field then
           reject f.span s!"an optional field may not be named '{field}', because an object without it has Object.prototype.{field}"
         else pure (Ty.optional type)
+      if type.hasOpenNullish then
+        reject f.span "optional nullable types with unresolved type parameters are not supported"
       pure (infos ++ [(field, type)])
   modify fun c => { c with
     typeParams := [], structs := c.structs ++ [{ file := c.file, name, exported, typeParams, fields := infos }] }
@@ -4645,6 +4686,8 @@ one. A nullable payload retains an inner option, so an omitted argument
 differs from a null argument. -/
 def paramType (span : Span) (optional : Bool) (type : TypeExpr) (before : List Ty) : TM Ty := do
   let ty ← translateType type
+  if ty.hasOpenNullish || (optional && (ty matches .nullable _) && ty.isGeneric) then
+    reject span "optional nullable types with unresolved type parameters are not supported"
   if !optional then
     if before.any (· matches .optional _) then
       reject span "a required parameter may not follow an optional one"

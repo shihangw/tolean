@@ -415,6 +415,13 @@ a reason to choose otherwise.
   inside a value of type `T`. If a later construct breaks that, Lean refuses
   the certificate rather than accepting a false one.
 
+  Issue #248 keeps optional nullable payloads with unresolved type parameters
+  refused. Before step 16 lifts that restriction, decide whether a codec
+  must prove that it never encodes a payload as null or undefined, or the
+  representation must enforce canonical values. Merely bundling an
+  arbitrary encoder does not distinguish `JSNullish.null` from a payload
+  that encodes to null.
+
 - How should a certificate cover an interface that refers to itself, and a
   function that calls itself? The encoder of such an interface would be a
   recursive function, and a certificate runs the interpreter with as much

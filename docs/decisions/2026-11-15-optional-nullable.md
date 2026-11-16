@@ -17,6 +17,8 @@ has separate `Val.null` and `Val.undefined` constructors. Collapsing them
 would change the meaning of strict comparisons, not merely the output type.
 
 Nested options preserve the existing types for nullable and optional values.
+Substitution through a generic alias collapses repeated nullable wrappers,
+because adding null to a type that already includes null changes no values.
 A dedicated three-case inductive would make case analysis more explicit,
 but it would need new conversions wherever a value changes from nullable
 to optional nullable. Nested options use Lean's existing constructors and
@@ -24,6 +26,14 @@ lemmas instead. Coalescing must inspect both layers. Optional chaining
 must skip its projection for either nullish value, but preserve a null
 that the projected field holds. Narrowing against undefined removes only
 the outer layer.
+
+Optional nullable fields and parameters whose payload still names type
+parameters remain refused, including through aliases and containers.
+Substituting a nullable type for a payload parameter can otherwise give
+two representations of null. A call-site restriction does not enforce that
+invariant on the generated polymorphic Lean type. The generic certificate
+step must decide codec laws or a canonical representation before lifting
+this refusal.
 
 An object without a key is still not the same object as one whose key
 holds undefined. The nested option models the value of a field read, not

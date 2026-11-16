@@ -589,6 +589,14 @@ test('the interpreter binds a parameter that a call leaves out to undefined', as
       source: 'export function f(x?: bigint | null): bigint { if (x !== null) return x ?? 10n; return 0n; }',
       args,
     })),
+    ...[[], [null], [5n]].map((args) => ({
+      source: 'export function f(x?: bigint | null): bigint { if (x === null) return 1n; return 0n; }',
+      args,
+    })),
+    ...[[], [null], [5n]].map((args) => ({
+      source: 'export function f(x?: bigint | null): bigint { if (x === undefined) return 1n; return 0n; }',
+      args,
+    })),
     {
       source:
         'function g(x?: bigint | null): bigint { return x ?? 10n; }\n' +
@@ -601,6 +609,10 @@ test('the interpreter binds a parameter that a call leaves out to undefined', as
     })),
     ...[{}, { limit: null }, { limit: 5n }].map((value) => ({
       source: 'interface Settings { readonly limit?: bigint | null; } export function f(s: Settings): bigint { return s.limit ?? 10n; }',
+      args: [value],
+    })),
+    ...[{}, { limit: null }, { limit: 5n }].map((value) => ({
+      source: 'interface JSNullish { readonly limit?: bigint | null; } export function f(s: JSNullish): bigint { return s.limit ?? 10n; }',
       args: [value],
     })),
     ...[{}, { limit: null }, { limit: 5n }].map((value) => ({
@@ -618,6 +630,18 @@ test('the interpreter binds a parameter that a call leaves out to undefined', as
     ...[[], [null], [{ count: null }], [{ count: 5n }]].map((args) => ({
       source: 'interface Inner { readonly count: bigint | null; } export function f(x?: Inner | null): bigint { return x?.count ?? 10n; }',
       args,
+    })),
+    ...[null, {}, { count: null }, { count: 5n }].map((value) => ({
+      source: 'interface Inner { readonly count?: bigint | null; } export function f(x: Inner | null): bigint { return x?.count ?? 10n; }',
+      args: [value],
+    })),
+    ...[[], [null], [{}], [{ count: null }], [{ count: 5n }]].map((args) => ({
+      source: 'interface Inner { readonly count?: bigint | null; } export function f(x?: Inner | null): bigint { return x?.count ?? 10n; }',
+      args,
+    })),
+    ...[{}, { value: null }, { value: 5n }].map((value) => ({
+      source: 'type Maybe<T> = T | null; interface Settings { readonly value?: Maybe<bigint | null>; } export function f(s: Settings): bigint { return s.value ?? 10n; }',
+      args: [value],
     })),
     { source: 'export function f(a: bigint, b?: bigint): bigint { return a + (b ?? 10n); }', args: [1n] },
     {
