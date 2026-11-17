@@ -7,6 +7,14 @@ The constructor must assign each declared field exactly once after
 `super(message)`. The assignment must be unconditional and must read that
 parameter directly.
 
+The parser refuses a normalization that would reorder own fields. TypeScript
+creates parameter properties in parameter order before separate declarations
+in declaration order. The normalized readonly parameters must have exactly
+that order. Assignments must also follow declaration order because TypeScript
+downlevel output creates separately declared fields when it assigns them.
+These checks preserve enumeration order on both native and downlevel classes.
+The interpreter tests compare complete thrown values without sorting fields.
+
 This normalization keeps the error AST, evaluator and certificates unchanged.
 The existing `program_sound` theorem covers the normalized program. The
 parser's round-trip theorem still covers every accepted module. The source

@@ -6029,6 +6029,7 @@ theorem errorAssignmentStep_ready {pending pending' : List String} {b : Bool}
     obtain ⟨name, s₃, hn, h⟩ := h
     obtain ⟨nt, r₃, _, _, _, rfl, hR₃⟩ := readName_inv hR₂ hn
     obtain ⟨_, h⟩ := pass_err (fun _ => ⟨_, _, rfl⟩) h
+    obtain ⟨_, h⟩ := pass_err (fun _ => ⟨_, _, rfl⟩) h
     rw [Parse.bind_ok] at h
     obtain ⟨eq, s₄, heq, h⟩ := h
     obtain ⟨_, r₄, _, rfl, hR₄⟩ := expectPunct_inv hR₃ heq
@@ -6131,6 +6132,7 @@ theorem parseClass_wf {T : Edition} (start : Pos) (exported : Bool) :
         (s₀ := past (past sf z r₆) lp r₇)
         (hK₇.target_eq.trans hT) hI hst)
       _ #[] _ params s₈ ⟨hR₇, Kept.refl _, by simp⟩ hps).1
+    obtain ⟨_, h⟩ := pass_err (fun _ => ⟨_, _, rfl⟩) h
     obtain ⟨_, h⟩ := pass_err (fun _ => ⟨_, _, rfl⟩) h
     -- `) {`
     rw [Parse.bind_ok] at h; obtain ⟨rp, s₉, hrp, h⟩ := h

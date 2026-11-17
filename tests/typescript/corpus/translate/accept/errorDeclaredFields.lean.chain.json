@@ -1,7 +1,7 @@
 {"tolean": "0.3.1",
  "target": "ES2024",
  "sources":
- [{"sha256": "ccd8c2ec6972ac611d2f712fa5480bcb18a4e9631d5d4c62a088dda5a1b2a446",
+ [{"sha256": "fb649809c9a43d2879bb294fd9bba2116519e17d4462311cb76eb84d50932014",
    "path": "corpus/translate/accept/errorDeclaredFields.ts"}],
  "output":
  {"sha256": "4e503005d19c30dca688f4d4674577d09dac8f9644c39972918b3b65d3e72e78",

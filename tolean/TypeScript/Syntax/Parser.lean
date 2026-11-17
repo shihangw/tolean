@@ -1399,6 +1399,14 @@ def errorFieldsOK (fields params : Array CtorParam) : Bool :=
       (errorFieldType f.param.type).isSome &&
       errorFieldType f.param.type == errorFieldType p.param.type
 
+/-- TypeScript creates parameter-property fields before separately declared
+fields. The normalized parameters must preserve that order. -/
+def errorFieldOrderOK (fields params : Array CtorParam) : Bool :=
+  ((errorFieldParams fields params).toList.filterMap fun p =>
+    if p.readonly then some p.param.name else none) ==
+  ((params.toList.filterMap fun p => if p.readonly then some p.param.name else none) ++
+    fields.toList.map (·.param.name))
+
 /-- Read one unconditional assignment. Removing the field from `pending`
 rejects repeated assignments, and the final check rejects missing ones. -/
 def errorAssignmentStep (pending : List String) : ParseM (List String × Bool) := do
@@ -1411,6 +1419,8 @@ def errorAssignmentStep (pending : List String) : ParseM (List String × Bool) :
   let name ← readName
   unless pending.contains name do
     failAt t "an error assignment must target an unassigned declared readonly field"
+  unless pending.head? == some name do
+    failAt t "assign error fields in declaration order so downlevel output preserves field order"
   let _ ← expectPunct "="
   let value ← readName
   unless value == name do
@@ -1443,6 +1453,8 @@ def parseClass (start : Pos) (exported : Bool) : ParseM Decl := do
   let params ← iterate (← budget) #[] (listStep ")" (fun _ => pure ()) parseCtorParam)
   unless errorFieldsOK fields params do
     failAt t "each error field needs one required same-name parameter with the same primitive type"
+  unless errorFieldOrderOK fields params do
+    failAt t "error field order must match parameter properties followed by separate declarations"
   let _ ← expectPunct ")"
   let _ ← expectPunct "{"
   let sup ← peek
