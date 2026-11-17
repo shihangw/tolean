@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Checks `tolean chain` on the gauge project: the chain holds as committed, and
 # `chain check` fails on a changed source, a missing project check and a claim
-# whose proof has another type or depends on a forbidden axiom.
+# whose proof has another type, and an obligation whose proof depends on a
+# forbidden axiom.
 # Run from tests/chain inside `nix develop`,
 # after `lake build` at the root.
 set -euo pipefail
@@ -118,7 +119,7 @@ theorem valid : validSpec := True.intro
 LEAN
 lake env lean --root="$tmp" -o "$tmp/ObligationAxioms.olean" "$tmp/ObligationAxioms.lean"
 (
-  export LEAN_PATH="$tmp:$(lake env printenv LEAN_PATH)"
+  export LEAN_PATH="$tmp"
   obligation_manifest() {
     node --input-type=module - "$@" <<'JS'
 import fs from "node:fs";
