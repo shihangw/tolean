@@ -1207,7 +1207,7 @@ def parseStatement (fuel : Nat) : ParseM Stmt := do
     if 1 < defaultCount clauses.toList then failAt t "a switch may have only one default"
     return .switchStmt (← spanFrom start) disc clauses.toList
   | .keyword "true" | .keyword "false" | .keyword "null" | .keyword "typeof"
-  | .keyword "void" | .keyword "new" => parseExpressionStatement fuel
+  | .keyword "void" | .keyword "new" | .keyword "this" => parseExpressionStatement fuel
   | .keyword "function" => parseLocalFunction (parseBlock fuel)
   | .keyword word => failAt t s!"'{word}' is not supported here"
   | _ => parseExpressionStatement fuel

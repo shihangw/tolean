@@ -21,8 +21,15 @@ def ctorName (name : String) : String := s!"{generatedPrefix}{name.length}_{name
 def methodName (name method : String) : String := s!"{generatedPrefix}{name.length}_{name}_method_{method}"
 def thisName : String := generatedPrefix ++ "this"
 
-def fields (d : ClassDecl) : List Field :=
+def declaredFields (d : ClassDecl) : List Field :=
   d.members.filterMap fun | .field f => some f | _ => none
+
+def fields (d : ClassDecl) : List Field :=
+  declaredFields d ++ d.members.flatMap fun
+    | .ctor ps _ => ps.filterMap fun p =>
+      if p.readonly then p.param.type.map (fun t => ⟨p.param.span, true, p.param.name, false, t⟩)
+      else none
+    | _ => []
 
 def methods (d : ClassDecl) : List ClassMethod :=
   d.members.filterMap fun | .method m => some m | _ => none
@@ -52,7 +59,8 @@ def infer (ctx : Context) (env : Types) : Nat → Expr → Option TypeExpr
     | .this _ => ctx.self.map classType
     | .new s name [] _ => some (.ref s name [])
     | .paren _ e | .asConst _ e | .satisfies _ e _ => infer ctx env f e
-    | .call _ (.ident _ name) _ => (ctx.returns.lookup name).join
+    | .call _ (.ident _ name) _ =>
+      if env.any (·.1 == name) then none else (ctx.returns.lookup name).join
     | .call _ (.member _ recv name) _ => do
       let ty ← infer ctx env f recv
       let d ← exactClass ctx ty
@@ -89,6 +97,7 @@ def expr (ctx : Context) (env : Types) : Nat → Expr → Result Expr
     | .new s name ts args =>
       let args' ← args.mapM (expr ctx env f)
       if ctx.classes.any (·.name == name) then
+        if env.any (·.1 == name) then refuse s "class constructors may not be shadowed"
         unless ts.isEmpty do refuse s "generic classes are not supported"
         pure (.call s (.ident s (ctorName name)) args')
       else pure (.new s name ts args')
@@ -108,10 +117,11 @@ def expr (ctx : Context) (env : Types) : Nat → Expr → Result Expr
       pure (.call s (← expr ctx env f callee) (← args.mapM (expr ctx env f)))
     | .member s recv name =>
       if name == "constructor" then refuse s "constructor property identity is not supported"
-      if isMethod ctx name then refuse s "class methods may not be extracted as values"
       let recv' ← receiver ctx env f recv
       if let some d := receiverClass ctx env recv then
+        if (methods d).any (·.name == name) then refuse s "class methods may not be extracted as values"
         unless (fields d).any (·.name == name) do refuse s "class instances expose only their readonly fields"
+      else if isMethod ctx name then refuse s "class methods may not be extracted from a receiver of unknown type"
       pure (.member s recv' name)
     | .index s recv key | .optIndex s recv key =>
       if (receiverClass ctx env recv).isSome then refuse s "computed class properties are not supported"
@@ -212,6 +222,7 @@ def stmts (ctx : Context) (env : Types) (fuel : Nat) : List Stmt → Result (Lis
     let env' := match s with
       | .varDecl _ d => (d.name, bindingType ctx env d) :: env
       | .destructure _ _ p _ _ => p.names.map (·, none) ++ env
+      | .funDecl _ name _ _ _ _ => (name, none) :: env
       | _ => env
     pure (s' :: (← stmts ctx env' fuel ss))
 
@@ -237,7 +248,7 @@ def elaborateClass (ctx : Context) (d : ClassDecl) : Result (List Decl) := do
     let some type := p.param.type
       | refuse p.param.span "a readonly constructor parameter needs a type"
     return some (⟨p.param.span, true, p.param.name, false, type⟩ : Field)
-  let fs := fields d ++ parameterFields
+  let fs := declaredFields d ++ parameterFields
   let ms := methods d
   unique d.span "field or method names" (fs.map (·.name) ++ ms.map (·.name))
   unique d.span "constructor assignments" (assigned.map Prod.fst)
@@ -245,8 +256,8 @@ def elaborateClass (ctx : Context) (d : ClassDecl) : Result (List Decl) := do
     if f.name == "constructor" || f.name == "__proto__" then
       refuse f.span "constructor and __proto__ fields are not supported"
     unless f.readonly && !f.optional do refuse f.span "fields must be required and readonly"
-  unless (assigned.map Prod.fst).all (fun n => (fields d).any (·.name == n)) &&
-      (fields d).all (fun f => (assigned.map Prod.fst).contains f.name) do
+  unless (assigned.map Prod.fst).all (fun n => (declaredFields d).any (·.name == n)) &&
+      (declaredFields d).all (fun f => (assigned.map Prod.fst).contains f.name) do
     refuse d.span "the constructor must assign every declared field exactly once and no undeclared field"
   let ps ← cps.mapM fun p => do
     if p.param.optional then refuse p.param.span "optional constructor parameters are not supported"

@@ -1498,6 +1498,101 @@ test('interface fields describe the values at each call, not aliases between cal
   expect(lean?.results.map((r) => r.value)).toEqual(expected);
 });
 
+test('readonly ordinary classes desugar to the same values as Node', async () => {
+  const source = `
+    class Counter {
+      readonly value: bigint;
+      constructor(value) { this.value = value; }
+      plus(x: bigint): bigint { return this.value + x; }
+      twice(): bigint { return this.plus(this.value); }
+    }
+    class Pair {
+      readonly left: bigint;
+      readonly right: bigint;
+      constructor(left: bigint, right: bigint) {
+        this.right = right + 1n;
+        this.left = left;
+      }
+      sum(): bigint { return this.left + this.right; }
+    }
+    export function add(x: bigint, y: bigint): bigint {
+      const c = new Counter(x);
+      return c.plus(y);
+    }
+    export function twice(x: bigint): bigint {
+      const c: Counter = new Counter(x);
+      return c.twice();
+    }
+    export function pair(x: bigint, y: bigint): bigint {
+      const p = new Pair(x, y);
+      return p.sum();
+    }
+    export function make(x: bigint): Counter { return new Counter(x); }
+    export function fromCall(x: bigint): bigint { return make(x).plus(2n); }
+  `;
+  const calls = [
+    { function: 'add', args: [4n, -7n] },
+    { function: 'twice', args: [11n] },
+    { function: 'pair', args: [3n, 8n] },
+    { function: 'make', args: [9n] },
+    { function: 'fromCall', args: [10n] },
+  ];
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: [{ source, calls: calls.map(call => ({
+      function: call.function, args: call.args.map(encode),
+    })) }] }),
+    encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (result === undefined || !result.parsed) return;
+  expect(result.accepted).toBe(true);
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-readonly-class-'));
+  const path = join(dir, 'classes.mjs');
+  writeFileSync(path, ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+  }).outputText);
+  const mod = await import(pathToFileURL(path).href) as Record<string, (...args: Array<unknown>) => unknown>;
+  expect(result.results.map(r => r.value)).toEqual(calls.map(call => encode(mod[call.function]!(...call.args))));
+});
+
+test('ordinary classes refuse observable prototypes and non-static dispatch', () => {
+  const classSource = `class C {
+    readonly value: bigint;
+    constructor(value: bigint) { this.value = value; }
+    get(): bigint { return this.value; }
+  }`;
+  const sources = [
+    `${classSource} export function f(x: C | null): bigint { return x.get(); }`,
+    `${classSource} export function f(x: any): bigint { return x.get(); }`,
+    `${classSource} export function f(x: bigint): boolean { return new C(x) instanceof C; }`,
+    `${classSource} export function f(x: bigint) { return new C(x).constructor; }`,
+    `${classSource} export function f(x: bigint) { return new C(x).get; }`,
+    `${classSource} export function f() { return C; }`,
+    `class C { readonly value: bigint;
+      constructor(value: bigint) { this.value = value; }
+      escape(): C { return this; }
+    } export function f(x: bigint): C { return new C(x).escape(); }`,
+    `class C { readonly value: bigint;
+      constructor(value: bigint) { this.value = value; this.value = value; }
+    } export function f(x: bigint): C { return new C(x); }`,
+  ];
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: sources.map(source => ({
+      source, calls: [{ function: 'f', args: [{ bigint: '1' }] }],
+    })) }),
+    encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const results = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  expect(results).toHaveLength(sources.length);
+  for (const result of results) {
+    expect(result.parsed).toBe(true);
+    if (result.parsed) expect(result.accepted).toBe(false);
+  }
+});
+
 test('generic functions and interfaces agree with Node', async () => {
   const source = readFileSync(new URL('./corpus/certify/accept/genericCertificates.ts', import.meta.url), 'utf8');
   expect(source).toContain('// certify: required');

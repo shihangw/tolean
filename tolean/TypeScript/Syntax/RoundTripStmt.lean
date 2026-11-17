@@ -93,7 +93,7 @@ keyword but those that start an expression. -/
 def startsExprStmt : Option TokenKind → Bool
   | some (.punct "{") | some (.ident "let") => false
   | some (.keyword w) =>
-    w == "true" || w == "false" || w == "null" || w == "typeof" || w == "void" || w == "new"
+    w == "true" || w == "false" || w == "null" || w == "typeof" || w == "void" || w == "new" || w == "this"
   | _ => true
 
 /-- A statement that ends with an `if` without `else`. An `else` after it would
@@ -719,7 +719,7 @@ theorem parseStatement_expr {f : Nat} {s : ParseState} {x : Token} {r : List Tok
     simp [hn]
   | keyword w =>
     simp [startsExprStmt] at hk
-    rcases hk with ((((rfl | rfl) | rfl) | rfl) | rfl) | rfl <;> rfl
+    rcases hk with (((((rfl | rfl) | rfl) | rfl) | rfl) | rfl) | rfl <;> rfl
   | punct p =>
     have h1 : p ≠ "{" := by rintro rfl; simp [startsExprStmt] at hk
     have h2 : p ≠ ";" := by rintro rfl; simp [startsExpr] at hx

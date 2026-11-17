@@ -5399,11 +5399,11 @@ theorem parseStatement_gives {T : Edition} {f : Nat} (hBlk : GivesS T (Parse.par
         StmtOK.throw ge.ok⟩
       simp only [Stmt.wf, Bool.and_eq_true]
       exact ⟨ge.wf, ge.after _ (follows_end (.inl rfl))⟩
-    by_cases he : w = "true" ∨ w = "false" ∨ w = "null" ∨ w = "typeof" ∨ w = "void" ∨ w = "new"
-    · rcases he with rfl | rfl | rfl | rfl | rfl | rfl <;> simp only at h <;>
+    by_cases he : w = "true" ∨ w = "false" ∨ w = "null" ∨ w = "typeof" ∨ w = "void" ∨ w = "new" ∨ w = "this"
+    · rcases he with rfl | rfl | rfl | rfl | rfl | rfl | rfl <;> simp only at h <;>
         exact exprStmt_gives hR hT hs (by rw [hk]; simp [startsExprStmt]) h
     simp only [not_or] at he
-    obtain ⟨e1, e2, e3, e4, e5, e6⟩ := he
+    obtain ⟨e1, e2, e3, e4, e5, e6, e7⟩ := he
     simp at h
   | regexp v target | number v | bigint v | string v | eof =>
     simp only at h
