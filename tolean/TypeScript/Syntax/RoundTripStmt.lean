@@ -43,6 +43,7 @@ theorem Stmt.lines_words : ∀ (st : Stmt) (d : Nat), (st.lines d).map Prod.snd 
   | .switchStmt _ _ cs, d => by
     simp [Stmt.lines, Stmt.clauseLines_words cs (d + 1), Stmt.clauseLines_words cs 1]
   | .funDecl _ _ _ _ _ body, d => by simp [Stmt.lines, Stmt.lines_words body d]
+  | .tryCatch _ b _ h, d => by simp [Stmt.lines, Stmt.lines_words b d, Stmt.lines_words h d]
   | .varDecl .., _ | .destructure .., _ | .exprStmt .., _ | .returnStmt _ none, _ | .returnStmt _ (some _), _
   | .breakStmt _, _ | .continueStmt _, _ | .empty _, _ | .throwStmt .., _ => by simp [Stmt.lines]
 
@@ -167,6 +168,7 @@ def Stmt.wf (T : Edition) (fn loop : Bool) : Stmt → Bool
   | .returnStmt _ none => fn
   | .returnStmt _ (some e) => fn && e.wfAt T .assign && e.afterOK [.punct ";"]
   | .throwStmt _ e => e.wfAt T .assign && e.afterOK [.punct ";"]
+  | .tryCatch _ b n h => b.isBlock && b.wf T fn loop && exprName n && h.isBlock && h.wf T fn loop
   | .ifStmt _ test t none => test.wfParen T && !t.isDecl && t.wf T fn loop
   | .ifStmt _ test t (some e) =>
     test.wfParen T && !t.isDecl && t.wf T fn loop && !t.openIf && !e.isDecl && e.wf T fn loop
@@ -204,6 +206,7 @@ mutual
 
 /-- How deep the statements of `st` nest. -/
 def Stmt.depth : Stmt → Nat
+  | .tryCatch _ b _ h => max b.depth h.depth + 1
   | .ifStmt _ _ t none => t.depth + 1
   | .ifStmt _ _ t (some e) => max t.depth e.depth + 1
   | .forOfStmt _ _ _ _ b | .forOfPattern _ _ _ _ b | .forStmt _ _ _ _ b | .whileStmt _ _ b => b.depth + 1
@@ -1345,6 +1348,8 @@ theorem Stmt.first {T : Edition} {fn loop : Bool} (st : Stmt) (hw : st.wf T fn l
     exact ⟨.keyword "switch", by simp [Stmt.wordLines, Stmt.lines, keywordWord], by simp [StartsStmt]⟩
   | throwStmt _ _ =>
     exact ⟨.keyword "throw", by simp [Stmt.wordLines, Stmt.lines, keywordWord], by simp [StartsStmt]⟩
+  | tryCatch _ _ _ _ =>
+    exact ⟨.keyword "try", by simp [Stmt.wordLines, Stmt.lines, keywordWord], by simp [StartsStmt]⟩
   | funDecl _ _ _ _ _ _ =>
     exact ⟨.keyword "function", by simp [Stmt.wordLines, Stmt.lines, keywordWord], by simp [StartsStmt, Stmt.isDecl]⟩
 
@@ -1789,6 +1794,73 @@ theorem stmt_block {T : Edition} {fn loop : Bool} (f : Nat) (sp : Span) (body : 
   simp only [Parse.parseStatement]
   rw [Parse.bind_eq (Parse.peek_eq (by simpa using hs))]
   simp only [hlb]
+  exact hp
+
+/-- The try reader keeps both blocks and the required catch binding. -/
+theorem parseTry_reads {T : Edition} {fn loop : Bool} (sp : Span) (b h : Stmt) (name : String)
+    (p : ParseM Stmt) (hn : exprName name = true)
+    (hbo : b.openIf = false) (hho : h.openIf = false)
+    (hb : ReadsS T fn loop p b) (hh : ReadsS T fn loop p h) :
+    ReadsS T fn loop (Parse.parseTry p) (.tryCatch sp b name h) := by
+  intro s ts rest hT hF hL hs hl hlaid hr _
+  simp only [Stmt.wordLines, Stmt.lines, List.map_cons, List.map_append] at hlaid
+  obtain ⟨ks, tail, rfl, hks, _, _, htail⟩ := Laid.cons hlaid
+  obtain ⟨k, ks', rfl, _, hnil⟩ := Touching.cons_one (by simpa [keywordWord] using hks)
+  simp [Touching] at hnil; subst hnil
+  obtain ⟨bs, after, rfl, hbs, hafter, _⟩ := Laid.append htail
+  obtain ⟨cs, hs', rfl, hcs, _, _, hhs⟩ := Laid.cons hafter
+  obtain ⟨ck, cs₁, rfl, hck, hc₁⟩ := Touching.cons_one (by simpa [keywordWord] using hcs)
+  obtain ⟨lp, cs₂, rfl, hlp, hc₂⟩ := Touching.cons_one (by simpa [punctWord] using hc₁)
+  obtain ⟨nm, cs₃, rfl, hnm, hc₃⟩ := Touching.cons_one (by simpa [identWord] using hc₂)
+  obtain ⟨rp, cs₄, rfl, hrp, hc₄⟩ := Touching.cons_one (by simpa [punctWord] using hc₃)
+  simp [Touching] at hc₄; subst hc₄
+  have hs₀ : s.rest = k :: (bs ++ ck :: lp :: nm :: rp :: (hs' ++ rest)) := by simpa using hs
+  let s₁ := past s k (bs ++ ck :: lp :: nm :: rp :: (hs' ++ rest))
+  obtain ⟨b', s₂, hpb, heb, hB⟩ := hb s₁ bs (ck :: lp :: nm :: rp :: (hs' ++ rest))
+    hT hF hL rfl (by simp [s₁, hl, hs₀]) hbs (by simp) (by simp [hbo])
+  have hs₂ : s₂.rest = ck :: lp :: nm :: rp :: (hs' ++ rest) := hB.rest_eq
+  let s₃ := past s₂ ck (lp :: nm :: rp :: (hs' ++ rest))
+  let s₄ := past s₃ lp (nm :: rp :: (hs' ++ rest))
+  let s₅ := past s₄ nm (rp :: (hs' ++ rest))
+  let s₆ := past s₅ rp (hs' ++ rest)
+  have hl₂ : s₂.left = s₂.rest.length := by rw [hB.left_eq, hs₂]
+  have hl₃ : s₃.left = s₃.rest.length := by simp [s₃, hl₂, hs₂]
+  have hl₄ : s₄.left = s₄.rest.length := by simp [s₄, s₃, hl₂, hs₂]
+  have hl₅ : s₅.left = s₅.rest.length := by simp [s₅, s₄, s₃, hl₂, hs₂]
+  have hl₆ : s₆.left = s₆.rest.length := by simp [s₆, s₅, s₄, s₃, hl₂, hs₂]
+  obtain ⟨h', s₇, hph, heh, hH⟩ := hh s₆ hs' rest (hB.target_eq.trans hT)
+    (hB.inFunction_eq.trans hF)
+    (fun h => by change s₂.loopDepth ≠ 0; rw [hB.loopDepth_eq]; exact hL h)
+    rfl hl₆ hhs hr (by simp [hho])
+  refine ⟨.tryCatch ⟨k.span.start, s₇.lastStop⟩ b' name h', s₇, ?_,
+    by simp [Stmt.erase, heb, heh],
+    leaves_trans (leaves_advance hs₀ hl) (leaves_trans hB
+      (leaves_trans (leaves_advance hs₂ hl₂)
+        (leaves_trans (leaves_advance (s := s₃) rfl hl₃)
+          (leaves_trans (leaves_advance (s := s₄) rfl hl₄)
+            (leaves_trans (leaves_advance (s := s₅) rfl hl₅) hH)))))⟩
+  simp only [Parse.parseTry]
+  rw [Parse.bind_eq (Parse.advance_cons hs₀ (by simp)), Parse.bind_eq hpb,
+    Parse.bind_eq (Parse.advance_cons hs₂ (by simp))]
+  simp only [Token.isKeyword, hck, beq_self_eq_true, ↓reduceIte, Parse.pure_bind]
+  rw [Parse.bind_eq (Parse.expectPunct_ok (s := s₃) rfl (by simp) hlp),
+    Parse.bind_eq (readName_ok (s := s₄) rfl hnm (by simpa [exprName] using hn)),
+    Parse.bind_eq (Parse.expectPunct_ok (s := s₅) rfl (by simp [hr]) hrp),
+    Parse.bind_eq hph, Parse.bind_eq (Parse.spanFrom_eq _ _)]
+  rfl
+
+theorem stmt_try {T : Edition} {fn loop : Bool} (f : Nat) (sp : Span) (b h : Stmt) (name : String)
+    (hrd : ReadsS T fn loop (Parse.parseTry (Parse.parseBlock f)) (.tryCatch sp b name h)) :
+    ReadsS T fn loop (Parse.parseStatement (f + 1)) (.tryCatch sp b name h) := by
+  intro s ts rest hT hF hL hs hl ht hr he
+  obtain ⟨st', s', hp, hst, hL'⟩ := hrd s ts rest hT hF hL hs hl ht hr he
+  refine ⟨st', s', ?_, hst, hL'⟩
+  simp only [Stmt.wordLines, Stmt.lines, List.map_cons, List.map_append] at ht
+  obtain ⟨a, b, rfl, ha, _⟩ := Laid.cons ht
+  obtain ⟨kw, a', rfl, hkw, _⟩ := Touching.cons_one (by simpa [keywordWord] using ha)
+  simp only [Parse.parseStatement]
+  rw [Parse.bind_eq (Parse.peek_eq (by simpa using hs))]
+  simp only [hkw]
   exact hp
 
 theorem afterOK_closer {e : Expr} (h : e.afterOK [.punct ")"] = true) (x : List TokenKind) :
@@ -2677,6 +2749,7 @@ theorem Stmt.first_break {T : Edition} {fn loop : Bool} (st : Stmt) (hw : st.wf 
   | continueStmt _ => simp [Stmt.wordLines, Stmt.lines, keywordWord] at h
   | switchStmt _ _ _ => simp [Stmt.wordLines, Stmt.lines, keywordWord] at h
   | throwStmt _ _ => simp [Stmt.wordLines, Stmt.lines, keywordWord] at h
+  | tryCatch _ _ _ _ => simp [Stmt.wordLines, Stmt.lines, keywordWord] at h
   | block _ _ => simp [Stmt.wordLines, Stmt.lines, punctWord] at h
   | empty _ => simp [Stmt.wordLines, Stmt.lines, punctWord] at h
   | funDecl _ _ _ _ _ _ => simp [Stmt.wordLines, Stmt.lines, keywordWord] at h
@@ -3060,6 +3133,25 @@ theorem allStmts_succ {T : Edition} (f : Nat) (IH : ∀ g ≤ f, AllStmts T g) :
   | throwStmt sp e =>
     simp only [Stmt.wf, Bool.and_eq_true] at hw
     exact stmt_throw f sp e hw.1 hw.2
+  | tryCatch sp b n h =>
+    simp only [Stmt.wf, Bool.and_eq_true] at hw
+    obtain ⟨⟨⟨⟨hbb, hbw⟩, hn'⟩, hhb⟩, hhw⟩ := hw
+    cases b with
+    | block bsp bs =>
+      cases h with
+      | block hsp hs =>
+        simp only [Stmt.depth] at hn
+        obtain ⟨g, rfl⟩ : ∃ g, f = g + 1 := ⟨f - 1, by omega⟩
+        apply stmt_try
+        apply parseTry_reads _ _ _ _ _ hn' rfl rfl
+        · exact parseBlock_reads g bsp bs fun st hst =>
+            ⟨Stmt.allWF_iff.mp hbw st hst, IH g (by omega) fn loop st (Stmt.allWF_iff.mp hbw st hst)
+              (by have := Stmt.depth_le_depthOf hst; simp [Stmt.need]; omega)⟩
+        · exact parseBlock_reads g hsp hs fun st hst =>
+            ⟨Stmt.allWF_iff.mp hhw st hst, IH g (by omega) fn loop st (Stmt.allWF_iff.mp hhw st hst)
+              (by have := Stmt.depth_le_depthOf hst; simp [Stmt.need]; omega)⟩
+      | _ => simp [Stmt.isBlock] at hhb
+    | _ => simp [Stmt.isBlock] at hbb
   | ifStmt sp test t e =>
     cases e with
     | none =>

@@ -38,6 +38,11 @@ runtime too. The remaining function declaration uses `FunctionDeclaration`
 §13.3.6.2). These operations exist in every supported target, so generic
 certificates add no edition gate.
 
+Try statements with a catch binding use TryStatement and CatchClause
+(ES2015 §13.15; ES2024 §14.15). Every supported target includes them.
+The initial subset requires a catch binding and does not include `finally`
+or the optional catch binding introduced in ES2019.
+
 Structural recursion adds no runtime operation. Its calls use `EvaluateCall`
 (ES2015 §12.3.4, ES2024 §13.3.6.2), and recursive interfaces erase with the
 other TypeScript type declarations. Every supported edition specifies the

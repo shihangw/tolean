@@ -110,6 +110,7 @@ partial def Stmt.toSexp : Stmt → Sexp
   | .exprStmt s e => node "expr" s [] [e.toSexp]
   | .returnStmt s value => node "return" s [] (value.map Expr.toSexp).toList
   | .throwStmt s value => node "throw" s [] [value.toSexp]
+  | .tryCatch s body name handler => node "try" s [name] [body.toSexp, handler.toSexp]
   | .ifStmt s test thenBranch elseBranch =>
     node "if" s [] ([test.toSexp, thenBranch.toSexp] ++ (elseBranch.map toSexp).toList)
   | .forOfStmt s kind name iterable body =>

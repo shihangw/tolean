@@ -898,6 +898,7 @@ mutual
 /-- `s` can throw: it holds a `throw`, or a declaration or a `return` whose
 value is a call of a function of `fns` that can throw. -/
 def stmtThrows (fns : List FnInfo) : Stmt → Bool
+  | .tryCatch .. => true
   | .throwStmt .. => true
   | .varDecl _ { init := some e, .. } | .returnStmt _ (some e) => callsThrowing fns e
   | .ifStmt _ _ t (some e) => stmtThrows fns t || stmtThrows fns e
@@ -1342,12 +1343,14 @@ def alwaysEnds (isJump : Stmt → Bool) : List Stmt → Bool
 
 /-- `s`, the last statement of a list, ends every path in a jump. -/
 def endsIn (isJump : Stmt → Bool) : Stmt → Bool
+  | .tryCatch _ b _ h => branchEnds isJump b && branchEnds isJump h
   | .ifStmt _ _ thenBranch (some elseBranch) =>
     branchEnds isJump thenBranch && branchEnds isJump elseBranch
   | s => isJump s
 
 /-- `alwaysEnds isJump (blockStatements s)`. -/
 def branchEnds (isJump : Stmt → Bool) : Stmt → Bool
+  | .tryCatch _ b _ h => branchEnds isJump b && branchEnds isJump h
   | .block _ body => alwaysEnds isJump body
   | .ifStmt _ _ thenBranch (some elseBranch) =>
     branchEnds isJump thenBranch && branchEnds isJump elseBranch
@@ -1380,6 +1383,7 @@ contains, neither counts, because they leave only that loop. A `throw` is
 not a jump here: it ends the function from anywhere, through the `Except`
 monad, so a branch or a loop body may hold one. -/
 def containsJump (brk cont : Bool) : Stmt → Bool
+  | .tryCatch _ b _ h => containsJump brk cont b || containsJump brk cont h
   | .returnStmt .. => true
   | .breakStmt _ => brk
   | .continueStmt _ => cont
@@ -1483,6 +1487,7 @@ def optionChanges (fns : List (String × List String)) : Option Expr → List St
 mutual
 
 def stmtChanges (fns : List (String × List String)) : Stmt → List String
+  | .tryCatch _ b _ h => stmtChanges fns b ++ stmtChanges fns h
   | .varDecl _ d => optionChanges fns d.init
   | .destructure _ _ _ _ init => exprChanges fns init
   | .exprStmt _ (.call _ (.ident _ name) args) =>
@@ -4198,6 +4203,18 @@ def translateStatements (fuel : Nat) (env : Env) (tail : Tail) (statements : Lis
     | .throwStmt s value =>
       unless rest.isEmpty do reject s "code after throw is unreachable"
       translateThrow env value
+    | .tryCatch s attempt name handler =>
+      unless rest.isEmpty && tail.isRet do
+        reject s "try and catch must end the function or a returning branch"
+      unless attempt.catchSafe do
+        reject s "try bodies allow only literal values, reads, strict equality, local initializers, if, return and throw new Error; mutation, calls and other operations need exception analysis"
+      if handler.mentions name then
+        reject s "the first catch subset must ignore its binding; tests and rethrows need typed caught values"
+      let .block _ bs := attempt | reject s "try requires a block"
+      let .block _ hs := handler | reject s "catch requires a block"
+      let b ← translateStatements fuel env .ret bs
+      let h ← translateStatements fuel env .ret hs
+      return .handle b h
     -- `continue` ends one run of the loop body with the state as it is.
     | .continueStmt s =>
       let some next := tail.continues
@@ -4980,6 +4997,7 @@ def varUsesNumber (d : VarDecl) : Bool :=
 mutual
 
 def stmtUsesNumber : Stmt → Bool
+  | .tryCatch _ b n h => isNumberName n || stmtUsesNumber b || stmtUsesNumber h
   | .varDecl _ d => varUsesNumber d
   | .destructure _ _ p type init =>
     p.names.any isNumberName || (type.map typeUsesNumber).getD false || exprUsesNumber init
@@ -5273,6 +5291,7 @@ def prepareInlineVar (decl : VarDecl) : TM Unit := do
 mutual
 
 def prepareInlineStmt : Stmt → TM Unit
+  | .tryCatch _ b _ h => do prepareInlineStmt b; prepareInlineStmt h
   | .varDecl _ decl => prepareInlineVar decl
   | .destructure _ _ _ type expr => do type.forM prepareInlineType; prepareInlineExpr expr
   | .exprStmt _ expr | .throwStmt _ expr => prepareInlineExpr expr
