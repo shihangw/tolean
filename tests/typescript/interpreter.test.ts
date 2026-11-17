@@ -205,6 +205,56 @@ function shown(x: unknown): string {
   }
 }
 
+test('read-only try bodies and ignored catches agree with Node', async () => {
+  const source = readFileSync(new URL('./corpus/translate/accept/tryCatch.ts', import.meta.url), 'utf8');
+  const calls: Array<{ function: string; args: Array<unknown> }> = [];
+  for (const value of [-19n, 0n, 27n, 2n ** 80n]) {
+    for (const flag of [false, true]) calls.push({ function: 'recover', args: [flag, value] });
+    calls.push({ function: 'entryScope', args: [value] });
+    calls.push({ function: 'returnSkipsCatch', args: [value] });
+  }
+  calls.push({ function: 'handlerThrows', args: [] });
+  calls.push({ function: 'returningBranch', args: [false] });
+  calls.push({ function: 'returningBranch', args: [true] });
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: [{ source, calls: calls.map(c => ({
+      function: c.function, args: c.args.map(encode),
+    })) }] }),
+    encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (result === undefined || !result.parsed) throw new Error('try fixture did not parse');
+  expect(result.accepted).toBe(true);
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-try-catch-'));
+  const path = join(dir, 'index.mjs');
+  writeFileSync(path, ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+  }).outputText);
+  const mod = await import(pathToFileURL(path).href) as Record<string, (...xs: Array<unknown>) => unknown>;
+  for (const [i, call] of calls.entries()) {
+    const fn = mod[call.function];
+    if (fn === undefined) throw new Error(`missing export ${call.function}`);
+    let actual: NodeResult;
+    try {
+      actual = { returns: fn(...call.args) };
+    } catch (error) {
+      actual = { throws: 'Error', thrown: error };
+    }
+    const expected = result.results[i];
+    expect(expected).not.toBeNull();
+    if (expected === undefined || expected === null) throw new Error('try fixture has no modeled result');
+    if ('returns' in actual) {
+      expect(expected).toEqual({ value: encode(actual.returns) });
+    } else {
+      expect('throws' in expected).toBe(true);
+      if (!('throws' in expected)) throw new Error('handler error was not propagated');
+      expect(canonical(expected.throws)).toBe(shownThrow(actual.thrown));
+    }
+  }
+});
+
 test('certified local functions agree with Node on random arguments', async () => {
   const source = ['localFunctionCertificate', 'localFunctionLoopCertificates'].map(name =>
     readFileSync(new URL(`./corpus/translate/accept/${name}.ts`, import.meta.url), 'utf8')).join('\n');

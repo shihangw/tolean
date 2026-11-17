@@ -64,6 +64,19 @@ theorem decls_sound {file : String} {m : Module} {decls : List IR.Decl} {start :
   obtain ⟨finish, hrun⟩ := translatesTo_ok h
   exact program_sound (.snoc false "N" .nil hfile hfns hifaces hrun) (by simp) _ args fuel v hv
 
+/-- A certificate can retain both returned and thrown values, rather than
+forgetting the thrown completion through `runIn`. -/
+theorem decls_sound_call {file : String} {m : Module} {decls : List IR.Decl} {start : Ctx}
+    (hfile : start.file = file)
+    (hfns : (start.functions, start.enums, start.enumValues, start.errorClasses) = ([], [], [], []))
+    (hifaces : start.interfaces = [])
+    (h : translatesTo m start decls = true) (name : String) (args : List (Val N)) (fuel : Nat)
+    (v : Except (Val N) (Val N))
+    (hv : IR.callIn (IR.functionsOf [(file, decls)]) ⟨file, name⟩ args fuel = some v) :
+    Eval.callIn [(file, m)] ⟨file, name⟩ args fuel = some v := by
+  obtain ⟨finish, hrun⟩ := translatesTo_ok h
+  exact program_sound_call (.snoc false "N" .nil hfile hfns hifaces hrun) (by simp) _ args fuel v hv
+
 /-- A fold of the output and `List.foldl` agree when one run of the body and
 one step of the fold agree. A certificate proves a lemma for each loop from
 this one. -/
@@ -924,7 +937,8 @@ syntax "link_tac" "[" Lean.Parser.Tactic.simpLemma,* "]" : tactic
 macro_rules
   | `(tactic| link_tac [$defs,*]) =>
     `(tactic| (
-      simp [runIn, callIn, Except.toOption, functionsOf, functions, Body.exec, Body.runFold, Expr.eval,
+      simp [runIn, callIn, Except.toOption, tryCatch, tryCatchThe, MonadExceptOf.tryCatch, Except.tryCatch,
+        pure, Except.pure, functionsOf, functions, Body.exec, Body.runFold, Expr.eval,
         Expr.evalCall, Expr.evalList,
         Expr.evalFields, Expr.evalMap, Expr.evalMapIdx, Expr.evalFilter, Expr.evalFind, Expr.evalFindIdx, Expr.evalReduce,
         bindState, callResult, eqVal, ← List.map_reverse,

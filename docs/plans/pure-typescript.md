@@ -324,8 +324,13 @@ leaves a gap.
     The [initial scope](../decisions/2026-11-17-try-catch.md) refuses try
     bodies that change outer state and built-in operations whose errors
     are not modeled. Mutable try bodies need environments on thrown
-    completions. Step 17 remains in progress until the parser, translation
-    and soundness proof cover the accepted slice.
+    completions. The first slice handles terminal try statements whose
+    handlers ignore the binding. Protected bodies allow local initializers,
+    branches and explicit built-in Error throws over simple expressions.
+    All calls, other potentially throwing operations and nested protected
+    try statements remain refused until their effects are analyzed.
+    Caught-value tests and rethrows need a typed caught value. These parts
+    of step 17 remain open.
 18. **P2.** Proof obligations: Tolean states `Consistent cmp` for a comparator
     outside the two known shapes and accepts a project-supplied proof beside
     the output. The build checks the proof for `sorry` and axioms. The same

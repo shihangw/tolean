@@ -94,7 +94,8 @@ structure Group where
 def everySection : Group :=
   ⟨"Every section of the subset", [``Proof.program_sound, ``Proof.translate_sound,
     ``Proof.program_sound_call, ``Proof.translate_sound_call,
-    ``Proof.programTranslation_rel, ``Proof.apply_recordGet, ``Proof.expr_sound, ``Proof.stmts_sound, ``Proof.decls_sound]⟩
+    ``Proof.programTranslation_rel, ``Proof.apply_recordGet, ``Proof.expr_sound, ``Proof.stmts_sound,
+    ``Proof.decls_sound, ``Proof.decls_sound_call]⟩
 
 /-- The sections of ECMA-262 that the interpreter follows, in the order of
 the spec, with the theorems about each. -/
@@ -286,7 +287,8 @@ def sections : List Section := [
     ``Proof.state_default_sim, ``Proof.state_last_sim, ``Proof.state_case_sim, ``Proof.switch_state_sim,
     ``Proof.translateStateClause_sound, ``Proof.translateStateClauses_sound]⟩,
   ⟨"sec-throw-statement", "14.14", "The throw Statement", [``Proof.throw_sim, ``Proof.eval_wrapError,
-    ``Proof.throwClass_sim, ``Proof.fieldArgs_marks, ``Proof.translateThrow_sound]⟩,
+    ``Proof.throwClass_sim, ``Proof.fieldArgs_marks, ``Proof.translateThrow_sound,
+    ``Proof.handle_returns, ``Proof.handle_end_impossible, ``Proof.handle_sim]⟩,
   -- §15 ECMAScript Language: Functions and Classes {#sec-ecmascript-language-functions-and-classes}
   ⟨"sec-function-definitions", "15.2", "Function Definitions",
     [``Proof.translateFunction_ok, ``Proof.checkTypeParams_ok, ``Proof.params_fold, ``Proof.params_fold_nodup,

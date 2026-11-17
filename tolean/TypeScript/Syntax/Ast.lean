@@ -302,6 +302,36 @@ inductive Stmt where
 
 instance : Inhabited Stmt := ⟨.empty default⟩
 
+/-- Expressions allowed in the first try bodies. Translation still checks
+their types and bindings. Calls, property access and arithmetic stay out
+because their exceptions need a separate analysis. -/
+def Expr.catchSafe : Expr → Bool
+  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => true
+  | .paren _ e | .unary _ .not e => e.catchSafe
+  | .binary _ .strictEq a b | .binary _ .strictNe a b => a.catchSafe && b.catchSafe
+  | _ => false
+
+mutual
+
+/-- A try body cannot change outer state or evaluate an operation whose
+exception the model represents as no result. Local initializers can only
+read values. The only explicit throw constructs a built-in Error. -/
+def Stmt.catchSafe : Stmt → Bool
+  | .block _ ss => Stmt.catchSafeList ss
+  | .varDecl _ { init := some e, .. } => e.catchSafe
+  | .returnStmt _ (some e) => e.catchSafe
+  | .throwStmt _ (.new _ "Error" [] [msg]) => msg.catchSafe
+  | .ifStmt _ e b none => e.catchSafe && b.catchSafe
+  | .ifStmt _ e b (some h) => e.catchSafe && b.catchSafe && h.catchSafe
+  | .empty _ => true
+  | _ => false
+
+def Stmt.catchSafeList : List Stmt → Bool
+  | [] => true
+  | s :: ss => s.catchSafe && Stmt.catchSafeList ss
+
+end
+
 /-- `e` is the name `n` as an assignment target, as in `n = 1` or `(n) = 1`. -/
 def Expr.namesTarget (n : String) : Expr → Bool
   | .ident _ m => m == n
@@ -474,7 +504,9 @@ def Expr.mayHold (p : String → Bool) : Expr → Bool
   | .regexp .. => false
   | .ident _ n => p n
   | .number .. | .bigint .. | .string .. | .bool .. | .null _ => false
-  | .new _ _ _ args => Expr.mayHoldList p args
+  -- A constructor name is a read too. In particular, a catch binding can
+  -- hide `Error` or another constructor even when no argument mentions it.
+  | .new _ name _ args => p name || Expr.mayHoldList p args
   | .array _ es => Expr.mayHoldList p es
   | .object _ ps => Property.mayHoldList p ps
   | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e =>

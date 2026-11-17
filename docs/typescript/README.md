@@ -33,7 +33,7 @@ the claimed type. Translation accepts checked tag guards as described below.
   `const [a, , b, ...rest] = xs`, expression statements,
   `return`, `throw`, `if` and `else`, `for … of` with a name or an array
   pattern before `of`, the counted `for`, `while`,
-  `switch`, blocks, `break`, `continue` and the empty statement. A counted
+  `switch`, `try` with a bound `catch`, blocks, `break`, `continue` and the empty statement. A counted
   `for`, such as `for (let i = 0; i < n; i++)`, starts with a `const` or `let`
   declaration or with nothing. The value of a `throw` must start on the same
   line, because ECMA-262 allows no line break after `throw`. The translator
@@ -760,6 +760,7 @@ interface fields, not new array type syntax.
 | `function g(a: A): T { … }` or `const g = (a: A): T => { … }` in the same place, which changes no variable of `f`, called as the whole value of a `const`, a `let` or a `return` | `def f.g` that returns the `T`, and `let v := f.g x a` at the call |
 | A function that calls itself, where each call passes a part of one parameter, the same one in every call. A part is a field of it, a value that a test of `null`, `undefined` or a tag narrows it to, an element of an array in it, an element of a tuple in it, or a part of one of these. | The same `def`, followed by `termination_by p` for the parameter `p`, and `decreasing_by all_goals tolean_decreasing`. Each call passes a value that is smaller by `sizeOf`, and the tactic from `tolean.TypeScript.Decreasing` proves it, so Lean checks that the function ends. Each `match` in such a function names the equation of its value `_h'`, which the tactic reads. Lean defines the function by well-founded recursion, so a claim unfolds it with `unfold` or `simp`, not with `rfl` or `decide`. |
 | `throw new Error(m)`, where `m` is a `string`, as the last statement of a function, of a loop body, or of a branch | `throw (JSError.mk m)`. A function that can throw returns `Except JSError R`, and each value that it returns is `pure` of the value. `JSError`, in `tolean/TypeScript/Spec/Error.lean`, holds the message. |
+| A terminal `try { … } catch (e) { … }` whose try body passes the read-only check and whose handler ignores `e` | `try … catch _ => …` in `Except`. A returned value skips the handler. A thrown error selects the handler with the variables from entry to the try statement. |
 | `const x = f(a)`, `let x = f(a)` or `return f(a)`, where `f` can throw | `f a >>= fun x => …`, which passes the error of the call on. So the function that holds the call can throw too. |
 | A call of `f` inside a larger expression, such as `return f(a) + 1n`, where JS evaluates the call whenever it evaluates the statement | `f a >>= fun r0' => …` before the statement, which reads `r0'` in place of the call. Each operand that JS evaluates before the call, such as `x.count` in `x.count + f(a)`, moves out first, to a `let` of its own, so the output runs the same operations in the same order. A literal whose parts are all literals stays, because it reads nothing and runs nothing, and its type comes from its position. The interpreter runs the statements in this form too (`Eval.Stmt.hoisted`), so the translator translates the body the interpreter runs. |
 | A loop whose body can throw, by a `throw` or a call of a function that can, and that changes a local or returns | The same fold in the `Except` monad: `List.foldlM`, or `forIn` without `Id.run`, followed by `>>= fun (x, y) =>` for the statements after the loop. Each run of the body ends in `pure` of its state, or throws. |
@@ -862,9 +863,48 @@ Tests of an optional nullable value preserve the same distinctions.
 `== null` matches either. A loose non-null test narrows to `T`; a strict
 non-null test may still leave undefined.
 
+### Try and catch
+
+The first catch subset handles explicit errors without restoring changed
+locals. Both blocks must return or throw, and the try statement must be the
+last statement of the function or of a returning branch. For example:
+
+```typescript
+export function recover(failed: boolean, value: bigint): bigint {
+  try {
+    if (failed) {
+      throw new Error("failed");
+    }
+    return value;
+  } catch (ignored) {
+    return 0n;
+  }
+}
+```
+
+The try body allows local declarations with initializers, blocks, `if`,
+`return` and `throw new Error(message)`. Its expressions may be primitive
+literals, names, parentheses, logical negation and strict equality or
+inequality. Translation still checks their types and bindings. A catch
+handler must not mention its binding, even in another declaration.
+
+Assignments and calls in the try body remain refused. Calls need an analysis
+of both captured state and built-in errors before a handler can safely
+resume with the entry environment. Arithmetic, property access, other
+constructors and nested try statements in the protected body also remain
+refused. In particular, an operation that the evaluator represents as no
+result is not converted into a catchable error.
+
+`finally`, optional catch bindings, `instanceof` tests of the caught value
+and rethrows of that value remain refused. The
+[decision record](../decisions/2026-11-17-try-catch.md) describes the state
+and error representation work that these extensions need.
+
+### Refused forms
+
 Tolean rejects these, among others:
 
-- `try` and `catch`, and a `throw` of anything but `new Error(message)`. It
+- A `throw` of anything but a supported error construction. It
   also rejects a call of a function that can throw where JS may not evaluate
   it, or evaluates it more than once: in a branch of `?:`, after `&&`, `||`
   or `??`, in the test or the update of a counted `for` loop, or in an arrow
