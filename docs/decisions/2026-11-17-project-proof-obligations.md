@@ -39,3 +39,9 @@ Additional comparator shapes on other element types remain refused in this
 slice. Obligations that capture generic types also remain refused. These
 restrictions do not change the existing support for known key comparisons.
 The mechanism does not yet serve `@decreases`, which remains refused here.
+
+Literal nonzero comparators remain refused because their consistency
+obligation cannot hold, even on a singleton array. A consistent comparator
+must compare each element with itself as equal. Interpreter seed 359337175
+exposed this case: main refused the program, but the comparator extension
+initially accepted it while the interpreter correctly gave no value.

@@ -3338,6 +3338,9 @@ Certificates must prove that statement before they can link the sort. -/
 def sortKeys (s : Span) (p q : Param) (body : Expr) (elem : Ty)
     (value : IR.Expr) (env : Env) : TM (List (List String × Bool × Bool)) := do
   if let some keys := keyComparator? p.name q.name body then return keys
+  if let some n := Eval.intLiteral? body.stripParens then
+    unless n == 0 do
+      reject s "a constant nonzero comparator is inconsistent: comparing an element with itself must give zero"
   unless elem == .bigint do
     reject s "a comparator proof obligation currently requires bigint elements"
   let scope := (env.locals.filter fun l => l.binding != .fn).map fun l => (l.name, l.type.lean)
