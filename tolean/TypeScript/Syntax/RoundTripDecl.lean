@@ -125,6 +125,13 @@ theorem Stmt.depth_lt : ∀ st : Stmt, st.depth < st.tokens.length
   | .exprStmt _ e => by simp [Stmt.depth, Stmt.tokens, Stmt.wordLines, Stmt.lines, punctWord]
   | .returnStmt _ v => by cases v <;> simp [Stmt.depth, Stmt.tokens, Stmt.wordLines, Stmt.lines, keywordWord]
   | .throwStmt _ e => by simp [Stmt.depth, Stmt.tokens, Stmt.wordLines, Stmt.lines, keywordWord]
+  | .tryCatch _ b n h => by
+    have hb := Stmt.depth_lt b
+    have hh := Stmt.depth_lt h
+    simp only [Stmt.depth, Stmt.tokens, Stmt.wordLines, Stmt.lines, List.map_cons, List.map_append,
+      List.flatten_cons, List.flatten_append, List.length_append, keywordWord, punctWord, identWord,
+      List.length_cons, List.length_nil] at *
+    omega
   | .breakStmt _ | .continueStmt _ => by simp [Stmt.depth, Stmt.tokens, Stmt.wordLines, Stmt.lines, keywordWord]
   | .empty _ => by simp [Stmt.depth, Stmt.tokens, Stmt.wordLines, Stmt.lines, punctWord]
   | .switchStmt sp d cs => by

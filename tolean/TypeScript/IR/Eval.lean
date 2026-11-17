@@ -646,6 +646,10 @@ termination_by fields => (fuel, sizeOf fields, 0)
 branch or a loop body, with the bindings it has made. -/
 def Body.exec (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : Env N) :
     Body → Option (Outcome N)
+  | .handle attempt handler => do
+    match ← Body.exec fs fuel ρ attempt with
+    | .ret (.error _) => Body.exec fs fuel ρ handler
+    | outcome => some outcome
   | .value e => do return .ret (.ok (← Expr.eval fs fuel ρ e))
   | .state _ | .yield .. => some (.normal ρ)
   | .done .. => some (.brk ρ)

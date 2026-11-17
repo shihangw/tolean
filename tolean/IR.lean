@@ -260,6 +260,9 @@ deriving Repr, Inhabited
 
 /-- The body of a function: `let`s that end in a value. -/
 inductive Body (T E : Type) where
+  /-- Run `handler` when `attempt` throws, without binding the thrown value.
+  Both bodies run from the same entry environment. -/
+  | handle (attempt handler : Body T E)
   /-- The value of the function. -/
   | value (e : Expr T E)
   /-- The locals that a branch or a loop body changes: `x` or `(x, y)`. -/
@@ -424,6 +427,7 @@ def Expr.refsFields : List (String × Expr T E) → List DeclRef
 end
 
 def Body.refs : Body T E → List DeclRef
+  | .handle a b => a.refs ++ b.refs
   | .value e => e.refs
   | .state _ | .yield .. | .done .. => []
   | .exit e _ => e.refs
@@ -444,6 +448,7 @@ def Body.refs : Body T E → List DeclRef
 /-- `b` can throw: it holds a `throw`, or a `bind` of a call that can throw.
 The printer then writes the branch or the loop in the `Except` monad. -/
 def Body.throws : Body T E → Bool
+  | .handle .. => true
   | .throw _ | .bind .. => true
   | .value _ | .state _ | .yield .. | .done .. | .exit .. => false
   | .let _ _ rest | .letTuple _ _ rest | .letArray _ _ _ rest => rest.throws
@@ -524,6 +529,7 @@ def Expr.usesStringFields (opUses : E → Bool) : List (String × Expr T E) → 
 end
 
 def Body.usesString (opUses : E → Bool) : Body T E → Bool
+  | .handle a b => a.usesString opUses || b.usesString opUses
   | .value e => Expr.usesString opUses e
   | .state _ | .yield .. | .done .. => false
   | .exit e _ => Expr.usesString opUses e
@@ -597,6 +603,7 @@ def Expr.usesMapFields : List (String × Expr T E) → Bool
 end
 
 def Body.usesMap : Body T E → Bool
+  | .handle a b => a.usesMap || b.usesMap
   | .value e | .exit e _ => e.usesMap onMap
   | .state _ | .yield .. | .done .. => false
   | .let _ e rest | .letTuple _ e rest => e.usesMap onMap || rest.usesMap
@@ -654,6 +661,7 @@ def Expr.anyOpFields : List (String × Expr T E) → Bool
 end
 
 def Body.anyOp : Body T E → Bool
+  | .handle a b => a.anyOp || b.anyOp
   | .value e | .exit e _ | .throw e => e.anyOp p
   | .state _ | .yield .. | .done .. => false
   | .let _ e rest | .letTuple _ e rest => e.anyOp p || rest.anyOp
@@ -725,6 +733,7 @@ def Expr.mentionsFields : List (String × Expr T E) → Bool
 end
 
 def Body.mentions : Body T E → Bool
+  | .handle a b => a.mentions || b.mentions
   | .value e | .exit e _ | .throw e => e.mentions onTy onOp
   | .state _ | .yield .. | .done .. => false
   | .let _ e rest | .letTuple _ e rest => e.mentions onTy onOp || rest.mentions
@@ -1028,6 +1037,7 @@ def Division.apply : Division → Int → Int → Int
 
 /-- The body tests the tag of the local `name` somewhere. -/
 def Body.testsTag (name : String) : Body T E → Bool
+  | .handle a b => a.testsTag name || b.testsTag name
   | .matchTag n _ _ _ _ a b => n == name || a.testsTag name || b.testsTag name
   | .let _ _ rest | .letArray _ _ _ rest | .letTuple _ _ rest => rest.testsTag name
   | .ite _ a b | .matchNull _ _ a b | .letState _ a b => a.testsTag name || b.testsTag name
@@ -1137,6 +1147,7 @@ def forgetParts (depths : List (String × Int)) (names : List String) : List (St
 /-- Each call of `self` in the body passes as its argument `i` a part of `p`
 at least `need` steps below it. -/
 def Body.callsShrink (self : DeclRef) (i : Nat) (need : Int) (depths : List (String × Int)) : Body T E → Bool
+  | .handle a b => a.callsShrink self i need depths && b.callsShrink self i need depths
   | .value e | .exit e _ => e.callsShrink self i need depths
   | .state _ | .yield .. | .done .. => true
   | .let name e rest =>
@@ -1199,6 +1210,7 @@ end
 
 /-- The body calls `self`. -/
 def Body.calls (self : DeclRef) : Body T E → Bool
+  | .handle a b => a.calls self || b.calls self
   | .value e | .exit e _ => e.calls self
   | .state _ | .yield .. | .done .. => false
   | .let _ e rest | .letTuple _ e rest => e.calls self || rest.calls self
@@ -1407,6 +1419,7 @@ or a loop body that can throw runs in, the end of a branch or of a run of a
 loop body is `pure` of its state, and the body of a loop that can throw runs
 in the monad with `>>=`. -/
 def Body.lines (names : Names) (monadic : Bool := false) : Body T E → List String
+  | .handle a b => ["try"] ++ indent (a.lines names true) ++ ["catch _ =>"] ++ indent (b.lines names true)
   | .value e => [e.print names]
   | .state ns => [inMonad names monadic (tuple ns)]
   | .yield ns slot =>
@@ -1561,6 +1574,7 @@ end
 /-- The functions that the calls of a body lifted out, with their
 parameters, result types and bodies. A callee comes before its caller. -/
 def Body.lifted : Body T E → List (DeclRef × List (String × Ty T) × Ty T × Body T E)
+  | .handle a b => a.lifted ++ b.lifted
   | .letCall _ r _ _ ps rt _ body _ rest => body.lifted ++ (r, ps, rt, body) :: rest.lifted
   | .let _ _ rest | .letTuple _ _ rest | .letArray _ _ _ rest | .letLifted _ _ rest | .bind _ _ _ rest
   | .letBorrow _ _ _ _ rest =>

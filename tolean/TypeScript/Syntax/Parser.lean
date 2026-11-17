@@ -1137,6 +1137,19 @@ def refuseDeclaration (t : Token) : ParseM Unit := do
   if t.isKeyword "const" || t.isIdent "let" || t.isKeyword "function" then
     failAt t "a declaration here needs a block around it"
 
+/-- Read a try statement with a required catch binding. The caller supplies
+the block parser so that both blocks use the same recursive fuel. -/
+def parseTry (parseBody : ParseM Stmt) : ParseM Stmt := do
+  let first ← advance
+  let body ← parseBody
+  let caught ← advance
+  unless caught.isKeyword "catch" do unexpected caught "'catch'"
+  let _ ← expectPunct "("
+  let name ← readName
+  let _ ← expectPunct ")"
+  let handler ← parseBody
+  return .tryCatch (← spanFrom first.span.start) body name handler
+
 mutual
 
 def parseStatement (fuel : Nat) : ParseM Stmt := do
@@ -1212,6 +1225,7 @@ def parseStatement (fuel : Nat) : ParseM Stmt := do
   | .keyword "true" | .keyword "false" | .keyword "null" | .keyword "typeof"
   | .keyword "void" | .keyword "new" => parseExpressionStatement fuel
   | .keyword "function" => parseLocalFunction (parseBlock fuel)
+  | .keyword "try" => parseTry (parseBlock fuel)
   | .keyword word => failAt t s!"'{word}' is not supported here"
   | _ => parseExpressionStatement fuel
 
