@@ -265,10 +265,6 @@ def stmt (ctx : Context) (env : Types) : Nat → Stmt → Result Stmt
         (← stmt ctx (p.names.map (·, none) ++ env) f body))
     | .destructure s k p ty e => pure (.destructure s k p ty (← expr ctx env f e))
     | .objectDestructure s k p ty e =>
-      if (receiverClass ctx env e).isSome then
-        refuse s "destructuring class instances is not supported"
-      if hasClassType ctx ty then
-        refuse s "class-typed destructuring bindings are not supported"
       pure (.objectDestructure s k p ty (← expr ctx env f e))
     | .switchStmt s e clauses =>
       pure (.switchStmt s (← expr ctx env f e) (← clauses.mapM fun (test, body) => do
@@ -291,7 +287,9 @@ def stmts (ctx : Context) (env : Types) (fuel : Nat) : List Stmt → Result (Lis
       | .destructure _ _ p _ _ => p.names.map (·, none) ++ env
       | .objectDestructure _ _ p _ _ => p.objectBindingNames.map (·, none) ++ env
       | .funDecl _ name _ _ _ _ => (name, none) :: env
-      | _ => env
+      | .exprStmt .. | .returnStmt .. | .ifStmt .. | .forOfStmt .. | .forOfPattern ..
+      | .forStmt .. | .whileStmt .. | .block .. | .breakStmt _ | .continueStmt _ | .empty _
+      | .switchStmt .. | .throwStmt .. | .tryCatch .. => env
     pure (s' :: (← stmts ctx env' fuel ss))
 
 end

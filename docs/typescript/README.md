@@ -690,8 +690,9 @@ must have one constructor that assigns every required readonly field exactly
 once. Methods use static dispatch, so a receiver must have the class's exact
 declared or inferred type. Tolean refuses operations that could observe the
 JavaScript prototype, including `instanceof`, constructor identity and
-destructuring a class instance. It also refuses class-typed object
-destructuring because a plain object could otherwise claim class provenance.
+methods extracted through object destructuring. Object destructuring may read
+readonly fields from a class instance, but the destructured names have no class
+type and cannot call class methods.
 The existing `class C extends Error` subset is separate; its accepted form and
 limits are listed below. The
 [class decision](../decisions/2026-11-17-readonly-classes.md) explains the

@@ -1,4 +1,4 @@
-// expect: 9:3 destructuring class instances is not supported
+// expect: 9:3 'get' is not a field
 class C {
   readonly value: bigint;
   constructor(value: bigint) { this.value = value; }
@@ -6,6 +6,6 @@ class C {
 }
 
 export function f(): bigint {
-  const { value } = new C(7n);
-  return value;
+  const { get } = new C(7n);
+  return get();
 }
