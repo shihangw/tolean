@@ -381,6 +381,11 @@ theorem Stmt.lineOK : ∀ (st : Stmt) (d : Nat), ∀ l ∈ st.lines d, LineOK l.
     simp only [destructureWords]
     exact ((((LineOK.word k.word_ne).append p.line).append (typeAnnotation_line ty)).append
       (LineOK.cons (by simp [punctWord]) (Expr.fine e).line)).append (LineOK.word (by simp [punctWord]))
+  | .objectDestructure _ k p ty e, d, l, hl => by
+    simp [Stmt.lines] at hl; subst hl
+    simp only [objectDestructureWords]
+    exact ((((LineOK.word k.word_ne).append (Expr.fine p).line).append (typeAnnotation_line ty)).append
+      (LineOK.cons (by simp [punctWord]) (Expr.fine e).line)).append (LineOK.word (by simp [punctWord]))
   | .exprStmt _ e, d, l, hl => by
     simp [Stmt.lines] at hl; subst hl
     exact (Expr.fine e).line.append (LineOK.word (w := punctWord ";") (by simp [punctWord]))

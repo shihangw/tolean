@@ -48,6 +48,13 @@ Structural recursion adds no runtime operation. Its calls use `EvaluateCall`
 other TypeScript type declarations. Every supported edition specifies the
 runtime operation.
 
+Flat object binding patterns use BindingInitialization and
+KeyedBindingInitialization (ES2015 §13.3.3.5 and §13.3.3.7; ES2024 §14.3.3.3
+and §14.3.3.4). They evaluate the source once and read the named properties
+in source order. Every supported edition has these operations. Defaults,
+nested patterns and destructured parameters remain refused. Object rest is
+a separate ES2018 operation and remains refused too.
+
 Guard calls use `EvaluateCall` (ES2024 §13.3.6.2), and their branches use
 `IfStatement` (§14.6). A primitive guard uses `typeof` (§13.5.3). These
 operations also exist in ES2015, the oldest target.

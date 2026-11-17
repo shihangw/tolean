@@ -47,15 +47,15 @@ attribute [simp] EStateM.bind_ok EStateM.map_ok
   simp [tooDeep, get, getThe, MonadStateOf.get, EStateM.get, throw, throwThe, MonadExceptOf.throw,
     EStateM.throw, bind, EStateM.bind]
 
-theorem checkName_ok {sp : Span} {name r : String} {s s' : Ctx} :
-    checkName sp name s = .ok r s' → r = name ∧ s' = s := by
+theorem checkName_ok {sp : Span} {name r : String} {s s' : Ctx} {quoted : Bool} :
+    checkName sp name quoted s = .ok r s' → r = name ∧ s' = s := by
   simp only [checkName, ite_state]
   split
   · simp
   · simp only [pure_bind, pure_ok]; rintro ⟨rfl, rfl⟩; exact ⟨rfl, rfl⟩
 
-theorem checkLocalName_ok {sp : Span} {name r : String} {s s' : Ctx}
-    (h : checkLocalName sp name s = .ok r s') : r = name ∧ s' = s := by
+theorem checkLocalName_ok {sp : Span} {name r : String} {s s' : Ctx} {quoted : Bool}
+    (h : checkLocalName sp name quoted s = .ok r s') : r = name ∧ s' = s := by
   simp only [checkLocalName, bind_ok, get_ok, ite_state] at h
   obtain ⟨c, s₁, ⟨rfl, rfl⟩, h⟩ := h
   split at h
@@ -70,7 +70,7 @@ theorem checkLocalName_ok {sp : Span} {name r : String} {s s' : Ctx}
         · exact checkName_ok h
 
 theorem declare_ok {env env' : Translate.Env} {sp : Span} {name : String} {b : Binding} {t : Ty}
-    {s s' : Ctx} (h : declare env sp name b t s = .ok env' s') :
+    {s s' : Ctx} {quoted : Bool} (h : declare env sp name b t quoted s = .ok env' s') :
     env.has name = false ∧ env' = env.add { name, binding := b, type := t } ∧ s' = s := by
   simp only [declare, ite_state] at h
   split at h

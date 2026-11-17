@@ -4405,4 +4405,57 @@ theorem parseExpression_budget {T : Edition} (e : Expr) (he : e.wfAt T .assign =
   rw [hg]
   exact expression_reads g e (exprs_read T g .assign e he (by omega)) s ts rest hT hs hl ht hn hr hE ha
 
+theorem Expr.isObjectPattern_erase (e : Expr) :
+    e.erase.isObjectPattern = e.isObjectPattern := by
+  cases e <;> simp only [Expr.erase, Expr.isObjectPattern]
+  rename_i sp props
+  rw [Property.eraseAll_eq]
+  simp only [List.isEmpty_map, List.all_map]
+  congr 1
+  apply List.all_congr rfl
+  intro p
+  cases p with
+  | shorthand => rfl
+  | spread => rfl
+  | keyValue sp key value =>
+    cases key <;> cases value <;> rfl
+
+theorem Expr.objectPattern_after {e : Expr} (hp : e.isObjectPattern = true) (after : List TokenKind) :
+    e.afterOK after = true := by
+  cases e <;> simp only [Expr.isObjectPattern] at hp
+  all_goals try contradiction
+  rename_i sp props
+  simp only [Bool.and_eq_true] at hp
+  simp only [Expr.afterOK]
+  have hall := hp.2
+  clear hp
+  generalize closeEq : TokenKind.punct "}" :: after = close
+  clear closeEq after
+  induction props with
+  | nil => rfl
+  | cons p ps ih =>
+    simp only [List.all_cons, Bool.and_eq_true] at hall
+    have htail := ih hall.2
+    cases p with
+    | shorthand =>
+      cases ps <;> simp_all [Property.afterOKList, Property.afterOK]
+    | spread => simp at hall
+    | keyValue sp key value =>
+      cases key <;> cases value <;> try simp at hall
+      cases ps <;> simp_all [Property.afterOKList, Property.afterOK, Expr.afterOK]
+
+theorem parseObjectPattern_budget {T : Edition} (e : Expr) (hp : e.isObjectPattern = true)
+    (he : e.wfAt T .primary = true) :
+    ∀ (s : ParseState) (ts rest : List Token), s.target = T → s.rest = ts ++ rest →
+      s.left = s.rest.length → Touching ts e.words → (∀ y ∈ ts.tail, NoBreak y) →
+      rest ≠ [] →
+      ∃ e' s', Parse.parsePrimary (10 * (s.left + 1)) s = .ok e' s' ∧
+        e'.erase = e.erase ∧ Leaves s s' rest := by
+  intro s ts rest hT hs hl ht hn hr
+  apply exprs_read T (10 * (s.left + 1)) .primary e he
+    (by have := need_le_budget (level := .primary) hs hl ht; omega)
+    s ts rest hT hs hl ht hn hr
+  · trivial
+  · exact e.objectPattern_after hp _
+
 end tolean.TypeScript.Syntax

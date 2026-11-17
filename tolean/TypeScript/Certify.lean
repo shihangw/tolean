@@ -222,7 +222,7 @@ partial def exprNumbers : Expr → List String
 
 def stmtNumbers : Stmt → List String
   | .varDecl _ d => (d.init.map exprNumbers).getD []
-  | .exprStmt _ e | .ifStmt _ e _ _ | .whileStmt _ e _ | .forOfStmt _ _ _ e _ | .forOfPattern _ _ _ e _ | .destructure _ _ _ _ e => exprNumbers e
+  | .exprStmt _ e | .ifStmt _ e _ _ | .whileStmt _ e _ | .forOfStmt _ _ _ e _ | .forOfPattern _ _ _ e _ | .destructure _ _ _ _ e | .objectDestructure _ _ _ _ e => exprNumbers e
   | .returnStmt _ e => (e.map exprNumbers).getD []
   | .forStmt _ i t u _ =>
     (((i.bind (·.init)).map exprNumbers).getD []) ++ ((t.map exprNumbers).getD []) ++ ((u.map exprNumbers).getD [])
@@ -230,7 +230,7 @@ def stmtNumbers : Stmt → List String
 
 def stmtCalls : Stmt → List String
   | .varDecl _ d => (d.init.map exprCalls).getD []
-  | .exprStmt _ e | .ifStmt _ e _ _ | .whileStmt _ e _ | .forOfStmt _ _ _ e _ | .forOfPattern _ _ _ e _ | .destructure _ _ _ _ e => exprCalls e
+  | .exprStmt _ e | .ifStmt _ e _ _ | .whileStmt _ e _ | .forOfStmt _ _ _ e _ | .forOfPattern _ _ _ e _ | .destructure _ _ _ _ e | .objectDestructure _ _ _ _ e => exprCalls e
   | .returnStmt _ e => (e.map exprCalls).getD []
   | .forStmt _ i t u _ =>
     (((i.bind (·.init)).map exprCalls).getD []) ++ ((t.map exprCalls).getD []) ++ ((u.map exprCalls).getD [])
@@ -277,7 +277,7 @@ partial def subExprs (e : Expr) : List Expr :=
 /-- The expressions that a statement holds, outside its nested statements. -/
 def stmtExprs : Stmt → List Expr
   | .varDecl _ d => d.init.toList
-  | .exprStmt _ e | .ifStmt _ e _ _ | .whileStmt _ e _ | .forOfStmt _ _ _ e _ | .forOfPattern _ _ _ e _ | .destructure _ _ _ _ e => [e]
+  | .exprStmt _ e | .ifStmt _ e _ _ | .whileStmt _ e _ | .forOfStmt _ _ _ e _ | .forOfPattern _ _ _ e _ | .destructure _ _ _ _ e | .objectDestructure _ _ _ _ e => [e]
   | .returnStmt _ e => e.toList
   | .switchStmt _ d cs => d :: cs.filterMap (·.1)
   | _ => []
@@ -471,6 +471,7 @@ abbrev ConditionalCall := List (String × Bool × IR.MatchNullKind × Bool) × L
 def guardCondition (r : Refs) (guards : List (String × Bool × IR.MatchNullKind × Bool))
     (condition : String) : String :=
   guards.foldr (fun (n, valueBranch, kind, narrowedNull) rest =>
+    let n := tolean.IR.identName n
     match kind with
     | .nullable | .optional =>
       if valueBranch then s!"(match {n} with | .none => _root_.True | .some {n} => {rest})"
@@ -790,9 +791,9 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         if let .tag v := t then return (s!"({str f}, Val.str {r.jsString v})", false)
         if let .optional u := t then
           let some e := encoderOf structRefs u | throw s!"{file}: cannot encode the field {name}.{f}"
-          return (s!"({r.eval "encField"} {str f} {e} x.{f})", true)
+          return (s!"({r.eval "encField"} {str f} {e} x.{tolean.IR.identName f})", true)
         let some e := encoderOf structRefs t | throw s!"{file}: cannot encode the field {name}.{f}"
-        return (s!"({str f}, {e} x.{f})", false)
+        return (s!"({str f}, {e} x.{tolean.IR.identName f})", false)
       let hasOptional := parts.any (·.2)
       let objList := if hasOptional then
           " ++ ".intercalate (parts.map fun (p, opt) => if opt then p else s!"[{p}]")
@@ -802,8 +803,8 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       let decs ← fields.mapM fun (f, t) => do
         let some dec := decoderOf structRefs t | throw s!"{file}: cannot decode the field {name}.{f}"
         return (f, dec)
-      let some_ := ", ".intercalate (decs.map fun (f, dec) => s!"{f} := {dec} (fs.lookup {str f})")
-      let none_ := ", ".intercalate (decs.map fun (f, dec) => s!"{f} := {dec} (none : Option (Val {nv}))")
+      let some_ := ", ".intercalate (decs.map fun (f, dec) => s!"{tolean.IR.identName f} := {dec} (fs.lookup {str f})")
+      let none_ := ", ".intercalate (decs.map fun (f, dec) => s!"{tolean.IR.identName f} := {dec} (none : Option (Val {nv}))")
       encs := encs.push s!"def encode{name} {structGeneric} (x : {structType}) : Val {nv} := Val.obj {if hasOptional then s!"({objList})" else objList}"
       encs := encs.push <|
         s!"def decode{name} {structGeneric} : Option (Val {nv}) → {structType}\n" ++
@@ -1036,7 +1037,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       -- The callback's function binds the locals that its body reads, as a
       -- loop's step does, and the lemma reads them back out of `ρ`.
       let captured := if scope.isEmpty then "" else
-        s!"fun {" ".intercalate (scope.map fun (n, t) => s!"({n} : {t.print names})")} => "
+        s!"fun {" ".intercalate (scope.map fun (n, t) => s!"({tolean.IR.identName n} : {t.print names})")} => "
       -- The function of `List.mapIdx` binds the index first, as a `Nat`, and
       -- then as the number that the body reads, as the printer writes it.
       let binders := match method with
@@ -1127,7 +1128,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           unless !(sortInputNames items).isEmpty && (sortInputNames items).all available.contains &&
               scope.isEmpty && sortInputShape items do
             throw s!"{file}: the sorted list must be reachable from parameters and its comparator must not capture locals in {name}"
-          let lets := String.join (bindings.map fun (n, e) => s!"let {n} := {e.print names}; ")
+          let lets := String.join (bindings.map fun (n, e) => s!"let {tolean.IR.identName n} := {e.print names}; ")
           let input := s!"({lets}{items.print names})"
           if keys.length > 1 then
             let subtype := "{ x : " ++ elemTy ++ " // x ∈ items }"
@@ -1138,7 +1139,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
             for ((path, difference, up), ki) in keys.zipIdx do
               let some ty := keyPathType decls elem path
                 | throw s!"{file}: cannot read a comparator key type in {name}"
-              let key := s!"(fun ({param} : {elemTy}) => {".".intercalate (param :: path)})"
+              let key := s!"(fun ({param} : {elemTy}) => {".".intercalate ((param :: path).map tolean.IR.identName)})"
               let numeric := ty matches .number
               if numeric then
                 let hn := s!"hkeys{ki}"
@@ -1192,7 +1193,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
             continue
           let [(path, difference, up)] := keys
             | throw s!"{file}: empty comparator keys in {name}"
-          let key := s!"(fun ({param} : {elemTy}) => {".".intercalate (param :: path)})"
+          let key := s!"(fun ({param} : {elemTy}) => {".".intercalate ((param :: path).map tolean.IR.identName)})"
           let hname := s!"{name}_sort_precondition" ++
             if obligations.isEmpty then "" else toString obligations.length
           if r.idents.contains hname then
@@ -1232,7 +1233,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
             consistency
           continue
         let keyCmp : List String × Bool × Bool → String := fun (path, _, up) =>
-          let key := s!"(fun ({param} : {elemTy}) => {".".intercalate (param :: path)})"
+          let key := s!"(fun ({param} : {elemTy}) => {".".intercalate ((param :: path).map tolean.IR.identName)})"
           let cmp := s!"({r.full "compareOn"} {key})"
           if up then cmp else s!"(fun (x y : {elemTy}) => {cmp} y x)"
         let o := match (keys.map keyCmp).reverse with
@@ -1278,7 +1279,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           throw s!"{file}: sort conditions in this callback need an element-restricted link lemma in {name}"
         let predicate := " ∧ ".intercalate (childConditions.map fun c => s!"({c})")
         let abstracted := s!"(fun ({param} : {elem.print names}) " ++
-          " ".intercalate (scope.map fun (n, t) => s!"({n} : {t.print names})") ++ s!" => {predicate})"
+          " ".intercalate (scope.map fun (n, t) => s!"({tolean.IR.identName n} : {t.print names})") ++ s!" => {predicate})"
         let applied := s!"({abstracted} x" ++ String.join (scope.map fun (n, _) => s!" {decode n}") ++ ")"
         let raw := s!"∀ _sortElement' ∈ ({items.print names}), ((fun ({param} : {elem.print names}) => {predicate}) _sortElement')"
         if parent.isSome then
@@ -1297,7 +1298,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           unless sortInputShape items &&
               (sortInputNames items).all available.contains do
             throw s!"{file}: callback sort conditions must be reachable from parameters in {name}"
-          let condition := "(" ++ String.join (bindings.map fun (n, e) => s!"let {n} := {e.print names}; ") ++ raw ++ ")"
+          let condition := "(" ++ String.join (bindings.map fun (n, e) => s!"let {tolean.IR.identName n} := {e.print names}; ") ++ raw ++ ")"
           let hn := s!"{name}_sort_precondition{obligations.length}"
           if r.idents.contains hn then throw s!"{file}: reserved certificate hypothesis name {hn}"
           obligations := obligations ++ [(hn, condition)]
@@ -1459,7 +1460,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       let stepLines := IR.indentBy "        " (body.lines names)
       -- Every binder has its type, as in the output's loop (see `IR.foldBinders`).
       let captured := if scopeNames.isEmpty then "" else
-        s!"fun {" ".intercalate (scope.map fun (n, t) => s!"({n} : {t.print names})")} => "
+        s!"fun {" ".intercalate (scope.map fun (n, t) => s!"({tolean.IR.identName n} : {t.print names})")} => "
       -- A loop that a `break` can end runs with `forIn`, and its step gives a
       -- `ForInStep` of the state. The type says `Id`, as `forIn` expects in the
       -- printed definition, so that the two `if`s have the same type and the

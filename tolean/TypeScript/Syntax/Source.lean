@@ -242,6 +242,10 @@ def destructureWords (kind : VarKind) (p : ArrayPattern) (type : Option TypeExpr
     List Word :=
   [kind.word] ++ p.words ++ typeAnnotation type ++ punctWord "=" :: init.words ++ [punctWord ";"]
 
+def objectDestructureWords (kind : VarKind) (p : Expr) (type : Option TypeExpr) (init : Expr) :
+    List Word :=
+  [kind.word] ++ p.words ++ typeAnnotation type ++ punctWord "=" :: init.words ++ [punctWord ";"]
+
 /-- The words of `e`, or none when it is absent. -/
 def optWords : Option Expr → List Word
   | some e => e.words
@@ -268,6 +272,8 @@ mutual
 def Stmt.lines (depth : Nat) : Stmt → List Line
   | .varDecl _ d => [(depth, d.words)]
   | .destructure _ kind p type init => [(depth, destructureWords kind p type init)]
+  | .objectDestructure _ kind p type init =>
+    [(depth, objectDestructureWords kind p type init)]
   | .exprStmt _ e => [(depth, e.words ++ [punctWord ";"])]
   | .returnStmt _ none => [(depth, [keywordWord "return", punctWord ";"])]
   | .returnStmt _ (some e) => [(depth, keywordWord "return" :: e.words ++ [punctWord ";"])]
@@ -490,6 +496,7 @@ mutual
 def Stmt.erase : Stmt → Stmt
   | .varDecl _ d => .varDecl noSpan d.erase
   | .destructure _ kind p type init => .destructure noSpan kind p (type.map TypeExpr.erase) init.erase
+  | .objectDestructure _ kind p type init => .objectDestructure noSpan kind p.erase (type.map TypeExpr.erase) init.erase
   | .exprStmt _ e => .exprStmt noSpan e.erase
   | .returnStmt _ v => .returnStmt noSpan (v.map Expr.erase)
   | .ifStmt _ test t e => .ifStmt noSpan test.erase t.erase (Stmt.eraseOpt e)

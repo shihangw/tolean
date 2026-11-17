@@ -122,6 +122,8 @@ theorem Stmt.depth_lt : ∀ st : Stmt, st.depth < st.tokens.length
     simp [Stmt.depth, Stmt.tokens, Stmt.wordLines, Stmt.lines, VarDecl.words, VarKind.word_eq]
   | .destructure _ k p t e => by
     simp [Stmt.depth, Stmt.tokens, Stmt.wordLines, Stmt.lines, destructureWords, VarKind.word_eq]
+  | .objectDestructure _ k p t e => by
+    simp [Stmt.depth, Stmt.tokens, Stmt.wordLines, Stmt.lines, objectDestructureWords, VarKind.word_eq]
   | .exprStmt _ e => by simp [Stmt.depth, Stmt.tokens, Stmt.wordLines, Stmt.lines, punctWord]
   | .returnStmt _ v => by cases v <;> simp [Stmt.depth, Stmt.tokens, Stmt.wordLines, Stmt.lines, keywordWord]
   | .throwStmt _ e => by simp [Stmt.depth, Stmt.tokens, Stmt.wordLines, Stmt.lines, keywordWord]
@@ -1234,6 +1236,18 @@ theorem Stmt.declStart {T : Edition} (st : Stmt) (hw : st.wf T false false = tru
     simp only [Stmt.wordLines, Stmt.lines, List.map_cons, List.map_nil] at ht
     obtain ⟨h1, _⟩ := Laid.one ht
     simp only [destructureWords, VarKind.word_eq] at h1
+    obtain ⟨x, ts', rfl, hx, _⟩ := Touching.cons_one (by simpa using h1)
+    refine ⟨x, ts', rfl, ?_, ?_, ?_, ?_, ?_, fun h => ?_⟩
+    · rw [hx]; cases kind <;> simp [VarKind.token]
+    · rw [hx]; cases kind <;> simp [VarKind.token]
+    · rw [hx]; cases kind <;> simp [VarKind.token]
+    · rw [hx]; cases kind <;> simp [VarKind.token]
+    · rw [hx]; cases kind <;> simp [VarKind.token]
+    · exfalso; rw [hx] at h; revert h; cases kind <;> simp [VarKind.token]
+  | objectDestructure sp kind p type init =>
+    simp only [Stmt.wordLines, Stmt.lines, List.map_cons, List.map_nil] at ht
+    obtain ⟨h1, _⟩ := Laid.one ht
+    simp only [objectDestructureWords, VarKind.word_eq] at h1
     obtain ⟨x, ts', rfl, hx, _⟩ := Touching.cons_one (by simpa using h1)
     refine ⟨x, ts', rfl, ?_, ?_, ?_, ?_, ?_, fun h => ?_⟩
     · rw [hx]; cases kind <;> simp [VarKind.token]

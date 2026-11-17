@@ -50,7 +50,8 @@ declarations and local arrows. The interpreter ignores the annotation, as
 Node does after type stripping: it evaluates the body rather than trusting
 the claimed type. Translation accepts checked tag guards as described below.
 - **Statements:** `const` and `let` declarations, array destructuring such as
-  `const [a, , b, ...rest] = xs`, expression statements,
+  `const [a, , b, ...rest] = xs`, flat object destructuring such as
+  `const { a, b: second } = value`, expression statements,
   `return`, `throw`, `if` and `else`, `for … of` with a name or an array
   pattern before `of`, the counted `for`, `while`,
   `switch`, `try` with a bound `catch`, blocks, `break`, `continue` and the empty statement. A counted
@@ -143,10 +144,30 @@ as `for (const [k, v] of m)`. Each place of the pattern is a name or an empty
 place, which is a hole, and a rest element may come last. A statement needs a
 value after `=`, and it declares one pattern. The parser refuses destructuring
 after `export`, in the first part of a counted `for` and before the `in` of a
-`for … in`. It also refuses object patterns, nested patterns and default
+`for … in`. It also refuses nested patterns and default
 values, and a pattern that is empty or that ends with a `,`, such as `[a, ]`
 or `[a, , ]`, although JavaScript allows both. So the last place is always a
 name or the rest element, and the printed pattern reads back as the same one.
+
+Local declarations also accept flat object patterns, such as
+`const { a, b: second } = value`. Each property must have an identifier key,
+and each binding must be a name. A pattern may select only some fields or
+read the same field into several names. A trailing comma is allowed. The
+source must have an interface or an inline object type. The output evaluates
+it once, including when it is a function call, then binds the selected fields
+in the surrounding scope. Extracted mutable collections remain aliases, so
+the existing restrictions on mutation still apply.
+Interface field names and object-pattern bindings that are Lean keywords are quoted in
+the output. For example, a field or a binding named `end` becomes `«end»`.
+Other declarations retain their existing name restrictions.
+Literal tag fields are not stored in the Lean structure and cannot be bound
+in an object pattern. They retain the restriction to tests of their union.
+
+Object patterns do not support nesting, defaults, rest elements or computed
+keys. Empty patterns, exported patterns and patterns in loop heads are also
+refused. A source that reads one of the pattern's own binding names is
+refused because that binding is not initialized yet. Destructured parameters
+remain refused: name the parameter and read its fields in the body instead.
 
 In the declaration at the start of a counted `for`, the parser refuses an `in`
 operator unless parentheses, braces, the arguments of a call or an index hold
@@ -307,6 +328,8 @@ before the match; checked guards only read their parameter's tag. The IR and
 its evaluator use their existing boolean functions, calls and tag matches.
 `program_sound` covers this lowering through the same statement proofs as
 inline tests. The native and WebAssembly translators use the same source.
+Destructuring is not yet accepted inside a try body.
+
 Guard normalization also visits both blocks of a `try` statement. Inline
 `typeof` and null tests narrow in either block, and a checked guard call can
 narrow in the catch handler. The protected body still rejects calls.

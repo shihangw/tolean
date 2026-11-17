@@ -16,7 +16,7 @@ enum whose members code may read, or of a global that the subset reads. So
 the subset never reads such a name as the function, the enum or the global
 where JS reads the local before its declaration, and throws. -/
 theorem declare_not_callable {env env' : Translate.Env} {sp : Span} {name : String} {b : Binding}
-    {t : Ty} {s s' : Ctx} (h : declare env sp name b t s = .ok env' s') :
+    {t : Ty} {s s' : Ctx} {quoted : Bool} (h : declare env sp name b t quoted s = .ok env' s') :
     (∀ f ∈ env.functions, f.name ≠ name) ∧ (∀ e ∈ env.enums, e.name ≠ name) ∧ name ≠ "NaN" ∧
       name ≠ "Infinity" ∧ name ≠ "Number" ∧ name ≠ "undefined" := by
   simp only [declare, ite_state] at h

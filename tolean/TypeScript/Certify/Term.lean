@@ -149,6 +149,8 @@ def stmt : Stmt → String
   | .varDecl s d => s!"({ns}Stmt.varDecl {span s} {varDecl d})"
   | .destructure s k p t e =>
     s!"({ns}Stmt.destructure {span s} {varKind k} {pattern p} {option (t.map typeExpr)} {expr e})"
+  | .objectDestructure s k p t e =>
+    s!"({ns}Stmt.objectDestructure {span s} {varKind k} {expr p} {option (t.map typeExpr)} {expr e})"
   | .exprStmt s e => s!"({ns}Stmt.exprStmt {span s} {expr e})"
   | .returnStmt s v => s!"({ns}Stmt.returnStmt {span s} {option (v.map expr)})"
   | .ifStmt s t a b =>

@@ -1028,6 +1028,159 @@ test('the interpreter reads the index of at and slice as Node does', async () =>
   }
 });
 
+test('object bindings agree with Node destructuring', async () => {
+  const source = `
+    export interface Span { readonly start: number; readonly end: number; }
+    export function length(s: Span): number {
+      const { start, end } = s;
+      return end - start;
+    }
+  `;
+  const spans = [
+    { start: 2, end: 9 },
+    { start: -5, end: 3 },
+    { start: 0, end: -0 },
+    { start: Infinity, end: Infinity },
+    { start: NaN, end: 1 },
+  ];
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({
+      programs: [{ source, calls: spans.map(s => ({ function: 'length', args: [encode(s)] })) }],
+    }),
+    encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (result === undefined || !result.parsed) return;
+  for (const [i, span] of spans.entries()) {
+    const { start, end } = span;
+    const value = result.results[i]?.value;
+    expect(value === undefined ? 'no value' : canonical(value))
+      .toBe(canonical(encode(end - start)));
+  }
+});
+
+test('renamed, partial and call-source object bindings agree with Node', async () => {
+  const header = `
+    export interface Pair { readonly a: number; readonly b: number; readonly extra: number; }
+    export function getPair(o: Pair): Pair { return o; }
+  `;
+  const bodies = [
+    'const { a: b, b: a } = o; return a - b;',
+    'const { b: x } = o; return x;',
+    'const { a: x, a: y } = o; return x + y;',
+    'const { a, b } = getPair(o); return a - b;',
+    'let { a: x, b } = o; x = x + b; return x;',
+    'const _objectField0 = 7; const { a, b } = o; return a + b + _objectField0;',
+    'const { a: by, b: match } = o; return match - by;',
+  ];
+  const sources = bodies.map(body => `${header} export function f(o: Pair): number { ${body} }`);
+  const inputs = [{ a: 2, b: 9, extra: 11 }, { a: -5, b: 3, extra: 0 }, { a: 0, b: -0, extra: 1 }];
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({
+      programs: sources.map(source => ({
+        source, calls: inputs.map(o => ({ function: 'f', args: [encode(o)] })),
+      })),
+    }),
+    encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const results = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-object-bindings-'));
+  for (const [i, source] of sources.entries()) {
+    const path = join(dir, `case${i}.mjs`);
+    writeFileSync(path, ts.transpileModule(source, {
+      compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+    }).outputText);
+    const mod = (await import(pathToFileURL(path).href)) as { f: (o: unknown) => unknown };
+    const result = results[i];
+    expect(result?.parsed, source).toBe(true);
+    if (result === undefined || !result.parsed) continue;
+    for (const [j, input] of inputs.entries()) {
+      const value = result.results[j]?.value;
+      expect(value === undefined ? 'no value' : canonical(value), source)
+        .toBe(canonical(encode(mod.f(input))));
+    }
+  }
+});
+
+test('object bindings inside try bodies are refused', () => {
+  const source = readFileSync(new URL('./corpus/translate/reject/tryObjectDestructure.ts', import.meta.url), 'utf8');
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: [{ source, calls: [{
+      function: 'inTry', args: [encode({ a: 3n, b: 5n })],
+    }] }] }),
+    encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (result === undefined || !result.parsed) throw new Error('try refusal fixture did not parse');
+  expect(result.accepted).toBe(false);
+  expect(result.results[0]?.value).toBeUndefined();
+});
+
+test('object bindings compose with catch and indexed access in Node', async () => {
+  const source = readFileSync(new URL('./corpus/translate/accept/objectDestructureComposition.ts', import.meta.url), 'utf8');
+  const calls: Array<{ function: string; args: Array<unknown> }> = [];
+  for (const [a, b] of [[0n, 0n], [-19n, 27n], [2n ** 80n, -3n]]) {
+    const pair = { a, b };
+    for (const fail of [false, true]) calls.push({ function: 'inCatch', args: [pair, fail] });
+    calls.push({ function: 'fromIndex', args: [{ pair, other: { a: b, b: a } }] });
+  }
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: [{ source, calls: calls.map(c => ({
+      function: c.function, args: c.args.map(encode),
+    })) }] }),
+    encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (result === undefined || !result.parsed) throw new Error('composition fixture did not parse');
+  expect(result.accepted).toBe(true);
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-object-composition-'));
+  const path = join(dir, 'index.mjs');
+  writeFileSync(path, ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+  }).outputText);
+  const mod = await import(pathToFileURL(path).href) as Record<string, (...xs: Array<unknown>) => unknown>;
+  for (const [i, call] of calls.entries()) {
+    const value = result.results[i]?.value;
+    expect(value === undefined ? 'no value' : canonical(value), call.function)
+      .toBe(canonical(encode(mod[call.function](...call.args))));
+  }
+});
+
+test('an object binding cannot read its own name in its initializer', async () => {
+  const source = `
+    export interface Pair { readonly a: number; readonly b: number; }
+    export function f(s: Pair): number {
+      if (true) { const { a: s, b } = s; return s + b; }
+      else { return 0; }
+    }
+  `;
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: [{
+      source, calls: [{ function: 'f', args: [encode({ a: 2, b: 9 })] }],
+    }] }),
+    encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (result === undefined || !result.parsed) return;
+  expect(result.results[0]?.value).toBeUndefined();
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-object-tdz-'));
+  const path = join(dir, 'case.mjs');
+  writeFileSync(path, ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+  }).outputText);
+  const mod = (await import(pathToFileURL(path).href)) as { f: (s: unknown) => unknown };
+  expect(() => mod.f({ a: 2, b: 9 })).toThrow(ReferenceError);
+});
+
 test('optional array indexing agrees with Node', async () => {
   const sources = [
     'export function f(xs: ReadonlyArray<bigint> | null): bigint { return xs?.[0] ?? 7n; }',
