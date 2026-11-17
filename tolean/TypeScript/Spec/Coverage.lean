@@ -487,6 +487,8 @@ def extras : List Group := [
     ``Syntax.tokens_readonly, ``Syntax.parsePrimaryType_paren,
     ``Syntax.parsePrimaryType_keyword, ``Syntax.parsePrimaryType_name, ``Syntax.parsePrimaryType_simple, ``Syntax.reads_one,
     ``Syntax.iterate_brackets, ``Syntax.iterate_brackets_goal, ``Syntax.iterate_sep,
+    ``Syntax.suffixNode_erase, ``Syntax.suffix_length, ``Syntax.iterate_suffixes,
+    ``Syntax.arrayStep_indexed, ``Syntax.arrayStep_suffix,
     ``Syntax.iterate_sepBefore, ``Syntax.iterate_stop, ``Syntax.unionStep_go,
     ``Syntax.unionStep_stop, ``Syntax.arrayWF_split, ``Syntax.arrayWF_head, ``Syntax.arrayOf_array,
     ``Syntax.brackets_succ, ``Syntax.length_brackets, ``Syntax.tokens_ref, ``Syntax.tokens_union,
