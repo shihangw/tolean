@@ -1,4 +1,4 @@
-// expect: 3:3 tolean supports only 'class Name extends Error'
+// expect: 3:23 default values are not supported
 class Bad extends Error {
   readonly id: string = "x";
 }
