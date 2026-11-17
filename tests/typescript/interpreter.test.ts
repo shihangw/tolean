@@ -1721,6 +1721,90 @@ test('ordinary classes refuse observable prototypes and non-static dispatch', ()
   }
 });
 
+test('readonly classes preserve provenance and do not blacklist Map methods', async () => {
+  const sources = [
+    `class C {
+      readonly value: bigint;
+      constructor(value: bigint) { this.value = value; }
+      get(): bigint { return this.value; }
+    }
+    export function f(): bigint { const c: C = { value: 7n }; return c.get(); }`,
+    `class C {
+      readonly value: bigint;
+      constructor(value: bigint) { this.value = value; }
+      get(): bigint { return this.value; }
+    }
+    type A = C;
+    export function f(): bigint {
+      const c: A = new C(7n);
+      const fake: C = { ...c };
+      return fake.get();
+    }`,
+    `class C {
+      readonly value: bigint;
+      constructor(value: bigint) { this.value = value; }
+      get(): bigint { return this.value; }
+    }
+    type A = C;
+    function make(): A { return { value: 7n }; }
+    export function f(): bigint { const c: A = make(); return c.get(); }`,
+    `class C {
+      readonly value: bigint;
+      constructor(value: bigint) { this.value = value; }
+      get(): bigint { return this.value; }
+    }
+    export function f(c: C): bigint { return c.get(); }`,
+  ];
+  const rejected = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: sources.map(source => ({
+      source, calls: [{ function: 'f', args: [] }],
+    })) }),
+    encoding: 'utf8',
+  });
+  expect(rejected.status, rejected.stderr).toBe(0);
+  const rejectedPrograms = (JSON.parse(rejected.stdout) as { programs: Array<Interpreted> }).programs;
+  expect(rejectedPrograms).toHaveLength(sources.length);
+  for (const [index, result] of rejectedPrograms.entries()) {
+    expect(result.parsed).toBe(true);
+    expect(result.accepted).toBe(false);
+    const path = join(mkdtempSync(join(tmpdir(), 'tolean-class-provenance-')), `case${index}.mjs`);
+    writeFileSync(path, ts.transpileModule(sources[index]!, {
+      compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+    }).outputText);
+    const mod = await import(pathToFileURL(path).href) as { f: (...args: Array<unknown>) => unknown };
+    if (index === 3) {
+      expect(() => mod.f({ value: 7n })).toThrow(TypeError);
+    } else {
+      expect(() => mod.f()).toThrow(TypeError);
+    }
+  }
+
+  const source = `class C {
+    readonly value: bigint;
+    constructor(value: bigint) { this.value = value; }
+    get(): bigint { return this.value; }
+  }
+  export function f(): bigint | undefined {
+    const m = new Map<string, bigint>();
+    m.set("x", 7n);
+    return m.get("x");
+  }`;
+  const accepted = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: [{ source, calls: [{ function: 'f', args: [] }] }] }),
+    encoding: 'utf8',
+  });
+  expect(accepted.status, accepted.stderr).toBe(0);
+  const program = (JSON.parse(accepted.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(program?.accepted).toBe(true);
+  if (program === undefined || !program.accepted) return;
+  const path = join(mkdtempSync(join(tmpdir(), 'tolean-class-map-')), 'map.mjs');
+  writeFileSync(path, ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+  }).outputText);
+  const mod = await import(pathToFileURL(path).href) as { f: () => unknown };
+  expect(program.results.map(result => result.value)).toEqual([encode(mod.f())]);
+});
+
 test('generic functions and interfaces agree with Node', async () => {
   const source = readFileSync(new URL('./corpus/certify/accept/genericCertificates.ts', import.meta.url), 'utf8');
   expect(source).toContain('// certify: required');

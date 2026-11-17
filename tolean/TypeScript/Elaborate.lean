@@ -39,15 +39,54 @@ def constructors (d : ClassDecl) : List (List CtorParam × Stmt) :=
 
 structure Context where
   classes : List ClassDecl
+  aliases : List (String × TypeExpr)
   returns : Types
   self : Option ClassDecl := none
+  expectedReturn : Option TypeExpr := none
 
 def classType (d : ClassDecl) : TypeExpr := .ref d.span d.name []
 
-def exactClass (ctx : Context) : TypeExpr → Option ClassDecl
-  | .ref _ name [] => ctx.classes.find? (·.name == name)
-  | .paren _ t => exactClass ctx t
-  | _ => none
+def exactClassFuel (ctx : Context) : Nat → TypeExpr → Option ClassDecl
+  | 0, _ => none
+  | fuel + 1, .ref _ name [] =>
+    match ctx.classes.find? (·.name == name) with
+    | some d => some d
+    | none => (ctx.aliases.lookup name).bind (exactClassFuel ctx fuel)
+  | fuel + 1, .paren _ t => exactClassFuel ctx fuel t
+  | _, _ => none
+
+def exactClass (ctx : Context) (ty : TypeExpr) : Option ClassDecl :=
+  exactClassFuel ctx 8 ty
+
+def mayBeClassFuel (ctx : Context) : Nat → TypeExpr → Bool
+  | 0, _ => true
+  | fuel + 1, ty =>
+    if (exactClassFuel ctx fuel ty).isSome then true else
+    match ty with
+    | .ref _ name [] =>
+      match ctx.aliases.lookup name with
+      | some alias => mayBeClassFuel ctx fuel alias
+      | none => false
+    | .paren _ inner => mayBeClassFuel ctx fuel inner
+    | .union _ members => members.any (mayBeClassFuel ctx fuel)
+    | .keyword _ "any" | .keyword _ "unknown" => true
+    | _ => false
+
+def containsClassTypeFuel (ctx : Context) : Nat → TypeExpr → Bool
+  | 0, _ => true
+  | fuel + 1, ty =>
+    if (exactClassFuel ctx fuel ty).isSome then true else
+    match ty with
+    | .ref _ name args =>
+      (ctx.aliases.lookup name).any (containsClassTypeFuel ctx fuel) ||
+        args.any (containsClassTypeFuel ctx fuel)
+    | .array _ inner | .paren _ inner => containsClassTypeFuel ctx fuel inner
+    | .union _ members => members.any (containsClassTypeFuel ctx fuel)
+    | .tuple _ _ elems => elems.any (containsClassTypeFuel ctx fuel)
+    | .object _ fs => fs.any fun
+      | .field _ _ _ _ fieldTy => containsClassTypeFuel ctx fuel fieldTy
+    | .predicate _ _ target => containsClassTypeFuel ctx fuel target
+    | _ => false
 
 def paramsEnv (params : List Param) : Types := params.map fun p => (p.name, p.type)
 
@@ -57,7 +96,7 @@ def infer (ctx : Context) (env : Types) : Nat → Expr → Option TypeExpr
     match e with
     | .ident _ name => (env.lookup name).join
     | .this _ => ctx.self.map classType
-    | .new s name [] _ => some (.ref s name [])
+    | .new s name _ _ => some (.ref s name [])
     | .paren _ e | .asConst _ e | .satisfies _ e _ => infer ctx env f e
     | .call _ (.ident _ name) _ =>
       if env.any (·.1 == name) then none else (ctx.returns.lookup name).join
@@ -79,6 +118,40 @@ def infer (ctx : Context) (env : Types) : Nat → Expr → Option TypeExpr
 
 def receiverClass (ctx : Context) (env : Types) (recv : Expr) : Option ClassDecl :=
   (infer ctx env 1000 recv).bind (exactClass ctx)
+
+inductive ReceiverKind where
+  | classInstance (decl : ClassDecl)
+  | nonClass
+  | unresolved
+
+def receiverKind (ctx : Context) (env : Types) (recv : Expr) : ReceiverKind :=
+  match infer ctx env 1000 recv with
+  | none => .unresolved
+  | some ty =>
+    match exactClass ctx ty with
+    | some d => .classInstance d
+    | none => if mayBeClassFuel ctx 8 ty then .unresolved else .nonClass
+
+def constructedClass (ctx : Context) : Expr → Option ClassDecl
+  | .new _ name [] _ => ctx.classes.find? (·.name == name)
+  | _ => none
+
+def hasClassType (ctx : Context) (ty : Option TypeExpr) : Bool :=
+  ty.any (containsClassTypeFuel ctx 8)
+
+def directClassType (ctx : Context) (ty : Option TypeExpr) : Option ClassDecl :=
+  ty.bind (exactClass ctx)
+
+def checkClassBinding (ctx : Context) (s : Span) (d : VarDecl) : Result Unit := do
+  if hasClassType ctx d.type then
+    let some init := d.init
+      | refuse s "class-typed locals must be initialized from a constructed class instance"
+    let some expected := d.type
+      | refuse s "class-typed locals need an explicit type"
+    let some cls := exactClass ctx expected
+      | refuse s "class-typed local aliases must resolve to one class"
+    unless (constructedClass ctx init).any (·.name == cls.name) do
+      refuse s "class-typed locals must be initialized directly with new for the declared class"
 
 def isMethod (ctx : Context) (name : String) : Bool :=
   ctx.classes.any fun d => (methods d).any (·.name == name)
@@ -102,26 +175,33 @@ def expr (ctx : Context) (env : Types) : Nat → Expr → Result Expr
         pure (.call s (.ident s (ctorName name)) args')
       else pure (.new s name ts args')
     | .call s (.member ms recv name) args =>
-      match receiverClass ctx env recv with
-      | some d =>
+      match receiverKind ctx env recv with
+      | .classInstance d =>
         unless (methods d).any (·.name == name) do
           refuse ms "only a declared method can be called on a class instance"
         let recv' ← receiver ctx env f recv
         pure (.call s (.ident ms (methodName d.name name))
           (recv' :: (← args.mapM (expr ctx env f))))
-      | none =>
+      | .unresolved =>
         if isMethod ctx name then
           refuse ms "method receiver must have exactly one statically known class type, not a union, any or an unknown type"
+        pure (.call s (.member ms (← expr ctx env f recv) name) (← args.mapM (expr ctx env f)))
+      | .nonClass =>
         pure (.call s (.member ms (← expr ctx env f recv) name) (← args.mapM (expr ctx env f)))
     | .call s callee args =>
       pure (.call s (← expr ctx env f callee) (← args.mapM (expr ctx env f)))
     | .member s recv name =>
       if name == "constructor" then refuse s "constructor property identity is not supported"
       let recv' ← receiver ctx env f recv
-      if let some d := receiverClass ctx env recv then
+      if let .classInstance d := receiverKind ctx env recv then
         if (methods d).any (·.name == name) then refuse s "class methods may not be extracted as values"
         unless (fields d).any (·.name == name) do refuse s "class instances expose only their readonly fields"
-      else if isMethod ctx name then refuse s "class methods may not be extracted from a receiver of unknown type"
+      else
+        match receiverKind ctx env recv with
+        | .unresolved =>
+          if isMethod ctx name then
+            refuse s "class methods may not be extracted from a receiver of unknown type"
+        | _ => pure ()
       pure (.member s recv' name)
     | .index s recv key | .optIndex s recv key =>
       if (receiverClass ctx env recv).isSome then refuse s "computed class properties are not supported"
@@ -129,7 +209,9 @@ def expr (ctx : Context) (env : Types) : Nat → Expr → Result Expr
       | .index .. => pure (.index s (← expr ctx env f recv) (← expr ctx env f key))
       | _ => pure (.optIndex s (← expr ctx env f recv) (← expr ctx env f key))
     | .optMember s recv name =>
-      if (receiverClass ctx env recv).isSome || isMethod ctx name || name == "constructor" then
+      if (receiverClass ctx env recv).isSome ||
+          ((receiverKind ctx env recv matches .unresolved) && isMethod ctx name) ||
+          name == "constructor" then
         refuse s "optional class property access and method dispatch are not supported"
       pure (.optMember s (← expr ctx env f recv) name)
     | .binary s .instanceof _ _ => refuse s "'instanceof' is not supported by the ordinary-class desugaring"
@@ -151,6 +233,8 @@ def expr (ctx : Context) (env : Types) : Nat → Expr → Result Expr
     | .postfix s op e => pure (.postfix s op (← expr ctx env f e))
     | .cond s t a b => pure (.cond s (← expr ctx env f t) (← expr ctx env f a) (← expr ctx env f b))
     | .arrow s parens ps body =>
+      if ps.any (fun p => hasClassType ctx p.type) then
+        refuse s "source functions may not accept class-typed parameters because callers could pass plain objects"
       pure (.arrow s parens ps (← expr ctx (paramsEnv ps ++ env) f body))
     | .asConst s e => pure (.asConst s (← expr ctx env f e))
     | .satisfies s e t => pure (.satisfies s (← expr ctx env f e) t)
@@ -185,8 +269,16 @@ def stmt (ctx : Context) (env : Types) : Nat → Stmt → Result Stmt
   | f + 1, st => do
     match st with
     | .varDecl s d =>
+      checkClassBinding ctx s d
       pure (.varDecl s { d with init := ← d.init.mapM (expr ctx env f) })
-    | .returnStmt s e => pure (.returnStmt s (← e.mapM (expr ctx env f)))
+    | .returnStmt s e => do
+      if let some expected := ctx.expectedReturn then
+        if let some d := exactClass ctx expected then
+          let some value := e
+            | refuse s "a class-typed function must return a constructed class instance"
+          unless (constructedClass ctx value).any (·.name == d.name) do
+            refuse s "a class-typed function must return new for the declared class, not an object or copy"
+      pure (.returnStmt s (← e.mapM (expr ctx env f)))
     | .exprStmt s e => pure (.exprStmt s (← expr ctx env f e))
     | .block s ss => pure (.block s (← stmts ctx env f ss))
     | .ifStmt s t a b =>
@@ -195,6 +287,7 @@ def stmt (ctx : Context) (env : Types) : Nat → Stmt → Result Stmt
     | .whileStmt s t b => pure (.whileStmt s (← expr ctx env f t) (← stmt ctx env f b))
     | .forStmt s init test update body =>
       let env' := match init with | some d => (d.name, bindingType ctx env d) :: env | none => env
+      init.forM fun d => checkClassBinding ctx s d
       let init' ← init.mapM fun d => do
         pure { d with init := ← d.init.mapM (expr ctx env f) }
       pure (.forStmt s init' (← test.mapM (expr ctx env' f)) (← update.mapM (expr ctx env' f))
@@ -212,8 +305,12 @@ def stmt (ctx : Context) (env : Types) : Nat → Stmt → Result Stmt
       pure (.switchStmt s (← expr ctx env f e) (← clauses.mapM fun (test, body) => do
         pure (← test.mapM (expr ctx env f), ← stmts ctx env f body)))
     | .funDecl s name tps ps rt body =>
+      if ps.any (fun p => hasClassType ctx p.type) then
+        refuse s "source functions may not accept class-typed parameters because callers could pass plain objects"
+      if hasClassType ctx rt && (directClassType ctx rt).isNone then
+        refuse s "functions may not return class instances inside containers because their provenance cannot be checked"
       pure (.funDecl s name tps ps rt
-        (← stmt { ctx with self := none } (paramsEnv ps ++ env) f body))
+        (← stmt { ctx with self := none, expectedReturn := rt } (paramsEnv ps ++ env) f body))
     | _ => pure st
 
 def stmts (ctx : Context) (env : Types) (fuel : Nat) : List Stmt → Result (List Stmt)
@@ -245,6 +342,8 @@ def elaborateClass (ctx : Context) (d : ClassDecl) : Result (List Decl) := do
   let .block _ ss := body | refuse d.span "a constructor needs a block body"
   let assigned ← assignments d.span ss
   let parameterFields ← cps.filterMapM fun p => do
+    if hasClassType ctx p.param.type then
+      refuse p.param.span "constructors may not accept class-typed parameters because callers could pass plain objects"
     if !p.readonly then return none
     let some type := p.param.type
       | refuse p.param.span "a readonly constructor parameter needs a type"
@@ -254,6 +353,8 @@ def elaborateClass (ctx : Context) (d : ClassDecl) : Result (List Decl) := do
   unique d.span "field or method names" (fs.map (·.name) ++ ms.map (·.name))
   unique d.span "constructor assignments" (assigned.map Prod.fst)
   for f in fs do
+    if hasClassType ctx (some f.type) && (exactClass ctx f.type).isNone then
+      refuse f.span "class instances inside field containers are not supported"
     if f.name == "constructor" || f.name == "__proto__" then
       refuse f.span "constructor and __proto__ fields are not supported"
     unless f.readonly && !f.optional do refuse f.span "fields must be required and readonly"
@@ -274,6 +375,9 @@ def elaborateClass (ctx : Context) (d : ClassDecl) : Result (List Decl) := do
   let bindings ← assigned.zipIdx |>.mapM fun ((name, value), index) => do
     let some field := fs.find? (·.name == name)
       | refuse value.span "unknown constructor field"
+    if let some fieldClass := exactClass ctx field.type then
+      unless (constructedClass ctx value).any (·.name == fieldClass.name) do
+        refuse value.span "class-typed fields must receive new for the declared class, not an object or copy"
     let temp := s!"{generatedPrefix}field_{index}"
     let value' ← expr { ctx with self := none } env 1000 value
     pure (name, temp, Stmt.varDecl value.span ⟨.const, temp, some field.type, some value'⟩)
@@ -285,9 +389,14 @@ def elaborateClass (ctx : Context) (d : ClassDecl) : Result (List Decl) := do
   let ctor := Decl.function d.span false (ctorName d.name) [] ps (some (classType d))
     (.block d.span (bindings.map (·.2.2) ++ [.returnStmt d.span (some (.object d.span props))]))
   let methodDecls ← ms.mapM fun m => do
+    if m.params.any (fun p => hasClassType ctx p.type) then
+      refuse m.span "methods may not accept class-typed parameters because callers could pass plain objects"
+    if hasClassType ctx m.returnType && (directClassType ctx m.returnType).isNone then
+      refuse m.span "methods may not return class instances inside containers because their provenance cannot be checked"
     unique m.span "method parameter names" (m.params.map (·.name))
     let selfParam : Param := ⟨m.span, thisName, false, some (classType d)⟩
-    let body' ← stmt { ctx with self := some d } (paramsEnv m.params) 1000 m.body
+    let body' ← stmt { ctx with self := some d, expectedReturn := m.returnType }
+      (paramsEnv m.params) 1000 m.body
     pure (Decl.function m.span false (methodName d.name m.name) []
       (selfParam :: m.params) m.returnType body')
   pure (.interface d.span d.exported d.name [] fs :: ctor :: methodDecls)
@@ -327,14 +436,30 @@ def runChars (chars : List Char) (target : Edition) (m : Module) : Result Module
   let returns := m.decls.filterMap fun
     | .function _ _ name _ _ rt _ => some (name, rt)
     | _ => none
-  let ctx : Context := ⟨classes, returns, none⟩
+  let aliases := m.decls.filterMap fun
+    | .typeAlias _ _ name [] ty => some (name, ty)
+    | _ => none
+  let ctx : Context := ⟨classes, aliases, returns, none, none⟩
   let decls ← m.decls.flatMapM fun
     | .classDecl d => elaborateClass ctx d
     | .function s exported name tps ps rt body => do
-      let body' ← stmt ctx (paramsEnv ps) 1000 body
+      if ps.any (fun p => hasClassType ctx p.type) then
+        refuse s "source functions may not accept class-typed parameters because callers could pass plain objects"
+      if hasClassType ctx rt && (directClassType ctx rt).isNone then
+        refuse s "functions may not return class instances inside containers because their provenance cannot be checked"
+      let body' ← stmt { ctx with expectedReturn := rt } (paramsEnv ps) 1000 body
       pure [.function s exported name tps ps rt body']
     | .stmt s => do pure [Decl.stmt (← stmt ctx [] 1000 s)]
     | .exportedVar s d => do
+      if hasClassType ctx d.type then
+        let some init := d.init
+          | refuse s "class-typed values must be initialized from a constructed class instance"
+        let some expected := d.type
+          | refuse s "class-typed values need an explicit type"
+        let some cls := exactClass ctx expected
+          | refuse s "class-typed aliases must resolve to one class"
+        unless (constructedClass ctx init).any (·.name == cls.name) do
+          refuse s "class-typed values must be initialized directly with new for the declared class"
       pure [.exportedVar s { d with init := ← d.init.mapM (expr ctx [] 1000) }]
     | d => pure [d]
   pure ⟨decls⟩

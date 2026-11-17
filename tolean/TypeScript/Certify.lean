@@ -1702,8 +1702,9 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     "-- A link theorem for a function with a nullable record parameter splits",
     "-- the record into every shape, and `link_tac` unfolds the evaluator in",
     "-- each. That can pass Lean's default budget.",
-    "set_option maxHeartbeats 400000" ++
-      (if hasClasses then "\nset_option maxRecDepth 100000" else ""),
+    (if hasClasses then
+      "set_option maxHeartbeats 4000000\nset_option maxRecDepth 100000"
+      else "set_option maxHeartbeats 400000"),
     "",
     (if hasClasses then "/-- The program after ordinary-class elaboration. -/"
       else "/-- The program, as the parser read it. -/"),
@@ -1726,7 +1727,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       "semantic-preservation theorem for the original JavaScript program. -/\n" ++
       s!"theorem program_elaborated : tolean.TypeScript.Elaborate.runChars sourceChars .{target.name.toLower} parsedProgram = Except.ok program := by\n" ++
       s!"  have hSource : (tolean.TypeScript.Elaborate.checkSource sourceChars .{target.name.toLower}).toBool = true := by decide +kernel\n" ++
-      "  simp [tolean.TypeScript.Elaborate.runChars, parsedProgram, program,\n" ++
+       "  simp (config := { maxSteps := 500000 }) [tolean.TypeScript.Elaborate.runChars, parsedProgram, program,\n" ++
       "    tolean.TypeScript.Elaborate.checkSource_eq_of_checked hSource,\n" ++
       "    tolean.TypeScript.Elaborate.elaborateClass, tolean.TypeScript.Elaborate.constructors,\n" ++
       "    tolean.TypeScript.Elaborate.assignments, tolean.TypeScript.Elaborate.declaredFields,\n" ++
@@ -1734,11 +1735,19 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       "    tolean.TypeScript.Elaborate.paramsEnv, tolean.TypeScript.Elaborate.expr,\n" ++
       "    tolean.TypeScript.Elaborate.receiver, tolean.TypeScript.Elaborate.stmt,\n" ++
       "    tolean.TypeScript.Elaborate.stmts, tolean.TypeScript.Elaborate.infer,\n" ++
-      "    tolean.TypeScript.Elaborate.receiverClass, tolean.TypeScript.Elaborate.exactClass,\n" ++
+       "    tolean.TypeScript.Elaborate.receiverClass, tolean.TypeScript.Elaborate.receiverKind,\n" ++
+       "    tolean.TypeScript.Elaborate.checkClassBinding, tolean.TypeScript.Elaborate.hasClassType,\n" ++
+       "    tolean.TypeScript.Elaborate.constructedClass, tolean.TypeScript.Elaborate.directClassType,\n" ++
+       "    tolean.TypeScript.Elaborate.containsClassTypeFuel, tolean.TypeScript.Elaborate.mayBeClassFuel,\n" ++
+       "    tolean.TypeScript.Elaborate.exactClass,\n" ++
+       "    tolean.TypeScript.Elaborate.exactClassFuel,\n" ++
       "    tolean.TypeScript.Elaborate.fields, tolean.TypeScript.Elaborate.classType,\n" ++
       "    tolean.TypeScript.Elaborate.ctorName, tolean.TypeScript.Elaborate.methodName,\n" ++
       "    tolean.TypeScript.Elaborate.generatedPrefix, tolean.TypeScript.Elaborate.thisName,\n" ++
-      "    List.eraseDups_cons] <;> rfl"
+       "    List.eraseDups_cons, List.filterMap_cons, List.find?_cons,\n" ++
+       "    List.filterMap_nil, List.isEmpty_cons, List.isEmpty_nil,\n" ++
+       "    List.findSome?_cons, List.any_cons, List.lookup, Option.isSome,\n" ++
+       "    Bool.false_eq_true, Bool.true_eq_false, if_false, if_true] <;> rfl"
       else ""),
     "",
     "/-- The Tolean IR, as the translator gives it for the program. -/",
@@ -1759,11 +1768,12 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
 /-- The functions of `source` that get a certificate, and whether that is all
 of them. -/
 def certifiedFunctions (source : String) (target : Edition := .default) :
-    Except String (List String × Bool) := do
-  let m ← (parse source target).mapError (·.message)
-  let m ← Elaborate.run source target m
+    Except String (List String × Bool × Bool) := do
+  let parsed ← (parse source target).mapError (·.message)
+  let hasClasses := parsed.decls.any fun | .classDecl _ => true | _ => false
+  let m ← Elaborate.run source target parsed
   let all := m.decls.filterMap fun | .function _ _ n .. => some n | _ => none
   let fns := certifiable m
-  return (fns, fns.length == all.length)
+  return (fns, fns.length == all.length, hasClasses)
 
 end tolean.TypeScript.Certify

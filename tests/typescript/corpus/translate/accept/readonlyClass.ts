@@ -1,4 +1,5 @@
 // certify: required
+// certify: required
 export class Counter {
   readonly value: bigint;
   constructor(value: bigint) { this.value = value; }
@@ -6,6 +7,6 @@ export class Counter {
 }
 
 export function add(x: bigint, y: bigint): bigint {
-  const c = new Counter(x);
+  const c: Counter = new Counter(x);
   return c.plus(y);
 }

@@ -25,6 +25,19 @@ method. The pass tracks parameter annotations, local annotations, constructor
 results, annotated function and method results, and class field types. It
 does not claim to implement TypeScript's full type inference.
 
+The pass preserves class-instance provenance before it erases methods. A
+class-typed local or result must use a direct `new C` expression. A plain
+object, a function result, or a spread copy cannot acquire class provenance
+from its annotation. A type alias to a class keeps that identity when the pass
+checks calls and spreads. Source functions, methods, and constructors cannot
+accept class-typed parameters, because callers could supply an object with
+matching fields but no class prototype.
+
+An inferred receiver with a known non-class type keeps its normal operation.
+For example, `Map.get` remains valid when an unrelated class also declares a
+`get` method. An unknown or possibly class-typed receiver still cannot use
+static class dispatch.
+
 ## What is proved
 
 The ordinary-class parser has separate token round-trip theorems for fields,
@@ -40,14 +53,20 @@ produces the literal lowered module used in the translation theorem. This
 establishes which tree the pass produces. It is not a proof that elaboration
 preserves the semantics of the original class program.
 
+The certificate chain records these as separate facts. It keeps the structural
+`program_elaborated` theorem, then records the semantic-preservation boundary
+as tested against Node. The translator stays tested rather than proved for a
+class-bearing file.
+
 ## What Node checks
 
 `tests/typescript/interpreter.test.ts` runs original class programs in Node and
 compares their results with interpretation after elaboration. Cases cover
 construction, inferred local receiver types, explicit receiver annotations,
 method calls on `this`, constructor assignment order, parameter properties,
-and class results passed through annotated functions. These comparisons test
-the semantic boundary that the Lean theorem does not yet prove. They do not
+class results passed through annotated functions, rejection of plain objects
+and copies, and unrelated `Map.get` dispatch. These comparisons test the
+semantic boundary that the Lean theorem does not yet prove. They do not
 establish semantic preservation for every accepted program.
 
 ## Refusals
@@ -59,6 +78,9 @@ duplicate assignments, extracted methods, computed class properties,
 bare `this`, including a return of it or an argument that passes it out.
 An arrow may read a field through lexical `this`; a nested ordinary function
 cannot borrow the enclosing method's receiver.
+It also refuses class-typed source parameters, nested class values in
+containers, and class-typed locals that do not use a direct constructor
+expression.
 
 The remaining translator checks still apply after elaboration. In particular,
 this work does not introduce mutable object aliases, prototype mutation,
