@@ -5,6 +5,7 @@ import tolean.TypeScript.Spec.BigInt
 import tolean.TypeScript.Spec.Date
 import tolean.TypeScript.Spec.Number
 import tolean.TypeScript.Spec.String
+import tolean.TypeScript.Spec.Record
 
 /-!
 The meaning of the translated TypeScript subset, as an interpreter in Lean.
@@ -240,6 +241,17 @@ def getKey (fields : List (String × Val N)) (key : JSString) : Option (Val N) :
   match (fields.find? fun p => JSString.ofString p.1 == key).map (·.2) with
   | some v => some v
   | none => if objectPrototypeNames.any (fun n => JSString.ofString n == key) then none else some .undefined
+
+/-- Object.keys and Object.entries use OrdinaryOwnPropertyKeys
+(ECMA-262 §10.1.11.1, §20.1.2.19 and §20.1.2.5). -/
+def recordProperties (fields : List (String × Val N)) (entries : Bool) : Val N :=
+  .list ((orderedRecordEntries fields).map fun (key, value) =>
+    if entries then .list [.str (JSString.ofString key), value] else .str (JSString.ofString key))
+
+/-- Object.hasOwn tests the object's own properties, not its prototype
+(ECMA-262 §20.1.2.13). -/
+def recordOwn (fields : List (String × Val N)) (key : JSString) : Bool :=
+  (fields.find? fun entry => JSString.ofString entry.1 == key).isSome
 
 /-- Set the property `key` of an object with the fields `fields` to `v`
 (`CreateDataProperty` on an ordinary object, ECMA-262 §7.3.5 and §10.1.6.3):

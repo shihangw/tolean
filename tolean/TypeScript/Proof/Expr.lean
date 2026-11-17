@@ -5362,6 +5362,8 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
         simp only [hel] at h
         simp at h
         obtain ⟨_, _, ⟨rfl, rfl⟩, keyRef, keys, ty, _, ⟨-, rfl⟩, k, s₃, hk, h⟩ := h
+        generalize (if keyRef.file = IR.dictionaryRef.file ∧ keyRef.name = IR.dictionaryRef.name
+          then Ty.string else .enum keyRef) = keyType at hk h
         split at h
         · simp only [pure_ok] at h
           obtain ⟨rfl, -⟩ := h

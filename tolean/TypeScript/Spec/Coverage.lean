@@ -152,6 +152,7 @@ def sections : List Section := [
   ⟨"sec-grouping-operator", "13.2.9", "The Grouping Operator",
     [``Proof.eval_stripParens, ``Syntax.Expr.sizeOf_stripParens_le]⟩,
   ⟨"sec-property-accessors", "13.3.2", "Property Accessors", [``Proof.translateMember_sound, ``Eval.eval_index_str, ``Eval.getKey_ofString, ``Eval.find?_fst_lookup,
+    ``Eval.getKey_success_iff, ``Eval.getKey_eq_of_success, ``Eval.getKey_encRecord_of_success,
     ``Coverage.index_lone_surrogate]⟩,
   ⟨"sec-function-calls", "13.3.6", "Function Calls",
     [``Proof.eval_call, ``Proof.eval_stringCall, ``Proof.out_call, ``Proof.evalCall_eq, ``Proof.out_evalCall, ``Proof.bind_toOption,

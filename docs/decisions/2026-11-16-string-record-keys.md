@@ -1,44 +1,65 @@
-# String-keyed records need a lookup condition
+# String-keyed records use ordered association lists
 
-We intend to accept `Record<string, V>`, both as a named type and in place.
-`Readonly` does not change its runtime meaning. A lookup has type
-`V | undefined`, as it does under `noUncheckedIndexedAccess`.
+`Record<string, V>` uses an ordered association list rather than a structure
+with a fixed set of fields. Named types, inline types and `Readonly` forms
+share this representation. Static object literals supply the properties.
+A lookup has type `V | undefined`, as it does under
+`noUncheckedIndexedAccess`.
 
-A dynamic lookup must carry a condition in its certificate and in
-`program_sound`: the key is an own key of the record, or it is not a name
-on `Object.prototype`. JavaScript can otherwise return an inherited
-function rather than a value of type `V`. The condition must describe the
-record and key at the lookup, not merely the function's initial arguments.
+Lookup compares UTF-16 code units without decoding the key. This matters
+because a lone surrogate must not turn into a replacement character and
+accidentally find a different property.
 
-An `Object.hasOwn(record, key)` guard discharges that condition.
-Iteration through `Object.keys` or `Object.entries` also establishes that
-the key is an own key. These forms should need no extra hypothesis.
-The guide should teach the guarded form when it is supported.
-Literal inherited names, such as `toString` and `constructor`, stay refused
-for these dictionaries. Record literals with `__proto__` stay refused
-because that spelling can set the prototype rather than an own property.
+## Lookup certificates
 
-## Current boundary
+A dictionary lookup needs the condition that the key is own or is not a
+name on `Object.prototype`. Otherwise JavaScript can return an inherited
+function rather than a value of type `V`. The source evaluator and the IR
+evaluator already return no result for an absent inherited name.
 
-This change improves the refusal instead of enabling dictionary operations.
-The existing translation represents a record as a structure with a fixed
-list of fields. Its `recordIndex` requires a declared literal union, and
-`recordGet` selects one of those fields. That representation cannot store
-an arbitrary runtime key set.
+Functions with an unguarded dynamic lookup receive a conditional printer
+link. Its premise says that the IR run on the encoded inputs returns a
+result. The final certificate takes that same premise and applies the
+existing `decls_sound` theorem. No converse compiler theorem or new
+`program_sound` premise is needed.
 
-The source evaluator already distinguishes absent own properties from
-inherited properties in `Spec.getKey`. Reusing a map lookup that returns
-`undefined` for every missing key would disagree with that evaluator.
-Accepting string keys requires a dictionary representation and a proof
-that transports the lookup condition through branches and calls.
-Neither is supplied here, so named and inline string-keyed records remain
-refused, including their `Readonly` forms. Naming the type does not solve
-this problem, and the diagnostic now says so.
+`getKey_success_iff` states the local condition precisely.
+`getKey_encRecord_of_success` relates a successful evaluator lookup to the
+total Option lookup in the printed model. In an otherwise total certified
+function, the new premise therefore excludes exactly the absent inherited
+lookup case. It applies to the actual run, not just the initial arguments.
 
-No runtime feature or edition is added in this slice. A later implementation
-must record `OrdinaryGet` (ECMA-262 2024 §10.1.8.1) and
-`Object.hasOwn` (§20.1.2.13, introduced in ES2022) in `Edition.lean`,
-cover the operations through `program_sound`, and compare them with
-JavaScript in `interpreter.test.ts`. It must also test keys from
-`Object.keys` and `Object.entries`, missing keys, inherited names, and
-the order of own keys.
+Certificates for functions without these lookups retain their existing
+unconditional statements and proof text. The intended guarded forms are
+`if (Object.hasOwn(record, key))` and iteration over the record's own keys
+or entries. These forms need no extra premise when the certificate
+generator can recognize the ownership evidence.
+
+Literal inherited names, such as `toString` and `constructor`, remain
+refused for dictionary lookups. Object literals with `__proto__` also
+remain refused because that spelling can set the prototype instead of
+creating an own property.
+
+## Own-key order
+
+`Object.keys` and `Object.entries` must use the same order as JavaScript:
+array-index names in ascending numeric order, followed by other names in
+insertion order. An array-index name is a canonical decimal spelling below
+2^32 - 1. Thus `01`, `-0` and `4294967295` are not array-index names.
+The evaluator and the printed model share the ordering implementation.
+
+The relevant operations are `OrdinaryGet` (ECMA-262 2024 §10.1.8.1),
+`OrdinaryOwnPropertyKeys` (§10.1.11.1), and `Object.hasOwn`
+(§20.1.2.13). The last operation requires ES2022.
+
+## Implementation checkpoint
+
+The first runtime checkpoint accepts named and inline dictionaries,
+identifier-keyed literals, and dynamic indexing. Its translator and
+certificate generator compile, and the generated dictionary definitions
+compile. It also supplies the own-key model and the lookup lemmas.
+
+This checkpoint is not the completed feature. Object-operation dispatch,
+guarded and iteration certificate proofs, quoted literal keys, and the
+full certificate and Node comparisons still need validation. The draft
+pull request must remain a draft until those checks pass.

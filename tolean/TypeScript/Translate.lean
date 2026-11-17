@@ -1173,9 +1173,9 @@ def translateType (t : TypeExpr) : TM Ty := do
       | t => return .optional t
     | _, _ => unsupportedType t
   | .array _ elem => return .array (← translateType elem)
-  | .ref _ "Record" [.keyword s "string", _]
-    | .ref _ "Readonly" [.ref _ "Record" [.keyword s "string", _]] =>
-    reject s "Record<string, V> is not supported yet: dynamic string lookup needs a certificate condition for inherited Object.prototype properties; naming the Record does not remove this requirement"
+  | .ref _ "Record" [.keyword _ "string", value]
+    | .ref _ "Readonly" [.ref _ "Record" [.keyword _ "string", value]] =>
+    return .struct IR.dictionaryRef [← translateType value]
   | .ref _ "Record" [_, _] | .ref _ "Readonly" [.ref _ "Record" [_, _]] =>
     reject t.span "a Record type needs a name; declare it as a type, such as type T = Record<K, V>"
   | .ref _ name [elem] =>
@@ -1819,6 +1819,8 @@ def numberConstant? : String → Option IR.NumberConstant
 keys, and `V`. The file must declare or import `K`, so that the output can
 name its constructors. -/
 def recordIndex (c : Ctx) : Ty → Option (DeclRef × List String × Ty)
+  | .struct ref [value] =>
+    if ref == IR.dictionaryRef then some (ref, [], .optional value) else none
   | .struct ref [] => do
     let info ← c.knownStructs.find? (·.ref == ref)
     let key ← info.key
@@ -1826,6 +1828,42 @@ def recordIndex (c : Ctx) : Ty → Option (DeclRef × List String × Ty)
     let (_, type) ← info.fields.head?
     return (key, info.fields.map (·.1), type)
   | _ => none
+
+/-- A literal inherited name is refused even when a particular dictionary
+could have an own property with that name. -/
+def inheritedRecordKey : Expr → Bool
+  | .string _ key => Eval.objectPrototypeNames.contains key
+  | .paren _ key => inheritedRecordKey key
+  | _ => false
+
+/-- A dictionary literal supplies its own fields rather than fixing them
+in a declaration. The existing object-literal checks still check each value,
+reject duplicate names and reject prototype setters. -/
+def dictionaryInfo (ref : DeclRef) (args : List Ty) (props : List Property) : Option StructInfo := do
+  unless ref == IR.dictionaryRef do none
+  let [value] := args | none
+  let fields ← props.mapM fun
+    | .shorthand _ name | .keyValue _ (.ident name) _ => some (name, value)
+    | _ => none
+  return { file := ref.file, name := ref.name, fields }
+
+/-- Object operations on string-keyed dictionaries. Only hasOwn consults a
+second argument; all three operations ignore inherited properties. -/
+def translateDictionaryCall (tr : Expr → TM Code) (s : Span)
+    (method : String) (args : List Expr) : TM Code := do
+  let obj :: rest := args | reject s "an Object dictionary operation needs a record"
+  let record ← tr obj
+  let .struct ref [value] := record.type | reject s "the Object operation needs a Record<string, V>"
+  unless ref == IR.dictionaryRef do reject s "the Object operation needs a Record<string, V>"
+  match method, rest with
+  | "keys", [] => return ⟨.ext .recordKeys [record.value], false, .array .string⟩
+  | "entries", [] => return ⟨.ext .recordEntries [record.value], false, .array (.tuple [.string, value])⟩
+  | "hasOwn", [key] =>
+    requireFeature s .objectHasOwn
+    let key ← tr key
+    unless key.type == .string do reject s "Object.hasOwn needs a string key"
+    return ⟨.ext .recordHasOwn [record.value, key.value], false, .boolean⟩
+  | _, _ => reject s "use Object.keys(record), Object.entries(record), or Object.hasOwn(record, key)"
 
 /-! ### Expressions -/
 
@@ -2909,8 +2947,12 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
       let (keyRef, keys, type) ← orReject (recordIndex (← get) o.type) s
         ("only an array, a tuple, or a value of a Record type, such as type T = Record<K, V>, whose key type K " ++
           "this file declares or imports, may be indexed")
-      let k ← translateExpr fuel env (some (.enum keyRef)) key
-      unless k.type == .enum keyRef do reject key.span "the key must have the key type of the Record"
+      let keyType := if keyRef == IR.dictionaryRef then Ty.string else .enum keyRef
+      let k ← translateExpr fuel env (some keyType) key
+      unless k.type == keyType && !(keyRef == IR.dictionaryRef && inheritedRecordKey key) do
+        reject key.span (if keyRef == IR.dictionaryRef then
+          "the key must be a string and may not be a literal Object.prototype name"
+          else "the key must have the key type of the Record")
       return ⟨.ext (.recordGet keyRef keys) [o.code, k.value], false, type⟩
   | .unary s op arg =>
     if op == .neg && arg.isInfinity && !env.has "Infinity" then
@@ -3362,7 +3404,8 @@ def translateObject (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (
     let c ← translateObject fuel env (some member) s props
     return ⟨.inject uref tag c.code, false, .tagged uref tags⟩
   let some (.struct ref args) := expected | reject s notStructMessage
-  let info ← orReject (ctx.knownStructs.find? (·.ref == ref)) s notStructMessage
+  let info ← orReject ((ctx.knownStructs.find? (·.ref == ref)).orElse
+    fun _ => dictionaryInfo ref args props) s notStructMessage
   let structName := ref.name
   -- The keys seen so far, and the fields translated so far.
   let (seen, parts) ← props.foldlM (init := (([] : List String), ([] : List (String × IR.Expr))))
@@ -4748,9 +4791,11 @@ def isNameUnion : TypeExpr → Bool
     | _ => false
   | _ => false
 
-/-- The key type and the value type of `Record<K, V>`, or of
-`Readonly<Record<K, V>>`. -/
+/-- The key and value types of a fixed-key Record. String-keyed records use
+the ordinary alias path because their runtime type needs no declaration. -/
 def recordArgs : TypeExpr → Option (TypeExpr × TypeExpr)
+  | .ref _ "Record" [.keyword _ "string", _]
+    | .ref _ "Readonly" [.ref _ "Record" [.keyword _ "string", _]] => none
   | .ref _ "Record" [k, v] | .ref _ "Readonly" [.ref _ "Record" [k, v]] => some (k, v)
   | _ => none
 
@@ -5620,7 +5665,7 @@ def translateWith (file source ns : String) (target : Edition := .default)
   -- namespace, so it must know the file. The translator only names files it
   -- sees, and this check keeps a later change from printing a bare name.
   if let some r := (decls.flatMap IR.Decl.refs).find? fun r =>
-      r.file != file && (deps.lookup r.file).isNone then
+      r != IR.dictionaryRef && r.file != file && (deps.lookup r.file).isNone then
     throw s!"{file}: the output names '{r.name}' of '{r.file}', a file that it does not see"
   let imports := (importedFiles file m).filterMap fun f => (deps.lookup f).map (s!"import {·.module}")
   -- A string is a `JSString`, which the output names only in a file that
@@ -5646,6 +5691,8 @@ def translateWith (file source ns : String) (target : Edition := .default)
      else if usesString then ["import tolean.TypeScript.Spec.String"] else []) ++
     (if usesBigInt then ["import tolean.TypeScript.Spec.BigInt"] else []) ++
     (if usesMap then ["import tolean.TypeScript.Map"] else []) ++
+    (if decls.any (fun d => d.refs.contains IR.dictionaryRef) then
+      ["import tolean.TypeScript.Spec.Record"] else []) ++
     (if usesRegExp then ["import tolean.TypeScript.Spec.RegExp"] else []) ++
     (if usesNullish then ["import tolean.TypeScript.Spec.Nullish"] else []) ++
     (if decls.any (IR.Decl.recursive names.file) then ["import tolean.TypeScript.Decreasing"] else []) ++

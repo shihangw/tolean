@@ -905,6 +905,10 @@ class PrintTy (T : Type) where
   /-- The name of the type of a set that keeps its elements in insertion
   order, which takes the element type, such as `JSSet`. -/
   set : Names → String
+  /-- A language may represent an object with a runtime container rather
+  than a generated Lean structure. The fields are already printed terms. -/
+  structLiteral : Names → DeclRef → String → List (String × String) → Option String :=
+    fun _ _ _ _ => none
 
 /-- How a language prints the operations it adds, given its arguments as
 printed code. -/
@@ -1328,7 +1332,11 @@ def Expr.print (names : Names) : Expr T E → String
     s!"([{", ".intercalate (Expr.printList names elems)}] : {(Ty.list elem).print names})"
   | .struct fields ref args =>
     let type : Ty T := if args.isEmpty then .struct ref else .app ref args
-    "({ " ++ ", ".intercalate (Expr.printFields names fields) ++ " } : " ++ type.print names ++ ")"
+    match PrintTy.structLiteral (T := T) names ref (type.print names)
+        (Expr.printFieldPairs names fields) with
+    | some literal => literal
+    | Option.none =>
+      "({ " ++ ", ".intercalate (Expr.printFields names fields) ++ " } : " ++ type.print names ++ ")"
   | .isNone a => s!"{argument (a.print names)}.isNone"
   | .isSome a => s!"{argument (a.print names)}.isSome"
   | .matchNull name whenNull whenValue kind =>
@@ -1377,6 +1385,10 @@ def Expr.print (names : Names) : Expr T E → String
 def Expr.printList (names : Names) : List (Expr T E) → List String
   | [] => []
   | e :: es => e.print names :: Expr.printList names es
+
+def Expr.printFieldPairs (names : Names) : List (String × Expr T E) → List (String × String)
+  | [] => []
+  | (key, value) :: rest => (key, value.print names) :: Expr.printFieldPairs names rest
 
 def Expr.printFields (names : Names) : List (String × Expr T E) → List String
   | [] => []
