@@ -103,6 +103,7 @@ private def theoremErr (env : Environment) (at_ name : String) (spec : Option St
 
 private def proofs (l : Loaded) : IO (List String) := do
   let mods := (l.project.claims.map (·.module) ++
+    l.project.obligations.map (·.module) ++
     (allNodes l).filterMap fun (_, n) => if n.status == .proved then n.module else none).eraseDups
   if mods.isEmpty then return []
   initSearchPath (← findSysroot)
@@ -113,7 +114,10 @@ private def proofs (l : Loaded) : IO (List String) := do
     match n.status, n.«theorem» with
     | .proved, some t => theoremErr env id t none n.axioms
     | _, _ => none
-  return claimErrs ++ nodeErrs
+  let obligationErrs := l.project.obligations.filterMap fun o =>
+    theoremErr env s!"obligation {o.spec}" o.proof (some o.spec)
+      ["propext", "Classical.choice", "Quot.sound"]
+  return claimErrs ++ nodeErrs ++ obligationErrs
 
 private def references (l : Loaded) : List String :=
   let known := (allNodes l).map (·.1) ++ l.files.map (·.2.module) ++ l.project.claims.map (·.id)
@@ -127,7 +131,7 @@ def check (path : System.FilePath) (passed : List String) : IO UInt32 := do
   let errs := (← freshness l) ++ evidence l passed ++ references l ++ (← proofs l)
   for e in errs do IO.eprintln e
   if errs.isEmpty then
-    IO.println s!"{l.files.length} files, {(allNodes l).length} nodes, {l.project.claims.length} claims: the chain holds"
+    IO.println s!"{l.files.length} files, {(allNodes l).length} nodes, {l.project.claims.length} claims, {l.project.obligations.length} obligations: the chain holds"
     return 0
   return 1
 

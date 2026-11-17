@@ -8,6 +8,26 @@ models JS numbers, and what is proved and what is trusted. The
 [This graph](verification.svg) shows the verification chain for TypeScript. It
 marks which links are proved, tested against a reference, or trusted.
 
+## Project proof obligations
+
+The project chain manifest accepts an optional `obligations` list. Each
+entry has `spec`, `proof` and `module` fields. `spec` names a Lean definition
+of a proposition. `proof` names a theorem whose type is exactly that
+definition, and `module` names the module to import.
+
+Build the proof module first, then run `lake env tolean chain check` with
+the path to the project chain manifest. The checker follows the theorem's
+dependencies and accepts only `propext`, `Classical.choice` and `Quot.sound`.
+Unlike a claim, an obligation cannot supply its own axiom allowlist.
+Proofs that depend on `sorryAx` fail this check.
+
+This is a checker for supplied proofs, not yet a way to extend the supported
+TypeScript subset. The translator still refuses arbitrary sort comparators.
+It does not generate obligation statements or use these entries in
+`program_sound`. See the
+[decision](../decisions/2026-11-17-project-proof-obligations.md) for the
+remaining certificate work.
+
 ## The translator
 
 ### Parsing
@@ -530,12 +550,17 @@ They do not accept extensionless imports even in a CommonJS project.
 Raw Node type stripping still needs `.ts`; use the matching TypeScript
 build or bundler when running code that uses the other spellings.
 
-Tolean loads relative `extends` chains inside the project. A base path is
+Tolean loads relative `extends` chains, including shared bases outside the
+directory that contains `tolean.json`. A base path is
 relative to the config that declares it, and may omit `.json`. An array of
 bases follows TypeScript 5's order: later bases override earlier ones, then
 the child overrides each inherited compiler option. A cycle or missing base
-is an error. Package names in `extends`, absolute paths and bases outside
-the project remain refused. Use a relative config inside the project instead.
+is an error. Package names in `extends` and absolute paths remain refused.
+Each inherited config is recorded by its relative path and SHA-256 hash in
+the translation manifest. Workspace hosts must supply the base files too,
+using paths relative to the project root, such as `../../tsconfig.base.json`.
+The workspace result reports these inputs in `configInputs`. This does not
+allow imports or source globs to reach outside the project.
 
 Tolean checks the merged options before it resolves imports. It refuses
 `moduleSuffixes` and `rootDirs`, including inherited settings, because they
@@ -543,7 +568,7 @@ can select a different relative import target. `paths` and `baseUrl` do not
 enable nonrelative imports. Other compiler options and source-selection
 settings do not change Tolean's project settings: `tolean.json` still lists
 the sources. The
-[inheritance decision](../decisions/2026-11-15-tsconfig-extends.md) explains
+[external config inputs decision](../decisions/2026-11-17-external-tsconfig-inputs.md) explains
 this boundary.
 
 - An import must name a relative path to a translated `.ts` file. Tolean

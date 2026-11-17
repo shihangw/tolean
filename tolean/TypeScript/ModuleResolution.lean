@@ -59,19 +59,56 @@ def parseConfig (path text : String) : Except String Json := do
     unless o matches .obj _ do throw s!"{path}: compilerOptions must be an object"
   return j
 
-/-- Config paths are relative to the declaring config, never to its child.
-The workspace boundary is shared by the native and browser hosts. -/
-def basePath (files : List String) (path base : String) : Except String String := do
+/-- Config paths may leave the project. This normalization is not used for imports. -/
+def configPath (path base : String) : Except String String := do
   unless base.startsWith "./" || base.startsWith "../" do
-    throw s!"{path}: package or absolute extends '{base}' is not supported; use a relative config inside the project"
+    throw s!"{path}: package or absolute extends '{base}' is not supported; use a relative config"
   if base.any fun c => c == '\\' || c == '$' then
     throw s!"{path}: unsupported extends path '{base}'"
-  let some parts := Eval.normalizeSegments (path.splitOn "/").dropLast (base.splitOn "/")
-    | throw s!"{path}: extends '{base}' leaves the project"
-  let name := "/".intercalate parts
+  let parts := ((path.splitOn "/").dropLast ++ base.splitOn "/").foldl
+    (fun acc part =>
+      if part == "." || part == "" then acc
+      else if part == ".." && !acc.isEmpty && acc.getLast? != some ".." then acc.dropLast
+      else acc ++ [part]) ([] : List String)
+  return "/".intercalate parts
+
+def basePath (files : List String) (path base : String) : Except String String := do
+  let name ← configPath path base
   if files.contains name then return name
   if !name.endsWith ".json" && files.contains (name ++ ".json") then return name ++ ".json"
   throw s!"{path}: extends '{base}' has no config file"
+
+/-- The host supplies config text, including bases outside the project.
+Only files reached through inheritance enter this input snapshot. -/
+def collectConfigs {m : Type → Type} [Monad m] [MonadExceptOf String m]
+    (read : String → m (Option String)) :
+    Nat → List String → String → StateT (List (String × String)) m Unit
+  | 0, _, path => throw s!"{path}: config inheritance exceeds 1024 levels"
+  | fuel + 1, stack, path => do
+    if stack.contains path then
+      throw s!"{path}: config extends cycle: {" -> ".intercalate (stack.reverse ++ [path])}"
+    if ((← get).lookup path).isSome then return
+    let some text ← liftM (read path) | throw s!"{path}: no config file"
+    let j ← match parseConfig path text with
+      | .ok j => pure j
+      | .error e => throw e
+    let bases ← match (j.getObjVal? "extends").toOption with
+      | none => pure []
+      | some (.str s) => pure [s]
+      | some (.arr xs) => xs.toList.mapM fun x => match x with
+        | .str s => pure s
+        | _ => throw s!"{path}: extends must be a string or an array of strings"
+      | some _ => throw s!"{path}: extends must be a string or an array of strings"
+    for base in bases do
+      let name ← match configPath path base with
+        | .ok name => pure name
+        | .error e => throw e
+      let target ← if (← liftM (read name)).isSome then pure name
+        else if !name.endsWith ".json" && (← liftM (read (name ++ ".json"))).isSome then
+          pure (name ++ ".json")
+        else throw s!"{path}: extends '{base}' has no config file"
+      collectConfigs read fuel (path :: stack) target
+    modify (· ++ [(path, text)])
 
 -- Only completed configs enter the cache. The separate active stack still
 -- detects cycles, while shared ancestors are read and merged once.
