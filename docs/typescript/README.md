@@ -1203,13 +1203,15 @@ yet describe the final map as the function's result.
 
 ### Indexed access types
 
-Indexed access types such as `Shape['kind']` remain refused, even when
-`Shape` is a declared interface and `kind` names an existing field.
-Nested access, unions of keys, `keyof`, numeric keys and generic receivers
-are also refused. This limitation concerns type annotations, not runtime
-array indexing.
+An indexed access type such as `Shape['kind']` resolves to the type of that
+field. The receiver must resolve to a known interface or object type, which
+may be imported or named through a type alias. Nested access such as
+`Envelope['shape']['kind']` repeats the lookup. Optional fields retain
+`undefined` in their type.
 
-Declare a named field type to avoid repeating a literal union:
+An anonymous literal union in an interface field remains refused because
+the translator needs a name for its Lean inductive type. Declare that union
+as a named type:
 
 ```ts
 export type Kind = 'circle' | 'square';
@@ -1219,16 +1221,19 @@ export interface Shape {
   readonly size: number;
 }
 
-export function hasKind(s: Shape, kind: Kind): boolean {
+export function hasKind(s: Shape, kind: Shape['kind']): boolean {
   return s.kind === kind;
 }
 ```
 
-An anonymous literal union in a field is a separate limitation: the
-translator needs a name for its Lean inductive type. Naming `Kind` addresses
-both limitations in this example. The
+Only a literal string key is supported. Unions of keys, `keyof` and numeric
+keys remain refused. A missing field is an error. An unconstrained generic
+receiver such as `T['kind']`, a union receiver, and a nullable or optional
+intermediate receiver are also refused because they do not resolve to one
+known structure. This feature concerns type annotations, not runtime
+array indexing. The
 [decision record](../decisions/2026-11-16-indexed-access-types.md)
-describes what must change before indexed access types can be accepted.
+describes the static lookup and its proof coverage.
 
 ## Numbers
 

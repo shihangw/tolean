@@ -483,14 +483,14 @@ test(`the interpreter agrees with Node ${process.version} on random programs`, a
   expect(failures).toEqual([]);
 }, 600_000);
 
-test('a named field type shares a literal union with a parameter', async () => {
+test('indexed access resolves the named literal union of a field', async () => {
   const source = `
     export type Kind = 'circle' | 'square';
     export interface Shape {
       readonly kind: Kind;
       readonly size: number;
     }
-    export function hasKind(s: Shape, kind: Kind): boolean {
+    export function hasKind(s: Shape, kind: Shape['kind']): boolean {
       return s.kind === kind;
     }
   `;

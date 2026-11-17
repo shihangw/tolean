@@ -1052,6 +1052,12 @@ class Printer {
     if (ts.isArrayTypeNode(t)) {
       return this.node('type-array', t, [], [this.type(t.elementType)]);
     }
+    if (ts.isIndexedAccessTypeNode(t)) {
+      if (!ts.isLiteralTypeNode(t.indexType) || !ts.isStringLiteral(t.indexType.literal)) {
+        refuse(t, 'an indexed access type requires one literal string key');
+      }
+      return this.node('type-indexed', t, [JSON.stringify(t.indexType.literal.text)], [this.type(t.objectType)]);
+    }
     if (ts.isUnionTypeNode(t)) {
       return this.node('type-union', t, [], t.types.map((m) => this.type(m)));
     }

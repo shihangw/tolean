@@ -1,3 +1,3 @@
-// expect: 3:20 indexed access types are not supported
+// expect: 3:21 an indexed access type requires one literal string key
 interface Shape { readonly kind: string; readonly size: number; }
 type Values = Shape[keyof Shape];
