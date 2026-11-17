@@ -38,6 +38,11 @@ runtime too. The remaining function declaration uses `FunctionDeclaration`
 §13.3.6.2). These operations exist in every supported target, so generic
 certificates add no edition gate.
 
+Structural recursion adds no runtime operation. Its calls use `EvaluateCall`
+(ES2015 §12.3.4, ES2024 §13.3.6.2), and recursive interfaces erase with the
+other TypeScript type declarations. Every supported edition specifies the
+runtime operation.
+
 Guard calls use `EvaluateCall` (ES2024 §13.3.6.2), and their branches use
 `IfStatement` (§14.6). A primitive guard uses `typeof` (§13.5.3). These
 operations also exist in ES2015, the oldest target.

@@ -245,6 +245,55 @@ test('certified local functions agree with Node on random arguments', async () =
   }
 });
 
+test('structural recursion agrees with Node', async () => {
+  const source = readFileSync(new URL('./corpus/translate/accept/structuralRecursion.ts', import.meta.url), 'utf8');
+  const node = { value: 2n, next: { value: 5n, next: { value: 8n, next: null } } };
+  const tree = {
+    value: 2n,
+    children: [{ value: 5n, children: [] }, { value: 8n, children: [{ value: 11n, children: [] }] }],
+  };
+  const folder = {
+    name: 'root',
+    entries: [
+      ['file', null],
+      ['sub', { name: 'sub', parent: { name: 'root', entries: [] }, entries: [['nested', null]] }],
+    ],
+  };
+  const calls = [
+    { function: 'length', args: [node] },
+    { function: 'sumFrom', args: [node] },
+    { function: 'sumFrom', args: [null] },
+    { function: 'nth', args: [1n, node] },
+    { function: 'size', args: [tree] },
+    { function: 'sizes', args: [tree] },
+    { function: 'allPositive', args: [tree] },
+    { function: 'hasLarge', args: [tree, 7n] },
+    { function: 'firstLarge', args: [tree, 7n] },
+    { function: 'files', args: [folder] },
+    { function: 'depth', args: [folder.entries[1]![1]] },
+  ];
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: [{ source, calls: calls.map(call => ({
+      function: call.function, args: call.args.map(encode),
+    })) }] }),
+    encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (!result?.parsed) return;
+  expect(result.accepted).toBe(true);
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-recursion-'));
+  const path = join(dir, 'recursive.mjs');
+  writeFileSync(path, ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+  }).outputText);
+  const mod = await import(pathToFileURL(path).href) as Record<string, (...args: Array<unknown>) => unknown>;
+  expect(result.results.map(item => item.value)).toEqual(
+    calls.map(call => encode(mod[call.function]!(...call.args))),
+  );
+});
+
 test('counted-loop certificates agree with Node for parameter and literal bounds', async () => {
   const source = readFileSync(new URL('./corpus/translate/accept/countedLoopCertificate.ts', import.meta.url), 'utf8');
   expect(source).toContain('// certify: required');

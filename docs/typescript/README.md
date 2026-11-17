@@ -408,14 +408,21 @@ and that the encoding is neither `null` nor `undefined`. The last two
 conditions keep a type parameter's value distinct from the nullish value that
 may surround it. A generic interface gets an encoder, a decoder, and a codec
 constructor built from the codecs of its type parameters. A recursive
-interface remains refused because its encoder needs a termination proof.
+interface remains refused by the certifier because its nested encoder and
+decoder need a reusable round-trip proof.
 A use of a generic interface is also refused when one of its type arguments
 is not a bare type parameter. The certifier has not yet specialized its field
-codecs for those arguments. A file with a function that calls itself has none
-either.
-A certificate runs the interpreter with as much fuel as the calls need, and
-the depth of a recursive call depends on its argument. Nor does a file with a
-function that can throw, because a certificate has no encoder for `Except` yet.
+codecs for those arguments. A file with a function that calls itself has no
+certificate yet. Its recursive call depth depends on the argument, and the
+certifier has not proved that adding interpreter fuel preserves a successful
+result, so it cannot combine the per-call bounds. The translator accepts
+structural recursion only when Lean proves termination, and `program_sound`
+covers those definitions. Recursive tagged unions remain refused because the
+translator does not emit their member interfaces and union as one mutual type
+block. User-supplied `@decreases` measures, mutual recursion and `while` loops
+also remain refused because the translator has no checked termination
+obligation for them. A file with a function that can throw also has no
+certificate yet, because the certifier has no encoder for `Except`.
 A local function can get a certificate, including one that contains a loop
 or is called from a loop. This covers calls that return a value and calls
 that write back captured `let` variables. A call can do both when its final
