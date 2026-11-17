@@ -1772,6 +1772,8 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     "-- the record into every shape, and `link_tac` unfolds the evaluator in",
     "-- each. That can pass Lean's default budget.",
     "set_option maxHeartbeats 400000",
+    "-- A sort obligation can contain a deeply nested comparator expression.",
+    "set_option maxRecDepth 10000",
     "",
     "/-- The program, as the parser read it. -/",
     s!"def program : tolean.TypeScript.Syntax.Module :=\n  {module m}",
