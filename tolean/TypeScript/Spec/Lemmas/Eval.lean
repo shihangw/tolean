@@ -266,6 +266,12 @@ def encUndef {α : Type} (enc : α → Val N) : Option α → Val N
 @[simp] theorem encUndef_some {α : Type} (enc : α → Val N) (v : α) : encUndef enc (some v) = enc v := rfl
 @[simp] theorem encUndef_none {α : Type} (enc : α → Val N) : encUndef enc none = .undefined := rfl
 
+@[simp] theorem encUndef_join {α : Type} (enc : α → Val N) (x : Option (Option α)) :
+    encUndef (encUndef enc) x = encUndef enc x.join := by
+  cases x with
+  | none => rfl
+  | some value => cases value <;> rfl
+
 /-- A successful property read agrees with the total lookup in the printed
 record model. The success premise excludes absent inherited properties. -/
 theorem getKey_encRecord_of_success {V : Type} (enc : V → Val N)
@@ -276,6 +282,103 @@ theorem getKey_encRecord_of_success {V : Type} (enc : V → Val N)
   rw [getKey_eq_of_success _ _ h]
   simp only [JSRecord.get?, List.find?_map, Function.comp_def]
   cases record.fields.find? (fun p => JSString.ofString p.1 == key) <;> rfl
+
+/-- An own-property test makes the corresponding evaluator lookup succeed. -/
+theorem getKey_encRecord_of_own {V : Type} (enc : V → Val N)
+    (record : JSRecord V) (key : JSString)
+    (h : recordOwn (record.fields.map fun (k, v) => (k, enc v)) key = true) :
+    getKey (record.fields.map fun (k, v) => (k, enc v)) key =
+      some (encUndef enc (record.get? key)) := by
+  apply getKey_encRecord_of_success
+  apply (getKey_success_iff _ _).2
+  apply Or.inl
+  simpa [recordOwn, List.find?_map, Function.comp_def] using h
+
+/-- An own-property read of optional values agrees with the record model's
+flattened lookup. -/
+theorem getKey_encRecord_join_of_own {V : Type} (enc : V → Val N)
+    (record : JSRecord (Option V)) (key : JSString)
+    (h : recordOwn (record.fields.map fun (k, v) => (k, encUndef enc v)) key = true) :
+    getKey (record.fields.map fun (k, v) => (k, encUndef enc v)) key =
+      some (encUndef enc (record.get? key).join) := by
+  rw [getKey_encRecord_of_own (enc := encUndef enc) record key h, encUndef_join]
+
+@[simp] theorem recordOwn_encRecord {V : Type} (enc : V → Val N)
+    (record : JSRecord V) (key : JSString) :
+    recordOwn (record.fields.map fun (k, v) => (k, enc v)) key = record.hasOwn key := by
+  simp [recordOwn, JSRecord.hasOwn, JSRecord.get?, List.find?_map, Function.comp_def]
+
+/-- If the encoded record does not own a key, its total lookup is absent. -/
+theorem recordOwn_encRecord_none {V : Type} (enc : V → Val N)
+    (record : JSRecord V) (key : JSString)
+    (h : recordOwn (record.fields.map fun (k, v) => (k, enc v)) key = false) :
+    record.get? key = none := by
+  have hown : record.hasOwn key = false := by
+    rw [← recordOwn_encRecord enc record key]
+    exact h
+  cases hget : record.get? key with
+  | none => rfl
+  | some value => simp [JSRecord.hasOwn, hget] at hown
+
+theorem recordFind_isSome_of_mem {V : Type} (fields : List (String × V))
+    (key : JSString)
+    (h : ∃ k, (∃ v, (k, v) ∈ fields) ∧ JSString.ofString k = key) :
+    (fields.find? fun p => JSString.ofString p.1 == key).isSome = true := by
+  obtain ⟨k, ⟨v, hmem⟩, hkey⟩ := h
+  exact List.find?_isSome.mpr ⟨(k, v), hmem, by simp [hkey]⟩
+
+@[simp] theorem findMap_snd_getD_of_some {V : Type} (fields : List (String × V))
+    (key : JSString) (fallback value : V)
+    (h : ∃ k, fields.find? (fun p => JSString.ofString p.1 == key) = some (k, value)) :
+    (((fields.find? (fun p => JSString.ofString p.1 == key)).map (·.2)).getD fallback) = value := by
+  obtain ⟨k, hfind⟩ := h
+  simp [hfind]
+
+theorem recordFind_num_ne_null {N : Type} (fields : List (String × N))
+    (key : JSString)
+    (h : ∃ k, (∃ v, (k, v) ∈ fields) ∧ JSString.ofString k = key) :
+    ((fields.find? fun p => JSString.ofString p.1 == key).map (fun p => Val.num p.2)).getD
+        Val.undefined ≠ Val.null := by
+  cases hf : fields.find? (fun p => JSString.ofString p.1 == key) with
+  | none =>
+    obtain ⟨k, ⟨v, hmem⟩, hkey⟩ := h
+    have hnot := (List.find?_eq_none.mp hf) (k, v) hmem
+    have hpred : JSString.ofString k == key := by simp [hkey]
+    exact False.elim (hnot hpred)
+  | some entry => cases entry <;> simp
+
+theorem recordFind_num_ne_undefined {N : Type} (fields : List (String × N))
+    (key : JSString)
+    (h : ∃ k, (∃ v, (k, v) ∈ fields) ∧ JSString.ofString k = key) :
+    ((fields.find? fun p => JSString.ofString p.1 == key).map (fun p => Val.num p.2)).getD
+        Val.undefined ≠ Val.undefined := by
+  cases hf : fields.find? (fun p => JSString.ofString p.1 == key) with
+  | none =>
+    obtain ⟨k, ⟨v, hmem⟩, hkey⟩ := h
+    have hnot := (List.find?_eq_none.mp hf) (k, v) hmem
+    have hpred : JSString.ofString k == key := by simp [hkey]
+    exact False.elim (hnot hpred)
+  | some entry => cases entry <;> simp
+
+theorem recordFind_num_ne_null_of_found {N : Type} (fields : List (String × N))
+    (key : JSString)
+    (h : ∃ value keyName,
+      fields.find? (fun p => JSString.ofString p.1 == key) = some (keyName, value)) :
+    (((fields.find? (fun p => JSString.ofString p.1 == key)).map
+      (fun p : String × N => Val.num p.2)).getD Val.undefined) ≠ Val.null := by
+  obtain ⟨value, keyName, hfind⟩ := h
+  simp only [hfind, Option.map_some, Option.getD_some]
+  simp
+
+theorem recordFind_num_ne_undefined_of_found {N : Type} (fields : List (String × N))
+    (key : JSString)
+    (h : ∃ value keyName,
+      fields.find? (fun p => JSString.ofString p.1 == key) = some (keyName, value)) :
+    (((fields.find? (fun p => JSString.ofString p.1 == key)).map
+      (fun p : String × N => Val.num p.2)).getD Val.undefined) ≠ Val.undefined := by
+  obtain ⟨value, keyName, hfind⟩ := h
+  simp only [hfind, Option.map_some, Option.getD_some]
+  simp
 
 /-- The entry of an optional field in an object: none for `none`, as an
 object literal that leaves the field out has no such key. -/

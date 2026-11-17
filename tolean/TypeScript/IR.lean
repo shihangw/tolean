@@ -209,11 +209,15 @@ inductive ExprExt where
   /-- `match k with | K.a => r.a | …`, on `r` and `k`: `r[k]`, where `r` is a
   `Record<K, V>` with the keys `keys`, and `K` is the literal union `key`. -/
   | recordGet (key : DeclRef) (keys : List String)
+  /-- `Record<string, T | undefined>[k]`: a missing property and an own
+  property whose value is `undefined` both produce `undefined`. -/
+  | recordGetFlatten (key : DeclRef) (keys : List String)
   | recordKeys
   | recordEntries
   | recordHasOwn
   /-- Bind an optional record before reading its selected field. -/
   | optRecordGet (key : DeclRef) (keys : List String) (bind : Bool)
+  | optRecordGetFlatten (key : DeclRef) (keys : List String) (bind : Bool)
   /-- `x ∈ xs`, a `Prop`, on `xs` and `x`: `xs.includes(x)`, where the
   elements are integers, booleans, strings or constructors of a literal
   union, which SameValueZero compares as `=` does. -/
@@ -451,9 +455,10 @@ def regexpPatternTerm : JSRegExp.Pattern → String
 
 open tolean.IR (argument) in
 private def printRecordGet (names : Names) (key : DeclRef) (keys : List String)
-    (r k : String) : String :=
+    (r k : String) (flatten : Bool) : String :=
   if key == dictionaryRef then
-    s!"(_root_.tolean.TypeScript.JSRecord.get? {argument r} {argument k})"
+    let get := s!"(_root_.tolean.TypeScript.JSRecord.get? {argument r} {argument k})"
+    if flatten then s!"(_root_.Option.join {get})" else get
   else
   let case (f : String) := s!"{(names.ref key).1}.{memberName f}"
   match keys.find? (case · == k) with
@@ -576,12 +581,17 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
   | .append, [a] => a
   | .append, lists =>
     s!"({" ++ ".intercalate (lists.map fun a => if wholeParens a then a else argument a)})"
-  | .recordGet key keys, [r, k] => printRecordGet names key keys r k
+  | .recordGet key keys, [r, k] => printRecordGet names key keys r k false
+  | .recordGetFlatten key keys, [r, k] => printRecordGet names key keys r k true
   | .recordKeys, [r] => s!"(_root_.tolean.TypeScript.JSRecord.keys {argument r})"
   | .recordEntries, [r] => s!"(_root_.tolean.TypeScript.JSRecord.entries {argument r})"
   | .recordHasOwn, [r, k] => s!"(_root_.tolean.TypeScript.JSRecord.hasOwn {argument r} {argument k})"
   | .optRecordGet key keys bind, [r, k] =>
-    let value := printRecordGet names key keys "_record'" k
+    let value := printRecordGet names key keys "_record'" k false
+    let body := if bind then value else s!"{leanName names "some"} {argument value}"
+    s!"({argument r}.bind (fun _record' => {body}))"
+  | .optRecordGetFlatten key keys bind, [r, k] =>
+    let value := printRecordGet names key keys "_record'" k true
     let body := if bind then value else s!"{leanName names "some"} {argument value}"
     s!"({argument r}.bind (fun _record' => {body}))"
   | .includes, [xs, x] => s!"{argument x} ∈ {argument xs}"

@@ -12,28 +12,26 @@ accidentally find a different property.
 
 ## Lookup certificates
 
-A dictionary lookup needs the condition that the key is own or is not a
-name on `Object.prototype`. Otherwise JavaScript can return an inherited
-function rather than a value of type `V`. The source evaluator and the IR
-evaluator already return no result for an absent inherited name.
+The certificate generator accepts a dynamic lookup only when a direct
+`Object.hasOwn(record, key)` test guards a read of that same record and key.
+The generated link theorem also has a premise that the IR run succeeds.
+That premise rules out dynamic reads that resolve to an inherited
+`Object.prototype` property, which the record model cannot represent.
+Certification supports guards in direct function bodies only. It refuses
+dynamic reads in callbacks and loops until their proof helpers carry the
+lookup-safety evidence.
 
-Functions with an unguarded dynamic lookup receive a conditional printer
-link. Its premise says that the IR run on the encoded inputs returns a
-result. The final certificate takes that same premise and applies the
-existing `decls_sound` theorem. No converse compiler theorem or new
-`program_sound` premise is needed.
+The accepted guard form currently covers direct function-body control flow.
+Dynamic Record reads in callbacks and loops are refused until the callback
+and loop helper lemmas carry the lookup-safety evidence. Unguarded reads are
+also refused, including reads with a constant `??` fallback: JavaScript may
+read an inherited `Object.prototype` property there, so fallback evaluation
+does not justify replacing that property with `undefined`. `Object.keys`
+and `Object.entries` remain supported because they enumerate own properties.
 
-`getKey_success_iff` states the local condition precisely.
-`getKey_encRecord_of_success` relates a successful evaluator lookup to the
-total Option lookup in the printed model. In an otherwise total certified
-function, the new premise therefore excludes exactly the absent inherited
-lookup case. It applies to the actual run, not just the initial arguments.
-
-Certificates for functions without these lookups retain their existing
-unconditional statements and proof text. The intended guarded forms are
-`if (Object.hasOwn(record, key))` and iteration over the record's own keys
-or entries. These forms need no extra premise when the certificate
-generator can recognize the ownership evidence.
+Optional-valued Records use `Option.join` when printed. This makes a missing
+property and an own property whose value is `undefined` both produce the
+single optional result required by TypeScript.
 
 Literal inherited names, such as `toString` and `constructor`, remain
 refused for dictionary lookups. Object literals with `__proto__` also
@@ -54,12 +52,9 @@ The relevant operations are `OrdinaryGet` (ECMA-262 2024 §10.1.8.1),
 
 ## Implementation checkpoint
 
-The first runtime checkpoint accepts named and inline dictionaries,
-identifier-keyed literals, and dynamic indexing. Its translator and
-certificate generator compile, and the generated dictionary definitions
-compile. It also supplies the own-key model and the lookup lemmas.
-
-This checkpoint is not the completed feature. Object-operation dispatch,
-guarded and iteration certificate proofs, quoted literal keys, and the
-full certificate and Node comparisons still need validation. The draft
-pull request must remain a draft until those checks pass.
+The supported certified subset is intentionally narrower than general
+`Record<string, V>` indexing: guarded reads are accepted, while unguarded and
+callback/loop reads are refused with a diagnostic explaining the missing
+lookup-safety proof. The generic type and own-key enumeration model remain
+available. Full corpus, callback/loop helper, and Node comparisons are still
+required before the draft pull request is ready.

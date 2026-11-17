@@ -166,6 +166,10 @@ def Ty.unoptional : Ty → Ty
   | .optional t => t
   | t => t
 
+def Ty.flattenOptional : Ty → Ty
+  | .optional (.optional t) => .optional t
+  | t => t
+
 def Ty.unnullable : Ty → Ty
   | .nullable t => t
   | t => t
@@ -1868,8 +1872,10 @@ def translateDictionaryCall (tr : Expr → TM Code) (s : Span)
     (method : String) (args : List Expr) : TM Code := do
   let obj :: rest := args | reject s "an Object dictionary operation needs a record"
   let record ← tr obj
-  let .struct ref [value] := record.type | reject s "the Object operation needs a Record<string, V>"
-  unless ref == IR.dictionaryRef do reject s "the Object operation needs a Record<string, V>"
+  let .struct ref [value] := record.type |
+    reject s "calls may name only the function itself, functions declared earlier in this file, or imported ones"
+  unless ref == IR.dictionaryRef do
+    reject s "calls may name only the function itself, functions declared earlier in this file, or imported ones"
   match method, rest with
   | "keys", [] => return ⟨.ext .recordKeys [record.value], false, .array .string⟩
   | "entries", [] => return ⟨.ext .recordEntries [record.value], false, .array (.tuple [.string, value])⟩
@@ -2923,8 +2929,11 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
         if type.isMaybe && !type.isOptional then reject s "an optional Record index could give null or undefined"
         let k ← translateExpr fuel env (some (.enum keyRef)) key
         unless k.type == .enum keyRef do reject key.span "the key must have the key type of the Record"
-        let result := if type.isOptional then type else .optional type
-        return ⟨.ext (.optRecordGet keyRef keys type.isOptional) [receiver, k.value], false, result⟩
+        let result := (if type.isOptional then type else .optional type).flattenOptional
+        let flatten := type matches .optional (.optional _)
+        let op := if flatten then IR.ExprExt.optRecordGetFlatten keyRef keys type.isOptional
+          else IR.ExprExt.optRecordGet keyRef keys type.isOptional
+        return ⟨.ext op [receiver, k.value], false, result⟩
       | none =>
         let elem ← orReject (match o.type with
           | .optional (.array t) | .nullable (.array t) => some t
@@ -2968,7 +2977,10 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
         reject key.span (if keyRef == IR.dictionaryRef then
           "the key must be a string and may not be a literal Object.prototype name"
           else "the key must have the key type of the Record")
-      return ⟨.ext (.recordGet keyRef keys) [o.code, k.value], false, type⟩
+      let flatten := type matches .optional (.optional _)
+      let op := if flatten then IR.ExprExt.recordGetFlatten keyRef keys
+        else IR.ExprExt.recordGet keyRef keys
+      return ⟨.ext op [o.code, k.value], false, type.flattenOptional⟩
   | .unary s op arg =>
     if op == .neg && arg.isInfinity && !env.has "Infinity" then
       return ⟨.numberConstant .negInf, false, .number⟩

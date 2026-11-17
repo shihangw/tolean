@@ -1152,11 +1152,16 @@ Tolean rejects these, among others:
   `return typeof x === 'string'` in a function without a predicate annotation.
 - A `Record` that is not the whole of a type alias, such as
   `(r: Record<K, V>)`, because the output needs a name for its structure.
-  Tolean also refuses `Record<string, V>`, including its inline and
-  `Readonly` forms. Giving it a name does not help: a dynamic lookup needs
-  a certificate condition that rules out an absent own key which names an
-  inherited `Object.prototype` property. That condition and a representation
-  for arbitrary own keys are not implemented yet. See the
+  `Record<string, V>` is supported, including inline and `Readonly` forms.
+  To certify a dynamic lookup, use a direct `Object.hasOwn(record, key)` guard
+  around the read of that same record and key. The generated link theorem
+  carries an explicit premise that the IR run succeeds. This excludes
+  prototype lookups that the model cannot represent. Certification supports
+  direct function-body guards only; it refuses reads inside callbacks and
+  loops until their proof helpers carry lookup-safety evidence. It also
+  refuses unguarded reads, even with a fallback.
+  Optional-valued Records flatten `undefined` from a missing property and
+  from an own `undefined` value to the same optional result. See the
   [decision on string-keyed records](../decisions/2026-11-16-string-record-keys.md).
   Tolean also refuses other keys that are not a
   literal union of strings, index signatures, and a key that Lean reserves,

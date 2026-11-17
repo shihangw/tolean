@@ -1,5 +1,6 @@
 import tolean.TypeScript.Syntax.Parser
 import tolean.TypeScript.Certify.Term
+import tolean.TypeScript.Certify.Record
 import tolean.TypeScript.Spec.Eval
 import tolean.TypeScript.Translate
 
@@ -1682,10 +1683,11 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     let simpSet := ", ".intercalate ([r.cert "decls"] ++ retNames ++ envLemmas ++ lemmaNames.toList ++ codecLemmas ++
       loopLemmas.toList ++ defs ++ obligations.map (·.1))
     let some_ := r.write "some" "Option.some"
-    let dynamicLookup := (outBody.anyOp fun
-      | .recordGet ref _ | .optRecordGet ref _ _ => ref == IR.dictionaryRef
-      | _ => false) ||
+    let dynamicLookup := outBody.anyOp dynamicRecordOp ||
       recordConditionalFunctions.any (fun callee => outBody.calls ⟨"", callee⟩)
+    if unguardedRecordBody [] outBody &&
+        (outRet.refs ++ outParams.flatMap (fun p => p.2.refs) ++ outBody.refs).contains IR.dictionaryRef then
+      throw s!"{file}: a dynamic Record read must be guarded by Object.hasOwn on the same record and key; reads in callbacks and loops are not certified yet"
     if dynamicLookup then recordConditionalFunctions := name :: recordConditionalFunctions
     let successName := name ++ "_record_success"
     let runName := r.full (if retainsError then "tolean.TypeScript.IR.callIn" else "tolean.TypeScript.IR.runIn")
@@ -1697,8 +1699,13 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     let binders := binders ++ successBinder
     let hasDictionary := dynamicLookup ||
       (outRet.refs ++ outParams.flatMap (fun p => p.2.refs) ++ outBody.refs).contains IR.dictionaryRef
+    let recordSimpSet := if dynamicLookup then
+      ", tolean.TypeScript.Eval.getKey_encRecord_join_of_own, tolean.TypeScript.Eval.getKey_encRecord_of_own, tolean.TypeScript.Eval.recordOwn_encRecord_none, tolean.TypeScript.Eval.recordOwn_encRecord"
+      else
+      ", tolean.TypeScript.Eval.getKey_encRecord_of_own, tolean.TypeScript.Eval.recordOwn_encRecord"
     let simpSet := simpSet ++ if hasDictionary then
-      ", tolean.TypeScript.Eval.encRecord, tolean.TypeScript.JSRecord.get?, tolean.TypeScript.Eval.getKey, List.find?_map, tolean.TypeScript.Eval.encUndef"
+      ", tolean.TypeScript.Eval.encRecord, tolean.TypeScript.JSRecord.hasOwn" ++
+        (if dynamicLookup then ", Option.getD" else ", tolean.TypeScript.JSRecord.get?, List.find?_map, Function.comp_def, tolean.TypeScript.Eval.encUndef") ++ recordSimpSet
       else ""
     let rfl := r.full "rfl"
     let sourceCall := if retainsError then
@@ -1712,14 +1719,17 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       s!"  all_goals (try simp_all [{simpSet}])\n  all_goals first | assumption | rfl | (intros; first | rfl | simp_all)"
     thms := thms.push <|
       (if dynamicLookup then
-        "/-- This link assumes that the IR run returns a result. At a dictionary\n" ++
-        "lookup, success means that the key is own or is not a name on Object.prototype. -/\n"
+        "/-- This link assumes that the IR run returns a result. -/\n"
         else "") ++
       s!"theorem {name}_link {functionGeneric} {binders} :\n" ++
       s!"    {runName} (N := {nv}) {outputFs} ⟨\"\", {str name}⟩ {list args} =\n" ++
       s!"      {some_} ({retEnc} ({call})) := by\n" ++
       (if dynamicLookup then s!"  revert {successName}\n" else "") ++
       s!"  {casesOn decls outParams}link_tac [{simpSet}]" ++
+      (if hasDictionary then
+        "\n  all_goals (try simp_all [List.find?_isSome, beq_iff_eq, tolean.TypeScript.Eval.recordFind_isSome_of_mem, tolean.TypeScript.Eval.findMap_snd_getD_of_some, tolean.TypeScript.Eval.recordFind_num_ne_null, tolean.TypeScript.Eval.recordFind_num_ne_undefined, tolean.TypeScript.Eval.recordFind_num_ne_null_of_found, tolean.TypeScript.Eval.recordFind_num_ne_undefined_of_found, tolean.TypeScript.Eval.getKey_encRecord_of_success, tolean.TypeScript.Eval.getKey_encRecord_of_own, tolean.TypeScript.Eval.getKey_encRecord_join_of_own, tolean.TypeScript.Eval.recordOwn_encRecord_none, tolean.TypeScript.Eval.encUndef_join])" ++
+        "\n  all_goals (try simp_all)\n  all_goals first | assumption | rfl | contradiction"
+        else "") ++
       (if literalMaps.isEmpty then "" else
         s!"\n  all_goals (try simp only [{", ".intercalate literalMaps}, ← List.map_append])\n" ++
         s!"  all_goals (try simp_all [{simpSet}, -List.map_cons, -List.map_nil, -List.map_map, ← List.map_append])") ++

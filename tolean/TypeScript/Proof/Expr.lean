@@ -5045,6 +5045,13 @@ theorem apply_recordGet {r : DeclRef} {keys : List String} {ov kv v : Val N}
   cases kv <;> simp at h
   exact ⟨_, _, rfl, rfl, h⟩
 
+theorem apply_recordGetFlatten {r : DeclRef} {keys : List String} {ov kv v : Val N}
+    (h : IR.ExprExt.apply (.recordGetFlatten r keys) [ov, kv] = some v) :
+    ∃ fields k, ov = .obj fields ∧ kv = .str k ∧ Eval.getKey fields k = some v := by
+  cases ov <;> simp [IR.ExprExt.apply] at h
+  cases kv <;> simp at h
+  exact ⟨_, _, rfl, rfl, h⟩
+
 theorem regexpLiteral_sound {F : Nat} {env : Translate.Env} {expected : Option Ty}
     {sp : Span} {source : String} {target : Edition} {ctx ctx' : Ctx} {c : Code}
     (h : translateExprCore (F + 1) env expected (.regexp sp source target) ctx = .ok c ctx') :
@@ -5320,12 +5327,22 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
                 rw [Eval.eval.eq_def]
                 simp only [hobj, Option.bind_eq_bind, Option.bind_some]
                 cases w
-                case null => simpa [hx, hy, IR.ExprExt.apply] using hv
-                case undefined => simpa [hx, hy, IR.ExprExt.apply] using hv
+                case null =>
+                  split at hv <;> simp [hx, hy, IR.ExprExt.apply] at hv
+                  all_goals change some Val.undefined = some v
+                  all_goals exact congrArg some hv
+                case undefined =>
+                  split at hv <;> simp [hx, hy, IR.ExprExt.apply] at hv
+                  all_goals change some Val.undefined = some v
+                  all_goals exact congrArg some hv
                 case obj fields =>
-                  cases j <;> simp [hx, hy, IR.ExprExt.apply] at hv
-                  simpa [Eval.optionalIndexValue, hkey] using hv
-                all_goals simp [hx, hy, IR.ExprExt.apply] at hv
+                  cases j <;> split at hv <;> simp [hx, hy, IR.ExprExt.apply] at hv
+                  all_goals first
+                    | (change ((Eval.optionalIndexValue (.obj fields) key
+                        (fun _ => Eval.eval m fuel ρs key)) = some v)
+                      ; simpa [Eval.optionalIndexValue, hkey] using hv)
+                    | simp [Eval.eval, Eval.optionalIndexValue, hkey, hv]
+                all_goals split at hv <;> simp [hx, hy, IR.ExprExt.apply] at hv
           · simp at h
         simp only [bind_ok, orReject_ok] at h
         obtain ⟨elem, s₂, ⟨_, rfl⟩, h⟩ := h
@@ -5459,7 +5476,21 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
               have h2 := ihE _ _ _ _ _ _ hk ρs ρo kv ha hs hkey
               simp only [hobj, hkey, Option.bind_eq_bind, Option.bind_some, pure_bind] at hv'
               simp only [Eval.eval, h1, h2, Option.bind_eq_bind, Option.bind_some]
-              obtain ⟨fields, k, rfl, rfl, hget⟩ := apply_recordGet hv'
+              have hrecord : ∃ fields k, ov = .obj fields ∧ kv = .str k ∧
+                  Eval.getKey fields k = some v := by
+                cases ty with
+                | optional inner =>
+                  cases inner with
+                  | optional value =>
+                    simp at hv'
+                    exact apply_recordGetFlatten hv'
+                  | _ =>
+                    simp at hv'
+                    exact apply_recordGet hv'
+                | _ =>
+                  simp at hv'
+                  exact apply_recordGet hv'
+              obtain ⟨fields, k, rfl, rfl, hget⟩ := hrecord
               simp_all
         · simp at h
       | unary sp op arg =>
