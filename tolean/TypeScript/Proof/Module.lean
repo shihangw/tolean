@@ -1547,6 +1547,7 @@ theorem translateDecl_ok {thr : String → Bool} {cls : String → Option (Optio
     simp only [translateDecl, bind_ok, modify_ok, pure_ok] at h
     obtain ⟨_, _, rfl, rfl, rfl⟩ := h
     exact ⟨rfl, rfl, [], by simp, by simp, id, by simp, by simp⟩
+  | classDecl d => simp [translateDecl] at h
   | stmt st => simp [translateDecl] at h
 
 theorem translateDecl_borrows {thr : String → Bool}
@@ -1584,6 +1585,7 @@ theorem translateDecl_borrows {thr : String → Bool}
     simp only [translateDecl, bind_ok, modify_ok, pure_ok] at h
     obtain ⟨_, _, rfl, rfl, rfl⟩ := h
     rfl
+  | classDecl d => simp [translateDecl] at h
   | exportedVar sp decl => simp [translateDecl] at h
   | stmt st => simp [translateDecl] at h
 
@@ -1623,6 +1625,7 @@ theorem translateDecl_names {P : Eval.Program} {thr : String → Bool}
     obtain ⟨_, _, rfl, rfl, rfl⟩ := h
     exact ⟨rfl, fun _ h => h, by simp [boundNames], by simp [boundNames], by simp [boundNames],
       ⟨[], by simp, by simp⟩, ⟨[], by simp, by simp⟩⟩
+  | classDecl d => simp [translateDecl] at h
   | stmt st => simp [translateDecl] at h
 
 /-- `R` holds for each pair of elements in the same place. -/
@@ -1765,6 +1768,7 @@ theorem decls_ok (P : Eval.Program) (thr : String → Bool) (cls : String → Op
         simp only [translateDecl, bind_ok, modify_ok, pure_ok] at h₁
         obtain ⟨_, _, rfl, rfl, rfl⟩ := h₁
         simpa [Eval.functionsIn, IR.functions, List.filterMap_cons] using hrel
+      | classDecl d => simp [prepareInline, prepareInlineDecl] at hprepare
       | stmt st => simp [translateDecl] at h₁
 
 theorem findSome_eq {α β : Type} {f : α → Option β} {x : β} :
@@ -2318,19 +2322,22 @@ theorem translate_sound_call {file source : String} {target : Edition} {m : Modu
   unfold translateTree translateFile at h
   cases hp : parse source target with
   | error e => simp [hp, Except.mapError] at h; cases h
-  | ok m' =>
-    simp only [hp, Except.mapError, bind, Except.bind] at h
-    split at h
-    · cases h
-    · rename_i r heq
-      split at heq
-      · cases heq
-      · rename_i decls' ctx' hrun
-        simp only [pure, Except.pure, Except.ok.injEq] at heq
-        subst heq
-        simp only [pure, Except.pure, Except.ok.injEq, Prod.mk.injEq] at h
-        obtain ⟨rfl, -, rfl⟩ := h
-        exact program_sound_call (.snoc false "N" .nil rfl rfl rfl hrun) (by simp) _ args fuel v hv
+  | ok parsed =>
+    cases helab : Elaborate.run source target parsed with
+    | error message => simp [hp, helab, Except.mapError, bind, Except.bind] at h
+    | ok m =>
+      simp only [hp, helab, Except.mapError, bind, Except.bind] at h
+      split at h
+      · cases h
+      · rename_i r heq
+        split at heq
+        · cases heq
+        · rename_i decls' ctx' hrun
+          simp only [pure, Except.pure, Except.ok.injEq] at heq
+          cases heq
+          simp only [pure, Except.pure, Except.ok.injEq, Prod.mk.injEq] at h
+          obtain ⟨rfl, -, rfl⟩ := h
+          exact program_sound_call (.snoc false "N" .nil rfl rfl rfl hrun) (by simp) _ args fuel v hv
 
 /-- The same, for one file and a call that returns: a call of a function of
 `decls` gives a value only when the interpreter gives the same value for the
