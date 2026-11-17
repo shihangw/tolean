@@ -1358,14 +1358,78 @@ def parseCtorParam : ParseM CtorParam := do
   -- The parameter's span starts at `readonly`, as in `tsc`.
   return { readonly, param := { param with span := ← spanFrom t.span.start } }
 
-/-- What a class must be: an error class with at most a constructor whose
-body calls `super` with the message. -/
+/-- What a class must be: an error class with readonly fields and a
+constructor that calls `super` before assigning them. -/
 def refuseClass {A : Type} (t : Token) : ParseM A :=
-  failAt t ("tolean supports only 'class Name extends Error', with at most a constructor whose body " ++
-    "is 'super(message);'")
+  failAt t ("tolean supports only 'class Name extends Error', with readonly fields and at most a constructor " ++
+    "that calls super(message) before same-name field assignments")
 
-/-- `class`, a name, `extends Error`, `{`, at most a constructor, and `}`.
-The constructor is `constructor(params) { super(message); }`. -/
+/-- Read the separate readonly declarations before an error constructor. -/
+def errorFieldStep (fields : Array CtorParam) : ParseM (Array CtorParam × Bool) := do
+  let t ← peek
+  if !t.isIdent "readonly" then return (fields, false)
+  let field ← parseCtorParam
+  unless field.readonly && !field.param.optional do
+    failAt t "an error field must be a required readonly field"
+  if fields.any (fun f => f.param.name == field.param.name) then
+    failAt t "an error field is declared twice"
+  endStatement
+  return (fields.push field, true)
+
+/-- Separate declarations must have the same primitive annotation as their
+constructor parameter. Spans do not affect this comparison. -/
+def errorFieldType : Option TypeExpr → Option String
+  | some (.keyword _ n) =>
+    if ["number", "bigint", "boolean", "string"].contains n then some n else none
+  | _ => none
+
+/-- Set only the readonly bit. The existing constructor checks still check
+the parameter's name, optional marker and type. -/
+def errorFieldParams (fields : Array CtorParam) (params : Array CtorParam) : Array CtorParam :=
+  params.map fun p => { p with readonly := p.readonly || fields.any (fun f => f.param.name == p.param.name) }
+
+/-- Each separate declaration has one same-name parameter, and does not
+redeclare a parameter property. -/
+def errorFieldsOK (fields params : Array CtorParam) : Bool :=
+  fields.all fun f =>
+    let ps := params.filter (fun p => p.param.name == f.param.name)
+    match ps[0]? with
+    | none => false
+    | some p => ps.size == 1 && !p.readonly && !p.param.optional &&
+      (errorFieldType f.param.type).isSome &&
+      errorFieldType f.param.type == errorFieldType p.param.type
+
+/-- TypeScript creates parameter-property fields before separately declared
+fields. The normalized parameters must preserve that order. -/
+def errorFieldOrderOK (fields params : Array CtorParam) : Bool :=
+  ((errorFieldParams fields params).toList.filterMap fun p =>
+    if p.readonly then some p.param.name else none) ==
+  ((params.toList.filterMap fun p => if p.readonly then some p.param.name else none) ++
+    fields.toList.map (·.param.name))
+
+/-- Read one unconditional assignment. Removing the field from `pending`
+rejects repeated assignments, and the final check rejects missing ones. -/
+def errorAssignmentStep (pending : List String) : ParseM (List String × Bool) := do
+  let t ← peek
+  if t.isPunct "}" then return (pending, false)
+  unless t.isKeyword "this" do
+    failAt t "after super(message), error fields require unconditional 'this.field = field;' assignments"
+  discard advance
+  let _ ← expectPunct "."
+  let name ← readName
+  unless pending.contains name do
+    failAt t "an error assignment must target an unassigned declared readonly field"
+  unless pending.head? == some name do
+    failAt t "assign error fields in declaration order so downlevel output preserves field order"
+  let _ ← expectPunct "="
+  let value ← readName
+  unless value == name do
+    failAt t "an error field assignment must use its same-name constructor parameter"
+  endStatement
+  return (pending.filter (· != name), true)
+
+/-- Read an error class. Separate readonly declarations and their same-name
+assignments normalize to readonly constructor parameters. -/
 def parseClass (start : Pos) (exported : Bool) : ParseM Decl := do
   discard advance
   let name ← readName
@@ -1376,14 +1440,21 @@ def parseClass (start : Pos) (exported : Bool) : ParseM Decl := do
   unless base.isIdent "Error" do refuseClass base
   discard advance
   let _ ← expectPunct "{"
+  let fields ← iterate (← budget) #[] errorFieldStep
   let t ← peek
   if t.isPunct "}" then
+    unless fields.isEmpty do
+      failAt t "declared error fields require a constructor and an assignment"
     discard advance
     return .errorClass (← spanFrom start) exported name none
   unless t.isIdent "constructor" do refuseClass t
   discard advance
   let _ ← expectPunct "("
   let params ← iterate (← budget) #[] (listStep ")" (fun _ => pure ()) parseCtorParam)
+  unless errorFieldsOK fields params do
+    failAt t "each error field needs one required same-name parameter with the same primitive type"
+  unless errorFieldOrderOK fields params do
+    failAt t "error field order must match parameter properties followed by separate declarations"
   let _ ← expectPunct ")"
   let _ ← expectPunct "{"
   let sup ← peek
@@ -1393,11 +1464,14 @@ def parseClass (start : Pos) (exported : Bool) : ParseM Decl := do
   let message ← parseExpression (← budget)
   let _ ← expectPunct ")"
   endStatement
+  let pending ← iterate (← budget) (fields.toList.map (·.param.name)) errorAssignmentStep
+  unless pending.isEmpty do
+    failAt sup "each declared error field must be assigned exactly once after super(message)"
   let t ← peek
   unless t.isPunct "}" do refuseClass t
   discard advance
   let _ ← expectPunct "}"
-  return .errorClass (← spanFrom start) exported name (some (params.toList, message))
+  return .errorClass (← spanFrom start) exported name (some ((errorFieldParams fields params).toList, message))
 
 /-- What `parseImport` refuses: every form of `import` outside the subset. -/
 def refuseImport {A : Type} (t : Token) : ParseM A :=
