@@ -1310,9 +1310,9 @@ theorem parseClassField_reads (f : Field) (hro : f.readonly = true)
   refine ⟨f', s', ?_, he, hL⟩
   simp only [Parse.parseClassField]
   rw [Parse.bind_eq (Parse.peek_eq hs'), Parse.bind_eq hp]
-  simp [hro', hopt', Token.isIdent, htok, pure, bind, EStateM.pure, EStateM.bind]
+  simp [hro', hopt', pure, bind, EStateM.pure, EStateM.bind]
 
-theorem parseClassMember_field_reads {T : Edition} (f : Field) (hro : f.readonly = true)
+theorem parseClassMember_field_reads (f : Field) (hro : f.readonly = true)
     (hopt : f.optional = false) (hty : f.type.wf = true)
     (s : ParseState) (ts rest : List Token) (hs : s.rest = ts ++ rest)
     (hl : s.left = s.rest.length)
@@ -1327,7 +1327,7 @@ theorem parseClassMember_field_reads {T : Edition} (f : Field) (hro : f.readonly
   have hfieldlaid : Laid (t :: ts') [f.words] := by simpa [ClassMember.lines] using hlaid
   have hfield := parseClassField_reads f hro hopt hty s (t :: ts') rest hs' hl hfieldlaid hr
   obtain ⟨f', s', hp, he, hL⟩ := hfield
-  refine ⟨.field f', s', ?_, by simpa [ClassMember.erase, he], hL⟩
+  refine ⟨.field f', s', ?_, by simp [ClassMember.erase, he], hL⟩
   unfold Parse.parseClassMember
   rw [Parse.bind_eq (Parse.peek_eq hs')]
   simp [Token.isPunct, Token.isEof, Token.isKeyword, Token.isIdent, htk,
@@ -1847,7 +1847,7 @@ theorem parseOrdinaryClassCtor_reads {T : Edition} (params : List CtorParam)
   let s₄ := past s₃ rp (b ++ rest)
   let s₅ : ParseState := { s₄ with inFunction := true, loopDepth := 0 }
   have hl₅ : s₅.left = s₅.rest.length := by
-    simp [s₅, s₄, hL₃.left_eq, hs₃]
+    simp [s₅, s₄, hL₃.left_eq]
   obtain ⟨body', s₆, hpb, heb, hL₆⟩ := parseBlock_budget (loop := false) sp body hbw s₅ b rest
     (by simp [s₅, s₄, hL₃.target_eq, s₂, s₁, hT]) rfl (fun h => by cases h)
     rfl hl₅ (by simpa only [Stmt.lines_words, Stmt.wordLines] using hb) hr
@@ -1929,7 +1929,7 @@ theorem parseClassMethod_reads {T : Edition} (m : ClassMethod)
     rw [Parse.ite_guard (fun h => by simp [Token.isPunct, hlp] at h),
       Parse.bind_eq (Parse.expectPunct_ok (s := s₁) rfl (by simp) hlp),
       Parse.bind_eq (Parse.budget_eq _), Parse.bind_eq hpp,
-      Parse.bind_eq (Parse.expectPunct_ok hs₃ (by simp [hr]) hrp),
+      Parse.bind_eq (Parse.expectPunct_ok hs₃ (by simp) hrp),
       Parse.bind_eq hpa, Parse.bind_eq (Parse.budget_eq _),
       Parse.bind_eq (Parse.inFunctionBody_ok hpb), Parse.bind_eq (Parse.spanFrom_eq _ _)]
     rfl
@@ -2033,7 +2033,7 @@ theorem parseClassMember_reads {T : Edition} (m : ClassMember) (hw : m.wf T = tr
   cases m with
   | field f =>
     simp only [ClassMember.wf, Bool.and_eq_true, Bool.not_eq_true'] at hw
-    exact parseClassMember_field_reads (T := T) f hw.1.1 hw.1.2 hw.2 s ts rest hs hl ht hr
+    exact parseClassMember_field_reads f hw.1.1 hw.1.2 hw.2 s ts rest hs hl ht hr
   | ctor params body =>
     simp only [ClassMember.wf, Bool.and_eq_true] at hw
     cases body <;> simp only [Stmt.isBlock, Bool.false_eq_true, and_false, false_and] at hw
@@ -2324,7 +2324,7 @@ theorem parseDecl_class {T : Edition} (sp : Span) (exported : Bool) (name : Stri
       parseDeclBody_class (s := s₁) _ _ rfl hck]
     rw [parseClassDeclaration_error (s := s₁) (cls := ck) (name := nm) (base := base)
       (r := a₃ ++ cts ++ rb :: rest) ex.span.start (ex.isKeyword "export")
-      (by simp [s₁, List.append_assoc, hs']) (by simpa [Token.isKeyword] using hbase)]
+      (by simp [s₁, List.append_assoc]) (by simpa [Token.isKeyword] using hbase)]
     exact hp
 
 theorem parseDecl_enum {T : Edition} (sp : Span) (exported : Bool) (name : String) (members : List EnumMember)
@@ -2562,7 +2562,7 @@ theorem Decl.first {T : Edition} (d : Decl) (hw : d.wf T = true) {ts : List Toke
       have hf := congrArg List.head? hk
       cases he : d.exported <;>
         simp [he, Decl.wordLines, Decl.lines, ClassDecl.lines, exportWords, keywordWord, identWord] at hf <;>
-        simp [he, hf]
+        simp [hf]
   | errorClass sp e n ctor =>
     have hk := h.kinds
     cases ts with

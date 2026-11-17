@@ -6045,7 +6045,7 @@ theorem parseOrdinaryClassCtor_wf {T : Edition} :
   obtain ⟨body, s₅, hb, h⟩ := h
   obtain ⟨hR₅, hK₅, hblock, hbw, hbok⟩ :=
     classBody_gives hR₄ (hK₃.target_eq.trans (hK₁.target_eq.trans hT)) hb
-  simp only [Parse.pure_ok, Prod.mk.injEq] at h
+  simp only [Parse.pure_ok] at h
   obtain ⟨rfl, rfl⟩ := h
   refine ⟨hR₅, hK₁.trans ((Kept.past _ _ _).trans
     (hK₃.trans ((Kept.past _ _ _).trans hK₅))), ?_, ?_⟩
