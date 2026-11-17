@@ -951,6 +951,8 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         | .function n .. => n == name
         | _ => false
       | throw s!"{file}: no translation of {name}"
+    if (loopsOf outBody).any (fun (_, _, body, _, _) => body.throws) then
+      throw s!"{file}: certificates for loops that can throw need a monadic loop invariant"
     let functionCodecs := typeParams.map fun p => (p, r.codecName p)
     let r := { r with codecs := functionCodecs }
     let functionGeneric := generic ++ r.codecBinders nv typeParams

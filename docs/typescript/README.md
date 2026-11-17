@@ -900,6 +900,11 @@ and rethrows of that value remain refused. The
 [decision record](../decisions/2026-11-17-try-catch.md) describes the state
 and error representation work that these extensions need.
 
+Certificates for results of type `Except JSError R` compare both returned
+values and thrown messages. They use the call evaluator instead of the
+value-only evaluator. Error-class unions and loops that can throw still
+have no certificate encoder or monadic loop invariant, respectively.
+
 ### Refused forms
 
 Tolean rejects these, among others:
