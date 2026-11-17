@@ -1112,9 +1112,6 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
             throw s!"{file}: duplicate proofs for {spec}"
           if supplied.isEmpty && Eval.intLiteral? arrowBody.stripParens != some 0 then
             throw s!"{file}: missing project proof for {spec}"
-          let fallback := match supplied.head? with
-            | some proof => s!"exact _root_.{proof.proof.toName}"
-            | none => s!"fail \"missing project proof for {spec}\""
           if let some proof := supplied.head? then
             proofModules := proofModules ++ [proof.module]
           let consistencyName := transNs ++ ".«" ++ Translate.SortObligation.key info.span ++ " proof»"
@@ -1124,15 +1121,16 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
               | throw s!"{file}: cannot decode obligation parameter {n} in {name}"
             return s!" ({dec} (ρ.lookup {str n}))"
           unless provedSortObligations.contains spec do
+            let proof := match supplied.head? with
+              | some proof => s!"  exact _root_.{proof.proof.toName}"
+              | none =>
+                s!"  unfold _root_.{statement}\n" ++
+                s!"  intro {nv} _ _ {" ".intercalate (allScope.map (·.1))}\n" ++
+                s!"  refine _root_.tolean.TypeScript.Proof.consistentOn_of_transCmp (_root_.compareOn (fun (_ : {elemTy}) => (0 : _root_.Int))) ?_\n" ++
+                s!"  sort_tac"
             thms := thms.push <|
               s!"theorem _root_.{consistencyName} : _root_.{statement} := by\n" ++
-              s!"  first\n" ++
-              s!"  | unfold _root_.{statement}\n" ++
-              s!"    intro {nv} _ _ {" ".intercalate (allScope.map (·.1))}\n" ++
-              s!"    refine _root_.tolean.TypeScript.Proof.consistentOn_of_transCmp (_root_.compareOn (fun (_ : {elemTy}) => (0 : _root_.Int))) ?_\n" ++
-              s!"    sort_tac\n" ++
-              s!"    done\n" ++
-              s!"  | {fallback}"
+              proof
             provedSortObligations := spec :: provedSortObligations
           let vars := ("x", elem) :: ("y", elem) :: scope.zipIdx.map fun ((_, t), i) => (s!"v{i}", t)
           loopLemmas := loopLemmas.push (r.cert lemmaName)

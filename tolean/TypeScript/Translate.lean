@@ -3355,7 +3355,7 @@ def constantSafeNumber? : IR.Expr → Option Int
   | .ext (.number n) [] => some n
   | .ext .numberNeg [value] => (- ·) <$> constantSafeNumber? value
   | .ext (.numberFold isMax) values => do
-    let values ← values.mapM constantSafeNumber?
+    let values ← constantSafeNumbers? values
     let first :: rest := values | none
     some (rest.foldl (fun acc n => if isMax then max acc n else min acc n) first)
   | .ext (.stringMethod .indexOf _) [.string source, .string search] =>
@@ -3364,6 +3364,13 @@ def constantSafeNumber? : IR.Expr → Option Int
       [.string source, .string search, _] =>
     some (JSString.indexOfFrom (JSString.ofString source) (JSString.ofString search) pos)
   | _ => none
+
+def constantSafeNumbers? : List IR.Expr → Option (List Int)
+  | [] => some []
+  | value :: values => do
+    let n ← constantSafeNumber? value
+    let ns ← constantSafeNumbers? values
+    return n :: ns
 
 /-- Unknown comparator shapes produce a statement, not an assumption.
 Certificates must prove that statement before they can link the sort. -/
@@ -3379,8 +3386,6 @@ def sortKeys (s : Span) (p q : Param) (body : Expr) (elem : Ty)
   if let some n := constant then
     unless n == 0 do
       reject s "a constant nonzero comparator is inconsistent: comparing an element with itself must give zero"
-  if constant.isNone && !(body.mayHold (· == p.name) && body.mayHold (· == q.name)) then
-    reject s "a comparator proof obligation must read both elements"
   unless elem == .bigint do
     reject s "a comparator proof obligation currently requires bigint elements"
   let scope := (env.locals.filter fun l => l.binding != .fn).map fun l => (l.name, l.type.lean)

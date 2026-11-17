@@ -7,8 +7,13 @@ T="$root/.lake/build/bin/tolean"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 lean_path="$(cd "$root" && lake env printenv LEAN_PATH):$work"
-cp corpus/obligations/squares.ts "$work/Input.ts"
-cp corpus/obligations/Proof.lean "$work/Proof.lean"
+fixture=${1:-squares}
+cp "corpus/obligations/$fixture.ts" "$work/Input.ts"
+if [ "$fixture" = squares ]; then
+  cp corpus/obligations/Proof.lean "$work/Proof.lean"
+else
+  cp corpus/obligations/OneParameter.lean "$work/Proof.lean"
+fi
 compile() {
   (cd "$root" && LEAN_PATH="$lean_path" lake env lean --root="$work" \
     -o "$work/$1.olean" "$work/$1.lean")
@@ -66,3 +71,6 @@ certify
 compile OutCert
 expect_failure "sorryAx" check
 echo "ok: generated comparator obligations and project proofs"
+if [ "$fixture" = squares ]; then
+  bash ./checkObligations.sh oneParameter
+fi
