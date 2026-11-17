@@ -1727,6 +1727,19 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
   | .call _ (.member _ (.ident _ "Object") "is") [a, b] => do
     if (env.lookup "Object").isSome then none
     return .bool (← sameValue (← eval m fuel env a) (← eval m fuel env b))
+  | .call _ (.member _ (.ident _ "Object") "keys") [arg] => do
+    if (env.lookup "Object").isSome then none
+    let .obj fields ← eval m fuel env arg | none
+    return recordProperties fields false
+  | .call _ (.member _ (.ident _ "Object") "entries") [arg] => do
+    if (env.lookup "Object").isSome then none
+    let .obj fields ← eval m fuel env arg | none
+    return recordProperties fields true
+  | .call _ (.member _ (.ident _ "Object") "hasOwn") [arg, key] => do
+    if (env.lookup "Object").isSome then none
+    let .obj fields ← eval m fuel env arg | none
+    let .str key ← eval m fuel env key | none
+    return .bool (recordOwn fields key)
   -- `xs.map(x => e)` and the other methods of an array that take a callback
   -- (`Array.prototype.map`, `filter`, `some`, `every` and `find`, ECMA-262
   -- §23.1.3.21, §23.1.3.8, §23.1.3.29, §23.1.3.6 and §23.1.3.9). The callback

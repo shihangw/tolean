@@ -3120,6 +3120,9 @@ def translateCall (fuel : Nat) (env : Env) (s : Span) (callee : Expr) (args : Li
   if let .member _ (.ident _ "Object") "is" := callee then
     if !env.has "Object" then
       return ← translateObjectIs (translateExpr fuel env none) s args
+  if let .member _ (.ident _ "Object") method := callee then
+    if !env.has "Object" then
+      return ← translateDictionaryCall (translateExpr fuel env none) s method args
   if let .member _ (.ident _ "Date") "UTC" := callee then
     if !env.has "Date" then
       return ← translateDateUtc (translateExpr fuel env none) s args
