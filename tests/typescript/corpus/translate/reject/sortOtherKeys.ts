@@ -1,4 +1,4 @@
-// expect: 7:32 a comparator here must compare keys
+// expect: 7:10 a comparator proof obligation currently requires bigint elements
 interface P {
   readonly x: bigint;
   readonly y: bigint;

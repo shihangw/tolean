@@ -162,7 +162,9 @@ inductive Feature where
   (§21.4.1.32). Date-only forms use UTC from ES2016 onward. -/
   | dateParseFormat
   /-- `xs.sort(cmp)` keeps the order of elements that `cmp` calls equal:
-  `SortIndexedProperties`, which is stable since ES2019. -/
+  `SortIndexedProperties` (§23.1.3.30.1 in ES2024), which is stable since
+  ES2019. Project proofs establish consistency for additional comparator
+  shapes; they do not change this edition requirement. -/
   | stableSort
   /-- `xs.toSorted(cmp)`: `Array.prototype.toSorted`. -/
   | arrayToSorted

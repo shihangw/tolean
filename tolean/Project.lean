@@ -347,7 +347,8 @@ def Job.chainLanguage : Job → String × Option String
 
 /-- What one unit writes: its Lean file and manifest, and for a TypeScript
 file with `certify`, its certificate. -/
-def unitWrites (u : Job) (read : String → Except String String) (result : Except String Translation) :
+def unitWrites (u : Job) (read : String → Except String String) (result : Except String Translation)
+    (proofs : List Chain.Obligation := []) :
     IO (List Write) := do
   let t ← ok result
   let (language, target) := u.chainLanguage
@@ -361,7 +362,7 @@ def unitWrites (u : Job) (read : String → Except String String) (result : Exce
   let text ← ok (read source)
   let cert := certPath t.output
   let certNs := t.ns ++ "Cert"
-  let certText ← ok (TypeScript.Certify.certify source text t.module t.ns certNs u.edition)
+  let certText ← ok (TypeScript.Certify.certify source text t.module t.ns certNs u.edition proofs)
   let certModule ← ok (moduleOf u.moduleRoot cert)
   let (fns, all) ← ok (TypeScript.Certify.certifiedFunctions text u.edition)
   let m := Chain.withCertificate m cert certText certModule certNs
@@ -371,6 +372,12 @@ def unitWrites (u : Job) (read : String → Except String String) (result : Exce
 /-- What the project file asks for: every file to write or to remove. Paths
 are relative to the project root, which must be the working directory. -/
 def plan (config : Json) : IO (List Write) := do
+  let proofs ← match config.getObjVal? "proofManifest" with
+    | .error _ => pure []
+    | .ok value => do
+      let path ← ok (fromJson? (α := String) value)
+      let manifest : Chain.ProjectManifest ← Chain.readJson path
+      pure manifest.obligations
   let files ← projectFiles "."
   let hasTypeScript := (units config files).any (· matches .typescript ..)
   let tsconfig ← if hasTypeScript && files.contains "tsconfig.json" then do
@@ -386,7 +393,7 @@ def plan (config : Json) : IO (List Write) := do
     match texts.lookup f with
     | some t => .ok t
     | none => .error s!"{f}: not read"
-  return (← (translateAll jobs read files).mapM fun (u, t) => unitWrites u read t).flatten
+  return (← (translateAll jobs read files).mapM fun (u, t) => unitWrites u read t proofs).flatten
 
 /-! ### Workspaces as JSON
 

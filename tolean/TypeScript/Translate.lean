@@ -614,9 +614,22 @@ structure AliasInfo where
   typeParams : List String := []
   type : Ty
 
-/-- What a file offers the files that import from it: its exported functions,
-interfaces and type aliases, and whether its declarations are generic over
-the number type. -/
+/-- The translated comparator and the lexical values its statement binds. -/
+structure SortObligation where
+  span : Span
+  param : String
+  other : String
+  elem : IR.Ty
+  body : IR.Expr
+  scope : List (String × IR.Ty)
+
+def SortObligation.key (s : Span) : String :=
+  s!"sort obligation at {s.start.line}:{s.start.col}"
+
+def SortObligation.name (s : Span) : String :=
+  s!"«{SortObligation.key s}»"
+
+/-- What a file offers its importers, and the obligations its output states. -/
 structure Interface where
   functions : List FnInfo := []
   structs : List StructInfo := []
@@ -633,9 +646,11 @@ structure Interface where
   `Except Thrown R` for its own `Thrown`, which another file cannot pass on
   yet. -/
   errorClasses : Bool := false
+  sortObligations : List SortObligation := []
 
 structure Ctx where
   file : String
+  sortObligations : List SortObligation := []
   /-- All source borrow signatures, including declarations later in the file.
   The interpreter uses the same list for its ownership guard. -/
   borrows : List (String × Nat) := []
@@ -3267,6 +3282,20 @@ def translateReduce (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (
       scope := (env.locals.filter fun l => l.binding != .fn).map fun l => (l.name, l.type.lean) }
   return ⟨.listFold xs.value i.value a.name p.name elem.lean b.value info, false, accType⟩
 
+/-- Unknown comparator shapes produce a statement, not an assumption.
+Certificates must prove that statement before they can link the sort. -/
+def sortKeys (s : Span) (p q : Param) (body : Expr) (elem : Ty)
+    (value : IR.Expr) (env : Env) : TM (List (List String × Bool × Bool)) := do
+  if let some keys := keyComparator? p.name q.name body then return keys
+  unless elem == .bigint do
+    reject s "a comparator proof obligation currently requires bigint elements"
+  let scope := (env.locals.filter fun l => l.binding != .fn).map fun l => (l.name, l.type.lean)
+  unless (tolean.IR.Ty.typeVarsList (scope.map (·.2))).isEmpty do
+    reject s "a comparator proof obligation cannot capture generic types yet"
+  modify fun ctx => { ctx with sortObligations := ctx.sortObligations ++
+    [{ span := s, param := p.name, other := q.name, elem := elem.lean, body := value, scope }] }
+  return []
+
 /-- `xs.toSorted((a, b) => e)` and `[...xs].sort((a, b) => e)`:
 `JSNumber.sortWith (fun a b => e) xs`. `sort` changes the array it sorts, so
 it may sort only an array literal, which nothing else holds. The comparator
@@ -3297,10 +3326,7 @@ def translateSort (fuel : Nat) (env : Env) (s : Span) (recv : Expr) (method : St
   let inner ← declare withQ p.span p.name .param elem
   let b ← translateExpr fuel inner (some .number) body
   unless b.type == .number do reject body.span "a comparator must give a number"
-  let keys ← orReject (keyComparator? p.name q.name body) body.span
-    ("a comparator here must compare keys, such as (a, b) => (a.k < b.k) ? -1 : (a.k > b.k) ? 1 : 0 " ++
-      "or (a, b) => a.t - b.t, with the tests in either order, the signs reversed, or a comparison " ++
-      "of the next key in place of the 0")
+  let keys ← sortKeys s p q body elem b.value env
   for (key, difference, _) in keys do
     let t ← keyType body.span elem key
     if difference then
@@ -5502,7 +5528,8 @@ def Ctx.interface (c : Ctx) (usesNumber : Bool) (numberVar : String)
         iface.aliases.filter fun a => names.any fun n => n.typeOnly && n.name == a.name,
     enums := c.reachableEnums,
     unions := c.reachableUnions,
-    usesNumber, numberVar, target := c.target, errorClasses := !c.errorClasses.isEmpty }
+    usesNumber, numberVar, target := c.target, errorClasses := !c.errorClasses.isEmpty,
+    sortObligations := c.sortObligations }
 
 def lineStarts (src : Array Char) : Array Nat := Id.run do
   let mut starts := #[0]
@@ -5634,6 +5661,7 @@ def translateWith (file source ns : String) (target : Edition := .default)
     | .function _ _ (.except ..) _ | .errors .. => true
     | _ => false
   let header :=
+    (if iface.sortObligations.isEmpty then [] else ["import tolean.TypeScript.Spec.Eval"]) ++
     (if usesDate then ["import tolean.TypeScript.Spec.Date"]
      else if names.generic then ["import tolean.TypeScript.Spec.Number"] else []) ++
     (if throws then ["import tolean.TypeScript.Spec.Error"]
@@ -5647,10 +5675,17 @@ def translateWith (file source ns : String) (target : Edition := .default)
     (if names.generic || usesString || throws || usesMap || usesBigInt || usesDate || usesRegExp || usesNullish then
       ["", "open tolean.TypeScript"]
      else if imports.isEmpty then [] else [""])
+  let obligations := iface.sortObligations.map fun o =>
+    let binders := o.scope.map fun (n, t) => s!"({n} : {t.print names})"
+    s!"-- tolean sort obligation: {ns}.{SortObligation.key o.span}\n" ++
+    s!"def {SortObligation.name o.span} : Prop :=\n" ++
+    s!"  ∀ \{{names.typeParam} : Type} [JSNumber {names.typeParam}] [SafeIntLaws {names.typeParam}] " ++
+    s!"{" ".intercalate binders},\n" ++
+    s!"    Eval.Consistent (fun ({o.param} {o.other} : {o.elem.print names}) => ({o.body.print names} : {names.typeParam}))"
   let text := "\n".intercalate
     ([s!"-- Generated by tolean {version} for {target.name} from {file}. Do not edit."] ++
       header ++
-      [s!"namespace {ns}", "", "\n\n".intercalate (decls.map (·.print names)), "", s!"end {ns}", ""])
+      [s!"namespace {ns}", "", "\n\n".intercalate (decls.map (·.print names) ++ obligations), "", s!"end {ns}", ""])
   let chain := (importedFiles file m).flatMap fun f => f :: ((deps.lookup f).map (·.imports)).getD []
   return { lean := text, interface := iface, imports := chain.eraseDups }
 

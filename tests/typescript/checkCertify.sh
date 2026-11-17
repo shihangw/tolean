@@ -6,6 +6,7 @@
 # The files are independent, so they run in parallel, one job for each CPU.
 set -euo pipefail
 cd "$(dirname "$0")"
+bash ./checkObligations.sh
 export T=$PWD/../../.lake/build/bin/tolean
 export root=$(cd ../.. && pwd)
 export work=$(mktemp -d)
@@ -54,7 +55,7 @@ certifyOne() {
       ! grep -q "error" <<<"$out"; then
     echo proved >"$result"
   else
-    { echo failed; echo "$out" | head -20; } >"$result"
+    { echo failed; echo "$out"; } >"$result"
   fi
 }
 export -f certifyOne
