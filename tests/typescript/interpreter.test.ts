@@ -245,6 +245,55 @@ test('certified local functions agree with Node on random arguments', async () =
   }
 });
 
+test('structural recursion agrees with Node', async () => {
+  const source = readFileSync(new URL('./corpus/translate/accept/structuralRecursion.ts', import.meta.url), 'utf8');
+  const node = { value: 2n, next: { value: 5n, next: { value: 8n, next: null } } };
+  const tree = {
+    value: 2n,
+    children: [{ value: 5n, children: [] }, { value: 8n, children: [{ value: 11n, children: [] }] }],
+  };
+  const folder = {
+    name: 'root',
+    entries: [
+      ['file', null],
+      ['sub', { name: 'sub', parent: { name: 'root', entries: [] }, entries: [['nested', null]] }],
+    ],
+  };
+  const calls = [
+    { function: 'length', args: [node] },
+    { function: 'sumFrom', args: [node] },
+    { function: 'sumFrom', args: [null] },
+    { function: 'nth', args: [1n, node] },
+    { function: 'size', args: [tree] },
+    { function: 'sizes', args: [tree] },
+    { function: 'allPositive', args: [tree] },
+    { function: 'hasLarge', args: [tree, 7n] },
+    { function: 'firstLarge', args: [tree, 7n] },
+    { function: 'files', args: [folder] },
+    { function: 'depth', args: [folder.entries[1]![1]] },
+  ];
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: [{ source, calls: calls.map(call => ({
+      function: call.function, args: call.args.map(encode),
+    })) }] }),
+    encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (!result?.parsed) return;
+  expect(result.accepted).toBe(true);
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-recursion-'));
+  const path = join(dir, 'recursive.mjs');
+  writeFileSync(path, ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+  }).outputText);
+  const mod = await import(pathToFileURL(path).href) as Record<string, (...args: Array<unknown>) => unknown>;
+  expect(result.results.map(item => item.value)).toEqual(
+    calls.map(call => encode(mod[call.function]!(...call.args))),
+  );
+});
+
 test('counted-loop certificates agree with Node for parameter and literal bounds', async () => {
   const source = readFileSync(new URL('./corpus/translate/accept/countedLoopCertificate.ts', import.meta.url), 'utf8');
   expect(source).toContain('// certify: required');
@@ -535,6 +584,76 @@ test('checked guards narrow both branches, aliases, local calls, and tag chains'
         .toBe(canonical(encode(mod[name](arg))));
     }
   }
+});
+
+test('declared error fields agree with Node after same-name assignments', async () => {
+  const original = readFileSync(new URL('./corpus/translate/accept/errorDeclaredFields.ts', import.meta.url), 'utf8');
+  const mixed = original.replace('message: string, line:', 'message: string, readonly code: string, line:')
+    .replace('new ParseError("negative line", line', 'new ParseError("negative line", "code", line');
+  for (const source of [original, mixed]) {
+    for (const target of [ts.ScriptTarget.ES2015, ts.ScriptTarget.ESNext]) {
+      const values = [-12, -1, 0, 9];
+      const run = spawnSync(tolean, ['interpret'], {
+        input: JSON.stringify({ programs: [{ source,
+          calls: values.map((line) => ({ function: 'check', args: [encode(line)] })) }] }),
+        encoding: 'utf8',
+      });
+      expect(run.status, run.stderr).toBe(0);
+      const lean = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+      expect(lean?.parsed).toBe(true);
+      if (lean === undefined || !lean.parsed) continue;
+      expect(lean.accepted).toBe(true);
+      const dir = mkdtempSync(join(tmpdir(), 'tolean-error-fields-'));
+      const path = join(dir, 'case.mjs');
+      writeFileSync(path, ts.transpileModule(source, {
+        compilerOptions: { target, module: ts.ModuleKind.ESNext },
+      }).outputText);
+      const mod = await import(pathToFileURL(path).href);
+      for (const [i, line] of values.entries()) {
+        let actual: { value: unknown } | { throws: unknown };
+        try { actual = { value: mod.check(line) }; } catch (error) { actual = { throws: error }; }
+        const result = lean.results[i];
+        expect(result).not.toBeNull();
+        if ('throws' in actual) {
+          expect(result !== null && result !== undefined && 'throws' in result
+            ? canonical(result.throws) : 'did not throw').toBe(shownThrow(actual.throws));
+          expect((actual.throws as Error).name).toBe('Error');
+        } else {
+          expect(result !== null && result !== undefined && 'value' in result
+            ? canonical(result.value) : 'did not return').toBe(canonical(encode(actual.value)));
+        }
+      }
+    }
+  }
+});
+
+test('error field normalization refuses missing, repeated and computed assignments', () => {
+  const cases = [
+    ['readonly line: number;', 'line: number', ''],
+    ['readonly line: number;', 'line: number', 'this.line = line; this.line = line;'],
+    ['readonly line: number;', 'line: number', 'if (line > 0) this.line = line;'],
+    ['readonly line: number;', 'line: number', 'this.line = line + 1;'],
+    ['readonly line: number;', 'other: number', 'this.line = other;'],
+    ['readonly line: string;', 'line: number', 'this.line = line;'],
+    ['readonly line: number; readonly line: number;', 'line: number', 'this.line = line;'],
+    ['readonly line: number;', 'readonly line: number', 'this.line = line;'],
+    ['readonly line?: number;', 'line: number', 'this.line = line;'],
+    ['', 'line: number', 'this.line = line;'],
+    ['readonly line: number;', 'line: number', 'this.name = "ParseError"; this.line = line;'],
+    ['readonly a: number; readonly b: number;', 'b: number, a: number', 'this.a = a; this.b = b;'],
+    ['readonly a: number;', 'a: number, readonly b: number', 'this.a = a;'],
+    ['readonly a: number; readonly b: number;', 'a: number, b: number', 'this.b = b; this.a = a;'],
+  ];
+  const programs = cases.map(([fields, params, assignments]) => ({
+    source: `class ParseError extends Error { ${fields}
+      constructor(${params}) { super("bad"); ${assignments} } }`,
+    calls: [],
+  }));
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify({ programs }), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const results = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  expect(results).toHaveLength(cases.length);
+  for (const [i, result] of results.entries()) expect(result.parsed, programs[i].source).toBe(false);
 });
 
 test('type re-exports introduce no runtime binding', async () => {

@@ -8,6 +8,26 @@ models JS numbers, and what is proved and what is trusted. The
 [This graph](verification.svg) shows the verification chain for TypeScript. It
 marks which links are proved, tested against a reference, or trusted.
 
+## Project proof obligations
+
+The project chain manifest accepts an optional `obligations` list. Each
+entry has `spec`, `proof` and `module` fields. `spec` names a Lean definition
+of a proposition. `proof` names a theorem whose type is exactly that
+definition, and `module` names the module to import.
+
+Build the proof module first, then run `lake env tolean chain check` with
+the path to the project chain manifest. The checker follows the theorem's
+dependencies and accepts only `propext`, `Classical.choice` and `Quot.sound`.
+Unlike a claim, an obligation cannot supply its own axiom allowlist.
+Proofs that depend on `sorryAx` fail this check.
+
+This is a checker for supplied proofs, not yet a way to extend the supported
+TypeScript subset. The translator still refuses arbitrary sort comparators.
+It does not generate obligation statements or use these entries in
+`program_sound`. See the
+[decision](../decisions/2026-11-17-project-proof-obligations.md) for the
+remaining certificate work.
+
 ## The translator
 
 ### Parsing
@@ -361,14 +381,21 @@ and that the encoding is neither `null` nor `undefined`. The last two
 conditions keep a type parameter's value distinct from the nullish value that
 may surround it. A generic interface gets an encoder, a decoder, and a codec
 constructor built from the codecs of its type parameters. A recursive
-interface remains refused because its encoder needs a termination proof.
+interface remains refused by the certifier because its nested encoder and
+decoder need a reusable round-trip proof.
 A use of a generic interface is also refused when one of its type arguments
 is not a bare type parameter. The certifier has not yet specialized its field
-codecs for those arguments. A file with a function that calls itself has none
-either.
-A certificate runs the interpreter with as much fuel as the calls need, and
-the depth of a recursive call depends on its argument. Nor does a file with a
-function that can throw, because a certificate has no encoder for `Except` yet.
+codecs for those arguments. A file with a function that calls itself has no
+certificate yet. Its recursive call depth depends on the argument, and the
+certifier has not proved that adding interpreter fuel preserves a successful
+result, so it cannot combine the per-call bounds. The translator accepts
+structural recursion only when Lean proves termination, and `program_sound`
+covers those definitions. Recursive tagged unions remain refused because the
+translator does not emit their member interfaces and union as one mutual type
+block. User-supplied `@decreases` measures, mutual recursion and `while` loops
+also remain refused because the translator has no checked termination
+obligation for them. A file with a function that can throw also has no
+certificate yet, because the certifier has no encoder for `Except`.
 A local function can get a certificate, including one that contains a loop
 or is called from a loop. This covers calls that return a value and calls
 that write back captured `let` variables. A call can do both when its final
@@ -523,12 +550,17 @@ They do not accept extensionless imports even in a CommonJS project.
 Raw Node type stripping still needs `.ts`; use the matching TypeScript
 build or bundler when running code that uses the other spellings.
 
-Tolean loads relative `extends` chains inside the project. A base path is
+Tolean loads relative `extends` chains, including shared bases outside the
+directory that contains `tolean.json`. A base path is
 relative to the config that declares it, and may omit `.json`. An array of
 bases follows TypeScript 5's order: later bases override earlier ones, then
 the child overrides each inherited compiler option. A cycle or missing base
-is an error. Package names in `extends`, absolute paths and bases outside
-the project remain refused. Use a relative config inside the project instead.
+is an error. Package names in `extends` and absolute paths remain refused.
+Each inherited config is recorded by its relative path and SHA-256 hash in
+the translation manifest. Workspace hosts must supply the base files too,
+using paths relative to the project root, such as `../../tsconfig.base.json`.
+The workspace result reports these inputs in `configInputs`. This does not
+allow imports or source globs to reach outside the project.
 
 Tolean checks the merged options before it resolves imports. It refuses
 `moduleSuffixes` and `rootDirs`, including inherited settings, because they
@@ -536,7 +568,7 @@ can select a different relative import target. `paths` and `baseUrl` do not
 enable nonrelative imports. Other compiler options and source-selection
 settings do not change Tolean's project settings: `tolean.json` still lists
 the sources. The
-[inheritance decision](../decisions/2026-11-15-tsconfig-extends.md) explains
+[external config inputs decision](../decisions/2026-11-17-external-tsconfig-inputs.md) explains
 this boundary.
 
 - An import must name a relative path to a translated `.ts` file. Tolean
@@ -769,6 +801,7 @@ interface fields, not new array type syntax.
 | An `if` or a `switch` that changes locals, where a branch can throw | `(if c then throw e else pure (x, y)) >>= fun (x, y) =>`, so that the statements after it take the state from the branch that did not throw |
 | `class C extends Error { constructor(readonly a: T, b: U) { super(m); } }`, or the same with no constructor | A constructor `C` of `Thrown`, the inductive of the errors that the file's functions throw, with the message and the `readonly` parameters as fields. `Thrown` comes first in the file, with `error (value : JSError)` for `throw new Error(m)`. Every function of the file that can throw then returns `Except Thrown R`. A parameter must have a primitive type and may not be named `message`, `name`, `stack` or `cause`; the message may not call a function; and the class must be declared before the functions that throw it, and may not be named `error`. [A decision record](../decisions/2026-11-11-thrown-per-file.md) explains the type and the rules. |
 | `class C { readonly a: A; constructor(a: A) { this.a = a; } m(x: A): A { return this.a; } }` | Before interpretation and translation, the class becomes an interface, an object-constructor function and a free function for each method. `new C(a)` calls the constructor. `c.m(x)` calls the free function with `c` as its first argument, but only when `c` has exactly the static type `C`. Ordinary fields require ES2022. The [class decision record](../decisions/2026-11-17-readonly-classes.md) separates the proved parser and lowered-program theorems from the Node comparisons that test elaboration. |
+| `class C extends Error { readonly line: number; constructor(message: string, line: number) { super(message); this.line = line; } }` | The parser normalizes the declared field to a readonly constructor parameter. Each field needs one required same-name parameter with the same primitive type, and exactly one unconditional assignment after `super(message)`. The normalized field order must match parameter properties followed by separate declarations. Assignments must follow declaration order so downlevel output preserves the same own-field order. Assignments from other names or expressions, optional fields, and `this.name` assignments remain refused. See [the decision](../decisions/2026-11-16-error-class-fields.md). |
 | `throw new C(args)`, in the places where `throw new Error(m)` may stand | `throw (Thrown.«C» m a)`, with the constructor's message written over the arguments, which first move to names unless they are literals, and the `readonly` arguments as the fields. The substitution stops at the parameters of an arrow function in the message. |
 | `const x = e`, `let x = e` | `let x := e` |
 | `x = e`, `x += e`, `x -= e`, `x *= e` on a `let` local | `let x := …` (shadowing) |

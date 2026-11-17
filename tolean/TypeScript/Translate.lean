@@ -5123,7 +5123,7 @@ def translateCtorParam (p : CtorParam) : TM (String × Ty × Bool) := do
   let pname ← checkLocalName p.param.span p.param.name
   -- JS assigns a parameter property after `super(…)` returns, so one named
   -- `message` would replace the message. `Error` owns the others too.
-  if ["message", "name", "stack", "cause"].contains pname then
+  if p.readonly && ["message", "name", "stack", "cause"].contains pname then
     reject p.param.span s!"a parameter of an error class may not be named {pname}, which Error owns"
   let ty ← translateType type
   unless ty matches .bigint | .number | .boolean | .string do

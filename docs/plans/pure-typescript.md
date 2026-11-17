@@ -290,10 +290,18 @@ leaves a gap.
     remaining computed list shapes, and direct sorts or conditioned helpers
     under enclosing nullable narrowing. Calls inside nullable matches are
     covered.
-11. **P2.** Recursion: tagged unions that refer to themselves first, then
-    `@decreases`, mutual recursion, and `while` loops. Add certificates for
-    self-referential interfaces and recursive functions, with existential
-    fuel, as proposed in the [recursion open question](#open-questions).
+11. **P2.** Recursion: the translator accepts self-referential interfaces and
+    single-function structural recursion when Lean accepts their declarations
+    and proves the function terminates. Certificates for recursive interfaces
+    and functions remain refused. A recursive interface needs a reusable
+    nested encoder and decoder round-trip proof; a recursive function needs
+    existential fuel and a proof that additional fuel preserves successful
+    interpreter results. Recursive tagged
+    unions remain refused because the translator does not emit their member
+    interfaces and union as one mutual type block. User-supplied `@decreases`
+    measures, mutual recursion and `while` loops also remain refused because
+    the translator has no checked termination obligation for them. See the
+    [decision record](../decisions/2026-11-17-recursion-certificates.md).
 12. **P1.** Non-literal `bigint` exponents, `BigInt(number)`,
     `toISOString`, and non-literal padding lengths. These still need a
     model of built-in errors whose messages the program cannot read.
@@ -325,6 +333,12 @@ leaves a gap.
     the output. The build checks the proof for `sorry` and axioms. The same
     mechanism later serves `@decreases`. See the
     [proof-obligation open question](#open-questions).
+    The first slice adds project manifest obligations with exact theorem
+    types and a fixed axiom policy. Arbitrary comparators remain refused:
+    both the sort translator and the certificate generator require known key shapes.
+    The checker does not yet connect external proofs to `program_sound` or
+    derive required obligations from generated output. See the
+    [decision](../decisions/2026-11-17-project-proof-obligations.md).
 19. **P2.** Close the `const` gap: share one predicate between the translator's
     refusal and the interpreter's `none` for assignments to a
     `for (const x of xs)` binding. See the [`const` open question](#open-questions).
@@ -424,18 +438,11 @@ decision record then states the choice and any limits that remain.
   [decision record](../decisions/2026-11-16-generic-codecs.md).
 
 - How should a certificate cover an interface that refers to itself, and a
-  function that calls itself? The encoder of such an interface would be a
-  recursive function, and a certificate runs the interpreter with as much
-  fuel as the calls need, which a recursive call does not bound. So a file
-  with either gets no certificate yet.
-
-  Recommendation: write the encoder with well-founded recursion, as the
-  translated function is written. It recurses through `List.map` over the
-  children with `sizeOf` as the measure and the same decreasing tactic. The
-  decoder recurses on the `Val`, which is a nested inductive too. The
-  round-trip proof is the new work, and the certifier should get it from one
-  lemma about a structure whose list field holds the structure, not from a
-  tactic script per file. For a recursive function, quantify the fuel
+  function that calls itself? The decision is to keep both outside certificates
+  until the recursive codec and fuel proofs exist. The certifier refuses them
+  with explicit errors. The
+  [decision record](../decisions/2026-11-17-recursion-certificates.md) gives
+  the reasons and limits. For a later implementation, quantify the fuel
   existentially for each input:
 
   ```lean
@@ -534,7 +541,9 @@ decision record then states the choice and any limits that remain.
 - Should a comparator that is not one of the two shapes be accepted when the
   project supplies a proof that it is consistent?
 
-  Recommendation: yes, as one case of a general mechanism for obligations.
+  Decision: yes, with a fixed axiom policy and statements from Tolean.
+  The [first slice](../decisions/2026-11-17-project-proof-obligations.md)
+  checks named project proofs but does not yet generate these statements.
   Tolean states the obligation, `Consistent cmp`, as a theorem in the output.
   Its tactic proves the two known shapes. When the tactic fails, the project
   may supply the proof in a file beside the output, which the manifest

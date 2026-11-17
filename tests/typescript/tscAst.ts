@@ -291,18 +291,59 @@ class Printer {
     if (s.members.length === 0) {
       return this.node('class', s, [this.name(s.name), ...(exported ? ['export'] : [])], []);
     }
-    const ctor = s.members[0];
-    if (s.members.length !== 1 || !ts.isConstructorDeclaration(ctor) || ctor.body === undefined) {
-      refuse(s, 'class member other than one constructor');
+    const ctor = s.members[s.members.length - 1];
+    if (!ts.isConstructorDeclaration(ctor) || ctor.body === undefined) {
+      refuse(s, 'error fields must precede one constructor');
     }
     this.modifiers(ctor, []);
-    const params = ctor.parameters.map((p) => this.ctorParam(p));
+    const fields = new Set<string>();
+    for (const member of s.members.slice(0, -1)) {
+      if (!ts.isPropertyDeclaration(member) || !ts.isIdentifier(member.name) ||
+          member.questionToken !== undefined || member.exclamationToken !== undefined ||
+          member.initializer !== undefined ||
+          !this.modifiers(member, [ts.SyntaxKind.ReadonlyKeyword]).has(ts.SyntaxKind.ReadonlyKeyword)) {
+        refuse(member, 'required readonly error field');
+      }
+      const name = member.name.text;
+      const matching = ctor.parameters.filter((p) => ts.isIdentifier(p.name) && p.name.text === name);
+      const p = matching[0];
+      const primitive = [ts.SyntaxKind.NumberKeyword, ts.SyntaxKind.BigIntKeyword,
+        ts.SyntaxKind.BooleanKeyword, ts.SyntaxKind.StringKeyword];
+      if (fields.has(name) || matching.length !== 1 || p.questionToken !== undefined ||
+          p.modifiers?.some((m) => m.kind === ts.SyntaxKind.ReadonlyKeyword) ||
+          member.type === undefined || !primitive.includes(member.type.kind) ||
+          member.type.kind !== p.type?.kind) {
+        refuse(member, 'error field needs one required same-name parameter with the same primitive type');
+      }
+      fields.add(name);
+    }
+    const properties = ctor.parameters.filter((p) =>
+      p.modifiers?.some((m) => m.kind === ts.SyntaxKind.ReadonlyKeyword));
+    const runtimeOrder = [...properties.map((p) => this.name(p.name)), ...fields];
+    const normalizedOrder = ctor.parameters.filter((p) =>
+      p.modifiers?.some((m) => m.kind === ts.SyntaxKind.ReadonlyKeyword) ||
+      ts.isIdentifier(p.name) && fields.has(p.name.text)).map((p) => this.name(p.name));
+    if (JSON.stringify(runtimeOrder) !== JSON.stringify(normalizedOrder)) {
+      refuse(ctor, 'error field order must match parameter properties followed by separate declarations');
+    }
+    const params = ctor.parameters.map((p) =>
+      this.ctorParam(p, ts.isIdentifier(p.name) && fields.has(p.name.text)));
     const body = ctor.body.statements;
-    const call = body.length === 1 && ts.isExpressionStatement(body[0]) ? body[0].expression : undefined;
+    const call = body.length > 0 && ts.isExpressionStatement(body[0]) ? body[0].expression : undefined;
     if (call === undefined || !ts.isCallExpression(call) || call.expression.kind !== ts.SyntaxKind.SuperKeyword ||
         call.typeArguments !== undefined || call.arguments.length !== 1 || ts.isSpreadElement(call.arguments[0])) {
       refuse(ctor, "constructor body other than 'super(message);'");
     }
+    for (const statement of body.slice(1)) {
+      const e = ts.isExpressionStatement(statement) ? statement.expression : undefined;
+      if (e === undefined || !ts.isBinaryExpression(e) || e.operatorToken.kind !== ts.SyntaxKind.EqualsToken ||
+          !ts.isPropertyAccessExpression(e.left) || e.left.expression.kind !== ts.SyntaxKind.ThisKeyword ||
+          !ts.isIdentifier(e.right) || e.left.name.text !== e.right.text ||
+          fields.values().next().value !== e.right.text || !fields.delete(e.right.text)) {
+        refuse(statement, 'unconditional assignment from a same-name parameter to an unassigned error field');
+      }
+    }
+    if (fields.size > 0) refuse(ctor, 'each error field must be assigned');
     return this.node('class', s, [this.name(s.name), ...(exported ? ['export'] : [])], [
       ...params,
       this.expr(call.arguments[0]),
@@ -345,8 +386,8 @@ class Printer {
   }
 
   /** A parameter of a constructor, which `readonly` may mark. */
-  private ctorParam(p: ts.ParameterDeclaration): Sexp {
-    const readonly = this.modifiers(p, [ts.SyntaxKind.ReadonlyKeyword]).size > 0;
+  private ctorParam(p: ts.ParameterDeclaration, field = false): Sexp {
+    const readonly = this.modifiers(p, [ts.SyntaxKind.ReadonlyKeyword]).size > 0 || field;
     if (p.dotDotDotToken !== undefined) {
       refuse(p, 'rest parameter');
     }

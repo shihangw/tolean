@@ -38,6 +38,11 @@ runtime too. The remaining function declaration uses `FunctionDeclaration`
 §13.3.6.2). These operations exist in every supported target, so generic
 certificates add no edition gate.
 
+Structural recursion adds no runtime operation. Its calls use `EvaluateCall`
+(ES2015 §12.3.4, ES2024 §13.3.6.2), and recursive interfaces erase with the
+other TypeScript type declarations. Every supported edition specifies the
+runtime operation.
+
 Guard calls use `EvaluateCall` (ES2024 §13.3.6.2), and their branches use
 `IfStatement` (§14.6). A primitive guard uses `typeof` (§13.5.3). These
 operations also exist in ES2015, the oldest target.
@@ -65,6 +70,15 @@ ClassFieldDefinitionEvaluation (§15.7.13), InitializeInstanceElements
 (§7.3.33), and EvaluateNew (§13.3.5.1). Public field declarations require
 ES2022. The accepted slice has no observable prototype lookup: elaboration
 replaces construction and statically resolved methods before evaluation.
+
+An error constructor may assign a separately declared readonly field from
+its same-name parameter after `super(message)`. The annotation erases before
+execution. The assignment uses `PutValue` (ES2015 §6.2.3.2, ES2024 §6.2.5.6),
+and the derived constructor uses `SuperCall` (ES2015 §12.3.5, ES2024 §13.3.7).
+These operations exist in every supported edition. Native field declarations
+use `InitializeInstanceElements` (ES2022 §7.3.33) after `super` returns.
+The accepted constructor cannot observe the intermediate undefined values,
+so its final fields agree with the existing parameter-property model.
 -/
 namespace tolean.TypeScript
 

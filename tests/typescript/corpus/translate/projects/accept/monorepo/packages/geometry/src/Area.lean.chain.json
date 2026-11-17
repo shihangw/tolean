@@ -1,0 +1,48 @@
+{"tolean": "0.3.1",
+ "target": "ES2024",
+ "sources":
+ [{"sha256": "a5bbbcd3de157e0674a48eb337734a47ee9db5b5ad309c2b08bd380e683f557a",
+   "path": "src/area.ts"},
+  {"sha256": "d61a36c5ef461e2a921aabd6ac38a67ed520b3d05487fb19ca79f79c6d910f1a",
+   "path": "../../tsconfig.base.json"},
+  {"sha256": "8f6e85eeaa8025fe7b2f01763e03f32540d3e2869ae857490d685098460f4e3a",
+   "path": "tsconfig.json"}],
+ "output":
+ {"sha256": "79552f2e5bf4528b76fa1ecd5b3fee57bc8cae28e0fc1471a89535b008c3cc22",
+  "path": "src/Area.lean"},
+ "nodes":
+ [{"status": "tested",
+   "label": "TypeScript parser",
+   "kind": "parser",
+   "id": "parser",
+   "evidence":
+   {"reference": "tsc", "check": "typescript-parse", "by": "tolean"}},
+  {"status": "tested",
+   "label": "TypeScript translator",
+   "kind": "translator",
+   "id": "translator",
+   "evidence":
+   {"reference": "fixed corpus output and random programs",
+    "check": "typescript-translate",
+    "by": "tolean"}},
+  {"status": "tested",
+   "module": "tolean.TypeScript.Spec.Number",
+   "label": "JavaScript number laws",
+   "kind": "spec",
+   "id": "spec",
+   "evidence":
+   {"reference": "Node 22 and 24",
+    "check": "typescript-engines",
+    "by": "tolean"}},
+  {"status": "trusted",
+   "label": "JavaScript engine",
+   "kind": "runtime",
+   "id": "runtime"}],
+ "module": "src.Area",
+ "language": "typescript",
+ "edges":
+ [["source", "parser"],
+  ["parser", "translator"],
+  ["translator", "output"],
+  ["spec", "output"],
+  ["runtime", "output"]]}
