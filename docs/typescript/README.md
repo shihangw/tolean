@@ -214,6 +214,10 @@ a program, a function of the IR gives a value only when the interpreter
 gives the same value for the same call.
 `program_sound_call` states the same for a call that throws: a function of
 the IR throws a value only when the interpreter throws the same value.
+`program_sound` already covers generic functions because it relates the IR
+evaluator to the interpreter without inspecting Lean type parameters. A
+generic certificate adds codec laws only for the link to the printed Lean
+function.
 `translate_sound` is the case of one file. It holds for every input,
 every model of numbers and every amount of fuel. The theorem does not assume
 that the types the translator gives are right. It is about the IR, so a
@@ -350,10 +354,18 @@ a certified file trusts the parser and the interpreter, instead of the
 translator. With `--manifest`, the chain records this: the translator link
 becomes `proved`, and so does the parse.
 
-Most functions of the subset can get a certificate. A file has none yet when
-it declares a generic function or interface, or an interface that refers to
-itself, because the certifier would need an encoder for a type parameter or a
-recursive encoder. A file with a function that calls itself has none either.
+Most functions of the subset can get a certificate. A generic function's
+theorem takes a `Codec N T` for each type parameter. A codec provides an
+encoding, a decoder, and proofs that decoding the encoding returns the input
+and that the encoding is neither `null` nor `undefined`. The last two
+conditions keep a type parameter's value distinct from the nullish value that
+may surround it. A generic interface gets an encoder, a decoder, and a codec
+constructor built from the codecs of its type parameters. A recursive
+interface remains refused because its encoder needs a termination proof.
+A use of a generic interface is also refused when one of its type arguments
+is not a bare type parameter. The certifier has not yet specialized its field
+codecs for those arguments. A file with a function that calls itself has none
+either.
 A certificate runs the interpreter with as much fuel as the calls need, and
 the depth of a recursive call depends on its argument. Nor does a file with a
 function that can throw, because a certificate has no encoder for `Except` yet.
@@ -832,9 +844,11 @@ undefined are still different objects in JavaScript. Tolean continues
 to refuse explicit undefined object fields and operations that observe
 whether the key exists.
 
-An optional nullable field or parameter whose payload still names type
-parameters is refused. Concrete aliases are normalized first, so
-`Maybe<bigint | null>` has only one null state when `Maybe<T>` is `T | null`.
+An optional nullable field or parameter may have a payload that names a type
+parameter. A generic certificate requires a codec whose encoding is neither
+null nor undefined, so the payload cannot collide with either outer state.
+Concrete aliases are normalized first, so `Maybe<bigint | null>` has only one
+null state when `Maybe<T>` is `T | null`.
 
 Tests of an optional nullable value preserve the same distinctions.
 `=== null` matches only null, `=== undefined` matches only undefined, and

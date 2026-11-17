@@ -842,6 +842,7 @@ def extras : List Group := [
   ⟨"Certificates: the check that the translator gives the tree", [``Proof.translatesTo_ok, ``Proof.lookup_ite,
     ``IR.Expr.beq_iff, ``IR.Expr.beqList_iff, ``IR.Expr.beqFields_iff]⟩,
   ⟨"Certificates: the encoders and decoders", [``Eval.encNull_some, ``Eval.encNull_none,
+    ``Eval.Codec.decode_encode, ``Eval.Codec.encode_ne_null, ``Eval.Codec.encode_ne_undefined,
     ``Eval.decInt_int, ``Eval.decBool_bool, ``Eval.decNum_num, ``Eval.decStr_str, ``Eval.decList_list,
     ``Eval.decNull_some, ``Eval.decList_nil, ``Eval.decList_cons, ``Eval.decList_encList,
     ``Eval.decNull_encNull, ``Eval.decNull_null, ``Eval.decList_list_null, ``Eval.decList_encList_null, ``Eval.encUndef_some, ``Eval.encUndef_none,

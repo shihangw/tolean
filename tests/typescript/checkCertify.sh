@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Certifies each file in corpus/translate that tolean can certify, and requires
-# Lean to accept every certificate. Run from tests/typescript inside
-# `nix develop`, after `lake build` at the root.
+# Certifies each file in the translation and certificate corpora that tolean
+# can certify, and requires Lean to accept every certificate. Run from
+# tests/typescript inside `nix develop`, after `lake build` at the root.
 #
 # The files are independent, so they run in parallel, one job for each CPU.
 set -euo pipefail
@@ -65,7 +65,8 @@ export -f certifyOne
 shard=${SHARD:-1/1}
 k=${shard%/*} n=${shard#*/}
 jobs=$(nproc 2>/dev/null || sysctl -n hw.ncpu)
-ls corpus/translate/accept/*.ts | awk -v k="$k" -v n="$n" '(NR - 1) % n == k - 1' |
+printf '%s\n' corpus/translate/accept/*.ts corpus/certify/accept/*.ts |
+  awk -v k="$k" -v n="$n" '(NR - 1) % n == k - 1' |
   xargs -P "$jobs" -I {} bash -c 'certifyOne "$1"' _ {}
 
 proved=0 skipped=0 failed=0

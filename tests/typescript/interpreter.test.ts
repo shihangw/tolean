@@ -1498,6 +1498,44 @@ test('interface fields describe the values at each call, not aliases between cal
   expect(lean?.results.map((r) => r.value)).toEqual(expected);
 });
 
+test('generic functions and interfaces agree with Node', async () => {
+  const source = readFileSync(new URL('./corpus/certify/accept/genericCertificates.ts', import.meta.url), 'utf8');
+  expect(source).toContain('// certify: required');
+  const calls = [
+    { function: 'identity', args: [11n] },
+    { function: 'identity', args: [null] },
+    { function: 'pair', args: [{ value: 12n }, ['x', true]] },
+    { function: 'box', args: [13n] },
+    { function: 'unbox', args: [{ value: 14n, extra: null }] },
+    { function: 'unbox', args: [{ value: 15n, extra: undefined }] },
+    { function: 'choose', args: [null, 16n] },
+    { function: 'choose', args: [17n, 18n] },
+    { function: 'isNull', args: [] },
+    { function: 'isNull', args: [undefined] },
+    { function: 'isNull', args: [null] },
+    { function: 'isNull', args: [19n] },
+    { function: 'count', args: [[1n, 2n, 3n]] },
+  ];
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: [{ source, calls: calls.map(call => ({
+      function: call.function, args: call.args.map(encode),
+    })) }] }),
+    encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (result === undefined || !result.parsed) return;
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-generic-certificate-'));
+  const path = join(dir, 'generic.mjs');
+  writeFileSync(path, ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+  }).outputText);
+  const mod = await import(pathToFileURL(path).href) as Record<string, (...args: Array<unknown>) => unknown>;
+  const expected = calls.map(call => encode(mod[call.function]!(...call.args)));
+  expect(result.results.map((r) => r.value)).toEqual(expected);
+});
+
 test('inline object shapes and tagged unions agree with Node', async () => {
   const fixtures: Array<{ name: string; calls: Array<{ function: string; args: Array<unknown> }> }> = [
     {

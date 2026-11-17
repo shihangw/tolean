@@ -2295,7 +2295,9 @@ theorem program_sound_call {p : Eval.Program} {outs : List (String × List IR.De
 
 /-- The same, for a call that returns: a call of a function of the output
 gives a value only when the interpreter gives the same value for the same
-call of the program. -/
+call of the program. It applies unchanged to generic declarations because the
+IR evaluator and interpreter do not inspect Lean type parameters. Certificate
+codecs state the value relation needed by the printed Lean definitions. -/
 theorem program_sound {p : Eval.Program} {outs : List (String × List IR.Decl)}
     {ifaces : List (String × Interface)} (h : ProgramTranslation p outs ifaces)
     (hnd : (p.map (·.1)).Nodup) (key : DeclRef) (args : List (Val N)) (fuel : Nat) (v : Val N)

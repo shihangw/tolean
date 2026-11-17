@@ -68,6 +68,17 @@ inductive Val (N : Type) where
   | closure (params : List String) (body : Stmt)
 deriving Inhabited
 
+/-- A certificate's encoding of an opaque TypeScript type parameter. The
+round-trip law lets the evaluator read values back from its environment. The
+two exclusions keep a payload distinct from the `null` and `undefined` cases
+of a surrounding nullable type. -/
+structure Codec (N : Type) (α : Type) where
+  encode : α → Val N
+  decode : Option (Val N) → α
+  decode_encode : ∀ x, decode (some (encode x)) = x
+  encode_ne_null : ∀ x, encode x ≠ Val.null
+  encode_ne_undefined : ∀ x, encode x ≠ Val.undefined
+
 /-- `ToBoolean` (ECMA-262 §7.1.2), on the values of the subset. A number is
 false when it is `+0`, `-0` or `NaN`, and `-0 === 0`. -/
 def Val.truthy : Val N → Bool
