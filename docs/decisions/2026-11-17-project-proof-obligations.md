@@ -45,3 +45,11 @@ obligation cannot hold, even on a singleton array. A consistent comparator
 must compare each element with itself as equal. Interpreter seed 359337175
 exposed this case: main refused the program, but the comparator extension
 initially accepted it while the interpreter correctly gave no value.
+
+Direct `NaN` and infinite comparator results also remain refused.
+The current consistency obligation requires an ordered result and a zero
+self-comparison, so these constants cannot discharge it. CI seeds 326945034
+and 326945742 exposed the `NaN` case. Node normalizes a comparator's `NaN`
+result to zero, but the current evaluator deliberately makes no claim for
+that case. The translator now retains main's refusal instead of broadening
+the evaluator or weakening the Node comparison.

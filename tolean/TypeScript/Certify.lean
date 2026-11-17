@@ -937,6 +937,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
   let mut conditionalLemmas : List String := []
   let mut thms : Array String := #[]
   let mut proofModules : List String := []
+  let mut provedSortObligations : List String := []
   -- The translator requires a callee before its caller, so the condition
   -- of a callee is available when the caller's theorem is written.
   let mut functionConditions : List (String × (List (String × IR.Ty) × List String)) := []
@@ -1100,7 +1101,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           let supplied := proofs.filter (·.spec == spec)
           if supplied.length > 1 then
             throw s!"{file}: duplicate proofs for {spec}"
-          if supplied.isEmpty && Eval.intLiteral? arrowBody != some 0 then
+          if supplied.isEmpty && Eval.intLiteral? arrowBody.stripParens != some 0 then
             throw s!"{file}: missing project proof for {spec}"
           let fallback := match supplied.head? with
             | some proof => s!"exact _root_.{proof.proof.toName}"
@@ -1113,15 +1114,17 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
             let some dec := decoderOf r t
               | throw s!"{file}: cannot decode obligation parameter {n} in {name}"
             return s!" ({dec} (ρ.lookup {str n}))"
-          thms := thms.push <|
-            s!"theorem _root_.{consistencyName} : {statement} := by\n" ++
-            s!"  first\n" ++
-            s!"  | unfold {statement}\n" ++
-            s!"    intro {nv} _ _ {" ".intercalate (allScope.map (·.1))}\n" ++
-            s!"    refine tolean.TypeScript.Proof.consistentOn_of_transCmp (compareOn (fun (_ : {elemTy}) => (0 : Int))) ?_\n" ++
-            s!"    sort_tac\n" ++
-            s!"    done\n" ++
-            s!"  | {fallback}"
+          unless provedSortObligations.contains spec do
+            thms := thms.push <|
+              s!"theorem _root_.{consistencyName} : _root_.{statement} := by\n" ++
+              s!"  first\n" ++
+              s!"  | unfold _root_.{statement}\n" ++
+              s!"    intro {nv} _ _ {" ".intercalate (allScope.map (·.1))}\n" ++
+              s!"    refine _root_.tolean.TypeScript.Proof.consistentOn_of_transCmp (_root_.compareOn (fun (_ : {elemTy}) => (0 : _root_.Int))) ?_\n" ++
+              s!"    sort_tac\n" ++
+              s!"    done\n" ++
+              s!"  | {fallback}"
+            provedSortObligations := spec :: provedSortObligations
           let vars := ("x", elem) :: ("y", elem) :: scope.zipIdx.map fun ((_, t), i) => (s!"v{i}", t)
           loopLemmas := loopLemmas.push (r.cert lemmaName)
           thms := thms.push <|
