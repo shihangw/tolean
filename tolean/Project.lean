@@ -347,11 +347,13 @@ def Job.chainLanguage : Job → String × Option String
 
 /-- What one unit writes: its Lean file and manifest, and for a TypeScript
 file with `certify`, its certificate. -/
-def unitWrites (u : Job) (read : String → Except String String) (result : Except String Translation) :
+def unitWrites (u : Job) (read : String → Except String String) (result : Except String Translation)
+    (configInputs : List (String × String) := []) :
     IO (List Write) := do
   let t ← ok result
   let (language, target) := u.chainLanguage
   let m ← Chain.fileManifest language target (u.sources ++ t.imports) t.output t.lean t.module
+  let m := { m with sources := m.sources ++ configInputs.map fun (path, text) => Chain.textRef path text }
   let manifest (m : Chain.FileManifest) : Write := .file (t.output ++ ".chain.json") (Chain.manifestText m)
   let .typescript s source := u | return [.file t.output t.lean, manifest m]
   unless bool s "certify" false do return [.file t.output t.lean, manifest m]
@@ -373,12 +375,21 @@ are relative to the project root, which must be the working directory. -/
 def plan (config : Json) : IO (List Write) := do
   let files ← projectFiles "."
   let hasTypeScript := (units config files).any (· matches .typescript ..)
-  let tsconfig ← if hasTypeScript && files.contains "tsconfig.json" then do
-      let loaded ← (TypeScript.ModuleResolution.loadOptions files
-        (fun path => (liftM (IO.FS.readFile path) : ExceptT String IO String))
-        (files.length + 1) [] "tsconfig.json").run
-      pure (some (← ok loaded))
-    else pure none
+  let configs ← if hasTypeScript && files.contains "tsconfig.json" then do
+      let loaded ← ((TypeScript.ModuleResolution.collectConfigs
+        (fun path => (liftM (do
+          if (← System.FilePath.pathExists path) && !(← System.FilePath.isDir path) then
+            return some (← IO.FS.readFile path)
+          else return none : IO (Option String)) : ExceptT String IO (Option String)))
+        1024 [] "tsconfig.json").run []).run
+      pure (← ok loaded).2
+    else pure []
+  let tsconfig ← if configs.isEmpty then pure none else do
+      pure (some (← ok (TypeScript.ModuleResolution.loadOptions (configs.map (·.1))
+        (fun path => match configs.lookup path with
+          | some text => .ok text
+          | none => .error s!"{path}: no config file")
+        (configs.length + 1) [] "tsconfig.json")))
   let jobs ← ok (configuredUnits config files tsconfig)
   let texts ← (jobs.flatMap Job.sources).eraseDups.mapM fun (f : String) => do
     return (f, ← IO.FS.readFile f)
@@ -386,7 +397,8 @@ def plan (config : Json) : IO (List Write) := do
     match texts.lookup f with
     | some t => .ok t
     | none => .error s!"{f}: not read"
-  return (← (translateAll jobs read files).mapM fun (u, t) => unitWrites u read t).flatten
+  return (← (translateAll jobs read files).mapM fun (u, t) =>
+    unitWrites u read t (if u matches .typescript .. then configs else [])).flatten
 
 /-! ### Workspaces as JSON
 
@@ -407,6 +419,9 @@ def translateWorkspace (input : String) : Except String Json := do
   let files ← ws.getObjValAs? (List Json) "files"
   let texts ← files.mapM fun f => do
     return ((← f.getObjValAs? String "path"), (← f.getObjValAs? String "text"))
+  -- External entries supply config text only, never translation sources.
+  let projectFiles := (texts.map (·.1)).filter fun path =>
+    !(path.splitOn "/").contains ".."
   let some configText := texts.lookup "tolean.json"
     | throw "the workspace has no tolean.json"
   let config ← (Json.parse configText).mapError (s!"tolean.json: {·}")
@@ -414,17 +429,23 @@ def translateWorkspace (input : String) : Except String Json := do
     match texts.lookup f with
     | some t => .ok t
     | none => .error s!"{f}: no such file"
-  let hasTypeScript := (units config (texts.map (·.1))).any (· matches .typescript ..)
+  let hasTypeScript := (units config projectFiles).any (· matches .typescript ..)
+  let configs ← if hasTypeScript && (texts.lookup "tsconfig.json").isSome then
+      pure (← (TypeScript.ModuleResolution.collectConfigs (fun path => pure (texts.lookup path))
+        1024 [] "tsconfig.json").run []).2
+    else pure []
   let tsconfig ← if hasTypeScript && (texts.lookup "tsconfig.json").isSome then
       some <$> TypeScript.ModuleResolution.loadOptions (texts.map (·.1)) read
         (texts.length + 1) [] "tsconfig.json"
     else pure none
-  let jobs ← configuredUnits config (texts.map (·.1)) tsconfig
-  let results := translateAll jobs read (texts.map (·.1))
+  let jobs ← configuredUnits config projectFiles tsconfig
+  let results := translateAll jobs read projectFiles
   -- Report the units in the project's order, whatever order they ran in.
   let ordered := jobs.filterMap fun j => (results.find? fun (k, _) => k.sources == j.sources).map
     fun (_, r) => unitJson j r
-  return Json.mkObj [("units", Json.arr ordered.toArray)]
+  let inputs := configs.map fun (path, text) => Lean.toJson (Chain.textRef path text)
+  return Json.mkObj ([("units", Json.arr ordered.toArray)] ++
+    if inputs.isEmpty then [] else [("configInputs", Lean.toJson inputs)])
 
 /-- `translateWorkspace` as JSON text, with an error as `{"error"}`. -/
 def workspaceJson (input : String) : String :=
