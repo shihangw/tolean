@@ -1254,6 +1254,46 @@ Optional parameters and generic borrowing functions remain refused too.
 The certifier also refuses borrowing functions: its link proof does not
 yet describe the final map as the function's result.
 
+### Indexed access types
+
+An indexed access type such as `Shape['kind']` resolves to the type of that
+field. The receiver must resolve to a known interface or object type, which
+may be imported or named through a type alias. Nested access such as
+`Envelope['shape']['kind']` repeats the lookup. Optional fields retain
+`undefined` in their type.
+
+An anonymous literal union in an interface field remains refused because
+the translator needs a name for its Lean inductive type. Declare that union
+as a named type:
+
+```ts
+export type Kind = 'circle' | 'square';
+
+export interface Shape {
+  readonly kind: Kind;
+  readonly size: number;
+}
+
+export function hasKind(s: Shape, kind: Shape['kind']): boolean {
+  return s.kind === kind;
+}
+```
+
+Only a literal string key is supported. Unions of keys, `keyof` and numeric
+keys remain refused. A missing field is an error. An unconstrained generic
+receiver such as `T['kind']`, a union receiver, and a nullable or optional
+intermediate receiver are also refused because they do not resolve to one
+known structure. This feature concerns type annotations, not runtime
+array indexing. The
+[decision record](../decisions/2026-11-16-indexed-access-types.md)
+describes the static lookup and its proof coverage.
+
+Indexed access to a single-literal tag field, such as
+`interface Circle { readonly kind: 'circle' }`, also remains refused.
+The translator stores that tag as field metadata rather than an ordinary
+value type, so it cannot safely reuse that representation for a parameter.
+Use a named literal-union type for the field instead.
+
 ## Numbers
 
 A JS `number` is an IEEE-754 double. Tolean does not map it to Lean's

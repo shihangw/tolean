@@ -24,6 +24,8 @@ def TypeExpr.beq : TypeExpr → TypeExpr → Bool
   | .literal a0 a1, .literal b0 b1 => decide (a0 = b0) && decide (a1 = b1)
   | .ref a0 a1 a2, .ref b0 b1 b2 => decide (a0 = b0) && decide (a1 = b1) && TypeExpr.beqList a2 b2
   | .array a0 a1, .array b0 b1 => decide (a0 = b0) && TypeExpr.beq a1 b1
+  | .indexed a0 a1 a2, .indexed b0 b1 b2 =>
+    decide (a0 = b0) && TypeExpr.beq a1 b1 && decide (a2 = b2)
   | .union a0 a1, .union b0 b1 => decide (a0 = b0) && TypeExpr.beqList a1 b1
   | .paren a0 a1, .paren b0 b1 => decide (a0 = b0) && TypeExpr.beq a1 b1
   | .tuple a0 a1 a2, .tuple b0 b1 b2 => decide (a0 = b0) && decide (a1 = b1) && TypeExpr.beqList a2 b2
@@ -66,6 +68,8 @@ theorem TypeExpr.beq_iff : (a b : TypeExpr) → TypeExpr.beq a b = true ↔ a = 
   | .ref a0 a1 a2, b => by
     cases b <;> simp [and_assoc, TypeExpr.beq, TypeExpr.beqList_iff a2]
   | .array a0 a1, b => by
+    cases b <;> simp [and_assoc, TypeExpr.beq, TypeExpr.beq_iff a1]
+  | .indexed a0 a1 a2, b => by
     cases b <;> simp [and_assoc, TypeExpr.beq, TypeExpr.beq_iff a1]
   | .union a0 a1, b => by
     cases b <;> simp [and_assoc, TypeExpr.beq, TypeExpr.beqList_iff a1]
