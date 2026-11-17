@@ -1673,7 +1673,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     let args ← outParams.mapM fun (p, t) => do
       let some e := encoderOf r t | throw s!"{file}: cannot encode the parameter {p}"
       return s!"({e} {p})"
-    let binders := " ".intercalate (params.map fun p => s!"({p.name} : _)") ++
+    let binders := " ".intercalate (outParams.map fun (p, t) => s!"({p} : {t.print names})") ++
       String.join (obligations.map fun (n, p) => s!" ({n} : {p})")
     let call := " ".intercalate ((r.full s!"{transNs}.{name}" ++ callN) :: params.map (·.name))
     let retNames := if returnsLoop then ["tolean.TypeScript.Proof.retResult"] else []

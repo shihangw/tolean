@@ -440,6 +440,13 @@ decision record then states the choice and any limits that remain.
   non-parameter argument remain refused; see the
   [decision record](../decisions/2026-11-16-generic-codecs.md).
 
+  Function certificates still have a separate link-proof gap for some loops.
+  A loop over `bigint | undefined`, or a loop whose body captures a generic
+  nullable value, can produce a typed loop lemma but leave the function's link
+  theorem unsolved. This also happens without a match and predates the codec
+  work. These shapes remain outside this change until the link proof can use
+  the typed loop lemma for them.
+
 - How should a certificate cover an interface that refers to itself, and a
   function that calls itself? The decision is to keep both outside certificates
   until the recursive codec and fuel proofs exist. The certifier refuses them
