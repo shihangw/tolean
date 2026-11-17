@@ -1383,6 +1383,12 @@ def parseOrdinaryClassCtor : ParseM (List CtorParam × Stmt) := do
   let body ← inFunctionBody (parseBlock (← budget))
   return (params.toList, body)
 
+def parseClassReturnAnnotation : ParseM (Option TypeExpr) := do
+  if (← peek).isPunct ":" then
+    discard advance
+    return some (← parseReturnType)
+  return none
+
 def parseClassMethod : ParseM ClassMethod := do
   let t ← peek
   let name ← readPropertyName
@@ -1391,10 +1397,7 @@ def parseClassMethod : ParseM ClassMethod := do
   let _ ← expectPunct "("
   let params ← iterate (← budget) #[] (listStep ")" (fun _ => pure ()) (parseParam true))
   let _ ← expectPunct ")"
-  let mut returnType := none
-  if (← peek).isPunct ":" then
-    discard advance
-    returnType := some (← parseReturnType)
+  let returnType ← parseClassReturnAnnotation
   let body ← inFunctionBody (parseBlock (← budget))
   return { span := ← spanFrom t.span.start, name, params := params.toList, returnType, body }
 
@@ -1462,10 +1465,8 @@ def parseOrdinaryClass (start : Pos) (exported : Bool) : ParseM Decl := do
   let _ ← expectPunct "{"
   let members ← iterate (← budget) #[] (blockStep parseClassMember)
   let _ ← expectPunct "}"
-  let constructors := members.toList.filterMap fun
-    | .ctor params body => some (params, body)
-    | _ => none
-  if constructors.length > 1 then failAt t "a class may declare exactly one constructor"
+  if members.toList.countP ClassMember.isCtor > 1 then
+    failAt t "a class may declare exactly one constructor"
   return .classDecl {
     span := ← spanFrom start
     exported

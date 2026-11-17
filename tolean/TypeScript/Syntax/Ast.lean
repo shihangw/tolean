@@ -949,6 +949,10 @@ inductive ClassMember where
   | ctor (params : List CtorParam) (body : Stmt)
   | method (method : ClassMethod)
 
+def ClassMember.isCtor : ClassMember → Bool
+  | .ctor .. => true
+  | _ => false
+
 /-- An ordinary class retained for the elaborator, which lowers it before
 interpretation and translation. -/
 structure ClassDecl where
