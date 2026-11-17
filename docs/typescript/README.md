@@ -307,6 +307,9 @@ before the match; checked guards only read their parameter's tag. The IR and
 its evaluator use their existing boolean functions, calls and tag matches.
 `program_sound` covers this lowering through the same statement proofs as
 inline tests. The native and WebAssembly translators use the same source.
+Guard normalization also visits both blocks of a `try` statement. Inline
+`typeof` and null tests narrow in either block, and a checked guard call can
+narrow in the catch handler. The protected body still rejects calls.
 
 #### Regular expressions
 

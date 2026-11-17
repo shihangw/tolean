@@ -119,6 +119,8 @@ def Stmt.expandGuards (guards : List (String × GuardTest)) (checked : List Span
   | .forStmt s d c u b => .forStmt s d c u (Stmt.expandGuards guards checked b)
   | .whileStmt s c b => .whileStmt s c (Stmt.expandGuards guards checked b)
   | .switchStmt s e cs => .switchStmt s e (Stmt.expandGuardsClauses guards checked cs)
+  | .tryCatch s body name handler =>
+    .tryCatch s (Stmt.expandGuards guards checked body) name (Stmt.expandGuards guards checked handler)
   | s => s
 
 def Stmt.expandGuardsList (guards : List (String × GuardTest)) (checked : List Span) : List Stmt → List Stmt

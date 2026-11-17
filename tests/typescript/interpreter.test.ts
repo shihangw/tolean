@@ -255,6 +255,45 @@ test('read-only try bodies and ignored catches agree with Node', async () => {
   }
 });
 
+test('checked guards and inline narrowing in try and catch agree with Node', async () => {
+  const source = readFileSync(new URL('./corpus/translate/accept/tryCatchGuards.ts', import.meta.url), 'utf8');
+  const calls: Array<{ function: string; args: Array<unknown> }> = [];
+  for (const value of ['plain text', 27n]) {
+    calls.push({ function: 'typeofInTry', args: [value] });
+    calls.push({ function: 'typeofInCatch', args: [value] });
+    calls.push({ function: 'checkedGuardInCatch', args: [value] });
+  }
+  for (const value of ['plain text', null]) {
+    calls.push({ function: 'nullTestInTry', args: [value] });
+    calls.push({ function: 'nullTestInCatch', args: [value] });
+  }
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: [{ source, calls: calls.map(c => ({
+      function: c.function, args: c.args.map(encode),
+    })) }] }),
+    encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (result === undefined || !result.parsed) throw new Error('guarded try fixture did not parse');
+  expect(result.accepted).toBe(true);
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-try-guards-'));
+  const path = join(dir, 'index.mjs');
+  writeFileSync(path, ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+  }).outputText);
+  const mod = await import(pathToFileURL(path).href) as Record<string, (...xs: Array<unknown>) => unknown>;
+  for (const [i, call] of calls.entries()) {
+    const fn = mod[call.function];
+    if (fn === undefined) throw new Error(`missing export ${call.function}`);
+    const expected = result.results[i];
+    expect(expected).not.toBeNull();
+    if (expected === undefined || expected === null) throw new Error('guarded try fixture has no modeled result');
+    expect(expected).toEqual({ value: encode(fn(...call.args)) });
+  }
+});
+
 test('certified local functions agree with Node on random arguments', async () => {
   const source = ['localFunctionCertificate', 'localFunctionLoopCertificates'].map(name =>
     readFileSync(new URL(`./corpus/translate/accept/${name}.ts`, import.meta.url), 'utf8')).join('\n');

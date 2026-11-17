@@ -303,11 +303,13 @@ inductive Stmt where
 instance : Inhabited Stmt := ⟨.empty default⟩
 
 /-- Expressions allowed in the first try bodies. Translation still checks
-their types and bindings. Calls, property access and arithmetic stay out
-because their exceptions need a separate analysis. -/
+their types and bindings. `typeof` may read a local name. Calls, property
+access and arithmetic stay out because their exceptions need a separate
+analysis. -/
 def Expr.catchSafe : Expr → Bool
   | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => true
   | .paren _ e | .unary _ .not e => e.catchSafe
+  | .unary _ .typeof (.ident ..) => true
   | .binary _ .strictEq a b | .binary _ .strictNe a b => a.catchSafe && b.catchSafe
   | _ => false
 
