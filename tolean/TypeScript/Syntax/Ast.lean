@@ -266,11 +266,32 @@ deriving DecidableEq
 def ArrayPattern.names (p : ArrayPattern) : List String :=
   p.elems.filterMap id ++ p.rest.toList
 
+/-- A flat object binding reuses the spelling of an object literal. Only
+identifier keys and identifier binding targets belong to this pattern. -/
+def Expr.isObjectPattern : Expr → Bool
+  | .object _ props => !props.isEmpty && props.all fun
+    | .shorthand .. | .keyValue _ (.ident _) (.ident ..) => true
+    | _ => false
+  | _ => false
+
+/-- The property and local name of each binding, in source order. -/
+def Expr.objectBindings : Expr → List (String × String)
+  | .object _ props => props.filterMap fun
+    | .shorthand _ n => some (n, n)
+    | .keyValue _ (.ident key) (.ident _ name) => some (key, name)
+    | _ => none
+  | _ => []
+
+def Expr.objectBindingNames (p : Expr) : List String :=
+  p.objectBindings.map Prod.snd
+
 inductive Stmt where
   | varDecl (span : Span) (decl : VarDecl)
   /-- `const [a, , b, ...rest]: T = init;`, an array destructuring
   (ECMA-262 §14.3.3), with an optional type. -/
   | destructure (span : Span) (kind : VarKind) (pattern : ArrayPattern) (type : Option TypeExpr) (init : Expr)
+  /-- A flat object binding in a local declaration (ECMA-262 §14.3.3). -/
+  | objectDestructure (span : Span) (kind : VarKind) (pattern : Expr) (type : Option TypeExpr) (init : Expr)
   | exprStmt (span : Span) (expr : Expr)
   | returnStmt (span : Span) (value : Option Expr)
   | ifStmt (span : Span) (test : Expr) (thenBranch : Stmt) (elseBranch : Option Stmt)
@@ -343,7 +364,7 @@ mutual
 
 /-- `s` assigns the name `n` somewhere inside it. -/
 def Stmt.assigns (n : String) : Stmt → Bool
-  | .destructure _ _ _ _ e => e.assigns n
+  | .destructure _ _ _ _ e | .objectDestructure _ _ _ _ e => e.assigns n
   | .varDecl _ d => match d.init with
     | some e => e.assigns n
     | none => false
@@ -422,7 +443,7 @@ mutual
 /-- `s` changes the array, map or set that the name `n` holds somewhere
 inside it, as `Expr.mutates` says. -/
 def Stmt.mutates (n : String) : Stmt → Bool
-  | .destructure _ _ _ _ e => e.mutates n
+  | .destructure _ _ _ _ e | .objectDestructure _ _ _ _ e => e.mutates n
   | .varDecl _ d => match d.init with
     | some e => e.mutates n
     | none => false
@@ -503,6 +524,7 @@ def Stmt.mentions (n : String) : Stmt → Bool
     | some e => e.mayHold (· == n)
     | none => false)
   | .destructure _ _ p _ e => p.names.contains n || e.mayHold (· == n)
+  | .objectDestructure _ _ p _ e => p.objectBindingNames.contains n || e.mayHold (· == n)
   | .exprStmt _ e | .throwStmt _ e => e.mayHold (· == n)
   | .returnStmt _ e => match e with
     | some e => e.mayHold (· == n)
@@ -660,6 +682,7 @@ def Stmt.binds (n : String) : Stmt → List Bool
   -- A destructured name holds an element of something else, or a copy of
   -- the rest that nothing owns.
   | .destructure _ _ p _ _ => if p.names.contains n then [false] else []
+  | .objectDestructure _ _ p _ _ => if p.objectBindingNames.contains n then [false] else []
   | .forOfStmt _ _ x _ b => (if x == n then [false] else []) ++ b.binds n
   | .forOfPattern _ _ p _ b => (if p.names.contains n then [false] else []) ++ b.binds n
   | .forStmt _ init _ _ b =>
@@ -691,7 +714,7 @@ mutual
 
 /-- The names whose array, map or set `s` changes, as `Expr.changed` says. -/
 def Stmt.changed : Stmt → List String
-  | .destructure _ _ _ _ e => e.changed
+  | .destructure _ _ _ _ e | .objectDestructure _ _ _ _ e => e.changed
   | .varDecl _ d => match d.init with
     | some e => e.changed
     | none => []
@@ -735,7 +758,7 @@ mutual
 over. A `return` ends the function, so nothing changes the object after
 that. A loop reads the collection without keeping it. -/
 def Stmt.leaks (n : String) : Stmt → Bool
-  | .destructure _ _ _ _ e => e.leaks n
+  | .destructure _ _ _ _ e | .objectDestructure _ _ _ _ e => e.leaks n
   | .varDecl _ d => match d.init with
     | some e => e.leaks n
     | none => false
@@ -884,6 +907,7 @@ def Stmt.constAssignedIn (s : Stmt) (rest : List Stmt) : Bool :=
   match s with
   | .varDecl _ d => d.kind == .const && Stmt.assignsList d.name rest
   | .destructure _ kind p _ _ => kind == .const && p.names.any (Stmt.assignsList · rest)
+  | .objectDestructure _ kind p _ _ => kind == .const && p.objectBindingNames.any (Stmt.assignsList · rest)
   | _ => false
 
 /-- Only a declaration can be a `const` that a later statement assigns. -/
@@ -915,7 +939,7 @@ does not count. -/
 def clausesDeclare (clauses : List (Option Expr × List Stmt)) : Bool :=
   clauses.any fun (_, body) => body.any fun
     | .varDecl _ d => !d.name.endsWith "'"
-    | .destructure .. => true
+    | .destructure .. | .objectDestructure .. => true
     | _ => false
 
 /-- A property of an interface. -/
@@ -997,7 +1021,7 @@ def Expr.span : Expr → Span
   | .arrow s _ _ _ | .asConst s _ | .satisfies s _ _ | .new s _ _ _ | .spread s _ => s
 
 def Stmt.span : Stmt → Span
-  | .varDecl s _ | .destructure s _ _ _ _ | .exprStmt s _ | .returnStmt s _ | .ifStmt s _ _ _ | .forOfStmt s _ _ _ _
+  | .varDecl s _ | .destructure s _ _ _ _ | .objectDestructure s _ _ _ _ | .exprStmt s _ | .returnStmt s _ | .ifStmt s _ _ _ | .forOfStmt s _ _ _ _
   | .forOfPattern s _ _ _ _
   | .forStmt s _ _ _ _ | .whileStmt s _ _ | .block s _ | .breakStmt s | .continueStmt s | .empty s | .switchStmt s _ _
   | .throwStmt s _ | .funDecl s _ _ _ _ _ => s

@@ -765,7 +765,8 @@ def parseProperty (fuel : Nat) : ParseM Property := do
     let .ident name := t.kind | unexpected next "':'"
     if refusedNames.contains name then failAt t s!"'{name}' is not supported as a name"
     return .shorthand t.span name
-  if next.isPunct "(" || next.isPunct "<" then failAt next "methods are not supported"
+  if next.isPunct "=" || next.isPunct "(" || next.isPunct "<" then
+    failAt next (if next.isPunct "=" then "default values are not supported" else "methods are not supported")
   unexpected next "':'"
 
 def parseObjectLiteral (fuel : Nat) : ParseM Expr := do
@@ -941,6 +942,24 @@ def parseDestructure (start : Pos) : ParseM Stmt := do
   if t.isPunct "," then failAt t "declare one variable per statement"
   endStatement
   return .destructure (← spanFrom start) kind pattern type init
+
+/-- A flat object binding. The object-literal reader preserves shorthand
+and renamed properties, then the guard excludes expression-only forms. -/
+def parseObjectDestructure (start : Pos) : ParseM Stmt := do
+  let keyword ← advance
+  let kind := if keyword.isKeyword "const" then VarKind.const else .«let»
+  let pattern ← parsePrimary (← budget)
+  unless pattern.isObjectPattern do
+    failAt keyword "an object pattern needs identifier fields and names; nested patterns, defaults and rest elements are not supported"
+  let type ← readAnnotation
+  let t ← peek
+  unless t.isPunct "=" do failAt t "a destructuring declaration needs a value"
+  discard advance
+  let init ← parseAssign (← budget)
+  let t ← peek
+  if t.isPunct "," then failAt t "declare one variable per statement"
+  endStatement
+  return .objectDestructure (← spanFrom start) kind pattern type init
 
 /-- The rest of `for (const [a, , ...r] of iterable) body` from the `[`, which
 the keyword `const` or `let` of `kind` comes before. `parseBody` reads the
@@ -1148,6 +1167,7 @@ def parseStatement (fuel : Nat) : ParseM Stmt := do
   -- with it (ECMA-262 §14.5).
   | .keyword "const" | .ident "let" =>
     if (← peekAt 1).isPunct "[" then parseDestructure start
+    else if (← peekAt 1).isPunct "{" then parseObjectDestructure start
     else
       parseDeclStatement (parseBlock fuel) start
   | .keyword "if" =>

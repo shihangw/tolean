@@ -1,39 +1,41 @@
-# Object destructuring needs a binding operation
+# Object patterns bind fields from one source value
 
-Object destructuring must evaluate its source once. For example,
-`const { start, end } = makeSpan()` must not become two calls to
-`makeSpan()`. The implementation should bind the result to a fresh internal
-name, then read the fields in source order. A renamed binding such as
-`{ start: first }` reads `start` and declares `first`.
+Local `const` and `let` declarations accept flat object patterns with
+identifier keys and optional renaming. The syntax tree retains the pattern.
+Its printer preserves shorthand and renamed properties, and the parser
+comparison checks those properties against TypeScript's binding tree.
 
-The current syntax tree has an array binding pattern, but no object binding
-pattern. Its evaluator and the `program_sound` proof likewise cover array
-patterns only. Reusing array indexing would give object patterns the wrong
-meaning. Introducing a block around separate declarations would also change
-their scope. Neither shortcut is acceptable.
+The output evaluates the source once. A structure-pattern expression selects
+the fields and returns their values as a tuple. The existing tuple binding
+then declares the user's names in the surrounding scope. The structure
+pattern includes `..`, so a declaration need not name every field. Repeated
+property keys share one pattern field, but each requested local receives its
+value. Generated names stay inside the expression and cannot capture the
+source or leak into the continuation.
 
-This change keeps object patterns refused and makes the diagnostic explain
-the safe manual rewrite. It does not fix issue #261. Before accepting these
-patterns, a follow-up must add their syntax tree, printer and parser proofs.
-It must also extend the evaluator and the statement case of `program_sound`.
-The parser comparison must compare object patterns with TypeScript's tree,
-rather than hide them behind a lowered tree.
+An output-only temporary was not a direct fit for the existing proof.
+`Agree` compares every name in the source and output environments, so a
+private binding in just the output breaks its continuation hypothesis.
+The structure-pattern expression avoids that mismatch without changing
+`Agree`. Its evaluator extracts fields from one object value, and the
+statement proof uses the existing `binds_sim` and tuple-binding argument.
+The source evaluator reads the same fields in source order.
 
-The first supported form should be a local `const` or `let` declaration with
-identifier property names and optional renaming. Its source must be evaluated
-once, and its bindings must belong to the surrounding block. The translator
-must apply the existing restrictions on mutable aliases to the extracted
-values. Tests must cover a call as the source, assignments to extracted `let`
-bindings, renamed fields and collisions with generated names.
+Renaming is by property name, not position. For example, `{ a: b, b: a }`
+reads `a` into `b` and `b` into `a`. But `{ a: s, b } = s` does not read an
+outer `s`: JavaScript resolves the initializer to the new local `s` and
+throws because it is not initialized yet. The translator refuses a source
+that mentions one of the pattern's binding names. The interpreter gives no
+value for that form, rather than incorrectly reading the outer binding.
 
-Nested patterns remain refused until the model accounts for each intermediate
-property read. Defaults need conditional evaluation when a property is
-undefined, so they remain refused too. Rest bindings need the semantics of
-`CopyDataProperties`, including exclusions and enumeration order. Destructured
-parameters need separate work on parameter binding and function entry.
-Neither operation follows from array binding.
+The existing restrictions on aliases still apply to extracted collections.
+Nested patterns, defaults, rest elements and computed keys remain refused.
+Empty patterns, exported patterns and patterns in loop heads remain refused
+too. Destructured parameters need separate work on function entry and
+parameter binding, so they remain refused.
 
-Object binding patterns date to ES2015, which specifies BindingInitialization
-in §13.3.3.5 and KeyedBindingInitialization in §13.3.3.7. ES2024 specifies them
-in §14.3.3.3 and §14.3.3.4. Every supported target has the basic operation.
-Object rest first appeared in ES2018 and must not inherit that ES2015 boundary.
+Object binding patterns date to ES2015, which specifies
+BindingInitialization in §13.3.3.5 and KeyedBindingInitialization in
+§13.3.3.7. ES2024 specifies them in §14.3.3.3 and §14.3.3.4. Every supported
+target has these operations. Object rest first appeared in ES2018 and does
+not inherit the ES2015 boundary.

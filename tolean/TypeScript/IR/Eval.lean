@@ -254,6 +254,9 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
     | .indexLit k => match args with
       | [.list xs] => some (Eval.elementAt xs (some k))
       | _ => none
+    | .objectTuple keys => match args with
+      | [.obj fields] => (keys.mapM (Eval.getProp fields)).map .list
+      | _ => none
     | .optIndexLit k _ => optionalLiteralIndex k args
     | .indexNumber => match args with
       | [.list xs, .num i] => some (Eval.elementAt xs (JSNumber.toSafeInt i))

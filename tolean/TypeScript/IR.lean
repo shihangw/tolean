@@ -221,6 +221,9 @@ inductive ExprExt where
   /-- `xs[k]?`, on `xs`: `xs[k]` with a number literal `k`, which is the
   element at `k` or `undefined`. -/
   | indexLit (k : Nat)
+  /-- Extract fields from one structure value as a tuple. The printed
+  expression uses a structure pattern, so it evaluates its argument once. -/
+  | objectTuple (fields : List String)
   /-- Bind an optional array or tuple before reading a literal index. -/
   | optIndexLit (k : Nat) (tupleSize : Option (Nat × Bool))
   /-- `(JSNumber.elementAt? xs i)`, on `xs` and `i`: `xs[i]` with a number
@@ -574,6 +577,13 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
     let int := leanName names "Int"
     s!"({js}.ofSafeInt (N := {names.typeParam}) (({leanName names "List.length"} {argument xs} : {leanName names "Nat"}) : {int}))"
   | .indexLit k, [xs] => s!"{argument xs}[{k}]?"
+  | .objectTuple fields, [source] =>
+    let keys := fields.eraseDups
+    let localName := fun key => s!"_objectField{keys.idxOf key}"
+    let bindings := keys.map fun key => s!"{memberName key} := {localName key}"
+    let pattern := String.intercalate ", " (bindings ++ [".."])
+    let result := tolean.IR.tuple (fields.map localName)
+    s!"(let \{ {pattern} } := {source}; {result})"
   | .optIndexLit k none, [xs] => s!"({argument xs}.bind (·[{k}]?))"
   | .optIndexLit k (some (size, bind)), [xs] =>
     let value := s!"_tuple'{tolean.IR.projPath k size}"

@@ -4410,6 +4410,52 @@ theorem parseDestructure_gives {T : Edition} {s s' : ParseState} {st : Stmt} {st
     unfold destructureWords
     words_ok
 
+theorem parseObjectDestructure_gives {T : Edition} {s s' : ParseState} {st : Stmt} {start : Pos} {x : Token}
+    {r : List Token} (hR : Ready s) (hT : s.target = T) (hs : s.rest = x :: r) (hx : x.kind ≠ .eof)
+    (h : Parse.parseObjectDestructure start s = .ok st s') :
+    Ready s' ∧ Kept s s' ∧ st.wf T s.inFunction (s.loopDepth != 0) = true ∧ st.openIf = false ∧ StmtOK T st := by
+  simp only [Parse.parseObjectDestructure] at h
+  rw [Parse.bind_eq (advance_past hR hs hx)] at h
+  have hR₁ := hR.past hs (hR.more hs hx)
+  rw [Parse.bind_eq (Parse.budget_eq _), Parse.bind_ok] at h
+  obtain ⟨p, s₅, hrp, h⟩ := h
+  obtain ⟨_, _, _, _, _, _, _, _, _, _, _, hPrim, _, _⟩ := exprs_give T _
+  have gp := hPrim _ _ _ hR₁ hT hrp
+  by_cases hp : p.isObjectPattern = true
+  rotate_left; · rw [if_neg hp] at h; exact absurd h (failAt_bind_ne_ok _ _ _ _ _ _)
+  rw [if_pos hp, Parse.pure_bind, Parse.bind_ok] at h
+  obtain ⟨ty, s₆, hty, h⟩ := h
+  have hKa : Kept s s₅ := (Kept.past _ _ _).trans gp.kept
+  obtain ⟨hR₆, hK₆, htw, htok⟩ := readAnnotation_inv gp.ready (hKa.target_eq.trans hT) hty
+  obtain ⟨w, r₆, hs₆⟩ := hR₆.cons
+  rw [Parse.bind_eq (Parse.peek_eq hs₆)] at h
+  by_cases heq : w.isPunct "=" = true
+  rotate_left; · rw [if_neg heq] at h; exact absurd h (failAt_bind_ne_ok _ _ _ _ _ _)
+  rw [if_pos heq, Parse.pure_bind] at h
+  have hwne : w.kind ≠ .eof := by simp [Token.isPunct] at heq; rw [heq]; simp
+  have hR₇ := hR₆.past hs₆ (hR₆.more hs₆ hwne)
+  rw [Parse.bind_eq (Parse.discard_eq (advance_past hR₆ hs₆ hwne)), Parse.bind_eq (Parse.budget_eq _),
+    Parse.bind_ok] at h
+  obtain ⟨v, s₈, hv, h⟩ := h
+  have hKb : Kept s (past s₆ w r₆) := hKa.trans (hK₆.trans (Kept.past _ _ _))
+  have gv := (exprs_give T _).2.1 _ _ _ hR₇ (hKb.target_eq.trans hT) hv
+  obtain ⟨z, r₈, hs₈⟩ := gv.ready.cons
+  rw [Parse.bind_eq (Parse.peek_eq hs₈)] at h
+  obtain ⟨_, h⟩ := fail_inv h
+  rw [Parse.bind_ok] at h; obtain ⟨_, s₉, hend', h⟩ := h
+  obtain ⟨hR₉, hK₉⟩ := endStatement_inv gv.ready hend'
+  rw [Parse.bind_eq (Parse.spanFrom_eq _ _)] at h
+  simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h
+  refine ⟨hR₉, hKb.trans (gv.kept.trans hK₉), ?_, rfl, StmtOK.one (fun _ => rfl) ?_⟩
+  · simp only [Stmt.wf, Bool.and_eq_true]
+    exact ⟨⟨⟨⟨hp, gp.wf⟩, htw⟩, gv.wf⟩, gv.after _ (follows_end (.inl rfl))⟩
+  · have hk := VarKind.word_ok T (if x.isKeyword "const" = true then VarKind.const else .«let»)
+    have h1 := typeAnnotation_ok htok
+    have h2 := gv.ok
+    have h3 := gp.ok
+    unfold objectDestructureWords
+    words_ok
+
 /-- What a function of the statement parser gives: a statement that `Stmt.wf`
 accepts in the state's function and loop. A statement that ends with an `if`
 without `else` has no `else` after it, and a declaration starts with `const`
@@ -5181,7 +5227,8 @@ theorem parseStatement_gives {T : Edition} {f : Nat} (hBlk : GivesS T (Parse.par
   -- of the `match` gives it.
   have hdecl : (x.kind = .keyword "const" ∨ x.kind = .ident "let") →
       (Parse.peekAt 1 >>= fun t => if t.isPunct "[" = true then Parse.parseDestructure x.span.start else
-        Parse.parseDeclStatement (Parse.parseBlock f) x.span.start) s = .ok st s' →
+        Parse.peekAt 1 >>= fun t => if t.isPunct "{" = true then Parse.parseObjectDestructure x.span.start else
+          Parse.parseDeclStatement (Parse.parseBlock f) x.span.start) s = .ok st s' →
       Ready s' ∧ Kept s s' ∧ st.wf T s.inFunction (s.loopDepth != 0) = true ∧
         (st.openIf = true → ∀ u ∈ s'.rest.head?, u.kind ≠ .keyword "else") ∧
         (st.isDecl = true → ∀ x ∈ s.rest.head?,
@@ -5198,6 +5245,12 @@ theorem parseStatement_gives {T : Edition} {f : Nat} (hBlk : GivesS T (Parse.par
       obtain ⟨hR₁, hK₁, hw, ho, hok⟩ := parseDestructure_gives hR hT hs hxne h
       exact ⟨hR₁, hK₁, hw, by simp [ho], fun _ => hfirst, hok⟩
     rw [if_neg hb] at h
+    rw [Parse.bind_eq (Parse.peekAt_rest _ _)] at h
+    by_cases ho : (s.rest[1]?.getD s.eof).isPunct "{" = true
+    · rw [if_pos ho] at h
+      obtain ⟨hR₁, hK₁, hw, ho, hok⟩ := parseObjectDestructure_gives hR hT hs hxne h
+      exact ⟨hR₁, hK₁, hw, by simp [ho], fun _ => hfirst, hok⟩
+    rw [if_neg ho] at h
     obtain ⟨hR₁, hK₁, hw, ho, hok⟩ := parseDeclStatement_gives hBlk hR hT hs hk h
     exact ⟨hR₁, hK₁, hw, ho, fun _ => hfirst, hok⟩
   generalize hk : x.kind = k at h

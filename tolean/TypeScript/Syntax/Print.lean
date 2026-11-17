@@ -105,6 +105,9 @@ partial def Stmt.toSexp : Stmt → Sexp
   | .varDecl s d => d.toSexp s false
   | .destructure s kind p type init =>
     node kind.keyword s [] ([p.toSexp] ++ (type.map TypeExpr.toSexp).toList ++ [init.toSexp])
+  | .objectDestructure s kind p type init =>
+    node kind.keyword s [] ([node "object-pattern" p.span [] [p.toSexp]] ++
+      (type.map TypeExpr.toSexp).toList ++ [init.toSexp])
   | .exprStmt s e => node "expr" s [] [e.toSexp]
   | .returnStmt s value => node "return" s [] (value.map Expr.toSexp).toList
   | .throwStmt s value => node "throw" s [] [value.toSexp]

@@ -549,6 +549,31 @@ class Printer {
         this.expr(decl.initializer),
       ]);
     }
+    if (ts.isObjectBindingPattern(decl.name)) {
+      if (exported) refuse(decl.name, 'exported destructuring');
+      if (decl.initializer === undefined) refuse(decl, 'destructuring without a value');
+      const pattern = decl.name;
+      if (pattern.elements.length === 0) refuse(pattern, 'empty object pattern');
+      const properties = pattern.elements.map(el => {
+        if (el.dotDotDotToken !== undefined) refuse(el, 'object rest binding');
+        if (el.initializer !== undefined) refuse(el, 'default value');
+        const name = this.name(el.name);
+        if (el.propertyName === undefined) {
+          return this.node('shorthand', el, [name], []);
+        }
+        if (!ts.isIdentifier(el.propertyName)) refuse(el.propertyName, 'object binding key');
+        return this.node('property', el, [el.propertyName.text], [
+          this.node('ident', el.name, [name], []),
+        ]);
+      });
+      return this.node(kind, s, [], [
+        this.node('object-pattern', pattern, [], [
+          this.node('object', pattern, [], properties),
+        ]),
+        ...(decl.type === undefined ? [] : [this.type(decl.type)]),
+        this.expr(decl.initializer),
+      ]);
+    }
     return this.node(
       kind,
       s,

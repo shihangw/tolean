@@ -1473,7 +1473,7 @@ mutual
 
 def stmtChanges (fns : List (String × List String)) : Stmt → List String
   | .varDecl _ d => optionChanges fns d.init
-  | .destructure _ _ _ _ init => exprChanges fns init
+  | .destructure _ _ _ _ init | .objectDestructure _ _ _ _ init => exprChanges fns init
   | .exprStmt _ (.call _ (.ident _ name) args) =>
     match fns.lookup name with
     | some _ => calleeChanges fns (.ident default name) ++ exprsChanges fns args
@@ -3722,6 +3722,24 @@ def translateDestructure (tr : Option Ty → Expr → TM Code) (k : Env → TM I
   let rest ← k env'
   orReject (destructureBody p t (withType code.value t code.type) reads rest) s "a pattern must declare a name"
 
+/-- Object bindings extract a tuple with a structure pattern. The pattern's
+locals belong to that expression, not to the continuation's environment. -/
+def translateObjectDestructure (tr : Option Ty → Expr → TM Code) (k : Env → TM IR.Body) (env : Env)
+    (s : Span) (kind : VarKind) (p : Expr) (type : Option TypeExpr) (init : Expr) : TM IR.Body := do
+  unless p.isObjectPattern do reject s "invalid object binding pattern"
+  if init.mayHold p.objectBindingNames.contains then
+    reject init.span "the source reads a name declared by this pattern before initialization"
+  let declared ← declaredType type
+  let code ← tr declared init
+  let _ ← fitDeclared s declared code
+  unless code.type.structRef?.isSome do reject s "an object pattern needs an interface or an object literal"
+  let reads ← p.objectBindings.mapM fun (key, name) => do
+    let field ← tr none (.member s init key)
+    return (name, field.type, field.value)
+  let env' ← declarePlaces s (if kind == .const then .const else .«let») env reads
+  let rest ← k env'
+  return .letTuple (reads.map (·.1)) (.ext (.objectTuple (p.objectBindings.map Prod.fst)) [code.value]) rest
+
 /-- Where a local function may stand. -/
 def localFunctionPlace : String :=
   "a local function must stand in the body of the function around it, " ++
@@ -4131,6 +4149,13 @@ def translateStatements (fuel : Nat) (env : Env) (tail : Tail) (statements : Lis
         modify fun c => { c with returning := false }
         return tail.returnBody (if (← get).throws then IR.Expr.pure code.value else code.value)
     | .varDecl s d => translateVariable fuel env s d rest tail
+    | .objectDestructure s kind p type init =>
+      if stmt.constAssignedIn rest then
+        reject s "a name of the pattern is a const, and a later statement assigns it; declare it with let"
+      if (throwingCall? env.functions init).isSome then
+        reject init.span "a pattern may not take the value of a call that can throw; declare a const for the call first"
+      translateObjectDestructure (fun exp e => do translateExpr (← fuelLimit) env exp e)
+        (fun env' => translateStatements fuel env' tail rest) env s kind p type init
     | .destructure s kind p type init =>
       if stmt.constAssignedIn rest then
         reject s "a name of the pattern is a const, and a later statement assigns it; declare it with let"
@@ -4971,6 +4996,8 @@ def stmtUsesNumber : Stmt → Bool
   | .varDecl _ d => varUsesNumber d
   | .destructure _ _ p type init =>
     p.names.any isNumberName || (type.map typeUsesNumber).getD false || exprUsesNumber init
+  | .objectDestructure _ _ p type init =>
+    p.objectBindingNames.any isNumberName || (type.map typeUsesNumber).getD false || exprUsesNumber init
   | .exprStmt _ e => exprUsesNumber e
   | .returnStmt _ v => (v.map exprUsesNumber).getD false
   | .throwStmt _ e => exprUsesNumber e
@@ -5261,7 +5288,8 @@ mutual
 
 def prepareInlineStmt : Stmt → TM Unit
   | .varDecl _ decl => prepareInlineVar decl
-  | .destructure _ _ _ type expr => do type.forM prepareInlineType; prepareInlineExpr expr
+  | .destructure _ _ _ type expr | .objectDestructure _ _ _ type expr =>
+    do type.forM prepareInlineType; prepareInlineExpr expr
   | .exprStmt _ expr | .throwStmt _ expr => prepareInlineExpr expr
   | .returnStmt _ expr => expr.forM prepareInlineExpr
   | .ifStmt _ test yes no => do
