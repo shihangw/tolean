@@ -4,8 +4,8 @@ export class ParseError extends Error {
 
   constructor(message: string, line: number, label: string) {
     super(message);
-    this.label = label;
     this.line = line;
+    this.label = label;
   }
 }
 

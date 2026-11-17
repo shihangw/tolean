@@ -1837,6 +1837,8 @@ theorem parseClass_reads {T : Edition} (start : Pos) (exported : Bool) (sp : Spa
         Parse.bind_eq (Parse.expectPunct_ok (s := s₆) rfl (by simp) hlp), Parse.bind_eq (Parse.budget_eq _),
         Parse.bind_eq hit]
       rw [if_pos (show Parse.errorFieldsOK #[] res = true by simp [Parse.errorFieldsOK]), Parse.pure_bind]
+      rw [if_pos (show Parse.errorFieldOrderOK #[] res = true by
+        simp [Parse.errorFieldOrderOK, Parse.errorFieldParams]), Parse.pure_bind]
       rw [Parse.bind_eq (Parse.expectPunct_ok hs₈ (by simp) hrp),
         Parse.bind_eq (Parse.expectPunct_ok (s := s₉) rfl (by simp) hcb),
         Parse.bind_eq (Parse.peek_eq (s := s₁₀) rfl), if_pos (show sk.isKeyword "super" = true by simp [Token.isKeyword, hsk]),

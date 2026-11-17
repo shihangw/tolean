@@ -317,6 +317,15 @@ class Printer {
       }
       fields.add(name);
     }
+    const properties = ctor.parameters.filter((p) =>
+      p.modifiers?.some((m) => m.kind === ts.SyntaxKind.ReadonlyKeyword));
+    const runtimeOrder = [...properties.map((p) => this.name(p.name)), ...fields];
+    const normalizedOrder = ctor.parameters.filter((p) =>
+      p.modifiers?.some((m) => m.kind === ts.SyntaxKind.ReadonlyKeyword) ||
+      ts.isIdentifier(p.name) && fields.has(p.name.text)).map((p) => this.name(p.name));
+    if (JSON.stringify(runtimeOrder) !== JSON.stringify(normalizedOrder)) {
+      refuse(ctor, 'error field order must match parameter properties followed by separate declarations');
+    }
     const params = ctor.parameters.map((p) =>
       this.ctorParam(p, ts.isIdentifier(p.name) && fields.has(p.name.text)));
     const body = ctor.body.statements;
@@ -329,7 +338,8 @@ class Printer {
       const e = ts.isExpressionStatement(statement) ? statement.expression : undefined;
       if (e === undefined || !ts.isBinaryExpression(e) || e.operatorToken.kind !== ts.SyntaxKind.EqualsToken ||
           !ts.isPropertyAccessExpression(e.left) || e.left.expression.kind !== ts.SyntaxKind.ThisKeyword ||
-          !ts.isIdentifier(e.right) || e.left.name.text !== e.right.text || !fields.delete(e.right.text)) {
+          !ts.isIdentifier(e.right) || e.left.name.text !== e.right.text ||
+          fields.values().next().value !== e.right.text || !fields.delete(e.right.text)) {
         refuse(statement, 'unconditional assignment from a same-name parameter to an unassigned error field');
       }
     }

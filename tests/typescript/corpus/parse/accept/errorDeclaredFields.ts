@@ -1,9 +1,9 @@
 export class ParseError extends Error {
   readonly line: number;
   readonly label: string;
-  constructor(message: string, readonly code: bigint, label: string, line: number) {
+  constructor(message: string, readonly code: bigint, line: number, label: string) {
     super(message);
-    this.label = label;
     this.line = line;
+    this.label = label;
   }
 }
