@@ -43,6 +43,11 @@ Try statements with a catch binding use TryStatement and CatchClause
 The initial subset requires a catch binding and does not include `finally`
 or the optional catch binding introduced in ES2019.
 
+Structural recursion adds no runtime operation. Its calls use `EvaluateCall`
+(ES2015 §12.3.4, ES2024 §13.3.6.2), and recursive interfaces erase with the
+other TypeScript type declarations. Every supported edition specifies the
+runtime operation.
+
 Guard calls use `EvaluateCall` (ES2024 §13.3.6.2), and their branches use
 `IfStatement` (§14.6). A primitive guard uses `typeof` (§13.5.3). These
 operations also exist in ES2015, the oldest target.
