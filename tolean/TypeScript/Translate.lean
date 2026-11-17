@@ -897,6 +897,7 @@ mutual
 /-- `s` can throw: it holds a `throw`, or a declaration or a `return` whose
 value is a call of a function of `fns` that can throw. -/
 def stmtThrows (fns : List FnInfo) : Stmt → Bool
+  | .tryCatch .. => true
   | .throwStmt .. => true
   | .varDecl _ { init := some e, .. } | .returnStmt _ (some e) => callsThrowing fns e
   | .ifStmt _ _ t (some e) => stmtThrows fns t || stmtThrows fns e
@@ -1174,6 +1175,16 @@ def translateType (t : TypeExpr) : TM Ty := do
       | t => return .optional t
     | _, _ => unsupportedType t
   | .array _ elem => return .array (← translateType elem)
+  | .indexed s receiver key =>
+    let ty ← translateType receiver
+    let .struct ref args := ty |
+      reject s "an indexed access receiver must resolve to a declared interface or object type"
+    let info ← orReject ((← get).knownStructs.find? (·.ref == ref)) s
+      "the indexed access receiver has no known fields"
+    let field ← orReject ((info.fieldsAt args).lookup key) s s!"'{key}' is not a field of {ref.name}"
+    if field matches .literal _ then
+      reject s "indexed access to a single-literal tag field is not supported; use a named literal-union type"
+    return field
   | .ref _ "Record" [_, _] | .ref _ "Readonly" [.ref _ "Record" [_, _]] =>
     reject t.span "a Record type needs a name; declare it as a type, such as type T = Record<K, V>"
   | .ref _ name [elem] =>
@@ -1332,12 +1343,14 @@ def alwaysEnds (isJump : Stmt → Bool) : List Stmt → Bool
 
 /-- `s`, the last statement of a list, ends every path in a jump. -/
 def endsIn (isJump : Stmt → Bool) : Stmt → Bool
+  | .tryCatch _ b _ h => branchEnds isJump b && branchEnds isJump h
   | .ifStmt _ _ thenBranch (some elseBranch) =>
     branchEnds isJump thenBranch && branchEnds isJump elseBranch
   | s => isJump s
 
 /-- `alwaysEnds isJump (blockStatements s)`. -/
 def branchEnds (isJump : Stmt → Bool) : Stmt → Bool
+  | .tryCatch _ b _ h => branchEnds isJump b && branchEnds isJump h
   | .block _ body => alwaysEnds isJump body
   | .ifStmt _ _ thenBranch (some elseBranch) =>
     branchEnds isJump thenBranch && branchEnds isJump elseBranch
@@ -1370,6 +1383,7 @@ contains, neither counts, because they leave only that loop. A `throw` is
 not a jump here: it ends the function from anywhere, through the `Except`
 monad, so a branch or a loop body may hold one. -/
 def containsJump (brk cont : Bool) : Stmt → Bool
+  | .tryCatch _ b _ h => containsJump brk cont b || containsJump brk cont h
   | .returnStmt .. => true
   | .breakStmt _ => brk
   | .continueStmt _ => cont
@@ -1473,6 +1487,7 @@ def optionChanges (fns : List (String × List String)) : Option Expr → List St
 mutual
 
 def stmtChanges (fns : List (String × List String)) : Stmt → List String
+  | .tryCatch _ b _ h => stmtChanges fns b ++ stmtChanges fns h
   | .varDecl _ d => optionChanges fns d.init
   | .destructure _ _ _ _ init | .objectDestructure _ _ _ _ init => exprChanges fns init
   | .exprStmt _ (.call _ (.ident _ name) args) =>
@@ -4223,6 +4238,18 @@ def translateStatements (fuel : Nat) (env : Env) (tail : Tail) (statements : Lis
     | .throwStmt s value =>
       unless rest.isEmpty do reject s "code after throw is unreachable"
       translateThrow env value
+    | .tryCatch s attempt name handler =>
+      unless rest.isEmpty && tail.isRet do
+        reject s "try and catch must end the function or a returning branch"
+      unless attempt.catchSafe do
+        reject s "try bodies allow only literal values, reads, strict equality, local initializers, if, return and throw new Error; mutation, calls and other operations need exception analysis"
+      if handler.mentions name then
+        reject s "the first catch subset must ignore its binding; tests and rethrows need typed caught values"
+      let .block _ bs := attempt | reject s "try requires a block"
+      let .block _ hs := handler | reject s "catch requires a block"
+      let b ← translateStatements fuel env .ret bs
+      let h ← translateStatements fuel env .ret hs
+      return .handle b h
     -- `continue` ends one run of the loop body with the state as it is.
     | .continueStmt s =>
       let some next := tail.continues
@@ -4570,10 +4597,10 @@ mutual
 it. -/
 def typeNames (name : String) : TypeExpr → Bool
   | .ref _ n args => n == name || typesName name args
-  | .array _ e | .paren _ e => typeNames name e
+  | .array _ e | .indexed _ e _ | .paren _ e | .predicate _ _ e => typeNames name e
   | .union _ members | .tuple _ _ members => typesName name members
   | .object _ fields => typeFieldsName name fields
-  | _ => false
+  | .keyword _ _ | .null _ | .literal _ _ => false
 
 def typesName (name : String) : List TypeExpr → Bool
   | [] => false
@@ -4933,7 +4960,7 @@ def typeUsesNumber : TypeExpr → Bool
   | .keyword _ name => name == "number"
   | .literal _ (.number _) => true
   | .ref _ name args => isNumberName name || typesUseNumber args
-  | .array _ e | .paren _ e => typeUsesNumber e
+  | .array _ e | .indexed _ e _ | .paren _ e => typeUsesNumber e
   | .union _ members | .tuple _ _ members => typesUseNumber members
   | .object _ fields => typeFieldsUseNumber fields
   | _ => false
@@ -5004,6 +5031,7 @@ def varUsesNumber (d : VarDecl) : Bool :=
 mutual
 
 def stmtUsesNumber : Stmt → Bool
+  | .tryCatch _ b n h => isNumberName n || stmtUsesNumber b || stmtUsesNumber h
   | .varDecl _ d => varUsesNumber d
   | .destructure _ _ p type init =>
     p.names.any isNumberName || (type.map typeUsesNumber).getD false || exprUsesNumber init
@@ -5249,7 +5277,7 @@ mutual
 when their source declaration translates, in its original scope. -/
 def prepareInlineType : TypeExpr → TM Unit
   | .object span fields => discard (translateType (.object span fields))
-  | .array _ type | .paren _ type | .predicate _ _ type => prepareInlineType type
+  | .array _ type | .indexed _ type _ | .paren _ type | .predicate _ _ type => prepareInlineType type
   | .ref _ _ types | .union _ types | .tuple _ _ types => prepareInlineTypes types
   | .keyword _ _ | .null _ | .literal _ _ => pure ()
 
@@ -5298,6 +5326,7 @@ def prepareInlineVar (decl : VarDecl) : TM Unit := do
 mutual
 
 def prepareInlineStmt : Stmt → TM Unit
+  | .tryCatch _ b _ h => do prepareInlineStmt b; prepareInlineStmt h
   | .varDecl _ decl => prepareInlineVar decl
   | .destructure _ _ _ type expr | .objectDestructure _ _ _ type expr =>
     do type.forM prepareInlineType; prepareInlineExpr expr

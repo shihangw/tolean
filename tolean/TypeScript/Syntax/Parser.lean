@@ -194,7 +194,13 @@ def arrayStep (start : Pos) (type : TypeExpr) : ParseM (TypeExpr × Bool) := do
   let t ← peek
   -- `tsc` does not read `T` `[]` across a line break as an array type.
   if !t.isPunct "[" || t.newlineBefore then return (type, false)
-  unless (← peekAt 1).isPunct "]" do failAt t "indexed access types are not supported"
+  unless (← peekAt 1).isPunct "]" do
+    let key ← peekAt 1
+    let .string value := key.kind |
+      failAt key "an indexed access type requires one literal string key"
+    skip 2
+    let _ ← expectPunct "]"
+    return (.indexed (← spanFrom start) type value, true)
   skip 2
   return (.array (← spanFrom start) type, true)
 
@@ -1152,6 +1158,19 @@ def refuseDeclaration (t : Token) : ParseM Unit := do
   if t.isKeyword "const" || t.isIdent "let" || t.isKeyword "function" then
     failAt t "a declaration here needs a block around it"
 
+/-- Read a try statement with a required catch binding. The caller supplies
+the block parser so that both blocks use the same recursive fuel. -/
+def parseTry (parseBody : ParseM Stmt) : ParseM Stmt := do
+  let first ← advance
+  let body ← parseBody
+  let caught ← advance
+  unless caught.isKeyword "catch" do unexpected caught "'catch'"
+  let _ ← expectPunct "("
+  let name ← readName
+  let _ ← expectPunct ")"
+  let handler ← parseBody
+  return .tryCatch (← spanFrom first.span.start) body name handler
+
 mutual
 
 def parseStatement (fuel : Nat) : ParseM Stmt := do
@@ -1228,6 +1247,7 @@ def parseStatement (fuel : Nat) : ParseM Stmt := do
   | .keyword "true" | .keyword "false" | .keyword "null" | .keyword "typeof"
   | .keyword "void" | .keyword "new" => parseExpressionStatement fuel
   | .keyword "function" => parseLocalFunction (parseBlock fuel)
+  | .keyword "try" => parseTry (parseBlock fuel)
   | .keyword word => failAt t s!"'{word}' is not supported here"
   | _ => parseExpressionStatement fuel
 

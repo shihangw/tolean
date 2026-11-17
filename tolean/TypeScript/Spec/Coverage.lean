@@ -94,7 +94,8 @@ structure Group where
 def everySection : Group :=
   ⟨"Every section of the subset", [``Proof.program_sound, ``Proof.translate_sound,
     ``Proof.program_sound_call, ``Proof.translate_sound_call,
-    ``Proof.programTranslation_rel, ``Proof.apply_recordGet, ``Proof.expr_sound, ``Proof.stmts_sound, ``Proof.decls_sound]⟩
+    ``Proof.programTranslation_rel, ``Proof.apply_recordGet, ``Proof.expr_sound, ``Proof.stmts_sound,
+    ``Proof.decls_sound, ``Proof.decls_sound_call]⟩
 
 /-- The sections of ECMA-262 that the interpreter follows, in the order of
 the spec, with the theorems about each. -/
@@ -288,7 +289,8 @@ def sections : List Section := [
     ``Proof.state_default_sim, ``Proof.state_last_sim, ``Proof.state_case_sim, ``Proof.switch_state_sim,
     ``Proof.translateStateClause_sound, ``Proof.translateStateClauses_sound]⟩,
   ⟨"sec-throw-statement", "14.14", "The throw Statement", [``Proof.throw_sim, ``Proof.eval_wrapError,
-    ``Proof.throwClass_sim, ``Proof.fieldArgs_marks, ``Proof.translateThrow_sound]⟩,
+    ``Proof.throwClass_sim, ``Proof.fieldArgs_marks, ``Proof.translateThrow_sound,
+    ``Proof.handle_returns, ``Proof.handle_end_impossible, ``Proof.handle_sim]⟩,
   -- §15 ECMAScript Language: Functions and Classes {#sec-ecmascript-language-functions-and-classes}
   ⟨"sec-function-definitions", "15.2", "Function Definitions",
     [``Proof.translateFunction_ok, ``Proof.checkTypeParams_ok, ``Proof.params_fold, ``Proof.params_fold_nodup,
@@ -489,6 +491,8 @@ def extras : List Group := [
     ``Syntax.tokens_readonly, ``Syntax.parsePrimaryType_paren,
     ``Syntax.parsePrimaryType_keyword, ``Syntax.parsePrimaryType_name, ``Syntax.parsePrimaryType_simple, ``Syntax.reads_one,
     ``Syntax.iterate_brackets, ``Syntax.iterate_brackets_goal, ``Syntax.iterate_sep,
+    ``Syntax.suffixNode_erase, ``Syntax.suffix_length, ``Syntax.iterate_suffixes,
+    ``Syntax.arrayStep_indexed, ``Syntax.arrayStep_suffix,
     ``Syntax.iterate_sepBefore, ``Syntax.iterate_stop, ``Syntax.unionStep_go,
     ``Syntax.unionStep_stop, ``Syntax.arrayWF_split, ``Syntax.arrayWF_head, ``Syntax.arrayOf_array,
     ``Syntax.brackets_succ, ``Syntax.length_brackets, ``Syntax.tokens_ref, ``Syntax.tokens_union,
@@ -622,7 +626,8 @@ def extras : List Group := [
     ``Syntax.parseDestructure_reads, ``Syntax.stmt_destructure, ``Syntax.Laid.kinds,
     ``Syntax.Stmt.first, ``Syntax.Laid.first, ``Syntax.parseBranch_reads, ``Syntax.Stmt.linesOf_wordLines,
     ``Syntax.next_not_else, ``Syntax.Laid.length_le, ``Syntax.blockStep_loop, ``Syntax.block_loop, ``Syntax.Stmt.eraseAll_eq,
-    ``Syntax.parseBlock_reads, ``Syntax.stmt_block, ``Syntax.afterOK_closer, ``Syntax.EndsExpr.closer,
+    ``Syntax.parseBlock_reads, ``Syntax.stmt_block, ``Syntax.parseTry_reads, ``Syntax.stmt_try,
+    ``Syntax.afterOK_closer, ``Syntax.EndsExpr.closer,
     ``Syntax.Touching.keywordParen, ``Syntax.stmt_if_none, ``Syntax.stmt_if_some,
     ``Syntax.Parse.withLoop_ok, ``Syntax.leaves_withLoop, ``Syntax.stmt_while, ``Syntax.typeParams_loop,
     ``Syntax.parseTypeParams_reads, ``Syntax.parseSignature_reads, ``Syntax.Parse.inFunctionBody_ok,
@@ -810,7 +815,8 @@ def extras : List Group := [
     ``Syntax.parseBlock_gives, ``Syntax.parseBranch_gives,
     ``Syntax.withLoop_inv, ``Syntax.parseExpressionStatement_inv, ``Syntax.pass_inv, ``Syntax.choose_inv,
     ``Syntax.parseForOf_inv, ``Syntax.parseForDeclaration_inv, ``Syntax.forInit_inv,
-    ``Syntax.forPart_inv, ``Syntax.parseFor_inv, ``Syntax.parenTest_inv, ``Syntax.exprStmt_gives, ``Syntax.parseStatement_gives,
+    ``Syntax.forPart_inv, ``Syntax.parseFor_inv, ``Syntax.parenTest_inv, ``Syntax.exprStmt_gives,
+    ``Syntax.parseTry_gives, ``Syntax.parseStatement_gives,
     ``Syntax.stmts_give, ``Syntax.DeclOK.import, ``Syntax.DeclOK.exports, ``Syntax.DeclOK.function, ``Syntax.DeclOK.interface, ``Syntax.DeclOK.enum, ``Syntax.DeclOK.errorClass,
     ``Syntax.DeclOK.typeAlias, ``Syntax.DeclOK.exportedVar, ``Syntax.DeclOK.stmt, ``Syntax.listStep_wf,
     ``Syntax.blockStep_wf, ``Syntax.advance_ready, ``Syntax.discard_advance_ready, ``Syntax.Refuses.bind,

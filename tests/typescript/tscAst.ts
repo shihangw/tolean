@@ -744,6 +744,18 @@ class Printer {
       }
       return this.node('throw', s, [], [this.expr(s.expression)]);
     }
+    if (ts.isTryStatement(s)) {
+      if (s.finallyBlock !== undefined || s.catchClause === undefined) {
+        refuse(s, 'finally is not supported');
+      }
+      const binding = s.catchClause.variableDeclaration;
+      if (binding === undefined || !ts.isIdentifier(binding.name) || binding.type !== undefined) {
+        refuse(s, 'catch requires an unannotated identifier');
+      }
+      return this.node('try', s, [binding.name.text], [
+        this.statement(s.tryBlock), this.statement(s.catchClause.block),
+      ]);
+    }
     if (ts.isIfStatement(s)) {
       const children = [this.expr(s.expression), this.branch(s.thenStatement)];
       if (s.elseStatement !== undefined) {
@@ -1117,6 +1129,12 @@ class Printer {
     }
     if (ts.isArrayTypeNode(t)) {
       return this.node('type-array', t, [], [this.type(t.elementType)]);
+    }
+    if (ts.isIndexedAccessTypeNode(t)) {
+      if (!ts.isLiteralTypeNode(t.indexType) || !ts.isStringLiteral(t.indexType.literal)) {
+        refuse(t, 'an indexed access type requires one literal string key');
+      }
+      return this.node('type-indexed', t, [JSON.stringify(t.indexType.literal.text)], [this.type(t.objectType)]);
     }
     if (ts.isUnionTypeNode(t)) {
       return this.node('type-union', t, [], t.types.map((m) => this.type(m)));
