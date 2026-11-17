@@ -902,8 +902,9 @@ and error representation work that these extensions need.
 
 Certificates for results of type `Except JSError R` compare both returned
 values and thrown messages. They use the call evaluator instead of the
-value-only evaluator. Error-class unions and loops that can throw still
-have no certificate encoder or monadic loop invariant, respectively.
+value-only evaluator. Error-class unions still need a certificate encoder.
+Loops in functions with an Except result need exception-aware loop
+invariants, including loops whose early return slots carry that result.
 
 ### Refused forms
 
