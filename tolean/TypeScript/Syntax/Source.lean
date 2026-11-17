@@ -110,6 +110,7 @@ def TypeExpr.words : TypeExpr → List Word
   | .ref _ name [] => [identWord name]
   | .ref _ name args => identWord name :: punctWord "<" :: separated "," (TypeExpr.wordsOf args) ++ [punctWord ">"]
   | .array _ elem => elem.words ++ [punctWord "[", punctWord "]"]
+  | .indexed _ receiver key => receiver.words ++ [punctWord "[", [.string key], punctWord "]"]
   -- A union of one member is `| T`, as `type A = | T` writes it.
   | .union _ [member] => punctWord "|" :: member.words
   | .union _ members => separated "|" (TypeExpr.wordsOf members)
@@ -409,6 +410,7 @@ def TypeExpr.erase : TypeExpr → TypeExpr
   | .literal _ lit => .literal noSpan lit
   | .ref _ name args => .ref noSpan name (TypeExpr.eraseAll args)
   | .array _ elem => .array noSpan elem.erase
+  | .indexed _ receiver key => .indexed noSpan receiver.erase key
   | .union _ members => .union noSpan (TypeExpr.eraseAll members)
   | .paren _ inner => .paren noSpan inner.erase
   | .tuple _ readonly elems => .tuple noSpan readonly (TypeExpr.eraseAll elems)
