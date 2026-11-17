@@ -61,6 +61,7 @@ partial def Expr.toSexp : Expr → Sexp
   | .regexp s source _ => node "regexp" s [Sexp.quote source] []
   | .bool s value => node (if value then "true" else "false") s [] []
   | .null s => node "null" s [] []
+  | .this s => node "this" s [] []
   | .array s elems => node "array" s [] (elems.map Expr.toSexp)
   | .object s props => node "object" s [] (props.map Property.toSexp)
   | .paren s inner => node "paren" s [] [inner.toSexp]
@@ -142,6 +143,15 @@ def Field.toSexp (f : Field) : Sexp :=
   node "field" f.span ([f.name] ++ flag f.readonly "readonly" ++ flag f.optional "optional")
     [f.type.toSexp]
 
+def ClassMethod.toSexp (m : ClassMethod) : Sexp :=
+  node "method" m.span [m.name]
+    (m.params.map Param.toSexp ++ (m.returnType.map TypeExpr.toSexp).toList ++ [m.body.toSexp])
+
+def ClassMember.toSexp : ClassMember → Sexp
+  | .field f => f.toSexp
+  | .ctor params body => .node "constructor" none [] (params.map CtorParam.toSexp ++ [body.toSexp])
+  | .method m => m.toSexp
+
 def Decl.toSexp : Decl → Sexp
   | .import s names source =>
     node "import" s [Sexp.quote source]
@@ -160,6 +170,9 @@ def Decl.toSexp : Decl → Sexp
   | .enum s exported name members =>
     node "enum" s ([name] ++ flag exported "export")
       (members.map fun m => node "member" m.span [m.name, Sexp.quote m.value] [])
+  | .classDecl d =>
+    node "class" d.span ([d.name] ++ flag d.exported "export")
+      (d.members.map ClassMember.toSexp)
   -- The constructor's parameters, then the message. A class without a
   -- constructor has no children.
   | .errorClass s exported name ctor =>

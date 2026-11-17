@@ -943,15 +943,23 @@ structure ClassMethod where
   returnType : Option TypeExpr
   body : Stmt
 
+/-- One member of an ordinary class, retained in source order. -/
+inductive ClassMember where
+  | field (field : Field)
+  | ctor (params : List CtorParam) (body : Stmt)
+  | method (method : ClassMethod)
+
+def ClassMember.isCtor : ClassMember → Bool
+  | .ctor .. => true
+  | _ => false
+
 /-- An ordinary class retained for the elaborator, which lowers it before
 interpretation and translation. -/
 structure ClassDecl where
   span : Span
   exported : Bool
   name : String
-  fields : List Field
-  ctor : Option (List CtorParam × Stmt)
-  methods : List ClassMethod
+  members : List ClassMember
 
 /-- One name of `import { a, type B } from "./x.ts"`. `typeOnly` is true for
 `type B`, and for every name of `import type { … }`. -/
