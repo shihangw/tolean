@@ -1179,7 +1179,10 @@ def translateType (t : TypeExpr) : TM Ty := do
       reject s "an indexed access receiver must resolve to a declared interface or object type"
     let info ← orReject ((← get).knownStructs.find? (·.ref == ref)) s
       "the indexed access receiver has no known fields"
-    orReject ((info.fieldsAt args).lookup key) s s!"'{key}' is not a field of {ref.name}"
+    let field ← orReject ((info.fieldsAt args).lookup key) s s!"'{key}' is not a field of {ref.name}"
+    if field matches .literal _ then
+      reject s "indexed access to a single-literal tag field is not supported; use a named literal-union type"
+    return field
   | .ref _ "Record" [_, _] | .ref _ "Readonly" [.ref _ "Record" [_, _]] =>
     reject t.span "a Record type needs a name; declare it as a type, such as type T = Record<K, V>"
   | .ref _ name [elem] =>
@@ -4541,10 +4544,10 @@ mutual
 it. -/
 def typeNames (name : String) : TypeExpr → Bool
   | .ref _ n args => n == name || typesName name args
-  | .array _ e | .paren _ e => typeNames name e
+  | .array _ e | .indexed _ e _ | .paren _ e | .predicate _ _ e => typeNames name e
   | .union _ members | .tuple _ _ members => typesName name members
   | .object _ fields => typeFieldsName name fields
-  | _ => false
+  | .keyword _ _ | .null _ | .literal _ _ => false
 
 def typesName (name : String) : List TypeExpr → Bool
   | [] => false

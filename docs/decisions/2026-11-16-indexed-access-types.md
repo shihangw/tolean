@@ -31,6 +31,19 @@ receiver does not resolve to a structure, so the translator refuses it.
 A missing key fails explicitly. Unions of keys, `keyof` and numeric keys
 remain refused because the parser accepts only one literal string key.
 
+Indexed access to a single-literal tag field remains refused too. Its
+translated `Ty.literal` is field metadata: the Lean printer omits that
+field from the structure. Reusing it as a parameter type lets a computed
+tag value reach a constructor whose printed structure has no such field.
+We reproduced this with a parameter of type `Shape['kind']` and a shorthand
+object field. Supporting it requires a value representation separate from
+field metadata, so this change refuses the lookup with an explicit message.
+A named literal-union field already has an ordinary value representation.
+
+The generic-parameter traversal visits indexed receivers. Thus
+`Box<T>['value']` can name `T` when the known structure's field has type `T`,
+even though the unconstrained receiver `T['value']` remains refused.
+
 The exact example in #263 also requires an anonymous union of string literals
 in an interface field. That remains refused. Such a union needs a generated
 inductive type and rules for its identity across declarations and imported

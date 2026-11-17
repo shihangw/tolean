@@ -1261,6 +1261,12 @@ array indexing. The
 [decision record](../decisions/2026-11-16-indexed-access-types.md)
 describes the static lookup and its proof coverage.
 
+Indexed access to a single-literal tag field, such as
+`interface Circle { readonly kind: 'circle' }`, also remains refused.
+The translator stores that tag as field metadata rather than an ordinary
+value type, so it cannot safely reuse that representation for a parameter.
+Use a named literal-union type for the field instead.
+
 ## Numbers
 
 A JS `number` is an IEEE-754 double. Tolean does not map it to Lean's

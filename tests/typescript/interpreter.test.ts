@@ -493,12 +493,17 @@ test('indexed access resolves the named literal union of a field', async () => {
     export function hasKind(s: Shape, kind: Shape['kind']): boolean {
       return s.kind === kind;
     }
+    interface Box<T> { readonly value: T; }
+    export function identity<T>(value: Box<T>['value']): T {
+      return value;
+    }
   `;
   const kinds = ['circle', 'square'] as const;
   const inputs = kinds.flatMap((kind) => kinds.map((expected) =>
     [{ kind, size: 1 }, expected] as const));
   const calls = inputs.map(([shape, kind]) =>
     ({ function: 'hasKind', args: [encode(shape), encode(kind)] }));
+  calls.push({ function: 'identity', args: [encode(7n)] });
   const run = spawnSync(tolean, ['interpret'], {
     input: JSON.stringify({ programs: [{ source, calls }] }), encoding: 'utf8',
   });
@@ -514,10 +519,12 @@ test('indexed access resolves the named literal union of a field', async () => {
   }).outputText);
   const mod = await import(pathToFileURL(path).href) as {
     hasKind: (shape: { kind: typeof kinds[number]; size: number }, kind: typeof kinds[number]) => boolean;
+    identity: (value: bigint) => bigint;
   };
   for (const [i, [shape, kind]] of inputs.entries()) {
     expect(result.results[i]).toEqual({ value: encode(mod.hasKind(shape, kind)) });
   }
+  expect(result.results[inputs.length]).toEqual({ value: encode(mod.identity(7n)) });
 });
 
 test('predicate annotations do not change what a guard computes', async () => {
