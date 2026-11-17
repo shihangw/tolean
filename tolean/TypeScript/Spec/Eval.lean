@@ -907,6 +907,7 @@ mutual
 
 /-- The names of the functions that `s` calls, anywhere in it. -/
 def Stmt.callNames : Stmt → List String
+  | .tryCatch _ b _ h => Stmt.callNames b ++ Stmt.callNames h
   | .varDecl _ { init := some e, .. } | .destructure _ _ _ _ e | .exprStmt _ e | .returnStmt _ (some e)
   | .throwStmt _ e => Expr.callNames e
   | .varDecl _ { init := none, .. } | .returnStmt _ none | .breakStmt _ | .continueStmt _ | .empty _ => []
@@ -935,6 +936,7 @@ mutual
 
 /-- `s` holds a `throw` statement. -/
 def Stmt.hasThrow : Stmt → Bool
+  | .tryCatch _ b _ h => Stmt.hasThrow b || Stmt.hasThrow h
   | .throwStmt .. => true
   | .ifStmt _ _ a (some b) => Stmt.hasThrow a || Stmt.hasThrow b
   | .ifStmt _ _ a none => Stmt.hasThrow a
@@ -1270,6 +1272,10 @@ def Stmt.hoistOne (thr : String → Bool) (cls : String → Option (Option (List
   | .block s ss =>
     let (ss', k) := Stmt.hoistList thr cls k ss
     ([.block s ss'], k)
+  | .tryCatch s b n h =>
+    let (bs, k) := Stmt.hoistOne thr cls k b
+    let (hs, k) := Stmt.hoistOne thr cls k h
+    ([.tryCatch s (asBody b bs) n (asBody h hs)], k)
   | .switchStmt s d cs =>
     let (d', h) := Expr.hoist thr cls ⟨[], k⟩ d
     let (cs', k) := Stmt.hoistClauses thr cls h.next cs

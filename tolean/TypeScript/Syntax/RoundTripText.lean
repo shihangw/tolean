@@ -393,6 +393,14 @@ theorem Stmt.lineOK : ∀ (st : Stmt) (d : Nat), ∀ l ∈ st.lines d, LineOK l.
     simp [Stmt.lines] at hl; subst hl
     exact LineOK.cons (by simp [keywordWord])
       ((Expr.fine e).line.append (LineOK.word (w := punctWord ";") (by simp [punctWord])))
+  | .tryCatch _ b n h, d, l, hl => by
+    simp only [Stmt.lines, List.mem_cons, List.mem_append] at hl
+    rcases hl with (rfl | hl) | (rfl | hl)
+    · exact LineOK.word (by simp [keywordWord])
+    · exact Stmt.lineOK b d l hl
+    · exact LineOK.cons (by simp [keywordWord]) (LineOK.cons (by simp [punctWord])
+        (LineOK.cons (by simp [identWord]) (LineOK.word (by simp [punctWord]))))
+    · exact Stmt.lineOK h d l hl
   | .ifStmt _ test t none, d, l, hl => by
     simp only [Stmt.lines, List.mem_cons] at hl
     rcases hl with rfl | hl

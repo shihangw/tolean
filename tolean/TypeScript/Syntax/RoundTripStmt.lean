@@ -43,6 +43,7 @@ theorem Stmt.lines_words : ∀ (st : Stmt) (d : Nat), (st.lines d).map Prod.snd 
   | .switchStmt _ _ cs, d => by
     simp [Stmt.lines, Stmt.clauseLines_words cs (d + 1), Stmt.clauseLines_words cs 1]
   | .funDecl _ _ _ _ _ body, d => by simp [Stmt.lines, Stmt.lines_words body d]
+  | .tryCatch _ b _ h, d => by simp [Stmt.lines, Stmt.lines_words b d, Stmt.lines_words h d]
   | .varDecl .., _ | .destructure .., _ | .exprStmt .., _ | .returnStmt _ none, _ | .returnStmt _ (some _), _
   | .breakStmt _, _ | .continueStmt _, _ | .empty _, _ | .throwStmt .., _ => by simp [Stmt.lines]
 
@@ -167,6 +168,8 @@ def Stmt.wf (T : Edition) (fn loop : Bool) : Stmt → Bool
   | .returnStmt _ none => fn
   | .returnStmt _ (some e) => fn && e.wfAt T .assign && e.afterOK [.punct ";"]
   | .throwStmt _ e => e.wfAt T .assign && e.afterOK [.punct ";"]
+  -- The syntax node is staged before the statement parser accepts it.
+  | .tryCatch .. => false
   | .ifStmt _ test t none => test.wfParen T && !t.isDecl && t.wf T fn loop
   | .ifStmt _ test t (some e) =>
     test.wfParen T && !t.isDecl && t.wf T fn loop && !t.openIf && !e.isDecl && e.wf T fn loop
@@ -204,6 +207,7 @@ mutual
 
 /-- How deep the statements of `st` nest. -/
 def Stmt.depth : Stmt → Nat
+  | .tryCatch _ b _ h => max b.depth h.depth + 1
   | .ifStmt _ _ t none => t.depth + 1
   | .ifStmt _ _ t (some e) => max t.depth e.depth + 1
   | .forOfStmt _ _ _ _ b | .forOfPattern _ _ _ _ b | .forStmt _ _ _ _ b | .whileStmt _ _ b => b.depth + 1
@@ -1344,6 +1348,8 @@ theorem Stmt.first {T : Edition} {fn loop : Bool} (st : Stmt) (hw : st.wf T fn l
     exact ⟨.keyword "switch", by simp [Stmt.wordLines, Stmt.lines, keywordWord], by simp [StartsStmt]⟩
   | throwStmt _ _ =>
     exact ⟨.keyword "throw", by simp [Stmt.wordLines, Stmt.lines, keywordWord], by simp [StartsStmt]⟩
+  | tryCatch _ _ _ _ =>
+    exact ⟨.keyword "try", by simp [Stmt.wordLines, Stmt.lines, keywordWord], by simp [StartsStmt]⟩
   | funDecl _ _ _ _ _ _ =>
     exact ⟨.keyword "function", by simp [Stmt.wordLines, Stmt.lines, keywordWord], by simp [StartsStmt, Stmt.isDecl]⟩
 
@@ -2675,6 +2681,7 @@ theorem Stmt.first_break {T : Edition} {fn loop : Bool} (st : Stmt) (hw : st.wf 
   | continueStmt _ => simp [Stmt.wordLines, Stmt.lines, keywordWord] at h
   | switchStmt _ _ _ => simp [Stmt.wordLines, Stmt.lines, keywordWord] at h
   | throwStmt _ _ => simp [Stmt.wordLines, Stmt.lines, keywordWord] at h
+  | tryCatch _ _ _ _ => simp [Stmt.wordLines, Stmt.lines, keywordWord] at h
   | block _ _ => simp [Stmt.wordLines, Stmt.lines, punctWord] at h
   | empty _ => simp [Stmt.wordLines, Stmt.lines, punctWord] at h
   | funDecl _ _ _ _ _ _ => simp [Stmt.wordLines, Stmt.lines, keywordWord] at h
@@ -3058,6 +3065,7 @@ theorem allStmts_succ {T : Edition} (f : Nat) (IH : ∀ g ≤ f, AllStmts T g) :
   | throwStmt sp e =>
     simp only [Stmt.wf, Bool.and_eq_true] at hw
     exact stmt_throw f sp e hw.1 hw.2
+  | tryCatch _ _ _ _ => simp [Stmt.wf] at hw
   | ifStmt sp test t e =>
     cases e with
     | none =>

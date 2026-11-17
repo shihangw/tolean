@@ -291,6 +291,9 @@ inductive Stmt where
   | switchStmt (span : Span) (disc : Expr) (clauses : List (Option Expr × List Stmt))
   /-- `throw value;`. -/
   | throwStmt (span : Span) (value : Expr)
+  /-- `try { … } catch (name) { … }` (ECMA-262 §14.15). Both children
+  are blocks. A `finally` clause is not part of this constructor. -/
+  | tryCatch (span : Span) (body : Stmt) (name : String) (handler : Stmt)
   /-- `function name<A>(params): T { … }` in a block: a function declaration
   (ECMA-262 §15.2) inside another function, which the block binds to
   `name`. -/
@@ -367,6 +370,7 @@ def Stmt.assigns (n : String) : Stmt → Bool
   | .breakStmt _ | .continueStmt _ | .empty _ => false
   | .switchStmt _ d cs => d.assigns n || Stmt.assignsClauses n cs
   | .throwStmt _ e => e.assigns n
+  | .tryCatch _ b _ h => b.assigns n || h.assigns n
   -- The body runs only when the function is called; counting it anyway only
   -- refuses more.
   | .funDecl _ _ _ _ _ b => b.assigns n
@@ -422,6 +426,7 @@ mutual
 /-- `s` changes the array, map or set that the name `n` holds somewhere
 inside it, as `Expr.mutates` says. -/
 def Stmt.mutates (n : String) : Stmt → Bool
+  | .tryCatch _ b _ h => b.mutates n || h.mutates n
   | .destructure _ _ _ _ e => e.mutates n
   | .varDecl _ d => match d.init with
     | some e => e.mutates n
@@ -499,6 +504,7 @@ mentions are the variables around it that it may read or change. Counting a
 name that the body declares itself only adds a variable that the body never
 sees from outside. -/
 def Stmt.mentions (n : String) : Stmt → Bool
+  | .tryCatch _ b x h => x == n || b.mentions n || h.mentions n
   | .varDecl _ d => d.name == n || (match d.init with
     | some e => e.mayHold (· == n)
     | none => false)
@@ -656,6 +662,7 @@ mutual
 new collection that only `n` holds (`VarDecl.owns`). A loop variable never
 does: it holds an element of something else. -/
 def Stmt.binds (n : String) : Stmt → List Bool
+  | .tryCatch _ b x h => b.binds n ++ (if x == n then [false] else []) ++ h.binds n
   | .varDecl _ d => if d.name == n then [d.owns] else []
   -- A destructured name holds an element of something else, or a copy of
   -- the rest that nothing owns.
@@ -691,6 +698,7 @@ mutual
 
 /-- The names whose array, map or set `s` changes, as `Expr.changed` says. -/
 def Stmt.changed : Stmt → List String
+  | .tryCatch _ b _ h => b.changed ++ h.changed
   | .destructure _ _ _ _ e => e.changed
   | .varDecl _ d => match d.init with
     | some e => e.changed
@@ -735,6 +743,7 @@ mutual
 over. A `return` ends the function, so nothing changes the object after
 that. A loop reads the collection without keeping it. -/
 def Stmt.leaks (n : String) : Stmt → Bool
+  | .tryCatch _ b _ h => b.leaks n || h.leaks n
   | .destructure _ _ _ _ e => e.leaks n
   | .varDecl _ d => match d.init with
     | some e => e.leaks n
@@ -1000,7 +1009,7 @@ def Stmt.span : Stmt → Span
   | .varDecl s _ | .destructure s _ _ _ _ | .exprStmt s _ | .returnStmt s _ | .ifStmt s _ _ _ | .forOfStmt s _ _ _ _
   | .forOfPattern s _ _ _ _
   | .forStmt s _ _ _ _ | .whileStmt s _ _ | .block s _ | .breakStmt s | .continueStmt s | .empty s | .switchStmt s _ _
-  | .throwStmt s _ | .funDecl s _ _ _ _ _ => s
+  | .throwStmt s _ | .tryCatch s _ _ _ | .funDecl s _ _ _ _ _ => s
 
 mutual
 

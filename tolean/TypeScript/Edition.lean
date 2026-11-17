@@ -38,6 +38,11 @@ runtime too. The remaining function declaration uses `FunctionDeclaration`
 §13.3.6.2). These operations exist in every supported target, so generic
 certificates add no edition gate.
 
+Try statements with a catch binding use TryStatement and CatchClause
+(ES2015 §13.15; ES2024 §14.15). Every supported target includes them.
+The initial subset requires a catch binding and does not include `finally`
+or the optional catch binding introduced in ES2019.
+
 Guard calls use `EvaluateCall` (ES2024 §13.3.6.2), and their branches use
 `IfStatement` (§14.6). A primitive guard uses `typeof` (§13.5.3). These
 operations also exist in ES2015, the oldest target.

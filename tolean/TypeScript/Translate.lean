@@ -897,6 +897,7 @@ mutual
 /-- `s` can throw: it holds a `throw`, or a declaration or a `return` whose
 value is a call of a function of `fns` that can throw. -/
 def stmtThrows (fns : List FnInfo) : Stmt → Bool
+  | .tryCatch _ b _ h => stmtThrows fns b || stmtThrows fns h
   | .throwStmt .. => true
   | .varDecl _ { init := some e, .. } | .returnStmt _ (some e) => callsThrowing fns e
   | .ifStmt _ _ t (some e) => stmtThrows fns t || stmtThrows fns e
@@ -4968,6 +4969,7 @@ def varUsesNumber (d : VarDecl) : Bool :=
 mutual
 
 def stmtUsesNumber : Stmt → Bool
+  | .tryCatch _ b n h => isNumberName n || stmtUsesNumber b || stmtUsesNumber h
   | .varDecl _ d => varUsesNumber d
   | .destructure _ _ p type init =>
     p.names.any isNumberName || (type.map typeUsesNumber).getD false || exprUsesNumber init
@@ -5260,6 +5262,7 @@ def prepareInlineVar (decl : VarDecl) : TM Unit := do
 mutual
 
 def prepareInlineStmt : Stmt → TM Unit
+  | .tryCatch _ b _ h => do prepareInlineStmt b; prepareInlineStmt h
   | .varDecl _ decl => prepareInlineVar decl
   | .destructure _ _ _ type expr => do type.forM prepareInlineType; prepareInlineExpr expr
   | .exprStmt _ expr | .throwStmt _ expr => prepareInlineExpr expr

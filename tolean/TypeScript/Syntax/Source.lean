@@ -294,6 +294,9 @@ def Stmt.lines (depth : Nat) : Stmt → List Line
     (depth, keywordWord "switch" :: punctWord "(" :: disc.words ++ [punctWord ")", punctWord "{"]) ::
       Stmt.clauseLines (depth + 1) clauses ++ [(depth, [punctWord "}"])]
   | .throwStmt _ e => [(depth, keywordWord "throw" :: e.words ++ [punctWord ";"])]
+  | .tryCatch _ b n h =>
+    (depth, [keywordWord "try"]) :: b.lines depth ++
+      (depth, [keywordWord "catch", punctWord "(", identWord n, punctWord ")"]) :: h.lines depth
   | .funDecl _ name typeParams params returnType body =>
     (depth, keywordWord "function" :: identWord name :: typeParamWords typeParams ++
       enclose "(" ")" (params.map Param.words) ++ typeAnnotation returnType) :: body.lines depth
@@ -499,6 +502,7 @@ def Stmt.erase : Stmt → Stmt
   | .empty _ => .empty noSpan
   | .switchStmt _ disc clauses => .switchStmt noSpan disc.erase (Stmt.eraseClauses clauses)
   | .throwStmt _ e => .throwStmt noSpan e.erase
+  | .tryCatch _ b n h => .tryCatch noSpan b.erase n h.erase
   | .funDecl _ name typeParams params returnType body =>
     .funDecl noSpan name typeParams (params.map Param.erase) (returnType.map TypeExpr.erase) body.erase
 
