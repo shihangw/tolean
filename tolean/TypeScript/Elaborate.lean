@@ -264,6 +264,12 @@ def stmt (ctx : Context) (env : Types) : Nat → Stmt → Result Stmt
       pure (.forOfPattern s k p (← expr ctx env f items)
         (← stmt ctx (p.names.map (·, none) ++ env) f body))
     | .destructure s k p ty e => pure (.destructure s k p ty (← expr ctx env f e))
+    | .objectDestructure s k p ty e =>
+      if (receiverClass ctx env e).isSome then
+        refuse s "destructuring class instances is not supported"
+      if hasClassType ctx ty then
+        refuse s "class-typed destructuring bindings are not supported"
+      pure (.objectDestructure s k p ty (← expr ctx env f e))
     | .switchStmt s e clauses =>
       pure (.switchStmt s (← expr ctx env f e) (← clauses.mapM fun (test, body) => do
         pure (← test.mapM (expr ctx env f), ← stmts ctx env f body)))
@@ -283,6 +289,7 @@ def stmts (ctx : Context) (env : Types) (fuel : Nat) : List Stmt → Result (Lis
     let env' := match s with
       | .varDecl _ d => (d.name, bindingType ctx env d) :: env
       | .destructure _ _ p _ _ => p.names.map (·, none) ++ env
+      | .objectDestructure _ _ p _ _ => p.objectBindingNames.map (·, none) ++ env
       | .funDecl _ name _ _ _ _ => (name, none) :: env
       | _ => env
     pure (s' :: (← stmts ctx env' fuel ss))

@@ -2007,6 +2007,24 @@ test('ordinary classes refuse observable prototypes and non-static dispatch', ()
   }
 });
 
+test('readonly classes refuse object destructuring that hides provenance', () => {
+  const sources = ['readonlyClassObjectDestructure', 'readonlyClassPlainObjectDestructure'];
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: sources.map(name => ({
+      source: readFileSync(new URL(`./corpus/translate/reject/${name}.ts`, import.meta.url), 'utf8'),
+      calls: [{ function: 'f', args: [] }],
+    })) }),
+    encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const results = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  expect(results).toHaveLength(sources.length);
+  for (const result of results) {
+    expect(result.parsed).toBe(true);
+    if (result.parsed) expect(result.accepted).toBe(false);
+  }
+});
+
 test('readonly classes traverse catch handlers and leave array operations to the checker', async () => {
   const accepted = ['readonlyClassArrayNames', 'readonlyClassCatch'];
   const calls = [
