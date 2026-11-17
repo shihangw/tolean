@@ -131,6 +131,14 @@ structure Claim where
   depends : List String
 deriving ToJson, FromJson, Inhabited, Repr
 
+/-- A project proof of a named obligation. Unlike a claim, this cannot widen
+the set of axioms accepted by the checker. -/
+structure Obligation where
+  spec : String
+  proof : String
+  module : String
+deriving ToJson, FromJson, Inhabited, Repr
+
 structure ProjectManifest where
   /-- Paths of file manifests, relative to the project manifest. -/
   files : List String
@@ -139,13 +147,15 @@ structure ProjectManifest where
   edges : List (String × String) := []
   claims : List Claim
   assumptions : List String := []
+  obligations : List Obligation := []
 deriving ToJson, Inhabited, Repr
 
 instance : FromJson ProjectManifest where
   fromJson? j := do
     return { files := ← j.getObjValAs? (List String) "files"
              nodes := ← optField j "nodes" [], edges := ← optField j "edges" []
-             claims := ← optField j "claims" [], assumptions := ← optField j "assumptions" [] }
+             claims := ← optField j "claims" [], assumptions := ← optField j "assumptions" []
+             obligations := ← optField j "obligations" [] }
 
 def readJson {A : Type} [FromJson A] (path : System.FilePath) : IO A := do
   let text ← IO.FS.readFile path

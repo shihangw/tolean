@@ -2,7 +2,11 @@
  "target": "ES2024",
  "sources":
  [{"sha256": "cd4138eebfa61b0a1eae70e5f88daad0257739792fa660bc02af073a36a1d846",
-   "path": "leaf.ts"}],
+   "path": "leaf.ts"},
+  {"sha256": "1a1aa90356542321e0dbac0354455b41a5e704103a20b4355c82f9b220cbd073",
+   "path": "base.json"},
+  {"sha256": "a432ea2ba24b308543df3aefda5bd157a7e76d5f75dba1b9701d1297a4243f87",
+   "path": "tsconfig.json"}],
  "output":
  {"sha256": "6e3a26d52297179a71b6744a30afa11760b0cf2acd7c770cebd4ff225eef7766",
   "path": "Leaf.lean"},

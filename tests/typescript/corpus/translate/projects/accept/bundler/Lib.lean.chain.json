@@ -2,7 +2,15 @@
  "target": "ES2024",
  "sources":
  [{"sha256": "6ec6cbd2937fefd0777ee8bec3b3143ae8fa52f2a1238f1c2f3980bff7b2da15",
-   "path": "lib.ts"}],
+   "path": "lib.ts"},
+  {"sha256": "7a4da63ff8309016170489bbd4e6ff64db381c86ea57797a00e3c06677172a34",
+   "path": "config/node.json"},
+  {"sha256": "1573f9914f3d2697543e9e0807c48631bbfb585540bb02d9f1a8e878e80e2210",
+   "path": "base.json"},
+  {"sha256": "25561f48b8805654bcf066f9081c343beb2eb18adb4ceef8d7750d5bf58505a6",
+   "path": "config/middle.json"},
+  {"sha256": "9434acc59e48a45c328e676a560cec3aca78edd0b405515dfba2accd4d73b6bc",
+   "path": "tsconfig.json"}],
  "output":
  {"sha256": "8cf4212d6dec432fa0af033324075db4c11c8fe9d21d963b4b44f833afde0953",
   "path": "Lib.lean"},

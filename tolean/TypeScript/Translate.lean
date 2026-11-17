@@ -1176,6 +1176,16 @@ def translateType (t : TypeExpr) : TM Ty := do
   | .ref _ "Record" [.keyword _ "string", value]
     | .ref _ "Readonly" [.ref _ "Record" [.keyword _ "string", value]] =>
     return .struct IR.dictionaryRef [← translateType value]
+  | .indexed s receiver key =>
+    let ty ← translateType receiver
+    let .struct ref args := ty |
+      reject s "an indexed access receiver must resolve to a declared interface or object type"
+    let info ← orReject ((← get).knownStructs.find? (·.ref == ref)) s
+      "the indexed access receiver has no known fields"
+    let field ← orReject ((info.fieldsAt args).lookup key) s s!"'{key}' is not a field of {ref.name}"
+    if field matches .literal _ then
+      reject s "indexed access to a single-literal tag field is not supported; use a named literal-union type"
+    return field
   | .ref _ "Record" [_, _] | .ref _ "Readonly" [.ref _ "Record" [_, _]] =>
     reject t.span "a Record type needs a name; declare it as a type, such as type T = Record<K, V>"
   | .ref _ name [elem] =>
@@ -4580,10 +4590,10 @@ mutual
 it. -/
 def typeNames (name : String) : TypeExpr → Bool
   | .ref _ n args => n == name || typesName name args
-  | .array _ e | .paren _ e => typeNames name e
+  | .array _ e | .indexed _ e _ | .paren _ e | .predicate _ _ e => typeNames name e
   | .union _ members | .tuple _ _ members => typesName name members
   | .object _ fields => typeFieldsName name fields
-  | _ => false
+  | .keyword _ _ | .null _ | .literal _ _ => false
 
 def typesName (name : String) : List TypeExpr → Bool
   | [] => false
@@ -4948,7 +4958,7 @@ def typeUsesNumber : TypeExpr → Bool
   | .keyword _ name => name == "number"
   | .literal _ (.number _) => true
   | .ref _ name args => isNumberName name || typesUseNumber args
-  | .array _ e | .paren _ e => typeUsesNumber e
+  | .array _ e | .indexed _ e _ | .paren _ e => typeUsesNumber e
   | .union _ members | .tuple _ _ members => typesUseNumber members
   | .object _ fields => typeFieldsUseNumber fields
   | _ => false
@@ -5171,7 +5181,7 @@ def translateCtorParam (p : CtorParam) : TM (String × Ty × Bool) := do
   let pname ← checkLocalName p.param.span p.param.name
   -- JS assigns a parameter property after `super(…)` returns, so one named
   -- `message` would replace the message. `Error` owns the others too.
-  if ["message", "name", "stack", "cause"].contains pname then
+  if p.readonly && ["message", "name", "stack", "cause"].contains pname then
     reject p.param.span s!"a parameter of an error class may not be named {pname}, which Error owns"
   let ty ← translateType type
   unless ty matches .bigint | .number | .boolean | .string do
@@ -5262,7 +5272,7 @@ mutual
 when their source declaration translates, in its original scope. -/
 def prepareInlineType : TypeExpr → TM Unit
   | .object span fields => discard (translateType (.object span fields))
-  | .array _ type | .paren _ type | .predicate _ _ type => prepareInlineType type
+  | .array _ type | .indexed _ type _ | .paren _ type | .predicate _ _ type => prepareInlineType type
   | .ref _ _ types | .union _ types | .tuple _ _ types => prepareInlineTypes types
   | .keyword _ _ | .null _ | .literal _ _ => pure ()
 
