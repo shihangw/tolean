@@ -768,6 +768,7 @@ interface fields, not new array type syntax.
 | A loop whose body can throw, by a `throw` or a call of a function that can, and that changes a local or returns | The same fold in the `Except` monad: `List.foldlM`, or `forIn` without `Id.run`, followed by `>>= fun (x, y) =>` for the statements after the loop. Each run of the body ends in `pure` of its state, or throws. |
 | An `if` or a `switch` that changes locals, where a branch can throw | `(if c then throw e else pure (x, y)) >>= fun (x, y) =>`, so that the statements after it take the state from the branch that did not throw |
 | `class C extends Error { constructor(readonly a: T, b: U) { super(m); } }`, or the same with no constructor | A constructor `C` of `Thrown`, the inductive of the errors that the file's functions throw, with the message and the `readonly` parameters as fields. `Thrown` comes first in the file, with `error (value : JSError)` for `throw new Error(m)`. Every function of the file that can throw then returns `Except Thrown R`. A parameter must have a primitive type and may not be named `message`, `name`, `stack` or `cause`; the message may not call a function; and the class must be declared before the functions that throw it, and may not be named `error`. [A decision record](../decisions/2026-11-11-thrown-per-file.md) explains the type and the rules. |
+| `class C { readonly a: A; constructor(a: A) { this.a = a; } m(x: A): A { return this.a; } }` | Before interpretation and translation, the class becomes an interface, an object-constructor function and a free function for each method. `new C(a)` calls the constructor. `c.m(x)` calls the free function with `c` as its first argument, but only when `c` has exactly the static type `C`. Ordinary fields require ES2022. The [class decision record](../decisions/2026-11-17-readonly-classes.md) separates the proved parser and lowered-program theorems from the Node comparisons that test elaboration. |
 | `throw new C(args)`, in the places where `throw new Error(m)` may stand | `throw (Thrown.«C» m a)`, with the constructor's message written over the arguments, which first move to names unless they are literals, and the `readonly` arguments as the fields. The substitution stops at the parameters of an arrow function in the message. |
 | `const x = e`, `let x = e` | `let x := e` |
 | `x = e`, `x += e`, `x -= e`, `x *= e` on a `let` local | `let x := …` (shadowing) |
@@ -1147,7 +1148,7 @@ Tolean rejects these, among others:
   A call of a local function must be a statement of its own, or
   the whole value of a `const`, a `let` or a `return`. So the function never
   escapes, because no code can return it, store it or pass it on.
-- A function value that escapes, classes other than the error classes above,
+- A function value that escapes, ordinary classes outside the readonly static-dispatch slice above,
   `async`, and exceptions other than the throws above.
 - Imports other than the named imports of [Imports](#imports).
 

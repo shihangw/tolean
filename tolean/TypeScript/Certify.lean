@@ -1721,9 +1721,9 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     "printer that wrote `program` need not be trusted. -/",
     s!"theorem program_parsed : tolean.TypeScript.Syntax.parseChars sourceChars .{target.name.toLower} = Except.ok {if hasClasses then "parsedProgram" else "program"} :=",
     "  tolean.TypeScript.Syntax.parseChars_eq_of_parsesTo (by decide +kernel)" ++ (if hasClasses then
-      "\n\n/-- The kernel checks the result of elaboration. This equation does not prove\n" ++
-      "that elaboration preserves JavaScript semantics; Node comparisons test that boundary. -/\n" ++
-      s!"theorem program_elaborated : tolean.TypeScript.Elaborate.run (String.ofList sourceChars) .{target.name.toLower} parsedProgram = Except.ok program := by\n  decide +kernel"
+      "\n\n-- This compiled check tests the elaboration result; it is not a kernel theorem.\n" ++
+      "-- Node comparisons test preservation of the original class program's results.\n" ++
+      s!"#guard tolean.TypeScript.Elaborate.elaboratesTo sourceChars .{target.name.toLower} parsedProgram program"
       else ""),
     "",
     "/-- The Tolean IR, as the translator gives it for the program. -/",

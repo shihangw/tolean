@@ -255,7 +255,7 @@ class Printer {
       );
     }
     if (ts.isClassDeclaration(s)) {
-      return this.errorClass(s);
+      return s.heritageClauses === undefined ? this.ordinaryClass(s) : this.errorClass(s);
     }
     if (ts.isEnumDeclaration(s)) {
       const exported = this.modifiers(s, [ts.SyntaxKind.ExportKeyword]).size > 0;
@@ -275,7 +275,7 @@ class Printer {
 
   /** `class Name extends Error { constructor(params) { super(message); } }`:
    * an error class, with at most a constructor whose body is one `super`
-   * call. The Lean parser refuses every other class. */
+   * call. Ordinary classes have their own parser below. */
   private errorClass(s: ts.ClassDeclaration): Sexp {
     const exported = this.modifiers(s, [ts.SyntaxKind.ExportKeyword]).size > 0;
     if (s.name === undefined || s.typeParameters !== undefined) {
@@ -307,6 +307,41 @@ class Printer {
       ...params,
       this.expr(call.arguments[0]),
     ]);
+  }
+
+  private ordinaryClass(s: ts.ClassDeclaration): Sexp {
+    const exported = this.modifiers(s, [ts.SyntaxKind.ExportKeyword]).size > 0;
+    if (s.name === undefined || s.typeParameters !== undefined) refuse(s, 'generic or anonymous class');
+    if (s.members.filter(ts.isConstructorDeclaration).length > 1) refuse(s, 'multiple constructors');
+    const members = s.members.map(m => {
+      if (ts.isPropertyDeclaration(m)) {
+        const mods = this.modifiers(m, [ts.SyntaxKind.ReadonlyKeyword]);
+        if (!mods.has(ts.SyntaxKind.ReadonlyKeyword) || m.questionToken !== undefined ||
+            m.initializer !== undefined || m.type === undefined || !ts.isIdentifier(m.name)) {
+          refuse(m, 'ordinary classes require typed readonly fields');
+        }
+        return this.node('field', m, [m.name.text, 'readonly'], [this.type(m.type)]);
+      }
+      if (!ts.isConstructorDeclaration(m) && !ts.isMethodDeclaration(m)) refuse(m, 'unsupported class member');
+      this.modifiers(m, []);
+      if (m.body === undefined) refuse(m, 'class member without a body');
+      const outer = { inFunction: this.inFunction, loopDepth: this.loopDepth };
+      this.inFunction = true;
+      this.loopDepth = 0;
+      const body = this.statement(m.body);
+      this.inFunction = outer.inFunction;
+      this.loopDepth = outer.loopDepth;
+      if (ts.isConstructorDeclaration(m)) {
+        return { head: 'constructor', atoms: [], children: [...m.parameters.map(p => this.ctorParam(p)), body] };
+      }
+      if (m.typeParameters !== undefined || m.asteriskToken !== undefined ||
+          m.questionToken !== undefined || !ts.isIdentifier(m.name)) refuse(m, 'unsupported class method');
+      return this.node('method', m, [m.name.text], [
+        ...m.parameters.map(p => this.param(p, true)),
+        ...(m.type === undefined ? [] : [this.type(m.type)]), body,
+      ]);
+    });
+    return this.node('class', s, [this.name(s.name), ...(exported ? ['export'] : [])], members);
   }
 
   /** A parameter of a constructor, which `readonly` may mark. */
@@ -809,6 +844,8 @@ class Printer {
         return this.node('false', e, [], []);
       case ts.SyntaxKind.NullKeyword:
         return this.node('null', e, [], []);
+      case ts.SyntaxKind.ThisKeyword:
+        return this.node('this', e, [], []);
       default:
         break;
     }

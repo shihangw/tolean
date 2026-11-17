@@ -1515,6 +1515,11 @@ test('readonly ordinary classes desugar to the same values as Node', async () =>
       }
       sum(): bigint { return this.left + this.right; }
     }
+    class ParamField {
+      readonly other: bigint;
+      constructor(readonly value: bigint) { this.other = value + 1n; }
+      read(): bigint { return this.value; }
+    }
     export function add(x: bigint, y: bigint): bigint {
       const c = new Counter(x);
       return c.plus(y);
@@ -1529,6 +1534,8 @@ test('readonly ordinary classes desugar to the same values as Node', async () =>
     }
     export function make(x: bigint): Counter { return new Counter(x); }
     export function fromCall(x: bigint): bigint { return make(x).plus(2n); }
+    export function paramField(x: bigint): ParamField { return new ParamField(x); }
+    export function readParam(x: bigint): bigint { return new ParamField(x).read(); }
   `;
   const calls = [
     { function: 'add', args: [4n, -7n] },
@@ -1536,6 +1543,8 @@ test('readonly ordinary classes desugar to the same values as Node', async () =>
     { function: 'pair', args: [3n, 8n] },
     { function: 'make', args: [9n] },
     { function: 'fromCall', args: [10n] },
+    { function: 'paramField', args: [12n] },
+    { function: 'readParam', args: [13n] },
   ];
   const run = spawnSync(tolean, ['interpret'], {
     input: JSON.stringify({ programs: [{ source, calls: calls.map(call => ({

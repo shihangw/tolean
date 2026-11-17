@@ -25,11 +25,11 @@ def declaredFields (d : ClassDecl) : List Field :=
   d.members.filterMap fun | .field f => some f | _ => none
 
 def fields (d : ClassDecl) : List Field :=
-  declaredFields d ++ d.members.flatMap fun
+  (d.members.flatMap fun
     | .ctor ps _ => ps.filterMap fun p =>
       if p.readonly then p.param.type.map (fun t => ⟨p.param.span, true, p.param.name, false, t⟩)
       else none
-    | _ => []
+    | _ => []) ++ declaredFields d
 
 def methods (d : ClassDecl) : List ClassMethod :=
   d.members.filterMap fun | .method m => some m | _ => none
@@ -249,7 +249,7 @@ def elaborateClass (ctx : Context) (d : ClassDecl) : Result (List Decl) := do
     let some type := p.param.type
       | refuse p.param.span "a readonly constructor parameter needs a type"
     return some (⟨p.param.span, true, p.param.name, false, type⟩ : Field)
-  let fs := declaredFields d ++ parameterFields
+  let fs := parameterFields ++ declaredFields d
   let ms := methods d
   unique d.span "field or method names" (fs.map (·.name) ++ ms.map (·.name))
   unique d.span "constructor assignments" (assigned.map Prod.fst)
@@ -294,10 +294,10 @@ def elaborateClass (ctx : Context) (d : ClassDecl) : Result (List Decl) := do
 
 /-- Programs without ordinary classes keep their existing path. The reserved
 prefix makes generated binders fresh even inside nested source expressions. -/
-def run (source : String) (target : Edition) (m : Module) : Result Module := do
+def runChars (chars : List Char) (target : Edition) (m : Module) : Result Module := do
   let classes := m.decls.filterMap fun | .classDecl d => some d | _ => none
   if classes.isEmpty then return m
-  let tokens ← (Syntax.lex source target).mapError (fun e => e.message)
+  let tokens ← (Syntax.lexChars chars target).mapError (fun e => e.message)
   for t in tokens do
     if let .ident name := t.kind then
       if name.startsWith generatedPrefix then
@@ -326,5 +326,14 @@ def run (source : String) (target : Edition) (m : Module) : Result Module := do
       pure [.exportedVar s { d with init := ← d.init.mapM (expr ctx [] 1000) }]
     | d => pure [d]
   pure ⟨decls⟩
+
+def run (source : String) (target : Edition) (m : Module) : Result Module :=
+  runChars source.toList target m
+
+/-- A decidable check of the resulting tree, not a semantic preservation claim. -/
+def elaboratesTo (chars : List Char) (target : Edition) (m out : Module) : Bool :=
+  match runChars chars target m with
+  | .ok actual => Module.beq actual out
+  | .error _ => false
 
 end tolean.TypeScript.Elaborate
