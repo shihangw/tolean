@@ -337,8 +337,10 @@ leaves a gap.
     mechanism later serves `@decreases`. See the
     [proof-obligation open question](#open-questions).
     The first slice adds project manifest obligations with exact theorem
-    types and a fixed axiom policy. Arbitrary comparators remain refused:
-    both the sort translator and the certificate generator require known key shapes.
+    types and a fixed axiom policy. Its chain tests cover obligations'
+    fixed axiom policy, not claim-specific axiom allowlists. Arbitrary
+    comparators remain refused: both the sort translator and the certificate
+    generator require known key shapes.
     The checker does not yet connect external proofs to `program_sound` or
     derive required obligations from generated output. See the
     [decision](../decisions/2026-11-17-project-proof-obligations.md).
