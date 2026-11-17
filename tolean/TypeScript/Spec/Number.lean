@@ -263,6 +263,15 @@ over this list. -/
 def JSNumber.countUp {N : Type} [JSNumber N] (k : Int) (b : N) : List N :=
   (countUp? k b).getD []
 
+/-- When a counted loop has a value, the list in its translated `countUp` is
+the same list that the interpreter uses. -/
+theorem JSNumber.countUp?_eq_of_isSome {N : Type} [JSNumber N] (k : Int) (b : N)
+    (h : (countUp? k b).isSome) :
+    countUp? k b = some (countUp k b) := by
+  cases hcount : countUp? k b with
+  | none => simp [hcount] at h
+  | some xs => simp [countUp, hcount]
+
 /-- On safe integers, JS `number` operations agree with `Int`. -/
 class SafeIntLaws (N : Type) [JSNumber N] : Prop where
   toSafeInt_inRange : ∀ {x : N} {i : Int}, toSafeInt x = some i → InRange i

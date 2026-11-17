@@ -260,7 +260,7 @@ def sections : List Section := [
     ``Proof.letState_sim, ``Proof.translateIf_sound]⟩,
   ⟨"sec-for-statement", "14.7.4", "The for Statement",
     [``Proof.loopHead_sim, ``Proof.LoopHead.constAssignedIn_stmt, ``Proof.execCounted_eq,
-    ``Proof.countFrom_acc]⟩,
+    ``Proof.countFrom_acc, ``JSNumber.countUp?_eq_of_isSome]⟩,
   ⟨"sec-for-in-and-for-of-statements", "14.7.5",
     "The for-in, for-of, and for-await-of Statements",
     [``Proof.loop_sim, ``Proof.runFold_foldl, ``Proof.runFold_foldl_on, ``Proof.runFold_forIn,

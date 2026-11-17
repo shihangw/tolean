@@ -464,7 +464,11 @@ a reason to choose otherwise.
   interpreter gives a value, or that the bound is at most
   `Number.MAX_SAFE_INTEGER`.
 
-  Recommendation: take a hypothesis on the bound, stated over the parameters.
+  Decision: take a hypothesis on the bound, stated over the parameters. The
+  [decision record](../decisions/2026-11-16-counted-loop-certificates.md)
+  records why the certificate requires this precondition and keeps non-parameter
+  bounds refused.
+
   The translation of a counted loop is the `for … of` fold over
   `JSNumber.countUp k b`, the IR evaluator gives `countUp? k b` and has no
   value when that is `none`, and `countUp` is `countUp?` with `[]` for

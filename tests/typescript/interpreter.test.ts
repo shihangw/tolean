@@ -23,11 +23,11 @@
  * - When the interpreter says that a call throws a value, Node throws the
  *   same value. An `Error` compares by its class and its message.
  * - When the translator accepts the program and the interpreter gives no
- *   value, Node throws. A program that sorts by a `number` key is the
- *   exception: its comparator is consistent only when no key is `NaN`, and a
- *   difference only when every key is finite, so the interpreter gives no
- *   value on other arrays, where Node returns one. The translation makes no
- *   claim there.
+ *   value, Node throws unless the program sorts by a `number` key or has a
+ *   counted loop whose bound fails the certificate's precondition. A numeric
+ *   sort needs a consistent comparator, and a counted loop needs a bound for
+ *   which `countUp?` gives a value. The translation makes no claim when either
+ *   condition fails.
  *
  * The parser accepts some programs that Node does not load, because they break
  * an early error rule of ECMA-262, such as a name declared twice in a block.
@@ -243,6 +243,47 @@ test('certified local functions agree with Node on random arguments', async () =
     expect(result.results[5 * i + 3]).toEqual({ value: encode(mod.localLoopUpdate([start, amount])) });
     expect(result.results[5 * i + 4]).toEqual({ value: encode(mod.localLoopNested([start, amount])) });
   }
+});
+
+test('counted-loop certificates agree with Node for parameter and literal bounds', async () => {
+  const source = readFileSync(new URL('./corpus/translate/accept/countedLoopCertificate.ts', import.meta.url), 'utf8');
+  expect(source).toContain('// certify: required');
+  const limits = fc.sample(fc.integer({ min: 0, max: 30 }), { seed, numRuns: 50 });
+  const arrays = fc.sample(fc.array(fc.bigInt(), { maxLength: 20 }), { seed, numRuns: 50 });
+  const calls = [
+    ...limits.map(limit => ({ function: 'sum', args: [encode(limit)] })),
+    ...arrays.map(xs => ({ function: 'length', args: [encode(xs)] })),
+    { function: 'literal', args: [] },
+    { function: 'nearSafe', args: [encode(2 ** 53)] },
+  ];
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: [{ source, calls }] }), encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (result === undefined || !result.parsed) return;
+  expect(result.accepted).toBe(true);
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-counted-loop-certificate-'));
+  const path = join(dir, 'counted.mjs');
+  writeFileSync(path, ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+  }).outputText);
+  const mod = (await import(pathToFileURL(path).href)) as {
+    sum: (limit: number) => number;
+    length: (xs: ReadonlyArray<bigint>) => number;
+    literal: () => number;
+    nearSafe: (limit: number) => number;
+  };
+  for (const [i, limit] of limits.entries()) {
+    expect(result.results[i]).toEqual({ value: encode(mod.sum(limit)) });
+  }
+  for (const [i, xs] of arrays.entries()) {
+    expect(result.results[limits.length + i]).toEqual({ value: encode(mod.length(xs)) });
+  }
+  expect(result.results.at(-2)).toEqual({ value: encode(mod.literal()) });
+  expect(result.results.at(-1)).toBeNull();
+  expect(mod.nearSafe(2 ** 53)).toBe(2);
 });
 
 test('local returns and sibling calls preserve captured state and agree with Node', async () => {
