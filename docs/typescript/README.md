@@ -8,6 +8,26 @@ models JS numbers, and what is proved and what is trusted. The
 [This graph](verification.svg) shows the verification chain for TypeScript. It
 marks which links are proved, tested against a reference, or trusted.
 
+## Project proof obligations
+
+The project chain manifest accepts an optional `obligations` list. Each
+entry has `spec`, `proof` and `module` fields. `spec` names a Lean definition
+of a proposition. `proof` names a theorem whose type is exactly that
+definition, and `module` names the module to import.
+
+Build the proof module first, then run `lake env tolean chain check` with
+the path to the project chain manifest. The checker follows the theorem's
+dependencies and accepts only `propext`, `Classical.choice` and `Quot.sound`.
+Unlike a claim, an obligation cannot supply its own axiom allowlist.
+Proofs that depend on `sorryAx` fail this check.
+
+This is a checker for supplied proofs, not yet a way to extend the supported
+TypeScript subset. The translator still refuses arbitrary sort comparators.
+It does not generate obligation statements or use these entries in
+`program_sound`. See the
+[decision](../decisions/2026-11-17-project-proof-obligations.md) for the
+remaining certificate work.
+
 ## The translator
 
 ### Parsing
@@ -546,12 +566,17 @@ They do not accept extensionless imports even in a CommonJS project.
 Raw Node type stripping still needs `.ts`; use the matching TypeScript
 build or bundler when running code that uses the other spellings.
 
-Tolean loads relative `extends` chains inside the project. A base path is
+Tolean loads relative `extends` chains, including shared bases outside the
+directory that contains `tolean.json`. A base path is
 relative to the config that declares it, and may omit `.json`. An array of
 bases follows TypeScript 5's order: later bases override earlier ones, then
 the child overrides each inherited compiler option. A cycle or missing base
-is an error. Package names in `extends`, absolute paths and bases outside
-the project remain refused. Use a relative config inside the project instead.
+is an error. Package names in `extends` and absolute paths remain refused.
+Each inherited config is recorded by its relative path and SHA-256 hash in
+the translation manifest. Workspace hosts must supply the base files too,
+using paths relative to the project root, such as `../../tsconfig.base.json`.
+The workspace result reports these inputs in `configInputs`. This does not
+allow imports or source globs to reach outside the project.
 
 Tolean checks the merged options before it resolves imports. It refuses
 `moduleSuffixes` and `rootDirs`, including inherited settings, because they
@@ -559,7 +584,7 @@ can select a different relative import target. `paths` and `baseUrl` do not
 enable nonrelative imports. Other compiler options and source-selection
 settings do not change Tolean's project settings: `tolean.json` still lists
 the sources. The
-[inheritance decision](../decisions/2026-11-15-tsconfig-extends.md) explains
+[external config inputs decision](../decisions/2026-11-17-external-tsconfig-inputs.md) explains
 this boundary.
 
 - An import must name a relative path to a translated `.ts` file. Tolean
@@ -780,7 +805,8 @@ interface fields, not new array type syntax.
 | A call of `f` inside a larger expression, such as `return f(a) + 1n`, where JS evaluates the call whenever it evaluates the statement | `f a >>= fun r0' => …` before the statement, which reads `r0'` in place of the call. Each operand that JS evaluates before the call, such as `x.count` in `x.count + f(a)`, moves out first, to a `let` of its own, so the output runs the same operations in the same order. A literal whose parts are all literals stays, because it reads nothing and runs nothing, and its type comes from its position. The interpreter runs the statements in this form too (`Eval.Stmt.hoisted`), so the translator translates the body the interpreter runs. |
 | A loop whose body can throw, by a `throw` or a call of a function that can, and that changes a local or returns | The same fold in the `Except` monad: `List.foldlM`, or `forIn` without `Id.run`, followed by `>>= fun (x, y) =>` for the statements after the loop. Each run of the body ends in `pure` of its state, or throws. |
 | An `if` or a `switch` that changes locals, where a branch can throw | `(if c then throw e else pure (x, y)) >>= fun (x, y) =>`, so that the statements after it take the state from the branch that did not throw |
-| `class C extends Error { constructor(readonly a: T, b: U) { super(m); } }`, or the same with no constructor | A constructor `C` of `Thrown`, the inductive of the errors that the file's functions throw, with the message and the `readonly` parameters as fields. `Thrown` comes first in the file, with `error (value : JSError)` for `throw new Error(m)`. Every function of the file that can throw then returns `Except Thrown R`. A parameter must have a primitive type and may not be named `message`, `name`, `stack` or `cause`; the message may not call a function; and the class must be declared before the functions that throw it, and may not be named `error`. [A decision record](../decisions/2026-11-11-thrown-per-file.md) explains the type and the rules. |
+| `class C extends Error { constructor(readonly a: T, b: U) { super(m); } }`, or the same with no constructor | A constructor `C` of `Thrown`, the inductive of the errors that the file's functions throw, with the message and the `readonly` parameters as fields. `Thrown` comes first in the file, with `error (value : JSError)` for `throw new Error(m)`. Every function of the file that can throw then returns `Except Thrown R`. A parameter must have a primitive type. A readonly parameter may not be named `message`, `name`, `stack` or `cause`, because it declares a field. The message may not call a function, and the class must be declared before the functions that throw it. The class may not be named `error`. [A decision record](../decisions/2026-11-11-thrown-per-file.md) explains the type and the rules. |
+| `class C extends Error { readonly line: number; constructor(message: string, line: number) { super(message); this.line = line; } }` | The parser normalizes the declared field to a readonly constructor parameter. Each field needs one required same-name parameter with the same primitive type, and exactly one unconditional assignment after `super(message)`. The normalized field order must match parameter properties followed by separate declarations. Assignments must follow declaration order so downlevel output preserves the same own-field order. Assignments from other names or expressions, optional fields, and `this.name` assignments remain refused. See [the decision](../decisions/2026-11-16-error-class-fields.md). |
 | `throw new C(args)`, in the places where `throw new Error(m)` may stand | `throw (Thrown.«C» m a)`, with the constructor's message written over the arguments, which first move to names unless they are literals, and the `readonly` arguments as the fields. The substitution stops at the parameters of an arrow function in the message. |
 | `const x = e`, `let x = e` | `let x := e` |
 | `x = e`, `x += e`, `x -= e`, `x *= e` on a `let` local | `let x := …` (shadowing) |

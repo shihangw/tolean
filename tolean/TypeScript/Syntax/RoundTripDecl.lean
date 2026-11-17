@@ -1716,6 +1716,26 @@ theorem ctorParams_reads {T : Edition} (params : List CtorParam) (hps : ∀ p �
 
 /-- `class`, a name, `extends Error`, `{`, at most a constructor on its own
 lines, and `}`. -/
+theorem errorFields_empty {s : ParseState} {t : Token} {rest : List Token}
+    (hs : s.rest = t :: rest) (ht : t.isIdent "readonly" = false) :
+    Parse.iterate (10 * (s.left + 1)) #[] Parse.errorFieldStep s = .ok #[] s := by
+  obtain ⟨n, hn⟩ : ∃ n, 10 * (s.left + 1) = n + 1 := ⟨10 * s.left + 9, by omega⟩
+  rw [hn]
+  apply Parse.iterate_false
+  simp only [Parse.errorFieldStep]
+  rw [Parse.bind_eq (Parse.peek_eq hs)]
+  simp [ht, Parse.pure_ok]
+
+theorem errorAssignments_empty {s : ParseState} {t : Token} {rest : List Token}
+    (hs : s.rest = t :: rest) (ht : t.isPunct "}" = true) :
+    Parse.iterate (10 * (s.left + 1)) [] Parse.errorAssignmentStep s = .ok [] s := by
+  obtain ⟨n, hn⟩ : ∃ n, 10 * (s.left + 1) = n + 1 := ⟨10 * s.left + 9, by omega⟩
+  rw [hn]
+  apply Parse.iterate_false
+  simp only [Parse.errorAssignmentStep]
+  rw [Parse.bind_eq (Parse.peek_eq hs), if_pos ht]
+  rfl
+
 theorem parseClass_reads {T : Edition} (start : Pos) (exported : Bool) (sp : Span) (name : String)
     (ctor : Option (List CtorParam × Expr)) (hname : exprName name = true) (hc : ctorWF T ctor = true) :
     ∀ (s : ParseState) (ts cts rest : List Token) (rb : Token), s.rest = ts ++ cts ++ rb :: rest →
@@ -1759,7 +1779,11 @@ theorem parseClass_reads {T : Edition} (start : Pos) (exported : Bool) (sp : Spa
       Parse.bind_eq (Parse.peek_eq (s := s₃) rfl), if_pos (show er.isIdent "Error" = true by simp [Token.isIdent, her]),
       Parse.pure_bind, Parse.bind_eq (Parse.discard_eq (Parse.advance_eq (s := s₃) rfl)),
       Parse.bind_eq (Parse.expectPunct_ok (s := s₄) rfl (by simp) hlb)]
-    rw [Parse.bind_eq (Parse.peek_eq (s := s₅) rfl), if_pos (show rb.isPunct "}" = true by simp [Token.isPunct, hrb]),
+    rw [Parse.bind_eq (Parse.budget_eq _),
+      Parse.bind_eq (errorFields_empty (s := s₅) rfl (by simp [Token.isIdent, hrb])),
+      Parse.bind_eq (Parse.peek_eq (s := s₅) rfl), if_pos (show rb.isPunct "}" = true by simp [Token.isPunct, hrb])]
+    simp only [Array.isEmpty_empty, ↓reduceIte, Parse.pure_bind]
+    rw [
       Parse.bind_eq (Parse.discard_eq (Parse.advance_cons (s := s₅) rfl hr)), Parse.bind_eq (Parse.spanFrom_eq _ _)]
     rfl
   | some c =>
@@ -1819,21 +1843,31 @@ theorem parseClass_reads {T : Edition} (start : Pos) (exported : Bool) (sp : Spa
         Parse.bind_eq (Parse.peek_eq (s := s₃) rfl), if_pos (show er.isIdent "Error" = true by simp [Token.isIdent, her]),
         Parse.pure_bind, Parse.bind_eq (Parse.discard_eq (Parse.advance_eq (s := s₃) rfl)),
         Parse.bind_eq (Parse.expectPunct_ok (s := s₄) rfl (by simp) hlb)]
-      rw [Parse.bind_eq (Parse.peek_eq hs₅), if_neg (show ¬ (ct.isPunct "}" = true) by simp [Token.isPunct, hct]),
+      rw [Parse.bind_eq (Parse.budget_eq _),
+        Parse.bind_eq (errorFields_empty hs₅ (by simp [Token.isIdent, hct])),
+        Parse.bind_eq (Parse.peek_eq hs₅), if_neg (show ¬ (ct.isPunct "}" = true) by simp [Token.isPunct, hct]),
         Parse.pure_bind, if_pos (show ct.isIdent "constructor" = true by simp [Token.isIdent, hct]), Parse.pure_bind,
         Parse.bind_eq (Parse.discard_eq (Parse.advance_eq hs₅)),
         Parse.bind_eq (Parse.expectPunct_ok (s := s₆) rfl (by simp) hlp), Parse.bind_eq (Parse.budget_eq _),
-        Parse.bind_eq hit, Parse.bind_eq (Parse.expectPunct_ok hs₈ (by simp) hrp),
+        Parse.bind_eq hit]
+      rw [if_pos (show Parse.errorFieldsOK #[] res = true by simp [Parse.errorFieldsOK]), Parse.pure_bind]
+      rw [if_pos (show Parse.errorFieldOrderOK #[] res = true by
+        simp [Parse.errorFieldOrderOK, Parse.errorFieldParams]), Parse.pure_bind]
+      rw [Parse.bind_eq (Parse.expectPunct_ok hs₈ (by simp) hrp),
         Parse.bind_eq (Parse.expectPunct_ok (s := s₉) rfl (by simp) hcb),
         Parse.bind_eq (Parse.peek_eq (s := s₁₀) rfl), if_pos (show sk.isKeyword "super" = true by simp [Token.isKeyword, hsk]),
         Parse.pure_bind, Parse.bind_eq (Parse.discard_eq (Parse.advance_eq (s := s₁₀) rfl)),
         Parse.bind_eq (Parse.expectPunct_ok (s := s₁₁) rfl (by simp) hlpm), Parse.bind_eq (Parse.budget_eq _),
         Parse.bind_eq hpm, Parse.bind_eq (Parse.expectPunct_ok hs₁₃ (by simp) hrpm),
         Parse.bind_eq (endStatement_semi (s := s₁₄) rfl (by simp) hsemi),
-        Parse.bind_eq (Parse.peek_eq (s := s₁₅) rfl), if_pos (show cr.isPunct "}" = true by simp [Token.isPunct, hcr]),
+        Parse.bind_eq (Parse.budget_eq _)]
+      simp only [List.map_nil]
+      rw [Parse.bind_eq (errorAssignments_empty (s := s₁₅) rfl (by simp [Token.isPunct, hcr]))]
+      simp only [List.isEmpty_nil, ↓reduceIte, Parse.pure_bind]
+      rw [Parse.bind_eq (Parse.peek_eq (s := s₁₅) rfl), if_pos (show cr.isPunct "}" = true by simp [Token.isPunct, hcr]),
         Parse.pure_bind, Parse.bind_eq (Parse.discard_eq (Parse.advance_eq (s := s₁₅) rfl)),
         Parse.bind_eq (Parse.expectPunct_ok (s := s₁₆) rfl hr hrb), Parse.bind_eq (Parse.spanFrom_eq _ _)]
-      rfl
+      simp [Parse.errorFieldParams]
     · simp [Decl.erase, hes, hem]
     · have L1 := leaves_trans hL₅ (leaves_advance hs₅ hl₅)
       have L2 := leaves_trans L1 (leaves_advance (s := s₆) rfl (by simp [s₆, hl₅, hs₅]))
