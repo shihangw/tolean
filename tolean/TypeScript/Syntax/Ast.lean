@@ -101,6 +101,8 @@ inductive TypeExpr where
   | ref (span : Span) (name : String) (args : List TypeExpr)
   /-- `T[]`. -/
   | array (span : Span) (elem : TypeExpr)
+  /-- `T['field']`, with one literal string key. -/
+  | indexed (span : Span) (receiver : TypeExpr) (key : String)
   | union (span : Span) (members : List TypeExpr)
   | paren (span : Span) (inner : TypeExpr)
   /-- `[A, B]`, or `readonly [A, B]` when `readonly` is true: a tuple type. -/
@@ -1029,7 +1031,7 @@ namespace tolean.TypeScript.Syntax
 open tolean
 
 def TypeExpr.span : TypeExpr → Span
-  | .keyword s _ | .null s | .literal s _ | .ref s _ _ | .array s _ | .union s _ | .paren s _
+  | .keyword s _ | .null s | .literal s _ | .ref s _ _ | .array s _ | .indexed s _ _ | .union s _ | .paren s _
   | .tuple s _ _ | .object s _ | .predicate s _ _ => s
 
 def Expr.span : Expr → Span

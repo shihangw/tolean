@@ -572,6 +572,50 @@ test(`the interpreter agrees with Node ${process.version} on random programs`, a
   expect(failures).toEqual([]);
 }, 600_000);
 
+test('indexed access resolves the named literal union of a field', async () => {
+  const source = `
+    export type Kind = 'circle' | 'square';
+    export interface Shape {
+      readonly kind: Kind;
+      readonly size: number;
+    }
+    export function hasKind(s: Shape, kind: Shape['kind']): boolean {
+      return s.kind === kind;
+    }
+    interface Box<T> { readonly value: T; }
+    export function identity<T>(value: Box<T>['value']): T {
+      return value;
+    }
+  `;
+  const kinds = ['circle', 'square'] as const;
+  const inputs = kinds.flatMap((kind) => kinds.map((expected) =>
+    [{ kind, size: 1 }, expected] as const));
+  const calls = inputs.map(([shape, kind]) =>
+    ({ function: 'hasKind', args: [encode(shape), encode(kind)] }));
+  calls.push({ function: 'identity', args: [encode(7n)] });
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: [{ source, calls }] }), encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (!result?.parsed) return;
+  expect(result.accepted).toBe(true);
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-field-type-'));
+  const path = join(dir, 'shape.mjs');
+  writeFileSync(path, ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+  }).outputText);
+  const mod = await import(pathToFileURL(path).href) as {
+    hasKind: (shape: { kind: typeof kinds[number]; size: number }, kind: typeof kinds[number]) => boolean;
+    identity: (value: bigint) => bigint;
+  };
+  for (const [i, [shape, kind]] of inputs.entries()) {
+    expect(result.results[i]).toEqual({ value: encode(mod.hasKind(shape, kind)) });
+  }
+  expect(result.results[inputs.length]).toEqual({ value: encode(mod.identity(7n)) });
+});
+
 test('predicate annotations do not change what a guard computes', async () => {
   const bodies = [
     'return value.kind === "circle";',
