@@ -2407,10 +2407,7 @@ theorem evalList_length {ρ : Eval.Env N} : ∀ {outs : List IR.Expr} {vs : List
         subst h
         simp [evalList_length hxs]
 
-omit [JSNumber N] in
-/-- The fields that the output keeps, from the marks of the parameters, are
-the fields that the interpreter keeps, from the parameters: those marked
-`readonly`, each with its argument. -/
+/-- A literal error name evaluates after the constructor arguments. -/
 theorem evalList_errorName (ρ : Eval.Env N) (codes : List IR.Expr) (name : Option String) :
     IR.Expr.evalList fs fuel ρ (codes ++ name.toList.map IR.Expr.string) =
       (IR.Expr.evalList fs fuel ρ codes).map
@@ -2423,6 +2420,10 @@ theorem evalList_errorName (ρ : Eval.Env N) (codes : List IR.Expr) (name : Opti
     cases IR.Expr.eval fs fuel ρ c <;>
       cases IR.Expr.evalList fs fuel ρ cs <;> simp
 
+omit [JSNumber N] in
+/-- The fields that the output keeps, from the marks of the parameters, are
+the fields that the interpreter keeps, from the parameters: those marked
+`readonly`, each with its argument. -/
 theorem fieldArgs_marks {α : Type} :
     ∀ (ps : List CtorParam) (qs : List (String × Ty × Bool)) (vs : List α),
       ps.map (fun p => (p.param.name, p.readonly)) = qs.map (fun x => (x.1, x.2.2)) →
@@ -2511,13 +2512,24 @@ theorem throwClass_sim {env : Translate.Env} {s sn tsp : Span} {c : String} {msg
     intro vs
     rw [fieldArgs_marks _ _ _ hps]
     cases ctor <;> simp [Eval.fieldArgs, Eval.ctorParams]
+  have hfieldsAll : ∀ (t : JSString) (vs : List (Val N)), vs.length = info.params.length →
+      (info.errorMarks.zip (.str t :: (vs ++ info.runtimeName.toList.map
+        (fun n => Val.str (JSString.ofString n))))).filterMap (fun (f, a) => f.map (·, a)) =
+        ("message", .str t) :: (Eval.fieldArgs ctor vs ++ Eval.errorNameFields (Eval.ctorName ctor)) := by
+    intro t vs hl
+    simp only [ClassInfo.errorMarks, List.cons_append, List.zip_cons_cons,
+      List.filterMap_cons, Option.map_some]
+    rw [List.zip_append (by simpa using hl.symm)]
+    simp only [List.filterMap_append]
+    rw [← hfields]
+    cases hn : info.runtimeName <;> simp [Eval.errorNameFields, hRuntimeName, hn]
   have hout : ∀ o, IR.Body.exec fs fuel ρo
       (.throw (.ext (.errorCase thrown c info.errorMarks) (info.errorArgs code codes))) = some o →
       ∃ t vs, o = .ret (.error (.error c
         (("message", .str t) :: (Eval.fieldArgs ctor vs ++ Eval.errorNameFields (Eval.ctorName ctor))))) ∧
         IR.Expr.eval fs fuel ρo code = some (.str t) ∧ IR.Expr.evalList fs fuel ρo codes = some vs := by
     intro o ho
-    simp only [ClassInfo.errorArgs, IR.Body.exec, IR.Expr.eval, IR.Expr.evalList,
+    simp only [ClassInfo.errorArgs, List.cons_append, IR.Body.exec, IR.Expr.eval, IR.Expr.evalList,
       evalList_errorName] at ho
     cases hm : IR.Expr.eval fs fuel ρo code with
     | none => simp [hm] at ho
@@ -2526,12 +2538,13 @@ theorem throwClass_sim {env : Translate.Env} {s sn tsp : Span} {c : String} {msg
       | none => simp [hm, hvs] at ho
       | some vs =>
         have hl := evalList_length fs fuel hvs
-        cases hn : info.runtimeName <;>
-          cases w <;> simp [ClassInfo.errorMarks, hn, hm, hvs, IR.ExprExt.apply, hl, hlen] at ho
-        all_goals
-          refine ⟨_, vs, ?_, rfl, rfl⟩
-          rw [← ho, hfields]
-          simp [Eval.errorNameFields, hRuntimeName, hn, List.zip_append, ← hlen, ← hl]
+        cases w <;> simp [ClassInfo.errorMarks, hm, hvs, IR.ExprExt.apply, hl, hlen] at ho
+        rename_i message
+        refine ⟨message, vs, ?_, rfl, rfl⟩
+        rw [← ho]
+        simpa [ClassInfo.errorMarks] using congrArg
+          (fun fields => Outcome.ret (Except.error (Val.error c fields)))
+          (hfieldsAll message vs (hl.trans hlen))
   constructor
   · intro v hv
     obtain ⟨t, vs, ho, hm, hvs⟩ := hout _ hv
