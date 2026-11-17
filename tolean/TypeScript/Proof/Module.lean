@@ -1768,7 +1768,7 @@ theorem decls_ok (P : Eval.Program) (thr : String → Bool) (cls : String → Op
         simp only [translateDecl, bind_ok, modify_ok, pure_ok] at h₁
         obtain ⟨_, _, rfl, rfl, rfl⟩ := h₁
         simpa [Eval.functionsIn, IR.functions, List.filterMap_cons] using hrel
-      | classDecl d => simp [prepareInline, prepareInlineDecl] at hprepare
+      | classDecl d => simp [translateDecl] at h₁
       | stmt st => simp [translateDecl] at h₁
 
 theorem findSome_eq {α β : Type} {f : α → Option β} {x : β} :
