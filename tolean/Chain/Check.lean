@@ -85,17 +85,22 @@ private instance : MonadEnv (ReaderT Environment Id) where
   getEnv := read
   modifyEnv _ := pure ()
 
+/-- Manifest names omit Lean quotation marks, including generated names
+whose components contain spaces. -/
+private def manifestName (s : String) : Name :=
+  (s.splitOn ".").foldl Name.str .anonymous
+
 /-- `name` is a theorem whose axioms are among `allowed`; with `spec`, its type
 is the constant `spec`. -/
 private def theoremErr (env : Environment) (at_ name : String) (spec : Option String)
     (allowed : List String) : Option String := Id.run do
-  let n := name.toName
+  let n := manifestName name
   let some ci := env.find? n | return some s!"{at_}: {name} is not in the environment"
   unless ci matches .thmInfo _ do return some s!"{at_}: {name} is not a theorem"
   if let some s := spec then
-    unless ci.type == mkConst s.toName do
+    unless ci.type == mkConst (manifestName s) do
       return some s!"{at_}: the type of {name} is not exactly {s}"
-    if env.find? s.toName |>.isNone then return some s!"{at_}: {s} is not in the environment"
+    if env.find? (manifestName s) |>.isNone then return some s!"{at_}: {s} is not in the environment"
   let axs := (collectAxioms n : ReaderT Environment Id _).run env
   let extra := axs.toList.filter fun a => !allowed.contains a.toString
   if extra.isEmpty then none

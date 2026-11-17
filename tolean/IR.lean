@@ -126,6 +126,8 @@ structure CallbackInfo (T : Type) where
   result : Ty T
   /-- The locals in scope at the call, in the order they were declared. -/
   scope : List (String × Ty T)
+  /-- The translator requires a separate proof for this comparator. -/
+  sortObligation : Bool := false
 deriving Repr, Inhabited
 
 /-- Which nullish value a source test matches. -/

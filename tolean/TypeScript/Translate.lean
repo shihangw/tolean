@@ -629,6 +629,57 @@ def SortObligation.key (s : Span) : String :=
 def SortObligation.name (s : Span) : String :=
   s!"«{SortObligation.key s}»"
 
+mutual
+/-- Read requirements from the translated tree, because isolated declaration
+translation restores its temporary state. -/
+def exprSortObligations : IR.Expr → List SortObligation
+  | .listMethod method items param elem body info =>
+    exprSortObligations items ++ exprSortObligations body ++
+      (match method with
+       | .sortWith other =>
+         if info.sortObligation then
+           [{ span := info.span, param, other, elem, body, scope := info.scope }]
+         else []
+       | _ => [])
+  | .listFold items init _ _ _ body _ =>
+    exprSortObligations items ++ exprSortObligations init ++ exprSortObligations body
+  | .field a _ _ | .propNot a | .not a | .neg a | .isNone a | .isSome a | .decide a | .push _ a
+  | .update _ _ a | .inject _ _ a | .ascribe a _ | .proj a _ _ => exprSortObligations a
+  | .ite a b c => exprSortObligations a ++ exprSortObligations b ++ exprSortObligations c
+  | .matchNull _ a b _ | .coalesce a b _ | .intOp _ a b | .order _ a b | .division _ a b
+  | .eq a b | .ne a b | .propAnd a b | .propOr a b | .and a b | .or a b =>
+    exprSortObligations a ++ exprSortObligations b
+  | .call _ args | .list args _ | .ext _ args | .tuple args => exprListSortObligations args
+  | .struct fields _ _ => fieldSortObligations fields
+  | .structUpdate base fields => exprSortObligations base ++ fieldSortObligations fields
+  | .int _ | .none | .bool _ | .string _ | .var _ | .enumCase .. | .tagValue _ => []
+
+def exprListSortObligations : List IR.Expr → List SortObligation
+  | [] => []
+  | e :: es => exprSortObligations e ++ exprListSortObligations es
+
+def fieldSortObligations : List (String × IR.Expr) → List SortObligation
+  | [] => []
+  | (_, e) :: es => exprSortObligations e ++ fieldSortObligations es
+end
+
+def bodySortObligations : IR.Body → List SortObligation
+  | .value e | .exit e _ | .throw e => exprSortObligations e
+  | .state _ | .yield .. | .done .. => []
+  | .let _ e rest | .letTuple _ e rest | .letLifted _ e rest =>
+    exprSortObligations e ++ bodySortObligations rest
+  | .letArray _ _ elems rest => exprListSortObligations elems ++ bodySortObligations rest
+  | .ite c a b => exprSortObligations c ++ bodySortObligations a ++ bodySortObligations b
+  | .matchNull _ _ a b | .matchTag _ _ _ _ _ a b | .letState _ a b =>
+    bodySortObligations a ++ bodySortObligations b
+  | .fold _ _ body items rest _ =>
+    exprSortObligations items ++ bodySortObligations body ++ bodySortObligations rest
+  | .bind _ _ args rest | .letBorrow _ _ _ args rest =>
+    exprListSortObligations args ++ bodySortObligations rest
+  | .letCall _ _ _ value _ _ _ body args rest =>
+    exprSortObligations value ++ bodySortObligations body ++
+      exprListSortObligations args ++ bodySortObligations rest
+
 /-- What a file offers its importers, and the obligations its output states. -/
 structure Interface where
   functions : List FnInfo := []
@@ -3336,6 +3387,7 @@ def translateSort (fuel : Nat) (env : Env) (s : Span) (recv : Expr) (method : St
         reject body.span "a key of a comparator must be a bigint, a string or a number"
   let info : IR.CallbackInfo IR.TyExt :=
     { span := s, result := Ty.number.lean,
+      sortObligation := (keyComparator? p.name q.name body).isNone,
       scope := (env.locals.filter fun l => l.binding != .fn).map fun l => (l.name, l.type.lean) }
   return ⟨.listMethod (.sortWith q.name) xs.value p.name elem.lean b.value info, false, xs.type⟩
 
@@ -5600,6 +5652,9 @@ def translateFile (file source : String) (target : Edition := .default)
   match (translateDecls m).run ctx with
   | .error e _ => .error e
   | .ok decls ctx' =>
+    let ctx' := { ctx' with sortObligations := decls.flatMap fun (d : IR.Decl) => match d with
+      | .function _ _ _ body => bodySortObligations body
+      | _ => [] }
     -- Array entries introduce number indices even when the source never
     -- names a number. Check the IR so map entries stay nongeneric.
     let usesNumber := usesNumber || decls.any (tolean.IR.Decl.anyOp (· == .arrayEntries))

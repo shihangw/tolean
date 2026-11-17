@@ -1118,7 +1118,9 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
             s!"  first\n" ++
             s!"  | unfold {statement}\n" ++
             s!"    intro {nv} _ _ {" ".intercalate (allScope.map (·.1))}\n" ++
-            s!"    exact tolean.TypeScript.Proof.consistentOn_of_transCmp (compareOn (fun (_ : {elemTy}) => (0 : Int))) (by sort_tac)\n" ++
+            s!"    refine tolean.TypeScript.Proof.consistentOn_of_transCmp (compareOn (fun (_ : {elemTy}) => (0 : Int))) ?_\n" ++
+            s!"    sort_tac\n" ++
+            s!"    done\n" ++
             s!"  | {fallback}"
           let vars := ("x", elem) :: ("y", elem) :: scope.zipIdx.map fun ((_, t), i) => (s!"v{i}", t)
           loopLemmas := loopLemmas.push (r.cert lemmaName)
