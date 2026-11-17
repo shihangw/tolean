@@ -3343,6 +3343,22 @@ def translateReduce (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (
       scope := (env.locals.filter fun l => l.binding != .fn).map fun l => (l.name, l.type.lean) }
   return ⟨.listFold xs.value i.value a.name p.name elem.lean b.value info, false, accType⟩
 
+/-- A number expression that the IR can prove is a safe-integer constant.
+`Math.min` and `Math.max` preserve that property when all their arguments do. -/
+def constantSafeNumber? : IR.Expr → Option Int
+  | .ext (.number n) [] => some n
+  | .ext .numberNeg [value] => (- ·) <$> constantSafeNumber? value
+  | .ext (.numberFold isMax) values => do
+    let values ← values.mapM constantSafeNumber?
+    let first :: rest := values | none
+    some (rest.foldl (fun acc n => if isMax then max acc n else min acc n) first)
+  | .ext (.stringMethod .indexOf _) [.string source, .string search] =>
+    some (JSString.indexOf (JSString.ofString source) (JSString.ofString search))
+  | .ext (.stringMethod .indexOf [_, some pos])
+      [.string source, .string search, _] =>
+    some (JSString.indexOfFrom (JSString.ofString source) (JSString.ofString search) pos)
+  | _ => none
+
 /-- Unknown comparator shapes produce a statement, not an assumption.
 Certificates must prove that statement before they can link the sort. -/
 def sortKeys (s : Span) (p q : Param) (body : Expr) (elem : Ty)
@@ -3353,6 +3369,12 @@ def sortKeys (s : Span) (p q : Param) (body : Expr) (elem : Ty)
       reject s "a constant nonzero comparator is inconsistent: comparing an element with itself must give zero"
   if value matches .numberConstant _ then
     reject s "a NaN or infinite comparator cannot satisfy the required consistency obligation"
+  let constant := constantSafeNumber? value
+  if let some n := constant then
+    unless n == 0 do
+      reject s "a constant nonzero comparator is inconsistent: comparing an element with itself must give zero"
+  if constant.isNone && !(body.mayHold (· == p.name) && body.mayHold (· == q.name)) then
+    reject s "a comparator proof obligation must read both elements"
   unless elem == .bigint do
     reject s "a comparator proof obligation currently requires bigint elements"
   let scope := (env.locals.filter fun l => l.binding != .fn).map fun l => (l.name, l.type.lean)
