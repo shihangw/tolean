@@ -35,6 +35,7 @@ partial def TypeExpr.toSexp : TypeExpr → Sexp
   | .literal s lit => node "type-literal" s [lit.atom] []
   | .ref s name args => node "type-ref" s [name] (args.map toSexp)
   | .array s elem => node "type-array" s [] [elem.toSexp]
+  | .indexed s receiver key => node "type-indexed" s [Sexp.quote key] [receiver.toSexp]
   | .union s members => node "type-union" s [] (members.map toSexp)
   | .paren s inner => node "type-paren" s [] [inner.toSexp]
   | .tuple s readonly elems => node "type-tuple" s (flag readonly "readonly") (elems.map toSexp)

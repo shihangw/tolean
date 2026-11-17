@@ -239,6 +239,10 @@ theorem ScanSummary.field {hit : Bool} {type : TypeExpr}
 mutual
 
 theorem TypeExpr.scanSafe : ∀ type : TypeExpr, ScanSafe 0 type.tokens
+  | .indexed _ receiver key => by
+    have hk : ScanSafe 1 [.string key] := ⟨false, by intro depth _ after; rfl⟩
+    simpa [TypeExpr.tokens, TypeExpr.words, punctWord] using
+      receiver.scanSafe.append (hk.enclose (.inr (.inl rfl)) (.inr (.inl rfl)))
   | .predicate _ name type => by
     simpa only [TypeExpr.tokens, TypeExpr.words, identWord, List.flatten_cons,
       List.singleton_append] using

@@ -71,6 +71,13 @@ ClassFieldDefinitionEvaluation (§15.7.13), InitializeInstanceElements
 ES2022. The accepted slice has no observable prototype lookup: elaboration
 replaces construction and statically resolved methods before evaluation.
 
+Indexed access annotations erase before execution. TypeScript 2.1 introduced
+them; the TypeScript Handbook describes them under Indexed Access Types.
+Resolving a literal string key adds no runtime operation or edition gate.
+Reading the corresponding field uses OrdinaryGet (ES2024 §10.1.8.1), which
+also exists in ES2015. A comparison of its value uses IsStrictlyEqual
+(ES2024 §7.2.15; Strict Equality Comparison in ES2015 §7.2.13).
+
 An error constructor may assign a separately declared readonly field from
 its same-name parameter after `super(message)`. The annotation erases before
 execution. The assignment uses `PutValue` (ES2015 §6.2.3.2, ES2024 §6.2.5.6),

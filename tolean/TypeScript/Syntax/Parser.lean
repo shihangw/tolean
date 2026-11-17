@@ -194,7 +194,13 @@ def arrayStep (start : Pos) (type : TypeExpr) : ParseM (TypeExpr × Bool) := do
   let t ← peek
   -- `tsc` does not read `T` `[]` across a line break as an array type.
   if !t.isPunct "[" || t.newlineBefore then return (type, false)
-  unless (← peekAt 1).isPunct "]" do failAt t "indexed access types are not supported"
+  unless (← peekAt 1).isPunct "]" do
+    let key ← peekAt 1
+    let .string value := key.kind |
+      failAt key "an indexed access type requires one literal string key"
+    skip 2
+    let _ ← expectPunct "]"
+    return (.indexed (← spanFrom start) type value, true)
   skip 2
   return (.array (← spanFrom start) type, true)
 
