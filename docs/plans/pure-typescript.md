@@ -336,6 +336,12 @@ leaves a gap.
     the output. The build checks the proof for `sorry` and axioms. The same
     mechanism later serves `@decreases`. See the
     [proof-obligation open question](#open-questions).
+    The first slice adds project manifest obligations with exact theorem
+    types and a fixed axiom policy. Arbitrary comparators remain refused:
+    both the sort translator and the certificate generator require known key shapes.
+    The checker does not yet connect external proofs to `program_sound` or
+    derive required obligations from generated output. See the
+    [decision](../decisions/2026-11-17-project-proof-obligations.md).
 19. **P2.** Close the `const` gap: share one predicate between the translator's
     refusal and the interpreter's `none` for assignments to a
     `for (const x of xs)` binding. See the [`const` open question](#open-questions).
@@ -539,7 +545,9 @@ decision record then states the choice and any limits that remain.
 - Should a comparator that is not one of the two shapes be accepted when the
   project supplies a proof that it is consistent?
 
-  Recommendation: yes, as one case of a general mechanism for obligations.
+  Decision: yes, with a fixed axiom policy and statements from Tolean.
+  The [first slice](../decisions/2026-11-17-project-proof-obligations.md)
+  checks named project proofs but does not yet generate these statements.
   Tolean states the obligation, `Consistent cmp`, as a theorem in the output.
   Its tactic proves the two known shapes. When the tactic fails, the project
   may supply the proof in a file beside the output, which the manifest

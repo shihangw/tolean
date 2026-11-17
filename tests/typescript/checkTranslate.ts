@@ -34,9 +34,10 @@
  * `.lake/build/bin/tolean`, or `$TOLEAN`.
  */
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { Gen } from './gen.ts';
@@ -225,11 +226,14 @@ const projectsDir = 'corpus/translate/projects';
 
 /** Check the IO-free entry point too. WebAssembly runs precisely this code,
 so projects exercise resolution in both builds whenever wasm/out is present. */
-function checkWorkspace(dir: string, accepted: boolean): void {
+function checkWorkspace(dir: string, accepted: boolean, workspaceDir = dir, mustRefuse = false): void {
   const files = (function walk(prefix: string): Array<{ path: string; text: string }> {
-    return readdirSync(join(dir, prefix), { withFileTypes: true }).flatMap((e) => {
+    return readdirSync(join(workspaceDir, prefix), { withFileTypes: true }).flatMap((e) => {
       const path = prefix === '' ? e.name : `${prefix}/${e.name}`;
-      return e.isDirectory() ? walk(path) : [{ path, text: readFileSync(join(dir, path), 'utf8') }];
+      return e.isDirectory() ? walk(path) : [{
+        path: relative(dir, join(workspaceDir, path)),
+        text: readFileSync(join(workspaceDir, path), 'utf8'),
+      }];
     });
   })('');
   const run = spawnSync(tolean, ['translate-workspace'], { input: JSON.stringify({ files }), encoding: 'utf8' });
@@ -237,7 +241,16 @@ function checkWorkspace(dir: string, accepted: boolean): void {
     failures.push(`${dir}: translate-workspace failed: ${run.stderr}`);
     return;
   }
-  const native = JSON.parse(run.stdout) as { units?: Array<{ output?: string; lean?: string; error?: string }>; error?: string };
+  const native = JSON.parse(run.stdout) as {
+    units?: Array<{ output?: string; lean?: string; error?: string }>;
+    configInputs?: Array<{ path: string; sha256: string }>; error?: string;
+  };
+  for (const input of native.configInputs ?? []) {
+    const text = files.find((file) => file.path === input.path)?.text;
+    if (text === undefined || input.sha256 !== createHash('sha256').update(text).digest('hex')) {
+      failures.push(`${dir}: incorrect config input hash for ${input.path}`);
+    }
+  }
   if (wasm !== null) {
     let other: unknown;
     try {
@@ -256,8 +269,19 @@ function checkWorkspace(dir: string, accepted: boolean): void {
         if (u.output === undefined || u.lean !== readFileSync(join(dir, u.output), 'utf8')) {
           failures.push(`${dir}: workspace output differs from the committed Lean file ${u.output}`);
         }
+        if (u.output !== undefined && native.configInputs !== undefined) {
+          const manifest = JSON.parse(readFileSync(join(dir, `${u.output}.chain.json`), 'utf8'));
+          for (const input of native.configInputs) {
+            if (!manifest.sources.some((source: { path: string; sha256: string }) =>
+              source.path === input.path && source.sha256 === input.sha256)) {
+              failures.push(`${dir}: native manifest omits workspace config input ${input.path}`);
+            }
+          }
+        }
       }
     }
+  } else if (mustRefuse && native.error === undefined && !native.units?.some((u) => u.error !== undefined)) {
+    failures.push(`${dir}: workspace accepted a refused project`);
   }
 }
 
@@ -265,7 +289,9 @@ const acceptProjects = readdirSync(`${projectsDir}/accept`).sort();
 const leanPath = rootLeanPath();
 const projectLean = rootLean();
 for (const name of acceptProjects) {
-  const dir = `${projectsDir}/accept/${name}`;
+  const workspaceDir = `${projectsDir}/accept/${name}`;
+  const marker = join(workspaceDir, 'project-root.txt');
+  const dir = existsSync(marker) ? join(workspaceDir, readFileSync(marker, 'utf8').trim()) : workspaceDir;
   const run = spawnSync(tolean, update ? ['translate'] : ['translate', '--check'], { cwd: dir, encoding: 'utf8' });
   if (run.status !== 0) {
     failures.push(`${dir}: tolean translate${update ? '' : ' --check'} failed: ${run.stderr.trim()}`);
@@ -273,8 +299,61 @@ for (const name of acceptProjects) {
   }
   const error = compilesProject(dir, leanPath, projectLean);
   if (error !== null) failures.push(`${dir}: the Lean output does not compile:\n${error}`);
-  checkWorkspace(dir, true);
+  checkWorkspace(dir, true, workspaceDir);
 }
+
+// The host supplies external configs, but they cannot become source files.
+// Each case exercises the native host and the same workspace in WebAssembly.
+for (const scenario of [
+  { name: 'missing base', base: { extends: './missing.json' } },
+  { name: 'external cycle', base: { extends: './packages/geometry/tsconfig.json' } },
+  { name: 'inherited suffixes', base: { compilerOptions: { moduleSuffixes: [''] } } },
+  { name: 'external import', source: 'import { other } from "../../../other.ts";\nexport const value = other;\n' },
+]) {
+  const workspace = mkdtempSync(join(out, 'external-config-'));
+  cpSync(`${projectsDir}/accept/monorepo`, workspace, { recursive: true });
+  const project = join(workspace, 'packages/geometry');
+  if (scenario.base !== undefined) {
+    writeFileSync(join(workspace, 'tsconfig.base.json'), JSON.stringify(scenario.base));
+  }
+  if (scenario.source !== undefined) {
+    writeFileSync(join(project, 'src/area.ts'), scenario.source);
+    writeFileSync(join(workspace, 'other.ts'), 'export const other = 1;\n');
+  }
+  const run = spawnSync(tolean, ['translate'], { cwd: project, encoding: 'utf8' });
+  if (run.status !== 1) failures.push(`${scenario.name}: native command did not refuse: ${run.stderr}`);
+  checkWorkspace(project, false, workspace, true);
+}
+
+// Arrays and extensionless bases keep the same precedence outside the root.
+// An unrelated external TypeScript file must not match even an explicit glob.
+{
+  const workspace = mkdtempSync(join(out, 'external-chain-'));
+  cpSync(`${projectsDir}/accept/monorepo`, workspace, { recursive: true });
+  const project = join(workspace, 'packages/geometry');
+  mkdirSync(join(workspace, 'common'));
+  writeFileSync(join(workspace, 'common.json'), JSON.stringify({
+    compilerOptions: { moduleResolution: 'bundler' },
+  }));
+  writeFileSync(join(workspace, 'left.json'), JSON.stringify({
+    extends: './common', compilerOptions: { moduleResolution: 'node16' },
+  }));
+  writeFileSync(join(workspace, 'right.json'), JSON.stringify({ extends: './common' }));
+  writeFileSync(join(workspace, 'tsconfig.base.json'), JSON.stringify({
+    extends: ['./left.json', './right.json'],
+  }));
+  writeFileSync(join(workspace, 'outside.ts'), 'class Unsupported {}\n');
+  writeFileSync(join(project, 'tolean.json'), JSON.stringify({
+    typescript: { sources: ['src/*.ts', '../../outside.ts'] },
+  }));
+  // Only bundler resolves this import. The later branch must restore that mode.
+  writeFileSync(join(project, 'src/main.ts'),
+    'import { area } from "./area";\nexport function square(x: number): number { return area(x, x); }\n');
+  const run = spawnSync(tolean, ['translate'], { cwd: project, encoding: 'utf8' });
+  if (run.status !== 0) failures.push(`external shared chain: ${run.stderr}`);
+  else checkWorkspace(project, true, workspace);
+}
+
 const rejectProjects = readdirSync(`${projectsDir}/reject`).sort();
 for (const name of rejectProjects) {
   const dir = `${projectsDir}/reject/${name}`;
