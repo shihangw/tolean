@@ -1266,7 +1266,7 @@ def ClassMember.wf (T : Edition) : ClassMember → Bool
   | .method m => ClassMethod.wf T m
 
 def ClassDecl.wf (T : Edition) (d : ClassDecl) : Bool :=
-  exprName d.name && d.members.all (ClassMember.wf T) &&
+  T.supports .readonlyClasses && exprName d.name && d.members.all (ClassMember.wf T) &&
     (d.members.countP ClassMember.isCtor ≤ 1)
 
 theorem ClassMember.first (m : ClassMember) :
@@ -2099,7 +2099,7 @@ theorem parseOrdinaryClass_reads {T : Edition} (d : ClassDecl) (hw : d.wf T = tr
     ∃ d' s', Parse.parseOrdinaryClass start exported s = .ok d' s' ∧
       d'.erase = (Decl.classDecl { d with exported := exported }).erase ∧ Leaves s s' rest := by
   simp only [ClassDecl.wf, Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq] at hw
-  obtain ⟨⟨hn, hms⟩, hcount⟩ := hw
+  obtain ⟨⟨⟨hsup, hn⟩, hms⟩, hcount⟩ := hw
   obtain ⟨ck, ts₁, rfl, hck, h₁⟩ := Touching.cons_one (by simpa [keywordWord] using ht)
   obtain ⟨nm, ts₂, rfl, hnm, h₂⟩ := Touching.cons_one (by simpa [identWord] using h₁)
   obtain ⟨lb, ts₃, rfl, hlb, h₃⟩ := Touching.cons_one (by simpa [punctWord] using h₂)
@@ -2127,6 +2127,10 @@ theorem parseOrdinaryClass_reads {T : Edition} (d : ClassDecl) (hw : d.wf T = tr
     rw [Parse.bind_eq (Parse.discard_eq (Parse.advance_eq hs₀)),
       Parse.bind_eq (readName_ok (s := s₁) rfl hnm (by simpa [exprName] using hn)),
       Parse.bind_eq (Parse.peek_eq (s := s₂) rfl)]
+    have hreq : Parse.requireFeature lb .readonlyClasses s₂ = .ok () s₂ := by
+      simp [Parse.requireFeature, s₂, s₁, hT, hsup, get, getThe, MonadStateOf.get,
+        EStateM.get, pure, bind, EStateM.bind, EStateM.pure]
+    rw [Parse.bind_eq hreq]
     rw [Parse.ite_guard (fun h => by simp [Token.isKeyword, hlb] at h),
       Parse.bind_eq (Parse.expectPunct_ok (s := s₂) rfl (by simp) hlb),
       Parse.bind_eq (Parse.budget_eq _), Parse.bind_eq hit,

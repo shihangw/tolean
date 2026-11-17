@@ -6202,6 +6202,8 @@ theorem parseOrdinaryClass_wf {T : Edition} (start : Pos) (exported : Bool) :
   have hnok := readName_words hR₁ hT₁ hn
   obtain ⟨nm, r₂, _, hnr, _, rfl, hR₂⟩ := readName_inv hR₁ hn
   rw [Parse.bind_eq (peek_eq' _)] at h
+  rw [Parse.bind_ok] at h; obtain ⟨_, s₂', hreq, h⟩ := h
+  obtain ⟨rfl, hsup⟩ := requireFeature_inv hreq
   obtain ⟨_, h⟩ := fail_inv h
   rw [Parse.bind_ok] at h; obtain ⟨lb, s₃, hlb, h⟩ := h
   obtain ⟨_, r₃, _, rfl, hR₃⟩ := expectPunct_inv hR₂ hlb
@@ -6223,7 +6225,8 @@ theorem parseOrdinaryClass_wf {T : Edition} (start : Pos) (exported : Bool) :
     refine ⟨hR₅, hK₁.trans ((Kept.past _ _ _).trans ((Kept.past _ _ _).trans
       (hK₄.trans (Kept.past _ _ _)))), ?_, ?_⟩
     · simp only [Decl.wf, ClassDecl.wf, Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq]
-      exact ⟨⟨by simpa [exprName] using hnr, fun m hm => (hmw m hm).1⟩, by omega⟩
+      exact ⟨⟨⟨by simpa [hT₁] using hsup, by simpa [exprName] using hnr⟩,
+        fun m hm => (hmw m hm).1⟩, by omega⟩
     · have he := exportWords_ok T exported
       intro l hl
       simp only [Decl.lines, ClassDecl.lines, List.mem_cons, List.mem_append,

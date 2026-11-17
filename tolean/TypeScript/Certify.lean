@@ -659,6 +659,8 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
   -- The certificate's program is the file "", so the tree names the file's
   -- own declarations under "".
   let (m, names, decls) ← (Translate.translateTree "" source target).mapError (file ++ ·)
+  let parsed ← (Syntax.parse source target).mapError (·.render file)
+  let hasClasses := parsed.decls.any (· matches .classDecl _)
   if !(Eval.borrowsOf ⟨[("", m)], ""⟩).isEmpty then
     throw s!"{file}: a map borrow has no certificate yet"
   let r : Refs := { idents := sourceIdents source target, certNs }
@@ -1702,8 +1704,11 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     "-- each. That can pass Lean's default budget.",
     "set_option maxHeartbeats 400000",
     "",
-    "/-- The program, as the parser read it. -/",
-    s!"def program : tolean.TypeScript.Syntax.Module :=\n  {module m}",
+    (if hasClasses then "/-- The program after ordinary-class elaboration. -/"
+      else "/-- The program, as the parser read it. -/"),
+    s!"def program : tolean.TypeScript.Syntax.Module :=\n  {module m}" ++ (if hasClasses then
+      s!"\n\n/-- The original syntax, before class elaboration. -/\ndef parsedProgram : tolean.TypeScript.Syntax.Module :=\n  {module parsed}"
+      else ""),
     "",
     "/-- The source file, one line at a time. -/",
     s!"def sourceLines : List (List Char) := [\n  " ++
@@ -1714,8 +1719,12 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     "/-- The parser gives `program` for the source: the kernel runs the parser and",
     "compares the trees. So the theorems below are about the source file, and the",
     "printer that wrote `program` need not be trusted. -/",
-    s!"theorem program_parsed : tolean.TypeScript.Syntax.parseChars sourceChars .{target.name.toLower} = Except.ok program :=",
-    "  tolean.TypeScript.Syntax.parseChars_eq_of_parsesTo (by decide +kernel)",
+    s!"theorem program_parsed : tolean.TypeScript.Syntax.parseChars sourceChars .{target.name.toLower} = Except.ok {if hasClasses then "parsedProgram" else "program"} :=",
+    "  tolean.TypeScript.Syntax.parseChars_eq_of_parsesTo (by decide +kernel)" ++ (if hasClasses then
+      "\n\n/-- The kernel checks the result of elaboration. This equation does not prove\n" ++
+      "that elaboration preserves JavaScript semantics; Node comparisons test that boundary. -/\n" ++
+      s!"theorem program_elaborated : tolean.TypeScript.Elaborate.run (String.ofList sourceChars) .{target.name.toLower} parsedProgram = Except.ok program := by\n  decide +kernel"
+      else ""),
     "",
     "/-- The Tolean IR, as the translator gives it for the program. -/",
     s!"def decls : List tolean.TypeScript.IR.Decl :=\n  {term decls}",
@@ -1737,6 +1746,7 @@ of them. -/
 def certifiedFunctions (source : String) (target : Edition := .default) :
     Except String (List String × Bool) := do
   let m ← (parse source target).mapError (·.message)
+  let m ← Elaborate.run source target m
   let all := m.decls.filterMap fun | .function _ _ n .. => some n | _ => none
   let fns := certifiable m
   return (fns, fns.length == all.length)

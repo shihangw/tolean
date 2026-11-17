@@ -1463,6 +1463,7 @@ def parseOrdinaryClass (start : Pos) (exported : Bool) : ParseM Decl := do
   discard advance
   let name ← readName
   let t ← peek
+  requireFeature t .readonlyClasses
   if t.isKeyword "extends" then failAt t "ordinary class inheritance is not supported"
   let _ ← expectPunct "{"
   let members ← iterate (← budget) #[] (blockStep parseClassMember)

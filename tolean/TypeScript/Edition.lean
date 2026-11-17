@@ -59,6 +59,12 @@ Expression narrowing follows the strict equality test and the selected
 branch of LogicalANDExpression, LogicalORExpression and ConditionalExpression
 (ES2024 §13.13 and §13.14). Logical NOT (§13.5.7) reverses the test. ES2015
 already specifies these operations, so all supported targets allow them.
+
+Ordinary readonly classes use ClassDefinitionEvaluation (ES2024 §15.7.14),
+ClassFieldDefinitionEvaluation (§15.7.13), InitializeInstanceElements
+(§7.3.33), and EvaluateNew (§13.3.5.1). Public field declarations require
+ES2022. The accepted slice has no observable prototype lookup: elaboration
+replaces construction and statically resolved methods before evaluation.
 -/
 namespace tolean.TypeScript
 
@@ -87,6 +93,7 @@ maintained. -/
 def Edition.default : Edition := .es2024
 
 inductive Feature where
+  | readonlyClasses
   /-- The counted `for` loop: `ForStatement` and `ForBodyEvaluation`
   (§14.7.4.2 in ES2024). -/
   | countedFor
@@ -169,6 +176,7 @@ inductive Feature where
 deriving BEq, Repr, Inhabited
 
 def Feature.since : Feature → Edition
+  | .readonlyClasses => .es2022
   | .countedFor => .es2015
   | .regexp => .es2015
   | .regexpReplace => .es2015
@@ -186,6 +194,7 @@ def Feature.since : Feature → Edition
   | .arrayFindLast | .arrayToSorted => .es2023
 
 def Feature.describe : Feature → String
+  | .readonlyClasses => "ordinary readonly classes"
   | .countedFor => "a counted 'for' loop"
   | .localReturnState => "a local function that returns a value and changes captured variables"
   | .localSiblingCalls => "calls between local functions"

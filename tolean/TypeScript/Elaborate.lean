@@ -212,7 +212,8 @@ def stmt (ctx : Context) (env : Types) : Nat → Stmt → Result Stmt
       pure (.switchStmt s (← expr ctx env f e) (← clauses.mapM fun (test, body) => do
         pure (← test.mapM (expr ctx env f), ← stmts ctx env f body)))
     | .funDecl s name tps ps rt body =>
-      pure (.funDecl s name tps ps rt (← stmt ctx (paramsEnv ps ++ env) f body))
+      pure (.funDecl s name tps ps rt
+        (← stmt { ctx with self := none } (paramsEnv ps ++ env) f body))
     | _ => pure st
 
 def stmts (ctx : Context) (env : Types) (fuel : Nat) : List Stmt → Result (List Stmt)
@@ -303,6 +304,14 @@ def run (source : String) (target : Edition) (m : Module) : Result Module := do
         refuse t.span s!"source names beginning with '{generatedPrefix}' are reserved"
   let first :: _ := classes | return m
   unique first.span "class names" (classes.map (·.name))
+  for decl in m.decls do
+    let names := match decl with
+      | .function _ _ name _ _ _ _ => [name]
+      | .exportedVar _ d => [d.name]
+      | .import _ names _ => names.filterMap fun (n : ImportName) => if n.typeOnly then none else some n.name
+      | _ => []
+    if names.any (fun name => classes.any (·.name == name)) then
+      refuse decl.span "class names may not share a runtime binding with another declaration"
   let returns := m.decls.filterMap fun
     | .function _ _ name _ _ rt _ => some (name, rt)
     | _ => none
