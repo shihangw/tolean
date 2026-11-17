@@ -543,7 +543,7 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
   | .isNull, [a] => s!"{leanName names "JSNullish"}.isNull {argument a}"
   | .isNullish, [a] => s!"{leanName names "JSNullish"}.isNullish {argument a}"
   | .optField path bind, [a] =>
-    s!"({argument a}.{if bind then "bind" else "map"} (·.{".".intercalate path}))"
+    s!"({argument a}.{if bind then "bind" else "map"} (·.{".".intercalate (path.map tolean.IR.identName)}))"
   | .mapEmpty, _ => s!"{leanName names "JSMap"}.empty"
   | .mapGet, [m, k] => s!"({leanName names "JSMap"}.get? {argument m} {argument k})"
   | .mapHas, [m, k] => s!"({leanName names "JSMap"}.has {argument m} {argument k})"

@@ -1023,14 +1023,15 @@ def isGlobalName (name : String) : Bool :=
   isNumberName name || name == "undefined" || name == "Map" || name == "Set" || name == "Error" ||
     name == "Object" || name == "Date"
 
-def checkName (span : Span) (name : String) : TM String := do
-  if leanReserved.contains name then reject span s!"name '{name}' is reserved in Lean"
+def checkName (span : Span) (name : String) (quoted : Bool := false) : TM String := do
+  if name == "_root_" || (!quoted && leanReserved.contains name) then
+    reject span s!"name '{name}' is reserved in Lean"
   return name
 
 /-- The name of a parameter or a local. TypeScript keeps types and values
 apart, but Lean does not, and the output writes an interface of the file by
 its bare name. So a local with that name would hide the interface. -/
-def checkLocalName (span : Span) (name : String) : TM String := do
+def checkLocalName (span : Span) (name : String) (quoted : Bool := false) : TM String := do
   let ctx ← get
   if ctx.structs.any fun i => i.name == name && i.file == ctx.file then
     reject span s!"'{name}' would hide the interface {name} in Lean; choose another name"
@@ -1041,9 +1042,9 @@ def checkLocalName (span : Span) (name : String) : TM String := do
     reject span s!"'{name}' would hide the type parameter {name} in Lean; choose another name"
   if ctx.errorClasses.any fun c => c.name == name then
     reject span s!"'{name}' would hide the error class {name}; choose another name"
-  checkName span name
+  checkName span name quoted
 
-def declare (env : Env) (span : Span) (name : String) (binding : Binding) (type : Ty) :
+def declare (env : Env) (span : Span) (name : String) (binding : Binding) (type : Ty) (quoted : Bool := false) :
     TM Env := do
   if env.has name then reject span s!"'{name}' shadows a name already in scope"
   -- A local is in its temporal dead zone from the start of its block, so a
@@ -1053,7 +1054,7 @@ def declare (env : Env) (span : Span) (name : String) (binding : Binding) (type 
     reject span s!"'{name}' would hide the function or global {name} in its whole block; choose another name"
   if env.enums.any (·.name == name) then
     reject span s!"'{name}' would hide the enum {name} in its whole block; choose another name"
-  let _ ← checkLocalName span name
+  let _ ← checkLocalName span name quoted
   -- A local of type `null` is always `null`, and Lean gives it the type
   -- `Option Empty`, which no other value of a nullable type has.
   if type == .null then reject span s!"'{name}' is always null; declare its type, such as bigint | null"
@@ -1282,7 +1283,7 @@ termination_by structural ts => ts
 def translateInlineFields (seen : List String) : List TypeField → TM (List (String × Ty))
   | [] => return []
   | .field span _ name optional type :: fields => do
-    let name ← checkName span name
+    let name ← checkName span name true
     if seen.contains name then reject span s!"'{name}' is declared twice"
     let type ← translateFieldType span optional name type (translateType type)
     return (name, type) :: (← translateInlineFields (name :: seen) fields)
@@ -3703,9 +3704,11 @@ def destructureBody (p : ArrayPattern) (t : Ty) (value : IR.Expr) (reads : List 
       (if exactTuple p t then value else .tuple (reads.map (·.2.2))) rest)
 
 /-- Declare each name of a pattern, in order. -/
-def declarePlaces (s : Span) (binding : Binding) : Env → List (String × Ty × IR.Expr) → TM Env
-  | env, [] => pure env
-  | env, (n, t, _) :: ps => do declarePlaces s binding (← declare env s n binding t) ps
+def declarePlaces (s : Span) (binding : Binding) (env : Env) (reads : List (String × Ty × IR.Expr))
+    (quoted : Bool := false) : TM Env :=
+  match reads with
+  | [] => pure env
+  | (n, t, _) :: ps => do declarePlaces s binding (← declare env s n binding t quoted) ps quoted
 
 /-- `const [a, b] = e`, then the statements after it, which `k` translates in
 the scope with the names. The output reads `e` once: a tuple with as many
@@ -3722,6 +3725,14 @@ def translateDestructure (tr : Option Ty → Expr → TM Code) (k : Env → TM I
   let rest ← k env'
   orReject (destructureBody p t (withType code.value t code.type) reads rest) s "a pattern must declare a name"
 
+/-- A field to bind with a Lean structure pattern. Literal tags are not
+stored as structure fields, so the pattern cannot name them. -/
+def objectField (s : Span) (source : Code) (key : String) : TM Code := do
+  let type ← keyType s source.type [key]
+  if type matches .literal _ then
+    reject s "a literal tag is not stored in the Lean structure; it may only be read in a test of its union"
+  return ⟨.field source.value true key, false, type⟩
+
 /-- Object bindings extract a tuple with a structure pattern. The pattern's
 locals belong to that expression, not to the continuation's environment. -/
 def translateObjectDestructure (tr : Option Ty → Expr → TM Code) (k : Env → TM IR.Body) (env : Env)
@@ -3734,9 +3745,9 @@ def translateObjectDestructure (tr : Option Ty → Expr → TM Code) (k : Env �
   let _ ← fitDeclared s declared code
   unless code.type.structRef?.isSome do reject s "an object pattern needs an interface or an object literal"
   let reads ← p.objectBindings.mapM fun (key, name) => do
-    let field ← tr none (.member s init key)
+    let field ← objectField s code key
     return (name, field.type, field.value)
-  let env' ← declarePlaces s (if kind == .const then .const else .«let») env reads
+  let env' ← declarePlaces s (if kind == .const then .const else .«let») env reads true
   let rest ← k env'
   return .letTuple (reads.map (·.1)) (.ext (.objectTuple (p.objectBindings.map Prod.fst)) [code.value]) rest
 
@@ -4615,7 +4626,7 @@ def translateInterface (s : Span) (exported : Bool) (name : String) (typeParams 
   let infos ← isolated do
     modify fun c => { c with structs := c.structs ++ [{ file := c.file, name, exported, typeParams, fields := [] }] }
     fields.foldlM (init := ([] : List (String × Ty))) fun infos f => do
-      let field ← checkName f.span f.name
+      let field ← checkName f.span f.name true
       if infos.any (·.1 == field) then reject f.span s!"'{field}' is declared twice"
       -- A Lean structure's fields are in scope in the types of the fields after
       -- them, so a field may not hide a type parameter.

@@ -27,6 +27,11 @@ export function fromCall(o: Pair): number {
   return a - b;
 }
 
+export function literal(): number {
+  const { a, b }: Pair = { a: 1, b: 2, extra: 3 };
+  return a + b;
+}
+
 export function update(o: Pair): number {
   let { a: x, b } = o;
   x = x + b;

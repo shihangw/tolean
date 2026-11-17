@@ -940,6 +940,7 @@ test('renamed, partial and call-source object bindings agree with Node', async (
     'const { a, b } = getPair(o); return a - b;',
     'let { a: x, b } = o; x = x + b; return x;',
     'const _objectField0 = 7; const { a, b } = o; return a + b + _objectField0;',
+    'const { a: by, b: match } = o; return match - by;',
   ];
   const sources = bodies.map(body => `${header} export function f(o: Pair): number { ${body} }`);
   const inputs = [{ a: 2, b: 9, extra: 11 }, { a: -5, b: 3, extra: 0 }, { a: 0, b: -0, extra: 1 }];
@@ -975,7 +976,8 @@ test('an object binding cannot read its own name in its initializer', async () =
   const source = `
     export interface Pair { readonly a: number; readonly b: number; }
     export function f(s: Pair): number {
-      { const { a: s, b } = s; return s + b; }
+      if (true) { const { a: s, b } = s; return s + b; }
+      else { return 0; }
     }
   `;
   const run = spawnSync(tolean, ['interpret'], {

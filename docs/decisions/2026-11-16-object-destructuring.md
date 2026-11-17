@@ -13,6 +13,13 @@ property keys share one pattern field, but each requested local receives its
 value. Generated names stay inside the expression and cannot capture the
 source or leak into the continuation.
 
+Field names and object-pattern locals may be Lean keywords. The printer
+quotes those identifiers, including later reads, assignments and captured
+uses. The certifier quotes field access and the corresponding local binders
+too. Other declarations keep their existing restrictions on names.
+Literal tag fields are absent from the Lean structure, so selecting one in
+an object pattern is refused. They remain restricted to tests of their union.
+
 An output-only temporary was not a direct fit for the existing proof.
 `Agree` compares every name in the source and output environments, so a
 private binding in just the output breaks its continuation hypothesis.

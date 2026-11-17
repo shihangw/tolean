@@ -157,6 +157,11 @@ source must have an interface or an inline object type. The output evaluates
 it once, including when it is a function call, then binds the selected fields
 in the surrounding scope. Extracted mutable collections remain aliases, so
 the existing restrictions on mutation still apply.
+Interface field names and object-pattern bindings that are Lean keywords are quoted in
+the output. For example, a field or a binding named `end` becomes `«end»`.
+Other declarations retain their existing name restrictions.
+Literal tag fields are not stored in the Lean structure and cannot be bound
+in an object pattern. They retain the restriction to tests of their union.
 
 Object patterns do not support nesting, defaults, rest elements or computed
 keys. Empty patterns, exported patterns and patterns in loop heads are also

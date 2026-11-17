@@ -4667,9 +4667,9 @@ theorem binds_sim {env env' : Translate.Env} {stmt : Stmt} {rest : List Stmt} {t
     · rwa [List.append_assoc]
     · exact h₂.mono hch
 
-theorem declarePlaces_ok {s : Span} {b : Binding} :
+theorem declarePlaces_ok {s : Span} {b : Binding} {quoted : Bool} :
     ∀ {env env' : Translate.Env} {reads : List (String × Ty × IR.Expr)} {ctx ctx' : Ctx},
-      declarePlaces s b env reads ctx = .ok env' ctx' →
+      declarePlaces s b env reads quoted ctx = .ok env' ctx' →
       (∀ n ∈ reads.map (·.1), env.has n = false) ∧
         (∀ x, env'.has x = (env.has x || (reads.map (·.1)).contains x)) ∧ globals env' = globals env
   | env, env', [], ctx, ctx', h => by
@@ -5066,10 +5066,10 @@ theorem translateDestructure_sound {tr : Option Ty → Expr → TM Code} {k : Tr
   simp [Eval.exec, Eval.execStmt, evalTop_ok m fuel hv, hit, hpb, hconst]
 
 omit [JSNumber N] in
-theorem objectReads_names {tr : Option Ty → Expr → TM Code} {s : Span} {init : Expr} :
+theorem objectReads_names {read : String → TM Code} :
     ∀ (ps : List (String × String)) (ctx : Ctx) (reads : List (String × Ty × IR.Expr)) (ctx' : Ctx),
       ps.mapM (m := TM) (fun (key, name) => do
-        let field ← tr none (.member s init key)
+        let field ← read key
         pure (name, field.type, field.value)) ctx = .ok reads ctx' →
       reads.map Prod.fst = ps.map Prod.snd := by
   intro ps
