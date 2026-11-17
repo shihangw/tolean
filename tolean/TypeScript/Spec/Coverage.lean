@@ -153,6 +153,7 @@ def sections : List Section := [
   ⟨"sec-grouping-operator", "13.2.9", "The Grouping Operator",
     [``Proof.eval_stripParens, ``Syntax.Expr.sizeOf_stripParens_le]⟩,
   ⟨"sec-property-accessors", "13.3.2", "Property Accessors", [``Proof.translateMember_sound, ``Eval.eval_index_str, ``Eval.getKey_ofString, ``Eval.find?_fst_lookup,
+    ``Eval.getKey_success_iff, ``Eval.getKey_eq_of_success, ``Eval.getKey_encRecord_of_success,
     ``Coverage.index_lone_surrogate]⟩,
   ⟨"sec-function-calls", "13.3.6", "Function Calls",
     [``Proof.eval_call, ``Proof.eval_stringCall, ``Proof.out_call, ``Proof.evalCall_eq, ``Proof.out_evalCall, ``Proof.bind_toOption,
@@ -327,6 +328,8 @@ def sections : List Section := [
   ⟨"sec-value-properties-of-the-global-object-infinity", "19.1.2", "Infinity", []⟩,
   ⟨"sec-value-properties-of-the-global-object-nan", "19.1.3", "NaN", []⟩,
   -- §20 Fundamental Objects {#sec-fundamental-objects}
+  ⟨"sec-object.hasown", "20.1.2.13", "Object.hasOwn ( O, P )",
+    [``Proof.translateDictionaryCall_sound]⟩,
   ⟨"sec-object.is", "20.1.2.15", "Object.is ( value1, value2 )",
     [``Proof.eval_objectIs, ``Proof.translateObjectIs_sound, ``Proof.out_numberSameValue,
     ``Proof.sameValue_of_eqVal]⟩,

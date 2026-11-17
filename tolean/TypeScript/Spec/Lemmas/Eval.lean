@@ -7,10 +7,50 @@ lemmas read the values of a loop's variables back out of an environment with
 the decoders at the end of this file.
 -/
 import tolean.TypeScript.Spec.Eval
+import tolean.TypeScript.Spec.Record
 
 namespace tolean.TypeScript.Eval
 
 variable {N : Type}
+
+/-- A record keeps its own properties in literal insertion order. -/
+def encRecord {V : Type} (enc : V → Val N) (record : JSRecord V) : Val N :=
+  .obj (record.fields.map fun (key, value) => (key, enc value))
+
+/-- Decode a record's fields without changing their order. -/
+def decRecord {V : Type} (dec : Option (Val N) → V) : Option (Val N) → JSRecord V
+  | some (.obj fields) => ⟨fields.map fun (key, value) => (key, dec (some value))⟩
+  | _ => ⟨[]⟩
+
+/-! ### String-keyed record lookup -/
+
+/-- Lookup succeeds exactly when the key is own or is not a name on
+Object.prototype. A conditional record certificate assumes that its IR run
+returns a result; this is the local condition at each record lookup. -/
+theorem getKey_success_iff (fields : List (String × Val N)) (key : JSString) :
+    (getKey fields key).isSome = true ↔
+      (fields.find? fun p => JSString.ofString p.1 == key).isSome = true ∨
+      objectPrototypeNames.any (fun n => JSString.ofString n == key) = false := by
+  unfold getKey
+  cases h : fields.find? (fun p => JSString.ofString p.1 == key) with
+  | none =>
+    simp only [Option.map_none, Option.isSome_none, Bool.false_eq_true, false_or]
+    split <;> simp_all
+  | some entry => simp
+
+/-- On a successful lookup, an absent own property gives undefined. This
+equation lets a conditional printer link use a total Option lookup without
+treating an absent inherited property as undefined. -/
+theorem getKey_eq_of_success (fields : List (String × Val N)) (key : JSString)
+    (h : (getKey fields key).isSome = true) :
+    getKey fields key =
+      some (((fields.find? fun p => JSString.ofString p.1 == key).map (·.2)).getD .undefined) := by
+  unfold getKey at *
+  cases hf : fields.find? (fun p => JSString.ofString p.1 == key) with
+  | none =>
+    simp only [hf, Option.map_none, Option.getD_none] at *
+    split at h <;> simp_all
+  | some entry => rfl
 
 /-! ### Calls -/
 
@@ -225,6 +265,17 @@ def encUndef {α : Type} (enc : α → Val N) : Option α → Val N
 
 @[simp] theorem encUndef_some {α : Type} (enc : α → Val N) (v : α) : encUndef enc (some v) = enc v := rfl
 @[simp] theorem encUndef_none {α : Type} (enc : α → Val N) : encUndef enc none = .undefined := rfl
+
+/-- A successful property read agrees with the total lookup in the printed
+record model. The success premise excludes absent inherited properties. -/
+theorem getKey_encRecord_of_success {V : Type} (enc : V → Val N)
+    (record : JSRecord V) (key : JSString)
+    (h : (getKey (record.fields.map fun (k, v) => (k, enc v)) key).isSome = true) :
+    getKey (record.fields.map fun (k, v) => (k, enc v)) key =
+      some (encUndef enc (record.get? key)) := by
+  rw [getKey_eq_of_success _ _ h]
+  simp only [JSRecord.get?, List.find?_map, Function.comp_def]
+  cases record.fields.find? (fun p => JSString.ofString p.1 == key) <;> rfl
 
 /-- The entry of an optional field in an object: none for `none`, as an
 object literal that leaves the field out has no such key. -/

@@ -20,6 +20,9 @@ translator writes for every program it accepts.
 -/
 namespace tolean.TypeScript.IR
 
+/-- The runtime record type is external to every translated module. -/
+def dictionaryRef : DeclRef := ⟨"#tolean-record", "_root_.tolean.TypeScript.JSRecord"⟩
+
 export tolean.IR (IntOp Order Division Names ImportedFile leanReserved memberName)
 
 /-- An operation of the abstract number model `JSNumber` on two numbers. -/
@@ -206,6 +209,9 @@ inductive ExprExt where
   /-- `match k with | K.a => r.a | …`, on `r` and `k`: `r[k]`, where `r` is a
   `Record<K, V>` with the keys `keys`, and `K` is the literal union `key`. -/
   | recordGet (key : DeclRef) (keys : List String)
+  | recordKeys
+  | recordEntries
+  | recordHasOwn
   /-- Bind an optional record before reading its selected field. -/
   | optRecordGet (key : DeclRef) (keys : List String) (bind : Bool)
   /-- `x ∈ xs`, a `Prop`, on `xs` and `x`: `xs.includes(x)`, where the
@@ -398,6 +404,11 @@ instance : tolean.IR.PrintTy TyExt where
   -- A JS `Map` keeps its entries in insertion order (`tolean/TypeScript/Map.lean`).
   map names := leanName names "JSMap"
   set names := leanName names "JSSet"
+  structLiteral _ ref type fields :=
+    if ref == dictionaryRef then
+      some ("({ fields := [" ++ ", ".intercalate (fields.map fun (key, value) =>
+        "(" ++ tolean.Sexp.quote key ++ ", " ++ value ++ ")") ++ "] } : " ++ type ++ ")")
+    else none
   stringLit names s := s!"{leanName names "JSString.ofString"} {tolean.Sexp.quote s}"
   -- The index that `Array.prototype.map` passes is a number (ECMA-262
   -- §23.1.3.21), and an array has fewer than 2^32 elements, so the index is a
@@ -441,6 +452,9 @@ def regexpPatternTerm : JSRegExp.Pattern → String
 open tolean.IR (argument) in
 private def printRecordGet (names : Names) (key : DeclRef) (keys : List String)
     (r k : String) : String :=
+  if key == dictionaryRef then
+    s!"(_root_.tolean.TypeScript.JSRecord.get? {argument r} {argument k})"
+  else
   let case (f : String) := s!"{(names.ref key).1}.{memberName f}"
   match keys.find? (case · == k) with
   | some f => s!"{argument r}.{f}"
@@ -563,6 +577,9 @@ def ExprExt.print (names : Names) (op : ExprExt) (args : List String) : String :
   | .append, lists =>
     s!"({" ++ ".intercalate (lists.map fun a => if wholeParens a then a else argument a)})"
   | .recordGet key keys, [r, k] => printRecordGet names key keys r k
+  | .recordKeys, [r] => s!"(_root_.tolean.TypeScript.JSRecord.keys {argument r})"
+  | .recordEntries, [r] => s!"(_root_.tolean.TypeScript.JSRecord.entries {argument r})"
+  | .recordHasOwn, [r, k] => s!"(_root_.tolean.TypeScript.JSRecord.hasOwn {argument r} {argument k})"
   | .optRecordGet key keys bind, [r, k] =>
     let value := printRecordGet names key keys "_record'" k
     let body := if bind then value else s!"{leanName names "some"} {argument value}"

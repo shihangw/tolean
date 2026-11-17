@@ -240,6 +240,15 @@ def ExprExt.apply : ExprExt → List (Val N) → Option (Val N)
     | .recordGet _ _ => match args with
       | [.obj fields, .str k] => Eval.getKey fields k
       | _ => none
+    | .recordKeys => match args with
+      | [.obj fields] => some (Eval.recordProperties fields false)
+      | _ => none
+    | .recordEntries => match args with
+      | [.obj fields] => some (Eval.recordProperties fields true)
+      | _ => none
+    | .recordHasOwn => match args with
+      | [.obj fields, .str key] => some (.bool (Eval.recordOwn fields key))
+      | _ => none
     | .optRecordGet _ _ _ => optionalRecordIndex args
     -- `x ∈ xs` and `List.any xs (JSNumber.sameValueZero x)`: whether an
     -- element is `x`, as `includes` compares them.

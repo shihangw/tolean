@@ -127,6 +127,9 @@ def encoderOf (r : Refs) : IR.Ty → Option String
   -- parameter; other applications have no codec yet.
   | .param name => do return s!"({← r.codec name}.encode)"
   | .app ref args => do
+    if ref == IR.dictionaryRef then
+      let [value] := args | none
+      return s!"({r.eval "encRecord"} {← encoderOf r value})"
     let codecs ← args.mapM fun
       | .param name => r.codec name
       | _ => none
@@ -156,6 +159,9 @@ def decoderOf (r : Refs) : IR.Ty → Option String
   | .tuple ts => do return s!"({r.eval "decTuple"} {← elementsDecoder r ts})"
   | .param name => do return s!"({← r.codec name}.decode)"
   | .app ref args => do
+    if ref == IR.dictionaryRef then
+      let [value] := args | none
+      return s!"({r.eval "decRecord"} {← decoderOf r value})"
     let codecs ← args.mapM fun
       | .param name => r.codec name
       | _ => none
@@ -944,6 +950,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
   -- The translator requires a callee before its caller, so the condition
   -- of a callee is available when the caller's theorem is written.
   let mut functionConditions : List (String × (List (String × IR.Ty) × List String)) := []
+  let mut recordConditionalFunctions : List String := []
   for d in m.decls do
     let .function _ _ name typeParams params _ syntaxBody := d | continue
     unless fns.contains name do continue
@@ -1675,8 +1682,25 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     let simpSet := ", ".intercalate ([r.cert "decls"] ++ retNames ++ envLemmas ++ lemmaNames.toList ++ codecLemmas ++
       loopLemmas.toList ++ defs ++ obligations.map (·.1))
     let some_ := r.write "some" "Option.some"
-    let rfl := r.full "rfl"
+    let dynamicLookup := (outBody.anyOp fun
+      | .recordGet ref _ | .optRecordGet ref _ _ => ref == IR.dictionaryRef
+      | _ => false) ||
+      recordConditionalFunctions.any (fun callee => outBody.calls ⟨"", callee⟩)
+    if dynamicLookup then recordConditionalFunctions := name :: recordConditionalFunctions
+    let successName := name ++ "_record_success"
     let runName := r.full (if retainsError then "tolean.TypeScript.IR.callIn" else "tolean.TypeScript.IR.runIn")
+    if dynamicLookup && r.idents.contains successName then
+      throw s!"{file}: reserved certificate hypothesis name {successName}"
+    let successBinder := if dynamicLookup then
+      s!" ({successName} : ({runName} (N := {nv}) {outputFs} ⟨\"\", {str name}⟩ {list args}).isSome = true)"
+      else ""
+    let binders := binders ++ successBinder
+    let hasDictionary := dynamicLookup ||
+      (outRet.refs ++ outParams.flatMap (fun p => p.2.refs) ++ outBody.refs).contains IR.dictionaryRef
+    let simpSet := simpSet ++ if hasDictionary then
+      ", tolean.TypeScript.Eval.encRecord, tolean.TypeScript.JSRecord.get?, tolean.TypeScript.Eval.getKey, List.find?_map, tolean.TypeScript.Eval.encUndef"
+      else ""
+    let rfl := r.full "rfl"
     let sourceCall := if retainsError then
         s!"{r.eval "callIn"} (N := {nv}) [(\"\", {r.cert "program"})] ⟨\"\", {str name}⟩"
       else s!"{r.eval "run"} (N := {nv}) {r.cert "program"} {str name}"
@@ -1687,9 +1711,14 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         s!"    | rw [{lemma}]\n") ++
       s!"  all_goals (try simp_all [{simpSet}])\n  all_goals first | assumption | rfl | (intros; first | rfl | simp_all)"
     thms := thms.push <|
+      (if dynamicLookup then
+        "/-- This link assumes that the IR run returns a result. At a dictionary\n" ++
+        "lookup, success means that the key is own or is not a name on Object.prototype. -/\n"
+        else "") ++
       s!"theorem {name}_link {functionGeneric} {binders} :\n" ++
       s!"    {runName} (N := {nv}) {outputFs} ⟨\"\", {str name}⟩ {list args} =\n" ++
       s!"      {some_} ({retEnc} ({call})) := by\n" ++
+      (if dynamicLookup then s!"  revert {successName}\n" else "") ++
       s!"  {casesOn decls outParams}link_tac [{simpSet}]" ++
       (if literalMaps.isEmpty then "" else
         s!"\n  all_goals (try simp only [{", ".intercalate literalMaps}, ← List.map_append])\n" ++
@@ -1707,7 +1736,8 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       s!"theorem {name}_cert {functionGeneric} {binders} :\n" ++
       s!"    {sourceCall} {list args} = {some_} ({retEnc} ({call})) :=\n" ++
       s!"  {soundName} {rfl} {rfl} {rfl} {r.cert "program_translated"} {str name} _ 64 _\n" ++
-      s!"    ({" ".intercalate ([r.cert s!"{name}_link"] ++ functionCodecs.map (·.2) ++ params.map (·.name) ++ obligations.map (·.1))})"
+      s!"    ({" ".intercalate ([r.cert s!"{name}_link"] ++ functionCodecs.map (·.2) ++ params.map (·.name) ++ obligations.map (·.1) ++
+        (if dynamicLookup then [successName] else []))})"
   return "\n".intercalate ([
     s!"-- Certificate written by tolean for {file}. Do not edit.",
     "import tolean.TypeScript.Spec.Lemmas.Eval",

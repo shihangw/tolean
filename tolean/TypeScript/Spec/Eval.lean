@@ -5,6 +5,7 @@ import tolean.TypeScript.Spec.BigInt
 import tolean.TypeScript.Spec.Date
 import tolean.TypeScript.Spec.Number
 import tolean.TypeScript.Spec.String
+import tolean.TypeScript.Spec.Record
 
 /-!
 The meaning of the translated TypeScript subset, as an interpreter in Lean.
@@ -240,6 +241,17 @@ def getKey (fields : List (String × Val N)) (key : JSString) : Option (Val N) :
   match (fields.find? fun p => JSString.ofString p.1 == key).map (·.2) with
   | some v => some v
   | none => if objectPrototypeNames.any (fun n => JSString.ofString n == key) then none else some .undefined
+
+/-- Object.keys and Object.entries use OrdinaryOwnPropertyKeys
+(ECMA-262 §10.1.11.1, §20.1.2.19 and §20.1.2.5). -/
+def recordProperties (fields : List (String × Val N)) (entries : Bool) : Val N :=
+  .list ((orderedRecordEntries fields).map fun (key, value) =>
+    if entries then .list [.str (JSString.ofString key), value] else .str (JSString.ofString key))
+
+/-- Object.hasOwn tests the object's own properties, not its prototype
+(ECMA-262 §20.1.2.13). -/
+def recordOwn (fields : List (String × Val N)) (key : JSString) : Bool :=
+  (fields.find? fun entry => JSString.ofString entry.1 == key).isSome
 
 /-- Set the property `key` of an object with the fields `fields` to `v`
 (`CreateDataProperty` on an ordinary object, ECMA-262 §7.3.5 and §10.1.6.3):
@@ -1715,6 +1727,19 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
   | .call _ (.member _ (.ident _ "Object") "is") [a, b] => do
     if (env.lookup "Object").isSome then none
     return .bool (← sameValue (← eval m fuel env a) (← eval m fuel env b))
+  | .call _ (.member _ (.ident _ "Object") "keys") [arg] => do
+    if (env.lookup "Object").isSome then none
+    let .obj fields ← eval m fuel env arg | none
+    return recordProperties fields false
+  | .call _ (.member _ (.ident _ "Object") "entries") [arg] => do
+    if (env.lookup "Object").isSome then none
+    let .obj fields ← eval m fuel env arg | none
+    return recordProperties fields true
+  | .call _ (.member _ (.ident _ "Object") "hasOwn") [arg, key] => do
+    if (env.lookup "Object").isSome then none
+    let .obj fields ← eval m fuel env arg | none
+    let .str key ← eval m fuel env key | none
+    return .bool (recordOwn fields key)
   -- `xs.map(x => e)` and the other methods of an array that take a callback
   -- (`Array.prototype.map`, `filter`, `some`, `every` and `find`, ECMA-262
   -- §23.1.3.21, §23.1.3.8, §23.1.3.29, §23.1.3.6 and §23.1.3.9). The callback
