@@ -1173,6 +1173,9 @@ def translateType (t : TypeExpr) : TM Ty := do
       | t => return .optional t
     | _, _ => unsupportedType t
   | .array _ elem => return .array (← translateType elem)
+  | .ref _ "Record" [.keyword s "string", _]
+    | .ref _ "Readonly" [.ref _ "Record" [.keyword s "string", _]] =>
+    reject s "Record<string, V> is not supported yet: dynamic string lookup needs a certificate condition for inherited Object.prototype properties; naming the Record does not remove this requirement"
   | .ref _ "Record" [_, _] | .ref _ "Readonly" [.ref _ "Record" [_, _]] =>
     reject t.span "a Record type needs a name; declare it as a type, such as type T = Record<K, V>"
   | .ref _ name [elem] =>
@@ -4759,6 +4762,8 @@ order, as for an interface. `r[k]` reads the field that `k` names. -/
 def translateRecord (exported : Bool) (name : String) (key value : TypeExpr) :
     TM IR.Decl := do
   let keyType ← isolated (translateType key)
+  if keyType == .string then
+    reject key.span "Record<string, V> is not supported yet: dynamic string lookup needs a certificate condition for inherited Object.prototype properties; naming the Record does not remove this requirement"
   let ctx ← get
   let info ← orReject (match keyType with
       | .enum ref => ctx.enums.find? (·.ref == ref)
