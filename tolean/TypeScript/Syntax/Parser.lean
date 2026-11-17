@@ -1219,6 +1219,7 @@ def parseStatement (fuel : Nat) : ParseM Stmt := do
   | .keyword "true" | .keyword "false" | .keyword "null" | .keyword "typeof"
   | .keyword "void" | .keyword "new" => parseExpressionStatement fuel
   | .keyword "function" => parseLocalFunction (parseBlock fuel)
+  | .keyword "try" => parseTry (parseBlock fuel)
   | .keyword word => failAt t s!"'{word}' is not supported here"
   | _ => parseExpressionStatement fuel
 

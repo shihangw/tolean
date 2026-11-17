@@ -678,6 +678,18 @@ class Printer {
       }
       return this.node('throw', s, [], [this.expr(s.expression)]);
     }
+    if (ts.isTryStatement(s)) {
+      if (s.finallyBlock !== undefined || s.catchClause === undefined) {
+        refuse(s, 'finally is not supported');
+      }
+      const binding = s.catchClause.variableDeclaration;
+      if (binding === undefined || !ts.isIdentifier(binding.name) || binding.type !== undefined) {
+        refuse(s, 'catch requires an unannotated identifier');
+      }
+      return this.node('try', s, [binding.name.text], [
+        this.statement(s.tryBlock), this.statement(s.catchClause.block),
+      ]);
+    }
     if (ts.isIfStatement(s)) {
       const children = [this.expr(s.expression), this.branch(s.thenStatement)];
       if (s.elseStatement !== undefined) {
