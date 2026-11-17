@@ -8,6 +8,26 @@ models JS numbers, and what is proved and what is trusted. The
 [This graph](verification.svg) shows the verification chain for TypeScript. It
 marks which links are proved, tested against a reference, or trusted.
 
+## Project proof obligations
+
+The project chain manifest accepts an optional `obligations` list. Each
+entry has `spec`, `proof` and `module` fields. `spec` names a Lean definition
+of a proposition. `proof` names a theorem whose type is exactly that
+definition, and `module` names the module to import.
+
+Build the proof module first, then run `lake env tolean chain check` with
+the path to the project chain manifest. The checker follows the theorem's
+dependencies and accepts only `propext`, `Classical.choice` and `Quot.sound`.
+Unlike a claim, an obligation cannot supply its own axiom allowlist.
+Proofs that depend on `sorryAx` fail this check.
+
+This is a checker for supplied proofs, not yet a way to extend the supported
+TypeScript subset. The translator still refuses arbitrary sort comparators.
+It does not generate obligation statements or use these entries in
+`program_sound`. See the
+[decision](../decisions/2026-11-17-project-proof-obligations.md) for the
+remaining certificate work.
+
 ## The translator
 
 ### Parsing
