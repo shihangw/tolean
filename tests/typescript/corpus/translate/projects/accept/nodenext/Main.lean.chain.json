@@ -4,7 +4,11 @@
  [{"sha256": "b3fcce750248e6840ad1b16eef030a9299a40b692e51369c9cc87191972e43dd",
    "path": "main.ts"},
   {"sha256": "cd4138eebfa61b0a1eae70e5f88daad0257739792fa660bc02af073a36a1d846",
-   "path": "leaf.ts"}],
+   "path": "leaf.ts"},
+  {"sha256": "1a1aa90356542321e0dbac0354455b41a5e704103a20b4355c82f9b220cbd073",
+   "path": "base.json"},
+  {"sha256": "a432ea2ba24b308543df3aefda5bd157a7e76d5f75dba1b9701d1297a4243f87",
+   "path": "tsconfig.json"}],
  "output":
  {"sha256": "232fe689061f9083506a6f8908c4e9007a3d4c916731fbb95f5a8e36571a7794",
   "path": "Main.lean"},
