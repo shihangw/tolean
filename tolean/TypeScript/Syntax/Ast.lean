@@ -161,6 +161,8 @@ inductive Expr where
   /-- `obj?.[idx]` skips the index when the receiver is absent. -/
   | optIndex (span : Span) (obj : Expr) (idx : Expr)
   | call (span : Span) (callee : Expr) (args : List Expr)
+  /-- The `this` value of a method or constructor. -/
+  | «this» (span : Span)
   | unary (span : Span) (op : UnaryOp) (arg : Expr)
   | prefix (span : Span) (op : UpdateOp) (arg : Expr)
   | postfix (span : Span) (op : UpdateOp) (arg : Expr)
@@ -370,7 +372,7 @@ mutual
 cannot be missed. -/
 def Expr.assigns (n : String) : Expr → Bool
   | .regexp .. => false
-  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => false
+  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .this _ => false
   | .array _ es => Expr.assignsList n es
   | .object _ ps => Property.assignsList n ps
   | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e => e.assigns n
@@ -453,7 +455,7 @@ def Expr.mutates (n : String) : Expr → Bool
   | .regexp .. => false
   | .call _ (.member _ (.ident _ m) method) args =>
     (m == n && changingMethods.contains method) || Expr.mutatesList n args
-  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => false
+  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .this _ => false
   | .array _ es => Expr.mutatesList n es
   | .object _ ps => Property.mutatesList n ps
   | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e =>
@@ -528,7 +530,7 @@ value, and `.get(k)` gives it back. -/
 def Expr.mayHold (p : String → Bool) : Expr → Bool
   | .regexp .. => false
   | .ident _ n => p n
-  | .number .. | .bigint .. | .string .. | .bool .. | .null _ => false
+  | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .this _ => false
   -- A constructor name is a read too. In particular, a catch binding can
   -- hide `Error` or another constructor even when no argument mentions it.
   | .new _ name _ args => p name || Expr.mayHoldList p args
@@ -649,7 +651,7 @@ def Expr.changed : Expr → List String
   | .regexp .. => []
   | .call _ (.member _ (.ident _ m) method) args =>
     (if changingMethods.contains method then [m] else []) ++ Expr.changedList args
-  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => []
+  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .this _ => []
   | .array _ es | .new _ _ _ es => Expr.changedList es
   | .object _ ps => Property.changedList ps
   | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e
@@ -679,7 +681,7 @@ such as `n.set(k, v)` used as a value. -/
 def Expr.leaks (n : String) : Expr → Bool
   | .regexp .. => false
   | .ident _ m => m == n
-  | .number .. | .bigint .. | .string .. | .bool .. | .null _ => false
+  | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .this _ => false
   | .member _ (.ident ..) _ | .optMember _ (.ident ..) _ => false
   | .index _ (.ident ..) i | .optIndex _ (.ident ..) i => i.leaks n
   | .call _ (.member _ (.ident ..) _) args => Expr.leaksList n args
@@ -1002,6 +1004,32 @@ structure EnumMember where
   value : String
 deriving DecidableEq
 
+/-- A method of an ordinary class. -/
+structure ClassMethod where
+  span : Span
+  name : String
+  params : List Param
+  returnType : Option TypeExpr
+  body : Stmt
+
+/-- One member of an ordinary class, retained in source order. -/
+inductive ClassMember where
+  | field (field : Field)
+  | ctor (params : List CtorParam) (body : Stmt)
+  | method (method : ClassMethod)
+
+def ClassMember.isCtor : ClassMember → Bool
+  | .ctor .. => true
+  | _ => false
+
+/-- An ordinary class retained for the elaborator, which lowers it before
+interpretation and translation. -/
+structure ClassDecl where
+  span : Span
+  exported : Bool
+  name : String
+  members : List ClassMember
+
 /-- One name of `import { a, type B } from "./x.ts"`. `typeOnly` is true for
 `type B`, and for every name of `import type { … }`. -/
 structure ImportName where
@@ -1026,6 +1054,7 @@ inductive Decl where
   | typeAlias (span : Span) (exported : Bool) (name : String) (typeParams : List String) (type : TypeExpr)
   /-- `enum Name { A = "a", B = "b" }`: an enum whose members are strings. -/
   | enum (span : Span) (exported : Bool) (name : String) (members : List EnumMember)
+  | classDecl (decl : ClassDecl)
   /-- `class Name extends Error { constructor(params) { super(message); } }`,
   an error class (ECMA-262 §15.7, and §20.5.1 for `Error`). Its fields are
   the `readonly` parameters of its constructor. Without a constructor (`ctor`
@@ -1061,7 +1090,7 @@ def TypeExpr.span : TypeExpr → Span
 def Expr.span : Expr → Span
   | .regexp s .. => s
   | .ident s _ | .number s _ | .bigint s _ | .string s _ | .bool s _ | .null s | .array s _
-  | .object s _ | .paren s _ | .member s _ _ | .optMember s _ _ | .index s _ _ | .optIndex s _ _ | .call s _ _ | .unary s _ _
+  | .object s _ | .paren s _ | .member s _ _ | .optMember s _ _ | .index s _ _ | .optIndex s _ _ | .call s _ _ | .this s | .unary s _ _
   | .prefix s _ _ | .postfix s _ _ | .binary s _ _ _ | .cond s _ _ _ | .assign s _ _ _
   | .arrow s _ _ _ | .asConst s _ | .satisfies s _ _ | .new s _ _ _ | .spread s _ => s
 
@@ -1091,7 +1120,7 @@ def Expr.lessFree : Expr → Bool
   | .spread _ e => e.lessFree
   -- The type arguments are a group that the parser reads itself.
   | .new _ _ _ args => Expr.lessFreeList args
-  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => true
+  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .this _ => true
 
 def Expr.lessFreeList : List Expr → Bool
   | [] => true
@@ -1120,7 +1149,7 @@ def Expr.inFree : Expr → Bool
   | .array _ es => Expr.inFreeList es
   | .member _ e _ | .optMember _ e _ | .index _ e _ | .optIndex _ e _ | .call _ e _ | .unary _ _ e | .prefix _ _ e
   | .postfix _ _ e | .arrow _ _ _ e | .asConst _ e | .satisfies _ e _ | .spread _ e => e.inFree
-  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .object .. | .paren ..
+  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .this _ | .object .. | .paren ..
   | .new .. => true
 
 def Expr.inFreeList : List Expr → Bool
@@ -1142,6 +1171,7 @@ def Stmt.isBreak : Stmt → Bool
 
 def Decl.span : Decl → Span
   | .import s .. | .exports s .. | .function s .. | .interface s .. | .typeAlias s .. | .enum s .. | .errorClass s .. | .exportedVar s _ => s
+  | .classDecl d => d.span
   | .stmt st => st.span
 
 /-- `e` reads a property after a `?.`, through property reads and not

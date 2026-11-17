@@ -3,6 +3,7 @@ import tolean.Version
 import tolean.TypeScript.Edition
 import tolean.TypeScript.Syntax.Parser
 import tolean.TypeScript.Syntax.Source
+import tolean.TypeScript.Elaborate
 import tolean.TypeScript.IR
 import tolean.TypeScript.IR.Equality
 import tolean.TypeScript.Spec.Eval
@@ -4983,6 +4984,7 @@ def keyUsesNumber : PropKey → Bool
 mutual
 
 def exprUsesNumber : Expr → Bool
+  | .this _ => false
   | .ident _ name => isNumberName name
   | .number .. => true
   -- `xs.length`, `s.length`, `s.indexOf(p)` and `xs.findIndex(…)` give a
@@ -5081,6 +5083,7 @@ def moduleUsesNumber (m : Module) : Bool :=
       isNumberName name || fields.any fun f => isNumberName f.name || typeUsesNumber f.type
     | .typeAlias _ _ name _ type => isNumberName name || typeUsesNumber type
     | .enum _ _ name _ => isNumberName name
+    | .classDecl _ => true
     | .errorClass _ _ name ctor =>
       isNumberName name || ctor.any fun (ps, m) =>
         ps.any (fun p => isNumberName p.param.name || (p.param.type.map typeUsesNumber).getD false) ||
@@ -5294,7 +5297,7 @@ mutual
 
 def prepareInlineExpr : Expr → TM Unit
   | .ident _ _ | .number _ _ | .bigint _ _ | .string _ _ | .regexp _ _ _
-  | .bool _ _ | .null _ => pure ()
+  | .bool _ _ | .null _ | .this _ => pure ()
   | .array _ exprs => prepareInlineExprs exprs
   | .object _ props => prepareInlineProperties props
   | .paren _ expr | .member _ expr _ | .optMember _ expr _ | .unary _ _ expr
@@ -5368,6 +5371,7 @@ def prepareInlineClauses : List (Option Expr × List Stmt) → TM Unit
 end
 
 def prepareInlineDecl : Decl → TM Unit
+  | .classDecl d => reject d.span "ordinary classes must be elaborated before translation"
   | .function _ _ _ params args ret body => do
     modify fun c => { c with typeParams := params }
     prepareInlineParams args
@@ -5610,6 +5614,7 @@ def translateFile (file source : String) (target : Edition := .default)
     (deps : List (String × Dependency) := []) (resolved : List (String × String) := []) :
     Except String (Module × IR.Names × List IR.Decl × Interface) := do
   let m ← (parse source target).mapError (·.render file)
+  let m ← (Elaborate.run source target m).mapError (fun message => file ++ ":" ++ message)
   let m := if resolved.isEmpty then m else
     { m with decls := m.decls.map fun
       | .import s names path => .import s names ((resolved.lookup path).getD path)

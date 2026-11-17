@@ -836,6 +836,7 @@ def Expr.subst (σ : List (String × Expr)) : Expr → Expr
   | .regexp s v target => .regexp s v target
   | .bool s b => .bool s b
   | .null s => .null s
+  | .this s => .this s
   | .array s es => .array s (Expr.substList σ es)
   | .object s ps => .object s (Property.substList σ ps)
   | .paren s e => .paren s (Expr.subst σ e)
@@ -880,7 +881,7 @@ mutual
 /-- The names of the functions that `e` calls, anywhere in it. -/
 def Expr.callNames : Expr → List String
   | .regexp .. => []
-  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => []
+  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .this _ => []
   | .array _ es => Expr.callNamesList es
   | .object _ ps => Property.callNamesList ps
   | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e
@@ -1024,7 +1025,7 @@ JS evaluates whenever it evaluates `e`. A call in a branch of `?:`, after
 `&&`, `||` or `??`, or in an arrow function may not run, so it stays where
 it is. -/
 def Expr.hoists (thr : String → Bool) : Expr → Bool
-  | .regexp .. | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .arrow .. => false
+  | .regexp .. | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .this _ | .arrow .. => false
   | .array _ es => Expr.hoistsList thr es
   | .object _ ps => Property.hoistsList thr ps
   | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e

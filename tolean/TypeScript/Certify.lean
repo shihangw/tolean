@@ -667,6 +667,8 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
   -- The certificate's program is the file "", so the tree names the file's
   -- own declarations under "".
   let (m, names, decls) ← (Translate.translateTree "" source target).mapError (file ++ ·)
+  let parsed ← (Syntax.parse source target).mapError (·.render file)
+  let hasClasses := parsed.decls.any (· matches .classDecl _)
   if !(Eval.borrowsOf ⟨[("", m)], ""⟩).isEmpty then
     throw s!"{file}: a map borrow has no certificate yet"
   let r : Refs := { idents := sourceIdents source target, certNs }
@@ -1726,10 +1728,15 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     "-- A link theorem for a function with a nullable record parameter splits",
     "-- the record into every shape, and `link_tac` unfolds the evaluator in",
     "-- each. That can pass Lean's default budget.",
-    "set_option maxHeartbeats 400000",
+    (if hasClasses then
+      "set_option maxHeartbeats 4000000\nset_option maxRecDepth 100000"
+      else "set_option maxHeartbeats 400000"),
     "",
-    "/-- The program, as the parser read it. -/",
-    s!"def program : tolean.TypeScript.Syntax.Module :=\n  {module m}",
+    (if hasClasses then "/-- The program after ordinary-class elaboration. -/"
+      else "/-- The program, as the parser read it. -/"),
+    s!"def program : tolean.TypeScript.Syntax.Module :=\n  {module m}" ++ (if hasClasses then
+      s!"\n\n/-- The original syntax, before class elaboration. -/\ndef parsedProgram : tolean.TypeScript.Syntax.Module :=\n  {module parsed}"
+      else ""),
     "",
     "/-- The source file, one line at a time. -/",
     s!"def sourceLines : List (List Char) := [\n  " ++
@@ -1740,8 +1747,34 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     "/-- The parser gives `program` for the source: the kernel runs the parser and",
     "compares the trees. So the theorems below are about the source file, and the",
     "printer that wrote `program` need not be trusted. -/",
-    s!"theorem program_parsed : tolean.TypeScript.Syntax.parseChars sourceChars .{target.name.toLower} = Except.ok program :=",
-    "  tolean.TypeScript.Syntax.parseChars_eq_of_parsesTo (by decide +kernel)",
+    s!"theorem program_parsed : tolean.TypeScript.Syntax.parseChars sourceChars .{target.name.toLower} = Except.ok {if hasClasses then "parsedProgram" else "program"} :=",
+    "  tolean.TypeScript.Syntax.parseChars_eq_of_parsesTo (by decide +kernel)" ++ (if hasClasses then
+      "\n\n/-- The kernel checks the elaboration result structurally. This is not a\n" ++
+      "semantic-preservation theorem for the original JavaScript program. -/\n" ++
+      s!"theorem program_elaborated : tolean.TypeScript.Elaborate.runChars sourceChars .{target.name.toLower} parsedProgram = Except.ok program := by\n" ++
+      s!"  have hSource : (tolean.TypeScript.Elaborate.checkSource sourceChars .{target.name.toLower}).toBool = true := by decide +kernel\n" ++
+       "  simp (config := { maxSteps := 500000 }) [tolean.TypeScript.Elaborate.runChars, parsedProgram, program,\n" ++
+      "    tolean.TypeScript.Elaborate.checkSource_eq_of_checked hSource,\n" ++
+      "    tolean.TypeScript.Elaborate.elaborateClass, tolean.TypeScript.Elaborate.constructors,\n" ++
+      "    tolean.TypeScript.Elaborate.assignments, tolean.TypeScript.Elaborate.declaredFields,\n" ++
+      "    tolean.TypeScript.Elaborate.methods, tolean.TypeScript.Elaborate.unique,\n" ++
+      "    tolean.TypeScript.Elaborate.paramsEnv, tolean.TypeScript.Elaborate.expr,\n" ++
+      "    tolean.TypeScript.Elaborate.receiver, tolean.TypeScript.Elaborate.stmt,\n" ++
+      "    tolean.TypeScript.Elaborate.stmts, tolean.TypeScript.Elaborate.infer,\n" ++
+       "    tolean.TypeScript.Elaborate.receiverClass,\n" ++
+       "    tolean.TypeScript.Elaborate.checkClassBinding, tolean.TypeScript.Elaborate.hasClassType,\n" ++
+       "    tolean.TypeScript.Elaborate.constructedClass, tolean.TypeScript.Elaborate.directClassType,\n" ++
+       "    tolean.TypeScript.Elaborate.containsClassTypeFuel,\n" ++
+       "    tolean.TypeScript.Elaborate.exactClass,\n" ++
+       "    tolean.TypeScript.Elaborate.exactClassFuel,\n" ++
+      "    tolean.TypeScript.Elaborate.fields, tolean.TypeScript.Elaborate.classType,\n" ++
+      "    tolean.TypeScript.Elaborate.ctorName, tolean.TypeScript.Elaborate.methodName,\n" ++
+      "    tolean.TypeScript.Elaborate.generatedPrefix, tolean.TypeScript.Elaborate.thisName,\n" ++
+       "    List.eraseDups_cons, List.filterMap_cons, List.find?_cons,\n" ++
+       "    List.filterMap_nil, List.isEmpty_cons, List.isEmpty_nil,\n" ++
+       "    List.findSome?_cons, List.any_cons, List.lookup, Option.isSome,\n" ++
+       "    Bool.false_eq_true, Bool.true_eq_false, if_false, if_true] <;> rfl"
+      else ""),
     "",
     "/-- The Tolean IR, as the translator gives it for the program. -/",
     s!"def decls : List tolean.TypeScript.IR.Decl :=\n  {term decls}",
@@ -1761,10 +1794,12 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
 /-- The functions of `source` that get a certificate, and whether that is all
 of them. -/
 def certifiedFunctions (source : String) (target : Edition := .default) :
-    Except String (List String × Bool) := do
-  let m ← (parse source target).mapError (·.message)
+    Except String (List String × Bool × Bool) := do
+  let parsed ← (parse source target).mapError (·.message)
+  let hasClasses := parsed.decls.any fun | .classDecl _ => true | _ => false
+  let m ← Elaborate.run source target parsed
   let all := m.decls.filterMap fun | .function _ _ n .. => some n | _ => none
   let fns := certifiable m
-  return (fns, fns.length == all.length)
+  return (fns, fns.length == all.length, hasClasses)
 
 end tolean.TypeScript.Certify
