@@ -451,6 +451,7 @@ theorem Expr.second : ∀ (e : Expr) {n : String} {k : TokenKind} {r : List Toke
 /-- Every well-formed expression is `spineOK`. -/
 theorem Expr.spineOK_wf {T : Edition} : ∀ (e : Expr) (level : Level), e.wfAt T level = true → e.spineOK = true
   | .spread .., level, h => by cases level <;> simp [Expr.wfAt] at h
+  | .this .., level, h => by cases level <;> simp [Expr.spineOK]
   | .member _ o _, level, h | .index _ o _, level, h | .call _ o _, level, h => by
     have : o.wfAt T .lhs = true := by cases level <;> simp_all [Expr.wfAt]
     simpa [Expr.spineOK] using Expr.spineOK_wf o .lhs this
@@ -1253,6 +1254,86 @@ def ctorWF (T : Edition) : Option (List CtorParam × Expr) → Bool
   | none => true
   | some (ps, m) => ps.all (fun p => p.param.wf) && m.wfParen T
 
+def ClassMethod.wf (T : Edition) (m : ClassMethod) : Bool :=
+  exprName m.name && m.params.all Param.wf &&
+    (match m.returnType with | some t => t.returnWF | none => true) &&
+    m.body.isBlock && m.body.wf T true false
+
+def ClassMember.wf (T : Edition) : ClassMember → Bool
+  | .field f => f.readonly && !f.optional && f.type.wf
+  | .ctor params body =>
+    params.all (fun p => p.param.wf) && body.isBlock && body.wf T true false
+  | .method m => ClassMethod.wf T m
+
+def ClassDecl.wf (T : Edition) (d : ClassDecl) : Bool :=
+  exprName d.name && d.members.all (ClassMember.wf T) &&
+    (d.members.countP (fun | .ctor .. => true | _ => false) == 1)
+
+theorem ClassMember.first (m : ClassMember) :
+    ∃ k, ((ClassMember.lines 1 m).map Prod.snd).flatten.flatten.head? = some k ∧
+      k ≠ .punct "}" ∧ k ≠ .eof := by
+  cases m with
+  | field f =>
+    obtain ⟨k, hk, hclose, heof⟩ := Field.first f
+    exact ⟨k, by simpa [ClassMember.lines] using hk, hclose, heof⟩
+  | ctor params body =>
+    exact ⟨.ident "constructor", by simp [ClassMember.lines, identWord],
+      (by intro h; cases h), (by intro h; cases h)⟩
+  | method m =>
+    by_cases h : m.name ∈ Lex.reservedWords
+    · exact ⟨.keyword m.name, by simp [ClassMember.lines, ClassMethod.lines, propertyName, h, keywordWord],
+        (by intro he; cases he), (by intro he; cases he)⟩
+    · exact ⟨.ident m.name, by
+        simp [ClassMember.lines, ClassMethod.lines, propertyName, h, identWord],
+        (by intro he; cases he), (by intro he; cases he)⟩
+
+theorem parseClassField_reads (f : Field) (hro : f.readonly = true)
+    (hopt : f.optional = false) (hty : f.type.wf = true)
+    (s : ParseState) (ts rest : List Token) (hs : s.rest = ts ++ rest)
+    (hl : s.left = s.rest.length) (hlaid : Laid ts [f.words]) (hr : rest ≠ []) :
+    ∃ f' s', Parse.parseClassField s = .ok f' s' ∧
+      f'.erase = f.erase ∧ Leaves s s' rest := by
+  obtain ⟨ht, hn⟩ := Laid.one (by simpa using hlaid)
+  have ht' : Touching ts (identWord "readonly" :: (propertyName f.name ::
+      (if f.optional then [punctWord "?"] else []) ++ punctWord ":" :: f.type.words ++ [punctWord ";"])) := by
+    simpa [Field.words, hro] using ht
+  obtain ⟨t, ts', rfl, htok, _⟩ := Touching.cons_one (by simpa [identWord] using ht')
+  have hs' : s.rest = t :: (ts' ++ rest) := by simpa using hs
+  have hfield := parseField_reads f hty s (t :: ts') rest hs hl ht hn hr
+  obtain ⟨f', s', hp, he, hL⟩ := hfield
+  have hro' : f'.readonly = true := by
+    have h := congrArg Field.readonly he
+    simpa [Field.erase, hro] using h
+  have hopt' : f'.optional = false := by
+    have h := congrArg Field.optional he
+    simpa [Field.erase, hopt] using h
+  refine ⟨f', s', ?_, he, hL⟩
+  simp only [Parse.parseClassField]
+  rw [Parse.bind_eq (Parse.peek_eq hs'), Parse.bind_eq hp]
+  simp [hro', hopt', Token.isIdent, htok, pure, bind, EStateM.pure, EStateM.bind]
+
+theorem parseClassMember_field_reads {T : Edition} (f : Field) (hro : f.readonly = true)
+    (hopt : f.optional = false) (hty : f.type.wf = true)
+    (s : ParseState) (ts rest : List Token) (hs : s.rest = ts ++ rest)
+    (hl : s.left = s.rest.length)
+    (hlaid : Laid ts ((ClassMember.lines 1 (.field f)).map Prod.snd))
+    (hr : rest ≠ []) :
+    ∃ m' s', Parse.parseClassMember s = .ok m' s' ∧
+      m'.erase = ClassMember.erase (.field f) ∧ Leaves s s' rest := by
+  obtain ⟨ht, hn⟩ := Laid.one (by simpa [ClassMember.lines] using hlaid)
+  obtain ⟨t, ts', rfl, htk, _⟩ :=
+    Touching.cons_one (by simpa [Field.words, hro, identWord] using ht)
+  have hs' : s.rest = t :: (ts' ++ rest) := by simpa using hs
+  have hfieldlaid : Laid (t :: ts') [f.words] := by simpa [ClassMember.lines] using hlaid
+  have hfield := parseClassField_reads f hro hopt hty s (t :: ts') rest hs' hl hfieldlaid hr
+  obtain ⟨f', s', hp, he, hL⟩ := hfield
+  refine ⟨.field f', s', ?_, by simpa [ClassMember.erase, he], hL⟩
+  unfold Parse.parseClassMember
+  rw [Parse.bind_eq (Parse.peek_eq hs')]
+  simp [Token.isPunct, Token.isEof, Token.isKeyword, Token.isIdent, htk,
+    pure, bind, EStateM.pure, EStateM.bind]
+  rw [hp]
+
 /-- `d` is a declaration that `parseDecl` reads when the target edition is `T`. -/
 def Decl.wf (T : Edition) : Decl → Bool
   | .«import» _ names _ => !names.isEmpty && names.all (fun n => exprName n.name)
@@ -1263,6 +1344,7 @@ def Decl.wf (T : Edition) : Decl → Bool
   | .typeAlias _ _ name tps ty => exprName name && tps.all typeName && ty.wf
   | .enum _ _ name _ => exprName name
   | .errorClass _ _ name ctor => exprName name && ctorWF T ctor
+  | .classDecl d => d.wf T
   | .exportedVar _ d => d.wf T
   | .stmt s => s.wf T false false
 
@@ -1600,9 +1682,17 @@ theorem parseDeclBody_enum {s : ParseState} {t nm : Token} {r : List Token} (sta
   rw [if_neg (show ¬ ((t.isIdent "type" && _) = true) by simp [Token.isIdent, ht])]
   rw [if_pos (show t.isKeyword "enum" = true by simp [Token.isKeyword, ht])]
 
+theorem parseClassDeclaration_error {s : ParseState} {cls name base : Token} {r : List Token}
+    (start : Pos) (exported : Bool) (hs : s.rest = cls :: name :: base :: r)
+    (hb : base.kind = .keyword "extends") :
+    Parse.parseClassDeclaration start exported s = Parse.parseClass start exported s := by
+  simp only [Parse.parseClassDeclaration]
+  rw [Parse.bind_eq (Parse.peekAt_rest s 2)]
+  simp [hs, Token.isKeyword, hb]
+
 theorem parseDeclBody_class {s : ParseState} {t nm : Token} {r : List Token} (start : Pos)
     (e : Bool) (hs : s.rest = t :: nm :: r) (ht : t.kind = .keyword "class") :
-    Parse.parseDeclBody start e s = Parse.parseClass start e s := by
+    Parse.parseDeclBody start e s = Parse.parseClassDeclaration start e s := by
   simp only [Parse.parseDeclBody]
   rw [Parse.bind_eq (Parse.peek_eq hs), Parse.bind_eq (Parse.peekAt_rest _ _)]
   rw [if_neg (show ¬ (t.isKeyword "function" = true) by simp [Token.isKeyword, ht])]
@@ -1851,28 +1941,38 @@ theorem parseDecl_class {T : Edition} (sp : Span) (exported : Bool) (name : Stri
   | false =>
     simp only [exportWords, Bool.false_eq_true, ↓reduceIte, List.nil_append] at ha
     obtain ⟨ck, a₁, rfl, hck, h₁⟩ := Touching.cons_one (by simpa [keywordWord] using ha)
-    obtain ⟨nm, a₂, rfl, _, _⟩ := Touching.cons_one (by simpa [identWord] using h₁)
-    have hs' : s.rest = ck :: nm :: (a₂ ++ (cts ++ rb :: rest)) := by simpa using hs
+    obtain ⟨nm, a₂, rfl, hnm, h₂⟩ := Touching.cons_one (by simpa [identWord] using h₁)
+    obtain ⟨base, a₃, rfl, hbase, _⟩ :=
+      Touching.cons_one (by simpa [keywordWord] using h₂)
+    have hs' : s.rest = ck :: nm :: (base :: a₃ ++ (cts ++ rb :: rest)) := by simpa using hs
     obtain ⟨d', s', hp, he, hL⟩ := parseClass_reads ck.span.start (ck.isKeyword "export") sp name ctor hname hc
-      s (ck :: nm :: a₂) cts rest rb (by simpa using hs) (by assumption) hl ha hcts hrbk hr
+      s (ck :: nm :: base :: a₃) cts rest rb (by simpa using hs) (by assumption) hl ha hcts hrbk hr
     refine ⟨d', s', ?_, by rw [he]; simp [Decl.erase, Token.isKeyword, hck], hL⟩
     rw [parseDecl_body hs' (by simp) (by rw [hck]; simp) (fun h => by simp [Token.isKeyword, hck] at h),
       if_neg (show ¬ (ck.isKeyword "export" = true) by simp [Token.isKeyword, hck]),
       parseDeclBody_class _ _ hs' hck]
+    rw [parseClassDeclaration_error (s := s) (cls := ck) (name := nm) (base := base)
+      (r := a₃ ++ cts ++ rb :: rest) ck.span.start (ck.isKeyword "export")
+      (by simpa [List.append_assoc] using hs') (by simpa [Token.isKeyword] using hbase)]
     exact hp
   | true =>
     simp only [exportWords, ↓reduceIte, List.singleton_append] at ha
     obtain ⟨ex, a₀, rfl, hex, h₀⟩ := Touching.cons_one (by simpa [keywordWord] using ha)
     obtain ⟨ck, a₁, rfl, hck, h₁⟩ := Touching.cons_one (by simpa [keywordWord] using h₀)
-    obtain ⟨nm, a₂, rfl, _, _⟩ := Touching.cons_one (by simpa [identWord] using h₁)
-    have hs' : s.rest = ex :: ck :: nm :: (a₂ ++ (cts ++ rb :: rest)) := by simpa using hs
-    let s₁ := past s ex (ck :: (nm :: (a₂ ++ (cts ++ rb :: rest))))
+    obtain ⟨nm, a₂, rfl, hnm, h₂⟩ := Touching.cons_one (by simpa [identWord] using h₁)
+    obtain ⟨base, a₃, rfl, hbase, _⟩ :=
+      Touching.cons_one (by simpa [keywordWord] using h₂)
+    have hs' : s.rest = ex :: ck :: nm :: (base :: a₃ ++ (cts ++ rb :: rest)) := by simpa using hs
+    let s₁ := past s ex (ck :: (nm :: (base :: a₃ ++ (cts ++ rb :: rest))))
     obtain ⟨d', s', hp, he, hL⟩ := parseClass_reads ex.span.start (ex.isKeyword "export") sp name ctor hname hc
-      s₁ (ck :: nm :: a₂) cts rest rb (by simp [s₁]) (by simp [s₁]; assumption) (by simp [s₁, hl, hs']) h₀ hcts hrbk hr
+      s₁ (ck :: nm :: base :: a₃) cts rest rb (by simp [s₁]) (by simp [s₁]; assumption) (by simp [s₁, hl, hs']) h₀ hcts hrbk hr
     refine ⟨d', s', ?_, by rw [he]; simp [Decl.erase, Token.isKeyword, hex], leaves_trans (leaves_advance hs' hl) hL⟩
     rw [parseDecl_body hs' (by simp) (by rw [hex]; simp) (fun _ => startsExportList_head rfl (by rw [hck]; simp) (by rw [hck]; simp)),
       if_pos (show ex.isKeyword "export" = true by simp [Token.isKeyword, hex]),
       parseDeclBody_class (s := s₁) _ _ rfl hck]
+    rw [parseClassDeclaration_error (s := s₁) (cls := ck) (name := nm) (base := base)
+      (r := a₃ ++ cts ++ rb :: rest) ex.span.start (ex.isKeyword "export")
+      (by simp [s₁, List.append_assoc, hs']) (by simpa [Token.isKeyword] using hbase)]
     exact hp
 
 theorem parseDecl_enum {T : Edition} (sp : Span) (exported : Bool) (name : String) (members : List EnumMember)
@@ -2049,6 +2149,16 @@ theorem Decl.first {T : Edition} (d : Decl) (hw : d.wf T = true) {ts : List Toke
     cases ts with
     | nil => cases e <;> simp [Decl.wordLines, Decl.lines, exportWords, keywordWord, identWord] at hk
     | cons x ts' => refine ⟨x, ts', rfl, ?_⟩; cases e <;> simp [Decl.wordLines, Decl.lines, exportWords, keywordWord, identWord] at hk <;> rw [hk.1] <;> simp
+  | classDecl d =>
+    have hk := h.kinds
+    cases ts with
+    | nil => cases d.exported <;> simp [Decl.wordLines, Decl.lines, ClassDecl.lines, exportWords, keywordWord, identWord] at hk
+    | cons x ts' =>
+      refine ⟨x, ts', rfl, ?_⟩
+      have hf := congrArg List.head? hk
+      cases he : d.exported <;>
+        simp [he, Decl.wordLines, Decl.lines, ClassDecl.lines, exportWords, keywordWord, identWord] at hf <;>
+        simp [he, hf]
   | errorClass sp e n ctor =>
     have hk := h.kinds
     cases ts with
