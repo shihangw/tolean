@@ -34,16 +34,11 @@ The old error-class parser and its reading theorem remain separate.
 
 The existing `program_sound_call` theorem still relates the interpreter and
 the IR on the **elaborated module**. Its value relation is unchanged.
-Certificates retain the original parsed tree. A compiled `#guard` checks the
-elaboration result before the certificate proves translation of the lowered
-tree. That guard is not a kernel theorem. Nor is it a proof that the pass
+Certificates retain the original parsed tree and prove, by kernel reduction
+split into source-hygiene and structural elaboration steps, that the pass
+produces the literal lowered module used in the translation theorem. This
+establishes which tree the pass produces. It is not a proof that elaboration
 preserves the semantics of the original class program.
-
-A kernel-checked elaboration equation was attempted on the class fixture.
-`decide +kernel` did not reduce its Boolean check to a decision, and
-`#reduce` exceeded a recursion depth of 10,000. The compiled check returns
-`true` for that fixture. This narrows only the certificate's extra elaboration
-check, not the accepted class slice or the existing translation theorem.
 
 ## What Node checks
 

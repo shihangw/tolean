@@ -657,7 +657,7 @@ def extras : List Group := [
     ``Syntax.parseEnumMember_reads, ``Syntax.EnumMember.first, ``Syntax.enumMember_loop,
     ``Syntax.Laid.length_members, ``Syntax.parseEnum_reads, ``Syntax.parseDeclBody_enum, ``Syntax.parseDecl_enum,
     ``Syntax.parseDeclBody_class, ``Syntax.parseDecl_class, ``Syntax.parseCtorParam_reads, ``Syntax.ctorParams_reads,
-    ``Syntax.parseClass_reads,
+    ``Syntax.parseClass_reads, ``Elaborate.checkSource_eq_of_checked,
     ``Syntax.ClassMember.first, ``Syntax.parseClassField_reads,
     ``Syntax.parseClassMember_field_reads, ``Syntax.parseClassDeclaration_error,
     ``Syntax.parseClassReturnAnnotation_reads, ``Syntax.parseOrdinaryClassCtor_reads,

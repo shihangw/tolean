@@ -1702,7 +1702,8 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     "-- A link theorem for a function with a nullable record parameter splits",
     "-- the record into every shape, and `link_tac` unfolds the evaluator in",
     "-- each. That can pass Lean's default budget.",
-    "set_option maxHeartbeats 400000",
+    "set_option maxHeartbeats 400000" ++
+      (if hasClasses then "\nset_option maxRecDepth 100000" else ""),
     "",
     (if hasClasses then "/-- The program after ordinary-class elaboration. -/"
       else "/-- The program, as the parser read it. -/"),
@@ -1721,9 +1722,23 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     "printer that wrote `program` need not be trusted. -/",
     s!"theorem program_parsed : tolean.TypeScript.Syntax.parseChars sourceChars .{target.name.toLower} = Except.ok {if hasClasses then "parsedProgram" else "program"} :=",
     "  tolean.TypeScript.Syntax.parseChars_eq_of_parsesTo (by decide +kernel)" ++ (if hasClasses then
-      "\n\n-- This compiled check tests the elaboration result; it is not a kernel theorem.\n" ++
-      "-- Node comparisons test preservation of the original class program's results.\n" ++
-      s!"#guard tolean.TypeScript.Elaborate.elaboratesTo sourceChars .{target.name.toLower} parsedProgram program"
+      "\n\n/-- The kernel checks the elaboration result structurally. This is not a\n" ++
+      "semantic-preservation theorem for the original JavaScript program. -/\n" ++
+      s!"theorem program_elaborated : tolean.TypeScript.Elaborate.runChars sourceChars .{target.name.toLower} parsedProgram = Except.ok program := by\n" ++
+      s!"  have hSource : (tolean.TypeScript.Elaborate.checkSource sourceChars .{target.name.toLower}).toBool = true := by decide +kernel\n" ++
+      "  simp [tolean.TypeScript.Elaborate.runChars, parsedProgram, program,\n" ++
+      "    tolean.TypeScript.Elaborate.checkSource_eq_of_checked hSource,\n" ++
+      "    tolean.TypeScript.Elaborate.elaborateClass, tolean.TypeScript.Elaborate.constructors,\n" ++
+      "    tolean.TypeScript.Elaborate.assignments, tolean.TypeScript.Elaborate.declaredFields,\n" ++
+      "    tolean.TypeScript.Elaborate.methods, tolean.TypeScript.Elaborate.unique,\n" ++
+      "    tolean.TypeScript.Elaborate.paramsEnv, tolean.TypeScript.Elaborate.expr,\n" ++
+      "    tolean.TypeScript.Elaborate.receiver, tolean.TypeScript.Elaborate.stmt,\n" ++
+      "    tolean.TypeScript.Elaborate.stmts, tolean.TypeScript.Elaborate.infer,\n" ++
+      "    tolean.TypeScript.Elaborate.receiverClass, tolean.TypeScript.Elaborate.exactClass,\n" ++
+      "    tolean.TypeScript.Elaborate.fields, tolean.TypeScript.Elaborate.classType,\n" ++
+      "    tolean.TypeScript.Elaborate.ctorName, tolean.TypeScript.Elaborate.methodName,\n" ++
+      "    tolean.TypeScript.Elaborate.generatedPrefix, tolean.TypeScript.Elaborate.thisName,\n" ++
+      "    List.eraseDups_cons] <;> rfl"
       else ""),
     "",
     "/-- The Tolean IR, as the translator gives it for the program. -/",

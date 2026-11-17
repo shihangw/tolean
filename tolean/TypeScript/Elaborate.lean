@@ -292,16 +292,28 @@ def elaborateClass (ctx : Context) (d : ClassDecl) : Result (List Decl) := do
       (selfParam :: m.params) m.returnType body')
   pure (.interface d.span d.exported d.name [] fs :: ctor :: methodDecls)
 
-/-- Programs without ordinary classes keep their existing path. The reserved
-prefix makes generated binders fresh even inside nested source expressions. -/
-def runChars (chars : List Char) (target : Edition) (m : Module) : Result Module := do
-  let classes := m.decls.filterMap fun | .classDecl d => some d | _ => none
-  if classes.isEmpty then return m
+/-- Check hygiene separately so certificates can reduce this small computation
+without reducing the elaboration of all class bodies at the same time. -/
+def checkSource (chars : List Char) (target : Edition) : Result Unit := do
   let tokens ← (Syntax.lexChars chars target).mapError (fun e => e.message)
   for t in tokens do
     if let .ident name := t.kind then
       if name.startsWith generatedPrefix then
         refuse t.span s!"source names beginning with '{generatedPrefix}' are reserved"
+  pure ()
+
+theorem checkSource_eq_of_checked {chars : List Char} {target : Edition}
+    (h : (checkSource chars target).toBool = true) : checkSource chars target = .ok () := by
+  cases he : checkSource chars target with
+  | error e => simp [he, Except.toBool] at h
+  | ok u => cases u; rfl
+
+/-- Programs without ordinary classes keep their existing path. The reserved
+prefix makes generated binders fresh even inside nested source expressions. -/
+def runChars (chars : List Char) (target : Edition) (m : Module) : Result Module := do
+  let classes := m.decls.filterMap fun | .classDecl d => some d | _ => none
+  if classes.isEmpty then return m
+  checkSource chars target
   let first :: _ := classes | return m
   unique first.span "class names" (classes.map (·.name))
   for decl in m.decls do
@@ -329,11 +341,5 @@ def runChars (chars : List Char) (target : Edition) (m : Module) : Result Module
 
 def run (source : String) (target : Edition) (m : Module) : Result Module :=
   runChars source.toList target m
-
-/-- A decidable check of the resulting tree, not a semantic preservation claim. -/
-def elaboratesTo (chars : List Char) (target : Edition) (m out : Module) : Bool :=
-  match runChars chars target m with
-  | .ok actual => Module.beq actual out
-  | .error _ => false
 
 end tolean.TypeScript.Elaborate
