@@ -5472,9 +5472,9 @@ theorem DeclOK.enum {exported : Bool} {name : String} {members : List EnumMember
   · exact hm m hm'
   · words_ok
 
-theorem DeclOK.errorClass {exported : Bool} {name : String} {ctor : Option (List CtorParam × Expr)}
+theorem DeclOK.errorClass {exported : Bool} {name : String} {ctor : Option ErrorCtor}
     (hn : Word.ok T (identWord name) = true)
-    (hc : ∀ ps m, ctor = some (ps, m) → (∀ p ∈ ps, WordsOK T p.words) ∧ WordsOK T m.words) :
+    (hc : ∀ ps m n, ctor = some (ps, m, n) → (∀ p ∈ ps, WordsOK T p.words) ∧ WordsOK T m.words) :
     DeclOK T (.errorClass sp exported name ctor) := by
   have h1 := exportWords_ok T exported
   intro l hl
@@ -5484,8 +5484,10 @@ theorem DeclOK.errorClass {exported : Bool} {name : String} {ctor : Option (List
   · cases ctor with
     | none => simp [ctorLines] at hl
     | some c =>
-      obtain ⟨ps, m⟩ := c
-      obtain ⟨hps, hm⟩ := hc ps m rfl
+      obtain ⟨ps, m, n⟩ := c
+      obtain ⟨hps, hm⟩ := hc ps m n rfl
+      have hname : WordsOK T (errorNameWords n) := by
+        cases n <;> simp only [errorNameWords] <;> words_ok
       have h2 := wordsOK_enclose (T := T) (o := "(") (c := ")") (items := ps.map CtorParam.words) (by decide)
         (by decide) (by intro x hx; obtain ⟨p, hp', rfl⟩ := List.mem_map.mp hx; exact hps p hp')
       simp only [ctorLines, List.mem_cons, List.not_mem_nil, or_false] at hl
@@ -6006,10 +6008,11 @@ theorem errorFieldStep_ready {T : Edition} {fs fs' : Array CtorParam} {b : Bool}
     obtain ⟨_, rfl⟩ := h
     exact ⟨hR₂, hK₁.trans hK₂⟩
 
-theorem errorAssignmentStep_ready {pending pending' : List String} {b : Bool}
+theorem errorAssignmentStep_ready {pending pending' : List String × Option String} {b : Bool}
     {s s' : ParseState} (hR : Ready s)
     (h : Parse.errorAssignmentStep pending s = .ok (pending', b) s') :
     Ready s' ∧ Kept s s' := by
+  rcases pending with ⟨pending, runtimeName⟩
   obtain ⟨t, r, hs⟩ := hR.cons
   simp only [Parse.errorAssignmentStep] at h
   rw [Parse.bind_eq (Parse.peek_eq hs)] at h
@@ -6028,22 +6031,43 @@ theorem errorAssignmentStep_ready {pending pending' : List String} {b : Bool}
     rw [Parse.bind_ok] at h
     obtain ⟨name, s₃, hn, h⟩ := h
     obtain ⟨nt, r₃, _, _, _, rfl, hR₃⟩ := readName_inv hR₂ hn
-    obtain ⟨_, h⟩ := pass_err (fun _ => ⟨_, _, rfl⟩) h
-    obtain ⟨_, h⟩ := pass_err (fun _ => ⟨_, _, rfl⟩) h
-    rw [Parse.bind_ok] at h
-    obtain ⟨eq, s₄, heq, h⟩ := h
-    obtain ⟨_, r₄, _, rfl, hR₄⟩ := expectPunct_inv hR₃ heq
-    rw [Parse.bind_ok] at h
-    obtain ⟨value, s₅, hv, h⟩ := h
-    obtain ⟨vt, r₅, _, _, _, rfl, hR₅⟩ := readName_inv hR₄ hv
-    obtain ⟨_, h⟩ := pass_err (fun _ => ⟨_, _, rfl⟩) h
-    rw [Parse.bind_ok] at h
-    obtain ⟨_, s₆, he, h⟩ := h
-    obtain ⟨hR₆, hK₆⟩ := endStatement_inv hR₅ he
-    simp only [Parse.pure_ok] at h
-    obtain ⟨_, rfl⟩ := h
-    exact ⟨hR₆, hK₁.trans ((Kept.past _ _ _).trans ((Kept.past _ _ _).trans
-      ((Kept.past _ _ _).trans ((Kept.past _ _ _).trans hK₆))))⟩
+    split at h
+    · simp only [Parse.errorNameAssignment] at h
+      obtain ⟨_, h⟩ := fail_inv h
+      rw [Parse.bind_eq (show (get : ParseM ParseState) (past (past s₁ dot r₂) nt r₃) =
+        .ok (past (past s₁ dot r₂) nt r₃) (past (past s₁ dot r₂) nt r₃) from rfl)] at h
+      obtain ⟨_, h⟩ := fail_inv h
+      rw [Parse.bind_ok] at h
+      obtain ⟨eq, s₄, heq, h⟩ := h
+      obtain ⟨_, r₄, _, rfl, hR₄⟩ := expectPunct_inv hR₃ heq
+      rw [Parse.bind_ok] at h
+      obtain ⟨literal, s₅, hv, h⟩ := h
+      obtain ⟨hR₅, hK₅⟩ := advance_ready hR₄ hv
+      cases hk : literal.kind <;> simp only [hk] at h
+      all_goals try exact absurd h (Parse.failAt_ne_ok _ _ _ _ _)
+      rw [Parse.bind_ok] at h
+      obtain ⟨_, s₆, he, h⟩ := h
+      obtain ⟨hR₆, hK₆⟩ := endStatement_inv hR₅ he
+      simp only [Parse.pure_ok] at h
+      obtain ⟨_, rfl⟩ := h
+      exact ⟨hR₆, hK₁.trans ((Kept.past _ _ _).trans
+        ((Kept.past _ _ _).trans ((Kept.past _ _ _).trans (hK₅.trans hK₆))))⟩
+    · obtain ⟨_, h⟩ := pass_err (fun _ => ⟨_, _, rfl⟩) h
+      obtain ⟨_, h⟩ := pass_err (fun _ => ⟨_, _, rfl⟩) h
+      rw [Parse.bind_ok] at h
+      obtain ⟨eq, s₄, heq, h⟩ := h
+      obtain ⟨_, r₄, _, rfl, hR₄⟩ := expectPunct_inv hR₃ heq
+      rw [Parse.bind_ok] at h
+      obtain ⟨value, s₅, hv, h⟩ := h
+      obtain ⟨vt, r₅, _, _, _, rfl, hR₅⟩ := readName_inv hR₄ hv
+      obtain ⟨_, h⟩ := pass_err (fun _ => ⟨_, _, rfl⟩) h
+      rw [Parse.bind_ok] at h
+      obtain ⟨_, s₆, he, h⟩ := h
+      obtain ⟨hR₆, hK₆⟩ := endStatement_inv hR₅ he
+      simp only [Parse.pure_ok] at h
+      obtain ⟨_, rfl⟩ := h
+      exact ⟨hR₆, hK₁.trans ((Kept.past _ _ _).trans ((Kept.past _ _ _).trans
+        ((Kept.past _ _ _).trans ((Kept.past _ _ _).trans hK₆))))⟩
 
 theorem errorFieldParams_wf {T : Edition} {fields params : Array CtorParam}
     (hp : ∀ p ∈ params.toList, p.param.wf = true ∧ WordsOK T p.words) :
@@ -6111,7 +6135,7 @@ theorem parseClass_wf {T : Edition} (start : Pos) (exported : Bool) :
       Parse.bind_eq (Parse.spanFrom_eq _ _)] at h
     simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h
     exact ⟨hRf.past hs₆ (hRf.more hs₆ hzne), hKf₀.trans (Kept.past _ _ _),
-      by simpa [Decl.wf, ctorWF, exprName] using hnr, DeclOK.errorClass hnok (fun _ _ h => by cases h)⟩
+      by simpa [Decl.wf, ctorWF, exprName] using hnr, DeclOK.errorClass hnok (fun _ _ _ h => by cases h)⟩
   · rw [if_neg hz] at h
     -- `constructor (`
     obtain ⟨hzc, h⟩ := pass_err (refuseClass_refuses _) h
@@ -6175,7 +6199,7 @@ theorem parseClass_wf {T : Edition} (start : Pos) (exported : Bool) :
     simp only [Parse.pure_ok] at h; obtain ⟨rfl, rfl⟩ := h
     have hpw' := errorFieldParams_wf (fields := fields) hpw
     refine ⟨hR₁₅, hK₁₁.trans (hK₁₂.trans (hK₁₃.trans (hKa.trans ((Kept.past _ _ _).trans (Kept.past _ _ _))))), ?_,
-      DeclOK.errorClass hnok (fun ps m hc => ?_)⟩
+      DeclOK.errorClass hnok (fun ps m n hc => ?_)⟩
     · simp only [Decl.wf, ctorWF, Bool.and_eq_true, List.all_eq_true]
       exact ⟨by simpa [exprName] using hnr, fun q hq => (hpw' q (by simpa using hq)).1, hmw⟩
     · cases hc

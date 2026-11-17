@@ -164,7 +164,8 @@ def Decl.toSexp : Decl → Sexp
   -- constructor has no children.
   | .errorClass s exported name ctor =>
     node "class" s ([name] ++ flag exported "export")
-      ((ctor.map fun (ps, m) => ps.map CtorParam.toSexp ++ [m.toSexp]).getD [])
+      ((ctor.map fun (ps, m, n) => ps.map CtorParam.toSexp ++ [m.toSexp] ++
+        n.toList.map (fun name => .node "error-name" none [Sexp.quote name] [])).getD [])
   | .exports s names source =>
     node "export" s (source.map Sexp.quote).toList
       (names.map fun n => node "name" n.span ([n.name] ++ flag n.typeOnly "type") [])

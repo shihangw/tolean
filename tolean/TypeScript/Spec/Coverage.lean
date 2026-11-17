@@ -286,7 +286,7 @@ def sections : List Section := [
     ``Proof.state_default_sim, ``Proof.state_last_sim, ``Proof.state_case_sim, ``Proof.switch_state_sim,
     ``Proof.translateStateClause_sound, ``Proof.translateStateClauses_sound]⟩,
   ⟨"sec-throw-statement", "14.14", "The throw Statement", [``Proof.throw_sim, ``Proof.eval_wrapError,
-    ``Proof.throwClass_sim, ``Proof.fieldArgs_marks, ``Proof.translateThrow_sound]⟩,
+    ``Proof.throwClass_sim, ``Proof.evalList_errorName, ``Proof.fieldArgs_marks, ``Proof.translateThrow_sound]⟩,
   -- §15 ECMAScript Language: Functions and Classes {#sec-ecmascript-language-functions-and-classes}
   ⟨"sec-function-definitions", "15.2", "Function Definitions",
     [``Proof.translateFunction_ok, ``Proof.checkTypeParams_ok, ``Proof.params_fold, ``Proof.params_fold_nodup,
@@ -657,7 +657,7 @@ def extras : List Group := [
     ``Syntax.parseEnumMember_reads, ``Syntax.EnumMember.first, ``Syntax.enumMember_loop,
     ``Syntax.Laid.length_members, ``Syntax.parseEnum_reads, ``Syntax.parseDeclBody_enum, ``Syntax.parseDecl_enum,
     ``Syntax.parseDeclBody_class, ``Syntax.parseDecl_class, ``Syntax.parseCtorParam_reads, ``Syntax.ctorParams_reads,
-    ``Syntax.errorFields_empty, ``Syntax.errorAssignments_empty, ``Syntax.parseClass_reads,
+    ``Syntax.errorFields_empty, ``Syntax.errorAssignments_stop, ``Syntax.errorName_reads, ``Syntax.parseClass_reads,
     ``Syntax.Touching.importName, ``Syntax.importStep_ok, ``Syntax.import_loop, ``Syntax.parseImport_reads,
     ``Syntax.Stmt.declStart, ``Syntax.parseDecl_body, ``Syntax.parseDeclBody_function, ``Syntax.parseDeclBody_interface,
     ``Syntax.parseDeclBody_typeAlias, ``Syntax.parseDecl_stmt, ``Syntax.parseDecl_import,

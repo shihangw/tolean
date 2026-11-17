@@ -73,6 +73,15 @@ These operations exist in every supported edition. Native field declarations
 use `InitializeInstanceElements` (ES2022 §7.3.33) after `super` returns.
 The accepted constructor cannot observe the intermediate undefined values,
 so its final fields agree with the existing parameter-property model.
+
+An error may assign its own `name` property with a string literal. This uses
+`PutValue` (ES2024 §6.2.5.6), not the constructor's identity. Without an own
+name, `OrdinaryGet` (§10.1.8.1) reads Error.prototype.name, whose value is
+`"Error"` (§20.5.3.4, ES2015 §19.5.3.4). These operations exist in every
+supported edition. Before ES2022, the parser requires the name assignment
+after separately declared fields because downlevel field assignments create
+those properties. From ES2022, native field initialization creates them
+before the constructor body resumes after `super`.
 -/
 namespace tolean.TypeScript
 

@@ -410,17 +410,18 @@ theorem CtorParam.beqList_iff : (xs ys : List CtorParam) → CtorParam.beqList x
     cases ys <;> simp [CtorParam.beqList, CtorParam.beq_iff x, CtorParam.beqList_iff xs]
 
 /-- The constructor of an error class: its parameters and its message. -/
-def ctorBeq : Option (List CtorParam × Expr) → Option (List CtorParam × Expr) → Bool
+def ctorBeq : Option ErrorCtor → Option ErrorCtor → Bool
   | none, none => true
-  | some (ps, m), some (qs, n) => CtorParam.beqList ps qs && Expr.beq m n
+  | some (ps, m, name), some (qs, n, other) =>
+    CtorParam.beqList ps qs && Expr.beq m n && name == other
   | _, _ => false
 
-theorem ctorBeq_iff : (a b : Option (List CtorParam × Expr)) → ctorBeq a b = true ↔ a = b
+theorem ctorBeq_iff : (a b : Option ErrorCtor) → ctorBeq a b = true ↔ a = b
   | none, b => by cases b <;> simp [ctorBeq]
-  | some (ps, m), b => by
+  | some (ps, m, name), b => by
     cases b with
     | none => simp [ctorBeq]
-    | some q => obtain ⟨qs, n⟩ := q; simp [ctorBeq, CtorParam.beqList_iff ps, Expr.beq_iff m]
+    | some q => obtain ⟨qs, n, other⟩ := q; simp [ctorBeq, CtorParam.beqList_iff ps, Expr.beq_iff m, Bool.and_assoc]
 
 def Decl.beq : Decl → Decl → Bool
   | .import a0 a1 a2, .import b0 b1 b2 => decide (a0 = b0) && decide (a1 = b1) && decide (a2 = b2)

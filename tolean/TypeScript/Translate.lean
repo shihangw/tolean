@@ -518,12 +518,21 @@ structure ClassInfo where
   /-- The class declares a constructor. Without one, `new C(m)` takes only
   the message. -/
   hasCtor : Bool := false
+  runtimeName : Option String := none
   params : List (String × Ty × Bool)
 
 /-- The fields of an error of the class, with their types: the `readonly`
 parameters, in order. -/
 def ClassInfo.fields (c : ClassInfo) : List (String × Ty) :=
-  c.params.filterMap fun (n, t, ro) => if ro then some (n, t) else none
+  (c.params.filterMap fun (n, t, ro) => if ro then some (n, t) else none) ++
+    c.runtimeName.toList.map (fun _ => ("name", .string))
+
+def ClassInfo.errorMarks (c : ClassInfo) : List (Option String) :=
+  some "message" :: (c.params.map fun (n, _, ro) => if ro then some n else none) ++
+    c.runtimeName.toList.map (fun _ => some "name")
+
+def ClassInfo.errorArgs (c : ClassInfo) (message : IR.Expr) (args : List IR.Expr) : List IR.Expr :=
+  message :: args ++ c.runtimeName.toList.map IR.Expr.string
 
 
 /-- A string enum whose members code may read, such as `Color.Red`: its
@@ -3627,8 +3636,8 @@ def translateThrow (env : Env) (value : Expr) : TM IR.Body := do
       pure ca
     let code ← translateExpr (← fuelLimit) env (some .string) msg
     unless code.type == .string do reject msg.span "the message of an error must be a string"
-    let marks := some "message" :: info.params.map fun (n, _, ro) => if ro then some n else none
-    return .throw (.ext (.errorCase ⟨ctx.file, "Thrown"⟩ c marks) (code.value :: codes.map (·.value)))
+    return .throw (.ext (.errorCase ⟨ctx.file, "Thrown"⟩ c info.errorMarks)
+      (info.errorArgs code.value (codes.map (·.value))))
   -- A construction of an error class that the hoisting left alone has the
   -- wrong number of arguments.
   | .new _ c _ _ =>
@@ -4832,7 +4841,7 @@ def checkBorrowResult (s : Span) (borrow : Option Nat) (name : String)
 def borrowLocals (locals : List Local) (param : Option String) : List Local :=
   locals.map fun l => if param == some l.name then { l with binding := .map } else l
 
-def translateFunction (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr)))
+def translateFunction (thr : String → Bool) (cls : String → Option (Option ErrorCtor))
     (guards : List (String × Eval.GuardTest))
     (classes : List ClassInfo) (s : Span) (exported : Bool) (name : String) (typeParams : List String)
     (params : List Param) (returnType : Option TypeExpr) (body : Stmt) : TM IR.Decl := do
@@ -5016,7 +5025,7 @@ def moduleUsesNumber (m : Module) : Bool :=
     | .typeAlias _ _ name _ type => isNumberName name || typeUsesNumber type
     | .enum _ _ name _ => isNumberName name
     | .errorClass _ _ name ctor =>
-      isNumberName name || ctor.any fun (ps, m) =>
+      isNumberName name || ctor.any fun (ps, m, _) =>
         ps.any (fun p => isNumberName p.param.name || (p.param.type.map typeUsesNumber).getD false) ||
           exprUsesNumber m
     | .exportedVar _ d => varUsesNumber d
@@ -5130,7 +5139,7 @@ def translateCtorParam (p : CtorParam) : TM (String × Ty × Bool) := do
 /-- An error class: its name is taken, its parameters have primitive types,
 and its message is a string over its parameters. The class is recorded for
 the `throw`s of the file. -/
-def translateErrorClass (s : Span) (exported : Bool) (name : String) (ctor : Option (List CtorParam × Expr)) :
+def translateErrorClass (s : Span) (exported : Bool) (name : String) (ctor : Option ErrorCtor) :
     TM ClassInfo := do
   let name ← checkName s name
   if name == "error" then
@@ -5139,7 +5148,7 @@ def translateErrorClass (s : Span) (exported : Bool) (name : String) (ctor : Opt
   -- The checks of the constructor read the state and change nothing.
   let params ← isolated <| match ctor with
     | none => pure []
-    | some (ps, message) => do
+    | some (ps, message, _) => do
       let params ← ps.mapM translateCtorParam
       if (params.map (·.1)).eraseDups.length != params.length then
         reject s "a parameter of the constructor is declared twice"
@@ -5156,7 +5165,8 @@ def translateErrorClass (s : Span) (exported : Bool) (name : String) (ctor : Opt
       let code ← isolated (translateExpr (← fuelLimit) env (some .string) message)
       unless code.type == .string do reject message.span "the message of an error must be a string"
       pure params
-  let info : ClassInfo := { file := (← get).file, name, exported, hasCtor := ctor.isSome, params }
+  let info : ClassInfo :=
+    { file := (← get).file, name, exported, hasCtor := ctor.isSome, runtimeName := Eval.ctorName ctor, params }
   modify fun c => { c with errorClasses := c.errorClasses ++ [info] }
   return info
 
@@ -5311,7 +5321,7 @@ def prepareInlineDecl : Decl → TM Unit
   | .typeAlias _ _ _ params type => do
     modify fun c => { c with typeParams := params }
     prepareInlineType type
-  | .errorClass _ _ _ ctor => ctor.forM fun (params, expr) => do
+  | .errorClass _ _ _ ctor => ctor.forM fun (params, expr, _) => do
     prepareInlineParams (params.map (·.param))
     prepareInlineExpr expr
   | .exportedVar _ decl => prepareInlineVar decl
@@ -5329,7 +5339,7 @@ def prepareInline (decl : Decl) : TM Unit := do
 
 /-- One declaration: an output declaration, or none for an import, an
 export list or an error class. -/
-def translateDecl (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr)))
+def translateDecl (thr : String → Bool) (cls : String → Option (Option ErrorCtor))
     (guards : List (String × Eval.GuardTest))
     (classes : List ClassInfo) : Decl → TM (Option IR.Decl)
   | .import s names source => do translateImport s names source; return none
@@ -5352,7 +5362,7 @@ def translateDecl (thr : String → Bool) (cls : String → Option (Option (List
 /-- The new structures precede the declaration that first needs them. Type
 preparation does not change the declaration that the semantic proof reads. -/
 def translateDeclWithInline (thr : String → Bool) (cls : String → Option (Option
-    (List CtorParam × Expr))) (guards : List (String × Eval.GuardTest)) (classes : List ClassInfo)
+    ErrorCtor)) (guards : List (String × Eval.GuardTest)) (classes : List ClassInfo)
     (decl : Decl) : TM (Option IR.Decl) := do
   let before := (← get).inlineStructs.length
   prepareInline decl

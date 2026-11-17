@@ -328,13 +328,20 @@ def fromWords : Option String → List Word
   | some source => [identWord "from", [.string source]]
   | none => []
 
-/-- The lines of the constructor of an error class, inside the class:
-`constructor(params) {`, then `super(message);`, then `}`. -/
-def ctorLines : Option (List CtorParam × Expr) → List Line
+/-- The optional assignment of an error's runtime name. -/
+def errorNameWords : Option String → List Word
   | none => []
-  | some (params, message) =>
+  | some name => [keywordWord "this", punctWord ".", identWord "name", punctWord "=",
+      [.string name], punctWord ";"]
+
+/-- The lines of the constructor of an error class, inside the class:
+`constructor(params) {`, then its message and name, then `}`. -/
+def ctorLines : Option ErrorCtor → List Line
+  | none => []
+  | some (params, message, runtimeName) =>
     [(1, identWord "constructor" :: enclose "(" ")" (params.map CtorParam.words) ++ [punctWord "{"]),
-      (2, keywordWord "super" :: punctWord "(" :: message.words ++ [punctWord ")", punctWord ";"]),
+      (2, keywordWord "super" :: punctWord "(" :: message.words ++
+        ([punctWord ")", punctWord ";"] ++ errorNameWords runtimeName)),
       (1, [punctWord "}"])]
 
 def Decl.lines : Decl → List Line
@@ -532,7 +539,7 @@ def Decl.erase : Decl → Decl
   | .typeAlias _ exported name typeParams type => .typeAlias noSpan exported name typeParams type.erase
   | .enum _ exported name members => .enum noSpan exported name (members.map EnumMember.erase)
   | .errorClass _ exported name ctor =>
-    .errorClass noSpan exported name (ctor.map fun (ps, m) => (ps.map CtorParam.erase, m.erase))
+    .errorClass noSpan exported name (ctor.map fun (ps, m, n) => (ps.map CtorParam.erase, m.erase, n))
   | .exportedVar _ d => .exportedVar noSpan d.erase
   | .stmt s => .stmt s.erase
 

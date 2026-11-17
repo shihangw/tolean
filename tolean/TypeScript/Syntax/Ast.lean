@@ -941,6 +941,10 @@ structure ImportName where
   name : String
 deriving DecidableEq
 
+/-- Parameters, the super message, and an optional literal assignment to
+the runtime name property of an error. -/
+abbrev ErrorCtor := List CtorParam × Expr × Option String
+
 inductive Decl where
   /-- `import { a, b } from "source"`: named imports from another file. -/
   | «import» (span : Span) (names : List ImportName) (source : String)
@@ -959,10 +963,11 @@ inductive Decl where
   | enum (span : Span) (exported : Bool) (name : String) (members : List EnumMember)
   /-- `class Name extends Error { constructor(params) { super(message); } }`,
   an error class (ECMA-262 §15.7, and §20.5.1 for `Error`). Its fields are
-  the `readonly` parameters of its constructor. Without a constructor (`ctor`
+  the `readonly` parameters of its constructor and its optional runtime name.
+  Without a constructor (`ctor`
   is none), `new Name(m)` makes an error with the message `m`, as
   `new Error(m)` does. -/
-  | errorClass (span : Span) (exported : Bool) (name : String) (ctor : Option (List CtorParam × Expr))
+  | errorClass (span : Span) (exported : Bool) (name : String) (ctor : Option ErrorCtor)
   | exportedVar (span : Span) (decl : VarDecl)
   | stmt (stmt : Stmt)
 

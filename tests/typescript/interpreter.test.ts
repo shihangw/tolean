@@ -639,7 +639,6 @@ test('error field normalization refuses missing, repeated and computed assignmen
     ['readonly line: number;', 'readonly line: number', 'this.line = line;'],
     ['readonly line?: number;', 'line: number', 'this.line = line;'],
     ['', 'line: number', 'this.line = line;'],
-    ['readonly line: number;', 'line: number', 'this.name = "ParseError"; this.line = line;'],
     ['readonly a: number; readonly b: number;', 'b: number, a: number', 'this.a = a; this.b = b;'],
     ['readonly a: number;', 'a: number, readonly b: number', 'this.a = a;'],
     ['readonly a: number; readonly b: number;', 'a: number, b: number', 'this.b = b; this.a = a;'],
@@ -654,6 +653,105 @@ test('error field normalization refuses missing, repeated and computed assignmen
   const results = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
   expect(results).toHaveLength(cases.length);
   for (const [i, result] of results.entries()) expect(result.parsed, programs[i].source).toBe(false);
+});
+
+test('error names are ordinary properties, not constructor tags', async () => {
+  const prefix = `class ParseError extends Error {
+    readonly line: number;
+    constructor(message: string, line: number) {
+      super(message);
+      ASSIGNMENTS
+    }
+  }
+  export function check(line: number): number {
+    if (line < 0) throw new ParseError("negative line", line);
+    return line;
+  }`;
+  const cases = [undefined, 'ParseError', 'DifferentError', 'Error', '', '名字 😀', 'quote"\\\n']
+    .flatMap((name) => [false, true].flatMap((before) =>
+      [ts.ScriptTarget.ES2015, ts.ScriptTarget.ES2024].map((target) => {
+        const assignment = name === undefined ? '' : `this.name = ${JSON.stringify(name)};`;
+        const assignments = before ? `${assignment} this.line = line;` : `this.line = line; ${assignment}`;
+        return { name, source: prefix.replace('ASSIGNMENTS', assignments), target,
+          refused: name !== undefined && before && target < ts.ScriptTarget.ES2022 };
+      })));
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: cases.map(({ source, target }) => ({
+      source, target: target === ts.ScriptTarget.ES2015 ? 'ES2015' : 'ES2024',
+      calls: [{ function: 'check', args: [encode(-3)] }],
+    })) }), encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const results = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-error-names-'));
+  for (const [i, { name, source, target, refused }] of cases.entries()) {
+    const lean = results[i];
+    expect(lean?.parsed, source).toBe(!refused);
+    if (refused || lean === undefined || !lean.parsed) continue;
+    expect(lean.accepted, source).toBe(true);
+    const path = join(dir, `case${i}.mjs`);
+    writeFileSync(path, ts.transpileModule(source, {
+      compilerOptions: { target, module: ts.ModuleKind.ESNext },
+    }).outputText);
+    const mod = await import(pathToFileURL(path).href);
+    let actual: unknown;
+    try { mod.check(-3); } catch (error) { actual = error; }
+    expect(actual).toBeInstanceOf(Error);
+    expect((actual as Error).name).toBe(name ?? 'Error');
+    expect((actual as Error).constructor.name).toBe('ParseError');
+    const result = lean.results[0];
+    expect(result !== undefined && result !== null && 'throws' in result
+      ? canonical(result.throws) : 'did not throw', source).toBe(shownThrow(actual));
+  }
+});
+
+test('error constructors refuse repeated, computed and conditional names', () => {
+  const assignments = [
+    'this.name = label;',
+    'this.name = "a" + "b";',
+    'this.name = "a"; this.name = "b";',
+    'if (label === "x") this.name = "a";',
+    'this["name"] = "a";',
+  ];
+  const programs = assignments.map((assignment) => ({
+    source: `class E extends Error { constructor(label: string) { super(label); ${assignment} } }`,
+    calls: [],
+  }));
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify({ programs }), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const results = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  for (const [i, result] of results.entries()) expect(result.parsed, programs[i].source).toBe(false);
+});
+
+test('the evaluator reads inherited and own error names outside the translated subset', async () => {
+  const sources = [
+    'export function name(): string { return new Error("message").name; }',
+    `class E extends Error { constructor(text: string) { super(text); this.name = "Different"; } }
+      export function name(): string { return new E("message").name; }`,
+  ];
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: sources.map((source) => ({
+      source, calls: [{ function: 'name', args: [] }],
+    })) }), encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const results = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-error-name-read-'));
+  for (const [i, source] of sources.entries()) {
+    const lean = results[i];
+    expect(lean?.parsed).toBe(true);
+    if (lean === undefined || !lean.parsed) continue;
+    // General construction of error values is still outside translation.
+    expect(lean.accepted).toBe(false);
+    const path = join(dir, `case${i}.mjs`);
+    writeFileSync(path, ts.transpileModule(source, {
+      compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+    }).outputText);
+    const mod = await import(pathToFileURL(path).href);
+    const result = lean.results[0];
+    expect(result !== undefined && result !== null && 'value' in result
+      ? canonical(result.value) : 'did not return').toBe(canonical(encode(mod.name())));
+  }
 });
 
 test('type re-exports introduce no runtime binding', async () => {

@@ -134,7 +134,8 @@ with the same names and the same `readonly` marks. And its name is not one
 that the interpreter reads as a global, such as `Map`. -/
 def ClassAgrees (m : Eval.Scope) (c : ClassInfo) : Prop :=
   ∃ ctor, Eval.errorClassIn m c.name = some ctor ∧
-    (Eval.ctorParams ctor).map (fun p => (p.param.name, p.readonly)) = c.params.map (fun x => (x.1, x.2.2)) ∧
+    ((Eval.ctorParams ctor).map (fun p => (p.param.name, p.readonly)) = c.params.map (fun x => (x.1, x.2.2)) ∧
+      Eval.ctorName ctor = c.runtimeName) ∧
     isGlobalName c.name = false
 
 /-- Each function that a call may name is the one the interpreter calls: in
