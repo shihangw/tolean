@@ -22,12 +22,16 @@ dynamic reads in callbacks and loops until their proof helpers carry the
 lookup-safety evidence.
 
 The accepted guard form currently covers direct function-body control flow.
-Dynamic Record reads in callbacks and loops are refused until the callback
-and loop helper lemmas carry the lookup-safety evidence. Unguarded reads are
-also refused, including reads with a constant `??` fallback: JavaScript may
-read an inherited `Object.prototype` property there, so fallback evaluation
-does not justify replacing that property with `undefined`. `Object.keys`
-and `Object.entries` remain supported because they enumerate own properties.
+Even a guarded dynamic Record read inside a callback or loop is refused.
+Their helper lemmas must carry the lookup-safety evidence through the callback
+or loop invariant, using the same hypothesis-threading machinery as counted
+loops. A follow-up should prove that composition for callback and loop helpers.
+The corpus reject cases `recordCallbackLookup.ts` and `recordLoopLookup.ts`
+cover this limitation. Unguarded reads are also refused, including reads with
+a constant `??` fallback: JavaScript may read an inherited
+`Object.prototype` property there, so fallback evaluation does not justify
+replacing that property with `undefined`. `Object.keys` and `Object.entries`
+remain supported because they enumerate own properties.
 
 Optional-valued Records use `Option.join` when printed. This makes a missing
 property and an own property whose value is `undefined` both produce the
@@ -53,8 +57,9 @@ The relevant operations are `OrdinaryGet` (ECMA-262 2024 §10.1.8.1),
 ## Implementation checkpoint
 
 The supported certified subset is intentionally narrower than general
-`Record<string, V>` indexing: guarded reads are accepted, while unguarded and
-callback/loop reads are refused with a diagnostic explaining the missing
-lookup-safety proof. The generic type and own-key enumeration model remain
-available. Full corpus, callback/loop helper, and Node comparisons are still
-required before the draft pull request is ready.
+`Record<string, V>` indexing: direct guarded reads are accepted, while
+unguarded reads and reads inside callbacks or loops are refused with a
+diagnostic explaining the missing lookup-safety proof. The generic type and
+own-key enumeration model remain available. Callback and loop composition
+remains follow-up work; the two corpus reject cases preserve the current
+boundary.

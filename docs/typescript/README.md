@@ -1157,9 +1157,9 @@ Tolean rejects these, among others:
   around the read of that same record and key. The generated link theorem
   carries an explicit premise that the IR run succeeds. This excludes
   prototype lookups that the model cannot represent. Certification supports
-  direct function-body guards only; it refuses reads inside callbacks and
-  loops until their proof helpers carry lookup-safety evidence. It also
-  refuses unguarded reads, even with a fallback.
+  direct function-body guards only; it refuses even guarded reads inside
+  callbacks and loops until their proof helpers carry lookup-safety evidence.
+  It also refuses unguarded reads, even with a fallback.
   Optional-valued Records flatten `undefined` from a missing property and
   from an own `undefined` value to the same optional result. See the
   [decision on string-keyed records](../decisions/2026-11-16-string-record-keys.md).
