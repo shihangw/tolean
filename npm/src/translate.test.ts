@@ -99,7 +99,8 @@ describe('translateWorkspace', () => {
   ];
 
   function showConfig(files: { path: string; text: string }[]) {
-    const dir = mkdtempSync(join(tmpdir(), 'tolean-extends-'));
+    const workspace = mkdtempSync(join(tmpdir(), 'tolean-extends-'));
+    const dir = join(workspace, 'packages/geometry');
     try {
       for (const file of files) {
         const path = join(dir, file.path);
@@ -108,7 +109,7 @@ describe('translateWorkspace', () => {
       }
       return spawnSync(process.execPath, [createRequire(import.meta.url).resolve('typescript/bin/tsc'), '--showConfig', '-p', dir], { encoding: 'utf8' });
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(workspace, { recursive: true, force: true });
     }
   }
 
@@ -158,7 +159,7 @@ describe('translateWorkspace', () => {
   test.each([
     ['{"extends":"./missing.json"}', /has no config file/],
     ['{"extends":"@tsconfig/node22"}', /package or absolute extends/],
-    ['{"extends":"../base.json"}', /leaves the project/],
+    ['{"extends":"../base.json"}', /extends '\.\.\/base.json' has no config file/],
     ['{"extends":["./base.json",42]}', /array of strings/],
   ])('refuses unsupported extends: %s', async (text, error) => {
     await expect(translateWorkspace([
@@ -175,6 +176,21 @@ describe('translateWorkspace', () => {
       { path: 'base.json', text: '{"compilerOptions":42}' },
       { path: 'lib.ts', text: source },
     ])).rejects.toThrow(/base.json: compilerOptions must be an object/);
+  });
+
+  test('loads the shared monorepo base without imports like tsc', async () => {
+    const files = [
+      { path: 'tolean.json', text: '{"typescript":{"sources":["src/*.ts"]}}' },
+      { path: 'tsconfig.json', text: '{"extends":"../../tsconfig.base.json","include":["src"]}' },
+      { path: '../../tsconfig.base.json', text: base },
+      { path: 'src/area.ts', text: 'export function area(w: number, h: number): number { return w * h; }' },
+    ];
+    const shown = showConfig(files);
+    expect(shown.status, shown.stdout + shown.stderr).toBe(0);
+    expect(JSON.parse(shown.stdout).compilerOptions.moduleResolution).toBe('bundler');
+    const units = await translateWorkspace(files);
+    expect(units).toHaveLength(1);
+    expect(units[0]).toMatchObject({ kind: 'ok', output: 'src/Area.lean' });
   });
 
   test.each(['{} /*', '{"compilerOptions":{"moduleResolution":42}}', '[]', '{"compilerOptions":42}'])(
