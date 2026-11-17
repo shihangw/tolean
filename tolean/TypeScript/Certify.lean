@@ -379,6 +379,31 @@ partial def exprNames : IR.Expr → List String
   | .proj e _ _ => exprNames e
   | .int _ | .none | .bool _ | .string _ | .enumCase .. | .tagValue _ => []
 
+/-- The names that a loop body reads. -/
+partial def bodyNames : IR.Body → List String
+  | .value e => exprNames e
+  | .state _ | .yield .. | .done .. => []
+  | .exit e _ | .throw e => exprNames e
+  | .let _ e rest | .letTuple _ e rest => exprNames e ++ bodyNames rest
+  | .letArray _ _ elems rest => elems.flatMap exprNames ++ bodyNames rest
+  | .ite c a b => exprNames c ++ bodyNames a ++ bodyNames b
+  | .matchNull _ _ a b | .matchTag _ _ _ _ _ a b => bodyNames a ++ bodyNames b
+  | .letState _ branch rest => bodyNames branch ++ bodyNames rest
+  | .fold _ _ body items rest _ => exprNames items ++ bodyNames body ++ bodyNames rest
+  | .bind _ _ args rest | .letBorrow _ _ _ args rest => args.flatMap exprNames ++ bodyNames rest
+  | .letCall _ _ _ value _ _ _ body args rest =>
+    exprNames value ++ bodyNames body ++ args.flatMap exprNames ++ bodyNames rest
+  | .letLifted _ e rest => exprNames e ++ bodyNames rest
+
+/-- Whether a type contains a source type parameter. -/
+partial def tyHasParam : IR.Ty → Bool
+  | .param _ => true
+  | .option t | .optional t | .list t | .set t => tyHasParam t
+  | .tuple ts => ts.any tyHasParam
+  | .app _ ts => ts.any tyHasParam
+  | .map k v | .except k v => tyHasParam k || tyHasParam v
+  | _ => false
+
 /-- The callbacks in a body, inner ones first, in the order of the source. -/
 partial def bodyCallbacks : IR.Body → List Callback
   | .value e => exprCallbacks e
@@ -749,6 +774,12 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       let structType := if typeParams.isEmpty then structTy name else
         (IR.Ty.app ⟨"", name⟩ (typeParams.map IR.Ty.param) : IR.Ty).print names
       let codecArgs := String.join (typeParams.map fun p => s!" ({structRefs.codecName p})")
+      let decodeCall := if typeParams.isEmpty then s!"decode{name}"
+        else s!"(decode{name}{codecArgs})"
+      let decodeEncodeLaw := if typeParams.isEmpty then s!"decode{name}_encode{name}"
+        else s!"(decode{name}_encode{name}{codecArgs})"
+      let encodeNeNullLaw := if typeParams.isEmpty then s!"encode{name}_ne_null"
+        else s!"(encode{name}_ne_null{codecArgs})"
       -- The encoder of an interface that refers to itself would be recursive.
       if allFields.any (fun (_, t) => t.refs.any (·.name == name)) then
         throw s!"{file}: the recursive interface {name} has no certificate yet"
@@ -783,26 +814,26 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         else s!"obtain ⟨{", ".intercalate (fields.map fun (f, _) => s!"x_{f}")}⟩ := x\n  " ++
           String.join (optionalFields.map fun f => s!"cases x_{f} <;> ")
       encs := encs.push <|
-        s!"@[simp] theorem decode{name}_encode{name} {structGeneric} (x : {structType}) : decode{name} (some (encode{name} ({nv} := {nv}) x)) = x := by\n" ++
+        s!"@[simp] theorem decode{name}_encode{name} {structGeneric} (x : {structType}) : decode{name}{codecArgs} (some (encode{name} ({nv} := {nv}){codecArgs} x)) = x := by\n" ++
         s!"  {splitOptional}{if optionalFields.isEmpty then "; " else ""}simp [decode{name}, encode{name}, List.lookup, encList{if typeParams.isEmpty then "" else ", " ++ String.intercalate ", " (typeParams.map fun p => s!"{structRefs.codecName p}.decode_encode, {structRefs.codecName p}.encode_ne_null, {structRefs.codecName p}.encode_ne_undefined")}]"
       encs := encs.push <|
-        s!"@[simp] theorem encode{name}_ne_null {structGeneric} (x : {structType}) : encode{name} ({nv} := {nv}) x ≠ Val.null := by\n" ++
+        s!"@[simp] theorem encode{name}_ne_null {structGeneric} (x : {structType}) : encode{name} ({nv} := {nv}){codecArgs} x ≠ Val.null := by\n" ++
         s!"  simp [encode{name}]"
       encs := encs.push <|
-        s!"@[simp] theorem encode{name}_ne_undefined {structGeneric} (x : {structType}) : encode{name} ({nv} := {nv}) x ≠ Val.undefined := by\n" ++
+        s!"@[simp] theorem encode{name}_ne_undefined {structGeneric} (x : {structType}) : encode{name} ({nv} := {nv}){codecArgs} x ≠ Val.undefined := by\n" ++
         s!"  simp [encode{name}]"
       -- An array of the interface, as a loop over it reads its variable back.
       -- `simp` cannot find this from `decList_list` when the fields nest, so
       -- the certificate states it.
       encs := encs.push <|
-        s!"@[simp] theorem decList_decode{name} {structGeneric} (xs : List {structType}) : decList (decode{name}{codecArgs}) (some (Val.list (List.map (encode{name} ({nv} := {nv}){codecArgs}) xs))) = xs :=\n" ++
-        s!"  decList_list _ _ decode{name}_encode{name} xs"
+        s!"@[simp] theorem decList_decode{name} {structGeneric} (xs : List {structType}) : decList {decodeCall} (some (Val.list (List.map (encode{name} ({nv} := {nv}){codecArgs}) xs))) = xs :=\n" ++
+        s!"  decList_list _ _ {decodeEncodeLaw} xs"
       -- The same for an array of nullable values, which `simp` would
       -- otherwise reach only through side conditions that it cannot discharge
       -- once it unfolds the encoder.
       encs := encs.push <|
-        s!"@[simp] theorem decList_decNull_decode{name} {structGeneric} (xs : List (Option {structType})) : decList (decNull (decode{name}{codecArgs})) (some (Val.list (List.map (encNull (encode{name} ({nv} := {nv}){codecArgs})) xs))) = xs :=\n" ++
-        s!"  decList_list_null _ _ decode{name}_encode{name} encode{name}_ne_null xs"
+        s!"@[simp] theorem decList_decNull_decode{name} {structGeneric} (xs : List (Option {structType})) : decList (decNull {decodeCall}) (some (Val.list (List.map (encNull (encode{name} ({nv} := {nv}){codecArgs})) xs))) = xs :=\n" ++
+        s!"  decList_list_null _ _ {decodeEncodeLaw} {encodeNeNullLaw} xs"
       unless typeParams.isEmpty do
         let genericTy := (IR.Ty.app ⟨"", name⟩ (typeParams.map IR.Ty.param) : IR.Ty).print names
         encs := encs.push <|
@@ -1350,6 +1381,14 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         let .ext (.closure params body) [] := value
           | throw s!"{file}: cannot state the closure invariant for {n}"
         pure (n, s!"{r.eval "Val.closure"} {list (params.map str)} {stmt body}")
+      -- A step that ignores its element can also run over raw interpreter
+      -- values, so callers need no codec for an irrelevant type parameter.
+      let independentElement :=
+        !(bodyNames body).contains element &&
+        info.scope.all (fun (n, _) => !(bodyNames body).contains n) &&
+        info.stateTypes.all (fun t => !tyHasParam t) &&
+        closures.isEmpty && body.refs.isEmpty && (bodyCallbacks body).isEmpty &&
+        !restricted && !info.breaks && info.returns.isNone
       let scope := info.scope
       let state := stateNames.zip info.stateTypes
       let vars := state ++ scope
@@ -1512,6 +1551,58 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         -- With no locals in the state, the goal is `ρ = ρ`, which the step
         -- before may already close.
         s!"    all_goals simp [{", ".intercalate ((List.range count).map fun i => s!"Env.set_of_lookup _ _ _ h{i}")}]"
+      if independentElement && count > 0 then
+        let untypedName := s!"{lemmaName}_untyped"
+        if r.idents.contains untypedName then
+          throw s!"{file}: reserved certificate lemma name {untypedName}"
+        let foldMapLemma := r.cert "foldl_map_encoded"
+        unless lemmaNames.contains foldMapLemma do
+          -- The interpreter folds encoded elements, but the translation folds
+          -- source values. A step that ignores each element preserves the fold.
+          encs := encs.push <|
+            s!"theorem {foldMapLemma} \{α β σ : Type} (encode : α → β) (f : σ → α → σ) " ++
+            s!"(g : σ → β → σ) (h : ∀ s x, g s (encode x) = f s x) (init : σ) (xs : List α) :\n" ++
+            s!"    List.foldl g init (List.map encode xs) = List.foldl f init xs := by\n" ++
+            "  induction xs generalizing init with\n" ++
+            "  | nil => rfl\n" ++
+            "  | cons x xs ih => simp only [List.map_cons, List.foldl_cons, h, ih]"
+          lemmaNames := lemmaNames.push foldMapLemma
+        let untypedCoded := coded.take count
+        let untypedHypNames := (List.range count).map (s!"h{·}")
+        let untypedBindHyps := if count == 1 then "have h0 := hI"
+          else "obtain ⟨" ++ ", ".intercalate untypedHypNames ++ "⟩ := hI"
+        let untypedInv (ρ : String) :=
+          " ∧ ".intercalate (untypedCoded.map fun (n, e, dec) =>
+            s!"{ρ}.lookup {str n} = some ({e} ({dec} ({ρ}.lookup {str n})))")
+        let untypedStep (_ρ : String) :=
+          s!"(fun ({IR.tuple stateNames} : {IR.foldState names info}) ({element} : Val {nv}) => (\n" ++
+            "\n".intercalate stepLines ++ s!" : {stepTy}))"
+        let untypedRun (ρ : String) :=
+          s!"(List.foldl {untypedStep ρ} {decState ρ} items)"
+        let untypedResult (ρ : String) :=
+          s!"(.normal {upd (untypedRun ρ) ρ})"
+        let untypedSimpSet := ", ".intercalate
+          (envLemmas ++ lemmaNames.toList ++ untypedHypNames)
+        loopLemmas := loopLemmas.push (r.cert untypedName)
+        thms := thms.push <|
+          s!"theorem {untypedName} {generic} (fs : List (tolean.DeclRef × List String × tolean.TypeScript.IR.Body))\n" ++
+          s!"    (fuel : Nat) (items : List (Val {nv})) (ρ : Env {nv}) (hI : {untypedInv "ρ"}) :\n" ++
+          s!"    tolean.TypeScript.IR.Body.runFold fs {fuel} {list (stateNames.map str)} {str element}\n" ++
+          s!"      ({term body}) ρ items = some {untypedResult "ρ"} := by\n" ++
+          s!"  suffices h : tolean.TypeScript.IR.Body.runFold fs {fuel} {list (stateNames.map str)} {str element}\n" ++
+          s!"      ({term body}) ρ (List.map id items) = some {untypedResult "ρ"} by\n" ++
+          "    simpa only [List.map_id] using h\n" ++
+          s!"  refine tolean.TypeScript.Proof.runFold_foldl fs {fuel} _ {str element} _ id\n" ++
+          s!"      (fun s ρ => {upd "s" "ρ"}) (fun ρ => {decState "ρ"}) (fun ρ => {untypedStep "ρ"})\n" ++
+          s!"    (fun ρ => {untypedInv "ρ"}) ?_ ?_ items ρ hI\n" ++
+          s!"  · intro ρ s x hI\n" ++
+          s!"    {untypedBindHyps}\n    try simp only []\n" ++
+          generalize "ρ" untypedCoded ++ destruct ++
+          s!"    {casesOn decls stateVars}link_tac [{untypedSimpSet}, {", ".intercalate untypedHypNames}]\n" ++
+          s!"  · intro ρ hI\n" ++
+          s!"    {untypedBindHyps}\n    try simp only []\n" ++
+          generalize "ρ" untypedCoded ++
+          s!"    all_goals simp [{", ".intercalate ((List.range count).map fun i => s!"Env.set_of_lookup _ _ _ h{i}")}]"
     -- A direct forwarding call applies the callee's conditions to its actual
     -- arguments. Lambda binding avoids capturing names in those arguments.
     for callee in ((stmtsOf syntaxBody).flatMap stmtCalls).eraseDups do
