@@ -1854,6 +1854,45 @@ test('ordinary classes refuse observable prototypes and non-static dispatch', ()
   }
 });
 
+test('readonly classes traverse catch handlers and leave array operations to the checker', async () => {
+  const accepted = ['readonlyClassArrayNames', 'readonlyClassCatch'];
+  const calls = [
+    ['literal', 'inferred', 'annotated', 'length', 'dispatched'],
+    ['f', 'localCatch', 'untouched'],
+  ];
+  for (const [index, name] of accepted.entries()) {
+    const source = readFileSync(new URL(`./corpus/translate/accept/${name}.ts`, import.meta.url), 'utf8');
+    const functions = calls[index]!;
+    const run = spawnSync(tolean, ['interpret'], {
+      input: JSON.stringify({ programs: [{ source, calls: functions.map(fn => ({ function: fn, args: [] })) }] }),
+      encoding: 'utf8',
+    });
+    expect(run.status, run.stderr).toBe(0);
+    const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+    expect(result?.parsed).toBe(true);
+    if (!result?.parsed) throw new Error('class regression fixture did not parse');
+    expect(result.accepted).toBe(true);
+    const path = join(mkdtempSync(join(tmpdir(), 'tolean-class-catch-array-')), `${name}.mjs`);
+    writeFileSync(path, ts.transpileModule(source, {
+      compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+    }).outputText);
+    const mod = await import(pathToFileURL(path).href) as Record<string, () => unknown>;
+    expect(result.results).toEqual(functions.map(fn => ({ value: encode(mod[fn]!()) })));
+  }
+  for (const name of ['CatchReturn', 'CatchAlias', 'CatchMethod', 'CatchLocal', 'CatchShadow', 'TryReturn']) {
+    const source = readFileSync(new URL(`./corpus/translate/reject/readonlyClass${name}.ts`, import.meta.url), 'utf8');
+    const run = spawnSync(tolean, ['interpret'], {
+      input: JSON.stringify({ programs: [{ source, calls: [{ function: 'f', args: [] }] }] }),
+      encoding: 'utf8',
+    });
+    expect(run.status, run.stderr).toBe(0);
+    const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+    expect(result?.parsed).toBe(true);
+    if (!result?.parsed) throw new Error('class refusal fixture did not parse');
+    expect(result.accepted).toBe(false);
+  }
+});
+
 test('readonly classes preserve provenance and do not blacklist Map methods', async () => {
   const sources = [
     `class C {

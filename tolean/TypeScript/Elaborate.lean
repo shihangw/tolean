@@ -58,20 +58,6 @@ def exactClassFuel (ctx : Context) : Nat → TypeExpr → Option ClassDecl
 def exactClass (ctx : Context) (ty : TypeExpr) : Option ClassDecl :=
   exactClassFuel ctx 8 ty
 
-def mayBeClassFuel (ctx : Context) : Nat → TypeExpr → Bool
-  | 0, _ => true
-  | fuel + 1, ty =>
-    if (exactClassFuel ctx fuel ty).isSome then true else
-    match ty with
-    | .ref _ name [] =>
-      match ctx.aliases.lookup name with
-      | some alias => mayBeClassFuel ctx fuel alias
-      | none => false
-    | .paren _ inner => mayBeClassFuel ctx fuel inner
-    | .union _ members => members.any (mayBeClassFuel ctx fuel)
-    | .keyword _ "any" | .keyword _ "unknown" => true
-    | _ => false
-
 def containsClassTypeFuel (ctx : Context) : Nat → TypeExpr → Bool
   | 0, _ => true
   | fuel + 1, ty =>
@@ -119,19 +105,6 @@ def infer (ctx : Context) (env : Types) : Nat → Expr → Option TypeExpr
 def receiverClass (ctx : Context) (env : Types) (recv : Expr) : Option ClassDecl :=
   (infer ctx env 1000 recv).bind (exactClass ctx)
 
-inductive ReceiverKind where
-  | classInstance (decl : ClassDecl)
-  | nonClass
-  | unresolved
-
-def receiverKind (ctx : Context) (env : Types) (recv : Expr) : ReceiverKind :=
-  match infer ctx env 1000 recv with
-  | none => .unresolved
-  | some ty =>
-    match exactClass ctx ty with
-    | some d => .classInstance d
-    | none => if mayBeClassFuel ctx 8 ty then .unresolved else .nonClass
-
 def constructedClass (ctx : Context) : Expr → Option ClassDecl
   | .new _ name [] _ => ctx.classes.find? (·.name == name)
   | _ => none
@@ -153,9 +126,6 @@ def checkClassBinding (ctx : Context) (s : Span) (d : VarDecl) : Result Unit := 
     unless (constructedClass ctx init).any (·.name == cls.name) do
       refuse s "class-typed locals must be initialized directly with new for the declared class"
 
-def isMethod (ctx : Context) (name : String) : Bool :=
-  ctx.classes.any fun d => (methods d).any (·.name == name)
-
 mutual
 
 def expr (ctx : Context) (env : Types) : Nat → Expr → Result Expr
@@ -175,33 +145,25 @@ def expr (ctx : Context) (env : Types) : Nat → Expr → Result Expr
         pure (.call s (.ident s (ctorName name)) args')
       else pure (.new s name ts args')
     | .call s (.member ms recv name) args =>
-      match receiverKind ctx env recv with
-      | .classInstance d =>
+      match receiverClass ctx env recv with
+      | some d =>
         unless (methods d).any (·.name == name) do
           refuse ms "only a declared method can be called on a class instance"
         let recv' ← receiver ctx env f recv
         pure (.call s (.ident ms (methodName d.name name))
           (recv' :: (← args.mapM (expr ctx env f))))
-      | .unresolved =>
-        if isMethod ctx name then
-          refuse ms "method receiver must have exactly one statically known class type, not a union, any or an unknown type"
-        pure (.call s (.member ms (← expr ctx env f recv) name) (← args.mapM (expr ctx env f)))
-      | .nonClass =>
+      | none =>
+        -- The ordinary checker handles receivers without an exact class type.
+        -- Lowered class interfaces have no methods, so this cannot add dispatch.
         pure (.call s (.member ms (← expr ctx env f recv) name) (← args.mapM (expr ctx env f)))
     | .call s callee args =>
       pure (.call s (← expr ctx env f callee) (← args.mapM (expr ctx env f)))
     | .member s recv name =>
       if name == "constructor" then refuse s "constructor property identity is not supported"
       let recv' ← receiver ctx env f recv
-      if let .classInstance d := receiverKind ctx env recv then
+      if let some d := receiverClass ctx env recv then
         if (methods d).any (·.name == name) then refuse s "class methods may not be extracted as values"
         unless (fields d).any (·.name == name) do refuse s "class instances expose only their readonly fields"
-      else
-        match receiverKind ctx env recv with
-        | .unresolved =>
-          if isMethod ctx name then
-            refuse s "class methods may not be extracted from a receiver of unknown type"
-        | _ => pure ()
       pure (.member s recv' name)
     | .index s recv key | .optIndex s recv key =>
       if (receiverClass ctx env recv).isSome then refuse s "computed class properties are not supported"
@@ -209,9 +171,7 @@ def expr (ctx : Context) (env : Types) : Nat → Expr → Result Expr
       | .index .. => pure (.index s (← expr ctx env f recv) (← expr ctx env f key))
       | _ => pure (.optIndex s (← expr ctx env f recv) (← expr ctx env f key))
     | .optMember s recv name =>
-      if (receiverClass ctx env recv).isSome ||
-          ((receiverKind ctx env recv matches .unresolved) && isMethod ctx name) ||
-          name == "constructor" then
+      if (receiverClass ctx env recv).isSome || name == "constructor" then
         refuse s "optional class property access and method dispatch are not supported"
       pure (.optMember s (← expr ctx env f recv) name)
     | .binary s .instanceof _ _ => refuse s "'instanceof' is not supported by the ordinary-class desugaring"
@@ -284,6 +244,9 @@ def stmt (ctx : Context) (env : Types) : Nat → Stmt → Result Stmt
     | .ifStmt s t a b =>
       pure (.ifStmt s (← expr ctx env f t) (← stmt ctx env f a) (← b.mapM (stmt ctx env f)))
     | .throwStmt s e => pure (.throwStmt s (← expr ctx env f e))
+    | .tryCatch s body name handler =>
+      pure (.tryCatch s (← stmt ctx env f body) name
+        (← stmt ctx ((name, some (.keyword s "unknown")) :: env) f handler))
     | .whileStmt s t b => pure (.whileStmt s (← expr ctx env f t) (← stmt ctx env f b))
     | .forStmt s init test update body =>
       let env' := match init with | some d => (d.name, bindingType ctx env d) :: env | none => env
@@ -311,7 +274,7 @@ def stmt (ctx : Context) (env : Types) : Nat → Stmt → Result Stmt
         refuse s "functions may not return class instances inside containers because their provenance cannot be checked"
       pure (.funDecl s name tps ps rt
         (← stmt { ctx with self := none, expectedReturn := rt } (paramsEnv ps ++ env) f body))
-    | _ => pure st
+    | .breakStmt _ | .continueStmt _ | .empty _ => pure st
 
 def stmts (ctx : Context) (env : Types) (fuel : Nat) : List Stmt → Result (List Stmt)
   | [] => pure []

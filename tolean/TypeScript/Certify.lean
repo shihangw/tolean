@@ -1760,10 +1760,10 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       "    tolean.TypeScript.Elaborate.paramsEnv, tolean.TypeScript.Elaborate.expr,\n" ++
       "    tolean.TypeScript.Elaborate.receiver, tolean.TypeScript.Elaborate.stmt,\n" ++
       "    tolean.TypeScript.Elaborate.stmts, tolean.TypeScript.Elaborate.infer,\n" ++
-       "    tolean.TypeScript.Elaborate.receiverClass, tolean.TypeScript.Elaborate.receiverKind,\n" ++
+       "    tolean.TypeScript.Elaborate.receiverClass,\n" ++
        "    tolean.TypeScript.Elaborate.checkClassBinding, tolean.TypeScript.Elaborate.hasClassType,\n" ++
        "    tolean.TypeScript.Elaborate.constructedClass, tolean.TypeScript.Elaborate.directClassType,\n" ++
-       "    tolean.TypeScript.Elaborate.containsClassTypeFuel, tolean.TypeScript.Elaborate.mayBeClassFuel,\n" ++
+       "    tolean.TypeScript.Elaborate.containsClassTypeFuel,\n" ++
        "    tolean.TypeScript.Elaborate.exactClass,\n" ++
        "    tolean.TypeScript.Elaborate.exactClassFuel,\n" ++
       "    tolean.TypeScript.Elaborate.fields, tolean.TypeScript.Elaborate.classType,\n" ++
