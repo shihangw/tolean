@@ -622,6 +622,25 @@ partial def loopsOf : IR.Body → List (List String × String × IR.Body × IR.L
   | .letCall _ _ _ _ _ _ _ body _ rest => loopsOf body ++ loopsOf rest
   | .bind _ _ _ rest | .letLifted _ _ rest | .letBorrow _ _ _ _ rest => loopsOf rest
 
+/-- Nullish branches on the path to a loop, in outermost-first order. -/
+def loopGuards (span : Span) : IR.Body →
+    Option (List (String × Bool × IR.MatchNullKind × Bool))
+  | .matchNull n kind a b =>
+    ((loopGuards span a).map ((n, false, kind, true) :: ·)).orElse fun _ =>
+      (loopGuards span b).map ((n, true, kind, true) :: ·)
+  | .handle a b | .ite _ a b | .letState _ a b |
+      .matchTag _ _ _ _ _ a b =>
+    (loopGuards span a).orElse fun _ => loopGuards span b
+  | .fold _ _ body _ rest info =>
+    if info.span == span then some []
+    else (loopGuards span body).orElse fun _ => loopGuards span rest
+  | .let _ _ rest | .letArray _ _ _ rest | .letTuple _ _ rest |
+      .bind _ _ _ rest | .letLifted _ _ rest | .letBorrow _ _ _ _ rest =>
+    loopGuards span rest
+  | .letCall _ _ _ _ _ _ _ body _ rest =>
+    (loopGuards span body).orElse fun _ => loopGuards span rest
+  | .value _ | .state _ | .yield .. | .done .. | .exit .. | .throw _ => none
+
 /-- The closure values that calls in a body require from their environment. -/
 def closureReads : IR.Body → List (String × IR.Expr)
   | .handle a b => closureReads a ++ closureReads b
@@ -970,6 +989,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       (exprCallbacks cb).any fun (_, _, _, _, child, _) => child.span == span
     let mut callbackConditions : List (Span × String) := []
     let mut loopConditions : List (Span × String) := []
+    let mut countedConditions : List (Span × String) := []
     let mut callbackCalls : List String := []
     let enclosingLoopsOf := fun span => (loopsOf outBody).filter fun (_, _, body, _, _) =>
       (bodyCallbacks body).any fun (_, _, _, _, child, _) => child.span == span
@@ -1349,6 +1369,17 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         if r.idents.contains hname then throw s!"{file}: reserved certificate hypothesis name {hname}"
         let condition :=
           s!"({r.write "JSNumber.countUp?" "tolean.TypeScript.JSNumber.countUp?"} ({k} : _root_.Int) ({bound.print names})).isSome"
+        let relevantGuards := fun guards =>
+          guards.filter fun (n, _, _, _) => (sortInputNames bound).contains n
+        -- Each enclosing step needs the child's safety condition in its own
+        -- scope. The function hypothesis alone cannot justify a loop lemma.
+        for (_, _, outerBody, outerInfo, _) in loopsOf outBody do
+          if let some guards := loopGuards info.span outerBody then
+            countedConditions := countedConditions ++
+              [(outerInfo.span, guardCondition r (relevantGuards guards) condition)]
+        let some guards := loopGuards info.span outBody
+          | throw s!"{file}: no narrowing context for counted loop in {name}"
+        let condition := guardCondition r (relevantGuards guards) condition
         obligations := obligations ++ [(hname, condition)]
         inputConditions := inputConditions ++ [condition]
       let parentLoop := parentLoopOf info.span
@@ -1375,13 +1406,17 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
             let binders := " ".intercalate (formals.map fun (p, t) => s!"({p} : {t.print names})")
             let arguments := " ".intercalate (actuals.map fun e => s!"({e.print names})")
             conditions := conditions ++ [guardCondition r guards s!"((fun {binders} => {condition}) {arguments})"]
-      let restricted := !conditions.isEmpty
-      if restricted then
+      let sortRestricted := !conditions.isEmpty
+      if sortRestricted then
         let outerScope := match parentLoop with
           | some (_, p, _, outerInfo, _) => (p, outerInfo.elem) :: outerInfo.scope
           | none => outParams
         if info.scope.any (fun (n, ty) => (outerScope.lookup n).any (fun outer => outer.print names != ty.print names)) then
           throw s!"{file}: sort conditions across an enclosing nullable narrowing need scope propagation in {name}"
+      let sortConditions := conditions
+      conditions := conditions ++ countedConditions.filterMap fun (span, condition) =>
+        if span == info.span then some condition else none
+      let restricted := !conditions.isEmpty
       let some bodyStmt := loopBody syntaxBody info.span
         | throw s!"{file}: no loop at {info.span.start.line}:{info.span.start.col} in {name}"
       -- The loop lemma's rewrite does not reach a list of encoded lists yet,
@@ -1419,8 +1454,9 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         let binders := " ".intercalate (info.scope.map fun (n, t) => s!"({n} : {t.print names})")
         let arguments := String.join (info.scope.map fun (n, _) => s!" {decode ρ n}")
         s!"∀ x ∈ items, ((fun ({element} : {info.elem.print names}) {binders} => {predicate}) x{arguments})"
-      if restricted then
-        let raw := s!"∀ _sortElement' ∈ ({loopItems.print names}), ((fun ({element} : {info.elem.print names}) => {predicate}) _sortElement')"
+      if sortRestricted then
+        let sortPredicate := " ∧ ".intercalate (sortConditions.map fun c => s!"({c})")
+        let raw := s!"∀ _sortElement' ∈ ({loopItems.print names}), ((fun ({element} : {info.elem.print names}) => {sortPredicate}) _sortElement')"
         if let some (outerState, _, _, outerInfo, _) := parentLoop then
           if (sortInputNames loopItems).any outerState.contains then
             throw s!"{file}: a nested sort condition depends on changing loop state in {name}"

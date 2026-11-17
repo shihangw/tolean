@@ -424,6 +424,56 @@ test('counted-loop certificates agree with Node for parameter and literal bounds
   expect(mod.nearSafe(2 ** 53)).toBe(2);
 });
 
+test('counted-loop narrowing and nesting preserve safe results and unsafe refusals', async () => {
+  const source = readFileSync(new URL('./corpus/certify/accept/countedLoopScopes.ts', import.meta.url), 'utf8');
+  expect(source).toContain('// certify: required');
+  const limits = fc.sample(fc.integer({ min: 0, max: 12 }), { seed, numRuns: 20 });
+  const calls: Array<{ function: string; args: Array<unknown> }> = [
+    { function: 'nullable', args: [null] },
+    { function: 'optional', args: [undefined] },
+    { function: 'nullableRecord', args: [null] },
+    { function: 'narrowedNested', args: [[1n], null] },
+    { function: 'narrowedInLoop', args: [[1n], null] },
+    ...limits.flatMap(limit => [
+      { function: 'nullable', args: [limit] },
+      { function: 'optional', args: [limit] },
+      { function: 'nullableRecord', args: [{ value: limit }] },
+      { function: 'narrowedNested', args: [[1n, 2n], limit] },
+      { function: 'narrowedInLoop', args: [[1n, 2n], { value: limit }] },
+    ]),
+    { function: 'inForOf', args: [[1n], Number.MAX_SAFE_INTEGER] },
+    { function: 'inCounted', args: [2, Number.MAX_SAFE_INTEGER] },
+    { function: 'deeper', args: [[1n, 2n], 2, Number.MAX_SAFE_INTEGER] },
+  ];
+  const unsafe = [
+    { function: 'inForOf', args: [[1n], Infinity] },
+    { function: 'inCounted', args: [1, Infinity] },
+    { function: 'deeper', args: [[1n], 1, Infinity] },
+  ];
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: [{
+      source, calls: [...calls, ...unsafe].map(call => ({
+        function: call.function, args: call.args.map(encode),
+      })),
+    }] }), encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (result === undefined || !result.parsed) return;
+  expect(result.accepted).toBe(true);
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-counted-scopes-'));
+  const path = join(dir, 'scopes.mjs');
+  writeFileSync(path, ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+  }).outputText);
+  const mod = await import(pathToFileURL(path).href) as Record<string, (...args: Array<unknown>) => unknown>;
+  expect(result.results.slice(0, calls.length)).toEqual(
+    calls.map(call => ({ value: encode(mod[call.function]!(...call.args)) })),
+  );
+  expect(result.results.slice(calls.length)).toEqual(unsafe.map(() => null));
+});
+
 test('local returns and sibling calls preserve captured state and agree with Node', async () => {
   const source = ['localFunctionReturnsAndChanges', 'localFunctionSiblingCalls'].map(name =>
     readFileSync(new URL(`./corpus/translate/accept/${name}.ts`, import.meta.url), 'utf8')).join('\n');
