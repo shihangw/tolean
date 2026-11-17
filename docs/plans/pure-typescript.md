@@ -297,8 +297,13 @@ leaves a gap.
 12. **P1.** Non-literal `bigint` exponents, `BigInt(number)`,
     `toISOString`, and non-literal padding lengths. These still need a
     model of built-in errors whose messages the program cannot read.
-13. **P2.** Classes with `readonly` fields and methods that do not change
-    `this`.
+13. **P2.** Ordinary classes remain refused. A structure plus free functions
+    would not preserve constructor identity, `instanceof`, prototype lookup
+    or method receivers. The evaluator and intermediate representation do not
+    model those observations. Mutable fields and methods that change `this`,
+    getters, setters, inheritance other than from `Error`, and static state
+    remain refused too. The [decision record](../decisions/2026-11-17-readonly-classes.md)
+    explains the boundary. The existing `extends Error` subset is separate.
 14. **P1.** Local functions: general final return expressions in functions
     that change captured variables, implicit transitive captures, longer
     sibling call chains, and value-returning callers with only indirect state changes.

@@ -627,6 +627,16 @@ rule. The `readonly` mark on a constructor
 parameter of an error class is different: it declares a field, so Tolean
 still uses it there.
 
+Ordinary classes remain refused, including classes whose fields are
+`readonly` and whose methods do not change `this`. A class creates a runtime
+constructor and prototype. The current evaluator models object properties but
+not constructor identity, `instanceof`, prototype lookup or method receivers.
+Translating such a class as a structure and free functions would not preserve
+those behaviors. The existing `class C extends Error` subset is separate;
+its accepted form and limits are listed below. The
+[class decision](../decisions/2026-11-17-readonly-classes.md) explains why
+ordinary classes remain outside the subset.
+
 Inline object types work in aliases, parameters, return types, interface
 fields, array elements and local annotations. They also work as the members
 of a named tagged union:
