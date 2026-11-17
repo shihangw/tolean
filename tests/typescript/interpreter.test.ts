@@ -1105,6 +1105,54 @@ test('renamed, partial and call-source object bindings agree with Node', async (
   }
 });
 
+test('object bindings inside try bodies are refused', () => {
+  const source = readFileSync(new URL('./corpus/translate/reject/tryObjectDestructure.ts', import.meta.url), 'utf8');
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: [{ source, calls: [{
+      function: 'inTry', args: [encode({ a: 3n, b: 5n })],
+    }] }] }),
+    encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (result === undefined || !result.parsed) throw new Error('try refusal fixture did not parse');
+  expect(result.accepted).toBe(false);
+  expect(result.results[0]?.value).toBeUndefined();
+});
+
+test('object bindings compose with catch and indexed access in Node', async () => {
+  const source = readFileSync(new URL('./corpus/translate/accept/objectDestructureComposition.ts', import.meta.url), 'utf8');
+  const calls: Array<{ function: string; args: Array<unknown> }> = [];
+  for (const [a, b] of [[0n, 0n], [-19n, 27n], [2n ** 80n, -3n]]) {
+    const pair = { a, b };
+    for (const fail of [false, true]) calls.push({ function: 'inCatch', args: [pair, fail] });
+    calls.push({ function: 'fromIndex', args: [{ pair, other: { a: b, b: a } }] });
+  }
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: [{ source, calls: calls.map(c => ({
+      function: c.function, args: c.args.map(encode),
+    })) }] }),
+    encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (result === undefined || !result.parsed) throw new Error('composition fixture did not parse');
+  expect(result.accepted).toBe(true);
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-object-composition-'));
+  const path = join(dir, 'index.mjs');
+  writeFileSync(path, ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+  }).outputText);
+  const mod = await import(pathToFileURL(path).href) as Record<string, (...xs: Array<unknown>) => unknown>;
+  for (const [i, call] of calls.entries()) {
+    const value = result.results[i]?.value;
+    expect(value === undefined ? 'no value' : canonical(value), call.function)
+      .toBe(canonical(encode(mod[call.function](...call.args))));
+  }
+});
+
 test('an object binding cannot read its own name in its initializer', async () => {
   const source = `
     export interface Pair { readonly a: number; readonly b: number; }
