@@ -313,6 +313,11 @@ leaves a gap.
     catch tests `e` with `instanceof` or ignores it. Keep `finally`, rethrowing
     a changed value and throwing anything but an error refused. See the
     [`try` and `catch` open question](#open-questions).
+    The [initial scope](../decisions/2026-11-17-try-catch.md) refuses try
+    bodies that change outer state and built-in operations whose errors
+    are not modeled. Mutable try bodies need environments on thrown
+    completions. Step 17 remains in progress until the parser, translation
+    and soundness proof cover the accepted slice.
 18. **P2.** Proof obligations: Tolean states `Consistent cmp` for a comparator
     outside the two known shapes and accepts a project-supplied proof beside
     the output. The build checks the proof for `sorry` and axioms. The same
@@ -507,8 +512,9 @@ decision record then states the choice and any limits that remain.
 - Should `try` and `catch` come in a later step? The survey had none, but much
   other pure code catches its own errors.
 
-  Recommendation: yes. Once the IR has `Except`, the interpreter
-  change is small. The first version takes `try { … } catch (e) { … }` where
+  Decision: start with the [restricted catch scope](../decisions/2026-11-17-try-catch.md).
+  `Except` alone does not preserve locals changed before a throw, so the
+  first version refuses those changes. It takes `try { … } catch (e) { … }` where
   the catch tests `e` with `instanceof` or ignores it, and refuses `finally`,
   a rethrow of a changed value, and a `throw` of anything but an error. The
   locals that the `try` body assigns become its result tuple, as a loop
