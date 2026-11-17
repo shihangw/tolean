@@ -2,6 +2,10 @@
 
 **Status:** accepted · **Date:** 2026-11-15
 
+The [external config inputs decision](2026-11-17-external-tsconfig-inputs.md)
+supersedes the refusal of relative bases outside the project. The merge
+rules and import restrictions below still apply.
+
 Tolean loads relative tsconfig inheritance before it checks import resolution
 options. This replaces the blanket refusal of `extends` in the
 [import resolution decision](2026-11-14-project-import-resolution.md).
