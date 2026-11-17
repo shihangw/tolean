@@ -88,17 +88,24 @@ def Refs.full (r : Refs) (name : String) : String := r.write name name
 def Refs.codec (r : Refs) (name : String) : Option String :=
   (r.codecs.find? (·.1 == name)).map (·.2)
 
-/-- A local codec binder that cannot hide an identifier from the source. -/
-def Refs.codecName (r : Refs) (name : String) : String :=
-  let base := s!"toleanCodec_{name}"
-  let candidates := (List.range (r.idents.length + 1)).map fun n =>
-    base ++ String.join (List.replicate n "_")
-  (candidates.find? fun candidate => !(r.idents.contains candidate)).getD (base ++ "_")
+/-- Allocate codecs together so that neither source names nor earlier codecs
+can hide a binder in this declaration. -/
+def Refs.withCodecs (r : Refs) (params : List String) : Refs := Id.run do
+  let mut used := r.idents
+  let mut codecs := []
+  for name in params do
+    let base := s!"toleanCodec_{name}"
+    let candidates := (List.range (used.length + 1)).map fun n =>
+      base ++ String.join (List.replicate n "_")
+    let fresh := (candidates.find? fun candidate => !(used.contains candidate)).getD (base ++ "_")
+    used := fresh :: used
+    codecs := codecs ++ [(name, fresh)]
+  return { r with codecs }
 
 /-- The binders for codecs that a generic declaration needs. -/
-def Refs.codecBinders (r : Refs) (nv : String) (params : List String) : String :=
-  String.join (params.map fun name =>
-    s!" \{{name} : Type} ({r.codecName name} : tolean.TypeScript.Eval.Codec {nv} {name})")
+def Refs.codecBinders (r : Refs) (nv : String) : String :=
+  String.join (r.codecs.map fun (name, codec) =>
+    s!" \{{name} : Type} ({codec} : tolean.TypeScript.Eval.Codec {nv} {name})")
 
 /-- Every identifier in `source`, at any level, as `Translate.translateFile`
 finds them. -/
@@ -389,7 +396,8 @@ partial def bodyNames : IR.Body → List String
   | .let _ e rest | .letTuple _ e rest => exprNames e ++ bodyNames rest
   | .letArray _ _ elems rest => elems.flatMap exprNames ++ bodyNames rest
   | .ite c a b => exprNames c ++ bodyNames a ++ bodyNames b
-  | .matchNull _ _ a b | .matchTag _ _ _ _ _ a b => bodyNames a ++ bodyNames b
+  | .matchNull name _ a b | .matchTag name _ _ _ _ a b =>
+    name :: (bodyNames a ++ bodyNames b)
   | .letState _ branch rest => bodyNames branch ++ bodyNames rest
   | .fold _ _ body items rest _ => exprNames items ++ bodyNames body ++ bodyNames rest
   | .bind _ _ args rest | .letBorrow _ _ _ args rest => args.flatMap exprNames ++ bodyNames rest
@@ -769,12 +777,11 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           s!"simp [encode{name}, {r.eval "sameValueZero"}, {r.eval "strictEq"}]) xs"
     -- An interface.
     if let .struct name typeParams allFields := d then
-      let structCodecs := typeParams.map fun p => (p, r.codecName p)
-      let structRefs := { r with codecs := structCodecs }
-      let structGeneric := generic ++ structRefs.codecBinders nv typeParams
+      let structRefs := r.withCodecs typeParams
+      let structGeneric := generic ++ structRefs.codecBinders nv
       let structType := if typeParams.isEmpty then structTy name else
         (IR.Ty.app ⟨"", name⟩ (typeParams.map IR.Ty.param) : IR.Ty).print names
-      let codecArgs := String.join (typeParams.map fun p => s!" ({structRefs.codecName p})")
+      let codecArgs := String.join (structRefs.codecs.map fun (_, codec) => s!" ({codec})")
       let decodeCall := if typeParams.isEmpty then s!"decode{name}"
         else s!"(decode{name}{codecArgs})"
       let decodeEncodeLaw := if typeParams.isEmpty then s!"decode{name}_encode{name}"
@@ -816,7 +823,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           String.join (optionalFields.map fun f => s!"cases x_{f} <;> ")
       encs := encs.push <|
         s!"@[simp] theorem decode{name}_encode{name} {structGeneric} (x : {structType}) : decode{name}{codecArgs} (some (encode{name} ({nv} := {nv}){codecArgs} x)) = x := by\n" ++
-        s!"  {splitOptional}{if optionalFields.isEmpty then "; " else ""}simp [decode{name}, encode{name}, List.lookup, encList{if typeParams.isEmpty then "" else ", " ++ String.intercalate ", " (typeParams.map fun p => s!"{structRefs.codecName p}.decode_encode, {structRefs.codecName p}.encode_ne_null, {structRefs.codecName p}.encode_ne_undefined")}]"
+        s!"  {splitOptional}{if optionalFields.isEmpty then "; " else ""}simp [decode{name}, encode{name}, List.lookup, encList{if typeParams.isEmpty then "" else ", " ++ String.intercalate ", " (structRefs.codecs.map fun (_, codec) => s!"{codec}.decode_encode, {codec}.encode_ne_null, {codec}.encode_ne_undefined")}]"
       encs := encs.push <|
         s!"@[simp] theorem encode{name}_ne_null {structGeneric} (x : {structType}) : encode{name} ({nv} := {nv}){codecArgs} x ≠ Val.null := by\n" ++
         s!"  simp [encode{name}]"
@@ -953,11 +960,9 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       | throw s!"{file}: no translation of {name}"
     if (outRet matches .except ..) && !(loopsOf outBody).isEmpty then
       throw s!"{file}: certificates for loops in functions that can throw need an exception-aware loop invariant"
-    let functionCodecs := typeParams.map fun p => (p, r.codecName p)
-    let r := { r with codecs := functionCodecs }
-    let functionGeneric := generic ++ r.codecBinders nv typeParams
-    let codecLemmas := typeParams.flatMap fun p =>
-      let c := r.codecName p
+    let r := r.withCodecs typeParams
+    let functionGeneric := generic ++ r.codecBinders nv
+    let codecLemmas := r.codecs.flatMap fun (_, c) =>
       [s!"{c}.decode_encode", s!"{c}.encode_ne_null", s!"{c}.encode_ne_undefined"]
     -- A callback gets a lemma before the loops, because a loop's body can
     -- hold one, and before the callbacks that hold it.
@@ -1707,7 +1712,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       s!"theorem {name}_cert {functionGeneric} {binders} :\n" ++
       s!"    {sourceCall} {list args} = {some_} ({retEnc} ({call})) :=\n" ++
       s!"  {soundName} {rfl} {rfl} {rfl} {r.cert "program_translated"} {str name} _ 64 _\n" ++
-      s!"    ({" ".intercalate ([r.cert s!"{name}_link"] ++ functionCodecs.map (·.2) ++ params.map (·.name) ++ obligations.map (·.1))})"
+      s!"    ({" ".intercalate ([r.cert s!"{name}_link"] ++ r.codecs.map (·.2) ++ params.map (·.name) ++ obligations.map (·.1))})"
   return "\n".intercalate ([
     s!"-- Certificate written by tolean for {file}. Do not edit.",
     "import tolean.TypeScript.Spec.Lemmas.Eval",

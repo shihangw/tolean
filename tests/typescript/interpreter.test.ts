@@ -1767,6 +1767,11 @@ test('generic functions and interfaces agree with Node', async () => {
     { function: 'isNull', args: [null] },
     { function: 'isNull', args: [19n] },
     { function: 'count', args: [[1n, 2n, 3n]] },
+    { function: 'collisionPair', args: [11n, true, 0n] },
+    { function: 'collisionBox', args: [11n, true, 'third', 0n, 1n] },
+    { function: 'collisionUnbox', args: [{
+      first: 11n, second: true, third: 'third', toleanCodec_T: 0n, toleanCodec_T_: 1n,
+    }] },
   ];
   const run = spawnSync(tolean, ['interpret'], {
     input: JSON.stringify({ programs: [{ source, calls: calls.map(call => ({
@@ -1786,6 +1791,54 @@ test('generic functions and interfaces agree with Node', async () => {
   const mod = await import(pathToFileURL(path).href) as Record<string, (...args: Array<unknown>) => unknown>;
   const expected = calls.map(call => encode(mod[call.function]!(...call.args)));
   expect(result.results.map((r) => r.value)).toEqual(expected);
+});
+
+test('loop matches read their scrutinees without reading their payloads', async () => {
+  const fixture = fileURLToPath(new URL('./corpus/certify/accept/matchLoopReads.ts', import.meta.url));
+  const source = readFileSync(fixture, 'utf8');
+  expect(source).toContain('// certify: required');
+  const left = { kind: 'left', value: 1n };
+  const right = { kind: 'right', value: 2n };
+  const calls = [
+    { function: 'countNulls', args: [[]] },
+    { function: 'countNulls', args: [[null, 1n, null, 2n]] },
+    { function: 'capturedNull', args: [[1n, 2n], null] },
+    { function: 'capturedNull', args: [[1n, 2n], 3n] },
+    { function: 'countLeft', args: [[left, right, left]] },
+    { function: 'capturedTag', args: [[1n, 2n], left] },
+    { function: 'capturedTag', args: [[1n, 2n], right] },
+    { function: 'independentCount', args: [[null, 1n, null]] },
+  ];
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: [{ source, calls: calls.map(call => ({
+      function: call.function, args: call.args.map(encode),
+    })) }] }), encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (result === undefined || !result.parsed) return;
+  expect(result.accepted).toBe(true);
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-match-loop-'));
+  const path = join(dir, 'matches.mjs');
+  writeFileSync(path, ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+  }).outputText);
+  const mod = await import(pathToFileURL(path).href) as Record<string, (...args: Array<unknown>) => unknown>;
+  expect(result.results.map(r => r.value)).toEqual(
+    calls.map(call => encode(mod[call.function]!(...call.args))));
+
+  const certificate = join(dir, 'MatchesCert.lean');
+  const certified = spawnSync(tolean, [
+    'certify', fixture, 'Matches', 'Matches', certificate, 'MatchesCert',
+  ], { encoding: 'utf8' });
+  expect(certified.status, certified.stderr).toBe(0);
+  const text = readFileSync(certificate, 'utf8');
+  for (const name of ['countNulls', 'capturedNull', 'countLeft', 'capturedTag']) {
+    expect(text).toMatch(new RegExp(`theorem ${name}_loop\\d+\\b`));
+    expect(text).not.toMatch(new RegExp(`${name}_loop\\d+_untyped`));
+  }
+  expect(text).toMatch(/theorem independentCount_loop\d+_untyped\b/);
 });
 
 test('inline object shapes and tagged unions agree with Node', async () => {
