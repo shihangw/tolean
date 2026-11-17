@@ -290,10 +290,18 @@ leaves a gap.
     remaining computed list shapes, and direct sorts or conditioned helpers
     under enclosing nullable narrowing. Calls inside nullable matches are
     covered.
-11. **P2.** Recursion: tagged unions that refer to themselves first, then
-    `@decreases`, mutual recursion, and `while` loops. Add certificates for
-    self-referential interfaces and recursive functions, with existential
-    fuel, as proposed in the [recursion open question](#open-questions).
+11. **P2.** Recursion: the translator accepts self-referential interfaces and
+    single-function structural recursion when Lean accepts their declarations
+    and proves the function terminates. Certificates for recursive interfaces
+    and functions remain refused. A recursive interface needs a reusable
+    nested encoder and decoder round-trip proof; a recursive function needs
+    existential fuel and a proof that additional fuel preserves successful
+    interpreter results. Recursive tagged
+    unions remain refused because the translator does not emit their member
+    interfaces and union as one mutual type block. User-supplied `@decreases`
+    measures, mutual recursion and `while` loops also remain refused because
+    the translator has no checked termination obligation for them. See the
+    [decision record](../decisions/2026-11-17-recursion-certificates.md).
 12. **P1.** Non-literal `bigint` exponents, `BigInt(number)`,
     `toISOString`, and non-literal padding lengths. These still need a
     model of built-in errors whose messages the program cannot read.
@@ -417,18 +425,11 @@ decision record then states the choice and any limits that remain.
   [decision record](../decisions/2026-11-16-generic-codecs.md).
 
 - How should a certificate cover an interface that refers to itself, and a
-  function that calls itself? The encoder of such an interface would be a
-  recursive function, and a certificate runs the interpreter with as much
-  fuel as the calls need, which a recursive call does not bound. So a file
-  with either gets no certificate yet.
-
-  Recommendation: write the encoder with well-founded recursion, as the
-  translated function is written. It recurses through `List.map` over the
-  children with `sizeOf` as the measure and the same decreasing tactic. The
-  decoder recurses on the `Val`, which is a nested inductive too. The
-  round-trip proof is the new work, and the certifier should get it from one
-  lemma about a structure whose list field holds the structure, not from a
-  tactic script per file. For a recursive function, quantify the fuel
+  function that calls itself? The decision is to keep both outside certificates
+  until the recursive codec and fuel proofs exist. The certifier refuses them
+  with explicit errors. The
+  [decision record](../decisions/2026-11-17-recursion-certificates.md) gives
+  the reasons and limits. For a later implementation, quantify the fuel
   existentially for each input:
 
   ```lean
