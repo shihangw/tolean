@@ -27,8 +27,8 @@ tolean translate-workspace
     read a workspace as JSON on stdin, {"files": [{"path", "text"}, …]} with
     tolean.json among them, and print each unit's Lean or error as JSON; it
     reads and writes no files
-tolean translate-source [--target ES20xx]
-    translate supplied TypeScript JSON (fileName, text, namespace) on stdin;
+tolean translate-source
+    translate supplied TypeScript JSON (fileName, text, namespace, target) on stdin;
     fileName labels diagnostics and does not name a file to read
 tolean interpret
     read TypeScript programs and calls as JSON on stdin, run each call in the
@@ -69,7 +69,7 @@ def usage : String :=
   "usage: tolean parse [--target ES20xx] [--round-trip] <file.ts>\n" ++
   "       tolean translate [--check] [--config <json>]\n" ++
   "       tolean translate-workspace < workspace.json\n" ++
-  "       tolean translate-source [--target ES20xx] < source.json\n" ++
+  "       tolean translate-source < source.json\n" ++
   "       tolean translate [--target ES20xx] [--certify] <input.ts> <output.lean> <Lean.Namespace>\n" ++
   "       tolean translate-sql <output.lean> <Lean.Namespace> --query Q --queries <file.sql>... --migrations <file.sql>...\n" ++
   "       tolean sql-schema --table T --migrations <file.sql>...\n" ++
@@ -260,6 +260,13 @@ def run (target : Edition) : List String → IO UInt32
     let input ← (← IO.getStdin).readToEnd
     let result : Except String String := do
       let json ← Lean.Json.parse input
+      let target ← match json.getObjVal? "target" with
+        | .ok value => do
+          let name ← value.getStr?
+          let some target := Edition.parse? name
+            | throw s!"unknown target '{name}'"
+          pure target
+        | .error _ => pure Edition.default
       Translate.translate (← json.getObjValAs? String "fileName")
         (← json.getObjValAs? String "text") (← json.getObjValAs? String "namespace") target
     let json := match result with

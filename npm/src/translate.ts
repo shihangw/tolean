@@ -71,7 +71,7 @@ export function binaryPath(): string {
 }
 
 /** Run a translator command on the JSON text, and return its output. */
-function run(input: string, args = ['translate-workspace']): Promise<string> {
+function run(input: string, args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn(binaryPath(), args, { stdio: ['pipe', 'pipe', 'pipe'] });
     const out: Buffer[] = [];
@@ -93,7 +93,7 @@ function run(input: string, args = ['translate-workspace']): Promise<string> {
  * Lean or as the translator's reason to refuse it.
  */
 export async function translateWorkspace(files: readonly WorkspaceFile[]): Promise<UnitResult[]> {
-  const json = JSON.parse(await run(JSON.stringify({ files }))) as
+  const json = JSON.parse(await run(JSON.stringify({ files }), ['translate-workspace'])) as
     | { error: string }
     | { units: ({ output: string; lean: string } | { sources: string[]; error: string })[] };
   if ('error' in json) throw new TranslateError(json.error);
@@ -116,10 +116,9 @@ export async function translateSource({
   target?: Edition;
 }): Promise<string> {
   // A single-file name is a diagnostic label, not a workspace source path.
-  const result = JSON.parse(await run(
-    JSON.stringify({ fileName, text, namespace }),
-    ['translate-source', '--target', target],
-  )) as { lean: string } | { error: string };
+  const result = JSON.parse(
+    await run(JSON.stringify({ fileName, text, namespace, target }), ['translate-source']),
+  ) as { lean: string } | { error: string };
   if ('error' in result) throw new TranslateError(result.error);
   return result.lean;
 }
