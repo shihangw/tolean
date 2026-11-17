@@ -988,9 +988,11 @@ Tolean rejects these, among others:
   a type other than `number` on `i`. Tolean also refuses one whose body
   assigns `i` or changes something that the bound reads, because JS reads
   the bound again before each run of the body and the output reads it once.
-  A file with a counted `for` gets no certificate yet. A certificate states
-  that the interpreter gives a value for every input, and it gives none when
-  `i` would pass `Number.MAX_SAFE_INTEGER`. `program_sound` covers the loop.
+  A certificate states a precondition for each counted loop: `countUp?` on
+  the bound must give a value. The bound must read only function parameters.
+  A `const` local bound remains refused. See the
+  [decision record](../decisions/2026-11-16-counted-loop-certificates.md).
+  `program_sound` covers the loop without this precondition.
 - An array declared with `let` and the type `Array<T>`. An array that the
   function pushes to must be a `const`; for a value, use `ReadonlyArray<T>`.
   An empty `[]` needs a type from its context, and the elements of a literal

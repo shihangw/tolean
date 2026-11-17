@@ -113,7 +113,7 @@ def decodeGauge {N : Type} [tolean.TypeScript.JSNumber N] : Option (Val N) → s
 theorem raise_link {N : Type} [tolean.TypeScript.JSNumber N] (g : _) (step : _) :
     tolean.TypeScript.IR.runIn (N := N) (tolean.TypeScript.IR.functionsOf [("", decls)]) ⟨"", "raise"⟩ [(encodeGauge g), (Val.int step)] =
       some (encodeGauge (sensor.Raise.raise g step)) := by
-  link_tac [decls, Env.set_cons, Env.lookup_cons, Env.lookup_set_same, Env.lookup_set_ne, Env.set_set, Env.length_set, encList, decInt, decBool, decStr, decNum, encodeGauge, decodeGauge, sensor.Raise.raise]
+  link_tac [decls, Env.set_cons, Env.lookup_cons, Env.lookup_set_same, Env.lookup_set_ne, Env.set_set, Env.length_set, encList, decInt, decBool, decStr, decNum, encodeGauge, decodeGauge, JSNumber.countUp?_eq_of_isSome, sensor.Raise.raise]
 
 theorem raise_cert {N : Type} [tolean.TypeScript.JSNumber N] (g : _) (step : _) :
     run (N := N) program "raise" [(encodeGauge g), (Val.int step)] = some (encodeGauge (sensor.Raise.raise g step)) :=

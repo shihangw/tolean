@@ -3812,7 +3812,7 @@ values and the list of them in the output, `JSNumber.countUp k b`. That list
 is `k`, then each integer after it that is less than `b`. The start `k` must
 be an integer literal, which the interpreter reads as the translation does. -/
 def countedHead (env : Env) (s : Span) (body : Stmt) (init : Option VarDecl) (test update : Option Expr) :
-    TM (String × Ty × IR.Expr) :=
+    TM (String × Ty × IR.Expr) := do
   match init, test, update with
   | some ⟨.let, name, type, some start⟩, some (.binary _ .lt (.ident _ n) bound), some update => do
     unless n == name && update.incrementsName name do reject s countedReason
