@@ -698,9 +698,9 @@ variables at that point. These are the completion records of ECMA-262
 inductive Outcome (N : Type) where
   | normal (env : Env N)
   /-- The function ends: it returns `v` when `r` is `.ok v`, and it throws `v`
-  when `r` is `.error v`. A return and a throw pass through every statement
-  of the subset in the same way, because the subset has no `try`, so one
-  outcome holds both. -/
+  when `r` is `.error v`. A catch distinguishes these two completions.
+  The accepted try bodies preserve outer state, so their handlers can use
+  the entry environment without storing one on this completion. -/
   | ret (r : Except (Val N) (Val N))
   | brk (env : Env N)
   | cont (env : Env N)
@@ -922,6 +922,7 @@ mutual
 
 /-- The names of the functions that `s` calls, anywhere in it. -/
 def Stmt.callNames : Stmt → List String
+  | .tryCatch _ b _ h => Stmt.callNames b ++ Stmt.callNames h
   | .varDecl _ { init := some e, .. } | .destructure _ _ _ _ e | .exprStmt _ e | .returnStmt _ (some e)
   | .throwStmt _ e => Expr.callNames e
   | .varDecl _ { init := none, .. } | .returnStmt _ none | .breakStmt _ | .continueStmt _ | .empty _ => []
@@ -950,6 +951,7 @@ mutual
 
 /-- `s` holds a `throw` statement. -/
 def Stmt.hasThrow : Stmt → Bool
+  | .tryCatch .. => true
   | .throwStmt .. => true
   | .ifStmt _ _ a (some b) => Stmt.hasThrow a || Stmt.hasThrow b
   | .ifStmt _ _ a none => Stmt.hasThrow a
@@ -1285,6 +1287,10 @@ def Stmt.hoistOne (thr : String → Bool) (cls : String → Option (Option Error
   | .block s ss =>
     let (ss', k) := Stmt.hoistList thr cls k ss
     ([.block s ss'], k)
+  | .tryCatch s b n h =>
+    let (bs, k) := Stmt.hoistOne thr cls k b
+    let (hs, k) := Stmt.hoistOne thr cls k h
+    ([.tryCatch s (asBody b bs) n (asBody h hs)], k)
   | .switchStmt s d cs =>
     let (d', h) := Expr.hoist thr cls ⟨[], k⟩ d
     let (cs', k) := Stmt.hoistClauses thr cls h.next cs
@@ -2166,6 +2172,12 @@ termination_by xs => (fuel, sizeOf body, xs.length + 1)
 /-- Run one statement. A block, and the branch of an `if`, keep the changes
 they make to outer variables and drop the variables they declare. -/
 def execStmt (m : Scope) (fuel : Nat) (env : Env N) : Stmt → Option (Outcome N)
+  | .tryCatch _ b name h => do
+    if !b.catchSafe || h.mentions name then none
+    else
+      match ← execStmt m fuel env b with
+      | .ret (.error _) => execStmt m fuel env h
+      | outcome => some outcome
   | .varDecl _ { name, init := some init, .. } => do
     match evalTop m fuel env init with
     | some (.ok v) => return .normal ((name, v) :: env)

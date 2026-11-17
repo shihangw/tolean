@@ -54,7 +54,7 @@ certifyOne() {
       ! grep -q "error" <<<"$out"; then
     echo proved >"$result"
   else
-    { echo failed; echo "$out" | head -20; } >"$result"
+    { echo failed; printf '%s\n' "$out"; } >"$result"
   fi
 }
 export -f certifyOne

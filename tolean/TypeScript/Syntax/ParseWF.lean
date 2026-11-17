@@ -335,6 +335,7 @@ theorem primaryWF_notReadonly : ∀ t : TypeExpr, t.primaryWF = true → t.isRea
       .object .., _ => rfl
 
 theorem arrayWF_wf : ∀ t : TypeExpr, t.arrayWF = true → t.wf = true
+  | .indexed _ _ _, h => by simpa [TypeExpr.arrayWF, TypeExpr.wf] using h
   | .array _ _, h | .keyword .., h | .null _, h | .literal .., h | .ref .., h | .paren .., h | .tuple .., h |
       .object .., h => by
     revert h; simp [TypeExpr.arrayWF, TypeExpr.wf]
@@ -652,9 +653,29 @@ theorem arrayStep_inv {T : Edition} {start : Pos} {a a' : TypeExpr} {b : Bool} {
         simpa [TypeExpr.words] using ha.append (WordsOK.cons (ok_punct (by decide)) (WordsOK.word (ok_punct (by decide)))),
         hR₂, ⟨rfl, rfl, rfl, rfl⟩⟩
     · simp only [hy, Bool.false_eq_true, ↓reduceIte] at h
-      rw [Parse.bind_ok] at h
-      obtain ⟨_, _, hf, _⟩ := h
-      exact absurd hf (Parse.failAt_ne_ok _ _ _ _ _)
+      rw [Parse.bind_eq (Parse.peekAt_eq (k := 1) (t := y) (by simp [hs]))] at h
+      cases hyk : y.kind <;> simp only [hyk] at h
+      all_goals try
+        rw [Parse.bind_ok] at h
+        obtain ⟨_, _, hf, _⟩ := h
+        exact absurd hf (Parse.failAt_ne_ok _ _ _ _ _)
+      all_goals
+        rename_i value
+        have hR₁ := hR.past hs hr
+        have hr' := hR₁.more rfl (by rw [hyk]; simp)
+        have hR₂ := hR₁.past (s := past s x (y :: r')) rfl hr'
+        rw [Parse.bind_eq (skip_two hs hr'), Parse.bind_ok] at h
+        obtain ⟨rb, s₃, hc, h⟩ := h
+        obtain ⟨hrb, rest, hs₂, rfl, hR₃⟩ := expectPunct_inv hR₂ hc
+        rw [Parse.bind_eq (Parse.spanFrom_eq _ _)] at h
+        simp only [Parse.pure_ok, Prod.mk.injEq] at h
+        obtain ⟨⟨rfl, _⟩, rfl⟩ := h
+        refine ⟨fun ha hro => ⟨?_, rfl⟩, fun ha => ?_, hR₃, ⟨rfl, rfl, rfl, rfl⟩⟩
+        · simp only [TypeExpr.arrayWF, ha, hro, Bool.not_false, Bool.and_self]
+        · have hkword : Word.ok T [.string value] = true := by rfl
+          simpa [TypeExpr.words] using ha.append
+            (WordsOK.cons (ok_punct (by decide))
+              (WordsOK.cons hkword (WordsOK.word (ok_punct (by decide)))))
 
 /-- `m` joins items that are all `ok`. -/
 theorem push_ok {ok : TypeExpr → Bool} {a : Array TypeExpr} {m : TypeExpr} (ha : ∀ x ∈ a.toList, ok x = true)
@@ -1366,9 +1387,26 @@ theorem arrayStep_skel {start : Pos} {a a' : TypeExpr} {b : Bool} {s s' : ParseS
       rw [TypeExpr.tokens_array, skel_append, hx, hyk]
       rfl
     · simp only [hy, Bool.false_eq_true, ↓reduceIte] at h
-      rw [Parse.bind_ok] at h
-      obtain ⟨_, _, hf, _⟩ := h
-      exact absurd hf (Parse.failAt_ne_ok _ _ _ _ _)
+      rw [Parse.bind_eq (Parse.peekAt_eq (k := 1) (t := y) (by simp [hs]))] at h
+      cases hyk : y.kind <;> simp only [hyk] at h
+      all_goals try
+        rw [Parse.bind_ok] at h
+        obtain ⟨_, _, hf, _⟩ := h
+        exact absurd hf (Parse.failAt_ne_ok _ _ _ _ _)
+      all_goals
+        rename_i value
+        have hR₁ := hR.past hs hr
+        have hr' := hR₁.more rfl (by rw [hyk]; simp)
+        have hR₂ := hR₁.past (s := past s x (y :: r')) rfl hr'
+        rw [Parse.bind_eq (skip_two hs hr'), Parse.bind_ok] at h
+        obtain ⟨rb, s₃, hc, h⟩ := h
+        obtain ⟨hrb, rest, hs₂, rfl, _⟩ := expectPunct_inv hR₂ hc
+        rw [Parse.bind_eq (Parse.spanFrom_eq _ _)] at h
+        simp only [Parse.pure_ok, Prod.mk.injEq] at h
+        obtain ⟨⟨rfl, _⟩, rfl⟩ := h
+        refine ⟨_, ((PastSkel.tok hs).trans
+          (PastSkel.tok (s := past s x (y :: r')) rfl)).trans (PastSkel.tok hs₂), ?_⟩
+        simp [TypeExpr.tokens, TypeExpr.words, punctWord, hx, hyk, hrb, skel, skelKind]
 
 theorem unionStep_skel {p : ParseM TypeExpr} (hp : SkelT p) {a a' : Array TypeExpr} {b : Bool}
     {s s' : ParseState} (hR : Ready s) (h : Parse.unionStep p a s = .ok (a', b) s') :
@@ -5167,6 +5205,62 @@ theorem parseDeclStatement_gives {T : Edition} {f : Nat} (hBlk : GivesS T (Parse
     | none => rfl
     | some t => exact hrw t rfl
 
+/-- The try reader preserves the state invariants and prints both blocks
+with a catch binding that the lexer can read again. -/
+theorem parseTry_gives {T : Edition} {f : Nat}
+    (hBlk : GivesS T (Parse.parseBlock f)) :
+    GivesFor T (Parse.parseTry (Parse.parseBlock f)) := by
+  intro s st s' x r hR hT hs hx hp
+  simp only [Parse.parseTry] at hp
+  rw [Parse.bind_eq (advance_past hR hs hx), Parse.bind_ok] at hp
+  obtain ⟨b, s₁, hb, hp⟩ := hp
+  obtain ⟨hR₁, hK₁, hbw, _, _, hbok⟩ :=
+    hBlk _ _ _ (hR.past hs (hR.more hs hx)) hT hb
+  have hK₀ : Kept s s₁ := (Kept.past _ _ _).trans hK₁
+  rw [Parse.bind_ok] at hp
+  obtain ⟨caught, s₂, hc, hp⟩ := hp
+  by_cases hcatch : caught.isKeyword "catch" = true
+  · rw [if_pos hcatch, Parse.pure_bind] at hp
+    obtain ⟨ct, cr, hs₁⟩ := hR₁.cons
+    obtain ⟨hce, hnext⟩ := advance_inv hR₁ hs₁ hc
+    subst caught
+    have hct : ct.kind = .keyword "catch" := by simpa [Token.isKeyword] using hcatch
+    obtain ⟨rfl, hR₂⟩ := hnext (by rw [hct]; simp)
+    rw [Parse.bind_ok] at hp
+    obtain ⟨lp, s₃, hlp, hp⟩ := hp
+    obtain ⟨_, lr, _, rfl, hR₃⟩ := expectPunct_inv hR₂ hlp
+    rw [Parse.bind_ok] at hp
+    obtain ⟨name, s₄, hname, hp⟩ := hp
+    obtain ⟨nm, nr, _, hn, _, rfl, hR₄⟩ := readName_inv hR₃ hname
+    have hnw := readName_words hR₃ (hK₀.target_eq.trans hT) hname
+    rw [Parse.bind_ok] at hp
+    obtain ⟨rp, s₅, hrp, hp⟩ := hp
+    obtain ⟨_, rr, _, rfl, hR₅⟩ := expectPunct_inv hR₄ hrp
+    have hK₅ : Kept s (past (past (past (past s₁ ct cr) lp lr) nm nr) rp rr) :=
+      hK₀.trans ((Kept.past _ _ _).trans ((Kept.past _ _ _).trans
+        ((Kept.past _ _ _).trans (Kept.past _ _ _))))
+    rw [Parse.bind_ok] at hp
+    obtain ⟨handler, s₆, hh, hp⟩ := hp
+    obtain ⟨hR₆, hK₆, hhw, _, _, hhok⟩ :=
+      hBlk _ _ _ hR₅ (hK₅.target_eq.trans hT) hh
+    rw [Parse.bind_eq (Parse.spanFrom_eq _ _)] at hp
+    simp only [Parse.pure_ok] at hp
+    obtain ⟨rfl, rfl⟩ := hp
+    refine ⟨hR₆, hK₅.trans hK₆, ?_, by simp [Stmt.openIf], rfl, ?_⟩
+    · simp only [Stmt.wf, Bool.and_eq_true]
+      exact ⟨⟨⟨⟨parseBlock_block hb, by simpa [hK₁.inFunction_eq, hK₁.loopDepth_eq] using hbw⟩,
+        by simpa [exprName] using hn⟩, parseBlock_block hh⟩,
+        by rw [← hK₅.inFunction_eq, ← hK₅.loopDepth_eq]; exact hhw⟩
+    · intro d l hl
+      simp only [Stmt.lines, List.mem_cons, List.mem_append] at hl
+      rcases hl with (rfl | hl) | (rfl | hl)
+      · words_ok
+      · exact hbok d l hl
+      · words_ok
+      · exact hhok d l hl
+  · rw [if_neg hcatch] at hp
+    exact False.elim (Parse.unexpected_ne_ok _ _ _ _ _ hp)
+
 theorem parseStatement_gives {T : Edition} {f : Nat} (hBlk : GivesS T (Parse.parseBlock f))
     (hBr : GivesB T (Parse.parseBranch f)) (hFor : GivesFor T (Parse.parseForOf f))
     (hCnt : GivesFor T (Parse.parseFor f)) (hCl : GivesC T (Parse.parseClause f))
@@ -5373,6 +5467,10 @@ theorem parseStatement_gives {T : Edition} {f : Nat} (hBlk : GivesS T (Parse.par
     by_cases hfun : w = "function"
     · subst hfun; simp only at h
       exact hFn _ _ _ hR hT (fun y hy => by simp [hs] at hy; subst hy; exact hk) h
+    by_cases htry : w = "try"
+    · subst htry; simp only at h
+      obtain ⟨hR', hK, hw, ho, hd, hok⟩ := parseTry_gives hBlk _ _ _ _ _ hR hT hs (hne hk (by simp)) h
+      exact ⟨hR', hK, hw, ho, by simp [hd], hok⟩
     by_cases hth : w = "throw"
     · subst hth; simp only at h
       have hx := hne hk (by simp)

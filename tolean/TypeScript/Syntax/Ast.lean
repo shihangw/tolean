@@ -101,6 +101,8 @@ inductive TypeExpr where
   | ref (span : Span) (name : String) (args : List TypeExpr)
   /-- `T[]`. -/
   | array (span : Span) (elem : TypeExpr)
+  /-- `T['field']`, with one literal string key. -/
+  | indexed (span : Span) (receiver : TypeExpr) (key : String)
   | union (span : Span) (members : List TypeExpr)
   | paren (span : Span) (inner : TypeExpr)
   /-- `[A, B]`, or `readonly [A, B]` when `readonly` is true: a tuple type. -/
@@ -291,6 +293,9 @@ inductive Stmt where
   | switchStmt (span : Span) (disc : Expr) (clauses : List (Option Expr × List Stmt))
   /-- `throw value;`. -/
   | throwStmt (span : Span) (value : Expr)
+  /-- `try { … } catch (name) { … }` (ECMA-262 §14.15). Both children
+  are blocks. A `finally` clause is not part of this constructor. -/
+  | tryCatch (span : Span) (body : Stmt) (name : String) (handler : Stmt)
   /-- `function name<A>(params): T { … }` in a block: a function declaration
   (ECMA-262 §15.2) inside another function, which the block binds to
   `name`. -/
@@ -298,6 +303,38 @@ inductive Stmt where
       (returnType : Option TypeExpr) (body : Stmt)
 
 instance : Inhabited Stmt := ⟨.empty default⟩
+
+/-- Expressions allowed in the first try bodies. Translation still checks
+their types and bindings. `typeof` may read a local name. Calls, property
+access and arithmetic stay out because their exceptions need a separate
+analysis. -/
+def Expr.catchSafe : Expr → Bool
+  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => true
+  | .paren _ e | .unary _ .not e => e.catchSafe
+  | .unary _ .typeof (.ident ..) => true
+  | .binary _ .strictEq a b | .binary _ .strictNe a b => a.catchSafe && b.catchSafe
+  | _ => false
+
+mutual
+
+/-- A try body cannot change outer state or evaluate an operation whose
+exception the model represents as no result. Local initializers can only
+read values. The only explicit throw constructs a built-in Error. -/
+def Stmt.catchSafe : Stmt → Bool
+  | .block _ ss => Stmt.catchSafeList ss
+  | .varDecl _ { init := some e, .. } => e.catchSafe
+  | .returnStmt _ (some e) => e.catchSafe
+  | .throwStmt _ (.new _ "Error" [] [msg]) => msg.catchSafe
+  | .ifStmt _ e b none => e.catchSafe && b.catchSafe
+  | .ifStmt _ e b (some h) => e.catchSafe && b.catchSafe && h.catchSafe
+  | .empty _ => true
+  | _ => false
+
+def Stmt.catchSafeList : List Stmt → Bool
+  | [] => true
+  | s :: ss => s.catchSafe && Stmt.catchSafeList ss
+
+end
 
 /-- `e` is the name `n` as an assignment target, as in `n = 1` or `(n) = 1`. -/
 def Expr.namesTarget (n : String) : Expr → Bool
@@ -367,6 +404,7 @@ def Stmt.assigns (n : String) : Stmt → Bool
   | .breakStmt _ | .continueStmt _ | .empty _ => false
   | .switchStmt _ d cs => d.assigns n || Stmt.assignsClauses n cs
   | .throwStmt _ e => e.assigns n
+  | .tryCatch _ b _ h => b.assigns n || h.assigns n
   -- The body runs only when the function is called; counting it anyway only
   -- refuses more.
   | .funDecl _ _ _ _ _ b => b.assigns n
@@ -422,6 +460,7 @@ mutual
 /-- `s` changes the array, map or set that the name `n` holds somewhere
 inside it, as `Expr.mutates` says. -/
 def Stmt.mutates (n : String) : Stmt → Bool
+  | .tryCatch _ b _ h => b.mutates n || h.mutates n
   | .destructure _ _ _ _ e => e.mutates n
   | .varDecl _ d => match d.init with
     | some e => e.mutates n
@@ -469,7 +508,9 @@ def Expr.mayHold (p : String → Bool) : Expr → Bool
   | .regexp .. => false
   | .ident _ n => p n
   | .number .. | .bigint .. | .string .. | .bool .. | .null _ => false
-  | .new _ _ _ args => Expr.mayHoldList p args
+  -- A constructor name is a read too. In particular, a catch binding can
+  -- hide `Error` or another constructor even when no argument mentions it.
+  | .new _ name _ args => p name || Expr.mayHoldList p args
   | .array _ es => Expr.mayHoldList p es
   | .object _ ps => Property.mayHoldList p ps
   | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e =>
@@ -499,6 +540,7 @@ mentions are the variables around it that it may read or change. Counting a
 name that the body declares itself only adds a variable that the body never
 sees from outside. -/
 def Stmt.mentions (n : String) : Stmt → Bool
+  | .tryCatch _ b x h => x == n || b.mentions n || h.mentions n
   | .varDecl _ d => d.name == n || (match d.init with
     | some e => e.mayHold (· == n)
     | none => false)
@@ -656,6 +698,7 @@ mutual
 new collection that only `n` holds (`VarDecl.owns`). A loop variable never
 does: it holds an element of something else. -/
 def Stmt.binds (n : String) : Stmt → List Bool
+  | .tryCatch _ b x h => b.binds n ++ (if x == n then [false] else []) ++ h.binds n
   | .varDecl _ d => if d.name == n then [d.owns] else []
   -- A destructured name holds an element of something else, or a copy of
   -- the rest that nothing owns.
@@ -691,6 +734,7 @@ mutual
 
 /-- The names whose array, map or set `s` changes, as `Expr.changed` says. -/
 def Stmt.changed : Stmt → List String
+  | .tryCatch _ b _ h => b.changed ++ h.changed
   | .destructure _ _ _ _ e => e.changed
   | .varDecl _ d => match d.init with
     | some e => e.changed
@@ -735,6 +779,7 @@ mutual
 over. A `return` ends the function, so nothing changes the object after
 that. A loop reads the collection without keeping it. -/
 def Stmt.leaks (n : String) : Stmt → Bool
+  | .tryCatch _ b _ h => b.leaks n || h.leaks n
   | .destructure _ _ _ _ e => e.leaks n
   | .varDecl _ d => match d.init with
     | some e => e.leaks n
@@ -991,7 +1036,7 @@ namespace tolean.TypeScript.Syntax
 open tolean
 
 def TypeExpr.span : TypeExpr → Span
-  | .keyword s _ | .null s | .literal s _ | .ref s _ _ | .array s _ | .union s _ | .paren s _
+  | .keyword s _ | .null s | .literal s _ | .ref s _ _ | .array s _ | .indexed s _ _ | .union s _ | .paren s _
   | .tuple s _ _ | .object s _ | .predicate s _ _ => s
 
 def Expr.span : Expr → Span
@@ -1005,7 +1050,7 @@ def Stmt.span : Stmt → Span
   | .varDecl s _ | .destructure s _ _ _ _ | .exprStmt s _ | .returnStmt s _ | .ifStmt s _ _ _ | .forOfStmt s _ _ _ _
   | .forOfPattern s _ _ _ _
   | .forStmt s _ _ _ _ | .whileStmt s _ _ | .block s _ | .breakStmt s | .continueStmt s | .empty s | .switchStmt s _ _
-  | .throwStmt s _ | .funDecl s _ _ _ _ _ => s
+  | .throwStmt s _ | .tryCatch s _ _ _ | .funDecl s _ _ _ _ _ => s
 
 mutual
 

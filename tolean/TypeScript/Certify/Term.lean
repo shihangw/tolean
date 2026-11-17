@@ -67,6 +67,7 @@ def typeExpr : TypeExpr → String
   | .literal s l => s!"({ns}TypeExpr.literal {span s} {litType l})"
   | .ref s n args => s!"({ns}TypeExpr.ref {span s} {str n} {list (args.map typeExpr)})"
   | .array s e => s!"({ns}TypeExpr.array {span s} {typeExpr e})"
+  | .indexed s e key => s!"({ns}TypeExpr.indexed {span s} {typeExpr e} {str key})"
   | .union s ms => s!"({ns}TypeExpr.union {span s} {list (ms.map typeExpr)})"
   | .paren s e => s!"({ns}TypeExpr.paren {span s} {typeExpr e})"
   | .tuple s ro es => s!"({ns}TypeExpr.tuple {span s} {ro} {list (es.map typeExpr)})"
@@ -165,6 +166,7 @@ def stmt : Stmt → String
   | .empty s => s!"({ns}Stmt.empty {span s})"
   | .switchStmt s d cs => s!"({ns}Stmt.switchStmt {span s} {expr d} {list (clauses cs)})"
   | .throwStmt s e => s!"({ns}Stmt.throwStmt {span s} {expr e})"
+  | .tryCatch s b n h => s!"({ns}Stmt.tryCatch {span s} {stmt b} {str n} {stmt h})"
   | .funDecl s n tps ps r b =>
     s!"({ns}Stmt.funDecl {span s} {str n} {list (tps.map str)} {list (ps.map param)} " ++
       s!"{option (r.map typeExpr)} {stmt b})"

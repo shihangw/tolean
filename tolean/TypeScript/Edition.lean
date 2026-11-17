@@ -38,6 +38,11 @@ runtime too. The remaining function declaration uses `FunctionDeclaration`
 §13.3.6.2). These operations exist in every supported target, so generic
 certificates add no edition gate.
 
+Try statements with a catch binding use TryStatement and CatchClause
+(ES2015 §13.15; ES2024 §14.15). Every supported target includes them.
+The initial subset requires a catch binding and does not include `finally`
+or the optional catch binding introduced in ES2019.
+
 Structural recursion adds no runtime operation. Its calls use `EvaluateCall`
 (ES2015 §12.3.4, ES2024 §13.3.6.2), and recursive interfaces erase with the
 other TypeScript type declarations. Every supported edition specifies the
@@ -64,6 +69,13 @@ Expression narrowing follows the strict equality test and the selected
 branch of LogicalANDExpression, LogicalORExpression and ConditionalExpression
 (ES2024 §13.13 and §13.14). Logical NOT (§13.5.7) reverses the test. ES2015
 already specifies these operations, so all supported targets allow them.
+
+Indexed access annotations erase before execution. TypeScript 2.1 introduced
+them; the TypeScript Handbook describes them under Indexed Access Types.
+Resolving a literal string key adds no runtime operation or edition gate.
+Reading the corresponding field uses OrdinaryGet (ES2024 §10.1.8.1), which
+also exists in ES2015. A comparison of its value uses IsStrictlyEqual
+(ES2024 §7.2.15; Strict Equality Comparison in ES2015 §7.2.13).
 
 An error constructor may assign a separately declared readonly field from
 its same-name parameter after `super(message)`. The annotation erases before

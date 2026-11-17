@@ -180,6 +180,7 @@ def valPattern : IR.Ty → Option String
 
 /-- The statements of a function body, with nested ones. -/
 partial def stmtsOf : Stmt → List Stmt
+  | .tryCatch s b n h => .tryCatch s b n h :: stmtsOf b ++ stmtsOf h
   | .block _ body => .block default body :: body.flatMap stmtsOf
   | .ifStmt s t a b => .ifStmt s t a b :: stmtsOf a ++ ((b.map stmtsOf).getD [])
   | .forOfStmt s k n i b => .forOfStmt s k n i b :: stmtsOf b
@@ -381,6 +382,7 @@ partial def exprNames : IR.Expr → List String
 
 /-- The names that a loop body reads. -/
 partial def bodyNames : IR.Body → List String
+  | .handle a b => bodyNames a ++ bodyNames b
   | .value e => exprNames e
   | .state _ | .yield .. | .done .. => []
   | .exit e _ | .throw e => exprNames e
@@ -406,6 +408,7 @@ partial def tyHasParam : IR.Ty → Bool
 
 /-- The callbacks in a body, inner ones first, in the order of the source. -/
 partial def bodyCallbacks : IR.Body → List Callback
+  | .handle a b => bodyCallbacks a ++ bodyCallbacks b
   | .value e => exprCallbacks e
   | .state _ | .yield .. | .done .. => []
   | .exit e _ => exprCallbacks e
@@ -525,6 +528,7 @@ def conditionCallFields (callee : String) : List (String × IR.Expr) → List Co
 end
 
 def bodyConditionCalls (callee : String) : IR.Body → List ConditionalCall
+  | .handle a b => bodyConditionCalls callee a ++ bodyConditionCalls callee b
   | .value e | .exit e _ => conditionCalls callee e
   | .let _ e rest | .letTuple _ e rest => conditionCalls callee e ++ bodyConditionCalls callee rest
   | .letState _ a b => bodyConditionCalls callee a ++ bodyConditionCalls callee b
@@ -541,6 +545,7 @@ def bodyConditionCalls (callee : String) : IR.Body → List ConditionalCall
 
 /-- Tagged narrowing needs guarded conditions over the original union value. -/
 def hasTaggedConditionScope : IR.Body → Bool
+  | .handle a b => hasTaggedConditionScope a || hasTaggedConditionScope b
   | .matchTag .. => true
   | .let _ _ rest | .letTuple _ _ rest | .letArray _ _ _ rest
   | .bind _ _ _ rest | .letCall _ _ _ _ _ _ _ _ _ rest | .letLifted _ _ rest
@@ -607,6 +612,7 @@ def casesOn (decls : List IR.Decl) (vars : List (String × IR.Ty)) : String :=
 
 /-- The loops of a body, inner ones first, in the order of the source. -/
 partial def loopsOf : IR.Body → List (List String × String × IR.Body × IR.LoopInfo × IR.Expr)
+  | .handle a b => loopsOf a ++ loopsOf b
   | .value _ | .state _ | .yield .. | .done .. | .exit .. => []
   | .let _ _ rest | .letArray _ _ _ rest | .letTuple _ _ rest => loopsOf rest
   | .ite _ a b | .matchNull _ _ a b | .matchTag _ _ _ _ _ a b => loopsOf a ++ loopsOf b
@@ -618,6 +624,7 @@ partial def loopsOf : IR.Body → List (List String × String × IR.Body × IR.L
 
 /-- The closure values that calls in a body require from their environment. -/
 def closureReads : IR.Body → List (String × IR.Expr)
+  | .handle a b => closureReads a ++ closureReads b
   | .value _ | .state _ | .yield .. | .done .. | .exit .. | .throw _ => []
   | .let _ _ rest | .letArray _ _ _ rest | .letTuple _ _ rest |
     .bind _ _ _ rest | .letLifted _ _ rest | .letBorrow _ _ _ _ rest => closureReads rest
@@ -944,6 +951,8 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         | .function n .. => n == name
         | _ => false
       | throw s!"{file}: no translation of {name}"
+    if (outRet matches .except ..) && !(loopsOf outBody).isEmpty then
+      throw s!"{file}: certificates for loops in functions that can throw need an exception-aware loop invariant"
     let functionCodecs := typeParams.map fun p => (p, r.codecName p)
     let r := { r with codecs := functionCodecs }
     let functionGeneric := generic ++ r.codecBinders nv typeParams
@@ -1645,7 +1654,17 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     functionConditions := (name, (outParams, inputConditions)) :: functionConditions
     -- The encoders follow the types of the output, which the translator has
     -- already worked out from the source's types.
-    let some retEnc := encoderOf r outRet | throw s!"{file}: cannot encode the result of {name}"
+    let (resultType, retainsError) := match outRet with
+      | .except (.ext .error) result => (result, true)
+      | t => (t, false)
+    let some valueEnc := encoderOf r resultType | throw s!"{file}: cannot encode the result of {name}"
+    let retEnc := if retainsError then
+        let ok := r.full "Except.ok"
+        let error := r.full "Except.error"
+        s!"(fun result => match result with | {ok} value => {ok} ({valueEnc} value) | " ++
+          s!"{error} error => {error} ({r.eval "Val.error"} \"Error\" " ++
+          s!"[(\"message\", {r.eval "Val.str"} error.message)]))"
+      else valueEnc
     let args ← outParams.mapM fun (p, t) => do
       let some e := encoderOf r t | throw s!"{file}: cannot encode the parameter {p}"
       return s!"({e} {p})"
@@ -1657,13 +1676,19 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       loopLemmas.toList ++ defs ++ obligations.map (·.1))
     let some_ := r.write "some" "Option.some"
     let rfl := r.full "rfl"
+    let runName := r.full (if retainsError then "tolean.TypeScript.IR.callIn" else "tolean.TypeScript.IR.runIn")
+    let sourceCall := if retainsError then
+        s!"{r.eval "callIn"} (N := {nv}) [(\"\", {r.cert "program"})] ⟨\"\", {str name}⟩"
+      else s!"{r.eval "run"} (N := {nv}) {r.cert "program"} {str name}"
+    let soundName := r.full (if retainsError then "tolean.TypeScript.Proof.decls_sound_call"
+      else "tolean.TypeScript.Proof.decls_sound")
     let conditionRewrites := if conditionalLemmas.isEmpty then "" else
       "\n  all_goals repeat' first\n" ++ String.join (conditionalLemmas.map fun lemma =>
         s!"    | rw [{lemma}]\n") ++
       s!"  all_goals (try simp_all [{simpSet}])\n  all_goals first | assumption | rfl | (intros; first | rfl | simp_all)"
     thms := thms.push <|
       s!"theorem {name}_link {functionGeneric} {binders} :\n" ++
-      s!"    {r.full "tolean.TypeScript.IR.runIn"} (N := {nv}) {outputFs} ⟨\"\", {str name}⟩ {list args} =\n" ++
+      s!"    {runName} (N := {nv}) {outputFs} ⟨\"\", {str name}⟩ {list args} =\n" ++
       s!"      {some_} ({retEnc} ({call})) := by\n" ++
       s!"  {casesOn decls outParams}link_tac [{simpSet}]" ++
       (if literalMaps.isEmpty then "" else
@@ -1680,8 +1705,8 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         "\n  all_goals (try split at *)\n  all_goals (subst_vars; link_eqs; simp_all [List.lookup])" else "")
     thms := thms.push <|
       s!"theorem {name}_cert {functionGeneric} {binders} :\n" ++
-      s!"    {r.eval "run"} (N := {nv}) {r.cert "program"} {str name} {list args} = {some_} ({retEnc} ({call})) :=\n" ++
-      s!"  {r.full "tolean.TypeScript.Proof.decls_sound"} {rfl} {rfl} {rfl} {r.cert "program_translated"} {str name} _ 64 _\n" ++
+      s!"    {sourceCall} {list args} = {some_} ({retEnc} ({call})) :=\n" ++
+      s!"  {soundName} {rfl} {rfl} {rfl} {r.cert "program_translated"} {str name} _ 64 _\n" ++
       s!"    ({" ".intercalate ([r.cert s!"{name}_link"] ++ functionCodecs.map (·.2) ++ params.map (·.name) ++ obligations.map (·.1))})"
   return "\n".intercalate ([
     s!"-- Certificate written by tolean for {file}. Do not edit.",

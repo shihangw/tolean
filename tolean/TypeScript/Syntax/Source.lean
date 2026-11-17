@@ -110,6 +110,7 @@ def TypeExpr.words : TypeExpr → List Word
   | .ref _ name [] => [identWord name]
   | .ref _ name args => identWord name :: punctWord "<" :: separated "," (TypeExpr.wordsOf args) ++ [punctWord ">"]
   | .array _ elem => elem.words ++ [punctWord "[", punctWord "]"]
+  | .indexed _ receiver key => receiver.words ++ [punctWord "[", [.string key], punctWord "]"]
   -- A union of one member is `| T`, as `type A = | T` writes it.
   | .union _ [member] => punctWord "|" :: member.words
   | .union _ members => separated "|" (TypeExpr.wordsOf members)
@@ -294,6 +295,9 @@ def Stmt.lines (depth : Nat) : Stmt → List Line
     (depth, keywordWord "switch" :: punctWord "(" :: disc.words ++ [punctWord ")", punctWord "{"]) ::
       Stmt.clauseLines (depth + 1) clauses ++ [(depth, [punctWord "}"])]
   | .throwStmt _ e => [(depth, keywordWord "throw" :: e.words ++ [punctWord ";"])]
+  | .tryCatch _ b n h =>
+    (depth, [keywordWord "try"]) :: b.lines depth ++
+      (depth, [keywordWord "catch", punctWord "(", identWord n, punctWord ")"]) :: h.lines depth
   | .funDecl _ name typeParams params returnType body =>
     (depth, keywordWord "function" :: identWord name :: typeParamWords typeParams ++
       enclose "(" ")" (params.map Param.words) ++ typeAnnotation returnType) :: body.lines depth
@@ -416,6 +420,7 @@ def TypeExpr.erase : TypeExpr → TypeExpr
   | .literal _ lit => .literal noSpan lit
   | .ref _ name args => .ref noSpan name (TypeExpr.eraseAll args)
   | .array _ elem => .array noSpan elem.erase
+  | .indexed _ receiver key => .indexed noSpan receiver.erase key
   | .union _ members => .union noSpan (TypeExpr.eraseAll members)
   | .paren _ inner => .paren noSpan inner.erase
   | .tuple _ readonly elems => .tuple noSpan readonly (TypeExpr.eraseAll elems)
@@ -506,6 +511,7 @@ def Stmt.erase : Stmt → Stmt
   | .empty _ => .empty noSpan
   | .switchStmt _ disc clauses => .switchStmt noSpan disc.erase (Stmt.eraseClauses clauses)
   | .throwStmt _ e => .throwStmt noSpan e.erase
+  | .tryCatch _ b n h => .tryCatch noSpan b.erase n h.erase
   | .funDecl _ name typeParams params returnType body =>
     .funDecl noSpan name typeParams (params.map Param.erase) (returnType.map TypeExpr.erase) body.erase
 

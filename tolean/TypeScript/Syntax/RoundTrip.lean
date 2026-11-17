@@ -122,7 +122,7 @@ def TypeExpr.primaryWF : TypeExpr → Bool
   | .paren _ inner => inner.wf
   | .tuple _ readonly elems => !readonly && !elems.isEmpty && TypeExpr.allWF elems
   | .object _ fields => TypeExpr.objectFieldsWF fields
-  | .array .. | .union .. | .predicate .. => false
+  | .array .. | .indexed .. | .union .. | .predicate .. => false
 
 def TypeExpr.objectFieldsWF : List TypeField → Bool
   | [] => true
@@ -132,6 +132,7 @@ def TypeExpr.objectFieldsWF : List TypeField → Bool
 after it any number of times. -/
 def TypeExpr.arrayWF : TypeExpr → Bool
   | .array _ elem => elem.arrayWF && !elem.isReadonlyTuple
+  | .indexed _ receiver _ => receiver.arrayWF && !receiver.isReadonlyTuple
   | .keyword _ name => name == "void" || Parse.keywordTypes.contains name
   | .null _ => true
   | .literal _ _ => true
@@ -148,6 +149,7 @@ def TypeExpr.wf : TypeExpr → Bool
   | .union _ [member] => member.arrayWF
   | .union _ members => 2 ≤ members.length && TypeExpr.allArrayWF members
   | .array _ elem => elem.arrayWF && !elem.isReadonlyTuple
+  | .indexed _ receiver _ => receiver.arrayWF && !receiver.isReadonlyTuple
   | .keyword _ name => name == "void" || Parse.keywordTypes.contains name
   | .null _ => true
   | .literal _ _ => true
@@ -198,6 +200,7 @@ def TypeExpr.height : TypeExpr → Nat
   | .tuple _ readonly elems => TypeExpr.heightOf elems + (if readonly then 2 else 1)
   | .object _ fields => TypeExpr.heightFields fields + 1
   | .array _ elem => elem.height
+  | .indexed _ receiver _ => receiver.height
   | .union _ members => TypeExpr.heightOf members
   | .keyword .. | .null _ | .literal .. => 0
 
@@ -702,35 +705,110 @@ theorem length_brackets (k : Nat) : (brackets k).length = 2 * k := by
   | zero => rfl
   | succ k ih => simp [brackets, ih]; omega
 
-/-- A type that `parseArrayType` reads is a primary type with `k` array types
-around it. -/
+def suffixWords : Option String → List TokenKind
+  | none => [.punct "[", .punct "]"]
+  | some key => [.punct "[", .string key, .punct "]"]
+
+def suffixNode (sp : Span) (key : Option String) (receiver : TypeExpr) : TypeExpr :=
+  match key with
+  | none => .array sp receiver
+  | some key => .indexed sp receiver key
+
+def suffixNodes (keys : List (Option String)) (receiver : TypeExpr) : TypeExpr :=
+  keys.foldl (fun receiver key => suffixNode noSpan key receiver) receiver
+
+theorem suffixNode_erase (sp : Span) (key : Option String) (receiver : TypeExpr) :
+    (suffixNode sp key receiver).erase = suffixNode noSpan key receiver.erase := by
+  cases key <;> rfl
+
+theorem suffix_length (keys : List (Option String)) :
+    keys.length ≤ (keys.flatMap suffixWords).length := by
+  induction keys with
+  | nil => simp
+  | cons key keys ih =>
+    cases key <;>
+      simp only [List.length_cons, List.flatMap_cons, suffixWords, List.length_append,
+        List.length_nil] <;> omega
+
+theorem iterate_suffixes {step : TypeExpr → ParseM (TypeExpr × Bool)}
+    (hstop : ∀ acc s u r, s.rest = u :: r → u.kind ≠ .punct "[" →
+      step acc s = .ok (acc, false) s)
+    (hgo : ∀ key acc s ts rest, s.rest = ts ++ rest → s.left = s.rest.length →
+      ts.map (·.kind) = suffixWords key → (∀ x ∈ ts, NoBreak x) → rest ≠ [] →
+      ∃ sp s', step acc s = .ok (suffixNode sp key acc, true) s' ∧ Leaves s s' rest) :
+    ∀ keys fuel acc s ts rest, keys.length < fuel →
+      s.rest = ts ++ rest → s.left = s.rest.length →
+      ts.map (·.kind) = keys.flatMap suffixWords →
+      (∀ x ∈ ts, NoBreak x) → rest ≠ [] → FollowsArray rest →
+      ∃ res s', Parse.iterate fuel acc step s = .ok res s' ∧
+        res.erase = suffixNodes keys acc.erase ∧ Leaves s s' rest := by
+  intro keys
+  induction keys with
+  | nil =>
+    intro fuel acc s ts rest hk hs hl htk _ hr hf
+    obtain ⟨f', rfl⟩ : ∃ f', fuel = f' + 1 := ⟨fuel - 1, by simp at hk; omega⟩
+    have hts : ts = [] := by simpa using htk
+    subst hts
+    obtain ⟨u, r, rfl⟩ := List.exists_cons_of_ne_nil hr
+    have hs' : s.rest = u :: r := by simpa using hs
+    refine ⟨acc, s, ?_, rfl, Leaves.refl (by simpa using hs) (by simp [hl, hs'])⟩
+    rw [Parse.iterate_succ]
+    simp [bind, EStateM.bind, hstop acc s u r hs' (hf.2 u rfl), pure, EStateM.pure]
+  | cons key keys ih =>
+    intro fuel acc s ts rest hk hs hl htk hn hr hf
+    obtain ⟨f', rfl⟩ : ∃ f', fuel = f' + 1 := ⟨fuel - 1, by simp at hk; omega⟩
+    simp only [List.flatMap_cons] at htk
+    obtain ⟨front, tail, rfl, hp, ht⟩ := List.map_eq_append_iff.mp htk
+    obtain ⟨sp, s₁, hstep, hL₁⟩ := hgo key acc s front (tail ++ rest)
+      (by simpa using hs) hl hp (fun x hx => hn x (by simp [hx])) (by simp [hr])
+    have hl₁ : s₁.left = s₁.rest.length := by rw [hL₁.left_eq, hL₁.rest_eq]
+    obtain ⟨res, s', hit, he, hL⟩ := ih f' (suffixNode sp key acc) s₁ tail rest
+      (by simp at hk; omega) hL₁.rest_eq hl₁ ht (fun x hx => hn x (by simp [hx])) hr hf
+    refine ⟨res, s', ?_, ?_, leaves_trans hL₁ hL⟩
+    · rw [Parse.iterate_succ]
+      simp only [bind, EStateM.bind, hstep]
+      exact hit
+    · rw [he, suffixNode_erase]
+      rfl
+
+/-- A postfix type is a primary type followed by array or literal-key suffixes. -/
 theorem arrayWF_split : ∀ (t : TypeExpr), t.arrayWF = true → t.isReadonlyTuple = false →
-    ∃ (base : TypeExpr) (k : Nat), base.primaryWF = true ∧
-    t.tokens = base.tokens ++ brackets k ∧ t.erase = arrayOf noSpan k base.erase ∧ base.height = t.height
+    ∃ (base : TypeExpr) (keys : List (Option String)), base.primaryWF = true ∧
+    t.tokens = base.tokens ++ keys.flatMap suffixWords ∧
+    t.erase = suffixNodes keys base.erase ∧ base.height = t.height
   | .array sp elem, h, _ => by
     simp only [TypeExpr.arrayWF, Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true] at h
     obtain ⟨base, k, hb, ht, he, hh⟩ := arrayWF_split elem h.1 h.2
-    refine ⟨base, k + 1, hb, ?_, ?_, ?_⟩
-    · simp [TypeExpr.tokens, TypeExpr.words, punctWord] at ht ⊢
-      rw [ht, List.append_assoc, brackets_succ]
-    · simp [TypeExpr.erase, arrayOf, he]
+    refine ⟨base, k ++ [none], hb, ?_, ?_, ?_⟩
+    · simpa [TypeExpr.tokens, TypeExpr.words, punctWord, suffixWords,
+        List.flatMap_append, List.append_assoc] using
+        congrArg (fun ts => ts ++ [.punct "[", .punct "]"]) ht
+    · simp [TypeExpr.erase, he, suffixNodes, List.foldl_append, suffixNode]
     · simp [TypeExpr.height, hh]
-  | .keyword sp n, h, _ => ⟨.keyword sp n, 0, by simpa [TypeExpr.arrayWF, TypeExpr.primaryWF] using h, by simp [brackets], rfl, rfl⟩
-  | .null sp, _, _ => ⟨.null sp, 0, rfl, by simp [brackets], rfl, rfl⟩
-  | .literal sp l, _, _ => ⟨.literal sp l, 0, rfl, by simp [brackets], rfl, rfl⟩
-  | .ref sp n args, h, _ => ⟨.ref sp n args, 0, by simpa [TypeExpr.arrayWF, TypeExpr.primaryWF] using h, by simp [brackets], rfl, rfl⟩
-  | .paren sp i, h, _ => ⟨.paren sp i, 0, by simpa [TypeExpr.arrayWF, TypeExpr.primaryWF] using h, by simp [brackets], rfl, rfl⟩
+  | .keyword sp n, h, _ => ⟨.keyword sp n, [], by simpa [TypeExpr.arrayWF, TypeExpr.primaryWF] using h, by simp, rfl, rfl⟩
+  | .null sp, _, _ => ⟨.null sp, [], rfl, by simp, rfl, rfl⟩
+  | .literal sp l, _, _ => ⟨.literal sp l, [], rfl, by simp, rfl, rfl⟩
+  | .ref sp n args, h, _ => ⟨.ref sp n args, [], by simpa [TypeExpr.arrayWF, TypeExpr.primaryWF] using h, by simp, rfl, rfl⟩
+  | .paren sp i, h, _ => ⟨.paren sp i, [], by simpa [TypeExpr.arrayWF, TypeExpr.primaryWF] using h, by simp, rfl, rfl⟩
   | .tuple sp ro es, h, hro => by
     cases ro with
     | true => simp [TypeExpr.isReadonlyTuple] at hro
     | false =>
-      exact ⟨.tuple sp false es, 0, by simpa [TypeExpr.arrayWF, TypeExpr.primaryWF] using h, by simp [brackets],
+      exact ⟨.tuple sp false es, [], by simpa [TypeExpr.arrayWF, TypeExpr.primaryWF] using h, by simp,
         rfl, rfl⟩
   | .object sp fields, h, _ =>
-      ⟨.object sp fields, 0, by simpa [TypeExpr.arrayWF, TypeExpr.primaryWF] using h,
-        by simp [brackets], rfl, rfl⟩
+      ⟨.object sp fields, [], by simpa [TypeExpr.arrayWF, TypeExpr.primaryWF] using h,
+        by simp, rfl, rfl⟩
   | .union .., h, _ => by simp [TypeExpr.arrayWF] at h
   | .predicate .., h, _ => by simp [TypeExpr.arrayWF] at h
+  | .indexed sp receiver key, h, _ => by
+    simp only [TypeExpr.arrayWF, Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true] at h
+    obtain ⟨base, keys, hb, ht, he, hh⟩ := arrayWF_split receiver h.1 h.2
+    refine ⟨base, keys ++ [some key], hb, ?_, ?_, hh⟩
+    · simpa [TypeExpr.tokens, TypeExpr.words, punctWord, suffixWords,
+        List.flatMap_append, List.append_assoc] using
+        congrArg (fun ts => ts ++ [.punct "[", .string key, .punct "]"]) ht
+    · simp [TypeExpr.erase, he, suffixNodes, List.foldl_append, suffixNode]
 
 /-- `iterate_brackets`, in the shape of a goal about a parser that starts at
 `s₀`, so that `refine` finds the step. -/
@@ -755,6 +833,7 @@ theorem Parse.budget_eq (s : ParseState) : Parse.budget s = .ok (10 * (s.left + 
 /-- A primary type has tokens. -/
 theorem primaryWF_tokens {b : TypeExpr} (hb : b.primaryWF = true) : b.tokens ≠ [] := by
   cases b with
+  | indexed _ _ _ => simp [TypeExpr.primaryWF] at hb
   | predicate _ _ _ => simp [TypeExpr.primaryWF] at hb
   | keyword sp name => simp only [TypeExpr.tokens, TypeExpr.words]; split <;> simp [keywordWord, identWord]
   | null sp => simp [TypeExpr.tokens, TypeExpr.words, keywordWord]
@@ -770,6 +849,7 @@ theorem primaryWF_tokens {b : TypeExpr} (hb : b.primaryWF = true) : b.tokens ≠
 theorem primaryWF_first {b : TypeExpr} (hb : b.primaryWF = true) :
     ∀ k ∈ b.tokens.head?, k ≠ .ident "readonly" := by
   cases b with
+  | indexed _ _ _ => simp [TypeExpr.primaryWF] at hb
   | predicate _ _ _ => simp [TypeExpr.primaryWF] at hb
   | keyword sp name =>
     simp only [TypeExpr.primaryWF, Bool.or_eq_true, beq_iff_eq] at hb
@@ -791,6 +871,61 @@ theorem primaryWF_first {b : TypeExpr} (hb : b.primaryWF = true) :
   | object _ _ => simp [TypeExpr.tokens, TypeExpr.words, punctWord]
   | array sp e => simp [TypeExpr.primaryWF] at hb
   | union sp ms => simp [TypeExpr.primaryWF] at hb
+
+theorem arrayStep_indexed (start : Pos) (acc : TypeExpr) (s : ParseState)
+    (lb key rb u : Token) (r : List Token) (name : String)
+    (hs : s.rest = lb :: key :: rb :: u :: r)
+    (hlb : lb.kind = .punct "[") (hk : key.kind = .string name)
+    (hrb : rb.kind = .punct "]") (hn : lb.newlineBefore = false) :
+    Parse.arrayStep start acc s =
+      .ok (.indexed ⟨start, rb.span.stop⟩ acc name, true)
+        (past (past (past s lb (key :: rb :: u :: r)) key (rb :: u :: r)) rb (u :: r)) := by
+  have h1 : s.rest[1]? = some key := by simp [hs]
+  simp only [Parse.arrayStep, Parse.bind_eq (Parse.peek_eq hs)]
+  simp only [Token.isPunct, hlb, hn, beq_self_eq_true, Bool.not_true, Bool.false_or,
+    Bool.false_eq_true, ↓reduceIte, Parse.pure_bind]
+  rw [Parse.bind_eq (Parse.peekAt_eq h1)]
+  simp only [hk, beq_iff_eq, reduceCtorEq, ↓reduceIte]
+  rw [Parse.bind_eq (Parse.peekAt_eq h1)]
+  simp only [hk]
+  simp [Parse.skip, Parse.advance_eq hs, Parse.advance_eq (s := past s lb (key :: rb :: u :: r)) rfl,
+    Parse.expectPunct, Parse.peek_eq (s := past (past s lb (key :: rb :: u :: r)) key (rb :: u :: r)) rfl,
+    Parse.advance_eq (s := past (past s lb (key :: rb :: u :: r)) key (rb :: u :: r)) rfl,
+    Token.isPunct, hrb, Parse.spanFrom, discard, Functor.mapConst, EStateM.map, get, getThe,
+    MonadStateOf.get, EStateM.get, bind, EStateM.bind, pure, EStateM.pure]
+
+theorem arrayStep_suffix (start : Pos) (key : Option String) (acc : TypeExpr)
+    (s : ParseState) (ts rest : List Token) (hs : s.rest = ts ++ rest)
+    (hl : s.left = s.rest.length) (hk : ts.map (·.kind) = suffixWords key)
+    (hn : ∀ x ∈ ts, NoBreak x) (hr : rest ≠ []) :
+    ∃ sp s', Parse.arrayStep start acc s = .ok (suffixNode sp key acc, true) s' ∧
+      Leaves s s' rest := by
+  obtain ⟨u, r, rfl⟩ := List.exists_cons_of_ne_nil hr
+  cases key with
+  | none =>
+    obtain ⟨lb, ts₁, rfl, hlb, hk⟩ := List.map_eq_cons_iff.mp hk
+    obtain ⟨rb, rfl, hrb⟩ := List.map_eq_singleton_iff.mp hk
+    have hs' : s.rest = lb :: rb :: u :: r := by simpa using hs
+    have hnl := noBreak_of hlb (by decide) (hn lb (by simp))
+    refine ⟨⟨start, rb.span.stop⟩, past (past s lb (rb :: u :: r)) rb (u :: r), ?_,
+      ⟨⟨rfl, rfl, rfl, rfl⟩, rfl, ?_⟩⟩
+    · have h1 : s.rest[1]? = some rb := by simp [hs']
+      simp [Parse.arrayStep, Parse.peek_eq hs', Parse.peekAt_eq h1, Token.isPunct, hlb, hrb, hnl,
+        Parse.skip, Parse.advance_eq hs', Parse.advance_eq (s := past s lb (rb :: u :: r)) rfl,
+        Parse.spanFrom, discard, Functor.mapConst, EStateM.map, get, getThe,
+        MonadStateOf.get, EStateM.get, bind, EStateM.bind, pure, EStateM.pure, suffixNode]
+    · simp [hl, hs']
+  | some key =>
+    obtain ⟨lb, ts₁, rfl, hlb, hk⟩ := List.map_eq_cons_iff.mp hk
+    obtain ⟨kt, ts₂, rfl, hkey, hk⟩ := List.map_eq_cons_iff.mp hk
+    obtain ⟨rb, rfl, hrb⟩ := List.map_eq_singleton_iff.mp hk
+    have hs' : s.rest = lb :: kt :: rb :: u :: r := by simpa using hs
+    refine ⟨⟨start, rb.span.stop⟩,
+      past (past (past s lb (kt :: rb :: u :: r)) kt (rb :: u :: r)) rb (u :: r),
+      arrayStep_indexed start acc s lb kt rb u r key hs' hlb hkey hrb
+        (noBreak_of hlb (by decide) (hn lb (by simp))),
+      ⟨⟨rfl, rfl, rfl, rfl⟩, rfl, ?_⟩⟩
+    simp [hl, hs']
 
 /-- `parseArrayType` reads a type that `parsePrimaryType` reads, with `[ ]` after
 it any number of times, and `readonly` before a tuple that it reads itself. -/
@@ -867,36 +1002,33 @@ theorem parseArrayType_reads (f : Nat) (t : TypeExpr) (hwf : t.arrayWF = true)
   have hfp : FollowsPrimary (kts ++ rest) := by
     intro x hx
     cases k with
-    | zero =>
-      have : kts = [] := by simpa [brackets] using hkk
+    | nil =>
+      have : kts = [] := by simpa using hkk
       subst this; exact hf.1 x (by simpa using hx)
-    | succ k =>
+    | cons key k =>
       cases kts with
-      | nil => simp [brackets] at hkk
+      | nil => cases key <;> simp [suffixWords] at hkk
       | cons y kts' =>
-        simp at hx; subst hx; simp [brackets] at hkk; simp [hkk.1]
+        simp at hx; subst hx
+        cases key <;> simp [suffixWords] at hkk <;> simp [hkk.1]
   obtain ⟨base', s₁, hp, hbe, hL₁⟩ := hprim base hb hh s bts (kts ++ rest) (by simpa using hs) hl hbk
     (fun x hx => hn x (by simp [hx])) (by simp [hr]) hfp
   have hl₁ : s₁.left = s₁.rest.length := by rw [hL₁.left_eq, hL₁.rest_eq]
-  have hk' : k < 10 * (s.left + 1) := by
+  have hk' : k.length < 10 * (s.left + 1) := by
     have := congrArg List.length hkk
-    simp [length_brackets] at this
+    have hb := suffix_length k
+    simp only [List.length_map] at this
     rw [hl, hs]; simp; omega
   simp only [Parse.parseArrayType, bind, EStateM.bind, Parse.peek_eq hs0, Parse.peekAt_rest]
   simp only [Token.isIdent, show (x0.kind == .ident "readonly") = false by simpa using hx0, Bool.false_and,
     Bool.false_eq_true, ↓reduceIte, EStateM.bind, pure, EStateM.pure, Parse.budget_eq, hp]
-  refine iterate_brackets_goal (target := t) ?_ ?_ hk' hL₁.rest_eq hl₁ hkk (fun x hx => hn x (by simp [hx])) hr hf
-    (by rw [hbe, he]) hL₁
-  · intro acc s u r hsu hu
+  have hstop : ∀ acc s u r, s.rest = u :: r → u.kind ≠ .punct "[" →
+      Parse.arrayStep x0.span.start acc s = .ok (acc, false) s := by
+    intro acc s u r hsu hu
     simp [Parse.arrayStep, Parse.peek_eq hsu, Token.isPunct, hu, bind, EStateM.bind, pure, EStateM.pure]
-  · intro acc s lb rb r hsr hr' hlb hrb hnl
-    obtain ⟨u, r', rfl⟩ := List.exists_cons_of_ne_nil hr'
-    refine ⟨⟨x0.span.start, rb.span.stop⟩, ?_⟩
-    have h1 : s.rest[1]? = some rb := by simp [hsr]
-    simp [Parse.arrayStep, Parse.peek_eq hsr, Parse.peekAt_eq h1, Token.isPunct, hlb, hrb, hnl, Parse.skip,
-      Parse.advance_eq hsr, Parse.advance_eq (s := past s lb (rb :: (u :: r'))) rfl, Parse.spanFrom,
-      discard, Functor.mapConst,
-      EStateM.map, get, getThe, MonadStateOf.get, EStateM.get, bind, EStateM.bind, pure, EStateM.pure]
+  obtain ⟨res, s', hit, he', hL⟩ := iterate_suffixes hstop (arrayStep_suffix x0.span.start)
+    k _ base' s₁ kts rest hk' hL₁.rest_eq hl₁ hkk (fun x hx => hn x (by simp [hx])) hr hf
+  exact ⟨res, s', hit, by rw [he', hbe, he], leaves_trans hL₁ hL⟩
 
 /-! ### Lists with a separator -/
 
@@ -1288,6 +1420,7 @@ theorem arrayWF_head (t : TypeExpr) (h : t.arrayWF = true) :
   obtain ⟨base, k, hb, htok, _, _⟩ := arrayWF_split t h (by simpa using hro)
   rw [htok]
   cases base with
+  | indexed _ _ _ => simp [TypeExpr.primaryWF] at hb
   | predicate _ _ _ => simp [TypeExpr.primaryWF] at hb
   | keyword sp name =>
     simp only [TypeExpr.tokens, TypeExpr.words, keywordWord, identWord]
@@ -2013,6 +2146,9 @@ theorem types_reads : ∀ f : Nat,
     refine ⟨?_, ?_, ?_⟩
     · intro t hwf hf
       cases t with
+      | indexed sp receiver key =>
+        exact parseType_plain f _ (by simpa [TypeExpr.wf, TypeExpr.arrayWF] using hwf)
+          (ihA _ (by simpa [TypeExpr.wf, TypeExpr.arrayWF] using hwf) (by omega))
       | predicate _ _ _ => simp [TypeExpr.wf] at hwf
       | union sp ms =>
         refine parseType_union f sp ms hwf fun m hm => ihA m ?_ ?_
@@ -2047,6 +2183,7 @@ theorem types_reads : ∀ f : Nat,
       exact parseArrayType_reads f t hwf (fun b hb hh => ihP b hb (by omega)) fun b hb hh => ihA b hb (by omega)
     · intro t hwf hf
       cases t with
+      | indexed _ _ _ => simp [TypeExpr.primaryWF] at hwf
       | predicate _ _ _ => simp [TypeExpr.primaryWF] at hwf
       | keyword sp name =>
         by_cases hv : name = "void"

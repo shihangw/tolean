@@ -5415,6 +5415,77 @@ theorem translateForOfPattern_sound
           simpa [stmtsChanges] using hfr₂.trans hfr
   · simp at h
 
+/-- A returned value skips the handler, while a thrown value selects it. -/
+theorem handle_returns {sp bsp hsp : Span} {name : String}
+    {bs hs : List Stmt} {b h : IR.Body} {ρs ρo : Eval.Env N} {v : Except (Val N) (Val N)}
+    (hsafe : (Stmt.block bsp bs).catchSafe = true)
+    (hignore : (Stmt.block hsp hs).mentions name = false)
+    (hbret : ∀ v, IR.Body.exec fs fuel ρo b = some (.ret v) → Eval.exec m fuel ρs bs = some (.ret v))
+    (hhret : ∀ v, IR.Body.exec fs fuel ρo h = some (.ret v) → Eval.exec m fuel ρs hs = some (.ret v))
+    (hv : IR.Body.exec fs fuel ρo (.handle b h) = some (.ret v)) :
+    Eval.exec m fuel ρs [.tryCatch sp (.block bsp bs) name (.block hsp hs)] = some (.ret v) := by
+  cases he : IR.Body.exec fs fuel ρo b with
+  | none => simp [IR.Body.exec, he] at hv
+  | some o =>
+    cases o with
+    | normal ρ | brk ρ | cont ρ => simp [IR.Body.exec, he] at hv
+    | ret r =>
+      have hsrc := hbret r he
+      cases r with
+      | ok v' =>
+        simp [IR.Body.exec, he] at hv
+        subst v
+        simp [Eval.exec, Eval.execStmt, hsafe, hignore, hsrc, Stmt.constAssignedIn]
+      | error e =>
+        have hhandler : IR.Body.exec fs fuel ρo h = some (.ret v) := by
+          simpa [IR.Body.exec, he] using hv
+        have hdst := hhret v hhandler
+        simp [Eval.exec, Eval.execStmt, hsafe, hignore, hsrc, hdst, Stmt.constAssignedIn]
+
+theorem handle_end_impossible {b h : IR.Body} {ρ : Eval.Env N} {o : Outcome N}
+    (ho : (∃ ρ', o = .normal ρ') ∨ (∃ ρ', o = .brk ρ'))
+    (hb : IR.Body.exec fs fuel ρ b ≠ some o)
+    (hh : IR.Body.exec fs fuel ρ h ≠ some o) :
+    IR.Body.exec fs fuel ρ (.handle b h) ≠ some o := by
+  intro hv
+  cases he : IR.Body.exec fs fuel ρ b with
+  | none => simp [IR.Body.exec, he] at hv
+  | some out =>
+    cases out with
+    | normal env | brk env | cont env =>
+      simp [IR.Body.exec, he] at hv
+      exact hb (he.trans (congrArg some hv))
+    | ret r =>
+      cases r with
+      | error e => exact hh (by simpa [IR.Body.exec, he] using hv)
+      | ok v =>
+        rcases ho with ⟨_, rfl⟩ | ⟨_, rfl⟩ <;> simp [IR.Body.exec, he] at hv
+
+/-- Both arms return from the function. Only a thrown completion selects
+the handler, and neither arm has a normal or breaking output completion. -/
+theorem handle_sim {env : Translate.Env} {sp bsp hsp : Span} {name : String}
+    {bs hs : List Stmt} {b h : IR.Body}
+    (hsafe : (Stmt.block bsp bs).catchSafe = true)
+    (hignore : (Stmt.block hsp hs).mentions name = false)
+    (hb : StmtSim (N := N) m fs fuel env .ret bs b)
+    (hh : StmtSim (N := N) m fs fuel env .ret hs h) :
+    StmtSim (N := N) m fs fuel env .ret
+      [.tryCatch sp (.block bsp bs) name (.block hsp hs)] (.handle b h) := by
+  intro ρs ρo ha hsc
+  obtain ⟨hbret, hbend⟩ := hb ρs ρo ha hsc
+  obtain ⟨hhret, hhend⟩ := hh ρs ρo ha hsc
+  refine ⟨fun _ hv => handle_returns m fs fuel hsafe hignore hbret hhret hv, ?_⟩
+  intro brk ρ' hv
+  exfalso
+  apply handle_end_impossible fs fuel (o := endOf brk ρ') ?_ ?_ ?_ hv
+  · cases brk <;> simp [endOf]
+  · intro he
+    have := (hbend brk ρ' he).1
+    simp [Tail.isRet] at this
+  · intro he
+    have := (hhend brk ρ' he).1
+    simp [Tail.isRet] at this
+
 /-- The statement functions of the translator are sound, at every fuel for
 which calls agree at that fuel and below. The body of a local function runs
 with less fuel than its call, so the induction on `F` keeps the fuel general. -/
@@ -5647,6 +5718,33 @@ theorem stmts_sound (F : Nat) : ∀ fuel, (∀ k ≤ fuel, CallsAgree (N := N) m
             cases rest <;> simp at hrest
             simp only [pure_bind] at h
             exact translateThrow_sound m fs fuel hc h
+          · simp at h
+        | tryCatch sp attempt name handler =>
+          simp only [ite_state] at h
+          split at h
+          · rename_i ht
+            simp only [Bool.and_eq_true] at ht
+            obtain ⟨hr, ht⟩ := ht
+            cases rest <;> simp at hr
+            have htail : tail = .ret := by cases tail <;> simp_all [Tail.isRet]
+            subst tail
+            simp only [pure_bind, ite_state] at h
+            split at h
+            · rename_i hsafe
+              split at h
+              · simp at h
+              · rename_i hi
+                have hignore : handler.mentions name = false := by simpa using hi
+                cases attempt with
+                | block bsp bs =>
+                  cases handler with
+                  | block hsp hs =>
+                    simp only [bind_ok, pure_ok] at h
+                    obtain ⟨b, c₁, hb, hout, c₂, hh, rfl, _⟩ := h
+                    exact handle_sim m fs fuel hsafe hignore (ihS _ _ _ _ _ _ hb) (ihS _ _ _ _ _ _ hh)
+                  | _ => simp at h
+                | _ => simp at h
+            · simp at h
           · simp at h
         | funDecl sp name tps params rt fbody => exact translateFunDecl_sound m fs fuel ihS h₀
         | _ => simp at h
