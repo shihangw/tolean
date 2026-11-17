@@ -4762,13 +4762,14 @@ order, as for an interface. `r[k]` reads the field that `k` names. -/
 def translateRecord (exported : Bool) (name : String) (key value : TypeExpr) :
     TM IR.Decl := do
   let keyType ← isolated (translateType key)
-  if keyType == .string then
-    reject key.span "Record<string, V> is not supported yet: dynamic string lookup needs a certificate condition for inherited Object.prototype properties; naming the Record does not remove this requirement"
   let ctx ← get
   let info ← orReject (match keyType with
       | .enum ref => ctx.enums.find? (·.ref == ref)
       | _ => none) key.span
-    "the keys of a Record must be a literal union of strings that this file declares or imports, such as type K = 'a' | 'b'"
+    (if keyType == .string then
+      "Record<string, V> is not supported yet: dynamic string lookup needs a certificate condition for inherited Object.prototype properties; naming the Record does not remove this requirement"
+    else
+      "the keys of a Record must be a literal union of strings that this file declares or imports, such as type K = 'a' | 'b'")
   let type ← isolated (translateType value)
   if let some m := info.members.find? leanReserved.contains then
     reject key.span s!"name '{m}' is reserved in Lean, so it cannot name a field of the Record"
