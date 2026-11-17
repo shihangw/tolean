@@ -378,7 +378,8 @@ def plan (config : Json) : IO (List Write) := do
   let configs ← if hasTypeScript && files.contains "tsconfig.json" then do
       let loaded ← ((TypeScript.ModuleResolution.collectConfigs
         (fun path => (liftM (do
-          if ← System.FilePath.pathExists path then return some (← IO.FS.readFile path)
+          if (← System.FilePath.pathExists path) && !(← System.FilePath.isDir path) then
+            return some (← IO.FS.readFile path)
           else return none : IO (Option String)) : ExceptT String IO (Option String)))
         1024 [] "tsconfig.json").run []).run
       pure (← ok loaded).2

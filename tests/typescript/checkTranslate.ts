@@ -325,6 +325,35 @@ for (const scenario of [
   checkWorkspace(project, false, workspace, true);
 }
 
+// Arrays and extensionless bases keep the same precedence outside the root.
+// An unrelated external TypeScript file must not match even an explicit glob.
+{
+  const workspace = mkdtempSync(join(out, 'external-chain-'));
+  cpSync(`${projectsDir}/accept/monorepo`, workspace, { recursive: true });
+  const project = join(workspace, 'packages/geometry');
+  mkdirSync(join(workspace, 'common'));
+  writeFileSync(join(workspace, 'common.json'), JSON.stringify({
+    compilerOptions: { moduleResolution: 'bundler' },
+  }));
+  writeFileSync(join(workspace, 'left.json'), JSON.stringify({
+    extends: './common', compilerOptions: { moduleResolution: 'node16' },
+  }));
+  writeFileSync(join(workspace, 'right.json'), JSON.stringify({ extends: './common' }));
+  writeFileSync(join(workspace, 'tsconfig.base.json'), JSON.stringify({
+    extends: ['./left.json', './right.json'],
+  }));
+  writeFileSync(join(workspace, 'outside.ts'), 'class Unsupported {}\n');
+  writeFileSync(join(project, 'tolean.json'), JSON.stringify({
+    typescript: { sources: ['src/*.ts', '../../outside.ts'] },
+  }));
+  // Only bundler resolves this import. The later branch must restore that mode.
+  writeFileSync(join(project, 'src/main.ts'),
+    'import { area } from "./area";\nexport function square(x: number): number { return area(x, x); }\n');
+  const run = spawnSync(tolean, ['translate'], { cwd: project, encoding: 'utf8' });
+  if (run.status !== 0) failures.push(`external shared chain: ${run.stderr}`);
+  else checkWorkspace(project, true, workspace);
+}
+
 const rejectProjects = readdirSync(`${projectsDir}/reject`).sort();
 for (const name of rejectProjects) {
   const dir = `${projectsDir}/reject/${name}`;

@@ -39,5 +39,11 @@ The workspace check supplies the same relative paths and compares the full
 native and WebAssembly results. It also compares the reported config hashes
 with the native manifest.
 
+Further cases check missing bases, external cycles and inherited unsupported
+options. An array with a shared external ancestor checks merge precedence
+through an extensionless import. That case also checks that an external
+TypeScript file cannot match source globs. Another case refuses an import
+that leaves the project.
+
 Config discovery and hashing remain tested and trusted. They add no proof
 assumption or interpreter operation.
