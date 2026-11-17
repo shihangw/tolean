@@ -592,7 +592,8 @@ def readOptionalMark (optionalOK : Bool) : ParseM Bool := do
 def parseParam (optionalOK : Bool) : ParseM Param := do
   let t ← peek
   if t.isPunct "..." then failAt t "rest parameters are not supported"
-  if t.isPunct "[" || t.isPunct "{" then failAt t "destructuring is not supported"
+  if t.isPunct "[" || t.isPunct "{" then
+    failAt t "destructuring is not supported in parameters; name the parameter and read its fields in the body"
   if t.isKeyword "this" then failAt t "'this' parameters are not supported"
   let name ← readName
   let optional ← readOptionalMark optionalOK
@@ -849,7 +850,8 @@ def parseDeclaration : ParseM VarDecl := do
   -- `parseStatement` reads `const [` itself, and `countedFor` hands
   -- `for (const [` to `parseForOf`. So a `[` here comes after `export`.
   if t.isPunct "[" || t.isPunct "{" then
-    failAt t (if t.isPunct "{" then "object destructuring is not supported"
+    failAt t (if t.isPunct "{" then
+      "object destructuring is not supported; bind the source once, then declare each field separately"
       else "array destructuring is not supported after 'export'")
   let name ← readName
   let mut type := none

@@ -128,6 +128,14 @@ values, and a pattern that is empty or that ends with a `,`, such as `[a, ]`
 or `[a, , ]`, although JavaScript allows both. So the last place is always a
 name or the rest element, and the printed pattern reads back as the same one.
 
+For an object pattern, bind the source once and declare its fields separately.
+For example, replace `const { start, end } = makeSpan()` with
+`const span = makeSpan(); const start = span.start; const end = span.end;`.
+Choose a source name that does not conflict with another binding. Repeating
+`makeSpan()` for each field could change the result or repeat a side effect.
+Destructured parameters are also refused. Name the parameter and read its
+fields in the body instead.
+
 In the declaration at the start of a counted `for`, the parser refuses an `in`
 operator unless parentheses, braces, the arguments of a call or an index hold
 it. ECMA-262 reads such an `in` as the start of a `for … in` loop. It allows

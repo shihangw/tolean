@@ -825,6 +825,41 @@ test('the interpreter reads the index of at and slice as Node does', async () =>
   }
 });
 
+test('the explicit object-binding rewrite agrees with Node destructuring', async () => {
+  const source = `
+    export interface Span { readonly start: number; readonly end: number; }
+    export function length(s: Span): number {
+      const span = s;
+      const start = span.start;
+      const end = span.end;
+      return end - start;
+    }
+  `;
+  const spans = [
+    { start: 2, end: 9 },
+    { start: -5, end: 3 },
+    { start: 0, end: -0 },
+    { start: Infinity, end: Infinity },
+    { start: NaN, end: 1 },
+  ];
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({
+      programs: [{ source, calls: spans.map(s => ({ function: 'length', args: [encode(s)] })) }],
+    }),
+    encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (result === undefined || !result.parsed) return;
+  for (const [i, span] of spans.entries()) {
+    const { start, end } = span;
+    const value = result.results[i]?.value;
+    expect(value === undefined ? 'no value' : canonical(value))
+      .toBe(canonical(encode(end - start)));
+  }
+});
+
 test('optional array indexing agrees with Node', async () => {
   const sources = [
     'export function f(xs: ReadonlyArray<bigint> | null): bigint { return xs?.[0] ?? 7n; }',
