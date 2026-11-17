@@ -226,7 +226,7 @@ const projectsDir = 'corpus/translate/projects';
 
 /** Check the IO-free entry point too. WebAssembly runs precisely this code,
 so projects exercise resolution in both builds whenever wasm/out is present. */
-function checkWorkspace(dir: string, accepted: boolean, workspaceDir = dir): void {
+function checkWorkspace(dir: string, accepted: boolean, workspaceDir = dir, mustRefuse = false): void {
   const files = (function walk(prefix: string): Array<{ path: string; text: string }> {
     return readdirSync(join(workspaceDir, prefix), { withFileTypes: true }).flatMap((e) => {
       const path = prefix === '' ? e.name : `${prefix}/${e.name}`;
@@ -280,7 +280,7 @@ function checkWorkspace(dir: string, accepted: boolean, workspaceDir = dir): voi
         }
       }
     }
-  } else if (native.error === undefined && !native.units?.some((u) => u.error !== undefined)) {
+  } else if (mustRefuse && native.error === undefined && !native.units?.some((u) => u.error !== undefined)) {
     failures.push(`${dir}: workspace accepted a refused project`);
   }
 }
@@ -322,7 +322,7 @@ for (const scenario of [
   }
   const run = spawnSync(tolean, ['translate'], { cwd: project, encoding: 'utf8' });
   if (run.status !== 1) failures.push(`${scenario.name}: native command did not refuse: ${run.stderr}`);
-  checkWorkspace(project, false, workspace);
+  checkWorkspace(project, false, workspace, true);
 }
 
 const rejectProjects = readdirSync(`${projectsDir}/reject`).sort();

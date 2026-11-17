@@ -420,7 +420,7 @@ def translateWorkspace (input : String) : Except String Json := do
     return ((← f.getObjValAs? String "path"), (← f.getObjValAs? String "text"))
   -- External entries supply config text only, never translation sources.
   let projectFiles := (texts.map (·.1)).filter fun path =>
-    !(path.splitOn "/").contains ".." && !path.startsWith "/"
+    !(path.splitOn "/").contains ".."
   let some configText := texts.lookup "tolean.json"
     | throw "the workspace has no tolean.json"
   let config ← (Json.parse configText).mapError (s!"tolean.json: {·}")
