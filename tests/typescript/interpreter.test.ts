@@ -760,6 +760,58 @@ test('declared error fields agree with Node after same-name assignments', async 
   }
 });
 
+test('error fields refuse __proto__ in both forms but allow plain parameters', async () => {
+  const cases = [
+    { fields: 'readonly __proto__: number;', params: '__proto__: number',
+      body: 'this.__proto__ = __proto__;', accepted: false,
+      es2015Keys: [], esNextKeys: ['__proto__'] },
+    { fields: '', params: 'readonly __proto__: number',
+      body: '', accepted: false, es2015Keys: [], esNextKeys: ['__proto__'] },
+    { fields: 'readonly code: number;', params: 'code: number',
+      body: 'this.code = code;', accepted: true,
+      es2015Keys: ['code'], esNextKeys: ['code'] },
+    { fields: '', params: 'readonly code: number',
+      body: '', accepted: true, es2015Keys: ['code'], esNextKeys: ['code'] },
+    { fields: '', params: '__proto__: number',
+      body: '', accepted: true, es2015Keys: [], esNextKeys: [] },
+  ];
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-proto-error-'));
+  for (const [i, entry] of cases.entries()) {
+    const source = `class E extends Error {
+      ${entry.fields}
+      constructor(${entry.params}) { super("bad"); ${entry.body} }
+    }
+    export function check(): number { throw new E(7); }`;
+    const run = spawnSync(tolean, ['interpret'], {
+      input: JSON.stringify({ programs: [{ source, calls: [{ function: 'check', args: [] }] }] }),
+      encoding: 'utf8',
+    });
+    expect(run.status, run.stderr).toBe(0);
+    const lean = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+    expect(lean?.parsed, source).toBe(true);
+    if (lean === undefined || !lean.parsed) continue;
+    expect(lean.accepted, source).toBe(entry.accepted);
+    for (const target of [ts.ScriptTarget.ES2015, ts.ScriptTarget.ESNext]) {
+      const path = join(dir, `case${i}-${target}.mjs`);
+      writeFileSync(path, ts.transpileModule(source, {
+        compilerOptions: { target, module: ts.ModuleKind.ESNext },
+      }).outputText);
+      const mod = await import(pathToFileURL(path).href);
+      let thrown: unknown;
+      try { mod.check(); } catch (error) { thrown = error; }
+      expect(thrown).toBeInstanceOf(Error);
+      const keys = target === ts.ScriptTarget.ES2015 ? entry.es2015Keys : entry.esNextKeys;
+      expect(Object.keys(thrown as Error)).toEqual(keys);
+      expect(Object.hasOwn(thrown as Error, '__proto__')).toBe(keys.includes('__proto__'));
+      if (entry.accepted) {
+        const result = lean.results[0];
+        expect(result !== null && result !== undefined && 'throws' in result
+          ? canonical(result.throws) : 'did not throw').toBe(shownThrow(thrown));
+      }
+    }
+  }
+});
+
 test('error field normalization refuses missing, repeated and computed assignments', () => {
   const cases = [
     ['readonly line: number;', 'line: number', ''],

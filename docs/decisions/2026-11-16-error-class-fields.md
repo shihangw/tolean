@@ -24,6 +24,14 @@ A plain parameter may be named `message`, `name`, `stack` or `cause`.
 Only a field with one of those names could replace an inherited or own error
 property, so the translator reserves those names for readonly parameters.
 
+Both readonly parameter properties and separate readonly declarations refuse
+`__proto__` fields. Downlevel assignment invokes the inherited prototype setter,
+which ignores primitive values rather than creating an own field. Native field
+definitions create that field instead. We refuse this name rather than model
+assignment and definition separately. A plain `__proto__` parameter remains
+legal because it does not write a field. The shared translator check applies
+after the parser normalizes separate declarations.
+
 The constructor cannot observe the temporary undefined values of native
 class fields. It calls `super` first, then only copies its parameters to the
 declared fields. It cannot call a function, read `this`, branch, or write a

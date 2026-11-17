@@ -5148,8 +5148,12 @@ def translateCtorParam (p : CtorParam) : TM (String × Ty × Bool) := do
   let pname ← checkLocalName p.param.span p.param.name
   -- JS assigns a parameter property after `super(…)` returns, so one named
   -- `message` would replace the message. `Error` owns the others too.
-  if p.readonly && ["message", "name", "stack", "cause"].contains pname then
-    reject p.param.span s!"a parameter of an error class may not be named {pname}, which Error owns"
+  -- The inherited `__proto__` setter does not create an own field in
+  -- downlevel output. This check also covers normalized declared fields.
+  if p.readonly && ["message", "name", "stack", "cause", "__proto__"].contains pname then
+    reject p.param.span (if pname == "__proto__" then
+      "an error field may not be named __proto__, whose assignment does not create an own field"
+    else s!"a parameter of an error class may not be named {pname}, which Error owns")
   let ty ← translateType type
   unless ty matches .bigint | .number | .boolean | .string do
     reject p.param.span "a parameter of an error class must be a bigint, a number, a boolean or a string"
