@@ -1,8 +1,8 @@
 /**
  * Tolean's translator, run as the native `tolean` command. The package finds
  * the binary in `$TOLEAN_BINARY`, or else in the package for this platform,
- * such as `@tolean/darwin-arm64`, and passes it the workspace as JSON on
- * stdin (`tolean translate-workspace`).
+ * such as `@tolean/darwin-arm64`, and passes it source or workspace JSON on
+ * stdin.
  */
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -70,10 +70,10 @@ export function binaryPath(): string {
   );
 }
 
-/** Run `tolean translate-workspace` on the JSON text, and return its output. */
-function run(input: string): Promise<string> {
+/** Run a translator command on the JSON text, and return its output. */
+function run(input: string, args = ['translate-workspace']): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn(binaryPath(), ['translate-workspace'], { stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(binaryPath(), args, { stdio: ['pipe', 'pipe', 'pipe'] });
     const out: Buffer[] = [];
     const err: Buffer[] = [];
     child.stdout.on('data', (b: Buffer) => out.push(b));
@@ -115,19 +115,11 @@ export async function translateSource({
   /** The edition the code runs on. */
   target?: Edition;
 }): Promise<string> {
-  const config = {
-    typescript: {
-      sources: [fileName],
-      target,
-      overrides: [{ sources: [fileName], output: 'Output.lean', namespace }],
-    },
-  };
-  const units = await translateWorkspace([
-    { path: 'tolean.json', text: JSON.stringify(config) },
-    { path: fileName, text },
-  ]);
-  const unit = units[0];
-  if (unit == null) throw new TranslateError(`${fileName}: no such file`);
-  if (unit.kind === 'error') throw new TranslateError(unit.error);
-  return unit.lean;
+  // A single-file name is a diagnostic label, not a workspace source path.
+  const result = JSON.parse(await run(
+    JSON.stringify({ fileName, text, namespace }),
+    ['translate-source', '--target', target],
+  )) as { lean: string } | { error: string };
+  if ('error' in result) throw new TranslateError(result.error);
+  return result.lean;
 }

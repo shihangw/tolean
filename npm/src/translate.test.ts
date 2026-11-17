@@ -12,6 +12,29 @@ import { TranslateError, translateSource, translateWorkspace } from './translate
 // corpus in tests/typescript and tests/go, with the same binary. Run them with
 // TOLEAN_BINARY set, as CI does, until the platform packages exist.
 describe('translateSource', () => {
+  test.each(['../input.ts', 'src/../input.ts', '/tmp/input.ts', 'src/input.ts', 'input.ts'])(
+    'preserves the supplied filename %s in output and diagnostics',
+    async (fileName) => {
+      const lean = await translateSource({
+        fileName,
+        text: 'export function f(): bigint { return 1n; }',
+        namespace: 'Test',
+      });
+      expect(lean.split('\n')[0]).toContain(`from ${fileName}.`);
+      expect(lean).toContain('namespace Test');
+      expect(lean).toContain('def f');
+      const invalid = translateSource({
+        fileName,
+        text: 'export function f(x: bigint): bigint { x = 1n; return x; }',
+        namespace: 'Test',
+      });
+      await expect(invalid).rejects.toThrow(TranslateError);
+      await expect(invalid).rejects.toThrow(
+        `${fileName}:1:40: only a local declared with let may be assigned`,
+      );
+    },
+  );
+
   test('translates a TypeScript file', async () => {
     const lean = await translateSource({
       fileName: 'input.ts',
@@ -50,6 +73,17 @@ describe('translateSource', () => {
 describe('translateWorkspace', () => {
   const source = 'export function f(): bigint { return 1n; }';
   const user = (path: string) => `import { f } from "${path}"; export function g(): bigint { return f(); }`;
+
+  test('excludes external source entries even when the config selects them', async () => {
+    const units = await translateWorkspace([
+      { path: 'tolean.json', text: '{"typescript":{"sources":["*.ts","../*.ts","src/../../*.ts"]}}' },
+      { path: 'input.ts', text: source },
+      { path: '../external.ts', text: source },
+      { path: 'src/../../external.ts', text: source },
+    ]);
+    expect(units).toHaveLength(1);
+    expect(units[0]).toMatchObject({ kind: 'ok', output: 'Input.lean' });
+  });
 
   test.each([
     ['bundler', './lib'],
