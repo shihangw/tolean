@@ -1201,6 +1201,35 @@ Optional parameters and generic borrowing functions remain refused too.
 The certifier also refuses borrowing functions: its link proof does not
 yet describe the final map as the function's result.
 
+### Indexed access types
+
+Indexed access types such as `Shape['kind']` remain refused, even when
+`Shape` is a declared interface and `kind` names an existing field.
+Nested access, unions of keys, `keyof`, numeric keys and generic receivers
+are also refused. This limitation concerns type annotations, not runtime
+array indexing.
+
+Declare a named field type to avoid repeating a literal union:
+
+```ts
+export type Kind = 'circle' | 'square';
+
+export interface Shape {
+  readonly kind: Kind;
+  readonly size: number;
+}
+
+export function hasKind(s: Shape, kind: Kind): boolean {
+  return s.kind === kind;
+}
+```
+
+An anonymous literal union in a field is a separate limitation: the
+translator needs a name for its Lean inductive type. Naming `Kind` addresses
+both limitations in this example. The
+[decision record](../decisions/2026-11-16-indexed-access-types.md)
+describes what must change before indexed access types can be accepted.
+
 ## Numbers
 
 A JS `number` is an IEEE-754 double. Tolean does not map it to Lean's
