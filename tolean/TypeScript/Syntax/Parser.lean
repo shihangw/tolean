@@ -1392,6 +1392,8 @@ def parseClassReturnAnnotation : ParseM (Option TypeExpr) := do
 def parseClassMethod : ParseM ClassMethod := do
   let t ← peek
   let name ← readPropertyName
+  if name == "readonly" || name == "constructor" || name == "extends" then
+    failAt t "this name is reserved for a class field, constructor or inheritance"
   let tp ← peek
   if tp.isPunct "<" then failAt tp "generic class methods are not supported"
   let _ ← expectPunct "("

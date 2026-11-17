@@ -1921,7 +1921,10 @@ theorem parseClassMethod_reads {T : Edition} (m : ClassMethod)
     by simp [ClassMethod.erase, hep, hea, heb], ?_⟩
   · simp only [Parse.parseClassMethod]
     rw [Parse.bind_eq (Parse.peek_eq hs₀),
-      Parse.bind_eq (readPropertyName_ok hs₀ hnm),
+      Parse.bind_eq (readPropertyName_ok hs₀ hnm)]
+    have hnn : name ≠ "readonly" ∧ name ≠ "constructor" ∧ name ≠ "extends" := by
+      simpa [Bool.and_eq_true, and_assoc] using hname
+    rw [Parse.ite_guard (fun h => by simp [hnn.1, hnn.2.1, hnn.2.2] at h),
       Parse.bind_eq (Parse.peek_eq (s := s₁) rfl)]
     rw [Parse.ite_guard (fun h => by simp [Token.isPunct, hlp] at h),
       Parse.bind_eq (Parse.expectPunct_ok (s := s₁) rfl (by simp) hlp),
