@@ -108,9 +108,9 @@ private def proofs (l : Loaded) : IO (List String) := do
     let path := l.dir / m.output.path
     if !(← path.pathExists) then return []
     let text ← IO.FS.readFile path
-    let prefix := "-- tolean sort obligation: "
+    let marker := "-- tolean sort obligation: "
     return (text.splitOn "\n").filterMap fun line =>
-      if line.startsWith prefix then some ((line.drop prefix.length).toString) else none
+      if line.startsWith marker then some ((line.drop marker.length).toString) else none
   let mods := (l.project.claims.map (·.module) ++
     l.project.obligations.map (·.module) ++
     (allNodes l).filterMap fun (_, n) => if n.status == .proved then n.module else none).eraseDups

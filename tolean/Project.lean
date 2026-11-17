@@ -375,7 +375,7 @@ def plan (config : Json) : IO (List Write) := do
   let proofs ← match config.getObjVal? "proofManifest" with
     | .error _ => pure []
     | .ok value => do
-      let path ← ok (fromJson? (α := String) value)
+      let path ← ok (Lean.fromJson? (α := String) value)
       let manifest : Chain.ProjectManifest ← Chain.readJson path
       pure manifest.obligations
   let files ← projectFiles "."
