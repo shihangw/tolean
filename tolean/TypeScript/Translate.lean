@@ -664,6 +664,7 @@ def fieldSortObligations : List (String × IR.Expr) → List SortObligation
 end
 
 def bodySortObligations : IR.Body → List SortObligation
+  | .handle attempt handler => bodySortObligations attempt ++ bodySortObligations handler
   | .value e | .exit e _ | .throw e => exprSortObligations e
   | .state _ | .yield .. | .done .. => []
   | .let _ e rest | .letTuple _ e rest | .letLifted _ e rest =>
