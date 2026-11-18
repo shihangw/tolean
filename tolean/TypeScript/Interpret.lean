@@ -296,7 +296,11 @@ def runProgram (p : Json) : Except String Json := do
       return Json.mkObj [("parsed", true), ("accepted", false),
           ("error", message), ("results", Json.arr (Array.replicate calls.size Json.null))]
     let m ← lowered
-    let accepted := (Translate.translateTree file source target).toBool
+    let translated := Translate.translateFile file source target
+    let accepted := translated.toBool
+    let sortObligations := match translated with
+      | .ok (_, _, _, iface) => !iface.sortObligations.isEmpty
+      | .error _ => false
     let results ← calls.mapM fun c => do
       let name ← c.getObjValAs? String "function"
       let args ← (← c.getObjValAs? (Array Json) "args").mapM ofJson
@@ -304,7 +308,8 @@ def runProgram (p : Json) : Except String Json := do
         | some (.ok v) => Json.mkObj [("value", toJson v)]
         | some (.error t) => Json.mkObj [("throws", toJson t)]
         | none => Json.null
-    return Json.mkObj [("parsed", true), ("accepted", accepted), ("results", Json.arr results)]
+    return Json.mkObj [("parsed", true), ("accepted", accepted),
+      ("sortObligations", sortObligations), ("results", Json.arr results)]
 
 /-- `{"programs": [{"source", "target"?, "calls": [{"function", "args"}]}]}`
 to `{"programs": [{"parsed", "accepted", "results"}]}`. -/

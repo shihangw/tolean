@@ -771,6 +771,10 @@ def consistentOn {α : Type} (cmp : α → α → Option Ordering) (items : List
     (cmp a b).isSome && cmp b a == (cmp a b).map Ordering.swap &&
       items.all fun c => !(cmp a b != some .gt && cmp b c != some .gt) || cmp a c != some .gt
 
+/-- A comparator is consistent on every finite input list. -/
+def Consistent {α : Type} (cmp : α → α → N) : Prop :=
+  ∀ items, consistentOn (fun a b => JSNumber.compareSign (cmp a b)) items = true
+
 /-- The elements of `items` in the order that `Array.prototype.sort` gives
 them with the comparator `cmp` (SortIndexedProperties, ECMA-262
 §23.1.3.30.1). An element comes after another only when `cmp` says that it

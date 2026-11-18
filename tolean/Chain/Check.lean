@@ -137,27 +137,41 @@ private instance : MonadEnv (ReaderT Environment Id) where
   getEnv := read
   modifyEnv _ := pure ()
 
+/-- Manifest names omit Lean quotation marks, including generated names
+whose components contain spaces. -/
+private def manifestName (s : String) : Name :=
+  (s.splitOn ".").foldl Name.str .anonymous
+
 /-- `name` is a theorem whose axioms are among `allowed`; with `spec`, its type
 is the constant `spec`. -/
 private def theoremErr (env : Environment) (at_ name : String) (spec : Option String)
     (allowed : List String) : Option String := Id.run do
-  let n := name.toName
+  let n := manifestName name
   let some ci := env.find? n | return some s!"{at_}: {name} is not in the environment"
   unless ci matches .thmInfo _ do return some s!"{at_}: {name} is not a theorem"
   if let some s := spec then
-    unless ci.type == mkConst s.toName do
+    unless ci.type == mkConst (manifestName s) do
       return some s!"{at_}: the type of {name} is not exactly {s}"
-    if env.find? s.toName |>.isNone then return some s!"{at_}: {s} is not in the environment"
+    if env.find? (manifestName s) |>.isNone then return some s!"{at_}: {s} is not in the environment"
   let axs := (collectAxioms n : ReaderT Environment Id _).run env
   let extra := axs.toList.filter fun a => !allowed.contains a.toString
   if extra.isEmpty then none
   else some s!"{at_}: {name} also depends on {", ".intercalate (extra.map toString)}"
 
 private def proofs (l : Loaded) : IO (List String) := do
+  -- Requirements come from the generated files, never from the project's
+  -- list of supplied proofs. Freshness checks protect those files too.
+  let required ← l.files.flatMapM fun (_, m) => do
+    let path := l.dir / m.output.path
+    if !(← path.pathExists) then return []
+    let text ← IO.FS.readFile path
+    let marker := "-- tolean sort obligation: "
+    return (text.splitOn "\n").filterMap fun line =>
+      if line.startsWith marker then some ((line.drop marker.length).toString) else none
   let mods := (l.project.claims.map (·.module) ++
     l.project.obligations.map (·.module) ++
     (allNodes l).filterMap fun (_, n) => if n.status == .proved then n.module else none).eraseDups
-  if mods.isEmpty then return []
+  if mods.isEmpty then return required.map fun spec => s!"missing proof for generated obligation {spec}"
   initSearchPath (← findSysroot)
   let env ← importModules (mods.toArray.map fun m => { module := m.toName }) {}
   let claimErrs := l.project.claims.filterMap fun c =>
@@ -169,7 +183,13 @@ private def proofs (l : Loaded) : IO (List String) := do
   let obligationErrs := l.project.obligations.filterMap fun o =>
     theoremErr env s!"obligation {o.spec}" o.proof (some o.spec)
       ["propext", "Classical.choice", "Quot.sound"]
-  return claimErrs ++ nodeErrs ++ obligationErrs
+  let requiredErrs := required.filterMap fun spec =>
+    let proof := match l.project.obligations.find? (·.spec == spec) with
+      | some o => o.proof
+      | none => spec ++ " proof"
+    theoremErr env s!"generated obligation {spec}" proof (some spec)
+      ["propext", "Classical.choice", "Quot.sound"]
+  return claimErrs ++ nodeErrs ++ obligationErrs ++ requiredErrs
 
 private def references (l : Loaded) : List String :=
   let known := (allNodes l).map (·.1) ++ l.files.map (·.2.module) ++ l.project.claims.map (·.id)

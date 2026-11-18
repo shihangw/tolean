@@ -2680,7 +2680,7 @@ theorem translateSort_sound {F : Nat}
   split at h
   rotate_left
   · simp only [bind_ok, reject_ne_ok, false_and, exists_false] at h
-  simp only [bind_ok, orReject_ok, pure_ok] at h
+  simp only [bind_ok, pure_ok] at h
   obtain ⟨-, s₉, -, -, s₁₀, -, rfl, -⟩ := h
   obtain ⟨-, rfl, -⟩ := declare_ok hdQ
   obtain ⟨hnp, rfl, -⟩ := declare_ok hdP

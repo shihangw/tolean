@@ -345,11 +345,12 @@ leaves a gap.
     [proof-obligation open question](#open-questions).
     The first slice adds project manifest obligations with exact theorem
     types and a fixed axiom policy. Its chain tests cover obligations'
-    fixed axiom policy, not claim-specific axiom allowlists. Arbitrary
-    comparators remain refused: both the sort translator and the certificate
-    generator require known key shapes.
-    The checker does not yet connect external proofs to `program_sound` or
-    derive required obligations from generated output. See the
+    fixed axiom policy, not claim-specific axiom allowlists.
+    The next slice generates consistency
+    statements for additional bigint comparators and passes project proofs
+    through the sort link theorem. Generated output determines the required
+    obligations. Other element types, captures of generic types and
+    `@decreases` obligations remain refused. See the
     [decision](../decisions/2026-11-17-project-proof-obligations.md).
 19. **P2.** Close the `const` gap: share one predicate between the translator's
     refusal and the interpreter's `none` for assignments to a

@@ -21,12 +21,39 @@ dependencies and accepts only `propext`, `Classical.choice` and `Quot.sound`.
 Unlike a claim, an obligation cannot supply its own axiom allowlist.
 Proofs that depend on `sorryAx` fail this check.
 
-This is a checker for supplied proofs, not yet a way to extend the supported
-TypeScript subset. The translator still refuses arbitrary sort comparators.
-It does not generate obligation statements or use these entries in
-`program_sound`. See the
-[decision](../decisions/2026-11-17-project-proof-obligations.md) for the
-remaining certificate work.
+For additional comparator shapes on bigint arrays, the translator emits a
+statement such as `Out.«sort obligation at 2:10»`. The statement requires
+`Eval.Consistent` for the translated comparator. Put its proof in a separate
+module that imports the generated output, not the certificate.
+
+In the project chain manifest, use the raw name without Lean's quotation
+marks:
+
+```json
+{
+  "spec": "Out.sort obligation at 2:10",
+  "proof": "ProjectProof.squares",
+  "module": "Proof"
+}
+```
+
+Set `"proofManifest": "tolean.chain.json"` in `tolean.json` to use those
+proofs when project units request certificates. For an individual file, use
+`tolean certify Input.ts Out Out OutCert.lean OutCert --proof-manifest
+tolean.chain.json`. The certificate imports the proof module and passes its
+theorem to the sort link proof. The usual function certificate then follows
+through `program_sound`.
+
+The generator automatically attempts a proof for literal-zero comparators.
+Other new shapes require a matching manifest entry. Generated statements,
+not the project's supplied proof list, determine which obligations the chain
+checker requires. The checker rejects proofs that use `sorryAx`, including
+indirect dependencies.
+
+New comparator obligations currently require bigint elements and cannot
+capture generic types. Known key comparisons retain their existing support.
+`@decreases` obligations remain refused. See the
+[decision](../decisions/2026-11-17-project-proof-obligations.md).
 
 ## The translator
 

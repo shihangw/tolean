@@ -131,7 +131,9 @@ def certifyAfterTranslate (target : Edition) (input source output ns : String) :
     let .ok (fns, all, classElaboration) := Certify.certifiedFunctions source target | return
     Chain.recordCertificate (output ++ ".chain.json") path (ns ++ "Cert") (ns ++ "Cert")
       (fns.map fun f => (f, s!"{ns}Cert.{f}_cert")) all classElaboration
-  | .error _ =>
+  | .error message =>
+    if let .ok (_, _, _, iface) := Translate.translateFile input source target then
+      unless iface.sortObligations.isEmpty do throw (IO.userError message)
     if ← System.FilePath.pathExists path then IO.FS.removeFile path
 
 def translateFile (target : Edition) (input output ns : String) (certify : Bool := false) :
@@ -292,7 +294,15 @@ def run (target : Edition) : List String → IO UInt32
   | "translate-go" :: rest => translateGo { roots := [], eraseTypes := [], erasePackages := [] } rest
   | "certify" :: input :: transModule :: transNs :: output :: certNs :: rest => do
     let source ← IO.FS.readFile input
-    match Certify.certify input source transModule transNs certNs target with
+    let (proofs, rest) ← match rest with
+      | "--proof-manifest" :: path :: rest => do
+        let manifest : Chain.ProjectManifest ← Chain.readJson path
+        pure (manifest.obligations, rest)
+      | rest => pure ([], rest)
+    unless rest.isEmpty || (rest.length == 2 && rest.head? == some "--manifest") do
+      IO.eprintln usage
+      return 2
+    match Certify.certify input source transModule transNs certNs target proofs with
     | .ok lean =>
       IO.FS.writeFile output lean
       if let ["--manifest", manifest] := rest then

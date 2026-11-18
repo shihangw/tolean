@@ -23,7 +23,8 @@
  * - When the interpreter says that a call throws a value, Node throws the
  *   same value. An `Error` compares by its class and its message.
  * - When the translator accepts the program and the interpreter gives no
- *   value, Node throws unless the program sorts by a `number` key or has a
+ *   value, Node throws unless the program has a comparator proof obligation,
+ *   sorts by a `number` key, or has a
  *   counted loop whose bound fails the certificate's precondition. A numeric
  *   sort needs a consistent comparator, and a counted loop needs a bound for
  *   which `countUp?` gives a value. The translation makes no claim when either
@@ -179,7 +180,7 @@ type Program = { seed: number; source: string; calls: Array<Call>; sortsByNumber
 /** A result is `null` when the interpreter gives no value. */
 type Interpreted =
   | { parsed: false }
-  | { parsed: true; accepted: boolean; results: Array<{ value: Value } | { throws: Value } | null> };
+  | { parsed: true; accepted: boolean; sortObligations: boolean; results: Array<{ value: Value } | { throws: Value } | null> };
 type NodeResult = { returns: unknown } | { throws: string; thrown: unknown };
 
 /** What Node threw, as `tolean interpret` writes it: an `Error` as its class,
@@ -607,7 +608,7 @@ test(`the interpreter agrees with Node ${process.version} on random programs`, a
         } else if (shown(actual.returns) !== canonical(expected.value)) {
           failures.push(`${where}: the interpreter gives ${canonical(expected.value)}, Node ${shown(actual.returns)}`);
         }
-      } else if (lean.accepted && !program.sortsByNumber) {
+      } else if (lean.accepted && !lean.sortObligations && !program.sortsByNumber) {
         tally.throws++;
         if ('returns' in actual) {
           failures.push(`${where}: the interpreter gives no value, Node ${shown(actual.returns)}`);
@@ -1581,6 +1582,21 @@ test('the interpreter gives no value for a function declared twice in a block', 
 // A difference of keys is consistent only when every key is finite. The spec
 // compares each element with itself too, and `Infinity - Infinity` is `NaN`,
 // so one infinite key is enough to leave the order to the engine.
+test('bigint computed-key comparators agree with Node', () => {
+  const source = 'export function f(xs: ReadonlyArray<bigint>): bigint[] { return xs.toSorted((a, b) => a * a < b * b ? -1 : a * a > b * b ? 1 : 0); }';
+  const arrays = [[], [3n, -1n, 1n, -3n, 0n], [5n, 5n, -5n], [2n ** 100n, -7n, 8n]];
+  const input = { programs: [{ source, calls: arrays.map((xs) => ({ function: 'f', args: [xs.map(encode)] })) }] };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const [lean] = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  expect(lean?.parsed).toBe(true);
+  if (lean === undefined || !lean.parsed) return;
+  expect(lean.accepted).toBe(true);
+  for (const [i, xs] of arrays.entries()) {
+    expect(lean.results[i]).toEqual({ value: xs.toSorted((a, b) => a * a < b * b ? -1 : a * a > b * b ? 1 : 0).map(encode) });
+  }
+});
+
 test('number comparison sorts agree with Node on non-NaN keys, including infinities and signed zero', () => {
   const source = 'export function f(xs: ReadonlyArray<number>): number[] { return xs.toSorted((a, b) => (a < b) ? -1 : (a > b) ? 1 : 0); }';
   const arrays = [[], [Infinity, -Infinity, 0, -0], [0, -0, 0, -0], [Number.MIN_VALUE, -Number.MIN_VALUE, 1, 1]];

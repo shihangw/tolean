@@ -2,6 +2,7 @@ import tolean.TypeScript.Syntax.Parser
 import tolean.TypeScript.Certify.Term
 import tolean.TypeScript.Spec.Eval
 import tolean.TypeScript.Translate
+import tolean.Chain.Manifest
 
 /-!
 `tolean certify`: a per-file certificate for a translation.
@@ -678,7 +679,8 @@ def term {α : Type} [Repr α] (x : α) : String := (repr x).pretty 100
 
 /-- The certificate file for `source`, translated as the Lean module `leanModule`
 with namespace `transNs`. -/
-def certify (file source leanModule transNs certNs : String) (target : Edition := .default) :
+def certify (file source leanModule transNs certNs : String) (target : Edition := .default)
+    (proofs : List tolean.Chain.Obligation := []) :
     Except String String := do
   if let .ok m := Syntax.parse source target then
     if m.decls.any (· matches .import ..) then
@@ -963,6 +965,8 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
   let mut loopLemmas : Array String := #[]
   let mut conditionalLemmas : List String := []
   let mut thms : Array String := #[]
+  let mut proofModules : List String := []
+  let mut provedSortObligations : List String := []
   -- The translator requires a callee before its caller, so the condition
   -- of a callee is available when the caller's theorem is written.
   let mut functionConditions : List (String × (List (String × IR.Ty) × List String)) := []
@@ -1122,9 +1126,48 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       if let .sortWith other := method then
         let some (.call _ _ [.arrow _ _ [p, q] arrowBody]) := callAt syntaxBody info.span
           | throw s!"{file}: no comparator at {info.span.start.line}:{info.span.start.col} in {name}"
-        let some keys := Translate.keyComparator? p.name q.name arrowBody
-          | throw s!"{file}: the comparator in {name} does not compare keys"
         let elemTy := elem.print names
+        if (Translate.keyComparator? p.name q.name arrowBody).isNone then
+          let spec := transNs ++ "." ++ Translate.SortObligation.key info.span
+          let statement := transNs ++ "." ++ Translate.SortObligation.name info.span
+          let supplied := proofs.filter (·.spec == spec)
+          if supplied.length > 1 then
+            throw s!"{file}: duplicate proofs for {spec}"
+          if supplied.isEmpty && Eval.intLiteral? arrowBody.stripParens != some 0 then
+            throw s!"{file}: missing project proof for {spec}"
+          if let some proof := supplied.head? then
+            proofModules := proofModules ++ [proof.module]
+          let consistencyName := transNs ++ ".«" ++ Translate.SortObligation.key info.span ++ " proof»"
+          let allScope := info.scope
+          let arguments ← allScope.mapM fun (n, t) => do
+            let some dec := decoderOf r t
+              | throw s!"{file}: cannot decode obligation parameter {n} in {name}"
+            return s!" ({dec} (ρ.lookup {str n}))"
+          unless provedSortObligations.contains spec do
+            let proof := match supplied.head? with
+              | some proof => s!"  exact _root_.{proof.proof.toName}"
+              | none =>
+                s!"  unfold _root_.{statement}\n" ++
+                s!"  intro {nv} _ _ {" ".intercalate (allScope.map (fun (n, _) => tolean.IR.identName n))}\n" ++
+                s!"  refine _root_.tolean.TypeScript.Proof.consistentOn_of_transCmp (_root_.compareOn (fun (_ : {elemTy}) => (0 : _root_.Int))) ?_\n" ++
+                s!"  sort_tac"
+            thms := thms.push <|
+              s!"theorem _root_.{consistencyName} : _root_.{statement} := by\n" ++
+              proof
+            provedSortObligations := spec :: provedSortObligations
+          let vars := ("x", elem) :: ("y", elem) :: scope.zipIdx.map fun ((_, t), i) => (s!"v{i}", t)
+          loopLemmas := loopLemmas.push (r.cert lemmaName)
+          thms := thms.push <|
+            s!"theorem {lemmaName} {functionGeneric} (fs : List (tolean.DeclRef × List String × tolean.TypeScript.IR.Body)){hfs}\n" ++
+            s!"    (fuel : Nat) (ρ : Env {nv}){hI} (items : {itemsTy}) :\n" ++
+            s!"    tolean.TypeScript.Eval.sortValues (tolean.TypeScript.IR.Expr.evalCompare fs {fuel} ρ {str param} {str other} ({term cbBody}))\n" ++
+            s!"      (List.map {encX} items) = some (List.map {encX} (tolean.TypeScript.JSNumber.sortWith {fn} items)) := by\n" ++
+            s!"  refine tolean.TypeScript.Proof.sortValues_sortWith fs {fuel} ρ {str param} {str other} _ {encX} {fn} ?_\n" ++
+            s!"    (fun _ => by simp) ({consistencyName} ({nv} := {nv}){String.join arguments}) items\n" ++
+            s!"  intro x y\n" ++ substHfs ++ unpack ++
+            s!"  {casesOn decls vars}link_tac [{simpSet}]"
+          continue
+        let keys := (Translate.keyComparator? p.name q.name arrowBody).getD []
         if comparesNumbers cbBody then
           conditionalLemmas := conditionalLemmas ++ [r.cert lemmaName]
           literalMaps := literalMaps ++ [s!"← List.map_singleton (f := {encX})",
@@ -1752,7 +1795,8 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     "import tolean.TypeScript.Spec.Lemmas.Eval",
     "import tolean.TypeScript.Syntax.Parser",
     "import tolean.TypeScript.Proof.Link",
-    s!"import {leanModule}",
+    s!"import {leanModule}"] ++
+    ((proofModules.map (s!"import {·.toName}")).eraseDups) ++ [
     "",
     s!"namespace {certNs}",
     "",
@@ -1764,9 +1808,11 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     "-- A link theorem for a function with a nullable record parameter splits",
     "-- the record into every shape, and `link_tac` unfolds the evaluator in",
     "-- each. That can pass Lean's default budget.",
-    (if hasClasses then
-      "set_option maxHeartbeats 4000000\nset_option maxRecDepth 100000"
+    (if hasClasses then "set_option maxHeartbeats 4000000"
       else "set_option maxHeartbeats 400000"),
+    "-- A sort obligation can contain a deeply nested comparator expression.",
+    (if hasClasses then "set_option maxRecDepth 100000"
+      else "set_option maxRecDepth 10000"),
     "",
     (if hasClasses then "/-- The program after ordinary-class elaboration. -/"
       else "/-- The program, as the parser read it. -/"),
