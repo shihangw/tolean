@@ -305,8 +305,15 @@ leaves a gap.
 12. **P1.** Non-literal `bigint` exponents, `BigInt(number)`,
     `toISOString`, and non-literal padding lengths. These still need a
     model of built-in errors whose messages the program cannot read.
-13. **P2.** Classes with `readonly` fields and methods that do not change
-    `this`.
+13. **P2.** Readonly ordinary classes elaborate to interfaces, object
+    constructors and free method functions before interpretation and
+    translation. Dispatch requires exactly one statically known class type.
+    The parser round trip is proved, and Node comparisons test elaboration.
+    A proof that elaboration preserves the original JavaScript semantics
+    remains open. Constructor identity, `instanceof`, escaping `this`,
+    inheritance, accessors and mutable fields remain refused.
+    The [decision record](../decisions/2026-11-17-readonly-classes.md) distinguishes
+    these proof boundaries. The existing `extends Error` subset is separate.
 14. **P1.** Local functions: general final return expressions in functions
     that change captured variables, implicit transitive captures, longer
     sibling call chains, and value-returning callers with only indirect state changes.
@@ -337,10 +344,13 @@ leaves a gap.
     mechanism later serves `@decreases`. See the
     [proof-obligation open question](#open-questions).
     The first slice adds project manifest obligations with exact theorem
-    types and a fixed axiom policy. Arbitrary comparators remain refused:
-    both the sort translator and the certificate generator require known key shapes.
-    The checker does not yet connect external proofs to `program_sound` or
-    derive required obligations from generated output. See the
+    types and a fixed axiom policy. Its chain tests cover obligations'
+    fixed axiom policy, not claim-specific axiom allowlists.
+    The next slice generates consistency
+    statements for additional bigint comparators and passes project proofs
+    through the sort link theorem. Generated output determines the required
+    obligations. Other element types, captures of generic types and
+    `@decreases` obligations remain refused. See the
     [decision](../decisions/2026-11-17-project-proof-obligations.md).
 19. **P2.** Close the `const` gap: share one predicate between the translator's
     refusal and the interpreter's `none` for assignments to a
@@ -484,7 +494,12 @@ decision record then states the choice and any limits that remain.
   `JSNumber.countUp k b`, the IR evaluator gives `countUp? k b` and has no
   value when that is `none`, and `countUp` is `countUp?` with `[]` for
   `none`. So the link theorem fails only where `countUp? k b = none`, and
-  each counted loop adds one binder to the function's two theorems:
+  each counted loop adds one binder to the function's two theorems.
+
+  Nullish narrowing guards stay around the bound's condition when it reaches
+  the function boundary. Enclosing loops carry child safety conditions in
+  their invariants, so their lemmas do not rely on a later function hypothesis.
+  A non-nullable bound needs no guard:
 
   ```lean
   theorem sum_cert {N : Type} [JSNumber N] (xs : List Int) (n : N)

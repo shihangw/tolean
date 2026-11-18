@@ -23,7 +23,8 @@
  * - When the interpreter says that a call throws a value, Node throws the
  *   same value. An `Error` compares by its class and its message.
  * - When the translator accepts the program and the interpreter gives no
- *   value, Node throws unless the program sorts by a `number` key or has a
+ *   value, Node throws unless the program has a comparator proof obligation,
+ *   sorts by a `number` key, or has a
  *   counted loop whose bound fails the certificate's precondition. A numeric
  *   sort needs a consistent comparator, and a counted loop needs a bound for
  *   which `countUp?` gives a value. The translation makes no claim when either
@@ -179,7 +180,7 @@ type Program = { seed: number; source: string; calls: Array<Call>; sortsByNumber
 /** A result is `null` when the interpreter gives no value. */
 type Interpreted =
   | { parsed: false }
-  | { parsed: true; accepted: boolean; results: Array<{ value: Value } | { throws: Value } | null> };
+  | { parsed: true; accepted: boolean; sortObligations: boolean; results: Array<{ value: Value } | { throws: Value } | null> };
 type NodeResult = { returns: unknown } | { throws: string; thrown: unknown };
 
 /** What Node threw, as `tolean interpret` writes it: an `Error` as its class,
@@ -424,6 +425,56 @@ test('counted-loop certificates agree with Node for parameter and literal bounds
   expect(mod.nearSafe(2 ** 53)).toBe(2);
 });
 
+test('counted-loop narrowing and nesting preserve safe results and unsafe refusals', async () => {
+  const source = readFileSync(new URL('./corpus/certify/accept/countedLoopScopes.ts', import.meta.url), 'utf8');
+  expect(source).toContain('// certify: required');
+  const limits = fc.sample(fc.integer({ min: 0, max: 12 }), { seed, numRuns: 20 });
+  const calls: Array<{ function: string; args: Array<unknown> }> = [
+    { function: 'nullable', args: [null] },
+    { function: 'optional', args: [undefined] },
+    { function: 'nullableRecord', args: [null] },
+    { function: 'narrowedNested', args: [[1n], null] },
+    { function: 'narrowedInLoop', args: [[1n], null] },
+    ...limits.flatMap(limit => [
+      { function: 'nullable', args: [limit] },
+      { function: 'optional', args: [limit] },
+      { function: 'nullableRecord', args: [{ value: limit }] },
+      { function: 'narrowedNested', args: [[1n, 2n], limit] },
+      { function: 'narrowedInLoop', args: [[1n, 2n], { value: limit }] },
+    ]),
+    { function: 'inForOf', args: [[1n], Number.MAX_SAFE_INTEGER] },
+    { function: 'inCounted', args: [2, Number.MAX_SAFE_INTEGER] },
+    { function: 'deeper', args: [[1n, 2n], 2, Number.MAX_SAFE_INTEGER] },
+  ];
+  const unsafe = [
+    { function: 'inForOf', args: [[1n], Infinity] },
+    { function: 'inCounted', args: [1, Infinity] },
+    { function: 'deeper', args: [[1n], 1, Infinity] },
+  ];
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: [{
+      source, calls: [...calls, ...unsafe].map(call => ({
+        function: call.function, args: call.args.map(encode),
+      })),
+    }] }), encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (result === undefined || !result.parsed) return;
+  expect(result.accepted).toBe(true);
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-counted-scopes-'));
+  const path = join(dir, 'scopes.mjs');
+  writeFileSync(path, ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+  }).outputText);
+  const mod = await import(pathToFileURL(path).href) as Record<string, (...args: Array<unknown>) => unknown>;
+  expect(result.results.slice(0, calls.length)).toEqual(
+    calls.map(call => ({ value: encode(mod[call.function]!(...call.args)) })),
+  );
+  expect(result.results.slice(calls.length)).toEqual(unsafe.map(() => null));
+});
+
 test('local returns and sibling calls preserve captured state and agree with Node', async () => {
   const source = ['localFunctionReturnsAndChanges', 'localFunctionSiblingCalls'].map(name =>
     readFileSync(new URL(`./corpus/translate/accept/${name}.ts`, import.meta.url), 'utf8')).join('\n');
@@ -557,7 +608,7 @@ test(`the interpreter agrees with Node ${process.version} on random programs`, a
         } else if (shown(actual.returns) !== canonical(expected.value)) {
           failures.push(`${where}: the interpreter gives ${canonical(expected.value)}, Node ${shown(actual.returns)}`);
         }
-      } else if (lean.accepted && !program.sortsByNumber) {
+      } else if (lean.accepted && !lean.sortObligations && !program.sortsByNumber) {
         tally.throws++;
         if ('returns' in actual) {
           failures.push(`${where}: the interpreter gives no value, Node ${shown(actual.returns)}`);
@@ -772,7 +823,6 @@ test('error field normalization refuses missing, repeated and computed assignmen
     ['readonly line: number;', 'readonly line: number', 'this.line = line;'],
     ['readonly line?: number;', 'line: number', 'this.line = line;'],
     ['', 'line: number', 'this.line = line;'],
-    ['readonly line: number;', 'line: number', 'this.name = "ParseError"; this.line = line;'],
     ['readonly a: number; readonly b: number;', 'b: number, a: number', 'this.a = a; this.b = b;'],
     ['readonly a: number;', 'a: number, readonly b: number', 'this.a = a;'],
     ['readonly a: number; readonly b: number;', 'a: number, b: number', 'this.b = b; this.a = a;'],
@@ -787,6 +837,133 @@ test('error field normalization refuses missing, repeated and computed assignmen
   const results = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
   expect(results).toHaveLength(cases.length);
   for (const [i, result] of results.entries()) expect(result.parsed, programs[i].source).toBe(false);
+});
+
+test('error names are ordinary properties, not constructor tags', async () => {
+  const prefix = `class ParseError extends Error {
+    readonly line: number;
+    constructor(message: string, line: number) {
+      super(message);
+      ASSIGNMENTS
+    }
+  }
+  export function check(line: number): number {
+    if (line < 0) throw new ParseError("negative line", line);
+    return line;
+  }`;
+  const cases = [undefined, 'ParseError', 'DifferentError', 'Error', '', '名字 😀', 'quote"\\\n']
+    .flatMap((name) => [false, true].flatMap((before) =>
+      [ts.ScriptTarget.ES2015, ts.ScriptTarget.ES2024].map((target) => {
+        const assignment = name === undefined ? '' : `this.name = ${JSON.stringify(name)};`;
+        const assignments = before ? `${assignment} this.line = line;` : `this.line = line; ${assignment}`;
+        return { name, source: prefix.replace('ASSIGNMENTS', assignments), target,
+          refused: name !== undefined && before && target < ts.ScriptTarget.ES2022 };
+      })));
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: cases.map(({ source, target }) => ({
+      source, target: target === ts.ScriptTarget.ES2015 ? 'ES2015' : 'ES2024',
+      calls: [{ function: 'check', args: [encode(-3)] }],
+    })) }), encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const results = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-error-names-'));
+  for (const [i, { name, source, target, refused }] of cases.entries()) {
+    const lean = results[i];
+    expect(lean?.parsed, source).toBe(!refused);
+    if (refused || lean === undefined || !lean.parsed) continue;
+    expect(lean.accepted, source).toBe(true);
+    const path = join(dir, `case${i}.mjs`);
+    writeFileSync(path, ts.transpileModule(source, {
+      compilerOptions: { target, module: ts.ModuleKind.ESNext },
+    }).outputText);
+    const mod = await import(pathToFileURL(path).href);
+    let actual: unknown;
+    try { mod.check(-3); } catch (error) { actual = error; }
+    expect(actual).toBeInstanceOf(Error);
+    expect((actual as Error).name).toBe(name ?? 'Error');
+    expect((actual as Error).constructor.name).toBe('ParseError');
+    const result = lean.results[0];
+    expect(result !== undefined && result !== null && 'throws' in result
+      ? canonical(result.throws) : 'did not throw', source).toBe(shownThrow(actual));
+  }
+});
+
+test('error constructors refuse repeated, computed and conditional names', () => {
+  const assignments = [
+    'this.name = label;',
+    'this.name = "a" + "b";',
+    'this.name = "a"; this.name = "b";',
+    'if (label === "x") this.name = "a";',
+    'this["name"] = "a";',
+  ];
+  const programs = assignments.map((assignment) => ({
+    source: `class E extends Error { constructor(label: string) { super(label); ${assignment} } }`,
+    calls: [],
+  }));
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify({ programs }), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const results = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  for (const [i, result] of results.entries()) expect(result.parsed, programs[i].source).toBe(false);
+});
+
+test('the evaluator reads modeled error fields outside the translated subset', async () => {
+  const sources = [
+    'export function name(): string { return new Error("message").name; }',
+    `class E extends Error { constructor(text: string) { super(text); this.name = "Different"; } }
+      export function name(): string { return new E("message").name; }`,
+    'export function name(): string { return new Error("message").message; }',
+    `class E extends Error { constructor(text: string, readonly detail: string) { super(text); } }
+      export function name(): string { return new E("message", "detail").detail; }`,
+  ];
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: sources.map((source) => ({
+      source, calls: [{ function: 'name', args: [] }],
+    })) }), encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const results = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-error-name-read-'));
+  for (const [i, source] of sources.entries()) {
+    const lean = results[i];
+    expect(lean?.parsed).toBe(true);
+    if (lean === undefined || !lean.parsed) continue;
+    // General construction of error values is still outside translation.
+    expect(lean.accepted).toBe(false);
+    const path = join(dir, `case${i}.mjs`);
+    writeFileSync(path, ts.transpileModule(source, {
+      compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+    }).outputText);
+    const mod = await import(pathToFileURL(path).href);
+    const result = lean.results[0];
+    expect(result !== undefined && result !== null && 'value' in result
+      ? canonical(result.value) : 'did not return').toBe(canonical(encode(mod.name())));
+  }
+});
+
+test('unmodeled Error member reads are refused by the interpreter and translator', () => {
+  const programs = ['stack', '__proto__', 'constructor', 'toString', 'cause', 'missing']
+    .flatMap((property) => [
+      `export function read(): string { return new Error("message").${property}; }`,
+      `class E extends Error {
+        constructor(text: string, readonly line: number) {
+          super(text); this.name = "Different";
+        }
+      }
+      export function read(): string { return new E("message", 1).${property}; }`,
+    ]).map((source) => ({ source, calls: [{ function: 'read', args: [] }] }));
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs }), encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const results = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  expect(results).toHaveLength(programs.length);
+  for (const [i, result] of results.entries()) {
+    expect(result.parsed, programs[i].source).toBe(true);
+    if (!result.parsed) continue;
+    expect(result.accepted, programs[i].source).toBe(false);
+    expect(result.results, programs[i].source).toEqual([null]);
+  }
 });
 
 test('type re-exports introduce no runtime binding', async () => {
@@ -1028,6 +1205,159 @@ test('the interpreter reads the index of at and slice as Node does', async () =>
   }
 });
 
+test('object bindings agree with Node destructuring', async () => {
+  const source = `
+    export interface Span { readonly start: number; readonly end: number; }
+    export function length(s: Span): number {
+      const { start, end } = s;
+      return end - start;
+    }
+  `;
+  const spans = [
+    { start: 2, end: 9 },
+    { start: -5, end: 3 },
+    { start: 0, end: -0 },
+    { start: Infinity, end: Infinity },
+    { start: NaN, end: 1 },
+  ];
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({
+      programs: [{ source, calls: spans.map(s => ({ function: 'length', args: [encode(s)] })) }],
+    }),
+    encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (result === undefined || !result.parsed) return;
+  for (const [i, span] of spans.entries()) {
+    const { start, end } = span;
+    const value = result.results[i]?.value;
+    expect(value === undefined ? 'no value' : canonical(value))
+      .toBe(canonical(encode(end - start)));
+  }
+});
+
+test('renamed, partial and call-source object bindings agree with Node', async () => {
+  const header = `
+    export interface Pair { readonly a: number; readonly b: number; readonly extra: number; }
+    export function getPair(o: Pair): Pair { return o; }
+  `;
+  const bodies = [
+    'const { a: b, b: a } = o; return a - b;',
+    'const { b: x } = o; return x;',
+    'const { a: x, a: y } = o; return x + y;',
+    'const { a, b } = getPair(o); return a - b;',
+    'let { a: x, b } = o; x = x + b; return x;',
+    'const _objectField0 = 7; const { a, b } = o; return a + b + _objectField0;',
+    'const { a: by, b: match } = o; return match - by;',
+  ];
+  const sources = bodies.map(body => `${header} export function f(o: Pair): number { ${body} }`);
+  const inputs = [{ a: 2, b: 9, extra: 11 }, { a: -5, b: 3, extra: 0 }, { a: 0, b: -0, extra: 1 }];
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({
+      programs: sources.map(source => ({
+        source, calls: inputs.map(o => ({ function: 'f', args: [encode(o)] })),
+      })),
+    }),
+    encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const results = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-object-bindings-'));
+  for (const [i, source] of sources.entries()) {
+    const path = join(dir, `case${i}.mjs`);
+    writeFileSync(path, ts.transpileModule(source, {
+      compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+    }).outputText);
+    const mod = (await import(pathToFileURL(path).href)) as { f: (o: unknown) => unknown };
+    const result = results[i];
+    expect(result?.parsed, source).toBe(true);
+    if (result === undefined || !result.parsed) continue;
+    for (const [j, input] of inputs.entries()) {
+      const value = result.results[j]?.value;
+      expect(value === undefined ? 'no value' : canonical(value), source)
+        .toBe(canonical(encode(mod.f(input))));
+    }
+  }
+});
+
+test('object bindings inside try bodies are refused', () => {
+  const source = readFileSync(new URL('./corpus/translate/reject/tryObjectDestructure.ts', import.meta.url), 'utf8');
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: [{ source, calls: [{
+      function: 'inTry', args: [encode({ a: 3n, b: 5n })],
+    }] }] }),
+    encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (result === undefined || !result.parsed) throw new Error('try refusal fixture did not parse');
+  expect(result.accepted).toBe(false);
+  expect(result.results[0]?.value).toBeUndefined();
+});
+
+test('object bindings compose with catch and indexed access in Node', async () => {
+  const source = readFileSync(new URL('./corpus/translate/accept/objectDestructureComposition.ts', import.meta.url), 'utf8');
+  const calls: Array<{ function: string; args: Array<unknown> }> = [];
+  for (const [a, b] of [[0n, 0n], [-19n, 27n], [2n ** 80n, -3n]]) {
+    const pair = { a, b };
+    for (const fail of [false, true]) calls.push({ function: 'inCatch', args: [pair, fail] });
+    calls.push({ function: 'fromIndex', args: [{ pair, other: { a: b, b: a } }] });
+  }
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: [{ source, calls: calls.map(c => ({
+      function: c.function, args: c.args.map(encode),
+    })) }] }),
+    encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (result === undefined || !result.parsed) throw new Error('composition fixture did not parse');
+  expect(result.accepted).toBe(true);
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-object-composition-'));
+  const path = join(dir, 'index.mjs');
+  writeFileSync(path, ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+  }).outputText);
+  const mod = await import(pathToFileURL(path).href) as Record<string, (...xs: Array<unknown>) => unknown>;
+  for (const [i, call] of calls.entries()) {
+    const value = result.results[i]?.value;
+    expect(value === undefined ? 'no value' : canonical(value), call.function)
+      .toBe(canonical(encode(mod[call.function](...call.args))));
+  }
+});
+
+test('an object binding cannot read its own name in its initializer', async () => {
+  const source = `
+    export interface Pair { readonly a: number; readonly b: number; }
+    export function f(s: Pair): number {
+      if (true) { const { a: s, b } = s; return s + b; }
+      else { return 0; }
+    }
+  `;
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: [{
+      source, calls: [{ function: 'f', args: [encode({ a: 2, b: 9 })] }],
+    }] }),
+    encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (result === undefined || !result.parsed) return;
+  expect(result.results[0]?.value).toBeUndefined();
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-object-tdz-'));
+  const path = join(dir, 'case.mjs');
+  writeFileSync(path, ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+  }).outputText);
+  const mod = (await import(pathToFileURL(path).href)) as { f: (s: unknown) => unknown };
+  expect(() => mod.f({ a: 2, b: 9 })).toThrow(ReferenceError);
+});
+
 test('optional array indexing agrees with Node', async () => {
   const sources = [
     'export function f(xs: ReadonlyArray<bigint> | null): bigint { return xs?.[0] ?? 7n; }',
@@ -1252,6 +1582,21 @@ test('the interpreter gives no value for a function declared twice in a block', 
 // A difference of keys is consistent only when every key is finite. The spec
 // compares each element with itself too, and `Infinity - Infinity` is `NaN`,
 // so one infinite key is enough to leave the order to the engine.
+test('bigint computed-key comparators agree with Node', () => {
+  const source = 'export function f(xs: ReadonlyArray<bigint>): bigint[] { return xs.toSorted((a, b) => a * a < b * b ? -1 : a * a > b * b ? 1 : 0); }';
+  const arrays = [[], [3n, -1n, 1n, -3n, 0n], [5n, 5n, -5n], [2n ** 100n, -7n, 8n]];
+  const input = { programs: [{ source, calls: arrays.map((xs) => ({ function: 'f', args: [xs.map(encode)] })) }] };
+  const run = spawnSync(tolean, ['interpret'], { input: JSON.stringify(input), encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  const [lean] = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  expect(lean?.parsed).toBe(true);
+  if (lean === undefined || !lean.parsed) return;
+  expect(lean.accepted).toBe(true);
+  for (const [i, xs] of arrays.entries()) {
+    expect(lean.results[i]).toEqual({ value: xs.toSorted((a, b) => a * a < b * b ? -1 : a * a > b * b ? 1 : 0).map(encode) });
+  }
+});
+
 test('number comparison sorts agree with Node on non-NaN keys, including infinities and signed zero', () => {
   const source = 'export function f(xs: ReadonlyArray<number>): number[] { return xs.toSorted((a, b) => (a < b) ? -1 : (a > b) ? 1 : 0); }';
   const arrays = [[], [Infinity, -Infinity, 0, -0], [0, -0, 0, -0], [Number.MIN_VALUE, -Number.MIN_VALUE, 1, 1]];
@@ -1748,6 +2093,279 @@ test('interface fields describe the values at each call, not aliases between cal
   const [lean] = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
   expect(lean?.accepted).toBe(true);
   expect(lean?.results.map((r) => r.value)).toEqual(expected);
+});
+
+test('readonly ordinary classes desugar to the same values as Node', async () => {
+  const source = `
+    class Counter {
+      readonly value: bigint;
+      constructor(value) { this.value = value; }
+      plus(x: bigint): bigint { return this.value + x; }
+      twice(): bigint { return this.plus(this.value); }
+    }
+    class Pair {
+      readonly left: bigint;
+      readonly right: bigint;
+      constructor(left: bigint, right: bigint) {
+        this.right = right + 1n;
+        this.left = left;
+      }
+      sum(): bigint { return this.left + this.right; }
+    }
+    class ParamField {
+      readonly other: bigint;
+      constructor(readonly value: bigint) { this.other = value + 1n; }
+      read(): bigint { return this.value; }
+    }
+    export function add(x: bigint, y: bigint): bigint {
+      const c = new Counter(x);
+      return c.plus(y);
+    }
+    export function twice(x: bigint): bigint {
+      const c: Counter = new Counter(x);
+      return c.twice();
+    }
+    export function pair(x: bigint, y: bigint): bigint {
+      const p = new Pair(x, y);
+      return p.sum();
+    }
+    export function make(x: bigint): Counter { return new Counter(x); }
+    export function fromCall(x: bigint): bigint { return make(x).plus(2n); }
+    export function paramField(x: bigint): ParamField { return new ParamField(x); }
+    export function readParam(x: bigint): bigint { return new ParamField(x).read(); }
+  `;
+  const calls = [
+    { function: 'add', args: [4n, -7n] },
+    { function: 'twice', args: [11n] },
+    { function: 'pair', args: [3n, 8n] },
+    { function: 'make', args: [9n] },
+    { function: 'fromCall', args: [10n] },
+    { function: 'paramField', args: [12n] },
+    { function: 'readParam', args: [13n] },
+  ];
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: [{ source, calls: calls.map(call => ({
+      function: call.function, args: call.args.map(encode),
+    })) }] }),
+    encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (result === undefined || !result.parsed) return;
+  expect(result.accepted).toBe(true);
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-readonly-class-'));
+  const path = join(dir, 'classes.mjs');
+  writeFileSync(path, ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+  }).outputText);
+  const mod = await import(pathToFileURL(path).href) as Record<string, (...args: Array<unknown>) => unknown>;
+  expect(result.results.map(r => r.value)).toEqual(calls.map(call => encode(mod[call.function]!(...call.args))));
+});
+
+test('ordinary classes refuse observable prototypes and non-static dispatch', () => {
+  const classSource = `class C {
+    readonly value: bigint;
+    constructor(value: bigint) { this.value = value; }
+    get(): bigint { return this.value; }
+  }`;
+  const sources = [
+    `${classSource} export function f(x: C | null): bigint { return x.get(); }`,
+    `${classSource} export function f(x: any): bigint { return x.get(); }`,
+    `${classSource} export function f(x: bigint): boolean { return new C(x) instanceof C; }`,
+    `${classSource} export function f(x: bigint) { return new C(x).constructor; }`,
+    `${classSource} export function f(x: bigint) { return new C(x).get; }`,
+    `${classSource} export function f() { return C; }`,
+    `class C { readonly value: bigint;
+      constructor(value: bigint) { this.value = value; }
+      escape(): C { return this; }
+    } export function f(x: bigint): C { return new C(x).escape(); }`,
+    `class C { readonly value: bigint;
+      constructor(value: bigint) { this.value = value; this.value = value; }
+    } export function f(x: bigint): C { return new C(x); }`,
+  ];
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: sources.map(source => ({
+      source, calls: [{ function: 'f', args: [{ bigint: '1' }] }],
+    })) }),
+    encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const results = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  expect(results).toHaveLength(sources.length);
+  for (const result of results) {
+    expect(result.parsed).toBe(true);
+    if (result.parsed) expect(result.accepted).toBe(false);
+  }
+});
+
+test('readonly classes still reject destructured method keys and method calls', () => {
+  const sources = ['readonlyClassObjectDestructure', 'readonlyClassPlainObjectDestructure'];
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: sources.map(name => ({
+      source: readFileSync(new URL(`./corpus/translate/reject/${name}.ts`, import.meta.url), 'utf8'),
+      calls: [{ function: 'f', args: [] }],
+    })) }),
+    encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const results = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  expect(results).toHaveLength(sources.length);
+  for (const result of results) {
+    expect(result.parsed).toBe(true);
+    if (result.parsed) expect(result.accepted).toBe(false);
+  }
+});
+
+test('readonly class fields can be destructured and agree with Node', async () => {
+  const source = readFileSync(new URL('./corpus/translate/accept/readonlyClassObjectDestructure.ts', import.meta.url), 'utf8');
+  const inputs = [7n, -3n];
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: [{
+      source, calls: inputs.map(value => ({ function: 'f', args: [encode(value)] })),
+    }] }),
+    encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (result === undefined || !result.parsed) throw new Error('class destructuring fixture did not parse');
+  expect(result.accepted).toBe(true);
+
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-readonly-class-destructure-'));
+  const path = join(dir, 'index.mjs');
+  writeFileSync(path, ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+  }).outputText);
+  const mod = await import(pathToFileURL(path).href) as { f: (value: bigint) => bigint };
+  for (const [i, value] of inputs.entries()) {
+    const actual = result.results[i]?.value;
+    expect(actual === undefined ? 'no value' : canonical(actual))
+      .toBe(canonical(encode(mod.f(value))));
+  }
+});
+
+test('readonly classes traverse catch handlers and leave array operations to the checker', async () => {
+  const accepted = ['readonlyClassArrayNames', 'readonlyClassCatch'];
+  const calls = [
+    ['literal', 'inferred', 'annotated', 'length', 'dispatched'],
+    ['f', 'localCatch', 'untouched'],
+  ];
+  for (const [index, name] of accepted.entries()) {
+    const source = readFileSync(new URL(`./corpus/translate/accept/${name}.ts`, import.meta.url), 'utf8');
+    const functions = calls[index]!;
+    const run = spawnSync(tolean, ['interpret'], {
+      input: JSON.stringify({ programs: [{ source, calls: functions.map(fn => ({ function: fn, args: [] })) }] }),
+      encoding: 'utf8',
+    });
+    expect(run.status, run.stderr).toBe(0);
+    const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+    expect(result?.parsed).toBe(true);
+    if (!result?.parsed) throw new Error('class regression fixture did not parse');
+    expect(result.accepted).toBe(true);
+    const path = join(mkdtempSync(join(tmpdir(), 'tolean-class-catch-array-')), `${name}.mjs`);
+    writeFileSync(path, ts.transpileModule(source, {
+      compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+    }).outputText);
+    const mod = await import(pathToFileURL(path).href) as Record<string, () => unknown>;
+    expect(result.results).toEqual(functions.map(fn => ({ value: encode(mod[fn]!()) })));
+  }
+  for (const name of ['CatchReturn', 'CatchAlias', 'CatchMethod', 'CatchLocal', 'CatchShadow', 'TryReturn']) {
+    const source = readFileSync(new URL(`./corpus/translate/reject/readonlyClass${name}.ts`, import.meta.url), 'utf8');
+    const run = spawnSync(tolean, ['interpret'], {
+      input: JSON.stringify({ programs: [{ source, calls: [{ function: 'f', args: [] }] }] }),
+      encoding: 'utf8',
+    });
+    expect(run.status, run.stderr).toBe(0);
+    const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+    expect(result?.parsed).toBe(true);
+    if (!result?.parsed) throw new Error('class refusal fixture did not parse');
+    expect(result.accepted).toBe(false);
+  }
+});
+
+test('readonly classes preserve provenance and do not blacklist Map methods', async () => {
+  const sources = [
+    `class C {
+      readonly value: bigint;
+      constructor(value: bigint) { this.value = value; }
+      get(): bigint { return this.value; }
+    }
+    export function f(): bigint { const c: C = { value: 7n }; return c.get(); }`,
+    `class C {
+      readonly value: bigint;
+      constructor(value: bigint) { this.value = value; }
+      get(): bigint { return this.value; }
+    }
+    type A = C;
+    export function f(): bigint {
+      const c: A = new C(7n);
+      const fake: C = { ...c };
+      return fake.get();
+    }`,
+    `class C {
+      readonly value: bigint;
+      constructor(value: bigint) { this.value = value; }
+      get(): bigint { return this.value; }
+    }
+    type A = C;
+    function make(): A { return { value: 7n }; }
+    export function f(): bigint { const c: A = make(); return c.get(); }`,
+    `class C {
+      readonly value: bigint;
+      constructor(value: bigint) { this.value = value; }
+      get(): bigint { return this.value; }
+    }
+    export function f(c: C): bigint { return c.get(); }`,
+  ];
+  const rejected = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: sources.map(source => ({
+      source, calls: [{ function: 'f', args: [] }],
+    })) }),
+    encoding: 'utf8',
+  });
+  expect(rejected.status, rejected.stderr).toBe(0);
+  const rejectedPrograms = (JSON.parse(rejected.stdout) as { programs: Array<Interpreted> }).programs;
+  expect(rejectedPrograms).toHaveLength(sources.length);
+  for (const [index, result] of rejectedPrograms.entries()) {
+    expect(result.parsed).toBe(true);
+    expect(result.accepted).toBe(false);
+    const path = join(mkdtempSync(join(tmpdir(), 'tolean-class-provenance-')), `case${index}.mjs`);
+    writeFileSync(path, ts.transpileModule(sources[index]!, {
+      compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+    }).outputText);
+    const mod = await import(pathToFileURL(path).href) as { f: (...args: Array<unknown>) => unknown };
+    if (index === 3) {
+      expect(() => mod.f({ value: 7n })).toThrow(TypeError);
+    } else {
+      expect(() => mod.f()).toThrow(TypeError);
+    }
+  }
+
+  const source = `class C {
+    readonly value: bigint;
+    constructor(value: bigint) { this.value = value; }
+    get(): bigint { return this.value; }
+  }
+  export function f(): bigint | undefined {
+    const m = new Map<string, bigint>();
+    m.set("x", 7n);
+    return m.get("x");
+  }`;
+  const accepted = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: [{ source, calls: [{ function: 'f', args: [] }] }] }),
+    encoding: 'utf8',
+  });
+  expect(accepted.status, accepted.stderr).toBe(0);
+  const program = (JSON.parse(accepted.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(program?.accepted).toBe(true);
+  if (program === undefined || !program.accepted) return;
+  const path = join(mkdtempSync(join(tmpdir(), 'tolean-class-map-')), 'map.mjs');
+  writeFileSync(path, ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+  }).outputText);
+  const mod = await import(pathToFileURL(path).href) as { f: () => unknown };
+  expect(program.results.map(result => result.value)).toEqual([encode(mod.f())]);
 });
 
 test('generic functions and interfaces agree with Node', async () => {

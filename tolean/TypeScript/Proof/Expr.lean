@@ -47,15 +47,15 @@ attribute [simp] EStateM.bind_ok EStateM.map_ok
   simp [tooDeep, get, getThe, MonadStateOf.get, EStateM.get, throw, throwThe, MonadExceptOf.throw,
     EStateM.throw, bind, EStateM.bind]
 
-theorem checkName_ok {sp : Span} {name r : String} {s s' : Ctx} :
-    checkName sp name s = .ok r s' → r = name ∧ s' = s := by
+theorem checkName_ok {sp : Span} {name r : String} {s s' : Ctx} {quoted : Bool} :
+    checkName sp name quoted s = .ok r s' → r = name ∧ s' = s := by
   simp only [checkName, ite_state]
   split
   · simp
   · simp only [pure_bind, pure_ok]; rintro ⟨rfl, rfl⟩; exact ⟨rfl, rfl⟩
 
-theorem checkLocalName_ok {sp : Span} {name r : String} {s s' : Ctx}
-    (h : checkLocalName sp name s = .ok r s') : r = name ∧ s' = s := by
+theorem checkLocalName_ok {sp : Span} {name r : String} {s s' : Ctx} {quoted : Bool}
+    (h : checkLocalName sp name quoted s = .ok r s') : r = name ∧ s' = s := by
   simp only [checkLocalName, bind_ok, get_ok, ite_state] at h
   obtain ⟨c, s₁, ⟨rfl, rfl⟩, h⟩ := h
   split at h
@@ -70,7 +70,7 @@ theorem checkLocalName_ok {sp : Span} {name r : String} {s s' : Ctx}
         · exact checkName_ok h
 
 theorem declare_ok {env env' : Translate.Env} {sp : Span} {name : String} {b : Binding} {t : Ty}
-    {s s' : Ctx} (h : declare env sp name b t s = .ok env' s') :
+    {s s' : Ctx} {quoted : Bool} (h : declare env sp name b t quoted s = .ok env' s') :
     env.has name = false ∧ env' = env.add { name, binding := b, type := t } ∧ s' = s := by
   simp only [declare, ite_state] at h
   split at h
@@ -134,7 +134,8 @@ with the same names and the same `readonly` marks. And its name is not one
 that the interpreter reads as a global, such as `Map`. -/
 def ClassAgrees (m : Eval.Scope) (c : ClassInfo) : Prop :=
   ∃ ctor, Eval.errorClassIn m c.name = some ctor ∧
-    (Eval.ctorParams ctor).map (fun p => (p.param.name, p.readonly)) = c.params.map (fun x => (x.1, x.2.2)) ∧
+    ((Eval.ctorParams ctor).map (fun p => (p.param.name, p.readonly)) = c.params.map (fun x => (x.1, x.2.2)) ∧
+      Eval.ctorName ctor = c.runtimeName) ∧
     isGlobalName c.name = false
 
 /-- Each function that a call may name is the one the interpreter calls: in
@@ -2679,7 +2680,7 @@ theorem translateSort_sound {F : Nat}
   split at h
   rotate_left
   · simp only [bind_ok, reject_ne_ok, false_and, exists_false] at h
-  simp only [bind_ok, orReject_ok, pure_ok] at h
+  simp only [bind_ok, pure_ok] at h
   obtain ⟨-, s₉, -, -, s₁₀, -, rfl, -⟩ := h
   obtain ⟨-, rfl, -⟩ := declare_ok hdQ
   obtain ⟨hnp, rfl, -⟩ := declare_ok hdP

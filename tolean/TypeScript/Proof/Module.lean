@@ -318,7 +318,7 @@ theorem checkBorrowResult_ok {sp : Span} {b : Option Nat} {name : String}
         exact ⟨h.2.symm, .inr ⟨i, n, rfl, rfl, hc⟩⟩
       · simp at h
 
-theorem translateFunction_ok {thr : String → Bool} {cls : String → Option (Option (List CtorParam × Expr))}
+theorem translateFunction_ok {thr : String → Bool} {cls : String → Option (Option ErrorCtor)}
     {classes : List ClassInfo} {sp : Span} {ex : Bool} {name : String} {tps : List String}
     {params : List Param} {ret : Option TypeExpr} {body : Stmt} {s s' : Ctx} {o : IR.Decl}
     (h : translateFunction thr cls guards classes sp ex name tps params ret body s = .ok o s') :
@@ -845,7 +845,7 @@ theorem translateInterface_names {P : Eval.Program} {sp : Span} {ex : Bool} {nam
 
 /-- A function: it declares its name in the functions. -/
 theorem translateFunction_names {P : Eval.Program} {thr : String → Bool}
-    {cls : String → Option (Option (List CtorParam × Expr))} {classes : List ClassInfo} {sp : Span} {ex : Bool}
+    {cls : String → Option (Option ErrorCtor)} {classes : List ClassInfo} {sp : Span} {ex : Bool}
     {name : String} {tps : List String} {params : List Param} {ret : Option TypeExpr} {body : Stmt} {s s' : Ctx}
     {o : IR.Decl} (h : translateFunction thr cls guards classes sp ex name tps params ret body s = .ok o s') :
     DeclNames P (.function sp ex name tps params ret body) s s' := by
@@ -1211,7 +1211,7 @@ theorem translateImport_names {P : Eval.Program} {sp : Span} {names : List Impor
 
 /-- An export list only checks the state: it adds no declaration and keeps the
 state. -/
-theorem translateExports_ok {thr : String → Bool} {cls : String → Option (Option (List CtorParam × Expr))}
+theorem translateExports_ok {thr : String → Bool} {cls : String → Option (Option ErrorCtor)}
     {classes : List ClassInfo} {sp : Span} {names : List ImportName} {source : Option String} {s s' : Ctx}
     {o : Option IR.Decl} (h : translateDecl thr cls guards classes (.exports sp names source) s = .ok o s') :
     o = none ∧ s' = s := by
@@ -1333,11 +1333,12 @@ theorem ctorParams_shape : ∀ (ps : List CtorParam) (s s' : Ctx) (params : List
 /-- What an error class does to the state: it adds itself to the error
 classes and changes nothing else. Its name is new among them and is not a
 global's, and its parameters are the constructor's. -/
-theorem translateErrorClass_ok {sp : Span} {ex : Bool} {name : String} {ctor : Option (List CtorParam × Expr)}
+theorem translateErrorClass_ok {sp : Span} {ex : Bool} {name : String} {ctor : Option ErrorCtor}
     {s s' : Ctx} {info : ClassInfo} (h : translateErrorClass sp ex name ctor s = .ok info s') :
     s' = { s with errorClasses := s.errorClasses ++ [info] } ∧ info.name = name ∧
       (∀ c ∈ s.errorClasses, c.name ≠ name) ∧ isGlobalName name = false ∧
-      (Eval.ctorParams ctor).map (fun p => (p.param.name, p.readonly)) = info.params.map fun x => (x.1, x.2.2) := by
+      ((Eval.ctorParams ctor).map (fun p => (p.param.name, p.readonly)) = info.params.map (fun x => (x.1, x.2.2)) ∧
+        Eval.ctorName ctor = info.runtimeName) := by
   unfold translateErrorClass at h
   simp only [bind_ok, ite_state] at h
   obtain ⟨name', s₁, hname, h⟩ := h
@@ -1348,14 +1349,14 @@ theorem translateErrorClass_ok {sp : Span} {ex : Bool} {name : String} {ctor : O
   obtain ⟨u, s₂, htop, params, s₃, hparams, c, s₄, ⟨rfl, rfl⟩, u', s₅, rfl, rfl, rfl⟩ := h
   obtain ⟨rfl, -⟩ := declareTopLevel_ok htop
   obtain ⟨rfl, s₆, hparams⟩ := isolated_ok hparams
-  refine ⟨rfl, rfl, declareTopLevel_classes htop, declareTopLevel_global htop, ?_⟩
+  refine ⟨rfl, rfl, declareTopLevel_classes htop, declareTopLevel_global htop, ?_, rfl⟩
   cases ctor with
   | none =>
     simp only [pure_ok] at hparams
     obtain ⟨rfl, -⟩ := hparams
     rfl
   | some pm =>
-    obtain ⟨ps, message⟩ := pm
+    obtain ⟨ps, message, runtimeName⟩ := pm
     simp only [bind_ok, ite_state] at hparams
     obtain ⟨params', s₇, hps, hparams⟩ := hparams
     split at hparams
@@ -1380,7 +1381,8 @@ theorem errorClasses_ok : ∀ (ds : List Decl) (s s' : Ctx) (os : List (Option C
     s' = { s with errorClasses := s.errorClasses ++ os.filterMap id } ∧
       ∀ c ∈ os.filterMap id, c.name ∉ s.errorClasses.map (·.name) ∧ isGlobalName c.name = false ∧
         ∃ ctor, Eval.errorClassOfDecls c.name ds = some ctor ∧
-          (Eval.ctorParams ctor).map (fun p => (p.param.name, p.readonly)) = c.params.map fun x => (x.1, x.2.2)
+          ((Eval.ctorParams ctor).map (fun p => (p.param.name, p.readonly)) = c.params.map (fun x => (x.1, x.2.2)) ∧
+            Eval.ctorName ctor = c.runtimeName)
   | [], s, s', os, h => by
     simp only [List.mapM_nil, pure_ok] at h
     obtain ⟨rfl, rfl⟩ := h
@@ -1425,7 +1427,8 @@ theorem translateErrorTypes_ok {m : Module} {s s' : Ctx} {pre : List IR.Decl}
       s'.enumValues = s.enumValues ∧ s'.borrows = s.borrows ∧ IR.functions pre = [] ∧
       (s.errorClasses = [] → ∀ c ∈ s'.errorClasses, isGlobalName c.name = false ∧
         ∃ ctor, Eval.errorClassOf m c.name = some ctor ∧
-          (Eval.ctorParams ctor).map (fun p => (p.param.name, p.readonly)) = c.params.map fun x => (x.1, x.2.2)) := by
+          ((Eval.ctorParams ctor).map (fun p => (p.param.name, p.readonly)) = c.params.map (fun x => (x.1, x.2.2)) ∧
+            Eval.ctorName ctor = c.runtimeName)) := by
   unfold translateErrorTypes at h
   simp only [bind_ok] at h
   obtain ⟨os, s₁, hos, h⟩ := h
@@ -1433,7 +1436,8 @@ theorem translateErrorTypes_ok {m : Module} {s s' : Ctx} {pre : List IR.Decl}
   have hc : ∀ c ∈ ({ s with errorClasses := s.errorClasses ++ os.filterMap id } : Ctx).errorClasses,
       s.errorClasses = [] → isGlobalName c.name = false ∧
         ∃ ctor, Eval.errorClassOf m c.name = some ctor ∧
-          (Eval.ctorParams ctor).map (fun p => (p.param.name, p.readonly)) = c.params.map fun x => (x.1, x.2.2) := by
+          ((Eval.ctorParams ctor).map (fun p => (p.param.name, p.readonly)) = c.params.map (fun x => (x.1, x.2.2)) ∧
+            Eval.ctorName ctor = c.runtimeName) := by
     intro c hc h0
     simp only [h0, List.nil_append] at hc
     exact (hcls c hc).2
@@ -1486,7 +1490,7 @@ theorem listsExport_of {m : Module} {name : String}
 /-- What one declaration does to the state: it keeps the file and the
 interfaces, adds its functions at the end, and keeps their names distinct. A
 function that it adds as exported is one that it declares as exported. -/
-theorem translateDecl_ok {thr : String → Bool} {cls : String → Option (Option (List CtorParam × Expr))}
+theorem translateDecl_ok {thr : String → Bool} {cls : String → Option (Option ErrorCtor)}
     {classes : List ClassInfo} {d : Decl} {s s' : Ctx} {o : Option IR.Decl}
     (hself : IfacesSelf s.interfaces) (h : translateDecl thr cls guards classes d s = .ok o s') :
     s'.file = s.file ∧ s'.interfaces = s.interfaces ∧
@@ -1547,10 +1551,11 @@ theorem translateDecl_ok {thr : String → Bool} {cls : String → Option (Optio
     simp only [translateDecl, bind_ok, modify_ok, pure_ok] at h
     obtain ⟨_, _, rfl, rfl, rfl⟩ := h
     exact ⟨rfl, rfl, [], by simp, by simp, id, by simp, by simp⟩
+  | classDecl d => simp [translateDecl] at h
   | stmt st => simp [translateDecl] at h
 
 theorem translateDecl_borrows {thr : String → Bool}
-    {cls : String → Option (Option (List CtorParam × Expr))}
+    {cls : String → Option (Option ErrorCtor)}
     {classes : List ClassInfo} {d : Decl} {s s' : Ctx} {o : Option IR.Decl}
     (hself : IfacesSelf s.interfaces) (h : translateDecl thr cls guards classes d s = .ok o s') :
     s'.borrows = s.borrows := by
@@ -1584,12 +1589,13 @@ theorem translateDecl_borrows {thr : String → Bool}
     simp only [translateDecl, bind_ok, modify_ok, pure_ok] at h
     obtain ⟨_, _, rfl, rfl, rfl⟩ := h
     rfl
+  | classDecl d => simp [translateDecl] at h
   | exportedVar sp decl => simp [translateDecl] at h
   | stmt st => simp [translateDecl] at h
 
 /-- What one declaration does to the names and the string enums of the file. -/
 theorem translateDecl_names {P : Eval.Program} {thr : String → Bool}
-    {cls : String → Option (Option (List CtorParam × Expr))} {classes : List ClassInfo} {d : Decl} {s s' : Ctx}
+    {cls : String → Option (Option ErrorCtor)} {classes : List ClassInfo} {d : Decl} {s s' : Ctx}
     {o : Option IR.Decl} (hfe : FaithfulE P s.interfaces) (h : translateDecl thr cls guards classes d s = .ok o s') :
     DeclNames P d s s' := by
   cases d with
@@ -1623,6 +1629,7 @@ theorem translateDecl_names {P : Eval.Program} {thr : String → Bool}
     obtain ⟨_, _, rfl, rfl, rfl⟩ := h
     exact ⟨rfl, fun _ h => h, by simp [boundNames], by simp [boundNames], by simp [boundNames],
       ⟨[], by simp, by simp⟩, ⟨[], by simp, by simp⟩⟩
+  | classDecl d => simp [translateDecl] at h
   | stmt st => simp [translateDecl] at h
 
 /-- `R` holds for each pair of elements in the same place. -/
@@ -1657,7 +1664,7 @@ theorem Forall₂.mono {α β : Type} {R S : α → β → Prop} (h : ∀ a b, R
 
 /-- What a list of declarations does to the state, and how its functions
 translate. -/
-theorem decls_ok (P : Eval.Program) (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr)))
+theorem decls_ok (P : Eval.Program) (thr : String → Bool) (cls : String → Option (Option ErrorCtor))
     (classes : List ClassInfo) :
     ∀ (ds : List Decl) (s s' : Ctx) (os : List (Option IR.Decl)),
     IfacesSelf s.interfaces → FaithfulE P s.interfaces →
@@ -1765,6 +1772,7 @@ theorem decls_ok (P : Eval.Program) (thr : String → Bool) (cls : String → Op
         simp only [translateDecl, bind_ok, modify_ok, pure_ok] at h₁
         obtain ⟨_, _, rfl, rfl, rfl⟩ := h₁
         simpa [Eval.functionsIn, IR.functions, List.filterMap_cons] using hrel
+      | classDecl d => simp [translateDecl] at h₁
       | stmt st => simp [translateDecl] at h₁
 
 theorem findSome_eq {α β : Type} {f : α → Option β} {x : β} :
@@ -2318,19 +2326,22 @@ theorem translate_sound_call {file source : String} {target : Edition} {m : Modu
   unfold translateTree translateFile at h
   cases hp : parse source target with
   | error e => simp [hp, Except.mapError] at h; cases h
-  | ok m' =>
-    simp only [hp, Except.mapError, bind, Except.bind] at h
-    split at h
-    · cases h
-    · rename_i r heq
-      split at heq
-      · cases heq
-      · rename_i decls' ctx' hrun
-        simp only [pure, Except.pure, Except.ok.injEq] at heq
-        subst heq
-        simp only [pure, Except.pure, Except.ok.injEq, Prod.mk.injEq] at h
-        obtain ⟨rfl, -, rfl⟩ := h
-        exact program_sound_call (.snoc false "N" .nil rfl rfl rfl hrun) (by simp) _ args fuel v hv
+  | ok parsed =>
+    cases helab : Elaborate.run source target parsed with
+    | error message => simp [hp, helab, Except.mapError, bind, Except.bind] at h
+    | ok m =>
+      simp only [hp, helab, Except.mapError, bind, Except.bind] at h
+      split at h
+      · cases h
+      · rename_i r heq
+        split at heq
+        · cases heq
+        · rename_i decls' ctx' hrun
+          simp only [pure, Except.pure, Except.ok.injEq] at heq
+          cases heq
+          simp only [pure, Except.pure, Except.ok.injEq, Prod.mk.injEq] at h
+          obtain ⟨rfl, -, rfl⟩ := h
+          exact program_sound_call (.snoc false "N" .nil rfl rfl rfl hrun) (by simp) _ args fuel v hv
 
 /-- The same, for one file and a call that returns: a call of a function of
 `decls` gives a value only when the interpreter gives the same value for the

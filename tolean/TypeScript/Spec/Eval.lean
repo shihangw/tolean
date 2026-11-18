@@ -231,6 +231,14 @@ def getProp (fields : List (String × Val N)) (name : String) : Option (Val N) :
   | some v => some v
   | none => if objectPrototypeNames.contains name then none else some .undefined
 
+/-- Error.prototype supplies the name when the instance has no own name.
+The constructor tag is independent of this ordinary property. Other reads
+require a modeled own field: errors omit stack and the prototype chain. -/
+def getErrorProp (fields : List (String × Val N)) (name : String) : Option (Val N) :=
+  if name == "name" then
+    some ((fields.lookup name).getD (.str (JSString.ofString "Error")))
+  else fields.lookup name
+
 /-- `obj[key]` with a string key: the property whose name is `key`, as
 `getProp` reads it. A property name is a Lean `String`, so `getKey` compares
 its UTF-16 code units with the key's. A key that holds a lone surrogate
@@ -763,6 +771,10 @@ def consistentOn {α : Type} (cmp : α → α → Option Ordering) (items : List
     (cmp a b).isSome && cmp b a == (cmp a b).map Ordering.swap &&
       items.all fun c => !(cmp a b != some .gt && cmp b c != some .gt) || cmp a c != some .gt
 
+/-- A comparator is consistent on every finite input list. -/
+def Consistent {α : Type} (cmp : α → α → N) : Prop :=
+  ∀ items, consistentOn (fun a b => JSNumber.compareSign (cmp a b)) items = true
+
 /-- The elements of `items` in the order that `Array.prototype.sort` gives
 them with the comparator `cmp` (SortIndexedProperties, ECMA-262
 §23.1.3.30.1). An element comes after another only when `cmp` says that it
@@ -800,25 +812,33 @@ JS has no `'` in a name, so no hoisted name hides a name of the source. -/
 /-- The constructor of the error class `name` among the declarations `ds`,
 when one declares it: its parameters and its message, or none for a class
 without a constructor. -/
-def errorClassOfDecls (name : String) : List Decl → Option (Option (List CtorParam × Expr))
+def errorClassOfDecls (name : String) : List Decl → Option (Option ErrorCtor)
   | [] => none
   | .errorClass _ _ n ctor :: ds => if n == name then some ctor else errorClassOfDecls name ds
   | _ :: ds => errorClassOfDecls name ds
 
 /-- The constructor of the error class `name` of `m`, when `m` declares one. -/
-def errorClassOf (m : Module) (name : String) : Option (Option (List CtorParam × Expr)) :=
+def errorClassOf (m : Module) (name : String) : Option (Option ErrorCtor) :=
   errorClassOfDecls name m.decls
 
 /-- The parameters of the constructor `ctor` of an error class. -/
-def ctorParams : Option (List CtorParam × Expr) → List CtorParam
+def ctorParams : Option ErrorCtor → List CtorParam
   | none => []
   | some (ps, _) => ps
+
+/-- An own name property exists only when the constructor assigns it.
+Otherwise the error inherits `"Error"` from Error.prototype. -/
+def ctorName (ctor : Option ErrorCtor) : Option String :=
+  ctor.bind fun (_, _, name) => name
+
+def errorNameFields {N : Type} (name : Option String) : List (String × Val N) :=
+  name.toList.map fun n => ("name", .str (JSString.ofString n))
 
 /-- The fields of an error made by the constructor `ctor`, from the values
 of its arguments: each `readonly` parameter, with its argument. The other
 arguments have served the message already, which `Stmt.hoisted` wrote over
 them. -/
-def fieldArgs {α : Type} (ctor : Option (List CtorParam × Expr)) (args : List α) : List (String × α) :=
+def fieldArgs {α : Type} (ctor : Option ErrorCtor) (args : List α) : List (String × α) :=
   ((ctorParams ctor).zip args).filterMap fun (p, a) => if p.readonly then some (p.param.name, a) else none
 
 mutual
@@ -836,6 +856,7 @@ def Expr.subst (σ : List (String × Expr)) : Expr → Expr
   | .regexp s v target => .regexp s v target
   | .bool s b => .bool s b
   | .null s => .null s
+  | .this s => .this s
   | .array s es => .array s (Expr.substList σ es)
   | .object s ps => .object s (Property.substList σ ps)
   | .paren s e => .paren s (Expr.subst σ e)
@@ -880,7 +901,7 @@ mutual
 /-- The names of the functions that `e` calls, anywhere in it. -/
 def Expr.callNames : Expr → List String
   | .regexp .. => []
-  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => []
+  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .this _ => []
   | .array _ es => Expr.callNamesList es
   | .object _ ps => Property.callNamesList ps
   | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e
@@ -908,7 +929,7 @@ mutual
 /-- The names of the functions that `s` calls, anywhere in it. -/
 def Stmt.callNames : Stmt → List String
   | .tryCatch _ b _ h => Stmt.callNames b ++ Stmt.callNames h
-  | .varDecl _ { init := some e, .. } | .destructure _ _ _ _ e | .exprStmt _ e | .returnStmt _ (some e)
+  | .varDecl _ { init := some e, .. } | .destructure _ _ _ _ e | .objectDestructure _ _ _ _ e | .exprStmt _ e | .returnStmt _ (some e)
   | .throwStmt _ e => Expr.callNames e
   | .varDecl _ { init := none, .. } | .returnStmt _ none | .breakStmt _ | .continueStmt _ | .empty _ => []
   | .ifStmt _ t a (some b) => Expr.callNames t ++ Stmt.callNames a ++ Stmt.callNames b
@@ -946,7 +967,7 @@ def Stmt.hasThrow : Stmt → Bool
   | .switchStmt _ _ cs => Stmt.hasThrowClauses cs
   -- A `throw` in a local function throws from the function that calls it.
   | .funDecl _ _ _ _ _ body => Stmt.hasThrow body
-  | .varDecl .. | .destructure .. | .exprStmt .. | .returnStmt .. | .breakStmt _ | .continueStmt _
+  | .varDecl .. | .destructure .. | .objectDestructure .. | .exprStmt .. | .returnStmt .. | .breakStmt _ | .continueStmt _
   | .empty _ => false
 
 def Stmt.hasThrowList : List Stmt → Bool
@@ -1024,7 +1045,7 @@ JS evaluates whenever it evaluates `e`. A call in a branch of `?:`, after
 `&&`, `||` or `??`, or in an arrow function may not run, so it stays where
 it is. -/
 def Expr.hoists (thr : String → Bool) : Expr → Bool
-  | .regexp .. | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .arrow .. => false
+  | .regexp .. | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .this _ | .arrow .. => false
   | .array _ es => Expr.hoistsList thr es
   | .object _ ps => Property.hoistsList thr ps
   | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e
@@ -1087,7 +1108,7 @@ mutual
 /-- Hoist the calls out of `e` that `thr` says can throw: each moves to a
 declaration before the statement, with every operand that JS evaluates
 before it, and `e` reads the names in their place. -/
-def Expr.hoist (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr))) (h : Hoisted) :
+def Expr.hoist (thr : String → Bool) (cls : String → Option (Option ErrorCtor)) (h : Hoisted) :
     Expr → Expr × Hoisted
   | .call s (.ident sn name) args =>
     let (args', h) := Expr.hoistOperands thr cls h args
@@ -1140,7 +1161,7 @@ def Expr.hoist (thr : String → Bool) (cls : String → Option (Option (List Ct
       if ts.isEmpty then
         match ctor with
         | none => if args'.length == 1 then (.new s c [hoistedMark] args', h) else (.new s c ts args', h)
-        | some (params, message) =>
+        | some (params, message, _) =>
           if params.length == args'.length then
             (.new s c [hoistedMark] (Expr.subst ((params.map (·.param.name)).zip args') message :: args'), h)
           else (.new s c ts args', h)
@@ -1151,7 +1172,7 @@ termination_by structural e => e
 
 /-- The arguments of an error class's constructor: each that is not a
 literal moves out to a name, after its own calls. -/
-def Expr.hoistAtoms (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr)))
+def Expr.hoistAtoms (thr : String → Bool) (cls : String → Option (Option ErrorCtor))
     (h : Hoisted) : List Expr → List Expr × Hoisted
   | [] => ([], h)
   | e :: es =>
@@ -1164,7 +1185,7 @@ termination_by structural es => es
 /-- Hoist the calls out of operands that JS evaluates in order. An operand
 before the last one that holds such a call moves out whole, after its own
 calls, so that it still runs before them. -/
-def Expr.hoistOperands (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr)))
+def Expr.hoistOperands (thr : String → Bool) (cls : String → Option (Option ErrorCtor))
     (h : Hoisted) : List Expr → List Expr × Hoisted
   | [] => ([], h)
   | e :: es =>
@@ -1175,7 +1196,7 @@ def Expr.hoistOperands (thr : String → Bool) (cls : String → Option (Option 
 termination_by structural es => es
 
 /-- The values of the properties of an object literal, in order. -/
-def Property.hoistOperands (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr)))
+def Property.hoistOperands (thr : String → Bool) (cls : String → Option (Option ErrorCtor))
     (h : Hoisted) : List Property → List Property × Hoisted
   | [] => ([], h)
   | p :: ps =>
@@ -1199,7 +1220,7 @@ end
 /-- Hoist the calls out of the value of a statement. A value that is itself
 a call keeps it, after the calls in its arguments, because the statement
 passes what the call throws on. -/
-def Expr.hoistValue (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr)))
+def Expr.hoistValue (thr : String → Bool) (cls : String → Option (Option ErrorCtor))
     (h : Hoisted) : Expr → Expr × Hoisted
   | .call s (.ident sn name) args =>
     let (args', h) := Expr.hoistOperands thr cls h args
@@ -1217,7 +1238,7 @@ mutual
 
 /-- The statements of a body with the calls that can throw hoisted out of
 their statements, numbering the fresh names from `k` on. -/
-def Stmt.hoistList (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr))) (k : Nat) :
+def Stmt.hoistList (thr : String → Bool) (cls : String → Option (Option ErrorCtor)) (k : Nat) :
     List Stmt → List Stmt × Nat
   | [] => ([], k)
   | s :: ss =>
@@ -1228,7 +1249,7 @@ termination_by structural ss => ss
 
 /-- One statement, as the statements that replace it: the hoisted
 declarations, then the statement with the names in place of the calls. -/
-def Stmt.hoistOne (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr))) (k : Nat) :
+def Stmt.hoistOne (thr : String → Bool) (cls : String → Option (Option ErrorCtor)) (k : Nat) :
     Stmt → List Stmt × Nat
   | .varDecl s ⟨kind, name, type, some e⟩ =>
     let (e', h) := Expr.hoistValue thr cls ⟨[], k⟩ e
@@ -1236,6 +1257,9 @@ def Stmt.hoistOne (thr : String → Bool) (cls : String → Option (Option (List
   | .destructure s kind p t e =>
     let (e', h) := Expr.hoistValue thr cls ⟨[], k⟩ e
     (h.decls ++ [.destructure s kind p t e'], h.next)
+  | .objectDestructure s kind p t e =>
+    let (e', h) := Expr.hoistValue thr cls ⟨[], k⟩ e
+    (h.decls ++ [.objectDestructure s kind p t e'], h.next)
   | .returnStmt s (some e) =>
     let (e', h) := Expr.hoistValue thr cls ⟨[], k⟩ e
     (h.decls ++ [.returnStmt s (some e')], h.next)
@@ -1283,7 +1307,7 @@ def Stmt.hoistOne (thr : String → Bool) (cls : String → Option (Option (List
   | s => ([s], k)
 termination_by structural s => s
 
-def Stmt.hoistClauses (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr))) (k : Nat) :
+def Stmt.hoistClauses (thr : String → Bool) (cls : String → Option (Option ErrorCtor)) (k : Nat) :
     List (Option Expr × List Stmt) → List (Option Expr × List Stmt) × Nat
   | [] => ([], k)
   | (t, ss) :: cs =>
@@ -1296,20 +1320,20 @@ end
 
 /-- A function body with the calls that can throw hoisted out of its
 statements. The model runs this body, and the translator translates it. -/
-def Stmt.hoisted (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr))) : Stmt → Stmt
+def Stmt.hoisted (thr : String → Bool) (cls : String → Option (Option ErrorCtor)) : Stmt → Stmt
   | .block s ss => .block s (Stmt.hoistList thr cls 0 ss).1
   | s => s
 
 /-- The functions of the declarations `ds`, by name, where `thr` says which
 functions can throw: their parameters and their body, with the calls that
 can throw hoisted out of its statements. -/
-def preparedBody (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr)))
+def preparedBody (thr : String → Bool) (cls : String → Option (Option ErrorCtor))
     (guards : List (String × GuardTest))
     (params : List Param) (ret : Option TypeExpr) (body : Stmt) : Stmt :=
   Stmt.hoisted thr cls (guardedBody guards params ret
     (if (borrowCandidate? params ret body).isSome then body.borrowPrefix else body))
 
-def functionsIn (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr)))
+def functionsIn (thr : String → Bool) (cls : String → Option (Option ErrorCtor))
     (guards : List (String × GuardTest))
     (ds : List Decl) : List (String × List String × Stmt) :=
   ds.filterMap fun
@@ -1395,7 +1419,7 @@ def exportsFunction (m : Module) (name : String) : Bool :=
     | _ => false
 
 /-- The constructor of the error class `name` of the file of `s`. -/
-def errorClassIn (s : Scope) (name : String) : Option (Option (List CtorParam × Expr)) :=
+def errorClassIn (s : Scope) (name : String) : Option (Option ErrorCtor) :=
   (s.program.lookup s.file).bind fun m => errorClassOf m name
 
 /-- The function that a call of `name` runs, in the file of `s`: the file's
@@ -1592,6 +1616,7 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     else do
       match ← eval m fuel env obj with
       | .obj fields => getProp fields name
+      | .error _ fields => getErrorProp fields name
       -- `xs.length`, the number of elements of an array (ECMA-262 §10.4.2).
       -- An array of the subset has fewer than 2^53 elements, so its length
       -- is a safe integer.
@@ -1882,7 +1907,7 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
         let .str s ← eval m fuel env msg | none
         let vs ← evalList m fuel env args
         if (ctorParams ctor).length != vs.length then none
-        return .error c (("message", .str s) :: fieldArgs ctor vs)
+        return .error c (("message", .str s) :: (fieldArgs ctor vs ++ errorNameFields (ctorName ctor)))
   | _ => none
 termination_by e => (fuel, sizeOf e, 0)
 
@@ -2178,6 +2203,15 @@ def execStmt (m : Scope) (fuel : Nat) (env : Env N) : Stmt → Option (Outcome N
     match ← evalTop m fuel env init with
     | .ok v => return .normal ((patternBindings p (← iterValues v)).reverse ++ env)
     | .error t => return .ret (.error t)
+  | .objectDestructure _ _ p _ init => do
+    if init.mayHold p.objectBindingNames.contains then none else do
+      match ← evalTop m fuel env init with
+      | .ok (.obj fields) =>
+        let bindings ← p.objectBindings.mapM fun (key, name) => do
+          return (name, ← getProp fields key)
+        return .normal (bindings.reverse ++ env)
+      | .ok _ => none
+      | .error t => return .ret (.error t)
   | .returnStmt _ (some e) => do
     match evalTop m fuel env e with
     | some r => return .ret r

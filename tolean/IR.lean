@@ -126,6 +126,8 @@ structure CallbackInfo (T : Type) where
   result : Ty T
   /-- The locals in scope at the call, in the order they were declared. -/
   scope : List (String × Ty T)
+  /-- The translator requires a separate proof for this comparator. -/
+  sortObligation : Bool := false
 deriving Repr, Inhabited
 
 /-- Which nullish value a source test matches. -/
@@ -863,7 +865,12 @@ def wrapped (constructor argument : String) : String :=
 def inMonad (names : Names) (monadic : Bool) (code : String) : String :=
   if monadic then wrapped (leanName names "pure") code else code
 
+/-- A source identifier that Lean would otherwise read as a keyword. -/
+def identName (name : String) : String :=
+  if leanReserved.contains name then s!"«{name}»" else name
+
 def tuple (names : List String) : String :=
+  let names := names.map identName
   match names with
   | [name] => name
   | _ => "(" ++ ", ".intercalate names ++ ")"
@@ -1250,7 +1257,7 @@ def foldState (names : Names) (info : LoopInfo T) : String :=
 value to return, in a loop that a `return` can end. -/
 def stepTuple (slot : Option String) (names : List String) : String :=
   match slot with
-  | some s => if names.isEmpty then s else s!"({s}, {", ".intercalate names})"
+  | some s => if names.isEmpty then s else s!"({s}, {", ".intercalate (names.map identName)})"
   | Option.none => tuple names
 
 /-- The binders of the function that `List.foldl` runs for a loop, with their
@@ -1311,7 +1318,7 @@ def Expr.print (names : Names) : Expr T E → String
       s!"\{ {argument (base.print names)} with {sets} }"
   | .bool b => if b then "true" else "false"
   | .string s => PrintTy.stringLit (T := T) names s
-  | .var name => name
+  | .var name => identName name
   | .enumCase ref member => s!"{(names.ref ref).1}.{memberName member}"
   | .tagValue value => PrintTy.stringLit (T := T) names value
   | .inject ref tag e =>
@@ -1324,7 +1331,7 @@ def Expr.print (names : Names) : Expr T E → String
     s!"({head} {argument (e.print names)})"
   | .field obj wrap name =>
     let o := obj.print names
-    s!"{if wrap then s!"({o})" else o}.{name}"
+    s!"{if wrap then s!"({o})" else o}.{identName name}"
   | .propNot p => s!"¬({p.print names})"
   | .not b => s!"!({b.print names})"
   | .neg a => s!"(-{a.print names})"
@@ -1344,6 +1351,7 @@ def Expr.print (names : Names) : Expr T E → String
   | .isNone a => s!"{argument (a.print names)}.isNone"
   | .isSome a => s!"{argument (a.print names)}.isSome"
   | .matchNull name whenNull whenValue kind =>
+    let name := identName name
     let none_ := leanName names "none"
     let some_ := leanName names "some"
     let nullish := leanName names "JSNullish"
@@ -1380,8 +1388,8 @@ def Expr.print (names : Names) : Expr T E → String
   | .and a b => s!"({a.print names} && {b.print names})"
   | .or a b => s!"({a.print names} || {b.print names})"
   | .decide p => s!"{leanName names "decide"} ({p.print names})"
-  | .push name a => s!"{name} ++ [{a.print names}]"
-  | .update op name a => s!"{name} {op.symbol} {a.print names}"
+  | .push name a => s!"{identName name} ++ [{a.print names}]"
+  | .update op name a => s!"{identName name} {op.symbol} {a.print names}"
   | .ext op args => PrintOp.print names op (Expr.printList names args)
   | .tuple es => "(" ++ ", ".intercalate (Expr.printList names es) ++ ")"
   | .proj e index size => argument (e.print names) ++ projPath index size
@@ -1396,7 +1404,7 @@ def Expr.printFields (names : Names) : List (String × Expr T E) → List String
     match e with
     -- The structure has no tag field.
     | .tagValue _ => Expr.printFields names fs
-    | _ => s!"{key} := {e.print names}" :: Expr.printFields names fs
+    | _ => s!"{identName key} := {e.print names}" :: Expr.printFields names fs
 
 end
 
@@ -1419,15 +1427,16 @@ def Body.lines (names : Names) (monadic : Bool := false) : Body T E → List Str
   | .exit e ns =>
     [inMonad names monadic (wrapped (leanName names "ForInStep.done")
       (stepTuple (some (wrapped (leanName names "some") (e.print names))) ns))]
-  | .let name e rest => s!"let {name} := {e.print names}" :: rest.lines names monadic
+  | .let name e rest => s!"let {identName name} := {e.print names}" :: rest.lines names monadic
   | .letTuple ns e rest => s!"let {tuple ns} := {e.print names}" :: rest.lines names monadic
   | .letArray name type elems rest =>
-    s!"let {name} : {type.print names} := [{", ".intercalate (Expr.printList names elems)}]" ::
+    s!"let {identName name} : {type.print names} := [{", ".intercalate (Expr.printList names elems)}]" ::
       rest.lines names monadic
   | .ite c whenTrue whenFalse =>
     [s!"if {c.print names} then"] ++ indent (whenTrue.lines names monadic) ++ ["else"] ++
       indent (whenFalse.lines names monadic)
   | .matchNull name kind whenNull whenValue =>
+    let name := identName name
     let none_ := leanName names "none"
     let some_ := leanName names "some"
     let nullish := leanName names "JSNullish"
@@ -1453,16 +1462,17 @@ def Body.lines (names : Names) (monadic : Bool := false) : Body T E → List Str
         [s!"| {nullish}.null =>"] ++ indent noneBinding ++
         [s!"| {nullish}.value {name} =>"] ++ indent someBinding
   | .matchTag name ref _ tag other whenTag whenOther =>
+    let printed := identName name
     let ctor (t : String) := s!"{(names.ref ref).1}.{memberName t}"
     let rest : List String := match other with
-      | some t => s!"| {ctor t} {name} =>" :: indent (whenOther.lines names monadic)
+      | some t => s!"| {ctor t} {printed} =>" :: indent (whenOther.lines names monadic)
       | Option.none =>
         match whenOther with
         | .matchTag n .. =>
           if n == name then Body.tagArms names monadic name whenOther
-          else s!"| {name} =>" :: indent (whenOther.lines names monadic)
-        | _ => s!"| {name} =>" :: indent (whenOther.lines names monadic)
-    s!"match {names.matchBinder}{name} with" :: s!"| {ctor tag} {name} =>" ::
+          else s!"| {printed} =>" :: indent (whenOther.lines names monadic)
+        | _ => s!"| {printed} =>" :: indent (whenOther.lines names monadic)
+    s!"match {names.matchBinder}{printed} with" :: s!"| {ctor tag} {printed} =>" ::
       indent (whenTag.lines names monadic) ++ rest
   | .letState ns branch rest =>
     if branch.throws then
@@ -1519,9 +1529,9 @@ def Body.lines (names : Names) (monadic : Bool := false) : Body T E → List Str
         [s!"    {tuple ns} {items.print names}"] ++ rest.lines names monadic
   | .throw e => [wrapped "throw" (e.print names)]
   | .bind name ref args rest =>
-    s!"{(Expr.call ref args).print names} >>= fun {name} =>" :: rest.lines names monadic
+    s!"{(Expr.call ref args).print names} >>= fun {identName name} =>" :: rest.lines names monadic
   | .letBorrow name ref _ args rest =>
-    s!"let {name} := {(Expr.call ref args).print names}" :: rest.lines names monadic
+    s!"let {identName name} := {(Expr.call ref args).print names}" :: rest.lines names monadic
   -- A call whose value the body returns at once is that value. The lifted
   -- body of the call is not printed here: `printFunction` prints the body
   -- that the declaration gave, and the translator checks that each call's
@@ -1534,7 +1544,7 @@ def Body.lines (names : Names) (monadic : Bool := false) : Body T E → List Str
       | _ => arg
     let call := (Expr.call ref args).print names
     match ns, rest with
-    | [x], .value (.var y) => if x == y then [call] else s!"let {x} := {call}" :: rest.lines names monadic
+    | [x], .value (.var y) => if x == y then [call] else s!"let {identName x} := {call}" :: rest.lines names monadic
     | _, _ => s!"let {tuple ns} := {call}" :: rest.lines names monadic
   | .letLifted _ _ rest => rest.lines names monadic
 
@@ -1544,16 +1554,17 @@ for the other members of a test of the same local. They join the outer
 `match` would not know which members the outer one ruled out. -/
 def Body.tagArms (names : Names) (monadic : Bool) (name : String) : Body T E → List String
   | .matchTag _ ref _ tag other whenTag whenOther =>
+    let printed := identName name
     let ctor (t : String) := s!"{(names.ref ref).1}.{memberName t}"
     let rest : List String := match other with
-      | some t => s!"| {ctor t} {name} =>" :: indent (whenOther.lines names monadic)
+      | some t => s!"| {ctor t} {printed} =>" :: indent (whenOther.lines names monadic)
       | Option.none =>
         match whenOther with
         | .matchTag n .. =>
           if n == name then Body.tagArms names monadic name whenOther
-          else s!"| {name} =>" :: indent (whenOther.lines names monadic)
-        | _ => s!"| {name} =>" :: indent (whenOther.lines names monadic)
-    s!"| {ctor tag} {name} =>" :: indent (whenTag.lines names monadic) ++ rest
+          else s!"| {printed} =>" :: indent (whenOther.lines names monadic)
+        | _ => s!"| {printed} =>" :: indent (whenOther.lines names monadic)
+    s!"| {ctor tag} {printed} =>" :: indent (whenTag.lines names monadic) ++ rest
   -- `Body.lines` calls this only on a test of a tag.
   | _ => []
 
@@ -1580,7 +1591,7 @@ def printFunction (names : Names) (name : String) (params : List (String × Ty T
   let decreasing := body.decreasingParam? ⟨names.file, name⟩ params
   let names := if decreasing.isSome then { names with matchHyp := true } else names
   let termination := match decreasing with
-    | some p => [s!"termination_by {p}", "decreasing_by all_goals tolean_decreasing"]
+    | some p => [s!"termination_by {identName p}", "decreasing_by all_goals tolean_decreasing"]
     | Option.none => []
   let generic := if names.generic then PrintTy.binders (T := T) names else ""
   -- The type parameters, in the order that the parameters name them. The
@@ -1594,7 +1605,7 @@ def printFunction (names : Names) (name : String) (params : List (String × Ty T
       | .optional (.option _) => s!" := {leanName names "JSNullish"}.undefined"
       | .optional _ => s!" := {leanName names "none"}"
       | _ => ""
-    s!"({param} : {type.print names}{default})"
+    s!"({identName param} : {type.print names}{default})"
   "\n".intercalate
     (s!"def {name}{generic} {" ".intercalate leanParams} : {ret.print names} :=" ::
       indent (body.lines names) ++ termination)
@@ -1611,7 +1622,7 @@ def Decl.print (names : Names) : Decl T E → String
           | .optional (.option _) => s!" := {leanName names "JSNullish"}.undefined"
           | .optional _ => s!" := {leanName names "none"}"
           | _ => ""
-        s!"  {field} : {type.print names}{default}")
+        s!"  {identName field} : {type.print names}{default}")
   | .tagged name _ members =>
     let generic := if names.generic then s!" ({names.typeParam} : Type)" else ""
     "\n".intercalate (s!"inductive {name}{generic} where" ::

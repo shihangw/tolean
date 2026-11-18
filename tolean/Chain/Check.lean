@@ -53,6 +53,58 @@ private def freshness (l : Loaded) : IO (List String) := do
         errs := errs ++ [s!"{f}: {r.path} changed since it was translated; translate it again"]
   return errs
 
+private def classElaborationErrors (l : Loaded) : List String :=
+  l.files.flatMap fun (f, m) =>
+    if !m.classElaboration then []
+    else Id.run do
+      let at_ := s!"{f}: class elaboration"
+      let node (id : String) := m.nodes.find? (·.id == id)
+      let edge (a b : String) := m.edges.contains (a, b)
+      let certs := m.nodes.filter (·.id.startsWith "certificate:")
+      let mut errs := []
+      match node "translator" with
+      | some n =>
+        if n.status == .proved then
+          errs := errs ++ [s!"{at_} cannot mark the translator proved across an unproved semantic boundary"]
+        if n.status != .tested then
+          errs := errs ++ [s!"{at_} must leave the translator tested"]
+      | none => errs := errs ++ [s!"{at_} has no translator node"]
+      match node "class-elaboration" with
+      | some n =>
+        if n.status != .tested ||
+            n.evidence.bind (·.check) != some "typescript-class-semantics" then
+          errs := errs ++ [s!"{at_} must record the semantic-preservation check as tested"]
+      | none => errs := errs ++ [s!"{at_} omits the tested semantic-preservation node"]
+      if m.certificate.isNone then
+        if !edge "parser" "class-elaboration" ||
+            !edge "class-elaboration" "translator" then
+          errs := errs ++ [s!"{at_} is missing a dependency from the parser through elaboration"]
+        return errs
+      if (node "elaborated").isNone || (node "parsed").isNone then
+        errs := errs ++ [s!"{at_} has no certificate proof nodes"]
+      match node "parsed" with
+      | some n =>
+        if n.status != .proved ||
+            !(n.«theorem».any (·.endsWith ".program_parsed")) then
+          errs := errs ++ [s!"{at_} must retain the source parser theorem"]
+      | none => errs := errs ++ [s!"{at_} omits the source parser theorem"]
+      match node "elaborated" with
+      | some n =>
+        if n.status != .proved ||
+            !(n.«theorem».any (·.endsWith ".program_elaborated")) then
+          errs := errs ++ [s!"{at_} must distinguish the structural elaboration theorem"]
+      | none => errs := errs ++ [s!"{at_} omits the structural elaboration theorem"]
+      if !edge "parser" "parsed" || !edge "parsed" "elaborated" ||
+          !edge "elaborated" "class-elaboration" then
+        errs := errs ++ [s!"{at_} is missing a parser or structural elaboration dependency"]
+      for c in certs do
+        if !edge "class-elaboration" c.id || !edge "elaborated" c.id ||
+            !edge c.id "translator" then
+          errs := errs ++ [s!"{at_} does not connect {c.id} through the semantic boundary"]
+        if edge "parsed" c.id then
+          errs := errs ++ [s!"{at_} bypasses elaboration for {c.id}"]
+      return errs
+
 private def evidence (l : Loaded) (passed : List String) : List String :=
   l.files.flatMap (fun (f, m) => m.nodes.filterMap fun n =>
     -- A translator that certificates prove has no single theorem: each
@@ -85,27 +137,41 @@ private instance : MonadEnv (ReaderT Environment Id) where
   getEnv := read
   modifyEnv _ := pure ()
 
+/-- Manifest names omit Lean quotation marks, including generated names
+whose components contain spaces. -/
+private def manifestName (s : String) : Name :=
+  (s.splitOn ".").foldl Name.str .anonymous
+
 /-- `name` is a theorem whose axioms are among `allowed`; with `spec`, its type
 is the constant `spec`. -/
 private def theoremErr (env : Environment) (at_ name : String) (spec : Option String)
     (allowed : List String) : Option String := Id.run do
-  let n := name.toName
+  let n := manifestName name
   let some ci := env.find? n | return some s!"{at_}: {name} is not in the environment"
   unless ci matches .thmInfo _ do return some s!"{at_}: {name} is not a theorem"
   if let some s := spec then
-    unless ci.type == mkConst s.toName do
+    unless ci.type == mkConst (manifestName s) do
       return some s!"{at_}: the type of {name} is not exactly {s}"
-    if env.find? s.toName |>.isNone then return some s!"{at_}: {s} is not in the environment"
+    if env.find? (manifestName s) |>.isNone then return some s!"{at_}: {s} is not in the environment"
   let axs := (collectAxioms n : ReaderT Environment Id _).run env
   let extra := axs.toList.filter fun a => !allowed.contains a.toString
   if extra.isEmpty then none
   else some s!"{at_}: {name} also depends on {", ".intercalate (extra.map toString)}"
 
 private def proofs (l : Loaded) : IO (List String) := do
+  -- Requirements come from the generated files, never from the project's
+  -- list of supplied proofs. Freshness checks protect those files too.
+  let required ← l.files.flatMapM fun (_, m) => do
+    let path := l.dir / m.output.path
+    if !(← path.pathExists) then return []
+    let text ← IO.FS.readFile path
+    let marker := "-- tolean sort obligation: "
+    return (text.splitOn "\n").filterMap fun line =>
+      if line.startsWith marker then some ((line.drop marker.length).toString) else none
   let mods := (l.project.claims.map (·.module) ++
     l.project.obligations.map (·.module) ++
     (allNodes l).filterMap fun (_, n) => if n.status == .proved then n.module else none).eraseDups
-  if mods.isEmpty then return []
+  if mods.isEmpty then return required.map fun spec => s!"missing proof for generated obligation {spec}"
   initSearchPath (← findSysroot)
   let env ← importModules (mods.toArray.map fun m => { module := m.toName }) {}
   let claimErrs := l.project.claims.filterMap fun c =>
@@ -117,7 +183,13 @@ private def proofs (l : Loaded) : IO (List String) := do
   let obligationErrs := l.project.obligations.filterMap fun o =>
     theoremErr env s!"obligation {o.spec}" o.proof (some o.spec)
       ["propext", "Classical.choice", "Quot.sound"]
-  return claimErrs ++ nodeErrs ++ obligationErrs
+  let requiredErrs := required.filterMap fun spec =>
+    let proof := match l.project.obligations.find? (·.spec == spec) with
+      | some o => o.proof
+      | none => spec ++ " proof"
+    theoremErr env s!"generated obligation {spec}" proof (some spec)
+      ["propext", "Classical.choice", "Quot.sound"]
+  return claimErrs ++ nodeErrs ++ obligationErrs ++ requiredErrs
 
 private def references (l : Loaded) : List String :=
   let known := (allNodes l).map (·.1) ++ l.files.map (·.2.module) ++ l.project.claims.map (·.id)
@@ -128,7 +200,8 @@ private def references (l : Loaded) : List String :=
 
 def check (path : System.FilePath) (passed : List String) : IO UInt32 := do
   let l ← load path
-  let errs := (← freshness l) ++ evidence l passed ++ references l ++ (← proofs l)
+  let errs := (← freshness l) ++ classElaborationErrors l ++ evidence l passed ++
+    references l ++ (← proofs l)
   for e in errs do IO.eprintln e
   if errs.isEmpty then
     IO.println s!"{l.files.length} files, {(allNodes l).length} nodes, {l.project.claims.length} claims, {l.project.obligations.length} obligations: the chain holds"

@@ -27,6 +27,10 @@ tolean translate-workspace
     read a workspace as JSON on stdin, {"files": [{"path", "text"}, …]} with
     tolean.json among them, and print each unit's Lean or error as JSON; it
     reads and writes no files
+tolean translate-source [--target ES20xx]
+    translate supplied TypeScript JSON (fileName, text, namespace, target) on stdin;
+    fileName labels diagnostics and does not name a file to read;
+    the JSON target overrides --target, which defaults to ES2024
 tolean interpret
     read TypeScript programs and calls as JSON on stdin, run each call in the
     interpreter of Spec/Eval.lean on real doubles, and print the results as
@@ -66,6 +70,7 @@ def usage : String :=
   "usage: tolean parse [--target ES20xx] [--round-trip] <file.ts>\n" ++
   "       tolean translate [--check] [--config <json>]\n" ++
   "       tolean translate-workspace < workspace.json\n" ++
+  "       tolean translate-source [--target ES20xx] < source.json\n" ++
   "       tolean translate [--target ES20xx] [--certify] <input.ts> <output.lean> <Lean.Namespace>\n" ++
   "       tolean translate-sql <output.lean> <Lean.Namespace> --query Q --queries <file.sql>... --migrations <file.sql>...\n" ++
   "       tolean sql-schema --table T --migrations <file.sql>...\n" ++
@@ -123,10 +128,12 @@ def certifyAfterTranslate (target : Edition) (input source output ns : String) :
   match Certify.certify input source ns ns (ns ++ "Cert") target with
   | .ok lean =>
     IO.FS.writeFile path lean
-    let .ok (fns, all) := Certify.certifiedFunctions source target | return
+    let .ok (fns, all, classElaboration) := Certify.certifiedFunctions source target | return
     Chain.recordCertificate (output ++ ".chain.json") path (ns ++ "Cert") (ns ++ "Cert")
-      (fns.map fun f => (f, s!"{ns}Cert.{f}_cert")) all
-  | .error _ =>
+      (fns.map fun f => (f, s!"{ns}Cert.{f}_cert")) all classElaboration
+  | .error message =>
+    if let .ok (_, _, _, iface) := Translate.translateFile input source target then
+      unless iface.sortObligations.isEmpty do throw (IO.userError message)
     if ← System.FilePath.pathExists path then IO.FS.removeFile path
 
 def translateFile (target : Edition) (input output ns : String) (certify : Bool := false) :
@@ -136,7 +143,10 @@ def translateFile (target : Edition) (input output ns : String) (certify : Bool 
   match Translate.translate input source ns target with
   | .ok lean =>
     IO.FS.writeFile output lean
-    Chain.emit "typescript" (some target.name) [input] output ns
+    let classElaboration := match TypeScript.Syntax.parse source target with
+      | .ok m => m.decls.any fun | .classDecl _ => true | _ => false
+      | .error _ => false
+    Chain.emit "typescript" (some target.name) [input] output ns classElaboration
     if certify then certifyAfterTranslate target input source output ns
     return 0
   | .error message =>
@@ -252,6 +262,24 @@ def run (target : Edition) : List String → IO UInt32
   | ["translate-workspace"] => do
     IO.println (Project.workspaceJson (← (← IO.getStdin).readToEnd))
     return 0
+  | ["translate-source"] => do
+    let input ← (← IO.getStdin).readToEnd
+    let result : Except String String := do
+      let json ← Lean.Json.parse input
+      let target ← match json.getObjVal? "target" with
+        | .ok value => do
+          let name ← value.getStr?
+          let some target := Edition.parse? name
+            | throw s!"unknown target '{name}'"
+          pure target
+        | .error _ => pure target
+      Translate.translate (← json.getObjValAs? String "fileName")
+        (← json.getObjValAs? String "text") (← json.getObjValAs? String "namespace") target
+    let json := match result with
+      | .ok lean => Lean.Json.mkObj [("lean", Lean.toJson lean)]
+      | .error error => Lean.Json.mkObj [("error", Lean.toJson error)]
+    IO.println json.compress
+    return 0
   | ["interpret"] => do
     match TypeScript.Interpret.interpret (← (← IO.getStdin).readToEnd) with
     | .ok out => IO.println out; return 0
@@ -266,13 +294,21 @@ def run (target : Edition) : List String → IO UInt32
   | "translate-go" :: rest => translateGo { roots := [], eraseTypes := [], erasePackages := [] } rest
   | "certify" :: input :: transModule :: transNs :: output :: certNs :: rest => do
     let source ← IO.FS.readFile input
-    match Certify.certify input source transModule transNs certNs target with
+    let (proofs, rest) ← match rest with
+      | "--proof-manifest" :: path :: rest => do
+        let manifest : Chain.ProjectManifest ← Chain.readJson path
+        pure (manifest.obligations, rest)
+      | rest => pure ([], rest)
+    unless rest.isEmpty || (rest.length == 2 && rest.head? == some "--manifest") do
+      IO.eprintln usage
+      return 2
+    match Certify.certify input source transModule transNs certNs target proofs with
     | .ok lean =>
       IO.FS.writeFile output lean
       if let ["--manifest", manifest] := rest then
-        let .ok (fns, all) := Certify.certifiedFunctions source target | return 1
+        let .ok (fns, all, classElaboration) := Certify.certifiedFunctions source target | return 1
         Chain.recordCertificate manifest output certNs certNs
-          (fns.map fun f => (f, s!"{certNs}.{f}_cert")) all
+          (fns.map fun f => (f, s!"{certNs}.{f}_cert")) all classElaboration
       return 0
     | .error e =>
       IO.eprintln e

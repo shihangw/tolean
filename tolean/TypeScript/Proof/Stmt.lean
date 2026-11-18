@@ -2407,6 +2407,19 @@ theorem evalList_length {ρ : Eval.Env N} : ∀ {outs : List IR.Expr} {vs : List
         subst h
         simp [evalList_length hxs]
 
+/-- A literal error name evaluates after the constructor arguments. -/
+theorem evalList_errorName (ρ : Eval.Env N) (codes : List IR.Expr) (name : Option String) :
+    IR.Expr.evalList fs fuel ρ (codes ++ name.toList.map IR.Expr.string) =
+      (IR.Expr.evalList fs fuel ρ codes).map
+        (fun vs => vs ++ name.toList.map (fun n => Val.str (JSString.ofString n))) := by
+  induction codes with
+  | nil => cases name <;> simp [IR.Expr.evalList, IR.Expr.eval]
+  | cons c cs ih =>
+    simp only [List.cons_append, IR.Expr.evalList]
+    rw [ih]
+    cases IR.Expr.eval fs fuel ρ c <;>
+      cases IR.Expr.evalList fs fuel ρ cs <;> simp
+
 omit [JSNumber N] in
 /-- The fields that the output keeps, from the marks of the parameters, are
 the fields that the interpreter keeps, from the parameters: those marked
@@ -2483,10 +2496,9 @@ theorem throwClass_sim {env : Translate.Env} {s sn tsp : Span} {c : String} {msg
     (hsim : Sim (N := N) m fs fuel env msg code) (hsims : SimList (N := N) m fs fuel env atoms codes)
     (hc : env.has c = false) :
     StmtSim (N := N) m fs fuel env tail [.throwStmt s (.new sn c [.keyword tsp "'"] (msg :: atoms))]
-      (.throw (.ext (.errorCase thrown c (some "message" :: info.params.map fun (n, _, ro) => if ro then some n else none))
-        (code :: codes))) := by
+      (.throw (.ext (.errorCase thrown c info.errorMarks) (info.errorArgs code codes))) := by
   intro ρs ρo ha hs
-  obtain ⟨ctor, hctor, hps, hglob⟩ := hs.2.2.2 info hinfo
+  obtain ⟨ctor, hctor, ⟨hps, hRuntimeName⟩, hglob⟩ := hs.2.2.2 info hinfo
   rw [hname] at hctor hglob
   have hE : c ≠ "Error" := by rintro rfl; simp [isGlobalName] at hglob
   have hM : c ≠ "Map" := by rintro rfl; simp [isGlobalName] at hglob
@@ -2500,12 +2512,25 @@ theorem throwClass_sim {env : Translate.Env} {s sn tsp : Span} {c : String} {msg
     intro vs
     rw [fieldArgs_marks _ _ _ hps]
     cases ctor <;> simp [Eval.fieldArgs, Eval.ctorParams]
-  have hout : ∀ o, IR.Body.exec fs fuel ρo (.throw (.ext (.errorCase thrown c
-      (some "message" :: info.params.map fun (n, _, ro) => if ro then some n else none)) (code :: codes))) = some o →
-      ∃ t vs, o = .ret (.error (.error c (("message", .str t) :: Eval.fieldArgs ctor vs))) ∧
+  have hfieldsAll : ∀ (t : JSString) (vs : List (Val N)), vs.length = info.params.length →
+      (info.errorMarks.zip (.str t :: (vs ++ info.runtimeName.toList.map
+        (fun n => Val.str (JSString.ofString n))))).filterMap (fun (f, a) => f.map (·, a)) =
+        ("message", .str t) :: (Eval.fieldArgs ctor vs ++ Eval.errorNameFields (Eval.ctorName ctor)) := by
+    intro t vs hl
+    simp only [ClassInfo.errorMarks, List.cons_append, List.zip_cons_cons,
+      List.filterMap_cons, Option.map_some]
+    rw [List.zip_append (by simpa using hl.symm)]
+    simp only [List.filterMap_append]
+    rw [← hfields]
+    cases hn : info.runtimeName <;> simp [Eval.errorNameFields, hRuntimeName, hn]
+  have hout : ∀ o, IR.Body.exec fs fuel ρo
+      (.throw (.ext (.errorCase thrown c info.errorMarks) (info.errorArgs code codes))) = some o →
+      ∃ t vs, o = .ret (.error (.error c
+        (("message", .str t) :: (Eval.fieldArgs ctor vs ++ Eval.errorNameFields (Eval.ctorName ctor))))) ∧
         IR.Expr.eval fs fuel ρo code = some (.str t) ∧ IR.Expr.evalList fs fuel ρo codes = some vs := by
     intro o ho
-    simp only [IR.Body.exec, IR.Expr.eval, IR.Expr.evalList] at ho
+    simp only [ClassInfo.errorArgs, List.cons_append, IR.Body.exec, IR.Expr.eval, IR.Expr.evalList,
+      evalList_errorName] at ho
     cases hm : IR.Expr.eval fs fuel ρo code with
     | none => simp [hm] at ho
     | some w =>
@@ -2513,9 +2538,13 @@ theorem throwClass_sim {env : Translate.Env} {s sn tsp : Span} {c : String} {msg
       | none => simp [hm, hvs] at ho
       | some vs =>
         have hl := evalList_length fs fuel hvs
-        cases w <;> simp [hm, hvs, IR.ExprExt.apply, hl, hlen] at ho
-        refine ⟨_, vs, ?_, rfl, rfl⟩
-        rw [← ho, hfields]
+        cases w <;> simp [ClassInfo.errorMarks, hm, hvs, IR.ExprExt.apply, hl, hlen] at ho
+        rename_i message
+        refine ⟨message, vs, ?_, rfl, rfl⟩
+        rw [← ho]
+        simpa [ClassInfo.errorMarks] using congrArg
+          (fun fields => Outcome.ret (Except.error (Val.error c fields)))
+          (hfieldsAll message vs (hl.trans hlen))
   constructor
   · intro v hv
     obtain ⟨t, vs, ho, hm, hvs⟩ := hout _ hv
@@ -3176,7 +3205,8 @@ theorem constAssigned_append_return_ident (s : Stmt) (result : String)
       s.constAssignedIn ss := by
   cases s <;> simp only [Stmt.constAssignedIn]
   · rw [assignsList_append_return_ident]
-  · have h : (fun n => Stmt.assignsList n
+  all_goals
+    have h : (fun n => Stmt.assignsList n
         (ss ++ [.returnStmt sp (some (.ident ep result))])) =
         (fun n => Stmt.assignsList n ss) :=
       funext fun n => assignsList_append_return_ident n result sp ep ss
@@ -4666,9 +4696,9 @@ theorem binds_sim {env env' : Translate.Env} {stmt : Stmt} {rest : List Stmt} {t
     · rwa [List.append_assoc]
     · exact h₂.mono hch
 
-theorem declarePlaces_ok {s : Span} {b : Binding} :
+theorem declarePlaces_ok {s : Span} {b : Binding} {quoted : Bool} :
     ∀ {env env' : Translate.Env} {reads : List (String × Ty × IR.Expr)} {ctx ctx' : Ctx},
-      declarePlaces s b env reads ctx = .ok env' ctx' →
+      declarePlaces s b env reads quoted ctx = .ok env' ctx' →
       (∀ n ∈ reads.map (·.1), env.has n = false) ∧
         (∀ x, env'.has x = (env.has x || (reads.map (·.1)).contains x)) ∧ globals env' = globals env
   | env, env', [], ctx, ctx', h => by
@@ -5063,6 +5093,111 @@ theorem translateDestructure_sound {tr : Option Ty → Expr → TM Code} {k : Tr
   refine ⟨ws, by simpa using hlen, fun ρs ha hs => ?_, hb⟩
   obtain ⟨v, vs, hv, hit, hpb⟩ := patternReads_sim m fs fuel hreads hsim' hne ha hs hws
   simp [Eval.exec, Eval.execStmt, evalTop_ok m fuel hv, hit, hpb, hconst]
+
+omit [JSNumber N] in
+theorem objectReads_names {read : String → TM Code} :
+    ∀ (ps : List (String × String)) (ctx : Ctx) (reads : List (String × Ty × IR.Expr)) (ctx' : Ctx),
+      ps.mapM (m := TM) (fun (key, name) => do
+        let field ← read key
+        pure (name, field.type, field.value)) ctx = .ok reads ctx' →
+      reads.map Prod.fst = ps.map Prod.snd := by
+  intro ps
+  induction ps with
+  | nil =>
+    intro ctx reads ctx' h
+    simp only [List.mapM_nil, pure_ok] at h
+    obtain ⟨rfl, _⟩ := h
+    rfl
+  | cons p ps ih =>
+    intro ctx reads ctx' h
+    obtain ⟨key, name⟩ := p
+    simp only [List.mapM_cons, bind_ok, pure_ok] at h
+    obtain ⟨r, c₁, ⟨field, c₂, hf, rfl, rfl⟩, rs, c₃, hrs, rfl, rfl⟩ := h
+    simpa using congrArg (name :: ·) (ih _ _ _ hrs)
+
+omit [JSNumber N] in
+theorem objectBindings_zip (fields : List (String × Val N)) :
+    ∀ (ps : List (String × String)) (ws : List (Val N)),
+      ((ps.map Prod.fst).mapM (Eval.getProp fields)) = some ws →
+      ps.mapM (fun binding => do return (binding.2, ← Eval.getProp fields binding.1)) =
+        some ((ps.map Prod.snd).zip ws) := by
+  intro ps
+  induction ps with
+  | nil =>
+    intro ws h
+    simp at h
+    subst ws
+    rfl
+  | cons p ps ih =>
+    intro ws h
+    obtain ⟨key, name⟩ := p
+    simp only [List.map_cons, List.mapM_cons] at h ⊢
+    cases hv : Eval.getProp fields key with
+    | none => simp [hv] at h
+    | some value =>
+      cases hr : (ps.map Prod.fst).mapM (Eval.getProp fields) with
+      | none => simp [hv, hr] at h
+      | some rest =>
+        simp [hv, hr] at h
+        subst ws
+        rw [ih rest hr]
+        simp
+
+theorem objectTuple_vals (ρ : Eval.Env N) (keys : List String) (source : IR.Expr) (ws : List (Val N))
+    (h : IR.Expr.eval fs fuel ρ (.ext (.objectTuple keys) [source]) = some (.list ws)) :
+    ∃ fields, IR.Expr.eval fs fuel ρ source = some (.obj fields) ∧
+      keys.mapM (Eval.getProp fields) = some ws := by
+  simp only [IR.Expr.eval, IR.Expr.evalList] at h
+  cases hs : IR.Expr.eval fs fuel ρ source with
+  | none => simp [hs] at h
+  | some value =>
+    cases value <;> simp [hs, IR.ExprExt.apply] at h
+    rename_i fields
+    exact ⟨fields, rfl, h⟩
+
+/-- A structure-pattern expression extracts the source once, and its tuple
+binds exactly the names that the source declaration binds. -/
+theorem translateObjectDestructure_sound {tr : Option Ty → Expr → TM Code} {k : Translate.Env → TM IR.Body}
+    {env : Translate.Env} {s : Span} {kind : VarKind} {p : Expr} {type : Option TypeExpr}
+    {init : Expr} {rest : List Stmt} {tail : Tail} {ctx ctx' : Ctx} {body : IR.Body}
+    (htr : ∀ exp e ctx c ctx', tr exp e ctx = .ok c ctx' → Sim (N := N) m fs fuel env e c.code)
+    (hk : ∀ env' ctx b ctx', k env' ctx = .ok b ctx' → StmtSim (N := N) m fs fuel env' tail rest b)
+    (hconst : (Stmt.objectDestructure s kind p type init).constAssignedIn rest = false)
+    (h : translateObjectDestructure tr k env s kind p type init ctx = .ok body ctx') :
+    StmtSim (N := N) m fs fuel env tail (.objectDestructure s kind p type init :: rest) body := by
+  simp only [translateObjectDestructure, ite_state] at h
+  split at h
+  · simp only [pure_bind, ite_state] at h
+    split at h
+    · simp at h
+    · rename_i htdz
+      simp only [bind_ok] at h
+      obtain ⟨declared, c₁, _, code, c₂, hcode, t, c₃, _, h⟩ := h
+      by_cases hstruct : code.type.structRef?.isSome = true
+      · rw [if_pos hstruct] at h
+        simp only [bind_ok, pure_ok] at h
+        obtain ⟨reads, c₄, hreads, env', c₅, hdecl, rb, c₆, hrb, hbody, _⟩ := h
+        subst body
+        have hnames := objectReads_names _ _ _ _ hreads
+        have hsim := htr _ _ _ _ _ hcode
+        obtain ⟨hfresh, hhas, hglob⟩ := declarePlaces_ok hdecl
+        refine binds_sim m fs fuel (reads.map (·.1)) hfresh hhas hglob
+          (fun n hn => by simp [stmtsChanges, hn]) ?_ (hk _ _ _ _ hrb)
+        intro ρo o ho
+        obtain ⟨ws, hw, hlen, hb⟩ := letTuple_exec fs fuel ho
+        obtain ⟨fields, hsource, hfields⟩ := objectTuple_vals fs fuel ρo _ _ ws hw
+        refine ⟨ws, hlen.symm, fun ρs ha hs => ?_, hb⟩
+        rw [eval_value] at hsource
+        have hv := hsim ρs ρo (.obj fields) ha hs hsource
+        have hbindings := objectBindings_zip fields p.objectBindings ws hfields
+        simp only [Option.bind_eq_bind] at hbindings
+        simp only [Eval.exec, Eval.execStmt, evalTop_ok m fuel hv, hconst, htdz,
+          Bool.false_eq_true, ↓reduceIte, Option.bind_eq_bind, Option.bind_some]
+        rw [hbindings]
+        simp [hnames]
+      · rw [if_neg hstruct] at h
+        simp at h
+  · simp at h
 
 /-! ### Array destructuring in the head of a loop -/
 
@@ -5529,6 +5664,20 @@ theorem stmts_sound (F : Nat) : ∀ fuel, (∀ k ≤ fuel, CallsAgree (N := N) m
           split at h
           · simp at h
           exact translateDestructure_sound m fs fuel
+            (fun _ _ _ _ _ hx => by
+              simp only [bind_ok, fuelLimit_ok] at hx
+              obtain ⟨_, _, ⟨rfl, rfl⟩, hx⟩ := hx
+              exact (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hx)
+            (fun _ _ _ _ hb => ihS _ _ _ _ _ _ hb) (by simpa using hconst) h
+        | objectDestructure sp kind p type init =>
+          simp only [ite_state] at h
+          split at h
+          · simp at h
+          rename_i hconst
+          simp only [pure_bind, ite_state] at h
+          split at h
+          · simp at h
+          exact translateObjectDestructure_sound m fs fuel
             (fun _ _ _ _ _ hx => by
               simp only [bind_ok, fuelLimit_ok] at hx
               obtain ⟨_, _, ⟨rfl, rfl⟩, hx⟩ := hx
