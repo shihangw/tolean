@@ -44,7 +44,7 @@ theorem Stmt.lines_words : ∀ (st : Stmt) (d : Nat), (st.lines d).map Prod.snd 
     simp [Stmt.lines, Stmt.clauseLines_words cs (d + 1), Stmt.clauseLines_words cs 1]
   | .funDecl _ _ _ _ _ body, d => by simp [Stmt.lines, Stmt.lines_words body d]
   | .tryCatch _ b _ h, d => by simp [Stmt.lines, Stmt.lines_words b d, Stmt.lines_words h d]
-  | .varDecl .., _ | .destructure .., _ | .exprStmt .., _ | .returnStmt _ none, _ | .returnStmt _ (some _), _
+  | .varDecl .., _ | .destructure .., _ | .objectDestructure .., _ | .exprStmt .., _ | .returnStmt _ none, _ | .returnStmt _ (some _), _
   | .breakStmt _, _ | .continueStmt _, _ | .empty _, _ | .throwStmt .., _ => by simp [Stmt.lines]
 
 theorem Stmt.linesOf_words : ∀ (ss : List Stmt) (d : Nat),
@@ -94,7 +94,7 @@ keyword but those that start an expression. -/
 def startsExprStmt : Option TokenKind → Bool
   | some (.punct "{") | some (.ident "let") => false
   | some (.keyword w) =>
-    w == "true" || w == "false" || w == "null" || w == "typeof" || w == "void" || w == "new"
+    w == "true" || w == "false" || w == "null" || w == "typeof" || w == "void" || w == "new" || w == "this"
   | _ => true
 
 /-- A statement that ends with an `if` without `else`. An `else` after it would
@@ -108,7 +108,7 @@ def Stmt.openIf : Stmt → Bool
 /-- A declaration, which JavaScript does not allow as the body of `if`, `for`
 or `while`. -/
 def Stmt.isDecl : Stmt → Bool
-  | .varDecl .. | .destructure .. | .funDecl .. => true
+  | .varDecl .. | .destructure .. | .objectDestructure .. | .funDecl .. => true
   | _ => false
 
 def Stmt.isBlock : Stmt → Bool
@@ -164,6 +164,9 @@ def Stmt.wf (T : Edition) (fn loop : Bool) : Stmt → Bool
   | .varDecl _ d => d.wf T
   | .destructure _ _ p type init =>
     p.wf && (match type with | some t => t.wf | none => true) && init.wfAt T .assign && init.afterOK [.punct ";"]
+  | .objectDestructure _ _ p type init =>
+    p.isObjectPattern && p.wfAt T .primary &&
+      (match type with | some t => t.wf | none => true) && init.wfAt T .assign && init.afterOK [.punct ";"]
   | .exprStmt _ e => e.wfAt T .assign && e.afterOK [.punct ";"] && startsExprStmt e.tokens.head?
   | .returnStmt _ none => fn
   | .returnStmt _ (some e) => fn && e.wfAt T .assign && e.afterOK [.punct ";"]
@@ -213,7 +216,7 @@ def Stmt.depth : Stmt → Nat
   | .block _ body => Stmt.depthOf body + 1
   | .switchStmt _ _ cs => Stmt.depthClauses cs + 1
   | .funDecl _ _ _ _ _ b => b.depth + 1
-  | .varDecl .. | .destructure .. | .exprStmt .. | .returnStmt .. | .breakStmt _ | .continueStmt _ | .empty _
+  | .varDecl .. | .destructure .. | .objectDestructure .. | .exprStmt .. | .returnStmt .. | .breakStmt _ | .continueStmt _ | .empty _
   | .throwStmt .. => 0
 
 def Stmt.depthOf : List Stmt → Nat
@@ -565,6 +568,7 @@ theorem Expr.firstWord : ∀ e : Expr, ∃ w ws, e.words = w :: ws ∧ w ≠ []
   | .regexp _ v target => ⟨_, _, by simp only [Expr.words]; exact rfl, by simp⟩
   | .bool _ b => ⟨_, _, by simp only [Expr.words]; exact rfl, by simp [keywordWord]⟩
   | .null _ => ⟨_, _, by simp only [Expr.words]; exact rfl, by simp [keywordWord]⟩
+  | .this _ => ⟨_, _, by simp only [Expr.words]; exact rfl, by simp [keywordWord]⟩
   | .array _ es => ⟨_, _, by simp only [Expr.words, enclose]; exact rfl, by simp [punctWord]⟩
   | .object _ ps => ⟨_, _, by simp only [Expr.words, enclose]; exact rfl, by simp [punctWord]⟩
   | .paren _ i => ⟨_, _, by simp only [Expr.words]; exact rfl, by simp [punctWord]⟩
@@ -721,7 +725,7 @@ theorem parseStatement_expr {f : Nat} {s : ParseState} {x : Token} {r : List Tok
     simp [hn]
   | keyword w =>
     simp [startsExprStmt] at hk
-    rcases hk with ((((rfl | rfl) | rfl) | rfl) | rfl) | rfl <;> rfl
+    rcases hk with (((((rfl | rfl) | rfl) | rfl) | rfl) | rfl) | rfl <;> rfl
   | punct p =>
     have h1 : p ≠ "{" := by rintro rfl; simp [startsExprStmt] at hk
     have h2 : p ≠ ";" := by rintro rfl; simp [startsExpr] at hx
@@ -920,11 +924,13 @@ theorem stmt_varDecl {T : Edition} {fn loop : Bool} (f : Nat) (sp : Span) (d : V
   have hs' : s.rest = kw :: nm :: (ts'' ++ rest) := by simpa using hs
   -- A name follows the keyword, so the statement is not a destructuring.
   have hnb : ¬ ((s.rest[1]?.getD s.eof).isPunct "[" = true) := by simp [hs', Token.isPunct, hnm]
+  have hno : ¬ ((s.rest[1]?.getD s.eof).isPunct "{" = true) := by simp [hs', Token.isPunct, hnm]
   refine ⟨.varDecl ⟨kw.span.start, s'.lastStop⟩ d', s', ?_, by simp [Stmt.erase, hd'], hL⟩
   simp only [Parse.parseStatement]
   rw [Parse.bind_eq (Parse.peek_eq hs')]
   rcases hk : d.kind <;> rw [hk] at hkw <;> simp only [VarKind.token] at hkw <;> simp only [hkw] <;>
-    rw [Parse.bind_eq (Parse.peekAt_rest _ _), if_neg hnb] <;> simp only [Parse.parseDeclStatement] <;>
+    rw [Parse.bind_eq (Parse.peekAt_rest _ _), if_neg hnb,
+      Parse.bind_eq (Parse.peekAt_rest _ _), if_neg hno] <;> simp only [Parse.parseDeclStatement] <;>
     rw [Parse.bind_eq (localArrowHead_decl hd₀)] <;>
     simp only [] <;> rw [Parse.bind_eq hp, Parse.bind_eq (Parse.spanFrom_eq _ _)] <;>
     rfl
@@ -1295,6 +1301,89 @@ theorem stmt_destructure {T : Edition} {fn loop : Bool} (f : Nat) (sp : Span) (k
 
 
 
+theorem parseObjectDestructure_reads {T : Edition} (start : Pos) (kind : VarKind) (p : Expr)
+    (type : Option TypeExpr) (init : Expr) (hp : p.isObjectPattern = true) (hpw : p.wfAt T .primary = true)
+    (htw : (match type with | some t => t.wf | none => true) = true) (he : init.wfAt T .assign = true)
+    (ha : init.afterOK [.punct ";"] = true) (s : ParseState) (ts rest : List Token) (hT : s.target = T)
+    (hs : s.rest = ts ++ rest) (hl : s.left = s.rest.length)
+    (ht : Touching ts (objectDestructureWords kind p type init))
+    (hn : ∀ y ∈ ts.tail, NoBreak y) (hr : rest ≠ []) :
+    ∃ p' type' init' s', Parse.parseObjectDestructure start s =
+        .ok (.objectDestructure ⟨start, s'.lastStop⟩ kind p' type' init') s' ∧
+      p'.erase = p.erase ∧ type'.map TypeExpr.erase = type.map TypeExpr.erase ∧
+      init'.erase = init.erase ∧ Leaves s s' rest := by
+  simp only [objectDestructureWords, VarKind.word_eq] at ht
+  obtain ⟨kw, ts₁, rfl, hkw, h₁⟩ := Touching.cons_one (by simpa using ht)
+  obtain ⟨pts, ts₂, rfl, hpt, h₂⟩ := Touching.append_split h₁
+  obtain ⟨tts, ts₃, rfl, htt, h₃⟩ := Touching.append_split h₂
+  obtain ⟨eq, ts₄, rfl, heq, h₄⟩ := Touching.cons_one (by simpa [punctWord] using h₃)
+  obtain ⟨ets, ts₅, rfl, het, h₅⟩ := Touching.append_split h₄
+  obtain ⟨semi, ts₆, rfl, hsemi, h₆⟩ := Touching.cons_one (by simpa [punctWord] using h₅)
+  simp [Touching] at h₆; subst h₆
+  have hs' : s.rest = kw :: (pts ++ (tts ++ eq :: (ets ++ semi :: rest))) := by simpa using hs
+  let s₁ := past s kw (pts ++ (tts ++ eq :: (ets ++ semi :: rest)))
+  have hl₁ : s₁.left = s₁.rest.length := by simp [s₁, hl, hs']
+  obtain ⟨p', s₅, hrp, hpe, hL₅⟩ := parseObjectPattern_budget p hp hpw
+    s₁ pts (tts ++ eq :: (ets ++ semi :: rest)) (by simpa [s₁] using hT) rfl hl₁ hpt
+    (fun y hy => hn y (by simp [List.mem_of_mem_tail hy])) (by simp)
+  have hp' : p'.isObjectPattern = true := by
+    rw [← Expr.isObjectPattern_erase p', hpe, Expr.isObjectPattern_erase p, hp]
+  have hl₅ : s₅.left = s₅.rest.length := by rw [hL₅.left_eq, hL₅.rest_eq]
+  obtain ⟨type', s₆, hty, hte, hL₆⟩ := readAnnotation_reads type htw s₅ tts eq (ets ++ semi :: rest)
+    hL₅.rest_eq hl₅ htt (fun y hy => hn y (by simp [hy])) heq
+  have hs₆ : s₆.rest = eq :: (ets ++ semi :: rest) := hL₆.rest_eq
+  have hl₆ : s₆.left = s₆.rest.length := by rw [hL₆.left_eq, hL₆.rest_eq]
+  let s₇ := past s₆ eq (ets ++ semi :: rest)
+  have hl₇ : s₇.left = s₇.rest.length := by simp [s₇, hl₆, hs₆]
+  have hT₇ : s₇.target = T := by simp [s₇, hL₆.target_eq, hL₅.target_eq, s₁, hT]
+  obtain ⟨init', s₈, hpi, hie, hL₈⟩ := parseAssign_budget init he s₇ ets (semi :: rest) hT₇ rfl hl₇ het
+    (fun y hy => hn y (by simp [List.mem_of_mem_tail hy])) (by simp)
+    (endsAssign_separator hsemi (by simp [separators])) (by simpa [hsemi] using afterOK_semicolon ha _)
+  have hs₈ : s₈.rest = semi :: rest := hL₈.rest_eq
+  let s₉ : ParseState := { s₈ with rest := rest, left := s₈.left - 1, lastStop := semi.span.stop }
+  refine ⟨p', type', init', s₉, ?_, hpe, hte, hie, ?_⟩
+  · simp only [Parse.parseObjectDestructure]
+    rw [Parse.bind_eq (Parse.advance_cons hs' (by simp)), Parse.bind_eq (Parse.budget_eq _),
+      Parse.bind_eq hrp, if_pos hp', Parse.pure_bind,
+      Parse.bind_eq hty, Parse.bind_eq (Parse.peek_eq hs₆),
+      if_pos (show eq.isPunct "=" = true by simp [Token.isPunct, heq]), Parse.pure_bind,
+      Parse.bind_eq (Parse.discard_eq (Parse.advance_cons hs₆ (by simp))), Parse.bind_eq (Parse.budget_eq _),
+      Parse.bind_eq hpi, Parse.bind_eq (Parse.peek_eq hs₈),
+      Parse.ite_guard (fun h => by simp [Token.isPunct, hsemi] at h),
+      Parse.bind_eq (endStatement_semi hs₈ hr hsemi), Parse.bind_eq (Parse.spanFrom_eq _ _)]
+    cases kind <;> simp [s₉, hkw, VarKind.token, Token.isKeyword, pure, EStateM.pure]
+  · exact leaves_trans (leaves_advance hs' hl) (leaves_trans hL₅ (leaves_trans hL₆
+      (leaves_trans (leaves_advance hs₆ hl₆) (leaves_trans hL₈ (leaves_advance hs₈ (by rw [hL₈.left_eq, hs₈]))))))
+
+theorem stmt_objectDestructure {T : Edition} {fn loop : Bool} (f : Nat) (sp : Span) (kind : VarKind) (p : Expr)
+    (type : Option TypeExpr) (init : Expr) (hw : (Stmt.objectDestructure sp kind p type init).wf T fn loop = true) :
+    ReadsS T fn loop (Parse.parseStatement (f + 1)) (.objectDestructure sp kind p type init) := by
+  intro s ts rest hT _ _ hs hl ht hr _
+  simp only [Stmt.wf, Bool.and_eq_true] at hw
+  obtain ⟨⟨⟨⟨hp, hpw⟩, htw⟩, he⟩, ha⟩ := hw
+  simp only [Stmt.wordLines, Stmt.lines, List.map_cons, List.map_nil] at ht
+  obtain ⟨h1, hn⟩ := Laid.one ht
+  have h1' := h1
+  simp only [objectDestructureWords, VarKind.word_eq] at h1'
+  obtain ⟨kw, ts', rfl, hkw, h2⟩ := Touching.cons_one (by simpa using h1')
+  obtain ⟨pts, ts'', rfl, hpt, _⟩ := Touching.append_split h2
+  have hopen : p.words = punctWord "{" :: p.words.tail := by
+    cases p <;> simp_all [Expr.isObjectPattern, Expr.words, enclose]
+  rw [hopen] at hpt
+  obtain ⟨lb, pts', rfl, hlb, _⟩ := Touching.cons_one hpt
+  have hs' : s.rest = kw :: lb :: (pts' ++ (ts'' ++ rest)) := by simpa using hs
+  have hb : ¬ (s.rest[1]?.getD s.eof).isPunct "[" = true := by simp [hs', Token.isPunct, hlb]
+  have ho : (s.rest[1]?.getD s.eof).isPunct "{" = true := by simp [hs', Token.isPunct, hlb]
+  obtain ⟨p', type', init', s', hp', hpe, hte, hie, hL⟩ := parseObjectDestructure_reads
+    kw.span.start kind p type init hp hpw htw he ha s _ rest hT hs hl h1 hn hr
+  refine ⟨.objectDestructure ⟨kw.span.start, s'.lastStop⟩ kind p' type' init', s', ?_,
+    by simp [Stmt.erase, hpe, hte, hie], hL⟩
+  simp only [Parse.parseStatement]
+  rw [Parse.bind_eq (Parse.peek_eq hs')]
+  cases kind <;> simp only [VarKind.token] at hkw <;> simp only [hkw] <;>
+    rw [Parse.bind_eq (Parse.peekAt_rest _ _), if_neg hb, Parse.bind_eq (Parse.peekAt_rest _ _), if_pos ho] <;>
+    exact hp'
+
 theorem Laid.kinds : ∀ {ts : List Token} {ls : List (List Word)}, Laid ts ls → ts.map (·.kind) = ls.flatten.flatten
   | ts, [], h => by simp [Laid] at h; simp [h]
   | _, l :: ls, ⟨a, b, rfl, ha, _, _, hb⟩ => by simp [ha.kinds, Laid.kinds hb]
@@ -1316,6 +1405,10 @@ theorem Stmt.first {T : Edition} {fn loop : Bool} (st : Stmt) (hw : st.wf T fn l
   | destructure sp kind p type init =>
     refine ⟨kind.token, ?_, ?_⟩
     · simp [Stmt.wordLines, Stmt.lines, destructureWords, VarKind.word_eq]
+    · cases kind <;> simp [StartsStmt, VarKind.token, Stmt.isDecl]
+  | objectDestructure sp kind p type init =>
+    refine ⟨kind.token, ?_, ?_⟩
+    · simp [Stmt.wordLines, Stmt.lines, objectDestructureWords, VarKind.word_eq]
     · cases kind <;> simp [StartsStmt, VarKind.token, Stmt.isDecl]
   | exprStmt sp e =>
     simp only [Stmt.wf, Bool.and_eq_true] at hw
@@ -2269,7 +2362,7 @@ mutual
 
 theorem Expr.inFree_erase : ∀ e : Expr, e.erase.inFree = e.inFree
   | .regexp .. => rfl
-  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .object .. | .paren ..
+  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .this _ | .object .. | .paren ..
   | .new .. => rfl
   | .array _ es => by simp only [Expr.erase, Expr.inFree]; exact Expr.inFreeList_eraseAll es
   | .member _ e _ => by simp only [Expr.erase, Expr.inFree]; exact Expr.inFree_erase e
@@ -2491,7 +2584,7 @@ mutual
 
 theorem Expr.lessFree_erase : ∀ e : Expr, e.erase.lessFree = e.lessFree
   | .regexp .. => rfl
-  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => rfl
+  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .this _ => rfl
   | .array _ es => by simp only [Expr.erase, Expr.lessFree]; exact Expr.lessFreeList_eraseAll es
   | .object _ ps => by simp only [Expr.erase, Expr.lessFree]; exact Property.lessFreeList_eraseAll ps
   | .paren _ e => by simp only [Expr.erase, Expr.lessFree]; exact Expr.lessFree_erase e
@@ -2539,6 +2632,7 @@ only on the first token after it. -/
 theorem Expr.afterOK_head : ∀ (e : Expr) {a b : List TokenKind}, e.lessFree = true → a.head? = b.head? →
     e.afterOK a = e.afterOK b
   | .regexp .., _, _, _, _ => rfl
+  | .this .., _, _, _, _ => rfl
   | .binary _ op l r, a, b, hf, h => by
     simp only [Expr.lessFree, Bool.and_eq_true, bne_iff_ne, ne_eq] at hf
     obtain ⟨⟨⟨h1, h2⟩, hl⟩, hr⟩ := hf
@@ -2737,6 +2831,8 @@ theorem Stmt.first_break {T : Edition} {fn loop : Bool} (st : Stmt) (hw : st.wf 
       identWord] at h
   | destructure sp kind p type init =>
     cases kind <;> simp [Stmt.wordLines, Stmt.lines, destructureWords, VarKind.word, keywordWord, identWord] at h
+  | objectDestructure sp kind p type init =>
+    cases kind <;> simp [Stmt.wordLines, Stmt.lines, objectDestructureWords, VarKind.word, keywordWord, identWord] at h
   | returnStmt sp v => cases v <;> simp [Stmt.wordLines, Stmt.lines, keywordWord] at h
   | ifStmt sp t a e => cases e <;> simp [Stmt.wordLines, Stmt.lines, keywordWord] at h
   | breakStmt _ => rfl
@@ -3117,6 +3213,7 @@ theorem allStmts_succ {T : Edition} (f : Nat) (IH : ∀ g ≤ f, AllStmts T g) :
   cases st with
   | varDecl sp d => exact stmt_varDecl f sp d hw
   | destructure sp kind p type init => exact stmt_destructure f sp kind p type init hw
+  | objectDestructure sp kind p type init => exact stmt_objectDestructure f sp kind p type init hw
   | exprStmt sp e =>
     obtain ⟨g, rfl⟩ : ∃ g, f = g + 1 := ⟨f - 1, by simp [Stmt.depth] at hn; omega⟩
     exact stmt_expr g sp e hw

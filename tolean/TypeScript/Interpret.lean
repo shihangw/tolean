@@ -291,6 +291,11 @@ def runProgram (p : Json) : Except String Json := do
   match Syntax.parse source target with
   | .error _ => return Json.mkObj [("parsed", false)]
   | .ok m =>
+    let lowered := Elaborate.run source target m
+    if let .error message := lowered then
+      return Json.mkObj [("parsed", true), ("accepted", false),
+          ("error", message), ("results", Json.arr (Array.replicate calls.size Json.null))]
+    let m ← lowered
     let accepted := (Translate.translateTree file source target).toBool
     let results ← calls.mapM fun c => do
       let name ← c.getObjValAs? String "function"

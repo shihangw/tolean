@@ -230,6 +230,7 @@ theorem Expr.fine : ∀ e : Expr, Fine e.words
   | .regexp _ v target => by simpa [Expr.words] using Fine.word (w := [.regexp v target]) (by simp)
   | .bool _ b => by simpa [Expr.words] using Fine.word (w := keywordWord (if b then "true" else "false")) (by simp [keywordWord])
   | .null _ => by simpa [Expr.words] using Fine.word (w := keywordWord "null") (by simp [keywordWord])
+  | .this _ => by simpa [Expr.words] using Fine.word (w := keywordWord "this") (by simp [keywordWord])
   | .array _ es => by simpa [Expr.words] using fine_enclose (o := "[") (c := "]") (Expr.fineAll es)
   | .object _ ps => by simpa [Expr.words] using fine_enclose (o := "{") (c := "}") (Property.fineAll ps)
   | .paren _ i => by
@@ -381,6 +382,11 @@ theorem Stmt.lineOK : ∀ (st : Stmt) (d : Nat), ∀ l ∈ st.lines d, LineOK l.
     simp only [destructureWords]
     exact ((((LineOK.word k.word_ne).append p.line).append (typeAnnotation_line ty)).append
       (LineOK.cons (by simp [punctWord]) (Expr.fine e).line)).append (LineOK.word (by simp [punctWord]))
+  | .objectDestructure _ k p ty e, d, l, hl => by
+    simp [Stmt.lines] at hl; subst hl
+    simp only [objectDestructureWords]
+    exact ((((LineOK.word k.word_ne).append (Expr.fine p).line).append (typeAnnotation_line ty)).append
+      (LineOK.cons (by simp [punctWord]) (Expr.fine e).line)).append (LineOK.word (by simp [punctWord]))
   | .exprStmt _ e, d, l, hl => by
     simp [Stmt.lines] at hl; subst hl
     exact (Expr.fine e).line.append (LineOK.word (w := punctWord ";") (by simp [punctWord]))
@@ -515,7 +521,55 @@ theorem exportWords_line (e : Bool) : LineOK (exportWords e) := by
   · exact LineOK.nil
   · exact LineOK.word (by simp [keywordWord])
 
+theorem ClassMember.lineOK : ∀ m : ClassMember, ∀ depth l, l ∈ m.lines depth → LineOK l.2
+  | .field f, depth, l, hl => by
+    simp only [ClassMember.lines, List.mem_singleton] at hl
+    subst hl
+    have h1 : LineOK (if f.readonly then [identWord "readonly"] else []) := by
+      split
+      · exact LineOK.word (by simp [identWord])
+      · exact LineOK.nil
+    have h2 : LineOK (if f.optional then [punctWord "?"] else []) := by
+      split
+      · exact LineOK.word (by simp [punctWord])
+      · exact LineOK.nil
+    have := ((h1.append (LineOK.word (propertyName_ne f.name))).append h2).append
+      (LineOK.cons (w := punctWord ":") (by simp [punctWord])
+        ((TypeExpr.line f.type).append (LineOK.word (w := punctWord ";") (by simp [punctWord]))))
+    simpa [Field.words, List.append_assoc] using this
+  | .ctor ps body, depth, l, hl => by
+    simp only [ClassMember.lines, List.mem_cons] at hl
+    rcases hl with rfl | hl
+    · have hp : ∀ x ∈ ps.map CtorParam.words, Fine x := by
+        intro x hx
+        obtain ⟨p, _, rfl⟩ := List.mem_map.mp hx
+        have hline : Fine p.param.words := Fine.ofLine (by simp [identWord]) (paramRest_line p.param)
+        unfold CtorParam.words; split
+        · exact Fine.ofLine (by simp [identWord]) hline.line
+        · simpa using hline
+      exact LineOK.cons (by simp [identWord]) (fine_enclose hp).line
+    · exact Stmt.lineOK body depth l hl
+  | .method m, depth, l, hl => by
+    simp only [ClassMember.lines, ClassMethod.lines, List.mem_cons] at hl
+    rcases hl with rfl | hl
+    · have hp : ∀ x ∈ m.params.map Param.words, Fine x := by
+        intro x hx
+        obtain ⟨p, _, rfl⟩ := List.mem_map.mp hx
+        exact Fine.ofLine (by simp [identWord]) (paramRest_line p)
+      exact LineOK.cons (propertyName_ne m.name)
+        ((fine_enclose hp).line.append (typeAnnotation_line m.returnType))
+    · exact Stmt.lineOK m.body depth l hl
+
 theorem Decl.lineOK : ∀ d : Decl, ∀ l ∈ d.lines, LineOK l.2
+  | .classDecl d, l, hl => by
+    simp only [Decl.lines, ClassDecl.lines, List.mem_cons, List.mem_append,
+      List.not_mem_nil, or_false] at hl
+    rcases hl with (rfl | hl) | rfl
+    · exact (exportWords_line d.exported).append (LineOK.cons (by simp [keywordWord])
+        (LineOK.cons (by simp [identWord]) (LineOK.word (by simp [punctWord]))))
+    · obtain ⟨m, _, hl⟩ := List.mem_flatMap.mp hl
+      exact ClassMember.lineOK m 1 l hl
+    · exact LineOK.word (by simp [punctWord])
   | .errorClass _ exported name ctor, l, hl => by
     simp only [Decl.lines, List.mem_cons, List.mem_append, List.not_mem_nil, or_false] at hl
     rcases hl with (rfl | hl) | rfl

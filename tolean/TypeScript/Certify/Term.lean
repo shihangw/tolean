@@ -100,6 +100,7 @@ def expr : Expr → String
   | .regexp s v target => s!"({ns}Expr.regexp {span s} {str v} .es{target.year})"
   | .bool s b => s!"({ns}Expr.bool {span s} {b})"
   | .null s => s!"({ns}Expr.null {span s})"
+  | .this s => s!"({ns}Expr.this {span s})"
   | .array s es => s!"({ns}Expr.array {span s} {list (exprs es)})"
   | .object s ps => s!"({ns}Expr.object {span s} {list (props ps)})"
   | .paren s e => s!"({ns}Expr.paren {span s} {expr e})"
@@ -149,6 +150,8 @@ def stmt : Stmt → String
   | .varDecl s d => s!"({ns}Stmt.varDecl {span s} {varDecl d})"
   | .destructure s k p t e =>
     s!"({ns}Stmt.destructure {span s} {varKind k} {pattern p} {option (t.map typeExpr)} {expr e})"
+  | .objectDestructure s k p t e =>
+    s!"({ns}Stmt.objectDestructure {span s} {varKind k} {expr p} {option (t.map typeExpr)} {expr e})"
   | .exprStmt s e => s!"({ns}Stmt.exprStmt {span s} {expr e})"
   | .returnStmt s v => s!"({ns}Stmt.returnStmt {span s} {option (v.map expr)})"
   | .ifStmt s t a b =>
@@ -196,6 +199,17 @@ def importName (n : ImportName) : String :=
   s!"\{ span := {span n.span}, typeOnly := {n.typeOnly}, name := {str n.name} }"
 
 def decl : Decl → String
+  | .classDecl d =>
+    let members := d.members.map fun
+      | .field f => s!"({ns}ClassMember.field {field f})"
+      | .ctor ps b =>
+        let params := ps.map fun p => s!"\{ readonly := {p.readonly}, param := {param p.param} }"
+        s!"({ns}ClassMember.ctor {list params} {stmt b})"
+      | .method m =>
+        s!"({ns}ClassMember.method \{ span := {span m.span}, name := {str m.name}, " ++
+          s!"params := {list (m.params.map param)}, returnType := {option (m.returnType.map typeExpr)}, body := {stmt m.body} })"
+    s!"({ns}Decl.classDecl \{ span := {span d.span}, exported := {d.exported}, " ++
+      s!"name := {str d.name}, members := {list members} })"
   | .import s names source => s!"({ns}Decl.import {span s} {list (names.map importName)} {str source})"
   | .exports s names source =>
     s!"({ns}Decl.exports {span s} {list (names.map importName)} {option (source.map str)})"

@@ -851,6 +851,7 @@ def Expr.subst (σ : List (String × Expr)) : Expr → Expr
   | .regexp s v target => .regexp s v target
   | .bool s b => .bool s b
   | .null s => .null s
+  | .this s => .this s
   | .array s es => .array s (Expr.substList σ es)
   | .object s ps => .object s (Property.substList σ ps)
   | .paren s e => .paren s (Expr.subst σ e)
@@ -895,7 +896,7 @@ mutual
 /-- The names of the functions that `e` calls, anywhere in it. -/
 def Expr.callNames : Expr → List String
   | .regexp .. => []
-  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => []
+  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .this _ => []
   | .array _ es => Expr.callNamesList es
   | .object _ ps => Property.callNamesList ps
   | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e
@@ -923,7 +924,7 @@ mutual
 /-- The names of the functions that `s` calls, anywhere in it. -/
 def Stmt.callNames : Stmt → List String
   | .tryCatch _ b _ h => Stmt.callNames b ++ Stmt.callNames h
-  | .varDecl _ { init := some e, .. } | .destructure _ _ _ _ e | .exprStmt _ e | .returnStmt _ (some e)
+  | .varDecl _ { init := some e, .. } | .destructure _ _ _ _ e | .objectDestructure _ _ _ _ e | .exprStmt _ e | .returnStmt _ (some e)
   | .throwStmt _ e => Expr.callNames e
   | .varDecl _ { init := none, .. } | .returnStmt _ none | .breakStmt _ | .continueStmt _ | .empty _ => []
   | .ifStmt _ t a (some b) => Expr.callNames t ++ Stmt.callNames a ++ Stmt.callNames b
@@ -961,7 +962,7 @@ def Stmt.hasThrow : Stmt → Bool
   | .switchStmt _ _ cs => Stmt.hasThrowClauses cs
   -- A `throw` in a local function throws from the function that calls it.
   | .funDecl _ _ _ _ _ body => Stmt.hasThrow body
-  | .varDecl .. | .destructure .. | .exprStmt .. | .returnStmt .. | .breakStmt _ | .continueStmt _
+  | .varDecl .. | .destructure .. | .objectDestructure .. | .exprStmt .. | .returnStmt .. | .breakStmt _ | .continueStmt _
   | .empty _ => false
 
 def Stmt.hasThrowList : List Stmt → Bool
@@ -1039,7 +1040,7 @@ JS evaluates whenever it evaluates `e`. A call in a branch of `?:`, after
 `&&`, `||` or `??`, or in an arrow function may not run, so it stays where
 it is. -/
 def Expr.hoists (thr : String → Bool) : Expr → Bool
-  | .regexp .. | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .arrow .. => false
+  | .regexp .. | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .this _ | .arrow .. => false
   | .array _ es => Expr.hoistsList thr es
   | .object _ ps => Property.hoistsList thr ps
   | .paren _ e | .member _ e _ | .optMember _ e _ | .unary _ _ e | .prefix _ _ e | .postfix _ _ e
@@ -1251,6 +1252,9 @@ def Stmt.hoistOne (thr : String → Bool) (cls : String → Option (Option Error
   | .destructure s kind p t e =>
     let (e', h) := Expr.hoistValue thr cls ⟨[], k⟩ e
     (h.decls ++ [.destructure s kind p t e'], h.next)
+  | .objectDestructure s kind p t e =>
+    let (e', h) := Expr.hoistValue thr cls ⟨[], k⟩ e
+    (h.decls ++ [.objectDestructure s kind p t e'], h.next)
   | .returnStmt s (some e) =>
     let (e', h) := Expr.hoistValue thr cls ⟨[], k⟩ e
     (h.decls ++ [.returnStmt s (some e')], h.next)
@@ -2194,6 +2198,15 @@ def execStmt (m : Scope) (fuel : Nat) (env : Env N) : Stmt → Option (Outcome N
     match ← evalTop m fuel env init with
     | .ok v => return .normal ((patternBindings p (← iterValues v)).reverse ++ env)
     | .error t => return .ret (.error t)
+  | .objectDestructure _ _ p _ init => do
+    if init.mayHold p.objectBindingNames.contains then none else do
+      match ← evalTop m fuel env init with
+      | .ok (.obj fields) =>
+        let bindings ← p.objectBindings.mapM fun (key, name) => do
+          return (name, ← getProp fields key)
+        return .normal (bindings.reverse ++ env)
+      | .ok _ => none
+      | .error t => return .ret (.error t)
   | .returnStmt _ (some e) => do
     match evalTop m fuel env e with
     | some r => return .ret r
