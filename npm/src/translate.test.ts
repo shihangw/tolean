@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-import { TranslateError, translateSource, translateWorkspace } from './translate.ts';
+import { binaryPath, TranslateError, translateSource, translateWorkspace } from './translate.ts';
 
 // These tests check that the package runs the tolean binary and passes its
 // options through. What the translator accepts and writes is checked on the
@@ -78,6 +78,37 @@ describe('translateSource', () => {
     });
     await expect(result).rejects.toThrow(TranslateError);
     await expect(result).rejects.toThrow("unknown target 'ES2030'");
+  });
+});
+
+describe('translate-source CLI', () => {
+  test.each([
+    { cliTarget: undefined, jsonTarget: undefined, target: 'ES2024' },
+    { cliTarget: 'ES2022', jsonTarget: undefined, target: 'ES2022' },
+    { cliTarget: 'ES2019', jsonTarget: undefined, target: 'ES2019' },
+    { cliTarget: 'ES2019', jsonTarget: 'ES2022', target: 'ES2022' },
+    { cliTarget: 'ES2022', jsonTarget: 'ES2019', target: 'ES2019' },
+  ])('uses $target with CLI target $cliTarget and JSON target $jsonTarget', ({ cliTarget, jsonTarget, target }) => {
+    const args = ['translate-source'];
+    if (cliTarget !== undefined) args.push('--target', cliTarget);
+    const result = spawnSync(binaryPath(), args, {
+      encoding: 'utf8',
+      input: JSON.stringify({
+        fileName: 'input.ts',
+        text: 'export function f(): bigint { return 1n; }',
+        namespace: 'Test',
+        target: jsonTarget,
+      }),
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toBe('');
+    const json = JSON.parse(result.stdout);
+    if (target === 'ES2019') {
+      expect(json).toEqual({ error: expect.stringContaining('the target ES2019 does not have bigint') });
+    } else {
+      expect(json).toEqual({ lean: expect.stringContaining(`for ${target} from input.ts.`) });
+    }
   });
 });
 
