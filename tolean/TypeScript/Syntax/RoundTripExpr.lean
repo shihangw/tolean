@@ -221,7 +221,7 @@ def Expr.wfAt (T : Edition) : Level → Expr → Bool
   | .lhs, e => e.wfAt T .primary
   | .primary, .ident _ name => exprName name
   | .primary, .regexp .. | .primary, .number .. | .primary, .bigint .. | .primary, .string .. | .primary, .bool ..
-  | .primary, .null _ => true
+  | .primary, .null _ | .primary, .this _ => true
   | .primary, .paren _ inner => inner.wfAt T .assign
   | .primary, .array _ elems => Expr.allWF T elems
   | .primary, .object _ props => Property.allWF T props
@@ -264,6 +264,7 @@ call of `async`, but only when no line break comes before its `(`, and the
 printer puts one there. -/
 def Expr.afterOK (after : List TokenKind) : Expr → Bool
   | .regexp .. => true
+  | .this _ => true
   | .binary _ op l r =>
     (if op == .lt || op == .shl then !closesKinds 0 (r.tokens ++ after) else true) &&
       l.afterOK ((symbol op.symbol) ++ r.tokens ++ after) && r.afterOK after
@@ -356,6 +357,7 @@ def simpleExpr (x : Token) : Option Expr :=
   | .keyword "true" => some (.bool x.span true)
   | .keyword "false" => some (.bool x.span false)
   | .keyword "null" => some (.null x.span)
+  | .keyword "this" => some (.this x.span)
   | _ => none
 
 theorem parsePrimary_simple (f : Nat) (s : ParseState) (x u : Token) (r : List Token) (e : Expr)
@@ -495,6 +497,7 @@ def startsExpr : TokenKind → Bool
 /-- An expression has tokens, and the first can start an expression. -/
 theorem Expr.first : ∀ e : Expr, ∃ k, e.tokens.head? = some k ∧ startsExpr k = true
   | .ident _ n => ⟨.ident n, by simp [Expr.tokens, Expr.words, identWord], rfl⟩
+  | .this _ => ⟨.keyword "this", by simp [Expr.tokens, Expr.words, keywordWord], rfl⟩
   | .number _ t => ⟨.number t, by simp [Expr.tokens, Expr.words], rfl⟩
   | .bigint _ t => ⟨.bigint t, by simp [Expr.tokens, Expr.words], rfl⟩
   | .string _ v => ⟨.string v, by simp [Expr.tokens, Expr.words], rfl⟩
@@ -717,7 +720,7 @@ def Expr.height : Expr → Nat
   | .arrow _ _ _ b | .asConst _ b | .satisfies _ b _ => b.height + 1
   -- `parseElement` reads the value of a spread with the fuel it gets.
   | .spread _ e => e.height
-  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => 0
+  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .this _ => 0
 
 def Expr.heightOf : List Expr → Nat
   | [] => 0
@@ -989,6 +992,8 @@ every level, and only `parseElement` reads one. -/
 theorem Expr.head_wf {T : Edition} : ∀ (e : Expr) (level : Level), e.wfAt T level = true →
     e.tokens.head? ≠ some (.punct "...")
   | .spread .., level, h => by cases level <;> simp [Expr.wfAt] at h
+  | .this _, level, h => by
+    cases level <;> simp [Expr.tokens, Expr.words, keywordWord]
   | .member _ o _, level, h | .index _ o _, level, h | .call _ o _, level, h
   | .optMember _ o _, level, h | .optIndex _ o _, level, h | .postfix _ _ o, level, h => by
     have ho : o.wfAt T .lhs = true := by cases level <;> simp_all [Expr.wfAt]
@@ -2096,7 +2101,7 @@ theorem parseLeftHandSide_reads {T : Edition} (f : Nat) (e : Expr) (he : e.wfAt 
 theorem Expr.isSimpleTarget_erase : ∀ e : Expr, e.erase.isSimpleTarget = e.isSimpleTarget
   | .paren _ i => by simp [Expr.erase, Expr.isSimpleTarget, Expr.isSimpleTarget_erase i]
   | .ident .. | .member .. | .index .. => by simp [Expr.erase, Expr.isSimpleTarget]
-  | .regexp .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .array .. | .object .. | .call .. | .optMember .. | .optIndex ..
+  | .regexp .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .this _ | .array .. | .object .. | .call .. | .optMember .. | .optIndex ..
   | .unary .. | .prefix .. | .postfix .. | .binary .. | .cond .. | .assign .. | .arrow .. | .asConst ..
   | .satisfies .. | .new .. | .spread .. => by
     simp [Expr.erase, Expr.isSimpleTarget]
@@ -2112,7 +2117,7 @@ theorem updateOp_symbol {t : Token} {op : UpdateOp} (h : t.kind = .punct op.symb
 def startsPrimary : TokenKind → Bool
   | .regexp .. => true
   | .ident _ | .number _ | .bigint _ | .string _ => true
-  | .keyword w => w == "true" || w == "false" || w == "null" || w == "new"
+  | .keyword w => w == "true" || w == "false" || w == "null" || w == "this" || w == "new"
   | .punct p => p == "(" || p == "[" || p == "{"
   | .eof => false
 
@@ -2397,7 +2402,7 @@ theorem binSuffix_first : ∀ e : Expr, (binSuffix e).flatten = [] ∨
     rcases binSuffix_first l with h | ⟨k, ks, h, hk⟩
     · exact .inr ⟨.ident "satisfies", t.words.flatten, by simp [binSuffix, h, identWord], rfl⟩
     · exact .inr ⟨k, ks ++ (.ident "satisfies" :: t.words.flatten), by simp [binSuffix, h, identWord], hk⟩
-  | .regexp .. | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .array .. | .object ..
+  | .regexp .. | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .this _ | .array .. | .object ..
   | .paren .. | .member .. | .optMember .. | .index .. | .optIndex .. | .call .. | .unary .. | .prefix .. | .postfix ..
   | .cond .. | .assign .. | .arrow .. | .new .. | .spread .. => .inl (by simp [binSuffix])
 
@@ -3112,7 +3117,7 @@ theorem Expr.arrowStart_false : ∀ e : Expr, e.leftArrow = false → ∀ after 
     cases after with
     | nil => rfl
     | cons b after => simp_all [Expr.tokens, Expr.words, identWord, Parse.arrowStart]
-  | .regexp .., _, after, _ | .number .., _, after, _ | .bigint .., _, after, _ | .string .., _, after, _ | .null _, _, after, _ =>
+  | .regexp .., _, after, _ | .number .., _, after, _ | .bigint .., _, after, _ | .string .., _, after, _ | .null _, _, after, _ | .this _, _, after, _ =>
     arrowStart_cons (by simp) (by simp) _
   | .bool _ b, _, after, _ => by cases b <;> exact arrowStart_cons (by simp) (by simp) _
   | .array .., _, after, _ => by rw [Expr.tokens_array]; exact arrowStart_cons (by simp) (by simp) _
@@ -3195,6 +3200,7 @@ arrow function. -/
 theorem Expr.leftArrow_wf {T : Edition} : ∀ (e : Expr) (level : Level), e.wfAt T level = true →
     level ≠ .assign → e.leftArrow = false
   | .arrow .., level, h, hl => by cases level <;> simp_all [Expr.wfAt]
+  | .this .., level, h, _ => by cases level <;> simp_all [Expr.wfAt, Expr.leftArrow]
   | .member _ o _, level, h, _ | .index _ o _, level, h, _ | .call _ o _, level, h, _ => by
     have : o.wfAt T .lhs = true := by cases level <;> simp_all [Expr.wfAt]
     simpa [Expr.leftArrow] using Expr.leftArrow_wf o .lhs this (by simp)
@@ -3623,6 +3629,9 @@ theorem primary_reads {T : Edition} (f : Nat) (IH : ∀ g ≤ f, AllRead T g) (e
   | null sp =>
     exact readsE_one (k := .keyword "null") (by simp [Expr.words, keywordWord]) fun s x u r hs hx =>
       ⟨_, parsePrimary_simple f s x u r (.null x.span) hs (by simp [simpleExpr, hx]), by simp [Expr.erase]⟩
+  | this sp =>
+    exact readsE_one (k := .keyword "this") (by simp [Expr.words, keywordWord]) fun s x u r hs hx =>
+      ⟨_, parsePrimary_simple f s x u r (.this x.span) hs (by simp [simpleExpr, hx]), by simp [Expr.erase]⟩
   | paren sp inner =>
     simp only [Expr.wfAt] at he
     simp only [need, Level.cost, Expr.height] at hn
@@ -4004,7 +4013,7 @@ mutual
 `;`. -/
 theorem Expr.neutral : ∀ e : Expr, Neutral e.tokens
   | .ident _ n => Neutral.all (by simp [Expr.tokens, Expr.words, identWord])
-  | .regexp .. | .number .. | .bigint .. | .string .. | .null _ => Neutral.all (by simp [Expr.tokens, Expr.words, keywordWord])
+  | .regexp .. | .number .. | .bigint .. | .string .. | .null _ | .this _ => Neutral.all (by simp [Expr.tokens, Expr.words, keywordWord])
   | .bool _ b => Neutral.all (by cases b <;> simp [Expr.tokens, Expr.words, keywordWord])
   | .array _ es => by
     have h := Neutral.enclosed (o := "[") (c := "]") (by simp) (by simp) (Neutral.join (Expr.neutralAll es))
@@ -4131,6 +4140,7 @@ mutual
 
 /-- `afterOK` depends on what follows only through what `AfterEquiv` compares. -/
 theorem Expr.afterOK_congr : ∀ (e : Expr) {a b : List TokenKind}, AfterEquiv a b → e.afterOK a = e.afterOK b
+  | .this _, a, b, h => by simp [Expr.afterOK]
   | .arrow _ _ _ body, a, b, h => by simp only [Expr.afterOK, Expr.afterOK_congr body h]
   | .binary _ op l r, a, b, h => by
     obtain ⟨k, ks, hk, _⟩ := binOp_head op
@@ -4254,7 +4264,7 @@ mutual
 
 /-- An expression nests no deeper than it has tokens. -/
 theorem Expr.height_le : ∀ e : Expr, e.height ≤ e.tokens.length
-  | .regexp .. | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ => by simp [Expr.height]
+  | .regexp .. | .ident .. | .number .. | .bigint .. | .string .. | .bool .. | .null _ | .this _ => by simp [Expr.height]
   | .array _ es => by
     have := Expr.heightOf_le es
     rw [Expr.tokens_array]; simp only [Expr.height, List.length_cons, List.length_append, List.length_nil]
@@ -4404,5 +4414,58 @@ theorem parseExpression_budget {T : Edition} (e : Expr) (he : e.wfAt T .assign =
   obtain ⟨g, hg⟩ : ∃ g, 10 * (s.left + 1) = g + 1 := ⟨10 * s.left + 9, by omega⟩
   rw [hg]
   exact expression_reads g e (exprs_read T g .assign e he (by omega)) s ts rest hT hs hl ht hn hr hE ha
+
+theorem Expr.isObjectPattern_erase (e : Expr) :
+    e.erase.isObjectPattern = e.isObjectPattern := by
+  cases e <;> simp only [Expr.erase, Expr.isObjectPattern]
+  rename_i sp props
+  rw [Property.eraseAll_eq]
+  simp only [List.isEmpty_map, List.all_map]
+  congr 1
+  apply List.all_congr rfl
+  intro p
+  cases p with
+  | shorthand => rfl
+  | spread => rfl
+  | keyValue sp key value =>
+    cases key <;> cases value <;> rfl
+
+theorem Expr.objectPattern_after {e : Expr} (hp : e.isObjectPattern = true) (after : List TokenKind) :
+    e.afterOK after = true := by
+  cases e <;> simp only [Expr.isObjectPattern] at hp
+  all_goals try contradiction
+  rename_i sp props
+  simp only [Bool.and_eq_true] at hp
+  simp only [Expr.afterOK]
+  have hall := hp.2
+  clear hp
+  generalize closeEq : TokenKind.punct "}" :: after = close
+  clear closeEq after
+  induction props with
+  | nil => rfl
+  | cons p ps ih =>
+    simp only [List.all_cons, Bool.and_eq_true] at hall
+    have htail := ih hall.2
+    cases p with
+    | shorthand =>
+      cases ps <;> simp_all [Property.afterOKList, Property.afterOK]
+    | spread => simp at hall
+    | keyValue sp key value =>
+      cases key <;> cases value <;> try simp at hall
+      cases ps <;> simp_all [Property.afterOKList, Property.afterOK, Expr.afterOK]
+
+theorem parseObjectPattern_budget {T : Edition} (e : Expr) (hp : e.isObjectPattern = true)
+    (he : e.wfAt T .primary = true) :
+    ∀ (s : ParseState) (ts rest : List Token), s.target = T → s.rest = ts ++ rest →
+      s.left = s.rest.length → Touching ts e.words → (∀ y ∈ ts.tail, NoBreak y) →
+      rest ≠ [] →
+      ∃ e' s', Parse.parsePrimary (10 * (s.left + 1)) s = .ok e' s' ∧
+        e'.erase = e.erase ∧ Leaves s s' rest := by
+  intro s ts rest hT hs hl ht hn hr
+  apply exprs_read T (10 * (s.left + 1)) .primary e he
+    (by have := need_le_budget (level := .primary) hs hl ht; omega)
+    s ts rest hT hs hl ht hn hr
+  · trivial
+  · exact e.objectPattern_after hp _
 
 end tolean.TypeScript.Syntax

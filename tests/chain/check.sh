@@ -9,9 +9,10 @@ set -euo pipefail
 cd "$(dirname "$0")"
 T=../../.lake/build/bin/tolean
 tmp=$(mktemp -d)
-trap 'cp "$tmp/raise.ts" sensor/raise.ts; cp "$tmp/project.json" tolean.chain.json; [ -f "$tmp/Raise.lean.good" ] && cp "$tmp/Raise.lean.good" sensor/Raise.lean; rm -rf "$tmp"' EXIT
+trap 'cp "$tmp/raise.ts" sensor/raise.ts; cp "$tmp/project.json" tolean.chain.json; cp "$tmp/Raise.lean.chain.json" sensor/Raise.lean.chain.json; [ -f "$tmp/Raise.lean.good" ] && cp "$tmp/Raise.lean.good" sensor/Raise.lean; rm -rf "$tmp"' EXIT
 cp sensor/raise.ts "$tmp/raise.ts"
 cp tolean.chain.json "$tmp/project.json"
+cp sensor/Raise.lean.chain.json "$tmp/Raise.lean.chain.json"
 
 fail() { echo "FAIL: $*"; exit 1; }
 check() { lake env "$T" chain check tolean.chain.json "$@" 2>&1; }
@@ -142,6 +143,27 @@ JS
   echo "ok: valid obligations-only chain"
 )
 cp "$tmp/project.json" tolean.chain.json
+
+# A class manifest cannot omit the unproved semantic boundary.
+node --input-type=module - <<'JS'
+import fs from "node:fs";
+const path = "sensor/Raise.lean.chain.json";
+const manifest = JSON.parse(fs.readFileSync(path, "utf8"));
+manifest.classElaboration = true;
+fs.writeFileSync(path, JSON.stringify(manifest));
+JS
+expect_fail "missing class elaboration boundary" "omits the tested semantic-preservation node"
+node --input-type=module - <<'JS'
+import fs from "node:fs";
+const path = "sensor/Raise.lean.chain.json";
+const manifest = JSON.parse(fs.readFileSync(path, "utf8"));
+manifest.nodes = manifest.nodes.map(node =>
+  node.id === "translator" ? {...node, status: "proved"} : node);
+fs.writeFileSync(path, JSON.stringify(manifest));
+JS
+expect_fail "proved translator across class boundary" "cannot mark the translator proved across an unproved semantic boundary"
+cp "$tmp/Raise.lean.chain.json" sensor/Raise.lean.chain.json
+echo "ok: class elaboration trust boundary"
 
 trust=$($T chain trust tolean.chain.json raise_stays_under_max)
 for want in "trusted: sensor.Raise:runtime" "trusted: callers" "tested: sensor.Raise:parser" "trusted: sensor.Raise:semantics"; do
