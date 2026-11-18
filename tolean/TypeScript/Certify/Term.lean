@@ -223,8 +223,11 @@ def decl : Decl → String
   | .errorClass s e n ctor =>
     let c := match ctor with
       | none => "none"
-      | some (ps, m) =>
-        s!"(some ({list (ps.map fun (p : CtorParam) => s!"\{ readonly := {p.readonly}, param := {param p.param} }")}, {expr m}))"
+      | some (ps, m, runtimeName) =>
+        let n := match runtimeName with
+          | none => "none"
+          | some n => s!"(some {str n})"
+        s!"(some ({list (ps.map fun (p : CtorParam) => s!"\{ readonly := {p.readonly}, param := {param p.param} }")}, {expr m}, {n}))"
     s!"({ns}Decl.errorClass {span s} {e} {str n} {c})"
   | .exportedVar s d => s!"({ns}Decl.exportedVar {span s} {varDecl d})"
   | .stmt s => s!"({ns}Decl.stmt {stmt s})"

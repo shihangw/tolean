@@ -36,11 +36,27 @@ initializer expression. Accepting those forms would require a larger model.
 Optional fields, nonprimitive field annotations, initializers at declarations,
 duplicate declarations, and repeated or missing assignments remain refused.
 
-An assignment to `this.name` remains refused at this stage. The error class
-tag identifies the constructor, but it does not represent the runtime `name`
-property. A custom runtime name needs its own AST data and a proof through
-the evaluator and generated certificates. Treating the constructor tag as
-the runtime name would incorrectly change classes that inherit `"Error"`.
+The follow-up accepts one unconditional string-literal assignment to
+`this.name` after `super`. The constructor AST records the optional literal
+separately from its parameters and message. ClassInfo carries it through
+translation, and the generated error constructor stores the explicit name
+as a string field. The evaluator appends that own property to the other
+fields. The constructor tag still identifies the class, even when its
+runtime name differs. An instance with no own name inherits `"Error"`.
+
+The name comes after the other fields in the model. ES2022 native class
+initialization creates declared fields before execution resumes after
+`super`, so an assignment to `this.name` may precede or follow their
+assignments. Before ES2022, the parser requires the name assignment after
+all separate field assignments. Otherwise downlevel TypeScript output would
+create the name first and change the own-property order. Parameter properties
+already exist before either kind of assignment. The interpreter tests compare
+complete errors at both targets without sorting their fields.
+
+Repeated name assignments, computed names, bracket notation, and conditional
+assignments remain refused. Names may be empty, contain Unicode, or differ
+from the class name. Optional chaining on an error and constructing an error
+outside a throw remain outside the translated subset.
 
 Per-file certificates for functions that return a custom thrown-error type
 remain refused. The existing result encoder cannot encode that type:

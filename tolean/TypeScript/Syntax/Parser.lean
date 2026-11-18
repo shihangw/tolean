@@ -1507,26 +1507,46 @@ def errorFieldOrderOK (fields params : Array CtorParam) : Bool :=
   ((params.toList.filterMap fun p => if p.readonly then some p.param.name else none) ++
     fields.toList.map (·.param.name))
 
+/-- The value of a single assignment to the runtime name. -/
+def errorNameAssignment (t : Token) (pending : List String) (runtimeName : Option String) :
+    ParseM ((List String × Option String) × Bool) := do
+  if runtimeName.isSome then
+    failAt t "an error constructor may assign this.name only once"
+  let context ← get
+  if context.target.year < 2022 && !pending.isEmpty then
+    failAt t "before ES2022, assign this.name after the declared fields to preserve own-field order"
+  let _ ← expectPunct "="
+  let literal ← advance
+  let .string value := literal.kind |
+    failAt literal "this.name must be assigned a string literal"
+  endStatement
+  return ((pending, some value), true)
+
 /-- Read one unconditional assignment. Removing the field from `pending`
 rejects repeated assignments, and the final check rejects missing ones. -/
-def errorAssignmentStep (pending : List String) : ParseM (List String × Bool) := do
+def errorAssignmentStep (state : List String × Option String) :
+    ParseM ((List String × Option String) × Bool) := do
+  let (pending, runtimeName) := state
   let t ← peek
-  if t.isPunct "}" then return (pending, false)
+  if t.isPunct "}" then return (state, false)
   unless t.isKeyword "this" do
     failAt t "after super(message), error fields require unconditional 'this.field = field;' assignments"
   discard advance
   let _ ← expectPunct "."
   let name ← readName
-  unless pending.contains name do
-    failAt t "an error assignment must target an unassigned declared readonly field"
-  unless pending.head? == some name do
-    failAt t "assign error fields in declaration order so downlevel output preserves field order"
-  let _ ← expectPunct "="
-  let value ← readName
-  unless value == name do
-    failAt t "an error field assignment must use its same-name constructor parameter"
-  endStatement
-  return (pending.filter (· != name), true)
+  if name == "name" then
+    errorNameAssignment t pending runtimeName
+  else do
+    unless pending.contains name do
+      failAt t "an error assignment must target an unassigned declared readonly field"
+    unless pending.head? == some name do
+      failAt t "assign error fields in declaration order so downlevel output preserves field order"
+    let _ ← expectPunct "="
+    let value ← readName
+    unless value == name do
+      failAt t "an error field assignment must use its same-name constructor parameter"
+    endStatement
+    return ((pending.filter (· != name), runtimeName), true)
 
 /-- Read an error class. Separate readonly declarations and their same-name
 assignments normalize to readonly constructor parameters. -/
@@ -1564,14 +1584,15 @@ def parseClass (start : Pos) (exported : Bool) : ParseM Decl := do
   let message ← parseExpression (← budget)
   let _ ← expectPunct ")"
   endStatement
-  let pending ← iterate (← budget) (fields.toList.map (·.param.name)) errorAssignmentStep
+  let (pending, runtimeName) ← iterate (← budget) (fields.toList.map (·.param.name), none) errorAssignmentStep
   unless pending.isEmpty do
     failAt sup "each declared error field must be assigned exactly once after super(message)"
   let t ← peek
   unless t.isPunct "}" do refuseClass t
   discard advance
   let _ ← expectPunct "}"
-  return .errorClass (← spanFrom start) exported name (some ((errorFieldParams fields params).toList, message))
+  return .errorClass (← spanFrom start) exported name
+    (some ((errorFieldParams fields params).toList, message, runtimeName))
 
 /-- An ordinary `class Name { … }` with readonly fields, a constructor and
 methods. -/
