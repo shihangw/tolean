@@ -353,7 +353,14 @@ def unitWrites (u : Job) (read : String → Except String String) (result : Exce
     IO (List Write) := do
   let t ← ok result
   let (language, target) := u.chainLanguage
+  let classElaboration ← match u with
+    | .typescript _ source => do
+      let text ← ok (read source)
+      let (_, _, hasClasses) ← ok (TypeScript.Certify.certifiedFunctions text u.edition)
+      pure hasClasses
+    | _ => pure false
   let m ← Chain.fileManifest language target (u.sources ++ t.imports) t.output t.lean t.module
+    classElaboration
   let m := { m with sources := m.sources ++ configInputs.map fun (path, text) => Chain.textRef path text }
   let manifest (m : Chain.FileManifest) : Write := .file (t.output ++ ".chain.json") (Chain.manifestText m)
   let .typescript s source := u | return [.file t.output t.lean, manifest m]
@@ -366,9 +373,9 @@ def unitWrites (u : Job) (read : String → Except String String) (result : Exce
   let certNs := t.ns ++ "Cert"
   let certText ← ok (TypeScript.Certify.certify source text t.module t.ns certNs u.edition proofs)
   let certModule ← ok (moduleOf u.moduleRoot cert)
-  let (fns, all) ← ok (TypeScript.Certify.certifiedFunctions text u.edition)
+  let (fns, all, classElaboration) ← ok (TypeScript.Certify.certifiedFunctions text u.edition)
   let m := Chain.withCertificate m cert certText certModule certNs
-    (fns.map fun f => (f, s!"{certNs}.{f}_cert")) all
+    (fns.map fun f => (f, s!"{certNs}.{f}_cert")) all classElaboration
   return [.file t.output t.lean, .file cert certText, manifest m]
 
 /-- What the project file asks for: every file to write or to remove. Paths

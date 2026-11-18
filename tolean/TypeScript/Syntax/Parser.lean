@@ -598,7 +598,8 @@ def readOptionalMark (optionalOK : Bool) : ParseM Bool := do
 def parseParam (optionalOK : Bool) : ParseM Param := do
   let t ← peek
   if t.isPunct "..." then failAt t "rest parameters are not supported"
-  if t.isPunct "[" || t.isPunct "{" then failAt t "destructuring is not supported"
+  if t.isPunct "[" || t.isPunct "{" then
+    failAt t "destructuring is not supported in parameters; name the parameter and read its fields in the body"
   if t.isKeyword "this" then failAt t "'this' parameters are not supported"
   let name ← readName
   let optional ← readOptionalMark optionalOK
@@ -770,7 +771,8 @@ def parseProperty (fuel : Nat) : ParseM Property := do
     let .ident name := t.kind | unexpected next "':'"
     if refusedNames.contains name then failAt t s!"'{name}' is not supported as a name"
     return .shorthand t.span name
-  if next.isPunct "(" || next.isPunct "<" then failAt next "methods are not supported"
+  if next.isPunct "=" || next.isPunct "(" || next.isPunct "<" then
+    failAt next (if next.isPunct "=" then "default values are not supported" else "methods are not supported")
   unexpected next "':'"
 
 def parseObjectLiteral (fuel : Nat) : ParseM Expr := do
@@ -830,6 +832,9 @@ def parsePrimary (fuel : Nat) : ParseM Expr := do
   | .keyword "null" =>
     discard advance
     return .null t.span
+  | .keyword "this" =>
+    discard advance
+    return .this t.span
   | .punct "(" =>
     discard advance
     let inner ← parseExpression fuel
@@ -855,7 +860,8 @@ def parseDeclaration : ParseM VarDecl := do
   -- `parseStatement` reads `const [` itself, and `countedFor` hands
   -- `for (const [` to `parseForOf`. So a `[` here comes after `export`.
   if t.isPunct "[" || t.isPunct "{" then
-    failAt t (if t.isPunct "{" then "object destructuring is not supported"
+    failAt t (if t.isPunct "{" then
+      "object destructuring is not supported; bind the source once, then declare each field separately"
       else "array destructuring is not supported after 'export'")
   let name ← readName
   let mut type := none
@@ -945,6 +951,24 @@ def parseDestructure (start : Pos) : ParseM Stmt := do
   if t.isPunct "," then failAt t "declare one variable per statement"
   endStatement
   return .destructure (← spanFrom start) kind pattern type init
+
+/-- A flat object binding. The object-literal reader preserves shorthand
+and renamed properties, then the guard excludes expression-only forms. -/
+def parseObjectDestructure (start : Pos) : ParseM Stmt := do
+  let keyword ← advance
+  let kind := if keyword.isKeyword "const" then VarKind.const else .«let»
+  let pattern ← parsePrimary (← budget)
+  unless pattern.isObjectPattern do
+    failAt keyword "an object pattern needs identifier fields and names; nested patterns, defaults and rest elements are not supported"
+  let type ← readAnnotation
+  let t ← peek
+  unless t.isPunct "=" do failAt t "a destructuring declaration needs a value"
+  discard advance
+  let init ← parseAssign (← budget)
+  let t ← peek
+  if t.isPunct "," then failAt t "declare one variable per statement"
+  endStatement
+  return .objectDestructure (← spanFrom start) kind pattern type init
 
 /-- The rest of `for (const [a, , ...r] of iterable) body` from the `[`, which
 the keyword `const` or `let` of `kind` comes before. `parseBody` reads the
@@ -1165,6 +1189,7 @@ def parseStatement (fuel : Nat) : ParseM Stmt := do
   -- with it (ECMA-262 §14.5).
   | .keyword "const" | .ident "let" =>
     if (← peekAt 1).isPunct "[" then parseDestructure start
+    else if (← peekAt 1).isPunct "{" then parseObjectDestructure start
     else
       parseDeclStatement (parseBlock fuel) start
   | .keyword "if" =>
@@ -1223,7 +1248,7 @@ def parseStatement (fuel : Nat) : ParseM Stmt := do
     if 1 < defaultCount clauses.toList then failAt t "a switch may have only one default"
     return .switchStmt (← spanFrom start) disc clauses.toList
   | .keyword "true" | .keyword "false" | .keyword "null" | .keyword "typeof"
-  | .keyword "void" | .keyword "new" => parseExpressionStatement fuel
+  | .keyword "void" | .keyword "new" | .keyword "this" => parseExpressionStatement fuel
   | .keyword "function" => parseLocalFunction (parseBlock fuel)
   | .keyword "try" => parseTry (parseBlock fuel)
   | .keyword word => failAt t s!"'{word}' is not supported here"
@@ -1378,11 +1403,66 @@ def parseCtorParam : ParseM CtorParam := do
   -- The parameter's span starts at `readonly`, as in `tsc`.
   return { readonly, param := { param with span := ← spanFrom t.span.start } }
 
-/-- What a class must be: an error class with readonly fields and a
-constructor that calls `super` before assigning them. -/
+/-- What an error class must be: it may have at most one constructor, and its
+body calls `super` with the message and assigns declared readonly fields in order. -/
 def refuseClass {A : Type} (t : Token) : ParseM A :=
   failAt t ("tolean supports only 'class Name extends Error', with readonly fields and at most a constructor " ++
     "that calls super(message) before same-name field assignments")
+
+def parseClassField : ParseM Field := do
+  let t ← peek
+  let field ← parseField
+  unless field.readonly do
+    failAt t "every ordinary class field must be readonly"
+  if field.optional then failAt t "optional class fields are not supported"
+  return field
+
+def parseOrdinaryClassCtor : ParseM (List CtorParam × Stmt) := do
+  discard advance
+  let _ ← expectPunct "("
+  let params ← iterate (← budget) #[] (listStep ")" (fun _ => pure ()) parseCtorParam)
+  let _ ← expectPunct ")"
+  let body ← inFunctionBody (parseBlock (← budget))
+  return (params.toList, body)
+
+def parseClassReturnAnnotation : ParseM (Option TypeExpr) := do
+  if (← peek).isPunct ":" then
+    discard advance
+    return some (← parseReturnType)
+  return none
+
+def parseClassMethod : ParseM ClassMethod := do
+  let t ← peek
+  let name ← readPropertyName
+  if name == "readonly" || name == "constructor" || name == "extends" then
+    failAt t "this name is reserved for a class field, constructor or inheritance"
+  let tp ← peek
+  if tp.isPunct "<" then failAt tp "generic class methods are not supported"
+  let _ ← expectPunct "("
+  let params ← iterate (← budget) #[] (listStep ")" (fun _ => pure ()) (parseParam true))
+  let _ ← expectPunct ")"
+  let returnType ← parseClassReturnAnnotation
+  let body ← inFunctionBody (parseBlock (← budget))
+  return { span := ← spanFrom t.span.start, name, params := params.toList, returnType, body }
+
+def parseClassMember : ParseM ClassMember := do
+  let t ← peek
+  if t.isPunct "}" then unexpected t "a class member"
+  if t.isEof then unexpected t "'}'"
+  if t.isKeyword "static" || t.isKeyword "private" || t.isKeyword "protected" || t.isKeyword "public" then
+    failAt t "static and access-modified class members are not supported"
+  if t.isPunct "#" then failAt t "private-name class members are not supported"
+  if t.isIdent "get" || t.isIdent "set" then
+    let next ← peekAt 1
+    if next.isAnyIdent && !next.newlineBefore then
+      failAt t "getters and setters are not supported"
+  if t.isIdent "readonly" then
+    return .field (← parseClassField)
+  if t.isIdent "constructor" then
+    let (params, body) ← parseOrdinaryClassCtor
+    return .ctor params body
+  if t.isKeyword "extends" then failAt t "ordinary class inheritance is not supported"
+  return .method (← parseClassMethod)
 
 /-- Read the separate readonly declarations before an error constructor. -/
 def errorFieldStep (fields : Array CtorParam) : ParseM (Array CtorParam × Bool) := do
@@ -1493,6 +1573,33 @@ def parseClass (start : Pos) (exported : Bool) : ParseM Decl := do
   let _ ← expectPunct "}"
   return .errorClass (← spanFrom start) exported name (some ((errorFieldParams fields params).toList, message))
 
+/-- An ordinary `class Name { … }` with readonly fields, a constructor and
+methods. -/
+def parseOrdinaryClass (start : Pos) (exported : Bool) : ParseM Decl := do
+  discard advance
+  let name ← readName
+  let t ← peek
+  requireFeature t .readonlyClasses
+  if t.isKeyword "extends" then failAt t "ordinary class inheritance is not supported"
+  let _ ← expectPunct "{"
+  let members ← iterate (← budget) #[] (blockStep parseClassMember)
+  let _ ← expectPunct "}"
+  if members.toList.countP ClassMember.isCtor > 1 then
+    failAt t "a class may declare exactly one constructor"
+  return .classDecl {
+    span := ← spanFrom start
+    exported
+    name
+    members := members.toList
+  }
+
+/-- Dispatch to the established error-class parser or the ordinary-class
+parser after checking the token that follows the class name. -/
+def parseClassDeclaration (start : Pos) (exported : Bool) : ParseM Decl := do
+  let base ← peekAt 2
+  if base.isKeyword "extends" then parseClass start exported
+  else parseOrdinaryClass start exported
+
 /-- What `parseImport` refuses: every form of `import` outside the subset. -/
 def refuseImport {A : Type} (t : Token) : ParseM A :=
   failAt t "tolean supports only 'import { a, b } from \"./file.ts\"', with no default or namespace import and no 'as'"
@@ -1577,7 +1684,7 @@ def parseDeclBody (start : Pos) (exported : Bool) : ParseM Decl := do
   else if t.isIdent "interface" && nameFollows then parseInterface start exported
   else if t.isIdent "type" && nameFollows then parseTypeAlias start exported
   else if t.isKeyword "enum" then parseEnum start exported
-  else if t.isKeyword "class" then parseClass start exported
+  else if t.isKeyword "class" then parseClassDeclaration start exported
   else if exported then
     unless t.isKeyword "const" || t.isIdent "let" do
       failAt t "tolean supports 'export' only of a function, an interface, a type, an enum, a class or a variable"

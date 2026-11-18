@@ -305,8 +305,15 @@ leaves a gap.
 12. **P1.** Non-literal `bigint` exponents, `BigInt(number)`,
     `toISOString`, and non-literal padding lengths. These still need a
     model of built-in errors whose messages the program cannot read.
-13. **P2.** Classes with `readonly` fields and methods that do not change
-    `this`.
+13. **P2.** Readonly ordinary classes elaborate to interfaces, object
+    constructors and free method functions before interpretation and
+    translation. Dispatch requires exactly one statically known class type.
+    The parser round trip is proved, and Node comparisons test elaboration.
+    A proof that elaboration preserves the original JavaScript semantics
+    remains open. Constructor identity, `instanceof`, escaping `this`,
+    inheritance, accessors and mutable fields remain refused.
+    The [decision record](../decisions/2026-11-17-readonly-classes.md) distinguishes
+    these proof boundaries. The existing `extends Error` subset is separate.
 14. **P1.** Local functions: general final return expressions in functions
     that change captured variables, implicit transitive captures, longer
     sibling call chains, and value-returning callers with only indirect state changes.
