@@ -42,3 +42,10 @@ export function narrowed(s: OptionalSpan): number {
   if (end !== null) { return end; }
   else { return 0; }
 }
+
+export interface Box { readonly start: bigint; }
+
+export function sorted(s: Box, xs: ReadonlyArray<bigint>): ReadonlyArray<bigint> {
+  const { start: by } = s;
+  return xs.toSorted((a, b) => 0);
+}

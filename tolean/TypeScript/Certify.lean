@@ -1128,7 +1128,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
               | some proof => s!"  exact _root_.{proof.proof.toName}"
               | none =>
                 s!"  unfold _root_.{statement}\n" ++
-                s!"  intro {nv} _ _ {" ".intercalate (allScope.map (·.1))}\n" ++
+                s!"  intro {nv} _ _ {" ".intercalate (allScope.map (fun (n, _) => tolean.IR.identName n))}\n" ++
                 s!"  refine _root_.tolean.TypeScript.Proof.consistentOn_of_transCmp (_root_.compareOn (fun (_ : {elemTy}) => (0 : _root_.Int))) ?_\n" ++
                 s!"  sort_tac"
             thms := thms.push <|

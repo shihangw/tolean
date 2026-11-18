@@ -5839,7 +5839,7 @@ def translateWith (file source ns : String) (target : Edition := .default)
       ["", "open tolean.TypeScript"]
      else if imports.isEmpty then [] else [""])
   let obligations := iface.sortObligations.map fun o =>
-    let binders := o.scope.map fun (n, t) => s!"({n} : {t.print names})"
+    let binders := o.scope.map fun (n, t) => s!"({tolean.IR.identName n} : {t.print names})"
     s!"-- tolean sort obligation: {ns}.{SortObligation.key o.span}\n" ++
     s!"def {SortObligation.name o.span} : Prop :=\n" ++
     s!"  ∀ \{{names.typeParam} : Type} [_root_.tolean.TypeScript.JSNumber {names.typeParam}] [_root_.tolean.TypeScript.SafeIntLaws {names.typeParam}] " ++
