@@ -326,8 +326,15 @@ class Printer {
     if (JSON.stringify(runtimeOrder) !== JSON.stringify(normalizedOrder)) {
       refuse(ctor, 'error field order must match parameter properties followed by separate declarations');
     }
-    const params = ctor.parameters.map((p) =>
-      this.ctorParam(p, ts.isIdentifier(p.name) && fields.has(p.name.text)));
+    const params = ctor.parameters.map((p) => {
+      const param = this.ctorParam(p, ts.isIdentifier(p.name) && fields.has(p.name.text));
+      const field = s.members.find((m) => ts.isPropertyDeclaration(m) &&
+        ts.isIdentifier(m.name) && m.name.text === this.name(p.name));
+      if (field !== undefined && ts.isPropertyDeclaration(field) && field.type !== undefined) {
+        param.span = `${this.pos(field.getStart(this.sf))}-${this.pos(field.type.getEnd())}`;
+      }
+      return param;
+    });
     const body = ctor.body.statements;
     const call = body.length > 0 && ts.isExpressionStatement(body[0]) ? body[0].expression : undefined;
     if (call === undefined || !ts.isCallExpression(call) || call.expression.kind !== ts.SyntaxKind.SuperKeyword ||
