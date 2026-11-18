@@ -2007,6 +2007,52 @@ test('ordinary classes refuse observable prototypes and non-static dispatch', ()
   }
 });
 
+test('readonly classes still reject destructured method keys and method calls', () => {
+  const sources = ['readonlyClassObjectDestructure', 'readonlyClassPlainObjectDestructure'];
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: sources.map(name => ({
+      source: readFileSync(new URL(`./corpus/translate/reject/${name}.ts`, import.meta.url), 'utf8'),
+      calls: [{ function: 'f', args: [] }],
+    })) }),
+    encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const results = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  expect(results).toHaveLength(sources.length);
+  for (const result of results) {
+    expect(result.parsed).toBe(true);
+    if (result.parsed) expect(result.accepted).toBe(false);
+  }
+});
+
+test('readonly class fields can be destructured and agree with Node', async () => {
+  const source = readFileSync(new URL('./corpus/translate/accept/readonlyClassObjectDestructure.ts', import.meta.url), 'utf8');
+  const inputs = [7n, -3n];
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: [{
+      source, calls: inputs.map(value => ({ function: 'f', args: [encode(value)] })),
+    }] }),
+    encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (result === undefined || !result.parsed) throw new Error('class destructuring fixture did not parse');
+  expect(result.accepted).toBe(true);
+
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-readonly-class-destructure-'));
+  const path = join(dir, 'index.mjs');
+  writeFileSync(path, ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+  }).outputText);
+  const mod = await import(pathToFileURL(path).href) as { f: (value: bigint) => bigint };
+  for (const [i, value] of inputs.entries()) {
+    const actual = result.results[i]?.value;
+    expect(actual === undefined ? 'no value' : canonical(actual))
+      .toBe(canonical(encode(mod.f(value))));
+  }
+});
+
 test('readonly classes traverse catch handlers and leave array operations to the checker', async () => {
   const accepted = ['readonlyClassArrayNames', 'readonlyClassCatch'];
   const calls = [

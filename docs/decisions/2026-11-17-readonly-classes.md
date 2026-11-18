@@ -65,7 +65,8 @@ compares their results with interpretation after elaboration. Cases cover
 construction, inferred local receiver types, explicit receiver annotations,
 method calls on `this`, constructor assignment order, parameter properties,
 class results passed through annotated functions, rejection of plain objects
-and copies, and unrelated `Map.get` dispatch. These comparisons test the
+and copies, object destructuring of class fields, and unrelated `Map.get`
+dispatch. These comparisons test the
 semantic boundary that the Lean theorem does not yet prove. They do not
 establish semantic preservation for every accepted program.
 
@@ -80,7 +81,10 @@ An arrow may read a field through lexical `this`; a nested ordinary function
 cannot borrow the enclosing method's receiver.
 It also refuses class-typed source parameters, nested class values in
 containers, and class-typed locals that do not use a direct constructor
-expression.
+expression. Object destructuring may read a class instance's readonly fields,
+but each destructured name has no class type. The existing type checks still
+refuse uses that require a class method, including calls through a destructured
+name.
 
 The remaining translator checks still apply after elaboration. In particular,
 this work does not introduce mutable object aliases, prototype mutation,

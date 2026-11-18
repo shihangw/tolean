@@ -685,15 +685,18 @@ rule. The `readonly` mark on a constructor
 parameter of an error class is different: it declares a field, so Tolean
 still uses it there.
 
-Ordinary classes remain refused, including classes whose fields are
-`readonly` and whose methods do not change `this`. A class creates a runtime
-constructor and prototype. The current evaluator models object properties but
-not constructor identity, `instanceof`, prototype lookup or method receivers.
-Translating such a class as a structure and free functions would not preserve
-those behaviors. The existing `class C extends Error` subset is separate;
-its accepted form and limits are listed below. The
-[class decision](../decisions/2026-11-17-readonly-classes.md) explains why
-ordinary classes remain outside the subset.
+The translator supports a restricted slice of ordinary classes. Each class
+must have one constructor that assigns every required readonly field exactly
+once. Methods use static dispatch, so a receiver must have the class's exact
+declared or inferred type. Tolean refuses operations that could observe the
+JavaScript prototype, including `instanceof`, constructor identity and
+methods extracted through object destructuring. Object destructuring may read
+readonly fields from a class instance, but the destructured names have no class
+type and cannot call class methods.
+The existing `class C extends Error` subset is separate; its accepted form and
+limits are listed below. The
+[class decision](../decisions/2026-11-17-readonly-classes.md) explains the
+ordinary-class lowering and its limits.
 
 Inline object types work in aliases, parameters, return types, interface
 fields, array elements and local annotations. They also work as the members
