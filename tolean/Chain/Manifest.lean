@@ -115,7 +115,32 @@ structure FileManifest where
   edges : List (String × String)
   /-- The certificate file, when `tolean certify` proved the translation. -/
   certificate : Option FileRef := none
-deriving ToJson, FromJson, Inhabited, Repr
+  /-- The certificate passes through ordinary-class elaboration, whose
+  semantic preservation is tested but not proved. -/
+  classElaboration : Bool := false
+deriving Inhabited, Repr
+
+instance : ToJson FileManifest where
+  toJson m := Lean.Json.mkObj <|
+    [("tolean", Lean.toJson m.tolean), ("language", Lean.toJson m.language),
+     ("target", Lean.toJson m.target), ("sources", Lean.toJson m.sources),
+     ("output", Lean.toJson m.output), ("module", Lean.toJson m.module),
+     ("nodes", Lean.toJson m.nodes), ("edges", Lean.toJson m.edges),
+     ("certificate", Lean.toJson m.certificate)] ++
+    (if m.classElaboration then [("classElaboration", Lean.toJson true)] else [])
+
+instance : FromJson FileManifest where
+  fromJson? j := do
+    return { tolean := ← j.getObjValAs? String "tolean"
+             language := ← j.getObjValAs? String "language"
+             target := ← optField j "target" none
+             sources := ← j.getObjValAs? (List FileRef) "sources"
+             output := ← j.getObjValAs? FileRef "output"
+             module := ← j.getObjValAs? String "module"
+             nodes := ← j.getObjValAs? (List Node) "nodes"
+             edges := ← j.getObjValAs? (List (String × String)) "edges"
+             certificate := ← optField j "certificate" none
+             classElaboration := ← optField j "classElaboration" false }
 
 structure Claim where
   id : String

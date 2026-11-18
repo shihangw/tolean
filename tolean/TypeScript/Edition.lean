@@ -48,6 +48,13 @@ Structural recursion adds no runtime operation. Its calls use `EvaluateCall`
 other TypeScript type declarations. Every supported edition specifies the
 runtime operation.
 
+Flat object binding patterns use BindingInitialization and
+KeyedBindingInitialization (ES2015 §13.3.3.5 and §13.3.3.7; ES2024 §14.3.3.3
+and §14.3.3.4). They evaluate the source once and read the named properties
+in source order. Every supported edition has these operations. Defaults,
+nested patterns and destructured parameters remain refused. Object rest is
+a separate ES2018 operation and remains refused too.
+
 Guard calls use `EvaluateCall` (ES2024 §13.3.6.2), and their branches use
 `IfStatement` (§14.6). A primitive guard uses `typeof` (§13.5.3). These
 operations also exist in ES2015, the oldest target.
@@ -69,6 +76,12 @@ Expression narrowing follows the strict equality test and the selected
 branch of LogicalANDExpression, LogicalORExpression and ConditionalExpression
 (ES2024 §13.13 and §13.14). Logical NOT (§13.5.7) reverses the test. ES2015
 already specifies these operations, so all supported targets allow them.
+
+Ordinary readonly classes use ClassDefinitionEvaluation (ES2024 §15.7.14),
+ClassFieldDefinitionEvaluation (§15.7.13), InitializeInstanceElements
+(§7.3.33), and EvaluateNew (§13.3.5.1). Public field declarations require
+ES2022. The accepted slice has no observable prototype lookup: elaboration
+replaces construction and statically resolved methods before evaluation.
 
 Indexed access annotations erase before execution. TypeScript 2.1 introduced
 them; the TypeScript Handbook describes them under Indexed Access Types.
@@ -113,6 +126,7 @@ maintained. -/
 def Edition.default : Edition := .es2024
 
 inductive Feature where
+  | readonlyClasses
   /-- The counted `for` loop: `ForStatement` and `ForBodyEvaluation`
   (§14.7.4.2 in ES2024). -/
   | countedFor
@@ -195,6 +209,7 @@ inductive Feature where
 deriving BEq, Repr, Inhabited
 
 def Feature.since : Feature → Edition
+  | .readonlyClasses => .es2022
   | .countedFor => .es2015
   | .regexp => .es2015
   | .regexpReplace => .es2015
@@ -212,6 +227,7 @@ def Feature.since : Feature → Edition
   | .arrayFindLast | .arrayToSorted => .es2023
 
 def Feature.describe : Feature → String
+  | .readonlyClasses => "ordinary readonly classes"
   | .countedFor => "a counted 'for' loop"
   | .localReturnState => "a local function that returns a value and changes captured variables"
   | .localSiblingCalls => "calls between local functions"

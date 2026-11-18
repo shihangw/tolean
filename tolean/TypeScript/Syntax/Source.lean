@@ -178,6 +178,7 @@ def Expr.words : Expr → List Word
   | .regexp _ source target => [[.regexp source target]]
   | .bool _ b => [keywordWord (if b then "true" else "false")]
   | .null _ => [keywordWord "null"]
+  | .this _ => [keywordWord "this"]
   | .array _ elems => enclose "[" "]" (Expr.wordsOf elems)
   | .object _ props => enclose "{" "}" (Property.wordsOf props)
   | .paren _ inner => punctWord "(" :: inner.words ++ [punctWord ")"]
@@ -242,6 +243,10 @@ def destructureWords (kind : VarKind) (p : ArrayPattern) (type : Option TypeExpr
     List Word :=
   [kind.word] ++ p.words ++ typeAnnotation type ++ punctWord "=" :: init.words ++ [punctWord ";"]
 
+def objectDestructureWords (kind : VarKind) (p : Expr) (type : Option TypeExpr) (init : Expr) :
+    List Word :=
+  [kind.word] ++ p.words ++ typeAnnotation type ++ punctWord "=" :: init.words ++ [punctWord ";"]
+
 /-- The words of `e`, or none when it is absent. -/
 def optWords : Option Expr → List Word
   | some e => e.words
@@ -268,6 +273,8 @@ mutual
 def Stmt.lines (depth : Nat) : Stmt → List Line
   | .varDecl _ d => [(depth, d.words)]
   | .destructure _ kind p type init => [(depth, destructureWords kind p type init)]
+  | .objectDestructure _ kind p type init =>
+    [(depth, objectDestructureWords kind p type init)]
   | .exprStmt _ e => [(depth, e.words ++ [punctWord ";"])]
   | .returnStmt _ none => [(depth, [keywordWord "return", punctWord ";"])]
   | .returnStmt _ (some e) => [(depth, keywordWord "return" :: e.words ++ [punctWord ";"])]
@@ -322,10 +329,24 @@ def Field.words (f : Field) : List Word :=
 def EnumMember.words (m : EnumMember) : List Word :=
   [propertyName m.name, punctWord "=", [.string m.value], punctWord ","]
 
+def ClassMethod.lines (depth : Nat) (m : ClassMethod) : List Line :=
+  (depth, [propertyName m.name] ++ enclose "(" ")" (m.params.map Param.words) ++
+    typeAnnotation m.returnType) :: m.body.lines depth
+
+def ClassMember.lines (depth : Nat) : ClassMember → List Line
+  | .field f => [(depth, f.words)]
+  | .ctor params body =>
+    (depth, identWord "constructor" :: enclose "(" ")" (params.map CtorParam.words)) :: body.lines depth
+  | .method m => ClassMethod.lines depth m
+
 def ImportName.words (n : ImportName) : List Word :=
   if n.typeOnly then [identWord "type", identWord n.name] else [identWord n.name]
 
 def exportWords (exported : Bool) : List Word := if exported then [keywordWord "export"] else []
+
+def ClassDecl.lines (d : ClassDecl) : List Line :=
+  (0, exportWords d.exported ++ [keywordWord "class", identWord d.name, punctWord "{"]) ::
+    d.members.flatMap (ClassMember.lines 1) ++ [(0, [punctWord "}"])]
 
 /-- `from "source"` after the names of an export list, when it has a source. -/
 def fromWords : Option String → List Word
@@ -360,6 +381,7 @@ def Decl.lines : Decl → List Line
   | .enum _ exported name members =>
     (0, exportWords exported ++ [keywordWord "enum", identWord name, punctWord "{"]) ::
       members.map (fun m => (1, m.words)) ++ [(0, [punctWord "}"])]
+  | .classDecl d => d.lines
   | .errorClass _ exported name ctor =>
     (0, exportWords exported ++
       [keywordWord "class", identWord name, keywordWord "extends", identWord "Error", punctWord "{"]) ::
@@ -447,6 +469,7 @@ def Expr.erase : Expr → Expr
   | .regexp _ source target => .regexp noSpan source target
   | .bool _ b => .bool noSpan b
   | .null _ => .null noSpan
+  | .this _ => .this noSpan
   | .array _ elems => .array noSpan (Expr.eraseAll elems)
   | .object _ props => .object noSpan (Property.eraseAll props)
   | .paren _ inner => .paren noSpan inner.erase
@@ -490,6 +513,7 @@ mutual
 def Stmt.erase : Stmt → Stmt
   | .varDecl _ d => .varDecl noSpan d.erase
   | .destructure _ kind p type init => .destructure noSpan kind p (type.map TypeExpr.erase) init.erase
+  | .objectDestructure _ kind p type init => .objectDestructure noSpan kind p.erase (type.map TypeExpr.erase) init.erase
   | .exprStmt _ e => .exprStmt noSpan e.erase
   | .returnStmt _ v => .returnStmt noSpan (v.map Expr.erase)
   | .ifStmt _ test t e => .ifStmt noSpan test.erase t.erase (Stmt.eraseOpt e)
@@ -528,6 +552,18 @@ def ImportName.erase (n : ImportName) : ImportName := { n with span := noSpan }
 
 def EnumMember.erase (m : EnumMember) : EnumMember := { m with span := noSpan }
 
+def ClassMethod.erase (m : ClassMethod) : ClassMethod :=
+  { span := noSpan, name := m.name, params := m.params.map Param.erase,
+    returnType := m.returnType.map TypeExpr.erase, body := m.body.erase }
+
+def ClassMember.erase : ClassMember → ClassMember
+  | .field f => .field (Field.erase f)
+  | .ctor params body => .ctor (params.map CtorParam.erase) body.erase
+  | .method m => .method (ClassMethod.erase m)
+
+def ClassDecl.erase (d : ClassDecl) : ClassDecl :=
+  { span := noSpan, exported := d.exported, name := d.name, members := d.members.map ClassMember.erase }
+
 def Decl.erase : Decl → Decl
   | .import _ names source => .import noSpan (names.map ImportName.erase) source
   | .exports _ names source => .exports noSpan (names.map ImportName.erase) source
@@ -537,6 +573,7 @@ def Decl.erase : Decl → Decl
     .interface noSpan exported name typeParams (fields.map Field.erase)
   | .typeAlias _ exported name typeParams type => .typeAlias noSpan exported name typeParams type.erase
   | .enum _ exported name members => .enum noSpan exported name (members.map EnumMember.erase)
+  | .classDecl d => .classDecl d.erase
   | .errorClass _ exported name ctor =>
     .errorClass noSpan exported name (ctor.map fun (ps, m) => (ps.map CtorParam.erase, m.erase))
   | .exportedVar _ d => .exportedVar noSpan d.erase
