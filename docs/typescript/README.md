@@ -50,7 +50,8 @@ declarations and local arrows. The interpreter ignores the annotation, as
 Node does after type stripping: it evaluates the body rather than trusting
 the claimed type. Translation accepts checked tag guards as described below.
 - **Statements:** `const` and `let` declarations, array destructuring such as
-  `const [a, , b, ...rest] = xs`, expression statements,
+  `const [a, , b, ...rest] = xs`, flat object destructuring such as
+  `const { a, b: second } = value`, expression statements,
   `return`, `throw`, `if` and `else`, `for … of` with a name or an array
   pattern before `of`, the counted `for`, `while`,
   `switch`, `try` with a bound `catch`, blocks, `break`, `continue` and the empty statement. A counted
@@ -143,10 +144,30 @@ as `for (const [k, v] of m)`. Each place of the pattern is a name or an empty
 place, which is a hole, and a rest element may come last. A statement needs a
 value after `=`, and it declares one pattern. The parser refuses destructuring
 after `export`, in the first part of a counted `for` and before the `in` of a
-`for … in`. It also refuses object patterns, nested patterns and default
+`for … in`. It also refuses nested patterns and default
 values, and a pattern that is empty or that ends with a `,`, such as `[a, ]`
 or `[a, , ]`, although JavaScript allows both. So the last place is always a
 name or the rest element, and the printed pattern reads back as the same one.
+
+Local declarations also accept flat object patterns, such as
+`const { a, b: second } = value`. Each property must have an identifier key,
+and each binding must be a name. A pattern may select only some fields or
+read the same field into several names. A trailing comma is allowed. The
+source must have an interface or an inline object type. The output evaluates
+it once, including when it is a function call, then binds the selected fields
+in the surrounding scope. Extracted mutable collections remain aliases, so
+the existing restrictions on mutation still apply.
+Interface field names and object-pattern bindings that are Lean keywords are quoted in
+the output. For example, a field or a binding named `end` becomes `«end»`.
+Other declarations retain their existing name restrictions.
+Literal tag fields are not stored in the Lean structure and cannot be bound
+in an object pattern. They retain the restriction to tests of their union.
+
+Object patterns do not support nesting, defaults, rest elements or computed
+keys. Empty patterns, exported patterns and patterns in loop heads are also
+refused. A source that reads one of the pattern's own binding names is
+refused because that binding is not initialized yet. Destructured parameters
+remain refused: name the parameter and read its fields in the body instead.
 
 In the declaration at the start of a counted `for`, the parser refuses an `in`
 operator unless parentheses, braces, the arguments of a call or an index hold
@@ -307,6 +328,8 @@ before the match; checked guards only read their parameter's tag. The IR and
 its evaluator use their existing boolean functions, calls and tag matches.
 `program_sound` covers this lowering through the same statement proofs as
 inline tests. The native and WebAssembly translators use the same source.
+Destructuring is not yet accepted inside a try body.
+
 Guard normalization also visits both blocks of a `try` statement. Inline
 `typeof` and null tests narrow in either block, and a checked guard call can
 narrow in the catch handler. The protected body still rejects calls.
@@ -662,6 +685,19 @@ rule. The `readonly` mark on a constructor
 parameter of an error class is different: it declares a field, so Tolean
 still uses it there.
 
+The translator supports a restricted slice of ordinary classes. Each class
+must have one constructor that assigns every required readonly field exactly
+once. Methods use static dispatch, so a receiver must have the class's exact
+declared or inferred type. Tolean refuses operations that could observe the
+JavaScript prototype, including `instanceof`, constructor identity and
+methods extracted through object destructuring. Object destructuring may read
+readonly fields from a class instance, but the destructured names have no class
+type and cannot call class methods.
+The existing `class C extends Error` subset is separate; its accepted form and
+limits are listed below. The
+[class decision](../decisions/2026-11-17-readonly-classes.md) explains the
+ordinary-class lowering and its limits.
+
 Inline object types work in aliases, parameters, return types, interface
 fields, array elements and local annotations. They also work as the members
 of a named tagged union:
@@ -794,6 +830,7 @@ interface fields, not new array type syntax.
 | A loop whose body can throw, by a `throw` or a call of a function that can, and that changes a local or returns | The same fold in the `Except` monad: `List.foldlM`, or `forIn` without `Id.run`, followed by `>>= fun (x, y) =>` for the statements after the loop. Each run of the body ends in `pure` of its state, or throws. |
 | An `if` or a `switch` that changes locals, where a branch can throw | `(if c then throw e else pure (x, y)) >>= fun (x, y) =>`, so that the statements after it take the state from the branch that did not throw |
 | `class C extends Error { constructor(readonly a: T, b: U) { super(m); } }`, or the same with no constructor | A constructor `C` of `Thrown`, the inductive of the errors that the file's functions throw, with the message and the `readonly` parameters as fields. `Thrown` comes first in the file, with `error (value : JSError)` for `throw new Error(m)`. Every function of the file that can throw then returns `Except Thrown R`. A parameter must have a primitive type. A readonly parameter may not be named `message`, `name`, `stack`, `cause` or `__proto__`, because it declares a field. The same restriction applies to separate readonly declarations. Plain parameters may use those names. The message may not call a function, and the class must be declared before the functions that throw it. The class may not be named `error`. [A decision record](../decisions/2026-11-11-thrown-per-file.md) explains the type and the rules. |
+| `class C { readonly a: A; constructor(a: A) { this.a = a; } m(x: A): A { return this.a; } }` | Before interpretation and translation, the class becomes an interface, an object-constructor function and a free function for each method. `new C(a)` calls the constructor. `c.m(x)` calls the free function with `c` as its first argument, but only when `c` has exactly the static type `C`. Ordinary fields require ES2022. The [class decision record](../decisions/2026-11-17-readonly-classes.md) separates the proved parser and lowered-program theorems from the Node comparisons that test elaboration. |
 | `class C extends Error { readonly line: number; constructor(message: string, line: number) { super(message); this.line = line; } }` | The parser normalizes the declared field to a readonly constructor parameter. Each field needs one required same-name parameter with the same primitive type, and exactly one unconditional assignment after `super(message)`. The normalized field order must match parameter properties followed by separate declarations. Assignments must follow declaration order so downlevel output preserves the same own-field order. Assignments from other names or expressions, optional fields, and `this.name` assignments remain refused. See [the decision](../decisions/2026-11-16-error-class-fields.md). |
 | `throw new C(args)`, in the places where `throw new Error(m)` may stand | `throw (Thrown.«C» m a)`, with the constructor's message written over the arguments, which first move to names unless they are literals, and the `readonly` arguments as the fields. The substitution stops at the parameters of an arrow function in the message. |
 | `const x = e`, `let x = e` | `let x := e` |
@@ -1219,7 +1256,7 @@ Tolean rejects these, among others:
   A call of a local function must be a statement of its own, or
   the whole value of a `const`, a `let` or a `return`. So the function never
   escapes, because no code can return it, store it or pass it on.
-- A function value that escapes, classes other than the error classes above,
+- A function value that escapes, ordinary classes outside the readonly static-dispatch slice above,
   `async`, and exceptions other than the throws above.
 - Imports other than the named imports of [Imports](#imports).
 

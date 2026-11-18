@@ -41,7 +41,7 @@ theorem checked_guard_boolean {env : Env} {params : List Param} {sp : tolean.Spa
 /-- A parameter or a local never has the name of an interface of its file,
 which Lean, unlike TypeScript, would read as the local. -/
 theorem checkLocalName_not_interface {sp : Span} {name r : String} {s s' : Ctx}
-    (h : checkLocalName sp name s = .ok r s') :
+    (h : checkLocalName sp name false s = .ok r s') :
     ∀ i ∈ s.structs, i.file = s.file → i.name ≠ name := by
   simp only [checkLocalName, bind_ok, get_ok, ite_state] at h
   obtain ⟨c, s₁, ⟨rfl, rfl⟩, h⟩ := h

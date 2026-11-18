@@ -55,29 +55,45 @@ def languageChain : String → List Node × List (String × String)
 def textRef (path text : String) : FileRef :=
   { path, sha256 := sha256Hex text.toUTF8 }
 
+def markClassElaboration (m : FileManifest) : FileManifest :=
+  { m with
+    nodes := m.nodes ++ [
+      { id := "class-elaboration", kind := "translator", status := .tested
+        label := "ordinary-class elaboration semantic preservation"
+        evidence := toleanCheck "typescript-class-semantics" "Node 22 and 24" }]
+    edges := m.edges.filter (· != ("parser", "translator")) ++
+      [("parser", "class-elaboration"), ("class-elaboration", "translator")]
+    classElaboration := true }
+
 /-- The manifest of a translation whose output is `outputText`. -/
 def fileManifest (language : String) (target : Option String) (sources : List String)
-    (output outputText module : String) : IO FileManifest := do
+    (output outputText module : String) (classElaboration : Bool := false) :
+    IO FileManifest := do
   let (nodes, edges) := languageChain language
-  return { tolean := version, language, target, sources := ← sources.mapM fileRef
-           output := textRef output outputText, module, nodes, edges }
+  let m : FileManifest := { tolean := version, language, target, sources := ← sources.mapM fileRef
+                            output := textRef output outputText, module, nodes, edges }
+  return if classElaboration then markClassElaboration m else m
 
 /-- A manifest as the text of its file. -/
 def manifestText (m : FileManifest) : String := (compact (Lean.toJson m)).pretty ++ "\n"
 
 /-- Write `<output>.chain.json` for a translation that just wrote `output`. -/
 def emit (language : String) (target : Option String) (sources : List String)
-    (output module : String) : IO Unit := do
+    (output module : String) (classElaboration : Bool := false) : IO Unit := do
   let m ← fileManifest language target sources output (← IO.FS.readFile output) module
+    classElaboration
   IO.FS.writeFile (output ++ ".chain.json") (manifestText m)
 
 /-- Record a certificate in the file manifest at `path`. Each function that
-has a theorem gets a proved node. When every function has one, the translator
-is proved for this file; the interpreter is then the link the proof trusts.
+has a theorem gets a proved node. When every function has one and no unproved
+class-elaboration boundary remains, the translator is proved for this file.
+The interpreter is then the link the proof trusts. A class certificate proves
+the structural elaboration result, but it keeps semantic preservation tested.
 The certificate also proves that the parser gives the program its theorems
 are about, so the printer that wrote the program is not trusted. -/
 def withCertificate (m : FileManifest) (certFile certText certModule certNs : String)
-    (theorems : List (String × String)) (allFunctions : Bool) : FileManifest :=
+    (theorems : List (String × String)) (allFunctions : Bool)
+    (classElaboration : Bool := false) : FileManifest :=
   let axioms := ["propext", "Classical.choice", "Quot.sound"]
   let certNodes := theorems.map fun (fn, thm) =>
     ({ id := s!"certificate:{fn}", kind := "proof", status := .proved
@@ -88,27 +104,43 @@ def withCertificate (m : FileManifest) (certFile certText certModule certNs : St
       label := "TypeScript semantics (interpreter)", module := some "tolean.TypeScript.Spec.Eval" },
     { id := "parsed", kind := "proof", status := .proved
       label := "the parser gives the program of the certificate", module := some certModule
-      «theorem» := some s!"{certNs}.program_parsed", axioms }]
+      «theorem» := some s!"{certNs}.program_parsed", axioms }] ++
+    (if classElaboration then [
+      { id := "elaborated", kind := "proof", status := .proved
+        label := "the kernel checks the structural class elaboration result"
+        module := some certModule, «theorem» := some s!"{certNs}.program_elaborated", axioms },
+      { id := "class-elaboration", kind := "translator", status := .tested
+        label := "ordinary-class elaboration semantic preservation"
+        evidence := toleanCheck "typescript-class-semantics" "Node 22 and 24" }]
+    else [])
   let nodes := (m.nodes.filter fun n => !(n.id.startsWith "certificate:") && n.id != "semantics" &&
-      n.id != "parsed").map fun n =>
-    if n.id == "translator" && allFunctions then
+      n.id != "parsed" && n.id != "elaborated" && n.id != "class-elaboration").map fun n =>
+    if n.id == "translator" && allFunctions && !classElaboration then
       { n with status := .proved, label := n.label ++ " (certified for this file)"
                evidence := none }
     else n
-  let certEdges := ("parser", "parsed") :: theorems.flatMap fun (fn, _) =>
-    [("parsed", s!"certificate:{fn}"),
+  let classEdges := if classElaboration then
+      [("parsed", "elaborated"), ("elaborated", "class-elaboration")] ++
+      theorems.map fun (fn, _) => ("class-elaboration", s!"certificate:{fn}")
+    else []
+  let certEdges := ("parser", "parsed") :: classEdges ++ theorems.flatMap fun (fn, _) =>
+    [(if classElaboration then ("elaborated", s!"certificate:{fn}") else
+        ("parsed", s!"certificate:{fn}")),
      ("semantics", s!"certificate:{fn}"), (s!"certificate:{fn}", "translator")]
   { m with
     nodes := nodes ++ extra ++ certNodes
     edges := (m.edges.filter fun ((a, b) : String × String) =>
       !(a.startsWith "certificate:" || b.startsWith "certificate:")) ++ certEdges
-    certificate := some (textRef certFile certText) }
+    certificate := some (textRef certFile certText)
+    classElaboration }
 
 /-- Record a certificate in the file manifest at `path`. -/
 def recordCertificate (path : System.FilePath) (certFile certModule certNs : String)
-    (theorems : List (String × String)) (allFunctions : Bool) : IO Unit := do
+    (theorems : List (String × String)) (allFunctions : Bool)
+    (classElaboration : Bool := false) : IO Unit := do
   let m : FileManifest ← readJson path
   writeJson path
-    (withCertificate m certFile (← IO.FS.readFile certFile) certModule certNs theorems allFunctions)
+    (withCertificate m certFile (← IO.FS.readFile certFile) certModule certNs theorems
+      allFunctions classElaboration)
 
 end tolean.Chain
