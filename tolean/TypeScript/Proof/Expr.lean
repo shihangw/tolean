@@ -130,13 +130,14 @@ theorem has_add (env : Translate.Env) (l : Local) (x : String) :
 
 /-- The error class `c` that the translator knows is the one the interpreter
 makes errors of, in the file of `m`: its constructor has the same parameters,
-with the same names and the same `readonly` marks. And its name is not one
-that the interpreter reads as a global, such as `Map`. Its fields use no
-reserved names that the interpreter does not model. -/
+with the same names and the same `readonly` marks, and the same runtime name.
+Its name is not one that the interpreter reads as a global, such as `Map`.
+Its fields use no reserved names that the interpreter does not model. -/
 def ClassAgrees (m : Eval.Scope) (c : ClassInfo) : Prop :=
   ∃ ctor, Eval.errorClassIn m c.name = some ctor ∧
     (Eval.ctorParams ctor).map (fun p => (p.param.name, p.readonly)) = c.params.map (fun x => (x.1, x.2.2)) ∧
-    isGlobalName c.name = false ∧ Eval.errorCtorSupported ctor = true
+    Eval.ctorName ctor = c.runtimeName ∧ isGlobalName c.name = false ∧
+    Eval.errorCtorSupported ctor = true
 
 /-- Each function that a call may name is the one the interpreter calls: in
 the file of `m`, a call of `f.name` runs `f`. Each string enum whose members

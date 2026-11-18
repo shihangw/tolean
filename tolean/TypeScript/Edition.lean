@@ -101,6 +101,15 @@ so its final fields agree with the existing parameter-property model.
 Both field forms refuse `__proto__`: downlevel assignment invokes the
 inherited setter rather than defining an own field. Plain parameters with
 that name remain legal because they do not assign a field.
+
+An error may assign its own `name` property with a string literal. This uses
+`PutValue` (ES2024 §6.2.5.6), not the constructor's identity. Without an own
+name, `OrdinaryGet` (§10.1.8.1) reads Error.prototype.name, whose value is
+`"Error"` (§20.5.3.4, ES2015 §19.5.3.4). These operations exist in every
+supported edition. Before ES2022, the parser requires the name assignment
+after separately declared fields because downlevel field assignments create
+those properties. From ES2022, native field initialization creates them
+before the constructor body resumes after `super`.
 -/
 namespace tolean.TypeScript
 

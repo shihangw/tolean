@@ -341,8 +341,18 @@ class Printer {
         call.typeArguments !== undefined || call.arguments.length !== 1 || ts.isSpreadElement(call.arguments[0])) {
       refuse(ctor, "constructor body other than 'super(message);'");
     }
+    let runtimeName: string | undefined;
     for (const statement of body.slice(1)) {
       const e = ts.isExpressionStatement(statement) ? statement.expression : undefined;
+      if (e !== undefined && ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+          ts.isPropertyAccessExpression(e.left) && e.left.expression.kind === ts.SyntaxKind.ThisKeyword &&
+          e.left.name.text === 'name') {
+        if (runtimeName !== undefined || !ts.isStringLiteral(e.right)) {
+          refuse(statement, 'this.name requires one string-literal assignment');
+        }
+        runtimeName = e.right.text;
+        continue;
+      }
       if (e === undefined || !ts.isBinaryExpression(e) || e.operatorToken.kind !== ts.SyntaxKind.EqualsToken ||
           !ts.isPropertyAccessExpression(e.left) || e.left.expression.kind !== ts.SyntaxKind.ThisKeyword ||
           !ts.isIdentifier(e.right) || e.left.name.text !== e.right.text ||
@@ -354,6 +364,8 @@ class Printer {
     return this.node('class', s, [this.name(s.name), ...(exported ? ['export'] : [])], [
       ...params,
       this.expr(call.arguments[0]),
+      ...(runtimeName === undefined ? [] :
+        [{ head: 'error-name', atoms: [JSON.stringify(runtimeName)], children: [] }]),
     ]);
   }
 
