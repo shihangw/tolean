@@ -760,13 +760,24 @@ test('declared error fields agree with Node after same-name assignments', async 
   }
 });
 
-test('error fields refuse __proto__ in both forms but allow plain parameters', async () => {
-  const cases = [
+test('error fields refuse unsupported names but allow plain parameters', async () => {
+  const cases: Array<{ fields: string; params: string; body: string; accepted: boolean;
+    es2015Keys?: string[]; esNextKeys?: string[]; className?: string; skipKeys?: boolean }> = [
     { fields: 'readonly __proto__: number;', params: '__proto__: number',
       body: 'this.__proto__ = __proto__;', accepted: false,
       es2015Keys: [], esNextKeys: ['__proto__'] },
     { fields: '', params: 'readonly __proto__: number',
       body: '', accepted: false, es2015Keys: [], esNextKeys: ['__proto__'] },
+    { fields: '', params: 'readonly __proto__: number',
+      body: '', className: 'Date', accepted: false,
+      es2015Keys: [], esNextKeys: ['__proto__'] },
+    { fields: '', params: 'readonly __proto__: number',
+      body: '', className: 'Set', accepted: false,
+      es2015Keys: [], esNextKeys: ['__proto__'] },
+    { fields: '', params: 'readonly message: string',
+      body: '', accepted: false, skipKeys: true },
+    { fields: '', params: 'readonly stack: string',
+      body: '', accepted: false, skipKeys: true },
     { fields: 'readonly code: number;', params: 'code: number',
       body: 'this.code = code;', accepted: true,
       es2015Keys: ['code'], esNextKeys: ['code'] },
@@ -777,11 +788,12 @@ test('error fields refuse __proto__ in both forms but allow plain parameters', a
   ];
   const dir = mkdtempSync(join(tmpdir(), 'tolean-proto-error-'));
   for (const [i, entry] of cases.entries()) {
-    const source = `class E extends Error {
+    const className = entry.className ?? 'E';
+    const source = `class ${className} extends Error {
       ${entry.fields}
       constructor(${entry.params}) { super("bad"); ${entry.body} }
     }
-    export function check(): number { throw new E(7); }`;
+    export function check(): number { throw new ${className}(7); }`;
     const programs = ['ES2015', 'ES2022', 'ES2024'].map(target => ({
       source, target, calls: [{ function: 'check', args: [] }],
     }));
@@ -811,9 +823,11 @@ test('error fields refuse __proto__ in both forms but allow plain parameters', a
       let thrown: unknown;
       try { mod.check(); } catch (error) { thrown = error; }
       expect(thrown).toBeInstanceOf(Error);
-      const keys = target === ts.ScriptTarget.ES2015 ? entry.es2015Keys : entry.esNextKeys;
-      expect(Object.keys(thrown as Error)).toEqual(keys);
-      expect(Object.hasOwn(thrown as Error, '__proto__')).toBe(keys.includes('__proto__'));
+      if (!entry.skipKeys) {
+        const keys = (target === ts.ScriptTarget.ES2015 ? entry.es2015Keys : entry.esNextKeys) ?? [];
+        expect(Object.keys(thrown as Error)).toEqual(keys);
+        expect(Object.hasOwn(thrown as Error, '__proto__')).toBe(keys.includes('__proto__'));
+      }
       if (entry.accepted) {
         const result = lean.results[0];
         expect(result !== null && result !== undefined && 'throws' in result

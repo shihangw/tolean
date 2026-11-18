@@ -1302,7 +1302,7 @@ with its `readonly` mark. -/
 theorem translateCtorParam_ok {p : CtorParam} {s s' : Ctx} {x : String × Ty × Bool}
     (h : translateCtorParam p s = .ok x s') :
     x.1 = p.param.name ∧ x.2.2 = p.readonly ∧
-      (p.readonly && p.param.name == "__proto__") = false := by
+      (p.readonly && ["message", "stack", "__proto__"].contains p.param.name) = false := by
   unfold translateCtorParam at h
   simp only [ite_state] at h
   split at h
@@ -1323,7 +1323,7 @@ its constructor: the same names, with the same `readonly` marks. -/
 theorem ctorParams_shape : ∀ (ps : List CtorParam) (s s' : Ctx) (params : List (String × Ty × Bool)),
     ps.mapM translateCtorParam s = .ok params s' →
     params.map (fun x => (x.1, x.2.2)) = ps.map (fun p => (p.param.name, p.readonly)) ∧
-      ps.all (fun p => !(p.readonly && p.param.name == "__proto__")) = true
+      ps.all (fun p => !(p.readonly && ["message", "stack", "__proto__"].contains p.param.name)) = true
   | [], _, _, _, h => by
     simp only [List.mapM_nil, pure_ok] at h
     obtain ⟨rfl, -⟩ := h
@@ -1389,7 +1389,9 @@ theorem errorClasses_ok : ∀ (ds : List Decl) (s s' : Ctx) (os : List (Option C
     s' = { s with errorClasses := s.errorClasses ++ os.filterMap id } ∧
       ∀ c ∈ os.filterMap id, c.name ∉ s.errorClasses.map (·.name) ∧ isGlobalName c.name = false ∧
         ∃ ctor, Eval.errorClassOfDecls c.name ds = some ctor ∧
-          (Eval.ctorParams ctor).map (fun p => (p.param.name, p.readonly)) = c.params.map fun x => (x.1, x.2.2)
+          (Eval.ctorParams ctor).map (fun p => (p.param.name, p.readonly)) =
+            (c.params.map fun x => (x.1, x.2.2)) ∧
+          Eval.errorCtorSupported ctor = true
   | [], s, s', os, h => by
     simp only [List.mapM_nil, pure_ok] at h
     obtain ⟨rfl, rfl⟩ := h
@@ -1406,14 +1408,15 @@ theorem errorClasses_ok : ∀ (ds : List Decl) (s s' : Ctx) (os : List (Option C
       refine ⟨by simp, fun c hc => ?_⟩
       simp only [List.filterMap_cons, id_eq, List.mem_cons] at hc
       rcases hc with rfl | hc
-      · refine ⟨fun hm => ?_, hn ▸ hglob, ctor, ?_, hshape⟩
+      · refine ⟨fun hm => ?_, hn ▸ hglob, ctor, ?_, hshape, ?_⟩
         · obtain ⟨c', hc', he⟩ := List.mem_map.mp hm
           exact hnew c' hc' (he.trans hn)
-        · simp [Eval.errorClassOfDecls, hn, hsafe]
-      · obtain ⟨hm, hg, ctor', hfind, hshape'⟩ := hrest c hc
+        · simp [Eval.errorClassOfDecls, hn]
+        · exact hsafe
+      · obtain ⟨hm, hg, ctor', hfind, hshape', hsafe'⟩ := hrest c hc
         simp only [List.map_append, List.map_cons, List.map_nil, List.mem_append, List.mem_singleton,
           not_or] at hm
-        refine ⟨hm.1, hg, ctor', ?_, hshape'⟩
+        refine ⟨hm.1, hg, ctor', ?_, hshape', hsafe'⟩
         have hne : n ≠ c.name := by rw [← hn]; exact fun h => hm.2 h.symm
         simp [Eval.errorClassOfDecls, hne, hfind]
     all_goals
@@ -1421,8 +1424,8 @@ theorem errorClasses_ok : ∀ (ds : List Decl) (s s' : Ctx) (os : List (Option C
       obtain ⟨rfl, rfl⟩ := ho
       refine ⟨by simp, fun c hc => ?_⟩
       simp only [List.filterMap_cons, id_eq] at hc
-      obtain ⟨hm, hg, ctor', hfind, hshape'⟩ := hrest c hc
-      exact ⟨hm, hg, ctor', by simpa [Eval.errorClassOfDecls] using hfind, hshape'⟩
+      obtain ⟨hm, hg, ctor', hfind, hshape', hsafe'⟩ := hrest c hc
+      exact ⟨hm, hg, ctor', by simpa [Eval.errorClassOfDecls] using hfind, hshape', hsafe'⟩
 
 /-- `translateErrorTypes` records the error classes of `m` and changes
 nothing else; its output has no function. When no class was recorded before,
@@ -1434,7 +1437,9 @@ theorem translateErrorTypes_ok {m : Module} {s s' : Ctx} {pre : List IR.Decl}
       s'.enumValues = s.enumValues ∧ s'.borrows = s.borrows ∧ IR.functions pre = [] ∧
       (s.errorClasses = [] → ∀ c ∈ s'.errorClasses, isGlobalName c.name = false ∧
         ∃ ctor, Eval.errorClassOf m c.name = some ctor ∧
-          (Eval.ctorParams ctor).map (fun p => (p.param.name, p.readonly)) = c.params.map fun x => (x.1, x.2.2)) := by
+          (Eval.ctorParams ctor).map (fun p => (p.param.name, p.readonly)) =
+            (c.params.map fun x => (x.1, x.2.2)) ∧
+          Eval.errorCtorSupported ctor = true) := by
   unfold translateErrorTypes at h
   simp only [bind_ok] at h
   obtain ⟨os, s₁, hos, h⟩ := h
@@ -1442,7 +1447,9 @@ theorem translateErrorTypes_ok {m : Module} {s s' : Ctx} {pre : List IR.Decl}
   have hc : ∀ c ∈ ({ s with errorClasses := s.errorClasses ++ os.filterMap id } : Ctx).errorClasses,
       s.errorClasses = [] → isGlobalName c.name = false ∧
         ∃ ctor, Eval.errorClassOf m c.name = some ctor ∧
-          (Eval.ctorParams ctor).map (fun p => (p.param.name, p.readonly)) = c.params.map fun x => (x.1, x.2.2) := by
+            (Eval.ctorParams ctor).map (fun p => (p.param.name, p.readonly)) =
+              (c.params.map fun x => (x.1, x.2.2)) ∧
+            Eval.errorCtorSupported ctor = true := by
     intro c hc h0
     simp only [h0, List.nil_append] at hc
     exact (hcls c hc).2
@@ -2191,8 +2198,8 @@ theorem programTranslation_rel {p : Eval.Program} {outs : List (String × List I
     rw [hfns, List.nil_append] at hfns'
     have hresC : ∀ c ∈ s₁.errorClasses, ClassAgrees ⟨P, file⟩ c := by
       intro c hc
-      obtain ⟨hg, ctor, hctor, hshape⟩ := hcls hcls0 c hc
-      exact ⟨ctor, by simp [Eval.errorClassIn, hPm, hctor], hshape, hg⟩
+      obtain ⟨hg, ctor, hctor, hshape, hsafe⟩ := hcls hcls0 c hc
+      exact ⟨ctor, by simp [Eval.errorClassIn, hPm, hctor], hshape, hg, hsafe⟩
     have hbn := hnames.nodup
     have hres : ∀ f ∈ finish.functions, Eval.resolve ⟨P, file⟩ f.name = some f.ref := by
       rw [hfns']

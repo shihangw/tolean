@@ -797,11 +797,13 @@ such a call inside a larger expression when the function can throw.
 JS has no `'` in a name, so no hoisted name hides a name of the source. -/
 
 
-/-- Error fields cannot use the inherited prototype setter. Plain constructor
-parameters do not create fields and may use that name. -/
+/-- The interpreter does not model readonly `message`, `stack` or `__proto__`
+fields. Plain constructor parameters do not create fields and may use those
+names. -/
 def errorCtorSupported : Option (List CtorParam × Expr) → Bool
   | none => true
-  | some (ps, _) => ps.all fun p => !(p.readonly && p.param.name == "__proto__")
+  | some (ps, _) => ps.all fun p =>
+      !(p.readonly && ["message", "stack", "__proto__"].contains p.param.name)
 
 /-- The constructor of the error class `name` among the declarations `ds`,
 when one declares it: its parameters and its message, or none for a class
@@ -810,7 +812,7 @@ def errorClassOfDecls (name : String) : List Decl → Option (Option (List CtorP
   | [] => none
   | .errorClass _ _ n ctor :: ds =>
     if n == name then
-      if errorCtorSupported ctor then some ctor else none
+      some ctor
     else errorClassOfDecls name ds
   | _ :: ds => errorClassOfDecls name ds
 
@@ -1891,7 +1893,7 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
     match errorClassIn m c with
     | none => none
     | some ctor =>
-      if (env.lookup c).isSome then none else do
+      if !errorCtorSupported ctor || (env.lookup c).isSome then none else do
         let .str s ← eval m fuel env msg | none
         let vs ← evalList m fuel env args
         if (ctorParams ctor).length != vs.length then none

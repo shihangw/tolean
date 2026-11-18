@@ -2486,7 +2486,7 @@ theorem throwClass_sim {env : Translate.Env} {s sn tsp : Span} {c : String} {msg
       (.throw (.ext (.errorCase thrown c (some "message" :: info.params.map fun (n, _, ro) => if ro then some n else none))
         (code :: codes))) := by
   intro ρs ρo ha hs
-  obtain ⟨ctor, hctor, hps, hglob⟩ := hs.2.2.2 info hinfo
+  obtain ⟨ctor, hctor, hps, hglob, hsafe⟩ := hs.2.2.2 info hinfo
   rw [hname] at hctor hglob
   have hE : c ≠ "Error" := by rintro rfl; simp [isGlobalName] at hglob
   have hM : c ≠ "Map" := by rintro rfl; simp [isGlobalName] at hglob
@@ -2524,7 +2524,7 @@ theorem throwClass_sim {env : Translate.Env} {s sn tsp : Span} {c : String} {msg
     rw [exec_single]
     simp only [Eval.execStmt]
     rw [Eval.eval]
-    · simp [hctor, hs.none hc, hsim ρs ρo _ ha hs hm, hsims ρs ρo vs ha hs hvs, hnum, hl, hlen]
+    · simp [hctor, hsafe, hs.none hc, hsim ρs ρo _ ha hs hm, hsims ρs ρo vs ha hs hvs, hnum, hl, hlen]
     all_goals (intros; simp_all)
   · intro brk ρo' hv
     obtain ⟨t, vs, ho, -, -⟩ := hout _ hv
