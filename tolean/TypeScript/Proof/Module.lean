@@ -1300,7 +1300,9 @@ theorem translateDecls_ok {m : Module} {s s' : Ctx} {ds : List IR.Decl}
 /-- Each parameter of a constructor translates to its name and its type,
 with its `readonly` mark. -/
 theorem translateCtorParam_ok {p : CtorParam} {s s' : Ctx} {x : String × Ty × Bool}
-    (h : translateCtorParam p s = .ok x s') : x.1 = p.param.name ∧ x.2.2 = p.readonly := by
+    (h : translateCtorParam p s = .ok x s') :
+    x.1 = p.param.name ∧ x.2.2 = p.readonly ∧
+      (p.readonly && p.param.name == "__proto__") = false := by
   unfold translateCtorParam at h
   simp only [ite_state] at h
   split at h
@@ -1313,22 +1315,27 @@ theorem translateCtorParam_ok {p : CtorParam} {s s' : Ctx} {x : String × Ty × 
     · simp at h
     · simp only [bind_ok] at h
       obtain ⟨ty, s₃, -, h⟩ := h
-      cases ty <;> simp at h <;> obtain ⟨rfl, -⟩ := h <;> exact ⟨rfl, rfl⟩
+      cases ty <;> simp at h <;> obtain ⟨rfl, -⟩ := h <;>
+        refine ⟨rfl, rfl, ?_⟩ <;> simp_all
 
 /-- The parameters of an error class, as translated, are the parameters of
 its constructor: the same names, with the same `readonly` marks. -/
 theorem ctorParams_shape : ∀ (ps : List CtorParam) (s s' : Ctx) (params : List (String × Ty × Bool)),
     ps.mapM translateCtorParam s = .ok params s' →
-    params.map (fun x => (x.1, x.2.2)) = ps.map fun p => (p.param.name, p.readonly)
+    params.map (fun x => (x.1, x.2.2)) = ps.map (fun p => (p.param.name, p.readonly)) ∧
+      ps.all (fun p => !(p.readonly && p.param.name == "__proto__")) = true
   | [], _, _, _, h => by
     simp only [List.mapM_nil, pure_ok] at h
     obtain ⟨rfl, -⟩ := h
-    rfl
+    exact ⟨rfl, rfl⟩
   | p :: ps, s, s', params, h => by
     simp only [List.mapM_cons, bind_ok, pure_ok] at h
     obtain ⟨x, s₁, hx, xs, s₂, hxs, rfl, -⟩ := h
-    obtain ⟨h1, h2⟩ := translateCtorParam_ok hx
-    simp [ctorParams_shape ps _ _ _ hxs, h1, h2]
+    obtain ⟨h1, h2, hsafe⟩ := translateCtorParam_ok hx
+    obtain ⟨hshape, hrest⟩ := ctorParams_shape ps _ _ _ hxs
+    constructor
+    · simp [hshape, h1, h2]
+    · simp only [List.all_cons, hsafe, Bool.not_false, hrest, Bool.and_self]
 
 /-- What an error class does to the state: it adds itself to the error
 classes and changes nothing else. Its name is new among them and is not a
@@ -1337,7 +1344,8 @@ theorem translateErrorClass_ok {sp : Span} {ex : Bool} {name : String} {ctor : O
     {s s' : Ctx} {info : ClassInfo} (h : translateErrorClass sp ex name ctor s = .ok info s') :
     s' = { s with errorClasses := s.errorClasses ++ [info] } ∧ info.name = name ∧
       (∀ c ∈ s.errorClasses, c.name ≠ name) ∧ isGlobalName name = false ∧
-      (Eval.ctorParams ctor).map (fun p => (p.param.name, p.readonly)) = info.params.map fun x => (x.1, x.2.2) := by
+      (Eval.ctorParams ctor).map (fun p => (p.param.name, p.readonly)) = info.params.map (fun x => (x.1, x.2.2)) ∧
+      Eval.errorCtorSupported ctor = true := by
   unfold translateErrorClass at h
   simp only [bind_ok, ite_state] at h
   obtain ⟨name', s₁, hname, h⟩ := h
@@ -1353,7 +1361,7 @@ theorem translateErrorClass_ok {sp : Span} {ex : Bool} {name : String} {ctor : O
   | none =>
     simp only [pure_ok] at hparams
     obtain ⟨rfl, -⟩ := hparams
-    rfl
+    exact ⟨rfl, rfl⟩
   | some pm =>
     obtain ⟨ps, message⟩ := pm
     simp only [bind_ok, ite_state] at hparams
@@ -1367,7 +1375,8 @@ theorem translateErrorClass_ok {sp : Span} {ex : Bool} {name : String} {ctor : O
         split at hparams
         · simp only [pure_ok] at hparams
           obtain ⟨rfl, -⟩ := hparams
-          exact (ctorParams_shape ps _ _ _ hps).symm
+          obtain ⟨hshape, hsafe⟩ := ctorParams_shape ps _ _ _ hps
+          exact ⟨hshape.symm, hsafe⟩
         · simp at hparams
       · simp only [bind_ok, reject_ne_ok, false_and, exists_false] at hparams
 
@@ -1393,14 +1402,14 @@ theorem errorClasses_ok : ∀ (ds : List Decl) (s s' : Ctx) (os : List (Option C
     case errorClass sp ex n ctor =>
       simp only [translateErrorClass?, map_ok] at ho
       obtain ⟨info, hinfo, rfl⟩ := ho
-      obtain ⟨rfl, hn, hnew, hglob, hshape⟩ := translateErrorClass_ok hinfo
+      obtain ⟨rfl, hn, hnew, hglob, hshape, hsafe⟩ := translateErrorClass_ok hinfo
       refine ⟨by simp, fun c hc => ?_⟩
       simp only [List.filterMap_cons, id_eq, List.mem_cons] at hc
       rcases hc with rfl | hc
       · refine ⟨fun hm => ?_, hn ▸ hglob, ctor, ?_, hshape⟩
         · obtain ⟨c', hc', he⟩ := List.mem_map.mp hm
           exact hnew c' hc' (he.trans hn)
-        · simp [Eval.errorClassOfDecls, hn]
+        · simp [Eval.errorClassOfDecls, hn, hsafe]
       · obtain ⟨hm, hg, ctor', hfind, hshape'⟩ := hrest c hc
         simp only [List.map_append, List.map_cons, List.map_nil, List.mem_append, List.mem_singleton,
           not_or] at hm

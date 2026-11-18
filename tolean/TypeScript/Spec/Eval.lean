@@ -797,12 +797,21 @@ such a call inside a larger expression when the function can throw.
 JS has no `'` in a name, so no hoisted name hides a name of the source. -/
 
 
+/-- Error fields cannot use the inherited prototype setter. Plain constructor
+parameters do not create fields and may use that name. -/
+def errorCtorSupported : Option (List CtorParam × Expr) → Bool
+  | none => true
+  | some (ps, _) => ps.all fun p => !(p.readonly && p.param.name == "__proto__")
+
 /-- The constructor of the error class `name` among the declarations `ds`,
 when one declares it: its parameters and its message, or none for a class
 without a constructor. -/
 def errorClassOfDecls (name : String) : List Decl → Option (Option (List CtorParam × Expr))
   | [] => none
-  | .errorClass _ _ n ctor :: ds => if n == name then some ctor else errorClassOfDecls name ds
+  | .errorClass _ _ n ctor :: ds =>
+    if n == name then
+      if errorCtorSupported ctor then some ctor else none
+    else errorClassOfDecls name ds
   | _ :: ds => errorClassOfDecls name ds
 
 /-- The constructor of the error class `name` of `m`, when `m` declares one. -/

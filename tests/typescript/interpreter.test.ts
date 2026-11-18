@@ -782,12 +782,23 @@ test('error fields refuse __proto__ in both forms but allow plain parameters', a
       constructor(${entry.params}) { super("bad"); ${entry.body} }
     }
     export function check(): number { throw new E(7); }`;
+    const programs = ['ES2015', 'ES2022', 'ES2024'].map(target => ({
+      source, target, calls: [{ function: 'check', args: [] }],
+    }));
     const run = spawnSync(tolean, ['interpret'], {
-      input: JSON.stringify({ programs: [{ source, calls: [{ function: 'check', args: [] }] }] }),
+      input: JSON.stringify({ programs }),
       encoding: 'utf8',
     });
     expect(run.status, run.stderr).toBe(0);
-    const lean = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+    const interpreted = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+    expect(interpreted).toHaveLength(programs.length);
+    for (const result of interpreted) {
+      expect(result.parsed, source).toBe(true);
+      if (!result.parsed) continue;
+      expect(result.accepted, source).toBe(entry.accepted);
+      if (!entry.accepted) expect(result.results, source).toEqual([null]);
+    }
+    const lean = interpreted[0];
     expect(lean?.parsed, source).toBe(true);
     if (lean === undefined || !lean.parsed) continue;
     expect(lean.accepted, source).toBe(entry.accepted);
