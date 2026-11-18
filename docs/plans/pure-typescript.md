@@ -486,7 +486,12 @@ decision record then states the choice and any limits that remain.
   `JSNumber.countUp k b`, the IR evaluator gives `countUp? k b` and has no
   value when that is `none`, and `countUp` is `countUp?` with `[]` for
   `none`. So the link theorem fails only where `countUp? k b = none`, and
-  each counted loop adds one binder to the function's two theorems:
+  each counted loop adds one binder to the function's two theorems.
+
+  Nullish narrowing guards stay around the bound's condition when it reaches
+  the function boundary. Enclosing loops carry child safety conditions in
+  their invariants, so their lemmas do not rely on a later function hypothesis.
+  A non-nullable bound needs no guard:
 
   ```lean
   theorem sum_cert {N : Type} [JSNumber N] (xs : List Int) (n : N)
