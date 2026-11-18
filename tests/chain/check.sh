@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Checks `tolean chain` on the gauge project: the chain holds as committed, and
 # `chain check` fails on a changed source, a missing project check and a claim
-# whose proof has another type. Run from tests/chain inside `nix develop`,
+# whose proof has another type, and an obligation whose proof depends on a
+# forbidden axiom.
+# Run from tests/chain inside `nix develop`,
 # after `lake build` at the root.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -102,6 +104,44 @@ project.obligations[0].axioms = ["propext"];
 fs.writeFileSync(path, JSON.stringify(project));
 JS
 expect_fail "axiom instead of proof" "propext is not a theorem"
+cp "$tmp/project.json" tolean.chain.json
+
+# Compile adversarial proofs only in this temporary module, outside the
+# warning-as-error build. Each theorem has exactly its obligation's type.
+cat > "$tmp/ObligationAxioms.lean" <<'LEAN'
+def obligationSpec : Prop := False
+axiom forbidden : obligationSpec
+theorem indirect : obligationSpec := forbidden
+theorem supplied : obligationSpec := indirect
+theorem admitted : obligationSpec := by sorry
+
+def validSpec : Prop := True
+theorem valid : validSpec := True.intro
+LEAN
+lake env lean --root="$tmp" -o "$tmp/ObligationAxioms.olean" "$tmp/ObligationAxioms.lean"
+(
+  export LEAN_PATH="$tmp"
+  obligation_manifest() {
+    node --input-type=module - "$@" <<'JS'
+import fs from "node:fs";
+const [spec, proof, ...axioms] = process.argv.slice(2);
+const obligation = {spec, proof, module: "ObligationAxioms"};
+if (axioms.length) obligation.axioms = axioms;
+fs.writeFileSync("tolean.chain.json", JSON.stringify({
+  files: [], obligations: [obligation]
+}));
+JS
+  }
+  obligation_manifest obligationSpec supplied
+  expect_fail "transitive forbidden axiom" "supplied also depends on forbidden"
+  obligation_manifest obligationSpec supplied forbidden
+  expect_fail "obligation cannot widen axiom policy" "supplied also depends on forbidden"
+  obligation_manifest obligationSpec admitted
+  expect_fail "admitted obligation" "admitted also depends on sorryAx"
+  obligation_manifest validSpec valid
+  check >/dev/null || fail "a valid obligations-only chain was rejected: $(check)"
+  echo "ok: valid obligations-only chain"
+)
 cp "$tmp/project.json" tolean.chain.json
 
 # A class manifest cannot omit the unproved semantic boundary.

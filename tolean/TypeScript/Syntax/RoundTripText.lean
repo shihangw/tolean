@@ -579,7 +579,9 @@ theorem Decl.lineOK : ∀ d : Decl, ∀ l ∈ d.lines, LineOK l.2
     · cases ctor with
       | none => simp [ctorLines] at hl
       | some c =>
-        obtain ⟨ps, m⟩ := c
+        obtain ⟨ps, m, runtimeName⟩ := c
+        have hname : LineOK (errorNameWords runtimeName) := by
+          cases runtimeName <;> simp [errorNameWords, LineOK, breaksOK, keywordWord, punctWord, identWord]
         simp only [ctorLines, List.mem_cons, List.not_mem_nil, or_false] at hl
         rcases hl with rfl | rfl | rfl
         · have hp : ∀ x ∈ ps.map CtorParam.words, Fine x := by
@@ -592,7 +594,8 @@ theorem Decl.lineOK : ∀ d : Decl, ∀ l ∈ d.lines, LineOK l.2
             · simpa using hline
           exact LineOK.cons (by simp [identWord]) ((fine_enclose hp).line.append (LineOK.word (by simp [punctWord])))
         · exact LineOK.cons (by simp [keywordWord]) (LineOK.cons (by simp [punctWord])
-            ((Expr.fine m).line.append (LineOK.cons (by simp [punctWord]) (LineOK.word (by simp [punctWord])))))
+            ((Expr.fine m).line.append
+              ((LineOK.cons (by simp [punctWord]) (LineOK.word (by simp [punctWord]))).append hname)))
         · exact LineOK.word (by simp [punctWord])
     · exact LineOK.word (by simp [punctWord])
   | .import _ names source, l, hl => by

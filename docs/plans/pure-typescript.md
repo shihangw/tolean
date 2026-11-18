@@ -344,7 +344,9 @@ leaves a gap.
     mechanism later serves `@decreases`. See the
     [proof-obligation open question](#open-questions).
     The first slice adds project manifest obligations with exact theorem
-    types and a fixed axiom policy. The next slice generates consistency
+    types and a fixed axiom policy. Its chain tests cover obligations'
+    fixed axiom policy, not claim-specific axiom allowlists.
+    The next slice generates consistency
     statements for additional bigint comparators and passes project proofs
     through the sort link theorem. Generated output determines the required
     obligations. Other element types, captures of generic types and
@@ -485,7 +487,12 @@ decision record then states the choice and any limits that remain.
   `JSNumber.countUp k b`, the IR evaluator gives `countUp? k b` and has no
   value when that is `none`, and `countUp` is `countUp?` with `[]` for
   `none`. So the link theorem fails only where `countUp? k b = none`, and
-  each counted loop adds one binder to the function's two theorems:
+  each counted loop adds one binder to the function's two theorems.
+
+  Nullish narrowing guards stay around the bound's condition when it reaches
+  the function boundary. Enclosing loops carry child safety conditions in
+  their invariants, so their lemmas do not rely on a later function hypothesis.
+  A non-nullable bound needs no guard:
 
   ```lean
   theorem sum_cert {N : Type} [JSNumber N] (xs : List Int) (n : N)
