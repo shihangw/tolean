@@ -856,11 +856,14 @@ test('error constructors refuse repeated, computed and conditional names', () =>
   for (const [i, result] of results.entries()) expect(result.parsed, programs[i].source).toBe(false);
 });
 
-test('the evaluator reads inherited and own error names outside the translated subset', async () => {
+test('the evaluator reads modeled error fields outside the translated subset', async () => {
   const sources = [
     'export function name(): string { return new Error("message").name; }',
     `class E extends Error { constructor(text: string) { super(text); this.name = "Different"; } }
       export function name(): string { return new E("message").name; }`,
+    'export function name(): string { return new Error("message").message; }',
+    `class E extends Error { constructor(text: string, readonly detail: string) { super(text); } }
+      export function name(): string { return new E("message", "detail").detail; }`,
   ];
   const run = spawnSync(tolean, ['interpret'], {
     input: JSON.stringify({ programs: sources.map((source) => ({
@@ -884,6 +887,31 @@ test('the evaluator reads inherited and own error names outside the translated s
     const result = lean.results[0];
     expect(result !== undefined && result !== null && 'value' in result
       ? canonical(result.value) : 'did not return').toBe(canonical(encode(mod.name())));
+  }
+});
+
+test('unmodeled Error member reads are refused by the interpreter and translator', () => {
+  const programs = ['stack', '__proto__', 'constructor', 'toString', 'cause', 'missing']
+    .flatMap((property) => [
+      `export function read(): string { return new Error("message").${property}; }`,
+      `class E extends Error {
+        constructor(text: string, readonly line: number) {
+          super(text); this.name = "Different";
+        }
+      }
+      export function read(): string { return new E("message", 1).${property}; }`,
+    ]).map((source) => ({ source, calls: [{ function: 'read', args: [] }] }));
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs }), encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const results = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  expect(results).toHaveLength(programs.length);
+  for (const [i, result] of results.entries()) {
+    expect(result.parsed, programs[i].source).toBe(true);
+    if (!result.parsed) continue;
+    expect(result.accepted, programs[i].source).toBe(false);
+    expect(result.results, programs[i].source).toEqual([null]);
   }
 });
 

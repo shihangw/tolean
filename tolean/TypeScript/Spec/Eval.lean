@@ -232,11 +232,12 @@ def getProp (fields : List (String × Val N)) (name : String) : Option (Val N) :
   | none => if objectPrototypeNames.contains name then none else some .undefined
 
 /-- Error.prototype supplies the name when the instance has no own name.
-The constructor tag is independent of this ordinary property. -/
+The constructor tag is independent of this ordinary property. Other reads
+require a modeled own field: errors omit stack and the prototype chain. -/
 def getErrorProp (fields : List (String × Val N)) (name : String) : Option (Val N) :=
   if name == "name" then
     some ((fields.lookup name).getD (.str (JSString.ofString "Error")))
-  else getProp fields name
+  else fields.lookup name
 
 /-- `obj[key]` with a string key: the property whose name is `key`, as
 `getProp` reads it. A property name is a Lean `String`, so `getKey` compares
