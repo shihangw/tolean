@@ -1615,8 +1615,21 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       let destruct := if count ≤ 1 then "" else
         s!"    obtain ⟨{", ".intercalate ((List.range count).map (s!"s{·}"))}⟩ := s\n"
       let closureLemmas := if closures.isEmpty then [] else ["tolean.TypeScript.Proof.lookup_ite"]
+      -- A child loop's lemma already quantifies over its incoming environment.
+      -- Apply it explicitly to expose the invariant for the updated state,
+      -- which the simplifier's conditional rewriting cannot always discharge.
+      -- The evaluator expression does not mention codecs, so supply those too.
+      let children := loopsOf body
+      let instantiatedLoops := (loopsOf outBody).zipIdx.filterMap fun ((_, _, _, child, _), i) =>
+        if children.any (fun (_, _, _, c, _) => c.span == child.span) then
+          some ("(" ++ " ".intercalate (r.cert s!"{name}_loop{i + 1}" :: r.codecs.map (·.2)) ++ ")")
+        else none
       let simpSet := ", ".intercalate (hfsName ++ stepNames ++ closureLemmas ++ envLemmas ++ lemmaNames.toList ++ codecLemmas ++
-        loopLemmas.toList ++ defs)
+        loopLemmas.toList ++ instantiatedLoops ++ defs)
+      let childRewrites := String.join (instantiatedLoops.map fun lemma =>
+        s!"    all_goals (try rw [{lemma}])\n") ++
+        (if instantiatedLoops.isEmpty then "" else
+          s!"    all_goals link_tac [{simpSet}, {", ".intercalate hypNames}]\n")
       -- The values that one step sees: the element, the state, and the other
       -- locals, which the lemma generalizes to `v0`, `v1` and so on.
       let stateVars := if count ≤ 1 then ["s"].zip info.stateTypes
@@ -1642,6 +1655,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         generalize "ρ" coded ++ destruct ++
         (if restricted then "    have hs := hkeys x hx\n" else "") ++
         s!"    {casesOn decls loopVars}link_tac [{simpSet}, {", ".intercalate hypNames}{if restricted then ", hs" else ""}]\n" ++
+        childRewrites ++
         (if !restricted || literalMaps.isEmpty then "" else
           s!"    all_goals (try simp only [{", ".intercalate literalMaps}, ← List.map_append])\n") ++
         rewrites ++

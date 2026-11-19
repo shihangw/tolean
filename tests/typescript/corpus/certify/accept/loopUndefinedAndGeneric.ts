@@ -152,3 +152,69 @@ export function returnWithTwoLocals(xs: ReadonlyArray<bigint | undefined>): bigi
   }
   return -1n;
 }
+
+export function returnThenLoop(
+  xs: ReadonlyArray<bigint | undefined>,
+  ys: ReadonlyArray<bigint>,
+): bigint {
+  for (const x of xs) {
+    if (x === undefined) return 0n;
+  }
+  let n = 0n;
+  for (const y of ys) n += y;
+  return n;
+}
+
+export function returnThenTwoLoops(
+  xs: ReadonlyArray<bigint | undefined>,
+  ys: ReadonlyArray<bigint>,
+): bigint {
+  for (const x of xs) {
+    if (x === undefined) return 0n;
+  }
+  let n = 0n;
+  for (const y of ys) n += y;
+  for (const z of ys) n += z;
+  return n;
+}
+
+export function returnNullThenLoop(
+  xs: ReadonlyArray<bigint | null>,
+  ys: ReadonlyArray<bigint>,
+): bigint {
+  for (const x of xs) {
+    if (x === null) return 0n;
+  }
+  let n = 0n;
+  for (const y of ys) n += y;
+  return n;
+}
+
+export function nestedLoops<T>(
+  xs: ReadonlyArray<bigint | undefined>,
+  ys: ReadonlyArray<bigint>,
+  value: T | null,
+): bigint {
+  let n = 0n;
+  for (const x of xs) {
+    if (x !== undefined) {
+      n += x;
+      for (const y of ys) {
+        if (value === null) n += y;
+      }
+    }
+  }
+  return n;
+}
+
+export function nestedLoopsPlain(
+  xs: ReadonlyArray<bigint>,
+  ys: ReadonlyArray<bigint>,
+): bigint {
+  let n = 0n;
+  for (const x of xs) {
+    n += x;
+    for (const y of ys) n += y;
+  }
+  return n;
+}

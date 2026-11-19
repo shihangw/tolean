@@ -1008,7 +1008,9 @@ step and the printed definition's step are such a pair when they hold a
 `match`, because each `match` has its own auxiliary function. After a split
 on the result of each loop, this lets `simp_all` see that the two results
 are the same. If one hypothesis projects the return slot from a loop result,
-also project the equality for the whole state. -/
+also project the equality for the whole state. Rewrite the goal with these
+hypotheses by definitional equality, so a result can also select the next
+branch when the goal still contains the loop itself. -/
 elab "link_eqs" : tactic => withMainContext do
   let hyps ← getLocalHyps
   let mut facts : Array Lean.Expr := #[]
@@ -1036,6 +1038,16 @@ elab "link_eqs" : tactic => withMainContext do
   for p in facts do
     let (_, g') ← (← g.assert `link_eq (← inferType p) p).intro1P
     g := g'
+  -- Unlike `simp`, rewriting compares the loop steps by definitional
+  -- equality, even when their matches have different auxiliary functions.
+  for h in hyps do
+    let some (_, a, _) := (← instantiateMVars (← inferType h)).eq? | continue
+    unless a.getAppFn.isConst do continue
+    try
+      let result ← g.rewrite (← g.getType) h (config := { transparency := .all })
+      unless result.mvarIds.isEmpty do continue
+      g ← g.replaceTargetEq result.eNew result.eqProof
+    catch _ => pure ()
   replaceMainGoal [g]
 
 end tolean.TypeScript.IR

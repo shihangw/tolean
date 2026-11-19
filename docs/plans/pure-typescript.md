@@ -453,18 +453,17 @@ decision record then states the choice and any limits that remain.
   Separate loops over `bigint | undefined` and loops that capture a generic
   nullable value certify, including when a function contains several loops.
   Returning loops certify when they change one or two locals and when their
-  elements are optional or nullable. A returning loop over a plain bigint
-  array can also be followed by later loops.
+  elements are optional or nullable. Returning loops over plain bigint,
+  optional bigint, and nullable bigint arrays can also be followed by later
+  loops. The link proof rewrites the loop result by definitional equality,
+  so different match auxiliary functions do not hide the return decision.
 
-  Two shapes remain open. A returning loop over
-  `ReadonlyArray<bigint | undefined>` followed by another loop still fails in
-  the function link theorem. That proof does not connect the evaluator's
-  returning-loop outcome to the printed function's choice to run the next
-  loop. `nestedLoops<T>` also fails when its outer loop narrows an element of
+  `nestedLoops<T>` certifies when its outer loop narrows an element of
   `ReadonlyArray<bigint | undefined>` and adds it to an accumulator, then its
   inner loop adds bigint elements when a captured `T | null` value is null.
-  The outer loop's step proof cannot apply the inner loop lemma with its
-  invariant after the outer loop changes the accumulator.
+  The inner loop lemma already quantifies over its incoming environment.
+  The outer step applies that lemma explicitly, with its codecs, and proves
+  the invariant for the updated accumulator as a separate goal.
 
 - How should a certificate cover an interface that refers to itself, and a
   function that calls itself? The decision is to keep both outside certificates
