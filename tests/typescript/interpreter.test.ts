@@ -761,7 +761,7 @@ test('declared error fields agree with Node after same-name assignments', async 
 });
 
 test('declared error classes take precedence over built-in constructors in the interpreter', async () => {
-  const cases = [
+  const cases: Array<{ name: string; source: string; accepted: boolean; args?: Array<unknown> }> = [
     { name: 'Set', source: `class Set extends Error {}
       export function check(): number { throw new Set("ab"); }`,
       accepted: false },
@@ -779,6 +779,16 @@ test('declared error classes take precedence over built-in constructors in the i
       export function check(): number { throw new ${name}("ab", 7); }`,
       accepted: false,
     })),
+    {
+      name: 'error class without a constructor',
+      source: `class E extends Error {}
+        export function check(n: number): number {
+          if (n < 0) { throw new E(); }
+          return n;
+        }`,
+      args: [-1],
+      accepted: true,
+    },
     { name: 'built-in Set', source: `export function check(): number {
       return new Set(["a", "b"]).size;
     }`, accepted: true },
@@ -788,8 +798,8 @@ test('declared error classes take precedence over built-in constructors in the i
     { name: 'ES2022', target: ts.ScriptTarget.ES2022 },
     { name: 'ES2024', target: ts.ScriptTarget.ES2024 },
   ];
-  const programs = cases.flatMap(({ source }) => targets.map(({ name }) => ({
-    source, target: name, calls: [{ function: 'check', args: [] }],
+  const programs = cases.flatMap(({ source, args }) => targets.map(({ name }) => ({
+    source, target: name, calls: [{ function: 'check', args: (args ?? []).map(encode) }],
   })));
   const run = spawnSync(tolean, ['interpret'], {
     input: JSON.stringify({ programs }),
@@ -811,7 +821,7 @@ test('declared error classes take precedence over built-in constructors in the i
       }).outputText);
       const mod = await import(pathToFileURL(path).href);
       let actual: { value: unknown } | { throws: unknown };
-      try { actual = { value: mod.check() }; } catch (error) { actual = { throws: error }; }
+      try { actual = { value: mod.check(...(scenario.args ?? [])) }; } catch (error) { actual = { throws: error }; }
       const interpretedResult = result.results[0];
       if ('throws' in actual) {
         const thrown = interpretedResult !== null && interpretedResult !== undefined && 'throws' in interpretedResult
