@@ -1592,7 +1592,8 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       let stepNames := if info.returns.isSome then
           ["tolean.TypeScript.Proof.retOutcome", "ForInStep.value"]
         else if info.breaks then ["tolean.TypeScript.Proof.stepOutcome", "ForInStep.value"] else []
-      if info.returns.isSome then returnsLoop := true
+      if info.returns.isSome then
+        returnsLoop := true
       let depth := if closures.isEmpty then callDepth m bodyStmt else callDepth m syntaxBody + closures.length
       let fuel := if depth == 0 then "fuel" else s!"(fuel + {depth})"
       -- A body with calls looks the functions up in the output, so the lemma
@@ -1759,7 +1760,8 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     let binders := " ".intercalate (outParams.map fun (p, t) => s!"({p} : {t.print names})") ++
       String.join (obligations.map fun (n, p) => s!" ({n} : {p})")
     let call := " ".intercalate ((r.full s!"{transNs}.{name}" ++ callN) :: params.map (·.name))
-    let retNames := if returnsLoop then ["tolean.TypeScript.Proof.retResult"] else []
+    let retNames := if returnsLoop then
+      ["tolean.TypeScript.Proof.retResult", "tolean.TypeScript.Proof.retResult_pair"] else []
     let simpSet := ", ".intercalate ([r.cert "decls"] ++ retNames ++ envLemmas ++ lemmaNames.toList ++ codecLemmas ++
       loopLemmas.toList ++ defs ++ obligations.map (·.1))
     let some_ := r.write "some" "Option.some"
@@ -1800,7 +1802,8 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       -- scrutinee can agree by unfolding without matching syntactically.
       (if returnsLoop then
         "\n  all_goals repeat' (split at * <;> (subst_vars; link_eqs; simp_all [List.lookup]))\n" ++
-        "  all_goals (subst_vars; link_eqs; simp_all [List.lookup])" else "")
+        "  all_goals (subst_vars; link_eqs; try simp_all [List.lookup])" ++
+        loopRewrites else "")
     thms := thms.push <|
       s!"theorem {name}_cert {functionGeneric} {binders} :\n" ++
       s!"    {sourceCall} {list args} = {some_} ({retEnc} ({call})) :=\n" ++

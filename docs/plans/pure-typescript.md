@@ -450,14 +450,21 @@ decision record then states the choice and any limits that remain.
   non-parameter argument remain refused; see the
   [decision record](../decisions/2026-11-16-generic-codecs.md).
 
-  `nestedLoops<T>` still fails when its outer loop narrows an element of
+  Separate loops over `bigint | undefined` and loops that capture a generic
+  nullable value certify, including when a function contains several loops.
+  Returning loops certify when they change one or two locals and when their
+  elements are optional or nullable. A returning loop over a plain bigint
+  array can also be followed by later loops.
+
+  Two shapes remain open. A returning loop over
+  `ReadonlyArray<bigint | undefined>` followed by another loop still fails in
+  the function link theorem. That proof does not connect the evaluator's
+  returning-loop outcome to the printed function's choice to run the next
+  loop. `nestedLoops<T>` also fails when its outer loop narrows an element of
   `ReadonlyArray<bigint | undefined>` and adds it to an accumulator, then its
   inner loop adds bigint elements when a captured `T | null` value is null.
   The outer loop's step proof cannot apply the inner loop lemma with its
   invariant after the outer loop changes the accumulator.
-  Separate loops over `bigint | undefined` and loops that capture a generic
-  nullable value now certify, including when a function contains several loops
-  of these kinds or returns early from a loop.
 
 - How should a certificate cover an interface that refers to itself, and a
   function that calls itself? The decision is to keep both outside certificates

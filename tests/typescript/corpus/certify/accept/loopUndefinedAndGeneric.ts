@@ -98,3 +98,57 @@ export function mixedLoops<T>(
   for (const z of zs) n += z;
   return n;
 }
+
+export function indexOfUndef(xs: ReadonlyArray<bigint | undefined>): bigint {
+  let i = 0n;
+  for (const x of xs) {
+    if (x === undefined) return i;
+    i += 1n;
+  }
+  return -1n;
+}
+
+export function indexOfNull(xs: ReadonlyArray<bigint | null>): bigint {
+  let i = 0n;
+  for (const x of xs) {
+    if (x === null) return i;
+    i += 1n;
+  }
+  return -1n;
+}
+
+export function returnThenLoopPlain(
+  xs: ReadonlyArray<bigint>,
+  ys: ReadonlyArray<bigint>,
+): bigint {
+  for (const x of xs) {
+    if (x === 0n) return 0n;
+  }
+  let n = 0n;
+  for (const y of ys) n += y;
+  return n;
+}
+
+export function returnThenSecondLoop(
+  xs: ReadonlyArray<bigint>,
+  ys: ReadonlyArray<bigint>,
+): bigint {
+  for (const x of xs) {
+    if (x === 0n) return 0n;
+  }
+  let n = 0n;
+  for (const y of ys) n += y;
+  for (const z of ys) n += z;
+  return n;
+}
+
+export function returnWithTwoLocals(xs: ReadonlyArray<bigint | undefined>): bigint {
+  let i = 0n;
+  let n = 0n;
+  for (const x of xs) {
+    if (x === undefined) return i + n;
+    i += 1n;
+    n += x;
+  }
+  return -1n;
+}
