@@ -4378,9 +4378,25 @@ theorem translateSpreadArray_sound {env : Translate.Env} {tr : Option Ty → Exp
 
 /-- `new Date(t)` means what the interpreter's rule for it means: the date
 whose time value is TimeClip of `t`. -/
+private theorem hasHoistedMark_false_of_no_mark {typeArgs : List TypeExpr}
+    (h : ∀ span, typeArgs ≠ [.keyword span "'"]) : Eval.hasHoistedMark typeArgs = false := by
+  cases typeArgs with
+  | nil => simp [Eval.hasHoistedMark]
+  | cons t rest =>
+    cases rest with
+    | cons _ _ => simp [Eval.hasHoistedMark]
+    | nil =>
+      cases t with
+      | keyword span name =>
+        by_cases hn : name = "'"
+        · exact False.elim (h span (by simp [hn]))
+        · simp [Eval.hasHoistedMark]
+      | _ => simp [Eval.hasHoistedMark]
+
 theorem translateNewDate_sound {tr : Option Ty → Expr → TM Code} {env : Translate.Env}
     (htr : ∀ exp e ctx c ctx', tr exp e ctx = .ok c ctx' → Sim (N := N) m fs fuel env e c.code)
     {sp : Span} {typeArgs : List TypeExpr} {args : List Expr} {ctx ctx' : Ctx} {c : Code}
+    (htypeArgs : typeArgs = [])
     (h : translateNewDate tr env sp args ctx = .ok c ctx') :
     Sim (N := N) m fs fuel env (.new sp "Date" typeArgs args) c.code := by
   match args, h with
@@ -4398,7 +4414,9 @@ theorem translateNewDate_sound {tr : Option Ty → Expr → TM Code} {env : Tran
       obtain ⟨x, hx, rfl⟩ := out_dateOfNumber fs fuel hv
       rw [eval_value] at hx
       have harg := htr _ _ _ _ _ ht ρs ρo _ ha hs hx
-      simp [Eval.eval, hs.none (by simpa using hhas), harg]
+      subst typeArgs
+      have hmark : Eval.hasHoistedMark [] = false := rfl
+      simp [Eval.eval, hmark, hs.none (by simpa using hhas), harg]
     · simp at h
   | [], h =>
     unfold translateNewDate at h
@@ -4420,7 +4438,8 @@ theorem translateNew_sound {tr : Option Ty → Expr → TM Code} {env : Translat
   · rename_i hc
     obtain rfl : callee = "Date" := by simpa using hc
     split at h
-    · exact translateNewDate_sound m fs fuel htr h
+    · rename_i htypeArgs
+      exact translateNewDate_sound m fs fuel htr (by simpa using htypeArgs) h
     · simp at h
   simp only [ite_state] at h
   split at h
@@ -4439,15 +4458,25 @@ theorem translateNew_sound {tr : Option Ty → Expr → TM Code} {env : Translat
   · simp only [show ("Map" == "Map") = true from rfl, ↓reduceIte] at h
     rcases args with _ | ⟨arg, _ | ⟨_, _⟩⟩
     · simp only [bind_ok] at h
-      obtain ⟨type, s₁, -, h⟩ := h
+      obtain ⟨type, s₁, htype, h⟩ := h
+      have hnot : ∀ span, typeArgs ≠ [.keyword span "'"] := by
+        intro span hmark
+        subst typeArgs
+        simp [Translate.newMapType] at htype
+      have hmark := hasHoistedMark_false_of_no_mark hnot
       simp only [pure_ok] at h
       obtain ⟨rfl, -⟩ := h
       intro ρs ρo v _ hs hv
       simp [IR.Expr.eval, IR.Expr.evalList, IR.ExprExt.apply] at hv
       subst hv
-      simp [Eval.eval, hnone ρs hs]
+      simp [Eval.eval, hmark, hnone ρs hs]
     · simp only [bind_ok, orReject_ok] at h
-      obtain ⟨declared, s₁, -, found, s₂, hfound, ⟨elem, li⟩, s₃, ⟨rfl, rfl⟩, type, s₄, -, h⟩ := h
+      obtain ⟨declared, s₁, hdeclared, found, s₂, hfound, ⟨elem, li⟩, s₃, ⟨rfl, rfl⟩, type, s₄, -, h⟩ := h
+      have hnot : ∀ span, typeArgs ≠ [.keyword span "'"] := by
+        intro span hmark
+        subst typeArgs
+        simp [Translate.declaredMapType] at hdeclared
+      have hmark := hasHoistedMark_false_of_no_mark hnot
       simp only [pure_ok] at h
       obtain ⟨rfl, -⟩ := h
       have hit := iterOf_sim m fs fuel
@@ -4463,20 +4492,30 @@ theorem translateNew_sound {tr : Option Ty → Expr → TM Code} {env : Translat
         rename_i vs
         obtain ⟨es, hes, rfl⟩ := hv
         have hiter := hit _ _ rfl ρs ρo _ ha hs hli
-        simp [Eval.eval, hnone ρs hs, hiter, hes]
+        simp [Eval.eval, hmark, hnone ρs hs, hiter, hes]
     · simp at h
   · simp only [show ("Set" == "Map") = false from rfl, ↓reduceIte, Bool.false_eq_true] at h
     rcases args with _ | ⟨arg, _ | ⟨_, _⟩⟩
     · simp only [bind_ok] at h
-      obtain ⟨type, s₁, -, h⟩ := h
+      obtain ⟨type, s₁, htype, h⟩ := h
+      have hnot : ∀ span, typeArgs ≠ [.keyword span "'"] := by
+        intro span hmark
+        subst typeArgs
+        simp [Translate.newSetType, Translate.unsupportedType, reject_ne_ok] at htype
+      have hmark := hasHoistedMark_false_of_no_mark hnot
       simp only [pure_ok] at h
       obtain ⟨rfl, -⟩ := h
       intro ρs ρo v _ hs hv
       simp [IR.Expr.eval, IR.Expr.evalList, IR.ExprExt.apply] at hv
       subst hv
-      simp [Eval.eval, hnone ρs hs]
+      simp [Eval.eval, hmark, hnone ρs hs]
     · simp only [bind_ok, orReject_ok] at h
-      obtain ⟨declared, s₁, -, found, s₂, hfound, ⟨elem, li⟩, s₃, ⟨rfl, rfl⟩, type, s₄, -, h⟩ := h
+      obtain ⟨declared, s₁, hdeclared, found, s₂, hfound, ⟨elem, li⟩, s₃, ⟨rfl, rfl⟩, type, s₄, -, h⟩ := h
+      have hnot : ∀ span, typeArgs ≠ [.keyword span "'"] := by
+        intro span hmark
+        subst typeArgs
+        simp [Translate.declaredSetType, Translate.unsupportedType, reject_ne_ok] at hdeclared
+      have hmark := hasHoistedMark_false_of_no_mark hnot
       simp only [pure_ok] at h
       obtain ⟨rfl, -⟩ := h
       have hit := iterOf_sim m fs fuel
@@ -4492,7 +4531,7 @@ theorem translateNew_sound {tr : Option Ty → Expr → TM Code} {env : Translat
         rename_i vs
         obtain ⟨es, hes, rfl⟩ := hv
         have hiter := hit _ _ rfl ρs ρo _ ha hs hli
-        simp [Eval.eval, hnone ρs hs, hiter, hes]
+        simp [Eval.eval, hmark, hnone ρs hs, hiter, hes]
     · simp at h
 
 theorem out_numberSameValue {a b : IR.Expr} {ρ : Eval.Env N} {v : Val N}

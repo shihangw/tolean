@@ -2114,10 +2114,13 @@ def declaredMapType (s : Span) (typeArgs : List TypeExpr) (expected : Option Ty)
   | _, _ => reject s "Map takes two type arguments"
 
 /-- The set type of `new Set<T>(items)` that the type argument or the context
-give, if they give one. -/
+give, if they give one. Hoisting uses an unparseable quote keyword to mark
+error-class constructions, so Set type translation must reject it. -/
 def declaredSetType (s : Span) (typeArgs : List TypeExpr) (expected : Option Ty) : TM (Option Ty) := do
   match typeArgs, expected with
-  | [t], _ => return some (.set (← mapKey s (← translateType t) "a set element"))
+  | [t], _ =>
+    if t matches .keyword _ "'" then unsupportedType t
+    return some (.set (← mapKey s (← translateType t) "a set element"))
   | [], some (.set t) => return some (.set t)
   | [], _ => return none
   | _, _ => reject s "Set takes one type argument"
@@ -2153,7 +2156,9 @@ def setOfElemsType (s : Span) (declared : Option Ty) (elem : Ty) : TM Ty := do
 context expects. -/
 def newSetType (s : Span) (typeArgs : List TypeExpr) (expected : Option Ty) : TM Ty := do
   match typeArgs, expected with
-  | [t], _ => return .set (← mapKey s (← translateType t) "a set element")
+  | [t], _ =>
+    if t matches .keyword _ "'" then unsupportedType t
+    return .set (← mapKey s (← translateType t) "a set element")
   | [], some (.set t) => return .set t
   | _, _ => reject s "new Set needs the type of its elements, such as new Set<string>()"
 

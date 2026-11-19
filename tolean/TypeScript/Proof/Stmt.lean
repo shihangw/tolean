@@ -2386,7 +2386,7 @@ theorem throw_sim {env : Translate.Env} {s sn : Span} {msg : Expr} {code : IR.Ex
     obtain ⟨t, ho, hm⟩ := hout _ hv
     cases ho
     rw [exec_single]
-    simp [Eval.execStmt, Eval.eval, hs.none herr, hsim ρs ρo _ ha hs hm]
+    simp [Eval.execStmt, Eval.eval, Eval.hasHoistedMark, hs.none herr, hsim ρs ρo _ ha hs hm]
   · intro brk ρo' hv
     obtain ⟨t, ho, -⟩ := hout _ hv
     cases brk <;> simp [endOf] at ho
@@ -2553,7 +2553,8 @@ theorem throwClass_sim {env : Translate.Env} {s sn tsp : Span} {c : String} {msg
     rw [exec_single]
     simp only [Eval.execStmt]
     rw [Eval.eval]
-    · simp [hctor, hsafe, hs.none hc, hsim ρs ρo _ ha hs hm, hsims ρs ρo vs ha hs hvs, hnum, hl, hlen]
+    · simp [Eval.hasHoistedMark, hctor, hsafe, hs.none hc, hsim ρs ρo _ ha hs hm,
+        hsims ρs ρo vs ha hs hvs, hnum, hl, hlen]
     all_goals (intros; simp_all)
   · intro brk ρo' hv
     obtain ⟨t, vs, ho, -, -⟩ := hout _ hv

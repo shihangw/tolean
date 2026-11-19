@@ -760,6 +760,64 @@ test('declared error fields agree with Node after same-name assignments', async 
   }
 });
 
+test('declared error classes take precedence over built-in constructors in the interpreter', async () => {
+  const cases = [
+    { name: 'Set', source: `class Set extends Error {}
+      export function check(): number { throw new Set("ab"); }`,
+      accepted: false },
+    ...['Set', 'Map', 'Date'].map((name) => ({
+      name,
+      source: `class ${name} extends Error {
+        constructor(message: string, readonly code: number) { super(message); }
+      }
+      export function check(): number { throw new ${name}("ab", 7); }`,
+      accepted: false,
+    })),
+    { name: 'built-in Set', source: `export function check(): number {
+      return new Set(["a", "b"]).size;
+    }`, accepted: true },
+  ];
+  const targets = [
+    { name: 'ES2015', target: ts.ScriptTarget.ES2015 },
+    { name: 'ES2022', target: ts.ScriptTarget.ES2022 },
+    { name: 'ES2024', target: ts.ScriptTarget.ES2024 },
+  ];
+  const programs = cases.flatMap(({ source }) => targets.map(({ name }) => ({
+    source, target: name, calls: [{ function: 'check', args: [] }],
+  })));
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs }),
+    encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const interpreted = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  expect(interpreted).toHaveLength(programs.length);
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-shadowed-error-class-'));
+  for (const [i, scenario] of cases.entries()) {
+    for (const [j, target] of targets.entries()) {
+      const result = interpreted[i * targets.length + j];
+      expect(result?.parsed, scenario.source).toBe(true);
+      if (result === undefined || !result.parsed) continue;
+      expect(result.accepted, scenario.source).toBe(scenario.accepted);
+      const path = join(dir, `case${i}-${target.name}.mjs`);
+      writeFileSync(path, ts.transpileModule(scenario.source, {
+        compilerOptions: { target: target.target, module: ts.ModuleKind.ESNext },
+      }).outputText);
+      const mod = await import(pathToFileURL(path).href);
+      let actual: { value: unknown } | { throws: unknown };
+      try { actual = { value: mod.check() }; } catch (error) { actual = { throws: error }; }
+      const interpretedResult = result.results[0];
+      if ('throws' in actual) {
+        expect(interpretedResult !== null && interpretedResult !== undefined && 'throws' in interpretedResult
+          ? canonical(interpretedResult.throws) : 'did not throw', scenario.source).toBe(shownThrow(actual.throws));
+      } else {
+        expect(interpretedResult !== null && interpretedResult !== undefined && 'value' in interpretedResult
+          ? canonical(interpretedResult.value) : 'did not return', scenario.source).toBe(canonical(encode(actual.value)));
+      }
+    }
+  }
+});
+
 test('error fields refuse unsupported names but allow plain parameters', async () => {
   const cases: Array<{ fields: string; params: string; body: string; accepted: boolean;
     es2015Keys?: string[]; esNextKeys?: string[]; className?: string; skipKeys?: boolean }> = [

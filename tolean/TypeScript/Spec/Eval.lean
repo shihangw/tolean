@@ -1014,6 +1014,12 @@ source `new C(…)` with one argument more than the constructor takes cannot
 pass for a rewritten one. -/
 def hoistedMark : TypeExpr := .keyword default "'"
 
+/-- Whether `typeArgs` carries the mark that `Stmt.hoisted` puts on an error
+class construction. The source parser cannot read a quote as a keyword. -/
+def hasHoistedMark : List TypeExpr → Bool
+  | [.keyword _ "'"] => true
+  | _ => false
+
 /-- `e` is a name or a literal, which hoisting would only rename. -/
 def Expr.isAtom : Expr → Bool
   | .regexp .. => true
@@ -1869,52 +1875,51 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
   -- is the whole value of a declaration or a `return` passes its throw on
   -- (`evalTop`).
   | .call _ (.ident _ name) args => do (← evalCall m fuel env name args).toOption
-  -- `new Map()` (ECMA-262 §24.1.1.1): a map without entries, unless a
-  -- variable hides the global `Map`. A declaration of the module named `Map`
-  -- would hide it too, as one named `Number` would hide `Number`, and the
-  -- translator refuses both.
-  | .new _ "Map" _ [] => if (env.lookup "Map").isSome then none else some (.map [])
-  -- `new Set()` (ECMA-262 §24.2.2.1), in the same way.
-  | .new _ "Set" _ [] => if (env.lookup "Set").isSome then none else some (.set [])
-  -- `new Date(t)` on a number (§21.4.2.1): the date whose time value is
-  -- TimeClip of `t`.
-  | .new _ "Date" _ [arg] => do
-    if (env.lookup "Date").isSome then none
-    let .num t ← eval m fuel env arg | none
-    return .date (JSDate.timeClip t)
-  -- `new Map(items)` and `new Set(items)` (`AddEntriesFromIterable`, ECMA-262
-  -- §24.1.1.2, and §24.2.2.1): the constructor visits `items` as a loop
-  -- would, and sets each `[key, value]`, or adds each value, in order.
-  | .new _ "Map" _ [arg] => do
-    if (env.lookup "Map").isSome then none
-    return .map (← mapOfItems (← evalIter m fuel env arg))
-  | .new _ "Set" _ [arg] => do
-    if (env.lookup "Set").isSome then none
-    return .set (← setOfItems (← evalIter m fuel env arg))
-  -- `new Error(message)` with a string message (`Error`, ECMA-262
-  -- §20.5.1.1): an error object whose own property `message` is the string,
-  -- unless a variable hides `Error`. As for `NaN`, a function or an enum of
-  -- the program named `Error` would hide the global in JS, and this rule
-  -- reads the global; the translator refuses such a name.
-  | .new _ "Error" [] [msg] => do
-    if (env.lookup "Error").isSome then none
-    let .str s ← eval m fuel env msg | none
-    return .error "Error" [("message", .str s)]
-  -- `new C(message, args)` for an error class `C` of the file, as
-  -- `Stmt.hoisted` writes it, with its mark: the object has the message,
-  -- then a property for each `readonly` parameter with its argument
-  -- (ECMA-262 §20.5.1.1 for `Error`, and §15.7.14 for the fields of a
-  -- derived class). A construction without the mark has the wrong number
-  -- of arguments, and the model gives no value.
-  | .new _ c [.keyword _ "'"] (msg :: args) =>
-    match errorClassIn m c with
-    | none => none
-    | some ctor =>
-      if !errorCtorSupported ctor || (env.lookup c).isSome then none else do
+  -- The mark that `Stmt.hoisted` puts on `new C(message, args)` separates an
+  -- error class `C` of the file from an unmarked built-in construction. Check
+  -- it before the built-in constructors because a declared class may shadow
+  -- a name such as `Set`.
+  | .new _ c typeArgs args =>
+    if hasHoistedMark typeArgs then
+      match args with
+      | msg :: args =>
+        match errorClassIn m c with
+        | none => none
+        | some ctor =>
+          if !errorCtorSupported ctor || (env.lookup c).isSome then none else do
+            let .str s ← eval m fuel env msg | none
+            let vs ← evalList m fuel env args
+            if (ctorParams ctor).length != vs.length then none
+            return .error c (("message", .str s) :: (fieldArgs ctor vs ++ errorNameFields (ctorName ctor)))
+      | [] => none
+    else
+      match c, typeArgs, args with
+      -- `new Map()` (ECMA-262 §24.1.1.1): a map without entries, unless a
+      -- variable hides the global `Map`.
+      | "Map", _, [] => if (env.lookup "Map").isSome then none else some (.map [])
+      -- `new Set()` (ECMA-262 §24.2.2.1), in the same way.
+      | "Set", _, [] => if (env.lookup "Set").isSome then none else some (.set [])
+      -- `new Date(t)` on a number (§21.4.2.1): the date whose time value is
+      -- TimeClip of `t`.
+      | "Date", _, [arg] => do
+        if (env.lookup "Date").isSome then none
+        let .num t ← eval m fuel env arg | none
+        return .date (JSDate.timeClip t)
+      -- `new Map(items)` and `new Set(items)` (`AddEntriesFromIterable`,
+      -- ECMA-262 §24.1.1.2 and §24.2.2.1): set or add each visited item.
+      | "Map", _, [arg] => do
+        if (env.lookup "Map").isSome then none
+        return .map (← mapOfItems (← evalIter m fuel env arg))
+      | "Set", _, [arg] => do
+        if (env.lookup "Set").isSome then none
+        return .set (← setOfItems (← evalIter m fuel env arg))
+      -- `new Error(message)` with a string message (`Error`, ECMA-262
+      -- §20.5.1.1): an error object whose own property `message` is the string.
+      | "Error", [], [msg] => do
+        if (env.lookup "Error").isSome then none
         let .str s ← eval m fuel env msg | none
-        let vs ← evalList m fuel env args
-        if (ctorParams ctor).length != vs.length then none
-        return .error c (("message", .str s) :: (fieldArgs ctor vs ++ errorNameFields (ctorName ctor)))
+        return .error "Error" [("message", .str s)]
+      | _, _, _ => none
   | _ => none
 termination_by e => (fuel, sizeOf e, 0)
 
