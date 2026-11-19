@@ -1778,7 +1778,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     let loopRewrites := if functionLoopLemmas.isEmpty then "" else
       "\n  all_goals repeat' first\n" ++ String.join (functionLoopLemmas.map fun lemma =>
         s!"    | rw [{lemma}]\n") ++
-      s!"  all_goals (try simp_all [{simpSet}])\n  all_goals first | assumption | rfl | (intros; first | rfl | simp_all [{simpSet}])"
+      s!"  all_goals (try simp_all [{simpSet}])\n  all_goals first | assumption | rfl | (intros; first | rfl | (try simp_all [{simpSet}]))"
     thms := thms.push <|
       s!"theorem {name}_link {functionGeneric} {binders} :\n" ++
       s!"    {runName} (N := {nv}) {outputFs} ⟨\"\", {str name}⟩ {list args} =\n" ++
