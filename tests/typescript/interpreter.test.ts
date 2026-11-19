@@ -767,6 +767,12 @@ test('declared error classes take precedence over built-in constructors in the i
       accepted: false },
     ...['Set', 'Map', 'Date'].map((name) => ({
       name,
+      source: `class ${name} extends Error {}
+        export function check(): number { throw new ${name}(); }`,
+      accepted: false,
+    })),
+    ...['Set', 'Map', 'Date'].map((name) => ({
+      name,
       source: `class ${name} extends Error {
         constructor(message: string, readonly code: number) { super(message); }
       }
@@ -808,8 +814,10 @@ test('declared error classes take precedence over built-in constructors in the i
       try { actual = { value: mod.check() }; } catch (error) { actual = { throws: error }; }
       const interpretedResult = result.results[0];
       if ('throws' in actual) {
-        expect(interpretedResult !== null && interpretedResult !== undefined && 'throws' in interpretedResult
-          ? canonical(interpretedResult.throws) : 'did not throw', scenario.source).toBe(shownThrow(actual.throws));
+        const thrown = interpretedResult !== null && interpretedResult !== undefined && 'throws' in interpretedResult
+          ? interpretedResult.throws : undefined;
+        expect(thrown !== undefined && thrown !== null && typeof thrown === 'object' && 'error' in thrown
+          ? canonical(thrown) : 'did not throw a declared error', scenario.source).toBe(shownThrow(actual.throws));
       } else {
         expect(interpretedResult !== null && interpretedResult !== undefined && 'value' in interpretedResult
           ? canonical(interpretedResult.value) : 'did not return', scenario.source).toBe(canonical(encode(actual.value)));

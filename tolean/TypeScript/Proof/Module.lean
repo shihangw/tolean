@@ -1427,6 +1427,37 @@ theorem errorClasses_ok : ∀ (ds : List Decl) (s s' : Ctx) (os : List (Option C
       obtain ⟨hm, hg, ctor', hfind, hshape', hruntime', hsafe'⟩ := hrest c hc
       exact ⟨hm, hg, ctor', by simpa [Eval.errorClassOfDecls] using hfind, hshape', hruntime', hsafe'⟩
 
+/-- Every error class in the declarations has a translated class record. -/
+theorem errorClasses_complete : ∀ (ds : List Decl) (s s' : Ctx) (os : List (Option ClassInfo)),
+    ds.mapM translateErrorClass? s = .ok os s' →
+    ∀ name, (Eval.errorClassOfDecls name ds).isSome = true →
+      ∃ c, some c ∈ os ∧ c.name = name
+  | [], s, s', os, h => by
+    simp only [List.mapM_nil, pure_ok] at h
+    obtain ⟨rfl, rfl⟩ := h
+    simp [Eval.errorClassOfDecls]
+  | d :: ds, s, s', os, h => by
+    simp only [List.mapM_cons, bind_ok, pure_ok] at h
+    obtain ⟨o, s₁, ho, os', s₂, hos, rfl, rfl⟩ := h
+    intro name hsource
+    cases d with
+    | errorClass sp exported declared ctor =>
+      simp only [Eval.errorClassOfDecls] at hsource
+      by_cases hname : declared = name
+      · simp [hname] at hsource
+        simp only [translateErrorClass?, map_ok] at ho
+        obtain ⟨info, hinfo, rfl⟩ := ho
+        rcases translateErrorClass_ok hinfo with ⟨_, hinfoName, _, _, _, _, _⟩
+        exact ⟨info, by simp, hinfoName.trans hname⟩
+      · have htail : (Eval.errorClassOfDecls name ds).isSome = true := by
+          simpa [hname] using hsource
+        obtain ⟨c, hc, hcn⟩ := errorClasses_complete ds s₁ s₂ os' hos name htail
+        exact ⟨c, List.mem_cons_of_mem _ hc, hcn⟩
+    | _ =>
+      simp only [Eval.errorClassOfDecls] at hsource
+      obtain ⟨c, hc, hcn⟩ := errorClasses_complete ds s₁ s₂ os' hos name hsource
+      exact ⟨c, List.mem_cons_of_mem _ hc, hcn⟩
+
 /-- `translateErrorTypes` records the error classes of `m` and changes
 nothing else; its output has no function. When no class was recorded before,
 each class recorded is one that `m` declares, with the constructor's
@@ -1439,10 +1470,12 @@ theorem translateErrorTypes_ok {m : Module} {s s' : Ctx} {pre : List IR.Decl}
         ∃ ctor, Eval.errorClassOf m c.name = some ctor ∧
           (Eval.ctorParams ctor).map (fun p => (p.param.name, p.readonly)) =
             (c.params.map fun x => (x.1, x.2.2)) ∧
-          Eval.ctorName ctor = c.runtimeName ∧ Eval.errorCtorSupported ctor = true) := by
+          Eval.ctorName ctor = c.runtimeName ∧ Eval.errorCtorSupported ctor = true) ∧
+      (s.errorClasses = [] → ∀ name, isGlobalName name = true → Eval.errorClassOf m name = none) := by
   unfold translateErrorTypes at h
   simp only [bind_ok] at h
   obtain ⟨os, s₁, hos, h⟩ := h
+  have hcomplete := errorClasses_complete m.decls s s₁ os hos
   obtain ⟨rfl, hcls⟩ := errorClasses_ok m.decls s s₁ os hos
   have hc : ∀ c ∈ ({ s with errorClasses := s.errorClasses ++ os.filterMap id } : Ctx).errorClasses,
       s.errorClasses = [] → isGlobalName c.name = false ∧
@@ -1453,15 +1486,27 @@ theorem translateErrorTypes_ok {m : Module} {s s' : Ctx} {pre : List IR.Decl}
     intro c hc h0
     simp only [h0, List.nil_append] at hc
     exact (hcls c hc).2
+  have hNoGlobal : s.errorClasses = [] → ∀ name, isGlobalName name = true →
+      Eval.errorClassOf m name = none := by
+    intro h0 name hg
+    by_cases hsome : Eval.errorClassOf m name = none
+    · exact hsome
+    · have hdecl : (Eval.errorClassOf m name).isSome = true := Option.isSome_iff_ne_none.mpr hsome
+      obtain ⟨c, hmem, hcn⟩ := hcomplete name (by simpa [Eval.errorClassOf] using hdecl)
+      have hmem' : c ∈ List.filterMap id os := by
+        exact List.mem_filterMap.mpr ⟨some c, hmem, rfl⟩
+      have hglobal := (hcls c hmem').2
+      rw [hcn] at hglobal
+      simp [hg] at hglobal
   simp only [ite_state] at h
   split at h
   · simp only [pure_ok] at h
     obtain ⟨rfl, rfl⟩ := h
-    exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, fun h0 c hc' => hc c hc' h0⟩
+    exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, fun h0 c hc' => hc c hc' h0, hNoGlobal⟩
   · simp only [bind_ok, pure_ok] at h
     obtain ⟨_, _, ⟨-, rfl⟩, u, s₂, htop, rfl, rfl⟩ := h
     obtain ⟨rfl, -⟩ := declareTopLevel_ok htop
-    exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, fun h0 c hc' => hc c hc' h0⟩
+    exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, fun h0 c hc' => hc c hc' h0, hNoGlobal⟩
 
 /-- A function of `c.withExports L` is one of `c`, exported there or named by
 `L` without `type`. -/
@@ -2186,7 +2231,7 @@ theorem programTranslation_rel {p : Eval.Program} {outs : List (String × List I
     obtain ⟨hfns, hen0, hev0, hcls0⟩ := hfns
     -- The file's error classes, then its own translation.
     obtain ⟨shapes, pre, s₁, os, hpre, hos, hfuncs⟩ := translateDecls_ok htr
-    obtain ⟨hf₁, hi₁, hfn₁, hen₁, hev₁, hb₁, hpre0, hcls⟩ := translateErrorTypes_ok hpre
+    obtain ⟨hf₁, hi₁, hfn₁, hen₁, hev₁, hb₁, hpre0, hcls, hnoClasses⟩ := translateErrorTypes_ok hpre
     have hfile : s₁.file = file := hf₁.trans hfile
     have hfns : s₁.functions = [] := hfn₁.trans hfns
     have hen0 : s₁.enums = [] := hen₁.trans hen0
@@ -2288,7 +2333,9 @@ theorem programTranslation_rel {p : Eval.Program} {outs : List (String × List I
       obtain ⟨hn, hps, hnd, tail, Fu, env, c, c', ht, hsub, hsubE, hsubC, hhas, hmode⟩ := hxy
       refine ⟨by simp [hn], hps, hnd, tail, Fu, env, c, c', ht,
         ⟨fun g hg => ⟨hres g (hsub g hg), ?_⟩, fun e he => hresE e (hsubE e he),
-          fun k hk => hresC k (hsubC k hk)⟩, hhas, ?_⟩
+          fun k hk => hresC k (hsubC k hk), fun name hg => by
+            have hn := hnoClasses hcls0 name hg
+            simp [Eval.errorClassIn, hPm, hn]⟩, hhas, ?_⟩
       · intro hborrow
         have hg' := hsub g hg
         rw [hfns'] at hg'

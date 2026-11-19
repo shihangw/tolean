@@ -148,7 +148,8 @@ def Resolves (m : Eval.Scope) (env : Translate.Env) : Prop :=
   (∀ f ∈ env.functions, Eval.resolve m f.name = some f.ref ∧
     (f.borrow.isSome = true → f.file = m.file)) ∧
     (∀ e ∈ env.enums, Eval.resolveEnum m e.name = some e.members) ∧
-    ∀ c ∈ env.classes, ClassAgrees m c
+    (∀ c ∈ env.classes, ClassAgrees m c) ∧
+    (∀ name, isGlobalName name = true → Eval.errorClassIn m name = none)
 
 /-- The functions, the string enums, the error classes and the local functions
 that code may name. A branch or a loop body keeps them, and changes only the
@@ -159,7 +160,8 @@ def globals (env : Translate.Env) : List FnInfo × List EnumValue × List ClassI
 theorem Resolves.congr {m : Eval.Scope} {env env' : Translate.Env} (h : Resolves m env)
     (hg : globals env' = globals env) : Resolves m env' := by
   simp only [globals, Prod.mk.injEq] at hg
-  exact ⟨fun f hf => h.1 f (hg.1 ▸ hf), fun e he => h.2.1 e (hg.2.1 ▸ he), fun c hc => h.2.2 c (hg.2.2.1 ▸ hc)⟩
+  exact ⟨fun f hf => h.1 f (hg.1 ▸ hf), fun e he => h.2.1 e (hg.2.1 ▸ he),
+    fun c hc => h.2.2.1 c (hg.2.2.1 ▸ hc), h.2.2.2⟩
 
 /-- A scope with the same globals has the same local functions, which change
 the same locals. -/
@@ -4416,7 +4418,8 @@ theorem translateNewDate_sound {tr : Option Ty → Expr → TM Code} {env : Tran
       have harg := htr _ _ _ _ _ ht ρs ρo _ ha hs hx
       subst typeArgs
       have hmark : Eval.hasHoistedMark [] = false := rfl
-      simp [Eval.eval, hmark, hs.none (by simpa using hhas), harg]
+      have hclassnone := hs.2.2.2.2 "Date" (by decide)
+      simp [Eval.eval, hmark, hclassnone, hs.none (by simpa using hhas), harg]
     · simp at h
   | [], h =>
     unfold translateNewDate at h
@@ -4469,7 +4472,8 @@ theorem translateNew_sound {tr : Option Ty → Expr → TM Code} {env : Translat
       intro ρs ρo v _ hs hv
       simp [IR.Expr.eval, IR.Expr.evalList, IR.ExprExt.apply] at hv
       subst hv
-      simp [Eval.eval, hmark, hnone ρs hs]
+      have hclassnone := hs.2.2.2.2 "Map" (by decide)
+      simp [Eval.eval, hmark, hnone ρs hs, hclassnone]
     · simp only [bind_ok, orReject_ok] at h
       obtain ⟨declared, s₁, hdeclared, found, s₂, hfound, ⟨elem, li⟩, s₃, ⟨rfl, rfl⟩, type, s₄, -, h⟩ := h
       have hnot : ∀ span, typeArgs ≠ [.keyword span "'"] := by
@@ -4492,7 +4496,8 @@ theorem translateNew_sound {tr : Option Ty → Expr → TM Code} {env : Translat
         rename_i vs
         obtain ⟨es, hes, rfl⟩ := hv
         have hiter := hit _ _ rfl ρs ρo _ ha hs hli
-        simp [Eval.eval, hmark, hnone ρs hs, hiter, hes]
+        have hclassnone := hs.2.2.2.2 "Map" (by decide)
+        simp [Eval.eval, hmark, hnone ρs hs, hclassnone, hiter, hes]
     · simp at h
   · simp only [show ("Set" == "Map") = false from rfl, ↓reduceIte, Bool.false_eq_true] at h
     rcases args with _ | ⟨arg, _ | ⟨_, _⟩⟩
@@ -4508,7 +4513,8 @@ theorem translateNew_sound {tr : Option Ty → Expr → TM Code} {env : Translat
       intro ρs ρo v _ hs hv
       simp [IR.Expr.eval, IR.Expr.evalList, IR.ExprExt.apply] at hv
       subst hv
-      simp [Eval.eval, hmark, hnone ρs hs]
+      have hclassnone := hs.2.2.2.2 "Set" (by decide)
+      simp [Eval.eval, hmark, hnone ρs hs, hclassnone]
     · simp only [bind_ok, orReject_ok] at h
       obtain ⟨declared, s₁, hdeclared, found, s₂, hfound, ⟨elem, li⟩, s₃, ⟨rfl, rfl⟩, type, s₄, -, h⟩ := h
       have hnot : ∀ span, typeArgs ≠ [.keyword span "'"] := by
@@ -4531,7 +4537,8 @@ theorem translateNew_sound {tr : Option Ty → Expr → TM Code} {env : Translat
         rename_i vs
         obtain ⟨es, hes, rfl⟩ := hv
         have hiter := hit _ _ rfl ρs ρo _ ha hs hli
-        simp [Eval.eval, hmark, hnone ρs hs, hiter, hes]
+        have hclassnone := hs.2.2.2.2 "Set" (by decide)
+        simp [Eval.eval, hmark, hnone ρs hs, hclassnone, hiter, hes]
     · simp at h
 
 theorem out_numberSameValue {a b : IR.Expr} {ρ : Eval.Env N} {v : Val N}

@@ -1166,14 +1166,18 @@ def Expr.hoist (thr : String → Bool) (cls : String → Option (Option ErrorCto
   -- comes first: `new C(message, args)`, with `hoistedMark` as the type
   -- argument. So the statement that runs the constructor needs no scope of
   -- its own. A construction with the wrong number of arguments stays as it
-  -- is, and so has no mark.
+  -- is, and so has no mark. An inherited Error constructor accepts no
+  -- arguments too, which gives it the empty message.
   | .new s c ts args =>
     match cls c with
     | some ctor =>
       let (args', h) := Expr.hoistAtoms thr cls h args
       if ts.isEmpty then
         match ctor with
-        | none => if args'.length == 1 then (.new s c [hoistedMark] args', h) else (.new s c ts args', h)
+        | none =>
+          if args'.isEmpty then (.new s c [hoistedMark] [.string s ""], h)
+          else if args'.length == 1 then (.new s c [hoistedMark] args', h)
+          else (.new s c ts args', h)
         | some (params, message, _) =>
           if params.length == args'.length then
             (.new s c [hoistedMark] (Expr.subst ((params.map (·.param.name)).zip args') message :: args'), h)
@@ -1893,7 +1897,8 @@ def eval (m : Scope) (fuel : Nat) (env : Env N) : Expr → Option (Val N)
             return .error c (("message", .str s) :: (fieldArgs ctor vs ++ errorNameFields (ctorName ctor)))
       | [] => none
     else
-      match c, typeArgs, args with
+      if (errorClassIn m c).isSome then none
+      else match c, typeArgs, args with
       -- `new Map()` (ECMA-262 §24.1.1.1): a map without entries, unless a
       -- variable hides the global `Map`.
       | "Map", _, [] => if (env.lookup "Map").isSome then none else some (.map [])
