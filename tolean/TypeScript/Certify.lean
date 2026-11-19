@@ -988,6 +988,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       throw s!"{file}: certificates for loops in functions that can throw need an exception-aware loop invariant"
     let r := r.withCodecs typeParams
     let functionGeneric := generic ++ r.codecBinders nv
+    let functionLoopLemmasStart := loopLemmas.size
     let codecLemmas := r.codecs.flatMap fun (_, c) =>
       [s!"{c}.decode_encode", s!"{c}.encode_ne_null", s!"{c}.encode_ne_undefined"]
     -- A callback gets a lemma before the loops, because a loop's body can
@@ -1773,6 +1774,11 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       "\n  all_goals repeat' first\n" ++ String.join (conditionalLemmas.map fun lemma =>
         s!"    | rw [{lemma}]\n") ++
       s!"  all_goals (try simp_all [{simpSet}])\n  all_goals first | assumption | rfl | (intros; first | rfl | simp_all)"
+    let functionLoopLemmas := loopLemmas.toList.drop functionLoopLemmasStart
+    let loopRewrites := if functionLoopLemmas.isEmpty then "" else
+      "\n  all_goals repeat' first\n" ++ String.join (functionLoopLemmas.map fun lemma =>
+        s!"    | rw [{lemma}]\n") ++
+      s!"  all_goals (try simp_all [{simpSet}])\n  all_goals first | assumption | rfl | (intros; first | rfl | simp_all [{simpSet}])"
     thms := thms.push <|
       s!"theorem {name}_link {functionGeneric} {binders} :\n" ++
       s!"    {runName} (N := {nv}) {outputFs} ⟨\"\", {str name}⟩ {list args} =\n" ++
@@ -1782,6 +1788,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         s!"\n  all_goals (try simp only [{", ".intercalate literalMaps}, ← List.map_append])\n" ++
         s!"  all_goals (try simp_all [{simpSet}, -List.map_cons, -List.map_nil, -List.map_map, ← List.map_append])") ++
       conditionRewrites ++
+      loopRewrites ++
       -- After a loop that a `return` can end, the evaluator matches on the
       -- loop's outcome, which is itself a match on the value to return. Once
       -- that match is split, the arms for a `break` or a `continue` close, and
