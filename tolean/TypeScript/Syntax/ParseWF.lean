@@ -6481,14 +6481,13 @@ theorem errorFieldParams_wf {T : Edition} {fields params : Array CtorParam}
   simp only [Parse.errorFieldParams, Array.toList_map, List.mem_map] at hmem
   obtain ⟨q, hq, rfl⟩ := hmem
   obtain ⟨hwf, hw⟩ := hp q hq
-  refine ⟨hwf, ?_⟩
   have hparam : WordsOK T q.param.words := by
     intro w h
     exact hw w (by simp [CtorParam.words, h])
-  simp only [CtorParam.words]
   split
-  · exact (WordsOK.cons (by simp [Word.ok, identWord, TokenKind.ok]; decide) WordsOK.nil).append hparam
-  · exact WordsOK.nil.append hparam
+  · exact ⟨hwf, hw⟩
+  · refine ⟨hwf, ?_⟩
+    exact WordsOK.cons (by simp [Word.ok, identWord, TokenKind.ok]; decide) hparam
  
 
 theorem parseClass_wf {T : Edition} (start : Pos) (exported : Bool) :

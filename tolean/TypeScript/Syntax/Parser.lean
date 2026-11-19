@@ -1483,10 +1483,13 @@ def errorFieldType : Option TypeExpr → Option String
     if ["number", "bigint", "boolean", "string"].contains n then some n else none
   | _ => none
 
-/-- Set only the readonly bit. The existing constructor checks still check
-the parameter's name, optional marker and type. -/
+/-- Mark declared fields readonly and retain their declaration spans for
+diagnostics. The constructor checks still check the parameter's type. -/
 def errorFieldParams (fields : Array CtorParam) (params : Array CtorParam) : Array CtorParam :=
-  params.map fun p => { p with readonly := p.readonly || fields.any (fun f => f.param.name == p.param.name) }
+  params.map fun p =>
+    match fields.find? (fun f => f.param.name == p.param.name) with
+    | none => p
+    | some f => { p with readonly := true, param := { p.param with span := f.param.span } }
 
 /-- Each separate declaration has one same-name parameter, and does not
 redeclare a parameter property. -/

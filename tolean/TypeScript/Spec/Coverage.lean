@@ -309,7 +309,7 @@ def sections : List Section := [
     ``Proof.prepareInline_ok, ``Proof.prepareInlineErrors_ok,
     ``Proof.functions_inlineStructs, ``Proof.functions_insertInlineDecls,
     ``Proof.translateCtorParam_ok, ``Proof.ctorParams_shape, ``Proof.translateErrorClass_ok,
-    ``Proof.errorClasses_ok, ``Proof.translateErrorTypes_ok,
+    ``Proof.errorClasses_ok, ``Proof.errorClasses_complete, ``Proof.translateErrorTypes_ok,
     ``Proof.mem_withExports_functions, ``Proof.mem_withExports_enums, ``Proof.listsExport_of, ``declareTopLevel_not_global, ``Proof.declareTopLevel_fresh, ``Proof.declRefs_bound,
     ``Proof.bound_unique, ``Proof.taken_of_lists, ``Proof.taken_grow, ``Proof.DeclNames.file,
     ``Proof.DeclNames.mono, ``Proof.DeclNames.bound, ``Proof.DeclNames.nodup, ``Proof.DeclNames.fresh,

@@ -811,6 +811,159 @@ test('declared error fields agree with Node after same-name assignments', async 
   }
 });
 
+test('declared error classes take precedence over built-in constructors in the interpreter', async () => {
+  const cases: Array<{ name: string; source: string; accepted: boolean; args?: Array<unknown> }> = [
+    { name: 'Set', source: `class Set extends Error {}
+      export function check(): number { throw new Set("ab"); }`,
+      accepted: false },
+    ...['Set', 'Map', 'Date'].map((name) => ({
+      name,
+      source: `class ${name} extends Error {}
+        export function check(): number { throw new ${name}(); }`,
+      accepted: false,
+    })),
+    ...['Set', 'Map', 'Date'].map((name) => ({
+      name,
+      source: `class ${name} extends Error {
+        constructor(message: string, readonly code: number) { super(message); }
+      }
+      export function check(): number { throw new ${name}("ab", 7); }`,
+      accepted: false,
+    })),
+    {
+      name: 'error class without a constructor',
+      source: `class E extends Error {}
+        export function check(n: number): number {
+          if (n < 0) { throw new E(); }
+          return n;
+        }`,
+      args: [-1],
+      accepted: true,
+    },
+    { name: 'built-in Set', source: `export function check(): number {
+      return new Set(["a", "b"]).size;
+    }`, accepted: true },
+  ];
+  const targets = [
+    { name: 'ES2015', target: ts.ScriptTarget.ES2015 },
+    { name: 'ES2022', target: ts.ScriptTarget.ES2022 },
+    { name: 'ES2024', target: ts.ScriptTarget.ES2024 },
+  ];
+  const programs = cases.flatMap(({ source, args }) => targets.map(({ name }) => ({
+    source, target: name, calls: [{ function: 'check', args: (args ?? []).map(encode) }],
+  })));
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs }),
+    encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const interpreted = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  expect(interpreted).toHaveLength(programs.length);
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-shadowed-error-class-'));
+  for (const [i, scenario] of cases.entries()) {
+    for (const [j, target] of targets.entries()) {
+      const result = interpreted[i * targets.length + j];
+      expect(result?.parsed, scenario.source).toBe(true);
+      if (result === undefined || !result.parsed) continue;
+      expect(result.accepted, scenario.source).toBe(scenario.accepted);
+      const path = join(dir, `case${i}-${target.name}.mjs`);
+      writeFileSync(path, ts.transpileModule(scenario.source, {
+        compilerOptions: { target: target.target, module: ts.ModuleKind.ESNext },
+      }).outputText);
+      const mod = await import(pathToFileURL(path).href);
+      let actual: { value: unknown } | { throws: unknown };
+      try { actual = { value: mod.check(...(scenario.args ?? [])) }; } catch (error) { actual = { throws: error }; }
+      const interpretedResult = result.results[0];
+      if ('throws' in actual) {
+        const thrown = interpretedResult !== null && interpretedResult !== undefined && 'throws' in interpretedResult
+          ? interpretedResult.throws : undefined;
+        expect(thrown !== undefined && thrown !== null && typeof thrown === 'object' && 'error' in thrown
+          ? canonical(thrown) : 'did not throw a declared error', scenario.source).toBe(shownThrow(actual.throws));
+      } else {
+        expect(interpretedResult !== null && interpretedResult !== undefined && 'value' in interpretedResult
+          ? canonical(interpretedResult.value) : 'did not return', scenario.source).toBe(canonical(encode(actual.value)));
+      }
+    }
+  }
+});
+
+test('error fields refuse unsupported names but allow plain parameters', async () => {
+  const cases: Array<{ fields: string; params: string; body: string; accepted: boolean;
+    es2015Keys?: string[]; esNextKeys?: string[]; className?: string; skipKeys?: boolean }> = [
+    { fields: 'readonly __proto__: number;', params: '__proto__: number',
+      body: 'this.__proto__ = __proto__;', accepted: false,
+      es2015Keys: [], esNextKeys: ['__proto__'] },
+    { fields: '', params: 'readonly __proto__: number',
+      body: '', accepted: false, es2015Keys: [], esNextKeys: ['__proto__'] },
+    { fields: '', params: 'readonly __proto__: number',
+      body: '', className: 'Date', accepted: false,
+      es2015Keys: [], esNextKeys: ['__proto__'] },
+    { fields: '', params: 'readonly __proto__: number',
+      body: '', className: 'Set', accepted: false,
+      es2015Keys: [], esNextKeys: ['__proto__'] },
+    { fields: '', params: 'readonly message: string',
+      body: '', accepted: false, skipKeys: true },
+    { fields: '', params: 'readonly stack: string',
+      body: '', accepted: false, skipKeys: true },
+    { fields: 'readonly code: number;', params: 'code: number',
+      body: 'this.code = code;', accepted: true,
+      es2015Keys: ['code'], esNextKeys: ['code'] },
+    { fields: '', params: 'readonly code: number',
+      body: '', accepted: true, es2015Keys: ['code'], esNextKeys: ['code'] },
+    { fields: '', params: '__proto__: number',
+      body: '', accepted: true, es2015Keys: [], esNextKeys: [] },
+  ];
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-proto-error-'));
+  for (const [i, entry] of cases.entries()) {
+    const className = entry.className ?? 'E';
+    const source = `class ${className} extends Error {
+      ${entry.fields}
+      constructor(${entry.params}) { super("bad"); ${entry.body} }
+    }
+    export function check(): number { throw new ${className}(7); }`;
+    const programs = ['ES2015', 'ES2022', 'ES2024'].map(target => ({
+      source, target, calls: [{ function: 'check', args: [] }],
+    }));
+    const run = spawnSync(tolean, ['interpret'], {
+      input: JSON.stringify({ programs }),
+      encoding: 'utf8',
+    });
+    expect(run.status, run.stderr).toBe(0);
+    const interpreted = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+    expect(interpreted).toHaveLength(programs.length);
+    for (const result of interpreted) {
+      expect(result.parsed, source).toBe(true);
+      if (!result.parsed) continue;
+      expect(result.accepted, source).toBe(entry.accepted);
+      if (!entry.accepted) expect(result.results, source).toEqual([null]);
+    }
+    const lean = interpreted[0];
+    expect(lean?.parsed, source).toBe(true);
+    if (lean === undefined || !lean.parsed) continue;
+    expect(lean.accepted, source).toBe(entry.accepted);
+    for (const target of [ts.ScriptTarget.ES2015, ts.ScriptTarget.ESNext]) {
+      const path = join(dir, `case${i}-${target}.mjs`);
+      writeFileSync(path, ts.transpileModule(source, {
+        compilerOptions: { target, module: ts.ModuleKind.ESNext },
+      }).outputText);
+      const mod = await import(pathToFileURL(path).href);
+      let thrown: unknown;
+      try { mod.check(); } catch (error) { thrown = error; }
+      expect(thrown).toBeInstanceOf(Error);
+      if (!entry.skipKeys) {
+        const keys = (target === ts.ScriptTarget.ES2015 ? entry.es2015Keys : entry.esNextKeys) ?? [];
+        expect(Object.keys(thrown as Error)).toEqual(keys);
+        expect(Object.hasOwn(thrown as Error, '__proto__')).toBe(keys.includes('__proto__'));
+      }
+      if (entry.accepted) {
+        const result = lean.results[0];
+        expect(result !== null && result !== undefined && 'throws' in result
+          ? canonical(result.throws) : 'did not throw').toBe(shownThrow(thrown));
+      }
+    }
+  }
+});
+
 test('error field normalization refuses missing, repeated and computed assignments', () => {
   const cases = [
     ['readonly line: number;', 'line: number', ''],
