@@ -1775,10 +1775,11 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         s!"    | rw [{lemma}]\n") ++
       s!"  all_goals (try simp_all [{simpSet}])\n  all_goals first | assumption | rfl | (intros; first | rfl | simp_all)"
     let functionLoopLemmas := loopLemmas.toList.drop functionLoopLemmasStart
+    let loopRewrites := String.join (functionLoopLemmas.map fun lemma =>
+      s!"\n  all_goals (try rw [{lemma}])\n  all_goals (try simp_all [{simpSet}])")
     let loopRewrites := if functionLoopLemmas.isEmpty then "" else
-      "\n  all_goals repeat' first\n" ++ String.join (functionLoopLemmas.map fun lemma =>
-        s!"    | rw [{lemma}]\n") ++
-      s!"  all_goals (try simp_all [{simpSet}])\n  all_goals first | assumption | rfl | (intros; first | rfl | (try simp_all [{simpSet}]))"
+      loopRewrites ++
+      s!"\n  all_goals first | assumption | rfl | (intros; first | rfl | (try simp_all [{simpSet}]))"
     thms := thms.push <|
       s!"theorem {name}_link {functionGeneric} {binders} :\n" ++
       s!"    {runName} (N := {nv}) {outputFs} ⟨\"\", {str name}⟩ {list args} =\n" ++
@@ -1795,8 +1796,11 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       -- the arm for the end of the loop reads the locals from its state.
       -- `link_eqs` relates the loop's result to the printed loop's, whose
       -- `match`es have other auxiliary functions.
+      -- Split again when a hypothesis still matches on that result. Its
+      -- scrutinee can agree by unfolding without matching syntactically.
       (if returnsLoop then
-        "\n  all_goals (try split at *)\n  all_goals (subst_vars; link_eqs; simp_all [List.lookup])" else "")
+        "\n  all_goals repeat' (split at * <;> (subst_vars; link_eqs; simp_all [List.lookup]))\n" ++
+        "  all_goals (subst_vars; link_eqs; simp_all [List.lookup])" else "")
     thms := thms.push <|
       s!"theorem {name}_cert {functionGeneric} {binders} :\n" ++
       s!"    {sourceCall} {list args} = {some_} ({retEnc} ({call})) :=\n" ++

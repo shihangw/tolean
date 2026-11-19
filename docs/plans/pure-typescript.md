@@ -450,12 +450,14 @@ decision record then states the choice and any limits that remain.
   non-parameter argument remain refused; see the
   [decision record](../decisions/2026-11-16-generic-codecs.md).
 
-  Function certificates still have a separate link-proof gap for some loops.
-  A loop over `bigint | undefined`, or a loop whose body captures a generic
-  nullable value, can produce a typed loop lemma but leave the function's link
-  theorem unsolved. This also happens without a match and predates the codec
-  work. These shapes remain outside this change until the link proof can use
-  the typed loop lemma for them.
+  `nestedLoops<T>` still fails when its outer loop narrows an element of
+  `ReadonlyArray<bigint | undefined>` and adds it to an accumulator, then its
+  inner loop adds bigint elements when a captured `T | null` value is null.
+  The outer loop's step proof cannot apply the inner loop lemma with its
+  invariant after the outer loop changes the accumulator.
+  Separate loops over `bigint | undefined` and loops that capture a generic
+  nullable value now certify, including when a function contains several loops
+  of these kinds or returns early from a loop.
 
 - How should a certificate cover an interface that refers to itself, and a
   function that calls itself? The decision is to keep both outside certificates
