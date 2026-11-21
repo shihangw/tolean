@@ -26,4 +26,26 @@ theorem bodyExec_fold_loopResult
   | returned value => simp [IR.Body.exec, hitems, hfold, tolean.IR.LoopResult.run]
   | completed state => simp [IR.Body.exec, hitems, hfold, tolean.IR.LoopResult.run]
 
+theorem bodyExec_fold_compose
+    (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
+    (names : List String) (element : String) (body : IR.Body)
+    (items : IR.Expr) (rest : IR.Body)
+    (info : tolean.IR.LoopInfo tolean.TypeScript.IR.TyExt) (ρ : Env N) :
+    IR.Body.exec fs fuel ρ (.fold names element body items rest info) =
+      match IR.Expr.eval fs fuel ρ items with
+      | some (.list vs) =>
+        match IR.Body.runFold fs fuel names element body ρ vs with
+        | some (.normal state) =>
+          tolean.IR.LoopResult.run (.completed state)
+            (fun value => some (Outcome.ret value))
+            (fun state => IR.Body.exec fs fuel state rest)
+        | some (.ret value) =>
+          tolean.IR.LoopResult.run (.returned value)
+            (fun value => some (Outcome.ret value))
+            (fun state => IR.Body.exec fs fuel state rest)
+        | some (.brk _) | some (.cont _) | none => none
+      | some _ | none => none := by
+  simp only [IR.Body.exec]
+  all_goals repeat' (split <;> simp_all [Option.bind, tolean.IR.LoopResult.run])
+
 end tolean.TypeScript.Proof

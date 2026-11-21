@@ -524,6 +524,31 @@ theorem runFold_forInRet_on {α σ τ R : Type} (fs : List (DeclRef × List Stri
   have := key xs (fun _ h => h) (dec ρ)
   rwa [hdec ρ hI] at this
 
+/-- A returning fold runs its rest only after completion. Keep the rest as a
+continuation of the shared loop result, so a proof can rewrite one loop before
+it opens the next one. -/
+theorem bodyExec_fold_compose
+    (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
+    (names : List String) (element : String) (body : IR.Body)
+    (items : IR.Expr) (rest : IR.Body)
+    (info : tolean.IR.LoopInfo tolean.TypeScript.IR.TyExt) (ρ : Eval.Env N) :
+    IR.Body.exec fs fuel ρ (.fold names element body items rest info) =
+      match IR.Expr.eval fs fuel ρ items with
+      | some (.list vs) =>
+        match IR.Body.runFold fs fuel names element body ρ vs with
+        | some (.normal state) =>
+          tolean.IR.LoopResult.run (.completed state)
+            (fun value => some (Eval.Outcome.ret value))
+            (fun state => IR.Body.exec fs fuel state rest)
+        | some (.ret value) =>
+          tolean.IR.LoopResult.run (.returned value)
+            (fun value => some (Eval.Outcome.ret value))
+            (fun state => IR.Body.exec fs fuel state rest)
+        | some (.brk _) | some (.cont _) | none => none
+      | some _ | none => none := by
+  simp only [IR.Body.exec]
+  all_goals repeat' (split <;> simp_all [Option.bind, tolean.IR.LoopResult.run])
+
 /-- `includes` on the encoded elements of a list, when SameValueZero of `v`
 and each element is a test `p` of the element. -/
 theorem includesVal_map {α : Type} (enc : α → Val N) (v : Val N) (p : α → Bool)
@@ -958,7 +983,8 @@ macro_rules
   | `(tactic| link_tac [$defs,*]) =>
     `(tactic| (
       simp [runIn, callIn, Except.toOption, tryCatch, tryCatchThe, MonadExceptOf.tryCatch, Except.tryCatch,
-        pure, Except.pure, bind, Except.bind, functionsOf, functions, Body.exec, Body.runFold, Expr.eval,
+        pure, Except.pure, bind, Except.bind, functionsOf, functions, bodyExec_fold_compose,
+        Body.exec, Body.runFold, Expr.eval,
         Expr.evalCall, Expr.evalList,
         Expr.evalFields, Expr.evalMap, Expr.evalMapIdx, Expr.evalFilter, Expr.evalFind, Expr.evalFindIdx, Expr.evalReduce,
         bindState, callResult, eqVal, ← List.map_reverse,
