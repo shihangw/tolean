@@ -22,7 +22,7 @@ def sumOfThree (a : Int) : Int :=
   (total (([a, (a + (1 : Int)), (2 : Int)] : List Int)))
 
 def maybe (x : Option Int) : List (Option Int) :=
-  ([x, none, (0 : Int)] : List (Option Int))
+  ([x, none, ((0 : Int) : Int)] : List (Option Int))
 
 def corners (p : Point) : List Point :=
   ([p, ({ x := p.y, y := p.x } : Point)] : List Point)

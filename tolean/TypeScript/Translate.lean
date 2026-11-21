@@ -851,7 +851,8 @@ def fixArgs (params : List Ty) (first : List Code) : List Code :=
 /-- `c` where the context expects a value of type `expected`. A value of a
 member of a union of primitive types, such as a `string` where
 `string | bigint` is expected, becomes the member's constructor. In JS the
-value stays the same. -/
+value stays the same. Before Lean widens a value to an option, its source
+type must fix overloaded operations such as negation and exponentiation. -/
 def Code.into (unions : List UnionInfo) (c : Code) (expected : Option Ty) : Code :=
   match expected with
   | some (.tagged ref tags) | some (.nullable (.tagged ref tags)) =>
@@ -861,6 +862,13 @@ def Code.into (unions : List UnionInfo) (c : Code) (expected : Option Ty) : Code
         ⟨.inject ref k c.value, false, .tagged ref tags⟩
       else c
     | none => c
+  | some (.optional _) | some (.nullable _) =>
+    if c.type != .null && some c.type != expected then
+      match c.value with
+      | .ascribe _ type =>
+        if type == c.type.lean then c else ⟨.ascribe c.value c.type.lean, false, c.type⟩
+      | _ => ⟨.ascribe c.value c.type.lean, false, c.type⟩
+    else c
   | _ => c
 
 mutual
@@ -3042,7 +3050,8 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
         | some (.literal _) => "a tag field must be its string literal itself, not the value of '?:'"
         | _ => "the branches of '?:' have different types"
       let type ← orReject ((a.type.join b.type).filter fun t => !(t matches .literal _)) s message
-      let code := IR.Expr.ite c.code a.value b.value
+      let code := IR.Expr.ite c.code (a.into env.unions (some type)).value
+        (b.into env.unions (some type)).value
       -- `null` is polymorphic, but two non-null branches need the joined type
       -- to coerce a value into `Option`.
       let needsAscription := type.isNullable && a.type != .null && b.type != .null
@@ -3053,8 +3062,10 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
       let b ← translateExpr fuel (if isEq then env.narrow name value else env) expected ifFalse
       let type ← orReject ((a.type.joinOptional b.type).filter fun t => !(t matches .literal _)) s
         "the branches of '?:' have different types"
-      return ⟨.matchNull name (if isEq then a.value else b.value)
-        (if isEq then b.value else a.value) kind, false, type⟩)
+      let av := (a.into env.unions (some type)).value
+      let bv := (b.into env.unions (some type)).value
+      return ⟨.matchNull name (if isEq then av else bv)
+        (if isEq then bv else av) kind, false, type⟩)
   | .call s callee args =>
     match reduceOf callee with
     | some recv => translateReduce fuel env expected s recv args
@@ -3218,7 +3229,9 @@ def translateCall (fuel : Nat) (env : Env) (s : Span) (callee : Expr) (args : Li
 
 /-- The arguments of a call, with the type of each argument of an optional
 parameter that names a type parameter written out: `(v : Option T)` with the
-types that the call fixes. Lean then makes a plain `v` the `some` of it, and
+types that the call fixes. A plain value first gets its source type, so Lean
+widens the result rather than choosing an operation on options.
+Lean then makes a plain `v` the `some` of it, and
 knows the type of a `none`, where it could not infer `T` from the rest of
 the call. -/
 def optArgs (sol : List (String × Ty)) : List Code → List Ty → List IR.Expr
@@ -3226,7 +3239,10 @@ def optArgs (sol : List (String × Ty)) : List Code → List Ty → List IR.Expr
     (if p matches .optional (.nullable _) then
       if c.value matches .undefined then IR.Expr.nullishUndefined
       else if c.type.isOptional then c.value else c.fieldValue (p.subst sol)
-     else if p matches .optional _ && p.isGeneric then .ascribe c.value (p.subst sol).lean else c.value) ::
+     else if p matches .optional _ && p.isGeneric then
+       .ascribe (if c.type != .null && c.type != p.subst sol then
+         .ascribe c.value c.type.lean else c.value) (p.subst sol).lean
+     else c.value) ::
       optArgs sol cs ps
   | cs, [] => cs.map (·.value)
   | [], _ :: _ => []
@@ -3692,7 +3708,7 @@ def translateUpdate (env : Env) (s : Span) (e : Expr) : TM (String × IR.Expr) :
     if op == .coalesce then
       let some { binding := .«let», type := .nullable value, .. } := env.lookup name
         | reject s "'??=' needs a local declared with let, of a type T | null"
-      let v ← translateExpr (← fuelLimit) env (some value) right
+      let v ← translateExpr (← fuelLimit) env (some (.nullable value)) right
       unless v.type.assignableTo (.nullable value) do reject s "the value does not have the local's type"
       return (name, .coalesce (.var name) v.value true)
     unless op.isSimple do refuse

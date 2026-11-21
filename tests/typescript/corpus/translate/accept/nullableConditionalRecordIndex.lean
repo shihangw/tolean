@@ -11,6 +11,6 @@ structure R where
   b : Int
 
 def f (absent : Bool) (r : R) (k : K) : Int :=
-  (Option.getD (((((if absent then none else r) : Option R)).bind (fun _record' => some ((match k with | K.«a» => _record'.a | K.«b» => _record'.b))))) ((0 : Int)))
+  (Option.getD (((((if absent then none else (r : R)) : Option R)).bind (fun _record' => some ((match k with | K.«a» => _record'.a | K.«b» => _record'.b))))) ((0 : Int)))
 
 end Test

@@ -28,6 +28,6 @@ def literal {N : Type} [JSNumber N]  : List Int :=
   (([(1 : Int), (2 : Int)] : List Int) ++ ([(3 : Int)] : List Int))
 
 def maybe {N : Type} [JSNumber N] (xs : List (Option Int)) (x : Int) : List (Option Int) :=
-  (xs ++ ([x, none] : List (Option Int)))
+  (xs ++ ([(x : Int), none] : List (Option Int)))
 
 end Test

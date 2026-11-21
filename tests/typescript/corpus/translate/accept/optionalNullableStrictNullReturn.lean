@@ -10,37 +10,37 @@ def f {N : Type} [JSNumber N] (x : JSNullish Int := JSNullish.undefined) : Optio
   match x with
   | JSNullish.undefined =>
     let x := Option.join x
-    (1 : Int)
+    ((1 : Int) : Int)
   | JSNullish.null =>
     let x {α : Type} : Option α := none
     x
   | JSNullish.value x =>
     let x := some x
-    (1 : Int)
+    ((1 : Int) : Int)
 
 def differentPayload {N : Type} [JSNumber N] (x : JSNullish Int := JSNullish.undefined) : Option JSString :=
   match x with
   | JSNullish.undefined =>
     let x := Option.join x
-    JSString.ofString "value"
+    (JSString.ofString "value" : JSString)
   | JSNullish.null =>
     let x {α : Type} : Option α := none
     x
   | JSNullish.value x =>
     let x := some x
-    JSString.ofString "value"
+    (JSString.ofString "value" : JSString)
 
 def inverted {N : Type} [JSNumber N] (x : JSNullish Int := JSNullish.undefined) : Option Int :=
   match x with
   | JSNullish.undefined =>
     let x := Option.join x
-    (1 : Int)
+    ((1 : Int) : Int)
   | JSNullish.null =>
     let x {α : Type} : Option α := none
     x
   | JSNullish.value x =>
     let x := some x
-    (1 : Int)
+    ((1 : Int) : Int)
 
 def sortedWithNull {N : Type} [JSNumber N] (value : Option Int) (xs : List N) : List N :=
   (JSNumber.sortWith (fun (a : N) (b : N) => (JSNumber.sub a b)) xs)
