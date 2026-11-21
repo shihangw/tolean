@@ -15,6 +15,9 @@ def generic {N : Type} [JSNumber N] {T : Type} (x : Option T := none) : Option T
   | some x =>
     (x : T)
 
+def nullableGeneric {N : Type} [JSNumber N] {T : Type} (x : Option T) : Option T :=
+  x
+
 def positions {N : Type} [JSNumber N] (x : Int) : Int :=
   let value := ((([x] : List Int))[0]? : Option Int)
   let value := (((x ^ (2 : Nat)) : Int) : Option Int)
@@ -25,10 +28,26 @@ def positions {N : Type} [JSNumber N] (x : Int) : Int :=
   let declared := (((x ^ (2 : Nat)) : Int) : Option Int)
   let argument := (take (N := N) (((x ^ (2 : Nat)) : Int)))
   let inferred := (generic (N := N) ((((x ^ (2 : Nat)) : Int) : Option Int)))
-  ((((Option.getD value ((0 : Int))) + (Option.getD declared ((0 : Int)))) + argument) + (Option.getD inferred ((0 : Int))))
+  let nullable := (nullableGeneric (N := N) ((x ^ (2 : Nat))))
+  (((((Option.getD value ((0 : Int))) + (Option.getD declared ((0 : Int)))) + argument) + (Option.getD inferred ((0 : Int)))) + (Option.getD nullable ((0 : Int))))
 
 def returned {N : Type} [JSNumber N] (x : Int) : Option Int :=
   ((x ^ (2 : Nat)) : Int)
+
+def optionalDeclared {N : Type} [JSNumber N] (x : Int) : Option Int :=
+  let value := (((x ^ (2 : Nat)) : Int) : Option Int)
+  value
+
+def optionalReturned {N : Type} [JSNumber N] (x : Int) : Option Int :=
+  ((-x) : Int)
+
+def conditional {N : Type} [JSNumber N] (x : Int) (flag : Bool) : Int :=
+  let value := ((if flag then ((x ^ (2 : Nat)) : Int) else none) : Option Int)
+  (Option.getD value ((0 : Int)))
+
+def narrowed {N : Type} [JSNumber N] (x : Option Int := none) : Int :=
+  let value := (match x with | none => x | some x => ((x ^ (2 : Nat)) : Int))
+  (Option.getD value ((0 : Int)))
 
 def loop {N : Type} [JSNumber N] (x : Int) : Int :=
   let value := ((([x] : List Int))[0]? : Option Int)

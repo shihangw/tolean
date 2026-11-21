@@ -8,6 +8,6 @@ structure Box (N : Type) where
   value : Int
 
 def read {N : Type} [JSNumber N] (box : (Box N)) : Int :=
-  (Option.getD (((((if (JSNumber.isNaN ((JSNumber.nan (N := N)))) then none else box) : Option (Box N))).map (·.value))) ((0 : Int)))
+  (Option.getD (((((if (JSNumber.isNaN ((JSNumber.nan (N := N)))) then none else (box : (Box N))) : Option (Box N))).map (·.value))) ((0 : Int)))
 
 end Test

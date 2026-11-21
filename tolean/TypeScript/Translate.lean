@@ -864,7 +864,10 @@ def Code.into (unions : List UnionInfo) (c : Code) (expected : Option Ty) : Code
     | none => c
   | some (.optional _) | some (.nullable _) =>
     if c.type != .null && some c.type != expected then
-      ⟨.ascribe c.value c.type.lean, false, c.type⟩
+      match c.value with
+      | .ascribe _ type =>
+        if type == c.type.lean then c else ⟨.ascribe c.value c.type.lean, false, c.type⟩
+      | _ => ⟨.ascribe c.value c.type.lean, false, c.type⟩
     else c
   | _ => c
 
