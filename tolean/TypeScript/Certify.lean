@@ -1800,8 +1800,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     let functionLoopLemmas := loopLemmas.toList.drop functionLoopLemmasStart
     let functionReturningLoopLemmas :=
       returningLoopLemmas.toList.drop functionReturningLoopLemmasStart
-    let functionPostLoopLemmas :=
-      functionLoopLemmas.filter fun lemma => !functionReturningLoopLemmas.contains lemma
+    let functionPostLoopLemmas := functionLoopLemmas
     let returningFoldSimpSet := ", ".intercalate
       ([r.cert "decls"] ++ retNames ++ resultCarrierNames ++ envLemmas ++ lemmaNames.toList ++
         codecLemmas ++ defs ++ obligations.map (·.1))
@@ -1813,7 +1812,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           "    tolean.DeclRef.beq_def, beq_iff_eq, reduceIte, decls]\n" ++
           String.join (functionReturningLoopLemmas.map fun lemma =>
             "  all_goals (try rw [tolean.TypeScript.Proof.bodyExec_fold_compose])\n" ++
-            s!"  all_goals (try simp only [tolean.TypeScript.IR.Expr.eval, List.lookup, tolean.DeclRef.beq_def, beq_iff_eq, reduceIte, bind, pure, {lemma}, {returningFoldSimpSet}])\n" ++
+            s!"  all_goals (try simp only [tolean.TypeScript.IR.Expr.eval, List.lookup, tolean.DeclRef.beq_def, beq_iff_eq, reduceIte, bind, pure, Eval.decList_list_null, Eval.decList_encList_null, Eval.decUndef_encUndef, {lemma}, {returningFoldSimpSet}])\n" ++
             s!"  all_goals (try simp_all [{lemma}, {returningFoldSimpSet}])\n")
       else ""
     let loopRewrites := String.join (functionPostLoopLemmas.map fun lemma =>
