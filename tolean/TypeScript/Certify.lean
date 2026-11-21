@@ -1776,8 +1776,12 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     let call := " ".intercalate ((r.full s!"{transNs}.{name}" ++ callN) :: params.map (·.name))
     let retNames := if returnsLoop then
       ["tolean.TypeScript.Proof.retResult", "tolean.TypeScript.Proof.retResult_pair"] else []
-    let simpSet := ", ".intercalate ([r.cert "decls"] ++ retNames ++ envLemmas ++ lemmaNames.toList ++ codecLemmas ++
-      loopLemmas.toList ++ defs ++ obligations.map (·.1))
+    let resultCarrierNames := if returnsLoop then
+      ["tolean.IR.LoopResult.runOption", "tolean.IR.LoopResult.runPair",
+        "tolean.IR.LoopResult.run", "tolean.IR.LoopResult.ofParts"] else []
+    let simpSet := ", ".intercalate
+      ([r.cert "decls"] ++ retNames ++ resultCarrierNames ++ envLemmas ++ lemmaNames.toList ++ codecLemmas ++
+        loopLemmas.toList ++ defs ++ obligations.map (·.1))
     let some_ := r.write "some" "Option.some"
     let rfl := r.full "rfl"
     let runName := r.full (if retainsError then "tolean.TypeScript.IR.callIn" else "tolean.TypeScript.IR.runIn")

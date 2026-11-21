@@ -393,9 +393,9 @@ def retOutcome {R τ : Type} (encR : R → Val N) (getRet : τ → Option R) :
 value to return, or the locals at its end. -/
 def retResult {R σ τ : Type} (encR : R → Val N) (getRet : τ → Option R) (getS : τ → σ)
     (upd : σ → Eval.Env N → Eval.Env N) (ρ : Eval.Env N) (t : τ) : Eval.Outcome N :=
-  match getRet t with
-  | some r => .ret (.ok (encR r))
-  | none => .normal (upd (getS t) ρ)
+  tolean.IR.LoopResult.run (tolean.IR.LoopResult.ofParts (getRet t) (getS t))
+    (fun r => .ret (.ok (encR r)))
+    (fun s => .normal (upd s ρ))
 
 omit [JSNumber N] in
 /-- The result of a returning loop whose state keeps its return value and
@@ -439,7 +439,8 @@ theorem runFold_forInRet {α σ τ R : Type} (fs : List (DeclRef × List String 
       some (retResult encR getRet getS upd ρ (Id.run (forIn xs (init s) (step ρ)))) := by
     intro xs
     induction xs with
-    | nil => intro s; simp [IR.Body.runFold, retResult, (hinit s).1, (hinit s).2]
+    | nil => intro s; simp [IR.Body.runFold, retResult, tolean.IR.LoopResult.run,
+      tolean.IR.LoopResult.ofParts, (hinit s).1, (hinit s).2]
     | cons x xs ih =>
       intro s
       obtain ⟨inner, hex, hb, hy⟩ := hbody ρ s x hI
@@ -450,12 +451,12 @@ theorem runFold_forInRet {α σ τ R : Type} (fs : List (DeclRef × List String 
         | some r =>
           simp only [List.map_cons, IR.Body.runFold, hex, retOutcome, hr, Option.bind_eq_bind,
             Option.bind_some, List.forIn_cons, hst]
-          simp [retResult, hr]
+          simp [retResult, tolean.IR.LoopResult.run, tolean.IR.LoopResult.ofParts, hr]
         | none =>
           simp only [ForInStep.value] at hb
           simp only [List.map_cons, IR.Body.runFold, hex, retOutcome, hr, hb hr, Option.bind_eq_bind,
             Option.bind_some, List.forIn_cons, hst]
-          simp [retResult, hr]
+          simp [retResult, tolean.IR.LoopResult.run, tolean.IR.LoopResult.ofParts, hr]
       | yield t =>
         obtain ⟨ht, hr⟩ := hy t hst
         rw [hst] at hex hb
@@ -491,7 +492,8 @@ theorem runFold_forInRet_on {α σ τ R : Type} (fs : List (DeclRef × List Stri
         some (retResult encR getRet getS upd ρ (Id.run (forIn ys (init s) (step ρ)))) := by
     intro ys
     induction ys with
-    | nil => intro _ s; simp [IR.Body.runFold, retResult, (hinit s).1, (hinit s).2]
+    | nil => intro _ s; simp [IR.Body.runFold, retResult, tolean.IR.LoopResult.run,
+      tolean.IR.LoopResult.ofParts, (hinit s).1, (hinit s).2]
     | cons x ys ih =>
       intro hmem s
       obtain ⟨inner, hex, hb, hy⟩ := hbody ρ s x hI (hmem x (by simp))
@@ -502,12 +504,12 @@ theorem runFold_forInRet_on {α σ τ R : Type} (fs : List (DeclRef × List Stri
         | some r =>
           simp only [List.map_cons, IR.Body.runFold, hex, retOutcome, hr, Option.bind_eq_bind,
             Option.bind_some, List.forIn_cons, hst]
-          simp [retResult, hr]
+          simp [retResult, tolean.IR.LoopResult.run, tolean.IR.LoopResult.ofParts, hr]
         | none =>
           simp only [ForInStep.value] at hb
           simp only [List.map_cons, IR.Body.runFold, hex, retOutcome, hr, hb hr, Option.bind_eq_bind,
             Option.bind_some, List.forIn_cons, hst]
-          simp [retResult, hr]
+          simp [retResult, tolean.IR.LoopResult.run, tolean.IR.LoopResult.ofParts, hr]
       | yield t =>
         obtain ⟨ht, hr⟩ := hy t hst
         rw [hst] at hex hb
