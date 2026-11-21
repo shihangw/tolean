@@ -1806,12 +1806,15 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       ([r.cert "decls"] ++ retNames ++ resultCarrierNames ++ envLemmas ++ lemmaNames.toList ++
         codecLemmas ++ defs ++ obligations.map (·.1))
     let returningFoldCompose := if !functionReturningLoopLemmas.isEmpty then
-        "  simp [tolean.TypeScript.IR.runIn, tolean.TypeScript.IR.callIn, Except.toOption,\n" ++
-          "    tolean.TypeScript.IR.functionsOf, tolean.TypeScript.IR.functions,\n" ++
-          "    List.lookup, tolean.DeclRef.beq_def, decls]\n" ++
+        "  simp only [tolean.TypeScript.IR.runIn, tolean.TypeScript.IR.callIn, Except.toOption,\n" ++
+          "    pure, Except.pure, bind, Except.bind, Option.bind, tolean.TypeScript.IR.functionsOf,\n" ++
+          "    tolean.TypeScript.IR.functions, List.flatMap, List.filterMap, List.map, List.lookup,\n" ++
+          "    List.flatten, List.zip, List.zipWith, List.reverse, List.reverseAux, List.length,\n" ++
+          "    tolean.DeclRef.beq_def, beq_iff_eq, reduceIte, decls]\n" ++
           String.join (functionReturningLoopLemmas.map fun lemma =>
             "  all_goals (try rw [tolean.TypeScript.Proof.bodyExec_fold_compose])\n" ++
-            s!"  all_goals (try simp only [tolean.TypeScript.IR.Expr.eval, List.lookup, tolean.DeclRef.beq_def, bind, pure, {lemma}, {returningFoldSimpSet}])\n")
+            s!"  all_goals (try simp only [tolean.TypeScript.IR.Expr.eval, List.lookup, tolean.DeclRef.beq_def, beq_iff_eq, reduceIte, bind, pure, {lemma}, {returningFoldSimpSet}])\n" ++
+            s!"  all_goals (try simp_all [{lemma}, {returningFoldSimpSet}])\n")
       else ""
     let loopRewrites := String.join (functionPostLoopLemmas.map fun lemma =>
       s!"\n  all_goals (try rw [{lemma}])\n  all_goals (try simp_all [{simpSet}])")
