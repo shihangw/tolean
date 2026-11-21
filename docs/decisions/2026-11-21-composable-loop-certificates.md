@@ -1,12 +1,27 @@
 # Loop certificates compose through one result carrier
 
-**Status:** accepted · **Date:** 2026-11-21
+**Status:** proposed; implementation tracked in #289, WIP on branch wip/289-loop-result-carrier · **Date:** 2026-11-21
 
 Loop certificates must compose by the meaning of their results, not by the
 names Lean gives generated helpers. The certifier will keep a proof lemma for
 each loop, but every early-return loop will expose its outcome through one
 shared carrier. Function and parent-loop proofs can then rewrite a loop result
 without depending on which match helper Lean generated for that loop.
+
+## Failed approaches and remaining shape-1 goals
+
+A theorem for a whole chain of loops combines different bodies and does not
+scale to loops nested under branches or callbacks. Per-loop result theorems
+cannot connect returning loops in the function-level link proof. Generalizing
+the pair-return lemma and asking `link_eqs` to use full transparency also failed
+to establish a stable rewrite boundary.
+
+The first optional-bigint shape still leaves two link goals. The first loop
+completes normally in both; the second either returns a value or also completes
+normally. The proof must connect those evaluator results through translation.
+Removing the carrier definitions leaves the outer evaluator and nested
+`Body.runFold` unreduced, while keeping only `run` and `ofParts` leaves that fold
+under the completed first-loop case.
 
 Each loop invariant describes the current evaluator environment. In
 particular, a child-loop invariant must be established after the preceding

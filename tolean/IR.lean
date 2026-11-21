@@ -260,35 +260,6 @@ structure LoopInfo (T : Type) where
   returns : Option (Ty T) := none
 deriving Repr, Inhabited
 
-/-- The shared result of a loop that can return from its function. -/
-inductive LoopResult (R σ : Type) where
-  | returned (value : R)
-  | completed (state : σ)
-
-namespace LoopResult
-
-/-- Turn a return slot and the final loop state into the shared carrier. -/
-def ofParts {R σ : Type} (returned : Option R) (state : σ) : LoopResult R σ :=
-  match returned with
-  | some value => .returned value
-  | none => .completed state
-
-/-- Run the continuation selected by a loop result. -/
-def run {R σ α : Type} (result : LoopResult R σ) (onReturn : R → α) (onComplete : σ → α) : α :=
-  match result with
-  | .returned value => onReturn value
-  | .completed state => onComplete state
-
-/-- Select the return or continuation arm of a loop with no changed locals. -/
-def runOption {R α : Type} (result : Option R) (onReturn : R → α) (onComplete : Unit → α) : α :=
-  run (ofParts result ()) onReturn onComplete
-
-/-- Select the return or continuation arm of a loop with changed locals. -/
-def runPair {R σ α : Type} (result : Option R × σ) (onReturn : R → α) (onComplete : σ → α) : α :=
-  run (ofParts result.1 result.2) onReturn onComplete
-
-end LoopResult
-
 /-- The body of a function: `let`s that end in a value. -/
 inductive Body (T E : Type) where
   /-- Run `handler` when `attempt` throws, without binding the thrown value.
@@ -364,18 +335,6 @@ inductive Body (T E : Type) where
   for it, because each call names the lifted function. -/
   | letLifted (name : String) (e : Expr T E) (rest : Body T E)
 deriving Repr, Inhabited
-
-/-- Whether a body contains a loop whose body can return from its function. -/
-def Body.hasReturningLoop : Body T E → Bool
-  | .handle a b => a.hasReturningLoop || b.hasReturningLoop
-  | .value _ | .state _ | .yield .. | .done .. | .exit .. | .throw _ => false
-  | .let _ _ rest | .letArray _ _ _ rest | .letTuple _ _ rest |
-      .bind _ _ _ rest | .letBorrow _ _ _ _ rest | .letLifted _ _ rest => rest.hasReturningLoop
-  | .ite _ a b | .matchNull _ _ a b | .matchTag _ _ _ _ _ a b |
-      .letState _ a b => a.hasReturningLoop || b.hasReturningLoop
-  | .fold _ _ body _ rest info =>
-      info.returns.isSome || body.hasReturningLoop || rest.hasReturningLoop
-  | .letCall _ _ _ _ _ _ _ body _ rest => body.hasReturningLoop || rest.hasReturningLoop
 
 /-- The state that a straight-line body returns. Borrow calls check this
 before copying out a parameter, rather than accepting any normal completion. -/
@@ -1553,18 +1512,11 @@ def Body.lines (names : Names) (monadic : Bool := false) : Body T E → List Str
           [s!"    {tuple ns} {items.print names}) >>= fun {tuple ns} =>"] ++ rest.lines names monadic
     else if info.returns.isSome then
       let none_ := leanName names "none"
-      let run := s!"{leanName names "Id.run"} ({leanName names "forIn"} {items.print names} {stepTuple (some none_) ns}"
-      let step :=
-        [s!"    (fun {foldBinders names ns element info} =>"] ++
-          indentBy "      " (bodyLines.dropLast ++ [lastLine ++ "))"])
-      if ns.isEmpty then
-        [s!"_root_.tolean.IR.LoopResult.runOption ({run}\n{String.intercalate "\n" step})",
-          "    (fun r => r)", "    (fun _ =>"] ++
-          indent (rest.lines names monadic) ++ [")"]
-      else
-        [s!"_root_.tolean.IR.LoopResult.runPair ({run}\n{String.intercalate "\n" step})",
-          "    (fun r => r)", s!"    (fun {tuple ns} =>"] ++
-          indent (rest.lines names monadic) ++ [")"]
+      [s!"match {leanName names "Id.run"} ({leanName names "forIn"} {items.print names} {stepTuple (some none_) ns}",
+        s!"    (fun {foldBinders names ns element info} =>"] ++
+        indentBy "      " (bodyLines.dropLast ++ [lastLine ++ ")) with"]) ++
+        [s!"| {stepTuple (some s!"{leanName names "some"} r") (if ns.isEmpty then [] else ["_"])} => r",
+          s!"| {stepTuple (some none_) ns} =>"] ++ indent (rest.lines names monadic)
     else if info.breaks then
       [s!"let {tuple ns} :=",
         s!"  {leanName names "Id.run"} ({leanName names "forIn"} {items.print names} {tuple ns}",
