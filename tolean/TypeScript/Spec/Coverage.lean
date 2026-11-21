@@ -266,7 +266,7 @@ def sections : List Section := [
     "The for-in, for-of, and for-await-of Statements",
     [``Proof.loop_sim, ``Proof.runFold_foldl, ``Proof.runFold_foldl_on, ``Proof.runFold_forIn,
       ``Proof.runFold_forIn_on, ``Proof.runFold_forInRet, ``Proof.runFold_forInRet_on,
-      ``Proof.retResult_pair, ``Proof.fst_eq_of_eq, ``Proof.translateLoop_sound,
+      ``Proof.retResult_pair, ``Proof.bodyExec_fold_compose, ``Proof.fst_eq_of_eq, ``Proof.translateLoop_sound,
     ``Proof.loopItems_ok, ``Proof.loopPattern_sim, ``Proof.translateForOfPattern_sound, ``Proof.patternStep_exec,
     ``Proof.Agree.shadow, ``Proof.lookup_append_or, ``Proof.patternReads_names, ``Proof.tuplePlaces_names,
     ``Proof.listPlaces_names, ``Proof.loopOver_vals, ``Proof.patternReads_vals, ``Proof.destructureBody_exec,

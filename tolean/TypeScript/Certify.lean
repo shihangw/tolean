@@ -748,6 +748,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
   let mut encs : Array String := #[]
   let mut lemmaNames : Array String :=
     #["encList", "decInt", "decBool", "decStr", "decNum"].map r.eval
+  let mut returningLoopLemmas : Array String := #[]
   -- The codecs of the declarations, in their order: a type names only the
   -- types before it, so each codec comes after the codecs it uses.
   for d in decls do
@@ -989,6 +990,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     let r := r.withCodecs typeParams
     let functionGeneric := generic ++ r.codecBinders nv
     let functionLoopLemmasStart := loopLemmas.size
+    let functionReturningLoopLemmasStart := returningLoopLemmas.size
     let codecLemmas := r.codecs.flatMap fun (_, c) =>
       [s!"{c}.decode_encode", s!"{c}.encode_ne_null", s!"{c}.encode_ne_undefined"]
     -- A callback gets a lemma before the loops, because a loop's body can
@@ -1594,6 +1596,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         else if info.breaks then ["tolean.TypeScript.Proof.stepOutcome", "ForInStep.value"] else []
       if info.returns.isSome then
         returnsLoop := true
+        returningLoopLemmas := returningLoopLemmas.push (r.cert lemmaName)
       let depth := if closures.isEmpty then callDepth m bodyStmt else callDepth m syntaxBody + closures.length
       let fuel := if depth == 0 then "fuel" else s!"(fuel + {depth})"
       -- A body with calls looks the functions up in the output, so the lemma
@@ -1795,7 +1798,22 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         s!"    | rw [{lemma}]\n") ++
       s!"  all_goals (try simp_all [{simpSet}])\n  all_goals first | assumption | rfl | (intros; first | rfl | simp_all)"
     let functionLoopLemmas := loopLemmas.toList.drop functionLoopLemmasStart
-    let loopRewrites := String.join (functionLoopLemmas.map fun lemma =>
+    let functionReturningLoopLemmas :=
+      returningLoopLemmas.toList.drop functionReturningLoopLemmasStart
+    let functionPostLoopLemmas :=
+      functionLoopLemmas.filter fun lemma => !functionReturningLoopLemmas.contains lemma
+    let returningFoldSimpSet := ", ".intercalate
+      ([r.cert "decls"] ++ retNames ++ resultCarrierNames ++ envLemmas ++ lemmaNames.toList ++
+        codecLemmas ++ defs ++ obligations.map (·.1))
+    let returningFoldCompose := if !functionReturningLoopLemmas.isEmpty then
+        "  simp [tolean.TypeScript.IR.runIn, tolean.TypeScript.IR.callIn, Except.toOption,\n" ++
+          "    tolean.TypeScript.IR.functionsOf, tolean.TypeScript.IR.functions,\n" ++
+          "    List.lookup, tolean.DeclRef.beq_def, decls]\n" ++
+          String.join (functionReturningLoopLemmas.map fun lemma =>
+            "  all_goals (try rw [tolean.TypeScript.Proof.bodyExec_fold_compose])\n" ++
+            s!"  all_goals (try simp only [tolean.TypeScript.IR.Expr.eval, List.lookup, tolean.DeclRef.beq_def, bind, pure, {lemma}, {returningFoldSimpSet}])\n")
+      else ""
+    let loopRewrites := String.join (functionPostLoopLemmas.map fun lemma =>
       s!"\n  all_goals (try rw [{lemma}])\n  all_goals (try simp_all [{simpSet}])")
     let loopRewrites := if functionLoopLemmas.isEmpty then "" else
       loopRewrites ++
@@ -1804,6 +1822,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       s!"theorem {name}_link {functionGeneric} {binders} :\n" ++
       s!"    {runName} (N := {nv}) {outputFs} ⟨\"\", {str name}⟩ {list args} =\n" ++
       s!"      {some_} ({retEnc} ({call})) := by\n" ++
+      returningFoldCompose ++
       s!"  {casesOn decls outParams}link_tac [{simpSet}]" ++
       (if literalMaps.isEmpty then "" else
         s!"\n  all_goals (try simp only [{", ".intercalate literalMaps}, ← List.map_append])\n" ++
