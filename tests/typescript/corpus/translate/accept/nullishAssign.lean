@@ -3,7 +3,7 @@ namespace Test
 
 def orDefault (x : Option Int) (d : Int) : Option Int :=
   let y := x
-  let y := (Option.or y d)
+  let y := (Option.or y ((d : Int)))
   y
 
 def firstSet (a : Option Int) (b : Option Int) : Option Int :=
@@ -18,7 +18,7 @@ def total (xs : List (Option Int)) (d : Int) : Int :=
     List.foldl
       (fun (sum : Int) (x : Option Int) =>
         let v := x
-        let v := (Option.or v d)
+        let v := (Option.or v ((d : Int)))
         let sum := sum + (Option.getD v ((0 : Int)))
         sum)
       sum xs

@@ -36,6 +36,6 @@ def cleared  : JSNullish :=
   ({ limit := (match (none : Option Int) with | none => _root_.tolean.TypeScript.JSNullish.null | some v => _root_.tolean.TypeScript.JSNullish.value v) } : JSNullish)
 
 def set  : JSNullish :=
-  ({ limit := (match ((5 : Int) : Option Int) with | none => _root_.tolean.TypeScript.JSNullish.null | some v => _root_.tolean.TypeScript.JSNullish.value v) } : JSNullish)
+  ({ limit := (match (((5 : Int) : Int) : Option Int) with | none => _root_.tolean.TypeScript.JSNullish.null | some v => _root_.tolean.TypeScript.JSNullish.value v) } : JSNullish)
 
 end Test

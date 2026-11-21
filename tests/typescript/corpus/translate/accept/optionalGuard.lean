@@ -23,6 +23,6 @@ def negatedChoice (x : Option Int := none) : Int :=
   (match x with | none => (0 : Int) | some x => (x + (1 : Int)))
 
 def optionalChoice (x : Option Int := none) : Option Int :=
-  (match x with | none => none | some x => (x + (1 : Int)))
+  (match x with | none => none | some x => ((x + (1 : Int)) : Int))
 
 end Test

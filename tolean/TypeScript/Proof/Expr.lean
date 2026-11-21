@@ -1438,7 +1438,8 @@ theorem tagTestOf_eval {env : Translate.Env} {e : Expr} {t : TagTest}
   | _ => simp at h
 
 /-- A value that becomes a member of a union of primitive types keeps its
-value: the evaluator gives a member's constructor the value inside. -/
+value: the evaluator gives a member's constructor the value inside.
+Source type annotations before option widening also preserve the value. -/
 theorem eval_into (unions : List UnionInfo) (c : Code) (expected : Option Ty) (ρ : Eval.Env N) :
     IR.Expr.eval fs fuel ρ (c.into unions expected).code = IR.Expr.eval fs fuel ρ c.code := by
   unfold Code.into
@@ -3689,7 +3690,9 @@ theorem evalList_optArgs (sol : List (String × Ty)) (ρ : Eval.Env N) :
             if c.value matches .undefined then IR.Expr.nullishUndefined
             else if c.type.isOptional then c.value else c.fieldValue (p.subst sol)
           else if p matches .optional _ && p.isGeneric then
-            .ascribe c.value (p.subst sol).lean else c.value) =
+            .ascribe (if c.type != .null && c.type != p.subst sol then
+              .ascribe c.value c.type.lean else c.value) (p.subst sol).lean
+          else c.value) =
           IR.Expr.eval fs fuel ρ c.value := by
       by_cases hp : (p matches .optional (.nullable _)) = true
       · simp only [hp, ↓reduceIte]
@@ -3706,7 +3709,8 @@ theorem evalList_optArgs (sol : List (String × Ty)) (ρ : Eval.Env N) :
           · simp only [ho, Bool.false_eq_true, ↓reduceIte]
             exact fieldValue_eval fs fuel c _ ρ
       · simp only [hp, Bool.false_eq_true, ↓reduceIte]
-        cases p <;> simp_all <;> split <;> simp [IR.Expr.eval]
+        cases p <;> simp_all <;> split <;>
+          simp only [IR.Expr.eval] <;> split <;> simp only [IR.Expr.eval]
     simp only [optArgs, List.map_cons, IR.Expr.evalList, evalList_optArgs sol ρ cs ps]
     exact congrArg
       (fun x : Option (Val N) =>
@@ -5628,15 +5632,17 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
             obtain ⟨ty, ⟨-, -⟩, hcode⟩ := h
             intro ρs ρo v ha hs hv'
             rw [← hcode] at hv'
-            have hv' : IR.Expr.eval fs fuel ρo (.ite tc.code ta.value tb.value) = some v := by
+            have hv' : IR.Expr.eval fs fuel ρo
+                (.ite tc.code (ta.into env.unions (some ty)).value
+                  (tb.into env.unions (some ty)).value) = some v := by
               split at hv' <;> simpa only [IR.Expr.eval] using hv'
             obtain ⟨t, ht, hbr⟩ := out_ite fs fuel hv'
             have htest := ihE _ _ _ _ _ _ htc ρs ρo _ ha hs ht
             simp only [Eval.eval, htest, Option.bind_eq_bind, Option.bind_some, Val.truthy]
             cases t
-            · simp only [eval_value] at hbr ⊢
+            · simp only [eval_value, eval_into] at hbr ⊢
               exact ihE _ _ _ _ _ _ htb ρs ρo _ ha hs hbr
-            · simp only [if_true, eval_value] at hbr ⊢
+            · simp only [if_true, eval_value, eval_into] at hbr ⊢
               exact ihE _ _ _ _ _ _ hta ρs ρo _ ha hs hbr
           · simp at h
         · cases hn : optionTestOf env test with
@@ -5665,7 +5671,7 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
             have rb := fun u hu => ihE _ _ _ _ _ _ htb ρs ρo u ha hsb hu
             rw [Eval.eval, ht]
             cases isEq <;> cases kind <;> cases w <;>
-            simp [IR.Expr.eval, hso, nullTestVal, Val.truthy, eval_value] at hv ⊢
+            simp [IR.Expr.eval, hso, nullTestVal, Val.truthy, eval_value, eval_into] at hv ⊢
             all_goals first | exact ra v hv | exact rb v hv
       | new sp callee typeArgs args =>
         simp only [translateExprCore] at h
