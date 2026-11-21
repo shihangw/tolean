@@ -35,3 +35,113 @@ over optional and nullable bigints, nested accumulator updates, the existing
 28-cell loop matrix, and two additional unreported shapes. Loop returns from
 inside nested loops remain follow-up work for #289 unless the shared result
 interface supports them without a shape-specific proof.
+
+## Implementation checkpoint
+
+The first optional-bigint shape remains blocked. The generated translation
+compiles in the `Corpus.TwoReturning` namespace, but Lean rejects its
+certificate in `twoReturning_link`. With all four carrier definitions in the
+certificate simp set, Lean reports these exact residual goals:
+
+```lean
+case h_1
+N : Type
+inst✝ : JSNumber N
+xs ys : List (Option Int)
+result✝¹ : tolean.IR.LoopResult Bool Unit
+state✝ : Unit
+result✝ : tolean.IR.LoopResult Bool Unit
+returned✝¹ : Option Bool
+heq✝¹ :
+  (forIn xs none fun x x_1 =>
+        match x with
+        | none => ForInStep.done (some true)
+        | some x => ForInStep.yield none).run =
+    none
+returned✝ : Option Bool
+value✝ : Bool
+heq✝ :
+  (forIn ys none fun x x_1 =>
+        match x with
+        | none => ForInStep.done (some true)
+        | some x => ForInStep.yield none).run =
+    some value✝
+⊢ ((match
+          match
+            match
+              (forIn ys none fun y x =>
+                  match y with
+                  | none => ForInStep.done (some true)
+                  | some y => ForInStep.yield none).run with
+            | some value => tolean.IR.LoopResult.returned value
+            | none => tolean.IR.LoopResult.completed () with
+          | tolean.IR.LoopResult.returned value => Outcome.ret (Except.ok (Val.bool value))
+          | tolean.IR.LoopResult.completed state =>
+            Outcome.normal
+              [("ys", Val.list (List.map (encUndef Val.int) ys)),
+                ("xs", Val.list (List.map (encUndef Val.int) xs))] with
+        | Outcome.normal ρ' => some (Outcome.ret (Except.ok (Val.bool false)))
+        | Outcome.ret v => some (Outcome.ret v)
+        | Outcome.brk env => none
+        | Outcome.cont env => none).bind
+      fun __do_lift =>
+      match __do_lift with
+      | Outcome.ret r => some r
+      | Outcome.normal env => none
+      | Outcome.brk env => none
+      | Outcome.cont env => none) =
+    some (Except.ok (Val.bool value✝))
+
+case h_2
+N : Type
+inst✝ : JSNumber N
+xs ys : List (Option Int)
+result✝¹ : tolean.IR.LoopResult Bool Unit
+state✝¹ : Unit
+result✝ : tolean.IR.LoopResult Bool Unit
+state✝ : Unit
+returned✝¹ : Option Bool
+heq✝¹ :
+  (forIn xs none fun x x_1 =>
+        match x with
+        | none => ForInStep.done (some true)
+        | some x => ForInStep.yield none).run =
+    none
+returned✝ : Option Bool
+heq✝ :
+  (forIn ys none fun x x_1 =>
+        match x with
+        | none => ForInStep.done (some true)
+        | some x => ForInStep.yield none).run =
+    none
+⊢ ((match
+          match
+            match
+              (forIn ys none fun y x =>
+                  match y with
+                  | none => ForInStep.done (some true)
+                  | some y => ForInStep.yield none).run with
+            | some value => tolean.IR.LoopResult.returned value
+            | none => tolean.IR.LoopResult.completed () with
+          | tolean.IR.LoopResult.returned value => Outcome.ret (Except.ok (Val.bool value))
+          | tolean.IR.LoopResult.completed state =>
+            Outcome.normal
+              [("ys", Val.list (List.map (encUndef Val.int) ys)),
+                ("xs", Val.list (encUndef Val.int) xs)] with
+        | Outcome.normal ρ' => some (Outcome.ret (Except.ok (Val.bool false)))
+        | Outcome.ret v => some (Outcome.ret v)
+        | Outcome.brk env => none
+        | Outcome.cont env => none).bind
+      fun __do_lift =>
+      match __do_lift with
+      | Outcome.ret r => some r
+      | Outcome.normal env => none
+      | Outcome.brk env => none
+      | Outcome.cont env => none) =
+    some (Except.ok (Val.bool false))
+```
+
+Removing all carrier definitions leaves the outer evaluator and its nested
+`Body.runFold` unreduced. Keeping only `run` and `ofParts` leaves that same
+nested fold under the completed first-loop case. These three simp-set choices
+do not prove the first shape, so the carrier rewrite boundary still needs work.
