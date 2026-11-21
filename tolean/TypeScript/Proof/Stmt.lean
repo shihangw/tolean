@@ -2386,7 +2386,9 @@ theorem throw_sim {env : Translate.Env} {s sn : Span} {msg : Expr} {code : IR.Ex
     obtain ⟨t, ho, hm⟩ := hout _ hv
     cases ho
     rw [exec_single]
-    simp [Eval.execStmt, Eval.eval, hs.none herr, hsim ρs ρo _ ha hs hm]
+    have hclassnone := hs.2.2.2.2 "Error" (by decide)
+    simp [Eval.execStmt, Eval.eval, Eval.hasHoistedMark, hclassnone, hs.none herr,
+      hsim ρs ρo _ ha hs hm]
   · intro brk ρo' hv
     obtain ⟨t, ho, -⟩ := hout _ hv
     cases brk <;> simp [endOf] at ho
@@ -2498,7 +2500,7 @@ theorem throwClass_sim {env : Translate.Env} {s sn tsp : Span} {c : String} {msg
     StmtSim (N := N) m fs fuel env tail [.throwStmt s (.new sn c [.keyword tsp "'"] (msg :: atoms))]
       (.throw (.ext (.errorCase thrown c info.errorMarks) (info.errorArgs code codes))) := by
   intro ρs ρo ha hs
-  obtain ⟨ctor, hctor, ⟨hps, hRuntimeName⟩, hglob⟩ := hs.2.2.2 info hinfo
+  obtain ⟨ctor, hctor, hps, hRuntimeName, hglob, hsafe⟩ := hs.2.2.2.1 info hinfo
   rw [hname] at hctor hglob
   have hE : c ≠ "Error" := by rintro rfl; simp [isGlobalName] at hglob
   have hM : c ≠ "Map" := by rintro rfl; simp [isGlobalName] at hglob
@@ -2553,7 +2555,8 @@ theorem throwClass_sim {env : Translate.Env} {s sn tsp : Span} {c : String} {msg
     rw [exec_single]
     simp only [Eval.execStmt]
     rw [Eval.eval]
-    · simp [hctor, hs.none hc, hsim ρs ρo _ ha hs hm, hsims ρs ρo vs ha hs hvs, hnum, hl, hlen]
+    · simp [Eval.hasHoistedMark, hctor, hsafe, hs.none hc, hsim ρs ρo _ ha hs hm,
+        hsims ρs ρo vs ha hs hvs, hnum, hl, hlen]
     all_goals (intros; simp_all)
   · intro brk ρo' hv
     obtain ⟨t, vs, ho, -, -⟩ := hout _ hv
@@ -3991,16 +3994,17 @@ theorem funDecl_sim {env env' : Translate.Env} {s : Span} {name : String} {tps :
     · rfl
     · exact ha x
   have hs' : Scoped m env' ((name, w) :: ρs) := by
-    refine ⟨fun x => ?_, ?_, ?_, ?_⟩
+    refine ⟨fun x => ?_, ?_⟩
     · rw [hhas, ← hs.1 x]
       simp only [List.lookup]
       by_cases hx : x = name
       · subst hx; simp
       · have h1 : (x == name) = false := by simpa using hx
         simp [h1]
-    · intro f hf; rw [hfun] at hf; exact hs.2.1 f hf
-    · intro e he; rw [henum] at he; exact hs.2.2.1 e he
-    · intro c hc; rw [hcls] at hc; exact hs.2.2.2 c hc
+    · exact ⟨(fun f hf => by rw [hfun] at hf; exact hs.2.1 f hf),
+        (fun e he => by rw [henum] at he; exact hs.2.2.1 e he),
+        (fun c hc => by rw [hcls] at hc; exact hs.2.2.2.1 c hc),
+        hs.2.2.2.2⟩
   have hexec : ∀ o, IR.Body.exec fs fuel ρo (.letLifted name (IR.Expr.closure (params.map (·.name)) body) rb) =
       some o → IR.Body.exec fs fuel ((name, w) :: ρo) rb = some o := by
     intro o ho
