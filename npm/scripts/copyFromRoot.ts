@@ -8,9 +8,9 @@
  *   name = "tolean"
  *   path = "../node_modules/tolean/lean"
  *
- * The runtime is the language specs and `#audit_claims`: what generated code
- * and proofs import. The parsers and translators stay out; they run as the
- * native `tolean` command.
+ * The runtime is the language specs, the shared runtime helpers and
+ * `#audit_claims`: what generated code and proofs import. The parsers and
+ * translators stay out; they run as the native `tolean` command.
  */
 import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -38,6 +38,7 @@ mkdirSync(`${out}tolean/TypeScript`, { recursive: true });
 cpSync(`${root}lean-toolchain`, `${out}lean-toolchain`);
 cpSync(`${root}lake-manifest.json`, `${out}lake-manifest.json`);
 cpSync(`${root}tolean/Audit.lean`, `${out}tolean/Audit.lean`);
+cpSync(`${root}tolean/Runtime`, `${out}tolean/Runtime`, { recursive: true });
 cpSync(`${root}tolean/TypeScript/Spec`, `${out}tolean/TypeScript/Spec`, { recursive: true });
 mkdirSync(`${out}tolean/Go/Spec`, { recursive: true });
 cpSync(`${root}tolean/Go/Spec`, `${out}tolean/Go/Spec`, { recursive: true });
@@ -50,7 +51,7 @@ writeFileSync(
     '',
     '[[lean_lib]]',
     'name = "tolean"',
-    'globs = ["tolean.Audit", "tolean.TypeScript.Spec.+", "tolean.Go.Spec.+"]',
+    'globs = ["tolean.Audit", "tolean.Runtime.+", "tolean.TypeScript.Spec.+", "tolean.Go.Spec.+"]',
     '',
   ].join('\n'),
 );

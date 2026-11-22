@@ -39,6 +39,8 @@ time, and the browser keeps it after that.
 That Lean cannot load Tolean's `.olean` files, because they must come from
 the same Lean commit. So the page joins the files of a workspace into one
 Lean file that imports only `Init`, with `bundle()` in `site/src/lean.ts`.
+The bundle includes `tolean/Runtime/LoopResult.lean` before the Go spec and
+workspace files, so returning folds can use the shared carrier.
 To see that file for an example, run:
 
 ```sh
