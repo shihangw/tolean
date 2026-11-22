@@ -1796,6 +1796,24 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       s!"  all_goals (try simp_all [{simpSet}])\n  all_goals first | assumption | rfl | (intros; first | rfl | simp_all)"
     let functionLoopLemmas := loopLemmas.toList.drop functionLoopLemmasStart
     let functionPostLoopLemmas := functionLoopLemmas
+    let stagedSimpSet := ", ".intercalate
+      ([r.cert "decls", "tolean.TypeScript.Proof.retResult",
+        "tolean.IR.LoopResult.runOption", "tolean.IR.LoopResult.runPair"] ++
+        envLemmas ++ lemmaNames.toList ++ codecLemmas ++ defs ++ obligations.map (·.1))
+    let topLoops := (loopsOf outBody).zipIdx.filterMap fun ((_, _, _, info, _), i) =>
+      if (parentLoopOf info.span).isNone then
+        some ("(" ++ " ".intercalate (r.cert s!"{name}_loop{i + 1}" :: r.codecs.map (·.2)) ++ ")")
+      else none
+    let stagedLoops := if !returnsLoop then "" else
+      s!"  {casesOn decls outParams}loop_prepare [{stagedSimpSet}]\n" ++
+      String.join (topLoops.map fun lemma =>
+        "  all_goals (try (\n" ++
+        s!"    loop_prepare [{stagedSimpSet}]\n" ++
+        "    rw [tolean.TypeScript.Proof.bodyExec_fold_compose]\n" ++
+        s!"    loop_prepare [{stagedSimpSet}]\n" ++
+        s!"    rw [{lemma}]\n" ++
+        s!"    all_goals loop_prepare [{stagedSimpSet}]\n" ++
+        "    all_goals (try split_loop_result)))\n")
     let loopRewrites := String.join (functionPostLoopLemmas.map fun lemma =>
       s!"\n  all_goals (try rw [{lemma}])\n  all_goals (try simp_all [{simpSet}])")
     let loopRewrites := if functionLoopLemmas.isEmpty then "" else
@@ -1805,7 +1823,8 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       s!"theorem {name}_link {functionGeneric} {binders} :\n" ++
       s!"    {runName} (N := {nv}) {outputFs} ⟨\"\", {str name}⟩ {list args} =\n" ++
       s!"      {some_} ({retEnc} ({call})) := by\n" ++
-      s!"  {casesOn decls outParams}link_tac [{simpSet}]" ++
+      stagedLoops ++
+      s!"  all_goals {casesOn decls outParams}link_tac [{simpSet}]" ++
       (if literalMaps.isEmpty then "" else
         s!"\n  all_goals (try simp only [{", ".intercalate literalMaps}, ← List.map_append])\n" ++
         s!"  all_goals (try simp_all [{simpSet}, -List.map_cons, -List.map_nil, -List.map_map, ← List.map_append])") ++

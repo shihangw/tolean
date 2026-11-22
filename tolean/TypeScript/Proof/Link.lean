@@ -942,6 +942,39 @@ macro_rules
 
 namespace tolean.TypeScript.IR
 
+/-- Evaluate straight-line statements without opening a fold. The last
+equation of `Body.exec` handles folds and deliberately stays opaque. -/
+syntax "loop_prepare" "[" Lean.Parser.Tactic.simpLemma,* "]" : tactic
+macro_rules
+  | `(tactic| loop_prepare [$defs,*]) =>
+    `(tactic| (try simp [
+      runIn, callIn, Except.toOption, functionsOf, functions,
+      Body.exec.eq_1, Body.exec.eq_2, Body.exec.eq_3, Body.exec.eq_4,
+      Body.exec.eq_5, Body.exec.eq_6, Body.exec.eq_7, Body.exec.eq_8,
+      Body.exec.eq_9, Body.exec.eq_10, Body.exec.eq_11, Body.exec.eq_12,
+      Body.exec.eq_13, Body.exec.eq_14, Body.exec.eq_15, Body.exec.eq_16,
+      Body.exec.eq_17, Body.exec.eq_18, Body.exec.eq_19, Body.exec.eq_20,
+      Body.exec.eq_21, Body.exec.eq_22,
+      Expr.eval, Expr.evalList, bindState, eqVal, tolean.IR.IntOp.apply,
+      List.lookup, DeclRef.beq_def, Eval.Env.set,
+      Eval.decList_list_null, Eval.decList_encList_null, Eval.decUndef_encUndef,
+      -List.map_map, $defs,*]))
+
+open Lean Elab Tactic Meta in
+/-- Split the current loop result on both sides of a link goal. The two
+steps can use distinct match helpers, so rewrite with definitional equality
+before inspecting the result. -/
+elab "split_loop_result" : tactic => withMainContext do
+  let target ← instantiateMVars (← getMainTarget)
+  let some e := target.find? fun e =>
+      e.isAppOf ``tolean.IR.LoopResult.ofParts && !e.hasLooseBVars
+    | throwError "split_loop_result: no loop result in the goal"
+  let stx ← Term.exprToSyntax e
+  evalTactic (← `(tactic| (
+    generalize loop_result_eq : $stx = loop_result
+    try erw [loop_result_eq]
+    cases loop_result <;> simp only [tolean.IR.LoopResult.run, Except.toOption])))
+
 open Lean Elab Tactic Meta in
 /-- Split on the value of a `List.find? p xs` in the goal, the value of a
 call of `find`. The evaluator reads that value only through a `match`, which
