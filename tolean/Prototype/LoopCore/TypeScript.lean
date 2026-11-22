@@ -1,5 +1,6 @@
 import tolean.Prototype.LoopCore.Core
 import tolean.TypeScript.IR.Eval
+import tolean.TypeScript.Proof.LoopHead
 
 namespace tolean.Prototype.LoopCore.TypeScript
 
@@ -52,5 +53,17 @@ theorem runFold_eq (fs : List (DeclRef × List String × tolean.TypeScript.IR.Bo
       all_goals
         cases tolean.TypeScript.IR.bindState names _ env <;> simp
       all_goals first | exact ih _ | rfl
+
+theorem execCounted_eq (m : Eval.Scope) (fuel : Nat) (body : Syntax.Stmt)
+    (name : String) (bound : N) (start : Int) (left : Nat)
+    (env : Eval.Env N) (values : List N)
+    (head : JSNumber.countFrom bound [] start left = some values) :
+    (Eval.execCounted m fuel env name body bound start left).map outcome =
+      execLoop (fun inner => (Eval.execStmt m fuel inner body).map outcome)
+        (fun x outer => some ((name, x) :: outer))
+        (fun outer inner => some (inner.drop (inner.length - outer.length)))
+        env (values.map Eval.Val.num) := by
+  rw [tolean.TypeScript.Proof.execCounted_eq m fuel env values head]
+  exact execLoop_eq m fuel body (fun v => some [(name, v)]) env _
 
 end tolean.Prototype.LoopCore.TypeScript

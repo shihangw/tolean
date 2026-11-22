@@ -41,6 +41,10 @@ def translateLoop (h : Head) (body : C.Stmt) (rest : C.Body) : C.Body :=
   lowerLoop ((C.writes body).map (fun n => (n, .int))) h.binder .int
     (C.translate (C.writes body) body) h.items rest true (some .int)
 
+def translateChecked (h : Head) (body : C.Stmt) (rest : C.Body) : Except String C.Body :=
+  if h.accepts body then .ok (translateLoop h body rest)
+  else .error "range loop changes its vector or binder, or the counted head is unsafe"
+
 theorem loop_sound (h : Head) (body : C.Stmt) (rest : C.Body) (env : C.Env)
     (vs : List C.Val) (head : values h env = some vs) :
     evalIR C.semantics env (translateLoop h body rest) =

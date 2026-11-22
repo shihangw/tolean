@@ -67,6 +67,17 @@ example : result (evalIR semantics (input [1,2,3,4] 7) findIR) = some (-1) := by
 example : result (evalIR semantics (input [1,2,3,4] 7) cppFindIR) = some (-1) := by decide
 example : result (evalIR semantics (input [-1,-2,-3,-4]) clampIR) = some 0 := by decide
 
+def runTwo (env : Env) : Option (Outcome Env Val) := do
+  match ← Cpp.runLoop range rangeSum env with
+  | .normal inner => Cpp.runLoop valueRange second inner
+  | other => return other
+
+example : result (runTwo (input [1,2,3,4])) = some 13 := by decide
+example : head.safe sumBody = true := by decide
+example : range.accepts rangeSum = true := by decide
+example : range.accepts (.assign "xs" (.int 0) .skip) = false := by decide
+example : head.safe (.assign "i" (.int 0) .skip) = false := by decide
+
 def golden (name : String) (body : Body) : String :=
   "import tolean.Prototype.LoopCore.Examples\n\n" ++
   s!"def {name} (xs : List Int) (key limit : Int) : Int :=\n  let s : Int := 0\n" ++

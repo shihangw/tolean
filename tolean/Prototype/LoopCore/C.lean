@@ -136,6 +136,10 @@ def translateLoop (h : Head) (body : Stmt) (rest : Body) : Body :=
   lowerLoop ((writes body).map (fun n => (n, .int))) h.binder .int
     (translate (writes body) body) h.items rest true (some .int)
 
+def translateChecked (h : Head) (body : Stmt) (rest : Body) : Except String Body :=
+  if h.safe body then .ok (translateLoop h body rest)
+  else .error "counted loop changes its binder or has a bound outside signed 32-bit integers"
+
 theorem loop_sound (h : Head) (body : Stmt) (rest : Body) (env : Env) :
     evalIR semantics env (translateLoop h body rest) =
       (do
