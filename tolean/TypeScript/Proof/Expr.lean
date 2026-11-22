@@ -1463,7 +1463,7 @@ theorem evalList_into_zip (unions : List UnionInfo) (sol : List (String × Ty))
   | c :: cs, p :: ps, h => by
     simp only [List.zip_cons_cons, List.map_cons, IR.Expr.evalList]
     rw [eval_into_value]
-        rw [evalList_into_zip fs fuel unions sol ρ cs ps (Nat.le_of_succ_le_succ h)]
+    rw [evalList_into_zip fs fuel unions sol ρ cs ps (Nat.le_of_succ_le_succ h)]
 
 /-- A nonzero bigint literal has the same nonzero value in every environment. -/
 theorem nonzero_literal (e : Expr) (h : isNonzeroBigintLiteral e = true) :
