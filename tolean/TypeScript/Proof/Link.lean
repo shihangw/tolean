@@ -1,6 +1,7 @@
 import Lean
 import tolean.TypeScript.Proof.Module
 import tolean.TypeScript.Spec.Lemmas.Number
+import tolean.TypeScript.Spec.LoopResult
 import tolean.TypeScript.IR.Equality
 import tolean.TypeScript.Map
 import Lean.Elab.Tactic.Basic
@@ -393,7 +394,7 @@ def retOutcome {R τ : Type} (encR : R → Val N) (getRet : τ → Option R) :
 value to return, or the locals at its end. -/
 def retResult {R σ τ : Type} (encR : R → Val N) (getRet : τ → Option R) (getS : τ → σ)
     (upd : σ → Eval.Env N → Eval.Env N) (ρ : Eval.Env N) (t : τ) : Eval.Outcome N :=
-  tolean.IR.LoopResult.run (tolean.IR.LoopResult.ofParts (getRet t) (getS t))
+  tolean.TypeScript.Spec.LoopResult.run (tolean.TypeScript.Spec.LoopResult.ofParts (getRet t) (getS t))
     (fun r => .ret (.ok (encR r)))
     (fun s => .normal (upd s ρ))
 
@@ -439,8 +440,8 @@ theorem runFold_forInRet {α σ τ R : Type} (fs : List (DeclRef × List String 
       some (retResult encR getRet getS upd ρ (Id.run (forIn xs (init s) (step ρ)))) := by
     intro xs
     induction xs with
-    | nil => intro s; simp [IR.Body.runFold, retResult, tolean.IR.LoopResult.run,
-      tolean.IR.LoopResult.ofParts, (hinit s).1, (hinit s).2]
+    | nil => intro s; simp [IR.Body.runFold, retResult, tolean.TypeScript.Spec.LoopResult.run,
+      tolean.TypeScript.Spec.LoopResult.ofParts, (hinit s).1, (hinit s).2]
     | cons x xs ih =>
       intro s
       obtain ⟨inner, hex, hb, hy⟩ := hbody ρ s x hI
@@ -451,12 +452,12 @@ theorem runFold_forInRet {α σ τ R : Type} (fs : List (DeclRef × List String 
         | some r =>
           simp only [List.map_cons, IR.Body.runFold, hex, retOutcome, hr, Option.bind_eq_bind,
             Option.bind_some, List.forIn_cons, hst]
-          simp [retResult, tolean.IR.LoopResult.run, tolean.IR.LoopResult.ofParts, hr]
+          simp [retResult, tolean.TypeScript.Spec.LoopResult.run, tolean.TypeScript.Spec.LoopResult.ofParts, hr]
         | none =>
           simp only [ForInStep.value] at hb
           simp only [List.map_cons, IR.Body.runFold, hex, retOutcome, hr, hb hr, Option.bind_eq_bind,
             Option.bind_some, List.forIn_cons, hst]
-          simp [retResult, tolean.IR.LoopResult.run, tolean.IR.LoopResult.ofParts, hr]
+          simp [retResult, tolean.TypeScript.Spec.LoopResult.run, tolean.TypeScript.Spec.LoopResult.ofParts, hr]
       | yield t =>
         obtain ⟨ht, hr⟩ := hy t hst
         rw [hst] at hex hb
@@ -492,8 +493,8 @@ theorem runFold_forInRet_on {α σ τ R : Type} (fs : List (DeclRef × List Stri
         some (retResult encR getRet getS upd ρ (Id.run (forIn ys (init s) (step ρ)))) := by
     intro ys
     induction ys with
-    | nil => intro _ s; simp [IR.Body.runFold, retResult, tolean.IR.LoopResult.run,
-      tolean.IR.LoopResult.ofParts, (hinit s).1, (hinit s).2]
+    | nil => intro _ s; simp [IR.Body.runFold, retResult, tolean.TypeScript.Spec.LoopResult.run,
+      tolean.TypeScript.Spec.LoopResult.ofParts, (hinit s).1, (hinit s).2]
     | cons x ys ih =>
       intro hmem s
       obtain ⟨inner, hex, hb, hy⟩ := hbody ρ s x hI (hmem x (by simp))
@@ -504,12 +505,12 @@ theorem runFold_forInRet_on {α σ τ R : Type} (fs : List (DeclRef × List Stri
         | some r =>
           simp only [List.map_cons, IR.Body.runFold, hex, retOutcome, hr, Option.bind_eq_bind,
             Option.bind_some, List.forIn_cons, hst]
-          simp [retResult, tolean.IR.LoopResult.run, tolean.IR.LoopResult.ofParts, hr]
+          simp [retResult, tolean.TypeScript.Spec.LoopResult.run, tolean.TypeScript.Spec.LoopResult.ofParts, hr]
         | none =>
           simp only [ForInStep.value] at hb
           simp only [List.map_cons, IR.Body.runFold, hex, retOutcome, hr, hb hr, Option.bind_eq_bind,
             Option.bind_some, List.forIn_cons, hst]
-          simp [retResult, tolean.IR.LoopResult.run, tolean.IR.LoopResult.ofParts, hr]
+          simp [retResult, tolean.TypeScript.Spec.LoopResult.run, tolean.TypeScript.Spec.LoopResult.ofParts, hr]
       | yield t =>
         obtain ⟨ht, hr⟩ := hy t hst
         rw [hst] at hex hb
@@ -537,17 +538,17 @@ theorem bodyExec_fold_compose
       | some (.list vs) =>
         match IR.Body.runFold fs fuel names element body ρ vs with
         | some (.normal state) =>
-          tolean.IR.LoopResult.run (.completed state)
+          tolean.TypeScript.Spec.LoopResult.run (.completed state)
             (fun value => some (Eval.Outcome.ret value))
             (fun state => IR.Body.exec fs fuel state rest)
         | some (.ret value) =>
-          tolean.IR.LoopResult.run (.returned value)
+          tolean.TypeScript.Spec.LoopResult.run (.returned value)
             (fun value => some (Eval.Outcome.ret value))
             (fun state => IR.Body.exec fs fuel state rest)
         | some (.brk _) | some (.cont _) | none => none
       | some _ | none => none := by
   simp only [IR.Body.exec]
-  all_goals repeat' (split <;> simp_all [Option.bind, tolean.IR.LoopResult.run])
+  all_goals repeat' (split <;> simp_all [Option.bind, tolean.TypeScript.Spec.LoopResult.run])
 
 /-- `includes` on the encoded elements of a list, when SameValueZero of `v`
 and each element is a test `p` of the element. -/
@@ -967,13 +968,13 @@ before inspecting the result. -/
 elab "split_loop_result" : tactic => withMainContext do
   let target ← instantiateMVars (← getMainTarget)
   let some e := target.find? fun e =>
-      e.isAppOf ``tolean.IR.LoopResult.ofParts && !e.hasLooseBVars
+      e.isAppOf ``tolean.TypeScript.Spec.LoopResult.ofParts && !e.hasLooseBVars
     | throwError "split_loop_result: no loop result in the goal"
   let stx ← Term.exprToSyntax e
   evalTactic (← `(tactic| (
     generalize loop_result_eq : $stx = loop_result
     try erw [loop_result_eq]
-    cases loop_result <;> simp only [tolean.IR.LoopResult.run, Except.toOption])))
+    cases loop_result <;> simp only [tolean.TypeScript.Spec.LoopResult.run, Except.toOption])))
 
 open Lean Elab Tactic Meta in
 /-- Split on the value of a `List.find? p xs` in the goal, the value of a

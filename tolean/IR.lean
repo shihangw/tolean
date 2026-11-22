@@ -1,5 +1,6 @@
 import tolean.Sexp
 import tolean.Source
+import tolean.TypeScript.Spec.LoopResult
 
 /-!
 The Tolean IR, the Tolean intermediate representation: the Lean code that a
@@ -259,35 +260,6 @@ structure LoopInfo (T : Type) where
   holds the value to return. -/
   returns : Option (Ty T) := none
 deriving Repr, Inhabited
-
-/-- The shared result of a loop that can return from its function. -/
-inductive LoopResult (R σ : Type) where
-  | returned (value : R)
-  | completed (state : σ)
-
-namespace LoopResult
-
-/-- Turn a return slot and the final loop state into the shared carrier. -/
-def ofParts {R σ : Type} (returned : Option R) (state : σ) : LoopResult R σ :=
-  match returned with
-  | some value => .returned value
-  | none => .completed state
-
-/-- Run the continuation selected by a loop result. -/
-def run {R σ α : Type} (result : LoopResult R σ) (onReturn : R → α) (onComplete : σ → α) : α :=
-  match result with
-  | .returned value => onReturn value
-  | .completed state => onComplete state
-
-/-- Select the return or continuation arm of a loop with no changed locals. -/
-def runOption {R α : Type} (result : Option R) (onReturn : R → α) (onComplete : Unit → α) : α :=
-  run (ofParts result ()) onReturn onComplete
-
-/-- Select the return or continuation arm of a loop with changed locals. -/
-def runPair {R σ α : Type} (result : Option R × σ) (onReturn : R → α) (onComplete : σ → α) : α :=
-  run (ofParts result.1 result.2) onReturn onComplete
-
-end LoopResult
 
 /-- The body of a function: `let`s that end in a value. -/
 inductive Body (T E : Type) where
@@ -1558,11 +1530,11 @@ def Body.lines (names : Names) (monadic : Bool := false) : Body T E → List Str
         [s!"    (fun {foldBinders names ns element info} =>"] ++
           indentBy "      " (bodyLines.dropLast ++ [lastLine ++ "))"])
       if ns.isEmpty then
-        [s!"_root_.tolean.IR.LoopResult.runOption ({run}\n{String.intercalate "\n" step})",
+        [s!"_root_.tolean.TypeScript.Spec.LoopResult.runOption ({run}\n{String.intercalate "\n" step})",
           "    (fun r => r)", "    (fun _ =>"] ++
           indent (rest.lines names monadic) ++ [")"]
       else
-        [s!"_root_.tolean.IR.LoopResult.runPair ({run}\n{String.intercalate "\n" step})",
+        [s!"_root_.tolean.TypeScript.Spec.LoopResult.runPair ({run}\n{String.intercalate "\n" step})",
           "    (fun r => r)", s!"    (fun {tuple ns} =>"] ++
           indent (rest.lines names monadic) ++ [")"]
     else if info.breaks then
