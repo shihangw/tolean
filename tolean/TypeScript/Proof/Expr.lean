@@ -4413,7 +4413,7 @@ theorem translateSpreadArray_sound {env : Translate.Env} {tr : Option Ty → Exp
   | some lss =>
     simp [hm] at happ
     subst happ
-    have := mapM_parts_sim m fs fuel (fun _ _ _ _ hp => translateElem_sim m fs fuel htr hp) s₃.unions elem
+    have := mapM_parts_sim m fs fuel (fun _ _ _ _ hp => translateElem_sim m fs fuel htr hp) unions elem
       elems ctx parts s₁ hparts ρs ρo ws lss ha hs hws hm
     simp [Eval.eval, this]
 
