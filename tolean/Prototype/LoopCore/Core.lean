@@ -67,4 +67,47 @@ def lowerLoop (changed : List (String × IR.Ty T)) (binder : String)
     { span := default, stateTypes := changed.map Prod.snd, elem, scope,
       breaks := breaks || returns.isSome, returns }
 
+/-- The evaluator's language interface. Unsupported expressions fail explicitly. -/
+structure Semantics (ρ v T E : Type) where
+  expr : ρ → IR.Expr T E → Option v
+  truth : v → Option Bool
+  elements : v → Option (List v)
+  put : String → v → ρ → ρ
+  project : List String → ρ → ρ → Option ρ
+
+/-- Meaning of the small shared IR fragment used here. -/
+def evalIR (s : Semantics ρ v T E) (env : ρ) : IR.Body T E → Option (Outcome ρ v)
+  | .value e | .exit e _ => return .ret (← s.expr env e)
+  | .state _ | .yield _ _ => some (.normal env)
+  | .done _ _ => some (.brk env)
+  | .let n e rest => do evalIR s (s.put n (← s.expr env e) env) rest
+  | .ite e yes no => do
+    if ← s.truth (← s.expr env e) then evalIR s env yes else evalIR s env no
+  | .fold ns binder body items rest _ => do
+    let vs ← s.elements (← s.expr env items)
+    match ← runFold (fun inner => evalIR s inner body)
+        (fun x outer => some (s.put binder x outer)) (s.project ns) env vs with
+    | .normal inner => evalIR s inner rest
+    | .ret v => return .ret v
+    | _ => none
+  | _ => none
+
+theorem lowerLoop_sound (s : Semantics ρ v T E)
+    (changed : List (String × IR.Ty T)) (binder : String) (elem : IR.Ty T)
+    (source : ρ → Option (Outcome ρ v)) (body rest : IR.Body T E)
+    (items : IR.Expr T E) (breaks : Bool) (returns : Option (IR.Ty T))
+    (step : ∀ env, evalIR s env body = (source env).map Outcome.lower)
+    (env : ρ) (vs : List v)
+    (head : (s.expr env items >>= s.elements) = some vs) :
+    evalIR s env (lowerLoop changed binder elem body items rest breaks returns) =
+      (do
+        match ← execLoop source (fun x outer => some (s.put binder x outer))
+            (s.project (changed.map Prod.fst)) env vs with
+        | .normal inner => evalIR s inner rest
+        | .ret v => return .ret v
+        | _ => none) := by
+  simp only [lowerLoop, evalIR]
+  rw [execLoop_eq_runFold source _ _ _ step]
+  cases he : s.expr env items <;> simp_all
+
 end tolean.Prototype.LoopCore
