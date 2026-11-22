@@ -4404,7 +4404,7 @@ theorem translateSpreadArray_sound {env : Translate.Env} {tr : Option Ty → Exp
     (h : translateSpreadArray tr exp s elems ctx = .ok c ctx') :
     Sim (N := N) m fs fuel env (.array s elems) c.code := by
   simp only [translateSpreadArray, bind_ok, pure_ok, get_ok] at h
-  obtain ⟨parts, s₁, hparts, elem, s₂, -, _, s₃, -, unions, ⟨-, -⟩, hcode, -⟩ := h
+  obtain ⟨parts, s₁, hparts, elem, s₂, -, _, s₃, -, unions, _, ⟨-, -⟩, hcode, -⟩ := h
   rw [← hcode]
   intro ρs ρo v ha hs hv
   obtain ⟨ws, hws, happ⟩ := out_ext fs fuel hv
