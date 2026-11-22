@@ -136,6 +136,7 @@ def Expr.beq : Expr → Expr → Bool
   | .string a0 a1, .string b0 b1 => decide (a0 = b0) && decide (a1 = b1)
   | .bool a0 a1, .bool b0 b1 => decide (a0 = b0) && decide (a1 = b1)
   | .null a0, .null b0 => decide (a0 = b0)
+  | .this a0, .this b0 => decide (a0 = b0)
   | .array a0 a1, .array b0 b1 => decide (a0 = b0) && Expr.beqList a1 b1
   | .object a0 a1, .object b0 b1 => decide (a0 = b0) && Property.beqList a1 b1
   | .paren a0 a1, .paren b0 b1 => decide (a0 = b0) && Expr.beq a1 b1
@@ -198,6 +199,8 @@ theorem Expr.beq_iff : (a b : Expr) → Expr.beq a b = true ↔ a = b
   | .bool a0 a1, b => by
     cases b <;> simp [and_assoc, Expr.beq]
   | .null a0, b => by
+    cases b <;> simp [and_assoc, Expr.beq]
+  | .this a0, b => by
     cases b <;> simp [and_assoc, Expr.beq]
   | .array a0 a1, b => by
     cases b <;> simp [and_assoc, Expr.beq, Expr.beqList_iff a1]
@@ -286,6 +289,8 @@ def Stmt.beq : Stmt → Stmt → Bool
   | .varDecl a0 a1, .varDecl b0 b1 => decide (a0 = b0) && VarDecl.beq a1 b1
   | .destructure a0 a1 a2 a3 a4, .destructure b0 b1 b2 b3 b4 =>
     decide (a0 = b0) && decide (a1 = b1) && decide (a2 = b2) && TypeExpr.beqOpt a3 b3 && Expr.beq a4 b4
+  | .objectDestructure a0 a1 a2 a3 a4, .objectDestructure b0 b1 b2 b3 b4 =>
+    decide (a0 = b0) && decide (a1 = b1) && Expr.beq a2 b2 && TypeExpr.beqOpt a3 b3 && Expr.beq a4 b4
   | .exprStmt a0 a1, .exprStmt b0 b1 => decide (a0 = b0) && Expr.beq a1 b1
   | .returnStmt a0 a1, .returnStmt b0 b1 => decide (a0 = b0) && Expr.beqOpt a1 b1
   | .ifStmt a0 a1 a2 a3, .ifStmt b0 b1 b2 b3 => decide (a0 = b0) && Expr.beq a1 b1 && Stmt.beq a2 b2 && Stmt.beqOpt a3 b3
@@ -330,6 +335,8 @@ theorem Stmt.beq_iff : (a b : Stmt) → Stmt.beq a b = true ↔ a = b
     cases b <;> simp [and_assoc, Stmt.beq, VarDecl.beq_iff a1]
   | .destructure a0 a1 a2 a3 a4, b => by
     cases b <;> simp [and_assoc, Stmt.beq, TypeExpr.beqOpt_iff a3, Expr.beq_iff a4]
+  | .objectDestructure a0 a1 a2 a3 a4, b => by
+    cases b <;> simp [and_assoc, Stmt.beq, Expr.beq_iff a2, TypeExpr.beqOpt_iff a3, Expr.beq_iff a4]
   | .exprStmt a0 a1, b => by
     cases b <;> simp [and_assoc, Stmt.beq, Expr.beq_iff a1]
   | .returnStmt a0 a1, b => by
@@ -418,17 +425,71 @@ theorem CtorParam.beqList_iff : (xs ys : List CtorParam) → CtorParam.beqList x
     cases ys <;> simp [CtorParam.beqList, CtorParam.beq_iff x, CtorParam.beqList_iff xs]
 
 /-- The constructor of an error class: its parameters and its message. -/
-def ctorBeq : Option (List CtorParam × Expr) → Option (List CtorParam × Expr) → Bool
+def ctorBeq : Option ErrorCtor → Option ErrorCtor → Bool
   | none, none => true
-  | some (ps, m), some (qs, n) => CtorParam.beqList ps qs && Expr.beq m n
+  | some (ps, m, name), some (qs, n, other) =>
+    CtorParam.beqList ps qs && Expr.beq m n && name == other
   | _, _ => false
 
-theorem ctorBeq_iff : (a b : Option (List CtorParam × Expr)) → ctorBeq a b = true ↔ a = b
+theorem ctorBeq_iff : (a b : Option ErrorCtor) → ctorBeq a b = true ↔ a = b
   | none, b => by cases b <;> simp [ctorBeq]
-  | some (ps, m), b => by
+  | some (ps, m, name), b => by
     cases b with
     | none => simp [ctorBeq]
-    | some q => obtain ⟨qs, n⟩ := q; simp [ctorBeq, CtorParam.beqList_iff ps, Expr.beq_iff m]
+    | some q => obtain ⟨qs, n, other⟩ := q; simp [ctorBeq, CtorParam.beqList_iff ps, Expr.beq_iff m, Bool.and_assoc]
+
+def ClassMethod.beq (a b : ClassMethod) : Bool :=
+  decide (a.span = b.span) && decide (a.name = b.name) &&
+    Param.beqList a.params b.params && TypeExpr.beqOpt a.returnType b.returnType &&
+    Stmt.beq a.body b.body
+
+def ClassMethod.beqList : List ClassMethod → List ClassMethod → Bool
+  | [], [] => true
+  | a :: as, b :: bs => ClassMethod.beq a b && ClassMethod.beqList as bs
+  | _, _ => false
+
+theorem ClassMethod.beq_iff (a b : ClassMethod) : ClassMethod.beq a b = true ↔ a = b := by
+  obtain ⟨span, name, params, returnType, body⟩ := a
+  cases b
+  simp [ClassMethod.beq, and_assoc, Param.beqList_iff params,
+    TypeExpr.beqOpt_iff returnType, Stmt.beq_iff body]
+
+theorem ClassMethod.beqList_iff :
+    (xs ys : List ClassMethod) → ClassMethod.beqList xs ys = true ↔ xs = ys
+  | [], ys => by cases ys <;> simp [ClassMethod.beqList]
+  | x :: xs, ys => by
+    cases ys <;> simp [ClassMethod.beqList, ClassMethod.beq_iff x, ClassMethod.beqList_iff xs]
+
+def ClassMember.beq : ClassMember → ClassMember → Bool
+  | .field a, .field b => Field.beq a b
+  | .ctor ps body, .ctor qs body' => CtorParam.beqList ps qs && Stmt.beq body body'
+  | .method a, .method b => ClassMethod.beq a b
+  | _, _ => false
+
+def ClassMember.beqList : List ClassMember → List ClassMember → Bool
+  | [], [] => true
+  | a :: as, b :: bs => ClassMember.beq a b && ClassMember.beqList as bs
+  | _, _ => false
+
+theorem ClassMember.beq_iff (a b : ClassMember) : ClassMember.beq a b = true ↔ a = b := by
+  cases a <;> cases b <;>
+    simp [ClassMember.beq, Field.beq_iff, CtorParam.beqList_iff, Stmt.beq_iff,
+      ClassMethod.beq_iff]
+
+theorem ClassMember.beqList_iff :
+    (xs ys : List ClassMember) → ClassMember.beqList xs ys = true ↔ xs = ys
+  | [], ys => by cases ys <;> simp [ClassMember.beqList]
+  | x :: xs, ys => by
+    cases ys <;> simp [ClassMember.beqList, ClassMember.beq_iff x, ClassMember.beqList_iff xs]
+
+def ClassDecl.beq (a b : ClassDecl) : Bool :=
+  decide (a.span = b.span) && decide (a.exported = b.exported) &&
+    decide (a.name = b.name) && ClassMember.beqList a.members b.members
+
+theorem ClassDecl.beq_iff (a b : ClassDecl) : ClassDecl.beq a b = true ↔ a = b := by
+  obtain ⟨span, exported, name, members⟩ := a
+  cases b
+  simp [ClassDecl.beq, and_assoc, ClassMember.beqList_iff members]
 
 def Decl.beq : Decl → Decl → Bool
   | .import a0 a1 a2, .import b0 b1 b2 => decide (a0 = b0) && decide (a1 = b1) && decide (a2 = b2)
@@ -437,6 +498,7 @@ def Decl.beq : Decl → Decl → Bool
   | .interface a0 a1 a2 a4 a3, .interface b0 b1 b2 b4 b3 => decide (a0 = b0) && decide (a1 = b1) && decide (a2 = b2) && decide (a4 = b4) && Field.beqList a3 b3
   | .typeAlias a0 a1 a2 a4 a3, .typeAlias b0 b1 b2 b4 b3 => decide (a0 = b0) && decide (a1 = b1) && decide (a2 = b2) && decide (a4 = b4) && TypeExpr.beq a3 b3
   | .enum a0 a1 a2 a3, .enum b0 b1 b2 b3 => decide (a0 = b0) && decide (a1 = b1) && decide (a2 = b2) && decide (a3 = b3)
+  | .classDecl a, .classDecl b => ClassDecl.beq a b
   | .errorClass a0 a1 a2 a3, .errorClass b0 b1 b2 b3 => decide (a0 = b0) && decide (a1 = b1) && decide (a2 = b2) && ctorBeq a3 b3
   | .exportedVar a0 a1, .exportedVar b0 b1 => decide (a0 = b0) && VarDecl.beq a1 b1
   | .stmt a0, .stmt b0 => Stmt.beq a0 b0
@@ -455,6 +517,8 @@ theorem Decl.beq_iff : (a b : Decl) → Decl.beq a b = true ↔ a = b
     cases b <;> simp [and_assoc, Decl.beq, TypeExpr.beq_iff a3]
   | .enum a0 a1 a2 a3, b => by
     cases b <;> simp [and_assoc, Decl.beq]
+  | .classDecl a, b => by
+    cases b <;> simp [and_assoc, Decl.beq, ClassDecl.beq_iff a]
   | .errorClass a0 a1 a2 a3, b => by
     cases b <;> simp [and_assoc, Decl.beq, ctorBeq_iff a3]
   | .exportedVar a0 a1, b => by

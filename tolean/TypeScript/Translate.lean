@@ -3,6 +3,7 @@ import tolean.Version
 import tolean.TypeScript.Edition
 import tolean.TypeScript.Syntax.Parser
 import tolean.TypeScript.Syntax.Source
+import tolean.TypeScript.Elaborate
 import tolean.TypeScript.IR
 import tolean.TypeScript.IR.Equality
 import tolean.TypeScript.Spec.Eval
@@ -522,12 +523,21 @@ structure ClassInfo where
   /-- The class declares a constructor. Without one, `new C(m)` takes only
   the message. -/
   hasCtor : Bool := false
+  runtimeName : Option String := none
   params : List (String × Ty × Bool)
 
 /-- The fields of an error of the class, with their types: the `readonly`
 parameters, in order. -/
 def ClassInfo.fields (c : ClassInfo) : List (String × Ty) :=
-  c.params.filterMap fun (n, t, ro) => if ro then some (n, t) else none
+  (c.params.filterMap fun (n, t, ro) => if ro then some (n, t) else none) ++
+    c.runtimeName.toList.map (fun _ => ("name", .string))
+
+def ClassInfo.errorMarks (c : ClassInfo) : List (Option String) :=
+  some "message" :: (c.params.map fun (n, _, ro) => if ro then some n else none) ++
+    c.runtimeName.toList.map (fun _ => some "name")
+
+def ClassInfo.errorArgs (c : ClassInfo) (message : IR.Expr) (args : List IR.Expr) : List IR.Expr :=
+  message :: args ++ c.runtimeName.toList.map IR.Expr.string
 
 
 /-- A string enum whose members code may read, such as `Color.Red`: its
@@ -618,9 +628,74 @@ structure AliasInfo where
   typeParams : List String := []
   type : Ty
 
-/-- What a file offers the files that import from it: its exported functions,
-interfaces and type aliases, and whether its declarations are generic over
-the number type. -/
+/-- The translated comparator and the lexical values its statement binds. -/
+structure SortObligation where
+  span : Span
+  param : String
+  other : String
+  elem : IR.Ty
+  body : IR.Expr
+  scope : List (String × IR.Ty)
+
+def SortObligation.key (s : Span) : String :=
+  s!"sort obligation at {s.start.line}:{s.start.col}"
+
+def SortObligation.name (s : Span) : String :=
+  s!"«{SortObligation.key s}»"
+
+mutual
+/-- Read requirements from the translated tree, because isolated declaration
+translation restores its temporary state. -/
+def exprSortObligations : IR.Expr → List SortObligation
+  | .listMethod method items param elem body info =>
+    exprSortObligations items ++ exprSortObligations body ++
+      (match method with
+       | .sortWith other =>
+         if info.sortObligation then
+           [{ span := info.span, param, other, elem, body, scope := info.scope }]
+         else []
+       | _ => [])
+  | .listFold items init _ _ _ body _ =>
+    exprSortObligations items ++ exprSortObligations init ++ exprSortObligations body
+  | .field a _ _ | .propNot a | .not a | .neg a | .isNone a | .isSome a | .decide a | .push _ a
+  | .update _ _ a | .inject _ _ a | .ascribe a _ | .proj a _ _ => exprSortObligations a
+  | .ite a b c => exprSortObligations a ++ exprSortObligations b ++ exprSortObligations c
+  | .matchNull _ a b _ | .coalesce a b _ | .intOp _ a b | .order _ a b | .division _ a b
+  | .eq a b | .ne a b | .propAnd a b | .propOr a b | .and a b | .or a b =>
+    exprSortObligations a ++ exprSortObligations b
+  | .call _ args | .list args _ | .ext _ args | .tuple args => exprListSortObligations args
+  | .struct fields _ _ => fieldSortObligations fields
+  | .structUpdate base fields => exprSortObligations base ++ fieldSortObligations fields
+  | .int _ | .none | .bool _ | .string _ | .var _ | .enumCase .. | .tagValue _ => []
+
+def exprListSortObligations : List IR.Expr → List SortObligation
+  | [] => []
+  | e :: es => exprSortObligations e ++ exprListSortObligations es
+
+def fieldSortObligations : List (String × IR.Expr) → List SortObligation
+  | [] => []
+  | (_, e) :: es => exprSortObligations e ++ fieldSortObligations es
+end
+
+def bodySortObligations : IR.Body → List SortObligation
+  | .handle attempt handler => bodySortObligations attempt ++ bodySortObligations handler
+  | .value e | .exit e _ | .throw e => exprSortObligations e
+  | .state _ | .yield .. | .done .. => []
+  | .let _ e rest | .letTuple _ e rest | .letLifted _ e rest =>
+    exprSortObligations e ++ bodySortObligations rest
+  | .letArray _ _ elems rest => exprListSortObligations elems ++ bodySortObligations rest
+  | .ite c a b => exprSortObligations c ++ bodySortObligations a ++ bodySortObligations b
+  | .matchNull _ _ a b | .matchTag _ _ _ _ _ a b | .letState _ a b =>
+    bodySortObligations a ++ bodySortObligations b
+  | .fold _ _ body items rest _ =>
+    exprSortObligations items ++ bodySortObligations body ++ bodySortObligations rest
+  | .bind _ _ args rest | .letBorrow _ _ _ args rest =>
+    exprListSortObligations args ++ bodySortObligations rest
+  | .letCall _ _ _ value _ _ _ body args rest =>
+    exprSortObligations value ++ bodySortObligations body ++
+      exprListSortObligations args ++ bodySortObligations rest
+
+/-- What a file offers its importers, and the obligations its output states. -/
 structure Interface where
   functions : List FnInfo := []
   structs : List StructInfo := []
@@ -637,9 +712,11 @@ structure Interface where
   `Except Thrown R` for its own `Thrown`, which another file cannot pass on
   yet. -/
   errorClasses : Bool := false
+  sortObligations : List SortObligation := []
 
 structure Ctx where
   file : String
+  sortObligations : List SortObligation := []
   /-- All source borrow signatures, including declarations later in the file.
   The interpreter uses the same list for its ownership guard. -/
   borrows : List (String × Nat) := []
@@ -1028,14 +1105,15 @@ def isGlobalName (name : String) : Bool :=
   isNumberName name || name == "undefined" || name == "Map" || name == "Set" || name == "Error" ||
     name == "Object" || name == "Date"
 
-def checkName (span : Span) (name : String) : TM String := do
-  if leanReserved.contains name then reject span s!"name '{name}' is reserved in Lean"
+def checkName (span : Span) (name : String) (quoted : Bool := false) : TM String := do
+  if name == "_root_" || (!quoted && leanReserved.contains name) then
+    reject span s!"name '{name}' is reserved in Lean"
   return name
 
 /-- The name of a parameter or a local. TypeScript keeps types and values
 apart, but Lean does not, and the output writes an interface of the file by
 its bare name. So a local with that name would hide the interface. -/
-def checkLocalName (span : Span) (name : String) : TM String := do
+def checkLocalName (span : Span) (name : String) (quoted : Bool := false) : TM String := do
   let ctx ← get
   if ctx.structs.any fun i => i.name == name && i.file == ctx.file then
     reject span s!"'{name}' would hide the interface {name} in Lean; choose another name"
@@ -1046,9 +1124,9 @@ def checkLocalName (span : Span) (name : String) : TM String := do
     reject span s!"'{name}' would hide the type parameter {name} in Lean; choose another name"
   if ctx.errorClasses.any fun c => c.name == name then
     reject span s!"'{name}' would hide the error class {name}; choose another name"
-  checkName span name
+  checkName span name quoted
 
-def declare (env : Env) (span : Span) (name : String) (binding : Binding) (type : Ty) :
+def declare (env : Env) (span : Span) (name : String) (binding : Binding) (type : Ty) (quoted : Bool := false) :
     TM Env := do
   if env.has name then reject span s!"'{name}' shadows a name already in scope"
   -- A local is in its temporal dead zone from the start of its block, so a
@@ -1058,7 +1136,7 @@ def declare (env : Env) (span : Span) (name : String) (binding : Binding) (type 
     reject span s!"'{name}' would hide the function or global {name} in its whole block; choose another name"
   if env.enums.any (·.name == name) then
     reject span s!"'{name}' would hide the enum {name} in its whole block; choose another name"
-  let _ ← checkLocalName span name
+  let _ ← checkLocalName span name quoted
   -- A local of type `null` is always `null`, and Lean gives it the type
   -- `Option Empty`, which no other value of a nullable type has.
   if type == .null then reject span s!"'{name}' is always null; declare its type, such as bigint | null"
@@ -1300,7 +1378,7 @@ termination_by structural ts => ts
 def translateInlineFields (seen : List String) : List TypeField → TM (List (String × Ty))
   | [] => return []
   | .field span _ name optional type :: fields => do
-    let name ← checkName span name
+    let name ← checkName span name true
     if seen.contains name then reject span s!"'{name}' is declared twice"
     let type ← translateFieldType span optional name type (translateType type)
     return (name, type) :: (← translateInlineFields (name :: seen) fields)
@@ -1495,7 +1573,7 @@ mutual
 def stmtChanges (fns : List (String × List String)) : Stmt → List String
   | .tryCatch _ b _ h => stmtChanges fns b ++ stmtChanges fns h
   | .varDecl _ d => optionChanges fns d.init
-  | .destructure _ _ _ _ init => exprChanges fns init
+  | .destructure _ _ _ _ init | .objectDestructure _ _ _ _ init => exprChanges fns init
   | .exprStmt _ (.call _ (.ident _ name) args) =>
     match fns.lookup name with
     | some _ => calleeChanges fns (.ident default name) ++ exprsChanges fns args
@@ -2150,10 +2228,13 @@ def declaredMapType (s : Span) (typeArgs : List TypeExpr) (expected : Option Ty)
   | _, _ => reject s "Map takes two type arguments"
 
 /-- The set type of `new Set<T>(items)` that the type argument or the context
-give, if they give one. -/
+give, if they give one. Hoisting uses an unparseable quote keyword to mark
+error-class constructions, so Set type translation must reject it. -/
 def declaredSetType (s : Span) (typeArgs : List TypeExpr) (expected : Option Ty) : TM (Option Ty) := do
   match typeArgs, expected with
-  | [t], _ => return some (.set (← mapKey s (← translateType t) "a set element"))
+  | [t], _ =>
+    if t matches .keyword _ "'" then unsupportedType t
+    return some (.set (← mapKey s (← translateType t) "a set element"))
   | [], some (.set t) => return some (.set t)
   | [], _ => return none
   | _, _ => reject s "Set takes one type argument"
@@ -2189,7 +2270,9 @@ def setOfElemsType (s : Span) (declared : Option Ty) (elem : Ty) : TM Ty := do
 context expects. -/
 def newSetType (s : Span) (typeArgs : List TypeExpr) (expected : Option Ty) : TM Ty := do
   match typeArgs, expected with
-  | [t], _ => return .set (← mapKey s (← translateType t) "a set element")
+  | [t], _ =>
+    if t matches .keyword _ "'" then unsupportedType t
+    return .set (← mapKey s (← translateType t) "a set element")
   | [], some (.set t) => return .set t
   | _, _ => reject s "new Set needs the type of its elements, such as new Set<string>()"
 
@@ -3342,6 +3425,52 @@ def translateReduce (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (
       scope := (env.locals.filter fun l => l.binding != .fn).map fun l => (l.name, l.type.lean) }
   return ⟨.listFold xs.value i.value a.name p.name elem.lean b.value info, false, accType⟩
 
+/-- A number expression that the IR can prove is a safe-integer constant.
+`Math.min` and `Math.max` preserve that property when all their arguments do. -/
+def constantSafeNumber? : IR.Expr → Option Int
+  | .ext (.number n) [] => some n
+  | .ext .numberNeg [value] => (- ·) <$> constantSafeNumber? value
+  | .ext (.numberFold isMax) values => do
+    let values ← constantSafeNumbers? values
+    let first :: rest := values | none
+    some (rest.foldl (fun acc n => if isMax then max acc n else min acc n) first)
+  | .ext (.stringMethod .indexOf _) [.string source, .string search] =>
+    some (JSString.indexOf (JSString.ofString source) (JSString.ofString search))
+  | .ext (.stringMethod .indexOf [_, some pos])
+      [.string source, .string search, _] =>
+    some (JSString.indexOfFrom (JSString.ofString source) (JSString.ofString search) pos)
+  | _ => none
+
+def constantSafeNumbers? : List IR.Expr → Option (List Int)
+  | [] => some []
+  | value :: values => do
+    let n ← constantSafeNumber? value
+    let ns ← constantSafeNumbers? values
+    return n :: ns
+
+/-- Unknown comparator shapes produce a statement, not an assumption.
+Certificates must prove that statement before they can link the sort. -/
+def sortKeys (s : Span) (p q : Param) (body : Expr) (elem : Ty)
+    (value : IR.Expr) (env : Env) : TM (List (List String × Bool × Bool)) := do
+  if let some keys := keyComparator? p.name q.name body then return keys
+  if let some n := Eval.intLiteral? body.stripParens then
+    unless n == 0 do
+      reject s "a constant nonzero comparator is inconsistent: comparing an element with itself must give zero"
+  if value matches .numberConstant _ then
+    reject s "a NaN or infinite comparator cannot satisfy the required consistency obligation"
+  let constant := constantSafeNumber? value
+  if let some n := constant then
+    unless n == 0 do
+      reject s "a constant nonzero comparator is inconsistent: comparing an element with itself must give zero"
+  unless elem == .bigint do
+    reject s "a comparator proof obligation currently requires bigint elements"
+  let scope := (env.locals.filter fun l => l.binding != .fn).map fun l => (l.name, l.type.lean)
+  unless (tolean.IR.Ty.typeVarsList (scope.map (·.2))).isEmpty do
+    reject s "a comparator proof obligation cannot capture generic types yet"
+  modify fun ctx => { ctx with sortObligations := ctx.sortObligations ++
+    [{ span := s, param := p.name, other := q.name, elem := elem.lean, body := value, scope }] }
+  return []
+
 /-- `xs.toSorted((a, b) => e)` and `[...xs].sort((a, b) => e)`:
 `JSNumber.sortWith (fun a b => e) xs`. `sort` changes the array it sorts, so
 it may sort only an array literal, which nothing else holds. The comparator
@@ -3372,10 +3501,7 @@ def translateSort (fuel : Nat) (env : Env) (s : Span) (recv : Expr) (method : St
   let inner ← declare withQ p.span p.name .param elem
   let b ← translateExpr fuel inner (some .number) body
   unless b.type == .number do reject body.span "a comparator must give a number"
-  let keys ← orReject (keyComparator? p.name q.name body) body.span
-    ("a comparator here must compare keys, such as (a, b) => (a.k < b.k) ? -1 : (a.k > b.k) ? 1 : 0 " ++
-      "or (a, b) => a.t - b.t, with the tests in either order, the signs reversed, or a comparison " ++
-      "of the next key in place of the 0")
+  let keys ← sortKeys s p q body elem b.value env
   for (key, difference, _) in keys do
     let t ← keyType body.span elem key
     if difference then
@@ -3385,6 +3511,7 @@ def translateSort (fuel : Nat) (env : Env) (s : Span) (recv : Expr) (method : St
         reject body.span "a key of a comparator must be a bigint, a string or a number"
   let info : IR.CallbackInfo IR.TyExt :=
     { span := s, result := Ty.number.lean,
+      sortObligation := (keyComparator? p.name q.name body).isNone,
       scope := (env.locals.filter fun l => l.binding != .fn).map fun l => (l.name, l.type.lean) }
   return ⟨.listMethod (.sortWith q.name) xs.value p.name elem.lean b.value info, false, xs.type⟩
 
@@ -3703,8 +3830,8 @@ def translateThrow (env : Env) (value : Expr) : TM IR.Body := do
       pure ca
     let code ← translateExpr (← fuelLimit) env (some .string) msg
     unless code.type == .string do reject msg.span "the message of an error must be a string"
-    let marks := some "message" :: info.params.map fun (n, _, ro) => if ro then some n else none
-    return .throw (.ext (.errorCase ⟨ctx.file, "Thrown"⟩ c marks) (code.value :: codes.map (·.value)))
+    return .throw (.ext (.errorCase ⟨ctx.file, "Thrown"⟩ c info.errorMarks)
+      (info.errorArgs code.value (codes.map (·.value))))
   -- A construction of an error class that the hoisting left alone has the
   -- wrong number of arguments.
   | .new _ c _ _ =>
@@ -3779,9 +3906,11 @@ def destructureBody (p : ArrayPattern) (t : Ty) (value : IR.Expr) (reads : List 
       (if exactTuple p t then value else .tuple (reads.map (·.2.2))) rest)
 
 /-- Declare each name of a pattern, in order. -/
-def declarePlaces (s : Span) (binding : Binding) : Env → List (String × Ty × IR.Expr) → TM Env
-  | env, [] => pure env
-  | env, (n, t, _) :: ps => do declarePlaces s binding (← declare env s n binding t) ps
+def declarePlaces (s : Span) (binding : Binding) (env : Env) (reads : List (String × Ty × IR.Expr))
+    (quoted : Bool := false) : TM Env :=
+  match reads with
+  | [] => pure env
+  | (n, t, _) :: ps => do declarePlaces s binding (← declare env s n binding t quoted) ps quoted
 
 /-- `const [a, b] = e`, then the statements after it, which `k` translates in
 the scope with the names. The output reads `e` once: a tuple with as many
@@ -3797,6 +3926,32 @@ def translateDestructure (tr : Option Ty → Expr → TM Code) (k : Env → TM I
   let env' ← declarePlaces s (if kind == .const then .const else .«let») env reads
   let rest ← k env'
   orReject (destructureBody p t (withType code.value t code.type) reads rest) s "a pattern must declare a name"
+
+/-- A field to bind with a Lean structure pattern. Literal tags are not
+stored as structure fields, so the pattern cannot name them. -/
+def objectField (s : Span) (source : Code) (key : String) : TM Code := do
+  let type ← keyType s source.type [key]
+  if type matches .literal _ then
+    reject s "a literal tag is not stored in the Lean structure; it may only be read in a test of its union"
+  return ⟨.field source.value true key, false, type⟩
+
+/-- Object bindings extract a tuple with a structure pattern. The pattern's
+locals belong to that expression, not to the continuation's environment. -/
+def translateObjectDestructure (tr : Option Ty → Expr → TM Code) (k : Env → TM IR.Body) (env : Env)
+    (s : Span) (kind : VarKind) (p : Expr) (type : Option TypeExpr) (init : Expr) : TM IR.Body := do
+  unless p.isObjectPattern do reject s "invalid object binding pattern"
+  if init.mayHold p.objectBindingNames.contains then
+    reject init.span "the source reads a name declared by this pattern before initialization"
+  let declared ← declaredType type
+  let code ← tr declared init
+  let _ ← fitDeclared s declared code
+  unless code.type.structRef?.isSome do reject s "an object pattern needs an interface or an object literal"
+  let reads ← p.objectBindings.mapM fun (key, name) => do
+    let field ← objectField s code key
+    return (name, field.type, field.value)
+  let env' ← declarePlaces s (if kind == .const then .const else .«let») env reads true
+  let rest ← k env'
+  return .letTuple (reads.map (·.1)) (.ext (.objectTuple (p.objectBindings.map Prod.fst)) [code.value]) rest
 
 /-- Where a local function may stand. -/
 def localFunctionPlace : String :=
@@ -4207,6 +4362,13 @@ def translateStatements (fuel : Nat) (env : Env) (tail : Tail) (statements : Lis
         modify fun c => { c with returning := false }
         return tail.returnBody (if (← get).throws then IR.Expr.pure code.value else code.value)
     | .varDecl s d => translateVariable fuel env s d rest tail
+    | .objectDestructure s kind p type init =>
+      if stmt.constAssignedIn rest then
+        reject s "a name of the pattern is a const, and a later statement assigns it; declare it with let"
+      if (throwingCall? env.functions init).isSome then
+        reject init.span "a pattern may not take the value of a call that can throw; declare a const for the call first"
+      translateObjectDestructure (fun exp e => do translateExpr (← fuelLimit) env exp e)
+        (fun env' => translateStatements fuel env' tail rest) env s kind p type init
     | .destructure s kind p type init =>
       if stmt.constAssignedIn rest then
         reject s "a name of the pattern is a const, and a later statement assigns it; declare it with let"
@@ -4678,7 +4840,7 @@ def translateInterface (s : Span) (exported : Bool) (name : String) (typeParams 
   let infos ← isolated do
     modify fun c => { c with structs := c.structs ++ [{ file := c.file, name, exported, typeParams, fields := [] }] }
     fields.foldlM (init := ([] : List (String × Ty))) fun infos f => do
-      let field ← checkName f.span f.name
+      let field ← checkName f.span f.name true
       if infos.any (·.1 == field) then reject f.span s!"'{field}' is declared twice"
       -- A Lean structure's fields are in scope in the types of the fields after
       -- them, so a field may not hide a type parameter.
@@ -4925,7 +5087,7 @@ def checkBorrowResult (s : Span) (borrow : Option Nat) (name : String)
 def borrowLocals (locals : List Local) (param : Option String) : List Local :=
   locals.map fun l => if param == some l.name then { l with binding := .map } else l
 
-def translateFunction (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr)))
+def translateFunction (thr : String → Bool) (cls : String → Option (Option ErrorCtor))
     (guards : List (String × Eval.GuardTest))
     (classes : List ClassInfo) (s : Span) (exported : Bool) (name : String) (typeParams : List String)
     (params : List Param) (returnType : Option TypeExpr) (body : Stmt) : TM IR.Decl := do
@@ -5013,6 +5175,7 @@ def keyUsesNumber : PropKey → Bool
 mutual
 
 def exprUsesNumber : Expr → Bool
+  | .this _ => false
   | .ident _ name => isNumberName name
   | .number .. => true
   -- `xs.length`, `s.length`, `s.indexOf(p)` and `xs.findIndex(…)` give a
@@ -5065,6 +5228,8 @@ def stmtUsesNumber : Stmt → Bool
   | .varDecl _ d => varUsesNumber d
   | .destructure _ _ p type init =>
     p.names.any isNumberName || (type.map typeUsesNumber).getD false || exprUsesNumber init
+  | .objectDestructure _ _ p type init =>
+    p.objectBindingNames.any isNumberName || (type.map typeUsesNumber).getD false || exprUsesNumber init
   | .exprStmt _ e => exprUsesNumber e
   | .returnStmt _ v => (v.map exprUsesNumber).getD false
   | .throwStmt _ e => exprUsesNumber e
@@ -5109,8 +5274,9 @@ def moduleUsesNumber (m : Module) : Bool :=
       isNumberName name || fields.any fun f => isNumberName f.name || typeUsesNumber f.type
     | .typeAlias _ _ name _ type => isNumberName name || typeUsesNumber type
     | .enum _ _ name _ => isNumberName name
+    | .classDecl _ => true
     | .errorClass _ _ name ctor =>
-      isNumberName name || ctor.any fun (ps, m) =>
+      isNumberName name || ctor.any fun (ps, m, _) =>
         ps.any (fun p => isNumberName p.param.name || (p.param.type.map typeUsesNumber).getD false) ||
           exprUsesNumber m
     | .exportedVar _ d => varUsesNumber d
@@ -5214,8 +5380,12 @@ def translateCtorParam (p : CtorParam) : TM (String × Ty × Bool) := do
   let pname ← checkLocalName p.param.span p.param.name
   -- JS assigns a parameter property after `super(…)` returns, so one named
   -- `message` would replace the message. `Error` owns the others too.
-  if p.readonly && ["message", "name", "stack", "cause"].contains pname then
-    reject p.param.span s!"a parameter of an error class may not be named {pname}, which Error owns"
+  -- The inherited `__proto__` setter does not create an own field in
+  -- downlevel output. This check also covers normalized declared fields.
+  if p.readonly && ["message", "name", "stack", "cause", "__proto__"].contains pname then
+    reject p.param.span (if pname == "__proto__" then
+      "an error field may not be named __proto__, whose assignment does not create an own field"
+    else s!"a parameter of an error class may not be named {pname}, which Error owns")
   let ty ← translateType type
   unless ty matches .bigint | .number | .boolean | .string do
     reject p.param.span "a parameter of an error class must be a bigint, a number, a boolean or a string"
@@ -5224,7 +5394,7 @@ def translateCtorParam (p : CtorParam) : TM (String × Ty × Bool) := do
 /-- An error class: its name is taken, its parameters have primitive types,
 and its message is a string over its parameters. The class is recorded for
 the `throw`s of the file. -/
-def translateErrorClass (s : Span) (exported : Bool) (name : String) (ctor : Option (List CtorParam × Expr)) :
+def translateErrorClass (s : Span) (exported : Bool) (name : String) (ctor : Option ErrorCtor) :
     TM ClassInfo := do
   let name ← checkName s name
   if name == "error" then
@@ -5233,7 +5403,7 @@ def translateErrorClass (s : Span) (exported : Bool) (name : String) (ctor : Opt
   -- The checks of the constructor read the state and change nothing.
   let params ← isolated <| match ctor with
     | none => pure []
-    | some (ps, message) => do
+    | some (ps, message, _) => do
       let params ← ps.mapM translateCtorParam
       if (params.map (·.1)).eraseDups.length != params.length then
         reject s "a parameter of the constructor is declared twice"
@@ -5250,7 +5420,8 @@ def translateErrorClass (s : Span) (exported : Bool) (name : String) (ctor : Opt
       let code ← isolated (translateExpr (← fuelLimit) env (some .string) message)
       unless code.type == .string do reject message.span "the message of an error must be a string"
       pure params
-  let info : ClassInfo := { file := (← get).file, name, exported, hasCtor := ctor.isSome, params }
+  let info : ClassInfo :=
+    { file := (← get).file, name, exported, hasCtor := ctor.isSome, runtimeName := Eval.ctorName ctor, params }
   modify fun c => { c with errorClasses := c.errorClasses ++ [info] }
   return info
 
@@ -5322,7 +5493,7 @@ mutual
 
 def prepareInlineExpr : Expr → TM Unit
   | .ident _ _ | .number _ _ | .bigint _ _ | .string _ _ | .regexp _ _ _
-  | .bool _ _ | .null _ => pure ()
+  | .bool _ _ | .null _ | .this _ => pure ()
   | .array _ exprs => prepareInlineExprs exprs
   | .object _ props => prepareInlineProperties props
   | .paren _ expr | .member _ expr _ | .optMember _ expr _ | .unary _ _ expr
@@ -5356,7 +5527,8 @@ mutual
 def prepareInlineStmt : Stmt → TM Unit
   | .tryCatch _ b _ h => do prepareInlineStmt b; prepareInlineStmt h
   | .varDecl _ decl => prepareInlineVar decl
-  | .destructure _ _ _ type expr => do type.forM prepareInlineType; prepareInlineExpr expr
+  | .destructure _ _ _ type expr | .objectDestructure _ _ _ type expr =>
+    do type.forM prepareInlineType; prepareInlineExpr expr
   | .exprStmt _ expr | .throwStmt _ expr => prepareInlineExpr expr
   | .returnStmt _ expr => expr.forM prepareInlineExpr
   | .ifStmt _ test yes no => do
@@ -5395,6 +5567,7 @@ def prepareInlineClauses : List (Option Expr × List Stmt) → TM Unit
 end
 
 def prepareInlineDecl : Decl → TM Unit
+  | .classDecl d => reject d.span "ordinary classes must be elaborated before translation"
   | .function _ _ _ params args ret body => do
     modify fun c => { c with typeParams := params }
     prepareInlineParams args
@@ -5406,7 +5579,7 @@ def prepareInlineDecl : Decl → TM Unit
   | .typeAlias _ _ _ params type => do
     modify fun c => { c with typeParams := params }
     prepareInlineType type
-  | .errorClass _ _ _ ctor => ctor.forM fun (params, expr) => do
+  | .errorClass _ _ _ ctor => ctor.forM fun (params, expr, _) => do
     prepareInlineParams (params.map (·.param))
     prepareInlineExpr expr
   | .exportedVar _ decl => prepareInlineVar decl
@@ -5424,7 +5597,7 @@ def prepareInline (decl : Decl) : TM Unit := do
 
 /-- One declaration: an output declaration, or none for an import, an
 export list or an error class. -/
-def translateDecl (thr : String → Bool) (cls : String → Option (Option (List CtorParam × Expr)))
+def translateDecl (thr : String → Bool) (cls : String → Option (Option ErrorCtor))
     (guards : List (String × Eval.GuardTest))
     (classes : List ClassInfo) : Decl → TM (Option IR.Decl)
   | .import s names source => do translateImport s names source; return none
@@ -5447,7 +5620,7 @@ def translateDecl (thr : String → Bool) (cls : String → Option (Option (List
 /-- The new structures precede the declaration that first needs them. Type
 preparation does not change the declaration that the semantic proof reads. -/
 def translateDeclWithInline (thr : String → Bool) (cls : String → Option (Option
-    (List CtorParam × Expr))) (guards : List (String × Eval.GuardTest)) (classes : List ClassInfo)
+    ErrorCtor)) (guards : List (String × Eval.GuardTest)) (classes : List ClassInfo)
     (decl : Decl) : TM (Option IR.Decl) := do
   let before := (← get).inlineStructs.length
   prepareInline decl
@@ -5597,7 +5770,8 @@ def Ctx.interface (c : Ctx) (usesNumber : Bool) (numberVar : String)
         iface.aliases.filter fun a => names.any fun n => n.typeOnly && n.name == a.name,
     enums := c.reachableEnums,
     unions := c.reachableUnions,
-    usesNumber, numberVar, target := c.target, errorClasses := !c.errorClasses.isEmpty }
+    usesNumber, numberVar, target := c.target, errorClasses := !c.errorClasses.isEmpty,
+    sortObligations := c.sortObligations }
 
 def lineStarts (src : Array Char) : Array Nat := Id.run do
   let mut starts := #[0]
@@ -5637,6 +5811,7 @@ def translateFile (file source : String) (target : Edition := .default)
     (deps : List (String × Dependency) := []) (resolved : List (String × String) := []) :
     Except String (Module × IR.Names × List IR.Decl × Interface) := do
   let m ← (parse source target).mapError (·.render file)
+  let m ← (Elaborate.run source target m).mapError (fun message => file ++ ":" ++ message)
   let m := if resolved.isEmpty then m else
     { m with decls := m.decls.map fun
       | .import s names path => .import s names ((resolved.lookup path).getD path)
@@ -5668,6 +5843,11 @@ def translateFile (file source : String) (target : Edition := .default)
   match (translateDecls m).run ctx with
   | .error e _ => .error e
   | .ok decls ctx' =>
+    let required := decls.flatMap fun (d : IR.Decl) => match d with
+      | .function _ _ _ body => bodySortObligations body
+      | _ => []
+    let required := required.eraseDupsBy (fun a b => SortObligation.key a.span == SortObligation.key b.span)
+    let ctx' := { ctx' with sortObligations := required }
     -- Array entries introduce number indices even when the source never
     -- names a number. Check the IR so map entries stay nongeneric.
     let usesNumber := usesNumber || decls.any (tolean.IR.Decl.anyOp (· == .arrayEntries))
@@ -5729,6 +5909,7 @@ def translateWith (file source ns : String) (target : Edition := .default)
     | .function _ _ (.except ..) _ | .errors .. => true
     | _ => false
   let header :=
+    (if iface.sortObligations.isEmpty then [] else ["import tolean.TypeScript.Spec.Eval"]) ++
     (if usesDate then ["import tolean.TypeScript.Spec.Date"]
      else if names.generic then ["import tolean.TypeScript.Spec.Number"] else []) ++
     (if throws then ["import tolean.TypeScript.Spec.Error"]
@@ -5744,10 +5925,17 @@ def translateWith (file source ns : String) (target : Edition := .default)
     (if names.generic || usesString || throws || usesMap || usesBigInt || usesDate || usesRegExp || usesNullish then
       ["", "open tolean.TypeScript"]
      else if imports.isEmpty then [] else [""])
+  let obligations := iface.sortObligations.map fun o =>
+    let binders := o.scope.map fun (n, t) => s!"({tolean.IR.identName n} : {t.print names})"
+    s!"-- tolean sort obligation: {ns}.{SortObligation.key o.span}\n" ++
+    s!"def {SortObligation.name o.span} : Prop :=\n" ++
+    s!"  ∀ \{{names.typeParam} : Type} [_root_.tolean.TypeScript.JSNumber {names.typeParam}] [_root_.tolean.TypeScript.SafeIntLaws {names.typeParam}] " ++
+    s!"{" ".intercalate binders},\n" ++
+    s!"    _root_.tolean.TypeScript.Eval.Consistent (fun ({o.param} {o.other} : {o.elem.print names}) => ({o.body.print names} : {names.typeParam}))"
   let text := "\n".intercalate
     ([s!"-- Generated by tolean {version} for {target.name} from {file}. Do not edit."] ++
       header ++
-      [s!"namespace {ns}", "", "\n\n".intercalate (decls.map (·.print names)), "", s!"end {ns}", ""])
+      [s!"namespace {ns}", "", "\n\n".intercalate (decls.map (·.print names) ++ obligations), "", s!"end {ns}", ""])
   let chain := (importedFiles file m).flatMap fun f => f :: ((deps.lookup f).map (·.imports)).getD []
   return { lean := text, interface := iface, imports := chain.eraseDups }
 

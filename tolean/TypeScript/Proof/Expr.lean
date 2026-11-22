@@ -47,15 +47,15 @@ attribute [simp] EStateM.bind_ok EStateM.map_ok
   simp [tooDeep, get, getThe, MonadStateOf.get, EStateM.get, throw, throwThe, MonadExceptOf.throw,
     EStateM.throw, bind, EStateM.bind]
 
-theorem checkName_ok {sp : Span} {name r : String} {s s' : Ctx} :
-    checkName sp name s = .ok r s' → r = name ∧ s' = s := by
+theorem checkName_ok {sp : Span} {name r : String} {s s' : Ctx} {quoted : Bool} :
+    checkName sp name quoted s = .ok r s' → r = name ∧ s' = s := by
   simp only [checkName, ite_state]
   split
   · simp
   · simp only [pure_bind, pure_ok]; rintro ⟨rfl, rfl⟩; exact ⟨rfl, rfl⟩
 
-theorem checkLocalName_ok {sp : Span} {name r : String} {s s' : Ctx}
-    (h : checkLocalName sp name s = .ok r s') : r = name ∧ s' = s := by
+theorem checkLocalName_ok {sp : Span} {name r : String} {s s' : Ctx} {quoted : Bool}
+    (h : checkLocalName sp name quoted s = .ok r s') : r = name ∧ s' = s := by
   simp only [checkLocalName, bind_ok, get_ok, ite_state] at h
   obtain ⟨c, s₁, ⟨rfl, rfl⟩, h⟩ := h
   split at h
@@ -70,7 +70,7 @@ theorem checkLocalName_ok {sp : Span} {name r : String} {s s' : Ctx}
         · exact checkName_ok h
 
 theorem declare_ok {env env' : Translate.Env} {sp : Span} {name : String} {b : Binding} {t : Ty}
-    {s s' : Ctx} (h : declare env sp name b t s = .ok env' s') :
+    {s s' : Ctx} {quoted : Bool} (h : declare env sp name b t quoted s = .ok env' s') :
     env.has name = false ∧ env' = env.add { name, binding := b, type := t } ∧ s' = s := by
   simp only [declare, ite_state] at h
   split at h
@@ -130,12 +130,14 @@ theorem has_add (env : Translate.Env) (l : Local) (x : String) :
 
 /-- The error class `c` that the translator knows is the one the interpreter
 makes errors of, in the file of `m`: its constructor has the same parameters,
-with the same names and the same `readonly` marks. And its name is not one
-that the interpreter reads as a global, such as `Map`. -/
+with the same names and the same `readonly` marks, and the same runtime name.
+Its name is not one that the interpreter reads as a global, such as `Map`.
+Its fields use no reserved names that the interpreter does not model. -/
 def ClassAgrees (m : Eval.Scope) (c : ClassInfo) : Prop :=
   ∃ ctor, Eval.errorClassIn m c.name = some ctor ∧
     (Eval.ctorParams ctor).map (fun p => (p.param.name, p.readonly)) = c.params.map (fun x => (x.1, x.2.2)) ∧
-    isGlobalName c.name = false
+    Eval.ctorName ctor = c.runtimeName ∧ isGlobalName c.name = false ∧
+    Eval.errorCtorSupported ctor = true
 
 /-- Each function that a call may name is the one the interpreter calls: in
 the file of `m`, a call of `f.name` runs `f`. Each string enum whose members
@@ -146,7 +148,8 @@ def Resolves (m : Eval.Scope) (env : Translate.Env) : Prop :=
   (∀ f ∈ env.functions, Eval.resolve m f.name = some f.ref ∧
     (f.borrow.isSome = true → f.file = m.file)) ∧
     (∀ e ∈ env.enums, Eval.resolveEnum m e.name = some e.members) ∧
-    ∀ c ∈ env.classes, ClassAgrees m c
+    (∀ c ∈ env.classes, ClassAgrees m c) ∧
+    (∀ name, isGlobalName name = true → Eval.errorClassIn m name = none)
 
 /-- The functions, the string enums, the error classes and the local functions
 that code may name. A branch or a loop body keeps them, and changes only the
@@ -157,7 +160,8 @@ def globals (env : Translate.Env) : List FnInfo × List EnumValue × List ClassI
 theorem Resolves.congr {m : Eval.Scope} {env env' : Translate.Env} (h : Resolves m env)
     (hg : globals env' = globals env) : Resolves m env' := by
   simp only [globals, Prod.mk.injEq] at hg
-  exact ⟨fun f hf => h.1 f (hg.1 ▸ hf), fun e he => h.2.1 e (hg.2.1 ▸ he), fun c hc => h.2.2 c (hg.2.2.1 ▸ hc)⟩
+  exact ⟨fun f hf => h.1 f (hg.1 ▸ hf), fun e he => h.2.1 e (hg.2.1 ▸ he),
+    fun c hc => h.2.2.1 c (hg.2.2.1 ▸ hc), h.2.2.2⟩
 
 /-- A scope with the same globals has the same local functions, which change
 the same locals. -/
@@ -2681,7 +2685,7 @@ theorem translateSort_sound {F : Nat}
   split at h
   rotate_left
   · simp only [bind_ok, reject_ne_ok, false_and, exists_false] at h
-  simp only [bind_ok, orReject_ok, pure_ok] at h
+  simp only [bind_ok, pure_ok] at h
   obtain ⟨-, s₉, -, -, s₁₀, -, rfl, -⟩ := h
   obtain ⟨-, rfl, -⟩ := declare_ok hdQ
   obtain ⟨hnp, rfl, -⟩ := declare_ok hdP
@@ -4379,9 +4383,25 @@ theorem translateSpreadArray_sound {env : Translate.Env} {tr : Option Ty → Exp
 
 /-- `new Date(t)` means what the interpreter's rule for it means: the date
 whose time value is TimeClip of `t`. -/
+private theorem hasHoistedMark_false_of_no_mark {typeArgs : List TypeExpr}
+    (h : ∀ span, typeArgs ≠ [.keyword span "'"]) : Eval.hasHoistedMark typeArgs = false := by
+  cases typeArgs with
+  | nil => simp [Eval.hasHoistedMark]
+  | cons t rest =>
+    cases rest with
+    | cons _ _ => simp [Eval.hasHoistedMark]
+    | nil =>
+      cases t with
+      | keyword span name =>
+        by_cases hn : name = "'"
+        · exact False.elim (h span (by simp [hn]))
+        · simp [Eval.hasHoistedMark]
+      | _ => simp [Eval.hasHoistedMark]
+
 theorem translateNewDate_sound {tr : Option Ty → Expr → TM Code} {env : Translate.Env}
     (htr : ∀ exp e ctx c ctx', tr exp e ctx = .ok c ctx' → Sim (N := N) m fs fuel env e c.code)
     {sp : Span} {typeArgs : List TypeExpr} {args : List Expr} {ctx ctx' : Ctx} {c : Code}
+    (htypeArgs : typeArgs = [])
     (h : translateNewDate tr env sp args ctx = .ok c ctx') :
     Sim (N := N) m fs fuel env (.new sp "Date" typeArgs args) c.code := by
   match args, h with
@@ -4399,7 +4419,10 @@ theorem translateNewDate_sound {tr : Option Ty → Expr → TM Code} {env : Tran
       obtain ⟨x, hx, rfl⟩ := out_dateOfNumber fs fuel hv
       rw [eval_value] at hx
       have harg := htr _ _ _ _ _ ht ρs ρo _ ha hs hx
-      simp [Eval.eval, hs.none (by simpa using hhas), harg]
+      subst typeArgs
+      have hmark : Eval.hasHoistedMark [] = false := rfl
+      have hclassnone := hs.2.2.2.2 "Date" (by decide)
+      simp [Eval.eval, hmark, hclassnone, hs.none (by simpa using hhas), harg]
     · simp at h
   | [], h =>
     unfold translateNewDate at h
@@ -4421,7 +4444,8 @@ theorem translateNew_sound {tr : Option Ty → Expr → TM Code} {env : Translat
   · rename_i hc
     obtain rfl : callee = "Date" := by simpa using hc
     split at h
-    · exact translateNewDate_sound m fs fuel htr h
+    · rename_i htypeArgs
+      exact translateNewDate_sound m fs fuel htr (by simpa using htypeArgs) h
     · simp at h
   simp only [ite_state] at h
   split at h
@@ -4440,15 +4464,26 @@ theorem translateNew_sound {tr : Option Ty → Expr → TM Code} {env : Translat
   · simp only [show ("Map" == "Map") = true from rfl, ↓reduceIte] at h
     rcases args with _ | ⟨arg, _ | ⟨_, _⟩⟩
     · simp only [bind_ok] at h
-      obtain ⟨type, s₁, -, h⟩ := h
+      obtain ⟨type, s₁, htype, h⟩ := h
+      have hnot : ∀ span, typeArgs ≠ [.keyword span "'"] := by
+        intro span hmark
+        subst typeArgs
+        simp [Translate.newMapType] at htype
+      have hmark := hasHoistedMark_false_of_no_mark hnot
       simp only [pure_ok] at h
       obtain ⟨rfl, -⟩ := h
       intro ρs ρo v _ hs hv
       simp [IR.Expr.eval, IR.Expr.evalList, IR.ExprExt.apply] at hv
       subst hv
-      simp [Eval.eval, hnone ρs hs]
+      have hclassnone := hs.2.2.2.2 "Map" (by decide)
+      simp [Eval.eval, hmark, hnone ρs hs, hclassnone]
     · simp only [bind_ok, orReject_ok] at h
-      obtain ⟨declared, s₁, -, found, s₂, hfound, ⟨elem, li⟩, s₃, ⟨rfl, rfl⟩, type, s₄, -, h⟩ := h
+      obtain ⟨declared, s₁, hdeclared, found, s₂, hfound, ⟨elem, li⟩, s₃, ⟨rfl, rfl⟩, type, s₄, -, h⟩ := h
+      have hnot : ∀ span, typeArgs ≠ [.keyword span "'"] := by
+        intro span hmark
+        subst typeArgs
+        simp [Translate.declaredMapType] at hdeclared
+      have hmark := hasHoistedMark_false_of_no_mark hnot
       simp only [pure_ok] at h
       obtain ⟨rfl, -⟩ := h
       have hit := iterOf_sim m fs fuel
@@ -4464,20 +4499,32 @@ theorem translateNew_sound {tr : Option Ty → Expr → TM Code} {env : Translat
         rename_i vs
         obtain ⟨es, hes, rfl⟩ := hv
         have hiter := hit _ _ rfl ρs ρo _ ha hs hli
-        simp [Eval.eval, hnone ρs hs, hiter, hes]
+        have hclassnone := hs.2.2.2.2 "Map" (by decide)
+        simp [Eval.eval, hmark, hnone ρs hs, hclassnone, hiter, hes]
     · simp at h
   · simp only [show ("Set" == "Map") = false from rfl, ↓reduceIte, Bool.false_eq_true] at h
     rcases args with _ | ⟨arg, _ | ⟨_, _⟩⟩
     · simp only [bind_ok] at h
-      obtain ⟨type, s₁, -, h⟩ := h
+      obtain ⟨type, s₁, htype, h⟩ := h
+      have hnot : ∀ span, typeArgs ≠ [.keyword span "'"] := by
+        intro span hmark
+        subst typeArgs
+        simp [Translate.newSetType, Translate.unsupportedType, reject_ne_ok] at htype
+      have hmark := hasHoistedMark_false_of_no_mark hnot
       simp only [pure_ok] at h
       obtain ⟨rfl, -⟩ := h
       intro ρs ρo v _ hs hv
       simp [IR.Expr.eval, IR.Expr.evalList, IR.ExprExt.apply] at hv
       subst hv
-      simp [Eval.eval, hnone ρs hs]
+      have hclassnone := hs.2.2.2.2 "Set" (by decide)
+      simp [Eval.eval, hmark, hnone ρs hs, hclassnone]
     · simp only [bind_ok, orReject_ok] at h
-      obtain ⟨declared, s₁, -, found, s₂, hfound, ⟨elem, li⟩, s₃, ⟨rfl, rfl⟩, type, s₄, -, h⟩ := h
+      obtain ⟨declared, s₁, hdeclared, found, s₂, hfound, ⟨elem, li⟩, s₃, ⟨rfl, rfl⟩, type, s₄, -, h⟩ := h
+      have hnot : ∀ span, typeArgs ≠ [.keyword span "'"] := by
+        intro span hmark
+        subst typeArgs
+        simp [Translate.declaredSetType, Translate.unsupportedType, reject_ne_ok] at hdeclared
+      have hmark := hasHoistedMark_false_of_no_mark hnot
       simp only [pure_ok] at h
       obtain ⟨rfl, -⟩ := h
       have hit := iterOf_sim m fs fuel
@@ -4493,7 +4540,8 @@ theorem translateNew_sound {tr : Option Ty → Expr → TM Code} {env : Translat
         rename_i vs
         obtain ⟨es, hes, rfl⟩ := hv
         have hiter := hit _ _ rfl ρs ρo _ ha hs hli
-        simp [Eval.eval, hnone ρs hs, hiter, hes]
+        have hclassnone := hs.2.2.2.2 "Set" (by decide)
+        simp [Eval.eval, hmark, hnone ρs hs, hclassnone, hiter, hes]
     · simp at h
 
 theorem out_numberSameValue {a b : IR.Expr} {ρ : Eval.Env N} {v : Val N}

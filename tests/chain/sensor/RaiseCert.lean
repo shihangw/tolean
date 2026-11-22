@@ -15,6 +15,8 @@ set_option linter.unusedVariables false
 -- the record into every shape, and `link_tac` unfolds the evaluator in
 -- each. That can pass Lean's default budget.
 set_option maxHeartbeats 400000
+-- A sort obligation can contain a deeply nested comparator expression.
+set_option maxRecDepth 10000
 
 /-- The program, as the parser read it. -/
 def program : tolean.TypeScript.Syntax.Module :=
@@ -110,12 +112,12 @@ def decodeGauge {N : Type} [tolean.TypeScript.JSNumber N] : Option (Val N) → s
 @[simp] theorem decList_decNull_decodeGauge {N : Type} [tolean.TypeScript.JSNumber N] (xs : List (Option sensor.Raise.Gauge)) : decList (decNull decodeGauge) (some (Val.list (List.map (encNull (encodeGauge (N := N))) xs))) = xs :=
   decList_list_null _ _ decodeGauge_encodeGauge encodeGauge_ne_null xs
 
-theorem raise_link {N : Type} [tolean.TypeScript.JSNumber N] (g : _) (step : _) :
+theorem raise_link {N : Type} [tolean.TypeScript.JSNumber N] (g : sensor.Raise.Gauge) (step : Int) :
     tolean.TypeScript.IR.runIn (N := N) (tolean.TypeScript.IR.functionsOf [("", decls)]) ⟨"", "raise"⟩ [(encodeGauge g), (Val.int step)] =
       some (encodeGauge (sensor.Raise.raise g step)) := by
   link_tac [decls, Env.set_cons, Env.lookup_cons, Env.lookup_set_same, Env.lookup_set_ne, Env.set_set, Env.length_set, encList, decInt, decBool, decStr, decNum, encodeGauge, decodeGauge, JSNumber.countUp?_eq_of_isSome, sensor.Raise.raise]
 
-theorem raise_cert {N : Type} [tolean.TypeScript.JSNumber N] (g : _) (step : _) :
+theorem raise_cert {N : Type} [tolean.TypeScript.JSNumber N] (g : sensor.Raise.Gauge) (step : Int) :
     run (N := N) program "raise" [(encodeGauge g), (Val.int step)] = some (encodeGauge (sensor.Raise.raise g step)) :=
   tolean.TypeScript.Proof.decls_sound rfl rfl rfl program_translated "raise" _ 64 _
     (raise_link g step)

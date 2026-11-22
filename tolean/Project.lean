@@ -348,11 +348,19 @@ def Job.chainLanguage : Job → String × Option String
 /-- What one unit writes: its Lean file and manifest, and for a TypeScript
 file with `certify`, its certificate. -/
 def unitWrites (u : Job) (read : String → Except String String) (result : Except String Translation)
+    (proofs : List Chain.Obligation := [])
     (configInputs : List (String × String) := []) :
     IO (List Write) := do
   let t ← ok result
   let (language, target) := u.chainLanguage
+  let classElaboration ← match u with
+    | .typescript _ source => do
+      let text ← ok (read source)
+      let (_, _, hasClasses) ← ok (TypeScript.Certify.certifiedFunctions text u.edition)
+      pure hasClasses
+    | _ => pure false
   let m ← Chain.fileManifest language target (u.sources ++ t.imports) t.output t.lean t.module
+    classElaboration
   let m := { m with sources := m.sources ++ configInputs.map fun (path, text) => Chain.textRef path text }
   let manifest (m : Chain.FileManifest) : Write := .file (t.output ++ ".chain.json") (Chain.manifestText m)
   let .typescript s source := u | return [.file t.output t.lean, manifest m]
@@ -363,16 +371,22 @@ def unitWrites (u : Job) (read : String → Except String String) (result : Exce
   let text ← ok (read source)
   let cert := certPath t.output
   let certNs := t.ns ++ "Cert"
-  let certText ← ok (TypeScript.Certify.certify source text t.module t.ns certNs u.edition)
+  let certText ← ok (TypeScript.Certify.certify source text t.module t.ns certNs u.edition proofs)
   let certModule ← ok (moduleOf u.moduleRoot cert)
-  let (fns, all) ← ok (TypeScript.Certify.certifiedFunctions text u.edition)
+  let (fns, all, classElaboration) ← ok (TypeScript.Certify.certifiedFunctions text u.edition)
   let m := Chain.withCertificate m cert certText certModule certNs
-    (fns.map fun f => (f, s!"{certNs}.{f}_cert")) all
+    (fns.map fun f => (f, s!"{certNs}.{f}_cert")) all classElaboration
   return [.file t.output t.lean, .file cert certText, manifest m]
 
 /-- What the project file asks for: every file to write or to remove. Paths
 are relative to the project root, which must be the working directory. -/
 def plan (config : Json) : IO (List Write) := do
+  let proofs ← match config.getObjVal? "proofManifest" with
+    | .error _ => pure []
+    | .ok value => do
+      let path ← ok (Lean.fromJson? (α := String) value)
+      let manifest : Chain.ProjectManifest ← Chain.readJson path
+      pure manifest.obligations
   let files ← projectFiles "."
   let hasTypeScript := (units config files).any (· matches .typescript ..)
   let configs ← if hasTypeScript && files.contains "tsconfig.json" then do
@@ -398,7 +412,7 @@ def plan (config : Json) : IO (List Write) := do
     | some t => .ok t
     | none => .error s!"{f}: not read"
   return (← (translateAll jobs read files).mapM fun (u, t) =>
-    unitWrites u read t (if u matches .typescript .. then configs else [])).flatten
+    unitWrites u read t proofs (if u matches .typescript .. then configs else [])).flatten
 
 /-! ### Workspaces as JSON
 
