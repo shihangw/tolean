@@ -943,23 +943,37 @@ macro_rules
 
 namespace tolean.TypeScript.IR
 
-/-- Evaluate straight-line statements without opening a fold. The last
-equation of `Body.exec` handles folds and deliberately stays opaque. -/
-syntax "loop_prepare" "[" Lean.Parser.Tactic.simpLemma,* "]" : tactic
-macro_rules
-  | `(tactic| loop_prepare [$defs,*]) =>
-    `(tactic| (try simp [
+open Lean Elab Tactic Meta in
+/-- Evaluate straight-line statements without opening a fold. Select the
+equations by their body constructor, so their order does not matter.
+Reject equations without a known body constructor rather than unfold a
+possible fold. -/
+elab "loop_prepare" "[" defs:Lean.Parser.Tactic.simpLemma,* "]" : tactic => do
+  let some equations ← getEqnsFor? ``Body.exec
+    | throwError "loop_prepare: no equations for Body.exec"
+  let mut lemmas : Array (TSyntax `Lean.Parser.Tactic.simpLemma) := #[]
+  for equation in equations do
+    let constructor ← forallTelescopeReducing (← getConstInfo equation).type fun _ type => do
+      let some (_, lhs, _) := type.eq?
+        | throwError "loop_prepare: {equation} is not an equality"
+      unless lhs.isAppOf ``Body.exec do
+        throwError "loop_prepare: {equation} does not evaluate Body.exec"
+      let .const constructor _ := lhs.appArg!.getAppFn
+        | throwError "loop_prepare: {equation} has no known body constructor"
+      let .ctorInfo info ← getConstInfo constructor
+        | throwError "loop_prepare: {equation} has no known body constructor"
+      unless info.induct == ``tolean.IR.Body do
+        throwError "loop_prepare: {equation} does not match a Body constructor"
+      return constructor
+    if constructor != ``tolean.IR.Body.fold then
+      lemmas := lemmas.push (← `(Lean.Parser.Tactic.simpLemma| $(mkIdent equation):ident))
+  evalTactic (← `(tactic| (try simp [
       runIn, callIn, Except.toOption, functionsOf, functions,
-      Body.exec.eq_1, Body.exec.eq_2, Body.exec.eq_3, Body.exec.eq_4,
-      Body.exec.eq_5, Body.exec.eq_6, Body.exec.eq_7, Body.exec.eq_8,
-      Body.exec.eq_9, Body.exec.eq_10, Body.exec.eq_11, Body.exec.eq_12,
-      Body.exec.eq_13, Body.exec.eq_14, Body.exec.eq_15, Body.exec.eq_16,
-      Body.exec.eq_17, Body.exec.eq_18, Body.exec.eq_19, Body.exec.eq_20,
-      Body.exec.eq_21, Body.exec.eq_22,
+      $lemmas,*,
       Expr.eval, Expr.evalList, bindState, eqVal, tolean.IR.IntOp.apply,
       List.lookup, DeclRef.beq_def, Eval.Env.set,
       Eval.decList_list_null, Eval.decList_encList_null, Eval.decUndef_encUndef,
-      -List.map_map, $defs,*]))
+      -List.map_map, $defs,*])))
 
 open Lean Elab Tactic Meta in
 /-- Split the current loop result on both sides of a link goal. The two
