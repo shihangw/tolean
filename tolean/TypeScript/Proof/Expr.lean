@@ -5756,7 +5756,7 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
       obtain ⟨codes, s₁, hcodes, elem, s₂, -, _, s₃, -, unions, ⟨-, -⟩, hr⟩ := h
       rw [← hr]
       intro ρs ρo vs ha hs hvalues
-      rw [evalList_into_value fs fuel unions (some elem) ρo] at hvalues
+      rw [evalList_into_value fs fuel unions.unions (some elem) ρo] at hvalues
       exact mapM_sim m fs fuel (fun e ctx c ctx' h => ihE _ _ _ _ _ _ h)
         es ctx codes s₁ hcodes ρs ρo vs ha hs hvalues
     · intro env exp sp es ctx c ctx' h
