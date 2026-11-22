@@ -60,12 +60,12 @@ below then trust neither the translator nor the printer. -/
 theorem program_translated : tolean.TypeScript.Proof.translatesTo program start decls = true := by
   decide +kernel
 
-theorem inc_link {N : Type} [tolean.TypeScript.JSNumber N] (x : _) :
+theorem inc_link {N : Type} [tolean.TypeScript.JSNumber N] (x : Int) :
     tolean.TypeScript.IR.runIn (N := N) (tolean.TypeScript.IR.functionsOf [("", decls)]) ⟨"", "inc"⟩ [(Val.int x)] =
       some (Val.int (src.«my-lib».Util.inc x)) := by
   link_tac [decls, Env.set_cons, Env.lookup_cons, Env.lookup_set_same, Env.lookup_set_ne, Env.set_set, Env.length_set, encList, decInt, decBool, decStr, decNum, JSNumber.countUp?_eq_of_isSome, src.«my-lib».Util.inc]
 
-theorem inc_cert {N : Type} [tolean.TypeScript.JSNumber N] (x : _) :
+theorem inc_cert {N : Type} [tolean.TypeScript.JSNumber N] (x : Int) :
     run (N := N) program "inc" [(Val.int x)] = some (Val.int (src.«my-lib».Util.inc x)) :=
   tolean.TypeScript.Proof.decls_sound rfl rfl rfl program_translated "inc" _ 64 _
     (inc_link x)

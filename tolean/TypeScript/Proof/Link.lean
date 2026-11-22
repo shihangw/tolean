@@ -393,9 +393,27 @@ def retOutcome {R τ : Type} (encR : R → Val N) (getRet : τ → Option R) :
 value to return, or the locals at its end. -/
 def retResult {R σ τ : Type} (encR : R → Val N) (getRet : τ → Option R) (getS : τ → σ)
     (upd : σ → Eval.Env N → Eval.Env N) (ρ : Eval.Env N) (t : τ) : Eval.Outcome N :=
-  match getRet t with
-  | some r => .ret (.ok (encR r))
-  | none => .normal (upd (getS t) ρ)
+  tolean.IR.LoopResult.run (tolean.IR.LoopResult.ofParts (getRet t) (getS t))
+    (fun r => .ret (.ok (encR r)))
+    (fun s => .normal (upd s ρ))
+
+omit [JSNumber N] in
+/-- The result of a returning loop whose state keeps its return value and
+accumulator separately. A completed loop updates the environment from the
+accumulator; an early return ignores that final accumulator. -/
+theorem retResult_pair {R σ : Type} (encR : R → Val N)
+    (upd : σ → Eval.Env N → Eval.Env N) (ρ : Eval.Env N) (t : Option R × σ) :
+    retResult encR Prod.fst Prod.snd upd ρ t =
+      match t.1 with
+      | some r => .ret (.ok (encR r))
+      | none => .normal (upd t.2 ρ) := by
+  cases t with
+  | mk r s => cases r <;> rfl
+
+omit [JSNumber N] in
+/-- Equality of loop states carries through their return slots. -/
+theorem fst_eq_of_eq {α β : Type} {x y : α × β} (h : x = y) : x.1 = y.1 :=
+  congrArg Prod.fst h
 
 /-- A fold of the output whose body can `return`, and `forIn`, agree when one
 run of the body and one step of `forIn` agree. The state of `forIn` holds
@@ -421,7 +439,8 @@ theorem runFold_forInRet {α σ τ R : Type} (fs : List (DeclRef × List String 
       some (retResult encR getRet getS upd ρ (Id.run (forIn xs (init s) (step ρ)))) := by
     intro xs
     induction xs with
-    | nil => intro s; simp [IR.Body.runFold, retResult, (hinit s).1, (hinit s).2]
+    | nil => intro s; simp [IR.Body.runFold, retResult, tolean.IR.LoopResult.run,
+      tolean.IR.LoopResult.ofParts, (hinit s).1, (hinit s).2]
     | cons x xs ih =>
       intro s
       obtain ⟨inner, hex, hb, hy⟩ := hbody ρ s x hI
@@ -432,12 +451,12 @@ theorem runFold_forInRet {α σ τ R : Type} (fs : List (DeclRef × List String 
         | some r =>
           simp only [List.map_cons, IR.Body.runFold, hex, retOutcome, hr, Option.bind_eq_bind,
             Option.bind_some, List.forIn_cons, hst]
-          simp [retResult, hr]
+          simp [retResult, tolean.IR.LoopResult.run, tolean.IR.LoopResult.ofParts, hr]
         | none =>
           simp only [ForInStep.value] at hb
           simp only [List.map_cons, IR.Body.runFold, hex, retOutcome, hr, hb hr, Option.bind_eq_bind,
             Option.bind_some, List.forIn_cons, hst]
-          simp [retResult, hr]
+          simp [retResult, tolean.IR.LoopResult.run, tolean.IR.LoopResult.ofParts, hr]
       | yield t =>
         obtain ⟨ht, hr⟩ := hy t hst
         rw [hst] at hex hb
@@ -473,7 +492,8 @@ theorem runFold_forInRet_on {α σ τ R : Type} (fs : List (DeclRef × List Stri
         some (retResult encR getRet getS upd ρ (Id.run (forIn ys (init s) (step ρ)))) := by
     intro ys
     induction ys with
-    | nil => intro _ s; simp [IR.Body.runFold, retResult, (hinit s).1, (hinit s).2]
+    | nil => intro _ s; simp [IR.Body.runFold, retResult, tolean.IR.LoopResult.run,
+      tolean.IR.LoopResult.ofParts, (hinit s).1, (hinit s).2]
     | cons x ys ih =>
       intro hmem s
       obtain ⟨inner, hex, hb, hy⟩ := hbody ρ s x hI (hmem x (by simp))
@@ -484,12 +504,12 @@ theorem runFold_forInRet_on {α σ τ R : Type} (fs : List (DeclRef × List Stri
         | some r =>
           simp only [List.map_cons, IR.Body.runFold, hex, retOutcome, hr, Option.bind_eq_bind,
             Option.bind_some, List.forIn_cons, hst]
-          simp [retResult, hr]
+          simp [retResult, tolean.IR.LoopResult.run, tolean.IR.LoopResult.ofParts, hr]
         | none =>
           simp only [ForInStep.value] at hb
           simp only [List.map_cons, IR.Body.runFold, hex, retOutcome, hr, hb hr, Option.bind_eq_bind,
             Option.bind_some, List.forIn_cons, hst]
-          simp [retResult, hr]
+          simp [retResult, tolean.IR.LoopResult.run, tolean.IR.LoopResult.ofParts, hr]
       | yield t =>
         obtain ⟨ht, hr⟩ := hy t hst
         rw [hst] at hex hb
@@ -503,6 +523,31 @@ theorem runFold_forInRet_on {α σ τ R : Type} (fs : List (DeclRef × List Stri
         rwa [← ht] at this
   have := key xs (fun _ h => h) (dec ρ)
   rwa [hdec ρ hI] at this
+
+/-- A returning fold runs its rest only after completion. Keep the rest as a
+continuation of the shared loop result, so a proof can rewrite one loop before
+it opens the next one. -/
+theorem bodyExec_fold_compose
+    (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
+    (names : List String) (element : String) (body : IR.Body)
+    (items : IR.Expr) (rest : IR.Body)
+    (info : tolean.IR.LoopInfo tolean.TypeScript.IR.TyExt) (ρ : Eval.Env N) :
+    IR.Body.exec fs fuel ρ (.fold names element body items rest info) =
+      match IR.Expr.eval fs fuel ρ items with
+      | some (.list vs) =>
+        match IR.Body.runFold fs fuel names element body ρ vs with
+        | some (.normal state) =>
+          tolean.IR.LoopResult.run (.completed state)
+            (fun value => some (Eval.Outcome.ret value))
+            (fun state => IR.Body.exec fs fuel state rest)
+        | some (.ret value) =>
+          tolean.IR.LoopResult.run (.returned value)
+            (fun value => some (Eval.Outcome.ret value))
+            (fun state => IR.Body.exec fs fuel state rest)
+        | some (.brk _) | some (.cont _) | none => none
+      | some _ | none => none := by
+  simp only [IR.Body.exec]
+  all_goals repeat' (split <;> simp_all [Option.bind, tolean.IR.LoopResult.run])
 
 /-- `includes` on the encoded elements of a list, when SameValueZero of `v`
 and each element is a test `p` of the element. -/
@@ -989,7 +1034,10 @@ apply the same function and agree by unfolding, add `b = b'`. A loop lemma's
 step and the printed definition's step are such a pair when they hold a
 `match`, because each `match` has its own auxiliary function. After a split
 on the result of each loop, this lets `simp_all` see that the two results
-are the same. -/
+are the same. If one hypothesis projects the return slot from a loop result,
+also project the equality for the whole state. Rewrite the goal with these
+hypotheses by definitional equality, so a result can also select the next
+branch when the goal still contains the loop itself. -/
 elab "link_eqs" : tactic => withMainContext do
   let hyps ← getLocalHyps
   let mut facts : Array Lean.Expr := #[]
@@ -1000,13 +1048,33 @@ elab "link_eqs" : tactic => withMainContext do
       let h₂ := hyps[j]!
       let some (_, a, _) := (← instantiateMVars (← inferType h₁)).eq? | continue
       let some (_, a', _) := (← instantiateMVars (← inferType h₂)).eq? | continue
-      if a == a' || !a.getAppFn.isConst || a.getAppFn != a'.getAppFn then continue
-      if ← withNewMCtxDepth (isDefEq a a') then
-        facts := facts.push (← mkEqTrans (← mkEqSymm h₁) h₂)
+      if a != a' && a'.isAppOf ``Prod.fst then
+        let base := a'.getAppArgs.back!
+        if ← withNewMCtxDepth (isDefEq a base) then
+          let projected ← mkAppM ``tolean.TypeScript.Proof.fst_eq_of_eq #[h₁]
+          facts := facts.push (← mkEqTrans (← mkEqSymm projected) h₂)
+      else if a != a' && a.isAppOf ``Prod.fst then
+        let base := a.getAppArgs.back!
+        if ← withNewMCtxDepth (isDefEq base a') then
+          let projected ← mkAppM ``tolean.TypeScript.Proof.fst_eq_of_eq #[h₂]
+          facts := facts.push (← mkEqTrans (← mkEqSymm h₁) projected)
+      else if a != a' && a.getAppFn.isConst && a.getAppFn == a'.getAppFn then
+        if ← withNewMCtxDepth (isDefEq a a') then
+          facts := facts.push (← mkEqTrans (← mkEqSymm h₁) h₂)
   let mut g ← getMainGoal
   for p in facts do
     let (_, g') ← (← g.assert `link_eq (← inferType p) p).intro1P
     g := g'
+  -- Unlike `simp`, rewriting compares the loop steps by definitional
+  -- equality, even when their matches have different auxiliary functions.
+  for h in hyps do
+    let some (_, a, _) := (← instantiateMVars (← inferType h)).eq? | continue
+    unless a.getAppFn.isConst do continue
+    try
+      let result ← g.rewrite (← g.getType) h (config := { transparency := .all })
+      unless result.mvarIds.isEmpty do continue
+      g ← g.replaceTargetEq result.eNew result.eqProof
+    catch _ => pure ()
   replaceMainGoal [g]
 
 end tolean.TypeScript.IR
