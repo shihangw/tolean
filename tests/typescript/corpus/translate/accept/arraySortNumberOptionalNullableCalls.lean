@@ -85,7 +85,7 @@ def classifyNull {N : Type} [JSNumber N]  : N :=
   (classify (N := N) ((match (none : Option N) with | none => JSNullish.null | some v => JSNullish.value v)))
 
 def classifyValue {N : Type} [JSNumber N]  : N :=
-  (classify (N := N) ((match ((JSNumber.ofSafeInt (N := N) (7 : Int)) : Option N) with | none => JSNullish.null | some v => JSNullish.value v)))
+  (classify (N := N) ((match (((JSNumber.ofSafeInt (N := N) (7 : Int)) : N) : Option N) with | none => JSNullish.null | some v => JSNullish.value v)))
 
 structure Numbers (N : Type) where
   values : JSNullish (List N) := JSNullish.undefined

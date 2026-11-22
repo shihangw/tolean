@@ -851,7 +851,8 @@ def fixArgs (params : List Ty) (first : List Code) : List Code :=
 /-- `c` where the context expects a value of type `expected`. A value of a
 member of a union of primitive types, such as a `string` where
 `string | bigint` is expected, becomes the member's constructor. In JS the
-value stays the same. -/
+value stays the same. Before Lean widens a value to an option, its source
+type must fix overloaded operations such as negation and exponentiation. -/
 def Code.into (unions : List UnionInfo) (c : Code) (expected : Option Ty) : Code :=
   match expected with
   | some (.tagged ref tags) | some (.nullable (.tagged ref tags)) =>
@@ -861,6 +862,14 @@ def Code.into (unions : List UnionInfo) (c : Code) (expected : Option Ty) : Code
         ⟨.inject ref k c.value, false, .tagged ref tags⟩
       else c
     | none => c
+  | some (.optional _) | some (.nullable _) =>
+    if c.type != .null && some c.type != expected &&
+        !(c.value matches .undefined) && !(c.value matches .nullishUndefined) then
+      match c.value with
+      | .ascribe _ type =>
+        if type == c.type.lean then c else ⟨.ascribe c.value c.type.lean, false, c.type⟩
+      | _ => ⟨.ascribe c.value c.type.lean, false, c.type⟩
+    else c
   | _ => c
 
 mutual
@@ -2301,13 +2310,14 @@ def translateElem (tr : Option Ty → Expr → TM Code) (expected : Option Ty) (
 
 /-- The lists that the output joins with `++`: each spread's list, and one
 literal for each run of elements between them. -/
-def partLists (t : IR.Ty) : List ElemPart → List IR.Expr
+def partLists (unions : List UnionInfo) (t : Ty) : List ElemPart → List IR.Expr
   | [] => []
-  | .many _ items :: ps => items :: partLists t ps
+  | .many _ items :: ps => items :: partLists unions t ps
   | .one c :: ps =>
-    match partLists t ps with
-    | .list xs _ :: rest => .list (c.value :: xs) t :: rest
-    | rest => .list [c.value] t :: rest
+    let value := (c.into unions (some t)).value
+    match partLists unions t ps with
+    | .list xs _ :: rest => .list (value :: xs) t.lean :: rest
+    | rest => .list [value] t.lean :: rest
 
 /-- Each piece has the array's element type `elem`. An element may have a
 type that fits `elem`, which Lean converts it to in the literal, but Lean does
@@ -2332,7 +2342,8 @@ def translateSpreadArray (tr : Option Ty → Expr → TM Code) (expected : Optio
     | _ => none
   let elem ← elementType s expectedElem (parts.map ElemPart.asCode)
   checkParts elem (parts.zip elems)
-  return ⟨.ext .append (partLists elem.lean parts), false, .array elem⟩
+  let unions := (← get).unions
+  return ⟨.ext .append (partLists unions elem parts), false, .array elem⟩
 
 /-- The receiver of `size`, `get` or `has`: an owned map as its local, as
 `ownedMap?` reads it, and any other expression as `tr` translates it. -/
@@ -3042,7 +3053,8 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
         | some (.literal _) => "a tag field must be its string literal itself, not the value of '?:'"
         | _ => "the branches of '?:' have different types"
       let type ← orReject ((a.type.join b.type).filter fun t => !(t matches .literal _)) s message
-      let code := IR.Expr.ite c.code a.value b.value
+      let code := IR.Expr.ite c.code (a.into env.unions (some type)).value
+        (b.into env.unions (some type)).value
       -- `null` is polymorphic, but two non-null branches need the joined type
       -- to coerce a value into `Option`.
       let needsAscription := type.isNullable && a.type != .null && b.type != .null
@@ -3053,8 +3065,10 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
       let b ← translateExpr fuel (if isEq then env.narrow name value else env) expected ifFalse
       let type ← orReject ((a.type.joinOptional b.type).filter fun t => !(t matches .literal _)) s
         "the branches of '?:' have different types"
-      return ⟨.matchNull name (if isEq then a.value else b.value)
-        (if isEq then b.value else a.value) kind, false, type⟩)
+      let av := (a.into env.unions (some type)).value
+      let bv := (b.into env.unions (some type)).value
+      return ⟨.matchNull name (if isEq then av else bv)
+        (if isEq then bv else av) kind, false, type⟩)
   | .call s callee args =>
     match reduceOf callee with
     | some recv => translateReduce fuel env expected s recv args
@@ -3131,7 +3145,9 @@ def translateElements (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span)
   let elem ← elementType s expectedElem codes
   for (c, e) in codes.zip elems do
     unless c.type.assignableTo elem do reject e.span "the element does not have the array's element type"
-  return (codes.map (·.value), elem)
+  let unions := (← get).unions
+  let values := codes.map fun c => (c.into unions (some elem)).value
+  return (values, elem)
 
 def translateCall (fuel : Nat) (env : Env) (s : Span) (callee : Expr) (args : List Expr) (top : Bool) :
     TM Code := do
@@ -3212,22 +3228,25 @@ def translateCall (fuel : Nat) (env : Env) (s : Span) (callee : Expr) (args : Li
   (args.zip (codes.zip fn.params)).forM fun (arg, c, paramType) => do
     unless c.type.passableTo (paramType.subst sol) do
       reject arg.span "the argument does not have the parameter's type"
+  let unions := (← get).unions
   let missing := (fn.params.drop args.length).map fun param =>
     if param matches .optional (.nullable _) then IR.Expr.nullishUndefined else IR.Expr.undefined
-  return ⟨.call fn.ref (optArgs sol codes fn.params ++ missing), false, fn.ret.subst sol⟩
+  return ⟨.call fn.ref (optArgs unions sol codes fn.params ++ missing), false, fn.ret.subst sol⟩
 
-/-- The arguments of a call, with the type of each argument of an optional
-parameter that names a type parameter written out: `(v : Option T)` with the
-types that the call fixes. Lean then makes a plain `v` the `some` of it, and
-knows the type of a `none`, where it could not infer `T` from the rest of
-the call. -/
-def optArgs (sol : List (String × Ty)) : List Code → List Ty → List IR.Expr
+/-- Arguments of a generic optional parameter need the substituted destination
+type after the source value has been typed. -/
+def optArgs (unions : List UnionInfo) (sol : List (String × Ty)) : List Code → List Ty → List IR.Expr
   | c :: cs, p :: ps =>
+    let c := c.into unions (some (p.subst sol))
     (if p matches .optional (.nullable _) then
       if c.value matches .undefined then IR.Expr.nullishUndefined
       else if c.type.isOptional then c.value else c.fieldValue (p.subst sol)
-     else if p matches .optional _ && p.isGeneric then .ascribe c.value (p.subst sol).lean else c.value) ::
-      optArgs sol cs ps
+     else if p matches .optional _ && p.isGeneric then
+       if c.type == .null || c.type == p.subst sol ||
+           c.value matches .undefined || c.value matches .nullishUndefined then c.value
+       else .ascribe c.value (p.subst sol).lean
+     else c.value) ::
+      optArgs unions sol cs ps
   | cs, [] => cs.map (·.value)
   | [], _ :: _ => []
 
@@ -3519,6 +3538,7 @@ def translateObject (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (
       -- the object owns the key, so explicit undefined fields remain refused.
       let v ← translateExpr fuel env (some fieldType.unoptional) value
       unless v.type.assignableTo fieldType.unoptional do reject span s!"'{key}' does not have the field's type"
+      let v := v.into ctx.unions (some fieldType)
       pure (seen ++ [key], parts ++ [(key, v.fieldValue fieldType)])
   for (field, type) in info.fieldsAt args do
     unless seen.contains field || type matches .optional _ do
@@ -3694,6 +3714,7 @@ def translateUpdate (env : Env) (s : Span) (e : Expr) : TM (String × IR.Expr) :
         | reject s "'??=' needs a local declared with let, of a type T | null"
       let v ← translateExpr (← fuelLimit) env (some value) right
       unless v.type.assignableTo (.nullable value) do reject s "the value does not have the local's type"
+      let v := v.into (← get).unions (some (.nullable value))
       return (name, .coalesce (.var name) v.value true)
     unless op.isSimple do refuse
     let some { binding := .«let», type, .. } := env.lookup name

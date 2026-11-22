@@ -24,7 +24,7 @@ def second {N : Type} [JSNumber N] (xs : List Int) : Option Int :=
   | none =>
     none
   | some v =>
-    v
+    (v : Int)
 
 def nth {N : Type} [JSNumber N] (xs : List JSString) (i : N) : JSString :=
   (Option.getD ((JSNumber.elementAt? xs i)) (JSString.ofString ""))

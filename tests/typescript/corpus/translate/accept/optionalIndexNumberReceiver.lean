@@ -5,7 +5,7 @@ open tolean.TypeScript
 namespace Test
 
 def values {N : Type} [JSNumber N] (absent : Bool) : Option (List Int) :=
-  (if absent then none else ([(1 : Int)] : List Int))
+  (if absent then none else (([(1 : Int)] : List Int) : List Int))
 
 def f {N : Type} [JSNumber N]  : Int :=
   (Option.getD (((((values (N := N) ((JSNumber.isNaN ((JSNumber.nan (N := N))))))).bind (·[0]?)) : Option Int)) ((0 : Int)))

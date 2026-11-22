@@ -5,11 +5,11 @@ def empty  : Option Int :=
   none
 
 def present (x : Int) : Option Int :=
-  x
+  (x : Int)
 
 def localValue (x : Int) : Int :=
   let value := (none : Option Int)
-  let value := (x : Option Int)
+  let value := ((x : Int) : Option Int)
   (Option.getD value ((0 : Int)))
 
 def read (x : Option Int := none) : Option Int :=

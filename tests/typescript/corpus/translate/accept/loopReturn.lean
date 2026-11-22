@@ -43,7 +43,7 @@ def firstPresent (xs : List (Option Int)) : Option Int :=
       | none =>
         ForInStep.yield none
       | some x =>
-        ForInStep.done (some x))))
+        ForInStep.done (some (x : Int)))))
       (fun r => r)
       (fun _ =>
     none

@@ -417,7 +417,7 @@ theorem update_sound (hc : CallsAgree (N := N) m.program fs fuel) {env : Transla
         obtain ⟨a, s₃, ha', h⟩ := h
         split at h
         · simp at h
-          obtain ⟨⟨rfl, rfl⟩, -⟩ := h
+          obtain ⟨s₄, ⟨rfl, rfl⟩, rfl, rfl⟩ := h
           have hsim := (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ ha'
           have hhas : env.has x = true := by simp [Env.has, hl]
           refine ⟨hhas, by simp [exprChanges, show (AssignOp.coalesce == AssignOp.coalesce) = true from rfl], ?_⟩
@@ -425,7 +425,7 @@ theorem update_sound (hc : CallsAgree (N := N) m.program fs fuel) {env : Transla
           simp only [IR.Expr.eval] at hu
           rw [← ha x] at hu
           rcases hcase with ⟨hnu, hbv⟩ | ⟨hn, hnu, rfl⟩
-          · rw [eval_value] at hbv
+          · rw [eval_into_value, eval_value] at hbv
             rcases hnu with rfl | rfl <;> simp [Eval.execStmt, hu, hsim ρs ρo w ha hs hbv]
           · cases w <;> simp_all [Eval.execStmt, isNullVal, env_set_self]
         · simp at h

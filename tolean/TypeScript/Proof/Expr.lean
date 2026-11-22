@@ -1438,10 +1438,17 @@ theorem tagTestOf_eval {env : Translate.Env} {e : Expr} {t : TagTest}
   | _ => simp at h
 
 /-- A value that becomes a member of a union of primitive types keeps its
-value: the evaluator gives a member's constructor the value inside. -/
+value: the evaluator gives a member's constructor the value inside.
+Source type annotations before option widening also preserve the value. -/
 theorem eval_into (unions : List UnionInfo) (c : Code) (expected : Option Ty) (ρ : Eval.Env N) :
     IR.Expr.eval fs fuel ρ (c.into unions expected).code = IR.Expr.eval fs fuel ρ c.code := by
   unfold Code.into
+  repeat' split
+  all_goals simp [IR.Expr.eval, eval_value]
+
+theorem eval_into_value (unions : List UnionInfo) (c : Code) (expected : Option Ty) (ρ : Eval.Env N) :
+    IR.Expr.eval fs fuel ρ (c.into unions expected).value = IR.Expr.eval fs fuel ρ c.value := by
+  unfold Code.value Code.into
   repeat' split
   all_goals simp [IR.Expr.eval, eval_value]
 
@@ -3676,21 +3683,42 @@ theorem fieldValue_eval (c : Code) (target : Ty) (ρ : Eval.Env N) :
       simp [IR.Expr.eval, IR.Expr.evalList, IR.ExprExt.apply, hcode]
   · rfl
 
-theorem evalList_optArgs (sol : List (String × Ty)) (ρ : Eval.Env N) :
+theorem fieldValue_into_eval (unions : List UnionInfo) (c : Code) (target : Ty)
+    (ρ : Eval.Env N) :
+    IR.Expr.eval fs fuel ρ ((c.into unions (some target)).fieldValue target) =
+      IR.Expr.eval fs fuel ρ c.value := by
+  rw [fieldValue_eval]
+  exact eval_into_value fs fuel unions c (some target) ρ
+
+theorem evalList_into_value (unions : List UnionInfo) (expected : Option Ty) (ρ : Eval.Env N) :
+    ∀ cs : List Code,
+      IR.Expr.evalList fs fuel ρ (cs.map fun c => (c.into unions expected).value) =
+        IR.Expr.evalList fs fuel ρ (cs.map Code.value)
+  | [] => rfl
+  | c :: cs => by
+    simp only [List.map_cons, IR.Expr.evalList]
+    rw [eval_into_value]
+    rw [evalList_into_value unions expected ρ cs]
+
+theorem evalList_optArgs (unions : List UnionInfo) (sol : List (String × Ty)) (ρ : Eval.Env N) :
     ∀ (cs : List Code) (ps : List Ty),
-      IR.Expr.evalList fs fuel ρ (optArgs sol cs ps) = IR.Expr.evalList fs fuel ρ (cs.map Code.value)
+      IR.Expr.evalList fs fuel ρ (optArgs unions sol cs ps) = IR.Expr.evalList fs fuel ρ (cs.map Code.value)
   | [], [] => rfl
   | [], _ :: _ => rfl
   | _ :: _, [] => rfl
   | c :: cs, p :: ps => by
-    have hfirst :
+    have hfirst : ∀ c : Code,
         IR.Expr.eval fs fuel ρ
           (if p matches .optional (.nullable _) then
             if c.value matches .undefined then IR.Expr.nullishUndefined
             else if c.type.isOptional then c.value else c.fieldValue (p.subst sol)
           else if p matches .optional _ && p.isGeneric then
-            .ascribe c.value (p.subst sol).lean else c.value) =
+            if c.type == .null || c.type == p.subst sol ||
+                c.value matches .undefined || c.value matches .nullishUndefined then c.value
+            else .ascribe c.value (p.subst sol).lean
+          else c.value) =
           IR.Expr.eval fs fuel ρ c.value := by
+      intro c
       by_cases hp : (p matches .optional (.nullable _)) = true
       · simp only [hp, ↓reduceIte]
         by_cases hu : (c.value matches .undefined) = true
@@ -3706,12 +3734,22 @@ theorem evalList_optArgs (sol : List (String × Ty)) (ρ : Eval.Env N) :
           · simp only [ho, Bool.false_eq_true, ↓reduceIte]
             exact fieldValue_eval fs fuel c _ ρ
       · simp only [hp, Bool.false_eq_true, ↓reduceIte]
-        cases p <;> simp_all <;> split <;> simp [IR.Expr.eval]
-    simp only [optArgs, List.map_cons, IR.Expr.evalList, evalList_optArgs sol ρ cs ps]
+        generalize hsub : p.subst sol = target
+        cases p with
+        | optional inner =>
+          by_cases hg : (Ty.optional inner).isGeneric = true
+          · simp only [hg]
+            by_cases h : c.type == .null || c.type == target ||
+              c.value matches .undefined || c.value matches .nullishUndefined
+            · simp [h]
+            · simp [h, IR.Expr.eval]
+          · simp [hg]
+        | _ => simp
+    simp only [optArgs, List.map_cons, IR.Expr.evalList, evalList_optArgs unions sol ρ cs ps]
     exact congrArg
       (fun x : Option (Val N) =>
         x.bind fun v => (IR.Expr.evalList fs fuel ρ (cs.map Code.value)).bind fun vs => some (v :: vs))
-      hfirst
+      ((hfirst _).trans (eval_into_value fs fuel unions c (some (p.subst sol)) ρ))
 
 /-! ### Maps -/
 
@@ -4264,11 +4302,12 @@ theorem translateElem_sim {env : Translate.Env} {tr : Option Ty → Expr → TM 
 /-- The lists that the output joins hold, one after another, what the array
 literal holds. -/
 theorem mapM_parts_sim {env : Translate.Env} {f : Expr → TM ElemPart}
-    (hf : ∀ e ctx p ctx', f e ctx = .ok p ctx' → PartSim (N := N) m fs fuel env e p) (t : IR.Ty) :
+    (hf : ∀ e ctx p ctx', f e ctx = .ok p ctx' → PartSim (N := N) m fs fuel env e p)
+    (unions : List UnionInfo) (t : Ty) :
     ∀ (es : List Expr) (ctx : Ctx) (ps : List ElemPart) (ctx' : Ctx),
       es.mapM f ctx = .ok ps ctx' →
       ∀ (ρs ρo : Eval.Env N) ws lss, Agree ρs ρo → Scoped m env ρs →
-        IR.Expr.evalList fs fuel ρo (partLists t ps) = some ws → ws.mapM IR.listItems? = some lss →
+        IR.Expr.evalList fs fuel ρo (partLists unions t ps) = some ws → ws.mapM IR.listItems? = some lss →
         Eval.evalElems m fuel ρs es = some lss.flatten := by
   intro es
   induction es with
@@ -4293,7 +4332,7 @@ theorem mapM_parts_sim {env : Translate.Env} {f : Expr → TM ElemPart}
       cases hw : IR.Expr.eval fs fuel ρo li with
       | none => simp [hw] at hws
       | some w =>
-        cases hws' : IR.Expr.evalList fs fuel ρo (partLists t ps') with
+        cases hws' : IR.Expr.evalList fs fuel ρo (partLists unions t ps') with
         | none => simp [hw, hws'] at hws
         | some ws' =>
           simp [hw, hws'] at hws
@@ -4314,7 +4353,7 @@ theorem mapM_parts_sim {env : Translate.Env} {f : Expr → TM ElemPart}
       simp only [partLists] at hws
       split at hws
       · next xs ty rest heq =>
-        simp only [IR.Expr.evalList, IR.Expr.eval] at hws
+        simp only [IR.Expr.evalList, IR.Expr.eval, eval_into_value] at hws
         cases hv0 : IR.Expr.eval fs fuel ρo c.value with
         | none => simp [hv0] at hws
         | some v0 =>
@@ -4331,7 +4370,7 @@ theorem mapM_parts_sim {env : Translate.Env} {f : Expr → TM ElemPart}
               | some lss' =>
                 simp [List.mapM_cons, IR.listItems?, hl'] at hl
                 subst hl
-                have hev : IR.Expr.evalList fs fuel ρo (partLists t ps') = some (.list vxs :: ws') := by
+                have hev : IR.Expr.evalList fs fuel ρo (partLists unions t ps') = some (.list vxs :: ws') := by
                   simp [heq, IR.Expr.evalList, IR.Expr.eval, hxs, hrest]
                 have hm : (Val.list vxs :: ws').mapM IR.listItems? = some (vxs :: lss') := by
                   simp [List.mapM_cons, IR.listItems?, hl']
@@ -4339,11 +4378,11 @@ theorem mapM_parts_sim {env : Translate.Env} {f : Expr → TM ElemPart}
                 rw [eval_value] at hv0
                 rw [evalElems_cons m fuel hsp, hsim ρs ρo _ ha hs hv0, this]
                 simp
-      · simp only [IR.Expr.evalList, IR.Expr.eval] at hws
+      · simp only [IR.Expr.evalList, IR.Expr.eval, eval_into_value] at hws
         cases hv0 : IR.Expr.eval fs fuel ρo c.value with
         | none => simp [hv0] at hws
         | some v0 =>
-          cases hws' : IR.Expr.evalList fs fuel ρo (partLists t ps') with
+          cases hws' : IR.Expr.evalList fs fuel ρo (partLists unions t ps') with
           | none => simp [hv0, hws'] at hws
           | some ws' =>
             simp [hv0, hws'] at hws
@@ -4364,8 +4403,9 @@ theorem translateSpreadArray_sound {env : Translate.Env} {tr : Option Ty → Exp
     {exp : Option Ty} {s : Span} {elems : List Expr} {ctx ctx' : Ctx} {c : Code}
     (h : translateSpreadArray tr exp s elems ctx = .ok c ctx') :
     Sim (N := N) m fs fuel env (.array s elems) c.code := by
-  simp only [translateSpreadArray, bind_ok, pure_ok] at h
-  obtain ⟨parts, s₁, hparts, elem, s₂, -, u, s₃, -, rfl, -⟩ := h
+  simp only [translateSpreadArray, bind_ok, pure_ok, get_ok] at h
+  obtain ⟨parts, s₁, hparts, elem, s₂, -, _, s₃, -, unions, _, ⟨-, -⟩, hcode, -⟩ := h
+  rw [← hcode]
   intro ρs ρo v ha hs hv
   obtain ⟨ws, hws, happ⟩ := out_ext fs fuel hv
   simp only [IR.ExprExt.apply] at happ
@@ -4374,7 +4414,7 @@ theorem translateSpreadArray_sound {env : Translate.Env} {tr : Option Ty → Exp
   | some lss =>
     simp [hm] at happ
     subst happ
-    have := mapM_parts_sim m fs fuel (fun _ _ _ _ hp => translateElem_sim m fs fuel htr hp) elem.lean
+    have := mapM_parts_sim m fs fuel (fun _ _ _ _ hp => translateElem_sim m fs fuel htr hp) unions.unions elem
       elems ctx parts s₁ hparts ρs ρo ws lss ha hs hws hm
     simp [Eval.eval, this]
 
@@ -4748,16 +4788,21 @@ theorem translateCall_sound {F : Nat} (hc : CallsAgree (N := N) m.program fs fue
           simp only [bind_ok] at h
           -- Fixing the type of an `undefined` argument keeps its value.
           obtain ⟨first, s₂, hcodes, _, s₃, -, _, s₄, -, h⟩ := h
-          obtain ⟨codes, hcodes', hcode⟩ : ∃ codes : List Code, codes.map Code.value = first.map Code.value ∧
-              c.code = .call fn.ref (optArgs (Ty.unifyList [] fn.params (codes.map (·.type))) codes fn.params ++
-                List.drop args.length (fn.params.map fun param =>
-                  if param matches .optional (.nullable _) then IR.Expr.nullishUndefined else IR.Expr.undefined)) := by
-            obtain ⟨_, -, rfl⟩ := map_ok.mp h
-            exact ⟨_, fixArgs_value _ _, rfl⟩
+          obtain ⟨_, s₁, _, h⟩ := h
+          obtain ⟨unions, hget, hresult⟩ := map_ok.mp h
+          have hget' : unions = s₁ ∧ ctx' = s₁ := by
+            simpa only [get_ok, EStateM.Result.ok.injEq] using hget
+          obtain ⟨rfl, rfl⟩ := hget'
+          let codes := fixArgs fn.params first
+          let sol := Ty.unifyList [] fn.params (codes.map (·.type))
+          have hcode : c.code = .call fn.ref (optArgs ctx'.unions sol codes fn.params ++
+              List.drop args.length (fn.params.map fun param =>
+                if param matches .optional (.nullable _) then IR.Expr.nullishUndefined else IR.Expr.undefined)) := by
+            simpa [codes, sol] using (congrArg Code.code hresult).symm
           -- What the call returns or throws, from which its value follows.
           have hcall : ∀ (ρs ρo : Eval.Env N) r, Agree ρs ρo → Scoped m env ρs →
-              IR.Expr.evalCall fs fuel ρo fn.ref (optArgs (Ty.unifyList [] fn.params (codes.map (·.type)))
-                codes fn.params ++ List.drop args.length (fn.params.map fun param =>
+              IR.Expr.evalCall fs fuel ρo fn.ref (optArgs ctx'.unions sol codes fn.params ++
+                List.drop args.length (fn.params.map fun param =>
                   if param matches .optional (.nullable _) then IR.Expr.nullishUndefined else IR.Expr.undefined)) = some r →
               Eval.evalCall m fuel ρs name args = some r := by
             intro ρs ρo r ha hs hr
@@ -4768,7 +4813,8 @@ theorem translateCall_sound {F : Nat} (hc : CallsAgree (N := N) m.program fs fue
               obtain ⟨param, hp, rfl⟩ := List.mem_map.mp he
               split <;> simp [IR.Expr.eval, IR.Expr.evalList, IR.ExprExt.apply]
             rw [out_evalCall, ← List.map_drop] at hr
-            rw [evalList_append_undefined fs fuel ρo _ hmissing, evalList_optArgs, hcodes'] at hr
+            rw [evalList_append_undefined fs fuel ρo _ hmissing, evalList_optArgs] at hr
+            rw [fixArgs_value] at hr
             cases hx : IR.Expr.evalList fs fuel ρo (first.map Code.value) with
             | none => simp [hx] at hr
             | some vs =>
@@ -4956,21 +5002,14 @@ theorem translateObject_sound {F : Nat}
           split at hg
           · simp at hg
             obtain ⟨rfl, -⟩ := hg
-            refine ⟨name, v.fieldValue fieldType, rfl, ?_⟩
+            refine ⟨name, _, rfl, ?_⟩
             intro ρs ρo w ha hs hw rest
-            have hfv : IR.Expr.eval fs fuel ρo (v.fieldValue fieldType) =
-                IR.Expr.eval fs fuel ρo v.value := by
-              unfold Code.fieldValue
-              split
-              · simp [IR.Expr.eval, IR.Expr.evalList, IR.ExprExt.apply]
-                cases IR.Expr.eval fs fuel ρo v.value <;> rfl
-              · rfl
-            rw [hfv] at hw
+            rw [fieldValue_into_eval] at hw
             rw [eval_value] at hw
             have := ihE _ _ _ _ _ _ hv ρs ρo w ha hs hw
             simp [Eval.evalProps, this]
             cases Eval.evalProps m fuel ρs rest <;> rfl
-          · simp at hg
+          · simp only [map_ok, reject_ne_ok, false_and, exists_false] at hg
       | spread ps v => simp at hg
       | keyValue ps key val =>
         cases key with
@@ -4986,21 +5025,14 @@ theorem translateObject_sound {F : Nat}
             split at hg
             · simp at hg
               obtain ⟨rfl, -⟩ := hg
-              refine ⟨key, v.fieldValue fieldType, rfl, ?_⟩
+              refine ⟨key, _, rfl, ?_⟩
               intro ρs ρo w ha hs hw rest
-              have hfv : IR.Expr.eval fs fuel ρo (v.fieldValue fieldType) =
-                  IR.Expr.eval fs fuel ρo v.value := by
-                unfold Code.fieldValue
-                split
-                · simp [IR.Expr.eval, IR.Expr.evalList, IR.ExprExt.apply]
-                  cases IR.Expr.eval fs fuel ρo v.value <;> rfl
-                · rfl
-              rw [hfv] at hw
+              rw [fieldValue_into_eval] at hw
               rw [eval_value] at hw
               have := ihE _ _ _ _ _ _ hv ρs ρo w ha hs hw
               simp [Eval.evalProps, this, hk]
               cases Eval.evalProps m fuel ρs rest <;> rfl
-            · simp at hg
+            · simp only [map_ok, reject_ne_ok, false_and, exists_false] at hg
         | _ => simp at hg
 
 /-- What a read of a `Record` gives: the property of an object that a string
@@ -5628,15 +5660,17 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
             obtain ⟨ty, ⟨-, -⟩, hcode⟩ := h
             intro ρs ρo v ha hs hv'
             rw [← hcode] at hv'
-            have hv' : IR.Expr.eval fs fuel ρo (.ite tc.code ta.value tb.value) = some v := by
+            have hv' : IR.Expr.eval fs fuel ρo
+                (.ite tc.code (ta.into env.unions (some ty)).value
+                  (tb.into env.unions (some ty)).value) = some v := by
               split at hv' <;> simpa only [IR.Expr.eval] using hv'
             obtain ⟨t, ht, hbr⟩ := out_ite fs fuel hv'
             have htest := ihE _ _ _ _ _ _ htc ρs ρo _ ha hs ht
             simp only [Eval.eval, htest, Option.bind_eq_bind, Option.bind_some, Val.truthy]
             cases t
-            · simp only [eval_value] at hbr ⊢
+            · simp only [eval_value, eval_into] at hbr ⊢
               exact ihE _ _ _ _ _ _ htb ρs ρo _ ha hs hbr
-            · simp only [if_true, eval_value] at hbr ⊢
+            · simp only [if_true, eval_value, eval_into] at hbr ⊢
               exact ihE _ _ _ _ _ _ hta ρs ρo _ ha hs hbr
           · simp at h
         · cases hn : optionTestOf env test with
@@ -5665,7 +5699,7 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
             have rb := fun u hu => ihE _ _ _ _ _ _ htb ρs ρo u ha hsb hu
             rw [Eval.eval, ht]
             cases isEq <;> cases kind <;> cases w <;>
-            simp [IR.Expr.eval, hso, nullTestVal, Val.truthy, eval_value] at hv ⊢
+            simp [IR.Expr.eval, hso, nullTestVal, Val.truthy, eval_value, eval_into] at hv ⊢
             all_goals first | exact ra v hv | exact rb v hv
       | new sp callee typeArgs args =>
         simp only [translateExprCore] at h
@@ -5680,9 +5714,12 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
     · intro env exp sp es ctx r ctx' h
       simp only [translateElements] at h
       simp at h
-      obtain ⟨codes, s₁, hcodes, elem, s₂, -, -, hr⟩ := h
+      obtain ⟨codes, s₁, hcodes, elem, s₂, -, _, s₃, -, unions, ⟨-, -⟩, hr⟩ := h
       rw [← hr]
-      exact mapM_sim m fs fuel (fun e ctx c ctx' h => ihE _ _ _ _ _ _ h) es ctx codes s₁ hcodes
+      intro ρs ρo vs ha hs hvalues
+      rw [evalList_into_value fs fuel unions.unions (some elem) ρo] at hvalues
+      exact mapM_sim m fs fuel (fun e ctx c ctx' h => ihE _ _ _ _ _ _ h)
+        es ctx codes s₁ hcodes ρs ρo vs ha hs hvalues
     · intro env exp sp es ctx c ctx' h
       simp only [translateArray, ite_state] at h
       split at h
