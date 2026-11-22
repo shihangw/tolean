@@ -3691,9 +3691,7 @@ theorem evalList_into_value (unions : List UnionInfo) (expected : Option Ty) (ρ
   | c :: cs => by
     simp only [List.map_cons, IR.Expr.evalList]
     rw [eval_into_value]
-    exact congrArg (fun x : Option (Val N) =>
-      x.bind fun v => (IR.Expr.evalList fs fuel ρ (cs.map Code.value)).bind fun vs =>
-        some (v :: vs)) (evalList_into_value unions expected ρ cs)
+    rw [evalList_into_value unions expected ρ cs]
 
 theorem evalList_optArgs (sol : List (String × Ty)) (ρ : Eval.Env N) :
     ∀ (cs : List Code) (ps : List Ty),
