@@ -154,7 +154,7 @@ export function App() {
       setStatuses(new Map(names.map((n) => [n, { kind: 'unchecked' }])));
       return;
     }
-    const b = bundle(data.goSpec, ordered, names);
+    const b = bundle(data.goSpec, data.loopResult, ordered, names);
     let cancelled = false;
     const timer = setTimeout(() => {
       setStatuses(new Map(names.map((n) => [n, { kind: 'checking' }])));

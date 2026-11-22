@@ -13,6 +13,9 @@ import { type WorkspaceFile, bundle, claims, isProof, isSpec } from './site/src/
 /** The Go Spec that generated Go code imports. */
 export const goSpecPath = path.join(import.meta.dirname, '..', 'tolean/Go/Spec/Basic.lean');
 
+/** The shared carrier that returning folds use in every language. */
+export const loopResultPath = path.join(import.meta.dirname, '..', 'tolean/Runtime/LoopResult.lean');
+
 const filesIn = (exampleDir: string, dir: string, keep: (f: string) => boolean): WorkspaceFile[] =>
   readdirSync(path.join(exampleDir, dir))
     .filter(keep)
@@ -41,5 +44,7 @@ if (process.argv[1] === import.meta.filename) {
   const { src, theorems } = exampleFiles(exampleDir);
   const files = [...src, ...theorems];
   const names = claims(files).map((c) => c.name);
-  process.stdout.write(bundle(readFileSync(goSpecPath, 'utf8'), leanInOrder(files), names).text);
+  process.stdout.write(
+    bundle(readFileSync(goSpecPath, 'utf8'), readFileSync(loopResultPath, 'utf8'), leanInOrder(files), names).text,
+  );
 }

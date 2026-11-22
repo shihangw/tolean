@@ -14,7 +14,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import vm from 'node:vm';
 
-import { exampleFiles, goSpecPath, leanInOrder } from '../../bundle.ts';
+import { exampleFiles, goSpecPath, leanInOrder, loopResultPath } from '../../bundle.ts';
 import { bundle, claims } from '../src/lean.ts';
 import { statuses } from '../src/checker.ts';
 
@@ -133,7 +133,12 @@ if (one != null) {
   const { src, theorems } = exampleFiles(dir);
   const files = [...src, ...theorems];
   const names = claims(files).map((c) => c.name);
-  const b = bundle(readFileSync(goSpecPath, 'utf8'), leanInOrder(files), names);
+  const b = bundle(
+    readFileSync(goSpecPath, 'utf8'),
+    readFileSync(loopResultPath, 'utf8'),
+    leanInOrder(files),
+    names,
+  );
   const result = statuses(await checkOne(b.text), b, names);
   process.stdout.write(JSON.stringify([...result]) + '\n');
   process.exit(0);
