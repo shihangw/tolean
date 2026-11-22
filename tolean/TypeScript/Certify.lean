@@ -1410,6 +1410,16 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         s!"  {casesOn decls vars}link_tac [{simpSet}]"
     let mut index := 0
     let mut returnsLoop := false
+    let loopSteps (indent simpSet : String) (lemmas : List String) :=
+      String.join (lemmas.map fun lemma =>
+        indent ++ "all_goals (try (\n" ++
+        indent ++ s!"  loop_prepare [{simpSet}]\n" ++
+        indent ++ "  rw [tolean.TypeScript.Proof.bodyExec_fold_compose]\n" ++
+        indent ++ s!"  loop_prepare [{simpSet}]\n" ++
+        indent ++ s!"  rw [{lemma}]\n" ++
+        indent ++ s!"  all_goals loop_prepare [{simpSet}]\n" ++
+        indent ++ "  all_goals (try split_loop_result)\n" ++
+        indent ++ "  all_goals (try simp only [tolean.IR.LoopResult.run])))\n")
     for (stateNames, element, body, info, loopItems) in loopsOf outBody do
       index := index + 1
       let lemmaName := s!"{name}_loop{index}"
@@ -1630,11 +1640,17 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         s!"    all_goals (try rw [{lemma}])\n") ++
         (if instantiatedLoops.isEmpty then "" else
           s!"    all_goals link_tac [{simpSet}, {", ".intercalate hypNames}]\n")
+      let childSimpSet := ", ".intercalate
+        (hfsName ++ stepNames ++ closureLemmas ++ envLemmas ++ lemmaNames.toList ++
+          codecLemmas ++ defs ++ hypNames)
       -- The values that one step sees: the element, the state, and the other
       -- locals, which the lemma generalizes to `v0`, `v1` and so on.
       let stateVars := if count ≤ 1 then ["s"].zip info.stateTypes
         else (List.range count).map (s!"s{·}") |>.zip info.stateTypes
       let loopVars := ("x", info.elem) :: stateVars ++ vars.zipIdx.map fun ((_, t), i) => (s!"v{i}", t)
+      let childSteps := if instantiatedLoops.isEmpty then "" else
+        s!"    {casesOn decls loopVars}loop_prepare [{childSimpSet}]\n" ++
+        loopSteps "    " childSimpSet instantiatedLoops
       let rewrites := if !restricted || conditionalLemmas.isEmpty then "" else
         "    all_goals repeat' first\n" ++ String.join (conditionalLemmas.map fun lemma =>
           s!"      | rw [{lemma}]\n")
@@ -1654,7 +1670,8 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         s!"    {bindHyps}\n    try simp only []\n" ++
         generalize "ρ" coded ++ destruct ++
         (if restricted then "    have hs := hkeys x hx\n" else "") ++
-        s!"    {casesOn decls loopVars}link_tac [{simpSet}, {", ".intercalate hypNames}{if restricted then ", hs" else ""}]\n" ++
+        childSteps ++
+        s!"    all_goals {if instantiatedLoops.isEmpty then casesOn decls loopVars else ""}link_tac [{simpSet}, {", ".intercalate hypNames}{if restricted then ", hs" else ""}]\n" ++
         childRewrites ++
         (if !restricted || literalMaps.isEmpty then "" else
           s!"    all_goals (try simp only [{", ".intercalate literalMaps}, ← List.map_append])\n") ++
@@ -1806,14 +1823,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       else none
     let stagedLoops := if !returnsLoop then "" else
       s!"  {casesOn decls outParams}loop_prepare [{stagedSimpSet}]\n" ++
-      String.join (topLoops.map fun lemma =>
-        "  all_goals (try (\n" ++
-        s!"    loop_prepare [{stagedSimpSet}]\n" ++
-        "    rw [tolean.TypeScript.Proof.bodyExec_fold_compose]\n" ++
-        s!"    loop_prepare [{stagedSimpSet}]\n" ++
-        s!"    rw [{lemma}]\n" ++
-        s!"    all_goals loop_prepare [{stagedSimpSet}]\n" ++
-        "    all_goals (try split_loop_result)))\n")
+      loopSteps "  " stagedSimpSet topLoops
     let loopRewrites := String.join (functionPostLoopLemmas.map fun lemma =>
       s!"\n  all_goals (try rw [{lemma}])\n  all_goals (try simp_all [{simpSet}])")
     let loopRewrites := if functionLoopLemmas.isEmpty then "" else
@@ -1824,7 +1834,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       s!"    {runName} (N := {nv}) {outputFs} ⟨\"\", {str name}⟩ {list args} =\n" ++
       s!"      {some_} ({retEnc} ({call})) := by\n" ++
       stagedLoops ++
-      s!"  all_goals {casesOn decls outParams}link_tac [{simpSet}]" ++
+      s!"  all_goals {if returnsLoop then "" else casesOn decls outParams}link_tac [{simpSet}]" ++
       (if literalMaps.isEmpty then "" else
         s!"\n  all_goals (try simp only [{", ".intercalate literalMaps}, ← List.map_append])\n" ++
         s!"  all_goals (try simp_all [{simpSet}, -List.map_cons, -List.map_nil, -List.map_map, ← List.map_append])") ++
