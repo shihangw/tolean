@@ -2310,13 +2310,14 @@ def translateElem (tr : Option Ty → Expr → TM Code) (expected : Option Ty) (
 
 /-- The lists that the output joins with `++`: each spread's list, and one
 literal for each run of elements between them. -/
-def partLists (t : IR.Ty) : List ElemPart → List IR.Expr
+def partLists (unions : List UnionInfo) (t : Ty) : List ElemPart → List IR.Expr
   | [] => []
-  | .many _ items :: ps => items :: partLists t ps
+  | .many _ items :: ps => items :: partLists unions t ps
   | .one c :: ps =>
-    match partLists t ps with
-    | .list xs _ :: rest => .list (c.value :: xs) t :: rest
-    | rest => .list [c.value] t :: rest
+    let value := (c.into unions (some t)).value
+    match partLists unions t ps with
+    | .list xs _ :: rest => .list (value :: xs) t.lean :: rest
+    | rest => .list [value] t.lean :: rest
 
 /-- Each piece has the array's element type `elem`. An element may have a
 type that fits `elem`, which Lean converts it to in the literal, but Lean does
@@ -2341,7 +2342,8 @@ def translateSpreadArray (tr : Option Ty → Expr → TM Code) (expected : Optio
     | _ => none
   let elem ← elementType s expectedElem (parts.map ElemPart.asCode)
   checkParts elem (parts.zip elems)
-  return ⟨.ext .append (partLists elem.lean parts), false, .array elem⟩
+  let unions := (← get).unions
+  return ⟨.ext .append (partLists unions elem parts), false, .array elem⟩
 
 /-- The receiver of `size`, `get` or `has`: an owned map as its local, as
 `ownedMap?` reads it, and any other expression as `tr` translates it. -/
@@ -3227,16 +3229,15 @@ def translateCall (fuel : Nat) (env : Env) (s : Span) (callee : Expr) (args : Li
     unless c.type.passableTo (paramType.subst sol) do
       reject arg.span "the argument does not have the parameter's type"
   let unions := (← get).unions
-  let codes := (codes.zip fn.params).map fun (c, paramType) =>
-    c.into unions (some (paramType.subst sol))
   let missing := (fn.params.drop args.length).map fun param =>
     if param matches .optional (.nullable _) then IR.Expr.nullishUndefined else IR.Expr.undefined
-  return ⟨.call fn.ref (optArgs sol codes fn.params ++ missing), false, fn.ret.subst sol⟩
+  return ⟨.call fn.ref (optArgs unions sol codes fn.params ++ missing), false, fn.ret.subst sol⟩
 
 /-- Arguments of a generic optional parameter need the substituted destination
 type after the source value has been typed. -/
-def optArgs (sol : List (String × Ty)) : List Code → List Ty → List IR.Expr
+def optArgs (unions : List UnionInfo) (sol : List (String × Ty)) : List Code → List Ty → List IR.Expr
   | c :: cs, p :: ps =>
+    let c := c.into unions (some (p.subst sol))
     (if p matches .optional (.nullable _) then
       if c.value matches .undefined then IR.Expr.nullishUndefined
       else if c.type.isOptional then c.value else c.fieldValue (p.subst sol)
@@ -3245,7 +3246,7 @@ def optArgs (sol : List (String × Ty)) : List Code → List Ty → List IR.Expr
            c.value matches .undefined || c.value matches .nullishUndefined then c.value
        else .ascribe c.value (p.subst sol).lean
      else c.value) ::
-      optArgs sol cs ps
+      optArgs unions sol cs ps
   | cs, [] => cs.map (·.value)
   | [], _ :: _ => []
 

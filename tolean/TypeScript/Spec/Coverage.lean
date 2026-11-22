@@ -166,7 +166,7 @@ def sections : List Section := [
     ``Proof.translateBorrowCall_sim, ``Proof.borrowCall?_some, ``Proof.exprChanges_stmt,
     ``Proof.borrowCallStmt_sim, ``Proof.translateBorrowStmt_sound,
     ``Proof.evalList_append_undefined, ``Proof.callS_append_undefined, ``Proof.fieldValue_eval,
-    ``Proof.evalList_optArgs, ``Proof.fixArgs_value, ``Proof.evalList_into_zip,
+    ``Proof.evalList_optArgs, ``Proof.fixArgs_value,
     ``Proof.fieldValue_into_eval,
 
     -- A call of a local function, which the output lifts out.
