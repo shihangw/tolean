@@ -4806,7 +4806,7 @@ theorem translateCall_sound {F : Nat} (hc : CallsAgree (N := N) m.program fs fue
           let codes := fixArgs fn.params first
           let sol := Ty.unifyList [] fn.params (codes.map (·.type))
           let intoCodes := (codes.zip fn.params).map fun (c, p) =>
-            c.into s₁.unions (some (p.subst sol))
+            c.into ctx'.unions (some (p.subst sol))
           have hfirstLen : first.length = args.length := by
             have hmapLen : ∀ {xs : List (Expr × Ty)} {out : List Code} {s s' : Ctx},
                 List.mapM (fun x => translateExpr F env
@@ -4852,7 +4852,7 @@ theorem translateCall_sound {F : Nat} (hc : CallsAgree (N := N) m.program fs fue
               split <;> simp [IR.Expr.eval, IR.Expr.evalList, IR.ExprExt.apply]
             rw [out_evalCall, ← List.map_drop] at hr
             rw [evalList_append_undefined fs fuel ρo _ hmissing, evalList_optArgs] at hr
-            rw [evalList_into_zip fs fuel s₁.unions sol ρo codes fn.params hcodesLen, fixArgs_value] at hr
+            rw [evalList_into_zip fs fuel ctx'.unions sol ρo codes fn.params hcodesLen, fixArgs_value] at hr
             cases hx : IR.Expr.evalList fs fuel ρo (first.map Code.value) with
             | none => simp [hx] at hr
             | some vs =>
