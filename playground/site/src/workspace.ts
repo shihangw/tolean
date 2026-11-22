@@ -7,6 +7,7 @@ export type Workspace =
 
 export interface ExampleData {
   readonly goSpec: string;
+  readonly loopResult: string;
   readonly examples: readonly { readonly name: string; readonly files: readonly WorkspaceFile[] }[];
 }
 

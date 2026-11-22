@@ -459,30 +459,21 @@ decision record then states the choice and any limits that remain.
   `nestedLoops<T>` certifies when its outer loop narrows an element of
   `ReadonlyArray<bigint | undefined>` and adds it to an accumulator, then its
   inner loop adds bigint elements when a captured `T | null` value is null.
-  This does not yet compose for every loop shape. Two returning loops over
-  `bigint | undefined` or `bigint | null` fail in the function's link theorem.
-  Its remaining goal has an equality for the second `forIn` result, but the
-  result in the target uses a distinct match helper, so `link_eqs` cannot
-  rewrite it. Plain `bigint` loops and loops that capture a generic nullable
-  value pass this matrix cell.
+  Two returning loops over `bigint | undefined` or `bigint | null` also
+  certify. Each loop exposes a shared returned-or-completed result, which
+  the proof splits before it continues to the next loop.
 
   An outer `bigint | undefined` loop with two inner loops around an
-  accumulator update fails in the outer loop lemma. The remaining child
-  `runFold` goal needs the loop invariant for an environment whose accumulator
-  has already changed; the available invariant still describes the original
-  environment. In the stuck goal, the child loop runs with its accumulator
-  bound to the first inner fold's result and with the outer element bound
-  beside it. The invariant hypotheses still describe the environment before
-  either binding. The same accumulator shape passes for `bigint` and
-  `bigint | null`, and for loops that capture a generic nullable value. A pass
-  that withheld loop lemmas from the initial simplification and tried to
-  rewrite once per loop did not close either proof.
+  accumulator update now certifies too. The certifier applies each child
+  lemma to the environment at that point, after the preceding fold and
+  accumulator update. Required fixtures also cover three returning loops
+  with mixed element types and two returning loops that share an accumulator.
 
   An inner loop that returns from the function is refused during translation
   for every element kind in the matrix, whether the outer loop contains one,
   two or three inner loops. The refusal says that a loop body may return only
-  where the statements after the loop end in a return. Keep #289 open until
-  loop results compose through sequencing and nesting by construction.
+  where the statements after the loop end in a return. This translation
+  restriction remains separate from the certificate composition fixed in #289.
 
 - How should a certificate cover an interface that refers to itself, and a
   function that calls itself? The decision is to keep both outside certificates

@@ -1,6 +1,7 @@
 import Lean
 import tolean.TypeScript.Proof.Module
 import tolean.TypeScript.Spec.Lemmas.Number
+import tolean.Runtime.LoopResult
 import tolean.TypeScript.IR.Equality
 import tolean.TypeScript.Map
 import Lean.Elab.Tactic.Basic
@@ -393,9 +394,9 @@ def retOutcome {R τ : Type} (encR : R → Val N) (getRet : τ → Option R) :
 value to return, or the locals at its end. -/
 def retResult {R σ τ : Type} (encR : R → Val N) (getRet : τ → Option R) (getS : τ → σ)
     (upd : σ → Eval.Env N → Eval.Env N) (ρ : Eval.Env N) (t : τ) : Eval.Outcome N :=
-  match getRet t with
-  | some r => .ret (.ok (encR r))
-  | none => .normal (upd (getS t) ρ)
+  tolean.Runtime.LoopResult.run (tolean.Runtime.LoopResult.ofParts (getRet t) (getS t))
+    (fun r => .ret (.ok (encR r)))
+    (fun s => .normal (upd s ρ))
 
 omit [JSNumber N] in
 /-- The result of a returning loop whose state keeps its return value and
@@ -439,7 +440,8 @@ theorem runFold_forInRet {α σ τ R : Type} (fs : List (DeclRef × List String 
       some (retResult encR getRet getS upd ρ (Id.run (forIn xs (init s) (step ρ)))) := by
     intro xs
     induction xs with
-    | nil => intro s; simp [IR.Body.runFold, retResult, (hinit s).1, (hinit s).2]
+    | nil => intro s; simp [IR.Body.runFold, retResult, tolean.Runtime.LoopResult.run,
+      tolean.Runtime.LoopResult.ofParts, (hinit s).1, (hinit s).2]
     | cons x xs ih =>
       intro s
       obtain ⟨inner, hex, hb, hy⟩ := hbody ρ s x hI
@@ -450,12 +452,12 @@ theorem runFold_forInRet {α σ τ R : Type} (fs : List (DeclRef × List String 
         | some r =>
           simp only [List.map_cons, IR.Body.runFold, hex, retOutcome, hr, Option.bind_eq_bind,
             Option.bind_some, List.forIn_cons, hst]
-          simp [retResult, hr]
+          simp [retResult, tolean.Runtime.LoopResult.run, tolean.Runtime.LoopResult.ofParts, hr]
         | none =>
           simp only [ForInStep.value] at hb
           simp only [List.map_cons, IR.Body.runFold, hex, retOutcome, hr, hb hr, Option.bind_eq_bind,
             Option.bind_some, List.forIn_cons, hst]
-          simp [retResult, hr]
+          simp [retResult, tolean.Runtime.LoopResult.run, tolean.Runtime.LoopResult.ofParts, hr]
       | yield t =>
         obtain ⟨ht, hr⟩ := hy t hst
         rw [hst] at hex hb
@@ -491,7 +493,8 @@ theorem runFold_forInRet_on {α σ τ R : Type} (fs : List (DeclRef × List Stri
         some (retResult encR getRet getS upd ρ (Id.run (forIn ys (init s) (step ρ)))) := by
     intro ys
     induction ys with
-    | nil => intro _ s; simp [IR.Body.runFold, retResult, (hinit s).1, (hinit s).2]
+    | nil => intro _ s; simp [IR.Body.runFold, retResult, tolean.Runtime.LoopResult.run,
+      tolean.Runtime.LoopResult.ofParts, (hinit s).1, (hinit s).2]
     | cons x ys ih =>
       intro hmem s
       obtain ⟨inner, hex, hb, hy⟩ := hbody ρ s x hI (hmem x (by simp))
@@ -502,12 +505,12 @@ theorem runFold_forInRet_on {α σ τ R : Type} (fs : List (DeclRef × List Stri
         | some r =>
           simp only [List.map_cons, IR.Body.runFold, hex, retOutcome, hr, Option.bind_eq_bind,
             Option.bind_some, List.forIn_cons, hst]
-          simp [retResult, hr]
+          simp [retResult, tolean.Runtime.LoopResult.run, tolean.Runtime.LoopResult.ofParts, hr]
         | none =>
           simp only [ForInStep.value] at hb
           simp only [List.map_cons, IR.Body.runFold, hex, retOutcome, hr, hb hr, Option.bind_eq_bind,
             Option.bind_some, List.forIn_cons, hst]
-          simp [retResult, hr]
+          simp [retResult, tolean.Runtime.LoopResult.run, tolean.Runtime.LoopResult.ofParts, hr]
       | yield t =>
         obtain ⟨ht, hr⟩ := hy t hst
         rw [hst] at hex hb
@@ -521,6 +524,31 @@ theorem runFold_forInRet_on {α σ τ R : Type} (fs : List (DeclRef × List Stri
         rwa [← ht] at this
   have := key xs (fun _ h => h) (dec ρ)
   rwa [hdec ρ hI] at this
+
+/-- A returning fold runs its rest only after completion. Keep the rest as a
+continuation of the shared loop result, so a proof can rewrite one loop before
+it opens the next one. -/
+theorem bodyExec_fold_compose
+    (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
+    (names : List String) (element : String) (body : IR.Body)
+    (items : IR.Expr) (rest : IR.Body)
+    (info : tolean.IR.LoopInfo tolean.TypeScript.IR.TyExt) (ρ : Eval.Env N) :
+    IR.Body.exec fs fuel ρ (.fold names element body items rest info) =
+      match IR.Expr.eval fs fuel ρ items with
+      | some (.list vs) =>
+        match IR.Body.runFold fs fuel names element body ρ vs with
+        | some (.normal state) =>
+          tolean.Runtime.LoopResult.run (.completed state)
+            (fun value => some (Eval.Outcome.ret value))
+            (fun state => IR.Body.exec fs fuel state rest)
+        | some (.ret value) =>
+          tolean.Runtime.LoopResult.run (.returned value)
+            (fun value => some (Eval.Outcome.ret value))
+            (fun state => IR.Body.exec fs fuel state rest)
+        | some (.brk _) | some (.cont _) | none => none
+      | some _ | none => none := by
+  simp only [IR.Body.exec]
+  all_goals repeat' (split <;> simp_all [Option.bind, tolean.Runtime.LoopResult.run])
 
 /-- `includes` on the encoded elements of a list, when SameValueZero of `v`
 and each element is a test `p` of the element. -/
@@ -916,6 +944,53 @@ macro_rules
 namespace tolean.TypeScript.IR
 
 open Lean Elab Tactic Meta in
+/-- Evaluate straight-line statements without opening a fold. Select the
+equations by their body constructor, so their order does not matter.
+Reject equations without a known body constructor rather than unfold a
+possible fold. -/
+elab "loop_prepare" "[" defs:Lean.Parser.Tactic.simpLemma,* "]" : tactic => do
+  let some equations ← getEqnsFor? ``Body.exec
+    | throwError "loop_prepare: no equations for Body.exec"
+  let mut lemmas : Array (TSyntax `Lean.Parser.Tactic.simpLemma) := #[]
+  for equation in equations do
+    let constructor ← forallTelescopeReducing (← getConstInfo equation).type fun _ type => do
+      let some (_, lhs, _) := type.eq?
+        | throwError "loop_prepare: {equation} is not an equality"
+      unless lhs.isAppOf ``Body.exec do
+        throwError "loop_prepare: {equation} does not evaluate Body.exec"
+      let .const constructor _ := lhs.appArg!.getAppFn
+        | throwError "loop_prepare: {equation} has no known body constructor"
+      let .ctorInfo info ← getConstInfo constructor
+        | throwError "loop_prepare: {equation} has no known body constructor"
+      unless info.induct == ``tolean.IR.Body do
+        throwError "loop_prepare: {equation} does not match a Body constructor"
+      return constructor
+    if constructor != ``tolean.IR.Body.fold then
+      lemmas := lemmas.push (← `(Lean.Parser.Tactic.simpLemma| $(mkIdent equation):ident))
+  evalTactic (← `(tactic| (try simp [
+      runIn, callIn, Except.toOption, functionsOf, functions,
+      $lemmas,*,
+      Expr.eval, Expr.evalList, bindState, eqVal, tolean.IR.IntOp.apply,
+      List.lookup, DeclRef.beq_def, Eval.Env.set,
+      Eval.decList_list_null, Eval.decList_encList_null, Eval.decUndef_encUndef,
+      -List.map_map, $defs,*])))
+
+open Lean Elab Tactic Meta in
+/-- Split the current loop result on both sides of a link goal. The two
+steps can use distinct match helpers, so rewrite with definitional equality
+before inspecting the result. -/
+elab "split_loop_result" : tactic => withMainContext do
+  let target ← instantiateMVars (← getMainTarget)
+  let some e := target.find? fun e =>
+      e.isAppOf ``tolean.Runtime.LoopResult.ofParts && !e.hasLooseBVars
+    | throwError "split_loop_result: no loop result in the goal"
+  let stx ← Term.exprToSyntax e
+  evalTactic (← `(tactic| (
+    generalize loop_result_eq : $stx = loop_result
+    try erw [loop_result_eq]
+    cases loop_result <;> simp only [tolean.Runtime.LoopResult.run, Except.toOption])))
+
+open Lean Elab Tactic Meta in
 /-- Split on the value of a `List.find? p xs` in the goal, the value of a
 call of `find`. The evaluator reads that value only through a `match`, which
 `split` cannot take apart until it knows whether the value is `some`. -/
@@ -955,7 +1030,7 @@ syntax "link_tac" "[" Lean.Parser.Tactic.simpLemma,* "]" : tactic
 macro_rules
   | `(tactic| link_tac [$defs,*]) =>
     `(tactic| (
-      simp [runIn, callIn, Except.toOption, tryCatch, tryCatchThe, MonadExceptOf.tryCatch, Except.tryCatch,
+      try simp [runIn, callIn, Except.toOption, tryCatch, tryCatchThe, MonadExceptOf.tryCatch, Except.tryCatch,
         pure, Except.pure, bind, Except.bind, functionsOf, functions, Body.exec, Body.runFold, Expr.eval,
         Expr.evalCall, Expr.evalList,
         Expr.evalFields, Expr.evalMap, Expr.evalMapIdx, Expr.evalFilter, Expr.evalFind, Expr.evalFindIdx, Expr.evalReduce,
