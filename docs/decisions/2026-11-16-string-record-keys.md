@@ -25,7 +25,11 @@ and after bindings, so an outer guard does not justify a later helper read.
 
 The required certificate cases `recordGuardedCallback.ts` and
 `recordGuardedLoop.ts` cover a guarded map and a guarded sum loop over
-number-valued records.
+number-valued records. `recordGuardedOptionalCallback.ts` and
+`recordGuardedOptionalLoop.ts` cover an undefined-test callback and a sum
+loop over optional number values. These helper proofs split the flattened
+optional payload, not just the outer lookup result, so they cover both an
+own undefined value and an own number.
 The corpus reject cases `recordCallbackLookup.ts` and `recordLoopLookup.ts`
 still require refusal for unguarded reads, including reads with
 a constant `??` fallback: JavaScript may read an inherited

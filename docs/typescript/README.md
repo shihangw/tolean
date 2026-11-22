@@ -1225,7 +1225,8 @@ Tolean rejects these, among others:
   direct function-body guards and local guards inside array callbacks and
   loops. Their helper proofs derive ownership from the local guard rather
   than an external success premise. Required certificates cover a guarded
-  map and a guarded sum loop over number-valued records. Guards across
+  map and a guarded sum loop over number-valued records, plus an
+  undefined-test callback and sum loop over optional number values. Guards across
   bindings, enclosing guards and reduce callbacks remain unsupported.
   It also refuses unguarded reads, even with a fallback.
   Optional-valued Records flatten `undefined` from a missing property and

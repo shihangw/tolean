@@ -359,7 +359,8 @@ leaves a gap.
     certificates through callbacks and loops. The per-element callback and
     loop-step proofs derive ownership from a guard in their own body, without
     an external success premise. Required certificates cover a guarded map
-    and a guarded sum loop. Unguarded reads remain refused. Guards across
+    and sum loop, plus an undefined-test callback and sum loop over optional
+    number values. Unguarded reads remain refused. Guards across
     bindings, outer guards and reduce callbacks remain outside this analysis.
     The
     [decision record](../decisions/2026-11-16-string-record-keys.md) and its
