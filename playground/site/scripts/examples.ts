@@ -1,13 +1,14 @@
 /**
  * Write the page's data: every example under playground/examples, with its
- * files, and the Go Spec that the page bundles with them. The page reads it
- * from public/examples.json. Also copy the service worker that lets GitHub
- * Pages serve the page cross-origin isolated, which the threaded Lean needs.
+ * files, the Go Spec and the shared loop carrier that the page bundles with
+ * them. The page reads it from public/examples.json. Also copy the service
+ * worker that lets GitHub Pages serve the page cross-origin isolated, which
+ * the threaded Lean needs.
  */
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { exampleFiles, goSpecPath } from '../../bundle.ts';
+import { exampleFiles, goSpecPath, loopResultPath } from '../../bundle.ts';
 
 const site = path.join(import.meta.dirname, '..');
 const examplesDir = path.join(site, '../examples');
@@ -25,7 +26,11 @@ const examples = readdirSync(examplesDir, { withFileTypes: true })
 
 writeFileSync(
   path.join(site, 'public/examples.json'),
-  JSON.stringify({ goSpec: readFileSync(goSpecPath, 'utf8'), examples }, null, 2) + '\n',
+  JSON.stringify(
+    { goSpec: readFileSync(goSpecPath, 'utf8'), loopResult: readFileSync(loopResultPath, 'utf8'), examples },
+    null,
+    2,
+  ) + '\n',
 );
 // The translator, from wasm/build.sh, when it has been built.
 const translator = path.join(site, '../../wasm/out');

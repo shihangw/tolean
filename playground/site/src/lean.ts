@@ -115,20 +115,29 @@ export interface Bundle {
 }
 
 /**
- * One Lean file that imports only `Init`: the Go Spec, then the generated
- * code, the claims and the proofs, then a check of each claim. The check
- * stands in for `#audit_claims`, which needs `import Lean`:
+ * One Lean file that imports only `Init`: the shared loop carrier and the
+ * Go Spec, then the generated code, the claims and the proofs, then a check
+ * of each claim. The check stands in for `#audit_claims`, which needs `import Lean`:
  * `example : Spec.c := Proof.c` fails unless the theorem has exactly the
  * claim's type, and `#print axioms` lists what the theorem relies on.
  * Import lines are blanked, not removed, so that line numbers stay the same.
  */
-export function bundle(goSpec: string, files: readonly WorkspaceFile[], claimNames: readonly string[]): Bundle {
+export function bundle(
+  goSpec: string,
+  loopResult: string,
+  files: readonly WorkspaceFile[],
+  claimNames: readonly string[],
+): Bundle {
   const body = (text: string) =>
     text
       .split('\n')
       .map((line) => (line.startsWith('import ') || line.startsWith('#audit_claims') ? '' : line))
       .join('\n');
-  const inputs = [{ path: 'tolean/Go/Spec/Basic.lean', text: goSpec }, ...files];
+  const inputs = [
+    { path: 'tolean/Runtime/LoopResult.lean', text: loopResult },
+    { path: 'tolean/Go/Spec/Basic.lean', text: goSpec },
+    ...files,
+  ];
   const parts: BundlePart[] = [];
   const chunks: string[] = [];
   let line = 1;

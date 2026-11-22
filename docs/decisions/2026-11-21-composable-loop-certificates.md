@@ -1,162 +1,45 @@
 # Loop certificates compose through one result carrier
 
-**Status:** proposed; implementation tracked in #289, WIP on branch wip/289-loop-result-carrier · **Date:** 2026-11-21
+**Status:** accepted · **Date:** 2026-11-21
 
-Loop certificates must compose by the meaning of their results, not by the
-names Lean gives generated helpers. The certifier will keep a proof lemma for
-each loop, but every early-return loop will expose its outcome through one
-shared carrier. Function and parent-loop proofs can then rewrite a loop result
-without depending on which match helper Lean generated for that loop.
+Loop certificates compose through `LoopResult`, which distinguishes a returned
+value from a completed loop's state. The generator exposes that result instead
+of relying on the names Lean gives each generated match helper.
 
-## Failed approaches and remaining shape-1 goals
+The carrier lives in `tolean/Runtime/LoopResult.lean`, under `tolean.Runtime`,
+and has no imports. Every language that prints a returning fold shares it.
+The shared IR must not depend on a TypeScript module, because Go range loops
+use the same fold. The npm package ships the shared runtime helpers alongside
+the language specs.
 
-A theorem for a whole chain of loops combines different bodies and does not
-scale to loops nested under branches or callbacks. Per-loop result theorems
-cannot connect returning loops in the function-level link proof. Generalizing
-the pair-return lemma and asking `link_eqs` to use full transparency also failed
-to establish a stable rewrite boundary.
+The certifier emits the same proof step for each loop in program order. It
+evaluates the preceding statements without unfolding folds, rewrites with
+`bodyExec_fold_compose`, and applies that loop's lemma to the current
+environment. It then splits the shared result into returned and completed
+cases. Only the completed case reaches the next statement.
 
-The first optional-bigint shape still leaves two link goals. The first loop
-completes normally in both; the second either returns a value or also completes
-normally. The proof must connect those evaluator results through translation.
-Removing the carrier definitions leaves the outer evaluator and nested
-`Body.runFold` unreduced, while keeping only `run` and `ofParts` leaves that fold
-under the completed first-loop case.
+A child loop follows the same steps inside its parent's loop lemma. Its
+invariant describes the environment after any preceding loop or accumulator
+update, not the environment at the start of the parent iteration.
 
-Each loop invariant describes the current evaluator environment. In
-particular, a child-loop invariant must be established after the preceding
-statement has updated the accumulator. An invariant that describes the
-environment at the start of the parent loop is not enough for that child.
+The result split rewrites both sides by definitional equality before it
+inspects the carrier. This matters because the evaluator lemma and the
+translated definition can use distinct match helpers for the same loop body.
+An ordinary simplifier rewrite does not always identify those helpers.
 
-We considered proving one theorem for a whole chain of loops. That combines
-different loop bodies and their state transitions in one proof interface, so
-it does not scale to loops nested under branches or callbacks. We also
-considered one specialized result theorem per loop. Those lemmas remain
-useful for proving each evaluator fold, but distinct per-loop result
-expressions cannot by themselves connect two returning loops in the
-function-level link proof.
+We first proved the two optional-bigint loops by hand. The generated steps
+also certify two nullable-bigint loops and an optional outer loop with two
+inner folds around an accumulator update. Required fixtures cover those
+three cases, three returning loops with mixed optional and nullable elements,
+and two returning loops that share an accumulator.
 
-The prototype also generalized a pair-return lemma and asked `link_eqs` to
-rewrite with full transparency. That approach did not establish a stable
-rewrite boundary: it still depended on unfolding the generated expression
-enough to identify the result. Instead, the generator will state the shared
-outcome explicitly and use the per-loop evaluator lemma only at the loop
-boundary.
+The earlier prototype unfolded the evaluator with one large simplification
+and then tried to rewrite the resulting folds. That lost the boundary between
+one completed loop and its continuation. Changing the carrier definitions in
+the simp set did not repair it. We retain per-loop evaluator lemmas, but apply
+them before unfolding the fold's continuation.
 
-The implementation must retain the existing certificate claims and rejection
-rules. It must not add per-shape tactic sequences, axioms, partial definitions
-or weaker tests. The required regressions cover sequential returning loops
-over optional and nullable bigints, nested accumulator updates, the existing
-28-cell loop matrix, and two additional unreported shapes. Loop returns from
-inside nested loops remain follow-up work for #289 unless the shared result
-interface supports them without a shape-specific proof.
-
-## Implementation checkpoint
-
-The first optional-bigint shape remains blocked. The generated translation
-compiles in the `Corpus.TwoReturning` namespace, but Lean rejects its
-certificate in `twoReturning_link`. With all four carrier definitions in the
-certificate simp set, Lean reports these exact residual goals:
-
-```lean
-case h_1
-N : Type
-inst✝ : JSNumber N
-xs ys : List (Option Int)
-result✝¹ : tolean.IR.LoopResult Bool Unit
-state✝ : Unit
-result✝ : tolean.IR.LoopResult Bool Unit
-returned✝¹ : Option Bool
-heq✝¹ :
-  (forIn xs none fun x x_1 =>
-        match x with
-        | none => ForInStep.done (some true)
-        | some x => ForInStep.yield none).run =
-    none
-returned✝ : Option Bool
-value✝ : Bool
-heq✝ :
-  (forIn ys none fun x x_1 =>
-        match x with
-        | none => ForInStep.done (some true)
-        | some x => ForInStep.yield none).run =
-    some value✝
-⊢ ((match
-          match
-            match
-              (forIn ys none fun y x =>
-                  match y with
-                  | none => ForInStep.done (some true)
-                  | some y => ForInStep.yield none).run with
-            | some value => tolean.IR.LoopResult.returned value
-            | none => tolean.IR.LoopResult.completed () with
-          | tolean.IR.LoopResult.returned value => Outcome.ret (Except.ok (Val.bool value))
-          | tolean.IR.LoopResult.completed state =>
-            Outcome.normal
-              [("ys", Val.list (List.map (encUndef Val.int) ys)),
-                ("xs", Val.list (List.map (encUndef Val.int) xs))] with
-        | Outcome.normal ρ' => some (Outcome.ret (Except.ok (Val.bool false)))
-        | Outcome.ret v => some (Outcome.ret v)
-        | Outcome.brk env => none
-        | Outcome.cont env => none).bind
-      fun __do_lift =>
-      match __do_lift with
-      | Outcome.ret r => some r
-      | Outcome.normal env => none
-      | Outcome.brk env => none
-      | Outcome.cont env => none) =
-    some (Except.ok (Val.bool value✝))
-
-case h_2
-N : Type
-inst✝ : JSNumber N
-xs ys : List (Option Int)
-result✝¹ : tolean.IR.LoopResult Bool Unit
-state✝¹ : Unit
-result✝ : tolean.IR.LoopResult Bool Unit
-state✝ : Unit
-returned✝¹ : Option Bool
-heq✝¹ :
-  (forIn xs none fun x x_1 =>
-        match x with
-        | none => ForInStep.done (some true)
-        | some x => ForInStep.yield none).run =
-    none
-returned✝ : Option Bool
-heq✝ :
-  (forIn ys none fun x x_1 =>
-        match x with
-        | none => ForInStep.done (some true)
-        | some x => ForInStep.yield none).run =
-    none
-⊢ ((match
-          match
-            match
-              (forIn ys none fun y x =>
-                  match y with
-                  | none => ForInStep.done (some true)
-                  | some y => ForInStep.yield none).run with
-            | some value => tolean.IR.LoopResult.returned value
-            | none => tolean.IR.LoopResult.completed () with
-          | tolean.IR.LoopResult.returned value => Outcome.ret (Except.ok (Val.bool value))
-          | tolean.IR.LoopResult.completed state =>
-            Outcome.normal
-              [("ys", Val.list (List.map (encUndef Val.int) ys)),
-                ("xs", Val.list (encUndef Val.int) xs)] with
-        | Outcome.normal ρ' => some (Outcome.ret (Except.ok (Val.bool false)))
-        | Outcome.ret v => some (Outcome.ret v)
-        | Outcome.brk env => none
-        | Outcome.cont env => none).bind
-      fun __do_lift =>
-      match __do_lift with
-      | Outcome.ret r => some r
-      | Outcome.normal env => none
-      | Outcome.brk env => none
-      | Outcome.cont env => none) =
-    some (Except.ok (Val.bool false))
-```
-
-Removing all carrier definitions leaves the outer evaluator and its nested
-`Body.runFold` unreduced. Keeping only `run` and `ofParts` leaves that same
-nested fold under the completed first-loop case. These three simp-set choices
-do not prove the first shape, so the carrier rewrite boundary still needs work.
+This change does not add axioms, partial definitions or weaker certificate
+claims. The translator still refuses an inner loop that returns from the
+function when the statements after that loop do not end in a return. That
+translation restriction is separate from certificate composition.
