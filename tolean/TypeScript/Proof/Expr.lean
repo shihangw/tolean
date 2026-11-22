@@ -3706,8 +3706,9 @@ theorem evalList_optArgs (sol : List (String × Ty)) (ρ : Eval.Env N) :
             if c.value matches .undefined then IR.Expr.nullishUndefined
             else if c.type.isOptional then c.value else c.fieldValue (p.subst sol)
           else if p matches .optional _ && p.isGeneric then
-            .ascribe (if c.type != .null && c.type != p.subst sol then
-              .ascribe c.value c.type.lean else c.value) (p.subst sol).lean
+            if c.type == .null || c.type == p.subst sol ||
+                c.value matches .undefined || c.value matches .nullishUndefined then c.value
+            else .ascribe c.value (p.subst sol).lean
           else c.value) =
           IR.Expr.eval fs fuel ρ c.value := by
       by_cases hp : (p matches .optional (.nullable _)) = true
