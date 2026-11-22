@@ -1419,7 +1419,9 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         s!"  refine tolean.TypeScript.Proof.{fromLemma} ?_ items\n" ++
         s!"  intro {intros}\n" ++ substHfs ++ unpack ++
         (if cbBody.anyOp dynamicRecordOp then "  try clear hI\n" else "") ++
-        s!"  {casesOn decls vars}link_tac [{simpSet}]"
+        s!"  {casesOn decls vars}link_tac [{simpSet}]" ++
+        (if cbBody.anyOp dynamicRecordOp then
+          s!"\n  all_goals (try (split_record <;> simp_all [{simpSet}]))" else "")
     let mut index := 0
     let mut returnsLoop := false
     for (stateNames, element, body, info, loopItems) in loopsOf outBody do
