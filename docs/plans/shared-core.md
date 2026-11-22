@@ -123,8 +123,15 @@ written, so that other documents can name a step.
    string translation.
 6. Take the rest of the shared parts out of the TypeScript code, now that Go
    uses them too: the evaluator with the value type as a parameter, and the
-   proof plumbing. Taking them out before a second language uses them would
-   fit them to TypeScript alone.
+   proof plumbing. The generic evaluator must include the shared loop runner
+   before Go loop lowering can use it. Taking these parts out before a second
+   language uses them would fit them to TypeScript alone.
+6a. Connect Go loop lowering to the shared evaluator before claiming Go loop
+    support. `Go.Translate.Pure.translateStmts` and `Go.Spec.Eval.execStmt`
+    currently reject `forStmt` and `range`, `Go.IR.Body.exec` has no `fold`
+    case, `Go.Translate.transRange` emits Lean text without an evaluator proof,
+    and counted-for lowering is not implemented. Add the missing evaluator
+    cases and proof connection before proving Go range or counted-for loops.
 7. Add the piece for external calls, and move Go's interface calls onto it.
 8. Do the same for SQL. Its `SELECT` queries already build an IR of their
    own, with an interpreter and a proof, and the
