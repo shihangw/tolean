@@ -415,6 +415,24 @@ omit [JSNumber N] in
 theorem fst_eq_of_eq {α β : Type} {x y : α × β} (h : x = y) : x.1 = y.1 :=
   congrArg Prod.fst h
 
+omit [JSNumber N] in
+/-- The result of a returning loop whose state keeps its return value and
+accumulator separately. A completed loop updates the environment from the
+accumulator; an early return ignores that final accumulator. -/
+theorem retResult_pair {R σ : Type} (encR : R → Val N)
+    (upd : σ → Eval.Env N → Eval.Env N) (ρ : Eval.Env N) (t : Option R × σ) :
+    retResult encR Prod.fst Prod.snd upd ρ t =
+      match t.1 with
+      | some r => .ret (.ok (encR r))
+      | none => .normal (upd t.2 ρ) := by
+  cases t with
+  | mk r s => cases r <;> rfl
+
+omit [JSNumber N] in
+/-- Equality of loop states carries through their return slots. -/
+theorem fst_eq_of_eq {α β : Type} {x y : α × β} (h : x = y) : x.1 = y.1 :=
+  congrArg Prod.fst h
+
 /-- A fold of the output whose body can `return`, and `forIn`, agree when one
 run of the body and one step of `forIn` agree. The state of `forIn` holds
 the value to return, which `getRet` reads, and the locals, which `getS`
