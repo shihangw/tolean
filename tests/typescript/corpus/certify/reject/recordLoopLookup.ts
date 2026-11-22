@@ -1,4 +1,4 @@
-// expect: a dynamic Record read must be guarded by Object.hasOwn on the same record and key; reads in callbacks and loops are not certified yet
+// expect: a dynamic Record read must be guarded by Object.hasOwn on the same record and key
 type Counts = Record<string, number>;
 
 export function total(r: Counts, keys: string[]): number {
