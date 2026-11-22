@@ -89,17 +89,24 @@ def Refs.full (r : Refs) (name : String) : String := r.write name name
 def Refs.codec (r : Refs) (name : String) : Option String :=
   (r.codecs.find? (·.1 == name)).map (·.2)
 
-/-- A local codec binder that cannot hide an identifier from the source. -/
-def Refs.codecName (r : Refs) (name : String) : String :=
-  let base := s!"toleanCodec_{name}"
-  let candidates := (List.range (r.idents.length + 1)).map fun n =>
-    base ++ String.join (List.replicate n "_")
-  (candidates.find? fun candidate => !(r.idents.contains candidate)).getD (base ++ "_")
+/-- Allocate codecs together so that neither source names nor earlier codecs
+can hide a binder in this declaration. -/
+def Refs.withCodecs (r : Refs) (params : List String) : Refs := Id.run do
+  let mut used := r.idents
+  let mut codecs := []
+  for name in params do
+    let base := s!"toleanCodec_{name}"
+    let candidates := (List.range (used.length + 1)).map fun n =>
+      base ++ String.join (List.replicate n "_")
+    let fresh := (candidates.find? fun candidate => !(used.contains candidate)).getD (base ++ "_")
+    used := fresh :: used
+    codecs := codecs ++ [(name, fresh)]
+  return { r with codecs }
 
 /-- The binders for codecs that a generic declaration needs. -/
-def Refs.codecBinders (r : Refs) (nv : String) (params : List String) : String :=
-  String.join (params.map fun name =>
-    s!" \{{name} : Type} ({r.codecName name} : tolean.TypeScript.Eval.Codec {nv} {name})")
+def Refs.codecBinders (r : Refs) (nv : String) : String :=
+  String.join (r.codecs.map fun (name, codec) =>
+    s!" \{{name} : Type} ({codec} : tolean.TypeScript.Eval.Codec {nv} {name})")
 
 /-- Every identifier in `source`, at any level, as `Translate.translateFile`
 finds them. -/
@@ -390,7 +397,8 @@ partial def bodyNames : IR.Body → List String
   | .let _ e rest | .letTuple _ e rest => exprNames e ++ bodyNames rest
   | .letArray _ _ elems rest => elems.flatMap exprNames ++ bodyNames rest
   | .ite c a b => exprNames c ++ bodyNames a ++ bodyNames b
-  | .matchNull _ _ a b | .matchTag _ _ _ _ _ a b => bodyNames a ++ bodyNames b
+  | .matchNull name _ a b | .matchTag name _ _ _ _ a b =>
+    name :: (bodyNames a ++ bodyNames b)
   | .letState _ branch rest => bodyNames branch ++ bodyNames rest
   | .fold _ _ body items rest _ => exprNames items ++ bodyNames body ++ bodyNames rest
   | .bind _ _ args rest | .letBorrow _ _ _ args rest => args.flatMap exprNames ++ bodyNames rest
@@ -793,12 +801,11 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           s!"simp [encode{name}, {r.eval "sameValueZero"}, {r.eval "strictEq"}]) xs"
     -- An interface.
     if let .struct name typeParams allFields := d then
-      let structCodecs := typeParams.map fun p => (p, r.codecName p)
-      let structRefs := { r with codecs := structCodecs }
-      let structGeneric := generic ++ structRefs.codecBinders nv typeParams
+      let structRefs := r.withCodecs typeParams
+      let structGeneric := generic ++ structRefs.codecBinders nv
       let structType := if typeParams.isEmpty then structTy name else
         (IR.Ty.app ⟨"", name⟩ (typeParams.map IR.Ty.param) : IR.Ty).print names
-      let codecArgs := String.join (typeParams.map fun p => s!" ({structRefs.codecName p})")
+      let codecArgs := String.join (structRefs.codecs.map fun (_, codec) => s!" ({codec})")
       let decodeCall := if typeParams.isEmpty then s!"decode{name}"
         else s!"(decode{name}{codecArgs})"
       let decodeEncodeLaw := if typeParams.isEmpty then s!"decode{name}_encode{name}"
@@ -840,7 +847,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           String.join (optionalFields.map fun f => s!"cases x_{f} <;> ")
       encs := encs.push <|
         s!"@[simp] theorem decode{name}_encode{name} {structGeneric} (x : {structType}) : decode{name}{codecArgs} (some (encode{name} ({nv} := {nv}){codecArgs} x)) = x := by\n" ++
-        s!"  {splitOptional}{if optionalFields.isEmpty then "; " else ""}simp [decode{name}, encode{name}, List.lookup, encList{if typeParams.isEmpty then "" else ", " ++ String.intercalate ", " (typeParams.map fun p => s!"{structRefs.codecName p}.decode_encode, {structRefs.codecName p}.encode_ne_null, {structRefs.codecName p}.encode_ne_undefined")}]"
+        s!"  {splitOptional}{if optionalFields.isEmpty then "; " else ""}simp [decode{name}, encode{name}, List.lookup, encList{if typeParams.isEmpty then "" else ", " ++ String.intercalate ", " (structRefs.codecs.map fun (_, codec) => s!"{codec}.decode_encode, {codec}.encode_ne_null, {codec}.encode_ne_undefined")}]"
       encs := encs.push <|
         s!"@[simp] theorem encode{name}_ne_null {structGeneric} (x : {structType}) : encode{name} ({nv} := {nv}){codecArgs} x ≠ Val.null := by\n" ++
         s!"  simp [encode{name}]"
@@ -979,11 +986,10 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       | throw s!"{file}: no translation of {name}"
     if (outRet matches .except ..) && !(loopsOf outBody).isEmpty then
       throw s!"{file}: certificates for loops in functions that can throw need an exception-aware loop invariant"
-    let functionCodecs := typeParams.map fun p => (p, r.codecName p)
-    let r := { r with codecs := functionCodecs }
-    let functionGeneric := generic ++ r.codecBinders nv typeParams
-    let codecLemmas := typeParams.flatMap fun p =>
-      let c := r.codecName p
+    let r := r.withCodecs typeParams
+    let functionGeneric := generic ++ r.codecBinders nv
+    let functionLoopLemmasStart := loopLemmas.size
+    let codecLemmas := r.codecs.flatMap fun (_, c) =>
       [s!"{c}.decode_encode", s!"{c}.encode_ne_null", s!"{c}.encode_ne_undefined"]
     -- A callback gets a lemma before the loops, because a loop's body can
     -- hold one, and before the callbacks that hold it.
@@ -1586,7 +1592,8 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       let stepNames := if info.returns.isSome then
           ["tolean.TypeScript.Proof.retOutcome", "ForInStep.value"]
         else if info.breaks then ["tolean.TypeScript.Proof.stepOutcome", "ForInStep.value"] else []
-      if info.returns.isSome then returnsLoop := true
+      if info.returns.isSome then
+        returnsLoop := true
       let depth := if closures.isEmpty then callDepth m bodyStmt else callDepth m syntaxBody + closures.length
       let fuel := if depth == 0 then "fuel" else s!"(fuel + {depth})"
       -- A body with calls looks the functions up in the output, so the lemma
@@ -1608,8 +1615,21 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       let destruct := if count ≤ 1 then "" else
         s!"    obtain ⟨{", ".intercalate ((List.range count).map (s!"s{·}"))}⟩ := s\n"
       let closureLemmas := if closures.isEmpty then [] else ["tolean.TypeScript.Proof.lookup_ite"]
+      -- A child loop's lemma already quantifies over its incoming environment.
+      -- Apply it explicitly to expose the invariant for the updated state,
+      -- which the simplifier's conditional rewriting cannot always discharge.
+      -- The evaluator expression does not mention codecs, so supply those too.
+      let children := loopsOf body
+      let instantiatedLoops := (loopsOf outBody).zipIdx.filterMap fun ((_, _, _, child, _), i) =>
+        if children.any (fun (_, _, _, c, _) => c.span == child.span) then
+          some ("(" ++ " ".intercalate (r.cert s!"{name}_loop{i + 1}" :: r.codecs.map (·.2)) ++ ")")
+        else none
       let simpSet := ", ".intercalate (hfsName ++ stepNames ++ closureLemmas ++ envLemmas ++ lemmaNames.toList ++ codecLemmas ++
-        loopLemmas.toList ++ defs)
+        loopLemmas.toList ++ instantiatedLoops ++ defs)
+      let childRewrites := String.join (instantiatedLoops.map fun lemma =>
+        s!"    all_goals (try rw [{lemma}])\n") ++
+        (if instantiatedLoops.isEmpty then "" else
+          s!"    all_goals link_tac [{simpSet}, {", ".intercalate hypNames}]\n")
       -- The values that one step sees: the element, the state, and the other
       -- locals, which the lemma generalizes to `v0`, `v1` and so on.
       let stateVars := if count ≤ 1 then ["s"].zip info.stateTypes
@@ -1635,6 +1655,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         generalize "ρ" coded ++ destruct ++
         (if restricted then "    have hs := hkeys x hx\n" else "") ++
         s!"    {casesOn decls loopVars}link_tac [{simpSet}, {", ".intercalate hypNames}{if restricted then ", hs" else ""}]\n" ++
+        childRewrites ++
         (if !restricted || literalMaps.isEmpty then "" else
           s!"    all_goals (try simp only [{", ".intercalate literalMaps}, ← List.map_append])\n") ++
         rewrites ++
@@ -1750,10 +1771,11 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     let args ← outParams.mapM fun (p, t) => do
       let some e := encoderOf r t | throw s!"{file}: cannot encode the parameter {p}"
       return s!"({e} {p})"
-    let binders := " ".intercalate (params.map fun p => s!"({p.name} : _)") ++
+    let binders := " ".intercalate (outParams.map fun (p, t) => s!"({p} : {t.print names})") ++
       String.join (obligations.map fun (n, p) => s!" ({n} : {p})")
     let call := " ".intercalate ((r.full s!"{transNs}.{name}" ++ callN) :: params.map (·.name))
-    let retNames := if returnsLoop then ["tolean.TypeScript.Proof.retResult"] else []
+    let retNames := if returnsLoop then
+      ["tolean.TypeScript.Proof.retResult", "tolean.TypeScript.Proof.retResult_pair"] else []
     let simpSet := ", ".intercalate ([r.cert "decls"] ++ retNames ++ envLemmas ++ lemmaNames.toList ++ codecLemmas ++
       loopLemmas.toList ++ defs ++ obligations.map (·.1))
     let some_ := r.write "some" "Option.some"
@@ -1768,6 +1790,12 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       "\n  all_goals repeat' first\n" ++ String.join (conditionalLemmas.map fun lemma =>
         s!"    | rw [{lemma}]\n") ++
       s!"  all_goals (try simp_all [{simpSet}])\n  all_goals first | assumption | rfl | (intros; first | rfl | simp_all)"
+    let functionLoopLemmas := loopLemmas.toList.drop functionLoopLemmasStart
+    let loopRewrites := String.join (functionLoopLemmas.map fun lemma =>
+      s!"\n  all_goals (try rw [{lemma}])\n  all_goals (try simp_all [{simpSet}])")
+    let loopRewrites := if functionLoopLemmas.isEmpty then "" else
+      loopRewrites ++
+      s!"\n  all_goals first | assumption | rfl | (intros; first | rfl | (try simp_all [{simpSet}]))"
     thms := thms.push <|
       s!"theorem {name}_link {functionGeneric} {binders} :\n" ++
       s!"    {runName} (N := {nv}) {outputFs} ⟨\"\", {str name}⟩ {list args} =\n" ++
@@ -1777,19 +1805,24 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         s!"\n  all_goals (try simp only [{", ".intercalate literalMaps}, ← List.map_append])\n" ++
         s!"  all_goals (try simp_all [{simpSet}, -List.map_cons, -List.map_nil, -List.map_map, ← List.map_append])") ++
       conditionRewrites ++
+      loopRewrites ++
       -- After a loop that a `return` can end, the evaluator matches on the
       -- loop's outcome, which is itself a match on the value to return. Once
       -- that match is split, the arms for a `break` or a `continue` close, and
       -- the arm for the end of the loop reads the locals from its state.
       -- `link_eqs` relates the loop's result to the printed loop's, whose
       -- `match`es have other auxiliary functions.
+      -- Split again when a hypothesis still matches on that result. Its
+      -- scrutinee can agree by unfolding without matching syntactically.
       (if returnsLoop then
-        "\n  all_goals (try split at *)\n  all_goals (subst_vars; link_eqs; simp_all [List.lookup])" else "")
+        "\n  all_goals repeat' (split at * <;> (subst_vars; link_eqs; simp_all [List.lookup]))\n" ++
+        "  all_goals (subst_vars; link_eqs; try simp_all [List.lookup])" ++
+        loopRewrites else "")
     thms := thms.push <|
       s!"theorem {name}_cert {functionGeneric} {binders} :\n" ++
       s!"    {sourceCall} {list args} = {some_} ({retEnc} ({call})) :=\n" ++
       s!"  {soundName} {rfl} {rfl} {rfl} {r.cert "program_translated"} {str name} _ 64 _\n" ++
-      s!"    ({" ".intercalate ([r.cert s!"{name}_link"] ++ functionCodecs.map (·.2) ++ params.map (·.name) ++ obligations.map (·.1))})"
+      s!"    ({" ".intercalate ([r.cert s!"{name}_link"] ++ r.codecs.map (·.2) ++ params.map (·.name) ++ obligations.map (·.1))})"
   return "\n".intercalate ([
     s!"-- Certificate written by tolean for {file}. Do not edit.",
     "import tolean.TypeScript.Spec.Lemmas.Eval",
