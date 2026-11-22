@@ -1671,7 +1671,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         generalize "ρ" coded ++ destruct ++
         (if restricted then "    have hs := hkeys x hx\n" else "") ++
         childSteps ++
-        s!"    all_goals {if instantiatedLoops.isEmpty then casesOn decls loopVars else ""}link_tac [{simpSet}, {", ".intercalate hypNames}{if restricted then ", hs" else ""}]\n" ++
+        s!"    {if instantiatedLoops.isEmpty then casesOn decls loopVars else "all_goals "}link_tac [{simpSet}, {", ".intercalate hypNames}{if restricted then ", hs" else ""}]\n" ++
         childRewrites ++
         (if !restricted || literalMaps.isEmpty then "" else
           s!"    all_goals (try simp only [{", ".intercalate literalMaps}, ← List.map_append])\n") ++
@@ -1834,7 +1834,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       s!"    {runName} (N := {nv}) {outputFs} ⟨\"\", {str name}⟩ {list args} =\n" ++
       s!"      {some_} ({retEnc} ({call})) := by\n" ++
       stagedLoops ++
-      s!"  all_goals {if returnsLoop then "" else casesOn decls outParams}link_tac [{simpSet}]" ++
+      s!"  {if returnsLoop then "all_goals " else casesOn decls outParams}link_tac [{simpSet}]" ++
       (if literalMaps.isEmpty then "" else
         s!"\n  all_goals (try simp only [{", ".intercalate literalMaps}, ← List.map_append])\n" ++
         s!"  all_goals (try simp_all [{simpSet}, -List.map_cons, -List.map_nil, -List.map_map, ← List.map_append])") ++
