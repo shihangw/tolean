@@ -5846,7 +5846,7 @@ def translateWith (file source ns : String) (target : Edition := .default)
     | .function _ _ _ body => body.hasReturningLoop
     | _ => false
   let header :=
-    (if hasReturningLoop then ["import tolean.TypeScript.Spec.LoopResult"] else []) ++
+    (if hasReturningLoop then ["import tolean.Runtime.LoopResult"] else []) ++
     (if iface.sortObligations.isEmpty then [] else ["import tolean.TypeScript.Spec.Eval"]) ++
     (if usesDate then ["import tolean.TypeScript.Spec.Date"]
      else if names.generic then ["import tolean.TypeScript.Spec.Number"] else []) ++

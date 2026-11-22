@@ -1,4 +1,5 @@
 import tolean.TypeScript.Spec.Nullish
+import tolean.Runtime.LoopResult
 import Lean
 import tolean.TypeScript.Certify
 import tolean.TypeScript.Decreasing

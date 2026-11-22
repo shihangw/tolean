@@ -6,6 +6,12 @@ Loop certificates compose through `LoopResult`, which distinguishes a returned
 value from a completed loop's state. The generator exposes that result instead
 of relying on the names Lean gives each generated match helper.
 
+The carrier lives in `tolean/Runtime/LoopResult.lean`, under `tolean.Runtime`,
+and has no imports. Every language that prints a returning fold shares it.
+The shared IR must not depend on a TypeScript module, because Go range loops
+use the same fold. The npm package ships the shared runtime helpers alongside
+the language specs.
+
 The certifier emits the same proof step for each loop in program order. It
 evaluates the preceding statements without unfolding folds, rewrites with
 `bodyExec_fold_compose`, and applies that loop's lemma to the current

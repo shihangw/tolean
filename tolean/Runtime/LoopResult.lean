@@ -1,4 +1,4 @@
-namespace tolean.TypeScript.Spec
+namespace tolean.Runtime
 
 /-- The shared result of a loop that can return from its function. -/
 inductive LoopResult (R σ : Type) where
@@ -28,4 +28,4 @@ def runPair {R σ α : Type} (result : Option R × σ) (onReturn : R → α) (on
   run (ofParts result.1 result.2) onReturn onComplete
 
 end LoopResult
-end tolean.TypeScript.Spec
+end tolean.Runtime

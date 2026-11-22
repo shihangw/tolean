@@ -1,6 +1,6 @@
 import tolean.Sexp
 import tolean.Source
-import tolean.TypeScript.Spec.LoopResult
+import tolean.Runtime.LoopResult
 
 /-!
 The Tolean IR, the Tolean intermediate representation: the Lean code that a
@@ -1530,11 +1530,11 @@ def Body.lines (names : Names) (monadic : Bool := false) : Body T E → List Str
         [s!"    (fun {foldBinders names ns element info} =>"] ++
           indentBy "      " (bodyLines.dropLast ++ [lastLine ++ "))"])
       if ns.isEmpty then
-        [s!"_root_.tolean.TypeScript.Spec.LoopResult.runOption ({run}\n{String.intercalate "\n" step})",
+        [s!"_root_.tolean.Runtime.LoopResult.runOption ({run}\n{String.intercalate "\n" step})",
           "    (fun r => r)", "    (fun _ =>"] ++
           indent (rest.lines names monadic) ++ [")"]
       else
-        [s!"_root_.tolean.TypeScript.Spec.LoopResult.runPair ({run}\n{String.intercalate "\n" step})",
+        [s!"_root_.tolean.Runtime.LoopResult.runPair ({run}\n{String.intercalate "\n" step})",
           "    (fun r => r)", s!"    (fun {tuple ns} =>"] ++
           indent (rest.lines names monadic) ++ [")"]
     else if info.breaks then

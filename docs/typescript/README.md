@@ -1520,8 +1520,10 @@ tolean <input.ts> <output.lean> <Lean.Namespace>
 ```
 
 Generated code that uses `number` imports `tolean.TypeScript.Spec.Number`.
-Loops that can return import `tolean.TypeScript.Spec.LoopResult`.
+Loops that can return import `tolean.Runtime.LoopResult`.
 Both modules ship in the npm package's Lean runtime.
+The loop helper is language-neutral because every language that prints a
+returning fold uses the same carrier.
 To use it, require the runtime by path:
 
 ```toml

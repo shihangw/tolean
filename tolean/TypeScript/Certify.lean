@@ -1,7 +1,7 @@
 import tolean.TypeScript.Syntax.Parser
 import tolean.TypeScript.Certify.Term
 import tolean.TypeScript.Spec.Eval
-import tolean.TypeScript.Spec.LoopResult
+import tolean.Runtime.LoopResult
 import tolean.TypeScript.Translate
 import tolean.Chain.Manifest
 
@@ -1420,7 +1420,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         indent ++ s!"  rw [{lemma}]\n" ++
         indent ++ s!"  all_goals loop_prepare [{simpSet}]\n" ++
         indent ++ "  all_goals (try split_loop_result)\n" ++
-        indent ++ "  all_goals (try simp only [tolean.TypeScript.Spec.LoopResult.run])))\n")
+        indent ++ "  all_goals (try simp only [tolean.Runtime.LoopResult.run])))\n")
     for (stateNames, element, body, info, loopItems) in loopsOf outBody do
       index := index + 1
       let lemmaName := s!"{name}_loop{index}"
@@ -1795,8 +1795,8 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     let retNames := if returnsLoop then
       ["tolean.TypeScript.Proof.retResult", "tolean.TypeScript.Proof.retResult_pair"] else []
     let resultCarrierNames := if returnsLoop then
-      ["tolean.TypeScript.Spec.LoopResult.runOption", "tolean.TypeScript.Spec.LoopResult.runPair",
-        "tolean.TypeScript.Spec.LoopResult.run", "tolean.TypeScript.Spec.LoopResult.ofParts"] else []
+      ["tolean.Runtime.LoopResult.runOption", "tolean.Runtime.LoopResult.runPair",
+        "tolean.Runtime.LoopResult.run", "tolean.Runtime.LoopResult.ofParts"] else []
     let simpSet := ", ".intercalate
       ([r.cert "decls"] ++ retNames ++ resultCarrierNames ++ envLemmas ++ lemmaNames.toList ++ codecLemmas ++
         loopLemmas.toList ++ defs ++ obligations.map (·.1))
@@ -1816,7 +1816,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     let functionPostLoopLemmas := functionLoopLemmas
     let stagedSimpSet := ", ".intercalate
       ([r.cert "decls", "tolean.TypeScript.Proof.retResult",
-        "tolean.TypeScript.Spec.LoopResult.runOption", "tolean.TypeScript.Spec.LoopResult.runPair"] ++
+        "tolean.Runtime.LoopResult.runOption", "tolean.Runtime.LoopResult.runPair"] ++
         envLemmas ++ lemmaNames.toList ++ codecLemmas ++ defs ++ obligations.map (·.1))
     let topLoops := (loopsOf outBody).zipIdx.filterMap fun ((_, _, _, info, _), i) =>
       if (parentLoopOf info.span).isNone then

@@ -25,12 +25,12 @@ test('returning loops compile with only the packaged Lean runtime', async () => 
       namespace: 'Test',
     });
     writeFileSync(join(work, 'Consumer.lean'), lean);
-    expect(lake('build', 'tolean.TypeScript.Spec.LoopResult')).toEqual({ status: 0, output: expect.any(String) });
+    expect(lake('build', 'tolean.Runtime.LoopResult')).toEqual({ status: 0, output: expect.any(String) });
     const compiled = lake('env', 'lean', 'Consumer.lean');
     expect(compiled, compiled.output).toEqual({ status: 0, output: expect.any(String) });
 
     // A missing runtime module must fail, even when the repository is built.
-    rmSync(join(work, '.lake/build/lib/lean/tolean/TypeScript/Spec/LoopResult.olean'));
+    rmSync(join(work, '.lake/build/lib/lean/tolean/Runtime/LoopResult.olean'));
     const missing = lake('env', 'lean', 'Consumer.lean');
     expect(missing.status).not.toBe(0);
     expect(missing.output).toContain('LoopResult.olean');
