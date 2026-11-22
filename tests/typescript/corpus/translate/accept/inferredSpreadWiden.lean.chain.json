@@ -1,0 +1,44 @@
+{"tolean": "0.3.1",
+ "target": "ES2024",
+ "sources":
+ [{"sha256": "7a0d5a9d818d57882be4c64949354ee1dc79ac74f6a592b0b315ba3c51eaceef",
+   "path": "corpus/translate/accept/inferredSpreadWiden.ts"}],
+ "output":
+ {"sha256": "a56b62e36541a051367f2618c59149ea16d11bc9db3befe1fb5e5b430ff718d1",
+  "path": "corpus/translate/accept/inferredSpreadWiden.lean"},
+ "nodes":
+ [{"status": "tested",
+   "label": "TypeScript parser",
+   "kind": "parser",
+   "id": "parser",
+   "evidence":
+   {"reference": "tsc", "check": "typescript-parse", "by": "tolean"}},
+  {"status": "tested",
+   "label": "TypeScript translator",
+   "kind": "translator",
+   "id": "translator",
+   "evidence":
+   {"reference": "fixed corpus output and random programs",
+    "check": "typescript-translate",
+    "by": "tolean"}},
+  {"status": "tested",
+   "module": "tolean.TypeScript.Spec.Number",
+   "label": "JavaScript number laws",
+   "kind": "spec",
+   "id": "spec",
+   "evidence":
+   {"reference": "Node 22 and 24",
+    "check": "typescript-engines",
+    "by": "tolean"}},
+  {"status": "trusted",
+   "label": "JavaScript engine",
+   "kind": "runtime",
+   "id": "runtime"}],
+ "module": "Test",
+ "language": "typescript",
+ "edges":
+ [["source", "parser"],
+  ["parser", "translator"],
+  ["translator", "output"],
+  ["spec", "output"],
+  ["runtime", "output"]]}

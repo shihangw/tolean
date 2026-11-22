@@ -10,7 +10,7 @@ structure Node where
 
 def pair (a : Int) (b : Int) : Node :=
   let tail := ({ value := b, next := none } : Node)
-  ({ value := a, next := tail } : Node)
+  ({ value := a, next := (tail : Node) } : Node)
 
 def second (n : Node) : Option Int :=
   let next := n.next
@@ -18,7 +18,7 @@ def second (n : Node) : Option Int :=
   | none =>
     none
   | some next =>
-    next.value
+    (next.value : Int)
 
 structure Tree (T : Type) where
   value : T

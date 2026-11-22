@@ -32,7 +32,7 @@ def lastStatus (statuses : List Status) : Option Status :=
   let last :=
     List.foldl
       (fun (last : Option Status) (s : Status) =>
-        let last := (s : Option Status)
+        let last := ((s : Status) : Option Status)
         last)
       last statuses
   last

@@ -15,6 +15,6 @@ def largest {N : Type} [JSNumber N] (xs : List Int) : Option Int :=
         else
           let value := (element ^ (3 : Nat))
           ForInStep.yield value))
-  value
+  (value : Int)
 
 end Test

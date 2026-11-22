@@ -12,7 +12,7 @@ def lastOf {N : Type} [JSNumber N] (xs : List N) : (Last N) :=
   let last :=
     List.foldl
       (fun (last : (Last N)) (x : N) =>
-        let last := ({ value := x } : (Last N))
+        let last := ({ value := (x : N) } : (Last N))
         last)
       last xs
   last
@@ -22,7 +22,7 @@ def lastBigint {N : Type} [JSNumber N] (xs : List Int) (start : Option Int) : Op
   let last :=
     List.foldl
       (fun (last : Option Int) (x : Int) =>
-        let last := (x : Option Int)
+        let last := ((x : Int) : Option Int)
         last)
       last xs
   last
