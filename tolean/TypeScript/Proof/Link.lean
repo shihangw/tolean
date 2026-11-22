@@ -1015,7 +1015,7 @@ syntax "link_tac" "[" Lean.Parser.Tactic.simpLemma,* "]" : tactic
 macro_rules
   | `(tactic| link_tac [$defs,*]) =>
     `(tactic| (
-      simp [runIn, callIn, Except.toOption, tryCatch, tryCatchThe, MonadExceptOf.tryCatch, Except.tryCatch,
+      try simp [runIn, callIn, Except.toOption, tryCatch, tryCatchThe, MonadExceptOf.tryCatch, Except.tryCatch,
         pure, Except.pure, bind, Except.bind, functionsOf, functions, Body.exec, Body.runFold, Expr.eval,
         Expr.evalCall, Expr.evalList,
         Expr.evalFields, Expr.evalMap, Expr.evalMapIdx, Expr.evalFilter, Expr.evalFind, Expr.evalFindIdx, Expr.evalReduce,
