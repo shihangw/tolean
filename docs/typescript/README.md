@@ -1222,8 +1222,11 @@ Tolean rejects these, among others:
   around the read of that same record and key. The generated link theorem
   carries an explicit premise that the IR run succeeds. This excludes
   prototype lookups that the model cannot represent. Certification supports
-  direct function-body guards only; it refuses even guarded reads inside
-  callbacks and loops until their proof helpers carry lookup-safety evidence.
+  direct function-body guards and local guards inside array callbacks and
+  loops. Their helper proofs derive ownership from the local guard rather
+  than an external success premise. Required certificates cover a guarded
+  map and a guarded sum loop over number-valued records. Guards across
+  bindings, enclosing guards and reduce callbacks remain unsupported.
   It also refuses unguarded reads, even with a fallback.
   Optional-valued Records flatten `undefined` from a missing property and
   from an own `undefined` value to the same optional result. See the

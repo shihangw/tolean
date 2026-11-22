@@ -355,14 +355,15 @@ leaves a gap.
 19. **P2.** Close the `const` gap: share one predicate between the translator's
     refusal and the interpreter's `none` for assignments to a
     `for (const x of xs)` binding. See the [`const` open question](#open-questions).
-20. **P2.** Compose guarded string-keyed Record lookup certificates through
-    callbacks and loops. Their helper proofs must carry the lookup-safety
-    hypothesis through the callback or loop invariant, using the same
-    hypothesis-threading machinery as counted-loop certificates. A follow-up
-    should prove those helper lemmas; until then, guarded reads in callbacks
-    and loops remain refused. The
+20. **Done for local guards.** Compose guarded string-keyed Record lookup
+    certificates through callbacks and loops. The per-element callback and
+    loop-step proofs derive ownership from a guard in their own body, without
+    an external success premise. Required certificates cover a guarded map
+    and a guarded sum loop. Unguarded reads remain refused. Guards across
+    bindings, outer guards and reduce callbacks remain outside this analysis.
+    The
     [decision record](../decisions/2026-11-16-string-record-keys.md) and its
-    corpus reject cases record this boundary.
+    positive and negative corpus cases record this boundary.
 
 Steps 2 and 4 cover most of the code in the survey. Step 8 matters most for
 proofs, because a fold over events keeps much of its state in maps.

@@ -17,17 +17,17 @@ The certificate generator accepts a dynamic lookup only when a direct
 The generated link theorem also has a premise that the IR run succeeds.
 That premise rules out dynamic reads that resolve to an inherited
 `Object.prototype` property, which the record model cannot represent.
-Certification supports guards in direct function bodies only. It refuses
-dynamic reads in callbacks and loops until their proof helpers carry the
-lookup-safety evidence.
+Certification also supports a local guard inside an array callback or loop
+body. The per-element callback proof and loop-step proof derive ownership
+from the true branch of that guard. Their helper theorems need no external
+success premise. The analysis discards ownership evidence at helper entry
+and after bindings, so an outer guard does not justify a later helper read.
 
-The accepted guard form currently covers direct function-body control flow.
-Even a guarded dynamic Record read inside a callback or loop is refused.
-Their helper lemmas must carry the lookup-safety evidence through the callback
-or loop invariant, using the same hypothesis-threading machinery as counted
-loops. A follow-up should prove that composition for callback and loop helpers.
+The required certificate cases `recordGuardedCallback.ts` and
+`recordGuardedLoop.ts` cover a guarded map and a guarded sum loop over
+number-valued records.
 The corpus reject cases `recordCallbackLookup.ts` and `recordLoopLookup.ts`
-cover this limitation. Unguarded reads are also refused, including reads with
+still require refusal for unguarded reads, including reads with
 a constant `??` fallback: JavaScript may read an inherited
 `Object.prototype` property there, so fallback evaluation does not justify
 replacing that property with `undefined`. `Object.keys` and `Object.entries`
@@ -57,9 +57,9 @@ The relevant operations are `OrdinaryGet` (ECMA-262 2024 §10.1.8.1),
 ## Implementation checkpoint
 
 The supported certified subset is intentionally narrower than general
-`Record<string, V>` indexing: direct guarded reads are accepted, while
-unguarded reads and reads inside callbacks or loops are refused with a
-diagnostic explaining the missing lookup-safety proof. The generic type and
-own-key enumeration model remain available. Callback and loop composition
-remains follow-up work; the two corpus reject cases preserve the current
-boundary.
+`Record<string, V>` indexing: direct guarded reads and locally guarded
+callback and loop reads are accepted. Unguarded reads remain refused.
+The generic type and own-key enumeration model remain available. This
+checkpoint does not claim guards across bindings or an enclosing guard
+as evidence for a callback or loop. Reduce callbacks remain outside the
+ownership analysis.
