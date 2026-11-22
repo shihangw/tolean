@@ -56,19 +56,21 @@ def runFold (body : σ → Option (Outcome σ q))
     | .brk inner => return .normal (← leave env inner)
     | .cont _ => none
 
-/-- The loop induction needs laws for both binding and leaving a scope.
-In particular, agreement before scope exit does not by itself imply agreement
-after scope exit. Languages must prove the latter law for their store relation. -/
+/-- `R` relates stores between iterations. `I s t` relates stores inside the
+iteration entered from `s` and `t`: it includes the body's agreement and frame
+facts. Binding establishes this anchored relation, the body preserves it, and
+scope exit converts it back to `R`. Return payloads do not require a frame. -/
 theorem execLoop_sim
     (R : ρ → σ → Prop) (V : r → q → Prop)
+    (I : ρ → σ → ρ → σ → Prop)
     (source : ρ → Option (Outcome ρ r)) (target : σ → Option (Outcome σ q))
     (bindS : v → ρ → Option ρ) (bindT : v → σ → Option σ)
     (leaveS : ρ → ρ → Option ρ) (leaveT : σ → σ → Option σ)
-    (bindLaw : ∀ x s t, R s t → Related R (bindS x s) (bindT x t))
-    (leaveLaw : ∀ s t si ti, R s t → R si ti →
+    (bindLaw : ∀ x s t, R s t → Related (I s t) (bindS x s) (bindT x t))
+    (leaveLaw : ∀ s t si ti, R s t → I s t si ti →
       Related R (leaveS s si) (leaveT t ti))
-    (bodyLaw : ∀ s t, R s t →
-      Related (fun a b => Outcome.Rel R V a.lower b) (source s) (target t))
+    (bodyLaw : ∀ s t si ti, R s t → I s t si ti →
+      Related (fun a b => Outcome.Rel (I s t) V a.lower b) (source si) (target ti))
     (s : ρ) (t : σ) (initial : R s t) (items : List v) :
     Related (Outcome.Rel R V)
       (execLoop source bindS leaveS s items) (runFold target bindT leaveT t items) := by
@@ -78,7 +80,7 @@ theorem execLoop_sim
     simp only [execLoop, runFold]
     apply Related.bind (bindLaw x s t initial)
     intro si ti bound
-    apply Related.bind (bodyLaw si ti bound)
+    apply Related.bind (bodyLaw s t si ti initial bound)
     intro a b step
     cases a <;> cases b <;> simp only [Outcome.lower, Outcome.Rel] at step
     all_goals try contradiction
@@ -107,10 +109,11 @@ theorem execLoop_eq_runFold
     (step : ∀ s, target s = (source s).map Outcome.lower)
     (env : ρ) (items : List v) :
     execLoop source bind leave env items = runFold target bind leave env items := by
-  have h := execLoop_sim Eq Eq source target bind bind leave leave
+  have h := execLoop_sim Eq Eq (fun _ _ si ti => si = ti)
+    source target bind bind leave leave
     (fun _ _ _ h => by subst_vars; exact (Related.eq_iff _ _).mpr rfl)
     (fun _ _ _ _ h hi => by subst_vars; exact (Related.eq_iff _ _).mpr rfl)
-    (fun s t h => by
+    (fun _ _ s t _ h => by
       subst t
       rw [step]
       cases source s <;> simp [Related, Outcome.rel_eq_iff])
