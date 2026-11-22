@@ -4852,6 +4852,7 @@ theorem translateCall_sound {F : Nat} (hc : CallsAgree (N := N) m.program fs fue
               split <;> simp [IR.Expr.eval, IR.Expr.evalList, IR.ExprExt.apply]
             rw [out_evalCall, ← List.map_drop] at hr
             rw [evalList_append_undefined fs fuel ρo _ hmissing, evalList_optArgs] at hr
+            simp only [intoCodes, List.map_map, Function.comp_def] at hr
             rw [evalList_into_zip fs fuel ctx'.unions sol ρo codes fn.params hcodesLen, fixArgs_value] at hr
             cases hx : IR.Expr.evalList fs fuel ρo (first.map Code.value) with
             | none => simp [hx] at hr
