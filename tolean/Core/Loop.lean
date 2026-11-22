@@ -170,12 +170,10 @@ theorem execLoop_eq_runFold
   cases he : execLoop source bind leave env items <;>
     cases ht : runFold target bind leave env items <;> simp_all [Related, Outcome.rel_eq_iff]
 
-/-- If the target loop succeeds, the source loop succeeds with a related
-result. The step law covers binding and the body together. It therefore does
-not require a partial source binder to succeed when the target body rejects an
-element. `I` relates body exits to the stores that the loop entered with; it
-does not have to relate body entries to those exits. -/
-private def loopStep (body : ρ → Option (Outcome ρ r))
+/-- One complete iteration, including element binding and body execution.
+Refinement laws compare this result rather than requiring isolated binders to
+succeed on both sides. -/
+def loopStep (body : ρ → Option (Outcome ρ r))
     (bind : v → ρ → Option ρ) (x : v) (env : ρ) : Option (Outcome ρ r) :=
   (bind x env).bind body
 
@@ -226,6 +224,11 @@ private theorem runFold_step (body : σ → Option (Outcome σ q))
       | brk state =>
         cases hl : leave env state <;> simp [runFold, loopStep, hb, ho, hl]
 
+/-- If the target loop succeeds, the source loop succeeds with a related
+result. The step law covers binding and the body together. It therefore does
+not require a partial source binder to succeed when the target body rejects an
+element. `I` relates body exits to the stores that the loop entered with; it
+does not have to relate body entries to those exits. -/
 theorem execLoop_refines
     (R : ρ → σ → Prop) (V : r → q → Prop)
     (I : ρ → σ → ρ → σ → Prop)
@@ -395,5 +398,52 @@ def lowerLoop (span : Span) (changed : List (String × IR.Ty T)) (binder : Strin
   .fold (changed.map Prod.fst) binder body items rest
     { span, stateTypes := changed.map Prod.snd, elem, scope,
       breaks := breaks || returns.isSome, returns }
+
+/-- The interface for the deliberately small evaluator used by experimental
+loop models. Production language evaluators remain language-specific. -/
+structure Semantics (ρ v T E : Type) where
+  expr : ρ → IR.Expr T E → Option v
+  truth : v → Option Bool
+  elements : v → Option (List v)
+  put : String → v → ρ → ρ
+  project : List String → ρ → ρ → Option ρ
+
+/-- Evaluate only the IR forms needed by the experimental loop models.
+Unsupported expressions and bodies fail explicitly. -/
+def evalIR (s : Semantics ρ v T E) (env : ρ) : IR.Body T E → Option (Outcome ρ v)
+  | .value e | .exit e _ => return .ret (← s.expr env e)
+  | .state _ | .yield _ _ => some (.normal env)
+  | .done _ _ => some (.brk env)
+  | .let n e rest => do evalIR s (s.put n (← s.expr env e) env) rest
+  | .ite e yes no => do
+    if ← s.truth (← s.expr env e) then evalIR s env yes else evalIR s env no
+  | .fold ns binder body items rest _ => do
+    let vs ← s.elements (← s.expr env items)
+    match ← runFold (fun inner => evalIR s inner body)
+        (fun x outer => some (s.put binder x outer)) (s.project ns) env vs with
+    | .normal inner => evalIR s inner rest
+    | .ret v => return .ret v
+    | _ => none
+  | _ => none
+
+/-- Soundness of the explicit `fold` node for a small model evaluator. The
+front end supplies the actual source span and proves one-step body agreement. -/
+theorem lowerLoop_sound (s : Semantics ρ v T E) (span : Span)
+    (changed : List (String × IR.Ty T)) (binder : String) (elem : IR.Ty T)
+    (source : ρ → Option (Outcome ρ v)) (body rest : IR.Body T E)
+    (items : IR.Expr T E) (breaks : Bool) (returns : Option (IR.Ty T))
+    (step : ∀ env, evalIR s env body = (source env).map Outcome.lower)
+    (env : ρ) (vs : List v)
+    (head : (s.expr env items >>= s.elements) = some vs) :
+    evalIR s env (lowerLoop span changed binder elem body items rest breaks returns) =
+      (do
+        match ← execLoop source (fun x outer => some (s.put binder x outer))
+            (s.project (changed.map Prod.fst)) env vs with
+        | .normal inner => evalIR s inner rest
+        | .ret v => return .ret v
+        | _ => none) := by
+  simp only [lowerLoop, evalIR]
+  rw [execLoop_eq_runFold source _ _ _ step]
+  cases he : s.expr env items <;> simp_all
 
 end tolean.Core.Loop

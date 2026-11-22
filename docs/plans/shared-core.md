@@ -132,6 +132,9 @@ written, so that other documents can name a step.
     case, `Go.Translate.transRange` emits Lean text without an evaluator proof,
     and counted-for lowering is not implemented. Add the missing evaluator
     cases and proof connection before proving Go range or counted-for loops.
+     `tolean/Experimental/LoopCore` contains small C and C++ models and examples
+     that exercise the core's shape only; they are not supported source
+     languages or production translators.
 7. Add the piece for external calls, and move Go's interface calls onto it.
 8. Do the same for SQL. Its `SELECT` queries already build an IR of their
    own, with an interpreter and a proof, and the
