@@ -59,16 +59,16 @@ def choose {N : Type} [JSNumber N] {T : Type} (fallback : T) (x : Option T := no
   (Option.getD x fallback)
 
 def chooseFallback {N : Type} [JSNumber N]  : Int :=
-  (choose (N := N) ((1 : Int)) ((none : Option Int)))
+  (choose (N := N) ((1 : Int)) none)
 
 def pick {N : Type} [JSNumber N] {T : Type} (a : Int) (x : Option T := none) (y : Option T := none) : Int :=
   a
 
 def pickFirst {N : Type} [JSNumber N]  : Int :=
-  (pick (N := N) ((1 : Int)) ((none : Option Int)) ((((2 : Int) : Int) : Option Int)))
+  (pick (N := N) ((1 : Int)) none ((((2 : Int) : Int) : Option Int)))
 
 def chooseParen {N : Type} [JSNumber N]  : Int :=
-  (choose (N := N) ((1 : Int)) ((none : Option Int)))
+  (choose (N := N) ((1 : Int)) none)
 
 def same {N : Type} [JSNumber N] (x : Int) : Int :=
   x
@@ -77,9 +77,9 @@ def deep {N : Type} [JSNumber N] (x : Int) : Int :=
   (same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) x)))))))))))))))))))))))))))))))))))))))
 
 def wrapper {N : Type} [JSNumber N] {U : Type} (value : U) : U :=
-  (choose (N := N) value ((none : Option U)))
+  (choose (N := N) value none)
 
 def sameName {N : Type} [JSNumber N] {T : Type} (value : T) : T :=
-  (choose (N := N) value ((none : Option T)))
+  (choose (N := N) value none)
 
 end Test

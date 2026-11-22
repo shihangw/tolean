@@ -863,7 +863,8 @@ def Code.into (unions : List UnionInfo) (c : Code) (expected : Option Ty) : Code
       else c
     | none => c
   | some (.optional _) | some (.nullable _) =>
-    if c.type != .null && some c.type != expected then
+    if c.type != .null && some c.type != expected &&
+        !(c.value matches .undefined) && !(c.value matches .nullishUndefined) then
       match c.value with
       | .ascribe _ type =>
         if type == c.type.lean then c else ⟨.ascribe c.value c.type.lean, false, c.type⟩
@@ -3142,7 +3143,9 @@ def translateElements (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span)
   let elem ← elementType s expectedElem codes
   for (c, e) in codes.zip elems do
     unless c.type.assignableTo elem do reject e.span "the element does not have the array's element type"
-  return (codes.map (·.value), elem)
+  let unions := (← get).unions
+  let values := codes.map fun c => (c.into unions (some elem)).value
+  return (values, elem)
 
 def translateCall (fuel : Nat) (env : Env) (s : Span) (callee : Expr) (args : List Expr) (top : Bool) :
     TM Code := do
@@ -3223,25 +3226,24 @@ def translateCall (fuel : Nat) (env : Env) (s : Span) (callee : Expr) (args : Li
   (args.zip (codes.zip fn.params)).forM fun (arg, c, paramType) => do
     unless c.type.passableTo (paramType.subst sol) do
       reject arg.span "the argument does not have the parameter's type"
+  let unions := (← get).unions
+  let codes := (codes.zip fn.params).map fun (c, paramType) =>
+    c.into unions (some (paramType.subst sol))
   let missing := (fn.params.drop args.length).map fun param =>
     if param matches .optional (.nullable _) then IR.Expr.nullishUndefined else IR.Expr.undefined
   return ⟨.call fn.ref (optArgs sol codes fn.params ++ missing), false, fn.ret.subst sol⟩
 
-/-- The arguments of a call, with the type of each argument of an optional
-parameter that names a type parameter written out: `(v : Option T)` with the
-types that the call fixes. A plain value first gets its source type, so Lean
-widens the result rather than choosing an operation on options.
-Lean then makes a plain `v` the `some` of it, and
-knows the type of a `none`, where it could not infer `T` from the rest of
-the call. -/
+/-- Arguments of a generic optional parameter need the substituted destination
+type after the source value has been typed. -/
 def optArgs (sol : List (String × Ty)) : List Code → List Ty → List IR.Expr
   | c :: cs, p :: ps =>
     (if p matches .optional (.nullable _) then
       if c.value matches .undefined then IR.Expr.nullishUndefined
       else if c.type.isOptional then c.value else c.fieldValue (p.subst sol)
      else if p matches .optional _ && p.isGeneric then
-       .ascribe (if c.type != .null && c.type != p.subst sol then
-         .ascribe c.value c.type.lean else c.value) (p.subst sol).lean
+       if c.type == .null || c.type == p.subst sol ||
+           c.value matches .undefined || c.value matches .nullishUndefined then c.value
+       else .ascribe c.value (p.subst sol).lean
      else c.value) ::
       optArgs sol cs ps
   | cs, [] => cs.map (·.value)
@@ -3535,6 +3537,7 @@ def translateObject (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (
       -- the object owns the key, so explicit undefined fields remain refused.
       let v ← translateExpr fuel env (some fieldType.unoptional) value
       unless v.type.assignableTo fieldType.unoptional do reject span s!"'{key}' does not have the field's type"
+      let v := v.into ctx.unions (some fieldType)
       pure (seen ++ [key], parts ++ [(key, v.fieldValue fieldType)])
   for (field, type) in info.fieldsAt args do
     unless seen.contains field || type matches .optional _ do
@@ -3708,8 +3711,9 @@ def translateUpdate (env : Env) (s : Span) (e : Expr) : TM (String × IR.Expr) :
     if op == .coalesce then
       let some { binding := .«let», type := .nullable value, .. } := env.lookup name
         | reject s "'??=' needs a local declared with let, of a type T | null"
-      let v ← translateExpr (← fuelLimit) env (some (.nullable value)) right
+      let v ← translateExpr (← fuelLimit) env (some value) right
       unless v.type.assignableTo (.nullable value) do reject s "the value does not have the local's type"
+      let v := v.into (← get).unions (some (.nullable value))
       return (name, .coalesce (.var name) v.value true)
     unless op.isSimple do refuse
     let some { binding := .«let», type, .. } := env.lookup name

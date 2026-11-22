@@ -11,7 +11,7 @@ def depth {T : Type} (n : Option (Branch T) := none) : Int :=
   | none =>
     (0 : Int)
   | some n =>
-    ((1 : Int) + (depth ((n.next : Option (Branch T)))))
+    ((1 : Int) + (depth n.next))
 termination_by n
 decreasing_by all_goals tolean_decreasing
 
