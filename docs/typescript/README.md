@@ -1520,6 +1520,8 @@ tolean <input.ts> <output.lean> <Lean.Namespace>
 ```
 
 Generated code that uses `number` imports `tolean.TypeScript.Spec.Number`.
+Loops that can return import `tolean.TypeScript.Spec.LoopResult`.
+Both modules ship in the npm package's Lean runtime.
 To use it, require the runtime by path:
 
 ```toml

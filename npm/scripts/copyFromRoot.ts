@@ -38,6 +38,7 @@ mkdirSync(`${out}tolean/TypeScript`, { recursive: true });
 cpSync(`${root}lean-toolchain`, `${out}lean-toolchain`);
 cpSync(`${root}lake-manifest.json`, `${out}lake-manifest.json`);
 cpSync(`${root}tolean/Audit.lean`, `${out}tolean/Audit.lean`);
+// This includes LoopResult, which returning loops import without the IR.
 cpSync(`${root}tolean/TypeScript/Spec`, `${out}tolean/TypeScript/Spec`, { recursive: true });
 mkdirSync(`${out}tolean/Go/Spec`, { recursive: true });
 cpSync(`${root}tolean/Go/Spec`, `${out}tolean/Go/Spec`, { recursive: true });
