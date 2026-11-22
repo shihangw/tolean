@@ -1446,6 +1446,12 @@ theorem eval_into (unions : List UnionInfo) (c : Code) (expected : Option Ty) (�
   repeat' split
   all_goals simp [IR.Expr.eval, eval_value]
 
+theorem eval_into_value (unions : List UnionInfo) (c : Code) (expected : Option Ty) (ρ : Eval.Env N) :
+    IR.Expr.eval fs fuel ρ (c.into unions expected).value = IR.Expr.eval fs fuel ρ c.value := by
+  unfold Code.value Code.into
+  repeat' split
+  all_goals simp [IR.Expr.eval, eval_value]
+
 /-- A nonzero bigint literal has the same nonzero value in every environment. -/
 theorem nonzero_literal (e : Expr) (h : isNonzeroBigintLiteral e = true) :
     ∃ y : Int, y ≠ 0 ∧ ∀ ρ : Eval.Env N, Eval.eval m fuel ρ e = some (.int y) := by
@@ -3677,6 +3683,18 @@ theorem fieldValue_eval (c : Code) (target : Ty) (ρ : Eval.Env N) :
       simp [IR.Expr.eval, IR.Expr.evalList, IR.ExprExt.apply, hcode]
   · rfl
 
+theorem evalList_into_value (unions : List UnionInfo) (expected : Option Ty) (ρ : Eval.Env N) :
+    ∀ cs : List Code,
+      IR.Expr.evalList fs fuel ρ (cs.map fun c => (c.into unions expected).value) =
+        IR.Expr.evalList fs fuel ρ (cs.map Code.value)
+  | [] => rfl
+  | c :: cs => by
+    simp only [List.map_cons, IR.Expr.evalList]
+    rw [eval_into_value]
+    exact congrArg (fun x : Option (Val N) =>
+      x.bind fun v => (IR.Expr.evalList fs fuel ρ (cs.map Code.value)).bind fun vs =>
+        some (v :: vs)) (evalList_into_value unions expected ρ cs)
+
 theorem evalList_optArgs (sol : List (String × Ty)) (ρ : Eval.Env N) :
     ∀ (cs : List Code) (ps : List Ty),
       IR.Expr.evalList fs fuel ρ (optArgs sol cs ps) = IR.Expr.evalList fs fuel ρ (cs.map Code.value)
@@ -4960,15 +4978,13 @@ theorem translateObject_sound {F : Nat}
           split at hg
           · simp at hg
             obtain ⟨rfl, -⟩ := hg
-            refine ⟨name, v.fieldValue fieldType, rfl, ?_⟩
+             refine ⟨name, (v.into ctx.unions (some fieldType)).fieldValue fieldType, rfl, ?_⟩
             intro ρs ρo w ha hs hw rest
-            have hfv : IR.Expr.eval fs fuel ρo (v.fieldValue fieldType) =
+             have hfv : IR.Expr.eval fs fuel ρo
+                 ((v.into ctx.unions (some fieldType)).fieldValue fieldType) =
                 IR.Expr.eval fs fuel ρo v.value := by
-              unfold Code.fieldValue
-              split
-              · simp [IR.Expr.eval, IR.Expr.evalList, IR.ExprExt.apply]
-                cases IR.Expr.eval fs fuel ρo v.value <;> rfl
-              · rfl
+               rw [fieldValue_eval]
+               exact eval_into_value ctx.unions v (some fieldType) ρo
             rw [hfv] at hw
             rw [eval_value] at hw
             have := ihE _ _ _ _ _ _ hv ρs ρo w ha hs hw
@@ -4990,15 +5006,13 @@ theorem translateObject_sound {F : Nat}
             split at hg
             · simp at hg
               obtain ⟨rfl, -⟩ := hg
-              refine ⟨key, v.fieldValue fieldType, rfl, ?_⟩
+              refine ⟨key, (v.into ctx.unions (some fieldType)).fieldValue fieldType, rfl, ?_⟩
               intro ρs ρo w ha hs hw rest
-              have hfv : IR.Expr.eval fs fuel ρo (v.fieldValue fieldType) =
+              have hfv : IR.Expr.eval fs fuel ρo
+                  ((v.into ctx.unions (some fieldType)).fieldValue fieldType) =
                   IR.Expr.eval fs fuel ρo v.value := by
-                unfold Code.fieldValue
-                split
-                · simp [IR.Expr.eval, IR.Expr.evalList, IR.ExprExt.apply]
-                  cases IR.Expr.eval fs fuel ρo v.value <;> rfl
-                · rfl
+                rw [fieldValue_eval]
+                exact eval_into_value ctx.unions v (some fieldType) ρo
               rw [hfv] at hw
               rw [eval_value] at hw
               have := ihE _ _ _ _ _ _ hv ρs ρo w ha hs hw
