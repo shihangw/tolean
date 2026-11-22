@@ -4404,7 +4404,8 @@ theorem translateSpreadArray_sound {env : Translate.Env} {tr : Option Ty → Exp
     (h : translateSpreadArray tr exp s elems ctx = .ok c ctx') :
     Sim (N := N) m fs fuel env (.array s elems) c.code := by
   simp only [translateSpreadArray, bind_ok, pure_ok, get_ok] at h
-  obtain ⟨parts, s₁, hparts, elem, s₂, -, u, s₃, -, unions, s₄, ⟨rfl, rfl⟩, rfl, -⟩ := h
+  obtain ⟨parts, s₁, hparts, elem, s₂, -, _, s₃, -, unions, ⟨-, -⟩, hr⟩ := h
+  rw [← hr]
   intro ρs ρo v ha hs hv
   obtain ⟨ws, hws, happ⟩ := out_ext fs fuel hv
   simp only [IR.ExprExt.apply] at happ
@@ -4413,7 +4414,7 @@ theorem translateSpreadArray_sound {env : Translate.Env} {tr : Option Ty → Exp
   | some lss =>
     simp [hm] at happ
     subst happ
-    have := mapM_parts_sim m fs fuel (fun _ _ _ _ hp => translateElem_sim m fs fuel htr hp) s₃.unions elem
+    have := mapM_parts_sim m fs fuel (fun _ _ _ _ hp => translateElem_sim m fs fuel htr hp) unions.unions elem
       elems ctx parts s₁ hparts ρs ρo ws lss ha hs hws hm
     simp [Eval.eval, this]
 
