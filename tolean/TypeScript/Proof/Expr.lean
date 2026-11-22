@@ -3750,13 +3750,13 @@ theorem evalList_optArgs (sol : List (String × Ty)) (ρ : Eval.Env N) :
         cases p with
         | optional inner =>
           by_cases hg : (Ty.optional inner).isGeneric = true
-          · simp only [hg, ↓reduceIte]
+          · simp only [hg]
             by_cases h : c.type == .null || c.type == target ||
               c.value matches .undefined || c.value matches .nullishUndefined
             · simp [h]
             · simp [h, IR.Expr.eval]
           · simp [hg]
-        | _ => simp [IR.Expr.eval]
+        | _ => simp
     simp only [optArgs, List.map_cons, IR.Expr.evalList, evalList_optArgs sol ρ cs ps]
     exact congrArg
       (fun x : Option (Val N) =>
