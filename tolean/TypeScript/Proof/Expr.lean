@@ -3726,7 +3726,7 @@ theorem evalList_optArgs (sol : List (String × Ty)) (ρ : Eval.Env N) :
           · simp only [ho, Bool.false_eq_true, ↓reduceIte]
             exact fieldValue_eval fs fuel c _ ρ
       · simp only [hp, Bool.false_eq_true, ↓reduceIte]
-        cases p <;> simp_all <;> split <;> simp [IR.Expr.eval]
+        cases p <;> simp_all <;> split <;> rfl
     simp only [optArgs, List.map_cons, IR.Expr.evalList, evalList_optArgs sol ρ cs ps]
     exact congrArg
       (fun x : Option (Val N) =>
