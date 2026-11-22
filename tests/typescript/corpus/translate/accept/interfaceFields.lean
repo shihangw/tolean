@@ -23,7 +23,7 @@ def make (value : Int) : Leaf :=
   ({ value := value } : Leaf)
 
 def withExtra (value : Int) (extra : Int) : Leaf :=
-  ({ value := value, extra := extra } : Leaf)
+  ({ value := value, extra := (extra : Int) } : Leaf)
 
 def identity (p : Leaf) : Leaf :=
   p

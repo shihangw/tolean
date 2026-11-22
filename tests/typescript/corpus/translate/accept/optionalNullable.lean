@@ -110,7 +110,7 @@ def cleared  : Settings :=
   ({ limit := (match (none : Option Int) with | none => JSNullish.null | some v => JSNullish.value v) } : Settings)
 
 def set  : Settings :=
-  ({ limit := (match ((5 : Int) : Option Int) with | none => JSNullish.null | some v => JSNullish.value v) } : Settings)
+  ({ limit := (match (((5 : Int) : Int) : Option Int) with | none => JSNullish.null | some v => JSNullish.value v) } : Settings)
 
 def callCleared  : Int :=
   (parameterLimit ((match (none : Option Int) with | none => JSNullish.null | some v => JSNullish.value v)))
@@ -122,7 +122,7 @@ def callOmitted  : Int :=
   (parameterLimit JSNullish.undefined)
 
 def callSet  : Int :=
-  (parameterLimit ((match ((5 : Int) : Option Int) with | none => JSNullish.null | some v => JSNullish.value v)))
+  (parameterLimit ((match (((5 : Int) : Int) : Option Int) with | none => JSNullish.null | some v => JSNullish.value v)))
 
 structure Inner where
   count : Option Int

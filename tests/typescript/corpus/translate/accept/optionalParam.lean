@@ -13,7 +13,7 @@ def scale {N : Type} [JSNumber N] (p : (Point N)) (factor : Option Int := none) 
 
 def grow {N : Type} [JSNumber N] (p : (Point N)) (factor : Option Int := none) : (Point N) :=
   let a := (scale (N := N) p none)
-  let b := (scale (N := N) a ((2 : Int)))
+  let b := (scale (N := N) a (((2 : Int) : Int)))
   let c := (scale (N := N) b none)
   (scale (N := N) c factor)
 
@@ -50,25 +50,25 @@ def take {N : Type} [JSNumber N] {T : Type} (x : Option T := none) : Option T :=
   | none =>
     none
   | some x =>
-    x
+    (x : T)
 
 def takeOne {N : Type} [JSNumber N]  : Option Int :=
-  (take (N := N) (((1 : Int) : Option Int)))
+  (take (N := N) ((((1 : Int) : Int) : Option Int)))
 
 def choose {N : Type} [JSNumber N] {T : Type} (fallback : T) (x : Option T := none) : T :=
   (Option.getD x fallback)
 
 def chooseFallback {N : Type} [JSNumber N]  : Int :=
-  (choose (N := N) ((1 : Int)) ((none : Option Int)))
+  (choose (N := N) ((1 : Int)) none)
 
 def pick {N : Type} [JSNumber N] {T : Type} (a : Int) (x : Option T := none) (y : Option T := none) : Int :=
   a
 
 def pickFirst {N : Type} [JSNumber N]  : Int :=
-  (pick (N := N) ((1 : Int)) ((none : Option Int)) (((2 : Int) : Option Int)))
+  (pick (N := N) ((1 : Int)) none ((((2 : Int) : Int) : Option Int)))
 
 def chooseParen {N : Type} [JSNumber N]  : Int :=
-  (choose (N := N) ((1 : Int)) ((none : Option Int)))
+  (choose (N := N) ((1 : Int)) none)
 
 def same {N : Type} [JSNumber N] (x : Int) : Int :=
   x
@@ -77,9 +77,9 @@ def deep {N : Type} [JSNumber N] (x : Int) : Int :=
   (same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) ((same (N := N) x)))))))))))))))))))))))))))))))))))))))
 
 def wrapper {N : Type} [JSNumber N] {U : Type} (value : U) : U :=
-  (choose (N := N) value ((none : Option U)))
+  (choose (N := N) value none)
 
 def sameName {N : Type} [JSNumber N] {T : Type} (value : T) : T :=
-  (choose (N := N) value ((none : Option T)))
+  (choose (N := N) value none)
 
 end Test

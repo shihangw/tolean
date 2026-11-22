@@ -14,7 +14,7 @@ def make (name : JSString) (price : Int) : Item :=
   ({ name := name, price := price } : Item)
 
 def sale (name : JSString) (price : Int) (discount : Int) : Item :=
-  ({ name := name, price := price, discount := discount, note := JSString.ofString "sale" } : Item)
+  ({ name := name, price := price, discount := (discount : Int), note := (JSString.ofString "sale" : JSString) } : Item)
 
 def cost (item : Item) : Int :=
   (item.price - (Option.getD item.discount ((0 : Int))))
