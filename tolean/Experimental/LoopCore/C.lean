@@ -116,26 +116,41 @@ private def writtenNames : Stmt → List String
 def writes (body : Stmt) : List String :=
   (writtenNames body).foldl (fun ns n => if n ∈ ns then ns else ns ++ [n]) []
 
-/-- Free scalar variables in the printable fragment have type `Int`.
-Arrays occur only as the first argument of indexing. -/
-def integerExpr : Expr → Bool
-  | .int _ | .var _ => true
-  | .intOp .add a b => integerExpr a && integerExpr b
-  | .ext .at [.var _, i] => integerExpr i
+/-- Free names not declared as arrays are treated as `Int`. A known scalar
+cannot be indexed, and a known array cannot appear in an integer position.
+Counted heads have no declared vector, so their indexing bases are inferred
+from their use. -/
+def integerExpr (scalarNames arrayNames : List String) : Expr → Bool
+  | .int _ => true
+  | .var n => !(arrayNames.contains n)
+  | .intOp .add a b =>
+    integerExpr scalarNames arrayNames a && integerExpr scalarNames arrayNames b
+  | .ext .at [.var n, i] =>
+    (arrayNames.isEmpty || arrayNames.contains n) &&
+      !(scalarNames.contains n) &&
+      integerExpr scalarNames arrayNames i
   | _ => false
 
-def booleanExpr : Expr → Bool
+def booleanExpr (scalarNames arrayNames : List String) : Expr → Bool
   | .bool _ => true
-  | .order .lt a b | .eq a b => integerExpr a && integerExpr b
+  | .order .lt a b | .eq a b =>
+    integerExpr scalarNames arrayNames a && integerExpr scalarNames arrayNames b
   | _ => false
 
 /-- The checked printer supports integer state and returns only.
 Boolean tests are allowed, but Boolean state and returns are rejected. -/
-def printable : Stmt → Bool
-  | .assign _ e rest | .addAssign _ e rest => integerExpr e && printable rest
-  | .ite c yes no => booleanExpr c && printable yes && printable no
-  | .ret e => integerExpr e
-  | _ => true
+def printable (knownScalars knownArrays : List String) (body : Stmt) : Bool :=
+  knownScalars.all (fun n => !(knownArrays.contains n)) &&
+    go knownScalars knownArrays body
+where
+  go (scalarNames arrayNames : List String) : Stmt → Bool
+    | .assign _ e rest | .addAssign _ e rest =>
+      integerExpr scalarNames arrayNames e && go scalarNames arrayNames rest
+    | .ite c yes no =>
+      booleanExpr scalarNames arrayNames c &&
+        go scalarNames arrayNames yes && go scalarNames arrayNames no
+    | .ret e => integerExpr scalarNames arrayNames e
+    | _ => true
 
 structure Head where
   span : Span
@@ -166,7 +181,8 @@ def translateLoop (h : Head) (body : Stmt) (rest : Body) : Body :=
     (translate names body) h.items rest true (some .int)
 
 def translateChecked (h : Head) (body : Stmt) (rest : Body) : Except String Body :=
-  if !printable body then .error "experimental printer requires integer locals and returns"
+  if !printable [h.binder] [] body then
+    .error "experimental printer requires integer locals and returns"
   else if h.safe body then .ok (translateLoop h body rest)
   else .error "counted loop changes its binder or has a bound outside signed 32-bit integers"
 

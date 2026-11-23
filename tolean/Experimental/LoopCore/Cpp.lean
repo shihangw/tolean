@@ -17,6 +17,13 @@ def Head.binder : Head → String
   | .counted h => h.binder
   | .byValue _ x _ | .byConstRef _ x _ => x
 
+def Head.scalarNames : Head → List String
+  | h => [h.binder]
+
+def Head.arrayNames : Head → List String
+  | .counted _ => []
+  | .byValue _ _ xs | .byConstRef _ _ xs => [xs]
+
 def Head.items : Head → C.Expr
   | .counted h => h.items
   | .byValue _ _ xs | .byConstRef _ _ xs => .var xs
@@ -49,7 +56,8 @@ def translateLoop (h : Head) (body : C.Stmt) (rest : C.Body) : C.Body :=
     (C.translate names body) h.items rest true (some .int)
 
 def translateChecked (h : Head) (body : C.Stmt) (rest : C.Body) : Except String C.Body :=
-  if !C.printable body then .error "experimental printer requires integer locals and returns"
+  if !C.printable h.scalarNames h.arrayNames body then
+    .error "experimental printer requires integer locals and returns"
   else if h.accepts body then .ok (translateLoop h body rest)
   else .error "range loop changes its vector or binder, or the counted head is unsafe"
 
