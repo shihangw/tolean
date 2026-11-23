@@ -1,5 +1,6 @@
 import tolean.TypeScript.Syntax.Parser
 import tolean.TypeScript.Certify.Term
+import tolean.TypeScript.Certify.Record
 import tolean.TypeScript.Spec.Eval
 import tolean.Runtime.LoopResult
 import tolean.TypeScript.Translate
@@ -136,6 +137,9 @@ def encoderOf (r : Refs) : IR.Ty → Option String
   -- parameter; other applications have no codec yet.
   | .param name => do return s!"({← r.codec name}.encode)"
   | .app ref args => do
+    if ref == IR.dictionaryRef then
+      let [value] := args | none
+      return s!"({r.eval "encRecord"} {← encoderOf r value})"
     let codecs ← args.mapM fun
       | .param name => r.codec name
       | _ => none
@@ -165,6 +169,9 @@ def decoderOf (r : Refs) : IR.Ty → Option String
   | .tuple ts => do return s!"({r.eval "decTuple"} {← elementsDecoder r ts})"
   | .param name => do return s!"({← r.codec name}.decode)"
   | .app ref args => do
+    if ref == IR.dictionaryRef then
+      let [value] := args | none
+      return s!"({r.eval "decRecord"} {← decoderOf r value})"
     let codecs ← args.mapM fun
       | .param name => r.codec name
       | _ => none
@@ -978,6 +985,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
   -- The translator requires a callee before its caller, so the condition
   -- of a callee is available when the caller's theorem is written.
   let mut functionConditions : List (String × (List (String × IR.Ty) × List String)) := []
+  let mut recordConditionalFunctions : List String := []
   for d in m.decls do
     let .function _ _ name typeParams params _ syntaxBody := d | continue
     unless fns.contains name do continue
@@ -1400,6 +1408,9 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           "  all_goals first | assumption | rfl | (intros; rfl)\n"
         continue
       let vars := ("x", elem) :: scope.zipIdx.map fun ((_, t), i) => (s!"v{i}", t)
+      let simpSet := simpSet ++ if cbBody.anyOp dynamicRecordOp then
+        ", tolean.TypeScript.Eval.encRecord, tolean.TypeScript.JSRecord.hasOwn, tolean.TypeScript.Eval.getKey_encRecord_of_own, tolean.TypeScript.Eval.recordOwn_encRecord, Option.getD"
+        else ""
       loopLemmas := loopLemmas.push (r.cert lemmaName)
       thms := thms.push <|
         s!"theorem {lemmaName} {functionGeneric} (fs : List (tolean.DeclRef × List String × tolean.TypeScript.IR.Body)){hfs}\n" ++
@@ -1408,7 +1419,10 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         s!"      (List.map {encX} items) = some ({result}) := by\n" ++
         s!"  refine tolean.TypeScript.Proof.{fromLemma} ?_ items\n" ++
         s!"  intro {intros}\n" ++ substHfs ++ unpack ++
-        s!"  {casesOn decls vars}link_tac [{simpSet}]"
+        (if cbBody.anyOp dynamicRecordOp then "  try clear hI\n" else "") ++
+        s!"  {casesOn decls vars}link_tac [{simpSet}]" ++
+        (if cbBody.anyOp dynamicRecordOp then
+          s!"\n  all_goals (try (split_record <;> simp_all [{simpSet}]))" else "")
     let mut index := 0
     let mut returnsLoop := false
     let loopSteps (indent simpSet : String) (lemmas : List String) :=
@@ -1637,6 +1651,9 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         else none
       let simpSet := ", ".intercalate (hfsName ++ stepNames ++ closureLemmas ++ envLemmas ++ lemmaNames.toList ++ codecLemmas ++
         loopLemmas.toList ++ instantiatedLoops ++ defs)
+      let simpSet := simpSet ++ if body.anyOp dynamicRecordOp then
+        ", tolean.TypeScript.Eval.encRecord, tolean.TypeScript.JSRecord.hasOwn, tolean.TypeScript.Eval.getKey_encRecord_of_own, tolean.TypeScript.Eval.recordOwn_encRecord, Option.getD"
+        else ""
       let childRewrites := String.join (instantiatedLoops.map fun lemma =>
         s!"    all_goals (try rw [{lemma}])\n") ++
         (if instantiatedLoops.isEmpty then "" else
@@ -1670,9 +1687,12 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         substHfs ++
         s!"    {bindHyps}\n    try simp only []\n" ++
         generalize "ρ" coded ++ destruct ++
+        (if body.anyOp dynamicRecordOp then "    try clear hI\n" else "") ++
         (if restricted then "    have hs := hkeys x hx\n" else "") ++
         childSteps ++
         s!"    {if instantiatedLoops.isEmpty then casesOn decls loopVars else "all_goals "}link_tac [{simpSet}, {", ".intercalate hypNames}{if restricted then ", hs" else ""}]\n" ++
+        (if body.anyOp dynamicRecordOp then
+          s!"    all_goals (try (split_record <;> simp_all [{simpSet}]))\n" else "") ++
         childRewrites ++
         (if !restricted || literalMaps.isEmpty then "" else
           s!"    all_goals (try simp only [{", ".intercalate literalMaps}, ← List.map_append])\n") ++
@@ -1801,8 +1821,31 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       ([r.cert "decls"] ++ retNames ++ resultCarrierNames ++ envLemmas ++ lemmaNames.toList ++ codecLemmas ++
         loopLemmas.toList ++ defs ++ obligations.map (·.1))
     let some_ := r.write "some" "Option.some"
-    let rfl := r.full "rfl"
+    let dynamicLookup := outBody.anyOp dynamicRecordOp ||
+      recordConditionalFunctions.any (fun callee => outBody.calls ⟨"", callee⟩)
+    if unguardedRecordBody [] outBody &&
+        (outRet.refs ++ outParams.flatMap (fun p => p.2.refs) ++ outBody.refs).contains IR.dictionaryRef then
+      throw s!"{file}: a dynamic Record read must be guarded by Object.hasOwn on the same record and key"
+    if dynamicLookup then recordConditionalFunctions := name :: recordConditionalFunctions
+    let successName := name ++ "_record_success"
     let runName := r.full (if retainsError then "tolean.TypeScript.IR.callIn" else "tolean.TypeScript.IR.runIn")
+    if dynamicLookup && r.idents.contains successName then
+      throw s!"{file}: reserved certificate hypothesis name {successName}"
+    let successBinder := if dynamicLookup then
+      s!" ({successName} : ({runName} (N := {nv}) {outputFs} ⟨\"\", {str name}⟩ {list args}).isSome = true)"
+      else ""
+    let binders := binders ++ successBinder
+    let hasDictionary := dynamicLookup ||
+      (outRet.refs ++ outParams.flatMap (fun p => p.2.refs) ++ outBody.refs).contains IR.dictionaryRef
+    let recordSimpSet := if dynamicLookup then
+      ", tolean.TypeScript.Eval.getKey_encRecord_join_of_own, tolean.TypeScript.Eval.getKey_encRecord_of_own, tolean.TypeScript.Eval.recordOwn_encRecord_none, tolean.TypeScript.Eval.recordOwn_encRecord"
+      else
+      ", tolean.TypeScript.Eval.getKey_encRecord_of_own, tolean.TypeScript.Eval.recordOwn_encRecord"
+    let simpSet := simpSet ++ if hasDictionary then
+      ", tolean.TypeScript.Eval.encRecord, tolean.TypeScript.Eval.decRecord, Function.comp_def, tolean.TypeScript.JSRecord.hasOwn" ++
+        (if dynamicLookup then ", Option.getD" else ", tolean.TypeScript.JSRecord.get?, List.find?_map, Function.comp_def, tolean.TypeScript.Eval.encUndef") ++ recordSimpSet
+      else ""
+    let rfl := r.full "rfl"
     let sourceCall := if retainsError then
         s!"{r.eval "callIn"} (N := {nv}) [(\"\", {r.cert "program"})] ⟨\"\", {str name}⟩"
       else s!"{r.eval "run"} (N := {nv}) {r.cert "program"} {str name}"
@@ -1831,11 +1874,19 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       loopRewrites ++
       s!"\n  all_goals first | assumption | rfl | (intros; first | rfl | (try simp_all [{simpSet}]))"
     thms := thms.push <|
+      (if dynamicLookup then
+        "/-- This link assumes that the IR run returns a result. -/\n"
+        else "") ++
       s!"theorem {name}_link {functionGeneric} {binders} :\n" ++
       s!"    {runName} (N := {nv}) {outputFs} ⟨\"\", {str name}⟩ {list args} =\n" ++
       s!"      {some_} ({retEnc} ({call})) := by\n" ++
       stagedLoops ++
+      (if dynamicLookup then s!"  revert {successName}\n" else "") ++
       s!"  {if returnsLoop then "all_goals " else casesOn decls outParams}link_tac [{simpSet}]" ++
+      (if hasDictionary then
+        "\n  all_goals (try simp_all [List.find?_isSome, beq_iff_eq, tolean.TypeScript.Eval.recordFind_isSome_of_mem, tolean.TypeScript.Eval.findMap_snd_getD_of_some, tolean.TypeScript.Eval.recordFind_num_ne_null, tolean.TypeScript.Eval.recordFind_num_ne_undefined, tolean.TypeScript.Eval.recordFind_num_ne_null_of_found, tolean.TypeScript.Eval.recordFind_num_ne_undefined_of_found, tolean.TypeScript.Eval.getKey_encRecord_of_success, tolean.TypeScript.Eval.getKey_encRecord_of_own, tolean.TypeScript.Eval.getKey_encRecord_join_of_own, tolean.TypeScript.Eval.recordOwn_encRecord_none, tolean.TypeScript.Eval.encUndef_join])" ++
+        "\n  all_goals (try simp_all)\n  all_goals (try first | assumption | rfl | contradiction)"
+        else "") ++
       (if literalMaps.isEmpty then "" else
         s!"\n  all_goals (try simp only [{", ".intercalate literalMaps}, ← List.map_append])\n" ++
         s!"  all_goals (try simp_all [{simpSet}, -List.map_cons, -List.map_nil, -List.map_map, ← List.map_append])") ++
@@ -1857,7 +1908,8 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       s!"theorem {name}_cert {functionGeneric} {binders} :\n" ++
       s!"    {sourceCall} {list args} = {some_} ({retEnc} ({call})) :=\n" ++
       s!"  {soundName} {rfl} {rfl} {rfl} {r.cert "program_translated"} {str name} _ 64 _\n" ++
-      s!"    ({" ".intercalate ([r.cert s!"{name}_link"] ++ r.codecs.map (·.2) ++ params.map (·.name) ++ obligations.map (·.1))})"
+      s!"    ({" ".intercalate ([r.cert s!"{name}_link"] ++ r.codecs.map (·.2) ++ params.map (·.name) ++ obligations.map (·.1) ++
+        (if dynamicLookup then [successName] else []))})"
   return "\n".intercalate ([
     s!"-- Certificate written by tolean for {file}. Do not edit.",
     "import tolean.TypeScript.Spec.Lemmas.Eval",

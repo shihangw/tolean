@@ -1021,6 +1021,33 @@ elab "split_undef" : tactic => withMainContext do
   let stx ← Term.exprToSyntax e
   evalTactic (← `(tactic| cases _ : $stx))
 
+open Lean Elab Tactic Meta in
+/-- Split the optional value of a record lookup after its ownership guard
+has reduced. Prefer the encoded payload: an optional-valued record flattens
+its lookup, so splitting only the outer option leaves the payload unknown.
+The encoding can occur only in a hypothesis when the goal is a contradiction. -/
+elab "split_record" : tactic => withMainContext do
+  let target ← instantiateMVars (← getMainTarget)
+  let findPayload := fun (e : Lean.Expr) =>
+    (e.find? fun e => e.isAppOfArity ``tolean.TypeScript.Eval.encUndef 4 &&
+      !e.hasLooseBVars).map (·.appArg!)
+  let mut payload := findPayload target
+  if payload.isNone then
+    for decl in ← getLCtx do
+      if !decl.isImplementationDetail && payload.isNone then
+        payload := findPayload decl.type
+  let mut record := target.find? fun e =>
+    e.isAppOf ``tolean.TypeScript.JSRecord.get? && !e.hasLooseBVars
+  if record.isNone then
+    for decl in ← getLCtx do
+      if !decl.isImplementationDetail && record.isNone then
+        record := decl.type.find? fun e =>
+          e.isAppOf ``tolean.TypeScript.JSRecord.get? && !e.hasLooseBVars
+  let some e := payload.orElse fun _ => record
+    | throwError "split_record: no record lookup in the goal or hypotheses"
+  let stx ← Term.exprToSyntax e
+  evalTactic (← `(tactic| cases _ : $stx))
+
 /-- The proof of a link theorem: unfold the IR's evaluator on the IR and the
 printed definitions, then split on each branch. `defs` names the IR, the
 encoders, the printed definitions and the loop lemmas. -/
