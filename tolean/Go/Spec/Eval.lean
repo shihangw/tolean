@@ -196,8 +196,10 @@ def countedHead : Option Stmt → Option Expr → Option Stmt → Option (String
     let a ← intLit? start
     let b ← intLit? stop
     if a < 0 || b < 0 || a ≥ 2 ^ 63 || b ≥ 2 ^ 63 then none
-    return (index, (List.range' a.toNat (b - a).toNat).map (fun n => .int n))
+    return (index, (List.range' a.toNat (b - a).toNat).map (fun n => .int (Int.ofNat n)))
   | _, _, _ => none
+
+mutual
 
 /-- This subset does not allow the body to change or shadow the counter.
 It also excludes nested loops until their frame proof is available. -/
@@ -205,11 +207,17 @@ def countedBodySafe (index : String) : Stmt → Bool
   | .assign _ _ [.ident _ name] [_] => name != index
   | .incDec _ _ (.ident _ name) => name != index
   | .ret _ _ => true
-  | .block _ ss => ss.all (countedBodySafe index)
-  | .ifStmt _ none _ t e =>
-    countedBodySafe index t && (e.map (countedBodySafe index)).getD true
+  | .block _ ss => countedStatementsSafe index ss
+  | .ifStmt _ none _ t none => countedBodySafe index t
+  | .ifStmt _ none _ t (some e) => countedBodySafe index t && countedBodySafe index e
   | .decl _ (.mk _ "var" [.value _ [name] _ _]) => name != index
   | _ => false
+
+def countedStatementsSafe (index : String) : List Stmt → Bool
+  | [] => true
+  | s :: ss => countedBodySafe index s && countedStatementsSafe index ss
+
+end
 
 /-- The functions of a package and the names it declares at the top level. -/
 structure Program where
