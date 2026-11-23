@@ -167,6 +167,10 @@ def Ty.unoptional : Ty → Ty
   | .optional t => t
   | t => t
 
+def Ty.flattenOptional : Ty → Ty
+  | .optional (.optional t) => .optional t
+  | t => t
+
 def Ty.unnullable : Ty → Ty
   | .nullable t => t
   | t => t
@@ -1261,6 +1265,9 @@ def translateType (t : TypeExpr) : TM Ty := do
       | t => return .optional t
     | _, _ => unsupportedType t
   | .array _ elem => return .array (← translateType elem)
+  | .ref _ "Record" [.keyword _ "string", value]
+    | .ref _ "Readonly" [.ref _ "Record" [.keyword _ "string", value]] =>
+    return .struct IR.dictionaryRef [← translateType value]
   | .indexed s receiver key =>
     let ty ← translateType receiver
     let .struct ref args := ty |
@@ -1918,6 +1925,8 @@ def numberConstant? : String → Option IR.NumberConstant
 keys, and `V`. The file must declare or import `K`, so that the output can
 name its constructors. -/
 def recordIndex (c : Ctx) : Ty → Option (DeclRef × List String × Ty)
+  | .struct ref [value] =>
+    if ref == IR.dictionaryRef then some (ref, [], .optional value) else none
   | .struct ref [] => do
     let info ← c.knownStructs.find? (·.ref == ref)
     let key ← info.key
@@ -1925,6 +1934,44 @@ def recordIndex (c : Ctx) : Ty → Option (DeclRef × List String × Ty)
     let (_, type) ← info.fields.head?
     return (key, info.fields.map (·.1), type)
   | _ => none
+
+/-- A literal inherited name is refused even when a particular dictionary
+could have an own property with that name. -/
+def inheritedRecordKey : Expr → Bool
+  | .string _ key => Eval.objectPrototypeNames.contains key
+  | .paren _ key => inheritedRecordKey key
+  | _ => false
+
+/-- A dictionary literal supplies its own fields rather than fixing them
+in a declaration. The existing object-literal checks still check each value,
+reject duplicate names and reject prototype setters. -/
+def dictionaryInfo (ref : DeclRef) (args : List Ty) (props : List Property) : Option StructInfo := do
+  unless ref == IR.dictionaryRef do none
+  let [value] := args | none
+  let fields ← props.mapM fun
+    | .shorthand _ name | .keyValue _ (.ident name) _ => some (name, value)
+    | _ => none
+  return { file := ref.file, name := ref.name, fields }
+
+/-- Object operations on string-keyed dictionaries. Only hasOwn consults a
+second argument; all three operations ignore inherited properties. -/
+def translateDictionaryCall (tr : Expr → TM Code) (s : Span)
+    (method : String) (args : List Expr) : TM Code := do
+  let obj :: rest := args | reject s "an Object dictionary operation needs a record"
+  let record ← tr obj
+  let .struct ref [value] := record.type |
+    reject s "calls may name only the function itself, functions declared earlier in this file, or imported ones"
+  unless ref == IR.dictionaryRef do
+    reject s "calls may name only the function itself, functions declared earlier in this file, or imported ones"
+  match method, rest with
+  | "keys", [] => return ⟨.ext .recordKeys [record.value], false, .array .string⟩
+  | "entries", [] => return ⟨.ext .recordEntries [record.value], false, .array (.tuple [.string, value])⟩
+  | "hasOwn", [key] =>
+    requireFeature s .objectHasOwn
+    let key ← tr key
+    unless key.type == .string do reject s "Object.hasOwn needs a string key"
+    return ⟨.ext .recordHasOwn [record.value, key.value], false, .boolean⟩
+  | _, _ => reject s "use Object.keys(record), Object.entries(record), or Object.hasOwn(record, key)"
 
 /-! ### Expressions -/
 
@@ -2976,8 +3023,11 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
         if type.isMaybe && !type.isOptional then reject s "an optional Record index could give null or undefined"
         let k ← translateExpr fuel env (some (.enum keyRef)) key
         unless k.type == .enum keyRef do reject key.span "the key must have the key type of the Record"
-        let result := if type.isOptional then type else .optional type
-        return ⟨.ext (.optRecordGet keyRef keys type.isOptional) [receiver, k.value], false, result⟩
+        let result := (if type.isOptional then type else .optional type).flattenOptional
+        let flatten := type matches .optional (.optional _)
+        let op := if flatten then IR.ExprExt.optRecordGetFlatten keyRef keys type.isOptional
+          else IR.ExprExt.optRecordGet keyRef keys type.isOptional
+        return ⟨.ext op [receiver, k.value], false, result⟩
       | none =>
         let elem ← orReject (match o.type with
           | .optional (.array t) | .nullable (.array t) => some t
@@ -3015,9 +3065,16 @@ def translateExprCore (fuel : Nat) (env : Env) (expected : Option Ty) (e : Expr)
       let (keyRef, keys, type) ← orReject (recordIndex (← get) o.type) s
         ("only an array, a tuple, or a value of a Record type, such as type T = Record<K, V>, whose key type K " ++
           "this file declares or imports, may be indexed")
-      let k ← translateExpr fuel env (some (.enum keyRef)) key
-      unless k.type == .enum keyRef do reject key.span "the key must have the key type of the Record"
-      return ⟨.ext (.recordGet keyRef keys) [o.code, k.value], false, type⟩
+      let keyType := if keyRef == IR.dictionaryRef then Ty.string else .enum keyRef
+      let k ← translateExpr fuel env (some keyType) key
+      unless k.type == keyType && !(keyRef == IR.dictionaryRef && inheritedRecordKey key) do
+        reject key.span (if keyRef == IR.dictionaryRef then
+          "the key must be a string and may not be a literal Object.prototype name"
+          else "the key must have the key type of the Record")
+      let flatten := type matches .optional (.optional _)
+      let op := if flatten then IR.ExprExt.recordGetFlatten keyRef keys
+        else IR.ExprExt.recordGet keyRef keys
+      return ⟨.ext op [o.code, k.value], false, type.flattenOptional⟩
   | .unary s op arg =>
     if op == .neg && arg.isInfinity && !env.has "Infinity" then
       return ⟨.numberConstant .negInf, false, .number⟩
@@ -3174,6 +3231,9 @@ def translateCall (fuel : Nat) (env : Env) (s : Span) (callee : Expr) (args : Li
   if let .member _ (.ident _ "Object") "is" := callee then
     if !env.has "Object" then
       return ← translateObjectIs (translateExpr fuel env none) s args
+  if let .member _ (.ident _ "Object") method := callee then
+    if !env.has "Object" then
+      return ← translateDictionaryCall (translateExpr fuel env none) s method args
   if let .member _ (.ident _ "Date") "UTC" := callee then
     if !env.has "Date" then
       return ← translateDateUtc (translateExpr fuel env none) s args
@@ -3520,7 +3580,8 @@ def translateObject (fuel : Nat) (env : Env) (expected : Option Ty) (s : Span) (
     let c ← translateObject fuel env (some member) s props
     return ⟨.inject uref tag c.code, false, .tagged uref tags⟩
   let some (.struct ref args) := expected | reject s notStructMessage
-  let info ← orReject (ctx.knownStructs.find? (·.ref == ref)) s notStructMessage
+  let info ← orReject ((ctx.knownStructs.find? (·.ref == ref)).orElse
+    fun _ => dictionaryInfo ref args props) s notStructMessage
   let structName := ref.name
   -- The keys seen so far, and the fields translated so far.
   let (seen, parts) ← props.foldlM (init := (([] : List String), ([] : List (String × IR.Expr))))
@@ -4955,9 +5016,11 @@ def isNameUnion : TypeExpr → Bool
     | _ => false
   | _ => false
 
-/-- The key type and the value type of `Record<K, V>`, or of
-`Readonly<Record<K, V>>`. -/
+/-- The key and value types of a fixed-key Record. String-keyed records use
+the ordinary alias path because their runtime type needs no declaration. -/
 def recordArgs : TypeExpr → Option (TypeExpr × TypeExpr)
+  | .ref _ "Record" [.keyword _ "string", _]
+    | .ref _ "Readonly" [.ref _ "Record" [.keyword _ "string", _]] => none
   | .ref _ "Record" [k, v] | .ref _ "Readonly" [.ref _ "Record" [k, v]] => some (k, v)
   | _ => none
 
@@ -4973,7 +5036,10 @@ def translateRecord (exported : Bool) (name : String) (key value : TypeExpr) :
   let info ← orReject (match keyType with
       | .enum ref => ctx.enums.find? (·.ref == ref)
       | _ => none) key.span
-    "the keys of a Record must be a literal union of strings that this file declares or imports, such as type K = 'a' | 'b'"
+    (if keyType == .string then
+      "Record<string, V> is not supported yet: dynamic string lookup needs a certificate condition for inherited Object.prototype properties; naming the Record does not remove this requirement"
+    else
+      "the keys of a Record must be a literal union of strings that this file declares or imports, such as type K = 'a' | 'b'")
   let type ← isolated (translateType value)
   if let some m := info.members.find? leanReserved.contains then
     reject key.span s!"name '{m}' is reserved in Lean, so it cannot name a field of the Record"
@@ -5844,7 +5910,7 @@ def translateWith (file source ns : String) (target : Edition := .default)
   -- namespace, so it must know the file. The translator only names files it
   -- sees, and this check keeps a later change from printing a bare name.
   if let some r := (decls.flatMap IR.Decl.refs).find? fun r =>
-      r.file != file && (deps.lookup r.file).isNone then
+      r != IR.dictionaryRef && r.file != file && (deps.lookup r.file).isNone then
     throw s!"{file}: the output names '{r.name}' of '{r.file}', a file that it does not see"
   let imports := (importedFiles file m).filterMap fun f => (deps.lookup f).map (s!"import {·.module}")
   -- A string is a `JSString`, which the output names only in a file that
@@ -5875,6 +5941,8 @@ def translateWith (file source ns : String) (target : Edition := .default)
      else if usesString then ["import tolean.TypeScript.Spec.String"] else []) ++
     (if usesBigInt then ["import tolean.TypeScript.Spec.BigInt"] else []) ++
     (if usesMap then ["import tolean.TypeScript.Map"] else []) ++
+    (if decls.any (fun d => d.refs.contains IR.dictionaryRef) then
+      ["import tolean.TypeScript.Spec.Record"] else []) ++
     (if usesRegExp then ["import tolean.TypeScript.Spec.RegExp"] else []) ++
     (if usesNullish then ["import tolean.TypeScript.Spec.Nullish"] else []) ++
     (if decls.any (IR.Decl.recursive names.file) then ["import tolean.TypeScript.Decreasing"] else []) ++
