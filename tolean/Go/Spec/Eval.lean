@@ -186,6 +186,11 @@ def Outcome.toLoop : Outcome → tolean.Core.Loop.Outcome Env Val
   | .normal env => .normal env
   | .ret value => .ret value
 
+def Outcome.fromLoop : tolean.Core.Loop.Outcome Env Val → Option Outcome
+  | .normal env => some (.normal env)
+  | .ret value => some (.ret value)
+  | _ => none
+
 /-- A finite counted head with literal bounds. The strict bound keeps the
 last increment within Go's signed 64-bit range. -/
 def countedHead : Option Stmt → Option Expr → Option Stmt → Option (String × List Val)
@@ -196,6 +201,7 @@ def countedHead : Option Stmt → Option Expr → Option Stmt → Option (String
     let a ← intLit? start
     let b ← intLit? stop
     if a < 0 || b < 0 || a ≥ 2 ^ 63 || b ≥ 2 ^ 63 then none
+    if (b - a).toNat > 4096 then none
     return (index, (List.range' a.toNat (b - a).toNat).map (fun n => .int (Int.ofNat n)))
   | _, _, _ => none
 
@@ -385,11 +391,11 @@ def execStmt (p : Program) (fuel : Nat) (env : Env) : Stmt → Option Outcome
     | .normal env' => some (.normal (env'.drop (env'.length - env.length)))
   -- Go specification, "For statements with for clause". The body cannot
   -- change the counter, and literal bounds cannot change between iterations.
-  | .forStmt _ init cond post body => do
+  | .forStmt _ init cond post (.block span body) => do
     let (index, items) ← countedHead init cond post
-    if !countedBodySafe index body then none
+    if !countedBodySafe index (.block span body) then none
     let out ← tolean.Core.Loop.execLoop
-      (fun inner => (execStmt p fuel inner body).map Outcome.toLoop)
+      (fun inner => (exec p fuel inner body).map Outcome.toLoop)
       (fun value outer => some ((index, value) :: outer))
       (fun outer inner => some (inner.drop (inner.length - outer.length))) env items
     match out with

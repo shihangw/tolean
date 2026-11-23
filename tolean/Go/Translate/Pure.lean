@@ -387,6 +387,27 @@ end
 
 /-! ### Functions -/
 
+def valueCode : Eval.Val → IR.Expr
+  | .int n => .int n
+  | .bool b => .bool b
+  | .str s => .string s
+
+/-- The first proved counted form starts the function body. Its body uses the
+existing state translation, so returns and nested loops remain refused. -/
+def translateTop (ctx : Ctx) (env : Env) (result : Ty) : List Stmt → TM IR.Body
+  | .forStmt sp init cond post (.block bsp ss) :: rest => do
+    let some (index, items) := Eval.countedHead init cond post
+      | reject sp "a counted loop needs literal bounds, ++, and at most 4096 iterations"
+    unless Eval.countedBodySafe index (.block bsp ss) do
+      reject sp "the counted body must not change its counter or contain another loop"
+    let inner ← declare env sp index .int
+    let changed := (env.filter fun l => (changesList ss).contains l.name)
+    let body ← translateStmts ctx inner (.state (changed.map (·.name))) stmtFuel ss
+    let next ← translateStmts ctx env (.ret result) stmtFuel rest
+    return tolean.Core.Loop.lowerLoop sp (changed.map fun l => (l.name, l.type.lean))
+      index .int body (.list (items.map valueCode) .int) next false none
+  | ss => translateStmts ctx env (.ret result) stmtFuel ss
+
 /-- The parameters and their types. A parameter without a name, as in
 `func f(int) int`, still takes an argument, so this part refuses it and the
 older string translation writes the function. -/
@@ -406,7 +427,7 @@ def translateFunc (ctx : Ctx) : Decl → TM (IR.Decl × FnSig)
     unless (ps.map (·.1)).Nodup do reject sp "two parameters have one name"
     unless ps.all (nameOK ·.1) do reject sp "a parameter has a reserved name"
     let env : Env := ps.map fun (n, t) => ⟨n, t⟩
-    let b ← translateStmts ctx env (.ret result) stmtFuel body
+    let b ← translateTop ctx env result body
     return (.function name (ps.map fun (n, t) => (n, t.lean)) result.lean b,
       ⟨name, ps.map (·.2), result⟩)
   | .func sp .. => reject sp "only a function with one result and no receiver can be pure"

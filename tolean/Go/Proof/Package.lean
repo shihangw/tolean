@@ -1,4 +1,4 @@
-import tolean.Go.Proof.Stmt
+import tolean.Go.Proof.LoopFrame
 
 /-!
 The translation of a package's pure functions means what the functions mean.
@@ -54,7 +54,7 @@ theorem translateFunc_ok {ctx : Ctx} {d : Decl} {decl : IR.Decl} {sig : FnSig}
       ps.map (·.1) = Eval.paramNames fields ∧
       decl = .function name (ps.map fun (n, t) => (n, t.lean)) result.lean b ∧
       sig.name = name ∧
-      translateStmts ctx (ps.map fun (n, t) => Local.mk n t) (.ret result) stmtFuel body = .ok b := by
+      translateTop ctx (ps.map fun (n, t) => Local.mk n t) result body = .ok b := by
   unfold translateFunc at h
   split at h
   · next sp name params rsp rt bsp body =>
@@ -251,7 +251,7 @@ theorem calls_agree : ∀ fuel, CallsAgree (Eval.program decls)
     simp only [IR.Decl.function.injEq] at hdecl
     obtain ⟨rfl, rfl, -, rfl⟩ := hdecl
     rw [hsig] at hfind
-    have hsim := stmts_sound (Eval.program decls) _ fuel (ctx := ⟨Eval.program decls, ks⟩) rfl ih hstmts
+    have hsim := top_sound (Eval.program decls) _ fuel (ctx := ⟨Eval.program decls, ks⟩) rfl ih hstmts
     have hps : List.map (fun x => x.fst) (List.map (fun x : String × Ty => (x.1, x.2.lean)) ps) =
         ps.map (·.1) := by simp
     rw [hps] at hlen hex
