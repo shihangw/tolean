@@ -116,40 +116,81 @@ private def writtenNames : Stmt → List String
 def writes (body : Stmt) : List String :=
   (writtenNames body).foldl (fun ns n => if n ∈ ns then ns else ns ++ [n]) []
 
-/-- Free names not declared as arrays are treated as `Int`. A known scalar
-cannot be indexed, and a known array cannot appear in an integer position.
-Counted heads have no declared vector, so their indexing bases are inferred
-from their use. -/
-def integerExpr (scalarNames arrayNames : List String) : Expr → Bool
+/-- A single assignment of scalar and array roles to names used by a body. -/
+structure Roles where
+  scalarNames : List String
+  arrayNames : List String
+deriving Repr, DecidableEq
+
+private def addName (names : List String) (name : String) : List String :=
+  if name ∈ names then names else names ++ [name]
+
+def Roles.scalar (roles : Roles) (name : String) : Roles :=
+  { roles with scalarNames := addName roles.scalarNames name }
+
+def Roles.array (roles : Roles) (name : String) : Roles :=
+  { roles with arrayNames := addName roles.arrayNames name }
+
+def Roles.consistent (roles : Roles) : Bool :=
+  roles.scalarNames.all (fun n => !(roles.arrayNames.contains n))
+
+private def inferInteger (roles : Roles) : Expr → Option Roles
+  | .int _ => some roles
+  | .var n => some (roles.scalar n)
+  | .intOp .add a b => do
+    let roles ← inferInteger roles a
+    inferInteger roles b
+  | .ext .at [.var n, i] => inferInteger (roles.array n) i
+  | _ => none
+
+private def inferBoolean (roles : Roles) : Expr → Option Roles
+  | .bool _ => some roles
+  | .order .lt a b | .eq a b => do
+    let roles ← inferInteger roles a
+    inferInteger roles b
+  | _ => none
+
+private def inferBody (roles : Roles) : Stmt → Option Roles
+  | .assign n e rest => do
+    let roles ← inferInteger (roles.scalar n) e
+    inferBody roles rest
+  | .addAssign n e rest => do
+    let roles ← inferInteger (roles.scalar n) e
+    inferBody roles rest
+  | .ite c yes no => do
+    let roles ← inferBoolean roles c
+    let roles ← inferBody roles yes
+    inferBody roles no
+  | .ret e => inferInteger roles e
+  | .skip | .brk | .cont => some roles
+
+def inferRoles (knownScalars knownArrays : List String) (body : Stmt) : Option Roles :=
+  inferBody ⟨knownScalars, knownArrays⟩ body
+
+private def integerExpr (roles : Roles) : Expr → Bool
   | .int _ => true
-  | .var n => !(arrayNames.contains n)
-  | .intOp .add a b =>
-    integerExpr scalarNames arrayNames a && integerExpr scalarNames arrayNames b
+  | .var n => roles.scalarNames.contains n
+  | .intOp .add a b => integerExpr roles a && integerExpr roles b
   | .ext .at [.var n, i] =>
-    (arrayNames.isEmpty || arrayNames.contains n) &&
-      !(scalarNames.contains n) &&
-      integerExpr scalarNames arrayNames i
+    roles.arrayNames.contains n && integerExpr roles i
   | _ => false
 
-def booleanExpr (scalarNames arrayNames : List String) : Expr → Bool
+private def booleanExpr (roles : Roles) : Expr → Bool
   | .bool _ => true
-  | .order .lt a b | .eq a b =>
-    integerExpr scalarNames arrayNames a && integerExpr scalarNames arrayNames b
+  | .order .lt a b | .eq a b => integerExpr roles a && integerExpr roles b
   | _ => false
 
 /-- The checked printer supports integer state and returns only.
 Boolean tests are allowed, but Boolean state and returns are rejected. -/
-def printable (knownScalars knownArrays : List String) (body : Stmt) : Bool :=
-  knownScalars.all (fun n => !(knownArrays.contains n)) &&
-    go knownScalars knownArrays body
+def printable (roles : Roles) (body : Stmt) : Bool :=
+  roles.consistent && go body
 where
-  go (scalarNames arrayNames : List String) : Stmt → Bool
+  go : Stmt → Bool
     | .assign _ e rest | .addAssign _ e rest =>
-      integerExpr scalarNames arrayNames e && go scalarNames arrayNames rest
+      integerExpr roles e && go rest
     | .ite c yes no =>
-      booleanExpr scalarNames arrayNames c &&
-        go scalarNames arrayNames yes && go scalarNames arrayNames no
-    | .ret e => integerExpr scalarNames arrayNames e
+      booleanExpr roles c && go yes && go no
+    | .ret e => integerExpr roles e
     | _ => true
 
 structure Head where
@@ -181,10 +222,13 @@ def translateLoop (h : Head) (body : Stmt) (rest : Body) : Body :=
     (translate names body) h.items rest true (some .int)
 
 def translateChecked (h : Head) (body : Stmt) (rest : Body) : Except String Body :=
-  if !printable [h.binder] [] body then
-    .error "experimental printer requires integer locals and returns"
-  else if h.safe body then .ok (translateLoop h body rest)
-  else .error "counted loop changes its binder or has a bound outside signed 32-bit integers"
+  match inferRoles [h.binder] [] body with
+  | none => .error "experimental printer requires integer locals and returns"
+  | some roles =>
+    if !printable roles body then
+      .error "experimental printer requires integer locals and returns"
+    else if h.safe body then .ok (translateLoop h body rest)
+    else .error "counted loop changes its binder or has a bound outside signed 32-bit integers"
 
 theorem loop_sound (h : Head) (body : Stmt) (rest : Body) (env : Env) :
     evalIR semantics env (translateLoop h body rest) =

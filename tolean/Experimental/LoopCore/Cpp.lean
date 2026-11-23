@@ -56,10 +56,13 @@ def translateLoop (h : Head) (body : C.Stmt) (rest : C.Body) : C.Body :=
     (C.translate names body) h.items rest true (some .int)
 
 def translateChecked (h : Head) (body : C.Stmt) (rest : C.Body) : Except String C.Body :=
-  if !C.printable h.scalarNames h.arrayNames body then
-    .error "experimental printer requires integer locals and returns"
-  else if h.accepts body then .ok (translateLoop h body rest)
-  else .error "range loop changes its vector or binder, or the counted head is unsafe"
+  match C.inferRoles h.scalarNames h.arrayNames body with
+  | none => .error "experimental printer requires integer locals and returns"
+  | some roles =>
+    if !C.printable roles body then
+      .error "experimental printer requires integer locals and returns"
+    else if h.accepts body then .ok (translateLoop h body rest)
+    else .error "range loop changes its vector or binder, or the counted head is unsafe"
 
 theorem loop_sound (h : Head) (body : C.Stmt) (rest : C.Body) (env : C.Env)
     (vs : List C.Val) (head : values h env = some vs) :

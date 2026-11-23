@@ -73,6 +73,18 @@ def find_cpp (xs : List Int) (key limit : Int) : Int :=
       (fun _ =>
     (-1 : Int)
   )
+--- index_cpp.lean
+import tolean.Experimental.LoopCore.Examples
+
+def index_cpp (xs : List Int) (key limit : Int) : Int :=
+  let s : Int := 0
+  _root_.tolean.Runtime.LoopResult.runOption (Id.run (forIn xs none
+    (fun (x : Int) (_ : Option Int) =>
+      ForInStep.done (some (xs.getD (x).toNat 0)))))
+      (fun r => r)
+      (fun _ =>
+    (0 : Int)
+  )
 --- two_loops_cpp.lean
 import tolean.Experimental.LoopCore.Examples
 

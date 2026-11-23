@@ -10,6 +10,7 @@ def main : IO Unit := do
     ("clamp_sum_c", C.translateChecked head clampBody (.value (.var "s"))),
     ("sum_cpp", Cpp.translateChecked range rangeSum (.value (.var "s"))),
     ("find_cpp", Cpp.translateChecked valueRange rangeFind (.value (.int (-1)))),
+    ("index_cpp", Cpp.translateChecked range indexedRangeElement (.value (.int 0))),
     ("two_loops_cpp", do
       let rest ← Cpp.translateChecked valueRange second (.value (.var "s"))
       Cpp.translateChecked range rangeSum rest),

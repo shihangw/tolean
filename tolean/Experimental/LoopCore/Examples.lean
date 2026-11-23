@@ -38,9 +38,13 @@ def booleanState : Stmt := .assign "flag" (.bool true) .skip
 def booleanReturn : Stmt := .ret (.bool true)
 def indexedCountedBinder : Stmt := .ret (.ext .at [.var "i", .int 0])
 def indexedRangeBinder : Stmt := .ret (.ext .at [.var "x", .int 0])
-def returnVector : Stmt := .ret (.var "xs")
-def conflictingArrayScalar : Stmt :=
+def indexedThenReturnArray : Stmt :=
   .ite (.eq element (.int 0)) (.ret (.var "xs")) .skip
+def assignThenIndexScalar : Stmt :=
+  .assign "s" (.int 1) (.ret (.ext .at [.var "s", .int 0]))
+def indexedRangeElement : Stmt := .ret (.ext .at [.var "xs", .var "x"])
+def returnVector : Stmt := .ret (.var "xs")
+def conflictingArrayScalar : Stmt := indexedThenReturnArray
 
 example : writes repeatedWrite = ["s"] := by decide
 example : writes branchWrite = ["s"] := by decide
@@ -102,12 +106,21 @@ example : (C.translateChecked head booleanReturn (.value (.int 0))).isOk = false
 example : (Cpp.translateChecked range booleanState (.value (.int 0))).isOk = false := by decide
 example : (Cpp.translateChecked range booleanReturn (.value (.int 0))).isOk = false := by decide
 example : (C.translateChecked head indexedCountedBinder (.value (.int 0))).isOk = false := by decide
+example : (C.translateChecked head indexedThenReturnArray (.value (.int 0))).isOk = false := by decide
+example : (C.translateChecked head assignThenIndexScalar (.value (.int 0))).isOk = false := by decide
+example : (Cpp.translateChecked (.counted head) indexedThenReturnArray
+    (.value (.int 0))).isOk = false := by decide
+example : (Cpp.translateChecked (.counted head) assignThenIndexScalar
+    (.value (.int 0))).isOk = false := by decide
 example : (Cpp.translateChecked range indexedRangeBinder (.value (.int 0))).isOk = false := by decide
 example : (Cpp.translateChecked range returnVector (.value (.int 0))).isOk = false := by decide
 example : (Cpp.translateChecked range conflictingArrayScalar (.value (.int 0))).isOk = false := by decide
 example : (C.translateChecked head sumBody (.value (.int 0))).isOk = true := by decide
+example : (C.translateChecked head findBody (.value (.int 0))).isOk = true := by decide
+example : (Cpp.translateChecked (.counted head) sumBody (.value (.int 0))).isOk = true := by decide
 example : (Cpp.translateChecked range (.addAssign "s" element .skip)
     (.value (.int 0))).isOk = true := by decide
+example : (Cpp.translateChecked range indexedRangeElement (.value (.int 0))).isOk = true := by decide
 example : (C.translateChecked head (.ret (.eq (.int 1) (.int 1)))
     (.value (.int 0))).isOk = false := by decide
 example : (Cpp.translateChecked range (.assign "flag" (.eq (.int 1) (.int 1)) .skip)

@@ -7,12 +7,13 @@ trap 'rm -rf "$tmp"' EXIT
 lake env lean --run tests/experimental/loopcore/Print.lean > "$tmp/printed"
 diff -u tests/experimental/loopcore/expected.txt "$tmp/printed"
 awk -v dir="$tmp" '/^--- / {file=dir "/" $2; next} {print >file}' "$tmp/printed"
-for file in sum_c find_c clamp_sum_c sum_cpp find_cpp two_loops_cpp \
+for file in sum_c find_c clamp_sum_c sum_cpp find_cpp index_cpp two_loops_cpp \
     repeated_c repeated_cpp branches_c branches_cpp; do
   case "$file" in
     sum_c|sum_cpp) expected=10; input='[1,2,3,4]' ;;
     find_c) expected=2; input='[1,2,3,4]' ;;
     find_cpp) expected=3; input='[1,2,3,4]' ;;
+    index_cpp) expected=0; input='[1,0]' ;;
     clamp_sum_c) expected=5; input='[-1,2,3,4]' ;;
     two_loops_cpp) expected=13; input='[1,2,3,4]' ;;
     repeated_*|branches_*) expected=2; input='[1,2,3,4]' ;;
