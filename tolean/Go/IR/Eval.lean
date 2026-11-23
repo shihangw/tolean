@@ -1,5 +1,6 @@
 import tolean.Go.IR
 import tolean.Go.Spec.Eval
+import tolean.Core.Loop
 
 /-!
 The meaning of the Tolean IR with the Go extension, as an evaluator over the
@@ -43,6 +44,11 @@ def bindState (names : List String) (inner outer : Env) : Option Env :=
   names.foldlM (fun ρ n => do
     let v ← inner.lookup n
     return if (ρ.lookup n).isSome then Eval.Env.set ρ n v else (n, v) :: ρ) outer
+
+/-- Go's current statement outcomes embed in the shared loop control type. -/
+def loopOutcome : Outcome → tolean.Core.Loop.Outcome Env Val
+  | .normal env => .normal env
+  | .ret value => .ret value
 
 mutual
 
@@ -114,6 +120,16 @@ def Body.exec (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
     match ← Body.exec fs fuel ρ branch with
     | .normal inner => Body.exec fs fuel (← bindState names inner ρ) rest
     | .ret _ => none
+  | .fold names element body (.list items _) rest _ => do
+    let values ← Expr.evalList fs fuel ρ items
+    let result ← tolean.Core.Loop.runFold
+      (fun inner => (Body.exec fs fuel inner body).map loopOutcome)
+      (fun value outer => some ((element, value) :: outer))
+      (fun outer inner => bindState names inner outer) ρ values
+    match result with
+    | .normal inner => Body.exec fs fuel inner rest
+    | .ret value => some (.ret value)
+    | _ => none
   | _ => none
 termination_by b => (fuel, sizeOf b, 0)
 
