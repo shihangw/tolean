@@ -1,0 +1,159 @@
+--- sum_c.lean
+import tolean.Experimental.LoopCore.Examples
+
+def sum_c (xs : List Int) (key limit : Int) : Int :=
+  let s : Int := 0
+  _root_.tolean.Runtime.LoopResult.runPair (Id.run (forIn (tolean.Experimental.LoopCore.C.count (0 : Int) (4 : Int)) (none, s)
+    (fun (i : Int) ((_, s) : Option Int × Int) =>
+      let s := (s + (xs.getD (i).toNat 0))
+      ForInStep.yield (none, s))))
+      (fun r => r)
+      (fun s =>
+    s
+  )
+--- find_c.lean
+import tolean.Experimental.LoopCore.Examples
+
+def find_c (xs : List Int) (key limit : Int) : Int :=
+  let s : Int := 0
+  _root_.tolean.Runtime.LoopResult.runOption (Id.run (forIn (tolean.Experimental.LoopCore.C.count (0 : Int) (4 : Int)) none
+    (fun (i : Int) (_ : Option Int) =>
+      if (xs.getD (i).toNat 0) = key then
+        ForInStep.done (some i)
+      else
+        ForInStep.yield none)))
+      (fun r => r)
+      (fun _ =>
+    (-1 : Int)
+  )
+--- clamp_sum_c.lean
+import tolean.Experimental.LoopCore.Examples
+
+def clamp_sum_c (xs : List Int) (key limit : Int) : Int :=
+  let s : Int := 0
+  _root_.tolean.Runtime.LoopResult.runPair (Id.run (forIn (tolean.Experimental.LoopCore.C.count (0 : Int) (4 : Int)) (none, s)
+    (fun (i : Int) ((_, s) : Option Int × Int) =>
+      if (xs.getD (i).toNat 0) < (0 : Int) then
+        ForInStep.yield (none, s)
+      else
+        let s := (s + (xs.getD (i).toNat 0))
+        if limit < s then
+          ForInStep.done (none, s)
+        else
+          ForInStep.yield (none, s))))
+      (fun r => r)
+      (fun s =>
+    s
+  )
+--- sum_cpp.lean
+import tolean.Experimental.LoopCore.Examples
+
+def sum_cpp (xs : List Int) (key limit : Int) : Int :=
+  let s : Int := 0
+  _root_.tolean.Runtime.LoopResult.runPair (Id.run (forIn xs (none, s)
+    (fun (x : Int) ((_, s) : Option Int × Int) =>
+      let s := (s + x)
+      ForInStep.yield (none, s))))
+      (fun r => r)
+      (fun s =>
+    s
+  )
+--- find_cpp.lean
+import tolean.Experimental.LoopCore.Examples
+
+def find_cpp (xs : List Int) (key limit : Int) : Int :=
+  let s : Int := 0
+  _root_.tolean.Runtime.LoopResult.runOption (Id.run (forIn xs none
+    (fun (x : Int) (_ : Option Int) =>
+      if x = key then
+        ForInStep.done (some x)
+      else
+        ForInStep.yield none)))
+      (fun r => r)
+      (fun _ =>
+    (-1 : Int)
+  )
+--- two_loops_cpp.lean
+import tolean.Experimental.LoopCore.Examples
+
+def two_loops_cpp (xs : List Int) (key limit : Int) : Int :=
+  let s : Int := 0
+  _root_.tolean.Runtime.LoopResult.runPair (Id.run (forIn xs (none, s)
+    (fun (x : Int) ((_, s) : Option Int × Int) =>
+      let s := (s + x)
+      ForInStep.yield (none, s))))
+      (fun r => r)
+      (fun s =>
+    _root_.tolean.Runtime.LoopResult.runOption (Id.run (forIn xs none
+    (fun (x : Int) (_ : Option Int) =>
+      if x = key then
+        ForInStep.done (some (s + x))
+      else
+        ForInStep.yield none)))
+        (fun r => r)
+        (fun _ =>
+      s
+    )
+  )
+--- repeated_c.lean
+import tolean.Experimental.LoopCore.Examples
+
+def repeated_c (xs : List Int) (key limit : Int) : Int :=
+  let s : Int := 0
+  _root_.tolean.Runtime.LoopResult.runPair (Id.run (forIn (tolean.Experimental.LoopCore.C.count (0 : Int) (4 : Int)) (none, s)
+    (fun (i : Int) ((_, s) : Option Int × Int) =>
+      let s := (1 : Int)
+      let s := (2 : Int)
+      ForInStep.yield (none, s))))
+      (fun r => r)
+      (fun s =>
+    s
+  )
+--- repeated_cpp.lean
+import tolean.Experimental.LoopCore.Examples
+
+def repeated_cpp (xs : List Int) (key limit : Int) : Int :=
+  let s : Int := 0
+  _root_.tolean.Runtime.LoopResult.runPair (Id.run (forIn xs (none, s)
+    (fun (x : Int) ((_, s) : Option Int × Int) =>
+      let s := (1 : Int)
+      let s := (2 : Int)
+      ForInStep.yield (none, s))))
+      (fun r => r)
+      (fun s =>
+    s
+  )
+--- branches_c.lean
+import tolean.Experimental.LoopCore.Examples
+
+def branches_c (xs : List Int) (key limit : Int) : Int :=
+  let s : Int := 0
+  _root_.tolean.Runtime.LoopResult.runPair (Id.run (forIn (tolean.Experimental.LoopCore.C.count (0 : Int) (4 : Int)) (none, s)
+    (fun (i : Int) ((_, s) : Option Int × Int) =>
+      if s < (1 : Int) then
+        let s := (1 : Int)
+        ForInStep.yield (none, s)
+      else
+        let s := (2 : Int)
+        ForInStep.yield (none, s))))
+      (fun r => r)
+      (fun s =>
+    s
+  )
+--- branches_cpp.lean
+import tolean.Experimental.LoopCore.Examples
+
+def branches_cpp (xs : List Int) (key limit : Int) : Int :=
+  let s : Int := 0
+  _root_.tolean.Runtime.LoopResult.runPair (Id.run (forIn xs (none, s)
+    (fun (x : Int) ((_, s) : Option Int × Int) =>
+      if s < (1 : Int) then
+        let s := (1 : Int)
+        ForInStep.yield (none, s)
+      else
+        let s := (2 : Int)
+        ForInStep.yield (none, s))))
+      (fun r => r)
+      (fun s =>
+    s
+  )

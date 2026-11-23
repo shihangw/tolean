@@ -30,6 +30,18 @@ def rangeFind : Stmt := .ite (.eq (.var "x") (.var "key")) (.ret (.var "x")) .sk
 def second : Stmt := .ite (.eq (.var "x") (.var "key"))
   (.ret (.intOp .add (.var "s") (.var "x"))) .skip
 
+def repeatedWrite : Stmt := .assign "s" (.int 1) (.assign "s" (.int 2) .skip)
+def branchWrite : Stmt :=
+  .ite (.order .lt (.var "s") (.int 1))
+    (.assign "s" (.int 1) .skip) (.assign "s" (.int 2) .skip)
+def booleanState : Stmt := .assign "flag" (.bool true) .skip
+def booleanReturn : Stmt := .ret (.bool true)
+
+example : writes repeatedWrite = ["s"] := by decide
+example : writes branchWrite = ["s"] := by decide
+example : writes (.assign "b" (.int 0)
+    (.assign "a" (.int 0) (.assign "b" (.int 1) .skip))) = ["b", "a"] := by decide
+
 def modelSpan : Span := ⟨⟨1, 1⟩, ⟨1, 2⟩⟩
 def head : C.Head := ⟨modelSpan, "i", 0, 4⟩
 def range : Cpp.Head := .byConstRef modelSpan "x" "xs"
@@ -79,6 +91,15 @@ example : head.safe sumBody = true := by decide
 example : range.accepts rangeSum = true := by decide
 example : range.accepts (.assign "xs" (.int 0) .skip) = false := by decide
 example : head.safe (.assign "i" (.int 0) .skip) = false := by decide
+
+example : (C.translateChecked head booleanState (.value (.int 0))).isOk = false := by decide
+example : (C.translateChecked head booleanReturn (.value (.int 0))).isOk = false := by decide
+example : (Cpp.translateChecked range booleanState (.value (.int 0))).isOk = false := by decide
+example : (Cpp.translateChecked range booleanReturn (.value (.int 0))).isOk = false := by decide
+example : (C.translateChecked head (.ret (.eq (.int 1) (.int 1)))
+    (.value (.int 0))).isOk = false := by decide
+example : (Cpp.translateChecked range (.assign "flag" (.eq (.int 1) (.int 1)) .skip)
+    (.value (.int 0))).isOk = false := by decide
 
 def golden (name : String) (body : Body) : String :=
   "import tolean.Experimental.LoopCore.Examples\n\n" ++

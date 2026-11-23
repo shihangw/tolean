@@ -34,6 +34,10 @@ theorem Related.bind {R : α → β → Prop} {S : γ → δ → Prop}
     Related S (a >>= f) (b >>= g) := by
   cases a <;> cases b <;> simp_all [Related]
 
+theorem Related.of_some_right {R : α → β → Prop} {a : Option α} {b : β}
+    (h : Related R a (some b)) : ∃ x, a = some x ∧ R x b := by
+  cases a <;> simp_all [Related]
+
 def execLoop (body : ρ → Option (Outcome ρ r))
     (bind : v → ρ → Option ρ) (leave : ρ → ρ → Option ρ)
     (env : ρ) : List v → Option (Outcome ρ r)
@@ -55,55 +59,6 @@ def runFold (body : σ → Option (Outcome σ q))
     | .normal inner => runFold body bind leave (← leave env inner) xs
     | .brk inner => return .normal (← leave env inner)
     | .cont _ => none
-
-private theorem execLoop_cons (body : ρ → Option (Outcome ρ r))
-    (bind : v → ρ → Option ρ) (leave : ρ → ρ → Option ρ)
-    (env : ρ) (x : v) (xs : List v) :
-    execLoop body bind leave env (x :: xs) =
-      (bind x env).bind fun inner =>
-        (body inner).bind fun outcome =>
-          match outcome with
-          | .ret value => some (.ret value)
-          | .normal state | .cont state =>
-            (leave env state).bind fun next => execLoop body bind leave next xs
-          | .brk state => (leave env state).map Outcome.normal := by
-  cases hb : bind x env with
-  | none => simp [execLoop, hb]
-  | some inner =>
-    cases ho : body inner with
-    | none => simp [execLoop, hb, ho]
-    | some out =>
-      cases out with
-      | ret value => simp [execLoop, hb, ho]
-      | normal state => simp [execLoop, hb, ho]
-      | cont state => simp [execLoop, hb, ho]
-      | brk state =>
-        cases hl : leave env state <;> simp [execLoop, hb, ho, hl]
-
-private theorem runFold_cons (body : σ → Option (Outcome σ q))
-    (bind : v → σ → Option σ) (leave : σ → σ → Option σ)
-    (env : σ) (x : v) (xs : List v) :
-    runFold body bind leave env (x :: xs) =
-      (bind x env).bind fun inner =>
-        (body inner).bind fun outcome =>
-          match outcome with
-          | .ret value => some (.ret value)
-          | .normal state =>
-            (leave env state).bind fun next => runFold body bind leave next xs
-          | .brk state => (leave env state).map Outcome.normal
-          | .cont _ => none := by
-  cases hb : bind x env with
-  | none => simp [runFold, hb]
-  | some inner =>
-    cases ho : body inner with
-    | none => simp [runFold, hb, ho]
-    | some out =>
-      cases out with
-      | ret value => simp [runFold, hb, ho]
-      | normal state => simp [runFold, hb, ho]
-      | cont state => simp [runFold, hb, ho]
-      | brk state =>
-        cases hl : leave env state <;> simp [runFold, hb, ho, hl]
 
 /-- `R` relates stores between iterations. `I s t` relates stores inside the
 iteration entered from `s` and `t`: it includes the body's agreement and frame
@@ -351,34 +306,10 @@ theorem execLoop_sim_refines
     (s : ρ) (t : σ) (initial : R s t) (items : List v)
     {b} (h : runFold target bindT leaveT t items = some b) :
     ∃ a, execLoop source bindS leaveS s items = some a ∧ Outcome.Rel R V a b := by
-  apply execLoop_refines R V I source target bindS bindT leaveS leaveT
-    leaveLaw
-    (fun x s t hs b hstep => ?_) s t initial items h
-  cases hbt : bindT x t with
-  | none => simp [loopStep, hbt] at hstep
-  | some ti =>
-    have hbind := bindLaw x s t hs
-    rw [hbt] at hbind
-    cases hbs : bindS x s with
-    | none => simp [Related, hbs] at hbind
-    | some si =>
-      have hentry : I s t si ti := by
-        simpa [Related, hbs] using hbind
-      cases hbody : target ti with
-      | none => simp [loopStep, hbt, hbody] at hstep
-      | some outT =>
-        have hb : b = outT := by
-          simpa [loopStep, hbt, hbody] using hstep.symm
-        subst b
-        have hbodyRel := bodyLaw s t si ti hs hentry
-        rw [hbody] at hbodyRel
-        cases hsource : source si with
-        | none => simp [Related, hsource] at hbodyRel
-        | some outS =>
-          have hrel : Outcome.Rel (I s t) V outS.lower outT := by
-            simpa [Related, hsource] using hbodyRel
-          refine ⟨outS, ?_, hrel⟩
-          simp [loopStep, hbs, hsource]
+  have related := execLoop_sim R V I source target bindS bindT leaveS leaveT
+    bindLaw leaveLaw bodyLaw s t initial items
+  rw [h] at related
+  exact related.of_some_right
 
 /-- Certificates observe live locals, rather than equality of environment lists.
 The language supplies the implication from its store relation to those reads. -/

@@ -44,11 +44,13 @@ def runLoop (h : Head) (body : C.Stmt) (env : C.Env) :
     (C.semantics.project (C.writes body)) env (← values h env)
 
 def translateLoop (h : Head) (body : C.Stmt) (rest : C.Body) : C.Body :=
-  lowerLoop h.span ((C.writes body).map (fun n => (n, .int))) h.binder .int
-    (C.translate (C.writes body) body) h.items rest true (some .int)
+  let names := C.writes body
+  lowerLoop h.span (names.map (fun n => (n, .int))) h.binder .int
+    (C.translate names body) h.items rest true (some .int)
 
 def translateChecked (h : Head) (body : C.Stmt) (rest : C.Body) : Except String C.Body :=
-  if h.accepts body then .ok (translateLoop h body rest)
+  if !C.printable body then .error "experimental printer requires integer locals and returns"
+  else if h.accepts body then .ok (translateLoop h body rest)
   else .error "range loop changes its vector or binder, or the counted head is unsafe"
 
 theorem loop_sound (h : Head) (body : C.Stmt) (rest : C.Body) (env : C.Env)

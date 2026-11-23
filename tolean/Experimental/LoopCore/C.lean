@@ -107,10 +107,35 @@ theorem body_sound (names : List String) (body : Stmt) (env : Env) :
     · exact ihn _
     · exact ihy _
 
-def writes : Stmt → List String
-  | .assign n _ rest | .addAssign n _ rest => n :: writes rest
-  | .ite _ yes no => writes yes ++ writes no
+private def writtenNames : Stmt → List String
+  | .assign n _ rest | .addAssign n _ rest => n :: writtenNames rest
+  | .ite _ yes no => writtenNames yes ++ writtenNames no
   | _ => []
+
+/-- Keep each changed local once, in order of its first assignment. -/
+def writes (body : Stmt) : List String :=
+  (writtenNames body).foldl (fun ns n => if n ∈ ns then ns else ns ++ [n]) []
+
+/-- Free scalar variables in the printable fragment have type `Int`.
+Arrays occur only as the first argument of indexing. -/
+def integerExpr : Expr → Bool
+  | .int _ | .var _ => true
+  | .intOp .add a b => integerExpr a && integerExpr b
+  | .ext .at [.var _, i] => integerExpr i
+  | _ => false
+
+def booleanExpr : Expr → Bool
+  | .bool _ => true
+  | .order .lt a b | .eq a b => integerExpr a && integerExpr b
+  | _ => false
+
+/-- The checked printer supports integer state and returns only.
+Boolean tests are allowed, but Boolean state and returns are rejected. -/
+def printable : Stmt → Bool
+  | .assign _ e rest | .addAssign _ e rest => integerExpr e && printable rest
+  | .ite c yes no => booleanExpr c && printable yes && printable no
+  | .ret e => integerExpr e
+  | _ => true
 
 structure Head where
   span : Span
@@ -136,11 +161,13 @@ def runLoop (h : Head) (body : Stmt) (env : Env) : Option (Outcome Env Val) :=
     (semantics.project (writes body)) env ((count h.start h.bound).map Val.int)
 
 def translateLoop (h : Head) (body : Stmt) (rest : Body) : Body :=
-  lowerLoop h.span ((writes body).map (fun n => (n, .int))) h.binder .int
-    (translate (writes body) body) h.items rest true (some .int)
+  let names := writes body
+  lowerLoop h.span (names.map (fun n => (n, .int))) h.binder .int
+    (translate names body) h.items rest true (some .int)
 
 def translateChecked (h : Head) (body : Stmt) (rest : Body) : Except String Body :=
-  if h.safe body then .ok (translateLoop h body rest)
+  if !printable body then .error "experimental printer requires integer locals and returns"
+  else if h.safe body then .ok (translateLoop h body rest)
   else .error "counted loop changes its binder or has a bound outside signed 32-bit integers"
 
 theorem loop_sound (h : Head) (body : Stmt) (rest : Body) (env : Env) :
