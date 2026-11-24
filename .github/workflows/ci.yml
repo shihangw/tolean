@@ -87,6 +87,9 @@ jobs:
         working-directory: tests/typescript
         run: node checkTranslate.ts
 
+      - name: Experimental C and C++ loop-core shape examples
+        run: bash tests/experimental/loopcore/run.sh
+
       # Needs the vitest that `pnpm install` above put in tests/typescript.
       - name: JS number laws and the interpreter, on every maintained Node release line
         run: nix run .#test-engines

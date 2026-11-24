@@ -1,4 +1,5 @@
 import tolean.TypeScript.Proof.LoopHead
+import tolean.TypeScript.Proof.LoopCore
 import tolean.TypeScript.Proof.Borrow
 import tolean.TypeScript.Spec.Lemmas.Eval
 
