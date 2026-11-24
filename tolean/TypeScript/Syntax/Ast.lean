@@ -444,6 +444,12 @@ def Stmt.assignsClauses (n : String) : List (Option Expr × List Stmt) → Bool
 
 end
 
+/-- A `for … of` binding is immutable when its declaration uses `const`.
+Assignments anywhere in the body, including compound assignments and
+increments, make that loop body invalid for the interpreter and translator. -/
+def Stmt.constLoopAssignedIn (kind : VarKind) (names : List String) (body : Stmt) : Bool :=
+  kind == .const && names.any (fun name => body.assigns name)
+
 /-- The methods that change the array, map or set that they are called on. -/
 def changingMethods : List String := ["push", "set", "add", "delete"]
 

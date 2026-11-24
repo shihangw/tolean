@@ -2352,12 +2352,14 @@ def execStmt (m : Scope) (fuel : Nat) (env : Env N) : Stmt → Option (Outcome N
   -- deletes before the loop reaches it. The model takes the values when the
   -- loop starts, so it gives no value for a body that changes them.
   | .forOfStmt _ .const name iterable body => do
+    if Stmt.constLoopAssignedIn .const [name] body then none
     if Stmt.mutatesIterable iterable body then none
     execLoop m fuel env (fun v => some [(name, v)]) body (← evalIter m fuel env iterable)
   -- `for (const [k, v] of xs)`: each run binds the names of the pattern to
   -- the values that iterating the item gives, as `const [k, v] = item` does
   -- (`ForDeclarationBindingInitialization`, ECMA-262 §14.7.5.3).
   | .forOfPattern _ .const p iterable body => do
+    if Stmt.constLoopAssignedIn .const p.names body then none
     if Stmt.mutatesIterable iterable body then none
     execLoop m fuel env (fun v => do return (patternBindings p (← iterValues v)).reverse) body
       (← evalIter m fuel env iterable)

@@ -10,16 +10,16 @@
  *
  * - When the interpreter gives a value, Node returns the same value. This
  *   holds for every program that the parser accepts, in the subset or not,
- *   except for three gaps that the random programs do not reach. The first,
- *   which the plan for pure TypeScript lists, is an assignment to the
- *   variable of a `for (const x of xs)` loop. The second is a call of a local
- *   function before its declaration, where a function of the module has the
- *   same name: JS binds the local function when its block starts, but the
- *   interpreter binds it where the declaration stands, so the call runs the
- *   function of the module. The third is a declaration, between a local
- *   function and a call of it, that hides a name the local function reads:
- *   JS keeps the variable of the declaration, and the interpreter takes the
- *   one in scope at the call. The translator refuses all three.
+ *   except for two gaps that the random programs do not reach. The first is a
+ *   call of a local function before its declaration, where a function of the
+ *   module has the same name: JS binds the local function when its block
+ *   starts, but the interpreter binds it where the declaration stands, so
+ *   the call runs the function of the module. The second is a declaration,
+ *   between a local function and a call of it, that hides a name the local
+ *   function reads: JS keeps the variable of the declaration, and the
+ *   interpreter takes the one in scope at the call. The translator refuses
+ *   both. An assignment to a `for (const x of xs)` binding is checked
+ *   separately below.
  * - When the interpreter says that a call throws a value, Node throws the
  *   same value. An `Error` compares by its class and its message.
  * - When the translator accepts the program and the interpreter gives no
@@ -252,6 +252,126 @@ test('read-only try bodies and ignored catches agree with Node', async () => {
       expect('throws' in expected).toBe(true);
       if (!('throws' in expected)) throw new Error('handler error was not propagated');
       expect(canonical(expected.throws)).toBe(shownThrow(actual.thrown));
+    }
+  }
+});
+
+test('assignments to for-of const bindings have no interpreter value', async () => {
+  const cases = [
+    {
+      name: 'assign',
+      source: `export function run(xs: ReadonlyArray<bigint>): bigint {
+        for (const x of xs) { x = 3n; }
+        return 0n;
+      }`,
+      args: [[1n]],
+      nodeThrows: true,
+    },
+    {
+      name: 'increment',
+      source: `export function run(xs: ReadonlyArray<bigint>): bigint {
+        for (const x of xs) { x++; }
+        return 0n;
+      }`,
+      args: [[1n]],
+      nodeThrows: true,
+    },
+    {
+      name: 'postfix decrement',
+      source: `export function run(xs: ReadonlyArray<bigint>): bigint {
+        for (const x of xs) { x--; }
+        return 0n;
+      }`,
+      args: [[1n]],
+      nodeThrows: true,
+    },
+    {
+      name: 'prefix decrement',
+      source: `export function run(xs: ReadonlyArray<bigint>): bigint {
+        for (const x of xs) { --x; }
+        return 0n;
+      }`,
+      args: [[1n]],
+      nodeThrows: true,
+    },
+    {
+      name: 'destructure',
+      source: `export function run(rows: ReadonlyArray<readonly [bigint]>): bigint {
+        for (const [x] of rows) { x += 1n; }
+        return 0n;
+      }`,
+      args: [[[1n]]],
+      nodeThrows: true,
+    },
+    {
+      name: 'nested loop writes the outer binding',
+      source: `export function run(xs: ReadonlyArray<bigint>, ys: ReadonlyArray<bigint>): bigint {
+        for (const x of xs) {
+          for (const y of ys) { x--; }
+        }
+        return 0n;
+      }`,
+      args: [[1n], [1n]],
+      nodeThrows: true,
+    },
+    {
+      name: 'shadowed binding',
+      source: `export function run(xs: ReadonlyArray<bigint>): bigint {
+        for (const x of xs) { { let x = 2n; x--; } }
+        return 0n;
+      }`,
+      args: [[1n]],
+      nodeThrows: false,
+    },
+    {
+      name: 'uninvoked closure writes the outer binding',
+      source: `export function run(xs: ReadonlyArray<bigint>): bigint {
+        for (const x of xs) {
+          function deferred() { x--; }
+        }
+        return 0n;
+      }`,
+      args: [[1n]],
+      nodeThrows: false,
+    },
+  ] satisfies Array<{
+    name: string;
+    source: string;
+    args: Array<unknown>;
+    nodeThrows: boolean;
+  }>;
+  const programs = cases.map((scenario) => ({
+    source: scenario.source,
+    calls: [{ function: 'run', args: scenario.args.map(encode) }],
+  }));
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs }),
+    encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const results = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  expect(results).toHaveLength(cases.length);
+  for (const [i, scenario] of cases.entries()) {
+    const result = results[i];
+    expect(result?.parsed, scenario.name).toBe(true);
+    if (result === undefined || !result.parsed) throw new Error(`${scenario.name} fixture did not parse`);
+    expect(result.accepted, scenario.name).toBe(false);
+    expect(result.results, scenario.name).toEqual([null]);
+  }
+
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-const-loop-'));
+  for (const [i, scenario] of cases.entries()) {
+    const path = join(dir, `${i}.mjs`);
+    writeFileSync(path, ts.transpileModule(scenario.source, {
+      compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+    }).outputText);
+    const mod = await import(pathToFileURL(path).href) as Record<string, (...xs: Array<unknown>) => unknown>;
+    const fn = mod.run;
+    if (fn === undefined) throw new Error(`missing export for ${scenario.name}`);
+    if (scenario.nodeThrows) {
+      expect(() => fn(...scenario.args)).toThrow(TypeError);
+    } else {
+      expect(fn(...scenario.args)).toBe(0n);
     }
   }
 });

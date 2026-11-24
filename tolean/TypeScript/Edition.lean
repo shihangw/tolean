@@ -23,6 +23,10 @@ A counted `for` loop uses `ForStatement` and `ForBodyEvaluation`
 (ES2024 §14.7.4.2). ES2015, the oldest supported target, specifies these
 operations.
 
+A `for … of` loop creates a lexical binding for each value
+(ES2024 §14.7.5.7). `PutValue` (§6.2.5.6) throws when the body assigns a
+`const` binding, and every supported edition specifies these operations.
+
 A feature whose meaning changes in a later edition gets a new feature for the
 new meaning, never a second meaning for the same one. An edition joins `all`
 only after a review of what it changed.
