@@ -65,7 +65,7 @@ evaluation and proof modules do not exist at these locations yet.
 
 | Layer | Owner and location | Contract |
 |---|---|---|
-| a. Loop head | Each language's translator | Produce binder names, an element type and an items expression, subject to the head's side conditions. Multiple names can bind fields of one list element. |
+| a. Loop head | Each language's translator | Produce binder names, an element type and an items expression, subject to the head's side conditions. A counted head's bound must not refer to its counter and must stay unchanged by the header update and the body. Multiple names can bind fields of one list element. |
 | b. Loop interpreter | Shared evaluation module under `tolean/`; called by each language's source interpreter | One generic `execLoop` takes the body-execution function, environment operations and element binding operation. A shared `Outcome` has `normal`, `ret`, `brk` and `cont`. Go gains the last two cases. |
 | c. Head simulation | Shared statement under `tolean/Proof/`; proofs under each language's `Proof/` | Generalize `HeadSim`: the source loop statement equals shared `execLoop` over the list that the output's items evaluate to, under the required environment and evaluation hypotheses. Prove it once for each head form. |
 | d. Lowering | Shared translation module under `tolean/`; existing printer in `tolean/IR.lean` | Build `Body.fold` from changed locals, the element binder, translated body, items, rest and `LoopInfo`. Keep the printer's choice of `foldl`, `forIn` and, after #292, `LoopResult`. |
@@ -95,15 +95,15 @@ path.
 | Language and head | Items list | Side conditions | What stays refused |
 |---|---|---|---|
 | TypeScript `for (const x of xs)` | Array elements, set values, map entries or string iteration values, in source order | The body cannot change the iterable. Pattern binders bind parts of an element. | Mutable iteration that could change the values visited |
-| TypeScript `for (let i = a; i < b; i++)` | `JSNumber.countUp a b` | Today `a` is an integer literal. The counter and everything the bound reads stay unchanged by the body. Evaluation requires a safe count. | Other tests and updates, except the already accepted equivalent updates `++i` and `i += 1` |
+| TypeScript `for (let i = a; i < b; i++)` | `JSNumber.countUp a b` | Today `a` is an integer literal. The body cannot assign the counter. The bound must not refer to the counter and must stay unchanged by the header update and the body. Evaluation requires a safe count. | Other tests and updates, except the already accepted equivalent updates `++i` and `i += 1` |
 | Go `for _, x := range xs` over a slice or array | Elements in index order | The body cannot change the iterable, including through an alias. | Range over a map, channel or function iterator |
 | Go `for i := range xs` or `for i, x := range xs` over a slice or array | Indices, or index-value pairs | Length and index values must fit the modeled Go `int`. The same no-mutation rule applies. | Unordered map iteration and other range forms not listed here |
-| Go `for i := a; i < b; i++` | Consecutive values from `a`, excluding `b` | Start, counter and bound have the same modeled integer type. The body cannot assign the counter or change what the bound reads. | Other update forms or tests |
-| C `for (int i = a; i < b; i++)` | Consecutive values from `a`, excluding `b` | Start and bound fit the counter's signed type. Require a bound of that same type and an unchanged counter and bound. | Mixed-type bounds, other update forms and pointer-walking loops |
+| Go `for i := a; i < b; i++` | Consecutive values from `a`, excluding `b` | Start, counter and bound have the same modeled integer type. The body cannot assign the counter. The bound must not refer to the counter and must stay unchanged by the header update and the body. | Other update forms or tests |
+| C `for (int i = a; i < b; i++)` | Consecutive values from `a`, excluding `b` | Start and bound fit the counter's signed type. The bound has that same type. The body cannot assign the counter. The bound must not refer to the counter and must stay unchanged by the header update and the body. | Mixed-type bounds, other update forms and pointer-walking loops |
 | C traversal of an array with known length | Indices, with element reads in index order | Prove the index range is within the array and fits the counter type. The body cannot change the iterable. | Unknown lengths and traversal through unchecked pointers |
 | C++ `for (const auto& x : xs)` or `for (auto x : xs)` over `std::vector`, `std::array` or built-in arrays | Elements in order, as for TypeScript's `for...of` | Element reads and copies must have modeled value semantics. The body cannot change the iterable or invalidate its iterators. | Writes through `auto&`, user-defined ranges and unmodeled copy or lifetime effects |
-| C++ `for (int i = a; i < b; ++i)` | Integers from `a`, excluding `b` | Require the signed bound to have the counter's type, as in C. The counter and what the bound reads stay unchanged by the body. | Mixed-type bounds and other update forms |
-| C++ `for (size_t i = 0; i < v.size(); ++i)` | Unsigned integers from zero, excluding `v.size()` | The bound has the counter's type. The body cannot change `v.size()`, assign the counter or change the iterated container. | Bounds of a different type and bodies that invalidate iterators |
+| C++ `for (int i = a; i < b; ++i)` | Integers from `a`, excluding `b` | Require the signed bound to have the counter's type, as in C. The body cannot assign the counter. The bound must not refer to the counter and must stay unchanged by the header update and the body. | Mixed-type bounds and other update forms |
+| C++ `for (size_t i = 0; i < v.size(); ++i)` | Unsigned integers from zero, excluding `v.size()` | The bound has the counter's type. The bound must not refer to the counter and must stay unchanged by the header update and the body. The body cannot assign the counter or change the iterated container. | Bounds of a different type and bodies that invalidate iterators |
 
 The strict bound makes the Go increment safe despite Go's wrapping
 integer semantics. An iteration starts only when `i < b`. Since `b` fits
@@ -130,8 +130,9 @@ iterated container, stay refused. So do loops whose bodies can throw
 across destructors with effects.
 
 Labeled `break` and `continue`, and `goto`, remain outside this design.
-An accepted head never permits the body to assign its counter or change
-what its bound reads. A later design may cover Go `for cond {}` as a
+An accepted counted head never permits the body to assign its counter.
+Its bound must not refer to the counter and must stay unchanged by both
+the header update and the body. A later design may cover Go `for cond {}` as a
 while loop, but it is not a finite-list head in this implementation.
 
 ## Evaluator dependency

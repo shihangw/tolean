@@ -58,7 +58,7 @@ Go guide documents it from then on.
 | Go | Lean | Refused |
 |---|---|---|
 | `switch` with a tag, and without one | A chain of `if` | `fallthrough`, which the parser refuses |
-| `for i := a; i < b; i++` | A same-type integer list, lowered through the [shared loop core](../decisions/2026-11-22-shared-loop-core.md) to `Body.fold` | Other updates or tests, mixed-type bounds, and bodies that assign the counter or change what the bound reads |
+| `for i := a; i < b; i++` | A same-type integer list, lowered through the [shared loop core](../decisions/2026-11-22-shared-loop-core.md) to `Body.fold`. The bound must not refer to the counter and must stay unchanged by the header update and the body. | Other updates or tests, mixed-type bounds, and bodies that assign the counter or change what the bound reads |
 | `for _, x := range xs` over a slice or array, with `break`, `continue` and `return` | Elements in order through the shared loop core, printed as `List.foldl` or `forIn`, with the shared return carrier where needed | A body that changes the iterable, including through an alias; range over a map, channel or function iterator |
 | `for i := range xs` or `for i, x := range xs` over a slice or array | Indices or index-value pairs through the same shared loop core | Lengths outside the modeled `int` range and the same mutation restrictions |
 | An `if` with an init statement, such as `if v := f(); v > 0` | A `let` before the `if` | |
