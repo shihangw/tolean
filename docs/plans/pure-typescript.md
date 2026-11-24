@@ -355,7 +355,10 @@ leaves a gap.
 19. **Done for the `const` gap.** The translator and interpreter share one
     predicate that checks assignments to each `for (const … of …)` binding.
     The check covers simple names and array patterns, and the interpreter
-    gives no value when a body assigns a binding. See the
+    gives no value when a body assigns a binding. The syntax scan also refuses
+    writes inside nested functions and to shadowed names, because it does not
+    track binding identity. Modeling that identity would change the interpreter
+    environment relation and its statement proofs. See the
     [decision record](../decisions/2026-11-24-for-of-const-bindings.md).
 20. **Done for local guards.** Compose guarded string-keyed Record lookup
     certificates through callbacks and loops. The per-element callback and
