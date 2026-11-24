@@ -201,7 +201,7 @@ def countedHead : Option Stmt → Option Expr → Option Stmt → Option (String
     let a ← intLit? start
     let b ← intLit? stop
     if a < 0 || b < 0 || a ≥ 2 ^ 63 || b ≥ 2 ^ 63 then none
-    if (b - a).toNat > 4096 then none
+    if (b - a).toNat > 256 then none
     return (index, (List.range' a.toNat (b - a).toNat).map (fun n => .int (Int.ofNat n)))
   | _, _, _ => none
 

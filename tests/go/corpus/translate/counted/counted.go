@@ -39,3 +39,10 @@ func Wrap(total int) int {
 	}
 	return total
 }
+
+func Limit(total int) int {
+	for i := 0; i < 256; i++ {
+		total++
+	}
+	return total
+}

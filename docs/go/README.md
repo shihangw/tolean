@@ -99,7 +99,7 @@ it writes everything else as before.
 
 The proved path also accepts a counted loop as the first statement of a
 function: `for i := a; i < b; i++ { body }`. Both bounds must be nonnegative
-integer literals below `2^63`, and the loop may take at most 4096 iterations.
+integer literals below `2^63`, and the loop may take at most 256 iterations.
 The counter must have a fresh, unreserved name. The body may update parameters,
 declare iteration-local variables, and use the existing non-returning `if`
 forms. For example, `func Sum(total int) int` may start with
@@ -116,8 +116,9 @@ clause” rule next to its counted-loop case.
 
 This first proved form refuses early return, `break`, `continue`, nested loops,
 and loops after another statement. It also refuses computed bounds, other
-comparison or update operators, counter mutation, and more than 4096
-iterations. The bound limits the literal list emitted by this first lowering.
+comparison or update operators, counter mutation, and more than 256
+iterations. The limit keeps the literal list emitted by this lowering within
+Lean's compilation recursion depth.
 The other restrictions keep the loop within the existing state-only body
 translation and the leading-loop proof. Slice ranges remain outside the proved
 path because its value model has no slices. The older string translator's

@@ -1,9 +1,9 @@
 {"tolean": "0.3.1",
  "sources":
- [{"sha256": "b91c6ee3bc9e2e4b6ac2d4d040c595b44b7877616bc63b0b595244c5a1fc3704",
+ [{"sha256": "a3948f8216d1996f39a0cf4d1bfec53b2c3746055fbddd179b93766ec4732a03",
    "path": "corpus/translate/counted/counted.go"}],
  "output":
- {"sha256": "fb5367bcbe3cada4621c028425839639a5bb491f307e7f7c908e3b68ec17dc3c",
+ {"sha256": "9f4562bb3f7913bf480ab450b6d337bfaa02175fae2cb46ad5c7f73ae6b34172",
   "path": "corpus/translate/counted/Counted.lean"},
  "nodes":
  [{"status": "tested",

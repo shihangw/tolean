@@ -397,7 +397,7 @@ existing state translation, so returns and nested loops remain refused. -/
 def translateTop (ctx : Ctx) (env : Env) (result : Ty) : List Stmt → TM IR.Body
   | .forStmt sp init cond post (.block bsp ss) :: rest => do
     let some (index, items) := Eval.countedHead init cond post
-      | reject sp "a counted loop needs literal bounds, ++, and at most 4096 iterations"
+      | reject sp "a counted loop needs literal bounds, ++, and at most 256 iterations"
     unless Eval.countedBodySafe index (.block bsp ss) do
       reject sp "the counted body must not change its counter or contain another loop"
     let inner ← declare env sp index .int
