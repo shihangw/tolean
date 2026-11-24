@@ -100,21 +100,24 @@ theorem loopHead_sim (hc : CallsAgree (N := N) m.program fs fuel) {env : Transla
     · rename_i hkind
       obtain rfl : kind = .const := by
         cases kind <;> first | rfl | simp +decide at hkind
-      simp only [pure_bind, bind_ok, fuelLimit_ok] at h
-      obtain ⟨_, _, ⟨rfl, rfl⟩, items, s₁, hitems, h⟩ := h
-      obtain ⟨⟨elemType', li'⟩, s₁', hli, h⟩ := h
-      obtain ⟨hmut, hlo, rfl⟩ := loopItems_ok hli
-      simp at h
-      obtain ⟨rfl, rfl, rfl⟩ := h.1
-      have hit := iterOf_sim m fs fuel
-        (fun _ _ _ hx => translateRecv_sim m fs fuel
-          (fun _ _ _ hx => (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hx) hx)
-        (fun _ _ _ _ hx => translateRecv_sim m fs fuel
-          (fun _ _ _ hx => (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hx) hx) hitems
-      intro ρs ρo vs ha hs hi
-      have hiter := hit _ _ hlo ρs ρo vs ha hs hi
-      simp [LoopHead.stmt, Eval.execStmt, hmut, hiter]
-    · simp at h
+      simp only [ite_state] at h
+      split at h
+      · simp at h
+      ·
+        simp only [pure_bind, bind_ok, fuelLimit_ok] at h
+        obtain ⟨_, _, ⟨rfl, rfl⟩, items, s₁, hitems, h⟩ := h
+        obtain ⟨⟨elemType', li'⟩, s₁', hli, h⟩ := h
+        obtain ⟨hmut, hlo, rfl⟩ := loopItems_ok hli
+        simp at h
+        obtain ⟨rfl, rfl, rfl⟩ := h.1
+        have hit := iterOf_sim m fs fuel
+          (fun _ _ _ hx => translateRecv_sim m fs fuel
+            (fun _ _ _ hx => (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hx) hx)
+          (fun _ _ _ _ hx => translateRecv_sim m fs fuel
+            (fun _ _ _ hx => (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hx) hx) hitems
+        intro ρs ρo vs ha hs hi
+        have hiter := hit _ _ hlo ρs ρo vs ha hs hi
+        simp [LoopHead.stmt, Eval.execStmt, Stmt.constLoopAssignedIn, hmut, hiter]
   | counted init test update =>
     simp only [loopHead, countedHead] at h
     split at h

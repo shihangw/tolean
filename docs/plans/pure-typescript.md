@@ -352,9 +352,11 @@ leaves a gap.
     obligations. Other element types, captures of generic types and
     `@decreases` obligations remain refused. See the
     [decision](../decisions/2026-11-17-project-proof-obligations.md).
-19. **P2.** Close the `const` gap: share one predicate between the translator's
-    refusal and the interpreter's `none` for assignments to a
-    `for (const x of xs)` binding. See the [`const` open question](#open-questions).
+19. **Done for the `const` gap.** The translator and interpreter share one
+    predicate that checks assignments to each `for (const … of …)` binding.
+    The check covers simple names and array patterns, and the interpreter
+    gives no value when a body assigns a binding. See the
+    [decision record](../decisions/2026-11-24-for-of-const-bindings.md).
 20. **Done for local guards.** Compose guarded string-keyed Record lookup
     certificates through callbacks and loops. The per-element callback and
     loop-step proofs derive ownership from a guard in their own body, without
@@ -609,21 +611,3 @@ decision record then states the choice and any limits that remain.
   inputs, because a comparator on `number` keys is consistent only without
   `NaN`.
 
-- How should the spec model `const` in full? Its environment holds values
-  only. Since [#63](https://github.com/shihangw/tolean/pull/63), the spec gives
-  no value for a block where a statement after a `const` declaration assigns
-  it, which covers `=`, `+=`, `??=` and `++`. A `for (const x of xs)` loop is
-  left: an assignment to `x` in the body writes the new value, where Node
-  throws a `TypeError`. The translator refuses it, so no certified program
-  meets the gap, but `interpreter.test.ts` asks the interpreter to agree with
-  Node on every program that it parses. The same check on the loop's body
-  would close it. A binding kind in `Eval.Env` would cover every case, but
-  then `Agree` and every statement proof would compare kinds too.
-
-  Recommendation: the check on the loop's body, through one predicate that
-  the translator and the interpreter share. A binding kind is the faithful
-  model, but its cost grows with the whole proof, because `Agree` compares
-  kinds and every statement lemma carries them. The check from #63 closes the
-  gap in a few lines. One predicate, such as `constRespected`, used both for
-  the translator's refusal and for the interpreter's `none`, makes the two
-  agree by construction instead of by two parallel checks.

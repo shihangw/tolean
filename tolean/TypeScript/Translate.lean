@@ -4019,6 +4019,8 @@ def translateForOfPattern (items : TM (Option (Ty × IR.Expr))) (kBody : Env →
     (kRest : TM IR.Body) (env : Env) (s : Span) (kind : VarKind) (p : ArrayPattern) (iterable : Expr)
     (body : Stmt) (tail : Tail) : TM IR.Body := do
   unless kind == .const do reject s "a loop must be 'for (const [a, b] of xs)'"
+  if Stmt.constLoopAssignedIn kind p.names body then
+    reject s "the body of a for-of loop may not assign its const binding"
   let bodyStatements := blockStatements body
   let returns := bodyStatements.any (containsJump false false)
   if returns && !tail.isRet then
@@ -4086,6 +4088,8 @@ visits the values of `xs`. -/
 def loopHead (env : Env) (s : Span) (body : Stmt) : LoopHead → TM (String × Ty × IR.Expr)
   | .forOf kind element iterable => do
     unless kind == .const do reject s "a loop must be 'for (const x of xs)'"
+    if Stmt.constLoopAssignedIn kind [element] body then
+      reject s "the body of a for-of loop may not assign its const binding"
     -- An owned map or set may be the iterable, as long as the body does not
     -- change it: a JS loop would visit the values that the body adds.
     let fl ← fuelLimit
