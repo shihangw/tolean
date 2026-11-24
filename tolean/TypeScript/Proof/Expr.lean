@@ -2113,7 +2113,7 @@ theorem eval_arrayMethod (sp sp' sa : Span) (par : Bool) (recv : Expr) (name : S
     | some v =>
       cases v <;> simp only [Option.bind_some, Option.bind_eq_bind]
       all_goals first | rfl | (rw [← key]; simp)
-  all_goals first | exact hr' | exact hrM | exact hrO | exact hrD | (intro _ h _; exact hrD _ h) | (intro s h; intros; exact absurd h (hj s))
+  all_goals first | exact hr' | exact hrM | exact hrO | exact hrD | (intro _ h _; exact hrD _ h) | (intro s h; intros; exact absurd h (hrO s)) | (intro s h; intros; exact absurd h (hj s))
 
 /-- `xs.map((x, i) => e)`, from the value of the array. -/
 theorem eval_mapIdx (sp sp' sa : Span) (par : Bool) (recv : Expr) (p q : Param) (body : Expr)
@@ -2138,7 +2138,7 @@ theorem eval_mapIdx (sp sp' sa : Span) (par : Bool) (recv : Expr) (p q : Param) 
     cases r with
     | none => rfl
     | some v => cases v <;> simp [methodVal]
-  all_goals first | exact hr' | exact hrM | exact hrO | exact hrD | (intro _ h _; exact hrD _ h) | decide | (intro s h; intros; exact absurd h (hj s))
+  all_goals first | exact hr' | exact hrM | exact hrO | exact hrD | (intro _ h _; exact hrD _ h) | decide | (intro s h; intros; exact absurd h (hrO s)) | (intro s h; intros; exact absurd h (hj s))
 
 /-- The value of a `List` function with a callback in the output, from the
 value of the list. -/
@@ -2636,6 +2636,8 @@ theorem eval_sort (sp sp' sa : Span) (par : Bool) (recv : Expr) (method : String
     intro s h; subst h; simp [Expr.namesGlobal] at hr
   have hrM : ∀ s, recv ≠ .ident s "Math" := by
     intro s h; subst h; simp [Expr.namesGlobal] at hr
+  have hrO : ∀ s, recv ≠ .ident s "Object" := by
+    intro s h; subst h; simp [Expr.namesGlobal] at hr
   have hrD : ∀ s, recv ≠ .ident s "Date" := by
     intro s h; subst h; simp [Expr.namesGlobal] at hr
   have hj : ∀ s, recv ≠ .ident s "JSON" := by
@@ -2648,7 +2650,7 @@ theorem eval_sort (sp sp' sa : Span) (par : Bool) (recv : Expr) (method : String
       cases r with
       | none => simp
       | some v => cases v <;> simp_all [methodVal]
-    all_goals first | exact hr' | exact hrM | exact hrD | decide | (intro s h; intros; exact absurd h (hj s))
+    all_goals first | exact hr' | exact hrM | exact hrD | decide | (intro s h; intros; exact absurd h (hrO s)) | (intro s h; intros; exact absurd h (hj s))
 
 omit [JSNumber N] in
 theorem sortOf_some {callee recv : Expr} {method : String} (h : sortOf callee = some (recv, method)) :
@@ -3829,6 +3831,7 @@ theorem eval_mapMethod (sp sp' : Span) (recv key : Expr) (name : String) (hr : r
            | rfl
            | (cases Eval.eval m fuel ρ key <;> simp [mapMethodVal]))
     | exact hr'
+    | (intro s h; intros; exact absurd h (hrO s))
     | (intro s h; intros; exact absurd h (hj s))
     | exact hrM
     | exact hrO
@@ -4661,6 +4664,79 @@ theorem translateObjectIs_sound {tr : Expr → TM Code} {env : Translate.Env}
   | [_], h => simp at h
   | _ :: _ :: _ :: _, h => simp at h
 
+/-- Dictionary keys, entries and ownership tests read only own properties.
+Each translated argument agrees with the source before the operation runs. -/
+theorem translateDictionaryCall_sound {tr : Expr → TM Code} {env : Translate.Env}
+    (htr : ∀ e ctx c ctx', tr e ctx = .ok c ctx' → Sim (N := N) m fs fuel env e c.code)
+    (hO : env.has "Object" = false) {sp sp' sp'' : Span} {method : String} {args : List Expr}
+    {ctx ctx' : Ctx} {c : Code} (h : translateDictionaryCall tr sp method args ctx = .ok c ctx') :
+    Sim (N := N) m fs fuel env (.call sp (.member sp' (.ident sp'' "Object") method) args) c.code ∧
+      ∀ ref outs, c.code ≠ .call ref outs := by
+  unfold translateDictionaryCall at h
+  cases args with
+  | nil => simp at h
+  | cons obj rest =>
+    simp only [bind_ok] at h
+    obtain ⟨record, s₁, hr, h⟩ := h
+    match record.type, h with
+    | .struct ref [value], h =>
+      simp only [ite_state] at h
+      split at h
+      · simp only [pure_bind] at h
+        split at h
+        · simp only [pure_ok] at h
+          obtain ⟨rfl, -⟩ := h
+          refine ⟨?_, fun ref outs hc => by cases hc⟩
+          intro ρs ρo v ha hs hv
+          simp only [IR.Expr.eval, IR.Expr.evalList] at hv
+          cases he : IR.Expr.eval fs fuel ρo record.value with
+          | none => simp [he] at hv
+          | some rv =>
+            cases rv <;> simp [he, IR.ExprExt.apply] at hv
+            rename_i fields
+            have ho := htr _ _ _ _ hr ρs ρo (.obj fields) ha hs (by rwa [eval_value] at he)
+            simp [Eval.eval, hs.none hO, ho, ← hv]
+        · simp only [pure_ok] at h
+          obtain ⟨rfl, -⟩ := h
+          refine ⟨?_, fun ref outs hc => by cases hc⟩
+          intro ρs ρo v ha hs hv
+          simp only [IR.Expr.eval, IR.Expr.evalList] at hv
+          cases he : IR.Expr.eval fs fuel ρo record.value with
+          | none => simp [he] at hv
+          | some rv =>
+            cases rv <;> simp [he, IR.ExprExt.apply] at hv
+            rename_i fields
+            have ho := htr _ _ _ _ hr ρs ρo (.obj fields) ha hs (by rwa [eval_value] at he)
+            simp [Eval.eval, hs.none hO, ho, ← hv]
+        · simp only [bind_ok, requireFeature_ok] at h
+          obtain ⟨_, _, ⟨-, rfl⟩, keyCode, s₂, hk, h⟩ := h
+          split at h
+          · simp only [pure_ok] at h
+            obtain ⟨rfl, -⟩ := h
+            refine ⟨?_, fun ref outs hc => by cases hc⟩
+            intro ρs ρo v ha hs hv
+            simp only [IR.Expr.eval, IR.Expr.evalList] at hv
+            cases he : IR.Expr.eval fs fuel ρo record.value with
+            | none => simp [he] at hv
+            | some rv =>
+              cases hke : IR.Expr.eval fs fuel ρo keyCode.value with
+              | none => simp [he, hke] at hv
+              | some kv =>
+                cases rv <;> simp [he, hke, IR.ExprExt.apply] at hv
+                cases kv <;> simp at hv
+                rename_i fields key
+                have ho := htr _ _ _ _ hr ρs ρo (.obj fields) ha hs (by rwa [eval_value] at he)
+                have hkey := htr _ _ _ _ hk ρs ρo (.str key) ha hs (by rwa [eval_value] at hke)
+                simp [Eval.eval, hs.none hO, ho, hkey, ← hv]
+          · simp at h
+        · simp at h
+      · simp at h
+    | .struct _ [], h | .struct _ (_ :: _ :: _), h => simp at h
+    | .bigint, h | .number, h | .boolean, h | .string, h | .null, h
+      | .nullable _, h | .optional _, h | .array _, h | .enum _, h
+      | .tagged .., h | .literal _, h | .tuple _, h | .param _, h
+      | .map .., h | .set _, h | .date, h | .regexp, h => simp at h
+
 /-- `translateNumberCall` means what the interpreter's rule for `Number(b)`
 means, when `tr` means what the argument means. Its code is no call. -/
 theorem translateNumberCall_sound {tr : Expr → TM Code} {env : Translate.Env}
@@ -4885,6 +4961,10 @@ theorem translateCall_sound {F : Nat} (hc : CallsAgree (N := N) m.program fs fue
                 translateObjectIs_sound m fs fuel (fun e ctx c ctx' h => ihE _ _ _ _ _ _ h) hOb h
               exact ⟨hsim, fun ref outs' hout => absurd hout (hnc ref outs')⟩
             · simp [hi] at h
+              cases hOb : env.has "Object" <;> simp [hOb] at h
+              obtain ⟨hsim, hnc⟩ :=
+                translateDictionaryCall_sound m fs fuel (fun e ctx c ctx' h => ihE _ _ _ _ _ _ h) hOb h
+              exact ⟨hsim, fun ref outs' hout => absurd hout (hnc ref outs')⟩
           · by_cases hDt : oname = "Date"
             · subst hDt
               by_cases hu : test = "UTC"
@@ -5040,6 +5120,13 @@ names. It splits each value on its own, so a new kind of value adds one case,
 not one for each other kind. -/
 theorem apply_recordGet {r : DeclRef} {keys : List String} {ov kv v : Val N}
     (h : IR.ExprExt.apply (.recordGet r keys) [ov, kv] = some v) :
+    ∃ fields k, ov = .obj fields ∧ kv = .str k ∧ Eval.getKey fields k = some v := by
+  cases ov <;> simp [IR.ExprExt.apply] at h
+  cases kv <;> simp at h
+  exact ⟨_, _, rfl, rfl, h⟩
+
+theorem apply_recordGetFlatten {r : DeclRef} {keys : List String} {ov kv v : Val N}
+    (h : IR.ExprExt.apply (.recordGetFlatten r keys) [ov, kv] = some v) :
     ∃ fields k, ov = .obj fields ∧ kv = .str k ∧ Eval.getKey fields k = some v := by
   cases ov <;> simp [IR.ExprExt.apply] at h
   cases kv <;> simp at h
@@ -5320,12 +5407,22 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
                 rw [Eval.eval.eq_def]
                 simp only [hobj, Option.bind_eq_bind, Option.bind_some]
                 cases w
-                case null => simpa [hx, hy, IR.ExprExt.apply] using hv
-                case undefined => simpa [hx, hy, IR.ExprExt.apply] using hv
+                case null =>
+                  split at hv <;> simp [hx, hy, IR.ExprExt.apply] at hv
+                  all_goals change some Val.undefined = some v
+                  all_goals exact congrArg some hv
+                case undefined =>
+                  split at hv <;> simp [hx, hy, IR.ExprExt.apply] at hv
+                  all_goals change some Val.undefined = some v
+                  all_goals exact congrArg some hv
                 case obj fields =>
-                  cases j <;> simp [hx, hy, IR.ExprExt.apply] at hv
-                  simpa [Eval.optionalIndexValue, hkey] using hv
-                all_goals simp [hx, hy, IR.ExprExt.apply] at hv
+                  cases j <;> split at hv <;> simp [hx, hy, IR.ExprExt.apply] at hv
+                  all_goals first
+                    | (change ((Eval.optionalIndexValue (.obj fields) key
+                        (fun _ => Eval.eval m fuel ρs key)) = some v)
+                      ; simpa [Eval.optionalIndexValue, hkey] using hv)
+                    | simp [Eval.eval, Eval.optionalIndexValue, hkey, hv]
+                all_goals split at hv <;> simp [hx, hy, IR.ExprExt.apply] at hv
           · simp at h
         simp only [bind_ok, orReject_ok] at h
         obtain ⟨elem, s₂, ⟨_, rfl⟩, h⟩ := h
@@ -5442,6 +5539,8 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
         simp only [hel] at h
         simp at h
         obtain ⟨_, _, ⟨rfl, rfl⟩, keyRef, keys, ty, _, ⟨-, rfl⟩, k, s₃, hk, h⟩ := h
+        generalize (if keyRef.file = IR.dictionaryRef.file ∧ keyRef.name = IR.dictionaryRef.name
+          then Ty.string else .enum keyRef) = keyType at hk h
         split at h
         · simp only [pure_ok] at h
           obtain ⟨rfl, -⟩ := h
@@ -5457,7 +5556,21 @@ theorem expr_sound (hc : CallsAgree (N := N) m.program fs fuel) (F : Nat) :
               have h2 := ihE _ _ _ _ _ _ hk ρs ρo kv ha hs hkey
               simp only [hobj, hkey, Option.bind_eq_bind, Option.bind_some, pure_bind] at hv'
               simp only [Eval.eval, h1, h2, Option.bind_eq_bind, Option.bind_some]
-              obtain ⟨fields, k, rfl, rfl, hget⟩ := apply_recordGet hv'
+              have hrecord : ∃ fields k, ov = .obj fields ∧ kv = .str k ∧
+                  Eval.getKey fields k = some v := by
+                cases ty with
+                | optional inner =>
+                  cases inner with
+                  | optional value =>
+                    simp at hv'
+                    exact apply_recordGetFlatten hv'
+                  | _ =>
+                    simp at hv'
+                    exact apply_recordGet hv'
+                | _ =>
+                  simp at hv'
+                  exact apply_recordGet hv'
+              obtain ⟨fields, k, rfl, rfl, hget⟩ := hrecord
               simp_all
         · simp at h
       | unary sp op arg =>

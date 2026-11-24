@@ -32,7 +32,8 @@ that describe Lean code do not depend on the source language.
 |---|---|---|
 | Pure core of the IR | Integers, booleans, strings, `Option`, `if`, `let`, structures, lists and `List.foldl`. Each language adds its own constructs at one extension point per layer, such as JavaScript numbers for TypeScript. | `tolean/IR.lean`, with the TypeScript extension in `tolean/TypeScript/IR.lean` |
 | Its printer | One IR, printed in one way, so there is one printer to trust or certify. The [printing plan](printing.md) hands its layout to Lean. | Part of `tolean/IR.lean`, which asks each language how to print what it adds |
-| Its evaluator | The meaning of the IR. It becomes generic over the value type, so that Go can use `int64` and SQL can use its own values and three-valued logic. | `tolean/TypeScript/IR/Eval.lean`, over the TypeScript interpreter's `Val N`, and `tolean/Go/IR/Eval.lean`, over Go's values |
+| Its evaluator | The meaning of the IR. It becomes generic over the value type and environment, so that Go can use `int64` and SQL can use its own values and three-valued logic. | `tolean/TypeScript/IR/Eval.lean`, over the TypeScript interpreter's `Val N`, and `tolean/Go/IR/Eval.lean`, over Go's values |
+| Loop core | Every supported `for` runs its body over a list in order. Languages supply heads and their simulations; the core shares state threading, control flow, lowering, fold soundness and certificates. See the [loop-core decision](../decisions/2026-11-22-shared-loop-core.md). | TypeScript's `LoopHead`, `execLoop` and `translateLoop_sound`; shared `Body.fold` and printer in `tolean/IR.lean`. [PR #292](https://github.com/shihangw/tolean/pull/292) adds runtime `LoopResult` and per-loop certificate composition. Go's proved path has no loops yet. |
 | Proof plumbing | `Env` and its lemmas, fuel, the encode and decode pattern, `link_tac`, `runFold_foldl`, a lemma of the shape of `decls_sound`, and kernel-decidable equality on the IR | `Env` is in `tolean/TypeScript/Spec/Eval.lean`, and the rest is under `tolean/TypeScript/Proof/` |
 | Certificate generator | The layout of a certificate, and `chars!` | `tolean/TypeScript/Certify.lean` and `Certify/`, with `chars!` in `Syntax/Parser.lean` |
 | Lexer side of the round trip | `lexChars_render`, `Laid` and `NoBreak` are about tokens and lines, not about TypeScript | `tolean/TypeScript/Syntax/` |
@@ -122,24 +123,40 @@ written, so that other documents can name a step.
    interpreter, as the [Go proofs plan](go-proofs.md) lists, and delete its
    string translation.
 6. Take the rest of the shared parts out of the TypeScript code, now that Go
-   uses them too: the evaluator with the value type as a parameter, and the
-   proof plumbing. The generic evaluator must include the shared loop runner
-   before Go loop lowering can use it. Taking these parts out before a second
-   language uses them would fit them to TypeScript alone.
+   uses them too: the evaluator with the value type and environment as
+   parameters, and the proof plumbing. The generic evaluator must include the
+   shared loop runner before Go loop lowering can use it. Use Go as its second
+   user before lowering and fold soundness move out of TypeScript; taking these
+   parts out before a second language uses them would fit them to TypeScript
+   alone.
 6a. Connect Go loop lowering to the shared evaluator before claiming Go loop
     support. `Go.Translate.Pure.translateStmts` and `Go.Spec.Eval.execStmt`
     currently reject `forStmt` and `range`, `Go.IR.Body.exec` has no `fold`
     case, `Go.Translate.transRange` emits Lean text without an evaluator proof,
     and counted-for lowering is not implemented. Add the missing evaluator
     cases and proof connection before proving Go range or counted-for loops.
-     `tolean/Experimental/LoopCore` contains small C and C++ models and examples
-     that exercise the core's shape only; they are not supported source
-     languages or production translators.
+    `tolean/Experimental/LoopCore` contains small C and C++ models and examples
+    that exercise the core's shape only; they are not supported source
+    languages or production translators.
 7. Add the piece for external calls, and move Go's interface calls onto it.
 8. Do the same for SQL. Its `SELECT` queries already build an IR of their
    own, with an interpreter and a proof, and the
    [SQL proofs plan](sql-proofs.md) lists the rest. That IR becomes the SQL
    extension of the shared IR once the shared IR has errors.
+9. Build the [shared loop core](../decisions/2026-11-22-shared-loop-core.md).
+   Each language maps its `for` heads to an items list and proves that
+   simulation. Share the interpreter, lowering, fold soundness and
+   certificates. Layers b and e of the record depend on step 6's generic
+   evaluator; heads, the simulation statement, lowering and certificates
+   can be designed now. Start with #292's runtime carrier, then develop
+   shared `Outcome` and `execLoop` with Go as the second user. Add proved
+   Go ranges and counted loops before extracting lowering and fold
+   soundness. C and C++ later supply their own heads and refusals.
+   This follows the second-user rule in step 6, rather than extracting
+   an interface fitted only to TypeScript. Each stage ends green and
+   preserves TypeScript output and certificate counts after #292's
+   runtime import changes. This step concerns `for`; later records will
+   cover `switch` and `if`.
 
 ## Open questions
 

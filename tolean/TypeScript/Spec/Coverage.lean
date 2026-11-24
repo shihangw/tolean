@@ -95,7 +95,8 @@ structure Group where
 def everySection : Group :=
   ⟨"Every section of the subset", [``Proof.program_sound, ``Proof.translate_sound,
     ``Proof.program_sound_call, ``Proof.translate_sound_call,
-    ``Proof.programTranslation_rel, ``Proof.apply_recordGet, ``Proof.expr_sound, ``Proof.stmts_sound,
+    ``Proof.programTranslation_rel, ``Proof.apply_recordGet, ``Proof.apply_recordGetFlatten,
+    ``Proof.expr_sound, ``Proof.stmts_sound,
     ``Proof.decls_sound, ``Proof.decls_sound_call]⟩
 
 /-- The sections of ECMA-262 that the interpreter follows, in the order of
@@ -154,6 +155,12 @@ def sections : List Section := [
   ⟨"sec-grouping-operator", "13.2.9", "The Grouping Operator",
     [``Proof.eval_stripParens, ``Syntax.Expr.sizeOf_stripParens_le]⟩,
   ⟨"sec-property-accessors", "13.3.2", "Property Accessors", [``Proof.translateMember_sound, ``Eval.eval_index_str, ``Eval.getKey_ofString, ``Eval.find?_fst_lookup,
+    ``Eval.getKey_success_iff, ``Eval.getKey_eq_of_success, ``Eval.getKey_encRecord_of_success,
+    ``Eval.encUndef_join, ``Eval.getKey_encRecord_of_own, ``Eval.getKey_encRecord_join_of_own,
+    ``Eval.recordOwn_encRecord, ``Eval.recordOwn_encRecord_none,
+    ``Eval.recordFind_isSome_of_mem,
+    ``Eval.findMap_snd_getD_of_some, ``Eval.recordFind_num_ne_null, ``Eval.recordFind_num_ne_undefined,
+    ``Eval.recordFind_num_ne_null_of_found, ``Eval.recordFind_num_ne_undefined_of_found,
     ``Coverage.index_lone_surrogate]⟩,
   ⟨"sec-function-calls", "13.3.6", "Function Calls",
     [``Proof.eval_call, ``Proof.eval_stringCall, ``Proof.out_call, ``Proof.evalCall_eq, ``Proof.out_evalCall, ``Proof.bind_toOption,
@@ -334,6 +341,8 @@ def sections : List Section := [
   ⟨"sec-value-properties-of-the-global-object-infinity", "19.1.2", "Infinity", []⟩,
   ⟨"sec-value-properties-of-the-global-object-nan", "19.1.3", "NaN", []⟩,
   -- §20 Fundamental Objects {#sec-fundamental-objects}
+  ⟨"sec-object.hasown", "20.1.2.13", "Object.hasOwn ( O, P )",
+    [``Proof.translateDictionaryCall_sound]⟩,
   ⟨"sec-object.is", "20.1.2.15", "Object.is ( value1, value2 )",
     [``Proof.eval_objectIs, ``Proof.translateObjectIs_sound, ``Proof.out_numberSameValue,
     ``Proof.sameValue_of_eqVal]⟩,

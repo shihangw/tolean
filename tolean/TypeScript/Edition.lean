@@ -138,6 +138,9 @@ maintained. -/
 def Edition.default : Edition := .es2024
 
 inductive Feature where
+  /-- Object.hasOwn (ES2022 §20.1.2.13), which tests an own property without
+  consulting Object.prototype. -/
+  | objectHasOwn
   | readonlyClasses
   /-- The counted `for` loop: `ForStatement` and `ForBodyEvaluation`
   (§14.7.4.2 in ES2024). -/
@@ -223,6 +226,7 @@ inductive Feature where
 deriving BEq, Repr, Inhabited
 
 def Feature.since : Feature → Edition
+  | .objectHasOwn => .es2022
   | .readonlyClasses => .es2022
   | .countedFor => .es2015
   | .regexp => .es2015
@@ -241,6 +245,7 @@ def Feature.since : Feature → Edition
   | .arrayFindLast | .arrayToSorted => .es2023
 
 def Feature.describe : Feature → String
+  | .objectHasOwn => "Object.hasOwn"
   | .readonlyClasses => "ordinary readonly classes"
   | .countedFor => "a counted 'for' loop"
   | .localReturnState => "a local function that returns a value and changes captured variables"
