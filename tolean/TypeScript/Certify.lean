@@ -396,8 +396,10 @@ partial def exprNames : IR.Expr → List String
   | .proj e _ _ => exprNames e
   | .int _ | .none | .bool _ | .string _ | .enumCase .. | .tagValue _ => []
 
+end
+
 /-- The names that a loop body reads. -/
-partial def bodyNames : IR.Body → List String
+def bodyNames : IR.Body → List String
   | .handle a b => bodyNames a ++ bodyNames b
   | .value e => exprNames e
   | .state _ | .yield .. | .done .. => []
@@ -414,14 +416,20 @@ partial def bodyNames : IR.Body → List String
     exprNames value ++ bodyNames body ++ args.flatMap exprNames ++ bodyNames rest
   | .letLifted _ e rest => exprNames e ++ bodyNames rest
 
-/-- Whether a type contains a source type parameter. -/
-partial def tyHasParam : IR.Ty → Bool
-  | .param _ => true
-  | .option t | .optional t | .list t | .set t => tyHasParam t
-  | .tuple ts => ts.any tyHasParam
-  | .app _ ts => ts.any tyHasParam
-  | .map k v | .except k v => tyHasParam k || tyHasParam v
-  | _ => false
+mutual
+  /-- Whether a type contains a source type parameter. -/
+  def tyHasParam : IR.Ty → Bool
+    | .param _ => true
+    | .option t | .optional t | .list t | .set t => tyHasParam t
+    | .tuple ts => tyListHasParam ts
+    | .app _ ts => tyListHasParam ts
+    | .map k v | .except k v => tyHasParam k || tyHasParam v
+    | _ => false
+
+  def tyListHasParam : List IR.Ty → Bool
+    | [] => false
+    | t :: ts => tyHasParam t || tyListHasParam ts
+end
 
 /-- The callbacks in a body, inner ones first, in the order of the source. -/
 partial def bodyCallbacks : IR.Body → List Callback
@@ -439,8 +447,6 @@ partial def bodyCallbacks : IR.Body → List Callback
   | .letCall _ _ _ _ _ _ _ body args rest =>
     args.flatMap exprCallbacks ++ bodyCallbacks body ++ bodyCallbacks rest
   | .letLifted _ _ rest => bodyCallbacks rest
-
-end
 
 mutual
 /-- Free names of list inputs and their callbacks. Each callback removes
