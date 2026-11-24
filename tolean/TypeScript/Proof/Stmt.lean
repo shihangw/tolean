@@ -5459,17 +5459,21 @@ theorem translateForOfPattern_sound
     simp only [pure_bind, ite_state] at h
     split at h
     · simp at h
-    · try simp only [pure_bind, ite_state] at h
-      split at h
-      · simp at h
-      · simp only [bind_ok] at h
+    · rename_i hnotAssigned
+      have hnot : Stmt.constLoopAssignedIn .const p.names b = false := by
+        cases hp : Stmt.constLoopAssignedIn .const p.names b with
+        | false => rfl
+        | true => exact False.elim (hnotAssigned hp)
+      try simp only [pure_bind, ite_state] at h
+      split at h <;> try simp at h
+      try simp only [pure_bind, ite_state] at h
+      split at h <;> try simp at h
+      all_goals
         obtain ⟨c, s₁, hc, h⟩ := h
-        obtain ⟨⟨elemType, li⟩, s₁', hli, h⟩ := h
+        obtain ⟨elemType, li, s₁', hli, h⟩ := h
         obtain ⟨hmut, hlo, rfl⟩ := loopItems_ok hli
-        simp only [orReject_ok] at h
         obtain ⟨x, s₂, ⟨hxh, rfl⟩, reads, s₃, hreads, bodyEnv, s₄, hdecl, bodyOut, s₅, hbody, step, s₆,
           ⟨hstep, rfl⟩, h⟩ := h
-        simp at h
         obtain ⟨_, _, ⟨rfl, rfl⟩, _, _, ⟨rfl, rfl⟩, _, _, ⟨rfl, rfl⟩, rb, hrb, hbodyEq⟩ := h
         obtain ⟨hfresh, hhas, hglob⟩ := declarePlaces_ok hdecl
         have hx : x ∈ reads.map (·.1) := by
@@ -5504,11 +5508,13 @@ theorem translateForOfPattern_sound
                 simp [hf] at ho
                 obtain ⟨mod, hl, hag, hfr⟩ := hnorm ρo₂ rfl
                 refine .inr ⟨mod, ρo₂, ?_, hag, hfr.mono fun n hn => by simp [stmtChanges, hn], ho⟩
-                simp [Eval.execStmt, hmut, hiter]; exact hl
+                simp [Eval.execStmt, hnot, hmut, hiter]; exact hl
               | ret w =>
                 simp [hf] at ho
                 subst ho
-                exact .inl ⟨w, rfl, by simp [Eval.execStmt, hmut, hiter]; exact hret w rfl⟩
+                exact .inl ⟨w, rfl, by
+                  simp [Eval.execStmt, hnot, hmut, hiter]
+                  exact hret w rfl⟩
               | brk _ | cont _ => simp [hf] at ho
         constructor
         · intro v hv

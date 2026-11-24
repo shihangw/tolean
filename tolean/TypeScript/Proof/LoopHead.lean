@@ -100,10 +100,14 @@ theorem loopHead_sim (hc : CallsAgree (N := N) m.program fs fuel) {env : Transla
     · rename_i hkind
       obtain rfl : kind = .const := by
         cases kind <;> first | rfl | simp +decide at hkind
-      simp only [ite_state] at h
       split at h
       · simp at h
-      ·
+      · rename_i hassigned
+        have hnot : b.assigns element = false := by
+          cases hb : b.assigns element with
+          | false => rfl
+          | true =>
+            exact False.elim (hassigned (by simpa [Stmt.constLoopAssignedIn, hb] using hkind))
         simp only [pure_bind, bind_ok, fuelLimit_ok] at h
         obtain ⟨_, _, ⟨rfl, rfl⟩, items, s₁, hitems, h⟩ := h
         obtain ⟨⟨elemType', li'⟩, s₁', hli, h⟩ := h
@@ -117,7 +121,8 @@ theorem loopHead_sim (hc : CallsAgree (N := N) m.program fs fuel) {env : Transla
             (fun _ _ _ hx => (expr_sound m fs fuel hc _).1 _ _ _ _ _ _ hx) hx) hitems
         intro ρs ρo vs ha hs hi
         have hiter := hit _ _ hlo ρs ρo vs ha hs hi
-        simp [LoopHead.stmt, Eval.execStmt, Stmt.constLoopAssignedIn, hmut, hiter]
+        simp [LoopHead.stmt, Eval.execStmt, Stmt.constLoopAssignedIn, hnot, hmut, hiter]
+    · simp at h
   | counted init test update =>
     simp only [loopHead, countedHead] at h
     split at h
