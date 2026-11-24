@@ -257,45 +257,122 @@ test('read-only try bodies and ignored catches agree with Node', async () => {
 });
 
 test('assignments to for-of const bindings have no interpreter value', async () => {
-  const source = `
-    export function assign(xs: ReadonlyArray<bigint>): bigint {
-      for (const x of xs) { x = 3n; }
-      return 0n;
-    }
-    export function increment(xs: ReadonlyArray<bigint>): bigint {
-      for (const x of xs) { x++; }
-      return 0n;
-    }
-    export function destructure(rows: ReadonlyArray<readonly [bigint]>): bigint {
-      for (const [x] of rows) { x += 1n; }
-      return 0n;
-    }
-  `;
-  const calls = ['assign', 'increment', 'destructure'].map((fn) => ({
-    function: fn,
-    args: [encode(fn === 'destructure' ? [[1n]] : [1n])],
+  const cases = [
+    {
+      name: 'assign',
+      source: `export function run(xs: ReadonlyArray<bigint>): bigint {
+        for (const x of xs) { x = 3n; }
+        return 0n;
+      }`,
+      args: [[1n]],
+      nodeThrows: true,
+    },
+    {
+      name: 'increment',
+      source: `export function run(xs: ReadonlyArray<bigint>): bigint {
+        for (const x of xs) { x++; }
+        return 0n;
+      }`,
+      args: [[1n]],
+      nodeThrows: true,
+    },
+    {
+      name: 'postfix decrement',
+      source: `export function run(xs: ReadonlyArray<bigint>): bigint {
+        for (const x of xs) { x--; }
+        return 0n;
+      }`,
+      args: [[1n]],
+      nodeThrows: true,
+    },
+    {
+      name: 'prefix decrement',
+      source: `export function run(xs: ReadonlyArray<bigint>): bigint {
+        for (const x of xs) { --x; }
+        return 0n;
+      }`,
+      args: [[1n]],
+      nodeThrows: true,
+    },
+    {
+      name: 'destructure',
+      source: `export function run(rows: ReadonlyArray<readonly [bigint]>): bigint {
+        for (const [x] of rows) { x += 1n; }
+        return 0n;
+      }`,
+      args: [[[1n]]],
+      nodeThrows: true,
+    },
+    {
+      name: 'nested loop writes the outer binding',
+      source: `export function run(xs: ReadonlyArray<bigint>, ys: ReadonlyArray<bigint>): bigint {
+        for (const x of xs) {
+          for (const y of ys) { x--; }
+        }
+        return 0n;
+      }`,
+      args: [[1n], [1n]],
+      nodeThrows: true,
+    },
+    {
+      name: 'shadowed binding',
+      source: `export function run(xs: ReadonlyArray<bigint>): bigint {
+        for (const x of xs) { { let x = 2n; x--; } }
+        return 0n;
+      }`,
+      args: [[1n]],
+      nodeThrows: false,
+    },
+    {
+      name: 'uninvoked closure writes the outer binding',
+      source: `export function run(xs: ReadonlyArray<bigint>): bigint {
+        for (const x of xs) {
+          function deferred() { x--; }
+        }
+        return 0n;
+      }`,
+      args: [[1n]],
+      nodeThrows: false,
+    },
+  ] satisfies Array<{
+    name: string;
+    source: string;
+    args: Array<unknown>;
+    nodeThrows: boolean;
+  }>;
+  const programs = cases.map((scenario) => ({
+    source: scenario.source,
+    calls: [{ function: 'run', args: scenario.args.map(encode) }],
   }));
   const run = spawnSync(tolean, ['interpret'], {
-    input: JSON.stringify({ programs: [{ source, calls }] }),
+    input: JSON.stringify({ programs }),
     encoding: 'utf8',
   });
   expect(run.status, run.stderr).toBe(0);
-  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
-  expect(result?.parsed).toBe(true);
-  if (result === undefined || !result.parsed) throw new Error('const-loop fixture did not parse');
-  expect(result.accepted).toBe(false);
-  expect(result.results).toEqual([null, null, null]);
+  const results = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  expect(results).toHaveLength(cases.length);
+  for (const [i, scenario] of cases.entries()) {
+    const result = results[i];
+    expect(result?.parsed, scenario.name).toBe(true);
+    if (result === undefined || !result.parsed) throw new Error(`${scenario.name} fixture did not parse`);
+    expect(result.accepted, scenario.name).toBe(false);
+    expect(result.results, scenario.name).toEqual([null]);
+  }
 
   const dir = mkdtempSync(join(tmpdir(), 'tolean-const-loop-'));
-  const path = join(dir, 'index.mjs');
-  writeFileSync(path, ts.transpileModule(source, {
-    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
-  }).outputText);
-  const mod = await import(pathToFileURL(path).href) as Record<string, (...xs: Array<unknown>) => unknown>;
-  for (const call of calls) {
-    const fn = mod[call.function];
-    if (fn === undefined) throw new Error(`missing export ${call.function}`);
-    expect(() => fn(...call.args.map(decode))).toThrow(TypeError);
+  for (const [i, scenario] of cases.entries()) {
+    const path = join(dir, `${i}.mjs`);
+    writeFileSync(path, ts.transpileModule(scenario.source, {
+      compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+    }).outputText);
+    const mod = await import(pathToFileURL(path).href) as Record<string, (...xs: Array<unknown>) => unknown>;
+    const fn = mod.run;
+    if (fn === undefined) throw new Error(`missing export for ${scenario.name}`);
+    if (scenario.nodeThrows) {
+      expect(() => fn(...scenario.args)).toThrow(TypeError);
+    } else {
+      expect(fn(...scenario.args)).toBe(0n);
+    }
   }
 });
 
