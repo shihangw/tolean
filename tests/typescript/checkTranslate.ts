@@ -109,13 +109,25 @@ function directive(text: string, key: string): string | undefined {
 
 const failures: Array<string> = [];
 
+const leanVersion = /^def version : String := "([^"]+)"$/m.exec(
+  readFileSync(join(root, 'tolean/Version.lean'), 'utf8'),
+)?.[1];
+const packageVersion = (JSON.parse(readFileSync(join(root, 'npm/package.json'), 'utf8')) as { version?: string }).version;
+if (leanVersion === undefined || packageVersion === undefined) {
+  failures.push('could not read the Lean or npm package version');
+} else if (leanVersion !== packageVersion) {
+  failures.push(`Lean version ${leanVersion} in tolean/Version.lean differs from npm/package.json version ${packageVersion}`);
+}
+
 const accept = readdirSync('corpus/translate/accept').filter((f) => f.endsWith('.ts')).sort();
+const translated = new Map<string, Result>();
 for (const file of accept) {
   const path = `corpus/translate/accept/${file}`;
   const golden = path.replace(/\.ts$/, '.lean');
   const output = join(out, file.replace(/\.ts$/, '.lean'));
   const target = directive(readFileSync(path, 'utf8'), 'target');
   const result = lean(path, output, target);
+  translated.set(path, result);
   await sameInWasm(path, result, target);
   if (result.kind === 'refused') {
     failures.push(`${path}: refused: ${result.message}`);
@@ -130,6 +142,35 @@ for (const file of accept) {
   const error = compiles(output);
   if (error !== null) {
     failures.push(`${path}: the Lean output does not compile:\n${error}`);
+  }
+}
+
+for (const file of readdirSync('corpus/translate/accept').filter((f) => f.endsWith('.lean.chain.json')).sort()) {
+  const manifestPath = `corpus/translate/accept/${file}`;
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
+    sources?: Array<{ path?: string }>;
+    output?: { path?: string; sha256?: string };
+  };
+  const sources = manifest.sources ?? [];
+  for (const source of sources) {
+    if (source.path === undefined || !existsSync(source.path)) {
+      failures.push(`${manifestPath}: source path ${source.path ?? '(missing)'} does not exist`);
+    }
+  }
+  const source = sources.find((candidate) => candidate.path !== undefined && translated.has(candidate.path));
+  if (source?.path === undefined) {
+    failures.push(`${manifestPath}: no source path has a current standalone translation`);
+    continue;
+  }
+  const result = translated.get(source.path)!;
+  if (result.kind === 'refused') continue;
+  const expectedOutput = source.path.replace(/\.ts$/, '.lean');
+  if (manifest.output?.path !== expectedOutput || !existsSync(manifest.output.path ?? '')) {
+    failures.push(`${manifestPath}: output path ${manifest.output?.path ?? '(missing)'} does not match ${expectedOutput}`);
+  }
+  const outputHash = createHash('sha256').update(result.text).digest('hex');
+  if (manifest.output?.sha256 !== outputHash) {
+    failures.push(`${manifestPath}: output hash ${manifest.output?.sha256 ?? '(missing)'} does not match the current translation ${outputHash}`);
   }
 }
 
