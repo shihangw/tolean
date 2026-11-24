@@ -97,6 +97,33 @@ with `if` and `else`, and return. The translator writes each pure function
 through `tolean/Go/Translate/Pure.lean`, which proves that translation, and
 it writes everything else as before.
 
+The proved path also accepts a counted loop as the first statement of a
+function: `for i := a; i < b; i++ { body }`. Both bounds must be nonnegative
+integer literals below `2^63`, and the loop may take at most 256 iterations.
+The counter must have a fresh, unreserved name. The body may update parameters,
+declare iteration-local variables, and use the existing non-returning `if`
+forms. For example, `func Sum(total int) int` may start with
+`for i := 0; i < 10; i++ { total += i }` and then return `total`.
+Arithmetic in the body still wraps.
+
+The bounds become a list of integers, and the shared `IR.Body.fold` threads
+the changed locals. `LoopFrame.loop_refines` uses
+`Core.Loop.execLoop_refines` to connect the source loop with that fold.
+`top_sound` connects the leading loop and its continuation to the existing
+package theorem. The success-only statement of `translate_sound` is unchanged.
+The interpreter records the Go specification's “For statements with for
+clause” rule next to its counted-loop case.
+
+This first proved form refuses early return, `break`, `continue`, nested loops,
+and loops after another statement. It also refuses computed bounds, other
+comparison or update operators, counter mutation, and more than 256
+iterations. The limit keeps the literal list emitted by this lowering within
+Lean's compilation recursion depth.
+The other restrictions keep the loop within the existing state-only body
+translation and the leading-loop proof. Slice ranges remain outside the proved
+path because its value model has no slices. The older string translator's
+range support is unchanged and is not covered by this theorem.
+
 `Pure.lean` is a total function, so Lean can reason about it. It does not
 write text. It builds the [Tolean IR](../decisions/2026-10-30-tolean-ir.md),
 the Lean code it writes as Lean data. `tolean/Go/IR.lean` adds what only Go

@@ -8,6 +8,7 @@
 //   - corpus/translate/*/: tolean translates the package's .go files with the
 //     options in `args` (the namespace first), the result equals the
 //     committed .lean file in the directory, and Lean compiles it.
+//   - *.lean: executable interpreter and IR checks, including refusals.
 //   - Any extra paths on the command line are checked like accepted files.
 //
 // Run it from tests/go after `lake build`:
@@ -55,8 +56,17 @@ func main() {
 			failed++
 		}
 	}
-	fmt.Printf("corpus: %d accepted files, %d refused files, %d translated packages, %d failures\n",
-		len(accept), len(reject), len(translate), failed)
+leanChecks, _ := filepath.Glob("*.lean")
+for _, path := range leanChecks {
+cmd := exec.Command("lake", "env", "lean", filepath.Join("tests/go", path))
+cmd.Dir = "../.."
+if output, err := cmd.CombinedOutput(); err != nil {
+fmt.Printf("FAIL %s: %v\n%s", path, err, output)
+failed++
+}
+}
+fmt.Printf("corpus: %d accepted files, %d refused files, %d translated packages, %d Lean checks, %d failures\n",
+len(accept), len(reject), len(translate), len(leanChecks), failed)
 	if failed > 0 {
 		os.Exit(1)
 	}

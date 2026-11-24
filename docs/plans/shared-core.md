@@ -124,10 +124,11 @@ written, so that other documents can name a step.
    string translation.
 6. Take the rest of the shared parts out of the TypeScript code, now that Go
    uses them too: the evaluator with the value type and environment as
-   parameters, and the proof plumbing. The generic evaluator includes the
-   shared loop runner, with Go as its second user before lowering and fold
-   soundness move out of TypeScript. Taking these parts out before a second
-   language uses them would fit them to TypeScript alone.
+   parameters, and the proof plumbing. The generic evaluator must include the
+   shared loop runner before Go loop lowering can use it. Use Go as its second
+   user before lowering and fold soundness move out of TypeScript; taking these
+   parts out before a second language uses them would fit them to TypeScript
+   alone.
 6a. Connect Go loop lowering to the shared evaluator before claiming Go loop
     support. `Go.Translate.Pure.translateStmts` and `Go.Spec.Eval.execStmt`
     currently reject `forStmt` and `range`, `Go.IR.Body.exec` has no `fold`

@@ -1,5 +1,6 @@
 import tolean.Go.Spec.Basic
 import tolean.Go.Syntax.Ast
+import tolean.Core.Loop
 
 /-!
 The meaning of the pure Go subset, as an interpreter in Lean.
@@ -181,6 +182,49 @@ inductive Outcome where
   | ret (v : Val)
 deriving Inhabited
 
+def Outcome.toLoop : Outcome → tolean.Core.Loop.Outcome Env Val
+  | .normal env => .normal env
+  | .ret value => .ret value
+
+def Outcome.fromLoop : tolean.Core.Loop.Outcome Env Val → Option Outcome
+  | .normal env => some (.normal env)
+  | .ret value => some (.ret value)
+  | _ => none
+
+/-- A finite counted head with literal bounds. The strict bound keeps the
+last increment within Go's signed 64-bit range. -/
+def countedHead : Option Stmt → Option Expr → Option Stmt → Option (String × List Val)
+  | some (.assign _ ":=" [.ident _ index] [.lit _ .int start]),
+      some (.binary _ "<" (.ident _ test) (.lit _ .int stop)),
+      some (.incDec _ "++" (.ident _ step)) => do
+    if index != test || index != step then none
+    let a ← intLit? start
+    let b ← intLit? stop
+    if a < 0 || b < 0 || a ≥ 2 ^ 63 || b ≥ 2 ^ 63 then none
+    if (b - a).toNat > 256 then none
+    return (index, (List.range' a.toNat (b - a).toNat).map (fun n => .int (Int.ofNat n)))
+  | _, _, _ => none
+
+mutual
+
+/-- This subset does not allow the body to change or shadow the counter.
+It also excludes nested loops until their frame proof is available. -/
+def countedBodySafe (index : String) : Stmt → Bool
+  | .assign _ _ [.ident _ name] [_] => name != index
+  | .incDec _ _ (.ident _ name) => name != index
+  | .ret _ _ => true
+  | .block _ ss => countedStatementsSafe index ss
+  | .ifStmt _ none _ t none => countedBodySafe index t
+  | .ifStmt _ none _ t (some e) => countedBodySafe index t && countedBodySafe index e
+  | .decl _ (.mk _ "var" [.value _ [name] _ _]) => name != index
+  | _ => false
+
+def countedStatementsSafe (index : String) : List Stmt → Bool
+  | [] => true
+  | s :: ss => countedBodySafe index s && countedStatementsSafe index ss
+
+end
+
 /-- The functions of a package and the names it declares at the top level. -/
 structure Program where
   /-- Each function without a receiver: its name, the names of its
@@ -345,6 +389,19 @@ def execStmt (p : Program) (fuel : Nat) (env : Env) : Stmt → Option Outcome
     match ← exec p fuel env body with
     | .ret v => some (.ret v)
     | .normal env' => some (.normal (env'.drop (env'.length - env.length)))
+  -- Go specification, "For statements with for clause". The body cannot
+  -- change the counter, and literal bounds cannot change between iterations.
+  | .forStmt _ init cond post (.block span body) => do
+    let (index, items) ← countedHead init cond post
+    if !countedBodySafe index (.block span body) then none
+    let out ← tolean.Core.Loop.execLoop
+      (fun inner => (exec p fuel inner body).map Outcome.toLoop)
+      (fun value outer => some ((index, value) :: outer))
+      (fun outer inner => some (inner.drop (inner.length - outer.length))) env items
+    match out with
+    | .normal inner => some (.normal inner)
+    | .ret value => some (.ret value)
+    | _ => none
   | _ => none
 termination_by s => (fuel, sizeOf s, 0)
 
