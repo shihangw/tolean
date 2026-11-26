@@ -317,13 +317,6 @@ leaves a gap.
 14. **P1.** Local functions: general final return expressions in functions
     that change captured variables, implicit transitive captures, longer
     sibling call chains, and value-returning callers with only indirect state changes.
-15. **P1.** Certificates for counted `for` loops: each counted loop adds a
-    hypothesis that `countUp?` on its bound gives a value. Print the bound
-    over the parameters, and refuse bounds that read anything but parameters.
-    See the [counted-loop open question](#open-questions).
-16. **P1.** Certificates for generic functions and interfaces: take a
-    `Codec N T` for each type parameter and write codec constructors for
-    generic interfaces. See the [generic certificate open question](#open-questions).
 17. **P2.** `try` and `catch`: accept `try { … } catch (e) { … }` where the
     catch tests `e` with `instanceof` or ignores it. Keep `finally`, rethrowing
     a changed value and throwing anything but an error refused. See the
@@ -352,27 +345,9 @@ leaves a gap.
     obligations. Other element types, captures of generic types and
     `@decreases` obligations remain refused. See the
     [decision](../decisions/2026-11-17-project-proof-obligations.md).
-19. **Done for the `const` gap.** The translator and interpreter share one
-    predicate that checks assignments to each `for (const … of …)` binding.
-    The check covers simple names and array patterns, and the interpreter
-    gives no value when a body assigns a binding. The syntax scan also refuses
-    writes inside nested functions and to shadowed names, because it does not
-    track binding identity. Modeling that identity would change the interpreter
-    environment relation and its statement proofs. See the
-    [decision record](../decisions/2026-11-24-for-of-const-bindings.md).
-20. **Done for local guards.** Compose guarded string-keyed Record lookup
-    certificates through callbacks and loops. The per-element callback and
-    loop-step proofs derive ownership from a guard in their own body, without
-    an external success premise. Required certificates cover a guarded map
-    and sum loop, plus an undefined-test callback and sum loop over optional
-    number values. Unguarded reads remain refused. Guards across
-    bindings, outer guards and reduce callbacks remain outside this analysis.
-    The
-    [decision record](../decisions/2026-11-16-string-record-keys.md) and its
-    positive and negative corpus cases record this boundary.
 
-Steps 2 and 4 cover most of the code in the survey. Step 8 matters most for
-proofs, because a fold over events keeps much of its state in maps.
+Step 8 matters most for proofs, because a fold over events keeps much of its
+state in maps.
 
 ## Refactors from review
 
@@ -451,10 +426,10 @@ that the earlier pull request already contains it.
 An open question ends with a recommendation until a step decides it. A
 decision record then states the choice and any limits that remain.
 
-- How should a certificate cover a generic function or interface? Before step
-  16, the certifier had no encoder for a type parameter, so a file with either
-  got no certificate. The claim could take an encoder for each type parameter
-  as an argument, since the code never looks inside such a value.
+- How should a certificate cover a generic function or interface? Before the
+  generic codecs, the certifier had no encoder for a type parameter, so a file
+  with either got no certificate. The claim could take an encoder for each
+  type parameter as an argument, since the code never looks inside such a value.
 
   Decision: require a `Codec N T` for each type parameter. A codec proves that
   its decoder reverses its encoder, and that the encoder never gives `null`
