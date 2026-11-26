@@ -81,7 +81,6 @@ Node-backed interpreter test cover that case. Optional calls remain refused.
 | A default parameter value | `Option` with a default at the call | A default that reads another parameter |
 | `while` and `do … while`, with a `@decreases` tag that names a measure | A recursive function with `termination_by`, as for recursion below | A loop without such a measure |
 | A rest parameter `...xs: T[]`, and a spread argument `f(...xs)` | A `List T` argument | A spread argument to a function whose parameters are not a rest parameter |
-| A class with `readonly` fields and methods that do not change `this` | A structure and one function per method | Methods that change `this`, inheritance other than from `Error`, getters, setters and `static` state |
 
 ### Generics
 
@@ -561,8 +560,9 @@ decision record then states the choice and any limits that remain.
   a rethrow of a changed value, and a `throw` of anything but an error. The
   locals that the `try` body assigns become its result tuple, as a loop
   body's do and a local function's do
-  ([decision](../decisions/2026-11-12-local-functions.md)), so the
-  threading that these use is already in place.
+  ([decision](../decisions/2026-11-12-local-functions.md)), but this threading
+  covers normal completion only. Thrown completions need to carry the
+  environment first.
 
 - The map-borrow question is settled by the
   [decision to pass changed maps back](../decisions/2026-11-14-map-borrows.md).
@@ -576,8 +576,10 @@ decision record then states the choice and any limits that remain.
   project supplies a proof that it is consistent?
 
   Decision: yes, with a fixed axiom policy and statements from Tolean.
-  The [first slice](../decisions/2026-11-17-project-proof-obligations.md)
-  checks named project proofs but does not yet generate these statements.
+  Tolean now generates these statements for `bigint` comparators that do not
+  capture generic types. Other element types remain refused. The
+  [project proof checks](../decisions/2026-11-17-project-proof-obligations.md)
+  require the exact theorem type.
   Tolean states the obligation, `Consistent cmp`, as a theorem in the output.
   Its tactic proves the two known shapes. When the tactic fails, the project
   may supply the proof in a file beside the output, which the manifest
