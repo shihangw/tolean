@@ -1110,9 +1110,70 @@ theorem call_bind {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs fuel)
   · exact .inl ⟨w, fun ρs ha hs => by rw [hev ρs ha hs]; exact hc f vs _ hw, hb⟩
   · exact .inr ⟨y, rfl, fun ρs ha hs => by rw [hev ρs ha hs]; exact hc f vs _ hy⟩
 
+theorem evalList_counted (fs : Funcs) (fuel : Nat) (ρ : Eval.Env) :
+    ∀ l : List Int, IR.Expr.evalList fs fuel ρ (l.map (valueCode ∘ Val.int)) =
+      some (l.map Val.int)
+  | [] => by simp [IR.Expr.evalList]
+  | x :: l => by
+    simp [IR.Expr.evalList, valueCode, IR.Expr.eval, evalList_counted fs fuel ρ l]
+
+/-- The items of a counted loop are the values of `upTo` on the values of
+its bounds. -/
+theorem countedItems_items {ρ : Eval.Env} {lo hi : IR.Expr} {values : List Val}
+    (h : IR.Expr.items fs fuel ρ (countedItems lo hi) = some values) :
+    ∃ a b, IR.Expr.eval fs fuel ρ lo = some (.int a) ∧ IR.Expr.eval fs fuel ρ hi = some (.int b) ∧
+      values = (upTo a b).map .int := by
+  have hext : IR.Expr.items fs fuel ρ (.ext .upTo [lo, hi]) = some values →
+      ∃ a b, IR.Expr.eval fs fuel ρ lo = some (.int a) ∧
+        IR.Expr.eval fs fuel ρ hi = some (.int b) ∧ values = (upTo a b).map .int := by
+    intro h
+    rw [IR.Expr.items] at h
+    cases hlo : IR.Expr.eval fs fuel ρ lo with
+    | none => simp [hlo, bind] at h
+    | some va =>
+      cases hhi : IR.Expr.eval fs fuel ρ hi with
+      | none => cases va <;> simp [hlo, hhi, bind] at h
+      | some vb =>
+        cases va <;> cases vb <;> simp [hlo, hhi, bind, pure] at h
+        exact ⟨_, _, rfl, rfl, h.symm⟩
+  unfold countedItems at h
+  split at h
+  · next a b =>
+    split at h
+    · rw [IR.Expr.items, evalList_counted] at h
+      cases h
+      exact ⟨a, b, by simp [IR.Expr.eval], by simp [IR.Expr.eval], rfl⟩
+    · exact hext h
+  · exact hext h
+
+/-- What the proof of a counted loop gives. `LoopFrame.lean` proves it from
+the shared loop core, and it needs only `StmtSim` for the body and the rest,
+so `stmts_sound_aux` takes it as a premise. -/
+def LoopLaw : Prop :=
+  ∀ (env : Pure.Env) (tail : Tail) (sp bsp : Span) (init : Option Stmt) (cond : Option Expr)
+    (post : Option Stmt) (loopSS rest : List Stmt) (index : String) (start stop : Expr)
+    (reads : List String) (items : IR.Expr) (loopBody next : IR.Body),
+    Eval.countedHead init cond post = some (index, start, stop, reads) →
+    Eval.countedBodySafe (index :: reads) (.block bsp loopSS) = true →
+    env.has index = false →
+    (∀ ρs ρo values, Agree ρs ρo → Scoped env ρs →
+      IR.Expr.items fs fuel ρo items = some values →
+      ∃ a b, values = (upTo a b).map .int ∧ Eval.eval p fuel ρs start = some (.ok (.int a)) ∧
+        Eval.eval p fuel ρs stop = some (.ok (.int b))) →
+    StmtSim p fs fuel (env ++ [⟨index, .int⟩])
+      (.state ((env.filter fun l => (changesList loopSS).contains l.name).map (·.name)))
+      loopSS loopBody →
+    StmtSim p fs fuel env tail rest next →
+    StmtSim p fs fuel env tail (.forStmt sp init cond post (.block bsp loopSS) :: rest)
+      (tolean.Core.Loop.lowerLoop sp
+        ((env.filter fun l => (changesList loopSS).contains l.name).map
+          fun l => (l.name, l.type.lean))
+        index .int loopBody items next false none)
+
 /-- `stmts_sound` and its case for `if`, by induction on the translator's
 fuel. -/
-theorem stmts_sound_aux {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs fuel) :
+theorem stmts_sound_aux {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs fuel)
+    (hl : LoopLaw p fs fuel) :
     ∀ n : Nat,
       (∀ env tail ss body, translateStmts ctx env tail n ss = .ok body →
         StmtSim p fs fuel env tail ss body) ∧
@@ -1121,7 +1182,7 @@ theorem stmts_sound_aux {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs
   | 0 => ⟨fun env tail ss body h => by simp [translateStmts] at h,
       fun env tail sp c t els rest body h => by simp [translateIf] at h⟩
   | n + 1 => by
-    obtain ⟨ihs, ihi⟩ := stmts_sound_aux hp hc n
+    obtain ⟨ihs, ihi⟩ := stmts_sound_aux hp hc hl n
     refine ⟨fun env tail ss body h => ?_, fun env tail sp c t els rest body h => ?_⟩
     · cases ss with
       | nil =>
@@ -1404,6 +1465,29 @@ theorem stmts_sound_aux {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs
               | _ :: _ :: _, h => simp [reject, throw, throwThe, MonadExceptOf.throw] at h
           -- `if`
           · next sp c t els => exact ihi env tail sp c t els rest body h
+          -- a counted loop
+          · next sp init cond post bsp loopSS =>
+            cases head : Eval.countedHead init cond post with
+            | none => simp [head, reject, throw, throwThe, MonadExceptOf.throw] at h
+            | some q =>
+              obtain ⟨index, start, stop, reads⟩ := q
+              simp only [head] at h
+              tm_simp at h
+              obtain ⟨safe, ⟨lo, tlo⟩, hlo, ⟨hi, thi⟩, hhi, -, hdiv, inner, declared, loopBody,
+                hbody, next, hnext, rfl⟩ := h
+              obtain ⟨freshIndex, rfl⟩ := declare_ok declared
+              simp only [Bool.and_eq_true, List.isEmpty_iff] at hdiv
+              refine hl env tail sp bsp init cond post loopSS rest index start stop reads _ loopBody
+                next head safe freshIndex (fun ρs ρo values ha hs hv => ?_)
+                (ihs _ _ _ _ hbody) (ihs _ _ _ _ hnext)
+              obtain ⟨a, b, ha', hb', rfl⟩ := countedItems_items fs fuel hv
+              obtain ⟨da, hda, -, hea⟩ := expr_sound fs fuel p hp hc hlo ha hs ha'
+              obtain ⟨db, hdb, -, heb⟩ := expr_sound fs fuel p hp hc hhi ha hs hb'
+              rw [hdiv.1, evalList_nil] at hda
+              rw [hdiv.2, evalList_nil] at hdb
+              cases hda
+              cases hdb
+              exact ⟨a, b, rfl, by rw [hea, outcome_nil], by rw [heb, outcome_nil]⟩
           -- `if s; c { … }`, as the block `{ s; if c { … } }`
           · next sp s c t els =>
             refine sim_congr p fs fuel (fun ρ => execStmt_ifInit p fuel sp s c t els ρ)
@@ -1620,9 +1704,10 @@ theorem stmts_sound_aux {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs
 
 /-- The body that the translator gives for a statement list means what the
 statements mean. -/
-theorem stmts_sound {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs fuel) {n : Nat}
+theorem stmts_sound {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs fuel)
+    (hl : LoopLaw p fs fuel) {n : Nat}
     {env : Pure.Env} {tail : Tail} {ss : List Stmt} {body : IR.Body}
     (h : translateStmts ctx env tail n ss = .ok body) : StmtSim p fs fuel env tail ss body :=
-  (stmts_sound_aux p fs fuel hp hc n).1 env tail ss body h
+  (stmts_sound_aux p fs fuel hp hc hl n).1 env tail ss body h
 
 end tolean.Go.Proof

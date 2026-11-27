@@ -22,7 +22,8 @@
 // /=, %=, ++ and --; if statements that change locals or return, with and
 // without an init statement; expression switches with and without a tag, an
 // init statement, several values in a case and a default anywhere, that
-// change locals or return; one counted loop at the start of a body; calls
+// change locals or return; counted loops anywhere but inside another loop,
+// with literal bounds or bounds that read the length of a string; calls
 // of functions declared earlier; and package-level constants, typed and
 // untyped, alone and in groups. A function that may panic is called only
 // where the subset allows it: alone after :=, =, var or return. Go's main
@@ -513,7 +514,7 @@ func (g *gen) assign(mark int) bool {
 // stmts writes up to n statements that do not return.
 func (g *gen) stmts(n, depth int) {
 	for range n {
-		switch g.pick(7) {
+		switch g.pick(8) {
 		case 0, 1:
 			t := allTypes[g.pick(len(allTypes))]
 			if g.chance(0.2) {
@@ -554,9 +555,14 @@ func (g *gen) stmts(n, depth int) {
 			if depth > 0 && !g.inLoop {
 				g.stateSwitch(depth - 1)
 			}
-		default:
+		case 6:
 			if depth > 0 && !g.inLoop {
 				g.stateIfInit(depth - 1)
+			}
+		default:
+			// A counted loop may stand anywhere, but not inside another loop.
+			if depth > 0 && !g.inLoop && len(g.visible(tInt, true)) > 0 {
+				g.loop()
 			}
 		}
 	}
@@ -868,8 +874,33 @@ func (g *gen) loop() {
 		start++
 		stop = start - 1
 	}
+	if g.chance(0.1) {
+		// Over 256 iterations, the output computes the list with Go.upTo.
+		stop = start + 300
+	}
+	startText, stopText := fmt.Sprint(start), fmt.Sprint(stop)
+	// A bound may read the length of a string. The body must not change what
+	// the bound reads, so the string cannot be assigned inside the loop.
+	var frozen *local
+	if strs := g.visible(tString, true); len(strs) > 0 && g.chance(0.5) {
+		frozen = strs[g.pick(len(strs))]
+		frozen.used = true
+		frozen.mutable = false
+		n := frozen.name
+		switch g.pick(3) {
+		case 0:
+			stopText = fmt.Sprintf("len(%s)", n)
+		case 1:
+			stopText = fmt.Sprintf("len(%s) + %d", n, g.pick(5))
+		default:
+			stopText = fmt.Sprintf("%d * len(%s)", 1+g.pick(3), n)
+		}
+		if g.chance(0.3) {
+			startText = fmt.Sprintf("len(%s) - %d", n, g.pick(4))
+		}
+	}
 	index := &local{name: g.fresh(), t: tInt}
-	g.line("for %s := %d; %s < %d; %s++ {", index.name, start, index.name, stop, index.name)
+	g.line("for %s := %s; %s < %s; %s++ {", index.name, startText, index.name, stopText, index.name)
 	mark := len(g.locals)
 	g.locals = append(g.locals, index)
 	g.inLoop = true
@@ -881,6 +912,9 @@ func (g *gen) loop() {
 	g.indent--
 	g.locals = g.locals[:mark]
 	g.line("}")
+	if frozen != nil {
+		frozen.mutable = true
+	}
 }
 
 func (g *gen) function(f *fn) {

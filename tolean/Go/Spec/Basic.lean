@@ -67,6 +67,10 @@ theorem indexMessage_ne (i n : Int) : indexMessage i n ≠ "" := by
   simp only [indexMessage, String.length_append, String.length_empty] at h'
   omega
 
+/-- The values `a`, `a + 1`, and so on, below `b`: the values that the counter
+of `for i := a; i < b; i++` takes. The list is empty when `b ≤ a`. -/
+def upTo (a b : Int) : List Int := (List.range (b - a).toNat).map fun (k : Nat) => a + k
+
 /-- The value `m`. The output of a failed check writes `Go.after c m` so that
 it evaluates `c`, the expression that Go was evaluating, before it panics with
 `m`. -/

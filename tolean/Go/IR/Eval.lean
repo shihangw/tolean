@@ -130,6 +130,17 @@ def Expr.evalList (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ 
   | e :: es => do return (← Expr.eval fs fuel ρ e) :: (← Expr.evalList fs fuel ρ es)
 termination_by es => (fuel, sizeOf es, 0)
 
+/-- The items of a loop: a list, or the values of `Go.upTo` on two integers. -/
+def Expr.items (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : Env) :
+    Expr → Option (List Val)
+  | .list items _ => Expr.evalList fs fuel ρ items
+  | .ext .upTo [lo, hi] => do
+    let .int a ← Expr.eval fs fuel ρ lo | none
+    let .int b ← Expr.eval fs fuel ρ hi | none
+    return (tolean.Go.upTo a b).map .int
+  | _ => none
+termination_by e => (fuel, sizeOf e, 0)
+
 /-- Run a body: it returns the function's value, or it ends in the state of a
 branch, with the bindings it has made. -/
 def Body.exec (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : Env) :
@@ -159,8 +170,8 @@ def Body.exec (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
       | .ret v => Body.exec fs (fuel + 1) ((name, v) :: ρ) rest
       | .panic x => some (.panic x)
       | .normal _ => none
-  | .fold names element body (.list items _) rest _ => do
-    let values ← Expr.evalList fs fuel ρ items
+  | .fold names element body items rest _ => do
+    let values ← Expr.items fs fuel ρ items
     let result ← tolean.Core.Loop.runFold
       (fun inner => (Body.exec fs fuel inner body).map loopOutcome)
       (fun value outer => some ((element, value) :: outer))

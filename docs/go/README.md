@@ -190,28 +190,31 @@ has effects, and binds each such call with `←`. It refuses one in the right
 operand of `&&` or `||`, because `←` would run it even when Go does not. The
 corpus package `panics` shows both.
 
-The proved path also accepts a counted loop as the first statement of a
-function: `for i := a; i < b; i++ { body }`. Both bounds must be nonnegative
-integer literals below `2^63`, and the loop may take at most 256 iterations.
-The counter must have a fresh, unreserved name. The body may update parameters,
-declare iteration-local variables, and use the existing non-returning `if`
-forms. For example, `func Sum(total int) int` may start with
-`for i := 0; i < 10; i++ { total += i }` and then return `total`.
-Arithmetic in the body still wraps.
+The proved path also accepts a counted loop at any position in a body:
+`for i := a; i < b; i++ { body }`. A bound may be an integer literal, a
+local, `len` of a local, or a sum, difference or product of those. Each bound
+must have type `int`, must not read the counter, and must contain no division,
+so it cannot panic. The body must not change what the bounds read. The counter
+must have a fresh, unreserved name. The body may update locals, declare
+iteration-local variables, and use the existing non-returning `if` forms. For
+example, `func Bytes(s string) int` may sum `int(s[i])` with
+`for i := 0; i < len(s); i++`. Arithmetic in the body still wraps.
 
-The bounds become a list of integers, and the shared `IR.Body.fold` threads
-the changed locals. `LoopFrame.loop_refines` uses
-`Core.Loop.execLoop_refines` to connect the source loop with that fold.
-`top_sound` connects the leading loop and its continuation to the existing
-package theorem. A panic in the body ends the loop, as a return does.
-The interpreter records the Go specification's “For statements with for
-clause” rule next to its counted-loop case.
+The interpreter evaluates both bounds once, before the first iteration, and
+runs the body over the finite list `Go.upTo a b`. The translation emits the
+same list. When both bounds are literals and the loop takes at most 256
+iterations, it prints the list element by element, as before; otherwise it
+prints `(Go.upTo a b)`. The shared `IR.Body.fold` threads the changed locals,
+and `LoopFrame.loop_law` uses `Core.Loop.execLoop_refines` to connect the
+source loop with that fold wherever the loop stands. A panic in the body ends
+the loop, as a return does. The
+[record on counted-loop termination](../decisions/2026-11-28-go-counted-loop-termination.md)
+explains why the loop needs no fuel.
 
-This first proved form refuses early return, `break`, `continue`, nested loops,
-and loops after another statement. It also refuses computed bounds, other
-comparison or update operators, counter mutation, and more than 256
-iterations. The limit keeps the literal list emitted by this lowering within
-Lean's compilation recursion depth.
+This proved form refuses early return, `break`, `continue`, nested loops,
+other comparison or update operators, counter mutation, bounds of another
+integer type, and bounds that could panic. A loop with only a condition stays
+refused, because the proved path has no termination measure for it.
 The other restrictions keep the loop within the existing state-only body
 translation and the leading-loop proof. Slice ranges remain outside the proved
 path because its value model has no slices. The older string translator's
