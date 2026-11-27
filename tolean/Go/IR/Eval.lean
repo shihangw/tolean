@@ -8,8 +8,9 @@ values of the interpreter in `Spec/Eval.lean`.
 
 Each constructor of `IR.Expr` and `IR.Body` is one form of Lean code. The
 evaluator gives it the value that the printed Lean computes, written as a Go
-value: an `Int` is `Val.int`, a `Bool` is `Val.bool` and a `String` is
-`Val.str`. A `Prop` such as `a < b` has the value of its `decide`.
+value: an `Int` is `Val.int`, a `Bool` is `Val.bool`, a `String` is
+`Val.str` and a structure is `Val.strct`, with its fields in order. `{ s with
+f := e }` replaces the fields it names, each of which `s` must have. A `Prop` such as `a < b` has the value of its `decide`.
 `Int.tdiv` and `Int.tmod` are total, as in Lean: a zero divisor gives `0`
 and the dividend. The translator tests the divisor before it divides, and
 `throw` of the message gives the outcome `panic`, as `Except.error` does.
@@ -121,6 +122,15 @@ def Expr.eval (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
     return .bool (x || y)
   | .decide p => Expr.eval fs fuel ρ p
   | .ext op args => do op.apply (← Expr.evalList fs fuel ρ args)
+  -- `{ x := a, y := b : S }` and `{ s with x := a }` on a structure, and
+  -- `s.x`.
+  | .struct fields _ _ => do return .strct (← Expr.evalFields fs fuel ρ fields)
+  | .structUpdate base fields => do
+    let .strct old ← Expr.eval fs fuel ρ base | none
+    let new ← Expr.evalFields fs fuel ρ fields
+    unless new.all (fun (f, _) => (old.lookup f).isSome) do none
+    return .strct (old.map fun (f, u) => (f, (new.lookup f).getD u))
+  | .field obj _ name => do Eval.fieldOf (← Expr.eval fs fuel ρ obj) name
   | _ => none
 termination_by e => (fuel, sizeOf e, 0)
 
@@ -128,6 +138,12 @@ def Expr.evalList (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ 
     List Expr → Option (List Val)
   | [] => some []
   | e :: es => do return (← Expr.eval fs fuel ρ e) :: (← Expr.evalList fs fuel ρ es)
+termination_by es => (fuel, sizeOf es, 0)
+
+def Expr.evalFields (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : Env) :
+    List (String × Expr) → Option (List (String × Val))
+  | [] => some []
+  | (f, e) :: es => do return (f, ← Expr.eval fs fuel ρ e) :: (← Expr.evalFields fs fuel ρ es)
 termination_by es => (fuel, sizeOf es, 0)
 
 /-- Run a body: it returns the function's value, or it ends in the state of a

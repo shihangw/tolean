@@ -107,6 +107,17 @@ every package-level `var`, keep the function on the string translation. The
 [decision record](../decisions/2026-11-26-go-package-constants.md) gives the
 reasons, and the corpus package `consts` shows the output.
 
+A pure function may also use a struct type of the package whose fields have
+those four types, such as `type Point struct { X int; Y int }`. It may build
+one with `Point{}`, `Point{x, y}` or `Point{X: x, Y: y}`, which names every
+field once in order, read a field with `p.X`, and set a field of a local
+with `p.X = e`. The output declares a `structure`, and writes
+`{ p with X := e }` for the assignment. Embedded fields, a field of another
+type, `var p Point` without a value, a keyed literal that leaves out a field
+or changes the order, and `==` on structs keep the function on the string
+translation. The [decision record](../decisions/2026-11-26-go-structs.md)
+gives the reasons, and the corpus package `structs` shows the output.
+
 An `if` may have an init statement, as in `if d := x - y; d > 0 { … }`. A
 `switch` may have a tag or none, an init statement, several values in one
 case, and a `default` clause anywhere in its body. The translator writes a

@@ -1,0 +1,36 @@
+{"tolean": "0.3.1",
+ "sources":
+ [{"sha256": "97e5ca9d5e75b6bcd088a358915a368b39f7e70b255b45e74fc26df0b77aeb56",
+   "path": "corpus/translate/structs/structs.go"}],
+ "output":
+ {"sha256": "49209761f3f618a15f5fdc963bb944e61496d6c0787509ea10473e26f712f3d7",
+  "path": "corpus/translate/structs/Structs.lean"},
+ "nodes":
+ [{"status": "tested",
+   "label": "Go parser",
+   "kind": "parser",
+   "id": "parser",
+   "evidence": {"reference": "go/parser", "check": "go-check", "by": "tolean"}},
+  {"status": "tested",
+   "label": "Go translator",
+   "kind": "translator",
+   "id": "translator",
+   "evidence":
+   {"reference": "fixed corpus output", "check": "go-check", "by": "tolean"}},
+  {"status": "trusted",
+   "module": "tolean.Go.Spec.Basic",
+   "label": "Go Spec",
+   "kind": "spec",
+   "id": "spec"},
+  {"status": "trusted",
+   "label": "Go compiler",
+   "kind": "runtime",
+   "id": "runtime"}],
+ "module": "Structs",
+ "language": "go",
+ "edges":
+ [["source", "parser"],
+  ["parser", "translator"],
+  ["translator", "output"],
+  ["spec", "output"],
+  ["runtime", "output"]]}

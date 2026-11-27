@@ -123,7 +123,9 @@ written, so that other documents can name a step.
    with `Body.bind`. State is not done, and Go does not need
    it yet: the Go code that the proved path accepts reads only parameters and
    locals, which the environment holds. Package-level constants need no state either,
-   because the interpreter holds their values in the program. Go will need
+   because the interpreter holds their values in the program. Go structs
+   reuse the shared IR's `struct`, `field` and `structUpdate` nodes, and a
+   field assignment replaces the local, so they need no state either. Go will need
    state for package-level variables and for slices, which a callee can
    change; build the state piece with the first of these, so that Go is its
    second user.

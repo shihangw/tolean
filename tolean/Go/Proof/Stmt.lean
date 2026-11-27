@@ -957,13 +957,19 @@ theorem zero_sound {ctx : Ctx} (hp : ctx.program = p) {te : Expr} {t : Ty}
   | ident sp name =>
     simp only [resolveType] at ht
     subst hp
-    simp only [Eval.zeroOf]
     split at ht
-    · simp at ht
-    · next hn =>
-      simp only [hn, Bool.false_eq_true, ↓reduceIte]
-      split at ht <;> simp only [Option.some.injEq, reduceCtorEq] at ht <;> subst ht <;>
-        simp only [zeroCode, IR.Expr.eval, Option.some.injEq] at hw <;> subst hw <;> rfl
+    · -- A struct has no zero code.
+      simp only [Option.some.injEq] at ht
+      subst ht
+      simp [zeroCode, IR.Expr.eval] at hw
+    · next hs =>
+      simp only [Eval.zeroOf]
+      have : ctx.program.structs.lookup name = none := by
+        cases h' : ctx.program.structs.lookup name
+        · rfl
+        · simp [h'] at hs
+      rw [this]
+      exact basic_zero ht hw
   | _ => simp [resolveType] at ht
 
 theorem guarded_zeroCode (t : Ty) (b : IR.Body) : guarded (zeroCode t) b = b := by
@@ -1337,6 +1343,73 @@ theorem stmts_sound_aux {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs
                   obtain ⟨ds, old, hds, hold, hres⟩ := key ρs ρo w ha hs hw
                   rw [outcome_ok (hn ds hds)] at hres
                   rw [Eval.execStmt]; simp [hk, hold, hres]
+          -- `x.f = e`
+          · next sp sp1 sp2 x f e =>
+            cases hl : env.lookup x with
+            | none => simp [hl, reject, throw, throwThe, MonadExceptOf.throw] at h
+            | some l =>
+              simp only [hl] at h
+              cases hlt : l.type with
+              | strct name =>
+                simp only [hlt] at h
+                cases hst : structTys ctx name with
+                | none => simp [hst, reject, throw, throwThe, MonadExceptOf.throw] at h
+                | some tys =>
+                  simp only [hst] at h
+                  cases hft : tys.lookup f with
+                  | none => simp [hft, reject, throw, throwThe, MonadExceptOf.throw] at h
+                  | some ft =>
+                    simp only [hft] at h
+                    tm_simp at h
+                    obtain ⟨⟨ce, te⟩, hce, -, rb, hrb, rfl⟩ := h
+                    -- The update evaluates exactly when the value does and `x`
+                    -- holds a struct with the field `f`.
+                    have key : ∀ ρo v, IR.Expr.eval fs fuel ρo (.structUpdate (.var x) [(f, ce)]) = some v →
+                        ∃ old u, ρo.lookup x = some old ∧ IR.Expr.eval fs fuel ρo ce = some u ∧
+                          Eval.setField old f u = some v := by
+                      intro ρo v hv
+                      simp only [IR.Expr.eval, IR.Expr.evalFields, Option.bind_eq_bind] at hv
+                      cases hx : ρo.lookup x with
+                      | none => simp [hx] at hv
+                      | some old =>
+                        cases old with
+                        | strct olds =>
+                          cases hu : IR.Expr.eval fs fuel ρo ce with
+                          | none => simp [hx, hu] at hv
+                          | some u =>
+                            refine ⟨_, u, rfl, rfl, ?_⟩
+                            simp only [hx, hu] at hv
+                            simp only [Eval.setField]
+                            simp only [Option.bind_some] at hv
+                            by_cases hf : (olds.lookup f).isSome = true
+                            · simp only [hf, ↓reduceIte, Option.some.injEq]
+                              simp [hf] at hv
+                              rw [← hv]
+                              congr 1
+                              refine List.map_congr_left (fun ⟨g, w⟩ _ => ?_)
+                              by_cases hg : g = f
+                              · subst hg; simp [List.lookup]
+                              · have : (g == f) = false := by simpa using hg
+                                simp [List.lookup, this]
+                            · simp [hf] at hv
+                        | _ => simp [hx] at hv
+                    have hdiv : divisors (.structUpdate (.var x) [(f, ce)]) = divisors ce := by
+                      simp [divisors, divisors.divisorsFields]
+                    refine guarded_sim p fs fuel (fun ρs ρo v ha hs hv => ?_)
+                      (set_sim p fs fuel (env_has_of_lookup hl) (by simp [stmtChanges])
+                        (fun ρo o hn hv => ?_) (ihs _ tail rest rb hrb))
+                    · obtain ⟨old, u, -, hu, -⟩ := key ρo v hv
+                      obtain ⟨ds, hds, hz⟩ := expr_zero p fs fuel hp hc hce ha hs hu
+                      exact ⟨ds, by rw [hdiv]; exact hds,
+                        fun y hm => by rw [Eval.execStmt]; simp [hz y hm, Eval.withValue]⟩
+                    obtain ⟨w, hw, hb⟩ := out_let fs fuel hv
+                    refine .inl ⟨w, fun ρs ha hs => ?_, hb⟩
+                    obtain ⟨old, u, hold, hu, hset⟩ := key ρo w hw
+                    have hn' : NoFault fs fuel ce ρo := by
+                      intro ds hds; exact hn ds (by rw [hdiv]; exact hds)
+                    have he := expr_ok p fs fuel hp hc hce ha hs hu hn'
+                    rw [Eval.execStmt]; simp [he, Eval.withValue, ha x, hold, hset]
+              | _ => simp [hlt, reject, throw, throwThe, MonadExceptOf.throw] at h
           -- `x++` and `x--`
           · next sp op sp' x =>
             cases ho : Eval.incDecOp? op with
@@ -1379,7 +1452,7 @@ theorem stmts_sound_aux {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs
               match values, h with
               | [], h =>
                 tm_simp at h
-                obtain ⟨env', hdecl, rb, hrb, rfl⟩ := h
+                obtain ⟨-, env', hdecl, rb, hrb, rfl⟩ := h
                 obtain ⟨hfresh, rfl⟩ := declare_ok hdecl
                 rw [guarded_zeroCode]
                 intro ρs ρo ha hs

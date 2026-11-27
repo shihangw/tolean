@@ -44,24 +44,27 @@ that no typed value has fixed yet. A `byte` is what indexing a string gives;
 no parameter, result or declared variable has that type. -/
 inductive Ty where
   | int | int64 | bool | string | untyped | byte
+  /-- A struct type that the package declares, by its name. -/
+  | strct (name : String)
 deriving DecidableEq, Repr, Inhabited
 
 def Ty.lean : Ty → IR.Ty
   | .bool => .bool
   | .string => .string
   | .int | .int64 | .untyped | .byte => .int
+  | .strct name => .struct ⟨"", name⟩
 
 /-- The types of `+`, `-`, `*`, `/` and `%`. Arithmetic on a `byte` wraps
 at 8 bits, which the subset leaves out. -/
 def Ty.isInt : Ty → Bool
   | .int | .int64 | .untyped => true
-  | .bool | .string | .byte => false
+  | .bool | .string | .byte | .strct _ => false
 
 /-- The integer types, which an integer constant can take and which the
 orders compare. -/
 def Ty.isNum : Ty → Bool
   | .int | .int64 | .untyped | .byte => true
-  | .bool | .string => false
+  | .bool | .string | .strct _ => false
 
 /-- The type that two operands share: the same type, or an untyped constant
 and an integer type. Two untyped constants share none, because the subset
@@ -143,9 +146,9 @@ def takenNames : List String :=
 
 def nameOK (name : String) : Bool := !takenNames.contains name
 
-/-- The type that a type expression names: a predeclared type, unless the
-package declares the name. -/
-def resolveType (ctx : Ctx) : Expr → Option Ty
+/-- The predeclared type that a type expression names, unless the package
+declares the name. -/
+def basicType (ctx : Ctx) : Expr → Option Ty
   | .ident _ name =>
     if ctx.program.names.contains name then none
     else match name with
@@ -156,19 +159,53 @@ def resolveType (ctx : Ctx) : Expr → Option Ty
       | _ => none
   | _ => none
 
+/-- The type that a type expression names: a predeclared type, or a struct
+type of the package. -/
+def resolveType (ctx : Ctx) (te : Expr) : Option Ty :=
+  match te with
+  | .ident _ name => if (ctx.program.structs.lookup name).isSome then some (.strct name) else basicType ctx te
+  | _ => none
+
+/-- The types of struct fields, when each has a predeclared type and a name
+that the output may use. -/
+def fieldTys (ctx : Ctx) : List (String × Expr) → Option (List (String × Ty))
+  | [] => some []
+  | (f, te) :: fs => do
+    let t ← basicType ctx te
+    if nameOK f then return (f, t) :: (← fieldTys ctx fs) else none
+
+/-- The fields of a struct type, with their types, when the type has a name
+that the output may use, its fields have distinct names, and `fieldTys`
+gives their types. -/
+def structTys (ctx : Ctx) (name : String) : Option (List (String × Ty)) := do
+  let fields ← ctx.program.structs.lookup name
+  if nameOK name && (fields.map (·.1)).Nodup then fieldTys ctx fields else none
+
 /-- The zero value of a type, as code. -/
 def zeroCode : Ty → IR.Expr
   | .bool => .bool false
   | .string => .string ""
   | .int | .int64 | .untyped | .byte => .int 0
+  -- The translator writes no zero value of a struct this way.
+  | .strct _ => .none
 
 /-! ### Expressions -/
 
-/-- The code of a value: a literal. -/
+mutual
+
+/-- The code of a value: a literal. The translator writes it for constants,
+which are never structs, and for the items of a counted loop. -/
 def valueCode : Eval.Val → IR.Expr
   | .int n => .int n
   | .bool b => .bool b
   | .str s => .string s
+  | .strct fs => .struct (valueCodeFields fs) ⟨"", ""⟩ []
+
+def valueCodeFields : List (String × Eval.Val) → List (String × IR.Expr)
+  | [] => []
+  | (f, v) :: fs => (f, valueCode v) :: valueCodeFields fs
+
+end
 
 /-- The type of a constant of the package whose declaration names the type
 `type`, if any, and whose value is `v`. A constant without a type is untyped,
@@ -179,6 +216,7 @@ def constType (ctx : Ctx) (type : Option Expr) (v : Eval.Val) : Option Ty :=
     | none, .int _ => some .untyped
     | none, .bool _ => some .bool
     | none, .str _ => some .string
+    | none, .strct _ => none
     | some te, _ => resolveType ctx te
   match t?, v with
   | some t, .int n => if t.isInt && -2 ^ 63 ≤ n && n < 2 ^ 63 then some t else none
@@ -238,11 +276,17 @@ def divisors : IR.Expr → List IR.Expr
   | .or a b => divisors a ++ divisors b
   | .call _ args => divisorsList args
   | .ext _ args => divisorsList args
+  | .field a _ _ => divisors a
+  | .struct fields _ _ => divisorsFields fields
+  | .structUpdate base fields => divisors base ++ divisorsFields fields
   | _ => []
 where
   divisorsList : List IR.Expr → List IR.Expr
     | [] => []
     | e :: es => divisors e ++ divisorsList es
+  divisorsFields : List (String × IR.Expr) → List IR.Expr
+    | [] => []
+    | (_, e) :: es => divisors e ++ divisorsFields es
 
 /-- `decide (d = 0)`. -/
 def isZero (d : IR.Expr) : IR.Expr := .decide (.eq d (.int 0))
@@ -337,12 +381,24 @@ def translateBinary (sp : Span) (o : BinOp) (a : IR.Expr) (ta : Ty) (b : IR.Expr
   | .ge => compare sp .ge a ta b tb
   | .eq =>
     match ta.unify tb with
+    | some (.strct _) => reject sp "the subset does not compare structs"
     | some _ => pure (.decide (.eq a b), .bool)
     | none => reject sp "the operands do not have one type"
   | .ne =>
     match ta.unify tb with
+    | some (.strct _) => reject sp "the subset does not compare structs"
     | some _ => pure (.decide (.ne a b), .bool)
     | none => reject sp "the operands do not have one type"
+
+/-- The elements of a struct literal have no keys, or a key for each field
+in `names`, in order. -/
+def keysInOrder (elts : List Expr) (names : List String) : Bool :=
+  !elts.any (Eval.keyName? · |>.isSome) || elts.map Eval.keyName? == names.map some
+
+/-- The object of `c.f` needs parentheses unless it is a name. -/
+def fieldWrap : IR.Expr → Bool
+  | .var _ => false
+  | _ => true
 
 /-- The arguments fit the parameters, one for one. -/
 def argsFit (codes : List (IR.Expr × Ty)) (params : List Ty) : Bool :=
@@ -415,6 +471,25 @@ def translateExpr (ctx : Ctx) (env : Env) : Nat → Expr → TM (IR.Expr × Ty)
         let codes ← translateArgs ctx env fuel args
         unless argsFit codes sig.params do reject sp "the arguments do not fit the parameters"
         pure (.call ⟨"", f⟩ (codes.map (·.1)), sig.result)
+    -- `x.f`: a field of a struct.
+    | .selector sp x f => do
+      let (c, t) ← translateExpr ctx env fuel x
+      let .strct name := t | reject sp "the subset selects only fields of structs"
+      let some tys := structTys ctx name | reject sp s!"the struct '{name}' has a field outside the subset"
+      let some ft := tys.lookup f | reject sp s!"'{name}' has no field '{f}'"
+      pure (.field c (fieldWrap c) f, ft)
+    -- `S{…}`: a struct literal with no elements, with every field in order,
+    -- or with a key for every field in order.
+    | .composite sp (some (.ident _ name)) elts => do
+      let some tys := structTys ctx name | reject sp s!"'{name}' is not a struct type of the subset"
+      let ref : DeclRef := ⟨"", name⟩
+      if elts.isEmpty then pure (.struct (tys.map fun (f, t) => (f, zeroCode t)) ref [], .strct name)
+      else
+        unless keysInOrder elts (tys.map (·.1)) do
+          reject sp "a keyed struct literal must name every field once, in order"
+        let codes ← translateArgs ctx env fuel (elts.map Eval.elemValue)
+        unless argsFit codes (tys.map (·.2)) do reject sp "the elements do not fit the fields"
+        pure (.struct ((tys.map (·.1)).zip (codes.map (·.1))) ref [], .strct name)
     | e => reject e.span "this expression is not supported"
 
 def translateArgs (ctx : Ctx) (env : Env) : Nat → List Expr → TM (List (IR.Expr × Ty))
@@ -485,6 +560,7 @@ mutual
 def stmtChanges : Stmt → List String
   | .assign _ _ lhs _ => lhs.filterMap fun
     | .ident _ n => some n
+    | .selector _ (.ident _ n) _ => some n
     | _ => none
   | .incDec _ _ (.ident _ n) => [n]
   | .block _ ss => changesList ss
@@ -645,6 +721,16 @@ def translateStmts (ctx : Ctx) (env : Env) (tail : Tail) : Nat → List Stmt →
         let (c', t') ← translateBinary sp o (.var x) l.type c t
         unless t' = l.type do reject sp "the value does not have the type of the local"
         return guarded c' (.let x c' (← translateStmts ctx env tail fuel rest))
+    -- `x.f = e` sets the field `f` of the local struct `x`.
+    | .assign sp "=" [.selector _ (.ident _ x) f] [e] => do
+      let some l := env.lookup x | reject sp s!"unknown local '{x}'"
+      let .strct name := l.type | reject sp "the subset sets only fields of structs"
+      let some tys := structTys ctx name | reject sp s!"the struct '{name}' has a field outside the subset"
+      let some ft := tys.lookup f | reject sp s!"'{name}' has no field '{f}'"
+      let (c, t) ← translateExpr ctx env exprFuel e
+      unless t.fits ft do reject sp "the value does not have the type of the field"
+      let c' : IR.Expr := .structUpdate (.var x) [(f, c)]
+      return guarded c' (.let x c' (← translateStmts ctx env tail fuel rest))
     | .incDec sp op (.ident _ x) => do
       let some o := Eval.incDecOp? op | reject sp s!"the operator '{op}' is not supported"
       let some l := env.lookup x | reject sp s!"unknown local '{x}'"
@@ -658,7 +744,7 @@ def translateStmts (ctx : Ctx) (env : Env) (tail : Tail) : Nat → List Stmt →
           let (c, t') ← translateExpr ctx env exprFuel e
           unless t'.fits t do reject sp "the value does not have the declared type"
           pure c
-        | [] => pure (zeroCode t)
+        | [] => if t matches .strct _ then reject sp "the subset declares a struct with a literal" else pure (zeroCode t)
         | _ => reject sp "declare one variable at a time"
       let env' ← declare env sp x t
       return guarded c (.let x c (← translateStmts ctx env' tail fuel rest))
