@@ -10,6 +10,17 @@ the same panic, for each input.
 open tolean.Go
 open tolean.Go.Eval (Val)
 
+-- The printer keeps atoms and complete parenthesized expressions intact.
+-- String literals and compound expressions need another pair of parentheses.
+#guard IR.arg "" == "()"
+#guard IR.arg "a.b'_09" == "a.b'_09"
+#guard IR.arg "é" == "(é)"
+#guard IR.arg "\"a\\\"b\"" == "(\"a\\\"b\")"
+#guard IR.arg "(Go.byteAt s i)" == "(Go.byteAt s i)"
+#guard IR.arg "(a) ++ (b)" == "((a) ++ (b))"
+#guard IR.arg "a ++ b" == "(a ++ b)"
+#guard IR.arg "((a))" == "((a))"
+
 private def parseDecls (src : String) : Except String (List Syntax.Decl) := do
   match Syntax.parse ("package strs\n" ++ src) with
   | .ok file => return file.decls

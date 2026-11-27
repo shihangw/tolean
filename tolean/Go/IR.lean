@@ -98,7 +98,9 @@ where
 /-- A printed argument, in parentheses unless it is a name, a number, or one
 group in parentheses. -/
 def arg (a : String) : String :=
-  let atom := a.all fun c => c.isAlphanum || c == '_' || c == '.' || c == '\''
+  -- String.all specializes a slice iterator that calls a private standard-library
+  -- helper absent from the WASM build. Traverse the characters instead.
+  let atom := a.toList.all fun c => c.isAlphanum || c == '_' || c == '.' || c == '\''
   if (atom && !a.isEmpty) || oneGroup a.toList then a else s!"({a})"
 
 /-- An operation on its printed arguments. The translator gives each one the
