@@ -495,6 +495,47 @@ test('value re-exports agree with Node through a chain of files', async () => {
   }
 });
 
+test('renamed imports and exports agree with Node', async () => {
+  const project = new URL('./corpus/translate/projects/accept/renamedImports/', import.meta.url);
+  const read = (name: string) => readFileSync(new URL(name, project), 'utf8');
+  // `use.ts` runs as the program's `main.ts`. It calls `triple` of origin.ts
+  // through two renames, `thrice` and `times3`, and `double` as `twice` and
+  // as `dbl`, beside its own `double`.
+  const files = ['origin.ts', 'relay.ts'].map(path => ({ path, source: read(path) }));
+  const source = read('use.ts');
+  const inputs = fc.sample(fc.tuple(fc.bigInt(), fc.boolean()), { seed, numRuns: 50 });
+  const calls = inputs.flatMap(([n, red]) => [
+    { function: 'six', args: [encode(n)] },
+    { function: 'eight', args: [encode(n)] },
+    { function: 'isRed', args: [encode(red ? 'red' : 'blue')] },
+  ]);
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: [{ source, files, calls }] }), encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const result = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs[0];
+  expect(result?.parsed).toBe(true);
+  if (!result?.parsed) return;
+  expect(result.accepted).toBe(true);
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-renamed-imports-'));
+  for (const { path, source: text } of [...files, { path: 'main.ts', source }]) {
+    const js = ts.transpileModule(text, {
+      compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+    }).outputText.replace(/(from\s+["'][^"']*)\.ts(["'])/g, '$1.mjs$2');
+    writeFileSync(join(dir, path.replace(/\.ts$/, '.mjs')), js);
+  }
+  const mod = await import(pathToFileURL(join(dir, 'main.mjs')).href) as {
+    six: (n: bigint) => bigint;
+    eight: (n: bigint) => bigint;
+    isRed: (c: string) => boolean;
+  };
+  for (const [i, [n, red]] of inputs.entries()) {
+    expect(result.results[3 * i]).toEqual({ value: encode(mod.six(n)) });
+    expect(result.results[3 * i + 1]).toEqual({ value: encode(mod.eight(n)) });
+    expect(result.results[3 * i + 2]).toEqual({ value: encode(mod.isRed(red ? 'red' : 'blue')) });
+  }
+});
+
 test('structural recursion agrees with Node', async () => {
   const source = readFileSync(new URL('./corpus/translate/accept/structuralRecursion.ts', import.meta.url), 'utf8');
   const node = { value: 2n, next: { value: 5n, next: { value: 8n, next: null } } };

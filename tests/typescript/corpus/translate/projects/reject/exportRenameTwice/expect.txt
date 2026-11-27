@@ -1,0 +1,1 @@
+'g' is exported twice: a declaration of this file exports it too

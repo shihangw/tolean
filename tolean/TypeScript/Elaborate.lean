@@ -397,7 +397,7 @@ def runChars (chars : List Char) (target : Edition) (m : Module) : Result Module
     let names := match decl with
       | .function _ _ name _ _ _ _ => [name]
       | .exportedVar _ d => [d.name]
-      | .import _ names _ => names.filterMap fun (n : ImportName) => if n.typeOnly then none else some n.name
+      | .import _ names _ => names.filterMap fun (n : ImportName) => if n.typeOnly then none else some n.binding
       | _ => []
     if names.any (fun name => classes.any (·.name == name)) then
       refuse decl.span "class names may not share a runtime binding with another declaration"

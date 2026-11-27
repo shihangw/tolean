@@ -339,8 +339,13 @@ def ClassMember.lines (depth : Nat) : ClassMember → List Line
     (depth, identWord "constructor" :: enclose "(" ")" (params.map CtorParam.words)) :: body.lines depth
   | .method m => ClassMethod.lines depth m
 
+/-- `as a` after a name, or nothing. -/
+def aliasWords : Option String → List Word
+  | some a => [identWord "as", identWord a]
+  | none => []
+
 def ImportName.words (n : ImportName) : List Word :=
-  if n.typeOnly then [identWord "type", identWord n.name] else [identWord n.name]
+  (if n.typeOnly then [identWord "type", identWord n.name] else [identWord n.name]) ++ aliasWords n.alias
 
 def exportWords (exported : Bool) : List Word := if exported then [keywordWord "export"] else []
 

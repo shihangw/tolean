@@ -560,6 +560,22 @@ theorem ClassMember.lineOK : ∀ m : ClassMember, ∀ depth l, l ∈ m.lines dep
         ((fine_enclose hp).line.append (typeAnnotation_line m.returnType))
     · exact Stmt.lineOK m.body depth l hl
 
+theorem ImportName.fine (n : ImportName) : Fine n.words := by
+  unfold ImportName.words
+  cases n.alias with
+  | none =>
+    simp only [aliasWords, List.append_nil]
+    split
+    · exact Fine.ofLine (by simp [identWord]) (LineOK.word (by simp [identWord]))
+    · exact Fine.word (by simp [identWord])
+  | some a =>
+    simp only [aliasWords]
+    have ha : Fine [identWord "as", identWord a] :=
+      Fine.ofLine (by simp [identWord]) (LineOK.word (by simp [identWord]))
+    split
+    · exact (Fine.ofLine (by simp [identWord]) (LineOK.word (by simp [identWord]))).append ha
+    · exact (Fine.word (by simp [identWord])).append ha
+
 theorem Decl.lineOK : ∀ d : Decl, ∀ l ∈ d.lines, LineOK l.2
   | .classDecl d, l, hl => by
     simp only [Decl.lines, ClassDecl.lines, List.mem_cons, List.mem_append,
@@ -604,9 +620,7 @@ theorem Decl.lineOK : ∀ d : Decl, ∀ l ∈ d.lines, LineOK l.2
       intro x hx
       simp only [List.mem_map] at hx
       obtain ⟨n, _, rfl⟩ := hx
-      unfold ImportName.words; split
-      · exact Fine.ofLine (by simp [identWord]) (LineOK.word (by simp [identWord]))
-      · exact Fine.word (by simp [identWord])
+      exact ImportName.fine n
     exact LineOK.cons (by simp [keywordWord]) ((fine_enclose hn).line.append
       (LineOK.cons (by simp [identWord]) (LineOK.cons (by simp) (LineOK.word (by simp [punctWord])))))
   | .exports _ names source, l, hl => by
@@ -615,9 +629,7 @@ theorem Decl.lineOK : ∀ d : Decl, ∀ l ∈ d.lines, LineOK l.2
       intro x hx
       simp only [List.mem_map] at hx
       obtain ⟨n, _, rfl⟩ := hx
-      unfold ImportName.words; split
-      · exact Fine.ofLine (by simp [identWord]) (LineOK.word (by simp [identWord]))
-      · exact Fine.word (by simp [identWord])
+      exact ImportName.fine n
     cases source with
     | none =>
       simpa [fromWords] using LineOK.cons (by simp [keywordWord]) ((fine_enclose hn).line.append
