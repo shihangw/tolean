@@ -1,4 +1,4 @@
-import tolean.TypeScript.EStateM
+import tolean.Core.EStateM
 import tolean.TypeScript.Syntax.Layout
 
 /-!

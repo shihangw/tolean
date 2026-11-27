@@ -4,8 +4,9 @@ import tolean.Go.Proof.LoopFrame
 The translation of a package's pure functions means what the functions mean.
 
 `translate_sound` states it for `translateFuncs`: when a function of the
-output gives a value for a call, the interpreter gives the same value for the
-same call of the source's function. It holds for every package, every order,
+output returns a value for a call, or throws, the interpreter returns the
+same value for the same call of the source's function, or panics with the
+same message. It holds for every package, every order,
 every input and every amount of fuel. The translator never fails as a whole,
 because it leaves out each function that it refuses, so the theorem needs no
 hypothesis about it.
@@ -49,12 +50,13 @@ theorem paramList_names {ctx : Ctx} :
 /-- What `translateFunc` gives for a function that it accepts. -/
 theorem translateFunc_ok {ctx : Ctx} {d : Decl} {decl : IR.Decl} {sig : FnSig}
     (h : translateFunc ctx d = .ok (decl, sig)) :
-    ∃ sp name fields results bsp body, ∃ (ps : List (String × Ty)) (result : Ty) (b : IR.Body),
+    ∃ sp name fields results bsp body, ∃ (ps : List (String × Ty)) (result : Ty) (monadic : Bool)
+      (ret : IR.Ty) (b : IR.Body),
       d = .func sp none name fields results (.block bsp body) ∧
       ps.map (·.1) = Eval.paramNames fields ∧
-      decl = .function name (ps.map fun (n, t) => (n, t.lean)) result.lean b ∧
+      decl = .function name (ps.map fun (n, t) => (n, t.lean)) ret b ∧
       sig.name = name ∧
-      translateTop ctx (ps.map fun (n, t) => Local.mk n t) result body = .ok b := by
+      translateTop ctx (ps.map fun (n, t) => Local.mk n t) result monadic body = .ok b := by
   unfold translateFunc at h
   split at h
   · next sp name params rsp rt bsp body =>
@@ -68,8 +70,16 @@ theorem translateFunc_ok {ctx : Ctx} {d : Decl} {decl : IR.Decl} {sig : FnSig}
       | some result =>
         simp only [hps, hr] at h
         tm_simp at h
-        obtain ⟨-, -, b, hb, rfl, rfl⟩ := h
-        exact ⟨sp, name, params, _, bsp, body, ps, result, b, rfl, paramList_names hps, rfl, rfl, hb⟩
+        obtain ⟨-, -, b, hb, h⟩ := h
+        rcases h with ⟨-, h⟩ | ⟨-, -, b', hb', h⟩
+        · simp only [Prod.mk.injEq] at h
+          obtain ⟨rfl, rfl⟩ := h
+          exact ⟨sp, name, params, _, bsp, body, ps, result, false, _, b, rfl, paramList_names hps,
+            rfl, rfl, hb⟩
+        · simp only [Prod.mk.injEq] at h
+          obtain ⟨rfl, rfl⟩ := h
+          exact ⟨sp, name, params, _, bsp, body, ps, result, true, _, b', rfl, paramList_names hps,
+            rfl, rfl, hb'⟩
   · exact absurd h reject_ne_ok
   · exact absurd h throw_ne_ok
 
@@ -219,16 +229,48 @@ theorem callO_some {fs : Funcs} {fuel : Nat} {ref : DeclRef} {vs : List Val} {v 
       | some o =>
         cases o with
         | normal _ => simp [hl, hlen, hex] at h
+        | panic _ => simp [hl, hlen, hex] at h
         | ret w => simp [hl, hlen, hex] at h; rw [h]
     · simp [hl, hlen] at h
 
-theorem callS_of {p : Eval.Program} {fuel : Nat} {f : String} {vs : List Val} {v : Val}
-    {ps : List String} {st : Stmt} (hl : p.funcs.lookup f = some (ps, st)) (hlen : ps.length = vs.length)
-    (hex : Eval.execStmt p fuel (ps.zip vs).reverse st = some (.ret v)) :
-    callS p (fuel + 1) f vs = some v := by
-  simp [callS, hl, hlen, hex]
-
 variable (decls : List Decl) (order : List String)
+
+/-- The body of a function of the output, run with calls that agree, ends as
+the body of the source's function does, when it returns or panics. -/
+theorem body_agree (fuel : Nat)
+    (hc : CallsAgree (Eval.program decls) (IR.functions ((translateFuncs decls order).map (·.1))) fuel)
+    {f : String} {psO : List String} {b : IR.Body} {vs : List Val}
+    (hl : (IR.functions ((translateFuncs decls order).map (·.1))).lookup ⟨"", f⟩ = some (psO, b))
+    (hlen : psO.length = vs.length) :
+    ∃ ps st, (Eval.program decls).funcs.lookup f = some (ps, st) ∧ ps.length = vs.length ∧
+      ∀ o, IR.Body.exec (IR.functions ((translateFuncs decls order).map (·.1))) fuel
+          (psO.zip vs).reverse b = some o → (∀ ρ, o ≠ .normal ρ) →
+        Eval.execStmt (Eval.program decls) fuel (ps.zip vs).reverse st = some o := by
+  obtain ⟨n, params, ret, b'', hmem, hkey, hx⟩ := lookup_functions hl
+  simp only [DeclRef.mk.injEq, true_and] at hkey
+  subst hkey
+  simp only [Prod.mk.injEq] at hx
+  obtain ⟨rfl, rfl⟩ := hx
+  obtain ⟨r, hr, hr1⟩ := List.mem_map.mp hmem
+  obtain ⟨d, ks, hfind, htr⟩ := translateFuncsFrom_accepted decls order [] (by simp [Accepted]) r hr
+  obtain ⟨sp, name, fields, results, bsp, body, ps, result, monadic, ret', b', rfl, hnames, hdecl,
+    hsig, hstmts⟩ := translateFunc_ok htr
+  rw [hr1] at hdecl
+  simp only [IR.Decl.function.injEq] at hdecl
+  obtain ⟨rfl, rfl, -, rfl⟩ := hdecl
+  rw [hsig] at hfind
+  have hsim := top_sound (Eval.program decls) _ fuel (ctx := ⟨Eval.program decls, ks⟩) rfl hc hstmts
+  have hps : List.map (fun x => x.fst) (List.map (fun x : String × Ty => (x.1, x.2.lean)) ps) =
+      ps.map (·.1) := by simp
+  rw [hps] at hlen ⊢
+  have hlen' : ps.length = vs.length := by simpa using hlen
+  refine ⟨_, _, findFunc_lookup hfind, by rw [← hnames]; exact hlen, fun o hex hno => ?_⟩
+  have hb := hsim _ _ (Agree.refl _) (scoped_params ps vs hlen')
+  rw [← hnames, execStmt_block]
+  cases o with
+  | ret v => rw [hb.1 v hex]; rfl
+  | panic x => rw [hb.2.2 x hex]; rfl
+  | normal ρ => exact absurd rfl (hno ρ)
 
 /-- Every call of the output agrees with the interpreter, by induction on the
 fuel: a call at `fuel + 1` runs a body whose calls have `fuel`. -/
@@ -236,39 +278,39 @@ theorem calls_agree : ∀ fuel, CallsAgree (Eval.program decls)
     (IR.functions ((translateFuncs decls order).map (·.1))) fuel
   | 0 => fun f vs v h => by simp [callO] at h
   | fuel + 1 => fun f vs v h => by
-    have ih := calls_agree fuel
     obtain ⟨psO, b, hl, hlen, hex⟩ := callO_some h
-    obtain ⟨n, params, ret, b'', hmem, hkey, hx⟩ := lookup_functions hl
-    simp only [DeclRef.mk.injEq, true_and] at hkey
-    subst hkey
-    simp only [Prod.mk.injEq] at hx
-    obtain ⟨rfl, rfl⟩ := hx
-    obtain ⟨r, hr, hr1⟩ := List.mem_map.mp hmem
-    obtain ⟨d, ks, hfind, htr⟩ := translateFuncsFrom_accepted decls order [] (by simp [Accepted]) r hr
-    obtain ⟨sp, name, fields, results, bsp, body, ps, result, b', rfl, hnames, hdecl, hsig, hstmts⟩ :=
-      translateFunc_ok htr
-    rw [hr1] at hdecl
-    simp only [IR.Decl.function.injEq] at hdecl
-    obtain ⟨rfl, rfl, -, rfl⟩ := hdecl
-    rw [hsig] at hfind
-    have hsim := top_sound (Eval.program decls) _ fuel (ctx := ⟨Eval.program decls, ks⟩) rfl ih hstmts
-    have hps : List.map (fun x => x.fst) (List.map (fun x : String × Ty => (x.1, x.2.lean)) ps) =
-        ps.map (·.1) := by simp
-    rw [hps] at hlen hex
-    have hlen' : ps.length = vs.length := by simpa using hlen
-    have hbody := (hsim _ _ (Agree.refl _) (scoped_params ps vs hlen')).1 v hex
-    refine callS_of (findFunc_lookup hfind) (by rw [← hnames]; exact hlen) ?_
-    rw [← hnames, execStmt_block, hbody]
-    rfl
+    obtain ⟨ps, st, hl', hlen', hst⟩ := body_agree decls order fuel (calls_agree fuel) hl hlen
+    simp [callS, hl', hlen', hst _ hex (fun _ h => by cases h)]
 
 /-- The pure functions that the translator writes as IR mean what the
-source's functions mean: a call of one of them gives a value only when the
-interpreter gives the same value for the same call. -/
-theorem translate_sound (name : String) (args : List Val) (fuel : Nat) (v : Val)
+source's functions mean: a call of one of them returns a value or panics only
+when the interpreter returns the same value or panics with the same message
+for the same call. -/
+theorem translate_sound (name : String) (args : List Val) (fuel : Nat) (r : Except Val Val)
     (hv : IR.runIn (IR.functions ((translateFuncs decls order).map (·.1))) ⟨"", name⟩ args fuel =
-      some v) :
-    Eval.runIn (Eval.program decls) name args fuel = some v := by
-  have := calls_agree decls order (fuel + 1) name args v (by simpa [callO, IR.runIn] using hv)
-  simpa [callS, Eval.runIn] using this
+      some r) :
+    Eval.runIn (Eval.program decls) name args fuel = some r := by
+  simp only [IR.runIn] at hv
+  cases hl : (IR.functions ((translateFuncs decls order).map (·.1))).lookup ⟨"", name⟩ with
+  | none => simp [hl] at hv
+  | some x =>
+    obtain ⟨psO, b⟩ := x
+    by_cases hlen : psO.length = args.length
+    · obtain ⟨ps, st, hl', hlen', hst⟩ := body_agree decls order fuel (calls_agree decls order fuel) hl hlen
+      cases hex : IR.Body.exec (IR.functions ((translateFuncs decls order).map (·.1))) fuel
+          (psO.zip args).reverse b with
+      | none => simp [hl, hlen, hex] at hv
+      | some o =>
+        cases o with
+        | normal _ => simp [hl, hlen, hex] at hv
+        | ret v =>
+          simp [hl, hlen, hex] at hv
+          subst hv
+          simp [Eval.runIn, hl', hlen', hst _ hex (fun _ h => by cases h)]
+        | panic x =>
+          simp [hl, hlen, hex] at hv
+          subst hv
+          simp [Eval.runIn, hl', hlen', hst _ hex (fun _ h => by cases h)]
+    · simp [hl, hlen] at hv
 
 end tolean.Go.Proof

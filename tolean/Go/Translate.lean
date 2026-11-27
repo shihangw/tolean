@@ -1129,6 +1129,12 @@ def translatePkg (pkg : Pkg) (cfg : Config) (ns : String) (sources : List String
   -- translates them in the order of `funcOrder`, so that each comes after the
   -- functions it calls.
   let pure := Pure.translateFuncs decls (funcOrder.filter (!effectful.contains ·))
+  -- A function that can panic returns an `Except`, which only the proved
+  -- path knows how to call, and it does not call it yet either.
+  for f in funcs do
+    if !(pure.any (·.2.name == f.name)) then
+      if let some g := f.idents.find? fun n => pure.any fun r => r.2.name == n && r.2.panics then
+        throw s!"'{f.name}' calls '{g}', which can panic, and a call of such a function is not supported yet"
   let names : tolean.IR.Names := { clashes := (Eval.program decls).names }
   let run : TM String := do
     -- Functions first, so the interface methods they call are known.

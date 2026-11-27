@@ -6,7 +6,7 @@ Goal: `parse (print t)` gives `t` apart from spans. `Syntax/Source.lean` prints 
 
 | File | Main theorem | Covers |
 |---|---|---|
-| `tolean/TypeScript/EStateM.lean` | `bind_ok`, `bind_eq`, … | monad lemmas for every `EStateM`; `Parse` and `Lex` export them |
+| `tolean/Core/EStateM.lean` | `bind_ok`, `bind_eq`, … | monad lemmas for every `EStateM`; `Parse` and `Lex` export them |
 | `Syntax/Layout.lean` | `Touching.kinds` | `NoBreak`, `Chained`, `Placed`, `Touching`, `Laid`; the lexer and parser proofs share them |
 | `Syntax/RoundTrip.lean` | `types_reads` | types; `Kept`, `past`, `Leaves` |
 | `Syntax/RoundTripExpr.lean` | `exprs_read` | each expression level; `afterOK` congruence; budget corollaries |
