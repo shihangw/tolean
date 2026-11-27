@@ -170,6 +170,17 @@ def valueCode : Eval.Val → IR.Expr
   | .bool b => .bool b
   | .str s => .string s
 
+/-- The items of a counted loop from `lo` up to below `hi`. Two literal
+bounds with at most 256 values give the list of the values, and other
+bounds give `Go.upTo`, which the output evaluates. The limit keeps a written
+list within Lean's compilation recursion depth. -/
+def countedItems (lo hi : IR.Expr) : IR.Expr :=
+  match lo, hi with
+  | .int a, .int b =>
+    if (b - a).toNat ≤ 256 then .list ((tolean.Go.upTo a b).map (valueCode ∘ .int)) .int
+    else .ext .upTo [lo, hi]
+  | _, _ => .ext .upTo [lo, hi]
+
 /-- The type of a constant of the package whose declaration names the type
 `type`, if any, and whose value is `v`. A constant without a type is untyped,
 as an integer, string or boolean literal is. An integer must fit in `int64`,
@@ -490,6 +501,7 @@ def stmtChanges : Stmt → List String
   | .block _ ss => changesList ss
   | .ifStmt _ init _ t e => changesOption init ++ stmtChanges t ++ changesOption e
   | .switchStmt _ init _ _ cs => changesOption init ++ changesClauses cs
+  | .forStmt _ _ _ _ body => stmtChanges body
   | _ => []
 
 def changesList : List Stmt → List String
@@ -663,6 +675,22 @@ def translateStmts (ctx : Ctx) (env : Env) (tail : Tail) : Nat → List Stmt →
       let env' ← declare env sp x t
       return guarded c (.let x c (← translateStmts ctx env' tail fuel rest))
     | .ifStmt sp none c t els => translateIf ctx env tail fuel sp c t els rest
+    | .forStmt sp init cond post (.block bsp ss) => do
+      let some (index, start, stop, reads) := Eval.countedHead init cond post
+        | reject sp "a counted loop needs the form for i := a; i < b; i++, where b reads names, integer literals, len, +, - and *, but not i"
+      unless Eval.countedBodySafe (index :: reads) (.block bsp ss) do
+        reject sp "the counted body must not change its counter or what its bound reads, or contain another loop"
+      let (lo, tlo) ← translateExpr ctx env exprFuel start
+      let (hi, thi) ← translateExpr ctx env exprFuel stop
+      unless tlo.fits .int && thi.fits .int do reject sp "the bounds of a counted loop must be ints"
+      unless (divisors lo).isEmpty && (divisors hi).isEmpty do
+        reject sp "the bounds of a counted loop must not panic"
+      let inner ← declare env sp index .int
+      let changed := (env.filter fun l => (changesList ss).contains l.name)
+      let body ← translateStmts ctx inner (.state (changed.map (·.name))) fuel ss
+      let next ← translateStmts ctx env tail fuel rest
+      return tolean.Core.Loop.lowerLoop sp (changed.map fun l => (l.name, l.type.lean))
+        index .int body (countedItems lo hi) next false none
     -- `if s; c { … }` is the block `{ s; if c { … } }`.
     | .ifStmt sp (some s) c t els =>
       translateStmts ctx env tail fuel (.block sp [s, .ifStmt sp none c t els] :: rest)
@@ -723,21 +751,11 @@ end
 
 /-! ### Functions -/
 
-/-- The first proved counted form starts the function body. Its body uses the
-existing state translation, so returns and nested loops remain refused. -/
-def translateTop (ctx : Ctx) (env : Env) (result : Ty) (monadic : Bool) : List Stmt → TM IR.Body
-  | .forStmt sp init cond post (.block bsp ss) :: rest => do
-    let some (index, items) := Eval.countedHead init cond post
-      | reject sp "a counted loop needs literal bounds, ++, and at most 256 iterations"
-    unless Eval.countedBodySafe index (.block bsp ss) do
-      reject sp "the counted body must not change its counter or contain another loop"
-    let inner ← declare env sp index .int
-    let changed := (env.filter fun l => (changesList ss).contains l.name)
-    let body ← translateStmts ctx inner (.state (changed.map (·.name))) stmtFuel ss
-    let next ← translateStmts ctx env (.ret result monadic) stmtFuel rest
-    return tolean.Core.Loop.lowerLoop sp (changed.map fun l => (l.name, l.type.lean))
-      index .int body (.list (items.map valueCode) .int) next false none
-  | ss => translateStmts ctx env (.ret result monadic) stmtFuel ss
+/-- The body of a function. A counted loop may stand anywhere in it, and the
+statement translation handles it. -/
+def translateTop (ctx : Ctx) (env : Env) (result : Ty) (monadic : Bool) (ss : List Stmt) :
+    TM IR.Body :=
+  translateStmts ctx env (.ret result monadic) stmtFuel ss
 
 /-- The parameters and their types. A parameter without a name, as in
 `func f(int) int`, still takes an argument, so this part refuses it and the

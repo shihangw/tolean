@@ -288,37 +288,55 @@ def withValue (r : Res Val Val) (k : Val → Option Outcome) : Option Outcome :=
 
 @[simp] theorem withValue_none (k : Val → Option Outcome) : withValue none k = none := rfl
 
-/-- A finite counted head with literal bounds. The strict bound keeps the
-last increment within Go's signed 64-bit range. -/
-def countedHead : Option Stmt → Option Expr → Option Stmt → Option (String × List Val)
-  | some (.assign _ ":=" [.ident _ index] [.lit _ .int start]),
-      some (.binary _ "<" (.ident _ test) (.lit _ .int stop)),
+/-- The names that a bound of a counted loop reads, when the bound is an
+integer literal, a name, `len` of a name, or `+`, `-` and `*` of such bounds.
+Other bounds give `none`. -/
+def boundReads : Expr → Option (List String)
+  | .ident _ name => some [name]
+  | .lit _ .int _ => some []
+  | .paren _ e => boundReads e
+  | .call _ (.ident _ "len") [.ident _ s] false => some ["len", s]
+  | .binary _ op a b =>
+    if op == "+" || op == "-" || op == "*" then do
+      return (← boundReads a) ++ (← boundReads b)
+    else none
+  | _ => none
+
+/-- A counted head `for i := a; i < b; i++`: the counter, the bounds, and the
+names that `b` reads. Go evaluates `b` before each iteration. The bound may
+not read the counter, and `countedBodySafe` keeps the body from changing
+what it reads, so each test sees the value that `b` has before the loop. The
+counter stays below `b`, so `i++` never passes Go's signed 64-bit range. -/
+def countedHead : Option Stmt → Option Expr → Option Stmt →
+    Option (String × Expr × Expr × List String)
+  | some (.assign _ ":=" [.ident _ index] [start]),
+      some (.binary _ "<" (.ident _ test) stop),
       some (.incDec _ "++" (.ident _ step)) => do
     if index != test || index != step then none
-    let a ← intLit? start
-    let b ← intLit? stop
-    if a < 0 || b < 0 || a ≥ 2 ^ 63 || b ≥ 2 ^ 63 then none
-    if (b - a).toNat > 256 then none
-    return (index, (List.range' a.toNat (b - a).toNat).map (fun n => .int (Int.ofNat n)))
+    let _ ← boundReads start
+    let reads ← boundReads stop
+    if reads.contains index then none
+    return (index, start, stop, reads)
   | _, _, _ => none
 
 mutual
 
-/-- This subset does not allow the body to change or shadow the counter.
-It also excludes nested loops until their frame proof is available. -/
-def countedBodySafe (index : String) : Stmt → Bool
-  | .assign _ _ [.ident _ name] [_] => name != index
-  | .incDec _ _ (.ident _ name) => name != index
+/-- This subset does not allow the body to change or shadow the counter or a
+name that the bound reads, given in `fixed`. It also excludes nested loops
+until their frame proof is available. -/
+def countedBodySafe (fixed : List String) : Stmt → Bool
+  | .assign _ _ [.ident _ name] [_] => !fixed.contains name
+  | .incDec _ _ (.ident _ name) => !fixed.contains name
   | .ret _ _ => true
-  | .block _ ss => countedStatementsSafe index ss
-  | .ifStmt _ none _ t none => countedBodySafe index t
-  | .ifStmt _ none _ t (some e) => countedBodySafe index t && countedBodySafe index e
-  | .decl _ (.mk _ "var" [.value _ [name] _ _]) => name != index
+  | .block _ ss => countedStatementsSafe fixed ss
+  | .ifStmt _ none _ t none => countedBodySafe fixed t
+  | .ifStmt _ none _ t (some e) => countedBodySafe fixed t && countedBodySafe fixed e
+  | .decl _ (.mk _ "var" [.value _ [name] _ _]) => !fixed.contains name
   | _ => false
 
-def countedStatementsSafe (index : String) : List Stmt → Bool
+def countedStatementsSafe (fixed : List String) : List Stmt → Bool
   | [] => true
-  | s :: ss => countedBodySafe index s && countedStatementsSafe index ss
+  | s :: ss => countedBodySafe fixed s && countedStatementsSafe fixed ss
 
 end
 
@@ -611,15 +629,23 @@ def execStmt (p : Program) (fuel : Nat) (env : Env) : Stmt → Option Outcome
     | .ret v => some (.ret v)
     | .panic x => some (.panic x)
     | .normal env' => some (.normal (env'.drop (env'.length - env.length)))
-  -- Go specification, "For statements with for clause". The body cannot
-  -- change the counter, and literal bounds cannot change between iterations.
-  | .forStmt _ init cond post (.block span body) => do
-    let (index, items) ← countedHead init cond post
-    if !countedBodySafe index (.block span body) then none
+  -- Go specification, "For statements with for clause". The init statement
+  -- runs once, and the condition before each iteration. The body cannot
+  -- change the counter or what the bound reads, so the bound keeps the value
+  -- that it has before the loop, and the counter takes the values of `upTo`.
+  | .forStmt _ init@(some (.assign _ ":=" [.ident _ _] [start]))
+      cond@(some (.binary _ "<" (.ident _ _) stop)) post (.block span body) => do
+    let (index, _, _, reads) ← countedHead init cond post
+    if !countedBodySafe (index :: reads) (.block span body) then none
+    withValue (eval p fuel env start) fun lo =>
+    withValue (eval p fuel env stop) fun hi => do
+    let .int lo := lo | none
+    let .int hi := hi | none
     let out ← tolean.Core.Loop.execLoop
       (fun inner => (exec p fuel inner body).map Outcome.toLoop)
       (fun value outer => some ((index, value) :: outer))
-      (fun outer inner => some (inner.drop (inner.length - outer.length))) env items
+      (fun outer inner => some (inner.drop (inner.length - outer.length))) env
+      ((upTo lo hi).map .int)
     match out with
     | .normal inner => some (.normal inner)
     | .ret (.ok value) => some (.ret value)

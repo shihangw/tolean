@@ -44,6 +44,9 @@ inductive ExprExt where
   /-- `(a, b, …)`: the arguments of a call, evaluated for a test of their
   divisors without the call itself. The output binds it to `_`. -/
   | args
+  /-- `(Go.upTo a b)`: the values of a counter from `a` up to below `b`. Only
+  a loop's list of items uses it. -/
+  | upTo
 deriving BEq, Repr, Inhabited, DecidableEq
 
 abbrev Ty := tolean.IR.Ty TyExt
@@ -116,6 +119,7 @@ def ExprExt.print (names : tolean.IR.Names) (op : ExprExt) (args : List String) 
   | .strGe, [a, b] => s!"({leanName names "Go.strGe"} {arg a} {arg b})"
   | .indexFault, [a, b] => s!"({leanName names "Go.indexFault"} {arg a} {arg b})"
   | .after, [a, b] => s!"({leanName names "Go.after"} {arg a} {arg b})"
+  | .upTo, [a, b] => s!"({leanName names "Go.upTo"} {arg a} {arg b})"
   | .args, [a] => a
   | .args, args@(_ :: _) => "(" ++ ", ".intercalate args ++ ")"
   | _, _ => ""
