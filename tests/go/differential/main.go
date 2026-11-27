@@ -22,8 +22,9 @@
 // /=, %=, ++ and --; if statements that change locals or return, with and
 // without an init statement; expression switches with and without a tag, an
 // init statement, several values in a case and a default anywhere, that
-// change locals or return; one counted loop at the start of a body; and calls
-// of functions declared earlier. A function that may panic is called only
+// change locals or return; one counted loop at the start of a body; calls
+// of functions declared earlier; and package-level constants, typed and
+// untyped, alone and in groups. A function that may panic is called only
 // where the subset allows it: alone after :=, =, var or return. Go's main
 // recovers each panic and prints its message. When the subset grows, add the
 // new construct here too.
@@ -94,6 +95,8 @@ type gen struct {
 	callable []fn
 	// The locals in scope, innermost last.
 	locals []*local
+	// The constants of the program being written.
+	consts []*constant
 	next   int
 	// Inside a loop, a string assignment reads no string local and calls
 	// nothing, so that a string cannot double on each iteration.
@@ -143,6 +146,67 @@ func (g *gen) literal(t ty) string {
 	}
 }
 
+// constant is a package-level constant. An untyped one holds an integer,
+// and it can stand for an int or an int64.
+type constant struct {
+	name    string
+	t       ty
+	untyped bool
+}
+
+// constants writes the package-level constants of one program, alone or in
+// a group. Their integers are small, so that -C cannot overflow.
+func (g *gen) constants(p int) {
+	g.consts = nil
+	n := g.pick(4)
+	if n == 0 {
+		return
+	}
+	grouped := g.chance(0.5)
+	if grouped {
+		g.line("const (")
+		g.indent++
+	}
+	for j := range n {
+		c := &constant{name: fmt.Sprintf("P%dK%d", p, j), t: allTypes[g.pick(len(allTypes))]}
+		value := g.literal(c.t)
+		if c.t.isInt() && g.chance(0.3) {
+			value = "-" + value
+		}
+		decl := c.name + " " + c.t.String() + " = " + value
+		if c.t.isInt() && g.chance(0.4) {
+			c.untyped = true
+			decl = c.name + " = " + value
+		}
+		if grouped {
+			g.line("%s", decl)
+		} else {
+			g.line("const %s", decl)
+		}
+		g.consts = append(g.consts, c)
+	}
+	if grouped {
+		g.indent--
+		g.line(")")
+	}
+	g.line("")
+}
+
+// leaf returns a constant expression of type t: a literal, or a constant
+// of the package.
+func (g *gen) leaf(t ty) string {
+	var fit []*constant
+	for _, c := range g.consts {
+		if c.t == t || (c.untyped && t.isInt()) {
+			fit = append(fit, c)
+		}
+	}
+	if len(fit) > 0 && g.chance(0.4) {
+		return fit[g.pick(len(fit))].name
+	}
+	return g.literal(t)
+}
+
 // expr returns an expression of type t, and whether Go reads it as a
 // constant. Two constant operands of an arithmetic operator would make Go
 // fold them at compile time, where overflow is an error, so the generator
@@ -163,7 +227,7 @@ func (g *gen) expr(t ty, depth int) (string, bool) {
 			l.used = true
 			return l.name, false
 		}
-		return g.literal(t), true
+		return g.leaf(t), true
 	}
 	var calls []fn
 	for _, f := range g.callable {
@@ -904,6 +968,7 @@ func check(seed int64, programs int) error {
 	var calls []call
 	for p := range programs {
 		g.callable = nil
+		g.constants(p)
 		for j := range 1 + g.pick(4) {
 			f := fn{name: fmt.Sprintf("P%dF%d", p, j), result: allTypes[g.pick(len(allTypes))]}
 			for range g.pick(4) {
