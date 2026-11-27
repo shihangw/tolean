@@ -330,8 +330,9 @@ structure Program where
   /-- The names that the package or its imports declare. A name such as
   `int` or `true` is predeclared only when the package does not declare it. -/
   names : List String
-  /-- Each package-level constant that the subset models: its name, its type
-  when the declaration names one, and its value. -/
+  /-- Each package-level constant, and each package-level variable that
+  never changes, that the subset models: its name, its type when the
+  declaration names one, and its value. -/
   consts : List (String × Option Expr × Val) := []
 
 /-- The names of the parameters, in order. A parameter without a name, as in
@@ -414,11 +415,154 @@ def declConsts (names : List String) : Decl → List (String × Option Expr × V
     | _ => none
   | _ => []
 
+/-! ### Package-level variables
+
+A package-level variable joins the program's values only when nothing can
+change it after package initialization. Then every read gives its initial
+value, as a constant does. The checks below are syntactic and conservative:
+they look at every function, method, `init` function and function literal of
+the package, and they reject a name on the left of any assignment, as the
+target of `++` or `--` or of a `range` with `=`, or after `&`, even where a
+local of the same name is meant. Another package can assign an exported
+variable, so only an unexported one qualifies. -/
+
+/-- The variable that an assignment to `e` changes, or whose address `&e`
+takes: `x` for `x`, `x.f`, `x[i]`, `x[i:j]`, `*x` and `(x)`. -/
+def rootName : Expr → Option String
+  | .ident _ n => some n
+  | .selector _ o _ => rootName o
+  | .index _ o _ => rootName o
+  | .sliceExpr _ o _ _ => rootName o
+  | .paren _ e => rootName e
+  | .star _ e => rootName e
+  | _ => none
+
+mutual
+
+/-- The names that `&` takes the address of somewhere in an expression,
+including in the body of a function literal. -/
+def Expr.writes : Expr → List String
+  | .ident .. | .lit .. => []
+  | .composite _ t es => optExprWrites t ++ exprsWrites es
+  | .keyValue _ k v => Expr.writes k ++ Expr.writes v
+  | .paren _ e => Expr.writes e
+  | .selector _ o _ => Expr.writes o
+  | .index _ o i => Expr.writes o ++ Expr.writes i
+  | .sliceExpr _ o l h => Expr.writes o ++ optExprWrites l ++ optExprWrites h
+  | .call _ f as _ => Expr.writes f ++ exprsWrites as
+  | .star _ e => Expr.writes e
+  | .unary _ op a => (if op == "&" then (rootName a).toList else []) ++ Expr.writes a
+  | .binary _ _ l r => Expr.writes l ++ Expr.writes r
+  | .sliceType .. | .arrayType .. | .mapType .. | .structType .. | .interfaceType ..
+  | .funcType .. | .ellipsis .. => []
+  | .typeAssert _ o _ => Expr.writes o
+  | .funcLit _ _ b => Stmt.writes b
+
+def exprsWrites : List Expr → List String
+  | [] => []
+  | e :: es => Expr.writes e ++ exprsWrites es
+
+def optExprWrites : Option Expr → List String
+  | none => []
+  | some e => Expr.writes e
+
+/-- The names that a statement may change: the roots of its assignment
+targets, and the names whose address it takes. -/
+def Stmt.writes : Stmt → List String
+  | .block _ ss => stmtsWrites ss
+  | .expr _ e => Expr.writes e
+  | .assign _ _ lhs rhs => lhs.filterMap rootName ++ exprsWrites lhs ++ exprsWrites rhs
+  | .incDec _ _ t => (rootName t).toList ++ Expr.writes t
+  | .decl _ d => genWrites d
+  | .ret _ es => exprsWrites es
+  | .brk _ | .cont _ => []
+  | .ifStmt _ i c b e => optStmtWrites i ++ Expr.writes c ++ Stmt.writes b ++ optStmtWrites e
+  | .forStmt _ i c p b => optStmtWrites i ++ optExprWrites c ++ optStmtWrites p ++ Stmt.writes b
+  | .range _ op k v x b =>
+    (if op == some "=" then (k.bind rootName).toList ++ (v.bind rootName).toList else []) ++
+      optExprWrites k ++ optExprWrites v ++ Expr.writes x ++ Stmt.writes b
+  | .switchStmt _ i t _ cs => optStmtWrites i ++ optExprWrites t ++ clausesWrites cs
+  | .typeSwitch _ i g _ cs => optStmtWrites i ++ Stmt.writes g ++ clausesWrites cs
+  | .deferStmt _ c => Expr.writes c
+
+def stmtsWrites : List Stmt → List String
+  | [] => []
+  | s :: ss => Stmt.writes s ++ stmtsWrites ss
+
+def optStmtWrites : Option Stmt → List String
+  | none => []
+  | some s => Stmt.writes s
+
+def clausesWrites : List CaseClause → List String
+  | [] => []
+  | .mk _ es body :: cs => (match es with | some es => exprsWrites es | none => []) ++
+      stmtsWrites body ++ clausesWrites cs
+
+/-- The writes of a declaration inside a function: the initial values of a
+`var` or `const`. -/
+def genWrites : GenDecl → List String
+  | .mk _ _ specs => specsWrites specs
+
+def specsWrites : List Spec → List String
+  | [] => []
+  | .value _ _ _ vs :: rest => exprsWrites vs ++ specsWrites rest
+  | _ :: rest => specsWrites rest
+
+end
+
+/-- The names that some function of the package may change, and those whose
+address some initial value of the package takes. -/
+def declWrites : Decl → List String
+  | .func _ _ _ _ _ body => Stmt.writes body
+  | .gen d => genWrites d
+
+/-- A name is exported when it starts with an upper-case letter (Go
+specification, "Exported identifiers"). The parser reads ASCII names only. -/
+def exported (name : String) : Bool :=
+  match name.toList with
+  | c :: _ => c.isUpper
+  | [] => false
+
+/-- The zero value of a predeclared type name, unless the package declares
+it (Go specification, "The zero value"). -/
+def basicZero (names : List String) : Expr → Option Val
+  | .ident _ n =>
+    if names.contains n then none
+    else match n with
+      | "int" | "int64" => some (.int 0)
+      | "bool" => some (.bool false)
+      | "string" => some (.str "")
+      | _ => none
+  | _ => none
+
+/-- The variables of one top-level declaration that never change (Go
+specification, "Variable declarations" and "Package initialization"): a
+`var` spec that declares one unexported name that nothing writes, with a
+literal value, as a constant has, or with a type and no value, so that it
+starts at the type's zero value. Without a type, an integer variable is an
+`int`, the default type of its literal. A variable with any other initial value
+leaves the subset, because its value would depend on the order of package
+initialization. -/
+def declVars (names written : List String) : Decl → List (String × Option Expr × Val)
+  | .gen (.mk _ "var" specs) => specs.filterMap fun
+    | .value _ [x] type values =>
+      if exported x || written.contains x || x == "_" then none
+      else match values, type with
+        | [e], _ => constValue? names e |>.map fun v =>
+          match type, v with
+          | none, .int _ => (x, some (.ident default "int"), v)
+          | _, _ => (x, type, v)
+        | [], some t => (fun v => (x, some t, v)) <$> basicZero names t
+        | _, _ => none
+    | _ => none
+  | _ => []
+
 /-- The program of the declarations of a package's files. -/
 def program (decls : List Decl) : Program where
   funcs := decls.filterMap funcOf
   names := decls.flatMap declNames
-  consts := decls.flatMap (declConsts (decls.flatMap declNames))
+  consts := decls.flatMap (declConsts (decls.flatMap declNames)) ++
+    decls.flatMap (declVars (decls.flatMap declNames) (decls.flatMap declWrites))
 
 /-- The value of a package-level name that no variable hides: a constant of
 the package, or a predeclared name that the package does not declare (Go

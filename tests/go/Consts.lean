@@ -51,5 +51,22 @@ private def refused (consts body : String) : Bool :=
 #guard refused "const A = 2\nconst B = A" "return x + B"
 #guard refused "type T int\nconst A T = 2" "return x + A"
 #guard refused "const Big = 9223372036854775808" "return x + Big"
--- A package-level `var` stays on the string path.
+-- An exported package-level `var` stays on the string path.
 #guard refused "var V = 2" "return x + V"
+
+/-! Package-level variables that nothing changes. -/
+
+#guard check "var n = 7" "return x + n" 3 10
+#guard check "var n int" "return x + n" 3 3
+#guard check "var (\n  s string\n  b = true\n)" "if b && s == \"\" { return 1 }; return 0" 0 1
+-- An untyped integer variable is an int, so it may meet another int.
+#guard check "var n = 2\nconst M = 3" "return n * M + x" 1 7
+-- A variable that some function assigns, increments or takes the address of.
+#guard refused "var n = 7\nfunc G() { n = 8 }" "return x + n"
+#guard refused "var n = 7\nfunc G() { n++ }" "return x + n"
+#guard refused "var n = 7\nfunc G() *int { return &n }" "return x + n"
+#guard refused "var n = 7\nfunc G() { f := func() { n += 1 }; f() }" "return x + n"
+-- An exported variable, which another package can assign.
+#guard refused "var N = 7" "return x + N"
+-- A variable whose initial value is no literal.
+#guard refused "var n = len(\"ab\")" "return x + n"

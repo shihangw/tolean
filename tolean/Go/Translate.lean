@@ -1052,7 +1052,12 @@ def transType (td : TypeDef) : TM String := do
 
 def transValue (v : ValueDef) : TM String := do
   modify fun s => { s with file := v.file }
-  let some value := v.value | fail v.span "a package-level value needs an initializer"
+  -- `var x T` starts at the zero value of `T` (Go specification, "The zero
+  -- value").
+  let some value := v.value | do
+    let some te := v.type | fail v.span "a package-level value needs an initializer"
+    let t ← resolveType te
+    return s!"def {leanName v.name} : {← leanType t} := {← zeroOf t}"
   let (x, t) ← transExpr value
   let t ← match v.type with
     | some te => resolveType te

@@ -1,9 +1,9 @@
 {"tolean": "0.3.1",
  "sources":
- [{"sha256": "adfb5323173f70446d423eba0b8d169193160b95eeda2d66a54bfcd99ea08e6f",
+ [{"sha256": "90092ce1defd21cf5f178478c094bab4dac244710dd37a563968b161649d8d7d",
    "path": "corpus/translate/consts/consts.go"}],
  "output":
- {"sha256": "9f0ace525cdcb952fb289669aaedcc2e05de0b069cc0dfa723de964fbbdb3e15",
+ {"sha256": "eb7cbe89bb136a49e6084845877c92e52d52f819ea89f36af3ea7bd8856c6ec5",
   "path": "corpus/translate/consts/Consts.lean"},
  "nodes":
  [{"status": "tested",

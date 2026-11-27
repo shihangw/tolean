@@ -25,3 +25,12 @@ func Charge(amount int64) int64 {
 func Label(name string) string {
 	return Prefix + name
 }
+
+var fallback string
+
+func NameOr(name string) string {
+	if name == "" {
+		return fallback
+	}
+	return name
+}
