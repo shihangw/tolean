@@ -561,7 +561,14 @@ func (g *gen) stateIfInit(depth int) {
 // one of them. A constant case value appears at most once, because Go refuses
 // a duplicate constant case. It reports false when it finds no switch
 // expression.
+//
+// The translation repeats the switch expression in the test of each case,
+// and joins the values of a case with ||, so the subset refuses a division
+// there, and the head divides nothing.
 func (g *gen) switchHead(clauses int) (string, [][]string, bool) {
+	saved := g.noDivide
+	g.noDivide = true
+	defer func() { g.noDivide = saved }()
 	header := "switch "
 	t := allTypes[g.pick(len(allTypes))]
 	tag := ""
