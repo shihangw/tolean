@@ -2979,6 +2979,16 @@ test('normal-completion map borrows copy the final map back without aliases', as
         'const m = new Map<bigint, bigint>(); forward(m, g, x); return x; }',
       refused: true,
     },
+    ...Array.from({ length: 40 }, (_, seed) => ({
+      source: new Gen(seed + 2000).twoMapBorrowProgram(seed % 2 === 1),
+      refused: false,
+    })),
+    {
+      source: 'function move(a: Map<bigint, bigint>, b: Map<bigint, bigint>, x: bigint): void { a.delete(1n); b.set(1n, x); }\n' +
+        'export function f(x: bigint): bigint { const m = new Map<bigint, bigint>([[1n, 4n]]); ' +
+        'move(m, m, x); return m.get(1n) ?? 0n; }',
+      refused: true,
+    },
   ];
   const inputs = [-9n, 0n, 17n];
   const run = spawnSync(tolean, ['interpret'], {

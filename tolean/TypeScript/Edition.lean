@@ -164,10 +164,10 @@ inductive Feature where
   with a literal replacement without GetSubstitution tokens
   (ES2024 §22.1.3.19, §22.2.6.11 and §22.1.3.19.1). -/
   | regexpReplace
-  /-- A call changes an exclusively owned Map argument: `EvaluateCall`,
+  /-- A call changes one or more exclusively owned Map arguments: `EvaluateCall`,
   `OrdinaryCallBindThis`, `FunctionDeclarationInstantiation`,
   `Map.prototype.set`, `Map.prototype.delete` and `ReturnStatement`.
-  Copying the final map back
+  Copying the final maps back
   models the shared object without exposing an alias. Maps date to ES2015. -/
   | mapBorrow
   /-- `**` and `**=`: `ExponentiationExpression`. -/
@@ -256,7 +256,7 @@ def Feature.describe : Feature → String
   | .localSiblingCalls => "calls between local functions"
   | .regexp => "regular expressions without flags"
   | .regexpReplace => "regular expression replacement without substitutions"
-  | .mapBorrow => "a call that changes an exclusively owned Map argument"
+  | .mapBorrow => "a call that changes exclusively owned Map arguments"
   | .exponent => "'**'"
   | .objectSpread => "object spread '...'"
   | .bigint => "bigint"
