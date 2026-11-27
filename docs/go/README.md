@@ -93,9 +93,26 @@ a transfer with pure functions.
 A pure function takes and returns `int`, `int64`, `bool` and `string`
 values and calls only other pure functions. Its body may declare locals with
 `:=` or `var`, assign them with `=`, `+=`, `-=`, `*=`, `++` and `--`, test
-with `if` and `else`, and return. The translator writes each pure function
-through `tolean/Go/Translate/Pure.lean`, which proves that translation, and
-it writes everything else as before.
+with `if`, `else` and `switch`, and return. The translator writes each pure
+function through `tolean/Go/Translate/Pure.lean`, which proves that
+translation, and it writes everything else as before.
+
+An `if` may have an init statement, as in `if d := x - y; d > 0 { … }`. A
+`switch` may have a tag or none, an init statement, several values in one
+case, and a `default` clause anywhere in its body. The translator writes a
+switch as the chain of `if` statements that Go's rules give it: the first
+case value that equals the tag picks its clause, and `default` runs when
+none does. A plain block `{ … }` is accepted too. `Proof/Switch.lean` proves
+that the interpreter gives each of these statements the meaning of the
+statements that the translator writes for it.
+
+Three forms of these statements stay on the string translation. An `if` with
+an init statement, a `switch` or a block that returns on some path must be
+the last statement of its list, so `if v := f(); v > 0 { return v }` cannot
+be followed by more code. A switch with a tag needs at least one case value,
+because only a case test evaluates the tag. `break` inside a switch is
+refused. The [decision record](../decisions/2026-11-26-go-switch-as-if-chain.md)
+gives the reasons.
 
 The proved path also accepts a counted loop as the first statement of a
 function: `for i := a; i < b; i++ { body }`. Both bounds must be nonnegative

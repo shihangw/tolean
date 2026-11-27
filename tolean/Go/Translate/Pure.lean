@@ -7,8 +7,9 @@ The part of the Go translator that builds the Tolean IR, for pure functions.
 A pure function here takes and returns `int`, `int64`, `bool` and `string`
 values, and calls only pure functions that this part has already
 translated. Its body may declare and assign locals, use `+=`, `-=`, `*=`,
-`++` and `--`, test with `if` and `else`, and return. Integer arithmetic
-wraps through `Go.wrap64`, as Go's does.
+`++` and `--`, test with `if`, `else` and `switch`, and return. An `if` or a
+`switch` may have an init statement. Integer arithmetic wraps through
+`Go.wrap64`, as Go's does.
 
 The translator is a total function, so that Lean can reason about it.
 `translate_sound` in `tolean/Go/Proof/Package.lean` proves that every

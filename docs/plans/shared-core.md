@@ -155,8 +155,11 @@ written, so that other documents can name a step.
    This follows the second-user rule in step 6, rather than extracting
    an interface fitted only to TypeScript. Each stage ends green and
    preserves TypeScript output and certificate counts after #292's
-   runtime import changes. This step concerns `for`; later records will
-   cover `switch` and `if`.
+   runtime import changes. This step concerns `for`. Go's `switch` and its
+   `if` with an init statement need no shared piece, because the translator
+   writes them with the IR's `ite` and `letState`, as the
+   [decision record](../decisions/2026-11-26-go-switch-as-if-chain.md)
+   explains.
 
 ## Open questions
 
