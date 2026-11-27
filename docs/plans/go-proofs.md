@@ -45,13 +45,6 @@ Go guide documents it from then on.
 | A function with several results, and `a, b := f()` | A tuple | Named results |
 | `error`, `errors.New` and `fmt.Errorf` with a leading `%w` | `Option GoError`, as today | Other uses of `fmt` |
 
-### Operators
-
-| Go | Lean | Refused |
-|---|---|---|
-| `<` and the other orders on strings | The order of UTF-8 bytes | |
-| `len(s)` on a string | The number of UTF-8 bytes | Indexing a string, until the interpreter models bytes |
-
 ### Statements and loops
 
 | Go | Lean | Refused |
@@ -94,11 +87,6 @@ change the separate work on `switch` and `if`.
 - The interpreter assumes that `int` is 64 bits wide, as it is on every
   64-bit platform. Should the translator refuse `int` and accept only
   `int64`, so that a claim holds on 32-bit platforms too?
-- A Go string is a sequence of bytes, and the interpreter models it as a
-  Lean `String`, which is a sequence of Unicode characters. The two agree for
-  the operations of the subset on valid UTF-8. Indexing a string would need
-  the bytes. Should strings become lists of bytes, as TypeScript's became
-  lists of UTF-16 code units?
 - Recursion: the proved path refuses a function that calls itself, because
   Lean would need a proof that the recursion ends. TypeScript's plan has the
   same open question.

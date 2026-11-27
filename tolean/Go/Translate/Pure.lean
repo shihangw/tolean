@@ -296,10 +296,10 @@ def translateBinary (sp : Span) (o : BinOp) (a : IR.Expr) (ta : Ty) (b : IR.Expr
     TM (IR.Expr × Ty) :=
   match o with
   | .land =>
-    if !(divisors b).isEmpty then reject sp "the right operand of && may not divide"
+    if !(divisors b).isEmpty then reject sp "the right operand of && may not divide or index a string"
     else if ta = .bool ∧ tb = .bool then pure (.and a b, .bool) else reject sp "&& needs booleans"
   | .lor =>
-    if !(divisors b).isEmpty then reject sp "the right operand of || may not divide"
+    if !(divisors b).isEmpty then reject sp "the right operand of || may not divide or index a string"
     else if ta = .bool ∧ tb = .bool then pure (.or a b, .bool) else reject sp "|| needs booleans"
   | .quo => divide sp .tdiv a ta b tb
   | .rem => divide sp .tmod a ta b tb

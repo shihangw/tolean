@@ -22,8 +22,11 @@
 // change locals or return, with and without an init statement; expression
 // switches with and without a tag, an init statement, several values in a
 // case and a default anywhere, that change locals or return; one counted loop
-// at the start of a body; and calls of functions declared earlier. When the subset grows, add the new construct
-// here too.
+// at the start of a body; calls of functions declared earlier; and len(s),
+// the byte s[i] converted to int or int64, and the orders of strings. An
+// index out of range panics, and the check compares the panic's message. A
+// function that may panic is never called, because the subset refuses such
+// a call. When the subset grows, add the new construct here too.
 //
 // Run it from tests/go after `lake build`:
 //
@@ -92,6 +95,11 @@ type gen struct {
 	// Inside a loop, a string assignment reads no string local and calls
 	// nothing, so that a string cannot double on each iteration.
 	inLoop, literalStrings bool
+	// noIndex: the expression is an operand that Go may not evaluate, the
+	// right operand of && or ||, where the subset refuses an index.
+	noIndex bool
+	// indexed: the current function indexes a string, so it may panic.
+	indexed bool
 }
 
 func (g *gen) line(format string, args ...any) {
@@ -119,7 +127,7 @@ func (g *gen) visible(t ty, mutable bool) []*local {
 	return out
 }
 
-var words = []string{"", "a", "ab", "Go", "xyz", "lean"}
+var words = []string{"", "a", "ab", "Go", "xyz", "lean", "é", "日本"}
 
 func (g *gen) literal(t ty) string {
 	switch t {
@@ -170,6 +178,18 @@ func (g *gen) expr(t ty, depth int) (string, bool) {
 	}
 	switch t {
 	case tInt, tInt64:
+		if g.chance(0.1) {
+			a, c := g.expr(tString, depth-1)
+			if t == tInt {
+				return "len(" + a + ")", c
+			}
+			return "int64(len(" + a + "))", c
+		}
+		if !g.noIndex && g.chance(0.15) {
+			if e, ok := g.index(t, depth-1); ok {
+				return e, false
+			}
+		}
 		if g.chance(0.15) {
 			a, c := g.expr(t, depth-1)
 			return "-(" + a + ")", c
@@ -192,7 +212,10 @@ func (g *gen) expr(t ty, depth int) (string, bool) {
 		case 1:
 			op := []string{"&&", "||"}[g.pick(2)]
 			a, ca := g.expr(tBool, depth-1)
+			saved := g.noIndex
+			g.noIndex = true
 			b, cb := g.expr(tBool, depth-1)
+			g.noIndex = saved
 			return "(" + a + " " + op + " " + b + ")", ca && cb
 		case 2:
 			it := []ty{tInt, tInt64}[g.pick(2)]
@@ -205,6 +228,9 @@ func (g *gen) expr(t ty, depth int) (string, bool) {
 		default:
 			et := allTypes[g.pick(len(allTypes))]
 			op := []string{"==", "!="}[g.pick(2)]
+			if et == tString && g.chance(0.5) {
+				op = []string{"<", "<=", ">", ">="}[g.pick(4)]
+			}
 			if et.isInt() {
 				a, b, ok := g.intOperands(et, depth-1)
 				if !ok {
@@ -217,6 +243,31 @@ func (g *gen) expr(t ty, depth int) (string, bool) {
 			return "(" + a + " " + op + " " + b + ")", ca && cb
 		}
 	}
+}
+
+// index returns int(s[i]) or int64(s[i]). Go refuses a constant index that
+// is negative, and a constant index out of the range of a constant string, so
+// a constant index is a small literal and the string is not constant then.
+func (g *gen) index(t ty, depth int) (string, bool) {
+	// A failed attempt reads no local, because only a constant fails, so
+	// no local counts as used when the index is dropped.
+	var s, i string
+	if g.chance(0.5) {
+		e, ok := g.nonConst([]ty{tInt, tInt64}[g.pick(2)], depth)
+		if !ok {
+			return "", false
+		}
+		i = e
+		s, _ = g.expr(tString, depth)
+	} else {
+		e, ok := g.nonConst(tString, depth)
+		if !ok {
+			return "", false
+		}
+		s, i = e, strconv.Itoa(g.pick(6))
+	}
+	g.indexed = true
+	return fmt.Sprintf("%s(%s[%s])", t, s, i), true
 }
 
 // intOperands returns two operands of the integer type t for a binary
@@ -459,6 +510,12 @@ func (g *gen) stateIfInit(depth int) {
 // a duplicate constant case. It reports false when it finds no switch
 // expression.
 func (g *gen) switchHead(clauses int) (string, [][]string, bool) {
+	// Go evaluates a case value only when no earlier one matched, and the
+	// subset refuses an index there. It refuses one in the tag too, which
+	// every comparison reads.
+	saved := g.noIndex
+	g.noIndex = true
+	defer func() { g.noIndex = saved }()
 	header := "switch "
 	t := allTypes[g.pick(len(allTypes))]
 	tag := ""
@@ -661,8 +718,11 @@ func (g *gen) loop() {
 	g.line("}")
 }
 
-func (g *gen) function(f fn) {
+// function writes f, and reports whether it indexes a string, so that it may
+// panic.
+func (g *gen) function(f fn) bool {
 	g.locals = nil
+	g.indexed = false
 	params := make([]string, len(f.params))
 	for i, p := range f.params {
 		l := &local{name: fmt.Sprintf("p%d", i), t: p, mutable: true}
@@ -678,6 +738,7 @@ func (g *gen) function(f fn) {
 	g.indent--
 	g.line("}")
 	g.line("")
+	return g.indexed
 }
 
 func (g *gen) value(t ty) (goText, leanVal, leanArg string) {
@@ -789,8 +850,9 @@ func check(seed int64, programs int) error {
 			for range g.pick(4) {
 				f.params = append(f.params, allTypes[g.pick(len(allTypes))])
 			}
-			g.function(f)
-			g.callable = append(g.callable, f)
+			if !g.function(f) {
+				g.callable = append(g.callable, f)
+			}
 			order = append(order, f.name)
 			for range callsPerFunction {
 				c := call{fn: f.name, result: f.result}
@@ -811,7 +873,20 @@ func check(seed int64, programs int) error {
 
 	// Go: a main that prints each result on its own line.
 	var m strings.Builder
-	m.WriteString("package main\n\nimport \"fmt\"\n\nfunc main() {\n")
+	m.WriteString("package main\n\nimport \"fmt\"\n\n")
+	// show runs a call, and returns what it prints, or the message of its panic
+	// after "panic: ".
+	m.WriteString(`func show(f func() string) (out string) {
+	defer func() {
+		if r := recover(); r != nil {
+			out = fmt.Sprint("panic: ", r)
+		}
+	}()
+	return f()
+}
+
+func main() {
+`)
 	for _, c := range calls {
 		format := "%d"
 		switch c.result {
@@ -820,7 +895,8 @@ func check(seed int64, programs int) error {
 		case tString:
 			format = "%q"
 		}
-		fmt.Fprintf(&m, "\tfmt.Printf(\"%s\\n\", %s(%s))\n", format, c.fn, strings.Join(c.goArgs, ", "))
+		fmt.Fprintf(&m, "\tfmt.Println(show(func() string { return fmt.Sprintf(%q, %s(%s)) }))\n",
+			format, c.fn, strings.Join(c.goArgs, ", "))
 	}
 	m.WriteString("}\n")
 	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(m.String()), 0o644); err != nil {
@@ -858,6 +934,28 @@ func check(seed int64, programs int) error {
 	l.WriteString("import tolean.Go.Spec.Basic\nimport tolean.Go.Syntax.Parser\nimport tolean.Go.Proof.Package\n")
 	l.WriteString(body)
 	l.WriteString("\nopen tolean.Go\n\n")
+	// agrees compares what a translated function returns with Go's result. A
+	// function that may panic returns an Except, and the others a plain value.
+	l.WriteString(`class Outcome (α : Type) (β : outParam Type) where
+  outcome : α → Except String β
+
+instance : Outcome Int Int := ⟨.ok⟩
+instance : Outcome Bool Bool := ⟨.ok⟩
+instance : Outcome String String := ⟨.ok⟩
+instance {β : Type} : Outcome (Except String β) β := ⟨id⟩
+
+def agrees {α β : Type} [Outcome α β] [BEq β] (x : α) (want : Except String β) : Bool :=
+  match Outcome.outcome x, want with
+  | .ok a, .ok b => a == b
+  | .error a, .error b => a == b
+  | _, _ => false
+
+/-- Equal results of a call. Except has no BEq instance. -/
+def same : Option (Except Eval.Val Eval.Val) → Except Eval.Val Eval.Val → Bool
+  | some (.ok a), .ok b | some (.error a), .error b => a == b
+  | _, _ => false
+
+`)
 	fmt.Fprintf(&l, "def source : String := %s\n\n", leanString(source))
 	quoted := make([]string, len(order))
 	for i, n := range order {
@@ -867,26 +965,33 @@ func check(seed int64, programs int) error {
 	var vals, translatedChecks []string
 	for i, c := range calls {
 		var leanResult, leanVal string
-		switch c.result {
-		case tBool:
-			leanResult, leanVal = results[i], "(.bool "+results[i]+")"
-		case tString:
-			s, err := strconv.Unquote(results[i])
-			if err != nil {
-				return fmt.Errorf("go run printed %q", results[i])
+		if msg, ok := strings.CutPrefix(results[i], "panic: "); ok {
+			leanResult = "(.error " + leanString(msg) + ")"
+			leanVal = "(.error (.str " + leanString(msg) + "))"
+		} else {
+			switch c.result {
+			case tBool:
+				leanResult, leanVal = results[i], "(.bool "+results[i]+")"
+			case tString:
+				s, err := strconv.Unquote(results[i])
+				if err != nil {
+					return fmt.Errorf("go run printed %q", results[i])
+				}
+				leanResult = leanString(s)
+				leanVal = "(.str " + leanResult + ")"
+			default:
+				leanResult = "(" + results[i] + " : Int)"
+				leanVal = "(.int (" + results[i] + "))"
 			}
-			leanResult = leanString(s)
-			leanVal = "(.str " + leanResult + ")"
-		default:
-			leanResult = "(" + results[i] + " : Int)"
-			leanVal = "(.int (" + results[i] + "))"
+			leanResult = "(.ok " + leanResult + ")"
+			leanVal = "(.ok " + leanVal + ")"
 		}
 		vals = append(vals, fmt.Sprintf("  (%q, [%s], %s)", c.fn, strings.Join(c.leanVals, ", "), leanVal))
 		label := fmt.Sprintf("%s(%s) = %s", c.fn, strings.Join(c.goArgs, ", "), results[i])
-		translatedChecks = append(translatedChecks, fmt.Sprintf("  (%s, Diff.%s %s == %s)",
+		translatedChecks = append(translatedChecks, fmt.Sprintf("  (%s, agrees (Diff.%s %s) %s)",
 			leanString(label), c.fn, strings.Join(c.leanArgs, " "), leanResult))
 	}
-	chunks(&l, "calls", "(String × List Eval.Val × Eval.Val)", vals)
+	chunks(&l, "calls", "(String × List Eval.Val × Except Eval.Val Eval.Val)", vals)
 	l.WriteString(`#eval show IO Unit from do
   let decls ← match Syntax.parse source with
     | .ok file => pure file.decls
@@ -905,19 +1010,20 @@ func check(seed int64, programs int) error {
     throw (IO.userError ("the proved path refuses generated functions:\n" ++ "\n".intercalate refusals))
   let program := Eval.program decls
   let fs := IR.functions (out.map (·.1))
-  -- The value that a call returns, or none when it panics or has no value.
-  -- The generator does not divide, so no call panics.
-  let value : Option (Except Eval.Val Eval.Val) → Option Eval.Val
-    | some (.ok v) => some v
-    | _ => none
+  -- A call returns a value or panics, as Go's does. The generator does not
+  -- divide, so a panic comes from an index out of range.
+  let shown : Option (Except Eval.Val Eval.Val) → String
+    | some (.ok v) => s!"{repr v}"
+    | some (.error v) => s!"panic {repr v}"
+    | none => "nothing"
   let mut bad : Array String := #[]
   for (f, args, want) in calls do
-    let got := value (Eval.runIn program f args)
-    if got != some want then
-      bad := bad.push s!"interpreter: {f} {repr args} gives {repr got}, Go gives {repr want}"
-    let got := value (IR.runIn fs ⟨"", f⟩ args)
-    if got != some want then
-      bad := bad.push s!"IR: {f} {repr args} gives {repr got}, Go gives {repr want}"
+    let got := Eval.runIn program f args
+    unless same got want do
+      bad := bad.push s!"interpreter: {f} {repr args} gives {shown got}, Go gives {shown (some want)}"
+    let got := IR.runIn fs ⟨"", f⟩ args
+    unless same got want do
+      bad := bad.push s!"IR: {f} {repr args} gives {shown got}, Go gives {shown (some want)}"
   unless bad.isEmpty do
     throw (IO.userError ("\n".intercalate bad.toList))
 

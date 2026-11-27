@@ -589,7 +589,7 @@ theorem divide_out {op : tolean.IR.Division} {o : BinOp}
           · exact checkVals_append (checkVals_append hia hib) hik
           · simp only [binaryRes, Eval.operate]
             unfold outcome
-            simp only [firstFault_append, hiff, firstFault, Option.or_none]
+            simp only [firstFault_append, hiff]
             cases firstFault da <;> cases firstFault db <;> by_cases h3 : y = 0 <;>
               simp [h3, tolean.IR.Division.apply]
   · exact absurd h reject_ne_ok
@@ -825,7 +825,7 @@ theorem expr_sound_aux {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs 
         obtain ⟨⟨cs, ts⟩, hcs, ⟨ci, ti⟩, hci, h⟩ := h
         by_cases hts : ts = .string
         · by_cases hti : ti.isNum = true
-          · simp only [hts, hti, ↓reduceIte, not_true_eq_false, pure_bind, pure_ok,
+          · simp only [hts, hti, ↓reduceIte, pure_bind, pure_ok,
               Prod.mk.injEq] at h
             obtain ⟨rfl, -⟩ := h
             obtain ⟨x, y, hx, hy, happ⟩ := out_ext2 hv
@@ -849,7 +849,7 @@ theorem expr_sound_aux {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs 
           · simp [hts, hti, reject, throw, throwThe, MonadExceptOf.throw, bind,
               Except.bind, pure, Except.pure] at h
         · simp [hts, reject, throw, throwThe, MonadExceptOf.throw, bind,
-            Except.bind, pure, Except.pure] at h
+            Except.bind] at h
       -- A call of `len`, a conversion, or a translated function.
       · next sp sp' f args =>
         cases hf : env.has f with
