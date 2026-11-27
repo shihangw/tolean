@@ -3687,42 +3687,61 @@ theorem rebind_sim {env : Translate.Env} {st : Stmt} {rest : List Stmt} {tail : 
     refine ⟨htail, new, out, mod₂, Ends.congr (by simp [Eval.exec, hst0, hst]) hex, hag₂, hnew, hout, ?_⟩
     simpa [stmtsChanges] using hfr₂.trans hfr
 
-/-- A global borrow copies its final map back before the continuation runs. -/
-theorem borrowCallStmt_sim {env : Translate.Env} {sp cs ns ms : Span} {args : List Expr}
-    {rest : List Stmt} {tail : Tail} {fn : FnInfo} {index : Nat} {target : String}
+/-- Changing the variables of `binds` changes only those names. -/
+theorem Frame.setAll {c : List String} :
+    ∀ (binds env : Eval.Env N), (∀ p ∈ binds, p.1 ∈ c) → Frame c (env.setAll binds) env
+  | [], env, _ => Frame.refl c env
+  | (k, w) :: bs, env, h => by
+    have hset : env.setAll ((k, w) :: bs) = (env.set k w).setAll bs := by simp [Eval.Env.setAll]
+    rw [hset]
+    have h1 := Frame.setAll bs (env.set k w) (fun p hp => h p (by simp [hp]))
+    have h2 : Frame c (env.set k w) env := Frame.set (h (k, w) (by simp)) env
+    exact (Frame.trans h1 h2).mono (fun n hn => (List.mem_append.mp hn).elim id id)
+
+/-- A global borrow copies its final maps back before the continuation runs. -/
+theorem borrowCallStmt_sim {env : Translate.Env} {sp cs ns : Span} {args : List Expr}
+    {rest : List Stmt} {tail : Tail} {fn : FnInfo} {indices : List Nat} {ts : List (Span × String)}
     {rb : IR.Body} {outs : List IR.Expr}
     (hc : CallsAgree (N := N) m.program fs fuel)
-    (hfind : fn ∈ env.functions) (hborrow : fn.borrow = some index)
+    (hfind : fn ∈ env.functions) (hborrow : fn.borrow = some indices)
     (hglobal : env.has fn.name = false)
     (hloc : env.fnChanges.lookup fn.name = none)
-    (htarget : args[index]? = some (.ident ms target))
+    (hts : borrowTargetsAt args indices = some ts)
+    (hnd : (ts.map (·.2)).Nodup)
     (hargs : SimList (N := N) m fs fuel env args outs)
     (hrest : StmtSim (N := N) m fs fuel env tail rest rb) :
     StmtSim (N := N) m fs fuel env tail
       (.exprStmt sp (.call cs (.ident ns fn.name) args) :: rest)
-      (.letBorrow target fn.ref index outs rb) := by
-  refine rebind_sim m fs fuel (names := [target]) (by simp) (fun n hn => ?_)
+      (.letBorrow (ts.map (·.2)) fn.ref indices outs rb) := by
+  refine rebind_sim m fs fuel (names := ts.map (·.2)) (by simp) (fun n hn => ?_)
     (fun ρs ρo o ha hs ho => ?_) hrest
-  · have hm := List.mem_of_getElem? htarget
-    simp only [List.mem_singleton] at hn
-    subst hn
+  · obtain ⟨⟨ms, n'⟩, hm, rfl⟩ := List.mem_map.mp hn
+    obtain ⟨i, hi⟩ := mem_borrowTargetsAt hts hm
+    have hm' := List.mem_of_getElem? hi
     simp only [stmtChanges, hloc, List.mem_append]
-    exact Or.inl (List.mem_filterMap.mpr ⟨_, hm, rfl⟩)
-  obtain ⟨before, vs, k, ps, body, param, after, entries,
-    hbefore, hvs, rfl, hout, hlen, hparam, hstate, hrun, hfinal, hrb⟩ := exec_letBorrow ho
-  have hbeforeS : ρs.lookup target = some (.map before) := by rw [ha]; exact hbefore
+    exact Or.inl (List.mem_filterMap.mpr ⟨_, hm', rfl⟩)
+  obtain ⟨vs, k, ps, body, params, after, inner, ρo₂, hmaps, hvs, rfl, hout, hlen, hparams, hnl,
+    hstate, hrun, hinner, hbs, hrb⟩ := exec_letBorrow ho
+  have hmapsS : Eval.holdMaps ρs (ts.map (·.2)) = true := by
+    rw [holdMaps_congr ha]; exact hmaps
   have hfile := (hs.2.1 fn hfind).2 (by simp [hborrow])
-  have hex := borrow_call_from_agreement m fs k hc ρs sp cs ns ms fn.name target param index args vs
-    ps body after before entries (hargs ρs ρo vs ha hs hvs) (hs.none hglobal) htarget
-    (by simpa [FnInfo.ref, hfile] using hout) hparam hstate hlen hbeforeS hrun hfinal
-  refine ⟨[(target, .map entries)], ρs.set target (.map entries), ρo.set target (.map entries),
-    ?_, hrb, hex, ?_, Frame.set (by simp) ρs⟩
-  · simp [IR.bindState, hbefore]
-  · intro n hn
-    simp only [List.mem_singleton] at hn
-    subst hn
-    rw [Eval.Env.lookup_set_same _ _ _ (by simp [hbeforeS])]
-    simp
+  have hex := borrow_call_from_agreement m fs k hc ρs sp cs ns fn.name indices args ts vs
+    ps body params after inner (hargs ρs ρo vs ha hs hvs) (hs.none hglobal) hts hnd hmapsS
+    (by simpa [FnInfo.ref, hfile] using hout) hparams hstate hlen hrun hinner
+  have hkeys : inner.map (·.1) = ts.map (·.2) := by
+    rw [borrowedMaps_keys hinner, List.map_fst_zip (by omega)]
+  refine ⟨inner, ρs.setAll inner, ρo₂, hbs, hrb, hex, fun n hn => ?_,
+    Frame.setAll inner ρs (fun p hp => by rw [← hkeys]; exact List.mem_map_of_mem hp)⟩
+  have hhas := holdMaps_isSome hmapsS hn
+  rw [lookup_setAll inner ρs (by rw [hkeys]; exact hnd) hhas]
+  have hin : (inner.lookup n).isSome := by
+    rw [List.lookup_isSome_iff]
+    rw [← hkeys] at hn
+    obtain ⟨p, hp, rfl⟩ := List.mem_map.mp hn
+    exact ⟨p, hp, by simp⟩
+  cases hl : inner.lookup n with
+  | none => simp [hl] at hin
+  | some v => rfl
 
 /-- A local call keeps the changed captured bindings. -/
 theorem localCallStmt_sim {env : Translate.Env} {sp cs sp' : Span} {args : List Expr} {rest : List Stmt}
@@ -4044,16 +4063,16 @@ theorem translateBorrowStmt_sound (hc : CallsAgree (N := N) m.program fs fuel) {
     (ihS : ∀ env tail ss ctx body ctx', translateStatements F env tail ss ctx = .ok body ctx' →
       StmtSim (N := N) m fs fuel env tail ss body)
     {env : Translate.Env} {tail : Tail} {s : Span} {e : Expr} {rest : List Stmt}
-    {fn : FnInfo} {i : Nat} {args : List Expr} {ctx ctx' : Ctx} {body : IR.Body}
+    {fn : FnInfo} {is : List Nat} {args : List Expr} {ctx ctx' : Ctx} {body : IR.Body}
     (hlc : localCall? env e = none)
-    (hbc : borrowCall? env e = some (fn, i, args))
+    (hbc : borrowCall? env e = some (fn, is, args))
     (h : translateStatements (F + 1) env tail (.exprStmt s e :: rest) ctx = .ok body ctx') :
     StmtSim (N := N) m fs fuel env tail (.exprStmt s e :: rest) body := by
   obtain ⟨cs, ns, rfl, hfind, hborrow⟩ := borrowCall?_some hbc
   unfold translateStatements at h
   simp only [hlc, hbc, pure_bind, bind_ok] at h
-  obtain ⟨⟨target, call⟩, c₁, hcall, h⟩ := h
-  obtain ⟨hglobal, ms, outs, htarget, rfl, hargs⟩ := translateBorrowCall_sim m fs fuel hc hcall
+  obtain ⟨⟨names, call⟩, c₁, hcall, h⟩ := h
+  obtain ⟨hglobal, ts, outs, hts, rfl, hnd, rfl, hargs⟩ := translateBorrowCall_sim m fs fuel hc hcall
   simp only [bind_ok, pure_ok] at h
   obtain ⟨rb, c₂, hrb, rfl, _⟩ := h
   have hno : env.localFns.find? (·.name == fn.name) = none := by
@@ -4068,7 +4087,7 @@ theorem translateBorrowStmt_sound (hc : CallsAgree (N := N) m.program fs fuel) {
     have hn := List.find?_eq_none.mp hno f hf
     have hne : f.name ≠ fn.name := by simpa using hn
     simpa using Ne.symm hne
-  exact borrowCallStmt_sim m fs fuel hc hfind hborrow hglobal hchanges htarget hargs
+  exact borrowCallStmt_sim m fs fuel hc hfind hborrow hglobal hchanges hts hnd hargs
     (ihS _ _ _ _ _ _ hrb)
 
 /-- A local statement call uses the translated closure body. -/

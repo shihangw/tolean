@@ -507,8 +507,9 @@ structure FnInfo where
   call of it may stand inside a larger expression. It does not know a
   function that throws only through an imported function. -/
   hoists : Bool := false
-  /-- A normal-completion map borrow returns this parameter instead of void. -/
-  borrow : Option Nat := none
+  /-- A normal-completion map borrow returns the parameters at these
+  indices, in order, instead of void. -/
+  borrow : Option (List Nat) := none
 
 def FnInfo.ref (f : FnInfo) : DeclRef := ⟨f.file, f.name⟩
 
@@ -719,7 +720,7 @@ structure Ctx where
   sortObligations : List SortObligation := []
   /-- All source borrow signatures, including declarations later in the file.
   The interpreter uses the same list for its ownership guard. -/
-  borrows : List (String × Nat) := []
+  borrows : List (String × List Nat) := []
   /-- The edition the code runs on. A feature newer than it is refused. -/
   target : Edition
   src : Array Char
@@ -4297,11 +4298,11 @@ def translateLocalStateCall (env : Env) (s : Span) (fn : LocalFn) (args : List E
   return (b, fn.captured.map (fun l => IR.Expr.var l.name) ++ outs)
 
 /-- A borrowing global function called as a statement. -/
-def borrowCall? (env : Env) : Expr → Option (FnInfo × Nat × List Expr)
+def borrowCall? (env : Env) : Expr → Option (FnInfo × List Nat × List Expr)
   | .call _ (.ident _ name) args => do
     let fn ← env.functions.find? (·.name == name)
-    let i ← fn.borrow
-    return (fn, i, args)
+    let is ← fn.borrow
+    return (fn, is, args)
   | _ => none
 
 /-- Translate the exclusive map argument without treating it as an escaping
@@ -4311,32 +4312,42 @@ def translateBorrowPlain (env : Env) (ty : Ty) (arg : Expr) : TM IR.Expr := do
   unless code.type.assignableTo ty do reject arg.span "the argument does not have the parameter's type"
   return withType code.value ty code.type
 
-def translateBorrowArg (env : Env) (target : String) (mapType ty : Ty) (arg : Expr) : TM IR.Expr :=
+def translateBorrowArg (env : Env) (targets : List (String × Ty)) (ty : Ty) (arg : Expr) : TM IR.Expr :=
   match arg with
   | .ident sp name => do
-    if name == target then
+    if let some mapType := targets.lookup name then
       unless mapType == ty do reject sp "the borrowed map has the wrong type"
       return IR.Expr.var name
     else translateBorrowPlain env ty arg
   | _ => translateBorrowPlain env ty arg
 
-def translateBorrowArgs (env : Env) (target : String) (mapType : Ty) :
+def translateBorrowArgs (env : Env) (targets : List (String × Ty)) :
     List Ty → List Expr → TM (List IR.Expr)
   | ty :: ps, arg :: args => do
-    let code ← translateBorrowArg env target mapType ty arg
-    return code :: (← translateBorrowArgs env target mapType ps args)
+    let code ← translateBorrowArg env targets ty arg
+    return code :: (← translateBorrowArgs env targets ps args)
   | _, _ => pure []
 
-def translateBorrowCall (env : Env) (s : Span) (fn : FnInfo) (i : Nat) (args : List Expr) :
-    TM (String × IR.Expr) := do
+/-- The caller's variable at each borrowed index, with its type. Each must
+be a map that the caller owns exclusively. -/
+def borrowTargetTypes (env : Env) (s : Span) (args : List Expr) : List Nat → TM (List (String × Ty))
+  | [] => pure []
+  | i :: is => do
+    let some (.ident _ name) := args[i]? | reject s "a map borrow needs an owned map variable"
+    let some binding := env.lookup name | reject s "a map borrow needs an owned map variable"
+    unless binding.binding == .map do reject s "a map borrow needs an exclusively owned map"
+    return (name, binding.type) :: (← borrowTargetTypes env s args is)
+
+def translateBorrowCall (env : Env) (s : Span) (fn : FnInfo) (is : List Nat) (args : List Expr) :
+    TM (List String × IR.Expr) := do
   if env.has fn.name then reject s "a local hides the borrowing function"
   unless fn.file == (← get).file do reject s "an imported map borrow is not supported yet"
   unless args.length == fn.params.length do reject s "a map borrow needs every argument"
-  let some (.ident _ name) := args[i]? | reject s "a map borrow needs an owned map variable"
-  let some binding := env.lookup name | reject s "a map borrow needs an owned map variable"
-  unless binding.binding == .map do reject s "a map borrow needs an exclusively owned map"
-  let outs ← translateBorrowArgs env name binding.type fn.params args
-  return (name, .call fn.ref outs)
+  let targets ← borrowTargetTypes env s args is
+  unless decide (targets.map (·.1)).Nodup do
+    reject s "a map borrow may not pass one map for two changed parameters"
+  let outs ← translateBorrowArgs env targets fn.params args
+  return (targets.map (·.1), .call fn.ref outs)
 
 mutual
 
@@ -4411,10 +4422,10 @@ def translateStatements (fuel : Nat) (env : Env) (tail : Tail) (statements : Lis
           (translateStatements fuel (fn.bodyEnv env) fn.tail (blockStatements fn.body))
         return .letCall fn.changes fn.ref fn.name fn.closure fn.leanParams fn.leanRet false b outs
           (← translateStatements fuel env tail rest)
-      if let some (fn, i, args) := borrowCall? env e then
-        let (name, call) ← translateBorrowCall env s fn i args
+      if let some (fn, is, args) := borrowCall? env e then
+        let (names, call) ← translateBorrowCall env s fn is args
         let .call ref outs := call | reject s "invalid map borrow"
-        return .letBorrow name ref i outs (← translateStatements fuel env tail rest)
+        return .letBorrow names ref is outs (← translateStatements fuel env tail rest)
       let (name, update) ← translateUpdate env s e
       return .let name update (← translateStatements fuel env tail rest)
     -- `function g(x: T): R { … }` in the body of the function: the output
@@ -5094,23 +5105,26 @@ def paramType (span : Span) (optional : Bool) (type : TypeExpr) (before : List T
   if ty == .null then reject span "an optional parameter of only null is not supported"
   return .optional ty.unoptional
 
-def functionReturnType (borrow : Option Nat) (types : List Ty) (s : Span) (rt : TypeExpr)
+def functionReturnType (borrow : Option (List Nat)) (types : List Ty) (s : Span) (rt : TypeExpr)
     (env : Env) (params : List Param) (body : Stmt) : TM Ty :=
   match borrow with
-  | some i => orReject types[i]? s "the borrowed parameter has no type"
+  | some [i] => orReject types[i]? s "the borrowed parameter has no type"
+  | some is => do
+    let tys ← orReject (is.mapM (types[·]?)) s "the borrowed parameter has no type"
+    return .tuple tys
   | none => isolated (translateReturnType env params rt body)
 
-def checkBorrowResult (s : Span) (borrow : Option Nat) (name : String)
-    (borrows : List (String × Nat)) (param : Option String) (out : IR.Body) : TM Unit :=
-  match borrow, param with
-  | some index, some param => do
-    unless borrows.lookup name == some index && out.returnedState == some [param] do
-      reject s "a map borrow must return its one changed parameter on normal completion"
+def checkBorrowResult (s : Span) (borrow : Option (List Nat)) (name : String)
+    (borrows : List (String × List Nat)) (params : Option (List String)) (out : IR.Body) : TM Unit :=
+  match borrow, params with
+  | some indices, some params => do
+    unless borrows.lookup name == some indices && out.returnedState == some params do
+      reject s "a map borrow must return its changed parameters on normal completion"
   | some _, none => reject s "the borrowed parameter is missing"
   | none, _ => pure ()
 
-def borrowLocals (locals : List Local) (param : Option String) : List Local :=
-  locals.map fun l => if param == some l.name then { l with binding := .map } else l
+def borrowLocals (locals : List Local) (params : Option (List String)) : List Local :=
+  locals.map fun l => if (params.map (·.contains l.name)).getD false then { l with binding := .map } else l
 
 def translateFunction (thr : String → Bool) (cls : String → Option (Option ErrorCtor))
     (guards : List (String × Eval.GuardTest))
@@ -5151,13 +5165,13 @@ def translateFunction (thr : String → Bool) (cls : String → Option (Option E
   -- call.
   let self : FnInfo :=
     { file := ctx.file, name, exported, typeParams, params := types, ret, throws, hoists := thr name, borrow }
-  let borrowedName := borrow.bind fun i => (params[i]?).map (·.name)
-  let locals := borrowLocals env.locals borrowedName
+  let borrowedNames := borrow.bind fun is => is.mapM fun i => (params[i]?).map (·.name)
+  let locals := borrowLocals env.locals borrowedNames
   let env : Env := { env with locals }
-  let tail := match borrowedName with | some n => Tail.state [n] | none => .ret
+  let tail := match borrowedNames with | some ns => Tail.state ns | none => .ret
   let out ← isolated (translateStatements (← fuelLimit) { env with functions := env.functions ++ [self] } tail
     (blockStatements body))
-  checkBorrowResult s borrow name ctx.borrows borrowedName out
+  checkBorrowResult s borrow name ctx.borrows borrowedNames out
   if out.calls self.ref && (out.decreasingParam? self.ref leanParams).isNone then
     reject s ("a function may call itself only on a part of one of its parameters, the same one in " ++
       "every call: a field of it, a value that a test narrows it to, or an element of an array in it")
