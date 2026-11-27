@@ -6,8 +6,9 @@ The part of the Go translator that builds the Tolean IR, for pure functions.
 
 A pure function here takes and returns `int`, `int64`, `bool` and `string`
 values, and calls only pure functions that this part has already
-translated. It may read a constant of the package whose value is a literal,
-and the output writes that value where the function reads the name. Its body may declare and assign locals, use `+=`, `-=`, `*=`,
+translated. It may read a constant of the package whose value is a literal, or a
+package-level variable with such a value that nothing in the package
+changes, and the output writes that value where the function reads the name. Its body may declare and assign locals, use `+=`, `-=`, `*=`,
 `/=`, `%=`, `++` and `--`, test with `if`, `else` and `switch`, and return.
 An `if` or a `switch` may have an init statement. Integer arithmetic wraps
 through `Go.wrap64`, as Go's does.
@@ -315,12 +316,13 @@ def translateExpr (ctx : Ctx) (env : Env) : Nat → Expr → TM (IR.Expr × Ty)
       match env.lookup name with
       | some l => pure (.var name, l.type)
       | none =>
-        -- A constant of the package is its value.
+        -- A constant of the package, or a variable that nothing changes, is
+        -- its value.
         match ctx.program.consts.lookup name with
         | some (te, v) =>
           match constType ctx te v with
           | some t => pure (valueCode v, t)
-          | none => reject sp s!"the constant '{name}' has a type outside the subset"
+          | none => reject sp s!"the package-level '{name}' has a type outside the subset"
         | none =>
         match Eval.predeclared ctx.program name with
         | some (.bool b) => pure (.bool b, .bool)

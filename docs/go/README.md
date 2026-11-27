@@ -102,10 +102,23 @@ level, such as `const Limit = 100` or `const Fee int64 = 3`, alone or in a
 group. The constant's value must be an integer or string literal, an integer
 literal after `-`, `true` or `false`, and a typed constant must have one of
 the four types above. The output writes the value where the function reads
-the name. A constant that uses `iota`, another constant or an operator, and
-every package-level `var`, keep the function on the string translation. The
+the name. A constant that uses `iota`, another constant or an operator keeps
+the function on the string translation. The
 [decision record](../decisions/2026-11-26-go-package-constants.md) gives the
 reasons, and the corpus package `consts` shows the output.
+
+A pure function may also read a package-level variable that nothing in the
+package changes, such as `var fallback string` or `var limit = 10`. The
+variable must be unexported, because another package can assign an exported
+one. Its initial value must be a literal of the kind a constant may have, or
+it must have a type and no value, and then it starts at the zero value. No
+function, method, `init` function or function literal of the package may
+assign it, increment it, assign it in a `range` clause, or take its address. The check
+is syntactic, so a local of the same name that is assigned counts too. Such
+a variable keeps its initial value, so the output writes that value as it
+does for a constant. A variable that some code changes stays on the string
+translation, as the
+[decision record](../decisions/2026-11-26-go-package-variables.md) explains.
 
 An `if` may have an init statement, as in `if d := x - y; d > 0 { … }`. A
 `switch` may have a tag or none, an init statement, several values in one

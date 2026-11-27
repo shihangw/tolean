@@ -15,6 +15,8 @@ def Prefix : String := "id-"
 
 def Enabled : Bool := true
 
+def fallback : String := ""
+
 def Capped (n : Int) : Int :=
   if decide (n > (100 : Int)) then
     (100 : Int)
@@ -29,5 +31,11 @@ def Charge (amount : Int) : Int :=
 
 def Label (name : String) : String :=
   ("id-" ++ name)
+
+def NameOr (name : String) : String :=
+  if decide (name = "") then
+    ""
+  else
+    name
 
 end Consts

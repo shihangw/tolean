@@ -24,7 +24,8 @@
 // init statement, several values in a case and a default anywhere, that
 // change locals or return; one counted loop at the start of a body; calls
 // of functions declared earlier; and package-level constants, typed and
-// untyped, alone and in groups. A function that may panic is called only
+// untyped, alone and in groups, and package-level variables that no
+// function changes. A function that may panic is called only
 // where the subset allows it: alone after :=, =, var or return. Go's main
 // recovers each panic and prints its message. When the subset grows, add the
 // new construct here too.
@@ -190,10 +191,56 @@ func (g *gen) constants(p int) {
 		g.line(")")
 	}
 	g.line("")
+	g.variables(p)
+}
+
+// variables writes package-level variables that no function changes, alone
+// or in a group. The proved path reads them as constants. A variable without
+// a type and with an integer literal is an int.
+func (g *gen) variables(p int) {
+	n := g.pick(3)
+	if n == 0 {
+		return
+	}
+	grouped := g.chance(0.5)
+	if grouped {
+		g.line("var (")
+		g.indent++
+	}
+	for j := range n {
+		c := &constant{name: fmt.Sprintf("p%dv%d", p, j), t: allTypes[g.pick(len(allTypes))]}
+		value := g.literal(c.t)
+		if c.t.isInt() && g.chance(0.3) {
+			value = "-" + value
+		}
+		var decl string
+		switch g.pick(3) {
+		case 0:
+			decl = c.name + " " + c.t.String()
+		case 1:
+			decl = c.name + " " + c.t.String() + " = " + value
+		default:
+			if c.t == tInt64 {
+				c.t = tInt
+			}
+			decl = c.name + " = " + value
+		}
+		if grouped {
+			g.line("%s", decl)
+		} else {
+			g.line("var %s", decl)
+		}
+		g.consts = append(g.consts, c)
+	}
+	if grouped {
+		g.indent--
+		g.line(")")
+	}
+	g.line("")
 }
 
 // leaf returns a constant expression of type t: a literal, or a constant
-// of the package.
+// or unchanged variable of the package.
 func (g *gen) leaf(t ty) string {
 	var fit []*constant
 	for _, c := range g.consts {
