@@ -1058,6 +1058,22 @@ theorem eval_panicCall {ctx : Ctx} {env : Pure.Env} {e : Expr} {f : String} {arg
   rw [hp] at hb
   simp [eval_call p fuel ρs csp fsp f args hb, scoped_none hs hf]
 
+theorem divisors_argsCode : ∀ cs : List IR.Expr,
+    divisors (argsCode cs) = divisors (.call ⟨"", f⟩ cs)
+  | [] => by simp [argsCode, divisors, divisors.divisorsList]
+  | c :: cs => by
+    have ih := divisors_argsCode (f := f) cs
+    simp only [divisors] at ih
+    simp [argsCode, divisors, divisors.divisorsList, ih]
+
+theorem argsCode_eval {ρ : Eval.Env} : ∀ {cs : List IR.Expr} {v : Val},
+    IR.Expr.eval fs fuel ρ (argsCode cs) = some v → ∃ vs, IR.Expr.evalList fs fuel ρ cs = some vs
+  | [], _, _ => ⟨[], evalList_nil⟩
+  | c :: cs, v, h => by
+    obtain ⟨x, y, hx, hy, -⟩ := out_ext2 h
+    obtain ⟨vs, hvs⟩ := argsCode_eval hy
+    exact ⟨x :: vs, by simp [IR.Expr.evalList, hx, hvs]⟩
+
 /-- The arguments of a call of a function that can panic: the source's
 evaluate to the code's values, or panic when a divisor is zero. -/
 theorem panicArgs {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs fuel)
@@ -1078,15 +1094,12 @@ theorem call_zero {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs fuel)
     {codes : List (IR.Expr × Ty)} (hcall : panicCallee? ctx env e = some (f, args, sig))
     (hargs : translateArgs ctx env exprFuel args = .ok codes) {ρs ρo : Eval.Env} {v : Val}
     (ha : Agree ρs ρo) (hs : Scoped env ρs)
-    (hv : IR.Expr.eval fs fuel ρo (.call ⟨"", f⟩ (codes.map (·.1))) = some v) :
-    ∃ ds, IR.Expr.evalList fs fuel ρo (divisors (.call ⟨"", f⟩ (codes.map (·.1)))) = some ds ∧
+    (hv : IR.Expr.eval fs fuel ρo (argsCode (codes.map (·.1))) = some v) :
+    ∃ ds, IR.Expr.evalList fs fuel ρo (divisors (argsCode (codes.map (·.1)))) = some ds ∧
       (∀ x, firstFault ds = some x → Eval.eval p fuel ρs e = some (.error x)) := by
-  rw [out_call] at hv
-  cases hvs : IR.Expr.evalList fs fuel ρo (codes.map (·.1)) with
-  | none => simp [hvs] at hv
-  | some vs =>
-    obtain ⟨ds, hds, hev⟩ := panicArgs p fs fuel hp hc hcall hargs ha hs hvs
-    exact ⟨ds, hds, fun x hm => by rw [hev, outcome_fault hm]; rfl⟩
+  obtain ⟨vs, hvs⟩ := argsCode_eval fs fuel hv
+  obtain ⟨ds, hds, hev⟩ := panicArgs p fs fuel hp hc hcall hargs ha hs hvs
+  exact ⟨ds, by rw [divisors_argsCode]; exact hds, fun x hm => by rw [hev, outcome_fault hm]; rfl⟩
 
 /-- `f a >>= fun x => rest`, when no divisor of the arguments is zero: the
 source's call returns the value that `rest` runs with, or panics as the
@@ -1095,7 +1108,7 @@ theorem call_bind {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs fuel)
     {env : Pure.Env} {e : Expr} {f : String} {args : List Expr} {sig : FnSig}
     {codes : List (IR.Expr × Ty)} (hcall : panicCallee? ctx env e = some (f, args, sig))
     (hargs : translateArgs ctx env exprFuel args = .ok codes) {ρo : Eval.Env}
-    (hn : NoFault fs fuel (.call ⟨"", f⟩ (codes.map (·.1))) ρo) {x : String} {rb : IR.Body}
+    (hn : NoFault fs fuel (argsCode (codes.map (·.1))) ρo) {x : String} {rb : IR.Body}
     {o : Outcome} (hv : IR.Body.exec fs fuel ρo (.bind x ⟨"", f⟩ (codes.map (·.1)) rb) = some o) :
     (∃ w, (∀ ρs, Agree ρs ρo → Scoped env ρs → Eval.eval p fuel ρs e = some (.ok w)) ∧
         IR.Body.exec fs fuel ((x, w) :: ρo) rb = some o) ∨
@@ -1105,7 +1118,7 @@ theorem call_bind {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs fuel)
   have hev : ∀ ρs, Agree ρs ρo → Scoped env ρs → Eval.eval p fuel ρs e = callS p fuel f vs := by
     intro ρs ha hs
     obtain ⟨ds, hds, hev⟩ := panicArgs p fs fuel hp hc hcall hargs ha hs hvs
-    rw [hev, outcome_ok (hn ds hds)]; rfl
+    rw [hev, outcome_ok (hn ds (by rw [divisors_argsCode]; exact hds))]; rfl
   rcases hr with ⟨w, hw, hb⟩ | ⟨y, hy, rfl⟩
   · exact .inl ⟨w, fun ρs ha hs => by rw [hev ρs ha hs]; exact hc f vs _ hw, hb⟩
   · exact .inr ⟨y, rfl, fun ρs ha hs => by rw [hev ρs ha hs]; exact hc f vs _ hy⟩
@@ -1148,8 +1161,8 @@ theorem stmts_sound_aux {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs
           have hz : ∀ (st : Stmt), (∀ ρs x, Eval.eval p fuel ρs e = some (.error x) →
               Eval.execStmt p fuel ρs st = some (.panic x)) →
               ∀ ρs ρo v, Agree ρs ρo → Scoped env ρs →
-                IR.Expr.eval fs fuel ρo (.call ⟨"", f⟩ (codes.map (·.1))) = some v →
-                ∃ ds, IR.Expr.evalList fs fuel ρo (divisors (.call ⟨"", f⟩ (codes.map (·.1)))) =
+                IR.Expr.eval fs fuel ρo (argsCode (codes.map (·.1))) = some v →
+                ∃ ds, IR.Expr.evalList fs fuel ρo (divisors (argsCode (codes.map (·.1)))) =
                   some ds ∧ (∀ x, firstFault ds = some x → Eval.execStmt p fuel ρs st =
                     some (.panic x)) := by
             intro st hst ρs ρo v ha hs hv

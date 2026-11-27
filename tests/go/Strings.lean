@@ -31,6 +31,17 @@ private def check (src : String) (args : List Val) (expected : Except Val Val) :
       same (IR.runIn (IR.functions (translated.map (·.1))) ⟨"", "F"⟩ args) (some expected) &&
       same (Eval.runIn (Eval.program decls) "F" args) (some expected)
 
+/-- `G` and then `F` are translated, and both sides give `expected` for a
+call of `F`. -/
+private def checkCall (src : String) (args : List Val) (expected : Except Val Val) : Bool :=
+  match parseDecls src with
+  | .error _ => false
+  | .ok decls =>
+    let translated := Pure.translateFuncs decls ["G", "F"]
+    translated.length == 2 &&
+      same (IR.runIn (IR.functions (translated.map (·.1))) ⟨"", "F"⟩ args) (some expected) &&
+      same (Eval.runIn (Eval.program decls) "F" args) (some expected)
+
 private def refused (src : String) : Bool :=
   match parseDecls src with
   | .error _ => false
@@ -65,6 +76,17 @@ private def at_ := "func F(s string, i int) int { return int(s[i]) }"
 #guard check "func F(a string, b string) bool { return a > b }" [.str "ab", .str "a"] (yes true)
 #guard check "func F(a string, b string) bool { return a >= b }" [.str "a", .str "ab"] (yes false)
 #guard check "func F(a string, b string) int { return len(a + b) }" [.str "ab", .str "é"] (ok 4)
+-- The arguments of a call of a function that can panic are checked first,
+-- and the callee's panic follows.
+private def callG := "func G(a int) int { return 10 / a }\nfunc F(s string, i int) int { x := G(int(s[i])); return x }"
+#guard checkCall callG [.str "ab", .int 1] (ok 0)
+#guard checkCall callG [.str "ab", .int 2]
+  (panics "runtime error: index out of range [2] with length 2")
+#guard checkCall callG [.str "a\x00", .int 1] (panics "runtime error: integer divide by zero")
+-- A failed check of an argument panics, even when the callee would panic on
+-- the value that Lean computes for the argument.
+#guard checkCall "func G(a int) int { return 10 / a }\nfunc F(a int, b int) int { x := G(a / b); return x }"
+  [.int 3, .int 0] (panics "runtime error: integer divide by zero")
 -- A slice can cut a UTF-8 sequence, which no Lean `String` holds.
 #guard refused "func F(s string) string { return s[1:] }"
 #guard refused "func F(s string, i int, j int) string { return s[i:j] }"

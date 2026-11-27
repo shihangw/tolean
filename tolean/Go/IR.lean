@@ -71,9 +71,32 @@ instance : tolean.IR.PrintTy TyExt where
   map names := leanName names "Std.HashMap"
   set names := leanName names "Std.HashSet"
 
-/-- A printed argument, in parentheses when it has a space and none. -/
+/-- Whether the parenthesis that opens `cs` closes only at its end. It skips
+string literals, whose parentheses do not count. -/
+def oneGroup (cs : List Char) : Bool :=
+  go cs 0 false false
+where
+  /-- `depth` open parentheses, inside a string literal or not, after an
+  escaping backslash or not. -/
+  go : List Char → Nat → Bool → Bool → Bool
+    | [], _, _, _ => false
+    | c :: rest, depth, inStr, esc =>
+      if inStr then
+        if esc then go rest depth true false
+        else if c == '\\' then go rest depth true true
+        else go rest depth (c != '"') false
+      else if c == '"' then go rest depth true false
+      else if c == '(' then go rest (depth + 1) false false
+      else if c == ')' then
+        if depth == 1 then rest.isEmpty else go rest (depth - 1) false false
+      else if depth == 0 then false
+      else go rest depth false false
+
+/-- A printed argument, in parentheses unless it is a name, a number, or one
+group in parentheses. -/
 def arg (a : String) : String :=
-  if a.contains ' ' && !a.startsWith "(" then s!"({a})" else a
+  let atom := a.all fun c => c.isAlphanum || c == '_' || c == '.' || c == '\''
+  if (atom && !a.isEmpty) || oneGroup a.toList then a else s!"({a})"
 
 /-- An operation on its printed arguments. The translator gives each one the
 number of arguments it takes, and the printer writes nothing for others. -/
