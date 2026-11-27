@@ -5,7 +5,7 @@
 // interpreter is trusted. This check is evidence that it means what Go means.
 // It writes random pure functions of the proved subset, then runs each one
 // with random arguments in three ways, and requires that all of them give the
-// value that `go run` prints:
+// value that `go run` prints, or the same panic:
 //
 //   - the interpreter, Eval.runIn, on the functions as tolean parses them;
 //   - the IR that Pure.translateFuncs produces, through IR.runIn;
@@ -16,12 +16,14 @@
 // subset shrank, and both need a look.
 //
 // The generator covers the subset as docs/go/README.md describes it: int,
-// int64, bool and string values; wrapping +, - and *; the orders on integers;
-// == and != on every type; &&, || and !; string concatenation; locals
-// declared with := and var; =, +=, -=, *=, ++ and --; if statements that
-// change locals or return; one counted loop at the start of a body; and calls
-// of functions declared earlier. When the subset grows, add the new construct
-// here too.
+// int64, bool and string values; wrapping +, - and *; / and %, which panic on
+// a zero divisor; the orders on integers; == and != on every type; &&, || and
+// !; string concatenation; locals declared with := and var; =, +=, -=, *=,
+// /=, %=, ++ and --; if statements that change locals or return; one counted
+// loop at the start of a body; and calls of functions declared earlier. A
+// function that may panic is called only where the subset allows it: alone
+// after :=, =, var or return. Go's main recovers each panic and prints its
+// message. When the subset grows, add the new construct here too.
 //
 // Run it from tests/go after `lake build`:
 //
@@ -76,6 +78,9 @@ type fn struct {
 	name   string
 	params []ty
 	result ty
+	// The body divides, or calls a function that may panic, so a call of it
+	// may panic.
+	panics bool
 }
 
 type gen struct {
@@ -90,6 +95,11 @@ type gen struct {
 	// Inside a loop, a string assignment reads no string local and calls
 	// nothing, so that a string cannot double on each iteration.
 	inLoop, literalStrings bool
+	// The function being written divides or calls a function that may panic.
+	panics bool
+	// The expression being written is the right operand of && or ||, where the
+	// subset refuses a division.
+	noDivide bool
 }
 
 func (g *gen) line(format string, args ...any) {
@@ -158,6 +168,13 @@ func (g *gen) expr(t ty, depth int) (string, bool) {
 			calls = append(calls, f)
 		}
 	}
+	var safe []fn
+	for _, f := range calls {
+		if !f.panics {
+			safe = append(safe, f)
+		}
+	}
+	calls = safe
 	if len(calls) > 0 && g.chance(0.15) {
 		f := calls[g.pick(len(calls))]
 		args := make([]string, len(f.params))
@@ -172,7 +189,14 @@ func (g *gen) expr(t ty, depth int) (string, bool) {
 			a, c := g.expr(t, depth-1)
 			return "-(" + a + ")", c
 		}
-		op := []string{"+", "-", "*"}[g.pick(3)]
+		ops := []string{"+", "-", "*", "/", "%"}
+		if g.noDivide {
+			ops = ops[:3]
+		}
+		op := ops[g.pick(len(ops))]
+		if op == "/" || op == "%" {
+			return g.division(t, op, depth-1)
+		}
 		a, b, ok := g.intOperands(t, depth-1)
 		if !ok {
 			return a, true
@@ -190,7 +214,10 @@ func (g *gen) expr(t ty, depth int) (string, bool) {
 		case 1:
 			op := []string{"&&", "||"}[g.pick(2)]
 			a, ca := g.expr(tBool, depth-1)
+			saved := g.noDivide
+			g.noDivide = true
 			b, cb := g.expr(tBool, depth-1)
+			g.noDivide = saved
 			return "(" + a + " " + op + " " + b + ")", ca && cb
 		case 2:
 			it := []ty{tInt, tInt64}[g.pick(2)]
@@ -235,6 +262,56 @@ func (g *gen) intOperands(t ty, depth int) (string, string, bool) {
 		b = l.name
 	}
 	return a, b, true
+}
+
+// division returns a / b or a % b on the integer type t. Go refuses a
+// constant zero divisor, so a constant divisor becomes a nonzero literal, and
+// two constant operands become a constant and a local.
+func (g *gen) division(t ty, op string, depth int) (string, bool) {
+	a, ca := g.expr(t, depth)
+	b, cb := g.expr(t, depth)
+	if cb {
+		if ca {
+			vars := g.visible(t, false)
+			if len(vars) == 0 {
+				return a, true
+			}
+			l := vars[g.pick(len(vars))]
+			l.used = true
+			b = l.name
+		} else {
+			// The translation tests no nonzero literal divisor, so the
+			// division cannot panic.
+			b = strconv.Itoa(1 + g.pick(9))
+			return "(" + a + " " + op + " " + b + ")", false
+		}
+	}
+	g.panics = true
+	return "(" + a + " " + op + " " + b + ")", false
+}
+
+// panicking returns a call of a function of type t that may panic, and
+// reports false when there is none. Inside a loop it calls none that returns
+// a string, so that a string cannot double on each iteration.
+func (g *gen) panicking(t ty) (string, bool) {
+	var fs []fn
+	for _, f := range g.callable {
+		if f.panics && f.result == t && !(g.inLoop && t == tString) {
+			fs = append(fs, f)
+		}
+	}
+	if len(fs) == 0 {
+		return "", false
+	}
+	f := fs[g.pick(len(fs))]
+	args := make([]string, len(f.params))
+	for i, p := range f.params {
+		g.literalStrings = g.inLoop && p == tString
+		args[i], _ = g.expr(p, 1)
+		g.literalStrings = false
+	}
+	g.panics = true
+	return fmt.Sprintf("%s(%s)", f.name, strings.Join(args, ", ")), true
 }
 
 // nonConst returns an expression of type t that Go does not read as a
@@ -296,10 +373,24 @@ func (g *gen) assign(mark int) bool {
 		g.line("%s%s", l.name, []string{"++", "--"}[g.pick(2)])
 		return true
 	}
+	if g.chance(0.15) {
+		if e, ok := g.panicking(l.t); ok {
+			g.line("%s = %s", l.name, e)
+			return true
+		}
+	}
 	g.literalStrings = g.inLoop && l.t == tString
-	e, _ := g.expr(l.t, 2)
+	e, ce := g.expr(l.t, 2)
 	g.literalStrings = false
 	switch {
+	case l.t.isInt() && g.chance(0.2):
+		// Go refuses a constant zero divisor.
+		if ce {
+			e = strconv.Itoa(1 + g.pick(9))
+		} else {
+			g.panics = true
+		}
+		g.line("%s %s %s", l.name, []string{"/=", "%="}[g.pick(2)], e)
 	case l.t.isInt() && g.chance(0.5):
 		g.line("%s %s %s", l.name, []string{"+=", "-=", "*="}[g.pick(3)], e)
 	case l.t == tString && g.chance(0.5):
@@ -316,6 +407,17 @@ func (g *gen) stmts(n, depth int) {
 		switch g.pick(5) {
 		case 0, 1:
 			t := allTypes[g.pick(len(allTypes))]
+			if g.chance(0.2) {
+				if e, ok := g.panicking(t); ok {
+					l := g.declare(t)
+					if g.chance(0.5) {
+						g.line("%s := %s", l.name, e)
+					} else {
+						g.line("var %s %s = %s", l.name, t, e)
+					}
+					continue
+				}
+			}
 			if g.chance(0.5) {
 				if e, ok := g.nonConst(t, 2); ok {
 					g.declare(t)
@@ -395,7 +497,13 @@ func (g *gen) returning(t ty, depth int) {
 		g.indent--
 		g.line("}")
 	default:
-		e, _ := g.expr(t, 3)
+		e, ok := "", false
+		if g.chance(0.2) {
+			e, ok = g.panicking(t)
+		}
+		if !ok {
+			e, _ = g.expr(t, 3)
+		}
 		g.use(mark)
 		g.line("return %s", e)
 	}
@@ -431,8 +539,9 @@ func (g *gen) loop() {
 	g.line("}")
 }
 
-func (g *gen) function(f fn) {
+func (g *gen) function(f *fn) {
 	g.locals = nil
+	g.panics = false
 	params := make([]string, len(f.params))
 	for i, p := range f.params {
 		l := &local{name: fmt.Sprintf("p%d", i), t: p, mutable: true}
@@ -448,6 +557,7 @@ func (g *gen) function(f fn) {
 	g.indent--
 	g.line("}")
 	g.line("")
+	f.panics = g.panics
 }
 
 func (g *gen) value(t ty) (goText, leanVal, leanArg string) {
@@ -479,6 +589,8 @@ type call struct {
 	goArgs, leanVals []string
 	leanArgs         []string
 	result           ty
+	// The translation returns an Except.
+	panics bool
 }
 
 // chunks defines name as a list of items. It writes the list in parts of 50,
@@ -559,11 +671,11 @@ func check(seed int64, programs int) error {
 			for range g.pick(4) {
 				f.params = append(f.params, allTypes[g.pick(len(allTypes))])
 			}
-			g.function(f)
+			g.function(&f)
 			g.callable = append(g.callable, f)
 			order = append(order, f.name)
 			for range callsPerFunction {
-				c := call{fn: f.name, result: f.result}
+				c := call{fn: f.name, result: f.result, panics: f.panics}
 				for _, t := range f.params {
 					a, v, l := g.value(t)
 					c.goArgs = append(c.goArgs, a)
@@ -581,7 +693,11 @@ func check(seed int64, programs int) error {
 
 	// Go: a main that prints each result on its own line.
 	var m strings.Builder
-	m.WriteString("package main\n\nimport \"fmt\"\n\nfunc main() {\n")
+	// show recovers a panic and prints its message.
+	m.WriteString("package main\n\nimport \"fmt\"\n\n")
+	m.WriteString("func show(f func() string) (s string) {\n\tdefer func() {\n" +
+		"\t\tif r := recover(); r != nil {\n\t\t\ts = fmt.Sprint(\"panic: \", r)\n\t\t}\n\t}()\n" +
+		"\treturn f()\n}\n\nfunc main() {\n")
 	for _, c := range calls {
 		format := "%d"
 		switch c.result {
@@ -590,7 +706,8 @@ func check(seed int64, programs int) error {
 		case tString:
 			format = "%q"
 		}
-		fmt.Fprintf(&m, "\tfmt.Printf(\"%s\\n\", %s(%s))\n", format, c.fn, strings.Join(c.goArgs, ", "))
+		fmt.Fprintf(&m, "\tfmt.Println(show(func() string { return fmt.Sprintf(%q, %s(%s)) }))\n",
+			format, c.fn, strings.Join(c.goArgs, ", "))
 	}
 	m.WriteString("}\n")
 	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(m.String()), 0o644); err != nil {
@@ -637,6 +754,17 @@ func check(seed int64, programs int) error {
 	var vals, translatedChecks []string
 	for i, c := range calls {
 		var leanResult, leanVal string
+		label := fmt.Sprintf("%s(%s) = %s", c.fn, strings.Join(c.goArgs, ", "), results[i])
+		leanCall := fmt.Sprintf("Diff.%s %s", c.fn, strings.Join(c.leanArgs, " "))
+		if msg, ok := strings.CutPrefix(results[i], "panic: "); ok {
+			if !c.panics {
+				return fmt.Errorf("%s panics, but the generator wrote no division or call that may panic", label)
+			}
+			vals = append(vals, fmt.Sprintf("  (%q, [%s], .error (.str %s))", c.fn, strings.Join(c.leanVals, ", "), leanString(msg)))
+			translatedChecks = append(translatedChecks, fmt.Sprintf("  (%s, match %s with | .error e => e == %s | .ok _ => false)",
+				leanString(label), leanCall, leanString(msg)))
+			continue
+		}
 		switch c.result {
 		case tBool:
 			leanResult, leanVal = results[i], "(.bool "+results[i]+")"
@@ -651,12 +779,14 @@ func check(seed int64, programs int) error {
 			leanResult = "(" + results[i] + " : Int)"
 			leanVal = "(.int (" + results[i] + "))"
 		}
-		vals = append(vals, fmt.Sprintf("  (%q, [%s], %s)", c.fn, strings.Join(c.leanVals, ", "), leanVal))
-		label := fmt.Sprintf("%s(%s) = %s", c.fn, strings.Join(c.goArgs, ", "), results[i])
-		translatedChecks = append(translatedChecks, fmt.Sprintf("  (%s, Diff.%s %s == %s)",
-			leanString(label), c.fn, strings.Join(c.leanArgs, " "), leanResult))
+		vals = append(vals, fmt.Sprintf("  (%q, [%s], .ok %s)", c.fn, strings.Join(c.leanVals, ", "), leanVal))
+		check := fmt.Sprintf("%s == %s", leanCall, leanResult)
+		if c.panics {
+			check = fmt.Sprintf("match %s with | .ok v => v == %s | .error _ => false", leanCall, leanResult)
+		}
+		translatedChecks = append(translatedChecks, fmt.Sprintf("  (%s, %s)", leanString(label), check))
 	}
-	chunks(&l, "calls", "(String × List Eval.Val × Eval.Val)", vals)
+	chunks(&l, "calls", "(String × List Eval.Val × Except Eval.Val Eval.Val)", vals)
 	l.WriteString(`#eval show IO Unit from do
   let decls ← match Syntax.parse source with
     | .ok file => pure file.decls
@@ -675,18 +805,20 @@ func check(seed int64, programs int) error {
     throw (IO.userError ("the proved path refuses generated functions:\n" ++ "\n".intercalate refusals))
   let program := Eval.program decls
   let fs := IR.functions (out.map (·.1))
-  -- The value that a call returns, or none when it panics or has no value.
-  -- The generator does not divide, so no call panics.
-  let value : Option (Except Eval.Val Eval.Val) → Option Eval.Val
-    | some (.ok v) => some v
-    | _ => none
+  -- The value that a call returns, or the panic, as text: Except has no
+  -- BEq instance.
+  let text : Option (Except Eval.Val Eval.Val) → String
+    | some (.ok v) => s!"value {repr v}"
+    | some (.error v) => s!"panic {repr v}"
+    | none => "no result"
   let mut bad : Array String := #[]
   for (f, args, want) in calls do
-    let got := value (Eval.runIn program f args)
-    if got != some want then
-      bad := bad.push s!"interpreter: {f} {repr args} gives {repr got}, Go gives {repr want}"
-    let got := value (IR.runIn fs ⟨"", f⟩ args)
-    if got != some want then
+    let want := text (some want)
+    let got := text (Eval.runIn program f args)
+    if got != want then
+      bad := bad.push s!"interpreter: {f} {repr args} gives {got}, Go gives {want}"
+    let got := text (IR.runIn fs ⟨"", f⟩ args)
+    if got != want then
       bad := bad.push s!"IR: {f} {repr args} gives {repr got}, Go gives {repr want}"
   unless bad.isEmpty do
     throw (IO.userError ("\n".intercalate bad.toList))
