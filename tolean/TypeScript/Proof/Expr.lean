@@ -146,7 +146,7 @@ code may read is the one the interpreter reads: in the file of `m`, the name
 a `throw` may make an error of is the one the interpreter makes. -/
 def Resolves (m : Eval.Scope) (env : Translate.Env) : Prop :=
   (∀ f ∈ env.functions, Eval.resolve m f.name = some f.ref ∧
-    (f.borrow.isSome = true → f.file = m.file)) ∧
+    (f.borrow.isSome = true → f.ref = ⟨m.file, f.name⟩)) ∧
     (∀ e ∈ env.enums, Eval.resolveEnum m e.name = some e.members) ∧
     (∀ c ∈ env.classes, ClassAgrees m c) ∧
     (∀ name, isGlobalName name = true → Eval.errorClassIn m name = none)

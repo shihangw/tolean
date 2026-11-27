@@ -79,6 +79,16 @@ export a name only once, an early error of the module grammar (ES2015
 §15.2.1.1; ES2024 §16.2.1.1). Every supported edition specifies both, so
 value re-exports add no edition gate.
 
+A renamed import, `import { a as b }`, and a renamed export, `export { a as b }`
+with or without `from`, follow the ImportSpecifier and ExportSpecifier grammar
+(ES2015 §15.2.2 and §15.2.3; ES2024 §16.2.2 and §16.2.3). The import binds the
+local name `b` to the export `a` of the other module, and the export lists
+`b` as the export name of the binding `a`, the ImportEntry and ExportEntry
+records of ParseModule (ES2015 §15.2.1.16.4 and Table 39; ES2024 §16.2.1.6.1
+and Table 61). ResolveExport follows a renamed re-export to the name before
+`as`. ES2015 specifies all of it, so renames add no edition gate. A string
+literal as a name, `export { a as "b" }`, came in ES2022 and remains refused.
+
 Optional element access follows OptionalExpression and ChainEvaluation
 (ES2020 §12.3.9; ES2024 §13.3.9). An absent receiver skips the index and
 gives undefined. A present array uses the existing array-index operation.

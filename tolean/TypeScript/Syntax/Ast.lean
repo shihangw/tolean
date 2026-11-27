@@ -1037,12 +1037,20 @@ structure ClassDecl where
   members : List ClassMember
 
 /-- One name of `import { a, type B } from "./x.ts"`. `typeOnly` is true for
-`type B`, and for every name of `import type { … }`. -/
+`type B`, and for every name of `import type { … }`. `alias` is the name
+after `as`: in an import, the name that the file binds to what the other file
+exports as `name`; in an export list, the name that the file exports `name`
+as. -/
 structure ImportName where
   span : Span
   typeOnly : Bool
   name : String
+  alias : Option String := none
 deriving DecidableEq
+
+/-- The name after `as`, or the name itself without `as`: what an import
+binds, or what an export list exports. -/
+def ImportName.binding (n : ImportName) : String := n.alias.getD n.name
 
 /-- Parameters, the super message, and an optional literal assignment to
 the runtime name property of an error. -/

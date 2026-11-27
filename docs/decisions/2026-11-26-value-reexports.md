@@ -51,7 +51,8 @@ an early error (§16.2.1.1).
   and export list. Renaming needs a second name in `ImportName`, and the
   parser's round-trip proof covers that structure, so it is a separate
   change. The translator side is ready for it: a renamed re-export would be
-  a function whose exported name differs from `FnInfo.name`.
+  a function whose exported name differs from `FnInfo.name`. The [renamed
+  imports decision](2026-11-26-renamed-imports.md) later accepted it.
 - `export * from "./x.ts"`. The parser refuses it. Its set of names depends
   on every name that the other file exports, and on the rule that a name
   from two star exports is ambiguous, which the subset does not model.

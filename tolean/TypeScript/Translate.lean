@@ -509,8 +509,18 @@ structure FnInfo where
   hoists : Bool := false
   /-- A normal-completion map borrow returns this parameter instead of void. -/
   borrow : Option Nat := none
+  /-- The name that the file `file` declares the function under, when the
+  function is known here under another name: `import { f as g }`, or
+  `export { f as g }`. -/
+  declName : Option String := none
 
-def FnInfo.ref (f : FnInfo) : DeclRef := ⟨f.file, f.name⟩
+def FnInfo.ref (f : FnInfo) : DeclRef := ⟨f.file, f.declName.getD f.name⟩
+
+/-- The function `f` known under the name `name`: the same declaration. -/
+def FnInfo.rename (f : FnInfo) (name : String) : FnInfo :=
+  { f with name, declName := some f.ref.name }
+
+@[simp] theorem FnInfo.ref_rename (f : FnInfo) (name : String) : (f.rename name).ref = f.ref := rfl
 
 /-- An error class of the file, `class C extends Error`: the parameters of
 its constructor, each with its type and whether `readonly` makes it a field,
@@ -614,8 +624,17 @@ structure EnumInfo where
   exported : Bool := false
   members : List String
   named : Option (List (String × String)) := none
+  /-- The name that the file `file` declares the enum under, when the enum
+  is known here under another name, as for a function. -/
+  declName : Option String := none
 
-def EnumInfo.ref (i : EnumInfo) : DeclRef := ⟨i.file, i.name⟩
+def EnumInfo.ref (i : EnumInfo) : DeclRef := ⟨i.file, i.declName.getD i.name⟩
+
+/-- The enum `i` known under the name `name`. -/
+def EnumInfo.rename (i : EnumInfo) (name : String) : EnumInfo :=
+  { i with name, declName := some i.ref.name }
+
+@[simp] theorem EnumInfo.ref_rename (i : EnumInfo) (name : String) : (i.rename name).ref = i.ref := rfl
 
 /-- A type alias of the program, `type T = U`, with the file that declares
 it. `type` is the type of `U`, which the translator writes wherever the
@@ -5331,7 +5350,9 @@ def translateImport (s : Span) (names : List ImportName) (source : String) : TM 
     reject s (s!"'{source}' is translated for {iface.target.name}, which is newer than this " ++
       s!"file's {ctx.target.name}")
   names.forM fun n => do
-    declareTopLevel n.span n.name
+    declareTopLevel n.span n.binding
+    if n.typeOnly && n.alias.isSome then
+      reject n.span "renaming a type with 'as' is not supported; import it under its own name"
     if n.typeOnly then
       match iface.aliases.find? (·.name == n.name),
           iface.enums.find? fun e => e.name == n.name && e.exported with
@@ -5354,8 +5375,8 @@ def translateImport (s : Span) (names : List ImportName) (source : String) : TM 
       -- A string enum is a value too: its object, whose members code reads.
       | some (info, pairs) =>
         modify fun c => { c with
-          enums := c.enums ++ [{ info with exported := false }],
-          enumValues := c.enumValues ++ [{ name := n.name, ref := info.ref, members := pairs }] }
+          enums := c.enums ++ [{ info.rename n.binding with exported := false }],
+          enumValues := c.enumValues ++ [{ name := n.binding, ref := info.ref, members := pairs }] }
       | none =>
       if iface.aliases.any (·.name == n.name) || (iface.enums.any fun e => e.name == n.name && e.exported) ||
           iface.unions.any fun u => u.name == n.name && u.exported then
@@ -5363,7 +5384,7 @@ def translateImport (s : Span) (names : List ImportName) (source : String) : TM 
       let fn ← orReject (iface.functions.find? (·.name == n.name)) n.span
         s!"'{source}' exports no function named '{n.name}'"
       if fn.borrow.isSome then reject n.span "an imported map borrow is not supported yet"
-      modify fun c => { c with functions := c.functions ++ [{ fn with exported := false }] }
+      modify fun c => { c with functions := c.functions ++ [{ fn.rename n.binding with exported := false }] }
 
 /-- Why the export list `names` is wrong in `c`, if it is. Each name must be
 a function, or with `type` an interface or a type, that the file declares
@@ -5372,7 +5393,13 @@ name with `type`, so a function may not have it, and a type must. A string
 enum is also a value, so only `export enum` exports it. -/
 def exportsError? (c : Ctx) (names : List ImportName) : Option (Span × String) :=
   names.findSome? fun n =>
-    if c.enums.any fun e => e.file == c.file && e.name == n.name && e.named.isSome then
+    -- `export { f as g }` exports the function `f` as `g` too, even when `f`
+    -- is exported already.
+    if n.binding != n.name then
+      if n.typeOnly || !(c.functions.any fun f => f.file == c.file && f.name == n.name) then
+        some (n.span, s!"only a function of this file may be renamed with 'as' in an export list, and '{n.name}' is not one")
+      else none
+    else if c.enums.any fun e => e.file == c.file && e.name == n.name && e.named.isSome then
       some (n.span, s!"'{n.name}' is a string enum; export it with 'export enum {n.name}'")
     else
       let ownFn := c.functions.find? fun f => f.file == c.file && f.name == n.name
@@ -5486,7 +5513,9 @@ def reexportsError? (c : Ctx) (s : Span) (names : List ImportName) (source : Str
       if c.target.year < iface.target.year then
         some (s, s!"'{source}' is translated for a newer edition than this file")
       else names.findSome? fun n =>
-        if !n.typeOnly then
+        if n.typeOnly && n.alias.isSome then
+          some (n.span, "renaming a type with 'as' is not supported; re-export it under its own name")
+        else if !n.typeOnly then
           if iface.functions.any (·.name == n.name) || (iface.stringEnum? n.name).isSome then none
           else if (iface.aliases.any (·.name == n.name)) ||
               (iface.structs.any fun i => i.name == n.name && i.exported) ||
@@ -5699,11 +5728,13 @@ def duplicateExport? (m : Module) : Option (ImportName × String) :=
   let reexported := (m.decls.flatMap fun
     | .exports _ names (some _) => names
     | _ => [])
+  let renamed := listed.filter fun n => n.binding != n.name
   (listed.zipIdx.findSome? fun (n, i) =>
-    if (listed.take i).any (·.name == n.name) then some (n, s!"'{n.name}' is in two export lists") else none).orElse
-  fun _ => reexported.findSome? fun n =>
-    if declared.contains n.name then
-      some (n, s!"'{n.name}' is exported twice: a declaration of this file exports it too")
+    if (listed.take i).any (·.binding == n.binding) then some (n, s!"'{n.binding}' is in two export lists")
+    else none).orElse
+  fun _ => (reexported ++ renamed).findSome? fun n =>
+    if declared.contains n.binding then
+      some (n, s!"'{n.binding}' is exported twice: a declaration of this file exports it too")
     else none
 
 /-- The declarations of `m`, translated. This is the translator as a function
@@ -5814,33 +5845,54 @@ def Ctx.reexportInterfaces (c : Ctx) (listed : List (List ImportName × String))
     let iface ← c.interfaces.lookup file
     return (names, iface)
 
-/-- The names that `m` re-exports as values: `export { a } from "./x.ts"`. -/
+/-- The names that `m` re-exports as values: `export { a } from "./x.ts"`,
+or `b` for `export { a as b } from "./x.ts"`. -/
 def reexportValueNames (m : Module) : List String :=
-  (reexportListed m).flatMap fun (names, _) => (names.filter (!·.typeOnly)).map (·.name)
+  (reexportListed m).flatMap fun (names, _) => (names.filter (!·.typeOnly)).map (·.binding)
+
+/-- The names that `m` may export a function of its own as: the functions
+with `export` before them, and the names of its export lists without `from`. -/
+def ownExportNames (m : Module) : List String :=
+  m.decls.flatMap fun
+    | .function _ true n _ _ _ _ => [n]
+    | .exports _ names none => (names.filter (!·.typeOnly)).map (·.binding)
+    | _ => []
+
+/-- The file's own functions that it exports, each under the name that it
+exports it as, which `Eval.exportedFunction` finds. A function exported as
+another name, `export { f as g }`, is offered as `g` and keeps its own
+declaration, so a call through `g` names the definition of `f`. -/
+def Ctx.ownExports (c : Ctx) (m : Module) : List FnInfo :=
+  (ownExportNames m).filterMap fun name => do
+    let own ← Eval.exportedFunction m name
+    let f ← c.functions.find? fun f => f.file == c.file && f.name == own
+    some { f with name, declName := some own, exported := true }
 
 /-- The functions that the file re-exports. Each keeps the file that declares
 it, so a call through the re-export names that file's definition. The name
 of each is one that the file does not export itself, and the file it comes
-from is the one that `Eval.resolveExport` follows. -/
+from, with the name that file exports it as, is the one that
+`Eval.resolveExport` follows. -/
 def Ctx.reexportedFunctions (c : Ctx) (m : Module) : List FnInfo :=
   (reexportValueNames m).filterMap fun name =>
-    if Eval.exportsFunction m name then none else do
-      let target ← Eval.reexportSource c.file m name
+    if (Eval.exportedFunction m name).isSome then none else do
+      let (target, other) ← Eval.reexportSource c.file m name
       let iface ← c.interfaces.lookup target
-      iface.functions.find? (·.name == name)
+      let g ← iface.functions.find? (·.name == other)
+      some (g.rename name)
 
 /-- The string enums that the file re-exports, with the enum's own file, in
 the same way. -/
 def Ctx.reexportedEnums (c : Ctx) (m : Module) : List EnumInfo :=
   (reexportValueNames m).filterMap fun name =>
     if ((Eval.enumsOf m true).lookup name).isSome then none else do
-      let target ← Eval.reexportSource c.file m name
+      let (target, other) ← Eval.reexportSource c.file m name
       let iface ← c.interfaces.lookup target
-      (iface.stringEnum? name).map (·.1)
+      (iface.stringEnum? other).map fun (e, _) => e.rename name
 
 def Ctx.interface (c : Ctx) (usesNumber : Bool) (numberVar : String)
     (listed : List (List ImportName × String) := []) (m : Module := ⟨[]⟩) : Interface :=
-  { functions := c.functions.filter (fun f => f.exported && f.file == c.file) ++ c.reexportedFunctions m,
+  { functions := c.ownExports m ++ c.reexportedFunctions m,
     structs := c.reachableStructs ++ (c.reexportInterfaces listed).flatMap fun (names, iface) =>
       iface.structs.filter fun i => i.exported && names.any fun n => n.typeOnly && n.name == i.name,
     aliases := (c.aliases.filter fun a => a.exported && a.file == c.file) ++

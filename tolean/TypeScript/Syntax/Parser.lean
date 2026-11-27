@@ -1626,11 +1626,36 @@ def parseClassDeclaration (start : Pos) (exported : Bool) : ParseM Decl := do
 
 /-- What `parseImport` refuses: every form of `import` outside the subset. -/
 def refuseImport {A : Type} (t : Token) : ParseM A :=
-  failAt t "tolean supports only 'import { a, b } from \"./file.ts\"', with no default or namespace import and no 'as'"
+  failAt t "tolean supports only 'import { a, b as c } from \"./file.ts\"', with no default or namespace import"
+
+/-- `as b` after a name of an import or an export list: `b`, or none when no
+`as` comes. -/
+def readAlias : ParseM (Option String) := do
+  if (← peek).isIdent "as" then
+    discard advance
+    let alias ← readName
+    pure (some alias)
+  else
+    pure none
+
+/-- The rest of one name of an import or an export list, after the name:
+`as b` if it comes, then the `,` after it, unless the `}` comes. -/
+def importTail (names : Array ImportName) (nameToken : Token) (typeOnly : Bool) (name : String) :
+    ParseM (Array ImportName × Bool) := do
+  let alias ← readAlias
+  -- `type as b` reads as the name `as` with `type` before it, so `type`
+  -- itself, renamed and without `type` before it, never comes here.
+  if alias.isSome && !typeOnly && name == "type" then failAt nameToken "'type' may not be renamed"
+  let names := names.push { span := nameToken.span, typeOnly, name, alias }
+  let t ← peek
+  if t.isPunct "," then discard advance
+  else if !t.isPunct "}" then unexpected t "',' or '}'"
+  return (names, true)
 
 /-- One step of the loop over the names of an import: a name, with `type`
-before it if it is a type, and the `,` after it, unless the `}` comes.
-`clauseType` is `import type`, which marks every name. -/
+before it if it is a type, `as` and another name after it if it is renamed,
+and the `,` after it, unless the `}` comes. `clauseType` is `import type`,
+which marks every name. -/
 def importStep (clauseType : Bool) (names : Array ImportName) : ParseM (Array ImportName × Bool) := do
   let t ← peek
   if t.isPunct "}" then return (names, false)
@@ -1641,12 +1666,7 @@ def importStep (clauseType : Bool) (names : Array ImportName) : ParseM (Array Im
   if typeOnly then discard advance
   let nameToken ← peek
   let name ← readName
-  if (← peek).isIdent "as" then refuseImport (← peek)
-  let names := names.push { span := nameToken.span, typeOnly := clauseType || typeOnly, name }
-  let t ← peek
-  if t.isPunct "," then discard advance
-  else if !t.isPunct "}" then unexpected t "',' or '}'"
-  return (names, true)
+  importTail names nameToken (clauseType || typeOnly) name
 
 /-- `import { a, type B } from "./x.ts";` and `import type { B } from "./x.ts";`.
 Other forms of `import` leave the subset. -/

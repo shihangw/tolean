@@ -3714,7 +3714,7 @@ theorem borrowCallStmt_sim {env : Translate.Env} {sp cs ns ms : Span} {args : Li
   have hfile := (hs.2.1 fn hfind).2 (by simp [hborrow])
   have hex := borrow_call_from_agreement m fs k hc ρs sp cs ns ms fn.name target param index args vs
     ps body after before entries (hargs ρs ρo vs ha hs hvs) (hs.none hglobal) htarget
-    (by simpa [FnInfo.ref, hfile] using hout) hparam hstate hlen hbeforeS hrun hfinal
+    (by simpa [hfile] using hout) hparam hstate hlen hbeforeS hrun hfinal
   refine ⟨[(target, .map entries)], ρs.set target (.map entries), ρo.set target (.map entries),
     ?_, hrb, hex, ?_, Frame.set (by simp) ρs⟩
   · simp [IR.bindState, hbefore]
