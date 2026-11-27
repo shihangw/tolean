@@ -1,0 +1,36 @@
+{"tolean": "0.3.1",
+ "sources":
+ [{"sha256": "092d6faf7b69c70731a9a8c610a52311fca3ed3e709e1bed5c7a1215a84fc410",
+   "path": "corpus/translate/strbytes/strbytes.go"}],
+ "output":
+ {"sha256": "452e802c52f27093962896a61d6d91148b791fe5327d5856bfe235a7b3c56d6f",
+  "path": "corpus/translate/strbytes/Strbytes.lean"},
+ "nodes":
+ [{"status": "tested",
+   "label": "Go parser",
+   "kind": "parser",
+   "id": "parser",
+   "evidence": {"reference": "go/parser", "check": "go-check", "by": "tolean"}},
+  {"status": "tested",
+   "label": "Go translator",
+   "kind": "translator",
+   "id": "translator",
+   "evidence":
+   {"reference": "fixed corpus output", "check": "go-check", "by": "tolean"}},
+  {"status": "trusted",
+   "module": "tolean.Go.Spec.Basic",
+   "label": "Go Spec",
+   "kind": "spec",
+   "id": "spec"},
+  {"status": "trusted",
+   "label": "Go compiler",
+   "kind": "runtime",
+   "id": "runtime"}],
+ "module": "Strbytes",
+ "language": "go",
+ "edges":
+ [["source", "parser"],
+  ["parser", "translator"],
+  ["translator", "output"],
+  ["spec", "output"],
+  ["runtime", "output"]]}

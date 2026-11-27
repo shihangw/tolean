@@ -27,8 +27,10 @@
 // untyped, alone and in groups, and package-level variables that no
 // function changes. A function that may panic is called only
 // where the subset allows it: alone after :=, =, var or return. Go's main
-// recovers each panic and prints its message. When the subset grows, add the
-// new construct here too.
+// recovers each panic and prints its message. The generator also writes
+// len(s), the byte s[i] converted to int or int64, which panics when i is out
+// of range, and the orders of strings. When the subset grows, add the new
+// construct here too.
 //
 // Run it from tests/go after `lake build`:
 //
@@ -104,8 +106,8 @@ type gen struct {
 	inLoop, literalStrings bool
 	// The function being written divides or calls a function that may panic.
 	panics bool
-	// The expression being written is the right operand of && or ||, where the
-	// subset refuses a division.
+	// The expression being written is the right operand of && or ||, or a part
+	// of a switch header, where the subset refuses a division and an index.
 	noDivide bool
 }
 
@@ -134,7 +136,7 @@ func (g *gen) visible(t ty, mutable bool) []*local {
 	return out
 }
 
-var words = []string{"", "a", "ab", "Go", "xyz", "lean"}
+var words = []string{"", "a", "ab", "Go", "xyz", "lean", "é", "日本"}
 
 func (g *gen) literal(t ty) string {
 	switch t {
@@ -299,6 +301,18 @@ func (g *gen) expr(t ty, depth int) (string, bool) {
 	}
 	switch t {
 	case tInt, tInt64:
+		if g.chance(0.1) {
+			a, c := g.expr(tString, depth-1)
+			if t == tInt {
+				return "len(" + a + ")", c
+			}
+			return "int64(len(" + a + "))", c
+		}
+		if !g.noDivide && g.chance(0.15) {
+			if e, ok := g.index(t, depth-1); ok {
+				return e, false
+			}
+		}
 		if g.chance(0.15) {
 			a, c := g.expr(t, depth-1)
 			return "-(" + a + ")", c
@@ -344,6 +358,9 @@ func (g *gen) expr(t ty, depth int) (string, bool) {
 		default:
 			et := allTypes[g.pick(len(allTypes))]
 			op := []string{"==", "!="}[g.pick(2)]
+			if et == tString && g.chance(0.5) {
+				op = []string{"<", "<=", ">", ">="}[g.pick(4)]
+			}
 			if et.isInt() {
 				a, b, ok := g.intOperands(et, depth-1)
 				if !ok {
@@ -356,6 +373,31 @@ func (g *gen) expr(t ty, depth int) (string, bool) {
 			return "(" + a + " " + op + " " + b + ")", ca && cb
 		}
 	}
+}
+
+// index returns int(s[i]) or int64(s[i]). Go refuses a constant index that
+// is negative, and a constant index out of the range of a constant string, so
+// a constant index is a small literal and the string is not constant then.
+func (g *gen) index(t ty, depth int) (string, bool) {
+	// A failed attempt reads no local, because only a constant fails, so no
+	// local counts as used when the index is dropped.
+	var s, i string
+	if g.chance(0.5) {
+		e, ok := g.nonConst([]ty{tInt, tInt64}[g.pick(2)], depth)
+		if !ok {
+			return "", false
+		}
+		i = e
+		s, _ = g.expr(tString, depth)
+	} else {
+		e, ok := g.nonConst(tString, depth)
+		if !ok {
+			return "", false
+		}
+		s, i = e, strconv.Itoa(g.pick(6))
+	}
+	g.panics = true
+	return fmt.Sprintf("%s(%s[%s])", t, s, i), true
 }
 
 // intOperands returns two operands of the integer type t for a binary
