@@ -23,8 +23,9 @@
 // without an init statement; expression switches with and without a tag, an
 // init statement, several values in a case and a default anywhere, that
 // change locals or return; one counted loop at the start of a body; calls
-// of functions declared earlier; and package-level constants, typed and
-// untyped, alone and in groups. A function that may panic is called only
+// of functions declared earlier; package-level constants, typed and
+// untyped, alone and in groups; and a struct type per program, with locals
+// from positional, keyed and empty literals, field reads and field writes. A function that may panic is called only
 // where the subset allows it: alone after :=, =, var or return. Go's main
 // recovers each panic and prints its message. The generator also writes
 // len(s), the byte s[i] converted to int or int64, which panics when i is out
@@ -73,6 +74,9 @@ func (t ty) String() string {
 
 func (t ty) isInt() bool { return t == tInt || t == tInt64 }
 
+// tStruct is the type of a local that holds the program's struct.
+const tStruct ty = -1
+
 type local struct {
 	name    string
 	t       ty
@@ -99,7 +103,10 @@ type gen struct {
 	locals []*local
 	// The constants of the program being written.
 	consts []*constant
-	next   int
+	// The name and field types of the program's struct type, if any.
+	structName   string
+	structFields []ty
+	next         int
 	// Inside a loop, a string assignment reads no string local and calls
 	// nothing, so that a string cannot double on each iteration.
 	inLoop, literalStrings bool
@@ -194,6 +201,76 @@ func (g *gen) constants(p int) {
 	g.line("")
 }
 
+// structType declares the program's struct type, or none. Its fields are
+// F0, F1, … with basic types.
+func (g *gen) structType(p int) {
+	g.structName, g.structFields = "", nil
+	if g.chance(0.4) {
+		return
+	}
+	g.structName = fmt.Sprintf("P%dS", p)
+	g.line("type %s struct {", g.structName)
+	for j := range 1 + g.pick(3) {
+		t := allTypes[g.pick(len(allTypes))]
+		g.structFields = append(g.structFields, t)
+		g.line("\tF%d %s", j, t)
+	}
+	g.line("}")
+	g.line("")
+}
+
+// fields returns the fields `v.Fj` of type t of the struct locals in scope.
+func (g *gen) fields(t ty) []string {
+	var out []string
+	for _, l := range g.locals {
+		if l.t != tStruct {
+			continue
+		}
+		for j, ft := range g.structFields {
+			if ft == t {
+				out = append(out, fmt.Sprintf("%s.F%d", l.name, j))
+			}
+		}
+	}
+	return out
+}
+
+// structLocal declares a local of the program's struct type from a
+// positional, keyed or empty literal, then sets one of its fields, which
+// also uses it.
+func (g *gen) structLocal() {
+	if g.structName == "" {
+		return
+	}
+	var lit string
+	switch g.pick(3) {
+	case 0:
+		lit = g.structName + "{}"
+	default:
+		keyed := g.chance(0.5)
+		parts := make([]string, len(g.structFields))
+		for j, t := range g.structFields {
+			e, _ := g.expr(t, 1)
+			if keyed {
+				e = fmt.Sprintf("F%d: %s", j, e)
+			}
+			parts[j] = e
+		}
+		lit = g.structName + "{" + strings.Join(parts, ", ") + "}"
+	}
+	l := &local{name: g.fresh(), t: tStruct, used: true}
+	g.line("%s := %s", l.name, lit)
+	g.locals = append(g.locals, l)
+	g.setField(l)
+}
+
+// setField writes `v.Fj = e` for the struct local l.
+func (g *gen) setField(l *local) {
+	j := g.pick(len(g.structFields))
+	e, _ := g.expr(g.structFields[j], 2)
+	g.line("%s.F%d = %s", l.name, j, e)
+}
+
 // leaf returns a constant expression of type t: a literal, or a constant
 // of the package.
 func (g *gen) leaf(t ty) string {
@@ -224,6 +301,9 @@ func (g *gen) expr(t ty, depth int) (string, bool) {
 	}
 	vars := g.visible(t, false)
 	if depth <= 0 || g.chance(0.3) {
+		if fs := g.fields(t); len(fs) > 0 && g.chance(0.3) {
+			return fs[g.pick(len(fs))], false
+		}
 		if len(vars) > 0 && g.chance(0.7) {
 			l := vars[g.pick(len(vars))]
 			l.used = true
@@ -445,7 +525,7 @@ func (g *gen) declare(t ty) *local {
 // subset accepts it.
 func (g *gen) use(mark int) {
 	for _, l := range g.locals[mark:] {
-		if l.used {
+		if l.used || l.t == tStruct {
 			continue
 		}
 		l.used = true
@@ -543,6 +623,21 @@ func (g *gen) stmts(n, depth int) {
 				g.line("var %s %s = %s", l.name, t, e)
 			}
 		case 2, 3:
+			// The proved counted loop leaves out struct locals.
+			if !g.inLoop && g.structName != "" && g.chance(0.25) {
+				var outer []*local
+				for _, l := range g.locals {
+					if l.t == tStruct {
+						outer = append(outer, l)
+					}
+				}
+				if len(outer) > 0 && g.chance(0.5) {
+					g.setField(outer[g.pick(len(outer))])
+				} else {
+					g.structLocal()
+				}
+				continue
+			}
 			g.assign(len(g.locals))
 		case 4:
 			if depth > 0 {
@@ -1011,6 +1106,7 @@ func check(seed int64, programs int) error {
 	for p := range programs {
 		g.callable = nil
 		g.constants(p)
+		g.structType(p)
 		for j := range 1 + g.pick(4) {
 			f := fn{name: fmt.Sprintf("P%dF%d", p, j), result: allTypes[g.pick(len(allTypes))]}
 			for range g.pick(4) {

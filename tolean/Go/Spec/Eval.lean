@@ -44,7 +44,42 @@ inductive Val where
   | int (i : Int)
   | bool (b : Bool)
   | str (s : String)
-deriving Inhabited, DecidableEq, Repr
+  /-- A struct: the value of each field, in the order that its type declares
+  them (Go specification, "Struct types"). -/
+  | strct (fields : List (String × Val))
+deriving Inhabited, Repr
+
+mutual
+
+/-- Equality of values. `deriving DecidableEq` does not handle the list of
+fields, so it is written out. -/
+def Val.decEq : (a b : Val) → Decidable (a = b)
+  | .int a, .int b => if h : a = b then isTrue (h ▸ rfl) else isFalse (by simp [h])
+  | .bool a, .bool b => if h : a = b then isTrue (h ▸ rfl) else isFalse (by simp [h])
+  | .str a, .str b => if h : a = b then isTrue (h ▸ rfl) else isFalse (by simp [h])
+  | .strct a, .strct b =>
+    match Val.decEqFields a b with
+    | isTrue h => isTrue (h ▸ rfl)
+    | isFalse h => isFalse (by simp [h])
+  | .int _, .bool _ | .int _, .str _ | .int _, .strct _
+  | .bool _, .int _ | .bool _, .str _ | .bool _, .strct _
+  | .str _, .int _ | .str _, .bool _ | .str _, .strct _
+  | .strct _, .int _ | .strct _, .bool _ | .strct _, .str _ => isFalse (by simp)
+
+def Val.decEqFields : (a b : List (String × Val)) → Decidable (a = b)
+  | [], [] => isTrue rfl
+  | [], _ :: _ | _ :: _, [] => isFalse (by simp)
+  | (n, v) :: a, (m, w) :: b =>
+    if hn : n = m then
+      match Val.decEq v w, Val.decEqFields a b with
+      | isTrue hv, isTrue ha => isTrue (by rw [hn, hv, ha])
+      | isFalse hv, _ => isFalse (by simp [hv])
+      | _, isFalse ha => isFalse (by simp [ha])
+    else isFalse (by simp [hn])
+
+end
+
+instance : DecidableEq Val := Val.decEq
 
 /-- The variables in scope, innermost first. -/
 abbrev Env := List (String × Val)
@@ -333,6 +368,9 @@ structure Program where
   /-- Each package-level constant that the subset models: its name, its type
   when the declaration names one, and its value. -/
   consts : List (String × Option Expr × Val) := []
+  /-- Each struct type that the package declares: its name, and the name and
+  type of each field, in order. -/
+  structs : List (String × List (String × Expr)) := []
 
 /-- The names of the parameters, in order. A parameter without a name, as in
 `func f(int) int`, still takes an argument, and its name is `_`, which no
@@ -414,11 +452,31 @@ def declConsts (names : List String) : Decl → List (String × Option Expr × V
     | _ => none
   | _ => []
 
+/-- The fields of a struct type, each with its own name (Go specification,
+"Struct types"): `X, Y int` declares two. An embedded field has no name of
+its own, so a struct with one leaves the subset, as does one whose field
+names repeat, which Go refuses. -/
+def structFields (fields : List Field) : Option (List (String × Expr)) := do
+  let fs ← fields.mapM fun
+    | .mk _ [] _ _ => none
+    | .mk _ names type _ => some (names.map (·, type))
+  let fs := fs.flatten
+  if (fs.map (·.1)).Nodup then some fs else none
+
+/-- The struct types of one top-level declaration (Go specification, "Type
+declarations"): `type S struct { … }`. -/
+def declStructs : Decl → List (String × List (String × Expr))
+  | .gen (.mk _ "type" specs) => specs.filterMap fun
+    | .type _ x (.structType _ fields) false => (x, ·) <$> structFields fields
+    | _ => none
+  | _ => []
+
 /-- The program of the declarations of a package's files. -/
 def program (decls : List Decl) : Program where
   funcs := decls.filterMap funcOf
   names := decls.flatMap declNames
   consts := decls.flatMap (declConsts (decls.flatMap declNames))
+  structs := decls.flatMap declStructs
 
 /-- The value of a package-level name that no variable hides: a constant of
 the package, or a predeclared name that the package does not declare (Go
@@ -428,8 +486,9 @@ def global (p : Program) (name : String) : Option Val :=
   | some (_, v) => some v
   | none => predeclared p name
 
-/-- The zero value of a type (Go specification, "The zero value"). -/
-def zeroOf (p : Program) : Expr → Option Val
+/-- The zero value of a predeclared type of the subset, unless the package
+declares the name. -/
+def basicZeroOf (p : Program) : Expr → Option Val
   | .ident _ name =>
     if p.names.contains name then none
     else match name with
@@ -437,6 +496,57 @@ def zeroOf (p : Program) : Expr → Option Val
       | "bool" => some (.bool false)
       | "string" => some (.str "")
       | _ => none
+  | _ => none
+
+/-- The zero value of a type (Go specification, "The zero value"). A struct's
+is the zero value of each field, and the subset's fields have predeclared
+types. -/
+def zeroOf (p : Program) (te : Expr) : Option Val :=
+  match te with
+  | .ident _ name =>
+    match p.structs.lookup name with
+    | some fields => (.strct ·) <$> fields.mapM fun (f, t) => (f, ·) <$> basicZeroOf p t
+    | none => basicZeroOf p te
+  | _ => none
+
+/-- The element of a composite literal without its key. -/
+def elemValue : Expr → Expr
+  | .keyValue _ _ v => v
+  | e => e
+
+/-- The field that a key of a struct literal names. -/
+def keyName? : Expr → Option String
+  | .keyValue _ (.ident _ f) _ => some f
+  | _ => none
+
+/-- The value of a struct literal of a type with `fields`, whose elements
+`elts` have the values `vals` (Go specification, "Composite literals"). The
+elements are all keyed or none is. A keyed literal gives each field it names
+its element's value and the others their zero value, and every key must name
+a field once. One without keys gives every field in order. -/
+def structLit (p : Program) (fields : List (String × Expr)) (elts : List Expr) (vals : List Val) :
+    Option Val :=
+  if elts.all (keyName? · |>.isSome) then do
+    let keys ← elts.mapM keyName?
+    unless keys.Nodup && keys.all (fields.lookup · |>.isSome) do none
+    let given := keys.zip vals
+    return .strct (← fields.mapM fun (f, t) =>
+      match given.lookup f with
+      | some v => some (f, v)
+      | none => (f, ·) <$> basicZeroOf p t)
+  else if elts.any (keyName? · |>.isSome) || vals.length != fields.length then none
+  else some (.strct ((fields.map (·.1)).zip vals))
+
+/-- The field `f` of a struct (Go specification, "Selectors"). -/
+def fieldOf (v : Val) (f : String) : Option Val :=
+  match v with
+  | .strct fs => fs.lookup f
+  | _ => none
+
+/-- A struct with the field `f` set to `w`. -/
+def setField (v : Val) (f : String) (w : Val) : Option Val :=
+  match v with
+  | .strct fs => if (fs.lookup f).isSome then some (.strct (fs.map fun (g, u) => (g, if g == f then w else u))) else none
   | _ => none
 
 /-- Every statement has a positive size, so that a statement with an init
@@ -496,6 +606,14 @@ def eval (p : Program) (fuel : Nat) (env : Env) : Expr → Res Val Val
         | [a] => (eval p fuel env a).andThen fun x => Res.lift (applyBuiltin b x)
         | _ => none
       | none => callFunc p fuel env f args
+  -- `x.f` reads the field `f` of the struct `x`.
+  | .selector _ x f => (eval p fuel env x).andThen fun v => Res.lift (fieldOf v f)
+  -- `T{…}`: the elements are evaluated in order (Go specification, "Order
+  -- of evaluation"), then the struct is built.
+  | .composite _ (some (.ident _ t)) elts =>
+    match p.structs.lookup t with
+    | some fields => (evalElems p fuel env elts).andThen fun vs => Res.lift (structLit p fields elts vs)
+    | none => none
   | _ => none
 termination_by e => (fuel, sizeOf e, 0)
 
@@ -524,6 +642,16 @@ def evalList (p : Program) (fuel : Nat) (env : Env) : List Expr → Res Val (Lis
   | e :: es => (eval p fuel env e).andThen fun v => (evalList p fuel env es).andThen fun vs => .ok (v :: vs)
 termination_by es => (fuel, sizeOf es, 0)
 
+/-- The values of the elements of a composite literal, in order, without
+their keys. -/
+def evalElems (p : Program) (fuel : Nat) (env : Env) : List Expr → Res Val (List Val)
+  | [] => .ok []
+  | .keyValue _ _ v :: es => (eval p fuel env v).andThen fun x =>
+    (evalElems p fuel env es).andThen fun xs => .ok (x :: xs)
+  | e :: es => (eval p fuel env e).andThen fun x =>
+    (evalElems p fuel env es).andThen fun xs => .ok (x :: xs)
+termination_by es => (fuel, sizeOf es, 0)
+
 def execStmt (p : Program) (fuel : Nat) (env : Env) : Stmt → Option Outcome
   | .ret _ [e] => withValue (eval p fuel env e) fun v => some (.ret v)
   | .assign _ op [.ident _ x] [e] =>
@@ -543,6 +671,12 @@ def execStmt (p : Program) (fuel : Nat) (env : Env) : Stmt → Option Outcome
         withValue ((eval p fuel env e).andThen fun v => operate o old v) fun w =>
           some (.normal (env.set x w))
     | none => none
+  -- `x.f = e`: `e` is evaluated, then the field `f` of the variable `x`
+  -- changes (Go specification, "Assignment statements").
+  | .assign _ "=" [.selector _ (.ident _ x) f] [e] =>
+    withValue (eval p fuel env e) fun v => do
+      let old ← env.lookup x
+      return .normal (env.set x (← setField old f v))
   | .incDec _ op (.ident _ x) => do
     let o ← incDecOp? op
     let old ← env.lookup x

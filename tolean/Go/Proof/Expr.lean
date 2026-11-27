@@ -315,7 +315,7 @@ is zero, and the test of an index when its message is not empty. -/
 def fault : Val → Option Val
   | .int i => if i = 0 then some Eval.divideByZero else none
   | .str m => if m = "" then none else some (.str m)
-  | .bool _ => none
+  | .bool _ | .strct _ => none
 
 /-- The panic of the first check of `ds` that fails. -/
 def firstFault : List Val → Option Val
@@ -653,6 +653,7 @@ theorem translateBinary_out {o : BinOp} (h : translateBinary sp o a ta b tb = .o
       hbin hd⟩
   case eq =>
     split at h
+    · exact absurd h reject_ne_ok
     · simp only [pure_ok, Prod.mk.injEq] at h
       obtain ⟨rfl, -⟩ := h
       rw [out_decide] at hv
@@ -662,6 +663,7 @@ theorem translateBinary_out {o : BinOp} (h : translateBinary sp o a ta b tb = .o
     · exact absurd h reject_ne_ok
   case ne =>
     split at h
+    · exact absurd h reject_ne_ok
     · simp only [pure_ok, Prod.mk.injEq] at h
       obtain ⟨rfl, -⟩ := h
       rw [out_decide] at hv
@@ -725,6 +727,233 @@ theorem plain_out {ρ : Eval.Env} {c : IR.Expr} (hd : divisors c = []) :
     IR.Expr.evalList fs fuel ρ (divisors c) = some [] ∧ CheckVals [] :=
   ⟨by rw [hd]; exact evalList_nil, checkVals_nil⟩
 
+/-! ### Structs -/
+
+theorem structTys_some {ctx : Ctx} {name : String} {tys : List (String × Ty)}
+    (h : structTys ctx name = some tys) :
+    ∃ fields, ctx.program.structs.lookup name = some fields ∧ (fields.map (·.1)).Nodup ∧
+      fieldTys ctx fields = some tys := by
+  unfold structTys at h
+  cases hl : ctx.program.structs.lookup name with
+  | none => simp [hl] at h
+  | some fields =>
+    simp only [hl, Option.bind_eq_bind, Option.bind_some] at h
+    split at h
+    · next hc => simp only [Bool.and_eq_true, decide_eq_true_eq] at hc; exact ⟨fields, rfl, hc.2, h⟩
+    · simp at h
+
+theorem fieldTys_names {ctx : Ctx} :
+    ∀ {fields : List (String × Expr)} {tys : List (String × Ty)}, fieldTys ctx fields = some tys →
+      tys.map (·.1) = fields.map (·.1)
+  | [], tys, h => by simp [fieldTys] at h; subst h; rfl
+  | (f, te) :: rest, tys, h => by
+    simp only [fieldTys] at h
+    cases hb : basicType ctx te with
+    | none => simp [hb] at h
+    | some t =>
+      cases hr : fieldTys ctx rest with
+      | none => simp [hb, hr] at h
+      | some rtys =>
+        simp only [hb, hr, Option.bind_eq_bind, Option.bind_some] at h
+        split at h
+        · simp at h; subst h; simp [fieldTys_names hr]
+        · simp at h
+
+theorem basic_zero {ctx : Ctx} {te : Expr} {t : Ty} (ht : basicType ctx te = some t) {ρ : Eval.Env}
+    {w : Val} (hw : IR.Expr.eval fs fuel ρ (zeroCode t) = some w) : Eval.basicZeroOf ctx.program te = some w := by
+  cases te with
+  | ident sp name =>
+    simp only [basicType] at ht
+    simp only [Eval.basicZeroOf]
+    split at ht
+    · simp at ht
+    · next hn =>
+      simp only [hn, Bool.false_eq_true, ↓reduceIte]
+      split at ht <;> simp only [Option.some.injEq, reduceCtorEq] at ht <;> subst ht <;>
+        simp only [zeroCode, IR.Expr.eval, Option.some.injEq] at hw <;> subst hw <;> rfl
+  | _ => simp [basicType] at ht
+
+theorem basic_divisors {ctx : Ctx} {te : Expr} {t : Ty} (ht : basicType ctx te = some t) :
+    divisors (zeroCode t) = [] := by
+  cases te with
+  | ident sp name =>
+    simp only [basicType] at ht
+    split at ht
+    · simp at ht
+    · split at ht <;> simp only [Option.some.injEq, reduceCtorEq] at ht <;> subst ht <;> rfl
+  | _ => simp [basicType] at ht
+
+/-- `S{}`: each field's zero value. -/
+theorem zero_fields {ctx : Ctx} {ρ : Eval.Env} :
+    ∀ {fields : List (String × Expr)} {tys : List (String × Ty)} {vs : List (String × Val)},
+      fieldTys ctx fields = some tys →
+      IR.Expr.evalFields fs fuel ρ (tys.map fun (f, t) => (f, zeroCode t)) = some vs →
+      divisors.divisorsFields (tys.map fun (f, t) => (f, zeroCode t)) = [] ∧
+      fields.mapM (fun (f, te) => (f, ·) <$> Eval.basicZeroOf ctx.program te) = some vs
+  | [], tys, vs, h, hv => by
+    simp [fieldTys] at h; subst h
+    simp [IR.Expr.evalFields] at hv; subst hv
+    simp [divisors.divisorsFields]
+  | (f, te) :: rest, tys, vs, h, hv => by
+    simp only [fieldTys] at h
+    cases hb : basicType ctx te with
+    | none => simp [hb] at h
+    | some t =>
+      cases hr : fieldTys ctx rest with
+      | none => simp [hb, hr] at h
+      | some rtys =>
+        simp only [hb, hr, Option.bind_eq_bind, Option.bind_some] at h
+        split at h
+        · simp at h; subst h
+          simp only [List.map_cons, IR.Expr.evalFields, Option.bind_eq_bind] at hv
+          cases hw : IR.Expr.eval fs fuel ρ (zeroCode t) with
+          | none => simp [hw] at hv
+          | some w =>
+            cases hws : IR.Expr.evalFields fs fuel ρ (rtys.map fun (f, t) => (f, zeroCode t)) with
+            | none => simp [hw, hws] at hv
+            | some ws =>
+              simp [hw, hws] at hv; subst hv
+              obtain ⟨hd, hm⟩ := zero_fields hr hws
+              refine ⟨?_, ?_⟩
+              · simp [divisors.divisorsFields, basic_divisors hb, hd]
+              · have hm' : rest.mapM (fun x => Option.map (fun y => (x.1, y)) (Eval.basicZeroOf ctx.program x.2)) = some ws := by
+                  rw [← hm]; rfl
+                simp [List.mapM_cons, basic_zero hb hw, hm']
+        · simp at h
+
+theorem evalFields_zip {ρ : Eval.Env} :
+    ∀ {names : List String} {cs : List IR.Expr} {ws : List (String × Val)},
+      names.length = cs.length → IR.Expr.evalFields fs fuel ρ (names.zip cs) = some ws →
+      ∃ vs, IR.Expr.evalList fs fuel ρ cs = some vs ∧ ws = names.zip vs
+  | [], [], ws, _, h => by simp [IR.Expr.evalFields] at h; subst h; exact ⟨[], by simp [IR.Expr.evalList], rfl⟩
+  | [], _ :: _, _, hl, _ | _ :: _, [], _, hl, _ => by simp at hl
+  | n :: ns, c :: cs, ws, hl, h => by
+    simp only [List.zip_cons_cons, IR.Expr.evalFields, Option.bind_eq_bind] at h
+    cases hw : IR.Expr.eval fs fuel ρ c with
+    | none => simp [hw] at h
+    | some w =>
+      cases hws : IR.Expr.evalFields fs fuel ρ (ns.zip cs) with
+      | none => simp [hw, hws] at h
+      | some rest =>
+        simp [hw, hws] at h; subst h
+        obtain ⟨vs, hvs, rfl⟩ := evalFields_zip (by simpa using hl) hws
+        exact ⟨w :: vs, by simp [IR.Expr.evalList, hw, hvs], rfl⟩
+
+theorem evalList_length {ρ : Eval.Env} :
+    ∀ {cs : List IR.Expr} {vs : List Val}, IR.Expr.evalList fs fuel ρ cs = some vs → vs.length = cs.length
+  | [], vs, h => by simp [IR.Expr.evalList] at h; subst h; rfl
+  | c :: cs, vs, h => by
+    simp only [IR.Expr.evalList, Option.bind_eq_bind] at h
+    cases hc : IR.Expr.eval fs fuel ρ c with
+    | none => simp [hc] at h
+    | some w =>
+      cases hcs : IR.Expr.evalList fs fuel ρ cs with
+      | none => simp [hc, hcs] at h
+      | some ws =>
+        simp [hc, hcs] at h; subst h
+        simp [evalList_length hcs]
+
+theorem divisorsFields_zip :
+    ∀ {names : List String} {cs : List IR.Expr}, names.length = cs.length →
+      divisors.divisorsFields (names.zip cs) = divisors.divisorsList cs
+  | [], [], _ => by simp [divisors.divisorsFields, divisors.divisorsList]
+  | [], _ :: _, hl | _ :: _, [], hl => by simp at hl
+  | n :: ns, c :: cs, hl => by
+    simp [divisors.divisorsFields, divisors.divisorsList, divisorsFields_zip (by simpa using hl : ns.length = cs.length)]
+
+theorem evalElems_eq (p : Eval.Program) (fuel : Nat) (env : Eval.Env) :
+    ∀ elts : List Expr, Eval.evalElems p fuel env elts = Eval.evalList p fuel env (elts.map Eval.elemValue)
+  | [] => by simp [Eval.evalElems, Eval.evalList]
+  | e :: es => by
+    cases e <;> simp [Eval.evalElems, Eval.evalList, Eval.elemValue, evalElems_eq p fuel env es]
+
+theorem mapM_of_map {α β : Type} {g : α → Option β} :
+    ∀ {l : List α} {r : List β}, l.map g = r.map some → l.mapM g = some r
+  | [], [], _ => rfl
+  | [], _ :: _, h | _ :: _, [], h => by simp at h
+  | a :: l, b :: r, h => by
+    simp only [List.map_cons, List.cons.injEq] at h
+    simp [List.mapM_cons, h.1, mapM_of_map h.2]
+
+theorem lookup_zip_mem :
+    ∀ {names : List String} {vs : List Val} {f : String} {v : Val}, names.Nodup →
+      (f, v) ∈ names.zip vs → (names.zip vs).lookup f = some v
+  | [], _, _, _, _, h => by simp at h
+  | _ :: _, [], _, _, _, h => by simp at h
+  | n :: ns, w :: ws, f, v, hn, h => by
+    simp only [List.zip_cons_cons, List.mem_cons, Prod.mk.injEq] at h
+    simp only [List.nodup_cons] at hn
+    rcases h with ⟨rfl, rfl⟩ | h
+    · simp
+    · have hf : f ∈ ns := (List.of_mem_zip h).1
+      have hne : (f == n) = false := by
+        simpa using (fun e : f = n => hn.1 (e ▸ hf))
+      simp [List.lookup, hne, lookup_zip_mem hn.2 h]
+
+theorem mapM_given {p : Eval.Program} (L : List (String × Val)) :
+    ∀ {fields : List (String × Expr)} {vs : List Val}, vs.length = fields.length →
+      (∀ f v, (f, v) ∈ (fields.map (·.1)).zip vs → L.lookup f = some v) →
+      fields.mapM (fun (f, t) => match L.lookup f with
+        | some v => some (f, v)
+        | none => (f, ·) <$> Eval.basicZeroOf p t) = some ((fields.map (·.1)).zip vs)
+  | [], [], _, _ => rfl
+  | [], _ :: _, hl, _ | _ :: _, [], hl, _ => by simp at hl
+  | (f, t) :: fs, v :: vs, hl, hL => by
+    have h1 : L.lookup f = some v := hL f v (by simp)
+    have h2 := mapM_given (p := p) L (fields := fs) (vs := vs) (by simpa using hl)
+      (fun g w hm => hL g w (by simp [hm]))
+    simp only [List.mapM_cons, h1, h2]
+    rfl
+
+/-- `S{}` gives each field its zero value. -/
+theorem structLit_empty (p : Eval.Program) (fields : List (String × Expr)) :
+    Eval.structLit p fields [] [] =
+      (fields.mapM fun (x : String × Expr) => (x.1, ·) <$> Eval.basicZeroOf p x.2).map .strct := by
+  unfold Eval.structLit
+  simp only [List.any_nil]
+  split <;> simp_all <;> cases (fields.mapM fun (x : String × Expr) => Option.map (fun y => (x.1, y)) (Eval.basicZeroOf p x.2)) <;> rfl
+
+/-- A struct literal whose elements give every field in order, with keys or
+without. -/
+theorem structLit_all (p : Eval.Program) (fields : List (String × Expr)) (elts : List Expr) (vs : List Val)
+    (hne : elts ≠ []) (hn : (fields.map (·.1)).Nodup) (hl : vs.length = fields.length)
+    (hk : elts.any (Eval.keyName? · |>.isSome) = true → elts.map Eval.keyName? = fields.map (some ·.1)) :
+    Eval.structLit p fields elts vs = some (.strct ((fields.map (·.1)).zip vs)) := by
+  unfold Eval.structLit
+  cases hany : elts.any (Eval.keyName? · |>.isSome) with
+  | false =>
+    have hall : elts.all (Eval.keyName? · |>.isSome) = false := by
+      obtain ⟨e, es, rfl⟩ := List.exists_cons_of_ne_nil hne
+      simp only [List.any_cons, Bool.or_eq_false_iff] at hany
+      simp [hany.1]
+    simp [hall, hl]
+  | true =>
+    have hm := hk hany
+    have hall : elts.all (Eval.keyName? · |>.isSome) = true := by
+      rw [List.all_eq_true]
+      intro e he
+      have : Eval.keyName? e ∈ elts.map Eval.keyName? := List.mem_map_of_mem he
+      rw [hm] at this
+      obtain ⟨⟨f, _⟩, -, h⟩ := List.mem_map.mp this
+      simp [← h]
+    have hkeys : elts.mapM Eval.keyName? = some (fields.map (·.1)) := mapM_of_map (by simpa using hm)
+    have hin : (fields.map (·.1)).all (fields.lookup · |>.isSome) = true := by
+      rw [List.all_eq_true]
+      intro k hk'
+      obtain ⟨⟨f, t⟩, hf, rfl⟩ := List.mem_map.mp hk'
+      exact List.lookup_isSome_iff.mpr ⟨(f, t), hf, by simp⟩
+    simp only [hall, hkeys, ↓reduceIte]
+    have := mapM_given (p := p) ((fields.map (·.1)).zip vs) (fields := fields) hl
+      (fun f v hm => lookup_zip_mem hn hm)
+    have this' : fields.mapM (fun x => match List.lookup x.fst ((fields.map (·.1)).zip vs) with
+        | some v => some (x.fst, v)
+        | none => Option.map (fun y => (x.fst, y)) (Eval.basicZeroOf p x.snd)) =
+        some ((fields.map (·.1)).zip vs) := by
+      rw [← this]; congr 1
+    simp [hn, hin]
+    erw [this']
+    rfl
+
 variable (p : Eval.Program) (fs) (fuel)
 
 /-- `expr_sound` and its case for argument lists, by induction on the
@@ -774,14 +1003,23 @@ theorem expr_sound_aux {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs 
           -- A constant of the package.
           · next te w hw =>
             split at h
-            · simp only [pure_ok, Prod.mk.injEq] at h
+            · next t' ht =>
+              simp only [pure_ok, Prod.mk.injEq] at h
               obtain ⟨rfl, -⟩ := h
+              -- No constant is a struct.
+              have hnot : ∀ fs', w ≠ .strct fs' := by
+                rintro fs' rfl; cases te <;> simp [constType] at ht
               have hv' : v = w := by
-                cases w <;> simp [valueCode, IR.Expr.eval] at hv <;> exact hv.symm
+                cases w with
+                | strct fs' => exact absurd rfl (hnot fs')
+                | _ => simp [valueCode, IR.Expr.eval] at hv; exact hv.symm
               subst hv'
-              refine ⟨[], by cases v <;> simp [valueCode, divisors, IR.Expr.evalList], checkVals_nil, ?_⟩
-              rw [Eval.eval, scoped_none hs (env_lookup_none hl), ← hp]
-              simp [Eval.global, hw, outcome_nil, Res.lift]
+              refine ⟨[], ?_, checkVals_nil, ?_⟩
+              · cases v with
+                | strct fs' => exact absurd rfl (hnot fs')
+                | _ => simp [valueCode, divisors, IR.Expr.evalList]
+              · rw [Eval.eval, scoped_none hs (env_lookup_none hl), ← hp]
+                simp [Eval.global, hw, outcome_nil, Res.lift]
             · exact absurd h reject_ne_ok
           -- `true` or `false`.
           · next hc =>
@@ -961,6 +1199,94 @@ theorem expr_sound_aux {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs 
                 simp only [andThen_outcome, hc f vs _ (callR_of_callO hv)]
                 exact outcome_some ds v
             · simp [hpanic, reject, throw, throwThe, MonadExceptOf.throw, bind, Except.bind] at h
+      -- `x.f`: a field of a struct.
+      · next sp x f =>
+        simp only [bind_ok] at h
+        obtain ⟨⟨cx, tx⟩, hcx, h⟩ := h
+        cases tx with
+        | strct name =>
+          cases hst : structTys ctx name with
+          | none => simp [hst] at h
+          | some tys =>
+            cases hft : tys.lookup f with
+            | none => simp [hst, hft] at h
+            | some ft =>
+              simp only [hst, hft, pure_ok, Prod.mk.injEq] at h
+              obtain ⟨rfl, -⟩ := h
+              simp only [IR.Expr.eval, Option.bind_eq_bind] at hv
+              cases hw : IR.Expr.eval fs fuel ρo cx with
+              | none => simp [hw] at hv
+              | some w =>
+                simp only [hw, Option.bind_some] at hv
+                obtain ⟨ds, hds, hint, he⟩ := ihe env x cx _ hcx ρs ρo w ha hs hw
+                refine ⟨ds, by simpa [divisors] using hds, hint, ?_⟩
+                rw [Eval.eval, he]
+                have := outcome_then (da := ds) (db := []) (a := w) (w := v)
+                  (g := fun u => Res.lift (Eval.fieldOf u f)) (by simp [Res.lift, hv, outcome_nil])
+                simpa using this
+        | _ => simp at h
+      -- `S{…}`: a struct literal.
+      · next sp tsp name elts =>
+        cases hst : structTys ctx name with
+        | none => simp [hst] at h
+        | some tys =>
+          obtain ⟨fields, hfl, hnd, hft⟩ := structTys_some hst
+          have hnames := fieldTys_names hft
+          simp only [hst] at h
+          rw [hp] at hfl
+          by_cases he : elts = []
+          · subst he
+            simp only [List.isEmpty_nil, ↓reduceIte, pure_ok, Prod.mk.injEq] at h
+            obtain ⟨rfl, -⟩ := h
+            simp only [IR.Expr.eval, Option.bind_eq_bind] at hv
+            cases hws : IR.Expr.evalFields fs fuel ρo (tys.map fun (f, t) => (f, zeroCode t)) with
+            | none => simp [hws] at hv
+            | some ws =>
+              simp [hws] at hv
+              subst hv
+              obtain ⟨hd, hm⟩ := zero_fields hft hws
+              rw [hp] at hm
+              refine ⟨[], by simp [divisors, hd, IR.Expr.evalList], checkVals_nil, ?_⟩
+              rw [Eval.eval]
+              simp only [hfl, Eval.evalElems, Res.andThen_ok, structLit_empty, hm]
+              rfl
+          · have he' : elts.isEmpty = false := List.isEmpty_eq_false_iff.mpr he
+            simp only [he', Bool.false_eq_true, ↓reduceIte] at h
+            tm_simp at h
+            obtain ⟨hko, codes, hcodes, hfit, rfl, -⟩ := h
+            have hk : elts.any (Eval.keyName? · |>.isSome) = true →
+                elts.map Eval.keyName? = fields.map (some ·.1) := by
+              intro hany
+              simp only [keysInOrder, hany, Bool.not_true, Bool.false_or, beq_iff_eq] at hko
+              rw [hko, hnames, List.map_map]; rfl
+            have hlen : codes.length = tys.length := by
+              simp only [argsFit, Bool.and_eq_true, beq_iff_eq] at hfit
+              simpa using hfit.1
+            have hlen' : (tys.map (·.1)).length = (codes.map (·.1)).length := by simp [hlen]
+            simp only [IR.Expr.eval, Option.bind_eq_bind] at hv
+            cases hws : IR.Expr.evalFields fs fuel ρo ((tys.map (·.1)).zip (codes.map (·.1))) with
+            | none => simp [hws] at hv
+            | some ws =>
+              simp [hws] at hv
+              subst hv
+              obtain ⟨vs, hvs, rfl⟩ := evalFields_zip hlen' hws
+              obtain ⟨ds, hds, hint, hargs⟩ := iha env _ codes hcodes ρs ρo vs ha hs hvs
+              refine ⟨ds, ?_, hint, ?_⟩
+              · simpa [divisors, divisorsFields_zip hlen'] using hds
+              · have hvl : vs.length = fields.length := by
+                  have h1 := evalList_length hvs
+                  have h2 := congrArg List.length hnames
+                  simp only [List.length_map] at h1 h2
+                  omega
+                rw [Eval.eval]
+                simp only [hfl]
+                rw [evalElems_eq, hargs]
+                rw [hnames]
+                have := outcome_then (da := ds) (db := []) (a := vs)
+                  (w := Val.strct ((fields.map (·.1)).zip vs))
+                  (g := fun us => Res.lift (Eval.structLit p fields elts us))
+                  (by simp [Res.lift, structLit_all p fields elts vs he hnd hvl hk, outcome_nil])
+                simpa using this
       · exact absurd h reject_ne_ok
     · cases es with
       | nil =>

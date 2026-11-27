@@ -188,6 +188,7 @@ theorem or_bool (sp : Span) (l r : Expr) (ρ : Eval.Env) :
         · cases rv <;> rfl
     | int _ => rfl
     | str _ => rfl
+    | strct _ => rfl
 
 theorem caseCond_none {sp : Span} {tag : Option Expr} {es : List Expr} (h : caseCond sp tag es = none) :
     es = [] := by
@@ -243,6 +244,7 @@ theorem execStmt_if_eq (sp : Span) (c : Expr) (t : Stmt) (els : Option Stmt) (ρ
       · rfl
     | int i => rfl
     | str s => rfl
+    | strct _ => rfl
 
 theorem execClauses_case (sp : Span) (es : List Expr) (body : List Stmt) (rest : List CaseClause)
     (dflt : Option (List Stmt)) (ρ : Eval.Env) (v : Val) :

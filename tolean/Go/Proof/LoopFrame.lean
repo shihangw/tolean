@@ -209,12 +209,30 @@ namespace tolean.Go.Proof
 
 open tolean.Go.Syntax tolean.Go.Pure
 
+mutual
+
+theorem eval_valueCode (fs : Funcs) (fuel : Nat) (env : Eval.Env) :
+    ∀ v : Eval.Val, IR.Expr.eval fs fuel env (valueCode v) = some v
+  | .int _ | .bool _ | .str _ => by simp [valueCode, IR.Expr.eval]
+  | .strct fields => by
+    simp [valueCode, IR.Expr.eval, eval_valueCodeFields fs fuel env fields]
+
+theorem eval_valueCodeFields (fs : Funcs) (fuel : Nat) (env : Eval.Env) :
+    ∀ fields : List (String × Eval.Val),
+      IR.Expr.evalFields fs fuel env (valueCodeFields fields) = some fields
+  | [] => by simp [valueCodeFields, IR.Expr.evalFields]
+  | (f, v) :: rest => by
+    simp [valueCodeFields, IR.Expr.evalFields, eval_valueCode fs fuel env v,
+      eval_valueCodeFields fs fuel env rest]
+
+end
+
 theorem eval_valueCodes (fs : Funcs) (fuel : Nat) (env : Eval.Env) (values : List Eval.Val) :
     IR.Expr.evalList fs fuel env (values.map valueCode) = some values := by
   induction values with
   | nil => simp [IR.Expr.evalList]
   | cons value values ih =>
-    cases value <;> simp [valueCode, IR.Expr.evalList, IR.Expr.eval, ih]
+    simp [IR.Expr.evalList, eval_valueCode fs fuel env value, ih]
 
 /-- The leading counted loop and the statements after it obey the same
 success-only contract as the existing statement translator. -/
