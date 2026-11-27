@@ -135,9 +135,27 @@ def Quo (a : Int) (b : Int) : (Except String Int) :=
 
 The translator refuses a division by the constant zero, which Go refuses
 too, and a division in the right operand of `&&` or `||`, which Go might not
-evaluate. It also refuses a call of a function that can panic, from a pure
-function or from the rest of the package, until calls in `Except` are
-added. The corpus package `divide` shows the output.
+evaluate. The corpus package `divide` shows the output.
+
+A pure function may call a function that can panic, when the call stands
+alone after `:=`, `=`, `var x T =` or `return`. Its arguments may divide, but
+they may not call another such function. The output binds the call with
+`>>=`, so the callee's panic ends the caller, and the caller can panic too:
+
+```lean
+def Scaled (a : Int) (b : Int) : (Except String Int) :=
+  (Quo a ((2 : Int))) >>= fun half =>
+  (Quo half ((Go.wrap64 (Int.tdiv b ((2 : Int)))))) >>= fun result =>
+  (pure result)
+```
+
+The proved path refuses such a call inside a larger expression, and in
+`x += f(…)` and the other compound assignments. The string translation
+accepts it inside an expression: a function there that calls a function that
+can panic runs in `Except String`, or in `ExceptT String (StateM σ)` when it
+has effects, and binds each such call with `←`. It refuses one in the right
+operand of `&&` or `||`, because `←` would run it even when Go does not. The
+corpus package `panics` shows both.
 
 The proved path also accepts a counted loop as the first statement of a
 function: `for i := a; i < b; i++ { body }`. Both bounds must be nonnegative
