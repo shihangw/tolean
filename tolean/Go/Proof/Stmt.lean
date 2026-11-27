@@ -950,20 +950,33 @@ theorem declare_ok {env env' : Pure.Env} {sp : Span} {x : String} {ty : Ty}
     · simp only [pure_ok] at h
       exact ⟨by simpa using hx, h.symm⟩
 
+theorem zero_basic {u : String} {t : Ty} (ht : basicType u = some t) {ρ : Eval.Env} {w : Val}
+    (hw : IR.Expr.eval fs fuel ρ (zeroCode t) = some w) : Eval.zeroOfBasic u = some w := by
+  unfold basicType at ht
+  split at ht <;> simp only [Option.some.injEq, reduceCtorEq] at ht <;> subst ht <;>
+    simp only [zeroCode, IR.Expr.eval, Option.some.injEq] at hw <;> subst hw <;> rfl
+
 theorem zero_sound {ctx : Ctx} (hp : ctx.program = p) {te : Expr} {t : Ty}
     (ht : resolveType ctx te = some t) {ρ : Eval.Env} {w : Val}
     (hw : IR.Expr.eval fs fuel ρ (zeroCode t) = some w) : Eval.zeroOf p te = some w := by
   cases te with
   | ident sp name =>
-    simp only [resolveType] at ht
     subst hp
+    simp only [resolveType] at ht
     simp only [Eval.zeroOf]
-    split at ht
-    · simp at ht
-    · next hn =>
-      simp only [hn, Bool.false_eq_true, ↓reduceIte]
-      split at ht <;> simp only [Option.some.injEq, reduceCtorEq] at ht <;> subst ht <;>
-        simp only [zeroCode, IR.Expr.eval, Option.some.injEq] at hw <;> subst hw <;> rfl
+    cases hl : ctx.program.types.lookup name with
+    | some u =>
+      simp only [hl] at ht
+      exact zero_basic (fs := fs) (fuel := fuel) ht hw
+    | none =>
+      simp only [hl] at ht
+      split at ht
+      · simp at ht
+      · next hn =>
+        simp only [hn, Bool.false_eq_true, ↓reduceIte]
+        have := zero_basic (fs := fs) (fuel := fuel) ht hw
+        unfold Eval.zeroOfBasic at this
+        split at this <;> simp_all
   | _ => simp [resolveType] at ht
 
 theorem guarded_zeroCode (t : Ty) (b : IR.Body) : guarded (zeroCode t) b = b := by

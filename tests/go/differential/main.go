@@ -213,6 +213,14 @@ func (g *gen) leaf(t ty) string {
 // constant. Two constant operands of an arithmetic operator would make Go
 // fold them at compile time, where overflow is an error, so the generator
 // never writes one.
+// The types that every generated file declares over predeclared types. A
+// conversion to one and back keeps the value.
+var namedInts = [2]string{"Count", "Wide"}
+
+const namedBool = "Flag"
+
+const namedTypes = "type Count int\n\ntype Wide = int64\n\ntype Flag bool\n"
+
 func (g *gen) expr(t ty, depth int) (string, bool) {
 	if t == tString && g.literalStrings {
 		if depth > 0 && g.chance(0.3) {
@@ -221,6 +229,23 @@ func (g *gen) expr(t ty, depth int) (string, bool) {
 			return "(" + a + " + " + b + ")", true
 		}
 		return g.literal(t), true
+	}
+	// A conversion to a type of the package and back keeps the value.
+	if depth > 0 && t != tString && g.chance(0.1) {
+		// Go evaluates a conversion of a constant when it compiles, so
+		// only a value that is not constant is converted.
+		e, isConst := g.expr(t, depth-1)
+		if isConst {
+			return e, true
+		}
+		switch t {
+		case tBool:
+			return "(" + namedBool + "(" + e + ") == " + namedBool + "(true))", false
+		case tInt:
+			return "int(" + namedInts[g.pick(2)] + "(" + e + "))", false
+		default:
+			return "int64(" + namedInts[g.pick(2)] + "(" + e + "))", false
+		}
 	}
 	vars := g.visible(t, false)
 	if depth <= 0 || g.chance(0.3) {
@@ -1006,6 +1031,7 @@ func check(seed int64, programs int) error {
 	g := &gen{r: rand.New(rand.NewSource(seed))}
 	g.line("package main")
 	g.line("")
+	g.line("%s", namedTypes)
 	var order []string
 	var calls []call
 	for p := range programs {
