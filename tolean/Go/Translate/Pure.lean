@@ -260,7 +260,8 @@ def stmtChanges : Stmt → List String
     | _ => none
   | .incDec _ _ (.ident _ n) => [n]
   | .block _ ss => changesList ss
-  | .ifStmt _ _ _ t e => stmtChanges t ++ changesOption e
+  | .ifStmt _ init _ t e => changesOption init ++ stmtChanges t ++ changesOption e
+  | .switchStmt _ init _ _ cs => changesOption init ++ changesClauses cs
   | _ => []
 
 def changesList : List Stmt → List String
@@ -271,6 +272,10 @@ def changesOption : Option Stmt → List String
   | none => []
   | some s => stmtChanges s
 
+def changesClauses : List CaseClause → List String
+  | [] => []
+  | .mk _ _ body :: cs => changesList body ++ changesClauses cs
+
 end
 
 mutual
@@ -280,6 +285,7 @@ def hasReturn : Stmt → Bool
   | .ret .. => true
   | .block _ ss => anyReturn ss
   | .ifStmt _ _ _ t e => hasReturn t || optionReturn e
+  | .switchStmt _ _ _ _ cs => clausesReturn cs
   | _ => false
 
 def anyReturn : List Stmt → Bool
@@ -290,7 +296,51 @@ def optionReturn : Option Stmt → Bool
   | none => false
   | some s => hasReturn s
 
+def clausesReturn : List CaseClause → Bool
+  | [] => false
+  | .mk _ _ body :: cs => anyReturn body || clausesReturn cs
+
 end
+
+/-! ### Switch statements
+
+The translator writes an expression switch as the chain of `if` statements
+that means the same. `Proof/Switch.lean` proves that the interpreter gives the
+chain the meaning that it gives the switch. -/
+
+/-- The test of one case expression `e`: `x == e` for the switch expression
+`x`, and `e` itself in a switch without one. -/
+def caseTest (sp : Span) : Option Expr → Expr → Expr
+  | none, e => e
+  | some x, e => .binary sp "==" x e
+
+/-- The test of a case clause, which holds when one of its expressions
+matches: `x == a || x == b`. None for a clause without expressions. -/
+def caseCond (sp : Span) (tag : Option Expr) : List Expr → Option Expr
+  | [] => none
+  | e :: es =>
+    match caseCond sp tag es with
+    | none => some (caseTest sp tag e)
+    | some r => some (.binary sp "||" (caseTest sp tag e) r)
+
+/-- The chain of `if` statements for the clauses of a switch. `dflt` is the
+`default` clause seen so far, which runs when no case matches. Each clause
+body is a block, as it is in Go. -/
+def switchChain (tag : Option Expr) : Option (Span × List Stmt) → List CaseClause → Option Stmt
+  | none, [] => none
+  | some (sp, body), [] => some (.block sp body)
+  | _, .mk sp none body :: rest => switchChain tag (some (sp, body)) rest
+  | dflt, .mk sp (some es) body :: rest =>
+    match caseCond sp tag es with
+    | none => switchChain tag dflt rest
+    | some c => some (.ifStmt sp none c (.block sp body) (switchChain tag dflt rest))
+
+/-- Some clause has a case expression, so that the chain evaluates the switch
+expression, as the switch does. -/
+def hasCase : List CaseClause → Bool
+  | [] => false
+  | .mk _ (some (_ :: _)) _ :: _ => true
+  | _ :: cs => hasCase cs
 
 /-- The locals of `env` that the statements may assign, in the order of
 `env`. -/
@@ -355,6 +405,33 @@ def translateStmts (ctx : Ctx) (env : Env) (tail : Tail) : Nat → List Stmt →
       let env' ← declare env sp x t
       return .let x c (← translateStmts ctx env' tail fuel rest)
     | .ifStmt sp none c t els => translateIf ctx env tail fuel sp c t els rest
+    -- `if s; c { … }` is the block `{ s; if c { … } }`.
+    | .ifStmt sp (some s) c t els =>
+      translateStmts ctx env tail fuel (.block sp [s, .ifStmt sp none c t els] :: rest)
+    -- A switch is a chain of `if` statements, inside a block after its init
+    -- statement.
+    | .switchStmt sp init tag bsp clauses => do
+      if tag.isSome && !hasCase clauses then
+        reject sp "a switch with an expression needs a case"
+      let some chain := switchChain tag none clauses | reject sp "a switch needs a clause"
+      let st' := match init with
+        | none => chain
+        | some s => .block bsp [s, chain]
+      translateStmts ctx env tail fuel (st' :: rest)
+    -- A block: what it declares goes out of scope at its end. When it
+    -- returns, it must end the function. Otherwise it gives the locals that it
+    -- changes, as a branch does.
+    | .block sp body => do
+      if anyReturn body then
+        let .ret _ := tail | reject sp "only a branch that always returns may return"
+        unless rest.isEmpty do
+          reject sp "a block, or an if or switch with an init statement, that returns must end the function"
+        translateStmts ctx env tail fuel body
+      else
+        let names := changedNames body env
+        if names.isEmpty then reject sp "a block that does not return must change a local"
+        let inner ← translateStmts ctx env (.state names) fuel body
+        return .letState names inner (← translateStmts ctx env tail fuel rest)
     | _ => reject st.span "this statement is not supported"
 
 /-- `if c { … } else …`, then `rest`. When a branch returns, the code after
