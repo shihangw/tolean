@@ -72,6 +72,13 @@ A type-only re-export erases before execution. Its module dependency follows
 the ExportDeclaration grammar (ES2015 §15.2.3; ES2024 §16.2.3). It introduces
 no local binding and preserves the type's identity in the defining module.
 
+A value re-export follows the same grammar. A call through it resolves the
+name with ResolveExport (ES2015 §15.2.1.16.3; ES2024 §16.2.1.6.3), which
+follows each re-export to the module that declares the binding. A module may
+export a name only once, an early error of the module grammar (ES2015
+§15.2.1.1; ES2024 §16.2.1.1). Every supported edition specifies both, so
+value re-exports add no edition gate.
+
 Optional element access follows OptionalExpression and ChainEvaluation
 (ES2020 §12.3.9; ES2024 §13.3.9). An absent receiver skips the index and
 gives undefined. A present array uses the existing array-index operation.
