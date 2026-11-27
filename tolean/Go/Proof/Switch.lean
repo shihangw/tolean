@@ -25,15 +25,24 @@ def leave (ρ : Eval.Env) : Outcome → Outcome
   | .ret v => .ret v
   | .panic x => .panic x
   | .normal ρ' => .normal (ρ'.drop (ρ'.length - ρ.length))
+  | .brk ρ' => .brk (ρ'.drop (ρ'.length - ρ.length))
+  | .cont ρ' => .cont (ρ'.drop (ρ'.length - ρ.length))
+
+/-- The end of a switch: a `break` in a clause ends the switch, which then
+completes normally. -/
+def catchBrk : Outcome → Outcome
+  | .brk ρ' => .normal ρ'
+  | o => o
+
+theorem drop_drop_length (ρ ρ' : Eval.Env) :
+    (ρ'.drop (ρ'.length - ρ.length)).drop ((ρ'.drop (ρ'.length - ρ.length)).length - ρ.length) =
+      ρ'.drop (ρ'.length - ρ.length) := by
+  simp only [List.length_drop]
+  have : ρ'.length - (ρ'.length - ρ.length) - ρ.length = 0 := by omega
+  rw [this, List.drop_zero]
 
 theorem leave_leave (ρ : Eval.Env) (o : Outcome) : leave ρ (leave ρ o) = leave ρ o := by
-  cases o with
-  | ret v => rfl
-  | panic x => rfl
-  | normal ρ' =>
-    simp only [leave, List.length_drop, Outcome.normal.injEq]
-    have : ρ'.length - (ρ'.length - ρ.length) - ρ.length = 0 := by omega
-    rw [this, List.drop_zero]
+  cases o <;> simp only [leave, drop_drop_length]
 
 theorem leave_self (ρ : Eval.Env) : leave ρ (.normal ρ) = .normal ρ := by
   simp [leave]
@@ -42,7 +51,9 @@ theorem bind_leave (x : Option Outcome) (ρ : Eval.Env) :
     (x.bind fun
       | .ret v => some (.ret v)
       | .panic x => some (.panic x)
-      | .normal ρ' => some (.normal (ρ'.drop (ρ'.length - ρ.length)))) = x.map (leave ρ) := by
+      | .normal ρ' => some (.normal (ρ'.drop (ρ'.length - ρ.length)))
+      | .brk ρ' => some (.brk (ρ'.drop (ρ'.length - ρ.length)))
+      | .cont ρ' => some (.cont (ρ'.drop (ρ'.length - ρ.length)))) = x.map (leave ρ) := by
   cases x with
   | none => rfl
   | some o => cases o <;> rfl
@@ -55,6 +66,8 @@ theorem exec_cons_eq (s : Stmt) (rest : List Stmt) (ρ : Eval.Env) :
     Eval.exec p fuel ρ (s :: rest) = (Eval.execStmt p fuel ρ s).bind fun
       | .ret v => some (.ret v)
       | .panic x => some (.panic x)
+      | .brk ρ' => some (.brk ρ')
+      | .cont ρ' => some (.cont ρ')
       | .normal ρ' => Eval.exec p fuel ρ' rest := by
   rw [Eval.exec]; rfl
 
@@ -77,6 +90,8 @@ theorem execStmt_ifInit (sp : Span) (s : Stmt) (c : Expr) (t : Stmt) (els : Opti
     cases o with
     | ret v => simp [leave]
     | panic x => simp [leave]
+    | brk e => simp [leave]
+    | cont e => simp [leave]
     | normal ρ₁ =>
       simp only [Option.bind_some, exec_cons_eq, exec_nil_eq]
       cases h2 : Eval.execStmt p fuel ρ₁ (.ifStmt sp none c t els) with
@@ -94,6 +109,8 @@ theorem execStmt_switchInit (sp : Span) (s : Stmt) (tag : Option Expr) (bsp : Sp
     cases o with
     | ret v => simp [leave]
     | panic x => simp [leave]
+    | brk e => simp [leave]
+    | cont e => simp [leave]
     | normal ρ₁ =>
       simp only [Option.bind_some, exec_cons_eq, exec_nil_eq]
       cases h2 : Eval.execStmt p fuel ρ₁ (.switchStmt sp none tag bsp cs) with
@@ -352,28 +369,47 @@ theorem chain_fails {ρ : Eval.Env} {x : Expr} (hx : Stuck (Eval.eval p fuel ρ 
       · rfl
       · exact absurd hr (hx v)
 
+theorem bind_catch (x : Option Outcome) (ρ : Eval.Env) :
+    (x.bind fun
+      | .ret v => some (.ret v)
+      | .panic x => some (.panic x)
+      | .normal ρ' => some (.normal (ρ'.drop (ρ'.length - ρ.length)))
+      | .brk ρ' => some (.normal (ρ'.drop (ρ'.length - ρ.length)))
+      | .cont ρ' => some (.cont (ρ'.drop (ρ'.length - ρ.length)))) =
+      (x.map (leave ρ)).map catchBrk := by
+  cases x with
+  | none => rfl
+  | some o => cases o <;> rfl
+
 theorem execStmt_switch_def (sp bsp : Span) (tag : Option Expr) (cs : List CaseClause)
     (ρ : Eval.Env) :
     Eval.execStmt p fuel ρ (.switchStmt sp none tag bsp cs) =
       Eval.withValue (match tag with
         | none => Res.ok (Val.bool true)
         | some x => Eval.eval p fuel ρ x) fun v =>
-          (Eval.execClauses p fuel ρ v cs none).map (leave ρ) := by
+          ((Eval.execClauses p fuel ρ v cs none).map (leave ρ)).map catchBrk := by
   rw [Eval.execStmt.eq_def]
-  simp only [← bind_leave]
+  simp only [← bind_catch]
   cases tag <;> rfl
 
-/-- An expression switch means what its chain of `if` statements means. -/
+theorem withValue_none_map (r : Res Val Val) :
+    (Eval.withValue r fun _ => none).map catchBrk = Eval.withValue r fun _ => none := by
+  rcases r with _ | _ | v <;> rfl
+
+/-- An expression switch means what its chain of `if` statements means,
+once a `break` in the chain completes the switch normally. -/
 theorem execStmt_switch_chain {sp bsp : Span} {tag : Option Expr} {cs : List CaseClause} {d : Stmt}
     (hcase : tag.isSome = true → hasCase cs = true) (hd : switchChain tag none cs = some d)
     (ρ : Eval.Env) :
-    Eval.execStmt p fuel ρ (.switchStmt sp none tag bsp cs) = Eval.execStmt p fuel ρ d := by
+    Eval.execStmt p fuel ρ (.switchStmt sp none tag bsp cs) =
+      (Eval.execStmt p fuel ρ d).map catchBrk := by
   rw [execStmt_switch_def]
   cases tag with
   | none =>
     have := chain_eval p fuel (ρ := ρ) (tag := none) (v := .bool true) rfl cs none
     simp only [hd, Option.map_none] at this
-    simpa using this
+    simp only [Eval.withValue_ok]
+    rw [this]
   | some x =>
     simp only
     rcases hx : Eval.eval p fuel ρ x with _ | _ | v
@@ -382,6 +418,280 @@ theorem execStmt_switch_chain {sp bsp : Span} {tag : Option Expr} {cs : List Cas
     · have := chain_eval p fuel (ρ := ρ) (tag := some x) (v := v) hx cs none
       simp only [Eval.withValue_ok]
       simp only [hd, Option.map_none] at this
-      simpa using this
+      rw [this]
+
+/-! ### Statements without a `break`
+
+A statement without a `break` of its own never gives a `break` outcome, so a
+switch whose clauses do not break means what its chain means. -/
+
+theorem withValue_ne_brk {r : Res Val Val} {k : Val → Option Outcome} {e : Eval.Env}
+    (hk : ∀ v, k v ≠ some (.brk e)) : Eval.withValue r k ≠ some (.brk e) := by
+  rcases r with _ | _ | v
+  · simp [Eval.withValue]
+  · simp [Eval.withValue]
+  · exact hk v
+
+attribute [local simp] Option.bind_eq_some_iff
+
+theorem execStmt_for_noBrk (sp : Span) (init : Option Stmt) (cond : Option Expr)
+    (post : Option Stmt) (body : Stmt) (ρ e : Eval.Env) :
+    Eval.execStmt p fuel ρ (.forStmt sp init cond post body) ≠ some (.brk e) := by
+  rw [Eval.execStmt.eq_def]
+  repeat' split
+  all_goals intro hx
+  all_goals simp_all
+  obtain ⟨_, _, _, _, o, _, h⟩ := hx
+  cases o with
+  | ret r => cases r <;> simp at h
+  | _ => simp at h
+
+mutual
+
+theorem execStmt_noBrk : ∀ (s : Stmt), breaks s = false → ∀ (ρ e : Eval.Env),
+    Eval.execStmt p fuel ρ s ≠ some (.brk e)
+  | .brk _, h, _, _ => by simp [breaks] at h
+  | .block sp body, h, ρ, e => by
+    have ih := exec_noBrk body (by simpa [breaks] using h)
+    rw [block_eq]
+    intro hx
+    cases hb : Eval.exec p fuel ρ body with
+    | none => simp [hb] at hx
+    | some o =>
+      cases o <;> simp [hb, leave] at hx
+      subst hx
+      exact ih ρ _ hb
+  | .ifStmt sp none c t els, h, ρ, e => by
+    simp only [breaks, breaksOption, Bool.false_or, Bool.or_eq_false_iff] at h
+    rw [execStmt_if_eq]
+    intro hx
+    rcases hr : boolOf (Eval.eval p fuel ρ c) with _ | _ | b
+    · simp [hr, withBool] at hx
+    · simp [hr, withBool] at hx
+    · simp only [hr, withBool] at hx
+      cases b with
+      | true =>
+        simp only [if_true] at hx
+        cases hy : Eval.execStmt p fuel ρ t with
+        | none => simp [hy] at hx
+        | some o =>
+          cases o <;> simp [hy, leave] at hx
+          subst hx
+          exact execStmt_noBrk t h.1 ρ _ hy
+      | false =>
+        cases els with
+        | none => simp [leave] at hx
+        | some f =>
+          simp only [Bool.false_eq_true, if_false] at hx
+          cases hy : Eval.execStmt p fuel ρ f with
+          | none => simp [hy] at hx
+          | some o =>
+            cases o <;> simp [hy, leave] at hx
+            subst hx
+            exact execStmt_noBrk f (by simpa [breaksOption] using h.2) ρ _ hy
+  | .ifStmt sp (some s) c t els, h, ρ, e => by
+    simp only [breaks, breaksOption, Bool.or_eq_false_iff] at h
+    rw [execStmt_ifInit, block_eq, exec_cons_eq]
+    intro hx
+    cases hs : Eval.execStmt p fuel ρ s with
+    | none => simp [hs] at hx
+    | some o =>
+      cases o with
+      | brk e' => exact execStmt_noBrk s h.1.1 ρ e' hs
+      | normal ρ₁ =>
+        have := Eval.stmt_size_pos s
+        have := execStmt_noBrk (.ifStmt sp none c t els)
+          (by simp [breaks, breaksOption, h.1.2, h.2]) ρ₁
+        simp only [hs, Option.bind_some, exec_cons_eq] at hx
+        cases hi : Eval.execStmt p fuel ρ₁ (.ifStmt sp none c t els) with
+        | none => simp [hi] at hx
+        | some o =>
+          cases o <;> simp [hi, exec_nil_eq, leave] at hx
+          subst hx
+          exact this _ hi
+      | _ => simp [hs, leave] at hx
+  | .switchStmt sp none tag bsp cs, _, ρ, e => by
+    rw [execStmt_switch_def]
+    apply withValue_ne_brk
+    intro v hx
+    cases hc : Eval.execClauses p fuel ρ v cs none with
+    | none => simp [hc] at hx
+    | some o => cases o <;> simp [hc, leave, catchBrk] at hx
+  | .switchStmt sp (some s) tag bsp cs, h, ρ, e => by
+    simp only [breaks, breaksOption] at h
+    rw [execStmt_switchInit, block_eq, exec_cons_eq]
+    intro hx
+    cases hs : Eval.execStmt p fuel ρ s with
+    | none => simp [hs] at hx
+    | some o =>
+      cases o with
+      | brk e' => exact execStmt_noBrk s h ρ e' hs
+      | normal ρ₁ =>
+        have := Eval.stmt_size_pos s
+        have := execStmt_noBrk (.switchStmt sp none tag bsp cs) (by simp [breaks, breaksOption]) ρ₁
+        simp only [hs, Option.bind_some, exec_cons_eq] at hx
+        cases hi : Eval.execStmt p fuel ρ₁ (.switchStmt sp none tag bsp cs) with
+        | none => simp [hi] at hx
+        | some o =>
+          cases o <;> simp [hi, exec_nil_eq, leave] at hx
+          subst hx
+          exact this _ hi
+      | _ => simp [hs, leave] at hx
+  | .assign .., _, ρ, e => by
+    rw [Eval.execStmt.eq_def]
+    try unfold Eval.withValue
+    repeat' split
+    all_goals intro hx
+    all_goals simp_all
+  | .incDec .., _, ρ, e => by
+    rw [Eval.execStmt.eq_def]
+    try unfold Eval.withValue
+    repeat' split
+    all_goals intro hx
+    all_goals simp_all
+  | .decl .., _, ρ, e => by
+    rw [Eval.execStmt.eq_def]
+    try unfold Eval.withValue
+    repeat' split
+    all_goals intro hx
+    all_goals simp_all
+  | .ret .., _, ρ, e => by
+    rw [Eval.execStmt.eq_def]
+    try unfold Eval.withValue
+    repeat' split
+    all_goals intro hx
+    all_goals simp_all
+  | .forStmt sp init cond post body, _, ρ, e => execStmt_for_noBrk p fuel sp init cond post body ρ e
+  | .cont .., _, ρ, e => by
+    rw [Eval.execStmt.eq_def]
+    try unfold Eval.withValue
+    repeat' split
+    all_goals intro hx
+    all_goals simp_all
+  | .expr .., _, ρ, e => by
+    rw [Eval.execStmt.eq_def]
+    try unfold Eval.withValue
+    repeat' split
+    all_goals intro hx
+    all_goals simp_all
+  | .range .., _, ρ, e => by
+    rw [Eval.execStmt.eq_def]
+    try unfold Eval.withValue
+    repeat' split
+    all_goals intro hx
+    all_goals simp_all
+  | .typeSwitch .., _, ρ, e => by
+    rw [Eval.execStmt.eq_def]
+    try unfold Eval.withValue
+    repeat' split
+    all_goals intro hx
+    all_goals simp_all
+  | .deferStmt .., _, ρ, e => by
+    rw [Eval.execStmt.eq_def]
+    try unfold Eval.withValue
+    repeat' split
+    all_goals intro hx
+    all_goals simp_all
+
+termination_by s => sizeOf s
+
+theorem exec_noBrk : ∀ (ss : List Stmt), breaksList ss = false → ∀ (ρ e : Eval.Env),
+    Eval.exec p fuel ρ ss ≠ some (.brk e)
+  | [], _, ρ, e => by simp [exec_nil_eq]
+  | s :: ss, h, ρ, e => by
+    simp only [breaksList, Bool.or_eq_false_iff] at h
+    rw [exec_cons_eq]
+    intro hx
+    cases hs : Eval.execStmt p fuel ρ s with
+    | none => simp [hs] at hx
+    | some o =>
+      cases o with
+      | brk e' => exact execStmt_noBrk s h.1 ρ e' hs
+      | normal ρ₁ => simp only [hs, Option.bind_some] at hx; exact exec_noBrk ss h.2 ρ₁ e hx
+      | _ => simp [hs] at hx
+termination_by ss => sizeOf ss
+
+end
+
+/-- A switch whose clauses do not break means what its chain of `if`
+statements means. -/
+theorem execStmt_switch_chain_noBrk {sp bsp : Span} {tag : Option Expr} {cs : List CaseClause}
+    {d : Stmt} (hcase : tag.isSome = true → hasCase cs = true)
+    (hd : switchChain tag none cs = some d) (hb : breaks d = false) (ρ : Eval.Env) :
+    Eval.execStmt p fuel ρ (.switchStmt sp none tag bsp cs) = Eval.execStmt p fuel ρ d := by
+  rw [execStmt_switch_chain p fuel hcase hd]
+  have := execStmt_noBrk p fuel d hb ρ
+  cases h : Eval.execStmt p fuel ρ d with
+  | none => rfl
+  | some o =>
+    cases o <;> simp [catchBrk]
+    exact this _ h
+
+/-- A switch's chain leaves the scope of what it declares, so leaving it
+again changes nothing. -/
+theorem chain_leave {tag : Option Expr} :
+    ∀ (cs : List CaseClause) (dflt : Option (Span × List Stmt)) (d : Stmt),
+      switchChain tag dflt cs = some d → ∀ ρ,
+        (Eval.execStmt p fuel ρ d).map (leave ρ) = Eval.execStmt p fuel ρ d
+  | [], none, d, h, _ => by simp [switchChain] at h
+  | [], some (sp, body), d, h, ρ => by
+    simp only [switchChain, Option.some.injEq] at h
+    subst h
+    rw [block_eq, Option.map_map]
+    congr 1
+    funext o
+    exact leave_leave ρ o
+  | .mk sp none body :: rest, dflt, d, h, ρ => by
+    simp only [switchChain] at h
+    exact chain_leave rest _ d h ρ
+  | .mk sp (some es) body :: rest, dflt, d, h, ρ => by
+    simp only [switchChain] at h
+    cases hc : caseCond sp tag es with
+    | none =>
+      simp only [hc] at h
+      exact chain_leave rest _ d h ρ
+    | some c =>
+      simp only [hc, Option.some.injEq] at h
+      subst h
+      rw [execStmt_if_eq]
+      unfold withBool
+      split
+      · rfl
+      · rfl
+      · rw [Option.map_map]
+        congr 1
+        funext o
+        exact leave_leave ρ o
+
+/-- A chain whose clauses do not break has no `break` of its own. -/
+theorem chain_noBreak {tag : Option Expr} :
+    ∀ (cs : List CaseClause) (dflt : Option (Span × List Stmt)) (d : Stmt),
+      clausesBreak cs = false → (∀ sp body, dflt = some (sp, body) → breaksList body = false) →
+      switchChain tag dflt cs = some d → breaks d = false
+  | [], none, d, _, _, h => by simp [switchChain] at h
+  | [], some (sp, body), d, _, hd, h => by
+    simp only [switchChain, Option.some.injEq] at h
+    subst h
+    simpa [breaks] using hd sp body rfl
+  | .mk sp none body :: rest, dflt, d, hc, _, h => by
+    simp only [clausesBreak, Bool.or_eq_false_iff] at hc
+    simp only [switchChain] at h
+    exact chain_noBreak rest _ d hc.2 (fun sp' body' he => by
+      simp only [Option.some.injEq, Prod.mk.injEq] at he
+      obtain ⟨rfl, rfl⟩ := he
+      exact hc.1) h
+  | .mk sp (some es) body :: rest, dflt, d, hc, hd, h => by
+    simp only [clausesBreak, Bool.or_eq_false_iff] at hc
+    simp only [switchChain] at h
+    cases hcc : caseCond sp tag es with
+    | none =>
+      simp only [hcc] at h
+      exact chain_noBreak rest _ d hc.2 hd h
+    | some c =>
+      simp only [hcc, Option.some.injEq] at h
+      subst h
+      cases hf : switchChain tag dflt rest with
+      | none => simp [breaks, breaksOption, hc.1]
+      | some f => simp [breaks, breaksOption, hc.1, chain_noBreak rest _ f hc.2 hd hf]
 
 end tolean.Go.Proof

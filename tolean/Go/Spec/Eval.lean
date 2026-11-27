@@ -251,11 +251,15 @@ def incDecOp? : String → Option BinOp
 /-! ### Programs -/
 
 /-- What a statement list does: it runs to its end with the variables it
-leaves, it returns a value, or it panics with a value. -/
+leaves, it returns a value, it panics with a value, or it runs `break` or
+`continue` with the variables at that point (Go specification, "Break
+statements" and "Continue statements"). -/
 inductive Outcome where
   | normal (env : Env)
   | ret (v : Val)
   | panic (v : Val)
+  | brk (env : Env)
+  | cont (env : Env)
 deriving Inhabited
 
 /-- A loop ends the function both when its body returns and when it panics,
@@ -265,6 +269,8 @@ def Outcome.toLoop : Outcome → tolean.Core.Loop.Outcome Env (Except Val Val)
   | .normal env => .normal env
   | .ret value => .ret (.ok value)
   | .panic value => .ret (.error value)
+  | .brk env => .brk env
+  | .cont env => .cont env
 
 def Outcome.fromLoop : tolean.Core.Loop.Outcome Env (Except Val Val) → Option Outcome
   | .normal env => some (.normal env)
@@ -310,15 +316,21 @@ def countedBodySafe (index : String) : Stmt → Bool
   | .assign _ _ [.ident _ name] [_] => name != index
   | .incDec _ _ (.ident _ name) => name != index
   | .ret _ _ => true
+  | .brk _ | .cont _ => true
   | .block _ ss => countedStatementsSafe index ss
   | .ifStmt _ none _ t none => countedBodySafe index t
   | .ifStmt _ none _ t (some e) => countedBodySafe index t && countedBodySafe index e
+  | .switchStmt _ none _ _ cs => countedClausesSafe index cs
   | .decl _ (.mk _ "var" [.value _ [name] _ _]) => name != index
   | _ => false
 
 def countedStatementsSafe (index : String) : List Stmt → Bool
   | [] => true
   | s :: ss => countedBodySafe index s && countedStatementsSafe index ss
+
+def countedClausesSafe (index : String) : List CaseClause → Bool
+  | [] => true
+  | .mk _ _ body :: cs => countedStatementsSafe index body && countedClausesSafe index cs
 
 end
 
@@ -563,12 +575,16 @@ def execStmt (p : Program) (fuel : Nat) (env : Env) : Stmt → Option Outcome
     match ← execStmt p fuel env s with
     | .ret v => some (.ret v)
     | .panic x => some (.panic x)
+    | .brk env' => some (.brk (env'.drop (env'.length - env.length)))
+    | .cont env' => some (.cont (env'.drop (env'.length - env.length)))
     | .normal env1 =>
       have := stmt_size_pos s
       match ← execStmt p fuel env1 (.ifStmt sp none c t els) with
       | .ret v => some (.ret v)
       | .panic x => some (.panic x)
       | .normal env' => some (.normal (env'.drop (env'.length - env.length)))
+      | .brk env' => some (.brk (env'.drop (env'.length - env.length)))
+      | .cont env' => some (.cont (env'.drop (env'.length - env.length)))
   | .ifStmt _ none c t els =>
     withValue (eval p fuel env c) fun
       | .bool b => do
@@ -580,6 +596,8 @@ def execStmt (p : Program) (fuel : Nat) (env : Env) : Stmt → Option Outcome
         | .ret v => some (.ret v)
         | .panic x => some (.panic x)
         | .normal env' => some (.normal (env'.drop (env'.length - env.length)))
+        | .brk env' => some (.brk (env'.drop (env'.length - env.length)))
+        | .cont env' => some (.cont (env'.drop (env'.length - env.length)))
       | _ => none
   -- `switch s; x { case a, b: … default: … }` (Go specification, "Switch
   -- statements"). The simple statement `s` runs first, in the implicit block
@@ -588,16 +606,22 @@ def execStmt (p : Program) (fuel : Nat) (env : Env) : Stmt → Option Outcome
     match ← execStmt p fuel env s with
     | .ret v => some (.ret v)
     | .panic x => some (.panic x)
+    | .brk env' => some (.brk (env'.drop (env'.length - env.length)))
+    | .cont env' => some (.cont (env'.drop (env'.length - env.length)))
     | .normal env1 =>
       have := stmt_size_pos s
       match ← execStmt p fuel env1 (.switchStmt sp none tag bsp clauses) with
       | .ret v => some (.ret v)
       | .panic x => some (.panic x)
       | .normal env' => some (.normal (env'.drop (env'.length - env.length)))
+      | .brk env' => some (.brk (env'.drop (env'.length - env.length)))
+      | .cont env' => some (.cont (env'.drop (env'.length - env.length)))
   -- The switch expression is evaluated exactly once, and a missing one stands
   -- for the boolean value `true`. Each clause is an implicit block, so what
   -- it declares goes out of scope at its end. The subset has no
-  -- `fallthrough`: the parser refuses it.
+  -- `fallthrough`: the parser refuses it. A `break` in a clause ends the
+  -- switch, which then completes normally (Go specification, "Break
+  -- statements").
   | .switchStmt _ none tag _ clauses =>
     withValue (match tag with
         | none => Res.ok (.bool true)
@@ -606,11 +630,20 @@ def execStmt (p : Program) (fuel : Nat) (env : Env) : Stmt → Option Outcome
       | .ret v => some (.ret v)
       | .panic x => some (.panic x)
       | .normal env' => some (.normal (env'.drop (env'.length - env.length)))
+      | .brk env' => some (.normal (env'.drop (env'.length - env.length)))
+      | .cont env' => some (.cont (env'.drop (env'.length - env.length)))
   | .block _ body => do
     match ← exec p fuel env body with
     | .ret v => some (.ret v)
     | .panic x => some (.panic x)
     | .normal env' => some (.normal (env'.drop (env'.length - env.length)))
+    | .brk env' => some (.brk (env'.drop (env'.length - env.length)))
+    | .cont env' => some (.cont (env'.drop (env'.length - env.length)))
+  -- `break` and `continue` without a label (Go specification, "Break
+  -- statements" and "Continue statements"). The innermost `for` or `switch`
+  -- around them handles the outcome. `go build` refuses one outside them.
+  | .brk _ => some (.brk env)
+  | .cont _ => some (.cont env)
   -- Go specification, "For statements with for clause". The body cannot
   -- change the counter, and literal bounds cannot change between iterations.
   | .forStmt _ init cond post (.block span body) => do
@@ -665,6 +698,8 @@ def exec (p : Program) (fuel : Nat) (env : Env) : List Stmt → Option Outcome
     match ← execStmt p fuel env s with
     | .ret v => some (.ret v)
     | .panic x => some (.panic x)
+    | .brk env' => some (.brk env')
+    | .cont env' => some (.cont env')
     | .normal env' => exec p fuel env' rest
 termination_by ss => (fuel, sizeOf ss, 0)
 
@@ -680,6 +715,6 @@ def runIn (p : Program) (name : String) (args : List Val) (fuel : Nat := 64) :
   match ← execStmt p fuel (params.zip args).reverse body with
   | .ret v => some (.ok v)
   | .panic x => some (.error x)
-  | .normal _ => none
+  | _ => none
 
 end tolean.Go.Eval

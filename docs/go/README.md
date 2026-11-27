@@ -122,7 +122,9 @@ the last statement of its list, so `if v := f(); v > 0 { return v }` cannot
 be followed by more code. A switch with a tag needs at least one case value,
 because only a case test evaluates the tag. A case with several values
 becomes a `||` of tests, so a value after the first may not divide or index
-a string, and neither may the tag of such a switch. `break` inside a switch is refused. The [decision record](../decisions/2026-11-26-go-switch-as-if-chain.md)
+a string, and neither may the tag of such a switch. A `break` inside a
+switch leaves the switch. A switch whose clauses break must change a local,
+and it must not also hold a `continue` of an enclosing loop. The [decision record](../decisions/2026-11-26-go-switch-as-if-chain.md)
 gives the reasons.
 
 Integer `/` and `%` become `Int.tdiv` and `Int.tmod`, which round toward
@@ -207,7 +209,15 @@ package theorem. A panic in the body ends the loop, as a return does.
 The interpreter records the Go specification's “For statements with for
 clause” rule next to its counted-loop case.
 
-This first proved form refuses early return, `break`, `continue`, nested loops,
+The body may hold `break` and `continue`, and so may an `if`, a block or a
+switch inside it. The interpreter and the IR both have a `break` and a
+`continue` outcome, and the shared loop core stops on a `break`. The output
+runs such a body with `forIn`, where each run of the body gives a
+`ForInStep`: `continue` and the end of the body give `yield`, and `break`
+gives `done`. A block that breaks or continues must end its list of
+statements. A labeled `break` or `continue` stays refused.
+
+This proved form still refuses early return, nested loops,
 and loops after another statement. It also refuses computed bounds, other
 comparison or update operators, counter mutation, and more than 256
 iterations. The limit keeps the literal list emitted by this lowering within

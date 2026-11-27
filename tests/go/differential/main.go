@@ -22,7 +22,8 @@
 // /=, %=, ++ and --; if statements that change locals or return, with and
 // without an init statement; expression switches with and without a tag, an
 // init statement, several values in a case and a default anywhere, that
-// change locals or return; one counted loop at the start of a body; calls
+// change locals or return, and break in a clause; one counted loop at the
+// start of a body, with a break or a continue under a test of the index; calls
 // of functions declared earlier; and package-level constants, typed and
 // untyped, alone and in groups. A function that may panic is called only
 // where the subset allows it: alone after :=, =, var or return. Go's main
@@ -754,6 +755,17 @@ func (g *gen) stateSwitch(depth int) {
 		}
 		if i < clauses && len(cases[i]) > 0 {
 			g.line("case %s:", strings.Join(cases[i], ", "))
+			if g.chance(0.3) {
+				// A break leaves the switch before the rest of the clause.
+				c, _ := g.expr(tBool, 1)
+				g.indent++
+				g.line("if %s {", c)
+				g.indent++
+				g.line("break")
+				g.indent--
+				g.line("}")
+				g.indent--
+			}
 			g.stateBlock(depth)
 		}
 	}
@@ -875,6 +887,15 @@ func (g *gen) loop() {
 	g.inLoop = true
 	g.indent++
 	g.stmts(g.pick(3), 1)
+	if g.chance(0.4) {
+		// A break or a continue in the middle of the body, under a test of the
+		// index.
+		g.line("if %s %s %d {", index.name, []string{"==", "<", ">"}[g.pick(3)], start+g.pick(stop-start+2))
+		g.indent++
+		g.line("%s", []string{"break", "continue"}[g.pick(2)])
+		g.indent--
+		g.line("}")
+	}
 	g.assign(mark)
 	g.use(mark + 1)
 	g.inLoop = false

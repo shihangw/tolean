@@ -85,7 +85,12 @@ private def dividing : String :=
 -- A tagless case must be a boolean, and the types must match.
 #guard refused "switch { case x: return 1 }; return 0"
 #guard refused "switch x { case \"a\": return 1 }; return 0"
--- `break` in a switch stays refused.
-#guard refused "r := 0; switch x { case 1: r = 1; break }; return r"
+-- `break` in a switch leaves the switch.
+#guard check "r := 0; switch x { case 1: r = 1; break }; return r" 1 1
+#guard check "r := 0; switch x { case 1: if r == 0 { break }; r = 5; default: r = 2 }; return r" 1 0
+#guard check "r := 0; switch x { case 1: if r == 0 { break }; r = 5; default: r = 2 }; return r" 3 2
+#guard check "r := 7; switch y := x; y { case 1: r = y; break }; return r" 1 1
+-- A switch that only breaks changes nothing, and there is nothing to translate.
+#guard refused "switch x { case 1: break }; return 0"
 
 #print axioms Proof.translate_sound

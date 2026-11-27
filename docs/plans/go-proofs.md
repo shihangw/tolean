@@ -50,13 +50,13 @@ Go guide documents it from then on.
 
 | Go | Lean | Refused |
 |---|---|---|
-| `for i := a; i < b; i++` | A same-type integer list, lowered through the [shared loop core](../decisions/2026-11-22-shared-loop-core.md) to `Body.fold`. The bound must not refer to the counter and must stay unchanged by the header update and the body. | Other updates or tests, mixed-type bounds, and bodies that assign the counter or change what the bound reads |
+| `for i := a; i < b; i++` | A same-type integer list, lowered through the [shared loop core](../decisions/2026-11-22-shared-loop-core.md) to `Body.fold`. The bound must not refer to the counter and must stay unchanged by the header update and the body. Unlabeled `break` and `continue` in the body, also inside an `if`, a block or a switch, are proved; the output then uses `forIn`. | Labeled `break` and `continue`, a switch that both breaks and continues, other updates or tests, mixed-type bounds, and bodies that assign the counter or change what the bound reads |
 | `for _, x := range xs` over a slice or array, with `break`, `continue` and `return` | Elements in order through the shared loop core, printed as `List.foldl` or `forIn`, with the shared return carrier where needed | A body that changes the iterable, including through an alias; range over a map, channel or function iterator |
 | `for i := range xs` or `for i, x := range xs` over a slice or array | Indices or index-value pairs through the same shared loop core | Lengths outside the modeled `int` range and the same mutation restrictions |
 | An `if` with an init statement, or a `switch`, that returns on some path and has statements after it, such as `if v := f(); v > 0 { return v }; return 0` | The `let` of the init statement in front of the code after the `if` | Nothing yet. The translator refuses this form, because the code after the statement would run where the init statement's name is still bound. The [decision record](../decisions/2026-11-26-go-switch-as-if-chain.md) explains why. |
 
 Go supplies each loop head and its `HeadSim`, not a second fold proof.
-The shared interpreter requires `brk` and `cont` cases in Go's `Outcome`.
+The shared interpreter requires `brk` and `cont` cases in Go's `Outcome`, and Go now has them.
 Its evaluator and soundness layers depend on step 6 of the
 [shared-core plan](shared-core.md); step 9 there records the loop work.
 Labeled jumps and `goto` remain refused. The loop-core decision does not

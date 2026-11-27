@@ -53,5 +53,21 @@ that an output body ignores names outside the translator's scope.
 
 ## `break` in a switch
 
-The subset has no `break` outcome yet. It stays refused until the loop work
-adds `break` and `continue` to Go's `Outcome`.
+Go's `Outcome` now has `brk` and `cont`, as the shared loop core requires.
+A `break` in a switch ends the switch, and the switch then ends normally, as
+the Go specification's section "Break statements" says. The interpreter maps
+the `brk` of the chosen clause to a normal outcome. `Switch.lean` proves that
+the chain of `if` statements gives the same outcome after this mapping.
+
+The translator writes a switch whose clauses break as its own body, which
+ends with the locals that the switch changes. A `break` in a clause returns
+those locals at once, and the rest of the clause is skipped. The code after
+the switch then reads them. A switch that changes no local has nothing to
+return, so the translator refuses it. A switch with an init statement becomes
+a block, so the init name does not reach the code after the switch.
+
+A `continue` inside such a switch would have to leave both the switch and the
+loop's body. The translator refuses a switch that both breaks and continues,
+because the body of the switch cannot say which of the two it ends with. A
+switch that only continues still works, since its `continue` reaches the loop
+unchanged.
