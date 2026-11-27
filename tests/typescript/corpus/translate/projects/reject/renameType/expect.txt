@@ -1,0 +1,1 @@
+renaming a type with 'as' is not supported; import it under its own name

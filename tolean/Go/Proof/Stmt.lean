@@ -478,14 +478,17 @@ theorem eqZero_eval {d : IR.Expr} {ρ : Eval.Env} {t : Bool}
   subst he
   exact ⟨_, hx, by simp⟩
 
+/-- Each value is an integer. -/
+def Ints (vs : List Val) : Prop := ∀ d ∈ vs, ∃ i, d = .int i
+
 theorem anyZero_eval {ρ : Eval.Env} :
     ∀ {ds : List IR.Expr} {t : Bool}, ds ≠ [] → IR.Expr.eval fs fuel ρ (anyZero ds) = some (.bool t) →
-      ∃ vs, IR.Expr.evalList fs fuel ρ ds = some vs ∧ (t = true ↔ Val.int 0 ∈ vs)
+      ∃ vs, IR.Expr.evalList fs fuel ρ ds = some vs ∧ Ints vs ∧ (t = true ↔ Val.int 0 ∈ vs)
   | [], _, hne, _ => absurd rfl hne
   | [d], t, _, h => by
     simp only [anyZero, isZero, out_decide] at h
     obtain ⟨i, hi, ht⟩ := eqZero_eval fs fuel h
-    refine ⟨[.int i], evalList_single hi, ?_⟩
+    refine ⟨[.int i], evalList_single hi, by simp [Ints], ?_⟩
     rw [ht]
     simp [eq_comm]
   | d :: d' :: rest, t, _, h => by
@@ -493,9 +496,13 @@ theorem anyZero_eval {ρ : Eval.Env} :
     obtain ⟨x, y, hx, hy, ht⟩ := out_or h
     simp only [isZero, out_decide] at hx
     obtain ⟨i, hi, hxi⟩ := eqZero_eval fs fuel hx
-    obtain ⟨vs, hvs, hy'⟩ := anyZero_eval (ds := d' :: rest) (by simp) hy
-    refine ⟨.int i :: vs, ?_, ?_⟩
+    obtain ⟨vs, hvs, hint, hy'⟩ := anyZero_eval (ds := d' :: rest) (by simp) hy
+    refine ⟨.int i :: vs, ?_, ?_, ?_⟩
     · simp [IR.Expr.evalList, hi, hvs]
+    · intro d hd
+      rcases List.mem_cons.mp hd with rfl | hd
+      · exact ⟨i, rfl⟩
+      · exact hint d hd
     · injection ht with ht
       subst ht
       rw [List.mem_cons, ← hy', Bool.or_eq_true, hxi]
@@ -503,34 +510,116 @@ theorem anyZero_eval {ρ : Eval.Env} :
 
 theorem zeroTest_eval {ρ : Eval.Env} {ds : List IR.Expr} {t : Bool} (hne : ds ≠ [])
     (h : IR.Expr.eval fs fuel ρ (zeroTest ds) = some (.bool t)) :
-    ∃ vs, IR.Expr.evalList fs fuel ρ ds = some vs ∧ (t = true ↔ Val.int 0 ∈ vs) := by
+    ∃ vs, IR.Expr.evalList fs fuel ρ ds = some vs ∧ Ints vs ∧ (t = true ↔ Val.int 0 ∈ vs) := by
   match ds, hne, h with
   | [d], _, h =>
     simp only [zeroTest] at h
     obtain ⟨i, hi, ht⟩ := eqZero_eval fs fuel h
-    refine ⟨[.int i], evalList_single hi, ?_⟩
+    refine ⟨[.int i], evalList_single hi, by simp [Ints], ?_⟩
     rw [ht]
     simp [eq_comm]
   | d :: d' :: rest, hne, h =>
     simp only [zeroTest] at h
     exact anyZero_eval fs fuel hne h
 
-/-- No divisor of `c` is zero. -/
-def NoZero (c : IR.Expr) (ρo : Eval.Env) : Prop :=
-  ∀ ds, IR.Expr.evalList fs fuel ρo (divisors c) = some ds → Val.int 0 ∉ ds
+/-- The first check of integers that fails is a zero divisor. -/
+theorem firstFault_ints : ∀ {vs : List Val}, Ints vs →
+    firstFault vs = if Val.int 0 ∈ vs then some Eval.divideByZero else none
+  | [], _ => by simp [firstFault]
+  | d :: vs, h => by
+    obtain ⟨i, rfl⟩ := h d (by simp)
+    have ih := firstFault_ints (vs := vs) fun d hd => h d (by simp [hd])
+    by_cases hi : i = 0
+    · subst hi; simp [firstFault, fault]
+    · have : Val.int i ≠ Val.int 0 := by simpa using hi
+      simp [firstFault, fault, hi, ih, eq_comm, this]
 
-theorem outcome_ok {α : Type} {ds : List Val} (h : Val.int 0 ∉ ds) (v : α) : outcome ds v = .ok v := by
-  simp [outcome, h]
-
-theorem outcome_zero {α : Type} {ds : List Val} (h : Val.int 0 ∈ ds) (v : α) :
-    outcome ds v = .error Eval.divideByZero := by
-  simp [outcome, h]
-
-theorem outcome_eq_ok {α : Type} {ds : List Val} {v u : α} (h : outcome ds v = .ok u) : v = u := by
-  unfold outcome at h
+/-- The test of one check: whether it fails, and the panic when it does. -/
+theorem failTest_eval {ρ : Eval.Env} {k : IR.Expr} {t : Bool}
+    (h : IR.Expr.eval fs fuel ρ (failTest k) = some (.bool t)) :
+    ∃ w, IR.Expr.eval fs fuel ρ k = some w ∧ (t = false ↔ fault w = none) ∧
+      ∀ x, IR.Expr.eval fs fuel ρ (failMessage k) = some x → t = true → fault w = some x := by
+  unfold failTest at h
+  unfold failMessage
   split at h
-  · cases h
-  · injection h
+  · next hk =>
+    simp only [hk, ↓reduceIte]
+    obtain ⟨x, y, r, hx, hy, he, hr⟩ := out_ne h
+    simp only [IR.Expr.eval, Option.some.injEq] at hy
+    subst hy
+    injection hr with hr
+    subst hr
+    cases x <;> simp [Eval.eqVal] at he
+    next m =>
+    subst he
+    refine ⟨_, hx, ?_, fun x hx' ht => ?_⟩
+    · by_cases hm : m = "" <;> simp [fault, hm]
+    · rw [hx] at hx'
+      cases hx'
+      by_cases hm : m = "" <;> simp_all [fault]
+  · next hk =>
+    simp only [hk, Bool.false_eq_true, ↓reduceIte]
+    obtain ⟨i, hi, ht⟩ := eqZero_eval fs fuel h
+    refine ⟨_, hi, ?_, fun x hx ht' => ?_⟩
+    · by_cases h0 : i = 0 <;> cases t <;> simp_all [fault]
+    · simp only [panicCode, IR.Expr.eval, Option.some.injEq] at hx
+      subst hx
+      have := ht.mp ht'
+      simp [fault, this, Eval.divideByZero]
+
+/-- What the chain of checks does: it throws the panic of the first check
+that fails, after `c` has a value, or every check passes and it runs
+`body`. -/
+theorem checkChain_cases {ρ : Eval.Env} {c : IR.Expr} {body : IR.Body} {o : Outcome} :
+    ∀ {ks : List IR.Expr}, IR.Body.exec fs fuel ρ (checkChain c ks body) = some o →
+      (∃ x w, o = .panic x ∧ IR.Expr.eval fs fuel ρ c = some w ∧
+        ∀ vs, IR.Expr.evalList fs fuel ρ ks = some vs → firstFault vs = some x) ∨
+      (∃ vs, IR.Expr.evalList fs fuel ρ ks = some vs ∧ firstFault vs = none ∧
+        IR.Body.exec fs fuel ρ body = some o)
+  | [], h => .inr ⟨[], evalList_nil, rfl, h⟩
+  | k :: ks, h => by
+    simp only [checkChain] at h
+    obtain ⟨t, ht, hex⟩ := out_ite fs fuel h
+    obtain ⟨w, hw, hpass, hfail⟩ := failTest_eval fs fuel ht
+    cases t
+    · have hf : fault w = none := hpass.mp rfl
+      simp only [Bool.false_eq_true, ↓reduceIte] at hex
+      rcases checkChain_cases hex with ⟨x, wc, ho, hc, hall⟩ | ⟨vs, hvs, hnone, hb⟩
+      · refine .inl ⟨x, wc, ho, hc, fun vs hvs => ?_⟩
+        simp only [IR.Expr.evalList, hw, Option.pure_def, Option.bind_eq_bind, Option.bind_some] at hvs
+        cases hks : IR.Expr.evalList fs fuel ρ ks with
+        | none => simp [hks] at hvs
+        | some us =>
+          simp only [hks, Option.bind_some, Option.some.injEq] at hvs
+          subst hvs
+          simp [firstFault, hf, hall us hks]
+      · refine .inr ⟨w :: vs, by simp [IR.Expr.evalList, hw, hvs], by simp [firstFault, hf, hnone], hb⟩
+    · simp only [↓reduceIte] at hex
+      obtain ⟨m, hm', rfl⟩ := out_throw fs fuel hex
+      obtain ⟨wc, m0, hc, hm, happ⟩ := out_ext2 hm'
+      simp only [IR.ExprExt.apply, Option.some.injEq] at happ
+      subst happ
+      have hf := hfail m0 hm rfl
+      refine .inl ⟨m0, wc, rfl, hc, fun vs hvs => ?_⟩
+      simp only [IR.Expr.evalList, hw, Option.pure_def, Option.bind_eq_bind, Option.bind_some] at hvs
+      cases hks : IR.Expr.evalList fs fuel ρ ks with
+      | none => simp [hks] at hvs
+      | some us =>
+        simp only [hks, Option.bind_some, Option.some.injEq] at hvs
+        subst hvs
+        simp [firstFault, hf]
+
+/-- No check of `c` fails. -/
+def NoFault (c : IR.Expr) (ρo : Eval.Env) : Prop :=
+  ∀ ds, IR.Expr.evalList fs fuel ρo (divisors c) = some ds → firstFault ds = none
+
+theorem outcome_ok {α : Type} {ds : List Val} (h : firstFault ds = none) (v : α) :
+    outcome ds v = .ok v := by
+  simp [outcome, h]
+
+theorem outcome_fault {α : Type} {ds : List Val} {x : Val} (h : firstFault ds = some x) (v : α) :
+    outcome ds v = .error x := by
+  simp [outcome, h]
 
 /-! ### Statement lists -/
 
@@ -663,63 +752,73 @@ theorem set_sim {P : Eval.Env → Prop} {env : Pure.Env} {st : Stmt} {rest : Lis
     exact (hrest _ _ (agree_set ha hsome) (hs' w)).2.2 y hb
 
 /-- What the output of a guarded statement does: it panics, as the source's
-statement does, or no divisor is zero and it runs `body`. -/
+statement does, or no check fails and it runs `body`. -/
 theorem guarded_cases {env : Pure.Env} {c : IR.Expr} {st : Stmt} {body : IR.Body}
     {ρs ρo : Eval.Env} (ha : Agree ρs ρo) (hs : Scoped env ρs)
     (hz : ∀ ρs ρo v, Agree ρs ρo → Scoped env ρs → IR.Expr.eval fs fuel ρo c = some v →
       ∃ ds, IR.Expr.evalList fs fuel ρo (divisors c) = some ds ∧
-        (Val.int 0 ∈ ds → Eval.execStmt p fuel ρs st = some (.panic Eval.divideByZero)))
+        (∀ x, firstFault ds = some x → Eval.execStmt p fuel ρs st = some (.panic x)))
     {o : Outcome} (h : IR.Body.exec fs fuel ρo (guarded c body) = some o) :
-    (o = .panic Eval.divideByZero ∧ Eval.execStmt p fuel ρs st = some (.panic Eval.divideByZero)) ∨
-      (NoZero fs fuel c ρo ∧ IR.Body.exec fs fuel ρo body = some o) := by
+    (∃ x, o = .panic x ∧ Eval.execStmt p fuel ρs st = some (.panic x)) ∨
+      (NoFault fs fuel c ρo ∧ IR.Body.exec fs fuel ρo body = some o) := by
   unfold guarded at h
   split at h
   · next hd =>
     refine .inr ⟨fun ds hds => ?_, h⟩
     rw [List.isEmpty_iff.mp hd, evalList_nil] at hds
     cases hds
-    simp
-  · next hd =>
-    have hne : divisors c ≠ [] := fun h' => hd (by simp [h'])
-    obtain ⟨t, ht, hex⟩ := out_ite fs fuel h
-    obtain ⟨vs, hvs, htv⟩ := zeroTest_eval fs fuel hne ht
-    cases t
-    · refine .inr ⟨fun ds hds => ?_, by simpa using hex⟩
-      rw [hvs] at hds
-      cases hds
-      intro hm
-      exact absurd (htv.mpr hm) (by simp)
-    · left
-      simp only [↓reduceIte] at hex
-      obtain ⟨w, hw, hthrow⟩ := out_let fs fuel hex
-      obtain ⟨m, hm, rfl⟩ := out_throw fs fuel hthrow
-      simp only [panicCode, IR.Expr.eval, Option.some.injEq] at hm
-      subst hm
-      obtain ⟨ds, hds, hpanic⟩ := hz ρs ρo w ha hs hw
-      rw [hvs] at hds
-      cases hds
-      exact ⟨rfl, hpanic (htv.mp rfl)⟩
+    rfl
+  · split at h
+    · rcases checkChain_cases fs fuel h with ⟨x, w, rfl, hw, hall⟩ | ⟨vs, hvs, hnone, hb⟩
+      · obtain ⟨ds, hds, hpanic⟩ := hz ρs ρo w ha hs hw
+        exact .inl ⟨x, rfl, hpanic x (hall ds hds)⟩
+      · refine .inr ⟨fun ds hds => ?_, hb⟩
+        rw [hvs] at hds
+        cases hds
+        exact hnone
+    · next hd _ =>
+      have hne : divisors c ≠ [] := fun h' => hd (by simp [h'])
+      obtain ⟨t, ht, hex⟩ := out_ite fs fuel h
+      obtain ⟨vs, hvs, hint, htv⟩ := zeroTest_eval fs fuel hne ht
+      have hff := firstFault_ints hint
+      cases t
+      · refine .inr ⟨fun ds hds => ?_, by simpa using hex⟩
+        rw [hvs] at hds
+        cases hds
+        have hm : Val.int 0 ∉ vs := fun hm => absurd (htv.mpr hm) (by simp)
+        simp [hff, hm]
+      · left
+        simp only [↓reduceIte] at hex
+        obtain ⟨w, hw, hthrow⟩ := out_let fs fuel hex
+        obtain ⟨m, hm, rfl⟩ := out_throw fs fuel hthrow
+        simp only [panicCode, IR.Expr.eval, Option.some.injEq] at hm
+        subst hm
+        obtain ⟨ds, hds, hpanic⟩ := hz ρs ρo w ha hs hw
+        rw [hvs] at hds
+        cases hds
+        refine ⟨_, rfl, hpanic _ ?_⟩
+        simp [hff, htv.mp rfl, Eval.divideByZero]
 
-/-- A statement whose divisors the output tests means what the source means,
-when the body after the test does from the environments where no divisor is
-zero. -/
+/-- A statement whose checks the output tests means what the source means,
+when the body after the test does from the environments where no check
+fails. -/
 theorem guarded_sim {env : Pure.Env} {tail : Tail} {c : IR.Expr} {st : Stmt} {rest : List Stmt}
     {body : IR.Body}
     (hz : ∀ ρs ρo v, Agree ρs ρo → Scoped env ρs → IR.Expr.eval fs fuel ρo c = some v →
       ∃ ds, IR.Expr.evalList fs fuel ρo (divisors c) = some ds ∧
-        (Val.int 0 ∈ ds → Eval.execStmt p fuel ρs st = some (.panic Eval.divideByZero)))
-    (hb : ∀ ρs ρo, Agree ρs ρo → Scoped env ρs → NoZero fs fuel c ρo →
+        (∀ x, firstFault ds = some x → Eval.execStmt p fuel ρs st = some (.panic x)))
+    (hb : ∀ ρs ρo, Agree ρs ρo → Scoped env ρs → NoFault fs fuel c ρo →
       SimAt p fs fuel env tail (st :: rest) body ρs ρo) :
     StmtSim p fs fuel env tail (st :: rest) (guarded c body) := by
   intro ρs ρo ha hs
   refine ⟨fun v hv => ?_, fun ρo' hv => ?_, fun y hv => ?_⟩
-  · rcases guarded_cases p fs fuel ha hs hz hv with ⟨h, -⟩ | ⟨hn, hex⟩
+  · rcases guarded_cases p fs fuel ha hs hz hv with ⟨_, h, -⟩ | ⟨hn, hex⟩
     · cases h
     · exact (hb ρs ρo ha hs hn).1 v hex
-  · rcases guarded_cases p fs fuel ha hs hz hv with ⟨h, -⟩ | ⟨hn, hex⟩
+  · rcases guarded_cases p fs fuel ha hs hz hv with ⟨_, h, -⟩ | ⟨hn, hex⟩
     · cases h
     · exact (hb ρs ρo ha hs hn).2.1 ρo' hex
-  · rcases guarded_cases p fs fuel ha hs hz hv with ⟨h, hst⟩ | ⟨hn, hex⟩
+  · rcases guarded_cases p fs fuel ha hs hz hv with ⟨x, h, hst⟩ | ⟨hn, hex⟩
     · cases h
       exact exec_cons_panic p fuel hst
     · exact (hb ρs ρo ha hs hn).2.2 y hex
@@ -875,20 +974,20 @@ code is zero. -/
 theorem expr_ok {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs fuel) {n : Nat}
     {env : Pure.Env} {e : Expr} {c : IR.Expr} {t : Ty} (h : translateExpr ctx env n e = .ok (c, t))
     {ρs ρo : Eval.Env} {v : Val} (ha : Agree ρs ρo) (hs : Scoped env ρs)
-    (hv : IR.Expr.eval fs fuel ρo c = some v) (hn : NoZero fs fuel c ρo) :
+    (hv : IR.Expr.eval fs fuel ρo c = some v) (hn : NoFault fs fuel c ρo) :
     Eval.eval p fuel ρs e = some (.ok v) := by
   obtain ⟨ds, hds, -, he⟩ := expr_sound fs fuel p hp hc h ha hs hv
   rw [he, outcome_ok (hn ds hds)]
 
-/-- The source's expression panics when a divisor of its code is zero. -/
+/-- The source's expression panics when a check of its code fails. -/
 theorem expr_zero {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs fuel) {n : Nat}
     {env : Pure.Env} {e : Expr} {c : IR.Expr} {t : Ty} (h : translateExpr ctx env n e = .ok (c, t))
     {ρs ρo : Eval.Env} {v : Val} (ha : Agree ρs ρo) (hs : Scoped env ρs)
     (hv : IR.Expr.eval fs fuel ρo c = some v) :
     ∃ ds, IR.Expr.evalList fs fuel ρo (divisors c) = some ds ∧
-      (Val.int 0 ∈ ds → Eval.eval p fuel ρs e = some (.error Eval.divideByZero)) := by
+      (∀ x, firstFault ds = some x → Eval.eval p fuel ρs e = some (.error x)) := by
   obtain ⟨ds, hds, -, he⟩ := expr_sound fs fuel p hp hc h ha hs hv
-  exact ⟨ds, hds, fun hm => by rw [he, outcome_zero hm]⟩
+  exact ⟨ds, hds, fun x hm => by rw [he, outcome_fault hm]⟩
 
 theorem compound_strict {op : String} {o : BinOp} (hk : AssignKind.ofString? op = some (.compound o)) :
     o ≠ .land ∧ o ≠ .lor := by
@@ -905,7 +1004,8 @@ theorem incDec_strict {op : String} {o : BinOp} (ho : Eval.incDecOp? op = some o
 
 theorem panicCallee_some {ctx : Ctx} {env : Pure.Env} {e : Expr} {f : String} {args : List Expr}
     {sig : FnSig} (h : panicCallee? ctx env e = some (f, args, sig)) :
-    env.has f = false ∧ ∃ csp fsp, e = .call csp (.ident fsp f) args false := by
+    env.has f = false ∧ Eval.builtin ctx.program f = none ∧
+      ∃ csp fsp, e = .call csp (.ident fsp f) args false := by
   unfold panicCallee? at h
   split at h
   · next csp fsp g args' =>
@@ -916,7 +1016,9 @@ theorem panicCallee_some {ctx : Ctx} {env : Pure.Env} {e : Expr} {f : String} {a
       · split at h
         · simp only [Option.some.injEq, Prod.mk.injEq] at h
           obtain ⟨rfl, rfl, -⟩ := h
-          exact ⟨by simpa using hg, csp, fsp, rfl⟩
+          simp only [Bool.or_eq_true, Option.isSome_iff_ne_none, not_or, ne_eq,
+            Decidable.not_not] at hg
+          exact ⟨by simpa using hg.1, hg.2, csp, fsp, rfl⟩
         · simp at h
       · simp at h
   · simp at h
@@ -949,11 +1051,12 @@ theorem bindCall_some {ctx : Ctx} {env : Pure.Env} {st : Stmt} {form : BindForm}
 /-- The source's call of a function that can panic: its arguments, then the
 call. -/
 theorem eval_panicCall {ctx : Ctx} {env : Pure.Env} {e : Expr} {f : String} {args : List Expr}
-    {sig : FnSig} (h : panicCallee? ctx env e = some (f, args, sig)) {ρs : Eval.Env}
-    (hs : Scoped env ρs) :
+    {sig : FnSig} (hp : ctx.program = p) (h : panicCallee? ctx env e = some (f, args, sig))
+    {ρs : Eval.Env} (hs : Scoped env ρs) :
     Eval.eval p fuel ρs e = (Eval.evalList p fuel ρs args).andThen (callS p fuel f) := by
-  obtain ⟨hf, csp, fsp, rfl⟩ := panicCallee_some h
-  simp [eval_call, scoped_none hs hf]
+  obtain ⟨hf, hb, csp, fsp, rfl⟩ := panicCallee_some h
+  rw [hp] at hb
+  simp [eval_call p fuel ρs csp fsp f args hb, scoped_none hs hf]
 
 /-- The arguments of a call of a function that can panic: the source's
 evaluate to the code's values, or panic when a divisor is zero. -/
@@ -967,23 +1070,23 @@ theorem panicArgs {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs fuel)
       Eval.eval p fuel ρs e = tolean.Core.Res.andThen (some (outcome ds vs)) (callS p fuel f) := by
   obtain ⟨ds, hds, -, hev⟩ := (expr_sound_aux fs fuel p hp hc exprFuel).2 env args codes hargs
     ρs ρo vs ha hs hvs
-  exact ⟨ds, by simpa [divisors] using hds, by rw [eval_panicCall p fuel hcall hs, hev]⟩
+  exact ⟨ds, by simpa [divisors] using hds, by rw [eval_panicCall p fuel hp hcall hs, hev]⟩
 
-/-- The source's call panics when a divisor of an argument's code is zero. -/
+/-- The source's call panics when a check of an argument's code fails. -/
 theorem call_zero {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs fuel)
     {env : Pure.Env} {e : Expr} {f : String} {args : List Expr} {sig : FnSig}
     {codes : List (IR.Expr × Ty)} (hcall : panicCallee? ctx env e = some (f, args, sig))
     (hargs : translateArgs ctx env exprFuel args = .ok codes) {ρs ρo : Eval.Env} {v : Val}
     (ha : Agree ρs ρo) (hs : Scoped env ρs)
-    (hv : IR.Expr.eval fs fuel ρo (.call ⟨"", f⟩ (codes.map (·.1))) = some v) :
-    ∃ ds, IR.Expr.evalList fs fuel ρo (divisors (.call ⟨"", f⟩ (codes.map (·.1)))) = some ds ∧
-      (Val.int 0 ∈ ds → Eval.eval p fuel ρs e = some (.error Eval.divideByZero)) := by
-  rw [out_call] at hv
+    (hv : IR.Expr.eval fs fuel ρo (.ext .args (codes.map (·.1))) = some v) :
+    ∃ ds, IR.Expr.evalList fs fuel ρo (divisors (.ext .args (codes.map (·.1)))) = some ds ∧
+      (∀ x, firstFault ds = some x → Eval.eval p fuel ρs e = some (.error x)) := by
+  simp only [IR.Expr.eval] at hv
   cases hvs : IR.Expr.evalList fs fuel ρo (codes.map (·.1)) with
   | none => simp [hvs] at hv
   | some vs =>
     obtain ⟨ds, hds, hev⟩ := panicArgs p fs fuel hp hc hcall hargs ha hs hvs
-    exact ⟨ds, hds, fun hm => by rw [hev, outcome_zero hm]; rfl⟩
+    exact ⟨ds, by simpa [divisors] using hds, fun x hm => by rw [hev, outcome_fault hm]; rfl⟩
 
 /-- `f a >>= fun x => rest`, when no divisor of the arguments is zero: the
 source's call returns the value that `rest` runs with, or panics as the
@@ -992,7 +1095,7 @@ theorem call_bind {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs fuel)
     {env : Pure.Env} {e : Expr} {f : String} {args : List Expr} {sig : FnSig}
     {codes : List (IR.Expr × Ty)} (hcall : panicCallee? ctx env e = some (f, args, sig))
     (hargs : translateArgs ctx env exprFuel args = .ok codes) {ρo : Eval.Env}
-    (hn : NoZero fs fuel (.call ⟨"", f⟩ (codes.map (·.1))) ρo) {x : String} {rb : IR.Body}
+    (hn : NoFault fs fuel (.ext .args (codes.map (·.1))) ρo) {x : String} {rb : IR.Body}
     {o : Outcome} (hv : IR.Body.exec fs fuel ρo (.bind x ⟨"", f⟩ (codes.map (·.1)) rb) = some o) :
     (∃ w, (∀ ρs, Agree ρs ρo → Scoped env ρs → Eval.eval p fuel ρs e = some (.ok w)) ∧
         IR.Body.exec fs fuel ((x, w) :: ρo) rb = some o) ∨
@@ -1002,7 +1105,7 @@ theorem call_bind {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs fuel)
   have hev : ∀ ρs, Agree ρs ρo → Scoped env ρs → Eval.eval p fuel ρs e = callS p fuel f vs := by
     intro ρs ha hs
     obtain ⟨ds, hds, hev⟩ := panicArgs p fs fuel hp hc hcall hargs ha hs hvs
-    rw [hev, outcome_ok (hn ds hds)]; rfl
+    rw [hev, outcome_ok (hn ds (by simpa [divisors] using hds))]; rfl
   rcases hr with ⟨w, hw, hb⟩ | ⟨y, hy, rfl⟩
   · exact .inl ⟨w, fun ρs ha hs => by rw [hev ρs ha hs]; exact hc f vs _ hw, hb⟩
   · exact .inr ⟨y, rfl, fun ρs ha hs => by rw [hev ρs ha hs]; exact hc f vs _ hy⟩
@@ -1042,16 +1145,16 @@ theorem stmts_sound_aux {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs
           obtain ⟨e, hcall, hshape⟩ := bindCall_some hbind
           rw [bind_ok] at h
           obtain ⟨codes, hargs, h⟩ := h
-          have hz : ∀ (st : Stmt), (∀ ρs, Eval.eval p fuel ρs e = some (.error Eval.divideByZero) →
-              Eval.execStmt p fuel ρs st = some (.panic Eval.divideByZero)) →
+          have hz : ∀ (st : Stmt), (∀ ρs x, Eval.eval p fuel ρs e = some (.error x) →
+              Eval.execStmt p fuel ρs st = some (.panic x)) →
               ∀ ρs ρo v, Agree ρs ρo → Scoped env ρs →
-                IR.Expr.eval fs fuel ρo (.call ⟨"", f⟩ (codes.map (·.1))) = some v →
-                ∃ ds, IR.Expr.evalList fs fuel ρo (divisors (.call ⟨"", f⟩ (codes.map (·.1)))) =
-                  some ds ∧ (Val.int 0 ∈ ds → Eval.execStmt p fuel ρs st =
-                    some (.panic Eval.divideByZero)) := by
+                IR.Expr.eval fs fuel ρo (.ext .args (codes.map (·.1))) = some v →
+                ∃ ds, IR.Expr.evalList fs fuel ρo (divisors (.ext .args (codes.map (·.1)))) =
+                  some ds ∧ (∀ x, firstFault ds = some x → Eval.execStmt p fuel ρs st =
+                    some (.panic x)) := by
             intro st hst ρs ρo v ha hs hv
             obtain ⟨ds, hds, hzero⟩ := call_zero p fs fuel hp hc hcall hargs ha hs hv
-            exact ⟨ds, hds, fun hm => hst ρs (hzero hm)⟩
+            exact ⟨ds, hds, fun x hm => hst ρs x (hzero x hm)⟩
           cases hshape with
           | ret =>
             cases tail with
@@ -1063,7 +1166,7 @@ theorem stmts_sound_aux {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs
                 tm_simp at h
                 obtain ⟨-, -, rfl⟩ := h
                 refine guarded_sim p fs fuel
-                  (hz _ fun ρs he => by rw [Eval.execStmt, he]; rfl) (fun ρs ρo ha hs hn => ?_)
+                  (hz _ fun ρs _ he => by rw [Eval.execStmt, he]; rfl) (fun ρs ρo ha hs hn => ?_)
                 have hval : ∀ w o, IR.Body.exec fs fuel ((resultName, w) :: ρo)
                     (.value (if monadic then IR.Expr.pure (.var resultName) else .var resultName)) =
                       some o → o = .ret w := by
@@ -1087,7 +1190,7 @@ theorem stmts_sound_aux {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs
             obtain ⟨-, env', hdecl, rb, hrb, rfl⟩ := h
             obtain ⟨hfresh, rfl⟩ := declare_ok hdecl
             refine guarded_sim p fs fuel
-              (hz _ fun ρs he => by rw [Eval.execStmt]; simp [AssignKind.ofString?, he])
+              (hz _ fun ρs _ he => by rw [Eval.execStmt]; simp [AssignKind.ofString?, he])
               (push_sim p fs fuel hfresh (fun ρo o hn hv => ?_) (ihs _ tail rest rb hrb))
             rcases call_bind p fs fuel hp hc hcall hargs hn hv with ⟨w, he, hb⟩ | ⟨y, hy, he⟩
             · exact .inl ⟨w, fun ρs ha hs => by
@@ -1104,7 +1207,7 @@ theorem stmts_sound_aux {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs
               have hold : ∀ ρs, Scoped env ρs → ∃ old, ρs.lookup x = some old := fun ρs hs =>
                 Option.isSome_iff_exists.mp (by rw [hs x]; exact env_has_of_lookup hl)
               refine guarded_sim p fs fuel
-                (hz _ fun ρs he => by rw [Eval.execStmt]; simp [AssignKind.ofString?, he])
+                (hz _ fun ρs _ he => by rw [Eval.execStmt]; simp [AssignKind.ofString?, he])
                 (set_sim p fs fuel (env_has_of_lookup hl) (by simp [stmtChanges])
                   (fun ρo o hn hv => ?_) (ihs _ tail rest rb hrb))
               rcases call_bind p fs fuel hp hc hcall hargs hn hv with ⟨w, he, hb⟩ | ⟨y, hy, he⟩
@@ -1122,7 +1225,7 @@ theorem stmts_sound_aux {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs
               obtain ⟨-, -, env', hdecl, rb, hrb, rfl⟩ := h
               obtain ⟨hfresh, rfl⟩ := declare_ok hdecl
               refine guarded_sim p fs fuel
-                (hz _ fun ρs he => by rw [Eval.execStmt]; simp [he])
+                (hz _ fun ρs _ he => by rw [Eval.execStmt]; simp [he])
                 (push_sim p fs fuel hfresh (fun ρo o hn hv => ?_) (ihs _ tail rest rb hrb))
               rcases call_bind p fs fuel hp hc hcall hargs hn hv with ⟨w, he, hb⟩ | ⟨y, hy, he⟩
               · exact .inl ⟨w, fun ρs ha hs => by rw [Eval.execStmt]; simp [he ρs ha hs], hb⟩
@@ -1141,7 +1244,7 @@ theorem stmts_sound_aux {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs
                 obtain ⟨⟨ce, te⟩, hce, -, rfl⟩ := h
                 refine guarded_sim p fs fuel (fun ρs ρo v ha hs hv => ?_) (fun ρs ρo ha hs hn => ?_)
                 · obtain ⟨ds, hds, hz⟩ := expr_zero p fs fuel hp hc hce ha hs hv
-                  exact ⟨ds, hds, fun hm => by rw [Eval.execStmt, hz hm]; rfl⟩
+                  exact ⟨ds, hds, fun x hm => by rw [Eval.execStmt, hz x hm]; rfl⟩
                 have hval : ∀ o, IR.Body.exec fs fuel ρo
                     (.value (if monadic then IR.Expr.pure ce else ce)) = some o →
                     ∃ w, IR.Expr.eval fs fuel ρo ce = some w ∧ o = .ret w := by
@@ -1175,7 +1278,7 @@ theorem stmts_sound_aux {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs
                 refine guarded_sim p fs fuel (fun ρs ρo v ha hs hv => ?_)
                   (push_sim p fs fuel hfresh (fun ρo o hn hv => ?_) (ihs _ tail rest rb hrb))
                 · obtain ⟨ds, hds, hz⟩ := expr_zero p fs fuel hp hc hce ha hs hv
-                  exact ⟨ds, hds, fun hm => by rw [Eval.execStmt]; simp [hk, hz hm]⟩
+                  exact ⟨ds, hds, fun x hm => by rw [Eval.execStmt]; simp [hk, hz x hm]⟩
                 obtain ⟨w, hw, hb⟩ := out_let fs fuel hv
                 refine .inl ⟨w, fun ρs ha hs => ?_, hb⟩
                 have he := expr_ok p fs fuel hp hc hce ha hs hw hn
@@ -1191,7 +1294,7 @@ theorem stmts_sound_aux {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs
                     (set_sim p fs fuel (env_has_of_lookup hl) (by simp [stmtChanges])
                       (fun ρo o hn hv => ?_) (ihs _ tail rest rb hrb))
                   · obtain ⟨ds, hds, hz⟩ := expr_zero p fs fuel hp hc hce ha hs hv
-                    exact ⟨ds, hds, fun hm => by rw [Eval.execStmt]; simp [hk, hz hm]⟩
+                    exact ⟨ds, hds, fun x hm => by rw [Eval.execStmt]; simp [hk, hz x hm]⟩
                   obtain ⟨w, hw, hb⟩ := out_let fs fuel hv
                   refine .inl ⟨w, fun ρs ha hs => ?_, hb⟩
                   have he := expr_ok p fs fuel hp hc hce ha hs hw hn
@@ -1218,7 +1321,7 @@ theorem stmts_sound_aux {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs
                     simp only [IR.Expr.eval] at hva
                     obtain ⟨db, hdb, hib, he⟩ := expr_sound fs fuel p hp hc hce ha hs hvb
                     obtain ⟨ds, hds, -, hres⟩ :=
-                      hout [] db (by simp [divisors, IR.Expr.evalList]) allInt_nil hdb hib
+                      hout [] db (by simp [divisors, IR.Expr.evalList]) checkVals_nil hdb hib
                     refine ⟨ds, va, hds, by rw [ha x]; exact hva, ?_⟩
                     rw [binaryRes_strict hl' hr', outcome_nil, tolean.Core.Res.andThen_ok, ← he] at hres
                     exact hres
@@ -1226,8 +1329,8 @@ theorem stmts_sound_aux {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs
                     (set_sim p fs fuel (env_has_of_lookup hl) (by simp [stmtChanges])
                       (fun ρo o' hn hv => ?_) (ihs _ tail rest rb hrb))
                   · obtain ⟨ds, old, hds, hold, hres⟩ := key ρs ρo v ha hs hv
-                    refine ⟨ds, hds, fun hm => ?_⟩
-                    rw [outcome_zero hm] at hres
+                    refine ⟨ds, hds, fun x hm => ?_⟩
+                    rw [outcome_fault hm] at hres
                     rw [Eval.execStmt]; simp [hk, hold, hres]
                   obtain ⟨w, hw, hb⟩ := out_let fs fuel hv
                   refine .inl ⟨w, fun ρs ha hs => ?_, hb⟩
@@ -1255,8 +1358,8 @@ theorem stmts_sound_aux {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs
                 obtain ⟨va, vb, hva, hvb, hout⟩ := translateBinary_out hbin hw
                 simp only [IR.Expr.eval, Option.some.injEq] at hva hvb
                 subst hvb
-                obtain ⟨ds, -, -, hres⟩ := hout [] [] (by simp [divisors, IR.Expr.evalList]) allInt_nil
-                  (by simp [divisors, IR.Expr.evalList]) allInt_nil
+                obtain ⟨ds, -, -, hres⟩ := hout [] [] (by simp [divisors, IR.Expr.evalList]) checkVals_nil
+                  (by simp [divisors, IR.Expr.evalList]) checkVals_nil
                 rw [binaryRes_strict hl' hr', outcome_nil, outcome_nil, tolean.Core.Res.andThen_ok,
                   tolean.Core.Res.andThen_ok, operate_binary hq' hm'] at hres
                 cases hbw : Eval.binary o va (.int 1) with
@@ -1293,7 +1396,7 @@ theorem stmts_sound_aux {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs
                 refine guarded_sim p fs fuel (fun ρs ρo v ha hs hv => ?_)
                   (push_sim p fs fuel hfresh (fun ρo o hn hv => ?_) (ihs _ tail rest rb hrb))
                 · obtain ⟨ds, hds, hz⟩ := expr_zero p fs fuel hp hc hc' ha hs hv
-                  exact ⟨ds, hds, fun hm => by rw [Eval.execStmt]; simp [hz hm]⟩
+                  exact ⟨ds, hds, fun x hm => by rw [Eval.execStmt]; simp [hz x hm]⟩
                 obtain ⟨w, hw, hb⟩ := out_let fs fuel hv
                 refine .inl ⟨w, fun ρs ha hs => ?_, hb⟩
                 have he := expr_ok p fs fuel hp hc hc' ha hs hw hn
@@ -1373,11 +1476,11 @@ theorem stmts_sound_aux {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs
       obtain ⟨-, h⟩ := h
       have hz : ∀ ρs ρo v, Agree ρs ρo → Scoped env ρs → IR.Expr.eval fs fuel ρo cond = some v →
           ∃ ds, IR.Expr.evalList fs fuel ρo (divisors cond) = some ds ∧
-            (Val.int 0 ∈ ds → Eval.execStmt p fuel ρs (.ifStmt sp none c t els) =
-              some (.panic Eval.divideByZero)) := by
+            (∀ x, firstFault ds = some x → Eval.execStmt p fuel ρs (.ifStmt sp none c t els) =
+              some (.panic x)) := by
         intro ρs ρo v ha hs hv
         obtain ⟨ds, hds, hz⟩ := expr_zero p fs fuel hp hc hcond ha hs hv
-        exact ⟨ds, hds, fun hm => by rw [Eval.execStmt, hz hm]; rfl⟩
+        exact ⟨ds, hds, fun x hm => by rw [Eval.execStmt, hz x hm]; rfl⟩
       split at h
       -- A branch returns: the rest joins the other branch.
       · cases tail with

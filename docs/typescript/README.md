@@ -638,9 +638,15 @@ this boundary.
   `import type`.
   Node's type stripping removes only imports that say `type`, so without it
   the JavaScript would import a name that does not exist at run time.
-- Only named imports are supported. Tolean refuses `as`, a default or
-  namespace import, an import with no names or for its side effects, and an
-  import cycle.
+- Only named imports are supported. Tolean refuses a default or namespace
+  import, an import with no names or for its side effects, and an import
+  cycle.
+- `import { clamp as limit } from "./x.ts"` binds `limit` in the file to
+  the function or string enum that `x.ts` exports as `clamp`, and the output
+  names the original declaration. The new name must be free in the file. A
+  type may not be renamed: `import { type Range as Span }` is refused, since
+  the output names a type by its own declaration and a second name would
+  need an alias of its own.
 - A type re-export, such as `export type { Point } from "./x.ts"`, may name
   an exported interface or type alias. The output imports the translated
   source module but adds no declaration. A consumer uses the original
@@ -655,16 +661,24 @@ this boundary.
   The re-export does not bind the name locally either, so that file may
   keep a private function of the same name. A module exports each name
   once, so the name may not also be exported by a declaration or by
-  another export list of the file. Tolean refuses `as` in a re-export, and
+  another export list of the file. `export { clamp as limit } from "./x.ts"`
+  re-exports `clamp` under the name `limit`, which then counts as the name
+  it exports. A type re-export may not be renamed. Tolean refuses
   `export *`. The [value re-exports
-  decision](../decisions/2026-11-26-value-reexports.md) explains the model.
+  decision](../decisions/2026-11-26-value-reexports.md) explains the model,
+  and the [renamed imports
+  decision](../decisions/2026-11-26-renamed-imports.md) the renames.
 - An export list, such as `export { clamp, type Range }`, exports
   declarations of the file, as `export` before each of them would. It may
   name only functions, interfaces and types that the file declares before the
   list and does not export already, and no name twice. An interface or a type
   needs `type`, and a function may not have it, because Node's type stripping
   removes exactly the names that say `type`. The output does not change,
-  because the names stay in scope. Tolean refuses `as` in an export list, and
+  because the names stay in scope. `export { scale as resize }` exports the
+  function `scale` under the name `resize` too, even when `scale` is
+  exported already, and an importer of `resize` calls `scale`. Only a
+  function of the file may be renamed in an export list, and the new name
+  may not be one that the file exports otherwise. Tolean refuses
   `export *`.
 - A function or an interface may not be named `NaN`, `Infinity` or `Number`,
   because it would hide the global that the subset reads under that name.

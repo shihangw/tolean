@@ -136,6 +136,11 @@ def eqVal : Val → Val → Option Bool
   | .str a, .str b => some (decide (a = b))
   | _, _ => none
 
+/-- The bytes of a string (Go specification, "String types"): a Go string is
+a sequence of bytes, and the bytes of a Lean `String` are its UTF-8
+encoding. -/
+def strBytes (s : String) : List UInt8 := s.toUTF8.toList
+
 /-- A binary operator on the values of its operands (Go specification,
 "Arithmetic operators" and "Comparison operators"). Integer `+`, `-` and `*`
 wrap, and `+` on strings joins them. `&&` and `||` evaluate their right
@@ -152,6 +157,12 @@ def binary : BinOp → Val → Val → Option Val
   | .le, .int a, .int b => some (.bool (decide (a ≤ b)))
   | .gt, .int a, .int b => some (.bool (decide (a > b)))
   | .ge, .int a, .int b => some (.bool (decide (a ≥ b)))
+  -- Strings are ordered lexically, byte by byte (Go specification,
+  -- "Comparison operators").
+  | .lt, .str a, .str b => some (.bool (decide (strBytes a < strBytes b)))
+  | .le, .str a, .str b => some (.bool (decide (strBytes a ≤ strBytes b)))
+  | .gt, .str a, .str b => some (.bool (decide (strBytes a > strBytes b)))
+  | .ge, .str a, .str b => some (.bool (decide (strBytes a ≥ strBytes b)))
   | .land, .bool a, .bool b => some (.bool (a && b))
   | .lor, .bool a, .bool b => some (.bool (a || b))
   | _, _, _ => none
@@ -173,6 +184,42 @@ def operate : BinOp → Val → Val → Res Val Val
   | .rem, .int a, .int b =>
     if b = 0 then .fail divideByZero else .ok (.int (a.tmod b))
   | o, a, b => Res.lift (binary o a b)
+
+/-- The run-time panic of an index `i` out of the range of a string of `n`
+bytes (Go specification, "Index expressions" and "Run-time panics"). The
+interpreter models it by the text of its `Error` method, which leaves out
+the length when the index is negative. -/
+def indexOutOfRange (i : Int) (n : Nat) : Val :=
+  .str ("runtime error: index out of range [" ++
+    (if i < 0 then s!"{i}]" else s!"{i}] with length {n}"))
+
+/-- `s[i]` on a string (Go specification, "Index expressions"): the byte at
+index `i`, of type `byte`, which the interpreter holds as an integer. An
+index out of range panics. -/
+def indexString : Val → Val → Res Val Val
+  | .str s, .int i =>
+    if h : 0 ≤ i ∧ i.toNat < (strBytes s).length then .ok (.int (strBytes s)[i.toNat].toNat)
+    else .fail (indexOutOfRange i (strBytes s).length)
+  | _, _ => none
+
+/-- A predeclared function of the subset: `len`, and the conversions to
+`int` and `int64`. -/
+inductive Builtin where
+  | len | toInt | toInt64
+deriving DecidableEq, Repr
+
+/-- A predeclared function on the value of its argument. `len` of a string is
+its number of bytes (Go specification, "Length and capacity"). A conversion
+of an integer to `int` or `int64` keeps its value, because every integer
+type of the subset fits in 64 bits (Go specification, "Conversions"). Go
+refuses a conversion of a `bool` or a `string` to an integer type, so the
+interpreter keeps any value, as it does for other programs that Go
+refuses. -/
+def applyBuiltin : Builtin → Val → Option Val
+  | .len, .str s => some (.int (strBytes s).length)
+  | .len, _ => none
+  | .toInt, v => some v
+  | .toInt64, v => some v
 
 /-- A unary operator on the value of its operand. `-` wraps, as `0 - x`
 does. -/
@@ -283,6 +330,9 @@ structure Program where
   /-- The names that the package or its imports declare. A name such as
   `int` or `true` is predeclared only when the package does not declare it. -/
   names : List String
+  /-- Each package-level constant that the subset models: its name, its type
+  when the declaration names one, and its value. -/
+  consts : List (String × Option Expr × Val) := []
 
 /-- The names of the parameters, in order. A parameter without a name, as in
 `func f(int) int`, still takes an argument, and its name is `_`, which no
@@ -317,11 +367,6 @@ def funcOf : Decl → Option (String × List String × Stmt)
     if name == "init" || name == "_" then none else some (name, paramNames params, body)
   | _ => none
 
-/-- The program of the declarations of a package's files. -/
-def program (decls : List Decl) : Program where
-  funcs := decls.filterMap funcOf
-  names := decls.flatMap declNames
-
 /-- The value of a predeclared name, unless the package declares it. -/
 def predeclared (p : Program) (name : String) : Option Val :=
   if p.names.contains name then none
@@ -329,6 +374,59 @@ def predeclared (p : Program) (name : String) : Option Val :=
     | "true" => some (.bool true)
     | "false" => some (.bool false)
     | _ => none
+
+/-- The predeclared function that the name `f` calls, unless the package
+declares the name (Go specification, "Predeclared identifiers"). -/
+def builtin (p : Program) (f : String) : Option Builtin :=
+  if p.names.contains f then none
+  else match f with
+    | "len" => some .len
+    | "int" => some .toInt
+    | "int64" => some .toInt64
+    | _ => none
+
+/-- The value of a constant's expression (Go specification, "Constants" and
+"Constant declarations"): an integer or string literal, an integer literal
+after `-`, or `true` or `false` when the package does not declare the name.
+`names` holds the names that the package declares. Any other constant
+expression, such as one that uses `iota` or another constant, leaves the
+subset. A typed constant has the value of its expression, because `go build`
+refuses one whose value its type cannot represent. -/
+def constValue? (names : List String) : Expr → Option Val
+  | .lit _ .int raw => (.int ·) <$> intLit? raw
+  | .lit _ .string raw => (.str ·) <$> stringLit? raw
+  | .unary _ "-" (.lit _ .int raw) => (fun n => .int (-n)) <$> intLit? raw
+  | .paren _ e => constValue? names e
+  | .ident _ name =>
+    if names.contains name then none
+    else match name with
+      | "true" => some (.bool true)
+      | "false" => some (.bool false)
+      | _ => none
+  | _ => none
+
+/-- The constants of one top-level declaration that the subset models: a
+`const` spec that declares one name with one value. A spec without a value
+repeats the one before it, with `iota`, so it leaves the subset. -/
+def declConsts (names : List String) : Decl → List (String × Option Expr × Val)
+  | .gen (.mk _ "const" specs) => specs.filterMap fun
+    | .value _ [x] type [e] => (fun v => (x, type, v)) <$> constValue? names e
+    | _ => none
+  | _ => []
+
+/-- The program of the declarations of a package's files. -/
+def program (decls : List Decl) : Program where
+  funcs := decls.filterMap funcOf
+  names := decls.flatMap declNames
+  consts := decls.flatMap (declConsts (decls.flatMap declNames))
+
+/-- The value of a package-level name that no variable hides: a constant of
+the package, or a predeclared name that the package does not declare (Go
+specification, "Declarations and scope"). -/
+def global (p : Program) (name : String) : Option Val :=
+  match p.consts.lookup name with
+  | some (_, v) => some v
+  | none => predeclared p name
 
 /-- The zero value of a type (Go specification, "The zero value"). -/
 def zeroOf (p : Program) : Expr → Option Val
@@ -353,12 +451,12 @@ interpreter is a total function. Operands are evaluated from left to right
 (Go specification, "Order of evaluation"), and a panic in one ends the
 evaluation. -/
 def eval (p : Program) (fuel : Nat) (env : Env) : Expr → Res Val Val
-  -- A variable hides a predeclared name (Go specification, "Declarations
-  -- and scope").
+  -- A variable hides a constant of the package and a predeclared name (Go
+  -- specification, "Declarations and scope").
   | .ident _ name =>
     match env.lookup name with
     | some v => .ok v
-    | none => Res.lift (predeclared p name)
+    | none => Res.lift (global p name)
   | .lit _ .int raw => Res.lift (do return .int (← intLit? raw))
   | .lit _ .string raw => Res.lift (do return .str (← stringLit? raw))
   | .paren _ e => eval p fuel env e
@@ -383,15 +481,31 @@ def eval (p : Program) (fuel : Nat) (env : Env) : Expr → Res Val Val
         | _ => none
     | some o => (eval p fuel env l).andThen fun x => (eval p fuel env r).andThen fun y => operate o x y
     | none => none
-  -- A call of a function of the package (Go specification, "Calls"): the
-  -- arguments are evaluated in order, each parameter is a new variable
-  -- bound to its argument, and the body runs. A variable of the same name
-  -- would hide the function, and the subset has no function values. A
-  -- panic in the body is a panic of the call (Go specification, "Handling
-  -- panics"), because the subset has no `recover`.
+  -- `s[i]` (Go specification, "Index expressions"): `s` and `i` are
+  -- evaluated in order, then the index is checked.
+  | .index _ s i =>
+    (eval p fuel env s).andThen fun x => (eval p fuel env i).andThen fun y => indexString x y
+  -- A call of a predeclared function, `len` or a conversion, which takes
+  -- one argument, or of a function of the package. A variable of the same
+  -- name would hide the function, and the subset has no function values.
   | .call _ (.ident _ f) args false =>
     if (env.lookup f).isSome then none
-    else (evalList p fuel env args).andThen fun vs =>
+    else match builtin p f with
+      | some b =>
+        match args with
+        | [a] => (eval p fuel env a).andThen fun x => Res.lift (applyBuiltin b x)
+        | _ => none
+      | none => callFunc p fuel env f args
+  | _ => none
+termination_by e => (fuel, sizeOf e, 0)
+
+/-- A call of the function `f` of the package (Go specification, "Calls"):
+the arguments are evaluated in order, each parameter is a new variable bound
+to its argument, and the body runs. A panic in the body is a panic of the
+call (Go specification, "Handling panics"), because the subset has no
+`recover`. -/
+def callFunc (p : Program) (fuel : Nat) (env : Env) (f : String) (args : List Expr) : Res Val Val :=
+    (evalList p fuel env args).andThen fun vs =>
       match fuel with
       | 0 => none
       | fuel + 1 =>
@@ -403,8 +517,7 @@ def eval (p : Program) (fuel : Nat) (env : Env) : Expr → Res Val Val
             | some (.ret v) => .ok v
             | some (.panic x) => .fail x
             | _ => none
-  | _ => none
-termination_by e => (fuel, sizeOf e, 0)
+termination_by (fuel, sizeOf args, 1)
 
 def evalList (p : Program) (fuel : Nat) (env : Env) : List Expr → Res Val (List Val)
   | [] => .ok []

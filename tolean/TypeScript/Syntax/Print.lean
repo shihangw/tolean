@@ -157,10 +157,15 @@ def ClassMember.toSexp : ClassMember → Sexp
   | .ctor params body => .node "constructor" none [] (params.map CtorParam.toSexp ++ [body.toSexp])
   | .method m => m.toSexp
 
+/-- A name of an import or an export list: the name, `type` if it is a type,
+and `as` with the other name if it is renamed. -/
+def ImportName.toSexp (n : ImportName) : Sexp :=
+  node "name" n.span ([n.name] ++ flag n.typeOnly "type" ++ (n.alias.map fun a => ["as", a]).getD []) []
+
 def Decl.toSexp : Decl → Sexp
   | .import s names source =>
     node "import" s [Sexp.quote source]
-      (names.map fun n => node "name" n.span ([n.name] ++ flag n.typeOnly "type") [])
+      (names.map ImportName.toSexp)
   | .function s exported name typeParams params returnType body =>
     -- A type parameter keeps no span, so its node has none.
     node "function" s ([name] ++ flag exported "export")
@@ -186,7 +191,7 @@ def Decl.toSexp : Decl → Sexp
         n.toList.map (fun name => .node "error-name" none [Sexp.quote name] [])).getD [])
   | .exports s names source =>
     node "export" s (source.map Sexp.quote).toList
-      (names.map fun n => node "name" n.span ([n.name] ++ flag n.typeOnly "type") [])
+      (names.map ImportName.toSexp)
   | .exportedVar s d => d.toSexp s true
   | .stmt st => st.toSexp
 

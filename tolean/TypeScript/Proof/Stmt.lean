@@ -3728,7 +3728,7 @@ theorem borrowCallStmt_sim {env : Translate.Env} {sp cs ns : Span} {args : List 
   have hfile := (hs.2.1 fn hfind).2 (by simp [hborrow])
   have hex := borrow_call_from_agreement m fs k hc ρs sp cs ns fn.name indices args ts vs
     ps body params after inner (hargs ρs ρo vs ha hs hvs) (hs.none hglobal) hts hnd hmapsS
-    (by simpa [FnInfo.ref, hfile] using hout) hparams hstate hlen hrun hinner
+    (by simpa [hfile] using hout) hparams hstate hlen hrun hinner
   have hkeys : inner.map (·.1) = ts.map (·.2) := by
     rw [borrowedMaps_keys hinner, List.map_fst_zip (by omega)]
   refine ⟨inner, ρs.setAll inner, ρo₂, hbs, hrb, hex, fun n hn => ?_,
@@ -4390,7 +4390,7 @@ theorem borrowDeclStmt_sim {env : Translate.Env} {s cs ns : Span} {d : VarDecl} 
   have hres := (hs.2.1 fn hfind).1
   obtain ⟨source, afterS, hsource, hsig, hresult, hown, hrunS, hagree⟩ :=
     hc.value k rfl ⟨m.file, fn.name⟩ ps body indices params r vs after
-      (by simpa [FnInfo.ref, hfile] using hout) hparams hstate hr hlen hrun
+      (by simpa [hfile] using hout) hparams hstate hr hlen hrun
   have hvsS := hargs ρs ρo vs ha hs hvs
   have hl := hs.none hglobal
   have hbind : Eval.bindArgs ps vs = some (ps.zip vs).reverse := by
@@ -4403,7 +4403,7 @@ theorem borrowDeclStmt_sim {env : Translate.Env} {s cs ns : Span} {d : VarDecl} 
     obtain ⟨x, hx, rfl⟩ := List.mem_map.mp hq
     exact hagree _ (List.mem_cons_of_mem _ (List.of_mem_zip hx).2)
   have hm : (⟨m.program, m.file⟩ : Eval.Scope) = m := rfl
-  have hfnref : fn.ref = ⟨m.file, fn.name⟩ := by simp [FnInfo.ref, hfile]
+  have hfnref : fn.ref = ⟨m.file, fn.name⟩ := hfile
   rw [hfnref] at hres
   have hnum' : (fn.name == "Number") = false := by simpa using hnum
   have htop : Eval.evalTop m (k + 1) ρs (.call cs (.ident ns fn.name) args) = none := by

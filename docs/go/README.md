@@ -97,6 +97,16 @@ and `--`, test with `if`, `else` and `switch`, and return. The translator writes
 function through `tolean/Go/Translate/Pure.lean`, which proves that
 translation, and it writes everything else as before.
 
+A pure function may read a constant that the package declares at the top
+level, such as `const Limit = 100` or `const Fee int64 = 3`, alone or in a
+group. The constant's value must be an integer or string literal, an integer
+literal after `-`, `true` or `false`, and a typed constant must have one of
+the four types above. The output writes the value where the function reads
+the name. A constant that uses `iota`, another constant or an operator, and
+every package-level `var`, keep the function on the string translation. The
+[decision record](../decisions/2026-11-26-go-package-constants.md) gives the
+reasons, and the corpus package `consts` shows the output.
+
 An `if` may have an init statement, as in `if d := x - y; d > 0 { … }`. A
 `switch` may have a tag or none, an init statement, several values in one
 case, and a `default` clause anywhere in its body. The translator writes a
@@ -111,8 +121,8 @@ an init statement, a `switch` or a block that returns on some path must be
 the last statement of its list, so `if v := f(); v > 0 { return v }` cannot
 be followed by more code. A switch with a tag needs at least one case value,
 because only a case test evaluates the tag. A case with several values
-becomes a `||` of tests, so a value after the first may not divide, and
-neither may the tag of such a switch. `break` inside a switch is refused. The [decision record](../decisions/2026-11-26-go-switch-as-if-chain.md)
+becomes a `||` of tests, so a value after the first may not divide or index
+a string, and neither may the tag of such a switch. `break` inside a switch is refused. The [decision record](../decisions/2026-11-26-go-switch-as-if-chain.md)
 gives the reasons.
 
 Integer `/` and `%` become `Int.tdiv` and `Int.tmod`, which round toward
@@ -133,9 +143,32 @@ def Quo (a : Int) (b : Int) : (Except String Int) :=
     (pure (Go.wrap64 (Int.tdiv a b)))
 ```
 
+A string is a sequence of bytes, as in Go. `len(s)` gives the number of
+its bytes, and `s[i]` gives the byte at index `i`, which the subset converts
+with `int(s[i])` or `int64(s[i])`. The orders `<`, `<=`, `>` and `>=`
+compare the bytes of two strings. The output writes `Go.byteLen`,
+`Go.byteAt` and `Go.strLt` and its siblings. An index out of range panics
+with Go's message, such as `runtime error: index out of range [5] with
+length 3`, so a statement that indexes a string first tests each index, in
+Go's order of evaluation:
+
+```lean
+def First (s : String) : (Except String Int) :=
+  if (Go.indexFault s (0 : Int)) ≠ "" then
+    throw (Go.after (Go.byteAt s (0 : Int)) (Go.indexFault s (0 : Int)))
+  else
+    (pure (Go.byteAt s (0 : Int)))
+```
+
+The translator refuses a slice of a string, `range` over a string, runes,
+and arithmetic on a byte. A slice can cut a character of UTF-8 in two, and
+the interpreter keeps a string as a Lean `String`, which holds only valid
+UTF-8. The [decision record](../decisions/2026-11-26-go-strings-as-bytes.md)
+gives the reasons. The corpus package `strbytes` shows the output.
+
 The translator refuses a division by the constant zero, which Go refuses
-too, and a division in the right operand of `&&` or `||`, which Go might not
-evaluate. The corpus package `divide` shows the output.
+too, and a division or an index in the right operand of `&&` or `||`, which
+Go might not evaluate. The corpus package `divide` shows the output.
 
 A pure function may call a function that can panic, when the call stands
 alone after `:=`, `=`, `var x T =` or `return`. Its arguments may divide, but
@@ -187,8 +220,8 @@ range support is unchanged and is not covered by this theorem.
 `Pure.lean` is a total function, so Lean can reason about it. It does not
 write text. It builds the [Tolean IR](../decisions/2026-10-30-tolean-ir.md),
 the Lean code it writes as Lean data. `tolean/Go/IR.lean` adds what only Go
-needs to the shared IR: `Go.wrap64`, `++` on strings, and `pure` for the
-value of a function that can panic. The shared IR gives `Int.tdiv`,
+needs to the shared IR: `Go.wrap64`, `++` on strings, `pure` for the
+value of a function that can panic, and the byte operations on strings. The shared IR gives `Int.tdiv`,
 `Int.tmod` and `throw`.
 `tolean/Go/IR/Eval.lean` gives the IR a meaning.
 
@@ -216,7 +249,8 @@ compares it with the Go runtime on random programs.
 
 That test is `tests/go/differential`. It writes random functions of the
 proved subset, calls each one with random arguments, and requires four
-results to agree: the value that `go run` prints, the interpreter's value,
+results to agree: the value that `go run` prints, or the message of its
+panic, the interpreter's value,
 the value of the IR that `Pure.lean` builds, and the value of the Lean code
 that `tolean translate-go` prints. It also requires that `Pure.lean`
 accepts every generated function, so a generator that leaves the subset

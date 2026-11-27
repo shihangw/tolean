@@ -133,14 +133,22 @@ theorem callR_of_callO {fs : Funcs} {fuel : Nat} {ref : DeclRef} {vs : List Val}
       · simp [hl, hlen] at h
 
 theorem eval_call (p : Eval.Program) (fuel : Nat) (ρ : Eval.Env) (sp sp' : Span) (f : String)
-    (args : List Expr) :
+    (args : List Expr) (hb : Eval.builtin p f = none) :
     Eval.eval p fuel ρ (.call sp (.ident sp' f) args false) =
       if (ρ.lookup f).isSome then none
       else (Eval.evalList p fuel ρ args).andThen (callS p fuel f) := by
   rw [Eval.eval]
   split
   · rfl
-  · congr 1
+  · rw [hb, Eval.callFunc]
+    congr 1
+
+theorem eval_builtin (p : Eval.Program) (fuel : Nat) (ρ : Eval.Env) (sp sp' : Span) (f : String)
+    (a : Expr) {b : Eval.Builtin} (hb : Eval.builtin p f = some b) (hl : ρ.lookup f = none) :
+    Eval.eval p fuel ρ (.call sp (.ident sp' f) [a] false) =
+      (Eval.eval p fuel ρ a).andThen fun x => Res.lift (Eval.applyBuiltin b x) := by
+  rw [Eval.eval, hl, hb]
+  rfl
 
 theorem out_call (fs : Funcs) (fuel : Nat) (ρ : Eval.Env) (ref : DeclRef) (args : List IR.Expr) :
     IR.Expr.eval fs fuel ρ (.call ref args) = (IR.Expr.evalList fs fuel ρ args).bind (callO fs fuel ref) := by
@@ -172,6 +180,26 @@ theorem out_append {a b : IR.Expr} (h : IR.Expr.eval fs fuel ρ (.append a b) = 
     | some wb =>
       cases wa <;> cases wb <;> simp [ha, hb, IR.ExprExt.apply] at h
       exact ⟨_, _, rfl, rfl, h.symm⟩
+
+/-- An operation of two arguments. -/
+theorem out_ext2 {op : IR.ExprExt} {a b : IR.Expr} (h : IR.Expr.eval fs fuel ρ (.ext op [a, b]) = some v) :
+    ∃ x y, IR.Expr.eval fs fuel ρ a = some x ∧ IR.Expr.eval fs fuel ρ b = some y ∧
+      op.apply [x, y] = some v := by
+  simp only [IR.Expr.eval, IR.Expr.evalList] at h
+  cases ha : IR.Expr.eval fs fuel ρ a with
+  | none => simp [ha] at h
+  | some wa =>
+    cases hb : IR.Expr.eval fs fuel ρ b with
+    | none => simp [ha, hb] at h
+    | some wb => simp [ha, hb] at h; exact ⟨_, _, rfl, rfl, h⟩
+
+/-- An operation of one argument. -/
+theorem out_ext1 {op : IR.ExprExt} {a : IR.Expr} (h : IR.Expr.eval fs fuel ρ (.ext op [a]) = some v) :
+    ∃ x, IR.Expr.eval fs fuel ρ a = some x ∧ op.apply [x] = some v := by
+  simp only [IR.Expr.eval, IR.Expr.evalList] at h
+  cases ha : IR.Expr.eval fs fuel ρ a with
+  | none => simp [ha] at h
+  | some wa => simp [ha] at h; exact ⟨_, rfl, h⟩
 
 theorem out_neg {a : IR.Expr} (h : IR.Expr.eval fs fuel ρ (.neg a) = some v) :
     ∃ i, IR.Expr.eval fs fuel ρ a = some (.int i) ∧ v = .int (-i) := by
@@ -278,38 +306,106 @@ theorem out_decide {a : IR.Expr} : IR.Expr.eval fs fuel ρ (.decide a) = IR.Expr
 
 /-! ### Divisors -/
 
-/-- Each value is an integer, as each divisor of translated code is. -/
-def AllInt (ds : List Val) : Prop := ∀ d ∈ ds, ∃ i, d = .int i
+/-- Each value is an integer, as the value of a divisor is, or a string, as
+the value of the test of an index is. -/
+def CheckVals (ds : List Val) : Prop := ∀ d ∈ ds, (∃ i, d = .int i) ∨ ∃ m, d = .str m
+
+/-- The panic that a check with the value `d` causes: a divisor panics when it
+is zero, and the test of an index when its message is not empty. -/
+def fault : Val → Option Val
+  | .int i => if i = 0 then some Eval.divideByZero else none
+  | .str m => if m = "" then none else some (.str m)
+  | .bool _ => none
+
+/-- The panic of the first check of `ds` that fails. -/
+def firstFault : List Val → Option Val
+  | [] => none
+  | d :: ds => (fault d).or (firstFault ds)
 
 /-- What the interpreter gives for an expression whose code has the value
-`v`, when the divisors of the code have the values `ds`: a panic when one of
-them is zero, and `v` otherwise. -/
+`v`, when the checks of the code have the values `ds`: the panic of the first
+check that fails, and `v` when none does. -/
 def outcome {α : Type} (ds : List Val) (v : α) : Except Val α :=
-  if Val.int 0 ∈ ds then .error Eval.divideByZero else .ok v
+  match firstFault ds with
+  | some x => .error x
+  | none => .ok v
 
-theorem allInt_nil : AllInt [] := by simp [AllInt]
+theorem checkVals_nil : CheckVals [] := by simp [CheckVals]
 
-theorem allInt_append {a b : List Val} (ha : AllInt a) (hb : AllInt b) : AllInt (a ++ b) := by
+theorem checkVals_append {a b : List Val} (ha : CheckVals a) (hb : CheckVals b) : CheckVals (a ++ b) := by
   intro d hd
   rcases List.mem_append.mp hd with hd | hd
   · exact ha d hd
   · exact hb d hd
 
-theorem allInt_int (i : Int) : AllInt [.int i] := by simp [AllInt]
+theorem checkVals_int (i : Int) : CheckVals [.int i] := by simp [CheckVals]
 
-theorem outcome_nil {α : Type} (v : α) : outcome [] v = .ok v := by simp [outcome]
+theorem checkVals_str (m : String) : CheckVals [.str m] := by simp [CheckVals]
+
+theorem firstFault_append : ∀ (a b : List Val), firstFault (a ++ b) = (firstFault a).or (firstFault b)
+  | [], b => by simp [firstFault]
+  | d :: a, b => by
+    simp only [List.cons_append, firstFault, firstFault_append a b, Option.or_assoc]
+
+theorem outcome_nil {α : Type} (v : α) : outcome [] v = .ok v := by simp [outcome, firstFault]
 
 theorem andThen_outcome {α β : Type} (ds : List Val) (a : α) (f : α → Res Val β) :
     Res.andThen (some (outcome ds a)) f =
-      if Val.int 0 ∈ ds then some (.error Eval.divideByZero) else f a := by
+      match firstFault ds with
+      | some x => some (.error x)
+      | none => f a := by
   unfold outcome
   split <;> rfl
 
 theorem outcome_some {α : Type} (ds : List Val) (v : α) :
-    (if Val.int 0 ∈ ds then some (.error Eval.divideByZero) else some (.ok v)) =
-      some (outcome ds v) := by
+    (match firstFault ds with
+      | some x => some (.error x)
+      | none => some (.ok v)) = some (outcome ds v) := by
   unfold outcome
   split <;> rfl
+
+/-- Two steps, each with its checks, are one step with the checks of both. -/
+theorem outcome_bind {α β : Type} (da db : List Val) (a : α) (f : α → β) :
+    Res.andThen (some (outcome da a)) (fun x => some (outcome db (f x))) =
+      some (outcome (da ++ db) (f a)) := by
+  unfold outcome
+  rw [firstFault_append]
+  cases firstFault da <;> cases firstFault db <;> rfl
+
+/-- A step with its checks, then a step that gives a value with its own. -/
+theorem outcome_then {α β : Type} {da db : List Val} {a : α} {w : β} {g : α → Res Val β}
+    (hg : g a = some (outcome db w)) :
+    Res.andThen (some (outcome da a)) g = some (outcome (da ++ db) w) := by
+  unfold outcome at *
+  rw [firstFault_append]
+  cases firstFault da with
+  | some x => rfl
+  | none => simpa using hg
+
+theorem outcome_map {α β : Type} (d : List Val) (a : α) (f : α → β) :
+    Res.andThen (some (outcome d a)) (fun x => Res.ok (f x)) = some (outcome d (f a)) := by
+  unfold outcome
+  cases firstFault d <;> rfl
+
+/-- `s[i]` gives the byte at `i`, unless the test of the index fails. -/
+theorem index_outcome (s : String) (i : Int) :
+    Eval.indexString (.str s) (.int i) = some (outcome [.str (indexFault s i)] (.int (byteAt s i))) := by
+  have hlen : byteLen s = ((Eval.strBytes s).length : Int) := rfl
+  unfold Eval.indexString outcome indexFault
+  by_cases hb : 0 ≤ i ∧ i.toNat < (Eval.strBytes s).length
+  · have hb' : 0 ≤ i ∧ i < byteLen s := by rw [hlen]; omega
+    simp only [hb, hb', firstFault, fault, Option.or_none]
+    have h2 : i.toNat < s.toByteArray.toList.length := hb.2
+    simp [byteAt, bytes, Eval.strBytes, List.getElem?_eq_getElem h2]
+  · have hb' : ¬ (0 ≤ i ∧ i < byteLen s) := by rw [hlen]; omega
+    simp only [hb, hb', dite_false, if_false, firstFault, fault, Option.or_none, indexMessage_ne]
+    rfl
+
+theorem outcome_eq_ok {α : Type} {ds : List Val} {v u : α} (h : outcome ds v = .ok u) : v = u := by
+  unfold outcome at h
+  split at h
+  · cases h
+  · injection h
 
 theorem evalList_append {ρ : Eval.Env} :
     ∀ {a b : List IR.Expr} {da db : List Val}, IR.Expr.evalList fs fuel ρ a = some da →
@@ -342,26 +438,29 @@ theorem evalList_nil {ρ : Eval.Env} : IR.Expr.evalList fs fuel ρ [] = some [] 
 zero. -/
 theorem tested_eval {ρ : Eval.Env} {b : IR.Expr} {y : Int}
     (hy : IR.Expr.eval fs fuel ρ b = some (.int y)) :
-    ∃ ks, IR.Expr.evalList fs fuel ρ (tested b) = some ks ∧ AllInt ks ∧ (Val.int 0 ∈ ks ↔ y = 0) := by
+    ∃ ks, IR.Expr.evalList fs fuel ρ (tested b) = some ks ∧ CheckVals ks ∧
+      firstFault ks = if y = 0 then some Eval.divideByZero else none := by
   unfold tested
   split
   · next n =>
     simp only [IR.Expr.eval, Option.some.injEq, Val.int.injEq] at hy
     subst hy
     split
-    · next h0 => exact ⟨[.int n], evalList_single (by simp [IR.Expr.eval]), allInt_int n, by simp [h0]⟩
-    · next h0 => exact ⟨[], evalList_nil, allInt_nil, by simp [h0]⟩
-  · exact ⟨[.int y], evalList_single hy, allInt_int y, by simp [eq_comm]⟩
+    · next h0 => exact ⟨[.int n], evalList_single (by simp [IR.Expr.eval]), checkVals_int n,
+        by simp [h0, firstFault, fault]⟩
+    · exact ⟨[], evalList_nil, checkVals_nil, by simp [*, firstFault]⟩
+  · exact ⟨[.int y], evalList_single hy, checkVals_int y, by
+      by_cases h0 : y = 0 <;> simp [h0, firstFault, fault]⟩
 
 /-- The divisors of the code of a binary operator, from those of its
 operands. -/
 theorem divisors_pair (ds : List Val) {ρ : Eval.Env} {a b : IR.Expr} {da db : List Val}
-    (ha : IR.Expr.evalList fs fuel ρ (divisors a) = some da) (hia : AllInt da)
-    (hb : IR.Expr.evalList fs fuel ρ (divisors b) = some db) (hib : AllInt db)
+    (ha : IR.Expr.evalList fs fuel ρ (divisors a) = some da) (hia : CheckVals da)
+    (hb : IR.Expr.evalList fs fuel ρ (divisors b) = some db) (hib : CheckVals db)
     (hds : ds = da ++ db) :
-    IR.Expr.evalList fs fuel ρ (divisors a ++ divisors b) = some ds ∧ AllInt ds := by
+    IR.Expr.evalList fs fuel ρ (divisors a ++ divisors b) = some ds ∧ CheckVals ds := by
   subst hds
-  exact ⟨evalList_append ha hb, allInt_append hia hib⟩
+  exact ⟨evalList_append ha hb, checkVals_append hia hib⟩
 
 /-! ### Operators -/
 
@@ -409,9 +508,9 @@ values, so do the result's, and the interpreter's `binaryRes` gives what the
 result's code gives, or the panic. -/
 def BinaryOut (fs : Funcs) (fuel : Nat) (ρ : Eval.Env) (o : BinOp) (a b c : IR.Expr)
     (va vb v : Val) : Prop :=
-  ∀ da db, IR.Expr.evalList fs fuel ρ (divisors a) = some da → AllInt da →
-    IR.Expr.evalList fs fuel ρ (divisors b) = some db → AllInt db →
-    ∃ ds, IR.Expr.evalList fs fuel ρ (divisors c) = some ds ∧ AllInt ds ∧
+  ∀ da db, IR.Expr.evalList fs fuel ρ (divisors a) = some da → CheckVals da →
+    IR.Expr.evalList fs fuel ρ (divisors b) = some db → CheckVals db →
+    ∃ ds, IR.Expr.evalList fs fuel ρ (divisors c) = some ds ∧ CheckVals ds ∧
       binaryRes o (some (outcome da va)) (some (outcome db vb)) = some (outcome ds v)
 
 /-- A strict operator whose code divides by nothing new and whose value is
@@ -421,11 +520,12 @@ theorem binaryOut_plain {o : BinOp} (hl : o ≠ .land) (hr : o ≠ .lor) (hq : o
     (hdiv : divisors c = divisors a ++ divisors b) :
     BinaryOut fs fuel ρ o a b c va vb v := by
   intro da db ha hia hb hib
-  refine ⟨da ++ db, by rw [hdiv]; exact evalList_append ha hb, allInt_append hia hib, ?_⟩
-  rw [binaryRes_strict hl hr, andThen_outcome]
-  simp only [andThen_outcome, operate_binary hq hm, hbin, Res.lift_some]
+  refine ⟨da ++ db, by rw [hdiv]; exact evalList_append ha hb, checkVals_append hia hib, ?_⟩
+  rw [binaryRes_strict hl hr]
+  simp only [operate_binary hq hm]
   unfold outcome
-  by_cases h1 : Val.int 0 ∈ da <;> by_cases h2 : Val.int 0 ∈ db <;> simp [h1, h2]
+  rw [firstFault_append]
+  cases firstFault da <;> cases firstFault db <;> simp [hbin]
 
 theorem arith_out {op : tolean.IR.IntOp} (h : arith sp op a ta b tb = .ok (c, t))
     (hv : IR.Expr.eval fs fuel ρ c = some v) :
@@ -443,20 +543,36 @@ theorem arith_out {op : tolean.IR.IntOp} (h : arith sp op a ta b tb = .ok (c, t)
     · exact absurd h reject_ne_ok
   · exact absurd h reject_ne_ok
 
+/-- The operator of the interpreter for an order. -/
+def orderOp : tolean.IR.Order → BinOp
+  | .lt => .lt
+  | .le => .le
+  | .gt => .gt
+  | .ge => .ge
+
 theorem compare_out {op : tolean.IR.Order} (h : Pure.compare sp op a ta b tb = .ok (c, t))
     (hv : IR.Expr.eval fs fuel ρ c = some v) :
-    ∃ x y, IR.Expr.eval fs fuel ρ a = some (.int x) ∧ IR.Expr.eval fs fuel ρ b = some (.int y) ∧
-      v = .bool (op.apply x y) ∧ divisors c = divisors a ++ divisors b := by
+    ∃ x y, IR.Expr.eval fs fuel ρ a = some x ∧ IR.Expr.eval fs fuel ρ b = some y ∧
+      Eval.binary (orderOp op) x y = some v ∧ divisors c = divisors a ++ divisors b := by
   unfold Pure.compare at h
   split at h
+  · simp only [pure_ok, Prod.mk.injEq] at h
+    obtain ⟨rfl, -⟩ := h
+    obtain ⟨x, y, hx, hy, happ⟩ := out_ext2 hv
+    refine ⟨x, y, hx, hy, ?_, by cases op <;> simp [strOrder, divisors, divisors.divisorsList]⟩
+    cases op <;> cases x <;> cases y <;>
+      simp_all [strOrder, IR.ExprExt.apply, orderOp, Eval.binary, strLt, strLe, strGt, strGe,
+        Eval.strBytes, bytes]
   · split at h
-    · simp only [pure_ok, Prod.mk.injEq] at h
-      obtain ⟨rfl, -⟩ := h
-      rw [out_decide] at hv
-      obtain ⟨x, y, hx, hy, rfl⟩ := out_order hv
-      exact ⟨x, y, hx, hy, rfl, by simp [divisors]⟩
+    · split at h
+      · simp only [pure_ok, Prod.mk.injEq] at h
+        obtain ⟨rfl, -⟩ := h
+        rw [out_decide] at hv
+        obtain ⟨x, y, hx, hy, rfl⟩ := out_order hv
+        exact ⟨_, _, hx, hy, by cases op <;> simp [orderOp, Eval.binary, tolean.IR.Order.apply],
+          by simp [divisors]⟩
+      · exact absurd h reject_ne_ok
     · exact absurd h reject_ne_ok
-  · exact absurd h reject_ne_ok
 
 /-- `a / b` and `a % b`: the code divides by `b` too, and the interpreter
 panics when `b` is zero. -/
@@ -484,16 +600,12 @@ theorem divide_out {op : tolean.IR.Division} {o : BinOp}
           refine ⟨da ++ db ++ ks ++ [], ?_, ?_, ?_⟩
           · simp only [divisors, divisors.divisorsList]
             exact evalList_append (evalList_append (evalList_append ha hb) hks) evalList_nil
-          · exact allInt_append (allInt_append (allInt_append hia hib) hik) allInt_nil
-          · simp only [binaryRes, andThen_outcome, Eval.operate]
+          · exact checkVals_append (checkVals_append (checkVals_append hia hib) hik) checkVals_nil
+          · simp only [binaryRes, Eval.operate]
             unfold outcome
-            by_cases h3 : y = 0
-            · have h3' := hiff.mpr h3
-              by_cases h1 : Val.int 0 ∈ da <;> by_cases h2 : Val.int 0 ∈ db <;>
-                simp [h1, h2, h3, h3']
-            · have h3' : Val.int 0 ∉ ks := fun h => h3 (hiff.mp h)
-              by_cases h1 : Val.int 0 ∈ da <;> by_cases h2 : Val.int 0 ∈ db <;>
-                simp [h1, h2, h3, h3', tolean.IR.Division.apply]
+            simp only [firstFault_append, hiff, firstFault, Option.or_none]
+            cases firstFault da <;> cases firstFault db <;> by_cases h3 : y = 0 <;>
+              simp [h3, tolean.IR.Division.apply]
         | tmod =>
           simp only [pure_ok, Prod.mk.injEq] at h
           obtain ⟨rfl, -⟩ := h
@@ -504,16 +616,12 @@ theorem divide_out {op : tolean.IR.Division} {o : BinOp}
           refine ⟨da ++ db ++ ks, ?_, ?_, ?_⟩
           · simp only [divisors]
             exact evalList_append (evalList_append ha hb) hks
-          · exact allInt_append (allInt_append hia hib) hik
-          · simp only [binaryRes, andThen_outcome, Eval.operate]
+          · exact checkVals_append (checkVals_append hia hib) hik
+          · simp only [binaryRes, Eval.operate]
             unfold outcome
-            by_cases h3 : y = 0
-            · have h3' := hiff.mpr h3
-              by_cases h1 : Val.int 0 ∈ da <;> by_cases h2 : Val.int 0 ∈ db <;>
-                simp [h1, h2, h3, h3']
-            · have h3' : Val.int 0 ∉ ks := fun h => h3 (hiff.mp h)
-              by_cases h1 : Val.int 0 ∈ da <;> by_cases h2 : Val.int 0 ∈ db <;>
-                simp [h1, h2, h3, h3', tolean.IR.Division.apply]
+            simp only [firstFault_append, hiff]
+            cases firstFault da <;> cases firstFault db <;> by_cases h3 : y = 0 <;>
+              simp [h3, tolean.IR.Division.apply]
   · exact absurd h reject_ne_ok
 
 /-- The code of a binary operator gives what the interpreter gives on the
@@ -540,9 +648,9 @@ theorem translateBinary_out {o : BinOp} (h : translateBinary sp o a ta b tb = .o
   case quo => exact divide_out rfl h hv
   case rem => exact divide_out rfl h hv
   case lt | le | gt | ge =>
-    obtain ⟨x, y, hx, hy, rfl, hd⟩ := compare_out h hv
+    obtain ⟨x, y, hx, hy, hbin, hd⟩ := compare_out h hv
     exact ⟨_, _, hx, hy, binaryOut_plain (by decide) (by decide) (by decide) (by decide)
-      (by simp [Eval.binary, tolean.IR.Order.apply]) hd⟩
+      hbin hd⟩
   case eq =>
     split at h
     · simp only [pure_ok, Prod.mk.injEq] at h
@@ -573,10 +681,10 @@ theorem translateBinary_out {o : BinOp} (h : translateBinary sp o a ta b tb = .o
         have hnil : divisors b = [] := by simpa using hb
         rw [hnil, evalList_nil] at hb'
         cases hb'
-        refine ⟨da ++ [], by simpa [divisors, hnil] using ha, allInt_append hia allInt_nil, ?_⟩
+        refine ⟨da ++ [], by simpa [divisors, hnil] using ha, checkVals_append hia checkVals_nil, ?_⟩
         simp only [binaryRes, andThen_outcome, outcome_nil, List.append_nil]
         unfold outcome
-        by_cases h1 : Val.int 0 ∈ da <;> cases x <;> simp [h1]
+        cases firstFault da <;> cases x <;> simp
       · exact absurd h reject_ne_ok
   case lor =>
     split at h
@@ -590,10 +698,10 @@ theorem translateBinary_out {o : BinOp} (h : translateBinary sp o a ta b tb = .o
         have hnil : divisors b = [] := by simpa using hb
         rw [hnil, evalList_nil] at hb'
         cases hb'
-        refine ⟨da ++ [], by simpa [divisors, hnil] using ha, allInt_append hia allInt_nil, ?_⟩
+        refine ⟨da ++ [], by simpa [divisors, hnil] using ha, checkVals_append hia checkVals_nil, ?_⟩
         simp only [binaryRes, andThen_outcome, outcome_nil, List.append_nil]
         unfold outcome
-        by_cases h1 : Val.int 0 ∈ da <;> cases x <;> simp [h1]
+        cases firstFault da <;> cases x <;> simp
       · exact absurd h reject_ne_ok
 
 /-! ### Expressions -/
@@ -614,8 +722,8 @@ theorem env_lookup_none {env : Pure.Env} {n : String} (h : env.lookup n = none) 
 
 /-- An expression whose code divides by nothing. -/
 theorem plain_out {ρ : Eval.Env} {c : IR.Expr} (hd : divisors c = []) :
-    IR.Expr.evalList fs fuel ρ (divisors c) = some [] ∧ AllInt [] :=
-  ⟨by rw [hd]; exact evalList_nil, allInt_nil⟩
+    IR.Expr.evalList fs fuel ρ (divisors c) = some [] ∧ CheckVals [] :=
+  ⟨by rw [hd]; exact evalList_nil, checkVals_nil⟩
 
 variable (p : Eval.Program) (fs) (fuel)
 
@@ -625,14 +733,14 @@ theorem expr_sound_aux {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs 
     ∀ n : Nat,
       (∀ (env : Pure.Env) (e : Expr) (c : IR.Expr) (t : Ty), translateExpr ctx env n e = .ok (c, t) →
         ∀ ρs ρo v, Agree ρs ρo → Scoped env ρs → IR.Expr.eval fs fuel ρo c = some v →
-          ∃ ds, IR.Expr.evalList fs fuel ρo (divisors c) = some ds ∧ AllInt ds ∧
+          ∃ ds, IR.Expr.evalList fs fuel ρo (divisors c) = some ds ∧ CheckVals ds ∧
             Eval.eval p fuel ρs e = some (outcome ds v)) ∧
       (∀ (env : Pure.Env) (es : List Expr) (cs : List (IR.Expr × Ty)),
         translateArgs ctx env n es = .ok cs →
         ∀ ρs ρo vs, Agree ρs ρo → Scoped env ρs →
           IR.Expr.evalList fs fuel ρo (cs.map (·.1)) = some vs →
           ∃ ds, IR.Expr.evalList fs fuel ρo (divisors.divisorsList (cs.map (·.1))) = some ds ∧
-            AllInt ds ∧ Eval.evalList p fuel ρs es = some (outcome ds vs))
+            CheckVals ds ∧ Eval.evalList p fuel ρs es = some (outcome ds vs))
   | 0 => by
     refine ⟨fun env e c t h => by simp [translateExpr] at h, fun env es cs h => ?_⟩
     cases es with
@@ -642,7 +750,7 @@ theorem expr_sound_aux {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs 
       intro ρs ρo vs _ _ hv
       simp [IR.Expr.evalList] at hv
       subst hv
-      exact ⟨[], by simp [divisors.divisorsList, IR.Expr.evalList], allInt_nil,
+      exact ⟨[], by simp [divisors.divisorsList, IR.Expr.evalList], checkVals_nil,
         by simp [Eval.evalList, outcome_nil]⟩
     | cons e es => simp [translateArgs] at h
   | n + 1 => by
@@ -659,19 +767,34 @@ theorem expr_sound_aux {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs 
           simp only [pure_ok, Prod.mk.injEq] at h
           obtain ⟨rfl, -⟩ := h
           simp only [IR.Expr.eval] at hv
-          refine ⟨[], by simp [divisors, IR.Expr.evalList], allInt_nil, ?_⟩
+          refine ⟨[], by simp [divisors, IR.Expr.evalList], checkVals_nil, ?_⟩
           rw [Eval.eval, ha name, hv, outcome_nil]
         · next hl =>
           split at h
-          · next b hb =>
-            simp only [pure_ok, Prod.mk.injEq] at h
-            obtain ⟨rfl, -⟩ := h
-            simp only [IR.Expr.eval, Option.some.injEq] at hv
-            subst hv
-            refine ⟨[], by simp [divisors, IR.Expr.evalList], allInt_nil, ?_⟩
-            rw [Eval.eval, scoped_none hs (env_lookup_none hl), ← hp, hb, outcome_nil]
-            rfl
-          · exact absurd h reject_ne_ok
+          -- A constant of the package.
+          · next te w hw =>
+            split at h
+            · simp only [pure_ok, Prod.mk.injEq] at h
+              obtain ⟨rfl, -⟩ := h
+              have hv' : v = w := by
+                cases w <;> simp [valueCode, IR.Expr.eval] at hv <;> exact hv.symm
+              subst hv'
+              refine ⟨[], by cases v <;> simp [valueCode, divisors, IR.Expr.evalList], checkVals_nil, ?_⟩
+              rw [Eval.eval, scoped_none hs (env_lookup_none hl), ← hp]
+              simp [Eval.global, hw, outcome_nil, Res.lift]
+            · exact absurd h reject_ne_ok
+          -- `true` or `false`.
+          · next hc =>
+            split at h
+            · next b hb =>
+              simp only [pure_ok, Prod.mk.injEq] at h
+              obtain ⟨rfl, -⟩ := h
+              simp only [IR.Expr.eval, Option.some.injEq] at hv
+              subst hv
+              refine ⟨[], by simp [divisors, IR.Expr.evalList], checkVals_nil, ?_⟩
+              rw [Eval.eval, scoped_none hs (env_lookup_none hl), ← hp]
+              simp [Eval.global, hc, hb, outcome_nil, Res.lift]
+            · exact absurd h reject_ne_ok
       -- An integer literal.
       · next sp raw =>
         split at h
@@ -681,7 +804,7 @@ theorem expr_sound_aux {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs 
             obtain ⟨rfl, -⟩ := h
             simp only [IR.Expr.eval, Option.some.injEq] at hv
             subst hv
-            refine ⟨[], by simp [divisors, IR.Expr.evalList], allInt_nil, ?_⟩
+            refine ⟨[], by simp [divisors, IR.Expr.evalList], checkVals_nil, ?_⟩
             simp [Eval.eval, hk, outcome_nil]
           · exact absurd h reject_ne_ok
         · exact absurd h reject_ne_ok
@@ -693,7 +816,7 @@ theorem expr_sound_aux {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs 
           obtain ⟨rfl, -⟩ := h
           simp only [IR.Expr.eval, Option.some.injEq] at hv
           subst hv
-          refine ⟨[], by simp [divisors, IR.Expr.evalList], allInt_nil, ?_⟩
+          refine ⟨[], by simp [divisors, IR.Expr.evalList], checkVals_nil, ?_⟩
           simp [Eval.eval, hs', outcome_nil]
         · exact absurd h reject_ne_ok
       -- Parentheses.
@@ -714,7 +837,7 @@ theorem expr_sound_aux {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs 
             subst hij
             obtain ⟨ds, hds, hint, he⟩ := ihe env arg ca tc hca ρs ρo _ ha hs hj
             refine ⟨ds ++ [], by simpa [divisors, divisors.divisorsList] using hds,
-              allInt_append hint allInt_nil, ?_⟩
+              checkVals_append hint checkVals_nil, ?_⟩
             rw [Eval.eval, he, andThen_outcome, List.append_nil, ← outcome_some]
             rfl
           · exact absurd h reject_ne_ok
@@ -741,15 +864,81 @@ theorem expr_sound_aux {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs 
           obtain ⟨ds, hds, hint, hres⟩ := hout da db hda hia hdb hib
           refine ⟨ds, hds, hint, ?_⟩
           rw [eval_binary ho, hl, hr, hres]
-      -- A call of a translated function.
+      -- An index of a string.
+      · next sp str idx =>
+        simp only [bind_ok] at h
+        obtain ⟨⟨cs, ts⟩, hcs, ⟨ci, ti⟩, hci, h⟩ := h
+        by_cases hts : ts = .string
+        · by_cases hti : ti.isNum = true
+          · simp only [hts, hti, ↓reduceIte, pure_bind, pure_ok,
+              Prod.mk.injEq] at h
+            obtain ⟨rfl, -⟩ := h
+            obtain ⟨x, y, hx, hy, happ⟩ := out_ext2 hv
+            obtain ⟨da, hda, hia, hs1⟩ := ihe env str cs ts hcs ρs ρo x ha hs hx
+            obtain ⟨db, hdb, hib, hs2⟩ := ihe env idx ci ti hci ρs ρo y ha hs hy
+            cases x <;> cases y <;> simp [IR.ExprExt.apply] at happ
+            next text k =>
+            subst happ
+            have hfault : IR.Expr.eval fs fuel ρo (.ext .indexFault [cs, ci]) =
+                some (.str (indexFault text k)) := by
+              simp [IR.Expr.eval, IR.Expr.evalList, hx, hy, IR.ExprExt.apply]
+            refine ⟨da ++ (db ++ [.str (indexFault text k)]), ?_, ?_, ?_⟩
+            · have hd : divisors (.ext .byteAt [cs, ci]) =
+                  divisors cs ++ (divisors ci ++ [.ext .indexFault [cs, ci]]) := by
+                simp [divisors, divisors.divisorsList]
+              rw [hd]
+              exact evalList_append hda (evalList_append hdb (evalList_single hfault))
+            · exact checkVals_append hia (checkVals_append hib (checkVals_str _))
+            · rw [Eval.eval, hs1, hs2]
+              exact outcome_then (outcome_then (index_outcome text k))
+          · simp [hts, hti, reject, throw, throwThe, MonadExceptOf.throw, bind,
+              Except.bind, pure, Except.pure] at h
+        · simp [hts, reject, throw, throwThe, MonadExceptOf.throw, bind,
+            Except.bind] at h
+      -- A call of `len`, a conversion, or a translated function.
       · next sp sp' f args =>
         cases hf : env.has f with
         | true => simp [hf] at h
         | false =>
+        have hl : ρs.lookup f = none := scoped_none hs hf
+        cases hbi : Eval.builtin ctx.program f with
+        | some bi =>
+          rw [hp] at hbi
+          match args, h with
+          | [arg], h =>
+            have hev := eval_builtin p fuel ρs sp sp' f arg hbi hl
+            simp only [hf, hp, hbi, Bool.false_eq_true, ↓reduceIte, bind_ok, pure_bind] at h
+            obtain ⟨⟨ca, tc⟩, hca, h⟩ := h
+            cases bi with
+            | len =>
+              by_cases htc : tc = .string
+              · simp only [htc, ↓reduceIte, pure_ok, Prod.mk.injEq] at h
+                obtain ⟨rfl, -⟩ := h
+                obtain ⟨x, hx, happ⟩ := out_ext1 hv
+                obtain ⟨ds, hds, hint, he⟩ := ihe env arg ca tc hca ρs ρo x ha hs hx
+                cases x <;> simp [IR.ExprExt.apply] at happ
+                subst happ
+                refine ⟨ds ++ [], by simpa [divisors, divisors.divisorsList] using hds,
+                  checkVals_append hint checkVals_nil, ?_⟩
+                rw [hev, he]
+                exact outcome_then (by simp [Eval.applyBuiltin, outcome_nil]; rfl)
+              · simp [htc] at h
+            | toInt | toInt64 =>
+              by_cases htc : tc.isNum = true
+              · simp only [htc, ↓reduceIte, pure_ok, Prod.mk.injEq] at h
+                obtain ⟨rfl, -⟩ := h
+                obtain ⟨ds, hds, hint, he⟩ := ihe env arg ca tc hca ρs ρo v ha hs hv
+                refine ⟨ds ++ [], by simpa using hds, checkVals_append hint checkVals_nil, ?_⟩
+                rw [hev, he]
+                exact outcome_then (by simp [Eval.applyBuiltin, outcome_nil])
+              · simp [htc] at h
+          | [], h => simp [hf, hp, hbi] at h
+          | _ :: _ :: _, h => simp [hf, hp, hbi] at h
+        | none =>
           cases hsig : ctx.known.find? (·.name == f) with
-          | none => simp [hf, hsig] at h
+          | none => simp [hf, hbi, hsig] at h
           | some sig =>
-            simp only [hf, hsig, Bool.false_eq_true, ↓reduceIte, bind_ok] at h
+            simp only [hf, hbi, hsig, Bool.false_eq_true, ↓reduceIte, bind_ok] at h
             obtain ⟨_, -, h⟩ := h
             cases hpanic : sig.panics
             · simp only [hpanic, Bool.false_eq_true, ↓reduceIte, pure_bind, bind_ok] at h
@@ -767,7 +956,8 @@ theorem expr_sound_aux {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs 
                 simp only [hvs, Option.bind_some] at hv
                 obtain ⟨ds, hds, hint, hargs⟩ := iha env args codes hcodes ρs ρo vs ha hs hvs
                 refine ⟨ds, by simpa [divisors] using hds, hint, ?_⟩
-                rw [eval_call, scoped_none hs hf, hargs]
+                rw [hp] at hbi
+                rw [eval_call p fuel ρs sp sp' f args hbi, hl, hargs]
                 simp only [andThen_outcome, hc f vs _ (callR_of_callO hv)]
                 exact outcome_some ds v
             · simp [hpanic, reject, throw, throwThe, MonadExceptOf.throw, bind, Except.bind] at h
@@ -779,7 +969,7 @@ theorem expr_sound_aux {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs 
         intro ρs ρo vs _ _ hv
         simp [IR.Expr.evalList] at hv
         subst hv
-        exact ⟨[], by simp [divisors.divisorsList, IR.Expr.evalList], allInt_nil,
+        exact ⟨[], by simp [divisors.divisorsList, IR.Expr.evalList], checkVals_nil,
           by simp [Eval.evalList, outcome_nil]⟩
       | cons e es =>
         simp only [translateArgs] at h
@@ -801,13 +991,11 @@ theorem expr_sound_aux {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs 
             subst hv
             obtain ⟨d1, hd1, hi1, he1⟩ := ihe env e c t hc' ρs ρo w ha hs hw
             obtain ⟨d2, hd2, hi2, he2⟩ := iha env es cs' hcs ρs ρo ws ha hs hws
-            refine ⟨d1 ++ d2, ?_, allInt_append hi1 hi2, ?_⟩
+            refine ⟨d1 ++ d2, ?_, checkVals_append hi1 hi2, ?_⟩
             · simp only [List.map_cons, divisors.divisorsList]
               exact evalList_append hd1 hd2
-            · rw [Eval.evalList, he1, andThen_outcome]
-              unfold outcome
-              by_cases h1 : Val.int 0 ∈ d1 <;> by_cases h2 : Val.int 0 ∈ d2 <;>
-                simp [h1, h2, he2, outcome]
+            · rw [Eval.evalList, he1]
+              exact outcome_then (by rw [he2]; exact outcome_map d2 ws (w :: ·))
 
 /-- The code that the translator gives for an expression gives a value only
 when the interpreter gives the same value for the expression, or panics
@@ -816,7 +1004,7 @@ theorem expr_sound {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs fuel
     {env : Pure.Env} {e : Expr} {c : IR.Expr} {t : Ty} (h : translateExpr ctx env n e = .ok (c, t))
     {ρs ρo : Eval.Env} {v : Val} (ha : Agree ρs ρo) (hs : Scoped env ρs)
     (hv : IR.Expr.eval fs fuel ρo c = some v) :
-    ∃ ds, IR.Expr.evalList fs fuel ρo (divisors c) = some ds ∧ AllInt ds ∧
+    ∃ ds, IR.Expr.evalList fs fuel ρo (divisors c) = some ds ∧ CheckVals ds ∧
       Eval.eval p fuel ρs e = some (outcome ds v) :=
   (expr_sound_aux fs fuel p hp hc n).1 env e c t h ρs ρo v ha hs hv
 
