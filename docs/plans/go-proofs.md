@@ -89,7 +89,6 @@ change the separate work on `switch` and `if`.
 
 | Check | What it does |
 |---|---|
-| The interpreter against Go | Run random pure programs with `go run` and with the interpreter, and compare the results, as `tests/typescript/interpreter.test.ts` does with Node |
 | Certificates | Prove the printer link for one file, as TypeScript's certificates do |
 
 ## Open questions
