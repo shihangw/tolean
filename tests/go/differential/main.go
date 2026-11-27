@@ -19,8 +19,10 @@
 // int64, bool and string values; wrapping +, - and *; the orders on integers;
 // == and != on every type; &&, || and !; string concatenation; locals
 // declared with := and var; =, +=, -=, *=, ++ and --; if statements that
-// change locals or return; one counted loop at the start of a body; and calls
-// of functions declared earlier. When the subset grows, add the new construct
+// change locals or return, with and without an init statement; expression
+// switches with and without a tag, an init statement, several values in a
+// case and a default anywhere, that change locals or return; one counted loop
+// at the start of a body; and calls of functions declared earlier. When the subset grows, add the new construct
 // here too.
 //
 // Run it from tests/go after `lake build`:
@@ -313,7 +315,7 @@ func (g *gen) assign(mark int) bool {
 // stmts writes up to n statements that do not return.
 func (g *gen) stmts(n, depth int) {
 	for range n {
-		switch g.pick(5) {
+		switch g.pick(7) {
 		case 0, 1:
 			t := allTypes[g.pick(len(allTypes))]
 			if g.chance(0.5) {
@@ -333,9 +335,19 @@ func (g *gen) stmts(n, depth int) {
 			}
 		case 2, 3:
 			g.assign(len(g.locals))
-		default:
+		case 4:
 			if depth > 0 {
 				g.stateIf(depth - 1)
+			}
+		case 5:
+			// The proved counted loop leaves out bodies with a switch or an
+			// init statement.
+			if depth > 0 && !g.inLoop {
+				g.stateSwitch(depth - 1)
+			}
+		default:
+			if depth > 0 && !g.inLoop {
+				g.stateIfInit(depth - 1)
 			}
 		}
 	}
@@ -352,10 +364,15 @@ func (g *gen) stateBlock(depth int) {
 	g.locals = g.locals[:mark]
 }
 
+// hasMutable reports whether some local in scope can be assigned.
+func (g *gen) hasMutable() bool {
+	return len(g.visible(tInt, true))+len(g.visible(tInt64, true))+
+		len(g.visible(tBool, true))+len(g.visible(tString, true)) > 0
+}
+
 // stateIf writes an if that does not return.
 func (g *gen) stateIf(depth int) {
-	if len(g.visible(tInt, true))+len(g.visible(tInt64, true))+
-		len(g.visible(tBool, true))+len(g.visible(tString, true)) == 0 {
+	if !g.hasMutable() {
 		return
 	}
 	c, _ := g.expr(tBool, 2)
@@ -368,11 +385,224 @@ func (g *gen) stateIf(depth int) {
 	g.line("}")
 }
 
+// initLocal declares the local of an init statement, `v := e`, and returns
+// the statement. The local cannot be assigned, so that each clause or branch
+// changes a local declared outside the statement, as the subset requires.
+func (g *gen) initLocal() (*local, string, bool) {
+	t := allTypes[g.pick(len(allTypes))]
+	e, ok := g.nonConst(t, 2)
+	if !ok {
+		return nil, "", false
+	}
+	l := g.declare(t)
+	l.used = true
+	l.mutable = false
+	return l, l.name + " := " + e, true
+}
+
+// initTest returns a condition that reads the init local l, so that Go sees
+// it used.
+func (g *gen) initTest(l *local) string {
+	switch l.t {
+	case tBool:
+		return []string{l.name, "!" + l.name}[g.pick(2)]
+	case tString:
+		return fmt.Sprintf("%s %s %s", l.name, []string{"==", "!="}[g.pick(2)], g.literal(tString))
+	default:
+		return fmt.Sprintf("%s %s %d", l.name, []string{"<", ">", "==", "!="}[g.pick(4)], g.pick(1001)-500)
+	}
+}
+
+// ifInit writes the header of an if with an init statement: a new local, or
+// an assignment to a local declared before it.
+func (g *gen) ifInit() bool {
+	if outer := g.visible(tInt, true); len(outer) > 0 && g.chance(0.3) {
+		l := outer[g.pick(len(outer))]
+		c, _ := g.expr(tBool, 2)
+		g.line("if %s%s; %s {", l.name, []string{"++", "--"}[g.pick(2)], c)
+		return true
+	}
+	l, init, ok := g.initLocal()
+	if !ok {
+		return false
+	}
+	c := g.initTest(l)
+	if g.chance(0.3) {
+		d, _ := g.expr(tBool, 1)
+		c = "(" + c + ") " + []string{"&&", "||"}[g.pick(2)] + " " + d
+	}
+	g.line("if %s; %s {", init, c)
+	return true
+}
+
+// stateIfInit writes an if with an init statement that does not return.
+func (g *gen) stateIfInit(depth int) {
+	if !g.hasMutable() {
+		return
+	}
+	mark := len(g.locals)
+	if !g.ifInit() {
+		return
+	}
+	g.stateBlock(depth)
+	if g.chance(0.5) {
+		g.line("} else {")
+		g.stateBlock(depth)
+	}
+	g.line("}")
+	g.locals = g.locals[:mark]
+}
+
+// switchHead writes nothing. It returns the header of an expression switch,
+// with an init statement or not, and the case values of its clauses, at least
+// one of them. A constant case value appears at most once, because Go refuses
+// a duplicate constant case. It reports false when it finds no switch
+// expression.
+func (g *gen) switchHead(clauses int) (string, [][]string, bool) {
+	header := "switch "
+	t := allTypes[g.pick(len(allTypes))]
+	tag := ""
+	if g.chance(0.3) {
+		l, init, ok := g.initLocal()
+		if !ok {
+			return "", nil, false
+		}
+		header += init + "; "
+		t, tag = l.t, l.name
+	} else if g.chance(0.7) {
+		e, ok := g.nonConst(t, 2)
+		if !ok {
+			return "", nil, false
+		}
+		tag = e
+	}
+	if tag != "" {
+		header += tag + " "
+	}
+	seen := map[string]bool{}
+	var cases [][]string
+	found := false
+	for range clauses {
+		var values []string
+		for range 1 + g.pick(3) {
+			if tag == "" {
+				if e, ok := g.nonConst(tBool, 2); ok {
+					values = append(values, e)
+				}
+			} else if g.chance(0.5) {
+				if e, ok := g.nonConst(t, 1); ok {
+					values = append(values, e)
+				}
+			} else if lit := g.literal(t); !seen[lit] {
+				seen[lit] = true
+				values = append(values, lit)
+			}
+		}
+		found = found || len(values) > 0
+		cases = append(cases, values)
+	}
+	// The tag may read locals, so the switch must be written. When every
+	// attempt failed, no literal is taken yet.
+	if !found {
+		if tag == "" {
+			cases[0] = []string{"true"}
+		} else {
+			cases[0] = []string{g.literal(t)}
+		}
+	}
+	return header + "{", cases, true
+}
+
+// stateSwitch writes an expression switch that does not return. Each clause
+// changes a local declared before the switch.
+func (g *gen) stateSwitch(depth int) {
+	if !g.hasMutable() {
+		return
+	}
+	mark := len(g.locals)
+	clauses := 1 + g.pick(3)
+	header, cases, ok := g.switchHead(clauses)
+	if !ok {
+		g.locals = g.locals[:mark]
+		return
+	}
+	dflt := -1
+	if g.chance(0.5) {
+		dflt = g.pick(clauses + 1)
+	}
+	g.line("%s", header)
+	for i := 0; i <= clauses; i++ {
+		if i == dflt {
+			g.line("default:")
+			g.stateBlock(depth)
+		}
+		if i < clauses && len(cases[i]) > 0 {
+			g.line("case %s:", strings.Join(cases[i], ", "))
+			g.stateBlock(depth)
+		}
+	}
+	g.line("}")
+	g.locals = g.locals[:mark]
+}
+
+// returningSwitch writes an expression switch whose every clause returns a
+// value of type t. It has a default clause, so nothing can follow it.
+func (g *gen) returningSwitch(t ty, depth int) bool {
+	mark := len(g.locals)
+	clauses := 1 + g.pick(3)
+	header, cases, ok := g.switchHead(clauses)
+	if !ok {
+		g.locals = g.locals[:mark]
+		return false
+	}
+	dflt := g.pick(clauses + 1)
+	g.line("%s", header)
+	for i := 0; i <= clauses; i++ {
+		if i == dflt {
+			g.line("default:")
+			g.indent++
+			g.returning(t, depth)
+			g.indent--
+		}
+		if i < clauses && len(cases[i]) > 0 {
+			g.line("case %s:", strings.Join(cases[i], ", "))
+			g.indent++
+			g.returning(t, depth)
+			g.indent--
+		}
+	}
+	g.line("}")
+	g.locals = g.locals[:mark]
+	return true
+}
+
+// returningIfInit writes an if with an init statement whose branches both
+// return a value of type t, so nothing can follow it.
+func (g *gen) returningIfInit(t ty, depth int) bool {
+	mark := len(g.locals)
+	if !g.ifInit() {
+		return false
+	}
+	g.indent++
+	g.returning(t, depth)
+	g.indent--
+	g.line("} else {")
+	g.indent++
+	g.returning(t, depth)
+	g.indent--
+	g.line("}")
+	g.locals = g.locals[:mark]
+	return true
+}
+
 // returning writes statements that end with a return of type t.
 func (g *gen) returning(t ty, depth int) {
 	mark := len(g.locals)
 	g.stmts(g.pick(4), depth)
+	g.use(mark)
 	switch {
+	case depth > 0 && g.chance(0.15) && g.returningSwitch(t, depth-1):
+	case depth > 0 && g.chance(0.15) && g.returningIfInit(t, depth-1):
 	case depth > 0 && g.chance(0.3):
 		g.use(mark)
 		c, _ := g.expr(tBool, 2)
@@ -675,12 +905,17 @@ func check(seed int64, programs int) error {
     throw (IO.userError ("the proved path refuses generated functions:\n" ++ "\n".intercalate refusals))
   let program := Eval.program decls
   let fs := IR.functions (out.map (·.1))
+  -- The value that a call returns, or none when it panics or has no value.
+  -- The generator does not divide, so no call panics.
+  let value : Option (Except Eval.Val Eval.Val) → Option Eval.Val
+    | some (.ok v) => some v
+    | _ => none
   let mut bad : Array String := #[]
   for (f, args, want) in calls do
-    let got := Eval.runIn program f args
+    let got := value (Eval.runIn program f args)
     if got != some want then
       bad := bad.push s!"interpreter: {f} {repr args} gives {repr got}, Go gives {repr want}"
-    let got := IR.runIn fs ⟨"", f⟩ args
+    let got := value (IR.runIn fs ⟨"", f⟩ args)
     if got != some want then
       bad := bad.push s!"IR: {f} {repr args} gives {repr got}, Go gives {repr want}"
   unless bad.isEmpty do

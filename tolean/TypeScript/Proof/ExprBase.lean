@@ -1,4 +1,4 @@
-import tolean.TypeScript.EStateM
+import tolean.Core.EStateM
 import tolean.TypeScript.Translate
 import tolean.TypeScript.IR.Eval
 import tolean.TypeScript.Spec.Lemmas.Eval

@@ -3,7 +3,7 @@ import tolean.Runtime.LoopResult
 import Lean
 import tolean.TypeScript.Certify
 import tolean.TypeScript.Decreasing
-import tolean.TypeScript.EStateM
+import tolean.Core.EStateM
 import tolean.TypeScript.Interpret
 import tolean.TypeScript.Map
 import tolean.TypeScript.Proof.Guard
@@ -95,7 +95,8 @@ structure Group where
 def everySection : Group :=
   ⟨"Every section of the subset", [``Proof.program_sound, ``Proof.translate_sound,
     ``Proof.program_sound_call, ``Proof.translate_sound_call,
-    ``Proof.programTranslation_rel, ``Proof.apply_recordGet, ``Proof.apply_recordGetFlatten,
+    ``Proof.programTranslation_rel, ``Proof.mem_reexportedFunctions,
+    ``Proof.mem_reexportedEnums, ``Proof.apply_recordGet, ``Proof.apply_recordGetFlatten,
     ``Proof.expr_sound, ``Proof.stmts_sound,
     ``Proof.decls_sound, ``Proof.decls_sound_call]⟩
 
@@ -339,7 +340,7 @@ def sections : List Section := [
   ⟨"sec-HostLoadImportedModule", "16.2.1.8", "HostLoadImportedModule",
     [``resolvePath_url, ``resolvePath_relative, ``resolvePath_last]⟩,
   ⟨"sec-imports", "16.2.2", "Imports",
-    [``Proof.translateImport_ok, ``Proof.import_refs_cons, ``Proof.translateImport_names,
+    [``Proof.translateImport_ok, ``Proof.import_via_cons, ``Proof.translateImport_names,
     ``Proof.importNames_cons, ``Proof.enumBinding_import_cons]⟩,
   ⟨"sec-exports", "16.2.3", "Exports", []⟩,
   -- §19 The Global Object {#sec-global-object}

@@ -639,14 +639,25 @@ this boundary.
   Node's type stripping removes only imports that say `type`, so without it
   the JavaScript would import a name that does not exist at run time.
 - Only named imports are supported. Tolean refuses `as`, a default or
-  namespace import, an import with no names or for its side effects, a
-  value re-export such as `export { a } from "./x.ts"`, and an import cycle.
+  namespace import, an import with no names or for its side effects, and an
+  import cycle.
 - A type re-export, such as `export type { Point } from "./x.ts"`, may name
   an exported interface or type alias. The output imports the translated
   source module but adds no declaration. A consumer uses the original
   type's identity, even through several re-exporting files. The re-export
-  does not bind `Point` locally. Re-exports of functions, enums and tagged
-  unions remain refused.
+  does not bind `Point` locally. Type re-exports of enums and tagged unions
+  remain refused.
+- A value re-export, such as `export { clamp, Color } from "./x.ts"`, may
+  name a function or a string enum that the source file exports, either
+  itself or through its own re-exports. A file that imports the name gets
+  the original declaration, so its output calls the function of the file
+  that declares it. The re-exporting file's output adds no declaration.
+  The re-export does not bind the name locally either, so that file may
+  keep a private function of the same name. A module exports each name
+  once, so the name may not also be exported by a declaration or by
+  another export list of the file. Tolean refuses `as` in a re-export, and
+  `export *`. The [value re-exports
+  decision](../decisions/2026-11-26-value-reexports.md) explains the model.
 - An export list, such as `export { clamp, type Range }`, exports
   declarations of the file, as `export` before each of them would. It may
   name only functions, interfaces and types that the file declares before the

@@ -7,8 +7,16 @@ The part of the Go translator that builds the Tolean IR, for pure functions.
 A pure function here takes and returns `int`, `int64`, `bool` and `string`
 values, and calls only pure functions that this part has already
 translated. Its body may declare and assign locals, use `+=`, `-=`, `*=`,
-`++` and `--`, test with `if` and `else`, and return. Integer arithmetic
-wraps through `Go.wrap64`, as Go's does.
+`/=`, `%=`, `++` and `--`, test with `if`, `else` and `switch`, and return.
+An `if` or a `switch` may have an init statement. Integer arithmetic wraps
+through `Go.wrap64`, as Go's does.
+
+Integer `/` and `%` are `Int.tdiv` and `Int.tmod`. Go panics when the divisor
+is zero, and Lean divides by zero without a panic, so a statement that
+divides first tests its divisors. When one of them is zero, the function
+throws the message of Go's panic. A function that can panic returns
+`Except String T` rather than `T`, and the functions of this part do not call
+it yet.
 
 The translator is a total function, so that Lean can reason about it.
 `translate_sound` in `tolean/Go/Proof/Package.lean` proves that every
@@ -80,6 +88,8 @@ structure FnSig where
   name : String
   params : List Ty
   result : Ty
+  /-- The function can panic, so its output returns an `Except`. -/
+  panics : Bool := false
 deriving Inhabited
 
 structure Ctx where
@@ -157,12 +167,98 @@ def compare (sp : Span) (op : tolean.IR.Order) (a : IR.Expr) (ta : Ty) (b : IR.E
   | some t => if t.isInt then pure (.decide (.order op a b), .bool) else reject sp "the subset orders only integers"
   | none => reject sp "the operands do not have one integer type"
 
+/-! ### Division -/
+
+/-- The divisor `b`, unless it is an integer literal other than zero, which
+needs no test. -/
+def tested : IR.Expr → List IR.Expr
+  | .int n => if n = 0 then [.int n] else []
+  | b => [b]
+
+/-- The divisors of the divisions in `c`, in no particular order. A statement
+that evaluates `c` panics in Go exactly when one of them is zero, because the
+translator refuses a division that Go might not evaluate: one in the right
+operand of `&&` or `||`. -/
+def divisors : IR.Expr → List IR.Expr
+  | .division _ a b => divisors a ++ divisors b ++ tested b
+  | .not a => divisors a
+  | .neg a => divisors a
+  | .decide a => divisors a
+  | .intOp _ a b => divisors a ++ divisors b
+  | .order _ a b => divisors a ++ divisors b
+  | .eq a b => divisors a ++ divisors b
+  | .ne a b => divisors a ++ divisors b
+  | .and a b => divisors a ++ divisors b
+  | .or a b => divisors a ++ divisors b
+  | .call _ args => divisorsList args
+  | .ext _ args => divisorsList args
+  | _ => []
+where
+  divisorsList : List IR.Expr → List IR.Expr
+    | [] => []
+    | e :: es => divisors e ++ divisorsList es
+
+/-- `decide (d = 0)`. -/
+def isZero (d : IR.Expr) : IR.Expr := .decide (.eq d (.int 0))
+
+/-- Some divisor of `ds` is zero, as a `Bool`. -/
+def anyZero : List IR.Expr → IR.Expr
+  | [] => .bool false
+  | [d] => isZero d
+  | d :: ds => .or (isZero d) (anyZero ds)
+
+/-- The test before a statement whose expressions divide by `ds`: `d = 0` for
+one divisor, and a `||` of `decide (d = 0)` for more. -/
+def zeroTest : List IR.Expr → IR.Expr
+  | [d] => .eq d (.int 0)
+  | ds => anyZero ds
+
+/-- The message of Go's panic for a division by zero. -/
+def panicCode : IR.Expr := .string "runtime error: integer divide by zero"
+
+/-- `body`, after a test of the divisors of `c`, which `body` evaluates
+first. When one of them is zero, the output evaluates `c` and throws Go's
+panic. `c` divides by zero then without a panic, as Lean does, and its value
+is unused. The output evaluates it so that the evaluator reaches the same
+expressions as the interpreter, which panics only when it reaches the
+division. A statement that does not divide keeps `body` as it is. -/
+def guarded (c : IR.Expr) (body : IR.Body) : IR.Body :=
+  if (divisors c).isEmpty then body
+  else .ite (zeroTest (divisors c)) (.let "_" c (.throw panicCode)) body
+
+/-- The code of an untyped constant is zero. Such a constant is a literal,
+possibly negated, because the translator refuses an operator on two
+constants. -/
+def constZero : IR.Expr → Bool
+  | .int 0 => true
+  | .ext .wrap64 [.neg a] => constZero a
+  | _ => false
+
+/-- `a / b` and `a % b` on integers. A constant zero divisor is an error in
+Go (Go specification, "Integer operators"), so the translator refuses it. -/
+def divide (sp : Span) (op : tolean.IR.Division) (a : IR.Expr) (ta : Ty) (b : IR.Expr) (tb : Ty) :
+    TM (IR.Expr × Ty) :=
+  match ta.unify tb with
+  | some t =>
+    if !t.isInt then reject sp "this operator needs integers"
+    else if tb = .untyped && constZero b then reject sp "division by the constant zero"
+    else match op with
+      | .tdiv => pure (.wrap64 (.division .tdiv a b), t)
+      | .tmod => pure (.division .tmod a b, t)
+  | none => reject sp "the operands do not have one integer type"
+
 /-- A binary operator on translated operands. -/
 def translateBinary (sp : Span) (o : BinOp) (a : IR.Expr) (ta : Ty) (b : IR.Expr) (tb : Ty) :
     TM (IR.Expr × Ty) :=
   match o with
-  | .land => if ta = .bool ∧ tb = .bool then pure (.and a b, .bool) else reject sp "&& needs booleans"
-  | .lor => if ta = .bool ∧ tb = .bool then pure (.or a b, .bool) else reject sp "|| needs booleans"
+  | .land =>
+    if !(divisors b).isEmpty then reject sp "the right operand of && may not divide"
+    else if ta = .bool ∧ tb = .bool then pure (.and a b, .bool) else reject sp "&& needs booleans"
+  | .lor =>
+    if !(divisors b).isEmpty then reject sp "the right operand of || may not divide"
+    else if ta = .bool ∧ tb = .bool then pure (.or a b, .bool) else reject sp "|| needs booleans"
+  | .quo => divide sp .tdiv a ta b tb
+  | .rem => divide sp .tmod a ta b tb
   | .add =>
     if ta = .string ∧ tb = .string then pure (.append a b, .string) else arith sp .add a ta b tb
   | .sub => arith sp .sub a ta b tb
@@ -221,6 +317,7 @@ def translateExpr (ctx : Ctx) (env : Env) : Nat → Expr → TM (IR.Expr × Ty)
     | .call sp (.ident _ f) args false => do
       if env.has f then reject sp s!"'{f}' is a local, not a function"
       let some sig := ctx.known.find? (·.name == f) | reject sp s!"'{f}' is not a pure function translated before this one"
+      if sig.panics then reject sp s!"'{f}' can panic, and a call of it is not supported yet"
       let codes ← translateArgs ctx env fuel args
       unless argsFit codes sig.params do reject sp "the arguments do not fit the parameters"
       pure (.call ⟨"", f⟩ (codes.map (·.1)), sig.result)
@@ -237,9 +334,10 @@ end
 /-! ### Statements -/
 
 /-- What the end of a statement list gives: the function's value, or the
-locals that a branch changes. -/
+locals that a branch changes. A function that can panic (`monadic`) returns
+`pure` of its value. -/
 inductive Tail where
-  | ret (result : Ty)
+  | ret (result : Ty) (monadic : Bool)
   | state (names : List String)
 
 def blockStatements : Stmt → List Stmt
@@ -260,7 +358,8 @@ def stmtChanges : Stmt → List String
     | _ => none
   | .incDec _ _ (.ident _ n) => [n]
   | .block _ ss => changesList ss
-  | .ifStmt _ _ _ t e => stmtChanges t ++ changesOption e
+  | .ifStmt _ init _ t e => changesOption init ++ stmtChanges t ++ changesOption e
+  | .switchStmt _ init _ _ cs => changesOption init ++ changesClauses cs
   | _ => []
 
 def changesList : List Stmt → List String
@@ -271,6 +370,10 @@ def changesOption : Option Stmt → List String
   | none => []
   | some s => stmtChanges s
 
+def changesClauses : List CaseClause → List String
+  | [] => []
+  | .mk _ _ body :: cs => changesList body ++ changesClauses cs
+
 end
 
 mutual
@@ -280,6 +383,7 @@ def hasReturn : Stmt → Bool
   | .ret .. => true
   | .block _ ss => anyReturn ss
   | .ifStmt _ _ _ t e => hasReturn t || optionReturn e
+  | .switchStmt _ _ _ _ cs => clausesReturn cs
   | _ => false
 
 def anyReturn : List Stmt → Bool
@@ -290,7 +394,51 @@ def optionReturn : Option Stmt → Bool
   | none => false
   | some s => hasReturn s
 
+def clausesReturn : List CaseClause → Bool
+  | [] => false
+  | .mk _ _ body :: cs => anyReturn body || clausesReturn cs
+
 end
+
+/-! ### Switch statements
+
+The translator writes an expression switch as the chain of `if` statements
+that means the same. `Proof/Switch.lean` proves that the interpreter gives the
+chain the meaning that it gives the switch. -/
+
+/-- The test of one case expression `e`: `x == e` for the switch expression
+`x`, and `e` itself in a switch without one. -/
+def caseTest (sp : Span) : Option Expr → Expr → Expr
+  | none, e => e
+  | some x, e => .binary sp "==" x e
+
+/-- The test of a case clause, which holds when one of its expressions
+matches: `x == a || x == b`. None for a clause without expressions. -/
+def caseCond (sp : Span) (tag : Option Expr) : List Expr → Option Expr
+  | [] => none
+  | e :: es =>
+    match caseCond sp tag es with
+    | none => some (caseTest sp tag e)
+    | some r => some (.binary sp "||" (caseTest sp tag e) r)
+
+/-- The chain of `if` statements for the clauses of a switch. `dflt` is the
+`default` clause seen so far, which runs when no case matches. Each clause
+body is a block, as it is in Go. -/
+def switchChain (tag : Option Expr) : Option (Span × List Stmt) → List CaseClause → Option Stmt
+  | none, [] => none
+  | some (sp, body), [] => some (.block sp body)
+  | _, .mk sp none body :: rest => switchChain tag (some (sp, body)) rest
+  | dflt, .mk sp (some es) body :: rest =>
+    match caseCond sp tag es with
+    | none => switchChain tag dflt rest
+    | some c => some (.ifStmt sp none c (.block sp body) (switchChain tag dflt rest))
+
+/-- Some clause has a case expression, so that the chain evaluates the switch
+expression, as the switch does. -/
+def hasCase : List CaseClause → Bool
+  | [] => false
+  | .mk _ (some (_ :: _)) _ :: _ => true
+  | _ :: cs => hasCase cs
 
 /-- The locals of `env` that the statements may assign, in the order of
 `env`. -/
@@ -311,32 +459,32 @@ def translateStmts (ctx : Ctx) (env : Env) (tail : Tail) : Nat → List Stmt →
   | 0, _ => throw "the statements are nested too deeply"
   | _ + 1, [] =>
     match tail with
-    | .ret _ => throw "the function can end without a return"
+    | .ret .. => throw "the function can end without a return"
     | .state names => pure (.state names)
   | fuel + 1, st :: rest =>
     match st with
     | .ret sp [e] => do
-      let .ret result := tail | reject sp "only a branch that always returns may return"
+      let .ret result monadic := tail | reject sp "only a branch that always returns may return"
       unless rest.isEmpty do reject sp "the code after return is unreachable"
       let (c, t) ← translateExpr ctx env exprFuel e
       unless t.fits result do reject sp "the value does not have the result type"
-      pure (.value c)
+      pure (guarded c (.value (if monadic then IR.Expr.pure c else c)))
     | .assign sp op [.ident _ x] [e] => do
       let some kind := AssignKind.ofString? op | reject sp s!"the operator '{op}' is not supported"
       let (c, t) ← translateExpr ctx env exprFuel e
       match kind with
       | .define =>
         let env' ← declare env sp x t.typed
-        return .let x c (← translateStmts ctx env' tail fuel rest)
+        return guarded c (.let x c (← translateStmts ctx env' tail fuel rest))
       | .assign =>
         let some l := env.lookup x | reject sp s!"unknown local '{x}'"
         unless t.fits l.type do reject sp "the value does not have the type of the local"
-        return .let x c (← translateStmts ctx env tail fuel rest)
+        return guarded c (.let x c (← translateStmts ctx env tail fuel rest))
       | .compound o =>
         let some l := env.lookup x | reject sp s!"unknown local '{x}'"
         let (c', t') ← translateBinary sp o (.var x) l.type c t
         unless t' = l.type do reject sp "the value does not have the type of the local"
-        return .let x c' (← translateStmts ctx env tail fuel rest)
+        return guarded c' (.let x c' (← translateStmts ctx env tail fuel rest))
     | .incDec sp op (.ident _ x) => do
       let some o := Eval.incDecOp? op | reject sp s!"the operator '{op}' is not supported"
       let some l := env.lookup x | reject sp s!"unknown local '{x}'"
@@ -353,8 +501,35 @@ def translateStmts (ctx : Ctx) (env : Env) (tail : Tail) : Nat → List Stmt →
         | [] => pure (zeroCode t)
         | _ => reject sp "declare one variable at a time"
       let env' ← declare env sp x t
-      return .let x c (← translateStmts ctx env' tail fuel rest)
+      return guarded c (.let x c (← translateStmts ctx env' tail fuel rest))
     | .ifStmt sp none c t els => translateIf ctx env tail fuel sp c t els rest
+    -- `if s; c { … }` is the block `{ s; if c { … } }`.
+    | .ifStmt sp (some s) c t els =>
+      translateStmts ctx env tail fuel (.block sp [s, .ifStmt sp none c t els] :: rest)
+    -- A switch is a chain of `if` statements, inside a block after its init
+    -- statement.
+    | .switchStmt sp init tag bsp clauses => do
+      if tag.isSome && !hasCase clauses then
+        reject sp "a switch with an expression needs a case"
+      let some chain := switchChain tag none clauses | reject sp "a switch needs a clause"
+      let st' := match init with
+        | none => chain
+        | some s => .block bsp [s, chain]
+      translateStmts ctx env tail fuel (st' :: rest)
+    -- A block: what it declares goes out of scope at its end. When it
+    -- returns, it must end the function. Otherwise it gives the locals that it
+    -- changes, as a branch does.
+    | .block sp body => do
+      if anyReturn body then
+        let .ret .. := tail | reject sp "only a branch that always returns may return"
+        unless rest.isEmpty do
+          reject sp "a block, or an if or switch with an init statement, that returns must end the function"
+        translateStmts ctx env tail fuel body
+      else
+        let names := changedNames body env
+        if names.isEmpty then reject sp "a block that does not return must change a local"
+        let inner ← translateStmts ctx env (.state names) fuel body
+        return .letState names inner (← translateStmts ctx env tail fuel rest)
     | _ => reject st.span "this statement is not supported"
 
 /-- `if c { … } else …`, then `rest`. When a branch returns, the code after
@@ -370,18 +545,19 @@ def translateIf (ctx : Ctx) (env : Env) (tail : Tail) : Nat → Span → Expr �
     let thenSS := blockStatements t
     let elseSS := elseStatements els
     if anyReturn (thenSS ++ elseSS) then
-      let .ret _ := tail | reject sp "only a branch that always returns may return"
+      let .ret .. := tail | reject sp "only a branch that always returns may return"
       if els.isSome && !rest.isEmpty then
         reject sp "when a branch returns and the if has an else, nothing may follow the if"
       let whenTrue ← translateStmts ctx env tail fuel thenSS
       let whenFalse ← translateStmts ctx env tail fuel (elseSS ++ rest)
-      return .ite cond whenTrue whenFalse
+      return guarded cond (.ite cond whenTrue whenFalse)
     else
       let names := changedNames (thenSS ++ elseSS) env
       if names.isEmpty then reject sp "an if that does not return must change a local"
       let whenTrue ← translateStmts ctx env (.state names) fuel thenSS
       let whenFalse ← translateStmts ctx env (.state names) fuel elseSS
-      return .letState names (.ite cond whenTrue whenFalse) (← translateStmts ctx env tail fuel rest)
+      return guarded cond
+        (.letState names (.ite cond whenTrue whenFalse) (← translateStmts ctx env tail fuel rest))
 
 end
 
@@ -394,7 +570,7 @@ def valueCode : Eval.Val → IR.Expr
 
 /-- The first proved counted form starts the function body. Its body uses the
 existing state translation, so returns and nested loops remain refused. -/
-def translateTop (ctx : Ctx) (env : Env) (result : Ty) : List Stmt → TM IR.Body
+def translateTop (ctx : Ctx) (env : Env) (result : Ty) (monadic : Bool) : List Stmt → TM IR.Body
   | .forStmt sp init cond post (.block bsp ss) :: rest => do
     let some (index, items) := Eval.countedHead init cond post
       | reject sp "a counted loop needs literal bounds, ++, and at most 256 iterations"
@@ -403,10 +579,10 @@ def translateTop (ctx : Ctx) (env : Env) (result : Ty) : List Stmt → TM IR.Bod
     let inner ← declare env sp index .int
     let changed := (env.filter fun l => (changesList ss).contains l.name)
     let body ← translateStmts ctx inner (.state (changed.map (·.name))) stmtFuel ss
-    let next ← translateStmts ctx env (.ret result) stmtFuel rest
+    let next ← translateStmts ctx env (.ret result monadic) stmtFuel rest
     return tolean.Core.Loop.lowerLoop sp (changed.map fun l => (l.name, l.type.lean))
       index .int body (.list (items.map valueCode) .int) next false none
-  | ss => translateStmts ctx env (.ret result) stmtFuel ss
+  | ss => translateStmts ctx env (.ret result monadic) stmtFuel ss
 
 /-- The parameters and their types. A parameter without a name, as in
 `func f(int) int`, still takes an argument, so this part refuses it and the
@@ -427,9 +603,17 @@ def translateFunc (ctx : Ctx) : Decl → TM (IR.Decl × FnSig)
     unless (ps.map (·.1)).Nodup do reject sp "two parameters have one name"
     unless ps.all (nameOK ·.1) do reject sp "a parameter has a reserved name"
     let env : Env := ps.map fun (n, t) => ⟨n, t⟩
-    let b ← translateTop ctx env result body
-    return (.function name (ps.map fun (n, t) => (n, t.lean)) result.lean b,
-      ⟨name, ps.map (·.2), result⟩)
+    let b ← translateTop ctx env result false body
+    if !b.throws then
+      return (.function name (ps.map fun (n, t) => (n, t.lean)) result.lean b,
+        ⟨name, ps.map (·.2), result, false⟩)
+    -- The function can panic, so it returns an `Except` and `pure` of its
+    -- value. The output writes `throw`, which a declaration of the package
+    -- would hide.
+    if ctx.program.names.contains "throw" then reject sp "the package declares 'throw'"
+    let b ← translateTop ctx env result true body
+    return (.function name (ps.map fun (n, t) => (n, t.lean)) (.except .string result.lean) b,
+      ⟨name, ps.map (·.2), result, true⟩)
   | .func sp .. => reject sp "only a function with one result and no receiver can be pure"
   | .gen _ => throw "not a function"
 

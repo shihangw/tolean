@@ -1,6 +1,7 @@
 import tolean.Go.Spec.Basic
 import tolean.Go.Syntax.Ast
 import tolean.Core.Loop
+import tolean.Core.Except
 
 /-!
 The meaning of the pure Go subset, as an interpreter in Lean.
@@ -8,12 +9,14 @@ The meaning of the pure Go subset, as an interpreter in Lean.
 `eval` and `exec` run the syntax tree that the parser returns, with no
 translation in between. `translate_sound` in `tolean/Go/Proof/Package.lean`
 proves that when a function that the translator writes as IR gives a value,
-this interpreter gives the same value for the same call. So a pure function
-trusts this interpreter, and no longer the translator.
+this interpreter gives the same value for the same call, and that when it
+panics, this interpreter panics too. So a pure function trusts this
+interpreter, and no longer the translator.
 
 This file is trusted. Each rule follows the Go specification for the values
-that the subset has, and the comments name the section. A rule returns
-`none` when the program would panic or when it leaves the subset.
+that the subset has, and the comments name the section. An expression gives
+a `Res`: a value, a panic, or `none` when it leaves the subset. A statement
+gives an `Outcome`, which can be a panic too.
 
 The interpreter assumes a program that `go build` accepts. It does not check
 types, so it gives a value to some programs that Go refuses, such as
@@ -23,6 +26,10 @@ refuses such programs.
 - `int` and `int64` values are `Int`. Each `+`, `-` and `*` wraps its
   result into the 64-bit range with `wrap64`, as Go's two's-complement
   arithmetic does. So `int` is 64 bits wide, as on every 64-bit platform.
+- `/` and `%` on integers panic when the divisor is zero (Go specification,
+  "Integer operators" and "Run-time panics"). The panic value is the runtime
+  error, which the interpreter models by its message,
+  `runtime error: integer divide by zero`.
 - A string is a Lean `String`. Go strings are bytes, but `+` and `==` on
   valid UTF-8 agree with `++` and `=` on Lean strings. The interpreter refuses
   the escapes that can make other bytes, such as `\xff`.
@@ -30,6 +37,7 @@ refuses such programs.
 namespace tolean.Go.Eval
 
 open tolean.Go.Syntax
+open tolean.Core (Res)
 
 /-- A Go value of the subset. -/
 inductive Val where
@@ -109,11 +117,12 @@ def stringLit? (raw : String) : Option String :=
 
 /-- A binary operator of the subset. -/
 inductive BinOp where
-  | add | sub | mul | eq | ne | lt | le | gt | ge | land | lor
+  | add | sub | mul | quo | rem | eq | ne | lt | le | gt | ge | land | lor
 deriving DecidableEq, Repr, Inhabited
 
 def BinOp.ofString? : String → Option BinOp
   | "+" => some .add | "-" => some .sub | "*" => some .mul
+  | "/" => some .quo | "%" => some .rem
   | "==" => some .eq | "!=" => some .ne
   | "<" => some .lt | "<=" => some .le | ">" => some .gt | ">=" => some .ge
   | "&&" => some .land | "||" => some .lor
@@ -147,6 +156,24 @@ def binary : BinOp → Val → Val → Option Val
   | .lor, .bool a, .bool b => some (.bool (a || b))
   | _, _, _ => none
 
+/-- The value of the run-time panic that an integer division by zero causes
+(Go specification, "Run-time panics"). Go panics with a `runtime.Error`, and
+the interpreter models it by the text of its `Error` method. -/
+def divideByZero : Val := .str "runtime error: integer divide by zero"
+
+/-- A binary operator on the values of its operands, which can panic (Go
+specification, "Integer operators"). `/` truncates toward zero and `%` takes
+the sign of the dividend, as `Int.tdiv` and `Int.tmod` do. A zero divisor
+panics. The quotient of the most negative value and `-1` overflows, and it
+wraps to the most negative value, as `wrap64` does. The remainder never
+overflows. The other operators are `binary`. -/
+def operate : BinOp → Val → Val → Res Val Val
+  | .quo, .int a, .int b =>
+    if b = 0 then .fail divideByZero else .ok (.int (wrap64 (a.tdiv b)))
+  | .rem, .int a, .int b =>
+    if b = 0 then .fail divideByZero else .ok (.int (a.tmod b))
+  | o, a, b => Res.lift (binary o a b)
+
 /-- A unary operator on the value of its operand. `-` wraps, as `0 - x`
 does. -/
 def unary : String → Val → Option Val
@@ -165,6 +192,7 @@ def AssignKind.ofString? : String → Option AssignKind
   | ":=" => some .define | "=" => some .assign
   | "+=" => some (.compound .add) | "-=" => some (.compound .sub)
   | "*=" => some (.compound .mul)
+  | "/=" => some (.compound .quo) | "%=" => some (.compound .rem)
   | _ => none
 
 /-- `x++` is `x += 1`, and `x--` is `x -= 1` (Go specification, "IncDec
@@ -176,20 +204,42 @@ def incDecOp? : String → Option BinOp
 /-! ### Programs -/
 
 /-- What a statement list does: it runs to its end with the variables it
-leaves, or it returns a value. -/
+leaves, it returns a value, or it panics with a value. -/
 inductive Outcome where
   | normal (env : Env)
   | ret (v : Val)
+  | panic (v : Val)
 deriving Inhabited
 
-def Outcome.toLoop : Outcome → tolean.Core.Loop.Outcome Env Val
+/-- A loop ends the function both when its body returns and when it panics,
+so the shared loop runner carries both as its return value: `.ok` for a
+return and `.error` for a panic. -/
+def Outcome.toLoop : Outcome → tolean.Core.Loop.Outcome Env (Except Val Val)
   | .normal env => .normal env
-  | .ret value => .ret value
+  | .ret value => .ret (.ok value)
+  | .panic value => .ret (.error value)
 
-def Outcome.fromLoop : tolean.Core.Loop.Outcome Env Val → Option Outcome
+def Outcome.fromLoop : tolean.Core.Loop.Outcome Env (Except Val Val) → Option Outcome
   | .normal env => some (.normal env)
-  | .ret value => some (.ret value)
+  | .ret (.ok value) => some (.ret value)
+  | .ret (.error value) => some (.panic value)
   | _ => none
+
+/-- Run `k` on the value of an expression. When the expression panics, the
+statement panics with the same value. -/
+def withValue (r : Res Val Val) (k : Val → Option Outcome) : Option Outcome :=
+  match r with
+  | none => none
+  | some (.error x) => some (.panic x)
+  | some (.ok v) => k v
+
+@[simp] theorem withValue_ok (v : Val) (k : Val → Option Outcome) :
+    withValue (some (.ok v)) k = k v := rfl
+
+@[simp] theorem withValue_error (x : Val) (k : Val → Option Outcome) :
+    withValue (some (.error x)) k = some (.panic x) := rfl
+
+@[simp] theorem withValue_none (k : Val → Option Outcome) : withValue none k = none := rfl
 
 /-- A finite counted head with literal bounds. The strict bound keeps the
 last increment within Go's signed 64-bit range. -/
@@ -291,76 +341,94 @@ def zeroOf (p : Program) : Expr → Option Val
       | _ => none
   | _ => none
 
+/-- Every statement has a positive size, so that a statement with an init
+statement is larger than the same statement without it. -/
+theorem stmt_size_pos (s : Stmt) : 0 < sizeOf s := by
+  cases s <;> simp <;> omega
+
 mutual
 
 /-- The value of `e`. `fuel` bounds the depth of nested calls, so that the
-interpreter is a total function. -/
-def eval (p : Program) (fuel : Nat) (env : Env) : Expr → Option Val
+interpreter is a total function. Operands are evaluated from left to right
+(Go specification, "Order of evaluation"), and a panic in one ends the
+evaluation. -/
+def eval (p : Program) (fuel : Nat) (env : Env) : Expr → Res Val Val
   -- A variable hides a predeclared name (Go specification, "Declarations
   -- and scope").
   | .ident _ name =>
     match env.lookup name with
-    | some v => some v
-    | none => predeclared p name
-  | .lit _ .int raw => do return .int (← intLit? raw)
-  | .lit _ .string raw => do return .str (← stringLit? raw)
+    | some v => .ok v
+    | none => Res.lift (predeclared p name)
+  | .lit _ .int raw => Res.lift (do return .int (← intLit? raw))
+  | .lit _ .string raw => Res.lift (do return .str (← stringLit? raw))
   | .paren _ e => eval p fuel env e
-  | .unary _ op a => do unary op (← eval p fuel env a)
+  | .unary _ op a => (eval p fuel env a).andThen fun x => Res.lift (unary op x)
   -- `&&` and `||` evaluate the right operand only when the left one does
   -- not decide the result (Go specification, "Logical operators").
-  | .binary _ op l r => do
+  | .binary _ op l r =>
     match BinOp.ofString? op with
     | some .land =>
-      let .bool x ← eval p fuel env l | none
-      if x then
-        let .bool y ← eval p fuel env r | none
-        return .bool y
-      else return .bool false
+      (eval p fuel env l).andThen fun
+        | .bool true => (eval p fuel env r).andThen fun
+          | .bool y => .ok (.bool y)
+          | _ => none
+        | .bool false => .ok (.bool false)
+        | _ => none
     | some .lor =>
-      let .bool x ← eval p fuel env l | none
-      if x then return .bool true
-      else
-        let .bool y ← eval p fuel env r | none
-        return .bool y
-    | some o => binary o (← eval p fuel env l) (← eval p fuel env r)
+      (eval p fuel env l).andThen fun
+        | .bool true => .ok (.bool true)
+        | .bool false => (eval p fuel env r).andThen fun
+          | .bool y => .ok (.bool y)
+          | _ => none
+        | _ => none
+    | some o => (eval p fuel env l).andThen fun x => (eval p fuel env r).andThen fun y => operate o x y
     | none => none
   -- A call of a function of the package (Go specification, "Calls"): the
   -- arguments are evaluated in order, each parameter is a new variable
   -- bound to its argument, and the body runs. A variable of the same name
-  -- would hide the function, and the subset has no function values.
-  | .call _ (.ident _ f) args false => do
+  -- would hide the function, and the subset has no function values. A
+  -- panic in the body is a panic of the call (Go specification, "Handling
+  -- panics"), because the subset has no `recover`.
+  | .call _ (.ident _ f) args false =>
     if (env.lookup f).isSome then none
-    let vs ← evalList p fuel env args
-    match fuel with
-    | 0 => none
-    | fuel + 1 =>
-      let (params, body) ← p.funcs.lookup f
-      if params.length != vs.length then none
-      match ← execStmt p fuel (params.zip vs).reverse body with
-      | .ret v => some v
-      | .normal _ => none
+    else (evalList p fuel env args).andThen fun vs =>
+      match fuel with
+      | 0 => none
+      | fuel + 1 =>
+        match p.funcs.lookup f with
+        | none => none
+        | some (params, body) =>
+          if params.length != vs.length then none
+          else match execStmt p fuel (params.zip vs).reverse body with
+            | some (.ret v) => .ok v
+            | some (.panic x) => .fail x
+            | _ => none
   | _ => none
 termination_by e => (fuel, sizeOf e, 0)
 
-def evalList (p : Program) (fuel : Nat) (env : Env) : List Expr → Option (List Val)
-  | [] => some []
-  | e :: es => do return (← eval p fuel env e) :: (← evalList p fuel env es)
+def evalList (p : Program) (fuel : Nat) (env : Env) : List Expr → Res Val (List Val)
+  | [] => .ok []
+  | e :: es => (eval p fuel env e).andThen fun v => (evalList p fuel env es).andThen fun vs => .ok (v :: vs)
 termination_by es => (fuel, sizeOf es, 0)
 
 def execStmt (p : Program) (fuel : Nat) (env : Env) : Stmt → Option Outcome
-  | .ret _ [e] => do return .ret (← eval p fuel env e)
-  | .assign _ op [.ident _ x] [e] => do
+  | .ret _ [e] => withValue (eval p fuel env e) fun v => some (.ret v)
+  | .assign _ op [.ident _ x] [e] =>
     match AssignKind.ofString? op with
     -- `x := e` declares `x` in the innermost scope.
-    | some .define => return .normal ((x, ← eval p fuel env e) :: env)
+    | some .define => withValue (eval p fuel env e) fun v => some (.normal ((x, v) :: env))
     -- `x = e` changes the innermost variable `x`.
     | some .assign =>
-      let v ← eval p fuel env e
-      let _ ← env.lookup x
-      return .normal (env.set x v)
+      withValue (eval p fuel env e) fun v => do
+        let _ ← env.lookup x
+        return .normal (env.set x v)
+    -- `x op= e` is `x = x op e`, with `x` evaluated once.
     | some (.compound o) =>
-      let old ← env.lookup x
-      return .normal (env.set x (← binary o old (← eval p fuel env e)))
+      match env.lookup x with
+      | none => none
+      | some old =>
+        withValue ((eval p fuel env e).andThen fun v => operate o old v) fun w =>
+          some (.normal (env.set x w))
     | none => none
   | .incDec _ op (.ident _ x) => do
     let o ← incDecOp? op
@@ -368,26 +436,67 @@ def execStmt (p : Program) (fuel : Nat) (env : Env) : Stmt → Option Outcome
     return .normal (env.set x (← binary o old (.int 1)))
   -- `var x T = e` and `var x T` (Go specification, "Variable
   -- declarations"): without a value, `x` starts at the zero value of `T`.
-  | .decl _ (.mk _ "var" [.value _ [x] (some type) values]) => do
-    let v ← match values with
-      | [e] => eval p fuel env e
-      | [] => zeroOf p type
-      | _ => none
-    return .normal ((x, v) :: env)
+  | .decl _ (.mk _ "var" [.value _ [x] (some type) values]) =>
+    match values with
+    | [e] => withValue (eval p fuel env e) fun v => some (.normal ((x, v) :: env))
+    | [] => do return .normal ((x, ← zeroOf p type) :: env)
+    | _ => none
   -- `if c { … } else …` (Go specification, "If statements"). Each branch is
   -- a block, so what it declares goes out of scope at its end.
-  | .ifStmt _ none c t els => do
-    let .bool b ← eval p fuel env c | none
-    let out ← if b then execStmt p fuel env t
-      else match els with
-        | some f => execStmt p fuel env f
-        | none => some (.normal env)
-    match out with
+  -- `if s; c { … } else …` (Go specification, "If statements"): the simple
+  -- statement `s` runs first, and the `if` is its own implicit block, so what
+  -- `s` declares goes out of scope at the end of the `if`.
+  | .ifStmt sp (some s) c t els => do
+    match ← execStmt p fuel env s with
     | .ret v => some (.ret v)
-    | .normal env' => some (.normal (env'.drop (env'.length - env.length)))
+    | .panic x => some (.panic x)
+    | .normal env1 =>
+      have := stmt_size_pos s
+      match ← execStmt p fuel env1 (.ifStmt sp none c t els) with
+      | .ret v => some (.ret v)
+      | .panic x => some (.panic x)
+      | .normal env' => some (.normal (env'.drop (env'.length - env.length)))
+  | .ifStmt _ none c t els =>
+    withValue (eval p fuel env c) fun
+      | .bool b => do
+        let out ← if b then execStmt p fuel env t
+          else match els with
+            | some f => execStmt p fuel env f
+            | none => some (.normal env)
+        match out with
+        | .ret v => some (.ret v)
+        | .panic x => some (.panic x)
+        | .normal env' => some (.normal (env'.drop (env'.length - env.length)))
+      | _ => none
+  -- `switch s; x { case a, b: … default: … }` (Go specification, "Switch
+  -- statements"). The simple statement `s` runs first, in the implicit block
+  -- of the `switch`.
+  | .switchStmt sp (some s) tag bsp clauses => do
+    match ← execStmt p fuel env s with
+    | .ret v => some (.ret v)
+    | .panic x => some (.panic x)
+    | .normal env1 =>
+      have := stmt_size_pos s
+      match ← execStmt p fuel env1 (.switchStmt sp none tag bsp clauses) with
+      | .ret v => some (.ret v)
+      | .panic x => some (.panic x)
+      | .normal env' => some (.normal (env'.drop (env'.length - env.length)))
+  -- The switch expression is evaluated exactly once, and a missing one stands
+  -- for the boolean value `true`. Each clause is an implicit block, so what
+  -- it declares goes out of scope at its end. The subset has no
+  -- `fallthrough`: the parser refuses it.
+  | .switchStmt _ none tag _ clauses =>
+    withValue (match tag with
+        | none => Res.ok (.bool true)
+        | some x => eval p fuel env x) fun v => do
+      match ← execClauses p fuel env v clauses none with
+      | .ret v => some (.ret v)
+      | .panic x => some (.panic x)
+      | .normal env' => some (.normal (env'.drop (env'.length - env.length)))
   | .block _ body => do
     match ← exec p fuel env body with
     | .ret v => some (.ret v)
+    | .panic x => some (.panic x)
     | .normal env' => some (.normal (env'.drop (env'.length - env.length)))
   -- Go specification, "For statements with for clause". The body cannot
   -- change the counter, and literal bounds cannot change between iterations.
@@ -400,29 +509,64 @@ def execStmt (p : Program) (fuel : Nat) (env : Env) : Stmt → Option Outcome
       (fun outer inner => some (inner.drop (inner.length - outer.length))) env items
     match out with
     | .normal inner => some (.normal inner)
-    | .ret value => some (.ret value)
+    | .ret (.ok value) => some (.ret value)
+    | .ret (.error value) => some (.panic value)
     | _ => none
   | _ => none
 termination_by s => (fuel, sizeOf s, 0)
 
-/-- Run statements in order, until one returns. -/
+/-- The clauses of an expression switch whose switch expression has the
+value `v` (Go specification, "Expression switches"). The case expressions are
+evaluated left to right and top to bottom, and the first one that equals `v`
+picks its clause. When none does, the `default` clause runs, wherever it
+stands. `dflt` is the body of the `default` clause seen so far. A panic in a
+case expression is a panic of the switch. -/
+def execClauses (p : Program) (fuel : Nat) (env : Env) (v : Val) :
+    List CaseClause → Option (List Stmt) → Option Outcome
+  | [], none => some (.normal env)
+  | [], some body => exec p fuel env body
+  | .mk _ none body :: rest, _ => execClauses p fuel env v rest (some body)
+  | .mk _ (some es) body :: rest, dflt =>
+    match matchAny p fuel env v es with
+    | none => none
+    | some (.error x) => some (.panic x)
+    | some (.ok true) => exec p fuel env body
+    | some (.ok false) => execClauses p fuel env v rest dflt
+termination_by cs dflt => (fuel, sizeOf cs + sizeOf dflt, 0)
+
+/-- Some case expression of `es` equals `v`. They are evaluated in order,
+until one does. -/
+def matchAny (p : Program) (fuel : Nat) (env : Env) (v : Val) : List Expr → Res Val Bool
+  | [] => Res.ok false
+  | e :: es => (eval p fuel env e).andThen fun w =>
+    match eqVal v w with
+    | none => none
+    | some true => Res.ok true
+    | some false => matchAny p fuel env v es
+termination_by es => (fuel, sizeOf es, 0)
+
+/-- Run statements in order, until one returns or panics. -/
 def exec (p : Program) (fuel : Nat) (env : Env) : List Stmt → Option Outcome
   | [] => some (.normal env)
   | s :: rest => do
     match ← execStmt p fuel env s with
     | .ret v => some (.ret v)
+    | .panic x => some (.panic x)
     | .normal env' => exec p fuel env' rest
 termination_by ss => (fuel, sizeOf ss, 0)
 
 end
 
 /-- Call the function `name` of `p` with `args`, as a call expression
-would. -/
-def runIn (p : Program) (name : String) (args : List Val) (fuel : Nat := 64) : Option Val := do
+would: `.ok` of the value it returns, or `.error` of the value it panics
+with. -/
+def runIn (p : Program) (name : String) (args : List Val) (fuel : Nat := 64) :
+    Option (Except Val Val) := do
   let (params, body) ← p.funcs.lookup name
   if params.length != args.length then none
   match ← execStmt p fuel (params.zip args).reverse body with
-  | .ret v => some v
+  | .ret v => some (.ok v)
+  | .panic x => some (.error x)
   | .normal _ => none
 
 end tolean.Go.Eval

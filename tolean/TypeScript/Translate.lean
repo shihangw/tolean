@@ -5485,7 +5485,10 @@ def translateErrorTypes (m : Module) : TM (List IR.Decl) := do
     (c.name, ("message", IR.Ty.string) :: c.fields.map fun (n, t) => (n, t.lean))
   return [.errors "Thrown" members]
 
-/-- Check a type re-export against the translated source module. -/
+/-- Check a re-export against the translated source module. A name without
+`type` must be a function or a string enum that the source module exports,
+directly or through its own re-exports. A name with `type` must be an
+interface or a type alias. -/
 def reexportsError? (c : Ctx) (s : Span) (names : List ImportName) (source : String) :
     Option (Span × String) :=
   match Eval.resolvePath c.file source with
@@ -5498,7 +5501,13 @@ def reexportsError? (c : Ctx) (s : Span) (names : List ImportName) (source : Str
         some (s, s!"'{source}' is translated for a newer edition than this file")
       else names.findSome? fun n =>
         if !n.typeOnly then
-          some (n.span, "re-exported values are not supported; use 'export type' for an interface or type alias")
+          if iface.functions.any (·.name == n.name) || (iface.stringEnum? n.name).isSome then none
+          else if (iface.aliases.any (·.name == n.name)) ||
+              (iface.structs.any fun i => i.name == n.name && i.exported) ||
+              (iface.enums.any fun e => e.name == n.name && e.exported) ||
+              (iface.unions.any fun u => u.name == n.name && u.exported) then
+            some (n.span, s!"'{n.name}' is a type; re-export it with 'type {n.name}'")
+          else some (n.span, s!"'{source}' exports no function or string enum named '{n.name}'")
         else if (iface.aliases.any (·.name == n.name)) ||
             (iface.structs.any fun i => i.name == n.name && i.exported) then none
         else some (n.span, s!"'{source}' exports no interface or type alias named '{n.name}'")
@@ -5685,11 +5694,31 @@ def exportListed (m : Module) : List ImportName :=
     | .exports _ names none => names
     | _ => []
 
-/-- A name that two export lists of `m` name, or one list twice. -/
-def duplicateExport? (m : Module) : Option ImportName :=
-  let listed := exportListed m
-  listed.zipIdx.findSome? fun (n, i) =>
-    if (listed.take i).any (·.name == n.name) then some n else none
+/-- The name that a declaration of `m` exports with `export` before it. -/
+def Decl.exportedName? : Decl → Option String
+  | .function _ true name _ _ _ _ | .interface _ true name _ _ | .typeAlias _ true name _ _
+  | .enum _ true name _ | .errorClass _ true name _ => some name
+  | .classDecl d => if d.exported then some d.name else none
+  | _ => none
+
+/-- A name that two export lists of `m` name, or one list twice, with the
+error. A module may export a name only once (ECMA-262 §16.2.1.1), so a
+re-exported name may not be a name that a declaration of the file exports
+either. -/
+def duplicateExport? (m : Module) : Option (ImportName × String) :=
+  let listed := m.decls.flatMap fun
+    | .exports _ names _ => names
+    | _ => []
+  let declared := m.decls.filterMap Decl.exportedName?
+  let reexported := (m.decls.flatMap fun
+    | .exports _ names (some _) => names
+    | _ => [])
+  (listed.zipIdx.findSome? fun (n, i) =>
+    if (listed.take i).any (·.name == n.name) then some (n, s!"'{n.name}' is in two export lists") else none).orElse
+  fun _ => reexported.findSome? fun n =>
+    if declared.contains n.name then
+      some (n, s!"'{n.name}' is exported twice: a declaration of this file exports it too")
+    else none
 
 /-- The declarations of `m`, translated. This is the translator as a function
 from one syntax tree to another: `translate` parses the source before it and
@@ -5699,7 +5728,7 @@ def translateDecls (m : Module) : TM (List IR.Decl) := do
     | .ident name => some name
     | _ => none
   modify fun c => { c with borrows := Eval.moduleBorrows m, inlineReserved := reserved, inlinePrefixes := [] }
-  if let some n := duplicateExport? m then reject n.span s!"'{n.name}' is in two export lists"
+  if let some (n, message) := duplicateExport? m then reject n.span message
   m.decls.forM fun decl => do
     if decl matches .errorClass _ _ _ _ then prepareInline decl else pure ()
   let errorShapes := (← get).inlineStructs.map StructInfo.inlineDecl
@@ -5799,15 +5828,39 @@ def Ctx.reexportInterfaces (c : Ctx) (listed : List (List ImportName × String))
     let iface ← c.interfaces.lookup file
     return (names, iface)
 
+/-- The names that `m` re-exports as values: `export { a } from "./x.ts"`. -/
+def reexportValueNames (m : Module) : List String :=
+  (reexportListed m).flatMap fun (names, _) => (names.filter (!·.typeOnly)).map (·.name)
+
+/-- The functions that the file re-exports. Each keeps the file that declares
+it, so a call through the re-export names that file's definition. The name
+of each is one that the file does not export itself, and the file it comes
+from is the one that `Eval.resolveExport` follows. -/
+def Ctx.reexportedFunctions (c : Ctx) (m : Module) : List FnInfo :=
+  (reexportValueNames m).filterMap fun name =>
+    if Eval.exportsFunction m name then none else do
+      let target ← Eval.reexportSource c.file m name
+      let iface ← c.interfaces.lookup target
+      iface.functions.find? (·.name == name)
+
+/-- The string enums that the file re-exports, with the enum's own file, in
+the same way. -/
+def Ctx.reexportedEnums (c : Ctx) (m : Module) : List EnumInfo :=
+  (reexportValueNames m).filterMap fun name =>
+    if ((Eval.enumsOf m true).lookup name).isSome then none else do
+      let target ← Eval.reexportSource c.file m name
+      let iface ← c.interfaces.lookup target
+      (iface.stringEnum? name).map (·.1)
+
 def Ctx.interface (c : Ctx) (usesNumber : Bool) (numberVar : String)
-    (listed : List (List ImportName × String) := []) : Interface :=
-  { functions := c.functions.filter fun f => f.exported && f.file == c.file,
+    (listed : List (List ImportName × String) := []) (m : Module := ⟨[]⟩) : Interface :=
+  { functions := c.functions.filter (fun f => f.exported && f.file == c.file) ++ c.reexportedFunctions m,
     structs := c.reachableStructs ++ (c.reexportInterfaces listed).flatMap fun (names, iface) =>
       iface.structs.filter fun i => i.exported && names.any fun n => n.typeOnly && n.name == i.name,
     aliases := (c.aliases.filter fun a => a.exported && a.file == c.file) ++
       (c.reexportInterfaces listed).flatMap fun (names, iface) =>
         iface.aliases.filter fun a => names.any fun n => n.typeOnly && n.name == a.name,
-    enums := c.reachableEnums,
+    enums := c.reachableEnums ++ c.reexportedEnums m,
     unions := c.reachableUnions,
     usesNumber, numberVar, target := c.target, errorClasses := !c.errorClasses.isEmpty,
     sortObligations := c.sortObligations }
@@ -5854,6 +5907,7 @@ def translateFile (file source : String) (target : Edition := .default)
   let m := if resolved.isEmpty then m else
     { m with decls := m.decls.map fun
       | .import s names path => .import s names ((resolved.lookup path).getD path)
+      | .exports s names (some path) => .exports s names (some ((resolved.lookup path).getD path))
       | d => d }
   let src := source.toList.toArray
   -- Every identifier in the source, at any level. A Lean name in this list is
@@ -5892,7 +5946,7 @@ def translateFile (file source : String) (target : Edition := .default)
     let usesNumber := usesNumber || decls.any (tolean.IR.Decl.anyOp (· == .arrayEntries))
     let names := { names with generic := usesNumber }
     return (m, names, decls,
-      (ctx'.withExports (exportListed m)).interface usesNumber names.typeParam (reexportListed m))
+      (ctx'.withExports (exportListed m)).interface usesNumber names.typeParam (reexportListed m) m)
 
 /-- Parse and translate `source`, the TypeScript file `file`: the parsed
 module, the names that the printer needs, and the Tolean IR. -/

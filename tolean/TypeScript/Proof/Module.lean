@@ -192,9 +192,10 @@ theorem bound_unique {ds : List Decl} (h : (ds.flatMap boundNames).Nodup) {a b :
     · subst hb₁; exact absurd rfl (h3 _ hxb _ (List.mem_flatMap.mpr ⟨a, ha₁, hxa⟩))
     · exact ih h2 ha₁ hb₁
 
-/-- The interfaces name the files they come from. -/
-def IfacesSelf (ifaces : List (String × Interface)) : Prop :=
-  ∀ t i, ifaces.lookup t = some i → ∀ g ∈ i.functions, g.file = t
+/-- Each function that an interface offers comes from one of the files of the
+interfaces: the file itself, or a file before it that it re-exports from. -/
+def IfacesKnown (ifaces : List (String × Interface)) : Prop :=
+  ∀ t i, ifaces.lookup t = some i → ∀ g ∈ i.functions, g.file ∈ ifaces.map (·.1)
 
 theorem params_fold {α : Type}
     {g : Env × List (String × α) × List Ty → Param → TM (Env × List (String × α) × List Ty)}
@@ -433,25 +434,25 @@ theorem translateFunction_ok {thr : String → Bool} {cls : String → Option (O
         rw [hi] at hp
         simpa [hn, List.getElem?_map] using hp
 
-/-- A reference of an import's name stays one when the import names one more. -/
-theorem import_refs_cons {target : String} {n : ImportName} {ns : List ImportName} {r : DeclRef}
-    (h : r ∈ (ns.filter (!·.typeOnly)).map fun n => (⟨target, n.name⟩ : DeclRef)) :
-    r ∈ ((n :: ns).filter (!·.typeOnly)).map fun n => (⟨target, n.name⟩ : DeclRef) := by
-  obtain ⟨a, ha, rfl⟩ := List.mem_map.mp h
+/-- A value name of an import stays one when the import names one more. -/
+theorem import_via_cons {n : ImportName} {ns : List ImportName} {q : ImportName → Prop}
+    (h : ∃ a ∈ ns.filter (!·.typeOnly), q a) : ∃ a ∈ (n :: ns).filter (!·.typeOnly), q a := by
+  obtain ⟨a, ha, hq⟩ := h
   obtain ⟨ha₁, ha₂⟩ := List.mem_filter.mp ha
-  exact List.mem_map.mpr ⟨a, List.mem_filter.mpr ⟨List.mem_cons_of_mem _ ha₁, ha₂⟩, rfl⟩
+  exact ⟨a, List.mem_filter.mpr ⟨List.mem_cons_of_mem _ ha₁, ha₂⟩, hq⟩
 
 /-- What an import does: it adds functions for names that it imports as
-values, from the file it names, and keeps the function names distinct. A name
-that it imports as a value may also be a string enum, which adds no function. -/
+values, as the interface of the file it names offers them, and keeps the
+function names distinct. A name that it imports as a value may also be a
+string enum, which adds no function. -/
 theorem translateImport_ok {sp : Span} {names : List ImportName} {source : String} {s s' : Ctx}
-    {u : Unit} (hself : IfacesSelf s.interfaces) (h : translateImport sp names source s = .ok u s') :
+    {u : Unit} (h : translateImport sp names source s = .ok u s') :
     (s'.file = s.file ∧ s'.borrows = s.borrows) ∧ s'.interfaces = s.interfaces ∧
       ∃ more, s'.functions = s.functions ++ more ∧
-        (∀ f ∈ more, f.ref ∈ declRefs s.file (.import sp names source)) ∧
+        (∀ f ∈ more, ∃ r ∈ declRefs s.file (.import sp names source), r.name = f.name ∧
+          ∃ i, s.interfaces.lookup r.file = some i ∧ ∃ g ∈ i.functions, g.ref = f.ref) ∧
         (∀ f ∈ more, f.exported = false ∧ f.borrow = none) ∧
-        ((s.functions.map (·.name)).Nodup → (s'.functions.map (·.name)).Nodup) ∧
-        (∀ f ∈ more, ∃ i, s.interfaces.lookup f.file = some i ∧ ∃ g ∈ i.functions, g.name = f.name) := by
+        ((s.functions.map (·.name)).Nodup → (s'.functions.map (·.name)).Nodup) := by
   unfold translateImport at h
   simp only [bind_ok, get_ok, orReject_ok] at h
   obtain ⟨c, s₁, ⟨rfl, rfl⟩, target, s₂, ⟨htarget, rfl⟩, iface, s₃, ⟨hiface, rfl⟩, hloop⟩ := h
@@ -461,24 +462,22 @@ theorem translateImport_ok {sp : Span} {names : List ImportName} {source : Strin
   rename_i hyear
   clear hyear
   simp only [pure_bind] at hloop
-  have hgf := hself _ _ hiface
   simp only [declRefs, htarget]
   suffices key : (s'.file = s₁.file ∧ s'.borrows = s₁.borrows) ∧ s'.interfaces = s₁.interfaces ∧
       ∃ more, s'.functions = s₁.functions ++ more ∧
-        (∀ f ∈ more, f.ref ∈ (names.filter (!·.typeOnly)).map (fun n => (⟨target, n.name⟩ : DeclRef))) ∧
+        (∀ f ∈ more, ∃ a ∈ names.filter (!·.typeOnly), a.name = f.name ∧ ∃ g ∈ iface.functions, g.ref = f.ref) ∧
         (∀ f ∈ more, f.exported = false ∧ f.borrow = none) ∧
-        ((s₁.functions.map (·.name)).Nodup → (s'.functions.map (·.name)).Nodup) ∧
-        (∀ f ∈ more, f.file = target ∧ ∃ g ∈ iface.functions, g.name = f.name) by
-    obtain ⟨hf, hi, more, hfns, hrefs, hex, hnd, horig⟩ := key
-    refine ⟨hf, hi, more, hfns, hrefs, hex, hnd, fun f hf' => ?_⟩
-    obtain ⟨h1, g, hg, hn⟩ := horig f hf'
-    exact ⟨iface, by rw [h1]; exact hiface, g, hg, hn⟩
-  clear hiface htarget hself
+        ((s₁.functions.map (·.name)).Nodup → (s'.functions.map (·.name)).Nodup) by
+    obtain ⟨hf, hi, more, hfns, hvia, hex, hnd⟩ := key
+    refine ⟨hf, hi, more, hfns, fun f hf' => ?_, hex, hnd⟩
+    obtain ⟨a, ha, han, g, hg, hgr⟩ := hvia f hf'
+    exact ⟨⟨target, a.name⟩, List.mem_map.mpr ⟨a, ha, rfl⟩, han, iface, hiface, g, hg, hgr⟩
+  clear hiface htarget
   induction names generalizing s₁ with
   | nil =>
     simp only [List.forM, pure_ok] at hloop
     obtain ⟨-, rfl⟩ := hloop
-    exact ⟨⟨rfl, rfl⟩, rfl, [], by simp, by simp, by simp, id, by simp⟩
+    exact ⟨⟨rfl, rfl⟩, rfl, [], by simp, by simp, by simp, id⟩
   | cons n ns ih =>
     simp only [List.forM, bind_ok] at hloop
     obtain ⟨u₁, s₄, hstep, hloop⟩ := hloop
@@ -492,27 +491,27 @@ theorem translateImport_ok {sp : Span} {names : List ImportName} {source : Strin
       | some info =>
         simp only [hfa, modify_ok] at hstep
         subst hstep
-        obtain ⟨hf, hi, more, hfns, hrefs, hex, hnd, horig⟩ := ih _ hloop
-        exact ⟨hf, hi, more, hfns, fun f hf' => import_refs_cons (hrefs f hf'), hex, hnd, horig⟩
+        obtain ⟨hf, hi, more, hfns, hvia, hex, hnd⟩ := ih _ hloop
+        exact ⟨hf, hi, more, hfns, fun f hf' => import_via_cons (hvia f hf'), hex, hnd⟩
       | none =>
       cases hfe : iface.enums.find? (fun e => e.name == n.name && e.exported) with
       | some info =>
         simp only [hfa, hfe, modify_ok] at hstep
         subst hstep
-        obtain ⟨hf, hi, more, hfns, hrefs, hex, hnd, horig⟩ := ih _ hloop
-        exact ⟨hf, hi, more, hfns, fun f hf' => import_refs_cons (hrefs f hf'), hex, hnd, horig⟩
+        obtain ⟨hf, hi, more, hfns, hvia, hex, hnd⟩ := ih _ hloop
+        exact ⟨hf, hi, more, hfns, fun f hf' => import_via_cons (hvia f hf'), hex, hnd⟩
       | none =>
       cases hfu : iface.unions.find? (fun u => u.name == n.name && u.exported) with
       | some info =>
         simp only [hfa, hfe, hfu, modify_ok] at hstep
         subst hstep
-        obtain ⟨hf, hi, more, hfns, hrefs, hex, hnd, horig⟩ := ih _ hloop
-        exact ⟨hf, hi, more, hfns, fun f hf' => import_refs_cons (hrefs f hf'), hex, hnd, horig⟩
+        obtain ⟨hf, hi, more, hfns, hvia, hex, hnd⟩ := ih _ hloop
+        exact ⟨hf, hi, more, hfns, fun f hf' => import_via_cons (hvia f hf'), hex, hnd⟩
       | none =>
         simp only [hfa, hfe, hfu, bind_ok, orReject_ok, modify_ok] at hstep
         obtain ⟨info, s₆, ⟨-, rfl⟩, rfl⟩ := hstep
-        obtain ⟨hf, hi, more, hfns, hrefs, hex, hnd, horig⟩ := ih _ hloop
-        exact ⟨hf, hi, more, hfns, fun f hf' => import_refs_cons (hrefs f hf'), hex, hnd, horig⟩
+        obtain ⟨hf, hi, more, hfns, hvia, hex, hnd⟩ := ih _ hloop
+        exact ⟨hf, hi, more, hfns, fun f hf' => import_via_cons (hvia f hf'), hex, hnd⟩
     · rename_i htype
       try simp only [ite_state] at hstep
       split at hstep
@@ -524,8 +523,8 @@ theorem translateImport_ok {sp : Span} {names : List ImportName} {source : Strin
         obtain ⟨info, pairs⟩ := p
         simp only [hse, modify_ok] at hstep
         subst hstep
-        obtain ⟨hf, hi, more, hfns, hrefs, hex, hnd, horig⟩ := ih _ hloop
-        exact ⟨hf, hi, more, hfns, fun f hf' => import_refs_cons (hrefs f hf'), hex, hnd, horig⟩
+        obtain ⟨hf, hi, more, hfns, hvia, hex, hnd⟩ := ih _ hloop
+        exact ⟨hf, hi, more, hfns, fun f hf' => import_via_cons (hvia f hf'), hex, hnd⟩
       | none =>
       simp only [hse] at hstep
       split at hstep
@@ -538,14 +537,14 @@ theorem translateImport_ok {sp : Span} {names : List ImportName} {source : Strin
         rename_i hborrow
         simp only [modify_ok] at hstep
         subst hstep
-        obtain ⟨hf, hi, more, hfns, hrefs, hex, hnd, horig⟩ := ih _ hloop
+        obtain ⟨hf, hi, more, hfns, hvia, hex, hnd⟩ := ih _ hloop
         have hname : fn.name = n.name := by simpa using List.find?_some hfind
-        have hfile := hgf fn (List.mem_of_find?_eq_some hfind)
-        refine ⟨hf, hi, { fn with exported := false } :: more, by simpa using hfns, ?_, ?_, ?_, ?_⟩
+        refine ⟨hf, hi, { fn with exported := false } :: more, by simpa using hfns, ?_, ?_, ?_⟩
         · intro f hf'
           rcases List.mem_cons.mp hf' with rfl | hf'
-          · simp [htype, FnInfo.ref, hname, hfile]
-          · exact import_refs_cons (hrefs f hf')
+          · exact ⟨n, List.mem_filter.mpr ⟨List.mem_cons_self .., by simpa using htype⟩, hname.symm,
+              fn, List.mem_of_find?_eq_some hfind, rfl⟩
+          · exact import_via_cons (hvia f hf')
         · intro f hf'
           rcases List.mem_cons.mp hf' with rfl | hf'
           · exact ⟨rfl, by simpa using hborrow⟩
@@ -561,10 +560,6 @@ theorem translateImport_ok {sp : Span} {names : List ImportName} {source : Strin
             obtain ⟨g, hg, rfl⟩ := List.mem_map.mp ha
             simpa [hname] using hfresh g hg)
           simpa using this
-        · intro f hf'
-          rcases List.mem_cons.mp hf' with rfl | hf'
-          · exact ⟨hfile, fn, List.mem_of_find?_eq_some hfind, rfl⟩
-          · exact horig f hf'
 
 theorem translateEnum_ok {sp : Span} {ex : Bool} {name : String} {members : List String}
     {s s' : Ctx} {o : IR.Decl} (h : translateEnum sp ex name members s = .ok o s') :
@@ -729,10 +724,18 @@ theorem stringEnum_some {iface : Interface} {name : String} {info : EnumInfo}
       exact ⟨List.mem_of_find?_eq_some hf, this.1, this.2, hn⟩
 
 /-- The interfaces offer only string enums that the program's files export,
-with the same members. -/
+directly or through re-exports, with the same members. Re-exports pass
+through files of the interfaces only, so as many steps as there are
+interfaces resolve each of them. -/
 def FaithfulE (p : Eval.Program) (ifaces : List (String × Interface)) : Prop :=
   ∀ t i, ifaces.lookup t = some i → ∀ name info pairs, i.stringEnum? name = some (info, pairs) →
-    ∃ tm, p.lookup t = some tm ∧ (Eval.enumsOf tm true).lookup name = some pairs
+    ∀ k, ifaces.length ≤ k → Eval.exportedEnum p k t name = some pairs
+
+/-- The same, with the number of steps that the interpreter takes: one for
+each file of the program. -/
+def EnumsResolve (p : Eval.Program) (ifaces : List (String × Interface)) : Prop :=
+  ∀ t i, ifaces.lookup t = some i → ∀ name info pairs, i.stringEnum? name = some (info, pairs) →
+    Eval.exportedEnum p p.length t name = some pairs
 
 /-- What one declaration does to the names that the file declares and to its
 string enums, in the program `P`: the names that the state declared stay
@@ -1113,7 +1116,7 @@ theorem importNames_cons {P : Eval.Program} {sp : Span} {n : ImportName} {ns : L
 /-- An import: it declares each name that it names, and a string enum that it
 imports without `type` is the value of its name. -/
 theorem translateImport_names {P : Eval.Program} {sp : Span} {names : List ImportName} {source : String}
-    {s s' : Ctx} {u : Unit} (hfe : FaithfulE P s.interfaces) (h : translateImport sp names source s = .ok u s') :
+    {s s' : Ctx} {u : Unit} (hfe : EnumsResolve P s.interfaces) (h : translateImport sp names source s = .ok u s') :
     DeclNames P (.import sp names source) s s' := by
   unfold translateImport at h
   simp only [bind_ok, get_ok, orReject_ok] at h
@@ -1189,7 +1192,7 @@ theorem translateImport_names {P : Eval.Program} {sp : Span} {names : List Impor
         simp only [hse, modify_ok] at hstep
         subst hstep
         obtain ⟨-, hn, -, -⟩ := stringEnum_some hse
-        obtain ⟨tm, htm, hl⟩ := hfe target iface hiface n.name info pairs hse
+        have hl := hfe target iface hiface n.name info pairs hse
         have hrest := ih _ (by exact hfe) (by exact htarget) (by exact hiface) hloop
         refine importNames_cons hfresh ?_ ?_ (by rfl) ⟨_, rfl, fun e he => ?_⟩ ⟨_, rfl, by simp⟩ hrest
         · exact (taken_grow (name := n.name) (a := []) (b := []) (d := []) (e := []) (by simp) (by simp) rfl (by simp) (by simp) (by simp [hn])).1
@@ -1197,7 +1200,7 @@ theorem translateImport_names {P : Eval.Program} {sp : Span} {names : List Impor
         simp only [List.mem_singleton] at he
         subst he
         have hnt : n.typeOnly = false := by simpa using htype
-        simp [Eval.enumBinding, hnt, htarget, htm, hl]
+        simp [Eval.enumBinding, hnt, htarget, hl]
       | none =>
       simp only [hse] at hstep
       split at hstep
@@ -1557,40 +1560,41 @@ interfaces, adds its functions at the end, and keeps their names distinct. A
 function that it adds as exported is one that it declares as exported. -/
 theorem translateDecl_ok {thr : String → Bool} {cls : String → Option (Option ErrorCtor)}
     {classes : List ClassInfo} {d : Decl} {s s' : Ctx} {o : Option IR.Decl}
-    (hself : IfacesSelf s.interfaces) (h : translateDecl thr cls guards classes d s = .ok o s') :
+    (h : translateDecl thr cls guards classes d s = .ok o s') :
     s'.file = s.file ∧ s'.interfaces = s.interfaces ∧
-      ∃ more, s'.functions = s.functions ++ more ∧ (∀ f ∈ more, f.ref ∈ declRefs s.file d) ∧
+      ∃ more, s'.functions = s.functions ++ more ∧
         ((s.functions.map (·.name)).Nodup → (s'.functions.map (·.name)).Nodup) ∧
         (∀ f ∈ more, f.exported = true → ∃ sp tps ps r b, d = .function sp true f.name tps ps r b) ∧
         (∀ f ∈ more, (f.file = s.file ∧ ∃ sp ex tps ps r b, d = .function sp ex f.name tps ps r b) ∨
-          f.borrow = none ∧ ∃ i, s.interfaces.lookup f.file = some i ∧ ∃ g ∈ i.functions, g.name = f.name) := by
+          f.borrow = none ∧ ∃ r ∈ declRefs s.file d, r.name = f.name ∧
+            ∃ i, s.interfaces.lookup r.file = some i ∧ ∃ g ∈ i.functions, g.ref = f.ref) := by
   cases d with
   | «import» sp names source =>
     simp only [translateDecl, bind_ok, pure_ok] at h
     obtain ⟨u, s₁, h₁, rfl, rfl⟩ := h
-    obtain ⟨⟨hf, -⟩, hi, more, hfns, hrefs, hex, hnd, horig⟩ := translateImport_ok hself h₁
-    exact ⟨hf, hi, more, hfns, hrefs, hnd, fun f hf' he => by simp [(hex f hf').1] at he,
-      fun f hf' => .inr ⟨(hex f hf').2, horig f hf'⟩⟩
+    obtain ⟨⟨hf, -⟩, hi, more, hfns, hvia, hex, hnd⟩ := translateImport_ok h₁
+    exact ⟨hf, hi, more, hfns, hnd, fun f hf' he => by simp [(hex f hf').1] at he,
+      fun f hf' => .inr ⟨(hex f hf').2, hvia f hf'⟩⟩
   | interface sp ex name tps fields =>
     simp only [translateDecl, map_ok] at h
     obtain ⟨o', h₁, rfl⟩ := h
     obtain ⟨⟨hf, -⟩, hi, hfns, -⟩ := translateInterface_ok h₁
-    exact ⟨hf, hi, [], by simp [hfns], by simp, by simp [hfns], by simp, by simp⟩
+    exact ⟨hf, hi, [], by simp [hfns], by simp [hfns], by simp, by simp⟩
   | typeAlias sp ex name tps type =>
     simp only [translateDecl, map_ok] at h
     obtain ⟨o', h₁, rfl⟩ := h
     obtain ⟨⟨hf, -⟩, hi, hfns, -⟩ := translateAlias_ok h₁
-    exact ⟨hf, hi, [], by simp [hfns], by simp, by simp [hfns], by simp, by simp⟩
+    exact ⟨hf, hi, [], by simp [hfns], by simp [hfns], by simp, by simp⟩
   | enum sp ex name members =>
     simp only [translateDecl, map_ok] at h
     obtain ⟨o', h₁, rfl⟩ := h
     obtain ⟨-, -, i, v, -, -, -, -, -, rfl⟩ := translateStringEnum_shape h₁
-    exact ⟨rfl, rfl, [], by simp, by simp, by simp, by simp, by simp⟩
+    exact ⟨rfl, rfl, [], by simp, by simp, by simp, by simp⟩
   | function sp ex name tps params ret body =>
     simp only [translateDecl, map_ok] at h
     obtain ⟨o', h₁, rfl⟩ := h
     obtain ⟨-, -, hf, hi, hfresh, f, hfns, hfile, hname, hex, -⟩ := translateFunction_ok h₁
-    refine ⟨hf, hi, [f], hfns, by simp [declRefs, FnInfo.ref, hfile, hname], fun hnd => ?_, ?_, ?_⟩
+    refine ⟨hf, hi, [f], hfns, fun hnd => ?_, ?_, ?_⟩
     · rw [hfns, List.map_append, List.nodup_append]
       refine ⟨hnd, by simp, ?_⟩
       intro a ha b hb
@@ -1610,25 +1614,25 @@ theorem translateDecl_ok {thr : String → Bool} {cls : String → Option (Optio
       exact .inl ⟨hfile, sp, ex, tps, params, ret, body, by rw [hname]⟩
   | exports sp names source =>
     obtain ⟨rfl, rfl⟩ := translateExports_ok h
-    exact ⟨rfl, rfl, [], by simp, by simp [declRefs], id, by simp, by simp⟩
+    exact ⟨rfl, rfl, [], by simp, id, by simp, by simp⟩
   | exportedVar sp decl => simp [translateDecl] at h
   | errorClass _ _ _ _ =>
     simp only [translateDecl, bind_ok, modify_ok, pure_ok] at h
     obtain ⟨_, _, rfl, rfl, rfl⟩ := h
-    exact ⟨rfl, rfl, [], by simp, by simp, id, by simp, by simp⟩
+    exact ⟨rfl, rfl, [], by simp, id, by simp, by simp⟩
   | classDecl d => simp [translateDecl] at h
   | stmt st => simp [translateDecl] at h
 
 theorem translateDecl_borrows {thr : String → Bool}
     {cls : String → Option (Option ErrorCtor)}
     {classes : List ClassInfo} {d : Decl} {s s' : Ctx} {o : Option IR.Decl}
-    (hself : IfacesSelf s.interfaces) (h : translateDecl thr cls guards classes d s = .ok o s') :
+    (h : translateDecl thr cls guards classes d s = .ok o s') :
     s'.borrows = s.borrows := by
   cases d with
   | «import» sp names source =>
     simp only [translateDecl, bind_ok, pure_ok] at h
     obtain ⟨_, _, h, rfl, rfl⟩ := h
-    exact (translateImport_ok hself h).1.2
+    exact (translateImport_ok h).1.2
   | interface sp ex name tps fields =>
     simp only [translateDecl, map_ok] at h
     obtain ⟨_, h, -⟩ := h
@@ -1661,7 +1665,7 @@ theorem translateDecl_borrows {thr : String → Bool}
 /-- What one declaration does to the names and the string enums of the file. -/
 theorem translateDecl_names {P : Eval.Program} {thr : String → Bool}
     {cls : String → Option (Option ErrorCtor)} {classes : List ClassInfo} {d : Decl} {s s' : Ctx}
-    {o : Option IR.Decl} (hfe : FaithfulE P s.interfaces) (h : translateDecl thr cls guards classes d s = .ok o s') :
+    {o : Option IR.Decl} (hfe : EnumsResolve P s.interfaces) (h : translateDecl thr cls guards classes d s = .ok o s') :
     DeclNames P d s s' := by
   cases d with
   | «import» sp names source =>
@@ -1732,23 +1736,24 @@ translate. -/
 theorem decls_ok (P : Eval.Program) (thr : String → Bool) (cls : String → Option (Option ErrorCtor))
     (classes : List ClassInfo) :
     ∀ (ds : List Decl) (s s' : Ctx) (os : List (Option IR.Decl)),
-    IfacesSelf s.interfaces → FaithfulE P s.interfaces →
+    EnumsResolve P s.interfaces →
     ds.mapM (translateDeclWithInline thr cls guards classes) s = .ok os s' →
     s'.file = s.file ∧ s'.interfaces = s.interfaces ∧
-      (∃ more, s'.functions = s.functions ++ more ∧ (∀ f ∈ more, f.ref ∈ ds.flatMap (declRefs s.file)) ∧
+      (∃ more, s'.functions = s.functions ++ more ∧
         (∀ f ∈ more, f.exported = true → ∃ sp tps ps r b, Decl.function sp true f.name tps ps r b ∈ ds) ∧
         ∀ f ∈ more, (f.file = s.file ∧ ∃ sp ex tps ps r b, Decl.function sp ex f.name tps ps r b ∈ ds) ∨
-          f.borrow = none ∧ ∃ i, s.interfaces.lookup f.file = some i ∧ ∃ g ∈ i.functions, g.name = f.name) ∧
+          f.borrow = none ∧ ∃ r ∈ ds.flatMap (declRefs s.file), r.name = f.name ∧
+            ∃ i, s.interfaces.lookup r.file = some i ∧ ∃ g ∈ i.functions, g.ref = f.ref) ∧
       ((s.functions.map (·.name)).Nodup → (s'.functions.map (·.name)).Nodup) ∧
       DeclsNames P ds s s' ∧
       Forall₂ (FnRelIn s'.functions s'.enumValues classes s.borrows) (Eval.functionsIn thr cls guards ds)
         (IR.functions (os.filterMap id))
-  | [], s, s', os, _, _, h => by
+  | [], s, s', os, _, h => by
     simp only [List.mapM_nil, pure_ok] at h
     obtain ⟨rfl, rfl⟩ := h
-    exact ⟨rfl, rfl, ⟨[], by simp, by simp, by simp, by simp⟩, id, DeclsNames.nil P s,
+    exact ⟨rfl, rfl, ⟨[], by simp, by simp, by simp⟩, id, DeclsNames.nil P s,
       by simp [Eval.functionsIn, IR.functions]; trivial⟩
-  | d :: ds, s, s', os, hself, hfe, h => by
+  | d :: ds, s, s', os, hfe, h => by
     simp only [List.mapM_cons, bind_ok, pure_ok] at h
     obtain ⟨o, s₁, h₁, os', s₂, h₂, rfl, rfl⟩ := h
     unfold translateDeclWithInline at h₁
@@ -1756,24 +1761,19 @@ theorem decls_ok (P : Eval.Program) (thr : String → Bool) (cls : String → Op
     simp only [bind_ok, modify_ok, pure_ok] at h₁
     obtain ⟨_, prepared, hprepare, _, state, h₁, _, _, rfl, rfl, rfl⟩ := h₁
     obtain ⟨shapes, rfl⟩ := prepareInline_ok hprepare
-    have hb₁ := translateDecl_borrows (s := { s with inlineStructs := shapes }) hself h₁
-    obtain ⟨hf₁, hi₁, more₁, hfns₁, hrefs₁, hnd₁, hex₁, hor₁⟩ :=
-      translateDecl_ok (s := { s with inlineStructs := shapes }) hself h₁
+    have hb₁ := translateDecl_borrows (s := { s with inlineStructs := shapes }) h₁
+    obtain ⟨hf₁, hi₁, more₁, hfns₁, hnd₁, hex₁, hor₁⟩ :=
+      translateDecl_ok (s := { s with inlineStructs := shapes }) h₁
     have hn := translateDecl_names (s := { s with inlineStructs := shapes }) hfe h₁
     let s₁ : Ctx :=
       { state with inlinePrefixes := state.inlinePrefixes ++ [state.inlineStructs.drop s.inlineStructs.length] }
     have hn₁ : DeclNames P d s s₁ :=
       ⟨hn.file, hn.mono, hn.bound, hn.nodup, hn.fresh, hn.values, hn.exports⟩
-    obtain ⟨hf₂, hi₂, ⟨more₂, hfns₂, hrefs₂, hex₂, hor₂⟩, hnd₂, hn₂, hrel⟩ :=
-      decls_ok P thr cls classes ds s₁ s₂ os' (by rw [hi₁]; exact hself) (by rw [hi₁]; exact hfe) h₂
+    obtain ⟨hf₂, hi₂, ⟨more₂, hfns₂, hex₂, hor₂⟩, hnd₂, hn₂, hrel⟩ :=
+      decls_ok P thr cls classes ds s₁ s₂ os' (by rw [hi₁]; exact hfe) h₂
     rw [hb₁] at hrel
     refine ⟨hf₂.trans hf₁, hi₂.trans hi₁, ⟨more₁ ++ more₂, by rw [hfns₂, hfns₁, List.append_assoc],
-      ?_, ?_, ?_⟩, fun h => hnd₂ (hnd₁ h), DeclsNames.cons hn₁ hn₂, ?_⟩
-    · intro f hf
-      rw [List.flatMap_cons, List.mem_append]
-      rcases List.mem_append.mp hf with hf | hf
-      · exact .inl (hrefs₁ f hf)
-      · exact .inr (by rw [← hf₁]; exact hrefs₂ f hf)
+      ?_, ?_⟩, fun h => hnd₂ (hnd₁ h), DeclsNames.cons hn₁ hn₂, ?_⟩
     · intro f hf he
       rcases List.mem_append.mp hf with hf | hf
       · obtain ⟨sp, tps, ps, r, b, hd⟩ := hex₁ f hf he
@@ -1782,12 +1782,14 @@ theorem decls_ok (P : Eval.Program) (thr : String → Bool) (cls : String → Op
         exact ⟨sp, tps, ps, r, b, List.mem_cons_of_mem _ hd⟩
     · intro f hf
       rcases List.mem_append.mp hf with hf | hf
-      · rcases hor₁ f hf with ⟨hfl, sp, ex, tps, ps, r, b, hd⟩ | h
+      · rcases hor₁ f hf with ⟨hfl, sp, ex, tps, ps, r, b, hd⟩ | ⟨hb, r, hr, hrest⟩
         · exact .inl ⟨hfl, sp, ex, tps, ps, r, b, by rw [hd]; exact List.mem_cons_self ..⟩
-        · exact .inr h
-      · rcases hor₂ f hf with ⟨hfl, sp, ex, tps, ps, r, b, hd⟩ | h
+        · exact .inr ⟨hb, r, by rw [List.flatMap_cons]; exact List.mem_append_left _ hr, hrest⟩
+      · rcases hor₂ f hf with ⟨hfl, sp, ex, tps, ps, r, b, hd⟩ | ⟨hb, r, hr, hrest⟩
         · exact .inl ⟨hfl.trans hf₁, sp, ex, tps, ps, r, b, List.mem_cons_of_mem _ hd⟩
-        · exact .inr (by rw [← hi₁]; exact h)
+        · refine .inr ⟨hb, r, ?_, by rw [← hi₁]; exact hrest⟩
+          rw [List.flatMap_cons, ← hf₁]
+          exact List.mem_append_right _ hr
     · -- The functions of the head, then the rest.
       have hsub : ∀ g ∈ s₁.functions, g ∈ s₂.functions := fun g hg => by
         rw [hfns₂]; exact List.mem_append_left _ hg
@@ -1856,10 +1858,13 @@ theorem findSome_eq {α β : Type} {f : α → Option β} {x : β} :
       · rw [hfa] at hsome; simp at hsome
       · exact ⟨b, hb, hsome⟩
 
-/-- The interfaces offer only functions that the program's files export. -/
+/-- The interfaces offer only functions that the program's files export,
+directly or through re-exports. Re-exports pass through files of the
+interfaces only, so as many steps as there are interfaces resolve each of
+them. -/
 def Faithful (p : Eval.Program) (ifaces : List (String × Interface)) : Prop :=
-  ∀ t i, ifaces.lookup t = some i → ∀ g ∈ i.functions,
-    ∃ tm, p.lookup t = some tm ∧ Eval.exportsFunction tm g.name = true
+  ∀ t i, ifaces.lookup t = some i → ∀ g ∈ i.functions, ∀ k, ifaces.length ≤ k →
+    Eval.resolveExport p k t g.name = some g.ref
 
 /-- A function that a declaration adds is named by a name that it binds. -/
 theorem declRefs_bound {file : String} {d : Decl} {r : DeclRef} (h : r ∈ declRefs file d) :
@@ -1882,14 +1887,13 @@ theorem declRefs_bound {file : String} {d : Decl} {r : DeclRef} (h : r ∈ declR
 name runs in that file. The module binds each name once, so the declaration
 that a function comes from is the only one that binds its name. -/
 theorem module_resolves {p : Eval.Program} {file : String} {m : Module} (hp : p.lookup file = some m)
-    {ifaces : List (String × Interface)} (hfaith : Faithful p ifaces) {F : List FnInfo}
-    (hincl : ∀ f ∈ F, f.ref ∈ m.decls.flatMap (declRefs file)) (hbn : (m.decls.flatMap boundNames).Nodup)
+    {ifaces : List (String × Interface)} (hfaith : Faithful p ifaces) (hlen : ifaces.length ≤ p.length)
+    (hself : ifaces.lookup file = none) {F : List FnInfo} (hbn : (m.decls.flatMap boundNames).Nodup)
     (horig : ∀ f ∈ F, (f.file = file ∧ ∃ sp ex tps ps r b, Decl.function sp ex f.name tps ps r b ∈ m.decls) ∨
-      ∃ i, ifaces.lookup f.file = some i ∧ ∃ g ∈ i.functions, g.name = f.name) :
+      ∃ r ∈ m.decls.flatMap (declRefs file), r.name = f.name ∧
+        ∃ i, ifaces.lookup r.file = some i ∧ ∃ g ∈ i.functions, g.ref = f.ref) :
     ∀ f ∈ F, Eval.resolve ⟨p, file⟩ f.name = some f.ref := by
   intro f hf
-  obtain ⟨df, hdf, hrdf⟩ := List.mem_flatMap.mp (hincl f hf)
-  have hbf : f.name ∈ boundNames df := declRefs_bound hrdf
   have hown_iff : ((Eval.functions m).any fun x => x.fst == f.name) = true ↔
       ∃ sp ex tps ps r b, Decl.function sp ex f.name tps ps r b ∈ m.decls := by
     simp only [List.any_eq_true, beq_iff_eq, Eval.functions, Eval.functionsIn, List.mem_filterMap]
@@ -1903,38 +1907,42 @@ theorem module_resolves {p : Eval.Program} {file : String} {m : Module} (hp : p.
         (Eval.guardTests m) ps r b), ⟨_, hd, rfl⟩, rfl⟩
   unfold Eval.resolve
   simp only [hp, Option.bind_eq_bind, Option.bind_some]
+  rcases horig f hf with ⟨hfl, hd⟩ | ⟨r, hr, hrn, i, hi, g, hg, hgr⟩
+  · rw [if_pos (hown_iff.mpr hd)]
+    simp [FnInfo.ref, hfl]
+  obtain ⟨df, hdf, hrdf⟩ := List.mem_flatMap.mp hr
+  have hbf : f.name ∈ boundNames df := hrn ▸ declRefs_bound hrdf
+  have hgn : g.name = f.name := by
+    have := congrArg DeclRef.name hgr
+    simpa [FnInfo.ref] using this
+  have hres := hfaith _ _ hi g hg p.length hlen
+  rw [hgn, hgr] at hres
   by_cases hown : ((Eval.functions m).any fun x => x.fst == f.name) = true
-  · rw [if_pos hown]
-    obtain ⟨sp, ex, tps, ps, r, b, hd⟩ := hown_iff.mp hown
+  · obtain ⟨sp, ex, tps, ps, r', b, hd⟩ := hown_iff.mp hown
     have := bound_unique hbn hdf hd hbf (by simp [boundNames])
     subst this
     simp only [declRefs, List.mem_singleton] at hrdf
-    rw [hrdf]
-    rfl
+    rw [hrdf] at hi
+    rw [hself] at hi
+    cases hi
   · rw [if_neg hown]
-    have hnot : ¬ ∃ sp ex tps ps r b, Decl.function sp ex f.name tps ps r b ∈ m.decls :=
-      fun h => hown (hown_iff.mpr h)
-    obtain ⟨i, hi, g, hg, hgn⟩ := (horig f hf).resolve_left fun h => hnot h.2
-    obtain ⟨tm, htm, hexp⟩ := hfaith _ _ hi g hg
-    rw [hgn] at hexp
-    rw [findSome_eq (l := m.decls) (x := f.file) ?ex ?uniq]
-    · simp only [Option.bind_some, htm, hexp, if_true]
-      rfl
+    rw [findSome_eq (l := m.decls) (x := r.file) ?ex ?uniq]
+    · simpa using hres
     case ex =>
       refine ⟨df, hdf, ?_⟩
       cases df with
-      | function sp ex name tps ps r b =>
-        simp only [declRefs, List.mem_singleton, FnInfo.ref, DeclRef.mk.injEq] at hrdf
-        exact absurd ⟨sp, ex, tps, ps, r, b, hrdf.2 ▸ hdf⟩ hnot
+      | function sp ex name tps ps r' b =>
+        simp only [boundNames, List.mem_singleton] at hbf
+        subst hbf
+        exact absurd (hown_iff.mpr ⟨sp, ex, tps, ps, r', b, hdf⟩) hown
       | «import» sp names source =>
         simp only [declRefs] at hrdf
         split at hrdf
         · rename_i target htarget
           obtain ⟨n, hn, hnr⟩ := List.mem_map.mp hrdf
           simp only [List.mem_filter] at hn
-          simp only [FnInfo.ref, DeclRef.mk.injEq] at hnr
           have hany : (names.any fun n => !n.typeOnly && n.name == f.name) = true :=
-            List.any_eq_true.mpr ⟨n, hn.1, by simpa [hnr.2] using hn.2⟩
+            List.any_eq_true.mpr ⟨n, hn.1, by simpa [← hrn, ← hnr] using hn.2⟩
           simp [hany, htarget]
         · simp at hrdf
       | _ => simp [declRefs] at hrdf
@@ -1954,8 +1962,7 @@ theorem module_resolves {p : Eval.Program} {file : String} {m : Module} (hp : p.
           subst this
           simp only [declRefs, hy] at hrdf
           obtain ⟨n', -, hnr⟩ := List.mem_map.mp hrdf
-          simp only [FnInfo.ref, DeclRef.mk.injEq] at hnr
-          exact hnr.1
+          rw [← hnr]
         · simp at hy
       | _ => simp at hy
 
@@ -2193,7 +2200,7 @@ inductive ProgramTranslation :
       (start.functions, start.enums, start.enumValues, start.errorClasses) = ([], [], [], []) →
       start.interfaces = ifaces → translateDecls m start = .ok decls finish →
       ProgramTranslation (p ++ [(file, m)]) (outs ++ [(file, decls)])
-        (ifaces ++ [(file, (finish.withExports (exportListed m)).interface usesNumber numberVar (reexportListed m))])
+        (ifaces ++ [(file, (finish.withExports (exportListed m)).interface usesNumber numberVar (reexportListed m) m)])
 
 theorem lookup_append_some {β : Type} {k : String} {b : β} {l l' : List (String × β)}
     (h : l.lookup k = some b) : (l ++ l').lookup k = some b := by
@@ -2217,26 +2224,66 @@ theorem lookup_append_mem {β : Type} {k : String} {l l' : List (String × β)}
   obtain ⟨b, hb⟩ := Option.isSome_iff_exists.mp (by rw [lookup_isSome]; simpa using h)
   rw [hb]; rfl
 
-/-- What a program's translation gives: interfaces that name their files and
-that the program's files export, and output functions that are the
-translations of the program's functions. -/
+/-- A function that a file re-exports: the file does not export a function
+of that name itself, and the interface of the file that it re-exports the
+name from offers the function. -/
+theorem mem_reexportedFunctions {c : Ctx} {m : Module} {g : FnInfo} (h : g ∈ c.reexportedFunctions m) :
+    ∃ t i, Eval.exportsFunction m g.name = false ∧ Eval.reexportSource c.file m g.name = some t ∧
+      c.interfaces.lookup t = some i ∧ g ∈ i.functions := by
+  simp only [Ctx.reexportedFunctions, List.mem_filterMap] at h
+  obtain ⟨name, -, hg⟩ := h
+  split at hg
+  · cases hg
+  · rename_i hex
+    simp only [Option.bind_eq_bind, Option.bind_eq_some_iff] at hg
+    obtain ⟨t, ht, i, hi, hfind⟩ := hg
+    have hn : g.name = name := by simpa using List.find?_some hfind
+    subst hn
+    exact ⟨t, i, by simpa using hex, ht, hi, List.mem_of_find?_eq_some hfind⟩
+
+/-- A string enum that a file re-exports, in the same way. -/
+theorem mem_reexportedEnums {c : Ctx} {m : Module} {e : EnumInfo} (h : e ∈ c.reexportedEnums m) :
+    ∃ name t i pairs, (Eval.enumsOf m true).lookup name = none ∧ Eval.reexportSource c.file m name = some t ∧
+      c.interfaces.lookup t = some i ∧ i.stringEnum? name = some (e, pairs) := by
+  simp only [Ctx.reexportedEnums, List.mem_filterMap] at h
+  obtain ⟨name, -, he⟩ := h
+  split at he
+  · cases he
+  · rename_i hown
+    simp only [Option.bind_eq_bind, Option.bind_eq_some_iff, Option.map_eq_some_iff] at he
+    obtain ⟨t, ht, i, hi, ⟨e', pairs⟩, hse, rfl⟩ := he
+    have hnone : (Eval.enumsOf m true).lookup name = none := by
+      cases hl : (Eval.enumsOf m true).lookup name
+      · rfl
+      · simp [hl] at hown
+    exact ⟨name, t, i, pairs, hnone, ht, hi, hse⟩
+
+/-- What a program's translation gives: interfaces whose functions come from
+the program's files and that the program's files export, and output
+functions that are the translations of the program's functions. -/
 theorem programTranslation_rel {p : Eval.Program} {outs : List (String × List IR.Decl)}
     {ifaces : List (String × Interface)} (h : ProgramTranslation p outs ifaces) :
-    ∀ (P : Eval.Program), (p.map (·.1)).Nodup → (∀ t tm, p.lookup t = some tm → P.lookup t = some tm) →
-      ifaces.map (·.1) = p.map (·.1) ∧ outs.map (·.1) = p.map (·.1) ∧ IfacesSelf ifaces ∧ Faithful P ifaces ∧
+    ∀ (P : Eval.Program), (p.map (·.1)).Nodup → p.length ≤ P.length →
+      (∀ t tm, p.lookup t = some tm → P.lookup t = some tm) →
+      ifaces.map (·.1) = p.map (·.1) ∧ outs.map (·.1) = p.map (·.1) ∧ IfacesKnown ifaces ∧ Faithful P ifaces ∧
         FaithfulE P ifaces ∧ Forall₂ (FnRelP P) (Eval.functionsOf p) (IR.functionsOf outs) := by
   induction h with
   | nil =>
-    intro P _ _
+    intro P _ _ _
     exact ⟨rfl, rfl, fun _ _ h => by simp at h, fun _ _ h => by simp at h, fun _ _ h => by simp at h, trivial⟩
   | @snoc p outs ifaces file m decls start finish u nv hrest hfile hfns hifaces htr ih =>
-    intro P hnd hP
+    intro P hnd hlenP hP
     simp only [List.map_append, List.map_cons, List.map_nil, List.nodup_append, List.mem_singleton] at hnd
     have hnotin : file ∉ p.map (·.1) := fun h => hnd.2.2 _ h _ rfl rfl
     have hP' : ∀ t tm, p.lookup t = some tm → P.lookup t = some tm := fun t tm h =>
       hP t tm (lookup_append_some h)
-    obtain ⟨hik, hok, hself, hfaith, hfaithE, hrel⟩ := ih P hnd.1 hP'
+    simp only [List.length_append, List.length_cons, List.length_nil] at hlenP
+    obtain ⟨hik, hok, hknown, hfaith, hfaithE, hrel⟩ := ih P hnd.1 (by omega) hP'
+    have hlenI : ifaces.length = p.length := by simpa using congrArg List.length hik
     have hPm : P.lookup file = some m := hP file m (by rw [lookup_append_none hnotin]; simp)
+    have hkeys : file ∉ ifaces.map (·.1) := by rw [hik]; exact hnotin
+    have hEnums : EnumsResolve P ifaces := fun t i hti name info pairs hse =>
+      hfaithE t i hti name info pairs hse P.length (by omega)
     simp only [Prod.mk.injEq] at hfns
     obtain ⟨hfns, hen0, hev0, hcls0⟩ := hfns
     -- The file's error classes, then its own translation.
@@ -2247,9 +2294,9 @@ theorem programTranslation_rel {p : Eval.Program} {outs : List (String × List I
     have hen0 : s₁.enums = [] := hen₁.trans hen0
     have hev0 : s₁.enumValues = [] := hev₁.trans hev0
     have hifaces : s₁.interfaces = ifaces := hi₁.trans hifaces
-    obtain ⟨hf, hi, ⟨more, hfns', hrefs, hex, horig⟩, -, hnames, hrelm⟩ :=
+    obtain ⟨hf, hi, ⟨more, hfns', hex, horig⟩, -, hnames, hrelm⟩ :=
       decls_ok P (Eval.mayThrow m) (Eval.errorClassOf m) s₁.errorClasses m.decls s₁ finish os
-        (by rw [hifaces]; exact hself) (by rw [hifaces]; exact hfaithE) hos
+        (by rw [hifaces]; exact hEnums) hos
     rw [hfns, List.nil_append] at hfns'
     have hresC : ∀ c ∈ s₁.errorClasses, ClassAgrees ⟨P, file⟩ c := by
       intro c hc
@@ -2258,36 +2305,44 @@ theorem programTranslation_rel {p : Eval.Program} {outs : List (String × List I
     have hbn := hnames.nodup
     have hres : ∀ f ∈ finish.functions, Eval.resolve ⟨P, file⟩ f.name = some f.ref := by
       rw [hfns']
-      refine module_resolves hPm (ifaces := ifaces) hfaith (fun f hf' => by rw [← hfile]; exact hrefs f hf') hbn ?_
+      refine module_resolves hPm (ifaces := ifaces) hfaith (by omega) (lookup_none_of_not_mem hkeys) hbn ?_
       intro f hf'
-      rcases horig f hf' with ⟨hfl, hd⟩ | ⟨-, i, hi', hg⟩
+      rcases horig f hf' with ⟨hfl, hd⟩ | ⟨-, r, hr, hrn, i, hi', hg⟩
       · exact .inl ⟨hfl.trans hfile, hd⟩
-      · exact .inr ⟨i, by rw [← hifaces]; exact hi', hg⟩
+      · exact .inr ⟨r, by rw [← hfile]; exact hr, hrn, i, by rw [← hifaces]; exact hi', hg⟩
     have hresE : ∀ e ∈ finish.enumValues, Eval.resolveEnum ⟨P, file⟩ e.name = some e.members := by
       obtain ⟨moreE, hmoreE, hv⟩ := hnames.values
       rw [hmoreE, hev0, List.nil_append]
       refine module_resolvesE hPm hbn fun e he => ?_
       rw [← hfile]
       exact hv e he
-    have hkeys : file ∉ ifaces.map (·.1) := by rw [hik]; exact hnotin
+    have hfinishFile : finish.file = file := by rw [hf, hfile]
+    have hfinishIfaces : finish.interfaces = ifaces := by rw [hi, hifaces]
     refine ⟨by simp [hik], by simp [hok], ?_, ?_, ?_, ?_⟩
     · intro t i hti g hg
+      have hsub : ∀ x, x ∈ ifaces.map (·.1) →
+          x ∈ (ifaces ++ [(file, (finish.withExports (exportListed m)).interface u nv (reexportListed m) m)]).map
+            (·.1) := fun x hx => by
+        simp only [List.map_append, List.mem_append]; exact .inl hx
       by_cases ht : t ∈ ifaces.map (·.1)
-      · exact hself t i (by rwa [lookup_append_mem ht] at hti) g hg
+      · exact hsub _ (hknown t i (by rwa [lookup_append_mem ht] at hti) g hg)
       · rw [lookup_append_none ht] at hti
         simp only [List.lookup] at hti
         split at hti
-        · rename_i hte
-          simp only [Option.some.injEq] at hti
+        · simp only [Option.some.injEq] at hti
           subst hti
-          simp only [Ctx.interface, List.mem_filter, Bool.and_eq_true, beq_iff_eq] at hg
-          have hgf : g.file = finish.file := hg.2.2
-          rw [hgf, hf, hfile]
-          exact (by simpa using hte : t = file).symm
+          simp only [Ctx.interface, List.mem_append, List.mem_filter, Bool.and_eq_true, beq_iff_eq] at hg
+          rcases hg with ⟨-, -, hgf⟩ | hg
+          · have hgf : g.file = file := by rw [hgf]; exact hfinishFile
+            simp [hgf]
+          · obtain ⟨t', i', -, -, hi', hg'⟩ := mem_reexportedFunctions hg
+            have hi' : ifaces.lookup t' = some i' := by rw [← hfinishIfaces]; exact hi'
+            exact hsub _ (hknown t' i' hi' g hg')
         · simp at hti
-    · intro t i hti g hg
+    · intro t i hti g hg k hk
+      simp only [List.length_append, List.length_cons, List.length_nil] at hk
       by_cases ht : t ∈ ifaces.map (·.1)
-      · exact hfaith t i (by rwa [lookup_append_mem ht] at hti) g hg
+      · exact hfaith t i (by rwa [lookup_append_mem ht] at hti) g hg k (by omega)
       · rw [lookup_append_none ht] at hti
         simp only [List.lookup] at hti
         split at hti
@@ -2296,27 +2351,40 @@ theorem programTranslation_rel {p : Eval.Program} {outs : List (String × List I
           subst hte
           simp only [Option.some.injEq] at hti
           subst hti
-          simp only [Ctx.interface, List.mem_filter, Bool.and_eq_true, beq_iff_eq] at hg
-          obtain ⟨hgm, hge, hgf⟩ := hg
-          obtain ⟨f, hf₀, hn, hgf₀, hex'⟩ := mem_withExports_functions hgm
-          rw [hfns'] at hf₀
-          refine ⟨m, hPm, ?_⟩
-          simp only [Eval.exportsFunction, List.any_eq_true]
-          rcases hex' hge with he | hl
-          · obtain ⟨sp, tps, ps, r, b, hd⟩ := hex f hf₀ he
-            exact ⟨_, hd, by simp [hn]⟩
-          · rcases horig f hf₀ with ⟨-, sp, ex, tps, ps, r, b, hd⟩ | ⟨-, i, hi', -⟩
-            · refine ⟨_, hd, ?_⟩
-              simp [hn, listsExport_of hl]
-            · have hff : f.file = t := by
-                have hgf' : g.file = finish.file := hgf
-                rw [← hgf₀, hgf', hf, hfile]
-              rw [hff, hifaces, lookup_none_of_not_mem hkeys] at hi'
-              cases hi'
+          obtain ⟨k, rfl⟩ : ∃ k', k = k' + 1 := ⟨k - 1, by omega⟩
+          simp only [Ctx.interface, List.mem_append, List.mem_filter, Bool.and_eq_true, beq_iff_eq] at hg
+          rcases hg with ⟨hgm, hge, hgf⟩ | hg
+          · have hgf' : g.file = t := by rw [hgf]; exact hfinishFile
+            obtain ⟨f, hf₀, hn, hgf₀, hex'⟩ := mem_withExports_functions hgm
+            rw [hfns'] at hf₀
+            have hexp : Eval.exportsFunction m g.name = true := by
+              simp only [Eval.exportsFunction, List.any_eq_true]
+              rcases hex' hge with he | hl
+              · obtain ⟨sp, tps, ps, r, b, hd⟩ := hex f hf₀ he
+                exact ⟨_, hd, by simp [hn]⟩
+              · rcases horig f hf₀ with ⟨-, sp, ex, tps, ps, r, b, hd⟩ | ⟨-, r, -, -, i, hi', g', hg', hgr⟩
+                · refine ⟨_, hd, ?_⟩
+                  simp [hn, listsExport_of hl]
+                · have hff : f.file = t := by rw [← hgf₀]; exact hgf'
+                  have hgf'' : g'.file = t := by
+                    have := congrArg DeclRef.file hgr
+                    simp only [FnInfo.ref] at this
+                    rw [this, hff]
+                  rw [hifaces] at hi'
+                  have := hknown _ _ hi' g' hg'
+                  rw [hgf''] at this
+                  exact absurd this hkeys
+            simp [Eval.resolveExport, hPm, hexp, FnInfo.ref, hgf']
+          · obtain ⟨t', i', hnot, hsrc, hi', hg'⟩ := mem_reexportedFunctions hg
+            have hi' : ifaces.lookup t' = some i' := by rw [← hfinishIfaces]; exact hi'
+            rw [show (finish.withExports (exportListed m)).file = t from hfinishFile] at hsrc
+            have := hfaith t' i' hi' g hg' k (by omega)
+            simp [Eval.resolveExport, hPm, hnot, hsrc, this]
         · simp at hti
-    · intro t i hti name info pairs hse
+    · intro t i hti name info pairs hse k hk
+      simp only [List.length_append, List.length_cons, List.length_nil] at hk
       by_cases ht : t ∈ ifaces.map (·.1)
-      · exact hfaithE t i (by rwa [lookup_append_mem ht] at hti) name info pairs hse
+      · exact hfaithE t i (by rwa [lookup_append_mem ht] at hti) name info pairs hse k (by omega)
       · rw [lookup_append_none ht] at hti
         simp only [List.lookup] at hti
         split at hti
@@ -2325,15 +2393,29 @@ theorem programTranslation_rel {p : Eval.Program} {outs : List (String × List I
           subst hte
           simp only [Option.some.injEq] at hti
           subst hti
+          obtain ⟨k, rfl⟩ : ∃ k', k = k' + 1 := ⟨k - 1, by omega⟩
           obtain ⟨hmem, hn, hex', hnamed⟩ := stringEnum_some hse
-          simp only [Ctx.interface, Ctx.reachableEnums, List.mem_filter] at hmem
-          obtain ⟨moreI, hmoreI, hx⟩ := hnames.exports
-          have hmem' := mem_withExports_enums hmem.1 (by simp [hnamed])
-          rw [hmoreI, hen0, List.nil_append] at hmem'
-          obtain ⟨sp, ms, hd, hms⟩ := hx info hmem' hex' pairs hnamed
-          refine ⟨m, hPm, ?_⟩
-          rw [← hn, ← hms]
-          exact enumsOf_lookup hbn hd
+          simp only [Ctx.interface, List.mem_append] at hmem
+          rcases hmem with hmem | hmem
+          · simp only [Ctx.reachableEnums, List.mem_filter] at hmem
+            obtain ⟨moreI, hmoreI, hx⟩ := hnames.exports
+            have hmem' := mem_withExports_enums hmem.1 (by simp [hnamed])
+            rw [hmoreI, hen0, List.nil_append] at hmem'
+            obtain ⟨sp, ms, hd, hms⟩ := hx info hmem' hex' pairs hnamed
+            have hl : (Eval.enumsOf m true).lookup name = some pairs := by
+              rw [← hn, ← hms]
+              exact enumsOf_lookup hbn hd
+            simp [Eval.exportedEnum, hPm, hl]
+          · obtain ⟨name', t', i', pairs', hnone, hsrc, hi', hse'⟩ := mem_reexportedEnums hmem
+            obtain ⟨-, hn', -, hnamed'⟩ := stringEnum_some hse'
+            have hname : name' = name := hn'.symm.trans hn
+            subst hname
+            have hpairs : pairs' = pairs := by rw [hnamed] at hnamed'; exact (Option.some.inj hnamed').symm
+            subst hpairs
+            have hi' : ifaces.lookup t' = some i' := by rw [← hfinishIfaces]; exact hi'
+            rw [show (finish.withExports (exportListed m)).file = t from hfinishFile] at hsrc
+            have := hfaithE t' i' hi' name' info pairs' hse' k (by omega)
+            simp [Eval.exportedEnum, hPm, hnone, hsrc, this]
         · simp at hti
     · simp only [Eval.functionsOf, IR.functionsOf, List.flatMap_append, List.flatMap_cons,
         List.flatMap_nil, List.append_nil]
@@ -2367,7 +2449,7 @@ theorem program_sound_call {p : Eval.Program} {outs : List (String × List IR.De
     (hnd : (p.map (·.1)).Nodup) (key : DeclRef) (args : List (Val N)) (fuel : Nat)
     (r : Except (Val N) (Val N)) (hr : IR.callIn (IR.functionsOf outs) key args fuel = some r) :
     Eval.callIn p key args fuel = some r :=
-  calls_agree p (IR.functionsOf outs) (programTranslation_rel h p hnd fun _ _ h => h).2.2.2.2.2
+  calls_agree p (IR.functionsOf outs) (programTranslation_rel h p hnd (Nat.le_refl _) fun _ _ h => h).2.2.2.2.2
     (fuel + 1) key args r hr
 
 /-- The same, for a call that returns: a call of a function of the output

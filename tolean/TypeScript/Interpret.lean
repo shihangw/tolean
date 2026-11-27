@@ -278,16 +278,44 @@ partial def ofJson (j : Json) : Except String (Val Float) :=
 /-- The file name that each program has. -/
 def file : String := "main.ts"
 
+/-- The other files of a program, `{"files": [{"path", "source"}]}`, which
+`main.ts` may import from: each file parsed and lowered, in order, and the
+translator's view of each when the translator accepts it. A file may import
+only from the files before it. A file that does not parse or lower stops the
+program with its error. -/
+def otherFiles (p : Json) (target : Edition) :
+    Except String (List (String × Syntax.Module) × List (String × Translate.Dependency) × Option String) := do
+  let files := (p.getObjValAs? (Array Json) "files").toOption.getD #[]
+  let mut program : List (String × Syntax.Module) := []
+  let mut deps : List (String × Translate.Dependency) := []
+  let mut refused : Option String := none
+  for f in files do
+    let path ← f.getObjValAs? String "path"
+    let source ← f.getObjValAs? String "source"
+    let m ← (Syntax.parse source target).mapError (·.render path)
+    let m ← (Elaborate.run source target m).mapError (path ++ ":" ++ ·)
+    program := program ++ [(path, m)]
+    match Translate.translateFile path source target deps with
+    | .ok (_, _, _, iface) =>
+      let ns := "File" ++ toString deps.length
+      let dep : Translate.Dependency :=
+        { module := ns, ns := ns, interface := iface, imports := Translate.importedFiles path m }
+      deps := deps ++ [(path, dep)]
+    | .error e => if refused.isNone then refused := some e
+  return (program, deps, refused)
+
 /-- Run one program: whether the parser and the translator accept it, and the
 result of each call. A result is `{"value": <value>}`, or
 `{"throws": <value>}` when the call throws, or `null` when the interpreter
-gives no value, so a call that returns `null` gives `{"value": null}`. -/
+gives no value, so a call that returns `null` gives `{"value": null}`. The
+calls run in `main.ts`, whose source is `source`. -/
 def runProgram (p : Json) : Except String Json := do
   let source ← p.getObjValAs? String "source"
   let target := match p.getObjValAs? String "target" with
     | .ok name => (Edition.parse? name).getD .default
     | .error _ => .default
   let calls ← p.getObjValAs? (Array Json) "calls"
+  let (others, deps, refused) ← otherFiles p target
   match Syntax.parse source target with
   | .error _ => return Json.mkObj [("parsed", false)]
   | .ok m =>
@@ -296,7 +324,9 @@ def runProgram (p : Json) : Except String Json := do
       return Json.mkObj [("parsed", true), ("accepted", false),
           ("error", message), ("results", Json.arr (Array.replicate calls.size Json.null))]
     let m ← lowered
-    let translated := Translate.translateFile file source target
+    let translated := match refused with
+      | some e => Except.error e
+      | none => Translate.translateFile file source target deps
     let accepted := translated.toBool
     let sortObligations := match translated with
       | .ok (_, _, _, iface) => !iface.sortObligations.isEmpty
@@ -304,14 +334,14 @@ def runProgram (p : Json) : Except String Json := do
     let results ← calls.mapM fun c => do
       let name ← c.getObjValAs? String "function"
       let args ← (← c.getObjValAs? (Array Json) "args").mapM ofJson
-      return match Eval.callIn [(file, m)] ⟨file, name⟩ args.toList with
+      return match Eval.callIn (others ++ [(file, m)]) ⟨file, name⟩ args.toList with
         | some (.ok v) => Json.mkObj [("value", toJson v)]
         | some (.error t) => Json.mkObj [("throws", toJson t)]
         | none => Json.null
     return Json.mkObj [("parsed", true), ("accepted", accepted),
       ("sortObligations", sortObligations), ("results", Json.arr results)]
 
-/-- `{"programs": [{"source", "target"?, "calls": [{"function", "args"}]}]}`
+/-- `{"programs": [{"source", "target"?, "files"?, "calls": [{"function", "args"}]}]}`
 to `{"programs": [{"parsed", "accepted", "results"}]}`. -/
 def interpret (input : String) : Except String String := do
   let programs ← (← Json.parse input).getObjValAs? (Array Json) "programs"  let out ← programs.mapM runProgram

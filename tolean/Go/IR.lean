@@ -5,9 +5,11 @@ The Go extension of the Tolean IR: the operations that the Go translator adds
 to the shared IR in `tolean/IR.lean`.
 
 Go adds no types, because its `int`, `int64`, `bool` and `string` are the
-shared `Int`, `Bool` and `String`. It adds two operations: `Go.wrap64`, which
-wraps an integer into the 64-bit range as Go's arithmetic does, and `++` on
-strings, which is Go's `+` on strings.
+shared `Int`, `Bool` and `String`. It adds three operations: `Go.wrap64`,
+which wraps an integer into the 64-bit range as Go's arithmetic does, `++` on
+strings, which is Go's `+` on strings, and `pure`, which returns a value from
+a function that can panic. Such a function returns `Except String T`, and a
+panic is `throw` of its message.
 
 `IR/Eval.lean` gives the IR a meaning, so that a theorem can state what the
 translator writes for every function it accepts.
@@ -25,6 +27,8 @@ inductive ExprExt where
   | wrap64
   /-- `(a ++ b)` on two strings. -/
   | append
+  /-- `(pure a)`: the value `a` as the result of a function that can panic. -/
+  | pure
 deriving BEq, Repr, Inhabited, DecidableEq
 
 abbrev Ty := tolean.IR.Ty TyExt
@@ -34,6 +38,7 @@ abbrev Decl := tolean.IR.Decl TyExt ExprExt
 
 @[match_pattern] abbrev Expr.wrap64 (a : Expr) : Expr := .ext .wrap64 [a]
 @[match_pattern] abbrev Expr.append (a b : Expr) : Expr := .ext .append [a, b]
+@[match_pattern] abbrev Expr.pure (a : Expr) : Expr := .ext .pure [a]
 
 /-! ### Printing -/
 
@@ -60,6 +65,7 @@ def ExprExt.print (names : tolean.IR.Names) (op : ExprExt) (args : List String) 
   match op, args with
   | .wrap64, [a] => s!"({tolean.IR.wrapped (leanName names "Go.wrap64") a})"
   | .append, [a, b] => s!"({a} ++ {b})"
+  | .pure, [a] => s!"({tolean.IR.wrapped (leanName names "pure") a})"
   | _, _ => ""
 
 instance : tolean.IR.PrintOp ExprExt := ⟨ExprExt.print⟩

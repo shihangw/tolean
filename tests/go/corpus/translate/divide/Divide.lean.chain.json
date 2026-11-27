@@ -1,0 +1,36 @@
+{"tolean": "0.3.1",
+ "sources":
+ [{"sha256": "0a5e90bba7af80abf4220aa46df3935947a8405b1a37e2ea0befb64c08699f6f",
+   "path": "corpus/translate/divide/divide.go"}],
+ "output":
+ {"sha256": "04751de82cf4712c2591cc98102fe646fd746ef1f74e49641c8f4fbe99669d20",
+  "path": "corpus/translate/divide/Divide.lean"},
+ "nodes":
+ [{"status": "tested",
+   "label": "Go parser",
+   "kind": "parser",
+   "id": "parser",
+   "evidence": {"reference": "go/parser", "check": "go-check", "by": "tolean"}},
+  {"status": "tested",
+   "label": "Go translator",
+   "kind": "translator",
+   "id": "translator",
+   "evidence":
+   {"reference": "fixed corpus output", "check": "go-check", "by": "tolean"}},
+  {"status": "trusted",
+   "module": "tolean.Go.Spec.Basic",
+   "label": "Go Spec",
+   "kind": "spec",
+   "id": "spec"},
+  {"status": "trusted",
+   "label": "Go compiler",
+   "kind": "runtime",
+   "id": "runtime"}],
+ "module": "Divide",
+ "language": "go",
+ "edges":
+ [["source", "parser"],
+  ["parser", "translator"],
+  ["translator", "output"],
+  ["spec", "output"],
+  ["runtime", "output"]]}

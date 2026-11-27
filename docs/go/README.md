@@ -92,10 +92,52 @@ a transfer with pure functions.
 
 A pure function takes and returns `int`, `int64`, `bool` and `string`
 values and calls only other pure functions. Its body may declare locals with
-`:=` or `var`, assign them with `=`, `+=`, `-=`, `*=`, `++` and `--`, test
-with `if` and `else`, and return. The translator writes each pure function
-through `tolean/Go/Translate/Pure.lean`, which proves that translation, and
-it writes everything else as before.
+`:=` or `var`, assign them with `=`, `+=`, `-=`, `*=`, `/=`, `%=`, `++`
+and `--`, test with `if`, `else` and `switch`, and return. The translator writes each pure
+function through `tolean/Go/Translate/Pure.lean`, which proves that
+translation, and it writes everything else as before.
+
+An `if` may have an init statement, as in `if d := x - y; d > 0 { … }`. A
+`switch` may have a tag or none, an init statement, several values in one
+case, and a `default` clause anywhere in its body. The translator writes a
+switch as the chain of `if` statements that Go's rules give it: the first
+case value that equals the tag picks its clause, and `default` runs when
+none does. A plain block `{ … }` is accepted too. `Proof/Switch.lean` proves
+that the interpreter gives each of these statements the meaning of the
+statements that the translator writes for it.
+
+Some forms of these statements stay on the string translation. An `if` with
+an init statement, a `switch` or a block that returns on some path must be
+the last statement of its list, so `if v := f(); v > 0 { return v }` cannot
+be followed by more code. A switch with a tag needs at least one case value,
+because only a case test evaluates the tag. A case with several values
+becomes a `||` of tests, so a value after the first may not divide, and
+neither may the tag of such a switch. `break` inside a switch is refused. The [decision record](../decisions/2026-11-26-go-switch-as-if-chain.md)
+gives the reasons.
+
+Integer `/` and `%` become `Int.tdiv` and `Int.tmod`, which round toward
+zero as Go does. `/` wraps through `Go.wrap64`, so `MinInt64 / -1` is
+`MinInt64`, as in Go. Go panics when the divisor is zero, and Lean's
+division gives zero instead, so a statement that divides first tests each
+divisor that is not a nonzero literal. When one of them is zero, the function
+throws Go's message, `runtime error: integer divide by zero`. A function that
+can panic returns `Except String T` and `pure` of its value; a function whose
+divisors are all nonzero literals still returns `T`:
+
+```lean
+def Quo (a : Int) (b : Int) : (Except String Int) :=
+  if b = (0 : Int) then
+    let _ := (Go.wrap64 (Int.tdiv a b))
+    throw ("runtime error: integer divide by zero")
+  else
+    (pure (Go.wrap64 (Int.tdiv a b)))
+```
+
+The translator refuses a division by the constant zero, which Go refuses
+too, and a division in the right operand of `&&` or `||`, which Go might not
+evaluate. It also refuses a call of a function that can panic, from a pure
+function or from the rest of the package, until calls in `Except` are
+added. The corpus package `divide` shows the output.
 
 The proved path also accepts a counted loop as the first statement of a
 function: `for i := a; i < b; i++ { body }`. Both bounds must be nonnegative
@@ -110,7 +152,7 @@ The bounds become a list of integers, and the shared `IR.Body.fold` threads
 the changed locals. `LoopFrame.loop_refines` uses
 `Core.Loop.execLoop_refines` to connect the source loop with that fold.
 `top_sound` connects the leading loop and its continuation to the existing
-package theorem. The success-only statement of `translate_sound` is unchanged.
+package theorem. A panic in the body ends the loop, as a return does.
 The interpreter records the Go specification's “For statements with for
 clause” rule next to its counted-loop case.
 
@@ -127,14 +169,18 @@ range support is unchanged and is not covered by this theorem.
 `Pure.lean` is a total function, so Lean can reason about it. It does not
 write text. It builds the [Tolean IR](../decisions/2026-10-30-tolean-ir.md),
 the Lean code it writes as Lean data. `tolean/Go/IR.lean` adds what only Go
-needs to the shared IR: `Go.wrap64` and `++` on strings.
+needs to the shared IR: `Go.wrap64`, `++` on strings, and `pure` for the
+value of a function that can panic. The shared IR gives `Int.tdiv`,
+`Int.tmod` and `throw`.
 `tolean/Go/IR/Eval.lean` gives the IR a meaning.
 
 `tolean/Go/Spec/Eval.lean` is an interpreter for the pure subset. It runs
 the syntax tree that the parser returns and follows the Go specification.
-The theorem `translate_sound` in `tolean/Go/Proof/Package.lean` states that
-when a function of the IR gives a value for a call, the interpreter gives
-the same value for the same call of the source's function. It holds for
+The interpreter has an outcome for a panic next to the one for a return. The
+theorem `translate_sound` in `tolean/Go/Proof/Package.lean` states that when
+a function of the IR returns a value for a call, or throws, the interpreter
+returns the same value for the same call of the source's function, or panics
+with the same message. It holds for
 every package, every input and every amount of fuel. The proof follows the
 one for TypeScript, in three files: `Proof/Expr.lean` for expressions,
 `Proof/Stmt.lean` for statements and `Proof/Package.lean` for calls.

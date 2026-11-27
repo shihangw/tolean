@@ -1469,13 +1469,34 @@ def exportsFunction (m : Module) (name : String) : Bool :=
     | .function _ exported n _ _ _ _ => (exported || listsExport m name) && n == name
     | _ => false
 
+/-- The file that a re-export of `m`, the module of `file`, names `name`
+from: the first `export { name } from "source"` without `type`. -/
+def reexportSource (file : String) (m : Module) (name : String) : Option String :=
+  m.decls.findSome? fun
+    | .exports _ names (some source) =>
+      if names.any fun n => !n.typeOnly && n.name == name then resolvePath file source else none
+    | _ => none
+
+/-- The function that the file `file` exports as `name`, as `ResolveExport`
+finds it (ECMA-262 §16.2.1.6.3): the file's own exported function, or else
+what the file it re-exports `name` from exports as `name`. A re-export binds
+no name in the file that re-exports it. A cycle of re-exports resolves to
+nothing in JS, and here it uses up `fuel`, which is the number of files of
+the program, so a chain without a cycle never runs out. -/
+def resolveExport (p : Program) : Nat → String → String → Option DeclRef
+  | 0, _, _ => none
+  | fuel + 1, file, name => do
+    let m ← p.lookup file
+    if exportsFunction m name then return ⟨file, name⟩
+    resolveExport p fuel (← reexportSource file m name) name
+
 /-- The constructor of the error class `name` of the file of `s`. -/
 def errorClassIn (s : Scope) (name : String) : Option (Option ErrorCtor) :=
   (s.program.lookup s.file).bind fun m => errorClassOf m name
 
 /-- The function that a call of `name` runs, in the file of `s`: the file's
-own function, or else the exported function of the file it imports `name`
-from. -/
+own function, or else the function that the file it imports `name` from
+exports under that name, through any re-exports. -/
 def resolve (s : Scope) (name : String) : Option DeclRef := do
   let m ← s.program.lookup s.file
   if (functions m).any (·.1 == name) then return ⟨s.file, name⟩
@@ -1483,8 +1504,7 @@ def resolve (s : Scope) (name : String) : Option DeclRef := do
     | .import _ names source =>
       if names.any fun n => !n.typeOnly && n.name == name then resolvePath s.file source else none
     | _ => none
-  let tm ← s.program.lookup target
-  if exportsFunction tm name then return ⟨target, name⟩ else none
+  resolveExport s.program s.program.length target name
 
 /-- The string enums that `m` declares, or only the exported ones when
 `exportedOnly`: each with its name, and the name and the string of each
@@ -1494,6 +1514,17 @@ def enumsOf (m : Module) (exportedOnly : Bool) : List (String × List (String ×
     | .enum _ exported name members =>
       if exported || !exportedOnly then some (name, members.map fun x => (x.name, x.value)) else none
     | _ => none
+
+/-- The string enum that the file `file` exports as `name`, with the name and
+the string of each member: its own exported enum, or else what the file it
+re-exports `name` from exports, as `resolveExport` finds a function. -/
+def exportedEnum (p : Program) : Nat → String → String → Option (List (String × String))
+  | 0, _, _ => none
+  | fuel + 1, file, name => do
+    let m ← p.lookup file
+    match (enumsOf m true).lookup name with
+    | some members => some members
+    | none => exportedEnum p fuel (← reexportSource file m name) name
 
 /-- What the declaration `d` of the file `file` binds the name `name` to, when
 it is a string enum or an import of `name` without `type`: the members of the
@@ -1505,8 +1536,7 @@ def enumBinding (p : Program) (file name : String) : Decl → Option (Option (Li
     if names.any fun n => !n.typeOnly && n.name == name then
       some (do
         let target ← resolvePath file source
-        let tm ← p.lookup target
-        (enumsOf tm true).lookup name)
+        exportedEnum p p.length target name)
     else none
   | _ => none
 
