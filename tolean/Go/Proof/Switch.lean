@@ -15,18 +15,21 @@ namespace tolean.Go.Proof
 
 open tolean.Go tolean.Go.Syntax tolean.Go.Pure
 open tolean.Go.Eval (Val Outcome)
+open tolean.Core (Res)
 
 variable (p : Eval.Program) (fuel : Nat)
 
-/-- The end of an implicit block: a return passes, and the names that the
-block declared go out of scope. -/
+/-- The end of an implicit block: a return or a panic passes, and the names
+that the block declared go out of scope. -/
 def leave (ρ : Eval.Env) : Outcome → Outcome
   | .ret v => .ret v
+  | .panic x => .panic x
   | .normal ρ' => .normal (ρ'.drop (ρ'.length - ρ.length))
 
 theorem leave_leave (ρ : Eval.Env) (o : Outcome) : leave ρ (leave ρ o) = leave ρ o := by
   cases o with
   | ret v => rfl
+  | panic x => rfl
   | normal ρ' =>
     simp only [leave, List.length_drop, Outcome.normal.injEq]
     have : ρ'.length - (ρ'.length - ρ.length) - ρ.length = 0 := by omega
@@ -38,6 +41,7 @@ theorem leave_self (ρ : Eval.Env) : leave ρ (.normal ρ) = .normal ρ := by
 theorem bind_leave (x : Option Outcome) (ρ : Eval.Env) :
     (x.bind fun
       | .ret v => some (.ret v)
+      | .panic x => some (.panic x)
       | .normal ρ' => some (.normal (ρ'.drop (ρ'.length - ρ.length)))) = x.map (leave ρ) := by
   cases x with
   | none => rfl
@@ -50,6 +54,7 @@ theorem block_eq (sp : Span) (body : List Stmt) (ρ : Eval.Env) :
 theorem exec_cons_eq (s : Stmt) (rest : List Stmt) (ρ : Eval.Env) :
     Eval.exec p fuel ρ (s :: rest) = (Eval.execStmt p fuel ρ s).bind fun
       | .ret v => some (.ret v)
+      | .panic x => some (.panic x)
       | .normal ρ' => Eval.exec p fuel ρ' rest := by
   rw [Eval.exec]; rfl
 
@@ -71,6 +76,7 @@ theorem execStmt_ifInit (sp : Span) (s : Stmt) (c : Expr) (t : Stmt) (els : Opti
   | some o =>
     cases o with
     | ret v => simp [leave]
+    | panic x => simp [leave]
     | normal ρ₁ =>
       simp only [Option.bind_some, exec_cons_eq, exec_nil_eq]
       cases h2 : Eval.execStmt p fuel ρ₁ (.ifStmt sp none c t els) with
@@ -87,6 +93,7 @@ theorem execStmt_switchInit (sp : Span) (s : Stmt) (tag : Option Expr) (bsp : Sp
   | some o =>
     cases o with
     | ret v => simp [leave]
+    | panic x => simp [leave]
     | normal ρ₁ =>
       simp only [Option.bind_some, exec_cons_eq, exec_nil_eq]
       cases h2 : Eval.execStmt p fuel ρ₁ (.switchStmt sp none tag bsp cs) with
@@ -95,38 +102,92 @@ theorem execStmt_switchInit (sp : Span) (s : Stmt) (tag : Option Expr) (bsp : Sp
 
 /-! ### Case tests -/
 
-/-- The boolean of a value. -/
-def asBool : Val → Option Bool
-  | .bool b => some b
-  | _ => none
+/-- The boolean of a value, or a panic of the run that gave it. -/
+def boolOf (r : Res Val Val) : Res Val Bool :=
+  r.andThen fun
+    | .bool b => Res.ok b
+    | _ => none
+
+/-- Run `k` on a boolean. A panic of the run that gave it is a panic of the
+statement. -/
+def withBool (r : Res Val Bool) (k : Bool → Option Outcome) : Option Outcome :=
+  match r with
+  | none => none
+  | some (.error x) => some (.panic x)
+  | some (.ok b) => k b
+
+theorem withBool_map (r : Res Val Bool) (k : Bool → Option Outcome) (ρ : Eval.Env) :
+    (withBool r k).map (leave ρ) = withBool r fun b => (k b).map (leave ρ) := by
+  rcases r with _ | _ | b <;> rfl
 
 /-- The switch expression `tag` has the value `v`, and a missing one is
 `true`. -/
 def TagVal (ρ : Eval.Env) : Option Expr → Val → Prop
   | none, v => v = .bool true
-  | some x, v => Eval.eval p fuel ρ x = some v
+  | some x, v => Eval.eval p fuel ρ x = some (.ok v)
 
 theorem caseTest_eval {ρ : Eval.Env} {tag : Option Expr} {v : Val} (ht : TagVal p fuel ρ tag v)
     (sp : Span) (e : Expr) :
-    (Eval.eval p fuel ρ (caseTest sp tag e)).bind asBool =
-      (Eval.eval p fuel ρ e).bind (Eval.eqVal v) := by
+    boolOf (Eval.eval p fuel ρ (caseTest sp tag e)) =
+      (Eval.eval p fuel ρ e).andThen fun w => Res.lift (Eval.eqVal v w) := by
   cases tag with
   | none =>
     simp only [TagVal] at ht
     subst ht
     simp only [caseTest]
-    cases Eval.eval p fuel ρ e with
-    | none => rfl
-    | some w => cases w <;> simp [asBool, Eval.eqVal]
+    rcases Eval.eval p fuel ρ e with _ | _ | w
+    · rfl
+    · rfl
+    · cases w <;> simp [boolOf, Eval.eqVal, Res.lift]
   | some x =>
     simp only [TagVal] at ht
     simp only [caseTest]
     rw [Eval.eval]
-    simp only [Eval.BinOp.ofString?, ht]
-    cases Eval.eval p fuel ρ e with
+    simp only [Eval.BinOp.ofString?, ht, Res.andThen_ok]
+    rcases Eval.eval p fuel ρ e with _ | _ | w
+    · rfl
+    · rfl
+    · simp only [Res.andThen_ok]
+      cases v <;> cases w <;>
+        simp [Eval.operate, Eval.binary, Eval.eqVal, boolOf, Res.lift]
+
+theorem matchAny_nil (ρ : Eval.Env) (v : Val) : Eval.matchAny p fuel ρ v [] = some (.ok false) := by
+  rw [Eval.matchAny]
+
+theorem matchAny_cons (ρ : Eval.Env) (v : Val) (e : Expr) (es : List Expr) :
+    Eval.matchAny p fuel ρ v (e :: es) =
+      ((Eval.eval p fuel ρ e).andThen fun w => Res.lift (Eval.eqVal v w)).andThen fun b =>
+        if b then Res.ok true else Eval.matchAny p fuel ρ v es := by
+  rw [Eval.matchAny]
+  rcases Eval.eval p fuel ρ e with _ | _ | w
+  · rfl
+  · rfl
+  · simp only [Res.andThen_ok]
+    cases Eval.eqVal v w with
     | none => rfl
-    | some w =>
-      cases h : Eval.eqVal v w <;> simp [Eval.binary, h, asBool]
+    | some b => cases b <;> rfl
+
+theorem or_bool (sp : Span) (l r : Expr) (ρ : Eval.Env) :
+    boolOf (Eval.eval p fuel ρ (.binary sp "||" l r)) =
+      (boolOf (Eval.eval p fuel ρ l)).andThen fun b =>
+        if b then Res.ok true else boolOf (Eval.eval p fuel ρ r) := by
+  rw [Eval.eval]
+  simp only [Eval.BinOp.ofString?]
+  rcases Eval.eval p fuel ρ l with _ | _ | lv
+  · rfl
+  · rfl
+  · cases lv with
+    | bool b =>
+      cases b with
+      | true => rfl
+      | false =>
+        simp only [Res.andThen_ok, boolOf, Bool.false_eq_true, ↓reduceIte]
+        rcases Eval.eval p fuel ρ r with _ | _ | rv
+        · rfl
+        · rfl
+        · cases rv <;> rfl
+    | int _ => rfl
+    | str _ => rfl
 
 theorem caseCond_none {sp : Span} {tag : Option Expr} {es : List Expr} (h : caseCond sp tag es = none) :
     es = [] := by
@@ -138,80 +199,44 @@ theorem caseCond_none {sp : Span} {tag : Option Expr} {es : List Expr} (h : case
 
 theorem caseCond_eval {ρ : Eval.Env} {tag : Option Expr} {v : Val} (ht : TagVal p fuel ρ tag v) (sp : Span) :
     ∀ {es : List Expr} {c : Expr}, caseCond sp tag es = some c →
-      (Eval.eval p fuel ρ c).bind asBool = Eval.matchAny p fuel ρ v es
+      boolOf (Eval.eval p fuel ρ c) = Eval.matchAny p fuel ρ v es
   | [], c, h => by simp [caseCond] at h
   | e :: es, c, h => by
-    rw [Eval.matchAny]
+    rw [matchAny_cons]
     simp only [caseCond] at h
     split at h
     · next hn =>
       simp only [Option.some.injEq] at h
       subst h
-      rw [caseCond_none hn, caseTest_eval p fuel ht sp e]
-      cases Eval.eval p fuel ρ e with
-      | none => rfl
-      | some w =>
-        cases h : Eval.eqVal v w with
-        | none => simp only [Option.bind_some, Option.bind_eq_bind, h]; rfl
-        | some b => cases b <;> simp [h, Eval.matchAny]
+      rw [caseCond_none hn, matchAny_nil, caseTest_eval p fuel ht sp e]
+      rcases Eval.eval p fuel ρ e with _ | _ | w
+      · rfl
+      · rfl
+      · simp only [Res.andThen_ok]
+        cases Eval.eqVal v w with
+        | none => rfl
+        | some b => cases b <;> rfl
     · next r hr =>
       simp only [Option.some.injEq] at h
       subst h
-      have ih := caseCond_eval ht sp hr
-      have ht' := caseTest_eval p fuel ht sp e
-      rw [Eval.eval]
-      simp only [Eval.BinOp.ofString?]
-      cases hl : Eval.eval p fuel ρ (caseTest sp tag e) with
-      | none =>
-        rw [hl] at ht'
-        cases he : Eval.eval p fuel ρ e with
-        | none => rfl
-        | some w =>
-          rw [he] at ht'
-          simp only [Option.bind_none, Option.bind_some] at ht'
-          simp [← ht']
-      | some lv =>
-        rw [hl] at ht'
-        cases lv with
-        | bool x =>
-          cases he : Eval.eval p fuel ρ e with
-          | none => simp [he, asBool] at ht'
-          | some w =>
-            rw [he] at ht'
-            simp only [Option.bind_some, asBool] at ht'
-            simp only [Option.bind_eq_bind, Option.bind_some, Option.pure_def, ← ht']
-            cases x with
-            | true => simp [asBool]
-            | false =>
-              simp only [Bool.false_eq_true, ↓reduceIte]
-              rw [← ih]
-              cases Eval.eval p fuel ρ r with
-              | none => rfl
-              | some rv => cases rv <;> simp [asBool]
-        | int i | str s =>
-          cases he : Eval.eval p fuel ρ e with
-          | none => simp [he, asBool] at ht' ⊢
-          | some w =>
-            rw [he] at ht'
-            simp only [Option.bind_some, asBool] at ht'
-            simp [← ht']
+      rw [or_bool, caseTest_eval p fuel ht sp e, caseCond_eval ht sp hr]
 
 /-! ### The chain of `if` statements -/
 
 theorem execStmt_if_eq (sp : Span) (c : Expr) (t : Stmt) (els : Option Stmt) (ρ : Eval.Env) :
     Eval.execStmt p fuel ρ (.ifStmt sp none c t els) =
-      ((Eval.eval p fuel ρ c).bind asBool).bind fun b =>
+      withBool (boolOf (Eval.eval p fuel ρ c)) fun b =>
         (if b then Eval.execStmt p fuel ρ t
           else match els with
             | some f => Eval.execStmt p fuel ρ f
             | none => some (.normal ρ)).map (leave ρ) := by
   rw [Eval.execStmt]
-  cases Eval.eval p fuel ρ c with
-  | none => rfl
-  | some w =>
-    cases w with
+  rcases Eval.eval p fuel ρ c with _ | _ | w
+  · rfl
+  · rfl
+  · cases w with
     | bool b =>
-      simp only [Option.bind_some, asBool]
+      simp only [Eval.withValue_ok, boolOf, Res.andThen_ok, withBool]
       rw [← bind_leave]
       cases b
       · cases els <;> rfl
@@ -219,8 +244,17 @@ theorem execStmt_if_eq (sp : Span) (c : Expr) (t : Stmt) (els : Option Stmt) (ρ
     | int i => rfl
     | str s => rfl
 
-theorem matchAny_nil (ρ : Eval.Env) (v : Val) : Eval.matchAny p fuel ρ v [] = some false := by
-  rw [Eval.matchAny]
+theorem execClauses_case (sp : Span) (es : List Expr) (body : List Stmt) (rest : List CaseClause)
+    (dflt : Option (List Stmt)) (ρ : Eval.Env) (v : Val) :
+    Eval.execClauses p fuel ρ v (.mk sp (some es) body :: rest) dflt =
+      withBool (Eval.matchAny p fuel ρ v es) fun b =>
+        if b then Eval.exec p fuel ρ body else Eval.execClauses p fuel ρ v rest dflt := by
+  rw [Eval.execClauses.eq_def]
+  simp only
+  rcases Eval.matchAny p fuel ρ v es with _ | _ | b
+  · rfl
+  · rfl
+  · cases b <;> rfl
 
 /-- The clauses mean what their chain means, once the switch expression has
 the value `v`. -/
@@ -239,50 +273,66 @@ theorem chain_eval {ρ : Eval.Env} {tag : Option Expr} {v : Val} (ht : TagVal p 
     simp only [switchChain]
     exact chain_eval ht rest (some (sp, body))
   | .mk sp (some es) body :: rest, dflt => by
-    rw [Eval.execClauses.eq_def]
     simp only [switchChain]
     cases hc : caseCond sp tag es with
     | none =>
-      rw [caseCond_none hc, matchAny_nil]
+      rw [caseCond_none hc, execClauses_case, matchAny_nil]
       exact chain_eval ht rest dflt
     | some c =>
       simp only
-      rw [execStmt_if_eq, caseCond_eval p fuel ht sp hc]
+      rw [execClauses_case, withBool_map, execStmt_if_eq, caseCond_eval p fuel ht sp hc]
       have ih := chain_eval ht rest dflt
       cases Eval.matchAny p fuel ρ v es with
       | none => rfl
-      | some b =>
-        cases b with
-        | true =>
-          simp only [Option.bind_some, ↓reduceIte, block_eq, Option.map_map]
-          congr 1; funext o; exact (leave_leave ρ o).symm
-        | false =>
-          simp only [Option.bind_eq_bind, Option.bind_some, Bool.false_eq_true, ↓reduceIte]
-          cases hch : switchChain tag dflt rest with
-          | none => simp only [hch] at ih; rw [ih]; simp [leave_self]
-          | some f =>
-            simp only [hch] at ih
-            simp only
-            rw [← ih, Option.map_map]
+      | some r =>
+        rcases r with x | b
+        · rfl
+        · cases b with
+          | true =>
+            simp only [withBool, ↓reduceIte, block_eq, Option.map_map]
             congr 1; funext o; exact (leave_leave ρ o).symm
+          | false =>
+            simp only [withBool, Bool.false_eq_true, ↓reduceIte]
+            cases hch : switchChain tag dflt rest with
+            | none => simp only [hch] at ih; rw [ih]; simp [leave_self]
+            | some f =>
+              simp only [hch] at ih
+              simp only
+              rw [← ih, Option.map_map]
+              congr 1; funext o; exact (leave_leave ρ o).symm
 
-theorem caseCond_fails {ρ : Eval.Env} {x : Expr} (hx : Eval.eval p fuel ρ x = none) (sp : Span) :
-    ∀ {es : List Expr} {c : Expr}, caseCond sp (some x) es = some c → Eval.eval p fuel ρ c = none
+/-- A value that the switch expression does not have: it is stuck or it
+panics. -/
+def Stuck (r : Res Val Val) : Prop := ∀ v, r ≠ some (.ok v)
+
+theorem stuck_andThen {r : Res Val Val} (hr : Stuck r) (f : Val → Res Val Val) :
+    r.andThen f = r := by
+  rcases r with _ | _ | v
+  · rfl
+  · rfl
+  · exact absurd rfl (hr v)
+
+theorem caseCond_fails {ρ : Eval.Env} {x : Expr} (hx : Stuck (Eval.eval p fuel ρ x)) (sp : Span) :
+    ∀ {es : List Expr} {c : Expr}, caseCond sp (some x) es = some c →
+      Eval.eval p fuel ρ c = Eval.eval p fuel ρ x
   | [], c, h => by simp [caseCond] at h
   | e :: es, c, h => by
-    have ht : Eval.eval p fuel ρ (caseTest sp (some x) e) = none := by
-      simp only [caseTest]; rw [Eval.eval]; simp [Eval.BinOp.ofString?, hx]
+    have ht : Eval.eval p fuel ρ (caseTest sp (some x) e) = Eval.eval p fuel ρ x := by
+      simp only [caseTest]; rw [Eval.eval]; simp only [Eval.BinOp.ofString?]
+      exact stuck_andThen hx _
     simp only [caseCond] at h
     split at h
     · simp only [Option.some.injEq] at h; subst h; exact ht
     · simp only [Option.some.injEq] at h; subst h
-      rw [Eval.eval]; simp [Eval.BinOp.ofString?, ht]
+      rw [Eval.eval]; simp only [Eval.BinOp.ofString?, ht]
+      exact stuck_andThen hx _
 
-/-- When the switch expression has no value, neither has the chain, because
-its first test evaluates the switch expression. -/
-theorem chain_fails {ρ : Eval.Env} {x : Expr} (hx : Eval.eval p fuel ρ x = none) :
+/-- When the switch expression has no value, the chain has the outcome of
+the switch, because its first test evaluates the switch expression. -/
+theorem chain_fails {ρ : Eval.Env} {x : Expr} (hx : Stuck (Eval.eval p fuel ρ x)) :
     ∀ (cs : List CaseClause) (dflt : Option (Span × List Stmt)) (d : Stmt), hasCase cs = true →
-      switchChain (some x) dflt cs = some d → Eval.execStmt p fuel ρ d = none
+      switchChain (some x) dflt cs = some d →
+        Eval.execStmt p fuel ρ d = Eval.withValue (Eval.eval p fuel ρ x) fun _ => none
   | [], _, _, h, _ => by simp [hasCase] at h
   | .mk sp none body :: rest, dflt, d, h, hd => by
     simp only [switchChain] at hd
@@ -297,14 +347,17 @@ theorem chain_fails {ρ : Eval.Env} {x : Expr} (hx : Eval.eval p fuel ρ x = non
       simp only [switchChain, hc, Option.some.injEq] at hd
       subst hd
       rw [execStmt_if_eq, caseCond_fails p fuel hx sp hc]
-      rfl
+      rcases hr : Eval.eval p fuel ρ x with _ | _ | v
+      · rfl
+      · rfl
+      · exact absurd hr (hx v)
 
 theorem execStmt_switch_def (sp bsp : Span) (tag : Option Expr) (cs : List CaseClause)
     (ρ : Eval.Env) :
     Eval.execStmt p fuel ρ (.switchStmt sp none tag bsp cs) =
-      (match tag with
-        | none => some (Val.bool true)
-        | some x => Eval.eval p fuel ρ x).bind fun v =>
+      Eval.withValue (match tag with
+        | none => Res.ok (Val.bool true)
+        | some x => Eval.eval p fuel ρ x) fun v =>
           (Eval.execClauses p fuel ρ v cs none).map (leave ρ) := by
   rw [Eval.execStmt.eq_def]
   simp only [← bind_leave]
@@ -322,13 +375,12 @@ theorem execStmt_switch_chain {sp bsp : Span} {tag : Option Expr} {cs : List Cas
     simp only [hd, Option.map_none] at this
     simpa using this
   | some x =>
-    cases hx : Eval.eval p fuel ρ x with
-    | none =>
-      simp only [hx, Option.bind_none]
-      exact (chain_fails p fuel hx cs none d (hcase rfl) hd).symm
-    | some v =>
-      have := chain_eval p fuel (ρ := ρ) (tag := some x) (v := v) hx cs none
-      simp only [hx, Option.bind_some]
+    simp only
+    rcases hx : Eval.eval p fuel ρ x with _ | _ | v
+    · rw [chain_fails p fuel (by rw [hx]; simp [Stuck]) cs none d (hcase rfl) hd, hx]; rfl
+    · rw [chain_fails p fuel (by rw [hx]; simp [Stuck]) cs none d (hcase rfl) hd, hx]; rfl
+    · have := chain_eval p fuel (ρ := ρ) (tag := some x) (v := v) hx cs none
+      simp only [Eval.withValue_ok]
       simp only [hd, Option.map_none] at this
       simpa using this
 

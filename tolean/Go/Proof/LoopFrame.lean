@@ -29,7 +29,7 @@ theorem body_frame (p : Eval.Program) (fs : Funcs) (fuel : Nat)
     (done : IR.Body.exec fs fuel t body = some (.normal innerT)) :
     ∃ innerS, Eval.exec p fuel s ss = some (.normal innerS) ∧
       Inner env ss s t innerS innerT := by
-  obtain ⟨_, fresh, modified, hs, ha, hn, hf⟩ := (sim s t agree scope).2 innerT done
+  obtain ⟨_, fresh, modified, hs, ha, hn, hf⟩ := (sim s t agree scope).2.1 innerT done
   exact ⟨fresh ++ modified, hs, fresh, modified, rfl, ha, hn, hf⟩
 
 /-- This uses the real translator's no-shadowing check and its statement proof.
@@ -187,7 +187,13 @@ theorem loop_refines (p : Eval.Program) (fs : Funcs) (fuel : Nat)
         subst out
         have hs := (sim _ _ (agree_cons h.1 index value)
           (scoped_cons h.2.1 index .int value)).1 result ht
-        exact ⟨.ret result, by simp [hs, Eval.Outcome.toLoop], rfl⟩
+        exact ⟨.ret (.ok result), by simp [hs, Eval.Outcome.toLoop], rfl⟩
+      | panic x =>
+        simp only [ht, Option.map_some, IR.loopOutcome, Option.some.injEq] at executed
+        subst out
+        have hs := (sim _ _ (agree_cons h.1 index value)
+          (scoped_cons h.2.1 index .int value)).2.2 x ht
+        exact ⟨.ret (.error x), by simp [hs, Eval.Outcome.toLoop], rfl⟩
       | normal innerT =>
         simp only [ht, Option.map_some, IR.loopOutcome, Option.some.injEq] at executed
         subst out
@@ -214,9 +220,9 @@ theorem eval_valueCodes (fs : Funcs) (fuel : Nat) (env : Eval.Env) (values : Lis
 success-only contract as the existing statement translator. -/
 theorem top_sound (p : Eval.Program) (fs : Funcs) (fuel : Nat)
     {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs fuel)
-    {env : Pure.Env} {result : Ty} {ss : List Stmt} {body : IR.Body}
-    (translated : translateTop ctx env result ss = .ok body) :
-    StmtSim p fs fuel env (.ret result) ss body := by
+    {env : Pure.Env} {result : Ty} {monadic : Bool} {ss : List Stmt} {body : IR.Body}
+    (translated : translateTop ctx env result monadic ss = .ok body) :
+    StmtSim p fs fuel env (.ret result monadic) ss body := by
   unfold translateTop at translated
   split at translated
   · next sp init cond post bsp loopSS rest =>
@@ -236,8 +242,8 @@ theorem top_sound (p : Eval.Program) (fs : Funcs) (fuel : Nat)
             ((env.filter fun l => (changesList loopSS).contains l.name).map
               fun l => (l.name, l.type.lean))
             index .int loopBody (.list (items.map valueCode) .int) next false none) = some out →
-          (∃ value, out = .ret value ∧ Eval.exec p fuel s
-            (.forStmt sp init cond post (.block bsp loopSS) :: rest) = some (.ret value)) ∨
+          (Eval.exec p fuel s (.forStmt sp init cond post (.block bsp loopSS) :: rest) = some out ∧
+            ∀ ρ, out ≠ .normal ρ) ∨
           ∃ source target, Eval.execStmt p fuel s
               (.forStmt sp init cond post (.block bsp loopSS)) = some (.normal source) ∧
             Agree source target ∧ Scoped env source ∧
@@ -252,7 +258,8 @@ theorem top_sound (p : Eval.Program) (fs : Funcs) (fuel : Nat)
             (fun outer inner => IR.bindState (changedNames loopSS env) inner outer) t items
           match value with
           | .normal inner => IR.Body.exec fs fuel inner next
-          | .ret value => some (.ret value)
+          | .ret (.ok value) => some (.ret value)
+          | .ret (.error value) => some (.panic value)
           | _ => none) = some out at executed
         cases targetRun : tolean.Core.Loop.runFold
             (fun inner => (IR.Body.exec fs fuel inner loopBody).map IR.loopOutcome)
@@ -283,26 +290,31 @@ theorem top_sound (p : Eval.Program) (fs : Funcs) (fuel : Nat)
               by simpa [targetRun] using executed⟩
           · left
             subst related
-            simp [targetRun, bind, Option.bind] at executed
-            subst out
-            refine ⟨_, rfl, ?_⟩
-            rw [exec_cons_ret p fuel sourceStmt]
+            rename_i r
+            cases r with
+            | ok v =>
+              simp [targetRun, bind, Option.bind] at executed
+              subst out
+              exact ⟨exec_cons_ret p fuel sourceStmt, fun _ h => by cases h⟩
+            | error x =>
+              simp [targetRun, bind, Option.bind] at executed
+              subst out
+              exact ⟨exec_cons_panic p fuel sourceStmt, fun _ h => by cases h⟩
           · simp [targetRun] at executed
           · simp [targetRun] at executed
-      constructor
-      · intro value executed
-        rcases key _ executed with done | ⟨source, target, step, ha, hs, next⟩
-        · obtain ⟨_, equal, done⟩ := done
-          cases equal
-          exact done
+      refine ⟨fun value executed => ?_, fun target executed => ?_, fun x executed => ?_⟩
+      · rcases key _ executed with done | ⟨source, target, step, ha, hs, next⟩
+        · exact done.1
         · rw [exec_cons_normal p fuel step]
           exact (simRest source target ha hs).1 value next
-      · intro target executed
-        rcases key _ executed with done | ⟨source, inner, step, ha, hs, next⟩
-        · obtain ⟨_, impossible, _⟩ := done
-          cases impossible
-        · have impossible := ((simRest source inner ha hs).2 target next).1
+      · rcases key _ executed with done | ⟨source, inner, step, ha, hs, next⟩
+        · exact absurd rfl (done.2 target)
+        · have impossible := ((simRest source inner ha hs).2.1 target next).1
           simp [Tail.isRet] at impossible
+      · rcases key _ executed with done | ⟨source, target, step, ha, hs, next⟩
+        · exact done.1
+        · rw [exec_cons_normal p fuel step]
+          exact (simRest source target ha hs).2.2 x next
   · exact stmts_sound p fs fuel hp hc translated
 
 end tolean.Go.Proof

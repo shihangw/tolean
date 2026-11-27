@@ -30,6 +30,11 @@ proof relates the interpreter's environment to the output's name by name. A
 local that the source does not have would break that relation for the rest
 of the function.
 
+A panic works the same way. When the tag divides by zero, the switch
+panics, and so does the first case test. The translator refuses a division
+in the right operand of `||`, so a clause with several values may not divide
+in its later values, and the tag may not divide when such a clause exists.
+
 ## Scope of an init statement
 
 The name that an init statement declares goes out of scope at the end of the

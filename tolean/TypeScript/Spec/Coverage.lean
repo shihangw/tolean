@@ -3,7 +3,7 @@ import tolean.Runtime.LoopResult
 import Lean
 import tolean.TypeScript.Certify
 import tolean.TypeScript.Decreasing
-import tolean.TypeScript.EStateM
+import tolean.Core.EStateM
 import tolean.TypeScript.Interpret
 import tolean.TypeScript.Map
 import tolean.TypeScript.Proof.Guard

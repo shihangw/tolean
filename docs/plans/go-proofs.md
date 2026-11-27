@@ -49,7 +49,6 @@ Go guide documents it from then on.
 
 | Go | Lean | Refused |
 |---|---|---|
-| `/` and `%` on integers | `Int.tdiv` and `Int.tmod` in `Except`, because a division by zero panics, and `MinInt64 / -1` wraps | Constant expressions, as now |
 | `<` and the other orders on strings | The order of UTF-8 bytes | |
 | `len(s)` on a string | The number of UTF-8 bytes | Indexing a string, until the interpreter models bytes |
 

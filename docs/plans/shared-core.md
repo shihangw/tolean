@@ -33,7 +33,7 @@ that describe Lean code do not depend on the source language.
 | Pure core of the IR | Integers, booleans, strings, `Option`, `if`, `let`, structures, lists and `List.foldl`. Each language adds its own constructs at one extension point per layer, such as JavaScript numbers for TypeScript. | `tolean/IR.lean`, with the TypeScript extension in `tolean/TypeScript/IR.lean` |
 | Its printer | One IR, printed in one way, so there is one printer to trust or certify. The [printing plan](printing.md) hands its layout to Lean. | Part of `tolean/IR.lean`, which asks each language how to print what it adds |
 | Its evaluator | The meaning of the IR. It becomes generic over the value type and environment, so that Go can use `int64` and SQL can use its own values and three-valued logic. | `tolean/TypeScript/IR/Eval.lean`, over the TypeScript interpreter's `Val N`, and `tolean/Go/IR/Eval.lean`, over Go's values |
-| Loop core | Every supported `for` runs its body over a list in order. Languages supply heads and their simulations; the core shares state threading, control flow, lowering, fold soundness and certificates. See the [loop-core decision](../decisions/2026-11-22-shared-loop-core.md). | TypeScript's `LoopHead`, `execLoop` and `translateLoop_sound`; shared `Body.fold` and printer in `tolean/IR.lean`. [PR #292](https://github.com/shihangw/tolean/pull/292) adds runtime `LoopResult` and per-loop certificate composition. Go's proved path has no loops yet. |
+| Loop core | Every supported `for` runs its body over a list in order. Languages supply heads and their simulations; the core shares state threading, control flow, lowering, fold soundness and certificates. See the [loop-core decision](../decisions/2026-11-22-shared-loop-core.md). | TypeScript's `LoopHead`, `execLoop` and `translateLoop_sound`; shared `Body.fold` and printer in `tolean/IR.lean`. [PR #292](https://github.com/shihangw/tolean/pull/292) adds runtime `LoopResult` and per-loop certificate composition. Go's proved path lowers a leading counted `for` to `Body.fold`. |
 | Proof plumbing | `Env` and its lemmas, fuel, the encode and decode pattern, `link_tac`, `runFold_foldl`, a lemma of the shape of `decls_sound`, and kernel-decidable equality on the IR | `Env` is in `tolean/TypeScript/Spec/Eval.lean`, and the rest is under `tolean/TypeScript/Proof/` |
 | Certificate generator | The layout of a certificate, and `chars!` | `tolean/TypeScript/Certify.lean` and `Certify/`, with `chars!` in `Syntax/Parser.lean` |
 | Lexer side of the round trip | `lexChars_render`, `Laid` and `NoBreak` are about tokens and lines, not about TypeScript | `tolean/TypeScript/Syntax/` |
@@ -57,9 +57,8 @@ already work.
 Each piece gets its lemmas once: bind, run and the frame rules. Then
 `link_tac` and the lemma of the shape of `decls_sound` work for any monad
 built from the pieces. The repository already shares lemmas this way for its
-own monads. `tolean/TypeScript/EStateM.lean` holds the `EStateM` lemmas that
-the translator's, parser's and lexer's monads use. That file moves to a shared
-place and grows.
+own monads. `tolean/Core/EStateM.lean` holds the `EStateM` lemmas that
+the translator's, parser's and lexer's monads use, and it grows.
 
 The generated code uses Lean's own monads for the pieces: `StateT`, `ExceptT`
 and `EStateM`, over `Id`. It does not use a monad of Tolean's own. `Std.Do`
@@ -116,9 +115,15 @@ written, so that other documents can name a step.
    interpreter, and extend `program_sound` and certificates to cover it.
    Exceptions are done: `Outcome.ret` holds an `Except`, the IR has
    `Body.throw` and `Body.bind`, and `program_sound_call` covers a call that
-   throws. Certificates do not cover a function that can throw yet.
-4. Move the `EStateM` lemmas to a shared module, and add the lemmas for the
-   state and exception pieces next to them.
+   throws. Certificates do not cover a function that can throw yet. Go uses
+   the same `Body.throw` for a panic: its interpreter and IR evaluator have a
+   panic outcome, and `translate_sound` covers integer `/` and `%`, whose
+   division by zero panics. A Go call of a function that can panic is not
+   translated yet, so the Go IR does not use `Body.bind`. State is not done.
+4. The `EStateM` lemmas are in the shared module `tolean/Core/EStateM.lean`,
+   and `tolean/Core/Except.lean` holds `Core.Res`, the result of a
+   computation that can fail or throw, with its bind lemmas. The lemmas for
+   the state piece are not added yet.
 5. Move the rest of the Go translator onto the Tolean IR and the Go
    interpreter, as the [Go proofs plan](go-proofs.md) lists, and delete its
    string translation.
@@ -129,12 +134,12 @@ written, so that other documents can name a step.
    user before lowering and fold soundness move out of TypeScript; taking these
    parts out before a second language uses them would fit them to TypeScript
    alone.
-6a. Connect Go loop lowering to the shared evaluator before claiming Go loop
-    support. `Go.Translate.Pure.translateStmts` and `Go.Spec.Eval.execStmt`
-    currently reject `forStmt` and `range`, `Go.IR.Body.exec` has no `fold`
-    case, `Go.Translate.transRange` emits Lean text without an evaluator proof,
-    and counted-for lowering is not implemented. Add the missing evaluator
-    cases and proof connection before proving Go range or counted-for loops.
+6a. Connect Go loop lowering to the shared evaluator. A counted `for` loop
+    with literal bounds, as the first statement of a function, is done:
+    `Go.Spec.Eval.execStmt` runs it with `Core.Loop.execLoop`,
+    `Go.IR.Body.exec` runs `fold` with `Core.Loop.runFold`, and `top_sound`
+    proves the lowering. `range` is not: `Go.Spec.Eval.execStmt` refuses it,
+    and `Go.Translate.transRange` writes Lean text without a proof.
     `tolean/Experimental/LoopCore` contains small C and C++ models and examples
     that exercise the core's shape only; they are not supported source
     languages or production translators.

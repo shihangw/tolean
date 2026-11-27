@@ -905,12 +905,17 @@ func check(seed int64, programs int) error {
     throw (IO.userError ("the proved path refuses generated functions:\n" ++ "\n".intercalate refusals))
   let program := Eval.program decls
   let fs := IR.functions (out.map (·.1))
+  -- The value that a call returns, or none when it panics or has no value.
+  -- The generator does not divide, so no call panics.
+  let value : Option (Except Eval.Val Eval.Val) → Option Eval.Val
+    | some (.ok v) => some v
+    | _ => none
   let mut bad : Array String := #[]
   for (f, args, want) in calls do
-    let got := Eval.runIn program f args
+    let got := value (Eval.runIn program f args)
     if got != some want then
       bad := bad.push s!"interpreter: {f} {repr args} gives {repr got}, Go gives {repr want}"
-    let got := IR.runIn fs ⟨"", f⟩ args
+    let got := value (IR.runIn fs ⟨"", f⟩ args)
     if got != some want then
       bad := bad.push s!"IR: {f} {repr args} gives {repr got}, Go gives {repr want}"
   unless bad.isEmpty do

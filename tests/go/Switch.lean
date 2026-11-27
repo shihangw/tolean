@@ -12,14 +12,24 @@ private def parseDecls (body : String) : Except String (List Syntax.Decl) := do
   | .ok file => return file.decls
   | .error _ => throw "the switch test did not parse"
 
-private def check (body : String) (input expected : Int) : Bool :=
+/-- Equal results of a call. `Except` has no `BEq` instance. -/
+private def same : Option (Except Eval.Val Eval.Val) → Option (Except Eval.Val Eval.Val) → Bool
+  | some (.ok a), some (.ok b) | some (.error a), some (.error b) => a == b
+  | none, none => true
+  | _, _ => false
+
+/-- `F` is translated, and both sides give `expected` for `input`. -/
+private def checkRes (body : String) (input : Int) (expected : Except Eval.Val Eval.Val) : Bool :=
   match parseDecls body with
   | .error _ => false
   | .ok decls =>
     let translated := Pure.translateFuncs decls ["F"]
     translated.length == 1 &&
-      IR.runIn (IR.functions (translated.map (·.1))) ⟨"", "F"⟩ [.int input] == some (.int expected) &&
-      Eval.runIn (Eval.program decls) "F" [.int input] == some (.int expected)
+      same (IR.runIn (IR.functions (translated.map (·.1))) ⟨"", "F"⟩ [.int input]) (some expected) &&
+      same (Eval.runIn (Eval.program decls) "F" [.int input]) (some expected)
+
+private def check (body : String) (input expected : Int) : Bool :=
+  checkRes body input (.ok (.int expected))
 
 private def refused (body : String) : Bool :=
   match parseDecls body with
@@ -54,6 +64,19 @@ private def withInit : String :=
 -- An init statement that assigns an outer local.
 #guard check "r := 0; if r = x + 1; r > 5 { r = 100 }; return r" 3 4
 #guard check "r := 0; if r = x + 1; r > 5 { r = 100 }; return r" 9 100
+-- A switch panics when its tag divides by zero, as Go does.
+private def dividing : String :=
+  "switch 10 / x { case 1: return 1; case 3: return 3; default: return 0 }"
+#guard check dividing 10 1
+#guard check dividing 3 3
+#guard check dividing 4 0
+#guard checkRes dividing 0 (.error Eval.divideByZero)
+#guard checkRes "r := 0; if d := 10 / x; d > 2 { r = d }; return r" 0 (.error Eval.divideByZero)
+#guard check "r := 0; if d := 10 / x; d > 2 { r = d }; return r" 2 5
+-- A case value after the first of its clause becomes the right operand of
+-- `||`, which may not divide, and so does a dividing tag in such a clause.
+#guard refused "switch x { case 1, 100 % x: return 1; default: return 0 }"
+#guard refused "switch 10 / x { case 1, 2: return 1; default: return 0 }"
 
 -- A tag with only a default would evaluate the tag for nothing.
 #guard refused "switch x { default: return 1 }"

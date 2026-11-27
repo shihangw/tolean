@@ -8,14 +8,21 @@ private def parseDecls (body : String) : Except String (List Syntax.Decl) := do
   | .ok file => return file.decls
   | .error _ => throw "the counted-loop test did not parse"
 
+/-- Equal results of a call. `Except` has no `BEq` instance. -/
+private def same : Option (Except Eval.Val Eval.Val) → Option (Except Eval.Val Eval.Val) → Bool
+  | some (.ok a), some (.ok b) | some (.error a), some (.error b) => a == b
+  | none, none => true
+  | _, _ => false
+
 private def check (body : String) (input expected : Int) : Bool :=
   match parseDecls body with
   | .error _ => false
   | .ok decls =>
     let translated := Pure.translateFuncs decls ["Sum"]
     translated.length == 1 &&
-      IR.runIn (IR.functions (translated.map (·.1))) ⟨"", "Sum"⟩ [.int input] == some (.int expected) &&
-      Eval.runIn (Eval.program decls) "Sum" [.int input] == some (.int expected)
+      same (IR.runIn (IR.functions (translated.map (·.1))) ⟨"", "Sum"⟩ [.int input])
+        (some (.ok (.int expected))) &&
+      same (Eval.runIn (Eval.program decls) "Sum" [.int input]) (some (.ok (.int expected)))
 
 private def refused (body : String) : Bool :=
   match parseDecls body with
