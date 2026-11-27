@@ -1,0 +1,44 @@
+{"tolean": "0.3.1",
+ "target": "ES2024",
+ "sources":
+ [{"sha256": "fbd96261c80295b5c91c18f0e12415843356b3ba4a49dbf69e86b6618f5048c6",
+   "path": "corpus/translate/accept/mapBorrowTwoMaps.ts"}],
+ "output":
+ {"sha256": "d5530dec1f415c56706afe1b3962234c239cb8029c70fa9f622bb12eee1ec5a0",
+  "path": "corpus/translate/accept/mapBorrowTwoMaps.lean"},
+ "nodes":
+ [{"status": "tested",
+   "label": "TypeScript parser",
+   "kind": "parser",
+   "id": "parser",
+   "evidence":
+   {"reference": "tsc", "check": "typescript-parse", "by": "tolean"}},
+  {"status": "tested",
+   "label": "TypeScript translator",
+   "kind": "translator",
+   "id": "translator",
+   "evidence":
+   {"reference": "fixed corpus output and random programs",
+    "check": "typescript-translate",
+    "by": "tolean"}},
+  {"status": "tested",
+   "module": "tolean.TypeScript.Spec.Number",
+   "label": "JavaScript number laws",
+   "kind": "spec",
+   "id": "spec",
+   "evidence":
+   {"reference": "Node 22 and 24",
+    "check": "typescript-engines",
+    "by": "tolean"}},
+  {"status": "trusted",
+   "label": "JavaScript engine",
+   "kind": "runtime",
+   "id": "runtime"}],
+ "module": "Test",
+ "language": "typescript",
+ "edges":
+ [["source", "parser"],
+  ["parser", "translator"],
+  ["translator", "output"],
+  ["spec", "output"],
+  ["runtime", "output"]]}

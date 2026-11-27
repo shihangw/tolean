@@ -869,22 +869,34 @@ def Expr.borrowAtom : Expr → Bool
   | .ident .. | .number .. | .bigint .. | .string .. | .bool .. => true
   | _ => false
 
-/-- The shape of a straight-line update candidate. A forwarding call also
-needs `borrowCallsValid` to establish which argument changes. -/
-def Stmt.borrowUpdate (param : String) : Stmt → Bool
+/-- The shape of a straight-line update of the candidate parameters `ps`. A
+forwarding call also needs `borrowCallsValid` to establish which arguments
+change. No candidate may appear twice among a call's arguments, so one call
+never borrows the same map for two parameters. -/
+def Stmt.borrowUpdate (ps : List String) : Stmt → Bool
   | .exprStmt _ (.call _ (.member _ (.ident _ name) method) args) =>
-    name == param &&
+    ps.contains name &&
       ((method == "set" && args.length == 2) || (method == "delete" && args.length == 1)) &&
-      args.all (fun e => e.borrowAtom && !e.leaks param)
+      args.all (fun e => e.borrowAtom && ps.all (fun p => !e.leaks p))
   | .exprStmt _ (.call _ (.ident _ _) args) =>
     args.all (·.borrowAtom) &&
-      (args.filter (fun e => match e with
-        | .ident _ name => name == param
-        | _ => false)).length == 1
+      ps.all fun p => (args.filter (fun e => match e with
+        | .ident _ name => name == p
+        | _ => false)).length ≤ 1
   | _ => false
 
+/-- The candidate parameters that an update statement names as changed: the
+receiver of `set` or `delete`, or an argument of a forwarding call. -/
+def Stmt.borrowTargets (ps : List String) : Stmt → List String
+  | .exprStmt _ (.call _ (.member _ (.ident _ name) _) _) => if ps.contains name then [name] else []
+  | .exprStmt _ (.call _ (.ident _ _) args) =>
+    args.filterMap fun e => match e with
+      | .ident _ name => if ps.contains name then some name else none
+      | _ => none
+  | _ => []
+
 /-- A terminal bare return has no value for a void borrowing call. Keep its
-prefix so the borrowing call can copy the final parameter binding out. -/
+prefix so the borrowing call can copy the final parameter bindings out. -/
 def Stmt.borrowPrefix : Stmt → Stmt
   | .block sp ss =>
     match ss.getLast? with
@@ -892,56 +904,85 @@ def Stmt.borrowPrefix : Stmt → Stmt
     | _ => .block sp ss
   | s => s
 
-/-- A candidate map parameter for copy-out. Forwarded calls still need the
-callee-index check in `borrowParam?` before this becomes a signature. -/
-def borrowCandidate? (params : List Param) (ret : Option TypeExpr) (body : Stmt) : Option Nat := do
-  let some (.keyword _ "void") := ret | none
-  let .block _ ss := body.borrowPrefix | none
-  let maps := params.zipIdx |>.filter fun (p, _) =>
+/-- The indices of the parameters whose type is a mutable `Map`. -/
+def mapParamIndices (params : List Param) : List Nat :=
+  (params.zipIdx.filter fun (p, _) =>
     match p.type with
     | some (.ref _ "Map" [_, _]) => true
-    | _ => false
-  let [(p, i)] := maps | none
-  if params.any (·.optional) || ss.isEmpty || !(ss.all (·.borrowUpdate p.name)) then none
-  else some i
+    | _ => false).map (·.2)
 
-/-- A forwarded call changes the candidate parameter only when it occurs
-at the checked callee's borrowed argument index. No parameter may hide
-that top-level callee. -/
-def Stmt.borrowCallsValid (borrows : List (String × Nat)) (params : List String)
-    (param : String) : Stmt → Bool
+/-- The names of the parameters at `indices`, in order. -/
+def paramNamesAt (params : List Param) (indices : List Nat) : List String :=
+  indices.filterMap fun i => (params[i]?).map (·.name)
+
+/-- The candidate map parameters for copy-out, in parameter order. Every
+mutable `Map` parameter must be changed by some statement, and every
+statement must change only candidates. Forwarded calls still need the
+callee-index check in `borrowParam?` before this becomes a signature. -/
+def borrowCandidate? (params : List Param) (ret : Option TypeExpr) (body : Stmt) : Option (List Nat) := do
+  let some (.keyword _ "void") := ret | none
+  let .block _ ss := body.borrowPrefix | none
+  let is := mapParamIndices params
+  let ps := paramNamesAt params is
+  if is.isEmpty || params.any (·.optional) || ss.isEmpty || !(ss.all (·.borrowUpdate ps)) ||
+      !(ps.all fun p => ss.any fun s => (s.borrowTargets ps).contains p) then none
+  else some is
+
+/-- A forwarded call changes a candidate parameter only when it occurs at
+one of the checked callee's borrowed argument indices, and every such index
+holds a candidate. No parameter may hide that top-level callee. -/
+def Stmt.borrowCallsValid (borrows : List (String × List Nat)) (params : List String)
+    (ps : List String) : Stmt → Bool
   | .exprStmt _ (.call _ (.ident _ name) args) =>
     !params.contains name &&
       match borrows.lookup name with
-      | some i =>
-        match args[i]? with
-        | some (.ident _ actual) => actual == param
-        | _ => false
+      | some is =>
+        (is.all fun i => match args[i]? with
+          | some (.ident _ actual) => ps.contains actual
+          | _ => false) &&
+        (args.zipIdx.all fun (a, j) => match a with
+          | .ident _ x => !ps.contains x || is.contains j
+          | _ => true)
       | none => false
   | _ => true
 
-/-- The map parameter whose final value a normal completion copies out.
+/-- The map parameters whose final values a normal completion copies out.
 Every forwarded call must use an already checked borrowing signature. -/
-def borrowParam? (borrows : List (String × Nat)) (params : List Param)
-    (ret : Option TypeExpr) (body : Stmt) : Option Nat := do
-  let i ← borrowCandidate? params ret body
-  let p ← params[i]?
+def borrowParam? (borrows : List (String × List Nat)) (params : List Param)
+    (ret : Option TypeExpr) (body : Stmt) : Option (List Nat) := do
+  let is ← borrowCandidate? params ret body
+  let ps := paramNamesAt params is
   let .block _ ss := body.borrowPrefix | none
-  if ss.all (·.borrowCallsValid borrows (params.map (·.name)) p.name) then some i else none
+  if ss.all (·.borrowCallsValid borrows (params.map (·.name)) ps) then some is else none
 
-/-- Replace a checked borrow statement by a mutation marker for the existing
+/-- The borrowed variables of a call: the identifier at each borrowed index,
+with its span. -/
+def borrowTargetsAt (args : List Expr) (is : List Nat) : Option (List (Span × String)) :=
+  is.mapM fun i => match (args[i]? : Option Expr) with
+    | some (Expr.ident ms map) => some (ms, map)
+    | _ => none
+
+/-- The arguments of a call at the indices that it does not borrow. -/
+def argsExcept (args : List Expr) (is : List Nat) : List Expr :=
+  (args.zipIdx.filter fun (_, j) => !is.contains j).map (·.1)
+
+/-- Replace a checked borrow statement by mutation markers for the existing
 ownership test. Every other mention of a borrowing function is refused here,
-so nested calls cannot bypass the check on the caller's source. -/
-def Stmt.borrowOwnershipBody (borrows : List (String × Nat)) (body : Stmt) : Option Stmt := do
+so nested calls cannot bypass the check on the caller's source. A call that
+passes the same variable at two borrowed indices is refused, because the
+two parameters would share one map. -/
+def Stmt.borrowOwnershipBody (borrows : List (String × List Nat)) (body : Stmt) : Option Stmt := do
   let .block sp ss := body | if borrows.any (fun b => body.mentions b.1) then none else some body
   let ss ← ss.mapM fun s => do
     match s with
     | .exprStmt sp (.call cs (.ident ns fn) args) =>
       match borrows.lookup fn with
-      | some i =>
-        let some (.ident ms map) := args[i]? | none
-        if (args.eraseIdx i).any (·.leaks map) then none
-        else some (.exprStmt sp (.call cs (.member ns (.ident ms map) "delete") (args.eraseIdx i)))
+      | some is =>
+        let targets ← borrowTargetsAt args is
+        let others := argsExcept args is
+        if !decide (targets.map (·.2)).Nodup || targets.any (fun (_, map) => others.any (·.leaks map)) then none
+        else some (.block sp (targets.map fun (ms, map) =>
+          .exprStmt sp (.call cs (.member ns (.ident ms map) "delete") others)))
       | none => if borrows.any (fun b => s.mentions b.1) then none else some s
     | _ => if borrows.any (fun b => s.mentions b.1) then none else some s
   return .block sp ss
@@ -950,7 +991,7 @@ def Stmt.borrowOwnershipBody (borrows : List (String × Nat)) (body : Stmt) : Op
 The marker makes a borrowed argument count as changed, but not as an alias
 that escapes the call. It retains the other arguments so collections that
 they hold still fail the ordinary leak test. -/
-def Stmt.ownsChangesBorrow (borrows : List (String × Nat)) (params : List String) (body : Stmt) : Bool :=
+def Stmt.ownsChangesBorrow (borrows : List (String × List Nat)) (params : List String) (body : Stmt) : Bool :=
   (body.borrowOwnershipBody borrows).any (Stmt.ownsChanges params)
 
 /-- `s` declares a `const` that a statement of `rest` assigns. In JS that

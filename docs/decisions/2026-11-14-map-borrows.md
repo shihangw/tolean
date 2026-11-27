@@ -7,7 +7,7 @@ caller should bind that result in place of its old map. We choose this
 borrow translation rather than a state monad. This record settles the design
 question in step 8 of the [pure TypeScript plan](../plans/pure-typescript.md).
 The first implementation and two later extensions now cover the
-[single-map case](../typescript/README.md#map-borrows) described below.
+[straight-line case](../typescript/README.md#map-borrows) described below.
 
 ## The result carries the maps
 
@@ -67,11 +67,16 @@ shape without changing that boundary.
 
 ## Current implementation
 
-A void function may now change one Map parameter through straight-line
+A void function may now change one or more Map parameters through straight-line
 set, delete and forwarding calls with atomic arguments. It may end with a
 bare return. A forwarded borrow must go to an earlier borrowing function
 in the same file. At the outer call, the caller owns the map and passes it
-exactly once in a top-level call statement. Other arguments must not keep
+exactly once in a top-level call statement.
+When a function changes several maps, every mutable Map parameter must
+change. The function returns a tuple of the final maps in parameter order,
+and the caller binds each name again. The translator refuses a call that
+passes one map for two changed parameters. The interpreter gives that call
+no result either. Other arguments must not keep
 that map, and the ownership check still counts collections that those
 arguments let escape.
 
@@ -81,8 +86,7 @@ rule. Corpus tests check the generated code, and interpreter tests compare
 the caller's observations with Node. Readonly inputs retain their existing
 translation.
 
-Step 8 remains open. Several changed maps, ordinary returned results,
-early returns, branches, loops and imported borrowing functions remain
+Step 8 remains open. Ordinary returned results, early returns, branches, loops and imported borrowing functions remain
 refused. Borrowing functions receive no per-file certificate yet. A wider
 result must preserve the final parameter bindings on every supported
 completion path; the statement proof must also relate newly declared
