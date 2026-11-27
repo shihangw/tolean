@@ -38,18 +38,27 @@ open tolean.Go.Syntax
 open tolean.Go.Eval (BinOp AssignKind)
 
 /-- A Go type of the subset. `untyped` is the type of an integer constant
-that no typed value has fixed yet. -/
+that no typed value has fixed yet. A `byte` is what indexing a string gives;
+no parameter, result or declared variable has that type. -/
 inductive Ty where
-  | int | int64 | bool | string | untyped
+  | int | int64 | bool | string | untyped | byte
 deriving DecidableEq, Repr, Inhabited
 
 def Ty.lean : Ty → IR.Ty
   | .bool => .bool
   | .string => .string
-  | .int | .int64 | .untyped => .int
+  | .int | .int64 | .untyped | .byte => .int
 
+/-- The types of `+`, `-`, `*`, `/` and `%`. Arithmetic on a `byte` wraps
+at 8 bits, which the subset leaves out. -/
 def Ty.isInt : Ty → Bool
   | .int | .int64 | .untyped => true
+  | .bool | .string | .byte => false
+
+/-- The integer types, which an integer constant can take and which the
+orders compare. -/
+def Ty.isNum : Ty → Bool
+  | .int | .int64 | .untyped | .byte => true
   | .bool | .string => false
 
 /-- The type that two operands share: the same type, or an untyped constant
@@ -57,8 +66,8 @@ and an integer type. Two untyped constants share none, because the subset
 leaves out constant expressions. -/
 def Ty.unify : Ty → Ty → Option Ty
   | .untyped, .untyped => none
-  | .untyped, t => if t.isInt then some t else none
-  | t, .untyped => if t.isInt then some t else none
+  | .untyped, t => if t.isNum then some t else none
+  | t, .untyped => if t.isNum then some t else none
   | a, b => if a = b then some a else none
 
 /-- A value of type `source` can stand where Go expects a `target`. -/
@@ -149,7 +158,7 @@ def resolveType (ctx : Ctx) : Expr → Option Ty
 def zeroCode : Ty → IR.Expr
   | .bool => .bool false
   | .string => .string ""
-  | .int | .int64 | .untyped => .int 0
+  | .int | .int64 | .untyped | .byte => .int 0
 
 /-! ### Expressions -/
 
@@ -160,11 +169,19 @@ def arith (sp : Span) (op : tolean.IR.IntOp) (a : IR.Expr) (ta : Ty) (b : IR.Exp
   | some t => if t.isInt then pure (.wrap64 (.intOp op a b), t) else reject sp "this operator needs integers"
   | none => reject sp "the operands do not have one integer type"
 
-/-- `a < b` and the other orders, on integers. -/
+/-- The order of strings for an order of integers. -/
+def strOrder : tolean.IR.Order → IR.ExprExt
+  | .lt => .strLt
+  | .le => .strLe
+  | .gt => .strGt
+  | .ge => .strGe
+
+/-- `a < b` and the other orders, on integers, and on strings byte by byte. -/
 def compare (sp : Span) (op : tolean.IR.Order) (a : IR.Expr) (ta : Ty) (b : IR.Expr) (tb : Ty) :
     TM (IR.Expr × Ty) :=
-  match ta.unify tb with
-  | some t => if t.isInt then pure (.decide (.order op a b), .bool) else reject sp "the subset orders only integers"
+  if ta = .string ∧ tb = .string then pure (.ext (strOrder op) [a, b], .bool)
+  else match ta.unify tb with
+  | some t => if t.isNum then pure (.decide (.order op a b), .bool) else reject sp "the subset orders only integers and strings"
   | none => reject sp "the operands do not have one integer type"
 
 /-! ### Division -/
@@ -175,12 +192,17 @@ def tested : IR.Expr → List IR.Expr
   | .int n => if n = 0 then [.int n] else []
   | b => [b]
 
-/-- The divisors of the divisions in `c`, in no particular order. A statement
-that evaluates `c` panics in Go exactly when one of them is zero, because the
-translator refuses a division that Go might not evaluate: one in the right
-operand of `&&` or `||`. -/
+/-- The checks of `c`, in the order in which Go makes them: the divisors of
+its divisions, and `Go.indexFault s i` for each index `s[i]`. A statement
+that evaluates `c` panics in Go exactly when one of them fails, a divisor
+when it is zero and an index when its message is not empty, and the first
+that fails gives the panic. Go makes each check when it evaluates the
+expression, so after the operands and in the order of evaluation. The
+translator refuses a check that Go might not make: one in the right operand
+of `&&` or `||`. -/
 def divisors : IR.Expr → List IR.Expr
   | .division _ a b => divisors a ++ divisors b ++ tested b
+  | .ext .byteAt args => divisorsList args ++ [.ext .indexFault args]
   | .not a => divisors a
   | .neg a => divisors a
   | .decide a => divisors a
@@ -216,14 +238,36 @@ def zeroTest : List IR.Expr → IR.Expr
 /-- The message of Go's panic for a division by zero. -/
 def panicCode : IR.Expr := .string "runtime error: integer divide by zero"
 
-/-- `body`, after a test of the divisors of `c`, which `body` evaluates
-first. When one of them is zero, the output evaluates `c` and throws Go's
-panic. `c` divides by zero then without a panic, as Lean does, and its value
-is unused. The output evaluates it so that the evaluator reaches the same
-expressions as the interpreter, which panics only when it reaches the
-division. A statement that does not divide keeps `body` as it is. -/
+/-- The check is the test of an index, rather than a divisor. -/
+def isIndexCheck : IR.Expr → Bool
+  | .ext .indexFault _ => true
+  | _ => false
+
+/-- The test that the check `k` fails, and the message of the panic. -/
+def failTest (k : IR.Expr) : IR.Expr :=
+  if isIndexCheck k then .ne k (.string "") else .eq k (.int 0)
+
+def failMessage (k : IR.Expr) : IR.Expr :=
+  if isIndexCheck k then k else panicCode
+
+/-- The checks `ks` in order, before `body`: the first that fails throws its
+panic, after the output evaluates `c`. -/
+def checkChain (c : IR.Expr) : List IR.Expr → IR.Body → IR.Body
+  | [], body => body
+  | k :: ks, body => .ite (failTest k) (.throw (.ext .after [c, failMessage k])) (checkChain c ks body)
+
+/-- `body`, after the checks of `c`, which `body` evaluates first. When a
+check fails, the output evaluates `c` and throws Go's panic. `c` divides by
+zero or reads an index out of range then without a panic, as Lean does, and
+its value is unused. The output evaluates it so that the evaluator reaches the
+same expressions as the interpreter, which panics only when it reaches the
+check. A statement that only divides tests all its divisors at once, because
+each gives the same panic. A statement that checks an index tests the checks
+one by one, in Go's order, because their panics differ. A statement without
+checks keeps `body` as it is. -/
 def guarded (c : IR.Expr) (body : IR.Body) : IR.Body :=
   if (divisors c).isEmpty then body
+  else if (divisors c).any isIndexCheck then checkChain c (divisors c) body
   else .ite (zeroTest (divisors c)) (.let "_" c (.throw panicCode)) body
 
 /-- The code of an untyped constant is zero. Such a constant is a literal,
@@ -314,13 +358,31 @@ def translateExpr (ctx : Ctx) (env : Env) : Nat → Expr → TM (IR.Expr × Ty)
       let (a, ta) ← translateExpr ctx env fuel l
       let (b, tb) ← translateExpr ctx env fuel r
       translateBinary sp o a ta b tb
+    -- `s[i]` on a string: a byte, after a test of the index.
+    | .index sp s i => do
+      let (cs, ts) ← translateExpr ctx env fuel s
+      let (ci, ti) ← translateExpr ctx env fuel i
+      unless ts = .string do reject sp "the subset indexes only strings"
+      unless ti.isNum do reject sp "an index must be an integer"
+      pure (.ext .byteAt [cs, ci], .byte)
     | .call sp (.ident _ f) args false => do
       if env.has f then reject sp s!"'{f}' is a local, not a function"
-      let some sig := ctx.known.find? (·.name == f) | reject sp s!"'{f}' is not a pure function translated before this one"
-      if sig.panics then reject sp s!"'{f}' can panic, and a call of it is not supported yet"
-      let codes ← translateArgs ctx env fuel args
-      unless argsFit codes sig.params do reject sp "the arguments do not fit the parameters"
-      pure (.call ⟨"", f⟩ (codes.map (·.1)), sig.result)
+      match Eval.builtin ctx.program f with
+      | some b =>
+        match args with
+        | [a] => do
+          let (c, t) ← translateExpr ctx env fuel a
+          match b with
+          | .len => if t = .string then pure (.ext .byteLen [c], .int) else reject sp "the subset takes len only of a string"
+          | .toInt => if t.isNum then pure (c, .int) else reject sp "the subset converts only integers"
+          | .toInt64 => if t.isNum then pure (c, .int64) else reject sp "the subset converts only integers"
+        | _ => reject sp s!"'{f}' takes one argument"
+      | none => do
+        let some sig := ctx.known.find? (·.name == f) | reject sp s!"'{f}' is not a pure function translated before this one"
+        if sig.panics then reject sp s!"'{f}' can panic, and a call of it is not supported yet"
+        let codes ← translateArgs ctx env fuel args
+        unless argsFit codes sig.params do reject sp "the arguments do not fit the parameters"
+        pure (.call ⟨"", f⟩ (codes.map (·.1)), sig.result)
     | e => reject e.span "this expression is not supported"
 
 def translateArgs (ctx : Ctx) (env : Env) : Nat → List Expr → TM (List (IR.Expr × Ty))

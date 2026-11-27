@@ -40,6 +40,14 @@ def ExprExt.apply : ExprExt → List Val → Option Val
   | .wrap64, [.int a] => some (.int (tolean.Go.wrap64 a))
   | .append, [.str a, .str b] => some (.str (a ++ b))
   | .pure, [a] => some a
+  | .byteLen, [.str s] => some (.int (tolean.Go.byteLen s))
+  | .byteAt, [.str s, .int i] => some (.int (tolean.Go.byteAt s i))
+  | .strLt, [.str a, .str b] => some (.bool (tolean.Go.strLt a b))
+  | .strLe, [.str a, .str b] => some (.bool (tolean.Go.strLe a b))
+  | .strGt, [.str a, .str b] => some (.bool (tolean.Go.strGt a b))
+  | .strGe, [.str a, .str b] => some (.bool (tolean.Go.strGe a b))
+  | .indexFault, [.str s, .int i] => some (.str (tolean.Go.indexFault s i))
+  | .after, [_, m] => some m
   | _, _ => none
 
 /-- The bindings that `let (x, y) := …` makes: each of `names`, with its value
