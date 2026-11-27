@@ -1126,6 +1126,18 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
       if let .fold acc := method then
         let some decY := decoderOf r info.result
           | throw s!"{file}: cannot decode the value of a callback in {name}"
+        -- The link proof unfolds `Eval.mapOfItems` and `Eval.setOfItems` only
+        -- on a list that it can see. When the initial value builds a map or a
+        -- set from another list, such as a parameter, Lean would reject the
+        -- certificate, so refuse it here.
+        let initArgs := match callAt syntaxBody info.span with
+          | some (.call _ _ (.arrow .. :: rest)) => rest
+          | _ => []
+        let hiddenItems := (initArgs.flatMap subExprs).any fun
+          | .new _ c _ [arg] => (c == "Map" || c == "Set") && !(arg matches .array ..)
+          | _ => false
+        if hiddenItems then
+          throw s!"{file}: the initial value of a reduce in {name} builds a Map or Set from a list the certificate cannot see"
         let vars := ("a", info.result) :: ("x", elem) :: scope.zipIdx.map fun ((_, t), i) => (s!"v{i}", t)
         loopLemmas := loopLemmas.push (r.cert lemmaName)
         thms := thms.push <|
