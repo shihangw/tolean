@@ -62,7 +62,7 @@ positions and the restrictions inherited from named interfaces.
 | TypeScript | Lean | Refused |
 |---|---|---|
 | `f?.()` | No accepted program to translate: `Syntax.TypeExpr` and `Translate.Ty` have no function type, and no accepted declaration gives a possibly `undefined` value a callable type. A generic type parameter does not make a value callable. Local function values cannot escape a direct call. | Optional calls stay refused; so does `==` against anything except `null` and `undefined`. |
-| A value re-export, such as `export { a } from "./x.ts"` | Nothing: the names stay in scope | `export *` |
+| A renamed re-export, such as `export { a as b } from "./x.ts"` | Nothing: an importer of `b` calls the original declaration `a` | `export *` |
 
 [#247](https://github.com/shihangw/tolean/pull/247) fixes optional indexing
 after a conditional join makes a `Record` nullable, as in
@@ -282,7 +282,10 @@ the P2 steps. Steps with the same priority keep the order of their numbers.
 The steps keep the numbers that pull requests refer to, so a finished step
 leaves a gap.
 
-2. **P0.** Value re-exports. Optional calls have no accepted program to apply
+2. **P0.** Renamed re-exports, `export { a as b } from "./x.ts"`. Value
+   re-exports without `as` translate. The parser refuses `as` in every import
+   and export list, and `ImportName` needs a second name that the parser's
+   round-trip proof covers. Optional calls have no accepted program to apply
    to, as the types table explains; they are not unfinished work in this step.
 8. **P0.** Widen map borrows to early returns, several changed maps, an
    ordinary returned value, control flow and imported callees.
