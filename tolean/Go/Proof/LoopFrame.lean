@@ -209,12 +209,19 @@ namespace tolean.Go.Proof
 
 open tolean.Go.Syntax tolean.Go.Pure
 
+theorem eval_valueCode (fs : Funcs) (fuel : Nat) (env : Eval.Env) :
+    ∀ value : Eval.Val, IR.Expr.eval fs fuel env (valueCode value) = some value
+  | .int _ | .bool _ | .str _ => by simp [valueCode, IR.Expr.eval]
+  | .pair a b => by
+    simp [valueCode, IR.Expr.eval, IR.Expr.evalList, eval_valueCode fs fuel env a,
+      eval_valueCode fs fuel env b, Eval.tupleVal]
+
 theorem eval_valueCodes (fs : Funcs) (fuel : Nat) (env : Eval.Env) (values : List Eval.Val) :
     IR.Expr.evalList fs fuel env (values.map valueCode) = some values := by
   induction values with
   | nil => simp [IR.Expr.evalList]
   | cons value values ih =>
-    cases value <;> simp [valueCode, IR.Expr.evalList, IR.Expr.eval, ih]
+    simp [IR.Expr.evalList, eval_valueCode, ih]
 
 /-- The leading counted loop and the statements after it obey the same
 success-only contract as the existing statement translator. -/

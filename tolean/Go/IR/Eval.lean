@@ -9,7 +9,8 @@ values of the interpreter in `Spec/Eval.lean`.
 Each constructor of `IR.Expr` and `IR.Body` is one form of Lean code. The
 evaluator gives it the value that the printed Lean computes, written as a Go
 value: an `Int` is `Val.int`, a `Bool` is `Val.bool` and a `String` is
-`Val.str`. A `Prop` such as `a < b` has the value of its `decide`.
+`Val.str`. A tuple `(a, b, c)` is `Val.pair a (Val.pair b c)`. A `Prop`
+such as `a < b` has the value of its `decide`.
 `Int.tdiv` and `Int.tmod` are total, as in Lean: a zero divisor gives `0`
 and the dividend. The translator tests the divisor before it divides, and
 `throw` of the message gives the outcome `panic`, as `Except.error` does.
@@ -121,6 +122,8 @@ def Expr.eval (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
     return .bool (x || y)
   | .decide p => Expr.eval fs fuel ρ p
   | .ext op args => do op.apply (← Expr.evalList fs fuel ρ args)
+  -- `(a, b, c)` is `(a, (b, c))` in Lean.
+  | .tuple es => do return Eval.tupleVal (← Expr.evalList fs fuel ρ es)
   | _ => none
 termination_by e => (fuel, sizeOf e, 0)
 
@@ -138,6 +141,10 @@ def Body.exec (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
   | .throw e => do return .panic (← Expr.eval fs fuel ρ e)
   | .state _ => some (.normal ρ)
   | .let name e rest => do Body.exec fs fuel ((name, ← Expr.eval fs fuel ρ e) :: ρ) rest
+  -- `let (a, _, c) := e` binds each name but `_` to its element, in order.
+  | .letTuple names e rest => do
+    let vs ← Eval.untuple names.length (← Expr.eval fs fuel ρ e)
+    Body.exec fs fuel (Eval.pushAll (Eval.bindings names vs) ρ) rest
   | .ite c whenTrue whenFalse => do
     let .bool t ← Expr.eval fs fuel ρ c | none
     if t then Body.exec fs fuel ρ whenTrue else Body.exec fs fuel ρ whenFalse

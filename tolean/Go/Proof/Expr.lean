@@ -316,6 +316,7 @@ def fault : Val → Option Val
   | .int i => if i = 0 then some Eval.divideByZero else none
   | .str m => if m = "" then none else some (.str m)
   | .bool _ => none
+  | .pair .. => none
 
 /-- The panic of the first check of `ds` that fails. -/
 def firstFault : List Val → Option Val
@@ -774,14 +775,23 @@ theorem expr_sound_aux {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs 
           -- A constant of the package.
           · next te w hw =>
             split at h
-            · simp only [pure_ok, Prod.mk.injEq] at h
+            · next t' ht =>
+              simp only [pure_ok, Prod.mk.injEq] at h
               obtain ⟨rfl, -⟩ := h
+              -- No constant is a pair.
+              have hnot : ∀ a b, w ≠ .pair a b := by
+                rintro a b rfl; cases te <;> simp [constType] at ht
               have hv' : v = w := by
-                cases w <;> simp [valueCode, IR.Expr.eval] at hv <;> exact hv.symm
+                cases w with
+                | pair a b => exact absurd rfl (hnot a b)
+                | _ => simp [valueCode, IR.Expr.eval] at hv; exact hv.symm
               subst hv'
-              refine ⟨[], by cases v <;> simp [valueCode, divisors, IR.Expr.evalList], checkVals_nil, ?_⟩
-              rw [Eval.eval, scoped_none hs (env_lookup_none hl), ← hp]
-              simp [Eval.global, hw, outcome_nil, Res.lift]
+              refine ⟨[], ?_, checkVals_nil, ?_⟩
+              · cases v with
+                | pair a b => exact absurd rfl (hnot a b)
+                | _ => simp [valueCode, divisors, IR.Expr.evalList]
+              · rw [Eval.eval, scoped_none hs (env_lookup_none hl), ← hp]
+                simp [Eval.global, hw, outcome_nil, Res.lift]
             · exact absurd h reject_ne_ok
           -- `true` or `false`.
           · next hc =>

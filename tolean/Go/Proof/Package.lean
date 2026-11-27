@@ -59,13 +59,13 @@ theorem translateFunc_ok {ctx : Ctx} {d : Decl} {decl : IR.Decl} {sig : FnSig}
       translateTop ctx (ps.map fun (n, t) => Local.mk n t) result monadic body = .ok b := by
   unfold translateFunc at h
   split at h
-  · next sp name params rsp rt bsp body =>
+  · next sp name params rt bsp body =>
     tm_simp at h
     obtain ⟨-, h⟩ := h
     cases hps : paramList ctx params with
     | none => simp [hps, reject, throw, throwThe, MonadExceptOf.throw] at h
     | some ps =>
-      cases hr : resolveType ctx rt with
+      cases hr : resultTy ctx rt with
       | none => simp [hps, hr, reject, throw, throwThe, MonadExceptOf.throw] at h
       | some result =>
         simp only [hps, hr] at h
