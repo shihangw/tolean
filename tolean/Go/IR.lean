@@ -7,8 +7,8 @@ to the shared IR in `tolean/IR.lean`.
 Go adds no types, because its `int`, `int64`, `bool` and `string` are the
 shared `Int`, `Bool` and `String`. A `byte` is an `Int` too. It adds
 `Go.wrap64`, which wraps an integer into the 64-bit range as Go's arithmetic
-does, `++` on strings, which is Go's `+` on strings, and `pure`, which returns
-a value from a function that can panic. Such a function returns
+does, `++` on strings, which is Go's `+` on strings, `pure`, which returns
+a value from a function that can panic, and the tuple of a call's arguments. Such a function returns
 `Except String T`, and a panic is `throw` of its message. The operations on
 the bytes of a string, `len`, indexing and the orders, are functions of
 `tolean/Go/Spec/Basic.lean`.
@@ -41,6 +41,9 @@ inductive ExprExt where
   | indexFault
   /-- `(Go.after c m)`: the value `m`, after the output has evaluated `c`. -/
   | after
+  /-- `(a, b, …)`: the arguments of a call, evaluated for a test of their
+  divisors without the call itself. The output binds it to `_`. -/
+  | args
 deriving BEq, Repr, Inhabited, DecidableEq
 
 abbrev Ty := tolean.IR.Ty TyExt
@@ -113,6 +116,8 @@ def ExprExt.print (names : tolean.IR.Names) (op : ExprExt) (args : List String) 
   | .strGe, [a, b] => s!"({leanName names "Go.strGe"} {arg a} {arg b})"
   | .indexFault, [a, b] => s!"({leanName names "Go.indexFault"} {arg a} {arg b})"
   | .after, [a, b] => s!"({leanName names "Go.after"} {arg a} {arg b})"
+  | .args, [a] => a
+  | .args, args@(_ :: _) => "(" ++ ", ".intercalate args ++ ")"
   | _, _ => ""
 
 instance : tolean.IR.PrintOp ExprExt := ⟨ExprExt.print⟩

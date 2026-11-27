@@ -251,13 +251,6 @@ def failTest (k : IR.Expr) : IR.Expr :=
 def failMessage (k : IR.Expr) : IR.Expr :=
   if isIndexCheck k then k else panicCode
 
-/-- Code that evaluates each of `cs`, in order, and gives `true`. The test
-before a call of a function that can panic evaluates the arguments with it,
-and not the call, whose panic the bind carries. -/
-def argsCode : List IR.Expr → IR.Expr
-  | [] => .bool true
-  | c :: cs => .ext .after [c, argsCode cs]
-
 /-- The checks `ks` in order, before `body`: the first that fails throws its
 panic, after the output evaluates `c`. -/
 def checkChain (c : IR.Expr) : List IR.Expr → IR.Body → IR.Body
@@ -575,9 +568,10 @@ def translateStmts (ctx : Ctx) (env : Env) (tail : Tail) : Nat → List Stmt →
       unless argsFit codes sig.params do reject sp "the arguments do not fit the parameters"
       let cs := codes.map (·.1)
       let ref : DeclRef := ⟨"", f⟩
-      -- The test of the arguments' checks evaluates the arguments, as
-      -- `guarded` does for any statement, but not the call, which may panic.
-      let bound (x : String) (rb : IR.Body) : IR.Body := guarded (argsCode cs) (.bind x ref cs rb)
+      -- The test of the arguments' divisors evaluates the arguments, but not
+      -- the call: the callee could panic for the values that a zero divisor
+      -- gives in Lean, and the panic must be the division's.
+      let bound (x : String) (rb : IR.Body) : IR.Body := guarded (.ext .args cs) (.bind x ref cs rb)
       match form with
       | .ret =>
         let .ret result monadic := tail | reject sp "only a branch that always returns may return"

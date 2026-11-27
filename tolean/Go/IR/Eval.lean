@@ -48,6 +48,11 @@ def ExprExt.apply : ExprExt → List Val → Option Val
   | .strGe, [.str a, .str b] => some (.bool (tolean.Go.strGe a b))
   | .indexFault, [.str s, .int i] => some (.str (tolean.Go.indexFault s i))
   | .after, [_, m] => some m
+  -- The output binds the tuple to `_` and never reads it, so its value is
+  -- not a Go value. The evaluator gives it the arguments' first value, or
+  -- `true` for none, so that it has one exactly when every argument has one.
+  | .args, a :: _ => some a
+  | .args, [] => some (.bool true)
   | _, _ => none
 
 /-- The bindings that `let (x, y) := …` makes: each of `names`, with its value

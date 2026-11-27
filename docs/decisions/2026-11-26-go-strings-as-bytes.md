@@ -34,10 +34,8 @@ bytes, as TypeScript's became lists of UTF-16 code units?
   statement's expression `c`, as the interpreter does before it reaches the
   check, and it throws the message `m`.
 - Before a call of a function that can panic, the test of the arguments
-  evaluates only the arguments, chained with `Go.after`, and not the call.
-  When a check of an argument fails, the callee might panic on the value
-  that Lean computes for it, and the output would then have no value where
-  Go panics.
+  evaluates only the tuple of the arguments, as #309 added it for divisors,
+  and not the call. The index checks of the arguments use the same test.
 - The orders `<`, `<=`, `>` and `>=` on strings compare the UTF-8 bytes. The
   output writes `Go.strLt a b` and the others. On valid UTF-8, this order is
   the order of code points, but the definition states the bytes, as Go does.
