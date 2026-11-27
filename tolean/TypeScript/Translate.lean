@@ -503,7 +503,7 @@ structure FnInfo where
   ret : Ty
   /-- The function can throw, so its output returns `Except JSError R`. -/
   throws : Bool := false
-  /-- The hoisting (`Eval.mayThrow`) knows that the function can throw, so a
+  /-- The hoisting (`Eval.hoistThrows`) knows that the function can throw, so a
   call of it may stand inside a larger expression. It does not know a
   function that throws only through an imported function. -/
   hoists : Bool := false
@@ -709,7 +709,7 @@ def bodySortObligations : IR.Body → List SortObligation
     bodySortObligations a ++ bodySortObligations b
   | .fold _ _ body items rest _ =>
     exprSortObligations items ++ bodySortObligations body ++ bodySortObligations rest
-  | .bind _ _ args rest | .letBorrow _ _ _ args rest =>
+  | .bind _ _ args rest | .letBorrow _ _ _ _ args rest =>
     exprListSortObligations args ++ bodySortObligations rest
   | .letCall _ _ _ value _ _ _ body args rest =>
     exprSortObligations value ++ bodySortObligations body ++
@@ -1010,6 +1010,9 @@ def stmtThrows (fns : List FnInfo) : Stmt → Bool
   | .tryCatch .. => true
   | .throwStmt .. => true
   | .varDecl _ { init := some e, .. } | .returnStmt _ (some e) => callsThrowing fns e
+  -- Only a map borrow that can throw stays a statement call after the
+  -- hoisting (`Eval.hoistThrows`).
+  | .exprStmt _ e => callsThrowing fns e
   | .ifStmt _ _ t (some e) => stmtThrows fns t || stmtThrows fns e
   | .ifStmt _ _ t none => stmtThrows fns t
   | .forOfStmt _ _ _ _ body | .forOfPattern _ _ _ _ body | .forStmt _ _ _ _ body | .whileStmt _ _ body =>
@@ -4444,7 +4447,7 @@ def translateStatements (fuel : Nat) (env : Env) (tail : Tail) (statements : Lis
       if let some (fn, is, args) := borrowCall? env e then
         let (names, call) ← translateBorrowCall env s fn is args
         let .call ref outs := call | reject s "invalid map borrow"
-        return .letBorrow names ref is outs (← translateStatements fuel env tail rest)
+        return .letBorrow fn.throws names ref is outs (← translateStatements fuel env tail rest)
       let (name, update) ← translateUpdate env s e
       return .let name update (← translateStatements fuel env tail rest)
     -- `function g(x: T): R { … }` in the body of the function: the output
@@ -5140,7 +5143,11 @@ def checkBorrowResult (s : Span) (borrow : Option (List Nat)) (name : String)
     unless borrows.lookup name == some indices && out.returnedState == some params do
       reject s "a map borrow must return its changed parameters on normal completion"
   | some _, none => reject s "the borrowed parameter is missing"
-  | none, _ => pure ()
+  -- A function that does not borrow returns through `return`, never with a
+  -- state, so that no call can mistake it for a borrow.
+  | none, _ =>
+    unless out.returnedState.isNone do
+      reject s "a function that does not borrow a map must end with a return"
 
 def borrowLocals (locals : List Local) (params : Option (List String)) : List Local :=
   locals.map fun l => if (params.map (·.contains l.name)).getD false then { l with binding := .map } else l
@@ -5175,7 +5182,7 @@ def translateFunction (thr : String → Bool) (cls : String → Option (Option E
       let ty ← paramType p.span p.optional type types
       pure (env.add { name := paramName, binding := .param, type := ty },
         leanParams ++ [(paramName, ty.lean)], types ++ [ty])
-  let borrow := if typeParams.isEmpty then borrowCandidate? params (some returnType) body else none
+  let borrow := if typeParams.isEmpty then borrowCandidate? params (some returnType) sourceBody else none
   let ret ← functionReturnType borrow types s returnType env params sourceBody
   let throws := stmtsThrow ctx.functions (blockStatements body)
   modify fun c => { c with currentFunction := name, returnType := ret, throws }
@@ -5766,7 +5773,7 @@ def translateDecls (m : Module) : TM (List IR.Decl) := do
   let types ← translateErrorTypes m
   let classes := (← get).errorClasses
   let decls ← m.decls.mapM
-    (translateDeclWithInline (Eval.mayThrow m) (Eval.errorClassOf m) (Eval.guardTests m) classes)
+    (translateDeclWithInline (Eval.hoistThrows m) (Eval.errorClassOf m) (Eval.guardTests m) classes)
   return errorShapes ++ types ++ insertInlineDecls decls (← get).inlinePrefixes
 
 mutual

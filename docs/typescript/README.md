@@ -1390,8 +1390,35 @@ Here the caller writes `let (a, b) := (move a b k)`. The caller must pass a
 different map for each changed parameter. A call such as `move(a, a, k)`
 fails translation, because the two parameters would share one map.
 
-Early returns, returned values, branches, loops and imported borrows
-remain refused.
+A borrowing function may throw. It may call a function of the same file
+that borrows nothing, such as a check that throws on a bad argument, as a
+statement of its own. That call may not pass a borrowed map. A borrowing
+function may also forward its map to a borrowing function that throws:
+
+```ts
+function check(x: bigint): bigint {
+  if (x < 0n) {
+    throw new Error("negative");
+  }
+  return x;
+}
+
+function put(m: Map<bigint, bigint>, x: bigint): void {
+  m.set(1n, x);
+  check(x);
+  m.set(2n, x);
+}
+```
+
+The Lean function `put` returns `Except JSError (JSMap Int Int)`, and its
+caller writes `(put m x) >>= fun m =>`. A throw ends the caller with the
+same error. The interpreter does not copy the maps back after a throw. No
+caller can observe them, because the body of a `try` may not make a call.
+A function that borrows nothing must end with a `return`, so that no call
+can mistake it for a borrow.
+
+Early returns, returned values, branches, loops, imported borrows and a
+`throw` statement in a borrowing function remain refused.
 Optional parameters and generic borrowing functions remain refused too.
 The certifier also refuses borrowing functions: its link proof does not
 yet describe the final map as the function's result.

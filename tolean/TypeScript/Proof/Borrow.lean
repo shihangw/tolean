@@ -178,21 +178,24 @@ theorem mem_borrowTargetsAt {args : List Expr} :
         exact ⟨i, ha⟩
     · exact mem_borrowTargetsAt (is := is) (by unfold borrowTargetsAt; exact hr) hm
 
-/-- A successful state-result call supplies the callee's final maps. -/
+/-- A state-result call either completes normally and supplies the callee's
+final maps, or throws, and then the whole body throws the same value. -/
 theorem exec_letBorrow {fs : List (DeclRef × List String × IR.Body)}
-    {fuel : Nat} {ρ : Eval.Env N} {names : List String} {ref : DeclRef} {indices : List Nat}
+    {fuel : Nat} {ρ : Eval.Env N} {thr : Bool} {names : List String} {ref : DeclRef} {indices : List Nat}
     {args : List IR.Expr} {rest : IR.Body} {o : Outcome N}
-    (h : IR.Body.exec fs fuel ρ (.letBorrow names ref indices args rest) = some o) :
-    ∃ vs k ps body params after inner ρ₂,
+    (h : IR.Body.exec fs fuel ρ (.letBorrow thr names ref indices args rest) = some o) :
+    ∃ vs k ps body params r,
       Eval.holdMaps ρ names = true ∧
       IR.Expr.evalList fs fuel ρ args = some vs ∧ fuel = k + 1 ∧
       fs.lookup ref = some (ps, body) ∧ ps.length = vs.length ∧
       indices.mapM (ps[·]?) = some params ∧ names.length = params.length ∧
       body.returnedState = some params ∧
-      IR.Body.exec fs k (ps.zip vs).reverse body = some (.normal after) ∧
-      Eval.borrowedMaps after (names.zip params) = some inner ∧
-      IR.bindState names inner ρ = some ρ₂ ∧
-      IR.Body.exec fs fuel ρ₂ rest = some o := by
+      IR.Body.exec fs k (ps.zip vs).reverse body = some r ∧
+      ((∃ after inner ρ₂, r = .normal after ∧
+        Eval.borrowedMaps after (names.zip params) = some inner ∧
+        IR.bindState names inner ρ = some ρ₂ ∧
+        IR.Body.exec fs fuel ρ₂ rest = some o) ∨
+       (∃ t, r = .ret (.error t) ∧ o = .ret (.error t))) := by
   simp only [IR.Body.exec] at h
   by_cases hm : Eval.holdMaps ρ names = true
   rotate_left
@@ -223,6 +226,7 @@ theorem exec_letBorrow {fs : List (DeclRef × List String × IR.Body)}
           cases hr : IR.Body.exec fs k (ps.zip vs).reverse body with
           | none => simp [hv, hf, hl, hp, hn, hs, hr] at h
           | some result =>
+            refine ⟨vs, k, ps, body, params, result, hm, rfl, rfl, rfl, hl, hp, hn, hs, hr, ?_⟩
             cases result with
             | normal after =>
               cases hi : Eval.borrowedMaps after (names.zip params) with
@@ -232,8 +236,13 @@ theorem exec_letBorrow {fs : List (DeclRef × List String × IR.Body)}
                 | none => simp [hv, hf, hl, hp, hn, hs, hr, hi, hb] at h
                 | some ρ₂ =>
                   simp [hv, hf, hl, hp, hn, hs, hr, hi, hb] at h
-                  exact ⟨vs, k, ps, body, params, after, inner, ρ₂, hm, rfl, rfl, rfl, hl, hp, hn, hs,
-                    hr, hi, hb, h⟩
+                  exact Or.inl ⟨after, inner, ρ₂, rfl, hi, hb, h⟩
+            | ret v =>
+              cases v with
+              | error t =>
+                simp [hv, hf, hl, hp, hn, hs, hr] at h
+                exact Or.inr ⟨t, rfl, h.symm⟩
+              | ok _ => simp [hv, hf, hl, hp, hn, hs, hr] at h
             | _ => simp [hv, hf, hl, hp, hn, hs, hr] at h
 
 /-- The call invariant supplies a source normal completion with the same
@@ -269,6 +278,33 @@ theorem borrow_call_from_agreement
     exact hagree _ (List.of_mem_zip hx).2
   rw [Eval.execStmt]
   simp [hargs, hglobal, hsig, hts, hnd, hmaps, hsource, hparams, hbind, hrunS, hinnerS]
+
+/-- The call invariant supplies a source throw with the same value, which
+the call statement passes on. -/
+theorem borrow_call_error_from_agreement
+    (m : Eval.Scope) (fs : List (DeclRef × List String × IR.Body))
+    (k : Nat) (hc : CallsAgree (N := N) m.program fs (k + 1))
+    (ρ : Eval.Env N) (sp cs ns : Span) (fn : String)
+    (indices : List Nat) (args : List Expr) (ts : List (Span × String)) (vs : List (Val N))
+    (ps : List String) (body : IR.Body) (params : List String) (t : Val N)
+    (hargs : Eval.evalList m (k + 1) ρ args = some vs)
+    (hglobal : ρ.lookup fn = none)
+    (hts : borrowTargetsAt args indices = some ts)
+    (hnd : (ts.map (·.2)).Nodup)
+    (hmaps : Eval.holdMaps ρ (ts.map (·.2)) = true)
+    (hout : fs.lookup ⟨m.file, fn⟩ = some (ps, body))
+    (hparams : indices.mapM (ps[·]?) = some params)
+    (hstate : body.returnedState = some params)
+    (hlen : ps.length = vs.length)
+    (hrun : IR.Body.exec fs k (ps.zip vs).reverse body = some (.ret (.error t))) :
+    Eval.execStmt m (k + 1) ρ (.exprStmt sp (.call cs (.ident ns fn) args)) =
+      some (.ret (.error t)) := by
+  obtain ⟨source, hsource, hsig, hrunS⟩ :=
+    hc.borrowError k rfl ⟨m.file, fn⟩ ps body indices params vs t hout hparams hstate hlen hrun
+  have hbind : Eval.bindArgs ps vs = some (ps.zip vs).reverse := by
+    simp [Eval.bindArgs, hlen]
+  rw [Eval.execStmt]
+  simp [hargs, hglobal, hsig, hts, hnd, hmaps, hsource, hparams, hbind, hrunS]
 
 open tolean.TypeScript.Translate
 

@@ -86,8 +86,21 @@ rule. Corpus tests check the generated code, and interpreter tests compare
 the caller's observations with Node. Readonly inputs retain their existing
 translation.
 
-Step 8 remains open. Ordinary returned results, early returns, branches, loops and imported borrowing functions remain
-refused. Borrowing functions receive no per-file certificate yet. A wider
+A borrowing function may throw. It may call a function of the same file
+that borrows nothing as a statement of its own, if that call passes no
+borrowed map, and it may forward its map to a borrowing function that
+throws. The output then returns `Except` of the maps, and each caller
+binds them with `>>=`, which passes the error on. The interpreter does not
+copy the maps back after a throw, because no `try` body may make a call,
+so no caller can observe them. The hoisting that moves a throwing call
+into a declaration of its own leaves a call of a borrowing function in
+place, because only the call statement copies the maps back. A function
+that borrows nothing must end with a `return`, so that the output never
+gives an ordinary call a state result.
+
+Step 8 remains open. Ordinary returned results, early returns, branches,
+loops, imported borrowing functions and a `throw` statement in a
+borrowing function remain refused. Borrowing functions receive no per-file certificate yet. A wider
 result must preserve the final parameter bindings on every supported
 completion path; the statement proof must also relate newly declared
 source and output variables before a returned value can be copied out.
